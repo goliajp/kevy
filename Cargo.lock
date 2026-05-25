@@ -62,6 +62,7 @@ version = "0.1.0"
 name = "kevy-rt"
 version = "0.1.0"
 dependencies = [
+ "kevy-hash",
  "kevy-persist",
  "kevy-resp",
  "kevy-ring",
