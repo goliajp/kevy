@@ -131,6 +131,28 @@ impl<C: Commands> Shard<C> {
             _ => None,
         };
         if let Some(shard) = single {
+            // In-order local fast path: the command runs on THIS shard and its
+            // reply is the next to emit (nothing pending), so write it straight
+            // into the connection's output — no PendingSlot, no fold, no reply
+            // `Vec` alloc, no drain copy. (`seq == next_emit` here, so advancing
+            // both `next_seq` (done above) and `next_emit` keeps them in step.)
+            if shard == self.id
+                && self.conns.get(&conn_id).is_some_and(|c| c.pending.is_empty())
+            {
+                if let Some(conn) = self.conns.get_mut(&conn_id) {
+                    // Disjoint field borrows: commands / store / conn.output.
+                    self.commands
+                        .dispatch_into(&mut self.store, &args, &mut conn.output);
+                    conn.next_emit += 1;
+                    if is_quit {
+                        conn.closing = true;
+                    }
+                }
+                if self.aof.is_some() && self.commands.is_write(&args) {
+                    self.log(&args);
+                }
+                return;
+            }
             if let Some(c) = self.conns.get_mut(&conn_id) {
                 c.pending.push_back(PendingSlot {
                     remaining: 1,
