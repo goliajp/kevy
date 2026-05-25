@@ -30,6 +30,10 @@ use std::time::Duration;
 
 /// SQ/CQ depth for the per-shard ring.
 const URING_ENTRIES: u32 = 256;
+/// Busy-poll iterations after the last work before yielding the core (mirrors
+/// the epoll reactor's `SPIN_LIMIT`). Keeps -c1 latency low without spinning a
+/// quiet shard at 100% forever.
+const URING_SPIN_LIMIT: u32 = 256;
 /// Fixed per-connection read buffer (bytes); larger requests span several reads.
 const READ_BUF: usize = 16 * 1024;
 
@@ -92,6 +96,7 @@ impl<C: Commands> Shard<C> {
         let mut accept_inflight = false;
         let mut comps: Vec<Completion> = Vec::with_capacity(URING_ENTRIES as usize);
         let mut cids: Vec<u64> = Vec::new();
+        let mut idle_spins: u32 = 0;
 
         while !stop.load(Ordering::Relaxed) {
             // Always keep one accept in flight.
@@ -145,10 +150,18 @@ impl<C: Commands> Shard<C> {
             }
             self.uring_reap_closed(&mut io);
 
-            // Idle: yield the core briefly so a quiet shard doesn't spin at 100%
-            // (a proper IORING_OP_TIMEOUT park is a follow-up).
+            // Busy-poll while there's recent work, so a -c1 client's next request
+            // is reaped immediately (the old unconditional 200µs sleep added that
+            // latency to every request: ~3.8k rps / 0.26ms). Only yield the core
+            // once we've been idle a while, so a quiet shard doesn't spin at 100%.
+            // (A proper IORING_OP_TIMEOUT / waker-poll park is the real fix.)
             if comps.is_empty() && !did_inbound {
-                std::thread::sleep(Duration::from_micros(200));
+                idle_spins = idle_spins.saturating_add(1);
+                if idle_spins >= URING_SPIN_LIMIT {
+                    std::thread::sleep(Duration::from_micros(200));
+                }
+            } else {
+                idle_spins = 0;
             }
         }
         Ok(())
