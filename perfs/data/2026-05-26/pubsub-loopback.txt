@@ -1,0 +1,18 @@
+Clean pub/sub 3-way — host loopback (NO docker bridge), isolated cores — lx64
+kevy-pubsub-bench: 50 subscribers on one channel + a flooding publisher (100k
+PUBLISH × 16B). server cores 0-9, load generator cores 10-15 (disjoint, so
+busy-poll can't starve it). 2 runs each. in-memory.
+
+  server          delivered msg/s        publishes/s
+  kevy io_uring   18,971,776 ; 16,420,176   379,436 ; 328,404   (avg 17.7M)
+  kevy epoll      16,143,810 ; 17,476,274   322,876 ; 349,525   (avg 16.8M)
+  valkey 9.1       6,810,806 ;  6,340,076   136,216 ; 126,802   (avg  6.6M)
+  redis 7.4        8,884,748 ;  8,150,596   177,695 ; 163,012   (avg  8.5M)
+
+kevy lead (delivered): vs valkey ~2.55-2.68x, vs redis ~1.98-2.08x.
+publishes/s: kevy ~336k vs valkey ~131k (~2.5x), redis ~170k (~2x).
+
+This is the clean counterpart to the earlier docker-bridge 2.28x (which
+understated kevy — bridge veth softirq starves busy-poll). Completes the clean
+three-indicator verification: -c1 1.14-1.33x, -c50 -P16 1.56-2.39x, pub/sub
+~2.0-2.68x — kevy leads valkey 9.1 + redis 7.4 on all three.

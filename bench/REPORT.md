@@ -443,9 +443,14 @@ stays there. No regression. Merged to `develop`.
   hurts kevy's busy-poll more than the blocking competitors, so kevy's true lead
   is if anything *understated*. Competitor io-threads runs were jittery
   (occasional drops to ~190k) — kevy was stable throughout.
-- **Open:** pub/sub still wants a clean loopback re-measure (current 2.28× figure
-  is docker-bridge, which *understates* kevy); a second physical load-gen box
-  would lift any residual client-side cap on the -c50 numbers.
+- **pub/sub (clean, 2026-05-26):** redone over host-loopback with isolated cores
+  (`bench/pubsub_loopback.sh`, 50 subs + flooding publisher): **kevy io_uring
+  ~17.7M / epoll ~16.8M delivered msg/s vs valkey 6.6M (~2.6×) and redis 8.5M
+  (~2.0×)**; publishes ~336k/s vs valkey 131k / redis 170k. Slightly above the old
+  docker-bridge 2.28× (which understated kevy). Three-indicator clean
+  verification complete — kevy leads on -c1, -c50 -P16, and pub/sub.
+- **Open:** a second physical load-gen box would lift the residual client-side cap
+  on the single-box -c50 numbers (the binding measurement constraint).
 
 Harnesses: `bench/lx64_loopback.sh` (3-way -c50), `bench/kevy_ab.sh` (binary
 A/B), `bench/lx64_c1.sh` (-c1). All pin server/client to disjoint cores.
