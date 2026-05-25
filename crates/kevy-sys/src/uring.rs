@@ -23,7 +23,7 @@
 
 use core::ffi::{c_int, c_long, c_void};
 use core::ptr;
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU16, AtomicU32, Ordering};
 use std::io;
 
 mod ffi {
@@ -47,11 +47,14 @@ mod ffi {
 // io_uring syscall numbers — identical across Linux architectures.
 const SYS_IO_URING_SETUP: c_long = 425;
 const SYS_IO_URING_ENTER: c_long = 426;
+const SYS_IO_URING_REGISTER: c_long = 427;
 
 // mmap protection / flags.
 const PROT_READ: c_int = 0x1;
 const PROT_WRITE: c_int = 0x2;
 const MAP_SHARED: c_int = 0x1;
+const MAP_PRIVATE: c_int = 0x2;
+const MAP_ANONYMOUS: c_int = 0x20;
 const MAP_POPULATE: c_int = 0x8000;
 
 // `mmap` region offsets passed as the file offset to select SQ ring / CQ ring / SQEs.
@@ -67,11 +70,26 @@ const IORING_OP_NOP: u8 = 0;
 const IORING_OP_ACCEPT: u8 = 13;
 const IORING_OP_READ: u8 = 22;
 const IORING_OP_WRITE: u8 = 23;
+const IORING_OP_RECV: u8 = 27;
 
 // accept4 flags set on the accepted socket (carried in the SQE's accept_flags
 // field, which aliases `rw_flags`).
 const SOCK_NONBLOCK: u32 = 0x800;
 const SOCK_CLOEXEC: u32 = 0x8_0000;
+
+// SQE flags / ioprio bits for buffer-select + multishot recv.
+const IOSQE_BUFFER_SELECT: u8 = 1 << 5; // SQE picks a buffer from a group
+const IORING_RECV_MULTISHOT: u16 = 2; // (ioprio) re-fire one recv per arrival
+
+// `io_uring_register` opcodes.
+const IORING_REGISTER_PBUF_RING: c_int = 22;
+const IORING_UNREGISTER_PBUF_RING: c_int = 23;
+
+// Completion `flags` bits: a buffer was used (id in the top 16 bits) / the
+// multishot SQE remains armed.
+const IORING_CQE_F_BUFFER: u32 = 1 << 0;
+const IORING_CQE_F_MORE: u32 = 1 << 1;
+const IORING_CQE_BUFFER_SHIFT: u32 = 16;
 
 #[repr(C)]
 #[derive(Default)]
@@ -167,6 +185,22 @@ pub struct Completion {
     pub user_data: u64,
     pub res: i32,
     pub flags: u32,
+}
+
+impl Completion {
+    /// The provided-buffer id the kernel filled, if this completion consumed one
+    /// (multishot/`recv` with buffer select). Recycle it via
+    /// [`ProvidedBufRing::recycle`] once the bytes are copied out.
+    pub fn buffer_id(&self) -> Option<u16> {
+        (self.flags & IORING_CQE_F_BUFFER != 0)
+            .then_some((self.flags >> IORING_CQE_BUFFER_SHIFT) as u16)
+    }
+
+    /// Whether the originating multishot SQE remains armed (more completions to
+    /// come). When `false`, the op terminated and must be re-submitted.
+    pub fn has_more(&self) -> bool {
+        self.flags & IORING_CQE_F_MORE != 0
+    }
 }
 
 /// A Linux io_uring instance: one submission ring + one completion ring.
@@ -334,6 +368,29 @@ impl IoUring {
         true
     }
 
+    /// Queue a **multishot** `recv(fd)` that draws its destination buffer from
+    /// the provided-buffer group `bgid` (see [`IoUring::register_buf_ring`]): one
+    /// SQE re-fires a completion per arrival, the kernel picking + reporting a
+    /// buffer id each time, until it terminates (error / `ENOBUFS`, signalled by
+    /// [`Completion::has_more`] returning `false`). No per-recv SQE, no read
+    /// buffer to keep alive. Returns `false` if the SQ is full.
+    pub fn prep_recv_multishot(&mut self, fd: i32, bgid: u16, user_data: u64) -> bool {
+        let Some(idx) = self.reserve() else {
+            return false;
+        };
+        // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
+        unsafe {
+            let sqe = self.sqes.add(idx);
+            // addr/len 0: the buffer comes from the group, not from us.
+            ptr::write(sqe, IoUringSqe::new(IORING_OP_RECV, fd, 0, 0, user_data));
+            (*sqe).ioprio = IORING_RECV_MULTISHOT;
+            (*sqe).flags = IOSQE_BUFFER_SELECT;
+            // `buf_index` aliases `buf_group` in the kernel ABI.
+            (*sqe).buf_index = bgid;
+        }
+        true
+    }
+
     /// Queue an `accept` on `listen_fd`; the accepted fd arrives as the
     /// completion's `res` (already `O_NONBLOCK | O_CLOEXEC`). Returns `false` if
     /// the SQ is full.
@@ -402,6 +459,71 @@ impl IoUring {
         unsafe { (*self.cq_khead).store(head, Ordering::Release) };
         n
     }
+
+    /// Register a **provided-buffer ring** of `entries` (power of two) buffers of
+    /// `buf_size` bytes each under group id `bgid`, for multishot
+    /// [`prep_recv_multishot`](Self::prep_recv_multishot). The kernel draws a
+    /// buffer per arrival and reports its id; the application recycles it via
+    /// [`ProvidedBufRing::recycle`]. The registration is auto-released when the
+    /// ring fd closes; the returned handle also unregisters + unmaps on drop.
+    pub fn register_buf_ring(
+        &self,
+        entries: u16,
+        buf_size: u32,
+        bgid: u16,
+    ) -> io::Result<ProvidedBufRing> {
+        assert!(entries.is_power_of_two(), "buf ring entries must be power of two");
+        // The ring is `entries` × `struct io_uring_buf` (16 bytes); anonymous so
+        // it's page-aligned (the kernel pins this address). Zeroed by mmap.
+        let ring_len = entries as usize * IO_URING_BUF_SIZE;
+        let ring = unsafe {
+            ffi::mmap(ptr::null_mut(), ring_len, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0)
+        };
+        if ring as isize == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        let ring = ring as *mut u8;
+
+        let reg = IoUringBufReg {
+            ring_addr: ring as u64,
+            ring_entries: entries as u32,
+            bgid,
+            pad: 0,
+            resv: [0; 3],
+        };
+        let ret = unsafe {
+            ffi::syscall(
+                SYS_IO_URING_REGISTER,
+                self.ring_fd as c_long,
+                IORING_REGISTER_PBUF_RING as c_long,
+                &reg as *const IoUringBufReg as c_long,
+                1 as c_long,
+            )
+        };
+        if ret < 0 {
+            let e = io::Error::last_os_error();
+            unsafe { ffi::munmap(ring as *mut c_void, ring_len) };
+            return Err(e);
+        }
+
+        let slab = vec![0u8; entries as usize * buf_size as usize];
+        let mut pbr = ProvidedBufRing {
+            ring_fd: self.ring_fd,
+            ring,
+            ring_len,
+            slab,
+            mask: entries - 1,
+            buf_size,
+            bgid,
+            tail: 0,
+        };
+        // Publish all buffers so the first recvs have somewhere to land.
+        for bid in 0..entries {
+            pbr.stage(bid);
+        }
+        pbr.commit();
+        Ok(pbr)
+    }
 }
 
 impl Drop for IoUring {
@@ -411,6 +533,107 @@ impl Drop for IoUring {
             ffi::munmap(self.cq_mmap, self.cq_mmap_len);
             ffi::munmap(self.sq_mmap, self.sq_mmap_len);
             ffi::close(self.ring_fd);
+        }
+    }
+}
+
+/// `sizeof(struct io_uring_buf)` — `{ addr:u64, len:u32, bid:u16, resv:u16 }`.
+const IO_URING_BUF_SIZE: usize = 16;
+/// Byte offset of the producer `tail` within the buf ring (it aliases
+/// `bufs[0].resv`, so adding a buffer at index 0 — which writes only addr/len/bid,
+/// offsets 0..14 — never clobbers it).
+const IO_URING_BUF_TAIL_OFF: usize = 14;
+
+#[repr(C)]
+struct IoUringBufReg {
+    ring_addr: u64,
+    ring_entries: u32,
+    bgid: u16,
+    pad: u16,
+    resv: [u64; 3],
+}
+
+/// A registered provided-buffer ring (the destination pool for multishot
+/// [`recv`](IoUring::prep_recv_multishot)). Owns the buf-ring mapping and the
+/// backing slab; the kernel fills a buffer per arrival, the app recycles it.
+pub struct ProvidedBufRing {
+    ring_fd: c_int,
+    ring: *mut u8,
+    ring_len: usize,
+    /// Contiguous backing store; buffer `bid` is `slab[bid*buf_size ..][..n]`.
+    /// Never resized, so the addresses published into the ring stay valid.
+    slab: Vec<u8>,
+    mask: u16,
+    buf_size: u32,
+    bgid: u16,
+    /// Local producer cursor (published to the kernel by [`Self::commit`]).
+    tail: u16,
+}
+
+// SAFETY: like `IoUring`, a single owner per shard thread; not `Sync`.
+unsafe impl Send for ProvidedBufRing {}
+
+impl ProvidedBufRing {
+    /// The buffer group id this ring serves (pass to `prep_recv_multishot`).
+    pub fn group(&self) -> u16 {
+        self.bgid
+    }
+
+    /// The `n` valid bytes the kernel placed in buffer `bid` (n = completion `res`).
+    pub fn bytes(&self, bid: u16, n: usize) -> &[u8] {
+        let start = bid as usize * self.buf_size as usize;
+        &self.slab[start..start + n.min(self.buf_size as usize)]
+    }
+
+    /// Place buffer `bid` at the current tail slot (without publishing). Writes
+    /// only addr/len/bid (offsets 0..14), never the tail at offset 14.
+    fn stage(&mut self, bid: u16) {
+        let idx = (self.tail & self.mask) as usize;
+        let base = unsafe { self.ring.add(idx * IO_URING_BUF_SIZE) };
+        let addr = unsafe { self.slab.as_ptr().add(bid as usize * self.buf_size as usize) } as u64;
+        // SAFETY: `base` is an in-bounds 16-byte slot; fields are unaligned-safe.
+        unsafe {
+            ptr::write_unaligned(base as *mut u64, addr);
+            ptr::write_unaligned(base.add(8) as *mut u32, self.buf_size);
+            ptr::write_unaligned(base.add(12) as *mut u16, bid);
+        }
+        self.tail = self.tail.wrapping_add(1);
+    }
+
+    /// Publish the staged buffers to the kernel (store-release on the ring tail).
+    fn commit(&self) {
+        let tail = unsafe { &*(self.ring.add(IO_URING_BUF_TAIL_OFF) as *const AtomicU16) };
+        tail.store(self.tail, Ordering::Release);
+    }
+
+    /// Return buffer `bid` to the ring so the kernel can reuse it. Call once the
+    /// bytes from its completion have been copied out.
+    pub fn recycle(&mut self, bid: u16) {
+        self.stage(bid);
+        self.commit();
+    }
+}
+
+impl Drop for ProvidedBufRing {
+    fn drop(&mut self) {
+        // Best-effort unregister (EBADF if the ring fd is already closed — fine),
+        // then unmap. The slab Vec frees itself.
+        let reg = IoUringBufReg {
+            ring_addr: 0,
+            ring_entries: 0,
+            bgid: self.bgid,
+            pad: 0,
+            resv: [0; 3],
+        };
+        unsafe {
+            ffi::syscall(
+                SYS_IO_URING_REGISTER,
+                self.ring_fd as c_long,
+                IORING_UNREGISTER_PBUF_RING as c_long,
+                &reg as *const IoUringBufReg as c_long,
+                1 as c_long,
+            );
+            ffi::munmap(self.ring as *mut c_void, self.ring_len);
         }
     }
 }
@@ -573,6 +796,84 @@ mod tests {
             }
         });
         assert_eq!(nwrote, 4, "should write 4 bytes");
+
+        client.join().unwrap();
+        // SAFETY: `conn_fd` is the accepted fd; wrap so drop closes it.
+        let _ = unsafe { OwnedFd::from_raw_fd(conn_fd) };
+    }
+
+    #[test]
+    fn multishot_recv_with_provided_buffers() {
+        // One multishot RECV SQE must yield a completion per arrival, each into a
+        // kernel-picked provided buffer (bid reported in cqe.flags), staying armed
+        // (F_MORE) across recycles — the exact mechanism the reactor relies on.
+        const ACCEPT: u64 = 1;
+        const RECV: u64 = 2;
+
+        let Some(mut ring) = ring_or_skip(16) else {
+            return;
+        };
+        // Provided-buffer ring may be unsupported on older kernels → skip.
+        let listener = crate::tcp_listen([127, 0, 0, 1], 0, 128).unwrap();
+        let port = listener.local_port().unwrap();
+
+        let client = std::thread::spawn(move || {
+            let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+            s.set_nodelay(true).unwrap();
+            s.write_all(b"ping").unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            s.write_all(b"pong").unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        });
+
+        assert!(ring.prep_accept(listener.raw(), ACCEPT));
+        ring.submit_and_wait(1).unwrap();
+        let mut conn_fd = -1;
+        ring.for_each_completion(|c| {
+            if c.user_data == ACCEPT {
+                conn_fd = c.res;
+            }
+        });
+        assert!(conn_fd >= 0, "accept failed: {conn_fd}");
+
+        let mut pbr = match ring.register_buf_ring(4, 64, 7) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("SKIP: provided buffer ring unavailable ({e})");
+                let _ = unsafe { OwnedFd::from_raw_fd(conn_fd) };
+                client.join().unwrap();
+                return;
+            }
+        };
+        assert!(ring.prep_recv_multishot(conn_fd, pbr.group(), RECV));
+
+        // First arrival.
+        ring.submit_and_wait(1).unwrap();
+        let mut c1 = None;
+        ring.for_each_completion(|c| {
+            if c.user_data == RECV {
+                c1 = Some(c);
+            }
+        });
+        let c1 = c1.expect("first recv completion");
+        assert!(c1.res > 0, "recv res should be >0, got {}", c1.res);
+        let bid1 = c1.buffer_id().expect("a provided buffer was used");
+        assert_eq!(pbr.bytes(bid1, c1.res as usize), b"ping");
+        assert!(c1.has_more(), "multishot recv stays armed (F_MORE)");
+        pbr.recycle(bid1);
+
+        // Second arrival — WITHOUT re-submitting the recv SQE (multishot).
+        ring.submit_and_wait(1).unwrap();
+        let mut c2 = None;
+        ring.for_each_completion(|c| {
+            if c.user_data == RECV {
+                c2 = Some(c);
+            }
+        });
+        let c2 = c2.expect("second recv completion from the same SQE");
+        let bid2 = c2.buffer_id().expect("a provided buffer was used");
+        assert_eq!(pbr.bytes(bid2, c2.res as usize), b"pong");
+        pbr.recycle(bid2);
 
         client.join().unwrap();
         // SAFETY: `conn_fd` is the accepted fd; wrap so drop closes it.

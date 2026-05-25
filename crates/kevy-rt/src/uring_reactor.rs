@@ -21,7 +21,7 @@ use crate::message::{Inbound, Op};
 use crate::shard::Shard;
 use kevy_persist::{load_snapshot, replay_aof};
 use kevy_resp::parse_command;
-use kevy_sys::{Completion, IoUring, Socket};
+use kevy_sys::{Completion, IoUring, ProvidedBufRing, Socket};
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
@@ -34,12 +34,19 @@ const URING_ENTRIES: u32 = 256;
 /// the epoll reactor's `SPIN_LIMIT`). Keeps -c1 latency low without spinning a
 /// quiet shard at 100% forever.
 const URING_SPIN_LIMIT: u32 = 256;
-/// Fixed per-connection read buffer (bytes); larger requests span several reads.
-const READ_BUF: usize = 16 * 1024;
+/// Shared provided-buffer ring per shard: `PBUF_ENTRIES` buffers of `PBUF_SIZE`
+/// bytes feed the multishot recvs of every connection. One recv may fill a whole
+/// buffer; larger arrivals span several (reassembled in `Conn::input`). 128 × 16K
+/// = 2 MiB/shard, recycled immediately after each completion is drained.
+const PBUF_ENTRIES: u16 = 128;
+const PBUF_SIZE: u32 = 16 * 1024;
+const PBUF_GROUP: u16 = 0;
+/// `-ENOBUFS`: the buf ring was momentarily empty; just re-arm (don't close).
+const ENOBUFS: i32 = 105;
 
 // `user_data` layout: top 2 bits = op, low 62 bits = conn id.
 const OP_SHIFT: u32 = 62;
-const OP_READ: u64 = 1 << OP_SHIFT;
+const OP_RECV: u64 = 1 << OP_SHIFT;
 const OP_WRITE: u64 = 2 << OP_SHIFT;
 const OP_ACCEPT: u64 = 3 << OP_SHIFT;
 const CONN_MASK: u64 = (1 << OP_SHIFT) - 1;
@@ -47,9 +54,9 @@ const CONN_MASK: u64 = (1 << OP_SHIFT) - 1;
 /// io_uring-specific per-connection state (the byte buffers that must outlive
 /// their in-flight SQEs). The command-level state stays in the shard's [`Conn`].
 struct UringConn {
-    /// Read target; an in-flight read SQE points here, so it must not move.
-    read_buf: Vec<u8>,
-    read_inflight: bool,
+    /// A multishot recv SQE is armed for this conn (re-fires per arrival, drawing
+    /// from the shard's provided-buffer ring). Re-armed only when it terminates.
+    recv_armed: bool,
     /// Stable buffer for an in-flight write (swapped in from `Conn::output`).
     write_buf: Vec<u8>,
     write_off: usize,
@@ -61,8 +68,7 @@ struct UringConn {
 impl UringConn {
     fn new() -> Self {
         UringConn {
-            read_buf: vec![0u8; READ_BUF],
-            read_inflight: false,
+            recv_armed: false,
             write_buf: Vec::new(),
             write_off: 0,
             write_inflight: false,
@@ -92,6 +98,9 @@ impl<C: Commands> Shard<C> {
         }
 
         let mut ring = IoUring::new(URING_ENTRIES)?;
+        // One provided-buffer ring per shard feeds every conn's multishot recv
+        // (needs Linux 5.19+; the epoll reactor is the fallback for older kernels).
+        let mut pbuf = ring.register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP)?;
         let mut io: HashMap<u64, UringConn> = HashMap::new();
         let mut accept_inflight = false;
         let mut comps: Vec<Completion> = Vec::with_capacity(URING_ENTRIES as usize);
@@ -103,7 +112,7 @@ impl<C: Commands> Shard<C> {
             if !accept_inflight {
                 accept_inflight = ring.prep_accept(self.listener.raw(), OP_ACCEPT);
             }
-            self.uring_arm_conns(&mut ring, &mut io, &mut cids);
+            self.uring_arm_conns(&mut ring, &mut io, &mut cids, pbuf.group());
 
             ring.submit_and_wait(0)?; // submit queued SQEs; reap is non-blocking
             comps.clear();
@@ -125,12 +134,7 @@ impl<C: Commands> Shard<C> {
                             io.insert(ncid, UringConn::new());
                         }
                     }
-                    OP_READ => {
-                        if let Some(uc) = io.get_mut(&cid) {
-                            uc.read_inflight = false;
-                        }
-                        self.uring_on_read(cid, c.res, &mut io);
-                    }
+                    OP_RECV => self.uring_on_recv(cid, c, &mut io, &mut pbuf),
                     OP_WRITE => self.uring_on_write(cid, c.res, &mut io),
                     _ => {}
                 }
@@ -176,6 +180,7 @@ impl<C: Commands> Shard<C> {
         ring: &mut IoUring,
         io: &mut HashMap<u64, UringConn>,
         cids: &mut Vec<u64>,
+        bgid: u16,
     ) {
         cids.clear();
         cids.extend(self.conns.keys().copied());
@@ -209,37 +214,54 @@ impl<C: Commands> Shard<C> {
                     io.get_mut(&cid).unwrap().write_inflight = true;
                 }
             }
-            // Submit a read if none is in flight and we're not closing.
-            let want_read = io.get(&cid).is_some_and(|uc| !uc.read_inflight && !uc.closing);
-            if want_read {
+            // Arm a multishot recv if one isn't already running (it re-fires per
+            // arrival into the shared provided-buffer ring, so this happens once
+            // per connection, not once per read — the syscall-batching win).
+            let want_recv = io.get(&cid).is_some_and(|uc| !uc.recv_armed && !uc.closing);
+            if want_recv {
                 let fd = self.conns[&cid].sock.raw();
-                let uc = io.get_mut(&cid).unwrap();
-                // SAFETY: read_buf is owned, stable, and outlives the SQE.
-                let ok = unsafe {
-                    ring.prep_read(fd, uc.read_buf.as_mut_ptr(), uc.read_buf.len() as u32, OP_READ | cid)
-                };
-                if ok {
-                    uc.read_inflight = true;
+                if ring.prep_recv_multishot(fd, bgid, OP_RECV | cid) {
+                    io.get_mut(&cid).unwrap().recv_armed = true;
                 }
             }
         }
     }
 
-    /// A read completed: append the bytes and run every complete command.
-    fn uring_on_read(&mut self, cid: u64, res: i32, io: &mut HashMap<u64, UringConn>) {
-        if res <= 0 {
-            if let Some(uc) = io.get_mut(&cid) {
-                uc.closing = true; // EOF or error
+    /// A multishot recv completed: copy the kernel-picked buffer's bytes into the
+    /// conn, recycle it, run every complete command, and re-arm if the SQE ended.
+    fn uring_on_recv(
+        &mut self,
+        cid: u64,
+        c: &Completion,
+        io: &mut HashMap<u64, UringConn>,
+        pbuf: &mut ProvidedBufRing,
+    ) {
+        // The multishot SQE stops firing once a completion lacks F_MORE (error,
+        // ENOBUFS, or EOF) — mark it for re-arming next loop.
+        if !c.has_more()
+            && let Some(uc) = io.get_mut(&cid)
+        {
+            uc.recv_armed = false;
+        }
+        if c.res <= 0 {
+            // Close on EOF (0) or a real error, but NOT on -ENOBUFS (the ring was
+            // momentarily empty; the data is still queued, so just re-arm).
+            if c.res != -ENOBUFS
+                && let Some(uc) = io.get_mut(&cid)
+            {
+                uc.closing = true;
             }
             return;
         }
-        let n = res as usize;
-        if let (Some(conn), Some(uc)) = (self.conns.get_mut(&cid), io.get(&cid)) {
-            let n = n.min(uc.read_buf.len());
-            conn.input.extend_from_slice(&uc.read_buf[..n]);
-        } else {
-            return;
+        // res > 0: a buffer was filled; copy it out and return it to the ring.
+        let Some(bid) = c.buffer_id() else {
+            return; // no buffer (shouldn't happen for a successful recv)
+        };
+        let n = c.res as usize;
+        if let Some(conn) = self.conns.get_mut(&cid) {
+            conn.input.extend_from_slice(pbuf.bytes(bid, n));
         }
+        pbuf.recycle(bid);
         loop {
             let parsed = {
                 let Some(conn) = self.conns.get_mut(&cid) else {
@@ -344,11 +366,10 @@ impl<C: Commands> Shard<C> {
                     c.output.is_empty() && c.pending.is_empty() && c.write_pos == 0
                 });
                 let closing = uc.closing || conn.is_some_and(|c| c.closing);
-                closing
-                    && !uc.read_inflight
-                    && !uc.write_inflight
-                    && uc.write_buf.is_empty()
-                    && drained
+                // The multishot recv may still be armed; closing the fd (on Conn
+                // drop) terminates it and its final completion is ignored (conn
+                // gone). We only need writes fully flushed before closing.
+                closing && !uc.write_inflight && uc.write_buf.is_empty() && drained
             })
             .map(|(&cid, _)| cid)
             .collect();

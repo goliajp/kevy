@@ -3,3 +3,6 @@
 # kevy persistence artifacts (snapshots + append-only logs)
 dump-*.rdb
 aof-*.aof
+
+# Claude Code runtime state (settings.json stays tracked)
+.claude/scheduled_tasks.lock

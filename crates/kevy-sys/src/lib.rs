@@ -60,7 +60,7 @@ use std::io;
 #[cfg(target_os = "linux")]
 mod uring;
 #[cfg(target_os = "linux")]
-pub use uring::{Completion, IoUring};
+pub use uring::{Completion, IoUring, ProvidedBufRing};
 
 mod ffi {
     use core::ffi::{c_int, c_void};
