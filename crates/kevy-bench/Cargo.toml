@@ -1,0 +1,10 @@
+[package]
+name = "kevy-bench"
+description = "Pure-Rust micro-benchmark harness for kevy — zero deps, no criterion. Median/p95 timing + A/B speedup ratios."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]

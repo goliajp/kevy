@@ -1,0 +1,16 @@
+[package]
+name = "kevy-resp"
+description = "RESP2/RESP3 wire-protocol codec for kevy — pure Rust, zero deps."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+keywords = ["redis", "resp", "protocol", "codec", "kevy"]
+categories = ["network-programming", "parser-implementations", "encoding"]
+
+[dependencies]
+
+[dev-dependencies]
+kevy-bench = { path = "../kevy-bench", version = "0.1" }

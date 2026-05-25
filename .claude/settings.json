@@ -1,0 +1,39 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(*)",
+      "Read(*)",
+      "Edit(*)",
+      "Write(*)",
+      "Glob(*)",
+      "Grep(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "Skill(*)",
+      "Agent(*)",
+      "AskUserQuestion(*)",
+      "TaskCreate(*)",
+      "TaskUpdate(*)",
+      "TaskGet(*)",
+      "TaskList(*)",
+      "TaskOutput(*)",
+      "TaskStop(*)",
+      "LSP(*)",
+      "Monitor(*)",
+      "NotebookEdit(*)",
+      "EnterPlanMode(*)",
+      "ExitPlanMode(*)",
+      "EnterWorktree(*)",
+      "ExitWorktree(*)",
+      "CronCreate(*)",
+      "CronDelete(*)",
+      "CronList(*)",
+      "PushNotification(*)",
+      "RemoteTrigger(*)",
+      "ScheduleWakeup(*)",
+      "ToolSearch(*)",
+      "mcp__*"
+    ],
+    "defaultMode": "bypassPermissions"
+  }
+}

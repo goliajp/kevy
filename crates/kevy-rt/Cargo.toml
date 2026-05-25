@@ -1,0 +1,18 @@
+[package]
+name = "kevy-rt"
+description = "kevy thread-per-core shared-nothing runtime — pure Rust, zero deps."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+keywords = ["redis", "thread-per-core", "shared-nothing", "runtime", "reactor"]
+categories = ["network-programming", "concurrency", "database-implementations"]
+
+[dependencies]
+kevy-sys = { path = "../kevy-sys", version = "0.1" }
+kevy-store = { path = "../kevy-store", version = "0.1" }
+kevy-resp = { path = "../kevy-resp", version = "0.1" }
+kevy-ring = { path = "../kevy-ring", version = "0.1" }
+kevy-persist = { path = "../kevy-persist", version = "0.1" }

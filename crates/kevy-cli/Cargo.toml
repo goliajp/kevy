@@ -1,0 +1,18 @@
+[package]
+name = "kevy-cli"
+description = "kevy-cli — a redis-cli-style client for kevy or any RESP server. Pure Rust, zero deps."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+keywords = ["redis", "cli", "client", "resp", "kevy"]
+categories = ["command-line-utilities", "database"]
+
+[[bin]]
+name = "kevy-cli"
+path = "src/main.rs"
+
+[dependencies]
+kevy-resp = { path = "../kevy-resp", version = "0.1" }
