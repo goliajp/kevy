@@ -120,12 +120,39 @@ impl<C: Commands> Shard<C> {
             }
             _ => {}
         }
-        let (targets, agg): (Vec<(usize, Op)>, Agg) = match route {
-            Route::Local => (vec![(self.id, Op::Dispatch(args))], Agg::First(None)),
-            Route::Single(idx) => {
-                let shard = shard_of(&args[idx], self.nshards);
-                (vec![(shard, Op::Dispatch(args))], Agg::First(None))
+
+        // Fast path: a single-target command (keyless `Local` or single-key
+        // `Single`) — the overwhelming majority (GET/SET/INCR/PING/…). Skip the
+        // `Vec<(shard, Op)>` allocation + the aggregation fold loop entirely:
+        // one slot, one target, `args` moved straight into the dispatch.
+        let single = match route {
+            Route::Local => Some(self.id),
+            Route::Single(idx) => Some(shard_of(&args[idx], self.nshards)),
+            _ => None,
+        };
+        if let Some(shard) = single {
+            if let Some(c) = self.conns.get_mut(&conn_id) {
+                c.pending.push_back(PendingSlot {
+                    remaining: 1,
+                    agg: Agg::First(None),
+                    done: None,
+                });
+                if is_quit {
+                    c.closing = true;
+                }
             }
+            if shard == self.id {
+                let part = self.exec_op(Op::Dispatch(args));
+                self.fold(conn_id, seq, part);
+            } else {
+                self.request_batch[shard].push((conn_id, seq, args));
+            }
+            return;
+        }
+
+        // Multi-target / aggregating commands (DEL, MGET, DBSIZE, fan-outs, …).
+        let (targets, agg): (Vec<(usize, Op)>, Agg) = match route {
+            Route::Local | Route::Single(_) => unreachable!("handled by fast path"),
             Route::DelKeys => (self.group_keys(&args, Op::Del), Agg::SumInt(0)),
             Route::ExistsKeys => (self.group_keys(&args, Op::Exists), Agg::SumInt(0)),
             Route::Dbsize => (
