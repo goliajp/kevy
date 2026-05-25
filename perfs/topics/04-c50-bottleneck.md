@@ -52,3 +52,25 @@ bash bench/perf_sat.sh <binary> <label>   # server-bound A/B (few shards, strong
 io_uring sharded suite 11/11 (epoll + io_uring) with the fast path; clippy 0.
 perf_sat A/B numbers above. data: `data/2026-05-26/c50-diag.txt`,
 `data/2026-05-26/fastpath-sat-ab.txt`.
+
+## Follow-up: pipeline scan classifies the bottleneck (2026-05-26)
+
+`bench/perf_pipe.sh` (4sh io_uring, 12-core client, GET -c50, vary -P):
+
+| -P | rps |
+|----|----:|
+| 1 | 377k |
+| 4 | 1.38M |
+| 16 | 3.33M |
+| 64 | 5.85M |
+| 256 | 7.21M |
+
+**19× from -P1→-P256 ⇒ per-command syscall/reactor overhead dominates, not
+command CPU** (~120ns CPU vs 555ns/cmd at -P256 single-shard). And -P256 reaches
+7.2M on the *same* 4-shard server that caps at 3.33M for -P16 ⇒ **-P16 4sh is
+server-bound** (clean A/B config). data: `data/2026-05-26/pipeline-scan.txt`.
+
+→ **Next lever (topic 05): io_uring multishot recv + provided-buffer ring.** At
+-P16 there are ~16× more read SQEs than at -P256; multishot re-fires one recv per
+connection and lets the kernel pick a buffer, cutting submit/re-arm overhead.
+~2× headroom at the typical -P16.
