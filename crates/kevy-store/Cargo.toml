@@ -1,0 +1,17 @@
+[package]
+name = "kevy-store"
+description = "kevy keyspace + value types + expiry — pure Rust, zero deps."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+keywords = ["redis", "keyspace", "kv", "database", "ttl"]
+categories = ["database-implementations", "data-structures", "caching"]
+
+[dependencies]
+kevy-hash = { path = "../kevy-hash", version = "0.1" }
+
+[dev-dependencies]
+kevy-bench = { path = "../kevy-bench", version = "0.1" }

@@ -1,0 +1,167 @@
+//! v0.5 detection: data written, SAVEd, and reloaded by a fresh runtime (same
+//! shard count) survives a "restart". Each shard persists its own store.
+
+use std::io::{Read, Write};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+fn free_port() -> u16 {
+    std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+fn req(parts: &[&[u8]]) -> Vec<u8> {
+    let mut v = format!("*{}\r\n", parts.len()).into_bytes();
+    for p in parts {
+        v.extend_from_slice(format!("${}\r\n", p.len()).as_bytes());
+        v.extend_from_slice(p);
+        v.extend_from_slice(b"\r\n");
+    }
+    v
+}
+
+fn read_reply(s: &mut std::net::TcpStream, expected: &[u8]) {
+    let mut buf = vec![0u8; expected.len()];
+    s.read_exact(&mut buf).unwrap();
+    assert_eq!(
+        &buf,
+        expected,
+        "expected {:?}",
+        String::from_utf8_lossy(expected)
+    );
+}
+
+/// Run a runtime on `port` in `dir` with `nshards`, hand it to `body`, then stop.
+fn with_runtime(port: u16, dir: &std::path::Path, nshards: usize, body: impl FnOnce(u16)) {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_t = stop.clone();
+    let dir = dir.to_path_buf();
+    let handle = std::thread::spawn(move || {
+        let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, nshards, kevy::KevyCommands)
+            .with_data_dir(dir);
+        rt.run(stop_t).unwrap();
+    });
+    let mut up = false;
+    for _ in 0..200 {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            up = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(up, "runtime did not start");
+    body(port);
+    stop.store(true, Ordering::Relaxed);
+    let _ = handle.join();
+}
+
+#[test]
+fn data_survives_restart_via_save() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-persist-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let nshards = 4;
+    let port = free_port();
+
+    // First run: write 100 keys and SAVE.
+    with_runtime(port, &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        for i in 0..100u32 {
+            c.write_all(&req(&[
+                b"SET",
+                format!("k{i}").as_bytes(),
+                format!("v{i}").as_bytes(),
+            ]))
+            .unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+        }
+        c.write_all(&req(&[b"SAVE"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+    });
+
+    // Per-shard snapshot files should now exist.
+    let dumps = (0..nshards)
+        .filter(|i| dir.join(format!("dump-{i}.rdb")).exists())
+        .count();
+    assert!(dumps > 0, "no snapshot files were written");
+
+    // Second run: a fresh runtime over the same dir must see the data.
+    let port2 = free_port();
+    with_runtime(port2, &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        for i in 0..100u32 {
+            c.write_all(&req(&[b"GET", format!("k{i}").as_bytes()]))
+                .unwrap();
+            let want = format!("v{i}");
+            read_reply(
+                &mut c,
+                format!("${}\r\n{}\r\n", want.len(), want).as_bytes(),
+            );
+        }
+    });
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn data_survives_restart_via_aof_without_save() {
+    // No SAVE at all — durability comes purely from the AOF replay on startup.
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-aof-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let nshards = 4;
+    let port = free_port();
+
+    with_runtime(port, &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        for i in 0..100u32 {
+            c.write_all(&req(&[
+                b"SET",
+                format!("a{i}").as_bytes(),
+                format!("b{i}").as_bytes(),
+            ]))
+            .unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+        }
+        // INCR a few — verifies non-idempotent ops replay exactly once.
+        for _ in 0..5 {
+            c.write_all(&req(&[b"INCR", b"counter"])).unwrap();
+        }
+        let mut buf = [0u8; 64];
+        let _ = c.read(&mut buf).unwrap();
+    });
+    // No SAVE: snapshots must NOT exist; AOF must.
+    assert!(!dir.join("dump-0.rdb").exists());
+
+    let port2 = free_port();
+    with_runtime(port2, &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        for i in 0..100u32 {
+            c.write_all(&req(&[b"GET", format!("a{i}").as_bytes()]))
+                .unwrap();
+            let want = format!("b{i}");
+            read_reply(
+                &mut c,
+                format!("${}\r\n{}\r\n", want.len(), want).as_bytes(),
+            );
+        }
+        // counter must be exactly 5 (replayed once each, not doubled).
+        c.write_all(&req(&[b"GET", b"counter"])).unwrap();
+        read_reply(&mut c, b"$1\r\n5\r\n");
+    });
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

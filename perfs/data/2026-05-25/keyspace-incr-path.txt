@@ -1,0 +1,18 @@
+=== run 1 ===
+== real Store::get/set (Fx+fmix64 keyspace), N=100000 ==
+  Store::get hit                 median       29 ns   p95       38 ns   min       16 ns
+  Store::get miss                median       12 ns   p95       16 ns   min       10 ns
+  Store::set overwrite           median      129 ns   p95      220 ns   min       76 ns
+  Store::incr_by                 median       83 ns   p95      125 ns   min       46 ns
+=== run 2 ===
+== real Store::get/set (Fx+fmix64 keyspace), N=100000 ==
+  Store::get hit                 median       28 ns   p95       38 ns   min       15 ns
+  Store::get miss                median       15 ns   p95       24 ns   min       11 ns
+  Store::set overwrite           median      131 ns   p95      206 ns   min       70 ns
+  Store::incr_by                 median       79 ns   p95       93 ns   min       51 ns
+=== run 3 ===
+== real Store::get/set (Fx+fmix64 keyspace), N=100000 ==
+  Store::get hit                 median       30 ns   p95       39 ns   min       17 ns
+  Store::get miss                median       12 ns   p95       17 ns   min       11 ns
+  Store::set overwrite           median      131 ns   p95      183 ns   min       78 ns
+  Store::incr_by                 median       79 ns   p95       92 ns   min       52 ns

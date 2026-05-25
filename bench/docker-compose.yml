@@ -1,0 +1,49 @@
+# Baseline bench harness: valkey 9.1 and kevy side-by-side on one Linux network,
+# measured by the neutral valkey-benchmark tool. Persistence disabled on both so
+# we measure the in-memory path, not disk I/O.
+#
+# CPU isolation: both servers are pinned to cores 0-9; the load generator runs on
+# cores 10-13. This is essential now that kevy busy-polls (it would otherwise peg
+# every core and starve the benchmark client, skewing the numbers).
+services:
+  valkey:
+    image: valkey/valkey:9.1
+    command:
+      ["valkey-server", "--save", "", "--appendonly", "no", "--protected-mode", "no"]
+    cpuset: "0-9"
+    networks: [bench]
+
+  redis:
+    image: redis:7.4
+    command:
+      ["redis-server", "--save", "", "--appendonly", "no", "--protected-mode", "no"]
+    cpuset: "0-9"
+    networks: [bench]
+
+  kevy:
+    build:
+      context: ..
+      dockerfile: bench/Dockerfile.kevy
+    environment:
+      KEVY_BIND: "0.0.0.0"
+      KEVY_PORT: "6379"
+      KEVY_AOF: "0" # in-memory parity with valkey's `appendonly no`
+      KEVY_THREADS: "10" # one shard per pinned core
+      # Pass through from the host: empty = epoll reactor, "1" = io_uring reactor.
+      KEVY_IO_URING: "${KEVY_IO_URING:-}"
+    # io_uring_setup is blocked by Docker's default seccomp profile; allow it.
+    security_opt:
+      - seccomp=unconfined
+    cpuset: "0-9"
+    networks: [bench]
+
+  # Idle box on its own cores; we exec valkey-benchmark here so the client never
+  # competes with the servers for CPU.
+  loadgen:
+    image: valkey/valkey:9.1
+    command: ["sleep", "infinity"]
+    cpuset: "10-13"
+    networks: [bench]
+
+networks:
+  bench:

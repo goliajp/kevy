@@ -1,0 +1,12 @@
+[package]
+name = "kevy-hash"
+description = "Fast, well-distributed hashing for kevy's single-trust-domain keyspace — pure Rust, zero deps."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+keywords = ["hash", "hasher", "fxhash", "fmix", "hashmap"]
+categories = ["algorithms", "data-structures"]
+
+[dependencies]

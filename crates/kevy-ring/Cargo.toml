@@ -1,0 +1,13 @@
+[package]
+name = "kevy-ring"
+description = "Lock-free bounded single-producer/single-consumer ring buffer for kevy — pure Rust, zero deps."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+keywords = ["spsc", "lock-free", "ring-buffer", "queue", "kevy"]
+categories = ["concurrency", "data-structures", "no-std"]
+
+[dependencies]

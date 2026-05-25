@@ -1,0 +1,88 @@
+keyspace hasher baseline — std HashMap (hashbrown table), SipHash vs candidates
+note: ratios are the signal; absolute ns drift with host load.
+
+== short key: 12 bytes/key, N=100000 ==
+ hash_one (pure hasher):
+  SipHash                        median        4 ns   p95        6 ns   min        4 ns
+  FNV-1a                         median        6 ns   p95        9 ns   min        5 ns
+  → FNV-1a  is 0.67× slower than SipHash (median)
+
+  SipHash                        median        4 ns   p95        6 ns   min        4 ns
+  FxHash                         median        0 ns   p95        1 ns   min        0 ns
+  → FxHash  is 4.00× faster than SipHash (median)
+
+  SipHash                        median        4 ns   p95        6 ns   min        4 ns
+  Fx+mix                         median        1 ns   p95        2 ns   min        1 ns
+  → Fx+mix  is 4.00× faster than SipHash (median)
+
+ get_hit:
+  SipHash                        median       18 ns   p95       26 ns   min       10 ns
+  FNV-1a                         median       21 ns   p95       29 ns   min       13 ns
+  → FNV-1a  is 0.86× slower than SipHash (median)
+
+  SipHash                        median       18 ns   p95       26 ns   min       10 ns
+  FxHash                         median      830 ns   p95     1157 ns   min      145 ns
+  → FxHash  is 0.02× slower than SipHash (median)
+
+  SipHash                        median       18 ns   p95       26 ns   min       10 ns
+  Fx+mix                         median       20 ns   p95       40 ns   min        9 ns
+  → Fx+mix  is 0.90× slower than SipHash (median)
+
+ get_miss:
+  SipHash                        median       26 ns   p95       54 ns   min       19 ns
+  FNV-1a                         median       32 ns   p95       91 ns   min       25 ns
+  → FNV-1a  is 0.81× slower than SipHash (median)
+
+  SipHash                        median       26 ns   p95       54 ns   min       19 ns
+  FxHash                         median        6 ns   p95       17 ns   min        4 ns
+  → FxHash  is 4.33× faster than SipHash (median)
+
+  SipHash                        median       26 ns   p95       54 ns   min       19 ns
+  Fx+mix                         median       16 ns   p95       25 ns   min       12 ns
+  → Fx+mix  is 1.62× faster than SipHash (median)
+
+== long key: 40 bytes/key, N=100000 ==
+ hash_one (pure hasher):
+  SipHash                        median       10 ns   p95       17 ns   min        8 ns
+  FNV-1a                         median       25 ns   p95       38 ns   min       21 ns
+  → FNV-1a  is 0.40× slower than SipHash (median)
+
+  SipHash                        median       10 ns   p95       17 ns   min        8 ns
+  FxHash                         median        2 ns   p95        3 ns   min        1 ns
+  → FxHash  is 5.00× faster than SipHash (median)
+
+  SipHash                        median       10 ns   p95       17 ns   min        8 ns
+  Fx+mix                         median        2 ns   p95        4 ns   min        2 ns
+  → Fx+mix  is 5.00× faster than SipHash (median)
+
+ get_hit:
+  SipHash                        median       48 ns   p95      127 ns   min       19 ns
+  FNV-1a                         median      104 ns   p95      177 ns   min       58 ns
+  → FNV-1a  is 0.46× slower than SipHash (median)
+
+  SipHash                        median       48 ns   p95      127 ns   min       19 ns
+  FxHash                         median       46 ns   p95       81 ns   min       18 ns
+  → FxHash  is 1.04× faster than SipHash (median)
+
+  SipHash                        median       48 ns   p95      127 ns   min       19 ns
+  Fx+mix                         median       34 ns   p95      571 ns   min       18 ns
+  → Fx+mix  is 1.41× faster than SipHash (median)
+
+ get_miss:
+  SipHash                        median       52 ns   p95       90 ns   min       30 ns
+  FNV-1a                         median       92 ns   p95      632 ns   min       50 ns
+  → FNV-1a  is 0.57× slower than SipHash (median)
+
+  SipHash                        median       52 ns   p95       90 ns   min       30 ns
+  FxHash                         median       59 ns   p95      105 ns   min       42 ns
+  → FxHash  is 0.88× slower than SipHash (median)
+
+  SipHash                        median       52 ns   p95       90 ns   min       30 ns
+  Fx+mix                         median       28 ns   p95       47 ns   min       20 ns
+  → Fx+mix  is 1.86× faster than SipHash (median)
+
+== real Store::get/set (Fx+fmix64 keyspace), N=100000 ==
+  Store::get hit                 median      124 ns   p95      255 ns   min       75 ns
+  Store::get miss                median       44 ns   p95       89 ns   min       28 ns
+  Store::set overwrite           median      228 ns   p95      316 ns   min      180 ns
+

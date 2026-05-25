@@ -1,0 +1,25 @@
+[package]
+name = "kevy"
+description = "kevy — a pure-Rust, zero-dependency, Redis-compatible KV server."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+readme = "README.md"
+keywords = ["redis", "kv", "key-value", "database", "valkey"]
+categories = ["database-implementations", "caching", "network-programming"]
+
+[lib]
+name = "kevy"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kevy"
+path = "src/main.rs"
+
+[dependencies]
+kevy-sys = { path = "../kevy-sys", version = "0.1" }
+kevy-resp = { path = "../kevy-resp", version = "0.1" }
+kevy-store = { path = "../kevy-store", version = "0.1" }
+kevy-rt = { path = "../kevy-rt", version = "0.1" }

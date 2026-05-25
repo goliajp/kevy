@@ -1,0 +1,358 @@
+# kevy vs valkey 9.1 — baseline (v0.2)
+
+**Date:** 2026-05-24 · **Goal of this run:** validate the bench harness and
+measure the starting gap. Not a "we're fast" claim — kevy v0.2 is a deliberately
+naive **single-connection blocking** server.
+
+## Setup
+
+- Both servers in Docker Linux (Docker Desktop, **arm64** VM), same network, so
+  the only variable is the server. Persistence disabled on both (`--save ""
+  --appendonly no` for valkey) to measure the in-memory path.
+- Measured by `valkey-benchmark` (neutral tool, not a kevy dependency).
+- `n=200000`, no pipelining (`-P 1`), tests: `ping,set,get,incr`.
+- valkey: `valkey/valkey:9.1`. kevy: `cargo build --release` (fat LTO,
+  codegen-units=1, panic=abort) — see `bench/Dockerfile.kevy`.
+- Reproduce: `bash bench/run.sh`.
+
+> Caveat: absolute rps is depressed by the macOS Docker VM; the **ratio** is the
+> signal, and both servers share the same VM.
+
+## Single connection (`-c 1`) — apples-to-apples
+
+| test         | valkey 9.1 (rps) | kevy v0.2 (rps) | kevy / valkey |
+|--------------|-----------------:|----------------:|--------------:|
+| PING_INLINE  | 40,177           | 27,167          | 0.68×         |
+| PING_MBULK   | 40,040           | 25,793          | 0.64×         |
+| SET          | 30,694           | 25,316          | 0.82×         |
+| GET          | 30,530           | 19,520          | 0.64×         |
+| INCR         | 30,148           | 23,524          | 0.78×         |
+
+p50 latency is comparable (valkey ~0.023ms; kevy 0.023–0.039ms).
+
+## Concurrency headroom — valkey `-c 50`
+
+| test         | valkey -c 50 (rps) | vs valkey -c 1 |
+|--------------|-------------------:|---------------:|
+| PING_INLINE  | 146,092            | 3.6×           |
+| PING_MBULK   | 149,589            | 3.7×           |
+| SET          | 132,890            | 4.3×           |
+| GET          | 139,373            | 4.6×           |
+| INCR         | 156,250            | 5.2×           |
+
+kevy can't run `-c 50` yet: its blocking `serve` accepts one connection at a
+time, so a 50-connection benchmark would stall.
+
+## Reading
+
+1. **The harness works** and gives stable, repeatable numbers.
+2. **Per-connection, kevy is already 0.64–0.82× valkey** — for a from-scratch
+   blocking skeleton with a hand-rolled socket layer, the protocol + store path
+   is not the bottleneck. Encouraging.
+3. **The real gap is concurrency.** valkey gets 4–5× from multiplexing 50
+   connections. To *exceed* valkey, kevy must reach (then beat) ~150k by:
+   event-driven reactor (multi-connection) → thread-per-core (multicore) →
+   later pipelining.
+
+## Optimization backlog (cold — surfaced, not scheduled)
+
+- **GET is kevy's weakest (0.64×).** Suspect per-op `Instant::now()` in the
+  lazy-expiry path (syscall per command) and `Vec::drain(..consumed)` shifting
+  the read buffer. Revisit when the reactor lands; consider a cached clock tick
+  and a cursor-based input buffer (`kevy-buf`).
+- No pipelining measured yet; add `-P` runs once the reactor exists.
+- Run on a native Linux box (no VM) for headline numbers.
+
+---
+
+# v0.3 — event-driven reactor (`kevy-net`)
+
+**Date:** 2026-05-24. Same harness/setup. kevy now multiplexes connections via a
+kqueue/epoll reactor, so it can finally run `-c 50`.
+
+> Run-to-run VM variance is real (this run's valkey `-c 1` came in ~30k vs ~40k
+> in the baseline run). **Only compare numbers within the same run.**
+
+## `-c 50` (concurrent) — this run
+
+| test         | valkey 9.1 | kevy (reactor) | kevy / valkey |
+|--------------|-----------:|---------------:|--------------:|
+| PING_INLINE  | 220,751    | 178,891        | 0.81×         |
+| PING_MBULK   | 243,013    | 189,753        | 0.78×         |
+| SET          | 232,558    | 154,083        | 0.66×         |
+| GET          | 191,755    | **195,886**    | **1.02×** ✅  |
+| INCR         | 211,864    | 184,843        | 0.87×         |
+
+## `-c 1` (single conn) — this run
+
+| test | valkey 9.1 | kevy | kevy / valkey |
+|------|-----------:|-----:|--------------:|
+| PING_INLINE | 30,331 | 22,012 | 0.73× |
+| PING_MBULK  | 27,863 | 23,705 | 0.85× |
+| SET         | 25,006 | 27,933 | 1.12× ✅ |
+| GET         | 22,986 | 21,559 | 0.94× |
+| INCR        | 24,140 | 33,278 | 1.38× ✅ |
+
+## Reading
+
+1. **The reactor was the right lever.** kevy went from ~25k rps (and unable to
+   run `-c 50` at all) to **154k–196k rps**, landing at **0.66–1.02× valkey** on
+   a single reactor thread — **GET already edges ahead**, and at `-c 1` kevy beats
+   valkey on SET/INCR.
+2. **SET is now the weakest (0.66×).** Suspect the per-SET `value.clone()` +
+   `key.to_vec()` + HashMap insert allocations. → optimization backlog (v1).
+3. **Next lever to *exceed* valkey, not just match it:** both servers are
+   ~single-core for command execution here. **thread-per-core sharding** lets
+   kevy use *all* cores for the keyspace (valkey keeps command execution
+   single-threaded) — the structural way to pull clearly ahead. Then io_uring +
+   pipelining toward the hardware ceiling.
+
+## Optimization backlog (v0.3 additions)
+
+- SET allocation path (`clone`/`to_vec`/insert) — revisit with `kevy-buf` /
+  borrowed keys at v1 polish.
+- Reactor idle wakeup is a 100ms tick; replace with eventfd/self-pipe (or fold
+  into io_uring) so shutdown/cross-thread wakeups are immediate and idle is free.
+
+---
+
+# v0.4 — thread-per-core, shared-nothing (`kevy-rt`)
+
+**Date:** 2026-05-25. 14 shards (one per VM vCPU), keys hash-sharded, cross-core
+commands forwarded by message passing (`std::mpsc` + self-pipe wakeups, coalesced
+to one wakeup per target per loop). Correctness proven by 29 tests incl. a
+cross-core shared-keyspace test, pipelined-order test, and fan-out aggregation.
+
+## `-c50` (concurrent), this run
+
+| test | valkey 9.1 | kevy 14-shard | kevy/valkey | (v0.3 1-reactor was) |
+|------|-----------:|--------------:|------------:|---------------------:|
+| PING_INLINE | 258,065 | 146,735 | 0.57× | 0.81× |
+| PING_MBULK  | 237,812 | 133,958 | 0.56× | 0.78× |
+| SET  | 256,082 |  98,668 | 0.39× | 0.66× |
+| GET  | 279,330 | 104,932 | 0.38× | 1.02× |
+| INCR | 271,003 | 100,857 | 0.37× | 0.87× |
+
+**Thread-per-core REGRESSED vs the single reactor.** Honest diagnosis:
+
+1. **Cross-core tax (architectural).** With 14 shards ~93% of commands forward to
+   another core; each is a round-trip with a syscall wakeup + locked `mpsc` each
+   way. At `-c1`, PING (never forwarded) held ~0.7–0.86×, but SET/INCR
+   (forwarded) fell to ~0.46× — the tax, isolated. Coalescing wakeups didn't help
+   at `-P1` (≈1 message per target per loop → nothing to coalesce).
+2. **Per-command machinery (perf-polish).** Even local commands regressed: the
+   sharded path allocates a `Slot` + HashMap insert/remove + per-reply `Vec` per
+   command, vs the single reactor's lean parse→dispatch→buffer.
+3. **Benchmark confound.** 14 server threads + the load generator share the SAME
+   14 vCPUs in the Docker VM. The 1-thread reactor left more cores for the
+   benchmark tool, so this co-located setup is structurally unfair to
+   thread-per-core. A real measurement needs the load generator off the server's
+   cores.
+
+## What makes shared-nothing actually win (the orthodox Scylla/Seastar way)
+
+- **Busy-poll cores** instead of sleeping + syscall wakeups — no per-message
+  syscall; the cross-core hop becomes a cache-line write. (Costs idle CPU; fine
+  for a dedicated DB box.)
+- **Lock-free SPSC/MPSC rings** between cores instead of `std::mpsc`.
+- **Lean per-command path:** slot ring indexed by seq (no HashMap), reusable
+  reply buffers (`kevy-buf`), borrowed keys.
+- **io_uring** to batch I/O syscalls toward the hardware ceiling.
+- **Isolated benchmark** (separate load-gen cores / machine) to measure honestly.
+
+These are real work and edge into the deferred perf pass — the architecture
+(path) is correct and in place; realizing its win is the v1 perf effort.
+
+**kevy's current fastest is the single reactor (v0.3): ~parity with valkey,
+GET ahead.**
+
+---
+
+# v1-perf — adaptive busy-poll + isolated bench
+
+**Date:** 2026-05-25. Two changes: (1) shards **busy-poll** when active (a
+cross-core hop is then a queue write with no wakeup syscall; a spinning peer
+needs no wake — see `flush_wakes` + per-shard `parked` flags); they park with a
+50ms backstop only when idle. (2) The bench now **CPU-isolates** servers
+(cores 0–9) from the load generator (cores 10–13), since busy-poll otherwise
+pegs every core and starves the client. AOF disabled (`KEVY_AOF=0`) for
+in-memory parity with valkey.
+
+## Isolated, this run (kevy = 10 busy-poll shards)
+
+| test | valkey -c1 | kevy -c1 | | valkey -c50 | kevy -c50 |
+|------|-----------:|---------:|---|------------:|----------:|
+| PING_INLINE | 36,114 | 32,938 (0.91×) | | 192,308 | 149,813 (0.78×) |
+| PING_MBULK  | 36,370 | 44,773 (1.23×) | | 192,308 | 138,122 (0.72×) |
+| SET  | 32,927 | 42,176 (1.28×) | | 174,064 | 145,243 (0.83×) |
+| GET  | 30,746 | 45,830 (1.49×) | | 183,655 | 154,919 (0.84×) |
+| INCR | 18,088* | 42,983 | | 195,122 | 155,400 (0.80×) |
+
+\* valkey -c1 INCR was an anomalous low that run (VM noise).
+
+## Reading
+
+- **busy-poll fixed the cross-core tax.** thread-per-core went from 0.37× to
+  ~0.8× valkey at -c50, and **kevy now beats valkey on single-connection**
+  (SET/GET/MBULK 1.2–1.5×) — the shared-nothing design finally pays off.
+- The residual -c50 gap is partly **load-gen-bound**: only 4 client cores drive
+  -c50 here (valkey's own -c50 also dropped vs the co-located run). A definitive
+  high-concurrency number needs a separate load-gen machine.
+- Remaining perf levers (v1 polish, ordered): lock-free SPSC/MPSC rings instead
+  of `std::mpsc`; lean per-command path (drop the `Slot`/`done` HashMap churn,
+  reuse reply buffers); io_uring (net+disk) toward the disk-I/O ceiling.
+
+Cost: busy-poll pins server cores at ~100% under load (the Scylla/Seastar
+model — appropriate for a dedicated DB box).
+
+## + lean per-command path (slot ring)
+
+Replaced the per-command `Slot`/`done` HashMaps with an O(1) seq-ordered
+`VecDeque` ring (no hashing, no per-command map alloc). A later run:
+
+| test | valkey -c50 | kevy -c50 | ratio |
+|------|------------:|----------:|------:|
+| PING_INLINE | 162,999 | 152,905 | 0.94× |
+| PING_MBULK  | 158,228 | 141,945 | 0.90× |
+| SET  | 169,635 | 153,965 | 0.91× |
+| GET  | 172,563 | 156,006 | 0.90× |
+| INCR | 183,318 | 156,617 | 0.85× |
+
+(kevy still beats valkey at -c1: SET 32.9k vs 23.0k, INCR 33.0k vs 24.4k.)
+
+**Perf-polish arc: naive thread-per-core 0.37× → busy-poll 0.8× → slot-ring
+~0.9× valkey at -c50, ahead at -c1.** Remaining to clear 1.0×+ at high
+concurrency: lock-free SPSC/MPSC rings (drop `std::mpsc`), io_uring (net+disk),
+and a separate load-gen machine for a clean measurement.
+
+---
+
+# post-modularization baseline (pre-ring-integration)
+
+**Date:** 2026-05-25. After the big-file/big-fn modularization (kevy-store → 9
+modules; kevy `dispatch` → router + 8 handlers; kevy-rt → 6 modules incl. the
+`shard`/`exec` reactor/executor split) **and** the dispatch hot-path fix (fold
+the verb into a stack buffer, no per-command heap alloc). Architecture otherwise
+unchanged: 10 busy-poll shards, slot-ring, **still `std::mpsc`** cross-core.
+Bench host was busy (load ~9.5 — other projects building), so absolute rps is
+depressed; the **ratio** (same VM, same run) is the signal.
+
+## `-c 1` (single connection)
+
+| test | valkey 9.1 | kevy | kevy/valkey |
+|------|-----------:|-----:|------------:|
+| PING_INLINE | 37,140 | 48,450 | 1.30× ✅ |
+| PING_MBULK  | 37,286 | 45,893 | 1.23× ✅ |
+| SET  | 36,996 | 43,225 | 1.17× ✅ |
+| GET  | 37,951 | 41,675 | 1.10× ✅ |
+| INCR | 37,085 | 46,147 | 1.24× ✅ |
+
+## `-c 50` (concurrent)
+
+| test | valkey 9.1 | kevy | kevy/valkey |
+|------|-----------:|-----:|------------:|
+| PING_INLINE | 180,995 | 147,929 | 0.82× |
+| PING_MBULK  | 182,315 | 151,515 | 0.83× |
+| SET  | 192,864 | 157,853 | 0.82× |
+| GET  | 190,295 | 157,729 | 0.83× |
+| INCR | 190,476 | 157,356 | 0.83× |
+
+## Reading
+
+1. **Modularization + dispatch fix did NOT regress perf.** At `-c1` kevy still
+   beats valkey across the board (1.10–1.30×); `-c50` sits at ~0.82–0.83×, the
+   same band as the slot-ring run (0.85–0.94×) within run-to-run + host-load
+   noise (this host was at load ~9.5). A pure structural refactor that leaves the
+   hot path intact — as expected.
+2. **The `-c50` gap (~0.18) confirms the cross-core `std::mpsc` is still the
+   bottleneck** — exactly what `kevy-ring` (built + stress-tested) targets. Next:
+   integrate it (one ring per ordered core-pair; deadlock-safe send via a local
+   backlog), then re-measure the gain on an idle host.
+
+---
+
+# post-ring-integration (kevy-ring SPSC mesh replaces std::mpsc)
+
+**Date:** 2026-05-25. Cross-core transport switched from `std::mpsc` to one
+lock-free SPSC ring per ordered core-pair (kevy-ring); a full ring spills to a
+local per-target backlog. Same host contention as the pre-ring baseline (load
+~9.4 from concurrent project builds), so **ratios are noisy — treat ±0.03 as
+noise.** 10 busy-poll shards.
+
+## `-c 50` (the cross-core path; ~90% of single-key cmds forward)
+
+| test | valkey | kevy (ring) | ratio | (pre-ring mpsc was) |
+|------|-------:|------------:|------:|--------------------:|
+| PING_INLINE | 183,486 | 146,199 | 0.80× | 0.82× |
+| PING_MBULK  | 180,018 | 143,678 | 0.80× | 0.83× |
+| SET  | 184,502 | 148,258 | 0.80× | 0.82× |
+| GET  | 182,983 | 146,628 | 0.80× | 0.83× |
+| INCR | 180,668 | 149,813 | 0.83× | 0.83× |
+
+## `-c 1`
+
+kevy 44.1k / 45.7k / 40.6k / 41.7k / 40.3k vs valkey ~36k — still **1.1–1.3×
+ahead** (ring is harmless to the single-connection path).
+
+## Reading (honest)
+
+**The ring shows no measurable -c50 gain over `std::mpsc` here** — 0.80–0.83×,
+the same band as before, within host-load noise. Most likely why:
+
+1. **busy-poll already removed the dominant cross-core tax** (the syscall
+   wakeup). The remaining `std::mpsc` cost is an *uncontended* `Mutex`
+   lock/unlock: each ordered core-pair has effectively one producer, so each
+   receiver is rarely contended, and an uncontended `Mutex` is a few ns — dwarfed
+   by the command + socket work. The lock-free ring removes those few ns, which
+   weren't the bottleneck. (The v0.4 "mpsc is the bottleneck" diagnosis predated
+   busy-poll, when the *wakeup syscall* — since eliminated — was the real tax.)
+2. **PING (keyless, never forwarded) and forwarded SET/GET/INCR move together**
+   (~0.80×), which points at a shared limiter that is *not* the cross-core queue
+   — most likely load-gen-bound (only 4 client cores drive -c50) and/or per-op
+   socket syscalls.
+3. **Host noise**: load ~9.4 on both runs; the ~0.02 dip is run-to-run variance.
+
+**Conclusion:** kevy-ring is correct, zero-allocation, and the orthodox
+Seastar-model primitive (a better foundation for io_uring / higher core counts),
+but at this core count + busy-poll it is **perf-neutral vs an uncontended
+`std::mpsc`** under this noisy measurement. A clean idle-host re-run is needed to
+confirm neutral-vs-small-gain. The real -c50 levers are elsewhere: a separate
+load-gen machine (lift the client-side cap) and **io_uring** (cut per-op socket
+syscalls toward the disk-I/O ceiling).
+
+---
+
+# io_uring reactor (Phase 2b) — correctness done; bench host-contaminated
+
+**Date:** 2026-05-25. New `kevy-rt/src/uring_reactor.rs` (cfg linux): a
+completion reactor reusing all command logic, opt-in via `KEVY_IO_URING=1`.
+**Correctness: the full `sharded` suite (11 tests, incl. cross-shard pipeline +
+transactions) passes via BOTH the epoll reactor and the io_uring reactor.**
+
+## `-c 50` — host was at load ~8.5
+
+Other projects' processes were pinned to the same server cores (0-9), starving
+kevy's busy-poll shards; absolute rps is ~5× below a clean run (kevy latency
+~1.5ms vs valkey 0.18ms). Only the **back-to-back io_uring-vs-epoll delta** is a
+(weak) signal.
+
+| test | valkey | kevy epoll | kevy io_uring | io_uring vs epoll |
+|------|-------:|-----------:|--------------:|------------------:|
+| SET  | 149,031 | 29,112 | 30,386 | +4% |
+| GET  | 151,860 | 31,969 | 37,679 | **+18%** (1.52ms → 1.05ms) |
+| INCR | 151,400 | 29,108 | 27,431 | −6% |
+
+## Reading
+
+- **Both kevy modes at ~0.2× valkey is host contamination, not the design** — a
+  clean host earlier put kevy at ~0.9× valkey -c50. The other projects shared
+  cores 0-9 with kevy's busy-poll shards and starved them; valkey (blocking) was
+  hurt less.
+- The same-host io_uring-vs-epoll delta is weak but positive: io_uring is **not
+  worse**, with a clear **GET edge** (+18%, latency −31%); SET +4%, INCR −6%.
+- **A clean io_uring-vs-epoll measurement is blocked on an idle host** (the
+  persistent blocker this whole session). The reactor is also still step-1
+  (busy-poll + 200µs idle sleep); an `IORING_OP_TIMEOUT` park and multishot recv
+  are the next polish.
+
+**Phase 2b reactor: correct and verified; perf quantification pending an idle host.**

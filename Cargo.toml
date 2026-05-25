@@ -1,0 +1,36 @@
+# kevy — pure-Rust, 0-dependency, Redis-compatible KV server.
+#
+# Principle (locked at L2): the ONLY C we touch is the unavoidable OS-boundary
+# libc (sockets / pollers / mmap / time), bound by hand with `unsafe extern "C"`.
+# Every algorithm and data structure is written in Rust — no third-party crate,
+# no C library for logic. See crates/kevy-sys for the sole libc boundary.
+[workspace]
+resolver = "3"
+members = [
+    "crates/kevy-sys",
+    "crates/kevy-resp",
+    "crates/kevy-ring",
+    "crates/kevy-store",
+    "crates/kevy-net",
+    "crates/kevy-rt",
+    "crates/kevy-persist",
+    "crates/kevy",
+    "crates/kevy-cli",
+    "crates/kevy-loadgen",
+    "crates/kevy-bench",
+    "crates/kevy-hash",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+authors = ["GOLIA K.K."]
+license = "MIT OR Apache-2.0"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
