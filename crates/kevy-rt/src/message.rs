@@ -6,9 +6,19 @@
 
 use kevy_resp::Argv;
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 /// A list of key/value pairs (for MSET).
 pub(crate) type KvPairs = Vec<(Vec<u8>, Vec<u8>)>;
+
+/// Shared pub/sub channel registry: `channel → (global subscriber count, bitset
+/// of shard ids that have ≥1 subscriber)`. Written on SUBSCRIBE/UNSUBSCRIBE/conn
+/// close (rare); read on every PUBLISH (hot) so the publisher can reply with the
+/// receiver count **locally** (no cross-shard count aggregation) and fan the
+/// delivery out **only** to shards that hold a subscriber. The bitset is an
+/// over-approximation between a channel's first sub and its count reaching 0
+/// (cleared then) — safe, since a stray delivery just finds no local subscriber.
+pub(crate) type PubSubReg = Arc<RwLock<HashMap<Vec<u8>, (u32, u64)>>>;
 
 /// What to fetch per key in a cross-shard gather.
 #[derive(Clone, Copy)]
@@ -87,6 +97,11 @@ pub(crate) enum Inbound {
         conn: u64,
         seq: u64,
         part: Part,
+    },
+    /// Fire-and-forget work with no reply folded back (pub/sub message delivery:
+    /// the publisher already replied with the receiver count from the registry).
+    Deliver {
+        op: Op,
     },
 }
 

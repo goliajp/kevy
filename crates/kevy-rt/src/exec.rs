@@ -114,6 +114,10 @@ impl<C: Commands> Shard<C> {
                 self.do_subscribe(conn_id, seq, &args, false);
                 return;
             }
+            Route::Publish => {
+                self.do_publish(conn_id, seq, &args);
+                return;
+            }
             _ => {}
         }
         let (targets, agg): (Vec<(usize, Op)>, Agg) = match route {
@@ -162,15 +166,8 @@ impl<C: Commands> Shard<C> {
             Route::Keys(pat) => self.fanout_keys(pat, None, KeyShape::Keys),
             Route::Scan(pat) => self.fanout_keys(pat, None, KeyShape::Scan),
             Route::RandomKey => self.fanout_keys(None, Some(1), KeyShape::Random),
-            Route::Publish => {
-                let (channel, msg) = (args[1].to_vec(), args[2].to_vec());
-                let targets = (0..self.nshards)
-                    .map(|s| (s, Op::Publish(channel.clone(), msg.clone())))
-                    .collect();
-                (targets, Agg::SumInt(0))
-            }
             // Handled above (early return).
-            Route::Subscribe | Route::Unsubscribe => unreachable!(),
+            Route::Subscribe | Route::Unsubscribe | Route::Publish => unreachable!(),
         };
 
         let remaining = targets.len().max(1) as u32;
@@ -265,36 +262,65 @@ impl<C: Commands> Shard<C> {
         } else {
             b"unsubscribe"
         };
-        let reply = match self.conns.get_mut(&conn_id) {
+        // Channels: the explicit args, or (UNSUBSCRIBE with none) all current subs.
+        let channels: Vec<Vec<u8>> = match self.conns.get(&conn_id) {
             None => return,
-            Some(c) => {
-                // UNSUBSCRIBE with no channels means "all currently subscribed".
-                let channels: Vec<Vec<u8>> = if args.len() > 1 {
-                    args.iter().skip(1).map(|s| s.to_vec()).collect()
-                } else {
-                    c.sub.iter().cloned().collect()
-                };
-                let mut out = Vec::new();
-                if channels.is_empty() {
-                    encode_array_len(&mut out, 3);
-                    encode_bulk(&mut out, verb);
-                    encode_null_bulk(&mut out);
-                    encode_integer(&mut out, c.sub.len() as i64);
-                }
-                for ch in &channels {
-                    if subscribe {
-                        c.sub.insert(ch.clone());
-                    } else {
-                        c.sub.remove(ch);
-                    }
-                    encode_array_len(&mut out, 3);
-                    encode_bulk(&mut out, verb);
-                    encode_bulk(&mut out, ch);
-                    encode_integer(&mut out, c.sub.len() as i64);
-                }
-                out
-            }
+            Some(_) if args.len() > 1 => args.iter().skip(1).map(|s| s.to_vec()).collect(),
+            Some(c) => c.sub.iter().cloned().collect(),
         };
+        // Track which channels actually changed (sub/unsub is idempotent) so the
+        // shared registry count stays exact.
+        let mut changed: Vec<Vec<u8>> = Vec::new();
+        let reply = {
+            let Some(c) = self.conns.get_mut(&conn_id) else {
+                return;
+            };
+            let mut out = Vec::new();
+            if channels.is_empty() {
+                encode_array_len(&mut out, 3);
+                encode_bulk(&mut out, verb);
+                encode_null_bulk(&mut out);
+                encode_integer(&mut out, c.sub.len() as i64);
+            }
+            for ch in &channels {
+                let did = if subscribe {
+                    c.sub.insert(ch.clone())
+                } else {
+                    c.sub.remove(ch)
+                };
+                if did {
+                    changed.push(ch.clone());
+                }
+                encode_array_len(&mut out, 3);
+                encode_bulk(&mut out, verb);
+                encode_bulk(&mut out, ch);
+                encode_integer(&mut out, c.sub.len() as i64);
+            }
+            out
+        };
+        // Reflect the change in the shared registry (PUBLISH reads it).
+        if !changed.is_empty() {
+            let bit = 1u64 << self.id;
+            let mut reg = self.pubsub.write().expect("pubsub registry");
+            for ch in &changed {
+                if subscribe {
+                    let e = reg.entry(ch.clone()).or_insert((0, 0));
+                    e.0 += 1;
+                    e.1 |= bit;
+                } else {
+                    let drop = match reg.get_mut(ch) {
+                        Some(e) => {
+                            e.0 = e.0.saturating_sub(1);
+                            e.0 == 0
+                        }
+                        None => false,
+                    };
+                    if drop {
+                        reg.remove(ch);
+                    }
+                }
+            }
+        }
         if let Some(c) = self.conns.get_mut(&conn_id) {
             c.pending.push_back(PendingSlot {
                 remaining: 1,
@@ -303,6 +329,51 @@ impl<C: Commands> Shard<C> {
             });
         }
         self.fold(conn_id, seq, Part::Reply(reply));
+    }
+
+    /// PUBLISH: reply with the receiver count read **locally** from the shared
+    /// registry (no cross-shard aggregation), then deliver the message
+    /// fire-and-forget to exactly the shards that hold a subscriber (in
+    /// parallel; no replies fold back). Replaces the old all-shards SumInt
+    /// fan-out, which cost ~2N cross-core ops per publish (N sends + N replies).
+    fn do_publish(&mut self, conn_id: u64, seq: u64, args: &Argv) {
+        let (count, bits) = self
+            .pubsub
+            .read()
+            .expect("pubsub registry")
+            .get(&args[1])
+            .copied()
+            .unwrap_or((0, 0));
+        let mut reply = Vec::new();
+        encode_integer(&mut reply, count as i64);
+        if let Some(c) = self.conns.get_mut(&conn_id) {
+            c.pending.push_back(PendingSlot {
+                remaining: 1,
+                agg: Agg::First(None),
+                done: None,
+            });
+        }
+        self.fold(conn_id, seq, Part::Reply(reply));
+
+        if bits != 0 {
+            let channel = args[1].to_vec();
+            let msg = args[2].to_vec();
+            for s in 0..self.nshards {
+                if bits & (1u64 << s) == 0 {
+                    continue;
+                }
+                if s == self.id {
+                    let _ = self.exec_op(Op::Publish(channel.clone(), msg.clone()));
+                } else {
+                    self.send_to(
+                        s,
+                        Inbound::Deliver {
+                            op: Op::Publish(channel.clone(), msg.clone()),
+                        },
+                    );
+                }
+            }
+        }
     }
 
     /// Split `args[1..]` (keys) by owning shard.
