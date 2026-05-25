@@ -20,7 +20,8 @@ use kevy_resp::parse_command;
 use kevy_ring::{Consumer, Producer};
 use kevy_store::Store;
 use kevy_sys::{Event, Poller, Socket, Waker};
-use std::collections::{HashMap, VecDeque};
+use kevy_hash::FxHashMap;
+use std::collections::VecDeque;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,8 +43,11 @@ pub(crate) struct Shard<C: Commands> {
     /// re-pushed (in order) by `flush_backlog` once the peer drains.
     pub(crate) backlog: Vec<VecDeque<Inbound>>,
     pub(crate) wakers: Vec<Arc<Waker>>,
-    pub(crate) conns: HashMap<u64, Conn>,
-    pub(crate) fd_to_conn: HashMap<i32, u64>,
+    // Fx-hashed: these are looked up per command (`conns` twice — start_command
+    // + fold) and per event; std's SipHash on the u64/i32 keys profiled at ~17%
+    // of single-shard CPU, the dominant non-command-CPU cost.
+    pub(crate) conns: FxHashMap<u64, Conn>,
+    pub(crate) fd_to_conn: FxHashMap<i32, u64>,
     pub(crate) next_conn_id: u64,
     pub(crate) events: Vec<Event>,
     pub(crate) read_buf: Vec<u8>,
