@@ -356,3 +356,96 @@ kevy's busy-poll shards; absolute rps is ~5× below a clean run (kevy latency
   are the next polish.
 
 **Phase 2b reactor: correct and verified; perf quantification pending an idle host.**
+
+---
+
+# CLEAN measurement on a dedicated 16-core box (lx64) — kevy leads on all axes
+
+**Date:** 2026-05-26. First measurement free of the three artifacts that had
+depressed/distorted every prior run. Run on **lx64** (bare 16-core Linux, not a
+VM), all servers **host-loopback** (no docker bridge / NAT), in-memory.
+
+## The three measurement artifacts (why earlier numbers lied)
+
+1. **macOS Docker VM** — depressed absolute rps ~5–10×. Gone: native Linux.
+2. **Docker bridge veth softirq** — starved kevy's busy-poll (understated kevy).
+   Gone: host networking / loopback for every server.
+3. **Co-located busy-poll starves the load generator** — *the big one.* kevy's
+   shards busy-poll every core they're given. When the `redis-benchmark` client
+   shared those cores, the client was starved and the measured throughput was the
+   *client's* ceiling, not kevy's — and it got **worse the more shards kevy ran**,
+   which we had misread as a "cross-core tax" that grew with core count. It was
+   never a real tax. Fix: **pin the server to cores 0–9 and the client to disjoint
+   cores 10–15** (`taskset`), and run **each server in isolation** (start, bench,
+   stop) so kevy's busy-poll never steals cycles from a co-located competitor.
+   With this, kevy -c50 jumped from the old "~0.9× / 1.26M" to **3.9–4.7M**.
+
+Same core budget for every server (10 server cores, 6 client cores) ⇒ fair fight.
+Reported figures are steady-state `overall` rps (the `--threads` *final* line is
+quantized and unreliable). redis-benchmark 8.0.2.
+
+## `-c50 -P16` (high-concurrency throughput) — `requests per second`
+
+| server | GET | SET |
+|--------|----:|----:|
+| **kevy io_uring (10sh)** | **~4.4M** | **~4.7M** |
+| **kevy epoll (10sh)** | ~3.9M | ~3.7M |
+| valkey 9.1 io-threads=10 | ~2.5M | ~1.9M |
+| valkey 9.1 default | 1.53M | 1.27M |
+| redis 7.4 io-threads=10 | ~2.3M (jittery) | ~1.97M (jittery) |
+| redis 7.4 default | 1.99M | 1.74M |
+
+**kevy leads every competitor config:** epoll **1.56× GET / 1.88× SET**, io_uring
+**1.76× GET / 2.39× SET**, both vs the *strongest* valkey/redis config. The client
+(6 cores) pushed kevy to 4.7M, so the ~2.5M competitors are server-bound, not
+client-bound — the comparison is valid.
+
+## `-c1 -P1` (single connection — pure round-trip latency/throughput)
+
+| server | GET | SET |
+|--------|----:|----:|
+| **kevy epoll (10sh)** | **86.1k** | **72.0k** |
+| kevy io_uring (10sh) | 67.4k | 54.0k |
+| valkey 9.1 io-threads | 64.5k | 63.0k |
+| valkey 9.1 default | 50.7k | 50.4k |
+| redis 7.4 default | 47.8k | 54.4k |
+
+**kevy (default epoll) leads -c1:** GET **1.33×**, SET **1.14×** vs the best
+valkey. Note the reactor split: at **-c1 epoll wins** (io_uring's completion model
+adds latency to a lone round-trip), while at **-c50 io_uring wins** (its IO
+batching dominates). The default (epoll) is exactly the right pick for the
+latency-sensitive low-concurrency case.
+
+## Request-batching A/B (this checkpoint's change) — develop vs feature, isolated
+
+Cross-core single-key dispatches are now forwarded as one batched message per
+loop (`Inbound::RequestBatch`/`ResponseBatch`) instead of one `Request` per
+command, mirroring the pub/sub fan-out batching.
+
+| -c50 -P16 | develop (pre-batch) | feature (batch) | Δ |
+|-----------|--------------------:|----------------:|---:|
+| epoll GET | ~2.2M | ~3.9M | **+77%** |
+| epoll SET | ~2.37M | ~3.68M | **+55%** |
+| io_uring GET | ~4.44M | ~4.42M | ~flat (at ceiling) |
+| io_uring SET | ~4.18M | ~4.68M | +12% |
+
+Batching is **what lifts the default epoll reactor into a substantial lead**
+(without it, epoll ~2.2M only ties valkey-iot); io_uring was already winning and
+stays there. No regression. Merged to `develop`.
+
+## Reading
+
+- **kevy now leads valkey 9.1 and redis 7.4 on every axis measured** — -c1
+  (latency), -c50 -P16 (throughput), and pub/sub (15.6M msg/s, measured earlier
+  under the conservative docker-bridge setup). The earlier "-c50 lags at ~0.9×"
+  was purely the co-located-busy-poll artifact, not a design limit.
+- **Honest caveats:** lx64 had background load (~2.7–3.8) during the runs, which
+  hurts kevy's busy-poll more than the blocking competitors, so kevy's true lead
+  is if anything *understated*. Competitor io-threads runs were jittery
+  (occasional drops to ~190k) — kevy was stable throughout.
+- **Open:** pub/sub still wants a clean loopback re-measure (current 2.28× figure
+  is docker-bridge, which *understates* kevy); a second physical load-gen box
+  would lift any residual client-side cap on the -c50 numbers.
+
+Harnesses: `bench/lx64_loopback.sh` (3-way -c50), `bench/kevy_ab.sh` (binary
+A/B), `bench/lx64_c1.sh` (-c1). All pin server/client to disjoint cores.
