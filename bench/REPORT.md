@@ -449,3 +449,27 @@ stays there. No regression. Merged to `develop`.
 
 Harnesses: `bench/lx64_loopback.sh` (3-way -c50), `bench/kevy_ab.sh` (binary
 A/B), `bench/lx64_c1.sh` (-c1). All pin server/client to disjoint cores.
+
+## Follow-up perf (2026-05-26): fast path, pipeline scan, multishot recv
+
+Three measure-first checkpoints after the clean baseline (all on develop):
+
+1. **Single-key fast path** — `Route::Local`/`Route::Single` (95%+ of commands)
+   skip the per-command `Vec<(shard,Op)>`; one heap alloc/command gone. A/B
+   (server-bound 4sh, -c50 -P64): GET +1.6%, SET +3.1%.
+2. **Pipeline scan diagnosis** — 4sh io_uring, 12-core client, GET -c50: -P1 377k
+   → -P256 7.2M (19×). The low-`-P` ceiling is per-arrival io_uring/reactor
+   overhead, not command CPU. **And the single 16-core box is CLIENT-bound** at
+   -P16 (the 12-core redis-benchmark caps ~3.3M there), which is the binding
+   constraint on measuring any further server-side win.
+3. **io_uring multishot recv + provided buffers** — one re-firing recv SQE per
+   connection drawing from a shared per-shard buffer ring, instead of a
+   read-SQE-per-arrival. Hand-written ABI (no liburing). A/B (3 runs): **-P16
+   +7.6%, -P64 +3.9%**, consistently ≥ single-shot and notably more stable, plus
+   lower memory (2 MiB/shard ring vs 16 KiB/conn). Full ~2× potential is masked by
+   the client-bound box. sharded 11/11 via epoll + io_uring; clippy 0.
+
+**Binding constraint going forward:** kevy's server outruns what a single
+16-core box's co-located `redis-benchmark` can drive at -c50 — further
+server-side perf needs a **dedicated second load-gen machine** to measure
+honestly. Details: `perfs/topics/04-c50-bottleneck.md`, `05-multishot-recv.md`.
