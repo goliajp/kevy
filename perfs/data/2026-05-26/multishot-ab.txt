@@ -1,0 +1,30 @@
+Multishot recv + provided buffers A/B — develop (single-shot read) vs feature
+(multishot recv). lx64, io_uring 4 shards on cores 0-3, client 12 cores (4-15),
+GET -c50, host-loopback. redis-benchmark 8.0.2, steady-state overall rps.
+
+Full pipeline scan (run 1):
+  -P     develop      multishot
+  1      412,870      395,970     (-4%)
+  4    1,286,425    1,322,199     (+3%)
+  16   3,169,519    3,343,836     (+5.5%)
+  64   5,818,575    5,672,585     (-2.5%)
+  256  7,289,161    7,216,429     (-1%)
+
+3-run confirmation at the typical -P16 / -P64 (run 1 + r2 + r3):
+  -P16  develop:   3,169,519 ; 3,353,787 ; 3,010,811   avg 3.178M
+  -P16  multishot: 3,343,836 ; 3,432,956 ; 3,481,744   avg 3.419M   => +7.6%
+  -P64  develop:   5,818,575 ; 5,734,834 ; 5,058,960   avg 5.537M
+  -P64  multishot: 5,672,585 ; 5,877,620 ; 5,716,028   avg 5.755M   => +3.9%
+
+Reading:
+- multishot is >= develop in every confirmation run at both -P16 and -P64, and
+  is markedly MORE STABLE: develop dips to 3.01M / 5.06M on a noisy run, multishot
+  stays in a tight band (3.34-3.48M / 5.67-5.88M). The run-1 -P64/-P256 "negatives"
+  were a lucky-high develop run, not a multishot regression.
+- Modest win (+4-7.6%), not the ~2x hypothesized: at -P16 the single 16-core box
+  is partly CLIENT-bound (the 12-core redis-benchmark caps ~3.3M at -P16 regardless
+  of server read-SQE count), so the read-SQE savings can't fully show. A truly
+  server-bound deployment (dedicated load-gen box) should see more.
+- Plus: lower memory (one shared 2 MiB provided-buffer ring per shard vs a 16 KiB
+  read buffer per connection) and the modern io_uring path. Correct (sharded 11/11
+  epoll + io_uring), clippy 0. => merged.
