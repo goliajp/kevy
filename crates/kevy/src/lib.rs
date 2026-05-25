@@ -113,6 +113,10 @@ impl Commands for KevyCommands {
         dispatch(store, args)
     }
 
+    fn dispatch_into(&self, store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
+        dispatch::dispatch_into(store, args, out)
+    }
+
     fn is_quit(&self, args: &Argv) -> bool {
         args.first()
             .is_some_and(|c| c.eq_ignore_ascii_case(b"QUIT"))
