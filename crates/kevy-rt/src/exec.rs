@@ -13,12 +13,12 @@ use crate::reduce::{drain_front, materialize, pubsub_message, shard_of};
 use crate::shard::Shard;
 use crate::{Commands, Route, TxnKind};
 use kevy_persist::save_snapshot;
-use kevy_resp::{encode_array_len, encode_bulk, encode_integer, encode_null_bulk};
+use kevy_resp::{Argv, encode_array_len, encode_bulk, encode_integer, encode_null_bulk};
 use std::collections::HashMap;
 
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
-    pub(crate) fn handle_command(&mut self, conn_id: u64, args: Vec<Vec<u8>>) {
+    pub(crate) fn handle_command(&mut self, conn_id: u64, args: Argv) {
         let kind = self.commands.txn_kind(&args);
         let in_multi = self.conns.get(&conn_id).is_some_and(|c| c.multi.is_some());
         match (in_multi, kind) {
@@ -92,7 +92,7 @@ impl<C: Commands> Shard<C> {
     }
 
     /// Assign a seq, fan the command out to the owning shard(s), fold local parts.
-    fn start_command(&mut self, conn_id: u64, args: Vec<Vec<u8>>) {
+    fn start_command(&mut self, conn_id: u64, args: Argv) {
         let seq = match self.conns.get_mut(&conn_id) {
             Some(c) => {
                 let s = c.next_seq;
@@ -144,7 +144,7 @@ impl<C: Commands> Shard<C> {
                     by_shard
                         .entry(shard_of(&args[i], self.nshards))
                         .or_default()
-                        .push((args[i].clone(), args[i + 1].clone()));
+                        .push((args[i].to_vec(), args[i + 1].to_vec()));
                     i += 2;
                 }
                 (
@@ -163,7 +163,7 @@ impl<C: Commands> Shard<C> {
             Route::Scan(pat) => self.fanout_keys(pat, None, KeyShape::Scan),
             Route::RandomKey => self.fanout_keys(None, Some(1), KeyShape::Random),
             Route::Publish => {
-                let (channel, msg) = (args[1].clone(), args[2].clone());
+                let (channel, msg) = (args[1].to_vec(), args[2].to_vec());
                 let targets = (0..self.nshards)
                     .map(|s| (s, Op::Publish(channel.clone(), msg.clone())))
                     .collect();
@@ -212,11 +212,11 @@ impl<C: Commands> Shard<C> {
     /// Group `args[1..]` keys by shard for a cross-shard gather.
     fn build_gather(
         &self,
-        args: &[Vec<u8>],
+        args: &Argv,
         kind: GatherKind,
         op: MultiOp,
     ) -> (Vec<(usize, Op)>, Agg) {
-        let keys: Vec<Vec<u8>> = args[1..].to_vec();
+        let keys: Vec<Vec<u8>> = args.iter().skip(1).map(|k| k.to_vec()).collect();
         let mut by_shard: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
         for k in &keys {
             by_shard
@@ -259,7 +259,7 @@ impl<C: Commands> Shard<C> {
 
     /// Handle SUBSCRIBE/UNSUBSCRIBE: mutate this conn's subscription set and
     /// reply with one confirmation frame per channel (running count).
-    fn do_subscribe(&mut self, conn_id: u64, seq: u64, args: &[Vec<u8>], subscribe: bool) {
+    fn do_subscribe(&mut self, conn_id: u64, seq: u64, args: &Argv, subscribe: bool) {
         let verb: &[u8] = if subscribe {
             b"subscribe"
         } else {
@@ -270,7 +270,7 @@ impl<C: Commands> Shard<C> {
             Some(c) => {
                 // UNSUBSCRIBE with no channels means "all currently subscribed".
                 let channels: Vec<Vec<u8>> = if args.len() > 1 {
-                    args[1..].to_vec()
+                    args.iter().skip(1).map(|s| s.to_vec()).collect()
                 } else {
                     c.sub.iter().cloned().collect()
                 };
@@ -306,13 +306,13 @@ impl<C: Commands> Shard<C> {
     }
 
     /// Split `args[1..]` (keys) by owning shard.
-    fn group_keys(&self, args: &[Vec<u8>], mk: fn(Vec<Vec<u8>>) -> Op) -> Vec<(usize, Op)> {
+    fn group_keys(&self, args: &Argv, mk: fn(Vec<Vec<u8>>) -> Op) -> Vec<(usize, Op)> {
         let mut by_shard: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
-        for key in &args[1..] {
+        for key in args.iter().skip(1) {
             by_shard
                 .entry(shard_of(key, self.nshards))
                 .or_default()
-                .push(key.clone());
+                .push(key.to_vec());
         }
         by_shard
             .into_iter()
@@ -333,9 +333,11 @@ impl<C: Commands> Shard<C> {
             Op::Del(keys) => {
                 let n = self.store.del(&keys);
                 if n > 0 {
-                    let mut c = Vec::with_capacity(keys.len() + 1);
-                    c.push(b"DEL".to_vec());
-                    c.extend(keys);
+                    let mut c = Argv::with_capacity(keys.len() + 1, 0);
+                    c.push(b"DEL");
+                    for k in &keys {
+                        c.push(k);
+                    }
                     self.log(&c);
                 }
                 Part::Int(n as i64)
@@ -344,7 +346,9 @@ impl<C: Commands> Shard<C> {
             Op::Dbsize => Part::Int(self.store.dbsize() as i64),
             Op::Flush => {
                 self.store.flush();
-                self.log(&[b"FLUSHALL".to_vec()]);
+                let mut c = Argv::with_capacity(1, 8);
+                c.push(b"FLUSHALL");
+                self.log(&c);
                 Part::Ok
             }
             Op::MSet(pairs) => {
@@ -352,9 +356,9 @@ impl<C: Commands> Shard<C> {
                     self.store.set(k, v.clone(), None, false, false);
                 }
                 if !pairs.is_empty() {
-                    let mut c = Vec::with_capacity(pairs.len() * 2 + 1);
-                    c.push(b"MSET".to_vec());
-                    for (k, v) in pairs {
+                    let mut c = Argv::with_capacity(pairs.len() * 2 + 1, 0);
+                    c.push(b"MSET");
+                    for (k, v) in &pairs {
                         c.push(k);
                         c.push(v);
                     }
@@ -429,7 +433,7 @@ impl<C: Commands> Shard<C> {
     }
 
     /// Append a mutating command to this shard's AOF, if enabled (best-effort).
-    fn log(&mut self, args: &[Vec<u8>]) {
+    fn log(&mut self, args: &Argv) {
         if let Some(aof) = &mut self.aof
             && let Err(e) = aof.append(args)
         {

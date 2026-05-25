@@ -17,18 +17,18 @@
 //! # Example (AOF)
 //!
 //! ```
-//! use kevy_persist::{Aof, Fsync, replay_aof};
+//! use kevy_persist::{Aof, Argv, Fsync, replay_aof};
 //!
 //! # fn main() -> std::io::Result<()> {
 //! let path = std::env::temp_dir().join("kevy-persist-doctest.aof");
 //! # let _ = std::fs::remove_file(&path);
 //! {
 //!     let mut aof = Aof::open(&path, Fsync::No)?;
-//!     aof.append(&[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()])?;
+//!     aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))?;
 //! } // flushed on drop
 //!
-//! let mut replayed = Vec::new();
-//! replay_aof(&path, |args| replayed.push(args.to_vec()))?;
+//! let mut replayed: Vec<Argv> = Vec::new();
+//! replay_aof(&path, |args| replayed.push(args))?;
 //! assert_eq!(replayed, vec![vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]]);
 //! # std::fs::remove_file(&path).ok();
 //! # Ok(())
@@ -36,6 +36,7 @@
 //! ```
 #![forbid(unsafe_code)]
 
+pub use kevy_resp::Argv;
 use kevy_store::{Store, Value};
 // ZSet snapshot iterates ordered (member, score) pairs via `Value::ZSet`.
 use std::fs::{File, OpenOptions};
@@ -307,7 +308,7 @@ impl Aof {
     }
 
     /// Append one command, applying the fsync policy.
-    pub fn append(&mut self, args: &[Vec<u8>]) -> io::Result<()> {
+    pub fn append(&mut self, args: &Argv) -> io::Result<()> {
         write_multibulk(&mut self.file, args)?;
         match self.fsync {
             Fsync::Always => {
@@ -348,7 +349,7 @@ impl Aof {
 /// Replay the command log at `path`, calling `apply` for each complete command.
 /// A truncated or corrupt trailing frame (e.g. a crash mid-append) is ignored.
 /// A missing file is treated as an empty log.
-pub fn replay_aof<F: FnMut(&[Vec<u8>])>(path: &Path, mut apply: F) -> io::Result<()> {
+pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<()> {
     let mut data = Vec::new();
     match File::open(path) {
         Ok(mut f) => {
@@ -361,7 +362,7 @@ pub fn replay_aof<F: FnMut(&[Vec<u8>])>(path: &Path, mut apply: F) -> io::Result
     while pos < data.len() {
         match kevy_resp::parse_command(&data[pos..]) {
             Ok(Some((args, consumed))) => {
-                apply(&args);
+                apply(args);
                 pos += consumed;
             }
             // Incomplete or corrupt tail — stop; the prefix is intact.
@@ -371,9 +372,9 @@ pub fn replay_aof<F: FnMut(&[Vec<u8>])>(path: &Path, mut apply: F) -> io::Result
     Ok(())
 }
 
-fn write_multibulk<W: Write>(w: &mut W, args: &[Vec<u8>]) -> io::Result<()> {
+fn write_multibulk<W: Write>(w: &mut W, args: &Argv) -> io::Result<()> {
     write!(w, "*{}\r\n", args.len())?;
-    for a in args {
+    for a in args.iter() {
         write!(w, "${}\r\n", a.len())?;
         w.write_all(a)?;
         w.write_all(b"\r\n")?;
@@ -489,8 +490,8 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    fn cmd(parts: &[&[u8]]) -> Vec<Vec<u8>> {
-        parts.iter().map(|p| p.to_vec()).collect()
+    fn cmd(parts: &[&[u8]]) -> Argv {
+        Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>())
     }
 
     #[test]
@@ -502,8 +503,8 @@ mod tests {
             aof.append(&cmd(&[b"INCR", b"a"])).unwrap();
             aof.append(&cmd(&[b"SET", b"b", b"hello world"])).unwrap();
         }
-        let mut got: Vec<Vec<Vec<u8>>> = Vec::new();
-        replay_aof(&path, |args| got.push(args.to_vec())).unwrap();
+        let mut got: Vec<Argv> = Vec::new();
+        replay_aof(&path, |args| got.push(args)).unwrap();
         assert_eq!(got.len(), 3);
         assert_eq!(got[0], cmd(&[b"SET", b"a", b"1"]));
         assert_eq!(got[1], cmd(&[b"INCR", b"a"]));
@@ -523,8 +524,8 @@ mod tests {
         f.write_all(b"*2\r\n$3\r\nSET\r\n$5\r\nhal").unwrap(); // truncated
         drop(f);
 
-        let mut got = Vec::new();
-        replay_aof(&path, |args| got.push(args.to_vec())).unwrap();
+        let mut got: Vec<Argv> = Vec::new();
+        replay_aof(&path, |args| got.push(args)).unwrap();
         assert_eq!(got, vec![cmd(&[b"SET", b"a", b"1"])]); // only the complete frame
         let _ = std::fs::remove_file(&path);
     }
@@ -538,8 +539,8 @@ mod tests {
         aof.append(&cmd(&[b"SET", b"b", b"2"])).unwrap();
         drop(aof);
 
-        let mut got = Vec::new();
-        replay_aof(&path, |args| got.push(args.to_vec())).unwrap();
+        let mut got: Vec<Argv> = Vec::new();
+        replay_aof(&path, |args| got.push(args)).unwrap();
         assert_eq!(got, vec![cmd(&[b"SET", b"b", b"2"])]); // pre-truncate write gone
         let _ = std::fs::remove_file(&path);
     }

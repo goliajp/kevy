@@ -20,12 +20,13 @@
 //! Run commands against an in-process keyspace (no sockets):
 //!
 //! ```
-//! use kevy::{KeyspaceStore, dispatch};
+//! use kevy::{Argv, KeyspaceStore, dispatch};
 //!
 //! let mut store = KeyspaceStore::new();
-//! assert_eq!(dispatch(&mut store, &[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]), b"+OK\r\n");
-//! assert_eq!(dispatch(&mut store, &[b"GET".to_vec(), b"k".to_vec()]), b"$1\r\nv\r\n");
-//! assert_eq!(dispatch(&mut store, &[b"INCR".to_vec(), b"n".to_vec()]), b":1\r\n");
+//! let cmd = |parts: &[&[u8]]| Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
+//! assert_eq!(dispatch(&mut store, &cmd(&[b"SET", b"k", b"v"])), b"+OK\r\n");
+//! assert_eq!(dispatch(&mut store, &cmd(&[b"GET", b"k"])), b"$1\r\nv\r\n");
+//! assert_eq!(dispatch(&mut store, &cmd(&[b"INCR", b"n"])), b":1\r\n");
 //! ```
 //!
 //! To run the full server: [`serve`]`(ip, port, nshards, dir, aof)`.
@@ -44,6 +45,7 @@ mod cmd;
 mod dispatch;
 use cmd::{scan_pattern, upper_verb};
 pub use dispatch::dispatch;
+pub use kevy_rt::Argv;
 pub use kevy_store::Store as KeyspaceStore;
 
 /// What to do with a connection after draining its buffered commands.
@@ -58,7 +60,7 @@ pub enum AfterDrain {
 pub struct KevyCommands;
 
 impl Commands for KevyCommands {
-    fn route(&self, args: &[Vec<u8>]) -> Route {
+    fn route(&self, args: &Argv) -> Route {
         let Some(name) = args.first() else {
             return Route::Local;
         };
@@ -75,7 +77,7 @@ impl Commands for KevyCommands {
             b"SINTER" if args.len() >= 2 => Route::SInter,
             b"SUNION" if args.len() >= 2 => Route::SUnion,
             b"SDIFF" if args.len() >= 2 => Route::SDiff,
-            b"KEYS" if args.len() == 2 => Route::Keys(Some(args[1].clone())),
+            b"KEYS" if args.len() == 2 => Route::Keys(Some(args[1].to_vec())),
             b"SCAN" if args.len() >= 2 => Route::Scan(scan_pattern(args)),
             b"RANDOMKEY" if args.len() == 1 => Route::RandomKey,
             b"SUBSCRIBE" if args.len() >= 2 => Route::Subscribe,
@@ -107,16 +109,16 @@ impl Commands for KevyCommands {
         }
     }
 
-    fn dispatch(&self, store: &mut Store, args: &[Vec<u8>]) -> Vec<u8> {
+    fn dispatch(&self, store: &mut Store, args: &Argv) -> Vec<u8> {
         dispatch(store, args)
     }
 
-    fn is_quit(&self, args: &[Vec<u8>]) -> bool {
+    fn is_quit(&self, args: &Argv) -> bool {
         args.first()
             .is_some_and(|c| c.eq_ignore_ascii_case(b"QUIT"))
     }
 
-    fn is_write(&self, args: &[Vec<u8>]) -> bool {
+    fn is_write(&self, args: &Argv) -> bool {
         let Some(name) = args.first() else {
             return false;
         };
@@ -162,7 +164,7 @@ impl Commands for KevyCommands {
         )
     }
 
-    fn txn_kind(&self, args: &[Vec<u8>]) -> TxnKind {
+    fn txn_kind(&self, args: &Argv) -> TxnKind {
         let Some(name) = args.first() else {
             return TxnKind::Other;
         };

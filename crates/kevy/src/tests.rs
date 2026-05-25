@@ -2,7 +2,7 @@ use super::*;
 
 /// Dispatch a command (given as argv pieces) against `store`, returning RESP.
 fn d(store: &mut Store, parts: &[&[u8]]) -> Vec<u8> {
-    let args: Vec<Vec<u8>> = parts.iter().map(|p| p.to_vec()).collect();
+    let args = Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
     dispatch(store, &args)
 }
 
@@ -68,24 +68,16 @@ fn string_completion() {
 #[test]
 fn routing_and_write_classification() {
     let c = KevyCommands;
-    assert!(matches!(
-        c.route(&[b"GET".to_vec(), b"k".to_vec()]),
-        Route::Single(1)
-    ));
-    assert!(matches!(c.route(&[b"PING".to_vec()]), Route::Local));
-    assert!(matches!(c.route(&[b"DBSIZE".to_vec()]), Route::Dbsize));
-    assert!(matches!(c.route(&[b"FLUSHALL".to_vec()]), Route::Flush));
-    assert!(matches!(c.route(&[b"SAVE".to_vec()]), Route::Save));
+    let a = |parts: &[&[u8]]| Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
+    assert!(matches!(c.route(&a(&[b"GET", b"k"])), Route::Single(1)));
+    assert!(matches!(c.route(&a(&[b"PING"])), Route::Local));
+    assert!(matches!(c.route(&a(&[b"DBSIZE"])), Route::Dbsize));
+    assert!(matches!(c.route(&a(&[b"FLUSHALL"])), Route::Flush));
+    assert!(matches!(c.route(&a(&[b"SAVE"])), Route::Save));
     // DEL: single key fast path vs multi-key fan-out.
-    assert!(matches!(
-        c.route(&[b"DEL".to_vec(), b"a".to_vec()]),
-        Route::Single(1)
-    ));
-    assert!(matches!(
-        c.route(&[b"DEL".to_vec(), b"a".to_vec(), b"b".to_vec()]),
-        Route::DelKeys
-    ));
-    assert!(c.is_write(&[b"set".to_vec(), b"k".to_vec(), b"v".to_vec()]));
-    assert!(!c.is_write(&[b"GET".to_vec(), b"k".to_vec()]));
-    assert!(c.is_quit(&[b"quit".to_vec()]));
+    assert!(matches!(c.route(&a(&[b"DEL", b"a"])), Route::Single(1)));
+    assert!(matches!(c.route(&a(&[b"DEL", b"a", b"b"])), Route::DelKeys));
+    assert!(c.is_write(&a(&[b"set", b"k", b"v"])));
+    assert!(!c.is_write(&a(&[b"GET", b"k"])));
+    assert!(c.is_quit(&a(&[b"quit"])));
 }

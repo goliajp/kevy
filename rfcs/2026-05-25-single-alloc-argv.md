@@ -1,6 +1,6 @@
 # RFC: single-allocation argv (`Command` representation)
 
-**Status:** Draft — design + plan; implementation is its own focused checkpoint.
+**Status:** **DONE (v0.perf-9, 2026-05-25)** — landed on `develop` via git-flow feature branch.
 
 **Author:** admin@golia.jp + Claude (autorun, 2026-05-25)
 
@@ -88,6 +88,30 @@ The `Commands` trait signature `&[Vec<u8>]` → `&Argv` is the spine of the chan
 
 ## Decision
 
-Queued as a deliberate checkpoint (v0.perf-9), not rushed at a session tail.
-Implement behind the component gate above. If the parse micro-bench shows the
-expected ~1.7×, land it; else drop and keep `Vec<Vec<u8>>`.
+**Landed (v0.perf-9).** Implemented `Argv { buf, ends }` in kevy-resp (Index/get/
+first/iter/len + `PartialEq<Vec<Vec<u8>>>` + `From<Vec<Vec<u8>>>` so call sites
+and tests stay readable), threaded `&Argv` / `Argv` through the `Commands` trait,
+`Op::Dispatch`, exec/conn, dispatch/cmd, and kevy-persist's AOF append+replay.
+
+**Key implementation note:** the first cut (`with_capacity(count, 0)`, grow as
+args push) measured *83 ns* for SET — **no better** than `Vec<Vec<u8>>`, because
+an incrementally-grown buffer reallocs ~once per arg. The fix is a **two-pass
+parse**: pass 1 validates the frame and sums the total byte length, pass 2 builds
+the argv pre-sized to that total → exactly 2 allocations, no regrowth.
+
+**Verification (component gate, kevy-resp/examples/bench_resp, release):**
+
+| Op | before (`Vec<Vec<u8>>`) | after (`Argv`, two-pass) |
+|---|---:|---:|
+| parse SET (3 args) | ~70 ns | **~50 ns (~1.4×)** |
+| parse GET (2 args) | ~60 ns | **~40 ns (~1.5×)** |
+| parse PING (inline) | ~30 ns | ~36 ns (slightly slower; inline is rare) |
+
+Gate (≥1.4×) met on the dominant SET/GET. Correctness: `cargo test --workspace`
+green (the one intermittent failure was the pre-existing SO_REUSEPORT
+startup race under parallel+loaded conditions — `data_survives_restart_via_aof`
+passes 3/3 in isolation), clippy 0 workspace-wide.
+
+The variadic multi-value commands (HDEL/RPUSH/SADD/MSET…) still materialise a
+`Vec<Vec<u8>>` via a `rest(args, n)` helper to feed the store APIs (non-headline;
+the store keeps those bytes anyway). The headline single-key path is allocation-leaner.

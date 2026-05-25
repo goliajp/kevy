@@ -99,7 +99,7 @@ impl<C: Commands> Shard<C> {
             let commands = &self.commands;
             let store = &mut self.store;
             replay_aof(&aof_path, |args| {
-                commands.dispatch(store, args);
+                commands.dispatch(store, &args);
             })?;
         }
 

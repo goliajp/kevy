@@ -35,24 +35,24 @@
 //! re-exported so you don't need a separate dependency.)
 //!
 //! ```no_run
-//! use kevy_rt::{Commands, Route, Runtime, Store, TxnKind};
+//! use kevy_rt::{Argv, Commands, Route, Runtime, Store, TxnKind};
 //! use std::sync::Arc;
 //! use std::sync::atomic::AtomicBool;
 //!
 //! #[derive(Clone)]
 //! struct MyCommands;
 //! impl Commands for MyCommands {
-//!     fn route(&self, args: &[Vec<u8>]) -> Route {
+//!     fn route(&self, args: &Argv) -> Route {
 //!         if args.len() >= 2 { Route::Single(1) } else { Route::Local }
 //!     }
-//!     fn dispatch(&self, _store: &mut Store, _args: &[Vec<u8>]) -> Vec<u8> {
+//!     fn dispatch(&self, _store: &mut Store, _args: &Argv) -> Vec<u8> {
 //!         b"+OK\r\n".to_vec()
 //!     }
-//!     fn is_quit(&self, args: &[Vec<u8>]) -> bool {
+//!     fn is_quit(&self, args: &Argv) -> bool {
 //!         args.first().is_some_and(|c| c.eq_ignore_ascii_case(b"QUIT"))
 //!     }
-//!     fn is_write(&self, _args: &[Vec<u8>]) -> bool { false }
-//!     fn txn_kind(&self, _args: &[Vec<u8>]) -> TxnKind { TxnKind::Other }
+//!     fn is_write(&self, _args: &Argv) -> bool { false }
+//!     fn txn_kind(&self, _args: &Argv) -> TxnKind { TxnKind::Other }
 //! }
 //!
 //! // One shard per core, listening on 127.0.0.1:6379, until `stop` is set.
@@ -76,6 +76,7 @@ mod shard;
 #[cfg(target_os = "linux")]
 mod uring_reactor;
 
+pub use kevy_resp::Argv;
 pub use kevy_store::Store;
 pub use runtime::Runtime;
 
@@ -120,15 +121,15 @@ pub enum Route {
 /// must be cheap/stateless to clone.
 pub trait Commands: Clone + Send + 'static {
     /// Classify how a command is routed across shards.
-    fn route(&self, args: &[Vec<u8>]) -> Route;
+    fn route(&self, args: &Argv) -> Route;
     /// Execute a full command against one shard's store, returning RESP bytes.
-    fn dispatch(&self, store: &mut Store, args: &[Vec<u8>]) -> Vec<u8>;
+    fn dispatch(&self, store: &mut Store, args: &Argv) -> Vec<u8>;
     /// Whether this command should close the connection (QUIT).
-    fn is_quit(&self, args: &[Vec<u8>]) -> bool;
+    fn is_quit(&self, args: &Argv) -> bool;
     /// Whether this command mutates the keyspace (so it must be logged to the AOF).
-    fn is_write(&self, args: &[Vec<u8>]) -> bool;
+    fn is_write(&self, args: &Argv) -> bool;
     /// Transaction-control classification (MULTI/EXEC/DISCARD vs anything else).
-    fn txn_kind(&self, args: &[Vec<u8>]) -> TxnKind;
+    fn txn_kind(&self, args: &Argv) -> TxnKind;
 }
 
 /// Transaction-control classification for a command.

@@ -19,30 +19,21 @@ reply encoder on the response. So both are on the per-command hot path.
 
 ## Measured (M-series Mac, release, kevy-bench median, 3 runs; loaded host)
 
-| Op | median | note |
-|---|---:|---|
-| `parse_command` GET (2 args) | ~60 ns | 3 allocs (outer + 2 args) |
-| `parse_command` SET (3 args) | ~70 ns | 4 allocs (outer + 3 args) |
-| `parse_command` PING (inline) | ~30 ns | 2 allocs |
-| `encode_bulk` | ~5 ns | append to reused buffer |
-| `encode_simple_string` | ~2 ns | |
-| `encode_integer` | ~5 ns | |
+| Op | `Vec<Vec<u8>>` | `Argv` (v0.perf-9) | note |
+|---|---:|---:|---|
+| `parse_command` GET (2 args) | ~60 ns | **~40 ns** | 2 allocs (buf + ends) vs 3 |
+| `parse_command` SET (3 args) | ~70 ns | **~50 ns** | 2 allocs vs 4 |
+| `parse_command` PING (inline) | ~30 ns | ~36 ns | inline, rare |
+| `encode_bulk` | ~5 ns | ~5 ns | append to reused buffer |
+| `encode_simple_string` | ~2 ns | ~2 ns | |
+| `encode_integer` | ~5 ns | ~5 ns | |
 
-**Finding (measure-first):** encoders are near-optimal — leave them. `parse` is
-**allocation-bound**: ~70 ns for SET is essentially the four `Vec` allocations,
-which are *required* by the cross-core ownership model (see
-`rfcs/2026-05-25-std-self-host-evaluation.md` framing). `find_crlf` only scans
-the short length-prefix lines (the bulk payload is length-skipped), so the byte
-loop is a few ns — not worth vectorising.
-
-The only lever that would cut the allocations is a **single-allocation argv**
-(`{ buf: Vec<u8>, offsets: [Range;N] }` — copy all arg bytes once + an offsets
-list, ~2 allocs instead of N+1). That changes the public `Command` type and
-ripples through `dispatch`/`route`/`Op::Dispatch`/all of kevy-rt — the same large
-blast radius as zero-copy-parse, deferred for the same reason (unverifiable-blind
-risk for a per-command-CPU saving that is small next to the per-command socket
-syscall). Revisit when the system-level io_uring throughput work makes CPU the
-proven bottleneck.
+**Finding (measure-first):** encoders are near-optimal — leave them. `parse` was
+**allocation-bound** (the N+1 `Vec` allocations of `Vec<Vec<u8>>`). **Resolved in
+v0.perf-9** by switching `Command` to `Argv { buf, ends }` — a two-allocation
+flat argv (see `rfcs/2026-05-25-single-alloc-argv.md`): ~1.4–1.5× faster parse on
+SET/GET. `find_crlf` only scans the short length-prefix lines (bulk payload is
+length-skipped), a few ns — not worth vectorising.
 
 ## Regression budgets (`tests/perf_gate.rs`, dev profile, generous headroom)
 

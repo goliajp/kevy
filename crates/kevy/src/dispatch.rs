@@ -8,13 +8,13 @@
 
 use crate::cmd::*;
 use kevy_resp::{
-    encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
+    Argv, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
     encode_simple_string,
 };
 use kevy_store::Store;
 
 /// Map one command to its RESP reply bytes.
-pub fn dispatch(store: &mut Store, args: &[Vec<u8>]) -> Vec<u8> {
+pub fn dispatch(store: &mut Store, args: &Argv) -> Vec<u8> {
     let mut out = Vec::new();
     let Some(name) = args.first() else {
         encode_error(&mut out, "ERR empty command");
@@ -41,7 +41,7 @@ pub fn dispatch(store: &mut Store, args: &[Vec<u8>]) -> Vec<u8> {
 }
 
 /// Connection / introspection commands (no keyspace access).
-fn dispatch_conn(cmd: &[u8], args: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
+fn dispatch_conn(cmd: &[u8], args: &Argv, out: &mut Vec<u8>) -> bool {
     match cmd {
         b"PING" => match args.len() {
             1 => encode_simple_string(out, "PONG"),
@@ -69,7 +69,7 @@ fn dispatch_conn(cmd: &[u8], args: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
 }
 
 /// String commands.
-fn dispatch_string(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
+fn dispatch_string(cmd: &[u8], store: &mut Store, args: &Argv, out: &mut Vec<u8>) -> bool {
     match cmd {
         b"SET" => cmd_set(store, args, out),
         b"GET" => {
@@ -105,7 +105,7 @@ fn dispatch_string(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Ve
             if args.len() != 3 {
                 wrong_args(out, "setnx");
             } else {
-                let set = store.set(&args[1], args[2].clone(), None, true, false);
+                let set = store.set(&args[1], args[2].to_vec(), None, true, false);
                 encode_integer(out, set as i64);
             }
         }
@@ -115,7 +115,7 @@ fn dispatch_string(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Ve
             if args.len() != 3 {
                 wrong_args(out, "getset");
             } else {
-                match store.getset(&args[1], args[2].clone()) {
+                match store.getset(&args[1], args[2].to_vec()) {
                     Ok(Some(v)) => encode_bulk(out, &v),
                     Ok(None) => encode_null_bulk(out),
                     Err(e) => store_err(out, e),
@@ -151,7 +151,7 @@ fn dispatch_string(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Ve
 }
 
 /// Hash commands.
-fn dispatch_hash(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
+fn dispatch_hash(cmd: &[u8], store: &mut Store, args: &Argv, out: &mut Vec<u8>) -> bool {
     match cmd {
         b"HSET" => cmd_hset(store, args, out),
         b"HSETNX" => {
@@ -179,7 +179,7 @@ fn dispatch_hash(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Vec<
             if args.len() < 3 {
                 wrong_args(out, "hdel");
             } else {
-                emit_int_result(store.hdel(&args[1], &args[2..]).map(|n| n as i64), out);
+                emit_int_result(store.hdel(&args[1], &rest(args, 2)).map(|n| n as i64), out);
             }
         }
         b"HEXISTS" => {
@@ -230,7 +230,7 @@ fn dispatch_hash(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Vec<
             if args.len() < 3 {
                 wrong_args(out, "hmget");
             } else {
-                match store.hmget(&args[1], &args[2..]) {
+                match store.hmget(&args[1], &rest(args, 2)) {
                     Ok(vals) => {
                         encode_array_len(out, vals.len() as i64);
                         for v in &vals {
@@ -250,20 +250,20 @@ fn dispatch_hash(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Vec<
 }
 
 /// List commands.
-fn dispatch_list(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
+fn dispatch_list(cmd: &[u8], store: &mut Store, args: &Argv, out: &mut Vec<u8>) -> bool {
     match cmd {
         b"LPUSH" => {
             if args.len() < 3 {
                 wrong_args(out, "lpush");
             } else {
-                emit_int_result(store.lpush(&args[1], &args[2..]).map(|n| n as i64), out);
+                emit_int_result(store.lpush(&args[1], &rest(args, 2)).map(|n| n as i64), out);
             }
         }
         b"RPUSH" => {
             if args.len() < 3 {
                 wrong_args(out, "rpush");
             } else {
-                emit_int_result(store.rpush(&args[1], &args[2..]).map(|n| n as i64), out);
+                emit_int_result(store.rpush(&args[1], &rest(args, 2)).map(|n| n as i64), out);
             }
         }
         b"LPOP" => cmd_pop(store, args, false, out),
@@ -336,20 +336,20 @@ fn dispatch_list(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Vec<
 }
 
 /// Set commands (single-key; multi-key SINTER/SUNION/SDIFF are runtime gathers).
-fn dispatch_set(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
+fn dispatch_set(cmd: &[u8], store: &mut Store, args: &Argv, out: &mut Vec<u8>) -> bool {
     match cmd {
         b"SADD" => {
             if args.len() < 3 {
                 wrong_args(out, "sadd");
             } else {
-                emit_int_result(store.sadd(&args[1], &args[2..]).map(|n| n as i64), out);
+                emit_int_result(store.sadd(&args[1], &rest(args, 2)).map(|n| n as i64), out);
             }
         }
         b"SREM" => {
             if args.len() < 3 {
                 wrong_args(out, "srem");
             } else {
-                emit_int_result(store.srem(&args[1], &args[2..]).map(|n| n as i64), out);
+                emit_int_result(store.srem(&args[1], &rest(args, 2)).map(|n| n as i64), out);
             }
         }
         b"SCARD" => {
@@ -381,7 +381,7 @@ fn dispatch_set(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u
 }
 
 /// Sorted-set commands.
-fn dispatch_zset(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
+fn dispatch_zset(cmd: &[u8], store: &mut Store, args: &Argv, out: &mut Vec<u8>) -> bool {
     match cmd {
         b"ZADD" => cmd_zadd(store, args, out),
         b"ZSCORE" => {
@@ -406,7 +406,7 @@ fn dispatch_zset(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Vec<
             if args.len() < 3 {
                 wrong_args(out, "zrem");
             } else {
-                emit_int_result(store.zrem(&args[1], &args[2..]).map(|n| n as i64), out);
+                emit_int_result(store.zrem(&args[1], &rest(args, 2)).map(|n| n as i64), out);
             }
         }
         b"ZRANK" => {
@@ -451,20 +451,20 @@ fn dispatch_zset(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Vec<
 }
 
 /// Type-agnostic key commands.
-fn dispatch_generic(cmd: &[u8], store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u8>) -> bool {
+fn dispatch_generic(cmd: &[u8], store: &mut Store, args: &Argv, out: &mut Vec<u8>) -> bool {
     match cmd {
         b"DEL" => {
             if args.len() < 2 {
                 wrong_args(out, "del");
             } else {
-                encode_integer(out, store.del(&args[1..]) as i64);
+                encode_integer(out, store.del(&rest(args, 1)) as i64);
             }
         }
         b"EXISTS" => {
             if args.len() < 2 {
                 wrong_args(out, "exists");
             } else {
-                encode_integer(out, store.exists(&args[1..]) as i64);
+                encode_integer(out, store.exists(&rest(args, 1)) as i64);
             }
         }
         b"EXPIRE" => cmd_expire(store, args, 1000, "expire", out),
