@@ -124,6 +124,12 @@ pub trait Commands: Clone + Send + 'static {
     fn route(&self, args: &Argv) -> Route;
     /// Execute a full command against one shard's store, returning RESP bytes.
     fn dispatch(&self, store: &mut Store, args: &Argv) -> Vec<u8>;
+    /// Execute a command, appending the RESP reply to `out`. The in-order local
+    /// fast path uses this to write straight into the connection's output buffer
+    /// (no per-command reply `Vec`). Default: delegate to [`dispatch`](Self::dispatch).
+    fn dispatch_into(&self, store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.dispatch(store, args));
+    }
     /// Whether this command should close the connection (QUIT).
     fn is_quit(&self, args: &Argv) -> bool;
     /// Whether this command mutates the keyspace (so it must be logged to the AOF).

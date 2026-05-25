@@ -16,28 +16,35 @@ use kevy_store::Store;
 /// Map one command to its RESP reply bytes.
 pub fn dispatch(store: &mut Store, args: &Argv) -> Vec<u8> {
     let mut out = Vec::new();
+    dispatch_into(store, args, &mut out);
+    out
+}
+
+/// Execute `args` against `store`, appending the RESP reply to `out`. Lets a hot
+/// caller (the in-order local fast path) write the reply straight into the
+/// connection's output buffer — no per-command reply `Vec` alloc, no copy.
+pub fn dispatch_into(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
     let Some(name) = args.first() else {
-        encode_error(&mut out, "ERR empty command");
-        return out;
+        encode_error(out, "ERR empty command");
+        return;
     };
     // Case-fold the verb for matching without a per-command heap allocation. A
     // verb longer than the buffer yields an empty slice → no handler matches →
     // the unknown-command error below (which reports the original `name`).
     let mut buf = [0u8; 32];
     let cmd = upper_verb(name, &mut buf);
-    let handled = dispatch_conn(cmd, args, &mut out)
-        || dispatch_string(cmd, store, args, &mut out)
-        || dispatch_hash(cmd, store, args, &mut out)
-        || dispatch_list(cmd, store, args, &mut out)
-        || dispatch_set(cmd, store, args, &mut out)
-        || dispatch_zset(cmd, store, args, &mut out)
-        || dispatch_generic(cmd, store, args, &mut out)
-        || dispatch_multikey_stub(cmd, &mut out);
+    let handled = dispatch_conn(cmd, args, out)
+        || dispatch_string(cmd, store, args, out)
+        || dispatch_hash(cmd, store, args, out)
+        || dispatch_list(cmd, store, args, out)
+        || dispatch_set(cmd, store, args, out)
+        || dispatch_zset(cmd, store, args, out)
+        || dispatch_generic(cmd, store, args, out)
+        || dispatch_multikey_stub(cmd, out);
     if !handled {
         let shown = String::from_utf8_lossy(name);
-        encode_error(&mut out, &format!("ERR unknown command '{shown}'"));
+        encode_error(out, &format!("ERR unknown command '{shown}'"));
     }
-    out
 }
 
 /// Connection / introspection commands (no keyspace access).
