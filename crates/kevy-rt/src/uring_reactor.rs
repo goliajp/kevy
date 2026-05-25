@@ -22,7 +22,7 @@ use crate::shard::Shard;
 use kevy_persist::{load_snapshot, replay_aof};
 use kevy_resp::parse_command;
 use kevy_sys::{Completion, IoUring, ProvidedBufRing, Socket};
-use std::collections::HashMap;
+use kevy_hash::FxHashMap;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -101,7 +101,7 @@ impl<C: Commands> Shard<C> {
         // One provided-buffer ring per shard feeds every conn's multishot recv
         // (needs Linux 5.19+; the epoll reactor is the fallback for older kernels).
         let mut pbuf = ring.register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP)?;
-        let mut io: HashMap<u64, UringConn> = HashMap::new();
+        let mut io: FxHashMap<u64, UringConn> = FxHashMap::default();
         let mut accept_inflight = false;
         let mut comps: Vec<Completion> = Vec::with_capacity(URING_ENTRIES as usize);
         let mut cids: Vec<u64> = Vec::new();
@@ -178,7 +178,7 @@ impl<C: Commands> Shard<C> {
     fn uring_arm_conns(
         &mut self,
         ring: &mut IoUring,
-        io: &mut HashMap<u64, UringConn>,
+        io: &mut FxHashMap<u64, UringConn>,
         cids: &mut Vec<u64>,
         bgid: u16,
     ) {
@@ -233,7 +233,7 @@ impl<C: Commands> Shard<C> {
         &mut self,
         cid: u64,
         c: &Completion,
-        io: &mut HashMap<u64, UringConn>,
+        io: &mut FxHashMap<u64, UringConn>,
         pbuf: &mut ProvidedBufRing,
     ) {
         // The multishot SQE stops firing once a completion lacks F_MORE (error,
@@ -291,7 +291,7 @@ impl<C: Commands> Shard<C> {
     }
 
     /// A write completed: advance progress; resubmit the remainder next loop.
-    fn uring_on_write(&mut self, cid: u64, res: i32, io: &mut HashMap<u64, UringConn>) {
+    fn uring_on_write(&mut self, cid: u64, res: i32, io: &mut FxHashMap<u64, UringConn>) {
         let Some(uc) = io.get_mut(&cid) else {
             return;
         };
@@ -357,7 +357,7 @@ impl<C: Commands> Shard<C> {
 
     /// Close connections that are done: EOF/QUIT seen, all output flushed, no
     /// SQE in flight. Dropping the `Conn` closes the fd.
-    fn uring_reap_closed(&mut self, io: &mut HashMap<u64, UringConn>) {
+    fn uring_reap_closed(&mut self, io: &mut FxHashMap<u64, UringConn>) {
         let done: Vec<u64> = io
             .iter()
             .filter(|(cid, uc)| {
