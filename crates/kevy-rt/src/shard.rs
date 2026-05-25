@@ -14,7 +14,7 @@
 
 use crate::Commands;
 use crate::conn::Conn;
-use crate::message::{Inbound, PubMsg, PubSubReg};
+use crate::message::{Inbound, Op, PubMsg, PubSubReg, ReqBatch};
 use kevy_persist::{Aof, load_snapshot, replay_aof};
 use kevy_resp::parse_command;
 use kevy_ring::{Consumer, Producer};
@@ -66,6 +66,11 @@ pub(crate) struct Shard<C: Commands> {
     /// Per-target-shard accumulated pub/sub deliveries, flushed once per loop
     /// (`flush_publish`) so a PUBLISH flood batches into one send per shard.
     pub(crate) publish_batch: Vec<Vec<PubMsg>>,
+    /// Per-owning-shard accumulated single-key dispatches, flushed once per loop
+    /// (`flush_requests`) so a -c50 flood costs one cross-core send per shard,
+    /// not one per command — amortizing the ring/fold tax that drags many
+    /// shards below single-shard throughput.
+    pub(crate) request_batch: Vec<ReqBatch>,
 }
 
 /// Iterations to busy-poll (timeout 0) after the last work before parking.
@@ -165,6 +170,8 @@ impl<C: Commands> Shard<C> {
             }
             // Re-push anything that overflowed a full ring last iteration.
             self.flush_backlog();
+            // Send this iteration's batched single-key dispatches (one per target).
+            self.flush_requests();
             // Send this iteration's batched pub/sub deliveries (one per target).
             self.flush_publish();
             // Flush subscribers a PUBLISH wrote to this iteration.
@@ -345,6 +352,30 @@ impl<C: Commands> Shard<C> {
                     Inbound::Response { conn, seq, part } => {
                         self.fold(conn, seq, part);
                         self.flush_conn(conn)?;
+                    }
+                    // Batched single-key dispatches to this (owning) shard: exec
+                    // each locally, reply as one `ResponseBatch` to the origin.
+                    Inbound::RequestBatch { origin, reqs } => {
+                        let mut resps = Vec::with_capacity(reqs.len());
+                        for (conn, seq, argv) in reqs {
+                            let part = self.exec_op(Op::Dispatch(argv));
+                            resps.push((conn, seq, part));
+                        }
+                        self.send_to(origin, Inbound::ResponseBatch(resps));
+                    }
+                    // Batched replies: fold each by seq, then flush each touched
+                    // conn once (dedup — pipelined replies share a conn).
+                    Inbound::ResponseBatch(resps) => {
+                        let mut to_flush: Vec<u64> = Vec::new();
+                        for (conn, seq, part) in resps {
+                            self.fold(conn, seq, part);
+                            if !to_flush.contains(&conn) {
+                                to_flush.push(conn);
+                            }
+                        }
+                        for conn in to_flush {
+                            self.flush_conn(conn)?;
+                        }
                     }
                     // Fire-and-forget batched pub/sub delivery; appended
                     // subscriber output is flushed via `flush_dirty`.

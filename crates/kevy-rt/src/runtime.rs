@@ -121,6 +121,7 @@ impl<C: Commands> Runtime<C> {
                 dirty: Vec::new(),
                 pubsub: pubsub.clone(),
                 publish_batch: (0..n).map(|_| Vec::new()).collect(),
+                request_batch: (0..n).map(|_| Vec::new()).collect(),
             });
         }
 
