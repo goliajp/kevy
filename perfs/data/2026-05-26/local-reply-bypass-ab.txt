@@ -1,0 +1,24 @@
+In-order local reply bypass — A/B — lx64, io_uring single-shard (core 0) +
+15-core client, GET, host-loopback. develop baseline ALREADY includes the Fx
+conn-map fix; this measures the bypass on top.
+
+  -P64  GET: develop 4,315,320 ; 4,239,373   feature 5,126,411 ; 5,194,930   +20%
+  -P256 GET: develop 4,809,464 ; 4,673,945   feature 5,954,849 ; 5,853,736   +24%
+
+io_uring sharded suite 11/11 with the bypass; full workspace tests + clippy green.
+
+The bypass: when a single-key command runs on the conn's own shard AND nothing
+is pending (its reply is the next to emit), dispatch_into() writes the RESP reply
+straight into conn.output — skipping PendingSlot push/pop + fold + materialize +
+the per-command reply Vec alloc + the drain copy. Attacks the post-Fx profile's
+fold (9.5%) + reply malloc. Mixed cross-core (pending non-empty) keeps the
+ordered slot path, so correctness (reply ordering) is preserved (sharded
+pipeline-order + cross-shard tests pass).
+
+=== Session perf arc (single-shard io_uring GET ceiling, -P256) ===
+  baseline               3.77M/core
+  + Fx conn maps         4.78M/core   (+25%)
+  + local reply bypass   ~5.9M/core   (+24%)
+  cumulative             +57%  ≈ 2.4x valkey 9.1's TOTAL throughput per core.
+Both wins were perf-guided (the user enabled `perf` on lx64). Next stones from
+the profile: parse_command (13.5%) + the remaining per-command allocs (Argv buf).
