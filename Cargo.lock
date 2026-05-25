@@ -6,6 +6,7 @@ version = 4
 name = "kevy"
 version = "0.1.0"
 dependencies = [
+ "kevy-bench",
  "kevy-resp",
  "kevy-rt",
  "kevy-store",
