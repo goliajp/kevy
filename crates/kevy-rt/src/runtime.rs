@@ -1,7 +1,7 @@
 //! The public entry point: configure and run the thread-per-core server.
 
 use crate::Commands;
-use crate::message::Inbound;
+use crate::message::{Inbound, PubSubReg};
 use crate::shard::Shard;
 use kevy_persist::{Aof, Fsync};
 use kevy_ring::{Consumer, Producer};
@@ -10,8 +10,8 @@ use kevy_sys::{Poller, Waker, tcp_listen_reuseport, waker};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, RwLock};
 
 /// Slots in each per-core-pair SPSC ring. A full ring spills to a local backlog
 /// (see [`Shard`]), so this only bounds the lock-free fast path, not capacity.
@@ -82,6 +82,9 @@ impl<C: Commands> Runtime<C> {
         let parked: Vec<Arc<AtomicBool>> =
             (0..n).map(|_| Arc::new(AtomicBool::new(false))).collect();
 
+        // Shared pub/sub channel registry (one per server, read on every PUBLISH).
+        let pubsub: PubSubReg = Arc::new(RwLock::new(HashMap::new()));
+
         // Build every shard up front so a bind/open failure aborts before we spawn.
         let mut shards = Vec::with_capacity(n);
         for id in 0..n {
@@ -116,6 +119,8 @@ impl<C: Commands> Runtime<C> {
                 data_dir: self.data_dir.clone(),
                 aof,
                 dirty: Vec::new(),
+                pubsub: pubsub.clone(),
+                publish_batch: (0..n).map(|_| Vec::new()).collect(),
             });
         }
 

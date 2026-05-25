@@ -144,6 +144,7 @@ impl<C: Commands> Shard<C> {
             // io_uring batches the delivery — just drop the (epoll-only) marks.
             self.dirty.clear();
             self.flush_backlog();
+            self.flush_publish();
             self.flush_wakes();
             if let Some(aof) = &mut self.aof {
                 let _ = aof.maybe_sync();
@@ -301,6 +302,13 @@ impl<C: Commands> Shard<C> {
                     Inbound::Response { conn, seq, part } => {
                         self.fold(conn, seq, part);
                     }
+                    // Fire-and-forget batched pub/sub delivery; the arm loop
+                    // writes any conn whose output this appended to.
+                    Inbound::DeliverPublish(batch) => {
+                        for m in &batch {
+                            self.deliver_publish(&m.0, &m.1);
+                        }
+                    }
                 }
             }
         }
@@ -327,7 +335,9 @@ impl<C: Commands> Shard<C> {
             .map(|(&cid, _)| cid)
             .collect();
         for cid in done {
-            self.conns.remove(&cid); // Conn drop closes the socket fd
+            if let Some(c) = self.conns.remove(&cid) {
+                self.unregister_subs(&c.sub); // Conn drop closes the socket fd
+            }
             io.remove(&cid);
         }
     }
