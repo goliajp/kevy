@@ -1,7 +1,7 @@
 //! Command helpers shared by the dispatcher.
 
 use kevy_resp::{
-    encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
+    Argv, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
     encode_simple_string,
 };
 use kevy_store::{ScoreBound, Store, StoreError};
@@ -88,19 +88,19 @@ pub(crate) fn emit_bulk_array(res: Result<Vec<Vec<u8>>, StoreError>, out: &mut V
 }
 
 /// `HSET key field value [field value ...]`.
-pub(crate) fn cmd_hset(store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u8>) {
+pub(crate) fn cmd_hset(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
     if args.len() < 4 || !args.len().is_multiple_of(2) {
         return wrong_args(out, "hset");
     }
-    let pairs: Vec<(Vec<u8>, Vec<u8>)> = args[2..]
-        .chunks(2)
-        .map(|c| (c[0].clone(), c[1].clone()))
+    let pairs: Vec<(Vec<u8>, Vec<u8>)> = (2..args.len())
+        .step_by(2)
+        .map(|i| (args[i].to_vec(), args[i + 1].to_vec()))
         .collect();
     emit_int_result(store.hset(&args[1], &pairs).map(|n| n as i64), out);
 }
 
 /// `ZADD key score member [score member ...]`.
-pub(crate) fn cmd_zadd(store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u8>) {
+pub(crate) fn cmd_zadd(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
     if args.len() < 4 || !(args.len() - 2).is_multiple_of(2) {
         return wrong_args(out, "zadd");
     }
@@ -110,14 +110,14 @@ pub(crate) fn cmd_zadd(store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u8>) {
         let Some(score) = arg_f64(&args[i]) else {
             return encode_error(out, "ERR value is not a valid float");
         };
-        pairs.push((score, args[i + 1].clone()));
+        pairs.push((score, args[i + 1].to_vec()));
         i += 2;
     }
     emit_int_result(store.zadd(&args[1], &pairs).map(|n| n as i64), out);
 }
 
 /// `ZRANGE key start stop [WITHSCORES]` — by rank.
-pub(crate) fn cmd_zrange(store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u8>) {
+pub(crate) fn cmd_zrange(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
     if args.len() < 4 || args.len() > 5 {
         return wrong_args(out, "zrange");
     }
@@ -132,7 +132,7 @@ pub(crate) fn cmd_zrange(store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u8>)
 }
 
 /// `ZRANGEBYSCORE key min max [WITHSCORES]`.
-pub(crate) fn cmd_zrangebyscore(store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u8>) {
+pub(crate) fn cmd_zrangebyscore(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
     if args.len() < 4 || args.len() > 5 {
         return wrong_args(out, "zrangebyscore");
     }
@@ -212,7 +212,7 @@ pub(crate) fn fmt_score(s: f64) -> Vec<u8> {
 }
 
 /// `SPOP`/`SRANDMEMBER key [count]` — single reply without count, array with it.
-pub(crate) fn cmd_spop_rand(store: &mut Store, args: &[Vec<u8>], remove: bool, out: &mut Vec<u8>) {
+pub(crate) fn cmd_spop_rand(store: &mut Store, args: &Argv, remove: bool, out: &mut Vec<u8>) {
     let name = if remove { "spop" } else { "srandmember" };
     if args.len() < 2 || args.len() > 3 {
         return wrong_args(out, name);
@@ -250,7 +250,7 @@ pub(crate) fn cmd_spop_rand(store: &mut Store, args: &[Vec<u8>], remove: bool, o
 }
 
 /// `LPOP`/`RPOP key [count]` — single reply without count, array with it.
-pub(crate) fn cmd_pop(store: &mut Store, args: &[Vec<u8>], tail: bool, out: &mut Vec<u8>) {
+pub(crate) fn cmd_pop(store: &mut Store, args: &Argv, tail: bool, out: &mut Vec<u8>) {
     let name = if tail { "rpop" } else { "lpop" };
     if args.len() < 2 || args.len() > 3 {
         return wrong_args(out, name);
@@ -292,7 +292,7 @@ pub(crate) fn cmd_pop(store: &mut Store, args: &[Vec<u8>], tail: bool, out: &mut
 }
 
 /// `SET key value [EX s | PX ms] [NX | XX]`.
-pub(crate) fn cmd_set(store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u8>) {
+pub(crate) fn cmd_set(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
     if args.len() < 3 {
         return wrong_args(out, "set");
     }
@@ -326,7 +326,7 @@ pub(crate) fn cmd_set(store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u8>) {
     if nx && xx {
         return encode_error(out, "ERR syntax error");
     }
-    if store.set(&args[1], args[2].clone(), expire, nx, xx) {
+    if store.set(&args[1], args[2].to_vec(), expire, nx, xx) {
         encode_simple_string(out, "OK");
     } else {
         encode_null_bulk(out); // NX/XX condition not met
@@ -336,7 +336,7 @@ pub(crate) fn cmd_set(store: &mut Store, args: &[Vec<u8>], out: &mut Vec<u8>) {
 /// `SETEX`/`PSETEX key ttl value`.
 pub(crate) fn cmd_setex(
     store: &mut Store,
-    args: &[Vec<u8>],
+    args: &Argv,
     unit_ms: i64,
     name: &str,
     out: &mut Vec<u8>,
@@ -350,7 +350,7 @@ pub(crate) fn cmd_setex(
     let ms = n.saturating_mul(unit_ms) as u64;
     store.set(
         &args[1],
-        args[3].clone(),
+        args[3].to_vec(),
         Some(Duration::from_millis(ms)),
         false,
         false,
@@ -360,7 +360,7 @@ pub(crate) fn cmd_setex(
 
 pub(crate) fn cmd_incr(
     store: &mut Store,
-    args: &[Vec<u8>],
+    args: &Argv,
     delta: i64,
     cmd: &str,
     out: &mut Vec<u8>,
@@ -373,7 +373,7 @@ pub(crate) fn cmd_incr(
 
 pub(crate) fn cmd_incr_by(
     store: &mut Store,
-    args: &[Vec<u8>],
+    args: &Argv,
     negate: bool,
     cmd: &str,
     out: &mut Vec<u8>,
@@ -397,7 +397,7 @@ pub(crate) fn cmd_incr_by(
 /// existed), matching Redis.
 pub(crate) fn cmd_expire(
     store: &mut Store,
-    args: &[Vec<u8>],
+    args: &Argv,
     unit_ms: i64,
     cmd: &str,
     out: &mut Vec<u8>,
@@ -408,11 +408,11 @@ pub(crate) fn cmd_expire(
     let Some(n) = arg_i64(&args[2]) else {
         return encode_error(out, ERR_NOT_INT);
     };
-    if store.exists(&[args[1].clone()]) == 0 {
+    if store.exists(&[args[1].to_vec()]) == 0 {
         return encode_integer(out, 0);
     }
     if n <= 0 {
-        store.del(&[args[1].clone()]);
+        store.del(&[args[1].to_vec()]);
         return encode_integer(out, 1);
     }
     let ms = n.saturating_mul(unit_ms) as u64;
@@ -425,7 +425,7 @@ pub(crate) fn cmd_expire(
 /// `TTL` (seconds) / `PTTL` (millis). Pass-through of the -2 / -1 sentinels.
 pub(crate) fn cmd_ttl(
     store: &mut Store,
-    args: &[Vec<u8>],
+    args: &Argv,
     in_secs: bool,
     cmd: &str,
     out: &mut Vec<u8>,
@@ -442,17 +442,25 @@ pub(crate) fn cmd_ttl(
     encode_integer(out, val);
 }
 
+/// Owned copy of `args[from..]` as a `Vec<Vec<u8>>`, for the variadic
+/// (multi-value) store calls that take `&[Vec<u8>]`. The headline single-key
+/// commands don't use this; these multi-value commands hand the bytes to the
+/// store to keep anyway.
+pub(crate) fn rest(args: &Argv, from: usize) -> Vec<Vec<u8>> {
+    args.iter().skip(from).map(<[u8]>::to_vec).collect()
+}
+
 /// Parse an `i64` argument from raw bytes.
 pub(crate) fn arg_i64(b: &[u8]) -> Option<i64> {
     std::str::from_utf8(b).ok()?.parse::<i64>().ok()
 }
 
 /// Extract the `MATCH <pattern>` option from a `SCAN cursor [opts...]` command.
-pub(crate) fn scan_pattern(args: &[Vec<u8>]) -> Option<Vec<u8>> {
+pub(crate) fn scan_pattern(args: &Argv) -> Option<Vec<u8>> {
     let mut i = 2;
     while i + 1 < args.len() {
         if args[i].eq_ignore_ascii_case(b"MATCH") {
-            return Some(args[i + 1].clone());
+            return Some(args[i + 1].to_vec());
         }
         i += 2;
     }

@@ -4,6 +4,7 @@
 //! [`Inbound`]) and how a command's (possibly multi-shard) result is
 //! accumulated on its origin shard ([`Agg`], [`PendingSlot`]). All crate-private.
 
+use kevy_resp::Argv;
 use std::collections::HashMap;
 
 /// A list of key/value pairs (for MSET).
@@ -36,7 +37,7 @@ pub(crate) enum MultiOp {
 
 /// A unit of work shipped to the owning shard.
 pub(crate) enum Op {
-    Dispatch(Vec<Vec<u8>>),
+    Dispatch(Argv),
     Del(Vec<Vec<u8>>),
     Exists(Vec<Vec<u8>>),
     Dbsize,

@@ -34,7 +34,7 @@ Conditions for the numbers below: M-series Mac, release, `kevy-bench` medians,
 
 | Crate | Note | Status |
 |---|---|---|
-| kevy-resp parse_command | `Vec<Vec<u8>>` owned argv | · v0.perf-8 measured: SET ~70 ns, **alloc-bound** (4 allocs, owned for cross-core). encoders near-free (~2–5 ns). Single-alloc-argv win deferred (Command-type change, big blast radius). perf_gate + BUDGETS added |
+| kevy-resp parse_command | `Argv {buf, ends}` (2-alloc) | ✓ v0.perf-9 (rfcs/single-alloc-argv): two-pass parse, 2 allocs vs N+1 → **SET ~70→~50 ns (~1.4×), GET ~60→~40 (~1.5×)**. encoders near-free. perf_gate + BUDGETS |
 | kevy-sys | libc boundary (sockets/epoll/io_uring) | · syscall-bound, not algorithmic |
 | kevy-ring | lock-free SPSC ring | ✓ has its own tests |
 | kevy-persist | RDB/AOF (background / startup) | · not hot path |

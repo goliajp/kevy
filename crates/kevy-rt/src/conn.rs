@@ -1,6 +1,7 @@
 //! Per-connection state owned by its origin shard.
 
 use crate::message::PendingSlot;
+use kevy_resp::Argv;
 use kevy_sys::Socket;
 use std::collections::{HashSet, VecDeque};
 
@@ -23,7 +24,7 @@ pub(crate) struct Conn {
     /// Channels this connection is subscribed to (pub/sub).
     pub(crate) sub: HashSet<Vec<u8>>,
     /// Queued commands inside a MULTI…EXEC transaction (`None` = not in MULTI).
-    pub(crate) multi: Option<Vec<Vec<Vec<u8>>>>,
+    pub(crate) multi: Option<Vec<Argv>>,
 }
 
 impl Conn {

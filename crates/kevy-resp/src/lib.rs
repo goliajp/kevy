@@ -34,8 +34,102 @@
 //! ```
 #![forbid(unsafe_code)]
 
+/// A parsed command's argument vector.
+///
+/// Stored in **two allocations** — all argument bytes concatenated in `buf`,
+/// with `ends[i]` the end offset of argument `i` — instead of the `N+1` a
+/// `Vec<Vec<u8>>` needs (one outer `Vec` plus one per argument). Parsing a SET
+/// drops from 4 allocations to 2. It is `Send` (two `Vec`s), so the
+/// thread-per-core runtime still forwards it across cores by value.
+///
+/// Index/`get`/`first`/`iter` return `&[u8]` argument slices. It compares equal
+/// to a `Vec<Vec<u8>>` of the same arguments, so call sites and tests read
+/// naturally.
+#[derive(Clone, Default, Debug, Eq)]
+pub struct Argv {
+    buf: Vec<u8>,
+    ends: Vec<u32>,
+}
+
+impl Argv {
+    /// An empty argv, pre-sizing for `argc` args totalling `bytes` bytes.
+    pub fn with_capacity(argc: usize, bytes: usize) -> Self {
+        Argv {
+            buf: Vec::with_capacity(bytes),
+            ends: Vec::with_capacity(argc),
+        }
+    }
+
+    /// Append one argument.
+    pub fn push(&mut self, arg: &[u8]) {
+        self.buf.extend_from_slice(arg);
+        self.ends.push(self.buf.len() as u32);
+    }
+
+    /// Number of arguments.
+    pub fn len(&self) -> usize {
+        self.ends.len()
+    }
+
+    /// Whether there are no arguments.
+    pub fn is_empty(&self) -> bool {
+        self.ends.is_empty()
+    }
+
+    /// Argument `i` as a byte slice, or `None` if out of range.
+    pub fn get(&self, i: usize) -> Option<&[u8]> {
+        let end = *self.ends.get(i)? as usize;
+        let start = if i == 0 { 0 } else { self.ends[i - 1] as usize };
+        Some(&self.buf[start..end])
+    }
+
+    /// The first argument (the command name), or `None` if empty.
+    pub fn first(&self) -> Option<&[u8]> {
+        self.get(0)
+    }
+
+    /// Iterate the arguments as byte slices.
+    pub fn iter(&self) -> impl Iterator<Item = &[u8]> {
+        (0..self.len()).map(move |i| self.get(i).expect("in range"))
+    }
+}
+
+impl core::ops::Index<usize> for Argv {
+    type Output = [u8];
+    fn index(&self, i: usize) -> &[u8] {
+        self.get(i).expect("argv index out of bounds")
+    }
+}
+
+/// Compare to a `Vec<Vec<u8>>` of the same arguments (keeps call sites + tests
+/// that build the expected value as a vec-of-vecs readable).
+impl PartialEq<Vec<Vec<u8>>> for Argv {
+    fn eq(&self, other: &Vec<Vec<u8>>) -> bool {
+        self.len() == other.len() && self.iter().zip(other).all(|(a, b)| a == b.as_slice())
+    }
+}
+
+impl PartialEq for Argv {
+    fn eq(&self, other: &Argv) -> bool {
+        self.buf == other.buf && self.ends == other.ends
+    }
+}
+
+/// Build from a vec-of-vecs (test/embedding convenience; the wire path uses
+/// [`parse_command`], which builds an [`Argv`] directly without the intermediate
+/// allocations).
+impl From<Vec<Vec<u8>>> for Argv {
+    fn from(v: Vec<Vec<u8>>) -> Self {
+        let mut a = Argv::with_capacity(v.len(), v.iter().map(Vec::len).sum());
+        for arg in &v {
+            a.push(arg);
+        }
+        a
+    }
+}
+
 /// A parsed command: `argv`, where `argv[0]` is the command name.
-pub type Command = Vec<Vec<u8>>;
+pub type Command = Argv;
 
 /// Why a buffer could not (yet) be parsed into a command.
 #[derive(Debug, PartialEq, Eq)]
@@ -67,11 +161,13 @@ fn parse_inline(buf: &[u8]) -> Result<Option<(Command, usize)>, ProtocolError> {
         return Ok(None);
     };
     let line = &buf[..eol];
-    let args: Command = line
+    let mut args = Argv::default();
+    for tok in line
         .split(|b| b.is_ascii_whitespace())
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_vec())
-        .collect();
+    {
+        args.push(tok);
+    }
     // Consume the line + CRLF even if it was blank (yields an empty argv).
     Ok(Some((args, eol + 2)))
 }
@@ -86,12 +182,17 @@ fn parse_multibulk(buf: &[u8]) -> Result<Option<(Command, usize)>, ProtocolError
         parse_int(&buf[1..hdr_end]).ok_or(ProtocolError::Malformed("bad multibulk count"))?;
     if count < 0 {
         // A null array — treat as an empty command.
-        return Ok(Some((Vec::new(), hdr_end + 2)));
+        return Ok(Some((Argv::default(), hdr_end + 2)));
     }
     let count = count as usize;
 
+    // Pass 1: verify the whole frame is present and sum the total argument bytes.
+    // Knowing the total up front lets pass 2 build the argv in exactly two
+    // allocations (the byte buffer + the offsets), with no reallocation — which
+    // is the entire point over `Vec<Vec<u8>>` (an incrementally-grown buffer
+    // would realloc ~once per argument, no better than N+1 separate `Vec`s).
     let mut pos = hdr_end + 2;
-    let mut args: Command = Vec::with_capacity(count);
+    let mut total = 0usize;
     for _ in 0..count {
         // Each element must be a bulk string: `$<len>\r\n<bytes>\r\n`.
         if pos >= buf.len() {
@@ -109,8 +210,7 @@ fn parse_multibulk(buf: &[u8]) -> Result<Option<(Command, usize)>, ProtocolError
             return Err(ProtocolError::Malformed("negative bulk length in request"));
         }
         let len = len as usize;
-        let data_start = len_end + 2;
-        let data_end = data_start + len;
+        let data_end = len_end + 2 + len;
         // Need the data plus its trailing CRLF.
         if buf.len() < data_end + 2 {
             return Ok(None);
@@ -118,8 +218,20 @@ fn parse_multibulk(buf: &[u8]) -> Result<Option<(Command, usize)>, ProtocolError
         if &buf[data_end..data_end + 2] != b"\r\n" {
             return Err(ProtocolError::Malformed("bulk string not CRLF-terminated"));
         }
-        args.push(buf[data_start..data_end].to_vec());
+        total += len;
         pos = data_end + 2;
+    }
+
+    // Pass 2: copy. The frame is already validated, so the length lines re-parse
+    // cleanly; the buffer is pre-sized to `total`, so `push` never reallocates.
+    let mut args = Argv::with_capacity(count, total);
+    let mut p = hdr_end + 2;
+    for _ in 0..count {
+        let len_end = find_crlf(buf, p + 1).expect("validated in pass 1");
+        let len = parse_int(&buf[p + 1..len_end]).expect("validated in pass 1") as usize;
+        let data_start = len_end + 2;
+        args.push(&buf[data_start..data_start + len]);
+        p = data_start + len + 2;
     }
     Ok(Some((args, pos)))
 }
