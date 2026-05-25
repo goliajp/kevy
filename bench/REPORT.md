@@ -478,3 +478,26 @@ Three measure-first checkpoints after the clean baseline (all on develop):
 16-core box's co-located `redis-benchmark` can drive at -c50 — further
 server-side perf needs a **dedicated second load-gen machine** to measure
 honestly. Details: `perfs/topics/04-c50-bottleneck.md`, `05-multishot-recv.md`.
+
+## perf-guided per-core wins (2026-05-26): single-shard 3.77M → ~5.9M GET/core
+
+`perf record` on the single-shard io_uring reactor (debug-symbol release,
+`perf_event_paranoid` relaxed + restored) found two big reactor-path costs that
+component micro-benches alone had missed:
+
+1. **Fx-hash the per-connection maps (+25%).** `conns`/`fd_to_conn`/`io` were std
+   `HashMap` (SipHash) — ~17.6% of CPU hashing the u64/i32 keys per command (conns
+   looked up twice/command). Switched to kevy-hash `FxHashMap` (~1ns vs ~15ns).
+   Single-shard GET 3.77M → 4.78M.
+2. **In-order local reply bypass (+24%).** When a single-key command runs on the
+   conn's own shard with nothing pending, write the reply straight to
+   `conn.output` (via `dispatch_into`) — no PendingSlot/fold/materialize, no
+   per-command reply alloc, no drain copy. 4.78M → ~5.9M.
+
+**Cumulative +57% per-core: ~5.9M GET/core ≈ 2.4× valkey 9.1's total throughput.**
+Both are reactor-path (unlike the command-CPU `encode_bulk` reserve, which was
+component -61% but system-neutral — the server is reactor-bound, not
+command-CPU-bound). Verified: sharded 11/11 via epoll AND io_uring, clippy 0,
+full tests green. The lesson: a profiler beats guessing — the SipHash hotspot
+contradicted a standing "negligible" assumption. Data:
+`perfs/data/2026-05-26/{fxhash-conn-maps,local-reply-bypass}-ab.txt`.
