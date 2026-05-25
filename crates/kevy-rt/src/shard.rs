@@ -14,7 +14,7 @@
 
 use crate::Commands;
 use crate::conn::Conn;
-use crate::message::Inbound;
+use crate::message::{Inbound, PubMsg, PubSubReg};
 use kevy_persist::{Aof, load_snapshot, replay_aof};
 use kevy_resp::parse_command;
 use kevy_ring::{Consumer, Producer};
@@ -61,6 +61,11 @@ pub(crate) struct Shard<C: Commands> {
     /// Connections a PUBLISH appended output to this iteration; the reactor
     /// flushes them (epoll via `flush_conn`, io_uring via its arm/write loop).
     pub(crate) dirty: Vec<u64>,
+    /// Shared pub/sub channel registry (see [`PubSubReg`]).
+    pub(crate) pubsub: PubSubReg,
+    /// Per-target-shard accumulated pub/sub deliveries, flushed once per loop
+    /// (`flush_publish`) so a PUBLISH flood batches into one send per shard.
+    pub(crate) publish_batch: Vec<Vec<PubMsg>>,
 }
 
 /// Iterations to busy-poll (timeout 0) after the last work before parking.
@@ -160,6 +165,8 @@ impl<C: Commands> Shard<C> {
             }
             // Re-push anything that overflowed a full ring last iteration.
             self.flush_backlog();
+            // Send this iteration's batched pub/sub deliveries (one per target).
+            self.flush_publish();
             // Flush subscribers a PUBLISH wrote to this iteration.
             self.flush_dirty()?;
             // One wakeup per touched (and parked) target this iteration.
@@ -339,6 +346,13 @@ impl<C: Commands> Shard<C> {
                         self.fold(conn, seq, part);
                         self.flush_conn(conn)?;
                     }
+                    // Fire-and-forget batched pub/sub delivery; appended
+                    // subscriber output is flushed via `flush_dirty`.
+                    Inbound::DeliverPublish(batch) => {
+                        for m in &batch {
+                            self.deliver_publish(&m.0, &m.1);
+                        }
+                    }
                 }
             }
         }
@@ -389,7 +403,29 @@ impl<C: Commands> Shard<C> {
             let fd = conn.sock.raw();
             let _ = self.poller.delete(fd);
             self.fd_to_conn.remove(&fd);
+            self.unregister_subs(&conn.sub);
             // conn (and its Socket) dropped here → fd closed.
+        }
+    }
+
+    /// Drop a (closing) connection's subscriptions from the shared registry, so
+    /// PUBLISH counts and the fan-out bitset don't count a gone subscriber.
+    pub(crate) fn unregister_subs(&self, subs: &std::collections::HashSet<Vec<u8>>) {
+        if subs.is_empty() {
+            return;
+        }
+        let mut reg = self.pubsub.write().expect("pubsub registry");
+        for ch in subs {
+            let drop = match reg.get_mut(ch) {
+                Some(e) => {
+                    e.0 = e.0.saturating_sub(1);
+                    e.0 == 0
+                }
+                None => false,
+            };
+            if drop {
+                reg.remove(ch);
+            }
         }
     }
 }
