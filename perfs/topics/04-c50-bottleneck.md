@@ -74,3 +74,17 @@ server-bound** (clean A/B config). data: `data/2026-05-26/pipeline-scan.txt`.
 -P16 there are ~16× more read SQEs than at -P256; multishot re-fires one recv per
 connection and lets the kernel pick a buffer, cutting submit/re-arm overhead.
 ~2× headroom at the typical -P16.
+
+## Definitive grounding: single-shard ceiling (2026-05-26)
+
+1 shard on core 0 + a 15-core client (load generator definitively not the limit),
+GET -c50 -P256: **epoll 3.77M / io_uring 3.76M rps** (`data/.../single-shard-ceiling.txt`).
+
+- **Per-core GET ceiling ≈ 3.77M (~265 ns/cmd)** — already ~1.5× valkey 9.1's
+  *total* throughput (single-threaded exec).
+- The 4-shard 7.2M (1.8M/shard) was **client-bound**, not a server limit: one shard
+  alone does 3.77M. **The dominant untapped headroom is multi-core scaling**
+  (~10-13 shards × 3.77M = 38-49M GET/s on this box) — unreachable by any
+  single-box co-located client. **A dedicated load-gen machine is the gating need.**
+- Per-core ~265 ns/cmd ≈ 110 ns command CPU + ~150 ns reactor/io_uring; the latter
+  is the only single-box-measurable lever left, with modest/complex remaining knobs.
