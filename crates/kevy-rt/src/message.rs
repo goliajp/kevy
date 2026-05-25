@@ -20,6 +20,10 @@ pub(crate) type KvPairs = Vec<(Vec<u8>, Vec<u8>)>;
 /// (cleared then) — safe, since a stray delivery just finds no local subscriber.
 pub(crate) type PubSubReg = Arc<RwLock<HashMap<Vec<u8>, (u32, u64)>>>;
 
+/// One pub/sub message `(channel, payload)`, shared (not cloned) across the
+/// shards it fans out to.
+pub(crate) type PubMsg = Arc<(Vec<u8>, Vec<u8>)>;
+
 /// What to fetch per key in a cross-shard gather.
 #[derive(Clone, Copy)]
 pub(crate) enum GatherKind {
@@ -59,8 +63,6 @@ pub(crate) enum Op {
     Gather(GatherKind, Vec<Vec<u8>>),
     /// Collect this shard's keys (optional glob + limit) — KEYS/SCAN/RANDOMKEY.
     CollectKeys(Option<Vec<u8>>, Option<usize>),
-    /// Deliver `message` to this shard's subscribers of `channel`; return count.
-    Publish(Vec<u8>, Vec<u8>),
 }
 
 /// How a KEYS-family reply is shaped.
@@ -98,11 +100,13 @@ pub(crate) enum Inbound {
         seq: u64,
         part: Part,
     },
-    /// Fire-and-forget work with no reply folded back (pub/sub message delivery:
-    /// the publisher already replied with the receiver count from the registry).
-    Deliver {
-        op: Op,
-    },
+    /// A batch of pub/sub messages `(channel, payload)` to deliver to this
+    /// shard's subscribers — fire-and-forget (no reply; the publisher already
+    /// replied with the receiver count from the registry). Batched per drain so
+    /// a flood of PUBLISHes costs one cross-core send per target shard, not one
+    /// per message. `Arc` so the same payload fanned to many shards is shared,
+    /// not cloned per target.
+    DeliverPublish(Vec<PubMsg>),
 }
 
 /// Accumulator for a command's (possibly multi-shard) result.

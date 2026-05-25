@@ -14,7 +14,7 @@
 
 use crate::Commands;
 use crate::conn::Conn;
-use crate::message::{Inbound, PubSubReg};
+use crate::message::{Inbound, PubMsg, PubSubReg};
 use kevy_persist::{Aof, load_snapshot, replay_aof};
 use kevy_resp::parse_command;
 use kevy_ring::{Consumer, Producer};
@@ -63,6 +63,9 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) dirty: Vec<u64>,
     /// Shared pub/sub channel registry (see [`PubSubReg`]).
     pub(crate) pubsub: PubSubReg,
+    /// Per-target-shard accumulated pub/sub deliveries, flushed once per loop
+    /// (`flush_publish`) so a PUBLISH flood batches into one send per shard.
+    pub(crate) publish_batch: Vec<Vec<PubMsg>>,
 }
 
 /// Iterations to busy-poll (timeout 0) after the last work before parking.
@@ -162,6 +165,8 @@ impl<C: Commands> Shard<C> {
             }
             // Re-push anything that overflowed a full ring last iteration.
             self.flush_backlog();
+            // Send this iteration's batched pub/sub deliveries (one per target).
+            self.flush_publish();
             // Flush subscribers a PUBLISH wrote to this iteration.
             self.flush_dirty()?;
             // One wakeup per touched (and parked) target this iteration.
@@ -341,10 +346,12 @@ impl<C: Commands> Shard<C> {
                         self.fold(conn, seq, part);
                         self.flush_conn(conn)?;
                     }
-                    // Fire-and-forget (pub/sub delivery): run it, no reply. The
-                    // appended subscriber output is flushed via `flush_dirty`.
-                    Inbound::Deliver { op } => {
-                        let _ = self.exec_op(op);
+                    // Fire-and-forget batched pub/sub delivery; appended
+                    // subscriber output is flushed via `flush_dirty`.
+                    Inbound::DeliverPublish(batch) => {
+                        for m in &batch {
+                            self.deliver_publish(&m.0, &m.1);
+                        }
                     }
                 }
             }
