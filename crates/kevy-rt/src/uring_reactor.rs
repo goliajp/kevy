@@ -301,6 +301,11 @@ impl<C: Commands> Shard<C> {
                     Inbound::Response { conn, seq, part } => {
                         self.fold(conn, seq, part);
                     }
+                    // Fire-and-forget pub/sub delivery; the arm loop writes any
+                    // conn whose output this appended to.
+                    Inbound::Deliver { op } => {
+                        let _ = self.exec_op(op);
+                    }
                 }
             }
         }
@@ -327,7 +332,9 @@ impl<C: Commands> Shard<C> {
             .map(|(&cid, _)| cid)
             .collect();
         for cid in done {
-            self.conns.remove(&cid); // Conn drop closes the socket fd
+            if let Some(c) = self.conns.remove(&cid) {
+                self.unregister_subs(&c.sub); // Conn drop closes the socket fd
+            }
             io.remove(&cid);
         }
     }
