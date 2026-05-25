@@ -17,7 +17,7 @@
 
 use crate::Commands;
 use crate::conn::Conn;
-use crate::message::Inbound;
+use crate::message::{Inbound, Op};
 use crate::shard::Shard;
 use kevy_persist::{load_snapshot, replay_aof};
 use kevy_resp::parse_command;
@@ -144,6 +144,7 @@ impl<C: Commands> Shard<C> {
             // io_uring batches the delivery — just drop the (epoll-only) marks.
             self.dirty.clear();
             self.flush_backlog();
+            self.flush_requests();
             self.flush_publish();
             self.flush_wakes();
             if let Some(aof) = &mut self.aof {
@@ -301,6 +302,23 @@ impl<C: Commands> Shard<C> {
                     }
                     Inbound::Response { conn, seq, part } => {
                         self.fold(conn, seq, part);
+                    }
+                    // Batched single-key dispatches to this (owning) shard: exec
+                    // each locally, reply as one `ResponseBatch` to the origin.
+                    Inbound::RequestBatch { origin, reqs } => {
+                        let mut resps = Vec::with_capacity(reqs.len());
+                        for (conn, seq, argv) in reqs {
+                            let part = self.exec_op(Op::Dispatch(argv));
+                            resps.push((conn, seq, part));
+                        }
+                        self.send_to(origin, Inbound::ResponseBatch(resps));
+                    }
+                    // Batched replies: fold each by seq; the arm loop writes any
+                    // conn whose output this appended to.
+                    Inbound::ResponseBatch(resps) => {
+                        for (conn, seq, part) in resps {
+                            self.fold(conn, seq, part);
+                        }
                     }
                     // Fire-and-forget batched pub/sub delivery; the arm loop
                     // writes any conn whose output this appended to.
