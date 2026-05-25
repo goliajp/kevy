@@ -87,6 +87,13 @@ pub(crate) enum Part {
     Keys(Vec<Vec<u8>>),
 }
 
+/// A batch of single-key dispatches forwarded to one owning shard: `(conn, seq,
+/// argv)` each. Batched per loop so a -c50 flood costs one cross-core send per
+/// target shard, not one per command.
+pub(crate) type ReqBatch = Vec<(u64, u64, Argv)>;
+/// The matching replies `(conn, seq, part)` sent back as one message.
+pub(crate) type RespBatch = Vec<(u64, u64, Part)>;
+
 /// Inter-core message (each core has one inbound queue carrying both).
 pub(crate) enum Inbound {
     Request {
@@ -100,6 +107,15 @@ pub(crate) enum Inbound {
         seq: u64,
         part: Part,
     },
+    /// Batched single-key dispatches to this (owning) shard; replied as one
+    /// `ResponseBatch`. The hot -c50 path: amortizes the cross-core ring/fold
+    /// overhead that drags 16 shards below 1 (single-shard is 2.1M GET).
+    RequestBatch {
+        origin: usize,
+        reqs: ReqBatch,
+    },
+    /// Batched replies for a `RequestBatch`, folded by seq on the origin.
+    ResponseBatch(RespBatch),
     /// A batch of pub/sub messages `(channel, payload)` to deliver to this
     /// shard's subscribers — fire-and-forget (no reply; the publisher already
     /// replied with the receiver count from the registry). Batched per drain so

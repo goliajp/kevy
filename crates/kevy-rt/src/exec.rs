@@ -192,7 +192,15 @@ impl<C: Commands> Shard<C> {
             if shard == self.id {
                 let part = self.exec_op(op);
                 self.fold(conn_id, seq, part);
+            } else if let Op::Dispatch(argv) = op {
+                // Single-key command for a peer shard: batch it into one
+                // cross-core send per target (flushed by `flush_requests`),
+                // instead of one `Inbound::Request` per command. This is the
+                // hot -c50 path; the ring/fold tax is what drags many shards
+                // below single-shard throughput.
+                self.request_batch[shard].push((conn_id, seq, argv));
             } else {
+                // Multi-key ops (Del/MSet/Gather/…) keep the unbatched path.
                 self.send_to(
                     shard,
                     Inbound::Request {
@@ -405,6 +413,19 @@ impl<C: Commands> Shard<C> {
             }
             let batch = std::mem::take(&mut self.publish_batch[s]);
             self.send_to(s, Inbound::DeliverPublish(batch));
+        }
+    }
+
+    /// Flush each shard's accumulated single-key dispatch batch as one
+    /// cross-core `RequestBatch` — a -c50 flood costs one send per target shard
+    /// per loop, not one per command. Call once per reactor loop iteration.
+    pub(crate) fn flush_requests(&mut self) {
+        for s in 0..self.nshards {
+            if s == self.id || self.request_batch[s].is_empty() {
+                continue;
+            }
+            let reqs = std::mem::take(&mut self.request_batch[s]);
+            self.send_to(s, Inbound::RequestBatch { origin: self.id, reqs });
         }
     }
 
