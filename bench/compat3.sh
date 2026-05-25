@@ -114,5 +114,46 @@ check ZCOUNT z1 1 3
 check ZINCRBY z1 1 b
 check ZREM z1 a
 
+# --- expanded coverage (2026-05-26): gap commands ---
+# string / expiry variants (TTL checked immediately so it's still deterministic;
+# PTTL/exact-ms skipped — timing-dependent across servers)
+check DECRBY ctr 5
+check SETEX se2 100 v2
+check TTL se2
+check GET se2
+check PSETEX pse 100000 v3
+check GET pse
+check SET pe pv
+check PEXPIRE pe 100000
+check GET pe
+# hash gaps
+check HSET hh a 1 b 2
+check HMGET hh a missing b
+check HSETNX hh a 9
+check HSETNX hh c 3
+check HGET hh c
+checku HVALS hh
+# list gap
+check RPUSH lt a b c d e
+check LTRIM lt 1 3
+check LRANGE lt 0 -1
+
+# --- error / type / arity reply compatibility (where clones diverge) ---
+check SET str1 v
+check LPUSH str1 x          # WRONGTYPE: string vs list op
+check LRANGE str1 0 -1      # WRONGTYPE
+check HGET str1 f           # WRONGTYPE
+check SET ni abc
+check INCR ni               # ERR not an integer
+check INCRBYFLOAT ni 1.0    # ERR not a float
+check GET                   # ERR wrong number of arguments
+check SET onlykey           # ERR wrong number of arguments
+check LPUSH lonely          # ERR wrong number of arguments
+check EXPIRE missingkey 100 # 0 (no such key)
+check GET missingkey        # nil
+check TYPE missingkey       # none
+check TTL missingkey        # -2
+check HGET missinghash fld  # nil
+
 echo "### RESULT  kevy vs valkey: $kv_p/$((kv_p + kv_f)) match   |   redis vs valkey: $rv_p/$((rv_p + rv_f)) match"
 docker compose down >/dev/null 2>&1
