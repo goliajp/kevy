@@ -296,6 +296,11 @@ pub fn encode_integer(out: &mut Vec<u8>, n: i64) {
 
 /// `$<len>\r\n<data>\r\n`
 pub fn encode_bulk(out: &mut Vec<u8>, data: &[u8]) {
+    // Reserve the whole frame up front so a fresh reply buffer (the common case:
+    // dispatch hands each command an empty `Vec`) fills without repeated reallocs
+    // as it grows — the bulk reply is the hot GET path. 16 covers '$', the length
+    // digits, and both CRLFs.
+    out.reserve(data.len() + 16);
     out.push(b'$');
     push_int(out, data.len() as i64);
     out.extend_from_slice(b"\r\n");
