@@ -120,6 +120,7 @@ impl<C: Commands> Runtime<C> {
                 aof,
                 dirty: Vec::new(),
                 pubsub: pubsub.clone(),
+                publish_batch: (0..n).map(|_| Vec::new()).collect(),
             });
         }
 
