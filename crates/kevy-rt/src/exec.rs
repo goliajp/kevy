@@ -476,7 +476,10 @@ impl<C: Commands> Shard<C> {
         match op {
             Op::Dispatch(args) => {
                 let reply = self.commands.dispatch(&mut self.store, &args);
-                if self.commands.is_write(&args) {
+                // Only classify writes when there's an AOF to log them to —
+                // otherwise `is_write` (+ its verb fold) is pure waste, and the
+                // cache-only / `--no-aof` path is hot.
+                if self.aof.is_some() && self.commands.is_write(&args) {
                     self.log(&args);
                 }
                 Part::Reply(reply)
