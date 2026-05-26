@@ -45,6 +45,7 @@ mod zset;
 pub use util::glob_match;
 pub use value::*;
 
+use kevy_hash::KevyHash;
 use kevy_map::KevyMap;
 use std::time::{Duration, Instant};
 
@@ -87,6 +88,16 @@ pub struct Store {
 impl Store {
     pub fn new() -> Self {
         Store::default()
+    }
+
+    /// Hint the CPU to fetch the bucket cache line for `key` into L1. Called
+    /// by the reactor's parse loop on command N+1 while command N is still
+    /// being dispatched — by the time N+1 actually probes the table, the
+    /// metadata line is hot. No-op when the table is empty. Cheap when not.
+    #[inline]
+    pub fn prefetch_for_key(&self, key: &[u8]) {
+        let hash = key.kevy_hash();
+        self.map.prefetch_for_hash(hash);
     }
 
     pub(crate) fn expired(&self, key: &[u8], now: Instant) -> bool {

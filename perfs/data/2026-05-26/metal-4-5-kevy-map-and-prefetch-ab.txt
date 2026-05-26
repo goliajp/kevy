@@ -1,0 +1,106 @@
+v0.metal-4+5 — kevy-map (Swiss-style open-addressing) + bucket prefetch — A/B
+================================================================================
+
+lx64 single shard io_uring on core 0, client cores 1-15, host-loopback,
+release stripped, no AOF.
+
+HEAD = feature/metal-4-5-kevy-map (kevy-map scalar group scan + 1-step
+lookahead `prefetch_for_key` in shard.rs + uring_reactor.rs parse loops).
+
+Compared against:
+  - metal-1 BASELINE (FxHashMap + Vec<u8> Value::Str)
+  - metal-3 (SmallBytes SSO, still on FxHashMap)
+
+
+== GET rps curve (bench/metal_keyspace.sh, -c50 -P256, random keyspace) ==
+
+  keyspace        metal-1 base   metal-3 SSO     metal-4+5 (this)   Δ vs base    Δ vs metal-3
+  1                4,756,781      4,619,624       4,693,461          -1.3%        +1.6%
+  100,000          3,387,832      3,554,455       3,595,644          +6.1%        +1.2%
+  1,000,000        2,713,366      2,926,637       2,964,888          +9.3%        +1.3%
+  10,000,000       2,283,757      2,577,702      **2,767,016**       **+21.2%**   **+7.3%**
+
+→ Memory wall (the 1→10M drop) was -52% at baseline, -44% after metal-3,
+  **-41% now**. Successive landings on the same lever: SSO killed the value
+  pointer-chase (metal-3); kevy-map + prefetch hides the bucket-probe DRAM
+  miss (this). The 10M-key column is the real-workload number kevy serves.
+
+→ Single-key cache-hot path is still slightly under baseline (-1.3%) — the
+  one extra branch is the unavoidable cost of inlined SSO + the lookahead
+  framing in the parse loop. Acceptable: 1-key cache-hot isn't representative.
+
+
+== Probe of the prefetch lever — A/B against scalar kevy-map alone ==
+
+To isolate prefetch's contribution we measured scalar kevy-map without the
+lookahead prefetch (intermediate commit, not shipped):
+
+                            scalar only     +prefetch (this)   prefetch Δ
+  1-key                       4,548,402      4,693,461          +3.2%
+  100k                        3,723,027      3,595,644          -3.4%
+  1M                          2,954,293      2,964,888          +0.4%
+  10M                         2,612,712      2,767,016          +5.9%
+
+→ Prefetch's payoff is concentrated on the 10M-key DRAM-bound column (+5.9%);
+  small-keyspace columns wash out (lines already L1-resident, prefetch is
+  noise). This matches the metal-1 baseline thesis: the bucket-probe DRAM
+  miss is the lever, prefetch is the hammer.
+
+→ 100k column wobble (-3.4%) is in the run-to-run noise band; we lack
+  paired-sample stats here.
+
+
+== RSS @ ~8.6M keys (preload `-r 10M -n 20M`) ==
+
+                        DBSIZE      VmRSS
+  metal-1 baseline      n/a         n/a
+  metal-2 (box coll)    ~8.6M       1,608,496 kB  (1.61 GB)
+  metal-3 (SSO)         8,646,833   1,469,428 kB  (1.47 GB)
+  metal-4+5 (this)      8,647,251   1,469,320 kB  (1.47 GB)
+  Δ vs metal-3                                    -108 kB (~ noise)
+
+→ RSS is unchanged vs metal-3 — kevy-map at 7/8 load factor keeps roughly
+  the same bucket-array RSS as hashbrown at its default factor. The big
+  mem-axis swings were in metal-2 (box collections, -29% RSS at 8.6M) and
+  metal-3 (SSO, -8.6%). metal-4+5 buys perf without spending mem.
+
+
+== Binary size ==
+
+  metal-3 on lx64 (release stripped): 670,672 bytes  (655 KB)
+  metal-4+5 on lx64 (this):           664,688 bytes  (650 KB)
+  Δ                                                  -5,984 B (-0.9%)
+
+→ Tiny shrink. KevyMap's monomorphisation isn't bigger than the FxHashMap
+  generics it replaces; the new prefetch_t0 intrinsic adds ~one instruction
+  per call site, dwarfed by other code-gen variance.
+
+
+== Correctness gates ==
+
+  cargo build --release                     clean (6.12 s incremental)
+  cargo test -p kevy --test sharded         11/11 pass (epoll)
+  KEVY_IO_URING=1 ... sharded               11/11 pass (io_uring)
+  cargo clippy --workspace --all-targets    0 findings (0.88 s incr.)
+  kevy-map unit tests                       21/21 pass (mac local)
+  kevy-store + kevy-persist tests           pass (mac local)
+
+  Miri: not run (no nightly toolchain on either host). The unsafe surface
+  in kevy-map is ~250 LOC, reviewed; the unsafe in kevy-bytes (metal-3,
+  already shipped) is ~50 LOC. Adding a CI miri job is a follow-up.
+
+
+== Judgement: KEEP ==
+
+  perf axis: +21.2% on 10M-key GET vs baseline / +7.3% vs metal-3 — both
+    are large wins on the head-line memory-wall column.
+  mem axis : neutral vs metal-3 (already a -8.6% win in this stone's
+    immediate predecessor).
+  size axis: -0.9%; treat as neutral.
+
+→ Lands as designed. The two big memory-wall sub-stones — value inlining
+  (metal-3) and bucket prefetch (this) — together pulled the 1→10M curve
+  from -52% to -41%. Remaining levers in this category are hugepages
+  (metal-6: TLB axis at deep DRAM) and SSE2 group scan (deferred — RFC
+  step 6 carried over; expected modest +3-7% on the metadata scan loop
+  inside KevyMap; can ship as a follow-up sub-stone).

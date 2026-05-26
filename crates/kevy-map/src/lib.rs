@@ -42,6 +42,38 @@ fn h2(hash: u64) -> u8 {
     ((hash >> 57) & 0x7F) as u8
 }
 
+/// Issue a hint to fetch the cache line containing `ptr` into L1 ("T0" =
+/// "all levels"). Stable on x86_64 / aarch64; no-op elsewhere.
+#[inline(always)]
+fn prefetch_t0(ptr: *const u8) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: _mm_prefetch reads no memory; any aligned/unaligned/
+        // out-of-bounds pointer is permitted by the ISA.
+        unsafe {
+            core::arch::x86_64::_mm_prefetch(
+                ptr as *const i8,
+                core::arch::x86_64::_MM_HINT_T0,
+            );
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: prfm reads no memory; any pointer permitted.
+        unsafe {
+            core::arch::asm!(
+                "prfm pldl1keep, [{p}]",
+                p = in(reg) ptr,
+                options(nostack, preserves_flags, readonly),
+            );
+        }
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        let _ = ptr;
+    }
+}
+
 /// An open-addressing Swiss-style hashtable keyed by [`KevyHash`].
 ///
 /// Power-of-two capacity (`mask = cap - 1`); 7/8 load factor; linear probing
@@ -158,6 +190,31 @@ impl<K, V> KevyMap<K, V> {
     /// `&V` over all live entries.
     pub fn values(&self) -> Values<'_, K, V> {
         Values(self.iter())
+    }
+
+    /// Hint the CPU to fetch the bucket cache line that a probe at `hash`
+    /// would start at. The v0.metal-5 lever against the bucket-probe DRAM
+    /// miss: the command-batch driver calls this for command N+1 while
+    /// finishing command N, so by the time N+1 actually probes the
+    /// metadata, the line is in L1.
+    ///
+    /// No-op when the table is empty. Cheap when not empty (a single
+    /// `prefetcht0` on x86_64 / `prfm pldl1keep` on aarch64; a regular
+    /// volatile load on other arches via [`std::intrinsics`] — but we
+    /// only use stable intrinsics here, so non-x86/aarch64 architectures
+    /// degrade to a no-op rather than a fake hint).
+    #[inline(always)]
+    pub fn prefetch_for_hash(&self, hash: u64) {
+        let cap = self.metadata.len();
+        if cap == 0 {
+            return;
+        }
+        let mask = cap - 1;
+        let idx = (hash as usize) & mask;
+        // SAFETY: idx < cap = metadata.len() ⇒ ptr in-bounds; prefetch reads
+        // never trap and never observe values.
+        let ptr = unsafe { self.metadata.as_ptr().add(idx) };
+        prefetch_t0(ptr);
     }
 
     #[inline]
@@ -840,6 +897,23 @@ mod tests {
         let mut got: Vec<u64> = s.iter().copied().collect();
         got.sort();
         assert_eq!(got, (0..10u64).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn prefetch_for_hash_is_safe_on_any_state() {
+        // Just exercise the API on empty and populated tables; it's a hint
+        // with no observable side effect, so we can only test it doesn't
+        // panic / miscompile.
+        let m: KevyMap<u64, u64> = KevyMap::new();
+        m.prefetch_for_hash(0);
+        m.prefetch_for_hash(u64::MAX);
+        let mut m = KevyMap::<u64, u64>::new();
+        for i in 0..50u64 {
+            m.insert(i, i);
+        }
+        for i in 0..50u64 {
+            m.prefetch_for_hash(i.kevy_hash());
+        }
     }
 
     #[test]
