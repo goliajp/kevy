@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 /// Re-exported so benches can fence the optimizer without importing `std::hint`.
 pub use std::hint::black_box;
 
-/// Per-operation timing summary, in nanoseconds. See [`bench`].
+/// Per-operation timing summary, in nanoseconds. See [`bench()`].
 #[derive(Clone, Copy, Debug)]
 pub struct Stats {
     /// Number of samples collected.
