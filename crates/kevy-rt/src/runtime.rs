@@ -3,7 +3,7 @@
 use crate::Commands;
 use crate::message::{Inbound, PubSubReg};
 use crate::shard::Shard;
-use kevy_hash::FxHashMap;
+use kevy_map::KevyMap;
 use kevy_persist::{Aof, Fsync};
 use kevy_ring::{Consumer, Producer};
 use kevy_store::Store;
@@ -110,8 +110,8 @@ impl<C: Commands> Runtime<C> {
                 outboxes: std::mem::take(&mut outboxes[id]),
                 backlog: (0..n).map(|_| VecDeque::new()).collect(),
                 wakers: wakers.clone(),
-                conns: FxHashMap::default(),
-                fd_to_conn: FxHashMap::default(),
+                conns: KevyMap::new(),
+                fd_to_conn: KevyMap::new(),
                 next_conn_id: 1,
                 events: Vec::with_capacity(1024),
                 read_buf: vec![0u8; 64 * 1024],

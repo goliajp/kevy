@@ -20,7 +20,7 @@ use kevy_resp::{Argv, parse_command_into};
 use kevy_ring::{Consumer, Producer};
 use kevy_store::Store;
 use kevy_sys::{Event, Poller, Socket, Waker};
-use kevy_hash::FxHashMap;
+use kevy_map::KevyMap;
 use std::collections::VecDeque;
 use std::io;
 use std::path::PathBuf;
@@ -46,8 +46,8 @@ pub(crate) struct Shard<C: Commands> {
     // Fx-hashed: these are looked up per command (`conns` twice — start_command
     // + fold) and per event; std's SipHash on the u64/i32 keys profiled at ~17%
     // of single-shard CPU, the dominant non-command-CPU cost.
-    pub(crate) conns: FxHashMap<u64, Conn>,
-    pub(crate) fd_to_conn: FxHashMap<i32, u64>,
+    pub(crate) conns: KevyMap<u64, Conn>,
+    pub(crate) fd_to_conn: KevyMap<i32, u64>,
     pub(crate) next_conn_id: u64,
     pub(crate) events: Vec<Event>,
     pub(crate) read_buf: Vec<u8>,
