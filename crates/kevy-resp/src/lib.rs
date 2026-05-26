@@ -60,6 +60,23 @@ impl Argv {
         }
     }
 
+    /// Drop all args while keeping the buf + ends capacity. Used by the
+    /// reactor's per-command scratch `Argv`: `parse_command_into` clears
+    /// then refills, so the hot path's malloc rate drops to ~0.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.buf.clear();
+        self.ends.clear();
+    }
+
+    /// Reserve room for `argc` args totalling `bytes` bytes on top of what is
+    /// already there (no shrink).
+    #[inline]
+    pub fn reserve_for(&mut self, argc: usize, bytes: usize) {
+        self.buf.reserve(bytes);
+        self.ends.reserve(argc);
+    }
+
     /// Append one argument.
     pub fn push(&mut self, arg: &[u8]) {
         self.buf.extend_from_slice(arg);
@@ -144,57 +161,71 @@ pub enum ProtocolError {
 /// - `Ok(None)` — need more bytes; call again after reading more.
 /// - `Err(_)` — the stream is corrupt; the caller should reply with an error
 ///   and close the connection.
+///
+/// This is the convenience form that allocates a fresh `Argv` per call. The
+/// reactor's hot path uses [`parse_command_into`] with a reused scratch
+/// `Argv` to keep per-cmd malloc rate at 0.
 pub fn parse_command(buf: &[u8]) -> Result<Option<(Command, usize)>, ProtocolError> {
+    let mut argv = Argv::default();
+    match parse_command_into(buf, &mut argv)? {
+        Some(consumed) => Ok(Some((argv, consumed))),
+        None => Ok(None),
+    }
+}
+
+/// Same as [`parse_command`], but writes into a caller-provided scratch
+/// `Argv` instead of allocating a new one each call. The reactor stores one
+/// `Argv` per shard and reuses it for every cmd on the local hot path; the
+/// internal `Vec<u8>` + `Vec<u32>` capacities amortise to zero allocations
+/// per command after the first few cmds warm them.
+///
+/// `dst` is cleared at the start of every call; on `Ok(None)` and `Err`, `dst`
+/// is left empty (so the caller doesn't see partial state).
+pub fn parse_command_into(
+    buf: &[u8],
+    dst: &mut Argv,
+) -> Result<Option<usize>, ProtocolError> {
+    dst.clear();
     if buf.is_empty() {
         return Ok(None);
     }
     if buf[0] == b'*' {
-        parse_multibulk(buf)
+        parse_multibulk_into(buf, dst)
     } else {
-        parse_inline(buf)
+        parse_inline_into(buf, dst)
     }
 }
 
-/// Inline command: a single CRLF-terminated line split on ASCII whitespace.
-fn parse_inline(buf: &[u8]) -> Result<Option<(Command, usize)>, ProtocolError> {
+fn parse_inline_into(buf: &[u8], dst: &mut Argv) -> Result<Option<usize>, ProtocolError> {
     let Some(eol) = find_crlf(buf, 0) else {
         return Ok(None);
     };
     let line = &buf[..eol];
-    let mut args = Argv::default();
     for tok in line
         .split(|b| b.is_ascii_whitespace())
         .filter(|s| !s.is_empty())
     {
-        args.push(tok);
+        dst.push(tok);
     }
-    // Consume the line + CRLF even if it was blank (yields an empty argv).
-    Ok(Some((args, eol + 2)))
+    Ok(Some(eol + 2))
 }
 
-/// RESP2 multi-bulk request: `*<count>\r\n` then `count` bulk strings.
-fn parse_multibulk(buf: &[u8]) -> Result<Option<(Command, usize)>, ProtocolError> {
-    // Parse the `*<count>` header line.
+fn parse_multibulk_into(buf: &[u8], dst: &mut Argv) -> Result<Option<usize>, ProtocolError> {
     let Some(hdr_end) = find_crlf(buf, 1) else {
         return Ok(None);
     };
     let count =
         parse_int(&buf[1..hdr_end]).ok_or(ProtocolError::Malformed("bad multibulk count"))?;
     if count < 0 {
-        // A null array — treat as an empty command.
-        return Ok(Some((Argv::default(), hdr_end + 2)));
+        // Null array → empty argv (already cleared).
+        return Ok(Some(hdr_end + 2));
     }
     let count = count as usize;
 
-    // Pass 1: verify the whole frame is present and sum the total argument bytes.
-    // Knowing the total up front lets pass 2 build the argv in exactly two
-    // allocations (the byte buffer + the offsets), with no reallocation — which
-    // is the entire point over `Vec<Vec<u8>>` (an incrementally-grown buffer
-    // would realloc ~once per argument, no better than N+1 separate `Vec`s).
+    // Pass 1: validate the whole frame is present and sum total argument bytes.
     let mut pos = hdr_end + 2;
     let mut total = 0usize;
     for _ in 0..count {
-        // Each element must be a bulk string: `$<len>\r\n<bytes>\r\n`.
         if pos >= buf.len() {
             return Ok(None);
         }
@@ -211,7 +242,6 @@ fn parse_multibulk(buf: &[u8]) -> Result<Option<(Command, usize)>, ProtocolError
         }
         let len = len as usize;
         let data_end = len_end + 2 + len;
-        // Need the data plus its trailing CRLF.
         if buf.len() < data_end + 2 {
             return Ok(None);
         }
@@ -222,18 +252,18 @@ fn parse_multibulk(buf: &[u8]) -> Result<Option<(Command, usize)>, ProtocolError
         pos = data_end + 2;
     }
 
-    // Pass 2: copy. The frame is already validated, so the length lines re-parse
-    // cleanly; the buffer is pre-sized to `total`, so `push` never reallocates.
-    let mut args = Argv::with_capacity(count, total);
+    // Pass 2: copy into dst (capacity already reserved if amortised; `reserve`
+    // is a no-op when current capacity suffices).
+    dst.reserve_for(count, total);
     let mut p = hdr_end + 2;
     for _ in 0..count {
         let len_end = find_crlf(buf, p + 1).expect("validated in pass 1");
         let len = parse_int(&buf[p + 1..len_end]).expect("validated in pass 1") as usize;
         let data_start = len_end + 2;
-        args.push(&buf[data_start..data_start + len]);
+        dst.push(&buf[data_start..data_start + len]);
         p = data_start + len + 2;
     }
-    Ok(Some((args, pos)))
+    Ok(Some(pos))
 }
 
 /// Find the index of `\r\n` at or after `start`, returning the index of `\r`.
