@@ -36,3 +36,10 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# Size-optimized profile: opt-level "z" + same hardening. Used to measure
+# the size/perf trade-off in v0.metal-16 — see perfs/data/2026-05-26/metal-16-*.
+# Invoke with `cargo build --profile release-min`.
+[profile.release-min]
+inherits = "release"
+opt-level = "s"
