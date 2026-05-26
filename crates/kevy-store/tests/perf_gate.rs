@@ -7,6 +7,8 @@
 //! O(n) probe walk, a per-op allocation that shouldn't be there), not to police
 //! single-nanosecond drift. Tighten only with a documented reason.
 
+#![cfg(not(debug_assertions))]
+
 use std::hint::black_box;
 use std::time::Duration;
 

@@ -4,6 +4,12 @@
 //! the dev box, low enough to catch real regressions.
 //!
 //! Reproducer: `cargo test -p kevy-bytes --test perf_gate --release`
+//!
+//! These tests measure raw ns and only make sense in release mode. Under
+//! debug / coverage instrumentation the budgets are 10-30× off; gate to
+//! release.
+
+#![cfg(not(debug_assertions))]
 
 use kevy_bench::{bench, black_box};
 use kevy_bytes::SmallBytes;

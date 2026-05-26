@@ -5,6 +5,8 @@
 //!
 //! Reproducer: `cargo test --release -p kevy-ring --test perf_gate`
 
+#![cfg(not(debug_assertions))]
+
 use kevy_bench::{bench, black_box};
 use kevy_ring::ring;
 
