@@ -1,5 +1,6 @@
 //! Value types — one backing structure per Redis type.
 
+pub use kevy_bytes::SmallBytes;
 use kevy_hash::{FxHashMap, FxHashSet};
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
@@ -100,13 +101,22 @@ impl ZSetData {
 /// array is ~40% denser/smaller (fewer cache misses on a large keyspace, less
 /// RSS). The extra pointer-chase lands only on collection ops, not the hot
 /// string GET path.
+///
+/// `Str` holds a [`SmallBytes`] (24 B, same size as `Vec<u8>`) so byte strings
+/// up to 22 bytes live **inline inside the bucket**, killing the second cache
+/// miss the value pointer-chase used to cost on large-keyspace GETs.
 pub enum Value {
-    Str(Vec<u8>),
+    Str(SmallBytes),
     Hash(Box<HashData>),
     List(Box<ListData>),
     Set(Box<SetData>),
     ZSet(Box<ZSetData>),
 }
+
+const _: () = {
+    // Don't let future variants undo box-collection's Entry-48B win.
+    assert!(std::mem::size_of::<Value>() <= 32);
+};
 
 impl Value {
     /// The Redis type name (`TYPE` command).

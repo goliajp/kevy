@@ -1,0 +1,12 @@
+[package]
+name = "kevy-bytes"
+description = "Small-byte-string with inline SSO — 24-byte layout, pure Rust, zero deps."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+keywords = ["sso", "small-string", "bytes", "inline"]
+categories = ["data-structures", "memory-management"]
+
+[dependencies]
