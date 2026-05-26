@@ -20,7 +20,7 @@ use crate::conn::Conn;
 use crate::message::{Inbound, Op};
 use crate::shard::Shard;
 use kevy_persist::{load_snapshot, replay_aof};
-use kevy_resp::parse_command;
+use kevy_resp::parse_command_into;
 use kevy_sys::{Completion, IoUring, ProvidedBufRing, Socket};
 use kevy_hash::FxHashMap;
 use std::io;
@@ -262,42 +262,41 @@ impl<C: Commands> Shard<C> {
             conn.input.extend_from_slice(pbuf.bytes(bid, n));
         }
         pbuf.recycle(bid);
-        // 1-step lookahead prefetch (v0.metal-5): mirrors the epoll path.
-        let mut pending: Option<kevy_resp::Command> = None;
+        // Zero-alloc parse hot path (v0.metal-6): mirrors the epoll path.
+        // parse_command_into reuses self.scratch_argv; mem::replace dance
+        // lets handle_command take &mut self while the parsed argv sits on
+        // the stack.
         let mut had_protocol_error = false;
         loop {
-            let parsed = {
+            let consumed = {
                 let Some(conn) = self.conns.get_mut(&cid) else {
                     return;
                 };
-                match parse_command(&conn.input) {
-                    Ok(Some((args, consumed))) => {
-                        conn.input.drain(..consumed);
-                        Some(Ok(args))
-                    }
+                match parse_command_into(&conn.input, &mut self.scratch_argv) {
+                    Ok(Some(c)) => Some(c),
                     Ok(None) => None,
-                    Err(_) => Some(Err(())),
+                    Err(_) => {
+                        had_protocol_error = true;
+                        None
+                    }
                 }
             };
-            match parsed {
-                Some(Ok(args)) => {
-                    if let Some(key) = args.get(1) {
+            match consumed {
+                Some(c) => {
+                    if let Some(conn) = self.conns.get_mut(&cid) {
+                        conn.input.drain(..c);
+                    } else {
+                        return;
+                    }
+                    let argv = std::mem::take(&mut self.scratch_argv);
+                    if let Some(key) = argv.get(1) {
                         self.store.prefetch_for_key(key);
                     }
-                    if let Some(prev) = pending.take() {
-                        self.handle_command(cid, prev);
-                    }
-                    pending = Some(args);
-                }
-                Some(Err(())) => {
-                    had_protocol_error = true;
-                    break;
+                    self.handle_command(cid, &argv);
+                    self.scratch_argv = argv;
                 }
                 None => break,
             }
-        }
-        if let Some(last) = pending {
-            self.handle_command(cid, last);
         }
         if had_protocol_error {
             self.protocol_error(cid);

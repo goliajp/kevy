@@ -16,7 +16,7 @@ use crate::Commands;
 use crate::conn::Conn;
 use crate::message::{Inbound, Op, PubMsg, PubSubReg, ReqBatch};
 use kevy_persist::{Aof, load_snapshot, replay_aof};
-use kevy_resp::parse_command;
+use kevy_resp::{Argv, parse_command_into};
 use kevy_ring::{Consumer, Producer};
 use kevy_store::Store;
 use kevy_sys::{Event, Poller, Socket, Waker};
@@ -75,6 +75,12 @@ pub(crate) struct Shard<C: Commands> {
     /// not one per command — amortizing the ring/fold tax that drags many
     /// shards below single-shard throughput.
     pub(crate) request_batch: Vec<ReqBatch>,
+    /// Reusable scratch `Argv` for the LOCAL parse hot path. Per-cmd
+    /// `parse_command_into` clears + refills this in place, so the per-cmd
+    /// malloc rate amortises to ~0 after the first few cmds warm `buf` and
+    /// `ends` capacities. Cross-shard forwards clone this into an owned
+    /// `Argv` to send (one alloc per cross-shard cmd — non-hot path).
+    pub(crate) scratch_argv: Argv,
 }
 
 /// Iterations to busy-poll (timeout 0) after the last work before parking.
@@ -265,45 +271,49 @@ impl<C: Commands> Shard<C> {
             }
         }
 
-        // 1-step lookahead prefetch (v0.metal-5): when command N+1 parses,
-        // hint its key bucket while dispatching N. On pipelined streams
-        // (-P256) this hides the bucket-probe DRAM miss the memory-wall
-        // baseline pinned (perfs/data/2026-05-26/metal-baseline.txt).
-        let mut pending: Option<kevy_resp::Command> = None;
+        // Zero-alloc parse hot path (v0.metal-6): parse into self.scratch_argv
+        // (reused across cmds; capacity amortises after warm-up). Dispatch via
+        // mem::replace so handle_command can take &mut self while we hold the
+        // parsed argv on the stack — `self.scratch_argv` is temporarily a
+        // default empty Argv during dispatch, restored after. In-cmd prefetch
+        // is issued before dispatch on the key (if any) so the bucket line
+        // moves toward L1 while start_command/handle_command's prologue runs.
         let mut had_protocol_error = false;
         loop {
-            let parsed = {
+            let consumed = {
                 let Some(conn) = self.conns.get_mut(&conn_id) else {
                     return Ok(());
                 };
-                match parse_command(&conn.input) {
-                    Ok(Some((args, consumed))) => {
-                        conn.input.drain(..consumed);
-                        Some(Ok(args))
-                    }
+                match parse_command_into(&conn.input, &mut self.scratch_argv) {
+                    Ok(Some(c)) => Some(c),
                     Ok(None) => None,
-                    Err(_) => Some(Err(())),
+                    Err(_) => {
+                        had_protocol_error = true;
+                        None
+                    }
                 }
             };
-            match parsed {
-                Some(Ok(args)) => {
-                    if let Some(key) = args.get(1) {
+            match consumed {
+                Some(c) => {
+                    if let Some(conn) = self.conns.get_mut(&conn_id) {
+                        conn.input.drain(..c);
+                    } else {
+                        return Ok(());
+                    }
+                    // Take ownership of the parsed argv (Default left in
+                    // `self.scratch_argv` while we dispatch). After dispatch
+                    // we'll put it back to preserve buf+ends capacity.
+                    let argv = std::mem::take(&mut self.scratch_argv);
+                    if let Some(key) = argv.get(1) {
                         self.store.prefetch_for_key(key);
                     }
-                    if let Some(prev) = pending.take() {
-                        self.handle_command(conn_id, prev);
-                    }
-                    pending = Some(args);
-                }
-                Some(Err(())) => {
-                    had_protocol_error = true;
-                    break;
+                    self.handle_command(conn_id, &argv);
+                    // Restore capacity; the just-default scratch becomes the
+                    // capacity-bearing one for the next iteration's parse.
+                    self.scratch_argv = argv;
                 }
                 None => break,
             }
-        }
-        if let Some(last) = pending {
-            self.handle_command(conn_id, last);
         }
         if had_protocol_error {
             self.protocol_error(conn_id);

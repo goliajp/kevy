@@ -18,8 +18,8 @@ use std::collections::HashMap;
 
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
-    pub(crate) fn handle_command(&mut self, conn_id: u64, args: Argv) {
-        let kind = self.commands.txn_kind(&args);
+    pub(crate) fn handle_command(&mut self, conn_id: u64, args: &Argv) {
+        let kind = self.commands.txn_kind(args);
         let in_multi = self.conns.get(&conn_id).is_some_and(|c| c.multi.is_some());
         match (in_multi, kind) {
             (false, TxnKind::Multi) => {
@@ -46,7 +46,7 @@ impl<C: Commands> Shard<C> {
             (true, TxnKind::Exec) => self.exec_transaction(conn_id),
             (true, TxnKind::Other) => {
                 if let Some(q) = self.conns.get_mut(&conn_id).and_then(|c| c.multi.as_mut()) {
-                    q.push(args);
+                    q.push(args.clone());
                 }
                 self.immediate_reply(conn_id, b"+QUEUED\r\n".to_vec());
             }
@@ -86,13 +86,13 @@ impl<C: Commands> Shard<C> {
         let mut header = Vec::new();
         encode_array_len(&mut header, queued.len() as i64);
         self.immediate_reply(conn_id, header);
-        for cmd in queued {
+        for cmd in &queued {
             self.start_command(conn_id, cmd);
         }
     }
 
     /// Assign a seq, fan the command out to the owning shard(s), fold local parts.
-    fn start_command(&mut self, conn_id: u64, args: Argv) {
+    fn start_command(&mut self, conn_id: u64, args: &Argv) {
         let seq = match self.conns.get_mut(&conn_id) {
             Some(c) => {
                 let s = c.next_seq;
@@ -102,20 +102,20 @@ impl<C: Commands> Shard<C> {
             None => return,
         };
 
-        let is_quit = self.commands.is_quit(&args);
-        let route = self.commands.route(&args);
+        let is_quit = self.commands.is_quit(args);
+        let route = self.commands.route(args);
         // Connection-level pub/sub commands modify this conn directly.
         match route {
             Route::Subscribe => {
-                self.do_subscribe(conn_id, seq, &args, true);
+                self.do_subscribe(conn_id, seq, args, true);
                 return;
             }
             Route::Unsubscribe => {
-                self.do_subscribe(conn_id, seq, &args, false);
+                self.do_subscribe(conn_id, seq, args, false);
                 return;
             }
             Route::Publish => {
-                self.do_publish(conn_id, seq, &args);
+                self.do_publish(conn_id, seq, args);
                 return;
             }
             _ => {}
@@ -123,8 +123,7 @@ impl<C: Commands> Shard<C> {
 
         // Fast path: a single-target command (keyless `Local` or single-key
         // `Single`) — the overwhelming majority (GET/SET/INCR/PING/…). Skip the
-        // `Vec<(shard, Op)>` allocation + the aggregation fold loop entirely:
-        // one slot, one target, `args` moved straight into the dispatch.
+        // `Vec<(shard, Op)>` allocation + the aggregation fold loop entirely.
         let single = match route {
             Route::Local => Some(self.id),
             Route::Single(idx) => Some(shard_of(&args[idx], self.nshards)),
@@ -142,14 +141,14 @@ impl<C: Commands> Shard<C> {
                 if let Some(conn) = self.conns.get_mut(&conn_id) {
                     // Disjoint field borrows: commands / store / conn.output.
                     self.commands
-                        .dispatch_into(&mut self.store, &args, &mut conn.output);
+                        .dispatch_into(&mut self.store, args, &mut conn.output);
                     conn.next_emit += 1;
                     if is_quit {
                         conn.closing = true;
                     }
                 }
-                if self.aof.is_some() && self.commands.is_write(&args) {
-                    self.log(&args);
+                if self.aof.is_some() && self.commands.is_write(args) {
+                    self.log(args);
                 }
                 return;
             }
@@ -164,10 +163,14 @@ impl<C: Commands> Shard<C> {
                 }
             }
             if shard == self.id {
-                let part = self.exec_op(Op::Dispatch(args));
+                // Local-but-not-fast-path: only here we need an owned Argv to
+                // hand to exec_op via Op::Dispatch. Clone once.
+                let part = self.exec_op(Op::Dispatch(args.clone()));
                 self.fold(conn_id, seq, part);
             } else {
-                self.request_batch[shard].push((conn_id, seq, args));
+                // Cross-shard forward: one Argv clone per forwarded cmd. The
+                // -c50 single-shard hot path never reaches here.
+                self.request_batch[shard].push((conn_id, seq, args.clone()));
             }
             return;
         }
@@ -175,8 +178,8 @@ impl<C: Commands> Shard<C> {
         // Multi-target / aggregating commands (DEL, MGET, DBSIZE, fan-outs, …).
         let (targets, agg): (Vec<(usize, Op)>, Agg) = match route {
             Route::Local | Route::Single(_) => unreachable!("handled by fast path"),
-            Route::DelKeys => (self.group_keys(&args, Op::Del), Agg::SumInt(0)),
-            Route::ExistsKeys => (self.group_keys(&args, Op::Exists), Agg::SumInt(0)),
+            Route::DelKeys => (self.group_keys(args, Op::Del), Agg::SumInt(0)),
+            Route::ExistsKeys => (self.group_keys(args, Op::Exists), Agg::SumInt(0)),
             Route::Dbsize => (
                 (0..self.nshards).map(|s| (s, Op::Dbsize)).collect(),
                 Agg::SumInt(0),
@@ -208,10 +211,10 @@ impl<C: Commands> Shard<C> {
                     Agg::AllOk,
                 )
             }
-            Route::MGet => self.build_gather(&args, GatherKind::Str, MultiOp::Mget),
-            Route::SInter => self.build_gather(&args, GatherKind::Set, MultiOp::SInter),
-            Route::SUnion => self.build_gather(&args, GatherKind::Set, MultiOp::SUnion),
-            Route::SDiff => self.build_gather(&args, GatherKind::Set, MultiOp::SDiff),
+            Route::MGet => self.build_gather(args, GatherKind::Str, MultiOp::Mget),
+            Route::SInter => self.build_gather(args, GatherKind::Set, MultiOp::SInter),
+            Route::SUnion => self.build_gather(args, GatherKind::Set, MultiOp::SUnion),
+            Route::SDiff => self.build_gather(args, GatherKind::Set, MultiOp::SDiff),
             Route::Keys(pat) => self.fanout_keys(pat, None, KeyShape::Keys),
             Route::Scan(pat) => self.fanout_keys(pat, None, KeyShape::Scan),
             Route::RandomKey => self.fanout_keys(None, Some(1), KeyShape::Random),

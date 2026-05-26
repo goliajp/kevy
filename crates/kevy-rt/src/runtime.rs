@@ -123,6 +123,7 @@ impl<C: Commands> Runtime<C> {
                 pubsub: pubsub.clone(),
                 publish_batch: (0..n).map(|_| Vec::new()).collect(),
                 request_batch: (0..n).map(|_| Vec::new()).collect(),
+                scratch_argv: kevy_resp::Argv::default(),
             });
         }
 
