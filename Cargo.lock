@@ -21,6 +21,7 @@ version = "0.1.0"
 name = "kevy-bytes"
 version = "0.1.0"
 dependencies = [
+ "kevy-bench",
  "kevy-hash",
 ]
 
@@ -39,6 +40,7 @@ version = "0.1.0"
 name = "kevy-map"
 version = "0.1.0"
 dependencies = [
+ "kevy-bench",
  "kevy-hash",
  "kevy-sys",
 ]

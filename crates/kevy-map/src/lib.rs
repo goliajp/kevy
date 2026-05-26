@@ -972,4 +972,118 @@ mod tests {
         m.insert(15, 15);
         assert_eq!(m.capacity(), MIN_CAP * 2);
     }
+
+    // ---- API-surface smoke tests (coverage padding for delegating methods) --
+
+    #[test]
+    fn map_keys_iter() {
+        let mut m = KevyMap::<u64, u64>::new();
+        for i in 0..5u64 {
+            m.insert(i, i + 10);
+        }
+        let mut ks: Vec<u64> = m.keys().copied().collect();
+        ks.sort();
+        assert_eq!(ks, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn map_values_iter() {
+        let mut m = KevyMap::<u64, u64>::new();
+        for i in 0..5u64 {
+            m.insert(i, i + 10);
+        }
+        let mut vs: Vec<u64> = m.values().copied().collect();
+        vs.sort();
+        assert_eq!(vs, vec![10, 11, 12, 13, 14]);
+    }
+
+    #[test]
+    fn map_default_is_empty() {
+        let m: KevyMap<u64, u64> = KevyMap::default();
+        assert!(m.is_empty());
+        assert_eq!(m.capacity(), 0);
+    }
+
+    #[test]
+    fn map_from_iterator() {
+        let m: KevyMap<u64, u64> = (0..10u64).map(|i| (i, i * 2)).collect();
+        assert_eq!(m.len(), 10);
+        assert_eq!(m.get(&5u64), Some(&10));
+    }
+
+    #[test]
+    fn map_extend() {
+        let mut m = KevyMap::<u64, u64>::new();
+        m.extend((0..5u64).map(|i| (i, i)));
+        assert_eq!(m.len(), 5);
+        assert_eq!(m.get(&3u64), Some(&3));
+    }
+
+    #[test]
+    fn map_index_panics_on_missing() {
+        let mut m = KevyMap::<u64, u64>::new();
+        m.insert(1, 10);
+        assert_eq!(m[&1u64], 10);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = m[&99u64];
+        }));
+        assert!(r.is_err(), "Index on missing key should panic");
+    }
+
+    #[test]
+    fn set_with_capacity_capacity_clear() {
+        let mut s: KevySet<u64> = KevySet::with_capacity(50);
+        assert!(s.capacity() >= 50);
+        for i in 0..10u64 {
+            s.insert(i);
+        }
+        assert_eq!(s.len(), 10);
+        s.clear();
+        assert!(s.is_empty());
+        // capacity preserved
+        assert!(s.capacity() >= 50);
+    }
+
+    #[test]
+    fn set_as_map_smoke() {
+        let mut s: KevySet<u64> = KevySet::new();
+        s.insert(7);
+        assert_eq!(s.as_map().len(), 1);
+        assert!(s.as_map().contains_key(&7u64));
+    }
+
+    #[test]
+    fn set_default_debug() {
+        let s: KevySet<u64> = KevySet::default();
+        assert!(s.is_empty());
+        let dbg = format!("{s:?}");
+        assert_eq!(dbg, "{}");
+    }
+
+    #[test]
+    fn set_into_iter_ref() {
+        let mut s: KevySet<u64> = KevySet::new();
+        for i in 0..3u64 {
+            s.insert(i);
+        }
+        let mut sum = 0u64;
+        for k in &s {
+            sum += k;
+        }
+        assert_eq!(sum, 3);
+    }
+
+    #[test]
+    fn set_from_iterator() {
+        let s: KevySet<u64> = (0..5u64).collect();
+        assert_eq!(s.len(), 5);
+        assert!(s.contains(&3u64));
+    }
+
+    #[test]
+    fn set_extend() {
+        let mut s: KevySet<u64> = KevySet::new();
+        s.extend(0..5u64);
+        assert_eq!(s.len(), 5);
+    }
 }
