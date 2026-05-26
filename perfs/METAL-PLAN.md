@@ -3,7 +3,7 @@
 Authorized 2026-05-26: ignore ROI / win-risk. Try every metal-level lever; let
 perf/mem/size data speak. **Correctness stays a hard gate** (sharded 11/11 epoll+
 io_uring, full workspace tests, clippy 0 per checkpoint) — only the perf-WIN gate
-is relaxed (try uncertain stones; keep what helps any of perf/mem/size, revert
+is relaxed (try uncertain checkpoints; keep what helps any of perf/mem/size, revert
 only clear all-axis regressions; document every result in `perfs/`).
 
 ## L1 — Roadmap (one line)
@@ -31,9 +31,11 @@ column +21.2% cumulative; bucket-probe miss hidden by prefetch). Remaining
 DRAM-bound levers (hugepages, SSE2 group scan) only move the 10M column.
 The **hot-path CPU levers (parse + dispatch ~ 60% combined) move every
 column**, including the 1-key cache-hot one we couldn't touch with mem-wall
-stones. So Phase A leads. Each checkpoint = one stone; correctness gate
-stays hard, perf-WIN gate relaxed (keep any-axis win, revert only all-axis
-regression, document everything).
+levers. So Phase A leads. Each checkpoint targets one lever (NOT a "stone" in
+the mailrs ARCHITECTURE.md sense — these checkpoints are cement-internal
+perf work, not extractable foundation crates). Correctness gate stays hard,
+perf-WIN gate relaxed (keep any-axis win, revert only all-axis regression,
+document everything).
 
 ### Phase A — Hot-path CPU (ceiling: highest; lifts every keyspace column)
 
@@ -56,9 +58,8 @@ regression, document everything).
 
 ### Phase B — DRAM-bound residual (ceiling: medium; only 10M-key column)
 
-- **v0.metal-9 — Hugepages (THP / explicit).** `madvise(MADV_HUGEPAGE)` on
-  store backing; optionally explicit 2MB pages. Drops TLB miss at 10M+
-  keys. Expected: 10M column +5-10%, other columns ~noise.
+- ✅ **v0.metal-9 — Hugepages (THP madvise).** Done — commit 3a29cf6.
+  10M +2.5% / 1-key first crossed into +3.5% vs baseline; RSS neutral.
 - **v0.metal-10 — KevyMap SSE2 group scan.** RFC step 6 carry-over from
   v0.metal-4+5. Now `KevyMap::find_by_borrow` is < 1% of CPU (prefetch
   already hides the bucket-probe miss), so this is a small lever; ship for
@@ -66,10 +67,10 @@ regression, document everything).
 
 ### Phase C — Reactor / IO (ceiling: medium)
 
-- **v0.metal-11 — Reactor loop overhead.** `runtime::run` closure is 6.38%
-  in flat + kernel `rep_movs_alternative` ~1%. Audit poll syscall freq,
-  idle-spin vs park threshold, recv-buffer copy paths. Expected: +3-5%.
-  Latency-sensitive — careful.
+- ✅ **v0.metal-11 — Reactor loop micro-ops.** Done — commit f71b9ae.
+  flush_* outer-empty short-circuits + `events` mem::take guarded on
+  non-empty. 10M +4.3% (DRAM-bound path benefits most); other columns
+  in paired noise.
 - **v0.metal-12 — io_uring zero-copy IO.** `SEND_ZC` for replies;
   registered files (fixed fd, skip table lookup) + registered buffers;
   revisit multishot. lx64 NIC = 100 Mbit (correctness verifiable on
@@ -78,30 +79,79 @@ regression, document everything).
 
 ### Phase D — Mem footprint extremity (ceiling: medium-high on RSS)
 
-- **v0.metal-13 — Key inline (`SmallBytes` for K).** Reuse the same
-  inline-22B-else-heap shape for keyspace keys. `KevyMap<Vec<u8>, V>` →
-  `KevyMap<SmallBytes, V>`. Frees ~24 B per key on Vec metadata. Expected:
-  RSS -10-15% @ 8.6M keys (≈ -150-200 MB).
+- ✅ **v0.metal-13 — Key inline (SmallBytes for K).** Done — commit 1d9d655.
+  Headline mem-axis win: RSS -17.3% (-254 MB) at 8.6M keys; also gave
+  +9-19% on middle/large keyspace perf columns because hash + key compare
+  collapse into one cache line.
 - **v0.metal-14 — Per-conn + pbuf-ring tightness.** Default input/output
   buffers per conn × shards = a few MB; io_uring pbuf-ring also generous.
   Shrink defaults, grow on demand, shrink-to-fit on idle. Expected: RSS
   -50-100 MB in many-conn scenarios. A/B for perf trade-off.
 - **v0.metal-15 — KevyMap load-factor + bucket layout review.** Currently
-  7/8 LF. Re-measure 7/8 vs 13/16 vs 15/16 on (perf, RSS) with prefetch on.
-  Pick the prefetch-friendly RSS-friendly sweet spot. Expected: RSS -5%
-  or document why 7/8 wins.
+  7/8 LF. Analytical pre-check: at 8.6M keys / next_pow2(8.6M/0.875)=16M,
+  LF up to 0.9375 keeps cap at 16M — no RSS movement at this keyspace
+  size from LF alone. Run only as a perf experiment if budget allows.
 
 ### Phase E — Binary size + closing
 
-- **v0.metal-16 — Binary size sweep.** `cargo-bloat`-driven (pure Rust, 0
-  dep, charter OK); trim `KevyMap<K, V>` monomorphisation explosion;
-  evaluate `opt-level = "z"`/`"s"`/`"3"` perf vs size; dead-code prune.
-  Current lx64 stripped = 655 KB; expected -20-40%.
+- **v0.metal-16 — Binary size sweep.** Use `nm` + `c++filt` (or
+  `cargo-bloat` if installed locally as a dev tool) to enumerate fn
+  bytes; trim `KevyMap<K, V>` monomorphisation explosion; evaluate
+  `opt-level = "z"`/`"s"`/`"3"` perf vs size; dead-code prune. Current
+  lx64 stripped = 666 KB; expected -20-40%.
 - **v0.metal-17 — Cross-core arena.** Lowest ceiling (ring 6-9 ns/item on
   x86); pool alloc on the forward path; shrink bytes per hop. Mem-axis
-  side win too. Closes the stone list.
+  side win too. Closes the checkpoint list.
 
-## L3a — HOT plan (current checkpoint: v0.metal-9 — hugepages / THP)
+## L3a — HOT plan (current checkpoint: v0.metal-16 — binary size sweep)
+
+After metal-9 (hugepages, done), metal-13 (key inline, done), metal-11
+(reactor micro-ops, done), remaining open checkpoints are:
+
+  metal-10 SSE2 group scan      KevyMap::find_by_borrow < 1% → ceiling tiny
+  metal-12 io_uring zero-copy   lx64 NIC 100Mbit ⇒ throughput unmeasurable
+  metal-14 per-conn buffers     mem -50-100MB additional; RSS already -46% from baseline
+  metal-15 LF revisit           analytically zero RSS movement at current keyspace
+  metal-16 binary size          UNTOUCHED axis ("perf/mem/size 三轴极致")
+  metal-17 cross-core arena     1-2% perf, lowest
+
+`metal-16` is the only checkpoint that addresses the size axis at all
+(11 done, 0 size touches) and is contained (Cargo.toml + dead-code
+sweep). Promote.
+
+Hot plan (6 steps):
+
+1. **Branch.** `git flow feature start metal-16-size`.
+2. **Establish baseline.** On lx64, build release stripped + with
+   debug syms; record `ls -l` byte count + `size -A` per-section
+   breakdown into `perfs/data/2026-05-26/metal-16-baseline.txt`.
+3. **Bytes-by-symbol audit.** Use `nm --print-size --size-sort
+   --reverse-sort --demangle target/release/kevy | head -40` to
+   identify the top 40 largest symbols. Look for: monomorphisation
+   explosions (multiple instantiations of KevyMap), large unused
+   functions, large generic vtables.
+4. **opt-level trade-off.** Try `opt-level = "s"` and `"z"` in a
+   `[profile.release-size]` profile (don't replace `release`). Build
+   with each, measure binary size + run 3-run A/B at one keyspace
+   (1-key / 10M). Choose the best trade-off (size win + perf <5%
+   regression) for the shipped profile.
+5. **Dead code sweep.** Apply findings from step 3: gate optional
+   features behind `cfg`, remove unused trait impls, see if any large
+   fn can be `#[cold]` to push it out of icache hot path.
+6. **lx64 A/B (3-run medians).** rps unchanged (or ≤5% paired
+   regression); record final stripped binary size. Data file
+   `metal-16-binary-size-ab.txt`. Judge + finish.
+
+## L3a (previous, completed) — v0.metal-9 / -11 / -13 brief recap
+
+- metal-9 hugepages: kevy-sys advise_hugepage + kevy-map alloc_table call.
+- metal-11 reactor: flush_* outer-empty short-circuits + events mem::take guard.
+- metal-13 key inline: KevyMap<Vec<u8>, V> → KevyMap<SmallBytes, V> across
+  Store::map / HashData / SetData / ZSetData.by_member.
+
+(was: HOT plan for v0.metal-9 hugepages — now archived as done.)
+
+## L3a (older, completed) — v0.metal-9 hugepages original hot plan
 
 After v0.metal-8, the post-flat reads:
 
@@ -113,9 +163,9 @@ After v0.metal-8, the post-flat reads:
 Phase A's wins are concentrated on the dispatch chain (-30% relative on
 the chain). `parse_command_into` still has the `extend_from_slice`
 byte-copy — further parse gains need a true borrowed argv (out of
-scope as a single stone; tracked as a Phase D refactor candidate).
+scope as a single checkpoint; tracked as a Phase D refactor candidate).
 
-Phase B's hugepages stone is the simplest next move: environment-level
+Phase B's hugepages checkpoint is the simplest next move: environment-level
 change, no code risk, hits 10M-key column directly via TLB. Promote it
 next.
 
@@ -280,22 +330,22 @@ to L3a on promotion). Notes:
 - **Phase D (metal-13 key SmallBytes, metal-14 buffers, metal-15 LF review)**:
   metal-13 reuses kevy-bytes; the others are tuning. metal-15 is a small,
   data-driven adjustment.
-- **Phase E (metal-16 size, metal-17 cross-core arena)**: closing stones.
+- **Phase E (metal-16 size, metal-17 cross-core arena)**: closing checkpoints.
   metal-16 is `cargo-bloat` analysis + opt-level tuning. metal-17 is the
-  lowest-ceiling stone left.
+  lowest-ceiling checkpoint left.
 
 ## L4 — Triggers (cold → hot promotion predicates)
 
-- 2→3 / 3→4+5 / 4+5→6: **satisfied** (each previous stone merged with a
+- 2→3 / 3→4+5 / 4+5→6: **satisfied** (each previous checkpoint merged with a
   data file + sharded 11/11 both reactors + clippy 0).
 - N→N+1 (general form): previous merged to develop, A/B data file under
   `perfs/data/2026-05-26/metal-<N>-*.txt` with median rps + RSS + binary
   size; correctness gates green. On promotion, expand the L3b entry into
   a linear L3a hot plan, then proceed.
-- **Re-measure trigger**: after each Phase-A stone (metal-6, -7, -8),
+- **Re-measure trigger**: after each Phase-A checkpoint (metal-6, -7, -8),
   re-run perf flat on the 1-key cache-hot path. If the levers re-rank
   (parse drops out, dispatch surfaces, etc.), update L2's Phase-A order
-  before promoting the next stone. Once Phase A's combined `parse +
+  before promoting the next checkpoint. Once Phase A's combined `parse +
   dispatch` CPU share falls below ~15%, Phase A is done — proceed to
   Phase B (DRAM residual).
 
