@@ -1,4 +1,10 @@
-# kevy → polish: stones + cement audit + closure (v0.polish)
+# kevy → polish: stones + cement audit + closure (v0.polish) — ✅ CLOSED 2026-05-26
+
+> **Status**: v0.polish complete. All Phase A/B/C/D gates green; see
+> `RELEASE-DRY-RUN.md`, per-stone `STONE-STATUS.md`, and per-crate
+> `AUDIT-2026-05-26.md` for evidence. Carry-over backlog tracked in
+> `ROADMAP.md`.
+
 
 ## L1 — Roadmap (one line)
 
