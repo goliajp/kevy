@@ -6,3 +6,4 @@ aof-*.aof
 
 # Claude Code runtime state (settings.json stays tracked)
 .claude/scheduled_tasks.lock
+.claude/handoff.md

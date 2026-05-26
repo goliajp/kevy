@@ -1,0 +1,16 @@
+[package]
+name = "kevy-pubsub-bench"
+description = "Pub/Sub fan-out throughput benchmarker — raw RESP over TCP, works against kevy / valkey / redis. Pure Rust, zero deps."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+keywords = ["redis", "valkey", "pubsub", "benchmark", "fanout"]
+categories = ["development-tools::profiling", "command-line-utilities"]
+
+[[bin]]
+name = "kevy-pubsub-bench"
+path = "src/main.rs"
+
+[dependencies]

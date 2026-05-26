@@ -10,6 +10,8 @@
 //!
 //! Usage: `kevy-pubsub-bench --host H --port P --subs K --msgs M --size S`
 
+#![forbid(unsafe_code)]
+
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
