@@ -245,15 +245,15 @@ impl Store {
         fields: Vec<(Vec<u8>, Vec<u8>)>,
         ttl_ms: Option<u64>,
     ) {
-        self.insert_loaded(key, Value::Hash(fields.into_iter().collect()), ttl_ms);
+        self.insert_loaded(key, Value::Hash(Box::new(fields.into_iter().collect())), ttl_ms);
     }
 
     pub fn load_list(&mut self, key: Vec<u8>, items: Vec<Vec<u8>>, ttl_ms: Option<u64>) {
-        self.insert_loaded(key, Value::List(items.into_iter().collect()), ttl_ms);
+        self.insert_loaded(key, Value::List(Box::new(items.into_iter().collect())), ttl_ms);
     }
 
     pub fn load_set(&mut self, key: Vec<u8>, members: Vec<Vec<u8>>, ttl_ms: Option<u64>) {
-        self.insert_loaded(key, Value::Set(members.into_iter().collect()), ttl_ms);
+        self.insert_loaded(key, Value::Set(Box::new(members.into_iter().collect())), ttl_ms);
     }
 
     /// Collect live keys (optionally matching a glob `pattern`, up to `limit`).
@@ -283,7 +283,7 @@ impl Store {
         for (m, score) in pairs {
             z.insert(&m, score);
         }
-        self.insert_loaded(key, Value::ZSet(z), ttl_ms);
+        self.insert_loaded(key, Value::ZSet(Box::new(z)), ttl_ms);
     }
 }
 

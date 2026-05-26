@@ -18,7 +18,7 @@ impl Store {
             self.map.insert(
                 key.to_vec(),
                 Entry {
-                    value: Value::Hash(HashData::default()),
+                    value: Value::Hash(Box::default()),
                     expire_at: None,
                 },
             );
