@@ -4,6 +4,8 @@
 //! they catch order-of-magnitude regressions (an accidental O(n²) scan, a
 //! per-arg double-allocation), not nanosecond drift.
 
+#![cfg(not(debug_assertions))]
+
 use std::hint::black_box;
 use std::time::Duration;
 

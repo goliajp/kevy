@@ -4,6 +4,8 @@
 //!
 //! Reproducer: `cargo test -p kevy-map --test perf_gate --release`
 
+#![cfg(not(debug_assertions))]
+
 use kevy_bench::{bench, black_box};
 use kevy_map::KevyMap;
 

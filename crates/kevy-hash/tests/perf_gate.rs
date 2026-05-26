@@ -2,6 +2,8 @@
 //!
 //! Reproducer: `cargo test -p kevy-hash --test perf_gate --release`
 
+#![cfg(not(debug_assertions))]
+
 use kevy_bench::{bench, black_box};
 use kevy_hash::{FxHasher, KevyHash};
 use std::hash::Hasher;

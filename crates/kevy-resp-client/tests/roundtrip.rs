@@ -5,7 +5,7 @@
 use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
