@@ -16,6 +16,8 @@
 //! to make `Value::Str(SmallBytes)` fit alongside the boxed collection
 //! variants and keep `Entry` at 48 B.
 
+#![warn(missing_docs)]
+
 #[cfg(target_endian = "big")]
 compile_error!("kevy-bytes requires little-endian: heap-tag byte overlaps inline length byte");
 
@@ -51,6 +53,14 @@ struct Heap {
     cap_and_tag: usize,
 }
 
+/// A 24-byte owned byte string with inline small-string optimization.
+///
+/// Strings of up to 22 bytes live entirely inside the value (no allocation,
+/// no pointer chase); larger strings spill to a heap buffer. The
+/// discriminator is a single byte at offset 23 (the tag, which doubles as
+/// the inline length 0..=22 OR equals 0xFF when the heap variant is active).
+///
+/// See the crate root for layout details.
 #[repr(C)]
 pub union SmallBytes {
     inline: Inline,
@@ -152,6 +162,7 @@ impl SmallBytes {
         unsafe { self.inline.tag <= INLINE_LEN_MAX }
     }
 
+    /// Number of bytes stored.
     #[inline]
     pub fn len(&self) -> usize {
         if self.is_inline() {
@@ -163,11 +174,13 @@ impl SmallBytes {
         }
     }
 
+    /// Whether `len() == 0`.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Borrow the bytes (no allocation; same for inline and heap variants).
     #[inline]
     pub fn as_slice(&self) -> &[u8] {
         if self.is_inline() {

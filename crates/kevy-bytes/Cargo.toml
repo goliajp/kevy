@@ -1,6 +1,6 @@
 [package]
 name = "kevy-bytes"
-description = "Small-byte-string with inline SSO — 24-byte layout, pure Rust, zero deps."
+description = "24-byte small-byte-string with inline SSO. Pure Rust."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
