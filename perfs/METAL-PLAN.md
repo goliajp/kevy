@@ -12,87 +12,137 @@ the compute floor; single-shard 5.9M GET/core) and the **hardware ceilings** —
 compute floor, memory latency, cross-core coherency, NIC zero-copy — measured on
 lx64, optimizing perf + mem + size exhaustively.
 
-## L2 — Version boundary `v0.metal` (data-informed reorder after v0.metal-1)
+## L2 — Version boundary `v0.metal` (rewritten 2026-05-26 from perf-flat data)
 
 Scope: pure perf/mem/size of the existing feature set. No new commands/features.
-Charter intact (0 crates.io dep, pure-Rust, libc only in kevy-sys, no C). The
-checkpoints below are **reordered against the original linear plan** based on
-`perfs/data/2026-05-26/metal-baseline.txt` — the memory wall is the dominant
-lever (-52%), cross-core ring is cheap on x86 (6-9 ns/item; deprioritized). Each
-checkpoint is its own stone; perf-WIN gate relaxed but correctness gate stays.
+Charter intact (0 crates.io dep, pure-Rust, libc only in kevy-sys, no C).
 
-- ✅ **v0.metal-1 — Measurement foundation.** Large-keyspace bench, ring micro-
-  bench, perf-on-lx64 harness, RSS + binary-size tracking. Done — commit 2db0b27.
-- ✅ **v0.metal-2 — Box collection Value variants.** Hash/List/Set/ZSet boxed →
-  Entry 80→48B → RSS -29% @ 8.6M keys, 10M-key GET +2.4%. Done — commit 2c3ee26.
-- ✅ **v0.metal-3 — Value inlining (SSO).** New `kevy-bytes` crate (24B unsafe
-  union; kevy-store stays `forbid(unsafe_code)`). `Value::Str(SmallBytes)` keeps
-  `size_of::<Value>()` ≤32B. 10M-key GET +12.9%, RSS -8.6% @ 8.6M keys. Done —
-  commit fb7c71c.
-- ✅ **v0.metal-4+5 — kevy-map + bucket prefetch.** Pure-Rust Swiss-style
-  open-addressing table (kevy-map crate, ~250 LOC unsafe) replacing
-  FxHashMap/FxHashSet across Store::map / HashData / SetData (via KevySet) /
-  ZSetData.by_member. New `Store::prefetch_for_key` invoked by both reactors'
-  parse loops (1-step lookahead: prefetch N+1 while dispatching N). 10M-key
-  GET 2.28M → 2.77M (+21.2% vs metal-1 baseline; +7.3% vs metal-3). RSS
-  neutral. Memory wall (1→10M curve) -52% → -41%. SSE2 group scan deferred
-  (RFC step 6) — scalar scan no longer the bottleneck once prefetch hides
-  the bucket-probe miss. Done — commit 421c826.
-- **v0.metal-6 — Hugepages (THP / explicit).** Large pages for the store backing
-  to drop TLB miss rate at 10M+ keys. Environment tuning; independent of code.
-- **v0.metal-7 — Zero-alloc local hot path.** Kill parse's 2 per-command allocs
-  on the LOCAL path (borrow argv from the input buffer; owned only when
-  forwarded). Profile shows malloc/cfree ~10%.
-- **v0.metal-8 — Parse to the floor.** SWAR CRLF + length scan; single-pass.
-  Profile shows parse_command ~13.5%.
-- **v0.metal-9 — Dispatch to the floor.** Branch-lean / perfect-hash verb
-  dispatch replacing the `dispatch_* || …` chain.
-- **v0.metal-10 — Cross-core arena / msg compaction.** Pool alloc on the forward
-  path; shrink bytes + cache lines per hop. Low priority (ring 6-9 ns/item on
-  x86) but still try.
-- **v0.metal-11 — Zero-copy IO.** io_uring `SEND_ZC` for replies; registered
-  files + registered buffers; revisit multishot. lx64 NIC = 100Mbit (correctness
-  verifiable, throughput not). AF_XDP = stretch.
-- **v0.metal-12 — Footprint & size.** Per-conn + pbuf-ring + store overhead;
-  binary size (LTO / codegen / opt-level / panic strategy) — the size axis.
+**Re-ordered 2026-05-26 PM** after the v0.metal-4+5 perf record on the 1-key
+cache-hot path (see `perfs/data/2026-05-26/perf-flat-after-metal-4-5.txt`).
+The flat self-time map exposed a much bigger lever than the remaining memory-
+wall residual:
 
-(v0.metal-4 and v0.metal-5 are merged; numbering 6..12 unchanged for stability.)
+  parse_command + libc malloc/cfree + Argv::with_capacity   ≈ **32% CPU**
+  start_command + handle_command + dispatch_into            ≈ **30% CPU**
+  KevyMap::find_by_borrow + Store::get + live_entry         ≈  **2% CPU**
 
-## L3a — HOT plan (current checkpoint: v0.metal-4+5 — kevy-map + prefetch)
+The memory wall has already been beaten down by v0.metal-2/3/4+5 (10M-key
+column +21.2% cumulative; bucket-probe miss hidden by prefetch). Remaining
+DRAM-bound levers (hugepages, SSE2 group scan) only move the 10M column.
+The **hot-path CPU levers (parse + dispatch ~ 60% combined) move every
+column**, including the 1-key cache-hot one we couldn't touch with mem-wall
+stones. So Phase A leads. Each checkpoint = one stone; correctness gate
+stays hard, perf-WIN gate relaxed (keep any-axis win, revert only all-axis
+regression, document everything).
 
-Design RFC: `rfcs/2026-05-26-kevy-map-design.md` (read first; this is the
-short-form step list). Each step ends with a detection command; output →
-`perfs/data/2026-05-26/metal-4-5-*`.
+### Phase A — Hot-path CPU (ceiling: highest; lifts every keyspace column)
 
-1. **Branch + crate skeleton.** `git flow feature start metal-4-5-kevy-map`;
-   add `crates/kevy-map` (Cargo.toml + lib.rs stub + module split); add to
-   workspace. **Detect**: `cargo check -p kevy-map` clean.
-2. **Hasher integration.** Add `KevyHash` trait + impls for `[u8]`, `u32`,
-   `u64`, `i32` to `kevy-hash` (one-call `hash(&self) -> u64`). **Detect**:
-   `cargo test -p kevy-hash` green; hash output matches FxFmix exactly.
-3. **Core impl (scalar group scan).** `KevyMap<K, V>`: metadata + slots
-   arrays; insert / get / remove / iter / grow; scalar 16-byte group scan
-   (one byte at a time); tombstones; power-of-two cap, 7/8 load factor.
-   **Detect**: ~20 unit tests cover boundaries (empty, single, grow,
-   collision storm, tombstone reuse, iter under remove); `cargo miri test -p
-   kevy-map` clean.
-4. **Wire `Store::map` to `KevyMap`.** Replace `FxHashMap<Vec<u8>, Entry>` —
-   keep other variants on FxHashMap for now. **Detect**: `cargo test -p
-   kevy-store` green.
-5. **Wire HashData / SetData / ZSetData.by_member to `KevyMap`.** Sweep.
-   **Detect**: `cargo test --workspace` green; clippy 0.
-6. **SSE2 group scan** under `#[cfg(target_arch = "x86_64")]`; SWAR u64
-   fallback otherwise. **Detect**: same tests pass; micro-bench shows group
-   scan ≥ scalar (use `kevy-bench`).
-7. **Prefetch hooks (v0.metal-5).** `KevyMap::prefetch_for_hash`; the batch
-   driver in `kevy-rt` issues prefetch for the next command's bucket group
-   while finishing the current. **Detect**: `cargo test --workspace` + clippy
-   0 + sharded 11/11 (epoll + io_uring on lx64).
-8. **lx64 A/B.** `bench/metal_keyspace.sh` curve; RSS @ 8.6M keys; stripped
-   binary size; cache-hot `-c50 -P256`. **Detect**:
-   `perfs/data/2026-05-26/metal-4-5-kevy-map-and-prefetch-ab.txt` written.
-9. **Judge + merge.** Any axis improved (and no axis ≥5% regressed) → `git
-   flow feature finish`. All-axis regression → discard + rejection note.
+- ✅ **v0.metal-1 — Measurement foundation.** Done — commit 2db0b27.
+- ✅ **v0.metal-2 — Box collection Value variants.** Done — commit 2c3ee26.
+- ✅ **v0.metal-3 — Value inlining (SmallBytes SSO).** Done — commit fb7c71c.
+- ✅ **v0.metal-4+5 — kevy-map + bucket prefetch.** Done — commit 421c826.
+- **v0.metal-6 — Zero-alloc parse + borrowed `Argv`.** Kill parse's 2
+  per-command allocs on the LOCAL path; argv borrows the conn input buffer
+  directly. Owned/borrowed split so cross-shard forwards still materialise.
+  Hits ~32% of cache-hot CPU (parse + libc malloc/cfree + Argv alloc).
+  Expected: cache-hot +15-25%.
+- **v0.metal-7 — Parse SWAR / SIMD CRLF + length scan.** u64 SWAR scan for
+  CR/LF + length-prefix; SSE2 `_mm_cmpeq_epi8` fast path on x86_64 with
+  SWAR u64 fallback. Hits parse_command's residual ALU (~16%). Expected:
+  another +5-10%.
+- **v0.metal-8 — Dispatch redo.** Perfect-hash verb dispatch replacing
+  `dispatch_* || …` chain; cheap `shard_of` (current `wrapping_mul` is 4.20%
+  in flat); fewer indirect calls in `handle_command`/`start_command`.
+  Hits ~30% CPU. Expected: +10-15%.
+
+### Phase B — DRAM-bound residual (ceiling: medium; only 10M-key column)
+
+- **v0.metal-9 — Hugepages (THP / explicit).** `madvise(MADV_HUGEPAGE)` on
+  store backing; optionally explicit 2MB pages. Drops TLB miss at 10M+
+  keys. Expected: 10M column +5-10%, other columns ~noise.
+- **v0.metal-10 — KevyMap SSE2 group scan.** RFC step 6 carry-over from
+  v0.metal-4+5. Now `KevyMap::find_by_borrow` is < 1% of CPU (prefetch
+  already hides the bucket-probe miss), so this is a small lever; ship for
+  completeness and instruction-cache density. Expected: +2-5%.
+
+### Phase C — Reactor / IO (ceiling: medium)
+
+- **v0.metal-11 — Reactor loop overhead.** `runtime::run` closure is 6.38%
+  in flat + kernel `rep_movs_alternative` ~1%. Audit poll syscall freq,
+  idle-spin vs park threshold, recv-buffer copy paths. Expected: +3-5%.
+  Latency-sensitive — careful.
+- **v0.metal-12 — io_uring zero-copy IO.** `SEND_ZC` for replies;
+  registered files (fixed fd, skip table lookup) + registered buffers;
+  revisit multishot. lx64 NIC = 100 Mbit (correctness verifiable on
+  loopback, throughput not). Big change to `uring_reactor.rs`; in-charter
+  (io_uring is the syscall interface).
+
+### Phase D — Mem footprint extremity (ceiling: medium-high on RSS)
+
+- **v0.metal-13 — Key inline (`SmallBytes` for K).** Reuse the same
+  inline-22B-else-heap shape for keyspace keys. `KevyMap<Vec<u8>, V>` →
+  `KevyMap<SmallBytes, V>`. Frees ~24 B per key on Vec metadata. Expected:
+  RSS -10-15% @ 8.6M keys (≈ -150-200 MB).
+- **v0.metal-14 — Per-conn + pbuf-ring tightness.** Default input/output
+  buffers per conn × shards = a few MB; io_uring pbuf-ring also generous.
+  Shrink defaults, grow on demand, shrink-to-fit on idle. Expected: RSS
+  -50-100 MB in many-conn scenarios. A/B for perf trade-off.
+- **v0.metal-15 — KevyMap load-factor + bucket layout review.** Currently
+  7/8 LF. Re-measure 7/8 vs 13/16 vs 15/16 on (perf, RSS) with prefetch on.
+  Pick the prefetch-friendly RSS-friendly sweet spot. Expected: RSS -5%
+  or document why 7/8 wins.
+
+### Phase E — Binary size + closing
+
+- **v0.metal-16 — Binary size sweep.** `cargo-bloat`-driven (pure Rust, 0
+  dep, charter OK); trim `KevyMap<K, V>` monomorphisation explosion;
+  evaluate `opt-level = "z"`/`"s"`/`"3"` perf vs size; dead-code prune.
+  Current lx64 stripped = 655 KB; expected -20-40%.
+- **v0.metal-17 — Cross-core arena.** Lowest ceiling (ring 6-9 ns/item on
+  x86); pool alloc on the forward path; shrink bytes per hop. Mem-axis
+  side win too. Closes the stone list.
+
+## L3a — HOT plan (current checkpoint: v0.metal-6 — zero-alloc parse + borrowed Argv)
+
+Each step ends with a detection command. Output →
+`perfs/data/2026-05-26/metal-6-*`.
+
+1. **Branch.** `git flow feature start metal-6-zero-alloc-parse`. **Detect**:
+   `git branch --show-current` = `feature/metal-6-zero-alloc-parse`.
+2. **`Argv` borrowed/owned split.** In `crates/kevy-resp`, add a borrowed
+   variant of `Argv` that holds `(ends: SmallVec<u32>, buf_offset: usize,
+   buf_len: usize)` referring back into the conn input buffer. Keep the
+   owned variant for cross-shard forwarding. `Command` becomes
+   `enum { Borrowed(ArgvRef<'a>), Owned(Argv) }` or a single struct with
+   an internal tag — pick the shape with fewer call-site changes.
+   **Detect**: `cargo test -p kevy-resp` green; the existing PartialEq
+   against `Vec<Vec<u8>>` still holds for borrowed argvs.
+3. **`parse_command` returns borrowed.** Rewrite the parser to point ends
+   into the input buffer; no `Vec` allocation per cmd. **Detect**:
+   `cargo test -p kevy-resp` green; perf alloc counter shows malloc rate
+   drops to ≤ 1/cmd on the GET hot path (verify via lx64 perf trace).
+4. **Materialise on forward.** When `start_command` decides to send to
+   another shard, clone the borrowed argv into an owned one. **Detect**:
+   `cargo test -p kevy --test sharded` 11/11 epoll + io_uring (each
+   reactor; cross-shard exercises the materialisation path).
+5. **Dispatch surface.** All command handlers that took `&[Vec<u8>]` or
+   `Vec<Vec<u8>>` adapt to the new shape (borrowed argv). Most should be
+   one-line changes since they read via index → `&[u8]`. **Detect**:
+   `cargo check --workspace` clean; `cargo clippy --workspace
+   --all-targets -- -D warnings` 0.
+6. **Local correctness gate.** **Detect**: `cargo test --workspace` 100%
+   pass.
+7. **lx64 gate.** Rsync + release build w/ debug syms; sharded 11/11 epoll
+   + io_uring. **Detect**: 22/22 (both reactors).
+8. **lx64 A/B.** `bench/metal_keyspace.sh` curve {1, 100k, 1M, 10M}; RSS @
+   8.6M keys; stripped binary size; cache-hot `-c50 -P256`. **Critical**:
+   3+ runs per column, report median to suppress run-to-run noise
+   (~4-5% seen in 1-key column). **Detect**:
+   `perfs/data/2026-05-26/metal-6-zero-alloc-parse-ab.txt` written with
+   medians + perf flat showing malloc/cfree ≤ 2%.
+9. **Judge + merge.** Any axis improved (and no axis ≥ 5% median
+   regression) → `git flow feature finish`. All-axis regression →
+   discard + rejection note in data file.
 
 ## L3a (previous, completed) — v0.metal-3 value inlining SSO
 
@@ -135,31 +185,57 @@ Each step ends with a detection command. Output → `perfs/data/2026-05-26/metal
    develop's `git log -1` shows the metal-3 commit or the data file shows the
    rejection rationale.
 
-## L3b — COLD plan (v0.metal-4 … v0.metal-12)
+## L3b — COLD plan (v0.metal-7 … v0.metal-17)
 
 As listed in L2 — what / requirement / resource, **not** step-level (expanded
 to L3a on promotion). Notes:
 
-- v0.metal-4 (kevy-map): biggest single piece of engineering left. Open-addressing
-  Swiss layout; control of metadata-bytes/group/probe sequence. Pre-bench against
-  std HashMap on the kevy keyspace to size effort.
-- v0.metal-5 (prefetch): depends on v0.metal-4 (need bucket address); landing
-  zone is `kevy-store::Store::execute_batch` or similar.
-- v0.metal-6 (hugepages): runtime + sysctl setup; pure environment.
-- v0.metal-7..9 (alloc/parse/dispatch): all internal, lx64-measurable.
-- v0.metal-10..12 (cross-core / IO / size): cross-core ring is x86-cheap; IO
-  zero-copy bounded by lx64 100Mbit NIC (correctness only); size axis last.
+- **Phase A residual (metal-7, metal-8)**: lx64-measurable, internal. After
+  metal-6 ships, re-take a perf flat to recheck the lever percentages — parse
+  and dispatch may shift after the borrowed-argv change.
+- **Phase B (metal-9 hugepages, metal-10 SSE2)**: hugepages is environment +
+  one madvise; SSE2 group scan is contained in `kevy-map` (RFC step 6
+  carry-over). Both only meaningful on the 10M-key column.
+- **Phase C (metal-11 reactor, metal-12 io_uring zero-copy)**: metal-11 is
+  small tuning; metal-12 is a large change in `uring_reactor.rs`. lx64 NIC
+  100 Mbit means zero-copy verifies correctness only; throughput needs a
+  faster NIC (out-of-scope right now).
+- **Phase D (metal-13 key SmallBytes, metal-14 buffers, metal-15 LF review)**:
+  metal-13 reuses kevy-bytes; the others are tuning. metal-15 is a small,
+  data-driven adjustment.
+- **Phase E (metal-16 size, metal-17 cross-core arena)**: closing stones.
+  metal-16 is `cargo-bloat` analysis + opt-level tuning. metal-17 is the
+  lowest-ceiling stone left.
 
 ## L4 — Triggers (cold → hot promotion predicates)
 
-- 2→3: **satisfied** (v0.metal-2 merged, baseline data informs the reorder).
-- 3→4+5: **satisfied** (v0.metal-3 merged: commit fb7c71c; data file
-  `metal-3-value-inlining-ab.txt`; sharded 11/11 both reactors; clippy 0).
-- 4+5→6 … 11→12: previous merged + correctness + A/B file. On promotion
-  expand the L3b entry into a linear L3a hot plan.
+- 2→3 / 3→4+5 / 4+5→6: **satisfied** (each previous stone merged with a
+  data file + sharded 11/11 both reactors + clippy 0).
+- N→N+1 (general form): previous merged to develop, A/B data file under
+  `perfs/data/2026-05-26/metal-<N>-*.txt` with median rps + RSS + binary
+  size; correctness gates green. On promotion, expand the L3b entry into
+  a linear L3a hot plan, then proceed.
+- **Re-measure trigger**: after each Phase-A stone (metal-6, -7, -8),
+  re-run perf flat on the 1-key cache-hot path. If the levers re-rank
+  (parse drops out, dispatch surfaces, etc.), update L2's Phase-A order
+  before promoting the next stone. Once Phase A's combined `parse +
+  dispatch` CPU share falls below ~15%, Phase A is done — proceed to
+  Phase B (DRAM residual).
 
-Autorun: execute L3a; at each checkpoint completion check the L4 predicate, then
-promote the next. **Per session authorization (2026-05-26)**: when a step
-presents a fork, pick the option with the **higher ceiling** without pausing —
-don't stop to ask. Still stop and report if (a) a measurement falsifies the
-plan, (b) all-axis regression triggers revert, or (c) charter would be violated.
+Autorun: execute L3a; at each checkpoint completion check the L4 predicate,
+then promote the next. **Per-session authorization (2026-05-26)**: when a
+step presents a fork, pick the **higher-ceiling** option without pausing.
+Stop and report only if (a) a measurement falsifies the plan, (b) all-axis
+regression triggers revert, or (c) charter would be violated.
+
+## Expected cumulative end-state (vs current develop after metal-4+5)
+
+| Axis              | Now (lx64 1-shard io_uring) | Phase A done | Phase B done | Phase C-E done |
+|-------------------|-----------------------------|--------------|--------------|----------------|
+| 1-key GET rps     | 4.6M                        | **6.5-7.5M** | +marginal    | +marginal      |
+| 10M-key GET rps   | 2.77M                       | 3.8-4.5M     | **4.1-5.0M** | +marginal      |
+| RSS @ 8.6M keys   | 1.47 GB                     | ~1.45 GB     | ~1.42 GB     | **1.20-1.30 GB** |
+| Stripped binary   | 655 KB                      | 670 KB       | 680 KB       | **~400 KB**    |
+
+Numbers are pre-measurement estimates; the data files under
+`perfs/data/2026-05-26/` are the ground truth.
