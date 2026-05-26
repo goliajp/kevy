@@ -11,7 +11,7 @@ use crate::message::{
 };
 use crate::reduce::{drain_front, materialize, pubsub_message, shard_of};
 use crate::shard::Shard;
-use crate::{Commands, Route, TxnKind};
+use crate::{Commands, ResolvedCmd, Route, TxnKind};
 use kevy_persist::save_snapshot;
 use kevy_resp::{Argv, encode_array_len, encode_bulk, encode_integer, encode_null_bulk};
 use std::collections::HashMap;
@@ -19,9 +19,12 @@ use std::collections::HashMap;
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
     pub(crate) fn handle_command(&mut self, conn_id: u64, args: &Argv) {
-        let kind = self.commands.txn_kind(args);
+        // One verb-resolution per cmd (was 4: txn_kind + route + is_quit +
+        // is_write each scanned the verb separately). KevyCommands overrides
+        // resolve() with a single match; non-overriding impls still pay 4×.
+        let resolved = self.commands.resolve(args);
         let in_multi = self.conns.get(&conn_id).is_some_and(|c| c.multi.is_some());
-        match (in_multi, kind) {
+        match (in_multi, &resolved.txn_kind) {
             (false, TxnKind::Multi) => {
                 if let Some(c) = self.conns.get_mut(&conn_id) {
                     c.multi = Some(Vec::new());
@@ -50,7 +53,7 @@ impl<C: Commands> Shard<C> {
                 }
                 self.immediate_reply(conn_id, b"+QUEUED\r\n".to_vec());
             }
-            (false, TxnKind::Other) => self.start_command(conn_id, args),
+            (false, TxnKind::Other) => self.start_command(conn_id, args, resolved),
         }
     }
 
@@ -87,12 +90,13 @@ impl<C: Commands> Shard<C> {
         encode_array_len(&mut header, queued.len() as i64);
         self.immediate_reply(conn_id, header);
         for cmd in &queued {
-            self.start_command(conn_id, cmd);
+            let resolved = self.commands.resolve(cmd);
+            self.start_command(conn_id, cmd, resolved);
         }
     }
 
     /// Assign a seq, fan the command out to the owning shard(s), fold local parts.
-    fn start_command(&mut self, conn_id: u64, args: &Argv) {
+    fn start_command(&mut self, conn_id: u64, args: &Argv, resolved: ResolvedCmd) {
         let seq = match self.conns.get_mut(&conn_id) {
             Some(c) => {
                 let s = c.next_seq;
@@ -102,8 +106,9 @@ impl<C: Commands> Shard<C> {
             None => return,
         };
 
-        let is_quit = self.commands.is_quit(args);
-        let route = self.commands.route(args);
+        let is_quit = resolved.is_quit;
+        let route = resolved.route;
+        let is_write = resolved.is_write;
         // Connection-level pub/sub commands modify this conn directly.
         match route {
             Route::Subscribe => {
@@ -147,7 +152,7 @@ impl<C: Commands> Shard<C> {
                         conn.closing = true;
                     }
                 }
-                if self.aof.is_some() && self.commands.is_write(args) {
+                if self.aof.is_some() && is_write {
                     self.log(args);
                 }
                 return;

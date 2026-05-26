@@ -33,7 +33,7 @@
 #![forbid(unsafe_code)]
 
 use kevy_resp::{encode_error, parse_command};
-use kevy_rt::{Commands, Route, Runtime, TxnKind};
+use kevy_rt::{Commands, ResolvedCmd, Route, Runtime, TxnKind};
 use kevy_store::Store;
 use kevy_sys::Socket;
 use std::io;
@@ -178,6 +178,118 @@ impl Commands for KevyCommands {
             b"EXEC" => TxnKind::Exec,
             b"DISCARD" => TxnKind::Discard,
             _ => TxnKind::Other,
+        }
+    }
+
+    /// One-pass verb resolution — the reactor calls this once per cmd and
+    /// reads back txn_kind / route / is_quit / is_write without re-scanning
+    /// the verb. This is `kevy-rt`'s primary hot-path optimization: every
+    /// match arm uses the same `upper` buffer.
+    fn resolve(&self, args: &Argv) -> ResolvedCmd {
+        let Some(name) = args.first() else {
+            return ResolvedCmd {
+                txn_kind: TxnKind::Other,
+                route: Route::Local,
+                is_quit: false,
+                is_write: false,
+            };
+        };
+        let mut buf = [0u8; 32];
+        let upper = upper_verb(name, &mut buf);
+
+        let txn_kind = match upper {
+            b"MULTI" => TxnKind::Multi,
+            b"EXEC" => TxnKind::Exec,
+            b"DISCARD" => TxnKind::Discard,
+            _ => TxnKind::Other,
+        };
+
+        let is_quit = upper == b"QUIT";
+
+        let is_write = matches!(
+            upper,
+            b"SET"
+                | b"SETNX"
+                | b"SETEX"
+                | b"PSETEX"
+                | b"GETSET"
+                | b"GETDEL"
+                | b"INCRBYFLOAT"
+                | b"DEL"
+                | b"INCR"
+                | b"DECR"
+                | b"INCRBY"
+                | b"DECRBY"
+                | b"APPEND"
+                | b"EXPIRE"
+                | b"PEXPIRE"
+                | b"PERSIST"
+                | b"FLUSHDB"
+                | b"FLUSHALL"
+                | b"HSET"
+                | b"HSETNX"
+                | b"HDEL"
+                | b"HINCRBY"
+                | b"LPUSH"
+                | b"RPUSH"
+                | b"LPOP"
+                | b"RPOP"
+                | b"LSET"
+                | b"LREM"
+                | b"LTRIM"
+                | b"SADD"
+                | b"SREM"
+                | b"SPOP"
+                | b"ZADD"
+                | b"ZREM"
+                | b"ZINCRBY"
+                | b"MSET"
+        );
+
+        let route = match upper {
+            b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG" | b"HELLO" => Route::Local,
+            b"DBSIZE" => Route::Dbsize,
+            b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
+            b"SAVE" | b"BGSAVE" => Route::Save,
+            b"MSET" if args.len() >= 3 && !args.len().is_multiple_of(2) => Route::MSet,
+            b"MGET" if args.len() >= 2 => Route::MGet,
+            b"SINTER" if args.len() >= 2 => Route::SInter,
+            b"SUNION" if args.len() >= 2 => Route::SUnion,
+            b"SDIFF" if args.len() >= 2 => Route::SDiff,
+            b"KEYS" if args.len() == 2 => Route::Keys(Some(args[1].to_vec())),
+            b"SCAN" if args.len() >= 2 => Route::Scan(scan_pattern(args)),
+            b"RANDOMKEY" if args.len() == 1 => Route::RandomKey,
+            b"SUBSCRIBE" if args.len() >= 2 => Route::Subscribe,
+            b"UNSUBSCRIBE" => Route::Unsubscribe,
+            b"PUBLISH" if args.len() == 3 => Route::Publish,
+            b"DEL" => {
+                if args.len() == 2 {
+                    Route::Single(1)
+                } else {
+                    Route::DelKeys
+                }
+            }
+            b"EXISTS" => {
+                if args.len() == 2 {
+                    Route::Single(1)
+                } else {
+                    Route::ExistsKeys
+                }
+            }
+            _ => {
+                if args.len() >= 2 {
+                    Route::Single(1)
+                } else {
+                    Route::Local
+                }
+            }
+        };
+
+        ResolvedCmd {
+            txn_kind,
+            route,
+            is_quit,
+            is_write,
         }
     }
 }

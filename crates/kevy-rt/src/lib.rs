@@ -136,6 +136,31 @@ pub trait Commands: Clone + Send + 'static {
     fn is_write(&self, args: &Argv) -> bool;
     /// Transaction-control classification (MULTI/EXEC/DISCARD vs anything else).
     fn txn_kind(&self, args: &Argv) -> TxnKind;
+
+    /// Resolve all verb-dependent attributes in **one** verb-table lookup.
+    /// The default implementation calls the four per-attribute methods above
+    /// (four upper_verb scans + matches); concrete impls SHOULD override this
+    /// with a single match so the reactor's hot path pays the verb-resolution
+    /// cost only once per command.
+    fn resolve(&self, args: &Argv) -> ResolvedCmd {
+        ResolvedCmd {
+            txn_kind: self.txn_kind(args),
+            route: self.route(args),
+            is_quit: self.is_quit(args),
+            is_write: self.is_write(args),
+        }
+    }
+}
+
+/// Per-command verb-resolution result. Produced once by [`Commands::resolve`]
+/// in the reactor's parse-then-dispatch loop, reused for routing decisions,
+/// AOF logging, and the QUIT branch — so the per-cmd `upper_verb` cost goes
+/// from 4× down to 1×.
+pub struct ResolvedCmd {
+    pub txn_kind: TxnKind,
+    pub route: Route,
+    pub is_quit: bool,
+    pub is_write: bool,
 }
 
 /// Transaction-control classification for a command.
