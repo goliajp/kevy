@@ -463,7 +463,12 @@ impl<C: Commands> Shard<C> {
     /// Flush each shard's accumulated pub/sub batch as one cross-core message —
     /// a flood of PUBLISHes costs one send per target shard per drain, not one
     /// per message. Call once per reactor loop iteration.
+    #[inline]
     pub(crate) fn flush_publish(&mut self) {
+        // Outer-empty short-circuit: the common hot path has no pub/sub.
+        if self.publish_batch.iter().all(|b| b.is_empty()) {
+            return;
+        }
         for s in 0..self.nshards {
             if s == self.id || self.publish_batch[s].is_empty() {
                 continue;
@@ -476,7 +481,12 @@ impl<C: Commands> Shard<C> {
     /// Flush each shard's accumulated single-key dispatch batch as one
     /// cross-core `RequestBatch` — a -c50 flood costs one send per target shard
     /// per loop, not one per command. Call once per reactor loop iteration.
+    #[inline]
     pub(crate) fn flush_requests(&mut self) {
+        // Outer-empty short-circuit: single-shard never has cross-shard reqs.
+        if self.request_batch.iter().all(|b| b.is_empty()) {
+            return;
+        }
         for s in 0..self.nshards {
             if s == self.id || self.request_batch[s].is_empty() {
                 continue;

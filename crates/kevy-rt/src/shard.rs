@@ -157,22 +157,26 @@ impl<C: Commands> Shard<C> {
                 self.parked[me].store(false, Ordering::SeqCst);
             }
 
-            let events = std::mem::take(&mut self.events);
-            let mut did_work = !events.is_empty();
-            for ev in &events {
-                if ev.fd == listener_fd {
-                    self.accept_ready()?;
-                } else if ev.fd == waker_fd {
-                    self.waker.drain();
-                } else if let Some(&conn_id) = self.fd_to_conn.get(&ev.fd) {
-                    if ev.readable || ev.hup {
-                        self.conn_readable(conn_id)?;
-                    } else if ev.writable {
-                        self.flush_conn(conn_id)?;
+            let mut did_work = !self.events.is_empty();
+            if did_work {
+                // mem::take only when there's actually work, avoids two Vec
+                // moves per empty iter (timeout=Some(0) often returns 0).
+                let events = std::mem::take(&mut self.events);
+                for ev in &events {
+                    if ev.fd == listener_fd {
+                        self.accept_ready()?;
+                    } else if ev.fd == waker_fd {
+                        self.waker.drain();
+                    } else if let Some(&conn_id) = self.fd_to_conn.get(&ev.fd) {
+                        if ev.readable || ev.hup {
+                            self.conn_readable(conn_id)?;
+                        } else if ev.writable {
+                            self.flush_conn(conn_id)?;
+                        }
                     }
                 }
+                self.events = events;
             }
-            self.events = events;
 
             // Messages from other cores (forwarded requests + replies to ours).
             if self.drain_inbound()? {
@@ -209,6 +213,12 @@ impl<C: Commands> Shard<C> {
     /// A spinning peer needs no syscall — it will see the message on its next
     /// poll(0). This is what removes the per-message wakeup under load.
     pub(crate) fn flush_wakes(&mut self) {
+        // Fast-path single-shard: pending_wakes is len-nshards; in the common
+        // single-shard benchmark this loop runs nshards times even when no
+        // wakes are pending. Skip outright when nothing's flagged.
+        if !self.pending_wakes.iter().any(|&w| w) {
+            return;
+        }
         for i in 0..self.pending_wakes.len() {
             if self.pending_wakes[i] {
                 self.pending_wakes[i] = false;
@@ -221,7 +231,11 @@ impl<C: Commands> Shard<C> {
 
     /// Flush connections a PUBLISH appended output to this iteration (epoll path;
     /// the io_uring reactor flushes them via its arm/write loop instead).
+    #[inline]
     fn flush_dirty(&mut self) -> io::Result<()> {
+        if self.dirty.is_empty() {
+            return Ok(());
+        }
         while let Some(id) = self.dirty.pop() {
             self.flush_conn(id)?;
         }
@@ -344,7 +358,13 @@ impl<C: Commands> Shard<C> {
 
     /// Re-push each per-target backlog into its ring (filled when a ring was full
     /// last iteration). Stops at the first target whose ring is still full.
+    #[inline]
     pub(crate) fn flush_backlog(&mut self) {
+        // Outer-empty short-circuit: in the hot single-shard / no-backlog
+        // path this avoids the nshards loop entirely.
+        if self.backlog.iter().all(|b| b.is_empty()) {
+            return;
+        }
         for dst in 0..self.nshards {
             if self.backlog[dst].is_empty() {
                 continue;
