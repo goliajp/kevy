@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+readme = "README.md"
 keywords = ["redis", "resp", "client", "valkey", "tcp"]
 categories = ["network-programming", "database"]
 
