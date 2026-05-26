@@ -247,8 +247,57 @@ impl Drop for SmallBytes {
 }
 
 impl Clone for SmallBytes {
+    /// Specialised clone that bypasses `as_slice → from_slice → alloc_heap`'s
+    /// two layered length checks. Inline variant is a bitwise union copy (no
+    /// branch through the slice path); heap variant goes straight to a single
+    /// `alloc + memcpy` keyed on the already-known heap length.
+    #[inline]
     fn clone(&self) -> Self {
-        Self::from_slice(self.as_slice())
+        if self.is_inline() {
+            // SAFETY: `Inline` is `repr(C)` + `Copy`; bitwise copy is sound
+            // when the source is currently in the inline variant (the tag
+            // byte ≤ 22 is part of the bit pattern we're copying, so the
+            // discriminator stays correct).
+            unsafe { Self { inline: self.inline } }
+        } else {
+            // SAFETY: tag > 22 ⇒ heap variant is active.
+            unsafe { self.clone_heap() }
+        }
+    }
+}
+
+impl SmallBytes {
+    /// Heap-fast-path clone. Caller must have established that `self` is in
+    /// the heap variant.
+    ///
+    /// # Safety
+    /// `self.heap` must be the active union variant (i.e. `is_inline()` is
+    /// false). `self.heap.ptr` must point to `self.heap.len` valid bytes.
+    #[inline]
+    unsafe fn clone_heap(&self) -> Self {
+        // SAFETY (covers the three `self.heap.*` reads): caller asserts the
+        // heap variant is active.
+        let (src_ptr, len) = unsafe { (self.heap.ptr.as_ptr(), self.heap.len) };
+        // `len > 22 ⇒ len > 0`, and the high bits are guarded by `CAP_MASK`
+        // never letting cap exceed 2^56, well below `isize::MAX`, so the
+        // unchecked layout is sound. Allocator alignment for `u8` is 1.
+        let layout = unsafe { Layout::from_size_align_unchecked(len, 1) };
+        // SAFETY: layout.size() > 0.
+        let raw = unsafe { alloc(layout) };
+        let ptr = match NonNull::new(raw) {
+            Some(p) => p,
+            None => handle_alloc_error(layout),
+        };
+        // SAFETY: src has `len` valid bytes; dst is freshly-allocated for `len`
+        // bytes; regions are disjoint.
+        unsafe { std::ptr::copy_nonoverlapping(src_ptr, ptr.as_ptr(), len) };
+        Self {
+            heap: Heap {
+                ptr,
+                len,
+                cap_and_tag: TAG_HEAP_BIT | (len & CAP_MASK),
+            },
+        }
     }
 }
 
@@ -260,8 +309,53 @@ impl fmt::Debug for SmallBytes {
 }
 
 impl PartialEq for SmallBytes {
+    /// Specialised over the slice form (`as_slice == as_slice`) by branching
+    /// on variant **once** and reading the relevant length / pointer pair
+    /// directly. Same-variant cases (inline/inline + heap/heap, which are the
+    /// only ones produced by a single allocator) skip a redundant `as_slice`
+    /// dispatch on each side; the mixed case falls back to the slice form.
+    #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.as_slice() == other.as_slice()
+        // SAFETY: byte 23 (`inline.tag`) is always a valid load in either
+        // variant — it's either the inline-length 0..=22 or 0xFF as the
+        // heap-discriminator overlap (see crate doc).
+        let self_tag = unsafe { self.inline.tag };
+        let other_tag = unsafe { other.inline.tag };
+        let self_inline = self_tag <= INLINE_LEN_MAX;
+        let other_inline = other_tag <= INLINE_LEN_MAX;
+        match (self_inline, other_inline) {
+            (true, true) => {
+                let len = self_tag as usize;
+                if len != other_tag as usize {
+                    return false;
+                }
+                // SAFETY: both in inline variant; first `len` bytes valid.
+                let a = unsafe {
+                    slice::from_raw_parts(self.inline.data.as_ptr(), len)
+                };
+                let b = unsafe {
+                    slice::from_raw_parts(other.inline.data.as_ptr(), len)
+                };
+                a == b
+            }
+            (false, false) => {
+                // SAFETY: both in heap variant.
+                let (a_len, b_len) =
+                    unsafe { (self.heap.len, other.heap.len) };
+                if a_len != b_len {
+                    return false;
+                }
+                // SAFETY: heap pointers + len are valid.
+                let a = unsafe {
+                    slice::from_raw_parts(self.heap.ptr.as_ptr(), a_len)
+                };
+                let b = unsafe {
+                    slice::from_raw_parts(other.heap.ptr.as_ptr(), b_len)
+                };
+                a == b
+            }
+            _ => self.as_slice() == other.as_slice(),
+        }
     }
 }
 impl Eq for SmallBytes {}
