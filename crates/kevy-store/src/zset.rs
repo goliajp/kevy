@@ -13,7 +13,7 @@ impl Store {
                 return Ok(None);
             }
             self.map.insert(
-                key.to_vec(),
+                SmallBytes::from_slice(key),
                 Entry {
                     value: Value::ZSet(Box::default()),
                     expire_at: None,
@@ -66,7 +66,7 @@ impl Store {
     pub fn zrem(&mut self, key: &[u8], members: &[Vec<u8>]) -> Result<usize, StoreError> {
         let removed = match self.zset_mut(key, false)? {
             None => 0,
-            Some(z) => members.iter().filter(|m| z.remove(m)).count(),
+            Some(z) => members.iter().filter(|m| z.remove(m.as_slice())).count(),
         };
         self.drop_if_empty_zset(key);
         Ok(removed)

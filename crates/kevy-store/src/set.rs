@@ -12,7 +12,7 @@ impl Store {
                 return Ok(None);
             }
             self.map.insert(
-                key.to_vec(),
+                SmallBytes::from_slice(key),
                 Entry {
                     value: Value::Set(Box::default()),
                     expire_at: None,
@@ -46,14 +46,17 @@ impl Store {
     /// `SADD` — returns the count of newly-added members.
     pub fn sadd(&mut self, key: &[u8], members: &[Vec<u8>]) -> Result<usize, StoreError> {
         let s = self.set_mut(key, true)?.expect("created");
-        Ok(members.iter().filter(|m| s.insert((*m).clone())).count())
+        Ok(members
+            .iter()
+            .filter(|m| s.insert(SmallBytes::from_slice(m)))
+            .count())
     }
 
     /// `SREM` — returns the count removed (deleting an emptied key).
     pub fn srem(&mut self, key: &[u8], members: &[Vec<u8>]) -> Result<usize, StoreError> {
         let removed = match self.set_mut(key, false)? {
             None => 0,
-            Some(s) => members.iter().filter(|m| s.remove(*m)).count(),
+            Some(s) => members.iter().filter(|m| s.remove(m.as_slice())).count(),
         };
         self.drop_if_empty_set(key);
         Ok(removed)
@@ -70,7 +73,7 @@ impl Store {
     pub fn smembers(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
         Ok(self
             .set_ref(key)?
-            .map_or(Vec::new(), |s| s.iter().cloned().collect()))
+            .map_or(Vec::new(), |s| s.iter().map(|m| m.to_vec()).collect()))
     }
 
     /// `SPOP key count` — remove and return up to `count` arbitrary members.
@@ -78,9 +81,9 @@ impl Store {
         let out = match self.set_mut(key, false)? {
             None => Vec::new(),
             Some(s) => {
-                let take: Vec<Vec<u8>> = s.iter().take(count).cloned().collect();
+                let take: Vec<Vec<u8>> = s.iter().take(count).map(|m| m.to_vec()).collect();
                 for m in &take {
-                    s.remove(m);
+                    s.remove(m.as_slice());
                 }
                 take
             }
@@ -93,7 +96,9 @@ impl Store {
     pub fn srandmember(&mut self, key: &[u8], count: usize) -> Result<Vec<Vec<u8>>, StoreError> {
         Ok(self
             .set_ref(key)?
-            .map_or(Vec::new(), |s| s.iter().take(count).cloned().collect()))
+            .map_or(Vec::new(), |s| {
+                s.iter().take(count).map(|m| m.to_vec()).collect()
+            }))
     }
 
     /// Snapshot of a set's members for cross-shard algebra (SINTER/etc.).

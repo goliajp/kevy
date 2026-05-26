@@ -16,7 +16,7 @@ impl Store {
                 return Ok(None);
             }
             self.map.insert(
-                key.to_vec(),
+                SmallBytes::from_slice(key),
                 Entry {
                     value: Value::Hash(Box::default()),
                     expire_at: None,
@@ -45,7 +45,7 @@ impl Store {
         let h = self.hash_mut(key, true)?.expect("created");
         let mut added = 0;
         for (f, v) in pairs {
-            if h.insert(f.clone(), v.clone()).is_none() {
+            if h.insert(SmallBytes::from_slice(f), v.clone()).is_none() {
                 added += 1;
             }
         }
@@ -62,7 +62,7 @@ impl Store {
             }
             return Ok(false);
         }
-        h.insert(field.to_vec(), val.to_vec());
+        h.insert(SmallBytes::from_slice(field), val.to_vec());
         Ok(true)
     }
 
@@ -89,7 +89,7 @@ impl Store {
         let h = self.hash_ref(key)?;
         Ok(fields
             .iter()
-            .map(|f| h.and_then(|h| h.get(f)).cloned())
+            .map(|f| h.and_then(|h| h.get(f.as_slice())).cloned())
             .collect())
     }
 
@@ -100,7 +100,7 @@ impl Store {
             Some(h) => {
                 let mut out = Vec::with_capacity(h.len() * 2);
                 for (f, v) in h {
-                    out.push(f.clone());
+                    out.push(f.to_vec());
                     out.push(v.clone());
                 }
                 Ok(out)
@@ -111,7 +111,7 @@ impl Store {
     pub fn hkeys(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
         Ok(self
             .hash_ref(key)?
-            .map_or(Vec::new(), |h| h.keys().cloned().collect()))
+            .map_or(Vec::new(), |h| h.keys().map(|k| k.to_vec()).collect()))
     }
 
     pub fn hvals(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
@@ -127,7 +127,10 @@ impl Store {
             return Ok(0);
         }
         let removed = match &mut self.map.get_mut(key).expect("live").value {
-            Value::Hash(h) => fields.iter().filter(|f| h.remove(*f).is_some()).count(),
+            Value::Hash(h) => fields
+                .iter()
+                .filter(|f| h.remove(f.as_slice()).is_some())
+                .count(),
             _ => return Err(StoreError::WrongType),
         };
         if let Some(Value::Hash(h)) = self.map.get(key).map(|e| &e.value)
@@ -146,7 +149,7 @@ impl Store {
             None => 0,
         };
         let next = cur.checked_add(delta).ok_or(StoreError::Overflow)?;
-        h.insert(field.to_vec(), next.to_string().into_bytes());
+        h.insert(SmallBytes::from_slice(field), next.to_string().into_bytes());
         Ok(next)
     }
 }
