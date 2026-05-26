@@ -52,6 +52,8 @@
 //! prod.join().unwrap();
 //! ```
 
+#![warn(missing_docs)]
+
 use std::cell::UnsafeCell;
 use std::mem::MaybeUninit;
 use std::sync::Arc;

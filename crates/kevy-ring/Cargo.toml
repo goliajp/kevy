@@ -1,6 +1,6 @@
 [package]
 name = "kevy-ring"
-description = "Lock-free bounded single-producer/single-consumer ring buffer for kevy — pure Rust, zero deps."
+description = "Lock-free bounded SPSC ring buffer. Pure Rust."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
