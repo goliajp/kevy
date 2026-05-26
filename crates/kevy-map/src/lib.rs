@@ -43,10 +43,13 @@ fn h2(hash: u64) -> u8 {
 }
 
 /// Issue a hint to fetch the cache line containing `ptr` into L1 ("T0" =
-/// "all levels"). Stable on x86_64 / aarch64; no-op elsewhere.
+/// "all levels"). Stable on x86_64 / aarch64; no-op elsewhere AND under
+/// `cfg(miri)` (miri cannot model inline asm / arch intrinsics, so the hint
+/// degrades to a no-op for unsafe-correctness testing — the semantic
+/// contract of `prefetch_t0` is "may do nothing", so this is sound).
 #[inline(always)]
 fn prefetch_t0(ptr: *const u8) {
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", not(miri)))]
     {
         // SAFETY: _mm_prefetch reads no memory; any aligned/unaligned/
         // out-of-bounds pointer is permitted by the ISA.
@@ -57,7 +60,7 @@ fn prefetch_t0(ptr: *const u8) {
             );
         }
     }
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(all(target_arch = "aarch64", not(miri)))]
     {
         // SAFETY: prfm reads no memory; any pointer permitted.
         unsafe {
@@ -68,7 +71,7 @@ fn prefetch_t0(ptr: *const u8) {
             );
         }
     }
-    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    #[cfg(any(miri, not(any(target_arch = "x86_64", target_arch = "aarch64"))))]
     {
         let _ = ptr;
     }
