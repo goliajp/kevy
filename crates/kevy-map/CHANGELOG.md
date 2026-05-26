@@ -13,12 +13,11 @@ this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - Initial release of `KevyMap<K, V>` — open-addressing Swiss-table-style
   hashtable with SIMD probing on x86_64 + aarch64.
-- `bucket_addr_for(&K) -> *const u8` exposing the underlying slot pointer
-  for caller-driven prefetch (the key kevy-rt hot-path mechanism for
-  hiding DRAM latency at 10M+ keys).
-- `KevyMap::prefetch_t0(ptr)` wrapper around `_mm_prefetch` / `prfm` (LE
-  64-bit x86_64 + aarch64; semantic no-op elsewhere and under miri).
-- Drop-in `insert`/`get`/`remove`/`len`/`is_empty`/`with_capacity`/`iter`.
+- `KevyMap::prefetch_for_hash(hash)` — hint the next bucket cache line
+  into L1 via `prefetcht0` (x86_64) / `prfm pldl1keep` (aarch64); the key
+  kevy-rt hot-path mechanism for hiding DRAM latency at 10M+ keys.
+- Drop-in `insert`/`get`/`get_mut`/`remove`/`len`/`is_empty`/`with_capacity`/`iter`.
+- `KevyHash` trait bound (re-exported via `kevy-hash`).
 
 ### Verified
 

@@ -60,10 +60,12 @@ kevy-bench (the smallest stone) packaged in **3.8 KB compressed** (5 files,
 8.1 KB uncompressed). The doc-heavy stones (kevy-bytes etc.) will be
 larger; will be re-measured once each is packaged end-to-end after Phase E.
 
-## Smoke install (`/tmp/kevy-smoke`)
+## Smoke installs (`/tmp/kevy-smoke`, `/tmp/kevy-smoke-multi`)
 
-Created a one-binary external consumer that path-deps `kevy-bytes` and
-runs the README example unchanged:
+### kevy-bytes single-stone smoke
+
+A one-binary external consumer that path-deps `kevy-bytes` and runs the
+README example unchanged:
 
 ```toml
 [dependencies]
@@ -91,6 +93,21 @@ kevy-bytes smoke OK: inline.len=5, heap.len=64
 
 ✅ External consumer integration works. This is the strongest signal that
 the published artifact will be usable in real downstream code.
+
+### Multi-stone smoke (5 of 6 publish targets)
+
+A second one-binary consumer at `/tmp/kevy-smoke-multi` path-deps **all
+5 stones that don't transitively need kevy-sys**: `kevy-bytes`, `kevy-hash`,
+`kevy-ring`, `kevy-resp`, `kevy-resp-client`. Each is exercised with its
+README example:
+
+```
+kevy-smoke-multi OK: 5 stones consumed cleanly
+```
+
+`kevy-map` is omitted from this smoke because it depends on `kevy-sys`
+(currently cement, not a publish target this round — see backlog in
+`ROADMAP.md` for the "graduate kevy-sys" item).
 
 ## `cargo publish --dry-run` results
 
