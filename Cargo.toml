@@ -29,6 +29,9 @@ edition = "2024"
 rust-version = "1.95"
 authors = ["GOLIA K.K."]
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/golia-kk/kevy"
+homepage = "https://github.com/golia-kk/kevy"
+documentation = "https://docs.rs/kevy"
 
 [profile.release]
 opt-level = 3
