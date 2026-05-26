@@ -1,0 +1,34 @@
+[package]
+name = "kevy-resp-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Fuzz workspace is intentionally isolated from the main workspace
+# (cargo-fuzz pulls libfuzzer-sys, a third-party crate; main charter is
+# "0 crates.io deps"). The fuzz/ dir is a dev-only adjunct, not part of
+# the published crate.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.kevy-resp]
+path = ".."
+
+[[bin]]
+name = "parse_command"
+path = "fuzz_targets/parse_command.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_reply"
+path = "fuzz_targets/parse_reply.rs"
+test = false
+doc = false
+bench = false

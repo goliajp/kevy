@@ -33,6 +33,7 @@
 //! assert_eq!(out, b"+PONG\r\n$2\r\nhi\r\n");
 //! ```
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 /// A parsed command's argument vector.
 ///
@@ -503,7 +504,15 @@ fn parse_array_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError
         return Ok(Some((Reply::Nil, hdr_end + 2)));
     }
     let mut pos = hdr_end + 2;
-    let mut items = Vec::with_capacity(count as usize);
+    // Cap initial capacity by remaining buffer bytes — an attacker-controlled
+    // `*999999999999\r\n` header would otherwise panic via `Vec::with_capacity`'s
+    // capacity overflow. Each item costs ≥ 1 byte (a CRLF for Nil/Int/Simple),
+    // so a real array of N items needs ≥ N bytes left. Push will grow the vec
+    // amortized if the genuine count is higher but bytes are present. Found by
+    // cargo-fuzz against crash-4c4ee6777903d009f93289eb428b3b371d027137 during
+    // STONE-AUDIT Phase A #4 (2026-05-26).
+    let cap = (count as usize).min(buf.len().saturating_sub(pos));
+    let mut items = Vec::with_capacity(cap);
     for _ in 0..count {
         match parse_reply(&buf[pos..])? {
             None => return Ok(None),
