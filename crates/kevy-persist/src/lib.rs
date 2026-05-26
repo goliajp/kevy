@@ -177,7 +177,7 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
             write_bytes(w, key)?;
             w.write_all(&(h.len() as u32).to_le_bytes())?;
             for (f, v) in h.iter() {
-                write_bytes(w, f)?;
+                write_bytes(w, f.as_slice())?;
                 write_bytes(w, v)?;
             }
         }
@@ -196,7 +196,7 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
             write_bytes(w, key)?;
             w.write_all(&(set.len() as u32).to_le_bytes())?;
             for m in set.iter() {
-                write_bytes(w, m)?;
+                write_bytes(w, m.as_slice())?;
             }
         }
         Value::ZSet(z) => {

@@ -37,7 +37,7 @@ impl Store {
                     return false;
                 }
                 self.map.insert(
-                    key.to_vec(),
+                    SmallBytes::from_slice(key),
                     Entry {
                         value: Value::Str(SmallBytes::from_vec(value)),
                         expire_at,
@@ -77,7 +77,7 @@ impl Store {
             },
             None => {
                 self.map.insert(
-                    key.to_vec(),
+                    SmallBytes::from_slice(key),
                     Entry {
                         value: Value::Str(SmallBytes::from_slice(data)),
                         expire_at: None,
@@ -105,7 +105,7 @@ impl Store {
             // Absent/expired ⇒ start from 0; 0 + delta can't overflow i64.
             None => {
                 self.map.insert(
-                    key.to_vec(),
+                    SmallBytes::from_slice(key),
                     Entry {
                         value: Value::Str(SmallBytes::from_vec(delta.to_string().into_bytes())),
                         expire_at: None,
@@ -127,7 +127,7 @@ impl Store {
             None => None,
         };
         self.map.insert(
-            key.to_vec(),
+            SmallBytes::from_slice(key),
             Entry {
                 value: Value::Str(SmallBytes::from_vec(val)),
                 expire_at: None,
@@ -176,7 +176,7 @@ impl Store {
                 }
                 let bytes = fmt_num(delta);
                 self.map.insert(
-                    key.to_vec(),
+                    SmallBytes::from_slice(key),
                     Entry {
                         value: Value::Str(SmallBytes::from_slice(&bytes)),
                         expire_at: None,

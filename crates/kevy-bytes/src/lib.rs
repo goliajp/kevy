@@ -282,6 +282,15 @@ impl std::borrow::Borrow<[u8]> for SmallBytes {
     }
 }
 
+/// `KevyHash` agrees with the byte-slice impl, so a `KevyMap<SmallBytes, V>`
+/// can be queried with `&[u8]` (via `Borrow<[u8]>`) and the hash matches.
+impl kevy_hash::KevyHash for SmallBytes {
+    #[inline]
+    fn kevy_hash(&self) -> u64 {
+        self.as_slice().kevy_hash()
+    }
+}
+
 impl From<&[u8]> for SmallBytes {
     fn from(bytes: &[u8]) -> Self {
         Self::from_slice(bytes)

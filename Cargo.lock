@@ -20,6 +20,9 @@ version = "0.1.0"
 [[package]]
 name = "kevy-bytes"
 version = "0.1.0"
+dependencies = [
+ "kevy-hash",
+]
 
 [[package]]
 name = "kevy-cli"

@@ -10,3 +10,4 @@ keywords = ["sso", "small-string", "bytes", "inline"]
 categories = ["data-structures", "memory-management"]
 
 [dependencies]
+kevy-hash = { path = "../kevy-hash", version = "0.1" }

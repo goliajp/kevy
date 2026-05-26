@@ -13,7 +13,7 @@ impl Store {
                 return Ok(None);
             }
             self.map.insert(
-                key.to_vec(),
+                SmallBytes::from_slice(key),
                 Entry {
                     value: Value::List(Box::default()),
                     expire_at: None,

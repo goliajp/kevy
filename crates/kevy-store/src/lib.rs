@@ -82,7 +82,7 @@ pub enum StoreError {
 /// driver — see v0.metal-5 hot plan.
 #[derive(Default)]
 pub struct Store {
-    pub(crate) map: KevyMap<Vec<u8>, Entry>,
+    pub(crate) map: KevyMap<SmallBytes, Entry>,
 }
 
 impl Store {
@@ -161,7 +161,7 @@ impl Store {
         let now = Instant::now();
         let mut removed = 0;
         for k in keys {
-            if self.reap(k, now) && self.map.remove(k).is_some() {
+            if self.reap(k, now) && self.map.remove(k.as_slice()).is_some() {
                 removed += 1;
             }
         }
@@ -239,13 +239,14 @@ impl Store {
             let ttl = e
                 .expire_at
                 .map(|t| t.saturating_duration_since(now).as_millis() as u64);
-            f(k, &e.value, ttl);
+            f(k.as_slice(), &e.value, ttl);
         }
     }
 
     fn insert_loaded(&mut self, key: Vec<u8>, value: Value, ttl_ms: Option<u64>) {
         let expire_at = ttl_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
-        self.map.insert(key, Entry { value, expire_at });
+        self.map
+            .insert(SmallBytes::from_vec(key), Entry { value, expire_at });
     }
 
     pub fn load_str(&mut self, key: Vec<u8>, value: Vec<u8>, ttl_ms: Option<u64>) {
@@ -258,7 +259,12 @@ impl Store {
         fields: Vec<(Vec<u8>, Vec<u8>)>,
         ttl_ms: Option<u64>,
     ) {
-        self.insert_loaded(key, Value::Hash(Box::new(fields.into_iter().collect())), ttl_ms);
+        // Hash keys are SmallBytes; values stay Vec<u8>. From-iter converts.
+        let hash_data: HashData = fields
+            .into_iter()
+            .map(|(f, v)| (SmallBytes::from_vec(f), v))
+            .collect();
+        self.insert_loaded(key, Value::Hash(Box::new(hash_data)), ttl_ms);
     }
 
     pub fn load_list(&mut self, key: Vec<u8>, items: Vec<Vec<u8>>, ttl_ms: Option<u64>) {
@@ -266,7 +272,8 @@ impl Store {
     }
 
     pub fn load_set(&mut self, key: Vec<u8>, members: Vec<Vec<u8>>, ttl_ms: Option<u64>) {
-        self.insert_loaded(key, Value::Set(Box::new(members.into_iter().collect())), ttl_ms);
+        let set_data: SetData = members.into_iter().map(SmallBytes::from_vec).collect();
+        self.insert_loaded(key, Value::Set(Box::new(set_data)), ttl_ms);
     }
 
     /// Collect live keys (optionally matching a glob `pattern`, up to `limit`).
@@ -279,11 +286,11 @@ impl Store {
                 continue;
             }
             if let Some(p) = pattern
-                && !glob_match(p, k)
+                && !glob_match(p, k.as_slice())
             {
                 continue;
             }
-            out.push(k.clone());
+            out.push(k.to_vec());
             if limit.is_some_and(|lim| out.len() >= lim) {
                 break;
             }

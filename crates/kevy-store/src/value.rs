@@ -5,14 +5,15 @@ use kevy_map::{KevyMap, KevySet};
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
 
-/// Backing structure for a Hash value — [`KevyMap`] (open-addressing Swiss
-/// table, kevy-hash one-call hasher, no DoS hardening — same-shaped wins as
-/// the keyspace map).
-pub type HashData = KevyMap<Vec<u8>, Vec<u8>>;
+/// Backing structure for a Hash value — [`KevyMap`] keyed by [`SmallBytes`]
+/// (22 B inline / heap-else). Field names ≤22B (the vast majority — `name`,
+/// `email`, etc.) live entirely inside the bucket, saving the 24 B Vec
+/// metadata + heap allocation per field on a 22-byte budget.
+pub type HashData = KevyMap<SmallBytes, Vec<u8>>;
 /// Backing structure for a List value (a ring-buffer deque — O(1) both ends).
 pub type ListData = VecDeque<Vec<u8>>;
-/// Backing structure for a Set value — [`KevySet`] wrapper over `KevyMap<K, ()>`.
-pub type SetData = KevySet<Vec<u8>>;
+/// Backing structure for a Set value — [`KevySet`] of [`SmallBytes`].
+pub type SetData = KevySet<SmallBytes>;
 
 /// A total-ordered f64 score (Redis scores are never NaN). `total_cmp` gives a
 /// total order so scores can key a `BTreeSet`.
@@ -60,13 +61,17 @@ impl ScoreBound {
 /// an order-statistics tree for O(log n) rank is a later perf item.)
 #[derive(Default)]
 pub struct ZSetData {
-    pub(crate) by_member: KevyMap<Vec<u8>, f64>,
+    pub(crate) by_member: KevyMap<SmallBytes, f64>,
+    /// The `(score, member)` index is still keyed by `Vec<u8>` member —
+    /// changing this requires the `BTreeSet` to accept a `(Score,
+    /// SmallBytes)` ordering, which is fine but a larger sweep; keep
+    /// it as-is for v0.metal-13 to avoid touching ZRANGE paths.
     pub(crate) by_score: BTreeSet<(Score, Vec<u8>)>,
 }
 
 impl ZSetData {
     pub(crate) fn insert(&mut self, member: &[u8], score: f64) -> bool {
-        let is_new = match self.by_member.insert(member.to_vec(), score) {
+        let is_new = match self.by_member.insert(SmallBytes::from_slice(member), score) {
             Some(old) => {
                 self.by_score.remove(&(Score(old), member.to_vec()));
                 false
