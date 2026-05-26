@@ -1,0 +1,13 @@
+[package]
+name = "kevy-map"
+description = "Open-addressing Swiss-style hashtable tuned for kevy's keyspace — pure Rust, zero deps. Exposes bucket addresses for software prefetch."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+keywords = ["hashmap", "hashtable", "open-addressing", "swiss", "prefetch"]
+categories = ["data-structures"]
+
+[dependencies]
+kevy-hash = { path = "../kevy-hash", version = "0.1" }
