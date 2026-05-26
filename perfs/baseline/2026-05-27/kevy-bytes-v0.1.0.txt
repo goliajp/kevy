@@ -1,0 +1,28 @@
+   Compiling kevy-hash v0.1.0 (/Users/doracawl/workspace/labs/lab21-kv/crates/kevy-hash)
+   Compiling kevy-bench v0.1.0 (/Users/doracawl/workspace/labs/lab21-kv/crates/kevy-bench)
+   Compiling kevy-bytes v0.1.0 (/Users/doracawl/workspace/labs/lab21-kv/crates/kevy-bytes)
+    Finished `release` profile [optimized] target(s) in 4.51s
+     Running `/Volumes/INTEL2T/workspace-cache/cargo-target/release/examples/bench_sso`
+kevy-bytes SmallBytes micro-bench — vs Vec<u8> baseline
+(ratios are the signal; absolutes drift on a loaded host)
+
+== from_slice (construct from &[u8]) ==
+  SmallBytes::from_slice (12B, inline) median        3 ns   p95        4 ns   min        2 ns
+  Vec::from           (12B)          median       17 ns   p95       23 ns   min       13 ns
+  ratio (Vec / SmallBytes inline) = 5.67×
+
+  SmallBytes::from_slice (64B, heap)  median       17 ns   p95       24 ns   min       13 ns
+  Vec::from           (64B)          median       15 ns   p95       32 ns   min       13 ns
+
+== clone (deep copy) ==
+  SmallBytes clone (12B, inline)     median        4 ns   p95       15 ns   min        3 ns
+  Vec clone        (12B)             median       14 ns   p95       20 ns   min       13 ns
+  ratio (Vec / SmallBytes inline) = 3.50×
+
+== as_slice (read borrow; no alloc) ==
+  SmallBytes as_slice (inline)       median        0 ns   p95        0 ns   min        0 ns
+  Vec as_slice                       median        0 ns   p95        0 ns   min        0 ns
+
+== len ==
+  SmallBytes len   (inline)          median        0 ns   p95        0 ns   min        0 ns
+  Vec len                            median        0 ns   p95        0 ns   min        0 ns

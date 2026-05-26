@@ -1,0 +1,19 @@
+   Compiling kevy-madvise v0.1.0 (/Users/doracawl/workspace/labs/lab21-kv/crates/kevy-madvise)
+   Compiling kevy-map v0.1.0 (/Users/doracawl/workspace/labs/lab21-kv/crates/kevy-map)
+    Finished `release` profile [optimized] target(s) in 5.24s
+     Running `/Volumes/INTEL2T/workspace-cache/cargo-target/release/examples/bench_vs_std`
+kevy-map vs std::HashMap (FxBuildHasher) micro-bench
+byte-string keys; ratios are the signal, absolutes drift on a loaded host
+
+== n = 256 keys ==
+  insert  KevyMap=26 ns/op  std+Fx=22 ns/op  ratio=0.85×
+  get-hit KevyMap=4 ns/op  std+Fx=4 ns/op  ratio=1.00×
+
+== n = 4096 keys ==
+  insert  KevyMap=36 ns/op  std+Fx=33 ns/op  ratio=0.92×
+  get-hit KevyMap=5 ns/op  std+Fx=7 ns/op  ratio=1.40×
+
+== n = 65536 keys ==
+  insert  KevyMap=57 ns/op  std+Fx=54 ns/op  ratio=0.95×
+  get-hit KevyMap=15 ns/op  std+Fx=13 ns/op  ratio=0.87×
+
