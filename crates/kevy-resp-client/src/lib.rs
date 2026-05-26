@@ -7,7 +7,7 @@
 //! Single-threaded; one client per thread. Holds an incremental read buffer
 //! so multi-segment replies reassemble across `read` calls.
 //!
-//! Pure Rust, only deps are `std` + [`kevy-resp`].
+//! Pure Rust, only deps are `std` + [`kevy_resp`].
 //!
 //! # Example
 //!
