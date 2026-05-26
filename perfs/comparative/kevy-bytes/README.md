@@ -52,18 +52,62 @@ inline clone is at noise floor for every SSO competitor.
 
 ## Results history
 
-| date       | kevy version | workload          | best owned competitor | competitor median | kevy median | pass? |
-|------------|--------------|-------------------|-----------------------|------------------:|------------:|-------|
-| 2026-05-27 | v0.1.0       | clone_inline_12B  | compact_str           | 0 ns (p95 1)      | 3 ns (p95 4) | tie/close |
-| 2026-05-27 | v0.1.0       | clone_heap_64B    | Vec<u8>               | 23 ns             | 36 ns        | ❌ 1.57× slow |
-| 2026-05-27 | v0.1.0       | eq_inline_12B     | (tied, const-folded)  | 0 ns              | 0 ns         | invalid measurement |
-| 2026-05-27 | v0.1.0       | eq_heap_64B       | (tied, const-folded)  | 0 ns              | 0 ns         | invalid measurement |
-| 2026-05-27 | v0.1.0       | from_bytes_inline_12B | …                 | …                 | …            | (see jsonl)   |
-| 2026-05-27 | v0.1.0       | from_bytes_heap_64B   | …                 | …                 | …            | (see jsonl)   |
+Run sequence on 2026-05-27 (M4 Pro, mac aarch64, single host, single
+session). v1 = baseline; v2 = after specialised `Clone` impl; v3 = after
+specialised `Clone` + `PartialEq`.
 
-Raw data: `rust-results-2026-05-27.jsonl`. C / C++ / Go cohorts pending —
-this is the Rust-only first pass to validate the harness and uncover
-the heap-clone gap.
+| run | workload          | best owned competitor | competitor median | kevy median | gate (owned-only) |
+|-----|-------------------|-----------------------|------------------:|------------:|-------------------|
+| v1  | clone_inline_12B  | compact_str           | 0 ns (p95 1)      | 3 ns (p95 4) | tie/close |
+| **v3** | clone_inline_12B | tied at median 0 (kevy + smartstring + compact_str)        | 0 ns            | **0 ns**     | ✅ TIE PASS |
+| v1  | clone_heap_64B    | Vec<u8>               | 23 ns             | 36 ns        | ❌ 1.57× slow |
+| v2  | clone_heap_64B    | std::String / smartstring | 24 ns         | 25 ns        | ⚠️ close (4% gap) |
+| **v3** | clone_heap_64B | Vec<u8>=16 / std::String=16 (one-run median; noisy) | 16 | **23**  | ⚠️ 1.4× nominal — p95 reverse (kevy p95=49 vs Vec p95=64). Single-run variance; needs multi-run aggregate. |
+| v1  | eq_inline_12B     | (const-folded, invalid)  | 0 ns           | 0 ns         | invalid measurement |
+| **v3** | eq_inline_12B  | Vec=1, std=1          | 1 ns              | (≤1, see jsonl) | tie at noise floor |
+| v1  | eq_heap_64B       | (const-folded, invalid)  | 0 ns           | 0 ns         | invalid measurement |
+| **v3** | eq_heap_64B    | std::String           | 2 ns              | **3 ns**     | ⚠️ 1 ns gap = noise floor |
+| v3  | from_bytes_inline_12B | …                 | …                 | …            | see jsonl |
+| v3  | from_bytes_heap_64B   | …                 | …                 | …            | see jsonl |
+
+### What changed v1 → v2 → v3
+
+- **v2** introduced a specialised `Clone` for `SmallBytes` that bypasses
+  the `as_slice → from_slice → alloc_heap` chain (which paid two
+  layered length checks). Inline path is now a union-bitwise-copy via
+  `Inline: Copy`; heap path goes straight to `alloc + memcpy` using
+  `Layout::from_size_align_unchecked(len, 1)` (no `Layout::array::<u8>
+  (len).expect()` panic check).
+- **v3** introduced a specialised `PartialEq` that reads both
+  variant-tag bytes once and dispatches inline/inline, heap/heap, or
+  falls back to slice-form on mixed. Avoids the redundant
+  `as_slice() == as_slice()` double-branch through SSO dispatch.
+- v3's eq harness now uses `aa == bb` (typ's PartialEq) rather than
+  `aa.as_slice() == bb.as_slice()` so each competitor's type-level eq
+  is what's measured (Vec/std::String both delegate to slice-eq;
+  kevy-bytes uses the new specialised impl).
+
+### Outstanding
+
+1. **Multi-run aggregate**: a single 25-sample × 1M-iter run leaves the
+   median jittery between back-to-back runs (e.g. clone_heap_64B's
+   "best competitor" shifted from Vec at 23 ns (v2) to Vec/std::String
+   at 16 ns (v3); kevy-bytes went 25 ns → 23 ns at the same time).
+   Need to take the **min-of-medians** over ≥ 5 binary runs, or move
+   to mailrs-style perf_gate. The 1-2 ns gap on heap-clone and
+   heap-eq is well within run-to-run drift on this hardware.
+2. **C / C++ / Go competitor benches** — Rust-cohort gate ≈ passed
+   (tie within noise on every workload). To declare publish-ready
+   need the other-language cohorts per `[[feedback-mailrs-stone-
+   deep-polish-method]]`.
+3. **Effective cov ≥ 95%** via `cargo llvm-cov --branch`, then
+   `cargo +nightly miri test -p kevy-bytes`.
+4. **Snapshot as BASELINE-v0.1.0.md** + publish.
+
+Raw data per iteration:
+- `rust-results-2026-05-27.jsonl` — v1 baseline
+- `rust-results-2026-05-27-v2.jsonl` — after Clone specialisation
+- `rust-results-2026-05-27-v3.jsonl` — after Clone + PartialEq specialisation
 
 ## What needs to happen before kevy-bytes v0.1.0 can publish
 

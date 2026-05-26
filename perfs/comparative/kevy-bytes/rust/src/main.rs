@@ -162,32 +162,46 @@ fn main() {
         let a = SmallBytes::from_slice(short_b);
         let b = SmallBytes::from_slice(short_b);
         bench("kevy-bytes", "eq_inline_12B", || {
-            black_box(a.as_slice() == b.as_slice());
+            // Double black_box on inputs prevents the compiler from hoisting the
+            // (loop-invariant) comparison and storing only the precomputed bool.
+            let aa = black_box(&a);
+            let bb = black_box(&b);
+            black_box(aa == bb);
         });
         let a = Vec::<u8>::from(short_b);
         let b = Vec::<u8>::from(short_b);
         bench("Vec<u8>", "eq_inline_12B", || {
-            black_box(&a == &b);
+            let aa = black_box(&a);
+            let bb = black_box(&b);
+            black_box(aa == bb);
         });
         let a = std::string::String::from(short_s);
         let b = std::string::String::from(short_s);
         bench("std::String", "eq_inline_12B", || {
-            black_box(&a == &b);
+            let aa = black_box(&a);
+            let bb = black_box(&b);
+            black_box(aa == bb);
         });
         let a: SmartString = short_s.into();
         let b: SmartString = short_s.into();
         bench("smartstring", "eq_inline_12B", || {
-            black_box(&a == &b);
+            let aa = black_box(&a);
+            let bb = black_box(&b);
+            black_box(aa == bb);
         });
         let a: CompactString = short_s.into();
         let b: CompactString = short_s.into();
         bench("compact_str", "eq_inline_12B", || {
-            black_box(&a == &b);
+            let aa = black_box(&a);
+            let bb = black_box(&b);
+            black_box(aa == bb);
         });
         let a: SmolStr = short_s.into();
         let b: SmolStr = short_s.into();
         bench("smol_str", "eq_inline_12B", || {
-            black_box(&a == &b);
+            let aa = black_box(&a);
+            let bb = black_box(&b);
+            black_box(aa == bb);
         });
     }
 
@@ -196,32 +210,46 @@ fn main() {
         let a = SmallBytes::from_slice(&long_b);
         let b = SmallBytes::from_slice(&long_b);
         bench("kevy-bytes", "eq_heap_64B", || {
-            black_box(a.as_slice() == b.as_slice());
+            // Double black_box on inputs prevents the compiler from hoisting the
+            // (loop-invariant) comparison and storing only the precomputed bool.
+            let aa = black_box(&a);
+            let bb = black_box(&b);
+            black_box(aa == bb);
         });
         let a = long_b.clone();
         let b = long_b.clone();
         bench("Vec<u8>", "eq_heap_64B", || {
-            black_box(&a == &b);
+            let aa = black_box(&a);
+            let bb = black_box(&b);
+            black_box(aa == bb);
         });
         let a = long_s.clone();
         let b = long_s.clone();
         bench("std::String", "eq_heap_64B", || {
-            black_box(&a == &b);
+            let aa = black_box(&a);
+            let bb = black_box(&b);
+            black_box(aa == bb);
         });
         let a: SmartString = long_s.as_str().into();
         let b: SmartString = long_s.as_str().into();
         bench("smartstring", "eq_heap_64B", || {
-            black_box(&a == &b);
+            let aa = black_box(&a);
+            let bb = black_box(&b);
+            black_box(aa == bb);
         });
         let a: CompactString = long_s.as_str().into();
         let b: CompactString = long_s.as_str().into();
         bench("compact_str", "eq_heap_64B", || {
-            black_box(&a == &b);
+            let aa = black_box(&a);
+            let bb = black_box(&b);
+            black_box(aa == bb);
         });
         let a: SmolStr = long_s.as_str().into();
         let b: SmolStr = long_s.as_str().into();
         bench("smol_str", "eq_heap_64B", || {
-            black_box(&a == &b);
+            let aa = black_box(&a);
+            let bb = black_box(&b);
+            black_box(aa == bb);
         });
     }
 
