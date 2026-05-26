@@ -1,0 +1,81 @@
+//! Borrowing iterators over a [`KevyMap`] — `(&K, &V)`, `&K`-only, and
+//! `&V`-only flavours.
+
+use std::mem::MaybeUninit;
+
+use crate::map::KevyMap;
+
+/// `(&K, &V)` iterator over all live entries of a [`KevyMap`]; order unspecified.
+pub struct Iter<'a, K, V> {
+    metadata: &'a [u8],
+    slots: &'a [MaybeUninit<(K, V)>],
+    pos: usize,
+}
+
+impl<'a, K, V> Iter<'a, K, V> {
+    /// Construct an iterator from a map's raw bucket slices.
+    pub(crate) fn new(metadata: &'a [u8], slots: &'a [MaybeUninit<(K, V)>]) -> Self {
+        Self {
+            metadata,
+            slots,
+            pos: 0,
+        }
+    }
+}
+
+impl<'a, K, V> Iterator for Iter<'a, K, V> {
+    type Item = (&'a K, &'a V);
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.pos < self.metadata.len() {
+            let i = self.pos;
+            self.pos += 1;
+            if self.metadata[i] & 0x80 == 0 {
+                // SAFETY: full slot. The borrow's lifetime is tied to
+                // self.slots: &'a [MaybeUninit<(K, V)>].
+                let kv = unsafe { self.slots[i].assume_init_ref() };
+                return Some((&kv.0, &kv.1));
+            }
+        }
+        None
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a KevyMap<K, V> {
+    type Item = (&'a K, &'a V);
+    type IntoIter = Iter<'a, K, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+/// `&K` iterator over all live entries of a [`KevyMap`].
+pub struct Keys<'a, K, V>(Iter<'a, K, V>);
+
+impl<'a, K, V> Keys<'a, K, V> {
+    pub(crate) fn new(inner: Iter<'a, K, V>) -> Self {
+        Self(inner)
+    }
+}
+
+impl<'a, K, V> Iterator for Keys<'a, K, V> {
+    type Item = &'a K;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|(k, _)| k)
+    }
+}
+
+/// `&V` iterator over all live entries of a [`KevyMap`].
+pub struct Values<'a, K, V>(Iter<'a, K, V>);
+
+impl<'a, K, V> Values<'a, K, V> {
+    pub(crate) fn new(inner: Iter<'a, K, V>) -> Self {
+        Self(inner)
+    }
+}
+
+impl<'a, K, V> Iterator for Values<'a, K, V> {
+    type Item = &'a V;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|(_, v)| v)
+    }
+}
