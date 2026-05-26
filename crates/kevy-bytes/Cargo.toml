@@ -8,10 +8,13 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
+documentation = "https://docs.rs/kevy-bytes"
 readme = "README.md"
 keywords = ["sso", "small-string", "bytes", "inline"]
 categories = ["data-structures", "memory-management"]
+
+[lints]
+workspace = true
 
 [dependencies]
 kevy-hash = { path = "../kevy-hash", version = "0.1" }

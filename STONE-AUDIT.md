@@ -7,19 +7,21 @@
 > 直接覆盖每个使用者。
 
 定义参照 mailrs `ARCHITECTURE.md` 的 stone / cement 区分：**stone = 单一
-identity、generic、可发布、独立可用的基础 crate**。kevy 目前的 stones (6):
-`kevy-bytes`, `kevy-hash`, `kevy-map`, `kevy-resp`, `kevy-ring`,
-`kevy-resp-client`. Cement 不走这个 audit，走 `CEMENT-AUDIT.md`（cement-
-tier 标准；目标是 "do its job in the kevy server"）。Dev tools (`kevy-bench`,
-`kevy-pubsub-bench`, `kevy-cli`) 走最轻的 dev-tool 标准（charter 0-dep 可豁
-免，但每个引入必须受审计许可）。
+identity、generic、可发布、独立可用的基础 crate**。kevy 目前的 stones (8):
+`kevy-bytes`, `kevy-hash`, `kevy-madvise`, `kevy-map`, `kevy-resp`,
+`kevy-resp-client`, `kevy-ring`, `kevy-uring`. Cement 不走这个 audit，走
+`CEMENT-AUDIT.md`（cement-tier 标准；目标是 "do its job in the kevy
+server"）。Dev tools (`kevy-bench`, `kevy-pubsub-bench`, `kevy-cli`) 走最
+轻的 dev-tool 标准（charter 0-dep 可豁免，但每个引入必须受审计许可）。
 
-**Why kevy-sys is cement (not a stone)**: identity "Hand-written libc
-bindings for kevy" needs the "for kevy" qualifier; it's hand-curated to
-kevy's narrow needs (a third party would compare against `libc`/`nix`/
-`rustix`/`mio` and find kevy-sys missing too much). The charter line
-"libc only in kevy-sys" frames it as containment, not publishable
-foundation. See `CEMENT-AUDIT.md`.
+**Why kevy-sys is cement (not a stone)**: identity "Hand-curated OS
+bindings for kevy — sockets + readiness poller" needs the "for kevy"
+qualifier; it's hand-curated to kevy's narrow needs (a third party would
+compare against `libc`/`nix`/`rustix`/`mio` and find kevy-sys missing too
+much). The two pieces of kevy-sys that *were* generic — the io_uring
+engine and the MADV_HUGEPAGE wrapper — were split out as the stones
+`kevy-uring` and `kevy-madvise` (see `KEVY-SYS-VERDICT-2026-05-27.md`).
+What remains in kevy-sys is the network-boundary cement.
 
 **Why kevy-cli is dev tool (not a stone)**: the "cli" in the name was the
 tell — a CLI binary's purpose is to be invoked, not consumed. The
@@ -193,7 +195,7 @@ cargo package --list -p <name>
 | Layer | Criterion | Why |
 |---|---|---|
 | **T1** | `[dependencies]` 段无任何 crates.io entry | charter L2 锁定 |
-| **T1** | libc / OS syscall 只在 `kevy-sys`；其他 stone 不 `extern "C"` | charter; kevy-sys 是唯一 OS-boundary |
+| **T1** | libc / OS syscall 只在 OS-boundary 系列 crates (`kevy-sys`, `kevy-uring`, `kevy-madvise`)；其他 stone 不 `extern "C"` | charter; OS boundary 集中可审 |
 | **T1** | `Cargo.toml`: `version.workspace`, `edition.workspace`, `authors.workspace` 全部 inherit | 不允许 stone 偏离 workspace policy |
 | **T2** | 跨 stone 的 dep 单向（grep dep graph 无 cycle）| infra cycle = 编译/包管理梦魇 |
 

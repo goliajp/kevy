@@ -10,6 +10,9 @@ readme = "README.md"
 keywords = ["redis", "keyspace", "kv", "database", "ttl"]
 categories = ["database-implementations", "data-structures", "caching"]
 
+[lints]
+workspace = true
+
 [dependencies]
 kevy-hash = { path = "../kevy-hash", version = "0.1" }
 kevy-bytes = { path = "../kevy-bytes", version = "0.1" }

@@ -8,10 +8,13 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
+documentation = "https://docs.rs/kevy-resp-client"
 readme = "README.md"
 keywords = ["redis", "resp", "client", "valkey", "tcp"]
 categories = ["network-programming", "database"]
+
+[lints]
+workspace = true
 
 [dependencies]
 kevy-resp = { path = "../kevy-resp", version = "0.1" }

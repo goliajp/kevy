@@ -8,10 +8,13 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
+documentation = "https://docs.rs/kevy-hash"
 readme = "README.md"
 keywords = ["hash", "hasher", "fxhash", "fmix", "hashmap"]
 categories = ["algorithms", "data-structures"]
+
+[lints]
+workspace = true
 
 [dependencies]
 

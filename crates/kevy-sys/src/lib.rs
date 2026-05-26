@@ -1,17 +1,23 @@
-//! kevy-sys — the single OS-boundary layer.
+//! kevy-sys — kevy's network-boundary layer.
 //!
-//! This is the ONLY crate in kevy permitted to touch libc, and it touches it
-//! only for primitives the kernel cannot expose any other way: sockets and the
-//! readiness poller (kqueue on macOS, epoll on Linux). Every binding is declared
-//! by hand with `unsafe extern "C"` (no `libc` crate, no third-party dep). On
-//! Linux these symbols resolve through glibc, on macOS through libSystem — both
-//! already linked by `std`, so we add zero dependencies.
+//! One of kevy's three OS-boundary crates (alongside the publishable stones
+//! [`kevy-uring`](https://crates.io/crates/kevy-uring) and
+//! [`kevy-madvise`](https://crates.io/crates/kevy-madvise)). This is the
+//! cement piece — hand-curated to the exact subset of sockets and the
+//! readiness poller (kqueue on macOS, epoll on Linux) that kevy's server
+//! needs. Every binding is declared by hand with `unsafe extern "C"`
+//! (no `libc` crate, no third-party dep). On Linux these symbols resolve
+//! through glibc, on macOS through libSystem — both already linked by
+//! `std`, so we add zero dependencies.
 //!
-//! The poller here is *readiness*-based. A *completion*-based io_uring engine
-//! (the `uring` module, Linux only) lives alongside it; both can back the reactor
-//! on top ([kevy-net]), which exposes only a byte-level service contract.
+//! The poller here is *readiness*-based. The *completion*-based io_uring
+//! engine has moved to its own stone crate, [`kevy-uring`]; either can back
+//! the reactor on top ([kevy-net]), which exposes only a byte-level
+//! service contract.
 //!
-//! Part of the [kevy] key–value server.
+//! Part of the [kevy] key–value server; not a generic OS-binding library.
+//!
+//! [`kevy-uring`]: https://crates.io/crates/kevy-uring
 //!
 //! # Safety
 //!
@@ -54,13 +60,6 @@ use core::ffi::{c_int, c_void};
 use core::mem::size_of;
 use core::ptr;
 use std::io;
-
-// Linux completion-based engine (io_uring); the readiness `Poller` below stays
-// the macOS path and the Linux fallback.
-#[cfg(target_os = "linux")]
-mod uring;
-#[cfg(target_os = "linux")]
-pub use uring::{Completion, IoUring, ProvidedBufRing};
 
 mod ffi {
     use core::ffi::{c_int, c_void};
@@ -142,12 +141,6 @@ mod ffi {
         ) -> c_int;
     }
 
-    // Memory advice (Linux). Used by kevy-map for THP hints on large
-    // metadata + slot arrays — drops dTLB-load-misses on 10M+ key keyspaces.
-    #[cfg(target_os = "linux")]
-    unsafe extern "C" {
-        pub fn madvise(addr: *mut c_void, length: usize, advice: c_int) -> c_int;
-    }
 }
 
 // ---- constants -------------------------------------------------------------
@@ -491,58 +484,6 @@ impl Drop for Waker {
 // The pipe ends are plain fds with no aliasing; safe to move across threads.
 unsafe impl Send for Waker {}
 unsafe impl Sync for Waker {}
-
-// ---- madvise (THP hint) ----------------------------------------------------
-
-/// Hint the kernel that the region `[ptr, ptr+len)` is a candidate for
-/// transparent huge pages (Linux `MADV_HUGEPAGE`). A best-effort kernel
-/// hint — returns nothing; mis-alignment / unsupported kernels silently
-/// no-op. Off Linux this is a no-op.
-///
-/// Used by kevy-map to drop dTLB-load-misses on the metadata + slot arrays
-/// of large keyspace tables. madvise expects page-aligned `addr` and a
-/// page-multiple `length`; we round addr UP and len DOWN to 4 KiB. If
-/// nothing remains, we don't call. Tables smaller than ~ a few pages are
-/// not worth a syscall.
-pub fn advise_hugepage(ptr: *const u8, len: usize) {
-    #[cfg(target_os = "linux")]
-    {
-        // 4 KiB base page is universal on x86_64 / aarch64 Linux setups
-        // kevy targets. (On systems using 16 KiB / 64 KiB pages the wider
-        // alignment still happens to be a 4-KiB multiple, so this is
-        // correct, just slightly more conservative.)
-        const PAGE: usize = 4096;
-        if len < PAGE * 2 {
-            return;
-        }
-        let start = ptr as usize;
-        let aligned_start = (start + PAGE - 1) & !(PAGE - 1);
-        let end = start + len;
-        if aligned_start >= end {
-            return;
-        }
-        let aligned_len = (end - aligned_start) & !(PAGE - 1);
-        if aligned_len < PAGE * 2 {
-            return;
-        }
-        // Linux MADV_HUGEPAGE = 14 (mm/madvise.c, asm-generic/mman-common.h).
-        const MADV_HUGEPAGE: c_int = 14;
-        // SAFETY: ffi::madvise is a kernel advise call; it reads no Rust
-        // memory, performs no writes, and is benign on error (EINVAL on
-        // mis-aligned / unsupported kernels is what we want — no-op).
-        unsafe {
-            let _ = ffi::madvise(
-                aligned_start as *mut c_void,
-                aligned_len,
-                MADV_HUGEPAGE,
-            );
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (ptr, len);
-    }
-}
 
 // ---- Poller ----------------------------------------------------------------
 

@@ -10,6 +10,9 @@ readme = "README.md"
 keywords = ["redis", "thread-per-core", "shared-nothing", "runtime", "reactor"]
 categories = ["network-programming", "concurrency", "database-implementations"]
 
+[lints]
+workspace = true
+
 [dependencies]
 kevy-sys = { path = "../kevy-sys", version = "0.1" }
 kevy-store = { path = "../kevy-store", version = "0.1" }
@@ -18,3 +21,9 @@ kevy-ring = { path = "../kevy-ring", version = "0.1" }
 kevy-persist = { path = "../kevy-persist", version = "0.1" }
 kevy-hash = { path = "../kevy-hash", version = "0.1" }
 kevy-map = { path = "../kevy-map", version = "0.1" }
+
+# io_uring engine is Linux-only; the rest of kevy-rt's hot path is the
+# epoll/kqueue reactor in kevy-sys. Gate at the manifest level so non-
+# Linux builds don't pull an empty crate into the graph.
+[target.'cfg(target_os = "linux")'.dependencies]
+kevy-uring = { path = "../kevy-uring", version = "0.1" }

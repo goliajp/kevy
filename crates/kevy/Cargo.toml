@@ -10,6 +10,9 @@ readme = "README.md"
 keywords = ["redis", "kv", "key-value", "database", "valkey"]
 categories = ["database-implementations", "caching", "network-programming"]
 
+[lints]
+workspace = true
+
 [lib]
 name = "kevy"
 path = "src/lib.rs"

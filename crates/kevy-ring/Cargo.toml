@@ -8,10 +8,13 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
+documentation = "https://docs.rs/kevy-ring"
 readme = "README.md"
 keywords = ["spsc", "lock-free", "ring-buffer", "queue", "kevy"]
 categories = ["concurrency", "data-structures", "no-std"]
+
+[lints]
+workspace = true
 
 [dependencies]
 

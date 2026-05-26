@@ -8,14 +8,17 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
+documentation = "https://docs.rs/kevy-map"
 readme = "README.md"
 keywords = ["hashmap", "hashtable", "open-addressing", "swiss", "prefetch"]
 categories = ["data-structures"]
 
+[lints]
+workspace = true
+
 [dependencies]
-kevy-hash = { path = "../kevy-hash", version = "0.1" }
-kevy-sys  = { path = "../kevy-sys",  version = "0.1" }
+kevy-hash     = { path = "../kevy-hash",     version = "0.1" }
+kevy-madvise  = { path = "../kevy-madvise",  version = "0.1" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench", version = "0.1" }

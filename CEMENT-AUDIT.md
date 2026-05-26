@@ -11,7 +11,7 @@ kevy's cements (5):
 
 | Cement | Identity needs "for kevy"? | Why cement |
 |---|---|---|
-| `kevy-sys` | yes — "hand-curated libc bindings for kevy" | OS-boundary containment; nobody else would want this exact subset |
+| `kevy-sys` | yes — "hand-curated OS bindings for kevy — sockets + readiness poller" | Network-boundary containment; nobody else would want this exact subset. The two generic pieces that previously lived here (`io_uring`, `MADV_HUGEPAGE`) were split out as the stones `kevy-uring` + `kevy-madvise` per `KEVY-SYS-VERDICT-2026-05-27.md`. |
 | `kevy-store` | yes — "Redis-semantic keyspace + value types" | Tied to Redis command surface + kevy's Value/Entry types |
 | `kevy-persist` | yes — "RDB snapshots + AOF over `kevy_store::Value`" | Couples to kevy-store's internal types |
 | `kevy-rt` | yes — "kevy thread-per-core shared-nothing runtime" | Specific reactor + Commands trait + connection lifecycle for kevy |
@@ -51,7 +51,7 @@ Same 3-tier shape as STONE-AUDIT, but criteria are different:
 | Layer | Criterion | Why |
 |---|---|---|
 | **T1** | 0 third-party (crates.io) deps; only path-deps to other kevy crates | hard charter constraint |
-| **T1** | `extern "C"` / libc only in `kevy-sys` (grep elsewhere = build break) | OS-boundary containment |
+| **T1** | `extern "C"` / libc only in OS-boundary crates `kevy-sys` / `kevy-uring` / `kevy-madvise` (grep elsewhere = build break) | OS-boundary containment |
 | **T1** | `forbid(unsafe_code)` where structurally possible (every cement crate that can; only kevy-sys + kevy-rt are exceptions today) | scope minimisation |
 | **T2** | Workspace fields inherited (`version.workspace = true` etc.) | no per-cement policy drift |
 | **T2** | No dep cycles | enforced by cargo, but include in audit checklist anyway |
@@ -74,17 +74,21 @@ Same 3-tier shape as STONE-AUDIT, but criteria are different:
 budgets here (kevy-sys is one-syscall-per-op below; persist is bounded
 by disk; kevy is just main + serve glue).
 
-## 5. kevy-sys specifics (OS-boundary cement)
+## 5. kevy-sys specifics (network-boundary cement)
 
-Extra rules just for kevy-sys, since it's the only crate touching `extern "C"`:
+Extra rules just for kevy-sys. Note that since the 2026-05-27 split, kevy-sys
+is no longer the **only** crate touching `extern "C"` — the OS-boundary now
+spans `kevy-sys` (cement), `kevy-uring` (stone), and `kevy-madvise` (stone).
+This section's signature-review rules apply to all three; grep guard below
+allow-lists them.
 
 | Layer | Criterion |
 |---|---|
 | **T1** | Every `extern "C"` fn signature matches the platform man page (POSIX / Linux / BSD as applicable; cited inline). |
 | **T1** | Every `unsafe { ffi::… }` site has SAFETY: documenting the preconditions the kernel requires. |
-| **T1** | `grep extern '"C"' crates/*/src` returns only kevy-sys hits. |
-| **T2** | Linux + macOS code paths symmetric (every Socket method / poll/event type has cfg branches for both). |
-| **T2** | miri / loom NOT REQUIRED (syscalls bypass both). The compensating audit is line-by-line review of FFI sigs vs man pages, captured in `crates/kevy-sys/AUDIT-2026-05-26.md`. |
+| **T1** | `grep extern '"C"' crates/*/src` returns only hits in `kevy-sys` / `kevy-uring` / `kevy-madvise`. |
+| **T2** | Linux + macOS code paths symmetric in kevy-sys (every Socket method / poll/event type has cfg branches for both). kevy-uring is Linux-only by design; off-Linux it compiles to an empty crate. |
+| **T2** | miri / loom NOT REQUIRED (syscalls bypass both). The compensating audit is line-by-line review of FFI sigs vs man pages, captured in each boundary crate's `AUDIT-<DATE>.md`. |
 
 ---
 
