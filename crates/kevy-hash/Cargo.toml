@@ -1,6 +1,6 @@
 [package]
 name = "kevy-hash"
-description = "Fast, well-distributed hashing for kevy's single-trust-domain keyspace — pure Rust, zero deps."
+description = "FxHash + fmix64 hasher for single-trust-domain keyspaces."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,3 +10,6 @@ keywords = ["hash", "hasher", "fxhash", "fmix", "hashmap"]
 categories = ["algorithms", "data-structures"]
 
 [dependencies]
+
+[dev-dependencies]
+kevy-bench = { path = "../kevy-bench", version = "0.1" }

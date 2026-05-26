@@ -27,6 +27,7 @@
 //! assert_eq!(m.get(b"key".as_slice()), Some(&1));
 //! ```
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
@@ -113,6 +114,7 @@ pub type FxBuildHasher = BuildHasherDefault<FxHasher>;
 /// hash function. `kevy-map` consumes both the full hash (for bucket index)
 /// and its top 7 bits (for the metadata byte).
 pub trait KevyHash {
+    /// Compute the final mixed 64-bit hash of `self` in one call.
     fn kevy_hash(&self) -> u64;
 }
 

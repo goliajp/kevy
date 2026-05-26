@@ -36,6 +36,9 @@ dependencies = [
 [[package]]
 name = "kevy-hash"
 version = "0.1.0"
+dependencies = [
+ "kevy-bench",
+]
 
 [[package]]
 name = "kevy-map"
