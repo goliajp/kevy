@@ -267,9 +267,51 @@ fn parse_multibulk_into(buf: &[u8], dst: &mut Argv) -> Result<Option<usize>, Pro
 }
 
 /// Find the index of `\r\n` at or after `start`, returning the index of `\r`.
+///
+/// SWAR-accelerated: scans 8 bytes at a time using the classic "has-zero-byte"
+/// bit trick (XOR each byte with `\r`, then `(x - 0x01..) & !x & 0x80..`
+/// isolates bytes that were zero). On a CR hit we confirm the next byte is
+/// `\n` and return; otherwise we resume from `pos + 1` so a stray `\r` doesn't
+/// terminate the scan. Safe Rust only — keeps `kevy-resp`'s
+/// `forbid(unsafe_code)` charter line.
 fn find_crlf(buf: &[u8], start: usize) -> Option<usize> {
+    const CR_BCAST: u64 = 0x0D0D0D0D_0D0D0D0Du64;
+    const ONES: u64 = 0x01010101_01010101u64;
+    const HIGH: u64 = 0x80808080_80808080u64;
+
+    let n = buf.len();
     let mut i = start;
-    while i + 1 < buf.len() {
+    // Need at least 2 bytes (CR + LF) to find a CRLF.
+    if i + 1 >= n {
+        return None;
+    }
+    // SWAR loop: read 8 bytes, find any byte == 0x0D, then check the next
+    // byte. We require the WHOLE 8-byte window to be within `buf` AND the
+    // byte just past it to also exist (so a CR at position 7 of the window
+    // can be confirmed by reading position 8). That's `i + 9 <= n`, i.e.
+    // `i + 8 < n` (strict, since we may need [pos+1] which is at most i+8
+    // when pos == i+7).
+    while i + 8 < n {
+        let word = u64::from_le_bytes(buf[i..i + 8].try_into().expect("8 bytes"));
+        let x = word ^ CR_BCAST;
+        let zeroed = x.wrapping_sub(ONES) & !x & HIGH;
+        if zeroed != 0 {
+            // The low set bit's byte index = first CR in this 8-byte window.
+            let bit_idx = zeroed.trailing_zeros();
+            let pos = i + (bit_idx / 8) as usize;
+            // pos < i + 8 ≤ n - 1, so pos + 1 < n is valid to read.
+            if buf[pos + 1] == b'\n' {
+                return Some(pos);
+            }
+            // Lone CR — resume scanning from the byte after it.
+            i = pos + 1;
+            continue;
+        }
+        i += 8;
+    }
+    // Tail: scalar over the last < 8 bytes (or what's left after a partial
+    // resume above).
+    while i + 1 < n {
         if buf[i] == b'\r' && buf[i + 1] == b'\n' {
             return Some(i);
         }
@@ -477,6 +519,72 @@ fn parse_array_reply(buf: &[u8]) -> Result<Option<(Reply, usize)>, ProtocolError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // SWAR find_crlf fuzz: planted CRLFs at every offset 0..40, lone-CR
+    // distractors, no-CRLF inputs, near-end boundaries. The SWAR window is
+    // 8 bytes, so transitions at offsets 0/7/8/15/16/… stress alignment.
+    #[test]
+    fn find_crlf_at_every_offset() {
+        for off in 0..40 {
+            let mut buf = vec![b'a'; 60];
+            buf[off] = b'\r';
+            buf[off + 1] = b'\n';
+            assert_eq!(find_crlf(&buf, 0), Some(off), "off={off}");
+        }
+    }
+
+    #[test]
+    fn find_crlf_skips_lone_cr() {
+        // Lone \r at the front, then a real CRLF later.
+        let mut buf = vec![b'a'; 32];
+        buf[3] = b'\r';
+        buf[4] = b'b'; // not \n → skip
+        buf[20] = b'\r';
+        buf[21] = b'\n';
+        assert_eq!(find_crlf(&buf, 0), Some(20));
+    }
+
+    #[test]
+    fn find_crlf_none_when_absent() {
+        let buf = vec![b'a'; 32];
+        assert_eq!(find_crlf(&buf, 0), None);
+        let buf = b"";
+        assert_eq!(find_crlf(buf, 0), None);
+        let buf = b"\r"; // only CR, no LF available
+        assert_eq!(find_crlf(buf, 0), None);
+    }
+
+    #[test]
+    fn find_crlf_at_buffer_end() {
+        let buf = b"abcdefghij\r\n"; // CRLF at offset 10
+        assert_eq!(find_crlf(buf, 0), Some(10));
+        // Start past the CR.
+        assert_eq!(find_crlf(buf, 11), None);
+    }
+
+    #[test]
+    fn find_crlf_with_many_lone_crs() {
+        // 7 lone CRs followed by a real CRLF. SWAR finds one CR per iter
+        // but must keep going until it finds the real pair.
+        let mut buf = Vec::new();
+        for _ in 0..7 {
+            buf.push(b'\r');
+            buf.push(b'x'); // not \n
+        }
+        buf.extend_from_slice(b"\r\n");
+        // Real CRLF starts at offset 14 (7 * 2).
+        assert_eq!(find_crlf(&buf, 0), Some(14));
+    }
+
+    #[test]
+    fn find_crlf_from_nonzero_start() {
+        let buf = b"\r\n\r\n\r\n";
+        // Starts at offset 0 → first CRLF.
+        assert_eq!(find_crlf(buf, 0), Some(0));
+        // Skip the first CRLF.
+        assert_eq!(find_crlf(buf, 2), Some(2));
+        assert_eq!(find_crlf(buf, 4), Some(4));
+    }
 
     #[test]
     fn parse_multibulk_ping() {
