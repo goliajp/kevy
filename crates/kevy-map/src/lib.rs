@@ -443,6 +443,18 @@ impl<K, V> Default for KevyMap<K, V> {
     }
 }
 
+/// `m[&q]` panics on missing key (matches `std::HashMap::Index` semantics).
+impl<K, Q, V> std::ops::Index<&Q> for KevyMap<K, V>
+where
+    K: std::borrow::Borrow<Q>,
+    Q: KevyHash + Eq + ?Sized,
+{
+    type Output = V;
+    fn index(&self, key: &Q) -> &V {
+        self.get(key).expect("no entry found for key")
+    }
+}
+
 impl<K, V> Drop for KevyMap<K, V> {
     fn drop(&mut self) {
         if std::mem::needs_drop::<(K, V)>() {
