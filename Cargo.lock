@@ -30,6 +30,7 @@ name = "kevy-cli"
 version = "0.1.0"
 dependencies = [
  "kevy-resp",
+ "kevy-resp-client",
 ]
 
 [[package]]
@@ -62,6 +63,13 @@ name = "kevy-resp"
 version = "0.1.0"
 dependencies = [
  "kevy-bench",
+]
+
+[[package]]
+name = "kevy-resp-client"
+version = "0.1.0"
+dependencies = [
+ "kevy-resp",
 ]
 
 [[package]]

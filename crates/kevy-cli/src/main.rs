@@ -17,7 +17,8 @@
 //! [kevy-resp]: https://crates.io/crates/kevy-resp
 #![forbid(unsafe_code)]
 
-use kevy_cli::{Reply, RespClient, format_reply};
+use kevy_cli::{Reply, format_reply};
+use kevy_resp_client::RespClient;
 use std::io::{self, BufRead, Write};
 use std::process::ExitCode;
 
