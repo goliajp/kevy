@@ -41,11 +41,14 @@ regression, document everything).
 - ✅ **v0.metal-2 — Box collection Value variants.** Done — commit 2c3ee26.
 - ✅ **v0.metal-3 — Value inlining (SmallBytes SSO).** Done — commit fb7c71c.
 - ✅ **v0.metal-4+5 — kevy-map + bucket prefetch.** Done — commit 421c826.
-- **v0.metal-6 — Zero-alloc parse + borrowed `Argv`.** Kill parse's 2
-  per-command allocs on the LOCAL path; argv borrows the conn input buffer
-  directly. Owned/borrowed split so cross-shard forwards still materialise.
-  Hits ~32% of cache-hot CPU (parse + libc malloc/cfree + Argv alloc).
-  Expected: cache-hot +15-25%.
+- ✅ **v0.metal-6 — Zero-alloc parse + scratch `Argv`.** kevy-resp gained
+  `parse_command_into(&[u8], &mut Argv)`; Shard adds `scratch_argv: Argv`
+  reused across cmds (mem::take dance lets handle_command take &mut self).
+  handle_command + start_command shift to `args: &Argv`; cross-shard forwards
+  clone once at the boundary. Argv::with_capacity dropped from 1.51% → 0%
+  in flat. Medians (3 runs): 100k +7.7%, 1M +5.1%, 10M +2.7% vs metal-4+5;
+  1-key -5.7% but in run-to-run noise band. Cumulative vs metal-1 baseline:
+  10M GET +24.5%. Done — commit 3659569.
 - **v0.metal-7 — Parse SWAR / SIMD CRLF + length scan.** u64 SWAR scan for
   CR/LF + length-prefix; SSE2 `_mm_cmpeq_epi8` fast path on x86_64 with
   SWAR u64 fallback. Hits parse_command's residual ALU (~16%). Expected:
@@ -102,47 +105,65 @@ regression, document everything).
   x86); pool alloc on the forward path; shrink bytes per hop. Mem-axis
   side win too. Closes the stone list.
 
-## L3a — HOT plan (current checkpoint: v0.metal-6 — zero-alloc parse + borrowed Argv)
+## L3a — HOT plan (current checkpoint: v0.metal-7 — parse SWAR / SIMD CRLF)
+
+Each step ends with a detection command. Output →
+`perfs/data/2026-05-26/metal-7-*`.
+
+The remaining parse cost after metal-6 is the byte-by-byte work inside
+`parse_multibulk_into`: `find_crlf` (scalar loop) gets called once per
+length-line + once per bulk-string-terminator, and `parse_int` (ASCII →
+i64) on every length-line. SWAR/SIMD on these scans + a tighter int
+parser is the lever.
+
+1. **Branch.** `git flow feature start metal-7-parse-swar`. **Detect**:
+   `git branch --show-current` = `feature/metal-7-parse-swar`.
+2. **SWAR `find_crlf`.** Rewrite to scan 8 bytes at a time using the
+   "byte-equality bit-trick" (XOR with 0x0D0D…0D, then the standard
+   has-zero-byte detection). Keep the scalar tail for the last < 8
+   bytes. Stable Rust only (no `core::arch`). **Detect**: existing
+   `kevy-resp` parser tests still pass; add fuzz-like unit tests
+   (random inputs with planted CRLFs at known offsets).
+3. **SSE2 fast path** for `find_crlf` under `#[cfg(target_arch =
+   "x86_64")]`. 16-byte `_mm_loadu_si128` + `_mm_cmpeq_epi8` against
+   '\r', then `_mm_movemask_epi8` + `trailing_zeros` for first hit.
+   Falls back to SWAR on non-x86. **Detect**: same tests pass; the
+   SWAR vs SSE2 path can be selected via cfg-test in CI.
+4. **Tight `parse_int`.** Current is a byte-by-byte ASCII loop. Replace
+   with a SWAR digit-pack trick for ≤ 8-digit ints (covers every RESP
+   length-line we'll see) and falls back to scalar for longer. **Detect**:
+   `kevy-resp` parser tests + a fuzz unit testing every i64 value
+   round-tripping through write_int + parse_int.
+5. **Local correctness gate.** **Detect**: `cargo test --workspace`
+   100% pass; clippy 0.
+6. **lx64 gate.** Rsync + release build w/ debug syms; sharded 11/11
+   epoll + io_uring. **Detect**: 22/22.
+7. **lx64 A/B (3-run medians).** **Critical**: also re-measure metal-6
+   itself (3 fresh runs) so the comparison is ABA-paired and the 1-key
+   noise question gets a real answer. **Detect**:
+   `perfs/data/2026-05-26/metal-7-parse-swar-ab.txt` written with paired
+   medians + new perf flat.
+8. **Judge + merge.** Any axis improved (and no axis ≥ 5% median
+   regression in paired ABA) → `git flow feature finish`. All-axis
+   regression → discard + rejection note.
+
+## L3a (previous, completed) — v0.metal-6 zero-alloc parse
 
 Each step ends with a detection command. Output →
 `perfs/data/2026-05-26/metal-6-*`.
 
-1. **Branch.** `git flow feature start metal-6-zero-alloc-parse`. **Detect**:
-   `git branch --show-current` = `feature/metal-6-zero-alloc-parse`.
-2. **`Argv` borrowed/owned split.** In `crates/kevy-resp`, add a borrowed
-   variant of `Argv` that holds `(ends: SmallVec<u32>, buf_offset: usize,
-   buf_len: usize)` referring back into the conn input buffer. Keep the
-   owned variant for cross-shard forwarding. `Command` becomes
-   `enum { Borrowed(ArgvRef<'a>), Owned(Argv) }` or a single struct with
-   an internal tag — pick the shape with fewer call-site changes.
-   **Detect**: `cargo test -p kevy-resp` green; the existing PartialEq
-   against `Vec<Vec<u8>>` still holds for borrowed argvs.
-3. **`parse_command` returns borrowed.** Rewrite the parser to point ends
-   into the input buffer; no `Vec` allocation per cmd. **Detect**:
-   `cargo test -p kevy-resp` green; perf alloc counter shows malloc rate
-   drops to ≤ 1/cmd on the GET hot path (verify via lx64 perf trace).
-4. **Materialise on forward.** When `start_command` decides to send to
-   another shard, clone the borrowed argv into an owned one. **Detect**:
-   `cargo test -p kevy --test sharded` 11/11 epoll + io_uring (each
-   reactor; cross-shard exercises the materialisation path).
-5. **Dispatch surface.** All command handlers that took `&[Vec<u8>]` or
-   `Vec<Vec<u8>>` adapt to the new shape (borrowed argv). Most should be
-   one-line changes since they read via index → `&[u8]`. **Detect**:
-   `cargo check --workspace` clean; `cargo clippy --workspace
-   --all-targets -- -D warnings` 0.
-6. **Local correctness gate.** **Detect**: `cargo test --workspace` 100%
-   pass.
-7. **lx64 gate.** Rsync + release build w/ debug syms; sharded 11/11 epoll
-   + io_uring. **Detect**: 22/22 (both reactors).
-8. **lx64 A/B.** `bench/metal_keyspace.sh` curve {1, 100k, 1M, 10M}; RSS @
-   8.6M keys; stripped binary size; cache-hot `-c50 -P256`. **Critical**:
-   3+ runs per column, report median to suppress run-to-run noise
-   (~4-5% seen in 1-key column). **Detect**:
-   `perfs/data/2026-05-26/metal-6-zero-alloc-parse-ab.txt` written with
-   medians + perf flat showing malloc/cfree ≤ 2%.
-9. **Judge + merge.** Any axis improved (and no axis ≥ 5% median
-   regression) → `git flow feature finish`. All-axis regression →
-   discard + rejection note in data file.
+1. Branch. `feature/metal-6-zero-alloc-parse` (now merged).
+2. `Argv::clear()` + `reserve_for()` + `parse_command_into(&[u8], &mut Argv)`
+   in kevy-resp.
+3. `Shard.scratch_argv: Argv` field.
+4. `conn_readable` / `uring_on_recv`: parse via `parse_command_into` +
+   `mem::take` for dispatch + restore.
+5. `handle_command` / `start_command`: `args: Argv` → `args: &Argv`;
+   cross-shard forwards clone at the boundary.
+6. cargo test --workspace + clippy 0 (local).
+7. lx64 sharded 11/11 epoll + io_uring.
+8. lx64 A/B 3-run medians + perf flat (Argv::with_capacity 1.51% → 0%).
+9. Judge KEEP + finish — commit 3659569.
 
 ## L3a (previous, completed) — v0.metal-3 value inlining SSO
 
