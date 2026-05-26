@@ -41,22 +41,18 @@ regression, document everything).
 - ✅ **v0.metal-2 — Box collection Value variants.** Done — commit 2c3ee26.
 - ✅ **v0.metal-3 — Value inlining (SmallBytes SSO).** Done — commit fb7c71c.
 - ✅ **v0.metal-4+5 — kevy-map + bucket prefetch.** Done — commit 421c826.
-- ✅ **v0.metal-6 — Zero-alloc parse + scratch `Argv`.** kevy-resp gained
-  `parse_command_into(&[u8], &mut Argv)`; Shard adds `scratch_argv: Argv`
-  reused across cmds (mem::take dance lets handle_command take &mut self).
-  handle_command + start_command shift to `args: &Argv`; cross-shard forwards
-  clone once at the boundary. Argv::with_capacity dropped from 1.51% → 0%
-  in flat. Medians (3 runs): 100k +7.7%, 1M +5.1%, 10M +2.7% vs metal-4+5;
-  1-key -5.7% but in run-to-run noise band. Cumulative vs metal-1 baseline:
-  10M GET +24.5%. Done — commit 3659569.
-- **v0.metal-7 — Parse SWAR / SIMD CRLF + length scan.** u64 SWAR scan for
-  CR/LF + length-prefix; SSE2 `_mm_cmpeq_epi8` fast path on x86_64 with
-  SWAR u64 fallback. Hits parse_command's residual ALU (~16%). Expected:
-  another +5-10%.
-- **v0.metal-8 — Dispatch redo.** Perfect-hash verb dispatch replacing
-  `dispatch_* || …` chain; cheap `shard_of` (current `wrapping_mul` is 4.20%
-  in flat); fewer indirect calls in `handle_command`/`start_command`.
-  Hits ~30% CPU. Expected: +10-15%.
+- ✅ **v0.metal-6 — Zero-alloc parse + scratch `Argv`.** Done — commit 3659569.
+  Argv::with_capacity 1.51% → 0%; 100k +7.7% / 1M +5.1% / 10M +2.7% vs metal-4+5.
+- ✅ **v0.metal-7 — SWAR find_crlf.** Done — commit bfa388d. 8-byte SWAR with
+  has-zero-byte detection in kevy-resp (SSE2 skipped to keep `forbid(unsafe_code)`).
+  Modest +3.8% on 100k; documented insight that further parse gains need
+  borrowed argv (avoid extend_from_slice byte copy).
+- ✅ **v0.metal-8 — Dispatch redo (resolve + shard_of).** Done — commit 2a9bfae.
+  `Commands::resolve` collapses 4× upper_verb to 1×; `shard_of` short-circuits
+  on single-shard + uses KevyHash for multi-shard. **start_command 18.70% → 7.11%
+  (-11.59pp)**; dispatch chain -30% relative. 1-key +5.2% (recovers most of the
+  earlier -7% drift); 1M +7.4%. Cumulative vs metal-1: 1-key -2.4%, 100k +18.3%,
+  1M +19.2%, 10M +23.2%.
 
 ### Phase B — DRAM-bound residual (ceiling: medium; only 10M-key column)
 
@@ -105,7 +101,67 @@ regression, document everything).
   x86); pool alloc on the forward path; shrink bytes per hop. Mem-axis
   side win too. Closes the stone list.
 
-## L3a — HOT plan (current checkpoint: v0.metal-7 — parse SWAR / SIMD CRLF)
+## L3a — HOT plan (current checkpoint: v0.metal-9 — hugepages / THP)
+
+After v0.metal-8, the post-flat reads:
+
+  parse_command_into  14.27%
+  find_crlf            8.59%   (SWAR'd, standalone now visible)
+  reactor::run        10.85%
+  dispatch chain      20.57%   (start 7.11 + handle 5.19 + dispatch_into 4.37 + resolve 3.90)
+
+Phase A's wins are concentrated on the dispatch chain (-30% relative on
+the chain). `parse_command_into` still has the `extend_from_slice`
+byte-copy — further parse gains need a true borrowed argv (out of
+scope as a single stone; tracked as a Phase D refactor candidate).
+
+Phase B's hugepages stone is the simplest next move: environment-level
+change, no code risk, hits 10M-key column directly via TLB. Promote it
+next.
+
+1. **Branch.** `git flow feature start metal-9-hugepages`. **Detect**:
+   `git branch --show-current` = `feature/metal-9-hugepages`.
+2. **THP madvise hook.** In `kevy-store`/`kevy-map` allocators (or
+   wherever the keyspace backing-store memory is materialised), call
+   `madvise(MADV_HUGEPAGE)` on large allocations. kevy-sys gets a thin
+   wrapper around `madvise(2)` (charter-allowed; libc-only OS boundary).
+   **Detect**: `cargo test -p kevy-sys` covers the madvise wrapper.
+3. **Allocate-and-mark sites.** kevy-map's metadata + slots Box<[T]>
+   allocations are the headline targets; per-conn buffers and pbuf-ring
+   are lesser candidates (in scope for metal-14, leave alone here).
+   Apply `madvise(MADV_HUGEPAGE)` on KevyMap::alloc_table when the
+   table crosses ≥ 1MB (huge-page-sized). **Detect**: workspace tests
+   pass; sharded 11/11 epoll + io_uring.
+4. **Explicit huge pages (optional, only if THP path is weak)**: pull
+   from `/proc/sys/vm/nr_hugepages`. SKIP unless THP shows < +3%.
+5. **Local correctness gate.** **Detect**: `cargo test --workspace`
+   100% pass; clippy 0.
+6. **lx64 gate.** Rsync + release w/ debug syms; sharded 11/11 both
+   reactors. **Detect**: 22/22.
+7. **lx64 A/B (3-run medians ABA).** Re-run metal-8's binary alongside
+   to get paired noise band. THP should mainly move the 10M-key
+   column (the TLB-pressured one). **Detect**:
+   `perfs/data/2026-05-26/metal-9-hugepages-ab.txt` written; perf flat
+   shows TLB-miss count drop (use `perf stat -e dTLB-load-misses`).
+8. **Judge + merge.** Any axis improved (no axis ≥5% paired
+   regression) → `git flow feature finish`. All-axis regression →
+   discard + rejection note.
+
+## L3a (previous, completed) — v0.metal-8 dispatch redo
+
+Each step ends with a detection command. Output →
+`perfs/data/2026-05-26/metal-8-*`.
+
+1. Branch.
+2. `shard_of`: single-shard short-circuit + KevyHash for multi-shard.
+3. `Commands::resolve` trait method + KevyCommands override.
+4. `handle_command` → call resolve once; pass `ResolvedCmd` to
+   `start_command`; replace `self.commands.is_*` calls with field reads.
+5. Local + lx64 correctness gates.
+6. 3-run A/B + perf flat (start_command 18.70% → 7.11%).
+7. Judge KEEP + finish — commit 2a9bfae.
+
+## L3a (older, completed) — v0.metal-7 SWAR find_crlf
 
 Each step ends with a detection command. Output →
 `perfs/data/2026-05-26/metal-7-*`.
