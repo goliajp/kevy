@@ -18,6 +18,7 @@
 //! to this crate) so `kevy-store` keeps `forbid(unsafe_code)`.
 
 #![deny(unsafe_op_in_unsafe_fn)]
+#![warn(missing_docs)]
 
 pub use kevy_hash::KevyHash;
 
@@ -159,6 +160,7 @@ impl<K, V> KevyMap<K, V> {
         self.occupied
     }
 
+    /// Whether the map has zero live entries.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.occupied == 0
@@ -367,6 +369,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
 }
 
 impl<K, V> KevyMap<K, V> {
+    /// Borrow the value for `key`, or `None` if absent.
     pub fn get<Q>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
@@ -378,6 +381,7 @@ impl<K, V> KevyMap<K, V> {
         Some(&kv.1)
     }
 
+    /// Mutably borrow the value for `key`, or `None` if absent.
     pub fn get_mut<Q>(&mut self, key: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
@@ -389,6 +393,7 @@ impl<K, V> KevyMap<K, V> {
         Some(&mut kv.1)
     }
 
+    /// Whether `key` is present in the map.
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
@@ -397,6 +402,7 @@ impl<K, V> KevyMap<K, V> {
         self.find_by_borrow(key).is_some()
     }
 
+    /// Remove `key`'s entry; returns the previous value if present.
     pub fn remove<Q>(&mut self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
@@ -479,6 +485,7 @@ impl<K: fmt::Debug, V: fmt::Debug> fmt::Debug for KevyMap<K, V> {
 
 // ---- Iter ----------------------------------------------------------------
 
+/// `(&K, &V)` iterator over all live entries of a [`KevyMap`]; order unspecified.
 pub struct Iter<'a, K, V> {
     metadata: &'a [u8],
     slots: &'a [MaybeUninit<(K, V)>],
@@ -510,6 +517,7 @@ impl<'a, K, V> IntoIterator for &'a KevyMap<K, V> {
     }
 }
 
+/// `&K` iterator over all live entries of a [`KevyMap`].
 pub struct Keys<'a, K, V>(Iter<'a, K, V>);
 impl<'a, K, V> Iterator for Keys<'a, K, V> {
     type Item = &'a K;
@@ -518,6 +526,7 @@ impl<'a, K, V> Iterator for Keys<'a, K, V> {
     }
 }
 
+/// `&V` iterator over all live entries of a [`KevyMap`].
 pub struct Values<'a, K, V>(Iter<'a, K, V>);
 impl<'a, K, V> Iterator for Values<'a, K, V> {
     type Item = &'a V;
@@ -559,26 +568,32 @@ impl<K: KevyHash + Eq, V> Extend<(K, V)> for KevyMap<K, V> {
 pub struct KevySet<K>(KevyMap<K, ()>);
 
 impl<K> KevySet<K> {
+    /// Construct an empty set without allocating.
     pub fn new() -> Self {
         Self(KevyMap::new())
     }
 
+    /// Construct a set sized for `cap_hint` members without growing.
     pub fn with_capacity(cap_hint: usize) -> Self {
         Self(KevyMap::with_capacity(cap_hint))
     }
 
+    /// Live member count.
     #[inline]
     pub fn len(&self) -> usize {
         self.0.len()
     }
+    /// Whether `len() == 0`.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+    /// Allocated slot count of the underlying map.
     #[inline]
     pub fn capacity(&self) -> usize {
         self.0.capacity()
     }
+    /// Drop every member and reset the metadata. Keeps the allocation.
     pub fn clear(&mut self) {
         self.0.clear();
     }
@@ -604,6 +619,7 @@ impl<K: KevyHash + Eq> KevySet<K> {
 }
 
 impl<K> KevySet<K> {
+    /// Whether `key` is a member of the set.
     pub fn contains<Q>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
@@ -634,6 +650,7 @@ impl<K: fmt::Debug> fmt::Debug for KevySet<K> {
     }
 }
 
+/// `&K` iterator over all members of a [`KevySet`]; order unspecified.
 pub struct SetIter<'a, K>(Iter<'a, K, ()>);
 
 impl<'a, K> Iterator for SetIter<'a, K> {

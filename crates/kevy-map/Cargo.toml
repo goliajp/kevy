@@ -1,6 +1,6 @@
 [package]
 name = "kevy-map"
-description = "Open-addressing Swiss-style hashtable tuned for kevy's keyspace — pure Rust, zero deps. Exposes bucket addresses for software prefetch."
+description = "Open-addressing hashtable with bucket-addr prefetch API."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
