@@ -1,0 +1,15 @@
+Box collection Value variants — A/B — lx64, single-shard io_uring, ~8.6M keys
+(-r 10M -n 20M), GET -c50 -P256 random over the keyspace. develop = inline
+collections (Value 64B/Entry ~80B), feature = boxed (Value 32B/Entry ~48B).
+
+            10M-key GET     RSS
+  develop   1,960,030       2,263,876 kB (2.26 GB)
+  feature   2,008,073       1,608,496 kB (1.61 GB)
+  delta     +2.4%           -29% (-650 MB)
+
+mem axis: -29% RSS — the big win (Entry 80→48B → hashbrown bucket array ~40%
+smaller). perf: +2.4% on the memory wall (denser buckets = cheaper bucket probe;
+modest because each GET still pays the bucket-probe miss + the value
+pointer-chase). Next memory-wall sub-stones for a bigger PERF win: value inlining
+(kill the value-chase 2nd miss) + software prefetch (hide the bucket miss).
+KEPT (big mem win + small perf, no regression). tests + clippy green.
