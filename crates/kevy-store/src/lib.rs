@@ -236,7 +236,7 @@ impl Store {
     }
 
     pub fn load_str(&mut self, key: Vec<u8>, value: Vec<u8>, ttl_ms: Option<u64>) {
-        self.insert_loaded(key, Value::Str(value), ttl_ms);
+        self.insert_loaded(key, Value::Str(SmallBytes::from_vec(value)), ttl_ms);
     }
 
     pub fn load_hash(

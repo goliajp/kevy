@@ -169,7 +169,7 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
             w.write_all(&[OP_STR])?;
             write_ttl(w, ttl)?;
             write_bytes(w, key)?;
-            write_bytes(w, v)?;
+            write_bytes(w, v.as_slice())?;
         }
         Value::Hash(h) => {
             w.write_all(&[OP_HASH])?;
