@@ -108,6 +108,26 @@ Raw data per iteration:
 - `rust-results-2026-05-27.jsonl` — v1 baseline
 - `rust-results-2026-05-27-v2.jsonl` — after Clone specialisation
 - `rust-results-2026-05-27-v3.jsonl` — after Clone + PartialEq specialisation
+- `rust-multirun.jsonl` — 5 binary runs concatenated; use `min-of-medians`
+  per (competitor, workload) to suppress jitter
+
+### Multi-run aggregate (5 × 25-sample × 1M-iter, v3 binary)
+
+`min-of-medians` (most representative of a hot-cache run):
+
+| workload          | best owned competitor      | best min ns | kevy-bytes min | verdict |
+|-------------------|----------------------------|------------:|---------------:|---------|
+| clone_inline_12B  | tie at 0 (kevy / smartstring / compact_str) | 0 | 0 | ✅ TIE |
+| clone_heap_64B    | std::String                | 17          | **19**         | ⚠️ 2 ns gap (vs heap-only String — kevy pays 1 is_inline branch) |
+| clone_heap_64B    | (byte-string cohort) Vec<u8> | 26        | **19**         | ✅ KEVY WINS by 7 ns |
+| eq_inline_12B     | tie at 1                   | 1           | (≤ 1)          | ✅ TIE at noise floor |
+| eq_heap_64B       | tie at 3 (kevy + Vec + std::String + smartstring) | 3 | **3**     | ✅ TIE |
+
+The 2 ns clone_heap gap vs `std::String` is the **structural cost of
+SSO** (one `is_inline()` branch ahead of dispatch) — heap-only strings
+don't carry that branch. Among **byte-string-shaped** types (Vec<u8>,
+the natural cohort for kevy-bytes' `Vec<u8>`-replacement role),
+kevy-bytes is the fastest.
 
 ## What needs to happen before kevy-bytes v0.1.0 can publish
 
