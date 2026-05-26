@@ -45,7 +45,7 @@ mod zset;
 pub use util::glob_match;
 pub use value::*;
 
-use kevy_hash::FxHashMap;
+use kevy_map::KevyMap;
 use std::time::{Duration, Instant};
 
 pub(crate) struct Entry {
@@ -73,13 +73,15 @@ pub enum StoreError {
 
 /// A single-database keyspace.
 ///
-/// The keyspace map uses [`kevy_hash::FxHasher`] rather than std's SipHash:
-/// it is a single-trust-domain, single-threaded-per-shard table, so the
-/// DoS-hardening tax buys nothing. Measured ~1.2–2.8× faster GET — see
-/// `rfcs/2026-05-25-std-self-host-evaluation.md`.
+/// The keyspace map is a [`KevyMap`] — a pure-Rust open-addressing Swiss
+/// table tuned for kevy's per-shard, single-trust-domain keyspace. The
+/// hasher is [`kevy_hash::KevyHash`] (one-call inlinable; no DoS hardening
+/// since the shard is single-threaded with no cross-trust keys). Owning the
+/// table also exposes bucket addresses for software prefetch on the batch
+/// driver — see v0.metal-5 hot plan.
 #[derive(Default)]
 pub struct Store {
-    pub(crate) map: FxHashMap<Vec<u8>, Entry>,
+    pub(crate) map: KevyMap<Vec<u8>, Entry>,
 }
 
 impl Store {

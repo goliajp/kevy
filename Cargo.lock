@@ -37,6 +37,13 @@ name = "kevy-loadgen"
 version = "0.1.0"
 
 [[package]]
+name = "kevy-map"
+version = "0.1.0"
+dependencies = [
+ "kevy-hash",
+]
+
+[[package]]
 name = "kevy-net"
 version = "0.1.0"
 dependencies = [
@@ -84,6 +91,7 @@ dependencies = [
  "kevy-bench",
  "kevy-bytes",
  "kevy-hash",
+ "kevy-map",
 ]
 
 [[package]]
