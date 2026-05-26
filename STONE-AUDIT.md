@@ -7,10 +7,24 @@
 > 直接覆盖每个使用者。
 
 定义参照 mailrs `ARCHITECTURE.md` 的 stone / cement 区分：**stone = 单一
-identity、generic、可发布、独立可用的基础 crate**。kevy 目前的 stones:
-`kevy-bytes`, `kevy-hash`, `kevy-map`, `kevy-resp`, `kevy-ring`, `kevy-sys`,
-`kevy-cli` (lib), `kevy-bench`, `kevy-pubsub-bench`。Cement 不走这个 audit
-（标准不同；cement 的标准是 "do its job in the kevy server"）。
+identity、generic、可发布、独立可用的基础 crate**。kevy 目前的 stones (6):
+`kevy-bytes`, `kevy-hash`, `kevy-map`, `kevy-resp`, `kevy-ring`,
+`kevy-resp-client`. Cement 不走这个 audit，走 `CEMENT-AUDIT.md`（cement-
+tier 标准；目标是 "do its job in the kevy server"）。Dev tools (`kevy-bench`,
+`kevy-pubsub-bench`, `kevy-cli`) 走最轻的 dev-tool 标准（charter 0-dep 可豁
+免，但每个引入必须受审计许可）。
+
+**Why kevy-sys is cement (not a stone)**: identity "Hand-written libc
+bindings for kevy" needs the "for kevy" qualifier; it's hand-curated to
+kevy's narrow needs (a third party would compare against `libc`/`nix`/
+`rustix`/`mio` and find kevy-sys missing too much). The charter line
+"libc only in kevy-sys" frames it as containment, not publishable
+foundation. See `CEMENT-AUDIT.md`.
+
+**Why kevy-cli is dev tool (not a stone)**: the "cli" in the name was the
+tell — a CLI binary's purpose is to be invoked, not consumed. The
+generic protocol pieces were carved out into `kevy-resp-client` (a real
+stone); `kevy-cli` itself is now just a redis-cli-style REPL.
 
 每个维度分三层：
 
