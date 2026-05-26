@@ -8,10 +8,13 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
+documentation = "https://docs.rs/kevy-resp"
 readme = "README.md"
 keywords = ["redis", "resp", "protocol", "codec", "kevy"]
 categories = ["network-programming", "parser-implementations", "encoding"]
+
+[lints]
+workspace = true
 
 [dependencies]
 

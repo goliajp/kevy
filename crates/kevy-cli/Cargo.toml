@@ -10,6 +10,9 @@ readme = "README.md"
 keywords = ["redis", "cli", "repl", "resp", "kevy"]
 categories = ["command-line-utilities", "database"]
 
+[lints]
+workspace = true
+
 [lib]
 name = "kevy_cli"
 path = "src/lib.rs"

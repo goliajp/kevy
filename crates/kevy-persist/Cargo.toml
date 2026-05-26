@@ -10,6 +10,9 @@ readme = "README.md"
 keywords = ["redis", "persistence", "rdb", "aof", "snapshot"]
 categories = ["database-implementations", "filesystem"]
 
+[lints]
+workspace = true
+
 [dependencies]
 kevy-store = { path = "../kevy-store", version = "0.1" }
 kevy-resp = { path = "../kevy-resp", version = "0.1" }

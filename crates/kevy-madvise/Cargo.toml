@@ -1,0 +1,19 @@
+[package]
+name = "kevy-madvise"
+description = "Pure-Rust madvise hints (MADV_HUGEPAGE) — no libc crate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-madvise"
+readme = "README.md"
+keywords = ["madvise", "hugepage", "thp", "memory", "linux"]
+categories = ["os", "memory-management", "external-ffi-bindings"]
+
+[lints]
+workspace = true
+
+[dependencies]

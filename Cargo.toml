@@ -8,6 +8,8 @@
 resolver = "3"
 members = [
     "crates/kevy-sys",
+    "crates/kevy-uring",
+    "crates/kevy-madvise",
     "crates/kevy-resp",
     "crates/kevy-ring",
     "crates/kevy-store",
@@ -28,10 +30,23 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 authors = ["GOLIA K.K."]
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/golia-kk/kevy"
-homepage = "https://github.com/golia-kk/kevy"
-documentation = "https://docs.rs/kevy"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/goliajp/kevy"
+homepage = "https://github.com/goliajp/kevy"
+
+# `documentation` is intentionally NOT inherited at the workspace level —
+# each publishable crate sets its own `documentation = "https://docs.rs/
+# <crate-name>"` so the link resolves to the crate's own docs.rs page,
+# not a hard-coded one. Matches the mailrs publish model.
+
+# Lint policy shared across every workspace member. Matches the project
+# charter: warnings are deny (clippy + rustc both). Per-crate manifests
+# opt in via `[lints] workspace = true`.
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny" }
 
 [profile.release]
 opt-level = 3

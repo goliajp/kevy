@@ -1,0 +1,19 @@
+[package]
+name = "kevy-uring"
+description = "Pure-Rust io_uring bindings — no liburing, no libc crate."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-uring"
+readme = "README.md"
+keywords = ["io-uring", "io_uring", "linux", "async", "completion"]
+categories = ["os::linux-apis", "asynchronous", "network-programming", "external-ffi-bindings"]
+
+[lints]
+workspace = true
+
+[dependencies]

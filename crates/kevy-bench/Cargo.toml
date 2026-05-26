@@ -8,8 +8,11 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-documentation.workspace = true
+documentation = "https://docs.rs/kevy-bench"
 keywords = ["benchmark", "bench", "perf", "median", "kevy"]
 categories = ["development-tools::testing", "no-std"]
+
+[lints]
+workspace = true
 
 [dependencies]

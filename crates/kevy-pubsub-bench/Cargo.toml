@@ -9,6 +9,9 @@ license.workspace = true
 keywords = ["redis", "valkey", "pubsub", "benchmark", "fanout"]
 categories = ["development-tools::profiling", "command-line-utilities"]
 
+[lints]
+workspace = true
+
 [[bin]]
 name = "kevy-pubsub-bench"
 path = "src/main.rs"

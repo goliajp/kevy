@@ -41,12 +41,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-madvise"
+version = "0.1.0"
+
+[[package]]
 name = "kevy-map"
 version = "0.1.0"
 dependencies = [
  "kevy-bench",
  "kevy-hash",
- "kevy-sys",
+ "kevy-madvise",
 ]
 
 [[package]]
@@ -93,6 +97,7 @@ dependencies = [
  "kevy-ring",
  "kevy-store",
  "kevy-sys",
+ "kevy-uring",
 ]
 
 [[package]]
@@ -107,4 +112,8 @@ dependencies = [
 
 [[package]]
 name = "kevy-sys"
+version = "0.1.0"
+
+[[package]]
+name = "kevy-uring"
 version = "0.1.0"

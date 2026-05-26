@@ -1,6 +1,6 @@
 [package]
 name = "kevy-sys"
-description = "Hand-written OS-boundary bindings for kevy — the only place libc is touched."
+description = "Hand-curated OS bindings for kevy — sockets + readiness poller."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,5 +9,8 @@ license.workspace = true
 readme = "README.md"
 keywords = ["redis", "epoll", "kqueue", "socket", "reactor"]
 categories = ["os", "network-programming", "external-ffi-bindings"]
+
+[lints]
+workspace = true
 
 [dependencies]
