@@ -359,7 +359,14 @@ impl PartialEq for SmallBytes {
                 };
                 a == b
             }
-            _ => self.as_slice() == other.as_slice(),
+            // Mixed inline/heap is unreachable from any safe constructor —
+            // a heap variant always carries len > 22, an inline always
+            // len ≤ 22, so two equal-length values land in the same arm
+            // (and non-equal-length comparisons short-circuit on
+            // `len != other_len` inside each arm).
+            _ => unreachable!(
+                "kevy-bytes invariant: a heap variant never carries len ≤ 22"
+            ),
         }
     }
 }
@@ -418,6 +425,7 @@ impl From<Vec<u8>> for SmallBytes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kevy_hash::KevyHash as _;
 
     #[test]
     fn size_and_align() {
@@ -567,5 +575,168 @@ mod tests {
             let s = SmallBytes::from_slice(&v);
             drop(s);
         }
+    }
+
+    // ---- Effective coverage: trait impls + branch paths ---------------------
+
+    #[test]
+    fn eq_is_reflexive_and_symmetric_inline() {
+        let a = SmallBytes::from_slice(b"hi");
+        let b = SmallBytes::from_slice(b"hi");
+        let c = SmallBytes::from_slice(b"no");
+        assert_eq!(a, a);
+        assert_eq!(a, b);
+        assert_eq!(b, a);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn eq_is_reflexive_and_symmetric_heap() {
+        let v: Vec<u8> = (0u8..40).collect();
+        let a = SmallBytes::from_slice(&v);
+        let b = SmallBytes::from_slice(&v);
+        let mut w = v.clone();
+        w[0] = w[0].wrapping_add(1);
+        let c = SmallBytes::from_slice(&w);
+        assert_eq!(a, a);
+        assert_eq!(a, b);
+        assert_eq!(b, a);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn partial_cmp_matches_cmp_inline() {
+        let a = SmallBytes::from_slice(b"abc");
+        let b = SmallBytes::from_slice(b"abd");
+        assert_eq!(a.partial_cmp(&b), Some(std::cmp::Ordering::Less));
+        assert_eq!(b.partial_cmp(&a), Some(std::cmp::Ordering::Greater));
+        assert_eq!(a.partial_cmp(&a), Some(std::cmp::Ordering::Equal));
+        // Same chain via the Ord impl directly.
+        assert_eq!(a.cmp(&b), std::cmp::Ordering::Less);
+        assert_eq!(a.cmp(&a), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn hash_agrees_with_byte_slice() {
+        use std::collections::hash_map::DefaultHasher;
+        let v: Vec<u8> = (0u8..40).collect();
+        let s = SmallBytes::from_slice(&v);
+        let mut h_slice = DefaultHasher::new();
+        v.as_slice().hash(&mut h_slice);
+        let mut h_sb = DefaultHasher::new();
+        s.hash(&mut h_sb);
+        // Same byte stream into the Hasher (Hash for [u8] writes len + bytes;
+        // ours delegates to as_slice so it matches).
+        assert_eq!(h_slice.finish(), h_sb.finish());
+    }
+
+    #[test]
+    fn kevy_hash_agrees_with_byte_slice() {
+        let v: Vec<u8> = (0u8..40).collect();
+        let s = SmallBytes::from_slice(&v);
+        assert_eq!(
+            s.kevy_hash(),
+            v.as_slice().kevy_hash(),
+            "KevyHash impl must agree with &[u8] so a KevyMap<SmallBytes, V> can be queried by Borrow<[u8]>"
+        );
+        let small = SmallBytes::from_slice(b"foo");
+        assert_eq!(small.kevy_hash(), (b"foo" as &[u8]).kevy_hash());
+    }
+
+    #[test]
+    fn as_ref_is_zero_copy_view() {
+        let s = SmallBytes::from_slice(b"abcdef");
+        let r: &[u8] = s.as_ref();
+        assert_eq!(r, b"abcdef");
+        // Same slice address as as_slice (the impl delegates to as_slice).
+        assert!(std::ptr::eq(r.as_ptr(), s.as_slice().as_ptr()));
+    }
+
+    #[test]
+    fn borrow_lookup_works_in_collection() {
+        use std::collections::HashMap;
+        let mut m: HashMap<SmallBytes, i32> = HashMap::new();
+        m.insert(SmallBytes::from_slice(b"key1"), 1);
+        m.insert(SmallBytes::from_slice(b"key2"), 2);
+        // Look up by &[u8] thanks to Borrow<[u8]>.
+        assert_eq!(m.get(b"key1".as_slice()), Some(&1));
+        assert_eq!(m.get(b"key2".as_slice()), Some(&2));
+        assert_eq!(m.get(b"none".as_slice()), None);
+    }
+
+    #[test]
+    fn from_byte_slice_round_trip() {
+        let a: SmallBytes = (&b"short"[..]).into();
+        assert_eq!(a.as_slice(), b"short");
+        let v: Vec<u8> = (0u8..40).collect();
+        let b: SmallBytes = v.as_slice().into();
+        assert_eq!(b.as_slice(), v.as_slice());
+        assert!(!b.is_inline());
+    }
+
+    #[test]
+    fn from_vec_dispatches_inline_or_heap() {
+        // ≤ 22 → inline (copies)
+        let inline_src: SmallBytes = vec![1u8, 2, 3].into();
+        assert!(inline_src.is_inline());
+        assert_eq!(inline_src.as_slice(), &[1, 2, 3]);
+        // > 22 → heap (reuses alloc; verified by from_vec_heap_reuses_alloc)
+        let v: Vec<u8> = (0u8..30).collect();
+        let heap_src: SmallBytes = v.clone().into();
+        assert!(!heap_src.is_inline());
+        assert_eq!(heap_src.as_slice(), v.as_slice());
+    }
+
+    #[test]
+    fn clone_heap_keeps_data_and_is_independent() {
+        // Cloned heap value must allocate a separate buffer (no shared
+        // pointer), so dropping the source doesn't invalidate the clone.
+        let v: Vec<u8> = (0u8..50).collect();
+        let src = SmallBytes::from_slice(&v);
+        let dup = src.clone();
+        // SAFETY: both in heap variant by len > 22.
+        unsafe {
+            assert_ne!(
+                src.heap.ptr.as_ptr(),
+                dup.heap.ptr.as_ptr(),
+                "clone must allocate a fresh buffer"
+            );
+        }
+        drop(src);
+        // dup remains valid.
+        assert_eq!(dup.as_slice(), v.as_slice());
+    }
+
+    #[test]
+    fn drop_inline_is_noop() {
+        // Just exercise the inline path of Drop (the `if self.is_inline()
+        // { return }` early-return); miri checks no UB.
+        for &n in &[0usize, 1, 5, 22] {
+            let s = SmallBytes::from_slice(&vec![b'x'; n]);
+            assert!(s.is_inline());
+            drop(s);
+        }
+    }
+
+    #[test]
+    fn into_vec_zero_size_path() {
+        // Empty (inline) → into_vec returns empty Vec without panic.
+        let s = SmallBytes::new();
+        let v = s.into_vec();
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn to_vec_copies_inline_and_heap() {
+        let inline = SmallBytes::from_slice(b"hi");
+        assert_eq!(inline.to_vec(), b"hi");
+        let v: Vec<u8> = (0u8..30).collect();
+        let heap = SmallBytes::from_slice(&v);
+        let copy = heap.to_vec();
+        assert_eq!(copy, v);
+        // to_vec returns an owned independent Vec; heap can be modified
+        // via subsequent operations without affecting the returned Vec.
+        // (Just verify equality after going through .to_vec.)
+        assert_eq!(heap.as_slice(), v.as_slice());
     }
 }
