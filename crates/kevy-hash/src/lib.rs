@@ -99,6 +99,69 @@ impl Hasher for FxHasher {
 /// keys hash equally across instances and process runs.
 pub type FxBuildHasher = BuildHasherDefault<FxHasher>;
 
+/// Single-call hashing for kevy's per-command hot path.
+///
+/// `std::hash::Hasher` is a state-machine API — every hash is `Hasher::default()`
+/// → `write_*` → `finish`, with `BuildHasher` indirection on top. For
+/// `kevy-map`'s open-addressing table the keyspace is a small handful of
+/// well-known leaf types (`[u8]`, `u32`, `u64`, `i32`); we get a faster, inline-
+/// friendly hash by exposing one method on each that produces the final mixed
+/// 64-bit value in one go.
+///
+/// All impls must agree with feeding the value through [`FxHasher`] then
+/// calling `finish` — this lets us cut the trait dispatch without changing the
+/// hash function. `kevy-map` consumes both the full hash (for bucket index)
+/// and its top 7 bits (for the metadata byte).
+pub trait KevyHash {
+    fn kevy_hash(&self) -> u64;
+}
+
+impl KevyHash for [u8] {
+    #[inline]
+    fn kevy_hash(&self) -> u64 {
+        let mut h = FxHasher::default();
+        h.write(self);
+        h.finish()
+    }
+}
+
+impl KevyHash for Vec<u8> {
+    #[inline]
+    fn kevy_hash(&self) -> u64 {
+        self.as_slice().kevy_hash()
+    }
+}
+
+impl KevyHash for u64 {
+    #[inline]
+    fn kevy_hash(&self) -> u64 {
+        fmix64(mix(0, *self))
+    }
+}
+
+impl KevyHash for u32 {
+    #[inline]
+    fn kevy_hash(&self) -> u64 {
+        fmix64(mix(0, *self as u64))
+    }
+}
+
+impl KevyHash for i32 {
+    #[inline]
+    fn kevy_hash(&self) -> u64 {
+        // Sign-extend to u64 so equal i32 values hash the same as if widened
+        // through the integer path; negatives' top bits still fmix64 away.
+        fmix64(mix(0, *self as i64 as u64))
+    }
+}
+
+impl KevyHash for usize {
+    #[inline]
+    fn kevy_hash(&self) -> u64 {
+        fmix64(mix(0, *self as u64))
+    }
+}
+
 /// A [`HashMap`] using [`FxHasher`] instead of SipHash.
 pub type FxHashMap<K, V> = HashMap<K, V, FxBuildHasher>;
 
@@ -131,6 +194,45 @@ mod tests {
         for i in 0..10_000u64 {
             assert_eq!(m.get(format!("key:{i}").into_bytes().as_slice()), Some(&i));
         }
+    }
+
+    #[test]
+    fn kevy_hash_matches_fx_hasher_for_bytes() {
+        // KevyHash is the one-call form of: FxHasher::default(); write(); finish().
+        // (Note: BuildHasher::hash_one routes through <[u8] as Hash> which adds a
+        // length prefix — we match the raw-Fx path, not hash_one. kevy-map is
+        // standalone; the FxHashMap path stays available for callers that want
+        // hash_one's length-prefixed behaviour.)
+        let key = b"hello-world".as_slice();
+        let one_call = key.kevy_hash();
+        let mut staged = FxHasher::default();
+        staged.write(key);
+        assert_eq!(one_call, staged.finish());
+    }
+
+    #[test]
+    fn kevy_hash_integer_paths_differ_per_value() {
+        let a: u64 = 1;
+        let b: u64 = 2;
+        assert_ne!(a.kevy_hash(), b.kevy_hash());
+        let i: i32 = -1;
+        let j: i32 = 1;
+        assert_ne!(i.kevy_hash(), j.kevy_hash());
+    }
+
+    #[test]
+    fn kevy_hash_top7_bits_distribute() {
+        // Same low-entropy clustering guard, but driven through `kevy_hash`
+        // on byte slices — the path kevy-map's metadata byte will use.
+        let mut top = [0u32; 128];
+        for i in 0..4096u64 {
+            let mut k = format!("key:{i}").into_bytes();
+            k.resize(12, b'x');
+            let hash = k.as_slice().kevy_hash();
+            top[(hash >> 57) as usize] += 1;
+        }
+        let max = *top.iter().max().unwrap();
+        assert!(max < 128, "top-7-bit skew {max} (mean 32) — avalanche failing");
     }
 
     #[test]

@@ -265,6 +265,12 @@ impl<C: Commands> Shard<C> {
             }
         }
 
+        // 1-step lookahead prefetch (v0.metal-5): when command N+1 parses,
+        // hint its key bucket while dispatching N. On pipelined streams
+        // (-P256) this hides the bucket-probe DRAM miss the memory-wall
+        // baseline pinned (perfs/data/2026-05-26/metal-baseline.txt).
+        let mut pending: Option<kevy_resp::Command> = None;
+        let mut had_protocol_error = false;
         loop {
             let parsed = {
                 let Some(conn) = self.conns.get_mut(&conn_id) else {
@@ -280,13 +286,27 @@ impl<C: Commands> Shard<C> {
                 }
             };
             match parsed {
-                Some(Ok(args)) => self.handle_command(conn_id, args),
+                Some(Ok(args)) => {
+                    if let Some(key) = args.get(1) {
+                        self.store.prefetch_for_key(key);
+                    }
+                    if let Some(prev) = pending.take() {
+                        self.handle_command(conn_id, prev);
+                    }
+                    pending = Some(args);
+                }
                 Some(Err(())) => {
-                    self.protocol_error(conn_id);
+                    had_protocol_error = true;
                     break;
                 }
                 None => break,
             }
+        }
+        if let Some(last) = pending {
+            self.handle_command(conn_id, last);
+        }
+        if had_protocol_error {
+            self.protocol_error(conn_id);
         }
         self.flush_conn(conn_id)
     }
