@@ -20,6 +20,7 @@ members = [
     "crates/kevy-hash",
     "crates/kevy-bytes",
     "crates/kevy-map",
+    "crates/kevy-resp-client",
 ]
 
 [workspace.package]
