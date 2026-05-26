@@ -29,14 +29,15 @@ checkpoint is its own stone; perf-WIN gate relaxed but correctness gate stays.
   union; kevy-store stays `forbid(unsafe_code)`). `Value::Str(SmallBytes)` keeps
   `size_of::<Value>()` ≤32B. 10M-key GET +12.9%, RSS -8.6% @ 8.6M keys. Done —
   commit fb7c71c.
-- **v0.metal-4+5 — Self-built `kevy-map` + software prefetch + cache-conscious
-  bucket layout.** Merged into one feature/stone because the prefetch is the
-  whole point of owning the table; shipping metal-4 alone would publish a
-  perf-neutral change. Pure-Rust Swiss-style open-addressing table (per-shard,
-  no DoS hardening, no SipHash residue) that exposes bucket addresses → batch
-  driver `prefetcht0`'s the next command's group while finishing the current →
-  hides the bucket-probe DRAM miss (the dominant remaining memory-wall cost
-  after v0.metal-3). Design: `rfcs/2026-05-26-kevy-map-design.md`.
+- ✅ **v0.metal-4+5 — kevy-map + bucket prefetch.** Pure-Rust Swiss-style
+  open-addressing table (kevy-map crate, ~250 LOC unsafe) replacing
+  FxHashMap/FxHashSet across Store::map / HashData / SetData (via KevySet) /
+  ZSetData.by_member. New `Store::prefetch_for_key` invoked by both reactors'
+  parse loops (1-step lookahead: prefetch N+1 while dispatching N). 10M-key
+  GET 2.28M → 2.77M (+21.2% vs metal-1 baseline; +7.3% vs metal-3). RSS
+  neutral. Memory wall (1→10M curve) -52% → -41%. SSE2 group scan deferred
+  (RFC step 6) — scalar scan no longer the bottleneck once prefetch hides
+  the bucket-probe miss. Done — commit 421c826.
 - **v0.metal-6 — Hugepages (THP / explicit).** Large pages for the store backing
   to drop TLB miss rate at 10M+ keys. Environment tuning; independent of code.
 - **v0.metal-7 — Zero-alloc local hot path.** Kill parse's 2 per-command allocs
