@@ -6,5 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords = ["benchmark", "bench", "perf", "median", "kevy"]
+categories = ["development-tools::testing", "no-std"]
 
 [dependencies]
