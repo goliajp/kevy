@@ -41,6 +41,7 @@ name = "kevy-map"
 version = "0.1.0"
 dependencies = [
  "kevy-hash",
+ "kevy-sys",
 ]
 
 [[package]]

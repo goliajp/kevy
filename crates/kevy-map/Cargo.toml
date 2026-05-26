@@ -11,3 +11,4 @@ categories = ["data-structures"]
 
 [dependencies]
 kevy-hash = { path = "../kevy-hash", version = "0.1" }
+kevy-sys  = { path = "../kevy-sys",  version = "0.1" }
