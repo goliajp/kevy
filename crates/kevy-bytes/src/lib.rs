@@ -129,10 +129,15 @@ impl SmallBytes {
         }
     }
 
+    #[inline]
     fn alloc_heap(bytes: &[u8]) -> Self {
         let len = bytes.len();
-        let layout = Layout::array::<u8>(len).expect("kevy-bytes: layout overflow");
-        // SAFETY: len > 22 ⇒ layout.size() > 0 (alloc requires non-zero size).
+        // `len > 22` (caller has already taken the heap branch) and `len` is
+        // a slice length ⇒ ≤ `isize::MAX` ⇒ well below the `usize::MAX -
+        // (align - 1)` bound `from_size_align_unchecked` needs. u8's align is 1.
+        // SAFETY: see above.
+        let layout = unsafe { Layout::from_size_align_unchecked(len, 1) };
+        // SAFETY: layout.size() > 0 (caller's heap branch guarantees len > 22).
         let raw = unsafe { alloc(layout) };
         let ptr = match NonNull::new(raw) {
             Some(p) => p,
