@@ -12,6 +12,7 @@ categories = ["database-implementations", "data-structures", "caching"]
 
 [dependencies]
 kevy-hash = { path = "../kevy-hash", version = "0.1" }
+kevy-bytes = { path = "../kevy-bytes", version = "0.1" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench", version = "0.1" }

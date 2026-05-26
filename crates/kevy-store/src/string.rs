@@ -27,7 +27,7 @@ impl Store {
                 if nx {
                     return false;
                 }
-                e.value = Value::Str(value);
+                e.value = Value::Str(SmallBytes::from_vec(value));
                 e.expire_at = expire_at;
                 true
             }
@@ -39,7 +39,7 @@ impl Store {
                 self.map.insert(
                     key.to_vec(),
                     Entry {
-                        value: Value::Str(value),
+                        value: Value::Str(SmallBytes::from_vec(value)),
                         expire_at,
                     },
                 );
@@ -66,8 +66,12 @@ impl Store {
         match self.live_entry_mut(key) {
             Some(e) => match &mut e.value {
                 Value::Str(v) => {
-                    v.extend_from_slice(data);
-                    Ok(v.len())
+                    // SmallBytes is immutable; pop out, grow via Vec, re-wrap.
+                    let mut owned = std::mem::take(v).into_vec();
+                    owned.extend_from_slice(data);
+                    let new_len = owned.len();
+                    *v = SmallBytes::from_vec(owned);
+                    Ok(new_len)
                 }
                 _ => Err(StoreError::WrongType),
             },
@@ -75,7 +79,7 @@ impl Store {
                 self.map.insert(
                     key.to_vec(),
                     Entry {
-                        value: Value::Str(data.to_vec()),
+                        value: Value::Str(SmallBytes::from_slice(data)),
                         expire_at: None,
                     },
                 );
@@ -89,11 +93,11 @@ impl Store {
         match self.live_entry_mut(key) {
             Some(e) => match &mut e.value {
                 Value::Str(v) => {
-                    let next = parse_i64(v)
+                    let next = parse_i64(v.as_slice())
                         .ok_or(StoreError::NotInteger)?
                         .checked_add(delta)
                         .ok_or(StoreError::Overflow)?;
-                    *v = next.to_string().into_bytes();
+                    *v = SmallBytes::from_vec(next.to_string().into_bytes());
                     Ok(next)
                 }
                 _ => Err(StoreError::WrongType),
@@ -103,7 +107,7 @@ impl Store {
                 self.map.insert(
                     key.to_vec(),
                     Entry {
-                        value: Value::Str(delta.to_string().into_bytes()),
+                        value: Value::Str(SmallBytes::from_vec(delta.to_string().into_bytes())),
                         expire_at: None,
                     },
                 );
@@ -117,7 +121,7 @@ impl Store {
     pub fn getset(&mut self, key: &[u8], val: Vec<u8>) -> Result<Option<Vec<u8>>, StoreError> {
         let old = match self.live_entry(key) {
             Some(e) => match &e.value {
-                Value::Str(v) => Some(v.clone()),
+                Value::Str(v) => Some(v.to_vec()),
                 _ => return Err(StoreError::WrongType),
             },
             None => None,
@@ -125,7 +129,7 @@ impl Store {
         self.map.insert(
             key.to_vec(),
             Entry {
-                value: Value::Str(val),
+                value: Value::Str(SmallBytes::from_vec(val)),
                 expire_at: None,
             },
         );
@@ -145,7 +149,7 @@ impl Store {
             Some(Entry {
                 value: Value::Str(v),
                 ..
-            }) => Ok(Some(v)),
+            }) => Ok(Some(v.into_vec())),
             _ => Ok(None),
         }
     }
@@ -155,12 +159,12 @@ impl Store {
         match self.live_entry_mut(key) {
             Some(e) => match &mut e.value {
                 Value::Str(v) => {
-                    let next = parse_f64(v).ok_or(StoreError::NotFloat)? + delta;
+                    let next = parse_f64(v.as_slice()).ok_or(StoreError::NotFloat)? + delta;
                     if !next.is_finite() {
                         return Err(StoreError::NotFloat);
                     }
                     let bytes = fmt_num(next);
-                    *v = bytes.clone();
+                    *v = SmallBytes::from_slice(&bytes);
                     Ok(bytes)
                 }
                 _ => Err(StoreError::WrongType),
@@ -174,7 +178,7 @@ impl Store {
                 self.map.insert(
                     key.to_vec(),
                     Entry {
-                        value: Value::Str(bytes.clone()),
+                        value: Value::Str(SmallBytes::from_slice(&bytes)),
                         expire_at: None,
                     },
                 );
