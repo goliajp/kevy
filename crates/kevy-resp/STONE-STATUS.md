@@ -23,8 +23,8 @@ Snapshot of the verification matrix as of the most recent audit.
 
 | Target           | Toolchain (cargo-fuzz) | Wall-clock | Execs / corpus | Findings |
 |------------------|------------------------|------------|----------------|----------|
-| `parse_command`  | nightly-2026-05-19 + libFuzzer | ≥ 3600 s  | recorded in `fuzz/corpus/parse_command/` | **0 crashes** (initial 60s catch surfaced the DoS in `parse_array_reply`; fixed in commit `a03a064` and re-fuzzed clean). |
-| `parse_reply`    | nightly-2026-05-19 + libFuzzer | ≥ 3600 s  | recorded in `fuzz/corpus/parse_reply/`   | **0 crashes** after the DoS fix. |
+| `parse_command`  | nightly-2026-05-19 + libFuzzer | 3601 s (2026-05-26) | **2 709 796 455 runs** (~750 k execs/s), on-disk corpus 596 entries; saturated at cov 235 / ft 840 | **0 crashes**. (60 s smoke during audit surfaced no issues for this target.) |
+| `parse_reply`    | nightly-2026-05-19 + libFuzzer | 3601 s (2026-05-26) | **365 199 468 runs** (~100 k execs/s — ran in parallel with `parse_command`, half-CPU), on-disk corpus 6361 entries; saturated at cov 229 / ft 1195 | **0 crashes** after the DoS fix in commit `a03a064`. Historical crash artifact `crash-4c4ee6…` (the pre-fix DoS) retained at `fuzz/artifacts/parse_reply/` and replayed clean every fuzz run as a regression check. |
 
 Run command (any time):
 
