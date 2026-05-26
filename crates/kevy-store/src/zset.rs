@@ -15,7 +15,7 @@ impl Store {
             self.map.insert(
                 key.to_vec(),
                 Entry {
-                    value: Value::ZSet(ZSetData::default()),
+                    value: Value::ZSet(Box::default()),
                     expire_at: None,
                 },
             );

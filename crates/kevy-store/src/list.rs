@@ -15,7 +15,7 @@ impl Store {
             self.map.insert(
                 key.to_vec(),
                 Entry {
-                    value: Value::List(ListData::new()),
+                    value: Value::List(Box::default()),
                     expire_at: None,
                 },
             );
