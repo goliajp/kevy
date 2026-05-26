@@ -1,17 +1,18 @@
 //! Value types — one backing structure per Redis type.
 
 pub use kevy_bytes::SmallBytes;
-use kevy_hash::{FxHashMap, FxHashSet};
+use kevy_map::{KevyMap, KevySet};
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
 
-/// Backing structure for a Hash value (hashbrown Swiss table + kevy-hash's
-/// Fx+fmix64 hasher — the keyspace win transfers; same byte-string keys).
-pub type HashData = FxHashMap<Vec<u8>, Vec<u8>>;
+/// Backing structure for a Hash value — [`KevyMap`] (open-addressing Swiss
+/// table, kevy-hash one-call hasher, no DoS hardening — same-shaped wins as
+/// the keyspace map).
+pub type HashData = KevyMap<Vec<u8>, Vec<u8>>;
 /// Backing structure for a List value (a ring-buffer deque — O(1) both ends).
 pub type ListData = VecDeque<Vec<u8>>;
-/// Backing structure for a Set value (hashbrown Swiss table + Fx+fmix64 hasher).
-pub type SetData = FxHashSet<Vec<u8>>;
+/// Backing structure for a Set value — [`KevySet`] wrapper over `KevyMap<K, ()>`.
+pub type SetData = KevySet<Vec<u8>>;
 
 /// A total-ordered f64 score (Redis scores are never NaN). `total_cmp` gives a
 /// total order so scores can key a `BTreeSet`.
@@ -59,7 +60,7 @@ impl ScoreBound {
 /// an order-statistics tree for O(log n) rank is a later perf item.)
 #[derive(Default)]
 pub struct ZSetData {
-    pub(crate) by_member: FxHashMap<Vec<u8>, f64>,
+    pub(crate) by_member: KevyMap<Vec<u8>, f64>,
     pub(crate) by_score: BTreeSet<(Score, Vec<u8>)>,
 }
 

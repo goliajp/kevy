@@ -262,6 +262,9 @@ impl<C: Commands> Shard<C> {
             conn.input.extend_from_slice(pbuf.bytes(bid, n));
         }
         pbuf.recycle(bid);
+        // 1-step lookahead prefetch (v0.metal-5): mirrors the epoll path.
+        let mut pending: Option<kevy_resp::Command> = None;
+        let mut had_protocol_error = false;
         loop {
             let parsed = {
                 let Some(conn) = self.conns.get_mut(&cid) else {
@@ -277,15 +280,29 @@ impl<C: Commands> Shard<C> {
                 }
             };
             match parsed {
-                Some(Ok(args)) => self.handle_command(cid, args),
-                Some(Err(())) => {
-                    self.protocol_error(cid);
-                    if let Some(uc) = io.get_mut(&cid) {
-                        uc.closing = true;
+                Some(Ok(args)) => {
+                    if let Some(key) = args.get(1) {
+                        self.store.prefetch_for_key(key);
                     }
+                    if let Some(prev) = pending.take() {
+                        self.handle_command(cid, prev);
+                    }
+                    pending = Some(args);
+                }
+                Some(Err(())) => {
+                    had_protocol_error = true;
                     break;
                 }
                 None => break,
+            }
+        }
+        if let Some(last) = pending {
+            self.handle_command(cid, last);
+        }
+        if had_protocol_error {
+            self.protocol_error(cid);
+            if let Some(uc) = io.get_mut(&cid) {
+                uc.closing = true;
             }
         }
     }
