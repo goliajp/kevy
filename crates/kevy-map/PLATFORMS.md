@@ -23,8 +23,8 @@ inline-asm gated by `cfg`.
 
 - On x86_64: emits `_mm_prefetch` (T0 hint).
 - On aarch64: emits `prfm pldl1keep`.
-- Anywhere else (incl. under miri): semantic no-op. `prefetch_t0` is always
-  safe to call; it just doesn't prefetch.
+- Anywhere else (incl. under miri): semantic no-op. `prefetch_for_hash` is
+  always safe to call; it just doesn't prefetch.
 
 ## Untested but expected to work
 

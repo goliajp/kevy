@@ -11,8 +11,8 @@ this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
-- Initial release of `FxFmixHasher` (Fx absorb + `fmix64` finalizer) and
-  `FxFmixBuildHasher` for drop-in use with `std::collections::HashMap`.
+- Initial release of `FxHasher` (Fx absorb + `fmix64` finalizer) and
+  `FxBuildHasher` for drop-in use with `std::collections::HashMap`.
 - `KevyHash` trait + `kevy_hash::kevy_hash(b: &[u8]) -> u64` zero-state
   helper for callers that don't need `Hasher`'s state machine.
 - 3.7–7× faster than `std`'s SipHash on the byte-string + integer key
