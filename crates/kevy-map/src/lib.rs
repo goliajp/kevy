@@ -130,6 +130,17 @@ impl<K, V> KevyMap<K, V> {
         debug_assert!(cap >= MIN_CAP);
         let metadata = vec![EMPTY; cap].into_boxed_slice();
         let slots: Box<[MaybeUninit<(K, V)>]> = Box::new_uninit_slice(cap);
+        // v0.metal-9: hint THP on both backing arrays. madvise tolerates
+        // mis-alignment by no-op'ing (Linux EINVAL is silenced inside
+        // kevy_sys::advise_hugepage). On 10M+ key tables the metadata array
+        // alone is 16 MB — well over the 2 MB HP boundary, so the kernel's
+        // khugepaged can promote it in place. Cheap on the non-Linux paths
+        // (compile-time no-op).
+        kevy_sys::advise_hugepage(metadata.as_ptr(), metadata.len());
+        kevy_sys::advise_hugepage(
+            slots.as_ptr() as *const u8,
+            std::mem::size_of_val::<[_]>(&slots),
+        );
         Self {
             metadata,
             slots,
