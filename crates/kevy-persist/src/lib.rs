@@ -176,7 +176,7 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
             write_ttl(w, ttl)?;
             write_bytes(w, key)?;
             w.write_all(&(h.len() as u32).to_le_bytes())?;
-            for (f, v) in h {
+            for (f, v) in h.iter() {
                 write_bytes(w, f)?;
                 write_bytes(w, v)?;
             }
@@ -186,7 +186,7 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
             write_ttl(w, ttl)?;
             write_bytes(w, key)?;
             w.write_all(&(l.len() as u32).to_le_bytes())?;
-            for item in l {
+            for item in l.iter() {
                 write_bytes(w, item)?;
             }
         }
@@ -195,7 +195,7 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
             write_ttl(w, ttl)?;
             write_bytes(w, key)?;
             w.write_all(&(set.len() as u32).to_le_bytes())?;
-            for m in set {
+            for m in set.iter() {
                 write_bytes(w, m)?;
             }
         }

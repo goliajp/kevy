@@ -93,12 +93,19 @@ impl ZSetData {
 }
 
 /// A stored value. One variant per Redis type.
+///
+/// The collection variants are **boxed** so the enum is only as big as `Str`
+/// (24 B) + tag = 32 B, not the 56 B `ZSetData` — every `Entry` (incl. the
+/// common string case) is then ~48 B instead of ~80 B, so the hashbrown bucket
+/// array is ~40% denser/smaller (fewer cache misses on a large keyspace, less
+/// RSS). The extra pointer-chase lands only on collection ops, not the hot
+/// string GET path.
 pub enum Value {
     Str(Vec<u8>),
-    Hash(HashData),
-    List(ListData),
-    Set(SetData),
-    ZSet(ZSetData),
+    Hash(Box<HashData>),
+    List(Box<ListData>),
+    Set(Box<SetData>),
+    ZSet(Box<ZSetData>),
 }
 
 impl Value {
