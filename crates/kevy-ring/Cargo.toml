@@ -11,3 +11,6 @@ keywords = ["spsc", "lock-free", "ring-buffer", "queue", "kevy"]
 categories = ["concurrency", "data-structures", "no-std"]
 
 [dependencies]
+
+[dev-dependencies]
+kevy-bench = { path = "../kevy-bench", version = "0.1" }
