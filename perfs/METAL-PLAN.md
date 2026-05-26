@@ -25,20 +25,18 @@ checkpoint is its own stone; perf-WIN gate relaxed but correctness gate stays.
   bench, perf-on-lx64 harness, RSS + binary-size tracking. Done — commit 2db0b27.
 - ✅ **v0.metal-2 — Box collection Value variants.** Hash/List/Set/ZSet boxed →
   Entry 80→48B → RSS -29% @ 8.6M keys, 10M-key GET +2.4%. Done — commit 2c3ee26.
-- **v0.metal-3 — Value inlining (SSO).** A 24B small-byte-string type (inline
-  ≤22B, else heap) lives in a new `kevy-bytes` crate (unsafe union; kevy-store
-  stays `forbid(unsafe_code)`). Replaces `Value::Str(Vec<u8>)`. Kills the small-
-  string-value pointer-chase 2nd cache miss on GET. Must keep `size_of::<Value>()`
-  ≤ 32B (don't undo box-collection's Entry-48B win).
-- **v0.metal-4 — Self-built `kevy-map` hashtable.** Pure-Rust open-addressing
-  Swiss-style table replacing std `HashMap`. Per-shard, single-thread, no
-  DoS-hardening tax. **Unlock**: exposes bucket addresses, the precondition for
-  software prefetch (v0.metal-5). Also removes any std SipHash residue + lets us
-  control bucket layout.
-- **v0.metal-5 — Software prefetch + cache-conscious bucket layout.** In batch
-  processing, `prefetch(next_key_bucket)` while finishing the current. Co-design
-  bucket layout (key inlined? metadata grouped? cache-line packing?) using
-  `kevy-map`'s freedom. The direct hammer on the -52% memory wall.
+- ✅ **v0.metal-3 — Value inlining (SSO).** New `kevy-bytes` crate (24B unsafe
+  union; kevy-store stays `forbid(unsafe_code)`). `Value::Str(SmallBytes)` keeps
+  `size_of::<Value>()` ≤32B. 10M-key GET +12.9%, RSS -8.6% @ 8.6M keys. Done —
+  commit fb7c71c.
+- **v0.metal-4+5 — Self-built `kevy-map` + software prefetch + cache-conscious
+  bucket layout.** Merged into one feature/stone because the prefetch is the
+  whole point of owning the table; shipping metal-4 alone would publish a
+  perf-neutral change. Pure-Rust Swiss-style open-addressing table (per-shard,
+  no DoS hardening, no SipHash residue) that exposes bucket addresses → batch
+  driver `prefetcht0`'s the next command's group while finishing the current →
+  hides the bucket-probe DRAM miss (the dominant remaining memory-wall cost
+  after v0.metal-3). Design: `rfcs/2026-05-26-kevy-map-design.md`.
 - **v0.metal-6 — Hugepages (THP / explicit).** Large pages for the store backing
   to drop TLB miss rate at 10M+ keys. Environment tuning; independent of code.
 - **v0.metal-7 — Zero-alloc local hot path.** Kill parse's 2 per-command allocs
@@ -57,7 +55,45 @@ checkpoint is its own stone; perf-WIN gate relaxed but correctness gate stays.
 - **v0.metal-12 — Footprint & size.** Per-conn + pbuf-ring + store overhead;
   binary size (LTO / codegen / opt-level / panic strategy) — the size axis.
 
-## L3a — HOT plan (current checkpoint: v0.metal-3 — value inlining SSO)
+(v0.metal-4 and v0.metal-5 are merged; numbering 6..12 unchanged for stability.)
+
+## L3a — HOT plan (current checkpoint: v0.metal-4+5 — kevy-map + prefetch)
+
+Design RFC: `rfcs/2026-05-26-kevy-map-design.md` (read first; this is the
+short-form step list). Each step ends with a detection command; output →
+`perfs/data/2026-05-26/metal-4-5-*`.
+
+1. **Branch + crate skeleton.** `git flow feature start metal-4-5-kevy-map`;
+   add `crates/kevy-map` (Cargo.toml + lib.rs stub + module split); add to
+   workspace. **Detect**: `cargo check -p kevy-map` clean.
+2. **Hasher integration.** Add `KevyHash` trait + impls for `[u8]`, `u32`,
+   `u64`, `i32` to `kevy-hash` (one-call `hash(&self) -> u64`). **Detect**:
+   `cargo test -p kevy-hash` green; hash output matches FxFmix exactly.
+3. **Core impl (scalar group scan).** `KevyMap<K, V>`: metadata + slots
+   arrays; insert / get / remove / iter / grow; scalar 16-byte group scan
+   (one byte at a time); tombstones; power-of-two cap, 7/8 load factor.
+   **Detect**: ~20 unit tests cover boundaries (empty, single, grow,
+   collision storm, tombstone reuse, iter under remove); `cargo miri test -p
+   kevy-map` clean.
+4. **Wire `Store::map` to `KevyMap`.** Replace `FxHashMap<Vec<u8>, Entry>` —
+   keep other variants on FxHashMap for now. **Detect**: `cargo test -p
+   kevy-store` green.
+5. **Wire HashData / SetData / ZSetData.by_member to `KevyMap`.** Sweep.
+   **Detect**: `cargo test --workspace` green; clippy 0.
+6. **SSE2 group scan** under `#[cfg(target_arch = "x86_64")]`; SWAR u64
+   fallback otherwise. **Detect**: same tests pass; micro-bench shows group
+   scan ≥ scalar (use `kevy-bench`).
+7. **Prefetch hooks (v0.metal-5).** `KevyMap::prefetch_for_hash`; the batch
+   driver in `kevy-rt` issues prefetch for the next command's bucket group
+   while finishing the current. **Detect**: `cargo test --workspace` + clippy
+   0 + sharded 11/11 (epoll + io_uring on lx64).
+8. **lx64 A/B.** `bench/metal_keyspace.sh` curve; RSS @ 8.6M keys; stripped
+   binary size; cache-hot `-c50 -P256`. **Detect**:
+   `perfs/data/2026-05-26/metal-4-5-kevy-map-and-prefetch-ab.txt` written.
+9. **Judge + merge.** Any axis improved (and no axis ≥5% regressed) → `git
+   flow feature finish`. All-axis regression → discard + rejection note.
+
+## L3a (previous, completed) — v0.metal-3 value inlining SSO
 
 Each step ends with a detection command. Output → `perfs/data/2026-05-26/metal-3-*`.
 
@@ -116,13 +152,10 @@ to L3a on promotion). Notes:
 ## L4 — Triggers (cold → hot promotion predicates)
 
 - 2→3: **satisfied** (v0.metal-2 merged, baseline data informs the reorder).
-- 3→4: v0.metal-3 merged to develop with sharded 11/11 (epoll+io_uring) + clippy
-  0 + `perfs/data/2026-05-26/metal-3-value-inlining-ab.txt` exists.
-- 4→5: v0.metal-4 (kevy-map) merged with sharded 11/11 + clippy 0 + an A/B file.
-  Because v0.metal-5 needs bucket-address API from v0.metal-4, this trigger is
-  hard.
-- 5→6 … 11→12: same shape — previous merged + correctness + A/B file. On
-  promotion expand the L3b entry into a linear L3a hot plan.
+- 3→4+5: **satisfied** (v0.metal-3 merged: commit fb7c71c; data file
+  `metal-3-value-inlining-ab.txt`; sharded 11/11 both reactors; clippy 0).
+- 4+5→6 … 11→12: previous merged + correctness + A/B file. On promotion
+  expand the L3b entry into a linear L3a hot plan.
 
 Autorun: execute L3a; at each checkpoint completion check the L4 predicate, then
 promote the next. **Per session authorization (2026-05-26)**: when a step
