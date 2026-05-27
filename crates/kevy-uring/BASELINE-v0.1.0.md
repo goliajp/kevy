@@ -39,29 +39,34 @@ is **submit + reap latency** + **batch throughput on the multishot
 recv path**. None of these can run on macOS — the metric is the
 kernel-time floor of `io_uring_enter`.
 
-## Performance (deferred to lx64 metal)
+## Performance — kevy-uring 148 ns / liburing 152 ns (lx64 metal, 5-run min-of-medians)
+
+Stone-local perf bench landed in v0.1.1 polish (P13-A2): see
+`perfs/comparative/kevy-uring/`. Workload: `nop_round_trip` = one
+`prep_nop → submit_and_wait(1) → for_each_completion` cycle, 100k
+iters/sample, 25 samples/run, 5 runs.
+
+| competitor | ns/op (min-of-medians, 5 runs) | medians (5 runs) |
+|---|---:|---|
+| **kevy-uring** | **148** | 150, 150, 152, 148, 150 |
+| liburing 2.9 (Jens Axboe) | 152 | 157, 152, 153, 155, 154 |
+
+**Verdict: kevy-uring ties (slightly beats) liburing at the kernel
+floor.** The 4 ns delta is within run-to-run noise; the takeaway is
+**no measurable wrapper overhead beyond the syscall**. Pre-bench
+expectation was "identical to liburing-direct" — confirmed empirically.
 
 The kevy-uring's own integration tests on Linux (`nop_round_trips`,
 `reads_a_file`, `batched_nops`, `accepts_a_connection`,
 `echo_round_trip_via_io_uring`, `multishot_recv_with_provided_buffers`)
-exercise the engine end-to-end and were last green on 2026-05-26 in
-the metal-perf harness when this code lived in `kevy-sys::uring`.
-The 2026-05-27 split moved the file unchanged (plus a test-helper
-migration to `std::net::TcpListener`); semantic behavior is
-identical.
+exercise the engine end-to-end; 6/6 pass on lx64 metal as of
+2026-05-27.
 
-Stone-local perf bench vs `tokio-uring` / `liburing` / `monoio` needs
-to run on the Linux host. Two natural workloads:
-- `nop_round_trip_latency` — `prep_nop` → `submit_and_wait(1)` →
-  `for_each_completion` round-trip; pure kernel-floor measurement.
-- `multishot_recv_throughput` — accept + multishot recv on a loopback
-  TCP connection; measures the provided-buffer ring efficiency vs
-  the per-recv-syscall pattern.
-
-Expected outcome: kevy-uring's per-op overhead is **2-3 instructions
-of cursor advance plus `mmap` stores**, identical to liburing-direct.
-Any gap vs `tokio-uring` or `monoio` is the cost of their task
-runtimes layered on top, not the engine.
+Async runtime layers (`tokio-uring`, `monoio`) and bindgen wrappers
+(`io-uring` crate) are intentionally excluded — their per-call cost
+is the kernel floor PLUS the runtime's task overhead, which is not
+the same metric (the comparison "raw engine vs raw engine" is what
+the gate measures).
 
 ## Memory contract
 
