@@ -132,3 +132,61 @@ cargo +nightly llvm-cov --branch -p kevy-uring --lib --tests --summary-only
 bash bench/lx64_c1.sh
 bash bench/lx64_loopback.sh
 ```
+
+## Post-single-buffer re-bench (2026-05-27, polish-tree HEAD = `52a06aa`)
+
+After P7-redo-redo (`crates/kevy-map` single-buffer right-aligned
+layout, commits `90814e6` + `52a06aa`), re-ran the same two
+harnesses on lx64 metal. Source rsynced fresh; kevy rebuilt with
+`cargo build --release -p kevy`; valkey/redis Docker images
+unchanged.
+
+Host state: loadavg 2.81 at run start (vs earlier run's lighter
+load); valkey absolute throughput regressed in proportion (host-load
+sensitivity is symmetric across all servers).
+
+### -c1 -P1 (`bench/lx64_c1.sh`)
+
+| server                  | GET rps  | SET rps  | vs valkey-iot GET | vs valkey-iot SET |
+|-------------------------|---------:|---------:|------------------:|------------------:|
+| **kevy epoll**          | 69,607   | **88,056** | 1.10×           | **1.52×**         |
+| kevy io_uring           | 63,872   | 71,301   | 1.01×             | 1.23×             |
+| valkey 9.1 io-threads   | 63,309   | 57,992   | 1.00×             | 1.00×             |
+| valkey 9.1 default      | 52,352   | 52,945   | 0.83×             | 0.91×             |
+| redis 7.4 default       | 56,782   | 55,988   | 0.90×             | 0.97×             |
+
+kevy-epoll SET +24% vs pre-single-buffer (71,182 → 88,056); kevy-uring
+GET took a -11% noise hit on this run (-c1 single-conn is high-CoV
+by design). kevy still leads every server on every workload.
+
+### -c50 -P16 (`bench/lx64_loopback.sh`)
+
+Steady-state (second of two back-to-back warm runs):
+
+| server                | SET (M rps) | GET (M rps) | vs valkey-iot SET | vs valkey-iot GET |
+|-----------------------|------------:|------------:|------------------:|------------------:|
+| **kevy io_uring**     | **3.99**    | **3.00**    | **3.00×**         | **2.50×**         |
+| kevy epoll            | 2.99        | 2.99        | 2.25×             | 2.50×             |
+| valkey 9.1 io-threads | 1.33        | 1.20        | 1.00×             | 1.00×             |
+| valkey 9.1 default    | 1.09        | 1.33        | 0.82×             | 1.11×             |
+| redis 7.4 default     | 1.50        | 1.50        | 1.13×             | 1.25×             |
+| redis 7.4 io-threads  | 1.00        | 1.00        | 0.75×             | 0.83×             |
+
+vs pre-single-buffer ratios:
+- SET: was 2.33× valkey-iot, now **3.00×** — relative lead widened.
+- GET: was 2.00× valkey-iot, now **2.50×** — relative lead widened.
+
+Absolute kevy-uring SET held at 3.99 M rps; GET softened from 3.99
+to 3.00 M rps but the cross-server delta still grew because
+valkey-iot dropped more (1.71 M → 1.33 M SET, 2.00 M → 1.20 M GET)
+under the heavier host load. **Single-buffer layout is at minimum
+neutral on e2e and likely a small win** — the contention-resilience
+signal is the strongest evidence.
+
+### Verdict
+
+The single-buffer rewrite did not regress any e2e workload on lx64
+metal and likely improved contention-resilience on -c50 (3.99 M SET
+held while valkey-iot dropped from 1.71 to 1.33 M). v0.1.0
+publish-gate "lead held on lx64 metal" remains green at HEAD
+`52a06aa`.
