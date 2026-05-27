@@ -1,97 +1,82 @@
 //! kevy server entry point.
+//!
+//! Reads config in precedence order (top wins): CLI flags → env vars
+//! → TOML file (auto-detected) → built-in defaults. See
+//! [`kevy_config`] for the schema.
 #![forbid(unsafe_code)]
 
-const DEFAULT_PORT: u16 = 6004;
-const DEFAULT_BIND: [u8; 4] = [127, 0, 0, 1];
+use std::path::PathBuf;
+
+use kevy_config::{CliOverrides, Config};
 
 fn main() -> ! {
-    let port = resolve_port();
-    let bind = resolve_bind();
-    let shards = resolve_shards();
-    let dir = resolve_data_dir();
-    let aof = resolve_aof();
-    let [a, b, c, d] = bind;
+    let (config_path, cli) = parse_cli();
+    let mut cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
+    cfg.merge_env(env_vars()).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
+    cfg.merge_cli(cli).unwrap_or_else(|e| {
+        eprintln!("{e}");
+        std::process::exit(1);
+    });
+
+    let threads = if cfg.server.threads == 0 {
+        std::thread::available_parallelism().map_or(1, |n| n.get())
+    } else {
+        cfg.server.threads
+    };
+    let [a, b, c, d] = cfg.server.bind;
     eprintln!(
-        "kevy v{} starting: {a}.{b}.{c}.{d}:{port}, {shards} shard(s), dir={}, aof={} (thread-per-core)",
+        "kevy v{} starting: {a}.{b}.{c}.{d}:{}, {threads} shard(s), dir={}, aof={} (thread-per-core)",
         env!("CARGO_PKG_VERSION"),
-        dir.display(),
-        if aof { "on" } else { "off" }
+        cfg.server.port,
+        cfg.server.data_dir.display(),
+        if cfg.persistence.aof { "on" } else { "off" }
     );
-    if !is_loopback(bind) {
-        warn_unprotected_bind(bind);
+    if !is_loopback(cfg.server.bind) {
+        warn_unprotected_bind(cfg.server.bind);
     }
-    kevy::serve(bind, port, shards, dir, aof); // never returns
+    kevy::serve(
+        cfg.server.bind,
+        cfg.server.port,
+        threads,
+        cfg.server.data_dir,
+        cfg.persistence.aof,
+    ); // never returns
 }
 
-/// `127.0.0.0/8` is the loopback range (RFC 1122). Anything else (a public
-/// IP, a LAN address, or the wildcard `0.0.0.0`) is reachable from at
-/// least one other host on the network.
-#[inline]
-fn is_loopback(bind: [u8; 4]) -> bool {
-    bind[0] == 127
+/// Parse CLI into `(--config PATH, CliOverrides)`. Backward-compatible with
+/// the pre-`kevy-config` flag set: `--bind`, `--port`, `--threads`, `--dir`,
+/// `--no-aof` all still work and override env + file values.
+fn parse_cli() -> (Option<PathBuf>, CliOverrides) {
+    let config_path = arg_value("--config").map(PathBuf::from);
+    let aof = if std::env::args().any(|a| a == "--no-aof") {
+        Some(false)
+    } else {
+        None
+    };
+    let overrides = CliOverrides {
+        bind: arg_value("--bind").and_then(|s| parse_ipv4(&s)),
+        port: arg_value("--port").and_then(|s| s.parse().ok()),
+        threads: arg_value("--threads")
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|&n| n > 0),
+        data_dir: arg_value("--dir").map(PathBuf::from),
+        aof,
+    };
+    (config_path, overrides)
 }
 
-/// Valkey/Redis "protected-mode" style advisory. kevy has no auth yet
-/// (deferred to v0.3+); the only safe deployment for a non-loopback bind
-/// is a trust-bounded network (docker-compose internal, kubernetes pod
-/// network, VPC private subnet). For public exposure, front with
-/// stunnel/nginx + IP allowlist until AUTH lands.
-fn warn_unprotected_bind(bind: [u8; 4]) {
-    let [a, b, c, d] = bind;
-    eprintln!("kevy WARN: bind={a}.{b}.{c}.{d} is not loopback and kevy has no AUTH/TLS yet.");
-    eprintln!("kevy WARN: anyone who can reach this socket can read/write every key.");
-    eprintln!("kevy WARN: safe only on trust-bounded networks (docker-compose internal,");
-    eprintln!("kevy WARN: kubernetes pod network, VPC private subnet). Do NOT expose to");
-    eprintln!("kevy WARN: the public internet. Front with stunnel/nginx + IP allowlist");
-    eprintln!("kevy WARN: until AUTH/TLS lands in v0.3+.");
-}
-
-/// AOF enabled unless `--no-aof` / `KEVY_AOF=0|off|false`.
-fn resolve_aof() -> bool {
-    if std::env::args().any(|a| a == "--no-aof") {
-        return false;
-    }
-    !matches!(
-        std::env::var("KEVY_AOF").ok().as_deref(),
-        Some("0") | Some("off") | Some("false") | Some("no")
-    )
-}
-
-/// Port precedence: `--port N` arg, then `KEVY_PORT` env, then the default.
-fn resolve_port() -> u16 {
-    arg_value("--port")
-        .and_then(|s| s.parse().ok())
-        .or_else(|| std::env::var("KEVY_PORT").ok().and_then(|s| s.parse().ok()))
-        .unwrap_or(DEFAULT_PORT)
-}
-
-/// Bind address precedence: `--bind A.B.C.D`, then `KEVY_BIND`, then loopback.
-fn resolve_bind() -> [u8; 4] {
-    arg_value("--bind")
-        .and_then(|s| parse_ipv4(&s))
-        .or_else(|| std::env::var("KEVY_BIND").ok().and_then(|s| parse_ipv4(&s)))
-        .unwrap_or(DEFAULT_BIND)
-}
-
-/// Shard/thread count: `--threads N`, then `KEVY_THREADS`, then CPU count.
-fn resolve_shards() -> usize {
-    arg_value("--threads")
-        .and_then(|s| s.parse().ok())
-        .or_else(|| {
-            std::env::var("KEVY_THREADS")
-                .ok()
-                .and_then(|s| s.parse().ok())
-        })
-        .filter(|&n| n > 0)
-        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
-}
-
-/// Data directory for snapshots: `--dir PATH`, then `KEVY_DIR`, then `.`.
-fn resolve_data_dir() -> std::path::PathBuf {
-    arg_value("--dir")
-        .or_else(|| std::env::var("KEVY_DIR").ok())
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
+/// Snapshot the process env as `(String, String)` pairs for
+/// `Config::merge_env`. We materialize because `Config::merge_env`
+/// expects an owned iterator (so tests can fixture an in-memory map
+/// without touching the global env).
+fn env_vars() -> impl IntoIterator<Item = (String, String)> {
+    std::env::vars().collect::<Vec<_>>()
 }
 
 /// Find `--flag value` or `--flag=value` in the args.
@@ -122,6 +107,29 @@ fn parse_ipv4(s: &str) -> Option<[u8; 4]> {
     Some(octets)
 }
 
+/// `127.0.0.0/8` is the loopback range (RFC 1122). Anything else (a public
+/// IP, a LAN address, or the wildcard `0.0.0.0`) is reachable from at
+/// least one other host on the network.
+#[inline]
+fn is_loopback(bind: [u8; 4]) -> bool {
+    bind[0] == 127
+}
+
+/// Valkey/Redis "protected-mode" style advisory. kevy has no auth yet
+/// (deferred to v0.3+); the only safe deployment for a non-loopback bind
+/// is a trust-bounded network (docker-compose internal, kubernetes pod
+/// network, VPC private subnet). For public exposure, front with
+/// stunnel/nginx + IP allowlist until AUTH lands.
+fn warn_unprotected_bind(bind: [u8; 4]) {
+    let [a, b, c, d] = bind;
+    eprintln!("kevy WARN: bind={a}.{b}.{c}.{d} is not loopback and kevy has no AUTH/TLS yet.");
+    eprintln!("kevy WARN: anyone who can reach this socket can read/write every key.");
+    eprintln!("kevy WARN: safe only on trust-bounded networks (docker-compose internal,");
+    eprintln!("kevy WARN: kubernetes pod network, VPC private subnet). Do NOT expose to");
+    eprintln!("kevy WARN: the public internet. Front with stunnel/nginx + IP allowlist");
+    eprintln!("kevy WARN: until AUTH/TLS lands in v0.3+.");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +145,13 @@ mod tests {
         assert!(!is_loopback([10, 0, 0, 1])); // RFC1918 private
         assert!(!is_loopback([192, 168, 1, 1])); // LAN
         assert!(!is_loopback([8, 8, 8, 8])); // public
+    }
+
+    #[test]
+    fn ipv4_parser_accepts_valid_only() {
+        assert_eq!(parse_ipv4("127.0.0.1"), Some([127, 0, 0, 1]));
+        assert_eq!(parse_ipv4("0.0.0.0"), Some([0, 0, 0, 0]));
+        assert_eq!(parse_ipv4("256.0.0.1"), None);
+        assert_eq!(parse_ipv4("1.2.3"), None);
     }
 }
