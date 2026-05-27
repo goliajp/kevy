@@ -135,4 +135,79 @@ impl Value {
             Value::ZSet(_) => "zset",
         }
     }
+
+    /// Approximate heap bytes the value owns. Excludes the inline `Entry` /
+    /// bucket slot — that's a separate per-entry constant accounted by the
+    /// store. Walks collections, so prefer the cached `Entry::weight` for
+    /// hot-path accounting and only call this when bootstrapping or after a
+    /// load-from-snapshot.
+    pub fn weight(&self) -> u64 {
+        match self {
+            Value::Str(s) => s.heap_bytes() as u64,
+            Value::Hash(h) => collection_overhead(h.capacity(), HASH_SLOT_BYTES) + h
+                .iter()
+                .map(|(f, v)| f.heap_bytes() as u64 + v.capacity() as u64)
+                .sum::<u64>(),
+            Value::List(l) => (l.capacity() as u64).saturating_mul(LIST_SLOT_BYTES)
+                + l.iter().map(|v| v.capacity() as u64).sum::<u64>(),
+            Value::Set(s) => collection_overhead(s.capacity(), SET_SLOT_BYTES) + s
+                .iter()
+                .map(|m| m.heap_bytes() as u64)
+                .sum::<u64>(),
+            Value::ZSet(z) => collection_overhead(z.by_member.capacity(), HASH_SLOT_BYTES)
+                + z.by_member
+                    .iter()
+                    .map(|(m, _)| m.heap_bytes() as u64)
+                    .sum::<u64>()
+                + (z.by_score.len() as u64).saturating_mul(BTREE_SLOT_BYTES),
+        }
+    }
+}
+
+/// Per-bucket footprint for `KevyMap`/`KevySet`-backed collections (open-
+/// addressing Swiss table). Approximation, not exact: includes metadata byte
+/// per slot plus the boxed `K`/`V` cell, padded for 7/8 load factor.
+pub(crate) const HASH_SLOT_BYTES: u64 = 32;
+pub(crate) const SET_SLOT_BYTES: u64 = 24;
+/// `VecDeque` ring-buffer slot per stored `Vec<u8>` header (24 B Vec metadata).
+pub(crate) const LIST_SLOT_BYTES: u64 = 24;
+/// `BTreeSet` per-entry overhead (node pointers + 6-element B-tree node padding).
+pub(crate) const BTREE_SLOT_BYTES: u64 = 40;
+/// Per-entry overhead in the top-level keyspace map: the inline 24-byte
+/// `SmallBytes` key cell + the 64-byte `Entry` (post weight/clock fields) +
+/// metadata. Approximation that errs slightly high so `used_memory` stays a
+/// conservative upper bound vs the actual allocator footprint.
+pub const ENTRY_OVERHEAD: u64 = 96;
+
+#[inline]
+fn collection_overhead(capacity: usize, per_slot: u64) -> u64 {
+    (capacity as u64).saturating_mul(per_slot)
+}
+
+/// Per-field delta a new hash field charges against the entry weight: heap
+/// bytes for the field name (if not inline) + value capacity + one slot of
+/// bucket overhead. Used when an HSET inserts a brand-new field.
+#[inline]
+pub fn hash_field_weight(field: &SmallBytes, value_cap: usize) -> u64 {
+    field.heap_bytes() as u64 + value_cap as u64 + HASH_SLOT_BYTES
+}
+
+/// Per-member delta a new set member charges. Mirrors [`hash_field_weight`]
+/// for the set variant (no separate value, single bucket slot).
+#[inline]
+pub fn set_member_weight(member: &SmallBytes) -> u64 {
+    member.heap_bytes() as u64 + SET_SLOT_BYTES
+}
+
+/// Per-item delta a new list element charges (Vec header slot + heap cap).
+#[inline]
+pub fn list_item_weight(value_cap: usize) -> u64 {
+    LIST_SLOT_BYTES + value_cap as u64
+}
+
+/// Per-member delta a new zset member charges: hash slot for `by_member` +
+/// BTreeSet slot for `by_score` + the member's heap bytes.
+#[inline]
+pub fn zset_member_weight(member: &SmallBytes) -> u64 {
+    member.heap_bytes() as u64 + HASH_SLOT_BYTES + BTREE_SLOT_BYTES
 }

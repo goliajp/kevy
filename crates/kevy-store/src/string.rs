@@ -19,7 +19,8 @@ impl Store {
     ) -> bool {
         // Clock read only when a TTL is requested.
         let expire_at = expire.map(|d| Instant::now() + d);
-        match self.live_entry_mut(key) {
+        let new_value = Value::Str(SmallBytes::from_vec(value));
+        let pending_insert = match self.live_entry_mut(key) {
             // Key exists and is live: NX must abort; otherwise overwrite the
             // value + TTL in place — no `key.to_vec()` (the key is already in
             // the table, std `insert` would clone it only to drop it).
@@ -27,25 +28,25 @@ impl Store {
                 if nx {
                     return false;
                 }
-                e.value = Value::Str(SmallBytes::from_vec(value));
+                e.value = new_value;
                 e.expire_at = expire_at;
-                true
+                None
             }
             // Absent (or expired ⇒ already dropped by live_entry_mut): XX aborts.
             None => {
                 if xx {
                     return false;
                 }
-                self.map.insert(
-                    SmallBytes::from_slice(key),
-                    Entry {
-                        value: Value::Str(SmallBytes::from_vec(value)),
-                        expire_at,
-                    },
-                );
-                true
+                Some(Entry::new(new_value, expire_at))
+            }
+        };
+        match pending_insert {
+            None => self.reweigh_entry(key),
+            Some(entry) => {
+                self.insert_entry(SmallBytes::from_slice(key), entry);
             }
         }
+        true
     }
 
     pub fn get(&mut self, key: &[u8]) -> Result<Option<&[u8]>, StoreError> {
@@ -63,7 +64,7 @@ impl Store {
     }
 
     pub fn append(&mut self, key: &[u8], data: &[u8]) -> Result<usize, StoreError> {
-        match self.live_entry_mut(key) {
+        let outcome = match self.live_entry_mut(key) {
             Some(e) => match &mut e.value {
                 Value::Str(v) => {
                     // SmallBytes is immutable; pop out, grow via Vec, re-wrap.
@@ -71,17 +72,21 @@ impl Store {
                     owned.extend_from_slice(data);
                     let new_len = owned.len();
                     *v = SmallBytes::from_vec(owned);
-                    Ok(new_len)
+                    AppendOutcome::Reweigh(new_len)
                 }
-                _ => Err(StoreError::WrongType),
+                _ => return Err(StoreError::WrongType),
             },
-            None => {
-                self.map.insert(
+            None => AppendOutcome::Insert,
+        };
+        match outcome {
+            AppendOutcome::Reweigh(new_len) => {
+                self.reweigh_entry(key);
+                Ok(new_len)
+            }
+            AppendOutcome::Insert => {
+                self.insert_entry(
                     SmallBytes::from_slice(key),
-                    Entry {
-                        value: Value::Str(SmallBytes::from_slice(data)),
-                        expire_at: None,
-                    },
+                    Entry::new(Value::Str(SmallBytes::from_slice(data)), None),
                 );
                 Ok(data.len())
             }
@@ -90,7 +95,7 @@ impl Store {
 
     /// `INCRBY` family; preserves any TTL.
     pub fn incr_by(&mut self, key: &[u8], delta: i64) -> Result<i64, StoreError> {
-        match self.live_entry_mut(key) {
+        let outcome = match self.live_entry_mut(key) {
             Some(e) => match &mut e.value {
                 Value::Str(v) => {
                     let next = parse_i64(v.as_slice())
@@ -98,20 +103,27 @@ impl Store {
                         .checked_add(delta)
                         .ok_or(StoreError::Overflow)?;
                     *v = SmallBytes::from_vec(next.to_string().into_bytes());
-                    Ok(next)
+                    IncrOutcome::Reweigh(next)
                 }
-                _ => Err(StoreError::WrongType),
+                _ => return Err(StoreError::WrongType),
             },
             // Absent/expired ⇒ start from 0; 0 + delta can't overflow i64.
-            None => {
-                self.map.insert(
+            None => IncrOutcome::Insert(delta),
+        };
+        match outcome {
+            IncrOutcome::Reweigh(next) => {
+                self.reweigh_entry(key);
+                Ok(next)
+            }
+            IncrOutcome::Insert(next) => {
+                self.insert_entry(
                     SmallBytes::from_slice(key),
-                    Entry {
-                        value: Value::Str(SmallBytes::from_vec(delta.to_string().into_bytes())),
-                        expire_at: None,
-                    },
+                    Entry::new(
+                        Value::Str(SmallBytes::from_vec(next.to_string().into_bytes())),
+                        None,
+                    ),
                 );
-                Ok(delta)
+                Ok(next)
             }
         }
     }
@@ -126,12 +138,9 @@ impl Store {
             },
             None => None,
         };
-        self.map.insert(
+        self.insert_entry(
             SmallBytes::from_slice(key),
-            Entry {
-                value: Value::Str(SmallBytes::from_vec(val)),
-                expire_at: None,
-            },
+            Entry::new(Value::Str(SmallBytes::from_vec(val)), None),
         );
         Ok(old)
     }
@@ -145,7 +154,7 @@ impl Store {
         if !is_str {
             return Err(StoreError::WrongType);
         }
-        match self.map.remove(key) {
+        match self.remove_entry(key) {
             Some(Entry {
                 value: Value::Str(v),
                 ..
@@ -156,7 +165,7 @@ impl Store {
 
     /// `INCRBYFLOAT` — returns the new value formatted as Redis would. Preserves TTL.
     pub fn incr_by_float(&mut self, key: &[u8], delta: f64) -> Result<Vec<u8>, StoreError> {
-        match self.live_entry_mut(key) {
+        let outcome = match self.live_entry_mut(key) {
             Some(e) => match &mut e.value {
                 Value::Str(v) => {
                     let next = parse_f64(v.as_slice()).ok_or(StoreError::NotFloat)? + delta;
@@ -165,25 +174,45 @@ impl Store {
                     }
                     let bytes = fmt_num(next);
                     *v = SmallBytes::from_slice(&bytes);
-                    Ok(bytes)
+                    FloatOutcome::Reweigh(bytes)
                 }
-                _ => Err(StoreError::WrongType),
+                _ => return Err(StoreError::WrongType),
             },
             None => {
                 // Absent/expired ⇒ start from 0.0.
                 if !delta.is_finite() {
                     return Err(StoreError::NotFloat);
                 }
-                let bytes = fmt_num(delta);
-                self.map.insert(
+                FloatOutcome::Insert(fmt_num(delta))
+            }
+        };
+        match outcome {
+            FloatOutcome::Reweigh(bytes) => {
+                self.reweigh_entry(key);
+                Ok(bytes)
+            }
+            FloatOutcome::Insert(bytes) => {
+                self.insert_entry(
                     SmallBytes::from_slice(key),
-                    Entry {
-                        value: Value::Str(SmallBytes::from_slice(&bytes)),
-                        expire_at: None,
-                    },
+                    Entry::new(Value::Str(SmallBytes::from_slice(&bytes)), None),
                 );
                 Ok(bytes)
             }
         }
     }
+}
+
+enum AppendOutcome {
+    Reweigh(usize),
+    Insert,
+}
+
+enum IncrOutcome {
+    Reweigh(i64),
+    Insert(i64),
+}
+
+enum FloatOutcome {
+    Reweigh(Vec<u8>),
+    Insert(Vec<u8>),
 }

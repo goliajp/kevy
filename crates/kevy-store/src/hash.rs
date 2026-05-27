@@ -15,12 +15,9 @@ impl Store {
             if !create {
                 return Ok(None);
             }
-            self.map.insert(
+            self.insert_entry(
                 SmallBytes::from_slice(key),
-                Entry {
-                    value: Value::Hash(Box::default()),
-                    expire_at: None,
-                },
+                Entry::new(Value::Hash(Box::default()), None),
             );
         }
         match &mut self.map.get_mut(key).expect("present").value {
@@ -42,28 +39,57 @@ impl Store {
 
     /// `HSET` — returns the count of newly-added fields.
     pub fn hset(&mut self, key: &[u8], pairs: &[(Vec<u8>, Vec<u8>)]) -> Result<usize, StoreError> {
-        let h = self.hash_mut(key, true)?.expect("created");
-        let mut added = 0;
-        for (f, v) in pairs {
-            if h.insert(SmallBytes::from_slice(f), v.clone()).is_none() {
-                added += 1;
+        let (added, delta) = {
+            let h = self.hash_mut(key, true)?.expect("created");
+            let mut a = 0usize;
+            let mut d: i64 = 0;
+            for (f, v) in pairs {
+                let smb = SmallBytes::from_slice(f);
+                let new_w = hash_field_weight(&smb, v.len()) as i64;
+                match h.insert(smb, v.clone()) {
+                    None => {
+                        a += 1;
+                        d += new_w;
+                    }
+                    Some(old) => {
+                        d += v.len() as i64 - old.len() as i64;
+                    }
+                }
             }
-        }
+            (a, d)
+        };
+        self.account_delta(key, delta);
         Ok(added)
     }
 
     /// `HSETNX` — set only if the field is absent; returns whether it was set.
     pub fn hsetnx(&mut self, key: &[u8], field: &[u8], val: &[u8]) -> Result<bool, StoreError> {
-        let h = self.hash_mut(key, true)?.expect("created");
-        if h.contains_key(field) {
-            // Don't leave an empty hash behind if we just created it.
-            if h.is_empty() {
-                self.map.remove(key);
+        let outcome = {
+            let h = self.hash_mut(key, true)?.expect("created");
+            if h.contains_key(field) {
+                if h.is_empty() {
+                    HsetnxOutcome::DropEmpty
+                } else {
+                    HsetnxOutcome::AlreadyExists
+                }
+            } else {
+                let smb = SmallBytes::from_slice(field);
+                let w = hash_field_weight(&smb, val.len()) as i64;
+                h.insert(smb, val.to_vec());
+                HsetnxOutcome::Inserted(w)
             }
-            return Ok(false);
+        };
+        match outcome {
+            HsetnxOutcome::DropEmpty => {
+                self.remove_entry(key);
+                Ok(false)
+            }
+            HsetnxOutcome::AlreadyExists => Ok(false),
+            HsetnxOutcome::Inserted(w) => {
+                self.account_delta(key, w);
+                Ok(true)
+            }
         }
-        h.insert(SmallBytes::from_slice(field), val.to_vec());
-        Ok(true)
     }
 
     pub fn hget(&mut self, key: &[u8], field: &[u8]) -> Result<Option<&[u8]>, StoreError> {
@@ -126,30 +152,62 @@ impl Store {
         if !self.reap(key, now) {
             return Ok(0);
         }
-        let removed = match &mut self.map.get_mut(key).expect("live").value {
-            Value::Hash(h) => fields
-                .iter()
-                .filter(|f| h.remove(f.as_slice()).is_some())
-                .count(),
-            _ => return Err(StoreError::WrongType),
+        let (removed, delta, drop_key) = {
+            let h_entry = self.map.get_mut(key).expect("live");
+            match &mut h_entry.value {
+                Value::Hash(h) => {
+                    let mut r = 0usize;
+                    let mut d: i64 = 0;
+                    for f in fields {
+                        if let Some(old_v) = h.remove(f.as_slice()) {
+                            r += 1;
+                            // The field key matters as a SmallBytes only for
+                            // heap_bytes/slot overhead; reconstruct the same
+                            // weight figure that hset paid in.
+                            let smb = SmallBytes::from_slice(f);
+                            d -= hash_field_weight(&smb, old_v.len()) as i64;
+                        }
+                    }
+                    let drop_now = h.is_empty();
+                    (r, d, drop_now)
+                }
+                _ => return Err(StoreError::WrongType),
+            }
         };
-        if let Some(Value::Hash(h)) = self.map.get(key).map(|e| &e.value)
-            && h.is_empty()
-        {
-            self.map.remove(key);
+        if drop_key {
+            self.remove_entry(key);
+        } else {
+            self.account_delta(key, delta);
         }
         Ok(removed)
     }
 
     /// `HINCRBY` — preserves TTL; errors if the field isn't an integer.
     pub fn hincrby(&mut self, key: &[u8], field: &[u8], delta: i64) -> Result<i64, StoreError> {
-        let h = self.hash_mut(key, true)?.expect("created");
-        let cur = match h.get(field) {
-            Some(v) => parse_i64(v).ok_or(StoreError::NotInteger)?,
-            None => 0,
+        let (next, weight_delta) = {
+            let h = self.hash_mut(key, true)?.expect("created");
+            let cur = match h.get(field) {
+                Some(v) => parse_i64(v).ok_or(StoreError::NotInteger)?,
+                None => 0,
+            };
+            let next = cur.checked_add(delta).ok_or(StoreError::Overflow)?;
+            let new_bytes = next.to_string().into_bytes();
+            let smb = SmallBytes::from_slice(field);
+            let new_field_w = hash_field_weight(&smb, new_bytes.len()) as i64;
+            let new_value_len = new_bytes.len();
+            let wd = match h.insert(smb, new_bytes) {
+                None => new_field_w,
+                Some(old) => new_value_len as i64 - old.len() as i64,
+            };
+            (next, wd)
         };
-        let next = cur.checked_add(delta).ok_or(StoreError::Overflow)?;
-        h.insert(SmallBytes::from_slice(field), next.to_string().into_bytes());
+        self.account_delta(key, weight_delta);
         Ok(next)
     }
+}
+
+enum HsetnxOutcome {
+    DropEmpty,
+    AlreadyExists,
+    Inserted(i64),
 }

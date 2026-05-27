@@ -11,12 +11,9 @@ impl Store {
             if !create {
                 return Ok(None);
             }
-            self.map.insert(
+            self.insert_entry(
                 SmallBytes::from_slice(key),
-                Entry {
-                    value: Value::Set(Box::default()),
-                    expire_at: None,
-                },
+                Entry::new(Value::Set(Box::default()), None),
             );
         }
         match &mut self.map.get_mut(key).expect("present").value {
@@ -36,28 +33,48 @@ impl Store {
     }
 
     fn drop_if_empty_set(&mut self, key: &[u8]) {
-        if let Some(Value::Set(s)) = self.map.get(key).map(|e| &e.value)
-            && s.is_empty()
-        {
-            self.map.remove(key);
+        let empty = matches!(self.map.get(key).map(|e| &e.value), Some(Value::Set(s)) if s.is_empty());
+        if empty {
+            self.remove_entry(key);
         }
     }
 
     /// `SADD` — returns the count of newly-added members.
     pub fn sadd(&mut self, key: &[u8], members: &[Vec<u8>]) -> Result<usize, StoreError> {
-        let s = self.set_mut(key, true)?.expect("created");
-        Ok(members
-            .iter()
-            .filter(|m| s.insert(SmallBytes::from_slice(m)))
-            .count())
+        let (added, delta) = {
+            let s = self.set_mut(key, true)?.expect("created");
+            let mut a = 0usize;
+            let mut d: i64 = 0;
+            for m in members {
+                let smb = SmallBytes::from_slice(m);
+                let w = set_member_weight(&smb) as i64;
+                if s.insert(smb) {
+                    a += 1;
+                    d += w;
+                }
+            }
+            (a, d)
+        };
+        self.account_delta(key, delta);
+        Ok(added)
     }
 
     /// `SREM` — returns the count removed (deleting an emptied key).
     pub fn srem(&mut self, key: &[u8], members: &[Vec<u8>]) -> Result<usize, StoreError> {
-        let removed = match self.set_mut(key, false)? {
-            None => 0,
-            Some(s) => members.iter().filter(|m| s.remove(m.as_slice())).count(),
+        let (removed, delta) = {
+            let mut r = 0usize;
+            let mut d: i64 = 0;
+            if let Some(s) = self.set_mut(key, false)? {
+                for m in members {
+                    if s.remove(m.as_slice()) {
+                        r += 1;
+                        d -= set_member_weight(&SmallBytes::from_slice(m)) as i64;
+                    }
+                }
+            }
+            (r, d)
         };
+        self.account_delta(key, delta);
         self.drop_if_empty_set(key);
         Ok(removed)
     }
@@ -78,16 +95,21 @@ impl Store {
 
     /// `SPOP key count` — remove and return up to `count` arbitrary members.
     pub fn spop(&mut self, key: &[u8], count: usize) -> Result<Vec<Vec<u8>>, StoreError> {
-        let out = match self.set_mut(key, false)? {
-            None => Vec::new(),
-            Some(s) => {
+        let (out, delta) = {
+            let mut o: Vec<Vec<u8>> = Vec::new();
+            let mut d: i64 = 0;
+            if let Some(s) = self.set_mut(key, false)? {
                 let take: Vec<Vec<u8>> = s.iter().take(count).map(|m| m.to_vec()).collect();
                 for m in &take {
-                    s.remove(m.as_slice());
+                    if s.remove(m.as_slice()) {
+                        d -= set_member_weight(&SmallBytes::from_slice(m)) as i64;
+                    }
                 }
-                take
+                o = take;
             }
+            (o, d)
         };
+        self.account_delta(key, delta);
         self.drop_if_empty_set(key);
         Ok(out)
     }

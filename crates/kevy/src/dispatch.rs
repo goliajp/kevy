@@ -33,8 +33,16 @@ pub fn dispatch_into(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
     // the unknown-command error below (which reports the original `name`).
     let mut buf = [0u8; 32];
     let cmd = upper_verb(name, &mut buf);
+    // OOM precheck for memory-growing writes only. When `maxmemory == 0` this
+    // is a single not-taken branch inside `Store::precheck_for_write`, so the
+    // unlimited-mode hot path keeps its v0.metal cycle budget.
+    let is_grow = is_growing_write_verb(cmd);
+    if is_grow && store.precheck_for_write().is_err() {
+        encode_error(out, OOM_ERR);
+        return;
+    }
     let handled = dispatch_conn(cmd, args, out)
-        || crate::ops::dispatch_ops(cmd, args, out)
+        || crate::ops::dispatch_ops(cmd, store, args, out)
         || dispatch_string(cmd, store, args, out)
         || dispatch_hash(cmd, store, args, out)
         || dispatch_list(cmd, store, args, out)
@@ -45,6 +53,13 @@ pub fn dispatch_into(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
     if !handled {
         let shown = String::from_utf8_lossy(name);
         encode_error(out, &format!("ERR unknown command '{shown}'"));
+        return;
+    }
+    // Post-write: trim back under `maxmemory` per the active policy. Same
+    // cost profile as the precheck — fast when disabled, sample-loop only
+    // when the just-finished command actually pushed us over.
+    if is_grow {
+        store.try_evict_after_write();
     }
 }
 

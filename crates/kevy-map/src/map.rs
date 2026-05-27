@@ -287,6 +287,15 @@ impl<K, V> KevyMap<K, V> {
         Iter::new(metadata, slots)
     }
 
+    /// `iter` that begins at bucket `start` (clamped to `capacity()`) and
+    /// walks to the end. To sweep the full ring beginning at a random offset
+    /// — the pattern the kevy-store eviction sampler uses — chain it with a
+    /// second `iter_from_bucket(0)` and `take(start)`.
+    pub fn iter_from_bucket(&self, start: usize) -> Iter<'_, K, V> {
+        let (metadata, slots) = self.as_slices();
+        Iter::with_start(metadata, slots, start)
+    }
+
     /// `&K` over all live entries.
     pub fn keys(&self) -> Keys<'_, K, V> {
         Keys::new(self.iter())

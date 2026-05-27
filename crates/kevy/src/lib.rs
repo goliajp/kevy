@@ -128,50 +128,24 @@ impl Commands for KevyCommands {
             .is_some_and(|c| c.eq_ignore_ascii_case(b"QUIT"))
     }
 
+    fn on_shard_init(&self, store: &mut Store) {
+        // Snapshot the process-wide config and apply its `[memory]` section
+        // to this shard. Reading `config_global::get()` returns
+        // `Config::default()` (maxmemory=0) when running outside `serve` —
+        // e.g. tests / embedded — so the call is harmlessly a no-op there.
+        let cfg = config_global::get();
+        store.set_max_memory(
+            cfg.memory.maxmemory,
+            map_eviction_policy(cfg.memory.maxmemory_policy),
+        );
+    }
+
     fn is_write(&self, args: &Argv) -> bool {
         let Some(name) = args.first() else {
             return false;
         };
         let mut buf = [0u8; 32];
-        matches!(
-            upper_verb(name, &mut buf),
-            b"SET"
-                | b"SETNX"
-                | b"SETEX"
-                | b"PSETEX"
-                | b"GETSET"
-                | b"GETDEL"
-                | b"INCRBYFLOAT"
-                | b"DEL"
-                | b"INCR"
-                | b"DECR"
-                | b"INCRBY"
-                | b"DECRBY"
-                | b"APPEND"
-                | b"EXPIRE"
-                | b"PEXPIRE"
-                | b"PERSIST"
-                | b"FLUSHDB"
-                | b"FLUSHALL"
-                | b"HSET"
-                | b"HSETNX"
-                | b"HDEL"
-                | b"HINCRBY"
-                | b"LPUSH"
-                | b"RPUSH"
-                | b"LPOP"
-                | b"RPOP"
-                | b"LSET"
-                | b"LREM"
-                | b"LTRIM"
-                | b"SADD"
-                | b"SREM"
-                | b"SPOP"
-                | b"ZADD"
-                | b"ZREM"
-                | b"ZINCRBY"
-                | b"MSET"
-        )
+        cmd::is_write_verb(upper_verb(name, &mut buf))
     }
 
     fn txn_kind(&self, args: &Argv) -> TxnKind {
@@ -212,45 +186,7 @@ impl Commands for KevyCommands {
 
         let is_quit = upper == b"QUIT";
 
-        let is_write = matches!(
-            upper,
-            b"SET"
-                | b"SETNX"
-                | b"SETEX"
-                | b"PSETEX"
-                | b"GETSET"
-                | b"GETDEL"
-                | b"INCRBYFLOAT"
-                | b"DEL"
-                | b"INCR"
-                | b"DECR"
-                | b"INCRBY"
-                | b"DECRBY"
-                | b"APPEND"
-                | b"EXPIRE"
-                | b"PEXPIRE"
-                | b"PERSIST"
-                | b"FLUSHDB"
-                | b"FLUSHALL"
-                | b"HSET"
-                | b"HSETNX"
-                | b"HDEL"
-                | b"HINCRBY"
-                | b"LPUSH"
-                | b"RPUSH"
-                | b"LPOP"
-                | b"RPOP"
-                | b"LSET"
-                | b"LREM"
-                | b"LTRIM"
-                | b"SADD"
-                | b"SREM"
-                | b"SPOP"
-                | b"ZADD"
-                | b"ZREM"
-                | b"ZINCRBY"
-                | b"MSET"
-        );
+        let is_write = cmd::is_write_verb(upper);
 
         let route = match upper {
             b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG" | b"HELLO"
@@ -299,6 +235,25 @@ impl Commands for KevyCommands {
             is_quit,
             is_write,
         }
+    }
+}
+
+/// Translate a `kevy_config::EvictionPolicy` (the user-facing TOML enum) into
+/// the `kevy_store::EvictionPolicy` mirror. The mapping is one-to-one — the
+/// two enums exist as a dependency-direction trick (kevy-store stays a leaf
+/// crate; kevy-config depends on nothing kevy-store does).
+fn map_eviction_policy(p: kevy_config::EvictionPolicy) -> kevy_store::EvictionPolicy {
+    use kevy_config::EvictionPolicy as C;
+    use kevy_store::EvictionPolicy as S;
+    match p {
+        C::NoEviction => S::NoEviction,
+        C::AllKeysLru => S::AllKeysLru,
+        C::AllKeysLfu => S::AllKeysLfu,
+        C::AllKeysRandom => S::AllKeysRandom,
+        C::VolatileLru => S::VolatileLru,
+        C::VolatileLfu => S::VolatileLfu,
+        C::VolatileRandom => S::VolatileRandom,
+        C::VolatileTtl => S::VolatileTtl,
     }
 }
 

@@ -98,10 +98,12 @@ impl<C: Commands> Runtime<C> {
             } else {
                 None
             };
+            let mut store = Store::new();
+            self.commands.on_shard_init(&mut store);
             shards.push(Shard {
                 id,
                 nshards: n,
-                store: Store::new(),
+                store,
                 commands: self.commands.clone(),
                 poller: Poller::new()?,
                 listener,

@@ -52,6 +52,90 @@ pub(crate) fn cmd_hello(out: &mut Vec<u8>) {
 pub(crate) const ERR_NOT_INT: &str = "ERR value is not an integer or out of range";
 pub(crate) const WRONGTYPE: &str =
     "WRONGTYPE Operation against a key holding the wrong kind of value";
+/// Redis's classic OOM reply for write attempts under `NoEviction`. Matches
+/// the wording valkey clients (redis-cli, jedis, go-redis) detect.
+pub(crate) const OOM_ERR: &str =
+    "OOM command not allowed when used memory > 'maxmemory'.";
+
+/// Verb-level "is this a write" classification. Mirrors the `is_write` arm in
+/// [`crate::KevyCommands::resolve`] so the local dispatch fast path and the
+/// runtime see the same set; both must include every command that can grow
+/// `used_memory`, so eviction gates them all. Kept in a single place to avoid
+/// drift.
+pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
+    matches!(
+        cmd,
+        b"SET"
+            | b"SETNX"
+            | b"SETEX"
+            | b"PSETEX"
+            | b"GETSET"
+            | b"GETDEL"
+            | b"INCRBYFLOAT"
+            | b"DEL"
+            | b"INCR"
+            | b"DECR"
+            | b"INCRBY"
+            | b"DECRBY"
+            | b"APPEND"
+            | b"EXPIRE"
+            | b"PEXPIRE"
+            | b"PERSIST"
+            | b"FLUSHDB"
+            | b"FLUSHALL"
+            | b"HSET"
+            | b"HSETNX"
+            | b"HDEL"
+            | b"HINCRBY"
+            | b"LPUSH"
+            | b"RPUSH"
+            | b"LPOP"
+            | b"RPOP"
+            | b"LSET"
+            | b"LREM"
+            | b"LTRIM"
+            | b"SADD"
+            | b"SREM"
+            | b"SPOP"
+            | b"ZADD"
+            | b"ZREM"
+            | b"ZINCRBY"
+            | b"MSET"
+    )
+}
+
+/// Subset of [`is_write_verb`] that can *grow* memory. `DEL` / `HDEL` / `LPOP`
+/// / `LREM` / `LTRIM` / `SREM` / `ZREM` / `EXPIRE` / `PERSIST` are writes but
+/// only ever shrink (or hold steady), so they never need the OOM precheck —
+/// and `FLUSH*` actively rescues us from OOM. Keeping them out of the precheck
+/// list lets a NoEviction-configured shard always accept shrinkers, matching
+/// Redis exactly.
+pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
+    matches!(
+        cmd,
+        b"SET"
+            | b"SETNX"
+            | b"SETEX"
+            | b"PSETEX"
+            | b"GETSET"
+            | b"INCRBYFLOAT"
+            | b"INCR"
+            | b"DECR"
+            | b"INCRBY"
+            | b"DECRBY"
+            | b"APPEND"
+            | b"HSET"
+            | b"HSETNX"
+            | b"HINCRBY"
+            | b"LPUSH"
+            | b"RPUSH"
+            | b"LSET"
+            | b"SADD"
+            | b"ZADD"
+            | b"ZINCRBY"
+            | b"MSET"
+    )
+}
 
 /// Encode a `StoreError` as its RESP error reply.
 pub(crate) fn store_err(out: &mut Vec<u8>, e: StoreError) {
@@ -62,6 +146,7 @@ pub(crate) fn store_err(out: &mut Vec<u8>, e: StoreError) {
         StoreError::OutOfRange => "ERR index out of range",
         StoreError::NoSuchKey => "ERR no such key",
         StoreError::NotFloat => "ERR value is not a valid float",
+        StoreError::OutOfMemory => OOM_ERR,
     };
     encode_error(out, msg);
 }

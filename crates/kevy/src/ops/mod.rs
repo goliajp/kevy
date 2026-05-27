@@ -12,26 +12,29 @@
 
 mod client;
 mod config;
+mod memory;
 
 use std::time::SystemTime;
 
 use kevy_config::Config;
 use kevy_resp::{Argv, encode_bulk, encode_error, encode_integer, encode_simple_string};
+use kevy_store::Store;
 
 use crate::config_global;
 
 /// Operational-command dispatcher. Returns `true` if the verb was
 /// recognised (and a reply has been written to `out`).
-pub(crate) fn dispatch_ops(cmd: &[u8], args: &Argv, out: &mut Vec<u8>) -> bool {
+pub(crate) fn dispatch_ops(cmd: &[u8], store: &mut Store, args: &Argv, out: &mut Vec<u8>) -> bool {
     let cfg = config_global::get();
     match cmd {
-        b"INFO" => cmd_info(&cfg, args, out),
+        b"INFO" => cmd_info(&cfg, store, args, out),
         b"CLUSTER" => cmd_cluster(args, out),
         b"DEBUG" => cmd_debug(args, out),
         b"WAIT" => cmd_wait(args, out),
         b"SHUTDOWN" => cmd_shutdown(args, out),
         b"CONFIG" => config::cmd_config(&cfg, args, out),
         b"CLIENT" => client::cmd_client(args, out),
+        b"MEMORY" => memory::cmd_memory(&cfg, store, args, out),
         _ => return false,
     }
     true
@@ -39,7 +42,7 @@ pub(crate) fn dispatch_ops(cmd: &[u8], args: &Argv, out: &mut Vec<u8>) -> bool {
 
 // ───────────── INFO ─────────────
 
-fn cmd_info(cfg: &Config, args: &Argv, out: &mut Vec<u8>) {
+fn cmd_info(cfg: &Config, store: &Store, args: &Argv, out: &mut Vec<u8>) {
     // INFO [section]; we always emit the requested section (or all when
     // none / "default" / "all" / "everything" is requested).
     let section = args.get(1).map(|a| a.to_ascii_lowercase());
@@ -52,7 +55,7 @@ fn cmd_info(cfg: &Config, args: &Argv, out: &mut Vec<u8>) {
         info_clients(&mut body);
     }
     if want_section(want, "memory") {
-        info_memory(cfg, &mut body);
+        info_memory(cfg, store, &mut body);
     }
     if want_section(want, "persistence") {
         info_persistence(cfg, &mut body);
@@ -102,15 +105,32 @@ fn info_clients(b: &mut String) {
     b.push_str("\r\n");
 }
 
-fn info_memory(cfg: &Config, b: &mut String) {
+fn info_memory(cfg: &Config, store: &Store, b: &mut String) {
+    let used = store.used_memory();
+    let peak = store.used_memory_peak();
     b.push_str("# Memory\r\n");
-    b.push_str("used_memory:0\r\n"); // TODO: real tracking lands in Wave 2 maxmemory
-    b.push_str("used_memory_human:0B\r\n");
-    b.push_str("used_memory_peak:0\r\n");
+    b.push_str(&format!("used_memory:{used}\r\n"));
+    b.push_str(&format!(
+        "used_memory_human:{}\r\n",
+        memory::format_bytes_human(used)
+    ));
+    b.push_str(&format!("used_memory_peak:{peak}\r\n"));
+    b.push_str(&format!(
+        "used_memory_peak_human:{}\r\n",
+        memory::format_bytes_human(peak)
+    ));
     b.push_str(&format!("maxmemory:{}\r\n", cfg.memory.maxmemory));
+    b.push_str(&format!(
+        "maxmemory_human:{}\r\n",
+        memory::format_bytes_human(cfg.memory.maxmemory)
+    ));
     b.push_str(&format!(
         "maxmemory_policy:{}\r\n",
         eviction_str(cfg.memory.maxmemory_policy)
+    ));
+    b.push_str(&format!(
+        "evicted_keys:{}\r\n",
+        store.evictions_total()
     ));
     b.push_str("\r\n");
 }
@@ -307,7 +327,8 @@ mod tests {
             a.push(r);
         }
         let mut out = Vec::new();
-        let handled = dispatch_ops(verb, &a, &mut out);
+        let mut store = Store::new();
+        let handled = dispatch_ops(verb, &mut store, &a, &mut out);
         assert!(handled, "verb {:?} not handled", String::from_utf8_lossy(verb));
         out
     }

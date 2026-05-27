@@ -12,12 +12,9 @@ impl Store {
             if !create {
                 return Ok(None);
             }
-            self.map.insert(
+            self.insert_entry(
                 SmallBytes::from_slice(key),
-                Entry {
-                    value: Value::ZSet(Box::default()),
-                    expire_at: None,
-                },
+                Entry::new(Value::ZSet(Box::default()), None),
             );
         }
         match &mut self.map.get_mut(key).expect("present").value {
@@ -37,20 +34,32 @@ impl Store {
     }
 
     fn drop_if_empty_zset(&mut self, key: &[u8]) {
-        if let Some(Value::ZSet(z)) = self.map.get(key).map(|e| &e.value)
-            && z.len() == 0
-        {
-            self.map.remove(key);
+        let empty = matches!(self.map.get(key).map(|e| &e.value), Some(Value::ZSet(z)) if z.len() == 0);
+        if empty {
+            self.remove_entry(key);
         }
     }
 
     /// `ZADD` — returns the count of newly-added members (updates don't count).
     pub fn zadd(&mut self, key: &[u8], pairs: &[(f64, Vec<u8>)]) -> Result<usize, StoreError> {
-        let z = self.zset_mut(key, true)?.expect("created");
-        Ok(pairs
-            .iter()
-            .filter(|(score, m)| z.insert(m, *score))
-            .count())
+        let (added, delta) = {
+            let z = self.zset_mut(key, true)?.expect("created");
+            let mut a = 0usize;
+            let mut d: i64 = 0;
+            for (score, m) in pairs {
+                let smb = SmallBytes::from_slice(m);
+                let w = zset_member_weight(&smb) as i64;
+                if z.insert(m, *score) {
+                    a += 1;
+                    d += w;
+                }
+                // Updating an existing score reuses the same member entry —
+                // no weight delta (f64 score is a fixed 8 B already counted).
+            }
+            (a, d)
+        };
+        self.account_delta(key, delta);
+        Ok(added)
     }
 
     pub fn zscore(&mut self, key: &[u8], member: &[u8]) -> Result<Option<f64>, StoreError> {
@@ -64,10 +73,20 @@ impl Store {
     }
 
     pub fn zrem(&mut self, key: &[u8], members: &[Vec<u8>]) -> Result<usize, StoreError> {
-        let removed = match self.zset_mut(key, false)? {
-            None => 0,
-            Some(z) => members.iter().filter(|m| z.remove(m.as_slice())).count(),
+        let (removed, delta) = {
+            let mut r = 0usize;
+            let mut d: i64 = 0;
+            if let Some(z) = self.zset_mut(key, false)? {
+                for m in members {
+                    if z.remove(m.as_slice()) {
+                        r += 1;
+                        d -= zset_member_weight(&SmallBytes::from_slice(m)) as i64;
+                    }
+                }
+            }
+            (r, d)
         };
+        self.account_delta(key, delta);
         self.drop_if_empty_zset(key);
         Ok(removed)
     }
@@ -81,9 +100,17 @@ impl Store {
 
     /// `ZINCRBY` — add `incr` to a member's score (default 0), returns the new score.
     pub fn zincrby(&mut self, key: &[u8], incr: f64, member: &[u8]) -> Result<f64, StoreError> {
-        let z = self.zset_mut(key, true)?.expect("created");
-        let next = z.by_member.get(member).copied().unwrap_or(0.0) + incr;
-        z.insert(member, next);
+        let (next, delta) = {
+            let z = self.zset_mut(key, true)?.expect("created");
+            let cur = z.by_member.get(member).copied().unwrap_or(0.0);
+            let next = cur + incr;
+            let smb = SmallBytes::from_slice(member);
+            let is_new = !z.by_member.contains_key(member);
+            z.insert(member, next);
+            let d = if is_new { zset_member_weight(&smb) as i64 } else { 0 };
+            (next, d)
+        };
+        self.account_delta(key, delta);
         Ok(next)
     }
 
