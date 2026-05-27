@@ -54,6 +54,94 @@ fn mix(state: u64, word: u64) -> u64 {
     (state.rotate_left(ROTATE) ^ word).wrapping_mul(SEED)
 }
 
+/// Two-stream pipelined hash_bytes inspired by rustc-hash 2.x's design
+/// (`rustc-hash/src/lib.rs#hash_bytes`). The key trick is keeping two
+/// independent state words `s0` / `s1` updated via 64×64→128 widening
+/// multiplication (one `mul`+`mulhi` on aarch64, one `mul` on x86_64),
+/// XORing the two halves of the product to mix top with bottom. The two
+/// streams are independent of each other in the bulk loop, so LLVM can
+/// schedule them on two ALU ports per cycle.
+///
+/// Lengths ≤ 16: XOR-only absorb of two reads (start + end), then a
+/// single `multiply_mix` of the two streams. The XOR-only absorb is fast
+/// because there's no ALU dependency between the two reads.
+///
+/// Lengths > 16: per-16-byte iteration, `s1 <- multiply_mix(s0 ^ x,
+/// CONST ^ y); s0 <- s1`. The `CONST` (digits of pi) prevents the
+/// all-zeros input from collapsing.
+///
+/// Final mix: `multiply_mix(s0, s1) ^ len` — folds length in so that
+/// `"abc"` and `"ab\0c"` hash differently (the XOR-only short path
+/// doesn't distinguish length-by-position without this).
+///
+/// Then `fmix64` to give us the anti-clustering avalanche we need (the
+/// rustc-hash design assumes its consumer mixes again; we don't, so we
+/// avalanche ourselves — same property as the legacy [`FxHasher`] path).
+#[inline]
+fn hash_bytes_pipelined(bytes: &[u8]) -> u64 {
+    // Constants — digits of pi (matches rustc-hash 2.x for cross-bench
+    // sanity; the actual choice doesn't matter beyond "non-zero, not
+    // sharing structure with input distributions").
+    const S1: u64 = 0x243f_6a88_85a3_08d3;
+    const S2: u64 = 0x1319_8a2e_0370_7344;
+    const ANTI_ZERO: u64 = 0xa409_3822_299f_31d0;
+    let len = bytes.len();
+    let mut s0 = S1;
+    let mut s1 = S2;
+
+    if len <= 16 {
+        if len >= 8 {
+            // Read first 8 and last 8 (may overlap when 8 ≤ len ≤ 15).
+            s0 ^= u64::from_le_bytes(bytes[0..8].try_into().unwrap());
+            s1 ^= u64::from_le_bytes(bytes[len - 8..].try_into().unwrap());
+        } else if len >= 4 {
+            s0 ^= u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as u64;
+            s1 ^= u32::from_le_bytes(bytes[len - 4..].try_into().unwrap()) as u64;
+        } else if len > 0 {
+            // 1-3 byte tail: form a 3-byte key (lo, mid, hi) that
+            // distinguishes "ab" from "ba" etc.
+            let lo = bytes[0];
+            let mid = bytes[len / 2];
+            let hi = bytes[len - 1];
+            s0 ^= lo as u64;
+            s1 ^= ((hi as u64) << 8) | mid as u64;
+        }
+        // len == 0 falls through with s0 == S1, s1 == S2 unchanged.
+    } else {
+        // Bulk: drop the very last byte from the bulk slice so the suffix
+        // 16 bytes can partially overlap with bulk's tail (this is what
+        // rustc-hash 2.x does; it makes the suffix path uniform).
+        let mut bulk = &bytes[..len - 1];
+        while let Some((chunk, rest)) = bulk.split_first_chunk::<16>() {
+            let x = u64::from_le_bytes(chunk[..8].try_into().unwrap());
+            let y = u64::from_le_bytes(chunk[8..].try_into().unwrap());
+            let t = multiply_mix(s0 ^ x, ANTI_ZERO ^ y);
+            s0 = s1;
+            s1 = t;
+            bulk = rest;
+        }
+        // Suffix 16 bytes (may overlap with last bulk iter).
+        let suffix = &bytes[len - 16..];
+        s0 ^= u64::from_le_bytes(suffix[0..8].try_into().unwrap());
+        s1 ^= u64::from_le_bytes(suffix[8..16].try_into().unwrap());
+    }
+
+    let folded = multiply_mix(s0, s1) ^ (len as u64);
+    fmix64(folded)
+}
+
+/// 64×64→128 widening multiply, XOR'ing the two halves of the product.
+/// Single `mul` on x86_64, one `mul`+one `mulhi` on aarch64. Mixes top and
+/// bottom of the product so the entire output fluctuates with small
+/// changes in the input.
+#[inline]
+fn multiply_mix(x: u64, y: u64) -> u64 {
+    let full = (x as u128).wrapping_mul(y as u128);
+    let lo = full as u64;
+    let hi = (full >> 64) as u64;
+    lo ^ hi
+}
+
 /// Fast, well-distributed [`Hasher`] for kevy's keyspace. Word-at-a-time absorb
 /// (FxHash-style) finished with [`fmix64`]. See the crate docs for the security
 /// trade-off.
@@ -119,11 +207,22 @@ pub trait KevyHash {
 }
 
 impl KevyHash for [u8] {
+    /// Byte-slice hash. Uses the **two-stream pipelined** path
+    /// ([`hash_bytes_pipelined`]) for ILP on the bench's 8-64 byte keyspace,
+    /// closing the prior 1 ns gap vs rustc-hash 2.x's `hash_bytes`. The
+    /// final `fmix64` retains the anti-clustering guarantee that the
+    /// `no_catastrophic_clustering_on_low_entropy_keys` test enforces.
+    ///
+    /// Note: the result diverges from the legacy [`FxHasher`] absorb path —
+    /// callers using `FxHashMap<Vec<u8>, _>` route through std's
+    /// `Hash::hash → Hasher::write → finish` (the legacy single-stream
+    /// path), which intentionally stays put for cross-instance hash
+    /// stability with anything that depended on the v0.polish bit pattern.
+    /// The `KevyHash for [u8]` impl is for one-call hot paths like
+    /// `kevy-map::find_by_borrow`, which is the only one we measure.
     #[inline]
     fn kevy_hash(&self) -> u64 {
-        let mut h = FxHasher::default();
-        h.write(self);
-        h.finish()
+        hash_bytes_pipelined(self)
     }
 }
 
@@ -199,17 +298,24 @@ mod tests {
     }
 
     #[test]
-    fn kevy_hash_matches_fx_hasher_for_bytes() {
-        // KevyHash is the one-call form of: FxHasher::default(); write(); finish().
-        // (Note: BuildHasher::hash_one routes through <[u8] as Hash> which adds a
-        // length prefix — we match the raw-Fx path, not hash_one. kevy-map is
-        // standalone; the FxHashMap path stays available for callers that want
-        // hash_one's length-prefixed behaviour.)
+    fn kevy_hash_bytes_is_deterministic_and_distinct() {
+        // KevyHash for [u8] uses the two-stream pipelined hash_bytes_pipelined
+        // path (the rustc-hash 2.x trick + our fmix64 finalize). It diverges
+        // from the legacy FxHasher::write byte absorb path — see the impl
+        // doc-comment.
         let key = b"hello-world".as_slice();
-        let one_call = key.kevy_hash();
+        // Deterministic across calls (no random seed).
+        assert_eq!(key.kevy_hash(), key.kevy_hash());
+        // Distinct from a single-bit-flipped key.
+        assert_ne!(key.kevy_hash(), b"hello-worle".as_slice().kevy_hash());
+        // Length matters (XOR-only short path otherwise wouldn't distinguish).
+        assert_ne!(b"abc".as_slice().kevy_hash(), b"abcd".as_slice().kevy_hash());
+        // The legacy FxHasher path is still available via std Hasher trait
+        // (FxHashMap users); the two no longer have to agree.
         let mut staged = FxHasher::default();
         staged.write(key);
-        assert_eq!(one_call, staged.finish());
+        let _fx_legacy = staged.finish();
+        // Intentionally no assert_eq! here — divergence is the point.
     }
 
     #[test]
