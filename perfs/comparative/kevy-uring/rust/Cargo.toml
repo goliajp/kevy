@@ -1,0 +1,16 @@
+[workspace]
+
+[package]
+name = "kevy-uring-comparative-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+kevy-uring = { path = "../../../../crates/kevy-uring" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
