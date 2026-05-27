@@ -12,14 +12,14 @@ this file.
 - Bench: 5 binary runs × 25 samples × 1M iter, min-of-medians per
   workload (suppresses single-run jitter)
 
-## Headline performance (ns/op, min-of-medians)
+## Headline performance (ns/op, min-of-medians, post-P21 pipelined)
 
 | workload          | best across all langs | kevy-hash | verdict                |
 |-------------------|-----------------------|----------:|------------------------|
-| hash_u64          | 0 (tied)              | 0         | ✅ **kevy tied for best** |
-| hash_bytes_8B     | 0 (kevy + ahash + fxhash) | 0     | ✅ **kevy tied for best** |
-| hash_bytes_16B    | 0 (fxhash / rustc-hash) | 1       | ⚠️ 1 ns noise floor    |
-| hash_bytes_64B    | 2 (ahash / rustc-hash / wyhash / std::hash) | 3 | ⚠️ 1 ns noise floor |
+| hash_u64          | 0 (tied)              | **0**     | ✅ **kevy tied for best** |
+| hash_bytes_8B     | 0 (tied)              | **0**     | ✅ **kevy tied for best** |
+| hash_bytes_16B    | 0 (tied)              | **0**     | ✅ **kevy tied for best (was +1 ns)** |
+| hash_bytes_64B    | 1 (rustc-hash)        | **2**     | +1 ns (noise floor; ties ahash/fxhash/xxh3/wyhash) |
 
 ### Per-cohort min ns (across 4 languages × multiple competitors)
 
@@ -57,29 +57,37 @@ this file.
   underlying memhash is comparable but the public API can't avoid
   the call overhead.
 
-### Why the 1 ns gap CANNOT be closed (P15-B2 investigation)
+### Why the residual 1 ns gap on 64B is structural (P21 close)
 
-The 1-2 ns gap vs the absolute fastest competitors (fxhash/rustc-hash
-on 16B; ahash on 64B) is **structural**, not a polish miss:
+Round 1 P15-B2 declared the gap "structural" without source-reading.
+Round 2 P21 re-investigated and found a real lever — **rustc-hash
+2.x's two-stream pipelined `hash_bytes`** — which we adopted
+(commit `95cd392`). The 16B gap to ahash/fxhash/rustc-hash closed
+to TIE; the 8B/u64 gaps remain TIE at the noise floor.
 
-- **Gap vs fxhash / rustc-hash** = the cost of our fmix64 finalize
-  (~6 ALU ops; pipelined to ~1 ns observed). Removing it WOULD close
-  the gap, but **would break the `no_catastrophic_clustering_on_low_
-  entropy_keys` test** — bare-Fx clusters 30-50× on `"key:0..N"`-style
-  inputs, which is the keyspace shape kevy actually sees in production.
-  fxhash/rustc-hash are FAST AT THE COST OF this guarantee; we trade
-  1 ns for the guarantee.
-- **Gap vs ahash on 64B** = ahash uses x86 AES-NI hardware
-  instructions to do its mix in 1-2 cycles. kevy-hash is
-  `#![forbid(unsafe_code)]` (charter constraint) — even targeting
-  AES intrinsics directly would require unsafe asm or std::arch.
-  ahash is a different architectural choice (DoS-resistant via random
-  seed + hardware AES); we explicitly do not pay either tax.
+What's left (rustc-hash 64B +1 ns lead): rustc-hash's `finish()` is
+just `self.hash.rotate_left(26)` — no avalanche. It works because
+hashbrown does its own mix on bucket-index computation. Our
+`KevyHash::kevy_hash()` is consumed DIRECTLY by both kevy-map's
+bucket-index AND its h2 metadata byte (top-7-bits), so we need the
+output already-avalanched. We pay 6 ALU ops of `fmix64` on every
+call to give the `no_catastrophic_clustering_on_low_entropy_keys`
+test its margin. That's the 1 ns gap.
 
-Both gaps are between kevy-hash and competitors that have sacrificed
-a property we keep. There is no "learn-from-open-source" lever
-remaining — the open-source winners win by giving up something we
-don't give up.
+vs ahash 2 ns (now TIE'd by our 64B pipelined path): ahash on 64B
+uses AES-NI hardware (16-byte SIMD AES instruction) — single-cycle
+mix. kevy-hash is `#![forbid(unsafe_code)]` (charter constraint);
+AES intrinsics would require unsafe asm or std::arch. We chose not
+to pay this — and pipelining closed the gap to ahash anyway, so the
+question is moot in v0.1.1.
+
+The remaining 1 ns to rustc-hash on 64B is the anti-clustering
+tax. There is no clean lever to close it without either:
+- giving up the avalanche guarantee (breaks our `no_catastrophic_
+  clustering` test), or
+- moving to AES-NI hardware (breaks our pure-Rust no-unsafe charter).
+
+Both would be charter changes; neither aligned with v0.1.x.
 
 ## Memory contract
 
