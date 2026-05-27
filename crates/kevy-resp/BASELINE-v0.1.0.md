@@ -11,14 +11,24 @@ Pre-publish snapshot. Future versions diff against this file.
 
 ## Headline performance (ns/op, single-binary 25-sample)
 
-| workload                  | best non-kevy        | kevy-resp | verdict     |
-|---------------------------|----------------------|----------:|-------------|
-| parse_command_set_3args   | redis-rs 511         | **56**    | ✅ **kevy 9.1× faster** |
-| parse_reply_bulk_12B      | redis-rs 157         | **18**    | ✅ **kevy 8.7× faster** |
+5-run min-of-medians (single-binary 25 samples × 1M iter):
 
-(Single-run min values. The kevy-resp absolute is dominated by the
-SWAR find_crlf + zero-alloc `Argv` layout; the redis-rs absolute is
-dominated by its per-element `Value::Bulk` `Vec` allocation.)
+| workload                | hiredis (C) | redis-rs (Rust) | kevy-resp (Rust) | verdict |
+|-------------------------|------------:|----------------:|-----------------:|---------|
+| parse_command_set_3args |         144 |             255 |           **50** | ✅ **kevy 2.9× C / 5.1× Rust** |
+| parse_reply_bulk_12B    |          42 |             101 |           **16** | ✅ **kevy 2.6× C / 6.3× Rust** |
+
+The earlier v0.1.0 single-run snapshot ("9.1× redis-rs", "8.7× redis-rs")
+was a lucky low. Multirun min-of-medians narrows the redis-rs ratios to
+5-6× — still a decisive win. Crucially, **kevy-resp is also 2.6-2.9×
+faster than hiredis (the C reference)**: the structural advantages
+(SWAR `find_crlf` + zero-alloc `Argv` layout) carry over into
+absolute leadership, not just "fastest in Rust".
+
+(Absolutes: hiredis dominated by per-frame `redisReply` tree
+allocation; redis-rs dominated by per-element `Value::Bulk` `Vec`
+allocation; kevy-resp dominated by the `Argv` alloc pair, which the
+reactor amortises to ~0 via scratch reuse.)
 
 ### Why kevy-resp wins so heavily
 
@@ -42,12 +52,18 @@ heap), while redis-rs optimises for general-purpose client use.
 
 ### Cross-language status
 
-C / Go / C++ competitor benches not in v0.1.0 — RESP parsers in
-those ecosystems (hiredis, go-redis, cpp_redis) require non-trivial
-fixture setup. Rust competitor is the definitive signal because
-redis-rs is the canonical Rust client; kevy-resp 9× ahead of redis-
-rs is well above any noise threshold. Cross-lang gate is **deferred
-to v0.1.1**; for v0.1.0 the Rust win is decisive.
+- **C (hiredis 1.3.0)** — landed in v0.1.1 polish (P14-B1). Per the
+  table above: kevy 2.6-2.9× faster than hiredis on both workloads.
+  hiredis's `redisReader` is the canonical C parser; the win
+  generalises beyond "fastest in Rust".
+- **Go (go-redis)** — deferred. Go's RESP parser sits inside the
+  client package and isn't trivial to isolate as a standalone
+  parser; would require a partial harness fork. Given kevy-resp
+  already beats both Rust and C reference parsers by ≥ 2.6×, this is
+  unlikely to change the verdict.
+- **C++ (cpp_redis / boost::redis)** — deferred. The C++ ecosystem
+  predominantly wraps hiredis; an independent C++ parser would not
+  add signal beyond what hiredis already provides.
 
 ## Memory contract
 

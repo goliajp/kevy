@@ -6,6 +6,10 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
+[[bin]]
+name = "bench"
+path = "src/main.rs"
+
 [dependencies]
 kevy-resp = { path = "../../../../crates/kevy-resp" }
 redis = { version = "0.32", default-features = false }
