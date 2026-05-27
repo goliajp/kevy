@@ -1,11 +1,28 @@
 //! The KevyMap implementation: struct, allocation, probing, and the live
 //! lookup / insert / remove API. Helpers (`h2`, `prefetch_t0`, metadata
 //! constants) and the private `ProbeOutcome` enum are all map-scoped.
+//!
+//! Layout (single allocation):
+//!
+//! ```text
+//! +------------+------------+-----+---------------+---------+--------+
+//! | slot[0]    | slot[1]    | ... | slot[cap-1]   | padding | meta   |
+//! +------------+------------+-----+---------------+---------+--------+
+//! ^                                                          ^
+//! slots_ptr                                                  metadata_ptr
+//! ```
+//!
+//! Both pointers are precomputed at `alloc_table` time and never re-derived
+//! in the hot path. The single allocation cuts one alloc/dealloc pair vs
+//! the previous two-`Box<[…]>` layout, and keeps metadata + slots in
+//! adjacent pages (warmer TLB, contiguous OS-prefetch).
 
+use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 use std::borrow::Borrow;
 use std::fmt;
+use std::marker::PhantomData;
 use std::mem::MaybeUninit;
-use std::ptr;
+use std::ptr::{self, NonNull};
 
 use kevy_hash::KevyHash;
 
@@ -66,24 +83,51 @@ fn prefetch_t0(ptr: *const u8) {
     }
 }
 
+/// Compute the single-buffer layout for a table of `cap` slots: returns the
+/// combined `Layout` and the byte offset to the metadata array. Panics on
+/// arithmetic overflow (only reachable for cap ≈ usize::MAX which would OOM
+/// anyway).
+#[inline]
+fn table_layout<KV>(cap: usize) -> (Layout, usize) {
+    let slots = Layout::array::<MaybeUninit<KV>>(cap).expect("slots layout overflow");
+    let meta = Layout::array::<u8>(cap + GROUP_WIDTH - 1).expect("metadata layout overflow");
+    let (combined, meta_offset) = slots.extend(meta).expect("layout extend overflow");
+    (combined.pad_to_align(), meta_offset)
+}
+
 /// An open-addressing Swiss-style hashtable keyed by [`KevyHash`].
 ///
 /// Power-of-two capacity (`mask = cap - 1`); 7/8 load factor; linear probing
 /// over the metadata array; full slots' (K, V) live AoS in a parallel slot
-/// array of `MaybeUninit<(K, V)>`.
+/// array of `MaybeUninit<(K, V)>` co-allocated with the metadata.
+///
+/// When `cap == 0` both pointers are dangling and no allocation is held.
 pub struct KevyMap<K, V> {
-    /// One byte per slot. `EMPTY` (0xFF), `DELETED` (0x80), or `h2` (0x00..=0x7F).
-    pub(crate) metadata: Box<[u8]>,
-    /// One slot per metadata byte. Initialised iff the corresponding metadata
-    /// byte is in 0x00..=0x7F (i.e. `meta & 0x80 == 0`).
-    pub(crate) slots: Box<[MaybeUninit<(K, V)>]>,
-    /// `cap - 1`; 0 when the table is uninitialised (cap = 0).
+    /// Slot array. `cap` initialised iff the corresponding metadata byte is
+    /// in `0x00..=0x7F`. Dangling when `cap == 0`.
+    slots_ptr: NonNull<MaybeUninit<(K, V)>>,
+    /// Metadata array (`cap + GROUP_WIDTH - 1` bytes; trailing
+    /// `GROUP_WIDTH - 1` bytes mirror the leading ones for SIMD-safe
+    /// wraparound loads — the hashbrown layout). Dangling when `cap == 0`.
+    metadata_ptr: NonNull<u8>,
+    /// Allocated slot count. `0` when no allocation is held.
+    cap: usize,
+    /// `cap - 1` when `cap > 0`; `0` when `cap == 0`.
     mask: usize,
     /// Live entries.
     occupied: usize,
     /// Tombstones (not yet reclaimed).
     deleted: usize,
+    /// Marker so dropck and variance treat us as owning `(K, V)` like a
+    /// `Box<[MaybeUninit<(K, V)>]>` would.
+    _marker: PhantomData<(K, V)>,
 }
+
+// SAFETY: KevyMap owns its `(K, V)` entries (via the slot allocation). The
+// `NonNull<...>` fields are conceptually `Box<[…]>` and inherit the same
+// Send/Sync bounds: send-K + send-V ⇒ KevyMap is Send. Same for Sync.
+unsafe impl<K: Send, V: Send> Send for KevyMap<K, V> {}
+unsafe impl<K: Sync, V: Sync> Sync for KevyMap<K, V> {}
 
 enum ProbeOutcome {
     Found(usize),
@@ -97,11 +141,13 @@ impl<K, V> KevyMap<K, V> {
     /// Construct an empty map without allocating.
     pub fn new() -> Self {
         Self {
-            metadata: Box::new([]),
-            slots: Box::new_uninit_slice(0),
+            slots_ptr: NonNull::dangling(),
+            metadata_ptr: NonNull::dangling(),
+            cap: 0,
             mask: 0,
             occupied: 0,
             deleted: 0,
+            _marker: PhantomData,
         }
     }
 
@@ -120,31 +166,43 @@ impl<K, V> KevyMap<K, V> {
     fn alloc_table(cap: usize) -> Self {
         debug_assert!(cap.is_power_of_two());
         debug_assert!(cap >= MIN_CAP);
-        // Metadata is `cap + GROUP_WIDTH - 1` bytes: the first `cap` bytes
-        // are the real per-slot metadata, the trailing `GROUP_WIDTH - 1`
-        // bytes mirror the leading ones so a 16-byte SIMD load starting at
-        // **any** slot in `[0, cap)` reads valid contiguous data, wrapping
-        // around the end without a branch. This is the hashbrown layout.
-        let total = cap + GROUP_WIDTH - 1;
-        let metadata = vec![EMPTY; total].into_boxed_slice();
-        let slots: Box<[MaybeUninit<(K, V)>]> = Box::new_uninit_slice(cap);
-        // v0.metal-9: hint THP on both backing arrays. madvise tolerates
-        // mis-alignment by no-op'ing (Linux EINVAL is silenced inside
-        // kevy_madvise::advise_hugepage). On 10M+ key tables the metadata array
-        // alone is 16 MB — well over the 2 MB HP boundary, so the kernel's
-        // khugepaged can promote it in place. Cheap on the non-Linux paths
-        // (compile-time no-op).
-        kevy_madvise::advise_hugepage(metadata.as_ptr(), metadata.len());
-        kevy_madvise::advise_hugepage(
-            slots.as_ptr() as *const u8,
-            std::mem::size_of_val::<[_]>(&slots),
-        );
+
+        let (layout, meta_offset) = table_layout::<(K, V)>(cap);
+        // SAFETY: layout has non-zero size (metadata alone is ≥ MIN_CAP +
+        // GROUP_WIDTH - 1 ≥ 31 bytes). alloc returns either a valid
+        // allocation of `layout` or null.
+        let base = unsafe { alloc(layout) };
+        if base.is_null() {
+            handle_alloc_error(layout);
+        }
+        // Initialise the metadata range (real + mirror tail) to EMPTY in a
+        // single memset. The slot array is left uninitialised — slots
+        // become initialised only when their metadata byte transitions
+        // out of the high-bit-set state (EMPTY/DELETED).
+        let meta_byte_ptr = unsafe { base.add(meta_offset) };
+        unsafe { ptr::write_bytes(meta_byte_ptr, EMPTY, cap + GROUP_WIDTH - 1) };
+
+        let slots_ptr = base as *mut MaybeUninit<(K, V)>;
+        let metadata_ptr = meta_byte_ptr;
+
+        // v0.metal-9 / single-buffer redo: hint THP on the entire buffer in
+        // one madvise call. The combined allocation is `meta_offset +
+        // cap + GROUP_WIDTH - 1` bytes (== `layout.size()` minus padding).
+        // On 10M+ key tables the metadata alone is 16 MB — well over the
+        // 2 MB HP boundary, so the kernel's khugepaged can promote it in
+        // place. Cheap on the non-Linux paths (compile-time no-op).
+        kevy_madvise::advise_hugepage(base as *const u8, layout.size());
+
         Self {
-            metadata,
-            slots,
+            // SAFETY: alloc returned non-null; raw pointers are derived
+            // within the same allocation.
+            slots_ptr: unsafe { NonNull::new_unchecked(slots_ptr) },
+            metadata_ptr: unsafe { NonNull::new_unchecked(metadata_ptr) },
+            cap,
             mask: cap - 1,
             occupied: 0,
             deleted: 0,
+            _marker: PhantomData,
         }
     }
 
@@ -154,10 +212,15 @@ impl<K, V> KevyMap<K, V> {
     /// real metadata.
     #[inline]
     fn set_meta(&mut self, i: usize, v: u8) {
-        self.metadata[i] = v;
-        if i < GROUP_WIDTH - 1 {
-            let cap = self.cap();
-            self.metadata[cap + i] = v;
+        debug_assert!(i < self.cap);
+        // SAFETY: i ∈ [0, cap); metadata array length is cap + GROUP_WIDTH - 1.
+        // When i < GROUP_WIDTH - 1 we also write cap + i, which is still
+        // inside the array (cap + GROUP_WIDTH - 2 ≤ cap + GROUP_WIDTH - 2).
+        unsafe {
+            *self.metadata_ptr.as_ptr().add(i) = v;
+            if i < GROUP_WIDTH - 1 {
+                *self.metadata_ptr.as_ptr().add(self.cap + i) = v;
+            }
         }
     }
 
@@ -173,28 +236,33 @@ impl<K, V> KevyMap<K, V> {
         self.occupied == 0
     }
 
-    /// Allocated slot count (NOT live entries). The slots vector length is
-    /// authoritative; metadata is `slots.len() + GROUP_WIDTH - 1` bytes
-    /// (the trailing bytes are a mirror — see `alloc_table`).
+    /// Allocated slot count (NOT live entries).
     #[inline]
     pub fn capacity(&self) -> usize {
-        self.slots.len()
+        self.cap
     }
 
     /// Drop every live entry and reset the metadata. Keeps the allocation.
     pub fn clear(&mut self) {
+        if self.cap == 0 {
+            return;
+        }
         if std::mem::needs_drop::<(K, V)>() {
-            let cap = self.cap();
-            for i in 0..cap {
-                if self.metadata[i] & 0x80 == 0 {
+            for i in 0..self.cap {
+                // SAFETY: i < cap ⇒ metadata pointer in-bounds.
+                let meta = unsafe { *self.metadata_ptr.as_ptr().add(i) };
+                if meta & 0x80 == 0 {
                     // SAFETY: full slot ⇒ initialised.
-                    unsafe { ptr::drop_in_place(self.slots[i].as_mut_ptr()) };
+                    unsafe {
+                        ptr::drop_in_place(self.slots_ptr.as_ptr().add(i) as *mut (K, V));
+                    }
                 }
             }
         }
-        // Reset entire metadata buffer (real range + mirror tail).
-        for m in self.metadata.iter_mut() {
-            *m = EMPTY;
+        // Reset entire metadata buffer (real range + mirror tail) in one memset.
+        // SAFETY: metadata buffer is exactly cap + GROUP_WIDTH - 1 bytes wide.
+        unsafe {
+            ptr::write_bytes(self.metadata_ptr.as_ptr(), EMPTY, self.cap + GROUP_WIDTH - 1);
         }
         self.occupied = 0;
         self.deleted = 0;
@@ -202,7 +270,8 @@ impl<K, V> KevyMap<K, V> {
 
     /// `(&K, &V)` over all live entries; order is unspecified.
     pub fn iter(&self) -> Iter<'_, K, V> {
-        Iter::new(&self.metadata, &self.slots)
+        let (metadata, slots) = self.as_slices();
+        Iter::new(metadata, slots)
     }
 
     /// `&K` over all live entries.
@@ -213,6 +282,26 @@ impl<K, V> KevyMap<K, V> {
     /// `&V` over all live entries.
     pub fn values(&self) -> Values<'_, K, V> {
         Values::new(self.iter())
+    }
+
+    /// Borrow the metadata and slots as parallel slices of length `cap`.
+    /// Used by [`KevyMap::iter`] (which only needs the real slot range,
+    /// not the mirror tail). When `cap == 0` returns two empty slices —
+    /// the dangling pointer is never dereferenced.
+    #[inline]
+    fn as_slices(&self) -> (&[u8], &[MaybeUninit<(K, V)>]) {
+        if self.cap == 0 {
+            return (&[], &[]);
+        }
+        // SAFETY: cap > 0 ⇒ both pointers are valid for `cap` reads; we hand
+        // out shared borrows tied to `&self`'s lifetime, so the allocation
+        // outlives the returned slices.
+        unsafe {
+            (
+                std::slice::from_raw_parts(self.metadata_ptr.as_ptr(), self.cap),
+                std::slice::from_raw_parts(self.slots_ptr.as_ptr(), self.cap),
+            )
+        }
     }
 
     /// Hint the CPU to fetch the bucket cache line that a probe at `hash`
@@ -228,31 +317,20 @@ impl<K, V> KevyMap<K, V> {
     /// degrade to a no-op rather than a fake hint).
     #[inline(always)]
     pub fn prefetch_for_hash(&self, hash: u64) {
-        let cap = self.cap();
-        if cap == 0 {
+        if self.cap == 0 {
             return;
         }
-        let mask = cap - 1;
-        let idx = (hash as usize) & mask;
-        // SAFETY: idx < cap ≤ metadata.len() ⇒ ptr in-bounds; prefetch reads
-        // never trap and never observe values.
-        let ptr = unsafe { self.metadata.as_ptr().add(idx) };
+        let idx = (hash as usize) & self.mask;
+        // SAFETY: idx < cap ≤ metadata length ⇒ pointer in-bounds; prefetch
+        // reads never trap and never observe values.
+        let ptr = unsafe { self.metadata_ptr.as_ptr().add(idx) };
         prefetch_t0(ptr);
-    }
-
-    #[inline]
-    fn cap(&self) -> usize {
-        // Slots length is authoritative; metadata is `cap + GROUP_WIDTH - 1`
-        // bytes (the mirror tail is bookkeeping for SIMD-safe wraparound
-        // loads, not extra slots).
-        self.slots.len()
     }
 
     /// 7/8 of the capacity — the inclusive max for `occupied + deleted`.
     #[inline]
     fn threshold(&self) -> usize {
-        let c = self.cap();
-        c - (c / 8)
+        self.cap - (self.cap / 8)
     }
 }
 
@@ -268,7 +346,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 // SAFETY: slot is full ⇒ initialised. We replace only the V
                 // field; the old K is kept (std HashMap semantics).
                 let v_ptr = unsafe {
-                    let kv: *mut (K, V) = self.slots[idx].as_mut_ptr();
+                    let kv: *mut (K, V) = self.slots_ptr.as_ptr().add(idx) as *mut (K, V);
                     ptr::addr_of_mut!((*kv).1)
                 };
                 let old_v = unsafe { ptr::replace(v_ptr, value) };
@@ -280,7 +358,11 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 via_tombstone,
             } => {
                 self.set_meta(insert_at, h2(hash));
-                self.slots[insert_at].write((key, value));
+                // SAFETY: insert_at < cap ⇒ slot pointer in-bounds; we write
+                // (K, V) into a previously uninitialised slot.
+                unsafe {
+                    (*self.slots_ptr.as_ptr().add(insert_at)).write((key, value));
+                }
                 self.occupied += 1;
                 if via_tombstone {
                     self.deleted -= 1;
@@ -291,16 +373,16 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
     }
 
     fn maybe_grow(&mut self) {
-        if self.cap() == 0 || (self.occupied + self.deleted) >= self.threshold() {
+        if self.cap == 0 || (self.occupied + self.deleted) >= self.threshold() {
             self.grow();
         }
     }
 
     fn grow(&mut self) {
-        let new_cap = if self.cap() == 0 {
+        let new_cap = if self.cap == 0 {
             MIN_CAP
         } else {
-            self.cap()
+            self.cap
                 .checked_mul(2)
                 .expect("kevy-map: capacity doubling overflow")
         };
@@ -314,43 +396,45 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         // Direct metadata writes are safe here because the old `self` table
         // is going away (we swap with new_map then drop), so a stale mirror
         // doesn't matter.
-        let old_cap = self.cap();
+        let old_cap = self.cap;
         for i in 0..old_cap {
-            if self.metadata[i] & 0x80 == 0 {
+            // SAFETY: i < old_cap ⇒ metadata in-bounds.
+            let meta = unsafe { *self.metadata_ptr.as_ptr().add(i) };
+            if meta & 0x80 == 0 {
                 // SAFETY: full slot ⇒ initialised; we mark DELETED immediately
                 // so this byte is never re-read as occupied.
-                let (k, v) = unsafe { ptr::read(self.slots[i].as_ptr()) };
-                self.metadata[i] = DELETED;
+                let (k, v) = unsafe { ptr::read(self.slots_ptr.as_ptr().add(i) as *const (K, V)) };
+                unsafe { *self.metadata_ptr.as_ptr().add(i) = DELETED };
                 let hash = k.kevy_hash();
                 new_map.insert_known_unique(hash, k, v);
             }
         }
-        // All occupied entries are now in new_map; the old self has no live
-        // slots.
+        // All occupied entries are now in new_map; the old self has no live slots.
         self.occupied = 0;
         self.deleted = 0;
         std::mem::swap(self, &mut new_map);
-        // new_map (now the old self) drops; metadata is all DELETED ⇒ Drop
-        // walks but touches no slots.
+        // new_map (now the old self) drops; metadata is all DELETED (or EMPTY
+        // for previously-empty slots) ⇒ Drop walks but touches no slots.
     }
 
     /// Insert under the assumption that the key isn't already present (used
     /// by `grow` to repopulate the new table). Skips the duplicate-key
-    /// check. Uses a 16-slot SIMD group scan + triangular probing to find
-    /// the first EMPTY.
+    /// check. Uses a 16-slot SIMD group scan to find the first EMPTY.
     fn insert_known_unique(&mut self, hash: u64, k: K, v: V) {
         let h2v = h2(hash);
         let mut group_start = (hash as usize) & self.mask;
-        let stride = GROUP_WIDTH;
         loop {
             // SAFETY: metadata is `cap + GROUP_WIDTH - 1` bytes; group_start
             // is in `[0, cap)`; the load reads 16 bytes which lie inside the
             // buffer thanks to the mirror tail.
-            let g = unsafe { Group::load(self.metadata.as_ptr().add(group_start)) };
+            let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
             if let Some(m) = g.match_byte(EMPTY).lowest_set() {
                 let slot = (group_start + m) & self.mask;
                 self.set_meta(slot, h2v);
-                self.slots[slot].write((k, v));
+                // SAFETY: slot < cap.
+                unsafe {
+                    (*self.slots_ptr.as_ptr().add(slot)).write((k, v));
+                }
                 self.occupied += 1;
                 return;
             }
@@ -358,13 +442,12 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
             // load factor and group-scan-aware probe, linear wins on cache
             // locality; triangular's anti-clustering only pays off at higher
             // load factors than we run).
-            let _ = stride;
             group_start = (group_start + GROUP_WIDTH) & self.mask;
         }
     }
 
     fn probe_with_key(&self, hash: u64, key: &K) -> ProbeOutcome {
-        if self.cap() == 0 {
+        if self.cap == 0 {
             return ProbeOutcome::NotFound {
                 insert_at: 0,
                 via_tombstone: false,
@@ -380,11 +463,11 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         if self.deleted == 0 {
             loop {
                 // SAFETY: see [insert_known_unique].
-                let g = unsafe { Group::load(self.metadata.as_ptr().add(group_start)) };
+                let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
                 for m in g.match_byte(h2v).iter() {
                     let slot = (group_start + m) & self.mask;
                     // SAFETY: matched h2 ⇒ slot is occupied ⇒ initialised.
-                    let kv = unsafe { self.slots[slot].assume_init_ref() };
+                    let kv = unsafe { (*self.slots_ptr.as_ptr().add(slot)).assume_init_ref() };
                     if &kv.0 == key {
                         return ProbeOutcome::Found(slot);
                     }
@@ -404,11 +487,11 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         let mut first_deleted: Option<usize> = None;
         loop {
             // SAFETY: see [insert_known_unique].
-            let g = unsafe { Group::load(self.metadata.as_ptr().add(group_start)) };
+            let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
             for m in g.match_byte(h2v).iter() {
                 let slot = (group_start + m) & self.mask;
                 // SAFETY: matched h2 ⇒ slot is occupied ⇒ initialised.
-                let kv = unsafe { self.slots[slot].assume_init_ref() };
+                let kv = unsafe { (*self.slots_ptr.as_ptr().add(slot)).assume_init_ref() };
                 if &kv.0 == key {
                     return ProbeOutcome::Found(slot);
                 }
@@ -439,7 +522,7 @@ impl<K, V> KevyMap<K, V> {
     {
         let idx = self.find_by_borrow(key)?;
         // SAFETY: find_by_borrow only returns indices into full slots.
-        let kv = unsafe { self.slots[idx].assume_init_ref() };
+        let kv = unsafe { (*self.slots_ptr.as_ptr().add(idx)).assume_init_ref() };
         Some(&kv.1)
     }
 
@@ -451,7 +534,7 @@ impl<K, V> KevyMap<K, V> {
     {
         let idx = self.find_by_borrow(key)?;
         // SAFETY: full slot.
-        let kv = unsafe { self.slots[idx].assume_init_mut() };
+        let kv = unsafe { (*self.slots_ptr.as_ptr().add(idx)).assume_init_mut() };
         Some(&mut kv.1)
     }
 
@@ -476,7 +559,7 @@ impl<K, V> KevyMap<K, V> {
         self.deleted += 1;
         // SAFETY: slot was full, we just marked it DELETED so it won't be
         // read again; ptr::read moves the (K, V) out.
-        let (_k, v) = unsafe { ptr::read(self.slots[idx].as_ptr()) };
+        let (_k, v) = unsafe { ptr::read(self.slots_ptr.as_ptr().add(idx) as *const (K, V)) };
         Some(v)
     }
 
@@ -485,21 +568,20 @@ impl<K, V> KevyMap<K, V> {
         K: Borrow<Q>,
         Q: KevyHash + Eq + ?Sized,
     {
-        if self.cap() == 0 {
+        if self.cap == 0 {
             return None;
         }
         let hash = key.kevy_hash();
         let h2v = h2(hash);
         let mut group_start = (hash as usize) & self.mask;
-        let stride = GROUP_WIDTH;
         loop {
             // SAFETY: see [insert_known_unique]; group_start ∈ [0, cap),
             // metadata length ≥ cap + GROUP_WIDTH - 1.
-            let g = unsafe { Group::load(self.metadata.as_ptr().add(group_start)) };
+            let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
             for m in g.match_byte(h2v).iter() {
                 let slot = (group_start + m) & self.mask;
                 // SAFETY: matched h2 ⇒ slot occupied ⇒ initialised.
-                let kv = unsafe { self.slots[slot].assume_init_ref() };
+                let kv = unsafe { (*self.slots_ptr.as_ptr().add(slot)).assume_init_ref() };
                 if kv.0.borrow() == key {
                     return Some(slot);
                 }
@@ -508,8 +590,6 @@ impl<K, V> KevyMap<K, V> {
             if !g.match_byte(EMPTY).is_empty() {
                 return None;
             }
-            // Linear-by-GROUP_WIDTH probing (matches insert_known_unique).
-            let _ = stride;
             group_start = (group_start + GROUP_WIDTH) & self.mask;
         }
     }
@@ -535,15 +615,29 @@ where
 
 impl<K, V> Drop for KevyMap<K, V> {
     fn drop(&mut self) {
+        if self.cap == 0 {
+            return;
+        }
         if std::mem::needs_drop::<(K, V)>() {
-            // Iterate the real slot range, NOT the mirror tail.
-            let cap = self.cap();
-            for i in 0..cap {
-                if self.metadata[i] & 0x80 == 0 {
+            for i in 0..self.cap {
+                // SAFETY: i < cap ⇒ in-bounds.
+                let meta = unsafe { *self.metadata_ptr.as_ptr().add(i) };
+                if meta & 0x80 == 0 {
                     // SAFETY: full slot ⇒ initialised.
-                    unsafe { ptr::drop_in_place(self.slots[i].as_mut_ptr()) };
+                    unsafe {
+                        ptr::drop_in_place(self.slots_ptr.as_ptr().add(i) as *mut (K, V));
+                    }
                 }
             }
+        }
+        // Free the single combined allocation. `slots_ptr` IS the base of
+        // the allocation (see alloc_table's layout computation: slots are
+        // at offset 0; metadata sits at meta_offset).
+        let (layout, _) = table_layout::<(K, V)>(self.cap);
+        // SAFETY: cap > 0 ⇒ slots_ptr is non-null and was returned by `alloc`
+        // with the same Layout (table_layout is deterministic on cap).
+        unsafe {
+            dealloc(self.slots_ptr.as_ptr() as *mut u8, layout);
         }
     }
 }
