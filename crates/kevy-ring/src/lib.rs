@@ -124,18 +124,41 @@ impl<T> Drop for Ring<T> {
 /// The sending half. `Send` (move to the producer thread); only this half pushes.
 pub struct Producer<T> {
     inner: Arc<Ring<T>>,
+    /// Cached snapshot of the consumer's `head`. Stale-OK: a value the
+    /// consumer has already advanced past is still safe to treat as "head"
+    /// (the available-slot count we compute is then a conservative lower
+    /// bound, never letting us overwrite a live slot). Refreshed from the
+    /// shared `head` only when the cached count says the ring is full.
+    /// This is the SPSC fast-path lever — it amortises the cross-cache-line
+    /// `Acquire` load on the consumer's cursor over many pushes.
+    head_cache: usize,
 }
 
 /// The receiving half. `Send` (move to the consumer thread); only this half pops.
 pub struct Consumer<T> {
     inner: Arc<Ring<T>>,
+    /// Cached snapshot of the producer's `tail`. Stale-OK in the same way as
+    /// [`Producer::head_cache`]: a value below the truth still lets us pop
+    /// safely (we just see fewer items than really exist; the next refresh
+    /// catches up). Refreshed only when the cached count says the ring is
+    /// empty.
+    tail_cache: usize,
 }
 
 /// Create a ring holding at least `capacity` items (rounded up to a power of
 /// two, minimum 2), returning its producer and consumer halves.
 pub fn ring<T>(capacity: usize) -> (Producer<T>, Consumer<T>) {
     let r = Arc::new(Ring::with_capacity(capacity));
-    (Producer { inner: r.clone() }, Consumer { inner: r })
+    (
+        Producer {
+            inner: r.clone(),
+            head_cache: 0,
+        },
+        Consumer {
+            inner: r,
+            tail_cache: 0,
+        },
+    )
 }
 
 impl<T> Producer<T> {
@@ -145,14 +168,19 @@ impl<T> Producer<T> {
         let r = &*self.inner;
         // `tail` is ours: a plain Relaxed load suffices.
         let tail = r.tail.0.load(Ordering::Relaxed);
-        // `Acquire` pairs with the consumer's `Release` store of `head`, so we
-        // observe slots it has freed before we reuse them.
-        let head = r.head.0.load(Ordering::Acquire);
-        if tail.wrapping_sub(head) > r.mask {
-            return Err(val); // full: capacity == mask + 1 items in flight
+        // Fast path: trust the cached consumer head. If the cache says we
+        // have room, skip the shared `Acquire` load entirely.
+        if tail.wrapping_sub(self.head_cache) > r.mask {
+            // Cache says full — refresh from the shared cursor. `Acquire`
+            // pairs with the consumer's `Release` store of `head` so we
+            // observe slots it has freed before we reuse them.
+            self.head_cache = r.head.0.load(Ordering::Acquire);
+            if tail.wrapping_sub(self.head_cache) > r.mask {
+                return Err(val); // really full
+            }
         }
-        // SAFETY: slot `tail & mask` is free (outside `[head, tail)`); we are the
-        // only producer, so no one else writes it.
+        // SAFETY: slot `tail & mask` is free (outside `[head, tail)`); we are
+        // the only producer, so no one else writes it.
         unsafe {
             (*r.buf[tail & r.mask].get()).write(val);
         }
@@ -182,11 +210,16 @@ impl<T> Consumer<T> {
         let r = &*self.inner;
         // `head` is ours: Relaxed.
         let head = r.head.0.load(Ordering::Relaxed);
-        // `Acquire` pairs with the producer's `Release` store of `tail`, so the
-        // slot write is visible before we read it.
-        let tail = r.tail.0.load(Ordering::Acquire);
-        if head == tail {
-            return None; // empty
+        // Fast path: trust the cached producer tail. If the cache says we
+        // have items, skip the shared `Acquire` load entirely.
+        if head == self.tail_cache {
+            // Cache says empty — refresh from the shared cursor. `Acquire`
+            // pairs with the producer's `Release` store of `tail` so the
+            // slot write is visible before we read it.
+            self.tail_cache = r.tail.0.load(Ordering::Acquire);
+            if head == self.tail_cache {
+                return None; // really empty
+            }
         }
         // SAFETY: slot `head & mask` is in `[head, tail)`, initialized by the
         // producer; we are the only consumer, so we read it exactly once.
@@ -226,8 +259,11 @@ mod tests {
 
     #[test]
     fn capacity_rounds_up_to_power_of_two() {
-        let (tx, _rx) = ring::<u8>(3);
+        let (tx, rx) = ring::<u8>(3);
         assert_eq!(tx.capacity(), 4);
+        // Consumer-side capacity must report the same slot count as the
+        // producer (both inspect the shared mask).
+        assert_eq!(rx.capacity(), tx.capacity());
         let (tx, _rx) = ring::<u8>(1);
         assert_eq!(tx.capacity(), 2); // minimum
         let (tx, _rx) = ring::<u8>(1024);
