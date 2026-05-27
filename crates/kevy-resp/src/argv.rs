@@ -114,3 +114,132 @@ impl From<Vec<Vec<u8>>> for Argv {
 
 /// A parsed command: `argv`, where `argv[0]` is the command name.
 pub type Command = Argv;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn with_capacity_preallocates_both_buffers() {
+        let a: Argv = Argv::with_capacity(4, 32);
+        assert_eq!(a.len(), 0);
+        assert!(a.is_empty());
+        // Underlying Vecs reserve at least what we asked for (no shrink).
+        assert!(a.buf.capacity() >= 32);
+        assert!(a.ends.capacity() >= 4);
+    }
+
+    #[test]
+    fn clear_keeps_capacity_resets_len() {
+        let mut a = Argv::default();
+        a.push(b"foo");
+        a.push(b"barbaz");
+        assert_eq!(a.len(), 2);
+        let cap_buf = a.buf.capacity();
+        let cap_ends = a.ends.capacity();
+        a.clear();
+        assert_eq!(a.len(), 0);
+        assert!(a.is_empty());
+        // Capacities preserved (the reuse contract the hot reactor relies on).
+        assert_eq!(a.buf.capacity(), cap_buf);
+        assert_eq!(a.ends.capacity(), cap_ends);
+    }
+
+    #[test]
+    fn reserve_for_grows_to_at_least_requested() {
+        let mut a = Argv::with_capacity(1, 4);
+        a.reserve_for(8, 64);
+        assert!(a.buf.capacity() >= 64);
+        assert!(a.ends.capacity() >= 8);
+        // reserve_for never shrinks.
+        a.reserve_for(0, 0);
+        assert!(a.buf.capacity() >= 64);
+        assert!(a.ends.capacity() >= 8);
+    }
+
+    #[test]
+    fn push_get_iter_first_round_trip() {
+        let mut a = Argv::default();
+        a.push(b"SET");
+        a.push(b"key");
+        a.push(b"value");
+        assert_eq!(a.len(), 3);
+        assert_eq!(a.first(), Some(b"SET" as &[u8]));
+        assert_eq!(a.get(0), Some(b"SET" as &[u8]));
+        assert_eq!(a.get(1), Some(b"key" as &[u8]));
+        assert_eq!(a.get(2), Some(b"value" as &[u8]));
+        assert_eq!(a.get(3), None);
+        let collected: Vec<&[u8]> = a.iter().collect();
+        assert_eq!(collected, vec![b"SET" as &[u8], b"key", b"value"]);
+    }
+
+    #[test]
+    fn first_on_empty_returns_none() {
+        let a = Argv::default();
+        assert_eq!(a.first(), None);
+        assert_eq!(a.get(0), None);
+    }
+
+    #[test]
+    fn index_returns_correct_slice() {
+        let mut a = Argv::default();
+        a.push(b"hi");
+        a.push(b"there");
+        assert_eq!(&a[0], b"hi" as &[u8]);
+        assert_eq!(&a[1], b"there" as &[u8]);
+    }
+
+    #[test]
+    #[should_panic(expected = "argv index out of bounds")]
+    fn index_out_of_bounds_panics() {
+        let a = Argv::default();
+        let _ = &a[0];
+    }
+
+    #[test]
+    fn eq_against_vec_of_vec() {
+        let mut a = Argv::default();
+        a.push(b"PING");
+        a.push(b"hello");
+        assert_eq!(a, vec![b"PING".to_vec(), b"hello".to_vec()]);
+        assert_ne!(a, vec![b"PING".to_vec()]);
+        assert_ne!(a, vec![b"PING".to_vec(), b"world".to_vec()]);
+    }
+
+    #[test]
+    fn eq_argv_vs_argv() {
+        let mut a = Argv::default();
+        a.push(b"A");
+        a.push(b"B");
+        let mut b = Argv::default();
+        b.push(b"A");
+        b.push(b"B");
+        let mut c = Argv::default();
+        c.push(b"A");
+        c.push(b"C");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn from_vec_of_vec_preserves_args() {
+        let v = vec![b"GET".to_vec(), b"my-key".to_vec()];
+        let a: Argv = Argv::from(v.clone());
+        assert_eq!(a.len(), 2);
+        assert_eq!(a, v);
+        // From<Vec<Vec<u8>>> reserves exactly the right total size.
+        assert_eq!(a.buf.len(), 3 + 6);
+    }
+
+    #[test]
+    fn clone_makes_independent_argv() {
+        let mut a = Argv::default();
+        a.push(b"X");
+        let b = a.clone();
+        assert_eq!(a, b);
+        // mutating original doesn't affect clone.
+        a.push(b"Y");
+        assert_ne!(a, b);
+        assert_eq!(b.len(), 1);
+    }
+}
