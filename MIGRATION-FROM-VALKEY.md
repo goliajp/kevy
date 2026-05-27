@@ -161,12 +161,33 @@ SAVE BGSAVE
 | | valkey / Redis | kevy v1.0 |
 |---|---|---|
 | Snapshot | RDB binary format | kevy snapshot v2 (own format, type-tagged) |
-| AOF | append-only commands | append-only commands (Wave 2 adds BGREWRITEAOF) |
+| AOF | append-only commands | append-only commands |
+| AOF rewrite | `BGREWRITEAOF` (background fork) | `BGREWRITEAOF` (synchronous per shard in v1.0; v1.x will incrementalise) |
+| Auto-rewrite | `auto_aof_rewrite_percentage` / `auto_aof_rewrite_min_size` | same knobs, same semantics (defaults: `100` / `64mb`) |
 | fsync policy | `always` / `everysec` (default) / `no` | identical names + semantics |
 | Snapshot interoperable with Redis RDB? | yes | **no** (different format; migration is via `RESTORE` or app-level export) |
 
-**Data-loss guarantees** match Redis: `always` = 0 loss, `everysec` =
-≤ 1 s loss on crash, `no` = ≤ ~30 s.
+### Data-loss guarantees on crash
+
+| `appendfsync` | Guarantee | Throughput cost |
+|---|---|---|
+| `always` | **0 bytes** lost — every write is on disk before `+OK` returns | ~50 % vs `everysec` |
+| `everysec` (default) | ≤ **1 second** of writes lost (matches Redis) | baseline |
+| `no` | up to ~30 s (kernel pagecache flush window) | slightly faster than `everysec` |
+
+### Crash-safety contract
+
+On startup each shard loads its snapshot (`dump-<id>.rdb`) first, then
+replays its append-only log (`aof-<id>.aof`). The AOF parser tolerates
+a truncated trailing frame from a process kill / power loss — the clean
+prefix replays and the partial tail is silently dropped, never a startup
+failure (verified by `crates/kevy/tests/persistence.rs`'s
+`aof_truncated_tail_is_tolerated_on_restart`).
+
+For destructive integration testing, `bench/crash-test.sh` loops
+"start → SET 100 keys → kill -9 → restart → verify". Run as
+`bash bench/crash-test.sh 10 everysec` (10 rounds with the default
+fsync policy) or `… always` (zero-loss mode).
 
 ## Eviction policies
 
