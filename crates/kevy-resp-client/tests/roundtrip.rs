@@ -107,6 +107,17 @@ fn error_reply() {
 }
 
 #[test]
+fn malformed_reply_yields_invalid_data_error() {
+    // Server sends bytes that can NEVER be a valid RESP frame (unknown
+    // type tag '!') — RespClient must surface ErrorKind::InvalidData,
+    // not retry forever or yield UnexpectedEof.
+    let port = mock_server(14, b"!garbage\r\n");
+    let mut c = RespClient::connect("127.0.0.1", port).unwrap();
+    let err = c.request(&[b"PING".to_vec()]).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+}
+
+#[test]
 fn server_close_mid_reply_yields_io_error() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
