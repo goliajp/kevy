@@ -10,6 +10,7 @@
 //! Subcommand-heavy verbs (currently `CONFIG`) live in submodules to
 //! keep file size in line with the project's ≤ 500 LOC rule.
 
+mod client;
 mod config;
 
 use std::time::SystemTime;
@@ -30,6 +31,7 @@ pub(crate) fn dispatch_ops(cmd: &[u8], args: &Argv, out: &mut Vec<u8>) -> bool {
         b"WAIT" => cmd_wait(args, out),
         b"SHUTDOWN" => cmd_shutdown(args, out),
         b"CONFIG" => config::cmd_config(&cfg, args, out),
+        b"CLIENT" => client::cmd_client(args, out),
         _ => return false,
     }
     true
