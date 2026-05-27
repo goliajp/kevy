@@ -41,7 +41,7 @@ use kevy_store::{Store, Value};
 // ZSet snapshot iterates ordered (member, score) pairs via `Value::ZSet`.
 use std::fs::{File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// File magic + format version. Bump `VERSION` on any layout change.
@@ -288,28 +288,58 @@ pub enum Fsync {
 /// Durability model (paired with snapshots): a snapshot taken at T0 plus the
 /// AOF of writes in (T0, now] reconstructs the current state. `SAVE` writes the
 /// snapshot then [`Aof::truncate`]s the log, so replay never double-applies.
+///
+/// Sizes (`size_bytes`, `size_at_last_rewrite`) drive auto-trigger of
+/// [`Aof::rewrite_from`] (BGREWRITEAOF) via the
+/// `auto_aof_rewrite_percentage` + `auto_aof_rewrite_min_size` knobs in
+/// `kevy_config`.
 pub struct Aof {
     file: BufWriter<File>,
+    path: PathBuf,
     fsync: Fsync,
     dirty: bool,
     last_sync: Instant,
+    /// Estimated bytes currently in the AOF file (existing + appended since
+    /// open). Maintained without fstat() syscalls per append.
+    size_bytes: u64,
+    /// File size right after the most recent [`Self::rewrite_from`] (or
+    /// `Self::open` if never rewritten). Anchor for `auto_aof_rewrite_*`.
+    size_at_last_rewrite: u64,
+    /// Total rewrites successfully completed since open. Surfaced via INFO.
+    rewrites_total: u64,
+}
+
+/// Result of an [`Aof::rewrite_from`] call. Surfaced by `BGREWRITEAOF` /
+/// `INFO persistence`.
+#[derive(Debug, Clone, Copy)]
+pub struct RewriteStats {
+    /// Keys dumped into the new AOF.
+    pub keys: u64,
+    /// New AOF size in bytes.
+    pub bytes: u64,
 }
 
 impl Aof {
     /// Open (creating if needed) `path` for appending.
     pub fn open(path: &Path, fsync: Fsync) -> io::Result<Self> {
         let file = OpenOptions::new().create(true).append(true).open(path)?;
+        let size = file.metadata().map(|m| m.len()).unwrap_or(0);
         Ok(Aof {
             file: BufWriter::new(file),
+            path: path.to_path_buf(),
             fsync,
             dirty: false,
             last_sync: Instant::now(),
+            size_bytes: size,
+            size_at_last_rewrite: size,
+            rewrites_total: 0,
         })
     }
 
     /// Append one command, applying the fsync policy.
     pub fn append(&mut self, args: &Argv) -> io::Result<()> {
         write_multibulk(&mut self.file, args)?;
+        self.size_bytes = self.size_bytes.saturating_add(estimate_multibulk_bytes(args));
         match self.fsync {
             Fsync::Always => {
                 self.file.flush()?;
@@ -342,8 +372,207 @@ impl Aof {
         f.seek(SeekFrom::Start(0))?; // harmless under O_APPEND; keeps len/pos coherent
         f.sync_all()?;
         self.dirty = false;
+        self.size_bytes = 0;
+        self.size_at_last_rewrite = 0;
         Ok(())
     }
+
+    /// Estimated current AOF size in bytes (file content as of last append).
+    #[inline]
+    pub fn size_bytes(&self) -> u64 {
+        self.size_bytes
+    }
+
+    /// AOF size at the most recent rewrite (or open). Auto-trigger compares
+    /// `(size_bytes - size_at_last_rewrite) * 100 / size_at_last_rewrite` to
+    /// the `auto_aof_rewrite_percentage` knob.
+    #[inline]
+    pub fn size_at_last_rewrite(&self) -> u64 {
+        self.size_at_last_rewrite
+    }
+
+    /// Successful rewrite count since `Self::open`. Surfaced in INFO.
+    #[inline]
+    pub fn rewrites_total(&self) -> u64 {
+        self.rewrites_total
+    }
+
+    /// BGREWRITEAOF: rebuild a compact AOF from `store`'s current state and
+    /// atomically swap it in.
+    ///
+    /// **v1.0 is synchronous** — the calling shard blocks for the rewrite's
+    /// duration. Each shard owns its own AOF, so the shards' rewrites
+    /// proceed independently; per-shard blocking matches Redis's `BGSAVE`
+    /// cost in a typical single-key-per-shard workload. Concurrent
+    /// (rewrite-during-writes) incrementalisation is a v1.x perf item.
+    ///
+    /// Writes to a `<path>.rewrite` temp file with fsync, then `rename(2)`s
+    /// it over the live AOF. The append handle is reopened against the new
+    /// file before this call returns, so subsequent `append` calls land in
+    /// the rewritten log.
+    pub fn rewrite_from(&mut self, store: &Store) -> io::Result<RewriteStats> {
+        // Flush any pending writes to the OLD file first so the snapshot
+        // accounts for everything the caller intended to durabilise.
+        self.file.flush()?;
+
+        let tmp = rewrite_tmp_path(&self.path);
+        let (keys, bytes) = dump_store_to_aof(&tmp, store)?;
+
+        // Atomic replacement. After this, the OLD file descriptor in
+        // `self.file` is open against an unlinked inode; new writes would
+        // go nowhere visible. Reopen against the new path.
+        std::fs::rename(&tmp, &self.path)?;
+        let f = OpenOptions::new().append(true).open(&self.path)?;
+        self.file = BufWriter::new(f);
+        self.size_bytes = bytes;
+        self.size_at_last_rewrite = bytes;
+        self.dirty = false;
+        self.rewrites_total = self.rewrites_total.saturating_add(1);
+        Ok(RewriteStats { keys, bytes })
+    }
+}
+
+/// `<aof>.rewrite` — same-directory temp path so `rename(2)` stays atomic.
+fn rewrite_tmp_path(path: &Path) -> PathBuf {
+    let mut p = path.to_path_buf();
+    let new_name = match path.file_name() {
+        Some(n) => {
+            let mut s = n.to_os_string();
+            s.push(".rewrite");
+            s
+        }
+        None => std::ffi::OsString::from("aof.rewrite"),
+    };
+    p.set_file_name(new_name);
+    p
+}
+
+/// Write `store`'s current state to `path` as a sequence of mutating RESP
+/// commands; flush + fsync before returning. Returns `(keys, bytes)`.
+fn dump_store_to_aof(path: &Path, store: &Store) -> io::Result<(u64, u64)> {
+    let f = File::create(path)?;
+    let mut w = BufWriter::new(f);
+    let mut keys = 0u64;
+    let mut err: Option<io::Error> = None;
+    store.snapshot_each(|key, value, ttl_ms| {
+        if err.is_some() {
+            return;
+        }
+        if let Err(e) = write_value_as_commands(&mut w, key, value, ttl_ms) {
+            err = Some(e);
+        } else {
+            keys += 1;
+        }
+    });
+    if let Some(e) = err {
+        return Err(e);
+    }
+    w.flush()?;
+    let inner = w.into_inner().map_err(|e| {
+        io::Error::new(io::ErrorKind::Other, e.to_string())
+    })?;
+    let bytes = inner.metadata().map(|m| m.len()).unwrap_or(0);
+    inner.sync_all()?;
+    Ok((keys, bytes))
+}
+
+/// Emit one (or two, if TTL'd) RESP write commands that, when replayed,
+/// reconstruct `key`'s `value` and TTL exactly.
+fn write_value_as_commands<W: Write>(
+    w: &mut W,
+    key: &[u8],
+    value: &Value,
+    ttl_ms: Option<u64>,
+) -> io::Result<()> {
+    match value {
+        Value::Str(s) => {
+            let argv = Argv::from(vec![b"SET".to_vec(), key.to_vec(), s.to_vec()]);
+            write_multibulk(w, &argv)?;
+        }
+        Value::Hash(h) => {
+            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + h.len() * 2);
+            argv.push(b"HSET".to_vec());
+            argv.push(key.to_vec());
+            for (f, v) in h.iter() {
+                argv.push(f.to_vec());
+                argv.push(v.clone());
+            }
+            write_multibulk(w, &Argv::from(argv))?;
+        }
+        Value::List(l) => {
+            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + l.len());
+            argv.push(b"RPUSH".to_vec());
+            argv.push(key.to_vec());
+            for v in l.iter() {
+                argv.push(v.clone());
+            }
+            write_multibulk(w, &Argv::from(argv))?;
+        }
+        Value::Set(s) => {
+            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + s.len());
+            argv.push(b"SADD".to_vec());
+            argv.push(key.to_vec());
+            for m in s.iter() {
+                argv.push(m.to_vec());
+            }
+            write_multibulk(w, &Argv::from(argv))?;
+        }
+        Value::ZSet(z) => {
+            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + z.ordered().count() * 2);
+            argv.push(b"ZADD".to_vec());
+            argv.push(key.to_vec());
+            for (m, sc) in z.ordered() {
+                argv.push(fmt_zset_score(sc));
+                argv.push(m.to_vec());
+            }
+            write_multibulk(w, &Argv::from(argv))?;
+        }
+    }
+    if let Some(ms) = ttl_ms {
+        let argv = Argv::from(vec![
+            b"PEXPIRE".to_vec(),
+            key.to_vec(),
+            ms.to_string().into_bytes(),
+        ]);
+        write_multibulk(w, &argv)?;
+    }
+    Ok(())
+}
+
+/// Format a sorted-set score the way Redis does (no trailing `.0` for
+/// integers; up to 17 sig figs for non-integer doubles). Tests want the
+/// replay-roundtrip to compare byte-equal, so don't introduce locale
+/// differences (`format!` is locale-free here).
+fn fmt_zset_score(s: f64) -> Vec<u8> {
+    if s.is_finite() && s == s.trunc() && s.abs() < 1e17 {
+        format!("{}", s as i64).into_bytes()
+    } else {
+        format!("{s:.17}").into_bytes()
+    }
+}
+
+/// Cheap byte-count estimator for a single multi-bulk frame:
+/// `*<n>\r\n` + per-arg `$<len>\r\n<bytes>\r\n`. No allocation, no
+/// double-pass — accurate to within a couple of bytes per arg.
+fn estimate_multibulk_bytes(args: &Argv) -> u64 {
+    let mut n: u64 = 3 + decimal_digits(args.len() as u64) as u64;
+    for a in args.iter() {
+        n += 3 + decimal_digits(a.len() as u64) as u64 + a.len() as u64 + 2;
+    }
+    n
+}
+
+#[inline]
+fn decimal_digits(mut x: u64) -> u32 {
+    if x == 0 {
+        return 1;
+    }
+    let mut d = 0;
+    while x > 0 {
+        d += 1;
+        x /= 10;
+    }
+    d
 }
 
 /// Replay the command log at `path`, calling `apply` for each complete command.
@@ -627,6 +856,181 @@ mod tests {
         assert_eq!(dst.type_of(b"list"), "list");
         assert_eq!(dst.type_of(b"set"), "set");
         assert_eq!(dst.type_of(b"zset"), "zset");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ───────────── AOF rewrite (Wave 2 #3) ─────────────
+
+    /// Tiny dispatch helper for AOF-rewrite roundtrip tests: turn the
+    /// canonical mutating verbs the rewriter emits back into Store mutations.
+    /// Mirrors a subset of `kevy::dispatch` — enough for the verbs
+    /// `dump_store_to_aof` actually emits.
+    fn apply_for_test(store: &mut Store, args: &Argv) {
+        let verb = args[0].to_ascii_uppercase();
+        match verb.as_slice() {
+            b"SET" => {
+                store.set(&args[1], args[2].to_vec(), None, false, false);
+            }
+            b"HSET" => {
+                let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+                let mut i = 2;
+                while i + 1 < args.len() {
+                    pairs.push((args[i].to_vec(), args[i + 1].to_vec()));
+                    i += 2;
+                }
+                store.hset(&args[1], &pairs).unwrap();
+            }
+            b"RPUSH" => {
+                let items: Vec<Vec<u8>> = args.iter().skip(2).map(|a| a.to_vec()).collect();
+                store.rpush(&args[1], &items).unwrap();
+            }
+            b"SADD" => {
+                let members: Vec<Vec<u8>> = args.iter().skip(2).map(|a| a.to_vec()).collect();
+                store.sadd(&args[1], &members).unwrap();
+            }
+            b"ZADD" => {
+                let mut pairs: Vec<(f64, Vec<u8>)> = Vec::new();
+                let mut i = 2;
+                while i + 1 < args.len() {
+                    let score: f64 = std::str::from_utf8(&args[i]).unwrap().parse().unwrap();
+                    pairs.push((score, args[i + 1].to_vec()));
+                    i += 2;
+                }
+                store.zadd(&args[1], &pairs).unwrap();
+            }
+            b"PEXPIRE" => {
+                let ms: u64 = std::str::from_utf8(&args[2]).unwrap().parse().unwrap();
+                store.expire(&args[1], Duration::from_millis(ms));
+            }
+            other => panic!("unexpected verb in AOF rewrite: {:?}", String::from_utf8_lossy(other)),
+        }
+    }
+
+    fn temp_aof(name: &str) -> std::path::PathBuf {
+        let mut p = std::env::temp_dir();
+        let uniq = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        p.push(format!("kevy-{name}-{uniq}.aof"));
+        p
+    }
+
+    #[test]
+    fn rewrite_reconstructs_full_keyspace() {
+        let path = temp_aof("rewrite-all");
+
+        let mut src = Store::new();
+        src.set(b"str", b"hello".to_vec(), None, false, false);
+        src.set(b"binary", vec![0u8, 1, 2, 255], None, false, false);
+        src.hset(b"hash", &[(b"f1".to_vec(), b"v1".to_vec()), (b"f2".to_vec(), b"v2".to_vec())])
+            .unwrap();
+        src.rpush(b"list", &[b"i1".to_vec(), b"i2".to_vec(), b"i3".to_vec()])
+            .unwrap();
+        src.sadd(b"set", &[b"m1".to_vec(), b"m2".to_vec()]).unwrap();
+        src.zadd(b"zset", &[(1.5, b"a".to_vec()), (2.5, b"b".to_vec())])
+            .unwrap();
+        src.set(
+            b"ttl",
+            b"x".to_vec(),
+            Some(Duration::from_secs(3600)),
+            false,
+            false,
+        );
+
+        let mut aof = Aof::open(&path, Fsync::Always).unwrap();
+        let stats = aof.rewrite_from(&src).unwrap();
+        assert_eq!(stats.keys, 7);
+        assert!(stats.bytes > 0);
+        assert_eq!(aof.size_bytes(), stats.bytes);
+        assert_eq!(aof.size_at_last_rewrite(), stats.bytes);
+        assert_eq!(aof.rewrites_total(), 1);
+        drop(aof);
+
+        // Replay into a fresh store; both should match.
+        let mut dst = Store::new();
+        replay_aof(&path, |args| apply_for_test(&mut dst, &args)).unwrap();
+        assert_eq!(dst.dbsize(), 7);
+        assert_eq!(dst.get(b"str").unwrap(), Some(&b"hello"[..]));
+        assert_eq!(dst.get(b"binary").unwrap(), Some(&[0u8, 1, 2, 255][..]));
+        assert_eq!(dst.hget(b"hash", b"f1").unwrap(), Some(&b"v1"[..]));
+        assert_eq!(dst.hget(b"hash", b"f2").unwrap(), Some(&b"v2"[..]));
+        assert_eq!(dst.llen(b"list").unwrap(), 3);
+        assert_eq!(dst.scard(b"set").unwrap(), 2);
+        assert_eq!(dst.zcard(b"zset").unwrap(), 2);
+        assert!(dst.pttl(b"ttl") > 3_500_000); // TTL survived
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rewrite_replaces_old_log_atomically() {
+        let path = temp_aof("rewrite-swap");
+
+        // Step 1: a stale AOF with many entries (simulating long-running
+        // history). After rewrite the new AOF must NOT carry these.
+        {
+            let mut aof = Aof::open(&path, Fsync::Always).unwrap();
+            for i in 0..50 {
+                let k = format!("k{i}");
+                let argv = Argv::from(vec![b"SET".to_vec(), k.into_bytes(), b"v".to_vec()]);
+                aof.append(&argv).unwrap();
+            }
+        }
+        let big_size = std::fs::metadata(&path).unwrap().len();
+        assert!(big_size > 0);
+
+        // Step 2: in-memory state is small (only 2 keys).
+        let mut store = Store::new();
+        store.set(b"only", b"value".to_vec(), None, false, false);
+        store.set(b"second", b"v2".to_vec(), None, false, false);
+        let mut aof = Aof::open(&path, Fsync::Always).unwrap();
+        let stats = aof.rewrite_from(&store).unwrap();
+        assert_eq!(stats.keys, 2);
+        let new_size = std::fs::metadata(&path).unwrap().len();
+        assert!(new_size < big_size, "rewrite should shrink: {new_size} vs {big_size}");
+
+        // Step 3: appending after rewrite lands in the new file.
+        aof.append(&Argv::from(vec![b"SET".to_vec(), b"third".to_vec(), b"v".to_vec()]))
+            .unwrap();
+        drop(aof);
+
+        let mut dst = Store::new();
+        replay_aof(&path, |args| apply_for_test(&mut dst, &args)).unwrap();
+        assert_eq!(dst.dbsize(), 3, "rewrite + append should yield 3 keys");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn append_bumps_size_estimate() {
+        let path = temp_aof("size-est");
+        let mut aof = Aof::open(&path, Fsync::No).unwrap();
+        assert_eq!(aof.size_bytes(), 0);
+        aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))
+            .unwrap();
+        let after_one = aof.size_bytes();
+        assert!(after_one > 0);
+        aof.append(&Argv::from(vec![b"SET".to_vec(), b"k2".to_vec(), b"v".to_vec()]))
+            .unwrap();
+        assert!(aof.size_bytes() > after_one);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rewrite_resets_size_anchor() {
+        let path = temp_aof("size-anchor");
+        let mut aof = Aof::open(&path, Fsync::Always).unwrap();
+        for _ in 0..10 {
+            aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))
+                .unwrap();
+        }
+        assert!(aof.size_bytes() > aof.size_at_last_rewrite());
+        let store = Store::new();
+        let stats = aof.rewrite_from(&store).unwrap();
+        // empty store ⇒ empty rewrite
+        assert_eq!(stats.keys, 0);
+        assert_eq!(aof.size_bytes(), 0);
+        assert_eq!(aof.size_at_last_rewrite(), 0);
+        assert_eq!(aof.rewrites_total(), 1);
         let _ = std::fs::remove_file(&path);
     }
 }

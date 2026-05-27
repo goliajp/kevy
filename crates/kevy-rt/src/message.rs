@@ -57,6 +57,8 @@ pub(crate) enum Op {
     Dbsize,
     Flush,
     Save,
+    /// Rebuild the AOF from this shard's in-memory state (BGREWRITEAOF).
+    RewriteAof,
     /// Set these key/value pairs (MSET).
     MSet(KvPairs),
     /// Fetch per-key payloads (MGET / set algebra).

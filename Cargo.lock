@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "kevy-bench",
  "kevy-config",
+ "kevy-persist",
  "kevy-resp",
  "kevy-rt",
  "kevy-store",

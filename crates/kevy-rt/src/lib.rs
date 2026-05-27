@@ -96,6 +96,9 @@ pub enum Route {
     Flush,
     /// Snapshot every shard's store to disk.
     Save,
+    /// `BGREWRITEAOF` — rebuild every shard's AOF from in-memory state.
+    /// Synchronous in v1.0 (each shard blocks for its own rewrite duration).
+    RewriteAof,
     /// `MSET` — `args[1..]` are key/value pairs, routed per key's shard.
     MSet,
     /// `MGET` — `args[1..]` are keys; values gathered in request order.
