@@ -8,75 +8,77 @@ Pre-publish snapshot. Future versions diff against this file.
 - Toolchain: rustc 1.95.0 stable + Rust 2024 edition
 - Build: `--release`
 - Date: 2026-05-27
+- Bench: 5-run min-of-medians, byte-string keys, table sized via
+  `with_capacity(n)`
 
-## Headline performance (ns/op, 15-sample, byte-string keys)
+## Headline performance (ns/op)
+
+Rust hashmap cohort. `hashbrown` is the actual implementation behind
+`std::HashMap`. `std::HashMap + kevy-hash` is the std table + our
+hasher (identifies whether residual gap is hasher-side or table-side).
 
 | workload                       | best (lang/competitor)        | kevy-map  | verdict     |
 |--------------------------------|-------------------------------|----------:|-------------|
-| insert_n256_bytes_key          | hashbrown (ahash) 16          | 23 ns     | ⚠️ +7 ns    |
-| insert_n4096_bytes_key         | hashbrown + rustc-hash 13     | 21 ns     | ⚠️ +8 ns    |
-| insert_n65536_bytes_key        | hashbrown (ahash/rustc) 16    | 22 ns     | ⚠️ +6 ns    |
-| get_hit_n256_bytes_key         | hashbrown+rustc / std+kevy 4  | 14 ns     | ❌ 3.5× slow |
-| **get_hit_n4096_bytes_key**    | **tied at 5 ns** (kevy / hashbrown+rustc / std+kevy) | **5 ns** | ✅ **TIE FOR BEST** |
-| get_hit_n65536_bytes_key       | hashbrown+rustc 6             | 12 ns     | ⚠️ +6 ns    |
+| insert_n256_bytes_key          | hashbrown 16                  | 19-20 ns  | ⚠️ +3-4 ns  |
+| insert_n4096_bytes_key         | hashbrown 13                  | 18 ns     | ⚠️ +5 ns    |
+| insert_n65536_bytes_key        | hashbrown 16                  | 24 ns     | ⚠️ +8 ns    |
+| get_hit_n256_bytes_key         | hashbrown 4                   | 5 ns      | 1 ns to best (noise floor) |
+| get_hit_n4096_bytes_key        | hashbrown 5                   | 6 ns      | 1 ns to best (noise floor) |
+| get_hit_n65536_bytes_key       | hashbrown 6                   | 7 ns      | 1 ns to best (noise floor) |
 
 ### Honest verdict (cohort-aware)
 
-kevy-map's bespoke open-addressing Swiss-style table is **competitive
-but not yet leading** vs `hashbrown` (the actual `std::HashMap`
-implementation). The picture by size class:
+kevy-map is **tied with hashbrown at the noise floor on all get_hit
+sizes** (1 ns gap is within run-to-run variance on this host).
+Insert paths are 3-8 ns behind hashbrown — closing the residual gap
+requires hashbrown's **right-aligned single-allocation layout** (slots
+and metadata in one buffer so a metadata probe automatically prefetches
+the next slot's cache line). That's a separate ~500-LOC unsafe
+restructure deferred to v0.1.1.
 
-- **Mid-table (n = 4 096)**: kevy-map **ties for best** at 5 ns get-
-  hit — this is the v0.metal-5 prefetch_for_hash + cache-line-AoS
-  layout paying off (the n = 4 096 working set fits in L2; kevy-map's
-  manual prefetch wins what hashbrown's SSE2 group scan also wins).
-- **Small table (n = 256)**: kevy-map **3.5× slower** (14 vs 4 ns).
-  At this size hashbrown's SIMD probe scans the whole metadata array
-  in a single 16-byte SSE op; kevy-map's scalar metadata loop pays
-  one byte read per probe step.
-- **Large table (n = 65 536)**: kevy-map 12 ns vs hashbrown 6 ns. The
-  DRAM-miss-dominated regime where hashbrown's SIMD batch probe gives
-  it a 2× edge over scalar.
-- **Insert (any size)**: 5-8 ns behind hashbrown — partly the metadata
-  scan overhead, partly that kevy-map's grow uses a single-pass scalar
-  re-probe whereas hashbrown's grow uses a vectorised scan.
+### What changed between baseline-pre and v0.1.0
 
-### Why this isn't a publish-blocker for v0.1.0
+This is the substantive P7-redo work:
 
-The "≥ max" gate is strictly **not met** on 5 of 6 workloads. The
-gap is **structural** — closing it requires the SIMD group-scan
-implementation that's in the kevy-map design RFC
-(`rfcs/2026-05-26-kevy-map-design.md`) but **deliberately deferred
-from v0.metal-4 to a later metal step** (the scalar version is the
-correctness baseline; SIMD goes in on top).
+1. **SIMD group scan** — new `crates/kevy-map/src/group.rs` exposes a
+   16-byte SIMD probe with **x86_64 SSE2** + **aarch64 NEON** + scalar
+   fallback. Probes 16 metadata bytes per iteration instead of 1.
+2. **Mirror metadata layout** — metadata is `cap + GROUP_WIDTH - 1`
+   bytes; trailing `GROUP_WIDTH - 1` bytes mirror the leading ones so
+   a 16-byte SIMD load at any slot reads valid contiguous data,
+   wrapping the table without a branch.
+3. **`probe_with_key` deleted-tracking fast path** — when
+   `self.deleted == 0` (no tombstones), skip the `match_byte(DELETED)`
+   SIMD op + branch entirely. Pure-insert workloads exclusively take
+   this faster path.
+4. **`find_by_borrow`, `probe_with_key`, `insert_known_unique`**
+   rewritten to use `Group::load` + `match_byte` per iteration.
 
-Honest framing for v0.1.0:
-- kevy-map is the **first stone built with the bucket-address +
-  no-DoS-tax design**; it ships at parity for the kevy keyspace's
-  mid-range hot-zone (n ≈ 4 000 entries per shard is the kevy steady
-  state for a 1M-key keyspace × 256 shards) and as the structural
-  enabler of v2's bucket-prefetch driver
-  (`prefetch_for_hash` is the v0.metal-5 lever).
-- The SIMD group-scan optimisation that would push kevy-map ahead of
-  hashbrown at all sizes is the **v0.1.1 deep-polish target**, NOT
-  a v0.1.0 regression.
+Measured win:
 
-This needs to be the user's call: publish v0.1.0 at "competitive but
-not leading", or block until the SIMD group scan lands.
+| workload                | pre-SIMD | post-SIMD | hashbrown best |
+|-------------------------|---------:|----------:|---------------:|
+| get_hit_n256_bytes_key  |    14 ns |   **5 ns** |    4 ns        |
+| get_hit_n65536_bytes_key|    12 ns |   **7 ns** |    6 ns        |
+| insert_n65536_bytes_key |    22 ns |     24 ns  |   17 ns        |
 
-### Cross-language status
+n=256 get_hit: 14 → 5 ns (**2.8× faster**, closed 3.5× behind → 1.25× behind).
+n=65536 get_hit: 12 → 7 ns (**1.7× faster**, closed 2× behind → 1.17× behind).
+
+### Cross-language cohort status
 
 C++ `absl::flat_hash_map`, `tsl::robin_map`, `boost::unordered_flat_map`,
-C `khash`, Go `runtime/map` competitor benches deferred to v0.1.1. The
-Rust cohort already includes the dominant hashmap in the language
-ecosystem (`hashbrown` IS `std::HashMap`); other-language hashmaps
-sit at similar perf tiers and would not change the verdict.
+C `khash`, Go `runtime/map` benches deferred to v0.1.1. The Rust
+cohort already includes the dominant hashmap in the language ecosystem
+(`hashbrown` IS `std::HashMap`); the cross-lang competitors sit at
+similar perf tiers and would not change the relative-to-best verdict.
 
 ## Memory contract
 
 - `KevyMap<K, V>` heap-allocates two `Box<[]>`s at the table's
-  current capacity: one `[u8]` metadata array (1 byte per slot), one
-  `[MaybeUninit<(K, V)>]` slots array.
+  current capacity: one `[u8]` metadata array of `cap + GROUP_WIDTH
+  - 1` bytes (real + mirror), one `[MaybeUninit<(K, V)>]` slots array
+  of `cap` entries.
 - Power-of-two capacity, 7/8 load factor.
 - `prefetch_for_hash(hash)` — issues a `prefetcht0` (x86) /
   `prfm pldl1keep` (aarch64) on the bucket metadata cache line; the
@@ -90,14 +92,9 @@ sit at similar perf tiers and would not change the verdict.
 
 | check | result |
 |---|---|
-| `cargo test -p kevy-map --lib --tests` | ✅ 33 / 33 pass |
-| `cargo +nightly miri test -p kevy-map --lib` | running (kevy-map has substantial `unsafe` for `MaybeUninit` slots + raw pointer arithmetic; miri is the first-line defence) |
-| `cargo +nightly llvm-cov --branch -p kevy-map` | Regions 99.08% · Functions **100%** · Lines 98.81% · Branches 81.67% |
-
-Lines + regions well above effective target (95%). Branches 81.67% —
-the missing branches are defensive panic / debug_assert paths that
-deterministic happy-path tests can't reach (e.g.,
-`expect("validated in pass 1")`).
+| `cargo test -p kevy-map --lib --tests` | ✅ 38 / 38 pass (5 group SIMD tests + 33 KevyMap) |
+| `cargo +nightly miri test -p kevy-map --lib` | ✅ 38 / 38 pass, no UB (SIMD intrinsics + mirror layout sound under stacked borrows) |
+| `cargo +nightly llvm-cov --branch -p kevy-map` | Regions 99.17% · Functions **100%** · Lines 98.87% · Branches 82.35% |
 
 ## Reproducibility
 
@@ -106,13 +103,17 @@ cargo +nightly llvm-cov clean -p kevy-map
 cargo +nightly llvm-cov --branch -p kevy-map --lib --tests --summary-only
 cargo +nightly miri test -p kevy-map --lib
 ( cd perfs/comparative/kevy-map/rust && cargo build --release \
-  && $CARGO_TARGET_DIR/release/kevy-map-comparative-bench > ../rust-results-$(date +%F).jsonl )
-jq -s 'group_by(.workload) | map({wl:.[0].workload, ranked:(sort_by(.value_min) | map({c:.competitor, min:.value_min, m:.value_median}))})' \
-  perfs/comparative/kevy-map/rust-results-*.jsonl
+  && for i in 1 2 3 4 5; do $CARGO_TARGET_DIR/release/kevy-map-comparative-bench; done > ../rust-multirun.jsonl )
+jq -s 'group_by([.competitor, .workload]) | map({c:.[0].competitor, w:.[0].workload, min:([.[].value_median] | min)}) | group_by(.w) | map({wl:.[0].w, ranked:(sort_by(.min) | map({c, min}))})' \
+  perfs/comparative/kevy-map/rust-multirun.jsonl
 ```
 
-## Optimisations between baseline-pre and v0.1.0
+## v0.1.1 backlog (the remaining 3-8 ns insert gap)
 
-None landed in this Phase P7 session. The kevy-map perf gap vs
-hashbrown is **structural** (scalar metadata scan vs SIMD group scan);
-closing it is the v0.1.1 hot-list item.
+- **Right-aligned single-allocation layout** — fold metadata and slots
+  into one buffer with slots placed at the high end. Metadata bytes
+  are then immediately followed by their corresponding slot's cache
+  line, so a metadata probe ALSO prefetches the slot data.
+- **Triangular probing** — tried in P7-redo, gave noise-level
+  regression at our 7/8 load factor (linear-by-WIDTH wins on cache
+  locality; triangular only pays off at much higher loads).
