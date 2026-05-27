@@ -57,6 +57,30 @@ this file.
   underlying memhash is comparable but the public API can't avoid
   the call overhead.
 
+### Why the 1 ns gap CANNOT be closed (P15-B2 investigation)
+
+The 1-2 ns gap vs the absolute fastest competitors (fxhash/rustc-hash
+on 16B; ahash on 64B) is **structural**, not a polish miss:
+
+- **Gap vs fxhash / rustc-hash** = the cost of our fmix64 finalize
+  (~6 ALU ops; pipelined to ~1 ns observed). Removing it WOULD close
+  the gap, but **would break the `no_catastrophic_clustering_on_low_
+  entropy_keys` test** — bare-Fx clusters 30-50× on `"key:0..N"`-style
+  inputs, which is the keyspace shape kevy actually sees in production.
+  fxhash/rustc-hash are FAST AT THE COST OF this guarantee; we trade
+  1 ns for the guarantee.
+- **Gap vs ahash on 64B** = ahash uses x86 AES-NI hardware
+  instructions to do its mix in 1-2 cycles. kevy-hash is
+  `#![forbid(unsafe_code)]` (charter constraint) — even targeting
+  AES intrinsics directly would require unsafe asm or std::arch.
+  ahash is a different architectural choice (DoS-resistant via random
+  seed + hardware AES); we explicitly do not pay either tax.
+
+Both gaps are between kevy-hash and competitors that have sacrificed
+a property we keep. There is no "learn-from-open-source" lever
+remaining — the open-source winners win by giving up something we
+don't give up.
+
 ## Memory contract
 
 - `FxHasher` is a single `u64` state — `size_of::<FxHasher>() == 8`.
