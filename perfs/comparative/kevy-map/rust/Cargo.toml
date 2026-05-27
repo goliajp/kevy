@@ -1,0 +1,19 @@
+[workspace]
+
+[package]
+name = "kevy-map-comparative-bench"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+kevy-map = { path = "../../../../crates/kevy-map" }
+kevy-hash = { path = "../../../../crates/kevy-hash" }
+hashbrown = { version = "0.15", default-features = false, features = ["default-hasher", "inline-more"] }
+rustc-hash = "2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
