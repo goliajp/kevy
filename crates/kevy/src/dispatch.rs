@@ -66,11 +66,8 @@ fn dispatch_conn(cmd: &[u8], args: &Argv, out: &mut Vec<u8>) -> bool {
         b"COMMAND" => out.extend_from_slice(b"*0\r\n"),
         b"HELLO" => cmd_hello(out),
         b"QUIT" => encode_simple_string(out, "OK"),
-        // Tolerant stub so redis-cli / valkey-benchmark handshakes don't choke.
-        b"CONFIG" => match args.get(1).map(|a| a.to_ascii_uppercase()) {
-            Some(sub) if sub == b"GET" => out.extend_from_slice(b"*0\r\n"),
-            _ => encode_simple_string(out, "OK"),
-        },
+        // CONFIG moved to crate::ops::dispatch_ops (real GET reads Config;
+        // SET / REWRITE return helpful errors until v1.x).
         _ => return false,
     }
     true
