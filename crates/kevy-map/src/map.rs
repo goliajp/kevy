@@ -87,10 +87,19 @@ fn prefetch_t0(ptr: *const u8) {
 /// combined `Layout` and the byte offset to the metadata array. Panics on
 /// arithmetic overflow (only reachable for cap ≈ usize::MAX which would OOM
 /// anyway).
+///
+/// Metadata size is `cap + GROUP_WIDTH` (hashbrown 0.15 layout): the first
+/// `cap` bytes are the real per-slot metadata, the trailing `GROUP_WIDTH`
+/// bytes mirror the leading ones so the branchless `set_meta` formula
+/// `index2 = ((i - GW) & mask) + GW` always lands inside the buffer (for
+/// `i = GROUP_WIDTH - 1` the formula evaluates to `cap + GROUP_WIDTH - 1`,
+/// the very last byte). That last byte is written by `set_meta` but never
+/// read by `Group::load` — SIMD loads from `group_start ∈ [0, cap)` reach
+/// at most `cap + GROUP_WIDTH - 2`.
 #[inline]
 fn table_layout<KV>(cap: usize) -> (Layout, usize) {
     let slots = Layout::array::<MaybeUninit<KV>>(cap).expect("slots layout overflow");
-    let meta = Layout::array::<u8>(cap + GROUP_WIDTH - 1).expect("metadata layout overflow");
+    let meta = Layout::array::<u8>(cap + GROUP_WIDTH).expect("metadata layout overflow");
     let (combined, meta_offset) = slots.extend(meta).expect("layout extend overflow");
     (combined.pad_to_align(), meta_offset)
 }
@@ -106,7 +115,7 @@ pub struct KevyMap<K, V> {
     /// Slot array. `cap` initialised iff the corresponding metadata byte is
     /// in `0x00..=0x7F`. Dangling when `cap == 0`.
     slots_ptr: NonNull<MaybeUninit<(K, V)>>,
-    /// Metadata array (`cap + GROUP_WIDTH - 1` bytes; trailing
+    /// Metadata array (`cap + GROUP_WIDTH` bytes; trailing
     /// `GROUP_WIDTH - 1` bytes mirror the leading ones for SIMD-safe
     /// wraparound loads — the hashbrown layout). Dangling when `cap == 0`.
     metadata_ptr: NonNull<u8>,
@@ -180,14 +189,14 @@ impl<K, V> KevyMap<K, V> {
         // become initialised only when their metadata byte transitions
         // out of the high-bit-set state (EMPTY/DELETED).
         let meta_byte_ptr = unsafe { base.add(meta_offset) };
-        unsafe { ptr::write_bytes(meta_byte_ptr, EMPTY, cap + GROUP_WIDTH - 1) };
+        unsafe { ptr::write_bytes(meta_byte_ptr, EMPTY, cap + GROUP_WIDTH) };
 
         let slots_ptr = base as *mut MaybeUninit<(K, V)>;
         let metadata_ptr = meta_byte_ptr;
 
         // v0.metal-9 / single-buffer redo: hint THP on the entire buffer in
         // one madvise call. The combined allocation is `meta_offset +
-        // cap + GROUP_WIDTH - 1` bytes (== `layout.size()` minus padding).
+        // cap + GROUP_WIDTH` bytes (== `layout.size()` minus padding).
         // On 10M+ key tables the metadata alone is 16 MB — well over the
         // 2 MB HP boundary, so the kernel's khugepaged can promote it in
         // place. Cheap on the non-Linux paths (compile-time no-op).
@@ -207,20 +216,24 @@ impl<K, V> KevyMap<K, V> {
     }
 
     /// Write `v` into metadata slot `i`, also updating the mirror byte
-    /// at `cap + i` when `i < GROUP_WIDTH - 1`. Every metadata mutation
-    /// goes through this helper so the mirror stays consistent with the
-    /// real metadata.
+    /// at `cap + i` when `i < GROUP_WIDTH`. Every metadata mutation goes
+    /// through this helper so the mirror stays consistent with the real
+    /// metadata.
+    ///
+    /// Branchless: the formula `index2 = ((i - GW) & mask) + GW`
+    /// (hashbrown 0.15's `set_ctrl`) yields the real mirror position
+    /// `cap + i` when `i < GW`, and yields `i` itself when `i >= GW`.
+    /// The second write is therefore either to the mirror byte or a
+    /// duplicate write to the same real byte (a no-op). No branch.
     #[inline]
     fn set_meta(&mut self, i: usize, v: u8) {
         debug_assert!(i < self.cap);
-        // SAFETY: i ∈ [0, cap); metadata array length is cap + GROUP_WIDTH - 1.
-        // When i < GROUP_WIDTH - 1 we also write cap + i, which is still
-        // inside the array (cap + GROUP_WIDTH - 2 ≤ cap + GROUP_WIDTH - 2).
+        // SAFETY: i ∈ [0, cap); i2 ∈ [GROUP_WIDTH, cap + GROUP_WIDTH);
+        // both in-bounds since metadata buffer length is cap + GROUP_WIDTH.
+        let i2 = (i.wrapping_sub(GROUP_WIDTH) & self.mask) + GROUP_WIDTH;
         unsafe {
             *self.metadata_ptr.as_ptr().add(i) = v;
-            if i < GROUP_WIDTH - 1 {
-                *self.metadata_ptr.as_ptr().add(self.cap + i) = v;
-            }
+            *self.metadata_ptr.as_ptr().add(i2) = v;
         }
     }
 
@@ -260,9 +273,9 @@ impl<K, V> KevyMap<K, V> {
             }
         }
         // Reset entire metadata buffer (real range + mirror tail) in one memset.
-        // SAFETY: metadata buffer is exactly cap + GROUP_WIDTH - 1 bytes wide.
+        // SAFETY: metadata buffer is exactly cap + GROUP_WIDTH bytes wide.
         unsafe {
-            ptr::write_bytes(self.metadata_ptr.as_ptr(), EMPTY, self.cap + GROUP_WIDTH - 1);
+            ptr::write_bytes(self.metadata_ptr.as_ptr(), EMPTY, self.cap + GROUP_WIDTH);
         }
         self.occupied = 0;
         self.deleted = 0;
@@ -424,7 +437,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         let h2v = h2(hash);
         let mut group_start = (hash as usize) & self.mask;
         loop {
-            // SAFETY: metadata is `cap + GROUP_WIDTH - 1` bytes; group_start
+            // SAFETY: metadata is `cap + GROUP_WIDTH` bytes; group_start
             // is in `[0, cap)`; the load reads 16 bytes which lie inside the
             // buffer thanks to the mirror tail.
             let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
@@ -576,7 +589,7 @@ impl<K, V> KevyMap<K, V> {
         let mut group_start = (hash as usize) & self.mask;
         loop {
             // SAFETY: see [insert_known_unique]; group_start ∈ [0, cap),
-            // metadata length ≥ cap + GROUP_WIDTH - 1.
+            // metadata length ≥ cap + GROUP_WIDTH.
             let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
             for m in g.match_byte(h2v).iter() {
                 let slot = (group_start + m) & self.mask;
