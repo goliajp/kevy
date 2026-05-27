@@ -76,6 +76,7 @@ impl Commands for KevyCommands {
             b"DBSIZE" => Route::Dbsize,
             b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
             b"SAVE" | b"BGSAVE" => Route::Save,
+            b"BGREWRITEAOF" => Route::RewriteAof,
             // Cross-shard multi-key (malformed arity falls back to Local so the
             // dispatch stub returns the arity error).
             b"MSET" if args.len() >= 3 && !args.len().is_multiple_of(2) => Route::MSet,
@@ -218,6 +219,7 @@ impl Commands for KevyCommands {
             b"DBSIZE" => Route::Dbsize,
             b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
             b"SAVE" | b"BGSAVE" => Route::Save,
+            b"BGREWRITEAOF" => Route::RewriteAof,
             b"MSET" if args.len() >= 3 && !args.len().is_multiple_of(2) => Route::MSet,
             b"MGET" if args.len() >= 2 => Route::MGet,
             b"SINTER" if args.len() >= 2 => Route::SInter,
@@ -282,16 +284,40 @@ fn map_eviction_policy(p: kevy_config::EvictionPolicy) -> kevy_store::EvictionPo
 
 /// Run the thread-per-core server forever: `nshards` shards on `ip:port`,
 /// snapshotting to / restoring from `data_dir`, with the AOF on/off.
+///
+/// Reads `cfg.persistence.appendfsync` from the process-wide config (set by
+/// `config_init`) to pick the AOF fsync policy. Defaults to `EverySec`
+/// when no config is installed (matches the Wave 1 behaviour).
 pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_aof: bool) -> ! {
+    let cfg = config_global::get();
+    let fsync = map_appendfsync(cfg.persistence.appendfsync);
     let runtime = Runtime::new(ip, port, nshards, KevyCommands)
         .with_data_dir(data_dir)
-        .with_aof(enable_aof);
+        .with_aof(enable_aof)
+        .with_appendfsync(fsync)
+        .with_auto_aof_rewrite(
+            cfg.persistence.auto_aof_rewrite_percentage,
+            cfg.persistence.auto_aof_rewrite_min_size,
+        );
     let stop = Arc::new(AtomicBool::new(false));
     if let Err(e) = runtime.run(stop) {
         eprintln!("kevy: runtime error: {e}");
         std::process::exit(1);
     }
     std::process::exit(0);
+}
+
+/// Translate a `kevy_config::AppendFsync` (TOML enum) into the
+/// `kevy_persist::Fsync` mirror. Same dependency-direction story as
+/// [`map_eviction_policy`].
+fn map_appendfsync(p: kevy_config::AppendFsync) -> kevy_persist::Fsync {
+    use kevy_config::AppendFsync as C;
+    use kevy_persist::Fsync as P;
+    match p {
+        C::Always => P::Always,
+        C::EverySec => P::EverySec,
+        C::No => P::No,
+    }
 }
 
 /// Parse and dispatch every complete command in `input`, appending replies to

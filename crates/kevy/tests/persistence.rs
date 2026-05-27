@@ -112,6 +112,77 @@ fn data_survives_restart_via_save() {
 }
 
 #[test]
+fn bgrewriteaof_shrinks_log_and_preserves_data() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-bgrewrite-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let nshards = 4;
+    let port = free_port();
+
+    let mut post_size: u64 = 0;
+    with_runtime(port, &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        // Build up history: each key gets SET 50x. Goal is two-fold:
+        //   - overflow the per-shard BufWriter (8 KB default) so disk
+        //     content is actually flushed before we sample the file size
+        //   - create a large gap (~50× compression) between pre-rewrite
+        //     accumulated bytes and post-rewrite compact bytes
+        for i in 0..40u32 {
+            for rev in 0..50u32 {
+                c.write_all(&req(&[
+                    b"SET",
+                    format!("k{i}").as_bytes(),
+                    format!("v{i}-r{rev}").as_bytes(),
+                ]))
+                .unwrap();
+                read_reply(&mut c, b"+OK\r\n");
+            }
+        }
+
+        c.write_all(&req(&[b"BGREWRITEAOF"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+
+        post_size = (0..nshards)
+            .map(|s| {
+                std::fs::metadata(dir.join(format!("aof-{s}.aof")))
+                    .map(|m| m.len())
+                    .unwrap_or(0)
+            })
+            .sum();
+        // 40 keys × 1 SET per key, summed across shards, fits well under
+        // the size of 2000 raw SETs we would otherwise carry forward.
+        // ~30-byte average per SET ⇒ post-rewrite ≤ ~2 KB total.
+        assert!(
+            post_size < 10_000,
+            "rewritten AOF unexpectedly large: {post_size} bytes"
+        );
+        assert!(post_size > 0, "rewritten AOF should not be empty");
+    });
+
+    // Restart from rewritten AOF: every key must come back with its final value.
+    let port2 = free_port();
+    with_runtime(port2, &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        for i in 0..40u32 {
+            c.write_all(&req(&[b"GET", format!("k{i}").as_bytes()]))
+                .unwrap();
+            let want = format!("v{i}-r49");
+            read_reply(
+                &mut c,
+                format!("${}\r\n{}\r\n", want.len(), want).as_bytes(),
+            );
+        }
+    });
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn data_survives_restart_via_aof_without_save() {
     // No SAVE at all — durability comes purely from the AOF replay on startup.
     let dir = std::env::temp_dir().join(format!(

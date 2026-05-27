@@ -63,6 +63,13 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) data_dir: PathBuf,
     /// `None` disables the append-only log (e.g. pure in-memory benchmarking).
     pub(crate) aof: Option<Aof>,
+    /// `auto_aof_rewrite_percentage`: trigger BGREWRITEAOF when the live
+    /// AOF is at least this percent larger than at the previous rewrite.
+    /// `0` disables auto-rewrite.
+    pub(crate) auto_aof_rewrite_pct: u32,
+    /// `auto_aof_rewrite_min_size`: never auto-rewrite an AOF smaller than
+    /// this many bytes (prevents thrash during startup / on tiny data).
+    pub(crate) auto_aof_rewrite_min_size: u64,
     /// Connections a PUBLISH appended output to this iteration; the reactor
     /// flushes them (epoll via `flush_conn`, io_uring via its arm/write loop).
     pub(crate) dirty: Vec<u64>,
@@ -220,6 +227,7 @@ impl<C: Commands> Shard<C> {
                     let now = Instant::now();
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
+                        self.maybe_auto_rewrite_aof();
                         last_tick = now;
                     }
                 }
@@ -235,6 +243,37 @@ impl<C: Commands> Shard<C> {
             };
         }
         Ok(())
+    }
+
+    /// Check whether the live AOF has grown enough to warrant an automatic
+    /// `BGREWRITEAOF`, and run it inline if so. Called from the tick path
+    /// — at most every `tick_interval_ms`, so the cost is amortised across
+    /// thousands of writes per check. No-op when AOF is disabled, when the
+    /// `auto_aof_rewrite_pct` knob is `0`, or when the current AOF is
+    /// smaller than `auto_aof_rewrite_min_size`.
+    fn maybe_auto_rewrite_aof(&mut self) {
+        if self.auto_aof_rewrite_pct == 0 {
+            return;
+        }
+        let Some(aof) = &self.aof else { return; };
+        let cur = aof.size_bytes();
+        if cur < self.auto_aof_rewrite_min_size {
+            return;
+        }
+        let baseline = aof.size_at_last_rewrite().max(1);
+        // (cur - baseline) * 100 / baseline ≥ pct  ⇔  cur * 100 ≥ baseline * (100 + pct)
+        let lhs = cur.saturating_mul(100);
+        let rhs = baseline.saturating_mul(100u64.saturating_add(self.auto_aof_rewrite_pct as u64));
+        if lhs < rhs {
+            return;
+        }
+        let aof = self.aof.as_mut().expect("just checked");
+        if let Err(e) = aof.rewrite_from(&self.store) {
+            eprintln!(
+                "kevy: shard {} auto AOF rewrite failed: {e}",
+                self.id,
+            );
+        }
     }
 
     /// Wake every target enqueued to this iteration that is currently parked.

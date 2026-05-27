@@ -27,6 +27,7 @@ kevy-resp = { path = "../kevy-resp", version = "0.1" }
 kevy-store = { path = "../kevy-store", version = "0.1" }
 kevy-rt = { path = "../kevy-rt", version = "0.1" }
 kevy-config = { path = "../kevy-config", version = "0.1" }
+kevy-persist = { path = "../kevy-persist", version = "0.1" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench", version = "0.1" }

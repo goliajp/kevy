@@ -28,6 +28,13 @@ pub struct Runtime<C: Commands> {
     data_dir: PathBuf,
     /// Whether the append-only log is enabled.
     enable_aof: bool,
+    /// fsync policy for the AOF. Default `EverySec` matches Redis.
+    appendfsync: Fsync,
+    /// auto-trigger BGREWRITEAOF when AOF grew this many % above the size
+    /// at the previous rewrite. `0` disables. Default `100` (matches Redis).
+    auto_aof_rewrite_pct: u32,
+    /// Floor below which auto-rewrite is skipped. Default `64 MiB`.
+    auto_aof_rewrite_min_size: u64,
 }
 
 impl<C: Commands> Runtime<C> {
@@ -39,6 +46,9 @@ impl<C: Commands> Runtime<C> {
             commands,
             data_dir: PathBuf::from("."),
             enable_aof: true,
+            appendfsync: Fsync::EverySec,
+            auto_aof_rewrite_pct: 100,
+            auto_aof_rewrite_min_size: 64 * 1024 * 1024,
         }
     }
 
@@ -51,6 +61,24 @@ impl<C: Commands> Runtime<C> {
     /// Enable/disable the append-only log. Default: enabled.
     pub fn with_aof(mut self, on: bool) -> Self {
         self.enable_aof = on;
+        self
+    }
+
+    /// fsync policy for the AOF. Default `EverySec` matches Redis (lose at
+    /// most ~1 s of writes on a crash). `Always` is zero-loss but ~50 %
+    /// throughput; `No` defers everything to the OS pagecache.
+    pub fn with_appendfsync(mut self, fsync: Fsync) -> Self {
+        self.appendfsync = fsync;
+        self
+    }
+
+    /// Auto-trigger BGREWRITEAOF when the live AOF has grown by at least
+    /// `pct` percent above its size at the previous rewrite, AND is at
+    /// least `min_size` bytes. `pct=0` disables auto-rewrite (clients can
+    /// still run BGREWRITEAOF manually). Defaults: 100 % / 64 MiB.
+    pub fn with_auto_aof_rewrite(mut self, pct: u32, min_size: u64) -> Self {
+        self.auto_aof_rewrite_pct = pct;
+        self.auto_aof_rewrite_min_size = min_size;
         self
     }
 
@@ -93,7 +121,7 @@ impl<C: Commands> Runtime<C> {
             let aof = if self.enable_aof {
                 Some(Aof::open(
                     &self.data_dir.join(format!("aof-{id}.aof")),
-                    Fsync::EverySec,
+                    self.appendfsync,
                 )?)
             } else {
                 None
@@ -121,6 +149,8 @@ impl<C: Commands> Runtime<C> {
                 parked: parked.clone(),
                 data_dir: self.data_dir.clone(),
                 aof,
+                auto_aof_rewrite_pct: self.auto_aof_rewrite_pct,
+                auto_aof_rewrite_min_size: self.auto_aof_rewrite_min_size,
                 dirty: Vec::new(),
                 pubsub: pubsub.clone(),
                 publish_batch: (0..n).map(|_| Vec::new()).collect(),

@@ -197,6 +197,10 @@ impl<C: Commands> Shard<C> {
                 (0..self.nshards).map(|s| (s, Op::Save)).collect(),
                 Agg::AllOk,
             ),
+            Route::RewriteAof => (
+                (0..self.nshards).map(|s| (s, Op::RewriteAof)).collect(),
+                Agg::AllOk,
+            ),
             Route::MSet => {
                 // args[1..] are key/value pairs; group by each key's shard.
                 let mut by_shard: HashMap<usize, KvPairs> = HashMap::new();
@@ -597,6 +601,21 @@ impl<C: Commands> Shard<C> {
                             path.display()
                         )
                     }
+                }
+                Part::Ok
+            }
+            Op::RewriteAof => {
+                // Each shard rewrites its own AOF in place. No-op if AOF is
+                // disabled (Redis returns "ERR" in that case; v1.0 returns
+                // +OK to keep the multi-shard reply aggregation simple — the
+                // disabled-AOF case is documented in BGREWRITEAOF's reply).
+                if let Some(aof) = &mut self.aof
+                    && let Err(e) = aof.rewrite_from(&self.store)
+                {
+                    eprintln!(
+                        "kevy: shard {} aof rewrite failed: {e}",
+                        self.id,
+                    );
                 }
                 Part::Ok
             }
