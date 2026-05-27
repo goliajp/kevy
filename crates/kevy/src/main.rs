@@ -17,7 +17,33 @@ fn main() -> ! {
         dir.display(),
         if aof { "on" } else { "off" }
     );
+    if !is_loopback(bind) {
+        warn_unprotected_bind(bind);
+    }
     kevy::serve(bind, port, shards, dir, aof); // never returns
+}
+
+/// `127.0.0.0/8` is the loopback range (RFC 1122). Anything else (a public
+/// IP, a LAN address, or the wildcard `0.0.0.0`) is reachable from at
+/// least one other host on the network.
+#[inline]
+fn is_loopback(bind: [u8; 4]) -> bool {
+    bind[0] == 127
+}
+
+/// Valkey/Redis "protected-mode" style advisory. kevy has no auth yet
+/// (deferred to v0.3+); the only safe deployment for a non-loopback bind
+/// is a trust-bounded network (docker-compose internal, kubernetes pod
+/// network, VPC private subnet). For public exposure, front with
+/// stunnel/nginx + IP allowlist until AUTH lands.
+fn warn_unprotected_bind(bind: [u8; 4]) {
+    let [a, b, c, d] = bind;
+    eprintln!("kevy WARN: bind={a}.{b}.{c}.{d} is not loopback and kevy has no AUTH/TLS yet.");
+    eprintln!("kevy WARN: anyone who can reach this socket can read/write every key.");
+    eprintln!("kevy WARN: safe only on trust-bounded networks (docker-compose internal,");
+    eprintln!("kevy WARN: kubernetes pod network, VPC private subnet). Do NOT expose to");
+    eprintln!("kevy WARN: the public internet. Front with stunnel/nginx + IP allowlist");
+    eprintln!("kevy WARN: until AUTH/TLS lands in v0.3+.");
 }
 
 /// AOF enabled unless `--no-aof` / `KEVY_AOF=0|off|false`.
@@ -94,4 +120,22 @@ fn parse_ipv4(s: &str) -> Option<[u8; 4]> {
         return None;
     }
     Some(octets)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_classification() {
+        // 127.0.0.0/8 is loopback per RFC 1122 — every octet in [1..255] is fine.
+        assert!(is_loopback([127, 0, 0, 1]));
+        assert!(is_loopback([127, 255, 255, 254]));
+        assert!(is_loopback([127, 1, 2, 3]));
+        // Everything outside 127.* is reachable from some other host.
+        assert!(!is_loopback([0, 0, 0, 0])); // wildcard — all interfaces
+        assert!(!is_loopback([10, 0, 0, 1])); // RFC1918 private
+        assert!(!is_loopback([192, 168, 1, 1])); // LAN
+        assert!(!is_loopback([8, 8, 8, 8])); // public
+    }
 }
