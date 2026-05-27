@@ -12,9 +12,17 @@
 - **crate 命名**:一律 `kevy-` 前缀,每个尽量做成可复用的 infra lib。
 - **性能目标**:对标并远超 valkey 9.1。基准方法见 `bench/REPORT.md`。
 
+## 代码质量规则(hard rule,新代码必须遵守,旧代码 split 来还债)
+
+- **文件 ≤ 500 LOC**(src/*.rs);test 文件 / `tests/` 目录豁免(Rust 社区惯例)。接近 500 时立即按职责拆 submodule,不要等。
+- **函数 ≤ 50 LOC**(包括签名+body+闭合 brace);超了就拆助手函数。例外仅限纯数据驱动的 dispatch / match 表(写下来才合理,而非控制流复杂)。
+- **写新 crate 前先想 API surface**:public fn ≤ 7-10 个常用入口;复杂内部用 pub(crate) 隔离。
+- **每 commit 后 quick check**: 触动 src/*.rs 的 commit 提交前跑 `wc -l <touched-files>` + grep `^fn \|^pub fn ` 数行;违规当场拆。
+- 详细判断标准见 memory `feedback-no-large-file-or-fn`。
+
 ## 规划方法
 
-按用户的 4 层信息架构(L1 roadmap / L2 版本边界 / L3a hot 计划带检测命令 / L3b cold backlog / L4 trigger)推进。checkpoint 状态见 memory `project-kevy-roadmap-state`。当前用户授权 **autorun**(自主推进 checkpoint,完成时报告进度,不必逐步等批准)。
+按用户的 4 层信息架构(L1 roadmap / L2 版本边界 / L3a hot 计划带检测命令 / L3b cold backlog / L4 trigger)推进。checkpoint 状态见 memory `project-kevy-roadmap-state`。当前用户授权 **autorun**(自主推进 checkpoint,完成时报告进度,不必逐步等批准)。**当前 active 版本计划**:[V1.0-BOUNDARY.md](V1.0-BOUNDARY.md) — 4 场景 prod-ready 完整 plan。已锁定 OUT-of-scope 见 [.claude/scope-decisions.md](.claude/scope-decisions.md)。
 
 ## 常用命令
 
