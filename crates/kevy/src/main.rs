@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use kevy_config::{CliOverrides, Config};
 
@@ -40,13 +41,15 @@ fn main() -> ! {
     if !is_loopback(cfg.server.bind) {
         warn_unprotected_bind(cfg.server.bind);
     }
-    kevy::serve(
-        cfg.server.bind,
-        cfg.server.port,
-        threads,
-        cfg.server.data_dir,
-        cfg.persistence.aof,
-    ); // never returns
+    let bind = cfg.server.bind;
+    let port = cfg.server.port;
+    let data_dir = cfg.server.data_dir.clone();
+    let aof = cfg.persistence.aof;
+    // Install the resolved Config process-wide so dispatch handlers
+    // (INFO, CONFIG GET) read live values instead of compile-time
+    // defaults. Must happen before the reactor starts so shards see it.
+    kevy::config_init(Arc::new(cfg));
+    kevy::serve(bind, port, threads, data_dir, aof); // never returns
 }
 
 /// Parse CLI into `(--config PATH, CliOverrides)`. Backward-compatible with

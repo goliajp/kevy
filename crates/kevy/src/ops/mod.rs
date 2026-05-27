@@ -1,27 +1,35 @@
 //! Operational commands required by valkey-compat clients but not tied
 //! to keyspace state: `INFO`, `CLUSTER INFO / NODES`, `DEBUG SLEEP`,
-//! `WAIT`, `SHUTDOWN`. All replies match the shape canonical valkey
-//! clients (redis-rs, go-redis, jedis, etc.) expect at handshake /
-//! housekeeping time.
+//! `WAIT`, `SHUTDOWN`, `CONFIG`. All replies match the shape canonical
+//! valkey clients (redis-rs, go-redis, jedis, etc.) expect at
+//! handshake / housekeeping time.
 //!
-//! `CLIENT *` and full `CONFIG GET/SET/REWRITE` live in follow-up
-//! commits — they need per-connection state and Config-in-dispatch
-//! plumbing respectively. The barebones `CONFIG GET` stub stays in
-//! [`crate::dispatch::dispatch_conn`] for now.
+//! `CLIENT *` lives in a follow-up commit — it needs per-connection
+//! state plumbed through the reactor → dispatch boundary.
+//!
+//! Subcommand-heavy verbs (currently `CONFIG`) live in submodules to
+//! keep file size in line with the project's ≤ 500 LOC rule.
+
+mod config;
 
 use std::time::SystemTime;
 
+use kevy_config::Config;
 use kevy_resp::{Argv, encode_bulk, encode_error, encode_integer, encode_simple_string};
+
+use crate::config_global;
 
 /// Operational-command dispatcher. Returns `true` if the verb was
 /// recognised (and a reply has been written to `out`).
 pub(crate) fn dispatch_ops(cmd: &[u8], args: &Argv, out: &mut Vec<u8>) -> bool {
+    let cfg = config_global::get();
     match cmd {
-        b"INFO" => cmd_info(args, out),
+        b"INFO" => cmd_info(&cfg, args, out),
         b"CLUSTER" => cmd_cluster(args, out),
         b"DEBUG" => cmd_debug(args, out),
         b"WAIT" => cmd_wait(args, out),
         b"SHUTDOWN" => cmd_shutdown(args, out),
+        b"CONFIG" => config::cmd_config(&cfg, args, out),
         _ => return false,
     }
     true
@@ -29,23 +37,23 @@ pub(crate) fn dispatch_ops(cmd: &[u8], args: &Argv, out: &mut Vec<u8>) -> bool {
 
 // ───────────── INFO ─────────────
 
-fn cmd_info(args: &Argv, out: &mut Vec<u8>) {
+fn cmd_info(cfg: &Config, args: &Argv, out: &mut Vec<u8>) {
     // INFO [section]; we always emit the requested section (or all when
     // none / "default" / "all" / "everything" is requested).
     let section = args.get(1).map(|a| a.to_ascii_lowercase());
     let want = section.as_deref();
     let mut body = String::new();
     if want_section(want, "server") {
-        info_server(&mut body);
+        info_server(cfg, &mut body);
     }
     if want_section(want, "clients") {
         info_clients(&mut body);
     }
     if want_section(want, "memory") {
-        info_memory(&mut body);
+        info_memory(cfg, &mut body);
     }
     if want_section(want, "persistence") {
-        info_persistence(&mut body);
+        info_persistence(cfg, &mut body);
     }
     if want_section(want, "stats") {
         info_stats(&mut body);
@@ -70,17 +78,17 @@ fn want_section(want: Option<&[u8]>, name: &str) -> bool {
     }
 }
 
-fn info_server(b: &mut String) {
+fn info_server(cfg: &Config, b: &mut String) {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     b.push_str("# Server\r\n");
-    b.push_str(&format!("redis_version:7.4.0\r\n")); // valkey-compat byte-for-byte sniffing
+    b.push_str("redis_version:7.4.0\r\n"); // valkey-compat byte-for-byte sniffing
     b.push_str(&format!("kevy_version:{}\r\n", env!("CARGO_PKG_VERSION")));
     b.push_str("redis_mode:standalone\r\n");
     b.push_str(&format!("process_id:{}\r\n", std::process::id()));
-    b.push_str(&format!("tcp_port:6004\r\n")); // TODO: from Config when plumbed
+    b.push_str(&format!("tcp_port:{}\r\n", cfg.server.port));
     b.push_str(&format!("server_time_usec:{}\r\n", now * 1_000_000));
     b.push_str("\r\n");
 }
@@ -92,20 +100,30 @@ fn info_clients(b: &mut String) {
     b.push_str("\r\n");
 }
 
-fn info_memory(b: &mut String) {
+fn info_memory(cfg: &Config, b: &mut String) {
     b.push_str("# Memory\r\n");
     b.push_str("used_memory:0\r\n"); // TODO: real tracking lands in Wave 2 maxmemory
     b.push_str("used_memory_human:0B\r\n");
     b.push_str("used_memory_peak:0\r\n");
-    b.push_str("maxmemory:0\r\n");
-    b.push_str("maxmemory_policy:noeviction\r\n");
+    b.push_str(&format!("maxmemory:{}\r\n", cfg.memory.maxmemory));
+    b.push_str(&format!(
+        "maxmemory_policy:{}\r\n",
+        eviction_str(cfg.memory.maxmemory_policy)
+    ));
     b.push_str("\r\n");
 }
 
-fn info_persistence(b: &mut String) {
+fn info_persistence(cfg: &Config, b: &mut String) {
     b.push_str("# Persistence\r\n");
     b.push_str("loading:0\r\n");
-    b.push_str("aof_enabled:1\r\n"); // TODO: read Config when plumbed
+    b.push_str(&format!(
+        "aof_enabled:{}\r\n",
+        if cfg.persistence.aof { 1 } else { 0 }
+    ));
+    b.push_str(&format!(
+        "appendfsync:{}\r\n",
+        appendfsync_str(cfg.persistence.appendfsync)
+    ));
     b.push_str("aof_rewrite_in_progress:0\r\n");
     b.push_str("aof_last_rewrite_time_sec:-1\r\n");
     b.push_str("\r\n");
@@ -231,9 +249,45 @@ fn cmd_shutdown(args: &Argv, _out: &mut Vec<u8>) {
     std::process::exit(0);
 }
 
+// ───────────── value → string converters (shared with config submodule) ─────────────
+
+pub(super) fn appendfsync_str(v: kevy_config::AppendFsync) -> &'static str {
+    use kevy_config::AppendFsync::*;
+    match v {
+        Always => "always",
+        EverySec => "everysec",
+        No => "no",
+    }
+}
+
+pub(super) fn eviction_str(v: kevy_config::EvictionPolicy) -> &'static str {
+    use kevy_config::EvictionPolicy::*;
+    match v {
+        NoEviction => "noeviction",
+        AllKeysLru => "allkeys-lru",
+        AllKeysLfu => "allkeys-lfu",
+        AllKeysRandom => "allkeys-random",
+        VolatileLru => "volatile-lru",
+        VolatileLfu => "volatile-lfu",
+        VolatileRandom => "volatile-random",
+        VolatileTtl => "volatile-ttl",
+    }
+}
+
+pub(super) fn log_level_str(v: kevy_config::LogLevel) -> &'static str {
+    use kevy_config::LogLevel::*;
+    match v {
+        Trace => "trace",
+        Debug => "debug",
+        Info => "info",
+        Warn => "warning",
+        Error => "error",
+    }
+}
+
 // ───────────── helpers ─────────────
 
-fn wrong_args(out: &mut Vec<u8>, name: &str) {
+pub(super) fn wrong_args(out: &mut Vec<u8>, name: &str) {
     encode_error(
         out,
         &format!("ERR wrong number of arguments for '{name}' command"),

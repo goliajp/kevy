@@ -42,8 +42,11 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 mod cmd;
+mod config_global;
 mod dispatch;
 mod ops;
+
+pub use config_global::init as config_init;
 use cmd::{scan_pattern, upper_verb};
 pub use dispatch::dispatch;
 pub use kevy_rt::Argv;

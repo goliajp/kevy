@@ -77,18 +77,23 @@ fn conn_and_introspection() {
     // HELLO (multi-line map reply — just check it's nonempty)
     assert!(!run(&mut s, &[b"HELLO"]).is_empty(), "HELLO");
 
-    // CONFIG GET / SET stubs.
+    // CONFIG GET / SET: Wave 1 replaced the prior tolerant stubs with the
+    // real Config-backed handler. GET against an unknown key still returns
+    // an empty array; SET is read-only in v1.0 (errors with a v1.x Wave 2
+    // pointer).
     assert_eq_reply(
-        &run(&mut s, &[b"CONFIG", b"GET", b"x"]),
+        &run(&mut s, &[b"CONFIG", b"GET", b"nonexistent-setting"]),
         b"*0\r\n",
-        "CONFIG GET",
+        "CONFIG GET unknown",
     );
-    assert_eq_reply(
+    assert_starts(
         &run(&mut s, &[b"CONFIG", b"SET", b"k", b"v"]),
-        b"+OK\r\n",
+        b"-ERR",
         "CONFIG SET",
     );
-    assert_eq_reply(&run(&mut s, &[b"CONFIG"]), b"+OK\r\n", "CONFIG bare");
+    // Bare `CONFIG` (no subcommand) is now wrong-args error rather than +OK
+    // — the tolerant stub is gone, the real dispatcher requires a subcommand.
+    assert_starts(&run(&mut s, &[b"CONFIG"]), b"-ERR", "CONFIG bare");
 
     // Empty cmd / unknown verb.
     let empty_argv = Argv::default();

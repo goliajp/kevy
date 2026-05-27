@@ -43,8 +43,15 @@ fn incr_paths_and_errors() {
 fn unknown_and_config_and_type() {
     let mut s = Store::new();
     assert!(d(&mut s, &[b"FROBNICATE"]).starts_with(b"-ERR unknown command"));
-    assert_eq!(d(&mut s, &[b"CONFIG", b"GET", b"maxmemory"]), b"*0\r\n");
-    assert_eq!(d(&mut s, &[b"CONFIG", b"SET", b"x", b"y"]), b"+OK\r\n");
+    // CONFIG GET maxmemory — real handler in ops::cmd_config_get reads the
+    // process Config (default maxmemory = 0). Reply is [key, value] array
+    // per Redis convention.
+    let reply = d(&mut s, &[b"CONFIG", b"GET", b"maxmemory"]);
+    let s_reply = std::str::from_utf8(&reply).unwrap();
+    assert!(s_reply.starts_with("*2\r\n"), "got {s_reply:?}");
+    assert!(s_reply.contains("maxmemory"));
+    // CONFIG SET is read-only in v1.0; Wave 2 wires up actual mutability.
+    assert!(d(&mut s, &[b"CONFIG", b"SET", b"x", b"y"]).starts_with(b"-ERR"));
     assert_eq!(d(&mut s, &[b"TYPE", b"missing"]), b"+none\r\n");
     d(&mut s, &[b"SET", b"k", b"v"]);
     assert_eq!(d(&mut s, &[b"TYPE", b"k"]), b"+string\r\n");
