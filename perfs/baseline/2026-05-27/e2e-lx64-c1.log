@@ -1,0 +1,17 @@
+### -c1 -P1  n=300000  server=0-9 client=10
+=== kevy epoll ===
+[kevy-epoll] GET rps=67580.7
+[kevy-epoll] SET rps=71182.2
+=== kevy io_uring ===
+[kevy-uring] GET rps=72050.0
+[kevy-uring] SET rps=71836.6
+=== valkey 9.1 (io-threads) ===
+[valkey-iot] GET rps=63510.1
+[valkey-iot] SET rps=62060.2
+=== valkey 9.1 (default) ===
+[valkey-def] GET rps=54277.3
+[valkey-def] SET rps=52200.3
+=== redis 7.4 (default) ===
+[redis-def] GET rps=57172.6
+[redis-def] SET rps=55798.4
+### C1_DONE
