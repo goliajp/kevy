@@ -183,6 +183,73 @@ fn bgrewriteaof_shrinks_log_and_preserves_data() {
 }
 
 #[test]
+fn aof_truncated_tail_is_tolerated_on_restart() {
+    // Power-loss / kill -9 simulation: half a write made it to disk before
+    // the kernel died. On restart, the prefix must replay cleanly and the
+    // partial trailing frame must be silently dropped — never panic, never
+    // refuse to start. This is the contract `replay_aof` documents and
+    // the active reaper / BGREWRITEAOF + auto-trigger machinery all
+    // assume holds.
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-truncated-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let nshards = 1; // single-shard so we know exactly which AOF to corrupt
+    let port = free_port();
+
+    // 1) Write some keys via a real runtime so its AOF is on disk.
+    with_runtime(port, &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        for i in 0..20u32 {
+            c.write_all(&req(&[
+                b"SET",
+                format!("survivor{i}").as_bytes(),
+                b"v".to_vec().as_slice(),
+            ]))
+            .unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+        }
+        // SAVE forces the AOF to flush via the snapshot path (which then
+        // truncates the AOF — so we don't SAVE here); instead, BGREWRITEAOF
+        // gives us a freshly-flushed AOF whose contents we can corrupt.
+        c.write_all(&req(&[b"BGREWRITEAOF"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+    });
+
+    // 2) Corrupt the AOF by appending a half-written frame (truncated bulk).
+    //    This simulates a process kill mid-append.
+    let aof_path = dir.join("aof-0.aof");
+    let mut bytes = std::fs::read(&aof_path).unwrap();
+    let prefix_len = bytes.len();
+    // Add a malformed multi-bulk that asks for 3 args, gives only header for arg 0.
+    bytes.extend_from_slice(b"*3\r\n$3\r\nSET\r\n$5\r\nfoo");
+    std::fs::write(&aof_path, &bytes).unwrap();
+    let corrupted_len = bytes.len();
+    assert!(corrupted_len > prefix_len, "test should have appended garbage");
+
+    // 3) Restart: every clean key from the prefix must survive; corrupt tail
+    //    is silently dropped (no panic, no startup failure).
+    let port2 = free_port();
+    with_runtime(port2, &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        for i in 0..20u32 {
+            c.write_all(&req(&[b"GET", format!("survivor{i}").as_bytes()]))
+                .unwrap();
+            read_reply(&mut c, b"$1\r\nv\r\n");
+        }
+        // The mangled `foo` from the truncated frame must NOT have landed.
+        c.write_all(&req(&[b"GET", b"foo"])).unwrap();
+        read_reply(&mut c, b"$-1\r\n");
+    });
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn data_survives_restart_via_aof_without_save() {
     // No SAVE at all — durability comes purely from the AOF replay on startup.
     let dir = std::env::temp_dir().join(format!(
