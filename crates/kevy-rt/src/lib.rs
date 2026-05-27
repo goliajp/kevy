@@ -144,6 +144,18 @@ pub trait Commands: Clone + Send + 'static {
     /// no-op so non-kevy embedders aren't forced to override.
     fn on_shard_init(&self, _store: &mut Store) {}
 
+    /// Periodic shard housekeeping (the equivalent of Redis's `serverCron`).
+    /// kevy uses this to run [`Store::tick_expire`] at the configured
+    /// `[expiry].hz`. Default no-op so non-kevy embedders / runtimes can
+    /// ignore it.
+    fn on_shard_tick(&self, _store: &mut Store) {}
+
+    /// Interval between [`Self::on_shard_tick`] calls. Default 100 ms
+    /// (matching Redis's `hz = 10`). `0` disables ticking entirely.
+    fn shard_tick_interval_ms(&self) -> u64 {
+        100
+    }
+
     /// Resolve all verb-dependent attributes in **one** verb-table lookup.
     /// The default implementation calls the four per-attribute methods above
     /// (four upper_verb scans + matches); concrete impls SHOULD override this
