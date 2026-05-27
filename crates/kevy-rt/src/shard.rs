@@ -23,6 +23,7 @@ use kevy_sys::{Event, Poller, Socket, Waker};
 use kevy_map::KevyMap;
 use std::collections::VecDeque;
 use std::io;
+use std::time::{Duration, Instant};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -88,6 +89,11 @@ const SPIN_LIMIT: u32 = 256;
 /// Backstop blocking-wait timeout when parked. Socket/cross-core readiness wakes
 /// us sooner; this only bounds latency if a wakeup is ever missed.
 const PARK_TIMEOUT_MS: i32 = 50;
+/// Throttle the per-loop `Instant::now()` cost in the active-expire path —
+/// we only consult the wall clock every N iterations. In busy-poll mode
+/// (~1M iters/s) N=256 ⇒ ~3.9k tick checks/s, plenty for a 10 Hz reaper;
+/// in parked mode each `wait` itself takes ≥ 1 ms so we always check.
+const TICK_CHECK_EVERY: u32 = 256;
 
 impl<C: Commands> Shard<C> {
     /// This shard's snapshot file: `<data_dir>/dump-<id>.rdb`.
@@ -129,6 +135,13 @@ impl<C: Commands> Shard<C> {
         let listener_fd = self.listener.raw();
         let waker_fd = self.waker.read_fd();
         let me = self.id;
+
+        let tick_interval = match self.commands.shard_tick_interval_ms() {
+            0 => None,
+            ms => Some(Duration::from_millis(ms)),
+        };
+        let mut last_tick = Instant::now();
+        let mut tick_check_counter: u32 = 0;
 
         let mut idle_spins: u32 = 0;
         while !stop.load(Ordering::Relaxed) {
@@ -195,6 +208,21 @@ impl<C: Commands> Shard<C> {
             // Honor the EverySec AOF fsync window.
             if let Some(aof) = &mut self.aof {
                 let _ = aof.maybe_sync();
+            }
+            // Active TTL reaper / shard housekeeping. Skip the wall-clock
+            // read on most iters: in busy-poll the tick fires at 10 Hz with
+            // negligible overhead; in park mode each iter is already ≥ 1 ms
+            // so the throttle does not delay the tick.
+            if let Some(iv) = tick_interval {
+                tick_check_counter = tick_check_counter.wrapping_add(1);
+                if tick_check_counter >= TICK_CHECK_EVERY {
+                    tick_check_counter = 0;
+                    let now = Instant::now();
+                    if now.duration_since(last_tick) >= iv {
+                        self.commands.on_shard_tick(&mut self.store);
+                        last_tick = now;
+                    }
+                }
             }
 
             // A non-empty backlog means a peer ring is full: keep spinning so we

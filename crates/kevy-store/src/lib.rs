@@ -41,6 +41,8 @@
 #![forbid(unsafe_code)]
 
 pub mod evict;
+pub mod expire;
+pub use expire::ExpireStats;
 mod hash;
 mod list;
 mod set;
@@ -183,6 +185,10 @@ pub struct Store {
     /// `used_memory` peak across the shard's lifetime; surfaced as
     /// `used_memory_peak` in `INFO memory`.
     pub(crate) used_memory_peak: u64,
+    /// Keys expired since startup (lazy reap path AND
+    /// [`Self::tick_expire`]). Surfaced via `INFO keyspace` / `MEMORY STATS`
+    /// once those fields land.
+    pub(crate) expired_keys_total: u64,
 }
 
 impl Store {
@@ -371,6 +377,7 @@ impl Store {
     pub(crate) fn reap(&mut self, key: &[u8], now: Instant) -> bool {
         if self.expired(key, now) {
             self.remove_entry(key);
+            self.expired_keys_total = self.expired_keys_total.saturating_add(1);
             false
         } else {
             self.map.contains_key(key)
@@ -393,6 +400,7 @@ impl Store {
         };
         if expired {
             self.remove_entry(key);
+            self.expired_keys_total = self.expired_keys_total.saturating_add(1);
             return None;
         }
         if self.maxmemory > 0 {
@@ -417,6 +425,7 @@ impl Store {
         };
         if expired {
             self.remove_entry(key);
+            self.expired_keys_total = self.expired_keys_total.saturating_add(1);
             return None;
         }
         if self.maxmemory > 0 {

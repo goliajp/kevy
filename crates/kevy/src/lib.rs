@@ -140,6 +140,29 @@ impl Commands for KevyCommands {
         );
     }
 
+    fn shard_tick_interval_ms(&self) -> u64 {
+        // hz=0 disables the active reaper (lazy expiry still runs); else
+        // every `1000/hz` ms — capped at 10 s so a misconfig can't park the
+        // reactor's tick check loop forever.
+        let cfg = config_global::get();
+        let hz = cfg.expiry.hz;
+        if hz == 0 {
+            0
+        } else {
+            (1000 / hz as u64).clamp(1, 10_000)
+        }
+    }
+
+    fn on_shard_tick(&self, store: &mut Store) {
+        // Run Redis's `activeExpireCycle` per shard. `sample` controls the
+        // batch size; up to 16 rounds per tick is well below Redis's 25 %
+        // CPU budget at the default 10 Hz cadence. Cheap when no TTL'd
+        // keys exist (a single map-emptiness check + bucket walk).
+        let cfg = config_global::get();
+        let samples = cfg.expiry.sample as usize;
+        store.tick_expire(samples, 16);
+    }
+
     fn is_write(&self, args: &Argv) -> bool {
         let Some(name) = args.first() else {
             return false;
