@@ -23,6 +23,7 @@ members = [
     "crates/kevy-bytes",
     "crates/kevy-map",
     "crates/kevy-resp-client",
+    "crates/kevy-config",
 ]
 
 [workspace.package]

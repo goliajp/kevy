@@ -1,0 +1,16 @@
+[package]
+name = "kevy-config"
+description = "Zero-dependency TOML subset parser and Config schema for kevy."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-config"
+readme = "README.md"
+keywords = ["toml", "config", "kevy", "redis", "kv"]
+categories = ["config", "parsing", "database-implementations"]
+
+[dependencies]

@@ -1,0 +1,65 @@
+# kevy.toml — kevy server config sample
+#
+# All values are OPTIONAL. Built-in defaults apply for anything missing.
+# Lines starting with '#' are comments and may be left in place; CONFIG
+# REWRITE in v1.0 will NOT preserve them (the file is regenerated from
+# the in-memory state; this is the v1.0 design — round-trip
+# preservation lands in v1.x).
+#
+# Precedence (top wins):
+#   1. CLI flags        — `kevy --bind 0.0.0.0 --port 7000 ...`
+#   2. Env vars         — KEVY_BIND, KEVY_PORT, KEVY_THREADS, KEVY_DIR, KEVY_AOF
+#   3. This TOML file   — see auto-detect order in kevy-config README
+#   4. Built-in default — what you see commented out below
+
+[server]
+# IPv4 bind address. Anything outside 127.0.0.0/8 triggers a startup WARN
+# because kevy has no AUTH/TLS yet — see .claude/scope-decisions.md.
+bind     = "127.0.0.1"
+port     = 6004
+# 0 = auto-detect (CPU count via std::thread::available_parallelism).
+threads  = 0
+# Where snapshot + AOF live. Resolved relative to the kevy process cwd.
+data_dir = "."
+
+[persistence]
+# Append-only file. Disable only for ephemeral / cache-only deployments.
+aof          = true
+# AOF fsync policy:
+#   "always"   — fsync per write command (zero data-loss, ~50% throughput)
+#   "everysec" — background fsync every second (lose at most 1s; default)
+#   "no"       — let the OS pagecache decide (lose up to 30s on crash)
+appendfsync  = "everysec"
+# BGREWRITEAOF triggers when current AOF size ≥ this percent over the
+# last rewrite. 100 = rewrite when AOF doubles.
+auto_aof_rewrite_percentage  = 100
+# Never auto-rewrite an AOF smaller than this. Size literal: "64mb",
+# "2gb", or a bare integer (bytes).
+auto_aof_rewrite_min_size    = "64mb"
+
+[memory]
+# Soft memory ceiling. 0 = unlimited (the default; check is dead-code-
+# eliminated when 0, so 0 write-path overhead).
+maxmemory         = 0
+# Action when maxmemory is hit. One of:
+#   noeviction       — return ERR on writes (default; conservative)
+#   allkeys-lru      — approximated LRU across all keys
+#   allkeys-lfu      — approximated LFU across all keys
+#   allkeys-random   — random key, all keys
+#   volatile-lru     — approximated LRU among keys with a TTL
+#   volatile-lfu     — approximated LFU among keys with a TTL
+#   volatile-random  — random key among keys with a TTL
+#   volatile-ttl     — key with the shortest remaining TTL
+maxmemory_policy  = "noeviction"
+
+[expiry]
+# TTL background reaper frequency (Hz). 10 = every 100 ms (Redis default).
+hz       = 10
+# Keys sampled per reaper cycle (Redis default).
+sample   = 20
+
+[log]
+# Verbosity: "trace" | "debug" | "info" | "warn" | "error".
+level    = "info"
+# Sink: "stderr" | "stdout" | "<file path>".
+output   = "stderr"
