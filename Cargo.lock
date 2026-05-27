@@ -7,6 +7,7 @@ name = "kevy"
 version = "0.1.0"
 dependencies = [
  "kevy-bench",
+ "kevy-config",
  "kevy-resp",
  "kevy-rt",
  "kevy-store",
@@ -32,6 +33,10 @@ dependencies = [
  "kevy-resp",
  "kevy-resp-client",
 ]
+
+[[package]]
+name = "kevy-config"
+version = "0.1.0"
 
 [[package]]
 name = "kevy-hash"
