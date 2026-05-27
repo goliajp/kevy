@@ -275,4 +275,32 @@ mod tests {
         assert!(max_low < 64, "low-bit skew {max_low} (mean 16) — avalanche failing");
         assert!(max_top < 128, "top-bit skew {max_top} (mean 32) — avalanche failing");
     }
+
+    // ---- KevyHash impls for delegating types (cov for u32 / usize / Vec<u8>) -
+
+    #[test]
+    fn kevy_hash_vec_u8_agrees_with_slice() {
+        let v: Vec<u8> = b"hello-world".to_vec();
+        assert_eq!(v.kevy_hash(), v.as_slice().kevy_hash());
+    }
+
+    #[test]
+    fn kevy_hash_u32_agrees_with_widened_u64() {
+        // u32 widens through u64 → same hash as the u64 form of the same value.
+        let n: u32 = 0xCAFE_BABE;
+        assert_eq!(n.kevy_hash(), (n as u64).kevy_hash());
+        // Distinct values produce distinct hashes.
+        let m: u32 = n.wrapping_add(1);
+        assert_ne!(n.kevy_hash(), m.kevy_hash());
+    }
+
+    #[test]
+    fn kevy_hash_usize_agrees_with_u64() {
+        // usize sign-free widens through u64. Equal-valued usize ↔ u64
+        // must hash the same so a map keyed by either reads back equivalently.
+        let n: usize = 42;
+        assert_eq!(n.kevy_hash(), (n as u64).kevy_hash());
+        let m: usize = 43;
+        assert_ne!(n.kevy_hash(), m.kevy_hash());
+    }
 }
