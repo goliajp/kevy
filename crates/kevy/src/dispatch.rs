@@ -34,6 +34,7 @@ pub fn dispatch_into(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
     let mut buf = [0u8; 32];
     let cmd = upper_verb(name, &mut buf);
     let handled = dispatch_conn(cmd, args, out)
+        || crate::ops::dispatch_ops(cmd, args, out)
         || dispatch_string(cmd, store, args, out)
         || dispatch_hash(cmd, store, args, out)
         || dispatch_list(cmd, store, args, out)
