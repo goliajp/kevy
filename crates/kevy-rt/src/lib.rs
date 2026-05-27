@@ -136,6 +136,13 @@ pub trait Commands: Clone + Send + 'static {
     fn is_write(&self, args: &Argv) -> bool;
     /// Transaction-control classification (MULTI/EXEC/DISCARD vs anything else).
     fn txn_kind(&self, args: &Argv) -> TxnKind;
+    /// Called once per shard, immediately after [`Store::new`], before the
+    /// reactor enters its event loop. Implementations install per-shard
+    /// configuration that the runtime doesn't know about — currently the
+    /// `maxmemory` + eviction-policy pair, which kevy ships via the
+    /// process-wide [`crate::commands::config_global`] snapshot. Default:
+    /// no-op so non-kevy embedders aren't forced to override.
+    fn on_shard_init(&self, _store: &mut Store) {}
 
     /// Resolve all verb-dependent attributes in **one** verb-table lookup.
     /// The default implementation calls the four per-attribute methods above

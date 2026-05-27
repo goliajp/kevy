@@ -185,6 +185,14 @@ impl SmallBytes {
         self.len() == 0
     }
 
+    /// Bytes this value holds on the heap (0 when inline). Lets memory-accounting
+    /// callers (e.g. `maxmemory` enforcement) charge only the off-stack footprint
+    /// without re-deriving the inline-length threshold.
+    #[inline]
+    pub fn heap_bytes(&self) -> usize {
+        if self.is_inline() { 0 } else { self.len() }
+    }
+
     /// Borrow the bytes (no allocation; same for inline and heap variants).
     #[inline]
     pub fn as_slice(&self) -> &[u8] {

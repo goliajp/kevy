@@ -28,6 +28,24 @@ impl<'a, K, V> Iter<'a, K, V> {
             pos: 0,
         }
     }
+
+    /// Construct an iterator that starts at bucket `start` (clamped to
+    /// `slots.len()`). Powers reservoir / random-start sampling for the
+    /// `kevy-store` eviction sampler — chain two of these (start..end, then
+    /// 0..start) to walk the table in a ring beginning at any position.
+    pub(crate) fn with_start(
+        metadata: &'a [u8],
+        slots: &'a [MaybeUninit<(K, V)>],
+        start: usize,
+    ) -> Self {
+        let real_len = slots.len();
+        let metadata = &metadata[..real_len];
+        Self {
+            metadata,
+            slots,
+            pos: start.min(real_len),
+        }
+    }
 }
 
 impl<'a, K, V> Iterator for Iter<'a, K, V> {

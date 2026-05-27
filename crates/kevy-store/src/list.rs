@@ -12,12 +12,9 @@ impl Store {
             if !create {
                 return Ok(None);
             }
-            self.map.insert(
+            self.insert_entry(
                 SmallBytes::from_slice(key),
-                Entry {
-                    value: Value::List(Box::default()),
-                    expire_at: None,
-                },
+                Entry::new(Value::List(Box::default()), None),
             );
         }
         match &mut self.map.get_mut(key).expect("present").value {
@@ -38,57 +35,84 @@ impl Store {
 
     /// Remove `key` if it now holds an empty list.
     fn drop_if_empty_list(&mut self, key: &[u8]) {
-        if let Some(Value::List(l)) = self.map.get(key).map(|e| &e.value)
-            && l.is_empty()
-        {
-            self.map.remove(key);
+        let empty = matches!(self.map.get(key).map(|e| &e.value), Some(Value::List(l)) if l.is_empty());
+        if empty {
+            self.remove_entry(key);
         }
     }
 
     /// `LPUSH` — prepend each value in turn; returns the new length.
     pub fn lpush(&mut self, key: &[u8], values: &[Vec<u8>]) -> Result<usize, StoreError> {
-        let l = self.list_mut(key, true)?.expect("created");
-        for v in values {
-            l.push_front(v.clone());
-        }
-        Ok(l.len())
+        let (new_len, delta) = {
+            let l = self.list_mut(key, true)?.expect("created");
+            let mut d: i64 = 0;
+            for v in values {
+                d += list_item_weight(v.len()) as i64;
+                l.push_front(v.clone());
+            }
+            (l.len(), d)
+        };
+        self.account_delta(key, delta);
+        Ok(new_len)
     }
 
     /// `RPUSH` — append each value; returns the new length.
     pub fn rpush(&mut self, key: &[u8], values: &[Vec<u8>]) -> Result<usize, StoreError> {
-        let l = self.list_mut(key, true)?.expect("created");
-        for v in values {
-            l.push_back(v.clone());
-        }
-        Ok(l.len())
+        let (new_len, delta) = {
+            let l = self.list_mut(key, true)?.expect("created");
+            let mut d: i64 = 0;
+            for v in values {
+                d += list_item_weight(v.len()) as i64;
+                l.push_back(v.clone());
+            }
+            (l.len(), d)
+        };
+        self.account_delta(key, delta);
+        Ok(new_len)
     }
 
     /// `LPOP` — pop up to `count` from the head (deleting an emptied key).
     pub fn lpop(&mut self, key: &[u8], count: usize) -> Result<Vec<Vec<u8>>, StoreError> {
-        let mut out = Vec::new();
-        if let Some(l) = self.list_mut(key, false)? {
-            for _ in 0..count {
-                match l.pop_front() {
-                    Some(v) => out.push(v),
-                    None => break,
+        let (out, delta) = {
+            let mut o = Vec::new();
+            let mut d: i64 = 0;
+            if let Some(l) = self.list_mut(key, false)? {
+                for _ in 0..count {
+                    match l.pop_front() {
+                        Some(v) => {
+                            d -= list_item_weight(v.len()) as i64;
+                            o.push(v);
+                        }
+                        None => break,
+                    }
                 }
             }
-        }
+            (o, d)
+        };
+        self.account_delta(key, delta);
         self.drop_if_empty_list(key);
         Ok(out)
     }
 
     /// `RPOP` — pop up to `count` from the tail.
     pub fn rpop(&mut self, key: &[u8], count: usize) -> Result<Vec<Vec<u8>>, StoreError> {
-        let mut out = Vec::new();
-        if let Some(l) = self.list_mut(key, false)? {
-            for _ in 0..count {
-                match l.pop_back() {
-                    Some(v) => out.push(v),
-                    None => break,
+        let (out, delta) = {
+            let mut o = Vec::new();
+            let mut d: i64 = 0;
+            if let Some(l) = self.list_mut(key, false)? {
+                for _ in 0..count {
+                    match l.pop_back() {
+                        Some(v) => {
+                            d -= list_item_weight(v.len()) as i64;
+                            o.push(v);
+                        }
+                        None => break,
+                    }
                 }
             }
-        }
+            (o, d)
+        };
+        self.account_delta(key, delta);
         self.drop_if_empty_list(key);
         Ok(out)
     }
@@ -121,62 +145,89 @@ impl Store {
 
     /// `LSET` — errors with `NoSuchKey` / `OutOfRange` like Redis.
     pub fn lset(&mut self, key: &[u8], idx: i64, val: &[u8]) -> Result<(), StoreError> {
-        let l = self.list_mut(key, false)?.ok_or(StoreError::NoSuchKey)?;
-        let i = norm_index(idx, l.len()).ok_or(StoreError::OutOfRange)?;
-        l[i] = val.to_vec();
+        let delta = {
+            let l = self.list_mut(key, false)?.ok_or(StoreError::NoSuchKey)?;
+            let i = norm_index(idx, l.len()).ok_or(StoreError::OutOfRange)?;
+            let old_len = l[i].len() as i64;
+            l[i] = val.to_vec();
+            val.len() as i64 - old_len
+        };
+        self.account_delta(key, delta);
         Ok(())
     }
 
     /// `LREM` — remove `count` occurrences of `val` (>0 head, <0 tail, 0 all).
     pub fn lrem(&mut self, key: &[u8], count: i64, val: &[u8]) -> Result<usize, StoreError> {
-        let removed = match self.list_mut(key, false)? {
-            None => 0,
-            Some(l) => {
-                let mut removed = 0;
-                if count >= 0 {
-                    let limit = if count == 0 {
-                        usize::MAX
-                    } else {
-                        count as usize
-                    };
-                    let mut i = 0;
-                    while i < l.len() {
-                        if removed < limit && l[i] == val {
-                            l.remove(i);
-                            removed += 1;
+        let (removed, delta) = {
+            let mut r = 0usize;
+            let mut d: i64 = 0;
+            match self.list_mut(key, false)? {
+                None => (0, 0),
+                Some(l) => {
+                    if count >= 0 {
+                        let limit = if count == 0 {
+                            usize::MAX
                         } else {
-                            i += 1;
+                            count as usize
+                        };
+                        let mut i = 0;
+                        while i < l.len() {
+                            if r < limit && l[i] == val {
+                                d -= list_item_weight(l[i].len()) as i64;
+                                l.remove(i);
+                                r += 1;
+                            } else {
+                                i += 1;
+                            }
+                        }
+                    } else {
+                        let limit = (-count) as usize;
+                        let mut i = l.len();
+                        while i > 0 {
+                            i -= 1;
+                            if r < limit && l[i] == val {
+                                d -= list_item_weight(l[i].len()) as i64;
+                                l.remove(i);
+                                r += 1;
+                            }
                         }
                     }
-                } else {
-                    let limit = (-count) as usize;
-                    let mut i = l.len();
-                    while i > 0 {
-                        i -= 1;
-                        if removed < limit && l[i] == val {
-                            l.remove(i);
-                            removed += 1;
-                        }
-                    }
+                    (r, d)
                 }
-                removed
             }
         };
+        self.account_delta(key, delta);
         self.drop_if_empty_list(key);
         Ok(removed)
     }
 
     /// `LTRIM` — keep only `[start, stop]` (deleting an emptied key).
     pub fn ltrim(&mut self, key: &[u8], start: i64, stop: i64) -> Result<(), StoreError> {
-        if let Some(l) = self.list_mut(key, false)? {
-            match range_bounds(start, stop, l.len()) {
-                None => l.clear(),
-                Some((s, e)) => {
-                    l.drain(e + 1..);
-                    l.drain(..s);
+        let delta = {
+            let mut d: i64 = 0;
+            if let Some(l) = self.list_mut(key, false)? {
+                match range_bounds(start, stop, l.len()) {
+                    None => {
+                        for v in l.iter() {
+                            d -= list_item_weight(v.len()) as i64;
+                        }
+                        l.clear();
+                    }
+                    Some((s, e)) => {
+                        for v in l.iter().skip(e + 1) {
+                            d -= list_item_weight(v.len()) as i64;
+                        }
+                        l.drain(e + 1..);
+                        for v in l.iter().take(s) {
+                            d -= list_item_weight(v.len()) as i64;
+                        }
+                        l.drain(..s);
+                    }
                 }
             }
-        }
+            d
+        };
+        self.account_delta(key, delta);
         self.drop_if_empty_list(key);
         Ok(())
     }

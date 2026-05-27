@@ -88,3 +88,48 @@ fn routing_and_write_classification() {
     assert!(!c.is_write(&a(&[b"GET", b"k"])));
     assert!(c.is_quit(&a(&[b"quit"])));
 }
+
+#[test]
+fn dispatch_returns_oom_when_no_eviction_at_limit() {
+    use kevy_store::EvictionPolicy;
+    let mut s = Store::new();
+    s.set_max_memory(1, EvictionPolicy::NoEviction);
+    // First SET succeeds (precheck sees used_memory=0 ≤ maxmemory check
+    // path); pushes us over.
+    let reply = d(&mut s, &[b"SET", b"k", b"v"]);
+    assert_eq!(reply, b"+OK\r\n");
+    assert!(s.used_memory() > 1);
+    // Second SET: precheck refuses with classic Redis OOM string.
+    let reply = d(&mut s, &[b"SET", b"k2", b"x"]);
+    let txt = std::str::from_utf8(&reply).unwrap();
+    assert!(txt.starts_with("-OOM "), "expected OOM error, got {txt:?}");
+    assert!(txt.contains("maxmemory"), "expected maxmemory in reply, got {txt:?}");
+}
+
+#[test]
+fn dispatch_evicts_under_allkeys_random() {
+    use kevy_store::EvictionPolicy;
+    let mut s = Store::new();
+    s.set_max_memory(800, EvictionPolicy::AllKeysRandom);
+    for i in 0..30 {
+        let k = format!("k{i:02}");
+        d(&mut s, &[b"SET", k.as_bytes(), b"x"]);
+    }
+    assert!(s.used_memory() <= 800, "dispatch should keep us under: {}", s.used_memory());
+    assert!(s.evictions_total() > 0, "AllKeysRandom should have evicted some keys");
+}
+
+#[test]
+fn memory_usage_via_dispatch() {
+    let mut s = Store::new();
+    d(&mut s, &[b"SET", b"k", b"hello"]);
+    let reply = d(&mut s, &[b"MEMORY", b"USAGE", b"k"]);
+    // Reply is `:N\r\n` — some integer > 0.
+    let txt = std::str::from_utf8(&reply).unwrap();
+    assert!(txt.starts_with(":"), "expected integer reply, got {txt:?}");
+    let n: i64 = txt[1..txt.len() - 2].parse().unwrap();
+    assert!(n > 0);
+    // Missing key → nil.
+    let reply = d(&mut s, &[b"MEMORY", b"USAGE", b"missing"]);
+    assert_eq!(reply, b"$-1\r\n");
+}
