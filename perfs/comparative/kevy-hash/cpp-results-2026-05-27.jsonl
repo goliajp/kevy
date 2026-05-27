@@ -1,0 +1,4 @@
+{"stone":"kevy-hash","language":"cpp","competitor":"std::hash<string_view>","workload":"hash_bytes_8B","metric":"ns_per_op","value_median":1,"value_p95":2,"value_min":1,"iterations":1000000,"host":"M4-Pro-aarch64","date":"2026-05-26T23:55:47Z"}
+{"stone":"kevy-hash","language":"cpp","competitor":"std::hash<string_view>","workload":"hash_bytes_16B","metric":"ns_per_op","value_median":1,"value_p95":3,"value_min":1,"iterations":1000000,"host":"M4-Pro-aarch64","date":"2026-05-26T23:55:48Z"}
+{"stone":"kevy-hash","language":"cpp","competitor":"std::hash<string_view>","workload":"hash_bytes_64B","metric":"ns_per_op","value_median":2,"value_p95":2,"value_min":2,"iterations":1000000,"host":"M4-Pro-aarch64","date":"2026-05-26T23:55:48Z"}
+{"stone":"kevy-hash","language":"cpp","competitor":"std::hash<uint64_t>","workload":"hash_u64","metric":"ns_per_op","value_median":0,"value_p95":0,"value_min":0,"iterations":1000000,"host":"M4-Pro-aarch64","date":"2026-05-26T23:55:48Z"}
