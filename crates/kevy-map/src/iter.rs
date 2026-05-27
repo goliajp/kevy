@@ -14,7 +14,14 @@ pub struct Iter<'a, K, V> {
 
 impl<'a, K, V> Iter<'a, K, V> {
     /// Construct an iterator from a map's raw bucket slices.
+    ///
+    /// `metadata` may be longer than `slots` because the map keeps a
+    /// trailing `GROUP_WIDTH - 1` byte mirror for SIMD-safe wraparound
+    /// loads; only the first `slots.len()` metadata bytes correspond to
+    /// real slots, and that's what we iterate over.
     pub(crate) fn new(metadata: &'a [u8], slots: &'a [MaybeUninit<(K, V)>]) -> Self {
+        let real_len = slots.len();
+        let metadata = &metadata[..real_len];
         Self {
             metadata,
             slots,
