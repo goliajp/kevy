@@ -19,4 +19,4 @@ kevy-bytes = { path = "../kevy-bytes", version = "0.1" }
 kevy-map = { path = "../kevy-map", version = "0.1" }
 
 [dev-dependencies]
-kevy-bench = { path = "../kevy-bench", version = "0.1" }
+kevy-bench = { path = "../kevy-bench" }

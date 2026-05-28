@@ -30,4 +30,4 @@ kevy-config = { path = "../kevy-config", version = "0.1" }
 kevy-persist = { path = "../kevy-persist", version = "0.1" }
 
 [dev-dependencies]
-kevy-bench = { path = "../kevy-bench", version = "0.1" }
+kevy-bench = { path = "../kevy-bench" }

@@ -9,6 +9,9 @@ license.workspace = true
 readme = "README.md"
 keywords = ["redis", "cli", "repl", "resp", "kevy"]
 categories = ["command-line-utilities", "database"]
+# Dev REPL — publish decision deferred to v1.x. Keep out of the RC publish
+# chain so it can be polished separately without blocking server crates.
+publish = false
 
 [lints]
 workspace = true
