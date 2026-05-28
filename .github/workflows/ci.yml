@@ -1,0 +1,155 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+# Cancel any in-flight runs for the same branch on a new push — saves
+# minutes on PRs that get force-pushed twice in a minute.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # The project's `[workspace.lints.rust] warnings = "deny"` makes any
+  # warning a hard CI failure — surface them with a single -D for clarity.
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # ───────────── native cargo test on the OS matrix ─────────────
+  test:
+    name: test (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-apple-darwin
+            os: macos-14   # M-series GitHub-hosted runner
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+          rustup component add clippy
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ matrix.target }}-
+
+      - name: Build (workspace)
+        run: cargo build --workspace --target ${{ matrix.target }}
+
+      - name: Test (workspace, --lib --tests)
+        run: cargo test --workspace --lib --tests --target ${{ matrix.target }}
+
+      - name: Clippy (workspace, all targets, all features)
+        run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
+
+  # ───────────── wasm32: kevy-bytes / -store / -embedded must build ─────────────
+  wasm:
+    name: cargo check ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - wasm32-unknown-unknown
+          - wasm32-wasip1
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust + wasm target
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ matrix.target }}-
+
+      - name: Check wasm-eligible crates
+        run: |
+          cargo check --target ${{ matrix.target }} -p kevy-bytes
+          cargo check --target ${{ matrix.target }} -p kevy-hash
+          cargo check --target ${{ matrix.target }} -p kevy-map
+          cargo check --target ${{ matrix.target }} -p kevy-store
+          cargo check --target ${{ matrix.target }} -p kevy-persist
+          cargo check --target ${{ matrix.target }} -p kevy-resp
+          cargo check --target ${{ matrix.target }} -p kevy-embedded
+
+  # ───────────── miri on the hashmap (catches UB in unsafe slot mgmt) ─────────────
+  miri:
+    name: miri (kevy-map + kevy-bytes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly + miri
+        run: |
+          rustup toolchain install nightly --component miri --no-self-update
+          rustup override set nightly
+
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: miri-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            miri-
+
+      - name: cargo miri test -p kevy-map
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation"
+        run: cargo miri test -p kevy-map --lib
+
+      - name: cargo miri test -p kevy-bytes
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation"
+        run: cargo miri test -p kevy-bytes --lib
+
+  # ───────────── compat smoke vs valkey 9.1 ─────────────
+  compat:
+    name: bench/run.sh (Docker, 5-min smoke)
+    runs-on: ubuntu-latest
+    # Don't block the main matrix on bench — it's a flake-prone Docker harness.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build kevy release image + run vs valkey 9.1
+        env:
+          N: "50000"   # smaller than the lx64 cohort — this is a smoke
+        run: |
+          set -euo pipefail
+          # `bench/run.sh` brings up valkey 9.1 + kevy release in compose,
+          # measures both via valkey-benchmark, then tears down.
+          bash bench/run.sh

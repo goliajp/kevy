@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'           # final release   (v1.0.0)
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc[0-9]+'  # release candidate (v1.0.0-rc1)
+      - 'v[0-9]+.[0-9]+.[0-9]+-beta[0-9]+'
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  # ───────────── verify the tag actually compiles cleanly ─────────────
+  verify:
+    name: Verify tag builds (release profile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+      - name: Build --release
+        run: cargo build --workspace --release
+      - name: Test --release
+        run: cargo test --workspace --release --lib --tests
+
+  # ───────────── cargo publish dry-run for every publishable crate ─────────────
+  publish-dry-run:
+    name: cargo publish --dry-run
+    runs-on: ubuntu-latest
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+      # Publish order matters: leaf crates first so dependents see them
+      # in the registry. Each `--dry-run` builds + packages without
+      # actually uploading — exact same shape as the real publish.
+      - name: kevy-madvise
+        run: cargo publish -p kevy-madvise --dry-run --allow-dirty
+      - name: kevy-sys
+        run: cargo publish -p kevy-sys --dry-run --allow-dirty
+      - name: kevy-hash
+        run: cargo publish -p kevy-hash --dry-run --allow-dirty
+      - name: kevy-bytes
+        run: cargo publish -p kevy-bytes --dry-run --allow-dirty
+      - name: kevy-ring
+        run: cargo publish -p kevy-ring --dry-run --allow-dirty
+      - name: kevy-map
+        run: cargo publish -p kevy-map --dry-run --allow-dirty
+      - name: kevy-resp
+        run: cargo publish -p kevy-resp --dry-run --allow-dirty
+      - name: kevy-resp-client
+        run: cargo publish -p kevy-resp-client --dry-run --allow-dirty
+      - name: kevy-store
+        run: cargo publish -p kevy-store --dry-run --allow-dirty
+      - name: kevy-persist
+        run: cargo publish -p kevy-persist --dry-run --allow-dirty
+      - name: kevy-config
+        run: cargo publish -p kevy-config --dry-run --allow-dirty
+      - name: kevy-rt
+        run: cargo publish -p kevy-rt --dry-run --allow-dirty
+      - name: kevy-embedded
+        run: cargo publish -p kevy-embedded --dry-run --allow-dirty
+      - name: kevy
+        run: cargo publish -p kevy --dry-run --allow-dirty
+
+  # ───────────── attach GitHub release notes (auto-generated) ─────────────
+  release-notes:
+    name: Draft GitHub release
+    runs-on: ubuntu-latest
+    needs: [verify, publish-dry-run]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # full history for changelog generation
+      - name: Create release draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag=${GITHUB_REF#refs/tags/}
+          gh release create "$tag" \
+            --draft \
+            --generate-notes \
+            --title "$tag"
