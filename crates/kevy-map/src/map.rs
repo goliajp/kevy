@@ -138,6 +138,11 @@ pub struct KevyMap<K, V> {
 unsafe impl<K: Send, V: Send> Send for KevyMap<K, V> {}
 unsafe impl<K: Sync, V: Sync> Sync for KevyMap<K, V> {}
 
+/// `(metadata, slots)` parallel-slice pair returned by [`KevyMap::as_slices`].
+/// Aliased so the long `(&[u8], &[MaybeUninit<(K, V)>])` signature doesn't
+/// trip clippy's `type_complexity` lint on a member-by-member basis.
+type SlotSlices<'a, K, V> = (&'a [u8], &'a [MaybeUninit<(K, V)>]);
+
 enum ProbeOutcome {
     Found(usize),
     NotFound {
@@ -311,7 +316,7 @@ impl<K, V> KevyMap<K, V> {
     /// not the mirror tail). When `cap == 0` returns two empty slices —
     /// the dangling pointer is never dereferenced.
     #[inline]
-    fn as_slices(&self) -> (&[u8], &[MaybeUninit<(K, V)>]) {
+    fn as_slices(&self) -> SlotSlices<'_, K, V> {
         if self.cap == 0 {
             return (&[], &[]);
         }
@@ -518,10 +523,10 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                     return ProbeOutcome::Found(slot);
                 }
             }
-            if first_deleted.is_none() {
-                if let Some(m) = g.match_byte(DELETED).lowest_set() {
-                    first_deleted = Some((group_start + m) & self.mask);
-                }
+            if first_deleted.is_none()
+                && let Some(m) = g.match_byte(DELETED).lowest_set()
+            {
+                first_deleted = Some((group_start + m) & self.mask);
             }
             if let Some(m) = g.match_byte(EMPTY).lowest_set() {
                 let probe_empty = (group_start + m) & self.mask;

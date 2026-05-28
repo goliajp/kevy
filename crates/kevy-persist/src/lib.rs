@@ -468,9 +468,9 @@ fn dump_store_to_aof(path: &Path, store: &Store) -> io::Result<(u64, u64)> {
         return Err(e);
     }
     w.flush()?;
-    let inner = w.into_inner().map_err(|e| {
-        io::Error::new(io::ErrorKind::Other, e.to_string())
-    })?;
+    let inner = w
+        .into_inner()
+        .map_err(|e| io::Error::other(e.to_string()))?;
     let bytes = inner.metadata().map(|m| m.len()).unwrap_or(0);
     inner.sync_all()?;
     Ok((keys, bytes))
