@@ -1,14 +1,23 @@
 //! `SmallBytes` — a 24-byte small-byte-string with inline-SSO optimization.
 //!
 //! Layout (**little-endian only**): a union of two 24-byte variants, distinguished
-//! by the last byte:
+//! by the byte at offset 23:
 //!
 //! - **Inline**: `[u8; 23]` data, then `u8` tag holding the inline length
 //!   (0..=22). The whole string lives in the value, no allocation.
-//! - **Heap**: `NonNull<u8>` ptr (8) + `usize` len (8) + `usize` cap_and_tag (8).
-//!   The high byte of `cap_and_tag` overlaps byte 23 of the union — the same
-//!   byte as Inline::tag — and is kept fixed at `0xFF` (> 22) as the heap
-//!   discriminator. The low 56 bits hold the heap capacity (up to 72 PB).
+//! - **Heap (64-bit)**: `NonNull<u8>` ptr (8) + `usize` len (8) + `usize`
+//!   cap_and_tag (8). The high byte of `cap_and_tag` overlaps byte 23 of
+//!   the union and is fixed at `0xFF` (> 22) as the heap discriminator. The
+//!   low 56 bits hold the heap capacity (up to 72 PB).
+//! - **Heap (32-bit)**: `NonNull<u8>` ptr (4) + `u32` len (4) + `u32`
+//!   cap (4) + 11-byte pad, then `u8` tag fixed at `0xFF`. Same 24-byte
+//!   total, same discriminator byte at offset 23 — pointer / len fields
+//!   are 32-bit-native so a `wasm32-unknown-unknown` build picks up the
+//!   right size without shifting a `usize` past its bit width.
+//!
+//! The 64-bit layout is the one the kevy server runs on, and is locked
+//! against perf-affecting changes (cfg-gated 32-bit alternative lives
+//! alongside it without touching any 64-bit code path).
 //!
 //! This lets us store every byte string up to 22 bytes — covering the vast
 //! majority of Redis-style values — without any pointer-chase, while keeping
@@ -31,18 +40,33 @@ use std::slice;
 
 const INLINE_CAP: usize = 23;
 const INLINE_LEN_MAX: u8 = (INLINE_CAP - 1) as u8;
+
+#[cfg(target_pointer_width = "64")]
 const TAG_HEAP_BIT: usize = 0xFFusize << 56;
+#[cfg(target_pointer_width = "64")]
 const CAP_MASK: usize = (1usize << 56) - 1;
+
+/// Heap-rep marker byte at offset 23. Used by the 32-bit `Heap::new` to
+/// set its dedicated `tag` field; the 64-bit path encodes the same byte
+/// implicitly via the high byte of `cap_and_tag`.
+#[cfg(target_pointer_width = "32")]
+const HEAP_TAG_BYTE: u8 = 0xFF;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct Inline {
     data: [u8; INLINE_CAP],
-    /// 0..=22 = inline length. The heap rep sets this byte to 0xFF via the high
-    /// byte of `Heap::cap_and_tag` (overlapping on little-endian).
+    /// 0..=22 = inline length. The heap rep sets this byte to 0xFF either via
+    /// the high byte of `Heap::cap_and_tag` (64-bit, little-endian overlap)
+    /// or as a dedicated `tag` field at offset 23 (32-bit).
     tag: u8,
 }
 
+/// 64-bit Heap rep — `ptr|len|cap_and_tag` × usize. High byte of
+/// `cap_and_tag` shadows `Inline::tag` (LE) so the discriminator byte at
+/// offset 23 = `0xFF`. Locked layout: the kevy server runs here and the
+/// v0.metal cycle budget assumes this exact shape.
+#[cfg(target_pointer_width = "64")]
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct Heap {
@@ -51,6 +75,80 @@ struct Heap {
     /// High byte = 0xFF (heap marker, shadows `Inline::tag`); low 56 bits =
     /// capacity (from the source `Vec<u8>` or our own alloc; ≥ len).
     cap_and_tag: usize,
+}
+
+/// 32-bit Heap rep — `ptr(4)|len(4)|cap(4)|pad(11)|tag(1)`. The dedicated
+/// `tag` byte at offset 23 (= `0xFF`) plays the role the 64-bit `cap_and_tag`
+/// high byte does, so the discriminator check at offset 23 stays identical
+/// across both layouts. Unlocks `wasm32-unknown-unknown` (Wave 3 #7) without
+/// touching the 64-bit hot path.
+#[cfg(target_pointer_width = "32")]
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct Heap {
+    ptr: NonNull<u8>,
+    len: u32,
+    cap: u32,
+    _pad: [u8; 11],
+    tag: u8,
+}
+
+impl Heap {
+    /// Build a Heap rep tagging the discriminator byte to `0xFF`. cfg-gated
+    /// so each pointer-width hits its native fields without runtime cost.
+    #[cfg(target_pointer_width = "64")]
+    #[inline]
+    fn new(ptr: NonNull<u8>, len: usize, cap: usize) -> Self {
+        debug_assert!(cap <= CAP_MASK, "kevy-bytes: capacity exceeds 56-bit field");
+        Self {
+            ptr,
+            len,
+            cap_and_tag: TAG_HEAP_BIT | (cap & CAP_MASK),
+        }
+    }
+    #[cfg(target_pointer_width = "32")]
+    #[inline]
+    fn new(ptr: NonNull<u8>, len: usize, cap: usize) -> Self {
+        // On 32-bit, `Vec<u8>` is bounded by the 4 GiB address space, so
+        // any source `len`/`cap` already fits in `u32`. Debug-assert to
+        // catch unexpected callers.
+        debug_assert!(
+            len <= u32::MAX as usize && cap <= u32::MAX as usize,
+            "kevy-bytes: len/cap exceeds u32 on 32-bit platform"
+        );
+        Self {
+            ptr,
+            len: len as u32,
+            cap: cap as u32,
+            _pad: [0; 11],
+            tag: HEAP_TAG_BYTE,
+        }
+    }
+
+    /// Live capacity (always returned as `usize` regardless of underlying
+    /// field width).
+    #[cfg(target_pointer_width = "64")]
+    #[inline]
+    fn capacity(&self) -> usize {
+        self.cap_and_tag & CAP_MASK
+    }
+    #[cfg(target_pointer_width = "32")]
+    #[inline]
+    fn capacity(&self) -> usize {
+        self.cap as usize
+    }
+
+    /// Live length (always `usize`).
+    #[cfg(target_pointer_width = "64")]
+    #[inline]
+    fn length(&self) -> usize {
+        self.len
+    }
+    #[cfg(target_pointer_width = "32")]
+    #[inline]
+    fn length(&self) -> usize {
+        self.len as usize
+    }
 }
 
 /// A 24-byte owned byte string with inline small-string optimization.
@@ -118,13 +216,8 @@ impl SmallBytes {
             let ptr = unsafe { NonNull::new_unchecked(v.as_mut_ptr()) };
             let len = v.len();
             let cap = v.capacity();
-            debug_assert!(cap <= CAP_MASK, "Vec capacity exceeds 56-bit field");
             Self {
-                heap: Heap {
-                    ptr,
-                    len,
-                    cap_and_tag: TAG_HEAP_BIT | (cap & CAP_MASK),
-                },
+                heap: Heap::new(ptr, len, cap),
             }
         }
     }
@@ -149,11 +242,7 @@ impl SmallBytes {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.as_ptr(), len);
         }
         Self {
-            heap: Heap {
-                ptr,
-                len,
-                cap_and_tag: TAG_HEAP_BIT | (len & CAP_MASK),
-            },
+            heap: Heap::new(ptr, len, len),
         }
     }
 
@@ -175,7 +264,7 @@ impl SmallBytes {
             unsafe { self.inline.tag as usize }
         } else {
             // SAFETY: tag > 22 ⇒ heap variant is active.
-            unsafe { self.heap.len }
+            unsafe { self.heap.length() }
         }
     }
 
@@ -203,7 +292,7 @@ impl SmallBytes {
             }
         } else {
             // SAFETY: heap variant active; ptr/len originate from a Vec or our own alloc.
-            unsafe { slice::from_raw_parts(self.heap.ptr.as_ptr(), self.heap.len) }
+            unsafe { slice::from_raw_parts(self.heap.ptr.as_ptr(), self.heap.length()) }
         }
     }
 
@@ -223,8 +312,8 @@ impl SmallBytes {
             let (ptr, len, cap) = unsafe {
                 (
                     self.heap.ptr.as_ptr(),
-                    self.heap.len,
-                    self.heap.cap_and_tag & CAP_MASK,
+                    self.heap.length(),
+                    self.heap.capacity(),
                 )
             };
             // Skip our Drop to avoid double-free; Vec::from_raw_parts now owns it.
@@ -252,7 +341,7 @@ impl Drop for SmallBytes {
         // time (either from Vec — Vec uses `Layout::array::<u8>(cap)` — or our
         // own alloc_heap which used the same layout).
         unsafe {
-            let cap = self.heap.cap_and_tag & CAP_MASK;
+            let cap = self.heap.capacity();
             let layout = Layout::array::<u8>(cap).expect("kevy-bytes: drop layout");
             dealloc(self.heap.ptr.as_ptr(), layout);
         }
@@ -290,7 +379,7 @@ impl SmallBytes {
     unsafe fn clone_heap(&self) -> Self {
         // SAFETY (covers the three `self.heap.*` reads): caller asserts the
         // heap variant is active.
-        let (src_ptr, len) = unsafe { (self.heap.ptr.as_ptr(), self.heap.len) };
+        let (src_ptr, len) = unsafe { (self.heap.ptr.as_ptr(), self.heap.length()) };
         // `len > 22 ⇒ len > 0`, and the high bits are guarded by `CAP_MASK`
         // never letting cap exceed 2^56, well below `isize::MAX`, so the
         // unchecked layout is sound. Allocator alignment for `u8` is 1.
@@ -305,11 +394,7 @@ impl SmallBytes {
         // bytes; regions are disjoint.
         unsafe { std::ptr::copy_nonoverlapping(src_ptr, ptr.as_ptr(), len) };
         Self {
-            heap: Heap {
-                ptr,
-                len,
-                cap_and_tag: TAG_HEAP_BIT | (len & CAP_MASK),
-            },
+            heap: Heap::new(ptr, len, len),
         }
     }
 }
@@ -354,7 +439,7 @@ impl PartialEq for SmallBytes {
             (false, false) => {
                 // SAFETY: both in heap variant.
                 let (a_len, b_len) =
-                    unsafe { (self.heap.len, other.heap.len) };
+                    unsafe { (self.heap.length(), other.heap.length()) };
                 if a_len != b_len {
                     return false;
                 }
@@ -503,7 +588,7 @@ mod tests {
         // SAFETY: we know it's heap; peek to verify pointer reuse.
         unsafe {
             assert_eq!(s.heap.ptr.as_ptr() as *const u8, ptr_before);
-            assert_eq!(s.heap.cap_and_tag & CAP_MASK, cap_before);
+            assert_eq!(s.heap.capacity(), cap_before);
         }
     }
 
