@@ -55,40 +55,137 @@ pub use value::*;
 
 use kevy_hash::KevyHash;
 use kevy_map::KevyMap;
+use std::num::NonZeroU64;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-/// Per-key entry. `weight` is the cached "dynamic" footprint
-/// (`key.heap_bytes() + value.weight()`) used for `maxmemory` accounting —
-/// does NOT include the constant per-entry slot overhead [`ENTRY_OVERHEAD`],
-/// which is added once to `Store::used_memory` on insert. `lru_clock` is a
-/// 24-bit-ish access ordinal — LRU uses it as a monotonic counter; LFU
-/// packs it as `[16-bit decay-tick | 8-bit log-counter]` — only updated
-/// when eviction is enabled.
+/// Process-start anchor: every `Entry::expire_at_ns` is a nanosecond
+/// offset from this `Instant`, encoded as `Option<NonZeroU64>` so the
+/// niche optimisation lets the field cost 8 bytes (vs 16 for a bare
+/// `Option<Instant>`). 584-year range from process start — Y2538-proof.
+fn epoch() -> Instant {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    *EPOCH.get_or_init(Instant::now)
+}
+
+/// Encode an absolute `Instant` as ns-since-process-start. Returns `None`
+/// when `t == epoch()` exactly (sentinel collision); in practice an entry
+/// inserted at exactly t=0 from process start with TTL=0 is the only path
+/// there, and TTL=0 isn't a valid expiry the API ever takes.
+#[inline]
+fn pack_deadline(t: Instant) -> Option<NonZeroU64> {
+    let ns = t.saturating_duration_since(epoch()).as_nanos() as u64;
+    NonZeroU64::new(ns)
+}
+
+/// Decode a packed deadline back into an `Instant` for the rare paths
+/// (`pttl`, snapshot dump) that need real-clock math.
+#[inline]
+fn unpack_deadline(ns: NonZeroU64) -> Instant {
+    epoch() + Duration::from_nanos(ns.get())
+}
+
+/// Per-entry weight ceiling — the field is `u32` so accounting saturates
+/// at 4 GiB per entry. Real-world Redis values are well below this; the
+/// ceiling only matters when a single hash / list / zset exceeds 4 GiB,
+/// in which case `MEMORY USAGE` and the maxmemory accounting under-
+/// report that one entry by the overflow amount. Acceptable v1.0 tradeoff
+/// — keeps `Entry` at 48 bytes (vs 56 if we kept `u64`).
+const WEIGHT_MAX: u32 = u32::MAX;
+
+/// Per-key entry — packed to 48 bytes (vs 64 in the original
+/// `Value + Option<Instant> + u64 weight + u32 clock + 4 pad` layout):
+///
+/// - `value`: 32 bytes (boxed-collection enum).
+/// - `expire_at_ns`: `Option<NonZeroU64>` = ns since process start.
+///   Niche optimisation makes this 8 bytes, not the 16 a bare
+///   `Option<Instant>` would cost.
+/// - `weight`: `u32`. Cached `key.heap_bytes() + value.weight()` for
+///   O(1) eviction & `MEMORY USAGE`. Saturates at 4 GiB per entry.
+/// - `lru_clock`: `u32`. LRU = monotonic op counter; LFU = packed
+///   `[16-bit decay-tick | 8-bit log-counter]`. Only updated when
+///   `Store::maxmemory > 0`.
+///
+/// Storage saving over the original layout: 16 bytes per entry = 25 %.
+/// For a 1 M-key shard that's ~16 MB of RSS back.
 pub(crate) struct Entry {
     pub(crate) value: Value,
-    /// Absolute monotonic deadline; `None` means no expiry.
-    pub(crate) expire_at: Option<Instant>,
-    /// Cached `key.heap_bytes() + value.weight()`. Kept in sync by every
-    /// mutator so eviction & `MEMORY USAGE` are O(1).
-    pub(crate) weight: u64,
-    /// LRU ordinal / LFU packed counter. Untouched (stays 0) when
-    /// `Store::maxmemory == 0`.
+    pub(crate) expire_at_ns: Option<NonZeroU64>,
+    pub(crate) weight: u32,
     pub(crate) lru_clock: u32,
 }
 
 impl Entry {
-    /// Build a fresh entry with weight uninitialised (the caller — usually
-    /// [`Store::insert_entry`] — will compute and stamp it).
+    /// Build a fresh entry with weight + lru_clock uninitialised (the
+    /// caller — usually [`Store::insert_entry`] — will compute and stamp them).
     #[inline]
     pub(crate) fn new(value: Value, expire_at: Option<Instant>) -> Self {
         Self {
             value,
-            expire_at,
+            expire_at_ns: expire_at.and_then(pack_deadline),
             weight: 0,
             lru_clock: 0,
         }
     }
+
+    /// Cached entry weight as a `u64` for arithmetic uniformity with the
+    /// `Store::used_memory: u64` accumulator. Zero-cost cast.
+    #[inline]
+    pub(crate) fn weight(&self) -> u64 {
+        self.weight as u64
+    }
+
+    /// LRU / LFU clock value (eviction-only).
+    #[inline]
+    pub(crate) fn lru_clock(&self) -> u32 {
+        self.lru_clock
+    }
+
+    /// Overwrite the cached weight, saturating at the 4 GiB ceiling.
+    #[inline]
+    pub(crate) fn set_weight(&mut self, w: u64) {
+        self.weight = w.min(WEIGHT_MAX as u64) as u32;
+    }
+
+    /// Overwrite the LRU/LFU clock field.
+    #[inline]
+    pub(crate) fn set_lru_clock(&mut self, c: u32) {
+        self.lru_clock = c;
+    }
+
+    /// Apply a signed delta to the cached weight (saturating both directions).
+    #[inline]
+    pub(crate) fn add_to_weight(&mut self, delta: i64) {
+        if delta == 0 {
+            return;
+        }
+        let cur = self.weight as u64;
+        let new = if delta >= 0 {
+            cur.saturating_add(delta as u64)
+        } else {
+            cur.saturating_sub((-delta) as u64)
+        };
+        self.weight = new.min(WEIGHT_MAX as u64) as u32;
+    }
+
+    /// Is the entry past its deadline as of `now`? `None` deadline =
+    /// never. Combines the two-step compare into one branch on the
+    /// niche-optimised `Option`.
+    #[inline]
+    pub(crate) fn is_expired_at(&self, now: Instant) -> bool {
+        match self.expire_at_ns {
+            None => false,
+            Some(ns) => unpack_deadline(ns) <= now,
+        }
+    }
 }
+
+// Pin the Entry layout: 32 (Value) + 8 (expire_at_ns, niche-opt) + 8 (packed)
+// = 48 bytes. Any padding regression (e.g. someone re-adding a 4-byte field
+// without packing) is caught at compile time.
+const _: () = {
+    assert!(std::mem::size_of::<Entry>() == 48);
+};
 
 /// Operation errors surfaced to the command layer.
 #[derive(Debug, PartialEq, Eq)]
@@ -238,7 +335,7 @@ impl Store {
     /// Cached weight of `key` (dynamic part + [`ENTRY_OVERHEAD`]). Returns
     /// `None` when the key is absent or expired (no implicit reap).
     pub fn estimate_key_bytes(&self, key: &[u8]) -> Option<u64> {
-        self.map.get(key).map(|e| e.weight + ENTRY_OVERHEAD)
+        self.map.get(key).map(|e| e.weight() + ENTRY_OVERHEAD)
     }
 
     /// O(1) precondition check the dispatch layer calls before every write
@@ -275,18 +372,18 @@ impl Store {
     /// the live value and key, then updates `used_memory` for either the
     /// new-key (charges [`ENTRY_OVERHEAD`]) or overwrite (weight swap) case.
     pub(crate) fn insert_entry(&mut self, key: SmallBytes, mut entry: Entry) -> Option<Entry> {
-        entry.weight = key.heap_bytes() as u64 + entry.value.weight();
+        entry.set_weight(key.heap_bytes() as u64 + entry.value.weight());
         if self.maxmemory > 0 {
             self.tick_clock();
-            entry.lru_clock = self.clock_counter as u32;
+            entry.set_lru_clock(self.clock_counter as u32);
         }
-        let new_w = entry.weight;
+        let new_w = entry.weight();
         let prev = self.map.insert(key, entry);
         match &prev {
             Some(old) => {
                 self.used_memory = self
                     .used_memory
-                    .saturating_sub(old.weight)
+                    .saturating_sub(old.weight())
                     .saturating_add(new_w);
             }
             None => {
@@ -303,7 +400,7 @@ impl Store {
         let old = self.map.remove(key)?;
         self.used_memory = self
             .used_memory
-            .saturating_sub(old.weight + ENTRY_OVERHEAD);
+            .saturating_sub(old.weight() + ENTRY_OVERHEAD);
         Some(old)
     }
 
@@ -316,7 +413,7 @@ impl Store {
             return;
         }
         if let Some(e) = self.map.get_mut(key) {
-            apply_delta(&mut e.weight, delta);
+            e.add_to_weight(delta);
         }
         apply_delta(&mut self.used_memory, delta);
         if delta > 0 {
@@ -334,8 +431,8 @@ impl Store {
             return;
         };
         let new_w = key_heap + e.value.weight();
-        let delta = new_w as i64 - e.weight as i64;
-        e.weight = new_w;
+        let delta = new_w as i64 - e.weight() as i64;
+        e.set_weight(new_w);
         apply_delta(&mut self.used_memory, delta);
         if delta > 0 {
             self.update_peak();
@@ -369,7 +466,7 @@ impl Store {
 
     pub(crate) fn expired(&self, key: &[u8], now: Instant) -> bool {
         match self.map.get(key) {
-            Some(e) => e.expire_at.is_some_and(|t| t <= now),
+            Some(e) => e.is_expired_at(now),
             None => false,
         }
     }
@@ -397,7 +494,7 @@ impl Store {
     pub(crate) fn live_entry(&mut self, key: &[u8]) -> Option<&Entry> {
         let expired = match self.map.get(key) {
             None => return None,
-            Some(e) => matches!(e.expire_at, Some(t) if t <= Instant::now()),
+            Some(e) => e.is_expired_at(Instant::now()),
         };
         if expired {
             self.remove_entry(key);
@@ -422,7 +519,7 @@ impl Store {
     pub(crate) fn live_entry_mut(&mut self, key: &[u8]) -> Option<&mut Entry> {
         let expired = match self.map.get(key) {
             None => return None,
-            Some(e) => matches!(e.expire_at, Some(t) if t <= Instant::now()),
+            Some(e) => e.is_expired_at(Instant::now()),
         };
         if expired {
             self.remove_entry(key);
@@ -462,7 +559,7 @@ impl Store {
             return false;
         }
         if let Some(e) = self.map.get_mut(key) {
-            e.expire_at = Some(now + ttl);
+            e.expire_at_ns = pack_deadline(now + ttl);
             true
         } else {
             false
@@ -475,8 +572,8 @@ impl Store {
             return false;
         }
         match self.map.get_mut(key) {
-            Some(e) if e.expire_at.is_some() => {
-                e.expire_at = None;
+            Some(e) if e.expire_at_ns.is_some() => {
+                e.expire_at_ns = None;
                 true
             }
             _ => false,
@@ -489,9 +586,11 @@ impl Store {
         if !self.reap(key, now) {
             return -2;
         }
-        match self.map.get(key).and_then(|e| e.expire_at) {
+        match self.map.get(key).and_then(|e| e.expire_at_ns) {
             None => -1,
-            Some(t) => t.saturating_duration_since(now).as_millis() as i64,
+            Some(ns) => unpack_deadline(ns)
+                .saturating_duration_since(now)
+                .as_millis() as i64,
         }
     }
 
@@ -519,12 +618,12 @@ impl Store {
     pub fn snapshot_each<F: FnMut(&[u8], &Value, Option<u64>)>(&self, mut f: F) {
         let now = Instant::now();
         for (k, e) in &self.map {
-            if e.expire_at.is_some_and(|t| t <= now) {
+            if e.is_expired_at(now) {
                 continue;
             }
             let ttl = e
-                .expire_at
-                .map(|t| t.saturating_duration_since(now).as_millis() as u64);
+                .expire_at_ns
+                .map(|ns| unpack_deadline(ns).saturating_duration_since(now).as_millis() as u64);
             f(k.as_slice(), &e.value, ttl);
         }
     }
@@ -567,7 +666,7 @@ impl Store {
         let now = Instant::now();
         let mut out = Vec::new();
         for (k, e) in &self.map {
-            if e.expire_at.is_some_and(|t| t <= now) {
+            if e.is_expired_at(now) {
                 continue;
             }
             if let Some(p) = pattern

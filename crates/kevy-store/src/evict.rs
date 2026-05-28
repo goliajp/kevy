@@ -49,11 +49,13 @@ const LFU_COUNTER_MAX: u8 = 255;
 #[inline]
 pub(crate) fn touch_on_access(e: &mut Entry, policy: EvictionPolicy, clock: u32) {
     if policy.uses_lru() {
-        e.lru_clock = clock;
+        e.set_lru_clock(clock);
     } else if policy.uses_lfu() {
-        let counter = e.lru_clock as u8;
+        let cur = e.lru_clock();
+        let counter = cur as u8;
         let next = lfu_log_incr(counter, clock);
-        e.lru_clock = (e.lru_clock & 0xFFFF_FF00) | next as u32;
+        // preserve the LFU 16-bit decay-tick (upper bits), update only counter.
+        e.set_lru_clock((cur & 0xFFFF_FF00) | next as u32);
     }
 }
 
@@ -160,7 +162,7 @@ fn sample_and_pick(store: &mut Store, n: usize) -> Option<Vec<u8>> {
     let primary = store.map.iter_from_bucket(start);
     let wrap = store.map.iter_from_bucket(0);
     for (k, e) in primary.chain(wrap).take(visit_cap) {
-        if volatile_only && e.expire_at.is_none() {
+        if volatile_only && e.expire_at_ns.is_none() {
             continue;
         }
         let score = score_entry(e, policy, now, clock);
@@ -181,17 +183,19 @@ fn sample_and_pick(store: &mut Store, n: usize) -> Option<Vec<u8>> {
 #[inline]
 fn score_entry(e: &Entry, policy: EvictionPolicy, now: Instant, clock: u32) -> i64 {
     match policy {
-        EvictionPolicy::AllKeysLru | EvictionPolicy::VolatileLru => e.lru_clock as i64,
+        EvictionPolicy::AllKeysLru | EvictionPolicy::VolatileLru => e.lru_clock() as i64,
         EvictionPolicy::AllKeysLfu | EvictionPolicy::VolatileLfu => {
-            (e.lru_clock & 0xFF) as i64
+            (e.lru_clock() & 0xFF) as i64
         }
         EvictionPolicy::AllKeysRandom | EvictionPolicy::VolatileRandom => {
             // Stamp each sampled entry with a fresh splitmix bit so the
             // "lowest score" rule picks uniformly at random.
-            splitmix32(clock ^ e.lru_clock) as i64
+            splitmix32(clock ^ e.lru_clock()) as i64
         }
-        EvictionPolicy::VolatileTtl => match e.expire_at {
-            Some(t) => t.saturating_duration_since(now).as_millis() as i64,
+        EvictionPolicy::VolatileTtl => match e.expire_at_ns {
+            Some(ns) => crate::unpack_deadline(ns)
+                .saturating_duration_since(now)
+                .as_millis() as i64,
             None => i64::MAX, // unreachable under volatile_only, but safe
         },
         EvictionPolicy::NoEviction => i64::MAX,

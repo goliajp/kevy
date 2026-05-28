@@ -67,11 +67,11 @@ pub(crate) fn sample_round(
             if sampled as usize >= samples {
                 break;
             }
-            let Some(deadline) = e.expire_at else {
+            let Some(deadline_ns) = e.expire_at_ns else {
                 continue;
             };
             sampled += 1;
-            if deadline <= now {
+            if crate::unpack_deadline(deadline_ns) <= now {
                 victims.push(k.to_vec());
             }
         }
