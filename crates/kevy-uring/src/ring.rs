@@ -104,27 +104,24 @@ impl IoUring {
         cq_len: usize,
         sqes_len: usize,
     ) -> io::Result<(*mut c_void, *mut c_void, *mut c_void)> {
-        let sq_mmap = Self::map_region(ring_fd, sq_len, IORING_OFF_SQ_RING).map_err(|e| {
+        let sq_mmap = Self::map_region(ring_fd, sq_len, IORING_OFF_SQ_RING).inspect_err(|_| {
             // SAFETY: ring_fd came from setup; not yet observed elsewhere.
             unsafe { ffi::close(ring_fd) };
-            e
         })?;
-        let cq_mmap = Self::map_region(ring_fd, cq_len, IORING_OFF_CQ_RING).map_err(|e| {
+        let cq_mmap = Self::map_region(ring_fd, cq_len, IORING_OFF_CQ_RING).inspect_err(|_| {
             // SAFETY: free what we mapped + close the fd.
             unsafe {
                 ffi::munmap(sq_mmap, sq_len);
                 ffi::close(ring_fd);
             }
-            e
         })?;
-        let sqes_map = Self::map_region(ring_fd, sqes_len, IORING_OFF_SQES).map_err(|e| {
+        let sqes_map = Self::map_region(ring_fd, sqes_len, IORING_OFF_SQES).inspect_err(|_| {
             // SAFETY: free what we mapped + close the fd.
             unsafe {
                 ffi::munmap(cq_mmap, cq_len);
                 ffi::munmap(sq_mmap, sq_len);
                 ffi::close(ring_fd);
             }
-            e
         })?;
         Ok((sq_mmap, cq_mmap, sqes_map))
     }
