@@ -1,0 +1,21 @@
+[package]
+name = "kevy-embedded"
+description = "Embedded mode for kevy — in-process Redis-compatible KV without the server/runtime."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-embedded"
+readme = "README.md"
+keywords = ["kevy", "redis", "kv", "embedded", "cache"]
+categories = ["database-implementations", "caching", "embedded"]
+
+[lints]
+workspace = true
+
+[dependencies]
+kevy-store = { path = "../kevy-store", version = "0.1" }
+kevy-persist = { path = "../kevy-persist", version = "0.1" }
