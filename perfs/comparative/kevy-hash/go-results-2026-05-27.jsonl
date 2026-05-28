@@ -1,4 +1,0 @@
-{"stone":"kevy-hash","language":"go","competitor":"hash/maphash.Bytes","workload":"hash_bytes_8B","metric":"ns_per_op","value_median":3,"value_p95":6,"value_min":3,"iterations":1000000,"host":"M4-Pro-aarch64","date":"2026-05-26T23:55:20Z"}
-{"stone":"kevy-hash","language":"go","competitor":"hash/maphash.Bytes","workload":"hash_bytes_16B","metric":"ns_per_op","value_median":3,"value_p95":5,"value_min":3,"iterations":1000000,"host":"M4-Pro-aarch64","date":"2026-05-26T23:55:20Z"}
-{"stone":"kevy-hash","language":"go","competitor":"hash/maphash.Bytes","workload":"hash_bytes_64B","metric":"ns_per_op","value_median":3,"value_p95":6,"value_min":3,"iterations":1000000,"host":"M4-Pro-aarch64","date":"2026-05-26T23:55:20Z"}
-{"stone":"kevy-hash","language":"go","competitor":"hash/maphash.Bytes","workload":"hash_u64","metric":"ns_per_op","value_median":3,"value_p95":5,"value_min":3,"iterations":1000000,"host":"M4-Pro-aarch64","date":"2026-05-26T23:55:21Z"}

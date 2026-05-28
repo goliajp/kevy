@@ -1,7 +1,0 @@
-# Build artifacts shouldn't ride in git history — only sources +
-# JSONL snapshots are checked in as the perf evidence.
-*/cpp/bench
-*/c/bench
-*/go/bench
-*/rust/target/
-**/Cargo.lock

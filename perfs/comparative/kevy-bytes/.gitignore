@@ -1,6 +1,0 @@
-# Built bench artifacts — only the JSONL outputs are checked in as the
-# perf snapshot evidence.
-cpp/bench
-go/bench
-c/bench
-**/target/
