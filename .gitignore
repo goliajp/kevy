@@ -4,6 +4,5 @@
 dump-*.rdb
 aof-*.aof
 
-# Claude Code runtime state (settings.json stays tracked)
-.claude/scheduled_tasks.lock
-.claude/handoff.md
+# Claude Code workspace — kept entirely local, not part of the public repo.
+.claude/
