@@ -2,22 +2,28 @@
 # measured by the neutral valkey-benchmark tool. Persistence disabled on both so
 # we measure the in-memory path, not disk I/O.
 #
-# CPU isolation: both servers are pinned to cores 0-9; the load generator runs on
-# cores 10-13. This is essential now that kevy busy-polls (it would otherwise peg
-# every core and starve the benchmark client, skewing the numbers).
+# CPU isolation is env-driven so the same compose file runs both on the
+# 24-core lx64 perf box (with deterministic pinning) and on small GHA runners
+# (no pinning). Set KEVY_BENCH_CPUSET_SERVERS / KEVY_BENCH_CPUSET_LOADGEN to
+# enable pinning — e.g. on the lx64 box:
+#   KEVY_BENCH_CPUSET_SERVERS=0-9 KEVY_BENCH_CPUSET_LOADGEN=10-13 bash bench/run.sh
+# Without these env vars, Docker schedules across all cores: that's the
+# correct behaviour for a small-runner smoke (single-digit cores) but is
+# numbers-skewing on busy-poll servers — only the headline lx64 numbers
+# should be quoted from a pinned run.
 services:
   valkey:
     image: valkey/valkey:9.1
     command:
       ["valkey-server", "--save", "", "--appendonly", "no", "--protected-mode", "no"]
-    cpuset: "0-9"
+    cpuset: "${KEVY_BENCH_CPUSET_SERVERS:-}"
     networks: [bench]
 
   redis:
     image: redis:7.4
     command:
       ["redis-server", "--save", "", "--appendonly", "no", "--protected-mode", "no"]
-    cpuset: "0-9"
+    cpuset: "${KEVY_BENCH_CPUSET_SERVERS:-}"
     networks: [bench]
 
   kevy:
@@ -28,13 +34,13 @@ services:
       KEVY_BIND: "0.0.0.0"
       KEVY_PORT: "6379"
       KEVY_AOF: "0" # in-memory parity with valkey's `appendonly no`
-      KEVY_THREADS: "10" # one shard per pinned core
+      KEVY_THREADS: "${KEVY_THREADS:-10}" # one shard per pinned core when pinned
       # Pass through from the host: empty = epoll reactor, "1" = io_uring reactor.
       KEVY_IO_URING: "${KEVY_IO_URING:-}"
     # io_uring_setup is blocked by Docker's default seccomp profile; allow it.
     security_opt:
       - seccomp=unconfined
-    cpuset: "0-9"
+    cpuset: "${KEVY_BENCH_CPUSET_SERVERS:-}"
     networks: [bench]
 
   # Idle box on its own cores; we exec valkey-benchmark here so the client never
@@ -42,7 +48,7 @@ services:
   loadgen:
     image: valkey/valkey:9.1
     command: ["sleep", "infinity"]
-    cpuset: "10-13"
+    cpuset: "${KEVY_BENCH_CPUSET_LOADGEN:-}"
     networks: [bench]
 
 networks:
