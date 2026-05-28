@@ -18,7 +18,8 @@ assert_eq!(s.get(b"greeting")?, Some(b"hello".to_vec()));
   `Config::with_persist("./data")`. Restart-safe out of the box.
 - **WASM / single-threaded apps** — use
   `Config::with_ttl_reaper_manual()` and call `Store::tick()` from your
-  own event loop.
+  own event loop. Full WASM walkthrough (browser / WASI / Cloudflare
+  Workers): [`../../docs/wasm.md`](../../docs/wasm.md).
 
 ## When NOT to use
 
