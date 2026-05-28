@@ -40,6 +40,14 @@ name = "kevy-config"
 version = "0.1.0"
 
 [[package]]
+name = "kevy-embedded"
+version = "0.1.0"
+dependencies = [
+ "kevy-persist",
+ "kevy-store",
+]
+
+[[package]]
 name = "kevy-hash"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,164 @@
+//! Embedded-store configuration. Builder-style — every knob has a sane
+//! default so `Config::default()` works for the simplest use case
+//! (in-memory, no persistence, background TTL reaper).
+
+use std::path::PathBuf;
+use std::time::Duration;
+
+pub use kevy_persist::Fsync as AppendFsync;
+pub use kevy_store::EvictionPolicy;
+
+/// How the active TTL reaper runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TtlReaperMode {
+    /// Spawn a background thread that ticks at the configured interval
+    /// (default 100 ms / 10 Hz, matching Redis's `hz=10`). Default.
+    Background,
+    /// Caller-driven via [`crate::Store::tick`]. Required for WASM
+    /// targets (no threads) and single-threaded apps that don't want a
+    /// background worker.
+    Manual,
+}
+
+/// Embedded-store config. Build by chaining `with_*` methods on
+/// [`Config::default`].
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// Soft memory ceiling in bytes. `0` (default) = unlimited.
+    pub maxmemory: u64,
+    /// Eviction policy when over `maxmemory`. Default `NoEviction`.
+    pub eviction_policy: EvictionPolicy,
+    /// Persistence directory. `None` = pure in-memory (no AOF, no snapshot).
+    pub data_dir: Option<PathBuf>,
+    /// AOF on/off when `data_dir` is set. Defaults to `true` (on) when
+    /// `with_persist` was called; ignored if `data_dir` is `None`.
+    pub aof: bool,
+    /// AOF fsync policy. Default `EverySec` (matches Redis: ≤ 1 s loss).
+    pub appendfsync: AppendFsync,
+    /// Snapshot file name inside `data_dir`. Default `"dump-0.rdb"`.
+    pub snapshot_filename: String,
+    /// AOF file name inside `data_dir`. Default `"aof-0.aof"`.
+    pub aof_filename: String,
+    /// TTL reaper mode. Default `Background`.
+    pub ttl_reaper: TtlReaperMode,
+    /// Reaper tick interval. Default 100 ms (10 Hz).
+    pub reaper_interval: Duration,
+    /// `tick_expire` samples per round. Default 20 (matches Redis).
+    pub reaper_samples: usize,
+    /// Max sample rounds per tick. Default 16.
+    pub reaper_max_rounds: u32,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            maxmemory: 0,
+            eviction_policy: EvictionPolicy::NoEviction,
+            data_dir: None,
+            aof: true,
+            appendfsync: AppendFsync::EverySec,
+            snapshot_filename: String::from("dump-0.rdb"),
+            aof_filename: String::from("aof-0.aof"),
+            ttl_reaper: TtlReaperMode::Background,
+            reaper_interval: Duration::from_millis(100),
+            reaper_samples: 20,
+            reaper_max_rounds: 16,
+        }
+    }
+}
+
+impl Config {
+    /// Enable persistence under `dir` — snapshot file + AOF land inside.
+    /// AOF defaults on; turn it off with [`Self::without_aof`] for pure
+    /// snapshot-only durability.
+    pub fn with_persist(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.data_dir = Some(dir.into());
+        self
+    }
+
+    /// Disable the AOF (snapshot-only persistence — explicit `save_snapshot`
+    /// calls are the only way data survives restart).
+    pub fn without_aof(mut self) -> Self {
+        self.aof = false;
+        self
+    }
+
+    /// Soft memory ceiling in bytes. `0` keeps the default (unlimited).
+    pub fn with_max_memory(mut self, bytes: u64) -> Self {
+        self.maxmemory = bytes;
+        self
+    }
+
+    /// Eviction policy when over [`Self::with_max_memory`].
+    pub fn with_eviction(mut self, policy: EvictionPolicy) -> Self {
+        self.eviction_policy = policy;
+        self
+    }
+
+    /// AOF fsync policy. Default [`AppendFsync::EverySec`].
+    pub fn with_appendfsync(mut self, fsync: AppendFsync) -> Self {
+        self.appendfsync = fsync;
+        self
+    }
+
+    /// Caller-driven TTL reaping — disables the background thread.
+    /// Required for WASM (no threads available). Call
+    /// [`crate::Store::tick`] yourself from your event loop.
+    pub fn with_ttl_reaper_manual(mut self) -> Self {
+        self.ttl_reaper = TtlReaperMode::Manual;
+        self
+    }
+
+    /// Override the background reaper interval. Default 100 ms.
+    pub fn with_reaper_interval(mut self, iv: Duration) -> Self {
+        self.reaper_interval = iv;
+        self
+    }
+
+    /// Override the snapshot file name inside `data_dir`.
+    pub fn with_snapshot_filename(mut self, name: impl Into<String>) -> Self {
+        self.snapshot_filename = name.into();
+        self
+    }
+
+    /// Override the AOF file name inside `data_dir`.
+    pub fn with_aof_filename(mut self, name: impl Into<String>) -> Self {
+        self.aof_filename = name.into();
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_is_pure_in_memory() {
+        let c = Config::default();
+        assert_eq!(c.maxmemory, 0);
+        assert!(c.data_dir.is_none());
+        assert_eq!(c.ttl_reaper, TtlReaperMode::Background);
+        assert!(c.aof);
+    }
+
+    #[test]
+    fn builder_chains() {
+        let c = Config::default()
+            .with_persist("/tmp/foo")
+            .with_max_memory(1024)
+            .with_eviction(EvictionPolicy::AllKeysLru)
+            .with_ttl_reaper_manual()
+            .with_appendfsync(AppendFsync::Always);
+        assert_eq!(c.data_dir.as_deref(), Some(std::path::Path::new("/tmp/foo")));
+        assert_eq!(c.maxmemory, 1024);
+        assert_eq!(c.eviction_policy, EvictionPolicy::AllKeysLru);
+        assert_eq!(c.ttl_reaper, TtlReaperMode::Manual);
+    }
+
+    #[test]
+    fn without_aof_disables_logging_path() {
+        let c = Config::default().with_persist("/tmp/foo").without_aof();
+        assert!(c.data_dir.is_some());
+        assert!(!c.aof);
+    }
+}

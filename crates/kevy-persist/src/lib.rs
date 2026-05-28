@@ -272,7 +272,7 @@ fn read_u64<R: Read>(r: &mut R) -> io::Result<u64> {
 // ---- AOF (append-only file) ------------------------------------------------
 
 /// When to fsync the AOF to disk.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fsync {
     /// fsync after every write — safest, slowest.
     Always,
