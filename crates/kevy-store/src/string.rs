@@ -29,7 +29,7 @@ impl Store {
                     return false;
                 }
                 e.value = new_value;
-                e.expire_at = expire_at;
+                e.expire_at_ns = expire_at.and_then(crate::pack_deadline);
                 None
             }
             // Absent (or expired ⇒ already dropped by live_entry_mut): XX aborts.
