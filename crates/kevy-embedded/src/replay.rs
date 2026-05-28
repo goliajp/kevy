@@ -119,7 +119,7 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
             if let Some(k) = args.get(1) {
                 let count = args
                     .get(2)
-                    .and_then(|c| parse_i64(c))
+                    .and_then(parse_i64)
                     .map_or(1usize, |c| c.max(0) as usize);
                 let _ = store.spop(k, count);
             }
@@ -185,7 +185,7 @@ fn apply_pop(store: &mut Store, args: &Argv, from_tail: bool) {
     if let Some(k) = args.get(1) {
         let count = args
             .get(2)
-            .and_then(|c| parse_i64(c))
+            .and_then(parse_i64)
             .map_or(1usize, |c| c.max(0) as usize);
         let _ = if from_tail {
             store.rpop(k, count)

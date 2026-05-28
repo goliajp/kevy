@@ -67,7 +67,7 @@ fn lfu_log_incr(counter: u8, clock: u32) -> u8 {
     }
     let baseval = counter.saturating_sub(LFU_INIT_VAL) as u32;
     let threshold = baseval.saturating_mul(LFU_LOG_FACTOR).saturating_add(1);
-    if threshold == 1 || splitmix32(clock) % threshold == 0 {
+    if threshold == 1 || splitmix32(clock).is_multiple_of(threshold) {
         counter.saturating_add(1)
     } else {
         counter
@@ -153,17 +153,13 @@ fn sample_and_pick(store: &mut Store, n: usize) -> Option<Vec<u8>> {
 
     let mut best: Option<(Vec<u8>, i64)> = None;
     let mut taken = 0;
-    let mut visited = 0;
     // Walk the bucket ring beginning at `start`; cap the linear scan so a
-    // sparsely-populated table doesn't spin forever.
+    // sparsely-populated table doesn't spin forever. `.take(visit_cap)` is
+    // the safety net; the inner `taken >= n` break is the normal exit.
     let visit_cap = cap.saturating_mul(2);
     let primary = store.map.iter_from_bucket(start);
     let wrap = store.map.iter_from_bucket(0);
-    for (k, e) in primary.chain(wrap) {
-        if visited >= visit_cap {
-            break;
-        }
-        visited += 1;
+    for (k, e) in primary.chain(wrap).take(visit_cap) {
         if volatile_only && e.expire_at.is_none() {
             continue;
         }
@@ -209,11 +205,13 @@ mod tests {
     #[test]
     fn lfu_increment_eventually_saturates() {
         let mut c = LFU_INIT_VAL;
-        // 1M synthetic accesses; counter should approach (but never exceed) 255.
+        // 1M synthetic accesses; counter should approach (but never exceed)
+        // 255 — the saturating-add inside `lfu_log_incr` is what enforces the
+        // upper bound, so we can't write a runtime assert (u8 ≤ 255 is
+        // trivially true). The growth assert below is the real check.
         for clock in 0..1_000_000u32 {
             c = lfu_log_incr(c, clock);
         }
-        assert!(c <= LFU_COUNTER_MAX);
         assert!(c >= LFU_INIT_VAL + 5, "expected meaningful growth, got {c}");
     }
 

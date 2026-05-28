@@ -57,12 +57,13 @@ use kevy_hash::KevyHash;
 use kevy_map::KevyMap;
 use std::time::{Duration, Instant};
 
-/// Per-key entry. `weight` is the cached "dynamic" footprint (key heap bytes
-/// + value heap bytes) used for `maxmemory` accounting — does NOT include the
-/// constant per-entry slot overhead [`ENTRY_OVERHEAD`], which is added once to
-/// `Store::used_memory` on insert. `lru_clock` is a 24-bit-ish access ordinal
-/// (LRU = monotonic counter; LFU = packed `[16-bit decay-tick | 8-bit log-
-/// counter]`) — only updated when eviction is enabled.
+/// Per-key entry. `weight` is the cached "dynamic" footprint
+/// (`key.heap_bytes() + value.weight()`) used for `maxmemory` accounting —
+/// does NOT include the constant per-entry slot overhead [`ENTRY_OVERHEAD`],
+/// which is added once to `Store::used_memory` on insert. `lru_clock` is a
+/// 24-bit-ish access ordinal — LRU uses it as a monotonic counter; LFU
+/// packs it as `[16-bit decay-tick | 8-bit log-counter]` — only updated
+/// when eviction is enabled.
 pub(crate) struct Entry {
     pub(crate) value: Value,
     /// Absolute monotonic deadline; `None` means no expiry.
