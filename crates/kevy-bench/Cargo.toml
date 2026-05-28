@@ -11,6 +11,10 @@ homepage.workspace = true
 documentation = "https://docs.rs/kevy-bench"
 keywords = ["benchmark", "bench", "perf", "median", "kevy"]
 categories = ["development-tools::testing", "no-std"]
+# In-house micro-bench harness — depended on only via [dev-dependencies] for
+# kevy's own crates. Not published while we decide whether it's reusable
+# enough as a standalone bench library.
+publish = false
 
 [lints]
 workspace = true

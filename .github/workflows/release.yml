@@ -61,6 +61,8 @@ jobs:
         run: cargo publish -p kevy-persist --dry-run --allow-dirty
       - name: kevy-config
         run: cargo publish -p kevy-config --dry-run --allow-dirty
+      - name: kevy-uring
+        run: cargo publish -p kevy-uring --dry-run --allow-dirty
       - name: kevy-rt
         run: cargo publish -p kevy-rt --dry-run --allow-dirty
       - name: kevy-embedded

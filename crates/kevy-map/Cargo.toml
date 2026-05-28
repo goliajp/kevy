@@ -21,4 +21,4 @@ kevy-hash     = { path = "../kevy-hash",     version = "0.1" }
 kevy-madvise  = { path = "../kevy-madvise",  version = "0.1" }
 
 [dev-dependencies]
-kevy-bench = { path = "../kevy-bench", version = "0.1" }
+kevy-bench = { path = "../kevy-bench" }

@@ -8,6 +8,9 @@ authors.workspace = true
 license.workspace = true
 keywords = ["redis", "valkey", "pubsub", "benchmark", "fanout"]
 categories = ["development-tools::profiling", "command-line-utilities"]
+# Internal Pub/Sub bench binary — produces the 6-way comparison numbers in
+# bench/pubsub-compare/. Not published.
+publish = false
 
 [lints]
 workspace = true
