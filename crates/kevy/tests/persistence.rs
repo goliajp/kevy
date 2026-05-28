@@ -275,11 +275,15 @@ fn data_survives_restart_via_aof_without_save() {
             read_reply(&mut c, b"+OK\r\n");
         }
         // INCR a few — verifies non-idempotent ops replay exactly once.
-        for _ in 0..5 {
+        // Read every reply before exiting so we know the shard processed
+        // all 5 commands; without this, racing the runtime shutdown can
+        // leave INCRs unapplied on a fast Linux host (a flake the Mac
+        // happens to dodge).
+        for i in 1..=5u32 {
             c.write_all(&req(&[b"INCR", b"counter"])).unwrap();
+            let want = format!(":{i}\r\n");
+            read_reply(&mut c, want.as_bytes());
         }
-        let mut buf = [0u8; 64];
-        let _ = c.read(&mut buf).unwrap();
     });
     // No SAVE: snapshots must NOT exist; AOF must.
     assert!(!dir.join("dump-0.rdb").exists());
