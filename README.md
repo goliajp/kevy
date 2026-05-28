@@ -166,19 +166,49 @@ cargo bench  # bench/run.sh — full vs-valkey comparison on Linux
 ```
 
 Stable Rust 1.95, Rust 2024 edition. Builds on `x86_64-unknown-linux-gnu`,
-`aarch64-unknown-linux-gnu`, `*-apple-darwin`. Most stones also build on
-`wasm32-unknown-unknown` (full wasm story lands in v1.0 Wave 3).
+`aarch64-unknown-linux-gnu`, `*-apple-darwin`. `kevy-embedded` + its
+dependency closure (`kevy-bytes`, `-hash`, `-map`, `-store`, `-persist`,
+`-resp`) also build on `wasm32-unknown-unknown` and `wasm32-wasip1` —
+see [`docs/wasm.md`](docs/wasm.md) for the WASM walkthrough.
+
+CI matrix (`.github/workflows/ci.yml`): x86_64-linux + aarch64-darwin
+build + test + clippy; wasm32 cargo-check; nightly miri on `kevy-map` +
+`kevy-bytes`; vs-valkey docker-compose smoke. Tagged releases trigger
+the `release.yml` workflow (cargo-publish dry-run for every publishable
+crate in dependency order + a drafted GitHub release).
 
 ## v1.0 roadmap status
 
 | Wave | Scope | Status |
 |---|---|---|
-| Wave 1 — config + ops + docs | `kevy-config` crate · INFO/CLUSTER/DEBUG/WAIT/SHUTDOWN · top-level README · MIGRATION doc | **in progress** |
-| Wave 2 —防 OOM + 防数据丢 | maxmemory + 8 eviction policies · TTL reaper · BGREWRITEAOF · crash-safe verify | not started |
-| Wave 3 — embedded + WASM + 发布 | `kevy-embedded` crate · 32-bit pointer port · WASM examples · GitHub Actions CI · v1.0.0-rc1 tag | not started |
+| Wave 1 — config + ops + docs | `kevy-config` crate · INFO/CLUSTER/DEBUG/WAIT/SHUTDOWN · top-level README · MIGRATION doc | **done** (tag `v1.0.0-w1`) |
+| Wave 2 — 防 OOM + 防数据丢 | maxmemory + 8 eviction policies · TTL reaper · BGREWRITEAOF · crash-safe verify | **done** |
+| Wave 3 — embedded + WASM + 发布 | `kevy-embedded` crate · 32-bit pointer port · WASM docs · GitHub Actions CI · v1.0.0-rc1 tag | **in progress** (RC tag pending lx64 re-bench) |
 
 Full v1.0 plan: [`V1.0-BOUNDARY.md`](V1.0-BOUNDARY.md).
 Project-wide scope decisions (what's permanently OUT): [`.claude/scope-decisions.md`](.claude/scope-decisions.md).
+
+## v1.x stability commitment
+
+Everything below is contract — kevy promises to keep it for the entire
+v1.x line. Breaking any of these requires a v2.0 major bump.
+
+| Surface | Stability promise |
+|---|---|
+| **Persistence format** | AOF schema (RESP multi-bulk frames) v1.x-compatible; snapshot format `KEVYSNAP` v2 v1.x-compatible. Loading a v1.0 file in any v1.x kevy is guaranteed to work. |
+| **RESP wire protocol** | All 94 commands in the [parity table](MIGRATION-FROM-VALKEY.md) keep their shape (arg count, reply type) for v1.x. New commands may be added; existing ones won't change. |
+| **valkey-cli / redis-cli compat** | `redis-cli`, `valkey-cli`, redis-rs, go-redis, jedis, ioredis — all keep working unchanged across v1.x. |
+| **Public Rust API** | `kevy_store::Store`, `kevy_embedded::Store`, `kevy_persist::Aof` / `RewriteStats`, `kevy_config::Config`, `kevy_rt::Runtime` / `Commands` — add-only across v1.x. Methods may gain optional params via new `*_with_*` variants; existing signatures stay. |
+| **CLI flags + env vars** | `--bind` / `--port` / `--threads` / `--dir` / `--no-aof` / `--config`, `KEVY_BIND` / `KEVY_PORT` / `KEVY_THREADS` / `KEVY_DIR` / `KEVY_AOF` / `KEVY_CONFIG` — names + meanings stay across v1.x. |
+| **TOML schema** | New `[section].key` fields allowed in v1.x; **no** rename or removal of existing fields until v2.0. Unknown keys are warned-not-errored, so older configs keep loading on newer kevy. |
+| **Memory / eviction semantics** | The 8 eviction policy names (`noeviction` / `allkeys-{lru,lfu,random}` / `volatile-{lru,lfu,random,ttl}`) and their selection algorithms (24-bit clock, sample-based) stay. `maxmemory-samples = 5` is the v1.x default — tunable later via config. |
+
+What's NOT covered:
+- Performance numbers may improve; kevy targets the hardware ceiling
+  every version.
+- Internal crate organisation can change (e.g., a kevy-rt module split)
+  without violating the API promise above.
+- Debug output / log line format is best-effort, not contract.
 
 ## License
 
