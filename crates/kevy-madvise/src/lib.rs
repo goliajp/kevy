@@ -41,6 +41,13 @@ mod ffi {
 /// UP and len DOWN to 4 KiB. If nothing remains, we don't call. Regions
 /// smaller than ~ a few pages are not worth a syscall.
 pub fn advise_hugepage(ptr: *const u8, len: usize) {
+    // Miri cannot execute foreign syscalls; madvise is purely advisory, so
+    // a no-op under miri preserves correctness and lets miri exercise the
+    // rest of the program.
+    if cfg!(miri) {
+        let _ = (ptr, len);
+        return;
+    }
     #[cfg(target_os = "linux")]
     {
         use core::ffi::{c_int, c_void};
