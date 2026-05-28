@@ -1,0 +1,63 @@
+# 6-way pub/sub bench: kevy / valkey / redis / zmq / aeron / zenoh.
+#
+# All servers run with `network_mode: host` + cpuset 0-9; the loadgen
+# runs on cpuset 10-15 so kevy's busy-poll can't starve the client.
+# Same isolation pattern as bench/lx64_loopback.sh.
+#
+# Build the loadgen image once (~10 min for the rusteron / zenoh /
+# kevy-pubsub-bench compile chain):
+#     docker compose --profile build build
+#
+# Then drive everything via run.sh — it brings each server up, runs the
+# matching client, tears down.
+
+services:
+  loadgen:
+    image: kevy-bench/loadgen:dev
+    build:
+      context: ../../
+      dockerfile: bench/pubsub-compare/Dockerfile.loadgen
+    network_mode: host
+    cpuset: "10-15"
+    # Aeron's embedded media driver opens ~200 MiB log-buffer files under
+    # /dev/shm — Docker's 64 MiB default trips its `insufficient storage`
+    # check. 512 MiB gives headroom for the conductor + log buffers per
+    # subscription.
+    shm_size: "512m"
+    profiles: ["build", "loadgen"]
+    command: ["sleep", "infinity"]
+
+  kevy:
+    image: kevy-bench/kevy:dev
+    build:
+      context: ../../
+      dockerfile: bench/pubsub-compare/Dockerfile.kevy
+    network_mode: host
+    cpuset: "0-9"
+    profiles: ["build", "kevy"]
+
+  valkey:
+    image: valkey/valkey:9.1
+    network_mode: host
+    cpuset: "0-9"
+    profiles: ["valkey"]
+    command:
+      [
+        "valkey-server",
+        "--port", "7002",
+        "--save", "",
+        "--appendonly", "no",
+      ]
+
+  redis:
+    image: redis:7.4
+    network_mode: host
+    cpuset: "0-9"
+    profiles: ["redis"]
+    command:
+      [
+        "redis-server",
+        "--port", "7003",
+        "--save", "",
+        "--appendonly", "no",
+      ]

@@ -1,0 +1,17 @@
+[package]
+name = "zenoh_bench"
+version = "0.0.1"
+edition = "2021"
+
+[[bin]]
+name = "zenoh_pubsub"
+path = "src/main.rs"
+
+[dependencies]
+zenoh = "1.9"
+tokio = { version = "1", features = ["full"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
