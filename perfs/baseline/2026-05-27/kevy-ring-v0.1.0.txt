@@ -1,8 +1,0 @@
-   Compiling kevy-ring v0.1.0 (/Users/doracawl/workspace/labs/lab21-kv/crates/kevy-ring)
-    Finished `release` profile [optimized] target(s) in 5.19s
-     Running `/Volumes/INTEL2T/workspace-cache/cargo-target/release/examples/bench_ring`
-kevy-ring micro-bench (indicative under host load)
-
-  push+pop u64 (same thread)     median        2 ns   p95        3 ns   min        2 ns
-cross-thread SPSC cap=256      7.7M items/s   129.9 ns/item
-cross-thread SPSC cap=1024    13.8M items/s    72.7 ns/item

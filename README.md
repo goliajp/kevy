@@ -35,8 +35,7 @@ Linux kernel floor.
 
 Per-stone vs best open-source competitor (kevy-bytes, kevy-hash,
 kevy-map, kevy-resp, kevy-ring): 8 / 8 at noise-floor parity or
-better. See [`perfs/baseline/2026-05-27/V1.1-DEEP-POLISH-CLOSE.md`](perfs/baseline/2026-05-27/V1.1-DEEP-POLISH-CLOSE.md)
-for the per-workload breakdown.
+better.
 
 ## Target scenarios (v1.0)
 

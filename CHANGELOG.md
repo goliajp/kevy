@@ -116,7 +116,6 @@ headlines:
 ## [v0.1.1-deep-polish-rc] and earlier
 
 Per-stone perf polish across `kevy-bytes` / `-hash` / `-map` /
-`-resp` / `-ring` / `-store`. See `perfs/` for per-stone reports
-and `v0.metal` / `v0.polish` hot-plan documents for the methodology.
-The five stones reach noise-floor parity or better vs the best
-open-source Rust / Go / C / C++ competitor at each workload.
+`-resp` / `-ring` / `-store`. The five stones reach noise-floor
+parity or better vs the best open-source Rust / Go / C / C++
+competitor at each workload.
