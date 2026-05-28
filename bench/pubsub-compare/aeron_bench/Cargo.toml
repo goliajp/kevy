@@ -1,0 +1,17 @@
+[package]
+name = "aeron_bench"
+version = "0.0.1"
+edition = "2021"
+
+[[bin]]
+name = "aeron_pubsub"
+path = "src/main.rs"
+
+[dependencies]
+rusteron-client = "0.1"
+rusteron-media-driver = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1

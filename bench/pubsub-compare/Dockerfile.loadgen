@@ -1,0 +1,57 @@
+# Loadgen image — bundles every pub/sub bench client we compare against:
+#
+#   - redis-benchmark (Debian) — for kevy / valkey / redis
+#   - kevy-pubsub-bench (kevy's own clean-loopback harness)
+#   - zmq_pubsub_bench (C, libzmq 4.3.5)
+#   - zenoh_pubsub (Rust, zenoh 1.9)
+#   - aeron_pubsub (Rust, rusteron-client 0.1)
+#
+# All compiled --release. The container runs as a long-lived `sleep
+# infinity` and `run.sh` execs into it to drive each test, so the
+# (slow, layered) build only happens once.
+FROM rust:1.95-slim AS build
+WORKDIR /src
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libzmq3-dev cmake clang pkg-config build-essential \
+    && rm -rf /var/lib/apt/lists/*
+# rusteron-media-driver's build.rs invokes rustfmt to pretty the generated
+# bindings; without it the build panics on a broken pipe. Add the
+# component to the bundled toolchain.
+RUN rustup component add rustfmt
+
+# Copy the kevy source so we can build kevy-pubsub-bench (the canonical
+# clean-loopback harness that the kevy in-tree bench uses).
+COPY . /src/kevy
+RUN cd /src/kevy && cargo build --release -p kevy-pubsub-bench
+
+# --- ZeroMQ bench (C) ---
+COPY bench/pubsub-compare/zmq_pubsub_bench.c /src/zmq_pubsub_bench.c
+RUN gcc -O3 -o /usr/local/bin/zmq_pubsub_bench /src/zmq_pubsub_bench.c -lzmq -lpthread
+
+# --- Zenoh bench (Rust) ---
+COPY bench/pubsub-compare/zenoh_bench /src/zenoh_bench
+RUN cd /src/zenoh_bench && cargo build --release \
+    && cp target/release/zenoh_pubsub /usr/local/bin/zenoh_pubsub
+
+# --- Aeron bench (Rust + bundled aeron-c via rusteron) ---
+# rusteron's build.rs produces libaeron.so (client) AND libaeron_driver.so
+# (media driver); both need to ship to /usr/local/lib so the embedded
+# driver and client can find each other at runtime.
+COPY bench/pubsub-compare/aeron_bench /src/aeron_bench
+RUN cd /src/aeron_bench && cargo build --release \
+    && cp target/release/aeron_pubsub /usr/local/bin/aeron_pubsub \
+    && find target/release/build -name 'libaeron*.so' -exec cp -n {} /usr/local/lib/ \; \
+    && ldconfig
+
+FROM debian:trixie-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      redis-tools libzmq5 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /usr/local/bin/zmq_pubsub_bench /usr/local/bin/
+COPY --from=build /usr/local/bin/zenoh_pubsub /usr/local/bin/
+COPY --from=build /usr/local/bin/aeron_pubsub /usr/local/bin/
+COPY --from=build /usr/local/lib/libaeron.so /usr/local/lib/
+COPY --from=build /usr/local/lib/libaeron_driver.so /usr/local/lib/
+COPY --from=build /src/kevy/target/release/kevy-pubsub-bench /usr/local/bin/
+RUN ldconfig
+CMD ["sleep", "infinity"]

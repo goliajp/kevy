@@ -1,0 +1,17 @@
+# Build a release kevy binary and run it on port 7001 (matching the
+# in-tree bench/pubsub_loopback.sh kevy port).
+#
+# `docker compose --profile kevy up -d` brings this up.
+FROM rust:1.95-slim AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --release -p kevy --bin kevy
+
+FROM debian:trixie-slim
+COPY --from=build /src/target/release/kevy /usr/local/bin/kevy
+EXPOSE 7001
+# --no-aof: pure in-memory bench; appendfsync off would still spin a fsync
+# thread, which adds noise. --threads 10 matches the in-tree script's
+# 10-shard server.
+ENTRYPOINT ["/usr/local/bin/kevy"]
+CMD ["--bind", "0.0.0.0", "--port", "7001", "--threads", "10", "--no-aof"]
