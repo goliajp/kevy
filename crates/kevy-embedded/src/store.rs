@@ -14,8 +14,30 @@ use kevy_store::{ExpireStats, StoreError};
 
 use crate::config::{Config, TtlReaperMode};
 
-/// The embedded keyspace. Cheap to clone (it's `Arc`-backed); every clone
-/// reaches the same underlying `kevy_store::Store` + AOF.
+/// The embedded keyspace.
+///
+/// `Store` itself is **not** `Clone` (the reaper-thread `JoinHandle` is
+/// owned uniquely). To share one keyspace across threads, wrap the store
+/// in an `Arc`:
+///
+/// ```
+/// use std::sync::Arc;
+/// use kevy_embedded::{Config, Store};
+///
+/// # fn main() -> std::io::Result<()> {
+/// let s = Arc::new(Store::open(Config::default().with_ttl_reaper_manual())?);
+/// let s2 = Arc::clone(&s);
+/// std::thread::spawn(move || {
+///     s2.set(b"from-thread", b"v").unwrap();
+/// }).join().unwrap();
+/// assert_eq!(s.get(b"from-thread")?, Some(b"v".to_vec()));
+/// # Ok(())
+/// # }
+/// ```
+///
+/// Every method takes `&self`, so an `Arc<Store>` reaches the same
+/// underlying `kevy_store::Store` + AOF + reaper. The internal
+/// `Arc<Mutex<Inner>>` is what makes that safe under contention.
 pub struct Store {
     inner: Arc<Mutex<Inner>>,
     config: Config,
@@ -533,12 +555,17 @@ impl Drop for Store {
         if let Some(j) = self.reaper_join.take() {
             let _ = j.join();
         }
-        // Final AOF flush (BufWriter Drop handles it, but be explicit so
-        // EverySec users don't lose the last sub-second of writes when
-        // dropping the store cleanly).
-        if let Ok(mut g) = self.inner.lock()
-            && let Some(aof) = &mut g.aof
-        {
+        // Final AOF flush (BufWriter Drop also handles it, but be explicit
+        // so EverySec users don't lose the last sub-second of writes when
+        // dropping the store cleanly). Recover from poison: a panic in some
+        // method during this session shouldn't strand the AOF unflushed,
+        // since the underlying writes already landed in-memory before the
+        // panic — we just need to push the BufWriter contents out.
+        let mut g = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poison) => poison.into_inner(),
+        };
+        if let Some(aof) = &mut g.aof {
             let _ = aof.maybe_sync();
         }
     }
@@ -658,6 +685,42 @@ mod tests {
         // The active reaper should have caught it without anyone reading.
         let _ = s.get(b"k").unwrap(); // either way, key should now be gone
         assert_eq!(s.dbsize(), 0);
+    }
+
+    #[test]
+    fn arc_sharing_across_threads() {
+        use std::sync::Arc;
+        let s = Arc::new(Store::open(Config::default().with_ttl_reaper_manual()).unwrap());
+        let mut handles = Vec::new();
+        for i in 0..8 {
+            let s = Arc::clone(&s);
+            handles.push(std::thread::spawn(move || {
+                for j in 0..50 {
+                    s.set(format!("t{i}-{j}").as_bytes(), b"v").unwrap();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(s.dbsize(), 8 * 50);
+    }
+
+    #[test]
+    fn drop_during_reaper_does_not_deadlock() {
+        // Sanity: a Store with a Background reaper must drop cleanly even
+        // while the reaper is sleeping. Without the stop-flag + join the
+        // drop would either hang or race the reaper holding the mutex.
+        for _ in 0..4 {
+            let s = Store::open(
+                Config::default().with_reaper_interval(Duration::from_millis(5)),
+            )
+            .unwrap();
+            s.set(b"k", b"v").unwrap();
+            // Let the reaper actually run a couple of times.
+            std::thread::sleep(Duration::from_millis(40));
+            drop(s); // must return within a few ms
+        }
     }
 
     #[test]
