@@ -42,7 +42,7 @@ homepage = "https://github.com/goliajp/kevy"
 # not a hard-coded one. Matches the mailrs publish model.
 
 # Lint policy shared across every workspace member. Matches the project
-# charter: warnings are deny (clippy + rustc both). Per-crate manifests
+# policy: warnings are deny (clippy + rustc both). Per-crate manifests
 # opt in via `[lints] workspace = true`.
 [workspace.lints.rust]
 warnings = "deny"
@@ -58,7 +58,7 @@ panic = "abort"
 strip = true
 
 # Size-optimized profile: opt-level "z" + same hardening. Used to measure
-# the size/perf trade-off in v0.metal-16 — see perfs/data/2026-05-26/metal-16-*.
+# the size/perf trade-off of opt-level "z" vs the default release profile.
 # Invoke with `cargo build --profile release-min`.
 [profile.release-min]
 inherits = "release"

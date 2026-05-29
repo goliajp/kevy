@@ -6,7 +6,7 @@
 //!   * a malformed-numeric error (where the verb parses an integer / float arg).
 //!
 //! The aim is to push `crates/kevy/src/cmd.rs` and `crates/kevy/src/dispatch.rs`
-//! over the 80% line-coverage cement bar. The test calls
+//! over the 80% line-coverage bar. The test calls
 //! [`kevy::dispatch`] in-process against a single `KeyspaceStore` — no sockets,
 //! no runtime — so it's order-independent within each #[test] but lets us
 //! sequence happy → error in one body.

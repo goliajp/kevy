@@ -15,7 +15,7 @@
 //! dependency.**
 //!
 //! Carved out of [`kevy-sys`](https://crates.io/crates/kevy-sys) so the
-//! engine can be reused independently of kevy's network cement. Part of
+//! engine can be reused independently of kevy's network internals. Part of
 //! the [kevy](https://crates.io/crates/kevy) key–value server.
 //!
 //! # Safety

@@ -7,9 +7,9 @@
 //! This crate supplies the hasher that table should use instead: an FxHash-style
 //! word-at-a-time absorb plus a murmur3 [`fmix64`] avalanche finalizer.
 //!
-//! Measured (`rfcs/2026-05-25-std-self-host-evaluation.md`, via
-//! `kevy-store/examples/bench_keyspace.rs`): ~4× faster hashing, ~1.2–2.8×
-//! faster GET-hit, ~1.1–1.7× faster GET-miss than SipHash, with no clustering.
+//! Measured (via `kevy-store/examples/bench_keyspace.rs`): ~4× faster
+//! hashing, ~1.2–2.8× faster GET-hit, ~1.1–1.7× faster GET-miss than
+//! SipHash, with no clustering.
 //! The finalizer is **essential** — the bare Fx absorb (no `fmix64`) clusters
 //! 30–50× on low-entropy sequential keys like `"key:0".."key:99999"`.
 //!

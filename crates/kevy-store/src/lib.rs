@@ -262,7 +262,7 @@ impl EvictionPolicy {
 /// hasher is [`kevy_hash::KevyHash`] (one-call inlinable; no DoS hardening
 /// since the shard is single-threaded with no cross-trust keys). Owning the
 /// table also exposes bucket addresses for software prefetch on the batch
-/// driver — see v0.metal-5 hot plan.
+/// driver.
 #[derive(Default)]
 pub struct Store {
     pub(crate) map: KevyMap<SmallBytes, Entry>,

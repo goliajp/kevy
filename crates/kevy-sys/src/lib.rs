@@ -1,9 +1,9 @@
 //! kevy-sys — kevy's network-boundary layer.
 //!
-//! One of kevy's three OS-boundary crates (alongside the publishable stones
+//! One of kevy's three OS-boundary crates (alongside the publishable
 //! [`kevy-uring`](https://crates.io/crates/kevy-uring) and
 //! [`kevy-madvise`](https://crates.io/crates/kevy-madvise)). This is the
-//! cement piece — hand-curated to the exact subset of sockets and the
+//! server-internal piece — hand-curated to the exact subset of sockets and the
 //! readiness poller (kqueue on macOS, epoll on Linux) that kevy's server
 //! needs. Every binding is declared by hand with `unsafe extern "C"`
 //! (no `libc` crate, no third-party dep). On Linux these symbols resolve
@@ -11,7 +11,7 @@
 //! `std`, so we add zero dependencies.
 //!
 //! The poller here is *readiness*-based. The *completion*-based io_uring
-//! engine has moved to its own stone crate, [`kevy-uring`]; either can back
+//! engine has moved to its own crate, [`kevy-uring`]; either can back
 //! the reactor on top ([kevy-net]), which exposes only a byte-level
 //! service contract.
 //!

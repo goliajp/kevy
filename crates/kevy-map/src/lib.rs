@@ -9,12 +9,12 @@
 //! 2. **No DoS-hardening tax** — single trust domain ⇒ no random seed.
 //!    Hasher is `kevy_hash::KevyHash` (one-call inlinable).
 //! 3. **Cache-conscious layout** — Swiss-style metadata bytes scanned (scalar
-//!    in this commit; SSE2 group scan lands in v0.metal-4+5 step 6); slots
+//!    in this commit; SSE2 group scan lands in a later pass); slots
 //!    AoS so the post-match key+value read hits one cache line.
 //!
-//! Design RFC: `rfcs/2026-05-26-kevy-map-design.md`.
+//! See the crate README for the design rationale.
 //!
-//! Charter: pure Rust, no `crates.io` deps; `unsafe` is allowed here (scoped
+//! Constraints: pure Rust, no `crates.io` deps; `unsafe` is allowed here (scoped
 //! to this crate) so `kevy-store` keeps `forbid(unsafe_code)`.
 
 #![deny(unsafe_op_in_unsafe_fn)]

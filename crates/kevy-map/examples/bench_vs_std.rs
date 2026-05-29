@@ -2,7 +2,7 @@
 //!
 //! The kevy production caller uses `KevyMap<SmallBytes, V>`, but the
 //! single-trust-domain Fx-hashed std HashMap is the prior art baseline this
-//! crate replaced (see `rfcs/2026-05-26-kevy-map-design.md`).
+//! crate replaced.
 //!
 //! `cargo run -p kevy-map --example bench_vs_std --release`
 

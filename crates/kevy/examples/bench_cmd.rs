@@ -1,8 +1,8 @@
 //! Local command CPU micro-bench — the parse → dispatch → encode path one
 //! connection pays per command (no socket / reactor / fold). This is the
 //! kevy-rt-side per-command cost the single-shard ceiling (~3.77M GET/core,
-//! ~265 ns/cmd) is built on; this bench isolates the CPU part so the stones can
-//! be polished one by one. Ratios/absolutes indicative under host load.
+//! ~265 ns/cmd) is built on; this bench isolates the CPU part so the
+//! component crates can be polished one by one. Ratios/absolutes indicative under host load.
 //!
 //! `cargo run -p kevy --example bench_cmd --release`
 

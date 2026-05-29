@@ -263,7 +263,7 @@ impl<C: Commands> Shard<C> {
             conn.input.extend_from_slice(pbuf.bytes(bid, n));
         }
         pbuf.recycle(bid);
-        // Zero-alloc parse hot path (v0.metal-6): mirrors the epoll path.
+        // Zero-alloc parse hot path: mirrors the epoll path.
         // parse_command_into reuses self.scratch_argv; mem::replace dance
         // lets handle_command take &mut self while the parsed argv sits on
         // the stack.

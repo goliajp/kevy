@@ -55,7 +55,7 @@ impl<K> KevySet<K> {
     }
 
     /// Borrow the underlying map (gives access to the bucket-addr / prefetch
-    /// API once added in v0.metal-5).
+    /// API).
     pub fn as_map(&self) -> &KevyMap<K, ()> {
         &self.0
     }

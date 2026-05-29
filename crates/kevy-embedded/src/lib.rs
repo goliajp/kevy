@@ -5,7 +5,7 @@
 //! kevy's data structures + persistence in the same address space as your
 //! app — caches, embedded databases, WASM blobs, sidecar tools.
 //!
-//! Zero crates.io dependencies (charter): only `kevy-store` (the keyspace)
+//! Zero crates.io dependencies: only `kevy-store` (the keyspace)
 //! and `kevy-persist` (snapshot + AOF). The whole network layer
 //! (`kevy-rt`, `kevy-sys`, `kevy-uring`) is intentionally NOT pulled in.
 //!

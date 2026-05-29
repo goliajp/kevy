@@ -8,7 +8,7 @@ edition = "2024"
 cargo-fuzz = true
 
 # Fuzz workspace is intentionally isolated from the main workspace
-# (cargo-fuzz pulls libfuzzer-sys, a third-party crate; main charter is
+# (cargo-fuzz pulls libfuzzer-sys, a third-party crate; main policy is
 # "0 crates.io deps"). The fuzz/ dir is a dev-only adjunct, not part of
 # the published crate.
 [workspace]

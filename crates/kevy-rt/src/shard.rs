@@ -352,7 +352,7 @@ impl<C: Commands> Shard<C> {
             }
         }
 
-        // Zero-alloc parse hot path (v0.metal-6): parse into self.scratch_argv
+        // Zero-alloc parse hot path: parse into self.scratch_argv
         // (reused across cmds; capacity amortises after warm-up). Dispatch via
         // mem::replace so handle_command can take &mut self while we hold the
         // parsed argv on the stack — `self.scratch_argv` is temporarily a

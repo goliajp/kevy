@@ -144,7 +144,7 @@ fn parse_multibulk_into(buf: &[u8], dst: &mut Argv) -> Result<Option<usize>, Pro
 /// isolates bytes that were zero). On a CR hit we confirm the next byte is
 /// `\n` and return; otherwise we resume from `pos + 1` so a stray `\r` doesn't
 /// terminate the scan. Safe Rust only — keeps `kevy-resp`'s
-/// `forbid(unsafe_code)` charter line.
+/// `forbid(unsafe_code)` guarantee.
 pub(crate) fn find_crlf(buf: &[u8], start: usize) -> Option<usize> {
     const CR_BCAST: u64 = 0x0D0D0D0D_0D0D0D0Du64;
     const ONES: u64 = 0x01010101_01010101u64;

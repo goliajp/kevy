@@ -1,6 +1,6 @@
 //! kevy-bench — a pure-Rust micro-benchmark harness. Zero dependencies.
 //!
-//! kevy is 0-dependency by charter, so we cannot pull `criterion`. This is the
+//! kevy is 0-dependency by policy, so we cannot pull `criterion`. This is the
 //! self-hosted equivalent, used by two callers:
 //!
 //! * per-crate exploration benches (`examples/bench_*.rs`) — compare two

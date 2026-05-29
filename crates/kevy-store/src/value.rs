@@ -65,7 +65,7 @@ pub struct ZSetData {
     /// The `(score, member)` index is still keyed by `Vec<u8>` member —
     /// changing this requires the `BTreeSet` to accept a `(Score,
     /// SmallBytes)` ordering, which is fine but a larger sweep; keep
-    /// it as-is for v0.metal-13 to avoid touching ZRANGE paths.
+    /// it as-is for now to avoid touching ZRANGE paths.
     pub(crate) by_score: BTreeSet<(Score, Vec<u8>)>,
 }
 
