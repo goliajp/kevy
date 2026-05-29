@@ -6,8 +6,9 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 ![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-orange.svg)
 
-A pure-Rust, **zero-dependency**, Redis-compatible key–value server —
-built to run as fast as the hardware allows.
+A pure-Rust, **zero-dependency**, Redis-compatible key–value store —
+usable as a standalone server **or** as an embedded library, built to run
+as fast as the hardware allows.
 
 kevy speaks the Redis wire protocol (RESP2), so `redis-cli`, `valkey-cli`,
 and every Redis client library talk to it **unchanged**. Underneath, the
@@ -19,44 +20,105 @@ cargo run -p kevy --bin kevy --release      # loopback, AOF on, port 6004
 redis-cli -p 6004 SET hello world
 ```
 
+## Why kevy
+
+- **Fast** — 2.3–2.7× valkey 9.1's throughput at high concurrency, 2.7× on
+  pub/sub fan-out, and ~18 M ops/s per core when embedded (numbers below).
+- **Tiny footprint** — a 768 KB server binary that boots into under 5 MB of
+  RAM. Fits a container sidecar, a small VM, or an edge box.
+- **Modern architecture** — thread-per-core, shared-nothing, no locks on
+  the hot path, io_uring on Linux. No global lock, no GIL-style bottleneck.
+- **No supply-chain risk** — zero crates.io dependencies. The whole tree is
+  `std` + kevy's own crates; the only C is the OS syscall boundary,
+  hand-bound in one crate. There is nothing else to audit.
+- **Drop-in compatible** — RESP2 wire protocol, 94-command parity with
+  valkey 9.1, reply-checked byte-for-byte. Existing clients and tools just
+  work.
+- **Embeddable** — `kevy-store` is a plain Rust library: no network, no
+  runtime, also builds for `wasm32`. The same engine, in your process.
+
+Honest about scope: kevy is **single-node** — no replication, clustering,
+AUTH/TLS, or public-internet exposure (see
+[when to use kevy](#when-to-use-kevy)).
+
 ## Performance
+
+All figures below were measured on one **bare-metal Intel Core i7-10700K**
+(8 cores / 16 threads, 3.8 GHz base / 5.1 GHz boost), 62 GB RAM,
+Linux 6.12.90, in-memory. Every benchmark is reproducible with the scripts
+in [`bench/`](bench/); full method and caveats in
+[`bench/REPORT.md`](bench/REPORT.md).
+
+### Server throughput (over the network)
 
 > Beating valkey 9.1 is the floor, not the goal — kevy targets the
 > hardware ceiling.
 
-Measured on a dedicated 16-core Linux box (server cores 0–9, isolated
-client cores):
+`redis-benchmark`, each server pinned to cores 0–9 with the client on
+isolated cores and run in isolation. Every engine uses its fastest config
+(kevy: io_uring at -c50, epoll at -c1; valkey/redis: io-threads):
 
-| metric | kevy (io_uring) | valkey 9.1 (io-threads) | ratio |
-|--------|----------------:|------------------------:|------:|
-| **-c50 SET / sec** | **4.0 M** | 1.5 M | **2.67×** |
-| **-c50 GET / sec** | **4.0 M** | 1.7 M | **2.33×** |
-| -c1 SET / sec | 88 k | 58 k | 1.52× |
-| -c1 GET / sec | 80 k | 65 k | 1.25× |
+| workload | kevy | valkey 9.1 | redis 7.4 |
+|----------|-----:|-----------:|----------:|
+| **-c50 -P16 GET** | **4.4 M/s** | 2.5 M/s | 2.3 M/s |
+| **-c50 -P16 SET** | **4.7 M/s** | 1.9 M/s | 2.0 M/s |
+| **-c1 GET** | **86 k/s** | 65 k/s | 48 k/s |
+| **-c1 SET** | **72 k/s** | 63 k/s | 54 k/s |
 
-Against the C reference implementation: **kevy's hand-written io_uring
-bindings reach a 148 ns nop round-trip vs liburing 2.9's 152 ns** — at the
-Linux kernel floor, with no liburing linked. Each core library crate
-benches at noise-floor parity or better than the best open-source
-Rust / Go / C / C++ competitor (8 / 8).
+Against the C reference for io_uring: kevy's hand-written bindings reach a
+148 ns nop round-trip vs liburing 2.9's 152 ns — at the Linux kernel floor,
+with no liburing linked. Reproduce with
+[`bench/loopback_c50.sh`](bench/loopback_c50.sh) and
+[`bench/loopback_c1.sh`](bench/loopback_c1.sh).
 
-Full method + reproduction: [`bench/REPORT.md`](bench/REPORT.md).
+### Embedded throughput (in-process, no network)
 
-## Why kevy
+Drop [`kevy-store`](crates/kevy-store) into your app and call it directly —
+no socket, no RESP parsing, no reactor. Single core, `Store` API:
 
-- **Zero crates.io dependencies.** Only `std` + kevy's own crates. Every
-  hashmap, hash function, and protocol parser is written in Rust; the sole
-  C is the OS boundary (sockets, epoll / io_uring, mmap), bound by hand
-  with `unsafe extern "C"` in a single crate.
-- **Thread-per-core, shared-nothing.** One reactor + one keyspace shard
-  per core, no locks on the hot path; cores coordinate by message passing.
-- **Drop-in Redis compatibility.** RESP2 wire protocol, 94-command parity
-  with valkey 9.1 — works with redis-rs, go-redis, jedis, ioredis, and the
-  rest, no code changes.
-- **Durable.** Snapshots + append-only file (AOF) with `appendfsync`
-  `always` / `everysec` / `no`, matching Redis semantics.
-- **Modern data structures**, not Redis's legacy encodings — all five data
-  types reimplemented from scratch.
+| operation | latency (median) | throughput |
+|-----------|-----------------:|-----------:|
+| `get` (hit) | 54 ns | ~18.5 M ops/s |
+| `get` (miss) | 14 ns | — |
+| `set` (overwrite) | 76 ns | ~13 M ops/s |
+| `incr` | 86 ns | — |
+
+That's roughly **3× the per-core throughput of the network server** — the
+embedded path skips the entire wire layer. Reproduce with
+`cargo run -p kevy-store --example bench_keyspace --release`.
+
+### Pub/sub fan-out (server mode)
+
+1 publisher → 50 subscribers, 200 000 messages, 16-byte payload. kevy is
+the fastest broker on the TCP / RESP path:
+
+| system | delivered msg/s | vs valkey |
+|--------|----------------:|----------:|
+| Aeron 1.45 (IPC, shared memory) | 26.5 M | 3.90× |
+| **kevy** | **18.2 M** | **2.68×** |
+| ZeroMQ 4.3.5 | 9.3 M | 1.37× |
+| redis 7.4 | 8.5 M | 1.25× |
+| valkey 9.1 | 6.8 M | 1.00× |
+| Zenoh 1.9 | 2.7 M | 0.40× |
+
+Aeron's shared-memory IPC is the structural ceiling (no kernel network
+stack); among TCP brokers kevy leads — 2× ZeroMQ on the same transport.
+Pub/sub is a **server-mode** feature; the embedded library is pure
+key–value. Method + the 6-way harness:
+[`bench/pubsub-compare/`](bench/pubsub-compare/).
+
+### Binary size & memory
+
+| | |
+|---|---|
+| Server binary (`release`, stripped) | **768 KB** |
+| Server binary (`release-min`, `opt-level="s"`) | **640 KB** |
+| Idle RSS (default, 16 threads) | **4.9 MB** |
+| Idle RSS (`--threads 1`) | **2.5 MB** |
+| Memory per key (at 8.6 M keys) | ~190 B (key + value + table overhead) |
+
+`SmallBytes` inlines payloads ≤ 22 B with zero heap allocation. A complete
+kevy server is a sub-megabyte binary that boots into under 5 MB of RAM.
 
 ## Quick start
 
