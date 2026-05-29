@@ -18,6 +18,6 @@ this crate adheres to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Notes
 
-Carved out of `kevy-sys` per the project's STONE/CEMENT split: the
-wrapper is generic enough to be a publishable stone in its own right,
-while the rest of `kevy-sys` (sockets + readiness poller) stays cement.
+Carved out of `kevy-sys`: the wrapper is generic enough to be a
+publishable crate in its own right, while the rest of `kevy-sys`
+(sockets + readiness poller) stays server-internal.

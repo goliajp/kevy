@@ -2,15 +2,15 @@
 # measured by the neutral valkey-benchmark tool. Persistence disabled on both so
 # we measure the in-memory path, not disk I/O.
 #
-# CPU isolation is env-driven so the same compose file runs both on the
-# 24-core lx64 perf box (with deterministic pinning) and on small GHA runners
-# (no pinning). Set KEVY_BENCH_CPUSET_SERVERS / KEVY_BENCH_CPUSET_LOADGEN to
-# enable pinning — e.g. on the lx64 box:
+# CPU isolation is env-driven so the same compose file runs both on a
+# dedicated 24-core Linux perf box (with deterministic pinning) and on small
+# GHA runners (no pinning). Set KEVY_BENCH_CPUSET_SERVERS / KEVY_BENCH_CPUSET_LOADGEN
+# to enable pinning — e.g. on the perf box:
 #   KEVY_BENCH_CPUSET_SERVERS=0-9 KEVY_BENCH_CPUSET_LOADGEN=10-13 bash bench/run.sh
 # Without these env vars, Docker schedules across all cores: that's the
 # correct behaviour for a small-runner smoke (single-digit cores) but is
-# numbers-skewing on busy-poll servers — only the headline lx64 numbers
-# should be quoted from a pinned run.
+# numbers-skewing on busy-poll servers — only the headline pinned-run numbers
+# should be quoted.
 services:
   valkey:
     image: valkey/valkey:9.1

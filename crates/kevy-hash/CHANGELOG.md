@@ -16,7 +16,7 @@ this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `KevyHash` trait + `kevy_hash::kevy_hash(b: &[u8]) -> u64` zero-state
   helper for callers that don't need `Hasher`'s state machine.
 - 3.7–7× faster than `std`'s SipHash on the byte-string + integer key
-  shapes kevy uses (see [`BUDGETS.md`](./BUDGETS.md)).
+  shapes kevy uses.
 
 ### Verified
 

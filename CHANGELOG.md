@@ -6,9 +6,8 @@ cadence is "tag when a Wave closes," not strict semver below v1.0.
 
 ## [Unreleased]
 
-The `develop` branch's snapshot of what will become `v1.0.0-rc1` once
-the user runs the full `lx64` e2e re-bench and tags. Everything below
-is already on `develop`.
+The `develop` branch's snapshot that became the `v1.0.0-rc` line.
+Everything below is already on `develop`.
 
 ### Added — Wave 3: embedded + WASM + release plumbing
 
@@ -46,7 +45,7 @@ is already on `develop`.
   log-scale increment with splitmix32-derived PRNG (no decay in v1.0).
   Per-entry weight cache + `ENTRY_OVERHEAD` constant give O(1)
   accounting on every mutation path. Unlimited mode (`maxmemory = 0`,
-  the default) stays at the v0.metal cycle budget.
+  the default) stays at its tuned hot-path budget.
 - **Active TTL reaper** — `Store::tick_expire(samples, rounds)` runs
   Redis's `activeExpireCycle` per shard. The reactor calls it at the
   configured `[expiry].hz` (default 10 Hz / 100 ms) via the new
@@ -111,11 +110,11 @@ headlines:
 - Top-level `README.md` + `MIGRATION-FROM-VALKEY.md` (94-cmd
   parity table).
 - Code-quality rule: `src/*.rs ≤ 500 LOC` / `fn ≤ 50 LOC` codified
-  in `CLAUDE.md`.
+  as a project coding rule.
 
 ## [v0.1.1-deep-polish-rc] and earlier
 
-Per-stone perf polish across `kevy-bytes` / `-hash` / `-map` /
-`-resp` / `-ring` / `-store`. The five stones reach noise-floor
+Per-crate perf polish across `kevy-bytes` / `-hash` / `-map` /
+`-resp` / `-ring` / `-store`. The five library crates reach noise-floor
 parity or better vs the best open-source Rust / Go / C / C++
 competitor at each workload.

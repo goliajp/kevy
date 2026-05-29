@@ -17,9 +17,9 @@ advise_hugepage(buf.as_ptr(), buf.len());
 
 ## Why a separate crate
 
-Carved out of `kevy-sys` so it can be used by *stone* crates (like
+Carved out of `kevy-sys` so it can be used by other library crates (like
 [`kevy-map`](https://crates.io/crates/kevy-map)) without dragging in the
-rest of kevy's OS-boundary cement (sockets, pollers, …). The wrapper has
+rest of kevy's OS-boundary internals (sockets, pollers, …). The wrapper has
 no dependencies on the rest of kevy and is generic enough to be useful
 anywhere a Rust process wants a tiny THP hint without the `libc` crate.
 

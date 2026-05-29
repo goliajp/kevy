@@ -11,8 +11,8 @@ this crate adheres to [SemVer](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- Initial release. Carved out of `kevy-sys` (the OS-boundary cement for
-  kevy) into its own publishable stone — the engine is generic Linux
+- Initial release. Carved out of `kevy-sys` (the OS-boundary layer for
+  kevy) into its own publishable crate — the engine is generic Linux
   infrastructure, not kevy-specific.
 - `IoUring::new(entries)` — allocate a SQ + CQ + SQEs ring via
   `io_uring_setup` and `mmap` the three kernel-shared regions.

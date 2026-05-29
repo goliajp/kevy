@@ -62,7 +62,7 @@ Set a hard memory ceiling via `Config::with_max_memory(bytes)` plus an
 - [`examples/embedded-cache.rs`](examples/embedded-cache.rs) —
   hard-cap LRU cache.
 
-## Charter
+## Dependencies
 
 Zero crates.io dependencies. Only `kevy-store` (keyspace) +
 `kevy-persist` (snapshot / AOF). The whole network layer

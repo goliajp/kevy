@@ -91,12 +91,12 @@ let kevy-embedded handle the in-memory state.
 | BGREWRITEAOF on browser wasm32 | no AOF | n/a |
 | Atomic `rename(2)` semantics on KV-backed Workers | KV is eventually consistent | snapshot serialisation handled at the JS layer |
 
-## Charter note
+## Dependency note
 
 `kevy-embedded` itself ships zero crates.io dependencies. The browser /
 Cloudflare integrations need `wasm-bindgen` (browser DOM interop) or
 `worker` (Cloudflare) — those are app-level dependencies, NOT
 kevy-embedded's, and you wire them yourself in your downstream crate.
 We deliberately do not ship a `examples/wasm-browser` here so the
-in-tree charter stays clean; instead, users build their own browser
+in-tree crates stay zero-dependency; instead, users build their own browser
 bridge against the public `kevy_embedded::Store` API.

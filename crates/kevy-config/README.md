@@ -85,7 +85,7 @@ loudly so misconfigurations surface immediately.
 
 ## Why custom TOML
 
-kevy's charter forbids crates.io dependencies. Writing a focused TOML
+kevy's zero-dependency policy forbids crates.io dependencies. Writing a focused TOML
 subset parser (~600 LOC including lexer + parser + tests) was cheaper
 than introducing the [`toml`](https://crates.io/crates/toml) crate
 (~10 K LOC, two-phase parse, datetime types we don't need) and lets the

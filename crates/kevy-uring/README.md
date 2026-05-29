@@ -34,7 +34,7 @@ ring.for_each_completion(|c| println!("accepted fd {}", c.res));
 ## Why a separate crate
 
 Carved out of [`kevy-sys`](https://crates.io/crates/kevy-sys) so the
-engine can be reused independently of kevy's network cement (sockets,
+engine can be reused independently of kevy's network internals (sockets,
 readiness pollers). The bindings are generic Linux infrastructure;
 nothing here is specific to kevy's command surface.
 

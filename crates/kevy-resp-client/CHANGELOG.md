@@ -20,7 +20,7 @@ this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Carve-out
 
 This crate was extracted from the in-tree `kevy-cli` binary so the
-library part can be a publishable stone (kevy-cli stays a dev tool;
+library part can be a publishable crate (kevy-cli stays a dev tool;
 identity = "kevy-cli binary, not a reusable lib").
 
 ### Verified

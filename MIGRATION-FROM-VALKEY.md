@@ -6,8 +6,7 @@ phpredis, redis-py, hiredis, …) connects without code changes.
 
 **TL;DR:** point your client at kevy's port (default `6004`), keep using
 the same commands. kevy supports 94 commands across all 5 data types
-plus pub/sub and transactions, parity-verified vs valkey 9.1 + redis 7.4
-by `bench/compat3.sh`.
+plus pub/sub and transactions, parity-verified vs valkey 9.1 + redis 7.4.
 
 ## What's the same as valkey 9.1
 
@@ -22,7 +21,7 @@ by `bench/compat3.sh`.
 
 ## What's different
 
-Most of these are **intentional scope choices** (see [`.claude/scope-decisions.md`](.claude/scope-decisions.md)); a few are roadmap items in flight.
+Most of these are **intentional scope choices** (detailed below); a few are roadmap items in flight.
 
 ### Permanently out of scope
 
