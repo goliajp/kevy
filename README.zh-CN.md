@@ -6,7 +6,8 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#许可证)
 ![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-orange.svg)
 
-纯 Rust、**零依赖**、兼容 Redis 的键值服务器 —— 以硬件允许的最快速度运行。
+纯 Rust、**零依赖**、兼容 Redis 的键值存储 —— 既可作为独立服务器，也可作为
+嵌入式库使用，以硬件允许的最快速度运行。
 
 kevy 使用 Redis 线协议（RESP2），因此 `redis-cli`、`valkey-cli` 以及所有
 Redis 客户端库都能**无需改动**直接连接。底层引擎是完全用 Rust 编写的现代
@@ -18,38 +19,98 @@ cargo run -p kevy --bin kevy --release      # 仅 loopback，AOF 开启，端口
 redis-cli -p 6004 SET hello world
 ```
 
+## 为什么选 kevy
+
+- **快** —— 高并发吞吐达 valkey 9.1 的 2.3–2.7×，pub/sub 扇出 2.7×，嵌入式
+  单核约 1800 万 ops/s（数据见下文）。
+- **占用极小** —— 768 KB 的服务器二进制，启动后内存不到 5 MB。容器 sidecar、
+  小型 VM、边缘设备都装得下。
+- **架构先进** —— thread-per-core、shared-nothing，热路径无锁，Linux 上用
+  io_uring。没有全局锁，没有 GIL 式瓶颈。
+- **无供应链风险** —— 零 crates.io 依赖。整棵依赖树只有 `std` 加 kevy 自己的
+  crate；唯一的 C 是操作系统系统调用边界，在单个 crate 里手写绑定。除了 kevy
+  本身，没有别的要审计。
+- **直接兼容** —— RESP2 线协议，与 valkey 9.1 达成 94 条命令对等，回复逐字节
+  核对。现有客户端和工具直接可用。
+- **可嵌入** —— `kevy-store` 是一个普通的 Rust 库：无网络、无运行时，还能为
+  `wasm32` 构建。同一套引擎，跑在你的进程里。
+
+关于适用范围我们如实说明：kevy 是**单机**的 —— 不做复制、集群、AUTH/TLS，
+也不直接暴露到公网（见[何时使用 kevy](#何时使用-kevy)）。
+
 ## 性能
+
+下列所有数据都在一台**裸金属 Intel Core i7-10700K**（8 核 / 16 线程，
+3.8 GHz 基频 / 5.1 GHz 睿频）、62 GB 内存、Linux 6.12.90 上测得，全内存。
+每项基准都可用 [`bench/`](bench/) 里的脚本复现；完整方法与注意事项见
+[`bench/REPORT.md`](bench/REPORT.md)。
+
+### 服务器吞吐（走网络）
 
 > 超越 valkey 9.1 只是下限，不是目标 —— kevy 瞄准的是硬件天花板。
 
-在一台专用 16 核 Linux 机器上测得（服务端用 0–9 核，客户端用独立核）：
+`redis-benchmark`，每个服务端 pin 到 0–9 核、客户端用独立核，且各自单独运行。
+每个引擎都用其最快配置（kevy：-c50 用 io_uring，-c1 用 epoll；valkey/redis：
+io-threads）：
 
-| 指标 | kevy (io_uring) | valkey 9.1 (io-threads) | 倍率 |
-|------|----------------:|------------------------:|-----:|
-| **-c50 SET / 秒** | **4.0 M** | 1.5 M | **2.67×** |
-| **-c50 GET / 秒** | **4.0 M** | 1.7 M | **2.33×** |
-| -c1 SET / 秒 | 88 k | 58 k | 1.52× |
-| -c1 GET / 秒 | 80 k | 65 k | 1.25× |
+| 负载 | kevy | valkey 9.1 | redis 7.4 |
+|------|-----:|-----------:|----------:|
+| **-c50 -P16 GET** | **4.4 M/s** | 2.5 M/s | 2.3 M/s |
+| **-c50 -P16 SET** | **4.7 M/s** | 1.9 M/s | 2.0 M/s |
+| **-c1 GET** | **86 k/s** | 65 k/s | 48 k/s |
+| **-c1 SET** | **72 k/s** | 63 k/s | 54 k/s |
 
-对比 io_uring 的 C 参考实现：**kevy 手写的 io_uring 绑定达到 148 ns 的
-nop 往返，而 liburing 2.9 是 152 ns** —— 已贴着 Linux 内核底线，且没有链接
-liburing。每个核心库 crate 的基准都达到或优于最强开源
-Rust / Go / C / C++ 竞品的噪声地板水平（8 / 8）。
+对比 io_uring 的 C 参考实现：kevy 手写绑定达到 148 ns 的 nop 往返，而
+liburing 2.9 是 152 ns —— 已贴 Linux 内核底线，且未链接 liburing。可用
+[`bench/loopback_c50.sh`](bench/loopback_c50.sh) 和
+[`bench/loopback_c1.sh`](bench/loopback_c1.sh) 复现。
 
-完整方法与复现步骤见 [`bench/REPORT.md`](bench/REPORT.md)。
+### 嵌入式吞吐（进程内，无网络）
 
-## 为什么选 kevy
+把 [`kevy-store`](crates/kevy-store) 放进你的应用直接调用 —— 无 socket、
+无 RESP 解析、无 reactor。单核，`Store` API：
 
-- **零 crates.io 依赖。** 只有 `std` 加 kevy 自己的 crate。每一个 hashmap、
-  hash 函数、协议解析器都是 Rust 自研；唯一的 C 是操作系统边界（socket、
-  epoll / io_uring、mmap），在单个 crate 里用 `unsafe extern "C"` 手写绑定。
-- **Thread-per-core、shared-nothing。** 每个核心一个 reactor 加一个 keyspace
-  分片，热路径上无锁；核心之间通过消息传递协调。
-- **直接兼容 Redis。** RESP2 线协议，与 valkey 9.1 达成 94 条命令对等 ——
-  redis-rs、go-redis、jedis、ioredis 等客户端无需改代码即可使用。
-- **持久化。** 快照 + 追加写文件（AOF），`appendfsync` 支持
-  `always` / `everysec` / `no`，语义与 Redis 一致。
-- **现代数据结构**，而非 Redis 的遗留编码 —— 五种数据类型全部从零重写。
+| 操作 | 延迟（中位数） | 吞吐 |
+|------|-------------:|-----:|
+| `get`（命中） | 54 ns | 约 1850 万 ops/s |
+| `get`（未命中） | 14 ns | — |
+| `set`（覆盖） | 76 ns | 约 1300 万 ops/s |
+| `incr` | 86 ns | — |
+
+约为**网络服务器单核吞吐的 3 倍** —— 嵌入式路径省掉了整个线协议层。可用
+`cargo run -p kevy-store --example bench_keyspace --release` 复现。
+
+### Pub/sub 扇出（服务器模式）
+
+1 个发布者 → 50 个订阅者，200 000 条消息，16 字节负载。kevy 是 TCP / RESP
+路径上最快的 broker：
+
+| 系统 | 交付 msg/s | 相对 valkey |
+|------|----------:|----------:|
+| Aeron 1.45（IPC，共享内存） | 26.5 M | 3.90× |
+| **kevy** | **18.2 M** | **2.68×** |
+| ZeroMQ 4.3.5 | 9.3 M | 1.37× |
+| redis 7.4 | 8.5 M | 1.25× |
+| valkey 9.1 | 6.8 M | 1.00× |
+| Zenoh 1.9 | 2.7 M | 0.40× |
+
+Aeron 的共享内存 IPC 是结构性上限（不经内核网络栈）；在 TCP broker 中 kevy
+领先 —— 同样的传输下达到 ZeroMQ 的 2 倍。Pub/sub 是**服务器模式**的功能；
+嵌入式库是纯键值。方法与 6 路对比工具见
+[`bench/pubsub-compare/`](bench/pubsub-compare/)。
+
+### 二进制大小与内存
+
+| | |
+|---|---|
+| 服务器二进制（`release`，已 strip） | **768 KB** |
+| 服务器二进制（`release-min`，`opt-level="s"`） | **640 KB** |
+| 空载 RSS（默认 16 线程） | **4.9 MB** |
+| 空载 RSS（`--threads 1`） | **2.5 MB** |
+| 每 key 内存（800 万 key 时） | 约 190 B（key + value + 表开销） |
+
+`SmallBytes` 把 ≤ 22 B 的负载内联，零堆分配。一个完整的 kevy 服务器是不到
+1 MB 的二进制，启动后内存不到 5 MB。
 
 ## 快速上手
 
