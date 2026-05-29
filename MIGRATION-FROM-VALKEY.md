@@ -296,3 +296,26 @@ Open an issue with:
 
 We treat reply mismatches as bugs unless the command is on the
 "out of scope" list above.
+
+## v1.x stability commitment
+
+Everything below is contract — kevy promises to keep it for the entire
+v1.x line. Breaking any of these requires a v2.0 major bump.
+
+| Surface | Stability promise |
+|---|---|
+| **Persistence format** | AOF schema (RESP multi-bulk frames) v1.x-compatible; snapshot format `KEVYSNAP` v2 v1.x-compatible. Loading a v1.0 file in any v1.x kevy is guaranteed to work. |
+| **RESP wire protocol** | All 94 commands in the parity table above keep their shape (arg count, reply type) for v1.x. New commands may be added; existing ones won't change. |
+| **valkey-cli / redis-cli compat** | `redis-cli`, `valkey-cli`, redis-rs, go-redis, jedis, ioredis — all keep working unchanged across v1.x. |
+| **Public Rust API** | `kevy_store::Store`, `kevy_embedded::Store`, `kevy_persist::Aof` / `RewriteStats`, `kevy_config::Config`, `kevy_rt::Runtime` / `Commands` — add-only across v1.x. Methods may gain optional params via new `*_with_*` variants; existing signatures stay. |
+| **CLI flags + env vars** | `--bind` / `--port` / `--threads` / `--dir` / `--no-aof` / `--config`, `KEVY_BIND` / `KEVY_PORT` / `KEVY_THREADS` / `KEVY_DIR` / `KEVY_AOF` / `KEVY_CONFIG` — names + meanings stay across v1.x. |
+| **TOML schema** | New `[section].key` fields allowed in v1.x; **no** rename or removal of existing fields until v2.0. Unknown keys are warned-not-errored, so older configs keep loading on newer kevy. |
+| **Memory / eviction semantics** | The 8 eviction policy names (`noeviction` / `allkeys-{lru,lfu,random}` / `volatile-{lru,lfu,random,ttl}`) and their selection algorithms (24-bit clock, sample-based) stay. `maxmemory-samples = 5` is the v1.x default — tunable later via config. |
+
+What's **not** covered:
+
+- Performance numbers may improve; kevy targets the hardware ceiling
+  every version.
+- Internal crate organisation can change (e.g. a `kevy-rt` module split)
+  without violating the API promise above.
+- Debug output / log line format is best-effort, not contract.

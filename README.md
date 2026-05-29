@@ -1,82 +1,88 @@
 # kevy
 
-A pure-Rust, **zero-dependency**, Redis-compatible key–value server,
+**English** · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
+
+[![CI](https://github.com/goliajp/kevy/actions/workflows/ci.yml/badge.svg)](https://github.com/goliajp/kevy/actions/workflows/ci.yml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-orange.svg)
+
+A pure-Rust, **zero-dependency**, Redis-compatible key–value server —
 built to run as fast as the hardware allows.
 
-- **0 crates.io deps.** Only `std` + kevy's own crates. The only C
-  touched is the unavoidable OS-boundary libc (sockets, epoll/io_uring,
-  pipes, mmap), bound by hand with `unsafe extern "C"` in one crate
-  (`kevy-sys`). Every algorithm and data structure is written in Rust.
-- **Thread-per-core, shared-nothing.** One reactor + one keyspace shard
-  per core, no locks on the hot path; cores coordinate by message
-  passing.
-- **Redis wire protocol** (RESP2). `redis-cli`, `valkey-cli`, and every
-  Redis client library talks to kevy out of the box —
-  [94-cmd parity vs valkey 9.1](MIGRATION-FROM-VALKEY.md).
-- **Durable.** Snapshots + append-only file (AOF), `appendfsync` =
-  `always` / `everysec` (default) / `no` matching Redis semantics.
-- **Configurable via TOML or env/CLI** — see [`kevy.toml.example`](crates/kevy/kevy.toml.example).
+kevy speaks the Redis wire protocol (RESP2), so `redis-cli`, `valkey-cli`,
+and every Redis client library talk to it **unchanged**. Underneath, the
+engine is a modern thread-per-core, shared-nothing design written entirely
+in Rust — the only C it touches is the unavoidable OS syscall boundary.
+
+```sh
+cargo run -p kevy --bin kevy --release      # loopback, AOF on, port 6004
+redis-cli -p 6004 SET hello world
+```
 
 ## Performance
 
-Beating valkey 9.1 is the floor, not the goal. Current numbers
-(dedicated 16-core Linux box, server cores 0-9, isolated client cores):
+> Beating valkey 9.1 is the floor, not the goal — kevy targets the
+> hardware ceiling.
 
-| metric            | kevy (io_uring) | valkey 9.1 (io-threads) | ratio  |
-|-------------------|----------------:|------------------------:|-------:|
-| **-c50 SET / sec**| **4.0 M**       | 1.5 M                   | **2.67×** |
-| **-c50 GET / sec**| **4.0 M**       | 1.7 M                   | **2.33×** |
-| -c1  SET / sec    |          88 k   |            58 k         | 1.52×  |
-| -c1  GET / sec    |          80 k   |            65 k         | 1.25×  |
+Measured on a dedicated 16-core Linux box (server cores 0–9, isolated
+client cores):
 
-vs liburing 2.9 (the C reference for io_uring):
-**kevy-uring 148 ns nop-round-trip vs liburing 152 ns** — at the
-Linux kernel floor.
+| metric | kevy (io_uring) | valkey 9.1 (io-threads) | ratio |
+|--------|----------------:|------------------------:|------:|
+| **-c50 SET / sec** | **4.0 M** | 1.5 M | **2.67×** |
+| **-c50 GET / sec** | **4.0 M** | 1.7 M | **2.33×** |
+| -c1 SET / sec | 88 k | 58 k | 1.52× |
+| -c1 GET / sec | 80 k | 65 k | 1.25× |
 
-Per-crate vs best open-source competitor (kevy-bytes, kevy-hash,
-kevy-map, kevy-resp, kevy-ring): 8 / 8 at noise-floor parity or
-better.
+Against the C reference implementation: **kevy's hand-written io_uring
+bindings reach a 148 ns nop round-trip vs liburing 2.9's 152 ns** — at the
+Linux kernel floor, with no liburing linked. Each core library crate
+benches at noise-floor parity or better than the best open-source
+Rust / Go / C / C++ competitor (8 / 8).
 
-## Target scenarios (v1.0)
+Full method + reproduction: [`bench/REPORT.md`](bench/REPORT.md).
 
-kevy v1.0 is prod-ready for these 4 use cases:
+## Why kevy
 
-1. **Local dev** — `cargo run -p kevy` + your favourite redis client
-2. **docker-compose internal** — `KEVY_BIND=0.0.0.0` inside the network,
-   trust boundary is the docker network itself (kevy has no AUTH/TLS yet
-   — see "Out of scope" below)
-3. **Embedded library** — drop the [`kevy-store`](crates/kevy-store)
-   crate into your app, no network, no reactor
-4. **Cache** — fronted by a real DB, kevy holds hot data with TTL +
-   `maxmemory` + LRU/LFU eviction
-
-Out of scope: replication, cluster, AUTH/TLS, public-internet exposure.
-For HA/multi-host go via k8s StatefulSet or sidecar proxy patterns.
+- **Zero crates.io dependencies.** Only `std` + kevy's own crates. Every
+  hashmap, hash function, and protocol parser is written in Rust; the sole
+  C is the OS boundary (sockets, epoll / io_uring, mmap), bound by hand
+  with `unsafe extern "C"` in a single crate.
+- **Thread-per-core, shared-nothing.** One reactor + one keyspace shard
+  per core, no locks on the hot path; cores coordinate by message passing.
+- **Drop-in Redis compatibility.** RESP2 wire protocol, 94-command parity
+  with valkey 9.1 — works with redis-rs, go-redis, jedis, ioredis, and the
+  rest, no code changes.
+- **Durable.** Snapshots + append-only file (AOF) with `appendfsync`
+  `always` / `everysec` / `no`, matching Redis semantics.
+- **Modern data structures**, not Redis's legacy encodings — all five data
+  types reimplemented from scratch.
 
 ## Quick start
 
 ### As a server
 
 ```sh
-# Build + run with all defaults (loopback only, AOF on, port 6004)
+# Build + run with defaults (loopback only, AOF on, port 6004)
 cargo run -p kevy --bin kevy --release
 
-# Or use a TOML config file
+# Or with a TOML config file
 cp crates/kevy/kevy.toml.example ./kevy.toml
-$EDITOR kevy.toml
 cargo run -p kevy --bin kevy --release -- --config ./kevy.toml
 
-# Then with any Redis client:
 redis-cli -p 6004 SET foo bar
 redis-cli -p 6004 GET foo
 ```
 
-CLI overrides take precedence over env vars over the TOML file:
+Precedence is CLI flags > env vars > TOML file > built-in defaults:
 
 ```sh
 kevy --bind 0.0.0.0 --port 7000 --threads 4 --dir /var/lib/kevy
-# Equivalent env: KEVY_BIND, KEVY_PORT, KEVY_THREADS, KEVY_DIR, KEVY_AOF
+# env equivalents: KEVY_BIND  KEVY_PORT  KEVY_THREADS  KEVY_DIR  KEVY_AOF
 ```
+
+See [`crates/kevy/kevy.toml.example`](crates/kevy/kevy.toml.example) for the
+fully annotated config schema.
 
 ### As an embedded library
 
@@ -89,126 +95,77 @@ s.set(b"key".to_vec(), b"value".to_vec(), None, false, false);
 assert_eq!(s.get(b"key").unwrap().unwrap(), b"value");
 ```
 
-(Polished `kevy-embedded` API + `Store::with_persist(path)` constructor
-+ WASM browser example land in v1.0 Wave 3.)
+## When to use kevy
 
-## Configuration
+kevy v1.0 is production-ready for four scenarios:
 
-```toml
-# kevy.toml — see crates/kevy/kevy.toml.example for full annotated schema
-[server]
-bind     = "127.0.0.1"
-port     = 6004
-threads  = 0           # 0 = auto (CPU count)
-data_dir = "."
+1. **Local dev** — `cargo run -p kevy` + your favourite Redis client.
+2. **docker-compose internal** — `KEVY_BIND=0.0.0.0` inside the network;
+   the trust boundary is the docker network itself.
+3. **Embedded library** — drop [`kevy-store`](crates/kevy-store) into your
+   app: no network, no reactor.
+4. **Cache** — fronted by a real database, kevy holds hot data with TTL +
+   `maxmemory` + LRU / LFU eviction.
 
-[persistence]
-aof          = true
-appendfsync  = "everysec"   # "always" | "everysec" | "no"
-
-[memory]
-maxmemory        = 0                  # 0 = unlimited; or "256mb" / "2gb"
-maxmemory_policy = "noeviction"       # 8 Redis policies supported
-```
-
-Precedence: CLI flags > env vars > TOML file > built-in defaults.
-Auto-detect search: `$KEVY_DIR/kevy.toml` → `./kevy.toml` → `/etc/kevy/kevy.toml`.
+**Out of scope by design:** replication, clustering, AUTH / TLS, and
+direct public-internet exposure. For HA / multi-host, use a Kubernetes
+StatefulSet or a sidecar-proxy pattern. The full scope rationale and the
+94-command parity table live in
+[`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md).
 
 ## Crates
 
-8 publishable library crates (on crates.io) + 1 server-internal crate
-(kevy-sys, bundled with the server binary):
+kevy ships as small, reusable crates — 8 publishable libraries plus the
+server-internal pieces:
 
 | crate | role |
 |-------|------|
-| [`kevy-bytes`](crates/kevy-bytes) | SmallBytes — owned byte string with inline-or-heap SSO |
+| [`kevy-bytes`](crates/kevy-bytes) | owned byte string with inline-or-heap small-string optimization |
 | [`kevy-hash`](crates/kevy-hash) | fast non-cryptographic hash for single-trust-domain keyspaces |
-| [`kevy-map`](crates/kevy-map) | Swiss-table hashmap with SIMD group scan + branchless mirror writes |
-| [`kevy-resp`](crates/kevy-resp) | zero-alloc RESP2/3 parser, ~9× faster than redis-rs's |
-| [`kevy-ring`](crates/kevy-ring) | bounded lock-free SPSC queue with cached cursors |
+| [`kevy-map`](crates/kevy-map) | Swiss-table hashmap with SIMD group scan |
+| [`kevy-resp`](crates/kevy-resp) | zero-alloc RESP2 / 3 parser |
+| [`kevy-ring`](crates/kevy-ring) | bounded lock-free SPSC queue |
 | [`kevy-madvise`](crates/kevy-madvise) | Linux `MADV_HUGEPAGE` wrapper, no-op elsewhere |
 | [`kevy-uring`](crates/kevy-uring) | pure-Rust io_uring bindings, no liburing |
 | [`kevy-resp-client`](crates/kevy-resp-client) | blocking RESP2 client |
-| [`kevy-config`](crates/kevy-config) | TOML subset parser + config schema |
-| `kevy-sys` | (server-internal) the sole libc boundary; ships with `kevy` |
-| `kevy-store` / `kevy-rt` / `kevy-persist` | server-side keyspace, runtime, persistence |
-| `kevy-cli` | redis-cli-style client (works against any RESP2 server) |
+| `kevy-config` · `kevy-store` · `kevy-rt` · `kevy-persist` | config, keyspace, runtime, persistence |
+| `kevy-sys` | the sole libc boundary (server-internal) |
 | `kevy` | the server binary |
 
-## Commands (94-cmd valkey parity)
+## Commands
 
-All five Redis data types implemented with **modern data structures**,
-not Redis's legacy encodings.
+All five Redis data types — **String, Hash, List, Set, Sorted Set** — plus
+**pub/sub**, **transactions** (`MULTI` / `EXEC` / `DISCARD`), persistence
+(`SAVE` / `BGSAVE` / `BGREWRITEAOF`), and operations (`INFO` / `CONFIG` /
+`CLIENT` / …). Multi-key commands and pub/sub work across the per-core
+shards, and `WRONGTYPE` behaves as in Redis.
 
-- **Connection** — `PING ECHO HELLO QUIT COMMAND`
-- **Keys** — `DEL EXISTS EXPIRE PEXPIRE TTL PTTL PERSIST TYPE DBSIZE FLUSHDB FLUSHALL KEYS SCAN RANDOMKEY`
-- **String** — `SET GET MSET MGET GETSET GETDEL SETNX SETEX PSETEX APPEND STRLEN INCR DECR INCRBY DECRBY INCRBYFLOAT`
-- **Hash** — `HSET HSETNX HGET HDEL HEXISTS HLEN HINCRBY HKEYS HVALS HGETALL HMGET`
-- **List** — `LPUSH RPUSH LPOP RPOP LLEN LINDEX LRANGE LSET LREM LTRIM`
-- **Set** — `SADD SREM SCARD SISMEMBER SMEMBERS SPOP SRANDMEMBER SINTER SUNION SDIFF`
-- **Sorted set** — `ZADD ZSCORE ZCARD ZREM ZRANK ZINCRBY ZRANGE ZRANGEBYSCORE ZCOUNT`
-- **Pub/sub** — `SUBSCRIBE UNSUBSCRIBE PUBLISH`
-- **Transactions** — `MULTI EXEC DISCARD`
-- **Persistence** — `SAVE BGSAVE` (`BGREWRITEAOF` in Wave 2)
-- **Operations** — `INFO CLUSTER DEBUG WAIT SHUTDOWN` (`CLIENT *` + full
-  `CONFIG GET/SET/REWRITE` in Wave 1 follow-up)
-
-`WRONGTYPE` returns as in Redis. Multi-key commands (`MSET` / `MGET` /
-`SINTER` / `SUNION` / `SDIFF`) and pub/sub work across the per-core shards.
+The full 94-command list with valkey-parity notes is in
+[`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md).
 
 ## Build & test
 
 ```sh
 cargo build --workspace --release
 cargo test  --workspace
-cargo bench  # bench/run.sh — full vs-valkey comparison on Linux
+bash bench/run.sh        # vs-valkey comparison (Linux + Docker)
 ```
 
-Stable Rust 1.95, Rust 2024 edition. Builds on `x86_64-unknown-linux-gnu`,
-`aarch64-unknown-linux-gnu`, `*-apple-darwin`. `kevy-embedded` + its
-dependency closure (`kevy-bytes`, `-hash`, `-map`, `-store`, `-persist`,
-`-resp`) also build on `wasm32-unknown-unknown` and `wasm32-wasip1` —
-see [`docs/wasm.md`](docs/wasm.md) for the WASM walkthrough.
+Stable Rust 1.95, Rust 2024 edition. Builds on Linux (`x86_64`, `aarch64`)
+and macOS. `kevy-embedded` and its dependency closure also build for
+`wasm32-unknown-unknown` / `wasm32-wasip1` — see [`docs/wasm.md`](docs/wasm.md)
+for the WebAssembly walkthrough.
 
-CI matrix (`.github/workflows/ci.yml`): x86_64-linux + aarch64-darwin
-build + test + clippy; wasm32 cargo-check; nightly miri on `kevy-map` +
-`kevy-bytes`; vs-valkey docker-compose smoke. Tagged releases trigger
-the `release.yml` workflow (cargo-publish dry-run for every publishable
-crate in dependency order + a drafted GitHub release).
+## Roadmap & stability
 
-## v1.0 roadmap status
-
-| Wave | Scope | Status |
-|---|---|---|
-| Wave 1 — config + ops + docs | `kevy-config` crate · INFO/CLUSTER/DEBUG/WAIT/SHUTDOWN · top-level README · MIGRATION doc | **done** (tag `v1.0.0-w1`) |
-| Wave 2 — 防 OOM + 防数据丢 | maxmemory + 8 eviction policies · TTL reaper · BGREWRITEAOF · crash-safe verify | **done** |
-| Wave 3 — embedded + WASM + 发布 | `kevy-embedded` crate · 32-bit pointer port · WASM docs · GitHub Actions CI · v1.0.0-rc tag | **done** (tag `v1.0.0-rc3`, in RC feedback period) |
-
-What's permanently out of scope is summarised in "Out of scope" above and
-detailed in [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md).
-
-## v1.x stability commitment
-
-Everything below is contract — kevy promises to keep it for the entire
-v1.x line. Breaking any of these requires a v2.0 major bump.
-
-| Surface | Stability promise |
-|---|---|
-| **Persistence format** | AOF schema (RESP multi-bulk frames) v1.x-compatible; snapshot format `KEVYSNAP` v2 v1.x-compatible. Loading a v1.0 file in any v1.x kevy is guaranteed to work. |
-| **RESP wire protocol** | All 94 commands in the [parity table](MIGRATION-FROM-VALKEY.md) keep their shape (arg count, reply type) for v1.x. New commands may be added; existing ones won't change. |
-| **valkey-cli / redis-cli compat** | `redis-cli`, `valkey-cli`, redis-rs, go-redis, jedis, ioredis — all keep working unchanged across v1.x. |
-| **Public Rust API** | `kevy_store::Store`, `kevy_embedded::Store`, `kevy_persist::Aof` / `RewriteStats`, `kevy_config::Config`, `kevy_rt::Runtime` / `Commands` — add-only across v1.x. Methods may gain optional params via new `*_with_*` variants; existing signatures stay. |
-| **CLI flags + env vars** | `--bind` / `--port` / `--threads` / `--dir` / `--no-aof` / `--config`, `KEVY_BIND` / `KEVY_PORT` / `KEVY_THREADS` / `KEVY_DIR` / `KEVY_AOF` / `KEVY_CONFIG` — names + meanings stay across v1.x. |
-| **TOML schema** | New `[section].key` fields allowed in v1.x; **no** rename or removal of existing fields until v2.0. Unknown keys are warned-not-errored, so older configs keep loading on newer kevy. |
-| **Memory / eviction semantics** | The 8 eviction policy names (`noeviction` / `allkeys-{lru,lfu,random}` / `volatile-{lru,lfu,random,ttl}`) and their selection algorithms (24-bit clock, sample-based) stay. `maxmemory-samples = 5` is the v1.x default — tunable later via config. |
-
-What's NOT covered:
-- Performance numbers may improve; kevy targets the hardware ceiling
-  every version.
-- Internal crate organisation can change (e.g., a kevy-rt module split)
-  without violating the API promise above.
-- Debug output / log line format is best-effort, not contract.
+kevy is in the **v1.0.0-rc** feedback period. Everything that v1.x promises
+to keep — persistence format, RESP wire protocol, public Rust API, CLI
+flags, env vars, TOML schema, eviction semantics — is **add-only across the
+v1.x line**: a file written by v1.0 loads on any later v1.x build. The full
+stability contract is in
+[`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md#v1x-stability-commitment).
 
 ## License
 
-MIT OR Apache-2.0, at your option. © 2026 GOLIA K.K.
+Licensed under either of **MIT** or **Apache-2.0**, at your option.
+© 2026 GOLIA K.K.
