@@ -199,7 +199,7 @@ impl<K, V> KevyMap<K, V> {
         let slots_ptr = base as *mut MaybeUninit<(K, V)>;
         let metadata_ptr = meta_byte_ptr;
 
-        // v0.metal-9 / single-buffer redo: hint THP on the entire buffer in
+        // single-buffer redo: hint THP on the entire buffer in
         // one madvise call. The combined allocation is `meta_offset +
         // cap + GROUP_WIDTH` bytes (== `layout.size()` minus padding).
         // On 10M+ key tables the metadata alone is 16 MB — well over the
@@ -332,7 +332,7 @@ impl<K, V> KevyMap<K, V> {
     }
 
     /// Hint the CPU to fetch the bucket cache line that a probe at `hash`
-    /// would start at. The v0.metal-5 lever against the bucket-probe DRAM
+    /// would start at. The prefetch lever against the bucket-probe DRAM
     /// miss: the command-batch driver calls this for command N+1 while
     /// finishing command N, so by the time N+1 actually probes the
     /// metadata, the line is in L1.

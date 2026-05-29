@@ -1,5 +1,5 @@
 //! Keyspace hasher baseline — std default (SipHash) vs FNV-1a, *same* hashbrown
-//! table. Evidence for `rfcs/2026-05-25-std-self-host-evaluation.md` Tier 1.
+//! table.
 //!
 //! std's `HashMap` is already a world-class Swiss table (hashbrown); only its
 //! default hasher is `SipHash-1-3` (DoS-resistant, but ~per-byte-keyed and slow
@@ -276,7 +276,7 @@ fn suite(label: &str, keys: &[Vec<u8>], absent: &[Vec<u8>]) {
 }
 
 /// Production hot path: the real `Store` (keyspace now uses Fx+fmix64). Absolute
-/// per-op cost, the post-adoption baseline for `perfs/topics/01-keyspace-hasher`.
+/// per-op cost, the post-adoption keyspace-hasher baseline.
 fn bench_real_store() {
     let keys = make_keys("key:", N, 12);
     let absent = make_keys("absent:", N, 12);

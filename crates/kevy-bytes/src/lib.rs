@@ -65,7 +65,7 @@ struct Inline {
 /// 64-bit Heap rep — `ptr|len|cap_and_tag` × usize. High byte of
 /// `cap_and_tag` shadows `Inline::tag` (LE) so the discriminator byte at
 /// offset 23 = `0xFF`. Locked layout: the kevy server runs here and the
-/// v0.metal cycle budget assumes this exact shape.
+/// perf budget assumes this exact shape.
 #[cfg(target_pointer_width = "64")]
 #[repr(C)]
 #[derive(Copy, Clone)]

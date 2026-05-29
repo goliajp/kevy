@@ -35,7 +35,7 @@ pub fn dispatch_into(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
     let cmd = upper_verb(name, &mut buf);
     // OOM precheck for memory-growing writes only. When `maxmemory == 0` this
     // is a single not-taken branch inside `Store::precheck_for_write`, so the
-    // unlimited-mode hot path keeps its v0.metal cycle budget.
+    // unlimited-mode hot path keeps its perf budget.
     let is_grow = is_growing_write_verb(cmd);
     if is_grow && store.precheck_for_write().is_err() {
         encode_error(out, OOM_ERR);

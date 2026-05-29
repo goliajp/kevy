@@ -2,7 +2,7 @@
 //!
 //! Only `format_reply` lives here — the protocol pieces (TCP connect, request
 //! loop) live in the [`kevy-resp-client`](https://crates.io/crates/kevy-resp-client)
-//! stone so they're reusable by integration tests / scripts / other tools.
+//! crate so they're reusable by integration tests / scripts / other tools.
 //! This file is the CLI-specific bit (how a redis-cli user expects bulk
 //! strings quoted, arrays numbered, nil shown as `(nil)`).
 

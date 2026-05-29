@@ -1,4 +1,4 @@
-//! v0.metal-1 step 2: the cross-core transport floor. Measures the raw SPSC ring
+//! The cross-core transport floor. Measures the raw SPSC ring
 //! op cost (same-thread push+pop) and the cross-thread throughput / per-item
 //! latency — the primitive every cross-shard command rides. Indicative under
 //! host load; the cross-thread number is the one that reflects cache-coherency

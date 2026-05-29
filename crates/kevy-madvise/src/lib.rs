@@ -5,8 +5,8 @@
 //! "C"` against glibc — no `libc` crate, no third-party dependency. Off Linux
 //! every entry point compile-time no-ops.
 //!
-//! Carved out of `kevy-sys` so it can be used by stones (like `kevy-map`)
-//! without dragging the rest of the OS-boundary cement along. See
+//! Carved out of `kevy-sys` so it can be used by other library crates (like
+//! `kevy-map`) without dragging the rest of the OS-boundary internals along. See
 //! [`advise_hugepage`] for the only entry point.
 //!
 //! # Safety

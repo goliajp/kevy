@@ -1,4 +1,4 @@
-//! Regression budgets for the keyspace hot path. See [BUDGETS.md](../BUDGETS.md).
+//! Regression budgets for the keyspace hot path.
 //!
 //! These run in the **dev** profile (`cargo test`), which is unoptimised —
 //! release is ~5–25× faster — and on a shared host that may be loaded. The

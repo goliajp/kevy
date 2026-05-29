@@ -1,4 +1,4 @@
-//! Regression budgets for the per-command RESP codec. See [BUDGETS.md](../BUDGETS.md).
+//! Regression budgets for the per-command RESP codec.
 //!
 //! Dev profile (unoptimised) + shared host, so budgets carry large headroom:
 //! they catch order-of-magnitude regressions (an accidental O(n²) scan, a
