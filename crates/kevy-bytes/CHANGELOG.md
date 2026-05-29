@@ -22,12 +22,11 @@ this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Performance
 
 - Inline `from_slice` ≈ 10–15 ns; `clone` ≈ 5–10 ns; `as_slice` ≈ 2–5 ns
-  (mac aarch64, loaded host — see [`BUDGETS.md`](./BUDGETS.md)).
+  (mac aarch64, loaded host).
 
 ### Verified
 
-- 17/17 unit tests under `cargo miri test` on `nightly-2026-05-19`
-  (see [`STONE-STATUS.md`](./STONE-STATUS.md)).
+- 17/17 unit tests under `cargo miri test` on `nightly-2026-05-19`.
 - Line coverage 93%+ via `cargo-llvm-cov`.
 
 [Unreleased]: ./

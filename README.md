@@ -20,7 +20,7 @@ built to run as fast as the hardware allows.
 ## Performance
 
 Beating valkey 9.1 is the floor, not the goal. Current numbers
-(`lx64` metal, server cores 0-9, isolated client cores):
+(dedicated 16-core Linux box, server cores 0-9, isolated client cores):
 
 | metric            | kevy (io_uring) | valkey 9.1 (io-threads) | ratio  |
 |-------------------|----------------:|------------------------:|-------:|
@@ -33,7 +33,7 @@ vs liburing 2.9 (the C reference for io_uring):
 **kevy-uring 148 ns nop-round-trip vs liburing 152 ns** — at the
 Linux kernel floor.
 
-Per-stone vs best open-source competitor (kevy-bytes, kevy-hash,
+Per-crate vs best open-source competitor (kevy-bytes, kevy-hash,
 kevy-map, kevy-resp, kevy-ring): 8 / 8 at noise-floor parity or
 better.
 
@@ -44,7 +44,7 @@ kevy v1.0 is prod-ready for these 4 use cases:
 1. **Local dev** — `cargo run -p kevy` + your favourite redis client
 2. **docker-compose internal** — `KEVY_BIND=0.0.0.0` inside the network,
    trust boundary is the docker network itself (kevy has no AUTH/TLS yet
-   — see [`.claude/scope-decisions.md`](.claude/scope-decisions.md))
+   — see "Out of scope" below)
 3. **Embedded library** — drop the [`kevy-store`](crates/kevy-store)
    crate into your app, no network, no reactor
 4. **Cache** — fronted by a real DB, kevy holds hot data with TTL +
@@ -116,8 +116,8 @@ Auto-detect search: `$KEVY_DIR/kevy.toml` → `./kevy.toml` → `/etc/kevy/kevy.
 
 ## Crates
 
-8 stones (published to crates.io) + 1 cement (kevy-sys, bundled with
-the server binary):
+8 publishable library crates (on crates.io) + 1 server-internal crate
+(kevy-sys, bundled with the server binary):
 
 | crate | role |
 |-------|------|
@@ -130,7 +130,7 @@ the server binary):
 | [`kevy-uring`](crates/kevy-uring) | pure-Rust io_uring bindings, no liburing |
 | [`kevy-resp-client`](crates/kevy-resp-client) | blocking RESP2 client |
 | [`kevy-config`](crates/kevy-config) | TOML subset parser + config schema |
-| `kevy-sys` | (cement) the sole libc boundary; ships with `kevy` |
+| `kevy-sys` | (server-internal) the sole libc boundary; ships with `kevy` |
 | `kevy-store` / `kevy-rt` / `kevy-persist` | server-side keyspace, runtime, persistence |
 | `kevy-cli` | redis-cli-style client (works against any RESP2 server) |
 | `kevy` | the server binary |
@@ -182,10 +182,10 @@ crate in dependency order + a drafted GitHub release).
 |---|---|---|
 | Wave 1 — config + ops + docs | `kevy-config` crate · INFO/CLUSTER/DEBUG/WAIT/SHUTDOWN · top-level README · MIGRATION doc | **done** (tag `v1.0.0-w1`) |
 | Wave 2 — 防 OOM + 防数据丢 | maxmemory + 8 eviction policies · TTL reaper · BGREWRITEAOF · crash-safe verify | **done** |
-| Wave 3 — embedded + WASM + 发布 | `kevy-embedded` crate · 32-bit pointer port · WASM docs · GitHub Actions CI · v1.0.0-rc1 tag | **in progress** (RC tag pending lx64 re-bench) |
+| Wave 3 — embedded + WASM + 发布 | `kevy-embedded` crate · 32-bit pointer port · WASM docs · GitHub Actions CI · v1.0.0-rc tag | **done** (tag `v1.0.0-rc3`, in RC feedback period) |
 
-Full v1.0 plan: [`V1.0-BOUNDARY.md`](V1.0-BOUNDARY.md).
-Project-wide scope decisions (what's permanently OUT): [`.claude/scope-decisions.md`](.claude/scope-decisions.md).
+What's permanently out of scope is summarised in "Out of scope" above and
+detailed in [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md).
 
 ## v1.x stability commitment
 

@@ -2,7 +2,7 @@
 #
 # All servers run with `network_mode: host` + cpuset 0-9; the loadgen
 # runs on cpuset 10-15 so kevy's busy-poll can't starve the client.
-# Same isolation pattern as bench/lx64_loopback.sh.
+# Same isolation pattern as bench/loopback_c50.sh.
 #
 # Build the loadgen image once (~10 min for the rusteron / zenoh /
 # kevy-pubsub-bench compile chain):

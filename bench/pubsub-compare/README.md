@@ -49,7 +49,7 @@ Override per-test parameters via env:
 SUBS=100 MSGS=500000 SIZE=64 bash run.sh
 ```
 
-## Latest results (lx64, 16-core, 2026-05-28)
+## Latest results (16-core Linux box, 2026-05-28)
 
 `SUBS=50 MSGS=200000 SIZE=16`:
 
@@ -70,7 +70,7 @@ Key takeaways:
 - **kevy is the fastest TCP / RESP-protocol implementation**, 2× faster
   than ZeroMQ on the same TCP loopback transport despite RESP overhead.
 - **kevy beats valkey 9.1 by 2.7×** at this fan-out workload (lift over
-  the v0.metal baseline of 2.3×).
+  the earlier 2.3× baseline).
 - Zenoh underperforms here because 50-way fan-out hits its tokio
   channel path; Zenoh's strength is query/put semantics, not broadcast.
 
@@ -87,7 +87,7 @@ Key takeaways:
 - [`run.sh`](run.sh) — orchestrator (bring up each server, run client,
   tear down).
 
-## Charter note
+## Dependency note
 
 The bench source pulls in `zenoh`, `tokio`, `rusteron-client` /
 `rusteron-media-driver`, and links against libzmq. These are

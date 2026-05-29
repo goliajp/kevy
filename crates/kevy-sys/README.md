@@ -1,18 +1,18 @@
 # kevy-sys
 
-The network-boundary cement for [kevy](https://crates.io/crates/kevy) —
+The network-boundary layer for [kevy](https://crates.io/crates/kevy) —
 a tiny, zero-dependency, pure-Rust wrapper over the sockets and readiness
 poller the kevy server needs.
 
 This is one of kevy's three OS-boundary crates. The other two are
-publishable, generic stones:
+publishable, general-purpose crates:
 
 - [`kevy-uring`](https://crates.io/crates/kevy-uring) — pure-Rust
   io_uring (Linux completion engine), carved out of this crate.
 - [`kevy-madvise`](https://crates.io/crates/kevy-madvise) — pure-Rust
   `madvise(MADV_HUGEPAGE)` hint, also carved out.
 
-`kevy-sys` itself is **cement** — its API surface is hand-curated to the
+`kevy-sys` is **server-internal** — its API surface is hand-curated to the
 exact subset of sockets / pollers kevy's reactor uses. A third party
 would compare against `libc` / `nix` / `rustix` / `mio` and find it
 missing too much; it's not a generic foundation, it's the OS-boundary

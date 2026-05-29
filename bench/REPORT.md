@@ -359,11 +359,12 @@ kevy's busy-poll shards; absolute rps is ~5× below a clean run (kevy latency
 
 ---
 
-# CLEAN measurement on a dedicated 16-core box (lx64) — kevy leads on all axes
+# CLEAN measurement on a dedicated 16-core Linux box — kevy leads on all axes
 
 **Date:** 2026-05-26. First measurement free of the three artifacts that had
-depressed/distorted every prior run. Run on **lx64** (bare 16-core Linux, not a
-VM), all servers **host-loopback** (no docker bridge / NAT), in-memory.
+depressed/distorted every prior run. Run on a **dedicated 16-core Linux box**
+(bare metal, not a VM), all servers **host-loopback** (no docker bridge / NAT),
+in-memory.
 
 ## The three measurement artifacts (why earlier numbers lied)
 
@@ -439,7 +440,7 @@ stays there. No regression. Merged to `develop`.
   (latency), -c50 -P16 (throughput), and pub/sub (15.6M msg/s, measured earlier
   under the conservative docker-bridge setup). The earlier "-c50 lags at ~0.9×"
   was purely the co-located-busy-poll artifact, not a design limit.
-- **Honest caveats:** lx64 had background load (~2.7–3.8) during the runs, which
+- **Honest caveats:** the box had background load (~2.7–3.8) during the runs, which
   hurts kevy's busy-poll more than the blocking competitors, so kevy's true lead
   is if anything *understated*. Competitor io-threads runs were jittery
   (occasional drops to ~190k) — kevy was stable throughout.
@@ -452,8 +453,8 @@ stays there. No regression. Merged to `develop`.
 - **Open:** a second physical load-gen box would lift the residual client-side cap
   on the single-box -c50 numbers (the binding measurement constraint).
 
-Harnesses: `bench/lx64_loopback.sh` (3-way -c50), `bench/kevy_ab.sh` (binary
-A/B), `bench/lx64_c1.sh` (-c1). All pin server/client to disjoint cores.
+Harnesses: `bench/loopback_c50.sh` (3-way -c50), `bench/kevy_ab.sh` (binary
+A/B), `bench/loopback_c1.sh` (-c1). All pin server/client to disjoint cores.
 
 ## Follow-up perf (2026-05-26): fast path, pipeline scan, multishot recv
 
@@ -477,7 +478,7 @@ Three measure-first checkpoints after the clean baseline (all on develop):
 **Binding constraint going forward:** kevy's server outruns what a single
 16-core box's co-located `redis-benchmark` can drive at -c50 — further
 server-side perf needs a **dedicated second load-gen machine** to measure
-honestly. Details: `perfs/topics/04-c50-bottleneck.md`, `05-multishot-recv.md`.
+honestly.
 
 ## perf-guided per-core wins (2026-05-26): single-shard 3.77M → ~5.9M GET/core
 
@@ -499,5 +500,4 @@ Both are reactor-path (unlike the command-CPU `encode_bulk` reserve, which was
 component -61% but system-neutral — the server is reactor-bound, not
 command-CPU-bound). Verified: sharded 11/11 via epoll AND io_uring, clippy 0,
 full tests green. The lesson: a profiler beats guessing — the SipHash hotspot
-contradicted a standing "negligible" assumption. Data:
-`perfs/data/2026-05-26/{fxhash-conn-maps,local-reply-bypass}-ab.txt`.
+contradicted a standing "negligible" assumption.

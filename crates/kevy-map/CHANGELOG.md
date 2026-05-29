@@ -27,7 +27,7 @@ this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Performance
 
 - Standalone microbench is **0.75–1.00×** of `std::HashMap + FxBuildHasher`
-  on mac aarch64 (see [`BUDGETS.md`](./BUDGETS.md) for the honest reading).
+  on mac aarch64 (loaded-host reading).
   Production wins come from caller-driven prefetch + `SmallBytes` keys, not
   the standalone bench.
 

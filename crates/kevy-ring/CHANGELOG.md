@@ -28,7 +28,7 @@ this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Performance
 
 - Same-thread push+pop ≈ 1 ns/op.
-- Cross-thread SPSC on lx64 (x86_64): 6-10 ns/item (104-165M items/sec
+- Cross-thread SPSC on x86_64: 6-10 ns/item (104-165M items/sec
   depending on capacity). Mac aarch64 ~63 ns/item due to coherence cost.
 
 ### Verified

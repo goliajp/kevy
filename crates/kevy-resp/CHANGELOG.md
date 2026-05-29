@@ -30,8 +30,7 @@ this crate adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Verified
 
 - 96.31% line coverage; perf-gate test gates parse + encode budgets.
-- 1h+ libFuzzer run per target (`parse_command`, `parse_reply`) — see
-  [`STONE-STATUS.md`](./STONE-STATUS.md) for the latest timestamps.
+- 1h+ libFuzzer run per target (`parse_command`, `parse_reply`).
 
 [Unreleased]: ./
 [0.1.0]: ./

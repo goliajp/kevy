@@ -147,7 +147,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build kevy release image + run vs valkey 9.1
         env:
-          N: "50000"   # smaller than the lx64 cohort — this is a smoke
+          N: "50000"   # smaller than the perf-box cohort — this is a smoke
         run: |
           set -euo pipefail
           # `bench/run.sh` brings up valkey 9.1 + kevy release in compose,
