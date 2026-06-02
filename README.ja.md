@@ -137,8 +137,11 @@ Aeron の共有メモリ IPC は構造的な上限です（カーネルのネッ
 | Linux x86_64 | `kevy-<TAG>-x86_64-unknown-linux-gnu.tar.gz` |
 | Linux aarch64 | `kevy-<TAG>-aarch64-unknown-linux-gnu.tar.gz` |
 | macOS Apple Silicon | `kevy-<TAG>-aarch64-apple-darwin.tar.gz` |
-| Windows x64 | `kevy-<TAG>-x86_64-pc-windows-msvc.zip` |
-| Windows arm64 | `kevy-<TAG>-aarch64-pc-windows-msvc.zip` |
+
+> Windows：kevy の OS 層は POSIX socket + epoll/kqueue + io_uring のため、
+> ネイティブ Windows ビルドはありません。下記の Docker イメージを利用して
+> ください —— Windows の Docker Desktop は Linux コンテナを透過的に
+> 実行します。
 
 ワンライナーでのインストール（Linux / macOS、ターゲットを選択）：
 

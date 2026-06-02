@@ -124,8 +124,10 @@ Aeron 的共享内存 IPC 是结构性上限（不经内核网络栈）；在 TC
 | Linux x86_64 | `kevy-<TAG>-x86_64-unknown-linux-gnu.tar.gz` |
 | Linux aarch64 | `kevy-<TAG>-aarch64-unknown-linux-gnu.tar.gz` |
 | macOS Apple Silicon | `kevy-<TAG>-aarch64-apple-darwin.tar.gz` |
-| Windows x64 | `kevy-<TAG>-x86_64-pc-windows-msvc.zip` |
-| Windows arm64 | `kevy-<TAG>-aarch64-pc-windows-msvc.zip` |
+
+> Windows：kevy 的 OS 层是 POSIX socket + epoll/kqueue + io_uring，没有
+> 原生 Windows 构建。请使用下面的 Docker 镜像 —— Windows 上的
+> Docker Desktop 会透明地运行 Linux 容器。
 
 一行命令安装（Linux / macOS，按需选择目标）：
 
