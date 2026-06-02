@@ -132,8 +132,10 @@ Pre-built `kevy` server binaries are attached to every
 | Linux x86_64 | `kevy-<TAG>-x86_64-unknown-linux-gnu.tar.gz` |
 | Linux aarch64 | `kevy-<TAG>-aarch64-unknown-linux-gnu.tar.gz` |
 | macOS Apple Silicon | `kevy-<TAG>-aarch64-apple-darwin.tar.gz` |
-| Windows x64 | `kevy-<TAG>-x86_64-pc-windows-msvc.zip` |
-| Windows arm64 | `kevy-<TAG>-aarch64-pc-windows-msvc.zip` |
+
+> Windows: kevy's OS layer is POSIX sockets + epoll/kqueue + io_uring, so
+> there is no native Windows build. Use the Docker image below — Docker
+> Desktop on Windows runs Linux containers transparently.
 
 One-liner (Linux / macOS — pick your target):
 
