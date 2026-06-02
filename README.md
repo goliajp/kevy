@@ -122,6 +122,33 @@ kevy server is a sub-megabyte binary that boots into under 5 MB of RAM.
 
 ## Quick start
 
+### Install
+
+Pre-built `kevy` server binaries are attached to every
+[GitHub Release](https://github.com/goliajp/kevy/releases). Supported targets:
+
+| platform | archive |
+|----------|---------|
+| Linux x86_64 | `kevy-<TAG>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux aarch64 | `kevy-<TAG>-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS Apple Silicon | `kevy-<TAG>-aarch64-apple-darwin.tar.gz` |
+| Windows x64 | `kevy-<TAG>-x86_64-pc-windows-msvc.zip` |
+| Windows arm64 | `kevy-<TAG>-aarch64-pc-windows-msvc.zip` |
+
+One-liner (Linux / macOS — pick your target):
+
+```sh
+TAG=v1.0.0-rc4
+TARGET=x86_64-unknown-linux-gnu      # or aarch64-unknown-linux-gnu, aarch64-apple-darwin
+curl -L "https://github.com/goliajp/kevy/releases/download/$TAG/kevy-$TAG-$TARGET.tar.gz" | tar -xz
+sudo install "kevy-$TAG-$TARGET/kevy" /usr/local/bin/kevy
+kevy --port 6004
+```
+
+Each archive ships the `kevy` binary plus `kevy.toml.example`, `README.md`,
+and both license files. A matching `.sha256` is published alongside each
+asset. Or build from source as below.
+
 ### As a server
 
 ```sh

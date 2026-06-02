@@ -126,6 +126,34 @@ Aeron の共有メモリ IPC は構造的な上限です（カーネルのネッ
 
 ## クイックスタート
 
+### インストール
+
+各 [GitHub Release](https://github.com/goliajp/kevy/releases) には、
+プリビルド済みの `kevy` サーバーバイナリが添付されています。サポートする
+ターゲット：
+
+| プラットフォーム | アーカイブ |
+|------------------|------------|
+| Linux x86_64 | `kevy-<TAG>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux aarch64 | `kevy-<TAG>-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS Apple Silicon | `kevy-<TAG>-aarch64-apple-darwin.tar.gz` |
+| Windows x64 | `kevy-<TAG>-x86_64-pc-windows-msvc.zip` |
+| Windows arm64 | `kevy-<TAG>-aarch64-pc-windows-msvc.zip` |
+
+ワンライナーでのインストール（Linux / macOS、ターゲットを選択）：
+
+```sh
+TAG=v1.0.0-rc4
+TARGET=x86_64-unknown-linux-gnu      # または aarch64-unknown-linux-gnu, aarch64-apple-darwin
+curl -L "https://github.com/goliajp/kevy/releases/download/$TAG/kevy-$TAG-$TARGET.tar.gz" | tar -xz
+sudo install "kevy-$TAG-$TARGET/kevy" /usr/local/bin/kevy
+kevy --port 6004
+```
+
+各アーカイブには `kevy` バイナリ、`kevy.toml.example`、`README.md`、
+2 つのライセンスファイルが同梱されています。アセットごとに対応する
+`.sha256` も公開されます。あるいは下記のとおりソースからビルドできます。
+
 ### サーバーとして
 
 ```sh
