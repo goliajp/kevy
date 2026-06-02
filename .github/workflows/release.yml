@@ -77,23 +77,140 @@ jobs:
       - name: kevy
         run: cargo publish -p kevy --dry-run --allow-dirty
 
-  # ───────────── attach GitHub release notes (auto-generated) ─────────────
+  # ───────────── build the kevy server binary for every supported target ─────────────
+  # All five targets build NATIVELY on their respective GitHub-hosted runner
+  # (no cross compilation): each runner type matches a target triple 1:1.
+  # Linux gnu (glibc) chosen over musl for ABI compat with mainstream server
+  # distros (Debian/Ubuntu/Fedora/Amazon Linux). For an "everywhere" musl
+  # binary, add a separate target row.
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    needs: verify
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            archive: zip
+          - target: aarch64-pc-windows-msvc
+            runner: windows-11-arm
+            archive: zip
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        shell: bash
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+
+      - name: Build kevy server binary
+        shell: bash
+        run: cargo build --release --bin kevy --target ${{ matrix.target }}
+
+      # Package layout (same on every target):
+      #   kevy-<tag>-<target>/
+      #     kevy(.exe)
+      #     README.md
+      #     LICENSE-APACHE
+      #     LICENSE-MIT
+      #     kevy.toml.example
+      - name: Stage release artifact (Unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          tag=${GITHUB_REF#refs/tags/}
+          stage="kevy-${tag}-${{ matrix.target }}"
+          mkdir -p "$stage"
+          cp "target/${{ matrix.target }}/release/kevy" "$stage/kevy"
+          cp README.md LICENSE-APACHE LICENSE-MIT "$stage/"
+          cp crates/kevy/kevy.toml.example "$stage/kevy.toml.example"
+          tar -czf "${stage}.tar.gz" "$stage"
+          shasum -a 256 "${stage}.tar.gz" > "${stage}.tar.gz.sha256"
+          echo "ASSET=${stage}.tar.gz" >> "$GITHUB_ENV"
+          echo "ASSET_SHA=${stage}.tar.gz.sha256" >> "$GITHUB_ENV"
+
+      - name: Stage release artifact (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $tag = "${env:GITHUB_REF}" -replace '^refs/tags/',''
+          $stage = "kevy-$tag-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/kevy.exe" "$stage/kevy.exe"
+          Copy-Item README.md, LICENSE-APACHE, LICENSE-MIT $stage
+          Copy-Item crates/kevy/kevy.toml.example "$stage/kevy.toml.example"
+          Compress-Archive -Path $stage -DestinationPath "$stage.zip"
+          $hash = (Get-FileHash -Algorithm SHA256 "$stage.zip").Hash.ToLower()
+          "$hash  $stage.zip" | Out-File -FilePath "$stage.zip.sha256" -Encoding ascii
+          "ASSET=$stage.zip"             | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+          "ASSET_SHA=$stage.zip.sha256"  | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kevy-${{ matrix.target }}
+          path: |
+            ${{ env.ASSET }}
+            ${{ env.ASSET_SHA }}
+          if-no-files-found: error
+
+  # ───────────── attach binaries + GitHub release notes ─────────────
   release-notes:
     name: Draft GitHub release
     runs-on: ubuntu-latest
-    needs: [verify, publish-dry-run]
+    needs: [verify, publish-dry-run, build-binaries]
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0    # full history for changelog generation
-      - name: Create release draft
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: kevy-*
+          merge-multiple: true
+
+      - name: List staged assets (debug aid)
+        run: ls -lh dist
+
+      - name: Create / update release draft + attach binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag=${GITHUB_REF#refs/tags/}
-          gh release create "$tag" \
-            --draft \
-            --generate-notes \
-            --title "$tag"
+          # rc / beta tags ship as Pre-release (shows the blue badge on GitHub);
+          # plain v1.0.0-style tags become a stable release.
+          prerelease_flag=""
+          case "$tag" in
+            *-rc*|*-beta*) prerelease_flag="--prerelease" ;;
+          esac
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists — uploading assets (overwrite)."
+            gh release upload "$tag" dist/* --clobber
+          else
+            gh release create "$tag" \
+              --draft \
+              $prerelease_flag \
+              --generate-notes \
+              --title "$tag" \
+              dist/*
+          fi

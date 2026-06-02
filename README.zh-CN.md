@@ -114,6 +114,32 @@ Aeron 的共享内存 IPC 是结构性上限（不经内核网络栈）；在 TC
 
 ## 快速上手
 
+### 安装
+
+每个 [GitHub Release](https://github.com/goliajp/kevy/releases) 都附带预编译的
+`kevy` 服务器二进制。支持的目标：
+
+| 平台 | 归档文件 |
+|------|----------|
+| Linux x86_64 | `kevy-<TAG>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux aarch64 | `kevy-<TAG>-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS Apple Silicon | `kevy-<TAG>-aarch64-apple-darwin.tar.gz` |
+| Windows x64 | `kevy-<TAG>-x86_64-pc-windows-msvc.zip` |
+| Windows arm64 | `kevy-<TAG>-aarch64-pc-windows-msvc.zip` |
+
+一行命令安装（Linux / macOS，按需选择目标）：
+
+```sh
+TAG=v1.0.0-rc4
+TARGET=x86_64-unknown-linux-gnu      # 或 aarch64-unknown-linux-gnu、aarch64-apple-darwin
+curl -L "https://github.com/goliajp/kevy/releases/download/$TAG/kevy-$TAG-$TARGET.tar.gz" | tar -xz
+sudo install "kevy-$TAG-$TARGET/kevy" /usr/local/bin/kevy
+kevy --port 6004
+```
+
+每个归档都包含 `kevy` 二进制、`kevy.toml.example`、`README.md` 以及两份
+license。每个资源旁还发布了对应的 `.sha256`。或者按下面从源码构建。
+
 ### 作为服务器
 
 ```sh
