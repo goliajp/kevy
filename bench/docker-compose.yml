@@ -29,7 +29,7 @@ services:
   kevy:
     build:
       context: ..
-      dockerfile: bench/Dockerfile.kevy
+      dockerfile: Dockerfile
     environment:
       KEVY_BIND: "0.0.0.0"
       KEVY_PORT: "6379"

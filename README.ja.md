@@ -154,6 +154,37 @@ kevy --port 6004
 2 つのライセンスファイルが同梱されています。アセットごとに対応する
 `.sha256` も公開されます。あるいは下記のとおりソースからビルドできます。
 
+### Docker で実行
+
+公式イメージは各リリースごとに
+[`ghcr.io/goliajp/kevy`](https://github.com/goliajp/kevy/pkgs/container/kevy)
+に push されます。マルチアーキ（`linux/amd64` + `linux/arm64`）。タグ：
+`:<semver>`（例：`:1.0.0-rc4`）、`:rc`（最新 RC を追従）、`:latest`
+（stable のみ — RC では付かない）。
+
+```sh
+# ワンショット
+docker run --rm -p 6379:6379 ghcr.io/goliajp/kevy:rc
+
+# 永続化（スナップショット + AOF を named volume で再起動後も保持）
+docker run -d --name kevy -p 6379:6379 -v kevy-data:/data ghcr.io/goliajp/kevy:rc
+redis-cli -p 6379 SET foo bar
+```
+
+イメージのデフォルト：`KEVY_BIND=0.0.0.0`、`KEVY_PORT=6379`、
+`KEVY_DIR=/data`、`KEVY_AOF=1`。`-e` で上書きするか、イメージ名のあとに
+CLI 引数を渡します：
+`docker run ... ghcr.io/goliajp/kevy:rc --threads 4 --port 7000`。
+
+カーネル 5.13+ の Linux ホストでは io_uring reactor を有効化できます。
+Docker のデフォルト seccomp は `io_uring_setup` をブロックするので解除
+してください：
+
+```sh
+docker run --rm -p 6379:6379 -e KEVY_IO_URING=1 \
+  --security-opt seccomp=unconfined ghcr.io/goliajp/kevy:rc
+```
+
 ### サーバーとして
 
 ```sh
