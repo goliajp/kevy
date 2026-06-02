@@ -131,7 +131,7 @@ jobs:
         run: |
           # workflow_dispatch passes a branch ref, not a tag — use describe so
           # a manual rerun on develop produces a sensible "v1.0.0-rc4-2-gabc"
-          # filename rather than "develop-${{...}}".
+          # filename rather than a branch ref.
           tag="${GITHUB_REF#refs/tags/}"
           case "$tag" in
             refs/*) tag=$(git describe --tags --always) ;;
