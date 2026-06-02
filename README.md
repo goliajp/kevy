@@ -149,6 +149,35 @@ Each archive ships the `kevy` binary plus `kevy.toml.example`, `README.md`,
 and both license files. A matching `.sha256` is published alongside each
 asset. Or build from source as below.
 
+### Run with Docker
+
+The official image is published on every release to
+[`ghcr.io/goliajp/kevy`](https://github.com/goliajp/kevy/pkgs/container/kevy),
+multi-arch (`linux/amd64` + `linux/arm64`). Tags:
+`:<semver>` (e.g. `:1.0.0-rc4`), `:rc` (rolling latest RC), and `:latest`
+(stable releases only — never RC).
+
+```sh
+# One-shot
+docker run --rm -p 6379:6379 ghcr.io/goliajp/kevy:rc
+
+# Persistent (snapshot + AOF survive restarts via a named volume)
+docker run -d --name kevy -p 6379:6379 -v kevy-data:/data ghcr.io/goliajp/kevy:rc
+redis-cli -p 6379 SET foo bar
+```
+
+Image defaults: `KEVY_BIND=0.0.0.0`, `KEVY_PORT=6379`, `KEVY_DIR=/data`,
+`KEVY_AOF=1`. Override any with `-e` or by passing flags after the image:
+`docker run ... ghcr.io/goliajp/kevy:rc --threads 4 --port 7000`.
+
+Linux hosts running on kernel 5.13+ can opt into the io_uring reactor —
+docker's default seccomp profile blocks `io_uring_setup`, so allow it:
+
+```sh
+docker run --rm -p 6379:6379 -e KEVY_IO_URING=1 \
+  --security-opt seccomp=unconfined ghcr.io/goliajp/kevy:rc
+```
+
 ### As a server
 
 ```sh

@@ -140,6 +140,34 @@ kevy --port 6004
 每个归档都包含 `kevy` 二进制、`kevy.toml.example`、`README.md` 以及两份
 license。每个资源旁还发布了对应的 `.sha256`。或者按下面从源码构建。
 
+### 使用 Docker 运行
+
+官方镜像在每次发版时推送到
+[`ghcr.io/goliajp/kevy`](https://github.com/goliajp/kevy/pkgs/container/kevy)，
+多架构（`linux/amd64` + `linux/arm64`）。Tag：`:<semver>`（如
+`:1.0.0-rc4`）、`:rc`（滚动追新 RC）、`:latest`（仅 stable，RC 期不打）。
+
+```sh
+# 临时运行
+docker run --rm -p 6379:6379 ghcr.io/goliajp/kevy:rc
+
+# 持久化（快照 + AOF 通过命名卷在重启后保留）
+docker run -d --name kevy -p 6379:6379 -v kevy-data:/data ghcr.io/goliajp/kevy:rc
+redis-cli -p 6379 SET foo bar
+```
+
+镜像默认值：`KEVY_BIND=0.0.0.0`、`KEVY_PORT=6379`、`KEVY_DIR=/data`、
+`KEVY_AOF=1`。用 `-e` 覆盖，或在镜像名后面接 CLI 参数：
+`docker run ... ghcr.io/goliajp/kevy:rc --threads 4 --port 7000`。
+
+Linux 内核 5.13+ 可以启用 io_uring reactor。Docker 默认 seccomp 拦截
+`io_uring_setup`，需要放开：
+
+```sh
+docker run --rm -p 6379:6379 -e KEVY_IO_URING=1 \
+  --security-opt seccomp=unconfined ghcr.io/goliajp/kevy:rc
+```
+
 ### 作为服务器
 
 ```sh

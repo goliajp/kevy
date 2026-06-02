@@ -1,5 +1,13 @@
 target/
 .git/
-node_modules/
+.github/
 .claude/
+docs/
+tests/
+bench/
+node_modules/
 **/*.bak
+**/.DS_Store
+README*.md
+CHANGELOG.md
+MIGRATION-FROM-VALKEY.md

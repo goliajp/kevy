@@ -1,0 +1,70 @@
+name: Docker
+
+# Build + push the official kevy server image to GitHub Container Registry
+# (ghcr.io/goliajp/kevy) on every release tag, plus on manual dispatch.
+#
+# Multi-arch (linux/amd64 + linux/arm64) via buildx + QEMU. Arm64 build is
+# emulated; expect ~5-10 min for the full pipeline. Caches via the GHA cache
+# backend so repeat runs on the same tag (e.g. dispatch after a tag re-push)
+# finish in seconds.
+#
+# Tag policy (driven by docker/metadata-action):
+#   - every release tag    → :<semver>      e.g. :1.0.0-rc4, :1.0.0
+#   - rc / beta tag        → :rc            (rolling "latest RC")
+#   - stable tag only      → :latest        (never on rc / beta)
+#
+# Pushes to ghcr.io use the workflow's own GITHUB_TOKEN — no extra secret
+# required, but the repository must have `Packages: write` permission for
+# Actions (Settings → Actions → General → Workflow permissions).
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-beta[0-9]+'
+  workflow_dispatch:
+
+jobs:
+  build-push:
+    name: Build + push ghcr.io/${{ github.repository }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU (for linux/arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags + labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=rc,enable=${{ startsWith(github.ref, 'refs/tags/') && (contains(github.ref, '-rc') || contains(github.ref, '-beta')) }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-rc') && !contains(github.ref, '-beta') }}
+
+      - name: Build + push multi-arch image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
