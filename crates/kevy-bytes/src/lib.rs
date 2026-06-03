@@ -841,25 +841,36 @@ mod tests {
     // produces at least one. Wrapping the system allocator (not replacing it
     // wholesale with a fake) keeps the test compatible with Rust's std types
     // that the tests themselves use.
+    //
+    // Concurrency: the global allocator is shared by EVERY thread in the test
+    // process, and `cargo test` runs ~30 unrelated tests in this crate in
+    // parallel. A simple global flag would attribute their allocs to our
+    // measurement window. We instead key the recording on a thread-local so
+    // only the test thread *currently inside* `measure_allocs` counts.
 
     use std::alloc::{GlobalAlloc, Layout, System};
-    use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
-    use std::sync::Mutex;
+    use std::cell::Cell;
 
-    /// `System` wrapper that bumps a counter on alloc. The counter is only
-    /// observed while `RECORDING` is true so test setup (vec!, format!, etc.)
-    /// does not skew the measurement.
     struct CountingAlloc {
         inner: System,
     }
-    static ALLOC_CALLS: AtomicUsize = AtomicUsize::new(0);
-    static RECORDING: AtomicBool = AtomicBool::new(false);
+
+    thread_local! {
+        // `const { Cell::new(...) }` is lazily-zero-init at thread spawn — no
+        // heap alloc — so the allocator itself can safely consult them.
+        static THREAD_RECORDING: Cell<bool> = const { Cell::new(false) };
+        static THREAD_ALLOC_CALLS: Cell<usize> = const { Cell::new(0) };
+    }
 
     unsafe impl GlobalAlloc for CountingAlloc {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-            if RECORDING.load(Ordering::Relaxed) {
-                ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
-            }
+            // `try_with` so if the TLS is being destroyed (process teardown)
+            // we still serve the alloc instead of panicking.
+            let _ = THREAD_RECORDING.try_with(|r| {
+                if r.get() {
+                    let _ = THREAD_ALLOC_CALLS.try_with(|c| c.set(c.get() + 1));
+                }
+            });
             // SAFETY: forwarding to the system allocator with the same layout.
             unsafe { self.inner.alloc(layout) }
         }
@@ -872,21 +883,12 @@ mod tests {
     #[global_allocator]
     static COUNTING: CountingAlloc = CountingAlloc { inner: System };
 
-    // Serialises all alloc-counting tests in this module: the RECORDING flag
-    // is a single shared atomic, so two #[test] threads simultaneously inside
-    // `measure_allocs` would corrupt each other's count (heap_payload's alloc
-    // gets attributed to inline_payload's window, etc). The test framework
-    // runs #[test]s in parallel by default; this mutex makes them mutually
-    // exclusive WITHIN this counting-allocator scope.
-    static GATE: Mutex<()> = Mutex::new(());
-
     fn measure_allocs<F: FnOnce()>(f: F) -> usize {
-        let _guard = GATE.lock().unwrap_or_else(|p| p.into_inner());
-        ALLOC_CALLS.store(0, Ordering::Relaxed);
-        RECORDING.store(true, Ordering::Relaxed);
+        THREAD_ALLOC_CALLS.with(|c| c.set(0));
+        THREAD_RECORDING.with(|r| r.set(true));
         f();
-        RECORDING.store(false, Ordering::Relaxed);
-        ALLOC_CALLS.load(Ordering::Relaxed)
+        THREAD_RECORDING.with(|r| r.set(false));
+        THREAD_ALLOC_CALLS.with(|c| c.get())
     }
 
     #[test]
