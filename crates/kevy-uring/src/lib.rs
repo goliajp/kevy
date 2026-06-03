@@ -35,6 +35,9 @@ mod layout;
 mod pbr;
 mod ring;
 
+#[cfg(test)]
+mod ring_tests;
+
 pub use completion::Completion;
 pub use pbr::ProvidedBufRing;
 pub use ring::IoUring;
