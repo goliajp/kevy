@@ -53,7 +53,16 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<()> {
     if total == 0 {
         return Ok(());
     }
-    let mut pos = 0;
+    // Skip the 9-byte AOF_MAGIC header if present. Legacy bare-RESP
+    // AOFs (pre-1.2.0) parse identically from position 0. Future
+    // format bumps should add a version check here.
+    let mut pos = if data.len() >= crate::aof::AOF_MAGIC.len()
+        && &data[..crate::aof::AOF_MAGIC.len()] == crate::aof::AOF_MAGIC
+    {
+        crate::aof::AOF_MAGIC.len()
+    } else {
+        0
+    };
     let mut replayed: u64 = 0;
     let stop = loop {
         if pos >= total {
