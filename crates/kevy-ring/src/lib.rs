@@ -53,11 +53,55 @@
 //! ```
 
 #![warn(missing_docs)]
+// `--cfg loom` is a known custom cfg used by tests/loom.rs to swap atomics +
+// UnsafeCell + Arc for loom's instrumented versions. Tell rustc not to
+// warn about the unrecognized cfg name on normal builds.
+#![allow(unexpected_cfgs)]
 
-use std::cell::UnsafeCell;
+// Loom-compat shim: under `--cfg loom` the model checker substitutes its own
+// instrumented atomics + `UnsafeCell` + `Arc`, and `tests/loom.rs` enumerates
+// every possible interleaving of the SPSC algorithm against this exact crate.
+// Under a normal build the imports are the std originals — zero overhead.
+//
+// `UnsafeCellExt::with_mut` unifies the two APIs: loom's `UnsafeCell` only
+// exposes `with_mut`; std's exposes `.get()`. We give std a tiny shim that
+// delegates to `.get()` so the same call-site (`cell.with_mut(|p| ...)`) works
+// in both modes. No production code change in the hot path.
+mod sync {
+    #[cfg(loom)]
+    pub use loom::cell::UnsafeCell;
+    #[cfg(loom)]
+    pub use loom::sync::Arc;
+    #[cfg(loom)]
+    pub use loom::sync::atomic::{AtomicUsize, Ordering};
+
+    #[cfg(not(loom))]
+    pub use std::cell::UnsafeCell;
+    #[cfg(not(loom))]
+    pub use std::sync::Arc;
+    #[cfg(not(loom))]
+    pub use std::sync::atomic::{AtomicUsize, Ordering};
+}
+
+#[cfg(not(loom))]
+trait UnsafeCellExt<T> {
+    fn with_mut<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(*mut T) -> R;
+}
+#[cfg(not(loom))]
+impl<T> UnsafeCellExt<T> for std::cell::UnsafeCell<T> {
+    #[inline(always)]
+    fn with_mut<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(*mut T) -> R,
+    {
+        f(self.get())
+    }
+}
+
 use std::mem::MaybeUninit;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use sync::{Arc, AtomicUsize, Ordering, UnsafeCell};
 
 /// Pad to a cache line so the producer's `tail` and consumer's `head` never
 /// share one — otherwise each side's store would invalidate the other's cache
@@ -113,9 +157,9 @@ impl<T> Drop for Ring<T> {
         while i != tail {
             // SAFETY: `i` is in `[head, tail)`, so this slot holds an initialized
             // `T` that no one else will read (we have `&mut self`).
-            unsafe {
-                (*self.buf[i & self.mask].get()).assume_init_drop();
-            }
+            self.buf[i & self.mask].with_mut(|p| unsafe {
+                (*p).assume_init_drop();
+            });
             i = i.wrapping_add(1);
         }
     }
@@ -181,9 +225,9 @@ impl<T> Producer<T> {
         }
         // SAFETY: slot `tail & mask` is free (outside `[head, tail)`); we are
         // the only producer, so no one else writes it.
-        unsafe {
-            (*r.buf[tail & r.mask].get()).write(val);
-        }
+        r.buf[tail & r.mask].with_mut(|p| unsafe {
+            (*p).write(val);
+        });
         // `Release` publishes the slot write to the consumer's `Acquire` of `tail`.
         r.tail.0.store(tail.wrapping_add(1), Ordering::Release);
         Ok(())
@@ -223,7 +267,7 @@ impl<T> Consumer<T> {
         }
         // SAFETY: slot `head & mask` is in `[head, tail)`, initialized by the
         // producer; we are the only consumer, so we read it exactly once.
-        let val = unsafe { (*r.buf[head & r.mask].get()).assume_init_read() };
+        let val = r.buf[head & r.mask].with_mut(|p| unsafe { (*p).assume_init_read() });
         // `Release` frees the slot for the producer's `Acquire` of `head`.
         r.head.0.store(head.wrapping_add(1), Ordering::Release);
         Some(val)
