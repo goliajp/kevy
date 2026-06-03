@@ -36,12 +36,15 @@
 #![warn(missing_docs)]
 
 mod argv;
+mod argv_borrowed;
 mod error;
 mod reply_encode;
 mod reply_parse;
 mod request;
+mod request_borrowed;
 
 pub use argv::{Argv, Command};
+pub use argv_borrowed::ArgvBorrowed;
 pub use error::ProtocolError;
 pub use reply_encode::{
     encode_array_len, encode_bulk, encode_command, encode_error, encode_integer, encode_null_bulk,
@@ -49,3 +52,4 @@ pub use reply_encode::{
 };
 pub use reply_parse::{Reply, parse_reply};
 pub use request::{parse_command, parse_command_into};
+pub use request_borrowed::parse_command_borrowed;
