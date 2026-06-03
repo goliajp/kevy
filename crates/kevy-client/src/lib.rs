@@ -42,10 +42,13 @@ use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
 
 mod collections;
+mod scan;
 mod subscribe;
+mod transaction;
 mod url;
 
 pub use subscribe::{PubsubEvent, Subscriber};
+pub use transaction::Transaction;
 
 pub(crate) use url::{Target, parse_url, resolve_store};
 
@@ -285,6 +288,56 @@ impl Connection {
         }
     }
 
+    /// `MGET key [key ...]` — one reply per key, `None` for missing /
+    /// wrong-type. Returns in the same order as `keys`.
+    pub fn mget(&mut self, keys: &[&[u8]]) -> io::Result<Vec<Option<Vec<u8>>>> {
+        match self {
+            Self::Embedded(s) => keys.iter().map(|k| s.get(k)).collect(),
+            Self::Remote(c) => {
+                let mut args = Vec::with_capacity(keys.len() + 1);
+                args.push(b"MGET".to_vec());
+                args.extend(keys.iter().map(|k| k.to_vec()));
+                match c.request(&args)? {
+                    Reply::Array(items) => items
+                        .into_iter()
+                        .map(|r| match r {
+                            Reply::Bulk(v) => Ok(Some(v)),
+                            Reply::Nil => Ok(None),
+                            other => Err(unexpected(other)),
+                        })
+                        .collect(),
+                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    other => Err(unexpected(other)),
+                }
+            }
+        }
+    }
+
+    /// `MSET key value [key value ...]` — set every pair atomically.
+    pub fn mset(&mut self, pairs: &[(&[u8], &[u8])]) -> io::Result<()> {
+        match self {
+            Self::Embedded(s) => {
+                for (k, v) in pairs {
+                    s.set(k, v)?;
+                }
+                Ok(())
+            }
+            Self::Remote(c) => {
+                let mut args = Vec::with_capacity(pairs.len() * 2 + 1);
+                args.push(b"MSET".to_vec());
+                for (k, v) in pairs {
+                    args.push(k.to_vec());
+                    args.push(v.to_vec());
+                }
+                match c.request(&args)? {
+                    Reply::Simple(s) if s == b"OK" => Ok(()),
+                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    other => Err(unexpected(other)),
+                }
+            }
+        }
+    }
+
     /// `PUBLISH channel message`. Returns the count of subscribers
     /// that received the message.
     ///
@@ -404,5 +457,27 @@ mod tests {
         // No bus, no subscribers — by design.
         let mut c = Connection::open("mem://").unwrap();
         assert_eq!(c.publish(b"chan", b"hi").unwrap(), 0);
+    }
+
+    #[test]
+    fn embedded_mget_mset() {
+        let mut c = Connection::open("mem://").unwrap();
+        c.mset(&[
+            (b"a".as_ref(), b"1".as_ref()),
+            (b"b".as_ref(), b"2".as_ref()),
+        ])
+        .unwrap();
+        let got = c.mget(&[&b"a"[..], &b"b"[..], &b"missing"[..]]).unwrap();
+        assert_eq!(
+            got,
+            vec![Some(b"1".to_vec()), Some(b"2".to_vec()), None]
+        );
+    }
+
+    #[test]
+    fn embedded_multi_rejected_unsupported() {
+        let mut c = Connection::open("mem://").unwrap();
+        let err = c.multi().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     }
 }
