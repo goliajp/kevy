@@ -1,11 +1,11 @@
 //! [`Store`] — the embedded entry point. Wraps `kevy_store::Store` with
-//! a mutex (for cross-thread access), optional AOF auto-logging, and an
-//! optional background TTL reaper.
+//! a mutex (for cross-thread access), optional AOF auto-logging, an
+//! optional background TTL reaper, and an in-process pub/sub bus.
 
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -13,20 +13,21 @@ use kevy_persist::{Aof, Argv, RewriteStats, load_snapshot, replay_aof, save_snap
 use kevy_store::{ExpireStats, StoreError};
 
 use crate::config::{Config, TtlReaperMode};
+use crate::pubsub::{PubsubBus, Subscription};
 
 /// The embedded keyspace.
 ///
-/// `Store` itself is **not** `Clone` (the reaper-thread `JoinHandle` is
-/// owned uniquely). To share one keyspace across threads, wrap the store
-/// in an `Arc`:
+/// **`Store` is `Clone`** (since v1.1.0). A clone is a cheap `Arc` bump:
+/// every clone reaches the same underlying `kevy_store::Store` + AOF +
+/// reaper + pub/sub bus. The reaper thread is joined and the AOF is
+/// flushed exactly once, when the **last** clone is dropped.
 ///
 /// ```
-/// use std::sync::Arc;
 /// use kevy_embedded::{Config, Store};
 ///
 /// # fn main() -> std::io::Result<()> {
-/// let s = Arc::new(Store::open(Config::default().with_ttl_reaper_manual())?);
-/// let s2 = Arc::clone(&s);
+/// let s = Store::open(Config::default().with_ttl_reaper_manual())?;
+/// let s2 = s.clone();
 /// std::thread::spawn(move || {
 ///     s2.set(b"from-thread", b"v").unwrap();
 /// }).join().unwrap();
@@ -35,19 +36,55 @@ use crate::config::{Config, TtlReaperMode};
 /// # }
 /// ```
 ///
-/// Every method takes `&self`, so an `Arc<Store>` reaches the same
-/// underlying `kevy_store::Store` + AOF + reaper. The internal
-/// `Arc<Mutex<Inner>>` is what makes that safe under contention.
+/// Every method takes `&self`. The internal `Arc<Mutex<Inner>>` is what
+/// makes shared access safe under contention.
+#[derive(Clone)]
 pub struct Store {
     inner: Arc<Mutex<Inner>>,
+    /// Shared drop guard: signals + joins reaper and flushes AOF when the
+    /// LAST `Store` clone (or `Subscription`) holding a strong ref drops.
+    guard: Arc<DropGuard>,
     config: Config,
-    reaper_stop: Option<Arc<AtomicBool>>,
-    reaper_join: Option<JoinHandle<()>>,
 }
 
-struct Inner {
-    store: kevy_store::Store,
-    aof: Option<Aof>,
+/// Weak handle to a `Store` — does not keep the underlying keyspace alive.
+///
+/// Used by the URL-keyed registry in `kevy-client` so that multiple
+/// `Connection::open("mem://name")` calls share the same backing store
+/// without leaking it when all strong handles go away.
+pub struct WeakStore {
+    inner: Weak<Mutex<Inner>>,
+    guard: Weak<DropGuard>,
+    config: Config,
+}
+
+impl WeakStore {
+    /// Try to upgrade back to a `Store`. Returns `None` if the last strong
+    /// reference has already been dropped.
+    pub fn upgrade(&self) -> Option<Store> {
+        Some(Store {
+            inner: self.inner.upgrade()?,
+            guard: self.guard.upgrade()?,
+            config: self.config.clone(),
+        })
+    }
+}
+
+pub(crate) struct Inner {
+    pub(crate) store: kevy_store::Store,
+    pub(crate) aof: Option<Aof>,
+    pub(crate) bus: PubsubBus,
+}
+
+/// Owns the reaper-thread handle + a back-reference to `Inner` for the
+/// final AOF flush. Lives in an `Arc<DropGuard>` shared across every
+/// `Store` clone; the actual drop logic fires only when the last clone
+/// goes away. `JoinHandle` is wrapped in `Mutex<Option>` so `Drop` can
+/// `.take()` it while only having `&self`.
+pub(crate) struct DropGuard {
+    reaper_stop: Option<Arc<AtomicBool>>,
+    reaper_join: Mutex<Option<JoinHandle<()>>>,
+    inner_for_flush: Arc<Mutex<Inner>>,
 }
 
 impl Store {
@@ -82,7 +119,11 @@ impl Store {
             None
         };
 
-        let inner = Arc::new(Mutex::new(Inner { store, aof }));
+        let inner = Arc::new(Mutex::new(Inner {
+            store,
+            aof,
+            bus: PubsubBus::new(),
+        }));
 
         let (reaper_stop, reaper_join) = match config.ttl_reaper {
             TtlReaperMode::Manual => (None, None),
@@ -100,12 +141,27 @@ impl Store {
             }
         };
 
+        let guard = Arc::new(DropGuard {
+            reaper_stop,
+            reaper_join: Mutex::new(reaper_join),
+            inner_for_flush: inner.clone(),
+        });
+
         Ok(Store {
             inner,
+            guard,
             config,
-            reaper_stop,
-            reaper_join,
         })
+    }
+
+    /// Get a weak handle that does not keep the keyspace alive.
+    /// `upgrade()` returns `None` once the last strong `Store` is dropped.
+    pub fn downgrade(&self) -> WeakStore {
+        WeakStore {
+            inner: Arc::downgrade(&self.inner),
+            guard: Arc::downgrade(&self.guard),
+            config: self.config.clone(),
+        }
     }
 
     /// The active config (a clone — modifying it has no effect on the
@@ -160,7 +216,7 @@ impl Store {
         // Disjoint-field split-borrow: destructure the guard so the borrow
         // checker sees `store` and `aof` as independent borrows, not two
         // claims on the same `&mut Inner`.
-        let Inner { store, aof } = &mut *g;
+        let Inner { store, aof, bus: _ } = &mut *g;
         let Some(aof) = aof else { return Ok(None) };
         Ok(Some(aof.rewrite_from(store)?))
     }
@@ -447,6 +503,49 @@ impl Store {
         self.lock().store.zcard(key).map_err(store_err)
     }
 
+    // ---- pub/sub --------------------------------------------------------
+
+    /// `PUBLISH channel payload`. Delivers `payload` to every subscriber on
+    /// `channel` (direct + pattern matches) running inside this same
+    /// process. Returns the count of receivers that the message reached.
+    pub fn publish(&self, channel: &[u8], payload: &[u8]) -> usize {
+        // Clone out the matching senders under the lock, then release the
+        // lock before send() so a slow receiver can't stall every other
+        // shard of the bus.
+        let plans = {
+            let g = self.lock();
+            g.bus.collect_delivery(channel, payload)
+        };
+        let mut count = 0;
+        for (frame, sender) in plans {
+            if sender.send(frame).is_ok() {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// Open a [`Subscription`] subscribed to `channels`. The subscription
+    /// owns its receive end; drop it to unsubscribe from everything.
+    /// Pass `&[]` to start with no subscriptions and add some later via
+    /// [`Subscription::subscribe`] / [`Subscription::psubscribe`].
+    pub fn subscribe(&self, channels: &[&[u8]]) -> Subscription {
+        let mut sub = Subscription::new(self.inner.clone(), self.guard.clone());
+        if !channels.is_empty() {
+            sub.subscribe(channels);
+        }
+        sub
+    }
+
+    /// Convenience: open a [`Subscription`] starting on pattern subscriptions.
+    pub fn psubscribe(&self, patterns: &[&[u8]]) -> Subscription {
+        let mut sub = Subscription::new(self.inner.clone(), self.guard.clone());
+        if !patterns.is_empty() {
+            sub.psubscribe(patterns);
+        }
+        sub
+    }
+
     // ---- internal -------------------------------------------------------
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -546,22 +645,24 @@ fn reaper_loop(
     }
 }
 
-impl Drop for Store {
+impl Drop for DropGuard {
     fn drop(&mut self) {
-        // Signal reaper to stop; it'll exit on next wake-up (≤ interval).
+        // Last `Store` clone is going away — stop the reaper, join it, then
+        // flush the AOF so EverySec users don't lose the last sub-second of
+        // writes. Poison recovery: a method panic earlier shouldn't strand
+        // the AOF unflushed; the writes already landed in-memory.
         if let Some(stop) = &self.reaper_stop {
             stop.store(true, Ordering::Relaxed);
         }
-        if let Some(j) = self.reaper_join.take() {
+        if let Some(j) = self
+            .reaper_join
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+        {
             let _ = j.join();
         }
-        // Final AOF flush (BufWriter Drop also handles it, but be explicit
-        // so EverySec users don't lose the last sub-second of writes when
-        // dropping the store cleanly). Recover from poison: a panic in some
-        // method during this session shouldn't strand the AOF unflushed,
-        // since the underlying writes already landed in-memory before the
-        // panic — we just need to push the BufWriter contents out.
-        let mut g = match self.inner.lock() {
+        let mut g = match self.inner_for_flush.lock() {
             Ok(g) => g,
             Err(poison) => poison.into_inner(),
         };

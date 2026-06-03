@@ -1,7 +1,10 @@
 [package]
 name = "kevy-embedded"
 description = "Embedded mode for kevy — in-process Redis-compatible KV without the server/runtime."
-version.workspace = true
+# kevy-embedded tracks its own additive growth (Store::Clone + pubsub bus
+# from v1.1.0); the rest of the workspace stays at 1.0.4 until the
+# Borrowed-Argv refactor lands. Same independence story as kevy-client.
+version = "1.1.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true

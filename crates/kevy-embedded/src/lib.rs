@@ -52,10 +52,12 @@
 #![forbid(unsafe_code)]
 
 mod config;
+mod pubsub;
 mod replay;
 mod store;
 
 pub use config::{AppendFsync, Config, EvictionPolicy, TtlReaperMode};
 pub use kevy_persist::RewriteStats;
 pub use kevy_store::{ExpireStats, StoreError};
-pub use store::Store;
+pub use pubsub::{PubsubFrame, Subscription};
+pub use store::{Store, WeakStore};
