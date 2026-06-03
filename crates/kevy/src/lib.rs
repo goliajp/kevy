@@ -72,7 +72,7 @@ impl Commands for KevyCommands {
         match upper_verb(name, &mut buf) {
             b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG" | b"HELLO"
             | b"INFO" | b"CLUSTER" | b"DEBUG" | b"WAIT" | b"SHUTDOWN"
-            | b"CLIENT" => Route::Local,
+            | b"CLIENT" | b"SELECT" => Route::Local,
             b"DBSIZE" => Route::Dbsize,
             b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
             b"SAVE" | b"BGSAVE" => Route::Save,
@@ -215,7 +215,7 @@ impl Commands for KevyCommands {
         let route = match upper {
             b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG" | b"HELLO"
             | b"INFO" | b"CLUSTER" | b"DEBUG" | b"WAIT" | b"SHUTDOWN"
-            | b"CLIENT" => Route::Local,
+            | b"CLIENT" | b"SELECT" => Route::Local,
             b"DBSIZE" => Route::Dbsize,
             b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
             b"SAVE" | b"BGSAVE" => Route::Save,
