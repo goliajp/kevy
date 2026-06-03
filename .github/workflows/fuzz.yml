@@ -46,12 +46,11 @@ jobs:
       - uses: actions/checkout@v4
 
       # cargo-fuzz needs the nightly toolchain (libfuzzer-sys + the
-      # `-Zsanitizer` machinery aren't in stable). Pin a recent dated
-      # nightly so build behaviour is reproducible.
+      # `-Zsanitizer` machinery aren't in stable). The repo root's
+      # rust-toolchain.toml pins channel=stable, so we explicitly invoke
+      # nightly per-command via `cargo +nightly …`.
       - name: Install nightly toolchain
-        run: |
-          rustup toolchain install nightly --component rust-src --no-self-update
-          rustup default nightly
+        run: rustup toolchain install nightly --component rust-src --no-self-update
 
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
@@ -68,10 +67,13 @@ jobs:
 
       - name: Run ${{ matrix.target }} for ${{ env.FUZZ_SECONDS }}s
         working-directory: crates/kevy-resp/fuzz
-        # -max_total_time bounds wall-clock so the job can't run away. Any
-        # libfuzzer crash trips the step (non-zero exit) and uploads the
-        # offending input as an artifact.
-        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=${{ env.FUZZ_SECONDS }}
+        # `cargo +nightly` overrides the stable channel pinned by the
+        # repo-root rust-toolchain.toml; cargo-fuzz then inherits nightly
+        # for its inner `cargo build` invocation. -max_total_time bounds
+        # wall-clock so the job can't run away. Any libfuzzer crash trips
+        # the step (non-zero exit) and uploads the offending input as an
+        # artifact.
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=${{ env.FUZZ_SECONDS }}
 
       - name: Upload crash artefacts on failure
         if: failure()
