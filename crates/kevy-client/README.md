@@ -53,7 +53,7 @@ environment variable / config file — develop against `mem://`,
 integration-test against `file:///tmp/test`, deploy against
 `kevy://prod-cache:6379`. No code change.
 
-## Command coverage (v1.4.0)
+## Command coverage (v1.5.0)
 
 All five Redis data types plus generic-key ops, persistence, the full
 pub/sub cycle (including in-process embedded delivery), multi-key
@@ -79,17 +79,37 @@ remote backend. Methods on `Connection`:
 `randomkey`. Embedded `scan` finishes in one round (any non-zero cursor
 returns empty); the remote backend honours the server's real cursor.
 
-**Transactions (v1.4.0, remote only):** `conn.multi()` → `Transaction`
-handle with `queue(&[verb, args...])` / `exec()` / `discard()`. Embedded
-returns `ErrorKind::Unsupported` — every Connection method already
-serialises on the embed mutex, so MULTI's locking guarantee maps to a
-no-op there.
+**Transactions (v1.4.0 + v1.5.0, remote only):** `conn.multi()` →
+`Transaction` handle. Two queue surfaces — raw `queue(&[verb, args...])`
+and v1.5.0's typed builders (`set`, `get`, `del`, `exists`, `incr`,
+`incr_by`, `mget`, `mset`) that chain via `&mut Self`. Plus
+[`Connection::watch`] / [`unwatch`] and [`Transaction::exec_watched`]
+for optimistic concurrency. Embedded returns `ErrorKind::Unsupported` —
+every Connection method already serialises on the embed mutex, so
+MULTI's locking guarantee maps to a no-op there.
 
 ```rust
+// raw shape, unchanged from v1.4.0
 let mut txn = conn.multi()?;
 txn.queue(&[b"SET", b"counter", b"0"])?;
 txn.queue(&[b"INCR", b"counter"])?;
 let replies = txn.exec()?;  // Vec<kevy_resp::Reply>
+
+// v1.5.0: typed builders chain with `?` directly
+let mut txn = conn.multi()?;
+txn.set(b"a", b"1")?
+    .incr(b"counter")?
+    .del(&[b"tmp"])?;
+let replies = txn.exec()?;
+
+// v1.5.0: WATCH-driven optimistic concurrency
+conn.watch(&[b"counter"])?;
+let mut txn = conn.multi()?;
+txn.incr(b"counter")?;
+match txn.exec_watched()? {
+    Some(replies) => assert_eq!(replies.len(), 1),
+    None         => { /* watched key changed — retry the whole block */ }
+}
 ```
 
 **Pub/sub:** `Connection::publish` for the producer side. The consumer

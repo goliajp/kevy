@@ -87,3 +87,84 @@ fn multi_drop_sends_implicit_discard() {
         // No exec/discard — Drop fires DISCARD on the wire.
     }
 }
+
+// ─── v1.5.0: typed builders + WATCH ───────────────────────────────────────
+
+#[test]
+fn typed_builders_chain_and_exec() {
+    // MULTI → +OK; SET a 1 → +QUEUED; INCR c → +QUEUED; DEL b → +QUEUED;
+    // EXEC → *3\r\n+OK\r\n:5\r\n:1\r\n
+    let port = mock_server(vec![
+        (14, b"+OK\r\n"),
+        (29, b"+QUEUED\r\n"),
+        (23, b"+QUEUED\r\n"),
+        (22, b"+QUEUED\r\n"),
+        (13, b"*3\r\n+OK\r\n:5\r\n:1\r\n"),
+    ]);
+    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut txn = conn.multi().unwrap();
+    txn.set(b"a", b"1")
+        .unwrap()
+        .incr(b"c")
+        .unwrap()
+        .del(&[b"b"])
+        .unwrap();
+    let replies = txn.exec().unwrap();
+    assert_eq!(replies.len(), 3);
+    assert!(matches!(&replies[0], Reply::Simple(s) if s == b"OK"));
+    assert!(matches!(&replies[1], Reply::Int(5)));
+    assert!(matches!(&replies[2], Reply::Int(1)));
+}
+
+#[test]
+fn watch_then_multi_exec_success() {
+    // WATCH x → +OK; MULTI → +OK; INCR x → +QUEUED; EXEC → *1\r\n:7\r\n
+    let port = mock_server(vec![
+        (20, b"+OK\r\n"),     // WATCH x
+        (14, b"+OK\r\n"),     // MULTI
+        (23, b"+QUEUED\r\n"), // INCR x
+        (13, b"*1\r\n:7\r\n"), // EXEC
+    ]);
+    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    conn.watch(&[b"x"]).unwrap();
+    let mut txn = conn.multi().unwrap();
+    txn.incr(b"x").unwrap();
+    let replies = txn.exec_watched().unwrap().expect("not aborted");
+    assert_eq!(replies.len(), 1);
+    assert!(matches!(&replies[0], Reply::Int(7)));
+}
+
+#[test]
+fn watch_then_exec_aborted_returns_none() {
+    // WATCH x → +OK; MULTI → +OK; INCR x → +QUEUED; EXEC → $-1\r\n (Nil)
+    let port = mock_server(vec![
+        (20, b"+OK\r\n"),
+        (14, b"+OK\r\n"),
+        (23, b"+QUEUED\r\n"),
+        (13, b"$-1\r\n"), // RESP2 null bulk — Reply::Nil
+    ]);
+    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    conn.watch(&[b"x"]).unwrap();
+    let mut txn = conn.multi().unwrap();
+    txn.incr(b"x").unwrap();
+    assert!(txn.exec_watched().unwrap().is_none());
+}
+
+#[test]
+fn unwatch_sends_off_the_wire() {
+    let port = mock_server(vec![(13, b"+OK\r\n")]); // UNWATCH
+    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    conn.unwatch().unwrap();
+}
+
+#[test]
+fn watch_on_embedded_returns_unsupported() {
+    // Embedded backend has no MULTI dispatcher; WATCH is a no-op there
+    // and must surface as Unsupported so callers don't silently miss
+    // the optimistic-concurrency guarantee.
+    let mut conn = Connection::open("mem://watch-embed-probe").unwrap();
+    let err = conn.watch(&[b"x"]).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+    let err = conn.unwatch().unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+}
