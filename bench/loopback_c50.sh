@@ -15,7 +15,7 @@ N=${N:-3000000}
 PIPE=${PIPE:-16}
 CONC=${CONC:-50}
 KEVY_THREADS=${KEVY_THREADS:-10}
-KBIN=/root/kevy/target/release/kevy
+KBIN=${KBIN:-/root/kevy/target/release/kevy}
 
 wait_ready() { # port
   for _ in $(seq 1 100); do
