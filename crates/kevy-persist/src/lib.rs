@@ -275,10 +275,14 @@ fn read_u64<R: Read>(r: &mut R) -> io::Result<u64> {
 
 
 /// Write `store`'s current state to `path` as a sequence of mutating RESP
-/// commands; flush + fsync before returning. Returns `(keys, bytes)`.
+/// commands prefixed with [`crate::aof::AOF_MAGIC`]; flush + fsync before
+/// returning. Returns `(keys, bytes)`. The magic header is consistent with
+/// `Aof::open`'s fresh-file behavior so BGREWRITEAOF-produced files replay
+/// the same way live-appended ones do.
 pub(crate) fn dump_store_to_aof(path: &Path, store: &Store) -> io::Result<(u64, u64)> {
     let f = File::create(path)?;
     let mut w = BufWriter::new(f);
+    w.write_all(crate::aof::AOF_MAGIC)?;
     let mut keys = 0u64;
     let mut err: Option<io::Error> = None;
     store.snapshot_each(|key, value, ttl_ms| {

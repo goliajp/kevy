@@ -200,6 +200,68 @@ fn replay_aof_with_ssh_stderr_head_does_not_panic() {
 /// hex preview" branch of replay_aof. The clean prefix replays;
 /// the corrupt frame + everything after is dropped; the function
 /// still returns Ok.
+/// New AOFs created by `Aof::open` carry the v1.2.0 `KEVYAOF1\n`
+/// magic header. `replay_aof` strips it before parsing RESP.
+#[test]
+fn fresh_aof_has_magic_header_and_replays_cleanly() {
+    use std::io::Read;
+    let path = temp_aof("magic-fresh");
+    {
+        let mut aof = Aof::open(&path, Fsync::No).unwrap();
+        aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))
+            .unwrap();
+    }
+    // Inspect bytes on disk: first 9 must be the magic.
+    let mut f = std::fs::File::open(&path).unwrap();
+    let mut buf = [0u8; 9];
+    f.read_exact(&mut buf).unwrap();
+    assert_eq!(&buf, b"KEVYAOF1\n");
+    // Replay: should see exactly one command, not the magic.
+    let mut seen: Vec<Argv> = Vec::new();
+    replay_aof(&path, |args| seen.push(args)).unwrap();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].get(0).unwrap(), b"SET");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Pre-1.2.0 AOFs ("legacy bare-RESP", no magic header) still replay
+/// — `replay_aof` only consumes the magic if it sees it. Backward-
+/// compat is non-negotiable for the install base.
+#[test]
+fn legacy_aof_without_magic_still_replays() {
+    use std::io::Write;
+    let path = temp_aof("magic-legacy");
+    // Build a bare-RESP AOF by hand (no magic prefix). Mirrors what a
+    // 1.0/1.1 server would have written.
+    let mut f = std::fs::File::create(&path).unwrap();
+    f.write_all(b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n").unwrap();
+    f.write_all(b"*3\r\n$3\r\nSET\r\n$1\r\nx\r\n$1\r\ny\r\n").unwrap();
+    drop(f);
+    let mut seen: Vec<Argv> = Vec::new();
+    replay_aof(&path, |args| seen.push(args)).unwrap();
+    assert_eq!(seen.len(), 2);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// `Aof::truncate` rewrites the file to just the magic header — so
+/// post-truncate replays still identify the file as kevy-managed.
+#[test]
+fn truncate_preserves_magic_header() {
+    use std::io::Read;
+    let path = temp_aof("magic-truncate");
+    let mut aof = Aof::open(&path, Fsync::No).unwrap();
+    aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))
+        .unwrap();
+    aof.truncate().unwrap();
+    assert_eq!(aof.size_bytes(), 9);
+    drop(aof);
+    let mut f = std::fs::File::open(&path).unwrap();
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).unwrap();
+    assert_eq!(buf, b"KEVYAOF1\n");
+    let _ = std::fs::remove_file(&path);
+}
+
 #[test]
 fn replay_aof_with_real_corrupt_frame_keeps_prefix() {
     use std::io::Write;
@@ -439,11 +501,12 @@ fn rewrite_replaces_old_log_atomically() {
 fn append_bumps_size_estimate() {
     let path = temp_aof("size-est");
     let mut aof = Aof::open(&path, Fsync::No).unwrap();
-    assert_eq!(aof.size_bytes(), 0);
+    // Fresh AOF carries the 9-byte AOF_MAGIC header (v1.2.0+).
+    let base = aof.size_bytes();
     aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))
         .unwrap();
     let after_one = aof.size_bytes();
-    assert!(after_one > 0);
+    assert!(after_one > base);
     aof.append(&Argv::from(vec![b"SET".to_vec(), b"k2".to_vec(), b"v".to_vec()]))
         .unwrap();
     assert!(aof.size_bytes() > after_one);
@@ -461,10 +524,11 @@ fn rewrite_resets_size_anchor() {
     assert!(aof.size_bytes() > aof.size_at_last_rewrite());
     let store = Store::new();
     let stats = aof.rewrite_from(&store).unwrap();
-    // empty store ⇒ empty rewrite
+    // empty store ⇒ empty rewrite (just the 9-byte AOF_MAGIC header).
     assert_eq!(stats.keys, 0);
-    assert_eq!(aof.size_bytes(), 0);
-    assert_eq!(aof.size_at_last_rewrite(), 0);
+    // dump_store_to_aof prefixes the file with AOF_MAGIC (9 bytes).
+    assert_eq!(aof.size_bytes(), 9);
+    assert_eq!(aof.size_at_last_rewrite(), 9);
     assert_eq!(aof.rewrites_total(), 1);
     let _ = std::fs::remove_file(&path);
 }

@@ -13,6 +13,14 @@ use crate::{
     dump_store_to_aof, estimate_multibulk_bytes, write_multibulk,
 };
 
+/// 9-byte file-format header written at the start of every kevy-managed
+/// AOF as of v1.2.0. `replay_aof` strips it before parsing RESP, so
+/// non-kevy bytes accidentally written into the AOF path (e.g. a deploy
+/// pipeline redirecting shell stderr into the file) get the same loud
+/// rejection as any other corrupt frame. Pre-1.2 AOFs (no magic) still
+/// replay — the parser only consumes the magic if it sees it.
+pub(crate) const AOF_MAGIC: &[u8; 9] = b"KEVYAOF1\n";
+
 /// When to fsync the AOF to disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fsync {
@@ -63,10 +71,20 @@ pub struct RewriteStats {
 }
 
 impl Aof {
-    /// Open (creating if needed) `path` for appending.
+    /// Open (creating if needed) `path` for appending. New files get the
+    /// 9-byte [`AOF_MAGIC`] header so replays can identify the file as
+    /// kevy-managed. Pre-existing files (legacy bare-RESP or already-
+    /// magic'd) are left untouched.
     pub fn open(path: &Path, fsync: Fsync) -> io::Result<Self> {
-        let file = OpenOptions::new().create(true).append(true).open(path)?;
-        let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+        let mut size = file.metadata().map(|m| m.len()).unwrap_or(0);
+        if size == 0 {
+            // Fresh file: stamp the magic header so the replayer can
+            // distinguish kevy-written AOFs from accidental writes.
+            file.write_all(AOF_MAGIC)?;
+            file.sync_data()?;
+            size = AOF_MAGIC.len() as u64;
+        }
         Ok(Aof {
             file: BufWriter::new(file),
             path: path.to_path_buf(),
@@ -109,16 +127,19 @@ impl Aof {
         Ok(())
     }
 
-    /// Empty the log (after a snapshot has captured the full state).
+    /// Empty the log (after a snapshot has captured the full state). The
+    /// post-truncate file keeps the [`AOF_MAGIC`] header so replays of
+    /// the freshly-trimmed log still identify as kevy-managed.
     pub fn truncate(&mut self) -> io::Result<()> {
         self.file.flush()?;
         let f = self.file.get_mut();
         f.set_len(0)?;
         f.seek(SeekFrom::Start(0))?; // harmless under O_APPEND; keeps len/pos coherent
+        f.write_all(AOF_MAGIC)?;
         f.sync_all()?;
         self.dirty = false;
-        self.size_bytes = 0;
-        self.size_at_last_rewrite = 0;
+        self.size_bytes = AOF_MAGIC.len() as u64;
+        self.size_at_last_rewrite = AOF_MAGIC.len() as u64;
         Ok(())
     }
 
