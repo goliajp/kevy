@@ -1,10 +1,11 @@
 [package]
 name = "kevy-client"
 description = "Unified client for kevy — switch between in-process embedded and TCP server backends with a single URL."
-# Explicit, not workspace-inherited: kevy-client is a v1.0.5 add-on that
+# Explicit, not workspace-inherited: kevy-client tracks its own version
+# (additive API growth is faster than the underlying server's), and
 # depends on the v1.0.4 chain already on crates.io, so the rest of the
-# workspace stays at 1.0.4 and only kevy-client ships a 1.0.5.
-version = "1.0.5"
+# workspace stays at 1.0.4 and only kevy-client moves.
+version = "1.1.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
