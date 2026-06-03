@@ -379,6 +379,39 @@ fn pubsub_across_cores() {
 }
 
 #[test]
+fn subscriber_disconnect_unregisters_subs() {
+    // Coverage: drive shard::unregister_subs by dropping a connection that
+    // holds active subscriptions. close_conn → unregister_subs walks the
+    // pubsub registry and decrements per-channel ref counts (deleting the
+    // entry when it hits zero). After the close, a PUBLISH to those
+    // channels must report 0 subscribers.
+    let srv = Server::start(4);
+
+    let mut sub = srv.connect();
+    sub.write_all(&req(&[b"SUBSCRIBE", b"chA", b"chB"])).unwrap();
+    read_reply(&mut sub, b"*3\r\n$9\r\nsubscribe\r\n$3\r\nchA\r\n:1\r\n");
+    read_reply(&mut sub, b"*3\r\n$9\r\nsubscribe\r\n$3\r\nchB\r\n:2\r\n");
+
+    // Confirm sub is live before disconnect.
+    let mut publisher = srv.connect();
+    publisher.write_all(&req(&[b"PUBLISH", b"chA", b"x"])).unwrap();
+    read_reply(&mut publisher, b":1\r\n");
+    read_reply(&mut sub, b"*3\r\n$7\r\nmessage\r\n$3\r\nchA\r\n$1\r\nx\r\n");
+
+    // Hard-drop the subscriber socket — reactor sees EOF, calls close_conn,
+    // which in turn calls unregister_subs to clean up the per-channel counts.
+    drop(sub);
+    // Give the reactor a moment to process the close.
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Now both channels should have zero subscribers — PUBLISH returns 0.
+    publisher.write_all(&req(&[b"PUBLISH", b"chA", b"y"])).unwrap();
+    read_reply(&mut publisher, b":0\r\n");
+    publisher.write_all(&req(&[b"PUBLISH", b"chB", b"z"])).unwrap();
+    read_reply(&mut publisher, b":0\r\n");
+}
+
+#[test]
 fn transactions() {
     let srv = Server::start(4);
     let mut c = srv.connect();

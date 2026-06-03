@@ -155,6 +155,64 @@ fn list_wrong_type() {
 }
 
 #[test]
+fn list_wrong_type_on_read_path() {
+    // list_ref WrongType branch — every read accessor returns WrongType when
+    // the key holds a string. Drives the `_ => Err(WrongType)` arm in list_ref.
+    let mut st = Store::new();
+    st.set(b"s", s("v"), None, false, false);
+    assert_eq!(st.lrange(b"s", 0, -1), Err(StoreError::WrongType));
+    assert_eq!(st.llen(b"s"), Err(StoreError::WrongType));
+    assert_eq!(st.lindex(b"s", 0), Err(StoreError::WrongType));
+    // list_mut WrongType branch on the read-only path (`create=false`).
+    assert_eq!(st.lpop(b"s", 1), Err(StoreError::WrongType));
+    assert_eq!(st.rpop(b"s", 1), Err(StoreError::WrongType));
+    assert_eq!(st.ltrim(b"s", 0, 0), Err(StoreError::WrongType));
+    assert_eq!(st.lrem(b"s", 1, b"v"), Err(StoreError::WrongType));
+    assert_eq!(st.lset(b"s", 0, b"v"), Err(StoreError::WrongType));
+}
+
+#[test]
+fn list_empty_and_missing_key_paths() {
+    // Missing-key paths: lpop/rpop return empty Vec without error; llen returns 0;
+    // lindex/lrange return None/empty; lrem returns 0; ltrim is a no-op.
+    let mut st = Store::new();
+    assert_eq!(st.lpop(b"missing", 5), Ok(vec![]));
+    assert_eq!(st.rpop(b"missing", 5), Ok(vec![]));
+    assert_eq!(st.llen(b"missing"), Ok(0));
+    assert_eq!(st.lindex(b"missing", 0), Ok(None));
+    assert_eq!(st.lrange(b"missing", 0, -1), Ok(vec![]));
+    assert_eq!(st.lrem(b"missing", 0, b"x"), Ok(0));
+    assert!(st.ltrim(b"missing", 0, 0).is_ok());
+
+    // pop_more_than_size: `None => break` arm — pop 5 from a 2-elt list, get 2.
+    st.rpush(b"l", &[s("a"), s("b")]).unwrap();
+    assert_eq!(st.lpop(b"l", 5), Ok(vec![s("a"), s("b")]));
+    assert_eq!(st.type_of(b"l"), "none"); // emptied → key removed
+}
+
+#[test]
+fn list_lrem_negative_count_and_lset_errors() {
+    let mut st = Store::new();
+    // LREM with negative count — drives the reverse-walk branch.
+    st.rpush(b"l", &[s("a"), s("b"), s("a"), s("c"), s("a")])
+        .unwrap();
+    assert_eq!(st.lrem(b"l", -2, b"a"), Ok(2)); // remove last 2 'a' from tail
+    assert_eq!(st.lrange(b"l", 0, -1), Ok(vec![s("a"), s("b"), s("c")]));
+
+    // LSET error paths: NoSuchKey + OutOfRange.
+    assert_eq!(st.lset(b"missing", 0, b"v"), Err(StoreError::NoSuchKey));
+    assert_eq!(st.lset(b"l", 99, b"v"), Err(StoreError::OutOfRange));
+    // Successful lset.
+    assert!(st.lset(b"l", 1, b"B").is_ok());
+    assert_eq!(st.lindex(b"l", 1), Ok(Some(s("B"))));
+
+    // LTRIM that empties → key drops; LTRIM no-overlap range also empties.
+    st.rpush(b"x", &[s("a"), s("b")]).unwrap();
+    st.ltrim(b"x", 5, 10).unwrap(); // out-of-bounds → empties
+    assert_eq!(st.type_of(b"x"), "none");
+}
+
+#[test]
 fn set_ops() {
     let mut st = Store::new();
     assert_eq!(st.sadd(b"s", &[s("a"), s("b"), s("a")]), Ok(2)); // dedup

@@ -307,3 +307,36 @@ fn data_survives_restart_via_aof_without_save() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn restart_tolerates_corrupt_snapshot() {
+    // Coverage: drive the `load_snapshot` Err branch in shard::run (the
+    // eprintln path). A corrupt dump-0.rdb should produce a startup warning
+    // on stderr but NOT prevent the reactor from coming up; subsequent
+    // writes go through normally.
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-corrupt-snap-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // Plant a non-snapshot file at dump-0.rdb. kevy-persist's loader
+    // recognises a magic header; arbitrary bytes fail the header check.
+    std::fs::write(dir.join("dump-0.rdb"), b"NOT A REAL KEVY SNAPSHOT").unwrap();
+
+    let port = free_port();
+    with_runtime(port, &dir, 1, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"PING"])).unwrap();
+        read_reply(&mut c, b"+PONG\r\n");
+        c.write_all(&req(&[b"SET", b"after-corrupt", b"ok"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        c.write_all(&req(&[b"GET", b"after-corrupt"])).unwrap();
+        read_reply(&mut c, b"$2\r\nok\r\n");
+    });
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
