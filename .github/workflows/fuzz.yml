@@ -1,0 +1,84 @@
+name: Fuzz
+
+# Cross-arch fuzz on Linux x86_64 — the production target. The local fuzz
+# rounds during development are mac aarch64 only; this job re-fuzzes under
+# Linux's different optimizer profile + sanitizer behaviour on every push
+# to develop and once a day on schedule, time-boxed so CI minutes stay
+# bounded.
+#
+# Charter note: cargo-fuzz and libfuzzer-sys are crates.io dev-only tools
+# (same exemption as cargo-llvm-cov). They never enter the runtime
+# dependency closure of any published kevy crate; the fuzz/ directory uses
+# its own isolated workspace.
+
+on:
+  push:
+    branches: [develop]
+    paths:
+      - 'crates/kevy-resp/**'
+      - '.github/workflows/fuzz.yml'
+  pull_request:
+    paths:
+      - 'crates/kevy-resp/**'
+  schedule:
+    # Daily at 08:00 UTC. Catches drift on develop even without a code push.
+    - cron: '0 8 * * *'
+  workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: 'Per-target fuzz duration (default 300)'
+        required: false
+        default: '300'
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }} (linux x86_64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [parse_command, parse_reply]
+    env:
+      # Honour workflow_dispatch input; default to 300 s (5 min) per target.
+      FUZZ_SECONDS: ${{ github.event.inputs.duration_seconds || '300' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # cargo-fuzz needs the nightly toolchain (libfuzzer-sys + the
+      # `-Zsanitizer` machinery aren't in stable). Pin a recent dated
+      # nightly so build behaviour is reproducible.
+      - name: Install nightly toolchain
+        run: |
+          rustup toolchain install nightly --component rust-src --no-self-update
+          rustup default nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Cache fuzz target build
+        uses: actions/cache@v4
+        with:
+          path: |
+            crates/kevy-resp/fuzz/target
+            crates/kevy-resp/fuzz/corpus
+          key: fuzz-${{ matrix.target }}-${{ runner.os }}-${{ hashFiles('crates/kevy-resp/fuzz/Cargo.lock') }}
+          restore-keys: |
+            fuzz-${{ matrix.target }}-${{ runner.os }}-
+
+      - name: Run ${{ matrix.target }} for ${{ env.FUZZ_SECONDS }}s
+        working-directory: crates/kevy-resp/fuzz
+        # -max_total_time bounds wall-clock so the job can't run away. Any
+        # libfuzzer crash trips the step (non-zero exit) and uploads the
+        # offending input as an artifact.
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=${{ env.FUZZ_SECONDS }}
+
+      - name: Upload crash artefacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: |
+            crates/kevy-resp/fuzz/artifacts/${{ matrix.target }}/
+            crates/kevy-resp/fuzz/corpus/${{ matrix.target }}/
+          if-no-files-found: ignore
