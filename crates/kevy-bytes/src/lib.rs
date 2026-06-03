@@ -921,11 +921,21 @@ mod tests {
         assert_ne!(inline_no, *forged);
         assert_ne!(*forged, inline_no);
 
-        // Don't drop the forged heap (cap=2 would dealloc the Vec's
-        // actual allocation with the wrong layout). ManuallyDrop guards
-        // both the storage Vec and the forged SmallBytes — process exit
-        // reclaims the leak.
-        let _ = (storage, forged);
+        // Drop sequence under miri's leak detector:
+        //   - `forged` stays in ManuallyDrop forever — SmallBytes::Drop
+        //     would dealloc(ptr, Layout(len=2, align=1)) using the
+        //     forged cap, but the actual underlying allocation belongs
+        //     to `storage` and likely has a different (larger) cap →
+        //     wrong-layout dealloc = UB. We never run that Drop.
+        //   - `storage` is the real owner; drop it explicitly so the
+        //     Vec's allocation is released. After this point any
+        //     access through forged.heap.ptr would be a use-after-
+        //     free, but we don't touch it.
+        let _ = forged;
+        // SAFETY: storage hasn't been dropped yet and we won't access it
+        // after this; the only outstanding alias (forged.heap.ptr) is
+        // intentionally orphaned in `forged` which we never read again.
+        unsafe { ManuallyDrop::drop(&mut storage); }
     }
 
     /// The actual mailrs prod crash shape, reproduced without unsafe:
