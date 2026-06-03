@@ -94,150 +94,130 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Assign a seq, fan the command out to the owning shard(s), fold local parts.
+    /// Assign a seq, then hand off to the per-shape starter (pub/sub /
+    /// single-target / multi-target). Each starter owns the rest of the
+    /// command's life cycle: pending-slot bookkeeping, local exec, and
+    /// cross-shard forwarding.
     fn start_command<A: ArgvView + ?Sized>(
         &mut self,
         conn_id: u64,
         args: &A,
         resolved: ResolvedCmd,
     ) {
-        let seq = match self.conns.get_mut(&conn_id) {
-            Some(c) => {
-                let s = c.next_seq;
-                c.next_seq += 1;
-                s
-            }
-            None => return,
-        };
-
-        let is_quit = resolved.is_quit;
-        let route = resolved.route;
-        let is_write = resolved.is_write;
-        // Connection-level pub/sub commands modify this conn directly.
+        let Some(seq) = self.next_seq_for(conn_id) else { return };
+        let ResolvedCmd { route, is_quit, is_write, .. } = resolved;
         match route {
-            Route::Subscribe => {
-                self.do_subscribe(conn_id, seq, args, true);
-                return;
+            Route::Subscribe => self.do_subscribe(conn_id, seq, args, true),
+            Route::Unsubscribe => self.do_subscribe(conn_id, seq, args, false),
+            Route::Publish => self.do_publish(conn_id, seq, args),
+            Route::Local => {
+                self.start_single(conn_id, seq, args, self.id, is_quit, is_write);
             }
-            Route::Unsubscribe => {
-                self.do_subscribe(conn_id, seq, args, false);
-                return;
+            Route::Single(idx) => {
+                let shard = shard_of(&args[idx], self.nshards);
+                self.start_single(conn_id, seq, args, shard, is_quit, is_write);
             }
-            Route::Publish => {
-                self.do_publish(conn_id, seq, args);
-                return;
-            }
-            _ => {}
+            // Multi-target / aggregating commands (DEL, MGET, DBSIZE, fan-outs, …).
+            other => self.start_multi(conn_id, seq, args, other, is_quit),
         }
+    }
 
-        // Fast path: a single-target command (keyless `Local` or single-key
-        // `Single`) — the overwhelming majority (GET/SET/INCR/PING/…). Skip the
-        // `Vec<(shard, Op)>` allocation + the aggregation fold loop entirely.
-        let single = match route {
-            Route::Local => Some(self.id),
-            Route::Single(idx) => Some(shard_of(&args[idx], self.nshards)),
-            _ => None,
-        };
-        if let Some(shard) = single {
-            // In-order local fast path: the command runs on THIS shard and its
-            // reply is the next to emit (nothing pending), so write it straight
-            // into the connection's output — no PendingSlot, no fold, no reply
-            // `Vec` alloc, no drain copy. (`seq == next_emit` here, so advancing
-            // both `next_seq` (done above) and `next_emit` keeps them in step.)
-            if shard == self.id
-                && self.conns.get(&conn_id).is_some_and(|c| c.pending.is_empty())
-            {
-                if let Some(conn) = self.conns.get_mut(&conn_id) {
-                    // Disjoint field borrows: commands / store / conn.output.
-                    self.commands
-                        .dispatch_into(&mut self.store, args, &mut conn.output);
-                    conn.next_emit += 1;
-                    if is_quit {
-                        conn.closing = true;
-                    }
-                }
-                if self.aof.is_some() && is_write {
-                    self.log(args);
-                }
-                return;
-            }
-            if let Some(c) = self.conns.get_mut(&conn_id) {
-                c.pending.push_back(PendingSlot {
-                    remaining: 1,
-                    agg: Agg::First(None),
-                    done: None,
-                });
-                if is_quit {
-                    c.closing = true;
-                }
-            }
-            if shard == self.id {
-                // Local-but-not-fast-path: only here we need an owned Argv to
-                // hand to exec_op via Op::Dispatch.
-                let part = self.exec_op(Op::Dispatch(args.to_argv()));
-                self.fold(conn_id, seq, part);
-            } else {
-                // Cross-shard forward: materialise owned at the handoff. The
-                // -c50 single-shard hot path never reaches here.
-                self.request_batch[shard].push((conn_id, seq, args.to_argv()));
-            }
+    /// Reserve a `seq` for this command. `None` if the conn vanished between
+    /// the parse loop and dispatch (rare; just drop the command).
+    fn next_seq_for(&mut self, conn_id: u64) -> Option<u64> {
+        let c = self.conns.get_mut(&conn_id)?;
+        let s = c.next_seq;
+        c.next_seq += 1;
+        Some(s)
+    }
+
+    /// Single-target command (keyless `Local` or single-key `Single`) — the
+    /// overwhelming majority (GET/SET/INCR/PING/…). Skips the
+    /// `Vec<(shard, Op)>` allocation + the aggregation fold loop entirely.
+    fn start_single<A: ArgvView + ?Sized>(
+        &mut self,
+        conn_id: u64,
+        seq: u64,
+        args: &A,
+        shard: usize,
+        is_quit: bool,
+        is_write: bool,
+    ) {
+        // In-order local fast path: `seq == next_emit` and no prior cmd is
+        // pending, so write straight to the conn's output and return.
+        if shard == self.id && self.try_inline_local(conn_id, args, is_quit, is_write) {
             return;
         }
+        self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
+        if shard == self.id {
+            // Local-but-not-fast-path: only here we need an owned Argv to
+            // hand to exec_op via Op::Dispatch.
+            let part = self.exec_op(Op::Dispatch(args.to_argv()));
+            self.fold(conn_id, seq, part);
+        } else {
+            // Cross-shard forward: materialise owned at the handoff. The
+            // -c50 single-shard hot path never reaches here.
+            self.request_batch[shard].push((conn_id, seq, args.to_argv()));
+        }
+    }
 
-        // Multi-target / aggregating commands (DEL, MGET, DBSIZE, fan-outs, …).
-        let (targets, agg): (Vec<(usize, Op)>, Agg) = match route {
-            Route::Local | Route::Single(_) => unreachable!("handled by fast path"),
-            Route::DelKeys => (self.group_keys(args, Op::Del), Agg::SumInt(0)),
-            Route::ExistsKeys => (self.group_keys(args, Op::Exists), Agg::SumInt(0)),
-            Route::Dbsize => (
-                (0..self.nshards).map(|s| (s, Op::Dbsize)).collect(),
-                Agg::SumInt(0),
-            ),
-            Route::Flush => (
-                (0..self.nshards).map(|s| (s, Op::Flush)).collect(),
-                Agg::AllOk,
-            ),
-            Route::Save => (
-                (0..self.nshards).map(|s| (s, Op::Save)).collect(),
-                Agg::AllOk,
-            ),
-            Route::RewriteAof => (
-                (0..self.nshards).map(|s| (s, Op::RewriteAof)).collect(),
-                Agg::AllOk,
-            ),
-            Route::MSet => {
-                // args[1..] are key/value pairs; group by each key's shard.
-                let mut by_shard: HashMap<usize, KvPairs> = HashMap::new();
-                let mut i = 1;
-                while i + 1 < args.len() {
-                    by_shard
-                        .entry(shard_of(&args[i], self.nshards))
-                        .or_default()
-                        .push((args[i].to_vec(), args[i + 1].to_vec()));
-                    i += 2;
-                }
-                (
-                    by_shard
-                        .into_iter()
-                        .map(|(s, p)| (s, Op::MSet(p)))
-                        .collect(),
-                    Agg::AllOk,
-                )
-            }
-            Route::MGet => self.build_gather(args, GatherKind::Str, MultiOp::Mget),
-            Route::SInter => self.build_gather(args, GatherKind::Set, MultiOp::SInter),
-            Route::SUnion => self.build_gather(args, GatherKind::Set, MultiOp::SUnion),
-            Route::SDiff => self.build_gather(args, GatherKind::Set, MultiOp::SDiff),
-            Route::Keys(pat) => self.fanout_keys(pat, None, KeyShape::Keys),
-            Route::Scan(pat) => self.fanout_keys(pat, None, KeyShape::Scan),
-            Route::RandomKey => self.fanout_keys(None, Some(1), KeyShape::Random),
-            // Handled above (early return).
-            Route::Subscribe | Route::Unsubscribe | Route::Publish => unreachable!(),
-        };
+    /// Try to dispatch a single-shard local command straight to the
+    /// connection's output buffer (no PendingSlot, no fold, no reply Vec).
+    /// Only valid when `seq == next_emit`, i.e. nothing is pending. Returns
+    /// `true` iff the inline write happened.
+    #[inline]
+    fn try_inline_local<A: ArgvView + ?Sized>(
+        &mut self,
+        conn_id: u64,
+        args: &A,
+        is_quit: bool,
+        is_write: bool,
+    ) -> bool {
+        let Some(conn) = self.conns.get_mut(&conn_id) else { return false };
+        if !conn.pending.is_empty() {
+            return false;
+        }
+        // Disjoint field borrows: commands / store / conn.output.
+        self.commands
+            .dispatch_into(&mut self.store, args, &mut conn.output);
+        conn.next_emit += 1;
+        if is_quit {
+            conn.closing = true;
+        }
+        if self.aof.is_some() && is_write {
+            self.log(args);
+        }
+        true
+    }
 
+    /// Multi-target / aggregating command (DEL, MGET, DBSIZE, fan-outs, …).
+    /// Builds the per-shard target list, registers a pending slot for the
+    /// aggregator, then dispatches each target (locally exec or cross-core
+    /// send).
+    fn start_multi<A: ArgvView + ?Sized>(
+        &mut self,
+        conn_id: u64,
+        seq: u64,
+        args: &A,
+        route: Route,
+        is_quit: bool,
+    ) {
+        let (targets, agg) = self.build_multi_targets(args, route);
         let remaining = targets.len().max(1) as u32;
+        self.push_pending_slot(conn_id, remaining, agg, is_quit);
+        // An empty key set (shouldn't happen given routing) still resolves.
+        if targets.is_empty() {
+            self.fold(conn_id, seq, Part::Int(0));
+            return;
+        }
+        self.dispatch_targets(conn_id, seq, targets);
+    }
+
+    /// Register a `PendingSlot` for `conn_id` waiting on `remaining` parts
+    /// to fold via `agg`. Pushed in seq order, so the slot's index is
+    /// `seq - next_emit`.
+    fn push_pending_slot(&mut self, conn_id: u64, remaining: u32, agg: Agg, is_quit: bool) {
         if let Some(c) = self.conns.get_mut(&conn_id) {
-            // Pushed in seq order, so this slot's index is `seq - next_emit`.
             c.pending.push_back(PendingSlot {
                 remaining,
                 agg,
@@ -247,12 +227,13 @@ impl<C: Commands> Shard<C> {
                 c.closing = true;
             }
         }
+    }
 
-        // An empty key set (shouldn't happen given routing) still resolves.
-        if targets.is_empty() {
-            self.fold(conn_id, seq, Part::Int(0));
-            return;
-        }
+    /// Fan a built target list out: locally exec on this shard, batch
+    /// single-key forwards to peer shards (the hot -c50 path), and use the
+    /// unbatched `Inbound::Request` for multi-key ops that don't fit the
+    /// batch shape.
+    fn dispatch_targets(&mut self, conn_id: u64, seq: u64, targets: Vec<(usize, Op)>) {
         for (shard, op) in targets {
             if shard == self.id {
                 let part = self.exec_op(op);
@@ -277,6 +258,72 @@ impl<C: Commands> Shard<C> {
                 );
             }
         }
+    }
+
+    /// Translate a multi-target [`Route`] into a `(targets, aggregator)` pair.
+    /// `route` is consumed so `Keys(pat)` / `Scan(pat)` can move the owned
+    /// pattern into `fanout_keys` without an extra clone. Single-target /
+    /// pub/sub routes are unreachable — they go through dedicated paths.
+    fn build_multi_targets<A: ArgvView + ?Sized>(
+        &self,
+        args: &A,
+        route: Route,
+    ) -> (Vec<(usize, Op)>, Agg) {
+        match route {
+            Route::Local | Route::Single(_) => unreachable!("handled by start_single"),
+            Route::Subscribe | Route::Unsubscribe | Route::Publish => {
+                unreachable!("handled by start_command pub/sub branch")
+            }
+            Route::DelKeys => (self.group_keys(args, Op::Del), Agg::SumInt(0)),
+            Route::ExistsKeys => (self.group_keys(args, Op::Exists), Agg::SumInt(0)),
+            Route::Dbsize => (
+                (0..self.nshards).map(|s| (s, Op::Dbsize)).collect(),
+                Agg::SumInt(0),
+            ),
+            Route::Flush => (
+                (0..self.nshards).map(|s| (s, Op::Flush)).collect(),
+                Agg::AllOk,
+            ),
+            Route::Save => (
+                (0..self.nshards).map(|s| (s, Op::Save)).collect(),
+                Agg::AllOk,
+            ),
+            Route::RewriteAof => (
+                (0..self.nshards).map(|s| (s, Op::RewriteAof)).collect(),
+                Agg::AllOk,
+            ),
+            Route::MSet => self.build_mset_targets(args),
+            Route::MGet => self.build_gather(args, GatherKind::Str, MultiOp::Mget),
+            Route::SInter => self.build_gather(args, GatherKind::Set, MultiOp::SInter),
+            Route::SUnion => self.build_gather(args, GatherKind::Set, MultiOp::SUnion),
+            Route::SDiff => self.build_gather(args, GatherKind::Set, MultiOp::SDiff),
+            Route::Keys(pat) => self.fanout_keys(pat, None, KeyShape::Keys),
+            Route::Scan(pat) => self.fanout_keys(pat, None, KeyShape::Scan),
+            Route::RandomKey => self.fanout_keys(None, Some(1), KeyShape::Random),
+        }
+    }
+
+    /// Group `args[1..]` key/value pairs by each key's shard for MSET.
+    fn build_mset_targets<A: ArgvView + ?Sized>(
+        &self,
+        args: &A,
+    ) -> (Vec<(usize, Op)>, Agg) {
+        let mut by_shard: HashMap<usize, KvPairs> = HashMap::new();
+        let mut i = 1;
+        while i + 1 < args.len() {
+            by_shard
+                .entry(shard_of(&args[i], self.nshards))
+                .or_default()
+                .push((args[i].to_vec(), args[i + 1].to_vec()));
+            i += 2;
+        }
+        (
+            by_shard
+                .into_iter()
+                .map(|(s, p)| (s, Op::MSet(p)))
+                .collect(),
+            Agg::AllOk,
+        )
     }
 
     /// Group `args[1..]` keys by shard for a cross-shard gather.
