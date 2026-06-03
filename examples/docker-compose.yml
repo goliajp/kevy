@@ -1,0 +1,74 @@
+# Minimal example: an application service that depends on kevy as its
+# Redis-compatible key-value store.
+#
+# Run from this directory:
+#
+#   docker compose up
+#
+# kevy listens on port 6379 inside the compose network — no host port
+# exposed by default, so only services on the same network reach it.
+# That matches kevy's trust model: bind to a private network, no AUTH.
+# To talk to kevy from your laptop, uncomment the `ports` block below.
+
+services:
+  kevy:
+    image: goliakk/kevy:rc   # or ghcr.io/goliajp/kevy:rc — same image
+    restart: unless-stopped
+
+    # Persist snapshot + AOF across `docker compose down`. Drop the volume
+    # (or set `KEVY_AOF: "0"`) for cache-only / ephemeral deployments.
+    volumes:
+      - kevy-data:/data
+
+    # Block `app` startup until kevy actually answers PING (not just
+    # "container running"). Uses bash + /dev/tcp — both ship in the image,
+    # no extra tools or sidecar needed. NOTE: the default /bin/sh is dash,
+    # which does NOT support /dev/tcp, so the check explicitly invokes bash.
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - exec 3<>/dev/tcp/127.0.0.1/6379 && printf 'PING\r\n' >&3 && head -c 7 <&3 | grep -q PONG
+      interval: 2s
+      timeout: 1s
+      retries: 15
+      start_period: 2s
+
+    # Uncomment to also expose kevy on the host (handy for local debugging
+    # with `redis-cli -p 6379` from outside the compose network).
+    # ports:
+    #   - "6379:6379"
+
+    networks: [appnet]
+
+  app:
+    # Replace this with your real application image. The redis:7.4 image
+    # here is just a demo "consumer" — it ships redis-cli, which we use
+    # to prove the wire is up by writing a heartbeat key every 2 seconds
+    # and reading it back through kevy.
+    image: redis:7.4
+    depends_on:
+      kevy:
+        condition: service_healthy
+    environment:
+      # Every Redis-compatible client library reads this. Inside the
+      # compose network, `kevy` resolves to the kevy container's IP.
+      REDIS_URL: redis://kevy:6379
+    command:
+      - sh
+      - -c
+      - |
+        echo "app: kevy is healthy, starting heartbeat loop"
+        while true; do
+          redis-cli -u "$$REDIS_URL" SET app:heartbeat "$$(date -Iseconds)" >/dev/null
+          echo "app: heartbeat=$$(redis-cli -u "$$REDIS_URL" GET app:heartbeat)"
+          sleep 2
+        done
+    networks: [appnet]
+
+volumes:
+  kevy-data:
+
+networks:
+  appnet:
