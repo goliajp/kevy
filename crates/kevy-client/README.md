@@ -53,30 +53,31 @@ environment variable / config file — develop against `mem://`,
 integration-test against `file:///tmp/test`, deploy against
 `kevy://prod-cache:6379`. No code change.
 
-## Command coverage (v1.0.5)
+## Command coverage (v1.1.0)
 
-The first cut covers the **string + generic-key subset** — about 80%
-of cache-style use. Methods on `Connection`:
+All five Redis data types plus generic-key ops, persistence, and
+pub/sub PUBLISH. Methods on `Connection`:
 
-| Method | Redis equivalent |
-|---|---|
-| `ping()` | `PING` |
-| `set(k, v)` | `SET key value` |
-| `get(k)` | `GET key` |
-| `del(&[k1, k2])` | `DEL k1 k2` |
-| `exists(&[k1, k2])` | `EXISTS k1 k2` |
-| `incr(k)` | `INCR k` |
-| `incr_by(k, delta)` | `INCRBY k delta` |
-| `expire(k, ttl)` | `PEXPIRE k ttl_ms` |
-| `persist(k)` | `PERSIST k` |
-| `ttl_ms(k)` | `PTTL k` (-2 absent, -1 no TTL) |
-| `type_of(k)` | `TYPE k` |
-| `dbsize()` | `DBSIZE` |
-| `flush()` | `FLUSHDB` |
+**Connection / generic:** `ping`, `dbsize`, `flush`, `type_of`,
+`exists`, `del`, `expire`, `persist`, `ttl_ms`.
 
-**v1.1.0** will round out hash / list / set / sorted-set / pub-sub. If
-you need a command this crate doesn't expose yet, drop down to the raw
-backend:
+**String:** `set`, `set_with_ttl`, `get`, `incr`, `incr_by`.
+
+**Hash:** `hset`, `hget`, `hdel`, `hlen`, `hgetall`, `hkeys`, `hvals`.
+
+**List:** `lpush`, `rpush`, `lpop`, `rpop`, `llen`, `lrange`.
+
+**Set:** `sadd`, `srem`, `smembers`, `scard`, `sismember`.
+
+**Sorted set:** `zadd`, `zrem`, `zscore`, `zcard`, `zrange`.
+
+**Pub/sub:** `publish` (subscribe is a streaming state machine, on the
+v1.2.0 roadmap). `publish` on the embedded backend returns 0
+(single-process, no subscribers) — matches Redis semantics for
+"publish to a channel nobody listens to".
+
+If you need a command this crate doesn't expose yet, drop down to the
+raw backend:
 
 ```rust
 match &mut conn {
