@@ -42,6 +42,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 mod cmd;
+mod cmd_data;
 mod config_global;
 mod dispatch;
 mod dispatch_collections;
