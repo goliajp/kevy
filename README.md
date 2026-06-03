@@ -257,6 +257,36 @@ server-internal pieces:
 | `kevy-sys` | the sole libc boundary (server-internal) |
 | `kevy` | the server binary |
 
+## Embedded ↔ server with one URL
+
+[`kevy-client`](crates/kevy-client) v1.3.0 + [`kevy-embedded`](crates/kevy-embedded)
+v1.1.0 let the same code switch between an in-process backend and a TCP
+kevy server with a single URL string — including pub/sub:
+
+```rust
+use kevy_client::{Connection, Subscriber, PubsubEvent};
+
+let url = std::env::var("KEVY_URL").unwrap_or_else(|_| "mem://app".into());
+let mut sub  = Subscriber::open(&url, &[b"events"])?;  // consumer
+let mut conn = Connection::open(&url)?;                // producer
+let _ack = sub.recv()?;                                 // drain SUBSCRIBE ack
+conn.publish(b"events", b"hello")?;
+match sub.recv()? {
+    PubsubEvent::Message { channel, payload } => { /* same code in dev + prod */ }
+    _ => {}
+}
+# Ok::<(), std::io::Error>(())
+```
+
+| URL | Backend |
+|---|---|
+| `mem://` | anonymous in-process, per-open fresh — no shared bus |
+| `mem://<name>` | shared in-process bus keyed by `<name>` |
+| `file:///abs/path` | shared in-process with snapshot + AOF persistence |
+| `kevy://host:port` · `redis://…` · `tcp://…` | TCP RESP server |
+
+Full walkthrough + caveats: [`docs/pubsub.md`](docs/pubsub.md).
+
 ## Commands
 
 All five Redis data types — **String, Hash, List, Set, Sorted Set** — plus
