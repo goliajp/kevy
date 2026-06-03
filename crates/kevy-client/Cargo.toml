@@ -2,10 +2,10 @@
 name = "kevy-client"
 description = "Unified client for kevy — switch between in-process embedded and TCP server backends with a single URL."
 # Explicit, not workspace-inherited: kevy-client tracks its own version
-# (additive API growth is faster than the underlying server's). Minor
-# 1.5.0 adds Transaction typed builders + WATCH/UNWATCH +
-# exec_watched (Option-returning EXEC).
-version = "1.5.0"
+# (additive API growth is faster than the underlying server's). Patch
+# 1.5.1 picks up the workspace 1.1.1 chain (kevy-persist replay_aof
+# loud summary + kevy-bytes PartialEq panic-free fallback).
+version = "1.5.1"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -21,6 +21,6 @@ categories = ["database", "caching", "api-bindings"]
 workspace = true
 
 [dependencies]
-kevy-embedded = { path = "../kevy-embedded", version = "1.1.1" }
-kevy-resp = { path = "../kevy-resp", version = "1.1.0" }
-kevy-resp-client = { path = "../kevy-resp-client", version = "1.1.0" }
+kevy-embedded = { path = "../kevy-embedded", version = "1.1.2" }
+kevy-resp = { path = "../kevy-resp", version = "1.1.1" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "1.1.1" }
