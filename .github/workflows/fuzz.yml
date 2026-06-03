@@ -8,18 +8,22 @@ name: Fuzz
 #
 # Charter note: cargo-fuzz and libfuzzer-sys are crates.io dev-only tools
 # (same exemption as cargo-llvm-cov). They never enter the runtime
-# dependency closure of any published kevy crate; the fuzz/ directory uses
-# its own isolated workspace.
+# dependency closure of any published kevy crate; each fuzz/ directory
+# uses its own isolated workspace.
 
 on:
   push:
     branches: [develop]
     paths:
       - 'crates/kevy-resp/**'
+      - 'crates/kevy-bytes/**'
+      - 'crates/kevy-persist/**'
       - '.github/workflows/fuzz.yml'
   pull_request:
     paths:
       - 'crates/kevy-resp/**'
+      - 'crates/kevy-bytes/**'
+      - 'crates/kevy-persist/**'
   schedule:
     # Daily at 08:00 UTC. Catches drift on develop even without a code push.
     - cron: '0 8 * * *'
@@ -32,13 +36,17 @@ on:
 
 jobs:
   fuzz:
-    name: Fuzz ${{ matrix.target }} (linux x86_64)
+    name: Fuzz ${{ matrix.crate }}/${{ matrix.target }} (linux x86_64)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        target: [parse_command, parse_reply]
+        include:
+          - { crate: kevy-resp,    target: parse_command }
+          - { crate: kevy-resp,    target: parse_reply }
+          - { crate: kevy-bytes,   target: cross_arm }
+          - { crate: kevy-persist, target: replay_aof }
     env:
       # Honour workflow_dispatch input; default to 300 s (5 min) per target.
       FUZZ_SECONDS: ${{ github.event.inputs.duration_seconds || '300' }}
@@ -59,14 +67,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            crates/kevy-resp/fuzz/target
-            crates/kevy-resp/fuzz/corpus
-          key: fuzz-${{ matrix.target }}-${{ runner.os }}-${{ hashFiles('crates/kevy-resp/fuzz/Cargo.lock') }}
+            crates/${{ matrix.crate }}/fuzz/target
+            crates/${{ matrix.crate }}/fuzz/corpus
+          key: fuzz-${{ matrix.crate }}-${{ matrix.target }}-${{ runner.os }}-${{ hashFiles(format('crates/{0}/fuzz/Cargo.lock', matrix.crate)) }}
           restore-keys: |
-            fuzz-${{ matrix.target }}-${{ runner.os }}-
+            fuzz-${{ matrix.crate }}-${{ matrix.target }}-${{ runner.os }}-
 
-      - name: Run ${{ matrix.target }} for ${{ env.FUZZ_SECONDS }}s
-        working-directory: crates/kevy-resp/fuzz
+      - name: Run ${{ matrix.crate }}/${{ matrix.target }} for ${{ env.FUZZ_SECONDS }}s
+        working-directory: crates/${{ matrix.crate }}/fuzz
         # `cargo +nightly` overrides the stable channel pinned by the
         # repo-root rust-toolchain.toml; cargo-fuzz then inherits nightly
         # for its inner `cargo build` invocation. -max_total_time bounds
@@ -79,8 +87,8 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: fuzz-crash-${{ matrix.target }}
+          name: fuzz-crash-${{ matrix.crate }}-${{ matrix.target }}
           path: |
-            crates/kevy-resp/fuzz/artifacts/${{ matrix.target }}/
-            crates/kevy-resp/fuzz/corpus/${{ matrix.target }}/
+            crates/${{ matrix.crate }}/fuzz/artifacts/${{ matrix.target }}/
+            crates/${{ matrix.crate }}/fuzz/corpus/${{ matrix.target }}/
           if-no-files-found: ignore
