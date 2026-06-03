@@ -1,21 +1,26 @@
 name: Docker
 
-# Build + push the official kevy server image to GitHub Container Registry
-# (ghcr.io/goliajp/kevy) on every release tag, plus on manual dispatch.
+# Build + push the official kevy server image to BOTH:
+#   - GitHub Container Registry  →  ghcr.io/goliajp/kevy
+#   - Docker Hub                 →  docker.io/goliakk/kevy   (a.k.a. `goliakk/kevy`)
+# on every release tag, plus on manual dispatch.
 #
 # Multi-arch (linux/amd64 + linux/arm64) via buildx + QEMU. Arm64 build is
 # emulated; expect ~5-10 min for the full pipeline. Caches via the GHA cache
 # backend so repeat runs on the same tag (e.g. dispatch after a tag re-push)
 # finish in seconds.
 #
-# Tag policy (driven by docker/metadata-action):
-#   - every release tag    → :<semver>      e.g. :1.0.0-rc4, :1.0.0
+# Tag policy (driven by docker/metadata-action), applied to BOTH registries:
+#   - every release tag    → :<semver>      e.g. :1.0.0-rc6, :1.0.0
 #   - rc / beta tag        → :rc            (rolling "latest RC")
 #   - stable tag only      → :latest        (never on rc / beta)
 #
-# Pushes to ghcr.io use the workflow's own GITHUB_TOKEN — no extra secret
-# required, but the repository must have `Packages: write` permission for
-# Actions (Settings → Actions → General → Workflow permissions).
+# Auth:
+#   - ghcr.io     uses the workflow's GITHUB_TOKEN (needs Settings → Actions
+#                 → Workflow permissions = Read and write permissions).
+#   - Docker Hub  uses the DOCKERHUB_USERNAME + DOCKERHUB_TOKEN secrets.
+#                 Rotate via:
+#                   gh secret set DOCKERHUB_TOKEN -R goliajp/kevy --body "<new>"
 
 on:
   push:
@@ -48,11 +53,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Compute image tags + labels
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          # One images-per-line list → metadata-action emits the SAME tag/label
+          # set under each registry, so build-push-action publishes one manifest
+          # per registry in a single buildx invocation.
+          images: |
+            ghcr.io/${{ github.repository }}
+            docker.io/goliakk/kevy
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=rc,enable=${{ startsWith(github.ref, 'refs/tags/') && (contains(github.ref, '-rc') || contains(github.ref, '-beta')) }}
