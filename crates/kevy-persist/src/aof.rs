@@ -6,7 +6,7 @@ use std::io::{self, BufWriter, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use kevy_resp::Argv;
+use kevy_resp::ArgvView;
 use kevy_store::Store;
 
 use crate::{
@@ -80,7 +80,7 @@ impl Aof {
     }
 
     /// Append one command, applying the fsync policy.
-    pub fn append(&mut self, args: &Argv) -> io::Result<()> {
+    pub fn append<A: ArgvView + ?Sized>(&mut self, args: &A) -> io::Result<()> {
         write_multibulk(&mut self.file, args)?;
         self.size_bytes = self
             .size_bytes

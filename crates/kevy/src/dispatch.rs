@@ -8,12 +8,12 @@
 
 use crate::cmd::*;
 use kevy_resp::{
-    Argv, encode_bulk, encode_error, encode_integer, encode_null_bulk, encode_simple_string,
+    ArgvView, encode_bulk, encode_error, encode_integer, encode_null_bulk, encode_simple_string,
 };
 use kevy_store::Store;
 
 /// Map one command to its RESP reply bytes.
-pub fn dispatch(store: &mut Store, args: &Argv) -> Vec<u8> {
+pub fn dispatch<A: ArgvView + ?Sized>(store: &mut Store, args: &A) -> Vec<u8> {
     let mut out = Vec::new();
     dispatch_into(store, args, &mut out);
     out
@@ -22,7 +22,7 @@ pub fn dispatch(store: &mut Store, args: &Argv) -> Vec<u8> {
 /// Execute `args` against `store`, appending the RESP reply to `out`. Lets a hot
 /// caller (the in-order local fast path) write the reply straight into the
 /// connection's output buffer — no per-command reply `Vec` alloc, no copy.
-pub fn dispatch_into(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
+pub fn dispatch_into<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     let Some(name) = args.first() else {
         encode_error(out, "ERR empty command");
         return;
@@ -63,7 +63,7 @@ pub fn dispatch_into(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
 }
 
 /// Connection / introspection commands (no keyspace access).
-fn dispatch_conn(cmd: &[u8], args: &Argv, out: &mut Vec<u8>) -> bool {
+fn dispatch_conn<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, out: &mut Vec<u8>) -> bool {
     match cmd {
         b"PING" => match args.len() {
             1 => encode_simple_string(out, "PONG"),
@@ -98,7 +98,7 @@ fn dispatch_conn(cmd: &[u8], args: &Argv, out: &mut Vec<u8>) -> bool {
 /// This is the v1.0.2 minimal: real multi-DB support (SELECT N + `MOVE` +
 /// `SWAPDB` + `databases` config + per-shard `Vec<Store>`) is on the
 /// v1.1.0 backlog.
-fn cmd_select(args: &Argv, out: &mut Vec<u8>) {
+fn cmd_select<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     if args.len() != 2 {
         wrong_args(out, "select");
         return;
@@ -130,7 +130,12 @@ fn cmd_select(args: &Argv, out: &mut Vec<u8>) {
 }
 
 /// String commands.
-fn dispatch_string(cmd: &[u8], store: &mut Store, args: &Argv, out: &mut Vec<u8>) -> bool {
+fn dispatch_string<A: ArgvView + ?Sized>(
+    cmd: &[u8],
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> bool {
     match cmd {
         b"SET" => cmd_set(store, args, out),
         b"GET" => {
@@ -212,7 +217,12 @@ fn dispatch_string(cmd: &[u8], store: &mut Store, args: &Argv, out: &mut Vec<u8>
 }
 
 /// Set commands (single-key; multi-key SINTER/SUNION/SDIFF are runtime gathers).
-fn dispatch_set(cmd: &[u8], store: &mut Store, args: &Argv, out: &mut Vec<u8>) -> bool {
+fn dispatch_set<A: ArgvView + ?Sized>(
+    cmd: &[u8],
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> bool {
     match cmd {
         b"SADD" => {
             if args.len() < 3 {
@@ -257,7 +267,12 @@ fn dispatch_set(cmd: &[u8], store: &mut Store, args: &Argv, out: &mut Vec<u8>) -
 }
 
 /// Type-agnostic key commands.
-fn dispatch_generic(cmd: &[u8], store: &mut Store, args: &Argv, out: &mut Vec<u8>) -> bool {
+fn dispatch_generic<A: ArgvView + ?Sized>(
+    cmd: &[u8],
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> bool {
     match cmd {
         b"DEL" => {
             if args.len() < 2 {

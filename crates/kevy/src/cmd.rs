@@ -1,6 +1,6 @@
 //! Command helpers shared by the dispatcher.
 
-use kevy_resp::{Argv, encode_array_len, encode_bulk, encode_error, encode_integer};
+use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer};
 use kevy_store::{ScoreBound, Store, StoreError};
 
 /// Uppercase a command verb into the caller's stack buffer — no per-command heap
@@ -169,7 +169,7 @@ pub(crate) fn emit_bulk_array(res: Result<Vec<Vec<u8>>, StoreError>, out: &mut V
 }
 
 /// `HSET key field value [field value ...]`.
-pub(crate) fn cmd_hset(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
+pub(crate) fn cmd_hset<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 4 || !args.len().is_multiple_of(2) {
         return wrong_args(out, "hset");
     }
@@ -181,7 +181,7 @@ pub(crate) fn cmd_hset(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
 }
 
 /// `ZADD key score member [score member ...]`.
-pub(crate) fn cmd_zadd(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
+pub(crate) fn cmd_zadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 4 || !(args.len() - 2).is_multiple_of(2) {
         return wrong_args(out, "zadd");
     }
@@ -198,7 +198,7 @@ pub(crate) fn cmd_zadd(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
 }
 
 /// `ZRANGE key start stop [WITHSCORES]` — by rank.
-pub(crate) fn cmd_zrange(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
+pub(crate) fn cmd_zrange<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 4 || args.len() > 5 {
         return wrong_args(out, "zrange");
     }
@@ -213,7 +213,11 @@ pub(crate) fn cmd_zrange(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
 }
 
 /// `ZRANGEBYSCORE key min max [WITHSCORES]`.
-pub(crate) fn cmd_zrangebyscore(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
+pub(crate) fn cmd_zrangebyscore<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) {
     if args.len() < 4 || args.len() > 5 {
         return wrong_args(out, "zrangebyscore");
     }
@@ -297,8 +301,8 @@ pub(crate) fn fmt_score(s: f64) -> Vec<u8> {
 /// (multi-value) store calls that take `&[Vec<u8>]`. The headline single-key
 /// commands don't use this; these multi-value commands hand the bytes to the
 /// store to keep anyway.
-pub(crate) fn rest(args: &Argv, from: usize) -> Vec<Vec<u8>> {
-    args.iter().skip(from).map(<[u8]>::to_vec).collect()
+pub(crate) fn rest<A: ArgvView + ?Sized>(args: &A, from: usize) -> Vec<Vec<u8>> {
+    (from..args.len()).map(|i| args[i].to_vec()).collect()
 }
 
 /// Parse an `i64` argument from raw bytes.
@@ -307,7 +311,7 @@ pub(crate) fn arg_i64(b: &[u8]) -> Option<i64> {
 }
 
 /// Extract the `MATCH <pattern>` option from a `SCAN cursor [opts...]` command.
-pub(crate) fn scan_pattern(args: &Argv) -> Option<Vec<u8>> {
+pub(crate) fn scan_pattern<A: ArgvView + ?Sized>(args: &A) -> Option<Vec<u8>> {
     let mut i = 2;
     while i + 1 < args.len() {
         if args[i].eq_ignore_ascii_case(b"MATCH") {

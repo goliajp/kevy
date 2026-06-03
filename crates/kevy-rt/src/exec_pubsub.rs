@@ -7,10 +7,16 @@ use crate::Commands;
 use crate::message::{Agg, Inbound, Part, PendingSlot};
 use crate::reduce::pubsub_message;
 use crate::shard::Shard;
-use kevy_resp::{Argv, encode_array_len, encode_bulk, encode_integer, encode_null_bulk};
+use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_integer, encode_null_bulk};
 
 impl<C: Commands> Shard<C> {
-    pub(crate) fn do_subscribe(&mut self, conn_id: u64, seq: u64, args: &Argv, subscribe: bool) {
+    pub(crate) fn do_subscribe<A: ArgvView + ?Sized>(
+        &mut self,
+        conn_id: u64,
+        seq: u64,
+        args: &A,
+        subscribe: bool,
+    ) {
         let verb: &[u8] = if subscribe {
             b"subscribe"
         } else {
@@ -19,7 +25,7 @@ impl<C: Commands> Shard<C> {
         // Channels: the explicit args, or (UNSUBSCRIBE with none) all current subs.
         let channels: Vec<Vec<u8>> = match self.conns.get(&conn_id) {
             None => return,
-            Some(_) if args.len() > 1 => args.iter().skip(1).map(|s| s.to_vec()).collect(),
+            Some(_) if args.len() > 1 => (1..args.len()).map(|i| args[i].to_vec()).collect(),
             Some(c) => c.sub.iter().cloned().collect(),
         };
         // Track which channels actually changed (sub/unsub is idempotent) so the
@@ -90,7 +96,12 @@ impl<C: Commands> Shard<C> {
     /// fire-and-forget to exactly the shards that hold a subscriber (in
     /// parallel; no replies fold back). Replaces the old all-shards SumInt
     /// fan-out, which cost ~2N cross-core ops per publish (N sends + N replies).
-    pub(crate) fn do_publish(&mut self, conn_id: u64, seq: u64, args: &Argv) {
+    pub(crate) fn do_publish<A: ArgvView + ?Sized>(
+        &mut self,
+        conn_id: u64,
+        seq: u64,
+        args: &A,
+    ) {
         let (count, bits) = self
             .pubsub
             .read()

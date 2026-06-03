@@ -11,11 +11,11 @@
 //! scenarios these stubs cover the 95% case where a client calls
 //! CLIENT once at handshake and never inspects.
 
-use kevy_resp::{Argv, encode_bulk, encode_error, encode_integer, encode_simple_string};
+use kevy_resp::{ArgvView, encode_bulk, encode_error, encode_integer, encode_simple_string};
 
 use super::wrong_args;
 
-pub(super) fn cmd_client(args: &Argv, out: &mut Vec<u8>) {
+pub(super) fn cmd_client<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     let sub = match args.get(1) {
         Some(s) => s.to_ascii_uppercase(),
         None => return wrong_args(out, "client"),
@@ -77,6 +77,7 @@ pub(super) fn cmd_client(args: &Argv, out: &mut Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kevy_resp::Argv;
 
     fn run(rest: &[&[u8]]) -> Vec<u8> {
         let mut a = Argv::default();

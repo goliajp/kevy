@@ -20,7 +20,7 @@ use crate::conn::Conn;
 use crate::message::{Inbound, Op};
 use crate::shard::Shard;
 use kevy_persist::{load_snapshot, replay_aof};
-use kevy_resp::parse_command_into;
+use kevy_resp::parse_command_borrowed;
 use kevy_sys::Socket;
 use kevy_uring::{Completion, IoUring, ProvidedBufRing};
 use kevy_map::KevyMap;
@@ -263,41 +263,37 @@ impl<C: Commands> Shard<C> {
             conn.input.extend_from_slice(pbuf.bytes(bid, n));
         }
         pbuf.recycle(bid);
-        // Zero-alloc parse hot path: mirrors the epoll path.
-        // parse_command_into reuses self.scratch_argv; mem::replace dance
-        // lets handle_command take &mut self while the parsed argv sits on
-        // the stack.
+        // Borrowed-argv parse hot path: mirrors the epoll/inbox path.
+        // Swap conn.input onto the stack so the parsed ArgvBorrowed can lend
+        // the buf without colliding with &mut self in dispatch; drain after
+        // each cmd, swap the buf back at the end (if conn still exists).
+        let mut input_buf = match self.conns.get_mut(&cid) {
+            Some(c) => std::mem::take(&mut c.input),
+            None => return,
+        };
         let mut had_protocol_error = false;
         loop {
-            let consumed = {
-                let Some(conn) = self.conns.get_mut(&cid) else {
-                    return;
-                };
-                match parse_command_into(&conn.input, &mut self.scratch_argv) {
-                    Ok(Some(c)) => Some(c),
-                    Ok(None) => None,
-                    Err(_) => {
-                        had_protocol_error = true;
-                        None
-                    }
+            let parse = parse_command_borrowed(&input_buf);
+            let (argv, consumed) = match parse {
+                Ok(Some(t)) => t,
+                Ok(None) => break,
+                Err(_) => {
+                    had_protocol_error = true;
+                    break;
                 }
             };
-            match consumed {
-                Some(c) => {
-                    if let Some(conn) = self.conns.get_mut(&cid) {
-                        conn.input.drain(..c);
-                    } else {
-                        return;
-                    }
-                    let argv = std::mem::take(&mut self.scratch_argv);
-                    if let Some(key) = argv.get(1) {
-                        self.store.prefetch_for_key(key);
-                    }
-                    self.handle_command(cid, &argv);
-                    self.scratch_argv = argv;
-                }
-                None => break,
+            if let Some(key) = argv.get(1) {
+                self.store.prefetch_for_key(key);
             }
+            self.handle_command(cid, &argv);
+            drop(argv);
+            input_buf.drain(..consumed);
+            if !self.conns.contains_key(&cid) {
+                return;
+            }
+        }
+        if let Some(c) = self.conns.get_mut(&cid) {
+            c.input = input_buf;
         }
         if had_protocol_error {
             self.protocol_error(cid);

@@ -9,11 +9,11 @@
 //! follow-up version called out in the message.
 
 use kevy_config::Config;
-use kevy_resp::{Argv, encode_array_len, encode_bulk, encode_error, encode_simple_string};
+use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_simple_string};
 
 use super::{appendfsync_str, eviction_str, log_level_str, wrong_args};
 
-pub(super) fn cmd_config(cfg: &Config, args: &Argv, out: &mut Vec<u8>) {
+pub(super) fn cmd_config<A: ArgvView + ?Sized>(cfg: &Config, args: &A, out: &mut Vec<u8>) {
     let sub = match args.get(1) {
         Some(s) => s.to_ascii_uppercase(),
         None => return wrong_args(out, "config"),
@@ -33,7 +33,7 @@ pub(super) fn cmd_config(cfg: &Config, args: &Argv, out: &mut Vec<u8>) {
     }
 }
 
-fn cmd_config_get(cfg: &Config, args: &Argv, out: &mut Vec<u8>) {
+fn cmd_config_get<A: ArgvView + ?Sized>(cfg: &Config, args: &A, out: &mut Vec<u8>) {
     if args.len() < 3 {
         return wrong_args(out, "config|get");
     }
@@ -41,8 +41,8 @@ fn cmd_config_get(cfg: &Config, args: &Argv, out: &mut Vec<u8>) {
     // whose key matches any of the requested glob patterns. Reply is a
     // flat `[k1, v1, k2, v2, ...]` array (Redis convention).
     let mut hits: Vec<(&'static str, String)> = Vec::new();
-    for arg in args.iter().skip(2) {
-        let pat = arg.to_ascii_lowercase();
+    for i in 2..args.len() {
+        let pat = args[i].to_ascii_lowercase();
         for (key, val) in config_pairs(cfg) {
             if glob_match(&pat, key.as_bytes()) && !hits.iter().any(|(k, _)| *k == key) {
                 hits.push((key, val));
@@ -56,7 +56,7 @@ fn cmd_config_get(cfg: &Config, args: &Argv, out: &mut Vec<u8>) {
     }
 }
 
-fn cmd_config_set(args: &Argv, out: &mut Vec<u8>) {
+fn cmd_config_set<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     if args.len() != 4 {
         return wrong_args(out, "config|set");
     }
@@ -141,6 +141,7 @@ fn yes_no(b: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kevy_resp::Argv;
 
     fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
         let mut a = Argv::default();

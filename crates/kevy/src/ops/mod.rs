@@ -17,14 +17,19 @@ mod memory;
 use std::time::SystemTime;
 
 use kevy_config::Config;
-use kevy_resp::{Argv, encode_bulk, encode_error, encode_integer, encode_simple_string};
+use kevy_resp::{ArgvView, encode_bulk, encode_error, encode_integer, encode_simple_string};
 use kevy_store::Store;
 
 use crate::config_global;
 
 /// Operational-command dispatcher. Returns `true` if the verb was
 /// recognised (and a reply has been written to `out`).
-pub(crate) fn dispatch_ops(cmd: &[u8], store: &mut Store, args: &Argv, out: &mut Vec<u8>) -> bool {
+pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
+    cmd: &[u8],
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> bool {
     let cfg = config_global::get();
     match cmd {
         b"INFO" => cmd_info(&cfg, store, args, out),
@@ -42,7 +47,7 @@ pub(crate) fn dispatch_ops(cmd: &[u8], store: &mut Store, args: &Argv, out: &mut
 
 // ───────────── INFO ─────────────
 
-fn cmd_info(cfg: &Config, store: &Store, args: &Argv, out: &mut Vec<u8>) {
+fn cmd_info<A: ArgvView + ?Sized>(cfg: &Config, store: &Store, args: &A, out: &mut Vec<u8>) {
     // INFO [section]; we always emit the requested section (or all when
     // none / "default" / "all" / "everything" is requested).
     let section = args.get(1).map(|a| a.to_ascii_lowercase());
@@ -182,7 +187,7 @@ fn info_keyspace(b: &mut String) {
 
 // ───────────── CLUSTER ─────────────
 
-fn cmd_cluster(args: &Argv, out: &mut Vec<u8>) {
+fn cmd_cluster<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     let sub = match args.get(1) {
         Some(s) => s.to_ascii_uppercase(),
         None => return wrong_args(out, "cluster"),
@@ -222,7 +227,7 @@ fn cmd_cluster(args: &Argv, out: &mut Vec<u8>) {
 
 // ───────────── DEBUG ─────────────
 
-fn cmd_debug(args: &Argv, out: &mut Vec<u8>) {
+fn cmd_debug<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     let sub = match args.get(1) {
         Some(s) => s.to_ascii_uppercase(),
         None => return wrong_args(out, "debug"),
@@ -248,7 +253,7 @@ fn cmd_debug(args: &Argv, out: &mut Vec<u8>) {
 
 // ───────────── WAIT ─────────────
 
-fn cmd_wait(args: &Argv, out: &mut Vec<u8>) {
+fn cmd_wait<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     // WAIT numreplicas timeout — single-machine kevy has zero replicas,
     // so the answer "how many replicas acked your writes" is always 0.
     // Redis blocks until numreplicas or timeout; we return immediately.
@@ -260,7 +265,7 @@ fn cmd_wait(args: &Argv, out: &mut Vec<u8>) {
 
 // ───────────── SHUTDOWN ─────────────
 
-fn cmd_shutdown(args: &Argv, _out: &mut Vec<u8>) {
+fn cmd_shutdown<A: ArgvView + ?Sized>(args: &A, _out: &mut Vec<u8>) {
     // SHUTDOWN [NOSAVE | SAVE] — Redis exits without sending a reply
     // (client sees connection drop). v1.0 stub: parse the subcommand
     // for forward compatibility, then exit(0). Wave 2 will add the
@@ -319,6 +324,7 @@ pub(super) fn wrong_args(out: &mut Vec<u8>, name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kevy_resp::Argv;
 
     fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
         let mut a = Argv::default();

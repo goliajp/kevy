@@ -35,24 +35,24 @@
 //! re-exported so you don't need a separate dependency.)
 //!
 //! ```no_run
-//! use kevy_rt::{Argv, Commands, Route, Runtime, Store, TxnKind};
+//! use kevy_rt::{ArgvView, Commands, Route, Runtime, Store, TxnKind};
 //! use std::sync::Arc;
 //! use std::sync::atomic::AtomicBool;
 //!
 //! #[derive(Clone)]
 //! struct MyCommands;
 //! impl Commands for MyCommands {
-//!     fn route(&self, args: &Argv) -> Route {
+//!     fn route<A: ArgvView + ?Sized>(&self, args: &A) -> Route {
 //!         if args.len() >= 2 { Route::Single(1) } else { Route::Local }
 //!     }
-//!     fn dispatch(&self, _store: &mut Store, _args: &Argv) -> Vec<u8> {
+//!     fn dispatch<A: ArgvView + ?Sized>(&self, _store: &mut Store, _args: &A) -> Vec<u8> {
 //!         b"+OK\r\n".to_vec()
 //!     }
-//!     fn is_quit(&self, args: &Argv) -> bool {
+//!     fn is_quit<A: ArgvView + ?Sized>(&self, args: &A) -> bool {
 //!         args.first().is_some_and(|c| c.eq_ignore_ascii_case(b"QUIT"))
 //!     }
-//!     fn is_write(&self, _args: &Argv) -> bool { false }
-//!     fn txn_kind(&self, _args: &Argv) -> TxnKind { TxnKind::Other }
+//!     fn is_write<A: ArgvView + ?Sized>(&self, _args: &A) -> bool { false }
+//!     fn txn_kind<A: ArgvView + ?Sized>(&self, _args: &A) -> TxnKind { TxnKind::Other }
 //! }
 //!
 //! // One shard per core, listening on 127.0.0.1:6379, until `stop` is set.
@@ -79,7 +79,7 @@ mod shard;
 #[cfg(target_os = "linux")]
 mod uring_reactor;
 
-pub use kevy_resp::Argv;
+pub use kevy_resp::{Argv, ArgvBorrowed, ArgvView};
 pub use kevy_store::Store;
 pub use runtime::Runtime;
 
@@ -127,21 +127,21 @@ pub enum Route {
 /// must be cheap/stateless to clone.
 pub trait Commands: Clone + Send + 'static {
     /// Classify how a command is routed across shards.
-    fn route(&self, args: &Argv) -> Route;
+    fn route<A: ArgvView + ?Sized>(&self, args: &A) -> Route;
     /// Execute a full command against one shard's store, returning RESP bytes.
-    fn dispatch(&self, store: &mut Store, args: &Argv) -> Vec<u8>;
+    fn dispatch<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8>;
     /// Execute a command, appending the RESP reply to `out`. The in-order local
     /// fast path uses this to write straight into the connection's output buffer
     /// (no per-command reply `Vec`). Default: delegate to [`dispatch`](Self::dispatch).
-    fn dispatch_into(&self, store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
+    fn dispatch_into<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.dispatch(store, args));
     }
     /// Whether this command should close the connection (QUIT).
-    fn is_quit(&self, args: &Argv) -> bool;
+    fn is_quit<A: ArgvView + ?Sized>(&self, args: &A) -> bool;
     /// Whether this command mutates the keyspace (so it must be logged to the AOF).
-    fn is_write(&self, args: &Argv) -> bool;
+    fn is_write<A: ArgvView + ?Sized>(&self, args: &A) -> bool;
     /// Transaction-control classification (MULTI/EXEC/DISCARD vs anything else).
-    fn txn_kind(&self, args: &Argv) -> TxnKind;
+    fn txn_kind<A: ArgvView + ?Sized>(&self, args: &A) -> TxnKind;
     /// Called once per shard, immediately after [`Store::new`], before the
     /// reactor enters its event loop. Implementations install per-shard
     /// configuration that the runtime doesn't know about — currently the
@@ -167,7 +167,7 @@ pub trait Commands: Clone + Send + 'static {
     /// (four upper_verb scans + matches); concrete impls SHOULD override this
     /// with a single match so the reactor's hot path pays the verb-resolution
     /// cost only once per command.
-    fn resolve(&self, args: &Argv) -> ResolvedCmd {
+    fn resolve<A: ArgvView + ?Sized>(&self, args: &A) -> ResolvedCmd {
         ResolvedCmd {
             txn_kind: self.txn_kind(args),
             route: self.route(args),

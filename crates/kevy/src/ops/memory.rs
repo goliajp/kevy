@@ -6,12 +6,17 @@
 //! clients actually parse, since we don't carry RDB/COW/replication state.
 
 use kevy_config::Config;
-use kevy_resp::{Argv, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk};
+use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk};
 use kevy_store::{ENTRY_OVERHEAD, Store};
 
 use super::{eviction_str, wrong_args};
 
-pub(crate) fn cmd_memory(cfg: &Config, store: &Store, args: &Argv, out: &mut Vec<u8>) {
+pub(crate) fn cmd_memory<A: ArgvView + ?Sized>(
+    cfg: &Config,
+    store: &Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) {
     let Some(sub) = args.get(1) else {
         return wrong_args(out, "memory");
     };
@@ -47,7 +52,7 @@ pub(crate) fn cmd_memory(cfg: &Config, store: &Store, args: &Argv, out: &mut Vec
 
 /// `MEMORY USAGE <key> [SAMPLES count]` — the `SAMPLES` arg is accepted for
 /// parity but ignored; our accounting is already exact-per-entry.
-fn cmd_memory_usage(store: &Store, args: &Argv, out: &mut Vec<u8>) {
+fn cmd_memory_usage<A: ArgvView + ?Sized>(store: &Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 3 {
         return wrong_args(out, "memory|usage");
     }
@@ -133,6 +138,7 @@ pub(crate) fn format_bytes_human(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kevy_resp::Argv;
 
     #[test]
     fn human_format_matches_redis_style() {
