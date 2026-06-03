@@ -402,8 +402,37 @@ fn decimal_digits(mut x: u64) -> u32 {
 }
 
 /// Replay the command log at `path`, calling `apply` for each complete command.
-/// A truncated or corrupt trailing frame (e.g. a crash mid-append) is ignored.
-/// A missing file is treated as an empty log.
+///
+/// Always emits a one-line summary to stderr when the file has any bytes,
+/// so operators can immediately see how many commands were replayed and
+/// how many bytes were dropped (truncated tail or parse error). This
+/// caught the mailrs incident only *after* a 70-day silent failure window
+/// — making the summary always-on is cheap (one line per restart) and
+/// turns silent-empty-store from a multi-hour outage into a one-line log
+/// hit.
+///
+/// Three outcomes:
+///
+/// * **Clean** — every byte consumed by valid RESP frames. Logs
+///   `replayed N commands from M bytes`.
+/// * **Truncated tail** — a crash mid-append left a partial frame. The
+///   prefix is intact and replays normally; the trailing partial bytes
+///   are silently OK. Logs `replayed N commands; trailing K bytes were
+///   a partial frame (crash mid-append, recoverable)`.
+/// * **Corrupt frame** — parser hit invalid bytes mid-file. The prefix
+///   replayed; the tail (including the bad frame) is dropped. Logs a
+///   loud WARN with the byte offset, parser error, and a hex+ascii
+///   preview of the bad region. Common cause: deploy pipeline wrote
+///   non-kevy bytes (e.g. SSH stderr) into the AOF path.
+///
+/// A missing file is treated as an empty log (returns Ok(()) silently,
+/// no log line).
+///
+/// Note: RESP has an *inline* form (space-separated tokens) for backward
+/// compatibility, so a stderr line like `Warning: Permanently added ...`
+/// will parse as a valid (if nonsense) command. The summary line is the
+/// signal — an unexpected count of replayed commands at boot is the
+/// operator's cue to inspect the AOF byte-by-byte.
 pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<()> {
     let mut data = Vec::new();
     match File::open(path) {
@@ -413,18 +442,89 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<()> {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e),
     }
+    let total = data.len();
+    if total == 0 {
+        return Ok(());
+    }
     let mut pos = 0;
-    while pos < data.len() {
+    let mut replayed: u64 = 0;
+    let stop = loop {
+        if pos >= total {
+            break ReplayStop::Clean;
+        }
         match kevy_resp::parse_command(&data[pos..]) {
             Ok(Some((args, consumed))) => {
                 apply(args);
                 pos += consumed;
+                replayed += 1;
             }
-            // Incomplete or corrupt tail — stop; the prefix is intact.
-            Ok(None) | Err(_) => break,
+            Ok(None) => break ReplayStop::TruncatedTail,
+            Err(e) => break ReplayStop::CorruptFrame(format!("{e:?}")),
+        }
+    };
+    log_replay_summary(path, total, pos, replayed, &data[pos.min(total)..], stop);
+    Ok(())
+}
+
+/// Outcome of an AOF replay run — drives the summary log shape.
+enum ReplayStop {
+    Clean,
+    TruncatedTail,
+    CorruptFrame(String),
+}
+
+/// Emit the one-line replay summary. Goes to stderr because kevy-persist
+/// has no log-crate dependency (pure-Rust + 0 deps charter); production
+/// deployments route stderr to their existing log sink.
+fn log_replay_summary(
+    path: &Path,
+    total: usize,
+    pos: usize,
+    replayed: u64,
+    remainder: &[u8],
+    stop: ReplayStop,
+) {
+    let display = path.display();
+    let dropped = total - pos;
+    match stop {
+        ReplayStop::Clean => {
+            eprintln!(
+                "kevy: AOF {display} replayed {replayed} commands from {total} bytes (clean)"
+            );
+        }
+        ReplayStop::TruncatedTail => {
+            eprintln!(
+                "kevy: AOF {display} replayed {replayed} commands; trailing {dropped} bytes \
+                 were a partial frame (crash mid-append, recoverable)"
+            );
+        }
+        ReplayStop::CorruptFrame(err) => {
+            let preview = preview_bytes(remainder);
+            eprintln!(
+                "kevy WARN: AOF {display} replayed {replayed} commands then hit a corrupt \
+                 frame at byte {pos}; dropping the trailing {dropped} bytes. \
+                 Preview: {preview}. Parser error: {err}. \
+                 Common cause: non-kevy bytes got written into this file path \
+                 (e.g. deploy pipeline redirecting stderr to the AOF)."
+            );
         }
     }
-    Ok(())
+}
+
+/// Hex + ASCII preview of up to 16 bytes, for diagnostic eprintlns.
+fn preview_bytes(b: &[u8]) -> String {
+    let n = b.len().min(16);
+    let mut hex = String::with_capacity(n * 3);
+    let mut ascii = String::with_capacity(n);
+    for &x in &b[..n] {
+        if !hex.is_empty() {
+            hex.push(' ');
+        }
+        use std::fmt::Write;
+        let _ = write!(hex, "{:02x}", x);
+        ascii.push(if (0x20..0x7f).contains(&x) { x as char } else { '.' });
+    }
+    format!("hex=[{hex}] ascii=[{ascii}]")
 }
 
 pub(crate) fn write_multibulk<W: Write, A: ArgvView + ?Sized>(
@@ -611,6 +711,55 @@ mod tests {
         let mut n = 0;
         replay_aof(&path, |_| n += 1).unwrap();
         assert_eq!(n, 0);
+    }
+
+    /// The mailrs prod incident shape: SSH stderr ("Warning: Permanently
+    /// added 't02.golia.jp' …") got redirected into the AOF by a deploy
+    /// pipeline. RESP has an *inline* form (space-tokenized for raw-typed
+    /// PING / DEBUG), so the junk does parse into commands — but kevy
+    /// must NOT panic, and the dispatcher above will reject the bogus
+    /// verbs at -ERR level. This test pins the lower-level guarantee:
+    /// replay returns Ok and processes every byte without crash, even
+    /// when the bytes are clearly not anything we ever wrote.
+    #[test]
+    fn replay_aof_with_ssh_stderr_head_does_not_panic() {
+        use std::io::Write;
+        let path = temp_file("ssh_warning_head");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(
+            b"Warning: Permanently added 't02.golia.jp' (ED25519) to the list of known hosts.\r\n",
+        ).unwrap();
+        f.write_all(b"*3\r\n$3\r\nSET\r\n$1\r\nk\r\n$1\r\nv\r\n").unwrap();
+        drop(f);
+        let mut n = 0;
+        replay_aof(&path, |_| n += 1).expect("replay must not panic on junk input");
+        // The SSH stderr line and the trailing SET both produce "commands"
+        // at the parse layer (inline + multibulk). The summary line on
+        // stderr will show this count — operations notices it's wrong.
+        assert!(n >= 2, "saw at least the inline junk + the SET, got {n}");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A *real* malformed RESP frame (`*` header with non-numeric count)
+    /// triggers the parser's Err path — and exercises the "WARN with
+    /// hex preview" branch of replay_aof. The clean prefix replays;
+    /// the corrupt frame + everything after is dropped; the function
+    /// still returns Ok.
+    #[test]
+    fn replay_aof_with_real_corrupt_frame_keeps_prefix() {
+        use std::io::Write;
+        let path = temp_file("real_corrupt_mid");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(b"*3\r\n$3\r\nSET\r\n$1\r\na\r\n$1\r\n1\r\n").unwrap();
+        f.write_all(b"*3\r\n$3\r\nSET\r\n$1\r\nb\r\n$1\r\n2\r\n").unwrap();
+        // Multi-bulk start byte (`*`) with non-numeric length → Err path.
+        f.write_all(b"*BAD\r\n").unwrap();
+        f.write_all(b"*3\r\n$3\r\nSET\r\n$1\r\nc\r\n$1\r\n3\r\n").unwrap();
+        drop(f);
+        let mut n = 0;
+        replay_aof(&path, |_| n += 1).expect("replay must not panic on corrupt frame");
+        assert_eq!(n, 2, "prefix replays; corrupt frame stops the loop; tail dropped");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
