@@ -450,14 +450,16 @@ impl PartialEq for SmallBytes {
                 };
                 a == b
             }
-            // Mixed inline/heap is unreachable from any safe constructor —
-            // a heap variant always carries len > 22, an inline always
-            // len ≤ 22, so two equal-length values land in the same arm
-            // (and non-equal-length comparisons short-circuit on
-            // `len != other_len` inside each arm).
-            _ => unreachable!(
-                "kevy-bytes invariant: a heap variant never carries len ≤ 22"
-            ),
+            // Mixed inline/heap: should not happen via any safe constructor
+            // (heap variants always carry len > 22, inline always ≤ 22), so
+            // two equal-length values normally land in the same arm. But a
+            // database's query path MUST NOT panic on data shape — external
+            // causes (memory corruption, mmap/FFI bytes from a caller crate,
+            // a future unsafe transmute upstream) can violate the invariant.
+            // Falling back to slice-form equality is logically identical to
+            // the same-arm arms and stays sound (each side's `as_slice()`
+            // already chooses the right variant per `is_inline()`).
+            _ => self.as_slice() == other.as_slice(),
         }
     }
 }
@@ -880,5 +882,43 @@ mod tests {
             allocs >= 1,
             "expected the heap path to allocate at least once, got {allocs}"
         );
+    }
+
+    /// PartialEq on a forged "heap variant with len ≤ 22" must NOT panic.
+    /// The safe API never produces such a value, but external causes
+    /// (mmap, FFI, future unsafe code, memory corruption) can. A DB's
+    /// query path has to degrade to a correct boolean, not crash.
+    /// Pre-fix: `unreachable!()` on the mixed arm would `panic!`.
+    /// Post-fix: falls back to slice-form equality.
+    #[test]
+    fn partial_eq_mixed_arm_does_not_panic() {
+        use std::mem::ManuallyDrop;
+
+        let inline_hi = SmallBytes::from_slice(b"hi");
+        let inline_no = SmallBytes::from_slice(b"no");
+
+        // Forge a heap variant that claims to hold "hi" with len = 2 —
+        // invariant-violating, but mechanically possible if the union
+        // bytes were ever externally written. The backing Vec stays
+        // alive via ManuallyDrop so the forged pointer is valid for
+        // the read inside PartialEq.
+        let mut storage = ManuallyDrop::new(b"hi".to_vec());
+        let ptr = NonNull::new(storage.as_mut_ptr()).expect("non-null Vec");
+        let forged = ManuallyDrop::new(SmallBytes {
+            heap: Heap::new(ptr, 2, 2),
+        });
+
+        // Equal content: must return true, must NOT panic.
+        assert_eq!(inline_hi, *forged);
+        assert_eq!(*forged, inline_hi);
+        // Different content: must return false, must NOT panic.
+        assert_ne!(inline_no, *forged);
+        assert_ne!(*forged, inline_no);
+
+        // Don't drop the forged heap (cap=2 would dealloc the Vec's
+        // actual allocation with the wrong layout). ManuallyDrop guards
+        // both the storage Vec and the forged SmallBytes — process exit
+        // reclaims the leak.
+        let _ = (storage, forged);
     }
 }
