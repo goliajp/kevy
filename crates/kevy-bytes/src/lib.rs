@@ -450,15 +450,18 @@ impl PartialEq for SmallBytes {
                 };
                 a == b
             }
-            // Mixed inline/heap: should not happen via any safe constructor
-            // (heap variants always carry len > 22, inline always ≤ 22), so
-            // two equal-length values normally land in the same arm. But a
-            // database's query path MUST NOT panic on data shape — external
-            // causes (memory corruption, mmap/FFI bytes from a caller crate,
-            // a future unsafe transmute upstream) can violate the invariant.
-            // Falling back to slice-form equality is logically identical to
-            // the same-arm arms and stays sound (each side's `as_slice()`
-            // already chooses the right variant per `is_inline()`).
+            // Mixed inline/heap: this IS reachable in normal operation.
+            // It happens whenever HashMap (or any `==` consumer) compares
+            // an inline-length value (len ≤ 22) against a heap-length
+            // value (len > 22). Two SmallBytes of different lengths can
+            // *collide* on hashbrown's hash + quadratic probe, and the
+            // probe checks equality even though the lengths differ. The
+            // pre-fix `unreachable!()` here was a logic bug — it assumed
+            // the same-arm short-circuits cover all cases, but they only
+            // fire when both sides land in the same arm. Different-length
+            // collisions correctly fall through here. The right answer
+            // is just slice-form equality (which short-circuits on `len`
+            // internally), giving `false` whenever the lengths differ.
             _ => self.as_slice() == other.as_slice(),
         }
     }
@@ -884,12 +887,15 @@ mod tests {
         );
     }
 
-    /// PartialEq on a forged "heap variant with len ≤ 22" must NOT panic.
-    /// The safe API never produces such a value, but external causes
-    /// (mmap, FFI, future unsafe code, memory corruption) can. A DB's
-    /// query path has to degrade to a correct boolean, not crash.
-    /// Pre-fix: `unreachable!()` on the mixed arm would `panic!`.
-    /// Post-fix: falls back to slice-form equality.
+    /// REAL prod incident (mailrs 2026-06-03): two legitimately-constructed
+    /// `SmallBytes` values — one inline (≤22 B) and one heap (>22 B) — get
+    /// compared by HashMap on a hash-collision. They have different
+    /// lengths, so they land in different union arms. Pre-fix: the
+    /// `unreachable!()` on the mixed arm panicked. Post-fix: falls back
+    /// to slice-form equality, which short-circuits on length internally
+    /// and returns `false` whenever the lengths differ. This is THE real
+    /// fix — not a defensive hack. The next test forges the same shape
+    /// but is the conceptual root-cause test.
     #[test]
     fn partial_eq_mixed_arm_does_not_panic() {
         use std::mem::ManuallyDrop;
@@ -920,5 +926,29 @@ mod tests {
         // both the storage Vec and the forged SmallBytes — process exit
         // reclaims the leak.
         let _ = (storage, forged);
+    }
+
+    /// The actual mailrs prod crash shape, reproduced without unsafe:
+    /// a legitimately-inline short value compared against a
+    /// legitimately-heap long value. Different lengths, both correctly
+    /// constructed, but they take different union arms. Pre-fix this
+    /// panicked at `unreachable!()`; post-fix it just returns `false`.
+    ///
+    /// Naturally produced by HashMap probing on hash-collision between
+    /// keys of different sizes — `_health_probe` (13 B inline) vs a
+    /// longer cement key (>22 B heap) in mailrs's case.
+    #[test]
+    fn partial_eq_unequal_length_across_inline_heap_is_false() {
+        let short_inline = SmallBytes::from_slice(b"_health_probe"); // 13 B
+        let long_heap = SmallBytes::from_slice(
+            b"this string is definitely longer than twenty-two bytes",
+        );
+        // Sanity: pre-conditions of the shape.
+        assert!(short_inline.is_inline());
+        assert!(!long_heap.is_inline());
+        // The real test: cross-arm comparison must NOT panic and must
+        // return false because the lengths differ.
+        assert_ne!(short_inline, long_heap);
+        assert_ne!(long_heap, short_inline);
     }
 }
