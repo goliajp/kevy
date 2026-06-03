@@ -34,7 +34,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use kevy_embedded::{Config, Store};
+use kevy_embedded::Store;
 use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
 
@@ -53,18 +53,16 @@ pub enum Connection {
 impl Connection {
     /// Open a backend chosen by URL scheme.
     ///
-    /// See the crate-level docs for the supported URL forms.
+    /// See the crate-level docs for the supported URL forms. From v1.3.0,
+    /// two `Connection::open` calls with the same `mem://<name>` or
+    /// `file:///path` URL share the same backing `Store` — and the same
+    /// pub/sub bus, so `Connection::publish` reaches a `Subscriber::open`
+    /// opened with the same URL.
     pub fn open(url: &str) -> io::Result<Self> {
         let parsed = parse_url(url)?;
         match parsed {
-            Target::EmbedMemory => Ok(Self::Embedded(Store::open(Config::default())?)),
-            Target::EmbedPersist(path) => Ok(Self::Embedded(Store::open(
-                Config::default().with_persist(path),
-            )?)),
-            // RespClient::from_url already speaks kevy:// + redis:// + tcp://
-            // (added in v1.0.3) — delegate to it for the network targets so
-            // the URL parser stays in one place.
-            Target::Remote(url) => Ok(Self::Remote(RespClient::from_url(&url)?)),
+            Target::Remote(remote_url) => Ok(Self::Remote(RespClient::from_url(&remote_url)?)),
+            embed => Ok(Self::Embedded(resolve_store(&embed)?)),
         }
     }
 
@@ -604,17 +602,19 @@ impl Connection {
     /// `PUBLISH channel message`. Returns the count of subscribers
     /// that received the message.
     ///
-    /// On the embedded backend there are no subscribers (single process,
-    /// no reactor), so this returns `Ok(0)` — matching Redis's
-    /// "publish to a channel with no listeners" semantic.
+    /// As of v1.3.0, the embedded backend has a real in-process pub/sub
+    /// bus: when a [`Subscriber`] is open against the same `mem://<name>`
+    /// or `file:///path` URL, this delivers there and returns the actual
+    /// receiver count. Anonymous `mem://` keeps the old "no subscribers,
+    /// returns 0" behaviour (the URL is its own bus, by design).
     ///
-    /// The pub/sub *consumer* side lives in [`Subscriber`], which takes
-    /// its own dedicated TCP connection: a subscribed connection cannot
-    /// send normal commands per the Redis/RESP spec, so it can't share
-    /// a socket with this `Connection`.
+    /// The pub/sub *consumer* side lives in [`Subscriber`]. On the remote
+    /// backend a subscribed TCP connection cannot send normal commands
+    /// per the RESP spec; the embedded backend has no such restriction
+    /// but `Subscriber` is still a distinct type for API symmetry.
     pub fn publish(&mut self, channel: &[u8], message: &[u8]) -> io::Result<usize> {
         match self {
-            Self::Embedded(_) => Ok(0),
+            Self::Embedded(s) => Ok(s.publish(channel, message)),
             Self::Remote(c) => match c.request(&vec3(b"PUBLISH", channel, message))? {
                 Reply::Int(n) if n >= 0 => Ok(n as usize),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
@@ -698,42 +698,44 @@ fn store_err(e: kevy_embedded::StoreError) -> io::Error {
 // =====================================================================
 
 /// What `parse_url` resolves an input to.
-#[derive(Debug)]
-enum Target {
-    /// `mem://` — in-process, in-memory only.
-    EmbedMemory,
-    /// `file://path` — in-process with persistence in `path`.
+///
+/// The `mem://` and `file://` forms route through a process-local
+/// registry so two opens of the same URL share the same backing
+/// [`kevy_embedded::Store`] — that's what makes embedded pub/sub work:
+/// the publisher's `Connection` and the consumer's `Subscriber`, opened
+/// with the same URL, reach the same bus. Anonymous `mem://` (no name)
+/// stays isolated for compatibility with v1.0/v1.1/v1.2 behaviour.
+#[derive(Debug, Clone)]
+pub(crate) enum Target {
+    /// `mem://` — anonymous, fresh `Store` each open, never shared.
+    EmbedMemoryAnonymous,
+    /// `mem://<name>` — shared by `<name>` across this process.
+    EmbedMemoryNamed(String),
+    /// `file:///abs/path` / `file://./rel/path` — shared by canonical path
+    /// across this process; also persists to disk (snapshot + AOF).
     EmbedPersist(PathBuf),
     /// `kevy://…` / `redis://…` / `tcp://…` — delegate to RespClient.
     Remote(String),
 }
 
-fn parse_url(url: &str) -> io::Result<Target> {
+pub(crate) fn parse_url(url: &str) -> io::Result<Target> {
     let (scheme, rest) = url
         .split_once("://")
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "URL missing '://'"))?;
     match scheme {
-        "mem" => {
-            if !rest.is_empty() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "mem:// URL must be empty after the scheme (e.g. `mem://`)",
-                ));
-            }
-            Ok(Target::EmbedMemory)
-        }
+        "mem" => Ok(if rest.is_empty() {
+            Target::EmbedMemoryAnonymous
+        } else {
+            Target::EmbedMemoryNamed(rest.to_string())
+        }),
         "file" => {
-            // file:///abs/path → "/abs/path"; file://./rel → "./rel".
-            // The triple-slash form is the standard file:// URI for an
-            // absolute path; we treat any leading `/` as part of the path.
-            let path = rest;
-            if path.is_empty() {
+            if rest.is_empty() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "file:// URL must include a path (e.g. `file:///var/lib/myapp`)",
                 ));
             }
-            Ok(Target::EmbedPersist(PathBuf::from(path)))
+            Ok(Target::EmbedPersist(PathBuf::from(rest)))
         }
         "kevy" | "redis" | "tcp" => Ok(Target::Remote(url.to_string())),
         "rediss" | "kevys" => Err(io::Error::new(
@@ -745,6 +747,62 @@ fn parse_url(url: &str) -> io::Result<Target> {
             format!("unknown URL scheme '{other}://'"),
         )),
     }
+}
+
+// =====================================================================
+// Embedded-Store URL registry
+// =====================================================================
+
+/// Process-local URL → `WeakStore` map. Same URL → same backing keyspace,
+/// which is what makes embedded pub/sub work across `Connection::open`
+/// and `Subscriber::open` calls. Entries auto-evict when their last
+/// strong handle drops (the next `open` for that URL canonicalizes to a
+/// fresh Store).
+fn embed_registry()
+-> &'static std::sync::Mutex<std::collections::HashMap<String, kevy_embedded::WeakStore>> {
+    use std::sync::{Mutex, OnceLock};
+    static REG: OnceLock<Mutex<std::collections::HashMap<String, kevy_embedded::WeakStore>>> =
+        OnceLock::new();
+    REG.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+fn registry_key(target: &Target) -> Option<String> {
+    match target {
+        Target::EmbedMemoryAnonymous | Target::Remote(_) => None,
+        Target::EmbedMemoryNamed(name) => Some(format!("mem://{name}")),
+        Target::EmbedPersist(path) => Some(format!("file://{}", path.display())),
+    }
+}
+
+/// Resolve `target` to a `Store`. Anonymous `mem://` always gets a fresh
+/// Store; named / persist targets return the cached one when present.
+pub(crate) fn resolve_store(target: &Target) -> io::Result<kevy_embedded::Store> {
+    use kevy_embedded::{Config, Store};
+    let key = registry_key(target);
+    if let Some(k) = &key
+        && let Ok(mut r) = embed_registry().lock()
+    {
+        r.retain(|_, w| w.upgrade().is_some());
+        if let Some(store) = r.get(k).and_then(|w| w.upgrade()) {
+            return Ok(store);
+        }
+    }
+    let store = match target {
+        Target::EmbedMemoryAnonymous | Target::EmbedMemoryNamed(_) => Store::open(Config::default()),
+        Target::EmbedPersist(path) => Store::open(Config::default().with_persist(path)),
+        Target::Remote(_) => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "resolve_store called on a Remote target",
+            ));
+        }
+    }?;
+    if let Some(k) = key
+        && let Ok(mut r) = embed_registry().lock()
+    {
+        r.insert(k, store.downgrade());
+    }
+    Ok(store)
 }
 
 // =====================================================================
@@ -781,8 +839,16 @@ mod tests {
 
     #[test]
     fn parse_mem_url() {
-        assert!(matches!(parse_url("mem://").unwrap(), Target::EmbedMemory));
-        assert!(parse_url("mem://something").is_err());
+        // `mem://` is anonymous (per-call fresh Store).
+        assert!(matches!(
+            parse_url("mem://").unwrap(),
+            Target::EmbedMemoryAnonymous
+        ));
+        // `mem://<name>` is shared by name (registry route, since v1.3.0).
+        match parse_url("mem://my-bus").unwrap() {
+            Target::EmbedMemoryNamed(n) => assert_eq!(n, "my-bus"),
+            other => panic!("expected EmbedMemoryNamed, got {other:?}"),
+        }
     }
 
     #[test]

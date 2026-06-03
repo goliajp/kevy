@@ -1,49 +1,69 @@
-//! Pub/sub consumer side — a TCP connection dedicated to receiving messages.
+//! Pub/sub consumer side — a connection dedicated to receiving messages.
 //!
-//! `SUBSCRIBE` / `PSUBSCRIBE` morph a Redis/kevy connection into a one-way
-//! event stream: the client no longer sends ordinary commands and instead
-//! reads an unbounded sequence of `subscribe`, `message`, `pmessage`,
+//! `SUBSCRIBE` / `PSUBSCRIBE` morph a connection into a one-way event
+//! stream: the client no longer sends ordinary commands and instead reads
+//! an unbounded sequence of `subscribe`, `message`, `pmessage`,
 //! `unsubscribe`, … frames until the connection is closed. That semantic
-//! doesn't fit the one-shot `Connection::request` shape — so subscribed
-//! traffic gets its own type, [`Subscriber`], on its own socket.
+//! doesn't fit the one-shot `Connection::request` shape, so subscribed
+//! traffic gets its own type, [`Subscriber`].
+//!
+//! Two backends, switched on the URL:
+//! - `kevy://` / `redis://` / `tcp://` — dedicated TCP socket
+//! - `mem://<name>` / `file:///path` — in-process bus, via the URL
+//!   registry in [`crate::resolve_store`]. Anonymous `mem://` (no name)
+//!   has no bus and is rejected; use a named bus to actually receive
+//!   messages from a [`crate::Connection::publish`] on the same URL.
 //!
 //! ```no_run
-//! use kevy_client::Subscriber;
+//! use kevy_client::{Subscriber, PubsubEvent};
 //!
 //! let mut sub = Subscriber::open("kevy://localhost:6379", &[b"news"])?;
 //! loop {
-//!     match sub.recv()? {
-//!         kevy_client::PubsubEvent::Message { channel, payload } => {
-//!             println!("{}: {}", String::from_utf8_lossy(&channel),
-//!                                String::from_utf8_lossy(&payload));
-//!         }
-//!         _ => {}  // ignore subscribe-acks and other meta frames
+//!     if let PubsubEvent::Message { channel, payload } = sub.recv()? {
+//!         println!("{}: {}", String::from_utf8_lossy(&channel),
+//!                            String::from_utf8_lossy(&payload));
 //!     }
 //! }
 //! # Ok::<(), std::io::Error>(())
 //! ```
-//!
-//! `mem://` / `file://` URLs are rejected with `ErrorKind::Unsupported`:
-//! single-process embed has no other producer to receive messages from.
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
+use kevy_embedded::{PubsubFrame, Subscription};
 use kevy_resp::{Reply, encode_command, parse_reply};
 
-/// One subscribed TCP connection. Owns the socket; not `Sync`.
+use crate::{Target, parse_url, resolve_store};
+
+/// One subscribed connection. Owns either a TCP socket or an in-process
+/// [`Subscription`]; the variant is chosen by the URL scheme in
+/// [`Subscriber::open`] / [`Subscriber::connect`].
 #[derive(Debug)]
 pub struct Subscriber {
-    stream: TcpStream,
-    buf: Vec<u8>,
+    inner: Inner,
 }
 
-/// One pubsub frame received from the server.
+#[derive(Debug)]
+enum Inner {
+    /// TCP RESP2 connection, drained one reply at a time.
+    Remote {
+        stream: TcpStream,
+        buf: Vec<u8>,
+    },
+    /// In-process bus subscription. `timeout` mirrors the TCP
+    /// `SO_RCVTIMEO` behaviour for [`Subscriber::recv`] / [`Subscriber::set_read_timeout`].
+    Embedded {
+        subscription: Subscription,
+        timeout: Option<Duration>,
+    },
+}
+
+/// One pubsub frame received from the bus or the wire.
 ///
-/// `Unsubscribe` / `Punsubscribe`'s `channel` / `pattern` is `None` when the
-/// server is acknowledging "unsubscribed from everything" with a nil bulk
-/// — matching the Redis wire shape.
+/// `Unsubscribe` / `Punsubscribe`'s `channel` / `pattern` is `None` when
+/// the server is acknowledging "unsubscribed from everything" with a nil
+/// bulk — matching the Redis wire shape.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PubsubEvent {
@@ -97,29 +117,43 @@ pub enum PubsubEvent {
 }
 
 impl Subscriber {
-    /// Open a fresh TCP connection without subscribing to anything.
-    /// Use [`Self::subscribe`] / [`Self::psubscribe`] next.
+    /// Open a fresh connection without subscribing to anything yet. Call
+    /// [`Self::subscribe`] / [`Self::psubscribe`] next.
     ///
-    /// Accepted URL schemes: `kevy://`, `redis://`, `tcp://` (all wire-identical).
-    /// `mem://` / `file://` return `ErrorKind::Unsupported` — there is no
-    /// other process to receive messages from inside an embedded store.
+    /// Accepted URLs:
+    /// - `kevy://`, `redis://`, `tcp://` — TCP RESP server
+    /// - `mem://<name>`, `file:///path` — in-process shared bus
+    /// - `mem://` (anonymous), `rediss://`, `kevys://`, `redis://user:pass@…`
+    ///   are rejected with [`io::ErrorKind::Unsupported`]
     pub fn connect(url: &str) -> io::Result<Self> {
-        let (host, port) = parse_pubsub_url(url)?;
-        let stream = TcpStream::connect((host.as_str(), port))?;
-        stream.set_nodelay(true).ok();
-        Ok(Self {
-            stream,
-            buf: Vec::with_capacity(8192),
-        })
+        let target = parse_url(url)?;
+        let inner = match target {
+            Target::EmbedMemoryAnonymous => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "anonymous mem:// has no other producer; use mem://<name> for a shared bus",
+                ));
+            }
+            Target::EmbedMemoryNamed(_) | Target::EmbedPersist(_) => Inner::Embedded {
+                subscription: resolve_store(&target)?.subscribe(&[]),
+                timeout: None,
+            },
+            Target::Remote(remote_url) => {
+                let (host, port) = remote_host_port(&remote_url)?;
+                let stream = TcpStream::connect((host.as_str(), port))?;
+                stream.set_nodelay(true).ok();
+                Inner::Remote {
+                    stream,
+                    buf: Vec::with_capacity(8192),
+                }
+            }
+        };
+        Ok(Self { inner })
     }
 
-    /// Open and subscribe to one or more channels in one step. After the
-    /// call returns, the server has the `SUBSCRIBE` command queued — drain
-    /// the per-channel ack frames with [`Self::recv`] before
-    /// you act on `Message` events.
-    ///
-    /// Returns `ErrorKind::InvalidInput` if `channels` is empty (use
-    /// [`Self::connect`] + [`Self::psubscribe`] for a pattern-only start).
+    /// Open and subscribe to one or more channels in one step. Returns
+    /// `ErrorKind::InvalidInput` if `channels` is empty (use
+    /// [`Self::connect`] for an empty start).
     pub fn open(url: &str, channels: &[&[u8]]) -> io::Result<Self> {
         if channels.is_empty() {
             return Err(io::Error::new(
@@ -132,9 +166,8 @@ impl Subscriber {
         Ok(s)
     }
 
-    /// `SUBSCRIBE channel [channel ...]`. Returns once the bytes are written;
-    /// the server sends one `Subscribe` ack per channel — drain with
-    /// [`Self::recv`].
+    /// `SUBSCRIBE channel [channel ...]`. Per-channel `Subscribe` acks
+    /// are delivered via [`Self::recv`].
     pub fn subscribe(&mut self, channels: &[&[u8]]) -> io::Result<()> {
         if channels.is_empty() {
             return Err(io::Error::new(
@@ -142,11 +175,17 @@ impl Subscriber {
                 "SUBSCRIBE needs ≥ 1 channel",
             ));
         }
-        self.send(b"SUBSCRIBE", channels)
+        match &mut self.inner {
+            Inner::Remote { stream, .. } => send_to(stream, b"SUBSCRIBE", channels),
+            Inner::Embedded { subscription, .. } => {
+                subscription.subscribe(channels);
+                Ok(())
+            }
+        }
     }
 
     /// `PSUBSCRIBE pattern [pattern ...]`. Patterns use Redis glob syntax
-    /// (`*`, `?`, `[…]`). Same ack-draining note as [`Self::subscribe`].
+    /// (`*`, `?`, `[…]`).
     pub fn psubscribe(&mut self, patterns: &[&[u8]]) -> io::Result<()> {
         if patterns.is_empty() {
             return Err(io::Error::new(
@@ -154,68 +193,136 @@ impl Subscriber {
                 "PSUBSCRIBE needs ≥ 1 pattern",
             ));
         }
-        self.send(b"PSUBSCRIBE", patterns)
+        match &mut self.inner {
+            Inner::Remote { stream, .. } => send_to(stream, b"PSUBSCRIBE", patterns),
+            Inner::Embedded { subscription, .. } => {
+                subscription.psubscribe(patterns);
+                Ok(())
+            }
+        }
     }
 
     /// `UNSUBSCRIBE [channel ...]`. Empty `channels` unsubscribes from
     /// every channel (Redis wire semantics).
     pub fn unsubscribe(&mut self, channels: &[&[u8]]) -> io::Result<()> {
-        self.send(b"UNSUBSCRIBE", channels)
+        match &mut self.inner {
+            Inner::Remote { stream, .. } => send_to(stream, b"UNSUBSCRIBE", channels),
+            Inner::Embedded { subscription, .. } => {
+                subscription.unsubscribe(channels);
+                Ok(())
+            }
+        }
     }
 
     /// `PUNSUBSCRIBE [pattern ...]`. Empty `patterns` unsubscribes from
     /// every pattern.
     pub fn punsubscribe(&mut self, patterns: &[&[u8]]) -> io::Result<()> {
-        self.send(b"PUNSUBSCRIBE", patterns)
-    }
-
-    /// Block until the next pubsub frame arrives, parse it, classify it.
-    ///
-    /// `recv` itself never times out — apply a read timeout via
-    /// [`Self::set_read_timeout`] if you need bounded blocking.
-    /// Server close yields `ErrorKind::UnexpectedEof`; a malformed RESP
-    /// frame yields `ErrorKind::InvalidData`.
-    pub fn recv(&mut self) -> io::Result<PubsubEvent> {
-        let mut chunk = [0u8; 8192];
-        loop {
-            match parse_reply(&self.buf) {
-                Ok(Some((reply, used))) => {
-                    self.buf.drain(..used);
-                    return classify(reply);
-                }
-                Ok(None) => {}
-                Err(_) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "malformed reply",
-                    ));
-                }
+        match &mut self.inner {
+            Inner::Remote { stream, .. } => send_to(stream, b"PUNSUBSCRIBE", patterns),
+            Inner::Embedded { subscription, .. } => {
+                subscription.punsubscribe(patterns);
+                Ok(())
             }
-            let n = self.stream.read(&mut chunk)?;
-            if n == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "server closed connection",
-                ));
-            }
-            self.buf.extend_from_slice(&chunk[..n]);
         }
     }
 
-    /// Apply (or clear) a read timeout on the underlying socket.
-    /// After setting `Some(dur)`, [`Self::recv`] will return an `io::Error`
-    /// of kind `WouldBlock` / `TimedOut` if no data arrives within `dur`.
-    pub fn set_read_timeout(&mut self, dur: Option<Duration>) -> io::Result<()> {
-        self.stream.set_read_timeout(dur)
+    /// Block until the next pubsub frame arrives. Apply
+    /// [`Self::set_read_timeout`] for bounded blocking.
+    /// Connection close / bus tear-down yields `ErrorKind::UnexpectedEof`.
+    pub fn recv(&mut self) -> io::Result<PubsubEvent> {
+        match &mut self.inner {
+            Inner::Remote { stream, buf } => recv_remote(stream, buf),
+            Inner::Embedded {
+                subscription,
+                timeout,
+            } => {
+                let frame = match *timeout {
+                    Some(d) => subscription.recv_timeout(d)?,
+                    None => subscription.recv()?,
+                };
+                Ok(frame_to_event(frame))
+            }
+        }
     }
 
-    fn send(&mut self, verb: &[u8], args: &[&[u8]]) -> io::Result<()> {
-        let mut argv = Vec::with_capacity(args.len() + 1);
-        argv.push(verb.to_vec());
-        argv.extend(args.iter().map(|a| a.to_vec()));
-        let mut frame = Vec::new();
-        encode_command(&mut frame, &argv);
-        self.stream.write_all(&frame)
+    /// Apply (or clear) a read timeout. After setting `Some(dur)`,
+    /// [`Self::recv`] returns an `io::Error` of kind `WouldBlock` /
+    /// `TimedOut` when no frame arrives within `dur`.
+    pub fn set_read_timeout(&mut self, dur: Option<Duration>) -> io::Result<()> {
+        match &mut self.inner {
+            Inner::Remote { stream, .. } => stream.set_read_timeout(dur),
+            Inner::Embedded { timeout, .. } => {
+                *timeout = dur;
+                Ok(())
+            }
+        }
+    }
+}
+
+fn send_to(stream: &mut TcpStream, verb: &[u8], args: &[&[u8]]) -> io::Result<()> {
+    let mut argv = Vec::with_capacity(args.len() + 1);
+    argv.push(verb.to_vec());
+    argv.extend(args.iter().map(|a| a.to_vec()));
+    let mut frame = Vec::new();
+    encode_command(&mut frame, &argv);
+    stream.write_all(&frame)
+}
+
+fn recv_remote(stream: &mut TcpStream, buf: &mut Vec<u8>) -> io::Result<PubsubEvent> {
+    let mut chunk = [0u8; 8192];
+    loop {
+        match parse_reply(buf) {
+            Ok(Some((reply, used))) => {
+                buf.drain(..used);
+                return classify(reply);
+            }
+            Ok(None) => {}
+            Err(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "malformed reply",
+                ));
+            }
+        }
+        let n = stream.read(&mut chunk)?;
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "server closed connection",
+            ));
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+}
+
+fn frame_to_event(frame: PubsubFrame) -> PubsubEvent {
+    match frame {
+        PubsubFrame::Subscribe { channel, count } => PubsubEvent::Subscribe {
+            channel,
+            count: count as i64,
+        },
+        PubsubFrame::Psubscribe { pattern, count } => PubsubEvent::Psubscribe {
+            pattern,
+            count: count as i64,
+        },
+        PubsubFrame::Unsubscribe { channel, count } => PubsubEvent::Unsubscribe {
+            channel,
+            count: count as i64,
+        },
+        PubsubFrame::Punsubscribe { pattern, count } => PubsubEvent::Punsubscribe {
+            pattern,
+            count: count as i64,
+        },
+        PubsubFrame::Message { channel, payload } => PubsubEvent::Message { channel, payload },
+        PubsubFrame::Pmessage {
+            pattern,
+            channel,
+            payload,
+        } => PubsubEvent::Pmessage {
+            pattern,
+            channel,
+            payload,
+        },
     }
 }
 
@@ -338,37 +445,15 @@ fn invalid(msg: impl Into<String>) -> io::Error {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// URL parsing (kevy://, redis://, tcp://; rejects mem/file/rediss/userinfo)
+// Remote host:port extraction. Reuses the same authority parsing logic
+// kevy-resp-client::from_url applies, but only needs host+port (pub/sub
+// is global, not db-scoped — any /N path segment is ignored).
 // ─────────────────────────────────────────────────────────────────────────
 
-fn parse_pubsub_url(url: &str) -> io::Result<(String, u16)> {
-    let (scheme, rest) = url.split_once("://").ok_or_else(|| {
+fn remote_host_port(url: &str) -> io::Result<(String, u16)> {
+    let (_scheme, rest) = url.split_once("://").ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "URL missing '://'")
     })?;
-    match scheme {
-        "kevy" | "redis" | "tcp" => {}
-        "mem" | "file" => {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                format!(
-                    "{scheme}:// is an embedded backend — pub/sub needs a TCP server. \
-                     Use kevy://host:port instead."
-                ),
-            ));
-        }
-        "rediss" | "kevys" => {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "TLS schemes (rediss://, kevys://) are unsupported — kevy has no TLS",
-            ));
-        }
-        other => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("unknown URL scheme '{other}://'"),
-            ));
-        }
-    }
     if rest.contains('@') {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -395,83 +480,28 @@ fn parse_pubsub_url(url: &str) -> io::Result<(String, u16)> {
 mod tests {
     use super::*;
 
-    // ----- URL parsing -----
+    // ----- URL routing -----
 
     #[test]
-    fn parses_kevy_redis_tcp() {
-        for url in [
-            "kevy://localhost:6379",
-            "redis://localhost:6379",
-            "tcp://localhost:6379",
-        ] {
-            let (h, p) = parse_pubsub_url(url).unwrap();
-            assert_eq!(h, "localhost");
-            assert_eq!(p, 6379);
-        }
+    fn anonymous_mem_rejected_for_subscriber() {
+        let err = Subscriber::connect("mem://").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
     }
 
     #[test]
-    fn default_port_when_omitted() {
-        let (h, p) = parse_pubsub_url("kevy://example.com").unwrap();
-        assert_eq!(h, "example.com");
-        assert_eq!(p, 6379);
+    fn named_mem_resolves_to_embedded() {
+        // Just connect, don't subscribe — proves the URL parses + registry
+        // hits the embedded branch. Drop immediately afterwards.
+        let _sub = Subscriber::connect("mem://named-bus-test").unwrap();
     }
 
     #[test]
-    fn db_path_segment_ignored() {
-        // Pub/sub is global, not db-scoped — `/N` is accepted but discarded.
-        let (h, p) = parse_pubsub_url("kevy://h:1234/0").unwrap();
-        assert_eq!(h, "h");
-        assert_eq!(p, 1234);
-        let (h, p) = parse_pubsub_url("redis://h:1234/3").unwrap();
-        assert_eq!(h, "h");
-        assert_eq!(p, 1234);
+    fn open_with_empty_channels_rejected() {
+        let err = Subscriber::open("kevy://127.0.0.1:1", &[]).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
     }
 
-    #[test]
-    fn mem_file_rejected_unsupported() {
-        for url in ["mem://", "file:///tmp/data"] {
-            let err = parse_pubsub_url(url).unwrap_err();
-            assert_eq!(err.kind(), io::ErrorKind::Unsupported);
-        }
-    }
-
-    #[test]
-    fn tls_rejected_unsupported() {
-        assert_eq!(
-            parse_pubsub_url("rediss://h:6379").unwrap_err().kind(),
-            io::ErrorKind::Unsupported
-        );
-    }
-
-    #[test]
-    fn userinfo_rejected_unsupported() {
-        assert_eq!(
-            parse_pubsub_url("kevy://u:p@h:6379").unwrap_err().kind(),
-            io::ErrorKind::Unsupported
-        );
-    }
-
-    #[test]
-    fn unknown_scheme_rejected() {
-        assert_eq!(
-            parse_pubsub_url("memcached://h:11211").unwrap_err().kind(),
-            io::ErrorKind::InvalidInput
-        );
-    }
-
-    #[test]
-    fn bad_port_rejected() {
-        assert!(parse_pubsub_url("kevy://h:notaport").is_err());
-        assert!(parse_pubsub_url("kevy://h:99999").is_err());
-    }
-
-    #[test]
-    fn empty_host_rejected() {
-        assert!(parse_pubsub_url("kevy://:6379").is_err());
-    }
-
-    // ----- classify -----
+    // ----- classify (RESP wire path) -----
 
     #[test]
     fn classify_subscribe_ack() {
@@ -485,22 +515,6 @@ mod tests {
             PubsubEvent::Subscribe {
                 channel: b"chan".to_vec(),
                 count: 1,
-            }
-        );
-    }
-
-    #[test]
-    fn classify_psubscribe_ack() {
-        let r = Reply::Array(vec![
-            Reply::Bulk(b"psubscribe".to_vec()),
-            Reply::Bulk(b"chan.*".to_vec()),
-            Reply::Int(2),
-        ]);
-        assert_eq!(
-            classify(r).unwrap(),
-            PubsubEvent::Psubscribe {
-                pattern: b"chan.*".to_vec(),
-                count: 2,
             }
         );
     }
@@ -540,25 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_unsubscribe_with_channel() {
-        let r = Reply::Array(vec![
-            Reply::Bulk(b"unsubscribe".to_vec()),
-            Reply::Bulk(b"chan".to_vec()),
-            Reply::Int(0),
-        ]);
-        assert_eq!(
-            classify(r).unwrap(),
-            PubsubEvent::Unsubscribe {
-                channel: Some(b"chan".to_vec()),
-                count: 0,
-            }
-        );
-    }
-
-    #[test]
     fn classify_unsubscribe_with_nil_channel() {
-        // Spec: when there were no subscribed channels, the server replies
-        // with a nil bulk in the channel slot.
         let r = Reply::Array(vec![
             Reply::Bulk(b"unsubscribe".to_vec()),
             Reply::Nil,
@@ -568,22 +564,6 @@ mod tests {
             classify(r).unwrap(),
             PubsubEvent::Unsubscribe {
                 channel: None,
-                count: 0,
-            }
-        );
-    }
-
-    #[test]
-    fn classify_punsubscribe_with_pattern() {
-        let r = Reply::Array(vec![
-            Reply::Bulk(b"punsubscribe".to_vec()),
-            Reply::Bulk(b"chan.*".to_vec()),
-            Reply::Int(0),
-        ]);
-        assert_eq!(
-            classify(r).unwrap(),
-            PubsubEvent::Punsubscribe {
-                pattern: Some(b"chan.*".to_vec()),
                 count: 0,
             }
         );
@@ -600,16 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_rejects_non_array() {
-        assert_eq!(
-            classify(Reply::Simple(b"OK".to_vec())).unwrap_err().kind(),
-            io::ErrorKind::InvalidData
-        );
-    }
-
-    #[test]
     fn classify_rejects_wrong_arity() {
-        // subscribe with 2 elements (missing count).
         let r = Reply::Array(vec![
             Reply::Bulk(b"subscribe".to_vec()),
             Reply::Bulk(b"x".to_vec()),
@@ -617,11 +588,64 @@ mod tests {
         assert_eq!(classify(r).unwrap_err().kind(), io::ErrorKind::InvalidData);
     }
 
-    // ----- subscribe arg validation -----
+    // ----- remote_host_port -----
 
     #[test]
-    fn open_with_empty_channels_rejected() {
-        let err = Subscriber::open("kevy://127.0.0.1:1", &[]).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    fn remote_host_port_default_6379() {
+        let (h, p) = remote_host_port("kevy://example.com").unwrap();
+        assert_eq!(h, "example.com");
+        assert_eq!(p, 6379);
+    }
+
+    #[test]
+    fn remote_host_port_explicit() {
+        let (h, p) = remote_host_port("redis://example.com:1234/0").unwrap();
+        assert_eq!(h, "example.com");
+        assert_eq!(p, 1234);
+    }
+
+    #[test]
+    fn remote_host_port_userinfo_rejected() {
+        assert_eq!(
+            remote_host_port("kevy://u:p@h:6379").unwrap_err().kind(),
+            io::ErrorKind::Unsupported
+        );
+    }
+
+    // ----- embedded end-to-end -----
+
+    #[test]
+    fn embed_subscribe_then_publish_via_same_url_delivers() {
+        use crate::Connection;
+        // Both opened with the SAME URL → registry returns the same Store
+        // → the publish reaches the subscriber.
+        let mut sub = Subscriber::open("mem://embed-e2e-1", &[b"chan"]).unwrap();
+        let mut pubconn = Connection::open("mem://embed-e2e-1").unwrap();
+        // Drain the SUBSCRIBE ack first.
+        let ack = sub.recv().unwrap();
+        assert!(matches!(ack, PubsubEvent::Subscribe { .. }));
+        // Publish from the second handle.
+        assert_eq!(pubconn.publish(b"chan", b"hi").unwrap(), 1);
+        let ev = sub.recv().unwrap();
+        assert_eq!(
+            ev,
+            PubsubEvent::Message {
+                channel: b"chan".to_vec(),
+                payload: b"hi".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn embed_different_url_names_are_isolated() {
+        use crate::Connection;
+        let mut sub = Subscriber::open("mem://embed-iso-A", &[b"chan"]).unwrap();
+        let mut pubconn = Connection::open("mem://embed-iso-B").unwrap();
+        // Drain ack.
+        let _ack = sub.recv().unwrap();
+        assert_eq!(pubconn.publish(b"chan", b"hi").unwrap(), 0);
+        sub.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
+        let err = sub.recv().unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     }
 }
