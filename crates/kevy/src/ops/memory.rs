@@ -161,4 +161,108 @@ mod tests {
         cmd_memory_usage(&store, &a, &mut out);
         assert_eq!(out, b"$-1\r\n");
     }
+
+    fn argv(parts: &[&[u8]]) -> Argv {
+        let mut a = Argv::default();
+        for p in parts {
+            a.push(p);
+        }
+        a
+    }
+
+    #[test]
+    fn memory_usage_returns_integer_for_present_key() {
+        let mut store = Store::new();
+        store.set(b"k", b"v".to_vec(), None, false, false);
+        let a = argv(&[b"MEMORY", b"USAGE", b"k"]);
+        let mut out = Vec::new();
+        cmd_memory_usage(&store, &a, &mut out);
+        assert!(out.starts_with(b":"), "expected integer reply, got {out:?}");
+        assert!(out.ends_with(b"\r\n"));
+    }
+
+    #[test]
+    fn memory_usage_wrong_arity() {
+        let store = Store::new();
+        let a = argv(&[b"MEMORY", b"USAGE"]);
+        let mut out = Vec::new();
+        cmd_memory_usage(&store, &a, &mut out);
+        assert!(out.starts_with(b"-ERR wrong number of arguments"));
+    }
+
+    #[test]
+    fn memory_top_level_dispatches_each_subcommand() {
+        let cfg = Config::default();
+        let store = Store::new();
+        // DOCTOR — canonical no-issues body
+        let mut out = Vec::new();
+        cmd_memory(&cfg, &store, &argv(&[b"MEMORY", b"DOCTOR"]), &mut out);
+        assert!(
+            out.starts_with(b"$") && out.windows(5).any(|w| w == b"issue"),
+            "DOCTOR should return a bulk diagnostic; got {out:?}"
+        );
+        // PURGE — +OK
+        out.clear();
+        cmd_memory(&cfg, &store, &argv(&[b"MEMORY", b"PURGE"]), &mut out);
+        assert_eq!(out, b"+OK\r\n");
+        // MALLOC-STATS — bulk note
+        out.clear();
+        cmd_memory(&cfg, &store, &argv(&[b"MEMORY", b"MALLOC-STATS"]), &mut out);
+        assert!(out.starts_with(b"$"));
+        // missing subcommand
+        out.clear();
+        cmd_memory(&cfg, &store, &argv(&[b"MEMORY"]), &mut out);
+        assert!(out.starts_with(b"-ERR wrong number of arguments"));
+        // unknown subcommand
+        out.clear();
+        cmd_memory(&cfg, &store, &argv(&[b"MEMORY", b"NOPE"]), &mut out);
+        assert!(out.starts_with(b"-ERR Unknown MEMORY subcommand"));
+    }
+
+    #[test]
+    fn memory_stats_encodes_all_eight_fields() {
+        let cfg = Config::default();
+        let mut store = Store::new();
+        store.set(b"k1", b"v1".to_vec(), None, false, false);
+        store.set(b"k2", b"v2".to_vec(), None, false, false);
+
+        let mut out = Vec::new();
+        cmd_memory_stats(&cfg, &store, &mut out);
+        // 8 pairs × 2 → *16
+        assert!(out.starts_with(b"*16\r\n"));
+        // Spot-check the key labels are present.
+        for label in [
+            b"peak.allocated".as_slice(),
+            b"total.allocated".as_slice(),
+            b"keys.count".as_slice(),
+            b"keys.bytes-per-key".as_slice(),
+            b"maxmemory".as_slice(),
+            b"maxmemory.policy".as_slice(),
+            b"evicted.keys".as_slice(),
+            b"entry.overhead".as_slice(),
+        ] {
+            assert!(
+                out.windows(label.len()).any(|w| w == label),
+                "missing label {:?} in stats output",
+                std::str::from_utf8(label).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn avg_bytes_per_key_handles_empty_store() {
+        let store = Store::new();
+        assert_eq!(avg_bytes_per_key(&store), 0);
+    }
+
+    #[test]
+    fn avg_bytes_per_key_divides_used_by_dbsize() {
+        let mut store = Store::new();
+        store.set(b"k1", b"v1".to_vec(), None, false, false);
+        store.set(b"k2", b"v2".to_vec(), None, false, false);
+        let avg = avg_bytes_per_key(&store);
+        assert!(avg > 0, "expected avg > 0 with two small keys; got {avg}");
+        // Sanity bound: well under the per-entry overhead × 2 ceiling.
+        assert!(avg < (ENTRY_OVERHEAD as i64) * 10);
+    }
 }
