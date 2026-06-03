@@ -83,9 +83,51 @@ fn dispatch_conn(cmd: &[u8], args: &Argv, out: &mut Vec<u8>) -> bool {
         b"QUIT" => encode_simple_string(out, "OK"),
         // CONFIG moved to crate::ops::dispatch_ops (real GET reads Config;
         // SET / REWRITE return helpful errors until v1.x).
+        b"SELECT" => cmd_select(args, out),
         _ => return false,
     }
     true
+}
+
+/// `SELECT <index>` — single-DB acknowledgement.
+///
+/// kevy is a single-database server (one keyspace per shard pool, no
+/// `databases N` config). For drop-in client compatibility we accept
+/// `SELECT 0` (the Redis default) with `+OK` and reject any other index
+/// with the byte-identical Redis error.
+///
+/// This is the v1.0.2 minimal: real multi-DB support (SELECT N + `MOVE` +
+/// `SWAPDB` + `databases` config + per-shard `Vec<Store>`) is on the
+/// v1.1.0 backlog.
+fn cmd_select(args: &Argv, out: &mut Vec<u8>) {
+    if args.len() != 2 {
+        wrong_args(out, "select");
+        return;
+    }
+    let idx_bytes = &args[1];
+    // Redis parses with strtoll-equivalent: leading sign, digits only,
+    // no fractional / whitespace. Anything else → "value is not an integer".
+    let s = match std::str::from_utf8(idx_bytes) {
+        Ok(s) => s,
+        Err(_) => {
+            encode_error(out, "ERR value is not an integer or out of range");
+            return;
+        }
+    };
+    let parsed: Result<i64, _> = s.parse();
+    match parsed {
+        Ok(0) => encode_simple_string(out, "OK"),
+        // Explicit: kevy is single-DB (unlike valkey's default 16). Tell the
+        // caller *why* it's rejected so they don't assume it's an arbitrary
+        // index out-of-range that they could config their way around.
+        Ok(_) => encode_error(
+            out,
+            "ERR kevy only supports DB 0 (multi-database support is on the v1.1.0 backlog)",
+        ),
+        // Byte-identical to valkey's "value is not an integer or out of range"
+        // — this one is a real parser error, not a kevy-specific limit.
+        Err(_) => encode_error(out, "ERR value is not an integer or out of range"),
+    }
 }
 
 /// String commands.

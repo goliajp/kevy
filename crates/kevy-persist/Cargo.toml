@@ -14,5 +14,5 @@ categories = ["database-implementations", "filesystem"]
 workspace = true
 
 [dependencies]
-kevy-store = { path = "../kevy-store", version = "1.0.1" }
-kevy-resp = { path = "../kevy-resp", version = "1.0.1" }
+kevy-store = { path = "../kevy-store", version = "1.0.2" }
+kevy-resp = { path = "../kevy-resp", version = "1.0.2" }

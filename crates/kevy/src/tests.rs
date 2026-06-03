@@ -16,6 +16,33 @@ fn ping_and_echo() {
 }
 
 #[test]
+fn select_zero_ok_others_rejected() {
+    let mut s = Store::new();
+    // SELECT 0 — the only DB kevy serves — is acknowledged for drop-in
+    // compatibility with redis-py / Jedis / etc. defaults (`db=0`).
+    assert_eq!(d(&mut s, &[b"SELECT", b"0"]), b"+OK\r\n");
+    assert_eq!(d(&mut s, &[b"select", b"0"]), b"+OK\r\n");
+
+    // Any other index returns an explicit kevy-only-DB-0 error (NOT the
+    // valkey "DB index is out of range" — that one would mislead callers
+    // into thinking they could just config their way around it).
+    let r1 = d(&mut s, &[b"SELECT", b"1"]);
+    assert!(r1.starts_with(b"-ERR kevy only supports DB 0"), "got: {:?}", std::str::from_utf8(&r1));
+    let r15 = d(&mut s, &[b"SELECT", b"15"]);
+    assert!(r15.starts_with(b"-ERR kevy only supports DB 0"));
+
+    // Non-numeric and out-of-range get Redis's "value is not an integer".
+    assert_eq!(
+        d(&mut s, &[b"SELECT", b"abc"]),
+        b"-ERR value is not an integer or out of range\r\n"
+    );
+
+    // Arity error matches the existing convention.
+    assert!(d(&mut s, &[b"SELECT"]).starts_with(b"-ERR"));
+    assert!(d(&mut s, &[b"SELECT", b"0", b"extra"]).starts_with(b"-ERR"));
+}
+
+#[test]
 fn set_options_and_errors() {
     let mut s = Store::new();
     assert_eq!(d(&mut s, &[b"SET", b"k", b"v", b"NX"]), b"+OK\r\n");
