@@ -832,4 +832,92 @@ mod tests {
         // (Just verify equality after going through .to_vec.)
         assert_eq!(heap.as_slice(), v.as_slice());
     }
+
+    // ===== alloc-count test =====
+    //
+    // The whole point of SmallBytes' SSO is "no heap alloc when payload ≤ 22
+    // bytes". We can prove it by swapping in a counting allocator and asserting
+    // the inline path produces ZERO Allocator::alloc calls. A heap-bound payload
+    // produces at least one. Wrapping the system allocator (not replacing it
+    // wholesale with a fake) keeps the test compatible with Rust's std types
+    // that the tests themselves use.
+
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
+
+    /// `System` wrapper that bumps a counter on alloc. The counter is only
+    /// observed while `RECORDING` is true so test setup (vec!, format!, etc.)
+    /// does not skew the measurement.
+    struct CountingAlloc {
+        inner: System,
+    }
+    static ALLOC_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static RECORDING: AtomicBool = AtomicBool::new(false);
+
+    unsafe impl GlobalAlloc for CountingAlloc {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            if RECORDING.load(Ordering::Relaxed) {
+                ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
+            }
+            // SAFETY: forwarding to the system allocator with the same layout.
+            unsafe { self.inner.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: forwarding to the system allocator with the same layout.
+            unsafe { self.inner.dealloc(ptr, layout) }
+        }
+    }
+
+    #[global_allocator]
+    static COUNTING: CountingAlloc = CountingAlloc { inner: System };
+
+    fn measure_allocs<F: FnOnce()>(f: F) -> usize {
+        ALLOC_CALLS.store(0, Ordering::Relaxed);
+        RECORDING.store(true, Ordering::Relaxed);
+        f();
+        RECORDING.store(false, Ordering::Relaxed);
+        ALLOC_CALLS.load(Ordering::Relaxed)
+    }
+
+    #[test]
+    fn inline_payload_does_not_allocate() {
+        // Warm + capture: every inline-sized SmallBytes constructor + access
+        // must produce zero heap allocations. `INLINE_LEN_MAX` is the max
+        // payload length the inline variant can hold (one byte of the
+        // INLINE_CAP-byte buffer is the length+discriminant tag).
+        let max_inline = INLINE_LEN_MAX as usize;
+        let allocs = measure_allocs(|| {
+            for n in 0..=max_inline {
+                let s = SmallBytes::from_slice(&[0u8; INLINE_CAP][..n]);
+                std::hint::black_box(&s);
+                std::hint::black_box(s.as_slice());
+                std::hint::black_box(s.len());
+                let c = s.clone(); // Clone of an inline value is also alloc-free.
+                std::hint::black_box(&c);
+                drop(c);
+                drop(s);
+            }
+        });
+        assert_eq!(
+            allocs, 0,
+            "expected SSO inline path to be alloc-free, got {allocs} allocs"
+        );
+    }
+
+    #[test]
+    fn heap_payload_does_allocate() {
+        // Control: payload just over the inline cap MUST allocate. If this
+        // is 0 either SSO bumped its cap silently or the counter is broken —
+        // either way the inline-zero assertion above is meaningless.
+        let max_inline = INLINE_LEN_MAX as usize;
+        let allocs = measure_allocs(|| {
+            let s = SmallBytes::from_slice(&[7u8; INLINE_CAP + 8][..max_inline + 1]);
+            std::hint::black_box(&s);
+            drop(s);
+        });
+        assert!(
+            allocs >= 1,
+            "expected the heap path to allocate at least once, got {allocs}"
+        );
+    }
 }
