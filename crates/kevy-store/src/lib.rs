@@ -288,6 +288,19 @@ pub struct Store {
     /// [`Self::tick_expire`]). Surfaced via `INFO keyspace` / `MEMORY STATS`
     /// once those fields land.
     pub(crate) expired_keys_total: u64,
+    /// `WATCH` version counters — present only for keys that have been
+    /// `WATCH`-ed at least once. [`Self::record_watch`] inserts the entry
+    /// (version 0 = "never written since first watch"); every subsequent
+    /// write on this shard calls [`Self::bump_if_watched`] which increments
+    /// only if the key is present in the map. Keys never `WATCH`-ed pay
+    /// one empty-map hashmap lookup per write (~10 ns).
+    ///
+    /// The map grows monotonically — entries are never evicted, even
+    /// when no conn is currently watching the key. For high-key-churn
+    /// workloads this can become a memory item; v1.x acceptable since
+    /// the entry is `Vec<u8>` + `u64` (~ 30 B + key length) and only
+    /// touched on writes / WATCH calls.
+    pub(crate) watch_versions: std::collections::HashMap<Vec<u8>, u64>,
 }
 
 impl Store {
@@ -331,6 +344,52 @@ impl Store {
     #[inline]
     pub fn evictions_total(&self) -> u64 {
         self.evictions_total
+    }
+
+    /// `WATCH` — record this key in the version tracker and return its
+    /// current version. Subsequent writes on this shard bump the version
+    /// via [`Self::bump_if_watched`]. Caller (the conn's origin shard)
+    /// stores the returned version; `EXEC` later asks every owning shard
+    /// "is the version still N?" via [`Self::key_version`].
+    ///
+    /// Keys that have never been written stay at version 0 — the first
+    /// write after a `WATCH` bumps to 1, which is what makes the "dirty"
+    /// comparison work (stored 0 ≠ current 1 ⇒ abort EXEC).
+    pub fn record_watch(&mut self, key: &[u8]) -> u64 {
+        *self
+            .watch_versions
+            .entry(key.to_vec())
+            .or_insert(0)
+    }
+
+    /// Read-only version lookup used by `EXEC`'s pre-execution check.
+    /// Returns `0` for keys never `WATCH`-ed (matches the initial value
+    /// `record_watch` would have inserted, so a `WATCH` → no-write →
+    /// `EXEC` sequence sees the stored 0 == current 0 and proceeds).
+    #[inline]
+    pub fn key_version(&self, key: &[u8]) -> u64 {
+        self.watch_versions.get(key).copied().unwrap_or(0)
+    }
+
+    /// Bump the version of `key` if (and only if) it has been
+    /// `WATCH`-ed at least once. Called from the write side of
+    /// `exec_op` after every successful mutation. Cost when no key is
+    /// watched: one empty-map lookup (~10 ns); when watched: lookup +
+    /// in-place u64 increment.
+    #[inline]
+    pub fn bump_if_watched(&mut self, key: &[u8]) {
+        if let Some(v) = self.watch_versions.get_mut(key) {
+            *v = v.wrapping_add(1);
+        }
+    }
+
+    /// Invalidate every watched key in one shot. Called from `FLUSHDB`
+    /// / `FLUSHALL` execution paths — every WATCH against this shard
+    /// must invalidate so a pending `EXEC` aborts.
+    pub fn bump_all_watched(&mut self) {
+        for v in self.watch_versions.values_mut() {
+            *v = v.wrapping_add(1);
+        }
     }
 
     /// Cached weight of `key` (dynamic part + [`ENTRY_OVERHEAD`]). Returns

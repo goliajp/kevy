@@ -469,3 +469,44 @@ fn memory_usage_reports_key_bytes() {
     assert!(big > small, "large value should report more bytes: {small} vs {big}");
     assert_eq!(st.estimate_key_bytes(b"missing"), None);
 }
+
+// ───────────── WATCH version tracking ─────────────
+
+#[test]
+fn record_watch_starts_at_zero_and_is_idempotent() {
+    let mut s = Store::new();
+    // Never-written + never-watched → record sees no prior entry,
+    // inserts 0, returns 0. Second record on the same key returns
+    // the same 0 (no spurious bump).
+    assert_eq!(s.record_watch(b"k"), 0);
+    assert_eq!(s.record_watch(b"k"), 0);
+    assert_eq!(s.key_version(b"k"), 0);
+}
+
+#[test]
+fn bump_if_watched_only_touches_tracked_keys() {
+    let mut s = Store::new();
+    // Untracked key: bump is a no-op (no insert side-effect).
+    s.bump_if_watched(b"never_watched");
+    assert_eq!(s.key_version(b"never_watched"), 0);
+    // After WATCH, bumps stick.
+    assert_eq!(s.record_watch(b"k"), 0);
+    s.bump_if_watched(b"k");
+    assert_eq!(s.key_version(b"k"), 1);
+    s.bump_if_watched(b"k");
+    s.bump_if_watched(b"k");
+    assert_eq!(s.key_version(b"k"), 3);
+}
+
+#[test]
+fn bump_all_watched_invalidates_every_tracked_entry() {
+    let mut s = Store::new();
+    s.record_watch(b"k1");
+    s.record_watch(b"k2");
+    s.bump_if_watched(b"k1"); // version 1
+    s.bump_all_watched(); // both → +1
+    assert_eq!(s.key_version(b"k1"), 2);
+    assert_eq!(s.key_version(b"k2"), 1);
+    // Untracked key still 0.
+    assert_eq!(s.key_version(b"untouched"), 0);
+}
