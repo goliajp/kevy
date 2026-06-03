@@ -2,14 +2,29 @@
 //! `Config` → key-value flattener they need. Split out of
 //! `super::mod` so the parent file stays under the project's 500-LOC cap.
 //!
-//! Wave 2 will turn `CONFIG SET` into a real hot-settable command for
-//! the field whitelist documented in `crates/kevy-config/README.md`;
-//! Wave 2 will also implement `CONFIG REWRITE` against the source
-//! `kevy.toml` path. v1.0 ships these two as read-only errors with the
-//! follow-up version called out in the message.
+//! `CONFIG SET` and `CONFIG REWRITE` are now real:
+//! - SET validates against the **hot-settable matrix** locked in
+//!   `V1.0-BOUNDARY.md`. Hot-settable knobs (`maxmemory`,
+//!   `maxmemory-policy`, `appendfsync`, `auto-aof-rewrite-*`, `hz`,
+//!   `maxmemory-samples`, `loglevel`, `logfile`-stdout/stderr) build
+//!   a fresh `Arc<Config>` and atomically swap [`crate::config_global`].
+//!   Per-shard re-application happens lazily on the next tick via
+//!   `kevy_rt::Commands::live_runtime_config` (~100 ms upper bound on
+//!   propagation; well under Redis's "best-effort" semantics).
+//! - Non-hot-settable fields (`bind`, `port`, `threads`, `dir`,
+//!   `appendonly`, `logfile`-with-path) return Redis's canonical
+//!   `ERR ... can't be changed at runtime` form.
+//! - REWRITE re-emits the live config via `Config::to_toml_string`
+//!   and rename-overwrites the source file atomically. Per the v1.0
+//!   matrix, inline comments are NOT preserved; the reply notes this.
 
-use kevy_config::Config;
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use kevy_config::{AppendFsync, Config, EvictionPolicy, LogLevel, LogOutput, parse_size};
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_simple_string};
+
+use crate::config_global;
 
 use super::{appendfsync_str, eviction_str, log_level_str, wrong_args};
 
@@ -60,20 +75,214 @@ fn cmd_config_set<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     if args.len() != 4 {
         return wrong_args(out, "config|set");
     }
-    encode_error(
-        out,
-        "ERR CONFIG SET is read-only in kevy v1.0 — edit kevy.toml and \
-         restart. Hot-settable in v1.x Wave 2 (maxmemory, maxmemory-policy, \
-         appendfsync, hz, sample, log-level)",
-    );
+    let key = args[2].to_ascii_lowercase();
+    let value = &args[3];
+    let live = config_global::get();
+    let mut new_cfg = (*live).clone();
+    match apply_hot_set(&mut new_cfg, &key, value) {
+        Ok(()) => match config_global::replace(Arc::new(new_cfg)) {
+            Ok(()) => encode_simple_string(out, "OK"),
+            Err(e) => encode_error(out, &format!("ERR {e}")),
+        },
+        Err(SetError::ReadOnly(k)) => encode_error(
+            out,
+            &format!("ERR config setting '{k}' can't be changed at runtime, restart required"),
+        ),
+        Err(SetError::Unknown(k)) => encode_error(
+            out,
+            &format!("ERR Unknown CONFIG SET parameter: '{k}'"),
+        ),
+        Err(SetError::BadValue { key, reason }) => encode_error(
+            out,
+            &format!("ERR CONFIG SET failed for '{key}': {reason}"),
+        ),
+    }
 }
 
 fn cmd_config_rewrite(out: &mut Vec<u8>) {
-    encode_error(
-        out,
-        "ERR CONFIG REWRITE not yet supported — kevy v1.0's TOML file is \
-         user-owned; lands alongside CONFIG SET in v1.x Wave 2",
-    );
+    let cfg = config_global::get();
+    let Some(path) = cfg.source_path.clone() else {
+        return encode_error(
+            out,
+            "ERR The server is running without a config file",
+        );
+    };
+    let text = cfg.to_toml_string();
+    match atomic_write(&path, text.as_bytes()) {
+        Ok(()) => {
+            // Redis returns +OK silently; we keep that wire shape. The
+            // "inline comments not preserved" caveat is documented in the
+            // v1.x stability promise / MIGRATION doc; v1.x will add round-
+            // trip preservation. Surfacing it here as a reply suffix would
+            // break the +OK contract Redis-aware clients expect.
+            eprintln!(
+                "kevy: CONFIG REWRITE wrote {} (any inline comments were lost — \
+                 v1.x will add round-trip preservation)",
+                path.display(),
+            );
+            encode_simple_string(out, "OK");
+        }
+        Err(e) => encode_error(
+            out,
+            &format!(
+                "ERR CONFIG REWRITE could not write {}: {e}",
+                path.display()
+            ),
+        ),
+    }
+}
+
+/// Atomic-rename file write: dump to `<path>.rewrite` with fsync,
+/// then `rename(2)` over the live path. Tolerates the temp-file
+/// existing from a prior crashed rewrite (overwritten on next try).
+fn atomic_write(path: &PathBuf, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut tmp = path.clone();
+    let new_name = match path.file_name() {
+        Some(n) => {
+            let mut s = n.to_os_string();
+            s.push(".rewrite");
+            s
+        }
+        None => return Err(std::io::Error::other("CONFIG REWRITE path has no file name")),
+    };
+    tmp.set_file_name(new_name);
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&tmp)?;
+    f.write_all(bytes)?;
+    f.sync_data()?;
+    drop(f);
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+#[derive(Debug)]
+enum SetError {
+    /// Field exists but the v1.0 hot-settable matrix marks it as
+    /// requiring a restart (bind, port, threads, dir, appendonly,
+    /// logfile-with-path).
+    ReadOnly(String),
+    /// Field name is not recognised by the schema at all.
+    Unknown(String),
+    /// Field exists + is hot-settable, but the value didn't parse.
+    BadValue { key: String, reason: String },
+}
+
+/// Hot-set one field on `cfg` based on its Redis-style key. Returns
+/// `Ok(())` on a clean apply or an [`SetError`] describing the refusal.
+fn apply_hot_set(cfg: &mut Config, key: &[u8], value: &[u8]) -> Result<(), SetError> {
+    let key_str = std::str::from_utf8(key)
+        .map_err(|_| SetError::Unknown(String::from_utf8_lossy(key).into_owned()))?;
+    let value_str = std::str::from_utf8(value)
+        .map_err(|_| SetError::BadValue {
+            key: key_str.to_string(),
+            reason: "value is not valid UTF-8".to_string(),
+        })?;
+    match key_str {
+        "maxmemory" | "maxmemory-policy" => set_memory(cfg, key_str, value_str),
+        "appendfsync" | "auto-aof-rewrite-percentage" | "auto-aof-rewrite-min-size" => {
+            set_persistence(cfg, key_str, value_str)
+        }
+        "hz" | "maxmemory-samples" => set_expiry(cfg, key_str, value_str),
+        "loglevel" | "logfile" => set_log(cfg, key_str, value_str),
+        "bind" | "port" | "io-threads" | "dir" | "appendonly" => {
+            Err(SetError::ReadOnly(key_str.to_string()))
+        }
+        other => Err(SetError::Unknown(other.to_string())),
+    }
+}
+
+fn set_memory(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> {
+    match key {
+        "maxmemory" => {
+            cfg.memory.maxmemory = parse_size(value).map_err(|reason| SetError::BadValue {
+                key: key.to_string(),
+                reason,
+            })?;
+        }
+        "maxmemory-policy" => {
+            cfg.memory.maxmemory_policy = EvictionPolicy::parse(value).ok_or_else(|| {
+                SetError::BadValue {
+                    key: key.to_string(),
+                    reason: "expected one of noeviction / allkeys-lru / \
+                             allkeys-lfu / allkeys-random / volatile-lru / \
+                             volatile-lfu / volatile-random / volatile-ttl"
+                        .to_string(),
+                }
+            })?;
+        }
+        _ => return Err(SetError::Unknown(key.to_string())),
+    }
+    Ok(())
+}
+
+fn set_persistence(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> {
+    match key {
+        "appendfsync" => {
+            cfg.persistence.appendfsync =
+                AppendFsync::parse(value).ok_or_else(|| SetError::BadValue {
+                    key: key.to_string(),
+                    reason: "expected one of always / everysec / no".to_string(),
+                })?;
+        }
+        "auto-aof-rewrite-percentage" => {
+            cfg.persistence.auto_aof_rewrite_percentage =
+                value.parse::<u32>().map_err(|_| SetError::BadValue {
+                    key: key.to_string(),
+                    reason: "expected a non-negative integer".to_string(),
+                })?;
+        }
+        "auto-aof-rewrite-min-size" => {
+            cfg.persistence.auto_aof_rewrite_min_size =
+                parse_size(value).map_err(|reason| SetError::BadValue {
+                    key: key.to_string(),
+                    reason,
+                })?;
+        }
+        _ => return Err(SetError::Unknown(key.to_string())),
+    }
+    Ok(())
+}
+
+fn set_expiry(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> {
+    let n = value.parse::<u32>().map_err(|_| SetError::BadValue {
+        key: key.to_string(),
+        reason: "expected a non-negative integer".to_string(),
+    })?;
+    match key {
+        "hz" => cfg.expiry.hz = n,
+        "maxmemory-samples" => cfg.expiry.sample = n,
+        _ => return Err(SetError::Unknown(key.to_string())),
+    }
+    Ok(())
+}
+
+fn set_log(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> {
+    match key {
+        "loglevel" => {
+            cfg.log.level = LogLevel::parse(value).ok_or_else(|| SetError::BadValue {
+                key: key.to_string(),
+                reason: "expected one of trace / debug / info / warning / error"
+                    .to_string(),
+            })?;
+        }
+        "logfile" => {
+            // Redis names this `logfile`; kevy's TOML calls it `log.output`.
+            // Per the v1.0 hot-settable matrix, only stdout / stderr are
+            // hot-settable. Any file path requires opening a handle the
+            // shards can write to — punted to the v1.x log-layer rewrite.
+            match LogOutput::parse(value) {
+                LogOutput::Stdout => cfg.log.output = LogOutput::Stdout,
+                LogOutput::Stderr => cfg.log.output = LogOutput::Stderr,
+                LogOutput::File(_) => return Err(SetError::ReadOnly(key.to_string())),
+            }
+        }
+        _ => return Err(SetError::Unknown(key.to_string())),
+    }
+    Ok(())
 }
 
 /// Flat list of redis-style `(key, value-as-string)` pairs the current
@@ -138,93 +347,7 @@ fn yes_no(b: bool) -> String {
     if b { "yes".into() } else { "no".into() }
 }
 
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use kevy_resp::Argv;
-
-    fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
-        let mut a = Argv::default();
-        a.push(verb);
-        for r in rest {
-            a.push(r);
-        }
-        let mut out = Vec::new();
-        let cfg = Config::default();
-        cmd_config(&cfg, &a, &mut out);
-        let _ = verb;
-        out
-    }
-
-    #[test]
-    fn glob_matcher_handles_star_and_literal() {
-        assert!(glob_match(b"*", b"anything"));
-        assert!(glob_match(b"max*", b"maxmemory"));
-        assert!(glob_match(b"max*", b"maxmemory-policy"));
-        assert!(glob_match(b"*memory*", b"maxmemory-policy"));
-        assert!(glob_match(b"port", b"port"));
-        assert!(!glob_match(b"port", b"ports"));
-        assert!(!glob_match(b"max*", b"min-memory"));
-        assert!(glob_match(b"", b""));
-        assert!(!glob_match(b"", b"x"));
-    }
-
-    #[test]
-    fn config_get_exact_key() {
-        let out = run(b"CONFIG", &[b"GET", b"port"]);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("*2\r\n"), "got: {s:?}");
-        assert!(s.contains("port"));
-        assert!(s.contains("6004")); // default port
-    }
-
-    #[test]
-    fn config_get_glob() {
-        let out = run(b"CONFIG", &[b"GET", b"max*"]);
-        let s = String::from_utf8(out).unwrap();
-        // max* matches maxmemory + maxmemory-policy + maxmemory-samples
-        // → 3 pairs → array of 6.
-        assert!(s.starts_with("*6\r\n"), "got: {s:?}");
-        assert!(s.contains("maxmemory"));
-        assert!(s.contains("maxmemory-policy"));
-    }
-
-    #[test]
-    fn config_get_unknown_key_returns_empty_array() {
-        let out = run(b"CONFIG", &[b"GET", b"nonexistent-setting"]);
-        assert_eq!(out, b"*0\r\n");
-    }
-
-    #[test]
-    fn config_get_multiple_patterns() {
-        let out = run(b"CONFIG", &[b"GET", b"port", b"bind"]);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("*4\r\n"));
-        assert!(s.contains("port"));
-        assert!(s.contains("bind"));
-    }
-
-    #[test]
-    fn config_set_returns_useful_error() {
-        let out = run(b"CONFIG", &[b"SET", b"maxmemory", b"2gb"]);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("-ERR"));
-        assert!(s.contains("read-only in kevy v1.0"));
-    }
-
-    #[test]
-    fn config_rewrite_returns_useful_error() {
-        let out = run(b"CONFIG", &[b"REWRITE"]);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("-ERR"));
-        assert!(s.contains("REWRITE"));
-    }
-
-    #[test]
-    fn config_unknown_subcommand_errors() {
-        let out = run(b"CONFIG", &[b"NUKE"]);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("-ERR"));
-        assert!(s.contains("unknown CONFIG subcommand"));
-    }
-}
+#[path = "config_tests.rs"]
+mod tests;

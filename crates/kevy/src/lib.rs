@@ -49,6 +49,7 @@ mod dispatch_collections;
 mod ops;
 
 pub use config_global::init as config_init;
+pub use config_global::replace as config_replace;
 use cmd::{scan_pattern, upper_verb};
 pub use dispatch::dispatch;
 pub use kevy_rt::Argv;
@@ -164,6 +165,41 @@ impl Commands for KevyCommands {
         let cfg = config_global::get();
         let samples = cfg.expiry.sample as usize;
         store.tick_expire(samples, 16);
+        // Re-apply maxmemory + eviction policy in case `CONFIG SET` has
+        // swapped the global since the previous tick. `store.set_max_memory`
+        // is idempotent and cheap (compares + assigns two scalars + may
+        // recompute soft-limit accounting); paying it every 100 ms is well
+        // below the noise floor of any benchmark.
+        store.set_max_memory(
+            cfg.memory.maxmemory,
+            map_eviction_policy(cfg.memory.maxmemory_policy),
+        );
+    }
+
+    fn live_runtime_config(&self) -> kevy_rt::LiveRuntimeConfig {
+        // Per-tick (every 100 ms by default) re-read of the process-wide
+        // config. When the embedder hasn't called `config_init` (tests,
+        // hand-rolled `Runtime`s in examples), return all-None so the
+        // builder's explicit `with_appendfsync` / `with_auto_aof_rewrite`
+        // choices aren't silently clobbered by `Config::default()` values.
+        // Once `config_init` has run, every field is wrapped in `Some` so
+        // the shard re-applies CONFIG SET changes within one tick.
+        if !config_global::is_initialised() {
+            return kevy_rt::LiveRuntimeConfig::default();
+        }
+        let cfg = config_global::get();
+        let hz = cfg.expiry.hz;
+        let tick_ms = if hz == 0 {
+            Some(0)
+        } else {
+            Some((1000u64 / hz as u64).clamp(1, 10_000))
+        };
+        kevy_rt::LiveRuntimeConfig {
+            appendfsync: Some(map_appendfsync(cfg.persistence.appendfsync)),
+            auto_aof_rewrite_pct: Some(cfg.persistence.auto_aof_rewrite_percentage),
+            auto_aof_rewrite_min_size: Some(cfg.persistence.auto_aof_rewrite_min_size),
+            tick_interval_ms: tick_ms,
+        }
     }
 
     fn is_write<A: ArgvView + ?Sized>(&self, args: &A) -> bool {
