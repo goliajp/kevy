@@ -127,14 +127,15 @@ All 8 Redis policies are supported: `NoEviction`, `AllKeysLru`,
 
 `Store::set` / `get` / etc. take `&self`. Internally there's **one
 `Mutex`** around the keyspace — fine for embedded use, where the
-amortised cost is dwarfed by your app's work. `Store` is `Send + Sync`,
-so wrap in `Arc` and share across threads:
+amortised cost is dwarfed by your app's work. **`Store` is `Clone`
+(v1.1.0+)**: a clone is a cheap `Arc` bump that reaches the same
+underlying keyspace + AOF + reaper + pub/sub bus. The reaper thread is
+joined and the AOF is flushed exactly once, when the last clone drops.
 
 ```rust
 use kevy_embedded::{Store, Config};
-use std::sync::Arc;
 
-let s = Arc::new(Store::open(Config::default())?);
+let s = Store::open(Config::default())?;
 let s2 = s.clone();
 std::thread::spawn(move || {
     s2.set(b"from-thread", b"works").unwrap();
@@ -144,6 +145,30 @@ std::thread::spawn(move || {
 
 For cross-core scale, use the [`kevy`](https://crates.io/crates/kevy)
 server instead — it shards the keyspace across cores with no shared lock.
+
+## In-process pub/sub (v1.1.0+)
+
+```rust
+use kevy_embedded::{Store, Config, PubsubFrame};
+
+let s = Store::open(Config::default())?;
+let s2 = s.clone();
+let mut sub = s.subscribe(&[b"news"]);
+let _ack = sub.recv()?;
+
+s2.publish(b"news", b"hello");
+match sub.recv()? {
+    PubsubFrame::Message { channel, payload } => { /* deliver to your app */ }
+    _ => {}
+}
+# Ok::<(), std::io::Error>(())
+```
+
+Channel + pattern subscriptions (`PSUBSCRIBE` glob syntax). Drop the
+`Subscription` to unsubscribe from everything atomically. Pair with the
+[`kevy-client`](https://crates.io/crates/kevy-client) URL facade to
+make the same code work against an in-process bus (`mem://name`) in dev
+and a kevy server (`kevy://host:port`) in prod — no scheme branching.
 
 ## Migrating from `lru` / `moka` / `dashmap`
 
