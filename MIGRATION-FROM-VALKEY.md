@@ -8,6 +8,9 @@ phpredis, redis-py, hiredis, …) connects without code changes.
 the same commands. kevy supports 94 commands across all 5 data types
 plus pub/sub and transactions, parity-verified vs valkey 9.1 + redis 7.4.
 
+This guide tracks **workspace v1.2.0** (current) — verify your binary
+with `kevy --version` if anything in this doc looks off.
+
 ## What's the same as valkey 9.1
 
 | | |
@@ -84,13 +87,21 @@ byte-for-byte. Last run: **94 / 94 pass**, 0 mismatches.
 PING ECHO HELLO QUIT COMMAND
 ```
 
-### Operations (6 — Wave 1 just landed)
+### Operations (7)
 
 ```
-INFO CLUSTER DEBUG WAIT SHUTDOWN CONFIG (GET stub)
+INFO CLUSTER DEBUG WAIT SHUTDOWN CONFIG CLIENT
 ```
 
-`CLIENT *` + full `CONFIG GET/SET/REWRITE` land in Wave 1 follow-up.
+- `CONFIG GET <pattern>` — works (supports glob patterns, multi-arg
+  query).
+- `CONFIG SET` / `CONFIG REWRITE` — return a single canonical error
+  (`ERR ... read-only in kevy v1.0 — edit kevy.toml and restart`).
+  Real hot-modification lands in a v1.x minor.
+- `CLIENT GETNAME` / `SETNAME` / `ID` / `NO-EVICT` / `LIST` / `KILL` —
+  reply shapes match Redis so client libraries that probe `CLIENT` at
+  handshake (lettuce, ioredis, …) keep working. Per-connection state
+  tracking is a stub; v1.x will wire it through to the reactor.
 
 ### Keys (12)
 
@@ -149,21 +160,22 @@ SUBSCRIBE UNSUBSCRIBE PUBLISH
 MULTI EXEC DISCARD
 ```
 
-### Persistence (2; `BGREWRITEAOF` in Wave 2)
+### Persistence (3)
 
 ```
-SAVE BGSAVE
+SAVE BGSAVE BGREWRITEAOF
 ```
 
 ## Persistence model
 
-| | valkey / Redis | kevy v1.0 |
+| | valkey / Redis | kevy v1.2 |
 |---|---|---|
-| Snapshot | RDB binary format | kevy snapshot v2 (own format, type-tagged) |
-| AOF | append-only commands | append-only commands |
-| AOF rewrite | `BGREWRITEAOF` (background fork) | `BGREWRITEAOF` (synchronous per shard in v1.0; v1.x will incrementalise) |
-| Auto-rewrite | `auto_aof_rewrite_percentage` / `auto_aof_rewrite_min_size` | same knobs, same semantics (defaults: `100` / `64mb`) |
+| Snapshot | RDB binary format | kevy snapshot v2 (own `KEVYSNAP` header, type-tagged) |
+| AOF | append-only commands | append-only commands, `KEVYAOF1\n` magic header on fresh files (since v1.2.0) |
+| AOF rewrite | `BGREWRITEAOF` (background fork) | `BGREWRITEAOF` (synchronous per shard in v1.x; incrementalisation is a v2 polish item) |
+| Auto-rewrite | `auto_aof_rewrite_percentage` / `auto_aof_rewrite_min_size` | same knobs, same semantics (defaults: `100` / `64mb`) — exercised by `crates/kevy/tests/persistence.rs::auto_aof_rewrite_*` |
 | fsync policy | `always` / `everysec` (default) / `no` | identical names + semantics |
+| Legacy AOF replay | n/a | bare-RESP AOFs (pre-v1.2 files without the magic header) still replay cleanly — backward-compat verified on every release |
 | Snapshot interoperable with Redis RDB? | yes | **no** (different format; migration is via `RESTORE` or app-level export) |
 
 ### Data-loss guarantees on crash
@@ -190,7 +202,8 @@ fsync policy) or `… always` (zero-loss mode).
 
 ## Eviction policies
 
-v1.0 Wave 2 ships all 8 Redis policies with identical names:
+kevy ships all 8 Redis policies with identical names and identical
+selection algorithms:
 
 ```
 noeviction  (default)
@@ -199,7 +212,12 @@ volatile-lru  volatile-lfu  volatile-random  volatile-ttl
 ```
 
 LRU/LFU approximation uses Redis-style 24-bit clock + sample-based
-selection (configurable via `maxmemory-samples`).
+selection (configurable via `maxmemory-samples`, default 5).
+
+Memory pressure is enforced before every write when `maxmemory` is
+set; the check compiles out (dead-code-eliminated) when the knob
+remains at its `0` (unlimited) default, so the eviction code path
+costs zero on workloads that don't use it.
 
 ## Migration walkthrough
 
@@ -210,7 +228,7 @@ selection (configurable via `maxmemory-samples`).
 ```yaml
 services:
   kv:
-    image: golia/kevy:1.0       # (or build from source until image lands)
+    image: golia/kevy:1.2       # (or build from source until image lands)
     environment:
       KEVY_BIND: 0.0.0.0        # trust-bounded inside the network
     ports:
