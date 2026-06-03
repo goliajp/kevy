@@ -161,3 +161,110 @@ fn recv_timeout_returns_timeout_when_empty() {
         .unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::TimedOut);
 }
+
+#[test]
+fn subscription_is_send_and_sync() {
+    // Static-assert via trait bounds: this won't compile if Subscription
+    // stops being Send + Sync. Closes the gap mailrs hit on first prod
+    // adoption (`Arc<Subscription>` failed because the `mpsc::Receiver`
+    // field was !Sync). See type-level doc for the trade-off + memory
+    // entry feedback-mailrs-prod-vet-lessons.
+    fn require_send_sync<T: Send + Sync>() {}
+    require_send_sync::<Subscription>();
+}
+
+#[test]
+fn arc_subscription_drains_concurrent_recvs_round_robin() {
+    // Two threads share one `Arc<Subscription>` and each call `recv` in
+    // a loop. The publisher floods 100 frames; the two consumers
+    // together must receive exactly 100 frames (no dropped, no
+    // duplicated). Per the documented single-consumer semantic, each
+    // frame goes to exactly one consumer — concurrent calls serialise
+    // on the receiver mutex and one waiter gets each enqueued frame.
+    let s = store();
+    let sub = std::sync::Arc::new(s.subscribe(&[b"flood"]));
+
+    // Drain the SUBSCRIBE ack so the test only counts publishes.
+    let _ack = sub.recv().unwrap();
+
+    let consumer1 = {
+        let sub = sub.clone();
+        std::thread::spawn(move || {
+            let mut count = 0u32;
+            while count < 100 {
+                match sub.recv_timeout(Duration::from_secs(2)) {
+                    Ok(_) => count += 1,
+                    Err(_) => break,
+                }
+            }
+            count
+        })
+    };
+    let consumer2 = {
+        let sub = sub.clone();
+        std::thread::spawn(move || {
+            let mut count = 0u32;
+            while count < 100 {
+                match sub.recv_timeout(Duration::from_secs(2)) {
+                    Ok(_) => count += 1,
+                    Err(_) => break,
+                }
+            }
+            count
+        })
+    };
+
+    for i in 0..100u32 {
+        let payload = format!("msg-{i:04}");
+        let n = s.publish(b"flood", payload.as_bytes());
+        assert_eq!(n, 1, "subscriber count was wrong at publish {i}");
+    }
+    // Give consumers time to drain then close the bus to unblock them.
+    std::thread::sleep(Duration::from_millis(100));
+    drop(s); // drops the last publishing handle; consumers' recv_timeout will see EOF or drain remaining
+    drop(sub); // drop the test's clone so only the two consumer clones remain
+
+    let c1 = consumer1.join().unwrap();
+    let c2 = consumer2.join().unwrap();
+    assert_eq!(c1 + c2, 100, "got c1={c1}, c2={c2}, expected sum=100");
+    // Both consumers should have received at least one frame (proving
+    // they both reached the lock, not just one greedy thread).
+    assert!(c1 > 0, "consumer 1 got nothing; both threads should have woken");
+    assert!(c2 > 0, "consumer 2 got nothing; both threads should have woken");
+}
+
+#[test]
+fn try_recv_returns_none_under_concurrent_blocking_recv() {
+    // Per the type-level doc: try_recv must NOT block on a concurrent
+    // blocking recv(). It uses `try_lock` and reports `Ok(None)` on
+    // contention. This protects the non-blocking contract for callers
+    // who poll try_recv while another thread does the long blocking
+    // wait.
+    let s = store();
+    let sub = std::sync::Arc::new(s.subscribe(&[b"slow"]));
+    let _ack = sub.recv().unwrap();
+
+    // Start a blocking recv that will wait a while.
+    let blocker = {
+        let sub = sub.clone();
+        std::thread::spawn(move || {
+            let _ = sub.recv_timeout(Duration::from_secs(2));
+        })
+    };
+    // Give the blocker time to acquire the lock.
+    std::thread::sleep(Duration::from_millis(50));
+
+    // try_recv must return promptly with Ok(None), not block.
+    let start = std::time::Instant::now();
+    let res = sub.try_recv().unwrap();
+    let elapsed = start.elapsed();
+    assert!(res.is_none(), "expected Ok(None) under contention, got {res:?}");
+    assert!(
+        elapsed < Duration::from_millis(50),
+        "try_recv took {elapsed:?} — should not block on receiver mutex"
+    );
+
+    // Cleanup: publish so the blocker returns; otherwise it hits the 2s timeout.
+    s.publish(b"slow", b"x");
+    let _ = blocker.join();
+}
