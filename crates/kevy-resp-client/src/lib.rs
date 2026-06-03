@@ -134,41 +134,45 @@ struct ParsedUrl {
 }
 
 fn parse_url(url: &str) -> io::Result<ParsedUrl> {
-    // Scheme split.
-    let (scheme, rest) = url
-        .split_once("://")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "URL missing '://'"))?;
-    match scheme {
-        "kevy" | "redis" | "tcp" => {}
-        "rediss" | "kevys" => {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "TLS schemes (rediss://, kevys://) are unsupported — kevy has no TLS",
-            ));
-        }
-        other => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("unknown URL scheme '{other}://'"),
-            ));
-        }
-    }
-
-    // Reject userinfo (AUTH) — kevy doesn't support auth.
+    let (scheme, rest) = split_scheme(url)?;
     if rest.contains('@') {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "userinfo (user:pass@host) is unsupported — kevy has no AUTH",
         ));
     }
-
-    // Split path off authority.
     let (authority, path) = match rest.split_once('/') {
         Some((auth, p)) => (auth, Some(p)),
         None => (rest, None),
     };
+    let (host, port) = parse_authority(authority)?;
+    let db = parse_db_path(scheme, path)?;
+    Ok(ParsedUrl { host, port, db })
+}
 
-    // Host + optional port.
+/// Validate the URL scheme and return `(scheme, rest)` where `rest` is
+/// everything past `://`. Rejects TLS schemes (kevy has no TLS) and
+/// unknown schemes.
+fn split_scheme(url: &str) -> io::Result<(&str, &str)> {
+    let (scheme, rest) = url
+        .split_once("://")
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "URL missing '://'"))?;
+    match scheme {
+        "kevy" | "redis" | "tcp" => Ok((scheme, rest)),
+        "rediss" | "kevys" => Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "TLS schemes (rediss://, kevys://) are unsupported — kevy has no TLS",
+        )),
+        other => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unknown URL scheme '{other}://'"),
+        )),
+    }
+}
+
+/// Parse `host[:port]` — defaulting to port 6379 (Redis convention)
+/// when the colon is absent. Empty hosts are rejected.
+fn parse_authority(authority: &str) -> io::Result<(String, u16)> {
     let (host, port) = match authority.rsplit_once(':') {
         Some((h, p)) => {
             let port: u16 = p.parse().map_err(|_| {
@@ -181,17 +185,18 @@ fn parse_url(url: &str) -> io::Result<ParsedUrl> {
     if host.is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty host"));
     }
+    Ok((host, port))
+}
 
-    // Optional DB index from path. `tcp://` ignores the path (it's a raw
-    // socket URL); `kevy://` and `redis://` honour `/N`.
-    let db = match path {
-        None | Some("") => None,
-        Some(p) if scheme == "tcp" => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("tcp:// URL must not have a path: '/{p}'"),
-            ));
-        }
+/// Optional DB index from the path component. `tcp://` is a raw-socket
+/// URL and rejects any path; `kevy://` and `redis://` honour `/N`.
+fn parse_db_path(scheme: &str, path: Option<&str>) -> io::Result<Option<u32>> {
+    match path {
+        None | Some("") => Ok(None),
+        Some(p) if scheme == "tcp" => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("tcp:// URL must not have a path: '/{p}'"),
+        )),
         Some(p) => {
             let n: u32 = p.parse().map_err(|_| {
                 io::Error::new(
@@ -199,11 +204,9 @@ fn parse_url(url: &str) -> io::Result<ParsedUrl> {
                     format!("bad db index: '{p}' (expected a non-negative integer)"),
                 )
             })?;
-            Some(n)
+            Ok(Some(n))
         }
-    };
-
-    Ok(ParsedUrl { host, port, db })
+    }
 }
 
 #[cfg(test)]

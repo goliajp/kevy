@@ -97,56 +97,18 @@ impl Store {
     /// - Spawns a background TTL reaper thread when
     ///   `config.ttl_reaper == Background` (the default).
     pub fn open(config: Config) -> io::Result<Self> {
-        let mut store = kevy_store::Store::new();
-        store.set_max_memory(config.maxmemory, config.eviction_policy);
-
-        let aof = if let Some(dir) = &config.data_dir {
-            std::fs::create_dir_all(dir)?;
-            let snap_path = dir.join(&config.snapshot_filename);
-            if snap_path.exists() {
-                load_snapshot(&mut store, &snap_path)?;
-            }
-            let aof_path = dir.join(&config.aof_filename);
-            if aof_path.exists() {
-                replay_aof(&aof_path, |args| crate::replay::apply(&mut store, &args))?;
-            }
-            if config.aof {
-                Some(Aof::open(&aof_path, config.appendfsync)?)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
+        let (store, aof) = init_persistent_store(&config)?;
         let inner = Arc::new(Mutex::new(Inner {
             store,
             aof,
             bus: PubsubBus::new(),
         }));
-
-        let (reaper_stop, reaper_join) = match config.ttl_reaper {
-            TtlReaperMode::Manual => (None, None),
-            TtlReaperMode::Background => {
-                let stop = Arc::new(AtomicBool::new(false));
-                let stop_t = stop.clone();
-                let inner_t = inner.clone();
-                let interval = config.reaper_interval;
-                let samples = config.reaper_samples;
-                let rounds = config.reaper_max_rounds;
-                let handle = std::thread::Builder::new()
-                    .name(String::from("kevy-embedded-reaper"))
-                    .spawn(move || reaper_loop(inner_t, stop_t, interval, samples, rounds))?;
-                (Some(stop), Some(handle))
-            }
-        };
-
+        let (reaper_stop, reaper_join) = spawn_reaper(&config, &inner)?;
         let guard = Arc::new(DropGuard {
             reaper_stop,
             reaper_join: Mutex::new(reaper_join),
             inner_for_flush: inner.clone(),
         });
-
         Ok(Store {
             inner,
             guard,
@@ -257,6 +219,59 @@ impl Store {
         match self.inner.lock() {
             Ok(g) => g,
             Err(poison) => poison.into_inner(),
+        }
+    }
+}
+
+/// Build the `kevy_store::Store` and (optionally) its `Aof`. Loads any
+/// pre-existing snapshot and replays any pre-existing AOF before
+/// returning. `data_dir = None` ⇒ pure in-memory (both return values
+/// are the empty store + `None`).
+fn init_persistent_store(config: &Config) -> io::Result<(kevy_store::Store, Option<Aof>)> {
+    let mut store = kevy_store::Store::new();
+    store.set_max_memory(config.maxmemory, config.eviction_policy);
+    let aof = if let Some(dir) = &config.data_dir {
+        std::fs::create_dir_all(dir)?;
+        let snap_path = dir.join(&config.snapshot_filename);
+        if snap_path.exists() {
+            load_snapshot(&mut store, &snap_path)?;
+        }
+        let aof_path = dir.join(&config.aof_filename);
+        if aof_path.exists() {
+            replay_aof(&aof_path, |args| crate::replay::apply(&mut store, &args))?;
+        }
+        if config.aof {
+            Some(Aof::open(&aof_path, config.appendfsync)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    Ok((store, aof))
+}
+
+/// Start the background TTL reaper thread, returning its stop signal +
+/// join handle. `TtlReaperMode::Manual` returns `(None, None)` so the
+/// caller-driven reap is in charge instead.
+#[allow(clippy::type_complexity)] // inline tuple keeps the pair colocated
+fn spawn_reaper(
+    config: &Config,
+    inner: &Arc<Mutex<Inner>>,
+) -> io::Result<(Option<Arc<AtomicBool>>, Option<JoinHandle<()>>)> {
+    match config.ttl_reaper {
+        TtlReaperMode::Manual => Ok((None, None)),
+        TtlReaperMode::Background => {
+            let stop = Arc::new(AtomicBool::new(false));
+            let stop_t = stop.clone();
+            let inner_t = inner.clone();
+            let interval = config.reaper_interval;
+            let samples = config.reaper_samples;
+            let rounds = config.reaper_max_rounds;
+            let handle = std::thread::Builder::new()
+                .name(String::from("kevy-embedded-reaper"))
+                .spawn(move || reaper_loop(inner_t, stop_t, interval, samples, rounds))?;
+            Ok((Some(stop), Some(handle)))
         }
     }
 }
