@@ -1,0 +1,107 @@
+name: Release kevy-client (per-crate)
+
+# Per-crate release path for kevy-client, decoupled from the workspace-wide
+# `vX.Y.Z` tag pipeline in release.yml. Triggered manually from the Actions
+# tab; the version is read from crates/kevy-client/Cargo.toml so the source
+# of truth stays single-headed.
+#
+# Why split this out: kevy-client grows on its own cadence (additive surface
+# expansion — multi-key in v1.4.0, typed Transaction + WATCH in v1.5.0)
+# while the workspace stays on its semver. Tagging the whole workspace
+# every time kevy-client moves is semantically noisy. This workflow tags
+# `kevy-client-v<version>` instead and publishes ONLY that crate.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build + test + cargo publish --dry-run, do NOT publish or tag'
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  release:
+    name: Verify + publish + tag kevy-client
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # to push the tag and create a GitHub release
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so `git tag` + `git push` see a writable ref.
+          fetch-depth: 0
+
+      - name: Install Rust stable
+        shell: bash
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+
+      - name: Read version from Cargo.toml
+        id: ver
+        shell: bash
+        run: |
+          v=$(grep -m1 -oE '^version *= *"[^"]+"' crates/kevy-client/Cargo.toml | cut -d'"' -f2)
+          if [ -z "$v" ]; then
+            echo "Could not parse version from crates/kevy-client/Cargo.toml" >&2
+            exit 1
+          fi
+          echo "version=$v" >>"$GITHUB_OUTPUT"
+          echo "tag=kevy-client-v$v" >>"$GITHUB_OUTPUT"
+          echo "kevy-client version = $v → tag kevy-client-v$v"
+
+      - name: Refuse to re-release an existing tag
+        shell: bash
+        run: |
+          tag=${{ steps.ver.outputs.tag }}
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "Tag $tag already exists locally — bump crates/kevy-client/Cargo.toml first." >&2
+            exit 1
+          fi
+          if git ls-remote --tags origin "refs/tags/$tag" | grep -q "$tag"; then
+            echo "Tag $tag already exists on origin — bump crates/kevy-client/Cargo.toml first." >&2
+            exit 1
+          fi
+
+      - name: Build --release (gate)
+        run: cargo build -p kevy-client --release
+
+      - name: Test --release (gate)
+        run: cargo test -p kevy-client --release --lib --tests
+
+      - name: cargo publish (dry-run)
+        if: ${{ inputs.dry_run }}
+        run: cargo publish -p kevy-client --dry-run
+
+      - name: cargo publish (real)
+        if: ${{ !inputs.dry_run }}
+        run: cargo publish -p kevy-client
+
+      # Tag AFTER publish so a publish failure doesn't leave a phantom tag
+      # pointing at a commit whose crate never made it to crates.io.
+      - name: Tag the released version
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        run: |
+          tag=${{ steps.ver.outputs.tag }}
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag "$tag" -m "kevy-client ${{ steps.ver.outputs.version }}"
+          git push origin "$tag"
+
+      - name: Create GitHub release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag=${{ steps.ver.outputs.tag }}
+          gh release create "$tag" \
+            --title "kevy-client v${{ steps.ver.outputs.version }}" \
+            --generate-notes \
+            --target "$GITHUB_SHA"
