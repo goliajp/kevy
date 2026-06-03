@@ -207,10 +207,10 @@ pub trait KevyHash {
 }
 
 impl KevyHash for [u8] {
-    /// Byte-slice hash. Uses the **two-stream pipelined** path
-    /// ([`hash_bytes_pipelined`]) for ILP on the bench's 8-64 byte keyspace,
-    /// closing the prior 1 ns gap vs rustc-hash 2.x's `hash_bytes`. The
-    /// final `fmix64` retains the anti-clustering guarantee that the
+    /// Byte-slice hash. Uses the **two-stream pipelined** path internally
+    /// for ILP on the bench's 8-64 byte keyspace, closing the prior 1 ns
+    /// gap vs rustc-hash 2.x's `hash_bytes`. The final `fmix64` retains
+    /// the anti-clustering guarantee that the
     /// `no_catastrophic_clustering_on_low_entropy_keys` test enforces.
     ///
     /// Note: the result diverges from the legacy [`FxHasher`] absorb path —

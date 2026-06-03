@@ -1,10 +1,11 @@
 //! Maxmemory enforcement and the 8 eviction policies.
 //!
-//! Activated by [`Store::set_max_memory`]. Hot-path entry points:
+//! Activated by [`Store::set_max_memory`]. Hot-path entry points (both
+//! crate-internal):
 //!
-//! - [`touch_on_access`] — bump the per-entry LRU ordinal / LFU counter on
+//! - `touch_on_access` — bump the per-entry LRU ordinal / LFU counter on
 //!   reads and writes (called only when `maxmemory > 0`).
-//! - [`evict_until_under_limit`] — sample-based eviction loop run after a
+//! - `evict_until_under_limit` — sample-based eviction loop run after a
 //!   write that pushed `used_memory` above the configured ceiling.
 //!
 //! All policies operate on N random samples per round (Redis-style; default

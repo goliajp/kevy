@@ -4,8 +4,8 @@
 use crate::error::ProtocolError;
 use crate::request::{find_crlf, parse_int};
 
-/// A parsed RESP reply (server → client) — the client-side counterpart of the
-/// `encode_*` functions in [`crate::reply_encode`].
+/// A parsed RESP reply (server → client) — the client-side counterpart of
+/// the crate's `encode_*` functions (server-side encoders).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
     /// `+OK`
