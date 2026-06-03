@@ -132,3 +132,21 @@ fn named_bus_recycles_after_all_handles_drop() {
     let mut conn2 = Connection::open(URL).unwrap();
     assert_eq!(conn2.get(b"hot").unwrap(), None);
 }
+
+/// mailrs feedback #4: `recv_message` swallows the SUBSCRIBE ack and
+/// returns the next real message directly, sparing callers the
+/// `loop { match recv() { _ => continue, Message => break } }` boilerplate.
+#[test]
+fn recv_message_skips_ack_and_returns_payload() {
+    const URL: &str = "mem://recv-message-skip-ack";
+    let mut sub = Subscriber::open(URL, &[b"chan"]).unwrap();
+    // Publish BEFORE draining the ack so recv_message has to walk
+    // past it to find the message.
+    let mut conn = Connection::open(URL).unwrap();
+    let n = conn.publish(b"chan", b"hello").unwrap();
+    assert_eq!(n, 1);
+    sub.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let (channel, payload) = sub.recv_message().unwrap();
+    assert_eq!(channel, b"chan");
+    assert_eq!(payload, b"hello");
+}

@@ -245,6 +245,37 @@ impl Subscriber {
         }
     }
 
+    /// Block until the next published `Message` / `Pmessage` arrives,
+    /// silently skipping subscription-acknowledgement frames
+    /// ([`PubsubEvent::Subscribe`] / [`Unsubscribe`] / [`Psubscribe`] /
+    /// [`Punsubscribe`]) along the way.
+    ///
+    /// This is the form most callers want — almost no consumer of
+    /// pubsub needs to see the ack frames (they're a wire-protocol
+    /// detail), so a loop+match around [`Self::recv`] is essentially
+    /// boilerplate. Returns `(channel, payload)`. For pattern matches,
+    /// `channel` is the concrete channel the publisher used (matching
+    /// Redis's `pmessage` shape, where `pattern` is discarded — use
+    /// [`Self::recv`] directly if you need it).
+    ///
+    /// Errors from [`Self::recv`] (connection close, timeout, etc.)
+    /// propagate unchanged.
+    pub fn recv_message(&mut self) -> io::Result<(Vec<u8>, Vec<u8>)> {
+        loop {
+            match self.recv()? {
+                PubsubEvent::Message { channel, payload } => return Ok((channel, payload)),
+                PubsubEvent::Pmessage { channel, payload, .. } => {
+                    return Ok((channel, payload));
+                }
+                // Ack frames — keep waiting for the next real message.
+                PubsubEvent::Subscribe { .. }
+                | PubsubEvent::Psubscribe { .. }
+                | PubsubEvent::Unsubscribe { .. }
+                | PubsubEvent::Punsubscribe { .. } => continue,
+            }
+        }
+    }
+
     /// Apply (or clear) a read timeout. After setting `Some(dur)`,
     /// [`Self::recv`] returns an `io::Error` of kind `WouldBlock` /
     /// `TimedOut` when no frame arrives within `dur`.
