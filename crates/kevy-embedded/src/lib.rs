@@ -52,6 +52,7 @@
 #![forbid(unsafe_code)]
 
 mod config;
+mod ops;
 mod pubsub;
 mod replay;
 mod store;
