@@ -53,10 +53,10 @@ environment variable / config file — develop against `mem://`,
 integration-test against `file:///tmp/test`, deploy against
 `kevy://prod-cache:6379`. No code change.
 
-## Command coverage (v1.1.0)
+## Command coverage (v1.2.0)
 
 All five Redis data types plus generic-key ops, persistence, and
-pub/sub PUBLISH. Methods on `Connection`:
+the full pub/sub cycle. Methods on `Connection`:
 
 **Connection / generic:** `ping`, `dbsize`, `flush`, `type_of`,
 `exists`, `del`, `expire`, `persist`, `ttl_ms`.
@@ -71,10 +71,25 @@ pub/sub PUBLISH. Methods on `Connection`:
 
 **Sorted set:** `zadd`, `zrem`, `zscore`, `zcard`, `zrange`.
 
-**Pub/sub:** `publish` (subscribe is a streaming state machine, on the
-v1.2.0 roadmap). `publish` on the embedded backend returns 0
-(single-process, no subscribers) — matches Redis semantics for
-"publish to a channel nobody listens to".
+**Pub/sub:** `Connection::publish` for the producer side. The consumer
+side is `Subscriber` — a separate type with its own dedicated TCP socket
+because subscribed connections cannot send normal commands per the
+RESP spec. `Connection::publish` on the embedded backend returns 0
+(single-process, no subscribers); `Subscriber::open` on `mem://` /
+`file://` URLs returns `ErrorKind::Unsupported`.
+
+```rust
+use kevy_client::{Subscriber, PubsubEvent};
+
+let mut sub = Subscriber::open("kevy://prod-cache:6379", &[b"news"])?;
+loop {
+    if let PubsubEvent::Message { channel, payload } = sub.recv()? {
+        println!("{}: {}", String::from_utf8_lossy(&channel),
+                           String::from_utf8_lossy(&payload));
+    }
+}
+# Ok::<(), std::io::Error>(())
+```
 
 If you need a command this crate doesn't expose yet, drop down to the
 raw backend:
