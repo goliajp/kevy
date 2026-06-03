@@ -79,6 +79,7 @@ mod shard;
 #[cfg(target_os = "linux")]
 mod uring_reactor;
 
+pub use kevy_persist::Fsync;
 pub use kevy_resp::{Argv, ArgvBorrowed, ArgvView};
 pub use kevy_store::Store;
 pub use runtime::Runtime;
@@ -163,6 +164,18 @@ pub trait Commands: Clone + Send + 'static {
         100
     }
 
+    /// Snapshot of the runtime-owned knobs that can be hot-modified
+    /// (the kevy server wires this to `CONFIG SET`). Called once per
+    /// shard tick — each `Some` value is applied to the shard's live
+    /// state; each `None` keeps the existing setting untouched.
+    ///
+    /// Default returns all-None so embedders that never hot-swap config
+    /// pay nothing beyond one struct-build per tick. The cost lives in
+    /// the impl's read of its own config source.
+    fn live_runtime_config(&self) -> LiveRuntimeConfig {
+        LiveRuntimeConfig::default()
+    }
+
     /// Resolve all verb-dependent attributes in **one** verb-table lookup.
     /// The default implementation calls the four per-attribute methods above
     /// (four upper_verb scans + matches); concrete impls SHOULD override this
@@ -195,4 +208,30 @@ pub enum TxnKind {
     Exec,
     Discard,
     Other,
+}
+
+/// Live snapshot of the runtime-owned knobs that may have been changed
+/// since this shard's last tick. Built by the [`Commands`] impl from
+/// its own config source (e.g. kevy reads `config_global`). Each
+/// `Some(_)` is applied to the shard; each `None` leaves the existing
+/// setting alone.
+///
+/// One snapshot is built per tick (every 100 ms by default), so its
+/// cost is amortised across thousands of commands.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct LiveRuntimeConfig {
+    /// AOF fsync policy. Applied via `Aof::set_fsync` — switching to
+    /// `Always` mid-flight also flushes any buffered bytes so the new
+    /// "every write is on disk before reply" contract is honoured from
+    /// the next append onward.
+    pub appendfsync: Option<Fsync>,
+    /// `auto_aof_rewrite_percentage`. `0` disables the auto-trigger.
+    pub auto_aof_rewrite_pct: Option<u32>,
+    /// `auto_aof_rewrite_min_size` in bytes.
+    pub auto_aof_rewrite_min_size: Option<u64>,
+    /// New tick interval in ms (`1000/hz`). `0` disables ticking
+    /// entirely — note that disabling also turns off active TTL
+    /// expiry and the auto-rewrite tick path. Lazy expiry on access
+    /// always still works.
+    pub tick_interval_ms: Option<u64>,
 }

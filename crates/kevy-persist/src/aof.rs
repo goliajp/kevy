@@ -97,6 +97,30 @@ impl Aof {
         })
     }
 
+    /// The fsync policy this AOF was opened with (or last switched to).
+    /// Mostly for tests / INFO output; the hot path doesn't read this.
+    #[inline]
+    pub fn fsync_policy(&self) -> Fsync {
+        self.fsync
+    }
+
+    /// Switch the fsync policy at runtime (called by `CONFIG SET
+    /// appendfsync`). When tightening to `Always`, also flushes + fsyncs
+    /// any bytes still in the BufWriter so the new "every write is on
+    /// disk before reply" contract is honoured starting on the next
+    /// append, not after the dirty backlog clears.
+    pub fn set_fsync(&mut self, fsync: Fsync) -> io::Result<()> {
+        let upgrading_to_always = matches!(fsync, Fsync::Always) && !matches!(self.fsync, Fsync::Always);
+        self.fsync = fsync;
+        if upgrading_to_always && self.dirty {
+            self.file.flush()?;
+            self.file.get_ref().sync_data()?;
+            self.dirty = false;
+            self.last_sync = Instant::now();
+        }
+        Ok(())
+    }
+
     /// Append one command, applying the fsync policy.
     pub fn append<A: ArgvView + ?Sized>(&mut self, args: &A) -> io::Result<()> {
         write_multibulk(&mut self.file, args)?;

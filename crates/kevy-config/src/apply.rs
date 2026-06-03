@@ -220,46 +220,25 @@ pub(crate) fn parse_ipv4(s: &str) -> Option<[u8; 4]> {
     Some(octets)
 }
 
+// Enum (string <-> variant) helpers moved to schema.rs as inherent
+// methods so `CONFIG SET` / `CONFIG REWRITE` share the same canonical
+// names as the TOML parser. These thin wrappers preserve the
+// pre-existing call sites.
+
 fn parse_appendfsync(s: &str) -> Option<AppendFsync> {
-    match s.to_ascii_lowercase().as_str() {
-        "always" => Some(AppendFsync::Always),
-        "everysec" => Some(AppendFsync::EverySec),
-        "no" => Some(AppendFsync::No),
-        _ => None,
-    }
+    AppendFsync::parse(s)
 }
 
 fn parse_eviction(s: &str) -> Option<EvictionPolicy> {
-    match s.to_ascii_lowercase().as_str() {
-        "noeviction" => Some(EvictionPolicy::NoEviction),
-        "allkeys-lru" => Some(EvictionPolicy::AllKeysLru),
-        "allkeys-lfu" => Some(EvictionPolicy::AllKeysLfu),
-        "allkeys-random" => Some(EvictionPolicy::AllKeysRandom),
-        "volatile-lru" => Some(EvictionPolicy::VolatileLru),
-        "volatile-lfu" => Some(EvictionPolicy::VolatileLfu),
-        "volatile-random" => Some(EvictionPolicy::VolatileRandom),
-        "volatile-ttl" => Some(EvictionPolicy::VolatileTtl),
-        _ => None,
-    }
+    EvictionPolicy::parse(s)
 }
 
 fn parse_log_level(s: &str) -> Option<LogLevel> {
-    match s.to_ascii_lowercase().as_str() {
-        "trace" => Some(LogLevel::Trace),
-        "debug" => Some(LogLevel::Debug),
-        "info" => Some(LogLevel::Info),
-        "warn" | "warning" => Some(LogLevel::Warn),
-        "error" => Some(LogLevel::Error),
-        _ => None,
-    }
+    LogLevel::parse(s)
 }
 
 fn parse_log_output(s: &str) -> LogOutput {
-    match s {
-        "stderr" => LogOutput::Stderr,
-        "stdout" => LogOutput::Stdout,
-        path => LogOutput::File(PathBuf::from(path)),
-    }
+    LogOutput::parse(s)
 }
 
 #[cfg(test)]
