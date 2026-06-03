@@ -28,59 +28,11 @@ impl<C: Commands> Shard<C> {
             Some(_) if args.len() > 1 => (1..args.len()).map(|i| args[i].to_vec()).collect(),
             Some(c) => c.sub.iter().cloned().collect(),
         };
-        // Track which channels actually changed (sub/unsub is idempotent) so the
-        // shared registry count stays exact.
-        let mut changed: Vec<Vec<u8>> = Vec::new();
-        let reply = {
-            let Some(c) = self.conns.get_mut(&conn_id) else {
-                return;
-            };
-            let mut out = Vec::new();
-            if channels.is_empty() {
-                encode_array_len(&mut out, 3);
-                encode_bulk(&mut out, verb);
-                encode_null_bulk(&mut out);
-                encode_integer(&mut out, c.sub.len() as i64);
-            }
-            for ch in &channels {
-                let did = if subscribe {
-                    c.sub.insert(ch.clone())
-                } else {
-                    c.sub.remove(ch)
-                };
-                if did {
-                    changed.push(ch.clone());
-                }
-                encode_array_len(&mut out, 3);
-                encode_bulk(&mut out, verb);
-                encode_bulk(&mut out, ch);
-                encode_integer(&mut out, c.sub.len() as i64);
-            }
-            out
+        let Some((reply, changed)) = self.apply_sub_to_conn(conn_id, &channels, subscribe, verb)
+        else {
+            return;
         };
-        // Reflect the change in the shared registry (PUBLISH reads it).
-        if !changed.is_empty() {
-            let bit = 1u64 << self.id;
-            let mut reg = self.pubsub.write().expect("pubsub registry");
-            for ch in &changed {
-                if subscribe {
-                    let e = reg.entry(ch.clone()).or_insert((0, 0));
-                    e.0 += 1;
-                    e.1 |= bit;
-                } else {
-                    let drop = match reg.get_mut(ch) {
-                        Some(e) => {
-                            e.0 = e.0.saturating_sub(1);
-                            e.0 == 0
-                        }
-                        None => false,
-                    };
-                    if drop {
-                        reg.remove(ch);
-                    }
-                }
-            }
-        }
+        self.apply_sub_to_registry(&changed, subscribe);
         if let Some(c) = self.conns.get_mut(&conn_id) {
             c.pending.push_back(PendingSlot {
                 remaining: 1,
@@ -89,6 +41,73 @@ impl<C: Commands> Shard<C> {
             });
         }
         self.fold(conn_id, seq, Part::Reply(reply));
+    }
+
+    /// Update the connection's local subscription set + build the
+    /// per-channel RESP reply. Returns `None` if the conn vanished
+    /// mid-flight, else `(reply_bytes, channels_that_actually_changed)`.
+    /// "Changed" matters because sub/unsub is idempotent — only real
+    /// transitions must update the shared registry.
+    fn apply_sub_to_conn(
+        &mut self,
+        conn_id: u64,
+        channels: &[Vec<u8>],
+        subscribe: bool,
+        verb: &[u8],
+    ) -> Option<(Vec<u8>, Vec<Vec<u8>>)> {
+        let c = self.conns.get_mut(&conn_id)?;
+        let mut out = Vec::new();
+        let mut changed: Vec<Vec<u8>> = Vec::new();
+        if channels.is_empty() {
+            encode_array_len(&mut out, 3);
+            encode_bulk(&mut out, verb);
+            encode_null_bulk(&mut out);
+            encode_integer(&mut out, c.sub.len() as i64);
+        }
+        for ch in channels {
+            let did = if subscribe {
+                c.sub.insert(ch.clone())
+            } else {
+                c.sub.remove(ch)
+            };
+            if did {
+                changed.push(ch.clone());
+            }
+            encode_array_len(&mut out, 3);
+            encode_bulk(&mut out, verb);
+            encode_bulk(&mut out, ch);
+            encode_integer(&mut out, c.sub.len() as i64);
+        }
+        Some((out, changed))
+    }
+
+    /// Reflect a real (sub/unsub) transition into the cross-shard
+    /// registry that `PUBLISH` consults to route messages to the
+    /// shards that actually hold subscribers.
+    fn apply_sub_to_registry(&self, changed: &[Vec<u8>], subscribe: bool) {
+        if changed.is_empty() {
+            return;
+        }
+        let bit = 1u64 << self.id;
+        let mut reg = self.pubsub.write().expect("pubsub registry");
+        for ch in changed {
+            if subscribe {
+                let e = reg.entry(ch.clone()).or_insert((0, 0));
+                e.0 += 1;
+                e.1 |= bit;
+            } else {
+                let drop = match reg.get_mut(ch) {
+                    Some(e) => {
+                        e.0 = e.0.saturating_sub(1);
+                        e.0 == 0
+                    }
+                    None => false,
+                };
+                if drop {
+                    reg.remove(ch);
+                }
+            }
+        }
     }
 
     /// PUBLISH: reply with the receiver count read **locally** from the shared
