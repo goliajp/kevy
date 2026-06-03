@@ -1,5 +1,11 @@
 /target
+# Nested target/ dirs (e.g. each fuzz/ has its own cargo workspace + target).
+**/target/
 **/*.rs.bk
+# cargo-fuzz default artifact dirs (corpus shared across runs, harness output).
+fuzz/corpus/
+fuzz/artifacts/
+fuzz/coverage/
 # kevy persistence artifacts (snapshots + append-only logs)
 dump-*.rdb
 aof-*.aof
