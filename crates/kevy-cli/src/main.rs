@@ -26,6 +26,25 @@ const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 6379;
 
 fn main() -> ExitCode {
+    // --help / --version short-circuit BEFORE we touch TCP, so the binary
+    // works in healthchecks / image-smoke / `--help` exploration without a
+    // running server. `-h` keeps its redis-cli meaning (host); only the long
+    // `--help` and `-V` / `--version` short-circuit. Mirrors the kevy server
+    // pattern shipped in v1.0.4.
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--help" => {
+                print_help();
+                return ExitCode::SUCCESS;
+            }
+            "--version" | "-V" => {
+                println!("kevy-cli {}", env!("CARGO_PKG_VERSION"));
+                return ExitCode::SUCCESS;
+            }
+            _ => {}
+        }
+    }
+
     let cfg = Config::from_args(std::env::args().skip(1));
     let mut conn = match RespClient::connect(&cfg.host, cfg.port) {
         Ok(c) => c,
@@ -42,6 +61,34 @@ fn main() -> ExitCode {
     } else {
         run_once(&mut conn, &cfg.command)
     }
+}
+
+fn print_help() {
+    let v = env!("CARGO_PKG_VERSION");
+    println!(
+        "\
+kevy-cli {v} — redis-cli-style REPL for kevy or any RESP server.
+
+USAGE:
+    kevy-cli [-h <host>] [-p <port>] [command [args ...]]
+
+OPTIONS:
+    -h <host>           Server hostname (default: 127.0.0.1)
+    -p <port>           Server port (default: 6379)
+    --help              Show this help and exit
+    -V, --version       Print version and exit
+
+With a trailing command, runs once and exits non-zero on a RESP error.
+Without a command, opens an interactive REPL (Ctrl-D / `quit` / `exit` to leave).
+
+EXAMPLES:
+    kevy-cli                            # REPL against 127.0.0.1:6379
+    kevy-cli -p 6004                    # REPL against kevy default port
+    kevy-cli -h prod.internal ping      # one-shot PING
+    kevy-cli -p 6004 set greet hello    # one-shot SET, exits 0
+
+Docs: https://github.com/goliajp/kevy"
+    );
 }
 
 /// Parsed command-line configuration.
