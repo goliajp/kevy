@@ -69,6 +69,8 @@
 
 mod conn;
 mod exec;
+mod exec_op;
+mod exec_pubsub;
 mod inbox;
 mod message;
 mod reduce;
