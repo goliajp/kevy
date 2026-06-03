@@ -17,5 +17,5 @@ categories = ["database-implementations", "caching", "embedded"]
 workspace = true
 
 [dependencies]
-kevy-store = { path = "../kevy-store", version = "0.1" }
-kevy-persist = { path = "../kevy-persist", version = "0.1" }
+kevy-store = { path = "../kevy-store", version = "1.0.1" }
+kevy-persist = { path = "../kevy-persist", version = "1.0.1" }
