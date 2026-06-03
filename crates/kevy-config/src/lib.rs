@@ -124,6 +124,84 @@ impl Config {
         }
         Ok(())
     }
+
+    /// Render the current config as a standard-template TOML file —
+    /// every field, in stable section/key order, with no comments. Used
+    /// by `CONFIG REWRITE`; the loss of any inline comments the user
+    /// had in their hand-edited file is the documented v1.0 trade-off
+    /// (v1.x will preserve them).
+    ///
+    /// Round-trips: feeding the output back through [`Self::from_toml_str`]
+    /// reconstructs an equivalent `Config` (modulo `source_path`).
+    pub fn to_toml_string(&self) -> String {
+        use std::fmt::Write;
+        let mut out = String::new();
+        let [a, b, c, d] = self.server.bind;
+        let _ = writeln!(out, "[server]");
+        let _ = writeln!(out, "bind     = \"{a}.{b}.{c}.{d}\"");
+        let _ = writeln!(out, "port     = {}", self.server.port);
+        let _ = writeln!(out, "threads  = {}", self.server.threads);
+        let _ = writeln!(
+            out,
+            "data_dir = \"{}\"",
+            escape_toml_basic_string(&self.server.data_dir.display().to_string()),
+        );
+        let _ = writeln!(out);
+        let _ = writeln!(out, "[persistence]");
+        let _ = writeln!(out, "aof                          = {}", self.persistence.aof);
+        let _ = writeln!(
+            out,
+            "appendfsync                  = \"{}\"",
+            self.persistence.appendfsync.as_str(),
+        );
+        let _ = writeln!(
+            out,
+            "auto_aof_rewrite_percentage  = {}",
+            self.persistence.auto_aof_rewrite_percentage,
+        );
+        let _ = writeln!(
+            out,
+            "auto_aof_rewrite_min_size    = {}",
+            self.persistence.auto_aof_rewrite_min_size,
+        );
+        let _ = writeln!(out);
+        let _ = writeln!(out, "[memory]");
+        let _ = writeln!(out, "maxmemory         = {}", self.memory.maxmemory);
+        let _ = writeln!(
+            out,
+            "maxmemory_policy  = \"{}\"",
+            self.memory.maxmemory_policy.as_str(),
+        );
+        let _ = writeln!(out);
+        let _ = writeln!(out, "[expiry]");
+        let _ = writeln!(out, "hz       = {}", self.expiry.hz);
+        let _ = writeln!(out, "sample   = {}", self.expiry.sample);
+        let _ = writeln!(out);
+        let _ = writeln!(out, "[log]");
+        let _ = writeln!(out, "level    = \"{}\"", self.log.level.as_str());
+        let _ = writeln!(
+            out,
+            "output   = \"{}\"",
+            escape_toml_basic_string(&self.log.output.as_str()),
+        );
+        out
+    }
+}
+
+/// Escape a string for use inside a TOML basic (double-quoted) string.
+/// `\` and `"` need backslash escape; other ASCII passes through. The
+/// values we emit (paths, enum names) never contain control characters,
+/// so this is sufficient for our serialiser.
+fn escape_toml_basic_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 /// Optional CLI overrides applied via [`Config::merge_cli`].
@@ -212,5 +290,47 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.server.bind, [0, 0, 0, 0]);
         assert_eq!(cfg.server.port, 7001);
+    }
+
+    #[test]
+    fn to_toml_string_round_trips_through_parser() {
+        let mut original = Config::default();
+        original.server.bind = [10, 0, 0, 1];
+        original.server.port = 7779;
+        original.server.threads = 4;
+        original.server.data_dir = PathBuf::from("/var/lib/kevy");
+        original.persistence.aof = false;
+        original.persistence.appendfsync = AppendFsync::Always;
+        original.persistence.auto_aof_rewrite_percentage = 200;
+        original.persistence.auto_aof_rewrite_min_size = 128 * 1024 * 1024;
+        original.memory.maxmemory = 4 * 1024 * 1024 * 1024;
+        original.memory.maxmemory_policy = EvictionPolicy::AllKeysLfu;
+        original.expiry.hz = 100;
+        original.expiry.sample = 50;
+        original.log.level = LogLevel::Warn;
+        original.log.output = LogOutput::File(PathBuf::from("/var/log/kevy.log"));
+
+        let toml_text = original.to_toml_string();
+        let mut reparsed = Config::from_toml_str(&toml_text, None).unwrap_or_else(|e| {
+            panic!("to_toml_string output did not reparse: {e}\n--- TOML ---\n{toml_text}")
+        });
+        // Re-parsing sets source_path only when one is passed; the live
+        // config's source_path is not part of the wire format.
+        reparsed.source_path = original.source_path.clone();
+        assert_eq!(original, reparsed);
+    }
+
+    #[test]
+    fn to_toml_string_escapes_quotes_and_backslashes_in_paths() {
+        let mut cfg = Config::default();
+        cfg.server.data_dir = PathBuf::from(r#"/path with "quote" and \back"#);
+        let text = cfg.to_toml_string();
+        assert!(
+            text.contains(r#"data_dir = "/path with \"quote\" and \\back""#),
+            "did not escape correctly: {text}"
+        );
+        // Round-trip the escape.
+        let reparsed = Config::from_toml_str(&text, None).expect("reparse");
+        assert_eq!(reparsed.server.data_dir, cfg.server.data_dir);
     }
 }

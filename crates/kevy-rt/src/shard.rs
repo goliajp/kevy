@@ -93,7 +93,7 @@ const PARK_TIMEOUT_MS: i32 = 50;
 /// we only consult the wall clock every N iterations. In busy-poll mode
 /// (~1M iters/s) N=256 ⇒ ~3.9k tick checks/s, plenty for a 10 Hz reaper;
 /// in parked mode each `wait` itself takes ≥ 1 ms so we always check.
-const TICK_CHECK_EVERY: u32 = 256;
+pub(crate) const TICK_CHECK_EVERY: u32 = 256;
 
 impl<C: Commands> Shard<C> {
     /// This shard's snapshot file: `<data_dir>/dump-<id>.rdb`.
@@ -136,7 +136,7 @@ impl<C: Commands> Shard<C> {
         let waker_fd = self.waker.read_fd();
         let me = self.id;
 
-        let tick_interval = match self.commands.shard_tick_interval_ms() {
+        let mut tick_interval = match self.commands.shard_tick_interval_ms() {
             0 => None,
             ms => Some(Duration::from_millis(ms)),
         };
@@ -220,6 +220,7 @@ impl<C: Commands> Shard<C> {
                     let now = Instant::now();
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
+                        self.apply_live_runtime_config(&mut tick_interval);
                         self.maybe_auto_rewrite_aof();
                         last_tick = now;
                     }
@@ -244,7 +245,40 @@ impl<C: Commands> Shard<C> {
     /// thousands of writes per check. No-op when AOF is disabled, when the
     /// `auto_aof_rewrite_pct` knob is `0`, or when the current AOF is
     /// smaller than `auto_aof_rewrite_min_size`.
-    fn maybe_auto_rewrite_aof(&mut self) {
+    /// Pull the live runtime knobs from the [`crate::Commands`] impl
+    /// and apply each `Some` to the shard's state. Called from the
+    /// tick branch (once per `tick_interval_ms`) so the cost is
+    /// amortised across thousands of commands; embedders that never
+    /// hot-swap inherit the trait default (all-None → zero work
+    /// beyond one struct build).
+    pub(crate) fn apply_live_runtime_config(&mut self, tick_interval: &mut Option<Duration>) {
+        let live = self.commands.live_runtime_config();
+        if let Some(f) = live.appendfsync
+            && let Some(aof) = &mut self.aof
+        {
+            // A failure to flush on policy tighten is logged but doesn't
+            // bring the shard down — the policy itself still takes effect
+            // and subsequent appends will retry the sync.
+            if let Err(e) = aof.set_fsync(f) {
+                eprintln!("kevy: shard {} set_fsync failed: {e}", self.id);
+            }
+        }
+        if let Some(p) = live.auto_aof_rewrite_pct {
+            self.auto_aof_rewrite_pct = p;
+        }
+        if let Some(m) = live.auto_aof_rewrite_min_size {
+            self.auto_aof_rewrite_min_size = m;
+        }
+        if let Some(ms) = live.tick_interval_ms {
+            *tick_interval = if ms == 0 {
+                None
+            } else {
+                Some(Duration::from_millis(ms))
+            };
+        }
+    }
+
+    pub(crate) fn maybe_auto_rewrite_aof(&mut self) {
         if self.auto_aof_rewrite_pct == 0 {
             return;
         }

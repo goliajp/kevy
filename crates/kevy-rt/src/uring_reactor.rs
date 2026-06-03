@@ -18,7 +18,7 @@
 use crate::Commands;
 use crate::conn::Conn;
 use crate::message::{Inbound, Op};
-use crate::shard::Shard;
+use crate::shard::{Shard, TICK_CHECK_EVERY};
 use kevy_persist::{load_snapshot, replay_aof};
 use kevy_resp::parse_command_borrowed;
 use kevy_sys::Socket;
@@ -27,7 +27,7 @@ use kevy_map::KevyMap;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// SQ/CQ depth for the per-shard ring.
 const URING_ENTRIES: u32 = 256;
@@ -108,6 +108,17 @@ impl<C: Commands> Shard<C> {
         let mut cids: Vec<u64> = Vec::new();
         let mut idle_spins: u32 = 0;
 
+        // Active reaper / hot-config / auto-rewrite tick — same shape as the
+        // epoll path in `shard::run`. Without this branch the io_uring
+        // reactor would silently skip TTL active expiry, auto-AOF-rewrite,
+        // and `CONFIG SET` propagation (lazy expiry on access still works).
+        let mut tick_interval = match self.commands.shard_tick_interval_ms() {
+            0 => None,
+            ms => Some(Duration::from_millis(ms)),
+        };
+        let mut last_tick = Instant::now();
+        let mut tick_check_counter: u32 = 0;
+
         while !stop.load(Ordering::Relaxed) {
             // Always keep one accept in flight.
             if !accept_inflight {
@@ -156,6 +167,23 @@ impl<C: Commands> Shard<C> {
                 let _ = aof.maybe_sync();
             }
             self.uring_reap_closed(&mut io);
+
+            // Tick path: throttled wall-clock check, then the hot-config /
+            // active-reaper / auto-rewrite trio. Same throttle as epoll
+            // (256-iter counter + `tick_interval` elapsed gate).
+            if let Some(iv) = tick_interval {
+                tick_check_counter = tick_check_counter.wrapping_add(1);
+                if tick_check_counter >= TICK_CHECK_EVERY {
+                    tick_check_counter = 0;
+                    let now = Instant::now();
+                    if now.duration_since(last_tick) >= iv {
+                        self.commands.on_shard_tick(&mut self.store);
+                        self.apply_live_runtime_config(&mut tick_interval);
+                        self.maybe_auto_rewrite_aof();
+                        last_tick = now;
+                    }
+                }
+            }
 
             // Busy-poll while there's recent work, so a -c1 client's next request
             // is reaped immediately (the old unconditional 200µs sleep added that
