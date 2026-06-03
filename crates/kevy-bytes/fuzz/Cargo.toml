@@ -1,0 +1,30 @@
+[package]
+name = "kevy-bytes-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Fuzz workspace is intentionally isolated from the main workspace
+# (cargo-fuzz pulls libfuzzer-sys, a third-party crate; main policy is
+# "0 crates.io deps"). The fuzz/ dir is a dev-only adjunct, not part of
+# the published crate.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.kevy-bytes]
+path = ".."
+
+[dependencies.kevy-hash]
+path = "../../kevy-hash"
+
+[[bin]]
+name = "cross_arm"
+path = "fuzz_targets/cross_arm.rs"
+test = false
+doc = false
+bench = false

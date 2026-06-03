@@ -1,0 +1,27 @@
+[package]
+name = "kevy-persist-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Fuzz workspace is intentionally isolated from the main workspace
+# (cargo-fuzz pulls libfuzzer-sys, a third-party crate; main policy is
+# "0 crates.io deps"). The fuzz/ dir is a dev-only adjunct, not part of
+# the published crate.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.kevy-persist]
+path = ".."
+
+[[bin]]
+name = "replay_aof"
+path = "fuzz_targets/replay_aof.rs"
+test = false
+doc = false
+bench = false
