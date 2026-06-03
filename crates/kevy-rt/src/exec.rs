@@ -262,17 +262,33 @@ impl<C: Commands> Shard<C> {
 
     /// Translate a multi-target [`Route`] into a `(targets, aggregator)` pair.
     /// `route` is consumed so `Keys(pat)` / `Scan(pat)` can move the owned
-    /// pattern into `fanout_keys` without an extra clone. Single-target /
-    /// pub/sub routes are unreachable — they go through dedicated paths.
+    /// pattern into `fanout_keys` without an extra clone.
+    ///
+    /// Single-target and pub/sub routes should never reach here — they go
+    /// through dedicated paths in `start_command`. If a routing-layer bug
+    /// ever sends one through, we emit a WARN and produce an empty target
+    /// list so the conn gets a nil/0 reply rather than crashing the
+    /// reactor for every other in-flight command on the shard. The
+    /// connection sees an observably-wrong reply; nothing else dies.
     fn build_multi_targets<A: ArgvView + ?Sized>(
         &self,
         args: &A,
         route: Route,
     ) -> (Vec<(usize, Op)>, Agg) {
         match route {
-            Route::Local | Route::Single(_) => unreachable!("handled by start_single"),
+            Route::Local | Route::Single(_) => {
+                eprintln!(
+                    "kevy WARN: build_multi_targets reached single-target route {route:?} \
+                     — routing bug; replying nil to the client"
+                );
+                (Vec::new(), Agg::First(None))
+            }
             Route::Subscribe | Route::Unsubscribe | Route::Publish => {
-                unreachable!("handled by start_command pub/sub branch")
+                eprintln!(
+                    "kevy WARN: build_multi_targets reached pub/sub route {route:?} \
+                     — routing bug; replying nil to the client"
+                );
+                (Vec::new(), Agg::First(None))
             }
             Route::DelKeys => (self.group_keys(args, Op::Del), Agg::SumInt(0)),
             Route::ExistsKeys => (self.group_keys(args, Op::Exists), Agg::SumInt(0)),

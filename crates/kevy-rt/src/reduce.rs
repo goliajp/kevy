@@ -95,7 +95,14 @@ fn finalize_gather(op: MultiOp, keys: Vec<Vec<u8>>, got: HashMap<Vec<u8>, Gather
                 MultiOp::SInter => set_intersect(&sets),
                 MultiOp::SUnion => set_union(&sets),
                 MultiOp::SDiff => set_diff(&sets),
-                MultiOp::Mget => unreachable!(),
+                // The outer match already routed Mget to its own arm
+                // above; reaching this arm would mean the outer
+                // dispatcher's wildcard caught Mget after a future
+                // refactor. Replying empty is observably wrong but
+                // doesn't crash the shard. Visible empty-array reply
+                // makes the bug catchable; an `unreachable!()` would
+                // crash-loop the whole reactor.
+                MultiOp::Mget => Vec::new(),
             };
             encode_array_len(&mut out, result.len() as i64);
             for m in &result {

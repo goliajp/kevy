@@ -84,6 +84,7 @@ pub use kevy_store::Store;
 pub use runtime::Runtime;
 
 /// How a command maps onto shards.
+#[derive(Debug)]
 pub enum Route {
     /// Keyless; execute on the connection's own shard (e.g. PING).
     Local,

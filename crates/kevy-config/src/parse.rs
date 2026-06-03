@@ -97,9 +97,14 @@ impl Parser {
 
     fn parse_assignment(&mut self) -> Result<(), ConfigError> {
         let key_span = self.tokens[self.pos].clone();
+        // By contract, `parse_all` only dispatches here when the head is
+        // `Token::Ident`. If a future refactor of the dispatcher changes
+        // that, we want a structured error — not a panic in a public
+        // `Config::load` call. Treat a non-Ident head as a parser
+        // invariant violation reported the same way a malformed file is.
         let key = match key_span.tok {
             Token::Ident(k) => k,
-            _ => unreachable!("parse_assignment called without Ident at head"),
+            _ => return Err(unexpected(&key_span, "expected key identifier".into())),
         };
         let line = key_span.line;
         self.pos += 1;
