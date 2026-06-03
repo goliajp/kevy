@@ -246,6 +246,30 @@ impl Connection {
         }
     }
 
+    /// `SINTER key [key ...]` — intersection of all sets.
+    pub fn sinter(&mut self, keys: &[&[u8]]) -> io::Result<Vec<Vec<u8>>> {
+        match self {
+            Self::Embedded(s) => embed_set_combine(s, keys, SetOp::Inter),
+            Self::Remote(c) => remote_set_combine(c, b"SINTER", keys),
+        }
+    }
+
+    /// `SUNION key [key ...]` — union of all sets.
+    pub fn sunion(&mut self, keys: &[&[u8]]) -> io::Result<Vec<Vec<u8>>> {
+        match self {
+            Self::Embedded(s) => embed_set_combine(s, keys, SetOp::Union),
+            Self::Remote(c) => remote_set_combine(c, b"SUNION", keys),
+        }
+    }
+
+    /// `SDIFF key [key ...]` — members of the first set absent from the rest.
+    pub fn sdiff(&mut self, keys: &[&[u8]]) -> io::Result<Vec<Vec<u8>>> {
+        match self {
+            Self::Embedded(s) => embed_set_combine(s, keys, SetOp::Diff),
+            Self::Remote(c) => remote_set_combine(c, b"SDIFF", keys),
+        }
+    }
+
     // ===== Sorted set =====
 
     /// `ZADD key score member [score member ...]`. Returns count of newly
@@ -390,6 +414,57 @@ fn set_multi(
     }
 }
 
+// Set-combine plumbing: each backend's path computes the intersection /
+// union / difference of N sets identified by `keys`.
+
+#[derive(Clone, Copy)]
+enum SetOp {
+    Inter,
+    Union,
+    Diff,
+}
+
+fn embed_set_combine(
+    s: &kevy_embedded::Store,
+    keys: &[&[u8]],
+    op: SetOp,
+) -> io::Result<Vec<Vec<u8>>> {
+    use std::collections::HashSet;
+    if keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let snapshots: Vec<Vec<Vec<u8>>> = keys
+        .iter()
+        .map(|k| s.smembers(k))
+        .collect::<io::Result<_>>()?;
+    let mut iter = snapshots.into_iter();
+    let mut acc: HashSet<Vec<u8>> = iter.next().unwrap_or_default().into_iter().collect();
+    for rest in iter {
+        let other: HashSet<Vec<u8>> = rest.into_iter().collect();
+        acc = match op {
+            SetOp::Inter => acc.intersection(&other).cloned().collect(),
+            SetOp::Union => acc.union(&other).cloned().collect(),
+            SetOp::Diff => acc.difference(&other).cloned().collect(),
+        };
+    }
+    Ok(acc.into_iter().collect())
+}
+
+fn remote_set_combine(
+    c: &mut RespClient,
+    verb: &[u8],
+    keys: &[&[u8]],
+) -> io::Result<Vec<Vec<u8>>> {
+    let mut args = Vec::with_capacity(keys.len() + 1);
+    args.push(verb.to_vec());
+    args.extend(keys.iter().map(|k| k.to_vec()));
+    match c.request(&args)? {
+        Reply::Array(items) => array_to_bulks(items),
+        Reply::Error(e) => Err(io::Error::other(string(e))),
+        other => Err(unexpected(other)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,5 +555,30 @@ mod tests {
 
         assert_eq!(c.zrem(b"lb", &[&b"carol"[..]]).unwrap(), 1);
         assert_eq!(c.zcard(b"lb").unwrap(), 2);
+    }
+
+    #[test]
+    fn embedded_set_combine_ops() {
+        let mut c = Connection::open("mem://").unwrap();
+        c.sadd(b"a", &[&b"x"[..], &b"y"[..], &b"z"[..]]).unwrap();
+        c.sadd(b"b", &[&b"y"[..], &b"z"[..], &b"w"[..]]).unwrap();
+
+        let mut inter = c.sinter(&[&b"a"[..], &b"b"[..]]).unwrap();
+        inter.sort();
+        assert_eq!(inter, vec![b"y".to_vec(), b"z".to_vec()]);
+
+        let mut union = c.sunion(&[&b"a"[..], &b"b"[..]]).unwrap();
+        union.sort();
+        assert_eq!(
+            union,
+            vec![b"w".to_vec(), b"x".to_vec(), b"y".to_vec(), b"z".to_vec()]
+        );
+
+        let mut diff = c.sdiff(&[&b"a"[..], &b"b"[..]]).unwrap();
+        diff.sort();
+        assert_eq!(diff, vec![b"x".to_vec()]);
+
+        // Empty input → empty output (no panic).
+        assert!(c.sinter(&[]).unwrap().is_empty());
     }
 }

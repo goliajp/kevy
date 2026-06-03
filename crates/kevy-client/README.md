@@ -53,11 +53,12 @@ environment variable / config file — develop against `mem://`,
 integration-test against `file:///tmp/test`, deploy against
 `kevy://prod-cache:6379`. No code change.
 
-## Command coverage (v1.3.0)
+## Command coverage (v1.4.0)
 
-All five Redis data types plus generic-key ops, persistence, and
-the full pub/sub cycle including in-process embedded delivery.
-Methods on `Connection`:
+All five Redis data types plus generic-key ops, persistence, the full
+pub/sub cycle (including in-process embedded delivery), multi-key
+operations, scan/keys, and `MULTI`/`EXEC`/`DISCARD` transactions on the
+remote backend. Methods on `Connection`:
 
 **Connection / generic:** `ping`, `dbsize`, `flush`, `type_of`,
 `exists`, `del`, `expire`, `persist`, `ttl_ms`.
@@ -71,6 +72,25 @@ Methods on `Connection`:
 **Set:** `sadd`, `srem`, `smembers`, `scard`, `sismember`.
 
 **Sorted set:** `zadd`, `zrem`, `zscore`, `zcard`, `zrange`.
+
+**Multi-key (v1.4.0):** `mget`, `mset`, `sinter`, `sunion`, `sdiff`.
+
+**Keyspace iteration (v1.4.0):** `keys(pattern)`, `scan(cursor, pattern, count)`,
+`randomkey`. Embedded `scan` finishes in one round (any non-zero cursor
+returns empty); the remote backend honours the server's real cursor.
+
+**Transactions (v1.4.0, remote only):** `conn.multi()` → `Transaction`
+handle with `queue(&[verb, args...])` / `exec()` / `discard()`. Embedded
+returns `ErrorKind::Unsupported` — every Connection method already
+serialises on the embed mutex, so MULTI's locking guarantee maps to a
+no-op there.
+
+```rust
+let mut txn = conn.multi()?;
+txn.queue(&[b"SET", b"counter", b"0"])?;
+txn.queue(&[b"INCR", b"counter"])?;
+let replies = txn.exec()?;  // Vec<kevy_resp::Reply>
+```
 
 **Pub/sub:** `Connection::publish` for the producer side. The consumer
 side is `Subscriber`, a separate type with its own backing channel
