@@ -39,7 +39,7 @@
 mod aof;
 
 pub use aof::{Aof, Fsync, RewriteStats};
-pub use kevy_resp::Argv;
+pub use kevy_resp::{Argv, ArgvView};
 use kevy_store::{Store, Value};
 // ZSet snapshot iterates ordered (member, score) pairs via `Value::ZSet`.
 use std::fs::File;
@@ -379,9 +379,10 @@ fn fmt_zset_score(s: f64) -> Vec<u8> {
 /// Cheap byte-count estimator for a single multi-bulk frame:
 /// `*<n>\r\n` + per-arg `$<len>\r\n<bytes>\r\n`. No allocation, no
 /// double-pass — accurate to within a couple of bytes per arg.
-pub(crate) fn estimate_multibulk_bytes(args: &Argv) -> u64 {
+pub(crate) fn estimate_multibulk_bytes<A: ArgvView + ?Sized>(args: &A) -> u64 {
     let mut n: u64 = 3 + decimal_digits(args.len() as u64) as u64;
-    for a in args.iter() {
+    for i in 0..args.len() {
+        let a = &args[i];
         n += 3 + decimal_digits(a.len() as u64) as u64 + a.len() as u64 + 2;
     }
     n
@@ -426,9 +427,13 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn write_multibulk<W: Write>(w: &mut W, args: &Argv) -> io::Result<()> {
+pub(crate) fn write_multibulk<W: Write, A: ArgvView + ?Sized>(
+    w: &mut W,
+    args: &A,
+) -> io::Result<()> {
     write!(w, "*{}\r\n", args.len())?;
-    for a in args.iter() {
+    for i in 0..args.len() {
+        let a = &args[i];
         write!(w, "${}\r\n", a.len())?;
         w.write_all(a)?;
         w.write_all(b"\r\n")?;

@@ -16,7 +16,6 @@ use crate::Commands;
 use crate::conn::Conn;
 use crate::message::{Inbound, PubMsg, PubSubReg, ReqBatch};
 use kevy_persist::{Aof, load_snapshot, replay_aof};
-use kevy_resp::Argv;
 use kevy_ring::{Consumer, Producer};
 use kevy_store::Store;
 use kevy_sys::{Event, Poller, Socket, Waker};
@@ -83,12 +82,6 @@ pub(crate) struct Shard<C: Commands> {
     /// not one per command — amortizing the ring/fold tax that drags many
     /// shards below single-shard throughput.
     pub(crate) request_batch: Vec<ReqBatch>,
-    /// Reusable scratch `Argv` for the LOCAL parse hot path. Per-cmd
-    /// `parse_command_into` clears + refills this in place, so the per-cmd
-    /// malloc rate amortises to ~0 after the first few cmds warm `buf` and
-    /// `ends` capacities. Cross-shard forwards clone this into an owned
-    /// `Argv` to send (one alloc per cross-shard cmd — non-hot path).
-    pub(crate) scratch_argv: Argv,
 }
 
 /// Iterations to busy-poll (timeout 0) after the last work before parking.

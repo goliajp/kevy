@@ -12,12 +12,12 @@ use crate::message::{
 use crate::reduce::{drain_front, materialize, shard_of};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route, TxnKind};
-use kevy_resp::{Argv, encode_array_len};
+use kevy_resp::{ArgvView, encode_array_len};
 use std::collections::HashMap;
 
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
-    pub(crate) fn handle_command(&mut self, conn_id: u64, args: &Argv) {
+    pub(crate) fn handle_command<A: ArgvView + ?Sized>(&mut self, conn_id: u64, args: &A) {
         // One verb-resolution per cmd (was 4: txn_kind + route + is_quit +
         // is_write each scanned the verb separately). KevyCommands overrides
         // resolve() with a single match; non-overriding impls still pay 4×.
@@ -48,7 +48,7 @@ impl<C: Commands> Shard<C> {
             (true, TxnKind::Exec) => self.exec_transaction(conn_id),
             (true, TxnKind::Other) => {
                 if let Some(q) = self.conns.get_mut(&conn_id).and_then(|c| c.multi.as_mut()) {
-                    q.push(args.clone());
+                    q.push(args.to_argv());
                 }
                 self.immediate_reply(conn_id, b"+QUEUED\r\n".to_vec());
             }
@@ -95,7 +95,12 @@ impl<C: Commands> Shard<C> {
     }
 
     /// Assign a seq, fan the command out to the owning shard(s), fold local parts.
-    fn start_command(&mut self, conn_id: u64, args: &Argv, resolved: ResolvedCmd) {
+    fn start_command<A: ArgvView + ?Sized>(
+        &mut self,
+        conn_id: u64,
+        args: &A,
+        resolved: ResolvedCmd,
+    ) {
         let seq = match self.conns.get_mut(&conn_id) {
             Some(c) => {
                 let s = c.next_seq;
@@ -168,13 +173,13 @@ impl<C: Commands> Shard<C> {
             }
             if shard == self.id {
                 // Local-but-not-fast-path: only here we need an owned Argv to
-                // hand to exec_op via Op::Dispatch. Clone once.
-                let part = self.exec_op(Op::Dispatch(args.clone()));
+                // hand to exec_op via Op::Dispatch.
+                let part = self.exec_op(Op::Dispatch(args.to_argv()));
                 self.fold(conn_id, seq, part);
             } else {
-                // Cross-shard forward: one Argv clone per forwarded cmd. The
+                // Cross-shard forward: materialise owned at the handoff. The
                 // -c50 single-shard hot path never reaches here.
-                self.request_batch[shard].push((conn_id, seq, args.clone()));
+                self.request_batch[shard].push((conn_id, seq, args.to_argv()));
             }
             return;
         }
@@ -275,13 +280,13 @@ impl<C: Commands> Shard<C> {
     }
 
     /// Group `args[1..]` keys by shard for a cross-shard gather.
-    fn build_gather(
+    fn build_gather<A: ArgvView + ?Sized>(
         &self,
-        args: &Argv,
+        args: &A,
         kind: GatherKind,
         op: MultiOp,
     ) -> (Vec<(usize, Op)>, Agg) {
-        let keys: Vec<Vec<u8>> = args.iter().skip(1).map(|k| k.to_vec()).collect();
+        let keys: Vec<Vec<u8>> = (1..args.len()).map(|i| args[i].to_vec()).collect();
         let mut by_shard: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
         for k in &keys {
             by_shard
@@ -342,9 +347,14 @@ impl<C: Commands> Shard<C> {
     }
 
     /// Split `args[1..]` (keys) by owning shard.
-    fn group_keys(&self, args: &Argv, mk: fn(Vec<Vec<u8>>) -> Op) -> Vec<(usize, Op)> {
+    fn group_keys<A: ArgvView + ?Sized>(
+        &self,
+        args: &A,
+        mk: fn(Vec<Vec<u8>>) -> Op,
+    ) -> Vec<(usize, Op)> {
         let mut by_shard: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
-        for key in args.iter().skip(1) {
+        for i in 1..args.len() {
+            let key = &args[i];
             by_shard
                 .entry(shard_of(key, self.nshards))
                 .or_default()
@@ -362,7 +372,7 @@ impl<C: Commands> Shard<C> {
     // `impl Shard`, but split so this file stays under 500 LOC.
 
     /// Append a mutating command to this shard's AOF, if enabled (best-effort).
-    pub(crate) fn log(&mut self, args: &Argv) {
+    pub(crate) fn log<A: ArgvView + ?Sized>(&mut self, args: &A) {
         if let Some(aof) = &mut self.aof
             && let Err(e) = aof.append(args)
         {

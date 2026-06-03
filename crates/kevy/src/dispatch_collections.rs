@@ -10,16 +10,16 @@
 
 use crate::cmd::*;
 use kevy_resp::{
-    Argv, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
+    ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
     encode_simple_string,
 };
 use kevy_store::Store;
 
 /// Hash commands.
-pub(crate) fn dispatch_hash(
+pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,
-    args: &Argv,
+    args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
     match cmd {
@@ -120,10 +120,10 @@ pub(crate) fn dispatch_hash(
 }
 
 /// List commands.
-pub(crate) fn dispatch_list(
+pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,
-    args: &Argv,
+    args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
     match cmd {
@@ -211,10 +211,10 @@ pub(crate) fn dispatch_list(
 }
 
 /// Sorted-set commands.
-pub(crate) fn dispatch_zset(
+pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,
-    args: &Argv,
+    args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
     match cmd {

@@ -6,14 +6,19 @@
 
 use crate::cmd::{ERR_NOT_INT, arg_i64, emit_int_result, store_err, wrong_args};
 use kevy_resp::{
-    Argv, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
+    ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
     encode_simple_string,
 };
 use kevy_store::Store;
 use std::time::Duration;
 
 /// `SPOP`/`SRANDMEMBER key [count]` — single reply without count, array with it.
-pub(crate) fn cmd_spop_rand(store: &mut Store, args: &Argv, remove: bool, out: &mut Vec<u8>) {
+pub(crate) fn cmd_spop_rand<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    remove: bool,
+    out: &mut Vec<u8>,
+) {
     let name = if remove { "spop" } else { "srandmember" };
     if args.len() < 2 || args.len() > 3 {
         return wrong_args(out, name);
@@ -51,7 +56,12 @@ pub(crate) fn cmd_spop_rand(store: &mut Store, args: &Argv, remove: bool, out: &
 }
 
 /// `LPOP`/`RPOP key [count]` — single reply without count, array with it.
-pub(crate) fn cmd_pop(store: &mut Store, args: &Argv, tail: bool, out: &mut Vec<u8>) {
+pub(crate) fn cmd_pop<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    tail: bool,
+    out: &mut Vec<u8>,
+) {
     let name = if tail { "rpop" } else { "lpop" };
     if args.len() < 2 || args.len() > 3 {
         return wrong_args(out, name);
@@ -93,7 +103,7 @@ pub(crate) fn cmd_pop(store: &mut Store, args: &Argv, tail: bool, out: &mut Vec<
 }
 
 /// `SET key value [EX s | PX ms] [NX | XX]`.
-pub(crate) fn cmd_set(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
+pub(crate) fn cmd_set<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 3 {
         return wrong_args(out, "set");
     }
@@ -135,9 +145,9 @@ pub(crate) fn cmd_set(store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
 }
 
 /// `SETEX`/`PSETEX key ttl value`.
-pub(crate) fn cmd_setex(
+pub(crate) fn cmd_setex<A: ArgvView + ?Sized>(
     store: &mut Store,
-    args: &Argv,
+    args: &A,
     unit_ms: i64,
     name: &str,
     out: &mut Vec<u8>,
@@ -159,9 +169,9 @@ pub(crate) fn cmd_setex(
     encode_simple_string(out, "OK");
 }
 
-pub(crate) fn cmd_incr(
+pub(crate) fn cmd_incr<A: ArgvView + ?Sized>(
     store: &mut Store,
-    args: &Argv,
+    args: &A,
     delta: i64,
     cmd: &str,
     out: &mut Vec<u8>,
@@ -172,9 +182,9 @@ pub(crate) fn cmd_incr(
     emit_int_result(store.incr_by(&args[1], delta), out);
 }
 
-pub(crate) fn cmd_incr_by(
+pub(crate) fn cmd_incr_by<A: ArgvView + ?Sized>(
     store: &mut Store,
-    args: &Argv,
+    args: &A,
     negate: bool,
     cmd: &str,
     out: &mut Vec<u8>,
@@ -196,9 +206,9 @@ pub(crate) fn cmd_incr_by(
 
 /// `EXPIRE`/`PEXPIRE`: non-positive TTL deletes the key (returning 1 if it
 /// existed), matching Redis.
-pub(crate) fn cmd_expire(
+pub(crate) fn cmd_expire<A: ArgvView + ?Sized>(
     store: &mut Store,
-    args: &Argv,
+    args: &A,
     unit_ms: i64,
     cmd: &str,
     out: &mut Vec<u8>,
@@ -224,9 +234,9 @@ pub(crate) fn cmd_expire(
 }
 
 /// `TTL` (seconds) / `PTTL` (millis). Pass-through of the -2 / -1 sentinels.
-pub(crate) fn cmd_ttl(
+pub(crate) fn cmd_ttl<A: ArgvView + ?Sized>(
     store: &mut Store,
-    args: &Argv,
+    args: &A,
     in_secs: bool,
     cmd: &str,
     out: &mut Vec<u8>,

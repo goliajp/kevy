@@ -8,7 +8,7 @@
 
 use std::io;
 
-use kevy_resp::parse_command_into;
+use kevy_resp::parse_command_borrowed;
 
 use crate::Commands;
 use crate::message::{Inbound, Op};
@@ -16,10 +16,16 @@ use crate::shard::Shard;
 
 impl<C: Commands> Shard<C> {
     /// Socket readable: read until WouldBlock, then parse out every full
-    /// RESP command into `scratch_argv` and dispatch it. Zero-alloc hot
-    /// path; the in-cmd prefetch is issued before dispatch on the key (if
-    /// any) so the bucket line moves toward L1 while start_command /
-    /// handle_command's prologue runs.
+    /// RESP command and dispatch it.
+    ///
+    /// The local fast path dispatches straight from an `ArgvBorrowed` view
+    /// into the connection's read buffer — no per-cmd memcpy. We swap
+    /// `conn.input` onto the stack (`mem::take`) for the parse-and-dispatch
+    /// loop so the borrowed argv doesn't conflict with `&mut self`; after
+    /// each command we `drain(..consumed)` on the local buf, and finally
+    /// swap the buf back into the connection (if it still exists). Cross-
+    /// shard / MULTI queue / AOF call `args.to_argv()` at the handoff
+    /// juncture; only those paths still materialise an owned `Argv`.
     pub(crate) fn conn_readable(&mut self, conn_id: u64) -> io::Result<()> {
         {
             let Some(conn) = self.conns.get_mut(&conn_id) else {
@@ -42,41 +48,37 @@ impl<C: Commands> Shard<C> {
             }
         }
 
-        // Parse + dispatch via mem::replace so handle_command can take
-        // &mut self while we hold the parsed argv on the stack —
-        // `self.scratch_argv` is temporarily a default empty Argv during
-        // dispatch, restored after to keep buf+ends capacity warm.
+        // Swap conn.input onto the stack so parse_command_borrowed can lend
+        // it to ArgvBorrowed without colliding with &mut self in dispatch.
+        let mut input_buf = match self.conns.get_mut(&conn_id) {
+            Some(c) => std::mem::take(&mut c.input),
+            None => return Ok(()),
+        };
+
         let mut had_protocol_error = false;
         loop {
-            let consumed = {
-                let Some(conn) = self.conns.get_mut(&conn_id) else {
-                    return Ok(());
-                };
-                match parse_command_into(&conn.input, &mut self.scratch_argv) {
-                    Ok(Some(c)) => Some(c),
-                    Ok(None) => None,
-                    Err(_) => {
-                        had_protocol_error = true;
-                        None
-                    }
+            let parse = parse_command_borrowed(&input_buf);
+            let (argv, consumed) = match parse {
+                Ok(Some(t)) => t,
+                Ok(None) => break,
+                Err(_) => {
+                    had_protocol_error = true;
+                    break;
                 }
             };
-            match consumed {
-                Some(c) => {
-                    if let Some(conn) = self.conns.get_mut(&conn_id) {
-                        conn.input.drain(..c);
-                    } else {
-                        return Ok(());
-                    }
-                    let argv = std::mem::take(&mut self.scratch_argv);
-                    if let Some(key) = argv.get(1) {
-                        self.store.prefetch_for_key(key);
-                    }
-                    self.handle_command(conn_id, &argv);
-                    self.scratch_argv = argv;
-                }
-                None => break,
+            if let Some(key) = argv.get(1) {
+                self.store.prefetch_for_key(key);
             }
+            self.handle_command(conn_id, &argv);
+            drop(argv);
+            input_buf.drain(..consumed);
+            if !self.conns.contains_key(&conn_id) {
+                // Connection was closed mid-batch; drop the rest of the buf.
+                return Ok(());
+            }
+        }
+        if let Some(c) = self.conns.get_mut(&conn_id) {
+            c.input = input_buf;
         }
         if had_protocol_error {
             self.protocol_error(conn_id);

@@ -33,7 +33,7 @@
 #![forbid(unsafe_code)]
 
 use kevy_resp::{encode_error, parse_command};
-use kevy_rt::{Commands, ResolvedCmd, Route, Runtime, TxnKind};
+use kevy_rt::{ArgvView, Commands, ResolvedCmd, Route, Runtime, TxnKind};
 use kevy_store::Store;
 use kevy_sys::Socket;
 use std::io;
@@ -66,7 +66,7 @@ pub enum AfterDrain {
 pub struct KevyCommands;
 
 impl Commands for KevyCommands {
-    fn route(&self, args: &Argv) -> Route {
+    fn route<A: ArgvView + ?Sized>(&self, args: &A) -> Route {
         let Some(name) = args.first() else {
             return Route::Local;
         };
@@ -118,15 +118,15 @@ impl Commands for KevyCommands {
         }
     }
 
-    fn dispatch(&self, store: &mut Store, args: &Argv) -> Vec<u8> {
+    fn dispatch<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8> {
         dispatch(store, args)
     }
 
-    fn dispatch_into(&self, store: &mut Store, args: &Argv, out: &mut Vec<u8>) {
+    fn dispatch_into<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A, out: &mut Vec<u8>) {
         dispatch::dispatch_into(store, args, out)
     }
 
-    fn is_quit(&self, args: &Argv) -> bool {
+    fn is_quit<A: ArgvView + ?Sized>(&self, args: &A) -> bool {
         args.first()
             .is_some_and(|c| c.eq_ignore_ascii_case(b"QUIT"))
     }
@@ -166,7 +166,7 @@ impl Commands for KevyCommands {
         store.tick_expire(samples, 16);
     }
 
-    fn is_write(&self, args: &Argv) -> bool {
+    fn is_write<A: ArgvView + ?Sized>(&self, args: &A) -> bool {
         let Some(name) = args.first() else {
             return false;
         };
@@ -174,7 +174,7 @@ impl Commands for KevyCommands {
         cmd::is_write_verb(upper_verb(name, &mut buf))
     }
 
-    fn txn_kind(&self, args: &Argv) -> TxnKind {
+    fn txn_kind<A: ArgvView + ?Sized>(&self, args: &A) -> TxnKind {
         let Some(name) = args.first() else {
             return TxnKind::Other;
         };
@@ -191,7 +191,7 @@ impl Commands for KevyCommands {
     /// reads back txn_kind / route / is_quit / is_write without re-scanning
     /// the verb. This is `kevy-rt`'s primary hot-path optimization: every
     /// match arm uses the same `upper` buffer.
-    fn resolve(&self, args: &Argv) -> ResolvedCmd {
+    fn resolve<A: ArgvView + ?Sized>(&self, args: &A) -> ResolvedCmd {
         let Some(name) = args.first() else {
             return ResolvedCmd {
                 txn_kind: TxnKind::Other,
