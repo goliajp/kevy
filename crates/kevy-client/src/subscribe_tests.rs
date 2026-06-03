@@ -168,3 +168,14 @@ fn embed_different_url_names_are_isolated() {
     let err = sub.recv().unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::TimedOut);
 }
+
+#[test]
+fn subscriber_is_send_and_sync() {
+    // kevy_embedded::Subscription is now Send + Sync (Mutex-wrapped
+    // mpsc receiver/sender — see kevy-embedded 1.x release notes for
+    // the trade-off). TcpStream is also Send + Sync. Therefore
+    // kevy_client::Subscriber must also be Send + Sync — Arc<Subscriber>
+    // works across async tasks / spawn_blocking jobs.
+    fn require_send_sync<T: Send + Sync>() {}
+    require_send_sync::<Subscriber>();
+}

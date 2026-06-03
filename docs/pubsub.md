@@ -194,6 +194,79 @@ receiver count.
 **TLS / AUTH** are not supported. Front with stunnel + IP allowlist
 at the network boundary if you need them.
 
+## Async runtimes (tokio / async-std / smol)
+
+`Subscription` and `Subscriber` are `Send + Sync` — `Arc<Subscription>`
+works, so multiple async tasks (or `spawn_blocking` jobs) can share one
+handle. The blocking `recv` API is intentionally retained: kevy ships
+zero crates.io dependencies, so an async-runtime-agnostic future would
+have to be hand-built. Two clean patterns:
+
+**Pattern A — dedicated OS thread + runtime channel** (single consumer,
+no shared handle needed):
+
+```rust,no_run
+# use kevy_embedded::{Config, PubsubFrame, Store};
+# let store = Store::open(Config::default().with_ttl_reaper_manual())?;
+// Pseudocode — replace `runtime_channel` with tokio::sync::mpsc /
+// async_channel / etc. as your runtime dictates.
+let (tx, rx) = /* runtime_channel */;
+std::thread::spawn({
+    let store = store.clone();
+    move || {
+        let sub = store.subscribe(&[b"queue:notify"]);
+        while let Ok(frame) = sub.recv() {
+            if matches!(
+                frame,
+                PubsubFrame::Message { .. } | PubsubFrame::Pmessage { .. }
+            ) && tx.blocking_send(()).is_err()
+            {
+                break; // receiver dropped
+            }
+        }
+    }
+});
+// `rx` is the async-side handle; await it from your async loop.
+# Ok::<(), std::io::Error>(())
+```
+
+This is what mailrs's outbound-queue worker uses — small, long-lived
+task; avoids the tokio blocking-pool slot per recv.
+
+**Pattern B — `Arc<Subscription>` + `spawn_blocking`** (multiple async
+tasks share one handle):
+
+```rust,no_run
+# use kevy_embedded::{Config, Store};
+# use std::sync::Arc;
+# let store = Store::open(Config::default().with_ttl_reaper_manual())?;
+let sub = Arc::new(store.subscribe(&[b"queue:notify"]));
+// Each async task gets its own clone of the Arc and recvs via
+// spawn_blocking; the receiver mutex serialises concurrent recvs.
+// Each frame is delivered to exactly one task (NOT broadcast).
+//
+// For broadcast fanout (every consumer sees every message), open a
+// separate Subscription per consumer — they're cheap.
+let task_handle = {
+    let sub = sub.clone();
+    // tokio::task::spawn_blocking pseudo:
+    std::thread::spawn(move || {
+        loop {
+            match sub.recv() {
+                Ok(frame) => { /* process */ let _ = frame; }
+                Err(_) => break, // bus closed
+            }
+        }
+    })
+};
+# let _ = task_handle;
+# Ok::<(), std::io::Error>(())
+```
+
+`Subscription::try_recv` uses `try_lock` and returns `Ok(None)` under
+lock contention — the non-blocking contract is preserved even when
+another task holds the receiver via `recv`.
+
 ## Migrating from v1.2.0
 
 Source-compatible. The semantic change is `Connection::publish` on
