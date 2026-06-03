@@ -1,6 +1,6 @@
-name: Release kevy-client
+name: Release kevy-sys
 
-# Per-crate release dispatcher for kevy-client. Body lives in
+# Per-crate release dispatcher for kevy-sys. Body lives in
 # release-crate.yml (reusable); this file just binds the crate name
 # and surfaces the dispatch UI in the Actions tab. See release-crate.yml
 # header for the dispatch flow.
@@ -17,6 +17,6 @@ jobs:
   release:
     uses: ./.github/workflows/release-crate.yml
     with:
-      crate: kevy-client
+      crate: kevy-sys
       dry_run: ${{ inputs.dry_run }}
     secrets: inherit

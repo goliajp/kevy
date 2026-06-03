@@ -1,0 +1,173 @@
+name: Release a single crate (reusable)
+
+# Reusable workflow that publishes ONE crate to crates.io, tags the
+# release as `<crate>-v<version>`, and creates a matching GitHub
+# release. Called from per-crate `release-<crate>.yml` wrappers via
+# `workflow_call`. The shared body lives here so changes (e.g. tighter
+# gates, retry logic, sigstore signing) land in one place.
+#
+# Two release routes in the repo:
+#
+#   * release.yml — workspace-wide. Pushing a `vX.Y.Z` tag triggers
+#     a verify + 16-crate publish chain. Use this for a coordinated
+#     workspace bump.
+#
+#   * release-<crate>.yml (this body) — per-crate, manually dispatched.
+#     Use this when a single crate ships an independent minor/patch
+#     (e.g. kevy-client v1.5.0) without touching the rest of the
+#     workspace. Tag scheme `<crate>-v<version>` keeps the tag
+#     namespace orthogonal to the workspace `vX.Y.Z` line.
+#
+# Dispatch flow (per-crate):
+#   resolve version from Cargo.toml → refuse if `<crate>-v<version>`
+#   already exists → build --release → test --release → cargo publish
+#   (skip-success on "already uploaded" — supports backfilling a
+#   per-crate tag for a version that was first shipped via the
+#   workspace pipeline) → git tag → push tag → gh release create.
+#
+# Tagging happens AFTER publish so a publish failure can't leave a
+# phantom tag pointing at a commit whose crate never reached crates.io.
+
+on:
+  workflow_call:
+    inputs:
+      crate:
+        description: 'Crate directory under crates/ (e.g. kevy-client)'
+        type: string
+        required: true
+      dry_run:
+        description: 'Build + test + cargo publish --dry-run; do not publish, tag, or release'
+        type: boolean
+        default: false
+    secrets:
+      CARGO_REGISTRY_TOKEN:
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  release:
+    name: Release ${{ inputs.crate }}
+    runs-on: ubuntu-latest
+    permissions:
+      # contents:write is required to push the tag and create a release.
+      contents: write
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need full history so `git tag` resolves and `git push` works
+          # without "shallow clone" errors.
+          fetch-depth: 0
+
+      - name: Install Rust stable
+        shell: bash
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+
+      - name: Resolve crate version (handles workspace inheritance)
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          crate='${{ inputs.crate }}'
+          dir="crates/$crate"
+          if [ ! -f "$dir/Cargo.toml" ]; then
+            echo "::error::No Cargo.toml at $dir/Cargo.toml"
+            exit 1
+          fi
+          # `cargo metadata` resolves `version.workspace = true` correctly,
+          # so the same workflow body works for both explicit-version
+          # crates (kevy-client, kevy-embedded) and workspace-inheriting
+          # ones (kevy-bytes, kevy-resp, ...).
+          v=$(cargo metadata --no-deps --format-version 1 \
+              --manifest-path "$dir/Cargo.toml" \
+              | python3 -c "
+          import sys, json
+          m = json.load(sys.stdin)
+          for p in m['packages']:
+              if p['name'] == '$crate':
+                  print(p['version']); break
+          ")
+          if [ -z "$v" ]; then
+            echo "::error::Could not resolve version for $crate"
+            exit 1
+          fi
+          tag="$crate-v$v"
+          echo "version=$v" >>"$GITHUB_OUTPUT"
+          echo "tag=$tag" >>"$GITHUB_OUTPUT"
+          echo "📦 $crate version = $v → tag $tag"
+
+      - name: Refuse to re-release an existing tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag='${{ steps.ver.outputs.tag }}'
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "::error::Tag $tag already exists locally — bump crates/${{ inputs.crate }}/Cargo.toml first (or the inherited workspace version)."
+            exit 1
+          fi
+          if git ls-remote --tags origin "refs/tags/$tag" | grep -q "refs/tags/$tag"; then
+            echo "::error::Tag $tag already exists on origin — bump version first."
+            exit 1
+          fi
+
+      - name: Build --release (gate)
+        run: cargo build -p ${{ inputs.crate }} --release
+
+      - name: Test --release (gate)
+        run: cargo test -p ${{ inputs.crate }} --release --lib --tests
+
+      - name: cargo publish (dry-run)
+        if: ${{ inputs.dry_run }}
+        run: cargo publish -p ${{ inputs.crate }} --dry-run
+
+      # Real publish path. We treat "already uploaded" as a success so
+      # this workflow can backfill a per-crate tag for a version that
+      # was first shipped via the workspace `release.yml` pipeline.
+      # Any other publish failure (auth, dep mismatch, network) is
+      # fatal — the tag step won't run.
+      - name: cargo publish (real)
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          log=$(mktemp)
+          if cargo publish -p ${{ inputs.crate }} 2>&1 | tee "$log"; then
+            echo "✓ published ${{ inputs.crate }}"
+            exit 0
+          fi
+          if grep -qE "already uploaded|crate version .* is already" "$log"; then
+            echo "↷ ${{ inputs.crate }} ${{ steps.ver.outputs.version }} already on crates.io — backfilling per-crate tag."
+            exit 0
+          fi
+          echo "::error::cargo publish failed for ${{ inputs.crate }}"
+          exit 1
+
+      - name: Tag the released version
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag='${{ steps.ver.outputs.tag }}'
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag "$tag" -m "${{ inputs.crate }} ${{ steps.ver.outputs.version }}"
+          git push origin "$tag"
+
+      - name: Create GitHub release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag='${{ steps.ver.outputs.tag }}'
+          gh release create "$tag" \
+            --title "${{ inputs.crate }} v${{ steps.ver.outputs.version }}" \
+            --generate-notes \
+            --target "$GITHUB_SHA"
