@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-client"
-version = "1.0.5"
+version = "1.1.0"
 dependencies = [
  "kevy-embedded",
  "kevy-resp",
