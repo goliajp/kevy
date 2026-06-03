@@ -22,7 +22,11 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 # Use the image's bundled toolchain (1.95) — we deliberately don't copy
 # rust-toolchain.toml so the build skips a redundant `rustup` download.
-RUN cargo build --release --bin kevy --locked
+# Builds BOTH the server (`kevy`) and the client CLI (`kevy-cli`) —
+# the latter ships in the runtime image so Docker / k8s healthchecks
+# (and `docker exec mycontainer kevy-cli ping`) work without an
+# external image.
+RUN cargo build --release --bin kevy --bin kevy-cli --locked
 
 FROM debian:bookworm-slim AS runtime
 LABEL org.opencontainers.image.title="kevy" \
@@ -32,6 +36,7 @@ LABEL org.opencontainers.image.title="kevy" \
       org.opencontainers.image.vendor="GOLIA K.K."
 
 COPY --from=build /src/target/release/kevy /usr/local/bin/kevy
+COPY --from=build /src/target/release/kevy-cli /usr/local/bin/kevy-cli
 
 # Default config; every value is overridable at `docker run` time.
 ENV KEVY_BIND=0.0.0.0 \
@@ -41,4 +46,11 @@ ENV KEVY_BIND=0.0.0.0 \
 
 VOLUME ["/data"]
 EXPOSE 6379
+
+# Container healthcheck: kevy-cli ping returns +PONG when the server is
+# accepting RESP. Honoured by `docker compose` (HEALTHCHECK directive),
+# kubernetes (exec liveness probe — see docs/), and `docker inspect`.
+HEALTHCHECK --interval=5s --timeout=2s --start-period=2s --retries=3 \
+    CMD kevy-cli -p ${KEVY_PORT:-6379} ping || exit 1
+
 ENTRYPOINT ["kevy"]

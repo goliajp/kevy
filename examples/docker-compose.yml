@@ -21,15 +21,11 @@ services:
       - kevy-data:/data
 
     # Block `app` startup until kevy actually answers PING (not just
-    # "container running"). Uses bash + /dev/tcp — both ship in the image,
-    # no extra tools or sidecar needed. NOTE: the default /bin/sh is dash,
-    # which does NOT support /dev/tcp, so the check explicitly invokes bash.
+    # "container running"). The image ships `kevy-cli` since v1.0.4 so
+    # the healthcheck is a one-liner; for older tags fall back to the
+    # bash + /dev/tcp form (see git history).
     healthcheck:
-      test:
-        - CMD
-        - bash
-        - -c
-        - exec 3<>/dev/tcp/127.0.0.1/6379 && printf 'PING\r\n' >&3 && head -c 7 <&3 | grep -q PONG
+      test: ["CMD", "kevy-cli", "ping"]
       interval: 2s
       timeout: 1s
       retries: 15

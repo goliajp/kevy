@@ -11,6 +11,25 @@ use std::sync::Arc;
 use kevy_config::{CliOverrides, Config};
 
 fn main() -> ! {
+    // --help / --version short-circuit BEFORE we touch the config layer, so
+    // they work even if the env / TOML is misconfigured (the standard CLI
+    // contract: --help always reachable). Spotted in v1.0.x downstream usage
+    // — mailrs's Docker healthcheck silently no-op'd because `kevy --help`
+    // was ignored, leading to a server-process being treated as a CLI tool.
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--help" | "-h" => {
+                print_help();
+                std::process::exit(0);
+            }
+            "--version" | "-V" => {
+                println!("kevy {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
+            _ => {}
+        }
+    }
+
     let (config_path, cli) = parse_cli();
     let mut cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| {
         eprintln!("{e}");
@@ -50,6 +69,41 @@ fn main() -> ! {
     // defaults. Must happen before the reactor starts so shards see it.
     kevy::config_init(Arc::new(cfg));
     kevy::serve(bind, port, threads, data_dir, aof); // never returns
+}
+
+fn print_help() {
+    let v = env!("CARGO_PKG_VERSION");
+    println!(
+        "\
+kevy {v} — pure-Rust Redis-compatible KV server.
+
+USAGE:
+    kevy [OPTIONS]
+
+OPTIONS:
+    --config <PATH>     TOML config file (auto-detected: ./kevy.toml,
+                        /etc/kevy/kevy.toml, $XDG_CONFIG_HOME/kevy/kevy.toml)
+    --bind <IPv4>       Bind address (default: 127.0.0.1)
+    --port <PORT>       Listen port (default: 6004)
+    --threads <N>       Shard count (default: 0 = available_parallelism())
+    --dir <PATH>        Data directory for snapshot + AOF (default: .)
+    --no-aof            Disable the AOF (in-memory only / cache-only mode)
+    -h, --help          Show this help and exit
+    -V, --version       Print version and exit
+
+Precedence (top wins): CLI flags > env vars > TOML file > built-in defaults.
+Env vars: KEVY_BIND, KEVY_PORT, KEVY_THREADS, KEVY_DIR, KEVY_AOF.
+
+EXAMPLES:
+    kevy                        # 127.0.0.1:6004, all cores, AOF on
+    kevy --bind 0.0.0.0 --port 6379
+    kevy --config /etc/kevy/kevy.toml
+    KEVY_BIND=0.0.0.0 KEVY_AOF=0 kevy
+
+CLI client for healthchecks / one-shot commands: see `kevy-cli --help`.
+
+Docs: https://github.com/goliajp/kevy"
+    );
 }
 
 /// Parse CLI into `(--config PATH, CliOverrides)`. Backward-compatible with
