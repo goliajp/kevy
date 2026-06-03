@@ -27,56 +27,68 @@ jobs:
       - name: Test --release
         run: cargo test --workspace --release --lib --tests
 
-  # ───────────── cargo publish dry-run for every publishable crate ─────────────
-  # First-release caveat: `cargo publish --dry-run` resolves path+version
-  # deps against crates.io, so any kevy-* crate with workspace deps fails
-  # ("no matching package named `kevy-hash` found") until at least one prior
-  # version is on the registry. Marked continue-on-error for the v1.0.0-rc
-  # cycle; flip back to gating once v1.0.0 is on crates.io and subsequent
-  # releases can resolve cleanly.
-  publish-dry-run:
-    name: cargo publish --dry-run (informational until GA)
+  # ───────────── cargo publish to crates.io (idempotent per crate) ─────────────
+  # Triggered automatically on tag push. Walks the 16 publishable crates in
+  # dependency order; for each, attempts `cargo publish` and treats
+  # "already uploaded" as a non-fatal skip (lets the workflow re-run after
+  # a partial failure without re-publishing the crates that already landed).
+  #
+  # Per-crate version tracking: kevy-embedded and kevy-client carry their
+  # own explicit `version =` in Cargo.toml (independent additive growth);
+  # everything else inherits the workspace version. The workflow doesn't
+  # care — `cargo publish -p <crate>` reads each crate's own Cargo.toml.
+  #
+  # Rate limit: crates.io throttles NEW-crate publishes (burst-5 then
+  # 1/~10 min), but version BUMPS on existing crates are not throttled —
+  # all 16 crates are already on crates.io, so a tag-driven mass-republish
+  # runs back-to-back with no sleeps.
+  publish:
+    name: cargo publish to crates.io
     runs-on: ubuntu-latest
     needs: verify
-    continue-on-error: true
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - run: |
           rustup toolchain install stable --no-self-update
           rustup default stable
-      # Publish order matters: leaf crates first so dependents see them
-      # in the registry. Each `--dry-run` builds + packages without
-      # actually uploading — exact same shape as the real publish.
-      - name: kevy-madvise
-        run: cargo publish -p kevy-madvise --dry-run --allow-dirty
-      - name: kevy-sys
-        run: cargo publish -p kevy-sys --dry-run --allow-dirty
-      - name: kevy-hash
-        run: cargo publish -p kevy-hash --dry-run --allow-dirty
-      - name: kevy-bytes
-        run: cargo publish -p kevy-bytes --dry-run --allow-dirty
-      - name: kevy-ring
-        run: cargo publish -p kevy-ring --dry-run --allow-dirty
-      - name: kevy-map
-        run: cargo publish -p kevy-map --dry-run --allow-dirty
-      - name: kevy-resp
-        run: cargo publish -p kevy-resp --dry-run --allow-dirty
-      - name: kevy-resp-client
-        run: cargo publish -p kevy-resp-client --dry-run --allow-dirty
-      - name: kevy-store
-        run: cargo publish -p kevy-store --dry-run --allow-dirty
-      - name: kevy-persist
-        run: cargo publish -p kevy-persist --dry-run --allow-dirty
-      - name: kevy-config
-        run: cargo publish -p kevy-config --dry-run --allow-dirty
-      - name: kevy-uring
-        run: cargo publish -p kevy-uring --dry-run --allow-dirty
-      - name: kevy-rt
-        run: cargo publish -p kevy-rt --dry-run --allow-dirty
-      - name: kevy-embedded
-        run: cargo publish -p kevy-embedded --dry-run --allow-dirty
-      - name: kevy
-        run: cargo publish -p kevy --dry-run --allow-dirty
+      - name: Publish chain
+        shell: bash
+        run: |
+          set -euo pipefail
+          publish_or_skip() {
+            local crate=$1
+            echo "::group::publish $crate"
+            local log; log=$(mktemp)
+            if cargo publish -p "$crate" 2>&1 | tee "$log"; then
+              echo "::endgroup::"
+              echo "✓ published $crate"
+              return 0
+            fi
+            if grep -qE "already uploaded|crate version .* is already" "$log"; then
+              echo "::endgroup::"
+              echo "↷ skipped $crate (already on crates.io)"
+              return 0
+            fi
+            echo "::endgroup::"
+            echo "✗ FAILED $crate" >&2
+            return 1
+          }
+          # Topological order — leaves first, then crates that depend on
+          # them. Same chain as RELEASE-DRY-RUN.md plus kevy-client at the
+          # end (added in v1.3.0, depends on kevy-embedded + kevy-resp +
+          # kevy-resp-client).
+          for c in \
+            kevy-madvise kevy-sys kevy-hash kevy-config kevy-uring \
+            kevy-bytes kevy-resp kevy-ring kevy-map \
+            kevy-resp-client kevy-store \
+            kevy-persist \
+            kevy-rt kevy-embedded \
+            kevy kevy-client; do
+            publish_or_skip "$c"
+          done
+          echo "all 16 publishable crates handled"
 
   # ───────────── build the kevy server binary for every supported target ─────────────
   # All targets build NATIVELY on their respective GitHub-hosted runner — each
@@ -159,7 +171,7 @@ jobs:
   release-notes:
     name: Draft GitHub release
     runs-on: ubuntu-latest
-    needs: [verify, publish-dry-run, build-binaries]
+    needs: [verify, publish, build-binaries]
     permissions:
       contents: write
     steps:
