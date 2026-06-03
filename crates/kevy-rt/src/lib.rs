@@ -145,9 +145,9 @@ pub trait Commands: Clone + Send + 'static {
     /// Called once per shard, immediately after [`Store::new`], before the
     /// reactor enters its event loop. Implementations install per-shard
     /// configuration that the runtime doesn't know about — currently the
-    /// `maxmemory` + eviction-policy pair, which kevy ships via the
-    /// process-wide [`crate::commands::config_global`] snapshot. Default:
-    /// no-op so non-kevy embedders aren't forced to override.
+    /// `maxmemory` + eviction-policy pair, which kevy ships via its own
+    /// process-wide config snapshot. Default: no-op so non-kevy embedders
+    /// aren't forced to override.
     fn on_shard_init(&self, _store: &mut Store) {}
 
     /// Periodic shard housekeeping (the equivalent of Redis's `serverCron`).
