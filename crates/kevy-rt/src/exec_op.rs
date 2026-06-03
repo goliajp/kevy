@@ -3,9 +3,10 @@
 //! that one under the 500-LOC house rule.
 
 use kevy_persist::save_snapshot;
-use kevy_resp::Argv;
+use kevy_resp::{Argv, ArgvView};
 
 use crate::Commands;
+use crate::Route;
 use crate::message::{GatherKind, Gathered, Op, Part};
 use crate::shard::Shard;
 
@@ -15,17 +16,26 @@ impl<C: Commands> Shard<C> {
         match op {
             Op::Dispatch(args) => {
                 let reply = self.commands.dispatch(&mut self.store, &args);
-                // Only classify writes when there's an AOF to log them to —
-                // otherwise `is_write` (+ its verb fold) is pure waste, and the
-                // cache-only / `--no-aof` path is hot.
-                if self.aof.is_some() && self.commands.is_write(&args) {
-                    self.log(&args);
+                // Write-side bookkeeping: AOF logging + WATCH version
+                // bump. Both gated on `is_write` so the cache-only path
+                // (no AOF + no WATCH-ed keys) pays nothing beyond one
+                // verb-table lookup. The WATCH bump is also gated inside
+                // `bump_if_watched` — it's an empty-map lookup when no
+                // key on this shard has ever been WATCH-ed.
+                if self.commands.is_write(&args) {
+                    self.bump_watch_for_dispatch(&args);
+                    if self.aof.is_some() {
+                        self.log(&args);
+                    }
                 }
                 Part::Reply(reply)
             }
             Op::Del(keys) => {
                 let n = self.store.del(&keys);
                 if n > 0 {
+                    for k in &keys {
+                        self.store.bump_if_watched(k);
+                    }
                     let mut c = Argv::with_capacity(keys.len() + 1, 0);
                     c.push(b"DEL");
                     for k in &keys {
@@ -39,6 +49,8 @@ impl<C: Commands> Shard<C> {
             Op::Dbsize => Part::Int(self.store.dbsize() as i64),
             Op::Flush => {
                 self.store.flush();
+                // Every WATCH against this shard is now invalidated.
+                self.store.bump_all_watched();
                 let mut c = Argv::with_capacity(1, 8);
                 c.push(b"FLUSHALL");
                 self.log(&c);
@@ -47,6 +59,7 @@ impl<C: Commands> Shard<C> {
             Op::MSet(pairs) => {
                 for (k, v) in &pairs {
                     self.store.set(k, v.clone(), None, false, false);
+                    self.store.bump_if_watched(k);
                 }
                 if !pairs.is_empty() {
                     let mut c = Argv::with_capacity(pairs.len() * 2 + 1, 0);
@@ -77,6 +90,29 @@ impl<C: Commands> Shard<C> {
             }
             Op::CollectKeys(pat, limit) => {
                 Part::Keys(self.store.collect_keys(pat.as_deref(), limit))
+            }
+            Op::CheckWatch(keys) => {
+                // EXEC's pre-execution fan-out: report whether any of
+                // `keys` (each carrying the version recorded at WATCH
+                // time) is now dirty on this shard. The origin shard
+                // ORs the partial results across shards and aborts
+                // EXEC if any shard reports `true`.
+                let dirty = keys
+                    .iter()
+                    .any(|(k, v)| self.store.key_version(k) != *v);
+                Part::Int(dirty as i64)
+            }
+            Op::CollectWatchVersions(keys) => {
+                // WATCH's fan-out: register each key in this shard's
+                // version tracker and report its current version. The
+                // origin shard stashes (key, version) pairs into the
+                // conn's watched set; EXEC checks against these via
+                // [`Op::CheckWatch`].
+                let mut out = Vec::with_capacity(keys.len());
+                for k in &keys {
+                    out.push((k.clone(), self.store.record_watch(k)));
+                }
+                Part::WatchVersions(out)
             }
             Op::Save => {
                 let path = self.snapshot_path();
@@ -111,6 +147,20 @@ impl<C: Commands> Shard<C> {
                 }
                 Part::Ok
             }
+        }
+    }
+
+    /// Resolve which arg index carries the key for a write `Op::Dispatch`,
+    /// then bump that key's WATCH version. Read-only commands and keyless
+    /// admin verbs (already filtered by `is_write`) never reach here. The
+    /// route lookup is one verb-table dispatch (~5 ns); inside-store the
+    /// bump is one HashMap::get_mut (no insert) — empty when no key on
+    /// this shard has ever been WATCH-ed.
+    fn bump_watch_for_dispatch<A: ArgvView + ?Sized>(&mut self, args: &A) {
+        if let Route::Single(idx) = self.commands.route(args)
+            && idx < args.len()
+        {
+            self.store.bump_if_watched(&args[idx]);
         }
     }
 }
