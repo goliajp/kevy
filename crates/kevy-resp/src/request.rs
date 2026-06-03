@@ -63,7 +63,7 @@ fn parse_inline_into(buf: &[u8], dst: &mut Argv) -> Result<Option<usize>, Protoc
 /// Validate the multi-bulk frame is fully present and report `(end_pos,
 /// total_arg_bytes)` if so. `start_pos` is the offset of the first `$`
 /// after the `*N\r\n` header. `Ok(None)` = need more bytes; `Err` = malformed.
-fn validate_multibulk_frame(
+pub(crate) fn validate_multibulk_frame(
     buf: &[u8],
     start_pos: usize,
     count: usize,
@@ -333,4 +333,5 @@ mod tests {
         assert_eq!(cmd, vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]);
         assert_eq!(used, buf.len());
     }
+
 }
