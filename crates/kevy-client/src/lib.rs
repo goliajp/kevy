@@ -20,9 +20,11 @@
 //! - `tcp://host[:port]`            — TCP RESP, raw (no SELECT round-trip)
 //!
 //! Auth (`redis://user:pass@…`) and TLS (`rediss://`) are rejected up front
-//! — kevy ships without either. v1.0.5 covers the string + generic-key
-//! command subset (the 80% of cache use); hash/list/set/zset/pubsub are on
-//! the v1.1.0 backlog. The trait-vs-enum design decision is enum for now
+//! — kevy ships without either. v1.1.0 added the full string/hash/list/set/
+//! zset + one-shot `PUBLISH` surface. v1.2.0 added the pub/sub *consumer*
+//! side as a separate [`Subscriber`] type — a subscribed connection cannot
+//! send normal commands, so it needs its own socket and lives outside the
+//! `Connection` enum. The trait-vs-enum design decision is enum for now
 //! (closed two-backend universe); see ROADMAP for the trait extension path.
 
 #![forbid(unsafe_code)]
@@ -35,6 +37,9 @@ use std::time::Duration;
 use kevy_embedded::{Config, Store};
 use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
+
+mod subscribe;
+pub use subscribe::{PubsubEvent, Subscriber};
 
 /// One open connection to a kevy backend, opaque about whether the backend
 /// is in-process or over TCP.
@@ -603,11 +608,10 @@ impl Connection {
     /// no reactor), so this returns `Ok(0)` — matching Redis's
     /// "publish to a channel with no listeners" semantic.
     ///
-    /// `SUBSCRIBE` / `PSUBSCRIBE` need a streaming state machine very
-    /// different from this one-shot request/reply API; they are
-    /// deferred to a v1.2.0 dedicated builder. Until then, drop down
-    /// to [`Connection::Remote`] and run the SUBSCRIBE round-trip
-    /// yourself.
+    /// The pub/sub *consumer* side lives in [`Subscriber`], which takes
+    /// its own dedicated TCP connection: a subscribed connection cannot
+    /// send normal commands per the Redis/RESP spec, so it can't share
+    /// a socket with this `Connection`.
     pub fn publish(&mut self, channel: &[u8], message: &[u8]) -> io::Result<usize> {
         match self {
             Self::Embedded(_) => Ok(0),

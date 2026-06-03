@@ -5,7 +5,7 @@ description = "Unified client for kevy — switch between in-process embedded an
 # (additive API growth is faster than the underlying server's), and
 # depends on the v1.0.4 chain already on crates.io, so the rest of the
 # workspace stays at 1.0.4 and only kevy-client moves.
-version = "1.1.0"
+version = "1.2.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
