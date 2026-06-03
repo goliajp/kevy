@@ -36,12 +36,31 @@ fn read_reply(s: &mut std::net::TcpStream, expected: &[u8]) {
 
 /// Run a runtime on `port` in `dir` with `nshards`, hand it to `body`, then stop.
 fn with_runtime(port: u16, dir: &std::path::Path, nshards: usize, body: impl FnOnce(u16)) {
+    with_runtime_configured(port, dir, nshards, |rt| rt, body);
+}
+
+/// Variant that lets the caller customise the `Runtime` (e.g. enable
+/// auto-rewrite) before it starts. The closure receives the builder and
+/// returns the modified builder; `with_data_dir` and `KevyCommands` are
+/// applied first.
+fn with_runtime_configured<F>(
+    port: u16,
+    dir: &std::path::Path,
+    nshards: usize,
+    configure: F,
+    body: impl FnOnce(u16),
+) where
+    F: FnOnce(kevy_rt::Runtime<kevy::KevyCommands>) -> kevy_rt::Runtime<kevy::KevyCommands>
+        + Send
+        + 'static,
+{
     let stop = Arc::new(AtomicBool::new(false));
     let stop_t = stop.clone();
     let dir = dir.to_path_buf();
     let handle = std::thread::spawn(move || {
         let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, nshards, kevy::KevyCommands)
             .with_data_dir(dir);
+        let rt = configure(rt);
         rt.run(stop_t).unwrap();
     });
     let mut up = false;
@@ -339,4 +358,195 @@ fn restart_tolerates_corrupt_snapshot() {
     });
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn auto_aof_rewrite_fires_when_threshold_crossed() {
+    // The active-tick path (`maybe_auto_rewrite_aof`) runs an inline
+    // BGREWRITEAOF whenever the live AOF has grown by ≥ pct % over the
+    // size at the previous rewrite AND exceeds `min_size` bytes. This
+    // test exercises that path: no client-side BGREWRITEAOF call,
+    // SETs alone push the AOF past 50 % growth above a 256-byte floor,
+    // and ~250 ms later (a few tick cycles) the shard's tick should
+    // have rebuilt the AOF in place. Final size must be ≤ pre-rewrite
+    // raw size, and every key still readable across a restart.
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-auto-rewrite-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let nshards = 1; // single-shard so size_bytes() is a single file
+    let port = free_port();
+    let aof_path = dir.join("aof-0.aof");
+
+    // 50 % growth over a 16 KiB floor. The floor must exceed the AOF's
+    // `BufWriter` capacity (8 KiB) so that by the time the logical
+    // `aof.size_bytes()` crosses the floor, the on-disk file has been
+    // flushed enough times for `metadata().len()` polling to observe the
+    // growth — otherwise the trigger could fire and rewrite before the
+    // test ever sees bytes hit disk.
+    with_runtime_configured(
+        port,
+        &dir,
+        nshards,
+        |rt| rt.with_auto_aof_rewrite(50, 16 * 1024),
+        |p| {
+            let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+
+            // 800 SETs of the same key with growing values. Each SET adds
+            // a ~60-byte multibulk to the log (logical ≈ 48 KiB), well past
+            // the 16 KiB × 1.5 trigger threshold. Post-rewrite the file
+            // dumps only the latest SET, so it collapses dramatically.
+            for rev in 0..800u32 {
+                c.write_all(&req(&[
+                    b"SET",
+                    b"counter",
+                    format!("revision-number-padding-{rev:08}").as_bytes(),
+                ]))
+                .unwrap();
+                read_reply(&mut c, b"+OK\r\n");
+            }
+
+            // After 800 ack'd SETs the BufWriter has spilled multiple
+            // 8 KiB chunks; disk should comfortably exceed 16 KiB.
+            let pre = wait_for_size_at_least_heartbeat(&aof_path, &mut c, 16 * 1024, 1_000);
+            assert!(
+                pre >= 16 * 1024,
+                "AOF on-disk did not reach the min_size floor: {pre} bytes after 1 s"
+            );
+
+            // Wait for the auto-rewrite tick. The shard's `tick_check`
+            // counter only increments per loop iter — when fully parked,
+            // each iter takes 50 ms (poll backstop) and 256 iters would
+            // need ~13 s to elapse. Send heartbeat PINGs every poll cycle
+            // to keep the shard in its busy-poll batch so `tick_check`
+            // fires and `elapsed >= 100 ms` triggers `maybe_auto_rewrite_aof`.
+            let post = wait_for_size_below_heartbeat(&aof_path, &mut c, pre / 2, 3_000);
+            assert!(
+                post < pre / 2,
+                "auto AOF rewrite did not fire (or didn't shrink): \
+                 post={post} bytes, pre={pre}"
+            );
+        },
+    );
+
+    // Restart from the auto-rewritten AOF: the final value must come back.
+    let port2 = free_port();
+    with_runtime(port2, &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"GET", b"counter"])).unwrap();
+        read_reply(
+            &mut c,
+            b"$32\r\nrevision-number-padding-00000799\r\n",
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn auto_aof_rewrite_respects_pct_zero_disable() {
+    // `auto_aof_rewrite_pct = 0` disables the tick-driven rewrite —
+    // even after crossing the min_size floor, the AOF must keep
+    // accumulating until a client calls BGREWRITEAOF explicitly.
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-auto-rewrite-off-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let nshards = 1;
+    let port = free_port();
+    let aof_path = dir.join("aof-0.aof");
+
+    with_runtime_configured(
+        port,
+        &dir,
+        nshards,
+        // pct=0 disables; the min_size value is irrelevant under that guard.
+        |rt| rt.with_auto_aof_rewrite(0, 1024),
+        |p| {
+            let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+            // 800 SETs — same volume + value width as the positive test so
+            // the BufWriter flushes and on-disk size is comparable.
+            for rev in 0..800u32 {
+                c.write_all(&req(&[
+                    b"SET",
+                    b"k",
+                    format!("revision-number-padding-{rev:08}").as_bytes(),
+                ]))
+                .unwrap();
+                read_reply(&mut c, b"+OK\r\n");
+            }
+
+            let pre = wait_for_size_at_least_heartbeat(&aof_path, &mut c, 16 * 1024, 1_000);
+            assert!(pre >= 16 * 1024, "AOF did not grow: {pre} bytes");
+
+            // Heartbeat across several tick cycles so the shard actually
+            // reaches `maybe_auto_rewrite_aof` and exercises the
+            // `pct == 0` early-return branch; otherwise the assertion
+            // below is vacuously true.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(600);
+            while std::time::Instant::now() < deadline {
+                c.write_all(&req(&[b"PING"])).unwrap();
+                read_reply(&mut c, b"+PONG\r\n");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            let post = std::fs::metadata(&aof_path).map(|m| m.len()).unwrap_or(0);
+            assert!(
+                post >= pre,
+                "auto-rewrite fired despite pct=0: {post} vs {pre} pre"
+            );
+        },
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Send a PING on `c` every iter while waiting for `path` to reach
+/// `floor` bytes. The shard's `tick_check` counter only fires the active
+/// reaper / auto-rewrite path every 256 loop iters, which under park-
+/// mode takes ~13 s. PINGs wake the shard, triggering a busy-poll batch
+/// that fires `tick_check` within micros.
+fn wait_for_size_at_least_heartbeat(
+    path: &std::path::Path,
+    c: &mut std::net::TcpStream,
+    floor: u64,
+    timeout_ms: u64,
+) -> u64 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        let sz = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        if sz >= floor || std::time::Instant::now() >= deadline {
+            return sz;
+        }
+        let _ = c.write_all(&req(&[b"PING"]));
+        read_reply(c, b"+PONG\r\n");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// Heartbeat variant of [`wait_for_size_below`]. See
+/// [`wait_for_size_at_least_heartbeat`] for the rationale.
+fn wait_for_size_below_heartbeat(
+    path: &std::path::Path,
+    c: &mut std::net::TcpStream,
+    pre: u64,
+    timeout_ms: u64,
+) -> u64 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        let sz = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        if sz < pre || std::time::Instant::now() >= deadline {
+            return sz;
+        }
+        let _ = c.write_all(&req(&[b"PING"]));
+        read_reply(c, b"+PONG\r\n");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
