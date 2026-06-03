@@ -12,8 +12,8 @@ SUBS=${SUBS:-50}
 MSGS=${MSGS:-100000}
 SIZE=${SIZE:-16}
 THREADS=${KEVY_THREADS:-10}
-KBIN=/root/kevy/target/release/kevy
-LG=/root/kevy/target/release/kevy-pubsub-bench
+KBIN=${KBIN:-/root/kevy/target/release/kevy}
+LG=${LG:-/root/kevy/target/release/kevy-pubsub-bench}
 
 wait_ready() { for _ in $(seq 1 100); do
   redis-benchmark -h 127.0.0.1 -p "$1" -t ping -c 1 -n 1 -q >/dev/null 2>&1 && return 0; sleep 0.1; done; return 1; }

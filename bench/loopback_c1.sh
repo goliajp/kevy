@@ -9,7 +9,7 @@ SRV_CORES=${SRV_CORES:-0-9}
 CLI_CORE=${CLI_CORE:-10}
 N=${N:-300000}
 KEVY_THREADS=${KEVY_THREADS:-10}
-KBIN=/root/kevy/target/release/kevy
+KBIN=${KBIN:-/root/kevy/target/release/kevy}
 
 wait_ready() {
   for _ in $(seq 1 100); do
