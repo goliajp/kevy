@@ -844,6 +844,7 @@ mod tests {
 
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::sync::atomic::{AtomicUsize, AtomicBool, Ordering};
+    use std::sync::Mutex;
 
     /// `System` wrapper that bumps a counter on alloc. The counter is only
     /// observed while `RECORDING` is true so test setup (vec!, format!, etc.)
@@ -871,7 +872,16 @@ mod tests {
     #[global_allocator]
     static COUNTING: CountingAlloc = CountingAlloc { inner: System };
 
+    // Serialises all alloc-counting tests in this module: the RECORDING flag
+    // is a single shared atomic, so two #[test] threads simultaneously inside
+    // `measure_allocs` would corrupt each other's count (heap_payload's alloc
+    // gets attributed to inline_payload's window, etc). The test framework
+    // runs #[test]s in parallel by default; this mutex makes them mutually
+    // exclusive WITHIN this counting-allocator scope.
+    static GATE: Mutex<()> = Mutex::new(());
+
     fn measure_allocs<F: FnOnce()>(f: F) -> usize {
+        let _guard = GATE.lock().unwrap_or_else(|p| p.into_inner());
         ALLOC_CALLS.store(0, Ordering::Relaxed);
         RECORDING.store(true, Ordering::Relaxed);
         f();
