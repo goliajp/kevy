@@ -53,10 +53,11 @@ environment variable / config file — develop against `mem://`,
 integration-test against `file:///tmp/test`, deploy against
 `kevy://prod-cache:6379`. No code change.
 
-## Command coverage (v1.2.0)
+## Command coverage (v1.3.0)
 
 All five Redis data types plus generic-key ops, persistence, and
-the full pub/sub cycle. Methods on `Connection`:
+the full pub/sub cycle including in-process embedded delivery.
+Methods on `Connection`:
 
 **Connection / generic:** `ping`, `dbsize`, `flush`, `type_of`,
 `exists`, `del`, `expire`, `persist`, `ttl_ms`.
@@ -72,24 +73,39 @@ the full pub/sub cycle. Methods on `Connection`:
 **Sorted set:** `zadd`, `zrem`, `zscore`, `zcard`, `zrange`.
 
 **Pub/sub:** `Connection::publish` for the producer side. The consumer
-side is `Subscriber` — a separate type with its own dedicated TCP socket
+side is `Subscriber`, a separate type with its own backing channel
 because subscribed connections cannot send normal commands per the
-RESP spec. `Connection::publish` on the embedded backend returns 0
-(single-process, no subscribers); `Subscriber::open` on `mem://` /
-`file://` URLs returns `ErrorKind::Unsupported`.
+RESP spec.
+
+**v1.3.0 makes embed work the same way as the network**: two opens of the
+same `mem://<name>` or `file:///path` URL route through a process-local
+registry and share one backing `Store` + pub/sub bus. So the same code
+runs against `mem://` in dev and `kevy://` in prod with **no scheme
+branching**:
 
 ```rust
-use kevy_client::{Subscriber, PubsubEvent};
+use kevy_client::{Connection, Subscriber, PubsubEvent};
 
-let mut sub = Subscriber::open("kevy://prod-cache:6379", &[b"news"])?;
-loop {
-    if let PubsubEvent::Message { channel, payload } = sub.recv()? {
-        println!("{}: {}", String::from_utf8_lossy(&channel),
-                           String::from_utf8_lossy(&payload));
-    }
+let url = std::env::var("KEVY_URL").unwrap_or_else(|_| "mem://mailbus".into());
+let mut sub = Subscriber::open(&url, &[b"news"])?;
+let mut pubconn = Connection::open(&url)?;
+
+// Drain the SUBSCRIBE ack first.
+let _ack = sub.recv()?;
+
+// Same URL → same bus, even across threads.
+pubconn.publish(b"news", b"hello world")?;
+
+if let PubsubEvent::Message { channel, payload } = sub.recv()? {
+    println!("{}: {}", String::from_utf8_lossy(&channel),
+                       String::from_utf8_lossy(&payload));
 }
 # Ok::<(), std::io::Error>(())
 ```
+
+Anonymous `mem://` (no name) stays per-call isolated — `Subscriber::open`
+rejects it with `ErrorKind::Unsupported` since no other producer can
+reach it. Use `mem://<some-name>` for a shared bus.
 
 If you need a command this crate doesn't expose yet, drop down to the
 raw backend:
