@@ -14,9 +14,9 @@
 
 use crate::Commands;
 use crate::conn::Conn;
-use crate::message::{Inbound, Op, PubMsg, PubSubReg, ReqBatch};
+use crate::message::{Inbound, PubMsg, PubSubReg, ReqBatch};
 use kevy_persist::{Aof, load_snapshot, replay_aof};
-use kevy_resp::{Argv, parse_command_into};
+use kevy_resp::Argv;
 use kevy_ring::{Consumer, Producer};
 use kevy_store::Store;
 use kevy_sys::{Event, Poller, Socket, Waker};
@@ -330,77 +330,10 @@ impl<C: Commands> Shard<C> {
         Ok(())
     }
 
-    fn conn_readable(&mut self, conn_id: u64) -> io::Result<()> {
-        {
-            let Some(conn) = self.conns.get_mut(&conn_id) else {
-                return Ok(());
-            };
-            loop {
-                match conn.sock.read(&mut self.read_buf) {
-                    Ok(0) => {
-                        conn.closing = true;
-                        break;
-                    }
-                    Ok(n) => conn.input.extend_from_slice(&self.read_buf[..n]),
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(_) => {
-                        conn.closing = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Zero-alloc parse hot path: parse into self.scratch_argv
-        // (reused across cmds; capacity amortises after warm-up). Dispatch via
-        // mem::replace so handle_command can take &mut self while we hold the
-        // parsed argv on the stack — `self.scratch_argv` is temporarily a
-        // default empty Argv during dispatch, restored after. In-cmd prefetch
-        // is issued before dispatch on the key (if any) so the bucket line
-        // moves toward L1 while start_command/handle_command's prologue runs.
-        let mut had_protocol_error = false;
-        loop {
-            let consumed = {
-                let Some(conn) = self.conns.get_mut(&conn_id) else {
-                    return Ok(());
-                };
-                match parse_command_into(&conn.input, &mut self.scratch_argv) {
-                    Ok(Some(c)) => Some(c),
-                    Ok(None) => None,
-                    Err(_) => {
-                        had_protocol_error = true;
-                        None
-                    }
-                }
-            };
-            match consumed {
-                Some(c) => {
-                    if let Some(conn) = self.conns.get_mut(&conn_id) {
-                        conn.input.drain(..c);
-                    } else {
-                        return Ok(());
-                    }
-                    // Take ownership of the parsed argv (Default left in
-                    // `self.scratch_argv` while we dispatch). After dispatch
-                    // we'll put it back to preserve buf+ends capacity.
-                    let argv = std::mem::take(&mut self.scratch_argv);
-                    if let Some(key) = argv.get(1) {
-                        self.store.prefetch_for_key(key);
-                    }
-                    self.handle_command(conn_id, &argv);
-                    // Restore capacity; the just-default scratch becomes the
-                    // capacity-bearing one for the next iteration's parse.
-                    self.scratch_argv = argv;
-                }
-                None => break,
-            }
-        }
-        if had_protocol_error {
-            self.protocol_error(conn_id);
-        }
-        self.flush_conn(conn_id)
-    }
+    // `conn_readable` (socket read + parse + dispatch) lives in
+    // [`crate::inbox`] alongside `drain_inbound` + `close_conn` — all the
+    // event handlers the `run` loop dispatches to. Still the same
+    // `impl Shard`.
 
     /// Enqueue a message to another shard, marking it for a coalesced wakeup. The
     /// fast path is a lock-free ring push; on a full ring it spills to the local
@@ -450,66 +383,9 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Drain inbound cross-core messages from every peer ring; returns whether
-    /// any were processed.
-    fn drain_inbound(&mut self) -> io::Result<bool> {
-        let mut did = false;
-        for src in 0..self.nshards {
-            if src == self.id {
-                continue; // no self-ring
-            }
-            while let Some(msg) = self.inboxes[src].as_mut().expect("peer inbox").pop() {
-                did = true;
-                match msg {
-                    Inbound::Request {
-                        origin,
-                        conn,
-                        seq,
-                        op,
-                    } => {
-                        let part = self.exec_op(op);
-                        self.send_to(origin, Inbound::Response { conn, seq, part });
-                    }
-                    Inbound::Response { conn, seq, part } => {
-                        self.fold(conn, seq, part);
-                        self.flush_conn(conn)?;
-                    }
-                    // Batched single-key dispatches to this (owning) shard: exec
-                    // each locally, reply as one `ResponseBatch` to the origin.
-                    Inbound::RequestBatch { origin, reqs } => {
-                        let mut resps = Vec::with_capacity(reqs.len());
-                        for (conn, seq, argv) in reqs {
-                            let part = self.exec_op(Op::Dispatch(argv));
-                            resps.push((conn, seq, part));
-                        }
-                        self.send_to(origin, Inbound::ResponseBatch(resps));
-                    }
-                    // Batched replies: fold each by seq, then flush each touched
-                    // conn once (dedup — pipelined replies share a conn).
-                    Inbound::ResponseBatch(resps) => {
-                        let mut to_flush: Vec<u64> = Vec::new();
-                        for (conn, seq, part) in resps {
-                            self.fold(conn, seq, part);
-                            if !to_flush.contains(&conn) {
-                                to_flush.push(conn);
-                            }
-                        }
-                        for conn in to_flush {
-                            self.flush_conn(conn)?;
-                        }
-                    }
-                    // Fire-and-forget batched pub/sub delivery; appended
-                    // subscriber output is flushed via `flush_dirty`.
-                    Inbound::DeliverPublish(batch) => {
-                        for m in &batch {
-                            self.deliver_publish(&m.0, &m.1);
-                        }
-                    }
-                }
-            }
-        }
-        Ok(did)
-    }
+    // `drain_inbound` + `close_conn` live in [`crate::inbox`] to keep this
+    // file under the 500-LOC house rule; they're still on the same
+    // `impl Shard` and called from `run()` here.
 
     pub(crate) fn flush_conn(&mut self, conn_id: u64) -> io::Result<()> {
         let (close, want_write, fd) = {
@@ -548,16 +424,6 @@ impl<C: Commands> Shard<C> {
             self.poller.modify(fd, true, want_write)?;
         }
         Ok(())
-    }
-
-    fn close_conn(&mut self, conn_id: u64) {
-        if let Some(conn) = self.conns.remove(&conn_id) {
-            let fd = conn.sock.raw();
-            let _ = self.poller.delete(fd);
-            self.fd_to_conn.remove(&fd);
-            self.unregister_subs(&conn.sub);
-            // conn (and its Socket) dropped here → fd closed.
-        }
     }
 
     /// Drop a (closing) connection's subscriptions from the shared registry, so

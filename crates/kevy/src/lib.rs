@@ -44,6 +44,7 @@ use std::sync::atomic::AtomicBool;
 mod cmd;
 mod config_global;
 mod dispatch;
+mod dispatch_collections;
 mod ops;
 
 pub use config_global::init as config_init;

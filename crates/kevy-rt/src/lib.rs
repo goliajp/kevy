@@ -69,6 +69,7 @@
 
 mod conn;
 mod exec;
+mod inbox;
 mod message;
 mod reduce;
 mod runtime;
