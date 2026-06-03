@@ -23,6 +23,7 @@
 mod group;
 mod iter;
 mod map;
+mod map_keyed;
 mod set;
 
 pub use kevy_hash::KevyHash;
