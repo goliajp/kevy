@@ -13,6 +13,7 @@
 //!
 //! URL schemes:
 //! - `mem://`                       — in-process embedded, in-memory only
+//! - `mem://<name>`                 — shared in-process bus keyed by `<name>`
 //! - `file:///abs/path` /
 //!   `file://./rel/path`            — in-process embedded with persistence
 //! - `kevy://host[:port][/db]`      — TCP RESP, kevy-native scheme
@@ -24,22 +25,29 @@
 //! zset + one-shot `PUBLISH` surface. v1.2.0 added the pub/sub *consumer*
 //! side as a separate [`Subscriber`] type — a subscribed connection cannot
 //! send normal commands, so it needs its own socket and lives outside the
-//! `Connection` enum. The trait-vs-enum design decision is enum for now
-//! (closed two-backend universe); see ROADMAP for the trait extension path.
+//! `Connection` enum. v1.3.0 routes `mem://<name>` / `file:///path` through
+//! a process-local registry so the publisher and consumer can find each
+//! other when both opens use the same URL. The trait-vs-enum design
+//! decision is enum for now (closed two-backend universe); see ROADMAP
+//! for the trait extension path.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 use std::io;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use kevy_embedded::Store;
 use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
 
+mod collections;
 mod subscribe;
+mod url;
+
 pub use subscribe::{PubsubEvent, Subscriber};
+
+pub(crate) use url::{Target, parse_url, resolve_store};
 
 /// One open connection to a kevy backend, opaque about whether the backend
 /// is in-process or over TCP.
@@ -70,7 +78,7 @@ impl Connection {
     /// The first thing every healthcheck calls.
     pub fn ping(&mut self) -> io::Result<()> {
         match self {
-            Self::Embedded(_) => Ok(()), // embedded is alive iff this method is called
+            Self::Embedded(_) => Ok(()),
             Self::Remote(c) => match c.request(&[b"PING".to_vec()])? {
                 Reply::Simple(s) if s == b"PONG" => Ok(()),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
@@ -277,328 +285,6 @@ impl Connection {
         }
     }
 
-    // ===== Hash =====
-
-    /// `HSET key field value [field value ...]`. Returns the number of
-    /// fields that were newly added (not overwrites).
-    pub fn hset(&mut self, key: &[u8], pairs: &[(&[u8], &[u8])]) -> io::Result<usize> {
-        match self {
-            Self::Embedded(s) => s.hset(key, pairs),
-            Self::Remote(c) => {
-                let mut args = Vec::with_capacity(2 + pairs.len() * 2);
-                args.push(b"HSET".to_vec());
-                args.push(key.to_vec());
-                for (f, v) in pairs {
-                    args.push(f.to_vec());
-                    args.push(v.to_vec());
-                }
-                match c.request(&args)? {
-                    Reply::Int(n) if n >= 0 => Ok(n as usize),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
-                    other => Err(unexpected(other)),
-                }
-            }
-        }
-    }
-
-    /// `HGET key field`. `None` when the key or field is absent.
-    pub fn hget(&mut self, key: &[u8], field: &[u8]) -> io::Result<Option<Vec<u8>>> {
-        match self {
-            Self::Embedded(s) => s.hget(key, field),
-            Self::Remote(c) => match c.request(&vec3(b"HGET", key, field))? {
-                Reply::Bulk(v) => Ok(Some(v)),
-                Reply::Nil => Ok(None),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
-                other => Err(unexpected(other)),
-            },
-        }
-    }
-
-    /// `HDEL key field [field ...]`. Returns the number of fields actually
-    /// removed.
-    pub fn hdel(&mut self, key: &[u8], fields: &[&[u8]]) -> io::Result<usize> {
-        match self {
-            Self::Embedded(s) => s.hdel(key, fields),
-            Self::Remote(c) => {
-                let mut args = Vec::with_capacity(fields.len() + 2);
-                args.push(b"HDEL".to_vec());
-                args.push(key.to_vec());
-                args.extend(fields.iter().map(|f| f.to_vec()));
-                match c.request(&args)? {
-                    Reply::Int(n) if n >= 0 => Ok(n as usize),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
-                    other => Err(unexpected(other)),
-                }
-            }
-        }
-    }
-
-    /// `HLEN key`. Number of fields in the hash (0 if absent).
-    pub fn hlen(&mut self, key: &[u8]) -> io::Result<usize> {
-        match self {
-            Self::Embedded(s) => s.with(|inner| inner.hlen(key)).map_err(store_err),
-            Self::Remote(c) => match c.request(&vec2(b"HLEN", key))? {
-                Reply::Int(n) if n >= 0 => Ok(n as usize),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
-                other => Err(unexpected(other)),
-            },
-        }
-    }
-
-    /// `HGETALL key`. Returns a flat `[f0, v0, f1, v1, ...]` matching the
-    /// Redis wire shape; empty when the key is absent.
-    pub fn hgetall(&mut self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
-        match self {
-            Self::Embedded(s) => s.with(|inner| inner.hgetall(key)).map_err(store_err),
-            Self::Remote(c) => match c.request(&vec2(b"HGETALL", key))? {
-                Reply::Array(items) => array_to_bulks(items),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
-                other => Err(unexpected(other)),
-            },
-        }
-    }
-
-    /// `HKEYS key`. Returns the hash's field names (empty if absent).
-    pub fn hkeys(&mut self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
-        match self {
-            Self::Embedded(s) => s.with(|inner| inner.hkeys(key)).map_err(store_err),
-            Self::Remote(c) => match c.request(&vec2(b"HKEYS", key))? {
-                Reply::Array(items) => array_to_bulks(items),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
-                other => Err(unexpected(other)),
-            },
-        }
-    }
-
-    /// `HVALS key`. Returns the hash's values (empty if absent).
-    pub fn hvals(&mut self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
-        match self {
-            Self::Embedded(s) => s.with(|inner| inner.hvals(key)).map_err(store_err),
-            Self::Remote(c) => match c.request(&vec2(b"HVALS", key))? {
-                Reply::Array(items) => array_to_bulks(items),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
-                other => Err(unexpected(other)),
-            },
-        }
-    }
-
-    // ===== List =====
-
-    /// `LPUSH key value [value ...]`. Returns the new list length.
-    pub fn lpush(&mut self, key: &[u8], values: &[&[u8]]) -> io::Result<usize> {
-        match self {
-            Self::Embedded(s) => s.lpush(key, values),
-            Self::Remote(c) => list_push(c, b"LPUSH", key, values),
-        }
-    }
-
-    /// `RPUSH key value [value ...]`. Returns the new list length.
-    pub fn rpush(&mut self, key: &[u8], values: &[&[u8]]) -> io::Result<usize> {
-        match self {
-            Self::Embedded(s) => s.rpush(key, values),
-            Self::Remote(c) => list_push(c, b"RPUSH", key, values),
-        }
-    }
-
-    /// `LPOP key count`. Returns up to `count` values from the head; empty
-    /// when the key is absent or already drained.
-    pub fn lpop(&mut self, key: &[u8], count: usize) -> io::Result<Vec<Vec<u8>>> {
-        match self {
-            Self::Embedded(s) => s.lpop(key, count),
-            Self::Remote(c) => list_pop(c, b"LPOP", key, count),
-        }
-    }
-
-    /// `RPOP key count`. Symmetric to [`Self::lpop`] from the tail.
-    pub fn rpop(&mut self, key: &[u8], count: usize) -> io::Result<Vec<Vec<u8>>> {
-        match self {
-            Self::Embedded(s) => s.rpop(key, count),
-            Self::Remote(c) => list_pop(c, b"RPOP", key, count),
-        }
-    }
-
-    /// `LLEN key`. 0 when the key is absent.
-    pub fn llen(&mut self, key: &[u8]) -> io::Result<usize> {
-        match self {
-            Self::Embedded(s) => s.llen(key),
-            Self::Remote(c) => match c.request(&vec2(b"LLEN", key))? {
-                Reply::Int(n) if n >= 0 => Ok(n as usize),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
-                other => Err(unexpected(other)),
-            },
-        }
-    }
-
-    /// `LRANGE key start stop`. Redis-style indexing — negative offsets
-    /// count from the tail (`-1` = last element).
-    pub fn lrange(&mut self, key: &[u8], start: i64, stop: i64) -> io::Result<Vec<Vec<u8>>> {
-        match self {
-            Self::Embedded(s) => s
-                .with(|inner| inner.lrange(key, start, stop))
-                .map_err(store_err),
-            Self::Remote(c) => {
-                let args = vec![
-                    b"LRANGE".to_vec(),
-                    key.to_vec(),
-                    start.to_string().into_bytes(),
-                    stop.to_string().into_bytes(),
-                ];
-                match c.request(&args)? {
-                    Reply::Array(items) => array_to_bulks(items),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
-                    other => Err(unexpected(other)),
-                }
-            }
-        }
-    }
-
-    // ===== Set =====
-
-    /// `SADD key member [member ...]`. Returns count of newly added members.
-    pub fn sadd(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
-        match self {
-            Self::Embedded(s) => s.sadd(key, members),
-            Self::Remote(c) => set_multi(c, b"SADD", key, members),
-        }
-    }
-
-    /// `SREM key member [member ...]`. Returns count of removed members.
-    pub fn srem(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
-        match self {
-            Self::Embedded(s) => s.srem(key, members),
-            Self::Remote(c) => set_multi(c, b"SREM", key, members),
-        }
-    }
-
-    /// `SMEMBERS key`. Order is implementation-defined; empty if absent.
-    pub fn smembers(&mut self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
-        match self {
-            Self::Embedded(s) => s.smembers(key),
-            Self::Remote(c) => match c.request(&vec2(b"SMEMBERS", key))? {
-                Reply::Array(items) => array_to_bulks(items),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
-                other => Err(unexpected(other)),
-            },
-        }
-    }
-
-    /// `SCARD key`. 0 when the key is absent.
-    pub fn scard(&mut self, key: &[u8]) -> io::Result<usize> {
-        match self {
-            Self::Embedded(s) => s.scard(key),
-            Self::Remote(c) => match c.request(&vec2(b"SCARD", key))? {
-                Reply::Int(n) if n >= 0 => Ok(n as usize),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
-                other => Err(unexpected(other)),
-            },
-        }
-    }
-
-    /// `SISMEMBER key member`. `false` when key or member absent.
-    pub fn sismember(&mut self, key: &[u8], member: &[u8]) -> io::Result<bool> {
-        match self {
-            Self::Embedded(s) => s
-                .with(|inner| inner.sismember(key, member))
-                .map_err(store_err),
-            Self::Remote(c) => match c.request(&vec3(b"SISMEMBER", key, member))? {
-                Reply::Int(1) => Ok(true),
-                Reply::Int(0) => Ok(false),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
-                other => Err(unexpected(other)),
-            },
-        }
-    }
-
-    // ===== Sorted set =====
-
-    /// `ZADD key score member [score member ...]`. Returns count of newly
-    /// added members (overwrites don't count).
-    pub fn zadd(&mut self, key: &[u8], pairs: &[(f64, &[u8])]) -> io::Result<usize> {
-        match self {
-            Self::Embedded(s) => s.zadd(key, pairs),
-            Self::Remote(c) => {
-                let mut args = Vec::with_capacity(2 + pairs.len() * 2);
-                args.push(b"ZADD".to_vec());
-                args.push(key.to_vec());
-                for (score, m) in pairs {
-                    args.push(score.to_string().into_bytes());
-                    args.push(m.to_vec());
-                }
-                match c.request(&args)? {
-                    Reply::Int(n) if n >= 0 => Ok(n as usize),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
-                    other => Err(unexpected(other)),
-                }
-            }
-        }
-    }
-
-    /// `ZREM key member [member ...]`. Returns count of removed members.
-    pub fn zrem(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
-        match self {
-            Self::Embedded(s) => s.zrem(key, members),
-            Self::Remote(c) => set_multi(c, b"ZREM", key, members),
-        }
-    }
-
-    /// `ZSCORE key member`. `None` if absent.
-    pub fn zscore(&mut self, key: &[u8], member: &[u8]) -> io::Result<Option<f64>> {
-        match self {
-            Self::Embedded(s) => s.zscore(key, member),
-            Self::Remote(c) => match c.request(&vec3(b"ZSCORE", key, member))? {
-                Reply::Bulk(v) => {
-                    let s = std::str::from_utf8(&v)
-                        .map_err(|_| io::Error::other("non-utf8 score reply"))?;
-                    let n: f64 = s
-                        .parse()
-                        .map_err(|_| io::Error::other(format!("bad score float: {s}")))?;
-                    Ok(Some(n))
-                }
-                Reply::Nil => Ok(None),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
-                other => Err(unexpected(other)),
-            },
-        }
-    }
-
-    /// `ZCARD key`. Number of members; 0 if absent.
-    pub fn zcard(&mut self, key: &[u8]) -> io::Result<usize> {
-        match self {
-            Self::Embedded(s) => s.zcard(key),
-            Self::Remote(c) => match c.request(&vec2(b"ZCARD", key))? {
-                Reply::Int(n) if n >= 0 => Ok(n as usize),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
-                other => Err(unexpected(other)),
-            },
-        }
-    }
-
-    /// `ZRANGE key start stop`. Ascending-score order; negative indices
-    /// count from the tail.
-    pub fn zrange(&mut self, key: &[u8], start: i64, stop: i64) -> io::Result<Vec<Vec<u8>>> {
-        match self {
-            Self::Embedded(s) => s
-                .with(|inner| inner.zrange(key, start, stop))
-                .map(|pairs| pairs.into_iter().map(|(m, _score)| m).collect())
-                .map_err(store_err),
-            Self::Remote(c) => {
-                let args = vec![
-                    b"ZRANGE".to_vec(),
-                    key.to_vec(),
-                    start.to_string().into_bytes(),
-                    stop.to_string().into_bytes(),
-                ];
-                match c.request(&args)? {
-                    Reply::Array(items) => array_to_bulks(items),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
-                    other => Err(unexpected(other)),
-                }
-            }
-        }
-    }
-
-    // ===== Pub/sub =====
-
     /// `PUBLISH channel message`. Returns the count of subscribers
     /// that received the message.
     ///
@@ -624,204 +310,23 @@ impl Connection {
     }
 }
 
-// Helpers for the multi-arg list / set commands — both backends accept a
-// slice of byte-slices, but the RESP path builds the args vector itself.
+// ─────────────────────────────────────────────────────────────────────────
+// Crate-internal helpers, used here + by `collections.rs` + `subscribe.rs`.
+// ─────────────────────────────────────────────────────────────────────────
 
-fn list_push(
-    c: &mut RespClient,
-    verb: &[u8],
-    key: &[u8],
-    values: &[&[u8]],
-) -> io::Result<usize> {
-    let mut args = Vec::with_capacity(values.len() + 2);
-    args.push(verb.to_vec());
-    args.push(key.to_vec());
-    args.extend(values.iter().map(|v| v.to_vec()));
-    match c.request(&args)? {
-        Reply::Int(n) if n >= 0 => Ok(n as usize),
-        Reply::Error(e) => Err(io::Error::other(string(e))),
-        other => Err(unexpected(other)),
-    }
-}
-
-fn list_pop(
-    c: &mut RespClient,
-    verb: &[u8],
-    key: &[u8],
-    count: usize,
-) -> io::Result<Vec<Vec<u8>>> {
-    let args = vec![verb.to_vec(), key.to_vec(), count.to_string().into_bytes()];
-    match c.request(&args)? {
-        Reply::Array(items) => array_to_bulks(items),
-        Reply::Bulk(v) => Ok(vec![v]),
-        Reply::Nil => Ok(Vec::new()),
-        Reply::Error(e) => Err(io::Error::other(string(e))),
-        other => Err(unexpected(other)),
-    }
-}
-
-fn set_multi(
-    c: &mut RespClient,
-    verb: &[u8],
-    key: &[u8],
-    members: &[&[u8]],
-) -> io::Result<usize> {
-    let mut args = Vec::with_capacity(members.len() + 2);
-    args.push(verb.to_vec());
-    args.push(key.to_vec());
-    args.extend(members.iter().map(|m| m.to_vec()));
-    match c.request(&args)? {
-        Reply::Int(n) if n >= 0 => Ok(n as usize),
-        Reply::Error(e) => Err(io::Error::other(string(e))),
-        other => Err(unexpected(other)),
-    }
-}
-
-fn array_to_bulks(items: Vec<Reply>) -> io::Result<Vec<Vec<u8>>> {
-    items
-        .into_iter()
-        .map(|r| match r {
-            Reply::Bulk(v) => Ok(v),
-            Reply::Simple(v) => Ok(v),
-            Reply::Nil => Ok(Vec::new()),
-            other => Err(unexpected(other)),
-        })
-        .collect()
-}
-
-fn store_err(e: kevy_embedded::StoreError) -> io::Error {
-    io::Error::other(format!("kevy-store: {e:?}"))
-}
-
-// =====================================================================
-// URL parsing
-// =====================================================================
-
-/// What `parse_url` resolves an input to.
-///
-/// The `mem://` and `file://` forms route through a process-local
-/// registry so two opens of the same URL share the same backing
-/// [`kevy_embedded::Store`] — that's what makes embedded pub/sub work:
-/// the publisher's `Connection` and the consumer's `Subscriber`, opened
-/// with the same URL, reach the same bus. Anonymous `mem://` (no name)
-/// stays isolated for compatibility with v1.0/v1.1/v1.2 behaviour.
-#[derive(Debug, Clone)]
-pub(crate) enum Target {
-    /// `mem://` — anonymous, fresh `Store` each open, never shared.
-    EmbedMemoryAnonymous,
-    /// `mem://<name>` — shared by `<name>` across this process.
-    EmbedMemoryNamed(String),
-    /// `file:///abs/path` / `file://./rel/path` — shared by canonical path
-    /// across this process; also persists to disk (snapshot + AOF).
-    EmbedPersist(PathBuf),
-    /// `kevy://…` / `redis://…` / `tcp://…` — delegate to RespClient.
-    Remote(String),
-}
-
-pub(crate) fn parse_url(url: &str) -> io::Result<Target> {
-    let (scheme, rest) = url
-        .split_once("://")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "URL missing '://'"))?;
-    match scheme {
-        "mem" => Ok(if rest.is_empty() {
-            Target::EmbedMemoryAnonymous
-        } else {
-            Target::EmbedMemoryNamed(rest.to_string())
-        }),
-        "file" => {
-            if rest.is_empty() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "file:// URL must include a path (e.g. `file:///var/lib/myapp`)",
-                ));
-            }
-            Ok(Target::EmbedPersist(PathBuf::from(rest)))
-        }
-        "kevy" | "redis" | "tcp" => Ok(Target::Remote(url.to_string())),
-        "rediss" | "kevys" => Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "TLS schemes (rediss://, kevys://) are unsupported — kevy has no TLS",
-        )),
-        other => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("unknown URL scheme '{other}://'"),
-        )),
-    }
-}
-
-// =====================================================================
-// Embedded-Store URL registry
-// =====================================================================
-
-/// Process-local URL → `WeakStore` map. Same URL → same backing keyspace,
-/// which is what makes embedded pub/sub work across `Connection::open`
-/// and `Subscriber::open` calls. Entries auto-evict when their last
-/// strong handle drops (the next `open` for that URL canonicalizes to a
-/// fresh Store).
-fn embed_registry()
--> &'static std::sync::Mutex<std::collections::HashMap<String, kevy_embedded::WeakStore>> {
-    use std::sync::{Mutex, OnceLock};
-    static REG: OnceLock<Mutex<std::collections::HashMap<String, kevy_embedded::WeakStore>>> =
-        OnceLock::new();
-    REG.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
-}
-
-fn registry_key(target: &Target) -> Option<String> {
-    match target {
-        Target::EmbedMemoryAnonymous | Target::Remote(_) => None,
-        Target::EmbedMemoryNamed(name) => Some(format!("mem://{name}")),
-        Target::EmbedPersist(path) => Some(format!("file://{}", path.display())),
-    }
-}
-
-/// Resolve `target` to a `Store`. Anonymous `mem://` always gets a fresh
-/// Store; named / persist targets return the cached one when present.
-pub(crate) fn resolve_store(target: &Target) -> io::Result<kevy_embedded::Store> {
-    use kevy_embedded::{Config, Store};
-    let key = registry_key(target);
-    if let Some(k) = &key
-        && let Ok(mut r) = embed_registry().lock()
-    {
-        r.retain(|_, w| w.upgrade().is_some());
-        if let Some(store) = r.get(k).and_then(|w| w.upgrade()) {
-            return Ok(store);
-        }
-    }
-    let store = match target {
-        Target::EmbedMemoryAnonymous | Target::EmbedMemoryNamed(_) => Store::open(Config::default()),
-        Target::EmbedPersist(path) => Store::open(Config::default().with_persist(path)),
-        Target::Remote(_) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "resolve_store called on a Remote target",
-            ));
-        }
-    }?;
-    if let Some(k) = key
-        && let Ok(mut r) = embed_registry().lock()
-    {
-        r.insert(k, store.downgrade());
-    }
-    Ok(store)
-}
-
-// =====================================================================
-// Small RESP helpers
-// =====================================================================
-
-fn vec2(verb: &[u8], a: &[u8]) -> Vec<Vec<u8>> {
+pub(crate) fn vec2(verb: &[u8], a: &[u8]) -> Vec<Vec<u8>> {
     vec![verb.to_vec(), a.to_vec()]
 }
 
-fn vec3(verb: &[u8], a: &[u8], b: &[u8]) -> Vec<Vec<u8>> {
+pub(crate) fn vec3(verb: &[u8], a: &[u8], b: &[u8]) -> Vec<Vec<u8>> {
     vec![verb.to_vec(), a.to_vec(), b.to_vec()]
 }
 
-fn string(b: Vec<u8>) -> String {
+pub(crate) fn string(b: Vec<u8>) -> String {
     String::from_utf8_lossy(&b).into_owned()
 }
 
-fn unexpected(r: Reply) -> io::Error {
+pub(crate) fn unexpected(r: Reply) -> io::Error {
     let kind = match r {
         Reply::Simple(_) => "simple-string",
         Reply::Error(_) => "error",
@@ -833,66 +338,29 @@ fn unexpected(r: Reply) -> io::Error {
     io::Error::other(format!("unexpected RESP reply variant: {kind}"))
 }
 
+pub(crate) fn array_to_bulks(items: Vec<Reply>) -> io::Result<Vec<Vec<u8>>> {
+    items
+        .into_iter()
+        .map(|r| match r {
+            Reply::Bulk(v) => Ok(v),
+            Reply::Simple(v) => Ok(v),
+            Reply::Nil => Ok(Vec::new()),
+            other => Err(unexpected(other)),
+        })
+        .collect()
+}
+
+pub(crate) fn store_err(e: kevy_embedded::StoreError) -> io::Error {
+    io::Error::other(format!("kevy-store: {e:?}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn parse_mem_url() {
-        // `mem://` is anonymous (per-call fresh Store).
-        assert!(matches!(
-            parse_url("mem://").unwrap(),
-            Target::EmbedMemoryAnonymous
-        ));
-        // `mem://<name>` is shared by name (registry route, since v1.3.0).
-        match parse_url("mem://my-bus").unwrap() {
-            Target::EmbedMemoryNamed(n) => assert_eq!(n, "my-bus"),
-            other => panic!("expected EmbedMemoryNamed, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn parse_file_url() {
-        match parse_url("file:///var/lib/myapp").unwrap() {
-            Target::EmbedPersist(p) => assert_eq!(p, PathBuf::from("/var/lib/myapp")),
-            _ => panic!("wrong variant"),
-        }
-        match parse_url("file://./data").unwrap() {
-            Target::EmbedPersist(p) => assert_eq!(p, PathBuf::from("./data")),
-            _ => panic!("wrong variant"),
-        }
-        assert!(parse_url("file://").is_err());
-    }
-
-    #[test]
-    fn parse_remote_urls_delegate() {
-        for url in ["kevy://h:6379", "redis://h:6379/0", "tcp://h:6379"] {
-            match parse_url(url).unwrap() {
-                Target::Remote(u) => assert_eq!(u, url),
-                _ => panic!("wrong variant"),
-            }
-        }
-    }
-
-    #[test]
-    fn parse_tls_rejected() {
-        assert_eq!(
-            parse_url("rediss://h:6379").unwrap_err().kind(),
-            io::ErrorKind::Unsupported
-        );
-    }
-
-    #[test]
-    fn parse_unknown_scheme_rejected() {
-        assert_eq!(
-            parse_url("memcached://h:11211").unwrap_err().kind(),
-            io::ErrorKind::InvalidInput
-        );
-    }
-
-    // Functional smoke against the embedded backend — covers every method
-    // delegating to Store. (Remote backend smoke needs a running server;
-    // see crates/kevy/tests/ for that integration in the next pass.)
+    /// Smoke against the embedded backend: every generic + string method
+    /// delegating to `Store`. Per-collection coverage (hash/list/set/zset)
+    /// lives in `collections::tests`.
     #[test]
     fn embedded_mem_full_crud_round_trip() {
         let mut c = Connection::open("mem://").unwrap();
@@ -901,138 +369,39 @@ mod tests {
         c.set(b"k", b"v").unwrap();
         assert_eq!(c.get(b"k").unwrap(), Some(b"v".to_vec()));
 
-        // del returns 1 (existing), 0 (missing).
         assert_eq!(c.del(&[&b"k"[..], &b"missing"[..]]).unwrap(), 1);
         assert_eq!(c.get(b"k").unwrap(), None);
 
-        // exists counts each present.
         c.set(b"a", b"1").unwrap();
         c.set(b"b", b"2").unwrap();
         assert_eq!(c.exists(&[&b"a"[..], &b"b"[..], &b"none"[..]]).unwrap(), 2);
 
-        // incr / incr_by — fresh counter starts at 0.
         assert_eq!(c.incr(b"counter").unwrap(), 1);
         assert_eq!(c.incr_by(b"counter", 9).unwrap(), 10);
 
-        // expire + ttl_ms + persist.
         c.set(b"timed", b"x").unwrap();
         assert!(c.expire(b"timed", Duration::from_secs(60)).unwrap());
         let ttl = c.ttl_ms(b"timed").unwrap();
         assert!((0..=60_000).contains(&ttl), "ttl_ms = {ttl}");
         assert!(c.persist(b"timed").unwrap());
-        // After persist, no expiry → ttl_ms is -1.
         assert_eq!(c.ttl_ms(b"timed").unwrap(), -1);
 
-        // type_of for absent + present.
         assert_eq!(c.type_of(b"none").unwrap(), "none");
         assert_eq!(c.type_of(b"timed").unwrap(), "string");
 
-        // dbsize / flush.
         assert!(c.dbsize().unwrap() >= 3);
         c.flush().unwrap();
         assert_eq!(c.dbsize().unwrap(), 0);
 
-        // set_with_ttl — same as set+expire but atomic.
-        c.set_with_ttl(b"timed2", b"x", Duration::from_secs(60)).unwrap();
+        c.set_with_ttl(b"timed2", b"x", Duration::from_secs(60))
+            .unwrap();
         let ttl = c.ttl_ms(b"timed2").unwrap();
         assert!((0..=60_000).contains(&ttl));
     }
 
     #[test]
-    fn embedded_hash_methods() {
-        let mut c = Connection::open("mem://").unwrap();
-        let pairs: &[(&[u8], &[u8])] = &[
-            (b"name".as_ref(), b"alice".as_ref()),
-            (b"age".as_ref(), b"30".as_ref()),
-        ];
-        assert_eq!(c.hset(b"u:1", pairs).unwrap(), 2);
-        assert_eq!(c.hget(b"u:1", b"name").unwrap(), Some(b"alice".to_vec()));
-        assert_eq!(c.hget(b"u:1", b"missing").unwrap(), None);
-        assert_eq!(c.hlen(b"u:1").unwrap(), 2);
-
-        // hgetall returns flat [f0,v0,f1,v1,...] — sort to make assertion stable.
-        let mut all = c.hgetall(b"u:1").unwrap();
-        all.sort();
-        assert!(all.contains(&b"alice".to_vec()));
-        assert!(all.contains(&b"name".to_vec()));
-
-        let mut keys = c.hkeys(b"u:1").unwrap();
-        keys.sort();
-        assert_eq!(keys, vec![b"age".to_vec(), b"name".to_vec()]);
-
-        let mut vals = c.hvals(b"u:1").unwrap();
-        vals.sort();
-        assert_eq!(vals, vec![b"30".to_vec(), b"alice".to_vec()]);
-
-        assert_eq!(c.hdel(b"u:1", &[&b"age"[..], &b"missing"[..]]).unwrap(), 1);
-        assert_eq!(c.hlen(b"u:1").unwrap(), 1);
-    }
-
-    #[test]
-    fn embedded_list_methods() {
-        let mut c = Connection::open("mem://").unwrap();
-        assert_eq!(c.rpush(b"q", &[&b"a"[..], &b"b"[..], &b"c"[..]]).unwrap(), 3);
-        assert_eq!(c.lpush(b"q", &[&b"z"[..]]).unwrap(), 4);
-        assert_eq!(c.llen(b"q").unwrap(), 4);
-
-        // q = [z, a, b, c]
-        assert_eq!(
-            c.lrange(b"q", 0, -1).unwrap(),
-            vec![b"z".to_vec(), b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]
-        );
-
-        assert_eq!(c.lpop(b"q", 2).unwrap(), vec![b"z".to_vec(), b"a".to_vec()]);
-        assert_eq!(c.rpop(b"q", 1).unwrap(), vec![b"c".to_vec()]);
-        assert_eq!(c.llen(b"q").unwrap(), 1);
-    }
-
-    #[test]
-    fn embedded_set_methods() {
-        let mut c = Connection::open("mem://").unwrap();
-        assert_eq!(
-            c.sadd(b"s", &[&b"a"[..], &b"b"[..], &b"a"[..]]).unwrap(),
-            2
-        ); // dedupe
-        assert_eq!(c.scard(b"s").unwrap(), 2);
-        assert!(c.sismember(b"s", b"a").unwrap());
-        assert!(!c.sismember(b"s", b"missing").unwrap());
-
-        let mut m = c.smembers(b"s").unwrap();
-        m.sort();
-        assert_eq!(m, vec![b"a".to_vec(), b"b".to_vec()]);
-
-        assert_eq!(c.srem(b"s", &[&b"a"[..]]).unwrap(), 1);
-        assert_eq!(c.scard(b"s").unwrap(), 1);
-    }
-
-    #[test]
-    fn embedded_zset_methods() {
-        let mut c = Connection::open("mem://").unwrap();
-        let pairs: &[(f64, &[u8])] = &[
-            (100.0, b"alice".as_ref()),
-            (200.0, b"bob".as_ref()),
-            (50.0, b"carol".as_ref()),
-        ];
-        assert_eq!(c.zadd(b"lb", pairs).unwrap(), 3);
-        assert_eq!(c.zscore(b"lb", b"bob").unwrap(), Some(200.0));
-        assert_eq!(c.zscore(b"lb", b"none").unwrap(), None);
-        assert_eq!(c.zcard(b"lb").unwrap(), 3);
-
-        // ZRANGE 0 -1 → ascending by score: carol, alice, bob.
-        let r = c.zrange(b"lb", 0, -1).unwrap();
-        assert_eq!(
-            r,
-            vec![b"carol".to_vec(), b"alice".to_vec(), b"bob".to_vec()]
-        );
-
-        assert_eq!(c.zrem(b"lb", &[&b"carol"[..]]).unwrap(), 1);
-        assert_eq!(c.zcard(b"lb").unwrap(), 2);
-    }
-
-    #[test]
-    fn embedded_publish_returns_zero() {
-        // Single-process embed has no subscribers — semantic match for
-        // "PUBLISH to a channel nobody listens to".
+    fn anonymous_mem_publish_returns_zero() {
+        // No bus, no subscribers — by design.
         let mut c = Connection::open("mem://").unwrap();
         assert_eq!(c.publish(b"chan", b"hi").unwrap(), 0);
     }
