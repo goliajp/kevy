@@ -1,0 +1,25 @@
+[package]
+name = "kevy-client"
+description = "Unified client for kevy — switch between in-process embedded and TCP server backends with a single URL."
+# Explicit, not workspace-inherited: kevy-client is a v1.0.5 add-on that
+# depends on the v1.0.4 chain already on crates.io, so the rest of the
+# workspace stays at 1.0.4 and only kevy-client ships a 1.0.5.
+version = "1.0.5"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-client"
+readme = "README.md"
+keywords = ["kevy", "redis", "kv", "client", "embedded"]
+categories = ["database", "caching", "api-bindings"]
+
+[lints]
+workspace = true
+
+[dependencies]
+kevy-embedded = { path = "../kevy-embedded", version = "1.0.4" }
+kevy-resp = { path = "../kevy-resp", version = "1.0.4" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "1.0.4" }

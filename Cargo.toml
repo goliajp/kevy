@@ -25,6 +25,7 @@ members = [
     "crates/kevy-resp-client",
     "crates/kevy-config",
     "crates/kevy-embedded",
+    "crates/kevy-client",
 ]
 
 [workspace.package]
