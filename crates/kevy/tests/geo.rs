@@ -448,6 +448,214 @@ fn geosearch_withcoord_withdist_withhash_emit_nested_arrays() {
     assert!(s.contains("13.361389"), "WITHCOORD lon missing: {s}");
 }
 
+// ───────────── GEOSEARCHSTORE / GEORADIUS / GEORADIUSBYMEMBER ─────────────
+
+#[test]
+fn geosearchstore_writes_geohash_scores_to_destination() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    add_two_more(&mut c);
+    c.write_all(&req(&[
+        b"GEOSEARCHSTORE",
+        b"NearPalermo",
+        b"Sicily",
+        b"FROMLONLAT",
+        b"13.361389",
+        b"38.115556",
+        b"BYRADIUS",
+        b"200",
+        b"km",
+    ]))
+    .unwrap();
+    // Expect ":3\r\n" — Palermo, Catania, Agrigento.
+    assert_eq!(read_reply(&mut c), b":3\r\n");
+    // ZSCORE on dst must return Palermo's geohash score.
+    c.write_all(&req(&[b"ZSCORE", b"NearPalermo", b"Palermo"])).unwrap();
+    let r = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("3479099956230698"), "dst missing geohash score: {s}");
+}
+
+#[test]
+fn geosearchstore_with_storedist_writes_distance_scores() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    c.write_all(&req(&[
+        b"GEOSEARCHSTORE",
+        b"Distances",
+        b"Sicily",
+        b"FROMMEMBER",
+        b"Palermo",
+        b"BYRADIUS",
+        b"200",
+        b"km",
+        b"STOREDIST",
+    ]))
+    .unwrap();
+    assert_eq!(read_reply(&mut c), b":2\r\n");
+    // Palermo→Palermo distance is 0.
+    c.write_all(&req(&[b"ZSCORE", b"Distances", b"Palermo"])).unwrap();
+    let r = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("$1\r\n0\r\n") || s.contains("$3\r\n0.0"), "self-distance not 0: {s}");
+}
+
+#[test]
+fn geosearchstore_empty_result_clears_destination() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    // Pre-populate dst with something to verify it gets cleared.
+    c.write_all(&req(&[
+        b"GEOSEARCHSTORE",
+        b"Out",
+        b"Sicily",
+        b"FROMLONLAT",
+        b"13.361389",
+        b"38.115556",
+        b"BYRADIUS",
+        b"50",
+        b"km",
+    ]))
+    .unwrap();
+    // Self-match → :1
+    assert_eq!(read_reply(&mut c), b":1\r\n");
+    // Now search far from any Sicily member → :0 + dst gone.
+    c.write_all(&req(&[
+        b"GEOSEARCHSTORE",
+        b"Out",
+        b"Sicily",
+        b"FROMLONLAT",
+        b"0",
+        b"0",
+        b"BYRADIUS",
+        b"100",
+        b"m",
+    ]))
+    .unwrap();
+    assert_eq!(read_reply(&mut c), b":0\r\n");
+    c.write_all(&req(&[b"EXISTS", b"Out"])).unwrap();
+    assert_eq!(read_reply(&mut c), b":0\r\n");
+}
+
+#[test]
+fn georadius_legacy_form_returns_members() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    add_two_more(&mut c);
+    c.write_all(&req(&[
+        b"GEORADIUS",
+        b"Sicily",
+        b"13.361389",
+        b"38.115556",
+        b"200",
+        b"km",
+        b"ASC",
+    ]))
+    .unwrap();
+    let r = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("Palermo"));
+    assert!(s.contains("Catania"));
+    assert!(s.contains("Agrigento"));
+    assert!(!s.contains("Roma"));
+}
+
+#[test]
+fn georadiusbymember_legacy_form_returns_members() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    c.write_all(&req(&[
+        b"GEORADIUSBYMEMBER",
+        b"Sicily",
+        b"Palermo",
+        b"200",
+        b"km",
+    ]))
+    .unwrap();
+    let r = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("Palermo"));
+    assert!(s.contains("Catania"));
+}
+
+#[test]
+fn georadius_store_writes_geohash_scores() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    add_two_more(&mut c);
+    c.write_all(&req(&[
+        b"GEORADIUS",
+        b"Sicily",
+        b"13.361389",
+        b"38.115556",
+        b"200",
+        b"km",
+        b"STORE",
+        b"NearPalermo",
+    ]))
+    .unwrap();
+    assert_eq!(read_reply(&mut c), b":3\r\n");
+    c.write_all(&req(&[b"ZSCORE", b"NearPalermo", b"Palermo"])).unwrap();
+    let s = String::from_utf8_lossy(&read_reply(&mut c)).to_string();
+    assert!(s.contains("3479099956230698"), "got: {s}");
+}
+
+#[test]
+fn georadius_ro_rejects_store() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    c.write_all(&req(&[
+        b"GEORADIUS_RO",
+        b"Sicily",
+        b"13.361389",
+        b"38.115556",
+        b"50",
+        b"km",
+        b"STORE",
+        b"x",
+    ]))
+    .unwrap();
+    let r = read_reply(&mut c);
+    assert!(
+        r.starts_with(b"-ERR"),
+        "_RO variant must reject STORE: {:?}",
+        String::from_utf8_lossy(&r),
+    );
+}
+
+#[test]
+fn georadius_store_with_with_clause_is_rejected() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    c.write_all(&req(&[
+        b"GEORADIUS",
+        b"Sicily",
+        b"13.361389",
+        b"38.115556",
+        b"50",
+        b"km",
+        b"WITHCOORD",
+        b"STORE",
+        b"x",
+    ]))
+    .unwrap();
+    let r = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.starts_with("-ERR"), "expected error, got: {s}");
+    assert!(
+        s.contains("STORE") && s.contains("WITH"),
+        "expected STORE+WITH conflict message, got: {s}",
+    );
+}
+
 #[test]
 fn geosearch_bybox_filters_to_rectangle() {
     let srv = Server::start(1);

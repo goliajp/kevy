@@ -12,6 +12,7 @@
 //!   this family (radius/box modes, six option flags). Split out so
 //!   each file stays under the project's ≤500-LOC rule.
 
+mod radius;
 mod search;
 
 use kevy_geo::{
@@ -38,6 +39,13 @@ pub(crate) fn dispatch_geo<A: ArgvView + ?Sized>(
         b"GEODIST" => cmd_geodist(store, args, out),
         b"GEOHASH" => cmd_geohash(store, args, out),
         b"GEOSEARCH" => search::cmd_geosearch(store, args, out),
+        b"GEOSEARCHSTORE" => search::cmd_geosearchstore(store, args, out),
+        b"GEORADIUS" | b"GEORADIUS_RO" => {
+            radius::cmd_georadius(store, args, out, cmd == b"GEORADIUS_RO")
+        }
+        b"GEORADIUSBYMEMBER" | b"GEORADIUSBYMEMBER_RO" => {
+            radius::cmd_georadiusbymember(store, args, out, cmd == b"GEORADIUSBYMEMBER_RO")
+        }
         _ => return false,
     }
     true
