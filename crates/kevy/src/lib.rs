@@ -134,6 +134,21 @@ impl Commands for KevyCommands {
         dispatch::dispatch_into(store, args, out)
     }
 
+    fn dispatch_resp3<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8> {
+        let mut out = Vec::with_capacity(64);
+        dispatch::dispatch_into_resp3(store, args, &mut out);
+        out
+    }
+
+    fn dispatch_into_resp3<A: ArgvView + ?Sized>(
+        &self,
+        store: &mut Store,
+        args: &A,
+        out: &mut Vec<u8>,
+    ) {
+        dispatch::dispatch_into_resp3(store, args, out)
+    }
+
     fn is_quit<A: ArgvView + ?Sized>(&self, args: &A) -> bool {
         args.first()
             .is_some_and(|c| c.eq_ignore_ascii_case(b"QUIT"))
