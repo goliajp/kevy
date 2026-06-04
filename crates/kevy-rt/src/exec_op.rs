@@ -156,7 +156,7 @@ impl<C: Commands> Shard<C> {
     /// route lookup is one verb-table dispatch (~5 ns); inside-store the
     /// bump is one HashMap::get_mut (no insert) — empty when no key on
     /// this shard has ever been WATCH-ed.
-    fn bump_watch_for_dispatch<A: ArgvView + ?Sized>(&mut self, args: &A) {
+    pub(crate) fn bump_watch_for_dispatch<A: ArgvView + ?Sized>(&mut self, args: &A) {
         if let Route::Single(idx) = self.commands.route(args)
             && idx < args.len()
         {

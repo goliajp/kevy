@@ -6,14 +6,11 @@
 //! the shard(s) that own its keys, executing one op against the local store,
 //! and folding sub-results into each connection's seq-ordered ring.
 
-use crate::message::{
-    Agg, GatherKind, Inbound, KeyShape, KvPairs, MultiOp, Op, Part, PendingSlot,
-};
+use crate::message::{Agg, Inbound, Op, Part, PendingSlot};
 use crate::reduce::{drain_front, materialize, shard_of};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route, TxnKind};
 use kevy_resp::{ArgvView, encode_array_len};
-use std::collections::HashMap;
 
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
@@ -40,12 +37,20 @@ impl<C: Commands> Shard<C> {
                 self.immediate_reply(conn_id, b"-ERR MULTI calls can not be nested\r\n".to_vec());
             }
             (true, TxnKind::Discard) => {
+                // DISCARD drops the queued cmds AND any `WATCH`-ed keys
+                // (Redis semantics — see https://redis.io/commands/discard).
                 if let Some(c) = self.conns.get_mut(&conn_id) {
                     c.multi = None;
+                    c.watched.clear();
                 }
                 self.immediate_reply(conn_id, b"+OK\r\n".to_vec());
             }
             (true, TxnKind::Exec) => self.exec_transaction(conn_id),
+            (true, TxnKind::Watch) => self.immediate_reply(
+                conn_id,
+                b"-ERR WATCH inside MULTI is not allowed\r\n".to_vec(),
+            ),
+            (false, TxnKind::Watch) => self.start_command(conn_id, args, resolved),
             (true, TxnKind::Other) => {
                 if let Some(q) = self.conns.get_mut(&conn_id).and_then(|c| c.multi.as_mut()) {
                     q.push(args.to_argv());
@@ -78,13 +83,20 @@ impl<C: Commands> Shard<C> {
 
     /// `EXEC` — emit a `*N` array header, then run the queued commands in order.
     /// The seq-ordered ring concatenates their replies into one valid array.
-    /// (Single-machine: same-shard commands are atomic on their core; we do not
-    /// add a global no-interleave lock across shards. WATCH is not yet supported.)
+    /// If the conn has any `WATCH`-ed keys, delegate to the pre-check fan-out
+    /// path in [`crate::exec_watch`] (aborts if any watched key is dirty).
     fn exec_transaction(&mut self, conn_id: u64) {
-        let queued = match self.conns.get_mut(&conn_id) {
-            Some(c) => c.multi.take().unwrap_or_default(),
+        let (queued, watched) = match self.conns.get_mut(&conn_id) {
+            Some(c) => (
+                c.multi.take().unwrap_or_default(),
+                std::mem::take(&mut c.watched),
+            ),
             None => return,
         };
+        if !watched.is_empty() {
+            self.exec_transaction_watched(conn_id, queued, watched);
+            return;
+        }
         let mut header = Vec::new();
         encode_array_len(&mut header, queued.len() as i64);
         self.immediate_reply(conn_id, header);
@@ -110,6 +122,8 @@ impl<C: Commands> Shard<C> {
             Route::Subscribe => self.do_subscribe(conn_id, seq, args, true),
             Route::Unsubscribe => self.do_subscribe(conn_id, seq, args, false),
             Route::Publish => self.do_publish(conn_id, seq, args),
+            Route::Watch => self.do_watch(conn_id, seq, args),
+            Route::Unwatch => self.do_unwatch(conn_id, seq),
             Route::Local => {
                 self.start_single(conn_id, seq, args, self.id, is_quit, is_write);
             }
@@ -184,8 +198,15 @@ impl<C: Commands> Shard<C> {
         if is_quit {
             conn.closing = true;
         }
-        if self.aof.is_some() && is_write {
-            self.log(args);
+        if is_write {
+            // WATCH version bump + AOF logging — the inline fast path
+            // bypasses `exec_op`, so both have to fire here.
+            // `bump_watch_for_dispatch` is an empty-map lookup when
+            // no key on this shard has ever been WATCH-ed.
+            self.bump_watch_for_dispatch(args);
+            if self.aof.is_some() {
+                self.log(args);
+            }
         }
         true
     }
@@ -233,7 +254,7 @@ impl<C: Commands> Shard<C> {
     /// single-key forwards to peer shards (the hot -c50 path), and use the
     /// unbatched `Inbound::Request` for multi-key ops that don't fit the
     /// batch shape.
-    fn dispatch_targets(&mut self, conn_id: u64, seq: u64, targets: Vec<(usize, Op)>) {
+    pub(crate) fn dispatch_targets(&mut self, conn_id: u64, seq: u64, targets: Vec<(usize, Op)>) {
         for (shard, op) in targets {
             if shard == self.id {
                 let part = self.exec_op(op);
@@ -260,137 +281,6 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Translate a multi-target [`Route`] into a `(targets, aggregator)` pair.
-    /// `route` is consumed so `Keys(pat)` / `Scan(pat)` can move the owned
-    /// pattern into `fanout_keys` without an extra clone.
-    ///
-    /// Single-target and pub/sub routes should never reach here — they go
-    /// through dedicated paths in `start_command`. If a routing-layer bug
-    /// ever sends one through, we emit a WARN and produce an empty target
-    /// list so the conn gets a nil/0 reply rather than crashing the
-    /// reactor for every other in-flight command on the shard. The
-    /// connection sees an observably-wrong reply; nothing else dies.
-    fn build_multi_targets<A: ArgvView + ?Sized>(
-        &self,
-        args: &A,
-        route: Route,
-    ) -> (Vec<(usize, Op)>, Agg) {
-        match route {
-            Route::Local | Route::Single(_) => {
-                eprintln!(
-                    "kevy WARN: build_multi_targets reached single-target route {route:?} \
-                     — routing bug; replying nil to the client"
-                );
-                (Vec::new(), Agg::First(None))
-            }
-            Route::Subscribe | Route::Unsubscribe | Route::Publish => {
-                eprintln!(
-                    "kevy WARN: build_multi_targets reached pub/sub route {route:?} \
-                     — routing bug; replying nil to the client"
-                );
-                (Vec::new(), Agg::First(None))
-            }
-            Route::DelKeys => (self.group_keys(args, Op::Del), Agg::SumInt(0)),
-            Route::ExistsKeys => (self.group_keys(args, Op::Exists), Agg::SumInt(0)),
-            Route::Dbsize => (
-                (0..self.nshards).map(|s| (s, Op::Dbsize)).collect(),
-                Agg::SumInt(0),
-            ),
-            Route::Flush => (
-                (0..self.nshards).map(|s| (s, Op::Flush)).collect(),
-                Agg::AllOk,
-            ),
-            Route::Save => (
-                (0..self.nshards).map(|s| (s, Op::Save)).collect(),
-                Agg::AllOk,
-            ),
-            Route::RewriteAof => (
-                (0..self.nshards).map(|s| (s, Op::RewriteAof)).collect(),
-                Agg::AllOk,
-            ),
-            Route::MSet => self.build_mset_targets(args),
-            Route::MGet => self.build_gather(args, GatherKind::Str, MultiOp::Mget),
-            Route::SInter => self.build_gather(args, GatherKind::Set, MultiOp::SInter),
-            Route::SUnion => self.build_gather(args, GatherKind::Set, MultiOp::SUnion),
-            Route::SDiff => self.build_gather(args, GatherKind::Set, MultiOp::SDiff),
-            Route::Keys(pat) => self.fanout_keys(pat, None, KeyShape::Keys),
-            Route::Scan(pat) => self.fanout_keys(pat, None, KeyShape::Scan),
-            Route::RandomKey => self.fanout_keys(None, Some(1), KeyShape::Random),
-        }
-    }
-
-    /// Group `args[1..]` key/value pairs by each key's shard for MSET.
-    fn build_mset_targets<A: ArgvView + ?Sized>(
-        &self,
-        args: &A,
-    ) -> (Vec<(usize, Op)>, Agg) {
-        let mut by_shard: HashMap<usize, KvPairs> = HashMap::new();
-        let mut i = 1;
-        while i + 1 < args.len() {
-            by_shard
-                .entry(shard_of(&args[i], self.nshards))
-                .or_default()
-                .push((args[i].to_vec(), args[i + 1].to_vec()));
-            i += 2;
-        }
-        (
-            by_shard
-                .into_iter()
-                .map(|(s, p)| (s, Op::MSet(p)))
-                .collect(),
-            Agg::AllOk,
-        )
-    }
-
-    /// Group `args[1..]` keys by shard for a cross-shard gather.
-    fn build_gather<A: ArgvView + ?Sized>(
-        &self,
-        args: &A,
-        kind: GatherKind,
-        op: MultiOp,
-    ) -> (Vec<(usize, Op)>, Agg) {
-        let keys: Vec<Vec<u8>> = (1..args.len()).map(|i| args[i].to_vec()).collect();
-        let mut by_shard: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
-        for k in &keys {
-            by_shard
-                .entry(shard_of(k, self.nshards))
-                .or_default()
-                .push(k.clone());
-        }
-        let targets = by_shard
-            .into_iter()
-            .map(|(s, ks)| (s, Op::Gather(kind, ks)))
-            .collect();
-        (
-            targets,
-            Agg::Gather {
-                op,
-                keys,
-                got: HashMap::new(),
-            },
-        )
-    }
-
-    /// Fan a key-collection out to every shard (KEYS/SCAN/RANDOMKEY).
-    fn fanout_keys(
-        &self,
-        pat: Option<Vec<u8>>,
-        limit: Option<usize>,
-        shape: KeyShape,
-    ) -> (Vec<(usize, Op)>, Agg) {
-        let targets = (0..self.nshards)
-            .map(|s| (s, Op::CollectKeys(pat.clone(), limit)))
-            .collect();
-        (
-            targets,
-            Agg::Keys {
-                shape,
-                acc: Vec::new(),
-            },
-        )
-    }
-
-
     /// Flush each shard's accumulated single-key dispatch batch as one
     /// cross-core `RequestBatch` — a -c50 flood costs one send per target shard
     /// per loop, not one per command. Call once per reactor loop iteration.
@@ -409,26 +299,10 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Split `args[1..]` (keys) by owning shard.
-    fn group_keys<A: ArgvView + ?Sized>(
-        &self,
-        args: &A,
-        mk: fn(Vec<Vec<u8>>) -> Op,
-    ) -> Vec<(usize, Op)> {
-        let mut by_shard: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
-        for i in 1..args.len() {
-            let key = &args[i];
-            by_shard
-                .entry(shard_of(key, self.nshards))
-                .or_default()
-                .push(key.to_vec());
-        }
-        by_shard
-            .into_iter()
-            .map(|(s, keys)| (s, mk(keys)))
-            .collect()
-    }
-
+    // `build_multi_targets` / `group_keys` / `build_gather` / `fanout_keys` /
+    // `build_mset_targets` live in [`crate::exec_build`] so this file stays
+    // under the 500-LOC house rule; still on the same `impl Shard`.
+    //
     // `exec_op` (the cross-shard request dispatcher) lives in
     // [`crate::exec_op`]; do_subscribe / do_publish / deliver_publish /
     // flush_publish live in [`crate::exec_pubsub`]. All still on the same
@@ -444,34 +318,53 @@ impl<C: Commands> Shard<C> {
     }
 
     /// Fold a sub-result into its slot; emit completed replies in seq order.
+    /// The `WatchCollect` / `ExecPrep` accumulators don't materialise to RESP
+    /// bytes — they hand off to [`crate::exec_watch`] for the conn-state
+    /// mutation + downstream dispatch they require.
     pub(crate) fn fold(&mut self, conn_id: u64, seq: u64, part: Part) {
-        let Some(conn) = self.conns.get_mut(&conn_id) else {
-            return;
-        };
-        if seq < conn.next_emit {
-            return; // already emitted (defensive — shouldn't happen)
-        }
-        let idx = (seq - conn.next_emit) as usize;
-        let Some(slot) = conn.pending.get_mut(idx) else {
-            return;
-        };
-        match (&mut slot.agg, part) {
-            (Agg::First(dst), Part::Reply(b)) => *dst = Some(b),
-            (Agg::SumInt(acc), Part::Int(n)) => *acc += n,
-            (Agg::AllOk, Part::Ok) => {}
-            (Agg::Gather { got, .. }, Part::Gathered(items)) => {
-                for (k, g) in items {
-                    got.insert(k, g);
-                }
+        let watch_agg: Option<Agg> = {
+            let Some(conn) = self.conns.get_mut(&conn_id) else {
+                return;
+            };
+            if seq < conn.next_emit {
+                return; // already emitted (defensive — shouldn't happen)
             }
-            (Agg::Keys { acc, .. }, Part::Keys(ks)) => acc.extend(ks),
-            _ => {}
-        }
-        slot.remaining -= 1;
-        if slot.remaining == 0 {
-            let agg = std::mem::replace(&mut slot.agg, Agg::AllOk);
-            slot.done = Some(materialize(agg));
-            drain_front(conn);
+            let idx = (seq - conn.next_emit) as usize;
+            let Some(slot) = conn.pending.get_mut(idx) else {
+                return;
+            };
+            match (&mut slot.agg, part) {
+                (Agg::First(dst), Part::Reply(b)) => *dst = Some(b),
+                (Agg::SumInt(acc), Part::Int(n)) => *acc += n,
+                (Agg::AllOk, Part::Ok) => {}
+                (Agg::Gather { got, .. }, Part::Gathered(items)) => {
+                    for (k, g) in items {
+                        got.insert(k, g);
+                    }
+                }
+                (Agg::Keys { acc, .. }, Part::Keys(ks)) => acc.extend(ks),
+                (Agg::WatchCollect { pairs }, Part::WatchVersions(items)) => {
+                    pairs.extend(items);
+                }
+                (Agg::ExecPrep { dirty, .. }, Part::Int(n)) => *dirty |= n != 0,
+                _ => {}
+            }
+            slot.remaining -= 1;
+            if slot.remaining == 0 {
+                let agg = std::mem::replace(&mut slot.agg, Agg::AllOk);
+                if matches!(agg, Agg::WatchCollect { .. } | Agg::ExecPrep { .. }) {
+                    Some(agg)
+                } else {
+                    slot.done = Some(materialize(agg));
+                    drain_front(conn);
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        if let Some(agg) = watch_agg {
+            self.finalize_watch_agg(conn_id, seq, agg);
         }
     }
 

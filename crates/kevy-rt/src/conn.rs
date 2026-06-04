@@ -31,21 +31,7 @@ pub(crate) struct Conn {
     /// transaction aborts (nil multi-bulk). Cleared on EXEC / DISCARD
     /// / UNWATCH / connection close. Empty in steady state for conns
     /// that never call `WATCH` (most clients).
-    ///
-    /// Foundation only — the EXEC fan-out path that consumes this
-    /// field lands in the next commit. `dead_code` until then.
-    #[allow(dead_code)]
     pub(crate) watched: Vec<(Vec<u8>, u64)>,
-    /// Set while a fan-out `Op::CheckWatch` is in flight for this
-    /// conn's pending EXEC. New `WATCH` calls inside an in-flight
-    /// EXEC are forbidden by Redis semantics; this flag plus
-    /// `multi.is_some()` lets the handler reject them with the right
-    /// error string.
-    ///
-    /// Foundation only — read sites land in the next commit. `dead_code`
-    /// until then.
-    #[allow(dead_code)]
-    pub(crate) exec_checking: bool,
 }
 
 impl Conn {
@@ -63,7 +49,6 @@ impl Conn {
             sub: HashSet::new(),
             multi: None,
             watched: Vec::new(),
-            exec_checking: false,
         }
     }
 }
