@@ -177,10 +177,22 @@ fn subscription_is_send_and_sync() {
 fn arc_subscription_drains_concurrent_recvs_round_robin() {
     // Two threads share one `Arc<Subscription>` and each call `recv` in
     // a loop. The publisher floods 100 frames; the two consumers
-    // together must receive exactly 100 frames (no dropped, no
-    // duplicated). Per the documented single-consumer semantic, each
-    // frame goes to exactly one consumer — concurrent calls serialise
-    // on the receiver mutex and one waiter gets each enqueued frame.
+    // together must receive exactly 100 frames — no drops, no
+    // duplicates. Per the documented single-consumer semantic, each
+    // frame goes to exactly one consumer (the receiver mutex
+    // serialises concurrent calls and one waiter gets each enqueued
+    // frame).
+    //
+    // **What we DON'T assert**: any specific split between c1 and c2.
+    // Under heavy concurrent load (the workspace test binary), one
+    // thread can win the lock on every iteration and drain the queue
+    // alone — that's still correct single-consumer behaviour. A prior
+    // version of this test asserted `c1 > 0 && c2 > 0` and flaked
+    // exactly that way under the parallel `cargo test --workspace`
+    // scheduler. The Sync property itself is statically asserted by
+    // `subscription_is_send_and_sync` above; this test only verifies
+    // the runtime contract: no message goes to >1 consumer, none
+    // drops on the floor.
     let s = store();
     let sub = std::sync::Arc::new(s.subscribe(&[b"flood"]));
 
@@ -227,10 +239,6 @@ fn arc_subscription_drains_concurrent_recvs_round_robin() {
     let c1 = consumer1.join().unwrap();
     let c2 = consumer2.join().unwrap();
     assert_eq!(c1 + c2, 100, "got c1={c1}, c2={c2}, expected sum=100");
-    // Both consumers should have received at least one frame (proving
-    // they both reached the lock, not just one greedy thread).
-    assert!(c1 > 0, "consumer 1 got nothing; both threads should have woken");
-    assert!(c2 > 0, "consumer 2 got nothing; both threads should have woken");
 }
 
 #[test]
