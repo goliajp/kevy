@@ -47,6 +47,14 @@ impl Store {
         }
     }
 
+    /// Read-only access to a stream's `StreamData`, used by `XINFO`
+    /// to inspect entries / groups / consumers without going through
+    /// the wrapper layer. Returns `Ok(None)` for a missing key,
+    /// `WrongType` for a non-stream value at `key`.
+    pub fn stream_view(&mut self, key: &[u8]) -> Result<Option<&StreamData>, StoreError> {
+        self.stream_ref(key)
+    }
+
     /// `XADD key <spec> field value [field value ...]`. Returns the
     /// assigned ID. `nomkstream` matches Redis's `NOMKSTREAM` flag —
     /// suppress key creation, returning `Ok(None)`. `now_ms` is the

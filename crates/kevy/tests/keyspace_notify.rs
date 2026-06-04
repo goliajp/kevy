@@ -244,6 +244,29 @@ fn default_off_emits_nothing() {
 }
 
 #[test]
+fn xadd_fires_stream_keyspace_event() {
+    let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    // `K` channel + `t` class → XADD fires `__keyspace@0__:s` with payload `xadd`.
+    let srv = Server::start_with_flags("Kt", 1);
+
+    let mut sub = srv.connect();
+    sub.write_all(&req(&[b"SUBSCRIBE", b"__keyspace@0__:s"])).unwrap();
+    read_reply(
+        &mut sub,
+        b"*3\r\n$9\r\nsubscribe\r\n$16\r\n__keyspace@0__:s\r\n:1\r\n",
+    );
+
+    let mut w = srv.connect();
+    w.write_all(&req(&[b"XADD", b"s", b"1-0", b"f", b"v"])).unwrap();
+    read_reply(&mut w, b"$3\r\n1-0\r\n");
+
+    read_reply(
+        &mut sub,
+        b"*3\r\n$7\r\nmessage\r\n$16\r\n__keyspace@0__:s\r\n$4\r\nxadd\r\n",
+    );
+}
+
+#[test]
 fn class_gate_filters_unrelated_events() {
     let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
     // `K$` enables ONLY string-class events. A HSET (hash class)

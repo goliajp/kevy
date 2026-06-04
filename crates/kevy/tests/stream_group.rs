@@ -385,6 +385,66 @@ fn xautoclaim_walks_pel_and_returns_cursor() {
 
 // ───────────── XGROUP CREATECONSUMER / DELCONSUMER ─────────────
 
+// ───────────── XINFO ─────────────
+
+#[test]
+fn xinfo_stream_reports_basic_fields() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    setup_group(&mut c);
+    c.write_all(&req(&[b"XINFO", b"STREAM", b"s"])).unwrap();
+    let r = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("length"), "missing length field: {s}");
+    assert!(s.contains("last-generated-id"), "missing last-generated-id: {s}");
+    assert!(s.contains("3-0"), "should mention last id: {s}");
+    assert!(s.contains("groups"), "missing groups field: {s}");
+    assert!(s.contains("first-entry"), "missing first-entry: {s}");
+}
+
+#[test]
+fn xinfo_stream_missing_key_errors() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    c.write_all(&req(&[b"XINFO", b"STREAM", b"none"])).unwrap();
+    let r = read_reply(&mut c);
+    assert!(r.starts_with(b"-ERR"), "got: {:?}", String::from_utf8_lossy(&r));
+}
+
+#[test]
+fn xinfo_groups_lists_each_group() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    setup_group(&mut c);
+    c.write_all(&req(&[b"XGROUP", b"CREATE", b"s", b"g2", b"$"])).unwrap();
+    let _ = read_reply(&mut c);
+    c.write_all(&req(&[b"XINFO", b"GROUPS", b"s"])).unwrap();
+    let r = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.starts_with("*2\r\n"), "expected 2 groups: {s}");
+    assert!(s.contains("g1") && s.contains("g2"));
+    assert!(s.contains("last-delivered-id"));
+}
+
+#[test]
+fn xinfo_consumers_lists_after_delivery() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    setup_group(&mut c);
+    c.write_all(&req(&[
+        b"XREADGROUP", b"GROUP", b"g1", b"c1", b"STREAMS", b"s", b">",
+    ]))
+    .unwrap();
+    let _ = read_reply(&mut c);
+    c.write_all(&req(&[b"XINFO", b"CONSUMERS", b"s", b"g1"])).unwrap();
+    let r = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.starts_with("*1\r\n"), "expected 1 consumer: {s}");
+    assert!(s.contains("c1"));
+    assert!(s.contains("pending"));
+    assert!(s.contains(":3"), "c1 PEL count = 3: {s}");
+}
+
 #[test]
 fn xgroup_createconsumer_then_delconsumer() {
     let srv = Server::start(1);

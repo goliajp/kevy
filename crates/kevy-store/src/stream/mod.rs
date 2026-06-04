@@ -195,6 +195,21 @@ impl StreamData {
         self.entries.iter().next_back().map(|(id, fv)| (*id, fv.as_slice()))
     }
 
+    /// Iterate `(group_name, group)` pairs — used by `XINFO GROUPS`.
+    pub fn groups_iter(&self) -> impl Iterator<Item = (&[u8], &group::ConsumerGroup)> {
+        self.groups.iter().map(|(k, v)| (k.as_slice(), v.as_ref()))
+    }
+
+    /// Lookup one group by name (for `XINFO CONSUMERS`).
+    pub fn group(&self, name: &[u8]) -> Option<&group::ConsumerGroup> {
+        self.groups.get(name).map(|b| b.as_ref())
+    }
+
+    /// Group count — `XINFO STREAM`'s `groups` field.
+    pub fn group_count(&self) -> usize {
+        self.groups.len()
+    }
+
     /// Snapshot-loader entry-point: insert a pre-existing entry without
     /// touching scalar state. Used by `Store::load_stream`; the loader
     /// pumps every entry then calls [`Self::set_loaded_state`] once.

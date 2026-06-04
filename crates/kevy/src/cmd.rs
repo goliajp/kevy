@@ -144,6 +144,10 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
         // Sorted set — class `z`. GEOADD writes a ZSet under the hood,
         // so it fires `zadd` notifications too (matches Redis).
         b"ZADD" | b"ZREM" | b"ZINCRBY" | b"GEOADD" => NotifyClass::Zset,
+        // Stream — class `t`. XADD/XDEL/XTRIM/XGROUP/XACK/XCLAIM/
+        // XREADGROUP all fire their lowercased verb name.
+        b"XADD" | b"XDEL" | b"XTRIM" | b"XGROUP" | b"XACK" | b"XCLAIM" | b"XAUTOCLAIM"
+        | b"XREADGROUP" => NotifyClass::Stream,
         // Generic — class `g`. (DEL single-key falls here; multi-key DEL
         // is routed through Op::Del + maybe_notify_del directly.)
         b"DEL" | b"EXPIRE" | b"PEXPIRE" | b"PERSIST" => NotifyClass::Generic,
