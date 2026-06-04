@@ -1,6 +1,6 @@
 [package]
 name = "kevy-resp"
-description = "RESP2 wire-protocol codec. Pure Rust."
+description = "RESP2 + RESP3 wire-protocol codec. Pure Rust."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
