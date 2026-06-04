@@ -219,14 +219,17 @@ impl<C: Commands> Shard<C> {
             conn.closing = true;
         }
         if is_write {
-            // WATCH version bump + AOF logging — the inline fast path
-            // bypasses `exec_op`, so both have to fire here.
-            // `bump_watch_for_dispatch` is an empty-map lookup when
-            // no key on this shard has ever been WATCH-ed.
+            // WATCH version bump + AOF logging + keyspace notify — the
+            // inline fast path bypasses `exec_op`, so all three have to
+            // fire here. `bump_watch_for_dispatch` is an empty-map
+            // lookup when no key on this shard has ever been WATCH-ed;
+            // `maybe_notify_dispatch` is an empty-flags check (zero work
+            // when notify_keyspace_events is off — the default).
             self.bump_watch_for_dispatch(args);
             if self.aof.is_some() {
                 self.log(args);
             }
+            self.maybe_notify_dispatch(args);
         }
         true
     }

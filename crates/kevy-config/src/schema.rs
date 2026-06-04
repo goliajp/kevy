@@ -266,6 +266,89 @@ impl Default for LogSection {
     }
 }
 
+/// `[notification]` section. `notify_keyspace_events` is a string of
+/// flag chars (Redis convention): `K` keyspace channel, `E` keyevent
+/// channel, `g` generic cmds, `$` string cmds, `l` list, `s` set, `h`
+/// hash, `z` zset, `A` alias for `g$lshz` (every event class except
+/// the not-yet-implemented `x`/`e`/`t`/`n`). Default empty = OFF
+/// (Redis default — zero hot-path cost).
+///
+/// Example: `notify_keyspace_events = "KEA"` enables every event
+/// class on BOTH channels. `"K$"` enables only string events on the
+/// keyspace channel.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NotificationSection {
+    /// Flag string controlling which keyspace notifications fire. Empty
+    /// (default) = OFF: writes pay one atomic load + skip, no publish.
+    pub notify_keyspace_events: String,
+}
+
+/// Parsed view of [`NotificationSection::notify_keyspace_events`]. The
+/// runtime caches this struct per-shard (hot-reload via the existing
+/// `LiveRuntimeConfig` tick path) so the per-write-command check
+/// reduces to four bool reads on the hot path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NotificationFlags {
+    /// `K` — publish on `__keyspace@<db>__:<key>` channel.
+    pub keyspace: bool,
+    /// `E` — publish on `__keyevent@<db>__:<event>` channel.
+    pub keyevent: bool,
+    /// `g` — DEL / EXPIRE / PERSIST / RENAME / TYPE / FLUSH etc.
+    pub generic: bool,
+    /// `$` — SET / GETSET / INCR* / APPEND / MSET / etc.
+    pub string: bool,
+    /// `l` — LPUSH / RPUSH / LPOP / RPOP / LREM / LSET / LTRIM / …
+    pub list: bool,
+    /// `s` — SADD / SREM / SPOP / SMOVE / …
+    pub set: bool,
+    /// `h` — HSET / HDEL / HINCRBY / HSETNX / …
+    pub hash: bool,
+    /// `z` — ZADD / ZINCRBY / ZREM / ZREMRANGEBY* / …
+    pub zset: bool,
+}
+
+impl NotificationFlags {
+    /// Notifications are entirely off (no channel enabled OR no class
+    /// enabled). The hot-path emits skip via this check before any
+    /// further classification or string formatting.
+    pub fn is_empty(&self) -> bool {
+        !(self.keyspace || self.keyevent)
+            || !(self.generic || self.string || self.list || self.set || self.hash || self.zset)
+    }
+}
+
+/// Parse a Redis-style `notify_keyspace_events` flag string into
+/// [`NotificationFlags`]. Unknown chars are ignored (forward-compat
+/// for `x`/`e`/`t`/`n` not yet implemented — see the section docs).
+/// The `A` alias enables every event-class flag except channels.
+pub fn parse_notification_flags(s: &str) -> NotificationFlags {
+    let mut f = NotificationFlags::default();
+    for c in s.chars() {
+        match c {
+            'K' => f.keyspace = true,
+            'E' => f.keyevent = true,
+            'g' => f.generic = true,
+            '$' => f.string = true,
+            'l' => f.list = true,
+            's' => f.set = true,
+            'h' => f.hash = true,
+            'z' => f.zset = true,
+            'A' => {
+                // Alias for "g$lshz" — every implemented event class.
+                // Per Redis spec `A` does NOT include `x`/`e`/`t`/`n`.
+                f.generic = true;
+                f.string = true;
+                f.list = true;
+                f.set = true;
+                f.hash = true;
+                f.zset = true;
+            }
+            _ => {} // forward-compat: silently ignore unknown chars
+        }
+    }
+    f
+}
+
 // ───────────── top-level Config ─────────────
 
 /// Complete kevy config: defaults + per-section overrides loaded from
@@ -282,6 +365,8 @@ pub struct Config {
     pub expiry: ExpirySection,
     /// `[log]` settings.
     pub log: LogSection,
+    /// `[notification]` settings (keyspace events).
+    pub notification: NotificationSection,
     /// Path the config was loaded from (for `CONFIG REWRITE`). `None` =
     /// loaded from defaults only / from in-memory string.
     pub source_path: Option<PathBuf>,
