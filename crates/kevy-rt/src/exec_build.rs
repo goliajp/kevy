@@ -36,8 +36,13 @@ impl<C: Commands> Shard<C> {
                 );
                 (Vec::new(), Agg::First(None))
             }
-            Route::Subscribe | Route::Unsubscribe | Route::Publish
-            | Route::Watch | Route::Unwatch => {
+            Route::Subscribe
+            | Route::Unsubscribe
+            | Route::Psubscribe
+            | Route::Punsubscribe
+            | Route::Publish
+            | Route::Watch
+            | Route::Unwatch => {
                 eprintln!(
                     "kevy WARN: build_multi_targets reached conn-level route {route:?} \
                      — routing bug; replying nil to the client"

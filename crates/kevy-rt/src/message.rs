@@ -20,6 +20,18 @@ pub(crate) type KvPairs = Vec<(Vec<u8>, Vec<u8>)>;
 /// (cleared then) — safe, since a stray delivery just finds no local subscriber.
 pub(crate) type PubSubReg = Arc<RwLock<HashMap<Vec<u8>, (u32, u64)>>>;
 
+/// Shared pub/sub pattern registry: `pattern → (global subscriber count,
+/// bitset of shard ids that have ≥1 subscriber to this pattern)`. Like
+/// [`PubSubReg`] but for `PSUBSCRIBE` patterns. PUBLISH walks this Vec
+/// linearly running [`kevy_store::glob_match`] against each pattern;
+/// matchers contribute to the reply count and the union shard bitset that
+/// receives the publish delivery. A `Vec<(...)>` (not a HashMap) because
+/// the keyspace is patterns, not exact strings — we have to glob_match
+/// every entry no matter how it's stored. The pmessage fan-out plus the
+/// channel-precise path remain disjoint code paths so the channel-only
+/// PUBLISH hot path is undisturbed by the existence of pattern subscribers.
+pub(crate) type PubSubPatternReg = Arc<RwLock<Vec<(Vec<u8>, u32, u64)>>>;
+
 /// One pub/sub message `(channel, payload)`, shared (not cloned) across the
 /// shards it fans out to.
 pub(crate) type PubMsg = Arc<(Vec<u8>, Vec<u8>)>;

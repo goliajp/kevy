@@ -121,6 +121,8 @@ impl<C: Commands> Shard<C> {
         match route {
             Route::Subscribe => self.do_subscribe(conn_id, seq, args, true),
             Route::Unsubscribe => self.do_subscribe(conn_id, seq, args, false),
+            Route::Psubscribe => self.do_psubscribe(conn_id, seq, args),
+            Route::Punsubscribe => self.do_punsubscribe(conn_id, seq, args),
             Route::Publish => self.do_publish(conn_id, seq, args),
             Route::Watch => self.do_watch(conn_id, seq, args),
             Route::Unwatch => self.do_unwatch(conn_id, seq),

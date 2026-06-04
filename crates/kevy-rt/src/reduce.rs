@@ -133,6 +133,18 @@ pub(crate) fn pubsub_message(channel: &[u8], msg: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Build a RESP pub/sub `pmessage` push frame for `PSUBSCRIBE` delivery
+/// (`*4\r\n$8\r\npmessage\r\n$<plen>\r\n<pat>\r\n$<clen>\r\n<chan>\r\n$<mlen>\r\n<payload>\r\n`).
+pub(crate) fn pubsub_pmessage(pattern: &[u8], channel: &[u8], msg: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_array_len(&mut out, 4);
+    encode_bulk(&mut out, b"pmessage");
+    encode_bulk(&mut out, pattern);
+    encode_bulk(&mut out, channel);
+    encode_bulk(&mut out, msg);
+    out
+}
+
 fn set_intersect(sets: &[Vec<Vec<u8>>]) -> Vec<Vec<u8>> {
     let Some((first, rest)) = sets.split_first() else {
         return Vec::new();
