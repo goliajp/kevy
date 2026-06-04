@@ -100,6 +100,7 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"ZADD"
             | b"ZREM"
             | b"ZINCRBY"
+            | b"GEOADD"
             | b"MSET"
     )
 }
@@ -129,8 +130,9 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
         }
         // Set — class `s` (SINTERSTORE/SUNIONSTORE/SDIFFSTORE not yet impl'd).
         b"SADD" | b"SREM" | b"SPOP" => NotifyClass::Set,
-        // Sorted set — class `z`.
-        b"ZADD" | b"ZREM" | b"ZINCRBY" => NotifyClass::Zset,
+        // Sorted set — class `z`. GEOADD writes a ZSet under the hood,
+        // so it fires `zadd` notifications too (matches Redis).
+        b"ZADD" | b"ZREM" | b"ZINCRBY" | b"GEOADD" => NotifyClass::Zset,
         // Generic — class `g`. (DEL single-key falls here; multi-key DEL
         // is routed through Op::Del + maybe_notify_del directly.)
         b"DEL" | b"EXPIRE" | b"PEXPIRE" | b"PERSIST" => NotifyClass::Generic,
@@ -168,6 +170,7 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"SADD"
             | b"ZADD"
             | b"ZINCRBY"
+            | b"GEOADD"
             | b"MSET"
     )
 }
