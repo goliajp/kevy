@@ -269,3 +269,214 @@ fn geohash_emits_11_char_base32() {
     assert!(s.contains("sqc8b49rny"), "Palermo geohash drift: {s}");
     assert!(s.contains("sqdtr74hyu"), "Catania geohash drift: {s}");
 }
+
+// ───────────── GEOSEARCH ─────────────
+
+fn add_two_more(c: &mut std::net::TcpStream) {
+    // Agrigento (south coast, ~120 km from Palermo)
+    // Roma (mainland, ~430 km from Palermo)
+    c.write_all(&req(&[
+        b"GEOADD",
+        b"Sicily",
+        b"13.583333",
+        b"37.318333",
+        b"Agrigento",
+        b"12.496366",
+        b"41.902782",
+        b"Roma",
+    ]))
+    .unwrap();
+    assert_eq!(read_reply(c), b":2\r\n");
+}
+
+#[test]
+fn geosearch_byradius_fromlonlat_returns_members_within_radius() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    add_two_more(&mut c);
+    c.write_all(&req(&[
+        b"GEOSEARCH",
+        b"Sicily",
+        b"FROMLONLAT",
+        b"13.361389",
+        b"38.115556",
+        b"BYRADIUS",
+        b"200",
+        b"km",
+    ]))
+    .unwrap();
+    let r = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&r);
+    // 200 km around Palermo covers Palermo, Catania (166 km), Agrigento
+    // (~120 km), but NOT Roma (~430 km).
+    assert!(s.contains("Palermo"), "Palermo missing: {s}");
+    assert!(s.contains("Catania"), "Catania missing: {s}");
+    assert!(s.contains("Agrigento"), "Agrigento missing: {s}");
+    assert!(!s.contains("Roma"), "Roma should be out of range: {s}");
+}
+
+#[test]
+fn geosearch_byradius_frommember_with_self_match() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    add_two_more(&mut c);
+    c.write_all(&req(&[
+        b"GEOSEARCH",
+        b"Sicily",
+        b"FROMMEMBER",
+        b"Palermo",
+        b"BYRADIUS",
+        b"50",
+        b"km",
+    ]))
+    .unwrap();
+    let r = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&r);
+    // Only Palermo within 50 km of itself.
+    assert!(s.contains("Palermo"), "Palermo missing: {s}");
+    assert!(!s.contains("Catania"), "Catania too far for 50km: {s}");
+}
+
+#[test]
+fn geosearch_frommember_unknown_member_errors() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    c.write_all(&req(&[
+        b"GEOSEARCH",
+        b"Sicily",
+        b"FROMMEMBER",
+        b"NoSuchMember",
+        b"BYRADIUS",
+        b"50",
+        b"km",
+    ]))
+    .unwrap();
+    let r = read_reply(&mut c);
+    assert!(
+        r.starts_with(b"-ERR could not decode requested zset member"),
+        "got: {:?}",
+        String::from_utf8_lossy(&r),
+    );
+}
+
+#[test]
+fn geosearch_asc_orders_by_distance() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    add_two_more(&mut c);
+    c.write_all(&req(&[
+        b"GEOSEARCH",
+        b"Sicily",
+        b"FROMLONLAT",
+        b"13.361389",
+        b"38.115556",
+        b"BYRADIUS",
+        b"500",
+        b"km",
+        b"ASC",
+    ]))
+    .unwrap();
+    let r = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&r);
+    // Order: Palermo (0), Agrigento (~120), Catania (166), Roma (~430).
+    let p = s.find("Palermo").unwrap();
+    let a = s.find("Agrigento").unwrap();
+    let c_i = s.find("Catania").unwrap();
+    let r_i = s.find("Roma").unwrap();
+    assert!(
+        p < a && a < c_i && c_i < r_i,
+        "ASC order broken: {s}",
+    );
+}
+
+#[test]
+fn geosearch_count_truncates_results() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    add_two_more(&mut c);
+    c.write_all(&req(&[
+        b"GEOSEARCH",
+        b"Sicily",
+        b"FROMLONLAT",
+        b"13.361389",
+        b"38.115556",
+        b"BYRADIUS",
+        b"500",
+        b"km",
+        b"COUNT",
+        b"2",
+    ]))
+    .unwrap();
+    let r = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&r);
+    // Two closest: Palermo + Agrigento.
+    assert!(s.starts_with("*2\r\n"), "expected 2 members: {s}");
+    assert!(s.contains("Palermo"));
+    assert!(s.contains("Agrigento"));
+    assert!(!s.contains("Catania"), "COUNT 2 should drop Catania: {s}");
+}
+
+#[test]
+fn geosearch_withcoord_withdist_withhash_emit_nested_arrays() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    c.write_all(&req(&[
+        b"GEOSEARCH",
+        b"Sicily",
+        b"FROMLONLAT",
+        b"13.361389",
+        b"38.115556",
+        b"BYRADIUS",
+        b"50",
+        b"km",
+        b"WITHCOORD",
+        b"WITHDIST",
+        b"WITHHASH",
+    ]))
+    .unwrap();
+    let r = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&r);
+    // Self-match returns an inner *4 array: name + dist + hash + [lon, lat].
+    assert!(s.contains("*1\r\n*4\r\n"), "expected nested array: {s}");
+    assert!(s.contains("Palermo"));
+    assert!(s.contains("13.361389"), "WITHCOORD lon missing: {s}");
+}
+
+#[test]
+fn geosearch_bybox_filters_to_rectangle() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    add_sicily(&mut c);
+    add_two_more(&mut c);
+    // Box around Palermo: 400 km wide, 100 km tall → captures the
+    // Sicilian east-west axis (Catania ~120 km east-southeast within
+    // the box width but the box height is only 100 km so the south
+    // members on the same latitude band as Palermo qualify; Catania
+    // is ~70 km south of Palermo so within the 100 km tall box;
+    // Agrigento is ~90 km south — also in. Roma is ~430 km north —
+    // out (height 100 km too short).
+    c.write_all(&req(&[
+        b"GEOSEARCH",
+        b"Sicily",
+        b"FROMLONLAT",
+        b"13.361389",
+        b"38.115556",
+        b"BYBOX",
+        b"400",
+        b"200",
+        b"km",
+    ]))
+    .unwrap();
+    let r = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("Palermo"));
+    assert!(s.contains("Catania"));
+    assert!(s.contains("Agrigento"));
+    assert!(!s.contains("Roma"), "Roma should be out of box: {s}");
+}

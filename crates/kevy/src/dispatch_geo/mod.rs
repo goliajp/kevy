@@ -1,12 +1,18 @@
-//! `GEOADD` / `GEOPOS` / `GEODIST` / `GEOHASH` — the basic Redis GEO
-//! quartet. Geo data is stored in a regular `ZSet` keyed by member with
-//! a 52-bit interleaved-geohash score (the same wire encoding Redis
-//! uses), so we layer entirely on the existing `Store::zadd / zscore`
-//! API — no new value variant.
+//! `GEOADD` / `GEOPOS` / `GEODIST` / `GEOHASH` / `GEOSEARCH` — the
+//! Redis GEO command family. Geo data is stored in a regular `ZSet`
+//! keyed by member with a 52-bit interleaved-geohash score (the same
+//! wire encoding Redis uses), so we layer entirely on the existing
+//! `Store::zadd` / `zscore` / `zrange_by_score` API — no new value
+//! variant.
 //!
-//! `GEOSEARCH` / `GEOSEARCHSTORE` / `GEORADIUS*` follow in a separate
-//! commit; the math primitive they need (`neighbor_ranges`) lives in
-//! `kevy-geo` alongside the encoders here.
+//! Sub-module layout:
+//! - `mod.rs` — dispatch table + the four basic commands (GEOADD,
+//!   GEOPOS, GEODIST, GEOHASH).
+//! - `search.rs` — GEOSEARCH, by far the largest single command in
+//!   this family (radius/box modes, six option flags). Split out so
+//!   each file stays under the project's ≤500-LOC rule.
+
+mod search;
 
 use kevy_geo::{
     decode_score, encode_base32_geohash, encode_score, haversine_meters,
@@ -31,9 +37,22 @@ pub(crate) fn dispatch_geo<A: ArgvView + ?Sized>(
         b"GEOPOS" => cmd_geopos(store, args, out),
         b"GEODIST" => cmd_geodist(store, args, out),
         b"GEOHASH" => cmd_geohash(store, args, out),
+        b"GEOSEARCH" => search::cmd_geosearch(store, args, out),
         _ => return false,
     }
     true
+}
+
+/// Shared between GEODIST and GEOSEARCH. Returns the metres-per-unit
+/// multiplier for `m | km | mi | ft`; `None` for unknown units.
+pub(super) fn parse_unit(b: &[u8]) -> Option<f64> {
+    match b.to_ascii_lowercase().as_slice() {
+        b"m" => Some(1.0),
+        b"km" => Some(1000.0),
+        b"mi" => Some(1609.34),
+        b"ft" => Some(0.3048),
+        _ => None,
+    }
 }
 
 // ───────────── GEOADD ─────────────
@@ -238,18 +257,6 @@ fn score_to_point(
     member: &[u8],
 ) -> Result<Option<(f64, f64)>, kevy_store::StoreError> {
     Ok(store.zscore(key, member)?.map(decode_score))
-}
-
-/// Multiplier converting metres into the requested unit. Matches Redis's
-/// constants.
-fn parse_unit(b: &[u8]) -> Option<f64> {
-    match b.to_ascii_lowercase().as_slice() {
-        b"m" => Some(1.0),
-        b"km" => Some(1000.0),
-        b"mi" => Some(1609.34),
-        b"ft" => Some(0.3048),
-        _ => None,
-    }
 }
 
 // ───────────── GEOHASH ─────────────
