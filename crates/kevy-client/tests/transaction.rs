@@ -157,6 +157,113 @@ fn unwatch_sends_off_the_wire() {
     conn.unwatch().unwrap();
 }
 
+// ─── v1.7.0: typed exec cursor (TransactionReplies) ───────────────────────
+
+#[test]
+fn exec_typed_reads_mixed_replies_in_order() {
+    // MULTI → SET a 1 (+OK) / INCR c (:5) / GET a ($1 1) / MGET b c (*2 $-1 $1 5)
+    let port = mock_server(vec![
+        (14, b"+OK\r\n"),                                     // MULTI
+        (29, b"+QUEUED\r\n"),                                 // SET a 1
+        (23, b"+QUEUED\r\n"),                                 // INCR c
+        (22, b"+QUEUED\r\n"),                                 // GET a
+        (28, b"+QUEUED\r\n"),                                 // MGET b c
+        (
+            13,
+            b"*4\r\n+OK\r\n:5\r\n$1\r\n1\r\n*2\r\n$-1\r\n$1\r\n5\r\n",
+        ), // EXEC
+    ]);
+    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut txn = conn.multi().unwrap();
+    txn.set(b"a", b"1")
+        .unwrap()
+        .incr(b"c")
+        .unwrap()
+        .get(b"a")
+        .unwrap()
+        .mget(&[b"b", b"c"])
+        .unwrap();
+    let mut r = txn.exec_typed().unwrap();
+    assert_eq!(r.remaining(), 4);
+    r.next_ok().unwrap();
+    assert_eq!(r.next_int().unwrap(), 5);
+    assert_eq!(r.next_bulk().unwrap(), Some(b"1".to_vec()));
+    assert_eq!(
+        r.next_array_of_bulks().unwrap(),
+        vec![None, Some(b"5".to_vec())]
+    );
+    r.expect_empty().unwrap();
+}
+
+#[test]
+fn exec_typed_type_mismatch_surfaces_invalid_data() {
+    let port = mock_server(vec![
+        (14, b"+OK\r\n"),       // MULTI
+        (23, b"+QUEUED\r\n"),   // INCR c
+        (13, b"*1\r\n:5\r\n"),  // EXEC
+    ]);
+    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut txn = conn.multi().unwrap();
+    txn.incr(b"c").unwrap();
+    let mut r = txn.exec_typed().unwrap();
+    // Ask for a Bulk when the next reply is actually Int → InvalidData.
+    let err = r.next_bulk().unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(
+        err.to_string().contains("expected Bulk"),
+        "msg = {err}"
+    );
+}
+
+#[test]
+fn exec_typed_aborted_by_watch_errors() {
+    let port = mock_server(vec![
+        (20, b"+OK\r\n"),     // WATCH x
+        (14, b"+OK\r\n"),     // MULTI
+        (23, b"+QUEUED\r\n"), // INCR x
+        (13, b"$-1\r\n"),     // EXEC → Nil (aborted)
+    ]);
+    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    conn.watch(&[b"x"]).unwrap();
+    let mut txn = conn.multi().unwrap();
+    txn.incr(b"x").unwrap();
+    let err = txn.exec_typed().unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(err.to_string().contains("WATCH"), "msg = {err}");
+}
+
+#[test]
+fn exec_watched_typed_returns_none_on_abort() {
+    let port = mock_server(vec![
+        (20, b"+OK\r\n"),
+        (14, b"+OK\r\n"),
+        (23, b"+QUEUED\r\n"),
+        (13, b"$-1\r\n"),
+    ]);
+    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    conn.watch(&[b"x"]).unwrap();
+    let mut txn = conn.multi().unwrap();
+    txn.incr(b"x").unwrap();
+    assert!(txn.exec_watched_typed().unwrap().is_none());
+}
+
+#[test]
+fn expect_empty_errors_when_replies_left_unconsumed() {
+    let port = mock_server(vec![
+        (14, b"+OK\r\n"),
+        (23, b"+QUEUED\r\n"),
+        (23, b"+QUEUED\r\n"),
+        (13, b"*2\r\n:1\r\n:2\r\n"),
+    ]);
+    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut txn = conn.multi().unwrap();
+    txn.incr(b"a").unwrap().incr(b"b").unwrap();
+    let mut r = txn.exec_typed().unwrap();
+    assert_eq!(r.next_int().unwrap(), 1);
+    let err = r.expect_empty().unwrap_err();
+    assert!(err.to_string().contains("1 un-consumed"), "msg = {err}");
+}
+
 #[test]
 fn watch_on_embedded_returns_unsupported() {
     // Embedded backend has no MULTI dispatcher; WATCH is a no-op there

@@ -47,8 +47,8 @@ mod subscribe;
 mod transaction;
 mod url;
 
-pub use subscribe::{PubsubEvent, Subscriber};
-pub use transaction::Transaction;
+pub use subscribe::{PubsubEvent, Subscriber, SubscriberEvents, SubscriberMessages};
+pub use transaction::{Transaction, TransactionReplies};
 
 pub(crate) use url::{Target, parse_url, resolve_store};
 
