@@ -11,6 +11,7 @@ use crate::reduce::{drain_front, materialize, shard_of};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route, TxnKind};
 use kevy_resp::{ArgvView, RespVersion, encode_array_len};
+use std::time::Instant;
 
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
@@ -130,6 +131,7 @@ impl<C: Commands> Shard<C> {
             Route::Unwatch => self.do_unwatch(conn_id, seq),
             Route::Hello => self.do_hello(conn_id, seq, args),
             Route::Rename { nx } => self.start_rename(conn_id, seq, args, nx),
+            Route::Slowlog(sub) => self.start_slowlog(conn_id, seq, sub),
             Route::Local => {
                 self.start_single(conn_id, seq, args, self.id, is_quit, is_write);
             }
@@ -207,6 +209,13 @@ impl<C: Commands> Shard<C> {
         // Branch on per-conn proto. V2 is the default + the hot path the
         // current bench numbers measure; the V3 arm only fires after a
         // HELLO 3 negotiation, so V2 cmovne sees ~0 measurable cost.
+        // SLOWLOG OFF (`slower_than_micros < 0`) skips the clock pair
+        // entirely so the hot-path stays unchanged.
+        let t0 = if self.slowlog.slower_than_micros >= 0 {
+            Some(Instant::now())
+        } else {
+            None
+        };
         match proto {
             RespVersion::V2 => self
                 .commands
@@ -215,6 +224,11 @@ impl<C: Commands> Shard<C> {
                 .commands
                 .dispatch_into_resp3(&mut self.store, args, &mut conn.output),
         }
+        if let Some(t0) = t0 {
+            let elapsed = t0.elapsed().as_micros().min(u64::MAX as u128) as u64;
+            self.slowlog_record(args, elapsed);
+        }
+        let Some(conn) = self.conns.get_mut(&conn_id) else { return true };
         conn.next_emit += 1;
         if is_quit {
             conn.closing = true;
@@ -371,6 +385,9 @@ impl<C: Commands> Shard<C> {
                     }
                 }
                 (Agg::Keys { acc, .. }, Part::Keys(ks)) => acc.extend(ks),
+                (Agg::SlowlogGet { entries, .. }, Part::SlowlogEntries(es)) => {
+                    entries.extend(es);
+                }
                 (Agg::WatchCollect { pairs }, Part::WatchVersions(items)) => {
                     pairs.extend(items);
                 }

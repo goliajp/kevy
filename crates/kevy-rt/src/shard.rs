@@ -110,6 +110,10 @@ pub(crate) struct Shard<C: Commands> {
     /// Reactor loop iterations between wall-clock reads for the tick
     /// check. Replaces the old `TICK_CHECK_EVERY` const.
     pub(crate) tick_check_every: u32,
+    /// SLOWLOG ring + threshold (see [`crate::exec_slowlog::SlowlogState`]).
+    /// Hot-reload via `apply_live_runtime_config` when the embedder
+    /// returns `Some` in `LiveRuntimeConfig::slowlog_*`.
+    pub(crate) slowlog: crate::exec_slowlog::SlowlogState,
 }
 
 // `SPIN_LIMIT` / `PARK_TIMEOUT_MS` / `TICK_CHECK_EVERY` moved to per-
@@ -315,6 +319,16 @@ impl<C: Commands> Shard<C> {
         }
         if let Some(flags) = live.notify_flags {
             self.notify_flags = flags;
+        }
+        if let Some(t) = live.slowlog_slower_than_micros {
+            self.slowlog.slower_than_micros = t;
+        }
+        if let Some(n) = live.slowlog_max_len {
+            self.slowlog.max_len = n;
+            let cap = n as usize;
+            while self.slowlog.buf.len() > cap {
+                self.slowlog.buf.pop_front();
+            }
         }
     }
 

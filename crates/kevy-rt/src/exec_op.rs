@@ -4,6 +4,7 @@
 
 use kevy_persist::save_snapshot;
 use kevy_resp::{Argv, ArgvView};
+use std::time::Instant;
 
 use crate::Commands;
 use crate::Route;
@@ -20,10 +21,21 @@ impl<C: Commands> Shard<C> {
                 // resolves to a single `dispatch` call (the existing
                 // bench-measured path); the V3 arm only fires after a
                 // HELLO 3 negotiation upstream.
+                // SLOWLOG OFF (`slower_than_micros < 0`) skips the
+                // clock pair entirely.
+                let t0 = if self.slowlog.slower_than_micros >= 0 {
+                    Some(Instant::now())
+                } else {
+                    None
+                };
                 let reply = match proto {
                     RespVersion::V2 => self.commands.dispatch(&mut self.store, &args),
                     RespVersion::V3 => self.commands.dispatch_resp3(&mut self.store, &args),
                 };
+                if let Some(t0) = t0 {
+                    let elapsed = t0.elapsed().as_micros().min(u64::MAX as u128) as u64;
+                    self.slowlog_record(&args, elapsed);
+                }
                 // Write-side bookkeeping: AOF logging + WATCH version
                 // bump. Both gated on `is_write` so the cache-only path
                 // (no AOF + no WATCH-ed keys) pays nothing beyond one
@@ -219,6 +231,12 @@ impl<C: Commands> Shard<C> {
                         )
                     }
                 }
+                Part::Ok
+            }
+            Op::SlowlogGet => Part::SlowlogEntries(self.slowlog.buf.iter().cloned().collect()),
+            Op::SlowlogLen => Part::Int(self.slowlog.buf.len() as i64),
+            Op::SlowlogReset => {
+                self.slowlog.buf.clear();
                 Part::Ok
             }
             Op::RewriteAof => {

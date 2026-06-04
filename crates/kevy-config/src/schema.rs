@@ -360,6 +360,31 @@ impl NotificationFlags {
     }
 }
 
+/// `[slowlog]` section — controls the per-shard slow-command ring
+/// buffer surfaced by `SLOWLOG GET/LEN/RESET`. Defaults match Redis:
+/// record any command slower than 10 ms, keep the last 128 entries
+/// per shard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlowlogSection {
+    /// Record any command whose execution took strictly more than this
+    /// many microseconds. `-1` disables the log (zero hot-path cost);
+    /// `0` records every command. Default `10_000` (10 ms).
+    pub slower_than_micros: i64,
+    /// Cap on the per-shard ring buffer. Once exceeded, the oldest
+    /// entry is dropped to make room. Across `nshards` shards the
+    /// effective server-wide cap is `max_len * nshards`. Default `128`.
+    pub max_len: u32,
+}
+
+impl Default for SlowlogSection {
+    fn default() -> Self {
+        Self {
+            slower_than_micros: 10_000,
+            max_len: 128,
+        }
+    }
+}
+
 /// Parse a Redis-style `notify_keyspace_events` flag string into
 /// [`NotificationFlags`]. Unknown chars are ignored (forward-compat
 /// for `x`/`e`/`t`/`n` not yet implemented — see the section docs).
@@ -412,6 +437,8 @@ pub struct Config {
     pub notification: NotificationSection,
     /// `[advanced]` settings (reactor tuning knobs).
     pub advanced: AdvancedSection,
+    /// `[slowlog]` settings (slow-command ring buffer).
+    pub slowlog: SlowlogSection,
     /// Path the config was loaded from (for `CONFIG REWRITE`). `None` =
     /// loaded from defaults only / from in-memory string.
     pub source_path: Option<PathBuf>,

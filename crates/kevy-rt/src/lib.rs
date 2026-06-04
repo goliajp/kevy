@@ -75,6 +75,7 @@ mod exec_op;
 mod exec_pubsub;
 mod exec_pubsub_pattern;
 mod exec_rename;
+mod exec_slowlog;
 mod exec_watch;
 mod inbox;
 mod message;
@@ -84,6 +85,7 @@ mod shard;
 #[cfg(target_os = "linux")]
 mod uring_reactor;
 
+pub use exec_slowlog::{SlowlogSub, parse_slowlog_sub};
 pub use kevy_config::NotificationFlags;
 pub use kevy_persist::Fsync;
 pub use kevy_resp::{Argv, ArgvBorrowed, ArgvView, RespVersion};
@@ -158,6 +160,11 @@ pub enum Route {
         /// `true` for `RENAMENX` (no overwrite — reply `:0` if dst exists).
         nx: bool,
     },
+    /// `SLOWLOG GET / LEN / RESET / HELP`. The sub-command + parsed
+    /// args are pre-decoded at routing time so the runtime knows
+    /// whether to short-circuit (HELP / error) or fan out across
+    /// shards (GET / LEN / RESET). See [`parse_slowlog_sub`].
+    Slowlog(SlowlogSub),
 }
 
 /// Command-set semantics injected into the runtime. Cloned to every core, so it
@@ -361,4 +368,11 @@ pub struct LiveRuntimeConfig {
     /// Default-empty flags mean OFF — writes pay one bool-OR check
     /// and skip every per-key keyspace notification publish.
     pub notify_flags: Option<NotificationFlags>,
+    /// `[slowlog].slower_than_micros` — `-1` disables, `0` records all,
+    /// `>0` is the strict micros threshold. `None` keeps the existing
+    /// shard setting (set by the [`Runtime`] builder at startup).
+    pub slowlog_slower_than_micros: Option<i64>,
+    /// `[slowlog].max_len` — ring cap per shard. Shrinking trims the
+    /// oldest entries on the next tick application.
+    pub slowlog_max_len: Option<u32>,
 }

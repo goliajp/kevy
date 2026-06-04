@@ -33,7 +33,7 @@ mod size;
 pub use schema::{
     AdvancedSection, AppendFsync, Config, ConfigError, EvictionPolicy, ExpirySection, LogLevel,
     LogOutput, LogSection, MemorySection, NotificationFlags, NotificationSection,
-    PersistenceSection, ServerSection, parse_notification_flags,
+    PersistenceSection, ServerSection, SlowlogSection, parse_notification_flags,
 };
 pub use size::parse_size;
 
@@ -198,6 +198,14 @@ impl Config {
         let _ = writeln!(out, "park_timeout_ms  = {}", self.advanced.park_timeout_ms);
         let _ = writeln!(out, "tick_check_every = {}", self.advanced.tick_check_every);
         let _ = writeln!(out, "ring_capacity    = {}", self.advanced.ring_capacity);
+        let _ = writeln!(out);
+        let _ = writeln!(out, "[slowlog]");
+        let _ = writeln!(
+            out,
+            "slower_than_micros = {}",
+            self.slowlog.slower_than_micros,
+        );
+        let _ = writeln!(out, "max_len            = {}", self.slowlog.max_len);
         out
     }
 }

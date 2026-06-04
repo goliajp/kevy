@@ -35,7 +35,10 @@
 use kevy_resp::{
     encode_array_len, encode_bulk, encode_error, encode_integer, encode_map_header, parse_command,
 };
-use kevy_rt::{ArgvView, Commands, NotifyClass, ResolvedCmd, RespVersion, Route, Runtime, TxnKind};
+use kevy_rt::{
+    ArgvView, Commands, NotifyClass, ResolvedCmd, RespVersion, Route, Runtime, TxnKind,
+    parse_slowlog_sub,
+};
 use kevy_store::Store;
 use kevy_sys::Socket;
 use std::io;
@@ -102,6 +105,7 @@ impl Commands for KevyCommands {
             b"UNWATCH" => Route::Unwatch,
             b"RENAME" => Route::Rename { nx: false },
             b"RENAMENX" => Route::Rename { nx: true },
+            b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),
             // DEL/EXISTS are single-key (fast path) unless given multiple keys.
             b"DEL" => {
                 if args.len() == 2 {
@@ -226,6 +230,8 @@ impl Commands for KevyCommands {
             notify_flags: Some(kevy_config::parse_notification_flags(
                 &cfg.notification.notify_keyspace_events,
             )),
+            slowlog_slower_than_micros: Some(cfg.slowlog.slower_than_micros),
+            slowlog_max_len: Some(cfg.slowlog.max_len),
         }
     }
 
@@ -319,6 +325,7 @@ impl Commands for KevyCommands {
             b"UNWATCH" => Route::Unwatch,
             b"RENAME" => Route::Rename { nx: false },
             b"RENAMENX" => Route::Rename { nx: true },
+            b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),
             b"DEL" => {
                 if args.len() == 2 {
                     Route::Single(1)
@@ -453,7 +460,8 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
             cfg.advanced.park_timeout_ms,
             cfg.advanced.tick_check_every,
             cfg.advanced.ring_capacity,
-        );
+        )
+        .with_slowlog(cfg.slowlog.slower_than_micros, cfg.slowlog.max_len);
     let stop = Arc::new(AtomicBool::new(false));
     if let Err(e) = runtime.run(stop) {
         eprintln!("kevy: runtime error: {e}");
