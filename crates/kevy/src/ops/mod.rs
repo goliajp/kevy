@@ -11,13 +11,15 @@
 //! keep file size in line with the project's ≤ 500 LOC rule.
 
 mod client;
-mod config;
+pub(crate) mod config;
 mod memory;
 
 use std::time::SystemTime;
 
 use kevy_config::Config;
-use kevy_resp::{ArgvView, encode_bulk, encode_error, encode_integer, encode_simple_string};
+use kevy_resp::{
+    ArgvView, RespVersion, encode_bulk, encode_error, encode_integer, encode_simple_string,
+};
 use kevy_store::Store;
 
 use crate::config_global;
@@ -37,7 +39,7 @@ pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
         b"DEBUG" => cmd_debug(args, out),
         b"WAIT" => cmd_wait(args, out),
         b"SHUTDOWN" => cmd_shutdown(args, out),
-        b"CONFIG" => config::cmd_config(&cfg, args, out),
+        b"CONFIG" => config::cmd_config(&cfg, args, out, RespVersion::V2),
         b"CLIENT" => client::cmd_client(args, out),
         b"MEMORY" => memory::cmd_memory(&cfg, store, args, out),
         _ => return false,
