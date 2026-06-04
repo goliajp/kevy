@@ -48,10 +48,12 @@ mod hash;
 mod keyspace;
 mod list;
 mod set;
+mod stream;
 mod string;
 mod util;
 mod value;
 mod zset;
+pub use stream::{EntryBatch, LoadedStreamEntry, StreamData, StreamId, StreamIdError, XAddIdSpec, parse_explicit_id, parse_range_end, parse_range_start, parse_xadd_id, now_unix_ms};
 pub use util::glob_match;
 pub use value::*;
 

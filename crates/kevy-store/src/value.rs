@@ -117,6 +117,7 @@ pub enum Value {
     List(Box<ListData>),
     Set(Box<SetData>),
     ZSet(Box<ZSetData>),
+    Stream(Box<crate::stream::StreamData>),
 }
 
 const _: () = {
@@ -133,6 +134,7 @@ impl Value {
             Value::List(_) => "list",
             Value::Set(_) => "set",
             Value::ZSet(_) => "zset",
+            Value::Stream(_) => "stream",
         }
     }
 
@@ -160,6 +162,7 @@ impl Value {
                     .map(|(m, _)| m.heap_bytes() as u64)
                     .sum::<u64>()
                 + (z.by_score.len() as u64).saturating_mul(BTREE_SLOT_BYTES),
+            Value::Stream(s) => s.weight(),
         }
     }
 }

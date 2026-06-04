@@ -247,4 +247,34 @@ impl Store {
         }
         self.insert_loaded(key, Value::ZSet(Box::new(z)), ttl_ms);
     }
+
+    /// Snapshot-load a stream: every entry plus the per-stream scalar
+    /// state (last_id, max_deleted_id, entries_added) is restored
+    /// verbatim. Caller passes already-decoded primitive tuples; this
+    /// fn does the [`SmallBytes`] / [`crate::StreamData`] conversion.
+    pub fn load_stream(
+        &mut self,
+        key: Vec<u8>,
+        entries: Vec<crate::stream::LoadedStreamEntry>,
+        last_id: (u64, u64),
+        max_deleted_id: (u64, u64),
+        entries_added: u64,
+        ttl_ms: Option<u64>,
+    ) {
+        let mut s = crate::stream::StreamData::default();
+        for (ms, seq, fv) in entries {
+            let id = crate::stream::StreamId { ms, seq };
+            let fv_small: Vec<(SmallBytes, SmallBytes)> = fv
+                .into_iter()
+                .map(|(f, v)| (SmallBytes::from_vec(f), SmallBytes::from_vec(v)))
+                .collect();
+            s.load_entry(id, fv_small);
+        }
+        s.set_loaded_state(
+            crate::stream::StreamId { ms: last_id.0, seq: last_id.1 },
+            crate::stream::StreamId { ms: max_deleted_id.0, seq: max_deleted_id.1 },
+            entries_added,
+        );
+        self.insert_loaded(key, Value::Stream(Box::new(s)), ttl_ms);
+    }
 }
