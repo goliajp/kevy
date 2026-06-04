@@ -375,13 +375,32 @@ impl<C: Commands> Shard<C> {
                     pairs.extend(items);
                 }
                 (Agg::ExecPrep { dirty, .. }, Part::Int(n)) => *dirty |= n != 0,
+                // Cross-shard RENAME orchestrator: buffer the step-1
+                // result in the agg so finalize can ship step 2.
+                (
+                    Agg::RenameOrchestrator { taken, .. },
+                    Part::RenameTaken { value, ttl_ms },
+                ) => *taken = Some((value, ttl_ms)),
+                // Step 2's put result feeds the put_stored field so
+                // finalize_rename_agg picks the right reply byte.
+                (
+                    Agg::RenameOrchestrator { put_stored, .. },
+                    Part::RenamePutDone { stored },
+                ) => *put_stored = Some(stored),
+                // The terminal step-1 miss (RenameNoSuchSrc) leaves
+                // `taken == None`; finalize reads that as "missing src".
                 _ => {}
             }
             slot.remaining -= 1;
             if slot.remaining == 0 {
                 let proto = slot.proto;
                 let agg = std::mem::replace(&mut slot.agg, Agg::AllOk);
-                if matches!(agg, Agg::WatchCollect { .. } | Agg::ExecPrep { .. }) {
+                if matches!(
+                    agg,
+                    Agg::WatchCollect { .. }
+                        | Agg::ExecPrep { .. }
+                        | Agg::RenameOrchestrator { .. }
+                ) {
                     Some(agg)
                 } else {
                     slot.done = Some(materialize(agg, proto));
@@ -393,7 +412,17 @@ impl<C: Commands> Shard<C> {
             }
         };
         if let Some(agg) = watch_agg {
-            self.finalize_watch_agg(conn_id, seq, agg);
+            match agg {
+                Agg::WatchCollect { .. } | Agg::ExecPrep { .. } => {
+                    self.finalize_watch_agg(conn_id, seq, agg)
+                }
+                Agg::RenameOrchestrator { .. } => self.finalize_rename_agg(conn_id, seq, agg),
+                // The match above is exhaustive over what fold ever puts
+                // into `watch_agg` (only the orchestrator aggs). Anything
+                // else is a bug; ignore so a stray slot doesn't crash
+                // the reactor.
+                _ => {}
+            }
         }
     }
 

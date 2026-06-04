@@ -40,14 +40,16 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> Vec<u8> {
         }
         Agg::Gather { op, keys, got } => finalize_gather(op, keys, got, proto),
         Agg::Keys { shape, acc } => finalize_keys(shape, acc),
-        // WatchCollect / ExecPrep have a conn-state side effect that
-        // pure materialise() can't express; `Shard::fold` routes them
-        // to `finalize_watch_agg` instead, so they never reach here.
-        // Defensive: emit an error rather than silently dropping the
-        // slot — a misroute would otherwise hang the connection.
-        Agg::WatchCollect { .. } | Agg::ExecPrep { .. } => {
+        // WatchCollect / ExecPrep / RenameOrchestrator carry conn-
+        // state mutations that pure materialise() can't express;
+        // `Shard::fold` routes them to `finalize_watch_agg` (Watch /
+        // Exec) or `finalize_rename_agg` (Rename) instead, so they
+        // never reach here. Defensive: emit an error rather than
+        // silently dropping the slot — a misroute would otherwise
+        // hang the connection.
+        Agg::WatchCollect { .. } | Agg::ExecPrep { .. } | Agg::RenameOrchestrator { .. } => {
             let mut out = Vec::new();
-            encode_error(&mut out, "ERR internal: watch accumulator hit materialize");
+            encode_error(&mut out, "ERR internal: orchestrator agg hit materialize");
             out
         }
     }

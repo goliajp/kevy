@@ -9,8 +9,8 @@
 //! the value to the destination shard. Routing is the runtime's job;
 //! the dispatch layer (`kevy::cmd::*`) sees only one shard at a time.
 
-use crate::message::{Agg, Inbound, Op, Part, PendingSlot};
-use crate::reduce::shard_of;
+use crate::message::{Agg, Inbound, Op, Part, PendingSlot, RenameStep};
+use crate::reduce::{drain_front, shard_of};
 use crate::shard::Shard;
 use crate::{Commands, RespVersion};
 use kevy_resp::ArgvView;
@@ -59,16 +59,168 @@ impl<C: Commands> Shard<C> {
             return;
         }
 
-        // Cross-shard: v2-3a placeholder. The orchestrator (Take from
-        // src shard, then Put to dst shard, then reply) lands in v2-3b.
-        // Redis cluster mode returns `CROSSSLOT` here; kevy uses a
-        // `CROSSSHARD` prefix to make it clear this isn't a cluster
-        // semantics issue but a not-yet-implemented optimisation.
-        self.fold_rename_reply(
-            conn_id,
-            seq,
-            b"-CROSSSHARD source and destination keys are on different shards (cross-shard RENAME pending v2-3b)\r\n".to_vec(),
-        );
+        // Cross-shard: orchestrator. Push a single pending slot with
+        // Agg::RenameOrchestrator; step 1 emits Op::RenameTake to
+        // src_shard. Fold receives Part::RenameTaken (or NoSuchSrc),
+        // step transitions to Put, emits Op::RenamePut. Step 2's
+        // Part::RenamePutDone triggers the +OK / :1 / :0 reply.
+        let agg = Agg::RenameOrchestrator {
+            step: RenameStep::Take,
+            nx,
+            src: src.clone(),
+            dst,
+            dst_shard,
+            taken: None,
+            put_stored: None,
+        };
+        if let Some(c) = self.conns.get_mut(&conn_id) {
+            let proto = c.proto;
+            c.pending.push_back(PendingSlot {
+                remaining: 1,
+                agg,
+                done: None,
+                proto,
+            });
+        }
+        let take_op = Op::RenameTake(src);
+        if src_shard == self.id {
+            let part = self.exec_op(take_op);
+            self.fold(conn_id, seq, part);
+        } else {
+            self.send_to(
+                src_shard,
+                Inbound::Request {
+                    origin: self.id,
+                    conn: conn_id,
+                    seq,
+                    op: take_op,
+                },
+            );
+        }
+    }
+
+    /// Resume the cross-shard RENAME after a sub-reply lands. Called
+    /// from `Shard::fold` once `slot.remaining == 0` for an
+    /// `Agg::RenameOrchestrator` slot.
+    ///
+    /// On step-1 completion: if Take succeeded → ship step 2 to
+    /// dst_shard, re-arm the slot. If Take missed → finalize with
+    /// `-ERR no such key`.
+    ///
+    /// On step-2 completion: finalize with `+OK` (RENAME ok) or `:1`
+    /// (RENAMENX ok) or `:0` (RENAMENX-blocked: dst already existed
+    /// on dst_shard at the moment of Put; we accept the data-loss
+    /// race vs adding a third "restore-src" step — Redis cluster has
+    /// the same trade-off via MIGRATE).
+    pub(crate) fn finalize_rename_agg(&mut self, conn_id: u64, seq: u64, agg: Agg) {
+        let Agg::RenameOrchestrator {
+            step,
+            nx,
+            src,
+            dst,
+            dst_shard,
+            taken,
+            put_stored,
+        } = agg
+        else {
+            return;
+        };
+        match step {
+            RenameStep::Take => self.advance_rename_to_put(conn_id, seq, nx, src, dst, dst_shard, taken),
+            RenameStep::Put => self.finish_rename_put(conn_id, seq, nx, put_stored),
+        }
+    }
+
+    /// Step 1 → step 2 transition. If src didn't exist, finalize with
+    /// `-ERR no such key`. Otherwise re-arm the slot for Put + ship
+    /// Op::RenamePut to dst_shard.
+    #[allow(clippy::too_many_arguments)]
+    fn advance_rename_to_put(
+        &mut self,
+        conn_id: u64,
+        seq: u64,
+        nx: bool,
+        _src: Vec<u8>,
+        dst: Vec<u8>,
+        dst_shard: usize,
+        taken: Option<(kevy_store::Value, Option<u64>)>,
+    ) {
+        let Some((value, ttl_ms)) = taken else {
+            // Take returned NoSuchSrc — finalize.
+            self.fill_rename_slot(conn_id, seq, b"-ERR no such key\r\n".to_vec());
+            return;
+        };
+        // Re-arm the same slot for step 2. Step transitions to Put.
+        if let Some(c) = self.conns.get_mut(&conn_id) {
+            let idx = (seq - c.next_emit) as usize;
+            if let Some(slot) = c.pending.get_mut(idx) {
+                slot.remaining = 1;
+                slot.agg = Agg::RenameOrchestrator {
+                    step: RenameStep::Put,
+                    nx,
+                    src: Vec::new(), // src no longer needed
+                    dst: dst.clone(),
+                    dst_shard,
+                    taken: None,        // step 2 doesn't buffer Value
+                    put_stored: None,   // fold fills this from RenamePutDone
+                };
+            }
+        }
+        let put_op = Op::RenamePut {
+            dst,
+            value,
+            ttl_ms,
+            nx,
+        };
+        if dst_shard == self.id {
+            let part = self.exec_op(put_op);
+            self.fold(conn_id, seq, part);
+        } else {
+            self.send_to(
+                dst_shard,
+                Inbound::Request {
+                    origin: self.id,
+                    conn: conn_id,
+                    seq,
+                    op: put_op,
+                },
+            );
+        }
+    }
+
+    /// Step 2 finished. Reply +OK / :1 / :0 depending on Put's `stored`
+    /// flag + the NX flag. `put_stored` is filled by `Shard::fold` from
+    /// `Part::RenamePutDone.stored` before this is called.
+    fn finish_rename_put(
+        &mut self,
+        conn_id: u64,
+        seq: u64,
+        nx: bool,
+        put_stored: Option<bool>,
+    ) {
+        let stored = put_stored.unwrap_or(false);
+        let reply = if stored {
+            if nx { b":1\r\n".to_vec() } else { b"+OK\r\n".to_vec() }
+        } else {
+            // Only reachable on RENAMENX cross-shard with pre-existing
+            // dst at Put time. The data-loss race here (src already
+            // taken at this point — Put refused, src gone) is
+            // documented. Future v3 could add a restore-src step or
+            // 2-phase pre-check.
+            b":0\r\n".to_vec()
+        };
+        self.fill_rename_slot(conn_id, seq, reply);
+    }
+
+    /// Drop a literal RESP frame into the orchestrator's slot + drain.
+    fn fill_rename_slot(&mut self, conn_id: u64, seq: u64, bytes: Vec<u8>) {
+        if let Some(c) = self.conns.get_mut(&conn_id) {
+            let idx = (seq - c.next_emit) as usize;
+            if let Some(slot) = c.pending.get_mut(idx) {
+                slot.done = Some(bytes);
+            }
+            drain_front(c);
+        }
     }
 
     /// Push a single pending slot + immediately fold a pre-built reply
