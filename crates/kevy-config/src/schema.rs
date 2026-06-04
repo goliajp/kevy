@@ -266,6 +266,49 @@ impl Default for LogSection {
     }
 }
 
+/// `[advanced]` section — reactor-loop tuning knobs that used to be
+/// hardcoded `const`s in `kevy-rt`. Defaults match the values shipped
+/// in workspace v1.3 / earlier so the existing benchmark numbers
+/// translate one-to-one. Tune only if you know what you're doing
+/// (`bench/REPORT.md` documents the trade-offs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdvancedSection {
+    /// Iterations the per-core reactor spins on `poll(timeout=0)`
+    /// before parking on a blocking wait. Higher = lower wake-up
+    /// latency under contention, higher idle CPU; lower = the inverse.
+    /// Default `256` (matches v1.0 const).
+    pub spin_limit: u32,
+    /// Bounded blocking wait in ms once the reactor parks. Acts as a
+    /// safety backstop for any missed cross-core wake (the per-pair
+    /// SeqCst fence is the primary mechanism since workspace v1.3.0).
+    /// Default `50` ms.
+    pub park_timeout_ms: u32,
+    /// How many reactor loop iterations between wall-clock reads for
+    /// the tick (TTL reaper / auto-AOF-rewrite / live-config refresh).
+    /// In busy-poll mode (~1M iter/s) the default `256` is one check
+    /// per ~256 µs — plenty for a 10 Hz tick. In park mode the
+    /// reactor bypasses this throttle (each iter is already ≥ 1 ms),
+    /// so the value only matters under sustained load. Default `256`.
+    pub tick_check_every: u32,
+    /// Per-direction SPSC ring slot count (one ring per ordered
+    /// core-pair). Must be a power of two; the ring code rounds up.
+    /// Overflow spills to a local backlog Vec rather than blocking,
+    /// so a small ring just shifts work to the slower path. Default
+    /// `1024`.
+    pub ring_capacity: usize,
+}
+
+impl Default for AdvancedSection {
+    fn default() -> Self {
+        Self {
+            spin_limit: 256,
+            park_timeout_ms: 50,
+            tick_check_every: 256,
+            ring_capacity: 1024,
+        }
+    }
+}
+
 /// `[notification]` section. `notify_keyspace_events` is a string of
 /// flag chars (Redis convention): `K` keyspace channel, `E` keyevent
 /// channel, `g` generic cmds, `$` string cmds, `l` list, `s` set, `h`
@@ -367,6 +410,8 @@ pub struct Config {
     pub log: LogSection,
     /// `[notification]` settings (keyspace events).
     pub notification: NotificationSection,
+    /// `[advanced]` settings (reactor tuning knobs).
+    pub advanced: AdvancedSection,
     /// Path the config was loaded from (for `CONFIG REWRITE`). `None` =
     /// loaded from defaults only / from in-memory string.
     pub source_path: Option<PathBuf>,

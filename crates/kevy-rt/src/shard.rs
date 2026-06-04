@@ -99,18 +99,25 @@ pub(crate) struct Shard<C: Commands> {
     /// and skips the publish hot-path. `Copy` so the per-cmd check
     /// fits in a register pair.
     pub(crate) notify_flags: NotificationFlags,
+    /// Iterations the reactor busy-polls before parking. Threaded in
+    /// from [`crate::Runtime::with_advanced`]; replaces the old
+    /// `SPIN_LIMIT` const so embedders can tune wake-up vs idle CPU.
+    pub(crate) spin_limit: u32,
+    /// Bounded blocking-wait timeout (ms) when parked. Acts as a
+    /// safety backstop against missed cross-core wakes. Replaces the
+    /// old `PARK_TIMEOUT_MS` const.
+    pub(crate) park_timeout_ms: i32,
+    /// Reactor loop iterations between wall-clock reads for the tick
+    /// check. Replaces the old `TICK_CHECK_EVERY` const.
+    pub(crate) tick_check_every: u32,
 }
 
-/// Iterations to busy-poll (timeout 0) after the last work before parking.
-const SPIN_LIMIT: u32 = 256;
-/// Backstop blocking-wait timeout when parked. Socket/cross-core readiness wakes
-/// us sooner; this only bounds latency if a wakeup is ever missed.
-const PARK_TIMEOUT_MS: i32 = 50;
-/// Throttle the per-loop `Instant::now()` cost in the active-expire path —
-/// we only consult the wall clock every N iterations. In busy-poll mode
-/// (~1M iters/s) N=256 ⇒ ~3.9k tick checks/s, plenty for a 10 Hz reaper;
-/// in parked mode each `wait` itself takes ≥ 1 ms so we always check.
-pub(crate) const TICK_CHECK_EVERY: u32 = 256;
+// `SPIN_LIMIT` / `PARK_TIMEOUT_MS` / `TICK_CHECK_EVERY` moved to per-
+// shard fields (`Shard.spin_limit` / `park_timeout_ms` /
+// `tick_check_every`) since workspace v1.4 — wired through
+// `[advanced]` config + `Runtime::with_advanced`. Defaults
+// (`256` / `50ms` / `256`) match the pre-v1.4 hardcoded values, so
+// existing benchmark numbers translate one-to-one.
 
 impl<C: Commands> Shard<C> {
     /// This shard's snapshot file: `<data_dir>/dump-<id>.rdb`.
@@ -164,7 +171,7 @@ impl<C: Commands> Shard<C> {
         while !stop.load(Ordering::Relaxed) {
             // Busy-poll while there's recent work — a cross-core hop then costs
             // no syscall. Park (blocking wait) once we've been idle a while.
-            let spinning = idle_spins < SPIN_LIMIT;
+            let spinning = idle_spins < self.spin_limit;
             let timeout = if spinning {
                 Some(0)
             } else {
@@ -188,7 +195,7 @@ impl<C: Commands> Shard<C> {
                     idle_spins = 0;
                     continue;
                 }
-                Some(PARK_TIMEOUT_MS)
+                Some(self.park_timeout_ms)
             };
 
             self.poller.wait(&mut self.events, timeout)?;
@@ -245,7 +252,7 @@ impl<C: Commands> Shard<C> {
             // at every park iteration regardless of recent traffic.
             if let Some(iv) = tick_interval {
                 tick_check_counter = tick_check_counter.wrapping_add(1);
-                if tick_check_counter >= TICK_CHECK_EVERY || !spinning {
+                if tick_check_counter >= self.tick_check_every || !spinning {
                     tick_check_counter = 0;
                     let now = Instant::now();
                     if now.duration_since(last_tick) >= iv {

@@ -443,6 +443,12 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
         .with_auto_aof_rewrite(
             cfg.persistence.auto_aof_rewrite_percentage,
             cfg.persistence.auto_aof_rewrite_min_size,
+        )
+        .with_advanced(
+            cfg.advanced.spin_limit,
+            cfg.advanced.park_timeout_ms,
+            cfg.advanced.tick_check_every,
+            cfg.advanced.ring_capacity,
         );
     let stop = Arc::new(AtomicBool::new(false));
     if let Err(e) = runtime.run(stop) {
