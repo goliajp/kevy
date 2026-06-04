@@ -288,6 +288,63 @@ impl Subscriber {
             }
         }
     }
+
+    /// Borrowing iterator over every pubsub frame — ack frames included.
+    /// Each `next()` is one blocking [`Self::recv`]. Terminates (`None`)
+    /// when the underlying stream / bus is gone (`ErrorKind::UnexpectedEof`);
+    /// every other error is surfaced as `Some(Err(_))` so the caller can
+    /// decide whether to retry (e.g. a read timeout) or break.
+    ///
+    /// kevy stays 0-deps so this is a `std::iter::Iterator`, not a
+    /// `futures::Stream`. Async runtimes consume it via
+    /// `spawn_blocking` (see `docs/pubsub.md`).
+    pub fn events(&mut self) -> SubscriberEvents<'_> {
+        SubscriberEvents { sub: self }
+    }
+
+    /// Borrowing iterator that silently skips `(p)?(un)?subscribe` acks
+    /// and yields the payload tuples consumers actually want. Mirrors
+    /// [`Self::recv_message`] in iterator form. For `Pmessage` the
+    /// pattern is discarded — fall back to [`Self::events`] if you need it.
+    pub fn messages(&mut self) -> SubscriberMessages<'_> {
+        SubscriberMessages { sub: self }
+    }
+}
+
+/// Iterator returned by [`Subscriber::events`]. Yields every pubsub
+/// frame (acks + payloads). See the method docs for termination + error
+/// semantics.
+#[derive(Debug)]
+pub struct SubscriberEvents<'a> {
+    sub: &'a mut Subscriber,
+}
+
+impl Iterator for SubscriberEvents<'_> {
+    type Item = io::Result<PubsubEvent>;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.sub.recv() {
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => None,
+            other => Some(other),
+        }
+    }
+}
+
+/// Iterator returned by [`Subscriber::messages`]. Yields one
+/// `(channel, payload)` per published `message` / `pmessage`; ack frames
+/// are silently consumed and not yielded.
+#[derive(Debug)]
+pub struct SubscriberMessages<'a> {
+    sub: &'a mut Subscriber,
+}
+
+impl Iterator for SubscriberMessages<'_> {
+    type Item = io::Result<(Vec<u8>, Vec<u8>)>;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.sub.recv_message() {
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => None,
+            other => Some(other),
+        }
+    }
 }
 
 fn send_to(stream: &mut TcpStream, verb: &[u8], args: &[&[u8]]) -> io::Result<()> {
