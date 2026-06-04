@@ -35,6 +35,10 @@ impl<C: Commands> Shard<C> {
                     if self.aof.is_some() {
                         self.log(&args);
                     }
+                    // Keyspace notification fan-out. Empty-flags
+                    // short-circuit inside maybe_notify_dispatch keeps
+                    // the OFF hot path at one bool-OR per write.
+                    self.maybe_notify_dispatch(&args);
                 }
                 Part::Reply(reply)
             }
@@ -50,6 +54,7 @@ impl<C: Commands> Shard<C> {
                         c.push(k);
                     }
                     self.log(&c);
+                    self.maybe_notify_del(&keys);
                 }
                 Part::Int(n as i64)
             }
@@ -62,6 +67,7 @@ impl<C: Commands> Shard<C> {
                 let mut c = Argv::with_capacity(1, 8);
                 c.push(b"FLUSHALL");
                 self.log(&c);
+                self.maybe_notify_flush();
                 Part::Ok
             }
             Op::MSet(pairs) => {
@@ -77,6 +83,7 @@ impl<C: Commands> Shard<C> {
                         c.push(v);
                     }
                     self.log(&c);
+                    self.maybe_notify_mset(&pairs);
                 }
                 Part::Ok
             }

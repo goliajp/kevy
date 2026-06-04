@@ -21,6 +21,7 @@ impl Config {
             "memory" => self.apply_memory(item),
             "expiry" => self.apply_expiry(item),
             "log" => self.apply_log(item),
+            "notification" => self.apply_notification(item),
             other => Err(schema_err(&item, format!("unknown section [{other}]"))),
         }
     }
@@ -103,6 +104,16 @@ impl Config {
             }
             "output" => self.log.output = parse_log_output(&value_as_string(&item)?),
             k => return Err(schema_err(&item, format!("unknown [log] key: {k}"))),
+        }
+        Ok(())
+    }
+
+    fn apply_notification(&mut self, item: Item) -> Result<(), ConfigError> {
+        match item.key.as_str() {
+            "notify_keyspace_events" => {
+                self.notification.notify_keyspace_events = value_as_string(&item)?;
+            }
+            k => return Err(schema_err(&item, format!("unknown [notification] key: {k}"))),
         }
         Ok(())
     }

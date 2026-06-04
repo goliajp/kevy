@@ -14,6 +14,7 @@
 
 use crate::Commands;
 use crate::conn::Conn;
+use crate::NotificationFlags;
 use crate::message::{Inbound, PubMsg, PubSubPatternReg, PubSubReg, ReqBatch};
 use kevy_persist::{Aof, load_snapshot, replay_aof};
 use kevy_ring::{Consumer, Producer};
@@ -92,6 +93,12 @@ pub(crate) struct Shard<C: Commands> {
     /// not one per command — amortizing the ring/fold tax that drags many
     /// shards below single-shard throughput.
     pub(crate) request_batch: Vec<ReqBatch>,
+    /// Per-shard cached `notify_keyspace_events` flags — hot-reloaded
+    /// off the [`crate::Commands::live_runtime_config`] tick. Empty
+    /// (default) = OFF: every write checks `notify_flags.is_empty()`
+    /// and skips the publish hot-path. `Copy` so the per-cmd check
+    /// fits in a register pair.
+    pub(crate) notify_flags: NotificationFlags,
 }
 
 /// Iterations to busy-poll (timeout 0) after the last work before parking.
@@ -229,12 +236,16 @@ impl<C: Commands> Shard<C> {
                 let _ = aof.maybe_sync();
             }
             // Active TTL reaper / shard housekeeping. Skip the wall-clock
-            // read on most iters: in busy-poll the tick fires at 10 Hz with
-            // negligible overhead; in park mode each iter is already ≥ 1 ms
-            // so the throttle does not delay the tick.
+            // read on most iters: in busy-poll the tick fires at 10 Hz
+            // with negligible overhead (counter saturates in ~us, then
+            // checks elapsed). In park mode each iter is already ≥ 1 ms
+            // so the throttle would delay the tick by 256 iters × 50 ms
+            // = ~12 s on a fully-idle server — bypass the counter when
+            // we just came back from a parking wait so the tick fires
+            // at every park iteration regardless of recent traffic.
             if let Some(iv) = tick_interval {
                 tick_check_counter = tick_check_counter.wrapping_add(1);
-                if tick_check_counter >= TICK_CHECK_EVERY {
+                if tick_check_counter >= TICK_CHECK_EVERY || !spinning {
                     tick_check_counter = 0;
                     let now = Instant::now();
                     if now.duration_since(last_tick) >= iv {
@@ -294,6 +305,9 @@ impl<C: Commands> Shard<C> {
             } else {
                 Some(Duration::from_millis(ms))
             };
+        }
+        if let Some(flags) = live.notify_flags {
+            self.notify_flags = flags;
         }
     }
 

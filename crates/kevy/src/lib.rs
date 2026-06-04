@@ -35,7 +35,7 @@
 use kevy_resp::{
     encode_array_len, encode_bulk, encode_error, encode_integer, encode_map_header, parse_command,
 };
-use kevy_rt::{ArgvView, Commands, ResolvedCmd, RespVersion, Route, Runtime, TxnKind};
+use kevy_rt::{ArgvView, Commands, NotifyClass, ResolvedCmd, RespVersion, Route, Runtime, TxnKind};
 use kevy_store::Store;
 use kevy_sys::Socket;
 use std::io;
@@ -221,6 +221,9 @@ impl Commands for KevyCommands {
             auto_aof_rewrite_pct: Some(cfg.persistence.auto_aof_rewrite_percentage),
             auto_aof_rewrite_min_size: Some(cfg.persistence.auto_aof_rewrite_min_size),
             tick_interval_ms: tick_ms,
+            notify_flags: Some(kevy_config::parse_notification_flags(
+                &cfg.notification.notify_keyspace_events,
+            )),
         }
     }
 
@@ -238,6 +241,12 @@ impl Commands for KevyCommands {
         };
         let mut buf = [0u8; 32];
         cmd::is_write_verb(upper_verb(name, &mut buf))
+    }
+
+    fn notify_class<A: ArgvView + ?Sized>(&self, args: &A) -> Option<NotifyClass> {
+        let name = args.first()?;
+        let mut buf = [0u8; 32];
+        cmd::notify_class_for_verb(upper_verb(name, &mut buf))
     }
 
     fn txn_kind<A: ArgvView + ?Sized>(&self, args: &A) -> TxnKind {

@@ -160,6 +160,7 @@ impl<C: Commands> Runtime<C> {
                 psub_local: HashMap::new(),
                 publish_batch: (0..n).map(|_| Vec::new()).collect(),
                 request_batch: (0..n).map(|_| Vec::new()).collect(),
+                notify_flags: crate::NotificationFlags::default(),
             });
         }
 

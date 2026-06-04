@@ -70,6 +70,7 @@
 mod conn;
 mod exec;
 mod exec_build;
+mod exec_notify;
 mod exec_op;
 mod exec_pubsub;
 mod exec_pubsub_pattern;
@@ -82,6 +83,7 @@ mod shard;
 #[cfg(target_os = "linux")]
 mod uring_reactor;
 
+pub use kevy_config::NotificationFlags;
 pub use kevy_persist::Fsync;
 pub use kevy_resp::{Argv, ArgvBorrowed, ArgvView, RespVersion};
 pub use kevy_store::Store;
@@ -181,6 +183,15 @@ pub trait Commands: Clone + Send + 'static {
     ) {
         self.dispatch_into(store, args, out);
     }
+    /// Classify a command for keyspace notifications. Returns `Some`
+    /// for write commands that should fire a notification when the
+    /// corresponding flag is enabled; `None` for read-only / no-op /
+    /// not-yet-classified commands (those never publish). Default
+    /// `None` so non-kevy embedders pay nothing.
+    fn notify_class<A: ArgvView + ?Sized>(&self, _args: &A) -> Option<NotifyClass> {
+        None
+    }
+
     /// Handle `HELLO` — return the new connection protocol version + the
     /// reply bytes. The runtime applies the new version to the conn
     /// before scheduling the reply, so a `HELLO 3` ack itself comes out
@@ -262,6 +273,40 @@ pub struct ResolvedCmd {
     pub is_write: bool,
 }
 
+/// Keyspace-notification event class — what category a write command
+/// belongs to, so the runtime can match it against the per-conn
+/// notify_keyspace_events flags before publishing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotifyClass {
+    /// `g` — generic key commands (DEL / EXPIRE / PERSIST / RENAME / TYPE).
+    Generic,
+    /// `$` — string commands (SET / GETSET / INCR / APPEND / MSET).
+    String,
+    /// `l` — list commands (LPUSH / RPUSH / LPOP / LREM / LTRIM / …).
+    List,
+    /// `s` — set commands (SADD / SREM / SPOP / …).
+    Set,
+    /// `h` — hash commands (HSET / HDEL / HINCRBY / …).
+    Hash,
+    /// `z` — sorted-set commands (ZADD / ZREM / ZINCRBY / …).
+    Zset,
+}
+
+impl NotifyClass {
+    /// Whether `flags` enables this event class.
+    #[inline]
+    pub fn enabled_in(self, flags: &NotificationFlags) -> bool {
+        match self {
+            NotifyClass::Generic => flags.generic,
+            NotifyClass::String => flags.string,
+            NotifyClass::List => flags.list,
+            NotifyClass::Set => flags.set,
+            NotifyClass::Hash => flags.hash,
+            NotifyClass::Zset => flags.zset,
+        }
+    }
+}
+
 /// Transaction-control classification for a command.
 pub enum TxnKind {
     Multi,
@@ -300,4 +345,10 @@ pub struct LiveRuntimeConfig {
     /// expiry and the auto-rewrite tick path. Lazy expiry on access
     /// always still works.
     pub tick_interval_ms: Option<u64>,
+    /// `notify_keyspace_events` flags. Parsed by the [`Commands`]
+    /// impl from its config source (e.g. kevy reads
+    /// `config_global` + [`kevy_config::parse_notification_flags`]).
+    /// Default-empty flags mean OFF — writes pay one bool-OR check
+    /// and skip every per-key keyspace notification publish.
+    pub notify_flags: Option<NotificationFlags>,
 }

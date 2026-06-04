@@ -4,6 +4,7 @@ use kevy_resp::{
     ArgvView, RespVersion, encode_array_len, encode_bulk, encode_double, encode_error,
     encode_integer,
 };
+use kevy_rt::NotifyClass;
 use kevy_store::{ScoreBound, Store, StoreError};
 
 /// Uppercase a command verb into the caller's stack buffer — no per-command heap
@@ -101,6 +102,41 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"ZINCRBY"
             | b"MSET"
     )
+}
+
+/// Classify an uppercased verb into a keyspace-notification class. Returns
+/// `None` for read-only / non-notifying commands so the runtime can
+/// short-circuit; otherwise a [`NotifyClass`] the caller matches against
+/// `NotificationFlags` to decide whether to actually publish.
+///
+/// Event name = lowercased verb (matches the Redis events.c naming
+/// convention — what redis-cli's `PSUBSCRIBE __keyevent@0__:*` reports).
+/// Multi-key cmds (DEL multi / MSET / FLUSHDB) get their own per-Op
+/// hooks (`maybe_notify_del` / `maybe_notify_mset` / `maybe_notify_flush`
+/// in `kevy-rt::exec_notify`); this table covers single-key dispatch only.
+pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
+    Some(match cmd {
+        // String — Redis class `$`.
+        b"SET" | b"SETNX" | b"SETEX" | b"PSETEX" | b"GETSET" | b"GETDEL"
+        | b"APPEND" | b"INCR" | b"DECR" | b"INCRBY" | b"DECRBY" | b"INCRBYFLOAT" => {
+            NotifyClass::String
+        }
+        // Hash — class `h`.
+        b"HSET" | b"HSETNX" | b"HDEL" | b"HINCRBY" => NotifyClass::Hash,
+        // List — class `l`.
+        b"LPUSH" | b"RPUSH" | b"LPOP" | b"RPOP" | b"LSET" | b"LREM" | b"LTRIM" => {
+            NotifyClass::List
+        }
+        // Set — class `s` (SINTERSTORE/SUNIONSTORE/SDIFFSTORE not yet impl'd).
+        b"SADD" | b"SREM" | b"SPOP" => NotifyClass::Set,
+        // Sorted set — class `z`.
+        b"ZADD" | b"ZREM" | b"ZINCRBY" => NotifyClass::Zset,
+        // Generic — class `g`. (DEL single-key falls here; multi-key DEL
+        // is routed through Op::Del + maybe_notify_del directly.)
+        b"DEL" | b"EXPIRE" | b"PEXPIRE" | b"PERSIST" => NotifyClass::Generic,
+        // Reads, admin, pub/sub etc. — no notification.
+        _ => return None,
+    })
 }
 
 /// Subset of [`is_write_verb`] that can *grow* memory. `DEL` / `HDEL` / `LPOP`

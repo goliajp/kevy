@@ -32,7 +32,8 @@ mod size;
 
 pub use schema::{
     AppendFsync, Config, ConfigError, EvictionPolicy, ExpirySection, LogLevel,
-    LogOutput, LogSection, MemorySection, PersistenceSection, ServerSection,
+    LogOutput, LogSection, MemorySection, NotificationFlags, NotificationSection,
+    PersistenceSection, ServerSection, parse_notification_flags,
 };
 pub use size::parse_size;
 
@@ -183,6 +184,13 @@ impl Config {
             out,
             "output   = \"{}\"",
             escape_toml_basic_string(&self.log.output.as_str()),
+        );
+        let _ = writeln!(out);
+        let _ = writeln!(out, "[notification]");
+        let _ = writeln!(
+            out,
+            "notify_keyspace_events = \"{}\"",
+            escape_toml_basic_string(&self.notification.notify_keyspace_events),
         );
         out
     }

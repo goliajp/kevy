@@ -21,6 +21,7 @@ kevy-ring = { path = "../kevy-ring", version = "1.3.0" }
 kevy-persist = { path = "../kevy-persist", version = "1.3.0" }
 kevy-hash = { path = "../kevy-hash", version = "1.3.0" }
 kevy-map = { path = "../kevy-map", version = "1.3.0" }
+kevy-config = { path = "../kevy-config", version = "1.3.0" }
 
 # io_uring engine is Linux-only; the rest of kevy-rt's hot path is the
 # epoll/kqueue reactor in kevy-sys. Gate at the manifest level so non-

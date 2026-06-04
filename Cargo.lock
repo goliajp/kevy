@@ -53,6 +53,7 @@ name = "kevy"
 version = "1.3.0"
 dependencies = [
  "kevy-bench",
+ "kevy-client",
  "kevy-config",
  "kevy-persist",
  "kevy-resp",
@@ -160,6 +161,7 @@ dependencies = [
 name = "kevy-rt"
 version = "1.3.0"
 dependencies = [
+ "kevy-config",
  "kevy-hash",
  "kevy-map",
  "kevy-persist",
