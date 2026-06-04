@@ -34,7 +34,7 @@ jobs:
             os: macos-14   # M-series GitHub-hosted runner
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust (stable)
         run: |
@@ -44,7 +44,7 @@ jobs:
           rustup component add clippy
 
       - name: Cache cargo registry + build artifacts
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -75,7 +75,7 @@ jobs:
           - wasm32-wasip1
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust + wasm target
         run: |
@@ -84,7 +84,7 @@ jobs:
           rustup target add ${{ matrix.target }}
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -109,7 +109,7 @@ jobs:
     name: miri (kevy-map + kevy-bytes)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install nightly + miri
         run: |
@@ -117,7 +117,7 @@ jobs:
           rustup override set nightly
 
       - name: Cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -144,7 +144,7 @@ jobs:
     # Don't block the main matrix on bench — it's a flake-prone Docker harness.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build kevy release image + run vs valkey 9.1
         env:
           N: "50000"   # smaller than the perf-box cohort — this is a smoke
