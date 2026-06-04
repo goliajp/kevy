@@ -26,6 +26,36 @@ pub struct ConsumerGroup {
     pub consumers: KevyMap<SmallBytes, Box<ConsumerState>>,
 }
 
+impl ConsumerGroup {
+    /// Highest ID delivered by this group — for `XINFO GROUPS`.
+    pub fn last_delivered_id(&self) -> StreamId {
+        self.last_delivered_id
+    }
+    /// Total pending entries — `XINFO GROUPS`'s `pending`.
+    pub fn pending_count(&self) -> usize {
+        self.pel.len()
+    }
+    /// Known consumer count — `XINFO GROUPS`'s `consumers`.
+    pub fn consumer_count(&self) -> usize {
+        self.consumers.len()
+    }
+    /// Iterate `(consumer_name, consumer)` pairs — `XINFO CONSUMERS`.
+    pub fn consumers_iter(&self) -> impl Iterator<Item = (&[u8], &ConsumerState)> {
+        self.consumers.iter().map(|(k, v)| (k.as_slice(), v.as_ref()))
+    }
+}
+
+impl ConsumerState {
+    /// `XINFO CONSUMERS`' `pending` field.
+    pub fn pending_count(&self) -> usize {
+        self.pel_count
+    }
+    /// Last unix-ms this consumer interacted with the group.
+    pub fn last_seen_ms(&self) -> u64 {
+        self.last_seen_ms
+    }
+}
+
 impl Default for ConsumerGroup {
     fn default() -> Self {
         Self {

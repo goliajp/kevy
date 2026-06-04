@@ -348,6 +348,8 @@ pub struct NotificationFlags {
     pub hash: bool,
     /// `z` — ZADD / ZINCRBY / ZREM / ZREMRANGEBY* / …
     pub zset: bool,
+    /// `t` — XADD / XDEL / XTRIM / XGROUP / XACK / XCLAIM / XREADGROUP …
+    pub stream: bool,
 }
 
 impl NotificationFlags {
@@ -356,7 +358,13 @@ impl NotificationFlags {
     /// further classification or string formatting.
     pub fn is_empty(&self) -> bool {
         !(self.keyspace || self.keyevent)
-            || !(self.generic || self.string || self.list || self.set || self.hash || self.zset)
+            || !(self.generic
+                || self.string
+                || self.list
+                || self.set
+                || self.hash
+                || self.zset
+                || self.stream)
     }
 }
 
@@ -401,15 +409,17 @@ pub fn parse_notification_flags(s: &str) -> NotificationFlags {
             's' => f.set = true,
             'h' => f.hash = true,
             'z' => f.zset = true,
+            't' => f.stream = true,
             'A' => {
-                // Alias for "g$lshz" — every implemented event class.
-                // Per Redis spec `A` does NOT include `x`/`e`/`t`/`n`.
+                // Alias for "g$lshzxetd" — every implemented event class.
+                // Per Redis spec `A` includes the stream `t` class.
                 f.generic = true;
                 f.string = true;
                 f.list = true;
                 f.set = true;
                 f.hash = true;
                 f.zset = true;
+                f.stream = true;
             }
             _ => {} // forward-compat: silently ignore unknown chars
         }

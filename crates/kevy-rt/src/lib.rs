@@ -307,6 +307,9 @@ pub enum NotifyClass {
     Hash,
     /// `z` — sorted-set commands (ZADD / ZREM / ZINCRBY / …).
     Zset,
+    /// `t` — stream commands (XADD / XDEL / XTRIM / XGROUP / XACK /
+    /// XCLAIM / XREADGROUP / …). Matches Redis's `t` class.
+    Stream,
 }
 
 impl NotifyClass {
@@ -320,6 +323,7 @@ impl NotifyClass {
             NotifyClass::Set => flags.set,
             NotifyClass::Hash => flags.hash,
             NotifyClass::Zset => flags.zset,
+            NotifyClass::Stream => flags.stream,
         }
     }
 }

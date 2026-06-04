@@ -11,6 +11,7 @@
 
 mod claim;
 mod group;
+mod info;
 
 use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
@@ -48,6 +49,7 @@ pub(crate) fn dispatch_stream<A: ArgvView + ?Sized>(
         b"XPENDING" => group::cmd_xpending(store, args, out),
         b"XCLAIM" => claim::cmd_xclaim(store, args, out),
         b"XAUTOCLAIM" => claim::cmd_xautoclaim(store, args, out),
+        b"XINFO" => info::cmd_xinfo(store, args, out),
         _ => return false,
     }
     true
