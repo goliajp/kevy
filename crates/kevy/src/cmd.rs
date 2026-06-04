@@ -101,6 +101,9 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"ZREM"
             | b"ZINCRBY"
             | b"GEOADD"
+            | b"GEOSEARCHSTORE"
+            | b"GEORADIUS"
+            | b"GEORADIUSBYMEMBER"
             | b"MSET"
     )
 }
@@ -171,6 +174,9 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"ZADD"
             | b"ZINCRBY"
             | b"GEOADD"
+            | b"GEOSEARCHSTORE"
+            | b"GEORADIUS"
+            | b"GEORADIUSBYMEMBER"
             | b"MSET"
     )
 }
