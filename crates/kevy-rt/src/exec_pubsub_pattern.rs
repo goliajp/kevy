@@ -20,7 +20,10 @@
 use crate::Commands;
 use crate::reduce::pubsub_pmessage;
 use crate::shard::Shard;
-use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_integer, encode_null_bulk};
+use kevy_resp::{
+    ArgvView, RespVersion, encode_array_len, encode_bulk, encode_integer, encode_null_bulk,
+    encode_push_header,
+};
 use kevy_store::glob_match;
 
 impl<C: Commands> Shard<C> {
@@ -73,13 +76,22 @@ impl<C: Commands> Shard<C> {
         subscribe: bool,
     ) -> (Vec<u8>, Vec<Vec<u8>>) {
         let verb: &[u8] = if subscribe { b"psubscribe" } else { b"punsubscribe" };
+        let proto = self
+            .conns
+            .get(&conn_id)
+            .map_or(RespVersion::V2, |c| c.proto);
         let mut out = Vec::new();
         let mut changed: Vec<Vec<u8>> = Vec::new();
+        // Header: V2 `*3` array, V3 `>3` push frame.
+        let emit_header = |out: &mut Vec<u8>| match proto {
+            RespVersion::V2 => encode_array_len(out, 3),
+            RespVersion::V3 => encode_push_header(out, 3),
+        };
         // The "no patterns to act on" edge case still gets one ack frame
         // with a nil pattern slot (matches Redis wire).
         if patterns.is_empty() {
             let count = self.psub_count_for(conn_id);
-            encode_array_len(&mut out, 3);
+            emit_header(&mut out);
             encode_bulk(&mut out, verb);
             encode_null_bulk(&mut out);
             encode_integer(&mut out, count as i64);
@@ -95,7 +107,7 @@ impl<C: Commands> Shard<C> {
                 changed.push(pat.clone());
             }
             let count = self.psub_count_for(conn_id);
-            encode_array_len(&mut out, 3);
+            emit_header(&mut out);
             encode_bulk(&mut out, verb);
             encode_bulk(&mut out, pat);
             encode_integer(&mut out, count as i64);
@@ -248,8 +260,12 @@ impl<C: Commands> Shard<C> {
         }
         let mut touched: Vec<u64> = Vec::with_capacity(plans.len());
         for (pat, id) in plans {
-            let frame = pubsub_pmessage(&pat, channel, msg);
             if let Some(c) = self.conns.get_mut(&id) {
+                // Per-conn proto: a single PUBLISH that fans out to a
+                // mix of V2 + V3 pattern-subscribers gets per-subscriber
+                // shape. The encode is one alloc per fan-out target —
+                // the dominant work is the bytes write into c.output.
+                let frame = pubsub_pmessage(&pat, channel, msg, c.proto);
                 c.output.extend_from_slice(&frame);
                 touched.push(id);
             }

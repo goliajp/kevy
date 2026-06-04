@@ -7,7 +7,10 @@ use crate::Commands;
 use crate::message::{Agg, Inbound, Part, PendingSlot};
 use crate::reduce::pubsub_message;
 use crate::shard::Shard;
-use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_integer, encode_null_bulk};
+use kevy_resp::{
+    ArgvView, RespVersion, encode_array_len, encode_bulk, encode_integer, encode_null_bulk,
+    encode_push_header,
+};
 
 impl<C: Commands> Shard<C> {
     pub(crate) fn do_subscribe<A: ArgvView + ?Sized>(
@@ -57,10 +60,18 @@ impl<C: Commands> Shard<C> {
         verb: &[u8],
     ) -> Option<(Vec<u8>, Vec<Vec<u8>>)> {
         let c = self.conns.get_mut(&conn_id)?;
+        let proto = c.proto;
         let mut out = Vec::new();
         let mut changed: Vec<Vec<u8>> = Vec::new();
+        // Header shape: V2 = `*3\r\n` array, V3 = `>3\r\n` push frame.
+        // Per-ack header so a V3 conn that runs through this multiple
+        // times keeps the push-frame demux contract.
+        let emit_header = |out: &mut Vec<u8>, proto: RespVersion| match proto {
+            RespVersion::V2 => encode_array_len(out, 3),
+            RespVersion::V3 => encode_push_header(out, 3),
+        };
         if channels.is_empty() {
-            encode_array_len(&mut out, 3);
+            emit_header(&mut out, proto);
             encode_bulk(&mut out, verb);
             encode_null_bulk(&mut out);
             encode_integer(&mut out, c.sub.len() as i64);
@@ -74,7 +85,7 @@ impl<C: Commands> Shard<C> {
             if did {
                 changed.push(ch.clone());
             }
-            encode_array_len(&mut out, 3);
+            emit_header(&mut out, proto);
             encode_bulk(&mut out, verb);
             encode_bulk(&mut out, ch);
             encode_integer(&mut out, c.sub.len() as i64);
@@ -172,6 +183,11 @@ impl<C: Commands> Shard<C> {
     /// (channel-precise frame) and every local `PSUBSCRIBE`r whose
     /// pattern matches (pmessage frame). Marks all touched conns dirty so
     /// the reactor flushes them. Returns the channel-precise count.
+    ///
+    /// Mixed V2 + V3 subscribers on the same channel: V2 gets `*3`
+    /// array frame, V3 gets `>3` push frame. Build both shapes
+    /// upfront so the per-subscriber loop is one extend, not a full
+    /// reencode (saves N alloc on a wide fan-out).
     pub(crate) fn deliver_publish(&mut self, channel: &[u8], msg: &[u8]) -> usize {
         let ids: Vec<u64> = self
             .conns
@@ -180,10 +196,19 @@ impl<C: Commands> Shard<C> {
             .map(|(id, _)| *id)
             .collect();
         if !ids.is_empty() {
-            let message = pubsub_message(channel, msg);
+            let v2 = pubsub_message(channel, msg, kevy_resp::RespVersion::V2);
+            let mut v3_cache: Option<Vec<u8>> = None;
             for id in &ids {
                 if let Some(c) = self.conns.get_mut(id) {
-                    c.output.extend_from_slice(&message);
+                    let frame = match c.proto {
+                        kevy_resp::RespVersion::V2 => &v2,
+                        kevy_resp::RespVersion::V3 => {
+                            v3_cache.get_or_insert_with(|| {
+                                pubsub_message(channel, msg, kevy_resp::RespVersion::V3)
+                            })
+                        }
+                    };
+                    c.output.extend_from_slice(frame);
                 }
             }
             self.dirty.extend_from_slice(&ids);
