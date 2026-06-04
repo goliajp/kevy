@@ -276,6 +276,81 @@ impl Subscriber {
         }
     }
 
+    /// Negotiate RESP3 on this connection by sending `HELLO 3` and
+    /// draining the ack. Subsequent `SUBSCRIBE` / `PSUBSCRIBE` /
+    /// `PUBLISH` deliveries arrive as push frames (`>N\r\n…`) instead
+    /// of the legacy RESP2 array shape (`*N\r\n…`); [`Self::recv`]
+    /// accepts both transparently, so existing code keeps working with
+    /// no other changes.
+    ///
+    /// Remote-only: the embedded backend has no proto negotiation
+    /// concept (frames go through the in-process bus typed). Calling
+    /// `hello3` on an embedded [`Subscriber`] returns
+    /// [`io::ErrorKind::Unsupported`].
+    ///
+    /// Must be called BEFORE any [`Self::subscribe`] /
+    /// [`Self::psubscribe`] — Redis requires `HELLO` be the first
+    /// command on a connection that uses it.
+    pub fn hello3(&mut self) -> io::Result<PubsubEvent> {
+        match &mut self.inner {
+            Inner::Embedded { .. } => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "HELLO 3 is a remote/TCP-only operation; embedded backend has no proto switch",
+            )),
+            Inner::Remote { stream, buf } => {
+                let mut frame = Vec::new();
+                encode_command(&mut frame, &[b"HELLO".to_vec(), b"3".to_vec()]);
+                stream.write_all(&frame)?;
+                // The HELLO 3 ack itself comes back as a RESP3 Map
+                // (`%7\r\n…`). parse_reply accepts it (P1); we drain
+                // and discard since the proto switch is the actual
+                // semantic — the body's just server metadata.
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match kevy_resp::parse_reply(buf) {
+                        Ok(Some((reply, used))) => {
+                            buf.drain(..used);
+                            // Reply::Map / Reply::Array both acceptable
+                            // (a server that rejected V3 would emit an
+                            // Error reply — fall through to the error
+                            // branch below).
+                            return match reply {
+                                Reply::Map(_) | Reply::Array(_) => {
+                                    Ok(PubsubEvent::Subscribe {
+                                        channel: b"HELLO".to_vec(),
+                                        count: 3,
+                                    })
+                                }
+                                Reply::Error(e) => Err(io::Error::other(
+                                    String::from_utf8_lossy(&e).into_owned(),
+                                )),
+                                other => Err(invalid(format!(
+                                    "unexpected HELLO 3 reply shape: {}",
+                                    shape(&other)
+                                ))),
+                            };
+                        }
+                        Ok(None) => {}
+                        Err(_) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::InvalidData,
+                                "malformed HELLO 3 reply",
+                            ));
+                        }
+                    }
+                    let n = stream.read(&mut chunk)?;
+                    if n == 0 {
+                        return Err(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "server closed connection during HELLO 3",
+                        ));
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+            }
+        }
+    }
+
     /// Apply (or clear) a read timeout. After setting `Some(dur)`,
     /// [`Self::recv`] returns an `io::Error` of kind `WouldBlock` /
     /// `TimedOut` when no frame arrives within `dur`.
@@ -415,8 +490,12 @@ fn frame_to_event(frame: PubsubFrame) -> PubsubEvent {
 }
 
 fn classify(reply: Reply) -> io::Result<PubsubEvent> {
+    // RESP2 pub/sub frames arrive as `*N` arrays; RESP3 servers wrap
+    // the same shape in a `>N` push frame so the client can demux
+    // out-of-band deliveries from regular command replies. We accept
+    // both — the body shape is identical.
     let items = match reply {
-        Reply::Array(v) => v,
+        Reply::Array(v) | Reply::Push(v) => v,
         other => return Err(invalid(format!("expected array frame, got {}", shape(&other)))),
     };
     let kind = match items.first() {
