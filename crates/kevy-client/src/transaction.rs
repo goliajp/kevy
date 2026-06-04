@@ -179,6 +179,41 @@ impl<'a> Transaction<'a> {
         }
     }
 
+    /// Like [`exec`](Self::exec) but returns a [`TransactionReplies`]
+    /// cursor with typed extractors (`next_int`, `next_bulk`, …) so
+    /// callers don't hand-match every `Reply` themselves. Aborts with
+    /// `io::ErrorKind::InvalidData` ("transaction aborted by WATCH") if
+    /// the server replied Nil; use [`exec_watched_typed`](Self::exec_watched_typed)
+    /// to distinguish abort from successfully-empty.
+    ///
+    /// Consumes the handle. The cursor remembers how many replies are
+    /// left ([`TransactionReplies::remaining`]) so callers can sanity-
+    /// check arity at the end of the read sequence.
+    pub fn exec_typed(mut self) -> io::Result<TransactionReplies> {
+        self.live = false;
+        match self.client.request(&[b"EXEC".to_vec()])? {
+            Reply::Array(items) => Ok(TransactionReplies::new(items)),
+            Reply::Nil => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "transaction aborted by WATCH",
+            )),
+            Reply::Error(e) => Err(io::Error::other(string(e))),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// Like [`exec_watched`](Self::exec_watched) but returns a typed
+    /// [`TransactionReplies`] cursor on commit; `None` on WATCH abort.
+    pub fn exec_watched_typed(mut self) -> io::Result<Option<TransactionReplies>> {
+        self.live = false;
+        match self.client.request(&[b"EXEC".to_vec()])? {
+            Reply::Array(items) => Ok(Some(TransactionReplies::new(items))),
+            Reply::Nil => Ok(None),
+            Reply::Error(e) => Err(io::Error::other(string(e))),
+            other => Err(unexpected(other)),
+        }
+    }
+
     /// `DISCARD` — abandon the queued commands. Consumes the handle.
     pub fn discard(mut self) -> io::Result<()> {
         self.live = false;
@@ -312,4 +347,135 @@ impl Drop for Transaction<'_> {
             let _ = self.client.request(&[b"DISCARD".to_vec()]);
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Typed EXEC reply cursor (v1.7.0). Sits between the existing raw
+// `Vec<Reply>` API and the maximalist typestate-tuple alternative —
+// callers consume queued replies in order via per-typed extractors:
+//
+//     let mut r = txn.exec_typed()?;
+//     let counter: i64       = r.next_int()?;        // INCR
+//     let prior:   Option<_> = r.next_bulk()?;       // GET
+//     let bulk_m:  Vec<_>    = r.next_array_of_bulks()?;  // MGET
+//     r.expect_empty()?;                              // arity gate
+//
+// Mismatch surfaces InvalidData with the actual variant in the message
+// so debugging doesn't require turning on RESP wire logging. The cursor
+// also exposes `raw()` as an escape hatch for verbs the typed helpers
+// don't cover (HGETALL → array of bulks; ZRANGE WITHSCORES → mixed
+// pairs; etc.).
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Typed cursor over the per-queued-command replies of a successful
+/// `EXEC`. Produced by [`Transaction::exec_typed`] /
+/// [`Transaction::exec_watched_typed`]. Each `next_*` consumes one
+/// reply; if the variant doesn't match the extractor, an
+/// `io::ErrorKind::InvalidData` is returned and the cursor advances
+/// regardless (so a downstream `expect_empty` still works correctly).
+#[derive(Debug)]
+pub struct TransactionReplies {
+    iter: std::vec::IntoIter<Reply>,
+}
+
+impl TransactionReplies {
+    fn new(items: Vec<Reply>) -> Self {
+        Self { iter: items.into_iter() }
+    }
+
+    /// Number of replies still un-consumed.
+    pub fn remaining(&self) -> usize {
+        self.iter.len()
+    }
+
+    /// Error out if the cursor still has replies — useful at the end of
+    /// a typed read sequence to assert the queued-command count matched.
+    pub fn expect_empty(&mut self) -> io::Result<()> {
+        let left = self.remaining();
+        if left == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("transaction reply cursor has {left} un-consumed replies"),
+            ))
+        }
+    }
+
+    /// Pop the next reply as a raw [`Reply`]. Escape hatch for verbs
+    /// the typed extractors don't cover.
+    pub fn raw(&mut self) -> io::Result<Reply> {
+        self.iter
+            .next()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "exhausted"))
+    }
+
+    /// Expect `Reply::Simple(b"OK")` — `SET` / `MSET` ack.
+    pub fn next_ok(&mut self) -> io::Result<()> {
+        match self.raw()? {
+            Reply::Simple(s) if s == b"OK" => Ok(()),
+            other => Err(mismatch("Simple(OK)", &other)),
+        }
+    }
+
+    /// Expect `Reply::Simple(b"OK")` OR `Reply::Nil` — `SET key v NX/XX`
+    /// returns Nil when the condition is not met.
+    pub fn next_ok_or_nil(&mut self) -> io::Result<bool> {
+        match self.raw()? {
+            Reply::Simple(s) if s == b"OK" => Ok(true),
+            Reply::Nil => Ok(false),
+            other => Err(mismatch("Simple(OK) or Nil", &other)),
+        }
+    }
+
+    /// Expect `Reply::Int` — `INCR` / `DEL` / `EXISTS` / `INCRBY`.
+    pub fn next_int(&mut self) -> io::Result<i64> {
+        match self.raw()? {
+            Reply::Int(n) => Ok(n),
+            other => Err(mismatch("Int", &other)),
+        }
+    }
+
+    /// Expect `Reply::Bulk` (or `Nil` → `None`) — `GET`.
+    pub fn next_bulk(&mut self) -> io::Result<Option<Vec<u8>>> {
+        match self.raw()? {
+            Reply::Bulk(b) => Ok(Some(b)),
+            Reply::Nil => Ok(None),
+            other => Err(mismatch("Bulk or Nil", &other)),
+        }
+    }
+
+    /// Expect `Reply::Array` of `Bulk`/`Nil` entries — `MGET`. Returns
+    /// `Vec<Option<Vec<u8>>>` in request order.
+    pub fn next_array_of_bulks(&mut self) -> io::Result<Vec<Option<Vec<u8>>>> {
+        let items = match self.raw()? {
+            Reply::Array(v) => v,
+            Reply::Nil => return Ok(Vec::new()),
+            other => return Err(mismatch("Array", &other)),
+        };
+        items
+            .into_iter()
+            .map(|r| match r {
+                Reply::Bulk(b) => Ok(Some(b)),
+                Reply::Nil => Ok(None),
+                other => Err(mismatch("Array element Bulk/Nil", &other)),
+            })
+            .collect()
+    }
+
+    /// Expect `Reply::Simple` (any payload) — for verbs whose ack isn't
+    /// `OK` (e.g. `PING` → `+PONG`).
+    pub fn next_simple(&mut self) -> io::Result<Vec<u8>> {
+        match self.raw()? {
+            Reply::Simple(s) => Ok(s),
+            other => Err(mismatch("Simple", &other)),
+        }
+    }
+}
+
+fn mismatch(want: &str, got: &Reply) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("transaction reply mismatch: expected {want}, got {got:?}"),
+    )
 }
