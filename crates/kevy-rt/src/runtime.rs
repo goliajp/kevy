@@ -14,9 +14,12 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, RwLock};
 
-/// Slots in each per-core-pair SPSC ring. A full ring spills to a local backlog
-/// (see [`Shard`]), so this only bounds the lock-free fast path, not capacity.
-const RING_CAPACITY: usize = 1024;
+/// Default slots in each per-core-pair SPSC ring. A full ring spills
+/// to a local backlog (see [`Shard`]), so this only bounds the
+/// lock-free fast path, not capacity. Overridable via the
+/// `[advanced] ring_capacity` config field threaded through
+/// [`Runtime::with_advanced`].
+const DEFAULT_RING_CAPACITY: usize = 1024;
 
 /// The public entry point: configure and run the thread-per-core server.
 pub struct Runtime<C: Commands> {
@@ -35,6 +38,17 @@ pub struct Runtime<C: Commands> {
     auto_aof_rewrite_pct: u32,
     /// Floor below which auto-rewrite is skipped. Default `64 MiB`.
     auto_aof_rewrite_min_size: u64,
+    /// Reactor SPSC ring slot count. See [`DEFAULT_RING_CAPACITY`].
+    ring_capacity: usize,
+    /// Reactor busy-poll iter limit before parking. Stored as `u32`
+    /// for the per-shard counter; the [`Shard`] field carries it
+    /// forward into the loop.
+    spin_limit: u32,
+    /// Reactor blocking-wait timeout in ms when parked.
+    park_timeout_ms: u32,
+    /// Wall-clock-read throttle for the tick check (TTL reaper / live
+    /// config refresh / auto-AOF-rewrite).
+    tick_check_every: u32,
 }
 
 impl<C: Commands> Runtime<C> {
@@ -49,7 +63,30 @@ impl<C: Commands> Runtime<C> {
             appendfsync: Fsync::EverySec,
             auto_aof_rewrite_pct: 100,
             auto_aof_rewrite_min_size: 64 * 1024 * 1024,
+            ring_capacity: DEFAULT_RING_CAPACITY,
+            spin_limit: 256,
+            park_timeout_ms: 50,
+            tick_check_every: 256,
         }
+    }
+
+    /// Reactor tuning knobs (`[advanced]` config section). Defaults
+    /// match the pre-v1.4 hardcoded constants. `ring_capacity` is
+    /// applied at SPSC ring construction (startup only); the other
+    /// three are read at each iteration of the reactor loop, so
+    /// values applied here take effect from the next shard.run() call.
+    pub fn with_advanced(
+        mut self,
+        spin_limit: u32,
+        park_timeout_ms: u32,
+        tick_check_every: u32,
+        ring_capacity: usize,
+    ) -> Self {
+        self.spin_limit = spin_limit;
+        self.park_timeout_ms = park_timeout_ms;
+        self.tick_check_every = tick_check_every;
+        self.ring_capacity = ring_capacity;
+        self
     }
 
     /// Set the directory where shards snapshot to / load from. Default: `.`.
@@ -98,7 +135,7 @@ impl<C: Commands> Runtime<C> {
                 if i == j {
                     continue;
                 }
-                let (p, c) = kevy_ring::ring::<Inbound>(RING_CAPACITY);
+                let (p, c) = kevy_ring::ring::<Inbound>(self.ring_capacity);
                 outboxes[i][j] = Some(p);
                 inboxes[j][i] = Some(c);
             }
@@ -161,6 +198,12 @@ impl<C: Commands> Runtime<C> {
                 publish_batch: (0..n).map(|_| Vec::new()).collect(),
                 request_batch: (0..n).map(|_| Vec::new()).collect(),
                 notify_flags: crate::NotificationFlags::default(),
+                spin_limit: self.spin_limit,
+                // `Poller::wait` takes the timeout as `i32` (POSIX
+                // poll/epoll convention). The config knob is `u32` —
+                // we clamp to i32::MAX, far above any sane park-timeout.
+                park_timeout_ms: self.park_timeout_ms.min(i32::MAX as u32) as i32,
+                tick_check_every: self.tick_check_every,
             });
         }
 

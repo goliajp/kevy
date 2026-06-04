@@ -31,7 +31,7 @@ mod schema;
 mod size;
 
 pub use schema::{
-    AppendFsync, Config, ConfigError, EvictionPolicy, ExpirySection, LogLevel,
+    AdvancedSection, AppendFsync, Config, ConfigError, EvictionPolicy, ExpirySection, LogLevel,
     LogOutput, LogSection, MemorySection, NotificationFlags, NotificationSection,
     PersistenceSection, ServerSection, parse_notification_flags,
 };
@@ -192,6 +192,12 @@ impl Config {
             "notify_keyspace_events = \"{}\"",
             escape_toml_basic_string(&self.notification.notify_keyspace_events),
         );
+        let _ = writeln!(out);
+        let _ = writeln!(out, "[advanced]");
+        let _ = writeln!(out, "spin_limit       = {}", self.advanced.spin_limit);
+        let _ = writeln!(out, "park_timeout_ms  = {}", self.advanced.park_timeout_ms);
+        let _ = writeln!(out, "tick_check_every = {}", self.advanced.tick_check_every);
+        let _ = writeln!(out, "ring_capacity    = {}", self.advanced.ring_capacity);
         out
     }
 }

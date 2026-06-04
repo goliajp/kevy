@@ -22,6 +22,7 @@ impl Config {
             "expiry" => self.apply_expiry(item),
             "log" => self.apply_log(item),
             "notification" => self.apply_notification(item),
+            "advanced" => self.apply_advanced(item),
             other => Err(schema_err(&item, format!("unknown section [{other}]"))),
         }
     }
@@ -114,6 +115,17 @@ impl Config {
                 self.notification.notify_keyspace_events = value_as_string(&item)?;
             }
             k => return Err(schema_err(&item, format!("unknown [notification] key: {k}"))),
+        }
+        Ok(())
+    }
+
+    fn apply_advanced(&mut self, item: Item) -> Result<(), ConfigError> {
+        match item.key.as_str() {
+            "spin_limit" => self.advanced.spin_limit = value_as_u32(&item)?,
+            "park_timeout_ms" => self.advanced.park_timeout_ms = value_as_u32(&item)?,
+            "tick_check_every" => self.advanced.tick_check_every = value_as_u32(&item)?,
+            "ring_capacity" => self.advanced.ring_capacity = value_as_usize(&item)?,
+            k => return Err(schema_err(&item, format!("unknown [advanced] key: {k}"))),
         }
         Ok(())
     }
