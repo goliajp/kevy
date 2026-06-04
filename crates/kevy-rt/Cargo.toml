@@ -27,3 +27,12 @@ kevy-map = { path = "../kevy-map", version = "1.2.0" }
 # Linux builds don't pull an empty crate into the graph.
 [target.'cfg(target_os = "linux")'.dependencies]
 kevy-uring = { path = "../kevy-uring", version = "1.2.0" }
+
+# Loom is a CHARTER-EXEMPTED dev-only crates.io dep (precedent in
+# kevy-ring/Cargo.toml — same status as cargo-fuzz / cargo-llvm-cov):
+# it intercepts atomics + thread scheduling to enumerate every possible
+# interleaving of concurrent code. Only resolves under
+# `RUSTFLAGS="--cfg loom"` (see `tests/loom.rs` for the recipe); a
+# normal `cargo build` / `cargo test` does NOT pull it in.
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
