@@ -329,6 +329,109 @@ fn exec_after_watch_with_multi_cmd_queue() {
     );
 }
 
+// ---------- at_seq invariants: queued cmds inside WATCH'd EXEC ----------
+
+#[test]
+fn watched_exec_with_queued_multi_target_del() {
+    // Queue a multi-key DEL inside a WATCH'd MULTI block. The
+    // pre-allocated placeholder slot must be reconfigured to fan-out
+    // shape (remaining = group count, agg = SumInt) by
+    // `start_multi_at_seq`; otherwise the slot would stall the conn.
+    let srv = Server::start(4);
+    let mut c = srv.connect();
+
+    // Seed 3 distinct keys (likely on different shards).
+    for k in ["mk:a", "mk:b", "mk:c"] {
+        c.write_all(&req(&[b"SET", k.as_bytes(), b"v"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+    }
+
+    c.write_all(&req(&[b"WATCH", b"sentinel"])).unwrap();
+    read_reply(&mut c, b"+OK\r\n");
+    c.write_all(&req(&[b"MULTI"])).unwrap();
+    read_reply(&mut c, b"+OK\r\n");
+    c.write_all(&req(&[b"DEL", b"mk:a", b"mk:b", b"mk:c"])).unwrap();
+    read_reply(&mut c, b"+QUEUED\r\n");
+    c.write_all(&req(&[b"EXISTS", b"mk:a", b"mk:b", b"mk:c"])).unwrap();
+    read_reply(&mut c, b"+QUEUED\r\n");
+    c.write_all(&req(&[b"EXEC"])).unwrap();
+    // *2 + :3 (DEL removed 3) + :0 (none EXIST after DEL)
+    read_reply(&mut c, b"*2\r\n:3\r\n:0\r\n");
+}
+
+#[test]
+fn watched_exec_with_queued_publish_emits_error_placeholder() {
+    // PUBLISH inside MULTI is queued (TxnKind::Other). Inside a WATCH'd
+    // EXEC its `start_command_at_seq` arm fills the placeholder with
+    // an explicit "pub/sub inside MULTI" error — keeps the conn's seq
+    // ring consistent (no stalled placeholder).
+    let srv = Server::start(4);
+    let mut c = srv.connect();
+
+    c.write_all(&req(&[b"WATCH", b"pw:k"])).unwrap();
+    read_reply(&mut c, b"+OK\r\n");
+    c.write_all(&req(&[b"MULTI"])).unwrap();
+    read_reply(&mut c, b"+OK\r\n");
+    c.write_all(&req(&[b"PUBLISH", b"ch", b"x"])).unwrap();
+    read_reply(&mut c, b"+QUEUED\r\n");
+    c.write_all(&req(&[b"INCR", b"pw:k"])).unwrap();
+    read_reply(&mut c, b"+QUEUED\r\n");
+    c.write_all(&req(&[b"EXEC"])).unwrap();
+    // *2 + error frame for PUBLISH + :1 for INCR.
+    // Error frame: -ERR pub/sub or WATCH not allowed inside MULTI\r\n  (46 bytes inc CRLF).
+    let want = b"*2\r\n-ERR pub/sub or WATCH not allowed inside MULTI\r\n:1\r\n";
+    read_reply(&mut c, want);
+}
+
+#[test]
+fn watched_exec_with_queued_unwatch_is_ok_noop() {
+    // UNWATCH queued inside MULTI is a no-op (the EXEC entry already
+    // drained `watched`). The at_seq arm fills the placeholder with
+    // `+OK\r\n` — verifying the queued UNWATCH doesn't desync the seq
+    // ring or skip the +OK reply.
+    let srv = Server::start(4);
+    let mut c = srv.connect();
+
+    c.write_all(&req(&[b"WATCH", b"u:k"])).unwrap();
+    read_reply(&mut c, b"+OK\r\n");
+    c.write_all(&req(&[b"MULTI"])).unwrap();
+    read_reply(&mut c, b"+OK\r\n");
+    c.write_all(&req(&[b"UNWATCH"])).unwrap();
+    read_reply(&mut c, b"+QUEUED\r\n");
+    c.write_all(&req(&[b"INCR", b"u:k"])).unwrap();
+    read_reply(&mut c, b"+QUEUED\r\n");
+    c.write_all(&req(&[b"EXEC"])).unwrap();
+    // *2 + +OK (UNWATCH no-op) + :1 (INCR fresh key).
+    read_reply(&mut c, b"*2\r\n+OK\r\n:1\r\n");
+}
+
+#[test]
+fn watched_exec_quit_inside_multi_closes_after_drain() {
+    // QUIT (`is_quit=true`) queued inside WATCH'd EXEC sets
+    // `conn.closing=true` via `start_single_at_seq`'s is_quit branch
+    // — covers the previously-untested `if is_quit { c.closing = true }`
+    // path inside the at_seq variants. The conn closes after the
+    // pre-QUIT replies are drained.
+    let srv = Server::start(4);
+    let mut c = srv.connect();
+
+    c.write_all(&req(&[b"WATCH", b"q:k"])).unwrap();
+    read_reply(&mut c, b"+OK\r\n");
+    c.write_all(&req(&[b"MULTI"])).unwrap();
+    read_reply(&mut c, b"+OK\r\n");
+    c.write_all(&req(&[b"SET", b"q:k", b"v"])).unwrap();
+    read_reply(&mut c, b"+QUEUED\r\n");
+    c.write_all(&req(&[b"QUIT"])).unwrap();
+    read_reply(&mut c, b"+QUEUED\r\n");
+    c.write_all(&req(&[b"EXEC"])).unwrap();
+    // *2 + +OK (SET) + +OK (QUIT reply).
+    read_reply(&mut c, b"*2\r\n+OK\r\n+OK\r\n");
+    // The conn now closes — a subsequent read returns 0 bytes (EOF).
+    let mut buf = [0u8; 32];
+    let n = c.read(&mut buf).unwrap_or(0);
+    assert_eq!(n, 0, "expected EOF after queued QUIT inside EXEC");
+}
+
 #[test]
 fn pipelined_command_after_exec_is_unaffected() {
     // After an EXEC (clean or dirty) the conn must accept the next
