@@ -74,6 +74,7 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         || crate::dispatch_collections::dispatch_list(cmd, store, args, out)
         || dispatch_set(cmd, store, args, out)
         || crate::dispatch_collections::dispatch_zset(cmd, store, args, out)
+        || crate::dispatch_geo::dispatch_geo(cmd, store, args, out)
         || dispatch_generic(cmd, store, args, out)
         || dispatch_multikey_stub(cmd, out);
     if !handled {

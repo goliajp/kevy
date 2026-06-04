@@ -55,6 +55,7 @@ dependencies = [
  "kevy-bench",
  "kevy-client",
  "kevy-config",
+ "kevy-geo",
  "kevy-persist",
  "kevy-resp",
  "kevy-rt",
@@ -102,6 +103,10 @@ dependencies = [
  "kevy-persist",
  "kevy-store",
 ]
+
+[[package]]
+name = "kevy-geo"
+version = "1.3.0"
 
 [[package]]
 name = "kevy-hash"
