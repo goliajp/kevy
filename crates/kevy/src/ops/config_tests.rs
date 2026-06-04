@@ -1,5 +1,5 @@
 use super::*;
-use kevy_resp::Argv;
+use kevy_resp::{Argv, RespVersion};
 
 fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
     let mut a = Argv::default();
@@ -9,7 +9,7 @@ fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
     }
     let mut out = Vec::new();
     let cfg = Config::default();
-    cmd_config(&cfg, &a, &mut out);
+    cmd_config(&cfg, &a, &mut out, RespVersion::V2);
     let _ = verb;
     out
 }

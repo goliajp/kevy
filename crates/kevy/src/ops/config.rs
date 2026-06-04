@@ -22,19 +22,27 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use kevy_config::{AppendFsync, Config, EvictionPolicy, LogLevel, LogOutput, parse_size};
-use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_simple_string};
+use kevy_resp::{
+    ArgvView, RespVersion, encode_array_len, encode_bulk, encode_error, encode_map_header,
+    encode_simple_string,
+};
 
 use crate::config_global;
 
 use super::{appendfsync_str, eviction_str, log_level_str, wrong_args};
 
-pub(super) fn cmd_config<A: ArgvView + ?Sized>(cfg: &Config, args: &A, out: &mut Vec<u8>) {
+pub(crate) fn cmd_config<A: ArgvView + ?Sized>(
+    cfg: &Config,
+    args: &A,
+    out: &mut Vec<u8>,
+    proto: RespVersion,
+) {
     let sub = match args.get(1) {
         Some(s) => s.to_ascii_uppercase(),
         None => return wrong_args(out, "config"),
     };
     match sub.as_slice() {
-        b"GET" => cmd_config_get(cfg, args, out),
+        b"GET" => cmd_config_get(cfg, args, out, proto),
         b"SET" => cmd_config_set(args, out),
         b"REWRITE" => cmd_config_rewrite(out),
         b"RESETSTAT" => encode_simple_string(out, "OK"),
@@ -48,13 +56,20 @@ pub(super) fn cmd_config<A: ArgvView + ?Sized>(cfg: &Config, args: &A, out: &mut
     }
 }
 
-fn cmd_config_get<A: ArgvView + ?Sized>(cfg: &Config, args: &A, out: &mut Vec<u8>) {
+fn cmd_config_get<A: ArgvView + ?Sized>(
+    cfg: &Config,
+    args: &A,
+    out: &mut Vec<u8>,
+    proto: RespVersion,
+) {
     if args.len() < 3 {
         return wrong_args(out, "config|get");
     }
     // CONFIG GET pattern1 [pattern2 ...] — collect all (key, value) pairs
-    // whose key matches any of the requested glob patterns. Reply is a
-    // flat `[k1, v1, k2, v2, ...]` array (Redis convention).
+    // whose key matches any of the requested glob patterns. Reply shape:
+    // V2 — flat `*2N\r\n[k1, v1, k2, v2, ...]` array (Redis legacy).
+    // V3 — `%N\r\n[k1, v1, k2, v2, ...]` Map (per the RESP3 spec — kv
+    //      replies are real maps).
     let mut hits: Vec<(&'static str, String)> = Vec::new();
     for i in 2..args.len() {
         let pat = args[i].to_ascii_lowercase();
@@ -64,7 +79,10 @@ fn cmd_config_get<A: ArgvView + ?Sized>(cfg: &Config, args: &A, out: &mut Vec<u8
             }
         }
     }
-    encode_array_len(out, (hits.len() * 2) as i64);
+    match proto {
+        RespVersion::V2 => encode_array_len(out, (hits.len() * 2) as i64),
+        RespVersion::V3 => encode_map_header(out, hits.len() as i64),
+    }
     for (k, v) in hits {
         encode_bulk(out, k.as_bytes());
         encode_bulk(out, v.as_bytes());

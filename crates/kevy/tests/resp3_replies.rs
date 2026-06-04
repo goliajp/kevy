@@ -294,6 +294,32 @@ fn mget_stays_array_on_resp3() {
 }
 
 #[test]
+fn config_get_returns_map_on_resp3() {
+    // CONFIG GET returns a known-key/value pair table on both protos.
+    // V2: `*2N\r\n[k, v, k, v, ...]` Array. V3: `%N\r\n[k, v, k, v, ...]` Map.
+    let srv = Server::start(1);
+
+    // V2 control: pattern `appendfsync` matches exactly 1 key.
+    let mut v2 = srv.connect();
+    v2.write_all(&req(&[b"CONFIG", b"GET", b"appendfsync"])).unwrap();
+    let mut head = [0u8; 4];
+    v2.read_exact(&mut head).unwrap();
+    assert_eq!(&head[..3], b"*2\r", "V2 CONFIG GET must use Array header `*2N`");
+    // Drain the 2 bulks.
+    let mut sink = vec![0u8; 64];
+    let _ = v2.read(&mut sink).unwrap();
+
+    // V3: same pattern → Map of 1 pair → `%1\r\n`.
+    let mut v3 = srv.v3_conn();
+    v3.write_all(&req(&[b"CONFIG", b"GET", b"appendfsync"])).unwrap();
+    let mut head = [0u8; 4];
+    v3.read_exact(&mut head).unwrap();
+    assert_eq!(&head, b"%1\r\n", "V3 CONFIG GET must use Map header `%1`");
+    // Drain the (k, v) pair.
+    let _ = v3.read(&mut sink).unwrap();
+}
+
+#[test]
 fn v2_wire_byte_for_byte_unchanged_after_resp3_migration() {
     // Critical guardrail: every V2 cmd test in the existing suite
     // (sharded.rs, cmd_matrix.rs, commands.rs) already asserts the

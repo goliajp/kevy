@@ -8,8 +8,8 @@
 
 use crate::cmd::*;
 use kevy_resp::{
-    ArgvView, encode_bulk, encode_double, encode_error, encode_integer, encode_map_header,
-    encode_null, encode_null_bulk, encode_set_header, encode_simple_string,
+    ArgvView, RespVersion, encode_bulk, encode_double, encode_error, encode_integer,
+    encode_map_header, encode_null, encode_null_bulk, encode_set_header, encode_simple_string,
 };
 use kevy_store::{Store, StoreError};
 
@@ -137,6 +137,16 @@ fn try_resp3_overrides<A: ArgvView + ?Sized>(
             } else {
                 emit_set_resp3(store.smembers(&args[1]), out);
             }
+            true
+        }
+        b"CONFIG" => {
+            // CONFIG GET shape changes RESP2 `*2N` array → RESP3 `%N` Map.
+            // Other CONFIG subcommands (SET / REWRITE / RESETSTAT) have
+            // the same reply shape under both protos; cmd_config ignores
+            // `proto` for those arms. Routing all CONFIG sub-cmds through
+            // the V3 path here is simpler than peeking the sub-cmd.
+            let cfg = crate::config_global::get();
+            crate::ops::config::cmd_config(&cfg, args, out, RespVersion::V3);
             true
         }
         _ => false,
