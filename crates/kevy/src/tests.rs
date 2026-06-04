@@ -177,7 +177,7 @@ fn argv(parts: &[&[u8]]) -> Argv {
 fn route_local_verbs() {
     let c = KevyCommands;
     for v in [
-        "PING", "ECHO", "QUIT", "COMMAND", "CONFIG", "HELLO", "INFO", "CLUSTER",
+        "PING", "ECHO", "QUIT", "COMMAND", "CONFIG", "INFO", "CLUSTER",
         "DEBUG", "WAIT", "SHUTDOWN", "CLIENT",
     ] {
         assert!(
@@ -185,6 +185,10 @@ fn route_local_verbs() {
             "{v}"
         );
     }
+    // HELLO is now Route::Hello (its own conn-level handler — v1.4.0
+    // gained HELLO 3 + per-conn RespVersion negotiation).
+    assert!(matches!(c.route(&argv(&[b"HELLO"])), Route::Hello));
+    assert!(matches!(c.route(&argv(&[b"HELLO", b"3"])), Route::Hello));
     // Empty args is also Route::Local (server-side error reply).
     assert!(matches!(c.route(&argv(&[])), Route::Local));
 }

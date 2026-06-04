@@ -1,7 +1,7 @@
 //! Per-connection state owned by its origin shard.
 
 use crate::message::PendingSlot;
-use kevy_resp::Argv;
+use kevy_resp::{Argv, RespVersion};
 use kevy_sys::Socket;
 use std::collections::{HashSet, VecDeque};
 
@@ -38,6 +38,14 @@ pub(crate) struct Conn {
     /// / UNWATCH / connection close. Empty in steady state for conns
     /// that never call `WATCH` (most clients).
     pub(crate) watched: Vec<(Vec<u8>, u64)>,
+    /// Which RESP version this connection speaks. Negotiated via
+    /// `HELLO`: a fresh conn defaults to RESP2 (Redis 6.x and earlier);
+    /// the conn switches to RESP3 when the client sends `HELLO 3`, at
+    /// which point `dispatch_into_resp3` becomes the per-command
+    /// reply encoder. Per-conn so a RESP2 client and a RESP3 client
+    /// can share the same server without either paying for the other's
+    /// shape.
+    pub(crate) proto: RespVersion,
 }
 
 impl Conn {
@@ -56,6 +64,7 @@ impl Conn {
             psub: HashSet::new(),
             multi: None,
             watched: Vec::new(),
+            proto: RespVersion::default(),
         }
     }
 }

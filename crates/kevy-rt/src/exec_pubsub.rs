@@ -192,6 +192,34 @@ impl<C: Commands> Shard<C> {
         ids.len()
     }
 
+    /// `HELLO [protover [AUTH user pass] [SETNAME name]]` — defer the
+    /// reply shape + protocol-version decision to the embedder via
+    /// [`crate::Commands::hello_reply`]. The runtime applies the
+    /// returned proto version to the conn BEFORE folding the reply, so
+    /// the ack itself goes out in the new proto's shape (a `HELLO 3`
+    /// ack arrives as a RESP3 Map per the spec).
+    pub(crate) fn do_hello<A: ArgvView + ?Sized>(
+        &mut self,
+        conn_id: u64,
+        seq: u64,
+        args: &A,
+    ) {
+        let current = match self.conns.get(&conn_id) {
+            Some(c) => c.proto,
+            None => return,
+        };
+        let (new_proto, reply) = self.commands.hello_reply(args, current);
+        if let Some(c) = self.conns.get_mut(&conn_id) {
+            c.proto = new_proto;
+            c.pending.push_back(PendingSlot {
+                remaining: 1,
+                agg: Agg::First(None),
+                done: None,
+            });
+        }
+        self.fold(conn_id, seq, Part::Reply(reply));
+    }
+
     /// Flush each shard's accumulated pub/sub batch as one cross-core message —
     /// a flood of PUBLISHes costs one send per target shard per drain, not one
     /// per message. Call once per reactor loop iteration.

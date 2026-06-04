@@ -378,8 +378,8 @@ fn watched_exec_with_queued_publish_emits_error_placeholder() {
     read_reply(&mut c, b"+QUEUED\r\n");
     c.write_all(&req(&[b"EXEC"])).unwrap();
     // *2 + error frame for PUBLISH + :1 for INCR.
-    // Error frame: -ERR pub/sub or WATCH not allowed inside MULTI\r\n  (46 bytes inc CRLF).
-    let want = b"*2\r\n-ERR pub/sub or WATCH not allowed inside MULTI\r\n:1\r\n";
+    // Error frame: -ERR pub/sub or WATCH or HELLO not allowed inside MULTI\r\n.
+    let want = b"*2\r\n-ERR pub/sub or WATCH or HELLO not allowed inside MULTI\r\n:1\r\n";
     read_reply(&mut c, want);
 }
 

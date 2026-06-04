@@ -4,7 +4,7 @@
 //! [`Inbound`]) and how a command's (possibly multi-shard) result is
 //! accumulated on its origin shard ([`Agg`], [`PendingSlot`]). All crate-private.
 
-use kevy_resp::Argv;
+use kevy_resp::{Argv, RespVersion};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -63,7 +63,12 @@ pub(crate) enum MultiOp {
 
 /// A unit of work shipped to the owning shard.
 pub(crate) enum Op {
-    Dispatch(Argv),
+    /// Forward a single command. The trailing `RespVersion` rides with
+    /// each cmd (not the conn) so a V2 client and a V3 client can hand
+    /// requests to the same owning shard and each get the right reply
+    /// shape from `dispatch` vs `dispatch_resp3`. Defaults to V2 for
+    /// any backwards-compatible construction site.
+    Dispatch(Argv, RespVersion),
     Del(Vec<Vec<u8>>),
     Exists(Vec<Vec<u8>>),
     Dbsize,
@@ -117,10 +122,12 @@ pub(crate) enum Part {
     WatchVersions(Vec<(Vec<u8>, u64)>),
 }
 
-/// A batch of single-key dispatches forwarded to one owning shard: `(conn, seq,
-/// argv)` each. Batched per loop so a -c50 flood costs one cross-core send per
-/// target shard, not one per command.
-pub(crate) type ReqBatch = Vec<(u64, u64, Argv)>;
+/// A batch of single-key dispatches forwarded to one owning shard:
+/// `(conn, seq, argv, proto)` each. Batched per loop so a -c50 flood
+/// costs one cross-core send per target shard, not one per command.
+/// The per-entry `proto` lets a single batch carry cmds from V2 and V3
+/// conns to the same owning shard.
+pub(crate) type ReqBatch = Vec<(u64, u64, Argv, RespVersion)>;
 /// The matching replies `(conn, seq, part)` sent back as one message.
 pub(crate) type RespBatch = Vec<(u64, u64, Part)>;
 

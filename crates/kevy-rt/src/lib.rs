@@ -83,7 +83,7 @@ mod shard;
 mod uring_reactor;
 
 pub use kevy_persist::Fsync;
-pub use kevy_resp::{Argv, ArgvBorrowed, ArgvView};
+pub use kevy_resp::{Argv, ArgvBorrowed, ArgvView, RespVersion};
 pub use kevy_store::Store;
 pub use runtime::Runtime;
 
@@ -139,6 +139,13 @@ pub enum Route {
     Watch,
     /// `UNWATCH` — clear the conn's `watched` set. Connection-level, local.
     Unwatch,
+    /// `HELLO [protover [AUTH user pass] [SETNAME name]]` — server
+    /// handshake; on `HELLO 3` flips the conn into RESP3 mode (per-conn
+    /// `proto` field). Reply shape itself is proto-aware (V2: array of
+    /// pairs; V3: Map). Connection-level, dispatch via the
+    /// [`Commands::hello_reply`] hook so embedders set their own server
+    /// metadata.
+    Hello,
 }
 
 /// Command-set semantics injected into the runtime. Cloned to every core, so it
@@ -148,11 +155,48 @@ pub trait Commands: Clone + Send + 'static {
     fn route<A: ArgvView + ?Sized>(&self, args: &A) -> Route;
     /// Execute a full command against one shard's store, returning RESP bytes.
     fn dispatch<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8>;
+    /// RESP3 variant of [`Self::dispatch`] — called when the connection
+    /// has negotiated `HELLO 3`. Default: delegate to the RESP2 path
+    /// (the cross-shard `Op::Dispatch` carries a per-cmd `RespVersion`
+    /// so a V2 client and a V3 client can share the owning shard).
+    fn dispatch_resp3<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8> {
+        self.dispatch(store, args)
+    }
     /// Execute a command, appending the RESP reply to `out`. The in-order local
     /// fast path uses this to write straight into the connection's output buffer
     /// (no per-command reply `Vec`). Default: delegate to [`dispatch`](Self::dispatch).
     fn dispatch_into<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.dispatch(store, args));
+    }
+    /// RESP3 variant of [`Self::dispatch_into`] — called when the
+    /// connection has negotiated `HELLO 3`. Default: delegate to the
+    /// RESP2 path (so a server that hasn't migrated any replies still
+    /// works correctly with a RESP3 client, per spec). Override per
+    /// command to emit RESP3 shapes (Map / Set / Double / …).
+    fn dispatch_into_resp3<A: ArgvView + ?Sized>(
+        &self,
+        store: &mut Store,
+        args: &A,
+        out: &mut Vec<u8>,
+    ) {
+        self.dispatch_into(store, args, out);
+    }
+    /// Handle `HELLO` — return the new connection protocol version + the
+    /// reply bytes. The runtime applies the new version to the conn
+    /// before scheduling the reply, so a `HELLO 3` ack itself comes out
+    /// shaped as a RESP3 Map (the new protocol is in effect for its own
+    /// reply).
+    ///
+    /// Default: ignore the args, keep `current_proto`, emit a minimal
+    /// RESP2 +OK so embedders that don't care still see a sane reply.
+    /// kevy's own impl in `kevy::KevyCommands` parses the optional
+    /// protover and emits the full server-info shape.
+    fn hello_reply<A: ArgvView + ?Sized>(
+        &self,
+        _args: &A,
+        current_proto: RespVersion,
+    ) -> (RespVersion, Vec<u8>) {
+        (current_proto, b"+OK\r\n".to_vec())
     }
     /// Whether this command should close the connection (QUIT).
     fn is_quit<A: ArgvView + ?Sized>(&self, args: &A) -> bool;
