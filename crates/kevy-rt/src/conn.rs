@@ -23,6 +23,12 @@ pub(crate) struct Conn {
     pub(crate) pending: VecDeque<PendingSlot>,
     /// Channels this connection is subscribed to (pub/sub).
     pub(crate) sub: HashSet<Vec<u8>>,
+    /// Glob patterns this connection has `PSUBSCRIBE`-d. Disjoint from
+    /// `sub` — a PUBLISH that matches both yields one `message` and one
+    /// `pmessage` frame (Redis semantics). Empty for the vast majority
+    /// of conns (no pattern subscribers), so the steady-state cost is one
+    /// `HashSet::is_empty()` check per delivery candidate.
+    pub(crate) psub: HashSet<Vec<u8>>,
     /// Queued commands inside a MULTI…EXEC transaction (`None` = not in MULTI).
     pub(crate) multi: Option<Vec<Argv>>,
     /// `WATCH`-ed keys + the version each had on its owning shard at
@@ -47,6 +53,7 @@ impl Conn {
             closing: false,
             pending: VecDeque::new(),
             sub: HashSet::new(),
+            psub: HashSet::new(),
             multi: None,
             watched: Vec::new(),
         }

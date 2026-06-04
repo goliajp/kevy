@@ -14,13 +14,13 @@
 
 use crate::Commands;
 use crate::conn::Conn;
-use crate::message::{Inbound, PubMsg, PubSubReg, ReqBatch};
+use crate::message::{Inbound, PubMsg, PubSubPatternReg, PubSubReg, ReqBatch};
 use kevy_persist::{Aof, load_snapshot, replay_aof};
 use kevy_ring::{Consumer, Producer};
 use kevy_store::Store;
 use kevy_sys::{Event, Poller, Socket, Waker};
 use kevy_map::KevyMap;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::time::{Duration, Instant};
 use std::path::PathBuf;
@@ -74,6 +74,16 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) dirty: Vec<u64>,
     /// Shared pub/sub channel registry (see [`PubSubReg`]).
     pub(crate) pubsub: PubSubReg,
+    /// Shared pub/sub pattern registry (see [`PubSubPatternReg`]).
+    /// Empty in steady state; PUBLISH skips the walk when so.
+    pub(crate) pubsub_patterns: PubSubPatternReg,
+    /// This shard's local pattern → conn ids table. Mirrors `pubsub`'s
+    /// channel-table role for the channel-precise path. Each
+    /// `PSUBSCRIBE` adds an entry; each delivered `PUBLISH` runs
+    /// `glob_match` against every key (only when the map is non-empty —
+    /// the steady-state O(1) `is_empty()` short-circuit keeps the
+    /// channel-only PUBLISH hot path untouched).
+    pub(crate) psub_local: HashMap<Vec<u8>, Vec<u64>>,
     /// Per-target-shard accumulated pub/sub deliveries, flushed once per loop
     /// (`flush_publish`) so a PUBLISH flood batches into one send per shard.
     pub(crate) publish_batch: Vec<Vec<PubMsg>>,

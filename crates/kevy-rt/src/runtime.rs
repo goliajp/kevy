@@ -1,7 +1,7 @@
 //! The public entry point: configure and run the thread-per-core server.
 
 use crate::Commands;
-use crate::message::{Inbound, PubSubReg};
+use crate::message::{Inbound, PubSubPatternReg, PubSubReg};
 use crate::shard::Shard;
 use kevy_map::KevyMap;
 use kevy_persist::{Aof, Fsync};
@@ -113,6 +113,9 @@ impl<C: Commands> Runtime<C> {
 
         // Shared pub/sub channel registry (one per server, read on every PUBLISH).
         let pubsub: PubSubReg = Arc::new(RwLock::new(HashMap::new()));
+        // Shared pub/sub pattern registry. Empty in steady state — the
+        // channel-only PUBLISH path skips the walk when so.
+        let pubsub_patterns: PubSubPatternReg = Arc::new(RwLock::new(Vec::new()));
 
         // Build every shard up front so a bind/open failure aborts before we spawn.
         let mut shards = Vec::with_capacity(n);
@@ -153,6 +156,8 @@ impl<C: Commands> Runtime<C> {
                 auto_aof_rewrite_min_size: self.auto_aof_rewrite_min_size,
                 dirty: Vec::new(),
                 pubsub: pubsub.clone(),
+                pubsub_patterns: pubsub_patterns.clone(),
+                psub_local: HashMap::new(),
                 publish_batch: (0..n).map(|_| Vec::new()).collect(),
                 request_batch: (0..n).map(|_| Vec::new()).collect(),
             });

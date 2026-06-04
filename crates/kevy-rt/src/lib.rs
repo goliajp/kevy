@@ -72,6 +72,7 @@ mod exec;
 mod exec_build;
 mod exec_op;
 mod exec_pubsub;
+mod exec_pubsub_pattern;
 mod exec_watch;
 mod inbox;
 mod message;
@@ -123,6 +124,13 @@ pub enum Route {
     /// `SUBSCRIBE` / `UNSUBSCRIBE` — connection-level (modifies this conn).
     Subscribe,
     Unsubscribe,
+    /// `PSUBSCRIBE pattern [pattern ...]` / `PUNSUBSCRIBE [pattern ...]` —
+    /// like Subscribe/Unsubscribe but the conn registers Redis-glob
+    /// patterns; `PUBLISH` to a matching channel delivers a `pmessage`
+    /// frame. Connection-level (modifies this conn + shared pattern
+    /// registry).
+    Psubscribe,
+    Punsubscribe,
     /// `PUBLISH channel message` — delivered to subscribers on every core.
     Publish,
     /// `WATCH key [key ...]` — fan-out to record per-shard versions, then

@@ -111,23 +111,32 @@ impl<C: Commands> Shard<C> {
     }
 
     /// PUBLISH: reply with the receiver count read **locally** from the shared
-    /// registry (no cross-shard aggregation), then deliver the message
-    /// fire-and-forget to exactly the shards that hold a subscriber (in
-    /// parallel; no replies fold back). Replaces the old all-shards SumInt
-    /// fan-out, which cost ~2N cross-core ops per publish (N sends + N replies).
+    /// registry (channel-precise + pattern matches; no cross-shard
+    /// aggregation), then deliver the message fire-and-forget to exactly the
+    /// shards that hold a subscriber (in parallel; no replies fold back).
+    /// Replaces the old all-shards SumInt fan-out, which cost ~2N cross-core
+    /// ops per publish (N sends + N replies).
     pub(crate) fn do_publish<A: ArgvView + ?Sized>(
         &mut self,
         conn_id: u64,
         seq: u64,
         args: &A,
     ) {
-        let (count, bits) = self
+        let (mut count, mut bits) = self
             .pubsub
             .read()
             .expect("pubsub registry")
             .get(&args[1])
             .copied()
             .unwrap_or((0, 0));
+        // Pattern path: walk the shared pattern registry and OR any matching
+        // entry's count + bits in. Read-locked + linear; empty-Vec
+        // short-circuit keeps channel-only PUBLISH undisturbed by the
+        // existence of the registry.
+        let (pcount, pbits) = self.pattern_match_for_channel(&args[1]);
+        count = count.saturating_add(pcount);
+        bits |= pbits;
+
         let mut reply = Vec::new();
         encode_integer(&mut reply, count as i64);
         if let Some(c) = self.conns.get_mut(&conn_id) {
@@ -157,8 +166,10 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Append a pub/sub message to every local subscriber of `channel`; returns
-    /// the count delivered and marks them dirty for the reactor to flush.
+    /// Append a pub/sub message to every local subscriber of `channel`
+    /// (channel-precise frame) and every local `PSUBSCRIBE`r whose
+    /// pattern matches (pmessage frame). Marks all touched conns dirty so
+    /// the reactor flushes them. Returns the channel-precise count.
     pub(crate) fn deliver_publish(&mut self, channel: &[u8], msg: &[u8]) -> usize {
         let ids: Vec<u64> = self
             .conns
@@ -166,16 +177,18 @@ impl<C: Commands> Shard<C> {
             .filter(|(_, c)| c.sub.contains(channel))
             .map(|(id, _)| *id)
             .collect();
-        if ids.is_empty() {
-            return 0;
-        }
-        let message = pubsub_message(channel, msg);
-        for id in &ids {
-            if let Some(c) = self.conns.get_mut(id) {
-                c.output.extend_from_slice(&message);
+        if !ids.is_empty() {
+            let message = pubsub_message(channel, msg);
+            for id in &ids {
+                if let Some(c) = self.conns.get_mut(id) {
+                    c.output.extend_from_slice(&message);
+                }
             }
+            self.dirty.extend_from_slice(&ids);
         }
-        self.dirty.extend_from_slice(&ids);
+        // Pattern path: defer to the pattern helper. Empty-map short-circuit
+        // there too — channel-only workloads pay one `HashMap::is_empty`.
+        self.deliver_pmessages(channel, msg);
         ids.len()
     }
 

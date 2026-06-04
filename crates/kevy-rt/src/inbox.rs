@@ -150,14 +150,26 @@ impl<C: Commands> Shard<C> {
     }
 
     /// Tear down a closing connection: deregister from the poller, drop
-    /// its subscriptions from the pub/sub registry, and release its
-    /// `Socket` (closing the fd).
+    /// its channel + pattern subscriptions from the shared registries
+    /// and the per-shard tables, and release its `Socket` (closing the
+    /// fd).
     pub(crate) fn close_conn(&mut self, conn_id: u64) {
         if let Some(conn) = self.conns.remove(&conn_id) {
             let fd = conn.sock.raw();
             let _ = self.poller.delete(fd);
             self.fd_to_conn.remove(&fd);
             self.unregister_subs(&conn.sub);
+            // Drop the conn's psub local table entries first (`unregister_psubs`
+            // reads `psub_local` to decide if our shard bit should be cleared).
+            for pat in &conn.psub {
+                if let Some(ids) = self.psub_local.get_mut(pat) {
+                    ids.retain(|&id| id != conn_id);
+                    if ids.is_empty() {
+                        self.psub_local.remove(pat);
+                    }
+                }
+            }
+            self.unregister_psubs(&conn.psub);
             // conn (and its Socket) dropped here → fd closed.
         }
     }

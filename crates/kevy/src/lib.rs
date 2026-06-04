@@ -92,6 +92,8 @@ impl Commands for KevyCommands {
             b"RANDOMKEY" if args.len() == 1 => Route::RandomKey,
             b"SUBSCRIBE" if args.len() >= 2 => Route::Subscribe,
             b"UNSUBSCRIBE" => Route::Unsubscribe, // no args = unsubscribe all
+            b"PSUBSCRIBE" if args.len() >= 2 => Route::Psubscribe,
+            b"PUNSUBSCRIBE" => Route::Punsubscribe, // no args = punsubscribe all
             b"PUBLISH" if args.len() == 3 => Route::Publish,
             b"WATCH" if args.len() >= 2 => Route::Watch,
             b"UNWATCH" => Route::Unwatch,
@@ -272,6 +274,8 @@ impl Commands for KevyCommands {
             b"RANDOMKEY" if args.len() == 1 => Route::RandomKey,
             b"SUBSCRIBE" if args.len() >= 2 => Route::Subscribe,
             b"UNSUBSCRIBE" => Route::Unsubscribe,
+            b"PSUBSCRIBE" if args.len() >= 2 => Route::Psubscribe,
+            b"PUNSUBSCRIBE" => Route::Punsubscribe,
             b"PUBLISH" if args.len() == 3 => Route::Publish,
             b"WATCH" if args.len() >= 2 => Route::Watch,
             b"UNWATCH" => Route::Unwatch,

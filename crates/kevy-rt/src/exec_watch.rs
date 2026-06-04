@@ -289,13 +289,16 @@ impl<C: Commands> Shard<C> {
             // is a queued no-op: clear `watched` (already empty here — taken
             // at EXEC entry) and emit `+OK`.
             Route::Unwatch => self.fill_placeholder(conn_id, seq, b"+OK\r\n".to_vec()),
-            Route::Subscribe | Route::Unsubscribe | Route::Publish | Route::Watch => {
-                self.fill_placeholder(
-                    conn_id,
-                    seq,
-                    b"-ERR pub/sub or WATCH not allowed inside MULTI\r\n".to_vec(),
-                )
-            }
+            Route::Subscribe
+            | Route::Unsubscribe
+            | Route::Psubscribe
+            | Route::Punsubscribe
+            | Route::Publish
+            | Route::Watch => self.fill_placeholder(
+                conn_id,
+                seq,
+                b"-ERR pub/sub or WATCH not allowed inside MULTI\r\n".to_vec(),
+            ),
             Route::Local => {
                 self.start_single_at_seq(conn_id, seq, args, self.id, is_quit, is_write)
             }
