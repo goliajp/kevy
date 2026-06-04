@@ -25,7 +25,7 @@ use std::io;
 use std::time::{Duration, Instant};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering, fence};
 
 pub(crate) struct Shard<C: Commands> {
     pub(crate) id: usize,
@@ -162,8 +162,17 @@ impl<C: Commands> Shard<C> {
                 Some(0)
             } else {
                 self.parked[me].store(true, Ordering::SeqCst);
-                // Close the park/wake race: drain once more after advertising
-                // "parked"; the blocking wait is also a backstop against a miss.
+                // Close the park/wake race: the SeqCst fence pairs with
+                // the matching fence in `flush_wakes` on every other
+                // shard, so any push that lands BEFORE this drain on the
+                // peer's side is either (a) seen by `drain_inbound` here
+                // OR (b) the peer's parked-load saw `true` and a wake
+                // syscall is on the way. Without the fence, the lost-wake
+                // window was bounded by `PARK_TIMEOUT_MS` (50 ms) — the
+                // blocking wait below is now defense-in-depth (covers a
+                // missed eventfd write, OS scheduling glitch, etc.).
+                // Loom-verified by `tests/loom.rs::park_wake_fence_*`.
+                fence(Ordering::SeqCst);
                 if self.drain_inbound()? {
                     self.parked[me].store(false, Ordering::SeqCst);
                     self.flush_backlog();
@@ -323,6 +332,19 @@ impl<C: Commands> Shard<C> {
         if !self.pending_wakes.iter().any(|&w| w) {
             return;
         }
+        // Close the park/wake race: the SeqCst fence pairs with the
+        // matching fence in `Shard::run` after a peer stores `parked=true`.
+        // Combined, they guarantee: if our ring push (Release on the
+        // outbox's tail, executed earlier this iteration via `send_to`)
+        // happens-before this load, AND the peer's parked-store
+        // happens-before its post-park drain, then either
+        //   (a) the peer's drain sees our push,            OR
+        //   (b) our load sees `parked=true` and we send the wake.
+        // Loom-verified by `kevy-rt/tests/loom.rs::no_wake_implies_drained`.
+        // Without the fence the lost-wake window was bounded by the
+        // peer's `PARK_TIMEOUT_MS` (50 ms); the timeout remains as
+        // defense-in-depth against missed eventfd writes / OS hiccups.
+        fence(Ordering::SeqCst);
         for i in 0..self.pending_wakes.len() {
             if self.pending_wakes[i] {
                 self.pending_wakes[i] = false;
