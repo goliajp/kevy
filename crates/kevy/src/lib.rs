@@ -52,6 +52,7 @@ mod config_global;
 mod dispatch;
 mod dispatch_collections;
 mod dispatch_geo;
+mod dispatch_stream;
 mod ops;
 
 pub use config_global::init as config_init;

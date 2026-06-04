@@ -60,6 +60,7 @@ const OP_HASH: u8 = 2;
 const OP_LIST: u8 = 3;
 const OP_SET: u8 = 4;
 const OP_ZSET: u8 = 5;
+const OP_STREAM: u8 = 6;
 
 /// Write a point-in-time snapshot of `store` to `path`, atomically: data is
 /// written to `<path>.tmp`, fsynced, then renamed over `path`.
@@ -156,6 +157,35 @@ pub fn load_snapshot(store: &mut Store, path: &Path) -> io::Result<()> {
                 }
                 store.load_zset(key, pairs, ttl);
             }
+            OP_STREAM => {
+                let last_ms = read_u64(&mut r)?;
+                let last_seq = read_u64(&mut r)?;
+                let mxd_ms = read_u64(&mut r)?;
+                let mxd_seq = read_u64(&mut r)?;
+                let entries_added = read_u64(&mut r)?;
+                let n = read_u32(&mut r)? as usize;
+                let mut entries = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let ms = read_u64(&mut r)?;
+                    let seq = read_u64(&mut r)?;
+                    let nf = read_u32(&mut r)? as usize;
+                    let mut fv = Vec::with_capacity(nf);
+                    for _ in 0..nf {
+                        let f = read_bytes(&mut r)?;
+                        let v = read_bytes(&mut r)?;
+                        fv.push((f, v));
+                    }
+                    entries.push((ms, seq, fv));
+                }
+                store.load_stream(
+                    key,
+                    entries,
+                    (last_ms, last_seq),
+                    (mxd_ms, mxd_seq),
+                    entries_added,
+                    ttl,
+                );
+            }
             other => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -212,6 +242,27 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
             for (m, score) in entries {
                 write_bytes(w, m)?;
                 w.write_all(&score.to_bits().to_le_bytes())?;
+            }
+        }
+        Value::Stream(s) => {
+            w.write_all(&[OP_STREAM])?;
+            write_ttl(w, ttl)?;
+            write_bytes(w, key)?;
+            w.write_all(&s.last_id().ms.to_le_bytes())?;
+            w.write_all(&s.last_id().seq.to_le_bytes())?;
+            w.write_all(&s.max_deleted_id().ms.to_le_bytes())?;
+            w.write_all(&s.max_deleted_id().seq.to_le_bytes())?;
+            w.write_all(&s.entries_added().to_le_bytes())?;
+            let len = s.length() as u32;
+            w.write_all(&len.to_le_bytes())?;
+            for (id, fv) in s.iter_entries() {
+                w.write_all(&id.ms.to_le_bytes())?;
+                w.write_all(&id.seq.to_le_bytes())?;
+                w.write_all(&(fv.len() as u32).to_le_bytes())?;
+                for (f, v) in fv {
+                    write_bytes(w, f.as_slice())?;
+                    write_bytes(w, v.as_slice())?;
+                }
             }
         }
     }
@@ -357,6 +408,22 @@ fn write_value_as_commands<W: Write>(
                 argv.push(m.to_vec());
             }
             write_multibulk(w, &Argv::from(argv))?;
+        }
+        Value::Stream(s) => {
+            // One XADD per entry — slow on huge streams but correct.
+            // Sprint A trade-off; v2-7c can group MAXLEN once and pump
+            // multi-entry XADD batches once the parser handles them.
+            for (id, fv) in s.iter_entries() {
+                let mut argv: Vec<Vec<u8>> = Vec::with_capacity(3 + fv.len() * 2);
+                argv.push(b"XADD".to_vec());
+                argv.push(key.to_vec());
+                argv.push(id.encode());
+                for (f, v) in fv {
+                    argv.push(f.to_vec());
+                    argv.push(v.to_vec());
+                }
+                write_multibulk(w, &Argv::from(argv))?;
+            }
         }
     }
     if let Some(ms) = ttl_ms {
