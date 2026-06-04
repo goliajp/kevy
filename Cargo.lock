@@ -50,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "kevy"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "kevy-bench",
  "kevy-config",
@@ -63,11 +63,11 @@ dependencies = [
 
 [[package]]
 name = "kevy-bench"
-version = "1.2.0"
+version = "1.3.0"
 
 [[package]]
 name = "kevy-bytes"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "kevy-bench",
  "kevy-hash",
@@ -75,7 +75,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-cli"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "kevy-resp",
  "kevy-resp-client",
@@ -83,7 +83,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-client"
-version = "1.6.0"
+version = "1.7.0"
 dependencies = [
  "kevy-embedded",
  "kevy-resp",
@@ -92,11 +92,11 @@ dependencies = [
 
 [[package]]
 name = "kevy-config"
-version = "1.2.0"
+version = "1.3.0"
 
 [[package]]
 name = "kevy-embedded"
-version = "1.1.3"
+version = "1.1.4"
 dependencies = [
  "kevy-persist",
  "kevy-store",
@@ -104,18 +104,18 @@ dependencies = [
 
 [[package]]
 name = "kevy-hash"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "kevy-bench",
 ]
 
 [[package]]
 name = "kevy-madvise"
-version = "1.2.0"
+version = "1.3.0"
 
 [[package]]
 name = "kevy-map"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "kevy-bench",
  "kevy-hash",
@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-persist"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "kevy-resp",
  "kevy-store",
@@ -132,25 +132,25 @@ dependencies = [
 
 [[package]]
 name = "kevy-pubsub-bench"
-version = "1.2.0"
+version = "1.3.0"
 
 [[package]]
 name = "kevy-resp"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "kevy-bench",
 ]
 
 [[package]]
 name = "kevy-resp-client"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "kevy-resp",
 ]
 
 [[package]]
 name = "kevy-ring"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "kevy-bench",
  "loom",
@@ -158,7 +158,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-rt"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "kevy-hash",
  "kevy-map",
@@ -173,7 +173,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-store"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "kevy-bench",
  "kevy-bytes",
@@ -183,11 +183,11 @@ dependencies = [
 
 [[package]]
 name = "kevy-sys"
-version = "1.2.0"
+version = "1.3.0"
 
 [[package]]
 name = "kevy-uring"
-version = "1.2.0"
+version = "1.3.0"
 
 [[package]]
 name = "lazy_static"
