@@ -100,6 +100,8 @@ impl Commands for KevyCommands {
             b"PUBLISH" if args.len() == 3 => Route::Publish,
             b"WATCH" if args.len() >= 2 => Route::Watch,
             b"UNWATCH" => Route::Unwatch,
+            b"RENAME" => Route::Rename { nx: false },
+            b"RENAMENX" => Route::Rename { nx: true },
             // DEL/EXISTS are single-key (fast path) unless given multiple keys.
             b"DEL" => {
                 if args.len() == 2 {
@@ -315,6 +317,8 @@ impl Commands for KevyCommands {
             b"PUBLISH" if args.len() == 3 => Route::Publish,
             b"WATCH" if args.len() >= 2 => Route::Watch,
             b"UNWATCH" => Route::Unwatch,
+            b"RENAME" => Route::Rename { nx: false },
+            b"RENAMENX" => Route::Rename { nx: true },
             b"DEL" => {
                 if args.len() == 2 {
                     Route::Single(1)

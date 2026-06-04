@@ -94,6 +94,17 @@ pub(crate) enum Op {
     /// modified since the recorded version, else `0`. The origin shard
     /// ORs the partial replies and aborts EXEC on any `1`.
     CheckWatch(Vec<(Vec<u8>, u64)>),
+    /// `RENAME` / `RENAMENX` — both keys on the same shard. Atomic on
+    /// that shard via [`kevy_store::Store::rename`]. Reply: `Part::Reply`
+    /// carrying `+OK\r\n` (RENAME ok), `:1\r\n` / `:0\r\n` (RENAMENX
+    /// ok / dst-exists), or `-ERR no such key\r\n`.
+    Rename {
+        src: Vec<u8>,
+        dst: Vec<u8>,
+        /// `true` for `RENAMENX` semantics (no overwrite — reply `:0`
+        /// if dst exists; reply `:1` on successful rename).
+        nx: bool,
+    },
 }
 
 /// How a KEYS-family reply is shaped.

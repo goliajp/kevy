@@ -8,7 +8,7 @@
 use std::time::{Duration, Instant};
 
 use crate::value::{HashData, SetData, Value, ZSetData};
-use crate::{Entry, SmallBytes, Store, glob_match, pack_deadline, unpack_deadline};
+use crate::{Entry, RenameOutcome, SmallBytes, Store, glob_match, pack_deadline, unpack_deadline};
 
 impl Store {
     // ---- generic key ops (type-agnostic) -------------------------------
@@ -39,6 +39,49 @@ impl Store {
         } else {
             false
         }
+    }
+
+    /// `RENAME` (or `RENAMENX` if `nx`). Atomic on this shard. Returns
+    /// the outcome so the dispatch layer can emit the right RESP frame
+    /// (RENAME: `+OK` or `-ERR no such key`; RENAMENX: `:1`/`:0`/error).
+    ///
+    /// Cross-shard rename is the runtime's job — by the time this is
+    /// called, both `src` and `dst` are guaranteed to live on the same
+    /// shard. See `kevy-rt::start_rename` for the cross-shard split.
+    pub fn rename(&mut self, src: &[u8], dst: &[u8], nx: bool) -> RenameOutcome {
+        let now = Instant::now();
+        if !self.reap(src, now) {
+            return RenameOutcome::NoSuchSrc;
+        }
+        if src == dst {
+            // Redis 6+ semantics: same-key rename is a no-op `+OK`.
+            // (RENAMENX same-key returns `:0` per Redis since dst
+            // technically already exists at src's address.)
+            return if nx {
+                RenameOutcome::DstExists
+            } else {
+                RenameOutcome::Renamed
+            };
+        }
+        if nx {
+            // Reap dst before the existence test so a TTL-expired dst
+            // doesn't block the rename.
+            let dst_live = self.reap(dst, now) && self.map.contains_key(dst);
+            if dst_live {
+                return RenameOutcome::DstExists;
+            }
+        }
+        // Take src's entry out. `remove_entry` returns the full Entry
+        // (value + TTL) — preserves TTL across rename, matching Redis.
+        let Some(entry) = self.remove_entry(src) else {
+            return RenameOutcome::NoSuchSrc;
+        };
+        // Drop any pre-existing dst (overwrite semantics). reap above
+        // already handled TTL-expired dst, but the live-dst case still
+        // needs removal.
+        self.remove_entry(dst);
+        self.insert_entry(SmallBytes::from_vec(dst.to_vec()), entry);
+        RenameOutcome::Renamed
     }
 
     pub fn persist(&mut self, key: &[u8]) -> bool {

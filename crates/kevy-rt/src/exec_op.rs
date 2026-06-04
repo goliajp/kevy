@@ -117,6 +117,42 @@ impl<C: Commands> Shard<C> {
                     .any(|(k, v)| self.store.key_version(k) != *v);
                 Part::Int(dirty as i64)
             }
+            Op::Rename { src, dst, nx } => {
+                // Same-shard atomic rename. The runtime's start_rename
+                // guarantees both keys live on this shard before
+                // emitting the Op (cross-shard goes through the v2-3b
+                // orchestrator instead — until that lands, it errors
+                // out at start_rename).
+                use kevy_store::RenameOutcome;
+                let outcome = self.store.rename(&src, &dst, nx);
+                let renamed = matches!(outcome, RenameOutcome::Renamed);
+                let reply = match outcome {
+                    RenameOutcome::Renamed if nx => b":1\r\n".to_vec(),
+                    RenameOutcome::Renamed => b"+OK\r\n".to_vec(),
+                    RenameOutcome::DstExists => b":0\r\n".to_vec(),
+                    RenameOutcome::NoSuchSrc => b"-ERR no such key\r\n".to_vec(),
+                };
+                if renamed {
+                    // AOF + WATCH bump for both src (deleted) and dst (created).
+                    self.store.bump_if_watched(&src);
+                    self.store.bump_if_watched(&dst);
+                    if self.aof.is_some() {
+                        let mut c = Argv::with_capacity(3, 0);
+                        c.push(if nx { b"RENAMENX" } else { b"RENAME" });
+                        c.push(&src);
+                        c.push(&dst);
+                        self.log(&c);
+                    }
+                    // Keyspace notifications: generic class, two events
+                    // (`rename_from` on src, `rename_to` on dst) per
+                    // Redis events.c convention.
+                    if !self.notify_flags.is_empty() && self.notify_flags.generic {
+                        self.notify_keyspace_event(b"rename_from", &src);
+                        self.notify_keyspace_event(b"rename_to", &dst);
+                    }
+                }
+                Part::Reply(reply)
+            }
             Op::CollectWatchVersions(keys) => {
                 // WATCH's fan-out: register each key in this shard's
                 // version tracker and report its current version. The

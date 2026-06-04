@@ -188,6 +188,19 @@ const _: () = {
     assert!(std::mem::size_of::<Entry>() == 48);
 };
 
+/// Outcome of [`Store::rename`] — three-way result so the dispatch
+/// layer can pick the right RESP frame (`+OK` / `-ERR no such key` /
+/// `:0` for `RENAMENX`-with-existing-dst).
+#[derive(Debug, PartialEq, Eq)]
+pub enum RenameOutcome {
+    /// Source removed, destination created (overwriting any prior dst).
+    Renamed,
+    /// Source key doesn't exist.
+    NoSuchSrc,
+    /// `RENAMENX` only — destination already exists, no rename done.
+    DstExists,
+}
+
 /// Operation errors surfaced to the command layer.
 #[derive(Debug, PartialEq, Eq)]
 pub enum StoreError {
