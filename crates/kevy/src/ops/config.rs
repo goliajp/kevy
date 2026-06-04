@@ -125,21 +125,9 @@ fn cmd_config_rewrite(out: &mut Vec<u8>) {
             "ERR The server is running without a config file",
         );
     };
-    let text = cfg.to_toml_string();
+    let text = rewrite_text(&cfg, &path);
     match atomic_write(&path, text.as_bytes()) {
-        Ok(()) => {
-            // Redis returns +OK silently; we keep that wire shape. The
-            // "inline comments not preserved" caveat is documented in the
-            // v1.x stability promise / MIGRATION doc; v1.x will add round-
-            // trip preservation. Surfacing it here as a reply suffix would
-            // break the +OK contract Redis-aware clients expect.
-            eprintln!(
-                "kevy: CONFIG REWRITE wrote {} (any inline comments were lost — \
-                 v1.x will add round-trip preservation)",
-                path.display(),
-            );
-            encode_simple_string(out, "OK");
-        }
+        Ok(()) => encode_simple_string(out, "OK"),
         Err(e) => encode_error(
             out,
             &format!(
@@ -147,6 +135,34 @@ fn cmd_config_rewrite(out: &mut Vec<u8>) {
                 path.display()
             ),
         ),
+    }
+}
+
+/// Build the rewrite payload, preferring the comment-preserving path
+/// (re-parse original source line-by-line, splice values in place) and
+/// falling back to [`Config::to_toml_string`] when the source can't be
+/// read or re-parsed.
+fn rewrite_text(cfg: &Config, path: &PathBuf) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(src) => match cfg.to_toml_string_preserving(&src) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!(
+                    "kevy: CONFIG REWRITE comment-preserving re-parse of {} \
+                     failed ({e}); falling back to standard template (comments lost)",
+                    path.display(),
+                );
+                cfg.to_toml_string()
+            }
+        },
+        Err(e) => {
+            eprintln!(
+                "kevy: CONFIG REWRITE could not read {} for comment preservation \
+                 ({e}); falling back to standard template (comments lost)",
+                path.display(),
+            );
+            cfg.to_toml_string()
+        }
     }
 }
 
