@@ -11,6 +11,8 @@
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use kevy_map::KevyMap;
+
 use crate::value::*;
 use crate::StoreError;
 
@@ -133,21 +135,25 @@ pub enum StreamIdError {
 // ───────────── StreamData ─────────────
 
 /// One stream's storage: every entry in `entries` plus the per-stream
-/// scalar state Redis exposes via `XINFO STREAM`. Consumer-group state
-/// (`groups`) is reserved for sprint B; it stays empty in sprint A.
+/// scalar state Redis exposes via `XINFO STREAM`, plus the consumer
+/// groups map (sprint B). An empty `groups` map costs ~8 bytes and
+/// makes the no-group fast path (sprint A XADD/XREAD) zero-overhead.
 #[derive(Default)]
 pub struct StreamData {
     /// Sorted entries; the `BTreeMap` enforces strict-increasing IDs.
-    entries: BTreeMap<StreamId, Vec<(SmallBytes, SmallBytes)>>,
+    pub(super) entries: BTreeMap<StreamId, Vec<(SmallBytes, SmallBytes)>>,
     /// Largest ID **ever** seen on this stream, even after the entry
     /// has been deleted (XDEL doesn't roll the clock back).
-    last_id: StreamId,
+    pub(super) last_id: StreamId,
     /// Largest ID that has been deleted (`max_deleted_entry_id` in
     /// Redis XINFO). Used to detect "deletion-only" gaps for clients.
-    max_deleted_id: StreamId,
+    pub(super) max_deleted_id: StreamId,
     /// Cumulative number of entries ever added — never decreases. Used
     /// by XINFO STREAM's `entries-added`.
-    entries_added: u64,
+    pub(super) entries_added: u64,
+    /// Consumer groups keyed by name (sprint B). Boxed so the
+    /// `StreamData` struct stays compact when no groups are attached.
+    pub(super) groups: KevyMap<SmallBytes, Box<group::ConsumerGroup>>,
 }
 
 impl StreamData {
@@ -367,7 +373,16 @@ impl StreamData {
     }
 }
 
+mod claim;
+mod group;
 mod store;
+#[allow(unused_imports)]
+pub use claim::AutoclaimResult;
+#[allow(unused_imports)]
+pub use group::{
+    ConsumerGroup, ConsumerState, GroupCreateMode, PelEntry, PendingExtended,
+    PendingExtendedRow, PendingSummary, ReadGroupId, XClaimOpts,
+};
 pub use store::EntryBatch;
 
 /// Snapshot-loader payload: one stream entry decoded into primitive

@@ -107,6 +107,11 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"XADD"
             | b"XDEL"
             | b"XTRIM"
+            | b"XGROUP"
+            | b"XREADGROUP"
+            | b"XACK"
+            | b"XCLAIM"
+            | b"XAUTOCLAIM"
             | b"MSET"
     )
 }
@@ -181,6 +186,10 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"GEORADIUS"
             | b"GEORADIUSBYMEMBER"
             | b"XADD"
+            | b"XGROUP"
+            | b"XREADGROUP"
+            | b"XCLAIM"
+            | b"XAUTOCLAIM"
             | b"MSET"
     )
 }
