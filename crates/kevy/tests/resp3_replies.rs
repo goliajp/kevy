@@ -320,6 +320,65 @@ fn config_get_returns_map_on_resp3() {
 }
 
 #[test]
+fn zrange_withscores_returns_nested_array_on_resp3() {
+    // V2 WITHSCORES: flat `*2N\r\n[m, s, m, s, ...]` interleaved bulks.
+    // V3 WITHSCORES: `*N\r\n[*2 [m, score-double], ...]` nested arrays
+    // (per RESP3 spec — each pair is a proper 2-tuple, score is a
+    // typed Double).
+    let srv = Server::start(1);
+    let mut v2 = srv.connect();
+    v2.write_all(&req(&[b"ZADD", b"z", b"1", b"a", b"2.5", b"b"]))
+        .unwrap();
+    read_reply(&mut v2, b":2\r\n");
+
+    // V2 ZRANGE WITHSCORES — flat interleaved bulks.
+    v2.write_all(&req(&[b"ZRANGE", b"z", b"0", b"-1", b"WITHSCORES"]))
+        .unwrap();
+    // *4 + bulk a + bulk 1 + bulk b + bulk 2.5
+    read_reply(
+        &mut v2,
+        b"*4\r\n$1\r\na\r\n$1\r\n1\r\n$1\r\nb\r\n$3\r\n2.5\r\n",
+    );
+
+    // V3 ZRANGE WITHSCORES — nested [bulk, double] pairs.
+    let mut v3 = srv.v3_conn();
+    v3.write_all(&req(&[b"ZRANGE", b"z", b"0", b"-1", b"WITHSCORES"]))
+        .unwrap();
+    // *2 + (*2 + bulk a + ,1) + (*2 + bulk b + ,2.5)
+    read_reply(
+        &mut v3,
+        b"*2\r\n*2\r\n$1\r\na\r\n,1\r\n*2\r\n$1\r\nb\r\n,2.5\r\n",
+    );
+
+    // No-WITHSCORES form: same plain bulk array on both protos.
+    v3.write_all(&req(&[b"ZRANGE", b"z", b"0", b"-1"])).unwrap();
+    read_reply(&mut v3, b"*2\r\n$1\r\na\r\n$1\r\nb\r\n");
+}
+
+#[test]
+fn zrangebyscore_withscores_returns_nested_array_on_resp3() {
+    let srv = Server::start(1);
+    let mut v3 = srv.v3_conn();
+    v3.write_all(&req(&[b"ZADD", b"zz", b"1", b"x", b"3", b"y"]))
+        .unwrap();
+    read_reply(&mut v3, b":2\r\n");
+
+    // Range covers both members; WITHSCORES → nested pairs with Double.
+    v3.write_all(&req(&[
+        b"ZRANGEBYSCORE",
+        b"zz",
+        b"-inf",
+        b"+inf",
+        b"WITHSCORES",
+    ]))
+    .unwrap();
+    read_reply(
+        &mut v3,
+        b"*2\r\n*2\r\n$1\r\nx\r\n,1\r\n*2\r\n$1\r\ny\r\n,3\r\n",
+    );
+}
+
+#[test]
 fn v2_wire_byte_for_byte_unchanged_after_resp3_migration() {
     // Critical guardrail: every V2 cmd test in the existing suite
     // (sharded.rs, cmd_matrix.rs, commands.rs) already asserts the

@@ -267,8 +267,8 @@ pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
                 encode_error(out, "ERR value is not a valid float");
             }
         }
-        b"ZRANGE" => cmd_zrange(store, args, out),
-        b"ZRANGEBYSCORE" => cmd_zrangebyscore(store, args, out),
+        b"ZRANGE" => cmd_zrange(store, args, out, kevy_resp::RespVersion::V2),
+        b"ZRANGEBYSCORE" => cmd_zrangebyscore(store, args, out, kevy_resp::RespVersion::V2),
         b"ZCOUNT" => {
             if args.len() != 4 {
                 wrong_args(out, "zcount");

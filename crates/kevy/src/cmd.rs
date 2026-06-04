@@ -1,6 +1,9 @@
 //! Command helpers shared by the dispatcher.
 
-use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer};
+use kevy_resp::{
+    ArgvView, RespVersion, encode_array_len, encode_bulk, encode_double, encode_error,
+    encode_integer,
+};
 use kevy_store::{ScoreBound, Store, StoreError};
 
 /// Uppercase a command verb into the caller's stack buffer — no per-command heap
@@ -198,7 +201,12 @@ pub(crate) fn cmd_zadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &
 }
 
 /// `ZRANGE key start stop [WITHSCORES]` — by rank.
-pub(crate) fn cmd_zrange<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+pub(crate) fn cmd_zrange<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+    proto: RespVersion,
+) {
     if args.len() < 4 || args.len() > 5 {
         return wrong_args(out, "zrange");
     }
@@ -209,7 +217,7 @@ pub(crate) fn cmd_zrange<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out:
     let (Some(s), Some(e)) = (arg_i64(&args[2]), arg_i64(&args[3])) else {
         return encode_error(out, ERR_NOT_INT);
     };
-    emit_zrange(store.zrange(&args[1], s, e), withscores, out);
+    emit_zrange(store.zrange(&args[1], s, e), withscores, proto, out);
 }
 
 /// `ZRANGEBYSCORE key min max [WITHSCORES]`.
@@ -217,6 +225,7 @@ pub(crate) fn cmd_zrangebyscore<A: ArgvView + ?Sized>(
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
+    proto: RespVersion,
 ) {
     if args.len() < 4 || args.len() > 5 {
         return wrong_args(out, "zrangebyscore");
@@ -228,31 +237,51 @@ pub(crate) fn cmd_zrangebyscore<A: ArgvView + ?Sized>(
     let (Some(min), Some(max)) = (parse_score_bound(&args[2]), parse_score_bound(&args[3])) else {
         return encode_error(out, "ERR min or max is not a float");
     };
-    emit_zrange(store.zrange_by_score(&args[1], min, max), withscores, out);
+    emit_zrange(store.zrange_by_score(&args[1], min, max), withscores, proto, out);
 }
 
-/// Encode a `(member, score)` list as a RESP array, optionally `WITHSCORES`.
+/// Encode a `(member, score)` list per `withscores` + `proto`:
+///
+/// | mode                  | wire shape                                                          |
+/// |-----------------------|---------------------------------------------------------------------|
+/// | no WITHSCORES (both)  | `*N\r\n$<m>...` — flat array of bulks                              |
+/// | WITHSCORES + V2       | `*2N\r\n$<m>\r\n$<s>...` — interleaved bulks (Redis legacy)        |
+/// | WITHSCORES + V3       | `*N\r\n*2\r\n$<m>\r\n,<s>\r\n...` — array of [bulk, double] pairs  |
+///
+/// The V3 nested-array shape is what RESP3 clients expect; the V2 flat
+/// interleaving is preserved bit-for-bit so unmigrated clients stay
+/// happy.
 pub(crate) fn emit_zrange(
     res: Result<Vec<(Vec<u8>, f64)>, StoreError>,
     withscores: bool,
+    proto: RespVersion,
     out: &mut Vec<u8>,
 ) {
     match res {
         Err(e) => store_err(out, e),
-        Ok(items) => {
-            let n = if withscores {
-                items.len() * 2
-            } else {
-                items.len()
-            };
-            encode_array_len(out, n as i64);
-            for (m, sc) in &items {
-                encode_bulk(out, m);
-                if withscores {
+        Ok(items) => match (withscores, proto) {
+            (false, _) => {
+                encode_array_len(out, items.len() as i64);
+                for (m, _) in &items {
+                    encode_bulk(out, m);
+                }
+            }
+            (true, RespVersion::V2) => {
+                encode_array_len(out, (items.len() * 2) as i64);
+                for (m, sc) in &items {
+                    encode_bulk(out, m);
                     encode_bulk(out, &fmt_score(*sc));
                 }
             }
-        }
+            (true, RespVersion::V3) => {
+                encode_array_len(out, items.len() as i64);
+                for (m, sc) in &items {
+                    encode_array_len(out, 2);
+                    encode_bulk(out, m);
+                    encode_double(out, *sc);
+                }
+            }
+        },
     }
 }
 

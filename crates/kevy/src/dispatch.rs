@@ -149,6 +149,19 @@ fn try_resp3_overrides<A: ArgvView + ?Sized>(
             crate::ops::config::cmd_config(&cfg, args, out, RespVersion::V3);
             true
         }
+        // ZRANGE WITHSCORES + ZRANGEBYSCORE WITHSCORES: V3 emits an
+        // array of [member, score] 2-element nested arrays (each score
+        // a Double `,N`), vs the V2 flat interleaved bulk array. The
+        // no-WITHSCORES form is the same plain `*N` array of bulks on
+        // both protos (cmd_zrange handles that branch internally).
+        b"ZRANGE" => {
+            cmd_zrange(store, args, out, RespVersion::V3);
+            true
+        }
+        b"ZRANGEBYSCORE" => {
+            cmd_zrangebyscore(store, args, out, RespVersion::V3);
+            true
+        }
         _ => false,
     }
 }
