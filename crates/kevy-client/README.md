@@ -53,7 +53,7 @@ environment variable / config file — develop against `mem://`,
 integration-test against `file:///tmp/test`, deploy against
 `kevy://prod-cache:6379`. No code change.
 
-## Command coverage (v1.5.0)
+## Command coverage (v1.7.0)
 
 All five Redis data types plus generic-key ops, persistence, the full
 pub/sub cycle (including in-process embedded delivery), multi-key
@@ -79,14 +79,17 @@ remote backend. Methods on `Connection`:
 `randomkey`. Embedded `scan` finishes in one round (any non-zero cursor
 returns empty); the remote backend honours the server's real cursor.
 
-**Transactions (v1.4.0 + v1.5.0, remote only):** `conn.multi()` →
-`Transaction` handle. Two queue surfaces — raw `queue(&[verb, args...])`
-and v1.5.0's typed builders (`set`, `get`, `del`, `exists`, `incr`,
-`incr_by`, `mget`, `mset`) that chain via `&mut Self`. Plus
-[`Connection::watch`] / [`unwatch`] and [`Transaction::exec_watched`]
-for optimistic concurrency. Embedded returns `ErrorKind::Unsupported` —
-every Connection method already serialises on the embed mutex, so
-MULTI's locking guarantee maps to a no-op there.
+**Transactions (v1.4.0 + v1.5.0 + v1.7.0, remote only):** `conn.multi()` →
+`Transaction` handle. Three queue surfaces — raw
+`queue(&[verb, args...])`, v1.5.0's typed builders (`set`, `get`, `del`,
+`exists`, `incr`, `incr_by`, `mget`, `mset`) that chain via `&mut Self`,
+and v1.7.0's typed reply cursor (`exec_typed` / `exec_watched_typed`
+returns a [`TransactionReplies`] with `next_int` / `next_bulk` /
+`next_ok` / `next_array_of_bulks` / `expect_empty`). Plus
+[`Connection::watch`] / [`unwatch`] for optimistic concurrency.
+Embedded returns `ErrorKind::Unsupported` — every Connection method
+already serialises on the embed mutex, so MULTI's locking guarantee
+maps to a no-op there.
 
 ```rust
 // raw shape, unchanged from v1.4.0
@@ -110,12 +113,31 @@ match txn.exec_watched()? {
     Some(replies) => assert_eq!(replies.len(), 1),
     None         => { /* watched key changed — retry the whole block */ }
 }
+
+// v1.7.0: typed reply cursor — drop the manual `Reply` matches
+let mut txn = conn.multi()?;
+txn.set(b"a", b"1")?.incr(b"counter")?.get(b"a")?;
+let mut r = txn.exec_typed()?;
+r.next_ok()?;                                 // SET → +OK
+let counter: i64 = r.next_int()?;             // INCR → :N
+let prior: Option<Vec<u8>> = r.next_bulk()?;  // GET  → $… or nil
+r.expect_empty()?;                            // arity gate
 ```
 
 **Pub/sub:** `Connection::publish` for the producer side. The consumer
 side is `Subscriber`, a separate type with its own backing channel
 because subscribed connections cannot send normal commands per the
-RESP spec.
+RESP spec. v1.6.0 added `recv_message` (auto-skips
+`(p)?(un)?subscribe` ack frames and returns `(channel, payload)`),
+and `psubscribe` / `punsubscribe` for pattern subscriptions. v1.7.0
+adds borrowing iterators — `Subscriber::events()` for every frame and
+`Subscriber::messages()` for ack-skipped `(channel, payload)` tuples
+— so consumers can write `for msg in sub.messages() { … }` instead of
+hand-rolling a `loop { match sub.recv() … }`. Both iterators
+terminate only on `UnexpectedEof`; transient errors (e.g. a read
+timeout) surface as `Some(Err(_))` so callers decide whether to keep
+going. Async runtimes consume via `spawn_blocking` (see
+`docs/pubsub.md` in the workspace).
 
 **v1.3.0 makes embed work the same way as the network**: two opens of the
 same `mem://<name>` or `file:///path` URL route through a process-local
