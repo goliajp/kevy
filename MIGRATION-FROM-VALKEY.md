@@ -5,10 +5,11 @@ RESP2 client (redis-rs, go-redis, jedis, lettuce, node-redis, ioredis,
 phpredis, redis-py, hiredis, …) connects without code changes.
 
 **TL;DR:** point your client at kevy's port (default `6004`), keep using
-the same commands. kevy supports 94 commands across all 5 data types
-plus pub/sub and transactions, parity-verified vs valkey 9.1 + redis 7.4.
+the same commands. kevy supports 98 commands across all 5 data types
+plus pub/sub (channels + patterns) and transactions (with optional
+`WATCH` CAS), parity-verified vs valkey 9.1 + redis 7.4.
 
-This guide tracks **workspace v1.2.0** (current) — verify your binary
+This guide tracks **workspace v1.3.0** (current) — verify your binary
 with `kevy --version` if anything in this doc looks off.
 
 ## What's the same as valkey 9.1
@@ -19,8 +20,8 @@ with `kevy --version` if anything in this doc looks off.
 | Reply shapes | bulk / simple-string / integer / array / error / null-bulk — identical encoding |
 | Error codes | `WRONGTYPE`, `ERR wrong number of arguments`, etc. — kept verbatim |
 | Command semantics | 94 commands listed below — reply-by-reply identical |
-| Subscription model | `SUBSCRIBE` / `UNSUBSCRIBE` / `PUBLISH` — channel-based |
-| Transactions | `MULTI` / `EXEC` / `DISCARD` — queue + atomic execute |
+| Subscription model | `SUBSCRIBE` / `UNSUBSCRIBE` / `PUBLISH` — channel-based; `PSUBSCRIBE` / `PUNSUBSCRIBE` — Redis-glob patterns (`*`, `?`, `[…]`) |
+| Transactions | `MULTI` / `EXEC` / `DISCARD` — queue + atomic execute; `WATCH` / `UNWATCH` optimistic CAS (single-shard strict, cross-shard best-effort — same property as Redis cluster mode) |
 
 ## What's different
 
@@ -46,8 +47,6 @@ Most of these are **intentional scope choices** (detailed below); a few are road
 
 ### Deferred to v1.x (will land in a minor release)
 
-- `WATCH` (optimistic CAS — `MULTI` works, but without the CAS check)
-- `PSUBSCRIBE` / `PUNSUBSCRIBE` (pattern pub/sub)
 - `RENAME` across shards (same-shard rename works)
 - Incremental `SCAN` cursor (currently a single full pass; cursor 0
   is the canonical entry point)
@@ -57,6 +56,21 @@ Most of these are **intentional scope choices** (detailed below); a few are road
 - Keyspace notifications (`__keyspace@*__:*`)
 - Geo commands (`GEOADD` / `GEORADIUS` / `GEOSEARCH`)
 - `SLOWLOG`
+
+### Landed in workspace v1.3.0 (previously deferred)
+
+- `WATCH` / `UNWATCH` — optimistic CAS for transactions. Single-shard
+  is strict CAS (reactor is single-threaded per shard); cross-shard is
+  best-effort with a µs-scale window between the pre-EXEC `CheckWatch`
+  fan-out and the queued commands running — the same trade-off Redis
+  cluster mode has. EXEC returns `Nil` on a watched-key conflict.
+- `PSUBSCRIBE` / `PUNSUBSCRIBE` — Redis-glob pattern pub/sub. Patterns
+  use `*` / `?` / `[…]` (with `^` negation + `\` escape). `PUBLISH`
+  delivers a `message` frame per direct subscriber AND a `pmessage`
+  frame per matching pattern subscriber, with reply count summing
+  both. Pattern matching adds one `HashMap::is_empty()` check per
+  delivery — zero hot-path cost when no pattern subscribers exist
+  (the common case).
 
 ### Different internals (transparent to clients)
 
@@ -95,9 +109,13 @@ INFO CLUSTER DEBUG WAIT SHUTDOWN CONFIG CLIENT
 
 - `CONFIG GET <pattern>` — works (supports glob patterns, multi-arg
   query).
-- `CONFIG SET` / `CONFIG REWRITE` — return a single canonical error
-  (`ERR ... read-only in kevy v1.0 — edit kevy.toml and restart`).
-  Real hot-modification lands in a v1.x minor.
+- `CONFIG SET` / `CONFIG REWRITE` — real hot-modification (since
+  workspace v1.2.0). Read-only fields (bind, port, dir, etc.) still
+  reply `ERR ... read-only — edit kevy.toml and restart`; everything
+  else (`appendfsync`, `auto_aof_rewrite_percentage`, `maxmemory`,
+  `maxmemory-policy`, `hz`, `loglevel`, …) applies to all shards
+  within the next tick (default 100 ms). `CONFIG REWRITE` writes the
+  effective config back to disk.
 - `CLIENT GETNAME` / `SETNAME` / `ID` / `NO-EVICT` / `LIST` / `KILL` —
   reply shapes match Redis so client libraries that probe `CLIENT` at
   handshake (lettuce, ioredis, …) keep working. Per-connection state
@@ -148,17 +166,28 @@ ZRANGE ZRANGEBYSCORE ZCOUNT
 
 `ZRANGEBYSCORE` supports `(min` / `min)` / `-inf` / `+inf` bounds.
 
-### Pub/sub (3)
+### Pub/sub (5)
 
 ```
-SUBSCRIBE UNSUBSCRIBE PUBLISH
+SUBSCRIBE UNSUBSCRIBE PSUBSCRIBE PUNSUBSCRIBE PUBLISH
 ```
 
-### Transactions (3)
+`PSUBSCRIBE` patterns use Redis glob syntax (`*`, `?`, `[…]`, `^`
+negation, `\` escape). Pattern subscribers receive `pmessage` frames;
+direct + pattern subscribers both contribute to `PUBLISH`'s reply
+count.
+
+### Transactions (5)
 
 ```
-MULTI EXEC DISCARD
+MULTI EXEC DISCARD WATCH UNWATCH
 ```
+
+`WATCH key [key ...]` is **strict CAS within one shard** (the
+reactor is single-threaded per shard) and **best-effort across
+shards** — exactly the trade-off Redis cluster mode has, for the
+same reason (no global no-interleave lock). EXEC returns `Nil`
+on a watched-key conflict; otherwise it commits the queued cmds.
 
 ### Persistence (3)
 
@@ -168,7 +197,7 @@ SAVE BGSAVE BGREWRITEAOF
 
 ## Persistence model
 
-| | valkey / Redis | kevy v1.2 |
+| | valkey / Redis | kevy v1.3 |
 |---|---|---|
 | Snapshot | RDB binary format | kevy snapshot v2 (own `KEVYSNAP` header, type-tagged) |
 | AOF | append-only commands | append-only commands, `KEVYAOF1\n` magic header on fresh files (since v1.2.0) |
@@ -228,7 +257,7 @@ costs zero on workloads that don't use it.
 ```yaml
 services:
   kv:
-    image: golia/kevy:1.2       # (or build from source until image lands)
+    image: golia/kevy:1.3       # (or build from source until image lands)
     environment:
       KEVY_BIND: 0.0.0.0        # trust-bounded inside the network
     ports:
