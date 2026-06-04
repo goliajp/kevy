@@ -31,9 +31,9 @@ redis-cli -p 6004 SET hello world
 - **No supply-chain risk** — zero crates.io dependencies. The whole tree is
   `std` + kevy's own crates; the only C is the OS syscall boundary,
   hand-bound in one crate. There is nothing else to audit.
-- **Drop-in compatible** — RESP2 wire protocol, 94-command parity with
-  valkey 9.1, reply-checked byte-for-byte. Existing clients and tools just
-  work.
+- **Drop-in compatible** — RESP2 wire protocol, 98-command parity with
+  valkey 9.1 (incl. pattern pub/sub and `WATCH`/`UNWATCH` optimistic CAS),
+  reply-checked byte-for-byte. Existing clients and tools just work.
 - **Embeddable** — `kevy-store` is a plain Rust library: no network, no
   runtime, also builds for `wasm32`. The same engine, in your process.
 
@@ -140,7 +140,7 @@ Pre-built `kevy` server binaries are attached to every
 One-liner (Linux / macOS — pick your target):
 
 ```sh
-TAG=v1.0.0-rc4
+TAG=v1.2.0
 TARGET=x86_64-unknown-linux-gnu      # or aarch64-unknown-linux-gnu, aarch64-apple-darwin
 curl -L "https://github.com/goliajp/kevy/releases/download/$TAG/kevy-$TAG-$TARGET.tar.gz" | tar -xz
 sudo install "kevy-$TAG-$TARGET/kevy" /usr/local/bin/kevy
@@ -222,7 +222,7 @@ assert_eq!(s.get(b"key").unwrap().unwrap(), b"value");
 
 ## When to use kevy
 
-kevy v1.0 is production-ready for four scenarios:
+kevy is production-ready for four scenarios:
 
 1. **Local dev** — `cargo run -p kevy` + your favourite Redis client.
 2. **docker-compose internal** — `KEVY_BIND=0.0.0.0` inside the network;
@@ -235,7 +235,7 @@ kevy v1.0 is production-ready for four scenarios:
 **Out of scope by design:** replication, clustering, AUTH / TLS, and
 direct public-internet exposure. For HA / multi-host, use a Kubernetes
 StatefulSet or a sidecar-proxy pattern. The full scope rationale and the
-94-command parity table live in
+98-command parity table live in
 [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md).
 
 ## Crates
@@ -259,9 +259,11 @@ server-internal pieces:
 
 ## Embedded ↔ server with one URL
 
-[`kevy-client`](crates/kevy-client) v1.3.0 + [`kevy-embedded`](crates/kevy-embedded)
-v1.1.0 let the same code switch between an in-process backend and a TCP
-kevy server with a single URL string — including pub/sub:
+[`kevy-client`](crates/kevy-client) v1.6.0+ + [`kevy-embedded`](crates/kevy-embedded)
+v1.1.0+ let the same code switch between an in-process backend and a TCP
+kevy server with a single URL string — including pub/sub (channels +
+patterns), `WATCH`-driven transactions, and typed `Transaction::exec_typed`
+reply cursors:
 
 ```rust
 use kevy_client::{Connection, Subscriber, PubsubEvent};
@@ -290,12 +292,14 @@ Full walkthrough + caveats: [`docs/pubsub.md`](docs/pubsub.md).
 ## Commands
 
 All five Redis data types — **String, Hash, List, Set, Sorted Set** — plus
-**pub/sub**, **transactions** (`MULTI` / `EXEC` / `DISCARD`), persistence
-(`SAVE` / `BGSAVE` / `BGREWRITEAOF`), and operations (`INFO` / `CONFIG` /
-`CLIENT` / …). Multi-key commands and pub/sub work across the per-core
-shards, and `WRONGTYPE` behaves as in Redis.
+**pub/sub** (`SUBSCRIBE` / `PSUBSCRIBE` — pattern glob), **transactions**
+(`MULTI` / `EXEC` / `DISCARD` / `WATCH` / `UNWATCH` — optimistic CAS),
+persistence (`SAVE` / `BGSAVE` / `BGREWRITEAOF`), and operations (`INFO` /
+`CONFIG` (real hot-modification) / `CLIENT` / …). Multi-key commands +
+pub/sub + WATCH work across the per-core shards, and `WRONGTYPE` behaves
+as in Redis.
 
-The full 94-command list with valkey-parity notes is in
+The full 98-command list with valkey-parity notes is in
 [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md).
 
 ## Build & test
@@ -313,11 +317,14 @@ for the WebAssembly walkthrough.
 
 ## Roadmap & stability
 
-kevy is in the **v1.0.0-rc** feedback period. Everything that v1.x promises
-to keep — persistence format, RESP wire protocol, public Rust API, CLI
-flags, env vars, TOML schema, eviction semantics — is **add-only across the
-v1.x line**: a file written by v1.0 loads on any later v1.x build. The full
-stability contract is in
+kevy is in the **v1.x line** (current workspace v1.2.x, with v1.3.0
+in flight). Everything that v1.x promises to keep — persistence
+format, RESP wire protocol, public Rust API, CLI flags, env vars,
+TOML schema, eviction semantics — is **add-only across the v1.x line**:
+a file written by v1.0 loads on any later v1.x build, and additive
+features (WATCH, pattern pub/sub, real CONFIG SET, typed transaction
+cursors) land in minor releases without breaking earlier code. The
+full stability contract is in
 [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md#v1x-stability-commitment).
 
 ## License
