@@ -8,15 +8,19 @@ use crate::conn::Conn;
 use crate::message::{Agg, Gathered, KeyShape, MultiOp};
 use kevy_hash::KevyHash;
 use kevy_resp::{
-    encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
-    encode_simple_string,
+    RespVersion, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
+    encode_set_header, encode_simple_string,
 };
 use std::collections::{HashMap, HashSet};
 
 const WRONGTYPE: &str = "WRONGTYPE Operation against a key holding the wrong kind of value";
 
-/// Turn a completed accumulator into its final RESP reply bytes.
-pub(crate) fn materialize(agg: Agg) -> Vec<u8> {
+/// Turn a completed accumulator into its final RESP reply bytes. The
+/// per-conn `proto` flips one or two reply shapes (notably the set-
+/// algebra arms of `finalize_gather` — SINTER/SUNION/SDIFF go from
+/// `*N` Array to `~N` Set under RESP3). Every other arm is the same
+/// bytes on both protos.
+pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> Vec<u8> {
     match agg {
         Agg::First(Some(b)) => b,
         Agg::First(None) => {
@@ -34,7 +38,7 @@ pub(crate) fn materialize(agg: Agg) -> Vec<u8> {
             encode_simple_string(&mut out, "OK");
             out
         }
-        Agg::Gather { op, keys, got } => finalize_gather(op, keys, got),
+        Agg::Gather { op, keys, got } => finalize_gather(op, keys, got, proto),
         Agg::Keys { shape, acc } => finalize_keys(shape, acc),
         // WatchCollect / ExecPrep have a conn-state side effect that
         // pure materialise() can't express; `Shard::fold` routes them
@@ -77,7 +81,17 @@ fn finalize_keys(shape: KeyShape, acc: Vec<Vec<u8>>) -> Vec<u8> {
 }
 
 /// Reduce gathered per-key payloads into the final RESP reply.
-fn finalize_gather(op: MultiOp, keys: Vec<Vec<u8>>, got: HashMap<Vec<u8>, Gathered>) -> Vec<u8> {
+///
+/// `proto` only affects the set-algebra arms (SINTER/SUNION/SDIFF):
+/// RESP2 emits an `*N` array header, RESP3 a `~N` Set header. MGET
+/// stays an `*N` array on both protos (per the RESP3 spec — order is
+/// significant, can't be a Set).
+fn finalize_gather(
+    op: MultiOp,
+    keys: Vec<Vec<u8>>,
+    got: HashMap<Vec<u8>, Gathered>,
+    proto: RespVersion,
+) -> Vec<u8> {
     let mut out = Vec::new();
     match op {
         MultiOp::Mget => {
@@ -114,7 +128,10 @@ fn finalize_gather(op: MultiOp, keys: Vec<Vec<u8>>, got: HashMap<Vec<u8>, Gather
                 // crash-loop the whole reactor.
                 MultiOp::Mget => Vec::new(),
             };
-            encode_array_len(&mut out, result.len() as i64);
+            match proto {
+                RespVersion::V2 => encode_array_len(&mut out, result.len() as i64),
+                RespVersion::V3 => encode_set_header(&mut out, result.len() as i64),
+            }
             for m in &result {
                 encode_bulk(&mut out, m);
             }

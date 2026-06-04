@@ -195,10 +195,12 @@ impl<C: Commands> Shard<C> {
     /// `crate::exec`'s slot-bookkeeping internals.
     fn fold_pubsub_reply(&mut self, conn_id: u64, seq: u64, reply: Vec<u8>) {
         if let Some(c) = self.conns.get_mut(&conn_id) {
+            let proto = c.proto;
             c.pending.push_back(crate::message::PendingSlot {
                 remaining: 1,
                 agg: crate::message::Agg::First(None),
                 done: None,
+                proto,
             });
         }
         self.fold(conn_id, seq, crate::message::Part::Reply(reply));

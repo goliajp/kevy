@@ -47,10 +47,12 @@ impl<C: Commands> Shard<C> {
             .collect();
         let remaining = targets.len().max(1) as u32;
         if let Some(c) = self.conns.get_mut(&conn_id) {
+            let proto = c.proto;
             c.pending.push_back(PendingSlot {
                 remaining,
                 agg: Agg::WatchCollect { pairs: Vec::new() },
                 done: None,
+                proto,
             });
         }
         if targets.is_empty() {
@@ -87,6 +89,7 @@ impl<C: Commands> Shard<C> {
                 remaining: 1,
                 agg: Agg::First(None),
                 done: None,
+                proto: c.proto,
             });
         }
         self.fold(conn_id, seq, Part::Reply(b"+OK\r\n".to_vec()));
@@ -137,17 +140,20 @@ impl<C: Commands> Shard<C> {
         let c = self.conns.get_mut(&conn_id)?;
         let header_seq = c.next_seq;
         let base_idx = c.pending.len();
+        let proto = c.proto;
         c.next_seq += 1 + n as u64;
         c.pending.push_back(PendingSlot {
             remaining: 1, // overwritten once we know the group count
             agg: Agg::ExecPrep { dirty: false, queued, header_seq },
             done: None,
+            proto,
         });
         for _ in 0..n {
             c.pending.push_back(PendingSlot {
                 remaining: 1,
                 agg: Agg::First(None),
                 done: None,
+                proto: c.proto,
             });
         }
         Some((header_seq, base_idx))

@@ -38,6 +38,7 @@ impl<C: Commands> Shard<C> {
                 remaining: 1,
                 agg: Agg::First(None),
                 done: None,
+                proto: c.proto,
             });
         }
         self.fold(conn_id, seq, Part::Reply(reply));
@@ -144,6 +145,7 @@ impl<C: Commands> Shard<C> {
                 remaining: 1,
                 agg: Agg::First(None),
                 done: None,
+                proto: c.proto,
             });
         }
         self.fold(conn_id, seq, Part::Reply(reply));
@@ -215,6 +217,7 @@ impl<C: Commands> Shard<C> {
                 remaining: 1,
                 agg: Agg::First(None),
                 done: None,
+                proto: c.proto,
             });
         }
         self.fold(conn_id, seq, Part::Reply(reply));

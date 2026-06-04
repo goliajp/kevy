@@ -206,4 +206,12 @@ pub(crate) struct PendingSlot {
     pub(crate) agg: Agg,
     /// Materialized reply once `remaining == 0`; emitted in seq order.
     pub(crate) done: Option<Vec<u8>>,
+    /// RESP version captured at dispatch time. Cross-shard gathers
+    /// (SINTER / SUNION / SDIFF) materialise on the origin shard long
+    /// after `start_multi` snapped this conn's proto; storing it here
+    /// (vs. re-reading `conn.proto` at fold time) keeps each in-flight
+    /// cmd shaped per the proto it was dispatched under — a HELLO 3
+    /// after `start_multi` doesn't retroactively reshape its reply.
+    /// 1 byte + alignment padding; not on any hot path.
+    pub(crate) proto: RespVersion,
 }

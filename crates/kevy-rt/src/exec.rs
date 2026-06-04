@@ -72,10 +72,12 @@ impl<C: Commands> Shard<C> {
             None => return,
         };
         if let Some(c) = self.conns.get_mut(&conn_id) {
+            let proto = c.proto;
             c.pending.push_back(PendingSlot {
                 remaining: 1,
                 agg: Agg::First(None),
                 done: None,
+                proto,
             });
         }
         self.fold(conn_id, seq, Part::Reply(bytes));
@@ -254,13 +256,17 @@ impl<C: Commands> Shard<C> {
 
     /// Register a `PendingSlot` for `conn_id` waiting on `remaining` parts
     /// to fold via `agg`. Pushed in seq order, so the slot's index is
-    /// `seq - next_emit`.
+    /// `seq - next_emit`. Captures the conn's current `proto` so a
+    /// later `materialize` (run when the last sub-reply lands) shapes
+    /// the bytes per the proto that was in effect at dispatch time.
     fn push_pending_slot(&mut self, conn_id: u64, remaining: u32, agg: Agg, is_quit: bool) {
         if let Some(c) = self.conns.get_mut(&conn_id) {
+            let proto = c.proto;
             c.pending.push_back(PendingSlot {
                 remaining,
                 agg,
                 done: None,
+                proto,
             });
             if is_quit {
                 c.closing = true;
@@ -369,11 +375,12 @@ impl<C: Commands> Shard<C> {
             }
             slot.remaining -= 1;
             if slot.remaining == 0 {
+                let proto = slot.proto;
                 let agg = std::mem::replace(&mut slot.agg, Agg::AllOk);
                 if matches!(agg, Agg::WatchCollect { .. } | Agg::ExecPrep { .. }) {
                     Some(agg)
                 } else {
-                    slot.done = Some(materialize(agg));
+                    slot.done = Some(materialize(agg, proto));
                     drain_front(conn);
                     None
                 }
@@ -392,10 +399,12 @@ impl<C: Commands> Shard<C> {
                 let s = c.next_seq;
                 c.next_seq += 1;
                 c.closing = true;
+                let proto = c.proto;
                 c.pending.push_back(PendingSlot {
                     remaining: 1,
                     agg: Agg::First(None),
                     done: None,
+                    proto,
                 });
                 s
             }
