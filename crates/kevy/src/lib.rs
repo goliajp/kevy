@@ -32,8 +32,10 @@
 //! To run the full server: [`serve`]`(ip, port, nshards, dir, aof)`.
 #![forbid(unsafe_code)]
 
-use kevy_resp::{encode_error, parse_command};
-use kevy_rt::{ArgvView, Commands, ResolvedCmd, Route, Runtime, TxnKind};
+use kevy_resp::{
+    encode_array_len, encode_bulk, encode_error, encode_integer, encode_map_header, parse_command,
+};
+use kevy_rt::{ArgvView, Commands, ResolvedCmd, RespVersion, Route, Runtime, TxnKind};
 use kevy_store::Store;
 use kevy_sys::Socket;
 use std::io;
@@ -73,7 +75,8 @@ impl Commands for KevyCommands {
         };
         let mut buf = [0u8; 32];
         match upper_verb(name, &mut buf) {
-            b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG" | b"HELLO"
+            b"HELLO" => Route::Hello,
+            b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG"
             | b"INFO" | b"CLUSTER" | b"DEBUG" | b"WAIT" | b"SHUTDOWN"
             | b"CLIENT" | b"SELECT" => Route::Local,
             b"DBSIZE" => Route::Dbsize,
@@ -206,6 +209,14 @@ impl Commands for KevyCommands {
         }
     }
 
+    fn hello_reply<A: ArgvView + ?Sized>(
+        &self,
+        args: &A,
+        current_proto: RespVersion,
+    ) -> (RespVersion, Vec<u8>) {
+        kevy_hello_reply(args, current_proto)
+    }
+
     fn is_write<A: ArgvView + ?Sized>(&self, args: &A) -> bool {
         let Some(name) = args.first() else {
             return false;
@@ -257,7 +268,8 @@ impl Commands for KevyCommands {
         let is_write = cmd::is_write_verb(upper);
 
         let route = match upper {
-            b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG" | b"HELLO"
+            b"HELLO" => Route::Hello,
+            b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG"
             | b"INFO" | b"CLUSTER" | b"DEBUG" | b"WAIT" | b"SHUTDOWN"
             | b"CLIENT" | b"SELECT" => Route::Local,
             b"DBSIZE" => Route::Dbsize,
@@ -309,6 +321,67 @@ impl Commands for KevyCommands {
             is_write,
         }
     }
+}
+
+/// Parse the optional `HELLO [protover [AUTH user pass] [SETNAME name]]`
+/// arguments, validate the proto switch request, and emit the right
+/// reply shape (RESP2 array-of-pairs or RESP3 Map) for the resulting
+/// proto. Returns `(new_proto, reply_bytes)` — the runtime applies
+/// `new_proto` to the conn BEFORE folding the reply so a `HELLO 3` ack
+/// itself goes out as a RESP3 Map.
+///
+/// Unsupported proto requests (`HELLO 4`, `HELLO 1`) leave the proto
+/// unchanged + emit `-NOPROTO unsupported protocol version`. AUTH /
+/// SETNAME tails are currently parsed-and-ignored (kevy has no AUTH
+/// and CLIENT SETNAME is already a stub — see scope-decisions.md).
+fn kevy_hello_reply<A: ArgvView + ?Sized>(
+    args: &A,
+    current_proto: RespVersion,
+) -> (RespVersion, Vec<u8>) {
+    let new_proto = match args.get(1) {
+        None => current_proto,
+        Some(b"2") => RespVersion::V2,
+        Some(b"3") => RespVersion::V3,
+        Some(_) => {
+            let mut out = Vec::new();
+            encode_error(
+                &mut out,
+                "NOPROTO unsupported protocol version (kevy supports 2 and 3)",
+            );
+            return (current_proto, out);
+        }
+    };
+    let mut out = Vec::new();
+    encode_hello_reply(&mut out, new_proto);
+    (new_proto, out)
+}
+
+/// Emit the HELLO ack body shaped per `proto`. RESP2: flat
+/// `*14\r\n...` array-of-pairs (kept identical to the pre-v1.4 wire
+/// for backward-compat). RESP3: `%7\r\n...` Map with the same 7 fields.
+fn encode_hello_reply(out: &mut Vec<u8>, proto: RespVersion) {
+    let proto_int = match proto {
+        RespVersion::V2 => 2,
+        RespVersion::V3 => 3,
+    };
+    match proto {
+        RespVersion::V2 => encode_array_len(out, 14),
+        RespVersion::V3 => encode_map_header(out, 7),
+    }
+    encode_bulk(out, b"server");
+    encode_bulk(out, b"kevy");
+    encode_bulk(out, b"version");
+    encode_bulk(out, env!("CARGO_PKG_VERSION").as_bytes());
+    encode_bulk(out, b"proto");
+    encode_integer(out, proto_int);
+    encode_bulk(out, b"id");
+    encode_integer(out, 0);
+    encode_bulk(out, b"mode");
+    encode_bulk(out, b"standalone");
+    encode_bulk(out, b"role");
+    encode_bulk(out, b"master");
+    encode_bulk(out, b"modules");
+    encode_array_len(out, 0);
 }
 
 /// Translate a `kevy_config::EvictionPolicy` (the user-facing TOML enum) into

@@ -9,13 +9,21 @@ use crate::Commands;
 use crate::Route;
 use crate::message::{GatherKind, Gathered, Op, Part};
 use crate::shard::Shard;
+use kevy_resp::RespVersion;
 
 impl<C: Commands> Shard<C> {
     /// Execute one op against this shard's store, logging mutations to the AOF.
     pub(crate) fn exec_op(&mut self, op: Op) -> Part {
         match op {
-            Op::Dispatch(args) => {
-                let reply = self.commands.dispatch(&mut self.store, &args);
+            Op::Dispatch(args, proto) => {
+                // Per-cmd proto picks the reply encoder. V2 hot path
+                // resolves to a single `dispatch` call (the existing
+                // bench-measured path); the V3 arm only fires after a
+                // HELLO 3 negotiation upstream.
+                let reply = match proto {
+                    RespVersion::V2 => self.commands.dispatch(&mut self.store, &args),
+                    RespVersion::V3 => self.commands.dispatch_resp3(&mut self.store, &args),
+                };
                 // Write-side bookkeeping: AOF logging + WATCH version
                 // bump. Both gated on `is_write` so the cache-only path
                 // (no AOF + no WATCH-ed keys) pays nothing beyond one

@@ -115,8 +115,8 @@ impl<C: Commands> Shard<C> {
                     // origin.
                     Inbound::RequestBatch { origin, reqs } => {
                         let mut resps = Vec::with_capacity(reqs.len());
-                        for (conn, seq, argv) in reqs {
-                            let part = self.exec_op(Op::Dispatch(argv));
+                        for (conn, seq, argv, proto) in reqs {
+                            let part = self.exec_op(Op::Dispatch(argv, proto));
                             resps.push((conn, seq, part));
                         }
                         self.send_to(origin, Inbound::ResponseBatch(resps));

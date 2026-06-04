@@ -10,7 +10,7 @@ use crate::message::{Agg, Inbound, Op, Part, PendingSlot};
 use crate::reduce::{drain_front, materialize, shard_of};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route, TxnKind};
-use kevy_resp::{ArgvView, encode_array_len};
+use kevy_resp::{ArgvView, RespVersion, encode_array_len};
 
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
@@ -126,6 +126,7 @@ impl<C: Commands> Shard<C> {
             Route::Publish => self.do_publish(conn_id, seq, args),
             Route::Watch => self.do_watch(conn_id, seq, args),
             Route::Unwatch => self.do_unwatch(conn_id, seq),
+            Route::Hello => self.do_hello(conn_id, seq, args),
             Route::Local => {
                 self.start_single(conn_id, seq, args, self.id, is_quit, is_write);
             }
@@ -159,21 +160,26 @@ impl<C: Commands> Shard<C> {
         is_quit: bool,
         is_write: bool,
     ) {
+        // Per-conn proto rides with each cmd (not the conn) so a V2 + V3
+        // mix on the same owning shard each gets the right reply shape.
+        // 1-byte enum copy; RESP2 client's default V2 makes every `match
+        // proto` downstream a predicted no-branch.
+        let proto = self.conns.get(&conn_id).map_or(RespVersion::V2, |c| c.proto);
         // In-order local fast path: `seq == next_emit` and no prior cmd is
         // pending, so write straight to the conn's output and return.
-        if shard == self.id && self.try_inline_local(conn_id, args, is_quit, is_write) {
+        if shard == self.id && self.try_inline_local(conn_id, args, is_quit, is_write, proto) {
             return;
         }
         self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
         if shard == self.id {
             // Local-but-not-fast-path: only here we need an owned Argv to
             // hand to exec_op via Op::Dispatch.
-            let part = self.exec_op(Op::Dispatch(args.to_argv()));
+            let part = self.exec_op(Op::Dispatch(args.to_argv(), proto));
             self.fold(conn_id, seq, part);
         } else {
             // Cross-shard forward: materialise owned at the handoff. The
             // -c50 single-shard hot path never reaches here.
-            self.request_batch[shard].push((conn_id, seq, args.to_argv()));
+            self.request_batch[shard].push((conn_id, seq, args.to_argv(), proto));
         }
     }
 
@@ -188,14 +194,24 @@ impl<C: Commands> Shard<C> {
         args: &A,
         is_quit: bool,
         is_write: bool,
+        proto: RespVersion,
     ) -> bool {
         let Some(conn) = self.conns.get_mut(&conn_id) else { return false };
         if !conn.pending.is_empty() {
             return false;
         }
         // Disjoint field borrows: commands / store / conn.output.
-        self.commands
-            .dispatch_into(&mut self.store, args, &mut conn.output);
+        // Branch on per-conn proto. V2 is the default + the hot path the
+        // current bench numbers measure; the V3 arm only fires after a
+        // HELLO 3 negotiation, so V2 cmovne sees ~0 measurable cost.
+        match proto {
+            RespVersion::V2 => self
+                .commands
+                .dispatch_into(&mut self.store, args, &mut conn.output),
+            RespVersion::V3 => self
+                .commands
+                .dispatch_into_resp3(&mut self.store, args, &mut conn.output),
+        }
         conn.next_emit += 1;
         if is_quit {
             conn.closing = true;
@@ -261,13 +277,13 @@ impl<C: Commands> Shard<C> {
             if shard == self.id {
                 let part = self.exec_op(op);
                 self.fold(conn_id, seq, part);
-            } else if let Op::Dispatch(argv) = op {
+            } else if let Op::Dispatch(argv, proto) = op {
                 // Single-key command for a peer shard: batch it into one
                 // cross-core send per target (flushed by `flush_requests`),
                 // instead of one `Inbound::Request` per command. This is the
                 // hot -c50 path; the ring/fold tax is what drags many shards
                 // below single-shard throughput.
-                self.request_batch[shard].push((conn_id, seq, argv));
+                self.request_batch[shard].push((conn_id, seq, argv, proto));
             } else {
                 // Multi-key ops (Del/MSet/Gather/…) keep the unbatched path.
                 self.send_to(

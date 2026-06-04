@@ -20,7 +20,7 @@ use crate::message::{Agg, Inbound, Op, Part, PendingSlot};
 use crate::reduce::{drain_front, shard_of};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route};
-use kevy_resp::{Argv, ArgvView, encode_array_len};
+use kevy_resp::{Argv, ArgvView, RespVersion, encode_array_len};
 use std::collections::HashMap;
 
 impl<C: Commands> Shard<C> {
@@ -294,10 +294,11 @@ impl<C: Commands> Shard<C> {
             | Route::Psubscribe
             | Route::Punsubscribe
             | Route::Publish
-            | Route::Watch => self.fill_placeholder(
+            | Route::Watch
+            | Route::Hello => self.fill_placeholder(
                 conn_id,
                 seq,
-                b"-ERR pub/sub or WATCH not allowed inside MULTI\r\n".to_vec(),
+                b"-ERR pub/sub or WATCH or HELLO not allowed inside MULTI\r\n".to_vec(),
             ),
             Route::Local => {
                 self.start_single_at_seq(conn_id, seq, args, self.id, is_quit, is_write)
@@ -334,19 +335,24 @@ impl<C: Commands> Shard<C> {
         is_quit: bool,
         is_write: bool,
     ) {
+        // EXEC's queued cmds inherit the conn's proto at execution time
+        // (the proto is captured per-cmd via Op::Dispatch). If the conn
+        // negotiated HELLO 3 before MULTI / between QUEUED frames, the
+        // queued cmds also emit RESP3 shapes.
+        let proto = self.conns.get(&conn_id).map_or(RespVersion::V2, |c| c.proto);
         if is_quit
             && let Some(c) = self.conns.get_mut(&conn_id)
         {
             c.closing = true;
         }
         if shard == self.id {
-            let part = self.exec_op(Op::Dispatch(args.to_argv()));
+            let part = self.exec_op(Op::Dispatch(args.to_argv(), proto));
             self.fold(conn_id, seq, part);
             // AOF logging happens inside `exec_op` for `Op::Dispatch`
             // (gated on `is_write`); the `is_write` arg here is unused.
             let _ = is_write;
         } else {
-            self.request_batch[shard].push((conn_id, seq, args.to_argv()));
+            self.request_batch[shard].push((conn_id, seq, args.to_argv(), proto));
         }
     }
 

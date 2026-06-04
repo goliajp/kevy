@@ -42,7 +42,8 @@ impl<C: Commands> Shard<C> {
             | Route::Punsubscribe
             | Route::Publish
             | Route::Watch
-            | Route::Unwatch => {
+            | Route::Unwatch
+            | Route::Hello => {
                 eprintln!(
                     "kevy WARN: build_multi_targets reached conn-level route {route:?} \
                      — routing bug; replying nil to the client"
