@@ -27,6 +27,7 @@
 mod apply;
 mod lex;
 mod parse;
+mod preserve;
 mod schema;
 mod size;
 
