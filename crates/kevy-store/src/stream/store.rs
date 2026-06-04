@@ -4,7 +4,10 @@
 //! `StreamId` types + entry-side ops) so each file stays under the
 //! project's ≤500-LOC rule.
 
-use super::{StreamData, StreamId, XAddIdSpec};
+use super::group::{AutoclaimResult, ReadGroupId};
+use super::{
+    GroupCreateMode, PendingExtended, PendingSummary, StreamData, StreamId, XAddIdSpec, XClaimOpts,
+};
 use crate::value::*;
 use crate::{Entry, Store, StoreError};
 
@@ -171,5 +174,220 @@ impl Store {
             self.reweigh_entry(key);
         }
         Ok(n as u64)
+    }
+
+    // ─────── consumer-group surface (sprint B) ───────
+
+    /// `XGROUP CREATE key group <id|$> [MKSTREAM]`. Returns `Ok(true)`
+    /// when a fresh group was added; `Ok(false)` if the group already
+    /// existed (caller emits `-BUSYGROUP`). `mkstream` matches Redis:
+    /// auto-create the stream key when missing.
+    pub fn xgroup_create(
+        &mut self,
+        key: &[u8],
+        group: &[u8],
+        mode: GroupCreateMode,
+        mkstream: bool,
+    ) -> Result<bool, StoreError> {
+        let exists = self.live_entry(key).is_some();
+        if !exists && !mkstream {
+            return Err(StoreError::NoSuchKey);
+        }
+        let s = self.stream_mut(key, true)?.expect("created");
+        let created = s.group_create(group, mode)?;
+        self.bump_if_watched(key);
+        self.reweigh_entry(key);
+        Ok(created)
+    }
+
+    /// `XGROUP DESTROY key group`. Returns `true` if a group was dropped.
+    pub fn xgroup_destroy(&mut self, key: &[u8], group: &[u8]) -> Result<bool, StoreError> {
+        let dropped;
+        {
+            let Some(s) = self.stream_mut(key, false)? else {
+                return Ok(false);
+            };
+            dropped = s.group_destroy(group);
+        }
+        if dropped {
+            self.bump_if_watched(key);
+            self.reweigh_entry(key);
+        }
+        Ok(dropped)
+    }
+
+    /// `XGROUP SETID key group <id|$>`.
+    pub fn xgroup_setid(
+        &mut self,
+        key: &[u8],
+        group: &[u8],
+        mode: GroupCreateMode,
+    ) -> Result<bool, StoreError> {
+        let touched;
+        {
+            let Some(s) = self.stream_mut(key, false)? else {
+                return Ok(false);
+            };
+            touched = s.group_setid(group, mode);
+        }
+        if touched {
+            self.bump_if_watched(key);
+        }
+        Ok(touched)
+    }
+
+    /// `XGROUP CREATECONSUMER key group consumer`.
+    pub fn xgroup_create_consumer(
+        &mut self,
+        key: &[u8],
+        group: &[u8],
+        consumer: &[u8],
+        now_ms: u64,
+    ) -> Result<bool, StoreError> {
+        let Some(s) = self.stream_mut(key, false)? else {
+            return Ok(false);
+        };
+        Ok(s.group_create_consumer(group, consumer, now_ms))
+    }
+
+    /// `XGROUP DELCONSUMER key group consumer`. Returns dropped PEL count.
+    pub fn xgroup_del_consumer(
+        &mut self,
+        key: &[u8],
+        group: &[u8],
+        consumer: &[u8],
+    ) -> Result<u64, StoreError> {
+        let Some(s) = self.stream_mut(key, false)? else {
+            return Ok(0);
+        };
+        Ok(s.group_del_consumer(group, consumer))
+    }
+
+    /// `XREADGROUP GROUP g c [COUNT n] [NOACK] STREAMS key id`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn xreadgroup(
+        &mut self,
+        key: &[u8],
+        group: &[u8],
+        consumer: &[u8],
+        last_seen: ReadGroupId,
+        count: Option<usize>,
+        noack: bool,
+        now_ms: u64,
+    ) -> Result<EntryBatch, StoreError> {
+        let result;
+        {
+            let Some(s) = self.stream_mut(key, false)? else {
+                return Err(StoreError::NoSuchKey);
+            };
+            result = s.readgroup(group, consumer, last_seen, count, noack, now_ms)?;
+        }
+        if !result.is_empty() {
+            self.bump_if_watched(key);
+        }
+        Ok(result)
+    }
+
+    /// `XACK key group id [id ...]`. Returns count of PEL removals.
+    pub fn xack(&mut self, key: &[u8], group: &[u8], ids: &[StreamId]) -> Result<u64, StoreError> {
+        let n;
+        {
+            let Some(s) = self.stream_mut(key, false)? else {
+                return Ok(0);
+            };
+            n = s.ack(group, ids);
+        }
+        if n > 0 {
+            self.bump_if_watched(key);
+        }
+        Ok(n)
+    }
+
+    /// `XPENDING key group` — summary form.
+    pub fn xpending_summary(
+        &mut self,
+        key: &[u8],
+        group: &[u8],
+    ) -> Result<Option<PendingSummary>, StoreError> {
+        Ok(self.stream_ref(key)?.and_then(|s| s.pending_summary(group)))
+    }
+
+    /// `XPENDING key group [IDLE ms] start end count [consumer]` —
+    /// extended form.
+    #[allow(clippy::too_many_arguments)]
+    pub fn xpending_extended(
+        &mut self,
+        key: &[u8],
+        group: &[u8],
+        idle_min_ms: Option<u64>,
+        start: StreamId,
+        end: StreamId,
+        count: usize,
+        consumer_filter: Option<&[u8]>,
+        now_ms: u64,
+    ) -> Result<Option<PendingExtended>, StoreError> {
+        Ok(self.stream_ref(key)?.and_then(|s| {
+            s.pending_extended(group, idle_min_ms, start, end, count, consumer_filter, now_ms)
+        }))
+    }
+
+    /// `XCLAIM key group consumer min-idle-ms id [id ...] [...]`.
+    /// Returns the (id, field-value) pairs successfully claimed —
+    /// dispatcher trims to ID-only when `JUSTID` is set.
+    pub fn xclaim(
+        &mut self,
+        key: &[u8],
+        group: &[u8],
+        new_owner: &[u8],
+        ids: &[StreamId],
+        opts: &XClaimOpts,
+        now_ms: u64,
+    ) -> Result<EntryBatch, StoreError> {
+        let claimed;
+        let payloads;
+        {
+            let Some(s) = self.stream_mut(key, false)? else {
+                return Err(StoreError::NoSuchKey);
+            };
+            claimed = s.claim(group, new_owner, ids, opts, now_ms)?;
+            payloads = s.payloads_for(&claimed);
+        }
+        if !claimed.is_empty() {
+            self.bump_if_watched(key);
+        }
+        Ok(payloads)
+    }
+
+    /// `XAUTOCLAIM key group consumer min-idle-ms start [COUNT n]
+    /// [JUSTID]`. Returns the cursor + claimed payloads + deleted IDs.
+    #[allow(clippy::too_many_arguments)]
+    pub fn xautoclaim(
+        &mut self,
+        key: &[u8],
+        group: &[u8],
+        new_owner: &[u8],
+        min_idle_ms: u64,
+        start: StreamId,
+        count: usize,
+        justid: bool,
+        now_ms: u64,
+    ) -> Result<(StreamId, EntryBatch, Vec<StreamId>), StoreError> {
+        let payloads;
+        let next_cursor;
+        let deleted_ids;
+        {
+            let Some(s) = self.stream_mut(key, false)? else {
+                return Err(StoreError::NoSuchKey);
+            };
+            let AutoclaimResult { next_cursor: nc, claimed_ids, deleted_ids: di } =
+                s.autoclaim(group, new_owner, min_idle_ms, start, count, justid, now_ms)?;
+            payloads = s.payloads_for(&claimed_ids);
+            next_cursor = nc;
+            deleted_ids = di;
+        }
+        if !payloads.is_empty() {
+            self.bump_if_watched(key);
+        }
+        Ok((next_cursor, payloads, deleted_ids))
     }
 }

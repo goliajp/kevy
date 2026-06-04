@@ -1,8 +1,16 @@
 //! `XADD` / `XLEN` / `XRANGE` / `XREVRANGE` / `XDEL` / `XTRIM` /
-//! `XREAD` — sprint A of the Redis Streams family. Bare streams, no
-//! consumer groups (sprint B), no blocking reads (sprint D). Layered on
-//! the new `kevy_store::StreamData` value variant; no other store
-//! type is touched.
+//! `XREAD` + the consumer-group family (`XGROUP` / `XREADGROUP` /
+//! `XACK` / `XPENDING` / `XCLAIM` / `XAUTOCLAIM`) — v2-7 sprints A
+//! (basics) and B (groups). XINFO + blocking reads land in sprints C
+//! and D respectively. Backed by `kevy_store::StreamData` — no new
+//! store value variant.
+//!
+//! Sub-modules:
+//! - `mod.rs` (this file) — dispatch entry + sprint A commands.
+//! - `group.rs` — sprint B (consumer-group commands).
+
+mod claim;
+mod group;
 
 use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
@@ -14,7 +22,7 @@ use kevy_store::{
 
 /// One stream's reply payload — the wire shape `XREAD` emits per
 /// stream (key + entries).
-type StreamReply = (Vec<u8>, EntryBatch);
+pub(super) type StreamReply = (Vec<u8>, EntryBatch);
 
 use crate::cmd::{store_err, wrong_args};
 
@@ -34,6 +42,12 @@ pub(crate) fn dispatch_stream<A: ArgvView + ?Sized>(
         b"XDEL" => cmd_xdel(store, args, out),
         b"XTRIM" => cmd_xtrim(store, args, out),
         b"XREAD" => cmd_xread(store, args, out),
+        b"XGROUP" => group::cmd_xgroup(store, args, out),
+        b"XREADGROUP" => group::cmd_xreadgroup(store, args, out),
+        b"XACK" => group::cmd_xack(store, args, out),
+        b"XPENDING" => group::cmd_xpending(store, args, out),
+        b"XCLAIM" => claim::cmd_xclaim(store, args, out),
+        b"XAUTOCLAIM" => claim::cmd_xautoclaim(store, args, out),
         _ => return false,
     }
     true
@@ -391,7 +405,7 @@ fn parse_xread_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XReadParsed, &'sta
 
 // ───────────── reply emitters ─────────────
 
-fn emit_entries(out: &mut Vec<u8>, entries: &EntryBatch) {
+pub(super) fn emit_entries(out: &mut Vec<u8>, entries: &EntryBatch) {
     encode_array_len(out, entries.len() as i64);
     for (id, fv) in entries {
         encode_array_len(out, 2);
