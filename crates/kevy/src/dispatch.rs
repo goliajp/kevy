@@ -8,9 +8,10 @@
 
 use crate::cmd::*;
 use kevy_resp::{
-    ArgvView, encode_bulk, encode_error, encode_integer, encode_null_bulk, encode_simple_string,
+    ArgvView, encode_bulk, encode_double, encode_error, encode_integer, encode_map_header,
+    encode_null, encode_null_bulk, encode_set_header, encode_simple_string,
 };
-use kevy_store::Store;
+use kevy_store::{Store, StoreError};
 
 /// Map one command to its RESP reply bytes.
 pub fn dispatch<A: ArgvView + ?Sized>(store: &mut Store, args: &A) -> Vec<u8> {
@@ -23,6 +24,31 @@ pub fn dispatch<A: ArgvView + ?Sized>(store: &mut Store, args: &A) -> Vec<u8> {
 /// caller (the in-order local fast path) write the reply straight into the
 /// connection's output buffer — no per-command reply `Vec` alloc, no copy.
 pub fn dispatch_into<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+    dispatch_with_proto(store, args, out, false);
+}
+
+/// RESP3 variant — same OOM bracketing + same V2 body for unmigrated
+/// commands; differs only in that a handful of commands
+/// (HGETALL → Map, ZSCORE/ZINCRBY → Double, SMEMBERS → Set, …) get a
+/// RESP3-shape override before the V2 fallback runs. Pure additive:
+/// every V2 reply that hasn't been migrated yet still goes out
+/// byte-for-byte identical.
+pub fn dispatch_into_resp3<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+    dispatch_with_proto(store, args, out, true);
+}
+
+/// Shared body: parse verb, OOM-precheck, try the (V3-or-V2) override
+/// chain, fall through to the unknown-command error. The `proto_v3`
+/// flag picks ONE extra match arm (the RESP3 override) before the
+/// existing V2 chain — it doesn't touch the V2 hot path's instruction
+/// stream when `proto_v3 == false` (the cmovne is predicted on every
+/// pre-HELLO-3 conn).
+fn dispatch_with_proto<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+    proto_v3: bool,
+) {
     let Some(name) = args.first() else {
         encode_error(out, "ERR empty command");
         return;
@@ -40,7 +66,8 @@ pub fn dispatch_into<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mu
         encode_error(out, OOM_ERR);
         return;
     }
-    let handled = dispatch_conn(cmd, args, out)
+    let handled = (proto_v3 && try_resp3_overrides(cmd, store, args, out))
+        || dispatch_conn(cmd, args, out)
         || crate::ops::dispatch_ops(cmd, store, args, out)
         || dispatch_string(cmd, store, args, out)
         || crate::dispatch_collections::dispatch_hash(cmd, store, args, out)
@@ -59,6 +86,106 @@ pub fn dispatch_into<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mu
     // when the just-finished command actually pushed us over.
     if is_grow {
         store.try_evict_after_write();
+    }
+}
+
+/// RESP3-shape replies for the commands whose `dispatch_into` output
+/// differs from the V2 form. Returns `true` if the cmd matched + the
+/// reply was emitted (so the caller skips the V2 chain).
+///
+/// Adding a new override here is the P3-style migration point: each
+/// arm is a 1:1 swap from a V2 helper to a RESP3 helper (Map / Set /
+/// Double / Verbatim / …). All other commands keep their V2 wire on
+/// RESP3 conns until they get an override — spec-legal gradual
+/// migration.
+fn try_resp3_overrides<A: ArgvView + ?Sized>(
+    cmd: &[u8],
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) -> bool {
+    match cmd {
+        b"HGETALL" => {
+            if args.len() != 2 {
+                wrong_args(out, "hgetall");
+            } else {
+                emit_hash_map_resp3(store.hgetall(&args[1]), out);
+            }
+            true
+        }
+        b"ZSCORE" => {
+            if args.len() != 3 {
+                wrong_args(out, "zscore");
+            } else {
+                emit_zscore_resp3(store.zscore(&args[1], &args[2]), out);
+            }
+            true
+        }
+        b"ZINCRBY" => {
+            if args.len() != 4 {
+                wrong_args(out, "zincrby");
+            } else if let Some(incr) = arg_f64(&args[2]) {
+                emit_zincrby_resp3(store.zincrby(&args[1], incr, &args[3]), out);
+            } else {
+                encode_error(out, "ERR value is not a valid float");
+            }
+            true
+        }
+        b"SMEMBERS" => {
+            if args.len() != 2 {
+                wrong_args(out, "smembers");
+            } else {
+                emit_set_resp3(store.smembers(&args[1]), out);
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// `HGETALL` over RESP3: flat `[k, v, k, v, ...]` shape from the store
+/// becomes a `%N` Map header + N (k, v) pairs.
+fn emit_hash_map_resp3(res: Result<Vec<Vec<u8>>, StoreError>, out: &mut Vec<u8>) {
+    match res {
+        Ok(flat) => {
+            let pairs = flat.len() / 2;
+            encode_map_header(out, pairs as i64);
+            for v in &flat {
+                encode_bulk(out, v);
+            }
+        }
+        Err(e) => store_err(out, e),
+    }
+}
+
+/// `SMEMBERS` over RESP3: array of bulk strings becomes a `~N` Set header.
+fn emit_set_resp3(res: Result<Vec<Vec<u8>>, StoreError>, out: &mut Vec<u8>) {
+    match res {
+        Ok(items) => {
+            encode_set_header(out, items.len() as i64);
+            for v in &items {
+                encode_bulk(out, v);
+            }
+        }
+        Err(e) => store_err(out, e),
+    }
+}
+
+/// `ZSCORE` over RESP3: `Some(f)` → `,<f>\r\n` Double; `None` →
+/// `_\r\n` RESP3 Null (vs the RESP2 `$-1\r\n` nil bulk).
+fn emit_zscore_resp3(res: Result<Option<f64>, StoreError>, out: &mut Vec<u8>) {
+    match res {
+        Ok(Some(sc)) => encode_double(out, sc),
+        Ok(None) => encode_null(out),
+        Err(e) => store_err(out, e),
+    }
+}
+
+/// `ZINCRBY` over RESP3: new score → Double (RESP2 emitted bulk).
+fn emit_zincrby_resp3(res: Result<f64, StoreError>, out: &mut Vec<u8>) {
+    match res {
+        Ok(sc) => encode_double(out, sc),
+        Err(e) => store_err(out, e),
     }
 }
 
