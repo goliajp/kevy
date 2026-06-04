@@ -162,6 +162,20 @@ fn try_resp3_overrides<A: ArgvView + ?Sized>(
             cmd_zrangebyscore(store, args, out, RespVersion::V3);
             true
         }
+        // RESP3 carries multi-line text replies as Verbatim strings
+        // (`=N\r\ntxt:<body>\r\n`) so the client knows the body is
+        // human-readable text (no JSON / table parsing). V2 stays as
+        // plain bulk. INFO and CLIENT INFO / LIST are the kevy verbs
+        // whose body is unambiguously text.
+        b"INFO" => {
+            let cfg = crate::config_global::get();
+            crate::ops::cmd_info(&cfg, store, args, out, RespVersion::V3);
+            true
+        }
+        b"CLIENT" => {
+            crate::ops::client::cmd_client(args, out, RespVersion::V3);
+            true
+        }
         _ => false,
     }
 }

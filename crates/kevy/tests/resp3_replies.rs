@@ -379,6 +379,55 @@ fn zrangebyscore_withscores_returns_nested_array_on_resp3() {
 }
 
 #[test]
+fn info_and_client_info_use_verbatim_on_resp3() {
+    // V2: bulk string `$<len>\r\n<body>\r\n`.
+    // V3: Verbatim string `=<len>\r\ntxt:<body>\r\n` so the client
+    // knows it's plain text (`txt` 3-char fmt tag is RESP3 spec).
+    let srv = Server::start(1);
+
+    // V2 INFO: leading byte is `$` (bulk).
+    let mut v2 = srv.connect();
+    v2.write_all(&req(&[b"INFO", b"server"])).unwrap();
+    let mut head = [0u8; 1];
+    v2.read_exact(&mut head).unwrap();
+    assert_eq!(head[0], b'$', "V2 INFO must stay bulk-string-shaped");
+    // Drain the body line + payload.
+    let mut sink = vec![0u8; 4096];
+    let _ = v2.read(&mut sink).unwrap();
+
+    // V3 INFO: leading byte is `=` (verbatim).
+    let mut v3 = srv.v3_conn();
+    v3.write_all(&req(&[b"INFO", b"server"])).unwrap();
+    v3.read_exact(&mut head).unwrap();
+    assert_eq!(head[0], b'=', "V3 INFO must use Verbatim string");
+    // Drain rest.
+    let mut sink = vec![0u8; 4096];
+    let n = v3.read(&mut sink).unwrap();
+    // The body must start with `<len>\r\ntxt:` per RESP3 verbatim wire.
+    let s = &sink[..n];
+    let crlf = s.iter().position(|&b| b == b'\n').unwrap();
+    assert!(
+        s[crlf + 1..crlf + 5] == *b"txt:",
+        "V3 INFO body must start with `txt:` fmt tag, got {:?}",
+        String::from_utf8_lossy(&s[crlf + 1..crlf + 16])
+    );
+
+    // CLIENT INFO same shape change.
+    let mut v3 = srv.v3_conn();
+    v3.write_all(&req(&[b"CLIENT", b"INFO"])).unwrap();
+    let mut head = [0u8; 1];
+    v3.read_exact(&mut head).unwrap();
+    assert_eq!(head[0], b'=', "V3 CLIENT INFO must use Verbatim string");
+
+    // CLIENT LIST same shape change.
+    let mut v3 = srv.v3_conn();
+    v3.write_all(&req(&[b"CLIENT", b"LIST"])).unwrap();
+    let mut head = [0u8; 1];
+    v3.read_exact(&mut head).unwrap();
+    assert_eq!(head[0], b'=', "V3 CLIENT LIST must use Verbatim string");
+}
+
+#[test]
 fn v2_wire_byte_for_byte_unchanged_after_resp3_migration() {
     // Critical guardrail: every V2 cmd test in the existing suite
     // (sharded.rs, cmd_matrix.rs, commands.rs) already asserts the

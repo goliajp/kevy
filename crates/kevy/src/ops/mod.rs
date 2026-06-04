@@ -10,7 +10,7 @@
 //! Subcommand-heavy verbs (currently `CONFIG`) live in submodules to
 //! keep file size in line with the project's ≤ 500 LOC rule.
 
-mod client;
+pub(crate) mod client;
 pub(crate) mod config;
 mod memory;
 
@@ -19,6 +19,7 @@ use std::time::SystemTime;
 use kevy_config::Config;
 use kevy_resp::{
     ArgvView, RespVersion, encode_bulk, encode_error, encode_integer, encode_simple_string,
+    encode_verbatim,
 };
 use kevy_store::Store;
 
@@ -34,13 +35,13 @@ pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
 ) -> bool {
     let cfg = config_global::get();
     match cmd {
-        b"INFO" => cmd_info(&cfg, store, args, out),
+        b"INFO" => cmd_info(&cfg, store, args, out, RespVersion::V2),
         b"CLUSTER" => cmd_cluster(args, out),
         b"DEBUG" => cmd_debug(args, out),
         b"WAIT" => cmd_wait(args, out),
         b"SHUTDOWN" => cmd_shutdown(args, out),
         b"CONFIG" => config::cmd_config(&cfg, args, out, RespVersion::V2),
-        b"CLIENT" => client::cmd_client(args, out),
+        b"CLIENT" => client::cmd_client(args, out, RespVersion::V2),
         b"MEMORY" => memory::cmd_memory(&cfg, store, args, out),
         _ => return false,
     }
@@ -49,7 +50,13 @@ pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
 
 // ───────────── INFO ─────────────
 
-fn cmd_info<A: ArgvView + ?Sized>(cfg: &Config, store: &Store, args: &A, out: &mut Vec<u8>) {
+pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
+    cfg: &Config,
+    store: &Store,
+    args: &A,
+    out: &mut Vec<u8>,
+    proto: RespVersion,
+) {
     // INFO [section]; we always emit the requested section (or all when
     // none / "default" / "all" / "everything" is requested).
     let section = args.get(1).map(|a| a.to_ascii_lowercase());
@@ -79,7 +86,13 @@ fn cmd_info<A: ArgvView + ?Sized>(cfg: &Config, store: &Store, args: &A, out: &m
     if want_section(want, "keyspace") {
         info_keyspace(&mut body);
     }
-    encode_bulk(out, body.as_bytes());
+    // RESP3: Verbatim text frame (`=N\r\ntxt:<body>\r\n`) so the
+    // client can render it as plain text (e.g. redis-cli prints it
+    // unchanged). RESP2 stays as a length-prefixed bulk.
+    match proto {
+        RespVersion::V2 => encode_bulk(out, body.as_bytes()),
+        RespVersion::V3 => encode_verbatim(out, *b"txt", body.as_bytes()),
+    }
 }
 
 fn want_section(want: Option<&[u8]>, name: &str) -> bool {

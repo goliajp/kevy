@@ -11,11 +11,18 @@
 //! scenarios these stubs cover the 95% case where a client calls
 //! CLIENT once at handshake and never inspects.
 
-use kevy_resp::{ArgvView, encode_bulk, encode_error, encode_integer, encode_simple_string};
+use kevy_resp::{
+    ArgvView, RespVersion, encode_bulk, encode_error, encode_integer, encode_simple_string,
+    encode_verbatim,
+};
 
 use super::wrong_args;
 
-pub(super) fn cmd_client<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+pub(crate) fn cmd_client<A: ArgvView + ?Sized>(
+    args: &A,
+    out: &mut Vec<u8>,
+    proto: RespVersion,
+) {
     let sub = match args.get(1) {
         Some(s) => s.to_ascii_uppercase(),
         None => return wrong_args(out, "client"),
@@ -49,7 +56,7 @@ pub(super) fn cmd_client<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
                         multi-mem=0 tot-mem=0 rbs=0 rbp=0 obl=0 oll=0 omem=0 \
                         events=r cmd=client|list user=default redir=-1 \
                         resp=2 lib-name= lib-ver=\n";
-            encode_bulk(out, body.as_bytes());
+            emit_client_text(out, body.as_bytes(), proto);
         }
         // KILL: zero connections actually killed (stub).
         b"KILL" => encode_integer(out, 0),
@@ -58,7 +65,7 @@ pub(super) fn cmd_client<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
             let body = "id=1 addr=127.0.0.1:0 laddr=127.0.0.1:0 fd=0 name= \
                         age=0 idle=0 flags=N db=0 sub=0 psub=0 ssub=0 \
                         multi=-1 cmd=client|info user=default resp=2";
-            encode_bulk(out, body.as_bytes());
+            emit_client_text(out, body.as_bytes(), proto);
         }
         // NO-EVICT: accept; v1.0 has no eviction so this is trivially honored.
         b"NO-EVICT" => encode_simple_string(out, "OK"),
@@ -74,6 +81,17 @@ pub(super) fn cmd_client<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     }
 }
 
+/// `CLIENT LIST` / `CLIENT INFO` reply body — V2 wraps it in a bulk
+/// string (Redis legacy); V3 wraps it in a Verbatim string tagged
+/// `txt:` so a RESP3 client knows to render it as plain text without
+/// quoting / escaping. Body bytes are identical.
+fn emit_client_text(out: &mut Vec<u8>, body: &[u8], proto: RespVersion) {
+    match proto {
+        RespVersion::V2 => encode_bulk(out, body),
+        RespVersion::V3 => encode_verbatim(out, *b"txt", body),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,7 +104,7 @@ mod tests {
             a.push(r);
         }
         let mut out = Vec::new();
-        cmd_client(&a, &mut out);
+        cmd_client(&a, &mut out, RespVersion::V2);
         out
     }
 
