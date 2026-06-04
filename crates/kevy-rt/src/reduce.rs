@@ -40,6 +40,9 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> Vec<u8> {
         }
         Agg::Gather { op, keys, got } => finalize_gather(op, keys, got, proto),
         Agg::Keys { shape, acc } => finalize_keys(shape, acc),
+        Agg::SlowlogGet { count, entries } => {
+            crate::exec_slowlog::encode_slowlog_get(count, entries)
+        }
         // WatchCollect / ExecPrep / RenameOrchestrator carry conn-
         // state mutations that pure materialise() can't express;
         // `Shard::fold` routes them to `finalize_watch_agg` (Watch /

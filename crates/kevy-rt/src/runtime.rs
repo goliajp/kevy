@@ -49,6 +49,10 @@ pub struct Runtime<C: Commands> {
     /// Wall-clock-read throttle for the tick check (TTL reaper / live
     /// config refresh / auto-AOF-rewrite).
     tick_check_every: u32,
+    /// `[slowlog].slower_than_micros`. Defaults match Redis (10 ms).
+    slowlog_slower_than_micros: i64,
+    /// `[slowlog].max_len`. Per-shard cap.
+    slowlog_max_len: u32,
 }
 
 impl<C: Commands> Runtime<C> {
@@ -67,7 +71,19 @@ impl<C: Commands> Runtime<C> {
             spin_limit: 256,
             park_timeout_ms: 50,
             tick_check_every: 256,
+            slowlog_slower_than_micros: 10_000,
+            slowlog_max_len: 128,
         }
+    }
+
+    /// SLOWLOG tuning (`[slowlog]` config section). Defaults: record any
+    /// command slower than 10 ms (`10_000` µs), keep the most-recent 128
+    /// entries per shard. Pass `slower_than_micros = -1` to disable
+    /// (zero hot-path cost — no `Instant::now()` taken).
+    pub fn with_slowlog(mut self, slower_than_micros: i64, max_len: u32) -> Self {
+        self.slowlog_slower_than_micros = slower_than_micros;
+        self.slowlog_max_len = max_len;
+        self
     }
 
     /// Reactor tuning knobs (`[advanced]` config section). Defaults
@@ -204,6 +220,10 @@ impl<C: Commands> Runtime<C> {
                 // we clamp to i32::MAX, far above any sane park-timeout.
                 park_timeout_ms: self.park_timeout_ms.min(i32::MAX as u32) as i32,
                 tick_check_every: self.tick_check_every,
+                slowlog: crate::exec_slowlog::SlowlogState::new(
+                    self.slowlog_slower_than_micros,
+                    self.slowlog_max_len,
+                ),
             });
         }
 

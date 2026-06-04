@@ -23,6 +23,7 @@ impl Config {
             "log" => self.apply_log(item),
             "notification" => self.apply_notification(item),
             "advanced" => self.apply_advanced(item),
+            "slowlog" => self.apply_slowlog(item),
             other => Err(schema_err(&item, format!("unknown section [{other}]"))),
         }
     }
@@ -126,6 +127,15 @@ impl Config {
             "tick_check_every" => self.advanced.tick_check_every = value_as_u32(&item)?,
             "ring_capacity" => self.advanced.ring_capacity = value_as_usize(&item)?,
             k => return Err(schema_err(&item, format!("unknown [advanced] key: {k}"))),
+        }
+        Ok(())
+    }
+
+    fn apply_slowlog(&mut self, item: Item) -> Result<(), ConfigError> {
+        match item.key.as_str() {
+            "slower_than_micros" => self.slowlog.slower_than_micros = value_as_i64(&item)?,
+            "max_len" => self.slowlog.max_len = value_as_u32(&item)?,
+            k => return Err(schema_err(&item, format!("unknown [slowlog] key: {k}"))),
         }
         Ok(())
     }

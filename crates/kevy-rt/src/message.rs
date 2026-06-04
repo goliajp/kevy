@@ -121,6 +121,14 @@ pub(crate) enum Op {
         ttl_ms: Option<u64>,
         nx: bool,
     },
+    /// `SLOWLOG GET` — collect this shard's ring buffer. Reply
+    /// [`Part::SlowlogEntries`] with a clone of the deque (origin
+    /// sorts + truncates after merging across shards).
+    SlowlogGet,
+    /// `SLOWLOG LEN` — this shard's ring length. Reply [`Part::Int`].
+    SlowlogLen,
+    /// `SLOWLOG RESET` — clear this shard's ring. Reply [`Part::Ok`].
+    SlowlogReset,
 }
 
 /// How a KEYS-family reply is shaped.
@@ -161,6 +169,10 @@ pub(crate) enum Part {
     RenamePutDone {
         stored: bool,
     },
+    /// `SLOWLOG GET` partial: this shard's ring buffer contents (in
+    /// FIFO order — oldest first). Origin sorts by timestamp DESC and
+    /// truncates per the `Get(count)` request.
+    SlowlogEntries(Vec<crate::exec_slowlog::SlowlogEntry>),
 }
 
 /// A batch of single-key dispatches forwarded to one owning shard:
@@ -237,6 +249,15 @@ pub(crate) enum Agg {
         dirty: bool,
         queued: Vec<Argv>,
         header_seq: u64,
+    },
+    /// `SLOWLOG GET` accumulator. Each shard pushes its `Vec<SlowlogEntry>`
+    /// via [`Part::SlowlogEntries`]; once all replies land, materialize
+    /// sorts by timestamp DESC and truncates to `count`. `count = None`
+    /// means "default 10 (Redis default)"; `count = Some(n)` where `n < 0`
+    /// means "all entries".
+    SlowlogGet {
+        count: Option<i64>,
+        entries: Vec<crate::exec_slowlog::SlowlogEntry>,
     },
     /// Cross-shard RENAME / RENAMENX orchestrator. Two-step protocol:
     /// step 1 emits `Op::RenameTake` to src_shard → fold receives
