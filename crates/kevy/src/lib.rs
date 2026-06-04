@@ -93,6 +93,8 @@ impl Commands for KevyCommands {
             b"SUBSCRIBE" if args.len() >= 2 => Route::Subscribe,
             b"UNSUBSCRIBE" => Route::Unsubscribe, // no args = unsubscribe all
             b"PUBLISH" if args.len() == 3 => Route::Publish,
+            b"WATCH" if args.len() >= 2 => Route::Watch,
+            b"UNWATCH" => Route::Unwatch,
             // DEL/EXISTS are single-key (fast path) unless given multiple keys.
             b"DEL" => {
                 if args.len() == 2 {
@@ -219,6 +221,7 @@ impl Commands for KevyCommands {
             b"MULTI" => TxnKind::Multi,
             b"EXEC" => TxnKind::Exec,
             b"DISCARD" => TxnKind::Discard,
+            b"WATCH" => TxnKind::Watch,
             _ => TxnKind::Other,
         }
     }
@@ -243,6 +246,7 @@ impl Commands for KevyCommands {
             b"MULTI" => TxnKind::Multi,
             b"EXEC" => TxnKind::Exec,
             b"DISCARD" => TxnKind::Discard,
+            b"WATCH" => TxnKind::Watch,
             _ => TxnKind::Other,
         };
 
@@ -269,6 +273,8 @@ impl Commands for KevyCommands {
             b"SUBSCRIBE" if args.len() >= 2 => Route::Subscribe,
             b"UNSUBSCRIBE" => Route::Unsubscribe,
             b"PUBLISH" if args.len() == 3 => Route::Publish,
+            b"WATCH" if args.len() >= 2 => Route::Watch,
+            b"UNWATCH" => Route::Unwatch,
             b"DEL" => {
                 if args.len() == 2 {
                     Route::Single(1)

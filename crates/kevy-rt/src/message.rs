@@ -70,20 +70,12 @@ pub(crate) enum Op {
     /// shard collates the (key, version) pairs into the conn's
     /// `watched` set; `EXEC` later asks every owning shard whether
     /// the version is still current via [`Op::CheckWatch`].
-    ///
-    /// Foundation only — the WATCH dispatch handler that constructs
-    /// this variant lands in the next commit. `dead_code` until then.
-    #[allow(dead_code)]
     CollectWatchVersions(Vec<Vec<u8>>),
     /// `EXEC`'s pre-execution fan-out: for each `(key, version)` pair,
     /// compare against this shard's current `key_version(key)`. The
     /// reply ([`Part::Int`]) is `1` if ANY key on this shard has been
     /// modified since the recorded version, else `0`. The origin shard
     /// ORs the partial replies and aborts EXEC on any `1`.
-    ///
-    /// Foundation only — the EXEC pre-check fan-out that constructs
-    /// this variant lands in the next commit. `dead_code` until then.
-    #[allow(dead_code)]
     CheckWatch(Vec<(Vec<u8>, u64)>),
 }
 
@@ -110,10 +102,6 @@ pub(crate) enum Part {
     /// `WATCH` partial reply: each key this shard owns paired with its
     /// current version, in request order. The origin shard collates
     /// these into the conn's watched set.
-    ///
-    /// Foundation only — the fold path that consumes this lands in the
-    /// next commit. `dead_code` until then.
-    #[allow(dead_code)]
     WatchVersions(Vec<(Vec<u8>, u64)>),
 }
 
@@ -170,6 +158,25 @@ pub(crate) enum Agg {
     Keys {
         shape: KeyShape,
         acc: Vec<Vec<u8>>,
+    },
+    /// `WATCH` fan-out accumulator: each owning shard returns its
+    /// `(key, version)` pairs via [`Part::WatchVersions`]; the origin
+    /// shard appends them all and, when the last fan-out reply arrives,
+    /// moves the pairs into the connection's `watched` set + emits +OK.
+    WatchCollect {
+        pairs: Vec<(Vec<u8>, u64)>,
+    },
+    /// `EXEC` pre-execution accumulator: a non-empty WATCH set fans
+    /// `CheckWatch` out to every shard that owns a watched key. Each
+    /// reply ORs into `dirty`. When the last reply arrives, the origin
+    /// shard either aborts (dirty → header = `*-1\r\n`, every queued
+    /// placeholder slot emits 0 bytes) or commits (clean → header =
+    /// `*N\r\n`, then dispatches each `queued` cmd at its pre-allocated
+    /// seq via `start_command_at_seq`).
+    ExecPrep {
+        dirty: bool,
+        queued: Vec<Argv>,
+        header_seq: u64,
     },
 }
 

@@ -69,8 +69,10 @@
 
 mod conn;
 mod exec;
+mod exec_build;
 mod exec_op;
 mod exec_pubsub;
+mod exec_watch;
 mod inbox;
 mod message;
 mod reduce;
@@ -123,6 +125,12 @@ pub enum Route {
     Unsubscribe,
     /// `PUBLISH channel message` — delivered to subscribers on every core.
     Publish,
+    /// `WATCH key [key ...]` — fan-out to record per-shard versions, then
+    /// stash the (key, version) pairs in the conn's `watched` set so the
+    /// next `EXEC` can validate them. Connection-level.
+    Watch,
+    /// `UNWATCH` — clear the conn's `watched` set. Connection-level, local.
+    Unwatch,
 }
 
 /// Command-set semantics injected into the runtime. Cloned to every core, so it
@@ -207,6 +215,12 @@ pub enum TxnKind {
     Multi,
     Exec,
     Discard,
+    /// `WATCH` — outside MULTI runs the fan-out; inside MULTI is rejected
+    /// with an error (Redis semantics: `WATCH inside MULTI is not allowed`).
+    /// `UNWATCH` is plain [`Self::Other`] — outside MULTI it routes to
+    /// [`Route::Unwatch`] (clear + OK); inside MULTI it queues as a no-op
+    /// that dispatch resolves to +OK at EXEC time.
+    Watch,
     Other,
 }
 
