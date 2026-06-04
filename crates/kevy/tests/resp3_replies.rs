@@ -232,6 +232,68 @@ fn unmigrated_cmds_still_emit_resp2_on_v3_conn() {
 }
 
 #[test]
+fn sinter_sunion_sdiff_return_set_on_resp3_cross_shard() {
+    // Multi-key set algebra goes through the kevy-rt reduce layer
+    // (finalize_gather), NOT the kevy dispatch_into chain. P3.2 plumbs
+    // proto through PendingSlot → materialize → finalize_gather so the
+    // SInter/SUnion/SDiff arm picks Set vs Array per the conn's proto
+    // recorded at start_multi time.
+    let srv = Server::start(4); // multi-shard exercises the cross-shard gather
+    let mut v2 = srv.connect();
+    v2.write_all(&req(&[b"SADD", b"a", b"x", b"y", b"z"])).unwrap();
+    read_reply(&mut v2, b":3\r\n");
+    v2.write_all(&req(&[b"SADD", b"b", b"y", b"z", b"w"])).unwrap();
+    read_reply(&mut v2, b":3\r\n");
+
+    // V3 conn: SINTER returns `~2` Set header (members y, z in any order).
+    let mut v3 = srv.v3_conn();
+    v3.write_all(&req(&[b"SINTER", b"a", b"b"])).unwrap();
+    let mut head = [0u8; 4];
+    v3.read_exact(&mut head).unwrap();
+    assert_eq!(&head, b"~2\r\n", "V3 SINTER must use Set header");
+    // Drain the 2 bulks (`$1\r\nX\r\n` = 7 bytes each).
+    skip_n(&mut v3, 14);
+
+    // SUNION: 4 distinct members → `~4`.
+    v3.write_all(&req(&[b"SUNION", b"a", b"b"])).unwrap();
+    let mut head = [0u8; 4];
+    v3.read_exact(&mut head).unwrap();
+    assert_eq!(&head, b"~4\r\n");
+    skip_n(&mut v3, 28);
+
+    // SDIFF a \ b: just {x} → `~1`.
+    v3.write_all(&req(&[b"SDIFF", b"a", b"b"])).unwrap();
+    let mut head = [0u8; 4];
+    v3.read_exact(&mut head).unwrap();
+    assert_eq!(&head, b"~1\r\n");
+    skip_n(&mut v3, 7);
+
+    // V2 control: SINTER stays as `*2` Array.
+    v2.write_all(&req(&[b"SINTER", b"a", b"b"])).unwrap();
+    let mut head = [0u8; 4];
+    v2.read_exact(&mut head).unwrap();
+    assert_eq!(&head, b"*2\r\n");
+    skip_n(&mut v2, 14);
+}
+
+#[test]
+fn mget_stays_array_on_resp3() {
+    // MGET is the OTHER multi-key gather but RESP3 keeps it array-shaped
+    // (member order is significant per the MGET contract; Set is not
+    // valid). Confirms finalize_gather's MGET arm doesn't get swept up
+    // in the SInter/SUnion/SDiff Set-header switch.
+    let srv = Server::start(4);
+    let mut v3 = srv.v3_conn();
+    v3.write_all(&req(&[b"SET", b"a", b"1"])).unwrap();
+    read_reply(&mut v3, b"+OK\r\n");
+    v3.write_all(&req(&[b"SET", b"b", b"2"])).unwrap();
+    read_reply(&mut v3, b"+OK\r\n");
+    v3.write_all(&req(&[b"MGET", b"a", b"missing", b"b"])).unwrap();
+    // Same array shape as V2: `*3\r\n$1\r\n1\r\n$-1\r\n$1\r\n2\r\n`.
+    read_reply(&mut v3, b"*3\r\n$1\r\n1\r\n$-1\r\n$1\r\n2\r\n");
+}
+
+#[test]
 fn v2_wire_byte_for_byte_unchanged_after_resp3_migration() {
     // Critical guardrail: every V2 cmd test in the existing suite
     // (sharded.rs, cmd_matrix.rs, commands.rs) already asserts the
