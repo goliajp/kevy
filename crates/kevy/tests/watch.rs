@@ -378,8 +378,10 @@ fn watched_exec_with_queued_publish_emits_error_placeholder() {
     read_reply(&mut c, b"+QUEUED\r\n");
     c.write_all(&req(&[b"EXEC"])).unwrap();
     // *2 + error frame for PUBLISH + :1 for INCR.
-    // Error frame: -ERR pub/sub or WATCH or HELLO not allowed inside MULTI\r\n.
-    let want = b"*2\r\n-ERR pub/sub or WATCH or HELLO not allowed inside MULTI\r\n:1\r\n";
+    // Error frame: kevy v2-3a expanded the in-MULTI deny list to also
+    // cover HELLO and RENAME (their orchestration doesn't have an
+    // at_seq variant yet — see exec_watch.rs).
+    let want = b"*2\r\n-ERR pub/sub or WATCH or HELLO or RENAME not allowed inside MULTI in v2-3a (queued-RENAME orchestration pending v2-3b)\r\n:1\r\n";
     read_reply(&mut c, want);
 }
 

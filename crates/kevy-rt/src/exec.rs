@@ -129,6 +129,7 @@ impl<C: Commands> Shard<C> {
             Route::Watch => self.do_watch(conn_id, seq, args),
             Route::Unwatch => self.do_unwatch(conn_id, seq),
             Route::Hello => self.do_hello(conn_id, seq, args),
+            Route::Rename { nx } => self.start_rename(conn_id, seq, args, nx),
             Route::Local => {
                 self.start_single(conn_id, seq, args, self.id, is_quit, is_write);
             }
@@ -262,7 +263,7 @@ impl<C: Commands> Shard<C> {
     /// `seq - next_emit`. Captures the conn's current `proto` so a
     /// later `materialize` (run when the last sub-reply lands) shapes
     /// the bytes per the proto that was in effect at dispatch time.
-    fn push_pending_slot(&mut self, conn_id: u64, remaining: u32, agg: Agg, is_quit: bool) {
+    pub(crate) fn push_pending_slot(&mut self, conn_id: u64, remaining: u32, agg: Agg, is_quit: bool) {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let proto = c.proto;
             c.pending.push_back(PendingSlot {

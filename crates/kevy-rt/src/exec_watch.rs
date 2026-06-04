@@ -301,10 +301,11 @@ impl<C: Commands> Shard<C> {
             | Route::Punsubscribe
             | Route::Publish
             | Route::Watch
-            | Route::Hello => self.fill_placeholder(
+            | Route::Hello
+            | Route::Rename { .. } => self.fill_placeholder(
                 conn_id,
                 seq,
-                b"-ERR pub/sub or WATCH or HELLO not allowed inside MULTI\r\n".to_vec(),
+                b"-ERR pub/sub or WATCH or HELLO or RENAME not allowed inside MULTI in v2-3a (queued-RENAME orchestration pending v2-3b)\r\n".to_vec(),
             ),
             Route::Local => {
                 self.start_single_at_seq(conn_id, seq, args, self.id, is_quit, is_write)

@@ -74,6 +74,7 @@ mod exec_notify;
 mod exec_op;
 mod exec_pubsub;
 mod exec_pubsub_pattern;
+mod exec_rename;
 mod exec_watch;
 mod inbox;
 mod message;
@@ -148,6 +149,15 @@ pub enum Route {
     /// [`Commands::hello_reply`] hook so embedders set their own server
     /// metadata.
     Hello,
+    /// `RENAME source destination` / `RENAMENX source destination`. The
+    /// runtime handles the two-shard decision: same-shard renames go
+    /// through one atomic [`Store::rename`] on the owning shard; cross-
+    /// shard renames use the Take→Put orchestrator (lands in v2-3b;
+    /// v2-3a emits `-CROSSSHARD ...` for that case).
+    Rename {
+        /// `true` for `RENAMENX` (no overwrite — reply `:0` if dst exists).
+        nx: bool,
+    },
 }
 
 /// Command-set semantics injected into the runtime. Cloned to every core, so it

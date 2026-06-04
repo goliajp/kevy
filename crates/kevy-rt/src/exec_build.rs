@@ -43,7 +43,8 @@ impl<C: Commands> Shard<C> {
             | Route::Publish
             | Route::Watch
             | Route::Unwatch
-            | Route::Hello => {
+            | Route::Hello
+            | Route::Rename { .. } => {
                 eprintln!(
                     "kevy WARN: build_multi_targets reached conn-level route {route:?} \
                      — routing bug; replying nil to the client"
