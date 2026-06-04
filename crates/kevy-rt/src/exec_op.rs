@@ -153,6 +153,41 @@ impl<C: Commands> Shard<C> {
                 }
                 Part::Reply(reply)
             }
+            Op::RenameTake(src) => {
+                // Step 1 of cross-shard RENAME: atomically take the
+                // entry out of this shard. The orchestrator on the
+                // origin shard chains the value into a follow-up
+                // `Op::RenamePut` on the destination shard.
+                match self.store.take_with_ttl(&src) {
+                    Some((value, ttl_ms)) => {
+                        self.store.bump_if_watched(&src);
+                        Part::RenameTaken { value, ttl_ms }
+                    }
+                    None => Part::RenameNoSuchSrc,
+                }
+            }
+            Op::RenamePut {
+                dst,
+                value,
+                ttl_ms,
+                nx,
+            } => {
+                // Step 2 of cross-shard RENAME. If NX is set and dst
+                // already exists on this shard, refuse the put. The
+                // orchestrator decides whether to surface `:0` (RENAMENX
+                // blocked) — RENAME (non-NX) always succeeds here.
+                if nx && self.store.key_exists(&dst) {
+                    return Part::RenamePutDone { stored: false };
+                }
+                self.store.put_with_ttl(dst.clone(), value, ttl_ms);
+                self.store.bump_if_watched(&dst);
+                // AOF / cross-shard RENAME durability is deferred —
+                // a faithful AOF replay would need to serialise the
+                // value through MIGRATE/RESTORE-style binary frames.
+                // For v2-3b, document the gap: cross-shard RENAME
+                // works in-memory but is not replayed through AOF.
+                Part::RenamePutDone { stored: true }
+            }
             Op::CollectWatchVersions(keys) => {
                 // WATCH's fan-out: register each key in this shard's
                 // version tracker and report its current version. The

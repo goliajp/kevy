@@ -105,6 +105,22 @@ pub(crate) enum Op {
         /// if dst exists; reply `:1` on successful rename).
         nx: bool,
     },
+    /// Cross-shard RENAME step 1: atomically take `src` (entry + TTL)
+    /// off this shard. Reply `Part::RenameTaken` on success or
+    /// `Part::RenameNoSuchSrc` if the key doesn't exist. The
+    /// orchestrator on the origin shard chains the value into a
+    /// follow-up [`Op::RenamePut`] on the destination shard.
+    RenameTake(Vec<u8>),
+    /// Cross-shard RENAME step 2: store the just-taken value at `dst`
+    /// on this shard. If `nx` is set and dst already exists, the put
+    /// is refused — orchestrator must rollback (restore src) or accept
+    /// loss. Reply: `Part::RenamePutDone { stored: bool }`.
+    RenamePut {
+        dst: Vec<u8>,
+        value: kevy_store::Value,
+        ttl_ms: Option<u64>,
+        nx: bool,
+    },
 }
 
 /// How a KEYS-family reply is shaped.
@@ -131,6 +147,20 @@ pub(crate) enum Part {
     /// current version, in request order. The origin shard collates
     /// these into the conn's watched set.
     WatchVersions(Vec<(Vec<u8>, u64)>),
+    /// Cross-shard RENAME step 1 success: src removed; here's the
+    /// value + TTL for the orchestrator to ship into step 2.
+    RenameTaken {
+        value: kevy_store::Value,
+        ttl_ms: Option<u64>,
+    },
+    /// Cross-shard RENAME step 1 miss: src didn't exist.
+    RenameNoSuchSrc,
+    /// Cross-shard RENAME step 2 result: `stored` is `true` if the
+    /// put landed at dst, `false` if `RENAMENX` blocked because dst
+    /// already had an entry.
+    RenamePutDone {
+        stored: bool,
+    },
 }
 
 /// A batch of single-key dispatches forwarded to one owning shard:
@@ -208,6 +238,42 @@ pub(crate) enum Agg {
         queued: Vec<Argv>,
         header_seq: u64,
     },
+    /// Cross-shard RENAME / RENAMENX orchestrator. Two-step protocol:
+    /// step 1 emits `Op::RenameTake` to src_shard → fold receives
+    /// `Part::RenameTaken` (or `RenameNoSuchSrc`); step 2 emits
+    /// `Op::RenamePut` to dst_shard → fold receives `Part::RenamePutDone`.
+    /// On step transitions, `finalize_watch_agg`'s sibling
+    /// `finalize_rename_agg` re-arms `slot.remaining = 1` and ships
+    /// the next Op.
+    RenameOrchestrator {
+        /// Which step we're in (Take then Put). The taken value lives
+        /// in `taken` once step 1 lands.
+        step: RenameStep,
+        /// `true` for `RENAMENX` — modifies step 2's reply shape (`:1`
+        /// vs `+OK`) + would gate dst-overwrite (but the pre-check is
+        /// in the Put-side response since cross-shard race is
+        /// unavoidable without 2-phase commit; see comment in
+        /// `exec_rename::finalize_rename_agg`).
+        nx: bool,
+        src: Vec<u8>,
+        dst: Vec<u8>,
+        dst_shard: usize,
+        /// Value+TTL captured from step 1; populated when step
+        /// transitions to Put.
+        taken: Option<(kevy_store::Value, Option<u64>)>,
+        /// Step 2's result, populated by fold when
+        /// `Part::RenamePutDone` lands. `Some(true)` = stored,
+        /// `Some(false)` = NX-blocked, `None` = step 2 hasn't run yet
+        /// (we're still in Take phase).
+        put_stored: Option<bool>,
+    },
+}
+
+/// Phase of the cross-shard RENAME orchestrator. See [`Agg::RenameOrchestrator`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RenameStep {
+    Take,
+    Put,
 }
 
 /// One outstanding command slot awaiting `remaining` sub-results, held in a

@@ -41,6 +41,46 @@ impl Store {
         }
     }
 
+    /// Cross-shard RENAME step 1: atomically remove the entry at
+    /// `key` (if any), returning the `(value, ttl_ms_remaining)`. The
+    /// orchestrator on the origin shard ships the result into a
+    /// follow-up [`Self::put_with_ttl`] on the destination shard.
+    /// Lazy-reaps an expired entry before the take (so an expired
+    /// key is observed as `None`, not silently rehomed).
+    pub fn take_with_ttl(&mut self, key: &[u8]) -> Option<(Value, Option<u64>)> {
+        let now = Instant::now();
+        if !self.reap(key, now) {
+            return None;
+        }
+        let entry = self.remove_entry(key)?;
+        let ttl_ms = entry.expire_at_ns.map(|ns| {
+            unpack_deadline(ns).saturating_duration_since(now).as_millis() as u64
+        });
+        Some((entry.value, ttl_ms))
+    }
+
+    /// Cross-shard RENAME step 2: write `value` at `key` on this
+    /// shard, overwriting any prior entry. `ttl_ms` is set as a TTL
+    /// relative to *now* (i.e. the orchestrator should have computed
+    /// the remaining TTL on the source shard via `take_with_ttl` and
+    /// is shipping that exact remaining value here).
+    pub fn put_with_ttl(&mut self, key: Vec<u8>, value: Value, ttl_ms: Option<u64>) {
+        let expire_at = ttl_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
+        let entry = Entry::new(value, expire_at);
+        // Overwrite — drop any existing entry first so the accounting
+        // doesn't double-count.
+        self.remove_entry(&key);
+        self.insert_entry(SmallBytes::from_vec(key), entry);
+    }
+
+    /// Whether a live (non-expired) entry exists at `key`. Reaps an
+    /// expired entry as a side effect. Used by the cross-shard RENAME
+    /// orchestrator's `nx` pre-check.
+    pub fn key_exists(&mut self, key: &[u8]) -> bool {
+        let now = Instant::now();
+        self.reap(key, now) && self.map.contains_key(key)
+    }
+
     /// `RENAME` (or `RENAMENX` if `nx`). Atomic on this shard. Returns
     /// the outcome so the dispatch layer can emit the right RESP frame
     /// (RENAME: `+OK` or `-ERR no such key`; RENAMENX: `:1`/`:0`/error).
