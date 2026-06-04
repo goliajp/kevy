@@ -153,6 +153,53 @@ fn decode_garbage_score_does_not_panic() {
 }
 
 #[test]
+fn neighbor_ranges_for_zero_radius_returns_full_keyspace() {
+    let r = neighbor_score_ranges(13.36, 38.11, 0.0);
+    assert_eq!(r.len(), 1);
+    assert_eq!(r[0].0, 0.0);
+    assert!(r[0].1 >= (1u64 << 52) as f64 - 1.0);
+}
+
+#[test]
+fn neighbor_ranges_small_radius_returns_compact_ranges() {
+    // 1 km around Palermo → step ~14 → 9 neighbour cells, possibly
+    // merged. The candidate set MUST include Palermo's own score.
+    let palermo_score = encode_score(13.361389, 38.115556).unwrap();
+    let ranges = neighbor_score_ranges(13.361389, 38.115556, 1_000.0);
+    assert!(!ranges.is_empty(), "expected ≥ 1 range");
+    assert!(
+        ranges.iter().any(|(min, max)| palermo_score >= *min && palermo_score <= *max),
+        "Palermo's score {palermo_score} not covered by any range: {ranges:?}",
+    );
+    // No range can be empty or inverted.
+    for (min, max) in &ranges {
+        assert!(min <= max, "inverted range: ({min}, {max})");
+    }
+}
+
+#[test]
+fn neighbor_ranges_medium_radius_includes_known_neighbour() {
+    // 200 km around Palermo MUST include Catania (166 km away).
+    let catania_score = encode_score(15.087269, 37.502669).unwrap();
+    let ranges = neighbor_score_ranges(13.361389, 38.115556, 200_000.0);
+    assert!(
+        ranges.iter().any(|(min, max)| catania_score >= *min && catania_score <= *max),
+        "Catania score not covered for 200 km radius: {ranges:?}",
+    );
+}
+
+#[test]
+fn neighbor_ranges_sorted_and_disjoint() {
+    let ranges = neighbor_score_ranges(0.0, 0.0, 50_000.0);
+    for w in ranges.windows(2) {
+        assert!(
+            w[0].1 < w[1].0,
+            "ranges should be disjoint after merge: {w:?}",
+        );
+    }
+}
+
+#[test]
 fn score_is_within_52_bits() {
     // Maximum-corner inputs must produce a non-negative integer ≤ 2^52 - 1
     // so that f64 conversion is lossless (mantissa 53 bits).
