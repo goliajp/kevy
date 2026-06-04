@@ -523,8 +523,16 @@ fn shape(r: &Reply) -> &'static str {
         Reply::Error(_) => "error",
         Reply::Int(_) => "integer",
         Reply::Bulk(_) => "bulk-string",
-        Reply::Nil => "nil",
+        Reply::Nil | Reply::Null => "nil",
         Reply::Array(_) => "array",
+        Reply::Map(_) => "map",
+        Reply::Set(_) => "set",
+        Reply::Double(_) => "double",
+        Reply::Boolean(_) => "boolean",
+        Reply::Verbatim { .. } => "verbatim-string",
+        Reply::BigNumber(_) => "big-number",
+        Reply::Push(_) => "push",
+        Reply::BlobError(_) => "blob-error",
     }
 }
 
