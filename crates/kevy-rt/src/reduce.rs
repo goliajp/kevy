@@ -9,7 +9,7 @@ use crate::message::{Agg, Gathered, KeyShape, MultiOp};
 use kevy_hash::KevyHash;
 use kevy_resp::{
     RespVersion, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
-    encode_set_header, encode_simple_string,
+    encode_push_header, encode_set_header, encode_simple_string,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -140,21 +140,37 @@ fn finalize_gather(
     out
 }
 
-/// Build a RESP pub/sub `message` push frame.
-pub(crate) fn pubsub_message(channel: &[u8], msg: &[u8]) -> Vec<u8> {
+/// Build a RESP pub/sub `message` delivery frame. V2 emits a 3-element
+/// array (`*3\r\n…`); V3 emits a Push frame (`>3\r\n…`) — same body
+/// bytes, prefix flips so the V3 client demuxes pub/sub from regular
+/// replies. Per-conn proto, since one channel can have V2 + V3
+/// subscribers mixed.
+pub(crate) fn pubsub_message(channel: &[u8], msg: &[u8], proto: RespVersion) -> Vec<u8> {
     let mut out = Vec::new();
-    encode_array_len(&mut out, 3);
+    match proto {
+        RespVersion::V2 => encode_array_len(&mut out, 3),
+        RespVersion::V3 => encode_push_header(&mut out, 3),
+    }
     encode_bulk(&mut out, b"message");
     encode_bulk(&mut out, channel);
     encode_bulk(&mut out, msg);
     out
 }
 
-/// Build a RESP pub/sub `pmessage` push frame for `PSUBSCRIBE` delivery
-/// (`*4\r\n$8\r\npmessage\r\n$<plen>\r\n<pat>\r\n$<clen>\r\n<chan>\r\n$<mlen>\r\n<payload>\r\n`).
-pub(crate) fn pubsub_pmessage(pattern: &[u8], channel: &[u8], msg: &[u8]) -> Vec<u8> {
+/// Build a RESP pub/sub `pmessage` delivery frame (PSUBSCRIBE matches).
+/// V2 `*4\r\n…` Array vs V3 `>4\r\n…` Push frame — same body, prefix
+/// flips.
+pub(crate) fn pubsub_pmessage(
+    pattern: &[u8],
+    channel: &[u8],
+    msg: &[u8],
+    proto: RespVersion,
+) -> Vec<u8> {
     let mut out = Vec::new();
-    encode_array_len(&mut out, 4);
+    match proto {
+        RespVersion::V2 => encode_array_len(&mut out, 4),
+        RespVersion::V3 => encode_push_header(&mut out, 4),
+    }
     encode_bulk(&mut out, b"pmessage");
     encode_bulk(&mut out, pattern);
     encode_bulk(&mut out, channel);

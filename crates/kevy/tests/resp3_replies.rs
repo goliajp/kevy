@@ -428,6 +428,67 @@ fn info_and_client_info_use_verbatim_on_resp3() {
 }
 
 #[test]
+fn pubsub_message_uses_push_frame_on_resp3() {
+    // V2 subscriber: `*3\r\nmessage\r\n<chan>\r\n<payload>\r\n` array.
+    // V3 subscriber: `>3\r\nmessage\r\n<chan>\r\n<payload>\r\n` push.
+    // Mixed V2 + V3 subscribers on the same channel each get the right
+    // shape (per-conn proto applied at deliver_publish).
+    let srv = Server::start(1);
+
+    let mut v2 = srv.connect();
+    v2.write_all(&req(&[b"SUBSCRIBE", b"news"])).unwrap();
+    read_reply(
+        &mut v2,
+        b"*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n",
+    );
+
+    let mut v3 = srv.v3_conn();
+    v3.write_all(&req(&[b"SUBSCRIBE", b"news"])).unwrap();
+    // V3 subscribe ack itself is push-framed: `>3\r\n…`.
+    read_reply(
+        &mut v3,
+        b">3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n",
+    );
+
+    let mut pub_ = srv.connect();
+    pub_.write_all(&req(&[b"PUBLISH", b"news", b"hello"])).unwrap();
+    read_reply(&mut pub_, b":2\r\n");
+
+    // V2 sub: message arrives as `*3` array.
+    read_reply(
+        &mut v2,
+        b"*3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nhello\r\n",
+    );
+    // V3 sub: same body, `>3` push prefix.
+    read_reply(
+        &mut v3,
+        b">3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nhello\r\n",
+    );
+}
+
+#[test]
+fn pmessage_uses_push_frame_on_resp3() {
+    // PSUBSCRIBE ack + pmessage delivery, both push-framed on V3.
+    let srv = Server::start(1);
+
+    let mut v3 = srv.v3_conn();
+    v3.write_all(&req(&[b"PSUBSCRIBE", b"news.*"])).unwrap();
+    read_reply(
+        &mut v3,
+        b">3\r\n$10\r\npsubscribe\r\n$6\r\nnews.*\r\n:1\r\n",
+    );
+
+    let mut pub_ = srv.connect();
+    pub_.write_all(&req(&[b"PUBLISH", b"news.tech", b"hi"]))
+        .unwrap();
+    read_reply(&mut pub_, b":1\r\n");
+    read_reply(
+        &mut v3,
+        b">4\r\n$8\r\npmessage\r\n$6\r\nnews.*\r\n$9\r\nnews.tech\r\n$2\r\nhi\r\n",
+    );
+}
+
+#[test]
 fn v2_wire_byte_for_byte_unchanged_after_resp3_migration() {
     // Critical guardrail: every V2 cmd test in the existing suite
     // (sharded.rs, cmd_matrix.rs, commands.rs) already asserts the
