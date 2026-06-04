@@ -267,6 +267,38 @@ let task_handle = {
 lock contention — the non-blocking contract is preserved even when
 another task holds the receiver via `recv`.
 
+**Pattern C — borrowing iterators on `kevy-client::Subscriber`** (v1.7.0):
+
+```rust,no_run
+# use kevy_client::Subscriber;
+let mut sub = Subscriber::open("mem://news", &[b"updates"])?;
+
+// `events()` yields every frame (acks included). Terminates on
+// UnexpectedEof; other errors surface as Some(Err(_)) so the caller
+// decides whether to retry (e.g. a read timeout) or break.
+for event in sub.events() {
+    let _ = event?; // dispatch
+    # break;
+}
+
+// `messages()` silently consumes acks and yields just
+// `(channel, payload)` — same shape recv_message returns.
+let mut sub2 = Subscriber::open("mem://news", &[b"updates"])?;
+for msg in sub2.messages() {
+    let (_channel, _payload) = msg?;
+    # break;
+}
+# Ok::<(), std::io::Error>(())
+```
+
+Same `spawn_blocking` rules apply: the iterators wrap `recv` /
+`recv_message`, which take the receiver mutex for the duration of
+each blocking wait. Drop or break out of the iterator to release
+the wait early. The iterator API is part of `kevy-client`, not
+`kevy-embedded` — open a `Subscriber` against the URL facade if
+you want it; reach for `Subscription` directly when you need the
+embed-only primitives.
+
 ## Migrating from v1.2.0
 
 Source-compatible. The semantic change is `Connection::publish` on
@@ -285,10 +317,12 @@ returns `Unsupported`.
 
 ## Related
 
-- [`kevy-embedded` v1.1.0](https://crates.io/crates/kevy-embedded) —
+- [`kevy-embedded` v1.1.3+](https://crates.io/crates/kevy-embedded) —
   the underlying `Store::Clone` + `PubsubBus` primitives. Use directly
   if you don't need the URL-facade indirection.
-- [`kevy-client` v1.3.0](https://crates.io/crates/kevy-client) — the
-  URL facade itself.
+- [`kevy-client` v1.6.0+](https://crates.io/crates/kevy-client) — the
+  URL facade itself; ships `Subscriber::recv_message` (v1.6.0) and
+  `events()` / `messages()` iterators (v1.7.0) for ergonomic frame
+  consumption.
 - [`kevy`](https://crates.io/crates/kevy) — the TCP server, when you
   outgrow single-process.
