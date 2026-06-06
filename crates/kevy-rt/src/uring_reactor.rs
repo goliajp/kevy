@@ -395,6 +395,26 @@ impl<C: Commands> Shard<C> {
                             self.deliver_publish(&m.0, &m.1);
                         }
                     }
+                    // Cross-shard BLOCK arbiter — same handlers as the epoll
+                    // path (`crate::inbox`). Conn output appended here is
+                    // flushed by the io_uring write loop, so no `flush_conn`.
+                    Inbound::BlockArm {
+                        origin,
+                        conn,
+                        key,
+                        kind,
+                        serve_argv,
+                        proto,
+                    } => self.target_arm(origin, conn, key, kind, serve_argv, proto),
+                    Inbound::BlockReady { conn, key } => self.origin_on_ready(conn, &key),
+                    Inbound::BlockServeReq { origin, conn, key } => {
+                        let reply = self.target_serve(origin, conn, &key);
+                        self.send_to(origin, Inbound::BlockServeResp { conn, key, reply });
+                    }
+                    Inbound::BlockServeResp { conn, key, reply } => {
+                        self.origin_on_serve_resp(conn, key, reply);
+                    }
+                    Inbound::BlockCancel { origin, conn } => self.target_cancel(origin, conn),
                 }
             }
         }
