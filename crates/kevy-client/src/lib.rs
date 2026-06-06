@@ -44,6 +44,7 @@ use kevy_resp_client::RespClient;
 mod collections;
 mod scan;
 mod subscribe;
+mod subscribe_io;
 mod transaction;
 mod url;
 
