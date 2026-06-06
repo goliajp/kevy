@@ -257,13 +257,9 @@ fn xread_block_times_out_with_nil_bulk_when_no_entries() {
 
 #[test]
 fn xread_block_woken_by_concurrent_xadd() {
-    // Uses an explicit ID (`1-0`) rather than `$`. The `$` form needs
-    // the dispatcher to snapshot the stream's last_id at park time and
-    // substitute it into the retried argv on wake — otherwise a fresh
-    // re-resolve of `$` after the XADD sees the *new* entry as the
-    // cursor and reports zero new rows, racing the wake into a hang.
-    // That `$` rewrite is a v2-7e follow-up; this test covers the wake
-    // path with an explicit cursor, where the bug doesn't apply.
+    // Wake path with an explicit cursor (no `$`). Companion to
+    // `xread_block_dollar_id_wakes` below, which exercises the same
+    // path with the `$` cursor that needs park-time rewriting.
     let srv = Server::start(1);
     let mut consumer = srv.connect();
     let mut producer = srv.connect();
@@ -283,6 +279,42 @@ fn xread_block_woken_by_concurrent_xadd() {
     let _ = read_reply(&mut producer);
     let reply = read_reply(&mut consumer);
     assert!(reply.starts_with(b"*1\r\n"));
+    assert!(reply.windows(3).any(|w| w == b"2-0"));
+    assert!(reply.windows(2).any(|w| w == b"v2"));
+}
+
+#[test]
+fn xread_block_dollar_id_wakes() {
+    // `$` cursor: park-time rewrite (Commands::resolve_block_argv on
+    // BlockKind::XReadBlock) must snapshot the stream's last_id when
+    // the conn is registered, so the wake retry sees the original
+    // cursor — not the post-XADD last_id, which would mean "0 entries
+    // > last_id" and a timeout. Regression test for v2-7e.
+    let srv = Server::start(1);
+    let mut consumer = srv.connect();
+    let mut producer = srv.connect();
+    // Pre-populate so `$` resolves to a real ID (xread_dollar_last_id
+    // errors on a missing key, which would prevent registration).
+    producer
+        .write_all(&req(&[b"XADD", b"stream", b"1-0", b"f", b"v"]))
+        .unwrap();
+    let _ = read_reply(&mut producer);
+    consumer
+        .write_all(&req(&[
+            b"XREAD", b"BLOCK", b"5000", b"STREAMS", b"stream", b"$",
+        ]))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    producer
+        .write_all(&req(&[b"XADD", b"stream", b"2-0", b"f", b"v2"]))
+        .unwrap();
+    let _ = read_reply(&mut producer);
+    let reply = read_reply(&mut consumer);
+    assert!(
+        reply.starts_with(b"*1\r\n"),
+        "expected one stream in reply, got {:?}",
+        std::str::from_utf8(&reply).unwrap_or("<non-utf8>")
+    );
     assert!(reply.windows(3).any(|w| w == b"2-0"));
     assert!(reply.windows(2).any(|w| w == b"v2"));
 }

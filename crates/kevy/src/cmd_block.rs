@@ -12,8 +12,8 @@
 //! own `dispatch_into` gets to emit the precise error reply, and the
 //! dispatcher sees output and skips registration.
 
-use kevy_resp::ArgvView;
-use kevy_rt::{BlockHint, BlockKind, Route};
+use kevy_resp::{Argv, ArgvView};
+use kevy_rt::{BlockHint, BlockKind, Route, Store};
 
 /// Classify an uppercased verb into its blocking-command hint. The runtime
 /// uses this (via [`crate::KevyCommands::resolve`]) to know whether to park
@@ -224,4 +224,64 @@ pub(crate) fn xreadgroup_route<A: ArgvView + ?Sized>(args: &A) -> Route {
 /// check on every write.
 pub(crate) fn wake_idx_for_verb(upper: &[u8]) -> Option<u8> {
     matches!(upper, b"LPUSH" | b"RPUSH" | b"XADD").then_some(1)
+}
+
+/// Materialise the parked argv for an `XREAD BLOCK ... STREAMS k1 ...
+/// id1 ...` command. The wake path replays this argv against `cmd_xread`,
+/// so any `$` IDs must be resolved here to the stream's current last_id —
+/// otherwise the post-wake re-resolve sees the just-written `XADD` entry
+/// as the cursor and reports zero new rows, racing the wake into a hang.
+///
+/// Falls back to `args.to_argv()` (no rewrite) on malformed input — the
+/// dispatcher already gated registration on a well-formed `BlockHint`, so
+/// the only way this is reached with malformed input is a logic bug
+/// elsewhere; returning the original argv keeps the existing failure
+/// mode (timeout) instead of crashing the shard.
+pub(crate) fn xread_resolve_argv<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+) -> Argv {
+    let Some(streams_at) = find_xread_streams_token(args) else {
+        return args.to_argv();
+    };
+    let after = args.len() - (streams_at + 1);
+    if after == 0 || !after.is_multiple_of(2) {
+        return args.to_argv();
+    }
+    let n = after / 2;
+    let keys_start = streams_at + 1;
+    let ids_start = keys_start + n;
+    let mut out = Argv::default();
+    for j in 0..args.len() {
+        let arg = args.get(j).expect("in range");
+        let pos = j.wrapping_sub(ids_start);
+        if pos < n && arg == b"$" {
+            let key = args.get(keys_start + pos).expect("in range");
+            let resolved = store
+                .xread_dollar_last_id(key)
+                .map(|id| id.encode())
+                .unwrap_or_else(|_| arg.to_vec());
+            out.push(&resolved);
+        } else {
+            out.push(arg);
+        }
+    }
+    out
+}
+
+/// Walk `XREAD`'s option preamble (`COUNT` / `BLOCK`) and return the
+/// position of the `STREAMS` token, or `None` if the argv is malformed
+/// or `STREAMS` is absent. Unrecognised tokens before `STREAMS` short-
+/// circuit to `None` — the caller treats that as "leave argv unchanged".
+fn find_xread_streams_token<A: ArgvView + ?Sized>(args: &A) -> Option<usize> {
+    let mut i = 1usize;
+    while i < args.len() {
+        let upper = args[i].to_ascii_uppercase();
+        match upper.as_slice() {
+            b"STREAMS" => return Some(i),
+            b"COUNT" | b"BLOCK" => i = i.saturating_add(2),
+            _ => return None,
+        }
+    }
+    None
 }

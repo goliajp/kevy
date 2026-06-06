@@ -268,7 +268,13 @@ impl<C: Commands> Shard<C> {
             } else {
                 crate::blocked::unix_now_ms().saturating_add(timeout_ms)
             };
-            let argv = args.to_argv();
+            // Snapshot the parked argv via the command set so positional
+            // ID / cursor arguments whose meaning depends on store state
+            // (XREAD's `$`, in particular) get frozen here instead of
+            // re-resolving on wake. Default impl is a plain `to_argv()`.
+            let argv = self
+                .commands
+                .resolve_block_argv(&mut self.store, args, kind);
             let keys = [key];
             self.blocked
                 .add(conn_id, &keys, kind, deadline_ms, argv, proto);
