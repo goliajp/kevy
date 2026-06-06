@@ -81,7 +81,7 @@ jobs:
           # kevy-resp-client).
           for c in \
             kevy-madvise kevy-sys kevy-hash kevy-config kevy-uring \
-            kevy-bytes kevy-resp kevy-ring kevy-map \
+            kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo \
             kevy-resp-client kevy-store \
             kevy-persist \
             kevy-rt kevy-embedded \
