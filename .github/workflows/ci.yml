@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [master, develop, "feature/**", "release/**", "hotfix/**", "bugfix/**", "support/**"]
   pull_request:
-    branches: [main, develop]
+    branches: [master, develop]
 
 # Cancel any in-flight runs for the same branch on a new push — saves
 # minutes on PRs that get force-pushed twice in a minute.
