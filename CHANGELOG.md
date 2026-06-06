@@ -4,6 +4,37 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [Unreleased]
+
+### Added
+
+- **Cross-shard blocking pops (v2-7e).** `BLPOP` / `BRPOP` / `XREAD BLOCK`
+  / `XREADGROUP BLOCK` now work when watched keys live on shards other
+  than the connection's, and multi-key `BLPOP k1 k2 …` is supported
+  (previously rejected). The connection parks on its origin shard and
+  watch registrations fan out to each key's owning shard; the origin is
+  the sole arbiter, so no target shard ever pops speculatively (which
+  would lose data when two keys go ready at once). See
+  `kevy_rt::block_xshard`. New additive `Commands` hooks
+  (`block_serve_argv`, `block_ready`, `wake_idx`) default to no-op, so
+  embedders recompile unchanged.
+
+### Fixed
+
+- A single-key `BLPOP` / `BRPOP` / `XREAD BLOCK` whose key hashed to a
+  shard other than the connection's **hung the client forever** — the
+  command was forwarded to the key's shard as a plain dispatch, which on
+  an empty list returned a 0-byte reply and never parked, woke, or timed
+  out. Now it parks correctly via the cross-shard arbiter. Regression
+  test `blocking_cross_shard::blpop_remote_key_times_out_not_hang`
+  (nshards = 8).
+
+### Known gaps
+
+- Non-blocking multi-stream `XREAD` across shards still reads only the
+  first STREAMS key's shard (a missing-feature, not a hang) — a separate
+  cross-shard gather, tracked for a follow-up.
+
 ## [v1.4.2] — 2026-06-07
 
 Patch release rolling up the v1.4.1 follow-ups: an XREAD BLOCK bug fix,

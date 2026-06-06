@@ -296,6 +296,18 @@ impl Store {
         Ok(result)
     }
 
+    /// Non-destructive: would `XREADGROUP … STREAMS key >` yield new
+    /// entries for `group` right now? True iff the stream's last id is
+    /// past the group's last-delivered id. Used by the cross-shard BLOCK
+    /// arbiter's readiness peek — never advances the group cursor. False
+    /// for a missing key / group.
+    pub fn xreadgroup_has_new(&mut self, key: &[u8], group: &[u8]) -> Result<bool, StoreError> {
+        Ok(self
+            .stream_ref(key)?
+            .and_then(|s| s.group(group).map(|g| s.last_id() > g.last_delivered_id()))
+            .unwrap_or(false))
+    }
+
     /// `XACK key group id [id ...]`. Returns count of PEL removals.
     pub fn xack(&mut self, key: &[u8], group: &[u8], ids: &[StreamId]) -> Result<u64, StoreError> {
         let n;

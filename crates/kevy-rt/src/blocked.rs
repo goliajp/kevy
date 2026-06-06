@@ -72,18 +72,23 @@ pub enum BlockKind {
 /// lookup happens once per command. `None` is the zero-cost default for
 /// every non-blocking verb (≥ 99.9 % of dispatches in steady state).
 ///
-/// `key` is the **same-shard** key the conn parks on (single-key only in
-/// v2-7d.2; multi-key sharded `BLPOP key1 key2 …` is left to a future
-/// sprint — `KevyCommands` returns an error reply for that form). For
-/// `XREAD BLOCK`, the key is the stream name; for `XREADGROUP BLOCK`,
-/// the consumer-group's stream key.
+/// `keys` is every key the conn watches (≥ 1). The dispatcher picks the
+/// park strategy from them:
+/// - **single key on the conn's own shard** → the in-shard fast path
+///   ([`BlockedClients`]): register + wake without any cross-core hop.
+/// - **single remote key, or any multi-key form** → the cross-shard
+///   arbiter ([`crate::block_xshard`]): the conn parks on its origin
+///   shard and watch registrations fan out to each key's owning shard.
+///
+/// For `BLPOP` / `BRPOP` the keys are list keys; for `XREAD BLOCK` /
+/// `XREADGROUP BLOCK` they are the STREAMS keys (in request order).
 #[derive(Clone, Debug, Default)]
 pub enum BlockHint {
     #[default]
     None,
     Block {
         kind: BlockKind,
-        key: Vec<u8>,
+        keys: Vec<Vec<u8>>,
         /// `0` = block forever (Redis convention). Anything else is the
         /// wall-clock millis the dispatcher will add to `unix_now_ms()` to
         /// derive the waiter's `deadline_ms`.

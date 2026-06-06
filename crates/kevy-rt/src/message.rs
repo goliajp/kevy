@@ -4,6 +4,7 @@
 //! [`Inbound`]) and how a command's (possibly multi-shard) result is
 //! accumulated on its origin shard ([`Agg`], [`PendingSlot`]). All crate-private.
 
+use crate::BlockKind;
 use kevy_resp::{Argv, RespVersion};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -213,6 +214,47 @@ pub(crate) enum Inbound {
     /// per message. `Arc` so the same payload fanned to many shards is shared,
     /// not cloned per target.
     DeliverPublish(Vec<PubMsg>),
+
+    // ── Cross-shard BLOCK arbiter (see [`crate::block_xshard`]) ──
+    // A conn parks on its origin shard; watch registrations fan out to the
+    // shards owning each watched key. The origin is the single arbiter that
+    // decides which ready key serves the conn, so no target ever pops
+    // speculatively (which would lose data when two keys go ready at once).
+    /// origin → target: "watch `key` for `(origin, conn)`; if a replay of
+    /// `serve_argv` would yield data now, send back [`Inbound::BlockReady`]".
+    /// Re-sent verbatim to re-arm after a raced-empty serve (idempotent —
+    /// the target dedups by `(origin, conn, key)`).
+    BlockArm {
+        origin: usize,
+        conn: u64,
+        key: Vec<u8>,
+        kind: BlockKind,
+        serve_argv: Argv,
+        /// The origin conn's RESP version, so the target shapes the served
+        /// reply (V2 array / V3 map) correctly without a round-trip.
+        proto: RespVersion,
+    },
+    /// target → origin: a watched `key` may now satisfy `conn`. The origin
+    /// arbitrates (ignores if `conn` already served / serving).
+    BlockReady { conn: u64, key: Vec<u8> },
+    /// origin → target: "serve `key` for `(origin, conn)` now" — the target
+    /// replays the armed `serve_argv` (popping / consuming) and returns the
+    /// reply via [`Inbound::BlockServeResp`].
+    BlockServeReq {
+        origin: usize,
+        conn: u64,
+        key: Vec<u8>,
+    },
+    /// target → origin: the serve result. Empty `reply` = raced (another
+    /// client drained the key between ready and serve) → the origin re-arms.
+    BlockServeResp {
+        conn: u64,
+        key: Vec<u8>,
+        reply: Vec<u8>,
+    },
+    /// origin → target: drop every waiter for `(origin, conn)` — sent on
+    /// successful serve, timeout, or disconnect.
+    BlockCancel { origin: usize, conn: u64 },
 }
 
 /// Accumulator for a command's (possibly multi-shard) result.

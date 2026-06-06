@@ -115,11 +115,19 @@ pub(crate) struct Shard<C: Commands> {
     /// Hot-reload via `apply_live_runtime_config` when the embedder
     /// returns `Some` in `LiveRuntimeConfig::slowlog_*`.
     pub(crate) slowlog: crate::exec_slowlog::SlowlogState,
-    /// Per-shard blocked-client registry (see [`crate::blocked`]). Shared by
-    /// `BLPOP` / `BRPOP` / `XREAD BLOCK` / `XREADGROUP BLOCK`. Empty in
-    /// steady state, so the wake / tick hot paths short-circuit on
-    /// `is_empty()`.
+    /// Per-shard blocked-client registry (see [`crate::blocked`]). The
+    /// in-shard fast path for a single key on this shard: `BLPOP` /
+    /// `BRPOP` / `XREAD BLOCK` / `XREADGROUP BLOCK`. Empty in steady
+    /// state, so the wake / tick hot paths short-circuit on `is_empty()`.
     pub(crate) blocked: BlockedClients,
+    /// Origin-side records for conns blocked across shards (a single
+    /// remote key or any multi-key form). This shard is the arbiter for
+    /// each. Empty in steady state. See [`crate::block_xshard`].
+    pub(crate) origin_blocks: HashMap<u64, crate::block_xshard::OriginBlock>,
+    /// Target-side cross-shard waiters: (possibly remote) conns blocked on
+    /// keys this shard owns. Kept separate from `blocked` so the hot
+    /// single-key-local path is untouched. Empty in steady state.
+    pub(crate) xwaiters: crate::block_xshard::XShardWaiters,
 }
 
 // `SPIN_LIMIT` / `PARK_TIMEOUT_MS` / `TICK_CHECK_EVERY` moved to per-
@@ -269,6 +277,7 @@ impl<C: Commands> Shard<C> {
                     // by `iv`), so a `BLPOP k 0.5` resolves on the next 50ms
                     // park instead of the next user-level shard tick.
                     self.tick_blocked_timeouts();
+                    self.tick_xshard_timeouts();
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
                         self.apply_live_runtime_config(&mut tick_interval);

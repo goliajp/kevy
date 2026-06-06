@@ -377,15 +377,50 @@ fn xreadgroup_block_woken_by_concurrent_xadd() {
     assert!(reply.windows(2).any(|w| w == b"v2"));
 }
 
-// ───────────── Multi-key rejection ─────────────
+// ───────────── Multi-key (v2-7e) ─────────────
+//
+// Multi-key BLPOP runs through the cross-shard arbiter even on one shard
+// (every key is a self-target), so these cover the arbiter's park / wake /
+// timeout paths without needing a multi-shard harness — the dedicated
+// cross-shard layout lives in `blocking_cross_shard.rs`.
 
 #[test]
-fn blpop_multi_key_returns_explicit_error_not_nil() {
+fn blpop_multi_key_times_out_when_all_empty() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     c.write_all(&req(&[b"BLPOP", b"a", b"b", b"0.1"])).unwrap();
+    let t0 = std::time::Instant::now();
     let reply = read_reply(&mut c);
-    assert!(reply.starts_with(b"-ERR"), "expected error, got {reply:?}");
-    let msg = std::str::from_utf8(&reply).unwrap();
-    assert!(msg.contains("multi-key"), "error should mention multi-key: {msg}");
+    assert_eq!(reply, b"*-1\r\n", "multi-key BLPOP timeout returns nil array");
+    assert!(t0.elapsed() >= std::time::Duration::from_millis(80));
+}
+
+#[test]
+fn blpop_multi_key_woken_on_second_key() {
+    let srv = Server::start(1);
+    let mut consumer = srv.connect();
+    let mut producer = srv.connect();
+    consumer
+        .write_all(&req(&[b"BLPOP", b"k1", b"k2", b"5"]))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    // Push to the *second* watched key — the arbiter must serve k2.
+    producer.write_all(&req(&[b"LPUSH", b"k2", b"v2"])).unwrap();
+    let _ = read_reply(&mut producer); // :1
+    let reply = read_reply(&mut consumer);
+    assert_eq!(reply, b"*2\r\n$2\r\nk2\r\n$2\r\nv2\r\n");
+}
+
+#[test]
+fn blpop_multi_key_immediate_hit_first_available() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    c.write_all(&req(&[b"RPUSH", b"ready", b"x"])).unwrap();
+    let _ = read_reply(&mut c); // :1
+    // `missing` is empty, `ready` has data → resolves at once via the arm
+    // readiness peek (no parking).
+    c.write_all(&req(&[b"BLPOP", b"missing", b"ready", b"5"]))
+        .unwrap();
+    let reply = read_reply(&mut c);
+    assert_eq!(reply, b"*2\r\n$5\r\nready\r\n$1\r\nx\r\n");
 }

@@ -143,6 +143,25 @@ impl<C: Commands> Shard<C> {
                             self.deliver_publish(&m.0, &m.1);
                         }
                     }
+                    // ── Cross-shard BLOCK arbiter (see `block_xshard`) ──
+                    Inbound::BlockArm {
+                        origin,
+                        conn,
+                        key,
+                        kind,
+                        serve_argv,
+                        proto,
+                    } => self.target_arm(origin, conn, key, kind, serve_argv, proto),
+                    Inbound::BlockReady { conn, key } => self.origin_on_ready(conn, &key),
+                    Inbound::BlockServeReq { origin, conn, key } => {
+                        let reply = self.target_serve(origin, conn, &key);
+                        self.send_to(origin, Inbound::BlockServeResp { conn, key, reply });
+                    }
+                    Inbound::BlockServeResp { conn, key, reply } => {
+                        self.origin_on_serve_resp(conn, key, reply);
+                        self.flush_conn(conn)?;
+                    }
+                    Inbound::BlockCancel { origin, conn } => self.target_cancel(origin, conn),
                 }
             }
         }
@@ -162,6 +181,9 @@ impl<C: Commands> Shard<C> {
             // was parked in, across all its watched keys. Cheap fast-out
             // when nothing is blocked (the common case).
             self.blocked.drop_for_conn(conn_id);
+            // Cancel any cross-shard block this conn was the origin of, so
+            // target shards drop their registrations.
+            self.cancel_xshard_on_close(conn_id);
             self.unregister_subs(&conn.sub);
             // Drop the conn's psub local table entries first (`unregister_psubs`
             // reads `psub_local` to decide if our shard bit should be cleared).

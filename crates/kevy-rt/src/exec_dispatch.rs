@@ -83,9 +83,9 @@ impl<C: Commands> Shard<C> {
         // and so wrote nothing. Skip the post-dispatch housekeeping —
         // the reply is deferred to the wake / timeout path.
         if !wrote_reply
-            && let crate::BlockHint::Block { kind, key, timeout_ms } = block_hint
+            && let crate::BlockHint::Block { kind, keys, timeout_ms } = block_hint
         {
-            self.park_blocked(conn_id, args, kind, key, timeout_ms, proto);
+            self.park_dispatch(conn_id, args, kind, keys, timeout_ms, proto);
             return true;
         }
         let Some(conn) = self.conns.get_mut(&conn_id) else { return true };
@@ -139,17 +139,24 @@ impl<C: Commands> Shard<C> {
             .is_some_and(|c| c.output.len() > out_pre_len)
     }
 
-    /// Register the conn as a blocked waiter on `key` with `kind`, freeze
-    /// the argv via `Commands::resolve_block_argv` (lets the command set
-    /// substitute state-dependent positional args — XREAD's `$` for the
-    /// stream's current last_id), and mark `Conn.blocked` so the reactor
-    /// skips reading more input from this socket until wake / timeout.
-    fn park_blocked<A: ArgvView + ?Sized>(
+    /// Park a blocking command whose `dispatch_into` produced no reply.
+    /// Picks the strategy from the watched keys:
+    /// - **single key on this shard** → the in-shard fast path
+    ///   ([`crate::blocked::BlockedClients`]): freeze the replay argv (via
+    ///   `block_serve_argv` then `resolve_block_argv` for `$`) and register
+    ///   the waiter locally — no cross-core hop.
+    /// - **single remote key, or any multi-key form** → the cross-shard
+    ///   arbiter ([`crate::block_xshard`]): the conn parks here (its origin
+    ///   shard) and watch registrations fan out to each key's owning shard.
+    ///
+    /// Either way `Conn.blocked` is set so the reactor knows the conn is
+    /// parked until a wake or timeout.
+    fn park_dispatch<A: ArgvView + ?Sized>(
         &mut self,
         conn_id: u64,
         args: &A,
         kind: crate::BlockKind,
-        key: Vec<u8>,
+        keys: Vec<Vec<u8>>,
         timeout_ms: u64,
         proto: RespVersion,
     ) {
@@ -158,14 +165,25 @@ impl<C: Commands> Shard<C> {
         } else {
             crate::blocked::unix_now_ms().saturating_add(timeout_ms)
         };
-        let argv = self
-            .commands
-            .resolve_block_argv(&mut self.store, args, kind);
-        let keys = [key];
-        self.blocked
-            .add(conn_id, &keys, kind, deadline_ms, argv, proto);
-        if let Some(conn) = self.conns.get_mut(&conn_id) {
-            conn.blocked = true;
+        if keys.len() == 1 && crate::reduce::shard_of(&keys[0], self.nshards) == self.id {
+            // In-shard fast path: narrow to the one key + freeze `$`.
+            let serve = self.commands.block_serve_argv(args, kind, &keys[0]);
+            let serve = self.commands.resolve_block_argv(&mut self.store, &serve, kind);
+            self.blocked.add(
+                conn_id,
+                std::slice::from_ref(&keys[0]),
+                kind,
+                deadline_ms,
+                serve,
+                proto,
+            );
+            if let Some(conn) = self.conns.get_mut(&conn_id) {
+                conn.blocked = true;
+            }
+        } else {
+            let entries =
+                crate::block_xshard::build_serve_entries(&self.commands, args, kind, &keys);
+            self.park_blocked_xshard(conn_id, kind, entries, deadline_ms, proto);
         }
     }
 
@@ -187,16 +205,28 @@ impl<C: Commands> Shard<C> {
             self.log(args);
         }
         self.maybe_notify_dispatch(args);
-        // BLOCK wake: if this write targets a key that a `BLPOP` / `XREAD
-        // BLOCK` waiter is parked on, wake the oldest one and retry its
-        // command. Gated on `wake_idx` (None for non-wake writes) AND on
-        // `BlockedClients::is_empty()`, so a None-only workload pays one
-        // Option discriminant check on every write.
+        // BLOCK wake: if this write targets a key a waiter is parked on,
+        // wake it. Gated on `wake_idx` (None for non-wake writes), so a
+        // None-only workload pays one Option discriminant check per write.
         if let Some(idx) = wake_idx
-            && !self.blocked.is_empty()
             && let Some(key) = args.get(idx as usize).map(<[u8]>::to_vec)
         {
-            self.wake_blocked_on_key(&key);
+            self.wake_key(&key);
+        }
+    }
+
+    /// Wake both block registries for a write that landed on `key`: the
+    /// in-shard fast path ([`crate::blocked::BlockedClients`]) and the
+    /// cross-shard arbiter ([`crate::block_xshard`]). Each is an
+    /// `is_empty()` short-circuit when unused, so the steady state pays two
+    /// predicted branches. Called from the local write path here and from
+    /// the cross-shard forwarded write path in [`crate::exec_op`].
+    pub(crate) fn wake_key(&mut self, key: &[u8]) {
+        if !self.blocked.is_empty() {
+            self.wake_blocked_on_key(key);
+        }
+        if !self.xwaiters.is_empty() && self.xwaiters.is_watched(key) {
+            self.target_wake_xshard(key);
         }
     }
 }

@@ -17,15 +17,13 @@ use kevy_rt::{BlockHint, BlockKind, Route, Store};
 
 /// Classify an uppercased verb into its blocking-command hint. The runtime
 /// uses this (via [`crate::KevyCommands::resolve`]) to know whether to park
-/// the conn on a key when the command's `dispatch_into` produces no reply.
-/// `None` is the zero-cost answer for every non-blocking verb.
+/// the conn when the command's `dispatch_into` produces no reply, and on
+/// which key(s). `None` is the zero-cost answer for every non-blocking verb.
 ///
-/// Multi-key forms (`BLPOP k1 k2 ... timeout`) deliberately return
-/// `BlockHint::None`: a sharded build cannot atomically wait on keys that
-/// may live on different shards, and `cmd_blpop` emits an explicit error
-/// in that branch (so the dispatcher does see a reply written and does not
-/// register a waiter). A future v2-7e sprint can lift the same-shard
-/// subset.
+/// Multi-key forms (`BLPOP k1 k2 … timeout`, `XREAD … STREAMS s1 s2 …`) are
+/// supported since v2-7e: the runtime parks the conn on its origin shard and
+/// fans watch registrations out to each key's owning shard (see
+/// `kevy_rt::block_xshard`). The keys are returned in request order.
 pub(crate) fn block_hint_for_verb<A: ArgvView + ?Sized>(
     upper: &[u8],
     args: &A,
@@ -39,11 +37,15 @@ pub(crate) fn block_hint_for_verb<A: ArgvView + ?Sized>(
     }
 }
 
+/// `BLPOP key [key …] timeout` — last arg is the timeout, the rest are
+/// watched list keys (≥ 1). Malformed timeout → `None` so `cmd_blpop`
+/// emits the precise error and the dispatcher skips registration.
 fn blpop_hint<A: ArgvView + ?Sized>(kind: BlockKind, args: &A) -> BlockHint {
-    if args.len() != 3 {
+    if args.len() < 3 {
         return BlockHint::None;
     }
-    let Ok(timeout_str) = std::str::from_utf8(&args[2]) else {
+    let timeout_idx = args.len() - 1;
+    let Ok(timeout_str) = std::str::from_utf8(&args[timeout_idx]) else {
         return BlockHint::None;
     };
     let Ok(secs) = timeout_str.parse::<f64>() else {
@@ -53,9 +55,10 @@ fn blpop_hint<A: ArgvView + ?Sized>(kind: BlockKind, args: &A) -> BlockHint {
         return BlockHint::None;
     }
     let timeout_ms = (secs * 1000.0) as u64;
+    let keys = (1..timeout_idx).map(|i| args[i].to_vec()).collect();
     BlockHint::Block {
         kind,
-        key: args[1].to_vec(),
+        keys,
         timeout_ms,
     }
 }
@@ -95,12 +98,12 @@ fn xread_block_hint<A: ArgvView + ?Sized>(args: &A) -> BlockHint {
                 let Some(bm) = block_ms else {
                     return BlockHint::None;
                 };
-                let Some(key) = args.get(i + 1) else {
+                let Some(keys) = streams_keys(args, i + 1) else {
                     return BlockHint::None;
                 };
                 return BlockHint::Block {
                     kind: BlockKind::XReadBlock,
-                    key: key.to_vec(),
+                    keys,
                     timeout_ms: bm,
                 };
             }
@@ -108,6 +111,18 @@ fn xread_block_hint<A: ArgvView + ?Sized>(args: &A) -> BlockHint {
         }
     }
     BlockHint::None
+}
+
+/// All STREAMS keys for a `STREAMS k1 … kn id1 … idn` tail starting at
+/// `start` (the first key). `None` if the key/id count is unbalanced or
+/// empty — the caller treats that as "not parkable".
+fn streams_keys<A: ArgvView + ?Sized>(args: &A, start: usize) -> Option<Vec<Vec<u8>>> {
+    let rest = args.len().checked_sub(start)?;
+    if rest == 0 || !rest.is_multiple_of(2) {
+        return None;
+    }
+    let n = rest / 2;
+    Some((start..start + n).map(|i| args[i].to_vec()).collect())
 }
 
 /// XREADGROUP: like [`xread_block_hint`] but starts after `GROUP gname
@@ -142,7 +157,7 @@ fn xreadgroup_block_hint<A: ArgvView + ?Sized>(args: &A) -> BlockHint {
                 let Some(bm) = block_ms else {
                     return BlockHint::None;
                 };
-                let Some(key) = args.get(i + 1) else {
+                let Some(keys) = streams_keys(args, i + 1) else {
                     return BlockHint::None;
                 };
                 // XREADGROUP BLOCK only parks for `>`-mode streams; the
@@ -152,7 +167,7 @@ fn xreadgroup_block_hint<A: ArgvView + ?Sized>(args: &A) -> BlockHint {
                 // call produces output and the registration is skipped.
                 return BlockHint::Block {
                     kind: BlockKind::XReadGroupBlock,
-                    key: key.to_vec(),
+                    keys,
                     timeout_ms: bm,
                 };
             }
@@ -162,17 +177,19 @@ fn xreadgroup_block_hint<A: ArgvView + ?Sized>(args: &A) -> BlockHint {
     BlockHint::None
 }
 
-/// Routing for `XREAD`: the routing key is the **first STREAMS key**, not
-/// `args[1]` (which is typically `COUNT` / `BLOCK` / `STREAMS` itself).
-/// Falls back to `Route::Single(1)` on malformed input so `cmd_xread`
-/// gets to emit the precise syntax error — and to `Route::Local` on a
-/// keyless XREAD so the local shard returns the empty-reply error
-/// without a misleading cross-shard hop.
+/// Routing for `XREAD`. A `BLOCK` clause forces [`Route::Local`] so the
+/// conn parks on its own shard and the cross-shard arbiter fans watch
+/// registrations out (single- or multi-stream, any shard layout). A
+/// non-blocking `XREAD` still routes by the **first STREAMS key** —
+/// multi-stream non-blocking reads across shards remain a separate gather
+/// (out of v2-7e's blocking scope). Falls back to `Route::Single(1)` on
+/// malformed input so `cmd_xread` emits the precise syntax error.
 pub(crate) fn xread_route<A: ArgvView + ?Sized>(args: &A) -> Route {
     let mut i = 1usize;
     while i < args.len() {
         let upper = args[i].to_ascii_uppercase();
         match upper.as_slice() {
+            b"BLOCK" => return Route::Local,
             b"STREAMS" => {
                 let key_idx = i + 1;
                 return if key_idx < args.len() {
@@ -181,7 +198,7 @@ pub(crate) fn xread_route<A: ArgvView + ?Sized>(args: &A) -> Route {
                     Route::Local
                 };
             }
-            b"COUNT" | b"BLOCK" => i = i.saturating_add(2),
+            b"COUNT" => i = i.saturating_add(2),
             _ => return Route::Single(1),
         }
     }
@@ -199,6 +216,7 @@ pub(crate) fn xreadgroup_route<A: ArgvView + ?Sized>(args: &A) -> Route {
     while i < args.len() {
         let upper = args[i].to_ascii_uppercase();
         match upper.as_slice() {
+            b"BLOCK" => return Route::Local,
             b"STREAMS" => {
                 let key_idx = i + 1;
                 return if key_idx < args.len() {
@@ -207,7 +225,7 @@ pub(crate) fn xreadgroup_route<A: ArgvView + ?Sized>(args: &A) -> Route {
                     Route::Local
                 };
             }
-            b"COUNT" | b"BLOCK" => i = i.saturating_add(2),
+            b"COUNT" => i = i.saturating_add(2),
             b"NOACK" => i = i.saturating_add(1),
             _ => return Route::Single(1),
         }

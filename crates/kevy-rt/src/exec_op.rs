@@ -51,6 +51,15 @@ impl<C: Commands> Shard<C> {
                     // short-circuit inside maybe_notify_dispatch keeps
                     // the OFF hot path at one bool-OR per write.
                     self.maybe_notify_dispatch(&args);
+                    // BLOCK wake: a forwarded LPUSH/RPUSH/XADD lands here on
+                    // the key's owning shard, where any waiter (in-shard or
+                    // cross-shard) is registered. The local fast-path write
+                    // wakes via `post_write_housekeeping` instead.
+                    if let Some(idx) = self.commands.wake_idx(&args)
+                        && let Some(key) = args.get(idx as usize).map(<[u8]>::to_vec)
+                    {
+                        self.wake_key(&key);
+                    }
                 }
                 Part::Reply(reply)
             }
