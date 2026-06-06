@@ -107,6 +107,7 @@ impl Commands for KevyCommands {
             b"UNWATCH" => Route::Unwatch,
             b"RENAME" => Route::Rename { nx: false },
             b"RENAMENX" => Route::Rename { nx: true },
+            b"XREAD" => cmd::xread_route(args),
             b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),
             // DEL/EXISTS are single-key (fast path) unless given multiple keys.
             b"DEL" => {
@@ -329,6 +330,7 @@ impl Commands for KevyCommands {
             b"UNWATCH" => Route::Unwatch,
             b"RENAME" => Route::Rename { nx: false },
             b"RENAMENX" => Route::Rename { nx: true },
+            b"XREAD" => cmd::xread_route(args),
             b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),
             b"DEL" => {
                 if args.len() == 2 {

@@ -320,15 +320,28 @@ fn cmd_xtrim<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8
 // ───────────── XREAD (non-blocking) ─────────────
 
 /// `XREAD [COUNT n] [BLOCK ms] STREAMS key [key ...] id [id ...]`.
-/// Sprint A ignores `BLOCK` (returns immediately with whatever is
-/// already buffered or `*-1` for nothing). Multi-key reads on different
-/// shards return `-CROSSSHARD` because the routing layer holds us on
-/// one shard at a time; same-shard fan-out runs inline.
+///
+/// BLOCK semantics:
+/// - `BLOCK ms` + every requested stream is empty past its requested ID:
+///   leaves `out` untouched. The runtime, having resolved
+///   `BlockHint::Block { kind: XReadBlock, ... }` for this command,
+///   detects the no-output condition and parks the conn on the first
+///   stream key. A subsequent `XADD` to that key wakes the conn and
+///   re-runs this function (which now finds the new entry and emits the
+///   normal multi-bulk reply); a `BLOCK 0` blocks forever.
+/// - `BLOCK ms` + at least one stream has fresh entries: emits the
+///   normal reply immediately (no waiter registered).
+/// - No `BLOCK`: emits `*-1` on empty (non-blocking convention).
+///
+/// Multi-stream BLOCK on different shards is constrained by the routing
+/// layer (only the first STREAMS key drives shard selection — see
+/// `kevy::KevyCommands::route`). Same-shard fan-out runs inline.
 fn cmd_xread<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     let parsed = match parse_xread_argv(args) {
         Ok(p) => p,
         Err(msg) => return encode_error(out, msg),
     };
+    let blocking = parsed.block_ms.is_some();
     let mut reply: Vec<StreamReply> = Vec::new();
     for (key, last_seen_arg) in parsed.streams {
         let last_seen = if last_seen_arg == b"$" {
@@ -355,16 +368,28 @@ fn cmd_xread<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8
             reply.push((key, entries));
         }
     }
+    if reply.is_empty() && blocking {
+        // BLOCK + nothing fresh → leave out untouched so the dispatcher
+        // registers the conn as a waiter on the first stream key (the
+        // routing key — see KevyCommands::route's XREAD arm). On the
+        // next XADD wake this same function re-runs and writes a reply.
+        return;
+    }
     emit_xread_reply(out, &reply);
 }
 
 struct XReadParsed {
     count: Option<usize>,
+    /// `Some(ms)` if the client passed `BLOCK ms`; sprint D's BLOCK reactor
+    /// uses this to know "no entries yet → caller should park the conn".
+    /// `None` means non-blocking (`*-1` on empty).
+    block_ms: Option<u64>,
     streams: Vec<(Vec<u8>, Vec<u8>)>, // (key, last-seen-arg)
 }
 
 fn parse_xread_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XReadParsed, &'static str> {
     let mut count: Option<usize> = None;
+    let mut block_ms: Option<u64> = None;
     let mut i = 1;
     while i < args.len() {
         let tok = args[i].to_ascii_uppercase();
@@ -379,7 +404,12 @@ fn parse_xread_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XReadParsed, &'sta
                 i += 2;
             }
             b"BLOCK" => {
-                // Sprint A: parse-and-ignore; sprint D will hook this.
+                let ms_arg = args.get(i + 1).ok_or("ERR syntax error")?;
+                let ms: u64 = std::str::from_utf8(ms_arg)
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .ok_or("ERR timeout is not an integer or out of range")?;
+                block_ms = Some(ms);
                 i += 2;
             }
             b"STREAMS" => {
@@ -397,7 +427,11 @@ fn parse_xread_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XReadParsed, &'sta
                         args[i + 1 + n + k].to_vec(),
                     ));
                 }
-                return Ok(XReadParsed { count, streams });
+                return Ok(XReadParsed {
+                    count,
+                    block_ms,
+                    streams,
+                });
             }
             _ => return Err("ERR syntax error"),
         }
