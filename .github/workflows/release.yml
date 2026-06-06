@@ -66,7 +66,7 @@ jobs:
               echo "✓ published $crate"
               return 0
             fi
-            if grep -qE "already uploaded|crate version .* is already" "$log"; then
+            if grep -qE "already uploaded|crate version .* is already|already exists on crates.io" "$log"; then
               echo "::endgroup::"
               echo "↷ skipped $crate (already on crates.io)"
               return 0
