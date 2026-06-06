@@ -13,6 +13,7 @@
 //! that is what keeps the all-to-all mesh deadlock-free.
 
 use crate::Commands;
+use crate::blocked::BlockedClients;
 use crate::conn::Conn;
 use crate::NotificationFlags;
 use crate::message::{Inbound, PubMsg, PubSubPatternReg, PubSubReg, ReqBatch};
@@ -114,6 +115,11 @@ pub(crate) struct Shard<C: Commands> {
     /// Hot-reload via `apply_live_runtime_config` when the embedder
     /// returns `Some` in `LiveRuntimeConfig::slowlog_*`.
     pub(crate) slowlog: crate::exec_slowlog::SlowlogState,
+    /// Per-shard blocked-client registry (see [`crate::blocked`]). Shared by
+    /// `BLPOP` / `BRPOP` / `XREAD BLOCK` / `XREADGROUP BLOCK`. Empty in
+    /// steady state, so the wake / tick hot paths short-circuit on
+    /// `is_empty()`.
+    pub(crate) blocked: BlockedClients,
 }
 
 // `SPIN_LIMIT` / `PARK_TIMEOUT_MS` / `TICK_CHECK_EVERY` moved to per-
@@ -259,6 +265,10 @@ impl<C: Commands> Shard<C> {
                 if tick_check_counter >= self.tick_check_every || !spinning {
                     tick_check_counter = 0;
                     let now = Instant::now();
+                    // BLOCK reactor: fire timeouts every tick gate (not gated
+                    // by `iv`), so a `BLPOP k 0.5` resolves on the next 50ms
+                    // park instead of the next user-level shard tick.
+                    self.tick_blocked_timeouts();
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
                         self.apply_live_runtime_config(&mut tick_interval);

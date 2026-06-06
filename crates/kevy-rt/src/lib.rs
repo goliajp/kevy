@@ -67,6 +67,7 @@
 // kevy-sys.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod blocked;
 mod conn;
 mod exec;
 mod exec_build;

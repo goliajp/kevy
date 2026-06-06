@@ -158,6 +158,10 @@ impl<C: Commands> Shard<C> {
             let fd = conn.sock.raw();
             let _ = self.poller.delete(fd);
             self.fd_to_conn.remove(&fd);
+            // Drop any BLPOP / BRPOP / XREAD BLOCK waiter the closing conn
+            // was parked in, across all its watched keys. Cheap fast-out
+            // when nothing is blocked (the common case).
+            self.blocked.drop_for_conn(conn_id);
             self.unregister_subs(&conn.sub);
             // Drop the conn's psub local table entries first (`unregister_psubs`
             // reads `psub_local` to decide if our shard bit should be cleared).
