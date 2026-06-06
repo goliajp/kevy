@@ -1,0 +1,22 @@
+name: Release kevy-geo
+
+# Per-crate release dispatcher for kevy-geo. Body lives in
+# release-crate.yml (reusable); this file just binds the crate name
+# and surfaces the dispatch UI in the Actions tab. See release-crate.yml
+# header for the dispatch flow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build + test + cargo publish --dry-run, do NOT publish or tag'
+        type: boolean
+        default: false
+
+jobs:
+  release:
+    uses: ./.github/workflows/release-crate.yml
+    with:
+      crate: kevy-geo
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
