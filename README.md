@@ -301,7 +301,7 @@ pattern glob), **transactions** (`MULTI` / `EXEC` / `DISCARD` / `WATCH` /
 `CLIENT` / …). Multi-key commands, pub/sub, WATCH, and blocking pops all
 work across the per-core shards, and `WRONGTYPE` behaves as in Redis.
 
-The full 98-command list with valkey-parity notes is in
+The full command list with valkey-parity notes is in
 [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md).
 
 ## Build & test

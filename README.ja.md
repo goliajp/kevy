@@ -277,7 +277,7 @@ kevy は小さく再利用可能な crate 群として提供されます —— 
 ブロッキング pop はいずれもコアごとのシャードをまたいで動作し、`WRONGTYPE`
 の挙動は Redis と同じです。
 
-valkey 同等性の注記付き完全な 98 コマンド一覧は
+valkey 同等性の注記付き完全なコマンド一覧は
 [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md) にあります。
 
 ## ビルドとテスト
