@@ -53,6 +53,7 @@ mod cmd_resolve;
 mod config_global;
 mod dispatch;
 mod dispatch_collections;
+mod dispatch_resp3;
 mod dispatch_geo;
 mod dispatch_stream;
 mod ops;
