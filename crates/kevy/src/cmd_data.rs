@@ -70,10 +70,12 @@ pub(crate) fn cmd_spop_rand<A: ArgvView + ?Sized>(
 ///   the reply); a `BLPOP key 0` blocks forever, anything else expires
 ///   on the reactor's blocked-timeout tick.
 ///
-/// Multi-key form (`BLPOP k1 k2 ... timeout`) is explicitly rejected
-/// with an error — a sharded build cannot atomically wait on keys that
-/// may live on different shards. A future v2-7e sprint can lift the
-/// same-shard subset.
+/// Multi-key form (`BLPOP k1 k2 … timeout`) is supported since v2-7e: it
+/// leaves `out` untouched so the runtime parks the conn across shards (the
+/// cross-shard arbiter fans watch registrations to each key's owning
+/// shard and replays a single-key `BLPOP key 0` on wake). The timeout
+/// (last arg) is still validated up front so a malformed one errors
+/// instead of silently blocking.
 pub(crate) fn cmd_blpop<A: ArgvView + ?Sized>(
     store: &mut Store,
     args: &A,
@@ -84,19 +86,19 @@ pub(crate) fn cmd_blpop<A: ArgvView + ?Sized>(
     if args.len() < 3 {
         return wrong_args(out, name);
     }
-    if args.len() > 3 {
-        return encode_error(
-            out,
-            "ERR multi-key BLPOP/BRPOP is not supported on sharded kevy \
-             (sprint v2-7e tracks the same-shard subset); use a single key",
-        );
-    }
-    let valid = std::str::from_utf8(&args[2])
+    let timeout_idx = args.len() - 1;
+    let valid = std::str::from_utf8(&args[timeout_idx])
         .ok()
         .and_then(|s| s.parse::<f64>().ok())
         .is_some_and(|f| f.is_finite() && f >= 0.0);
     if !valid {
         return encode_error(out, "ERR timeout is not a float or out of range");
+    }
+    if args.len() > 3 {
+        // Multi-key: leave out untouched → the dispatcher parks the conn on
+        // every watched key via the cross-shard arbiter. The per-key wake
+        // replays a single-key `BLPOP key 0` (the len == 3 path below).
+        return;
     }
     let res = if tail {
         store.rpop(&args[1], 1)

@@ -85,6 +85,12 @@ fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
         b"UNWATCH" => Route::Unwatch,
         b"RENAME" => Route::Rename { nx: false },
         b"RENAMENX" => Route::Rename { nx: true },
+        // Blocking pop verbs always park on the conn's own (origin) shard,
+        // from where the cross-shard arbiter fans watch registrations out
+        // to each key's owning shard (see kevy_rt::block_xshard). Routing
+        // by key instead would strand the waiter on a shard that doesn't
+        // own the connection.
+        b"BLPOP" | b"BRPOP" => Route::Local,
         b"XREAD" => cmd_block::xread_route(args),
         b"XREADGROUP" => cmd_block::xreadgroup_route(args),
         b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),

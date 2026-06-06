@@ -67,6 +67,7 @@
 // kevy-sys.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod block_xshard;
 mod blocked;
 mod conn;
 mod exec;
@@ -268,6 +269,18 @@ pub trait Commands: Clone + Send + 'static {
         LiveRuntimeConfig::default()
     }
 
+    /// Index into `args` of the key whose write may wake a blocked waiter
+    /// (`LPUSH` / `RPUSH` feed `BLPOP` / `BRPOP`; `XADD` feeds the stream
+    /// blocks). `Some(1)` for those verbs, `None` for everything else. The
+    /// in-shard fast path reads this off [`ResolvedCmd::wake_idx`]; the
+    /// cross-shard write path ([`crate::exec_op`], where a forwarded write
+    /// lands on the key's owning shard) re-derives it via this method since
+    /// the `Op::Dispatch` envelope doesn't carry the resolved hint. Default
+    /// `None` so non-blocking embedders pay nothing.
+    fn wake_idx<A: ArgvView + ?Sized>(&self, _args: &A) -> Option<u8> {
+        None
+    }
+
     /// Classify a command for blocking semantics. `BlockHint::None`
     /// (default) is the zero-cost answer for every non-blocking verb;
     /// the dispatcher only registers a waiter when this returns
@@ -292,6 +305,11 @@ pub trait Commands: Clone + Send + 'static {
     /// need to override when a registered command carries an arg whose
     /// meaning depends on store state at park time (`XREAD $`, the
     /// classic case).
+    ///
+    /// For the cross-shard arbiter this runs on the **target** shard (the
+    /// one that owns the key) when the waiter is armed, so `$` snapshots
+    /// the target's real `last_id` — not the origin shard's (which may not
+    /// hold the stream at all).
     fn resolve_block_argv<A: ArgvView + ?Sized>(
         &self,
         _store: &mut Store,
@@ -299,6 +317,42 @@ pub trait Commands: Clone + Send + 'static {
         _kind: BlockKind,
     ) -> Argv {
         args.to_argv()
+    }
+
+    /// Build the **single-key** command the dispatcher will replay to
+    /// satisfy one watched `key` of a (possibly multi-key) blocking
+    /// command. `args` is the original command; `key` is one of its
+    /// watched keys. Returns an [`Argv`] that, when dispatched, pops /
+    /// reads only `key` — e.g. `BLPOP k1 k2 0` watching `k2` yields
+    /// `BLPOP k2 0`; `XREAD … STREAMS s1 s2 id1 id2` watching `s2`
+    /// yields `XREAD … STREAMS s2 id2`.
+    ///
+    /// Any state-dependent positional arg (`$`) is left **literal** here —
+    /// it's frozen later by [`Self::resolve_block_argv`] on the key's
+    /// owning shard. No store access needed (pure argv slicing). Default:
+    /// the unchanged argv (single-key blocking commands need no rewrite).
+    fn block_serve_argv<A: ArgvView + ?Sized>(
+        &self,
+        args: &A,
+        _kind: BlockKind,
+        _key: &[u8],
+    ) -> Argv {
+        args.to_argv()
+    }
+
+    /// Non-destructive readiness peek for a parked waiter: would replaying
+    /// `serve_argv` (built by [`Self::block_serve_argv`], `$` already
+    /// frozen) produce a reply right now? Runs on the key's owning shard
+    /// when arming and is the gate for emitting a cross-shard wake. Must
+    /// NOT mutate the store (no pop / no group-cursor advance). Default
+    /// `false` so non-blocking embedders never spuriously wake.
+    fn block_ready<A: ArgvView + ?Sized>(
+        &self,
+        _store: &mut Store,
+        _serve_argv: &A,
+        _kind: BlockKind,
+    ) -> bool {
+        false
     }
 
     /// Resolve all verb-dependent attributes in **one** verb-table lookup.

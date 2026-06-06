@@ -225,6 +225,8 @@ impl<C: Commands> Runtime<C> {
                     self.slowlog_max_len,
                 ),
                 blocked: crate::blocked::BlockedClients::new(),
+                origin_blocks: std::collections::HashMap::new(),
+                xwaiters: crate::block_xshard::XShardWaiters::default(),
             });
         }
 
