@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# pre-commit: enforce kevy's CLAUDE.md hard rules on staged files.
+#
+# Currently enforces:
+#   - crates/<x>/src/**/*.rs ≤ 500 LOC (non-test sources only;
+#     test files under tests/ and benches/ are exempt per Rust
+#     community norms — see memory feedback-no-large-file-or-fn).
+#
+# Function-level (`fn ≤ 50 LOC`) is intentionally NOT checked here —
+# reliably parsing Rust fn bodies in shell is error-prone, and the
+# 500-LOC file gate catches most drift early enough that fn-level
+# review at commit-author time is workable. Add a fn-level gate later
+# if the file gate proves insufficient.
+#
+# To bypass for a single commit (e.g. tech-debt tracked elsewhere):
+#   git commit --no-verify
+#
+# Installed by setting `git config core.hooksPath .githooks`; see
+# GIT-FLOW.md for the one-time setup.
+
+set -euo pipefail
+
+readonly LOC_LIMIT=500
+
+# Staged Rust source files under crates/<x>/src/, excluding any path
+# segment containing `tests` or `benches` (test files exempt).
+staged=$(git diff --cached --name-only --diff-filter=ACM \
+  | grep -E '^crates/[^/]+/src/.*\.rs$' \
+  | grep -vE '(^|/)(tests|benches)(/|$)' \
+  || true)
+
+if [ -z "$staged" ]; then
+  exit 0
+fi
+
+failed=0
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  # Count lines in the staged blob (not the worktree) — a partial
+  # `git add -p` may have left the working copy bigger than what's
+  # being committed.
+  blob=$(git ls-files --stage -- "$f" | awk '{print $2}')
+  if [ -z "$blob" ]; then
+    continue
+  fi
+  loc=$(git cat-file blob "$blob" | wc -l | tr -d ' ')
+  if [ "$loc" -gt "$LOC_LIMIT" ]; then
+    echo "✗ $f: $loc LOC > $LOC_LIMIT (CLAUDE.md hard rule)" >&2
+    failed=1
+  fi
+done <<EOF
+$staged
+EOF
+
+if [ "$failed" -ne 0 ]; then
+  echo "" >&2
+  echo "Split oversized files into submodules before committing. To" >&2
+  echo "bypass for this commit only (when the overflow is tech-debt-" >&2
+  echo "tracked, not new growth):" >&2
+  echo "  git commit --no-verify" >&2
+  exit 1
+fi
