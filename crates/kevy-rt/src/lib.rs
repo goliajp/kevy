@@ -71,6 +71,7 @@ mod blocked;
 mod conn;
 mod exec;
 mod exec_build;
+mod exec_dispatch;
 mod exec_notify;
 mod exec_op;
 mod exec_pubsub;
@@ -83,6 +84,7 @@ mod message;
 mod reduce;
 mod runtime;
 mod shard;
+mod shard_tick;
 #[cfg(target_os = "linux")]
 mod uring_reactor;
 
