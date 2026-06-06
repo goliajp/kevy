@@ -18,7 +18,7 @@
 use crate::Commands;
 use crate::conn::Conn;
 use crate::message::{Inbound, Op};
-use crate::shard::{Shard, TICK_CHECK_EVERY};
+use crate::shard::Shard;
 use kevy_persist::{load_snapshot, replay_aof};
 use kevy_resp::parse_command_borrowed;
 use kevy_sys::Socket;
@@ -173,7 +173,7 @@ impl<C: Commands> Shard<C> {
             // (256-iter counter + `tick_interval` elapsed gate).
             if let Some(iv) = tick_interval {
                 tick_check_counter = tick_check_counter.wrapping_add(1);
-                if tick_check_counter >= TICK_CHECK_EVERY {
+                if tick_check_counter >= self.tick_check_every {
                     tick_check_counter = 0;
                     let now = Instant::now();
                     if now.duration_since(last_tick) >= iv {
@@ -370,8 +370,8 @@ impl<C: Commands> Shard<C> {
                     // each locally, reply as one `ResponseBatch` to the origin.
                     Inbound::RequestBatch { origin, reqs } => {
                         let mut resps = Vec::with_capacity(reqs.len());
-                        for (conn, seq, argv) in reqs {
-                            let part = self.exec_op(Op::Dispatch(argv));
+                        for (conn, seq, argv, proto) in reqs {
+                            let part = self.exec_op(Op::Dispatch(argv, proto));
                             resps.push((conn, seq, part));
                         }
                         self.send_to(origin, Inbound::ResponseBatch(resps));
