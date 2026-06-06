@@ -278,6 +278,27 @@ pub trait Commands: Clone + Send + 'static {
         BlockHint::None
     }
 
+    /// Rewrite `args` into the owned [`Argv`] that the dispatcher will
+    /// store as the parked waiter's command and replay on wake. Lets a
+    /// command set normalise positional ID / cursor arguments that would
+    /// otherwise re-resolve to a different value on retry — most notably
+    /// `XREAD BLOCK ... STREAMS k $`, where leaving `$` literal in the
+    /// retried argv causes a fresh re-resolve to the post-`XADD` last_id
+    /// and zero matching entries (the wake hangs).
+    ///
+    /// Default: just materialise the argv unchanged. Concrete impls only
+    /// need to override when a registered command carries an arg whose
+    /// meaning depends on store state at park time (`XREAD $`, the
+    /// classic case).
+    fn resolve_block_argv<A: ArgvView + ?Sized>(
+        &self,
+        _store: &mut Store,
+        args: &A,
+        _kind: BlockKind,
+    ) -> Argv {
+        args.to_argv()
+    }
+
     /// Resolve all verb-dependent attributes in **one** verb-table lookup.
     /// The default implementation calls the per-attribute methods above
     /// (five upper_verb scans + matches); concrete impls SHOULD override

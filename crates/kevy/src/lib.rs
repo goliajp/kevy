@@ -36,7 +36,7 @@ use kevy_resp::{
     encode_array_len, encode_bulk, encode_error, encode_integer, encode_map_header, parse_command,
 };
 use kevy_rt::{
-    ArgvView, Commands, NotifyClass, ResolvedCmd, RespVersion, Route, Runtime, TxnKind,
+    ArgvView, BlockKind, Commands, NotifyClass, ResolvedCmd, RespVersion, Route, Runtime, TxnKind,
     parse_slowlog_sub,
 };
 use kevy_store::Store;
@@ -273,6 +273,24 @@ impl Commands for KevyCommands {
             b"DISCARD" => TxnKind::Discard,
             b"WATCH" => TxnKind::Watch,
             _ => TxnKind::Other,
+        }
+    }
+
+    /// Freeze `$` IDs in an `XREAD BLOCK` argv at park time. Default
+    /// would leave `$` literal in the parked argv; the wake retry would
+    /// then re-resolve `$` to the *post-XADD* `last_id`, miss the new
+    /// entry, and time out instead of returning it. Other block kinds
+    /// (BLPOP / BRPOP / XREADGROUP `>`) have no state-dependent argv —
+    /// they fall through to the trait default.
+    fn resolve_block_argv<A: ArgvView + ?Sized>(
+        &self,
+        store: &mut Store,
+        args: &A,
+        kind: BlockKind,
+    ) -> Argv {
+        match kind {
+            BlockKind::XReadBlock => cmd_block::xread_resolve_argv(store, args),
+            _ => args.to_argv(),
         }
     }
 
