@@ -47,6 +47,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 mod cmd;
+mod cmd_block;
 mod cmd_data;
 mod config_global;
 mod dispatch;
@@ -107,7 +108,8 @@ impl Commands for KevyCommands {
             b"UNWATCH" => Route::Unwatch,
             b"RENAME" => Route::Rename { nx: false },
             b"RENAMENX" => Route::Rename { nx: true },
-            b"XREAD" => cmd::xread_route(args),
+            b"XREAD" => cmd_block::xread_route(args),
+            b"XREADGROUP" => cmd_block::xreadgroup_route(args),
             b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),
             // DEL/EXISTS are single-key (fast path) unless given multiple keys.
             b"DEL" => {
@@ -330,7 +332,8 @@ impl Commands for KevyCommands {
             b"UNWATCH" => Route::Unwatch,
             b"RENAME" => Route::Rename { nx: false },
             b"RENAMENX" => Route::Rename { nx: true },
-            b"XREAD" => cmd::xread_route(args),
+            b"XREAD" => cmd_block::xread_route(args),
+            b"XREADGROUP" => cmd_block::xreadgroup_route(args),
             b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),
             b"DEL" => {
                 if args.len() == 2 {
@@ -355,8 +358,8 @@ impl Commands for KevyCommands {
             }
         };
 
-        let block_hint = cmd::block_hint_for_verb(upper, args);
-        let wake_idx = cmd::wake_idx_for_verb(upper);
+        let block_hint = cmd_block::block_hint_for_verb(upper, args);
+        let wake_idx = cmd_block::wake_idx_for_verb(upper);
 
         ResolvedCmd {
             txn_kind,

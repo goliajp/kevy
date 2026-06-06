@@ -141,6 +141,13 @@ pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(
         Err(msg) => return encode_error(out, msg),
     };
     let mut reply: Vec<super::StreamReply> = Vec::new();
+    // BLOCK only takes effect when at least one stream is reading new
+    // entries (`>`); a replay-from-PEL form (`XREADGROUP … STREAMS s 0`)
+    // returns immediately even with BLOCK set, matching Redis. So we
+    // remember "any `>`-stream" before iterating, then check both flags
+    // before parking.
+    let any_new_stream = parsed.streams.iter().any(|(_, id)| id == b">");
+    let blocking = parsed.block_ms.is_some() && any_new_stream;
     for (key, last_seen_arg) in parsed.streams {
         let last_seen = if last_seen_arg == b">" {
             ReadGroupId::New
@@ -181,6 +188,12 @@ pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(
             reply.push((key, entries));
         }
     }
+    if reply.is_empty() && blocking {
+        // BLOCK + new-mode + nothing fresh → leave out untouched so the
+        // dispatcher registers the conn as a waiter on the first stream
+        // key. Next XADD on that key wakes us and re-runs xreadgroup.
+        return;
+    }
     if reply.is_empty() {
         encode_array_len(out, -1);
         return;
@@ -197,6 +210,10 @@ struct XReadGroupParsed {
     group: Vec<u8>,
     consumer: Vec<u8>,
     count: Option<usize>,
+    /// `Some(ms)` if `BLOCK ms` was present; v2-7d.4 uses this together
+    /// with the "at least one stream reads `>`" check to decide whether
+    /// to park the conn when every requested stream is empty.
+    block_ms: Option<u64>,
     noack: bool,
     streams: Vec<(Vec<u8>, Vec<u8>)>,
 }
@@ -214,6 +231,7 @@ fn parse_xreadgroup_argv<A: ArgvView + ?Sized>(
     let consumer = args[3].to_vec();
     let mut i = 4;
     let mut count = None;
+    let mut block_ms: Option<u64> = None;
     let mut noack = false;
     while i < args.len() {
         let tok = args[i].to_ascii_uppercase();
@@ -228,7 +246,12 @@ fn parse_xreadgroup_argv<A: ArgvView + ?Sized>(
                 i += 2;
             }
             b"BLOCK" => {
-                // Sprint A/B ignore BLOCK; sprint D wires the reactor.
+                let ms_arg = args.get(i + 1).ok_or("ERR syntax error")?;
+                let ms: u64 = std::str::from_utf8(ms_arg)
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .ok_or("ERR timeout is not an integer or out of range")?;
+                block_ms = Some(ms);
                 i += 2;
             }
             b"NOACK" => {
@@ -247,7 +270,14 @@ fn parse_xreadgroup_argv<A: ArgvView + ?Sized>(
                 for k in 0..n {
                     streams.push((args[i + 1 + k].to_vec(), args[i + 1 + n + k].to_vec()));
                 }
-                return Ok(XReadGroupParsed { group, consumer, count, noack, streams });
+                return Ok(XReadGroupParsed {
+                    group,
+                    consumer,
+                    count,
+                    block_ms,
+                    noack,
+                    streams,
+                });
             }
             _ => return Err("ERR syntax error"),
         }
