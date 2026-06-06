@@ -55,6 +55,69 @@ pub(crate) fn cmd_spop_rand<A: ArgvView + ?Sized>(
     }
 }
 
+/// `BLPOP key timeout` / `BRPOP key timeout` — single-key form only.
+///
+/// Behavior:
+/// - If the list is non-empty, pops one value and writes the canonical
+///   `*2\r\n + bulk(key) + bulk(value)` reply (the runtime then emits it
+///   like any other reply).
+/// - If the list is empty, **leaves `out` untouched**. The runtime,
+///   having already resolved a `BlockHint::Block` for this command,
+///   detects the no-output condition and registers the conn as a waiter
+///   on `key` (see `kevy-rt::exec::try_inline_local`). A subsequent
+///   `LPUSH` / `RPUSH` to that key wakes the oldest waiter, which
+///   re-runs `cmd_blpop` (this time finding a non-empty list and writing
+///   the reply); a `BLPOP key 0` blocks forever, anything else expires
+///   on the reactor's blocked-timeout tick.
+///
+/// Multi-key form (`BLPOP k1 k2 ... timeout`) is explicitly rejected
+/// with an error — a sharded build cannot atomically wait on keys that
+/// may live on different shards. A future v2-7e sprint can lift the
+/// same-shard subset.
+pub(crate) fn cmd_blpop<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    tail: bool,
+    out: &mut Vec<u8>,
+) {
+    let name = if tail { "brpop" } else { "blpop" };
+    if args.len() < 3 {
+        return wrong_args(out, name);
+    }
+    if args.len() > 3 {
+        return encode_error(
+            out,
+            "ERR multi-key BLPOP/BRPOP is not supported on sharded kevy \
+             (sprint v2-7e tracks the same-shard subset); use a single key",
+        );
+    }
+    let valid = std::str::from_utf8(&args[2])
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .is_some_and(|f| f.is_finite() && f >= 0.0);
+    if !valid {
+        return encode_error(out, "ERR timeout is not a float or out of range");
+    }
+    let res = if tail {
+        store.rpop(&args[1], 1)
+    } else {
+        store.lpop(&args[1], 1)
+    };
+    match res {
+        Err(e) => store_err(out, e),
+        Ok(items) => {
+            if let Some(v) = items.into_iter().next() {
+                encode_array_len(out, 2);
+                encode_bulk(out, &args[1]);
+                encode_bulk(out, &v);
+            }
+            // else: list empty — return without writing; the dispatcher
+            // sees `out.len()` unchanged + `BlockHint::Block` and parks
+            // the conn.
+        }
+    }
+}
+
 /// `LPOP`/`RPOP key [count]` — single reply without count, array with it.
 pub(crate) fn cmd_pop<A: ArgvView + ?Sized>(
     store: &mut Store,

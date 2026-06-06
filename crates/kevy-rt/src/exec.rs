@@ -120,7 +120,14 @@ impl<C: Commands> Shard<C> {
         resolved: ResolvedCmd,
     ) {
         let Some(seq) = self.next_seq_for(conn_id) else { return };
-        let ResolvedCmd { route, is_quit, is_write, .. } = resolved;
+        let ResolvedCmd {
+            route,
+            is_quit,
+            is_write,
+            block_hint,
+            wake_idx,
+            ..
+        } = resolved;
         match route {
             Route::Subscribe => self.do_subscribe(conn_id, seq, args, true),
             Route::Unsubscribe => self.do_subscribe(conn_id, seq, args, false),
@@ -133,11 +140,15 @@ impl<C: Commands> Shard<C> {
             Route::Rename { nx } => self.start_rename(conn_id, seq, args, nx),
             Route::Slowlog(sub) => self.start_slowlog(conn_id, seq, sub),
             Route::Local => {
-                self.start_single(conn_id, seq, args, self.id, is_quit, is_write);
+                self.start_single(
+                    conn_id, seq, args, self.id, is_quit, is_write, block_hint, wake_idx,
+                );
             }
             Route::Single(idx) => {
                 let shard = shard_of(&args[idx], self.nshards);
-                self.start_single(conn_id, seq, args, shard, is_quit, is_write);
+                self.start_single(
+                    conn_id, seq, args, shard, is_quit, is_write, block_hint, wake_idx,
+                );
             }
             // Multi-target / aggregating commands (DEL, MGET, DBSIZE, fan-outs, …).
             other => self.start_multi(conn_id, seq, args, other, is_quit),
@@ -156,6 +167,7 @@ impl<C: Commands> Shard<C> {
     /// Single-target command (keyless `Local` or single-key `Single`) — the
     /// overwhelming majority (GET/SET/INCR/PING/…). Skips the
     /// `Vec<(shard, Op)>` allocation + the aggregation fold loop entirely.
+    #[allow(clippy::too_many_arguments)]
     fn start_single<A: ArgvView + ?Sized>(
         &mut self,
         conn_id: u64,
@@ -164,6 +176,8 @@ impl<C: Commands> Shard<C> {
         shard: usize,
         is_quit: bool,
         is_write: bool,
+        block_hint: crate::BlockHint,
+        wake_idx: Option<u8>,
     ) {
         // Per-conn proto rides with each cmd (not the conn) so a V2 + V3
         // mix on the same owning shard each gets the right reply shape.
@@ -172,7 +186,11 @@ impl<C: Commands> Shard<C> {
         let proto = self.conns.get(&conn_id).map_or(RespVersion::V2, |c| c.proto);
         // In-order local fast path: `seq == next_emit` and no prior cmd is
         // pending, so write straight to the conn's output and return.
-        if shard == self.id && self.try_inline_local(conn_id, args, is_quit, is_write, proto) {
+        if shard == self.id
+            && self.try_inline_local(
+                conn_id, args, is_quit, is_write, proto, block_hint, wake_idx,
+            )
+        {
             return;
         }
         self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
@@ -193,6 +211,7 @@ impl<C: Commands> Shard<C> {
     /// Only valid when `seq == next_emit`, i.e. nothing is pending. Returns
     /// `true` iff the inline write happened.
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     fn try_inline_local<A: ArgvView + ?Sized>(
         &mut self,
         conn_id: u64,
@@ -200,11 +219,14 @@ impl<C: Commands> Shard<C> {
         is_quit: bool,
         is_write: bool,
         proto: RespVersion,
+        block_hint: crate::BlockHint,
+        wake_idx: Option<u8>,
     ) -> bool {
         let Some(conn) = self.conns.get_mut(&conn_id) else { return false };
         if !conn.pending.is_empty() {
             return false;
         }
+        let out_pre_len = conn.output.len();
         // Disjoint field borrows: commands / store / conn.output.
         // Branch on per-conn proto. V2 is the default + the hot path the
         // current bench numbers measure; the V3 arm only fires after a
@@ -228,6 +250,33 @@ impl<C: Commands> Shard<C> {
             let elapsed = t0.elapsed().as_micros().min(u64::MAX as u128) as u64;
             self.slowlog_record(args, elapsed);
         }
+        // Blocking-command park-on-miss: BLPOP / BRPOP / XREAD BLOCK whose
+        // `dispatch_into` could not satisfy itself (empty list / no fresh
+        // stream entry) wrote nothing to `conn.output`. Register the conn
+        // as a waiter on the hint key, mark `Conn.blocked`, and skip the
+        // post-dispatch housekeeping (`next_emit ++`, write notify, AOF
+        // log) — the reply is deferred to the wake / timeout path.
+        let wrote_reply = self
+            .conns
+            .get(&conn_id)
+            .is_some_and(|c| c.output.len() > out_pre_len);
+        if !wrote_reply
+            && let crate::BlockHint::Block { kind, key, timeout_ms } = block_hint
+        {
+            let deadline_ms = if timeout_ms == 0 {
+                u64::MAX
+            } else {
+                crate::blocked::unix_now_ms().saturating_add(timeout_ms)
+            };
+            let argv = args.to_argv();
+            let keys = [key];
+            self.blocked
+                .add(conn_id, &keys, kind, deadline_ms, argv, proto);
+            if let Some(conn) = self.conns.get_mut(&conn_id) {
+                conn.blocked = true;
+            }
+            return true;
+        }
         let Some(conn) = self.conns.get_mut(&conn_id) else { return true };
         conn.next_emit += 1;
         if is_quit {
@@ -245,6 +294,21 @@ impl<C: Commands> Shard<C> {
                 self.log(args);
             }
             self.maybe_notify_dispatch(args);
+            // BLOCK reactor wake: if this write targets a key that a
+            // `BLPOP` / `XREAD BLOCK` waiter is parked on, wake the
+            // oldest one and retry its command. Gated on `wake_idx` (the
+            // verb's wake-target arg index, `None` for non-wake writes)
+            // *and* `BlockedClients::is_empty()` — when no one is
+            // parked, the cost is one `is_empty()` check on the
+            // steady-state hot path.
+            if let Some(idx) = wake_idx
+                && !self.blocked.is_empty()
+            {
+                let key = args.get(idx as usize).map(|k| k.to_vec());
+                if let Some(key) = key {
+                    self.wake_blocked_on_key(&key);
+                }
+            }
         }
         true
     }

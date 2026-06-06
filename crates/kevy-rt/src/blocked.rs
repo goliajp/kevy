@@ -1,9 +1,11 @@
-// The non-tick API (`add` / `pop_oldest_on_key` / `is_watched` / `BlockKind`
-// variants) is consumed by the per-command wake-up wiring that lands in the
-// follow-up sprints (BLPOP/BRPOP, XREAD BLOCK, XREADGROUP BLOCK). `expect`
-// rather than `allow` so the warning re-fires automatically once those
-// sprints connect callers — a missed wiring will not silently linger.
-#![expect(dead_code, reason = "wired in v2-7d.2 / .3 / .4 sprint commits")]
+// The pieces consumed by the follow-up XREAD BLOCK / XREADGROUP BLOCK
+// sprints (`BlockKind::XReadBlock`, `BlockKind::XReadGroupBlock`,
+// `BlockHint::XReadBlock`, …) are marked here; once those sprints connect
+// callers the corresponding warnings re-fire automatically.
+#![expect(
+    dead_code,
+    reason = "stream BlockKind / BlockHint variants land in v2-7d.3 / .4"
+)]
 
 //! Per-shard blocked-client registry, shared by `BLPOP` / `BRPOP` /
 //! `XREAD BLOCK` / `XREADGROUP BLOCK`.
@@ -58,11 +60,35 @@ pub(crate) fn encode_block_timeout(out: &mut Vec<u8>, kind: BlockKind, proto: Re
 /// Which blocking command a waiter is parked in. Drives both timeout-nil
 /// shape and wake-retry dispatch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum BlockKind {
+pub enum BlockKind {
     Blpop,
     Brpop,
     XReadBlock,
     XReadGroupBlock,
+}
+
+/// How a command wants to block, if at all. Returned by
+/// [`Commands::resolve`] inside [`crate::ResolvedCmd`] so the verb-table
+/// lookup happens once per command. `None` is the zero-cost default for
+/// every non-blocking verb (≥ 99.9 % of dispatches in steady state).
+///
+/// `key` is the **same-shard** key the conn parks on (single-key only in
+/// v2-7d.2; multi-key sharded `BLPOP key1 key2 …` is left to a future
+/// sprint — `KevyCommands` returns an error reply for that form). For
+/// `XREAD BLOCK`, the key is the stream name; for `XREADGROUP BLOCK`,
+/// the consumer-group's stream key.
+#[derive(Clone, Debug, Default)]
+pub enum BlockHint {
+    #[default]
+    None,
+    Block {
+        kind: BlockKind,
+        key: Vec<u8>,
+        /// `0` = block forever (Redis convention). Anything else is the
+        /// wall-clock millis the dispatcher will add to `unix_now_ms()` to
+        /// derive the waiter's `deadline_ms`.
+        timeout_ms: u64,
+    },
 }
 
 pub(crate) struct BlockedClient {
@@ -215,5 +241,41 @@ impl<C: Commands> Shard<C> {
             encode_block_timeout(&mut conn.output, w.kind, w.proto);
             self.dirty.push(w.conn_id);
         }
+    }
+
+    /// Wake the oldest waiter on `key` (FIFO, matching Redis) and retry its
+    /// command. Called by the dispatcher after a write that may have produced
+    /// new data for blocked readers — `LPUSH` / `RPUSH` for `BLPOP` /
+    /// `BRPOP`; `XADD` for `XREAD BLOCK` / `XREADGROUP BLOCK`. The retry
+    /// re-runs the original command via `Commands::dispatch_into`; if the
+    /// data has already been consumed in a race window, the retry sees an
+    /// empty list / stream and a `None` from this fn — the waiter has
+    /// already been popped out of the registry so it stays unblocked (the
+    /// next tick or a fresh client request resolves it). One push wakes one
+    /// waiter only (Redis semantics — a single LPUSH does not feed two
+    /// BLPOP clients).
+    pub(crate) fn wake_blocked_on_key(&mut self, key: &[u8]) {
+        if self.blocked.is_empty() {
+            return;
+        }
+        let Some(waiter) = self.blocked.pop_oldest_on_key(key) else {
+            return;
+        };
+        self.blocked.drop_for_conn(waiter.conn_id);
+        let Some(conn) = self.conns.get_mut(&waiter.conn_id) else {
+            return;
+        };
+        conn.blocked = false;
+        let proto = waiter.proto;
+        match proto {
+            RespVersion::V2 => self
+                .commands
+                .dispatch_into(&mut self.store, &waiter.argv, &mut conn.output),
+            RespVersion::V3 => self
+                .commands
+                .dispatch_into_resp3(&mut self.store, &waiter.argv, &mut conn.output),
+        }
+        conn.next_emit += 1;
+        self.dirty.push(waiter.conn_id);
     }
 }

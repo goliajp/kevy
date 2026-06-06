@@ -143,6 +143,8 @@ pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
         }
         b"LPOP" => cmd_pop(store, args, false, out),
         b"RPOP" => cmd_pop(store, args, true, out),
+        b"BLPOP" => cmd_blpop(store, args, false, out),
+        b"BRPOP" => cmd_blpop(store, args, true, out),
         b"LLEN" => {
             if args.len() != 2 {
                 wrong_args(out, "llen");

@@ -4,7 +4,7 @@ use kevy_resp::{
     ArgvView, RespVersion, encode_array_len, encode_bulk, encode_double, encode_error,
     encode_integer,
 };
-use kevy_rt::NotifyClass;
+use kevy_rt::{BlockHint, BlockKind, NotifyClass};
 use kevy_store::{ScoreBound, Store, StoreError};
 
 /// Uppercase a command verb into the caller's stack buffer — no per-command heap
@@ -62,6 +62,57 @@ pub(crate) const OOM_ERR: &str =
 /// runtime see the same set; both must include every command that can grow
 /// `used_memory`, so eviction gates them all. Kept in a single place to avoid
 /// drift.
+/// Classify an uppercased verb into its blocking-command hint. The runtime
+/// uses this (via [`crate::KevyCommands::resolve`]) to know whether to park
+/// the conn on a key when the command's `dispatch_into` produces no reply.
+/// `None` is the zero-cost answer for every non-blocking verb.
+///
+/// Multi-key forms (`BLPOP k1 k2 ... timeout`) deliberately return
+/// `BlockHint::None`: a sharded build cannot atomically wait on keys that
+/// may live on different shards, and `cmd_blpop` emits an explicit error
+/// in that branch (so the dispatcher does see a reply written and does not
+/// register a waiter). A future v2-7e sprint can lift the same-shard
+/// subset.
+pub(crate) fn block_hint_for_verb<A: ArgvView + ?Sized>(
+    upper: &[u8],
+    args: &A,
+) -> BlockHint {
+    let kind = match upper {
+        b"BLPOP" => BlockKind::Blpop,
+        b"BRPOP" => BlockKind::Brpop,
+        _ => return BlockHint::None,
+    };
+    if args.len() != 3 {
+        return BlockHint::None;
+    }
+    let Ok(timeout_str) = std::str::from_utf8(&args[2]) else {
+        return BlockHint::None;
+    };
+    let Ok(secs) = timeout_str.parse::<f64>() else {
+        return BlockHint::None;
+    };
+    if !secs.is_finite() || secs < 0.0 {
+        return BlockHint::None;
+    }
+    let timeout_ms = (secs * 1000.0) as u64;
+    BlockHint::Block {
+        kind,
+        key: args[1].to_vec(),
+        timeout_ms,
+    }
+}
+
+/// Verbs whose successful write may wake a waiter parked on the key at
+/// `args[idx]`. `Some(1)` for the small set that BLOCK readers watch
+/// (`LPUSH` / `RPUSH` feed `BLPOP` / `BRPOP`; `XADD` feeds `XREAD BLOCK` /
+/// `XREADGROUP BLOCK`); `None` for everything else. The runtime's wake
+/// hook is *also* gated on `BlockedClients::is_empty()`, so a `None`-only
+/// workload (the steady state) pays one inline `Option` discriminant
+/// check on every write.
+pub(crate) fn wake_idx_for_verb(upper: &[u8]) -> Option<u8> {
+    matches!(upper, b"LPUSH" | b"RPUSH" | b"XADD").then_some(1)
+}
+
 pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
     matches!(
         cmd,
