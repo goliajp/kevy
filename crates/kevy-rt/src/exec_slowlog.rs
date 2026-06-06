@@ -92,7 +92,12 @@ impl<C: Commands> Shard<C> {
         if threshold < 0 {
             return;
         }
-        if (elapsed_micros as i64) <= threshold {
+        // Skip strictly below threshold — `elapsed == threshold` records,
+        // matching Redis's `if (duration < slowlog_log_slower_than) return;`
+        // and making `slowlog-log-slower-than 0` record every command
+        // (including the sub-microsecond `as_micros() → 0` ones that hit
+        // in release-profile measurement).
+        if (elapsed_micros as i64) < threshold {
             return;
         }
         let local_seq = self.slowlog.next_local_seq;

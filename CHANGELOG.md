@@ -4,6 +4,27 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.4.1] — 2026-06-06
+
+Hotfix for v1.4.0's SLOWLOG threshold semantics under release-profile
+builds. The v1.4.0 tag exists in git but never reached crates.io —
+the release pipeline's `Verify tag builds (release profile)` job
+failed in this exact case, and the publish step never ran. v1.4.1 is
+the first published `1.4.x` artifact.
+
+### Fixed
+
+- `SLOWLOG`: `slowlog-log-slower-than 0` now records every command,
+  including the sub-microsecond writes whose `Instant::elapsed().
+  as_micros()` rounds to `0` under release-profile optimization.
+  Previously the threshold check was `elapsed <= threshold → skip`,
+  meaning a `threshold = 0` discarded the `elapsed == 0` row that
+  release-profile SETs always produce. The fix is one line in
+  `exec_slowlog.rs` (`<=` → `<`) and brings the behavior in line
+  with Redis (`if (duration < slowlog_log_slower_than) return;`).
+  Caught by the v1.4.0 release pipeline; covered by all four
+  `slowlog_*` integration tests under `--release`.
+
 ## [v1.4.0] — 2026-06-06
 
 RESP3 wire protocol + the full v2 command sprint: Streams (basic ops +
