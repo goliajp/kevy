@@ -4,7 +4,16 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
-## [Unreleased]
+## [v1.5.0] — 2026-06-07
+
+Minor release: cross-shard blocking pops. A `BLPOP` / `BRPOP` / `XREAD
+BLOCK` whose key lived on a shard other than the connection's used to hang
+the client forever; multi-key `BLPOP` was rejected outright. Both are now
+fixed via a cross-shard BLOCK arbiter (`kevy_rt::block_xshard`). New
+`Commands` hooks are additive with default bodies, so embedders recompile
+unchanged. Workspace bump 1.4.2 → 1.5.0; kevy-embedded 1.1.5 → 1.1.6;
+kevy-client 1.7.1 → 1.7.2 (both inherited the workspace bump, no API
+change).
 
 ### Added
 
