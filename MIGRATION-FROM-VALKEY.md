@@ -5,11 +5,12 @@ RESP2 client (redis-rs, go-redis, jedis, lettuce, node-redis, ioredis,
 phpredis, redis-py, hiredis, …) connects without code changes.
 
 **TL;DR:** point your client at kevy's port (default `6004`), keep using
-the same commands. kevy supports 98 commands across all 5 data types
-plus pub/sub (channels + patterns) and transactions (with optional
-`WATCH` CAS), parity-verified vs valkey 9.1 + redis 7.4.
+the same commands. kevy implements the valkey/redis command set across
+all 5 data types plus Streams, Geo, blocking pops (`BLPOP` / `BRPOP` /
+`XREAD BLOCK`), pub/sub (channels + patterns), and transactions (with
+optional `WATCH` CAS), parity-verified vs valkey 9.1 + redis 7.4.
 
-This guide tracks **workspace v1.3.0** (current) — verify your binary
+This guide tracks **workspace v1.5.0** (current) — verify your binary
 with `kevy --version` if anything in this doc looks off.
 
 ## What's the same as valkey 9.1
@@ -19,7 +20,7 @@ with `kevy --version` if anything in this doc looks off.
 | Wire protocol | RESP2 (full) |
 | Reply shapes | bulk / simple-string / integer / array / error / null-bulk — identical encoding |
 | Error codes | `WRONGTYPE`, `ERR wrong number of arguments`, etc. — kept verbatim |
-| Command semantics | 94 commands listed below — reply-by-reply identical |
+| Command semantics | reply-by-reply identical (see the parity table below) |
 | Subscription model | `SUBSCRIBE` / `UNSUBSCRIBE` / `PUBLISH` — channel-based; `PSUBSCRIBE` / `PUNSUBSCRIBE` — Redis-glob patterns (`*`, `?`, `[…]`) |
 | Transactions | `MULTI` / `EXEC` / `DISCARD` — queue + atomic execute; `WATCH` / `UNWATCH` optimistic CAS (single-shard strict, cross-shard best-effort — same property as Redis cluster mode) |
 
@@ -38,27 +39,39 @@ Most of these are **intentional scope choices** (detailed below); a few are road
 - **Lua / Functions scripting** (`EVAL`, `EVALSHA`, `FUNCTION`).
   Roadmap candidate for v1.x; not in v1.0.
 
-### Deferred to v0.3+
+### Out of scope (permanent)
 
-- **AUTH / TLS** (`AUTH`, `requirepass`, `tls-port`). v1.0's target
+- **AUTH / TLS** (`AUTH`, `requirepass`, `tls-port`). kevy's target
   scenarios (docker-compose internal, k8s pod network, embedded,
-  cache) put the trust boundary at the network layer. kevy WARNs at
-  startup if you bind to a non-loopback interface without auth.
+  cache) put the trust boundary at the network layer, so auth and TLS
+  are intentionally not on the roadmap — same posture as cluster mode
+  and replication. kevy WARNs at startup if you bind to a non-loopback
+  interface.
 
-### Deferred to v1.x (will land in a minor release)
+### Still deferred
 
-- `RENAME` across shards (same-shard rename works)
-- Incremental `SCAN` cursor (currently a single full pass; cursor 0
-  is the canonical entry point)
-- True RESP3 reply encoding (`HELLO 3` reports proto 2 today)
-- `EVAL` / `EVALSHA` / `FUNCTION` (Lua scripting)
-- `XADD` / `XREAD` / consumer groups (Redis Streams)
-- Keyspace notifications (`__keyspace@*__:*`)
-- Geo commands (`GEOADD` / `GEORADIUS` / `GEOSEARCH`)
-- `SLOWLOG`
+- Incremental `SCAN` cursor (currently a single full pass; cursor `0`
+  is the canonical entry point — replies are valkey-shaped)
+- `EVAL` / `EVALSHA` / `FUNCTION` (Lua scripting) — needs a pure-Rust
+  Lua engine to keep the 0-deps charter; no committed timeline
+- Non-blocking multi-stream `XREAD` across shards currently reads only
+  the first STREAMS key's shard (blocking `XREAD` is fully cross-shard)
 
-### Landed in workspace v1.3.0 (previously deferred)
+### Landed since v1.0 (previously deferred)
 
+- `RENAME` / `RENAMENX` across shards — two-phase take→put orchestrator
+  (same-shard stays one atomic op).
+- True RESP3 — `HELLO 3` negotiates proto 3; replies use RESP3 shapes
+  (Map / Set / Double / Big-number / Null) per command.
+- **Streams** — `XADD` / `XREAD` / `XRANGE` / `XREVRANGE` / `XLEN` /
+  `XDEL` / `XTRIM` plus consumer groups (`XGROUP` / `XREADGROUP` /
+  `XACK` / `XPENDING` / `XCLAIM` / `XAUTOCLAIM` / `XINFO`).
+- **Blocking pops** — `BLPOP` / `BRPOP` / `XREAD BLOCK` / `XREADGROUP
+  BLOCK`, single- and multi-key, **across shards** (v1.5.0).
+- Keyspace notifications — `__keyspace@*__:*` / `__keyevent@*__:*`.
+- **Geo** — `GEOADD` / `GEOSEARCH` / `GEOSEARCHSTORE` / `GEODIST` /
+  `GEOPOS` / `GEOHASH`.
+- `SLOWLOG` — `GET` / `LEN` / `RESET` (per-shard ring, merged on read).
 - `WATCH` / `UNWATCH` — optimistic CAS for transactions. Single-shard
   is strict CAS (reactor is single-threaded per shard); cross-shard is
   best-effort with a µs-scale window between the pre-EXEC `CheckWatch`
@@ -94,6 +107,12 @@ interoperable with Redis/valkey. (That's a non-goal.)
 `bench/compat3.sh` runs the same command sequence against valkey 9.1,
 redis 7.4, and kevy via the neutral `valkey-cli`, then diffs replies
 byte-for-byte. Last run: **94 / 94 pass**, 0 mismatches.
+
+The 94 checks below are the cross-engine *differential* core (Strings /
+Keys / Hash / List / Set / Sorted set / pub/sub / transactions /
+persistence). Streams, Geo, and blocking pops (listed under "Landed"
+above) ship with their own Rust integration suites
+(`crates/kevy/tests/`) rather than this `valkey-cli` diff harness.
 
 ### Connection / admin (5)
 
