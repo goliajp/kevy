@@ -292,12 +292,14 @@ Full walkthrough + caveats: [`docs/pubsub.md`](docs/pubsub.md).
 ## Commands
 
 All five Redis data types — **String, Hash, List, Set, Sorted Set** — plus
-**pub/sub** (`SUBSCRIBE` / `PSUBSCRIBE` — pattern glob), **transactions**
-(`MULTI` / `EXEC` / `DISCARD` / `WATCH` / `UNWATCH` — optimistic CAS),
-persistence (`SAVE` / `BGSAVE` / `BGREWRITEAOF`), and operations (`INFO` /
-`CONFIG` (real hot-modification) / `CLIENT` / …). Multi-key commands +
-pub/sub + WATCH work across the per-core shards, and `WRONGTYPE` behaves
-as in Redis.
+**Streams** (`XADD` / `XREAD` / `XRANGE` / consumer groups), **blocking
+pops** (`BLPOP` / `BRPOP` / `XREAD BLOCK` / `XREADGROUP BLOCK` — single- and
+multi-key, **across shards**), **pub/sub** (`SUBSCRIBE` / `PSUBSCRIBE` —
+pattern glob), **transactions** (`MULTI` / `EXEC` / `DISCARD` / `WATCH` /
+`UNWATCH` — optimistic CAS), persistence (`SAVE` / `BGSAVE` /
+`BGREWRITEAOF`), and operations (`INFO` / `CONFIG` (real hot-modification) /
+`CLIENT` / …). Multi-key commands, pub/sub, WATCH, and blocking pops all
+work across the per-core shards, and `WRONGTYPE` behaves as in Redis.
 
 The full 98-command list with valkey-parity notes is in
 [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md).
