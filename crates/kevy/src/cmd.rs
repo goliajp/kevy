@@ -4,7 +4,7 @@ use kevy_resp::{
     ArgvView, RespVersion, encode_array_len, encode_bulk, encode_double, encode_error,
     encode_integer,
 };
-use kevy_rt::{BlockHint, BlockKind, NotifyClass};
+use kevy_rt::{BlockHint, BlockKind, NotifyClass, Route};
 use kevy_store::{ScoreBound, Store, StoreError};
 
 /// Uppercase a command verb into the caller's stack buffer — no per-command heap
@@ -77,11 +77,15 @@ pub(crate) fn block_hint_for_verb<A: ArgvView + ?Sized>(
     upper: &[u8],
     args: &A,
 ) -> BlockHint {
-    let kind = match upper {
-        b"BLPOP" => BlockKind::Blpop,
-        b"BRPOP" => BlockKind::Brpop,
-        _ => return BlockHint::None,
-    };
+    match upper {
+        b"BLPOP" => blpop_hint(BlockKind::Blpop, args),
+        b"BRPOP" => blpop_hint(BlockKind::Brpop, args),
+        b"XREAD" => xread_block_hint(args),
+        _ => BlockHint::None,
+    }
+}
+
+fn blpop_hint<A: ArgvView + ?Sized>(kind: BlockKind, args: &A) -> BlockHint {
     if args.len() != 3 {
         return BlockHint::None;
     }
@@ -100,6 +104,82 @@ pub(crate) fn block_hint_for_verb<A: ArgvView + ?Sized>(
         key: args[1].to_vec(),
         timeout_ms,
     }
+}
+
+/// XREAD: scan `[COUNT n] [BLOCK ms] STREAMS key …` to discover both
+/// the `BLOCK ms` clause and the first stream key (the key the conn
+/// will be parked on). Returns `BlockHint::None` when:
+/// - no `BLOCK` keyword (non-blocking XREAD — caller dispatches normally),
+/// - malformed `BLOCK ms` (timeout not an integer),
+/// - missing `STREAMS` keyword,
+/// - missing stream key after `STREAMS`.
+///
+/// In each non-block case, `cmd_xread` itself emits the appropriate
+/// reply (success or error), so the dispatcher sees output and skips
+/// registration.
+fn xread_block_hint<A: ArgvView + ?Sized>(args: &A) -> BlockHint {
+    let mut block_ms: Option<u64> = None;
+    let mut i = 1usize;
+    while i < args.len() {
+        let upper = args[i].to_ascii_uppercase();
+        match upper.as_slice() {
+            b"COUNT" => i = i.saturating_add(2),
+            b"BLOCK" => {
+                let Some(ms_arg) = args.get(i + 1) else {
+                    return BlockHint::None;
+                };
+                let Ok(s) = std::str::from_utf8(ms_arg) else {
+                    return BlockHint::None;
+                };
+                let Ok(ms) = s.parse::<u64>() else {
+                    return BlockHint::None;
+                };
+                block_ms = Some(ms);
+                i = i.saturating_add(2);
+            }
+            b"STREAMS" => {
+                let Some(bm) = block_ms else {
+                    return BlockHint::None;
+                };
+                let Some(key) = args.get(i + 1) else {
+                    return BlockHint::None;
+                };
+                return BlockHint::Block {
+                    kind: BlockKind::XReadBlock,
+                    key: key.to_vec(),
+                    timeout_ms: bm,
+                };
+            }
+            _ => return BlockHint::None,
+        }
+    }
+    BlockHint::None
+}
+
+/// Routing for `XREAD`: the routing key is the **first STREAMS key**, not
+/// `args[1]` (which is typically `COUNT` / `BLOCK` / `STREAMS` itself).
+/// Falls back to `Route::Single(1)` on malformed input so `cmd_xread`
+/// gets to emit the precise syntax error — and to `Route::Local` on a
+/// keyless XREAD so the local shard returns the empty-reply error
+/// without a misleading cross-shard hop.
+pub(crate) fn xread_route<A: ArgvView + ?Sized>(args: &A) -> Route {
+    let mut i = 1usize;
+    while i < args.len() {
+        let upper = args[i].to_ascii_uppercase();
+        match upper.as_slice() {
+            b"STREAMS" => {
+                let key_idx = i + 1;
+                return if key_idx < args.len() {
+                    Route::Single(key_idx)
+                } else {
+                    Route::Local
+                };
+            }
+            b"COUNT" | b"BLOCK" => i = i.saturating_add(2),
+            _ => return Route::Single(1),
+        }
+    }
+    Route::Local
 }
 
 /// Verbs whose successful write may wake a waiter parked on the key at
