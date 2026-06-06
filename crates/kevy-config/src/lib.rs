@@ -25,6 +25,7 @@
 #![warn(missing_docs)]
 
 mod apply;
+mod error;
 mod lex;
 mod parse;
 mod preserve;

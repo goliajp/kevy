@@ -54,6 +54,7 @@
 mod config;
 mod ops;
 mod pubsub;
+mod pubsub_bus;
 mod replay;
 mod store;
 
