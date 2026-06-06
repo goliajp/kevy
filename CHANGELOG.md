@@ -4,6 +4,83 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.4.2] — 2026-06-07
+
+Patch release rolling up the v1.4.1 follow-ups: an XREAD BLOCK bug fix,
+two CI/release hardening jobs that catch the exact failure modes the
+v1.4.0 → v1.4.1 sequence exposed, and a workspace-wide src/*.rs ≤ 500
+LOC sweep (every production file now matches the CLAUDE.md house rule;
+test files exempt per Rust community norm).
+
+No public API breaks. New trait method `Commands::resolve_block_argv`
+on `kevy-rt` is additive with a default body, so existing embedders
+recompile unchanged.
+
+### Fixed
+
+- `XREAD BLOCK ms STREAMS key $` no longer hangs when an `XADD` lands
+  during the park window. The previous implementation kept the literal
+  `$` in the parked argv; the wake retry re-resolved `$` to the
+  *post-`XADD`* `last_id`, so the just-added entry sat at the cursor
+  and the read returned 0 rows (the conn timed out instead of
+  receiving the entry it was supposed to be woken by). Park-time now
+  rewrites each `$` to the stream's current `last_id` via a new
+  `Commands::resolve_block_argv` hook, so the wake retry sees the
+  original cursor and the freshly added entry. New regression test
+  `xread_block_dollar_id_wakes` exercises the real `$` form;
+  `xread_block_woken_by_concurrent_xadd` keeps documenting the
+  explicit-ID variant. (ROADMAP task #10 / v2-7d known limitation,
+  closed.)
+
+### Added — CI / release plumbing
+
+- `.github/workflows/ci.yml`: new `release-profile` job that runs
+  `cargo test --workspace --release --lib --tests` on every push to
+  `release/**` and `hotfix/**` branches. Catches release-only bugs
+  (compiler eliminating a branch, sub-microsecond timings rounding
+  to zero — the exact shape of the v1.4.0 SLOWLOG regression) at PR
+  review time instead of inside the publish workflow.
+- `.github/workflows/release.yml`: new `Publish chain self-check`
+  step before the publish loop. Reads `cargo metadata --no-deps`,
+  lists every workspace member whose `publish` field is unset, and
+  diffs that set against the hand-maintained `for c in …` chain.
+  Aborts on either side of the symmetric difference: a publishable
+  crate not in the loop (the v1.4.0 release shipped without
+  kevy-geo this way), or a name in the loop that isn't a publishable
+  workspace member.
+
+### Changed — internal refactor (no API surface)
+
+- All production `src/*.rs` files now ≤ 500 LOC and every `fn` ≤ 50
+  LOC, matching the CLAUDE.md house rule. Test files (`tests.rs`
+  modules) are exempt per the Rust community norm and remain
+  uncapped.
+- New sibling modules carry the lifted-out code; each keeps its
+  parent's `impl<C: Commands> Shard<C>` (or `impl Commands for
+  KevyCommands`) so behaviour + call shape are unchanged:
+  - `kevy-rt/src/exec_dispatch.rs` — `start_single` +
+    `try_inline_local` + the new `park_blocked` /
+    `post_write_housekeeping` / `dispatch_inline` helpers that bring
+    `try_inline_local` from 106 LOC down to 35 LOC.
+  - `kevy-rt/src/shard_tick.rs` — per-tick housekeeping
+    (`apply_live_runtime_config`, `maybe_auto_rewrite_aof`).
+  - `kevy/src/cmd_resolve.rs` — `KevyCommands::resolve`'s body as
+    `kevy_resolve(args)` + a `route_for_verb(upper, args)` helper.
+  - `kevy/src/dispatch_resp3.rs` — `try_resp3_overrides` + the four
+    `emit_*_resp3` reply helpers.
+  - `kevy-client/src/subscribe_io.rs` — `send_to` / `recv_remote` /
+    `frame_to_event` / `classify` and the per-field reply unwraps.
+  - `kevy-config/src/error.rs` — `ConfigError` enum + Display +
+    Error impls; the public `kevy_config::ConfigError` path is
+    unchanged.
+  - `kevy-embedded/src/pubsub_bus.rs` — `BusEntry` + `PubsubBus`
+    (the per-`Inner` channel/pattern registry).
+
+### Tooling
+
+- New end-to-end test `xread_block_dollar_id_wakes` in
+  `crates/kevy/tests/blocking.rs` (now 12 tests).
+
 ## [v1.4.1] — 2026-06-06
 
 Hotfix for v1.4.0's SLOWLOG threshold semantics under release-profile
