@@ -28,10 +28,17 @@ jobs:
         run: cargo test --workspace --release --lib --tests
 
   # ───────────── cargo publish to crates.io (idempotent per crate) ─────────────
-  # Triggered automatically on tag push. Walks the 16 publishable crates in
+  # Triggered automatically on tag push. Walks every publishable crate in
   # dependency order; for each, attempts `cargo publish` and treats
   # "already uploaded" as a non-fatal skip (lets the workflow re-run after
   # a partial failure without re-publishing the crates that already landed).
+  #
+  # A pre-step (`Publish chain self-check`) reads `cargo metadata` to list
+  # every workspace member whose `publish` field is unset (i.e. publishable
+  # to crates.io) and aborts the job if the hand-maintained loop below
+  # misses one. Without this, adding a new `kevy-*` crate without updating
+  # the loop silently publishes everything except the new crate — the
+  # v1.4.0 release tagged kevy-geo this way.
   #
   # Per-crate version tracking: kevy-embedded and kevy-client carry their
   # own explicit `version =` in Cargo.toml (independent additive growth);
@@ -53,6 +60,42 @@ jobs:
       - run: |
           rustup toolchain install stable --no-self-update
           rustup default stable
+
+      # Hand-maintained chain order MUST cover every publishable crate.
+      # Adding a `kevy-*` crate without updating the loop below silently
+      # skips it during release (the v1.4.0 → v1.4.1 fix-up sequence was
+      # caused by this). This step asserts the loop covers every member
+      # whose `publish` field is unset before any publishing starts.
+      - name: Publish chain self-check
+        shell: bash
+        run: |
+          set -euo pipefail
+          chain=$(printf '%s\n' \
+            kevy-madvise kevy-sys kevy-hash kevy-config kevy-uring \
+            kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo \
+            kevy-resp-client kevy-store \
+            kevy-persist \
+            kevy-rt kevy-embedded \
+            kevy kevy-client | sort -u)
+          expected=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages | map(select(.publish == null)) | .[].name' \
+            | sort -u)
+          missing=$(comm -23 <(printf '%s\n' "$expected") <(printf '%s\n' "$chain"))
+          extra=$(comm -13 <(printf '%s\n' "$expected") <(printf '%s\n' "$chain"))
+          if [[ -n "$missing" ]]; then
+            echo "::error::publish loop is missing publishable crates:"
+            printf '  %s\n' $missing
+            echo "fix: add them to the \`for c in ...\` list below in dependency order"
+            exit 1
+          fi
+          if [[ -n "$extra" ]]; then
+            echo "::error::publish loop lists crates not in workspace metadata:"
+            printf '  %s\n' $extra
+            echo "fix: remove them from the loop, or set their \`publish\` field"
+            exit 1
+          fi
+          echo "✓ publish loop covers $(echo "$expected" | wc -l) publishable crates"
+
       - name: Publish chain
         shell: bash
         run: |
@@ -88,7 +131,7 @@ jobs:
             kevy kevy-client; do
             publish_or_skip "$c"
           done
-          echo "all 16 publishable crates handled"
+          echo "all publishable crates handled"
 
   # ───────────── build the kevy server binary for every supported target ─────────────
   # All targets build NATIVELY on their respective GitHub-hosted runner — each
