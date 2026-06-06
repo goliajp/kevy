@@ -10,8 +10,7 @@ use crate::message::{Agg, Inbound, Op, Part, PendingSlot};
 use crate::reduce::{drain_front, materialize, shard_of};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route, TxnKind};
-use kevy_resp::{ArgvView, RespVersion, encode_array_len};
-use std::time::Instant;
+use kevy_resp::{ArgvView, encode_array_len};
 
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
@@ -164,160 +163,10 @@ impl<C: Commands> Shard<C> {
         Some(s)
     }
 
-    /// Single-target command (keyless `Local` or single-key `Single`) — the
-    /// overwhelming majority (GET/SET/INCR/PING/…). Skips the
-    /// `Vec<(shard, Op)>` allocation + the aggregation fold loop entirely.
-    #[allow(clippy::too_many_arguments)]
-    fn start_single<A: ArgvView + ?Sized>(
-        &mut self,
-        conn_id: u64,
-        seq: u64,
-        args: &A,
-        shard: usize,
-        is_quit: bool,
-        is_write: bool,
-        block_hint: crate::BlockHint,
-        wake_idx: Option<u8>,
-    ) {
-        // Per-conn proto rides with each cmd (not the conn) so a V2 + V3
-        // mix on the same owning shard each gets the right reply shape.
-        // 1-byte enum copy; RESP2 client's default V2 makes every `match
-        // proto` downstream a predicted no-branch.
-        let proto = self.conns.get(&conn_id).map_or(RespVersion::V2, |c| c.proto);
-        // In-order local fast path: `seq == next_emit` and no prior cmd is
-        // pending, so write straight to the conn's output and return.
-        if shard == self.id
-            && self.try_inline_local(
-                conn_id, args, is_quit, is_write, proto, block_hint, wake_idx,
-            )
-        {
-            return;
-        }
-        self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
-        if shard == self.id {
-            // Local-but-not-fast-path: only here we need an owned Argv to
-            // hand to exec_op via Op::Dispatch.
-            let part = self.exec_op(Op::Dispatch(args.to_argv(), proto));
-            self.fold(conn_id, seq, part);
-        } else {
-            // Cross-shard forward: materialise owned at the handoff. The
-            // -c50 single-shard hot path never reaches here.
-            self.request_batch[shard].push((conn_id, seq, args.to_argv(), proto));
-        }
-    }
-
-    /// Try to dispatch a single-shard local command straight to the
-    /// connection's output buffer (no PendingSlot, no fold, no reply Vec).
-    /// Only valid when `seq == next_emit`, i.e. nothing is pending. Returns
-    /// `true` iff the inline write happened.
-    #[inline]
-    #[allow(clippy::too_many_arguments)]
-    fn try_inline_local<A: ArgvView + ?Sized>(
-        &mut self,
-        conn_id: u64,
-        args: &A,
-        is_quit: bool,
-        is_write: bool,
-        proto: RespVersion,
-        block_hint: crate::BlockHint,
-        wake_idx: Option<u8>,
-    ) -> bool {
-        let Some(conn) = self.conns.get_mut(&conn_id) else { return false };
-        if !conn.pending.is_empty() {
-            return false;
-        }
-        let out_pre_len = conn.output.len();
-        // Disjoint field borrows: commands / store / conn.output.
-        // Branch on per-conn proto. V2 is the default + the hot path the
-        // current bench numbers measure; the V3 arm only fires after a
-        // HELLO 3 negotiation, so V2 cmovne sees ~0 measurable cost.
-        // SLOWLOG OFF (`slower_than_micros < 0`) skips the clock pair
-        // entirely so the hot-path stays unchanged.
-        let t0 = if self.slowlog.slower_than_micros >= 0 {
-            Some(Instant::now())
-        } else {
-            None
-        };
-        match proto {
-            RespVersion::V2 => self
-                .commands
-                .dispatch_into(&mut self.store, args, &mut conn.output),
-            RespVersion::V3 => self
-                .commands
-                .dispatch_into_resp3(&mut self.store, args, &mut conn.output),
-        }
-        if let Some(t0) = t0 {
-            let elapsed = t0.elapsed().as_micros().min(u64::MAX as u128) as u64;
-            self.slowlog_record(args, elapsed);
-        }
-        // Blocking-command park-on-miss: BLPOP / BRPOP / XREAD BLOCK whose
-        // `dispatch_into` could not satisfy itself (empty list / no fresh
-        // stream entry) wrote nothing to `conn.output`. Register the conn
-        // as a waiter on the hint key, mark `Conn.blocked`, and skip the
-        // post-dispatch housekeeping (`next_emit ++`, write notify, AOF
-        // log) — the reply is deferred to the wake / timeout path.
-        let wrote_reply = self
-            .conns
-            .get(&conn_id)
-            .is_some_and(|c| c.output.len() > out_pre_len);
-        if !wrote_reply
-            && let crate::BlockHint::Block { kind, key, timeout_ms } = block_hint
-        {
-            let deadline_ms = if timeout_ms == 0 {
-                u64::MAX
-            } else {
-                crate::blocked::unix_now_ms().saturating_add(timeout_ms)
-            };
-            // Snapshot the parked argv via the command set so positional
-            // ID / cursor arguments whose meaning depends on store state
-            // (XREAD's `$`, in particular) get frozen here instead of
-            // re-resolving on wake. Default impl is a plain `to_argv()`.
-            let argv = self
-                .commands
-                .resolve_block_argv(&mut self.store, args, kind);
-            let keys = [key];
-            self.blocked
-                .add(conn_id, &keys, kind, deadline_ms, argv, proto);
-            if let Some(conn) = self.conns.get_mut(&conn_id) {
-                conn.blocked = true;
-            }
-            return true;
-        }
-        let Some(conn) = self.conns.get_mut(&conn_id) else { return true };
-        conn.next_emit += 1;
-        if is_quit {
-            conn.closing = true;
-        }
-        if is_write {
-            // WATCH version bump + AOF logging + keyspace notify — the
-            // inline fast path bypasses `exec_op`, so all three have to
-            // fire here. `bump_watch_for_dispatch` is an empty-map
-            // lookup when no key on this shard has ever been WATCH-ed;
-            // `maybe_notify_dispatch` is an empty-flags check (zero work
-            // when notify_keyspace_events is off — the default).
-            self.bump_watch_for_dispatch(args);
-            if self.aof.is_some() {
-                self.log(args);
-            }
-            self.maybe_notify_dispatch(args);
-            // BLOCK reactor wake: if this write targets a key that a
-            // `BLPOP` / `XREAD BLOCK` waiter is parked on, wake the
-            // oldest one and retry its command. Gated on `wake_idx` (the
-            // verb's wake-target arg index, `None` for non-wake writes)
-            // *and* `BlockedClients::is_empty()` — when no one is
-            // parked, the cost is one `is_empty()` check on the
-            // steady-state hot path.
-            if let Some(idx) = wake_idx
-                && !self.blocked.is_empty()
-            {
-                let key = args.get(idx as usize).map(|k| k.to_vec());
-                if let Some(key) = key {
-                    self.wake_blocked_on_key(&key);
-                }
-            }
-        }
-        true
-    }
+    // `start_single` + `try_inline_local` (and their helpers `park_blocked`
+    // / `post_write_housekeeping`) live in [`crate::exec_dispatch`] —
+    // same `impl<C: Commands> Shard<C>`, split out so this file stays
+    // under the 500-LOC house rule.
 
     /// Multi-target / aggregating command (DEL, MGET, DBSIZE, fan-outs, …).
     /// Builds the per-shard target list, registers a pending slot for the

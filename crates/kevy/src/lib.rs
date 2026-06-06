@@ -49,6 +49,7 @@ use std::sync::atomic::AtomicBool;
 mod cmd;
 mod cmd_block;
 mod cmd_data;
+mod cmd_resolve;
 mod config_global;
 mod dispatch;
 mod dispatch_collections;
@@ -297,96 +298,9 @@ impl Commands for KevyCommands {
     /// One-pass verb resolution — the reactor calls this once per cmd and
     /// reads back txn_kind / route / is_quit / is_write without re-scanning
     /// the verb. This is `kevy-rt`'s primary hot-path optimization: every
-    /// match arm uses the same `upper` buffer.
+    /// match arm uses the same `upper` buffer. Body in [`cmd_resolve`].
     fn resolve<A: ArgvView + ?Sized>(&self, args: &A) -> ResolvedCmd {
-        let Some(name) = args.first() else {
-            return ResolvedCmd {
-                txn_kind: TxnKind::Other,
-                route: Route::Local,
-                is_quit: false,
-                is_write: false,
-                block_hint: kevy_rt::BlockHint::None,
-                wake_idx: None,
-            };
-        };
-        let mut buf = [0u8; 32];
-        let upper = upper_verb(name, &mut buf);
-
-        let txn_kind = match upper {
-            b"MULTI" => TxnKind::Multi,
-            b"EXEC" => TxnKind::Exec,
-            b"DISCARD" => TxnKind::Discard,
-            b"WATCH" => TxnKind::Watch,
-            _ => TxnKind::Other,
-        };
-
-        let is_quit = upper == b"QUIT";
-
-        let is_write = cmd::is_write_verb(upper);
-
-        let route = match upper {
-            b"HELLO" => Route::Hello,
-            b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG"
-            | b"INFO" | b"CLUSTER" | b"DEBUG" | b"WAIT" | b"SHUTDOWN"
-            | b"CLIENT" | b"SELECT" => Route::Local,
-            b"DBSIZE" => Route::Dbsize,
-            b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
-            b"SAVE" | b"BGSAVE" => Route::Save,
-            b"BGREWRITEAOF" => Route::RewriteAof,
-            b"MSET" if args.len() >= 3 && !args.len().is_multiple_of(2) => Route::MSet,
-            b"MGET" if args.len() >= 2 => Route::MGet,
-            b"SINTER" if args.len() >= 2 => Route::SInter,
-            b"SUNION" if args.len() >= 2 => Route::SUnion,
-            b"SDIFF" if args.len() >= 2 => Route::SDiff,
-            b"KEYS" if args.len() == 2 => Route::Keys(Some(args[1].to_vec())),
-            b"SCAN" if args.len() >= 2 => Route::Scan(scan_pattern(args)),
-            b"RANDOMKEY" if args.len() == 1 => Route::RandomKey,
-            b"SUBSCRIBE" if args.len() >= 2 => Route::Subscribe,
-            b"UNSUBSCRIBE" => Route::Unsubscribe,
-            b"PSUBSCRIBE" if args.len() >= 2 => Route::Psubscribe,
-            b"PUNSUBSCRIBE" => Route::Punsubscribe,
-            b"PUBLISH" if args.len() == 3 => Route::Publish,
-            b"WATCH" if args.len() >= 2 => Route::Watch,
-            b"UNWATCH" => Route::Unwatch,
-            b"RENAME" => Route::Rename { nx: false },
-            b"RENAMENX" => Route::Rename { nx: true },
-            b"XREAD" => cmd_block::xread_route(args),
-            b"XREADGROUP" => cmd_block::xreadgroup_route(args),
-            b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),
-            b"DEL" => {
-                if args.len() == 2 {
-                    Route::Single(1)
-                } else {
-                    Route::DelKeys
-                }
-            }
-            b"EXISTS" => {
-                if args.len() == 2 {
-                    Route::Single(1)
-                } else {
-                    Route::ExistsKeys
-                }
-            }
-            _ => {
-                if args.len() >= 2 {
-                    Route::Single(1)
-                } else {
-                    Route::Local
-                }
-            }
-        };
-
-        let block_hint = cmd_block::block_hint_for_verb(upper, args);
-        let wake_idx = cmd_block::wake_idx_for_verb(upper);
-
-        ResolvedCmd {
-            txn_kind,
-            route,
-            is_quit,
-            is_write,
-            block_hint,
-            wake_idx,
-        }
+        cmd_resolve::kevy_resolve(args)
     }
 }
 
