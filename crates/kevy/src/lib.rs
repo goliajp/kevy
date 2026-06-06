@@ -284,6 +284,8 @@ impl Commands for KevyCommands {
                 route: Route::Local,
                 is_quit: false,
                 is_write: false,
+                block_hint: kevy_rt::BlockHint::None,
+                wake_idx: None,
             };
         };
         let mut buf = [0u8; 32];
@@ -351,11 +353,16 @@ impl Commands for KevyCommands {
             }
         };
 
+        let block_hint = cmd::block_hint_for_verb(upper, args);
+        let wake_idx = cmd::wake_idx_for_verb(upper);
+
         ResolvedCmd {
             txn_kind,
             route,
             is_quit,
             is_write,
+            block_hint,
+            wake_idx,
         }
     }
 }

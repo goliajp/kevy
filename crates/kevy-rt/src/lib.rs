@@ -86,6 +86,7 @@ mod shard;
 #[cfg(target_os = "linux")]
 mod uring_reactor;
 
+pub use blocked::{BlockHint, BlockKind};
 pub use exec_slowlog::{SlowlogSub, parse_slowlog_sub};
 pub use kevy_config::NotificationFlags;
 pub use kevy_persist::Fsync;
@@ -265,17 +266,31 @@ pub trait Commands: Clone + Send + 'static {
         LiveRuntimeConfig::default()
     }
 
+    /// Classify a command for blocking semantics. `BlockHint::None`
+    /// (default) is the zero-cost answer for every non-blocking verb;
+    /// the dispatcher only registers a waiter when this returns
+    /// `BlockHint::Block` *and* the command's `dispatch_into` produced no
+    /// reply (i.e. it could not satisfy itself immediately — e.g. BLPOP
+    /// on an empty list). Concrete impls should fold this into their
+    /// override of [`Self::resolve`] so the verb-table lookup happens
+    /// once per command.
+    fn block_hint<A: ArgvView + ?Sized>(&self, _args: &A) -> BlockHint {
+        BlockHint::None
+    }
+
     /// Resolve all verb-dependent attributes in **one** verb-table lookup.
-    /// The default implementation calls the four per-attribute methods above
-    /// (four upper_verb scans + matches); concrete impls SHOULD override this
-    /// with a single match so the reactor's hot path pays the verb-resolution
-    /// cost only once per command.
+    /// The default implementation calls the per-attribute methods above
+    /// (five upper_verb scans + matches); concrete impls SHOULD override
+    /// this with a single match so the reactor's hot path pays the verb-
+    /// resolution cost only once per command.
     fn resolve<A: ArgvView + ?Sized>(&self, args: &A) -> ResolvedCmd {
         ResolvedCmd {
             txn_kind: self.txn_kind(args),
             route: self.route(args),
             is_quit: self.is_quit(args),
             is_write: self.is_write(args),
+            block_hint: self.block_hint(args),
+            wake_idx: None,
         }
     }
 }
@@ -289,6 +304,16 @@ pub struct ResolvedCmd {
     pub route: Route,
     pub is_quit: bool,
     pub is_write: bool,
+    /// Blocking-command classification (see [`Commands::block_hint`]).
+    /// `BlockHint::None` for every non-blocking verb.
+    pub block_hint: BlockHint,
+    /// Index into `args` whose write may wake a `BLPOP` / `XREAD BLOCK`
+    /// waiter parked on that key — `Some(1)` for `LPUSH` / `RPUSH` /
+    /// `XADD`, `None` for every other command (including reads). The
+    /// dispatcher's wake hook is gated on both this being `Some` *and*
+    /// the per-shard `BlockedClients` registry being non-empty, so the
+    /// steady-state cost when nobody is parked is one `is_empty()` check.
+    pub wake_idx: Option<u8>,
 }
 
 /// Keyspace-notification event class — what category a write command
