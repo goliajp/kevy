@@ -267,12 +267,17 @@ kevy は小さく再利用可能な crate 群として提供されます —— 
 ## コマンド
 
 5 つの Redis データ型 —— **String、Hash、List、Set、Sorted Set** —— に加え、
-**pub/sub**、**トランザクション**（`MULTI` / `EXEC` / `DISCARD`）、永続化
-（`SAVE` / `BGSAVE` / `BGREWRITEAOF`）、運用コマンド（`INFO` / `CONFIG` /
-`CLIENT` / …）。マルチキーコマンドと pub/sub はコアごとのシャードをまたいで
-動作し、`WRONGTYPE` の挙動は Redis と同じです。
+**Streams**（`XADD` / `XREAD` / `XRANGE` / コンシューマグループ）、
+**ブロッキング pop**（`BLPOP` / `BRPOP` / `XREAD BLOCK` / `XREADGROUP BLOCK`
+—— 単一キー・複数キー、**シャードをまたいで**動作）、**pub/sub**
+（`SUBSCRIBE` / `PSUBSCRIBE` —— パターン glob）、**トランザクション**
+（`MULTI` / `EXEC` / `DISCARD` / `WATCH` / `UNWATCH` —— 楽観的 CAS）、永続化
+（`SAVE` / `BGSAVE` / `BGREWRITEAOF`）、運用コマンド（`INFO` / `CONFIG`
+（実際のホット変更）/ `CLIENT` / …）。マルチキーコマンド、pub/sub、WATCH、
+ブロッキング pop はいずれもコアごとのシャードをまたいで動作し、`WRONGTYPE`
+の挙動は Redis と同じです。
 
-valkey 同等性の注記付き完全な 94 コマンド一覧は
+valkey 同等性の注記付き完全な 98 コマンド一覧は
 [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md) にあります。
 
 ## ビルドとテスト
