@@ -176,6 +176,10 @@ impl<C: Commands> Shard<C> {
                 if tick_check_counter >= self.tick_check_every {
                     tick_check_counter = 0;
                     let now = Instant::now();
+                    // BLOCK reactor: same cadence as the epoll path so
+                    // BLPOP / XREAD BLOCK timeouts fire identically under
+                    // either reactor.
+                    self.tick_blocked_timeouts();
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
                         self.apply_live_runtime_config(&mut tick_interval);

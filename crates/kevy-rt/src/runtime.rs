@@ -224,6 +224,7 @@ impl<C: Commands> Runtime<C> {
                     self.slowlog_slower_than_micros,
                     self.slowlog_max_len,
                 ),
+                blocked: crate::blocked::BlockedClients::new(),
             });
         }
 

@@ -46,6 +46,13 @@ pub(crate) struct Conn {
     /// can share the same server without either paying for the other's
     /// shape.
     pub(crate) proto: RespVersion,
+    /// Set while this conn is parked in a `BLPOP` / `BRPOP` / `XREAD BLOCK`
+    /// / `XREADGROUP BLOCK` waiter. The dispatcher uses it to refuse new
+    /// command processing on this conn until a wake (write to a watched
+    /// key) or a tick-driven timeout clears the flag. The conn's socket
+    /// stays open and registered with the poller; only command execution
+    /// is gated.
+    pub(crate) blocked: bool,
 }
 
 impl Conn {
@@ -65,6 +72,7 @@ impl Conn {
             multi: None,
             watched: Vec::new(),
             proto: RespVersion::default(),
+            blocked: false,
         }
     }
 }
