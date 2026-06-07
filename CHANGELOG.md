@@ -4,6 +4,33 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.6.0] — 2026-06-07
+
+Minor release: AOF `appendfsync always` group commit. Workspace 1.5.1 →
+1.6.0; kevy-embedded 1.1.7 → 1.1.8; kevy-client 1.7.3 → 1.7.4.
+
+### Added / Changed
+
+- **AOF group commit for `appendfsync always`.** Previously every write
+  fsynced individually (`flush()+sync_data()` per command). Now a pipelined
+  batch's writes are buffered and fsynced once at the batch boundary — still
+  before that batch's replies leave the shard, so the "durable before reply"
+  contract is unchanged. Measured **+46 %** (0.89M → 1.30M SET/s, `-c50
+  -P16`, 10 shards, lx64 NVMe); the per-write-durable vs 1-second-window
+  gap shrank from −39 % to −8 %. Applies to all always-write paths on both
+  reactors (epoll + io_uring local reads, and the cross-shard request
+  batch). `everysec` / `no` / cache-only paths are unchanged.
+  - New public API on `kevy_persist::Aof`: `begin_group()` / `end_group()`
+    (additive; existing embedders recompile unchanged).
+
+### Verified
+
+- New `kevy-persist` test `aof_group_commit_defers_then_flushes` (the batch
+  is not on disk until `end_group`, then fully durable). Full workspace
+  tests + clippy green; compat3 differential 135/135 vs valkey 9.1 + redis
+  7.4. Regression A/B (lx64): no GET/SET hot-path change; 3-way still leads
+  (kevy io_uring ~2.2× valkey / ~1.7× redis). See `bench/REPORT.md`.
+
 ## [v1.5.1] — 2026-06-07
 
 Patch release: three valkey-parity / correctness fixes surfaced by
