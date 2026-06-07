@@ -112,6 +112,8 @@ impl Commands for KevyCommands {
             b"RENAMENX" => Route::Rename { nx: true },
             b"XREAD" => cmd_block::xread_route(args),
             b"XREADGROUP" => cmd_block::xreadgroup_route(args),
+            // XGROUP / XINFO key is at args[2] (after the subcommand).
+            b"XGROUP" | b"XINFO" if args.len() >= 3 => Route::Single(2),
             b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),
             // DEL/EXISTS are single-key (fast path) unless given multiple keys.
             b"DEL" => {

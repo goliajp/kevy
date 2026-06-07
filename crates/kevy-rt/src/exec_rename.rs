@@ -127,7 +127,9 @@ impl<C: Commands> Shard<C> {
         };
         match step {
             RenameStep::Take => self.advance_rename_to_put(conn_id, seq, nx, src, dst, dst_shard, taken),
-            RenameStep::Put => self.finish_rename_put(conn_id, seq, nx, put_stored),
+            RenameStep::Put => self.finish_rename_put(conn_id, seq, nx, src, taken, put_stored),
+            // Restore (RENAMENX NX-refused) completed → src is back; reply :0.
+            RenameStep::Restore => self.fill_rename_slot(conn_id, seq, b":0\r\n".to_vec()),
         }
     }
 
@@ -140,17 +142,18 @@ impl<C: Commands> Shard<C> {
         conn_id: u64,
         seq: u64,
         nx: bool,
-        _src: Vec<u8>,
+        src: Vec<u8>,
         dst: Vec<u8>,
         dst_shard: usize,
         taken: Option<(kevy_store::Value, Option<u64>)>,
     ) {
         let Some((value, ttl_ms)) = taken else {
-            // Take returned NoSuchSrc — finalize.
-            self.fill_rename_slot(conn_id, seq, b"-ERR no such key\r\n".to_vec());
+            self.fill_rename_slot(conn_id, seq, b"-ERR no such key\r\n".to_vec()); // NoSuchSrc
             return;
         };
-        // Re-arm the same slot for step 2. Step transitions to Put.
+        // Re-arm the slot for Put, keeping `src` so an NX-refused Put can
+        // restore the source (the value rides to dst now; fold hands it
+        // back into `taken` only on refuse — restore-on-refuse, no loss).
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
@@ -158,20 +161,15 @@ impl<C: Commands> Shard<C> {
                 slot.agg = Agg::RenameOrchestrator {
                     step: RenameStep::Put,
                     nx,
-                    src: Vec::new(), // src no longer needed
+                    src,
                     dst: dst.clone(),
                     dst_shard,
-                    taken: None,        // step 2 doesn't buffer Value
-                    put_stored: None,   // fold fills this from RenamePutDone
+                    taken: None,
+                    put_stored: None,
                 };
             }
         }
-        let put_op = Op::RenamePut {
-            dst,
-            value,
-            ttl_ms,
-            nx,
-        };
+        let put_op = Op::RenamePut { dst, value, ttl_ms, nx };
         if dst_shard == self.id {
             let part = self.exec_op(put_op);
             self.fold(conn_id, seq, part);
@@ -196,20 +194,63 @@ impl<C: Commands> Shard<C> {
         conn_id: u64,
         seq: u64,
         nx: bool,
+        src: Vec<u8>,
+        taken: Option<(kevy_store::Value, Option<u64>)>,
         put_stored: Option<bool>,
     ) {
-        let stored = put_stored.unwrap_or(false);
-        let reply = if stored {
-            if nx { b":1\r\n".to_vec() } else { b"+OK\r\n".to_vec() }
+        if put_stored.unwrap_or(false) {
+            let reply = if nx { b":1\r\n".to_vec() } else { b"+OK\r\n".to_vec() };
+            self.fill_rename_slot(conn_id, seq, reply);
+            return;
+        }
+        // RENAMENX cross-shard, dst already existed at Put time → the
+        // rename does NOT happen. Step 1 took `src` off its shard, so put
+        // it back (the value rode home in `taken`) before replying `:0` —
+        // a no-op RENAMENX must not lose the source key.
+        match taken {
+            Some((value, ttl_ms)) => self.restore_renamed_src(conn_id, seq, nx, src, value, ttl_ms),
+            None => self.fill_rename_slot(conn_id, seq, b":0\r\n".to_vec()),
+        }
+    }
+
+    /// Step 3 (RENAMENX NX-refused only): put the taken source value back
+    /// on src's shard, re-arming the slot for the `Restore` step which
+    /// emits the `:0` reply once the put-back lands.
+    fn restore_renamed_src(
+        &mut self,
+        conn_id: u64,
+        seq: u64,
+        nx: bool,
+        src: Vec<u8>,
+        value: kevy_store::Value,
+        ttl_ms: Option<u64>,
+    ) {
+        let src_shard = shard_of(&src, self.nshards);
+        if let Some(c) = self.conns.get_mut(&conn_id) {
+            let idx = (seq - c.next_emit) as usize;
+            if let Some(slot) = c.pending.get_mut(idx) {
+                slot.remaining = 1;
+                slot.agg = Agg::RenameOrchestrator {
+                    step: RenameStep::Restore,
+                    nx,
+                    src: Vec::new(),
+                    dst: Vec::new(),
+                    dst_shard: 0,
+                    taken: None,
+                    put_stored: None,
+                };
+            }
+        }
+        let restore_op = Op::RenamePut { dst: src, value, ttl_ms, nx: false };
+        if src_shard == self.id {
+            let part = self.exec_op(restore_op);
+            self.fold(conn_id, seq, part);
         } else {
-            // Only reachable on RENAMENX cross-shard with pre-existing
-            // dst at Put time. The data-loss race here (src already
-            // taken at this point — Put refused, src gone) is
-            // documented. Future v3 could add a restore-src step or
-            // 2-phase pre-check.
-            b":0\r\n".to_vec()
-        };
-        self.fill_rename_slot(conn_id, seq, reply);
+            self.send_to(
+                src_shard,
+                Inbound::Request { origin: self.id, conn: conn_id, seq, op: restore_op },
+            );
+        }
     }
 
     /// Drop a literal RESP frame into the orchestrator's slot + drain.

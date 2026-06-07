@@ -317,12 +317,18 @@ impl<C: Commands> Shard<C> {
                     Agg::RenameOrchestrator { taken, .. },
                     Part::RenameTaken { value, ttl_ms },
                 ) => *taken = Some((value, ttl_ms)),
-                // Step 2's put result feeds the put_stored field so
-                // finalize_rename_agg picks the right reply byte.
+                // Step 2's put result: `refused = None` → stored; `Some`
+                // → NX-blocked, and the handed-back value lands in `taken`
+                // so finalize can restore src before the `:0` reply.
                 (
-                    Agg::RenameOrchestrator { put_stored, .. },
-                    Part::RenamePutDone { stored },
-                ) => *put_stored = Some(stored),
+                    Agg::RenameOrchestrator { put_stored, taken, .. },
+                    Part::RenamePutDone { refused },
+                ) => {
+                    *put_stored = Some(refused.is_none());
+                    if refused.is_some() {
+                        *taken = refused;
+                    }
+                }
                 // The terminal step-1 miss (RenameNoSuchSrc) leaves
                 // `taken == None`; finalize reads that as "missing src".
                 _ => {}

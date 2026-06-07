@@ -198,7 +198,11 @@ impl<C: Commands> Shard<C> {
                 // orchestrator decides whether to surface `:0` (RENAMENX
                 // blocked) — RENAME (non-NX) always succeeds here.
                 if nx && self.store.key_exists(&dst) {
-                    return Part::RenamePutDone { stored: false };
+                    // NX-refused: hand the source value back so the
+                    // orchestrator can restore it on src's shard.
+                    return Part::RenamePutDone {
+                        refused: Some((value, ttl_ms)),
+                    };
                 }
                 self.store.put_with_ttl(dst.clone(), value, ttl_ms);
                 self.store.bump_if_watched(&dst);
@@ -207,7 +211,7 @@ impl<C: Commands> Shard<C> {
                 // value through MIGRATE/RESTORE-style binary frames.
                 // For v2-3b, document the gap: cross-shard RENAME
                 // works in-memory but is not replayed through AOF.
-                Part::RenamePutDone { stored: true }
+                Part::RenamePutDone { refused: None }
             }
             Op::CollectWatchVersions(keys) => {
                 // WATCH's fan-out: register each key in this shard's

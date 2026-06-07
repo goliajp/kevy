@@ -164,11 +164,13 @@ pub(crate) enum Part {
     },
     /// Cross-shard RENAME step 1 miss: src didn't exist.
     RenameNoSuchSrc,
-    /// Cross-shard RENAME step 2 result: `stored` is `true` if the
-    /// put landed at dst, `false` if `RENAMENX` blocked because dst
-    /// already had an entry.
+    /// Cross-shard RENAME step 2 result. `refused` is `None` when the put
+    /// landed at dst; `Some((value, ttl))` when `RENAMENX` blocked because
+    /// dst already had an entry — the source value (taken in step 1) is
+    /// handed back so the orchestrator can put it back on its shard (no
+    /// data loss) before replying `:0`.
     RenamePutDone {
-        stored: bool,
+        refused: Option<(kevy_store::Value, Option<u64>)>,
     },
     /// `SLOWLOG GET` partial: this shard's ring buffer contents (in
     /// FIFO order — oldest first). Origin sorts by timestamp DESC and
@@ -337,6 +339,10 @@ pub(crate) enum Agg {
 pub(crate) enum RenameStep {
     Take,
     Put,
+    /// `RENAMENX` only: the Put was NX-refused (dst already existed), so
+    /// the source taken in step 1 is being put back on its shard before
+    /// the `:0` reply — a no-op `RENAMENX` must not lose the source.
+    Restore,
 }
 
 /// One outstanding command slot awaiting `remaining` sub-results, held in a
