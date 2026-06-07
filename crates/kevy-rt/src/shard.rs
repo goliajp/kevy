@@ -341,6 +341,11 @@ impl<C: Commands> Shard<C> {
     /// the io_uring reactor flushes them via its arm/write loop instead).
     #[inline]
     fn flush_dirty(&mut self) -> io::Result<()> {
+        // `appendfsync always` loop-level group commit: one fsync for the
+        // whole iteration's buffered writes BEFORE any deferred reply leaves
+        // (durable-before-reply, one fsync per loop instead of per command).
+        // No-op in every other mode.
+        self.aof_end_group()?;
         if self.dirty.is_empty() {
             return Ok(());
         }

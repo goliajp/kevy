@@ -152,6 +152,14 @@ impl Aof {
         Ok(())
     }
 
+    /// Whether a group-commit window is open (the caller is deferring this
+    /// batch's fsync). The reactor reads this to decide whether to defer a
+    /// connection's reply flush to the loop-level fsync point.
+    #[inline]
+    pub fn is_deferring(&self) -> bool {
+        self.deferred
+    }
+
     /// Open a group-commit window (no-op unless the policy is `Always`):
     /// subsequent `append`s buffer instead of fsyncing per command. Pair
     /// with [`Self::end_group`] **before** sending the batch's replies.

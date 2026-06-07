@@ -56,9 +56,12 @@ impl<C: Commands> Shard<C> {
         };
 
         let mut had_protocol_error = false;
-        // Group-commit window for `appendfsync always`: the writes dispatched
-        // from this pipelined read batch buffer their AOF appends and fsync
-        // once in `aof_end_group`, BEFORE `flush_conn` sends their replies.
+        // Group-commit window for `appendfsync always`: this batch's writes
+        // buffer their AOF appends instead of fsyncing per command. The fsync
+        // happens once at the reactor loop's `flush_dirty` (covering every
+        // conn read + cross-shard reply this iteration), and this conn's reply
+        // flush is deferred there too — so durability still precedes reply,
+        // with one fsync per loop instead of per command.
         self.aof_begin_group();
         loop {
             let parse = parse_command_borrowed(&input_buf);
@@ -77,20 +80,33 @@ impl<C: Commands> Shard<C> {
             drop(argv);
             input_buf.drain(..consumed);
             if !self.conns.contains_key(&conn_id) {
-                // Connection was closed mid-batch; drop the rest of the buf.
-                self.aof_end_group()?;
+                // Connection closed mid-batch; drop the rest of the buf. Any
+                // AOF writes it buffered are fsynced at the loop flush point.
                 return Ok(());
             }
         }
-        // fsync the batch's buffered writes before any reply leaves the shard.
-        self.aof_end_group()?;
         if let Some(c) = self.conns.get_mut(&conn_id) {
             c.input = input_buf;
         }
         if had_protocol_error {
             self.protocol_error(conn_id);
         }
-        self.flush_conn(conn_id)
+        // `always`: defer the reply flush to `flush_dirty`, which fsyncs the
+        // whole iteration's buffered writes once before any reply leaves.
+        // Every other mode flushes eagerly here (unchanged hot path).
+        if self.aof_deferring() {
+            self.dirty.push(conn_id);
+            Ok(())
+        } else {
+            self.flush_conn(conn_id)
+        }
+    }
+
+    /// Whether the AOF is buffering an open group-commit window (`always`
+    /// mode mid-batch) — the reactor defers reply flushes to the loop fsync.
+    #[inline]
+    pub(crate) fn aof_deferring(&self) -> bool {
+        self.aof.as_ref().is_some_and(|a| a.is_deferring())
     }
 
     /// Open the AOF group-commit window (no-op unless AOF is on + policy is
