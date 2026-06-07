@@ -4,6 +4,42 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.8.0] — 2026-06-07
+
+Minor release: io_uring is now the default reactor on Linux, with an
+automatic epoll fallback. Workspace 1.7.0 → 1.8.0; kevy-embedded 1.1.10 →
+1.1.11; kevy-client 1.7.6 → 1.7.7.
+
+### Changed
+
+- **The Linux reactor now auto-selects io_uring at startup, falling back
+  to epoll when the host can't build a ring.** Previously io_uring was
+  opt-in via `KEVY_IO_URING=1`; epoll was the default. Now an unset
+  `KEVY_IO_URING` probes io_uring (creates + drops a real ring with the
+  production parameters, including the buffer-ring registration) and uses
+  it when available — otherwise it logs the reason and uses epoll.
+  **Startup never fails over reactor choice.** This catches a
+  seccomp-blocked `io_uring_setup` (Docker's default profile) and
+  pre-5.19 kernels before any shard loads data.
+  - Override still honoured: `KEVY_IO_URING=0/off/no/false` forces epoll;
+    any other value forces io_uring with no fallback (a setup failure then
+    surfaces loudly — for benchmarks / tests).
+  - The startup line reports the choice: `kevy: reactor = io_uring
+    (io_uring available)` or `... = epoll (io_uring unavailable …)`.
+
+### Fixed
+
+- **io_uring disconnect leaked block waiters and pub/sub registrations.**
+  The io_uring reactor's connection reaper hand-rolled its teardown
+  (removed the conn + unsubscribed channels only), skipping the shared
+  `close_conn` path the epoll reactor uses. So disconnecting a connection
+  that was parked on a cross-shard `BLPOP`/`XREAD` left its arbiter waiter
+  and `psub` registrations behind — a later `RPUSH`/`XADD` could wake the
+  gone waiter and consume an element meant for a live client. The reaper
+  now routes through `close_conn` (which runs `drop_for_conn`,
+  `cancel_xshard_on_close`, channel + pattern unsubscribe). Only reachable
+  under io_uring; epoll was always correct.
+
 ## [v1.7.0] — 2026-06-07
 
 Minor release: cross-shard multi-stream `XREAD`. Workspace 1.6.1 → 1.7.0;
