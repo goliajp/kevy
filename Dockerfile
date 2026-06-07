@@ -11,9 +11,11 @@
 # Quick start (host port 6379 → container 6379, persistent volume):
 #   docker run -d --name kevy -p 6379:6379 -v kevy-data:/data ghcr.io/goliajp/kevy
 #
-# Run on Linux with io_uring (kernel 5.13+, host seccomp must allow
-# io_uring_setup):
-#   docker run --rm -p 6379:6379 -e KEVY_IO_URING=1 \
+# kevy auto-selects io_uring on Linux when available (kernel >= 5.19), else
+# falls back to epoll — startup never fails. Docker's default seccomp blocks
+# io_uring_setup, so the default run uses epoll; allow io_uring for the faster
+# reactor (or force it with -e KEVY_IO_URING=1, force epoll with =0):
+#   docker run --rm -p 6379:6379 \
 #     --security-opt seccomp=unconfined ghcr.io/goliajp/kevy
 
 FROM rust:1.95-slim-bookworm AS build

@@ -174,13 +174,20 @@ Image defaults: `KEVY_BIND=0.0.0.0`, `KEVY_PORT=6379`, `KEVY_DIR=/data`,
 `KEVY_AOF=1`. Override any with `-e` or by passing flags after the image:
 `docker run ... goliakk/kevy:rc --threads 4 --port 7000`.
 
-Linux hosts running on kernel 5.13+ can opt into the io_uring reactor —
-docker's default seccomp profile blocks `io_uring_setup`, so allow it:
+On Linux, kevy **auto-selects io_uring** when the host can build the ring
+(kernel ≥ 5.19, and `io_uring_setup` not blocked by seccomp) and otherwise
+falls back to the epoll reactor — startup never fails on either. Docker's
+default seccomp profile blocks `io_uring_setup`, so the default image runs
+on epoll; allow io_uring for the faster reactor:
 
 ```sh
-docker run --rm -p 6379:6379 -e KEVY_IO_URING=1 \
+docker run --rm -p 6379:6379 \
   --security-opt seccomp=unconfined goliakk/kevy:rc
 ```
+
+Override the auto-pick with `KEVY_IO_URING=0` (force epoll) or
+`KEVY_IO_URING=1` (force io_uring — fail loudly if unavailable, for
+benchmarks). macOS/BSD always use kqueue.
 
 Prefer the GitHub registry? Swap any `goliakk/kevy` above for
 `ghcr.io/goliajp/kevy` — identical image, same tags.

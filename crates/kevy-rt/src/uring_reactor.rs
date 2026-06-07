@@ -45,6 +45,22 @@ const PBUF_GROUP: u16 = 0;
 /// `-ENOBUFS`: the buf ring was momentarily empty; just re-arm (don't close).
 const ENOBUFS: i32 = 105;
 
+/// Probe whether this host can build the io_uring + provided-buffer ring that
+/// [`Shard::run_uring`] needs: `io_uring_setup` not blocked by seccomp (Docker's
+/// default profile blocks it) and a kernel new enough for the buf ring (5.19+).
+/// Builds and immediately drops a real ring with the same parameters, so a
+/// success here means `run_uring` will start. [`crate::Runtime`] calls this once
+/// before spawning shards to auto-select io_uring with a graceful epoll fallback
+/// — so an unavailable io_uring degrades to epoll instead of failing startup.
+pub(crate) fn io_uring_available() -> bool {
+    match IoUring::new(URING_ENTRIES) {
+        Ok(ring) => ring
+            .register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP)
+            .is_ok(),
+        Err(_) => false,
+    }
+}
+
 // `user_data` layout: top 2 bits = op, low 62 bits = conn id.
 const OP_SHIFT: u32 = 62;
 const OP_RECV: u64 = 1 << OP_SHIFT;
