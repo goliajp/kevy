@@ -4,6 +4,20 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.6.1] — 2026-06-07
+
+Patch release: faster snapshots. Workspace 1.6.0 → 1.6.1; kevy-embedded
+1.1.8 → 1.1.9; kevy-client 1.7.4 → 1.7.5. No public API change.
+
+### Changed
+
+- **Snapshot / BGREWRITEAOF bulk writes use a 1 MiB BufWriter** (was the
+  8 KiB default). `SAVE` was measured at only ~12 % of disk sequential
+  bandwidth (758 MB/s vs a 6.1 GB/s NVMe ceiling on an M4 Pro) — the small
+  buffer turned a multi-hundred-MB snapshot into tens of thousands of small
+  `write(2)`s. The larger buffer lifts SAVE to **~1.73 GB/s (+128 %)**.
+  Content is byte-identical; only the flush granularity changes.
+
 ## [v1.6.0] — 2026-06-07
 
 Minor release: AOF `appendfsync always` group commit. Workspace 1.5.1 →
