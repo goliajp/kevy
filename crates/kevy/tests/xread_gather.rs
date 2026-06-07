@@ -20,21 +20,46 @@ fn req(parts: &[&[u8]]) -> Vec<u8> {
     v
 }
 
-fn read_reply(s: &mut std::net::TcpStream) -> Vec<u8> {
-    // Read until quiescent (small replies arrive in one or two segments).
-    let mut out = Vec::new();
-    let mut buf = [0u8; 8192];
+fn read_n(s: &mut std::net::TcpStream, n: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; n];
+    s.read_exact(&mut buf).unwrap();
+    buf
+}
+
+fn read_line(s: &mut std::net::TcpStream, out: &mut Vec<u8>) {
     loop {
-        match s.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                out.extend_from_slice(&buf[..n]);
-                if n < buf.len() {
-                    break;
-                }
-            }
-            Err(_) => break,
+        out.extend_from_slice(&read_n(s, 1));
+        if out.ends_with(b"\r\n") {
+            break;
         }
+    }
+}
+
+fn read_len(s: &mut std::net::TcpStream, out: &mut Vec<u8>) -> i64 {
+    let start = out.len();
+    read_line(s, out);
+    std::str::from_utf8(&out[start..out.len() - 2]).unwrap().parse().unwrap()
+}
+
+/// Read exactly one complete RESP reply (handles multi-segment arrival).
+fn read_reply(s: &mut std::net::TcpStream) -> Vec<u8> {
+    let head = read_n(s, 1);
+    let mut out = head.clone();
+    match head[0] {
+        b'+' | b'-' | b':' => read_line(s, &mut out),
+        b'$' => {
+            let len = read_len(s, &mut out);
+            if len >= 0 {
+                out.extend_from_slice(&read_n(s, len as usize + 2));
+            }
+        }
+        b'*' => {
+            let n = read_len(s, &mut out);
+            for _ in 0..n.max(0) {
+                out.extend_from_slice(&read_reply(s));
+            }
+        }
+        other => panic!("unknown reply prefix {other:?}"),
     }
     out
 }
@@ -74,9 +99,16 @@ impl Server {
         Self { port, dir, stop, handle: Some(handle) }
     }
     fn connect(&self) -> std::net::TcpStream {
-        let s = std::net::TcpStream::connect(("127.0.0.1", self.port)).unwrap();
-        s.set_read_timeout(Some(std::time::Duration::from_millis(400))).unwrap();
-        s
+        // Retry: under CI load (several 8-shard servers in parallel) the
+        // first connect can race the listener becoming ready.
+        for _ in 0..400 {
+            if let Ok(s) = std::net::TcpStream::connect(("127.0.0.1", self.port)) {
+                s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+                return s;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("could not connect to test server on port {}", self.port);
     }
 }
 
