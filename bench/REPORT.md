@@ -501,3 +501,35 @@ component -61% but system-neutral — the server is reactor-bound, not
 command-CPU-bound). Verified: sharded 11/11 via epoll AND io_uring, clippy 0,
 full tests green. The lesson: a profiler beats guessing — the SipHash hotspot
 contradicted a standing "negligible" assumption.
+
+---
+
+## v1.5.0 regression A/B — the feature wave didn't touch the hot path (2026-06-07, lx64)
+
+**Question:** did the v1.1–v1.5 feature wave (RESP3, Geo, Streams, blocking
+pops, cross-shard BLOCK) regress GET/SET? `resolve()` now also computes
+`block_hint` + `wake_idx` per command, and routing gained BLPOP / BRPOP /
+XGROUP / XINFO arms.
+
+**Method:** `bench/kevy_ab.sh`, **same release profile for both binaries**,
+lx64 (16-core, kernel 6.12), server cores 0-9 / client cores 10-15, `-c50
+-P16 n=4M`, **3 rounds × 2 samples = 6 samples/metric**. `v1.4.2` tag vs
+`develop` (= v1.5.0 + the compat fixes). Both reactors.
+
+| metric        | v1.4.2 | develop | Δ      |
+|---------------|-------:|--------:|-------:|
+| epoll GET     | 1.67M  | 1.73M   | +3.5%  |
+| epoll SET     | 1.62M  | 1.67M   | +3.3%  |
+| io_uring GET  | 2.61M  | 2.61M   | ~flat  |
+| io_uring SET  | 2.47M  | 2.44M   | −1.0%  |
+
+**Verdict: no regression.** develop is flat-to-slightly-faster; every Δ is
+inside the ~5–7 % run-to-run spread (the per-binary samples vary that much
+themselves). Confirms the code-level read — the blocking/stream additions to
+`resolve()` only fire for those verbs; GET/SET still hit the default route
+arm and an early `None` from `block_hint`/`wake_idx`, with no new allocation.
+
+**Caveat:** these absolute numbers are CLIENT-bound (6 client cores driving
+`-c50 -P16`), well below the headline single-shard ~5.9M GET/core — this run
+measures *relative* v1.4.2 → v1.5.0, not peak server throughput. A peak
+re-baseline still needs the 2-box setup (the documented binding constraint).
