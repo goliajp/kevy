@@ -533,3 +533,29 @@ arm and an early `None` from `block_hint`/`wake_idx`, with no new allocation.
 `-c50 -P16`), well below the headline single-shard ~5.9M GET/core — this run
 measures *relative* v1.4.2 → v1.5.0, not peak server throughput. A peak
 re-baseline still needs the 2-box setup (the documented binding constraint).
+
+## v1.5.0 3-way re-baseline — kevy still leads valkey 9.1 + redis 7.4 (2026-06-07, lx64)
+
+Confirms the "leads on every axis" claim holds after the v1.1–v1.5 feature
+wave. Isolated runs (one server at a time, same cores), lx64 16-core, server
+cores 0-9 / client cores 10-15 ×6, `-c50 -P16 n=3M`. valkey 9.1 + redis 7.4
+via `docker --network host --cpuset-cpus 0-9` (no bridge NAT), **single-
+threaded defaults** (their out-of-box shape); kevy = develop 10-shard.
+Steady-state `overall:` rps (the quantized "requests per second" tail line
+is unreliable under `--threads`).
+
+| engine            | GET    | SET    | vs kevy-uring |
+|-------------------|-------:|-------:|--------------:|
+| valkey 9.1        | ~1.1M  | ~1.0M  | —             |
+| redis 7.4         | ~1.4M  | ~1.38M | —             |
+| **kevy epoll**    | ~1.75M | ~1.62M |               |
+| **kevy io_uring** | ~2.55M | ~2.4M  |               |
+
+Ratios (kevy io_uring): **~2.2× valkey, ~1.7× redis**; kevy epoll ~1.5×
+valkey, ~1.2× redis. (Aside: redis 7.4 edged valkey 9.1 on this workload —
+both still behind kevy.)
+
+**Caveat (unchanged):** single-box `-c50 -P16` is CLIENT-bound (6 client
+cores), so absolute rps is capped below the headline single-shard ~5.9M
+GET/core — the ratio is the signal. A true peak re-baseline still needs the
+documented 2-box (same-LAN) load-gen setup.
