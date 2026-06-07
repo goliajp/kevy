@@ -31,7 +31,7 @@ run() { wait_ready "$1" || return; redis-benchmark -h 127.0.0.1 -p "$1" -t set -
 
 echo "### -c1 -P1  n=$N  server=$SRV_CORES client=$CLI_CORE"
 echo "=== kevy epoll ==="
-KEVY_BIND=127.0.0.1 taskset -c "$SRV_CORES" "$KBIN" --threads "$KEVY_THREADS" --port 7001 --no-aof >/tmp/c1_e.log 2>&1 &
+KEVY_IO_URING=0 KEVY_BIND=127.0.0.1 taskset -c "$SRV_CORES" "$KBIN" --threads "$KEVY_THREADS" --port 7001 --no-aof >/tmp/c1_e.log 2>&1 &
 P=$!; run 7001 "kevy-epoll"; kill "$P" 2>/dev/null; wait "$P" 2>/dev/null
 
 echo "=== kevy io_uring ==="

@@ -43,7 +43,7 @@ echo "### ISOLATED runs. server cores=$SRV_CORES  client cores=$CLI_CORES x$CLI_
 
 # ---- kevy (epoll), host process, $KEVY_THREADS shards ----
 echo "=== kevy-${KEVY_THREADS}sh (epoll) ==="
-KEVY_BIND=127.0.0.1 taskset -c "$SRV_CORES" "$KBIN" --threads "$KEVY_THREADS" \
+KEVY_IO_URING=0 KEVY_BIND=127.0.0.1 taskset -c "$SRV_CORES" "$KBIN" --threads "$KEVY_THREADS" \
   --port 7001 --no-aof >/tmp/kevy_srv.log 2>&1 &
 KPID=$!
 run_two 7001 "kevy-${KEVY_THREADS}sh"

@@ -230,10 +230,29 @@ impl<C: Commands> Runtime<C> {
             });
         }
 
-        // Opt into the Linux io_uring (completion) reactor with KEVY_IO_URING=1;
-        // otherwise use the readiness reactor (epoll/kqueue), the default + macOS.
+        // Reactor selection on Linux:
+        //   KEVY_IO_URING unset → auto: try io_uring, fall back to epoll if the
+        //     host can't build the ring (probe below) — startup never fails.
+        //   KEVY_IO_URING=0/off/no/false → force the epoll readiness reactor.
+        //   KEVY_IO_URING=<anything else> → force io_uring (no fallback; a
+        //     setup failure then surfaces loudly — for benchmarks / tests).
+        // The probe creates+drops a real ring with the run_uring parameters, so
+        // it catches a seccomp-blocked io_uring_setup (Docker's default profile)
+        // and pre-5.19 kernels before any shard loads data. (macOS = kqueue.)
         #[cfg(target_os = "linux")]
-        let use_uring = std::env::var_os("KEVY_IO_URING").is_some();
+        let use_uring = match std::env::var("KEVY_IO_URING").ok().as_deref() {
+            Some("0") | Some("off") | Some("no") | Some("false") => false,
+            Some(_) => true,
+            None => {
+                let avail = crate::uring_reactor::io_uring_available();
+                eprintln!(
+                    "kevy: reactor = {} (io_uring {})",
+                    if avail { "io_uring" } else { "epoll" },
+                    if avail { "available" } else { "unavailable — kernel <5.19 or seccomp; using epoll" },
+                );
+                avail
+            }
+        };
 
         let mut handles = Vec::with_capacity(n);
         for shard in shards {

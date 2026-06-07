@@ -29,7 +29,7 @@ echo "### pub/sub loopback  server=$SRV_CORES client=$CLI_CORES subs=$SUBS msgs=
 echo "### $(uptime)"
 
 echo "=== kevy epoll (${THREADS}sh) ==="
-KEVY_BIND=127.0.0.1 taskset -c "$SRV_CORES" "$KBIN" --threads "$THREADS" --port 7001 --no-aof >/tmp/ps_e.log 2>&1 &
+KEVY_IO_URING=0 KEVY_BIND=127.0.0.1 taskset -c "$SRV_CORES" "$KBIN" --threads "$THREADS" --port 7001 --no-aof >/tmp/ps_e.log 2>&1 &
 P=$!; run 7001 "kevy-epoll"; kill "$P" 2>/dev/null; wait "$P" 2>/dev/null
 
 echo "=== kevy io_uring (${THREADS}sh) ==="
