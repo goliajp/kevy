@@ -86,11 +86,14 @@ pub fn encode_base32_geohash(lon: f64, lat: f64) -> [u8; 11] {
     let mut out = [0u8; 11];
     for (i, slot) in out.iter_mut().enumerate() {
         let shift = 52i32 - (i as i32 + 1) * 5;
+        // Redis emits the 52 score bits across the first 10 chars (50 bits)
+        // and pads the 11th char with zero rather than spilling the 2 low
+        // real bits into it — match that so GEOHASH strings are byte-equal.
         let idx = if shift >= 0 {
-            (bits >> shift) & 0x1f
+            ((bits >> shift) & 0x1f) as usize
         } else {
-            (bits << -shift) & 0x1f
-        } as usize;
+            0
+        };
         *slot = ALPHABET[idx];
     }
     out
@@ -167,10 +170,19 @@ fn cell_centre(
     lat_min: f64,
     lat_max: f64,
 ) -> (f64, f64) {
+    // Mirror Redis's geohashDecode float-op order EXACTLY: decode each axis
+    // to its cell [min,max] separately, then average — `lon_min + (i/cells)
+    // *span` for min and `(i+1)/cells*span` for max. The mathematically
+    // equivalent `(i+0.5)/cells*span` rounds differently in the last ULP,
+    // which made GEOPOS diverge from valkey/redis in the final digits.
     let cells = (1u64 << GEO_STEP) as f64;
-    let lon = lon_min + ((ilon as f64) + 0.5) / cells * (lon_max - lon_min);
-    let lat = lat_min + ((ilat as f64) + 0.5) / cells * (lat_max - lat_min);
-    (lon, lat)
+    let lon_span = lon_max - lon_min;
+    let lat_span = lat_max - lat_min;
+    let lon_lo = lon_min + (ilon as f64 / cells) * lon_span;
+    let lon_hi = lon_min + ((ilon as f64 + 1.0) / cells) * lon_span;
+    let lat_lo = lat_min + (ilat as f64 / cells) * lat_span;
+    let lat_hi = lat_min + ((ilat as f64 + 1.0) / cells) * lat_span;
+    ((lon_lo + lon_hi) / 2.0, (lat_lo + lat_hi) / 2.0)
 }
 
 /// Convert an f64 score back to its 52-bit interleaved integer. Saturates
@@ -270,4 +282,48 @@ fn merge_ranges(sorted: Vec<(u64, u64)>) -> Vec<(f64, f64)> {
         }
     }
     out.into_iter().map(|(a, b)| (a as f64, b as f64)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Reference values produced by valkey 9.1 + redis 7.4 (both agree) for
+    // the canonical Sicily fixture. Regression guards for the two geo
+    // encoding bugs the cross-engine differential (`bench/compat3.sh`)
+    // caught: GEOHASH 11th-char padding and GEOPOS cell-midpoint rounding.
+    const PALERMO: (f64, f64) = (13.361389, 38.115556);
+    const CATANIA: (f64, f64) = (15.087269, 37.502669);
+
+    #[test]
+    fn geohash_string_matches_redis() {
+        // 11th char must be '0' (zero-padded), not the spilled low bits.
+        assert_eq!(&encode_base32_geohash(PALERMO.0, PALERMO.1), b"sqc8b49rny0");
+        assert_eq!(&encode_base32_geohash(CATANIA.0, CATANIA.1), b"sqdtr74hyu0");
+    }
+
+    #[test]
+    fn geopos_roundtrip_matches_redis_to_the_last_digit() {
+        // decode(encode(..)) must reproduce valkey/redis GEOPOS byte-for-byte
+        // (17 sig digits), which requires the exact cell-midpoint float order.
+        for (lon, lat, want_lon, want_lat) in [
+            (
+                PALERMO.0,
+                PALERMO.1,
+                "13.36138933897018433",
+                "38.11555639549629859",
+            ),
+            (
+                CATANIA.0,
+                CATANIA.1,
+                "15.08726745843887329",
+                "37.50266842333162032",
+            ),
+        ] {
+            let score = encode_score(lon, lat).expect("in range");
+            let (dlon, dlat) = decode_score(score);
+            assert_eq!(format!("{dlon:.17}"), want_lon, "lon for ({lon},{lat})");
+            assert_eq!(format!("{dlat:.17}"), want_lat, "lat for ({lon},{lat})");
+        }
+    }
 }

@@ -93,6 +93,17 @@ fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
         b"BLPOP" | b"BRPOP" => Route::Local,
         b"XREAD" => cmd_block::xread_route(args),
         b"XREADGROUP" => cmd_block::xreadgroup_route(args),
+        // XGROUP / XINFO put the stream key at args[2] (after the
+        // subcommand), not args[1] — route by the real key so a
+        // multi-shard server lands on the shard that owns the stream.
+        // Keyless forms (HELP) fall back to Local.
+        b"XGROUP" | b"XINFO" => {
+            if args.len() >= 3 {
+                Route::Single(2)
+            } else {
+                Route::Local
+            }
+        }
         b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),
         b"DEL" => {
             if args.len() == 2 {
