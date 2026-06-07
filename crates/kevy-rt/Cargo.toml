@@ -14,20 +14,20 @@ categories = ["network-programming", "concurrency", "database-implementations"]
 workspace = true
 
 [dependencies]
-kevy-sys = { path = "../kevy-sys", version = "1.5.1" }
-kevy-store = { path = "../kevy-store", version = "1.5.1" }
-kevy-resp = { path = "../kevy-resp", version = "1.5.1" }
-kevy-ring = { path = "../kevy-ring", version = "1.5.1" }
-kevy-persist = { path = "../kevy-persist", version = "1.5.1" }
-kevy-hash = { path = "../kevy-hash", version = "1.5.1" }
-kevy-map = { path = "../kevy-map", version = "1.5.1" }
-kevy-config = { path = "../kevy-config", version = "1.5.1" }
+kevy-sys = { path = "../kevy-sys", version = "1.6.0" }
+kevy-store = { path = "../kevy-store", version = "1.6.0" }
+kevy-resp = { path = "../kevy-resp", version = "1.6.0" }
+kevy-ring = { path = "../kevy-ring", version = "1.6.0" }
+kevy-persist = { path = "../kevy-persist", version = "1.6.0" }
+kevy-hash = { path = "../kevy-hash", version = "1.6.0" }
+kevy-map = { path = "../kevy-map", version = "1.6.0" }
+kevy-config = { path = "../kevy-config", version = "1.6.0" }
 
 # io_uring engine is Linux-only; the rest of kevy-rt's hot path is the
 # epoll/kqueue reactor in kevy-sys. Gate at the manifest level so non-
 # Linux builds don't pull an empty crate into the graph.
 [target.'cfg(target_os = "linux")'.dependencies]
-kevy-uring = { path = "../kevy-uring", version = "1.5.1" }
+kevy-uring = { path = "../kevy-uring", version = "1.6.0" }
 
 # Loom is a CHARTER-EXEMPTED dev-only crates.io dep (precedent in
 # kevy-ring/Cargo.toml — same status as cargo-fuzz / cargo-llvm-cov):
