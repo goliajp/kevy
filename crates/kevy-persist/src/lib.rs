@@ -62,12 +62,17 @@ const OP_SET: u8 = 4;
 const OP_ZSET: u8 = 5;
 const OP_STREAM: u8 = 6;
 
+/// BufWriter capacity for bulk snapshot / AOF-rewrite writes. The 8 KiB
+/// default made SAVE ~12 % of disk bandwidth (tens of thousands of small
+/// `write(2)`s); 1 MiB amortizes the syscalls toward disk speed.
+const SNAPSHOT_BUF_CAP: usize = 1 << 20;
+
 /// Write a point-in-time snapshot of `store` to `path`, atomically: data is
 /// written to `<path>.tmp`, fsynced, then renamed over `path`.
 pub fn save_snapshot(store: &Store, path: &Path) -> io::Result<()> {
     let tmp = tmp_path(path);
     {
-        let mut w = BufWriter::new(File::create(&tmp)?);
+        let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, File::create(&tmp)?);
         w.write_all(MAGIC)?;
         w.write_all(&[VERSION])?;
         // `snapshot_each` is infallible; capture the first write error to surface.
@@ -332,7 +337,7 @@ fn read_u64<R: Read>(r: &mut R) -> io::Result<u64> {
 /// the same way live-appended ones do.
 pub(crate) fn dump_store_to_aof(path: &Path, store: &Store) -> io::Result<(u64, u64)> {
     let f = File::create(path)?;
-    let mut w = BufWriter::new(f);
+    let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, f);
     w.write_all(crate::aof::AOF_MAGIC)?;
     let mut keys = 0u64;
     let mut err: Option<io::Error> = None;
