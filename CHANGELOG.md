@@ -4,6 +4,26 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.7.0] — 2026-06-07
+
+Minor release: cross-shard multi-stream `XREAD`. Workspace 1.6.1 → 1.7.0;
+kevy-embedded 1.1.9 → 1.1.10; kevy-client 1.7.5 → 1.7.6.
+
+### Fixed
+
+- **Non-blocking `XREAD … STREAMS s1 s2 …` over streams on different shards
+  returned partial data.** It routed to the first STREAMS key's shard only,
+  so streams owned by other shards were silently dropped (no error). It now
+  fans each stream out to its owning shard and merges the replies in request
+  order — empty streams skipped, `*-1` when all empty, `COUNT` applied per
+  stream, `$` resolved on each stream's owning shard. Single-stream `XREAD`
+  keeps the fast single-shard path; blocking `XREAD` already parks on the
+  origin shard via the cross-shard BLOCK arbiter (v1.5.0).
+  - `XREADGROUP` multi-stream cross-shard remains a follow-up (its `>`
+    consume semantics need separate handling).
+  - Additive internal API only (a new `Route::XReadGather` variant); no
+    public breakage.
+
 ## [v1.6.1] — 2026-06-07
 
 Patch release: faster snapshots. Workspace 1.6.0 → 1.6.1; kevy-embedded
