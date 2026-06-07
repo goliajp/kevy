@@ -1,14 +1,23 @@
 //! Non-blocking multi-stream `XREAD` across shards (cross-shard gather).
 //! Before this, `XREAD … STREAMS s1 s2 …` routed to the first stream's shard
-//! only and silently dropped streams living on other shards. `nshards = 8`
-//! so the streams almost certainly span shards; the gather must return every
-//! non-empty stream, in request order, with `COUNT` honoured.
+//! only and silently dropped streams living on other shards. `nshards = 4`
+//! makes distinct streams very likely span shards; the gather machinery runs
+//! for any ≥2-stream read regardless, and must return every non-empty stream
+//! in request order, with `COUNT` honoured.
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+// kevy shards busy-poll, so running several multi-shard servers in parallel
+// (cargo's default) oversubscribes CI cores and starves the cross-shard
+// round-trips a gather needs. Serialize: each test holds this for its whole
+// body via `serial()`, so only one server runs at a time.
 static GATE: Mutex<()> = Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    GATE.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 fn req(parts: &[&[u8]]) -> Vec<u8> {
     let mut v = format!("*{}\r\n", parts.len()).into_bytes();
@@ -73,7 +82,6 @@ struct Server {
 
 impl Server {
     fn start() -> Self {
-        let _g = GATE.lock().unwrap_or_else(|e| e.into_inner());
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
@@ -85,7 +93,7 @@ impl Server {
         let st = stop.clone();
         let d = dir.clone();
         let handle = std::thread::spawn(move || {
-            kevy_rt::Runtime::new([127, 0, 0, 1], port, 8, kevy::KevyCommands)
+            kevy_rt::Runtime::new([127, 0, 0, 1], port, 4, kevy::KevyCommands)
                 .with_data_dir(d)
                 .run(st)
                 .unwrap();
@@ -99,8 +107,7 @@ impl Server {
         Self { port, dir, stop, handle: Some(handle) }
     }
     fn connect(&self) -> std::net::TcpStream {
-        // Retry: under CI load (several 8-shard servers in parallel) the
-        // first connect can race the listener becoming ready.
+        // Retry: the listener may not be accepting the instant start() returns.
         for _ in 0..400 {
             if let Ok(s) = std::net::TcpStream::connect(("127.0.0.1", self.port)) {
                 s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
@@ -124,6 +131,7 @@ impl Drop for Server {
 
 #[test]
 fn xread_multistream_crossshard_returns_all_in_order() {
+    let _s = serial();
     let srv = Server::start();
     let mut c = srv.connect();
     for (st, val) in [("sa", "va"), ("sb", "vb"), ("sc", "vc")] {
@@ -149,6 +157,7 @@ fn xread_multistream_crossshard_returns_all_in_order() {
 
 #[test]
 fn xread_multistream_skips_empty_streams() {
+    let _s = serial();
     let srv = Server::start();
     let mut c = srv.connect();
     c.write_all(&req(&[b"XADD", b"hasdata", b"1-0", b"f", b"v"])).unwrap();
@@ -164,6 +173,7 @@ fn xread_multistream_skips_empty_streams() {
 
 #[test]
 fn xread_multistream_all_empty_is_nil() {
+    let _s = serial();
     let srv = Server::start();
     let mut c = srv.connect();
     c.write_all(&req(&[b"XREAD", b"STREAMS", b"none1", b"none2", b"0", b"0"]))
@@ -173,6 +183,7 @@ fn xread_multistream_all_empty_is_nil() {
 
 #[test]
 fn xread_multistream_count_is_honoured_per_stream() {
+    let _s = serial();
     let srv = Server::start();
     let mut c = srv.connect();
     for id in ["1-0", "2-0", "3-0"] {
