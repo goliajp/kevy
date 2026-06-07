@@ -252,6 +252,21 @@ impl<C: Commands> Shard<C> {
                 self.slowlog.buf.clear();
                 Part::Ok
             }
+            Op::XReadOne { index, argv } => {
+                // Single-stream non-blocking XREAD on the stream's owning
+                // shard (`$` resolves to this shard's last_id). XREAD has no
+                // RESP3 override (always a RESP2 array), so the reply is one
+                // of: `*1\r\n<element>` (data) / `*-1\r\n` (empty) / `-ERR…`.
+                let reply = self.commands.dispatch(&mut self.store, &argv);
+                let element = if reply.starts_with(b"*1\r\n") {
+                    Some(reply[4..].to_vec()) // strip the array wrapper
+                } else if reply.first() == Some(&b'-') {
+                    Some(reply) // error: carried verbatim, origin surfaces it
+                } else {
+                    None // `*-1` — this stream had nothing
+                };
+                Part::XReadElement { index, element }
+            }
             Op::RewriteAof => {
                 // Each shard rewrites its own AOF in place. No-op if AOF is
                 // disabled (Redis returns "ERR" in that case; v1.0 returns

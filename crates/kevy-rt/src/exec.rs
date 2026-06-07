@@ -310,6 +310,13 @@ impl<C: Commands> Shard<C> {
                 (Agg::WatchCollect { pairs }, Part::WatchVersions(items)) => {
                     pairs.extend(items);
                 }
+                // Cross-shard XREAD gather: drop each stream's element into
+                // its request-order slot.
+                (Agg::XReadGather { slots }, Part::XReadElement { index, element }) => {
+                    if let Some(slot) = slots.get_mut(index as usize) {
+                        *slot = element;
+                    }
+                }
                 (Agg::ExecPrep { dirty, .. }, Part::Int(n)) => *dirty |= n != 0,
                 // Cross-shard RENAME orchestrator: buffer the step-1
                 // result in the agg so finalize can ship step 2.

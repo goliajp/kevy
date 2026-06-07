@@ -170,6 +170,17 @@ pub enum Route {
     /// whether to short-circuit (HELP / error) or fan out across
     /// shards (GET / LEN / RESET). See [`parse_slowlog_sub`].
     Slowlog(SlowlogSub),
+    /// Non-blocking `XREAD` over **multiple** streams — fan each stream
+    /// out to its owning shard and merge the per-stream replies in request
+    /// order (single-stream XREAD still routes via [`Self::Single`]). Each
+    /// element is `(stream key, last-seen id)`; `count` is the optional
+    /// `COUNT` cap applied per stream. The command set builds this only for
+    /// the non-blocking, ≥2-stream form; blocking XREAD parks on the origin
+    /// shard instead (see the cross-shard BLOCK arbiter).
+    XReadGather {
+        streams: Vec<(Vec<u8>, Vec<u8>)>,
+        count: Option<usize>,
+    },
 }
 
 /// Command-set semantics injected into the runtime. Cloned to every core, so it
