@@ -155,5 +155,57 @@ check TYPE missingkey       # none
 check TTL missingkey        # -2
 check HGET missinghash fld  # nil
 
+# --- streams (explicit IDs — `*` auto-ID is wall-clock, non-deterministic) ---
+check XADD xs 1-0 f a
+check XADD xs 2-0 f b
+check XADD xs 3-0 f c
+check XLEN xs
+check XRANGE xs - +
+check XREVRANGE xs + -
+check XRANGE xs 2-0 3-0
+check XREAD COUNT 10 STREAMS xs 0
+check XDEL xs 2-0
+check XLEN xs
+check XGROUP CREATE xs g1 0
+check XREADGROUP GROUP g1 c1 COUNT 10 STREAMS xs ">"
+check XACK xs g1 1-0
+check XADD xs 4-0 f d
+check XTRIM xs MAXLEN 2
+check XLEN xs
+check XADD xs 1-0 f dup       # ERR id <= top
+check XRANGE missingstream - +  # empty array
+
+# --- geo (precision-sensitive: byte-exact match IS the test; if redis≠valkey
+#     too on a line, it's float formatting in the references, not a kevy gap) ---
+check GEOADD geo 13.361389 38.115556 Palermo
+check GEOADD geo 15.087269 37.502669 Catania
+check GEODIST geo Palermo Catania
+check GEODIST geo Palermo Catania km
+check GEOHASH geo Palermo Catania
+check GEOPOS geo Palermo Catania
+check GEOSEARCH geo FROMMEMBER Palermo BYRADIUS 300 km ASC
+
+# --- rename ---
+check SET rk1 rv
+check RENAME rk1 rk2
+check GET rk2
+check EXISTS rk1
+check SET rk3 a
+check SET rk4 b
+check RENAMENX rk3 rk4        # 0 (dst exists)
+check RENAMENX rk3 rk5        # 1
+check RENAME missingk dst     # ERR no such key
+
+# --- blocking pops (immediate-hit forms only — deterministic, no real block) ---
+check RPUSH bl x y
+check BLPOP bl 0
+check BRPOP bl 0
+check RPUSH bl2 only
+check BLPOP miss bl2 0        # served from the second key
+
+# --- slowlog (GET carries timestamps → LEN/RESET only) ---
+check SLOWLOG RESET
+check SLOWLOG LEN
+
 echo "### RESULT  kevy vs valkey: $kv_p/$((kv_p + kv_f)) match   |   redis vs valkey: $rv_p/$((rv_p + rv_f)) match"
 docker compose down >/dev/null 2>&1
