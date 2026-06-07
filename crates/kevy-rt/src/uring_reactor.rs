@@ -375,9 +375,14 @@ impl<C: Commands> Shard<C> {
                     // each locally, reply as one `ResponseBatch` to the origin.
                     Inbound::RequestBatch { origin, reqs } => {
                         let mut resps = Vec::with_capacity(reqs.len());
+                        self.aof_begin_group();
                         for (conn, seq, argv, proto) in reqs {
                             let part = self.exec_op(Op::Dispatch(argv, proto));
                             resps.push((conn, seq, part));
+                        }
+                        // fsync the batch's forwarded writes before replying.
+                        if let Err(e) = self.aof_end_group() {
+                            eprintln!("kevy: shard {} aof group sync failed: {e}", self.id);
                         }
                         self.send_to(origin, Inbound::ResponseBatch(resps));
                     }

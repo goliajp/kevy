@@ -56,6 +56,10 @@ impl<C: Commands> Shard<C> {
         };
 
         let mut had_protocol_error = false;
+        // Group-commit window for `appendfsync always`: the writes dispatched
+        // from this pipelined read batch buffer their AOF appends and fsync
+        // once in `aof_end_group`, BEFORE `flush_conn` sends their replies.
+        self.aof_begin_group();
         loop {
             let parse = parse_command_borrowed(&input_buf);
             let (argv, consumed) = match parse {
@@ -74,9 +78,12 @@ impl<C: Commands> Shard<C> {
             input_buf.drain(..consumed);
             if !self.conns.contains_key(&conn_id) {
                 // Connection was closed mid-batch; drop the rest of the buf.
+                self.aof_end_group()?;
                 return Ok(());
             }
         }
+        // fsync the batch's buffered writes before any reply leaves the shard.
+        self.aof_end_group()?;
         if let Some(c) = self.conns.get_mut(&conn_id) {
             c.input = input_buf;
         }
@@ -84,6 +91,28 @@ impl<C: Commands> Shard<C> {
             self.protocol_error(conn_id);
         }
         self.flush_conn(conn_id)
+    }
+
+    /// Open the AOF group-commit window (no-op unless AOF is on + policy is
+    /// `always`). Bracket a batch of writes with this and [`Self::aof_end_group`]
+    /// so an `always` policy fsyncs once per batch instead of per command,
+    /// still before the batch's replies are sent.
+    #[inline]
+    pub(crate) fn aof_begin_group(&mut self) {
+        if let Some(aof) = &mut self.aof {
+            aof.begin_group();
+        }
+    }
+
+    /// Close the group-commit window: one fsync for the batch (if any writes
+    /// buffered), before replies leave. Errors propagate like other flush
+    /// failures.
+    #[inline]
+    pub(crate) fn aof_end_group(&mut self) -> io::Result<()> {
+        if let Some(aof) = &mut self.aof {
+            aof.end_group()?;
+        }
+        Ok(())
     }
 
     /// Drain inbound cross-core messages from every peer ring; returns
@@ -115,10 +144,13 @@ impl<C: Commands> Shard<C> {
                     // origin.
                     Inbound::RequestBatch { origin, reqs } => {
                         let mut resps = Vec::with_capacity(reqs.len());
+                        self.aof_begin_group();
                         for (conn, seq, argv, proto) in reqs {
                             let part = self.exec_op(Op::Dispatch(argv, proto));
                             resps.push((conn, seq, part));
                         }
+                        // fsync the batch's forwarded writes before replying.
+                        self.aof_end_group()?;
                         self.send_to(origin, Inbound::ResponseBatch(resps));
                     }
                     // Batched replies: fold each by seq, then flush each
