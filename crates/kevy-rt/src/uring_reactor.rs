@@ -475,9 +475,15 @@ impl<C: Commands> Shard<C> {
             .map(|(&cid, _)| cid)
             .collect();
         for cid in done {
-            if let Some(c) = self.conns.remove(&cid) {
-                self.unregister_subs(&c.sub); // Conn drop closes the socket fd
-            }
+            // Use the shared teardown (not a local conns.remove): it also
+            // cancels block waiters (local + cross-shard arbiter) and drops
+            // pub/sub + pattern subscriptions. Skipping it leaked a parked
+            // BLPOP/XREAD waiter and psub registrations on every io_uring
+            // disconnect — a waiter left behind could consume a later push
+            // meant for a live client. The epoll-only `poller.delete` /
+            // `fd_to_conn` steps inside are harmless no-ops here (io_uring
+            // never registered the fd with the readiness poller).
+            self.close_conn(cid);
             io.remove(&cid);
         }
     }
