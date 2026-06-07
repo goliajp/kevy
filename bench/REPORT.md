@@ -597,3 +597,25 @@ so "always" power-safety is drive-dependent regardless of kevy. (An earlier
 `fio --fdatasync=1 --bs=100` micro-bench read 1821 IOPS — sub-block writes
 + per-100-byte fdatasync is pathological; the kevy numbers above are the
 real signal, not that.)
+
+### AOF Always group-commit — result (2026-06-07, lx64, same setup)
+
+Implemented group-commit (defer the `always` fsync to the end of a pipelined
+batch, still before its replies leave). Re-measured epoll, SET `-c50 -P16
+n=2M`, 10 shards, same machine:
+
+| AOF mode (epoll)       | before | after group-commit |
+|------------------------|-------:|-------------------:|
+| always (fsync/write)   | 0.89M  | **1.30M  (+46 %)** |
+| everysec               | 1.45M  | 1.42M (flat)       |
+| off (no-AOF ceiling)\* | 1.65M  | 1.48M\*            |
+
+\* `off` is unaffected by the change (AOF disabled ⇒ no group is opened); the
+lower no-AOF number this run is box-load drift, so the `always` gain is if
+anything understated. The telling ratios: `always` went from **54 % → 88 %**
+of the *same-run* no-AOF ceiling, and the per-write-durable vs 1s-window gap
+shrank from **−39 % to −8 %**. One fsync per pipelined batch instead of per
+command, durability-before-reply preserved (the fsync still precedes the
+batch's replies). io_uring-local writes still fsync per command — a
+follow-up; the cross-shard `RequestBatch` path is group-committed on both
+reactors.
