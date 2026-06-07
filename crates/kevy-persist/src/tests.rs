@@ -128,6 +128,34 @@ fn aof_append_and_replay() {
 }
 
 #[test]
+fn aof_group_commit_defers_then_flushes() {
+    // appendfsync=always group commit: inside begin_group/end_group the
+    // appends buffer (one fsync per batch), and end_group makes them all
+    // durable BEFORE the caller sends replies. Guards the durable-before-
+    // reply contract the reactor relies on.
+    let path = temp_file("aofgroup");
+    let mut aof = Aof::open(&path, Fsync::Always).unwrap();
+    aof.begin_group();
+    aof.append(&cmd(&[b"SET", b"a", b"1"])).unwrap();
+    aof.append(&cmd(&[b"SET", b"b", b"2"])).unwrap();
+    aof.append(&cmd(&[b"SET", b"c", b"3"])).unwrap();
+    // Mid-group, before end_group: the batch is still buffered, not on disk.
+    let mut mid: Vec<Argv> = Vec::new();
+    replay_aof(&path, |a| mid.push(a)).unwrap();
+    assert!(mid.is_empty(), "group commit must defer until end_group, saw {}", mid.len());
+    // end_group does the single fsync for the whole batch.
+    aof.end_group().unwrap();
+    let mut after: Vec<Argv> = Vec::new();
+    replay_aof(&path, |a| after.push(a)).unwrap();
+    assert_eq!(after, vec![
+        cmd(&[b"SET", b"a", b"1"]),
+        cmd(&[b"SET", b"b", b"2"]),
+        cmd(&[b"SET", b"c", b"3"]),
+    ]);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn aof_truncated_tail_ignored() {
     let path = temp_file("aoftail");
     {

@@ -58,6 +58,16 @@ pub struct Aof {
     size_at_last_rewrite: u64,
     /// Total rewrites successfully completed since open. Surfaced via INFO.
     rewrites_total: u64,
+    /// Group-commit window: while `true`, an `Fsync::Always` `append` only
+    /// buffers (sets `dirty`) instead of fsyncing per command. The caller
+    /// brackets a batch of writes with [`Self::begin_group`] /
+    /// [`Self::end_group`] and `end_group` does the single fsync **before**
+    /// the batch's replies are sent — preserving "durable before reply"
+    /// while amortizing the per-command `flush()+sync_data()` syscalls.
+    /// Only the multi-command reactor entry points (pipelined socket reads,
+    /// cross-shard request batches) open a group; every other path keeps
+    /// the per-command fsync, so the default is always the safe one.
+    deferred: bool,
 }
 
 /// Result of an [`Aof::rewrite_from`] call. Surfaced by `BGREWRITEAOF` /
@@ -94,6 +104,7 @@ impl Aof {
             size_bytes: size,
             size_at_last_rewrite: size,
             rewrites_total: 0,
+            deferred: false,
         })
     }
 
@@ -128,11 +139,42 @@ impl Aof {
             .size_bytes
             .saturating_add(estimate_multibulk_bytes(args));
         match self.fsync {
+            // Inside a group-commit window, defer the fsync to `end_group`
+            // (one per batch, still before the batch's replies). Outside
+            // one, fsync per command — the safe default for every path.
+            Fsync::Always if self.deferred => self.dirty = true,
             Fsync::Always => {
                 self.file.flush()?;
                 self.file.get_ref().sync_data()?;
             }
             Fsync::EverySec | Fsync::No => self.dirty = true,
+        }
+        Ok(())
+    }
+
+    /// Open a group-commit window (no-op unless the policy is `Always`):
+    /// subsequent `append`s buffer instead of fsyncing per command. Pair
+    /// with [`Self::end_group`] **before** sending the batch's replies.
+    #[inline]
+    pub fn begin_group(&mut self) {
+        if matches!(self.fsync, Fsync::Always) {
+            self.deferred = true;
+        }
+    }
+
+    /// Close the group-commit window: one `flush()+sync_data()` for the
+    /// whole batch (if anything was buffered), then resume per-command
+    /// fsync. Must be called before the batch's replies leave the shard.
+    #[inline]
+    pub fn end_group(&mut self) -> io::Result<()> {
+        if self.deferred {
+            self.deferred = false;
+            if self.dirty {
+                self.file.flush()?;
+                self.file.get_ref().sync_data()?;
+                self.dirty = false;
+                self.last_sync = Instant::now();
+            }
         }
         Ok(())
     }
