@@ -305,6 +305,11 @@ impl<C: Commands> Shard<C> {
             None => return,
         };
         let mut had_protocol_error = false;
+        // AOF group-commit window (mirrors the epoll `conn_readable` path):
+        // `appendfsync always` buffers this batch's writes and fsyncs once in
+        // `aof_end_group`, which runs before the io_uring write loop submits
+        // the replies — so durability still precedes reply.
+        self.aof_begin_group();
         loop {
             let parse = parse_command_borrowed(&input_buf);
             let (argv, consumed) = match parse {
@@ -322,9 +327,11 @@ impl<C: Commands> Shard<C> {
             drop(argv);
             input_buf.drain(..consumed);
             if !self.conns.contains_key(&cid) {
+                self.uring_aof_end_group();
                 return;
             }
         }
+        self.uring_aof_end_group();
         if let Some(c) = self.conns.get_mut(&cid) {
             c.input = input_buf;
         }
@@ -333,6 +340,15 @@ impl<C: Commands> Shard<C> {
             if let Some(uc) = io.get_mut(&cid) {
                 uc.closing = true;
             }
+        }
+    }
+
+    /// Close the AOF group-commit window, best-effort (the io_uring path's
+    /// handlers return `()`; a sync error is logged like other AOF failures).
+    #[inline]
+    fn uring_aof_end_group(&mut self) {
+        if let Err(e) = self.aof_end_group() {
+            eprintln!("kevy: shard {} aof group sync failed: {e}", self.id);
         }
     }
 
@@ -381,9 +397,7 @@ impl<C: Commands> Shard<C> {
                             resps.push((conn, seq, part));
                         }
                         // fsync the batch's forwarded writes before replying.
-                        if let Err(e) = self.aof_end_group() {
-                            eprintln!("kevy: shard {} aof group sync failed: {e}", self.id);
-                        }
+                        self.uring_aof_end_group();
                         self.send_to(origin, Inbound::ResponseBatch(resps));
                     }
                     // Batched replies: fold each by seq; the arm loop writes any
