@@ -627,3 +627,20 @@ bound, independent of the reactor (vs no-AOF, where io_uring's ~2.34M beats
 epoll's ~1.48M). So the always path still has the most relative headroom on
 io_uring; closing it further means bigger fsync batches / fewer barriers
 (or a PLP drive where one barrier per batch is the real win).
+
+### snapshot SAVE throughput (2026-06-07, mini / Apple M4 Pro, clean idle box)
+
+SAVE of a 356 MB / 1.26M-key dataset (256 B values), kevy default 14 shards,
+AOF off. Wall time of the `SAVE` command; throughput = dump bytes / time.
+
+| snapshot BufWriter | SAVE throughput | % of disk ceiling |
+|--------------------|----------------:|------------------:|
+| 8 KiB (default)    | 758 MB/s        | 12 %              |
+| **1 MiB**          | **~1.73 GB/s**  | **28 %**          |
+
+NVMe sequential-write ceiling on the same box: 6.1 GB/s (`dd bs=1m`). The
+8 KiB default turned the snapshot into tens of thousands of small `write(2)`s;
+a 1 MiB buffer amortizes them for **+128 %**. The remaining gap to the disk
+ceiling is per-key serialization CPU (`write_entry`), not I/O — a deeper,
+lower-ROI optimization left for later. (Same const lifts BGREWRITEAOF's
+bulk dump.)
