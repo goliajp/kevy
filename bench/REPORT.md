@@ -644,3 +644,17 @@ a 1 MiB buffer amortizes them for **+128 %**. The remaining gap to the disk
 ceiling is per-key serialization CPU (`write_entry`), not I/O — a deeper,
 lower-ROI optimization left for later. (Same const lifts BGREWRITEAOF's
 bulk dump.)
+
+### AOF always — loop-level group commit tried, no benefit, reverted (2026-06-07, mini)
+
+Hypothesis: coalescing a whole reactor-loop iteration's writes (every readable
+conn) into ONE fsync would beat the per-read-batch group commit. Implemented
+it (defer reply flush to a single `flush_dirty` fsync) and measured on mini
+(kqueue, honest fsync): `always` SET stayed flat — -P16 6.1k, -P64 75k, -P256
+469k, indistinguishable from the per-batch version. Reason: under this
+workload the reactor processes ~one readable conn per loop, so "per loop" ≈
+"per read batch" — no extra coalescing to capture. Reverted (measure-first:
+no measured win ⇒ no added complexity). The per-batch group commit (v1.6.0,
++46% on lx64) stands as the AOF-always optimization. Further always gains
+would need a different mechanism (e.g. a short time-window group, or batching
+across loops) — deferred unless a real durable-write workload demands it.
