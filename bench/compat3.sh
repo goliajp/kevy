@@ -209,3 +209,6 @@ check SLOWLOG LEN
 
 echo "### RESULT  kevy vs valkey: $kv_p/$((kv_p + kv_f)) match   |   redis vs valkey: $rv_p/$((rv_p + rv_f)) match"
 docker compose down >/dev/null 2>&1
+# Correctness gate: exit non-zero if kevy diverged from valkey on any check
+# (redis-vs-valkey diffs are informational — reference float formatting).
+[ "$kv_f" -eq 0 ]
