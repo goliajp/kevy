@@ -619,3 +619,11 @@ command, durability-before-reply preserved (the fsync still precedes the
 batch's replies). io_uring-local writes still fsync per command — a
 follow-up; the cross-shard `RequestBatch` path is group-committed on both
 reactors.
+
+io_uring follow-up: the io_uring local read path (`uring_on_recv`) is now
+group-committed too (the cross-shard `RequestBatch` already was on both
+reactors). always lands ~1.2–1.3M on BOTH reactors — it's fsync-syscall-
+bound, independent of the reactor (vs no-AOF, where io_uring's ~2.34M beats
+epoll's ~1.48M). So the always path still has the most relative headroom on
+io_uring; closing it further means bigger fsync batches / fewer barriers
+(or a PLP drive where one barrier per batch is the real win).
