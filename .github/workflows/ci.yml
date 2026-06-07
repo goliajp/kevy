@@ -185,3 +185,16 @@ jobs:
           # `bench/run.sh` brings up valkey 9.1 + kevy release in compose,
           # measures both via valkey-benchmark, then tears down.
           bash bench/run.sh
+
+  # ───────────── command parity (correctness gate) ─────────────
+  compat-differential:
+    name: compat3 differential (kevy == valkey 9.1, byte-for-byte)
+    runs-on: ubuntu-latest
+    # Blocking, unlike the perf smoke above: a divergence is a deterministic
+    # correctness bug (byte-diff of replies vs valkey 9.1 + redis 7.4), not
+    # an environmental perf artifact. The script exits non-zero if kevy
+    # diverges from valkey on any check.
+    steps:
+      - uses: actions/checkout@v5
+      - name: 3-way differential vs valkey 9.1 + redis 7.4
+        run: bash bench/compat3.sh
