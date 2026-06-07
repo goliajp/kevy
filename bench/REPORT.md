@@ -559,3 +559,41 @@ both still behind kevy.)
 cores), so absolute rps is capped below the headline single-shard ~5.9M
 GET/core — the ratio is the signal. A true peak re-baseline still needs the
 documented 2-box (same-LAN) load-gen setup.
+
+## disk-I/O persistence baseline — measure-first (2026-06-07, lx64, Samsung 9100 PRO NVMe)
+
+First numbers for the persistence path (this REPORT's blank area). kevy SET
+`-c50 -P16 n=2M`, 10 shards, server cores 0-9 / client 10-15.
+
+| AOF mode                  | SET rps | vs no-AOF |
+|---------------------------|--------:|----------:|
+| off (cache-only)          | 1.65M   | —         |
+| everysec (Redis default)  | 1.45M   | −12 %     |
+| always (fsync per write)  | 0.89M   | −46 %     |
+
+- **everysec is nearly free** (−12 %): the 1-second-window durable path
+  stays near the memory/reactor ceiling — for the default durable config
+  kevy is reactor-bound, **not** disk-bound. Persistence isn't the
+  bottleneck there.
+- **always (per-write durability) costs ~half**, and the cost is per-command
+  `flush() + sync_data()` — two syscalls per write with **no group commit**
+  (`kevy_persist::aof::append`, the `Fsync::Always` arm). 0.89M/s ≫ any real
+  per-write flush barrier, so this consumer NVMe fast-acks `fdatasync` from
+  its volatile cache: the always path is *syscall-overhead-bound*, not
+  fsync-barrier-bound.
+- **Snapshot sequential-write ceiling: 2.7 GB/s** (fio bs=1M O_DIRECT) —
+  bulk SAVE is bandwidth-rich (a 1 GB dataset ≈ 0.4 s of raw write).
+
+**Optimization identified (next):** AOF Always **group commit** — append a
+whole reactor iteration's writes to the BufWriter, then ONE
+`flush()+sync_data()` before flushing that iteration's replies (preserving
+"durable before reply"). Amortizes the 2-syscall-per-command cost across a
+batch; should lift always from ~0.89M toward everysec's ~1.45M — and on a
+PLP datacenter SSD, where `fsync` is a real barrier, the win is far larger
+(one barrier per batch, not per write).
+
+Caveat: a consumer SSD without power-loss protection fast-acks `fdatasync`,
+so "always" power-safety is drive-dependent regardless of kevy. (An earlier
+`fio --fdatasync=1 --bs=100` micro-bench read 1821 IOPS — sub-block writes
++ per-100-byte fdatasync is pathological; the kevy numbers above are the
+real signal, not that.)
