@@ -185,24 +185,55 @@ fn xreadgroup_block_hint<A: ArgvView + ?Sized>(args: &A) -> BlockHint {
 /// (out of v2-7e's blocking scope). Falls back to `Route::Single(1)` on
 /// malformed input so `cmd_xread` emits the precise syntax error.
 pub(crate) fn xread_route<A: ArgvView + ?Sized>(args: &A) -> Route {
+    let mut count: Option<usize> = None;
     let mut i = 1usize;
     while i < args.len() {
         let upper = args[i].to_ascii_uppercase();
         match upper.as_slice() {
             b"BLOCK" => return Route::Local,
-            b"STREAMS" => {
-                let key_idx = i + 1;
-                return if key_idx < args.len() {
-                    Route::Single(key_idx)
-                } else {
-                    Route::Local
-                };
+            b"COUNT" => {
+                // Malformed COUNT → route single so cmd_xread emits the error.
+                match args
+                    .get(i + 1)
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                    .and_then(|s| s.parse::<usize>().ok())
+                {
+                    Some(c) => count = Some(c),
+                    None => return Route::Single(1),
+                }
+                i = i.saturating_add(2);
             }
-            b"COUNT" => i = i.saturating_add(2),
+            b"STREAMS" => return xread_streams_route(args, i + 1, count),
             _ => return Route::Single(1),
         }
     }
     Route::Local
+}
+
+/// Decide the route for an `XREAD … STREAMS k1 … kn id1 … idn` tail (start =
+/// first key). One stream → route by its key (fast single-shard path);
+/// ≥2 streams → a cross-shard gather (fan each stream to its owning shard,
+/// merge in request order). Malformed (unbalanced) → `Single(1)` so
+/// `cmd_xread` emits the precise error.
+fn xread_streams_route<A: ArgvView + ?Sized>(
+    args: &A,
+    start: usize,
+    count: Option<usize>,
+) -> Route {
+    let Some(rest) = args.len().checked_sub(start) else {
+        return Route::Single(1);
+    };
+    if rest == 0 || !rest.is_multiple_of(2) {
+        return Route::Single(1);
+    }
+    let n = rest / 2;
+    if n == 1 {
+        return Route::Single(start);
+    }
+    let streams = (0..n)
+        .map(|j| (args[start + j].to_vec(), args[start + n + j].to_vec()))
+        .collect();
+    Route::XReadGather { streams, count }
 }
 
 /// Routing for `XREADGROUP`: same as [`xread_route`] but starts the scan

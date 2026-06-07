@@ -130,6 +130,13 @@ pub(crate) enum Op {
     SlowlogLen,
     /// `SLOWLOG RESET` — clear this shard's ring. Reply [`Part::Ok`].
     SlowlogReset,
+    /// One stream of a multi-stream non-blocking `XREAD` whose streams span
+    /// shards. `argv` is a complete single-stream `XREAD [COUNT n] STREAMS
+    /// key id` dispatched on the stream's owning shard (so `$` resolves to
+    /// that shard's `last_id`); `index` is the stream's position in the
+    /// original request, used to reassemble the reply in request order.
+    /// Reply: [`Part::XReadElement`].
+    XReadOne { index: u32, argv: Argv },
 }
 
 /// How a KEYS-family reply is shaped.
@@ -176,6 +183,13 @@ pub(crate) enum Part {
     /// FIFO order — oldest first). Origin sorts by timestamp DESC and
     /// truncates per the `Get(count)` request.
     SlowlogEntries(Vec<crate::exec_slowlog::SlowlogEntry>),
+    /// One stream's result for a cross-shard `XREAD` gather (see
+    /// [`Op::XReadOne`]). `element` is the encoded `*2 <key> <entries>`
+    /// reply element (the `*1\r\n` wrapper already stripped) when the
+    /// stream had data, or `None` when empty. `index` preserves request
+    /// order; an error reply is carried verbatim in `element` and detected
+    /// by the leading `-`.
+    XReadElement { index: u32, element: Option<Vec<u8>> },
 }
 
 /// A batch of single-key dispatches forwarded to one owning shard:
@@ -281,6 +295,13 @@ pub(crate) enum Agg {
     /// moves the pairs into the connection's `watched` set + emits +OK.
     WatchCollect {
         pairs: Vec<(Vec<u8>, u64)>,
+    },
+    /// Cross-shard non-blocking `XREAD` gather: each watched stream's
+    /// owning shard returns its [`Part::XReadElement`], dropped into
+    /// `slots` by request index. Materialized in request order, empty
+    /// streams skipped (`*-1` if all empty), matching single-shard XREAD.
+    XReadGather {
+        slots: Vec<Option<Vec<u8>>>,
     },
     /// `EXEC` pre-execution accumulator: a non-empty WATCH set fans
     /// `CheckWatch` out to every shard that owns a watched key. Each

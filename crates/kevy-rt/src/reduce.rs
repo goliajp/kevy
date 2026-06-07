@@ -39,6 +39,7 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> Vec<u8> {
             out
         }
         Agg::Gather { op, keys, got } => finalize_gather(op, keys, got, proto),
+        Agg::XReadGather { slots } => finalize_xread_gather(slots),
         Agg::Keys { shape, acc } => finalize_keys(shape, acc),
         Agg::SlowlogGet { count, entries } => {
             crate::exec_slowlog::encode_slowlog_get(count, entries)
@@ -81,6 +82,30 @@ fn finalize_keys(shape: KeyShape, acc: Vec<Vec<u8>>) -> Vec<u8> {
             Some(k) => encode_bulk(&mut out, k),
             None => encode_null_bulk(&mut out),
         },
+    }
+    out
+}
+
+/// Reassemble a cross-shard non-blocking `XREAD` reply from per-stream slots
+/// in request order. Empty streams (`None`) are skipped; if every stream was
+/// empty the reply is `*-1` (matching single-shard non-blocking XREAD). If
+/// any stream returned an error frame (leading `-`) it's surfaced as the
+/// whole reply — Redis fails the command on the first wrong-type / bad-id
+/// stream. XREAD has no RESP3 shape, so this is proto-independent.
+fn finalize_xread_gather(slots: Vec<Option<Vec<u8>>>) -> Vec<u8> {
+    for slot in slots.iter().flatten() {
+        if slot.first() == Some(&b'-') {
+            return slot.clone();
+        }
+    }
+    let elements: Vec<&Vec<u8>> = slots.iter().flatten().collect();
+    if elements.is_empty() {
+        return b"*-1\r\n".to_vec();
+    }
+    let mut out = Vec::new();
+    encode_array_len(&mut out, elements.len() as i64);
+    for e in elements {
+        out.extend_from_slice(e);
     }
     out
 }

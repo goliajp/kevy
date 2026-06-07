@@ -9,7 +9,7 @@ use crate::Route;
 use crate::message::{Agg, GatherKind, KeyShape, KvPairs, MultiOp, Op};
 use crate::reduce::shard_of;
 use crate::shard::Shard;
-use kevy_resp::ArgvView;
+use kevy_resp::{Argv, ArgvView};
 use std::collections::HashMap;
 
 impl<C: Commands> Shard<C> {
@@ -78,7 +78,37 @@ impl<C: Commands> Shard<C> {
             Route::Keys(pat) => self.fanout_keys(pat, None, KeyShape::Keys),
             Route::Scan(pat) => self.fanout_keys(pat, None, KeyShape::Scan),
             Route::RandomKey => self.fanout_keys(None, Some(1), KeyShape::Random),
+            Route::XReadGather { streams, count } => self.build_xread_targets(streams, count),
         }
+    }
+
+    /// One `Op::XReadOne` per stream, routed to its owning shard, tagged with
+    /// the stream's request index so the gather reassembles in order.
+    fn build_xread_targets(
+        &self,
+        streams: Vec<(Vec<u8>, Vec<u8>)>,
+        count: Option<usize>,
+    ) -> (Vec<(usize, Op)>, Agg) {
+        let n = streams.len();
+        let count_bytes = count.map(|c| c.to_string().into_bytes());
+        let targets = streams
+            .into_iter()
+            .enumerate()
+            .map(|(i, (key, cursor))| {
+                let shard = shard_of(&key, self.nshards);
+                let mut argv = Argv::default();
+                argv.push(b"XREAD");
+                if let Some(cb) = &count_bytes {
+                    argv.push(b"COUNT");
+                    argv.push(cb);
+                }
+                argv.push(b"STREAMS");
+                argv.push(&key);
+                argv.push(&cursor);
+                (shard, Op::XReadOne { index: i as u32, argv })
+            })
+            .collect();
+        (targets, Agg::XReadGather { slots: vec![None; n] })
     }
 
     /// Group `args[1..]` key/value pairs by each key's shard for MSET.
