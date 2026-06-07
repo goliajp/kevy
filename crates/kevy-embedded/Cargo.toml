@@ -6,7 +6,7 @@ description = "Embedded mode for kevy — in-process Redis-compatible KV without
 # carries the kevy-persist AOF_MAGIC header (forward-compat) + the
 # replay_aof loud-summary fix from 1.1.1. 1.1.5 follows the workspace
 # 1.4.2 chain and an internal split of `pubsub.rs` (no API change).
-version = "1.1.8"
+version = "1.1.9"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -22,5 +22,5 @@ categories = ["database-implementations", "caching", "embedded"]
 workspace = true
 
 [dependencies]
-kevy-store = { path = "../kevy-store", version = "1.6.0" }
-kevy-persist = { path = "../kevy-persist", version = "1.6.0" }
+kevy-store = { path = "../kevy-store", version = "1.6.1" }
+kevy-persist = { path = "../kevy-persist", version = "1.6.1" }
