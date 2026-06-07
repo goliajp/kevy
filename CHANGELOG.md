@@ -4,6 +4,36 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.5.1] — 2026-06-07
+
+Patch release: three valkey-parity / correctness fixes surfaced by
+extending the cross-engine differential harness (`bench/compat3.sh`) to
+Streams / Geo / blocking / RENAME — now 135/135 vs valkey 9.1 + redis 7.4,
+and gated in CI. All three are pre-existing (not v1.5.0 regressions); no
+public API change. Workspace 1.5.0 → 1.5.1; kevy-embedded 1.1.6 → 1.1.7;
+kevy-client 1.7.2 → 1.7.3.
+
+### Fixed
+
+- **Cross-shard `RENAMENX` could lose the source key.** When source and
+  destination hashed to different shards and the destination already
+  existed, step 1 took the source off its shard but the NX-refused step-2
+  put was never rolled back — the reply `:0` was correct but the source
+  key was gone. The refused put now hands the value back and the
+  orchestrator restores it on the source's shard before replying (a new
+  `RenameStep::Restore`), so a no-op `RENAMENX` no longer loses data.
+- **`XGROUP` / `XINFO` were unusable on a multi-shard server.** Their
+  stream key is at `args[2]` (after the subcommand) but they routed by
+  `args[1]` (`CREATE`/`STREAM`), landing on the wrong shard — `XGROUP
+  CREATE` failed with "key doesn't exist" and `XREADGROUP`/`XACK`
+  cascaded. Now routed by the real key (keyless `HELP` forms stay local).
+- **`GEOHASH` / `GEOPOS` diverged from valkey in the last digit(s).**
+  The 11th `GEOHASH` char spilled the low score bits instead of
+  zero-padding like Redis; `GEOPOS` decoded the cell centre with a
+  float-op order that rounded differently than Redis's `(min+max)/2`.
+  Both now reproduce valkey byte-for-byte. Adds kevy-geo unit tests (the
+  existing ones only checked the first 10 geohash chars).
+
 ## [v1.5.0] — 2026-06-07
 
 Minor release: cross-shard blocking pops. A `BLPOP` / `BRPOP` / `XREAD

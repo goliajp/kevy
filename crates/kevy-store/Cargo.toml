@@ -14,9 +14,9 @@ categories = ["database-implementations", "data-structures", "caching"]
 workspace = true
 
 [dependencies]
-kevy-hash = { path = "../kevy-hash", version = "1.5.0" }
-kevy-bytes = { path = "../kevy-bytes", version = "1.5.0" }
-kevy-map = { path = "../kevy-map", version = "1.5.0" }
+kevy-hash = { path = "../kevy-hash", version = "1.5.1" }
+kevy-bytes = { path = "../kevy-bytes", version = "1.5.1" }
+kevy-map = { path = "../kevy-map", version = "1.5.1" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }
