@@ -410,25 +410,20 @@ fn auto_aof_rewrite_fires_when_threshold_crossed() {
                 read_reply(&mut c, b"+OK\r\n");
             }
 
-            // After 800 ack'd SETs the BufWriter has spilled multiple
-            // 8 KiB chunks; disk should comfortably exceed 16 KiB.
-            let pre = wait_for_size_at_least_heartbeat(&aof_path, &mut c, 16 * 1024, 1_000);
+            // Wait for the auto-rewrite tick to compact the log. 800 ack'd
+            // SETs are ≈ 48 KiB of un-rewritten multibulks, so the only way
+            // the on-disk file can drop below 8 KiB is a rewrite that
+            // collapsed them to the single latest SET. We assert on that
+            // shrink alone — NOT on first observing the pre-rewrite peak,
+            // which races the rewrite (it can fire before a poll catches the
+            // file large, the original flake). Heartbeat PINGs keep the shard
+            // in its busy-poll batch so `tick_check` fires and
+            // `maybe_auto_rewrite_aof` runs.
+            let post = wait_for_size_below_heartbeat(&aof_path, &mut c, 8 * 1024, 5_000);
             assert!(
-                pre >= 16 * 1024,
-                "AOF on-disk did not reach the min_size floor: {pre} bytes after 1 s"
-            );
-
-            // Wait for the auto-rewrite tick. The shard's `tick_check`
-            // counter only increments per loop iter — when fully parked,
-            // each iter takes 50 ms (poll backstop) and 256 iters would
-            // need ~13 s to elapse. Send heartbeat PINGs every poll cycle
-            // to keep the shard in its busy-poll batch so `tick_check`
-            // fires and `elapsed >= 100 ms` triggers `maybe_auto_rewrite_aof`.
-            let post = wait_for_size_below_heartbeat(&aof_path, &mut c, pre / 2, 3_000);
-            assert!(
-                post < pre / 2,
-                "auto AOF rewrite did not fire (or didn't shrink): \
-                 post={post} bytes, pre={pre}"
+                post < 8 * 1024,
+                "auto AOF rewrite did not fire: {post} bytes still on disk after \
+                 800 SETs (un-rewritten would be ≈ 48 KiB)"
             );
         },
     );
