@@ -166,8 +166,17 @@ impl Store {
     /// one mutex lock + map-emptiness check when nothing has TTL.
     pub fn tick(&self) -> ExpireStats {
         let mut g = self.lock();
-        g.store
-            .tick_expire(self.config.reaper_samples, self.config.reaper_max_rounds)
+        let stats = g
+            .store
+            .tick_expire(self.config.reaper_samples, self.config.reaper_max_rounds);
+        // Auto-AOF-rewrite check rides the same caller-driven tick in Manual
+        // mode (Background mode runs it from the reaper thread instead).
+        maybe_auto_rewrite(
+            &mut g,
+            self.config.auto_aof_rewrite_pct,
+            self.config.auto_aof_rewrite_min_size,
+        );
+        stats
     }
 
     /// `BGREWRITEAOF`: rebuild the AOF from current state. Synchronous —
@@ -268,9 +277,13 @@ fn spawn_reaper(
             let interval = config.reaper_interval;
             let samples = config.reaper_samples;
             let rounds = config.reaper_max_rounds;
+            let rw_pct = config.auto_aof_rewrite_pct;
+            let rw_min = config.auto_aof_rewrite_min_size;
             let handle = std::thread::Builder::new()
                 .name(String::from("kevy-embedded-reaper"))
-                .spawn(move || reaper_loop(inner_t, stop_t, interval, samples, rounds))?;
+                .spawn(move || {
+                    reaper_loop(inner_t, stop_t, interval, samples, rounds, rw_pct, rw_min)
+                })?;
             Ok((Some(stop), Some(handle)))
         }
     }
@@ -304,12 +317,15 @@ pub(crate) fn store_err(e: StoreError) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, format!("kevy-store: {e:?}"))
 }
 
+#[allow(clippy::too_many_arguments)] // reaper config knobs, all primitives
 fn reaper_loop(
     inner: Arc<Mutex<Inner>>,
     stop: Arc<AtomicBool>,
     interval: Duration,
     samples: usize,
     rounds: u32,
+    rewrite_pct: u32,
+    rewrite_min_size: u64,
 ) {
     while !stop.load(Ordering::Relaxed) {
         std::thread::sleep(interval);
@@ -326,6 +342,33 @@ fn reaper_loop(
         if let Some(aof) = &mut g.aof {
             let _ = aof.maybe_sync();
         }
+        maybe_auto_rewrite(&mut g, rewrite_pct, rewrite_min_size);
+    }
+}
+
+/// Auto-`BGREWRITEAOF`: rewrite the AOF when it has grown `pct` percent past
+/// its size at the last rewrite and is at least `min_size` bytes (Redis's
+/// `auto-aof-rewrite-percentage` / `-min-size`). Mirrors the server runtime's
+/// `Shard::maybe_auto_rewrite_aof`. Runs under the held `Inner` lock, so it
+/// briefly blocks writers while it rewrites — acceptable because it fires
+/// rarely (only when the AOF has doubled past the floor). `pct == 0` disables.
+pub(crate) fn maybe_auto_rewrite(g: &mut Inner, pct: u32, min_size: u64) {
+    if pct == 0 {
+        return;
+    }
+    let Inner { store, aof, .. } = g;
+    let Some(aof) = aof else { return };
+    let cur = aof.size_bytes();
+    if cur < min_size {
+        return;
+    }
+    let baseline = aof.size_at_last_rewrite().max(1);
+    // (cur - baseline) * 100 / baseline ≥ pct  ⇔  cur * 100 ≥ baseline * (100 + pct)
+    if cur.saturating_mul(100) < baseline.saturating_mul(100u64.saturating_add(pct as u64)) {
+        return;
+    }
+    if let Err(e) = aof.rewrite_from(store) {
+        eprintln!("kevy: embedded auto AOF rewrite failed: {e}");
     }
 }
 
