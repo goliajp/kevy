@@ -140,7 +140,7 @@ impl Store {
     pub(crate) fn live_entry(&mut self, key: &[u8]) -> Option<&Entry> {
         let expired = match self.map.get(key) {
             None => return None,
-            Some(e) => e.is_expired_at(Instant::now()),
+            Some(e) => e.is_expired_now(),
         };
         if expired {
             self.remove_entry(key);
@@ -165,7 +165,7 @@ impl Store {
     pub(crate) fn live_entry_mut(&mut self, key: &[u8]) -> Option<&mut Entry> {
         let expired = match self.map.get(key) {
             None => return None,
-            Some(e) => e.is_expired_at(Instant::now()),
+            Some(e) => e.is_expired_now(),
         };
         if expired {
             self.remove_entry(key);
