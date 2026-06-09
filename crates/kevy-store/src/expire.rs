@@ -105,6 +105,9 @@ impl Store {
     /// check + a single bucket-iter probe per round. Designed so the active
     /// reaper is never a tax on TTL-free workloads.
     pub fn tick_expire(&mut self, samples_per_round: usize, max_rounds: u32) -> ExpireStats {
+        // Refresh the coarse cached clock every tick (the read path's lazy
+        // expiry compares against it) — even when there's nothing to reap.
+        self.refresh_clock();
         if samples_per_round == 0 || max_rounds == 0 || self.map.is_empty() {
             return ExpireStats::default();
         }

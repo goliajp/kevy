@@ -223,6 +223,11 @@ impl<C: Commands> Shard<C> {
 
             let mut did_work = !self.events.is_empty();
             if did_work {
+                // Redis-style `updateCachedTime`: refresh the store's coarse
+                // clock once per batch, so the per-command read path's lazy
+                // expiry skips its own `Instant::now()` (amortized over the
+                // whole batch of events processed below).
+                self.store.refresh_clock();
                 // mem::take only when there's actually work, avoids two Vec
                 // moves per empty iter (timeout=Some(0) often returns 0).
                 let events = std::mem::take(&mut self.events);

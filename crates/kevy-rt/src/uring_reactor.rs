@@ -146,6 +146,11 @@ impl<C: Commands> Shard<C> {
             comps.clear();
             ring.for_each_completion(|c| comps.push(c));
 
+            // Redis-style `updateCachedTime`: refresh the store's coarse clock
+            // once per batch so per-command lazy expiry skips `Instant::now()`.
+            if !comps.is_empty() {
+                self.store.refresh_clock();
+            }
             for c in &comps {
                 let op = c.user_data & !CONN_MASK;
                 let cid = c.user_data & CONN_MASK;

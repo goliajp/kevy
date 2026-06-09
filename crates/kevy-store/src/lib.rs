@@ -41,6 +41,7 @@
 #![forbid(unsafe_code)]
 
 mod accounting;
+mod clock;
 pub mod evict;
 pub mod expire;
 pub use expire::ExpireStats;
@@ -62,36 +63,10 @@ pub use stream::{
 pub use util::glob_match;
 pub use value::*;
 
+pub(crate) use clock::{now_ns, pack_deadline, unpack_deadline};
 use kevy_map::KevyMap;
 use std::num::NonZeroU64;
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
-
-/// Process-start anchor: every `Entry::expire_at_ns` is a nanosecond
-/// offset from this `Instant`, encoded as `Option<NonZeroU64>` so the
-/// niche optimisation lets the field cost 8 bytes (vs 16 for a bare
-/// `Option<Instant>`). 584-year range from process start — Y2538-proof.
-fn epoch() -> Instant {
-    static EPOCH: OnceLock<Instant> = OnceLock::new();
-    *EPOCH.get_or_init(Instant::now)
-}
-
-/// Encode an absolute `Instant` as ns-since-process-start. Returns `None`
-/// when `t == epoch()` exactly (sentinel collision); in practice an entry
-/// inserted at exactly t=0 from process start with TTL=0 is the only path
-/// there, and TTL=0 isn't a valid expiry the API ever takes.
-#[inline]
-fn pack_deadline(t: Instant) -> Option<NonZeroU64> {
-    let ns = t.saturating_duration_since(epoch()).as_nanos() as u64;
-    NonZeroU64::new(ns)
-}
-
-/// Decode a packed deadline back into an `Instant` for the rare paths
-/// (`pttl`, snapshot dump) that need real-clock math.
-#[inline]
-fn unpack_deadline(ns: NonZeroU64) -> Instant {
-    epoch() + Duration::from_nanos(ns.get())
-}
+use std::time::Instant;
 
 /// Per-entry weight ceiling — the field is `u32` so accounting saturates
 /// at 4 GiB per entry. Real-world Redis values are well below this; the
@@ -187,16 +162,17 @@ impl Entry {
         }
     }
 
-    /// Like [`Self::is_expired_at`] but reads the clock **only when the entry
-    /// carries a TTL**. A key with no deadline (the common case) never pays
-    /// `Instant::now()` (~20–40 ns) — the win the per-access read path
-    /// (`live_entry`) is built on. Callers that already hold a `now` for a
-    /// batch (the reaper) keep using `is_expired_at` to read the clock once.
+    /// Lazy-expiry check for the per-access read path. A no-TTL key (the common
+    /// case) short-circuits without reading any clock (the [`live_entry`] win).
+    /// A TTL'd key compares its deadline against either the coarse cached clock
+    /// (`use_cached` — when a reactor/reaper refreshes it, the Redis cached-
+    /// `mstime` model, no per-get syscall) or a fresh `Instant::now()` (manual
+    /// mode, where nothing else advances the clock so each get must read it).
     #[inline]
-    pub(crate) fn is_expired_now(&self) -> bool {
+    pub(crate) fn is_expired(&self, use_cached: bool, cached_ns: u64) -> bool {
         match self.expire_at_ns {
             None => false,
-            Some(ns) => unpack_deadline(ns) <= Instant::now(),
+            Some(d) => d.get() <= if use_cached { cached_ns } else { now_ns() },
         }
     }
 }
@@ -300,6 +276,21 @@ impl EvictionPolicy {
 #[derive(Default)]
 pub struct Store {
     pub(crate) map: KevyMap<SmallBytes, Entry>,
+    /// Coarse cached monotonic clock (ns since [`epoch`]), refreshed by the
+    /// reactor loop / reaper tick via [`Self::refresh_clock`]. Lazy expiry on
+    /// the read path (`live_entry`) compares deadlines against this instead of
+    /// calling `Instant::now()` per access — the Redis cached-`mstime` model.
+    /// `0` (the `Default`) reads as "epoch" → keys look live until the first
+    /// refresh, the safe direction (expires at most one refresh-interval late,
+    /// never early — writes stamp deadlines from a *fresh* clock).
+    pub(crate) cached_ns: u64,
+    /// Whether lazy expiry trusts [`Self::cached_ns`] (set by a reactor/reaper
+    /// that calls [`Self::refresh_clock`]) instead of reading a fresh clock per
+    /// access. Enabled by the server reactor and the embedded background
+    /// reaper; left `false` (the `Default`) for manual-reaper / bare-`Store`
+    /// use, where nothing refreshes the cache so each access reads fresh —
+    /// preserving "lazy expiry works without an explicit tick".
+    pub(crate) cached_clock: bool,
     /// Live byte estimate (dynamic per-entry weights + [`ENTRY_OVERHEAD`] per
     /// key). Compared against [`Self::maxmemory`] to drive eviction.
     pub(crate) used_memory: u64,
@@ -339,6 +330,29 @@ pub struct Store {
 impl Store {
     pub fn new() -> Self {
         Store::default()
+    }
+
+    /// Refresh the coarse cached clock ([`Self::cached_ns`]) from a single
+    /// `Instant::now()`. Call once per reactor-loop batch / reaper tick; the
+    /// per-access read path then skips its own clock read. Lazy expiry is
+    /// coarse to this cadence (a key expires ≤ one refresh-interval late,
+    /// never early — writes stamp deadlines from a fresh clock).
+    #[inline]
+    pub fn refresh_clock(&mut self) {
+        self.cached_ns = now_ns();
+    }
+
+    /// Enable/disable trusting the cached clock for lazy expiry (see
+    /// [`Self::cached_ns`]). Call with `true` only when something refreshes the
+    /// clock regularly (the server reactor per batch, the embedded background
+    /// reaper per tick); leave `false` for manual-reaper mode. Seeds the cache
+    /// when enabling so the first access is accurate.
+    #[inline]
+    pub fn set_cached_clock(&mut self, on: bool) {
+        self.cached_clock = on;
+        if on {
+            self.refresh_clock();
+        }
     }
 
     /// Install (or clear, with `maxmemory == 0`) the eviction limit and

@@ -183,6 +183,10 @@ impl<C: Commands> Runtime<C> {
                 None
             };
             let mut store = Store::new();
+            // The reactor loop refreshes the store clock once per batch, so
+            // lazy expiry can trust the cached clock (skip per-command
+            // `Instant::now()`).
+            store.set_cached_clock(true);
             self.commands.on_shard_init(&mut store);
             shards.push(Shard {
                 id,
