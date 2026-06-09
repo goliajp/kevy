@@ -25,7 +25,7 @@ impl Store {
     /// return `false` but we don't expose those here — use [`Store::with`]
     /// for the full surface).
     pub fn set(&self, key: &[u8], value: &[u8]) -> io::Result<bool> {
-        let mut g = self.lock();
+        let mut g = self.wshard(key);
         let ok = g.store.set(key, value.to_vec(), None, false, false);
         commit_write(&mut g, &[b"SET", key, value])?;
         Ok(ok)
@@ -37,7 +37,7 @@ impl Store {
     /// `PEXPIRE` would be re-anchored to replay-time, resetting the TTL to a
     /// fresh full duration on every restart (INC-2026-06-09).
     pub fn set_with_ttl(&self, key: &[u8], value: &[u8], ttl: Duration) -> io::Result<bool> {
-        let mut g = self.lock();
+        let mut g = self.wshard(key);
         let ok = g.store.set(key, value.to_vec(), Some(ttl), false, false);
         let ms = ttl.as_millis().min(u64::MAX as u128) as u64;
         let deadline = kevy_store::now_unix_ms().saturating_add(ms);
@@ -55,35 +55,37 @@ impl Store {
     /// stamps the LRU clock.
     pub fn get(&self, key: &[u8]) -> io::Result<Option<Vec<u8>>> {
         if self.config().maxmemory == 0 {
-            let g = self.rlock();
+            let g = self.rshard(key);
             return Ok(g.store.get_shared(key).map_err(store_err)?.map(|v| v.to_vec()));
         }
-        let mut g = self.lock();
+        let mut g = self.wshard(key);
         Ok(g.store.get(key).map_err(store_err)?.map(|v| v.to_vec()))
     }
 
     /// `DEL key1 [key2 ...]`. Returns the count of keys actually removed.
+    /// Keys fan out to their owning shards.
     pub fn del(&self, keys: &[&[u8]]) -> io::Result<usize> {
-        let mut g = self.lock();
-        let owned: Vec<Vec<u8>> = keys.iter().map(|k| k.to_vec()).collect();
-        let n = g.store.del(&owned);
-        if n > 0 {
-            let mut parts: Vec<&[u8]> = Vec::with_capacity(keys.len() + 1);
-            parts.push(b"DEL");
-            for k in keys {
-                parts.push(k);
+        let mut total = 0;
+        for k in keys {
+            let owned = vec![k.to_vec()];
+            let mut g = self.wshard(k);
+            let n = g.store.del(&owned);
+            if n > 0 {
+                total += n;
+                commit_write(&mut g, &[b"DEL", k])?;
             }
-            commit_write(&mut g, &parts)?;
         }
-        Ok(n)
+        Ok(total)
     }
 
     /// `EXISTS key1 [key2 ...]`. Count of existing keys (duplicates counted
     /// multiple times, matching Redis).
     pub fn exists(&self, keys: &[&[u8]]) -> io::Result<usize> {
-        let mut g = self.lock();
-        let owned: Vec<Vec<u8>> = keys.iter().map(|k| k.to_vec()).collect();
-        Ok(g.store.exists(&owned))
+        let mut total = 0;
+        for k in keys {
+            total += self.wshard(k).store.exists(&[k.to_vec()]);
+        }
+        Ok(total)
     }
 
     /// `INCR key`. Returns the post-increment value.
@@ -93,7 +95,7 @@ impl Store {
 
     /// `INCRBY key delta`. Negative `delta` does DECR-style work.
     pub fn incr_by(&self, key: &[u8], delta: i64) -> io::Result<i64> {
-        let mut g = self.lock();
+        let mut g = self.wshard(key);
         let n = g.store.incr_by(key, delta).map_err(store_err)?;
         commit_write(&mut g, &[b"INCRBY", key, delta.to_string().as_bytes()])?;
         Ok(n)
@@ -103,7 +105,7 @@ impl Store {
     /// records an absolute `PEXPIREAT` deadline (see [`Self::set_with_ttl`])
     /// so the TTL survives a restart unchanged.
     pub fn expire(&self, key: &[u8], ttl: Duration) -> io::Result<bool> {
-        let mut g = self.lock();
+        let mut g = self.wshard(key);
         let touched = g.store.expire(key, ttl);
         if touched {
             let ms = ttl.as_millis().min(u64::MAX as u128) as u64;
@@ -115,7 +117,7 @@ impl Store {
 
     /// `PERSIST key`. Returns `true` if a TTL was actually cleared.
     pub fn persist(&self, key: &[u8]) -> io::Result<bool> {
-        let mut g = self.lock();
+        let mut g = self.wshard(key);
         let touched = g.store.persist(key);
         if touched {
             commit_write(&mut g, &[b"PERSIST", key])?;
@@ -125,53 +127,53 @@ impl Store {
 
     /// Remaining TTL in ms (or Redis-style `-1`/`-2` for no-TTL/no-key).
     pub fn ttl_ms(&self, key: &[u8]) -> i64 {
-        self.lock().store.pttl(key)
+        self.wshard(key).store.pttl(key)
     }
 
     /// `TYPE key` — `"string"`, `"hash"`, `"list"`, `"set"`, `"zset"`, or `"none"`.
     pub fn type_of(&self, key: &[u8]) -> &'static str {
-        self.lock().store.type_of(key)
+        self.wshard(key).store.type_of(key)
     }
 
-    /// `DBSIZE` — total live keys.
+    /// `DBSIZE` — total live keys across all shards.
     pub fn dbsize(&self) -> usize {
-        self.lock().store.dbsize()
+        self.sum_shards(|i| i.store.dbsize())
     }
 
-    /// `FLUSHALL` — empty the keyspace (logged so a replay reaches the same
-    /// empty state).
+    /// `FLUSHALL` — empty every shard (each logs `FLUSHALL` so a replay reaches
+    /// the same empty state).
     pub fn flush(&self) -> io::Result<()> {
-        let mut g = self.lock();
-        g.store.flush();
-        commit_write(&mut g, &[b"FLUSHALL"])?;
-        Ok(())
+        self.try_for_each_shard(|inner| {
+            inner.store.flush();
+            commit_write(inner, &[b"FLUSHALL"])
+        })
     }
 
     /// `MEMORY USAGE` for one key — `Some(bytes)` or `None` if absent.
     pub fn key_bytes(&self, key: &[u8]) -> Option<u64> {
-        self.lock().store.estimate_key_bytes(key)
+        self.wshard(key).store.estimate_key_bytes(key)
     }
 
-    /// Live `used_memory` estimate (matches `INFO memory`'s field).
+    /// Live `used_memory` estimate (summed across shards).
     pub fn used_memory(&self) -> u64 {
-        self.lock().store.used_memory()
+        self.sum_shards_u64(|i| i.store.used_memory())
     }
 
-    /// `INFO`-style counter: total keys evicted by `maxmemory` so far.
+    /// `INFO`-style counter: total keys evicted by `maxmemory` (all shards).
     pub fn evictions_total(&self) -> u64 {
-        self.lock().store.evictions_total()
+        self.sum_shards_u64(|i| i.store.evictions_total())
     }
 
-    /// `INFO`-style counter: total keys expired (lazy + active reaper).
+    /// `INFO`-style counter: total keys expired (lazy + active reaper, all shards).
     pub fn expired_keys_total(&self) -> u64 {
-        self.lock().store.expired_keys_total()
+        self.sum_shards_u64(|i| i.store.expired_keys_total())
     }
 
     // ---- hash ops -------------------------------------------------------
 
     /// `HSET key field value [field value ...]`. Returns count newly added.
     pub fn hset(&self, key: &[u8], pairs: &[(&[u8], &[u8])]) -> io::Result<usize> {
-        let mut g = self.lock();
+        let mut g = self.wshard(key);
         let owned: Vec<(Vec<u8>, Vec<u8>)> =
             pairs.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect();
         let added = g.store.hset(key, &owned).map_err(store_err)?;
@@ -188,7 +190,7 @@ impl Store {
 
     /// `HGET key field`. `None` if absent.
     pub fn hget(&self, key: &[u8], field: &[u8]) -> io::Result<Option<Vec<u8>>> {
-        let mut g = self.lock();
+        let mut g = self.wshard(key);
         Ok(g.store
             .hget(key, field)
             .map_err(store_err)?
@@ -197,7 +199,7 @@ impl Store {
 
     /// `HDEL key field [field ...]`. Returns count actually removed.
     pub fn hdel(&self, key: &[u8], fields: &[&[u8]]) -> io::Result<usize> {
-        let mut g = self.lock();
+        let mut g = self.wshard(key);
         let owned: Vec<Vec<u8>> = fields.iter().map(|f| f.to_vec()).collect();
         let removed = g.store.hdel(key, &owned).map_err(store_err)?;
         if removed > 0 {
@@ -236,7 +238,7 @@ impl Store {
 
     /// `LLEN key`. Length of the list at `key`; 0 if absent.
     pub fn llen(&self, key: &[u8]) -> io::Result<usize> {
-        self.lock().store.llen(key).map_err(store_err)
+        self.wshard(key).store.llen(key).map_err(store_err)
     }
 
     // ---- set ops --------------------------------------------------------
@@ -248,7 +250,7 @@ impl Store {
 
     /// `SREM key member [member ...]`. Returns count actually removed.
     pub fn srem(&self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
-        let mut g = self.lock();
+        let mut g = self.wshard(key);
         let owned: Vec<Vec<u8>> = members.iter().map(|m| m.to_vec()).collect();
         let removed = g.store.srem(key, &owned).map_err(store_err)?;
         if removed > 0 {
@@ -265,19 +267,19 @@ impl Store {
 
     /// `SMEMBERS key`. Order implementation-defined; empty if absent.
     pub fn smembers(&self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
-        self.lock().store.smembers(key).map_err(store_err)
+        self.wshard(key).store.smembers(key).map_err(store_err)
     }
 
     /// `SCARD key`. Member count; 0 if absent.
     pub fn scard(&self, key: &[u8]) -> io::Result<usize> {
-        self.lock().store.scard(key).map_err(store_err)
+        self.wshard(key).store.scard(key).map_err(store_err)
     }
 
     // ---- zset ops -------------------------------------------------------
 
     /// `ZADD key score member [score member ...]`. Returns count newly added.
     pub fn zadd(&self, key: &[u8], pairs: &[(f64, &[u8])]) -> io::Result<usize> {
-        let mut g = self.lock();
+        let mut g = self.wshard(key);
         let owned: Vec<(f64, Vec<u8>)> =
             pairs.iter().map(|(s, m)| (*s, m.to_vec())).collect();
         let added = g.store.zadd(key, &owned).map_err(store_err)?;
@@ -298,7 +300,7 @@ impl Store {
 
     /// `ZREM key member [member ...]`. Returns count actually removed.
     pub fn zrem(&self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
-        let mut g = self.lock();
+        let mut g = self.wshard(key);
         let owned: Vec<Vec<u8>> = members.iter().map(|m| m.to_vec()).collect();
         let removed = g.store.zrem(key, &owned).map_err(store_err)?;
         if removed > 0 {
@@ -315,12 +317,12 @@ impl Store {
 
     /// `ZSCORE key member`. `Some(score)` if present.
     pub fn zscore(&self, key: &[u8], member: &[u8]) -> io::Result<Option<f64>> {
-        self.lock().store.zscore(key, member).map_err(store_err)
+        self.wshard(key).store.zscore(key, member).map_err(store_err)
     }
 
     /// `ZCARD key`. Member count; 0 if absent.
     pub fn zcard(&self, key: &[u8]) -> io::Result<usize> {
-        self.lock().store.zcard(key).map_err(store_err)
+        self.wshard(key).store.zcard(key).map_err(store_err)
     }
 
     // ---- pub/sub --------------------------------------------------------
@@ -332,6 +334,7 @@ impl Store {
         // Clone matching senders under the lock, then release before
         // send() so a slow receiver can't stall unrelated traffic.
         let plans = {
+            // Pub/sub is process-wide; the bus lives on shard 0.
             let g = self.lock();
             g.bus.collect_delivery(channel, payload)
         };
@@ -380,7 +383,7 @@ fn push_helper<F>(
 where
     F: FnOnce(&mut kevy_store::Store, &[u8], &[Vec<u8>]) -> Result<usize, StoreError>,
 {
-    let mut g = s.lock();
+    let mut g = s.wshard(key);
     let owned: Vec<Vec<u8>> = values.iter().map(|v| v.to_vec()).collect();
     let n = op(&mut g.store, key, &owned).map_err(store_err)?;
     let mut parts: Vec<&[u8]> = Vec::with_capacity(2 + values.len());
@@ -394,7 +397,7 @@ where
 }
 
 fn pop_helper(s: &Store, key: &[u8], count: usize, from_tail: bool) -> io::Result<Vec<Vec<u8>>> {
-    let mut g = s.lock();
+    let mut g = s.wshard(key);
     let popped = if from_tail {
         g.store.rpop(key, count).map_err(store_err)?
     } else {

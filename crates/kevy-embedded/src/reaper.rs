@@ -12,7 +12,7 @@ use kevy_persist::Aof;
 
 use crate::config::{Config, TtlReaperMode};
 use crate::metric::{KevyMetric, MetricSink};
-use crate::store::Inner;
+use crate::store::{Inner, Shards};
 
 /// Start the background TTL reaper thread, returning its stop signal +
 /// join handle. `TtlReaperMode::Manual` returns `(None, None)` so the
@@ -20,14 +20,14 @@ use crate::store::Inner;
 #[allow(clippy::type_complexity)] // inline tuple keeps the pair colocated
 pub(crate) fn spawn_reaper(
     config: &Config,
-    inner: &Arc<RwLock<Inner>>,
+    shards: &Shards,
 ) -> io::Result<(Option<Arc<AtomicBool>>, Option<JoinHandle<()>>)> {
     match config.ttl_reaper {
         TtlReaperMode::Manual => Ok((None, None)),
         TtlReaperMode::Background => {
             let stop = Arc::new(AtomicBool::new(false));
             let stop_t = stop.clone();
-            let inner_t = inner.clone();
+            let shards_t = shards.clone();
             let interval = config.reaper_interval;
             let samples = config.reaper_samples;
             let rounds = config.reaper_max_rounds;
@@ -37,7 +37,7 @@ pub(crate) fn spawn_reaper(
             let handle = std::thread::Builder::new()
                 .name(String::from("kevy-embedded-reaper"))
                 .spawn(move || {
-                    reaper_loop(inner_t, stop_t, interval, samples, rounds, rw_pct, rw_min, sink)
+                    reaper_loop(shards_t, stop_t, interval, samples, rounds, rw_pct, rw_min, sink)
                 })?;
             Ok((Some(stop), Some(handle)))
         }
@@ -46,7 +46,7 @@ pub(crate) fn spawn_reaper(
 
 #[allow(clippy::too_many_arguments)] // reaper config knobs, all primitives
 fn reaper_loop(
-    inner: Arc<RwLock<Inner>>,
+    shards: Shards,
     stop: Arc<AtomicBool>,
     interval: Duration,
     samples: usize,
@@ -60,17 +60,18 @@ fn reaper_loop(
         if stop.load(Ordering::Relaxed) {
             break;
         }
-        {
-            let mut g = lock_inner(&inner);
-            let _ = g.store.tick_expire(samples, rounds);
-            // EverySec AOF fsync window check — embedded mode runs this from
-            // the same reaper tick rather than a separate timer.
-            if let Some(aof) = &mut g.aof {
-                let _ = aof.maybe_sync();
+        for shard in shards.iter() {
+            {
+                let mut g = lock_inner(shard);
+                let _ = g.store.tick_expire(samples, rounds);
+                // EverySec AOF fsync window check — runs from the same tick.
+                if let Some(aof) = &mut g.aof {
+                    let _ = aof.maybe_sync();
+                }
             }
+            // Non-blocking: holds the lock only for begin/finish, not the spill.
+            concurrent_auto_rewrite(shard, rewrite_pct, rewrite_min_size, sink.as_ref());
         }
-        // Non-blocking: holds the lock only for begin/finish, not the spill.
-        concurrent_auto_rewrite(&inner, rewrite_pct, rewrite_min_size, sink.as_ref());
     }
 }
 

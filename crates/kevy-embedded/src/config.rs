@@ -56,6 +56,13 @@ pub struct Config {
     /// Optional push-style metric callback (replay / rewrite events). Default
     /// `None`. Set via [`Self::with_metric_sink`]; not part of `Debug` output.
     pub(crate) metric_sink: Option<crate::metric::MetricSink>,
+    /// Keyspace shard count (`hash(key) % shards`), each a fully independent
+    /// lock + keyspace + AOF (shared-nothing) — concurrent access scales across
+    /// cores. **Default `1`** (single shard = the original single-lock /
+    /// single-`aof-0.aof` layout, zero migration). Set `> 1` via
+    /// [`Self::with_shards`]; the first open with `> 1` re-shards an existing
+    /// single AOF into per-shard files.
+    pub shards: usize,
 }
 
 impl Default for Config {
@@ -75,6 +82,7 @@ impl Default for Config {
             auto_aof_rewrite_pct: 100,
             auto_aof_rewrite_min_size: 64 * 1024 * 1024,
             metric_sink: None,
+            shards: 1,
         }
     }
 }
@@ -122,6 +130,18 @@ impl Config {
     pub fn with_auto_aof_rewrite(mut self, pct: u32, min_size: u64) -> Self {
         self.auto_aof_rewrite_pct = pct;
         self.auto_aof_rewrite_min_size = min_size;
+        self
+    }
+
+    /// Shard the keyspace into `n` shared-nothing partitions (`hash(key) % n`),
+    /// each with its own lock + keyspace + AOF, so concurrent access scales
+    /// across cores. `n` clamps to ≥ 1; `1` (default) is the original
+    /// single-shard layout. Going from a single-AOF store to `n > 1`
+    /// re-shards the existing `aof-0.aof` into `aof-0..aof-{n-1}` on the next
+    /// open (the old file is backed up to `aof-0.aof.premigration.<ts>` first).
+    /// Pub/sub is process-wide (handled on shard 0), not sharded.
+    pub fn with_shards(mut self, n: usize) -> Self {
+        self.shards = n.max(1);
         self
     }
 

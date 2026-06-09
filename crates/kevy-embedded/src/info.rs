@@ -31,27 +31,27 @@ impl Store {
     /// [`KevyInfo`]. Takes the embedded mutex once; safe to call from a
     /// health endpoint.
     pub fn info(&self) -> KevyInfo {
-        let g = self.lock();
         KevyInfo {
-            keys: g.store.dbsize(),
-            used_memory: g.store.used_memory(),
-            aof_bytes: g.aof.as_ref().map_or(0, |a| a.size_bytes()),
-            expire_pending: g.store.ttl_pending_count(),
-            evictions: g.store.evictions_total(),
-            expired_keys: g.store.expired_keys_total(),
+            keys: self.sum_shards(|i| i.store.dbsize()),
+            used_memory: self.sum_shards_u64(|i| i.store.used_memory()),
+            aof_bytes: self.sum_shards_u64(|i| i.aof.as_ref().map_or(0, |a| a.size_bytes())),
+            expire_pending: self.sum_shards(|i| i.store.ttl_pending_count()),
+            evictions: self.sum_shards_u64(|i| i.store.evictions_total()),
+            expired_keys: self.sum_shards_u64(|i| i.store.expired_keys_total()),
         }
     }
 
-    /// Number of live keys that currently carry a TTL (the expire-set size).
+    /// Number of live keys that currently carry a TTL (the expire-set size,
+    /// summed across shards).
     pub fn expire_pending_count(&self) -> usize {
-        self.lock().store.ttl_pending_count()
+        self.sum_shards(|i| i.store.ttl_pending_count())
     }
 
     /// Remaining TTL for `key` as a [`Duration`], or `None` when the key is
     /// absent or has no TTL (persistent). For the raw Redis `PTTL` sentinels
     /// (`-2` no key, `-1` no TTL) use [`Store::ttl_ms`].
     pub fn ttl(&self, key: &[u8]) -> Option<Duration> {
-        let ms = self.lock().store.pttl(key);
+        let ms = self.wshard(key).store.pttl(key);
         if ms < 0 {
             None
         } else {
