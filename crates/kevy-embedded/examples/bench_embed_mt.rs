@@ -55,14 +55,21 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(2_000_000);
     let keys: Vec<Vec<u8>> = (0..KEYS).map(|i| format!("k{i}").into_bytes()).collect();
+    let shards: usize = std::env::var("KEVY_SHARDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
 
     // Shared in-memory store (no AOF) — isolate the lock/keyspace from disk.
-    let store = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    let store = Store::open(Config::default().with_shards(shards).with_ttl_reaper_manual()).unwrap();
     for k in &keys {
         store.set(k, VAL).unwrap();
     }
 
-    println!("kevy-embedded MULTI-THREAD throughput — in-memory, {KEYS} keys, {}B val, n={n_per}/thread", VAL.len());
+    println!(
+        "kevy-embedded MULTI-THREAD throughput — in-memory, shards={shards}, {KEYS} keys, {}B val, n={n_per}/thread",
+        VAL.len()
+    );
     for &t in &[1usize, 2, 4, 8, 10] {
         run("GET", &store, t, n_per, &keys, false);
     }

@@ -24,3 +24,4 @@ workspace = true
 [dependencies]
 kevy-store = { path = "../kevy-store", version = "1.11.0" }
 kevy-persist = { path = "../kevy-persist", version = "1.11.0" }
+kevy-hash = { path = "../kevy-hash", version = "1.11.0" }

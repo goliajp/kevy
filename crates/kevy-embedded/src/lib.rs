@@ -57,6 +57,7 @@ mod metric;
 mod ops;
 mod pubsub;
 mod reaper;
+mod shard;
 mod pubsub_bus;
 mod replay;
 mod store;
