@@ -15,7 +15,7 @@
 use std::collections::HashSet;
 use std::io;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError, channel};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use crate::store::Inner;
@@ -97,7 +97,7 @@ pub(crate) use crate::pubsub_bus::PubsubBus;
 /// open a separate `Subscription` per consumer — they're cheap.
 #[allow(missing_debug_implementations)]
 pub struct Subscription {
-    inner: Arc<Mutex<Inner>>,
+    inner: Arc<RwLock<Inner>>,
     // Keeps the AOF/reaper alive as long as a Subscription does — so
     // dropping every `Store` clone while a subscriber is still active
     // leaves the keyspace intact until the subscriber also goes away.
@@ -118,10 +118,10 @@ pub struct Subscription {
 }
 
 impl Subscription {
-    pub(crate) fn new(inner: Arc<Mutex<Inner>>, guard: Arc<crate::store::DropGuard>) -> Self {
+    pub(crate) fn new(inner: Arc<RwLock<Inner>>, guard: Arc<crate::store::DropGuard>) -> Self {
         let (sender, receiver) = channel();
         let id = inner
-            .lock()
+            .write()
             .unwrap_or_else(|p| p.into_inner())
             .bus
             .alloc_id();
@@ -150,7 +150,7 @@ impl Subscription {
     /// enqueued onto the receive queue in order.
     pub fn subscribe(&mut self, channels: &[&[u8]]) {
         let s = self.sender_clone();
-        let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
         for ch in channels {
             let owned = ch.to_vec();
             let added = g.bus.add_channel(self.id, &s, owned.clone());
@@ -169,7 +169,7 @@ impl Subscription {
     /// (`*`, `?`, `[abc]`).
     pub fn psubscribe(&mut self, patterns: &[&[u8]]) {
         let s = self.sender_clone();
-        let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
         for pat in patterns {
             let owned = pat.to_vec();
             let added = g.bus.add_pattern(self.id, &s, owned.clone());
@@ -194,7 +194,7 @@ impl Subscription {
             return;
         }
         let s = self.sender_clone();
-        let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
         for ch in channels {
             let owned = ch.to_vec();
             let _ = g.bus.remove_channel(self.id, &owned);
@@ -214,7 +214,7 @@ impl Subscription {
             return;
         }
         let s = self.sender_clone();
-        let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
         for pat in patterns {
             let owned = pat.to_vec();
             let _ = g.bus.remove_pattern(self.id, &owned);
@@ -230,7 +230,7 @@ impl Subscription {
     fn drain_channel_subs(&mut self) {
         let s = self.sender_clone();
         let owned: Vec<Vec<u8>> = self.channels.drain().collect();
-        let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
         if owned.is_empty() {
             let count = g.bus.count_for(self.id);
             let _ = s.send(PubsubFrame::Unsubscribe { channel: None, count });
@@ -249,7 +249,7 @@ impl Subscription {
     fn drain_pattern_subs(&mut self) {
         let s = self.sender_clone();
         let owned: Vec<Vec<u8>> = self.patterns.drain().collect();
-        let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
         if owned.is_empty() {
             let count = g.bus.count_for(self.id);
             let _ = s.send(PubsubFrame::Punsubscribe { pattern: None, count });
@@ -324,31 +324,10 @@ impl std::fmt::Debug for Subscription {
 
 impl Drop for Subscription {
     fn drop(&mut self) {
-        // Best-effort cleanup. If the underlying Inner is poisoned we still
-        // remove our entries; the AtomicBool / send stuff doesn't care.
-        if let Ok(mut g) = self.inner.lock() {
-            g.bus.remove_all_for(self.id);
-        } else if let Ok(mut g) = self.inner.clear_poison_and_lock() {
-            // Mutex::clear_poison + reacquire is stable since Rust 1.77; we
-            // pin rust-version=1.95 so this is available. The `else` branch
-            // above is unreachable in practice given we always recover from
-            // poison ourselves; left here so the cleanup is total.
-            g.bus.remove_all_for(self.id);
-        }
-    }
-}
-
-/// Tiny helper trait so `Drop` can recover from poison without
-/// pulling in the explicit `poison.into_inner()` dance. Local to the
-/// module; not part of the public API.
-trait LockExt<'a, T> {
-    fn clear_poison_and_lock(&'a self) -> std::sync::LockResult<std::sync::MutexGuard<'a, T>>;
-}
-
-impl<'a, T> LockExt<'a, T> for Mutex<T> {
-    fn clear_poison_and_lock(&'a self) -> std::sync::LockResult<std::sync::MutexGuard<'a, T>> {
-        self.clear_poison();
-        self.lock()
+        // Best-effort cleanup. Recover from poison (a panic elsewhere left the
+        // bus intact) so our entries are always removed.
+        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
+        g.bus.remove_all_for(self.id);
     }
 }
 

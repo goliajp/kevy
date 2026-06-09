@@ -59,6 +59,24 @@ impl Store {
         }
     }
 
+    /// Read-only `GET`: `&self`, so concurrent readers can run under a shared
+    /// lock (embedded mode's `RwLock` read path). Expiry is checked against the
+    /// coarse cached clock but an expired key is *not* removed here (no `&mut`)
+    /// — the reaper / next write reclaims it; a reader just sees `None`. LRU is
+    /// not touched, so this path is only used when eviction is off
+    /// (`maxmemory == 0`); with eviction, the caller takes the mutating
+    /// [`Self::get`] under an exclusive lock so access still stamps the LRU.
+    pub fn get_shared(&self, key: &[u8]) -> Result<Option<&[u8]>, StoreError> {
+        match self.map.get(key) {
+            None => Ok(None),
+            Some(e) if e.is_expired(self.cached_clock, self.cached_ns) => Ok(None),
+            Some(e) => match &e.value {
+                Value::Str(v) => Ok(Some(v.as_slice())),
+                _ => Err(StoreError::WrongType),
+            },
+        }
+    }
+
     pub fn strlen(&mut self, key: &[u8]) -> Result<usize, StoreError> {
         Ok(self.get(key)?.map_or(0, |v| v.len()))
     }
