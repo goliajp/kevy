@@ -4,6 +4,35 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.10.0] — 2026-06-09
+
+Minor release: the embedded auto-AOF-rewrite is now **non-blocking**, plus a
+push-style metric callback — closing the two gaps left from the mailrs feedback
+(`kevy-product-feedback-2026-06-09`). Workspace 1.9.0 → 1.10.0; kevy-embedded
+1.1.13 → 1.1.14; kevy-client 1.7.9 → 1.7.10.
+
+### Changed
+
+- **Embedded background auto-AOF-rewrite no longer blocks application writes.**
+  v1.9.0 ran the auto-rewrite inline under the store lock (blocking writers for
+  the full serialize + disk write + fsync). It now runs in three phases: (1)
+  serialize the keyspace to memory under the lock and start teeing live appends
+  into a diff buffer, (2) **release the lock** and spill the snapshot image to
+  disk + fsync — the expensive part, off the hot path, (3) re-take the lock
+  briefly to append the tee'd diff and atomically swap the file in. Writes
+  during the disk spill are captured by the tee, so nothing is lost; crash
+  safety is unchanged (atomic `rename`). The manual `Store::rewrite_aof()` stays
+  synchronous (the explicit "rewrite now" path); a manual call is a no-op while
+  a background rewrite is in flight.
+
+### Added
+
+- **`Config::with_metric_sink(callback)`** — a push-style metric callback that
+  fires `KevyMetric::Replay { commands, bytes, elapsed_ms }` after startup AOF
+  replay and `KevyMetric::Rewrite { keys, before_bytes, after_bytes,
+  elapsed_ms }` after each AOF rewrite. For continuous monitoring without
+  polling `info()`. `KevyMetric` is `#[non_exhaustive]`.
+
 ## [v1.9.0] — 2026-06-09
 
 Minor release: AOF maintenance + observability for embedded mode, from the

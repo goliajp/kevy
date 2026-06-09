@@ -47,6 +47,22 @@ pub(crate) fn dump_store_to_aof(path: &Path, store: &Store) -> io::Result<(u64, 
     Ok((keys, bytes))
 }
 
+/// Serialize `store`'s current state into an in-memory AOF image (magic +
+/// the same RESP command stream `dump_store_to_aof` writes). Returns the
+/// bytes and the key count. Used by the non-blocking rewrite: the caller
+/// produces this buffer under the store lock, then spills it to disk *off*
+/// the lock. `Vec<u8>` is an infallible `Write`, so no error path exists.
+pub(crate) fn dump_store_to_buf(store: &Store) -> (Vec<u8>, u64) {
+    let mut buf = Vec::with_capacity(crate::SNAPSHOT_BUF_CAP);
+    buf.extend_from_slice(crate::aof::AOF_MAGIC);
+    let mut keys = 0u64;
+    store.snapshot_each(|key, value, ttl_ms| {
+        let _ = write_value_as_commands(&mut buf, key, value, ttl_ms);
+        keys += 1;
+    });
+    (buf, keys)
+}
+
 /// Emit one (or two, if TTL'd) RESP write commands that, when replayed,
 /// reconstruct `key`'s `value` and TTL exactly.
 fn write_value_as_commands<W: Write>(

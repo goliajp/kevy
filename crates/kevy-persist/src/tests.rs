@@ -421,6 +421,10 @@ fn apply_for_test(store: &mut Store, args: &Argv) {
         b"SET" => {
             store.set(&args[1], args[2].to_vec(), None, false, false);
         }
+        b"DEL" => {
+            let keys: Vec<Vec<u8>> = args.iter().skip(1).map(|a| a.to_vec()).collect();
+            store.del(&keys);
+        }
         b"HSET" => {
             let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
             let mut i = 2;
@@ -589,4 +593,50 @@ fn rewrite_resets_size_anchor() {
     assert_eq!(aof.size_at_last_rewrite(), 9);
     assert_eq!(aof.rewrites_total(), 1);
     let _ = std::fs::remove_file(&path);
+}
+
+/// The non-blocking rewrite must lose nothing: writes that land *between*
+/// `begin_concurrent_rewrite` (snapshot taken) and `finish_concurrent_rewrite`
+/// (swap) — i.e. during the off-lock disk spill — are tee'd into the diff
+/// buffer and replayed after the compacted snapshot.
+#[test]
+fn concurrent_rewrite_captures_writes_during_spill() {
+    let path = temp_aof("concurrent-rw");
+    let mut store = Store::new();
+    store.set(b"a", b"1".to_vec(), None, false, false);
+    store.set(b"b", b"2".to_vec(), None, false, false);
+
+    let mut aof = Aof::open(&path, Fsync::Always).unwrap();
+
+    // Phase 1 (would be under the store lock): snapshot {a,b}, start teeing.
+    let plan = aof.begin_concurrent_rewrite(&store).unwrap();
+    assert!(aof.is_rewriting());
+    assert_eq!(plan.keys, 2);
+
+    // Writes that arrive DURING the off-lock spill — must be captured by the
+    // tee, not lost when the snapshot (which predates them) is swapped in.
+    aof.append(&argv(&[b"SET", b"c", b"3"])).unwrap(); // new key
+    aof.append(&argv(&[b"SET", b"b", b"22"])).unwrap(); // overwrite
+    aof.append(&argv(&[b"DEL", b"a"])).unwrap(); // delete a snapshotted key
+
+    // Phase 2: spill the snapshot image to the temp file (off-lock).
+    std::fs::write(&plan.tmp, &plan.body).unwrap();
+
+    // Phase 3: append the diff + atomic swap.
+    let stats = aof.finish_concurrent_rewrite(&plan.tmp, plan.keys).unwrap();
+    assert!(!aof.is_rewriting());
+    assert_eq!(stats.keys, 2);
+    assert_eq!(aof.rewrites_total(), 1);
+
+    // Replay the rewritten AOF: compacted snapshot THEN the during-spill diff.
+    let mut dst = Store::new();
+    replay_aof(&path, |a| apply_for_test(&mut dst, &a)).unwrap();
+    assert_eq!(dst.get(b"a").unwrap(), None, "DEL during spill must apply");
+    assert_eq!(dst.get(b"b").unwrap(), Some(&b"22"[..]), "overwrite must win");
+    assert_eq!(dst.get(b"c").unwrap(), Some(&b"3"[..]), "new key must survive");
+    let _ = std::fs::remove_file(&path);
+}
+
+fn argv(parts: &[&[u8]]) -> Argv {
+    Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>())
 }

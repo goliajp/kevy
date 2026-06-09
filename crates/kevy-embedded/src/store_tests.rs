@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::{AppendFsync, EvictionPolicy};
+use std::time::Duration;
 
 fn tmp_dir(name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
@@ -191,6 +192,60 @@ fn info_and_introspection() {
     assert!(s.ttl(b"b").unwrap() > Duration::from_secs(90));
     assert_eq!(s.ttl(b"a"), None); // key exists, no TTL
     assert_eq!(s.ttl(b"missing"), None); // no key
+}
+
+#[test]
+fn metric_sink_receives_rewrite_and_replay() {
+    use std::sync::{Arc, Mutex};
+    let dir = tmp_dir("metric-sink");
+    let seen: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+    // Run 1: redundant writes + a manual rewrite → a Rewrite event fires.
+    {
+        let s_seen = seen.clone();
+        let s = Store::open(
+            Config::default()
+                .with_persist(&dir)
+                .with_ttl_reaper_manual()
+                .with_appendfsync(AppendFsync::Always)
+                .with_metric_sink(move |m| {
+                    let tag = match m {
+                        KevyMetric::Rewrite { .. } => "rewrite",
+                        KevyMetric::Replay { .. } => "replay",
+                    };
+                    s_seen.lock().unwrap().push(tag);
+                }),
+        )
+        .unwrap();
+        for i in 0..50 {
+            s.set(b"k", format!("v{i}").as_bytes()).unwrap();
+        }
+        assert!(s.rewrite_aof().unwrap().is_some());
+    }
+    assert!(
+        seen.lock().unwrap().contains(&"rewrite"),
+        "manual rewrite_aof should emit a Rewrite metric"
+    );
+
+    // Run 2: reopen → AOF replay → a Replay event fires.
+    seen.lock().unwrap().clear();
+    let r_seen = seen.clone();
+    let _s2 = Store::open(
+        Config::default()
+            .with_persist(&dir)
+            .with_ttl_reaper_manual()
+            .with_metric_sink(move |m| {
+                if matches!(m, KevyMetric::Replay { .. }) {
+                    r_seen.lock().unwrap().push("replay");
+                }
+            }),
+    )
+    .unwrap();
+    assert!(
+        seen.lock().unwrap().contains(&"replay"),
+        "reopening should emit a Replay metric"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

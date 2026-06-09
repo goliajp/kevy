@@ -7,12 +7,14 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::Instant;
+
+use crate::metric::KevyMetric;
 
 use kevy_persist::{Aof, Argv, RewriteStats, load_snapshot, replay_aof, save_snapshot};
 use kevy_store::{ExpireStats, StoreError};
 
-use crate::config::{Config, TtlReaperMode};
+use crate::config::Config;
 use crate::pubsub::PubsubBus;
 
 /// The embedded keyspace.
@@ -103,7 +105,7 @@ impl Store {
             aof,
             bus: PubsubBus::new(),
         }));
-        let (reaper_stop, reaper_join) = spawn_reaper(&config, &inner)?;
+        let (reaper_stop, reaper_join) = crate::reaper::spawn_reaper(&config, &inner)?;
         let guard = Arc::new(DropGuard {
             reaper_stop,
             reaper_join: Mutex::new(reaper_join),
@@ -165,23 +167,29 @@ impl Store {
     /// (call ~10× per second to match Redis's `hz=10`); no-op cost is
     /// one mutex lock + map-emptiness check when nothing has TTL.
     pub fn tick(&self) -> ExpireStats {
-        let mut g = self.lock();
-        let stats = g
-            .store
-            .tick_expire(self.config.reaper_samples, self.config.reaper_max_rounds);
+        let stats = {
+            let mut g = self.lock();
+            g.store
+                .tick_expire(self.config.reaper_samples, self.config.reaper_max_rounds)
+        };
         // Auto-AOF-rewrite check rides the same caller-driven tick in Manual
-        // mode (Background mode runs it from the reaper thread instead).
-        maybe_auto_rewrite(
-            &mut g,
+        // mode (Background mode runs it from the reaper thread instead). The
+        // non-blocking path releases the lock for the disk spill, so other
+        // threads' store ops aren't blocked while this tick rewrites.
+        crate::reaper::concurrent_auto_rewrite(
+            &self.inner,
             self.config.auto_aof_rewrite_pct,
             self.config.auto_aof_rewrite_min_size,
+            self.config.metric_sink.as_ref(),
         );
         stats
     }
 
     /// `BGREWRITEAOF`: rebuild the AOF from current state. Synchronous —
-    /// blocks until the rewrite + atomic rename completes. Returns
-    /// `Ok(None)` when persistence is disabled.
+    /// blocks until the rewrite + atomic rename completes (the explicit
+    /// "rewrite now" API; the background auto-rewrite is non-blocking
+    /// instead). Returns `Ok(None)` when persistence is disabled or a
+    /// background rewrite is already in flight (it would clobber this one).
     pub fn rewrite_aof(&self) -> io::Result<Option<RewriteStats>> {
         let mut g = self.lock();
         // Disjoint-field split-borrow: destructure the guard so the borrow
@@ -189,7 +197,21 @@ impl Store {
         // claims on the same `&mut Inner`.
         let Inner { store, aof, bus: _ } = &mut *g;
         let Some(aof) = aof else { return Ok(None) };
-        Ok(Some(aof.rewrite_from(store)?))
+        if aof.is_rewriting() {
+            return Ok(None); // a non-blocking rewrite is mid-flight
+        }
+        let before_bytes = aof.size_bytes();
+        let start = Instant::now();
+        let stats = aof.rewrite_from(store)?;
+        if let Some(sink) = &self.config.metric_sink {
+            sink.emit(KevyMetric::Rewrite {
+                keys: stats.keys,
+                before_bytes,
+                after_bytes: stats.bytes,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+            });
+        }
+        Ok(Some(stats))
     }
 
     /// Snapshot the store to `<data_dir>/<snapshot_filename>`, atomically.
@@ -247,7 +269,20 @@ fn init_persistent_store(config: &Config) -> io::Result<(kevy_store::Store, Opti
         }
         let aof_path = dir.join(&config.aof_filename);
         if aof_path.exists() {
-            replay_aof(&aof_path, |args| crate::replay::apply(&mut store, &args))?;
+            let bytes = std::fs::metadata(&aof_path).map(|m| m.len()).unwrap_or(0);
+            let start = Instant::now();
+            let mut commands = 0u64;
+            replay_aof(&aof_path, |args| {
+                commands += 1;
+                crate::replay::apply(&mut store, &args);
+            })?;
+            if let Some(sink) = &config.metric_sink {
+                sink.emit(KevyMetric::Replay {
+                    commands,
+                    bytes,
+                    elapsed_ms: start.elapsed().as_millis() as u64,
+                });
+            }
         }
         if config.aof {
             Some(Aof::open(&aof_path, config.appendfsync)?)
@@ -258,35 +293,6 @@ fn init_persistent_store(config: &Config) -> io::Result<(kevy_store::Store, Opti
         None
     };
     Ok((store, aof))
-}
-
-/// Start the background TTL reaper thread, returning its stop signal +
-/// join handle. `TtlReaperMode::Manual` returns `(None, None)` so the
-/// caller-driven reap is in charge instead.
-#[allow(clippy::type_complexity)] // inline tuple keeps the pair colocated
-fn spawn_reaper(
-    config: &Config,
-    inner: &Arc<Mutex<Inner>>,
-) -> io::Result<(Option<Arc<AtomicBool>>, Option<JoinHandle<()>>)> {
-    match config.ttl_reaper {
-        TtlReaperMode::Manual => Ok((None, None)),
-        TtlReaperMode::Background => {
-            let stop = Arc::new(AtomicBool::new(false));
-            let stop_t = stop.clone();
-            let inner_t = inner.clone();
-            let interval = config.reaper_interval;
-            let samples = config.reaper_samples;
-            let rounds = config.reaper_max_rounds;
-            let rw_pct = config.auto_aof_rewrite_pct;
-            let rw_min = config.auto_aof_rewrite_min_size;
-            let handle = std::thread::Builder::new()
-                .name(String::from("kevy-embedded-reaper"))
-                .spawn(move || {
-                    reaper_loop(inner_t, stop_t, interval, samples, rounds, rw_pct, rw_min)
-                })?;
-            Ok((Some(stop), Some(handle)))
-        }
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -315,61 +321,6 @@ pub(crate) fn commit_write(inner: &mut Inner, parts: &[&[u8]]) -> io::Result<()>
 
 pub(crate) fn store_err(e: StoreError) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, format!("kevy-store: {e:?}"))
-}
-
-#[allow(clippy::too_many_arguments)] // reaper config knobs, all primitives
-fn reaper_loop(
-    inner: Arc<Mutex<Inner>>,
-    stop: Arc<AtomicBool>,
-    interval: Duration,
-    samples: usize,
-    rounds: u32,
-    rewrite_pct: u32,
-    rewrite_min_size: u64,
-) {
-    while !stop.load(Ordering::Relaxed) {
-        std::thread::sleep(interval);
-        if stop.load(Ordering::Relaxed) {
-            break;
-        }
-        let mut g = match inner.lock() {
-            Ok(g) => g,
-            Err(poison) => poison.into_inner(),
-        };
-        let _ = g.store.tick_expire(samples, rounds);
-        // EverySec AOF fsync window check — embedded mode runs this from
-        // the same reaper tick rather than a separate timer.
-        if let Some(aof) = &mut g.aof {
-            let _ = aof.maybe_sync();
-        }
-        maybe_auto_rewrite(&mut g, rewrite_pct, rewrite_min_size);
-    }
-}
-
-/// Auto-`BGREWRITEAOF`: rewrite the AOF when it has grown `pct` percent past
-/// its size at the last rewrite and is at least `min_size` bytes (Redis's
-/// `auto-aof-rewrite-percentage` / `-min-size`). Mirrors the server runtime's
-/// `Shard::maybe_auto_rewrite_aof`. Runs under the held `Inner` lock, so it
-/// briefly blocks writers while it rewrites — acceptable because it fires
-/// rarely (only when the AOF has doubled past the floor). `pct == 0` disables.
-pub(crate) fn maybe_auto_rewrite(g: &mut Inner, pct: u32, min_size: u64) {
-    if pct == 0 {
-        return;
-    }
-    let Inner { store, aof, .. } = g;
-    let Some(aof) = aof else { return };
-    let cur = aof.size_bytes();
-    if cur < min_size {
-        return;
-    }
-    let baseline = aof.size_at_last_rewrite().max(1);
-    // (cur - baseline) * 100 / baseline ≥ pct  ⇔  cur * 100 ≥ baseline * (100 + pct)
-    if cur.saturating_mul(100) < baseline.saturating_mul(100u64.saturating_add(pct as u64)) {
-        return;
-    }
-    if let Err(e) = aof.rewrite_from(store) {
-        eprintln!("kevy: embedded auto AOF rewrite failed: {e}");
-    }
 }
 
 impl Drop for DropGuard {
