@@ -53,6 +53,9 @@ pub struct Config {
     pub auto_aof_rewrite_pct: u32,
     /// Floor below which auto-rewrite is skipped. Default `64 MiB` (Redis).
     pub auto_aof_rewrite_min_size: u64,
+    /// Optional push-style metric callback (replay / rewrite events). Default
+    /// `None`. Set via [`Self::with_metric_sink`]; not part of `Debug` output.
+    pub(crate) metric_sink: Option<crate::metric::MetricSink>,
 }
 
 impl Default for Config {
@@ -71,6 +74,7 @@ impl Default for Config {
             reaper_max_rounds: 16,
             auto_aof_rewrite_pct: 100,
             auto_aof_rewrite_min_size: 64 * 1024 * 1024,
+            metric_sink: None,
         }
     }
 }
@@ -118,6 +122,19 @@ impl Config {
     pub fn with_auto_aof_rewrite(mut self, pct: u32, min_size: u64) -> Self {
         self.auto_aof_rewrite_pct = pct;
         self.auto_aof_rewrite_min_size = min_size;
+        self
+    }
+
+    /// Register a push-style metric callback. It receives a [`KevyMetric`] for
+    /// each AOF replay (startup) and AOF rewrite (compaction) — wire it to
+    /// Prometheus / a log line / a counter. The callback runs synchronously on
+    /// the emitting thread (reaper thread for background rewrites), so keep it
+    /// fast and non-blocking. Replaces any previously-set sink.
+    pub fn with_metric_sink(
+        mut self,
+        sink: impl Fn(crate::KevyMetric) + Send + Sync + 'static,
+    ) -> Self {
+        self.metric_sink = Some(crate::metric::MetricSink::new(sink));
         self
     }
 

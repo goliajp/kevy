@@ -74,10 +74,15 @@ grown `percentage` past its size at the previous rewrite **and** is at least
 - Server: config keys `auto_aof_rewrite_percentage` / `auto_aof_rewrite_min_size` (also live-tunable via `CONFIG SET`); checked on the reactor tick.
 - Embedded: `Config::with_auto_aof_rewrite(pct, min_size)`; checked on the background reaper tick, or on your `Store::tick` calls in manual reaper mode. `pct = 0` disables (manual only).
 
-The embedded auto-rewrite runs inline under the store lock, so it briefly
-blocks writers while rewriting — acceptable because it fires rarely (only once
-the AOF has roughly doubled past the floor). If a rewrite crashes midway the
-original AOF is untouched and the `.tmp` file can be deleted.
+The embedded **auto**-rewrite is **non-blocking**: it serializes the keyspace
+under the lock, then releases the lock for the slow disk write + fsync (the
+expensive part), and re-takes it only briefly to swap the file in. Writes that
+land during the disk write are tee'd into a diff buffer and appended after the
+snapshot, so nothing is lost. The transient cost is one in-memory copy of the
+serialized keyspace. The **manual** `Store::rewrite_aof()` / server
+`BGREWRITEAOF` is synchronous (blocks the caller for the rewrite) — it's the
+explicit "rewrite now" path. If a rewrite crashes midway the original AOF is
+untouched (the swap is an atomic `rename`) and the `.tmp` file can be deleted.
 
 ## Crash recovery (AOF replay on startup)
 
@@ -121,6 +126,25 @@ store.evictions_total();        // total evicted by maxmemory
 
 `expire_pending_count() == 0` when you expected TTLs is the tell that the TTL
 subsystem didn't register your keys.
+
+### Push-style metrics
+
+For continuous monitoring (vs polling `info()`), register a callback:
+
+```rust
+let cfg = Config::default()
+    .with_persist("/data/kevy")
+    .with_metric_sink(|m| match m {
+        KevyMetric::Replay { commands, bytes, elapsed_ms } => { /* startup */ }
+        KevyMetric::Rewrite { keys, before_bytes, after_bytes, elapsed_ms } => { /* compaction */ }
+        _ => {}
+    });
+```
+
+The sink fires on AOF replay (startup) and each AOF rewrite (compaction). It
+runs synchronously on the emitting thread (the reaper thread for background
+rewrites), so keep it fast. `KevyMetric` is `#[non_exhaustive]` — match with a
+`_` arm to stay forward-compatible.
 
 ## What is *not* persisted
 

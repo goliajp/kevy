@@ -10,7 +10,7 @@ use kevy_resp::ArgvView;
 use kevy_store::Store;
 
 use crate::{
-    dump_store_to_aof, estimate_multibulk_bytes, write_multibulk,
+    dump_store_to_aof, dump_store_to_buf, estimate_multibulk_bytes, write_multibulk,
 };
 
 /// 9-byte file-format header written at the start of every kevy-managed
@@ -68,6 +68,23 @@ pub struct Aof {
     /// cross-shard request batches) open a group; every other path keeps
     /// the per-command fsync, so the default is always the safe one.
     deferred: bool,
+    /// Non-blocking rewrite "diff buffer". While `Some`, every `append` also
+    /// tees its RESP frame here, so writes that land *during* an off-lock
+    /// rewrite are captured and replayed after the compacted snapshot. See
+    /// [`Self::begin_concurrent_rewrite`].
+    rewrite_tee: Option<Vec<u8>>,
+}
+
+/// Handoff between the two halves of a non-blocking rewrite: the serialized
+/// keyspace image (produced under the store lock) and the temp path to spill
+/// it to (off-lock). See [`Aof::begin_concurrent_rewrite`].
+pub struct RewritePlan {
+    /// The compacted AOF image (magic + one command stream per key).
+    pub body: Vec<u8>,
+    /// Same-directory temp file to spill `body` to before the final swap.
+    pub tmp: PathBuf,
+    /// Keys captured in `body` (for the resulting [`RewriteStats`]).
+    pub keys: u64,
 }
 
 /// Result of an [`Aof::rewrite_from`] call. Surfaced by `BGREWRITEAOF` /
@@ -105,6 +122,7 @@ impl Aof {
             size_at_last_rewrite: size,
             rewrites_total: 0,
             deferred: false,
+            rewrite_tee: None,
         })
     }
 
@@ -135,6 +153,12 @@ impl Aof {
     /// Append one command, applying the fsync policy.
     pub fn append<A: ArgvView + ?Sized>(&mut self, args: &A) -> io::Result<()> {
         write_multibulk(&mut self.file, args)?;
+        // Tee into the in-flight rewrite's diff buffer (off-lock rewrite in
+        // progress): re-encode the same frame so it survives the swap. Only
+        // active during the rare rewrite window — zero cost otherwise.
+        if let Some(tee) = &mut self.rewrite_tee {
+            write_multibulk(tee, args)?;
+        }
         self.size_bytes = self
             .size_bytes
             .saturating_add(estimate_multibulk_bytes(args));
@@ -261,6 +285,61 @@ impl Aof {
         self.dirty = false;
         self.rewrites_total = self.rewrites_total.saturating_add(1);
         Ok(RewriteStats { keys, bytes })
+    }
+
+    /// Is a non-blocking rewrite mid-flight (between
+    /// [`Self::begin_concurrent_rewrite`] and `finish`/`abort`)? While true,
+    /// don't start another rewrite — `append` is teeing into the diff buffer.
+    #[inline]
+    pub fn is_rewriting(&self) -> bool {
+        self.rewrite_tee.is_some()
+    }
+
+    /// Phase 1 of a **non-blocking** rewrite (Background auto-rewrite). Must be
+    /// called under the store lock: it serializes the keyspace into an
+    /// in-memory image and starts teeing subsequent `append`s into a diff
+    /// buffer — both atomic w.r.t. other writes. The caller then spills
+    /// `plan.body` to `plan.tmp` **with the lock released** (the slow disk
+    /// write), and finally calls [`Self::finish_concurrent_rewrite`] under the
+    /// lock again. Writes that land during the off-lock spill are captured by
+    /// the tee and appended after the snapshot, so nothing is lost.
+    pub fn begin_concurrent_rewrite(&mut self, store: &Store) -> io::Result<RewritePlan> {
+        let (body, keys) = dump_store_to_buf(store);
+        self.rewrite_tee = Some(Vec::new());
+        Ok(RewritePlan {
+            body,
+            tmp: rewrite_tmp_path(&self.path),
+            keys,
+        })
+    }
+
+    /// Phase 2: the `plan.body` is already on disk at `tmp` (spilled off-lock).
+    /// Append the diff buffer (writes since `begin`), fsync, atomically swap
+    /// over the live AOF, and reopen the append handle against it. Call under
+    /// the store lock. `keys` is `plan.keys`.
+    pub fn finish_concurrent_rewrite(&mut self, tmp: &Path, keys: u64) -> io::Result<RewriteStats> {
+        let tee = self.rewrite_tee.take().unwrap_or_default();
+        {
+            let mut f = OpenOptions::new().append(true).open(tmp)?;
+            f.write_all(&tee)?;
+            f.sync_all()?;
+        }
+        std::fs::rename(tmp, &self.path)?;
+        let f = OpenOptions::new().append(true).open(&self.path)?;
+        let bytes = f.metadata().map(|m| m.len()).unwrap_or(0);
+        self.file = BufWriter::new(f);
+        self.size_bytes = bytes;
+        self.size_at_last_rewrite = bytes;
+        self.dirty = false;
+        self.rewrites_total = self.rewrites_total.saturating_add(1);
+        Ok(RewriteStats { keys, bytes })
+    }
+
+    /// Abandon an in-flight non-blocking rewrite (e.g. the off-lock spill
+    /// failed): drop the diff buffer and resume normal appends. The live AOF
+    /// is untouched, so no data is at risk; the caller deletes the temp file.
+    pub fn abort_concurrent_rewrite(&mut self) {
+        self.rewrite_tee = None;
     }
 }
 

@@ -40,10 +40,12 @@ mod aof;
 mod replay;
 mod rewrite_fmt;
 
-pub use aof::{Aof, Fsync, RewriteStats};
+pub use aof::{Aof, Fsync, RewritePlan, RewriteStats};
 pub use replay::replay_aof;
 pub use kevy_resp::{Argv, ArgvView};
-pub(crate) use rewrite_fmt::{dump_store_to_aof, estimate_multibulk_bytes, write_multibulk};
+pub(crate) use rewrite_fmt::{
+    dump_store_to_aof, dump_store_to_buf, estimate_multibulk_bytes, write_multibulk,
+};
 use kevy_store::Store;
 use kevy_store::Value;
 // ZSet snapshot iterates ordered (member, score) pairs via `Value::ZSet`.
