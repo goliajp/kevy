@@ -47,7 +47,17 @@ impl Store {
     }
 
     /// `GET key` — `Some(bytes)` on hit, `None` on miss or expired.
+    ///
+    /// With eviction off (`maxmemory == 0`, the default) this takes the **read**
+    /// lock and a non-mutating store lookup, so concurrent readers scale across
+    /// cores — the path a read-heavy embed cache lives on. With eviction on it
+    /// falls back to the exclusive lock + mutating get so each access still
+    /// stamps the LRU clock.
     pub fn get(&self, key: &[u8]) -> io::Result<Option<Vec<u8>>> {
+        if self.config().maxmemory == 0 {
+            let g = self.rlock();
+            return Ok(g.store.get_shared(key).map_err(store_err)?.map(|v| v.to_vec()));
+        }
         let mut g = self.lock();
         Ok(g.store.get(key).map_err(store_err)?.map(|v| v.to_vec()))
     }

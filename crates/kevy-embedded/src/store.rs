@@ -5,7 +5,7 @@
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
@@ -38,11 +38,11 @@ use crate::pubsub::PubsubBus;
 /// # }
 /// ```
 ///
-/// Every method takes `&self`. The internal `Arc<Mutex<Inner>>` is what
+/// Every method takes `&self`. The internal `Arc<RwLock<Inner>>` is what
 /// makes shared access safe under contention.
 #[derive(Clone)]
 pub struct Store {
-    inner: Arc<Mutex<Inner>>,
+    inner: Arc<RwLock<Inner>>,
     /// Shared drop guard: signals + joins reaper and flushes AOF when the
     /// LAST `Store` clone (or `Subscription`) holding a strong ref drops.
     guard: Arc<DropGuard>,
@@ -55,7 +55,7 @@ pub struct Store {
 /// `Connection::open("mem://name")` calls share the same backing store
 /// without leaking it when all strong handles go away.
 pub struct WeakStore {
-    inner: Weak<Mutex<Inner>>,
+    inner: Weak<RwLock<Inner>>,
     guard: Weak<DropGuard>,
     config: Config,
 }
@@ -86,7 +86,7 @@ pub(crate) struct Inner {
 pub(crate) struct DropGuard {
     reaper_stop: Option<Arc<AtomicBool>>,
     reaper_join: Mutex<Option<JoinHandle<()>>>,
-    inner_for_flush: Arc<Mutex<Inner>>,
+    inner_for_flush: Arc<RwLock<Inner>>,
 }
 
 impl Store {
@@ -100,7 +100,7 @@ impl Store {
     ///   `config.ttl_reaper == Background` (the default).
     pub fn open(config: Config) -> io::Result<Self> {
         let (store, aof) = init_persistent_store(&config)?;
-        let inner = Arc::new(Mutex::new(Inner {
+        let inner = Arc::new(RwLock::new(Inner {
             store,
             aof,
             bus: PubsubBus::new(),
@@ -231,9 +231,9 @@ impl Store {
     // in `crate::ops` (kept under the 500-LOC file cap). Look there for
     // e.g. `Store::set` / `Store::hset` / `Store::publish`.
 
-    /// Crate-internal: clone the shared `Arc<Mutex<Inner>>` handle, used
+    /// Crate-internal: clone the shared `Arc<RwLock<Inner>>` handle, used
     /// by `ops.rs::Store::subscribe` to hand the bus to a `Subscription`.
-    pub(crate) fn inner_handle(&self) -> Arc<Mutex<Inner>> {
+    pub(crate) fn inner_handle(&self) -> Arc<RwLock<Inner>> {
         self.inner.clone()
     }
 
@@ -243,11 +243,24 @@ impl Store {
         self.guard.clone()
     }
 
-    /// Crate-internal: acquire the embedded mutex. Recovers from poison
-    /// because every method's critical section is short — a panic in one
-    /// doesn't corrupt the keyspace.
-    pub(crate) fn lock(&self) -> MutexGuard<'_, Inner> {
-        match self.inner.lock() {
+    /// Crate-internal: acquire the embedded lock for **writing** (mutation).
+    /// Recovers from poison because every method's critical section is short —
+    /// a panic in one doesn't corrupt the keyspace. Most methods mutate (or
+    /// touch the AOF), so this is the default; read-only `GET` uses
+    /// [`Self::rlock`] so concurrent readers don't serialize.
+    pub(crate) fn lock(&self) -> RwLockWriteGuard<'_, Inner> {
+        match self.inner.write() {
+            Ok(g) => g,
+            Err(poison) => poison.into_inner(),
+        }
+    }
+
+    /// Crate-internal: acquire the embedded lock for **reading**. Multiple
+    /// readers run concurrently — the embedded `GET` fast path takes this so a
+    /// read-heavy embed consumer (e.g. a multi-threaded web cache) scales
+    /// across cores instead of serializing every access on one exclusive lock.
+    pub(crate) fn rlock(&self) -> RwLockReadGuard<'_, Inner> {
+        match self.inner.read() {
             Ok(g) => g,
             Err(poison) => poison.into_inner(),
         }
@@ -344,7 +357,7 @@ impl Drop for DropGuard {
         {
             let _ = j.join();
         }
-        let mut g = match self.inner_for_flush.lock() {
+        let mut g = match self.inner_for_flush.write() {
             Ok(g) => g,
             Err(poison) => poison.into_inner(),
         };

@@ -78,12 +78,19 @@ fn manual_tick_runs_active_reaper() {
     s.set_with_ttl(b"short", b"v", Duration::from_millis(1)).unwrap();
     s.set(b"perm", b"v").unwrap();
     std::thread::sleep(Duration::from_millis(20));
-    let stats = s.tick();
-    // tick() should at least sample and reap (may take multiple ticks
-    // for sparse layouts; the call is idempotent).
-    let _ = stats;
-    let _ = s.get(b"short").unwrap(); // lazy reap path
-    assert!(s.expired_keys_total() >= 1);
+    // Read path is non-mutating now: an expired key reads as None but is NOT
+    // reclaimed by the get itself — the active reaper does that.
+    assert_eq!(s.get(b"short").unwrap(), None);
+    assert!(s.get(b"perm").unwrap().is_some());
+    // tick() runs the active reaper; sampling is probabilistic, so tick until
+    // it has reclaimed the expired key (bounded — one key is caught quickly).
+    for _ in 0..50 {
+        if s.expired_keys_total() >= 1 {
+            break;
+        }
+        s.tick();
+    }
+    assert!(s.expired_keys_total() >= 1, "active reaper should reclaim the expired key");
     assert!(s.get(b"perm").unwrap().is_some());
 }
 

@@ -4,7 +4,7 @@
 
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, RwLock, RwLockWriteGuard};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -20,7 +20,7 @@ use crate::store::Inner;
 #[allow(clippy::type_complexity)] // inline tuple keeps the pair colocated
 pub(crate) fn spawn_reaper(
     config: &Config,
-    inner: &Arc<Mutex<Inner>>,
+    inner: &Arc<RwLock<Inner>>,
 ) -> io::Result<(Option<Arc<AtomicBool>>, Option<JoinHandle<()>>)> {
     match config.ttl_reaper {
         TtlReaperMode::Manual => Ok((None, None)),
@@ -46,7 +46,7 @@ pub(crate) fn spawn_reaper(
 
 #[allow(clippy::too_many_arguments)] // reaper config knobs, all primitives
 fn reaper_loop(
-    inner: Arc<Mutex<Inner>>,
+    inner: Arc<RwLock<Inner>>,
     stop: Arc<AtomicBool>,
     interval: Duration,
     samples: usize,
@@ -104,7 +104,7 @@ fn rewrite_threshold_met(aof: &Aof, pct: u32, min_size: u64) -> bool {
 /// On any failure the in-flight rewrite is aborted (live AOF untouched, no
 /// data at risk) and the temp file removed.
 pub(crate) fn concurrent_auto_rewrite(
-    inner: &Arc<Mutex<Inner>>,
+    inner: &Arc<RwLock<Inner>>,
     pct: u32,
     min_size: u64,
     sink: Option<&MetricSink>,
@@ -168,8 +168,9 @@ fn spill_rewrite_body(tmp: &std::path::Path, body: &[u8]) -> io::Result<()> {
     f.sync_all()
 }
 
-/// Lock the inner state, recovering from a poisoned mutex (a method panic
-/// elsewhere left data intact in memory).
-pub(crate) fn lock_inner(inner: &Arc<Mutex<Inner>>) -> MutexGuard<'_, Inner> {
-    inner.lock().unwrap_or_else(|p| p.into_inner())
+/// Write-lock the inner state, recovering from a poisoned lock (a method panic
+/// elsewhere left data intact in memory). The reaper mutates (reap + clock
+/// refresh + rewrite), so it always takes the write side.
+pub(crate) fn lock_inner(inner: &Arc<RwLock<Inner>>) -> RwLockWriteGuard<'_, Inner> {
+    inner.write().unwrap_or_else(|p| p.into_inner())
 }
