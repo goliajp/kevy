@@ -4,6 +4,32 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.12.0] — 2026-06-09
+
+Minor release: **shared-nothing keyspace sharding for embedded mode** — the
+embedded store now scales reads across cores. Workspace 1.11.0 → 1.12.0;
+kevy-embedded 1.1.15 → 1.1.16; kevy-client 1.7.11 → 1.7.12.
+
+### Added
+
+- **`Config::with_shards(n)`** — partition the embedded keyspace into `n`
+  shared-nothing shards (`hash(key) % n`, the same router the network server
+  uses), each an independent lock + keyspace + AOF. Concurrent operations on
+  different shards never contend, so a multi-threaded embed consumer scales
+  across cores. Measured on a 16-core box (in-memory GET, 10 threads):
+  **5.3M ops/s (single mutex, v1.10.0) → 12.5M (RwLock, v1.11.0) → 66.3M
+  (16 shards) — 12.5× over the campaign, and positive scaling (21M @1 thread
+  → 66M @10) where the unsharded store regressed with thread count.**
+  - **Default `n = 1`** — the original single-lock / single-`aof-0.aof` layout,
+    zero behavior change, zero migration. Sharding is strictly opt-in.
+  - With `n > 1`, persistence uses per-shard `aof-{i}.aof` + a `shards.meta`
+    file. The first open at `n > 1` re-shards a legacy single AOF into per-shard
+    files (the old file is backed up to `aof-0.aof.premigration.<ns>`); changing
+    the shard count re-shards via a temp keyspace. Pub/sub is process-wide
+    (handled on shard 0), not sharded.
+  - `Store::with_key(key, f)` — the `with` escape hatch routed to a key's shard
+    (plain `with` targets shard 0).
+
 ## [v1.11.0] — 2026-06-09
 
 Minor release: embedded read-path performance — GET throughput and multi-core
