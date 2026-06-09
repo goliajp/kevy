@@ -419,7 +419,11 @@ fn auto_aof_rewrite_fires_when_threshold_crossed() {
             // file large, the original flake). Heartbeat PINGs keep the shard
             // in its busy-poll batch so `tick_check` fires and
             // `maybe_auto_rewrite_aof` runs.
-            let post = wait_for_size_below_heartbeat(&aof_path, &mut c, 8 * 1024, 5_000);
+            // Generous timeout: the rewrite is tick-driven, so a heavily
+            // loaded CI runner (parallel jobs starving the reactor thread)
+            // needs headroom — it WILL fire (threshold is met), just maybe not
+            // in 5 s. 20 s tolerates that without making a real break hang long.
+            let post = wait_for_size_below_heartbeat(&aof_path, &mut c, 8 * 1024, 20_000);
             assert!(
                 post < 8 * 1024,
                 "auto AOF rewrite did not fire: {post} bytes still on disk after \
