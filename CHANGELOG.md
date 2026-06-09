@@ -4,6 +4,43 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.11.0] — 2026-06-09
+
+Minor release: embedded read-path performance — GET throughput and multi-core
+read scaling. Workspace 1.10.0 → 1.11.0; kevy-embedded 1.1.14 → 1.1.15;
+kevy-client 1.7.10 → 1.7.11. All measured on a 16-core Linux box.
+
+### Changed
+
+- **GET no longer reads the clock for keys without a TTL.** The per-access read
+  path called `is_expired_at(Instant::now())`, evaluating the monotonic clock
+  on every access even when the key had no deadline. It now reads the clock
+  only in the has-deadline branch. **No-TTL GET ~+51%** (embedded in-memory,
+  single thread: 19.1M → 28.9M ops/s).
+- **TTL'd-key GET uses a coarse cached clock** (Redis `mstime` model): a clock
+  refreshed once per reactor batch (server) / reaper tick (embedded background)
+  instead of an `Instant::now()` per access. Writes still stamp deadlines from
+  a fresh clock, so deadlines stay exact (a key expires at most one
+  refresh-interval late, never early). Opt-in per store — only the server
+  reactor and the embedded *background* reaper, which refresh the cache, trust
+  it; manual-reaper / bare-`Store` reads a fresh clock so lazy expiry still
+  works without an explicit tick. **TTL'd GET ~+62%** (17.7M → 28.7M ops/s),
+  now on par with no-TTL GET.
+- **Embedded `Store` uses a `RwLock`; GET takes a shared read lock.** A
+  multi-threaded embed consumer previously serialized every access on one
+  exclusive mutex — throughput *regressed* with thread count (16-core: GET
+  20.0M @1 thread → 5.3M @10). GET now takes a read lock + a non-mutating
+  lookup (when `maxmemory == 0`), so concurrent readers run in parallel:
+  **10-thread GET 5.3M → 12.5M ops/s (+136%)**. Expired keys are reclaimed by
+  the active reaper / next write rather than lazily on read (read returns
+  `None` either way); with eviction on, GET keeps the exclusive + LRU-stamping
+  path.
+
+### Added
+
+- `cargo run -p kevy-embedded --example bench_embed[_mt]` — single- and
+  multi-threaded in-process throughput harnesses.
+
 ## [v1.10.0] — 2026-06-09
 
 Minor release: the embedded auto-AOF-rewrite is now **non-blocking**, plus a
