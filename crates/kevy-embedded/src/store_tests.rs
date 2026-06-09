@@ -407,3 +407,24 @@ fn sharded_pubsub_still_process_wide() {
         PubsubFrame::Message { channel: b"chan".to_vec(), payload: b"hello".to_vec() }
     );
 }
+
+#[test]
+fn collect_keys_spans_all_shards() {
+    let s = Store::open(Config::default().with_shards(8).with_ttl_reaper_manual()).unwrap();
+    for i in 0..500u32 {
+        s.set(format!("user:{i}").as_bytes(), b"v").unwrap();
+    }
+    for i in 0..50u32 {
+        s.set(format!("other:{i}").as_bytes(), b"v").unwrap();
+    }
+    // Glob scan must span ALL shards, not just shard 0 (the `with` hole).
+    let matched = s.collect_keys(Some(b"user:*"), None);
+    assert_eq!(matched.len(), 500);
+    // limit bounds the total across shards.
+    assert_eq!(s.collect_keys(Some(b"user:*"), Some(100)).len(), 100);
+    // for_each_shard sees the whole keyspace.
+    let mut total = 0;
+    s.for_each_shard(|inner| total += inner.dbsize());
+    assert_eq!(total, 550);
+    assert_eq!(s.shard_count(), 8);
+}
