@@ -4,6 +4,25 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.13.0] — 2026-06-09
+
+Minor release: **cross-shard keyspace scan** for embedded sharding. Workspace
+1.12.0 → 1.13.0; kevy-embedded 1.1.16 → 1.1.17; kevy-client 1.7.12 → 1.7.13.
+Reported by mailrs (shard-scan gap blocking `with_shards` adoption).
+
+### Added
+
+- **`Store::collect_keys(pattern, limit)`** — `KEYS`/`SCAN`-glob across **every
+  shard**. With `with_shards(n > 1)`, the `with(|s| s.collect_keys(..))` escape
+  hatch only saw shard 0, so a glob scan (key bust, metrics gauges) silently
+  missed `(n-1)/n` of the keyspace. `collect_keys` is the cross-shard,
+  read-locked replacement; identical to the old `with(...)` call when
+  `shard_count() == 1`. `limit` bounds the total across shards.
+- **`Store::for_each_shard(f)`** — run `f` against each shard's underlying
+  `kevy_store::Store` (the cross-shard escape hatch for ops not yet wrapped),
+  and **`Store::shard_count()`**. Single-key work still uses `with_key`; globs
+  use `collect_keys`.
+
 ## [v1.12.0] — 2026-06-09
 
 Minor release: **shared-nothing keyspace sharding for embedded mode** — the

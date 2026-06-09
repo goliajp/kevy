@@ -161,6 +161,39 @@ impl Store {
         f(&mut g.store)
     }
 
+    /// `KEYS` / `SCAN`-glob across **every shard** — the cross-shard
+    /// replacement for `with(|s| s.collect_keys(pat, lim))`, which only sees
+    /// shard 0 once sharding is on. Behaves identically to `with(...)` when
+    /// `shard_count() == 1`. `limit` bounds the *total* returned across shards.
+    /// Takes a read lock per shard (concurrent-safe).
+    pub fn collect_keys(&self, pattern: Option<&[u8]>, limit: Option<usize>) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        for shard in self.shards.iter() {
+            if limit.is_some_and(|l| out.len() >= l) {
+                break;
+            }
+            let remaining = limit.map(|l| l - out.len());
+            out.extend(lock_read(shard).store.collect_keys(pattern, remaining));
+        }
+        out
+    }
+
+    /// Run `f` against **each shard's** underlying `kevy_store::Store` (in
+    /// shard-index order) — the cross-shard escape hatch. The caller assembles
+    /// the merged result. Pairs with [`Self::shard_count`]. For a single key,
+    /// prefer [`Self::with_key`]; for a glob scan, prefer [`Self::collect_keys`].
+    pub fn for_each_shard<F: FnMut(&mut kevy_store::Store)>(&self, mut f: F) {
+        for shard in self.shards.iter() {
+            f(&mut lock_write(shard).store);
+        }
+    }
+
+    /// Number of keyspace shards (`== Config::shards`).
+    #[inline]
+    pub fn shard_count(&self) -> usize {
+        self.shards.len()
+    }
+
     /// Append a raw RESP-frame argument list to the shard owning its key's
     /// AOF. No-op when persistence is disabled.
     pub fn log(&self, parts: &[&[u8]]) -> io::Result<()> {
