@@ -45,7 +45,7 @@ impl<C: Commands> Shard<C> {
                 if self.commands.is_write(&args) {
                     self.bump_watch_for_dispatch(&args);
                     if self.aof.is_some() {
-                        self.log(&args);
+                        self.log_write(&args);
                     }
                     // Keyspace notification fan-out. Empty-flags
                     // short-circuit inside maybe_notify_dispatch keeps

@@ -31,13 +31,18 @@ impl Store {
         Ok(ok)
     }
 
-    /// `SET key value PX ms` — overwrites + sets TTL.
+    /// `SET key value PX ms` — overwrites + sets TTL. The AOF records an
+    /// **absolute** `PEXPIREAT` deadline (not the relative `ttl`) so the key
+    /// expires at the same wall-clock instant after a restart — a relative
+    /// `PEXPIRE` would be re-anchored to replay-time, resetting the TTL to a
+    /// fresh full duration on every restart (INC-2026-06-09).
     pub fn set_with_ttl(&self, key: &[u8], value: &[u8], ttl: Duration) -> io::Result<bool> {
         let mut g = self.lock();
         let ok = g.store.set(key, value.to_vec(), Some(ttl), false, false);
         let ms = ttl.as_millis().min(u64::MAX as u128) as u64;
+        let deadline = kevy_store::now_unix_ms().saturating_add(ms);
         commit_write(&mut g, &[b"SET", key, value])?;
-        commit_write(&mut g, &[b"PEXPIRE", key, ms.to_string().as_bytes()])?;
+        commit_write(&mut g, &[b"PEXPIREAT", key, deadline.to_string().as_bytes()])?;
         Ok(ok)
     }
 
@@ -84,13 +89,16 @@ impl Store {
         Ok(n)
     }
 
-    /// `EXPIRE key seconds`. Returns `true` if a key was touched.
+    /// `EXPIRE key seconds`. Returns `true` if a key was touched. The AOF
+    /// records an absolute `PEXPIREAT` deadline (see [`Self::set_with_ttl`])
+    /// so the TTL survives a restart unchanged.
     pub fn expire(&self, key: &[u8], ttl: Duration) -> io::Result<bool> {
         let mut g = self.lock();
         let touched = g.store.expire(key, ttl);
         if touched {
             let ms = ttl.as_millis().min(u64::MAX as u128) as u64;
-            commit_write(&mut g, &[b"PEXPIRE", key, ms.to_string().as_bytes()])?;
+            let deadline = kevy_store::now_unix_ms().saturating_add(ms);
+            commit_write(&mut g, &[b"PEXPIREAT", key, deadline.to_string().as_bytes()])?;
         }
         Ok(touched)
     }

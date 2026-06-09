@@ -550,3 +550,71 @@ fn wait_for_size_below_heartbeat(
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
+
+/// Read one RESP integer reply (`:<n>\r\n`) byte-by-byte (no buffering, so
+/// later reads on the same stream stay aligned).
+fn read_integer(s: &mut std::net::TcpStream) -> i64 {
+    let mut byte = [0u8; 1];
+    s.read_exact(&mut byte).unwrap();
+    assert_eq!(byte[0], b':', "expected RESP integer");
+    let mut n = Vec::new();
+    loop {
+        s.read_exact(&mut byte).unwrap();
+        if byte[0] == b'\r' {
+            s.read_exact(&mut byte).unwrap(); // consume \n
+            break;
+        }
+        n.push(byte[0]);
+    }
+    String::from_utf8(n).unwrap().parse().unwrap()
+}
+
+/// INC-2026-06-09 regression: a relative TTL must survive a restart at its
+/// *original* wall-clock deadline, not be reset to a fresh full duration.
+/// Before the fix, AOF replay re-anchored `PEXPIRE` to restart-time, so PTTL
+/// after restart read back the full 100 s; the fix logs an absolute
+/// `PEXPIREAT`, so the ~3 s spent down is correctly subtracted.
+#[test]
+fn relative_ttl_survives_restart_at_original_deadline() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-ttl-restart-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let nshards = 2;
+
+    let port = free_port();
+    with_runtime(port, &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"SET", b"k", b"v"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        // 100 s relative TTL — large enough that it can't actually expire
+        // during the test, so any "reset to full" is unambiguous.
+        c.write_all(&req(&[b"PEXPIRE", b"k", b"100000"])).unwrap();
+        read_reply(&mut c, b":1\r\n");
+    });
+
+    // Spend ~3 s "down" between the two runtimes.
+    std::thread::sleep(std::time::Duration::from_secs(3));
+
+    let port2 = free_port();
+    with_runtime(port2, &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"GET", b"k"])).unwrap();
+        read_reply(&mut c, b"$1\r\nv\r\n"); // value survived
+        c.write_all(&req(&[b"PTTL", b"k"])).unwrap();
+        let pttl = read_integer(&mut c);
+        // Deadline preserved: ~97 s left. A reset-to-full bug reads ~100 s.
+        assert!(
+            (0..=98_000).contains(&pttl),
+            "PTTL after restart = {pttl} ms; expected the original deadline \
+             (~97 s) minus downtime, not a reset to the full 100 s"
+        );
+        assert!(pttl > 90_000, "PTTL {pttl} ms implausibly low — key nearly gone");
+    });
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -80,6 +80,8 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"APPEND"
             | b"EXPIRE"
             | b"PEXPIRE"
+            | b"EXPIREAT"
+            | b"PEXPIREAT"
             | b"PERSIST"
             | b"FLUSHDB"
             | b"FLUSHALL"

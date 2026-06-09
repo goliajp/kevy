@@ -324,6 +324,8 @@ fn dispatch_generic<A: ArgvView + ?Sized>(
         }
         b"EXPIRE" => cmd_expire(store, args, 1000, "expire", out),
         b"PEXPIRE" => cmd_expire(store, args, 1, "pexpire", out),
+        b"EXPIREAT" => cmd_expireat(store, args, 1000, "expireat", out),
+        b"PEXPIREAT" => cmd_expireat(store, args, 1, "pexpireat", out),
         b"TTL" => cmd_ttl(store, args, true, "ttl", out),
         b"PTTL" => cmd_ttl(store, args, false, "pttl", out),
         b"PERSIST" => {

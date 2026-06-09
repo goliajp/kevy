@@ -41,6 +41,33 @@ impl Store {
         }
     }
 
+    /// `EXPIREAT`/`PEXPIREAT` semantics: set an **absolute** wall-clock
+    /// deadline (Unix epoch millis). This is the persistence-safe form —
+    /// a deadline survives restart unchanged, unlike the relative
+    /// [`Self::expire`] (whose duration is re-anchored to "now"). A
+    /// deadline already in the past deletes the key immediately (Redis
+    /// behaviour). Returns `true` iff the key existed (and was either
+    /// re-dated or deleted). The wall-clock → monotonic-`Instant`
+    /// conversion happens here so callers persist absolute time but the
+    /// hot path keeps its cheap monotonic deadline.
+    pub fn expire_at_unix_ms(&mut self, key: &[u8], deadline_ms: u64) -> bool {
+        let now = Instant::now();
+        if !self.reap(key, now) || !self.map.contains_key(key) {
+            return false;
+        }
+        let wall_now = crate::now_unix_ms();
+        if deadline_ms <= wall_now {
+            // Past deadline: delete now, just like Redis EXPIREAT in the past.
+            self.remove_entry(key);
+            return true;
+        }
+        let remaining = Duration::from_millis(deadline_ms - wall_now);
+        if let Some(e) = self.map.get_mut(key) {
+            e.expire_at_ns = pack_deadline(now + remaining);
+        }
+        true
+    }
+
     /// Cross-shard RENAME step 1: atomically remove the entry at
     /// `key` (if any), returning the `(value, ttl_ms_remaining)`. The
     /// orchestrator on the origin shard ships the result into a

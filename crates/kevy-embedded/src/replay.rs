@@ -63,6 +63,8 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
         }
         b"EXPIRE" => apply_expire(store, args, 1_000),
         b"PEXPIRE" => apply_expire(store, args, 1),
+        b"EXPIREAT" => apply_expireat(store, args, 1_000),
+        b"PEXPIREAT" => apply_expireat(store, args, 1),
         b"PERSIST" => {
             if let Some(k) = args.get(1) {
                 store.persist(k);
@@ -165,6 +167,18 @@ fn apply_expire(store: &mut Store, args: &Argv, unit_ms: u64) {
         && let Some(n) = parse_u64(t)
     {
         store.expire(k, Duration::from_millis(n.saturating_mul(unit_ms)));
+    }
+}
+
+/// `EXPIREAT`/`PEXPIREAT` replay: the argument is an **absolute** Unix
+/// timestamp, so the deadline is reconstructed unchanged regardless of when
+/// the replay runs (a past deadline drops the key). This is the persistence-
+/// stable form the write path now emits in place of relative `PEXPIRE`.
+fn apply_expireat(store: &mut Store, args: &Argv, unit_ms: u64) {
+    if let (Some(k), Some(t)) = (args.get(1), args.get(2))
+        && let Some(n) = parse_u64(t)
+    {
+        store.expire_at_unix_ms(k, n.saturating_mul(unit_ms));
     }
 }
 

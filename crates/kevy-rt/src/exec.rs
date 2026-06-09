@@ -10,7 +10,7 @@ use crate::message::{Agg, Inbound, Op, Part, PendingSlot};
 use crate::reduce::{drain_front, materialize, shard_of};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route, TxnKind};
-use kevy_resp::{ArgvView, encode_array_len};
+use kevy_resp::{Argv, ArgvView, encode_array_len};
 
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
@@ -278,6 +278,33 @@ impl<C: Commands> Shard<C> {
         }
     }
 
+    /// Like [`Self::log`] but TTL-persistence-safe. After logging `args`, if
+    /// it is a *relative*-TTL write (`EXPIRE`/`PEXPIRE`/`SETEX`/`PSETEX`/
+    /// `SET … EX|PX`) it appends an absolute `PEXPIREAT key <unix_ms>` derived
+    /// from the key's post-exec deadline. AOF replay re-anchors a relative TTL
+    /// to restart-time — resetting every key to a fresh full TTL
+    /// (INC-2026-06-09) — so the absolute follow-up overwrites that with the
+    /// original wall-clock deadline. Already-absolute writes (`EXPIREAT`/
+    /// `PEXPIREAT`) replay correctly and need no follow-up.
+    pub(crate) fn log_write<A: ArgvView + ?Sized>(&mut self, args: &A) {
+        self.log(args);
+        if !relative_ttl_write(args) {
+            return;
+        }
+        let Some(key) = args.get(1) else { return };
+        let pttl = self.store.pttl(key);
+        if pttl < 0 {
+            return; // command left no live TTL (key gone / TTL cleared)
+        }
+        let abs = kevy_store::now_unix_ms().saturating_add(pttl as u64);
+        let key = key.to_vec();
+        let mut c = Argv::with_capacity(3, 0);
+        c.push(b"PEXPIREAT");
+        c.push(&key);
+        c.push(abs.to_string().as_bytes());
+        self.log(&c);
+    }
+
     /// Fold a sub-result into its slot; emit completed replies in seq order.
     /// The `WatchCollect` / `ExecPrep` accumulators don't materialise to RESP
     /// bytes — they hand off to [`crate::exec_watch`] for the conn-state
@@ -398,4 +425,27 @@ impl<C: Commands> Shard<C> {
             Part::Reply(b"-ERR Protocol error\r\n".to_vec()),
         );
     }
+}
+
+/// Does `args` set a TTL via a *relative* duration (vs absolute `*AT`)? Such
+/// writes need an absolute `PEXPIREAT` follow-up in the AOF — see
+/// [`Shard::log_write`]. `SET … EXAT|PXAT` aren't parsed by the server's SET,
+/// so only `EX`/`PX` count here.
+fn relative_ttl_write<A: ArgvView + ?Sized>(args: &A) -> bool {
+    if args.len() < 3 {
+        return false;
+    }
+    let verb = &args[0];
+    if verb.eq_ignore_ascii_case(b"EXPIRE")
+        || verb.eq_ignore_ascii_case(b"PEXPIRE")
+        || verb.eq_ignore_ascii_case(b"SETEX")
+        || verb.eq_ignore_ascii_case(b"PSETEX")
+    {
+        return true;
+    }
+    if verb.eq_ignore_ascii_case(b"SET") {
+        return (3..args.len())
+            .any(|i| args[i].eq_ignore_ascii_case(b"EX") || args[i].eq_ignore_ascii_case(b"PX"));
+    }
+    false
 }

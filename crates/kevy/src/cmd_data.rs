@@ -298,6 +298,31 @@ pub(crate) fn cmd_expire<A: ArgvView + ?Sized>(
     );
 }
 
+/// `EXPIREAT` (unit_ms = 1000) / `PEXPIREAT` (unit_ms = 1). The argument is
+/// an **absolute** Unix timestamp (seconds / millis), so the deadline is
+/// persistence-stable — unlike relative `EXPIRE`, it survives an AOF replay
+/// or snapshot load unchanged. A timestamp already in the past deletes the
+/// key (Redis behaviour). Returns `1` if the key existed, `0` otherwise.
+pub(crate) fn cmd_expireat<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    unit_ms: i64,
+    cmd: &str,
+    out: &mut Vec<u8>,
+) {
+    if args.len() != 3 {
+        return wrong_args(out, cmd);
+    }
+    let Some(n) = arg_i64(&args[2]) else {
+        return encode_error(out, ERR_NOT_INT);
+    };
+    if store.exists(&[args[1].to_vec()]) == 0 {
+        return encode_integer(out, 0);
+    }
+    let deadline_ms = n.saturating_mul(unit_ms).max(0) as u64;
+    encode_integer(out, store.expire_at_unix_ms(&args[1], deadline_ms) as i64);
+}
+
 /// `TTL` (seconds) / `PTTL` (millis). Pass-through of the -2 / -1 sentinels.
 pub(crate) fn cmd_ttl<A: ArgvView + ?Sized>(
     store: &mut Store,

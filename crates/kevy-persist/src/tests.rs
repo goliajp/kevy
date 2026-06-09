@@ -41,9 +41,34 @@ fn snapshot_round_trip() {
         Some(&[0u8, 1, 2, 255, 254][..])
     );
     assert_eq!(dst.get(b"withttl").unwrap(), Some(&b"soon"[..]));
-    // TTL survived (stored as remaining-ms, restored as a fresh deadline).
+    // TTL survived (stored as an absolute Unix-ms deadline, v3 format).
     assert!(dst.pttl(b"withttl") > 90_000);
 
+    let _ = std::fs::remove_file(&path);
+}
+
+/// INC-2026-06-09 regression: a snapshot stores the **absolute** deadline, so
+/// time elapsed between save and load is subtracted from the restored TTL.
+/// The pre-fix v2 format stored remaining-ms and re-anchored on load, so the
+/// TTL would read back ~unchanged regardless of the gap.
+#[test]
+fn snapshot_ttl_is_absolute_across_delay() {
+    let path = temp_file("ttl-abs");
+    let mut src = Store::new();
+    src.set(b"k", b"v".to_vec(), Some(Duration::from_secs(100)), false, false);
+    save_snapshot(&src, &path).unwrap();
+
+    std::thread::sleep(Duration::from_millis(1500));
+
+    let mut dst = Store::new();
+    load_snapshot(&mut dst, &path).unwrap();
+    let pttl = dst.pttl(b"k");
+    // ~1.5 s of the 100 s elapsed while "down": deadline preserved => < 99 s.
+    assert!(
+        (0..99_000).contains(&pttl),
+        "PTTL after delayed load = {pttl} ms; absolute deadline not preserved"
+    );
+    assert!(pttl > 90_000, "PTTL {pttl} implausibly low");
     let _ = std::fs::remove_file(&path);
 }
 
@@ -426,6 +451,11 @@ fn apply_for_test(store: &mut Store, args: &Argv) {
         b"PEXPIRE" => {
             let ms: u64 = std::str::from_utf8(&args[2]).unwrap().parse().unwrap();
             store.expire(&args[1], Duration::from_millis(ms));
+        }
+        b"PEXPIREAT" => {
+            // The rewrite now emits absolute deadlines (INC-2026-06-09 fix).
+            let deadline: u64 = std::str::from_utf8(&args[2]).unwrap().parse().unwrap();
+            store.expire_at_unix_ms(&args[1], deadline);
         }
         other => panic!("unexpected verb in AOF rewrite: {:?}", String::from_utf8_lossy(other)),
     }
