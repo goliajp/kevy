@@ -47,6 +47,12 @@ pub struct Config {
     pub reaper_samples: usize,
     /// Max sample rounds per tick. Default 16.
     pub reaper_max_rounds: u32,
+    /// Auto-`BGREWRITEAOF` trigger: rewrite when the live AOF has grown by at
+    /// least this percent over its size at the previous rewrite. `0` disables
+    /// (call [`crate::Store::rewrite_aof`] manually). Default `100` (Redis).
+    pub auto_aof_rewrite_pct: u32,
+    /// Floor below which auto-rewrite is skipped. Default `64 MiB` (Redis).
+    pub auto_aof_rewrite_min_size: u64,
 }
 
 impl Default for Config {
@@ -63,6 +69,8 @@ impl Default for Config {
             reaper_interval: Duration::from_millis(100),
             reaper_samples: 20,
             reaper_max_rounds: 16,
+            auto_aof_rewrite_pct: 100,
+            auto_aof_rewrite_min_size: 64 * 1024 * 1024,
         }
     }
 }
@@ -98,6 +106,18 @@ impl Config {
     /// AOF fsync policy. Default [`AppendFsync::EverySec`].
     pub fn with_appendfsync(mut self, fsync: AppendFsync) -> Self {
         self.appendfsync = fsync;
+        self
+    }
+
+    /// Auto-`BGREWRITEAOF` thresholds: rewrite once the AOF has grown `pct`
+    /// percent past its size at the last rewrite AND is at least `min_size`
+    /// bytes. In `Background` reaper mode the check runs on the reaper tick;
+    /// in `Manual` mode it runs when you call [`crate::Store::tick`]. Pass
+    /// `pct = 0` to disable auto-rewrite (you can still call
+    /// [`crate::Store::rewrite_aof`] yourself). Defaults: 100 % / 64 MiB.
+    pub fn with_auto_aof_rewrite(mut self, pct: u32, min_size: u64) -> Self {
+        self.auto_aof_rewrite_pct = pct;
+        self.auto_aof_rewrite_min_size = min_size;
         self
     }
 

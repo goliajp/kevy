@@ -4,6 +4,37 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.9.0] — 2026-06-09
+
+Minor release: AOF maintenance + observability for embedded mode, from the
+mailrs production feedback (`kevy-product-feedback-2026-06-09`). Workspace
+1.8.1 → 1.9.0; kevy-embedded 1.1.12 → 1.1.13; kevy-client 1.7.8 → 1.7.9.
+
+### Added
+
+- **Automatic AOF rewrite in embedded mode.**
+  `Config::with_auto_aof_rewrite(pct, min_size)` triggers a `BGREWRITEAOF`-style
+  compaction when the live AOF has grown `pct` percent past its size at the
+  previous rewrite and is at least `min_size` bytes — defaults **100 % /
+  64 MiB**, matching Redis and the network server. The check rides the
+  background reaper tick (or `Store::tick` in manual reaper mode). The manual
+  `Store::rewrite_aof()` already existed and is unchanged.
+- **Embedded introspection API.**
+  `Store::info() -> KevyInfo` (keys, used_memory, aof_bytes, expire_pending,
+  evictions, expired_keys), `Store::expire_pending_count()` (live keys carrying
+  a TTL — the expire-set size), and `Store::ttl(key) -> Option<Duration>` (an
+  ergonomic wrapper over the raw `ttl_ms` PTTL sentinels). Backed by a new
+  `kevy_store::Store::ttl_pending_count()`.
+- **`docs/persistence.md`** — AOF / snapshot / fsync policy / TTL semantics /
+  rewrite & compaction / crash recovery / file-naming / embedded introspection,
+  in one place. Linked from the README.
+
+### Changed
+
+- **AOF replay now logs its wall-clock time**: `… replayed N commands from M
+  bytes in T ms (clean)`. Replay time scales with the AOF, so surfacing it
+  gives operators a baseline to watch.
+
 ## [v1.8.1] — 2026-06-09
 
 Patch release: **TTL deadlines now survive a restart.** Workspace 1.8.0 →

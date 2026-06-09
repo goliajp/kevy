@@ -197,6 +197,18 @@ impl Store {
         // peak is lifetime-cumulative; intentionally not reset.
     }
 
+    /// Count live (non-expired) keys that carry a TTL — the size of the
+    /// "expire set" Redis tracks. Useful as an introspection signal for
+    /// confirming the TTL subsystem actually registered keys. O(n) over the
+    /// keyspace; call it for diagnostics, not on the hot path.
+    pub fn ttl_pending_count(&self) -> usize {
+        let now = Instant::now();
+        self.map
+            .values()
+            .filter(|e| e.expire_at_ns.is_some() && !e.is_expired_at(now))
+            .count()
+    }
+
     // ---- persistence hooks ---------------------------------------------
 
     /// Visit every live entry as `(key, &value, ttl_ms)` for snapshotting.

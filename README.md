@@ -309,7 +309,9 @@ pattern glob), **transactions** (`MULTI` / `EXEC` / `DISCARD` / `WATCH` /
 work across the per-core shards, and `WRONGTYPE` behaves as in Redis.
 
 The full command list with valkey-parity notes is in
-[`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md).
+[`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md). Durability — AOF,
+snapshots, TTL semantics, rewrite/compaction, crash recovery, and the embedded
+introspection API — is documented in [`docs/persistence.md`](docs/persistence.md).
 
 ## Build & test
 

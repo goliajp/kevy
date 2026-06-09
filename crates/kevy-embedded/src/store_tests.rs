@@ -175,3 +175,56 @@ fn save_snapshot_then_restart() {
     assert_eq!(s2.dbsize(), 10);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn info_and_introspection() {
+    let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    s.set(b"a", b"1").unwrap();
+    s.set_with_ttl(b"b", b"2", Duration::from_secs(100)).unwrap();
+
+    let info = s.info();
+    assert_eq!(info.keys, 2);
+    assert_eq!(info.expire_pending, 1);
+    assert_eq!(info.aof_bytes, 0); // pure in-memory
+    assert_eq!(s.expire_pending_count(), 1);
+
+    assert!(s.ttl(b"b").unwrap() > Duration::from_secs(90));
+    assert_eq!(s.ttl(b"a"), None); // key exists, no TTL
+    assert_eq!(s.ttl(b"missing"), None); // no key
+}
+
+#[test]
+fn auto_aof_rewrite_compacts_redundant_writes() {
+    let dir = tmp_dir("auto-rw");
+    let s = Store::open(
+        Config::default()
+            .with_persist(&dir)
+            .with_ttl_reaper_manual()
+            .with_appendfsync(AppendFsync::Always)
+            // Aggressive thresholds so a couple hundred SETs trip it.
+            .with_auto_aof_rewrite(1, 1),
+    )
+    .unwrap();
+    // Same key overwritten many times → the AOF holds 300 redundant SETs.
+    for i in 0..300 {
+        s.set(b"hot", format!("v{i}").as_bytes()).unwrap();
+    }
+    let before = s.info().aof_bytes;
+    s.tick(); // manual mode: tick drives the auto-rewrite check
+    let after = s.info().aof_bytes;
+
+    assert!(
+        after < before,
+        "auto-rewrite should compact redundant SETs: before={before} after={after}"
+    );
+    // Latest value preserved, and it survives a real restart.
+    assert_eq!(s.get(b"hot").unwrap(), Some(b"v299".to_vec()));
+    drop(s);
+    let s2 = Store::open(
+        Config::default().with_persist(&dir).with_ttl_reaper_manual(),
+    )
+    .unwrap();
+    assert_eq!(s2.get(b"hot").unwrap(), Some(b"v299".to_vec()));
+    assert_eq!(s2.dbsize(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}

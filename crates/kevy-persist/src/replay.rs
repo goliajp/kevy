@@ -53,6 +53,9 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<()> {
     if total == 0 {
         return Ok(());
     }
+    // Replay wall-clock — AOF is an unbounded resource, so its replay time is
+    // too; surfacing it gives operators a baseline to watch it grow.
+    let start = std::time::Instant::now();
     // Skip the 9-byte AOF_MAGIC header if present. Legacy bare-RESP
     // AOFs (pre-1.2.0) parse identically from position 0. Future
     // format bumps should add a version check here.
@@ -78,7 +81,8 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<()> {
             Err(e) => break ReplayStop::CorruptFrame(format!("{e:?}")),
         }
     };
-    log_replay_summary(path, total, pos, replayed, &data[pos.min(total)..], stop);
+    let elapsed_ms = start.elapsed().as_millis();
+    log_replay_summary(path, total, pos, replayed, &data[pos.min(total)..], stop, elapsed_ms);
     Ok(())
 }
 
@@ -99,25 +103,29 @@ fn log_replay_summary(
     replayed: u64,
     remainder: &[u8],
     stop: ReplayStop,
+    elapsed_ms: u128,
 ) {
     let display = path.display();
     let dropped = total - pos;
     match stop {
         ReplayStop::Clean => {
             eprintln!(
-                "kevy: AOF {display} replayed {replayed} commands from {total} bytes (clean)"
+                "kevy: AOF {display} replayed {replayed} commands from {total} bytes \
+                 in {elapsed_ms} ms (clean)"
             );
         }
         ReplayStop::TruncatedTail => {
             eprintln!(
-                "kevy: AOF {display} replayed {replayed} commands; trailing {dropped} bytes \
+                "kevy: AOF {display} replayed {replayed} commands from {total} bytes \
+                 in {elapsed_ms} ms; trailing {dropped} bytes \
                  were a partial frame (crash mid-append, recoverable)"
             );
         }
         ReplayStop::CorruptFrame(err) => {
             let preview = preview_bytes(remainder);
             eprintln!(
-                "kevy WARN: AOF {display} replayed {replayed} commands then hit a corrupt \
+                "kevy WARN: AOF {display} replayed {replayed} commands in {elapsed_ms} ms \
+                 then hit a corrupt \
                  frame at byte {pos}; dropping the trailing {dropped} bytes. \
                  Preview: {preview}. Parser error: {err}. \
                  Common cause: non-kevy bytes got written into this file path \
