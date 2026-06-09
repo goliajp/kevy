@@ -186,6 +186,19 @@ impl Entry {
             Some(ns) => unpack_deadline(ns) <= now,
         }
     }
+
+    /// Like [`Self::is_expired_at`] but reads the clock **only when the entry
+    /// carries a TTL**. A key with no deadline (the common case) never pays
+    /// `Instant::now()` (~20–40 ns) — the win the per-access read path
+    /// (`live_entry`) is built on. Callers that already hold a `now` for a
+    /// batch (the reaper) keep using `is_expired_at` to read the clock once.
+    #[inline]
+    pub(crate) fn is_expired_now(&self) -> bool {
+        match self.expire_at_ns {
+            None => false,
+            Some(ns) => unpack_deadline(ns) <= Instant::now(),
+        }
+    }
 }
 
 // Pin the Entry layout: 32 (Value) + 8 (expire_at_ns, niche-opt) + 8 (packed)
