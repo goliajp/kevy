@@ -38,19 +38,29 @@
 
 mod aof;
 mod replay;
+mod rewrite_fmt;
 
 pub use aof::{Aof, Fsync, RewriteStats};
 pub use replay::replay_aof;
 pub use kevy_resp::{Argv, ArgvView};
-use kevy_store::{Store, Value};
+pub(crate) use rewrite_fmt::{dump_store_to_aof, estimate_multibulk_bytes, write_multibulk};
+use kevy_store::Store;
+use kevy_store::Value;
 // ZSet snapshot iterates ordered (member, score) pairs via `Value::ZSet`.
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
 /// File magic + format version. Bump `VERSION` on any layout change.
+///
+/// v2 stored each entry's TTL as **remaining millis** (relative), so a load
+/// re-anchored the deadline to load-time — a restart reset every key to a
+/// fresh full TTL (INC-2026-06-09). v3 stores the **absolute** Unix-ms
+/// deadline, so a load reconstructs the original instant. The loader still
+/// accepts v2 (treated as relative) for backward compatibility.
 const MAGIC: &[u8; 8] = b"KEVYSNAP";
-const VERSION: u8 = 2;
+const VERSION: u8 = 3;
+const VERSION_RELATIVE_TTL: u8 = 2;
 
 // Record opcodes (one per value type). Each record is:
 //   [op][ttl: u8 flag + optional u64][key][type payload]
@@ -65,7 +75,7 @@ const OP_STREAM: u8 = 6;
 /// BufWriter capacity for bulk snapshot / AOF-rewrite writes. The 8 KiB
 /// default made SAVE ~12 % of disk bandwidth (tens of thousands of small
 /// `write(2)`s); 1 MiB amortizes the syscalls toward disk speed.
-const SNAPSHOT_BUF_CAP: usize = 1 << 20;
+pub(crate) const SNAPSHOT_BUF_CAP: usize = 1 << 20;
 
 /// Write a point-in-time snapshot of `store` to `path`, atomically: data is
 /// written to `<path>.tmp`, fsynced, then renamed over `path`.
@@ -75,11 +85,15 @@ pub fn save_snapshot(store: &Store, path: &Path) -> io::Result<()> {
         let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, File::create(&tmp)?);
         w.write_all(MAGIC)?;
         w.write_all(&[VERSION])?;
+        // `snapshot_each` yields *remaining* ms; v3 persists the absolute
+        // Unix-ms deadline (now + remaining) so the TTL survives a restart.
+        let now = kevy_store::now_unix_ms();
         // `snapshot_each` is infallible; capture the first write error to surface.
         let mut err: Option<io::Error> = None;
         store.snapshot_each(|key, value, ttl| {
+            let deadline = ttl.map(|ms| now.saturating_add(ms));
             if err.is_none()
-                && let Err(e) = write_entry(&mut w, key, value, ttl)
+                && let Err(e) = write_entry(&mut w, key, value, deadline)
             {
                 err = Some(e);
             }
@@ -107,19 +121,32 @@ pub fn load_snapshot(store: &mut Store, path: &Path) -> io::Result<()> {
             "kevy snapshot: bad magic",
         ));
     }
-    if read_u8(&mut r)? != VERSION {
+    let version = read_u8(&mut r)?;
+    if version != VERSION && version != VERSION_RELATIVE_TTL {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "kevy snapshot: bad version",
         ));
     }
+    // v3 stores absolute Unix-ms deadlines; convert each to remaining ms
+    // against one `now` read so the load is internally consistent. A deadline
+    // already past becomes `Some(0)` → loaded then immediately reaped (lazy
+    // get / active reaper), matching "expired key is gone". v2 ttls are
+    // already remaining, so pass them through.
+    let absolute_ttl = version >= VERSION;
+    let now = kevy_store::now_unix_ms();
 
     loop {
         let op = read_u8(&mut r)?;
         if op == OP_EOF {
             return Ok(());
         }
-        let ttl = read_ttl(&mut r)?;
+        let raw_ttl = read_ttl(&mut r)?;
+        let ttl = if absolute_ttl {
+            raw_ttl.map(|deadline| deadline.saturating_sub(now))
+        } else {
+            raw_ttl
+        };
         let key = read_bytes(&mut r)?;
         match op {
             OP_STR => {
@@ -328,172 +355,6 @@ fn read_u64<R: Read>(r: &mut R) -> io::Result<u64> {
     r.read_exact(&mut b)?;
     Ok(u64::from_le_bytes(b))
 }
-
-
-/// Write `store`'s current state to `path` as a sequence of mutating RESP
-/// commands prefixed with [`crate::aof::AOF_MAGIC`]; flush + fsync before
-/// returning. Returns `(keys, bytes)`. The magic header is consistent with
-/// `Aof::open`'s fresh-file behavior so BGREWRITEAOF-produced files replay
-/// the same way live-appended ones do.
-pub(crate) fn dump_store_to_aof(path: &Path, store: &Store) -> io::Result<(u64, u64)> {
-    let f = File::create(path)?;
-    let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, f);
-    w.write_all(crate::aof::AOF_MAGIC)?;
-    let mut keys = 0u64;
-    let mut err: Option<io::Error> = None;
-    store.snapshot_each(|key, value, ttl_ms| {
-        if err.is_some() {
-            return;
-        }
-        if let Err(e) = write_value_as_commands(&mut w, key, value, ttl_ms) {
-            err = Some(e);
-        } else {
-            keys += 1;
-        }
-    });
-    if let Some(e) = err {
-        return Err(e);
-    }
-    w.flush()?;
-    let inner = w
-        .into_inner()
-        .map_err(|e| io::Error::other(e.to_string()))?;
-    let bytes = inner.metadata().map(|m| m.len()).unwrap_or(0);
-    inner.sync_all()?;
-    Ok((keys, bytes))
-}
-
-/// Emit one (or two, if TTL'd) RESP write commands that, when replayed,
-/// reconstruct `key`'s `value` and TTL exactly.
-fn write_value_as_commands<W: Write>(
-    w: &mut W,
-    key: &[u8],
-    value: &Value,
-    ttl_ms: Option<u64>,
-) -> io::Result<()> {
-    match value {
-        Value::Str(s) => {
-            let argv = Argv::from(vec![b"SET".to_vec(), key.to_vec(), s.to_vec()]);
-            write_multibulk(w, &argv)?;
-        }
-        Value::Hash(h) => {
-            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + h.len() * 2);
-            argv.push(b"HSET".to_vec());
-            argv.push(key.to_vec());
-            for (f, v) in h.iter() {
-                argv.push(f.to_vec());
-                argv.push(v.clone());
-            }
-            write_multibulk(w, &Argv::from(argv))?;
-        }
-        Value::List(l) => {
-            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + l.len());
-            argv.push(b"RPUSH".to_vec());
-            argv.push(key.to_vec());
-            for v in l.iter() {
-                argv.push(v.clone());
-            }
-            write_multibulk(w, &Argv::from(argv))?;
-        }
-        Value::Set(s) => {
-            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + s.len());
-            argv.push(b"SADD".to_vec());
-            argv.push(key.to_vec());
-            for m in s.iter() {
-                argv.push(m.to_vec());
-            }
-            write_multibulk(w, &Argv::from(argv))?;
-        }
-        Value::ZSet(z) => {
-            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + z.ordered().count() * 2);
-            argv.push(b"ZADD".to_vec());
-            argv.push(key.to_vec());
-            for (m, sc) in z.ordered() {
-                argv.push(fmt_zset_score(sc));
-                argv.push(m.to_vec());
-            }
-            write_multibulk(w, &Argv::from(argv))?;
-        }
-        Value::Stream(s) => {
-            // One XADD per entry — slow on huge streams but correct.
-            // Sprint A trade-off; v2-7c can group MAXLEN once and pump
-            // multi-entry XADD batches once the parser handles them.
-            for (id, fv) in s.iter_entries() {
-                let mut argv: Vec<Vec<u8>> = Vec::with_capacity(3 + fv.len() * 2);
-                argv.push(b"XADD".to_vec());
-                argv.push(key.to_vec());
-                argv.push(id.encode());
-                for (f, v) in fv {
-                    argv.push(f.to_vec());
-                    argv.push(v.to_vec());
-                }
-                write_multibulk(w, &Argv::from(argv))?;
-            }
-        }
-    }
-    if let Some(ms) = ttl_ms {
-        let argv = Argv::from(vec![
-            b"PEXPIRE".to_vec(),
-            key.to_vec(),
-            ms.to_string().into_bytes(),
-        ]);
-        write_multibulk(w, &argv)?;
-    }
-    Ok(())
-}
-
-/// Format a sorted-set score the way Redis does (no trailing `.0` for
-/// integers; up to 17 sig figs for non-integer doubles). Tests want the
-/// replay-roundtrip to compare byte-equal, so don't introduce locale
-/// differences (`format!` is locale-free here).
-fn fmt_zset_score(s: f64) -> Vec<u8> {
-    if s.is_finite() && s == s.trunc() && s.abs() < 1e17 {
-        format!("{}", s as i64).into_bytes()
-    } else {
-        format!("{s:.17}").into_bytes()
-    }
-}
-
-/// Cheap byte-count estimator for a single multi-bulk frame:
-/// `*<n>\r\n` + per-arg `$<len>\r\n<bytes>\r\n`. No allocation, no
-/// double-pass — accurate to within a couple of bytes per arg.
-pub(crate) fn estimate_multibulk_bytes<A: ArgvView + ?Sized>(args: &A) -> u64 {
-    let mut n: u64 = 3 + decimal_digits(args.len() as u64) as u64;
-    for i in 0..args.len() {
-        let a = &args[i];
-        n += 3 + decimal_digits(a.len() as u64) as u64 + a.len() as u64 + 2;
-    }
-    n
-}
-
-#[inline]
-fn decimal_digits(mut x: u64) -> u32 {
-    if x == 0 {
-        return 1;
-    }
-    let mut d = 0;
-    while x > 0 {
-        d += 1;
-        x /= 10;
-    }
-    d
-}
-
-
-pub(crate) fn write_multibulk<W: Write, A: ArgvView + ?Sized>(
-    w: &mut W,
-    args: &A,
-) -> io::Result<()> {
-    write!(w, "*{}\r\n", args.len())?;
-    for i in 0..args.len() {
-        let a = &args[i];
-        write!(w, "${}\r\n", a.len())?;
-        w.write_all(a)?;
-        w.write_all(b"\r\n")?;
-    }
-    Ok(())
-}
-
 
 #[cfg(test)]
 mod tests;

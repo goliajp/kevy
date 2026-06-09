@@ -202,7 +202,7 @@ impl<C: Commands> Shard<C> {
         // default), so the steady-state cost is two predicted branches.
         self.bump_watch_for_dispatch(args);
         if self.aof.is_some() {
-            self.log(args);
+            self.log_write(args);
         }
         self.maybe_notify_dispatch(args);
         // BLOCK wake: if this write targets a key a waiter is parked on,

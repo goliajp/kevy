@@ -4,6 +4,40 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.8.1] — 2026-06-09
+
+Patch release: **TTL deadlines now survive a restart.** Workspace 1.8.0 →
+1.8.1; kevy-embedded 1.1.11 → 1.1.12; kevy-client 1.7.7 → 1.7.8. Reported by
+the mailrs production deployment (INC-2026-06-09).
+
+### Fixed
+
+- **A key's TTL was reset to a fresh full duration on every restart.** TTL was
+  persisted as a *relative* `PEXPIRE <ms>` in the AOF (and as remaining-ms in
+  the binary snapshot), so AOF replay / snapshot load re-anchored the deadline
+  to load-time. A key set with a 300 s TTL, after a restart hours later, came
+  back with a fresh 300 s instead of expiring at its original instant — so a
+  cache entry could outlive its intended lifetime indefinitely across frequent
+  restarts (it never expired from the reader's point of view). In-memory TTL
+  (within a single process lifetime) was always correct; only persistence was
+  affected.
+  - **All persistence paths now record an absolute Unix-ms deadline.** The
+    embedded `set_with_ttl`/`expire` log `PEXPIREAT`; the server's AOF append
+    follows a relative TTL write (`EXPIRE`/`PEXPIRE`/`SETEX`/`PSETEX`/
+    `SET … EX|PX`) with an absolute `PEXPIREAT` correction; `BGREWRITEAOF`
+    emits `PEXPIREAT`; the binary snapshot stores the absolute deadline
+    (format v3). Load/replay subtracts elapsed wall-clock and drops keys whose
+    deadline already passed.
+  - Backward-compatible: a v2 snapshot (relative TTL) and old relative
+    `PEXPIRE` AOF entries still load (treated as relative-from-load, the prior
+    behaviour) — no migration needed; new writes are absolute.
+
+### Added
+
+- **`EXPIREAT` / `PEXPIREAT` commands** (absolute Unix-time expiry, matching
+  Redis). Single-key routed; replicated to the AOF. These are also the wire
+  form the persistence layer now uses internally.
+
 ## [v1.8.0] — 2026-06-07
 
 Minor release: io_uring is now the default reactor on Linux, with an
