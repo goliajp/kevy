@@ -80,7 +80,38 @@ fn main() {
     // single-op path) — fsync-rate-bound, so run far fewer ops to stay bounded.
     bench("aof-always", &s3, (n / 20).max(50_000), &keys);
 
+    // TTL'd-key GET: the mailrs path (every cache key has a TTL). With the
+    // background reaper the cached clock is trusted (no per-get Instant::now);
+    // manual mode reads a fresh clock per get — the gap is the cached-clock win.
+    bench_ttl_get("ttl GET (cached clk)", false, n, &keys); // background reaper
+    bench_ttl_get("ttl GET (fresh clk) ", true, n, &keys); // manual reaper
+
     drop((s1, s2, s3));
     let _ = std::fs::remove_dir_all(&dir2);
     let _ = std::fs::remove_dir_all(&dir3);
+}
+
+/// GET throughput over keys that all carry a (long) TTL — the mailrs cache
+/// shape. `manual_reaper` toggles whether the store trusts the cached clock
+/// (background) or reads a fresh clock per get (manual).
+fn bench_ttl_get(label: &str, manual_reaper: bool, n: usize, keys: &[Vec<u8>]) {
+    let cfg = if manual_reaper {
+        Config::default().with_ttl_reaper_manual()
+    } else {
+        Config::default() // background reaper (default) → cached clock trusted
+    };
+    let store = Store::open(cfg).unwrap();
+    let ttl = std::time::Duration::from_secs(3600); // never expires during the run
+    for k in keys {
+        store.set_with_ttl(k, VAL, ttl).unwrap();
+    }
+    let t = Instant::now();
+    let mut hits = 0usize;
+    for i in 0..n {
+        if store.get(&keys[i % KEYS]).unwrap().is_some() {
+            hits += 1;
+        }
+    }
+    std::hint::black_box(hits);
+    println!("[{label}] GET {:>10.0} ops/s", n as f64 / t.elapsed().as_secs_f64());
 }

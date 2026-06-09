@@ -138,9 +138,10 @@ impl Store {
     /// `get` = 2). The two-phase shape (decide, then mutate/fetch) keeps the
     /// borrow checker happy without an owning key clone.
     pub(crate) fn live_entry(&mut self, key: &[u8]) -> Option<&Entry> {
+        let (uc, cn) = (self.cached_clock, self.cached_ns);
         let expired = match self.map.get(key) {
             None => return None,
-            Some(e) => e.is_expired_now(),
+            Some(e) => e.is_expired(uc, cn),
         };
         if expired {
             self.remove_entry(key);
@@ -163,9 +164,10 @@ impl Store {
     /// Read-modify commands (INCR/APPEND/…) get the entry once and mutate in
     /// place, preserving any TTL on it.
     pub(crate) fn live_entry_mut(&mut self, key: &[u8]) -> Option<&mut Entry> {
+        let (uc, cn) = (self.cached_clock, self.cached_ns);
         let expired = match self.map.get(key) {
             None => return None,
-            Some(e) => e.is_expired_now(),
+            Some(e) => e.is_expired(uc, cn),
         };
         if expired {
             self.remove_entry(key);

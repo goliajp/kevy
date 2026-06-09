@@ -14,7 +14,7 @@ use crate::metric::KevyMetric;
 use kevy_persist::{Aof, Argv, RewriteStats, load_snapshot, replay_aof, save_snapshot};
 use kevy_store::{ExpireStats, StoreError};
 
-use crate::config::Config;
+use crate::config::{Config, TtlReaperMode};
 use crate::pubsub::PubsubBus;
 
 /// The embedded keyspace.
@@ -261,6 +261,10 @@ impl Store {
 fn init_persistent_store(config: &Config) -> io::Result<(kevy_store::Store, Option<Aof>)> {
     let mut store = kevy_store::Store::new();
     store.set_max_memory(config.maxmemory, config.eviction_policy);
+    // Trust the cached clock for lazy expiry only when the background reaper is
+    // refreshing it every tick; in manual mode nothing refreshes it, so each
+    // access reads a fresh clock (lazy expiry stays correct without a tick).
+    store.set_cached_clock(matches!(config.ttl_reaper, TtlReaperMode::Background));
     let aof = if let Some(dir) = &config.data_dir {
         std::fs::create_dir_all(dir)?;
         let snap_path = dir.join(&config.snapshot_filename);
