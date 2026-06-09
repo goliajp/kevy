@@ -114,9 +114,16 @@ fn background_reaper_thread_drops_expired_keys() {
     )
     .unwrap();
     s.set_with_ttl(b"k", b"v", Duration::from_millis(5)).unwrap();
-    std::thread::sleep(Duration::from_millis(120));
-    // The active reaper should have caught it without anyone reading.
-    let _ = s.get(b"k").unwrap(); // either way, key should now be gone
+    // The active reaper (20ms interval) reclaims the expired key on its own —
+    // reads no longer reap. Poll for it (bounded) rather than racing a fixed
+    // sleep against the reaper thread's scheduling on a loaded CI box.
+    for _ in 0..200 {
+        if s.dbsize() == 0 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(s.get(b"k").unwrap(), None); // expired → gone
     assert_eq!(s.dbsize(), 0);
 }
 
