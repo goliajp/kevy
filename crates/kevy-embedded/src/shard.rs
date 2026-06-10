@@ -2,10 +2,16 @@
 //! bring-up (load / migrate). Each shard is a fully independent
 //! `kevy_store::Store` + AOF behind its own lock (shared-nothing), so
 //! concurrent access on different shards never contends. `n == 1` is the
-//! original single-shard layout (single `aof-0.aof`, no `shards.meta`) — zero
-//! change, zero migration. `n > 1` keeps per-shard `aof-{i}.aof` + a
-//! `shards.meta` recording the count; the first open at `n > 1` re-shards a
-//! legacy single AOF into per-shard files.
+//! original single-shard layout (one snapshot + one AOF under the configured
+//! filenames, `dump-0.rdb` / `aof-0.aof` by default). `n > 1` keeps per-shard
+//! `aof-{i}.aof` + a `shards.meta` recording the count; the first open at
+//! `n > 1` re-shards a legacy single AOF into per-shard files.
+//!
+//! Dir interop with the `kevy` server: under the default filenames a
+//! single-shard dir is byte-identical to the server's 1-thread layout, and
+//! `n == 1` records `shards.meta` too so neither side needs inference.
+//! Custom `with_aof_filename` / `with_snapshot_filename` names opt out of
+//! that interop (the dir stays meta-less — a server can't find the files).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -53,6 +59,28 @@ fn snapshot_path(dir: &Path, config: &Config, i: usize, n: usize) -> PathBuf {
     }
 }
 
+/// Highest `dump-{i}.rdb` / `aof-{i}.aof` index + 1 found in `dir`, or 0.
+/// Mirrors the server runtime's inference for meta-less dirs so an
+/// unstamped multi-shard dir is never mistaken for the single-file layout.
+fn infer_files_n(dir: &Path) -> usize {
+    let mut n = 0usize;
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let idx = name
+            .strip_prefix("dump-")
+            .and_then(|r| r.strip_suffix(".rdb"))
+            .or_else(|| name.strip_prefix("aof-").and_then(|r| r.strip_suffix(".aof")));
+        if let Some(i) = idx.and_then(|s| s.parse::<usize>().ok()) {
+            n = n.max(i + 1);
+        }
+    }
+    n
+}
+
 fn fresh_keyspace(config: &Config) -> Keyspace {
     let mut s = Keyspace::new();
     s.set_max_memory(config.maxmemory, config.eviction_policy);
@@ -75,17 +103,33 @@ pub(crate) fn build_shards(config: &Config) -> io::Result<Vec<Arc<RwLock<Inner>>
 
     let meta_path = dir.join("shards.meta");
     let prev = read_shards_meta(&meta_path);
+    // Under the default filenames the n==1 layout coincides with shard 0's,
+    // so the dir is server-readable; custom names opt out of that interop
+    // and stay meta-less (a meta would point the server at files that
+    // don't exist).
+    let sharded_names =
+        config.snapshot_filename == "dump-0.rdb" && config.aof_filename == "aof-0.aof";
     // The embedded store always routes by KevyHash; a dir written by a
     // slots-routing server re-shards (losslessly) on first embedded open.
     let same_layout = match prev {
         Some(m) => m.n == n && m.routing == Routing::KevyHash,
-        None => n == 1, // no meta + n==1 = the untouched single-file layout
+        // No meta + n==1: the single-file layout — unless the files say
+        // multi-shard (a meta-less pre-1.5 server dir). Loading only
+        // shard 0 of those silently dropped (k-1)/k of the keyspace.
+        None => n == 1 && infer_files_n(&dir) <= 1,
     };
 
     if same_layout {
         load_in_place(&dir, config, n, &mut stores)?;
+        if n > 1 || sharded_names {
+            write_shards_meta(&meta_path, ShardsMeta { n, routing: Routing::KevyHash })?;
+        }
     } else {
-        reshard(&dir, config, n, prev.map(|m| m.n), &mut stores)?;
+        let src_n = prev.map(|m| m.n).or_else(|| {
+            let k = infer_files_n(&dir);
+            (k > 1).then_some(k)
+        });
+        reshard(&dir, config, n, src_n, &mut stores)?;
         // Always record the new layout — including n == 1: a stale meta
         // from a larger prior n would otherwise trigger a second re-shard
         // next open, whose sources were already renamed to `.premigration`
