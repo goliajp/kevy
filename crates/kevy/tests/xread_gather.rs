@@ -82,12 +82,16 @@ struct Server {
 
 impl Server {
     fn start() -> Self {
+        Self::start_in(std::env::temp_dir().join(format!("kevy-xrg-{}", std::process::id())))
+    }
+
+    /// Start against an existing data dir (restart-survival tests).
+    fn start_in(dir: std::path::PathBuf) -> Self {
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .unwrap()
             .local_addr()
             .unwrap()
             .port();
-        let dir = std::env::temp_dir().join(format!("kevy-xrg-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let st = stop.clone();
@@ -106,6 +110,15 @@ impl Server {
         }
         Self { port, dir, stop, handle: Some(handle) }
     }
+    /// Stop the runtime but keep the data dir (for reopen tests).
+    fn shutdown_keep_dir(mut self) -> std::path::PathBuf {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+        std::mem::take(&mut self.dir)
+    }
+
     fn connect(&self) -> std::net::TcpStream {
         // Retry: the listener may not be accepting the instant start() returns.
         for _ in 0..400 {
@@ -125,7 +138,9 @@ impl Drop for Server {
         if let Some(h) = self.handle.take() {
             let _ = h.join();
         }
-        let _ = std::fs::remove_dir_all(&self.dir);
+        if self.dir.as_os_str() != "" {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 }
 
@@ -202,4 +217,99 @@ fn xread_multistream_count_is_honoured_per_stream() {
     assert!(reply.starts_with(b"*2\r\n"), "expected two streams, got {s:?}");
     // Only id 1-0 from each (COUNT 1), not 2-0 / 3-0.
     assert!(s.contains("1-0") && !s.contains("2-0") && !s.contains("3-0"), "COUNT not honoured: {s:?}");
+}
+
+#[test]
+fn xreadgroup_multistream_crossshard_returns_all_streams() {
+    let _s = serial();
+    let srv = Server::start();
+    let mut c = srv.connect();
+    // Two streams (hashing to different shards at nshards=8), one group each.
+    for st in ["ga", "gb"] {
+        c.write_all(&req(&[b"XADD", st.as_bytes(), b"1-0", b"f", b"v1"])).unwrap();
+        let _ = read_reply(&mut c);
+        c.write_all(&req(&[b"XGROUP", b"CREATE", st.as_bytes(), b"grp", b"0"])).unwrap();
+        let _ = read_reply(&mut c);
+    }
+    // `>` over both streams: the regression was reading only the first
+    // STREAMS key's shard and silently dropping the other stream.
+    c.write_all(&req(&[
+        b"XREADGROUP", b"GROUP", b"grp", b"alice", b"STREAMS", b"ga", b"gb", b">", b">",
+    ]))
+    .unwrap();
+    let reply = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&reply);
+    assert!(reply.starts_with(b"*2\r\n"), "expected both streams, got {s:?}");
+    assert!(s.contains("ga") && s.contains("gb"), "missing a stream: {s:?}");
+
+    // Both deliveries are now pending: an id-mode replay (PEL) per stream
+    // must show 1-0 on each — proving the remote shard's PEL was updated.
+    c.write_all(&req(&[
+        b"XREADGROUP", b"GROUP", b"grp", b"alice", b"STREAMS", b"ga", b"gb", b"0", b"0",
+    ]))
+    .unwrap();
+    let reply = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&reply);
+    assert!(reply.starts_with(b"*2\r\n"), "expected both PELs, got {s:?}");
+    assert!(s.matches("1-0").count() >= 2, "PEL missing on a shard: {s:?}");
+
+    // A second `>` read returns nothing new on either stream.
+    c.write_all(&req(&[
+        b"XREADGROUP", b"GROUP", b"grp", b"alice", b"STREAMS", b"ga", b"gb", b">", b">",
+    ]))
+    .unwrap();
+    assert_eq!(read_reply(&mut c), b"*-1\r\n");
+}
+
+#[test]
+fn xreadgroup_multistream_missing_group_errors() {
+    let _s = serial();
+    let srv = Server::start();
+    let mut c = srv.connect();
+    for st in ["ha", "hb"] {
+        c.write_all(&req(&[b"XADD", st.as_bytes(), b"1-0", b"f", b"v"])).unwrap();
+        let _ = read_reply(&mut c);
+    }
+    // Group exists on neither stream → NOGROUP error (first error wins),
+    // matching the single-stream form.
+    c.write_all(&req(&[
+        b"XREADGROUP", b"GROUP", b"nogrp", b"alice", b"STREAMS", b"ha", b"hb", b">", b">",
+    ]))
+    .unwrap();
+    let reply = read_reply(&mut c);
+    assert!(reply.starts_with(b"-NOGROUP"), "{:?}", String::from_utf8_lossy(&reply));
+}
+
+#[test]
+fn xreadgroup_gather_pel_survives_aof_restart() {
+    let _s = serial();
+    let srv = Server::start();
+    let mut c = srv.connect();
+    for st in ["pa", "pb"] {
+        c.write_all(&req(&[b"XADD", st.as_bytes(), b"1-0", b"f", b"v"])).unwrap();
+        let _ = read_reply(&mut c);
+        c.write_all(&req(&[b"XGROUP", b"CREATE", st.as_bytes(), b"grp", b"0"])).unwrap();
+        let _ = read_reply(&mut c);
+    }
+    // Cross-shard `>` delivery registers 1-0 in each stream's PEL — on its
+    // owning shard, AOF-logged there as the rewritten single-stream form.
+    c.write_all(&req(&[
+        b"XREADGROUP", b"GROUP", b"grp", b"alice", b"STREAMS", b"pa", b"pb", b">", b">",
+    ]))
+    .unwrap();
+    assert!(read_reply(&mut c).starts_with(b"*2\r\n"));
+    drop(c);
+
+    // Restart against the same dir: AOF replay must rebuild both PELs.
+    let dir = srv.shutdown_keep_dir();
+    let srv2 = Server::start_in(dir);
+    let mut c2 = srv2.connect();
+    c2.write_all(&req(&[
+        b"XREADGROUP", b"GROUP", b"grp", b"alice", b"STREAMS", b"pa", b"pb", b"0", b"0",
+    ]))
+    .unwrap();
+    let reply = read_reply(&mut c2);
+    let s = String::from_utf8_lossy(&reply);
+    assert!(reply.starts_with(b"*2\r\n"), "expected both PELs after restart, got {s:?}");
+    assert!(s.matches("1-0").count() >= 2, "PEL lost across restart: {s:?}");
 }
