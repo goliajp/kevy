@@ -260,12 +260,23 @@ pub(crate) fn drain_front(conn: &mut Conn) {
 /// hash so a cross-shard routing change doesn't require rehashing the store.
 ///
 /// `n == 1` short-circuits to 0 (every key is local; common when running
-/// `--threads 1` benchmarks). For `n > 1` use `kevy_hash::KevyHash` (FxFmix —
-/// word-at-a-time, ~4× faster than the previous FNV-1a byte loop).
+/// `--threads 1` benchmarks). Two routing schemes (`slots`):
+///
+/// - `false` (default): `kevy_hash::KevyHash` (FxFmix — word-at-a-time,
+///   ~4× faster than the previous FNV-1a byte loop).
+/// - `true` (cluster mode): Redis-cluster slots — `key_hash_slot` (CRC16 of
+///   the `{hashtag}` & 16383) then [`slot_to_shard`], so external cluster
+///   clients can compute key placement themselves.
+///
+/// The scheme is a startup-time property of the data dir (`shards.meta`),
+/// never flipped at runtime.
 #[inline]
-pub(crate) fn shard_of(key: &[u8], n: usize) -> usize {
+pub(crate) fn shard_of(key: &[u8], n: usize, slots: bool) -> usize {
     if n == 1 {
         return 0;
+    }
+    if slots {
+        return slot_to_shard(kevy_hash::key_hash_slot(key), n);
     }
     let h = key.kevy_hash();
     // Power-of-two n hits the cheap mask path; otherwise modulo.
@@ -274,4 +285,12 @@ pub(crate) fn shard_of(key: &[u8], n: usize) -> usize {
     } else {
         (h as usize) % n
     }
+}
+
+/// Owner shard of a cluster `slot` under the contiguous even split: shard `i`
+/// owns `[ceil(i·16384/n), ceil((i+1)·16384/n))`, for which `(slot·n) >> 14`
+/// is the exact inverse (16384 = 2¹⁴ — multiply + shift, no division).
+#[inline]
+pub(crate) fn slot_to_shard(slot: u16, n: usize) -> usize {
+    (slot as usize * n) >> 14
 }

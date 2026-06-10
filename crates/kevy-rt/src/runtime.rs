@@ -57,6 +57,10 @@ pub struct Runtime<C: Commands> {
     slowlog_slower_than_micros: i64,
     /// `[slowlog].max_len`. Per-shard cap.
     slowlog_max_len: u32,
+    /// Single-node cluster mode: slot-based key routing (CRC16 `{hashtag}`
+    /// → contiguous ranges) + one deterministic extra listener per shard at
+    /// `cluster_port_base + id`. `None` = off (default, zero change).
+    cluster_port_base: Option<u16>,
 }
 
 impl<C: Commands> Runtime<C> {
@@ -77,7 +81,19 @@ impl<C: Commands> Runtime<C> {
             tick_check_every: 256,
             slowlog_slower_than_micros: -1,
             slowlog_max_len: 128,
+            cluster_port_base: None,
         }
+    }
+
+    /// Enable single-node cluster mode: keys route by Redis-cluster slot
+    /// (CRC16 `{hashtag}` & 16383, contiguous even ranges) and every shard
+    /// `i` binds a second, deterministic listener at `port_base + i` that
+    /// answers wrong-shard keys with `-MOVED` instead of forwarding. The
+    /// SO_REUSEPORT listener on the main port keeps today's full
+    /// forward-anywhere behaviour for non-cluster clients.
+    pub fn with_cluster(mut self, port_base: u16) -> Self {
+        self.cluster_port_base = Some(port_base);
+        self
     }
 
     /// SLOWLOG tuning (`[slowlog]` config section). Default
@@ -197,6 +213,7 @@ impl<C: Commands> Runtime<C> {
             shards.push(Shard {
                 id,
                 nshards: n,
+                slot_routing: self.cluster_port_base.is_some(),
                 store,
                 commands: self.commands.clone(),
                 poller: Poller::new()?,

@@ -17,7 +17,7 @@
 //!   `start_command_at_seq`.
 
 use crate::message::{Agg, DispatchMeta, Inbound, Op, Part, PendingSlot, SmallReply};
-use crate::reduce::{drain_front, shard_of};
+use crate::reduce::drain_front;
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route};
 use kevy_resp::{Argv, ArgvView, RespVersion, encode_array_len};
@@ -37,7 +37,7 @@ impl<C: Commands> Shard<C> {
         for i in 1..args.len() {
             let key = &args[i];
             by_shard
-                .entry(shard_of(key, self.nshards))
+                .entry(self.shard_of(key))
                 .or_default()
                 .push(key.to_vec());
         }
@@ -167,7 +167,7 @@ impl<C: Commands> Shard<C> {
         let mut by_shard: HashMap<usize, Vec<(Vec<u8>, u64)>> = HashMap::new();
         for (k, v) in watched {
             by_shard
-                .entry(shard_of(&k, self.nshards))
+                .entry(self.shard_of(&k))
                 .or_default()
                 .push((k, v));
         }
@@ -312,7 +312,7 @@ impl<C: Commands> Shard<C> {
                 self.start_single_at_seq(conn_id, seq, args, self.id, is_quit, meta)
             }
             Route::Single(idx) => {
-                let shard = shard_of(&args[idx], self.nshards);
+                let shard = self.shard_of(&args[idx]);
                 let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
                 self.start_single_at_seq(conn_id, seq, args, shard, is_quit, meta)
             }
