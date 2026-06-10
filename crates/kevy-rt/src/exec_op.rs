@@ -258,12 +258,14 @@ impl<C: Commands> Shard<C> {
                 // The XREADGROUP form mutates group state (PEL /
                 // last-delivered) — run the same post-write housekeeping
                 // (AOF, WATCH bump, notify) the Route::Single path gets,
-                // against the rewritten single-stream argv. The key sits
-                // right after STREAMS in the fixed rewrite shape.
+                // against the rewritten single-stream argv. `build_xread_
+                // targets` emits a fixed `… STREAMS <key> <cursor>` tail, so
+                // the key is always the second-to-last arg — derive it
+                // directly. A token search for "STREAMS" would mis-fire on a
+                // group/consumer literally named "streams" (a legal Redis
+                // name) and point the WATCH bump / notify at the wrong key.
                 if write {
-                    let key_idx = (0..argv.len())
-                        .find(|&j| argv[j].eq_ignore_ascii_case(b"STREAMS"))
-                        .map(|j| (j + 1) as u8);
+                    let key_idx = (argv.len() >= 2).then(|| (argv.len() - 2) as u8);
                     let meta = DispatchMeta { is_write: true, wake_idx: None, key_idx };
                     self.post_write_housekeeping(&argv, meta);
                 }
