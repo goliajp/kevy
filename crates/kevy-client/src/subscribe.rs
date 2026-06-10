@@ -250,8 +250,9 @@ impl Subscriber {
 
     /// Block until the next published `Message` / `Pmessage` arrives,
     /// silently skipping subscription-acknowledgement frames
-    /// ([`PubsubEvent::Subscribe`] / [`Unsubscribe`] / [`Psubscribe`] /
-    /// [`Punsubscribe`]) along the way.
+    /// ([`PubsubEvent::Subscribe`] / [`PubsubEvent::Unsubscribe`] /
+    /// [`PubsubEvent::Psubscribe`] / [`PubsubEvent::Punsubscribe`]) along
+    /// the way.
     ///
     /// This is the form most callers want — almost no consumer of
     /// pubsub needs to see the ack frames (they're a wire-protocol

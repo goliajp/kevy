@@ -303,6 +303,29 @@ fn map_values_iter() {
 }
 
 #[test]
+fn map_iter_mut_writes_visible_via_get() {
+    let mut m = KevyMap::<u64, u64>::new();
+    assert!(m.iter_mut().next().is_none()); // cap == 0 path
+
+    for i in 0..50u64 {
+        m.insert(i, i);
+    }
+    for i in (0..50u64).step_by(2) {
+        m.remove(&i); // tombstones must be skipped, not yielded
+    }
+    let mut seen = 0usize;
+    for (&k, v) in m.iter_mut() {
+        assert_eq!(k % 2, 1);
+        *v += 100;
+        seen += 1;
+    }
+    assert_eq!(seen, 25);
+    for i in (1..50u64).step_by(2) {
+        assert_eq!(m.get(&i), Some(&(i + 100)));
+    }
+}
+
+#[test]
 fn map_default_is_empty() {
     let m: KevyMap<u64, u64> = KevyMap::default();
     assert!(m.is_empty());

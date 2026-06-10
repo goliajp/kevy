@@ -47,6 +47,47 @@ fn nop_round_trips() {
 }
 
 #[test]
+fn timeout_fires_after_elapsing() {
+    let Some(mut ring) = ring_or_skip(8) else {
+        return;
+    };
+    const ETIME: i32 = 62;
+    let ts = KernelTimespec::from_millis(5);
+    // SAFETY: `ts` outlives the wait below (reaped before it drops).
+    assert!(unsafe { ring.prep_timeout(&ts, 0x71) });
+    let start = std::time::Instant::now();
+    ring.submit_and_wait(1).unwrap();
+    let mut got = None;
+    let n = ring.for_each_completion(|c| got = Some(c));
+    assert_eq!(n, 1);
+    let c = got.expect("one completion");
+    assert_eq!(c.user_data, 0x71);
+    assert_eq!(c.res, -ETIME); // plain expiry, not cancellation
+    assert!(start.elapsed() >= std::time::Duration::from_millis(5));
+}
+
+#[test]
+fn timeout_bounds_a_wait_alongside_a_pending_read() {
+    let Some(mut ring) = ring_or_skip(8) else {
+        return;
+    };
+    // A pipe with no writer activity: the read SQE stays pending forever, so
+    // only the timeout can satisfy submit_and_wait(1) — exactly the parked-
+    // reactor shape (waker read + bounded timeout).
+    let (reader, _writer) = std::io::pipe().unwrap();
+    let mut buf = [0u8; 8];
+    // SAFETY: buf and ts outlive the wait; both completions reaped below.
+    assert!(unsafe { ring.prep_read(reader.as_raw_fd(), buf.as_mut_ptr(), 8, 0x72) });
+    let ts = KernelTimespec::from_millis(5);
+    assert!(unsafe { ring.prep_timeout(&ts, 0x73) });
+    ring.submit_and_wait(1).unwrap();
+    let mut datas = Vec::new();
+    ring.for_each_completion(|c| datas.push(c.user_data));
+    assert!(datas.contains(&0x73), "timeout CQE should arrive, got {datas:?}");
+    assert!(!datas.contains(&0x72), "read must still be pending");
+}
+
+#[test]
 fn reads_a_file() {
     let Some(mut ring) = ring_or_skip(8) else {
         return;

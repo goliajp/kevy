@@ -53,6 +53,11 @@ pub(crate) struct Conn {
     /// stays open and registered with the poller; only command execution
     /// is gated.
     pub(crate) blocked: bool,
+    /// Accepted on this shard's per-shard cluster listener (vs the shared
+    /// SO_REUSEPORT compat port). Cluster conns get `-MOVED` for wrong-shard
+    /// single-key commands instead of transparent forwarding. Always false
+    /// when cluster mode is off.
+    pub(crate) cluster: bool,
 }
 
 impl Conn {
@@ -73,6 +78,7 @@ impl Conn {
             watched: Vec::new(),
             proto: RespVersion::default(),
             blocked: false,
+            cluster: false,
         }
     }
 }

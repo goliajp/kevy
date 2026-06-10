@@ -369,14 +369,18 @@ impl NotificationFlags {
 }
 
 /// `[slowlog]` section — controls the per-shard slow-command ring
-/// buffer surfaced by `SLOWLOG GET/LEN/RESET`. Defaults match Redis:
-/// record any command slower than 10 ms, keep the last 128 entries
-/// per shard.
+/// buffer surfaced by `SLOWLOG GET/LEN/RESET`. Default is OFF
+/// (`slower_than_micros = -1`) so the hot path never pays the
+/// `Instant::now()` pair around dispatch (~30 ns/op, ≈9 % at 3 M
+/// ops/s). To enable Redis-style 10 ms tracking, set
+/// `slower_than_micros = 10000` in `[slowlog]` or run
+/// `CONFIG SET slowlog-log-slower-than 10000`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlowlogSection {
-    /// Record any command whose execution took strictly more than this
-    /// many microseconds. `-1` disables the log (zero hot-path cost);
-    /// `0` records every command. Default `10_000` (10 ms).
+    /// Record any command whose execution took at least this many
+    /// microseconds (Redis: `< slower_than_micros` is skipped). `-1`
+    /// disables the log (zero hot-path cost — no `Instant::now()`
+    /// taken); `0` records every command. Default `-1` (OFF).
     pub slower_than_micros: i64,
     /// Cap on the per-shard ring buffer. Once exceeded, the oldest
     /// entry is dropped to make room. Across `nshards` shards the
@@ -387,7 +391,7 @@ pub struct SlowlogSection {
 impl Default for SlowlogSection {
     fn default() -> Self {
         Self {
-            slower_than_micros: 10_000,
+            slower_than_micros: -1,
             max_len: 128,
         }
     }
@@ -427,6 +431,23 @@ pub fn parse_notification_flags(s: &str) -> NotificationFlags {
     f
 }
 
+/// `[cluster]` section — single-node cluster mode: keys route by
+/// Redis-cluster slot (CRC16 `{hashtag}` & 16383) and every shard `i`
+/// gets a second, deterministic listener at `port_base + i` that answers
+/// wrong-shard keys with `-MOVED`, so stock cluster-aware clients
+/// (`redis-benchmark --cluster`, `redis-cli -c`) can address shards
+/// directly. The main SO_REUSEPORT port keeps full forward-anywhere
+/// behaviour for non-cluster clients. Not hot-settable: the routing
+/// scheme is a startup property of the data dir (`shards.meta`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ClusterSection {
+    /// Enable cluster mode. Default `false` (zero change).
+    pub enabled: bool,
+    /// First cluster port (shard `i` listens at `port_base + i`).
+    /// `0` (default) = `server.port + 1`.
+    pub port_base: u16,
+}
+
 // ───────────── top-level Config ─────────────
 
 /// Complete kevy config: defaults + per-section overrides loaded from
@@ -449,6 +470,8 @@ pub struct Config {
     pub advanced: AdvancedSection,
     /// `[slowlog]` settings (slow-command ring buffer).
     pub slowlog: SlowlogSection,
+    /// `[cluster]` settings (single-node cluster mode).
+    pub cluster: ClusterSection,
     /// Path the config was loaded from (for `CONFIG REWRITE`). `None` =
     /// loaded from defaults only / from in-memory string.
     pub source_path: Option<PathBuf>,

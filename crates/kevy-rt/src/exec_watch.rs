@@ -16,8 +16,8 @@
 //!   and each queued cmd is dispatched at its pre-allocated seq via
 //!   `start_command_at_seq`.
 
-use crate::message::{Agg, Inbound, Op, Part, PendingSlot};
-use crate::reduce::{drain_front, shard_of};
+use crate::message::{Agg, DispatchMeta, Inbound, Op, Part, PendingSlot, SmallReply};
+use crate::reduce::drain_front;
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route};
 use kevy_resp::{Argv, ArgvView, RespVersion, encode_array_len};
@@ -37,7 +37,7 @@ impl<C: Commands> Shard<C> {
         for i in 1..args.len() {
             let key = &args[i];
             by_shard
-                .entry(shard_of(key, self.nshards))
+                .entry(self.shard_of(key))
                 .or_default()
                 .push(key.to_vec());
         }
@@ -92,7 +92,7 @@ impl<C: Commands> Shard<C> {
                 proto: c.proto,
             });
         }
-        self.fold(conn_id, seq, Part::Reply(b"+OK\r\n".to_vec()));
+        self.fold(conn_id, seq, Part::Reply(SmallReply::from_slice(b"+OK\r\n")));
     }
 
     /// `EXEC` with a non-empty `watched` set: pre-allocate `N+1` slots,
@@ -167,7 +167,7 @@ impl<C: Commands> Shard<C> {
         let mut by_shard: HashMap<usize, Vec<(Vec<u8>, u64)>> = HashMap::new();
         for (k, v) in watched {
             by_shard
-                .entry(shard_of(&k, self.nshards))
+                .entry(self.shard_of(&k))
                 .or_default()
                 .push((k, v));
         }
@@ -228,7 +228,7 @@ impl<C: Commands> Shard<C> {
         c.watched.extend(pairs);
         let idx = (seq - c.next_emit) as usize;
         if let Some(slot) = c.pending.get_mut(idx) {
-            slot.done = Some(b"+OK\r\n".to_vec());
+            slot.done = Some(SmallReply::from_slice(b"+OK\r\n"));
         }
         drain_front(c);
     }
@@ -248,11 +248,11 @@ impl<C: Commands> Shard<C> {
             if let Some(c) = self.conns.get_mut(&conn_id) {
                 let base_idx = (header_seq - c.next_emit) as usize;
                 if let Some(h) = c.pending.get_mut(base_idx) {
-                    h.done = Some(b"*-1\r\n".to_vec());
+                    h.done = Some(SmallReply::from_slice(b"*-1\r\n"));
                 }
                 for i in 0..n {
                     if let Some(p) = c.pending.get_mut(base_idx + 1 + i) {
-                        p.done = Some(Vec::new());
+                        p.done = Some(SmallReply::from_slice(b""));
                     }
                 }
                 drain_front(c);
@@ -264,7 +264,7 @@ impl<C: Commands> Shard<C> {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let base_idx = (header_seq - c.next_emit) as usize;
             if let Some(h) = c.pending.get_mut(base_idx) {
-                h.done = Some(header_bytes);
+                h.done = Some(SmallReply::from_vec(header_bytes));
             }
             drain_front(c);
         }
@@ -288,7 +288,7 @@ impl<C: Commands> Shard<C> {
         args: &A,
         resolved: ResolvedCmd,
     ) {
-        let ResolvedCmd { route, is_quit, is_write, .. } = resolved;
+        let ResolvedCmd { route, is_quit, is_write, wake_idx, .. } = resolved;
         match route {
             // Pub/sub + WATCH inside MULTI is rejected at queue time
             // (`handle_command` errors before queuing). UNWATCH inside MULTI
@@ -308,11 +308,13 @@ impl<C: Commands> Shard<C> {
                 b"-ERR pub/sub or WATCH or HELLO or RENAME not allowed inside MULTI in v2-3a (queued-RENAME orchestration pending v2-3b)\r\n".to_vec(),
             ),
             Route::Local => {
-                self.start_single_at_seq(conn_id, seq, args, self.id, is_quit, is_write)
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: None };
+                self.start_single_at_seq(conn_id, seq, args, self.id, is_quit, meta)
             }
             Route::Single(idx) => {
-                let shard = shard_of(&args[idx], self.nshards);
-                self.start_single_at_seq(conn_id, seq, args, shard, is_quit, is_write)
+                let shard = self.shard_of(&args[idx]);
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
+                self.start_single_at_seq(conn_id, seq, args, shard, is_quit, meta)
             }
             other => self.start_multi_at_seq(conn_id, seq, args, other, is_quit),
         }
@@ -325,7 +327,7 @@ impl<C: Commands> Shard<C> {
         let Some(c) = self.conns.get_mut(&conn_id) else { return };
         let idx = (seq - c.next_emit) as usize;
         if let Some(slot) = c.pending.get_mut(idx) {
-            slot.done = Some(bytes);
+            slot.done = Some(SmallReply::from_vec(bytes));
         }
         drain_front(c);
     }
@@ -340,12 +342,13 @@ impl<C: Commands> Shard<C> {
         args: &A,
         shard: usize,
         is_quit: bool,
-        is_write: bool,
+        meta: DispatchMeta,
     ) {
         // EXEC's queued cmds inherit the conn's proto at execution time
-        // (the proto is captured per-cmd via Op::Dispatch). If the conn
+        // (the proto is captured per-cmd at the forward site). If the conn
         // negotiated HELLO 3 before MULTI / between QUEUED frames, the
-        // queued cmds also emit RESP3 shapes.
+        // queued cmds also emit RESP3 shapes. AOF logging + WATCH bump
+        // happen inside `exec_op`, driven by `meta`.
         let proto = self.conns.get(&conn_id).map_or(RespVersion::V2, |c| c.proto);
         if is_quit
             && let Some(c) = self.conns.get_mut(&conn_id)
@@ -353,13 +356,11 @@ impl<C: Commands> Shard<C> {
             c.closing = true;
         }
         if shard == self.id {
-            let part = self.exec_op(Op::Dispatch(args.to_argv(), proto));
+            let part = self.run_dispatch(args, proto, meta);
             self.fold(conn_id, seq, part);
-            // AOF logging happens inside `exec_op` for `Op::Dispatch`
-            // (gated on `is_write`); the `is_write` arg here is unused.
-            let _ = is_write;
         } else {
-            self.request_batch[shard].push((conn_id, seq, args.to_argv(), proto));
+            let argv = self.argv_pool.take_filled(args);
+            self.request_batch[shard].push((conn_id, seq, argv, proto, meta));
         }
     }
 

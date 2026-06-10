@@ -330,6 +330,11 @@ fn config_pairs(cfg: &Config) -> Vec<(&'static str, String)> {
     v.push(("io-threads", cfg.server.threads.to_string()));
     v.push(("dir", cfg.server.data_dir.display().to_string()));
     v.push(("appendonly", yes_no(cfg.persistence.aof)));
+    // kevy has no RDB save schedule (snapshots are explicit SAVE/BGSAVE);
+    // the empty string is Redis's own "no save points" value. Standard
+    // tooling (redis-benchmark's per-node config fetch) requires the key
+    // to exist and treats its absence as "could not fetch CONFIG".
+    v.push(("save", String::new()));
     v.push((
         "appendfsync",
         appendfsync_str(cfg.persistence.appendfsync).to_string(),
@@ -350,6 +355,11 @@ fn config_pairs(cfg: &Config) -> Vec<(&'static str, String)> {
     v.push(("hz", cfg.expiry.hz.to_string()));
     v.push(("maxmemory-samples", cfg.expiry.sample.to_string()));
     v.push(("loglevel", log_level_str(cfg.log.level).to_string()));
+    v.push(("cluster-enabled", yes_no(cfg.cluster.enabled)));
+    v.push((
+        "cluster-port-base",
+        crate::cluster_port_base(cfg).to_string(),
+    ));
     v
 }
 

@@ -24,6 +24,7 @@ impl Config {
             "notification" => self.apply_notification(item),
             "advanced" => self.apply_advanced(item),
             "slowlog" => self.apply_slowlog(item),
+            "cluster" => self.apply_cluster(item),
             other => Err(schema_err(&item, format!("unknown section [{other}]"))),
         }
     }
@@ -140,8 +141,18 @@ impl Config {
         Ok(())
     }
 
+    fn apply_cluster(&mut self, item: Item) -> Result<(), ConfigError> {
+        match item.key.as_str() {
+            "enabled" => self.cluster.enabled = value_as_bool(&item)?,
+            "port_base" => self.cluster.port_base = value_as_u16(&item)?,
+            k => return Err(schema_err(&item, format!("unknown [cluster] key: {k}"))),
+        }
+        Ok(())
+    }
+
     /// Apply one env var. Recognised names (others ignored):
-    /// `KEVY_BIND`, `KEVY_PORT`, `KEVY_THREADS`, `KEVY_DIR`, `KEVY_AOF`.
+    /// `KEVY_BIND`, `KEVY_PORT`, `KEVY_THREADS`, `KEVY_DIR`, `KEVY_AOF`,
+    /// `KEVY_CLUSTER`.
     pub(crate) fn apply_env_var(
         &mut self,
         name: &str,
@@ -172,6 +183,9 @@ impl Config {
             "KEVY_DIR" => self.server.data_dir = PathBuf::from(value),
             "KEVY_AOF" => {
                 self.persistence.aof = !matches!(value, "0" | "off" | "false" | "no");
+            }
+            "KEVY_CLUSTER" => {
+                self.cluster.enabled = !matches!(value, "0" | "off" | "false" | "no");
             }
             _ => {}
         }

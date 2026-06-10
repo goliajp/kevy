@@ -133,7 +133,7 @@ pub struct PendingExtendedRow {
     pub delivery_count: u32,
 }
 
-/// Knobs for [`StreamData::xclaim`]: `min-idle-ms` plus the
+/// Knobs for [`crate::StreamData`]'s `xclaim`: `min-idle-ms` plus the
 /// `IDLE`/`TIME`/`RETRYCOUNT`/`FORCE`/`JUSTID` flag tail.
 pub struct XClaimOpts {
     /// Only claim entries idle for at least this many ms.

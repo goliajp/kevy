@@ -49,10 +49,18 @@ pub struct Runtime<C: Commands> {
     /// Wall-clock-read throttle for the tick check (TTL reaper / live
     /// config refresh / auto-AOF-rewrite).
     tick_check_every: u32,
-    /// `[slowlog].slower_than_micros`. Defaults match Redis (10 ms).
+    /// `[slowlog].slower_than_micros`. Default: `-1` (OFF — zero
+    /// hot-path cost: every command would otherwise pay an
+    /// `Instant::now()` pair around dispatch). Set to `10_000` to match
+    /// Redis's default 10 ms threshold; see [`Self::with_slowlog`] /
+    /// `CONFIG SET slowlog-log-slower-than 10000`.
     slowlog_slower_than_micros: i64,
     /// `[slowlog].max_len`. Per-shard cap.
     slowlog_max_len: u32,
+    /// Single-node cluster mode: slot-based key routing (CRC16 `{hashtag}`
+    /// → contiguous ranges) + one deterministic extra listener per shard at
+    /// `cluster_port_base + id`. `None` = off (default, zero change).
+    cluster_port_base: Option<u16>,
 }
 
 impl<C: Commands> Runtime<C> {
@@ -71,15 +79,29 @@ impl<C: Commands> Runtime<C> {
             spin_limit: 256,
             park_timeout_ms: 50,
             tick_check_every: 256,
-            slowlog_slower_than_micros: 10_000,
+            slowlog_slower_than_micros: -1,
             slowlog_max_len: 128,
+            cluster_port_base: None,
         }
     }
 
-    /// SLOWLOG tuning (`[slowlog]` config section). Defaults: record any
-    /// command slower than 10 ms (`10_000` µs), keep the most-recent 128
-    /// entries per shard. Pass `slower_than_micros = -1` to disable
-    /// (zero hot-path cost — no `Instant::now()` taken).
+    /// Enable single-node cluster mode: keys route by Redis-cluster slot
+    /// (CRC16 `{hashtag}` & 16383, contiguous even ranges) and every shard
+    /// `i` binds a second, deterministic listener at `port_base + i` that
+    /// answers wrong-shard keys with `-MOVED` instead of forwarding. The
+    /// SO_REUSEPORT listener on the main port keeps today's full
+    /// forward-anywhere behaviour for non-cluster clients.
+    pub fn with_cluster(mut self, port_base: u16) -> Self {
+        self.cluster_port_base = Some(port_base);
+        self
+    }
+
+    /// SLOWLOG tuning (`[slowlog]` config section). Default
+    /// `slower_than_micros = -1` (OFF) so the hot path never reads the
+    /// clock — every enabled command otherwise pays an `Instant::now()`
+    /// pair around dispatch, ~30 ns/op (≈9 % at 3 M ops/s). To match
+    /// Redis's 10 ms default, pass `10_000`; `0` records all; `-1`
+    /// disables. `max_len` is the per-shard ring cap (default 128).
     pub fn with_slowlog(mut self, slower_than_micros: i64, max_len: u32) -> Self {
         self.slowlog_slower_than_micros = slower_than_micros;
         self.slowlog_max_len = max_len;
@@ -139,6 +161,21 @@ impl<C: Commands> Runtime<C> {
     pub fn run(self, stop: Arc<AtomicBool>) -> io::Result<()> {
         let n = self.nshards;
 
+        // Cluster binds shard `i` at `port_base + i`; reject a range that
+        // overflows u16 up front (loud) instead of wrapping a listener onto
+        // a low/privileged port while CLUSTER SLOTS advertises 65536+.
+        if let Some(base) = self.cluster_port_base
+            && base as usize + n > u16::MAX as usize + 1
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "cluster port range {base}..={} exceeds 65535 ({n} shards)",
+                    base as usize + n - 1
+                ),
+            ));
+        }
+
         // One lock-free SPSC ring per ordered core-pair (i→j): the producer goes
         // to shard i's outbox[j], the consumer to shard j's inbox[i]. There is no
         // self-ring — a shard runs its own commands inline, never over a ring.
@@ -170,10 +207,43 @@ impl<C: Commands> Runtime<C> {
         // channel-only PUBLISH path skips the walk when so.
         let pubsub_patterns: PubSubPatternReg = Arc::new(RwLock::new(Vec::new()));
 
+        // Reconcile the on-disk shard layout (count + routing) before any
+        // shard loads its files; a mismatch re-homes every key once, here.
+        // Skipped for a pure in-memory run against a dir with no kevy files.
+        // Cluster mode always records the layout even with AOF off and an
+        // empty dir: a later SAVE writes slot-distributed `dump-{i}.rdb`, and
+        // without a meta a non-cluster restart would read them as KevyHash
+        // and silently strand every key.
+        if self.enable_aof
+            || self.cluster_port_base.is_some()
+            || crate::reshard::has_kevy_files(&self.data_dir)
+        {
+            let routing = if self.cluster_port_base.is_some() {
+                kevy_persist::Routing::Slots
+            } else {
+                kevy_persist::Routing::KevyHash
+            };
+            crate::reshard::ensure_layout(&self.data_dir, n, routing, &self.commands)?;
+        }
+
+        // Advertised cluster topology (None = cluster off). A 0.0.0.0 bind
+        // advertises 127.0.0.1 — an unroutable redirect target would strand
+        // every cluster client (single-machine scope; no announce-ip knob).
+        let topo = self.cluster_port_base.map(|base| crate::cluster::ClusterTopo {
+            ip: if self.ip == [0, 0, 0, 0] { [127, 0, 0, 1] } else { self.ip },
+            port_base: base,
+        });
+
         // Build every shard up front so a bind/open failure aborts before we spawn.
         let mut shards = Vec::with_capacity(n);
         for id in 0..n {
             let listener = tcp_listen_reuseport(self.ip, self.port, 1024)?;
+            // Cluster mode: a second, deterministic per-shard listener at
+            // port_base + id (plain bind — exactly one owner per port).
+            let cluster_listener = match self.cluster_port_base {
+                Some(base) => Some(kevy_sys::tcp_listen(self.ip, base + id as u16, 1024)?),
+                None => None,
+            };
             let aof = if self.enable_aof {
                 Some(Aof::open(
                     &self.data_dir.join(format!("aof-{id}.aof")),
@@ -191,6 +261,8 @@ impl<C: Commands> Runtime<C> {
             shards.push(Shard {
                 id,
                 nshards: n,
+                cluster: topo.clone(),
+                cluster_listener,
                 store,
                 commands: self.commands.clone(),
                 poller: Poller::new()?,
@@ -231,6 +303,8 @@ impl<C: Commands> Runtime<C> {
                 blocked: crate::blocked::BlockedClients::new(),
                 origin_blocks: std::collections::HashMap::new(),
                 xwaiters: crate::block_xshard::XShardWaiters::default(),
+                reply_scratch: Vec::with_capacity(4096),
+                argv_pool: kevy_resp::ArgvPool::new(),
             });
         }
 
