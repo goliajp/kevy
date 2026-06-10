@@ -431,6 +431,23 @@ pub fn parse_notification_flags(s: &str) -> NotificationFlags {
     f
 }
 
+/// `[cluster]` section — single-node cluster mode: keys route by
+/// Redis-cluster slot (CRC16 `{hashtag}` & 16383) and every shard `i`
+/// gets a second, deterministic listener at `port_base + i` that answers
+/// wrong-shard keys with `-MOVED`, so stock cluster-aware clients
+/// (`redis-benchmark --cluster`, `redis-cli -c`) can address shards
+/// directly. The main SO_REUSEPORT port keeps full forward-anywhere
+/// behaviour for non-cluster clients. Not hot-settable: the routing
+/// scheme is a startup property of the data dir (`shards.meta`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ClusterSection {
+    /// Enable cluster mode. Default `false` (zero change).
+    pub enabled: bool,
+    /// First cluster port (shard `i` listens at `port_base + i`).
+    /// `0` (default) = `server.port + 1`.
+    pub port_base: u16,
+}
+
 // ───────────── top-level Config ─────────────
 
 /// Complete kevy config: defaults + per-section overrides loaded from
@@ -453,6 +470,8 @@ pub struct Config {
     pub advanced: AdvancedSection,
     /// `[slowlog]` settings (slow-command ring buffer).
     pub slowlog: SlowlogSection,
+    /// `[cluster]` settings (single-node cluster mode).
+    pub cluster: ClusterSection,
     /// Path the config was loaded from (for `CONFIG REWRITE`). `None` =
     /// loaded from defaults only / from in-memory string.
     pub source_path: Option<PathBuf>,

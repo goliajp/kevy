@@ -87,6 +87,7 @@ impl<C: Commands> Shard<C> {
     /// Completion-based run loop (Linux io_uring). Mirrors [`Shard::run`] but
     /// drives socket I/O through io_uring instead of the readiness poller.
     pub(crate) fn run_uring(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {
+        self.commands.on_shard_start(self.id);
         // Restore: snapshot then AOF replay (same as the readiness path).
         let snap = self.snapshot_path();
         if snap.exists()

@@ -63,3 +63,16 @@ sample   = 20
 level    = "info"
 # Sink: "stderr" | "stdout" | "<file path>".
 output   = "stderr"
+
+[cluster]
+# Single-node cluster mode: keys route by Redis-cluster slot (CRC16 of the
+# {hashtag} & 16383, one contiguous range per shard) and every shard i binds
+# a second deterministic listener at port_base + i answering wrong-shard
+# keys with -MOVED. Stock cluster-aware clients (redis-cli -c,
+# redis-benchmark --cluster) then connect straight to the owning shard; the
+# main port keeps full forward-anywhere behaviour. Switching an existing
+# data dir in or out of cluster mode re-homes keys once at startup
+# (sources backed up as *.premigration.<ts>). Not hot-settable.
+enabled   = false
+# First cluster port. 0 (default) = server port + 1.
+port_base = 0

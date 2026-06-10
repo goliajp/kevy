@@ -180,6 +180,14 @@ pub trait Commands: Clone + Send + 'static {
     /// aren't forced to override.
     fn on_shard_init(&self, _store: &mut Store) {}
 
+    /// Called once on the shard's own thread, first thing in the reactor
+    /// entry (both reactors), before restore/replay. Implementations that
+    /// need per-shard identity at dispatch time (e.g. kevy's `CLUSTER MYID`
+    /// / `CLUSTER NODES` `myself` flag) stash `shard` in a thread-local here
+    /// — in a thread-per-core runtime the current thread *is* the shard.
+    /// Default: no-op.
+    fn on_shard_start(&self, _shard: usize) {}
+
     /// Periodic shard housekeeping (the equivalent of Redis's `serverCron`).
     /// kevy uses this to run [`Store::tick_expire`] at the configured
     /// `[expiry].hz`. Default no-op so non-kevy embedders / runtimes can
