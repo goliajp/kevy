@@ -17,6 +17,15 @@ const POLY: u16 = 0x1021;
 /// 256-entry table, generated at compile time (MSB-first, init 0).
 const TABLE: [u16; 256] = make_table();
 
+/// Slice-by-4 companion tables. `TABLE_N[x]` is the CRC contribution of
+/// byte `x` seen `N` bytes before the end of a 4-byte block:
+/// `T_{n+1}[x] = (T_n[x] << 8) ^ T0[T_n[x] >> 8]` (advance the partial
+/// remainder one more byte through the LFSR). Valid because the init-0
+/// byte table is GF(2)-linear: `T[a ^ b] = T[a] ^ T[b]`.
+const TABLE1: [u16; 256] = next_table(&TABLE);
+const TABLE2: [u16; 256] = next_table(&TABLE1);
+const TABLE3: [u16; 256] = next_table(&TABLE2);
+
 const fn make_table() -> [u16; 256] {
     let mut table = [0u16; 256];
     let mut i = 0;
@@ -37,9 +46,43 @@ const fn make_table() -> [u16; 256] {
     table
 }
 
+const fn next_table(prev: &[u16; 256]) -> [u16; 256] {
+    let mut table = [0u16; 256];
+    let mut i = 0;
+    while i < 256 {
+        table[i] = (prev[i] << 8) ^ TABLE[(prev[i] >> 8) as usize];
+        i += 1;
+    }
+    table
+}
+
 /// CRC16-CCITT (XMODEM) of `bytes`. Check vector: `crc16(b"123456789") == 0x31C3`.
+///
+/// Slice-by-4: a 16-bit remainder is fully shifted out after two bytes, so
+/// a 4-byte step folds the current crc into the first two table lookups and
+/// the last two are data-only — 4 lookups + 3 XORs per 4 bytes instead of
+/// the byte-wise loop's 4 dependent shift/lookup chains. Routing hashes
+/// every key in cluster mode; the byte-wise walk profiled at 3.7 % of
+/// server CPU on the pinned 8sh angle (2026-06-10).
 #[inline]
 pub fn crc16(bytes: &[u8]) -> u16 {
+    let mut crc: u16 = 0;
+    let mut chunks = bytes.chunks_exact(4);
+    for c in &mut chunks {
+        crc = TABLE3[(((crc >> 8) as u8) ^ c[0]) as usize]
+            ^ TABLE2[((crc as u8) ^ c[1]) as usize]
+            ^ TABLE1[c[2] as usize]
+            ^ TABLE[c[3] as usize];
+    }
+    for &b in chunks.remainder() {
+        crc = (crc << 8) ^ TABLE[(((crc >> 8) as u8) ^ b) as usize];
+    }
+    crc
+}
+
+/// Reference byte-at-a-time implementation, kept for the equivalence test.
+#[cfg(test)]
+fn crc16_bytewise(bytes: &[u8]) -> u16 {
     let mut crc: u16 = 0;
     for &b in bytes {
         crc = (crc << 8) ^ TABLE[(((crc >> 8) as u8) ^ b) as usize];
@@ -79,6 +122,23 @@ mod tests {
     fn xmodem_check_vector() {
         assert_eq!(crc16(b"123456789"), 0x31C3);
         assert_eq!(crc16(b""), 0);
+    }
+
+    #[test]
+    fn slice_by_4_matches_bytewise() {
+        // Every length 0..=64 over a churned byte pattern, so all chunk /
+        // remainder splits and both crc-folded lookups are exercised.
+        let data: Vec<u8> = (0..64u32)
+            .map(|i| (i.wrapping_mul(167).wrapping_add(13) % 251) as u8)
+            .collect();
+        for len in 0..=data.len() {
+            assert_eq!(
+                crc16(&data[..len]),
+                crc16_bytewise(&data[..len]),
+                "len={len}"
+            );
+        }
+        assert_eq!(crc16(b"key:000000123456"), crc16_bytewise(b"key:000000123456"));
     }
 
     #[test]

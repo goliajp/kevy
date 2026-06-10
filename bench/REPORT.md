@@ -795,3 +795,84 @@ Tooling caveat (cost a few hours): `redis-benchmark 8.0.2 --cluster` with
 distribution badly across nodes (observed 291–1920 pkts/port vs perfectly
 uniform single-test runs) and the affected stage drops to ~2.5 M. Cluster
 angles must run one test per invocation (`/tmp/ab_cluster.sh` updated).
+
+### The forwarding tax, converted to throughput (2026-06-10, lx64, pinned-hashtag angle)
+
+The `redis-benchmark --cluster` client was the bottleneck hiding the win, so
+this angle removes it: 8 plain-mode redis-benchmark processes, each pinning
+its keys to one shard via a `{tag}` hashtag (`GET {t3}:__rand_int__ …`,
+6 conns × P256 each). Cluster mode connects each process straight to its
+shard's port (0 % forwarded); compat mode sends the *identical* commands to
+the shared REUSEPORT port (~7/8 forwarded). Client cost is byte-identical in
+both modes — the delta is the tax. 5 interleaved rounds (`/tmp/ab_pinned.sh`):
+
+| mean of 5 rounds | compat (7/8 forwarded) | cluster ports (0 forwarded) | delta |
+|---|---|---|---|
+| SET | 13.7 M | **19.4 M** | **+42 %** |
+| GET | 14.7 M | **20.1 M** | **+37 %** |
+
+Cluster-side numbers are tight (±1–2 % across rounds; compat wobbles ±6 % —
+the forwarded path is inherently noisier). **New 8-shard headline: GET
+~20.1 M / SET ~19.4 M ops/s** — key-aware routing pays exactly where the
+campaign predicted, once the load generator can keep up.
+
+Harness note: rounds 2/4 initially reported compat = 0 — a lifecycle race
+(the next server bound its cluster ports while the previous one was still
+dying → AddrInUse → exit, and the ready-probe had pinged the dying server).
+Fixed in the script: kill + wait for zero `pgrep` matches before each start.
+
+### Profile-guided follow-up: reaper bound + slice-by-4 CRC16 (2026-06-10, lx64)
+
+Profiling the new headline showed two avoidable costs: `tick_expire` at
+6.1 % (the sampling walk bounded TTL-bearing *samples* but not *visited
+buckets*, so a TTL-free 300k-key shard walked the whole table ×3 every
+100 ms tick — the exact tax the doc comment promised TTL-free workloads
+would never pay) and `shard_of` at 3.7 % (cluster routing hashes every key
+with byte-wise CRC16). `a635d65` caps reaper visits at `samples × 8` and
+moves CRC16 to slice-by-4 (const-generated companion tables, equivalence-
+tested against the byte-wise reference at every length 0..=64).
+
+Quiet-box A/B, 3 interleaved rounds, pinned-hashtag angle:
+
+| mean of 3 rounds | before | after | delta |
+|---|---|---|---|
+| cluster GET | 20.3 M | **23.7 M** | **+17 %** |
+| cluster SET | 19.4 M | **21.9 M** | **+13 %** |
+| compat GET | 14.1 M | 17.5 M | +24 % |
+| compat SET | 13.7 M | 16.8 M | +22 % |
+
+The compat side gains too — the reaper fix is universal, not a cluster
+perk. **8-shard headline now: GET ~23.7 M / SET ~21.9 M ops/s.**
+
+### HEAD vs the historical peak anchor (2026-06-10, lx64, interleaved)
+
+`kevy_877cd41` was the campaign's "peak" anchor binary. Same box, same
+session, 3 interleaved rounds each:
+
+| angle | peak anchor | HEAD (`7f4995f`) | delta |
+|---|---|---|---|
+| legacy 8sh-P256 (fixed key) GET | 8.69 M | 11.17 M | +29 % |
+| legacy 8sh-P256 (fixed key) SET | 8.25 M | 9.98 M | +21 % |
+| pinned-hashtag compat (random keys) GET | 6.73 M | 15.31 M | 2.28× |
+| pinned-hashtag compat (random keys) SET | 6.35 M | 13.82 M | 2.18× |
+
+Random-key load exposes what the fixed-key angle hides (chiefly the old
+unbounded reaper walk), stretching the gap to 2.2×. With cluster routing —
+a capability the anchor doesn't have — HEAD's 23.7 M GET stands at 2.7×
+the anchor's best angle and 3.5× its same-load number.
+
+### Long-run headline + annotate verdict (2026-06-10, lx64)
+
+The 8 M-ops-per-process A/B segments under-amortise startup/ramp; official
+long runs (30 M ops × 8 processes, pinned-hashtag cluster angle, quiet box):
+**GET 30.8 M ops/s, SET 22.3 M ops/s** — GET at ~80 % of the naive 38 M
+ceiling estimate.
+
+Instruction-level annotate of the remaining top spots found no mechanical
+waste left to claim: `dispatch_batch` (17 %) is flat-profile parse+dispatch
+work (hottest single instruction 1.7 %, an inlined hash multiply);
+`find_by_borrow` (25 %) is the keyspace lookup itself (kevy-map already
+deep-polished); `shard_of` (4 %) splits roughly half hashtag `{}` scanning,
+half slice-by-4 CRC — a SWAR memchr for the brace scan is worth ~1–2 %,
+below the round-to-round noise floor, recorded as an observation rather
+than claimed. The remaining gap to ceiling is real work, not overhead.
