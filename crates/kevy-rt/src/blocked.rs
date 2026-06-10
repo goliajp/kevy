@@ -75,9 +75,9 @@ pub enum BlockKind {
 /// `keys` is every key the conn watches (≥ 1). The dispatcher picks the
 /// park strategy from them:
 /// - **single key on the conn's own shard** → the in-shard fast path
-///   ([`BlockedClients`]): register + wake without any cross-core hop.
+///   (`BlockedClients`): register + wake without any cross-core hop.
 /// - **single remote key, or any multi-key form** → the cross-shard
-///   arbiter ([`crate::block_xshard`]): the conn parks on its origin
+///   arbiter (`block_xshard`): the conn parks on its origin
 ///   shard and watch registrations fan out to each key's owning shard.
 ///
 /// For `BLPOP` / `BRPOP` the keys are list keys; for `XREAD BLOCK` /
