@@ -820,3 +820,26 @@ Harness note: rounds 2/4 initially reported compat = 0 — a lifecycle race
 (the next server bound its cluster ports while the previous one was still
 dying → AddrInUse → exit, and the ready-probe had pinged the dying server).
 Fixed in the script: kill + wait for zero `pgrep` matches before each start.
+
+### Profile-guided follow-up: reaper bound + slice-by-4 CRC16 (2026-06-10, lx64)
+
+Profiling the new headline showed two avoidable costs: `tick_expire` at
+6.1 % (the sampling walk bounded TTL-bearing *samples* but not *visited
+buckets*, so a TTL-free 300k-key shard walked the whole table ×3 every
+100 ms tick — the exact tax the doc comment promised TTL-free workloads
+would never pay) and `shard_of` at 3.7 % (cluster routing hashes every key
+with byte-wise CRC16). `a635d65` caps reaper visits at `samples × 8` and
+moves CRC16 to slice-by-4 (const-generated companion tables, equivalence-
+tested against the byte-wise reference at every length 0..=64).
+
+Quiet-box A/B, 3 interleaved rounds, pinned-hashtag angle:
+
+| mean of 3 rounds | before | after | delta |
+|---|---|---|---|
+| cluster GET | 20.3 M | **23.7 M** | **+17 %** |
+| cluster SET | 19.4 M | **21.9 M** | **+13 %** |
+| compat GET | 14.1 M | 17.5 M | +24 % |
+| compat SET | 13.7 M | 16.8 M | +22 % |
+
+The compat side gains too — the reaper fix is universal, not a cluster
+perk. **8-shard headline now: GET ~23.7 M / SET ~21.9 M ops/s.**
