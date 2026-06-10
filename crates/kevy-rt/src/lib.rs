@@ -104,7 +104,7 @@ pub use kevy_config::NotificationFlags;
 pub use kevy_persist::Fsync;
 pub use kevy_resp::{Argv, ArgvBorrowed, ArgvView, RespVersion};
 pub use kevy_store::Store;
-pub use route::Route;
+pub use route::{Route, XGroupCtx};
 pub use runtime::Runtime;
 
 /// Command-set semantics injected into the runtime. Cloned to every core, so it

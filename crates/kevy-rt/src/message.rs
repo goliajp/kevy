@@ -144,13 +144,17 @@ pub(crate) enum Op {
     SlowlogLen,
     /// `SLOWLOG RESET` — clear this shard's ring. Reply [`Part::Ok`].
     SlowlogReset,
-    /// One stream of a multi-stream non-blocking `XREAD` whose streams span
-    /// shards. `argv` is a complete single-stream `XREAD [COUNT n] STREAMS
-    /// key id` dispatched on the stream's owning shard (so `$` resolves to
-    /// that shard's `last_id`); `index` is the stream's position in the
-    /// original request, used to reassemble the reply in request order.
-    /// Reply: [`Part::XReadElement`].
-    XReadOne { index: u32, argv: Argv },
+    /// One stream of a multi-stream non-blocking `XREAD` / `XREADGROUP`
+    /// whose streams span shards. `argv` is a complete single-stream
+    /// rewrite (`XREAD [COUNT n] STREAMS key id` or `XREADGROUP GROUP g c
+    /// [COUNT n] [NOACK] STREAMS key id`) dispatched on the stream's owning
+    /// shard (so `$` resolves to that shard's `last_id`); `index` is the
+    /// stream's position in the original request, used to reassemble the
+    /// reply in request order. `write` marks the XREADGROUP form — it
+    /// mutates group state (PEL / last-delivered), so the owning shard runs
+    /// the post-write housekeeping (AOF log of the rewritten argv, WATCH
+    /// bump, keyspace notify) after dispatch. Reply: [`Part::XReadElement`].
+    XReadOne { index: u32, argv: Argv, write: bool },
 }
 
 /// How a KEYS-family reply is shaped.
