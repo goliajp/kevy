@@ -216,7 +216,7 @@ pub trait Commands: Clone + Send + 'static {
     /// (`LPUSH` / `RPUSH` feed `BLPOP` / `BRPOP`; `XADD` feeds the stream
     /// blocks). `Some(1)` for those verbs, `None` for everything else. The
     /// in-shard fast path reads this off [`ResolvedCmd::wake_idx`]; the
-    /// cross-shard write path ([`crate::exec_op`], where a forwarded write
+    /// cross-shard write path (`exec_op`, where a forwarded write
     /// lands on the key's owning shard) re-derives it via this method since
     /// the forwarded envelope doesn't carry the resolved hint. Default
     /// `None` so non-blocking embedders pay nothing.
