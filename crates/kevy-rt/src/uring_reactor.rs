@@ -10,21 +10,23 @@
 //! Opted into on Linux via `KEVY_IO_URING=1` (see [`crate::Runtime`]); the
 //! readiness reactor stays the default and the macOS path.
 //!
-//! Step-1 scope: accept + per-conn read → dispatch → write, plus the cross-core
-//! drain, which is enough for the full `sharded` suite. It busy-polls and sleeps
-//! briefly when idle (an `IORING_OP_TIMEOUT` park is a follow-up). Pub/sub's
-//! direct `flush_conn` write is not yet wired here (no pub/sub in `sharded`).
+//! Scope: accept + per-conn read → dispatch → write, plus the cross-core
+//! drain. Idle handling is a spin → nap → park ladder; the park rung is the
+//! epoll reactor's park translated to the ring: `parked[me]` + a waker-pipe
+//! read SQE + an `IORING_OP_TIMEOUT` bound, all satisfied by one blocking
+//! `submit_and_wait(1)`. Pub/sub's direct `flush_conn` write is not yet
+//! wired here (no pub/sub in `sharded`).
 
 use crate::Commands;
 use crate::conn::Conn;
 use crate::shard::Shard;
 use kevy_persist::{load_snapshot, replay_aof};
 use kevy_sys::Socket;
-use kevy_uring::{Completion, IoUring, ProvidedBufRing};
+use kevy_uring::{Completion, IoUring, KernelTimespec, ProvidedBufRing};
 use kevy_map::KevyMap;
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering, fence};
 use std::time::{Duration, Instant};
 
 /// SQ/CQ depth for the per-shard ring.
@@ -33,6 +35,13 @@ const URING_ENTRIES: u32 = 256;
 /// the epoll reactor's `SPIN_LIMIT`). Keeps -c1 latency low without spinning a
 /// quiet shard at 100% forever.
 const URING_SPIN_LIMIT: u32 = 256;
+/// Naps (200 µs sleeps) after the spin stage before properly parking — the
+/// middle rung of the spin → nap → park idle ladder. Naps preserve the
+/// throughput behaviour under load (brief lulls aggregate work into bigger
+/// batches; an instant park/wake per lull was measured −18~21 % on the
+/// 8-shard bench), while the park rung below caps a *truly* idle shard at
+/// ~zero CPU instead of waking every 200 µs forever.
+const URING_NAP_LIMIT: u32 = 64;
 /// Shared provided-buffer ring per shard: `PBUF_ENTRIES` buffers of `PBUF_SIZE`
 /// bytes feed the multishot recvs of every connection. One recv may fill a whole
 /// buffer; larger arrivals span several (reassembled in `Conn::input`). 128 × 16K
@@ -59,11 +68,15 @@ pub(crate) fn io_uring_available() -> bool {
     }
 }
 
-// `user_data` layout: top 2 bits = op, low 62 bits = conn id.
-const OP_SHIFT: u32 = 62;
+// `user_data` layout: top 3 bits = op, low 61 bits = conn id.
+const OP_SHIFT: u32 = 61;
 const OP_RECV: u64 = 1 << OP_SHIFT;
 const OP_WRITE: u64 = 2 << OP_SHIFT;
 const OP_ACCEPT: u64 = 3 << OP_SHIFT;
+/// The shard's waker pipe became readable (a peer woke a parked shard).
+const OP_WAKER: u64 = 4 << OP_SHIFT;
+/// The bounded-park timeout fired (see [`ParkState`]).
+const OP_TIMEOUT: u64 = 5 << OP_SHIFT;
 const CONN_MASK: u64 = (1 << OP_SHIFT) - 1;
 
 /// io_uring-specific per-connection state (the byte buffers that must outlive
@@ -93,6 +106,22 @@ impl UringConn {
     }
 }
 
+/// Parked-wait state: the waker-pipe read buffer and timeout payload that
+/// in-flight park SQEs point at. Lives on `run_uring`'s stack for the
+/// reactor's whole life, so the kernel-side pointers stay valid across
+/// iterations (a wake may reap only one of the two CQEs; the other SQE
+/// stays in flight into later parks).
+#[derive(Default)]
+struct ParkState {
+    /// A read SQE on the waker pipe is in flight.
+    waker_armed: bool,
+    /// A timeout SQE is in flight (bounds the blocking wait; a leftover
+    /// one from an earlier park just shortens the next park — harmless).
+    timeout_inflight: bool,
+    wake_buf: [u8; 8],
+    ts: KernelTimespec,
+}
+
 impl<C: Commands> Shard<C> {
     /// Completion-based run loop (Linux io_uring). Mirrors [`Shard::run`] but
     /// drives socket I/O through io_uring instead of the readiness poller.
@@ -120,8 +149,9 @@ impl<C: Commands> Shard<C> {
         let mut io: KevyMap<u64, UringConn> = KevyMap::new();
         let mut accept_inflight = false;
         let mut comps: Vec<Completion> = Vec::with_capacity(URING_ENTRIES as usize);
-        let mut cids: Vec<u64> = Vec::new();
         let mut idle_spins: u32 = 0;
+        let mut park = ParkState::default();
+        let mut woke_from_park = false;
 
         // Active reaper / hot-config / auto-rewrite tick — same shape as the
         // epoll path in `shard::run`. Without this branch the io_uring
@@ -141,7 +171,7 @@ impl<C: Commands> Shard<C> {
             if !accept_inflight {
                 accept_inflight = ring.prep_accept(self.listener.raw(), OP_ACCEPT);
             }
-            self.uring_arm_conns(&mut ring, &mut io, &mut cids, pbuf.group());
+            self.uring_arm_conns(&mut ring, &mut io, pbuf.group());
 
             ring.submit_and_wait(0)?; // submit queued SQEs; reap is non-blocking
             comps.clear();
@@ -152,12 +182,18 @@ impl<C: Commands> Shard<C> {
             if !comps.is_empty() {
                 self.store.refresh_clock();
             }
+            // Park-administrative CQEs (waker / timeout) must not count as
+            // work: an idle shard's bounded park produces one of them every
+            // `park_timeout_ms`, and treating that as work would reset the
+            // idle ladder into a 100 %-CPU spin burst per tick.
+            let mut io_work = false;
             for c in &comps {
                 let op = c.user_data & !CONN_MASK;
                 let cid = c.user_data & CONN_MASK;
                 match op {
                     OP_ACCEPT => {
                         accept_inflight = false;
+                        io_work = true;
                         if c.res >= 0 {
                             // SAFETY: a freshly accepted fd we now own.
                             let sock = unsafe { Socket::from_raw_fd(c.res) };
@@ -168,8 +204,20 @@ impl<C: Commands> Shard<C> {
                             io.insert(ncid, UringConn::new());
                         }
                     }
-                    OP_RECV => self.uring_on_recv(cid, c, &mut io, &mut pbuf),
-                    OP_WRITE => self.uring_on_write(cid, c.res, &mut io),
+                    OP_RECV => {
+                        io_work = true;
+                        self.uring_on_recv(cid, c, &mut io, &mut pbuf);
+                    }
+                    OP_WRITE => {
+                        io_work = true;
+                        self.uring_on_write(cid, c.res, &mut io);
+                    }
+                    OP_WAKER => {
+                        park.waker_armed = false;
+                        // The read took ≤ 8 bytes; clear any pile-up beyond it.
+                        self.waker.drain();
+                    }
+                    OP_TIMEOUT => park.timeout_inflight = false,
                     _ => {}
                 }
             }
@@ -198,7 +246,11 @@ impl<C: Commands> Shard<C> {
             // (256-iter counter + `tick_interval` elapsed gate).
             if let Some(iv) = tick_interval {
                 tick_check_counter = tick_check_counter.wrapping_add(1);
-                if tick_check_counter >= self.tick_check_every {
+                // `|| woke_from_park`: mirrors the epoll path's `|| !spinning`
+                // — parked iterations are ≥ ms apart, so gating them behind
+                // the 256-iter counter would delay ticks (and BLPOP/XREAD
+                // timeouts) by minutes on an idle shard.
+                if tick_check_counter >= self.tick_check_every || woke_from_park {
                     tick_check_counter = 0;
                     let now = Instant::now();
                     // BLOCK reactor: same cadence as the epoll path so
@@ -215,14 +267,28 @@ impl<C: Commands> Shard<C> {
                 }
             }
 
-            // Busy-poll while there's recent work, so a -c1 client's next request
-            // is reaped immediately (the old unconditional 200µs sleep added that
-            // latency to every request: ~3.8k rps / 0.26ms). Only yield the core
-            // once we've been idle a while, so a quiet shard doesn't spin at 100%.
-            // (A proper IORING_OP_TIMEOUT / waker-poll park is the real fix.)
-            if comps.is_empty() && !did_inbound {
+            // Idle ladder — spin, then nap, then park:
+            //   1. busy-poll `URING_SPIN_LIMIT` empty iterations, so a -c1
+            //      client's next request is reaped immediately;
+            //   2. nap in 200 µs sleeps for `URING_NAP_LIMIT` rounds — under
+            //      load, brief lulls aggregate inbound work into bigger
+            //      batches (parking instantly here measured −18~21 % on the
+            //      8-shard bench);
+            //   3. park: blocking wait on the ring, woken by socket I/O or
+            //      the waker pipe — a truly idle shard costs ~zero CPU and
+            //      re-parks straight from a fruitless tick (the counter is
+            //      NOT reset, mirroring the epoll path's saturated state).
+            // A non-empty backlog means a peer ring is full — keep spinning
+            // to re-attempt the flush (nothing would wake us when the peer
+            // drains).
+            woke_from_park = false;
+            let has_backlog = self.backlog.iter().any(|b| !b.is_empty());
+            if !io_work && !did_inbound && !has_backlog {
                 idle_spins = idle_spins.saturating_add(1);
-                if idle_spins >= URING_SPIN_LIMIT {
+                if idle_spins >= URING_SPIN_LIMIT + URING_NAP_LIMIT {
+                    self.uring_park(&mut ring, &mut park)?;
+                    woke_from_park = true;
+                } else if idle_spins >= URING_SPIN_LIMIT {
                     std::thread::sleep(Duration::from_micros(200));
                 }
             } else {
@@ -232,56 +298,93 @@ impl<C: Commands> Shard<C> {
         Ok(())
     }
 
+    /// Blocking wait, epoll-park equivalent: publish `parked[me]`, close the
+    /// park/wake race with a fenced re-drain (same pairing as `Shard::run` /
+    /// `flush_wakes`; loom-verified there), then block in
+    /// `submit_and_wait(1)` until any CQE — socket I/O, the waker-pipe read
+    /// (a peer pushed to our inbox), or the bounding timeout (tick cadence,
+    /// default 50 ms). The CQEs are reaped by the next loop iteration.
+    fn uring_park(&mut self, ring: &mut IoUring, park: &mut ParkState) -> io::Result<()> {
+        let me = self.id;
+        self.parked[me].store(true, Ordering::SeqCst);
+        fence(Ordering::SeqCst);
+        if self.uring_drain_inbound() {
+            // A push landed in the race window — process it, don't block.
+            self.parked[me].store(false, Ordering::SeqCst);
+            return Ok(());
+        }
+        if !park.waker_armed {
+            // SAFETY: `park` lives on `run_uring`'s stack for the reactor's
+            // whole life, so `wake_buf` outlives the SQE.
+            park.waker_armed = unsafe {
+                ring.prep_read(
+                    self.waker.read_fd(),
+                    park.wake_buf.as_mut_ptr(),
+                    park.wake_buf.len() as u32,
+                    OP_WAKER,
+                )
+            };
+        }
+        if !park.timeout_inflight {
+            park.ts = KernelTimespec::from_millis(self.park_timeout_ms.max(1) as u64);
+            // SAFETY: `ts` is only rewritten when no timeout SQE is in
+            // flight, and outlives the SQE (same lifetime as `wake_buf`).
+            park.timeout_inflight = unsafe { ring.prep_timeout(&park.ts, OP_TIMEOUT) };
+        }
+        if park.waker_armed || park.timeout_inflight {
+            ring.submit_and_wait(1)?;
+        }
+        self.parked[me].store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
     /// Submit a read for every idle open conn and a write for every conn with
     /// pending output, reusing one fixed buffer per direction per conn.
+    ///
+    /// One pass over `conns` with one `io` probe per conn: this loop runs
+    /// every reactor iteration, and the previous shape (a `keys()` snapshot
+    /// Vec + 3-8 map probes per conn to appease the borrow checker) was the
+    /// hottest block of `run_uring` self time on the 8-shard profile. `conns`
+    /// and `io` are disjoint borrows (`io` lives on `run_uring`'s stack), so
+    /// `iter_mut` needs no snapshot — nothing here inserts or removes.
     fn uring_arm_conns(
         &mut self,
         ring: &mut IoUring,
         io: &mut KevyMap<u64, UringConn>,
-        cids: &mut Vec<u64>,
         bgid: u16,
     ) {
-        cids.clear();
-        cids.extend(self.conns.keys().copied());
-        for &cid in cids.iter() {
+        for (&cid, conn) in self.conns.iter_mut() {
+            let Some(uc) = io.get_mut(&cid) else {
+                continue;
+            };
             // Start a new write: move the conn's output into the stable write_buf.
-            if let (Some(uc), Some(conn)) = (io.get_mut(&cid), self.conns.get_mut(&cid))
-                && !uc.write_inflight
-                && uc.write_buf.is_empty()
-                && !conn.output.is_empty()
-            {
+            if !uc.write_inflight && uc.write_buf.is_empty() && !conn.output.is_empty() {
                 std::mem::swap(&mut uc.write_buf, &mut conn.output);
                 uc.write_off = 0;
             }
             // Submit the write (fresh or a partial-write continuation).
-            let write_req = io.get(&cid).map(|uc| {
-                (!uc.write_inflight && uc.write_off < uc.write_buf.len(), uc.write_off)
-            });
-            if let Some((true, off)) = write_req {
-                let fd = self.conns[&cid].sock.raw();
-                let uc = &io[&cid];
+            if !uc.write_inflight && uc.write_off < uc.write_buf.len() {
                 // SAFETY: write_buf is owned, stable, and outlives the SQE.
                 let ok = unsafe {
                     ring.prep_write(
-                        fd,
-                        uc.write_buf.as_ptr().add(off),
-                        (uc.write_buf.len() - off) as u32,
+                        conn.sock.raw(),
+                        uc.write_buf.as_ptr().add(uc.write_off),
+                        (uc.write_buf.len() - uc.write_off) as u32,
                         OP_WRITE | cid,
                     )
                 };
                 if ok {
-                    io.get_mut(&cid).unwrap().write_inflight = true;
+                    uc.write_inflight = true;
                 }
             }
             // Arm a multishot recv if one isn't already running (it re-fires per
             // arrival into the shared provided-buffer ring, so this happens once
             // per connection, not once per read — the syscall-batching win).
-            let want_recv = io.get(&cid).is_some_and(|uc| !uc.recv_armed && !uc.closing);
-            if want_recv {
-                let fd = self.conns[&cid].sock.raw();
-                if ring.prep_recv_multishot(fd, bgid, OP_RECV | cid) {
-                    io.get_mut(&cid).unwrap().recv_armed = true;
-                }
+            if !uc.recv_armed
+                && !uc.closing
+                && ring.prep_recv_multishot(conn.sock.raw(), bgid, OP_RECV | cid)
+            {
+                uc.recv_armed = true;
             }
         }
     }

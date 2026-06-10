@@ -39,5 +39,6 @@ mod ring;
 mod ring_tests;
 
 pub use completion::Completion;
+pub use layout::KernelTimespec;
 pub use pbr::ProvidedBufRing;
 pub use ring::IoUring;

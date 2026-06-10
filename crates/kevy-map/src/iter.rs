@@ -73,6 +73,53 @@ impl<'a, K, V> IntoIterator for &'a KevyMap<K, V> {
     }
 }
 
+/// `(&K, &mut V)` iterator over all live entries of a [`KevyMap`]; order
+/// unspecified. Keys stay shared — mutating a key would corrupt its bucket.
+pub struct IterMut<'a, K, V> {
+    metadata: &'a [u8],
+    slots: &'a mut [MaybeUninit<(K, V)>],
+    pos: usize,
+}
+
+impl<'a, K, V> IterMut<'a, K, V> {
+    /// Construct from a map's raw bucket slices (same mirror-tail trim as
+    /// [`Iter::new`]).
+    pub(crate) fn new(metadata: &'a [u8], slots: &'a mut [MaybeUninit<(K, V)>]) -> Self {
+        let metadata = &metadata[..slots.len()];
+        Self {
+            metadata,
+            slots,
+            pos: 0,
+        }
+    }
+}
+
+impl<'a, K, V> Iterator for IterMut<'a, K, V> {
+    type Item = (&'a K, &'a mut V);
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.pos < self.metadata.len() {
+            let i = self.pos;
+            self.pos += 1;
+            if self.metadata[i] & 0x80 == 0 {
+                // SAFETY: full slot ⇒ initialised, and `pos` only advances, so
+                // each index is yielded at most once — the returned `&mut V`s
+                // are disjoint and all live within the `'a` borrow of `slots`.
+                let kv = unsafe { &mut *(self.slots.as_mut_ptr().add(i) as *mut (K, V)) };
+                return Some((&kv.0, &mut kv.1));
+            }
+        }
+        None
+    }
+}
+
+impl<'a, K, V> IntoIterator for &'a mut KevyMap<K, V> {
+    type Item = (&'a K, &'a mut V);
+    type IntoIter = IterMut<'a, K, V>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
 /// `&K` iterator over all live entries of a [`KevyMap`].
 pub struct Keys<'a, K, V>(Iter<'a, K, V>);
 
