@@ -25,7 +25,7 @@ use std::ptr::{self, NonNull};
 
 use kevy_hash::KevyHash;
 
-use crate::iter::{Iter, Keys, Values};
+use crate::iter::{Iter, IterMut, Keys, Values};
 
 /// SIMD group width (16 metadata bytes loaded per probe iteration).
 pub(crate) const GROUP_WIDTH: usize = 16;
@@ -140,6 +140,10 @@ unsafe impl<K: Sync, V: Sync> Sync for KevyMap<K, V> {}
 /// Aliased so the long `(&[u8], &[MaybeUninit<(K, V)>])` signature doesn't
 /// trip clippy's `type_complexity` lint on a member-by-member basis.
 type SlotSlices<'a, K, V> = (&'a [u8], &'a [MaybeUninit<(K, V)>]);
+
+/// Mutable-slot variant of [`SlotSlices`], returned by
+/// [`KevyMap::as_mut_slices`] for [`KevyMap::iter_mut`].
+type SlotSlicesMut<'a, K, V> = (&'a [u8], &'a mut [MaybeUninit<(K, V)>]);
 
 pub(crate) enum ProbeOutcome {
     Found(usize),
@@ -299,6 +303,13 @@ impl<K, V> KevyMap<K, V> {
         Iter::with_start(metadata, slots, start)
     }
 
+    /// `(&K, &mut V)` over all live entries; order is unspecified. Keys stay
+    /// shared (mutating a key in place would corrupt its bucket).
+    pub fn iter_mut(&mut self) -> IterMut<'_, K, V> {
+        let (metadata, slots) = self.as_mut_slices();
+        IterMut::new(metadata, slots)
+    }
+
     /// `&K` over all live entries.
     pub fn keys(&self) -> Keys<'_, K, V> {
         Keys::new(self.iter())
@@ -325,6 +336,24 @@ impl<K, V> KevyMap<K, V> {
             (
                 std::slice::from_raw_parts(self.metadata_ptr.as_ptr(), self.cap),
                 std::slice::from_raw_parts(self.slots_ptr.as_ptr(), self.cap),
+            )
+        }
+    }
+
+    /// [`KevyMap::as_slices`] with mutable slots (metadata stays shared —
+    /// [`KevyMap::iter_mut`] only reads it). The disjoint borrows are sound:
+    /// metadata and slots are separate allocations.
+    #[inline]
+    fn as_mut_slices(&mut self) -> SlotSlicesMut<'_, K, V> {
+        if self.cap == 0 {
+            return (&[], &mut []);
+        }
+        // SAFETY: cap > 0 ⇒ both pointers are valid; `&mut self` guarantees
+        // exclusive access for the lifetime of the returned slices.
+        unsafe {
+            (
+                std::slice::from_raw_parts(self.metadata_ptr.as_ptr(), self.cap),
+                std::slice::from_raw_parts_mut(self.slots_ptr.as_ptr(), self.cap),
             )
         }
     }

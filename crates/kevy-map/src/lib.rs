@@ -27,6 +27,6 @@ mod map_keyed;
 mod set;
 
 pub use kevy_hash::KevyHash;
-pub use iter::{Iter, Keys, Values};
+pub use iter::{Iter, IterMut, Keys, Values};
 pub use map::KevyMap;
 pub use set::{KevySet, SetIter};
