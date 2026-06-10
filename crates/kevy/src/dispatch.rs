@@ -57,6 +57,35 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
     // the unknown-command error below (which reports the original `name`).
     let mut buf = [0u8; 32];
     let cmd = upper_verb(name, &mut buf);
+    // Tier-1 fast path: GET / SET are the overwhelming bulk of real traffic;
+    // dispatch them in ONE match instead of walking the category-handler
+    // chain (conn → ops → string → …) whose every stage re-matches the verb.
+    // Neither has a RESP3 override, so this is proto-agnostic. SET keeps the
+    // grow-verb OOM bracket (precheck + post-write evict) inline.
+    match cmd {
+        b"GET" => {
+            if args.len() != 2 {
+                wrong_args(out, "get");
+            } else {
+                match store.get(&args[1]) {
+                    Ok(Some(v)) => encode_bulk(out, v),
+                    Ok(None) => encode_null_bulk(out),
+                    Err(e) => store_err(out, e),
+                }
+            }
+            return;
+        }
+        b"SET" => {
+            if store.precheck_for_write().is_err() {
+                encode_error(out, OOM_ERR);
+                return;
+            }
+            cmd_set(store, args, out);
+            store.try_evict_after_write();
+            return;
+        }
+        _ => {}
+    }
     // OOM precheck for memory-growing writes only. When `maxmemory == 0` this
     // is a single not-taken branch inside `Store::precheck_for_write`, so the
     // unlimited-mode hot path keeps its perf budget.
