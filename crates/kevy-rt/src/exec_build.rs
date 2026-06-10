@@ -7,7 +7,6 @@
 use crate::Commands;
 use crate::Route;
 use crate::message::{Agg, GatherKind, KeyShape, KvPairs, MultiOp, Op};
-use crate::reduce::shard_of;
 use crate::shard::Shard;
 use kevy_resp::{Argv, ArgvView};
 use std::collections::HashMap;
@@ -95,7 +94,7 @@ impl<C: Commands> Shard<C> {
             .into_iter()
             .enumerate()
             .map(|(i, (key, cursor))| {
-                let shard = shard_of(&key, self.nshards);
+                let shard = self.shard_of(&key);
                 let mut argv = Argv::default();
                 argv.push(b"XREAD");
                 if let Some(cb) = &count_bytes {
@@ -120,7 +119,7 @@ impl<C: Commands> Shard<C> {
         let mut i = 1;
         while i + 1 < args.len() {
             by_shard
-                .entry(shard_of(&args[i], self.nshards))
+                .entry(self.shard_of(&args[i]))
                 .or_default()
                 .push((args[i].to_vec(), args[i + 1].to_vec()));
             i += 2;
@@ -145,7 +144,7 @@ impl<C: Commands> Shard<C> {
         let mut by_shard: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
         for k in &keys {
             by_shard
-                .entry(shard_of(k, self.nshards))
+                .entry(self.shard_of(k))
                 .or_default()
                 .push(k.clone());
         }
@@ -192,7 +191,7 @@ impl<C: Commands> Shard<C> {
         for i in 1..args.len() {
             let key = &args[i];
             by_shard
-                .entry(shard_of(key, self.nshards))
+                .entry(self.shard_of(key))
                 .or_default()
                 .push(key.to_vec());
         }

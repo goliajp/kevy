@@ -181,6 +181,13 @@ impl Commands for KevyCommands {
         );
     }
 
+    fn on_shard_start(&self, shard: usize) {
+        // Thread-per-core: the reactor thread *is* the shard, so a
+        // thread-local carries per-shard identity into dispatch handlers
+        // (CLUSTER MYID / the `myself` flag in CLUSTER NODES).
+        ops::cluster::set_current_shard(shard);
+    }
+
     fn shard_tick_interval_ms(&self) -> u64 {
         // hz=0 disables the active reaper (lazy expiry still runs); else
         // every `1000/hz` ms — capped at 10 s so a misconfig can't park the
@@ -359,7 +366,7 @@ fn map_eviction_policy(p: kevy_config::EvictionPolicy) -> kevy_store::EvictionPo
 pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_aof: bool) -> ! {
     let cfg = config_global::get();
     let fsync = map_appendfsync(cfg.persistence.appendfsync);
-    let runtime = Runtime::new(ip, port, nshards, KevyCommands)
+    let mut runtime = Runtime::new(ip, port, nshards, KevyCommands)
         .with_data_dir(data_dir)
         .with_aof(enable_aof)
         .with_appendfsync(fsync)
@@ -374,12 +381,24 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
             cfg.advanced.ring_capacity,
         )
         .with_slowlog(cfg.slowlog.slower_than_micros, cfg.slowlog.max_len);
+    if cfg.cluster.enabled {
+        runtime = runtime.with_cluster(cluster_port_base(&cfg));
+    }
     let stop = Arc::new(AtomicBool::new(false));
     if let Err(e) = runtime.run(stop) {
         eprintln!("kevy: runtime error: {e}");
         std::process::exit(1);
     }
     std::process::exit(0);
+}
+
+/// Resolved first cluster port: `[cluster].port_base`, or `server.port + 1`
+/// when left at the `0` default. Shard `i` listens at this + `i`.
+pub(crate) fn cluster_port_base(cfg: &kevy_config::Config) -> u16 {
+    match cfg.cluster.port_base {
+        0 => cfg.server.port + 1,
+        base => base,
+    }
 }
 
 /// Translate a `kevy_config::AppendFsync` (TOML enum) into the

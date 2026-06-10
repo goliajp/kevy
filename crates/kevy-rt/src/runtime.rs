@@ -57,6 +57,10 @@ pub struct Runtime<C: Commands> {
     slowlog_slower_than_micros: i64,
     /// `[slowlog].max_len`. Per-shard cap.
     slowlog_max_len: u32,
+    /// Single-node cluster mode: slot-based key routing (CRC16 `{hashtag}`
+    /// → contiguous ranges) + one deterministic extra listener per shard at
+    /// `cluster_port_base + id`. `None` = off (default, zero change).
+    cluster_port_base: Option<u16>,
 }
 
 impl<C: Commands> Runtime<C> {
@@ -77,7 +81,19 @@ impl<C: Commands> Runtime<C> {
             tick_check_every: 256,
             slowlog_slower_than_micros: -1,
             slowlog_max_len: 128,
+            cluster_port_base: None,
         }
+    }
+
+    /// Enable single-node cluster mode: keys route by Redis-cluster slot
+    /// (CRC16 `{hashtag}` & 16383, contiguous even ranges) and every shard
+    /// `i` binds a second, deterministic listener at `port_base + i` that
+    /// answers wrong-shard keys with `-MOVED` instead of forwarding. The
+    /// SO_REUSEPORT listener on the main port keeps today's full
+    /// forward-anywhere behaviour for non-cluster clients.
+    pub fn with_cluster(mut self, port_base: u16) -> Self {
+        self.cluster_port_base = Some(port_base);
+        self
     }
 
     /// SLOWLOG tuning (`[slowlog]` config section). Default
@@ -176,10 +192,37 @@ impl<C: Commands> Runtime<C> {
         // channel-only PUBLISH path skips the walk when so.
         let pubsub_patterns: PubSubPatternReg = Arc::new(RwLock::new(Vec::new()));
 
+        // Reconcile the on-disk shard layout (count + routing) before any
+        // shard loads its files; a mismatch re-homes every key once, here.
+        // Skipped for a pure in-memory run against a dir with no kevy files,
+        // so that case keeps writing nothing at all.
+        if self.enable_aof || crate::reshard::has_kevy_files(&self.data_dir) {
+            let routing = if self.cluster_port_base.is_some() {
+                kevy_persist::Routing::Slots
+            } else {
+                kevy_persist::Routing::KevyHash
+            };
+            crate::reshard::ensure_layout(&self.data_dir, n, routing, &self.commands)?;
+        }
+
+        // Advertised cluster topology (None = cluster off). A 0.0.0.0 bind
+        // advertises 127.0.0.1 — an unroutable redirect target would strand
+        // every cluster client (single-machine scope; no announce-ip knob).
+        let topo = self.cluster_port_base.map(|base| crate::cluster::ClusterTopo {
+            ip: if self.ip == [0, 0, 0, 0] { [127, 0, 0, 1] } else { self.ip },
+            port_base: base,
+        });
+
         // Build every shard up front so a bind/open failure aborts before we spawn.
         let mut shards = Vec::with_capacity(n);
         for id in 0..n {
             let listener = tcp_listen_reuseport(self.ip, self.port, 1024)?;
+            // Cluster mode: a second, deterministic per-shard listener at
+            // port_base + id (plain bind — exactly one owner per port).
+            let cluster_listener = match self.cluster_port_base {
+                Some(base) => Some(kevy_sys::tcp_listen(self.ip, base + id as u16, 1024)?),
+                None => None,
+            };
             let aof = if self.enable_aof {
                 Some(Aof::open(
                     &self.data_dir.join(format!("aof-{id}.aof")),
@@ -197,6 +240,8 @@ impl<C: Commands> Runtime<C> {
             shards.push(Shard {
                 id,
                 nshards: n,
+                cluster: topo.clone(),
+                cluster_listener,
                 store,
                 commands: self.commands.clone(),
                 poller: Poller::new()?,

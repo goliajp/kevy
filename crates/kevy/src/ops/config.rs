@@ -350,6 +350,11 @@ fn config_pairs(cfg: &Config) -> Vec<(&'static str, String)> {
     v.push(("hz", cfg.expiry.hz.to_string()));
     v.push(("maxmemory-samples", cfg.expiry.sample.to_string()));
     v.push(("loglevel", log_level_str(cfg.log.level).to_string()));
+    v.push(("cluster-enabled", yes_no(cfg.cluster.enabled)));
+    v.push((
+        "cluster-port-base",
+        crate::cluster_port_base(cfg).to_string(),
+    ));
     v
 }
 

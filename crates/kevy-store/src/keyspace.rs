@@ -287,6 +287,51 @@ impl Store {
         self.insert_loaded(key, Value::ZSet(Box::new(z)), ttl_ms);
     }
 
+    /// Insert one already-typed `(key, value, ttl)` triple, e.g. straight out
+    /// of another store's [`Self::snapshot_each`] — the redistribution step
+    /// both reshard paths (embedded `shards` bring-up, server routing
+    /// migration) use to re-home keys after a layout change.
+    pub fn load_value(&mut self, key: &[u8], value: &Value, ttl_ms: Option<u64>) {
+        let k = key.to_vec();
+        match value {
+            Value::Str(v) => self.load_str(k, v.to_vec(), ttl_ms),
+            Value::Hash(h) => self.load_hash(
+                k,
+                h.iter().map(|(f, v)| (f.to_vec(), v.clone())).collect(),
+                ttl_ms,
+            ),
+            Value::List(l) => self.load_list(k, l.iter().cloned().collect(), ttl_ms),
+            Value::Set(s) => self.load_set(k, s.iter().map(|m| m.to_vec()).collect(), ttl_ms),
+            Value::ZSet(z) => self.load_zset(
+                k,
+                z.ordered().map(|(m, sc)| (m.to_vec(), sc)).collect(),
+                ttl_ms,
+            ),
+            Value::Stream(st) => {
+                let entries: Vec<crate::stream::LoadedStreamEntry> = st
+                    .iter_entries()
+                    .map(|(id, fv)| {
+                        let fvv = fv
+                            .iter()
+                            .map(|(f, v)| (f.as_slice().to_vec(), v.as_slice().to_vec()))
+                            .collect();
+                        (id.ms, id.seq, fvv)
+                    })
+                    .collect();
+                let last = st.last_id();
+                let mxd = st.max_deleted_id();
+                self.load_stream(
+                    k,
+                    entries,
+                    (last.ms, last.seq),
+                    (mxd.ms, mxd.seq),
+                    st.entries_added(),
+                    ttl_ms,
+                );
+            }
+        }
+    }
+
     /// Snapshot-load a stream: every entry plus the per-stream scalar
     /// state (last_id, max_deleted_id, entries_added) is restored
     /// verbatim. Caller passes already-decoded primitive tuples; this

@@ -216,6 +216,30 @@ kevy --bind 0.0.0.0 --port 7000 --threads 4 --dir /var/lib/kevy
 See [`crates/kevy/kevy.toml.example`](crates/kevy/kevy.toml.example) for the
 fully annotated config schema.
 
+### Cluster mode (single node, key-aware routing)
+
+`--cluster` (or `KEVY_CLUSTER=1` / `[cluster] enabled = true`) exposes each
+shard as a virtual cluster node: shard `i` gets a deterministic extra port at
+`port + 1 + i`, `CLUSTER SLOTS / SHARDS / NODES` report the real topology
+(CRC16 `{hashtag}` slots, one contiguous range per shard), and a wrong-shard
+key on a cluster port answers `-MOVED` instead of being forwarded. Stock
+cluster-aware clients (`redis-cli -c`, `redis-benchmark --cluster`, client
+libraries) then talk straight to the owning shard — no cross-shard forwarding
+tax. The main port keeps full proxy-style behaviour for everything else.
+
+```sh
+kevy --threads 8 --cluster          # main port 6004, shard ports 6005-6012
+redis-cli -c -p 6005 SET foo bar    # follows MOVED automatically
+```
+
+Superset notes vs Redis Cluster (single machine, single process — there is
+no failover, resharding, MIGRATE/ASK, or gossip): cross-slot multi-key
+commands (`MGET`, `SUNION`, transactions, blocking fan-outs) execute instead
+of failing with `-CROSSSLOT`, and keyspace-wide views (`KEYS`, `SCAN`,
+`DBSIZE`) stay whole-keyspace on every port. Switching an existing data dir
+in or out of cluster mode re-homes keys once at startup (sources are backed
+up as `*.premigration.<ts>`).
+
 ### As an embedded library
 
 ```rust
