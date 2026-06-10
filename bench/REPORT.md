@@ -716,3 +716,39 @@ Remaining ceiling levers (unstarted): reactor notification machinery
 (`run_uring` self ≈16 % — io_uring-native polling of the cross-core rings
 / eventfd integration) and key-aware routing (clusters/client-side
 sharding would erase the 87.5 % forward tax; ~4.5× theoretical headroom).
+
+## Reactor notification machinery — resolved (2026-06-10, lx64)
+
+The "`run_uring` self ≈16 %" headline decomposed (via `#[inline(never)]`
+on the loop's four inlined blocks + perf annotate) into: `uring_arm_conns`
+6.1 % — almost entirely a `keys()` snapshot Vec + 3–8 redundant map probes
+per conn per iteration to satisfy the borrow checker — and
+`uring_drain_inbound` 4.5 %, which is mostly real message-shuttling work,
+not empty polling. The notification *architecture* was never the hot cost.
+
+**Landed:**
+
+| commit | change | measured |
+|---|---|---|
+| `17bb639`/`c10db1f` | `KevyMap::iter_mut` (new stone API, miri-clean); single-pass arm loop, one `io` probe per conn, no snapshot | 8sh SET +3.8 % (4/4), GET +1.2 % (3/4) |
+| `2cf3f14`/`24bd703` | `IORING_OP_TIMEOUT` in kevy-uring; spin → nap → park idle ladder | throughput flat (+0.5/+1.4 %); **idle CPU 6.5 % → 0.7 %** (8 shards); c1 p50 unchanged |
+
+The park rung is the epoll park translated to the ring: `parked[me]` +
+fenced re-drain (same loom-verified pairing) + a waker-pipe read SQE +
+a timeout SQE, blocking in `submit_and_wait(1)`. Waker/timeout CQEs
+don't count as work, so an idle shard re-parks straight from a 50 ms
+tick instead of burning a spin burst.
+
+**Negative result (the instructive one):** parking directly after the
+spin stage — i.e. instant wakeups instead of the old 200 µs sleep —
+measured **−18…21 %** on the 8sh bench. Under load, the sleep was doing
+real work: brief lulls aggregate cross-core inbound into bigger batches,
+and instant wakes replaced that with producer-side pipe-write syscalls
+plus smaller batches per iteration. Throughput here wants bounded
+latency, not minimal latency; the nap rung keeps it.
+
+**Post-campaign profile (8sh-P256 SET):** reactor machinery
+(loop + arm + drain) 15.5 % → ~7.8 %; top single item is now
+`dispatch_batch` 7.1 % (parse + dispatch proper). The 40 % `intel_idle`
+on server cores is accept-skew + forward-tax idleness — that is the
+key-aware-routing lever (~4.5×), now the only big one left.
