@@ -35,7 +35,6 @@
 use crate::Commands;
 use crate::blocked::{BlockKind, encode_block_timeout, unix_now_ms};
 use crate::message::Inbound;
-use crate::reduce::shard_of;
 use crate::shard::Shard;
 use kevy_resp::{Argv, ArgvView, RespVersion};
 use std::collections::HashMap;
@@ -162,7 +161,7 @@ impl<C: Commands> Shard<C> {
         let keys: Vec<OriginKey> = entries
             .into_iter()
             .map(|(key, serve_argv)| OriginKey {
-                shard: shard_of(&key, self.nshards),
+                shard: self.shard_of(&key),
                 key,
                 serve_argv,
             })

@@ -29,6 +29,7 @@ kevy-rt = { path = "../kevy-rt", version = "1.13.0" }
 kevy-config = { path = "../kevy-config", version = "1.13.0" }
 kevy-persist = { path = "../kevy-persist", version = "1.13.0" }
 kevy-geo = { path = "../kevy-geo", version = "1.13.0" }
+kevy-hash = { path = "../kevy-hash", version = "1.13.0" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }

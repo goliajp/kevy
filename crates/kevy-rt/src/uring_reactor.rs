@@ -20,6 +20,8 @@
 use crate::Commands;
 use crate::conn::Conn;
 use crate::shard::Shard;
+pub(crate) use crate::uring_conn::UringConn;
+use crate::uring_conn::ParkState;
 use kevy_persist::{load_snapshot, replay_aof};
 use kevy_sys::Socket;
 use kevy_uring::{Completion, IoUring, KernelTimespec, ProvidedBufRing};
@@ -77,55 +79,15 @@ const OP_ACCEPT: u64 = 3 << OP_SHIFT;
 const OP_WAKER: u64 = 4 << OP_SHIFT;
 /// The bounded-park timeout fired (see [`ParkState`]).
 const OP_TIMEOUT: u64 = 5 << OP_SHIFT;
+/// Accept on the per-shard cluster listener (conns marked for `-MOVED`).
+const OP_ACCEPT_CL: u64 = 6 << OP_SHIFT;
 const CONN_MASK: u64 = (1 << OP_SHIFT) - 1;
-
-/// io_uring-specific per-connection state (the byte buffers that must outlive
-/// their in-flight SQEs). The command-level state stays in the shard's [`Conn`].
-pub(crate) struct UringConn {
-    // Fields are pub(crate) for the reap loop in [`crate::uring_inbox`].
-    /// A multishot recv SQE is armed for this conn (re-fires per arrival, drawing
-    /// from the shard's provided-buffer ring). Re-armed only when it terminates.
-    pub(crate) recv_armed: bool,
-    /// Stable buffer for an in-flight write (swapped in from `Conn::output`).
-    pub(crate) write_buf: Vec<u8>,
-    pub(crate) write_off: usize,
-    pub(crate) write_inflight: bool,
-    /// EOF/error seen on the socket — close once writes drain.
-    pub(crate) closing: bool,
-}
-
-impl UringConn {
-    fn new() -> Self {
-        UringConn {
-            recv_armed: false,
-            write_buf: Vec::new(),
-            write_off: 0,
-            write_inflight: false,
-            closing: false,
-        }
-    }
-}
-
-/// Parked-wait state: the waker-pipe read buffer and timeout payload that
-/// in-flight park SQEs point at. Lives on `run_uring`'s stack for the
-/// reactor's whole life, so the kernel-side pointers stay valid across
-/// iterations (a wake may reap only one of the two CQEs; the other SQE
-/// stays in flight into later parks).
-#[derive(Default)]
-struct ParkState {
-    /// A read SQE on the waker pipe is in flight.
-    waker_armed: bool,
-    /// A timeout SQE is in flight (bounds the blocking wait; a leftover
-    /// one from an earlier park just shortens the next park — harmless).
-    timeout_inflight: bool,
-    wake_buf: [u8; 8],
-    ts: KernelTimespec,
-}
 
 impl<C: Commands> Shard<C> {
     /// Completion-based run loop (Linux io_uring). Mirrors [`Shard::run`] but
     /// drives socket I/O through io_uring instead of the readiness poller.
     pub(crate) fn run_uring(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {
+        self.commands.on_shard_start(self.id);
         // Restore: snapshot then AOF replay (same as the readiness path).
         let snap = self.snapshot_path();
         if snap.exists()
@@ -148,6 +110,9 @@ impl<C: Commands> Shard<C> {
         let mut pbuf = ring.register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP)?;
         let mut io: KevyMap<u64, UringConn> = KevyMap::new();
         let mut accept_inflight = false;
+        // Starts "in flight" when cluster mode is off, so the arm loop never
+        // preps an accept on a listener that doesn't exist.
+        let mut cl_accept_inflight = self.cluster_listener.is_none();
         let mut comps: Vec<Completion> = Vec::with_capacity(URING_ENTRIES as usize);
         let mut idle_spins: u32 = 0;
         let mut park = ParkState::default();
@@ -167,9 +132,14 @@ impl<C: Commands> Shard<C> {
         let mut reap_counter: u32 = 0;
 
         while !stop.load(Ordering::Relaxed) {
-            // Always keep one accept in flight.
+            // Always keep one accept in flight (per listener).
             if !accept_inflight {
                 accept_inflight = ring.prep_accept(self.listener.raw(), OP_ACCEPT);
+            }
+            if !cl_accept_inflight
+                && let Some(cl) = &self.cluster_listener
+            {
+                cl_accept_inflight = ring.prep_accept(cl.raw(), OP_ACCEPT_CL);
             }
             self.uring_arm_conns(&mut ring, &mut io, pbuf.group());
 
@@ -191,8 +161,13 @@ impl<C: Commands> Shard<C> {
                 let op = c.user_data & !CONN_MASK;
                 let cid = c.user_data & CONN_MASK;
                 match op {
-                    OP_ACCEPT => {
-                        accept_inflight = false;
+                    OP_ACCEPT | OP_ACCEPT_CL => {
+                        let cluster = op == OP_ACCEPT_CL;
+                        if cluster {
+                            cl_accept_inflight = false;
+                        } else {
+                            accept_inflight = false;
+                        }
                         io_work = true;
                         if c.res >= 0 {
                             // SAFETY: a freshly accepted fd we now own.
@@ -200,7 +175,9 @@ impl<C: Commands> Shard<C> {
                             let _ = sock.set_nodelay();
                             let ncid = self.next_conn_id;
                             self.next_conn_id += 1;
-                            self.conns.insert(ncid, Conn::new(sock));
+                            let mut conn = Conn::new(sock);
+                            conn.cluster = cluster;
+                            self.conns.insert(ncid, conn);
                             io.insert(ncid, UringConn::new());
                         }
                     }

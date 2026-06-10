@@ -13,8 +13,10 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use kevy_hash::KevyHash;
-use kevy_persist::{Aof, load_snapshot, replay_aof};
-use kevy_store::{Store as Keyspace, Value};
+use kevy_persist::{
+    Aof, Routing, ShardsMeta, load_snapshot, read_shards_meta, replay_aof, write_shards_meta,
+};
+use kevy_store::Store as Keyspace;
 
 use crate::config::{Config, TtlReaperMode};
 use crate::metric::KevyMetric;
@@ -72,21 +74,23 @@ pub(crate) fn build_shards(config: &Config) -> io::Result<Vec<Arc<RwLock<Inner>>
     std::fs::create_dir_all(&dir)?;
 
     let meta_path = dir.join("shards.meta");
-    let prev_n: Option<usize> = std::fs::read_to_string(&meta_path)
-        .ok()
-        .and_then(|s| s.trim().parse().ok());
-    let same_layout = match prev_n {
-        Some(m) => m == n,
+    let prev = read_shards_meta(&meta_path);
+    // The embedded store always routes by KevyHash; a dir written by a
+    // slots-routing server re-shards (losslessly) on first embedded open.
+    let same_layout = match prev {
+        Some(m) => m.n == n && m.routing == Routing::KevyHash,
         None => n == 1, // no meta + n==1 = the untouched single-file layout
     };
 
     if same_layout {
         load_in_place(&dir, config, n, &mut stores)?;
     } else {
-        reshard(&dir, config, n, prev_n, &mut stores)?;
-        if n > 1 {
-            std::fs::write(&meta_path, n.to_string())?;
-        }
+        reshard(&dir, config, n, prev.map(|m| m.n), &mut stores)?;
+        // Always record the new layout — including n == 1: a stale meta
+        // from a larger prior n would otherwise trigger a second re-shard
+        // next open, whose sources were already renamed to `.premigration`
+        // (the shrink-to-one open would come up empty).
+        write_shards_meta(&meta_path, ShardsMeta { n, routing: Routing::KevyHash })?;
     }
 
     // Open each shard's live AOF for append (if persistence is on).
@@ -160,8 +164,7 @@ fn reshard(
 
     // Redistribute the merged keyspace into the target shards.
     temp.snapshot_each(|key, value, ttl_ms| {
-        let s = &mut stores[shard_idx(key, n)];
-        insert_value(s, key, value, ttl_ms);
+        stores[shard_idx(key, n)].load_value(key, value, ttl_ms);
     });
 
     // Back up sources, then materialize each shard's compacted AOF.
@@ -178,48 +181,6 @@ fn reshard(
         }
     }
     Ok(())
-}
-
-/// Insert one typed value (from `snapshot_each`) into `store`, preserving TTL.
-fn insert_value(store: &mut Keyspace, key: &[u8], value: &Value, ttl_ms: Option<u64>) {
-    let k = key.to_vec();
-    match value {
-        Value::Str(v) => store.load_str(k, v.to_vec(), ttl_ms),
-        Value::Hash(h) => store.load_hash(
-            k,
-            h.iter().map(|(f, v)| (f.to_vec(), v.clone())).collect(),
-            ttl_ms,
-        ),
-        Value::List(l) => store.load_list(k, l.iter().cloned().collect(), ttl_ms),
-        Value::Set(s) => store.load_set(k, s.iter().map(|m| m.to_vec()).collect(), ttl_ms),
-        Value::ZSet(z) => store.load_zset(
-            k,
-            z.ordered().map(|(m, sc)| (m.to_vec(), sc)).collect(),
-            ttl_ms,
-        ),
-        Value::Stream(st) => {
-            let entries: Vec<kevy_store::LoadedStreamEntry> = st
-                .iter_entries()
-                .map(|(id, fv)| {
-                    let fvv = fv
-                        .iter()
-                        .map(|(f, v)| (f.as_slice().to_vec(), v.as_slice().to_vec()))
-                        .collect();
-                    (id.ms, id.seq, fvv)
-                })
-                .collect();
-            let last = st.last_id();
-            let mxd = st.max_deleted_id();
-            store.load_stream(
-                k,
-                entries,
-                (last.ms, last.seq),
-                (mxd.ms, mxd.seq),
-                st.entries_added(),
-                ttl_ms,
-            );
-        }
-    }
 }
 
 fn emit_replay(config: &Config, commands: u64, bytes: u64, start: Instant) {
