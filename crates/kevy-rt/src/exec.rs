@@ -27,10 +27,11 @@ impl<C: Commands> Shard<C> {
         let Some(c) = self.conns.get_mut(&conn_id) else { return };
         let in_multi = c.multi.is_some();
         let proto = c.proto;
+        let cluster_conn = c.cluster;
         if !in_multi && matches!(resolved.txn_kind, TxnKind::Other | TxnKind::Watch) {
             let seq = c.next_seq;
             c.next_seq += 1;
-            self.start_command(conn_id, seq, proto, args, resolved);
+            self.start_command(conn_id, seq, proto, args, resolved, cluster_conn);
             return;
         }
         // Transaction-state arms (rare next to the dispatch path above);
@@ -125,7 +126,10 @@ impl<C: Commands> Shard<C> {
             let seq = c.next_seq;
             c.next_seq += 1;
             let proto = c.proto;
-            self.start_command(conn_id, seq, proto, cmd, resolved);
+            // cluster_conn = false: queued transactions execute with full
+            // cross-shard fan-out even on a cluster conn (superset
+            // behaviour — the redirect already happened, or never will).
+            self.start_command(conn_id, seq, proto, cmd, resolved, false);
         }
     }
 
@@ -141,6 +145,7 @@ impl<C: Commands> Shard<C> {
         proto: RespVersion,
         args: &A,
         resolved: ResolvedCmd,
+        cluster_conn: bool,
     ) {
         let ResolvedCmd {
             route,
@@ -167,6 +172,21 @@ impl<C: Commands> Shard<C> {
             }
             Route::Single(idx) => {
                 let shard = self.shard_of(&args[idx]);
+                // Cluster conns own their shard's slots only: a wrong-shard
+                // key redirects (`-MOVED`) instead of forwarding, keeping a
+                // cluster client's topology honest. `cluster_conn` is only
+                // ever true in cluster mode, so the compat / cluster-off
+                // path pays one always-false branch. (EXEC replay passes
+                // false — queued transactions keep full fan-out semantics.)
+                if cluster_conn && shard != self.id {
+                    if let Some(topo) = &self.cluster {
+                        let slot = kevy_hash::key_hash_slot(&args[idx]);
+                        let bytes = topo.moved(slot, shard);
+                        self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
+                        self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(bytes)));
+                        return;
+                    }
+                }
                 // Keyed routes put the key at argv[1] (or argv[2] for
                 // XGROUP/XINFO) — well inside u8.
                 let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
