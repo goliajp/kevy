@@ -109,6 +109,7 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"XADD"
             | b"XDEL"
             | b"XTRIM"
+            | b"XSETID"
             | b"XGROUP"
             | b"XREADGROUP"
             | b"XACK"
@@ -148,8 +149,8 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
         b"ZADD" | b"ZREM" | b"ZINCRBY" | b"GEOADD" => NotifyClass::Zset,
         // Stream — class `t`. XADD/XDEL/XTRIM/XGROUP/XACK/XCLAIM/
         // XREADGROUP all fire their lowercased verb name.
-        b"XADD" | b"XDEL" | b"XTRIM" | b"XGROUP" | b"XACK" | b"XCLAIM" | b"XAUTOCLAIM"
-        | b"XREADGROUP" => NotifyClass::Stream,
+        b"XADD" | b"XDEL" | b"XTRIM" | b"XSETID" | b"XGROUP" | b"XACK" | b"XCLAIM"
+        | b"XAUTOCLAIM" | b"XREADGROUP" => NotifyClass::Stream,
         // Generic — class `g`. (DEL single-key falls here; multi-key DEL
         // is routed through Op::Del + maybe_notify_del directly.)
         b"DEL" | b"EXPIRE" | b"PEXPIRE" | b"PERSIST" => NotifyClass::Generic,

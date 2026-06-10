@@ -326,6 +326,7 @@ impl Store {
                     (last.ms, last.seq),
                     (mxd.ms, mxd.seq),
                     st.entries_added(),
+                    st.export_groups(),
                     ttl_ms,
                 );
             }
@@ -333,9 +334,11 @@ impl Store {
     }
 
     /// Snapshot-load a stream: every entry plus the per-stream scalar
-    /// state (last_id, max_deleted_id, entries_added) is restored
-    /// verbatim. Caller passes already-decoded primitive tuples; this
-    /// fn does the [`SmallBytes`] / [`crate::StreamData`] conversion.
+    /// state (last_id, max_deleted_id, entries_added) and the consumer
+    /// groups are restored verbatim. Caller passes already-decoded
+    /// primitive tuples; this fn does the [`SmallBytes`] /
+    /// [`crate::StreamData`] conversion.
+    #[allow(clippy::too_many_arguments)]
     pub fn load_stream(
         &mut self,
         key: Vec<u8>,
@@ -343,6 +346,7 @@ impl Store {
         last_id: (u64, u64),
         max_deleted_id: (u64, u64),
         entries_added: u64,
+        groups: Vec<crate::stream::LoadedGroup>,
         ttl_ms: Option<u64>,
     ) {
         let mut s = crate::stream::StreamData::default();
@@ -359,6 +363,7 @@ impl Store {
             crate::stream::StreamId { ms: max_deleted_id.0, seq: max_deleted_id.1 },
             entries_added,
         );
+        s.import_groups(groups);
         self.insert_loaded(key, Value::Stream(Box::new(s)), ttl_ms);
     }
 }

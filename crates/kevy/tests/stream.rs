@@ -411,3 +411,36 @@ fn xadd_on_wrong_type_errors() {
     let r = read_reply(&mut c);
     assert!(r.starts_with(b"-WRONGTYPE"), "got: {:?}", String::from_utf8_lossy(&r));
 }
+
+// ───────────── XSETID (2026-06-11) ─────────────
+
+#[test]
+fn xsetid_bumps_clock_and_rejects_rollback() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+    c.write_all(&req(&[b"XSETID", b"nope", b"1-0"])).unwrap();
+    assert_eq!(
+        read_reply(&mut c),
+        b"-ERR The XSETID command requires the key to exist.\r\n"
+    );
+    c.write_all(&req(&[b"XADD", b"s", b"5-1", b"f", b"v"])).unwrap();
+    assert_eq!(read_reply(&mut c), b"$3\r\n5-1\r\n");
+    c.write_all(&req(&[b"XSETID", b"s", b"4-0"])).unwrap();
+    assert_eq!(
+        read_reply(&mut c),
+        b"-ERR The ID specified in XSETID is smaller than the target stream top item\r\n"
+    );
+    c.write_all(&req(&[
+        b"XSETID", b"s", b"9-0", b"ENTRIESADDED", b"42", b"MAXDELETEDID", b"3-3",
+    ]))
+    .unwrap();
+    assert_eq!(read_reply(&mut c), b"+OK\r\n");
+    // The bumped clock now gates XADD.
+    c.write_all(&req(&[b"XADD", b"s", b"9-0", b"f", b"v"])).unwrap();
+    assert_eq!(
+        read_reply(&mut c),
+        b"-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n"
+    );
+    c.write_all(&req(&[b"XADD", b"s", b"9-1", b"f", b"v"])).unwrap();
+    assert_eq!(read_reply(&mut c), b"$3\r\n9-1\r\n");
+}
