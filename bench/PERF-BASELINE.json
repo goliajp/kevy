@@ -1,0 +1,13 @@
+{
+  "recorded": "2026-06-10T15:58:57Z",
+  "bin": "kevy_v1.14.0",
+  "tolerance": 0.92,
+  "metrics": {
+    "pinned_cluster_get": 26038402,
+    "pinned_cluster_set": 22523482,
+    "pinned_compat_get": 18146240,
+    "pinned_compat_set": 17097328,
+    "legacy_8sh_get": 10877494,
+    "legacy_8sh_set": 9973447
+  }
+}

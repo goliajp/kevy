@@ -88,12 +88,24 @@ fn finalize_keys(shape: KeyShape, acc: Vec<Vec<u8>>) -> Vec<u8> {
     out
 }
 
-/// Reassemble a cross-shard non-blocking `XREAD` reply from per-stream slots
-/// in request order. Empty streams (`None`) are skipped; if every stream was
-/// empty the reply is `*-1` (matching single-shard non-blocking XREAD). If
-/// any stream returned an error frame (leading `-`) it's surfaced as the
-/// whole reply — Redis fails the command on the first wrong-type / bad-id
-/// stream. XREAD has no RESP3 shape, so this is proto-independent.
+/// Reassemble a cross-shard non-blocking `XREAD` / `XREADGROUP` reply from
+/// per-stream slots in request order. Empty streams (`None`) are skipped; if
+/// every stream was empty the reply is `*-1` (matching single-shard
+/// non-blocking XREAD). If any stream returned an error frame (leading `-`)
+/// it's surfaced as the whole reply — Redis fails the command on the first
+/// wrong-type / bad-id stream. XREAD has no RESP3 shape, so this is
+/// proto-independent.
+///
+/// Documented divergence (XREADGROUP only): upstream Redis validates every
+/// key/group *before* delivering anything, so an error implies nothing was
+/// delivered. Here each shard executes its slice independently — if shard A
+/// delivered entries (PEL rows recorded) and shard B then reports NOGROUP,
+/// the client sees the error but A's deliveries stand. They are not lost:
+/// they sit in A's PEL under the requesting consumer, visible to XPENDING
+/// and reclaimable via XAUTOCLAIM — the same place they'd be after a client
+/// crash mid-read. Pre-validating across shards would cost an extra
+/// round-trip on every multi-stream XREADGROUP; the error path is rare and
+/// recoverable, so the trade-off stands (RFC 2026-06-11).
 fn finalize_xread_gather(slots: Vec<Option<Vec<u8>>>) -> Vec<u8> {
     for slot in slots.iter().flatten() {
         if slot.first() == Some(&b'-') {

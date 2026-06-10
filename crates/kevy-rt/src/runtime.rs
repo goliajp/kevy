@@ -289,7 +289,16 @@ impl<C: Commands> Runtime<C> {
                 psub_local: HashMap::new(),
                 publish_batch: (0..n).map(|_| Vec::new()).collect(),
                 request_batch: (0..n).map(|_| Vec::new()).collect(),
-                notify_flags: crate::NotificationFlags::default(),
+                // Seed from the live config at construction, not default():
+                // these flags were otherwise blind until the first 100 ms
+                // shard tick, so a write landing before that never fired
+                // its keyspace notification (CI-visible flake; a real
+                // startup gap for any pre-configured notify_keyspace_events).
+                notify_flags: self
+                    .commands
+                    .live_runtime_config()
+                    .notify_flags
+                    .unwrap_or_default(),
                 spin_limit: self.spin_limit,
                 // `Poller::wait` takes the timeout as `i32` (POSIX
                 // poll/epoll convention). The config knob is `u32` —

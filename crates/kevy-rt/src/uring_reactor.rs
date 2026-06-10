@@ -385,10 +385,8 @@ impl<C: Commands> Shard<C> {
         if c.res <= 0 {
             // Close on EOF (0) or a real error, but NOT on -ENOBUFS (the ring was
             // momentarily empty; the data is still queued, so just re-arm).
-            if c.res != -ENOBUFS
-                && let Some(uc) = io.get_mut(&cid)
-            {
-                uc.closing = true;
+            if c.res != -ENOBUFS {
+                self.uring_mark_closing(cid, io);
             }
             return;
         }
@@ -429,10 +427,22 @@ impl<C: Commands> Shard<C> {
         }
         if outcome.protocol_error {
             self.protocol_error(cid);
-            if let Some(uc) = io.get_mut(&cid) {
-                uc.closing = true;
-            }
+            self.uring_mark_closing(cid, io);
         }
+    }
+
+    /// Mark `cid` closing and eagerly cancel its block waiters (local
+    /// parked BLPOP/XREAD + cross-shard arbiter registrations). The full
+    /// teardown still happens in `uring_reap_closed`, but that runs on a
+    /// 1/16-iteration throttle — without the eager cancel a dead conn's
+    /// waiter stayed live for up to 16 iterations and could consume a
+    /// push (e.g. an LPUSH element) meant for a live client.
+    fn uring_mark_closing(&mut self, cid: u64, io: &mut KevyMap<u64, UringConn>) {
+        if let Some(uc) = io.get_mut(&cid) {
+            uc.closing = true;
+        }
+        self.blocked.drop_for_conn(cid);
+        self.cancel_xshard_on_close(cid);
     }
 
     /// Close the AOF group-commit window, best-effort (the io_uring path's
@@ -451,7 +461,7 @@ impl<C: Commands> Shard<C> {
         };
         uc.write_inflight = false;
         if res < 0 {
-            uc.closing = true;
+            self.uring_mark_closing(cid, io);
             return;
         }
         uc.write_off += res as usize;
