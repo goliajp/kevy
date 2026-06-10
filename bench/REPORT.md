@@ -860,3 +860,19 @@ Random-key load exposes what the fixed-key angle hides (chiefly the old
 unbounded reaper walk), stretching the gap to 2.2×. With cluster routing —
 a capability the anchor doesn't have — HEAD's 23.7 M GET stands at 2.7×
 the anchor's best angle and 3.5× its same-load number.
+
+### Long-run headline + annotate verdict (2026-06-10, lx64)
+
+The 8 M-ops-per-process A/B segments under-amortise startup/ramp; official
+long runs (30 M ops × 8 processes, pinned-hashtag cluster angle, quiet box):
+**GET 30.8 M ops/s, SET 22.3 M ops/s** — GET at ~80 % of the naive 38 M
+ceiling estimate.
+
+Instruction-level annotate of the remaining top spots found no mechanical
+waste left to claim: `dispatch_batch` (17 %) is flat-profile parse+dispatch
+work (hottest single instruction 1.7 %, an inlined hash multiply);
+`find_by_borrow` (25 %) is the keyspace lookup itself (kevy-map already
+deep-polished); `shard_of` (4 %) splits roughly half hashtag `{}` scanning,
+half slice-by-4 CRC — a SWAR memchr for the brace scan is worth ~1–2 %,
+below the round-to-round noise floor, recorded as an observation rather
+than claimed. The remaining gap to ceiling is real work, not overhead.
