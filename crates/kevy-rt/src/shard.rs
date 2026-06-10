@@ -135,7 +135,7 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) reply_scratch: Vec<u8>,
     /// Recycled `Argv`s for the cross-shard forward path: the forward
     /// sites fill from here (no malloc in steady state), and the
-    /// `RequestBatch` handler drops each executed argv back in. See
+    /// `ResponseBatch` handler drops each returned husk back in. See
     /// [`kevy_resp::ArgvPool`] for the ownership cycle.
     pub(crate) argv_pool: kevy_resp::ArgvPool,
 }

@@ -35,10 +35,9 @@ impl<C: Commands> Shard<C> {
                         self.aof_begin_group();
                         for (conn, seq, argv, proto, meta) in reqs {
                             let part = self.run_dispatch(&argv, proto, meta);
-                            resps.push((conn, seq, part));
-                            // Spent argv joins THIS shard's pool for its own
-                            // forwards (see the epoll handler in `inbox.rs`).
-                            self.argv_pool.put(argv);
+                            // The spent argv husk rides home with the reply;
+                            // the origin pools it (see `RespBatch`).
+                            resps.push((conn, seq, part, argv));
                         }
                         // fsync the batch's forwarded writes before replying.
                         self.uring_aof_end_group();
@@ -47,7 +46,8 @@ impl<C: Commands> Shard<C> {
                     // Batched replies: fold each by seq; the arm loop writes any
                     // conn whose output this appended to.
                     Inbound::ResponseBatch(resps) => {
-                        for (conn, seq, part) in resps {
+                        for (conn, seq, part, husk) in resps {
+                            self.argv_pool.put(husk);
                             self.fold(conn, seq, part);
                         }
                     }
