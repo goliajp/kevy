@@ -60,11 +60,14 @@ use std::path::Path;
 /// v2 stored each entry's TTL as **remaining millis** (relative), so a load
 /// re-anchored the deadline to load-time — a restart reset every key to a
 /// fresh full TTL (INC-2026-06-09). v3 stores the **absolute** Unix-ms
-/// deadline, so a load reconstructs the original instant. The loader still
-/// accepts v2 (treated as relative) for backward compatibility.
+/// deadline, so a load reconstructs the original instant. v4 appends a
+/// consumer-group section to each `OP_STREAM` payload (groups + consumers
+/// plus PEL) — before that, SAVE/reshard silently dropped group state. The
+/// loader still accepts v2 (relative TTL) and v3 (no group section).
 const MAGIC: &[u8; 8] = b"KEVYSNAP";
-const VERSION: u8 = 3;
+const VERSION: u8 = 4;
 const VERSION_RELATIVE_TTL: u8 = 2;
+const VERSION_ABSOLUTE_TTL: u8 = 3;
 
 // Record opcodes (one per value type). Each record is:
 //   [op][ttl: u8 flag + optional u64][key][type payload]
@@ -126,18 +129,18 @@ pub fn load_snapshot(store: &mut Store, path: &Path) -> io::Result<()> {
         ));
     }
     let version = read_u8(&mut r)?;
-    if version != VERSION && version != VERSION_RELATIVE_TTL {
+    if !(VERSION_RELATIVE_TTL..=VERSION).contains(&version) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "kevy snapshot: bad version",
         ));
     }
-    // v3 stores absolute Unix-ms deadlines; convert each to remaining ms
+    // v3+ stores absolute Unix-ms deadlines; convert each to remaining ms
     // against one `now` read so the load is internally consistent. A deadline
     // already past becomes `Some(0)` → loaded then immediately reaped (lazy
     // get / active reaper), matching "expired key is gone". v2 ttls are
     // already remaining, so pass them through.
-    let absolute_ttl = version >= VERSION;
+    let absolute_ttl = version >= VERSION_ABSOLUTE_TTL;
     let now = kevy_store::now_unix_ms();
 
     loop {
@@ -213,12 +216,20 @@ pub fn load_snapshot(store: &mut Store, path: &Path) -> io::Result<()> {
                     }
                     entries.push((ms, seq, fv));
                 }
+                // v4 appends the consumer-group section; v2/v3 files
+                // predate groups-in-snapshot, so they load with none.
+                let groups = if version >= VERSION {
+                    read_stream_groups(&mut r)?
+                } else {
+                    Vec::new()
+                };
                 store.load_stream(
                     key,
                     entries,
                     (last_ms, last_seq),
                     (mxd_ms, mxd_seq),
                     entries_added,
+                    groups,
                     ttl,
                 );
             }
@@ -300,9 +311,65 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
                     write_bytes(w, v.as_slice())?;
                 }
             }
+            write_stream_groups(w, &s.export_groups())?;
         }
     }
     Ok(())
+}
+
+/// v4 consumer-group section: `[n_groups][per group: name, last_delivered,
+/// consumers (name + last_seen_ms), PEL rows]`. Tombstone PEL rows are kept
+/// — the snapshot path is the full-fidelity one (the AOF rewrite can't
+/// re-create them via XCLAIM, see `rewrite_fmt`).
+fn write_stream_groups<W: Write>(w: &mut W, groups: &[kevy_store::LoadedGroup]) -> io::Result<()> {
+    w.write_all(&(groups.len() as u32).to_le_bytes())?;
+    for g in groups {
+        write_bytes(w, &g.name)?;
+        w.write_all(&g.last_delivered.0.to_le_bytes())?;
+        w.write_all(&g.last_delivered.1.to_le_bytes())?;
+        w.write_all(&(g.consumers.len() as u32).to_le_bytes())?;
+        for (name, last_seen_ms) in &g.consumers {
+            write_bytes(w, name)?;
+            w.write_all(&last_seen_ms.to_le_bytes())?;
+        }
+        w.write_all(&(g.pel.len() as u32).to_le_bytes())?;
+        for (ms, seq, consumer, delivery_time_ms, delivery_count) in &g.pel {
+            w.write_all(&ms.to_le_bytes())?;
+            w.write_all(&seq.to_le_bytes())?;
+            write_bytes(w, consumer)?;
+            w.write_all(&delivery_time_ms.to_le_bytes())?;
+            w.write_all(&delivery_count.to_le_bytes())?;
+        }
+    }
+    Ok(())
+}
+
+/// Loader-side twin of [`write_stream_groups`].
+fn read_stream_groups<R: Read>(r: &mut R) -> io::Result<Vec<kevy_store::LoadedGroup>> {
+    let n = read_u32(r)? as usize;
+    let mut groups = Vec::with_capacity(n);
+    for _ in 0..n {
+        let name = read_bytes(r)?;
+        let last_delivered = (read_u64(r)?, read_u64(r)?);
+        let nc = read_u32(r)? as usize;
+        let mut consumers = Vec::with_capacity(nc);
+        for _ in 0..nc {
+            let cname = read_bytes(r)?;
+            consumers.push((cname, read_u64(r)?));
+        }
+        let np = read_u32(r)? as usize;
+        let mut pel = Vec::with_capacity(np);
+        for _ in 0..np {
+            let ms = read_u64(r)?;
+            let seq = read_u64(r)?;
+            let consumer = read_bytes(r)?;
+            let delivery_time_ms = read_u64(r)?;
+            let delivery_count = read_u32(r)?;
+            pel.push((ms, seq, consumer, delivery_time_ms, delivery_count));
+        }
+        groups.push(kevy_store::LoadedGroup { name, last_delivered, consumers, pel });
+    }
+    Ok(groups)
 }
 
 fn write_ttl<W: Write>(w: &mut W, ttl: Option<u64>) -> io::Result<()> {
@@ -364,3 +431,5 @@ fn read_u64<R: Read>(r: &mut R) -> io::Result<u64> {
 mod tests;
 #[cfg(test)]
 mod tests_aof;
+#[cfg(test)]
+mod tests_rewrite;
