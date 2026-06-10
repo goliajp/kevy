@@ -175,6 +175,7 @@ impl<C: Commands> Shard<C> {
     }
 
     pub(crate) fn run(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {
+        self.commands.on_shard_start(self.id);
         // Restore: snapshot (state as of last SAVE) then replay the AOF (writes
         // since that SAVE). The AOF is truncated at each SAVE, so this never
         // double-applies. Replay goes straight to the store (no re-logging).

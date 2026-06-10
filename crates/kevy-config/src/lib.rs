@@ -125,6 +125,9 @@ impl Config {
         if let Some(aof) = cli.aof {
             self.persistence.aof = aof;
         }
+        if let Some(cluster) = cli.cluster {
+            self.cluster.enabled = cluster;
+        }
         Ok(())
     }
 
@@ -244,6 +247,8 @@ pub struct CliOverrides {
     pub data_dir: Option<PathBuf>,
     /// Override `persistence.aof` (`--no-aof` → `Some(false)`).
     pub aof: Option<bool>,
+    /// Override `cluster.enabled` (`--cluster` → `Some(true)`).
+    pub cluster: Option<bool>,
 }
 
 fn read_required(p: &Path) -> Result<String, ConfigError> {
