@@ -4,6 +4,86 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.14.0] — 2026-06-10
+
+Major release: **single-node CLUSTER mode** (key-aware routing — the last
+lever of the perf-ceiling campaign), the full hot-path perf campaign (①
+allocator/parse/dispatch, ② reactor notification), cross-shard XREADGROUP,
+and a TTL-reaper fix. 8-shard headline moves from ~8.7 M to **30.8 M GET /
+22.3 M SET ops/s** (pinned-hashtag angle, lx64). Workspace 1.13.0 → 1.14.0;
+kevy-embedded 1.1.17 → 1.1.18; kevy-client 1.7.13 → 1.7.14.
+
+### Added
+
+- **Single-node cluster mode** (`--cluster` / `KEVY_CLUSTER=1` /
+  `[cluster] enabled`): keys route by Redis-cluster slot (CRC16 `{hashtag}`
+  & 16383, one contiguous range per shard); every shard `i` binds a second
+  deterministic listener at `port_base + i` (default `port+1+i`) answering
+  wrong-shard keys with `-MOVED`. Stock cluster-aware clients
+  (`redis-cli -c`, `redis-benchmark --cluster`, client libraries) discover
+  the topology and talk straight to the owning shard — no cross-shard
+  forwarding tax. The main SO_REUSEPORT port keeps full proxy-style
+  behaviour. `CLUSTER SLOTS / SHARDS / NODES / INFO / MYID / KEYSLOT /
+  COUNTKEYSINSLOT` answer with the real topology; `KEYSLOT` matches upstream
+  (`foo` → 12182), and a packet capture across a full benchmark run shows
+  zero spurious MOVEDs.
+- **`shards.meta` v2 + automatic re-shard**: the data dir now records
+  (shard count, routing scheme); a mismatch at bring-up re-homes every key
+  once, with `.premigration.<ts>` backups. Fixes the server silently
+  stranding keys on a `--threads` change (it never wrote a meta), and an
+  embedded shrink-to-one bug that could truncate a live AOF.
+- **`kevy_hash::crc16` / `key_hash_slot`**: XMODEM CRC16 (compile-time
+  tables, slice-by-4) + Redis-cluster hashtag slot mapping.
+- **Cross-shard non-blocking multi-stream `XREADGROUP`**: previously only
+  the first STREAMS key's shard was read, silently dropping streams owned
+  elsewhere; now fans out per stream with group context, PEL updates and
+  AOF logging on each owning shard (logged as the single-stream rewrite, so
+  per-shard replay is correct).
+- Fuzz targets for `shards.meta` parsing (round-trip fixpoint) and
+  `key_hash_slot` (slot range + hashtag metamorphic property).
+
+### Changed
+
+- **Hot-path perf campaign** (carried since v1.13.0): ArgvPool zero-malloc
+  cross-shard forwarding, SmallReply stack-inline replies, borrowed
+  single-pass multibulk parse, tier-1 GET/SET dispatch fast path,
+  DispatchMeta resolve-once, single conns-probe pre-dispatch, io_uring
+  spin→nap→park idle ladder (idle CPU 6.5 % → 0.7 %), batched
+  uring_arm_conns, IORING_OP_TIMEOUT bounded park.
+- **SLOWLOG defaults to OFF** (`slowlog-log-slower-than = -1`): the 10 ms
+  Redis default cost every command an `Instant::now()` pair (~13-19 % at
+  multi-M ops/s). Re-enable with `CONFIG SET slowlog-log-slower-than 10000`.
+- **TTL reaper bounds its bucket walk** (`samples × 8` visits per round):
+  a TTL-free keyspace previously paid a full-table walk every 100 ms tick
+  (measured 6 % of server CPU); sparse-TTL coverage leans on the rotating
+  random start + lazy expiry.
+- `CONFIG GET` now exposes `save` (empty = no save points), so standard
+  tooling (e.g. redis-benchmark's per-node config fetch) stops warning.
+
+### Fixed
+
+- A bare 1-element `XREADGROUP` could panic the receiving shard
+  (out-of-bounds argv index); now a clean arity error.
+- Cluster port ranges that would overflow u16 are rejected at startup
+  (loudly) instead of wrapping onto low ports while CLUSTER SLOTS
+  advertises 65536+.
+- XREADGROUP-gather write housekeeping derived the stream key by scanning
+  for the literal "STREAMS", mis-targeting WATCH/notify when a group or
+  consumer is named "streams"; now derived from the fixed rewrite shape.
+- Cluster mode with AOF off and an empty dir now still records the layout,
+  so a later SAVE + non-cluster restart can't silently strand keys.
+
+### Known limitations
+
+- Stream **consumer groups / PELs are not encoded** into snapshots or AOF
+  rewrites (pre-existing): they recover only via original-AOF command
+  replay, so SAVE-only persistence, BGREWRITEAOF, and layout re-shards drop
+  group state (originals remain in `.premigration` backups). Tracked for an
+  upcoming release.
+- Cross-slot multi-key commands execute (single-machine superset) instead
+  of returning `-CROSSSLOT`; keyspace-wide views stay whole-keyspace on
+  every port.
+
 ## [v1.13.0] — 2026-06-09
 
 Minor release: **cross-shard keyspace scan** for embedded sharding. Workspace
