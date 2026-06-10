@@ -245,7 +245,11 @@ fn xread_streams_route<A: ArgvView + ?Sized>(
 /// dropped — same bug shape the non-blocking multi-stream XREAD had.
 pub(crate) fn xreadgroup_route<A: ArgvView + ?Sized>(args: &A) -> Route {
     if args.len() < 4 || !args[1].eq_ignore_ascii_case(b"GROUP") {
-        return Route::Single(1);
+        // Too short / not GROUP-form: route single-key so cmd_xreadgroup
+        // emits the precise arity error. A bare `XREADGROUP` (len 1) has no
+        // args[1] to route by — fall back to Local so the runtime never
+        // indexes a missing arg (Route::Single(1) would panic the shard).
+        return if args.len() >= 2 { Route::Single(1) } else { Route::Local };
     }
     let mut count: Option<usize> = None;
     let mut noack = false;
