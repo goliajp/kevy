@@ -9,7 +9,7 @@
 //! cross-shard hop, or a block-and-park).
 
 use crate::Commands;
-use crate::message::{Agg, DispatchMeta, Op};
+use crate::message::{Agg, DispatchMeta};
 use crate::shard::Shard;
 use kevy_resp::{ArgvView, RespVersion};
 use std::time::Instant;
@@ -45,14 +45,17 @@ impl<C: Commands> Shard<C> {
         }
         self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
         if shard == self.id {
-            // Local-but-not-fast-path: only here we need an owned Argv to
-            // hand to exec_op via Op::Dispatch.
-            let part = self.exec_op(Op::Dispatch(args.to_argv(), proto, meta));
+            // Local-but-not-fast-path (a prior cmd is still pending):
+            // dispatch straight off the borrowed argv — no owned
+            // materialise needed.
+            let part = self.run_dispatch(args, proto, meta);
             self.fold(conn_id, seq, part);
         } else {
-            // Cross-shard forward: materialise owned at the handoff. The
-            // -c50 single-shard hot path never reaches here.
-            self.request_batch[shard].push((conn_id, seq, args.to_argv(), proto, meta));
+            // Cross-shard forward: materialise owned at the handoff —
+            // into a pool-recycled Argv, so the steady state mallocs
+            // nothing. The -c50 single-shard hot path never reaches here.
+            let argv = self.argv_pool.take_filled(args);
+            self.request_batch[shard].push((conn_id, seq, argv, proto, meta));
         }
     }
 
@@ -184,11 +187,16 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Post-`dispatch_into` work for a write that landed in the inline
-    /// fast path: WATCH version bump, AOF append, keyspace notify, and
-    /// BLOCK reactor wake on the written key. Each step is a no-op when
-    /// its feature is unused on this shard.
-    fn post_write_housekeeping<A: ArgvView + ?Sized>(&mut self, args: &A, meta: DispatchMeta) {
+    /// Post-`dispatch_into` work for a write — runs after the inline fast
+    /// path here and after [`Shard::run_dispatch`] (the local fallback +
+    /// forwarded paths): WATCH version bump, AOF append, keyspace notify,
+    /// and BLOCK reactor wake on the written key. Each step is a no-op
+    /// when its feature is unused on this shard.
+    pub(crate) fn post_write_housekeeping<A: ArgvView + ?Sized>(
+        &mut self,
+        args: &A,
+        meta: DispatchMeta,
+    ) {
         // The WATCH bump uses `meta.key_idx` straight from the origin
         // resolve() — no verb re-parse (this used to re-run the ~40-arm
         // `Commands::route` walk on every local write). `bump_if_watched`

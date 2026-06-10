@@ -211,24 +211,17 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Fan a built target list out: locally exec on this shard, batch
-    /// single-key forwards to peer shards (the hot -c50 path), and use the
-    /// unbatched `Inbound::Request` for multi-key ops that don't fit the
-    /// batch shape.
+    /// Fan a built target list out: locally exec on this shard, or send the
+    /// unbatched `Inbound::Request` to the owning peer. Single-key forwards
+    /// never come through here — `start_single` pushes them straight onto
+    /// `request_batch` (the hot batched lane).
     pub(crate) fn dispatch_targets(&mut self, conn_id: u64, seq: u64, targets: Vec<(usize, Op)>) {
         for (shard, op) in targets {
             if shard == self.id {
                 let part = self.exec_op(op);
                 self.fold(conn_id, seq, part);
-            } else if let Op::Dispatch(argv, proto, meta) = op {
-                // Single-key command for a peer shard: batch it into one
-                // cross-core send per target (flushed by `flush_requests`),
-                // instead of one `Inbound::Request` per command. This is the
-                // hot -c50 path; the ring/fold tax is what drags many shards
-                // below single-shard throughput.
-                self.request_batch[shard].push((conn_id, seq, argv, proto, meta));
             } else {
-                // Multi-key ops (Del/MSet/Gather/…) keep the unbatched path.
+                // Multi-key ops (Del/MSet/Gather/…) use the unbatched path.
                 self.send_to(
                     shard,
                     Inbound::Request {

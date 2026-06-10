@@ -2,7 +2,7 @@
 //! fan-out. Each shard owns its own [`SlowlogState`]; `SLOWLOG GET` and
 //! `SLOWLOG LEN` aggregate across shards, `SLOWLOG RESET` clears them all.
 //!
-//! Timing position: the inline fast-path and `exec_op`'s [`Op::Dispatch`] arm
+//! Timing position: the inline fast-path and the forwarded `Shard::run_dispatch` path
 //! both measure `Instant::now()` around the dispatch call only (no AOF /
 //! WATCH / notify overhead is charged to the recorded micros). Records only
 //! when `state.slower_than_micros >= 0` AND elapsed micros strictly exceed

@@ -238,6 +238,7 @@ impl<C: Commands> Runtime<C> {
                 origin_blocks: std::collections::HashMap::new(),
                 xwaiters: crate::block_xshard::XShardWaiters::default(),
                 reply_scratch: Vec::with_capacity(4096),
+                argv_pool: kevy_resp::ArgvPool::new(),
             });
         }
 
