@@ -77,15 +77,32 @@ pub enum Route {
     /// whether to short-circuit (HELP / error) or fan out across
     /// shards (GET / LEN / RESET). See [`parse_slowlog_sub`].
     Slowlog(SlowlogSub),
-    /// Non-blocking `XREAD` over **multiple** streams — fan each stream
-    /// out to its owning shard and merge the per-stream replies in request
-    /// order (single-stream XREAD still routes via [`Self::Single`]). Each
-    /// element is `(stream key, last-seen id)`; `count` is the optional
-    /// `COUNT` cap applied per stream. The command set builds this only for
-    /// the non-blocking, ≥2-stream form; blocking XREAD parks on the origin
-    /// shard instead (see the cross-shard BLOCK arbiter).
+    /// Non-blocking `XREAD` / `XREADGROUP` over **multiple** streams — fan
+    /// each stream out to its owning shard and merge the per-stream replies
+    /// in request order (single-stream forms still route via
+    /// [`Self::Single`]). Each element is `(stream key, last-seen id)`;
+    /// `count` is the optional `COUNT` cap applied per stream; `group`
+    /// `Some` makes each per-shard sub-query an `XREADGROUP` (a write —
+    /// PEL / last-delivered updates happen on each stream's owning shard
+    /// and are AOF-logged there as the rewritten single-stream command).
+    /// The command set builds this only for the non-blocking, ≥2-stream
+    /// forms; blocking reads park on the origin shard instead (see the
+    /// cross-shard BLOCK arbiter).
     XReadGather {
         streams: Vec<(Vec<u8>, Vec<u8>)>,
         count: Option<usize>,
+        group: Option<XGroupCtx>,
     },
+}
+
+/// The `GROUP <name> <consumer>` (+ `NOACK`) context an `XREADGROUP`
+/// gather carries to each per-stream sub-query.
+#[derive(Debug)]
+pub struct XGroupCtx {
+    /// Consumer-group name.
+    pub group: Vec<u8>,
+    /// Consumer name within the group.
+    pub consumer: Vec<u8>,
+    /// `NOACK` — deliver without adding to the PEL.
+    pub noack: bool,
 }

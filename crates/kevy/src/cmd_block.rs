@@ -13,7 +13,7 @@
 //! dispatcher sees output and skips registration.
 
 use kevy_resp::{Argv, ArgvView};
-use kevy_rt::{BlockHint, BlockKind, Route, Store};
+use kevy_rt::{BlockHint, BlockKind, Route, Store, XGroupCtx};
 
 /// Classify an uppercased verb into its blocking-command hint. The runtime
 /// uses this (via [`crate::KevyCommands::resolve`]) to know whether to park
@@ -203,7 +203,7 @@ pub(crate) fn xread_route<A: ArgvView + ?Sized>(args: &A) -> Route {
                 }
                 i = i.saturating_add(2);
             }
-            b"STREAMS" => return xread_streams_route(args, i + 1, count),
+            b"STREAMS" => return xread_streams_route(args, i + 1, count, None),
             _ => return Route::Single(1),
         }
     }
@@ -219,6 +219,7 @@ fn xread_streams_route<A: ArgvView + ?Sized>(
     args: &A,
     start: usize,
     count: Option<usize>,
+    group: Option<XGroupCtx>,
 ) -> Route {
     let Some(rest) = args.len().checked_sub(start) else {
         return Route::Single(1);
@@ -233,31 +234,54 @@ fn xread_streams_route<A: ArgvView + ?Sized>(
     let streams = (0..n)
         .map(|j| (args[start + j].to_vec(), args[start + n + j].to_vec()))
         .collect();
-    Route::XReadGather { streams, count }
+    Route::XReadGather { streams, count, group }
 }
 
 /// Routing for `XREADGROUP`: same as [`xread_route`] but starts the scan
-/// after `GROUP gname consumer` and skips the bare `NOACK` flag. Looks
-/// up the first STREAMS key, the routing target.
+/// after `GROUP gname consumer` and tracks the bare `NOACK` flag. One
+/// stream routes by its key (single-shard path); ≥2 streams become a
+/// cross-shard gather carrying the group context, so streams owned by
+/// other shards are read (and their PEL updated) instead of silently
+/// dropped — same bug shape the non-blocking multi-stream XREAD had.
 pub(crate) fn xreadgroup_route<A: ArgvView + ?Sized>(args: &A) -> Route {
     if args.len() < 4 || !args[1].eq_ignore_ascii_case(b"GROUP") {
         return Route::Single(1);
     }
+    let mut count: Option<usize> = None;
+    let mut noack = false;
     let mut i = 4usize;
     while i < args.len() {
         let upper = args[i].to_ascii_uppercase();
         match upper.as_slice() {
             b"BLOCK" => return Route::Local,
             b"STREAMS" => {
-                let key_idx = i + 1;
-                return if key_idx < args.len() {
-                    Route::Single(key_idx)
-                } else {
-                    Route::Local
+                if i + 1 >= args.len() {
+                    return Route::Local; // cmd_xreadgroup emits the error
+                }
+                let group = XGroupCtx {
+                    group: args[2].to_vec(),
+                    consumer: args[3].to_vec(),
+                    noack,
                 };
+                return xread_streams_route(args, i + 1, count, Some(group));
             }
-            b"COUNT" => i = i.saturating_add(2),
-            b"NOACK" => i = i.saturating_add(1),
+            b"COUNT" => {
+                // Malformed COUNT → single-key route so the command body
+                // emits the precise syntax error.
+                match args
+                    .get(i + 1)
+                    .and_then(|b| std::str::from_utf8(b).ok())
+                    .and_then(|s| s.parse::<usize>().ok())
+                {
+                    Some(c) => count = Some(c),
+                    None => return Route::Single(1),
+                }
+                i = i.saturating_add(2);
+            }
+            b"NOACK" => {
+                noack = true;
+                i = i.saturating_add(1);
+            }
             _ => return Route::Single(1),
         }
     }
