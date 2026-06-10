@@ -4,7 +4,6 @@
 
 use kevy_persist::save_snapshot;
 use kevy_resp::Argv;
-use std::time::Instant;
 
 use crate::Commands;
 use crate::message::{DispatchMeta, GatherKind, Gathered, Op, Part, SmallReply};
@@ -26,30 +25,17 @@ impl<C: Commands> Shard<C> {
         proto: RespVersion,
         meta: DispatchMeta,
     ) -> Part {
-        // SLOWLOG OFF (`slower_than_micros < 0`) skips the clock pair.
-        let t0 = if self.slowlog.slower_than_micros >= 0 {
-            Some(Instant::now())
-        } else {
-            None
-        };
-        // Per-cmd proto picks the reply encoder. V2 is the hot path;
-        // the V3 arm only fires after a HELLO 3 negotiation upstream.
+        let t0 = self.slowlog_t0();
         self.reply_scratch.clear();
-        match proto {
-            RespVersion::V2 => {
-                self.commands
-                    .dispatch_into(&mut self.store, args, &mut self.reply_scratch)
-            }
-            RespVersion::V3 => {
-                self.commands
-                    .dispatch_into_resp3(&mut self.store, args, &mut self.reply_scratch)
-            }
-        }
+        crate::exec_dispatch::dispatch_proto(
+            &self.commands,
+            &mut self.store,
+            args,
+            proto,
+            &mut self.reply_scratch,
+        );
         let reply = SmallReply::from_slice(&self.reply_scratch);
-        if let Some(t0) = t0 {
-            let elapsed = t0.elapsed().as_micros().min(u64::MAX as u128) as u64;
-            self.slowlog_record(args, elapsed);
-        }
+        self.slowlog_maybe(t0, args);
         if meta.is_write {
             self.post_write_housekeeping(args, meta);
         }

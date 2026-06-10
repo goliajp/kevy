@@ -212,3 +212,74 @@ fn custom_filenames_stay_metaless() {
     assert_eq!(s2.get(b"k").unwrap(), Some(b"v".to_vec()));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ─────────────── reshard crash-idempotency (2026-06-11) ───────────────
+
+/// Crash right after a reshard's commit point (journal + `.reshard` temps
+/// on disk, sources untouched): the next open must roll the migration
+/// forward — finalize the temps, back the stale source up, record the
+/// layout — and come up with the *new* state, not the stale one.
+#[test]
+fn open_rolls_forward_a_committed_reshard() {
+    let dir = tmp_dir("reshard-rollfwd");
+    std::fs::create_dir_all(&dir).unwrap();
+    // Old layout: one shard whose snapshot still holds the pre-reshard key.
+    let mut stale = kevy_store::Store::new();
+    stale.set(b"stale", b"x".to_vec(), None, false, false);
+    kevy_persist::save_snapshot(&stale, &dir.join("dump-0.rdb")).unwrap();
+    kevy_persist::write_shards_meta(
+        &dir.join("shards.meta"),
+        kevy_persist::ShardsMeta { n: 1, routing: kevy_persist::Routing::KevyHash },
+    )
+    .unwrap();
+    // Committed-but-unfinished migration to 2 shards: temps + journal.
+    // Keys are placed on the shard their hash routes to, as a real
+    // redistribute would have done.
+    let mut shards = [kevy_store::Store::new(), kevy_store::Store::new()];
+    for (k, v) in [(b"alpha".as_slice(), b"1".as_slice()), (b"beta", b"2"), (b"gamma", b"3")] {
+        shards[crate::shard::shard_idx(k, 2)].set(k, v.to_vec(), None, false, false);
+    }
+    kevy_persist::save_snapshot(&shards[0], &dir.join("dump-0.rdb.reshard")).unwrap();
+    kevy_persist::save_snapshot(&shards[1], &dir.join("dump-1.rdb.reshard")).unwrap();
+    std::fs::write(
+        dir.join("reshard.journal"),
+        "kevy-reshard-journal v1\nstamp=7\nprev_n=1\nn=2\nrouting=kevyhash\n",
+    )
+    .unwrap();
+
+    let s = Store::open(
+        Config::default().with_persist(&dir).with_shards(2).with_ttl_reaper_manual(),
+    )
+    .unwrap();
+    assert_eq!(s.dbsize(), 3, "recovered store must hold the migrated state");
+    assert_eq!(s.get(b"alpha").unwrap(), Some(b"1".to_vec()));
+    assert_eq!(s.get(b"gamma").unwrap(), Some(b"3".to_vec()));
+    assert_eq!(s.get(b"stale").unwrap(), None);
+    drop(s);
+    assert!(dir.join("dump-0.rdb.premigration.7").exists(), "stale source not backed up");
+    assert!(!dir.join("reshard.journal").exists());
+    assert!(!dir.join("dump-0.rdb.reshard").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A torn journal (crash mid-journal-write) means the commit point was
+/// never reached: the old layout is intact and must load as-is, with the
+/// torn journal and stale temps discarded.
+#[test]
+fn open_discards_a_torn_reshard_journal() {
+    let dir = tmp_dir("reshard-torn");
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut old = kevy_store::Store::new();
+    old.set(b"keep", b"v".to_vec(), None, false, false);
+    kevy_persist::save_snapshot(&old, &dir.join("dump-0.rdb")).unwrap();
+    std::fs::write(dir.join("reshard.journal"), "kevy-reshard-journal v1\nstamp=").unwrap();
+
+    let s = Store::open(
+        Config::default().with_persist(&dir).with_ttl_reaper_manual(),
+    )
+    .unwrap();
+    assert_eq!(s.get(b"keep").unwrap(), Some(b"v".to_vec()));
+    drop(s);
+    assert!(!dir.join("reshard.journal").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

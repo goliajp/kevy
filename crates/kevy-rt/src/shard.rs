@@ -166,12 +166,12 @@ impl<C: Commands> Shard<C> {
 
     /// This shard's snapshot file: `<data_dir>/dump-<id>.rdb`.
     pub(crate) fn snapshot_path(&self) -> PathBuf {
-        self.data_dir.join(format!("dump-{}.rdb", self.id))
+        kevy_persist::layout::snapshot_path(&self.data_dir, self.id)
     }
 
     /// This shard's append-only log: `<data_dir>/aof-<id>.aof`.
     pub(crate) fn aof_path(&self) -> PathBuf {
-        self.data_dir.join(format!("aof-{}.aof", self.id))
+        kevy_persist::layout::aof_path(&self.data_dir, self.id)
     }
 
     pub(crate) fn run(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {

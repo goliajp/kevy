@@ -274,7 +274,7 @@ impl Store {
             let name = if n == 1 {
                 self.config.snapshot_filename.clone()
             } else {
-                format!("dump-{i}.rdb")
+                kevy_persist::layout::snapshot_file(i)
             };
             let g = lock_read(shard);
             save_snapshot(&g.store, &dir.join(name))?;

@@ -117,24 +117,31 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
     }
 }
 
+/// Walk the advertised topology — the single derivation (advertised IP,
+/// per-shard port, slot range) all three emitters (`NODES` / `SLOTS` /
+/// `SHARDS`) format from: `f(i, ip, port, start, end)` per virtual node.
+fn for_each_node(cfg: &Config, n: usize, mut f: impl FnMut(usize, &str, i64, u16, u16)) {
+    let ip = advertised_ip(cfg);
+    let base = crate::cluster_port_base(cfg) as i64;
+    for i in 0..n {
+        let (start, end) = kevy_rt::shard_slot_range(i, n);
+        f(i, &ip, base + i as i64, start, end);
+    }
+}
+
 /// `CLUSTER NODES` text: one line per virtual node. The answering shard is
 /// flagged `myself`. No cluster bus — `@cport` mirrors the data port.
 fn nodes_text(cfg: &Config, n: usize) -> String {
-    let ip = advertised_ip(cfg);
-    let base = crate::cluster_port_base(cfg) as usize;
     let me = current_shard();
     let mut body = String::new();
-    for i in 0..n {
-        let (start, end) = kevy_rt::shard_slot_range(i, n);
+    for_each_node(cfg, n, |i, ip, port, start, end| {
         let flags = if i == me { "myself,master" } else { "master" };
         body.push_str(&format!(
-            "{} {ip}:{}@{} {flags} - 0 0 {} connected {start}-{end}\r\n",
+            "{} {ip}:{port}@{port} {flags} - 0 0 {} connected {start}-{end}\r\n",
             node_id(i),
-            base + i,
-            base + i,
             i + 1,
         ));
-    }
+    });
     body
 }
 
@@ -142,30 +149,24 @@ fn nodes_text(cfg: &Config, n: usize) -> String {
 /// element (metadata map, RESP2-encoded as an empty array) matches the
 /// Redis 7 / valkey shape clients are parsed against.
 fn encode_slots(cfg: &Config, n: usize, out: &mut Vec<u8>) {
-    let ip = advertised_ip(cfg);
-    let base = crate::cluster_port_base(cfg) as i64;
     encode_array_len(out, n as i64);
-    for i in 0..n {
-        let (start, end) = kevy_rt::shard_slot_range(i, n);
+    for_each_node(cfg, n, |i, ip, port, start, end| {
         encode_array_len(out, 3);
         encode_integer(out, start as i64);
         encode_integer(out, end as i64);
         encode_array_len(out, 4);
         encode_bulk(out, ip.as_bytes());
-        encode_integer(out, base + i as i64);
+        encode_integer(out, port);
         encode_bulk(out, node_id(i).as_bytes());
         encode_array_len(out, 0);
-    }
+    });
 }
 
 /// `CLUSTER SHARDS` (Redis 7 shape): per shard a 2-pair map-as-array of
 /// `slots` `[start, end]` and `nodes` `[node-detail-map]`.
 fn encode_shards(cfg: &Config, n: usize, out: &mut Vec<u8>) {
-    let ip = advertised_ip(cfg);
-    let base = crate::cluster_port_base(cfg) as i64;
     encode_array_len(out, n as i64);
-    for i in 0..n {
-        let (start, end) = kevy_rt::shard_slot_range(i, n);
+    for_each_node(cfg, n, |i, ip, port, start, end| {
         encode_array_len(out, 4); // 2 k/v pairs flattened
         encode_bulk(out, b"slots");
         encode_array_len(out, 2);
@@ -177,7 +178,7 @@ fn encode_shards(cfg: &Config, n: usize, out: &mut Vec<u8>) {
         encode_bulk(out, b"id");
         encode_bulk(out, node_id(i).as_bytes());
         encode_bulk(out, b"port");
-        encode_integer(out, base + i as i64);
+        encode_integer(out, port);
         encode_bulk(out, b"ip");
         encode_bulk(out, ip.as_bytes());
         encode_bulk(out, b"endpoint");
@@ -186,5 +187,5 @@ fn encode_shards(cfg: &Config, n: usize, out: &mut Vec<u8>) {
         encode_bulk(out, b"master");
         encode_bulk(out, b"health");
         encode_bulk(out, b"online");
-    }
+    });
 }

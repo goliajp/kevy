@@ -12,7 +12,28 @@ use crate::Commands;
 use crate::message::{Agg, DispatchMeta};
 use crate::shard::Shard;
 use kevy_resp::{ArgvView, RespVersion};
+use kevy_store::Store;
 use std::time::Instant;
+
+/// Dispatch `args` into `out` under the per-command protocol version.
+/// V2 is the default + the hot path; the V3 arm only fires after a HELLO 3
+/// negotiation upstream. A free function over the disjoint `Shard` fields
+/// so both the inline fast path (`out` = the conn's output buffer, borrowed
+/// from `self.conns`) and `run_dispatch` (`out` = the reply scratch) share
+/// it.
+#[inline]
+pub(crate) fn dispatch_proto<C: Commands, A: ArgvView + ?Sized>(
+    commands: &C,
+    store: &mut Store,
+    args: &A,
+    proto: RespVersion,
+    out: &mut Vec<u8>,
+) {
+    match proto {
+        RespVersion::V2 => commands.dispatch_into(store, args, out),
+        RespVersion::V3 => commands.dispatch_into_resp3(store, args, out),
+    }
+}
 
 impl<C: Commands> Shard<C> {
     /// Single-target command (keyless `Local` or single-key `Single`) — the
@@ -78,27 +99,14 @@ impl<C: Commands> Shard<C> {
         block_hint: crate::BlockHint,
         meta: DispatchMeta,
     ) -> bool {
-        // SLOWLOG OFF (`slower_than_micros < 0`) skips the clock pair.
         // Field-only read, before the conn borrow.
-        let t0 = if self.slowlog.slower_than_micros >= 0 {
-            Some(Instant::now())
-        } else {
-            None
-        };
+        let t0 = self.slowlog_t0();
         let Some(conn) = self.conns.get_mut(&conn_id) else { return false };
         if !conn.pending.is_empty() {
             return false;
         }
         let out_pre_len = conn.output.len();
-        // V2 is the default + the hot path; V3 only fires after HELLO 3.
-        match proto {
-            RespVersion::V2 => self
-                .commands
-                .dispatch_into(&mut self.store, args, &mut conn.output),
-            RespVersion::V3 => self
-                .commands
-                .dispatch_into_resp3(&mut self.store, args, &mut conn.output),
-        }
+        dispatch_proto(&self.commands, &mut self.store, args, proto, &mut conn.output);
         let wrote_reply = conn.output.len() > out_pre_len;
         // Park-on-miss for BLPOP / BRPOP / XREAD BLOCK that wrote nothing:
         // the reply is deferred to the wake / timeout path.
@@ -120,9 +128,20 @@ impl<C: Commands> Shard<C> {
         true
     }
 
+    /// SLOWLOG start instant — `None` when SLOWLOG is OFF
+    /// (`slower_than_micros < 0`, the default), skipping the clock pair.
+    #[inline]
+    pub(crate) fn slowlog_t0(&self) -> Option<Instant> {
+        if self.slowlog.slower_than_micros >= 0 {
+            Some(Instant::now())
+        } else {
+            None
+        }
+    }
+
     /// Record `args` in the SLOWLOG if a start instant was captured
     /// (`None` = SLOWLOG OFF, the default — a no-op).
-    fn slowlog_maybe<A: ArgvView + ?Sized>(&mut self, t0: Option<Instant>, args: &A) {
+    pub(crate) fn slowlog_maybe<A: ArgvView + ?Sized>(&mut self, t0: Option<Instant>, args: &A) {
         if let Some(t0) = t0 {
             let elapsed = t0.elapsed().as_micros().min(u64::MAX as u128) as u64;
             self.slowlog_record(args, elapsed);
