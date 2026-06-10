@@ -120,7 +120,6 @@ impl<C: Commands> Shard<C> {
         let mut io: KevyMap<u64, UringConn> = KevyMap::new();
         let mut accept_inflight = false;
         let mut comps: Vec<Completion> = Vec::with_capacity(URING_ENTRIES as usize);
-        let mut cids: Vec<u64> = Vec::new();
         let mut idle_spins: u32 = 0;
 
         // Active reaper / hot-config / auto-rewrite tick — same shape as the
@@ -141,7 +140,7 @@ impl<C: Commands> Shard<C> {
             if !accept_inflight {
                 accept_inflight = ring.prep_accept(self.listener.raw(), OP_ACCEPT);
             }
-            self.uring_arm_conns(&mut ring, &mut io, &mut cids, pbuf.group());
+            self.uring_arm_conns(&mut ring, &mut io, pbuf.group());
 
             ring.submit_and_wait(0)?; // submit queued SQEs; reap is non-blocking
             comps.clear();
@@ -234,54 +233,51 @@ impl<C: Commands> Shard<C> {
 
     /// Submit a read for every idle open conn and a write for every conn with
     /// pending output, reusing one fixed buffer per direction per conn.
+    ///
+    /// One pass over `conns` with one `io` probe per conn: this loop runs
+    /// every reactor iteration, and the previous shape (a `keys()` snapshot
+    /// Vec + 3-8 map probes per conn to appease the borrow checker) was the
+    /// hottest block of `run_uring` self time on the 8-shard profile. `conns`
+    /// and `io` are disjoint borrows (`io` lives on `run_uring`'s stack), so
+    /// `iter_mut` needs no snapshot — nothing here inserts or removes.
     fn uring_arm_conns(
         &mut self,
         ring: &mut IoUring,
         io: &mut KevyMap<u64, UringConn>,
-        cids: &mut Vec<u64>,
         bgid: u16,
     ) {
-        cids.clear();
-        cids.extend(self.conns.keys().copied());
-        for &cid in cids.iter() {
+        for (&cid, conn) in self.conns.iter_mut() {
+            let Some(uc) = io.get_mut(&cid) else {
+                continue;
+            };
             // Start a new write: move the conn's output into the stable write_buf.
-            if let (Some(uc), Some(conn)) = (io.get_mut(&cid), self.conns.get_mut(&cid))
-                && !uc.write_inflight
-                && uc.write_buf.is_empty()
-                && !conn.output.is_empty()
-            {
+            if !uc.write_inflight && uc.write_buf.is_empty() && !conn.output.is_empty() {
                 std::mem::swap(&mut uc.write_buf, &mut conn.output);
                 uc.write_off = 0;
             }
             // Submit the write (fresh or a partial-write continuation).
-            let write_req = io.get(&cid).map(|uc| {
-                (!uc.write_inflight && uc.write_off < uc.write_buf.len(), uc.write_off)
-            });
-            if let Some((true, off)) = write_req {
-                let fd = self.conns[&cid].sock.raw();
-                let uc = &io[&cid];
+            if !uc.write_inflight && uc.write_off < uc.write_buf.len() {
                 // SAFETY: write_buf is owned, stable, and outlives the SQE.
                 let ok = unsafe {
                     ring.prep_write(
-                        fd,
-                        uc.write_buf.as_ptr().add(off),
-                        (uc.write_buf.len() - off) as u32,
+                        conn.sock.raw(),
+                        uc.write_buf.as_ptr().add(uc.write_off),
+                        (uc.write_buf.len() - uc.write_off) as u32,
                         OP_WRITE | cid,
                     )
                 };
                 if ok {
-                    io.get_mut(&cid).unwrap().write_inflight = true;
+                    uc.write_inflight = true;
                 }
             }
             // Arm a multishot recv if one isn't already running (it re-fires per
             // arrival into the shared provided-buffer ring, so this happens once
             // per connection, not once per read — the syscall-batching win).
-            let want_recv = io.get(&cid).is_some_and(|uc| !uc.recv_armed && !uc.closing);
-            if want_recv {
-                let fd = self.conns[&cid].sock.raw();
-                if ring.prep_recv_multishot(fd, bgid, OP_RECV | cid) {
-                    io.get_mut(&cid).unwrap().recv_armed = true;
-                }
+            if !uc.recv_armed
+                && !uc.closing
+                && ring.prep_recv_multishot(conn.sock.raw(), bgid, OP_RECV | cid)
+            {
+                uc.recv_armed = true;
             }
         }
     }
