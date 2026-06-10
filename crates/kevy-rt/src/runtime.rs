@@ -237,6 +237,7 @@ impl<C: Commands> Runtime<C> {
                 blocked: crate::blocked::BlockedClients::new(),
                 origin_blocks: std::collections::HashMap::new(),
                 xwaiters: crate::block_xshard::XShardWaiters::default(),
+                reply_scratch: Vec::with_capacity(4096),
             });
         }
 

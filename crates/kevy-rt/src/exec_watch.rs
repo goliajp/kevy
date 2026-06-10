@@ -16,7 +16,7 @@
 //!   and each queued cmd is dispatched at its pre-allocated seq via
 //!   `start_command_at_seq`.
 
-use crate::message::{Agg, DispatchMeta, Inbound, Op, Part, PendingSlot};
+use crate::message::{Agg, DispatchMeta, Inbound, Op, Part, PendingSlot, SmallReply};
 use crate::reduce::{drain_front, shard_of};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route};
@@ -92,7 +92,7 @@ impl<C: Commands> Shard<C> {
                 proto: c.proto,
             });
         }
-        self.fold(conn_id, seq, Part::Reply(b"+OK\r\n".to_vec()));
+        self.fold(conn_id, seq, Part::Reply(SmallReply::from_slice(b"+OK\r\n")));
     }
 
     /// `EXEC` with a non-empty `watched` set: pre-allocate `N+1` slots,
@@ -228,7 +228,7 @@ impl<C: Commands> Shard<C> {
         c.watched.extend(pairs);
         let idx = (seq - c.next_emit) as usize;
         if let Some(slot) = c.pending.get_mut(idx) {
-            slot.done = Some(b"+OK\r\n".to_vec());
+            slot.done = Some(SmallReply::from_slice(b"+OK\r\n"));
         }
         drain_front(c);
     }
@@ -248,11 +248,11 @@ impl<C: Commands> Shard<C> {
             if let Some(c) = self.conns.get_mut(&conn_id) {
                 let base_idx = (header_seq - c.next_emit) as usize;
                 if let Some(h) = c.pending.get_mut(base_idx) {
-                    h.done = Some(b"*-1\r\n".to_vec());
+                    h.done = Some(SmallReply::from_slice(b"*-1\r\n"));
                 }
                 for i in 0..n {
                     if let Some(p) = c.pending.get_mut(base_idx + 1 + i) {
-                        p.done = Some(Vec::new());
+                        p.done = Some(SmallReply::from_slice(b""));
                     }
                 }
                 drain_front(c);
@@ -264,7 +264,7 @@ impl<C: Commands> Shard<C> {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let base_idx = (header_seq - c.next_emit) as usize;
             if let Some(h) = c.pending.get_mut(base_idx) {
-                h.done = Some(header_bytes);
+                h.done = Some(SmallReply::from_vec(header_bytes));
             }
             drain_front(c);
         }
@@ -327,7 +327,7 @@ impl<C: Commands> Shard<C> {
         let Some(c) = self.conns.get_mut(&conn_id) else { return };
         let idx = (seq - c.next_emit) as usize;
         if let Some(slot) = c.pending.get_mut(idx) {
-            slot.done = Some(bytes);
+            slot.done = Some(SmallReply::from_vec(bytes));
         }
         drain_front(c);
     }
