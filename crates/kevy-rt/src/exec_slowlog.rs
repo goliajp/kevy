@@ -156,7 +156,7 @@ impl<C: Commands> Shard<C> {
 
     fn slowlog_immediate(&mut self, conn_id: u64, seq: u64, bytes: Vec<u8>) {
         self.push_pending_slot(conn_id, 1, Agg::First(None), false);
-        self.fold(conn_id, seq, Part::Reply(bytes));
+        self.fold(conn_id, seq, Part::Reply(crate::message::SmallReply::from_vec(bytes)));
     }
 
     fn slowlog_fanout(

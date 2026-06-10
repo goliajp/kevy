@@ -6,7 +6,7 @@
 //! the shard(s) that own its keys, executing one op against the local store,
 //! and folding sub-results into each connection's seq-ordered ring.
 
-use crate::message::{Agg, DispatchMeta, Inbound, Op, Part, PendingSlot};
+use crate::message::{Agg, DispatchMeta, Inbound, Op, Part, PendingSlot, SmallReply};
 use crate::reduce::{drain_front, materialize, shard_of};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route, TxnKind};
@@ -80,7 +80,7 @@ impl<C: Commands> Shard<C> {
                 proto,
             });
         }
-        self.fold(conn_id, seq, Part::Reply(bytes));
+        self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(bytes)));
     }
 
     /// `EXEC` — emit a `*N` array header, then run the queued commands in order.
@@ -422,7 +422,7 @@ impl<C: Commands> Shard<C> {
         self.fold(
             conn_id,
             seq,
-            Part::Reply(b"-ERR Protocol error\r\n".to_vec()),
+            Part::Reply(SmallReply::from_slice(b"-ERR Protocol error\r\n")),
         );
     }
 }

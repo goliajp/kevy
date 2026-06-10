@@ -128,6 +128,11 @@ pub(crate) struct Shard<C: Commands> {
     /// keys this shard owns. Kept separate from `blocked` so the hot
     /// single-key-local path is untouched. Empty in steady state.
     pub(crate) xwaiters: crate::block_xshard::XShardWaiters,
+    /// Reused staging buffer for forwarded-dispatch replies (`exec_op`'s
+    /// `Op::Dispatch` arm): `dispatch_into` writes here, then ≤30 B replies
+    /// copy into a stack-inline [`crate::message::SmallReply`] — zero
+    /// allocator traffic for the +OK / :N / small-GET steady state.
+    pub(crate) reply_scratch: Vec<u8>,
 }
 
 // `SPIN_LIMIT` / `PARK_TIMEOUT_MS` / `TICK_CHECK_EVERY` moved to per-

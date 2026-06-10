@@ -20,6 +20,7 @@ impl<C: Commands> Shard<C> {
     /// `Vec<(shard, Op)>` allocation + the aggregation fold loop entirely.
     /// `meta` carries the origin resolve()'s write-side facts so no later
     /// stage (local post-write or the owning shard) re-parses the verb.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn start_single<A: ArgvView + ?Sized>(
         &mut self,
         conn_id: u64,

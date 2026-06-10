@@ -7,7 +7,7 @@ use kevy_resp::Argv;
 use std::time::Instant;
 
 use crate::Commands;
-use crate::message::{GatherKind, Gathered, Op, Part};
+use crate::message::{GatherKind, Gathered, Op, Part, SmallReply};
 use crate::shard::Shard;
 use kevy_resp::RespVersion;
 
@@ -27,10 +27,24 @@ impl<C: Commands> Shard<C> {
                 } else {
                     None
                 };
-                let reply = match proto {
-                    RespVersion::V2 => self.commands.dispatch(&mut self.store, &args),
-                    RespVersion::V3 => self.commands.dispatch_resp3(&mut self.store, &args),
-                };
+                // Reply staging: `dispatch_into` the reused scratch, then
+                // ≤30 B replies (+OK / :N / small GET) copy into a stack-
+                // inline SmallReply — zero allocator traffic on the
+                // forwarded hot path (was: a fresh Vec per command here,
+                // freed on the origin after its drain).
+                self.reply_scratch.clear();
+                match proto {
+                    RespVersion::V2 => {
+                        self.commands
+                            .dispatch_into(&mut self.store, &args, &mut self.reply_scratch)
+                    }
+                    RespVersion::V3 => self.commands.dispatch_into_resp3(
+                        &mut self.store,
+                        &args,
+                        &mut self.reply_scratch,
+                    ),
+                }
+                let reply = crate::message::SmallReply::from_slice(&self.reply_scratch);
                 if let Some(t0) = t0 {
                     let elapsed = t0.elapsed().as_micros().min(u64::MAX as u128) as u64;
                     self.slowlog_record(&args, elapsed);
@@ -174,7 +188,7 @@ impl<C: Commands> Shard<C> {
                         self.notify_keyspace_event(b"rename_to", &dst);
                     }
                 }
-                Part::Reply(reply)
+                Part::Reply(SmallReply::from_vec(reply))
             }
             Op::RenameTake(src) => {
                 // Step 1 of cross-shard RENAME: atomically take the

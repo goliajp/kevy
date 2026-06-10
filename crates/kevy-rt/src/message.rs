@@ -167,9 +167,48 @@ pub(crate) enum KeyShape {
     Random,
 }
 
+/// A RESP reply fragment with a 30-byte inline arm. The forwarded-dispatch
+/// hot path produces tiny replies (`+OK`, `:N`, a `$16` GET payload = 23 B)
+/// whose heap `Vec` round-trip (alloc on the owning shard, free after the
+/// origin's drain) dominated the data itself — ~19 % of 8-shard SET CPU sat
+/// in the allocator. `Inline` keeps those entirely on the stack across the
+/// ring; `Heap` carries anything bigger with the old one-alloc semantics.
+pub(crate) enum SmallReply {
+    Inline { len: u8, buf: [u8; 30] },
+    Heap(Vec<u8>),
+}
+
+impl SmallReply {
+    /// Copy `b` into the inline arm when it fits, else one heap alloc.
+    #[inline]
+    pub(crate) fn from_slice(b: &[u8]) -> Self {
+        if b.len() <= 30 {
+            let mut buf = [0u8; 30];
+            buf[..b.len()].copy_from_slice(b);
+            SmallReply::Inline { len: b.len() as u8, buf }
+        } else {
+            SmallReply::Heap(b.to_vec())
+        }
+    }
+
+    /// Wrap an already-owned `Vec` — zero-copy for the heap arm.
+    #[inline]
+    pub(crate) fn from_vec(v: Vec<u8>) -> Self {
+        SmallReply::Heap(v)
+    }
+
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        match self {
+            SmallReply::Inline { len, buf } => &buf[..*len as usize],
+            SmallReply::Heap(v) => v,
+        }
+    }
+}
+
 /// A partial result shipped back to the originating shard.
 pub(crate) enum Part {
-    Reply(Vec<u8>),
+    Reply(SmallReply),
     Int(i64),
     Ok,
     /// Per-key gathered payloads.
@@ -292,7 +331,7 @@ pub(crate) enum Inbound {
 
 /// Accumulator for a command's (possibly multi-shard) result.
 pub(crate) enum Agg {
-    First(Option<Vec<u8>>),
+    First(Option<SmallReply>),
     SumInt(i64),
     AllOk,
     /// Gathered per-key payloads, reduced by `op` over `keys` (request order).
@@ -389,7 +428,9 @@ pub(crate) struct PendingSlot {
     pub(crate) remaining: u32,
     pub(crate) agg: Agg,
     /// Materialized reply once `remaining == 0`; emitted in seq order.
-    pub(crate) done: Option<Vec<u8>>,
+    /// `SmallReply` so the forwarded tiny-reply path (+OK / :N / small
+    /// GET) stays heap-free end to end.
+    pub(crate) done: Option<SmallReply>,
     /// RESP version captured at dispatch time. Cross-shard gathers
     /// (SINTER / SUNION / SDIFF) materialise on the origin shard long
     /// after `start_multi` snapped this conn's proto; storing it here
