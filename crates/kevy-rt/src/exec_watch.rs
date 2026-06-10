@@ -16,7 +16,7 @@
 //!   and each queued cmd is dispatched at its pre-allocated seq via
 //!   `start_command_at_seq`.
 
-use crate::message::{Agg, Inbound, Op, Part, PendingSlot};
+use crate::message::{Agg, DispatchMeta, Inbound, Op, Part, PendingSlot};
 use crate::reduce::{drain_front, shard_of};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route};
@@ -288,7 +288,7 @@ impl<C: Commands> Shard<C> {
         args: &A,
         resolved: ResolvedCmd,
     ) {
-        let ResolvedCmd { route, is_quit, is_write, .. } = resolved;
+        let ResolvedCmd { route, is_quit, is_write, wake_idx, .. } = resolved;
         match route {
             // Pub/sub + WATCH inside MULTI is rejected at queue time
             // (`handle_command` errors before queuing). UNWATCH inside MULTI
@@ -308,11 +308,13 @@ impl<C: Commands> Shard<C> {
                 b"-ERR pub/sub or WATCH or HELLO or RENAME not allowed inside MULTI in v2-3a (queued-RENAME orchestration pending v2-3b)\r\n".to_vec(),
             ),
             Route::Local => {
-                self.start_single_at_seq(conn_id, seq, args, self.id, is_quit, is_write)
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: None };
+                self.start_single_at_seq(conn_id, seq, args, self.id, is_quit, meta)
             }
             Route::Single(idx) => {
                 let shard = shard_of(&args[idx], self.nshards);
-                self.start_single_at_seq(conn_id, seq, args, shard, is_quit, is_write)
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
+                self.start_single_at_seq(conn_id, seq, args, shard, is_quit, meta)
             }
             other => self.start_multi_at_seq(conn_id, seq, args, other, is_quit),
         }
@@ -340,12 +342,13 @@ impl<C: Commands> Shard<C> {
         args: &A,
         shard: usize,
         is_quit: bool,
-        is_write: bool,
+        meta: DispatchMeta,
     ) {
         // EXEC's queued cmds inherit the conn's proto at execution time
         // (the proto is captured per-cmd via Op::Dispatch). If the conn
         // negotiated HELLO 3 before MULTI / between QUEUED frames, the
-        // queued cmds also emit RESP3 shapes.
+        // queued cmds also emit RESP3 shapes. AOF logging + WATCH bump
+        // happen inside `exec_op`, driven by `meta`.
         let proto = self.conns.get(&conn_id).map_or(RespVersion::V2, |c| c.proto);
         if is_quit
             && let Some(c) = self.conns.get_mut(&conn_id)
@@ -353,13 +356,10 @@ impl<C: Commands> Shard<C> {
             c.closing = true;
         }
         if shard == self.id {
-            let part = self.exec_op(Op::Dispatch(args.to_argv(), proto));
+            let part = self.exec_op(Op::Dispatch(args.to_argv(), proto, meta));
             self.fold(conn_id, seq, part);
-            // AOF logging happens inside `exec_op` for `Op::Dispatch`
-            // (gated on `is_write`); the `is_write` arg here is unused.
-            let _ = is_write;
         } else {
-            self.request_batch[shard].push((conn_id, seq, args.to_argv(), proto));
+            self.request_batch[shard].push((conn_id, seq, args.to_argv(), proto, meta));
         }
     }
 

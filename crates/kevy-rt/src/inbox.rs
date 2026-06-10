@@ -145,8 +145,8 @@ impl<C: Commands> Shard<C> {
                     Inbound::RequestBatch { origin, reqs } => {
                         let mut resps = Vec::with_capacity(reqs.len());
                         self.aof_begin_group();
-                        for (conn, seq, argv, proto) in reqs {
-                            let part = self.exec_op(Op::Dispatch(argv, proto));
+                        for (conn, seq, argv, proto, meta) in reqs {
+                            let part = self.exec_op(Op::Dispatch(argv, proto, meta));
                             resps.push((conn, seq, part));
                         }
                         // fsync the batch's forwarded writes before replying.

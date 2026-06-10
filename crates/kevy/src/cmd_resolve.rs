@@ -30,6 +30,25 @@ pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(args: &A) -> ResolvedCmd {
     let mut buf = [0u8; 32];
     let upper = upper_verb(name, &mut buf);
 
+    // Tier-1 fast path (mirrors `dispatch_with_proto`'s): GET / SET resolve
+    // in ONE comparison each instead of walking the txn + route (~40 arms) +
+    // is_write + block_hint + wake_idx matches, all of which land in their
+    // catch-alls for these two verbs. Field values are byte-identical to
+    // what the general path below computes.
+    match upper {
+        b"GET" | b"SET" => {
+            return ResolvedCmd {
+                txn_kind: TxnKind::Other,
+                route: if args.len() >= 2 { Route::Single(1) } else { Route::Local },
+                is_quit: false,
+                is_write: upper == b"SET",
+                block_hint: kevy_rt::BlockHint::None,
+                wake_idx: None,
+            };
+        }
+        _ => {}
+    }
+
     let txn_kind = match upper {
         b"MULTI" => TxnKind::Multi,
         b"EXEC" => TxnKind::Exec,

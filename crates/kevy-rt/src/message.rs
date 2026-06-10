@@ -62,6 +62,23 @@ pub(crate) enum MultiOp {
     SDiff,
 }
 
+/// Write-side facts the origin's `resolve()` already computed, carried
+/// with a dispatched command so the executing shard never re-parses the
+/// verb. Before this rode along, every forwarded write re-ran THREE
+/// full verb matches (`is_write` + `route` for the WATCH bump +
+/// `wake_idx`) on the owning shard — measurable at -c50 (SET trailed
+/// GET by the cost of those walks).
+#[derive(Clone, Copy)]
+pub(crate) struct DispatchMeta {
+    pub(crate) is_write: bool,
+    /// `Some(i)` = waking writes (LPUSH/RPUSH/XADD): argv[i] is the key
+    /// whose blocked waiters should be woken after the write.
+    pub(crate) wake_idx: Option<u8>,
+    /// `Some(i)` = argv[i] is the routed key (Route::Single) — the WATCH
+    /// version bump target. `None` for keyless `Route::Local` cmds.
+    pub(crate) key_idx: Option<u8>,
+}
+
 /// A unit of work shipped to the owning shard.
 pub(crate) enum Op {
     /// Forward a single command. The trailing `RespVersion` rides with
@@ -69,7 +86,7 @@ pub(crate) enum Op {
     /// requests to the same owning shard and each get the right reply
     /// shape from `dispatch` vs `dispatch_resp3`. Defaults to V2 for
     /// any backwards-compatible construction site.
-    Dispatch(Argv, RespVersion),
+    Dispatch(Argv, RespVersion, DispatchMeta),
     Del(Vec<Vec<u8>>),
     Exists(Vec<Vec<u8>>),
     Dbsize,
@@ -197,7 +214,7 @@ pub(crate) enum Part {
 /// costs one cross-core send per target shard, not one per command.
 /// The per-entry `proto` lets a single batch carry cmds from V2 and V3
 /// conns to the same owning shard.
-pub(crate) type ReqBatch = Vec<(u64, u64, Argv, RespVersion)>;
+pub(crate) type ReqBatch = Vec<(u64, u64, Argv, RespVersion, DispatchMeta)>;
 /// The matching replies `(conn, seq, part)` sent back as one message.
 pub(crate) type RespBatch = Vec<(u64, u64, Part)>;
 
