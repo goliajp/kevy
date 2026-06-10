@@ -71,7 +71,7 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Single-key dispatched cmd (Op::Dispatch). Classify the verb, gate
+    /// Single-key dispatched cmd (`Shard::run_dispatch`). Classify the verb, gate
     /// on the per-class flag, then fire one keyspace event for the cmd's
     /// key (`args[1]` per Redis convention — keyless cmds short-circuit
     /// inside `Commands::notify_class` returning `None`).

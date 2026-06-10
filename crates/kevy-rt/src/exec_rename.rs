@@ -258,7 +258,7 @@ impl<C: Commands> Shard<C> {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
-                slot.done = Some(bytes);
+                slot.done = Some(crate::message::SmallReply::from_vec(bytes));
             }
             drain_front(c);
         }
@@ -282,6 +282,6 @@ impl<C: Commands> Shard<C> {
             // care about RESP3 shape, not for a fixed-bytes reply.
             let _ = RespVersion::V2;
         }
-        self.fold(conn_id, seq, Part::Reply(reply));
+        self.fold(conn_id, seq, Part::Reply(crate::message::SmallReply::from_vec(reply)));
     }
 }

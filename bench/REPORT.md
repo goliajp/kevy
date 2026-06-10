@@ -658,3 +658,61 @@ no measured win ⇒ no added complexity). The per-batch group commit (v1.6.0,
 +46% on lx64) stands as the AOF-always optimization. Further always gains
 would need a different mechanism (e.g. a short time-window group, or batching
 across loops) — deferred unless a real durable-write workload demands it.
+
+## Server perf-ceiling campaign — regression recovered, then peak surpassed (2026-06-09/10, lx64)
+
+Two-phase campaign against the post-feature-wave regression (standard
+`-c50 -P16` corners were −27…37 % vs the `877cd41` peak binary) and then
+past it. All A/Bs interleaved multi-round on an idle box, `overall:` line
+only, peak anchor co-run.
+
+**Phase 1 — recovery (8 commits, `459c924..f941c8d`):** SLOWLOG default
+OFF (+13–19 %), config-read deferral (+10–13 %), io_uring reap 1/16
+amortize (+8–13 %), tier-1 GET/SET dispatch (+15 % SET), DispatchMeta
+(verb facts resolved once, +6 % GET), single-probe overwrite SET
+(+8–11 %), stack-inline SmallReply across the cross-shard ring (+2.3 %).
+Recovered the four corners to −8…10 % of peak.
+
+**Phase 2 — allocator + parse surge (7 commits, `f856ea3..5f69b01`):**
+
+| commit | lever | 8sh-P256 io_uring A/B |
+|---|---|---|
+| `f856ea3` | ArgvPool: pool-recycled owned argvs on the forward path; borrowed local dispatch | (gated with next) |
+| `eb530cf` | spent-argv husks ride the reply batch back to the origin's pool | GET +24.8 %, SET +25.9 % |
+| `3914b5e` | single-pass multibulk parse (fused `$len\r\n` header walk) | GET +4.2 %, SET +2.2 % |
+| `83e1ef8` | parse cursor: one tail drain per batch, not per cmd (was O(batch²) bytes) | GET +4.6 % |
+| `d0d40bf` | `Store::set_slice`: small SET values inline without the `to_vec` malloc/free pair | SET +8.2 % (first past 10M) |
+| `9df5113` / `5f69b01` | refactors (shared dispatch_batch; one conns probe pre-dispatch) | measured flat, kept for shape |
+
+The husk-return commit is the campaign's center: recycling at the owning
+shard failed measurably (accept skew starves conn-heavy shards' pools
+while quiet shards overflow — malloc share didn't move), so the husk now
+returns to its origin with the reply, making every pool's level match its
+own conn demand by construction. After it, malloc left the 8sh SET
+profile top-10 entirely.
+
+**End state (3-round interleaved, same run):**
+
+| corner (`-c50 -P16`, 10sh) | f941c8d | HEAD `5f69b01` | `877cd41` peak | HEAD vs peak |
+|---|---:|---:|---:|---:|
+| epoll GET | 4.23M | **5.43M** | 4.51M | **+20 %** |
+| epoll SET | 3.85M | **5.89M** | 4.37M | **+35 %** |
+| io_uring GET | 4.85M | **6.35M** | 5.18M | **+22 %** |
+| io_uring SET | 4.68M | **6.00M** | 4.70M | **+28 %** |
+
+8-shard `-c50 -P256` io_uring: GET 8.5M → **11.4M** (+34 %), SET 7.4M →
+**10.3M** (+39 %).
+
+Negative results (kept out, archived in the session notes): pooling spent
+argvs at the owning shard (accept skew), embedding per-conn io_uring state
+into `Conn` (struct bloat hurt per-cmd probes more than the arm scan
+saved), zero-copy parse from the provided buffer (flat — the chunk memcpy
+is cheap next to dispatch), and conns-probe consolidation (flat — KevyMap
+u64 probes are not a bottleneck on this box; kept as a refactor).
+Same-binary calibration on this box: SET can swing ±6 % between rounds —
+single-digit deltas need 4+ interleaved rounds.
+
+Remaining ceiling levers (unstarted): reactor notification machinery
+(`run_uring` self ≈16 % — io_uring-native polling of the cross-core rings
+/ eventfd integration) and key-aware routing (clusters/client-side
+sharding would erase the 87.5 % forward tax; ~4.5× theoretical headroom).

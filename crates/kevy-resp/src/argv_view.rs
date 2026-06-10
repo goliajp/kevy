@@ -43,19 +43,29 @@ pub trait ArgvView: core::ops::Index<usize, Output = [u8]> {
         ArgvIter { view: self, i: 0 }
     }
 
-    /// Materialise an owned [`Argv`] — copies arg bytes into a fresh buffer.
-    /// Used at handoff junctures (cross-shard dispatch, MULTI queue, AOF
-    /// logging) that need to outlive the original input buffer. Object-safe
-    /// (no `Self: Sized` bound) so callers can hold `&dyn ArgvView`.
-    fn to_argv(&self) -> Argv {
+    /// Clear `out` and refill it with this view's arguments. `out` keeps
+    /// its buffer capacity across the clear, so refilling a recycled
+    /// [`Argv`] (see [`crate::ArgvPool`]) is allocation-free in steady
+    /// state. Object-safe (no `Self: Sized` bound).
+    fn copy_into(&self, out: &mut Argv) {
+        out.clear();
         let n = self.len();
         let total: usize = (0..n).map(|i| self.get(i).map_or(0, <[u8]>::len)).sum();
-        let mut out = Argv::with_capacity(n, total);
+        out.reserve_for(n, total);
         for i in 0..n {
             if let Some(arg) = self.get(i) {
                 out.push(arg);
             }
         }
+    }
+
+    /// Materialise an owned [`Argv`] — copies arg bytes into a fresh buffer.
+    /// Used at handoff junctures (cross-shard dispatch, MULTI queue, AOF
+    /// logging) that need to outlive the original input buffer. Object-safe
+    /// (no `Self: Sized` bound) so callers can hold `&dyn ArgvView`.
+    fn to_argv(&self) -> Argv {
+        let mut out = Argv::default();
+        self.copy_into(&mut out);
         out
     }
 }

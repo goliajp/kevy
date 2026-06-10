@@ -318,7 +318,8 @@ introspection API — is documented in [`docs/persistence.md`](docs/persistence.
 ```sh
 cargo build --workspace --release
 cargo test  --workspace
-bash bench/run.sh        # vs-valkey comparison (Linux + Docker)
+bash bench/run.sh        # portability smoke (docker, no pipeline) — NOT a perf benchmark
+bash bench/loopback_c50.sh   # headline perf vs valkey/redis (Linux, host-loopback, pinned)
 ```
 
 Stable Rust 1.95, Rust 2024 edition. Builds on Linux (`x86_64`, `aarch64`)

@@ -418,13 +418,15 @@ impl Store {
         self.watch_versions.get(key).copied().unwrap_or(0)
     }
 
-    /// Bump the version of `key` if (and only if) it has been
-    /// `WATCH`-ed at least once. Called from the write side of
-    /// `exec_op` after every successful mutation. Cost when no key is
-    /// watched: one empty-map lookup (~10 ns); when watched: lookup +
-    /// in-place u64 increment.
+    /// Bump the version of `key` if (and only if) it has been `WATCH`-ed at
+    /// least once. Write-side call after every mutation. The empty check
+    /// runs BEFORE the key is hashed — the common nothing-watched case
+    /// pays one branch, not a guaranteed-miss probe.
     #[inline]
     pub fn bump_if_watched(&mut self, key: &[u8]) {
+        if self.watch_versions.is_empty() {
+            return;
+        }
         if let Some(v) = self.watch_versions.get_mut(key) {
             *v = v.wrapping_add(1);
         }
@@ -487,10 +489,8 @@ pub(crate) fn apply_delta(v: &mut u64, delta: i64) {
     }
 }
 
-/// Heap bytes a `SmallBytes`-encoded key would own. Mirrors
-/// `SmallBytes::heap_bytes` but takes `&[u8]` so the helper is reachable from
-/// places that don't yet have the typed `SmallBytes` (e.g. `reweigh_entry`).
-/// The 22-byte inline boundary is shared with the `kevy-bytes` crate.
+/// Heap bytes a `SmallBytes`-encoded key would own (`&[u8]` mirror of
+/// `SmallBytes::heap_bytes`; 22-byte inline boundary per `kevy-bytes`).
 #[inline]
 pub(crate) fn key_heap_bytes_for(key: &[u8]) -> u64 {
     if key.len() <= 22 { 0 } else { key.len() as u64 }

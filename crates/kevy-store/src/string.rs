@@ -9,6 +9,10 @@ impl Store {
     // ---- strings -------------------------------------------------------
 
     /// `SET` — overwrites any existing value/type. NX/XX guards; clears TTL.
+    /// Takes an owned `Vec` so a >22 B value's allocation is adopted as-is
+    /// (no copy). For callers holding a borrowed slice, prefer
+    /// [`Self::set_slice`] — it skips the `to_vec` entirely for values that
+    /// inline.
     pub fn set(
         &mut self,
         key: &[u8],
@@ -17,32 +21,65 @@ impl Store {
         nx: bool,
         xx: bool,
     ) -> bool {
+        self.set_value(key, Value::Str(SmallBytes::from_vec(value)), expire, nx, xx)
+    }
+
+    /// [`Self::set`] for a borrowed value. Values ≤ 22 B store inline in the
+    /// entry — zero allocator traffic, where `set(key, value.to_vec(), …)`
+    /// paid a malloc for the `Vec` and a free when the inline copy dropped
+    /// it (the dominant overwrite-SET pattern). Larger values pay the same
+    /// single allocation either way.
+    pub fn set_slice(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+        expire: Option<Duration>,
+        nx: bool,
+        xx: bool,
+    ) -> bool {
+        self.set_value(key, Value::Str(SmallBytes::from_slice(value)), expire, nx, xx)
+    }
+
+    fn set_value(
+        &mut self,
+        key: &[u8],
+        new_value: Value,
+        expire: Option<Duration>,
+        nx: bool,
+        xx: bool,
+    ) -> bool {
         // Clock read only when a TTL is requested.
         let expire_at = expire.map(|d| Instant::now() + d);
-        let new_value = Value::Str(SmallBytes::from_vec(value));
-        let pending_insert = match self.live_entry_mut(key) {
+        let key_heap = crate::key_heap_bytes_for(key);
+        let outcome = match self.live_entry_mut(key) {
             // Key exists and is live: NX must abort; otherwise overwrite the
             // value + TTL in place — no `key.to_vec()` (the key is already in
-            // the table, std `insert` would clone it only to drop it).
+            // the table, std `insert` would clone it only to drop it). The
+            // weight delta is computed HERE on the `&mut Entry` we already
+            // hold — `reweigh_entry(key)` would re-hash + re-probe the map
+            // for the entry we just mutated (the overwrite-SET hot path).
             Some(e) => {
                 if nx {
                     return false;
                 }
                 e.value = new_value;
                 e.expire_at_ns = expire_at.and_then(crate::pack_deadline);
-                None
+                let new_w = key_heap + e.value.weight();
+                let delta = new_w as i64 - e.weight() as i64;
+                e.set_weight(new_w);
+                Ok(delta)
             }
             // Absent (or expired ⇒ already dropped by live_entry_mut): XX aborts.
             None => {
                 if xx {
                     return false;
                 }
-                Some(Entry::new(new_value, expire_at))
+                Err(Entry::new(new_value, expire_at))
             }
         };
-        match pending_insert {
-            None => self.reweigh_entry(key),
-            Some(entry) => {
+        match outcome {
+            Ok(delta) => self.apply_weight_delta(delta),
+            Err(entry) => {
                 self.insert_entry(SmallBytes::from_slice(key), entry);
             }
         }

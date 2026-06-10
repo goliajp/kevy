@@ -3,66 +3,62 @@
 //! that one under the 500-LOC house rule.
 
 use kevy_persist::save_snapshot;
-use kevy_resp::{Argv, ArgvView};
+use kevy_resp::Argv;
 use std::time::Instant;
 
 use crate::Commands;
-use crate::Route;
-use crate::message::{GatherKind, Gathered, Op, Part};
+use crate::message::{DispatchMeta, GatherKind, Gathered, Op, Part, SmallReply};
 use crate::shard::Shard;
-use kevy_resp::RespVersion;
+use kevy_resp::{ArgvView, RespVersion};
 
 impl<C: Commands> Shard<C> {
+    /// Execute one resolved single-target command against the local store:
+    /// `dispatch_into` the reused `reply_scratch`, copy ≤30 B replies into a
+    /// stack-inline [`SmallReply`], then run the meta-driven write
+    /// bookkeeping (WATCH bump / AOF / notify / BLOCK wake — see
+    /// [`Shard::post_write_housekeeping`]). Borrows `args`, so the local
+    /// fallback path dispatches straight off the parse buffer (no owned
+    /// `Argv` materialise) and the batched forward path can recycle its
+    /// `Argv` after the call.
+    pub(crate) fn run_dispatch<A: ArgvView + ?Sized>(
+        &mut self,
+        args: &A,
+        proto: RespVersion,
+        meta: DispatchMeta,
+    ) -> Part {
+        // SLOWLOG OFF (`slower_than_micros < 0`) skips the clock pair.
+        let t0 = if self.slowlog.slower_than_micros >= 0 {
+            Some(Instant::now())
+        } else {
+            None
+        };
+        // Per-cmd proto picks the reply encoder. V2 is the hot path;
+        // the V3 arm only fires after a HELLO 3 negotiation upstream.
+        self.reply_scratch.clear();
+        match proto {
+            RespVersion::V2 => {
+                self.commands
+                    .dispatch_into(&mut self.store, args, &mut self.reply_scratch)
+            }
+            RespVersion::V3 => {
+                self.commands
+                    .dispatch_into_resp3(&mut self.store, args, &mut self.reply_scratch)
+            }
+        }
+        let reply = SmallReply::from_slice(&self.reply_scratch);
+        if let Some(t0) = t0 {
+            let elapsed = t0.elapsed().as_micros().min(u64::MAX as u128) as u64;
+            self.slowlog_record(args, elapsed);
+        }
+        if meta.is_write {
+            self.post_write_housekeeping(args, meta);
+        }
+        Part::Reply(reply)
+    }
+
     /// Execute one op against this shard's store, logging mutations to the AOF.
     pub(crate) fn exec_op(&mut self, op: Op) -> Part {
         match op {
-            Op::Dispatch(args, proto) => {
-                // Per-cmd proto picks the reply encoder. V2 hot path
-                // resolves to a single `dispatch` call (the existing
-                // bench-measured path); the V3 arm only fires after a
-                // HELLO 3 negotiation upstream.
-                // SLOWLOG OFF (`slower_than_micros < 0`) skips the
-                // clock pair entirely.
-                let t0 = if self.slowlog.slower_than_micros >= 0 {
-                    Some(Instant::now())
-                } else {
-                    None
-                };
-                let reply = match proto {
-                    RespVersion::V2 => self.commands.dispatch(&mut self.store, &args),
-                    RespVersion::V3 => self.commands.dispatch_resp3(&mut self.store, &args),
-                };
-                if let Some(t0) = t0 {
-                    let elapsed = t0.elapsed().as_micros().min(u64::MAX as u128) as u64;
-                    self.slowlog_record(&args, elapsed);
-                }
-                // Write-side bookkeeping: AOF logging + WATCH version
-                // bump. Both gated on `is_write` so the cache-only path
-                // (no AOF + no WATCH-ed keys) pays nothing beyond one
-                // verb-table lookup. The WATCH bump is also gated inside
-                // `bump_if_watched` — it's an empty-map lookup when no
-                // key on this shard has ever been WATCH-ed.
-                if self.commands.is_write(&args) {
-                    self.bump_watch_for_dispatch(&args);
-                    if self.aof.is_some() {
-                        self.log_write(&args);
-                    }
-                    // Keyspace notification fan-out. Empty-flags
-                    // short-circuit inside maybe_notify_dispatch keeps
-                    // the OFF hot path at one bool-OR per write.
-                    self.maybe_notify_dispatch(&args);
-                    // BLOCK wake: a forwarded LPUSH/RPUSH/XADD lands here on
-                    // the key's owning shard, where any waiter (in-shard or
-                    // cross-shard) is registered. The local fast-path write
-                    // wakes via `post_write_housekeeping` instead.
-                    if let Some(idx) = self.commands.wake_idx(&args)
-                        && let Some(key) = args.get(idx as usize).map(<[u8]>::to_vec)
-                    {
-                        self.wake_key(&key);
-                    }
-                }
-                Part::Reply(reply)
-            }
             Op::Del(keys) => {
                 let n = self.store.del(&keys);
                 if n > 0 {
@@ -172,7 +168,7 @@ impl<C: Commands> Shard<C> {
                         self.notify_keyspace_event(b"rename_to", &dst);
                     }
                 }
-                Part::Reply(reply)
+                Part::Reply(SmallReply::from_vec(reply))
             }
             Op::RenameTake(src) => {
                 // Step 1 of cross-shard RENAME: atomically take the
@@ -282,17 +278,7 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Resolve which arg index carries the key for a write `Op::Dispatch`,
-    /// then bump that key's WATCH version. Read-only commands and keyless
-    /// admin verbs (already filtered by `is_write`) never reach here. The
-    /// route lookup is one verb-table dispatch (~5 ns); inside-store the
-    /// bump is one HashMap::get_mut (no insert) — empty when no key on
-    /// this shard has ever been WATCH-ed.
-    pub(crate) fn bump_watch_for_dispatch<A: ArgvView + ?Sized>(&mut self, args: &A) {
-        if let Route::Single(idx) = self.commands.route(args)
-            && idx < args.len()
-        {
-            self.store.bump_if_watched(&args[idx]);
-        }
-    }
+    // The WATCH version bump reads `DispatchMeta::key_idx` directly in
+    // `Shard::run_dispatch` above — the old `bump_watch_for_dispatch`
+    // re-ran the full `Commands::route` verb walk per write and is gone.
 }
