@@ -32,12 +32,16 @@ use std::sync::atomic::{AtomicBool, Ordering, fence};
 pub(crate) struct Shard<C: Commands> {
     pub(crate) id: usize,
     pub(crate) nshards: usize,
-    /// Key→shard routing scheme: `false` = KevyHash (default), `true` =
-    /// Redis-cluster slots (CRC16 `{hashtag}` → contiguous slot ranges) so
-    /// cluster-aware clients can compute placement. Startup-time property
-    /// (recorded in `shards.meta`), never flipped live. See
-    /// [`crate::reduce::shard_of`].
-    pub(crate) slot_routing: bool,
+    /// Cluster mode (`Some` = on): switches key→shard routing from KevyHash
+    /// to Redis-cluster slots (CRC16 `{hashtag}` → contiguous ranges) and
+    /// carries the advertised per-shard addressing for `-MOVED` replies.
+    /// Startup-time property (recorded in `shards.meta`), never flipped
+    /// live. See [`crate::reduce::shard_of`].
+    pub(crate) cluster: Option<crate::cluster::ClusterTopo>,
+    /// The per-shard deterministic listener (`cluster.port_base + id`),
+    /// `Some` iff cluster mode is on. Conns accepted here are marked
+    /// [`Conn::cluster`] and get `-MOVED` instead of forwarding.
+    pub(crate) cluster_listener: Option<Socket>,
     pub(crate) store: Store,
     pub(crate) commands: C,
     pub(crate) poller: Poller,
@@ -157,7 +161,7 @@ impl<C: Commands> Shard<C> {
     /// Owning shard of `key` under this server's routing scheme.
     #[inline]
     pub(crate) fn shard_of(&self, key: &[u8]) -> usize {
-        crate::reduce::shard_of(key, self.nshards, self.slot_routing)
+        crate::reduce::shard_of(key, self.nshards, self.cluster.is_some())
     }
 
     /// This shard's snapshot file: `<data_dir>/dump-<id>.rdb`.
@@ -197,6 +201,14 @@ impl<C: Commands> Shard<C> {
         self.poller.add(self.listener.raw(), true, false)?;
         self.poller.add(self.waker.read_fd(), true, false)?;
         let listener_fd = self.listener.raw();
+        // -1 never matches an event fd, so the cluster-off loop below pays
+        // one dead integer compare per event and nothing else.
+        let mut cluster_fd = -1;
+        if let Some(cl) = &self.cluster_listener {
+            cl.set_nonblocking()?;
+            self.poller.add(cl.raw(), true, false)?;
+            cluster_fd = cl.raw();
+        }
         let waker_fd = self.waker.read_fd();
         let me = self.id;
 
@@ -255,7 +267,9 @@ impl<C: Commands> Shard<C> {
                 let events = std::mem::take(&mut self.events);
                 for ev in &events {
                     if ev.fd == listener_fd {
-                        self.accept_ready()?;
+                        self.accept_ready(false)?;
+                    } else if ev.fd == cluster_fd {
+                        self.accept_ready(true)?;
                     } else if ev.fd == waker_fd {
                         self.waker.drain();
                     } else if let Some(&conn_id) = self.fd_to_conn.get(&ev.fd) {
@@ -336,9 +350,18 @@ impl<C: Commands> Shard<C> {
     // [`crate::shard_flush`] — same `impl<C: Commands> Shard<C>`, split
     // out so this file stays under the 500-LOC house rule.
 
-    fn accept_ready(&mut self) -> io::Result<()> {
+    /// Drain one listener's accept queue. `cluster` selects the per-shard
+    /// cluster listener (conns marked for `-MOVED` semantics) over the
+    /// shared compat listener.
+    fn accept_ready(&mut self, cluster: bool) -> io::Result<()> {
         loop {
-            match self.listener.accept() {
+            let accepted = if cluster {
+                let Some(cl) = &self.cluster_listener else { return Ok(()) };
+                cl.accept()
+            } else {
+                self.listener.accept()
+            };
+            match accepted {
                 Ok(sock) => {
                     sock.set_nonblocking()?;
                     let _ = sock.set_nodelay();
@@ -347,7 +370,9 @@ impl<C: Commands> Shard<C> {
                     self.next_conn_id += 1;
                     self.poller.add(fd, true, false)?;
                     self.fd_to_conn.insert(fd, id);
-                    self.conns.insert(id, Conn::new(sock));
+                    let mut conn = Conn::new(sock);
+                    conn.cluster = cluster;
+                    self.conns.insert(id, conn);
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,

@@ -69,6 +69,7 @@
 
 mod block_xshard;
 mod blocked;
+mod cluster;
 mod conn;
 mod exec;
 mod exec_build;
@@ -83,108 +84,28 @@ mod exec_watch;
 mod inbox;
 mod message;
 mod reduce;
+mod reshard;
+mod route;
 mod runtime;
 mod shard;
 mod shard_flush;
 mod shard_tick;
+#[cfg(target_os = "linux")]
+mod uring_conn;
 #[cfg(target_os = "linux")]
 mod uring_inbox;
 #[cfg(target_os = "linux")]
 mod uring_reactor;
 
 pub use blocked::{BlockHint, BlockKind};
+pub use cluster::shard_slot_range;
 pub use exec_slowlog::{SlowlogSub, parse_slowlog_sub};
 pub use kevy_config::NotificationFlags;
 pub use kevy_persist::Fsync;
 pub use kevy_resp::{Argv, ArgvBorrowed, ArgvView, RespVersion};
 pub use kevy_store::Store;
+pub use route::Route;
 pub use runtime::Runtime;
-
-/// How a command maps onto shards.
-#[derive(Debug)]
-pub enum Route {
-    /// Keyless; execute on the connection's own shard (e.g. PING).
-    Local,
-    /// Single-key; route by `args[idx]`.
-    Single(usize),
-    /// `args[1..]` are keys; delete each on its shard, sum the counts.
-    DelKeys,
-    /// `args[1..]` are keys; count existing across shards.
-    ExistsKeys,
-    /// Sum every shard's key count.
-    Dbsize,
-    /// Flush every shard.
-    Flush,
-    /// Snapshot every shard's store to disk.
-    Save,
-    /// `BGREWRITEAOF` — rebuild every shard's AOF from in-memory state.
-    /// Synchronous in v1.0 (each shard blocks for its own rewrite duration).
-    RewriteAof,
-    /// `MSET` — `args[1..]` are key/value pairs, routed per key's shard.
-    MSet,
-    /// `MGET` — `args[1..]` are keys; values gathered in request order.
-    MGet,
-    /// `SINTER` / `SUNION` / `SDIFF` — `args[1..]` are set keys.
-    SInter,
-    SUnion,
-    SDiff,
-    /// `KEYS pattern` — every shard returns its matching keys.
-    Keys(Option<Vec<u8>>),
-    /// `SCAN` (cursor-0 approximation) — like KEYS but replies `[cursor, keys]`.
-    Scan(Option<Vec<u8>>),
-    /// `RANDOMKEY` — one arbitrary key across all shards.
-    RandomKey,
-    /// `SUBSCRIBE` / `UNSUBSCRIBE` — connection-level (modifies this conn).
-    Subscribe,
-    Unsubscribe,
-    /// `PSUBSCRIBE pattern [pattern ...]` / `PUNSUBSCRIBE [pattern ...]` —
-    /// like Subscribe/Unsubscribe but the conn registers Redis-glob
-    /// patterns; `PUBLISH` to a matching channel delivers a `pmessage`
-    /// frame. Connection-level (modifies this conn + shared pattern
-    /// registry).
-    Psubscribe,
-    Punsubscribe,
-    /// `PUBLISH channel message` — delivered to subscribers on every core.
-    Publish,
-    /// `WATCH key [key ...]` — fan-out to record per-shard versions, then
-    /// stash the (key, version) pairs in the conn's `watched` set so the
-    /// next `EXEC` can validate them. Connection-level.
-    Watch,
-    /// `UNWATCH` — clear the conn's `watched` set. Connection-level, local.
-    Unwatch,
-    /// `HELLO [protover [AUTH user pass] [SETNAME name]]` — server
-    /// handshake; on `HELLO 3` flips the conn into RESP3 mode (per-conn
-    /// `proto` field). Reply shape itself is proto-aware (V2: array of
-    /// pairs; V3: Map). Connection-level, dispatch via the
-    /// [`Commands::hello_reply`] hook so embedders set their own server
-    /// metadata.
-    Hello,
-    /// `RENAME source destination` / `RENAMENX source destination`. The
-    /// runtime handles the two-shard decision: same-shard renames go
-    /// through one atomic [`Store::rename`] on the owning shard; cross-
-    /// shard renames use the Take→Put orchestrator (lands in v2-3b;
-    /// v2-3a emits `-CROSSSHARD ...` for that case).
-    Rename {
-        /// `true` for `RENAMENX` (no overwrite — reply `:0` if dst exists).
-        nx: bool,
-    },
-    /// `SLOWLOG GET / LEN / RESET / HELP`. The sub-command + parsed
-    /// args are pre-decoded at routing time so the runtime knows
-    /// whether to short-circuit (HELP / error) or fan out across
-    /// shards (GET / LEN / RESET). See [`parse_slowlog_sub`].
-    Slowlog(SlowlogSub),
-    /// Non-blocking `XREAD` over **multiple** streams — fan each stream
-    /// out to its owning shard and merge the per-stream replies in request
-    /// order (single-stream XREAD still routes via [`Self::Single`]). Each
-    /// element is `(stream key, last-seen id)`; `count` is the optional
-    /// `COUNT` cap applied per stream. The command set builds this only for
-    /// the non-blocking, ≥2-stream form; blocking XREAD parks on the origin
-    /// shard instead (see the cross-shard BLOCK arbiter).
-    XReadGather {
-        streams: Vec<(Vec<u8>, Vec<u8>)>,
-        count: Option<usize>,
-    },
-}
 
 /// Command-set semantics injected into the runtime. Cloned to every core, so it
 /// must be cheap/stateless to clone.

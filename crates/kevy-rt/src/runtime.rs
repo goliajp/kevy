@@ -192,10 +192,37 @@ impl<C: Commands> Runtime<C> {
         // channel-only PUBLISH path skips the walk when so.
         let pubsub_patterns: PubSubPatternReg = Arc::new(RwLock::new(Vec::new()));
 
+        // Reconcile the on-disk shard layout (count + routing) before any
+        // shard loads its files; a mismatch re-homes every key once, here.
+        // Skipped for a pure in-memory run against a dir with no kevy files,
+        // so that case keeps writing nothing at all.
+        if self.enable_aof || crate::reshard::has_kevy_files(&self.data_dir) {
+            let routing = if self.cluster_port_base.is_some() {
+                kevy_persist::Routing::Slots
+            } else {
+                kevy_persist::Routing::KevyHash
+            };
+            crate::reshard::ensure_layout(&self.data_dir, n, routing, &self.commands)?;
+        }
+
+        // Advertised cluster topology (None = cluster off). A 0.0.0.0 bind
+        // advertises 127.0.0.1 — an unroutable redirect target would strand
+        // every cluster client (single-machine scope; no announce-ip knob).
+        let topo = self.cluster_port_base.map(|base| crate::cluster::ClusterTopo {
+            ip: if self.ip == [0, 0, 0, 0] { [127, 0, 0, 1] } else { self.ip },
+            port_base: base,
+        });
+
         // Build every shard up front so a bind/open failure aborts before we spawn.
         let mut shards = Vec::with_capacity(n);
         for id in 0..n {
             let listener = tcp_listen_reuseport(self.ip, self.port, 1024)?;
+            // Cluster mode: a second, deterministic per-shard listener at
+            // port_base + id (plain bind — exactly one owner per port).
+            let cluster_listener = match self.cluster_port_base {
+                Some(base) => Some(kevy_sys::tcp_listen(self.ip, base + id as u16, 1024)?),
+                None => None,
+            };
             let aof = if self.enable_aof {
                 Some(Aof::open(
                     &self.data_dir.join(format!("aof-{id}.aof")),
@@ -213,7 +240,8 @@ impl<C: Commands> Runtime<C> {
             shards.push(Shard {
                 id,
                 nshards: n,
-                slot_routing: self.cluster_port_base.is_some(),
+                cluster: topo.clone(),
+                cluster_listener,
                 store,
                 commands: self.commands.clone(),
                 poller: Poller::new()?,
