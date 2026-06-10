@@ -19,7 +19,6 @@ use crate::Commands;
 use crate::conn::Conn;
 use crate::shard::Shard;
 use kevy_persist::{load_snapshot, replay_aof};
-use kevy_resp::parse_command_borrowed;
 use kevy_sys::Socket;
 use kevy_uring::{Completion, IoUring, ProvidedBufRing};
 use kevy_map::KevyMap;
@@ -314,6 +313,9 @@ impl<C: Commands> Shard<C> {
             return;
         }
         // res > 0: a buffer was filled; copy it out and return it to the ring.
+        // (A zero-copy parse straight from the provided buffer was measured
+        // flat — the copy is cheap next to dispatch — so the single
+        // append-then-parse shape stays.)
         let Some(bid) = c.buffer_id() else {
             return; // no buffer (shouldn't happen for a successful recv)
         };
@@ -322,51 +324,30 @@ impl<C: Commands> Shard<C> {
             conn.input.extend_from_slice(pbuf.bytes(bid, n));
         }
         pbuf.recycle(bid);
-        // Borrowed-argv parse hot path: mirrors the epoll/inbox path.
-        // Swap conn.input onto the stack so the parsed ArgvBorrowed can lend
-        // the buf without colliding with &mut self in dispatch; a cursor
-        // walks the cmds and one final drain moves the unparsed tail,
+        // Swap `conn.input` onto the stack so the borrowed argvs don't
+        // collide with `&mut self` in dispatch; one tail drain at the end,
         // then the buf swaps back (if the conn still exists).
         let mut input_buf = match self.conns.get_mut(&cid) {
             Some(c) => std::mem::take(&mut c.input),
             None => return,
         };
-        let mut had_protocol_error = false;
         // AOF group-commit window (mirrors the epoll `conn_readable` path):
         // `appendfsync always` buffers this batch's writes and fsyncs once in
         // `aof_end_group`, which runs before the io_uring write loop submits
         // the replies — so durability still precedes reply.
         self.aof_begin_group();
-        // Parse cursor + one final drain — see the epoll twin in
-        // `crate::inbox` for why per-cmd draining was O(batch²) bytes.
-        let mut off = 0usize;
-        loop {
-            let parse = parse_command_borrowed(&input_buf[off..]);
-            let (argv, consumed) = match parse {
-                Ok(Some(t)) => t,
-                Ok(None) => break,
-                Err(_) => {
-                    had_protocol_error = true;
-                    break;
-                }
-            };
-            if let Some(key) = argv.get(1) {
-                self.store.prefetch_for_key(key);
-            }
-            self.handle_command(cid, &argv);
-            drop(argv);
-            off += consumed;
-            if !self.conns.contains_key(&cid) {
-                self.uring_aof_end_group();
-                return;
-            }
-        }
+        let outcome = self.dispatch_batch(cid, &input_buf);
         self.uring_aof_end_group();
-        input_buf.drain(..off);
-        if let Some(c) = self.conns.get_mut(&cid) {
-            c.input = input_buf;
+        if !outcome.conn_gone {
+            input_buf.drain(..outcome.consumed);
+            if let Some(c) = self.conns.get_mut(&cid) {
+                c.input = input_buf;
+            }
         }
-        if had_protocol_error {
+        if outcome.conn_gone {
+            return;
+        }
+        if outcome.protocol_error {
             self.protocol_error(cid);
             if let Some(uc) = io.get_mut(&cid) {
                 uc.closing = true;
