@@ -134,6 +134,8 @@ impl<C: Commands> Shard<C> {
         };
         let mut last_tick = Instant::now();
         let mut tick_check_counter: u32 = 0;
+        // 1/16 cadence: reap is 5.7 % of -c50 -P16 SET CPU, rarely fruitful.
+        let mut reap_counter: u32 = 0;
 
         while !stop.load(Ordering::Relaxed) {
             // Always keep one accept in flight.
@@ -187,7 +189,10 @@ impl<C: Commands> Shard<C> {
             if let Some(aof) = &mut self.aof {
                 let _ = aof.maybe_sync();
             }
-            self.uring_reap_closed(&mut io);
+            reap_counter = reap_counter.wrapping_add(1);
+            if reap_counter & 0xF == 0 {
+                self.uring_reap_closed(&mut io);
+            }
 
             // Tick path: throttled wall-clock check, then the hot-config /
             // active-reaper / auto-rewrite trio. Same throttle as epoll
