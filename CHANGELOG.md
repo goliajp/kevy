@@ -4,6 +4,75 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.15.0] — 2026-06-11
+
+Minor release: **stream consumer-group / PEL persistence** (closing
+v1.14.0's known limitation) plus a crash-safety batch from the v1.14
+review. Workspace 1.14.0 → 1.15.0; kevy-embedded 1.1.18 → 1.1.19;
+kevy-client 1.7.14 → 1.7.15 (dep refs only). Perfgate PASS on both
+features (6/6 angles, lx64).
+
+### Added
+
+- **`XSETID key last-id [ENTRIESADDED n] [MAXDELETEDID id]`** (Redis 7
+  shape): overwrite a stream's scalar state. Write-classified
+  (AOF-propagated) and keyspace-notifying (class `t`); errors mirror
+  upstream ("requires the key to exist", "smaller than the target stream
+  top item").
+- **Snapshot format v4**: each `OP_STREAM` payload now carries the
+  stream's consumer groups — group `last_delivered_id`, consumers with
+  `last_seen_ms`, and the full PEL (owner, `delivery_time_ms`,
+  `delivery_count`), including tombstone rows for XDEL'd-while-pending
+  entries. v2/v3 snapshots still load.
+
+### Fixed
+
+- **Consumer groups / PELs now survive every persistence path** (was the
+  v1.14.0 known limitation): snapshots (v4 group section), AOF rewrites
+  (`XGROUP CREATE`/`CREATECONSUMER` + one `XCLAIM … TIME t RETRYCOUNT n
+  FORCE JUSTID` per live PEL row — full delivery fidelity, upstream's own
+  rewrite technique), and reshards (the redistribution path carries
+  groups). Previously SAVE-only persistence, BGREWRITEAOF, and layout
+  re-shards all dropped group state.
+- **AOF rewrite scalar drift**: a stream whose tail (or entirety) had
+  been XDEL'd replayed with a rolled-back ID clock — and an empty stream
+  (deleted-out or groups-only) vanished from the rewrite entirely. The
+  rewrite now re-creates empty streams (`XADD … MAXLEN 0` + the new
+  `XSETID`) and restores `last_id` / `entries_added` /
+  `max_deleted_entry_id` exactly.
+- **Server reshard is crash-idempotent**: new snapshots are written under
+  temp names and a durable `reshard.journal` marks the commit point
+  before any source file is touched; an interrupted migration is rolled
+  forward on the next start. Previously a crash inside the migration
+  window left the data dir empty (recovery only by hand from
+  `.premigration` backups).
+- **io_uring dead-conn block waiters**: EOF / write-error / protocol-
+  error now cancels a conn's BLPOP/XREAD waiters immediately instead of
+  on the 1/16-throttled reap — a parked waiter on a dead conn could
+  consume a pushed element meant for a live client for up to 16
+  iterations.
+- **Embedded / server data-dir interop**: a meta-less multi-shard dir
+  opened by the embedded store at `shards = 1` silently loaded shard 0
+  only; the shard count is now inferred and the dir migrated whole.
+  Default-named single-shard embedded dirs also record `shards.meta`
+  (custom `with_aof_filename` / `with_snapshot_filename` names are a
+  documented interop opt-out).
+
+### Known limitations
+
+- AOF **rewrites** drop tombstone PEL rows (pending entries whose stream
+  entry was XDEL'd) — they can't be re-created by command replay, and
+  kevy's XCLAIM/XAUTOCLAIM treat them as reapable. Snapshots (v4)
+  preserve them fully; only XPENDING visibility across a
+  rewrite-then-restart is affected.
+- Multi-stream `XREADGROUP` across shards executes per shard: if one
+  shard errors (e.g. NOGROUP) after another delivered, the deliveries
+  stand (visible in XPENDING, reclaimable via XAUTOCLAIM) while the
+  client sees the error. Upstream pre-validates; documented trade-off.
+- Cross-slot multi-key commands execute (single-machine superset) instead
+  of returning `-CROSSSLOT`; keyspace-wide views stay whole-keyspace on
+  every port (carried from v1.14.0).
+
 ## [v1.14.0] — 2026-06-10
 
 Major release: **single-node CLUSTER mode** (key-aware routing — the last

@@ -184,6 +184,27 @@ impl Store {
         Ok(n as u64)
     }
 
+    /// `XSETID key last-id [ENTRIESADDED n] [MAXDELETEDID id]`. Returns
+    /// `NoSuchKey` for a missing key (dispatch maps it to Redis's
+    /// "requires the key to exist" wording), `OutOfRange` when `last_id`
+    /// is below the stream's top entry.
+    pub fn xsetid(
+        &mut self,
+        key: &[u8],
+        last_id: StreamId,
+        entries_added: Option<u64>,
+        max_deleted_id: Option<StreamId>,
+    ) -> Result<(), StoreError> {
+        {
+            let Some(s) = self.stream_mut(key, false)? else {
+                return Err(StoreError::NoSuchKey);
+            };
+            s.xsetid(last_id, entries_added, max_deleted_id)?;
+        }
+        self.bump_if_watched(key);
+        Ok(())
+    }
+
     // ─────── consumer-group surface (sprint B) ───────
 
     /// `XGROUP CREATE key group <id|$> [MKSTREAM]`. Returns `Ok(true)`

@@ -394,3 +394,6 @@ impl Drop for DropGuard {
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "store_tests_shard.rs"]
+mod tests_shard;

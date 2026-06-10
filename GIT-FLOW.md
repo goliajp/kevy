@@ -71,6 +71,26 @@ git push origin develop
   known-flaky test documented in memory or `.claude/known-flakes.md`
   (re-run once; if it still fails, treat as real).
 
+## Perf gate — mandatory before finish and release
+
+Throughput regressions are release blockers. Before `git flow feature
+finish` on any branch that touches `crates/` hot paths, and always on
+`release/*` before finishing:
+
+```sh
+rsync -a --delete crates/ lx64:~/kevy-bench/crates/
+rsync -a Cargo.toml Cargo.lock bench/perfgate.sh lx64:~/kevy-bench/
+ssh lx64 'cd ~/kevy-bench && RUSTC_WRAPPER= cargo build --release -p kevy \
+  && cp target/release/kevy /tmp/kevy_gate \
+  && bash perfgate.sh /tmp/kevy_gate'
+```
+
+Exit 0 = PASS. Exit 1 = regression — do not finish, do not release; find
+the regression first. Exit 2 = refused (dirty box / busy) — sweep or wait,
+then rerun; never "just skip" the gate. The baseline lives in
+`bench/PERF-BASELINE.json`; raise it (`--update-baseline` + commit) only
+when a deliberate improvement lands, never to make a red gate green.
+
 ## Release flow — stabilize → tag → publish
 
 A release is a `vX.Y.Z` tag on `master` with the matching workspace

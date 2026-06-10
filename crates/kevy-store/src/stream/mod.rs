@@ -390,9 +390,11 @@ impl StreamData {
 
 mod claim;
 mod group;
+mod load;
 mod store;
 #[allow(unused_imports)]
 pub use claim::AutoclaimResult;
+pub use load::{LoadedGroup, LoadedPelEntry};
 #[allow(unused_imports)]
 pub use group::{
     ConsumerGroup, ConsumerState, GroupCreateMode, PelEntry, PendingExtended,

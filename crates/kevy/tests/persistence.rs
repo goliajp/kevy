@@ -617,3 +617,117 @@ fn relative_ttl_survives_restart_at_original_deadline() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ───────────── stream consumer groups survive restart (2026-06-11) ─────────────
+
+/// Drive the grouped-stream fixture over the wire: entries 1-1/2-1/3-1 on
+/// `st`, group `g`, consumer c1 holds 1-1+2-1, c2 holds 3-1, then 2-1 is
+/// XDEL'd (tombstone PEL row). Also `st2`: deleted-only stream + group g2.
+fn build_grouped_stream(c: &mut std::net::TcpStream) {
+    let entry = |id: &str| format!("*2\r\n$3\r\n{id}\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n");
+    for id in ["1-1", "2-1", "3-1"] {
+        c.write_all(&req(&[b"XADD", b"st", id.as_bytes(), b"f", b"v"])).unwrap();
+        read_reply(c, format!("$3\r\n{id}\r\n").as_bytes());
+    }
+    c.write_all(&req(&[b"XGROUP", b"CREATE", b"st", b"g", b"0"])).unwrap();
+    read_reply(c, b"+OK\r\n");
+    c.write_all(&req(&[
+        b"XREADGROUP", b"GROUP", b"g", b"c1", b"COUNT", b"2", b"STREAMS", b"st", b">",
+    ]))
+    .unwrap();
+    read_reply(
+        c,
+        format!("*1\r\n*2\r\n$2\r\nst\r\n*2\r\n{}{}", entry("1-1"), entry("2-1")).as_bytes(),
+    );
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g", b"c2", b"STREAMS", b"st", b">"]))
+        .unwrap();
+    read_reply(
+        c,
+        format!("*1\r\n*2\r\n$2\r\nst\r\n*1\r\n{}", entry("3-1")).as_bytes(),
+    );
+    c.write_all(&req(&[b"XDEL", b"st", b"2-1"])).unwrap();
+    read_reply(c, b":1\r\n");
+    // st2: deleted-only stream whose last_id must survive, plus a group.
+    c.write_all(&req(&[b"XADD", b"st2", b"5-1", b"f", b"v"])).unwrap();
+    read_reply(c, b"$3\r\n5-1\r\n");
+    c.write_all(&req(&[b"XDEL", b"st2", b"5-1"])).unwrap();
+    read_reply(c, b":1\r\n");
+    c.write_all(&req(&[b"XGROUP", b"CREATE", b"st2", b"g2", b"5-1"])).unwrap();
+    read_reply(c, b"+OK\r\n");
+}
+
+/// Post-restart probes shared by the AOF-rewrite and snapshot paths.
+/// `pending_total` differs: the snapshot keeps the 2-1 tombstone PEL row
+/// (3 pending, c1=2), the rewrite drops it (2 pending, c1=1) — RFC
+/// 2026-06-11 trade-off.
+fn assert_grouped_stream_restored(c: &mut std::net::TcpStream, tombstone_kept: bool) {
+    let (total, c1) = if tombstone_kept { (3, 2) } else { (2, 1) };
+    c.write_all(&req(&[b"XPENDING", b"st", b"g"])).unwrap();
+    read_reply(
+        c,
+        format!(
+            "*4\r\n:{total}\r\n$3\r\n1-1\r\n$3\r\n3-1\r\n*2\r\n*2\r\n$2\r\nc1\r\n$1\r\n{c1}\r\n*2\r\n$2\r\nc2\r\n$1\r\n1\r\n"
+        )
+        .as_bytes(),
+    );
+    // PEL replay: c1 re-reads its own pending entries from 0 — only the
+    // still-existing 1-1 comes back (2-1 is deleted in both paths).
+    c.write_all(&req(&[b"XREADGROUP", b"GROUP", b"g", b"c1", b"STREAMS", b"st", b"0"]))
+        .unwrap();
+    read_reply(
+        c,
+        b"*1\r\n*2\r\n$2\r\nst\r\n*1\r\n*2\r\n$3\r\n1-1\r\n*2\r\n$1\r\nf\r\n$1\r\nv\r\n",
+    );
+    // st2: the ID clock survived the restart even though the stream is empty.
+    c.write_all(&req(&[b"XADD", b"st2", b"5-1", b"f", b"v"])).unwrap();
+    read_reply(
+        c,
+        b"-ERR The ID specified in XADD is equal or smaller than the target stream top item\r\n",
+    );
+    c.write_all(&req(&[b"XPENDING", b"st2", b"g2"])).unwrap();
+    read_reply(c, b"*4\r\n:0\r\n$-1\r\n$-1\r\n*-1\r\n");
+}
+
+#[test]
+fn stream_groups_survive_bgrewriteaof_restart() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-groups-aof-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    with_runtime(port, &dir, 1, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        build_grouped_stream(&mut c);
+        c.write_all(&req(&[b"BGREWRITEAOF"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+    });
+    let port2 = free_port();
+    with_runtime(port2, &dir, 1, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        assert_grouped_stream_restored(&mut c, /*tombstone_kept=*/ false);
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn stream_groups_survive_save_restart() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-groups-save-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    with_runtime(port, &dir, 1, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        build_grouped_stream(&mut c);
+        c.write_all(&req(&[b"SAVE"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+    });
+    let port2 = free_port();
+    with_runtime(port2, &dir, 1, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        assert_grouped_stream_restored(&mut c, /*tombstone_kept=*/ true);
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -58,9 +58,10 @@ mod value;
 mod zset;
 pub use stream::{
     AutoclaimResult, ConsumerGroup, ConsumerState, EntryBatch, GroupCreateMode,
-    LoadedStreamEntry, PelEntry, PendingExtended, PendingExtendedRow, PendingSummary,
-    ReadGroupId, StreamData, StreamId, StreamIdError, XAddIdSpec, XClaimOpts,
-    now_unix_ms, parse_explicit_id, parse_range_end, parse_range_start, parse_xadd_id,
+    LoadedGroup, LoadedPelEntry, LoadedStreamEntry, PelEntry, PendingExtended,
+    PendingExtendedRow, PendingSummary, ReadGroupId, StreamData, StreamId, StreamIdError,
+    XAddIdSpec, XClaimOpts, now_unix_ms, parse_explicit_id, parse_range_end,
+    parse_range_start, parse_xadd_id,
 };
 pub use util::glob_match;
 pub use value::*;
