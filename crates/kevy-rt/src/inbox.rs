@@ -147,11 +147,9 @@ impl<C: Commands> Shard<C> {
                         self.aof_begin_group();
                         for (conn, seq, argv, proto, meta) in reqs {
                             let part = self.run_dispatch(&argv, proto, meta);
-                            resps.push((conn, seq, part));
-                            // The spent argv joins THIS shard's pool, ready
-                            // for its own forwards — under uniform traffic
-                            // pools balance, so no return trip is needed.
-                            self.argv_pool.put(argv);
+                            // The spent argv husk rides home with the reply;
+                            // the origin pools it (see `RespBatch`).
+                            resps.push((conn, seq, part, argv));
                         }
                         // fsync the batch's forwarded writes before replying.
                         self.aof_end_group()?;
@@ -162,7 +160,8 @@ impl<C: Commands> Shard<C> {
                     // conn).
                     Inbound::ResponseBatch(resps) => {
                         let mut to_flush: Vec<u64> = Vec::new();
-                        for (conn, seq, part) in resps {
+                        for (conn, seq, part, husk) in resps {
+                            self.argv_pool.put(husk);
                             self.fold(conn, seq, part);
                             if !to_flush.contains(&conn) {
                                 to_flush.push(conn);

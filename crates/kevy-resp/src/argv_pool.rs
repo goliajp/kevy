@@ -4,20 +4,24 @@
 //! (2 mallocs) on the origin core, which the owning core then frees after
 //! dispatch — a cross-thread alloc/free pair per forwarded command. The
 //! pool breaks that cycle: the origin fills a recycled `Argv` (capacity
-//! retained → no malloc), and the owning shard, after executing the
-//! borrowed argv, drops the husk into *its own* pool for *its own*
-//! forwards. Under hash-uniform traffic every shard sends ≈ what it
-//! receives, so pools stay balanced and steady-state allocator traffic on
-//! the forward path goes to zero — no return trip needed.
+//! retained → no malloc), the owning shard executes it borrowed, and the
+//! spent husk rides back to the origin with the reply batch, where it
+//! re-enters the origin's pool. Returning to the *origin* (rather than
+//! pooling at the owner) keeps each shard's pool level matched to its own
+//! conn demand by construction — recycle-at-the-owner measurably starved
+//! conn-heavy shards (accept skew) while overfilling quiet ones, leaving
+//! the malloc rate unchanged.
 
 use crate::argv::Argv;
 use crate::argv_view::ArgvView;
 
-/// Most argvs a pool retains. Bounds memory when traffic is asymmetric
-/// (a shard that receives more forwards than it sends would otherwise
-/// accumulate husks without bound). Sized above the worst-case inflight
-/// of the standard bench grid (50 conns × P16 ≈ 800).
-const MAX_POOLED: usize = 1024;
+/// Most argvs a pool retains. With husks returning to their origin the
+/// steady-state pool level equals the shard's own forwarded in-flight
+/// (conns × pipeline depth — ≈1600 at the 50-conn × P256 bench corner),
+/// so the cap is headroom, not a working limit; it only bounds memory
+/// when a conn burst comes and goes. 8192 ≈ ~1 MiB worst case per shard
+/// at typical small-argv buffer sizes.
+const MAX_POOLED: usize = 8192;
 
 /// Largest arg-bytes buffer worth retaining. A one-off `SET k <1 MB>`
 /// must not park a megabyte in the pool forever; oversized husks are

@@ -252,7 +252,12 @@ pub(crate) enum Part {
 /// conns to the same owning shard.
 pub(crate) type ReqBatch = Vec<(u64, u64, Argv, RespVersion, DispatchMeta)>;
 /// The matching replies `(conn, seq, part)` sent back as one message.
-pub(crate) type RespBatch = Vec<(u64, u64, Part)>;
+/// Each reply carries the request's spent `Argv` husk back to the origin,
+/// which drops it into its own [`kevy_resp::ArgvPool`] — so every shard's
+/// pool level matches its own conn demand by construction, immune to
+/// accept skew (a conn-heavy shard forwards more than it receives, so
+/// recycle-at-the-owner starves its pool while overfilling quiet shards').
+pub(crate) type RespBatch = Vec<(u64, u64, Part, Argv)>;
 
 /// Inter-core message (each core has one inbound queue carrying both).
 pub(crate) enum Inbound {
