@@ -32,6 +32,9 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
 
+mod crc16;
+pub use crc16::{crc16, key_hash_slot};
+
 /// FxHash mixing constant (rustc's `rustc-hash` seed).
 const SEED: u64 = 0x517c_c1b7_2722_0a95;
 const ROTATE: u32 = 5;
