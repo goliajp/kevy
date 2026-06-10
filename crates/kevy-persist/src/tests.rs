@@ -205,3 +205,102 @@ fn all_types_snapshot_round_trip() {
     assert_eq!(dst.type_of(b"zset"), "zset");
     let _ = std::fs::remove_file(&path);
 }
+
+// ───────────── stream consumer groups (snapshot v4, 2026-06-11) ─────────────
+
+use kevy_store::{GroupCreateMode, ReadGroupId, StreamId, XAddIdSpec};
+
+/// Entries 1-1/2-1/3-1; group `g`; `c1` holds 1-1+2-1 (t=1000), `c2`
+/// holds 3-1 (t=2000); 2-1 XDEL'd → its PEL row is a tombstone.
+fn grouped_stream_store() -> Store {
+    let mut src = Store::new();
+    for ms in [1u64, 2, 3] {
+        src.xadd(
+            b"st",
+            XAddIdSpec::Explicit(StreamId { ms, seq: 1 }),
+            vec![(b"f".to_vec(), b"v".to_vec())],
+            false,
+            0,
+        )
+        .unwrap();
+    }
+    src.xgroup_create(b"st", b"g", GroupCreateMode::AtId(StreamId::MIN), false)
+        .unwrap();
+    src.xreadgroup(b"st", b"g", b"c1", ReadGroupId::New, Some(2), false, 1000)
+        .unwrap();
+    src.xreadgroup(b"st", b"g", b"c2", ReadGroupId::New, None, false, 2000)
+        .unwrap();
+    src.xdel(b"st", &[StreamId { ms: 2, seq: 1 }]).unwrap();
+    src
+}
+
+#[test]
+fn stream_groups_snapshot_round_trip() {
+    let path = temp_file("groups");
+    let src = grouped_stream_store();
+    save_snapshot(&src, &path).unwrap();
+
+    let mut dst = Store::new();
+    load_snapshot(&mut dst, &path).unwrap();
+
+    let view = dst.stream_view(b"st").unwrap().unwrap();
+    assert_eq!(view.length(), 2);
+    assert_eq!(view.last_id(), StreamId { ms: 3, seq: 1 });
+    assert_eq!(view.entries_added(), 3);
+    assert_eq!(view.max_deleted_id(), StreamId { ms: 2, seq: 1 });
+    let g = view.group(b"g").expect("group must survive the snapshot");
+    assert_eq!(g.last_delivered_id(), StreamId { ms: 3, seq: 1 });
+    // Snapshot is the full-fidelity path: the 2-1 tombstone survives.
+    assert_eq!(g.pending_count(), 3);
+    let p2 = g.pel.get(&StreamId { ms: 2, seq: 1 }).unwrap();
+    assert_eq!(
+        (p2.consumer.as_slice(), p2.delivery_time_ms, p2.delivery_count),
+        (&b"c1"[..], 1000, 1)
+    );
+    let mut consumers: Vec<(Vec<u8>, u64, usize)> = g
+        .consumers_iter()
+        .map(|(n, c)| (n.to_vec(), c.last_seen_ms(), c.pending_count()))
+        .collect();
+    consumers.sort();
+    assert_eq!(
+        consumers,
+        vec![(b"c1".to_vec(), 1000, 2), (b"c2".to_vec(), 2000, 1)]
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A v3 file (pre-groups format) must still load — entries + scalars
+/// present, group map empty. Hand-encoded bytes pin the v3 layout.
+#[test]
+fn v3_snapshot_without_groups_still_loads() {
+    let path = temp_file("v3compat");
+    let mut b: Vec<u8> = Vec::new();
+    b.extend_from_slice(b"KEVYSNAP");
+    b.push(3); // version 3: no group section after the entries block
+    b.push(6); // OP_STREAM
+    b.push(0); // no TTL
+    b.extend_from_slice(&2u32.to_le_bytes());
+    b.extend_from_slice(b"st");
+    for v in [1u64, 1, 0, 0, 1] {
+        // last(1,1), max_deleted(0,0), entries_added=1
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    b.extend_from_slice(&1u32.to_le_bytes()); // 1 entry
+    b.extend_from_slice(&1u64.to_le_bytes()); // ms
+    b.extend_from_slice(&1u64.to_le_bytes()); // seq
+    b.extend_from_slice(&1u32.to_le_bytes()); // 1 field
+    b.extend_from_slice(&1u32.to_le_bytes());
+    b.push(b'f');
+    b.extend_from_slice(&1u32.to_le_bytes());
+    b.push(b'v');
+    b.push(0); // OP_EOF
+    std::fs::write(&path, &b).unwrap();
+
+    let mut dst = Store::new();
+    load_snapshot(&mut dst, &path).unwrap();
+    let view = dst.stream_view(b"st").unwrap().unwrap();
+    assert_eq!(view.length(), 1);
+    assert_eq!(view.last_id(), StreamId { ms: 1, seq: 1 });
+    assert_eq!(view.group_count(), 0);
+    let _ = std::fs::remove_file(&path);
+}
