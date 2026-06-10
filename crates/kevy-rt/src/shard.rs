@@ -32,6 +32,16 @@ use std::sync::atomic::{AtomicBool, Ordering, fence};
 pub(crate) struct Shard<C: Commands> {
     pub(crate) id: usize,
     pub(crate) nshards: usize,
+    /// Cluster mode (`Some` = on): switches key→shard routing from KevyHash
+    /// to Redis-cluster slots (CRC16 `{hashtag}` → contiguous ranges) and
+    /// carries the advertised per-shard addressing for `-MOVED` replies.
+    /// Startup-time property (recorded in `shards.meta`), never flipped
+    /// live. See [`crate::reduce::shard_of`].
+    pub(crate) cluster: Option<crate::cluster::ClusterTopo>,
+    /// The per-shard deterministic listener (`cluster.port_base + id`),
+    /// `Some` iff cluster mode is on. Conns accepted here are marked
+    /// [`Conn::cluster`] and get `-MOVED` instead of forwarding.
+    pub(crate) cluster_listener: Option<Socket>,
     pub(crate) store: Store,
     pub(crate) commands: C,
     pub(crate) poller: Poller,
@@ -128,6 +138,16 @@ pub(crate) struct Shard<C: Commands> {
     /// keys this shard owns. Kept separate from `blocked` so the hot
     /// single-key-local path is untouched. Empty in steady state.
     pub(crate) xwaiters: crate::block_xshard::XShardWaiters,
+    /// Reused staging buffer for forwarded-dispatch replies
+    /// (`Shard::run_dispatch`): `dispatch_into` writes here, then ≤30 B replies
+    /// copy into a stack-inline [`crate::message::SmallReply`] — zero
+    /// allocator traffic for the +OK / :N / small-GET steady state.
+    pub(crate) reply_scratch: Vec<u8>,
+    /// Recycled `Argv`s for the cross-shard forward path: the forward
+    /// sites fill from here (no malloc in steady state), and the
+    /// `ResponseBatch` handler drops each returned husk back in. See
+    /// [`kevy_resp::ArgvPool`] for the ownership cycle.
+    pub(crate) argv_pool: kevy_resp::ArgvPool,
 }
 
 // `SPIN_LIMIT` / `PARK_TIMEOUT_MS` / `TICK_CHECK_EVERY` moved to per-
@@ -138,6 +158,12 @@ pub(crate) struct Shard<C: Commands> {
 // existing benchmark numbers translate one-to-one.
 
 impl<C: Commands> Shard<C> {
+    /// Owning shard of `key` under this server's routing scheme.
+    #[inline]
+    pub(crate) fn shard_of(&self, key: &[u8]) -> usize {
+        crate::reduce::shard_of(key, self.nshards, self.cluster.is_some())
+    }
+
     /// This shard's snapshot file: `<data_dir>/dump-<id>.rdb`.
     pub(crate) fn snapshot_path(&self) -> PathBuf {
         self.data_dir.join(format!("dump-{}.rdb", self.id))
@@ -149,6 +175,7 @@ impl<C: Commands> Shard<C> {
     }
 
     pub(crate) fn run(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {
+        self.commands.on_shard_start(self.id);
         // Restore: snapshot (state as of last SAVE) then replay the AOF (writes
         // since that SAVE). The AOF is truncated at each SAVE, so this never
         // double-applies. Replay goes straight to the store (no re-logging).
@@ -175,6 +202,14 @@ impl<C: Commands> Shard<C> {
         self.poller.add(self.listener.raw(), true, false)?;
         self.poller.add(self.waker.read_fd(), true, false)?;
         let listener_fd = self.listener.raw();
+        // -1 never matches an event fd, so the cluster-off loop below pays
+        // one dead integer compare per event and nothing else.
+        let mut cluster_fd = -1;
+        if let Some(cl) = &self.cluster_listener {
+            cl.set_nonblocking()?;
+            self.poller.add(cl.raw(), true, false)?;
+            cluster_fd = cl.raw();
+        }
         let waker_fd = self.waker.read_fd();
         let me = self.id;
 
@@ -233,7 +268,9 @@ impl<C: Commands> Shard<C> {
                 let events = std::mem::take(&mut self.events);
                 for ev in &events {
                     if ev.fd == listener_fd {
-                        self.accept_ready()?;
+                        self.accept_ready(false)?;
+                    } else if ev.fd == cluster_fd {
+                        self.accept_ready(true)?;
                     } else if ev.fd == waker_fd {
                         self.waker.drain();
                     } else if let Some(&conn_id) = self.fd_to_conn.get(&ev.fd) {
@@ -309,55 +346,23 @@ impl<C: Commands> Shard<C> {
     // `impl<C: Commands> Shard<C>`, split out so this file stays under
     // the 500-LOC house rule.
 
-    /// Wake every target enqueued to this iteration that is currently parked.
-    /// A spinning peer needs no syscall — it will see the message on its next
-    /// poll(0). This is what removes the per-message wakeup under load.
-    pub(crate) fn flush_wakes(&mut self) {
-        // Fast-path single-shard: pending_wakes is len-nshards; in the common
-        // single-shard benchmark this loop runs nshards times even when no
-        // wakes are pending. Skip outright when nothing's flagged.
-        if !self.pending_wakes.iter().any(|&w| w) {
-            return;
-        }
-        // Close the park/wake race: the SeqCst fence pairs with the
-        // matching fence in `Shard::run` after a peer stores `parked=true`.
-        // Combined, they guarantee: if our ring push (Release on the
-        // outbox's tail, executed earlier this iteration via `send_to`)
-        // happens-before this load, AND the peer's parked-store
-        // happens-before its post-park drain, then either
-        //   (a) the peer's drain sees our push,            OR
-        //   (b) our load sees `parked=true` and we send the wake.
-        // Loom-verified by `kevy-rt/tests/loom.rs::no_wake_implies_drained`.
-        // Without the fence the lost-wake window was bounded by the
-        // peer's `PARK_TIMEOUT_MS` (50 ms); the timeout remains as
-        // defense-in-depth against missed eventfd writes / OS hiccups.
-        fence(Ordering::SeqCst);
-        for i in 0..self.pending_wakes.len() {
-            if self.pending_wakes[i] {
-                self.pending_wakes[i] = false;
-                if self.parked[i].load(Ordering::SeqCst) {
-                    let _ = self.wakers[i].wake();
-                }
-            }
-        }
-    }
+    // The outbound transport half (`flush_wakes` / `flush_dirty` /
+    // `send_to` / `flush_backlog` / `flush_conn`) lives in
+    // [`crate::shard_flush`] — same `impl<C: Commands> Shard<C>`, split
+    // out so this file stays under the 500-LOC house rule.
 
-    /// Flush connections a PUBLISH appended output to this iteration (epoll path;
-    /// the io_uring reactor flushes them via its arm/write loop instead).
-    #[inline]
-    fn flush_dirty(&mut self) -> io::Result<()> {
-        if self.dirty.is_empty() {
-            return Ok(());
-        }
-        while let Some(id) = self.dirty.pop() {
-            self.flush_conn(id)?;
-        }
-        Ok(())
-    }
-
-    fn accept_ready(&mut self) -> io::Result<()> {
+    /// Drain one listener's accept queue. `cluster` selects the per-shard
+    /// cluster listener (conns marked for `-MOVED` semantics) over the
+    /// shared compat listener.
+    fn accept_ready(&mut self, cluster: bool) -> io::Result<()> {
         loop {
-            match self.listener.accept() {
+            let accepted = if cluster {
+                let Some(cl) = &self.cluster_listener else { return Ok(()) };
+                cl.accept()
+            } else {
+                self.listener.accept()
+            };
+            match accepted {
                 Ok(sock) => {
                     sock.set_nonblocking()?;
                     let _ = sock.set_nodelay();
@@ -366,7 +371,9 @@ impl<C: Commands> Shard<C> {
                     self.next_conn_id += 1;
                     self.poller.add(fd, true, false)?;
                     self.fd_to_conn.insert(fd, id);
-                    self.conns.insert(id, Conn::new(sock));
+                    let mut conn = Conn::new(sock);
+                    conn.cluster = cluster;
+                    self.conns.insert(id, conn);
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -381,96 +388,9 @@ impl<C: Commands> Shard<C> {
     // event handlers the `run` loop dispatches to. Still the same
     // `impl Shard`.
 
-    /// Enqueue a message to another shard, marking it for a coalesced wakeup. The
-    /// fast path is a lock-free ring push; on a full ring it spills to the local
-    /// per-target backlog (preserving order), which `flush_backlog` drains later.
-    pub(crate) fn send_to(&mut self, dst: usize, msg: Inbound) {
-        if self.backlog[dst].is_empty() {
-            match self.outboxes[dst].as_mut() {
-                Some(p) => {
-                    if let Err(m) = p.push(msg) {
-                        self.backlog[dst].push_back(m);
-                    }
-                }
-                // `dst == self.id` has no ring and is never sent to.
-                None => return,
-            }
-        } else {
-            // Order: queue behind the existing backlog rather than jumping the ring.
-            self.backlog[dst].push_back(msg);
-        }
-        self.pending_wakes[dst] = true;
-    }
-
-    /// Re-push each per-target backlog into its ring (filled when a ring was full
-    /// last iteration). Stops at the first target whose ring is still full.
-    #[inline]
-    pub(crate) fn flush_backlog(&mut self) {
-        // Outer-empty short-circuit: in the hot single-shard / no-backlog
-        // path this avoids the nshards loop entirely.
-        if self.backlog.iter().all(|b| b.is_empty()) {
-            return;
-        }
-        for dst in 0..self.nshards {
-            if self.backlog[dst].is_empty() {
-                continue;
-            }
-            let Some(p) = self.outboxes[dst].as_mut() else {
-                self.backlog[dst].clear();
-                continue;
-            };
-            while let Some(msg) = self.backlog[dst].pop_front() {
-                if let Err(m) = p.push(msg) {
-                    self.backlog[dst].push_front(m);
-                    break;
-                }
-                self.pending_wakes[dst] = true;
-            }
-        }
-    }
-
     // `drain_inbound` + `close_conn` live in [`crate::inbox`] to keep this
     // file under the 500-LOC house rule; they're still on the same
     // `impl Shard` and called from `run()` here.
-
-    pub(crate) fn flush_conn(&mut self, conn_id: u64) -> io::Result<()> {
-        let (close, want_write, fd) = {
-            let Some(conn) = self.conns.get_mut(&conn_id) else {
-                return Ok(());
-            };
-            while conn.write_pos < conn.output.len() {
-                match conn.sock.write(&conn.output[conn.write_pos..]) {
-                    Ok(0) => break,
-                    Ok(n) => conn.write_pos += n,
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                    Err(_) => {
-                        conn.closing = true;
-                        break;
-                    }
-                }
-            }
-            if conn.write_pos == conn.output.len() {
-                conn.output.clear();
-                conn.write_pos = 0;
-            }
-            let out_remaining = conn.write_pos < conn.output.len();
-            let close = conn.closing && conn.pending.is_empty() && !out_remaining;
-            (close, out_remaining, conn.sock.raw())
-        };
-
-        if close {
-            self.close_conn(conn_id);
-            return Ok(());
-        }
-        if let Some(conn) = self.conns.get_mut(&conn_id)
-            && want_write != conn.want_write
-        {
-            conn.want_write = want_write;
-            self.poller.modify(fd, true, want_write)?;
-        }
-        Ok(())
-    }
 
     /// Drop a (closing) connection's subscriptions from the shared registry, so
     /// PUBLISH counts and the fan-out bitset don't count a gone subscriber.

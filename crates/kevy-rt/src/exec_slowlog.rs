@@ -2,7 +2,7 @@
 //! fan-out. Each shard owns its own [`SlowlogState`]; `SLOWLOG GET` and
 //! `SLOWLOG LEN` aggregate across shards, `SLOWLOG RESET` clears them all.
 //!
-//! Timing position: the inline fast-path and `exec_op`'s [`Op::Dispatch`] arm
+//! Timing position: the inline fast-path and the forwarded `Shard::run_dispatch` path
 //! both measure `Instant::now()` around the dispatch call only (no AOF /
 //! WATCH / notify overhead is charged to the recorded micros). Records only
 //! when `state.slower_than_micros >= 0` AND elapsed micros strictly exceed
@@ -156,7 +156,7 @@ impl<C: Commands> Shard<C> {
 
     fn slowlog_immediate(&mut self, conn_id: u64, seq: u64, bytes: Vec<u8>) {
         self.push_pending_slot(conn_id, 1, Agg::First(None), false);
-        self.fold(conn_id, seq, Part::Reply(bytes));
+        self.fold(conn_id, seq, Part::Reply(crate::message::SmallReply::from_vec(bytes)));
     }
 
     fn slowlog_fanout(

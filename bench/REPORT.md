@@ -658,3 +658,221 @@ no measured win ⇒ no added complexity). The per-batch group commit (v1.6.0,
 +46% on lx64) stands as the AOF-always optimization. Further always gains
 would need a different mechanism (e.g. a short time-window group, or batching
 across loops) — deferred unless a real durable-write workload demands it.
+
+## Server perf-ceiling campaign — regression recovered, then peak surpassed (2026-06-09/10, lx64)
+
+Two-phase campaign against the post-feature-wave regression (standard
+`-c50 -P16` corners were −27…37 % vs the `877cd41` peak binary) and then
+past it. All A/Bs interleaved multi-round on an idle box, `overall:` line
+only, peak anchor co-run.
+
+**Phase 1 — recovery (8 commits, `459c924..f941c8d`):** SLOWLOG default
+OFF (+13–19 %), config-read deferral (+10–13 %), io_uring reap 1/16
+amortize (+8–13 %), tier-1 GET/SET dispatch (+15 % SET), DispatchMeta
+(verb facts resolved once, +6 % GET), single-probe overwrite SET
+(+8–11 %), stack-inline SmallReply across the cross-shard ring (+2.3 %).
+Recovered the four corners to −8…10 % of peak.
+
+**Phase 2 — allocator + parse surge (7 commits, `f856ea3..5f69b01`):**
+
+| commit | lever | 8sh-P256 io_uring A/B |
+|---|---|---|
+| `f856ea3` | ArgvPool: pool-recycled owned argvs on the forward path; borrowed local dispatch | (gated with next) |
+| `eb530cf` | spent-argv husks ride the reply batch back to the origin's pool | GET +24.8 %, SET +25.9 % |
+| `3914b5e` | single-pass multibulk parse (fused `$len\r\n` header walk) | GET +4.2 %, SET +2.2 % |
+| `83e1ef8` | parse cursor: one tail drain per batch, not per cmd (was O(batch²) bytes) | GET +4.6 % |
+| `d0d40bf` | `Store::set_slice`: small SET values inline without the `to_vec` malloc/free pair | SET +8.2 % (first past 10M) |
+| `9df5113` / `5f69b01` | refactors (shared dispatch_batch; one conns probe pre-dispatch) | measured flat, kept for shape |
+
+The husk-return commit is the campaign's center: recycling at the owning
+shard failed measurably (accept skew starves conn-heavy shards' pools
+while quiet shards overflow — malloc share didn't move), so the husk now
+returns to its origin with the reply, making every pool's level match its
+own conn demand by construction. After it, malloc left the 8sh SET
+profile top-10 entirely.
+
+**End state (3-round interleaved, same run):**
+
+| corner (`-c50 -P16`, 10sh) | f941c8d | HEAD `5f69b01` | `877cd41` peak | HEAD vs peak |
+|---|---:|---:|---:|---:|
+| epoll GET | 4.23M | **5.43M** | 4.51M | **+20 %** |
+| epoll SET | 3.85M | **5.89M** | 4.37M | **+35 %** |
+| io_uring GET | 4.85M | **6.35M** | 5.18M | **+22 %** |
+| io_uring SET | 4.68M | **6.00M** | 4.70M | **+28 %** |
+
+8-shard `-c50 -P256` io_uring: GET 8.5M → **11.4M** (+34 %), SET 7.4M →
+**10.3M** (+39 %).
+
+Negative results (kept out, archived in the session notes): pooling spent
+argvs at the owning shard (accept skew), embedding per-conn io_uring state
+into `Conn` (struct bloat hurt per-cmd probes more than the arm scan
+saved), zero-copy parse from the provided buffer (flat — the chunk memcpy
+is cheap next to dispatch), and conns-probe consolidation (flat — KevyMap
+u64 probes are not a bottleneck on this box; kept as a refactor).
+Same-binary calibration on this box: SET can swing ±6 % between rounds —
+single-digit deltas need 4+ interleaved rounds.
+
+Remaining ceiling levers (unstarted): reactor notification machinery
+(`run_uring` self ≈16 % — io_uring-native polling of the cross-core rings
+/ eventfd integration) and key-aware routing (clusters/client-side
+sharding would erase the 87.5 % forward tax; ~4.5× theoretical headroom).
+
+## Reactor notification machinery — resolved (2026-06-10, lx64)
+
+The "`run_uring` self ≈16 %" headline decomposed (via `#[inline(never)]`
+on the loop's four inlined blocks + perf annotate) into: `uring_arm_conns`
+6.1 % — almost entirely a `keys()` snapshot Vec + 3–8 redundant map probes
+per conn per iteration to satisfy the borrow checker — and
+`uring_drain_inbound` 4.5 %, which is mostly real message-shuttling work,
+not empty polling. The notification *architecture* was never the hot cost.
+
+**Landed:**
+
+| commit | change | measured |
+|---|---|---|
+| `17bb639`/`c10db1f` | `KevyMap::iter_mut` (new stone API, miri-clean); single-pass arm loop, one `io` probe per conn, no snapshot | 8sh SET +3.8 % (4/4), GET +1.2 % (3/4) |
+| `2cf3f14`/`24bd703` | `IORING_OP_TIMEOUT` in kevy-uring; spin → nap → park idle ladder | throughput flat (+0.5/+1.4 %); **idle CPU 6.5 % → 0.7 %** (8 shards); c1 p50 unchanged |
+
+The park rung is the epoll park translated to the ring: `parked[me]` +
+fenced re-drain (same loom-verified pairing) + a waker-pipe read SQE +
+a timeout SQE, blocking in `submit_and_wait(1)`. Waker/timeout CQEs
+don't count as work, so an idle shard re-parks straight from a 50 ms
+tick instead of burning a spin burst.
+
+**Negative result (the instructive one):** parking directly after the
+spin stage — i.e. instant wakeups instead of the old 200 µs sleep —
+measured **−18…21 %** on the 8sh bench. Under load, the sleep was doing
+real work: brief lulls aggregate cross-core inbound into bigger batches,
+and instant wakes replaced that with producer-side pipe-write syscalls
+plus smaller batches per iteration. Throughput here wants bounded
+latency, not minimal latency; the nap rung keeps it.
+
+**Post-campaign profile (8sh-P256 SET):** reactor machinery
+(loop + arm + drain) 15.5 % → ~7.8 %; top single item is now
+`dispatch_batch` 7.1 % (parse + dispatch proper). The 40 % `intel_idle`
+on server cores is accept-skew + forward-tax idleness — that is the
+key-aware-routing lever (~4.5×), now the only big one left.
+
+## Single-node CLUSTER slot routing — the forwarding tax, measured honestly (2026-06-10, lx64)
+
+Roadmap ③: cluster mode (`--cluster`) exposes each shard at a deterministic
+port with Redis-cluster slot routing (CRC16 `{hashtag}` & 16383, contiguous
+ranges), so cluster-aware clients address the owning shard directly — no
+cross-shard forwarding. Protocol validation: `redis-cli -c` follows MOVED
+across all shards (hashtags included), `CLUSTER KEYSLOT foo` = 12182 (matches
+upstream Redis), and a packet capture during a full `redis-benchmark
+--cluster` run contained **zero MOVED** frames — placement is exact.
+
+**Result: the forwarding tax is real and cluster routing removes it, but on
+this 16-core box the *throughput* headline doesn't move, because
+`redis-benchmark --cluster -r 1000000` is client-bound at ~6.1–6.6 M ops/s.**
+The win shows up as server CPU instead (same throughput, far less work):
+
+| angle (single-test, -r 1M, P256) | compat port | cluster ports | server CPU |
+|---|---|---|---|
+| 8sh GET | 6.6 M | 6.6 M | 125% vs ~200%+ (cluster lower) |
+| 4sh GET | 6.19 M | 6.13 M | **209% → 128% (−39%)** |
+| 4sh SET | 6.13 M | 5.70 M | **266% → 208% (−22%)** |
+| 2sh GET | 6.14 M | 6.13 M | client-capped |
+| 2sh SET | 4.2–4.4 M | 3.8–4.2 M | server-bound, parity within ±6% round noise |
+
+At equal load the cluster path does ~25–40 % less server work per op; that
+margin becomes throughput the moment clients are not the bottleneck (more
+client cores / multiple load generators than this box has). The 2sh SET
+parity (instead of a win) decomposes into two costs the redirect path adds:
+`-c 50 --cluster` opens 50 conns *per node* (2× total conns → shallower
+per-conn batches), and slot routing hashes with byte-wise CRC16 instead of
+the word-wise KevyHash (~4× slower per key; slice-by-4 tables are the known
+upgrade if a server-bound angle ever shows it matters).
+
+**Regression gate (old 8sh angle, no -r, compat port, cluster off)** —
+park2 (`24bd703`) vs cluster HEAD, 3 interleaved rounds: GET 11.35 M → 11.21 M
+(−1.2 %), SET 10.57 M → 10.29 M (−2.7 %), both inside the ±6 % round-to-round
+noise. Cluster-off costs one dead branch.
+
+Tooling caveat (cost a few hours): `redis-benchmark 8.0.2 --cluster` with
+**multiple tests in one invocation** (`-t get,set`) skews its key
+distribution badly across nodes (observed 291–1920 pkts/port vs perfectly
+uniform single-test runs) and the affected stage drops to ~2.5 M. Cluster
+angles must run one test per invocation (`/tmp/ab_cluster.sh` updated).
+
+### The forwarding tax, converted to throughput (2026-06-10, lx64, pinned-hashtag angle)
+
+The `redis-benchmark --cluster` client was the bottleneck hiding the win, so
+this angle removes it: 8 plain-mode redis-benchmark processes, each pinning
+its keys to one shard via a `{tag}` hashtag (`GET {t3}:__rand_int__ …`,
+6 conns × P256 each). Cluster mode connects each process straight to its
+shard's port (0 % forwarded); compat mode sends the *identical* commands to
+the shared REUSEPORT port (~7/8 forwarded). Client cost is byte-identical in
+both modes — the delta is the tax. 5 interleaved rounds (`/tmp/ab_pinned.sh`):
+
+| mean of 5 rounds | compat (7/8 forwarded) | cluster ports (0 forwarded) | delta |
+|---|---|---|---|
+| SET | 13.7 M | **19.4 M** | **+42 %** |
+| GET | 14.7 M | **20.1 M** | **+37 %** |
+
+Cluster-side numbers are tight (±1–2 % across rounds; compat wobbles ±6 % —
+the forwarded path is inherently noisier). **New 8-shard headline: GET
+~20.1 M / SET ~19.4 M ops/s** — key-aware routing pays exactly where the
+campaign predicted, once the load generator can keep up.
+
+Harness note: rounds 2/4 initially reported compat = 0 — a lifecycle race
+(the next server bound its cluster ports while the previous one was still
+dying → AddrInUse → exit, and the ready-probe had pinged the dying server).
+Fixed in the script: kill + wait for zero `pgrep` matches before each start.
+
+### Profile-guided follow-up: reaper bound + slice-by-4 CRC16 (2026-06-10, lx64)
+
+Profiling the new headline showed two avoidable costs: `tick_expire` at
+6.1 % (the sampling walk bounded TTL-bearing *samples* but not *visited
+buckets*, so a TTL-free 300k-key shard walked the whole table ×3 every
+100 ms tick — the exact tax the doc comment promised TTL-free workloads
+would never pay) and `shard_of` at 3.7 % (cluster routing hashes every key
+with byte-wise CRC16). `a635d65` caps reaper visits at `samples × 8` and
+moves CRC16 to slice-by-4 (const-generated companion tables, equivalence-
+tested against the byte-wise reference at every length 0..=64).
+
+Quiet-box A/B, 3 interleaved rounds, pinned-hashtag angle:
+
+| mean of 3 rounds | before | after | delta |
+|---|---|---|---|
+| cluster GET | 20.3 M | **23.7 M** | **+17 %** |
+| cluster SET | 19.4 M | **21.9 M** | **+13 %** |
+| compat GET | 14.1 M | 17.5 M | +24 % |
+| compat SET | 13.7 M | 16.8 M | +22 % |
+
+The compat side gains too — the reaper fix is universal, not a cluster
+perk. **8-shard headline now: GET ~23.7 M / SET ~21.9 M ops/s.**
+
+### HEAD vs the historical peak anchor (2026-06-10, lx64, interleaved)
+
+`kevy_877cd41` was the campaign's "peak" anchor binary. Same box, same
+session, 3 interleaved rounds each:
+
+| angle | peak anchor | HEAD (`7f4995f`) | delta |
+|---|---|---|---|
+| legacy 8sh-P256 (fixed key) GET | 8.69 M | 11.17 M | +29 % |
+| legacy 8sh-P256 (fixed key) SET | 8.25 M | 9.98 M | +21 % |
+| pinned-hashtag compat (random keys) GET | 6.73 M | 15.31 M | 2.28× |
+| pinned-hashtag compat (random keys) SET | 6.35 M | 13.82 M | 2.18× |
+
+Random-key load exposes what the fixed-key angle hides (chiefly the old
+unbounded reaper walk), stretching the gap to 2.2×. With cluster routing —
+a capability the anchor doesn't have — HEAD's 23.7 M GET stands at 2.7×
+the anchor's best angle and 3.5× its same-load number.
+
+### Long-run headline + annotate verdict (2026-06-10, lx64)
+
+The 8 M-ops-per-process A/B segments under-amortise startup/ramp; official
+long runs (30 M ops × 8 processes, pinned-hashtag cluster angle, quiet box):
+**GET 30.8 M ops/s, SET 22.3 M ops/s** — GET at ~80 % of the naive 38 M
+ceiling estimate.
+
+Instruction-level annotate of the remaining top spots found no mechanical
+waste left to claim: `dispatch_batch` (17 %) is flat-profile parse+dispatch
+work (hottest single instruction 1.7 %, an inlined hash multiply);
+`find_by_borrow` (25 %) is the keyspace lookup itself (kevy-map already
+deep-polished); `shard_of` (4 %) splits roughly half hashtag `{}` scanning,
+half slice-by-4 CRC — a SWAR memchr for the brace scan is worth ~1–2 %,
+below the round-to-round noise floor, recorded as an observation rather
+than claimed. The remaining gap to ceiling is real work, not overhead.

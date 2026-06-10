@@ -25,3 +25,10 @@ path = "fuzz_targets/replay_aof.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "shards_meta"
+path = "fuzz_targets/shards_meta.rs"
+test = false
+doc = false
+bench = false

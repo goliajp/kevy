@@ -39,9 +39,11 @@
 mod aof;
 mod replay;
 mod rewrite_fmt;
+mod shards_meta;
 
 pub use aof::{Aof, Fsync, RewritePlan, RewriteStats};
 pub use replay::replay_aof;
+pub use shards_meta::{Routing, ShardsMeta, read_shards_meta, write_shards_meta};
 pub use kevy_resp::{Argv, ArgvView};
 pub(crate) use rewrite_fmt::{
     dump_store_to_aof, dump_store_to_buf, estimate_multibulk_bytes, write_multibulk,
@@ -360,3 +362,5 @@ fn read_u64<R: Read>(r: &mut R) -> io::Result<u64> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_aof;

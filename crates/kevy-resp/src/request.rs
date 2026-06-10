@@ -137,6 +137,63 @@ fn parse_multibulk_into(buf: &[u8], dst: &mut Argv) -> Result<Option<usize>, Pro
     Ok(Some(end_pos))
 }
 
+/// Parse a bulk-string length header `$<len>\r\n` whose `$` sits at
+/// `buf[pos]` (the caller has already checked that byte). One fused pass:
+/// the digits accumulate while the same loop walks to the terminating
+/// CRLF — bulk headers are 2-21 bytes, so this short byte loop beats the
+/// `find_crlf` + [`parse_int`] double scan the two-pass parser paid per
+/// arg. Accepts the same shapes as `parse_int` (optional `+`/`-` sign,
+/// checked i64 accumulation); a negative length is malformed in a
+/// request, matching [`validate_multibulk_frame`].
+///
+/// Returns `(len, data_start)`; `Ok(None)` = need more bytes.
+pub(crate) fn parse_bulk_len(
+    buf: &[u8],
+    pos: usize,
+) -> Result<Option<(usize, usize)>, ProtocolError> {
+    let mut q = pos + 1;
+    let neg = match buf.get(q) {
+        None => return Ok(None),
+        Some(b'-') => {
+            q += 1;
+            true
+        }
+        Some(b'+') => {
+            q += 1;
+            false
+        }
+        _ => false,
+    };
+    let digits_start = q;
+    let mut acc: i64 = 0;
+    loop {
+        match buf.get(q) {
+            None => return Ok(None),
+            Some(&b) if b.is_ascii_digit() => {
+                acc = acc
+                    .checked_mul(10)
+                    .and_then(|a| a.checked_add((b - b'0') as i64))
+                    .ok_or(ProtocolError::Malformed("bad bulk length"))?;
+                q += 1;
+            }
+            Some(b'\r') => break,
+            Some(_) => return Err(ProtocolError::Malformed("bad bulk length")),
+        }
+    }
+    if q == digits_start {
+        return Err(ProtocolError::Malformed("bad bulk length"));
+    }
+    match buf.get(q + 1) {
+        None => return Ok(None),
+        Some(b'\n') => {}
+        Some(_) => return Err(ProtocolError::Malformed("bad bulk length")),
+    }
+    if neg {
+        return Err(ProtocolError::Malformed("negative bulk length in request"));
+    }
+    Ok(Some((acc as usize, q + 2)))
+}
+
 /// Find the index of `\r\n` at or after `start`, returning the index of `\r`.
 ///
 /// SWAR-accelerated: scans 8 bytes at a time using the classic "has-zero-byte"

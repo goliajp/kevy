@@ -44,7 +44,7 @@ impl<C: Commands> Shard<C> {
                 proto: c.proto,
             });
         }
-        self.fold(conn_id, seq, Part::Reply(reply));
+        self.fold(conn_id, seq, Part::Reply(crate::message::SmallReply::from_vec(reply)));
     }
 
     /// Update the connection's local subscription set + build the
@@ -159,7 +159,7 @@ impl<C: Commands> Shard<C> {
                 proto: c.proto,
             });
         }
-        self.fold(conn_id, seq, Part::Reply(reply));
+        self.fold(conn_id, seq, Part::Reply(crate::message::SmallReply::from_vec(reply)));
 
         if bits != 0 {
             // Share one payload across all target shards (Arc, no per-target byte
@@ -245,7 +245,7 @@ impl<C: Commands> Shard<C> {
                 proto: c.proto,
             });
         }
-        self.fold(conn_id, seq, Part::Reply(reply));
+        self.fold(conn_id, seq, Part::Reply(crate::message::SmallReply::from_vec(reply)));
     }
 
     /// Flush each shard's accumulated pub/sub batch as one cross-core message —

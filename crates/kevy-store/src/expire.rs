@@ -57,14 +57,21 @@ pub(crate) fn sample_round(
         % cap;
     let mut victims: Vec<Vec<u8>> = Vec::with_capacity(samples);
     let mut sampled = 0u32;
-    // Single-pass walk from `start` to end. Sparse tables / unlucky starts
-    // may sample fewer than `samples` per round; that's fine — the next
-    // tick picks a different random start, so over time the keyspace is
-    // covered uniformly. Avoids the double-count a `chain(wrap)` would
-    // create when the same bucket range is visited twice.
+    // Single-pass walk from `start`, bounded in *visited entries*, not just
+    // in TTL-bearing samples: without the bound, a keyspace with few (or
+    // zero) TTL'd keys made every round walk to the end of the table
+    // looking for them — measured at 6 % of server CPU on a 300k-key
+    // TTL-free shard (the pinned 8sh profile, 2026-06-10), for a reaper
+    // with nothing to reap. With it, a TTL-free round costs O(samples)
+    // buckets; sparse-TTL keyspaces sample fewer keys per round and rely
+    // on the rotating random start (plus lazy expiry) for coverage —
+    // the same time-boxing trade Redis's activeExpireCycle makes.
+    let visit_cap = samples.saturating_mul(8);
+    let mut visited = 0usize;
     {
         for (k, e) in store.map.iter_from_bucket(start) {
-            if sampled as usize >= samples {
+            visited += 1;
+            if sampled as usize >= samples || visited > visit_cap {
                 break;
             }
             let Some(deadline_ns) = e.expire_at_ns else {

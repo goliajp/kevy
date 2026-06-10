@@ -5,11 +5,11 @@
 //! pub/sub framing, the seq-ring drain, and the shard hash.
 
 use crate::conn::Conn;
-use crate::message::{Agg, Gathered, KeyShape, MultiOp};
+use crate::message::{Agg, Gathered, KeyShape, MultiOp, SmallReply};
 use kevy_hash::KevyHash;
 use kevy_resp::{
-    RespVersion, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
-    encode_push_header, encode_set_header, encode_simple_string,
+    RespVersion, encode_array_len, encode_bulk, encode_error, encode_null_bulk,
+    encode_push_header, encode_set_header,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -20,29 +20,31 @@ const WRONGTYPE: &str = "WRONGTYPE Operation against a key holding the wrong kin
 /// algebra arms of `finalize_gather` — SINTER/SUNION/SDIFF go from
 /// `*N` Array to `~N` Set under RESP3). Every other arm is the same
 /// bytes on both protos.
-pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> Vec<u8> {
+pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
     match agg {
         Agg::First(Some(b)) => b,
         Agg::First(None) => {
             let mut out = Vec::new();
             encode_error(&mut out, "ERR internal error");
-            out
+            SmallReply::from_vec(out)
         }
+        // `:N` is ≤ 22 bytes — inline, no alloc.
         Agg::SumInt(n) => {
-            let mut out = Vec::new();
-            encode_integer(&mut out, n);
-            out
+            let mut out = [0u8; 30];
+            let mut cur = std::io::Cursor::new(&mut out[..]);
+            use std::io::Write as _;
+            let _ = write!(cur, ":{n}\r\n");
+            let len = cur.position() as u8;
+            SmallReply::Inline { len, buf: out }
         }
-        Agg::AllOk => {
-            let mut out = Vec::new();
-            encode_simple_string(&mut out, "OK");
-            out
+        Agg::AllOk => SmallReply::from_slice(b"+OK\r\n"),
+        Agg::Gather { op, keys, got } => {
+            SmallReply::from_vec(finalize_gather(op, keys, got, proto))
         }
-        Agg::Gather { op, keys, got } => finalize_gather(op, keys, got, proto),
-        Agg::XReadGather { slots } => finalize_xread_gather(slots),
-        Agg::Keys { shape, acc } => finalize_keys(shape, acc),
+        Agg::XReadGather { slots } => SmallReply::from_vec(finalize_xread_gather(slots)),
+        Agg::Keys { shape, acc } => SmallReply::from_vec(finalize_keys(shape, acc)),
         Agg::SlowlogGet { count, entries } => {
-            crate::exec_slowlog::encode_slowlog_get(count, entries)
+            SmallReply::from_vec(crate::exec_slowlog::encode_slowlog_get(count, entries))
         }
         // WatchCollect / ExecPrep / RenameOrchestrator carry conn-
         // state mutations that pure materialise() can't express;
@@ -54,7 +56,7 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> Vec<u8> {
         Agg::WatchCollect { .. } | Agg::ExecPrep { .. } | Agg::RenameOrchestrator { .. } => {
             let mut out = Vec::new();
             encode_error(&mut out, "ERR internal: orchestrator agg hit materialize");
-            out
+            SmallReply::from_vec(out)
         }
     }
 }
@@ -248,7 +250,7 @@ pub(crate) fn drain_front(conn: &mut Conn) {
     while matches!(conn.pending.front(), Some(s) if s.done.is_some()) {
         let slot = conn.pending.pop_front().unwrap();
         if let Some(bytes) = slot.done {
-            conn.output.extend_from_slice(&bytes);
+            conn.output.extend_from_slice(bytes.as_slice());
         }
         conn.next_emit += 1;
     }
@@ -258,12 +260,23 @@ pub(crate) fn drain_front(conn: &mut Conn) {
 /// hash so a cross-shard routing change doesn't require rehashing the store.
 ///
 /// `n == 1` short-circuits to 0 (every key is local; common when running
-/// `--threads 1` benchmarks). For `n > 1` use `kevy_hash::KevyHash` (FxFmix —
-/// word-at-a-time, ~4× faster than the previous FNV-1a byte loop).
+/// `--threads 1` benchmarks). Two routing schemes (`slots`):
+///
+/// - `false` (default): `kevy_hash::KevyHash` (FxFmix — word-at-a-time,
+///   ~4× faster than the previous FNV-1a byte loop).
+/// - `true` (cluster mode): Redis-cluster slots — `key_hash_slot` (CRC16 of
+///   the `{hashtag}` & 16383) then [`slot_to_shard`], so external cluster
+///   clients can compute key placement themselves.
+///
+/// The scheme is a startup-time property of the data dir (`shards.meta`),
+/// never flipped at runtime.
 #[inline]
-pub(crate) fn shard_of(key: &[u8], n: usize) -> usize {
+pub(crate) fn shard_of(key: &[u8], n: usize, slots: bool) -> usize {
     if n == 1 {
         return 0;
+    }
+    if slots {
+        return slot_to_shard(kevy_hash::key_hash_slot(key), n);
     }
     let h = key.kevy_hash();
     // Power-of-two n hits the cheap mask path; otherwise modulo.
@@ -272,4 +285,12 @@ pub(crate) fn shard_of(key: &[u8], n: usize) -> usize {
     } else {
         (h as usize) % n
     }
+}
+
+/// Owner shard of a cluster `slot` under the contiguous even split: shard `i`
+/// owns `[ceil(i·16384/n), ceil((i+1)·16384/n))`, for which `(slot·n) >> 14`
+/// is the exact inverse (16384 = 2¹⁴ — multiply + shift, no division).
+#[inline]
+pub(crate) fn slot_to_shard(slot: u16, n: usize) -> usize {
+    (slot as usize * n) >> 14
 }

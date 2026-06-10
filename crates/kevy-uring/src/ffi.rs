@@ -47,6 +47,7 @@ pub const IORING_ENTER_GETEVENTS: u32 = 1;
 // ---- Operation opcodes (subset we use) ------------------------------------
 
 pub const IORING_OP_NOP: u8 = 0;
+pub const IORING_OP_TIMEOUT: u8 = 11;
 pub const IORING_OP_ACCEPT: u8 = 13;
 pub const IORING_OP_READ: u8 = 22;
 pub const IORING_OP_WRITE: u8 = 23;

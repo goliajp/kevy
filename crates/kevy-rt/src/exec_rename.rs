@@ -10,7 +10,7 @@
 //! the dispatch layer (`kevy::cmd::*`) sees only one shard at a time.
 
 use crate::message::{Agg, Inbound, Op, Part, PendingSlot, RenameStep};
-use crate::reduce::{drain_front, shard_of};
+use crate::reduce::drain_front;
 use crate::shard::Shard;
 use crate::{Commands, RespVersion};
 use kevy_resp::ArgvView;
@@ -33,8 +33,8 @@ impl<C: Commands> Shard<C> {
         }
         let src = args[1].to_vec();
         let dst = args[2].to_vec();
-        let src_shard = shard_of(&src, self.nshards);
-        let dst_shard = shard_of(&dst, self.nshards);
+        let src_shard = self.shard_of(&src);
+        let dst_shard = self.shard_of(&dst);
 
         if src_shard == dst_shard {
             // Same-shard: one atomic Op::Rename. Route to the owning
@@ -225,7 +225,7 @@ impl<C: Commands> Shard<C> {
         value: kevy_store::Value,
         ttl_ms: Option<u64>,
     ) {
-        let src_shard = shard_of(&src, self.nshards);
+        let src_shard = self.shard_of(&src);
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
@@ -258,7 +258,7 @@ impl<C: Commands> Shard<C> {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
-                slot.done = Some(bytes);
+                slot.done = Some(crate::message::SmallReply::from_vec(bytes));
             }
             drain_front(c);
         }
@@ -282,6 +282,6 @@ impl<C: Commands> Shard<C> {
             // care about RESP3 shape, not for a fixed-bytes reply.
             let _ = RespVersion::V2;
         }
-        self.fold(conn_id, seq, Part::Reply(reply));
+        self.fold(conn_id, seq, Part::Reply(crate::message::SmallReply::from_vec(reply)));
     }
 }

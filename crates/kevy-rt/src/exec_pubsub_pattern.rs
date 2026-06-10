@@ -215,7 +215,7 @@ impl<C: Commands> Shard<C> {
                 proto,
             });
         }
-        self.fold(conn_id, seq, crate::message::Part::Reply(reply));
+        self.fold(conn_id, seq, crate::message::Part::Reply(crate::message::SmallReply::from_vec(reply)));
     }
 
     /// Sum the receiver counts + OR the shard bitsets of every pattern

@@ -49,13 +49,18 @@ fn main() -> ! {
     } else {
         cfg.server.threads
     };
+    // Write the resolved count back so CLUSTER SLOTS / SHARDS / NODES (which
+    // read the process-wide config) see the real shard count, not the `0 =
+    // auto` sentinel.
+    cfg.server.threads = threads;
     let [a, b, c, d] = cfg.server.bind;
     eprintln!(
-        "kevy v{} starting: {a}.{b}.{c}.{d}:{}, {threads} shard(s), dir={}, aof={} (thread-per-core)",
+        "kevy v{} starting: {a}.{b}.{c}.{d}:{}, {threads} shard(s), dir={}, aof={}{} (thread-per-core)",
         env!("CARGO_PKG_VERSION"),
         cfg.server.port,
         cfg.server.data_dir.display(),
-        if cfg.persistence.aof { "on" } else { "off" }
+        if cfg.persistence.aof { "on" } else { "off" },
+        if cfg.cluster.enabled { ", cluster" } else { "" },
     );
     if !is_loopback(cfg.server.bind) {
         warn_unprotected_bind(cfg.server.bind);
@@ -88,11 +93,15 @@ OPTIONS:
     --threads <N>       Shard count (default: 0 = available_parallelism())
     --dir <PATH>        Data directory for snapshot + AOF (default: .)
     --no-aof            Disable the AOF (in-memory only / cache-only mode)
+    --cluster           Single-node cluster mode: slot routing + one extra
+                        deterministic port per shard (port+1+i); cluster
+                        clients (redis-cli -c, redis-benchmark --cluster)
+                        address shards directly, others use the main port
     -h, --help          Show this help and exit
     -V, --version       Print version and exit
 
 Precedence (top wins): CLI flags > env vars > TOML file > built-in defaults.
-Env vars: KEVY_BIND, KEVY_PORT, KEVY_THREADS, KEVY_DIR, KEVY_AOF.
+Env vars: KEVY_BIND, KEVY_PORT, KEVY_THREADS, KEVY_DIR, KEVY_AOF, KEVY_CLUSTER.
 
 EXAMPLES:
     kevy                        # 127.0.0.1:6004, all cores, AOF on
@@ -116,6 +125,11 @@ fn parse_cli() -> (Option<PathBuf>, CliOverrides) {
     } else {
         None
     };
+    let cluster = if std::env::args().any(|a| a == "--cluster") {
+        Some(true)
+    } else {
+        None
+    };
     let overrides = CliOverrides {
         bind: arg_value("--bind").and_then(|s| parse_ipv4(&s)),
         port: arg_value("--port").and_then(|s| s.parse().ok()),
@@ -124,6 +138,7 @@ fn parse_cli() -> (Option<PathBuf>, CliOverrides) {
             .filter(|&n| n > 0),
         data_dir: arg_value("--dir").map(PathBuf::from),
         aof,
+        cluster,
     };
     (config_path, overrides)
 }

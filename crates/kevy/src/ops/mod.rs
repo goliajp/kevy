@@ -11,6 +11,7 @@
 //! keep file size in line with the project's ≤ 500 LOC rule.
 
 pub(crate) mod client;
+pub(crate) mod cluster;
 pub(crate) mod config;
 mod memory;
 
@@ -26,23 +27,37 @@ use kevy_store::Store;
 use crate::config_global;
 
 /// Operational-command dispatcher. Returns `true` if the verb was
-/// recognised (and a reply has been written to `out`).
+/// recognised (and a reply has been written to `out`). `config_global::get`
+/// is paid only inside the arms that actually need it — GET / SET and the
+/// other string / collection verbs flow past via the early `_ => false`
+/// without touching the global config Arc clone.
 pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
-    let cfg = config_global::get();
     match cmd {
-        b"INFO" => cmd_info(&cfg, store, args, out, RespVersion::V2),
-        b"CLUSTER" => cmd_cluster(args, out),
+        b"INFO" => {
+            let cfg = config_global::get();
+            cmd_info(&cfg, store, args, out, RespVersion::V2);
+        }
+        b"CLUSTER" => {
+            let cfg = config_global::get();
+            cluster::cmd_cluster(&cfg, store, args, out);
+        }
         b"DEBUG" => cmd_debug(args, out),
         b"WAIT" => cmd_wait(args, out),
         b"SHUTDOWN" => cmd_shutdown(args, out),
-        b"CONFIG" => config::cmd_config(&cfg, args, out, RespVersion::V2),
+        b"CONFIG" => {
+            let cfg = config_global::get();
+            config::cmd_config(&cfg, args, out, RespVersion::V2);
+        }
         b"CLIENT" => client::cmd_client(args, out, RespVersion::V2),
-        b"MEMORY" => memory::cmd_memory(&cfg, store, args, out),
+        b"MEMORY" => {
+            let cfg = config_global::get();
+            memory::cmd_memory(&cfg, store, args, out);
+        }
         _ => return false,
     }
     true
@@ -81,7 +96,7 @@ pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
         info_replication(&mut body);
     }
     if want_section(want, "cluster") {
-        info_cluster(&mut body);
+        info_cluster(cfg, &mut body);
     }
     if want_section(want, "keyspace") {
         info_keyspace(&mut body);
@@ -188,9 +203,13 @@ fn info_replication(b: &mut String) {
     b.push_str("\r\n");
 }
 
-fn info_cluster(b: &mut String) {
+fn info_cluster(cfg: &Config, b: &mut String) {
     b.push_str("# Cluster\r\n");
-    b.push_str("cluster_enabled:0\r\n");
+    b.push_str(if cfg.cluster.enabled {
+        "cluster_enabled:1\r\n"
+    } else {
+        "cluster_enabled:0\r\n"
+    });
     b.push_str("\r\n");
 }
 
@@ -198,46 +217,6 @@ fn info_keyspace(b: &mut String) {
     b.push_str("# Keyspace\r\n");
     // TODO: emit `db0:keys=N,expires=M,avg_ttl=...` when key-count is plumbed.
     b.push_str("\r\n");
-}
-
-// ───────────── CLUSTER ─────────────
-
-fn cmd_cluster<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
-    let sub = match args.get(1) {
-        Some(s) => s.to_ascii_uppercase(),
-        None => return wrong_args(out, "cluster"),
-    };
-    match sub.as_slice() {
-        b"INFO" => {
-            // Same payload Redis returns for standalone (clients check
-            // cluster_enabled:0 to skip CLUSTER SHARDS / CLUSTER SLOTS).
-            let body = "cluster_enabled:0\r\n\
-                        cluster_state:ok\r\n\
-                        cluster_slots_assigned:16384\r\n\
-                        cluster_slots_ok:16384\r\n\
-                        cluster_slots_pfail:0\r\n\
-                        cluster_slots_fail:0\r\n\
-                        cluster_known_nodes:1\r\n\
-                        cluster_size:1\r\n\
-                        cluster_current_epoch:0\r\n\
-                        cluster_my_epoch:0\r\n";
-            encode_bulk(out, body.as_bytes());
-        }
-        b"NODES" => {
-            // Single standalone node entry. Format documented at
-            // https://redis.io/commands/cluster-nodes/. Most fields are
-            // "-" when not applicable.
-            let body = "0000000000000000000000000000000000000000 :0@0 myself,master - 0 0 0 connected 0-16383\r\n";
-            encode_bulk(out, body.as_bytes());
-        }
-        b"MYID" => encode_bulk(
-            out,
-            b"0000000000000000000000000000000000000000",
-        ),
-        b"COUNTKEYSINSLOT" => encode_integer(out, 0),
-        b"KEYSLOT" => encode_integer(out, 0),
-        _ => encode_simple_string(out, "OK"),
-    }
 }
 
 // ───────────── DEBUG ─────────────

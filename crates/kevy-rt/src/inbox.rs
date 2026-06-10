@@ -11,19 +11,58 @@ use std::io;
 use kevy_resp::parse_command_borrowed;
 
 use crate::Commands;
-use crate::message::{Inbound, Op};
+use crate::message::Inbound;
 use crate::shard::Shard;
 
+/// What [`Shard::dispatch_batch`] saw: how far the parse cursor got,
+/// whether it stopped on malformed input, and whether the conn was
+/// closed by one of its own commands (QUIT) mid-batch.
+pub(crate) struct BatchOutcome {
+    pub(crate) consumed: usize,
+    pub(crate) protocol_error: bool,
+    pub(crate) conn_gone: bool,
+}
+
 impl<C: Commands> Shard<C> {
+    /// Parse and dispatch every complete RESP command at the front of
+    /// `buf` (the borrowed-argv hot path shared by both reactors). The
+    /// caller owns buffer bookkeeping (tail retention) and the AOF
+    /// group-commit window around the batch.
+    pub(crate) fn dispatch_batch(&mut self, conn_id: u64, buf: &[u8]) -> BatchOutcome {
+        let mut off = 0usize;
+        loop {
+            match parse_command_borrowed(&buf[off..]) {
+                Ok(Some((argv, consumed))) => {
+                    if let Some(key) = argv.get(1) {
+                        self.store.prefetch_for_key(key);
+                    }
+                    self.handle_command(conn_id, &argv);
+                    drop(argv);
+                    off += consumed;
+                    if !self.conns.contains_key(&conn_id) {
+                        return BatchOutcome { consumed: off, protocol_error: false, conn_gone: true };
+                    }
+                }
+                Ok(None) => {
+                    return BatchOutcome { consumed: off, protocol_error: false, conn_gone: false };
+                }
+                Err(_) => {
+                    return BatchOutcome { consumed: off, protocol_error: true, conn_gone: false };
+                }
+            }
+        }
+    }
+
     /// Socket readable: read until WouldBlock, then parse out every full
     /// RESP command and dispatch it.
     ///
     /// The local fast path dispatches straight from an `ArgvBorrowed` view
     /// into the connection's read buffer — no per-cmd memcpy. We swap
     /// `conn.input` onto the stack (`mem::take`) for the parse-and-dispatch
-    /// loop so the borrowed argv doesn't conflict with `&mut self`; after
-    /// each command we `drain(..consumed)` on the local buf, and finally
-    /// swap the buf back into the connection (if it still exists). Cross-
+    /// loop so the borrowed argv doesn't conflict with `&mut self`; a
+    /// cursor advances past each command and ONE final `drain` moves the
+    /// (usually empty) unparsed tail to the front before the buf is
+    /// swapped back into the connection (if it still exists). Cross-
     /// shard / MULTI queue / AOF call `args.to_argv()` at the handoff
     /// juncture; only those paths still materialise an owned `Argv`.
     pub(crate) fn conn_readable(&mut self, conn_id: u64) -> io::Result<()> {
@@ -55,39 +94,24 @@ impl<C: Commands> Shard<C> {
             None => return Ok(()),
         };
 
-        let mut had_protocol_error = false;
         // Group-commit window for `appendfsync always`: the writes dispatched
         // from this pipelined read batch buffer their AOF appends and fsync
         // once in `aof_end_group`, BEFORE `flush_conn` sends their replies.
         self.aof_begin_group();
-        loop {
-            let parse = parse_command_borrowed(&input_buf);
-            let (argv, consumed) = match parse {
-                Ok(Some(t)) => t,
-                Ok(None) => break,
-                Err(_) => {
-                    had_protocol_error = true;
-                    break;
-                }
-            };
-            if let Some(key) = argv.get(1) {
-                self.store.prefetch_for_key(key);
-            }
-            self.handle_command(conn_id, &argv);
-            drop(argv);
-            input_buf.drain(..consumed);
-            if !self.conns.contains_key(&conn_id) {
-                // Connection was closed mid-batch; drop the rest of the buf.
-                self.aof_end_group()?;
-                return Ok(());
-            }
-        }
+        let outcome = self.dispatch_batch(conn_id, &input_buf);
         // fsync the batch's buffered writes before any reply leaves the shard.
         self.aof_end_group()?;
+        if outcome.conn_gone {
+            // Connection was closed mid-batch; drop the rest of the buf.
+            return Ok(());
+        }
+        // ONE tail drain (usually empty) — `dispatch_batch`'s cursor already
+        // walked the cmds, so nothing memmoves per command.
+        input_buf.drain(..outcome.consumed);
         if let Some(c) = self.conns.get_mut(&conn_id) {
             c.input = input_buf;
         }
-        if had_protocol_error {
+        if outcome.protocol_error {
             self.protocol_error(conn_id);
         }
         self.flush_conn(conn_id)
@@ -145,9 +169,11 @@ impl<C: Commands> Shard<C> {
                     Inbound::RequestBatch { origin, reqs } => {
                         let mut resps = Vec::with_capacity(reqs.len());
                         self.aof_begin_group();
-                        for (conn, seq, argv, proto) in reqs {
-                            let part = self.exec_op(Op::Dispatch(argv, proto));
-                            resps.push((conn, seq, part));
+                        for (conn, seq, argv, proto, meta) in reqs {
+                            let part = self.run_dispatch(&argv, proto, meta);
+                            // The spent argv husk rides home with the reply;
+                            // the origin pools it (see `RespBatch`).
+                            resps.push((conn, seq, part, argv));
                         }
                         // fsync the batch's forwarded writes before replying.
                         self.aof_end_group()?;
@@ -158,7 +184,8 @@ impl<C: Commands> Shard<C> {
                     // conn).
                     Inbound::ResponseBatch(resps) => {
                         let mut to_flush: Vec<u64> = Vec::new();
-                        for (conn, seq, part) in resps {
+                        for (conn, seq, part, husk) in resps {
+                            self.argv_pool.put(husk);
                             self.fold(conn, seq, part);
                             if !to_flush.contains(&conn) {
                                 to_flush.push(conn);

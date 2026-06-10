@@ -44,6 +44,12 @@ impl Argv {
         self.ends.reserve(argc);
     }
 
+    /// Capacity of the concatenated-bytes buffer. Drives [`crate::ArgvPool`]'s
+    /// retention policy (don't keep a huge one-off buffer alive in the pool).
+    pub(crate) fn buf_capacity(&self) -> usize {
+        self.buf.capacity()
+    }
+
     /// Append one argument.
     pub fn push(&mut self, arg: &[u8]) {
         self.buf.extend_from_slice(arg);

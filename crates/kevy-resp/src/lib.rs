@@ -37,6 +37,7 @@
 
 mod argv;
 mod argv_borrowed;
+mod argv_pool;
 mod argv_view;
 mod error;
 mod reply_encode;
@@ -47,6 +48,7 @@ mod request_borrowed;
 
 pub use argv::{Argv, Command};
 pub use argv_borrowed::ArgvBorrowed;
+pub use argv_pool::ArgvPool;
 pub use argv_view::{ArgvIter, ArgvView};
 pub use error::ProtocolError;
 pub use reply_encode::{
