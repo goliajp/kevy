@@ -92,6 +92,25 @@ impl IoUringSqe {
     }
 }
 
+/// `struct __kernel_timespec` — the timeout payload an `IORING_OP_TIMEOUT`
+/// SQE points at (always 64-bit fields, independent of the C `time_t` width).
+#[repr(C)]
+#[derive(Default)]
+pub struct KernelTimespec {
+    pub tv_sec: i64,
+    pub tv_nsec: i64,
+}
+
+impl KernelTimespec {
+    /// A relative timeout of `ms` milliseconds.
+    pub fn from_millis(ms: u64) -> KernelTimespec {
+        KernelTimespec {
+            tv_sec: (ms / 1000) as i64,
+            tv_nsec: ((ms % 1000) * 1_000_000) as i64,
+        }
+    }
+}
+
 /// `struct io_uring_buf_reg` — `io_uring_register(IORING_REGISTER_PBUF_RING,
 /// …)`'s argument layout.
 #[repr(C)]
