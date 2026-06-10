@@ -6,7 +6,7 @@
 //! the shard(s) that own its keys, executing one op against the local store,
 //! and folding sub-results into each connection's seq-ordered ring.
 
-use crate::message::{Agg, Inbound, Op, Part, PendingSlot};
+use crate::message::{Agg, DispatchMeta, Inbound, Op, Part, PendingSlot};
 use crate::reduce::{drain_front, materialize, shard_of};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route, TxnKind};
@@ -139,15 +139,15 @@ impl<C: Commands> Shard<C> {
             Route::Rename { nx } => self.start_rename(conn_id, seq, args, nx),
             Route::Slowlog(sub) => self.start_slowlog(conn_id, seq, sub),
             Route::Local => {
-                self.start_single(
-                    conn_id, seq, args, self.id, is_quit, is_write, block_hint, wake_idx,
-                );
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: None };
+                self.start_single(conn_id, seq, args, self.id, is_quit, block_hint, meta);
             }
             Route::Single(idx) => {
                 let shard = shard_of(&args[idx], self.nshards);
-                self.start_single(
-                    conn_id, seq, args, shard, is_quit, is_write, block_hint, wake_idx,
-                );
+                // Keyed routes put the key at argv[1] (or argv[2] for
+                // XGROUP/XINFO) — well inside u8.
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
+                self.start_single(conn_id, seq, args, shard, is_quit, block_hint, meta);
             }
             // Multi-target / aggregating commands (DEL, MGET, DBSIZE, fan-outs, …).
             other => self.start_multi(conn_id, seq, args, other, is_quit),
@@ -220,13 +220,13 @@ impl<C: Commands> Shard<C> {
             if shard == self.id {
                 let part = self.exec_op(op);
                 self.fold(conn_id, seq, part);
-            } else if let Op::Dispatch(argv, proto) = op {
+            } else if let Op::Dispatch(argv, proto, meta) = op {
                 // Single-key command for a peer shard: batch it into one
                 // cross-core send per target (flushed by `flush_requests`),
                 // instead of one `Inbound::Request` per command. This is the
                 // hot -c50 path; the ring/fold tax is what drags many shards
                 // below single-shard throughput.
-                self.request_batch[shard].push((conn_id, seq, argv, proto));
+                self.request_batch[shard].push((conn_id, seq, argv, proto, meta));
             } else {
                 // Multi-key ops (Del/MSet/Gather/…) keep the unbatched path.
                 self.send_to(

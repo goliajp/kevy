@@ -3,11 +3,10 @@
 //! that one under the 500-LOC house rule.
 
 use kevy_persist::save_snapshot;
-use kevy_resp::{Argv, ArgvView};
+use kevy_resp::Argv;
 use std::time::Instant;
 
 use crate::Commands;
-use crate::Route;
 use crate::message::{GatherKind, Gathered, Op, Part};
 use crate::shard::Shard;
 use kevy_resp::RespVersion;
@@ -16,7 +15,7 @@ impl<C: Commands> Shard<C> {
     /// Execute one op against this shard's store, logging mutations to the AOF.
     pub(crate) fn exec_op(&mut self, op: Op) -> Part {
         match op {
-            Op::Dispatch(args, proto) => {
+            Op::Dispatch(args, proto, meta) => {
                 // Per-cmd proto picks the reply encoder. V2 hot path
                 // resolves to a single `dispatch` call (the existing
                 // bench-measured path); the V3 arm only fires after a
@@ -37,13 +36,16 @@ impl<C: Commands> Shard<C> {
                     self.slowlog_record(&args, elapsed);
                 }
                 // Write-side bookkeeping: AOF logging + WATCH version
-                // bump. Both gated on `is_write` so the cache-only path
-                // (no AOF + no WATCH-ed keys) pays nothing beyond one
-                // verb-table lookup. The WATCH bump is also gated inside
-                // `bump_if_watched` — it's an empty-map lookup when no
-                // key on this shard has ever been WATCH-ed.
-                if self.commands.is_write(&args) {
-                    self.bump_watch_for_dispatch(&args);
+                // bump. All facts (is_write / key_idx / wake_idx) ride in
+                // `meta` from the origin's single resolve() — this shard
+                // re-parses NOTHING (previously three full verb matches
+                // per forwarded write).
+                if meta.is_write {
+                    if let Some(idx) = meta.key_idx
+                        && (idx as usize) < args.len()
+                    {
+                        self.store.bump_if_watched(&args[idx as usize]);
+                    }
                     if self.aof.is_some() {
                         self.log_write(&args);
                     }
@@ -55,7 +57,7 @@ impl<C: Commands> Shard<C> {
                     // the key's owning shard, where any waiter (in-shard or
                     // cross-shard) is registered. The local fast-path write
                     // wakes via `post_write_housekeeping` instead.
-                    if let Some(idx) = self.commands.wake_idx(&args)
+                    if let Some(idx) = meta.wake_idx
                         && let Some(key) = args.get(idx as usize).map(<[u8]>::to_vec)
                     {
                         self.wake_key(&key);
@@ -282,17 +284,7 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Resolve which arg index carries the key for a write `Op::Dispatch`,
-    /// then bump that key's WATCH version. Read-only commands and keyless
-    /// admin verbs (already filtered by `is_write`) never reach here. The
-    /// route lookup is one verb-table dispatch (~5 ns); inside-store the
-    /// bump is one HashMap::get_mut (no insert) — empty when no key on
-    /// this shard has ever been WATCH-ed.
-    pub(crate) fn bump_watch_for_dispatch<A: ArgvView + ?Sized>(&mut self, args: &A) {
-        if let Route::Single(idx) = self.commands.route(args)
-            && idx < args.len()
-        {
-            self.store.bump_if_watched(&args[idx]);
-        }
-    }
+    // The WATCH version bump now reads `DispatchMeta::key_idx` directly in
+    // the `Op::Dispatch` arm above — the old `bump_watch_for_dispatch`
+    // re-ran the full `Commands::route` verb walk per write and is gone.
 }

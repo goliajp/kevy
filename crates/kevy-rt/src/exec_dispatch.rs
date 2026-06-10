@@ -9,7 +9,7 @@
 //! cross-shard hop, or a block-and-park).
 
 use crate::Commands;
-use crate::message::{Agg, Op};
+use crate::message::{Agg, DispatchMeta, Op};
 use crate::shard::Shard;
 use kevy_resp::{ArgvView, RespVersion};
 use std::time::Instant;
@@ -18,7 +18,8 @@ impl<C: Commands> Shard<C> {
     /// Single-target command (keyless `Local` or single-key `Single`) — the
     /// overwhelming majority (GET/SET/INCR/PING/…). Skips the
     /// `Vec<(shard, Op)>` allocation + the aggregation fold loop entirely.
-    #[allow(clippy::too_many_arguments)]
+    /// `meta` carries the origin resolve()'s write-side facts so no later
+    /// stage (local post-write or the owning shard) re-parses the verb.
     pub(crate) fn start_single<A: ArgvView + ?Sized>(
         &mut self,
         conn_id: u64,
@@ -26,9 +27,8 @@ impl<C: Commands> Shard<C> {
         args: &A,
         shard: usize,
         is_quit: bool,
-        is_write: bool,
         block_hint: crate::BlockHint,
-        wake_idx: Option<u8>,
+        meta: DispatchMeta,
     ) {
         // Per-conn proto rides with each cmd (not the conn) so a V2 + V3
         // mix on the same owning shard each gets the right reply shape.
@@ -38,9 +38,7 @@ impl<C: Commands> Shard<C> {
         // In-order local fast path: `seq == next_emit` and no prior cmd is
         // pending, so write straight to the conn's output and return.
         if shard == self.id
-            && self.try_inline_local(
-                conn_id, args, is_quit, is_write, proto, block_hint, wake_idx,
-            )
+            && self.try_inline_local(conn_id, args, is_quit, proto, block_hint, meta)
         {
             return;
         }
@@ -48,12 +46,12 @@ impl<C: Commands> Shard<C> {
         if shard == self.id {
             // Local-but-not-fast-path: only here we need an owned Argv to
             // hand to exec_op via Op::Dispatch.
-            let part = self.exec_op(Op::Dispatch(args.to_argv(), proto));
+            let part = self.exec_op(Op::Dispatch(args.to_argv(), proto, meta));
             self.fold(conn_id, seq, part);
         } else {
             // Cross-shard forward: materialise owned at the handoff. The
             // -c50 single-shard hot path never reaches here.
-            self.request_batch[shard].push((conn_id, seq, args.to_argv(), proto));
+            self.request_batch[shard].push((conn_id, seq, args.to_argv(), proto, meta));
         }
     }
 
@@ -62,16 +60,14 @@ impl<C: Commands> Shard<C> {
     /// Only valid when `seq == next_emit`, i.e. nothing is pending. Returns
     /// `true` iff the inline write happened (caller skips fallback paths).
     #[inline]
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_inline_local<A: ArgvView + ?Sized>(
         &mut self,
         conn_id: u64,
         args: &A,
         is_quit: bool,
-        is_write: bool,
         proto: RespVersion,
         block_hint: crate::BlockHint,
-        wake_idx: Option<u8>,
+        meta: DispatchMeta,
     ) -> bool {
         let Some(conn) = self.conns.get_mut(&conn_id) else { return false };
         if !conn.pending.is_empty() {
@@ -93,8 +89,8 @@ impl<C: Commands> Shard<C> {
         if is_quit {
             conn.closing = true;
         }
-        if is_write {
-            self.post_write_housekeeping(args, wake_idx);
+        if meta.is_write {
+            self.post_write_housekeeping(args, meta);
         }
         true
     }
@@ -191,16 +187,18 @@ impl<C: Commands> Shard<C> {
     /// fast path: WATCH version bump, AOF append, keyspace notify, and
     /// BLOCK reactor wake on the written key. Each step is a no-op when
     /// its feature is unused on this shard.
-    fn post_write_housekeeping<A: ArgvView + ?Sized>(
-        &mut self,
-        args: &A,
-        wake_idx: Option<u8>,
-    ) {
-        // `bump_watch_for_dispatch` is an empty-map lookup when no key on
-        // this shard has ever been WATCH-ed; `maybe_notify_dispatch` is
-        // an empty-flags check when notify_keyspace_events is off (the
-        // default), so the steady-state cost is two predicted branches.
-        self.bump_watch_for_dispatch(args);
+    fn post_write_housekeeping<A: ArgvView + ?Sized>(&mut self, args: &A, meta: DispatchMeta) {
+        // The WATCH bump uses `meta.key_idx` straight from the origin
+        // resolve() — no verb re-parse (this used to re-run the ~40-arm
+        // `Commands::route` walk on every local write). `bump_if_watched`
+        // is an empty-map lookup when nothing is WATCH-ed;
+        // `maybe_notify_dispatch` is an empty-flags check when
+        // notify_keyspace_events is off (the default).
+        if let Some(idx) = meta.key_idx
+            && (idx as usize) < args.len()
+        {
+            self.store.bump_if_watched(&args[idx as usize]);
+        }
         if self.aof.is_some() {
             self.log_write(args);
         }
@@ -208,7 +206,7 @@ impl<C: Commands> Shard<C> {
         // BLOCK wake: if this write targets a key a waiter is parked on,
         // wake it. Gated on `wake_idx` (None for non-wake writes), so a
         // None-only workload pays one Option discriminant check per write.
-        if let Some(idx) = wake_idx
+        if let Some(idx) = meta.wake_idx
             && let Some(key) = args.get(idx as usize).map(<[u8]>::to_vec)
         {
             self.wake_key(&key);
