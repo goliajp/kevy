@@ -20,29 +20,36 @@ impl Store {
         // Clock read only when a TTL is requested.
         let expire_at = expire.map(|d| Instant::now() + d);
         let new_value = Value::Str(SmallBytes::from_vec(value));
-        let pending_insert = match self.live_entry_mut(key) {
+        let key_heap = crate::key_heap_bytes_for(key);
+        let outcome = match self.live_entry_mut(key) {
             // Key exists and is live: NX must abort; otherwise overwrite the
             // value + TTL in place — no `key.to_vec()` (the key is already in
-            // the table, std `insert` would clone it only to drop it).
+            // the table, std `insert` would clone it only to drop it). The
+            // weight delta is computed HERE on the `&mut Entry` we already
+            // hold — `reweigh_entry(key)` would re-hash + re-probe the map
+            // for the entry we just mutated (the overwrite-SET hot path).
             Some(e) => {
                 if nx {
                     return false;
                 }
                 e.value = new_value;
                 e.expire_at_ns = expire_at.and_then(crate::pack_deadline);
-                None
+                let new_w = key_heap + e.value.weight();
+                let delta = new_w as i64 - e.weight() as i64;
+                e.set_weight(new_w);
+                Ok(delta)
             }
             // Absent (or expired ⇒ already dropped by live_entry_mut): XX aborts.
             None => {
                 if xx {
                     return false;
                 }
-                Some(Entry::new(new_value, expire_at))
+                Err(Entry::new(new_value, expire_at))
             }
         };
-        match pending_insert {
-            None => self.reweigh_entry(key),
-            Some(entry) => {
+        match outcome {
+            Ok(delta) => self.apply_weight_delta(delta),
+            Err(entry) => {
                 self.insert_entry(SmallBytes::from_slice(key), entry);
             }
         }
