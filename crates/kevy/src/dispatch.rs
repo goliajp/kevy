@@ -234,7 +234,7 @@ fn dispatch_string<A: ArgvView + ?Sized>(
             if args.len() != 3 {
                 wrong_args(out, "setnx");
             } else {
-                let set = store.set(&args[1], args[2].to_vec(), None, true, false);
+                let set = store.set_slice(&args[1], &args[2], None, true, false);
                 encode_integer(out, set as i64);
             }
         }

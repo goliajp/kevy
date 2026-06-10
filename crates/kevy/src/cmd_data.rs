@@ -202,7 +202,7 @@ pub(crate) fn cmd_set<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &m
     if nx && xx {
         return encode_error(out, "ERR syntax error");
     }
-    if store.set(&args[1], args[2].to_vec(), expire, nx, xx) {
+    if store.set_slice(&args[1], &args[2], expire, nx, xx) {
         encode_simple_string(out, "OK");
     } else {
         encode_null_bulk(out); // NX/XX condition not met
@@ -224,9 +224,9 @@ pub(crate) fn cmd_setex<A: ArgvView + ?Sized>(
         return encode_error(out, &format!("ERR invalid expire time in '{name}' command"));
     };
     let ms = n.saturating_mul(unit_ms) as u64;
-    store.set(
+    store.set_slice(
         &args[1],
-        args[3].to_vec(),
+        &args[3],
         Some(Duration::from_millis(ms)),
         false,
         false,
