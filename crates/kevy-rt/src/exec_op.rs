@@ -248,12 +248,25 @@ impl<C: Commands> Shard<C> {
                 self.slowlog.buf.clear();
                 Part::Ok
             }
-            Op::XReadOne { index, argv } => {
-                // Single-stream non-blocking XREAD on the stream's owning
-                // shard (`$` resolves to this shard's last_id). XREAD has no
-                // RESP3 override (always a RESP2 array), so the reply is one
-                // of: `*1\r\n<element>` (data) / `*-1\r\n` (empty) / `-ERR…`.
+            Op::XReadOne { index, argv, write } => {
+                // Single-stream non-blocking XREAD/XREADGROUP on the
+                // stream's owning shard (`$` resolves to this shard's
+                // last_id). Neither has a RESP3 override (always a RESP2
+                // array), so the reply is one of: `*1\r\n<element>` (data) /
+                // `*-1\r\n` (empty) / `-ERR…`.
                 let reply = self.commands.dispatch(&mut self.store, &argv);
+                // The XREADGROUP form mutates group state (PEL /
+                // last-delivered) — run the same post-write housekeeping
+                // (AOF, WATCH bump, notify) the Route::Single path gets,
+                // against the rewritten single-stream argv. The key sits
+                // right after STREAMS in the fixed rewrite shape.
+                if write {
+                    let key_idx = (0..argv.len())
+                        .find(|&j| argv[j].eq_ignore_ascii_case(b"STREAMS"))
+                        .map(|j| (j + 1) as u8);
+                    let meta = DispatchMeta { is_write: true, wake_idx: None, key_idx };
+                    self.post_write_housekeeping(&argv, meta);
+                }
                 let element = if reply.starts_with(b"*1\r\n") {
                     Some(reply[4..].to_vec()) // strip the array wrapper
                 } else if reply.first() == Some(&b'-') {
