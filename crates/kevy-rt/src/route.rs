@@ -60,12 +60,12 @@ pub enum Route {
     /// handshake; on `HELLO 3` flips the conn into RESP3 mode (per-conn
     /// `proto` field). Reply shape itself is proto-aware (V2: array of
     /// pairs; V3: Map). Connection-level, dispatch via the
-    /// [`Commands::hello_reply`] hook so embedders set their own server
+    /// [`crate::Commands::hello_reply`] hook so embedders set their own server
     /// metadata.
     Hello,
     /// `RENAME source destination` / `RENAMENX source destination`. The
     /// runtime handles the two-shard decision: same-shard renames go
-    /// through one atomic [`Store::rename`] on the owning shard; cross-
+    /// through one atomic [`crate::Store::rename`] on the owning shard; cross-
     /// shard renames use the Take→Put orchestrator (lands in v2-3b;
     /// v2-3a emits `-CROSSSHARD ...` for that case).
     Rename {
@@ -75,7 +75,7 @@ pub enum Route {
     /// `SLOWLOG GET / LEN / RESET / HELP`. The sub-command + parsed
     /// args are pre-decoded at routing time so the runtime knows
     /// whether to short-circuit (HELP / error) or fan out across
-    /// shards (GET / LEN / RESET). See [`parse_slowlog_sub`].
+    /// shards (GET / LEN / RESET). See [`crate::parse_slowlog_sub`].
     Slowlog(SlowlogSub),
     /// Non-blocking `XREAD` / `XREADGROUP` over **multiple** streams — fan
     /// each stream out to its owning shard and merge the per-stream replies

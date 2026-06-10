@@ -31,7 +31,7 @@ impl ClusterTopo {
 
 /// The contiguous slot range `[start, end]` (inclusive, CLUSTER SLOTS shape)
 /// shard `i` of `n` owns: `[ceil(i·16384/n), ceil((i+1)·16384/n) - 1]`.
-/// Exact inverse of [`crate::reduce::slot_to_shard`]'s multiply-shift.
+/// Exact inverse of `reduce::slot_to_shard`'s multiply-shift.
 pub fn shard_slot_range(i: usize, n: usize) -> (u16, u16) {
     let start = (i * 16384).div_ceil(n);
     let end = ((i + 1) * 16384).div_ceil(n) - 1;
