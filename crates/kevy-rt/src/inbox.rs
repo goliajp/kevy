@@ -21,9 +21,10 @@ impl<C: Commands> Shard<C> {
     /// The local fast path dispatches straight from an `ArgvBorrowed` view
     /// into the connection's read buffer — no per-cmd memcpy. We swap
     /// `conn.input` onto the stack (`mem::take`) for the parse-and-dispatch
-    /// loop so the borrowed argv doesn't conflict with `&mut self`; after
-    /// each command we `drain(..consumed)` on the local buf, and finally
-    /// swap the buf back into the connection (if it still exists). Cross-
+    /// loop so the borrowed argv doesn't conflict with `&mut self`; a
+    /// cursor advances past each command and ONE final `drain` moves the
+    /// (usually empty) unparsed tail to the front before the buf is
+    /// swapped back into the connection (if it still exists). Cross-
     /// shard / MULTI queue / AOF call `args.to_argv()` at the handoff
     /// juncture; only those paths still materialise an owned `Argv`.
     pub(crate) fn conn_readable(&mut self, conn_id: u64) -> io::Result<()> {
@@ -60,8 +61,13 @@ impl<C: Commands> Shard<C> {
         // from this pipelined read batch buffer their AOF appends and fsync
         // once in `aof_end_group`, BEFORE `flush_conn` sends their replies.
         self.aof_begin_group();
+        // Parse cursor: each cmd advances `off`; ONE drain at the end moves
+        // the (usually empty) tail. Draining per cmd memmoved the whole
+        // remainder every iteration — O(batch²) bytes on a P16/P256
+        // pipelined read.
+        let mut off = 0usize;
         loop {
-            let parse = parse_command_borrowed(&input_buf);
+            let parse = parse_command_borrowed(&input_buf[off..]);
             let (argv, consumed) = match parse {
                 Ok(Some(t)) => t,
                 Ok(None) => break,
@@ -75,7 +81,7 @@ impl<C: Commands> Shard<C> {
             }
             self.handle_command(conn_id, &argv);
             drop(argv);
-            input_buf.drain(..consumed);
+            off += consumed;
             if !self.conns.contains_key(&conn_id) {
                 // Connection was closed mid-batch; drop the rest of the buf.
                 self.aof_end_group()?;
@@ -84,6 +90,7 @@ impl<C: Commands> Shard<C> {
         }
         // fsync the batch's buffered writes before any reply leaves the shard.
         self.aof_end_group()?;
+        input_buf.drain(..off);
         if let Some(c) = self.conns.get_mut(&conn_id) {
             c.input = input_buf;
         }
