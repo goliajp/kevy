@@ -6,11 +6,11 @@
 //! the shard(s) that own its keys, executing one op against the local store,
 //! and folding sub-results into each connection's seq-ordered ring.
 
-use crate::message::{Agg, Inbound, Op, Part, PendingSlot};
+use crate::message::{Agg, DispatchMeta, Inbound, Op, Part, PendingSlot, SmallReply};
 use crate::reduce::{drain_front, materialize, shard_of};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route, TxnKind};
-use kevy_resp::{Argv, ArgvView, encode_array_len};
+use kevy_resp::{Argv, ArgvView, RespVersion, encode_array_len};
 
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
@@ -19,7 +19,22 @@ impl<C: Commands> Shard<C> {
         // is_write each scanned the verb separately). KevyCommands overrides
         // resolve() with a single match; non-overriding impls still pay 4×.
         let resolved = self.commands.resolve(args);
-        let in_multi = self.conns.get(&conn_id).is_some_and(|c| c.multi.is_some());
+        // One conns probe serves the whole pre-dispatch phase — the MULTI
+        // check, the per-cmd proto capture, and (for the dispatching hot
+        // arms) the seq assignment. These were three separate map probes
+        // per command (in_multi here + next_seq_for + start_single's proto
+        // read).
+        let Some(c) = self.conns.get_mut(&conn_id) else { return };
+        let in_multi = c.multi.is_some();
+        let proto = c.proto;
+        if !in_multi && matches!(resolved.txn_kind, TxnKind::Other | TxnKind::Watch) {
+            let seq = c.next_seq;
+            c.next_seq += 1;
+            self.start_command(conn_id, seq, proto, args, resolved);
+            return;
+        }
+        // Transaction-state arms (rare next to the dispatch path above);
+        // each re-probes internally / via immediate_reply.
         match (in_multi, &resolved.txn_kind) {
             (false, TxnKind::Multi) => {
                 if let Some(c) = self.conns.get_mut(&conn_id) {
@@ -50,14 +65,14 @@ impl<C: Commands> Shard<C> {
                 conn_id,
                 b"-ERR WATCH inside MULTI is not allowed\r\n".to_vec(),
             ),
-            (false, TxnKind::Watch) => self.start_command(conn_id, args, resolved),
             (true, TxnKind::Other) => {
                 if let Some(q) = self.conns.get_mut(&conn_id).and_then(|c| c.multi.as_mut()) {
                     q.push(args.to_argv());
                 }
                 self.immediate_reply(conn_id, b"+QUEUED\r\n".to_vec());
             }
-            (false, TxnKind::Other) => self.start_command(conn_id, args, resolved),
+            // (false, Other | Watch) dispatched on the early path above.
+            (false, TxnKind::Other | TxnKind::Watch) => {}
         }
     }
 
@@ -80,7 +95,7 @@ impl<C: Commands> Shard<C> {
                 proto,
             });
         }
-        self.fold(conn_id, seq, Part::Reply(bytes));
+        self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(bytes)));
     }
 
     /// `EXEC` — emit a `*N` array header, then run the queued commands in order.
@@ -104,21 +119,29 @@ impl<C: Commands> Shard<C> {
         self.immediate_reply(conn_id, header);
         for cmd in &queued {
             let resolved = self.commands.resolve(cmd);
-            self.start_command(conn_id, cmd, resolved);
+            // EXEC's queued cmds inherit the conn's proto at execution
+            // time (same per-cmd capture as the live dispatch path).
+            let Some(c) = self.conns.get_mut(&conn_id) else { return };
+            let seq = c.next_seq;
+            c.next_seq += 1;
+            let proto = c.proto;
+            self.start_command(conn_id, seq, proto, cmd, resolved);
         }
     }
 
-    /// Assign a seq, then hand off to the per-shape starter (pub/sub /
-    /// single-target / multi-target). Each starter owns the rest of the
-    /// command's life cycle: pending-slot bookkeeping, local exec, and
-    /// cross-shard forwarding.
+    /// Hand off to the per-shape starter (pub/sub / single-target /
+    /// multi-target). Each starter owns the rest of the command's life
+    /// cycle: pending-slot bookkeeping, local exec, and cross-shard
+    /// forwarding. `seq` and `proto` arrive from the caller's single
+    /// pre-dispatch conns probe (see [`Self::handle_command`]).
     fn start_command<A: ArgvView + ?Sized>(
         &mut self,
         conn_id: u64,
+        seq: u64,
+        proto: RespVersion,
         args: &A,
         resolved: ResolvedCmd,
     ) {
-        let Some(seq) = self.next_seq_for(conn_id) else { return };
         let ResolvedCmd {
             route,
             is_quit,
@@ -139,28 +162,19 @@ impl<C: Commands> Shard<C> {
             Route::Rename { nx } => self.start_rename(conn_id, seq, args, nx),
             Route::Slowlog(sub) => self.start_slowlog(conn_id, seq, sub),
             Route::Local => {
-                self.start_single(
-                    conn_id, seq, args, self.id, is_quit, is_write, block_hint, wake_idx,
-                );
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: None };
+                self.start_single(conn_id, seq, proto, args, self.id, is_quit, block_hint, meta);
             }
             Route::Single(idx) => {
                 let shard = shard_of(&args[idx], self.nshards);
-                self.start_single(
-                    conn_id, seq, args, shard, is_quit, is_write, block_hint, wake_idx,
-                );
+                // Keyed routes put the key at argv[1] (or argv[2] for
+                // XGROUP/XINFO) — well inside u8.
+                let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
+                self.start_single(conn_id, seq, proto, args, shard, is_quit, block_hint, meta);
             }
             // Multi-target / aggregating commands (DEL, MGET, DBSIZE, fan-outs, …).
             other => self.start_multi(conn_id, seq, args, other, is_quit),
         }
-    }
-
-    /// Reserve a `seq` for this command. `None` if the conn vanished between
-    /// the parse loop and dispatch (rare; just drop the command).
-    fn next_seq_for(&mut self, conn_id: u64) -> Option<u64> {
-        let c = self.conns.get_mut(&conn_id)?;
-        let s = c.next_seq;
-        c.next_seq += 1;
-        Some(s)
     }
 
     // `start_single` + `try_inline_local` (and their helpers `park_blocked`
@@ -211,24 +225,17 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Fan a built target list out: locally exec on this shard, batch
-    /// single-key forwards to peer shards (the hot -c50 path), and use the
-    /// unbatched `Inbound::Request` for multi-key ops that don't fit the
-    /// batch shape.
+    /// Fan a built target list out: locally exec on this shard, or send the
+    /// unbatched `Inbound::Request` to the owning peer. Single-key forwards
+    /// never come through here — `start_single` pushes them straight onto
+    /// `request_batch` (the hot batched lane).
     pub(crate) fn dispatch_targets(&mut self, conn_id: u64, seq: u64, targets: Vec<(usize, Op)>) {
         for (shard, op) in targets {
             if shard == self.id {
                 let part = self.exec_op(op);
                 self.fold(conn_id, seq, part);
-            } else if let Op::Dispatch(argv, proto) = op {
-                // Single-key command for a peer shard: batch it into one
-                // cross-core send per target (flushed by `flush_requests`),
-                // instead of one `Inbound::Request` per command. This is the
-                // hot -c50 path; the ring/fold tax is what drags many shards
-                // below single-shard throughput.
-                self.request_batch[shard].push((conn_id, seq, argv, proto));
             } else {
-                // Multi-key ops (Del/MSet/Gather/…) keep the unbatched path.
+                // Multi-key ops (Del/MSet/Gather/…) use the unbatched path.
                 self.send_to(
                     shard,
                     Inbound::Request {
@@ -422,7 +429,7 @@ impl<C: Commands> Shard<C> {
         self.fold(
             conn_id,
             seq,
-            Part::Reply(b"-ERR Protocol error\r\n".to_vec()),
+            Part::Reply(SmallReply::from_slice(b"-ERR Protocol error\r\n")),
         );
     }
 }

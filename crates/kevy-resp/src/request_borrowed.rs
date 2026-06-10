@@ -5,7 +5,7 @@
 
 use crate::argv_borrowed::ArgvBorrowed;
 use crate::error::ProtocolError;
-use crate::request::{find_crlf, parse_int, validate_multibulk_frame};
+use crate::request::{find_crlf, parse_bulk_len, parse_int};
 
 /// Parse one command from the front of `buf`, recording each arg as a
 /// `(start, end)` range into `buf` rather than copying its bytes.
@@ -53,6 +53,13 @@ fn parse_inline_borrowed(
     Ok(Some((argv, eol + 2)))
 }
 
+/// Single-pass multibulk parse: each arg's header is validated and its
+/// `(start, end)` range recorded in the same walk. The old two-pass shape
+/// (`validate_multibulk_frame`, then re-scan every header to record the
+/// ranges) re-paid `find_crlf` + `parse_int` per arg — measurably ~half
+/// the whole parse cost at the 8-shard bench corner. On `Ok(None)` /
+/// `Err` the partially-built argv is simply dropped (a range vec; no
+/// bytes were copied).
 fn parse_multibulk_borrowed(
     buf: &[u8],
 ) -> Result<Option<(ArgvBorrowed<'_>, usize)>, ProtocolError> {
@@ -65,23 +72,29 @@ fn parse_multibulk_borrowed(
         return Ok(Some((ArgvBorrowed::new(buf), hdr_end + 2)));
     }
     let count = count as usize;
-    let start = hdr_end + 2;
-
-    let (end_pos, _total) = match validate_multibulk_frame(buf, start, count)? {
-        Some(t) => t,
-        None => return Ok(None),
-    };
 
     let mut argv = ArgvBorrowed::with_capacity(buf, count);
-    let mut p = start;
+    let mut p = hdr_end + 2;
     for _ in 0..count {
-        let len_end = find_crlf(buf, p + 1).expect("validated in pass 1");
-        let len = parse_int(&buf[p + 1..len_end]).expect("validated in pass 1") as usize;
-        let data_start = len_end + 2;
-        argv.push_range(data_start, data_start + len);
-        p = data_start + len + 2;
+        match buf.get(p) {
+            None => return Ok(None),
+            Some(b'$') => {}
+            Some(_) => return Err(ProtocolError::Malformed("expected bulk string")),
+        }
+        let Some((len, data_start)) = parse_bulk_len(buf, p)? else {
+            return Ok(None);
+        };
+        let data_end = data_start + len;
+        if buf.len() < data_end + 2 {
+            return Ok(None);
+        }
+        if &buf[data_end..data_end + 2] != b"\r\n" {
+            return Err(ProtocolError::Malformed("bulk string not CRLF-terminated"));
+        }
+        argv.push_range(data_start, data_end);
+        p = data_end + 2;
     }
-    Ok(Some((argv, end_pos)))
+    Ok(Some((argv, p)))
 }
 
 #[cfg(test)]
@@ -150,6 +163,45 @@ mod tests {
     fn borrowed_malformed_errors() {
         assert!(parse_command_borrowed(b"*1\r\n+OK\r\n").is_err());
         assert!(parse_command_borrowed(b"*x\r\n").is_err());
+        // Bulk-header malformations through the fused single-pass walk.
+        assert!(parse_command_borrowed(b"*1\r\n$x\r\n").is_err());
+        assert!(parse_command_borrowed(b"*1\r\n$\r\n").is_err());
+        assert!(parse_command_borrowed(b"*1\r\n$-1\r\n").is_err());
+        assert!(parse_command_borrowed(b"*1\r\n$3\rXabc\r\n").is_err());
+        // 20 nines overflows i64 → malformed, not a hang.
+        assert!(parse_command_borrowed(b"*1\r\n$99999999999999999999\r\n").is_err());
+        // Bulk data not CRLF-terminated.
+        assert!(parse_command_borrowed(b"*1\r\n$3\r\nabcXX").is_err());
+    }
+
+    #[test]
+    fn borrowed_incomplete_at_every_prefix_returns_none() {
+        // The single-pass parser must report Ok(None) — never Err, never
+        // Some — for every strict prefix of a valid frame (a split TCP
+        // read can land at any byte).
+        let frame = b"*3\r\n$3\r\nSET\r\n$16\r\nkey:000000000001\r\n$3\r\nxxx\r\n";
+        for cut in 0..frame.len() {
+            let r = parse_command_borrowed(&frame[..cut]);
+            assert!(
+                matches!(r, Ok(None)),
+                "prefix len {cut} gave {:?}",
+                r.map(|o| o.map(|(_, used)| used))
+            );
+        }
+        let (argv, used) = parse_command_borrowed(frame).unwrap().unwrap();
+        assert_eq!(used, frame.len());
+        assert_eq!(argv.len(), 3);
+        assert_eq!(argv.get(1), Some(b"key:000000000001" as &[u8]));
+    }
+
+    #[test]
+    fn borrowed_plus_sign_bulk_len_matches_parse_int_semantics() {
+        // parse_int accepts a leading '+'; the fused header parser keeps
+        // that acceptance so the two parsers agree on every frame.
+        let frame = b"*1\r\n$+4\r\nPING\r\n";
+        let (argv, used) = parse_command_borrowed(frame).unwrap().unwrap();
+        assert_eq!(argv, vec![b"PING".to_vec()]);
+        assert_eq!(used, frame.len());
     }
 
     #[test]

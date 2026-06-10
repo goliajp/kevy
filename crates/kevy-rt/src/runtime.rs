@@ -49,7 +49,11 @@ pub struct Runtime<C: Commands> {
     /// Wall-clock-read throttle for the tick check (TTL reaper / live
     /// config refresh / auto-AOF-rewrite).
     tick_check_every: u32,
-    /// `[slowlog].slower_than_micros`. Defaults match Redis (10 ms).
+    /// `[slowlog].slower_than_micros`. Default: `-1` (OFF — zero
+    /// hot-path cost: every command would otherwise pay an
+    /// `Instant::now()` pair around dispatch). Set to `10_000` to match
+    /// Redis's default 10 ms threshold; see [`Self::with_slowlog`] /
+    /// `CONFIG SET slowlog-log-slower-than 10000`.
     slowlog_slower_than_micros: i64,
     /// `[slowlog].max_len`. Per-shard cap.
     slowlog_max_len: u32,
@@ -71,15 +75,17 @@ impl<C: Commands> Runtime<C> {
             spin_limit: 256,
             park_timeout_ms: 50,
             tick_check_every: 256,
-            slowlog_slower_than_micros: 10_000,
+            slowlog_slower_than_micros: -1,
             slowlog_max_len: 128,
         }
     }
 
-    /// SLOWLOG tuning (`[slowlog]` config section). Defaults: record any
-    /// command slower than 10 ms (`10_000` µs), keep the most-recent 128
-    /// entries per shard. Pass `slower_than_micros = -1` to disable
-    /// (zero hot-path cost — no `Instant::now()` taken).
+    /// SLOWLOG tuning (`[slowlog]` config section). Default
+    /// `slower_than_micros = -1` (OFF) so the hot path never reads the
+    /// clock — every enabled command otherwise pays an `Instant::now()`
+    /// pair around dispatch, ~30 ns/op (≈9 % at 3 M ops/s). To match
+    /// Redis's 10 ms default, pass `10_000`; `0` records all; `-1`
+    /// disables. `max_len` is the per-shard ring cap (default 128).
     pub fn with_slowlog(mut self, slower_than_micros: i64, max_len: u32) -> Self {
         self.slowlog_slower_than_micros = slower_than_micros;
         self.slowlog_max_len = max_len;
@@ -231,6 +237,8 @@ impl<C: Commands> Runtime<C> {
                 blocked: crate::blocked::BlockedClients::new(),
                 origin_blocks: std::collections::HashMap::new(),
                 xwaiters: crate::block_xshard::XShardWaiters::default(),
+                reply_scratch: Vec::with_capacity(4096),
+                argv_pool: kevy_resp::ArgvPool::new(),
             });
         }
 

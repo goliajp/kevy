@@ -62,14 +62,28 @@ pub(crate) enum MultiOp {
     SDiff,
 }
 
-/// A unit of work shipped to the owning shard.
+/// Write-side facts the origin's `resolve()` already computed, carried
+/// with a dispatched command so the executing shard never re-parses the
+/// verb. Before this rode along, every forwarded write re-ran THREE
+/// full verb matches (`is_write` + `route` for the WATCH bump +
+/// `wake_idx`) on the owning shard — measurable at -c50 (SET trailed
+/// GET by the cost of those walks).
+#[derive(Clone, Copy)]
+pub(crate) struct DispatchMeta {
+    pub(crate) is_write: bool,
+    /// `Some(i)` = waking writes (LPUSH/RPUSH/XADD): argv[i] is the key
+    /// whose blocked waiters should be woken after the write.
+    pub(crate) wake_idx: Option<u8>,
+    /// `Some(i)` = argv[i] is the routed key (Route::Single) — the WATCH
+    /// version bump target. `None` for keyless `Route::Local` cmds.
+    pub(crate) key_idx: Option<u8>,
+}
+
+/// A unit of work shipped to the owning shard. Forwarded single-key
+/// commands don't ride here — they go through the batched
+/// [`Inbound::RequestBatch`] lane (one `(conn, seq, Argv, RespVersion,
+/// DispatchMeta)` entry each) and execute via `Shard::run_dispatch`.
 pub(crate) enum Op {
-    /// Forward a single command. The trailing `RespVersion` rides with
-    /// each cmd (not the conn) so a V2 client and a V3 client can hand
-    /// requests to the same owning shard and each get the right reply
-    /// shape from `dispatch` vs `dispatch_resp3`. Defaults to V2 for
-    /// any backwards-compatible construction site.
-    Dispatch(Argv, RespVersion),
     Del(Vec<Vec<u8>>),
     Exists(Vec<Vec<u8>>),
     Dbsize,
@@ -150,9 +164,48 @@ pub(crate) enum KeyShape {
     Random,
 }
 
+/// A RESP reply fragment with a 30-byte inline arm. The forwarded-dispatch
+/// hot path produces tiny replies (`+OK`, `:N`, a `$16` GET payload = 23 B)
+/// whose heap `Vec` round-trip (alloc on the owning shard, free after the
+/// origin's drain) dominated the data itself — ~19 % of 8-shard SET CPU sat
+/// in the allocator. `Inline` keeps those entirely on the stack across the
+/// ring; `Heap` carries anything bigger with the old one-alloc semantics.
+pub(crate) enum SmallReply {
+    Inline { len: u8, buf: [u8; 30] },
+    Heap(Vec<u8>),
+}
+
+impl SmallReply {
+    /// Copy `b` into the inline arm when it fits, else one heap alloc.
+    #[inline]
+    pub(crate) fn from_slice(b: &[u8]) -> Self {
+        if b.len() <= 30 {
+            let mut buf = [0u8; 30];
+            buf[..b.len()].copy_from_slice(b);
+            SmallReply::Inline { len: b.len() as u8, buf }
+        } else {
+            SmallReply::Heap(b.to_vec())
+        }
+    }
+
+    /// Wrap an already-owned `Vec` — zero-copy for the heap arm.
+    #[inline]
+    pub(crate) fn from_vec(v: Vec<u8>) -> Self {
+        SmallReply::Heap(v)
+    }
+
+    #[inline]
+    pub(crate) fn as_slice(&self) -> &[u8] {
+        match self {
+            SmallReply::Inline { len, buf } => &buf[..*len as usize],
+            SmallReply::Heap(v) => v,
+        }
+    }
+}
+
 /// A partial result shipped back to the originating shard.
 pub(crate) enum Part {
-    Reply(Vec<u8>),
+    Reply(SmallReply),
     Int(i64),
     Ok,
     /// Per-key gathered payloads.
@@ -197,9 +250,14 @@ pub(crate) enum Part {
 /// costs one cross-core send per target shard, not one per command.
 /// The per-entry `proto` lets a single batch carry cmds from V2 and V3
 /// conns to the same owning shard.
-pub(crate) type ReqBatch = Vec<(u64, u64, Argv, RespVersion)>;
+pub(crate) type ReqBatch = Vec<(u64, u64, Argv, RespVersion, DispatchMeta)>;
 /// The matching replies `(conn, seq, part)` sent back as one message.
-pub(crate) type RespBatch = Vec<(u64, u64, Part)>;
+/// Each reply carries the request's spent `Argv` husk back to the origin,
+/// which drops it into its own [`kevy_resp::ArgvPool`] — so every shard's
+/// pool level matches its own conn demand by construction, immune to
+/// accept skew (a conn-heavy shard forwards more than it receives, so
+/// recycle-at-the-owner starves its pool while overfilling quiet shards').
+pub(crate) type RespBatch = Vec<(u64, u64, Part, Argv)>;
 
 /// Inter-core message (each core has one inbound queue carrying both).
 pub(crate) enum Inbound {
@@ -275,7 +333,7 @@ pub(crate) enum Inbound {
 
 /// Accumulator for a command's (possibly multi-shard) result.
 pub(crate) enum Agg {
-    First(Option<Vec<u8>>),
+    First(Option<SmallReply>),
     SumInt(i64),
     AllOk,
     /// Gathered per-key payloads, reduced by `op` over `keys` (request order).
@@ -372,7 +430,9 @@ pub(crate) struct PendingSlot {
     pub(crate) remaining: u32,
     pub(crate) agg: Agg,
     /// Materialized reply once `remaining == 0`; emitted in seq order.
-    pub(crate) done: Option<Vec<u8>>,
+    /// `SmallReply` so the forwarded tiny-reply path (+OK / :N / small
+    /// GET) stays heap-free end to end.
+    pub(crate) done: Option<SmallReply>,
     /// RESP version captured at dispatch time. Cross-shard gathers
     /// (SINTER / SUNION / SDIFF) materialise on the origin shard long
     /// after `start_multi` snapped this conn's proto; storing it here

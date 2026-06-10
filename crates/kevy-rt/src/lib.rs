@@ -85,7 +85,10 @@ mod message;
 mod reduce;
 mod runtime;
 mod shard;
+mod shard_flush;
 mod shard_tick;
+#[cfg(target_os = "linux")]
+mod uring_inbox;
 #[cfg(target_os = "linux")]
 mod uring_reactor;
 
@@ -192,7 +195,7 @@ pub trait Commands: Clone + Send + 'static {
     fn dispatch<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8>;
     /// RESP3 variant of [`Self::dispatch`] — called when the connection
     /// has negotiated `HELLO 3`. Default: delegate to the RESP2 path
-    /// (the cross-shard `Op::Dispatch` carries a per-cmd `RespVersion`
+    /// (the cross-shard forward carries a per-cmd `RespVersion`
     /// so a V2 client and a V3 client can share the owning shard).
     fn dispatch_resp3<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8> {
         self.dispatch(store, args)
@@ -286,7 +289,7 @@ pub trait Commands: Clone + Send + 'static {
     /// in-shard fast path reads this off [`ResolvedCmd::wake_idx`]; the
     /// cross-shard write path ([`crate::exec_op`], where a forwarded write
     /// lands on the key's owning shard) re-derives it via this method since
-    /// the `Op::Dispatch` envelope doesn't carry the resolved hint. Default
+    /// the forwarded envelope doesn't carry the resolved hint. Default
     /// `None` so non-blocking embedders pay nothing.
     fn wake_idx<A: ArgvView + ?Sized>(&self, _args: &A) -> Option<u8> {
         None

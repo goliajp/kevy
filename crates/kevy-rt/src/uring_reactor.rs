@@ -17,10 +17,8 @@
 
 use crate::Commands;
 use crate::conn::Conn;
-use crate::message::{Inbound, Op};
 use crate::shard::Shard;
 use kevy_persist::{load_snapshot, replay_aof};
-use kevy_resp::parse_command_borrowed;
 use kevy_sys::Socket;
 use kevy_uring::{Completion, IoUring, ProvidedBufRing};
 use kevy_map::KevyMap;
@@ -70,16 +68,17 @@ const CONN_MASK: u64 = (1 << OP_SHIFT) - 1;
 
 /// io_uring-specific per-connection state (the byte buffers that must outlive
 /// their in-flight SQEs). The command-level state stays in the shard's [`Conn`].
-struct UringConn {
+pub(crate) struct UringConn {
+    // Fields are pub(crate) for the reap loop in [`crate::uring_inbox`].
     /// A multishot recv SQE is armed for this conn (re-fires per arrival, drawing
     /// from the shard's provided-buffer ring). Re-armed only when it terminates.
-    recv_armed: bool,
+    pub(crate) recv_armed: bool,
     /// Stable buffer for an in-flight write (swapped in from `Conn::output`).
-    write_buf: Vec<u8>,
-    write_off: usize,
-    write_inflight: bool,
+    pub(crate) write_buf: Vec<u8>,
+    pub(crate) write_off: usize,
+    pub(crate) write_inflight: bool,
     /// EOF/error seen on the socket — close once writes drain.
-    closing: bool,
+    pub(crate) closing: bool,
 }
 
 impl UringConn {
@@ -134,6 +133,8 @@ impl<C: Commands> Shard<C> {
         };
         let mut last_tick = Instant::now();
         let mut tick_check_counter: u32 = 0;
+        // 1/16 cadence: reap is 5.7 % of -c50 -P16 SET CPU, rarely fruitful.
+        let mut reap_counter: u32 = 0;
 
         while !stop.load(Ordering::Relaxed) {
             // Always keep one accept in flight.
@@ -187,7 +188,10 @@ impl<C: Commands> Shard<C> {
             if let Some(aof) = &mut self.aof {
                 let _ = aof.maybe_sync();
             }
-            self.uring_reap_closed(&mut io);
+            reap_counter = reap_counter.wrapping_add(1);
+            if reap_counter & 0xF == 0 {
+                self.uring_reap_closed(&mut io);
+            }
 
             // Tick path: throttled wall-clock check, then the hot-config /
             // active-reaper / auto-rewrite trio. Same throttle as epoll
@@ -309,6 +313,9 @@ impl<C: Commands> Shard<C> {
             return;
         }
         // res > 0: a buffer was filled; copy it out and return it to the ring.
+        // (A zero-copy parse straight from the provided buffer was measured
+        // flat — the copy is cheap next to dispatch — so the single
+        // append-then-parse shape stays.)
         let Some(bid) = c.buffer_id() else {
             return; // no buffer (shouldn't happen for a successful recv)
         };
@@ -317,46 +324,30 @@ impl<C: Commands> Shard<C> {
             conn.input.extend_from_slice(pbuf.bytes(bid, n));
         }
         pbuf.recycle(bid);
-        // Borrowed-argv parse hot path: mirrors the epoll/inbox path.
-        // Swap conn.input onto the stack so the parsed ArgvBorrowed can lend
-        // the buf without colliding with &mut self in dispatch; drain after
-        // each cmd, swap the buf back at the end (if conn still exists).
+        // Swap `conn.input` onto the stack so the borrowed argvs don't
+        // collide with `&mut self` in dispatch; one tail drain at the end,
+        // then the buf swaps back (if the conn still exists).
         let mut input_buf = match self.conns.get_mut(&cid) {
             Some(c) => std::mem::take(&mut c.input),
             None => return,
         };
-        let mut had_protocol_error = false;
         // AOF group-commit window (mirrors the epoll `conn_readable` path):
         // `appendfsync always` buffers this batch's writes and fsyncs once in
         // `aof_end_group`, which runs before the io_uring write loop submits
         // the replies — so durability still precedes reply.
         self.aof_begin_group();
-        loop {
-            let parse = parse_command_borrowed(&input_buf);
-            let (argv, consumed) = match parse {
-                Ok(Some(t)) => t,
-                Ok(None) => break,
-                Err(_) => {
-                    had_protocol_error = true;
-                    break;
-                }
-            };
-            if let Some(key) = argv.get(1) {
-                self.store.prefetch_for_key(key);
-            }
-            self.handle_command(cid, &argv);
-            drop(argv);
-            input_buf.drain(..consumed);
-            if !self.conns.contains_key(&cid) {
-                self.uring_aof_end_group();
-                return;
-            }
-        }
+        let outcome = self.dispatch_batch(cid, &input_buf);
         self.uring_aof_end_group();
-        if let Some(c) = self.conns.get_mut(&cid) {
-            c.input = input_buf;
+        if !outcome.conn_gone {
+            input_buf.drain(..outcome.consumed);
+            if let Some(c) = self.conns.get_mut(&cid) {
+                c.input = input_buf;
+            }
         }
-        if had_protocol_error {
+        if outcome.conn_gone {
+            return;
+        }
+        if outcome.protocol_error {
             self.protocol_error(cid);
             if let Some(uc) = io.get_mut(&cid) {
                 uc.closing = true;
@@ -367,7 +358,7 @@ impl<C: Commands> Shard<C> {
     /// Close the AOF group-commit window, best-effort (the io_uring path's
     /// handlers return `()`; a sync error is logged like other AOF failures).
     #[inline]
-    fn uring_aof_end_group(&mut self) {
+    pub(crate) fn uring_aof_end_group(&mut self) {
         if let Err(e) = self.aof_end_group() {
             eprintln!("kevy: shard {} aof group sync failed: {e}", self.id);
         }
@@ -390,106 +381,8 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// Drain cross-core rings: execute forwarded requests, fold replies into
-    /// their connection's output (no direct write — io_uring flushes it).
-    fn uring_drain_inbound(&mut self) -> bool {
-        let mut did = false;
-        for src in 0..self.nshards {
-            if src == self.id {
-                continue;
-            }
-            while let Some(msg) = self.inboxes[src].as_mut().expect("peer inbox").pop() {
-                did = true;
-                match msg {
-                    Inbound::Request { origin, conn, seq, op } => {
-                        let part = self.exec_op(op);
-                        self.send_to(origin, Inbound::Response { conn, seq, part });
-                    }
-                    Inbound::Response { conn, seq, part } => {
-                        self.fold(conn, seq, part);
-                    }
-                    // Batched single-key dispatches to this (owning) shard: exec
-                    // each locally, reply as one `ResponseBatch` to the origin.
-                    Inbound::RequestBatch { origin, reqs } => {
-                        let mut resps = Vec::with_capacity(reqs.len());
-                        self.aof_begin_group();
-                        for (conn, seq, argv, proto) in reqs {
-                            let part = self.exec_op(Op::Dispatch(argv, proto));
-                            resps.push((conn, seq, part));
-                        }
-                        // fsync the batch's forwarded writes before replying.
-                        self.uring_aof_end_group();
-                        self.send_to(origin, Inbound::ResponseBatch(resps));
-                    }
-                    // Batched replies: fold each by seq; the arm loop writes any
-                    // conn whose output this appended to.
-                    Inbound::ResponseBatch(resps) => {
-                        for (conn, seq, part) in resps {
-                            self.fold(conn, seq, part);
-                        }
-                    }
-                    // Fire-and-forget batched pub/sub delivery; the arm loop
-                    // writes any conn whose output this appended to.
-                    Inbound::DeliverPublish(batch) => {
-                        for m in &batch {
-                            self.deliver_publish(&m.0, &m.1);
-                        }
-                    }
-                    // Cross-shard BLOCK arbiter — same handlers as the epoll
-                    // path (`crate::inbox`). Conn output appended here is
-                    // flushed by the io_uring write loop, so no `flush_conn`.
-                    Inbound::BlockArm {
-                        origin,
-                        conn,
-                        key,
-                        kind,
-                        serve_argv,
-                        proto,
-                    } => self.target_arm(origin, conn, key, kind, serve_argv, proto),
-                    Inbound::BlockReady { conn, key } => self.origin_on_ready(conn, &key),
-                    Inbound::BlockServeReq { origin, conn, key } => {
-                        let reply = self.target_serve(origin, conn, &key);
-                        self.send_to(origin, Inbound::BlockServeResp { conn, key, reply });
-                    }
-                    Inbound::BlockServeResp { conn, key, reply } => {
-                        self.origin_on_serve_resp(conn, key, reply);
-                    }
-                    Inbound::BlockCancel { origin, conn } => self.target_cancel(origin, conn),
-                }
-            }
-        }
-        did
-    }
-
-    /// Close connections that are done: EOF/QUIT seen, all output flushed, no
-    /// SQE in flight. Dropping the `Conn` closes the fd.
-    fn uring_reap_closed(&mut self, io: &mut KevyMap<u64, UringConn>) {
-        let done: Vec<u64> = io
-            .iter()
-            .filter(|(cid, uc)| {
-                let conn = self.conns.get(cid);
-                let drained = conn.is_none_or(|c| {
-                    c.output.is_empty() && c.pending.is_empty() && c.write_pos == 0
-                });
-                let closing = uc.closing || conn.is_some_and(|c| c.closing);
-                // The multishot recv may still be armed; closing the fd (on Conn
-                // drop) terminates it and its final completion is ignored (conn
-                // gone). We only need writes fully flushed before closing.
-                closing && !uc.write_inflight && uc.write_buf.is_empty() && drained
-            })
-            .map(|(&cid, _)| cid)
-            .collect();
-        for cid in done {
-            // Use the shared teardown (not a local conns.remove): it also
-            // cancels block waiters (local + cross-shard arbiter) and drops
-            // pub/sub + pattern subscriptions. Skipping it leaked a parked
-            // BLPOP/XREAD waiter and psub registrations on every io_uring
-            // disconnect — a waiter left behind could consume a later push
-            // meant for a live client. The epoll-only `poller.delete` /
-            // `fd_to_conn` steps inside are harmless no-ops here (io_uring
-            // never registered the fd with the readiness poller).
-            self.close_conn(cid);
-            io.remove(&cid);
-        }
-    }
+    // `uring_drain_inbound` + `uring_reap_closed` (the cross-core drain
+    // and connection-reap half) live in [`crate::uring_inbox`] — same
+    // `impl<C: Commands> Shard<C>`, split out so this file stays under
+    // the 500-LOC house rule.
 }

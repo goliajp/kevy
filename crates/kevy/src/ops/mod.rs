@@ -26,23 +26,34 @@ use kevy_store::Store;
 use crate::config_global;
 
 /// Operational-command dispatcher. Returns `true` if the verb was
-/// recognised (and a reply has been written to `out`).
+/// recognised (and a reply has been written to `out`). `config_global::get`
+/// is paid only inside the arms that actually need it — GET / SET and the
+/// other string / collection verbs flow past via the early `_ => false`
+/// without touching the global config Arc clone.
 pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
-    let cfg = config_global::get();
     match cmd {
-        b"INFO" => cmd_info(&cfg, store, args, out, RespVersion::V2),
+        b"INFO" => {
+            let cfg = config_global::get();
+            cmd_info(&cfg, store, args, out, RespVersion::V2);
+        }
         b"CLUSTER" => cmd_cluster(args, out),
         b"DEBUG" => cmd_debug(args, out),
         b"WAIT" => cmd_wait(args, out),
         b"SHUTDOWN" => cmd_shutdown(args, out),
-        b"CONFIG" => config::cmd_config(&cfg, args, out, RespVersion::V2),
+        b"CONFIG" => {
+            let cfg = config_global::get();
+            config::cmd_config(&cfg, args, out, RespVersion::V2);
+        }
         b"CLIENT" => client::cmd_client(args, out, RespVersion::V2),
-        b"MEMORY" => memory::cmd_memory(&cfg, store, args, out),
+        b"MEMORY" => {
+            let cfg = config_global::get();
+            memory::cmd_memory(&cfg, store, args, out);
+        }
         _ => return false,
     }
     true
