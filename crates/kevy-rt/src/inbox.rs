@@ -139,9 +139,28 @@ impl<C: Commands> Shard<C> {
         Ok(())
     }
 
+    /// Close the group-commit window, best-effort: a sync error is logged
+    /// like other AOF failures. The io_uring drain takes this arm — its
+    /// handlers return `()`, so there is nowhere to propagate to.
+    #[inline]
+    pub(crate) fn aof_end_group_logged(&mut self) {
+        if let Err(e) = self.aof_end_group() {
+            eprintln!("kevy: shard {} aof group sync failed: {e}", self.id);
+        }
+    }
+
     /// Drain inbound cross-core messages from every peer ring; returns
-    /// whether any were processed.
+    /// whether any were processed (the epoll reactor's entry point).
     pub(crate) fn drain_inbound(&mut self) -> io::Result<bool> {
+        self.drain_inbound_core::<true>()
+    }
+
+    /// The drain shared by both reactors. `DIRECT_FLUSH` selects the epoll
+    /// behavior (write each touched conn's output here, propagating I/O
+    /// errors) over the io_uring one (`false`: appended output is picked up
+    /// by the arm/write loop, and the only fallible step — the AOF group
+    /// sync — downgrades to a logged error, so no `Err` is ever built).
+    pub(crate) fn drain_inbound_core<const DIRECT_FLUSH: bool>(&mut self) -> io::Result<bool> {
         let mut did = false;
         for src in 0..self.nshards {
             if src == self.id {
@@ -161,7 +180,9 @@ impl<C: Commands> Shard<C> {
                     }
                     Inbound::Response { conn, seq, part } => {
                         self.fold(conn, seq, part);
-                        self.flush_conn(conn)?;
+                        if DIRECT_FLUSH {
+                            self.flush_conn(conn)?;
+                        }
                     }
                     // Batched single-key dispatches to this (owning) shard:
                     // exec each locally, reply as one `ResponseBatch` to the
@@ -176,7 +197,11 @@ impl<C: Commands> Shard<C> {
                             resps.push((conn, seq, part, argv));
                         }
                         // fsync the batch's forwarded writes before replying.
-                        self.aof_end_group()?;
+                        if DIRECT_FLUSH {
+                            self.aof_end_group()?;
+                        } else {
+                            self.aof_end_group_logged();
+                        }
                         self.send_to(origin, Inbound::ResponseBatch(resps));
                     }
                     // Batched replies: fold each by seq, then flush each
@@ -187,7 +212,7 @@ impl<C: Commands> Shard<C> {
                         for (conn, seq, part, husk) in resps {
                             self.argv_pool.put(husk);
                             self.fold(conn, seq, part);
-                            if !to_flush.contains(&conn) {
+                            if DIRECT_FLUSH && !to_flush.contains(&conn) {
                                 to_flush.push(conn);
                             }
                         }
@@ -196,7 +221,8 @@ impl<C: Commands> Shard<C> {
                         }
                     }
                     // Fire-and-forget batched pub/sub delivery; appended
-                    // subscriber output is flushed via `flush_dirty`.
+                    // subscriber output is flushed via `flush_dirty` (epoll)
+                    // or the arm/write loop (io_uring).
                     Inbound::DeliverPublish(batch) => {
                         for m in &batch {
                             self.deliver_publish(&m.0, &m.1);
@@ -218,7 +244,9 @@ impl<C: Commands> Shard<C> {
                     }
                     Inbound::BlockServeResp { conn, key, reply } => {
                         self.origin_on_serve_resp(conn, key, reply);
-                        self.flush_conn(conn)?;
+                        if DIRECT_FLUSH {
+                            self.flush_conn(conn)?;
+                        }
                     }
                     Inbound::BlockCancel { origin, conn } => self.target_cancel(origin, conn),
                 }

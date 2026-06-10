@@ -37,7 +37,9 @@
 #![forbid(unsafe_code)]
 
 mod aof;
+pub mod layout;
 mod replay;
+pub mod reshard;
 mod rewrite_fmt;
 mod shards_meta;
 

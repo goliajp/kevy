@@ -246,7 +246,7 @@ impl<C: Commands> Runtime<C> {
             };
             let aof = if self.enable_aof {
                 Some(Aof::open(
-                    &self.data_dir.join(format!("aof-{id}.aof")),
+                    &kevy_persist::layout::aof_path(&self.data_dir, id),
                     self.appendfsync,
                 )?)
             } else {
