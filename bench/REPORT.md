@@ -795,3 +795,28 @@ Tooling caveat (cost a few hours): `redis-benchmark 8.0.2 --cluster` with
 distribution badly across nodes (observed 291–1920 pkts/port vs perfectly
 uniform single-test runs) and the affected stage drops to ~2.5 M. Cluster
 angles must run one test per invocation (`/tmp/ab_cluster.sh` updated).
+
+### The forwarding tax, converted to throughput (2026-06-10, lx64, pinned-hashtag angle)
+
+The `redis-benchmark --cluster` client was the bottleneck hiding the win, so
+this angle removes it: 8 plain-mode redis-benchmark processes, each pinning
+its keys to one shard via a `{tag}` hashtag (`GET {t3}:__rand_int__ …`,
+6 conns × P256 each). Cluster mode connects each process straight to its
+shard's port (0 % forwarded); compat mode sends the *identical* commands to
+the shared REUSEPORT port (~7/8 forwarded). Client cost is byte-identical in
+both modes — the delta is the tax. 5 interleaved rounds (`/tmp/ab_pinned.sh`):
+
+| mean of 5 rounds | compat (7/8 forwarded) | cluster ports (0 forwarded) | delta |
+|---|---|---|---|
+| SET | 13.7 M | **19.4 M** | **+42 %** |
+| GET | 14.7 M | **20.1 M** | **+37 %** |
+
+Cluster-side numbers are tight (±1–2 % across rounds; compat wobbles ±6 % —
+the forwarded path is inherently noisier). **New 8-shard headline: GET
+~20.1 M / SET ~19.4 M ops/s** — key-aware routing pays exactly where the
+campaign predicted, once the load generator can keep up.
+
+Harness note: rounds 2/4 initially reported compat = 0 — a lifecycle race
+(the next server bound its cluster ports while the previous one was still
+dying → AddrInUse → exit, and the ready-probe had pinged the dying server).
+Fixed in the script: kill + wait for zero `pgrep` matches before each start.
