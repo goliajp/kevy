@@ -11,7 +11,7 @@ use std::io;
 use kevy_resp::parse_command_borrowed;
 
 use crate::Commands;
-use crate::message::{Inbound, Op};
+use crate::message::Inbound;
 use crate::shard::Shard;
 
 impl<C: Commands> Shard<C> {
@@ -146,8 +146,12 @@ impl<C: Commands> Shard<C> {
                         let mut resps = Vec::with_capacity(reqs.len());
                         self.aof_begin_group();
                         for (conn, seq, argv, proto, meta) in reqs {
-                            let part = self.exec_op(Op::Dispatch(argv, proto, meta));
+                            let part = self.run_dispatch(&argv, proto, meta);
                             resps.push((conn, seq, part));
+                            // The spent argv joins THIS shard's pool, ready
+                            // for its own forwards — under uniform traffic
+                            // pools balance, so no return trip is needed.
+                            self.argv_pool.put(argv);
                         }
                         // fsync the batch's forwarded writes before replying.
                         self.aof_end_group()?;

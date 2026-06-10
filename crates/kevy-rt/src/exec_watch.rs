@@ -345,7 +345,7 @@ impl<C: Commands> Shard<C> {
         meta: DispatchMeta,
     ) {
         // EXEC's queued cmds inherit the conn's proto at execution time
-        // (the proto is captured per-cmd via Op::Dispatch). If the conn
+        // (the proto is captured per-cmd at the forward site). If the conn
         // negotiated HELLO 3 before MULTI / between QUEUED frames, the
         // queued cmds also emit RESP3 shapes. AOF logging + WATCH bump
         // happen inside `exec_op`, driven by `meta`.
@@ -356,10 +356,11 @@ impl<C: Commands> Shard<C> {
             c.closing = true;
         }
         if shard == self.id {
-            let part = self.exec_op(Op::Dispatch(args.to_argv(), proto, meta));
+            let part = self.run_dispatch(args, proto, meta);
             self.fold(conn_id, seq, part);
         } else {
-            self.request_batch[shard].push((conn_id, seq, args.to_argv(), proto, meta));
+            let argv = self.argv_pool.take_filled(args);
+            self.request_batch[shard].push((conn_id, seq, argv, proto, meta));
         }
     }
 

@@ -79,14 +79,11 @@ pub(crate) struct DispatchMeta {
     pub(crate) key_idx: Option<u8>,
 }
 
-/// A unit of work shipped to the owning shard.
+/// A unit of work shipped to the owning shard. Forwarded single-key
+/// commands don't ride here — they go through the batched
+/// [`Inbound::RequestBatch`] lane (one `(conn, seq, Argv, RespVersion,
+/// DispatchMeta)` entry each) and execute via `Shard::run_dispatch`.
 pub(crate) enum Op {
-    /// Forward a single command. The trailing `RespVersion` rides with
-    /// each cmd (not the conn) so a V2 client and a V3 client can hand
-    /// requests to the same owning shard and each get the right reply
-    /// shape from `dispatch` vs `dispatch_resp3`. Defaults to V2 for
-    /// any backwards-compatible construction site.
-    Dispatch(Argv, RespVersion, DispatchMeta),
     Del(Vec<Vec<u8>>),
     Exists(Vec<Vec<u8>>),
     Dbsize,
