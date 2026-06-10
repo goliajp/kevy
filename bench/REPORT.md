@@ -843,3 +843,20 @@ Quiet-box A/B, 3 interleaved rounds, pinned-hashtag angle:
 
 The compat side gains too — the reaper fix is universal, not a cluster
 perk. **8-shard headline now: GET ~23.7 M / SET ~21.9 M ops/s.**
+
+### HEAD vs the historical peak anchor (2026-06-10, lx64, interleaved)
+
+`kevy_877cd41` was the campaign's "peak" anchor binary. Same box, same
+session, 3 interleaved rounds each:
+
+| angle | peak anchor | HEAD (`7f4995f`) | delta |
+|---|---|---|---|
+| legacy 8sh-P256 (fixed key) GET | 8.69 M | 11.17 M | +29 % |
+| legacy 8sh-P256 (fixed key) SET | 8.25 M | 9.98 M | +21 % |
+| pinned-hashtag compat (random keys) GET | 6.73 M | 15.31 M | 2.28× |
+| pinned-hashtag compat (random keys) SET | 6.35 M | 13.82 M | 2.18× |
+
+Random-key load exposes what the fixed-key angle hides (chiefly the old
+unbounded reaper walk), stretching the gap to 2.2×. With cluster routing —
+a capability the anchor doesn't have — HEAD's 23.7 M GET stands at 2.7×
+the anchor's best angle and 3.5× its same-load number.
