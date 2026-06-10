@@ -100,6 +100,18 @@ impl Store {
         }
     }
 
+    /// Apply a weight delta computed in-place by a caller that already held
+    /// `&mut Entry` (overwrite-SET fast path) — same arithmetic as
+    /// [`Self::reweigh_entry`] but WITHOUT the second hash + map probe that
+    /// `reweigh_entry(key)` pays to re-find the entry it just mutated.
+    #[inline]
+    pub(crate) fn apply_weight_delta(&mut self, delta: i64) {
+        apply_delta(&mut self.used_memory, delta);
+        if delta > 0 {
+            self.update_peak();
+        }
+    }
+
     /// Hint the CPU to fetch the bucket cache line for `key` into L1. Called
     /// by the reactor's parse loop on command N+1 while command N is still
     /// being dispatched — by the time N+1 actually probes the table, the
