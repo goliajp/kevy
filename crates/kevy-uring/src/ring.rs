@@ -10,11 +10,12 @@ use std::io;
 use crate::completion::Completion;
 use crate::ffi::{
     self, IORING_ENTER_GETEVENTS, IORING_OFF_CQ_RING, IORING_OFF_SQ_RING, IORING_OFF_SQES,
-    IORING_OP_ACCEPT, IORING_OP_NOP, IORING_OP_READ, IORING_OP_RECV, IORING_OP_WRITE,
+    IORING_OP_ACCEPT, IORING_OP_NOP, IORING_OP_READ, IORING_OP_RECV, IORING_OP_TIMEOUT,
+    IORING_OP_WRITE,
     IORING_RECV_MULTISHOT, IOSQE_BUFFER_SELECT, MAP_POPULATE, MAP_SHARED, PROT_READ, PROT_WRITE,
     SOCK_CLOEXEC, SOCK_NONBLOCK, SYS_IO_URING_ENTER, SYS_IO_URING_SETUP,
 };
-use crate::layout::{IoUringParams, IoUringSqe};
+use crate::layout::{IoUringParams, IoUringSqe, KernelTimespec};
 use crate::pbr::ProvidedBufRing;
 
 /// A Linux io_uring instance: one submission ring + one completion ring.
@@ -302,6 +303,31 @@ impl IoUring {
                 IoUringSqe::new(IORING_OP_ACCEPT, listen_fd, 0, 0, user_data),
             );
             (*sqe).rw_flags = SOCK_NONBLOCK | SOCK_CLOEXEC;
+        }
+        true
+    }
+
+    /// Queue a relative timeout: the completion (res = `-ETIME`) arrives once
+    /// `ts` elapses, or earlier with res = 0 / `-ECANCELED` if the ring shuts
+    /// down. Bounds a blocking [`IoUring::submit_and_wait`] the way a poller's
+    /// wait-timeout would. Returns `false` if the SQ is full.
+    ///
+    /// # Safety
+    /// `ts` must stay valid (not moved or dropped) until the matching
+    /// completion is reaped — the kernel reads it asynchronously.
+    pub unsafe fn prep_timeout(&mut self, ts: *const KernelTimespec, user_data: u64) -> bool {
+        let Some(idx) = self.reserve() else {
+            return false;
+        };
+        // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
+        unsafe {
+            let sqe = self.sqes.add(idx);
+            // addr = timespec ptr, len = 1 (one timespec), off = 0 (pure
+            // timeout — no completion-count trigger), rw_flags = 0 (relative).
+            ptr::write(
+                sqe,
+                IoUringSqe::new(IORING_OP_TIMEOUT, -1, ts as u64, 1, user_data),
+            );
         }
         true
     }
