@@ -155,7 +155,7 @@ impl<C: Commands> Shard<C> {
         } else {
             crate::blocked::unix_now_ms().saturating_add(timeout_ms)
         };
-        if keys.len() == 1 && crate::reduce::shard_of(&keys[0], self.nshards) == self.id {
+        if keys.len() == 1 && self.shard_of(&keys[0]) == self.id {
             // In-shard fast path: narrow to the one key + freeze `$`.
             let serve = self.commands.block_serve_argv(args, kind, &keys[0]);
             let serve = self.commands.resolve_block_argv(&mut self.store, &serve, kind);

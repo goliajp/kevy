@@ -32,6 +32,12 @@ use std::sync::atomic::{AtomicBool, Ordering, fence};
 pub(crate) struct Shard<C: Commands> {
     pub(crate) id: usize,
     pub(crate) nshards: usize,
+    /// Key→shard routing scheme: `false` = KevyHash (default), `true` =
+    /// Redis-cluster slots (CRC16 `{hashtag}` → contiguous slot ranges) so
+    /// cluster-aware clients can compute placement. Startup-time property
+    /// (recorded in `shards.meta`), never flipped live. See
+    /// [`crate::reduce::shard_of`].
+    pub(crate) slot_routing: bool,
     pub(crate) store: Store,
     pub(crate) commands: C,
     pub(crate) poller: Poller,
@@ -148,6 +154,12 @@ pub(crate) struct Shard<C: Commands> {
 // existing benchmark numbers translate one-to-one.
 
 impl<C: Commands> Shard<C> {
+    /// Owning shard of `key` under this server's routing scheme.
+    #[inline]
+    pub(crate) fn shard_of(&self, key: &[u8]) -> usize {
+        crate::reduce::shard_of(key, self.nshards, self.slot_routing)
+    }
+
     /// This shard's snapshot file: `<data_dir>/dump-<id>.rdb`.
     pub(crate) fn snapshot_path(&self) -> PathBuf {
         self.data_dir.join(format!("dump-{}.rdb", self.id))

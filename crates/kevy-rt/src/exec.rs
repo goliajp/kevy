@@ -7,7 +7,7 @@
 //! and folding sub-results into each connection's seq-ordered ring.
 
 use crate::message::{Agg, DispatchMeta, Inbound, Op, Part, PendingSlot, SmallReply};
-use crate::reduce::{drain_front, materialize, shard_of};
+use crate::reduce::{drain_front, materialize};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route, TxnKind};
 use kevy_resp::{Argv, ArgvView, RespVersion, encode_array_len};
@@ -166,7 +166,7 @@ impl<C: Commands> Shard<C> {
                 self.start_single(conn_id, seq, proto, args, self.id, is_quit, block_hint, meta);
             }
             Route::Single(idx) => {
-                let shard = shard_of(&args[idx], self.nshards);
+                let shard = self.shard_of(&args[idx]);
                 // Keyed routes put the key at argv[1] (or argv[2] for
                 // XGROUP/XINFO) — well inside u8.
                 let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
