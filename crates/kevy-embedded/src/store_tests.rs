@@ -1,10 +1,9 @@
 use super::*;
 use crate::config::{AppendFsync, EvictionPolicy};
-use crate::PubsubFrame;
 use std::path::PathBuf;
 use std::time::Duration;
 
-fn tmp_dir(name: &str) -> PathBuf {
+pub(crate) fn tmp_dir(name: &str) -> PathBuf {
     let mut p = std::env::temp_dir();
     let uniq = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -298,133 +297,4 @@ fn auto_aof_rewrite_compacts_redundant_writes() {
     assert_eq!(s2.get(b"hot").unwrap(), Some(b"v299".to_vec()));
     assert_eq!(s2.dbsize(), 1);
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-// ───────────────────────── sharding (B2) ─────────────────────────
-
-#[test]
-fn sharded_in_memory_roundtrip() {
-    let s = Store::open(Config::default().with_shards(8).with_ttl_reaper_manual()).unwrap();
-    for i in 0..1000u32 {
-        s.set(format!("k{i}").as_bytes(), format!("v{i}").as_bytes()).unwrap();
-    }
-    assert_eq!(s.dbsize(), 1000);
-    for i in 0..1000u32 {
-        assert_eq!(
-            s.get(format!("k{i}").as_bytes()).unwrap(),
-            Some(format!("v{i}").into_bytes())
-        );
-    }
-    // Cross-shard DEL: keys hash to different shards.
-    let keys: Vec<Vec<u8>> = (0..1000u32).map(|i| format!("k{i}").into_bytes()).collect();
-    let refs: Vec<&[u8]> = keys.iter().map(|k| k.as_slice()).collect();
-    assert_eq!(s.del(&refs).unwrap(), 1000);
-    assert_eq!(s.dbsize(), 0);
-}
-
-#[test]
-fn sharded_persist_survives_restart() {
-    let dir = tmp_dir("sharded-restart");
-    {
-        let s = Store::open(
-            Config::default().with_persist(&dir).with_shards(4).with_ttl_reaper_manual(),
-        )
-        .unwrap();
-        for i in 0..500u32 {
-            s.set(format!("k{i}").as_bytes(), format!("v{i}").as_bytes()).unwrap();
-        }
-        assert_eq!(s.dbsize(), 500);
-    }
-    // Per-shard AOFs exist; reopen at the same shard count loads them.
-    assert!(dir.join("shards.meta").exists());
-    assert!(dir.join("aof-3.aof").exists());
-    let s2 = Store::open(
-        Config::default().with_persist(&dir).with_shards(4).with_ttl_reaper_manual(),
-    )
-    .unwrap();
-    assert_eq!(s2.dbsize(), 500);
-    assert_eq!(s2.get(b"k0").unwrap(), Some(b"v0".to_vec()));
-    assert_eq!(s2.get(b"k499").unwrap(), Some(b"v499".to_vec()));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn migrates_single_aof_to_shards() {
-    let dir = tmp_dir("migrate");
-    // 1. Write with the default single-shard layout (one aof-0.aof, no meta).
-    {
-        let s = Store::open(
-            Config::default().with_persist(&dir).with_ttl_reaper_manual(),
-        )
-        .unwrap();
-        for i in 0..300u32 {
-            s.set(format!("k{i}").as_bytes(), format!("v{i}").as_bytes()).unwrap();
-        }
-    }
-    assert!(dir.join("aof-0.aof").exists());
-    assert!(!dir.join("shards.meta").exists());
-
-    // 2. Reopen opting into 4 shards → migrates the single AOF.
-    {
-        let s = Store::open(
-            Config::default().with_persist(&dir).with_shards(4).with_ttl_reaper_manual(),
-        )
-        .unwrap();
-        assert_eq!(s.dbsize(), 300);
-        for i in 0..300u32 {
-            assert_eq!(
-                s.get(format!("k{i}").as_bytes()).unwrap(),
-                Some(format!("v{i}").into_bytes())
-            );
-        }
-    }
-    // Migration artifacts: meta written, legacy AOF backed up, per-shard files.
-    assert!(dir.join("shards.meta").exists());
-    assert!(std::fs::read_dir(&dir).unwrap().any(|e| {
-        e.unwrap().file_name().to_string_lossy().contains("premigration")
-    }));
-
-    // 3. Reopen sharded again → loads per-shard, data intact.
-    let s3 = Store::open(
-        Config::default().with_persist(&dir).with_shards(4).with_ttl_reaper_manual(),
-    )
-    .unwrap();
-    assert_eq!(s3.dbsize(), 300);
-    assert_eq!(s3.get(b"k150").unwrap(), Some(b"v150".to_vec()));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn sharded_pubsub_still_process_wide() {
-    // Pub/sub is on shard 0; publishing reaches a subscriber regardless of
-    // how the keyspace is sharded.
-    let s = Store::open(Config::default().with_shards(8).with_ttl_reaper_manual()).unwrap();
-    let sub = s.subscribe(&[b"chan"]);
-    let _ack = sub.recv().unwrap();
-    assert_eq!(s.publish(b"chan", b"hello"), 1);
-    assert_eq!(
-        sub.recv().unwrap(),
-        PubsubFrame::Message { channel: b"chan".to_vec(), payload: b"hello".to_vec() }
-    );
-}
-
-#[test]
-fn collect_keys_spans_all_shards() {
-    let s = Store::open(Config::default().with_shards(8).with_ttl_reaper_manual()).unwrap();
-    for i in 0..500u32 {
-        s.set(format!("user:{i}").as_bytes(), b"v").unwrap();
-    }
-    for i in 0..50u32 {
-        s.set(format!("other:{i}").as_bytes(), b"v").unwrap();
-    }
-    // Glob scan must span ALL shards, not just shard 0 (the `with` hole).
-    let matched = s.collect_keys(Some(b"user:*"), None);
-    assert_eq!(matched.len(), 500);
-    // limit bounds the total across shards.
-    assert_eq!(s.collect_keys(Some(b"user:*"), Some(100)).len(), 100);
-    // for_each_shard sees the whole keyspace.
-    let mut total = 0;
-    s.for_each_shard(|inner| total += inner.dbsize());
-    assert_eq!(total, 550);
-    assert_eq!(s.shard_count(), 8);
 }
