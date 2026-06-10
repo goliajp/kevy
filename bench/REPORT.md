@@ -752,3 +752,46 @@ latency, not minimal latency; the nap rung keeps it.
 `dispatch_batch` 7.1 % (parse + dispatch proper). The 40 % `intel_idle`
 on server cores is accept-skew + forward-tax idleness — that is the
 key-aware-routing lever (~4.5×), now the only big one left.
+
+## Single-node CLUSTER slot routing — the forwarding tax, measured honestly (2026-06-10, lx64)
+
+Roadmap ③: cluster mode (`--cluster`) exposes each shard at a deterministic
+port with Redis-cluster slot routing (CRC16 `{hashtag}` & 16383, contiguous
+ranges), so cluster-aware clients address the owning shard directly — no
+cross-shard forwarding. Protocol validation: `redis-cli -c` follows MOVED
+across all shards (hashtags included), `CLUSTER KEYSLOT foo` = 12182 (matches
+upstream Redis), and a packet capture during a full `redis-benchmark
+--cluster` run contained **zero MOVED** frames — placement is exact.
+
+**Result: the forwarding tax is real and cluster routing removes it, but on
+this 16-core box the *throughput* headline doesn't move, because
+`redis-benchmark --cluster -r 1000000` is client-bound at ~6.1–6.6 M ops/s.**
+The win shows up as server CPU instead (same throughput, far less work):
+
+| angle (single-test, -r 1M, P256) | compat port | cluster ports | server CPU |
+|---|---|---|---|
+| 8sh GET | 6.6 M | 6.6 M | 125% vs ~200%+ (cluster lower) |
+| 4sh GET | 6.19 M | 6.13 M | **209% → 128% (−39%)** |
+| 4sh SET | 6.13 M | 5.70 M | **266% → 208% (−22%)** |
+| 2sh GET | 6.14 M | 6.13 M | client-capped |
+| 2sh SET | 4.2–4.4 M | 3.8–4.2 M | server-bound, parity within ±6% round noise |
+
+At equal load the cluster path does ~25–40 % less server work per op; that
+margin becomes throughput the moment clients are not the bottleneck (more
+client cores / multiple load generators than this box has). The 2sh SET
+parity (instead of a win) decomposes into two costs the redirect path adds:
+`-c 50 --cluster` opens 50 conns *per node* (2× total conns → shallower
+per-conn batches), and slot routing hashes with byte-wise CRC16 instead of
+the word-wise KevyHash (~4× slower per key; slice-by-4 tables are the known
+upgrade if a server-bound angle ever shows it matters).
+
+**Regression gate (old 8sh angle, no -r, compat port, cluster off)** —
+park2 (`24bd703`) vs cluster HEAD, 3 interleaved rounds: GET 11.35 M → 11.21 M
+(−1.2 %), SET 10.57 M → 10.29 M (−2.7 %), both inside the ±6 % round-to-round
+noise. Cluster-off costs one dead branch.
+
+Tooling caveat (cost a few hours): `redis-benchmark 8.0.2 --cluster` with
+**multiple tests in one invocation** (`-t get,set`) skews its key
+distribution badly across nodes (observed 291–1920 pkts/port vs perfectly
+uniform single-test runs) and the affected stage drops to ~2.5 M. Cluster
+angles must run one test per invocation (`/tmp/ab_cluster.sh` updated).
