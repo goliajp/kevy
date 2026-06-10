@@ -9,6 +9,10 @@ impl Store {
     // ---- strings -------------------------------------------------------
 
     /// `SET` — overwrites any existing value/type. NX/XX guards; clears TTL.
+    /// Takes an owned `Vec` so a >22 B value's allocation is adopted as-is
+    /// (no copy). For callers holding a borrowed slice, prefer
+    /// [`Self::set_slice`] — it skips the `to_vec` entirely for values that
+    /// inline.
     pub fn set(
         &mut self,
         key: &[u8],
@@ -17,9 +21,35 @@ impl Store {
         nx: bool,
         xx: bool,
     ) -> bool {
+        self.set_value(key, Value::Str(SmallBytes::from_vec(value)), expire, nx, xx)
+    }
+
+    /// [`Self::set`] for a borrowed value. Values ≤ 22 B store inline in the
+    /// entry — zero allocator traffic, where `set(key, value.to_vec(), …)`
+    /// paid a malloc for the `Vec` and a free when the inline copy dropped
+    /// it (the dominant overwrite-SET pattern). Larger values pay the same
+    /// single allocation either way.
+    pub fn set_slice(
+        &mut self,
+        key: &[u8],
+        value: &[u8],
+        expire: Option<Duration>,
+        nx: bool,
+        xx: bool,
+    ) -> bool {
+        self.set_value(key, Value::Str(SmallBytes::from_slice(value)), expire, nx, xx)
+    }
+
+    fn set_value(
+        &mut self,
+        key: &[u8],
+        new_value: Value,
+        expire: Option<Duration>,
+        nx: bool,
+        xx: bool,
+    ) -> bool {
         // Clock read only when a TTL is requested.
         let expire_at = expire.map(|d| Instant::now() + d);
-        let new_value = Value::Str(SmallBytes::from_vec(value));
         let key_heap = crate::key_heap_bytes_for(key);
         let outcome = match self.live_entry_mut(key) {
             // Key exists and is live: NX must abort; otherwise overwrite the
