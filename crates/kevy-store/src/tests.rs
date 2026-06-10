@@ -378,3 +378,103 @@ fn bump_all_watched_invalidates_every_tracked_entry() {
     // Untracked key still 0.
     assert_eq!(s.key_version(b"untouched"), 0);
 }
+
+// ───────────── stream groups across load_value / XSETID (2026-06-11) ─────────────
+
+/// Build the canonical grouped-stream fixture: entries 1-1/2-1/3-1, group
+/// `g`, consumer `c1` holding 1-1+2-1 (delivered at t=1000), `c2` holding
+/// 3-1 (t=2000), then 2-1 XDEL'd so its PEL row is a tombstone.
+pub(crate) fn grouped_stream_fixture(st: &mut Store) {
+    for ms in [1u64, 2, 3] {
+        st.xadd(
+            b"st",
+            XAddIdSpec::Explicit(StreamId { ms, seq: 1 }),
+            vec![(s("f"), s("v"))],
+            false,
+            0,
+        )
+        .unwrap();
+    }
+    st.xgroup_create(b"st", b"g", GroupCreateMode::AtId(StreamId::MIN), false)
+        .unwrap();
+    st.xreadgroup(b"st", b"g", b"c1", ReadGroupId::New, Some(2), false, 1000)
+        .unwrap();
+    st.xreadgroup(b"st", b"g", b"c2", ReadGroupId::New, None, false, 2000)
+        .unwrap();
+    st.xdel(b"st", &[StreamId { ms: 2, seq: 1 }]).unwrap();
+}
+
+#[test]
+fn load_value_carries_stream_groups() {
+    let mut src = Store::new();
+    grouped_stream_fixture(&mut src);
+
+    // The reshard redistribution path: snapshot_each → load_value.
+    let mut dst = Store::new();
+    src.snapshot_each(|k, v, ttl| dst.load_value(k, v, ttl));
+
+    let view = dst.stream_view(b"st").unwrap().unwrap();
+    let g = view.group(b"g").expect("group must survive load_value");
+    assert_eq!(g.last_delivered_id(), StreamId { ms: 3, seq: 1 });
+    assert_eq!(g.pending_count(), 3); // tombstone 2-1 included
+    let p1 = g.pel.get(&StreamId { ms: 1, seq: 1 }).unwrap();
+    assert_eq!(
+        (p1.consumer.as_slice(), p1.delivery_time_ms, p1.delivery_count),
+        (&b"c1"[..], 1000, 1)
+    );
+    let p3 = g.pel.get(&StreamId { ms: 3, seq: 1 }).unwrap();
+    assert_eq!(
+        (p3.consumer.as_slice(), p3.delivery_time_ms, p3.delivery_count),
+        (&b"c2"[..], 2000, 1)
+    );
+    let mut consumers: Vec<(Vec<u8>, u64, usize)> = g
+        .consumers_iter()
+        .map(|(n, c)| (n.to_vec(), c.last_seen_ms(), c.pending_count()))
+        .collect();
+    consumers.sort();
+    assert_eq!(consumers, vec![(s("c1"), 1000, 2), (s("c2"), 2000, 1)]);
+}
+
+#[test]
+fn xsetid_scalar_overrides_and_guards() {
+    let mut st = Store::new();
+    assert_eq!(
+        st.xsetid(b"nope", StreamId { ms: 1, seq: 0 }, None, None),
+        Err(StoreError::NoSuchKey)
+    );
+    st.xadd(
+        b"s",
+        XAddIdSpec::Explicit(StreamId { ms: 5, seq: 1 }),
+        vec![(s("f"), s("v"))],
+        false,
+        0,
+    )
+    .unwrap();
+    // Below the top entry → rejected, state untouched.
+    assert_eq!(
+        st.xsetid(b"s", StreamId { ms: 4, seq: 0 }, None, None),
+        Err(StoreError::OutOfRange)
+    );
+    st.xsetid(
+        b"s",
+        StreamId { ms: 9, seq: 0 },
+        Some(42),
+        Some(StreamId { ms: 3, seq: 3 }),
+    )
+    .unwrap();
+    let view = st.stream_view(b"s").unwrap().unwrap();
+    assert_eq!(view.last_id(), StreamId { ms: 9, seq: 0 });
+    assert_eq!(view.entries_added(), 42);
+    assert_eq!(view.max_deleted_id(), StreamId { ms: 3, seq: 3 });
+    // The bumped ID clock gates subsequent XADDs.
+    assert!(
+        st.xadd(
+            b"s",
+            XAddIdSpec::Explicit(StreamId { ms: 9, seq: 0 }),
+            vec![(s("f"), s("v"))],
+            false,
+            0,
+        )
+        .is_err()
+    );
+}

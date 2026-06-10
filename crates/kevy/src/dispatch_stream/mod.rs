@@ -12,6 +12,7 @@
 mod claim;
 mod group;
 mod info;
+mod setid;
 
 use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
@@ -42,6 +43,7 @@ pub(crate) fn dispatch_stream<A: ArgvView + ?Sized>(
         b"XREVRANGE" => cmd_range(store, args, out, /*rev=*/ true),
         b"XDEL" => cmd_xdel(store, args, out),
         b"XTRIM" => cmd_xtrim(store, args, out),
+        b"XSETID" => setid::cmd_xsetid(store, args, out),
         b"XREAD" => cmd_xread(store, args, out),
         b"XGROUP" => group::cmd_xgroup(store, args, out),
         b"XREADGROUP" => group::cmd_xreadgroup(store, args, out),
