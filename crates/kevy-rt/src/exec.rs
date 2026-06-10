@@ -178,14 +178,15 @@ impl<C: Commands> Shard<C> {
                 // ever true in cluster mode, so the compat / cluster-off
                 // path pays one always-false branch. (EXEC replay passes
                 // false — queued transactions keep full fan-out semantics.)
-                if cluster_conn && shard != self.id {
-                    if let Some(topo) = &self.cluster {
-                        let slot = kevy_hash::key_hash_slot(&args[idx]);
-                        let bytes = topo.moved(slot, shard);
-                        self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
-                        self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(bytes)));
-                        return;
-                    }
+                if cluster_conn
+                    && shard != self.id
+                    && let Some(topo) = &self.cluster
+                {
+                    let slot = kevy_hash::key_hash_slot(&args[idx]);
+                    let bytes = topo.moved(slot, shard);
+                    self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
+                    self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(bytes)));
+                    return;
                 }
                 // Keyed routes put the key at argv[1] (or argv[2] for
                 // XGROUP/XINFO) — well inside u8.
