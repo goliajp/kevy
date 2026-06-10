@@ -145,7 +145,7 @@ impl Config {
         self
     }
 
-    /// Register a push-style metric callback. It receives a [`KevyMetric`] for
+    /// Register a push-style metric callback. It receives a [`crate::KevyMetric`] for
     /// each AOF replay (startup) and AOF rewrite (compaction) — wire it to
     /// Prometheus / a log line / a counter. The callback runs synchronously on
     /// the emitting thread (reaper thread for background rewrites), so keep it

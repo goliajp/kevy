@@ -332,7 +332,7 @@ impl Commands for KevyCommands {
     /// One-pass verb resolution — the reactor calls this once per cmd and
     /// reads back txn_kind / route / is_quit / is_write without re-scanning
     /// the verb. This is `kevy-rt`'s primary hot-path optimization: every
-    /// match arm uses the same `upper` buffer. Body in [`cmd_resolve`].
+    /// match arm uses the same `upper` buffer. Body in `cmd_resolve`.
     fn resolve<A: ArgvView + ?Sized>(&self, args: &A) -> ResolvedCmd {
         cmd_resolve::kevy_resolve(args)
     }

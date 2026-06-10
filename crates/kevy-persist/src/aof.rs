@@ -99,7 +99,7 @@ pub struct RewriteStats {
 
 impl Aof {
     /// Open (creating if needed) `path` for appending. New files get the
-    /// 9-byte [`AOF_MAGIC`] header so replays can identify the file as
+    /// 9-byte `AOF_MAGIC` header so replays can identify the file as
     /// kevy-managed. Pre-existing files (legacy bare-RESP or already-
     /// magic'd) are left untouched.
     pub fn open(path: &Path, fsync: Fsync) -> io::Result<Self> {
@@ -218,7 +218,7 @@ impl Aof {
     }
 
     /// Empty the log (after a snapshot has captured the full state). The
-    /// post-truncate file keeps the [`AOF_MAGIC`] header so replays of
+    /// post-truncate file keeps the `AOF_MAGIC` header so replays of
     /// the freshly-trimmed log still identify as kevy-managed.
     pub fn truncate(&mut self) -> io::Result<()> {
         self.file.flush()?;

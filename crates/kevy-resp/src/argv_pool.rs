@@ -51,7 +51,7 @@ impl ArgvPool {
 
     /// Recycle a spent `Argv`. Dropped instead of pooled when the pool is
     /// full or the argv's buffer is oversized (retention policy — see
-    /// [`MAX_POOLED`] / [`MAX_POOLED_BYTES`]).
+    /// `MAX_POOLED` / `MAX_POOLED_BYTES`).
     pub fn put(&mut self, argv: Argv) {
         if self.free.len() < MAX_POOLED && argv.buf_capacity() <= MAX_POOLED_BYTES {
             self.free.push(argv);

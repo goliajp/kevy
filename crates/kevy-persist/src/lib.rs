@@ -362,3 +362,5 @@ fn read_u64<R: Read>(r: &mut R) -> io::Result<u64> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_aof;
