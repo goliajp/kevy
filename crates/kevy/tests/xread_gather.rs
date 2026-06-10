@@ -313,3 +313,50 @@ fn xreadgroup_gather_pel_survives_aof_restart() {
     assert!(reply.starts_with(b"*2\r\n"), "expected both PELs after restart, got {s:?}");
     assert!(s.matches("1-0").count() >= 2, "PEL lost across restart: {s:?}");
 }
+
+#[test]
+fn xreadgroup_group_named_streams_routes_correct_key() {
+    // Regression: housekeeping derived key_idx by scanning for "STREAMS";
+    // a group literally named "streams" fooled it. Two streams on different
+    // shards, group name == "streams", `>` over both — must deliver from
+    // both and update each real stream's PEL (not a phantom key).
+    let _s = serial();
+    let srv = Server::start();
+    let mut c = srv.connect();
+    for st in ["ns_a", "ns_b"] {
+        c.write_all(&req(&[b"XADD", st.as_bytes(), b"1-0", b"f", b"v"])).unwrap();
+        let _ = read_reply(&mut c);
+        c.write_all(&req(&[b"XGROUP", b"CREATE", st.as_bytes(), b"streams", b"0"])).unwrap();
+        let _ = read_reply(&mut c);
+    }
+    c.write_all(&req(&[
+        b"XREADGROUP", b"GROUP", b"streams", b"alice", b"STREAMS", b"ns_a", b"ns_b", b">", b">",
+    ]))
+    .unwrap();
+    let reply = read_reply(&mut c);
+    let s = String::from_utf8_lossy(&reply);
+    assert!(reply.starts_with(b"*2\r\n") && s.contains("ns_a") && s.contains("ns_b"), "{s:?}");
+    // PEL recorded on both streams (key_idx pointed at the stream, not "alice").
+    c.write_all(&req(&[
+        b"XREADGROUP", b"GROUP", b"streams", b"alice", b"STREAMS", b"ns_a", b"ns_b", b"0", b"0",
+    ]))
+    .unwrap();
+    let reply = read_reply(&mut c);
+    assert!(String::from_utf8_lossy(&reply).matches("1-0").count() >= 2, "PEL missing");
+}
+
+#[test]
+fn bare_xreadgroup_does_not_panic_shard() {
+    // Regression: a 1-element XREADGROUP routed Route::Single(1), and the
+    // runtime indexed the missing args[1], panicking the shard. Must be a
+    // graceful error and the server must keep serving.
+    let _s = serial();
+    let srv = Server::start();
+    let mut c = srv.connect();
+    c.write_all(&req(&[b"XREADGROUP"])).unwrap();
+    let reply = read_reply(&mut c);
+    assert_eq!(reply.first(), Some(&b'-'), "expected error, got {:?}", String::from_utf8_lossy(&reply));
+    // Server still alive.
+    c.write_all(&req(&[b"PING"])).unwrap();
+    assert_eq!(read_reply(&mut c), b"+PONG\r\n");
+}

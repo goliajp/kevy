@@ -396,7 +396,9 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
 /// when left at the `0` default. Shard `i` listens at this + `i`.
 pub(crate) fn cluster_port_base(cfg: &kevy_config::Config) -> u16 {
     match cfg.cluster.port_base {
-        0 => cfg.server.port + 1,
+        // saturating: port 65535 would overflow; Runtime::run then rejects
+        // the (base, nshards) range loudly rather than wrapping a listener.
+        0 => cfg.server.port.saturating_add(1),
         base => base,
     }
 }

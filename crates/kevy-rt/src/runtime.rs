@@ -161,6 +161,21 @@ impl<C: Commands> Runtime<C> {
     pub fn run(self, stop: Arc<AtomicBool>) -> io::Result<()> {
         let n = self.nshards;
 
+        // Cluster binds shard `i` at `port_base + i`; reject a range that
+        // overflows u16 up front (loud) instead of wrapping a listener onto
+        // a low/privileged port while CLUSTER SLOTS advertises 65536+.
+        if let Some(base) = self.cluster_port_base
+            && base as usize + n > u16::MAX as usize + 1
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "cluster port range {base}..={} exceeds 65535 ({n} shards)",
+                    base as usize + n - 1
+                ),
+            ));
+        }
+
         // One lock-free SPSC ring per ordered core-pair (i→j): the producer goes
         // to shard i's outbox[j], the consumer to shard j's inbox[i]. There is no
         // self-ring — a shard runs its own commands inline, never over a ring.
@@ -194,9 +209,15 @@ impl<C: Commands> Runtime<C> {
 
         // Reconcile the on-disk shard layout (count + routing) before any
         // shard loads its files; a mismatch re-homes every key once, here.
-        // Skipped for a pure in-memory run against a dir with no kevy files,
-        // so that case keeps writing nothing at all.
-        if self.enable_aof || crate::reshard::has_kevy_files(&self.data_dir) {
+        // Skipped for a pure in-memory run against a dir with no kevy files.
+        // Cluster mode always records the layout even with AOF off and an
+        // empty dir: a later SAVE writes slot-distributed `dump-{i}.rdb`, and
+        // without a meta a non-cluster restart would read them as KevyHash
+        // and silently strand every key.
+        if self.enable_aof
+            || self.cluster_port_base.is_some()
+            || crate::reshard::has_kevy_files(&self.data_dir)
+        {
             let routing = if self.cluster_port_base.is_some() {
                 kevy_persist::Routing::Slots
             } else {
