@@ -18,12 +18,14 @@ on:
       - 'crates/kevy-resp/**'
       - 'crates/kevy-bytes/**'
       - 'crates/kevy-persist/**'
+      - 'crates/kevy-hash/**'
       - '.github/workflows/fuzz.yml'
   pull_request:
     paths:
       - 'crates/kevy-resp/**'
       - 'crates/kevy-bytes/**'
       - 'crates/kevy-persist/**'
+      - 'crates/kevy-hash/**'
   schedule:
     # Daily at 08:00 UTC. Catches drift on develop even without a code push.
     - cron: '0 8 * * *'
@@ -47,6 +49,8 @@ jobs:
           - { crate: kevy-resp,    target: parse_reply }
           - { crate: kevy-bytes,   target: cross_arm }
           - { crate: kevy-persist, target: replay_aof }
+          - { crate: kevy-persist, target: shards_meta }
+          - { crate: kevy-hash,    target: key_hash_slot }
     env:
       # Honour workflow_dispatch input; default to 300 s (5 min) per target.
       FUZZ_SECONDS: ${{ github.event.inputs.duration_seconds || '300' }}

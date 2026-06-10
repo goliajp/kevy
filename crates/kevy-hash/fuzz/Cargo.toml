@@ -1,5 +1,5 @@
 [package]
-name = "kevy-persist-fuzz"
+name = "kevy-hash-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -16,19 +16,12 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 
-[dependencies.kevy-persist]
+[dependencies.kevy-hash]
 path = ".."
 
 [[bin]]
-name = "replay_aof"
-path = "fuzz_targets/replay_aof.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "shards_meta"
-path = "fuzz_targets/shards_meta.rs"
+name = "key_hash_slot"
+path = "fuzz_targets/key_hash_slot.rs"
 test = false
 doc = false
 bench = false
