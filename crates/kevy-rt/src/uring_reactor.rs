@@ -324,8 +324,9 @@ impl<C: Commands> Shard<C> {
         pbuf.recycle(bid);
         // Borrowed-argv parse hot path: mirrors the epoll/inbox path.
         // Swap conn.input onto the stack so the parsed ArgvBorrowed can lend
-        // the buf without colliding with &mut self in dispatch; drain after
-        // each cmd, swap the buf back at the end (if conn still exists).
+        // the buf without colliding with &mut self in dispatch; a cursor
+        // walks the cmds and one final drain moves the unparsed tail,
+        // then the buf swaps back (if the conn still exists).
         let mut input_buf = match self.conns.get_mut(&cid) {
             Some(c) => std::mem::take(&mut c.input),
             None => return,
@@ -336,8 +337,11 @@ impl<C: Commands> Shard<C> {
         // `aof_end_group`, which runs before the io_uring write loop submits
         // the replies — so durability still precedes reply.
         self.aof_begin_group();
+        // Parse cursor + one final drain — see the epoll twin in
+        // `crate::inbox` for why per-cmd draining was O(batch²) bytes.
+        let mut off = 0usize;
         loop {
-            let parse = parse_command_borrowed(&input_buf);
+            let parse = parse_command_borrowed(&input_buf[off..]);
             let (argv, consumed) = match parse {
                 Ok(Some(t)) => t,
                 Ok(None) => break,
@@ -351,13 +355,14 @@ impl<C: Commands> Shard<C> {
             }
             self.handle_command(cid, &argv);
             drop(argv);
-            input_buf.drain(..consumed);
+            off += consumed;
             if !self.conns.contains_key(&cid) {
                 self.uring_aof_end_group();
                 return;
             }
         }
         self.uring_aof_end_group();
+        input_buf.drain(..off);
         if let Some(c) = self.conns.get_mut(&cid) {
             c.input = input_buf;
         }
