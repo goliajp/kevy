@@ -175,10 +175,18 @@ mod tests {
         s.set(b"k2", b"v".to_vec(), Some(Duration::from_millis(1)), false, false);
         s.set(b"perm", b"v".to_vec(), None, false, false);
         std::thread::sleep(Duration::from_millis(20));
-        let stats = s.tick_expire(20, 16);
-        assert_eq!(stats.expired, 2, "both TTL'd keys should be reaped");
-        assert!(stats.sampled >= 2);
-        assert_eq!(s.dbsize(), 1, "perm survives");
+        // A single tick may legitimately miss a key: the sampling walk is
+        // time-boxed and starts at a rotating bucket (the a635d65 trade —
+        // coverage comes from repeated ticks + lazy expiry, not from one
+        // exhaustive pass). Assert the *eventual* contract, like the
+        // production reaper exercises it.
+        for _ in 0..64 {
+            if s.dbsize() == 1 {
+                break;
+            }
+            s.tick_expire(20, 16);
+        }
+        assert_eq!(s.dbsize(), 1, "perm survives, both TTL'd keys reaped");
         assert!(s.expired_keys_total() >= 2);
     }
 
