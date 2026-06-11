@@ -174,17 +174,20 @@ mod tests {
         s.set(b"k1", b"v".to_vec(), Some(Duration::from_millis(1)), false, false);
         s.set(b"k2", b"v".to_vec(), Some(Duration::from_millis(1)), false, false);
         s.set(b"perm", b"v".to_vec(), None, false, false);
-        std::thread::sleep(Duration::from_millis(20));
-        // A single tick may legitimately miss a key: the sampling walk is
-        // time-boxed and starts at a rotating bucket (the a635d65 trade —
-        // coverage comes from repeated ticks + lazy expiry, not from one
-        // exhaustive pass). Assert the *eventual* contract, like the
-        // production reaper exercises it.
-        for _ in 0..64 {
+        // Two flake sources, both observed on virtualized CI runners:
+        // a single tick may legitimately miss a key (the sampling walk is
+        // time-boxed with a rotating start — the a635d65 trade; coverage
+        // comes from repeated ticks), and on a starved macOS VM the
+        // monotonic clock (`Instant`, mach_absolute_time) can advance far
+        // slower than the wall-clock `sleep`, so a 1 ms deadline may not
+        // have passed yet. Sleep-and-tick until converged (bounded), like
+        // the production reaper drives it — the eventual contract.
+        for _ in 0..500 {
+            s.tick_expire(20, 16);
             if s.dbsize() == 1 {
                 break;
             }
-            s.tick_expire(20, 16);
+            std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(s.dbsize(), 1, "perm survives, both TTL'd keys reaped");
         assert!(s.expired_keys_total() >= 2);
@@ -244,10 +247,13 @@ mod tests {
             );
         }
         s.set(b"perm", b"v".to_vec(), None, false, false);
-        std::thread::sleep(Duration::from_millis(20));
+        // Sleep-and-tick until converged: on a starved CI VM the monotonic
+        // clock can lag the wall-clock sleep, so a fixed pre-sleep + a
+        // bounded dry tick loop under-counts (see
+        // tick_expire_drops_past_deadline).
         let mut total_expired = 0u32;
         let mut any_round_ge_2 = false;
-        for _ in 0..20 {
+        for _ in 0..500 {
             let stats = s.tick_expire(20, 16);
             total_expired += stats.expired;
             if stats.rounds >= 2 {
@@ -256,6 +262,7 @@ mod tests {
             if s.dbsize() == 1 {
                 break;
             }
+            std::thread::sleep(Duration::from_millis(10));
         }
         assert_eq!(total_expired, 40);
         assert!(any_round_ge_2, "at least one heavy-batch tick should loop");
