@@ -298,3 +298,32 @@ fn auto_aof_rewrite_compacts_redundant_writes() {
     assert_eq!(s2.dbsize(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `save_snapshot` must reset the AOF to post-collect writes (the
+/// documented snapshot+log durability contract). Before the fix the AOF
+/// kept its full history, so a restart replayed pre-snapshot commands ON
+/// TOP of the snapshot — non-idempotent ops (RPUSH) duplicated.
+#[test]
+fn save_snapshot_resets_aof_no_double_replay() {
+    let dir = tmp_dir("save-aof-reset");
+    {
+        let s = Store::open(
+            Config::default().with_persist(&dir).with_ttl_reaper_manual(),
+        )
+        .unwrap();
+        s.rpush(b"l", &[b"a", b"b"]).unwrap();
+        assert!(s.save_snapshot().unwrap());
+        // Post-snapshot write: must survive via the (reset) AOF.
+        s.rpush(b"l", &[b"c"]).unwrap();
+    }
+    let s2 = Store::open(
+        Config::default().with_persist(&dir).with_ttl_reaper_manual(),
+    )
+    .unwrap();
+    assert_eq!(
+        s2.llen(b"l").unwrap(),
+        3,
+        "snapshot + replayed AOF must not double-apply pre-snapshot RPUSHes"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
