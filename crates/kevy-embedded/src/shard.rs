@@ -19,8 +19,10 @@ use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use kevy_hash::KevyHash;
+use kevy_persist::reshard::{ShardLayout, commit_reshard, merge_sources, recover_journal};
 use kevy_persist::{
-    Aof, Routing, ShardsMeta, load_snapshot, read_shards_meta, replay_aof, write_shards_meta,
+    Aof, Routing, ShardsMeta, layout, layout::infer_files_n, load_snapshot, read_shards_meta,
+    replay_aof, write_shards_meta,
 };
 use kevy_store::Store as Keyspace;
 
@@ -47,7 +49,7 @@ fn aof_path(dir: &Path, config: &Config, i: usize, n: usize) -> PathBuf {
     if n == 1 {
         dir.join(&config.aof_filename) // back-compat: the original single file
     } else {
-        dir.join(format!("aof-{i}.aof"))
+        layout::aof_path(dir, i)
     }
 }
 
@@ -55,30 +57,22 @@ fn snapshot_path(dir: &Path, config: &Config, i: usize, n: usize) -> PathBuf {
     if n == 1 {
         dir.join(&config.snapshot_filename)
     } else {
-        dir.join(format!("dump-{i}.rdb"))
+        layout::snapshot_path(dir, i)
     }
 }
 
-/// Highest `dump-{i}.rdb` / `aof-{i}.aof` index + 1 found in `dir`, or 0.
-/// Mirrors the server runtime's inference for meta-less dirs so an
-/// unstamped multi-shard dir is never mistaken for the single-file layout.
-fn infer_files_n(dir: &Path) -> usize {
-    let mut n = 0usize;
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else { continue };
-        let idx = name
-            .strip_prefix("dump-")
-            .and_then(|r| r.strip_suffix(".rdb"))
-            .or_else(|| name.strip_prefix("aof-").and_then(|r| r.strip_suffix(".aof")));
-        if let Some(i) = idx.and_then(|s| s.parse::<usize>().ok()) {
-            n = n.max(i + 1);
-        }
+/// The embedded store's file layout for [`kevy_persist::reshard`]: the
+/// standard per-shard names, except `n == 1` keeps the configured
+/// single-file names (the `with_*_filename` back-compat knobs).
+struct EmbLayout<'a>(&'a Config);
+
+impl ShardLayout for EmbLayout<'_> {
+    fn snapshot_path(&self, dir: &Path, i: usize, n: usize) -> PathBuf {
+        snapshot_path(dir, self.0, i, n)
     }
-    n
+    fn aof_path(&self, dir: &Path, i: usize, n: usize) -> PathBuf {
+        aof_path(dir, self.0, i, n)
+    }
 }
 
 fn fresh_keyspace(config: &Config) -> Keyspace {
@@ -100,15 +94,18 @@ pub(crate) fn build_shards(config: &Config) -> io::Result<Vec<Arc<RwLock<Inner>>
         return Ok(into_inners(stores, (0..n).map(|_| None).collect()));
     };
     std::fs::create_dir_all(&dir)?;
+    // Complete (or safely discard) a reshard a crash interrupted, before
+    // reading the layout — same roll-forward the server runtime does.
+    recover_journal(&dir, &EmbLayout(config))?;
 
-    let meta_path = dir.join("shards.meta");
+    let meta_path = layout::shards_meta_path(&dir);
     let prev = read_shards_meta(&meta_path);
     // Under the default filenames the n==1 layout coincides with shard 0's,
     // so the dir is server-readable; custom names opt out of that interop
     // and stay meta-less (a meta would point the server at files that
     // don't exist).
-    let sharded_names =
-        config.snapshot_filename == "dump-0.rdb" && config.aof_filename == "aof-0.aof";
+    let sharded_names = config.snapshot_filename == layout::snapshot_file(0)
+        && config.aof_filename == layout::aof_file(0);
     // The embedded store always routes by KevyHash; a dir written by a
     // slots-routing server re-shards (losslessly) on first embedded open.
     let same_layout = match prev {
@@ -129,12 +126,11 @@ pub(crate) fn build_shards(config: &Config) -> io::Result<Vec<Arc<RwLock<Inner>>
             let k = infer_files_n(&dir);
             (k > 1).then_some(k)
         });
+        // The commit also records the new layout — including n == 1: a
+        // stale meta from a larger prior n would otherwise trigger a second
+        // re-shard next open, whose sources were already renamed to
+        // `.premigration` (the shrink-to-one open would come up empty).
         reshard(&dir, config, n, src_n, &mut stores)?;
-        // Always record the new layout — including n == 1: a stale meta
-        // from a larger prior n would otherwise trigger a second re-shard
-        // next open, whose sources were already renamed to `.premigration`
-        // (the shrink-to-one open would come up empty).
-        write_shards_meta(&meta_path, ShardsMeta { n, routing: Routing::KevyHash })?;
     }
 
     // Open each shard's live AOF for append (if persistence is on).
@@ -171,9 +167,14 @@ fn load_in_place(dir: &Path, config: &Config, n: usize, stores: &mut [Keyspace])
     Ok(())
 }
 
-/// Re-shard: load every source file into one temp keyspace, redistribute each
-/// key to its target shard, then rewrite each shard's AOF from its slice. The
-/// source files are backed up (`.premigration.<nanos>`) before being replaced.
+/// Re-shard: load every source file into one temp keyspace, redistribute
+/// each key to its target shard, then hand the crash-safe commit to
+/// [`kevy_persist::reshard`] — per-shard snapshots land under `.reshard`
+/// temp names, a durable journal marks the commit point, and only then are
+/// the sources backed up (`.premigration.<nanos>`) and the temps finalized.
+/// A crash at any point either leaves the old layout intact or is rolled
+/// forward by `build_shards`' recovery on the next open. Each shard's fresh
+/// AOF opens after this returns; the snapshot is the full migrated state.
 fn reshard(
     dir: &Path,
     config: &Config,
@@ -181,29 +182,23 @@ fn reshard(
     prev_n: Option<usize>,
     stores: &mut [Keyspace],
 ) -> io::Result<()> {
+    let lay = EmbLayout(config);
     let mut temp = fresh_keyspace(config);
     let mut total_cmds = 0u64;
-    let mut total_bytes = 0u64;
     let start = Instant::now();
     // Source layout: prior shard files, or a legacy single AOF/snapshot.
     let src_n = prev_n.unwrap_or(1);
-    let mut sources: Vec<PathBuf> = Vec::new();
-    for i in 0..src_n {
-        let snap = snapshot_path(dir, config, i, src_n);
-        if snap.exists() {
-            load_snapshot(&mut temp, &snap)?;
-            sources.push(snap);
-        }
-        let aof = aof_path(dir, config, i, src_n);
-        if aof.exists() {
-            total_bytes += std::fs::metadata(&aof).map(|m| m.len()).unwrap_or(0);
-            replay_aof(&aof, |args| {
-                total_cmds += 1;
-                crate::replay::apply(&mut temp, &args);
-            })?;
-            sources.push(aof);
-        }
-    }
+    merge_sources(dir, src_n, &lay, &mut temp, |store, args| {
+        total_cmds += 1;
+        crate::replay::apply(store, &args);
+    })?;
+    // Replay-metric byte count: the source AOFs (sizes read before the
+    // commit renames them away).
+    let total_bytes = (0..src_n)
+        .map(|i| lay.aof_path(dir, i, src_n))
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .sum();
     emit_replay(config, total_cmds, total_bytes, start);
 
     // Redistribute the merged keyspace into the target shards.
@@ -211,19 +206,7 @@ fn reshard(
         stores[shard_idx(key, n)].load_value(key, value, ttl_ms);
     });
 
-    // Back up sources, then materialize each shard's compacted AOF.
-    let stamp = backup_stamp();
-    for src in &sources {
-        let mut bak = src.clone().into_os_string();
-        bak.push(format!(".premigration.{stamp}"));
-        let _ = std::fs::rename(src, &bak);
-    }
-    if config.aof {
-        for (i, store) in stores.iter().enumerate() {
-            let mut aof = Aof::open(&aof_path(dir, config, i, n), config.appendfsync)?;
-            aof.rewrite_from(store)?;
-        }
-    }
+    commit_reshard(dir, src_n, ShardsMeta { n, routing: Routing::KevyHash }, stores, &lay)?;
     Ok(())
 }
 
@@ -235,13 +218,6 @@ fn emit_replay(config: &Config, commands: u64, bytes: u64, start: Instant) {
             elapsed_ms: start.elapsed().as_millis() as u64,
         });
     }
-}
-
-fn backup_stamp() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
 }
 
 fn into_inners(stores: Vec<Keyspace>, aofs: Vec<Option<Aof>>) -> Vec<Arc<RwLock<Inner>>> {

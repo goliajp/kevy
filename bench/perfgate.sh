@@ -17,8 +17,13 @@
 #   * preflight refuses to run on a dirty box (leftover kevy/redis-benchmark
 #     processes, or load >= 1.0): a polluted run costs hours of false
 #     debugging, a refused run costs one retry.
-#   * 3 rounds per angle, median compared against bench/PERF-BASELINE.json
-#     with per-metric tolerance — single rounds swing +-6%.
+#   * 3 fresh server INSTANCES per angle, median across instances, compared
+#     against bench/PERF-BASELINE.json with per-metric tolerance. Instance-
+#     to-instance spread (page placement / IRQ luck at server start) proved
+#     the dominant noise axis (2026-06-11: +-5% on legacy_8sh_get — three
+#     rounds against ONE instance just re-sample the same draw, and a gate
+#     conditioned on a single instance is a coin flip near the floor).
+#     Rounds within an instance swing only +-2%.
 #
 # Exit codes: 0 = PASS (or baseline updated), 1 = FAIL/regression, 2 = refused
 # (dirty box / missing tools / bad usage).
@@ -30,7 +35,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 BASELINE="$HERE/PERF-BASELINE.json"
 N_PINNED=${N_PINNED:-30000000}   # per process x8 — long N, ramp amortised
 N_LEGACY=${N_LEGACY:-30000000}
-ROUNDS=${ROUNDS:-3}
+INSTANCES=${INSTANCES:-3}
 # Hashtags pinning shard 0..7 under the contiguous slot split (CRC16).
 TAGS=(t3 t43 t2 t42 t1 t41 t0 t40)
 
@@ -99,37 +104,48 @@ run_legacy() { # $1 = get|set -> echoes overall rps (fixed key, REUSEPORT)
     | awk '{printf "%.0f", $1}'
 }
 
-median3() { printf "%s\n%s\n%s\n" "$1" "$2" "$3" | sort -n | sed -n 2p; }
+median_of() { printf "%s\n" "$@" | sort -n | awk '{a[NR]=$1} END {print a[int((NR+1)/2)]}'; }
 
-# ---------- measure: 3 rounds per angle, keep the median ----------
-declare -A MED
-collect() { # $1 metric-name, $2 command-string
-  local r v1 v2 v3
-  v1=$(eval "$2"); v2=$(eval "$2"); v3=$(eval "$2")
-  MED[$1]=$(median3 "$v1" "$v2" "$v3")
-  echo "  $1: rounds [$v1 $v2 $v3] -> median ${MED[$1]}"
+# ---------- measure: 3 fresh instances per angle, median across them ----------
+# Each instance pass boots a brand-new server (cluster then legacy), warms
+# it, and measures every angle once — so each metric collects one sample
+# per instance and the medians compare instance-distribution centers, not
+# one instance's luck.
+declare -A SAMPLES MED
+sample() { # $1 metric-name, $2 command-string
+  local v
+  v=$(eval "$2")
+  SAMPLES[$1]="${SAMPLES[$1]:-}$v "
 }
 
-echo "perfgate: warming + measuring (bin=$BIN, N=$N_PINNED x8, $ROUNDS rounds/angle)"
-server_start "--cluster"
-# Warm each shard's keyspace once (1M random keys per tag at P64).
-# NB: wait MUST name the pids — a bare `wait` also waits on the $SRV
-# background job, which never exits (this exact hang has bitten twice).
-WPIDS=()
-for i in $(seq 0 7); do
-  taskset -c 8-15 redis-benchmark -p $((7002 + i)) -n 1000000 -r 1000000 \
-    -P 64 -q SET "{${TAGS[$i]}}:__rand_int__" v >/dev/null 2>&1 &
-  WPIDS+=($!)
-done; wait "${WPIDS[@]}"
-collect pinned_cluster_get 'run_pinned get cluster'
-collect pinned_cluster_set 'run_pinned set cluster'
-collect pinned_compat_get  'run_pinned get compat'
-collect pinned_compat_set  'run_pinned set compat'
-server_start ""   # legacy angle: cluster off (the historical configuration)
-taskset -c 8-15 redis-benchmark -p 7001 -t set -n 300000 -P 64 -q >/dev/null 2>&1
-collect legacy_8sh_get 'run_legacy get'
-collect legacy_8sh_set 'run_legacy set'
-server_stop
+echo "perfgate: warming + measuring (bin=$BIN, N=$N_PINNED x8, $INSTANCES instances/angle)"
+for inst in $(seq 1 "$INSTANCES"); do
+  server_start "--cluster"
+  # Warm each shard's keyspace (1M random keys per tag at P64).
+  # NB: wait MUST name the pids — a bare `wait` also waits on the $SRV
+  # background job, which never exits (this exact hang has bitten twice).
+  WPIDS=()
+  for i in $(seq 0 7); do
+    taskset -c 8-15 redis-benchmark -p $((7002 + i)) -n 1000000 -r 1000000 \
+      -P 64 -q SET "{${TAGS[$i]}}:__rand_int__" v >/dev/null 2>&1 &
+    WPIDS+=($!)
+  done; wait "${WPIDS[@]}"
+  sample pinned_cluster_get 'run_pinned get cluster'
+  sample pinned_cluster_set 'run_pinned set cluster'
+  sample pinned_compat_get  'run_pinned get compat'
+  sample pinned_compat_set  'run_pinned set compat'
+  server_start ""   # legacy angle: cluster off (the historical configuration)
+  taskset -c 8-15 redis-benchmark -p 7001 -t set -n 300000 -P 64 -q >/dev/null 2>&1
+  sample legacy_8sh_get 'run_legacy get'
+  sample legacy_8sh_set 'run_legacy set'
+  server_stop
+done
+for m in pinned_cluster_get pinned_cluster_set pinned_compat_get pinned_compat_set \
+         legacy_8sh_get legacy_8sh_set; do
+  # shellcheck disable=SC2086 — word-splitting the collected samples is the point
+  MED[$m]=$(median_of ${SAMPLES[$m]})
+  echo "  $m: instances [${SAMPLES[$m]%% }] -> median ${MED[$m]}"
+done
 
 # ---------- compare or record ----------
 if [ "$MODE" = "--update-baseline" ]; then

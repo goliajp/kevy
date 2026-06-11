@@ -138,7 +138,7 @@ pub enum StreamIdError {
 /// scalar state Redis exposes via `XINFO STREAM`, plus the consumer
 /// groups map (sprint B). An empty `groups` map costs ~8 bytes and
 /// makes the no-group fast path (sprint A XADD/XREAD) zero-overhead.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct StreamData {
     /// Sorted entries; the `BTreeMap` enforces strict-increasing IDs.
     pub(super) entries: BTreeMap<StreamId, Vec<(SmallBytes, SmallBytes)>>,

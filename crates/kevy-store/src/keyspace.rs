@@ -5,6 +5,7 @@
 //!
 //! Split out of [`crate`] for file-size hygiene.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::value::{HashData, SetData, Value, ZSetData};
@@ -245,16 +246,16 @@ impl Store {
             .into_iter()
             .map(|(f, v)| (SmallBytes::from_vec(f), v))
             .collect();
-        self.insert_loaded(key, Value::Hash(Box::new(hash_data)), ttl_ms);
+        self.insert_loaded(key, Value::Hash(Arc::new(hash_data)), ttl_ms);
     }
 
     pub fn load_list(&mut self, key: Vec<u8>, items: Vec<Vec<u8>>, ttl_ms: Option<u64>) {
-        self.insert_loaded(key, Value::List(Box::new(items.into_iter().collect())), ttl_ms);
+        self.insert_loaded(key, Value::List(Arc::new(items.into_iter().collect())), ttl_ms);
     }
 
     pub fn load_set(&mut self, key: Vec<u8>, members: Vec<Vec<u8>>, ttl_ms: Option<u64>) {
         let set_data: SetData = members.into_iter().map(SmallBytes::from_vec).collect();
-        self.insert_loaded(key, Value::Set(Box::new(set_data)), ttl_ms);
+        self.insert_loaded(key, Value::Set(Arc::new(set_data)), ttl_ms);
     }
 
     /// Collect live keys (optionally matching a glob `pattern`, up to `limit`).
@@ -284,7 +285,7 @@ impl Store {
         for (m, score) in pairs {
             z.insert(&m, score);
         }
-        self.insert_loaded(key, Value::ZSet(Box::new(z)), ttl_ms);
+        self.insert_loaded(key, Value::ZSet(Arc::new(z)), ttl_ms);
     }
 
     /// Insert one already-typed `(key, value, ttl)` triple, e.g. straight out
@@ -364,6 +365,6 @@ impl Store {
             entries_added,
         );
         s.import_groups(groups);
-        self.insert_loaded(key, Value::Stream(Box::new(s)), ttl_ms);
+        self.insert_loaded(key, Value::Stream(Arc::new(s)), ttl_ms);
     }
 }

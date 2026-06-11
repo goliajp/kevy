@@ -22,6 +22,28 @@ A fresh embedded store with the default config persists via the **AOF only** —
 no snapshot file appears unless you call `save_snapshot`. That is expected, not
 a missing feature: the AOF alone is a complete durable record.
 
+## Snapshots: `SAVE`, `BGSAVE`, `Store::save_snapshot`
+
+A successful snapshot **resets the AOF**: the snapshot carries the state at
+the snapshot point, and the log restarts with exactly the writes that landed
+after it — so a restart loads snapshot + log without ever double-applying
+history (v1.16.0 also fixed the embedded `save_snapshot`, which previously
+left the full log in place and duplicated non-idempotent commands like
+`RPUSH` on replay).
+
+- **`SAVE`** (server) is synchronous and blocking-durable, the Redis
+  contract: it returns after the snapshot is on disk. If a background
+  save/rewrite is already in flight on a shard, that shard's `SAVE` is
+  skipped with a log line.
+- **`BGSAVE`** (server, v1.16.0) freezes a copy-on-write view per shard and
+  returns immediately; a background thread writes the snapshot and the
+  reactor tick commits the snapshot rename together with the log reset in
+  one adjacent critical section. Writes issued after `BGSAVE` keep landing
+  in the old log until the swap, so a crash at any point loses nothing.
+- **`Store::save_snapshot`** (embedded) is synchronous like `SAVE`, with
+  the same view-freeze trick: per-shard locks are held for the freeze and
+  the commit, not the disk write.
+
 ## fsync policy (`appendfsync`)
 
 Controls how often the AOF is flushed to disk. Default **`EverySec`** (matches
@@ -64,8 +86,17 @@ to a single `SET hot <latest>`.
 
 **Manual** (always available):
 
-- Server: `BGREWRITEAOF`.
-- Embedded: `Store::rewrite_aof() -> io::Result<Option<RewriteStats>>` (synchronous; blocks until the atomic rename completes).
+- Server: `BGREWRITEAOF` — background since v1.16.0: `+OK` returns once the
+  shard has frozen a copy-on-write view of its keyspace (O(n)-shallow,
+  nanoseconds per key); a per-shard background thread serializes it and the
+  compacted file swaps in within a reactor tick (~100 ms) of the disk write
+  finishing. Watch `INFO persistence` (below) for completion. One job in
+  flight per shard; a request landing while one runs is skipped with a log
+  line.
+- Embedded: `Store::rewrite_aof() -> io::Result<Option<RewriteStats>>` —
+  synchronous from the caller's point of view (returns after the atomic
+  rename), but per-shard locks are held only for the view freeze and the
+  final swap; concurrent readers/writers flow during the serialization.
 
 **Automatic** (Redis-style thresholds): rewrite fires when the live AOF has
 grown `percentage` past its size at the previous rewrite **and** is at least
@@ -74,15 +105,16 @@ grown `percentage` past its size at the previous rewrite **and** is at least
 - Server: config keys `auto_aof_rewrite_percentage` / `auto_aof_rewrite_min_size` (also live-tunable via `CONFIG SET`); checked on the reactor tick.
 - Embedded: `Config::with_auto_aof_rewrite(pct, min_size)`; checked on the background reaper tick, or on your `Store::tick` calls in manual reaper mode. `pct = 0` disables (manual only).
 
-The embedded **auto**-rewrite is **non-blocking**: it serializes the keyspace
-under the lock, then releases the lock for the slow disk write + fsync (the
-expensive part), and re-takes it only briefly to swap the file in. Writes that
-land during the disk write are tee'd into a diff buffer and appended after the
-snapshot, so nothing is lost. The transient cost is one in-memory copy of the
-serialized keyspace. The **manual** `Store::rewrite_aof()` / server
-`BGREWRITEAOF` is synchronous (blocks the caller for the rewrite) — it's the
-explicit "rewrite now" path. If a rewrite crashes midway the original AOF is
-untouched (the swap is an atomic `rename`) and the `.tmp` file can be deleted.
+Every rewrite path is **non-blocking** for the keyspace (v1.16.0): the lock
+(embedded) or shard thread (server) is held only to freeze a copy-on-write
+view — collection values are refcount-shared, so the freeze is O(keys), not
+O(bytes) — and to swap the finished file in. Serialization + fsync run with
+the keyspace live; writes that land meanwhile are tee'd into a diff buffer
+and appended after the compacted image, so nothing is lost. The transient
+cost is the view (tens of bytes per key) plus a one-time copy of any
+collection first mutated while the rewrite is in flight. If a rewrite
+crashes midway the original AOF is untouched (the swap is an atomic
+`rename`) and the `<aof>.rewrite` temp can be deleted.
 
 ## Crash recovery (AOF replay on startup)
 
@@ -106,6 +138,27 @@ kevy: AOF /data/kevy/aof-0.aof replayed 145313 commands from 418261733 bytes in 
 
 Because the AOF is unbounded, replay time grows with it — watch this number
 and use auto-rewrite to keep it bounded.
+
+A shard-layout migration (changing `--threads` / `shards`, or switching
+cluster routing) is crash-idempotent: new snapshots land under `.reshard`
+temp names, a durable `reshard.journal` marks the commit point, and an
+interrupted migration is rolled forward on the next start. Source files
+survive as `.premigration.<timestamp>` backups.
+
+## Introspection (server)
+
+`INFO persistence` reports the answering shard's view, refreshed each
+reactor tick (~100 ms):
+
+```
+aof_enabled:1
+appendfsync:everysec
+aof_rewrite_in_progress:0     # a background save/rewrite is in flight
+aof_rewrites_total:3          # completed AOF rewrites since open
+```
+
+`aof_rewrites_total` incrementing (and `in_progress` returning to `0`) is
+the completion signal for the asynchronous `BGREWRITEAOF` / `BGSAVE`.
 
 ## Introspection (embedded)
 
@@ -159,5 +212,9 @@ rewrites), so keep it fast. `KevyMetric` is `#[non_exhaustive]` — match with a
 |---|---|
 | `aof-<id>.aof` | Live AOF for shard `<id>` |
 | `dump-<id>.rdb` | Binary snapshot for shard `<id>` |
-| `<aof>.tmp` | In-progress rewrite/snapshot; safe to delete if stale |
+| `shards.meta` | Recorded shard count + routing scheme |
+| `dump-<id>.rdb.tmp` | In-progress snapshot write; safe to delete if stale |
+| `aof-<id>.aof.rewrite` | In-progress AOF rewrite/reset; safe to delete if stale |
+| `dump-<id>.rdb.reshard` + `reshard.journal` | In-progress shard-layout migration (rolled forward on next start; never delete the journal by hand) |
+| `*.premigration.<unix_ts>` | Pre-migration source backups |
 | `aof-<id>.aof.panic-quarantine.<unix_ts>` | Corrupt AOF tail set aside during recovery |

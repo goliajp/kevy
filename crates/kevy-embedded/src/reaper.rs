@@ -2,7 +2,7 @@
 //! `store.rs` to keep it under the 500-LOC house cap; operates on the shared
 //! [`Inner`] state via the same mutex the public `Store` methods use.
 
-use std::io::{self, Write};
+use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, RwLockWriteGuard};
 use std::thread::JoinHandle;
@@ -111,8 +111,10 @@ pub(crate) fn concurrent_auto_rewrite(
     sink: Option<&MetricSink>,
 ) {
     let start = Instant::now();
-    // Phase 1 — decide + begin, under the lock.
-    let (plan, before_bytes) = {
+    // Phase 1 — decide + freeze the COW view + start the tee, under the
+    // lock. O(n)-shallow (refcount bumps + key copies): the lock window no
+    // longer scales with serialized bytes, let alone disk speed.
+    let (view, tmp, before_bytes) = {
         let mut g = lock_inner(inner);
         let ready = g.aof.as_ref().is_some_and(|a| rewrite_threshold_met(a, pct, min_size));
         if !ready {
@@ -121,28 +123,32 @@ pub(crate) fn concurrent_auto_rewrite(
         let Inner { store, aof, .. } = &mut *g;
         let aof = aof.as_mut().expect("checked above");
         let before = aof.size_bytes();
-        match aof.begin_concurrent_rewrite(store) {
-            Ok(p) => (p, before),
+        let view = store.collect_snapshot();
+        match aof.begin_view_rewrite() {
+            Ok(tmp) => (view, tmp, before),
             Err(e) => {
                 eprintln!("kevy: embedded auto AOF rewrite (begin) failed: {e}");
                 return;
             }
         }
     };
-    // Phase 2 — spill the snapshot image to disk, lock released.
-    if let Err(e) = spill_rewrite_body(&plan.tmp, &plan.body) {
-        eprintln!("kevy: embedded auto AOF rewrite (spill) failed: {e}");
-        let mut g = lock_inner(inner);
-        if let Some(aof) = &mut g.aof {
-            aof.abort_concurrent_rewrite();
+    // Phase 2 — serialize the frozen view + fsync, lock released.
+    let keys = match kevy_persist::dump_aof(&tmp, &view) {
+        Ok((keys, _)) => keys,
+        Err(e) => {
+            eprintln!("kevy: embedded auto AOF rewrite (dump) failed: {e}");
+            let mut g = lock_inner(inner);
+            if let Some(aof) = &mut g.aof {
+                aof.abort_concurrent_rewrite();
+            }
+            let _ = std::fs::remove_file(&tmp);
+            return;
         }
-        let _ = std::fs::remove_file(&plan.tmp);
-        return;
-    }
+    };
     // Phase 3 — append the diff, swap, reopen, under the lock.
     let mut g = lock_inner(inner);
     let Some(aof) = &mut g.aof else { return };
-    match aof.finish_concurrent_rewrite(&plan.tmp, plan.keys) {
+    match aof.finish_concurrent_rewrite(&tmp, keys) {
         Ok(stats) => {
             if let Some(sink) = sink {
                 sink.emit(KevyMetric::Rewrite {
@@ -156,17 +162,9 @@ pub(crate) fn concurrent_auto_rewrite(
         Err(e) => {
             eprintln!("kevy: embedded auto AOF rewrite (finish) failed: {e}");
             aof.abort_concurrent_rewrite();
-            let _ = std::fs::remove_file(&plan.tmp);
+            let _ = std::fs::remove_file(&tmp);
         }
     }
-}
-
-/// Write the rewrite snapshot image to `tmp` and fsync it. Pure I/O; runs
-/// with the store lock released.
-fn spill_rewrite_body(tmp: &std::path::Path, body: &[u8]) -> io::Result<()> {
-    let mut f = std::fs::File::create(tmp)?;
-    f.write_all(body)?;
-    f.sync_all()
 }
 
 /// Write-lock the inner state, recovering from a poisoned lock (a method panic

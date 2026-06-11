@@ -37,17 +37,18 @@
 #![forbid(unsafe_code)]
 
 mod aof;
+pub mod layout;
 mod replay;
+pub mod reshard;
 mod rewrite_fmt;
 mod shards_meta;
 
-pub use aof::{Aof, Fsync, RewritePlan, RewriteStats};
+pub use aof::{Aof, Fsync, RewritePlan, RewriteStats, write_aof_base};
 pub use replay::replay_aof;
 pub use shards_meta::{Routing, ShardsMeta, read_shards_meta, write_shards_meta};
 pub use kevy_resp::{Argv, ArgvView};
-pub(crate) use rewrite_fmt::{
-    dump_store_to_aof, dump_store_to_buf, estimate_multibulk_bytes, write_multibulk,
-};
+pub use rewrite_fmt::dump_aof;
+pub(crate) use rewrite_fmt::{dump_store_to_buf, estimate_multibulk_bytes, write_multibulk};
 use kevy_store::Store;
 use kevy_store::Value;
 // ZSet snapshot iterates ordered (member, score) pairs via `Value::ZSet`.
@@ -84,20 +85,53 @@ const OP_STREAM: u8 = 6;
 /// `write(2)`s); 1 MiB amortizes the syscalls toward disk speed.
 pub(crate) const SNAPSHOT_BUF_CAP: usize = 1 << 20;
 
-/// Write a point-in-time snapshot of `store` to `path`, atomically: data is
-/// written to `<path>.tmp`, fsynced, then renamed over `path`.
-pub fn save_snapshot(store: &Store, path: &Path) -> io::Result<()> {
+/// Anything that can enumerate `(key, &Value, ttl_ms)` triples for
+/// serialization: a live [`Store`] (its `snapshot_each`, the synchronous
+/// paths) or a frozen [`kevy_store::SnapshotView`] (the COW paths — collect
+/// on the owning thread, serialize on a background one).
+pub trait SnapshotSource {
+    /// Visit every live entry as `(key, &value, remaining_ttl_ms)`.
+    fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>));
+}
+
+impl SnapshotSource for Store {
+    fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>)) {
+        self.snapshot_each(f);
+    }
+}
+
+impl SnapshotSource for kevy_store::SnapshotView {
+    fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>)) {
+        self.each(f);
+    }
+}
+
+/// Write a point-in-time snapshot of `src` (a live [`Store`] or a frozen
+/// [`kevy_store::SnapshotView`]) to `path`, atomically: data is written to
+/// `<path>.tmp`, fsynced, then renamed over `path`.
+pub fn save_snapshot<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<()> {
+    let tmp = write_snapshot_tmp(src, path)?;
+    std::fs::rename(&tmp, path)
+}
+
+/// The write half of [`save_snapshot`]: produce the durable (fsynced)
+/// `<path>.tmp` and return its path **without** the final rename. For the
+/// COW background-save flow: the serializer thread writes the temp file at
+/// leisure, then the store-owning thread renames it in the same critical
+/// section that resets the AOF — keeping the snapshot/AOF commit adjacent
+/// instead of seconds apart.
+pub fn write_snapshot_tmp<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<std::path::PathBuf> {
     let tmp = tmp_path(path);
     {
         let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, File::create(&tmp)?);
         w.write_all(MAGIC)?;
         w.write_all(&[VERSION])?;
-        // `snapshot_each` yields *remaining* ms; v3 persists the absolute
+        // The source yields *remaining* ms; v3 persists the absolute
         // Unix-ms deadline (now + remaining) so the TTL survives a restart.
         let now = kevy_store::now_unix_ms();
-        // `snapshot_each` is infallible; capture the first write error to surface.
+        // Enumeration is infallible; capture the first write error to surface.
         let mut err: Option<io::Error> = None;
-        store.snapshot_each(|key, value, ttl| {
+        src.for_each_entry(|key, value, ttl| {
             let deadline = ttl.map(|ms| now.saturating_add(ms));
             if err.is_none()
                 && let Err(e) = write_entry(&mut w, key, value, deadline)
@@ -112,7 +146,7 @@ pub fn save_snapshot(store: &Store, path: &Path) -> io::Result<()> {
         w.flush()?;
         w.get_ref().sync_all()?; // durably on disk before the rename
     }
-    std::fs::rename(&tmp, path)
+    Ok(tmp)
 }
 
 /// Load a snapshot from `path` into `store` (entries are inserted, not cleared

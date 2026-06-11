@@ -216,11 +216,11 @@ SAVE BGSAVE BGREWRITEAOF
 
 ## Persistence model
 
-| | valkey / Redis | kevy v1.3 |
+| | valkey / Redis | kevy v1.16 |
 |---|---|---|
-| Snapshot | RDB binary format | kevy snapshot v2 (own `KEVYSNAP` header, type-tagged) |
+| Snapshot | RDB binary format | kevy snapshot v4 (own `KEVYSNAP` header, type-tagged, stream consumer groups included) |
 | AOF | append-only commands | append-only commands, `KEVYAOF1\n` magic header on fresh files (since v1.2.0) |
-| AOF rewrite | `BGREWRITEAOF` (background fork) | `BGREWRITEAOF` (synchronous per shard in v1.x; incrementalisation is a v2 polish item) |
+| AOF rewrite | `BGREWRITEAOF` (background fork) | `BGREWRITEAOF` (background per shard since v1.16.0: copy-on-write view frozen on the shard thread, serialized off-thread — fork-free; completion observable via `INFO persistence` `aof_rewrites_total`) |
 | Auto-rewrite | `auto_aof_rewrite_percentage` / `auto_aof_rewrite_min_size` | same knobs, same semantics (defaults: `100` / `64mb`) — exercised by `crates/kevy/tests/persistence.rs::auto_aof_rewrite_*` |
 | fsync policy | `always` / `everysec` (default) / `no` | identical names + semantics |
 | Legacy AOF replay | n/a | bare-RESP AOFs (pre-v1.2 files without the magic header) still replay cleanly — backward-compat verified on every release |

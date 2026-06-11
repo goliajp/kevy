@@ -89,7 +89,8 @@ impl Commands for KevyCommands {
             | b"CLIENT" | b"SELECT" => Route::Local,
             b"DBSIZE" => Route::Dbsize,
             b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
-            b"SAVE" | b"BGSAVE" => Route::Save,
+            b"SAVE" => Route::Save,
+            b"BGSAVE" => Route::BgSave,
             b"BGREWRITEAOF" => Route::RewriteAof,
             // Cross-shard multi-key (malformed arity falls back to Local so the
             // dispatch stub returns the arity error).
@@ -186,6 +187,13 @@ impl Commands for KevyCommands {
         // thread-local carries per-shard identity into dispatch handlers
         // (CLUSTER MYID / the `myself` flag in CLUSTER NODES).
         ops::cluster::set_current_shard(shard);
+    }
+
+    fn on_persist_stats(&self, in_flight: bool, aof_rewrites_total: u64) {
+        // Same thread-local pattern as `on_shard_start`: `INFO persistence`
+        // answers with the answering shard's view (the COUNTKEYSINSLOT
+        // precedent), refreshed by the reactor tick.
+        ops::set_persist_stats(in_flight, aof_rewrites_total);
     }
 
     fn shard_tick_interval_ms(&self) -> u64 {

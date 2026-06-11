@@ -246,7 +246,7 @@ impl<C: Commands> Runtime<C> {
             };
             let aof = if self.enable_aof {
                 Some(Aof::open(
-                    &self.data_dir.join(format!("aof-{id}.aof")),
+                    &kevy_persist::layout::aof_path(&self.data_dir, id),
                     self.appendfsync,
                 )?)
             } else {
@@ -281,6 +281,7 @@ impl<C: Commands> Runtime<C> {
                 parked: parked.clone(),
                 data_dir: self.data_dir.clone(),
                 aof,
+                persist: crate::persist_worker::PersistWorker::new(),
                 auto_aof_rewrite_pct: self.auto_aof_rewrite_pct,
                 auto_aof_rewrite_min_size: self.auto_aof_rewrite_min_size,
                 dirty: Vec::new(),

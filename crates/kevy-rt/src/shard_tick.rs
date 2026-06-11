@@ -80,9 +80,18 @@ impl<C: Commands> Shard<C> {
         if lhs < rhs {
             return;
         }
-        let aof = self.aof.as_mut().expect("just checked");
-        if let Err(e) = aof.rewrite_from(&self.store) {
-            eprintln!("kevy: shard {} auto AOF rewrite failed: {e}", self.id);
-        }
+        self.start_bg_rewrite();
+    }
+
+    /// Tick half of background persistence: apply any finished BGSAVE /
+    /// rewrite (commit or abort — see `poll_persist_done`), then check the
+    /// auto-rewrite threshold.
+    pub(crate) fn tick_persist(&mut self) {
+        self.poll_persist_done();
+        self.maybe_auto_rewrite_aof();
+        let in_flight =
+            self.persist.busy() || self.aof.as_ref().is_some_and(|a| a.is_rewriting());
+        let rewrites = self.aof.as_ref().map_or(0, |a| a.rewrites_total());
+        self.commands.on_persist_stats(in_flight, rewrites);
     }
 }

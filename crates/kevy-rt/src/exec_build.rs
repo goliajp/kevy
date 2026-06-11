@@ -65,6 +65,10 @@ impl<C: Commands> Shard<C> {
                 (0..self.nshards).map(|s| (s, Op::Save)).collect(),
                 Agg::AllOk,
             ),
+            Route::BgSave => (
+                (0..self.nshards).map(|s| (s, Op::BgSave)).collect(),
+                Agg::AllOk,
+            ),
             Route::RewriteAof => (
                 (0..self.nshards).map(|s| (s, Op::RewriteAof)).collect(),
                 Agg::AllOk,

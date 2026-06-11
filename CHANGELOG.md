@@ -4,6 +4,90 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.16.0] — 2026-06-12
+
+Minor release: **COW persistence** — snapshot/rewrite serialization no
+longer stalls a shard for the disk write (an O(n)-shallow view freeze,
+~8 ns/entry, replaces it), plus an internal steel-dedup pass (one
+crash-safe reshard engine shared by server and embedded), an embedded
+durability fix, and real `INFO persistence` fields. Workspace 1.15.0 →
+1.16.0; kevy-embedded 1.1.19 → 1.1.20; kevy-client 1.7.15 → 1.7.16 (dep
+refs only). Perfgate PASS on every unit (6/6 angles, lx64; see
+"Changed" for the gate-methodology update).
+
+### Added
+
+- **Background `BGSAVE` / `BGREWRITEAOF`**: the shard freezes a
+  copy-on-write view of its keyspace (collection values are
+  refcount-shared; mutations copy on write while a snapshot is in
+  flight) and a per-shard background thread serializes it. `+OK`
+  returns at the freeze; the snapshot/rewritten log swaps in within a
+  tick (~100 ms) of the disk write finishing. One job in flight per
+  shard (the Redis single-bgsave discipline). `SAVE` keeps its
+  synchronous, blocking-durable contract — and is skipped with a log
+  line if it races an in-flight background job.
+- **`INFO persistence` real fields**: `aof_rewrite_in_progress` now
+  reports the answering shard's actual state (it was a stubbed `0`),
+  and the new `aof_rewrites_total` counts completed rewrites — the
+  completion signal for the now-asynchronous BGREWRITEAOF. Refreshed
+  per reactor tick.
+- **`kevy_store::Store::collect_snapshot` / `SnapshotView`** (embedded /
+  library users): an O(n)-shallow, `Send` point-in-time view —
+  serialize on any thread while the store keeps mutating.
+  `kevy_persist` serializers accept either a live store or a view
+  (`SnapshotSource`).
+
+### Changed
+
+- **`BGSAVE` resets the AOF at the snapshot point** (replacing the old
+  save-then-truncate): the new log carries exactly the post-snapshot
+  writes, teed while the background save ran. Crash exposure is
+  unchanged — the old log keeps receiving every write until the swap,
+  and the snapshot-rename + log-swap commit happens in one adjacent
+  critical section.
+- **Embedded re-shard output is server-identical**: a shard-layout
+  migration now writes per-shard `dump-{i}.rdb` snapshots + fresh AOFs
+  (previously rewritten-in-place AOFs), and is crash-idempotent via the
+  same `reshard.journal` roll-forward the server uses — a crash
+  mid-migration previously lost the migrated state from disk. Backup
+  rename failures now propagate instead of being silently ignored.
+- **Perfgate methodology** (`bench/perfgate.sh`): each angle now
+  measures 3 fresh server instances and gates on the median across
+  instances (was 3 rounds against one instance). Instance-to-instance
+  spread is the dominant noise axis (±5%); the baseline was re-recorded
+  accordingly. Affects contributors only.
+
+### Fixed
+
+- **Embedded `Store::save_snapshot` no longer double-applies history on
+  restart**: it never reset the AOF, so a restart with both files
+  replayed the full log on top of the snapshot — duplicating
+  non-idempotent commands (RPUSH'd elements doubled). It now performs
+  the same tee'd log reset as `BGSAVE`; a save that races the
+  background auto-rewrite waits it out (bounded) instead of writing a
+  snapshot whose log would still double-apply.
+
+### Internal
+
+- One crash-safe reshard engine (`kevy_persist::reshard`) behind both
+  the server and embedded migration paths; per-shard persistence file
+  names have a single source of truth (`kevy_persist::layout`); the
+  epoll/io_uring reactors share one cross-core drain
+  (`drain_inbound_core`); the CLUSTER topology emitters share one
+  derivation.
+
+### Known limitations
+
+- `BGSAVE` / `BGREWRITEAOF` completion is asynchronous: poll
+  `INFO persistence` (`aof_rewrite_in_progress` / `aof_rewrites_total`)
+  rather than expecting files to have swapped when `+OK` arrives.
+- A collection first mutated while a snapshot is in flight is deep-
+  copied at that moment (copy-on-write granularity is the whole
+  collection) — a write touching a very large hash/zset during a
+  background save pays that copy once.
+- Tombstone-PEL, cross-shard XREADGROUP, and cross-slot multi-key
+  items carried from v1.15.0 (below).
+
 ## [v1.15.0] — 2026-06-11
 
 Minor release: **stream consumer-group / PEL persistence** (closing
