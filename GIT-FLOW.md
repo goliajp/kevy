@@ -91,6 +91,17 @@ then rerun; never "just skip" the gate. The baseline lives in
 `bench/PERF-BASELINE.json`; raise it (`--update-baseline` + commit) only
 when a deliberate improvement lands, never to make a red gate green.
 
+Methodology (since 2026-06-12): each angle measures **3 fresh server
+instances** and gates on the median across them — instance-to-instance
+spread (page placement / IRQ luck at server start, ±5 % on the 8sh
+angles) dominates round-to-round noise (±2 %), so re-rolling rounds
+against one instance just re-samples one draw. If the gate reds on a
+single angle near the floor, first compare the *reference* binary
+(`/tmp/kevy_gate`) on the same box state before suspecting the code; a
+red on both is box state or methodology, not a regression. Preflight's
+instantaneous idle check passes through IO-bound interference — eyeball
+`uptime` (load < 1) before trusting a result.
+
 ## Release flow — stabilize → tag → publish
 
 A release is a `vX.Y.Z` tag on `master` with the matching workspace
