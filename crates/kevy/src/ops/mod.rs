@@ -170,7 +170,23 @@ fn info_memory(cfg: &Config, store: &Store, b: &mut String) {
     b.push_str("\r\n");
 }
 
+thread_local! {
+    /// The answering shard's background-persistence view, refreshed by the
+    /// reactor tick via `Commands::on_persist_stats` (thread-per-core:
+    /// thread == shard, the `cluster::CURRENT_SHARD` pattern). Stale by at
+    /// most one tick interval. `(in_flight, aof_rewrites_total)`.
+    static PERSIST_STATS: std::cell::Cell<(bool, u64)> =
+        const { std::cell::Cell::new((false, 0)) };
+}
+
+/// Record the reactor's persistence stats for `INFO persistence` (see
+/// [`PERSIST_STATS`]).
+pub(crate) fn set_persist_stats(in_flight: bool, aof_rewrites_total: u64) {
+    PERSIST_STATS.with(|c| c.set((in_flight, aof_rewrites_total)));
+}
+
 fn info_persistence(cfg: &Config, b: &mut String) {
+    let (in_flight, rewrites) = PERSIST_STATS.with(|c| c.get());
     b.push_str("# Persistence\r\n");
     b.push_str("loading:0\r\n");
     b.push_str(&format!(
@@ -181,7 +197,14 @@ fn info_persistence(cfg: &Config, b: &mut String) {
         "appendfsync:{}\r\n",
         appendfsync_str(cfg.persistence.appendfsync)
     ));
-    b.push_str("aof_rewrite_in_progress:0\r\n");
+    // The answering shard's view (each shard persists independently);
+    // refreshed per reactor tick, so in-progress flips within ~100 ms of
+    // a BGSAVE/BGREWRITEAOF starting or finishing.
+    b.push_str(&format!(
+        "aof_rewrite_in_progress:{}\r\n",
+        if in_flight { 1 } else { 0 }
+    ));
+    b.push_str(&format!("aof_rewrites_total:{rewrites}\r\n"));
     b.push_str("aof_last_rewrite_time_sec:-1\r\n");
     b.push_str("\r\n");
 }

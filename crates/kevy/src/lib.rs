@@ -189,6 +189,13 @@ impl Commands for KevyCommands {
         ops::cluster::set_current_shard(shard);
     }
 
+    fn on_persist_stats(&self, in_flight: bool, aof_rewrites_total: u64) {
+        // Same thread-local pattern as `on_shard_start`: `INFO persistence`
+        // answers with the answering shard's view (the COUNTKEYSINSLOT
+        // precedent), refreshed by the reactor tick.
+        ops::set_persist_stats(in_flight, aof_rewrites_total);
+    }
+
     fn shard_tick_interval_ms(&self) -> u64 {
         // hz=0 disables the active reaper (lazy expiry still runs); else
         // every `1000/hz` ms — capped at 10 s so a misconfig can't park the

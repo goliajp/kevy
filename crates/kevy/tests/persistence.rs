@@ -808,3 +808,48 @@ fn bgsave_writes_snapshot_in_background_and_keeps_post_save_writes() {
     });
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `INFO persistence` reflects the answering shard's real background
+/// state: rewrites_total increments once a BGREWRITEAOF lands, and
+/// in_progress returns to 0 (both refreshed by the reactor tick).
+#[test]
+fn info_persistence_reports_rewrite_completion() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-info-persist-{}",
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let port = free_port();
+    with_runtime(port, &dir, 1, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        for i in 0..100u32 {
+            c.write_all(&req(&[b"SET", format!("k{i}").as_bytes(), b"v"])).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+        }
+        c.write_all(&req(&[b"BGREWRITEAOF"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        let info = |c: &mut std::net::TcpStream| -> String {
+            c.write_all(&req(&[b"INFO", b"persistence"])).unwrap();
+            // Bulk reply: $<len>\r\n<body>\r\n — read the length line, then body.
+            let mut one = [0u8; 1];
+            let mut hdr = Vec::new();
+            loop {
+                c.read_exact(&mut one).unwrap();
+                hdr.push(one[0]);
+                if hdr.ends_with(b"\r\n") {
+                    break;
+                }
+            }
+            let len: usize =
+                String::from_utf8_lossy(&hdr[1..hdr.len() - 2]).parse().unwrap();
+            let mut body = vec![0u8; len + 2];
+            c.read_exact(&mut body).unwrap();
+            String::from_utf8_lossy(&body).into_owned()
+        };
+        wait_for("INFO to report the completed rewrite", || {
+            let s = info(&mut c);
+            s.contains("aof_rewrites_total:1") && s.contains("aof_rewrite_in_progress:0")
+        });
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
