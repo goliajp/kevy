@@ -16,6 +16,7 @@ use crate::map::KevyMap;
 /// `std::HashSet` only by hashing through [`KevyHash`] (one-call inlinable)
 /// and exposing the underlying `KevyMap`'s bucket-address API via
 /// [`KevySet::as_map`] for callers that want prefetch.
+#[derive(Clone)]
 pub struct KevySet<K>(KevyMap<K, ()>);
 
 impl<K> KevySet<K> {

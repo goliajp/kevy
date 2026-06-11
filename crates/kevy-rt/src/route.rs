@@ -19,8 +19,12 @@ pub enum Route {
     Dbsize,
     /// Flush every shard.
     Flush,
-    /// Snapshot every shard's store to disk.
+    /// Snapshot every shard's store to disk, synchronously (`SAVE` —
+    /// blocks until durable, the Redis contract for the explicit form).
     Save,
+    /// `BGSAVE` — collect a COW view per shard and persist in the
+    /// background; the command returns once the views are frozen.
+    BgSave,
     /// `BGREWRITEAOF` — rebuild every shard's AOF from in-memory state.
     /// Synchronous in v1.0 (each shard blocks for its own rewrite duration).
     RewriteAof,

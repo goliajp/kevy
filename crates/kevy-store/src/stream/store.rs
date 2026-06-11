@@ -10,6 +10,7 @@ use super::{
 };
 use crate::value::*;
 use crate::{Entry, Store, StoreError};
+use std::sync::Arc;
 
 /// Cloned-out view of stream entries, the cross-module wire form. Keeps
 /// the same shape Redis sends and lets the callers stay decoupled from
@@ -28,11 +29,11 @@ impl Store {
             }
             self.insert_entry(
                 SmallBytes::from_slice(key),
-                Entry::new(Value::Stream(Box::default()), None),
+                Entry::new(Value::Stream(Arc::default()), None),
             );
         }
         match &mut self.map.get_mut(key).expect("present").value {
-            Value::Stream(s) => Ok(Some(s)),
+            Value::Stream(s) => Ok(Some(Arc::make_mut(s))),
             _ => Err(StoreError::WrongType),
         }
     }

@@ -304,3 +304,59 @@ fn v3_snapshot_without_groups_still_loads() {
     assert_eq!(view.group_count(), 0);
     let _ = std::fs::remove_file(&path);
 }
+
+// ─────────────── SnapshotView serialization (COW E-3) ───────────────
+
+fn populated_store() -> Store {
+    let mut s = Store::new();
+    s.set(b"s1", b"plain".to_vec(), None, false, false);
+    s.set(b"s2", vec![b'x'; 100], None, false, false); // heap str
+    s.hset(b"h", &[(b"f".to_vec(), b"v".to_vec())]).unwrap();
+    s.rpush(b"l", &[b"a".to_vec(), b"b".to_vec()]).unwrap();
+    s.sadd(b"set", &[b"m1".to_vec(), b"m2".to_vec()]).unwrap();
+    s.zadd(b"z", &[(1.5, b"one".to_vec())]).unwrap();
+    s
+}
+
+/// A frozen view serializes byte-identically to the live store it froze
+/// (no-TTL data: TTL deadlines are stamped at write time and would
+/// legitimately differ between two writes).
+#[test]
+fn view_snapshot_bytes_match_store_snapshot() {
+    let s = populated_store();
+    let view = s.collect_snapshot();
+    let dir = std::env::temp_dir();
+    let p_store = dir.join(format!("kevy-e3-store-{}.rdb", std::process::id()));
+    let p_view = dir.join(format!("kevy-e3-view-{}.rdb", std::process::id()));
+    save_snapshot(&s, &p_store).unwrap();
+    save_snapshot(&view, &p_view).unwrap();
+    assert_eq!(std::fs::read(&p_store).unwrap(), std::fs::read(&p_view).unwrap());
+    let _ = std::fs::remove_file(&p_store);
+    let _ = std::fs::remove_file(&p_view);
+}
+
+/// View-serialized AOF replays into an equivalent store, and reflects the
+/// collect instant — not mutations that landed during/after serialization.
+#[test]
+fn view_aof_round_trips_at_the_collect_instant() {
+    let mut s = populated_store();
+    let view = s.collect_snapshot();
+    // Post-collect mutations must not appear in the dump.
+    s.set(b"s1", b"mutated".to_vec(), None, false, false);
+    s.hset(b"h", &[(b"f2".to_vec(), b"late".to_vec())]).unwrap();
+
+    let p = std::env::temp_dir().join(format!("kevy-e3-aof-{}.aof", std::process::id()));
+    let (keys, bytes) = dump_aof(&p, &view).unwrap();
+    assert_eq!(keys, 6);
+    assert!(bytes > 0);
+
+    let mut restored = Store::new();
+    replay_aof(&p, |args| {
+        crate::tests_rewrite::apply_for_test(&mut restored, &args);
+    })
+    .unwrap();
+    assert_eq!(restored.get(b"s1").unwrap(), Some(b"plain".as_slice()));
+    assert_eq!(restored.hget(b"h", b"f2").unwrap(), None);
+    assert_eq!(restored.hget(b"h", b"f").unwrap(), Some(b"v".as_slice()));
+    let _ = std::fs::remove_file(&p);
+}

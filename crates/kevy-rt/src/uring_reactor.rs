@@ -238,7 +238,7 @@ impl<C: Commands> Shard<C> {
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
                         self.apply_live_runtime_config(&mut tick_interval);
-                        self.maybe_auto_rewrite_aof();
+                        self.tick_persist();
                         last_tick = now;
                     }
                 }
@@ -415,7 +415,7 @@ impl<C: Commands> Shard<C> {
         // the replies — so durability still precedes reply.
         self.aof_begin_group();
         let outcome = self.dispatch_batch(cid, &input_buf);
-        self.uring_aof_end_group();
+        self.aof_end_group_logged();
         if !outcome.conn_gone {
             input_buf.drain(..outcome.consumed);
             if let Some(c) = self.conns.get_mut(&cid) {
@@ -443,15 +443,6 @@ impl<C: Commands> Shard<C> {
         }
         self.blocked.drop_for_conn(cid);
         self.cancel_xshard_on_close(cid);
-    }
-
-    /// Close the AOF group-commit window, best-effort (the io_uring path's
-    /// handlers return `()`; a sync error is logged like other AOF failures).
-    #[inline]
-    pub(crate) fn uring_aof_end_group(&mut self) {
-        if let Err(e) = self.aof_end_group() {
-            eprintln!("kevy: shard {} aof group sync failed: {e}", self.id);
-        }
     }
 
     /// A write completed: advance progress; resubmit the remainder next loop.

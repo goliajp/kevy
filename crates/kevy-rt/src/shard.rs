@@ -148,6 +148,13 @@ pub(crate) struct Shard<C: Commands> {
     /// `ResponseBatch` handler drops each returned husk back in. See
     /// [`kevy_resp::ArgvPool`] for the ownership cycle.
     pub(crate) argv_pool: kevy_resp::ArgvPool,
+    /// Background persister (BGSAVE / BGREWRITEAOF / auto-rewrite); the
+    /// thread spawns lazily on the first job. Declared last on purpose:
+    /// appending here leaves every pre-existing field's offset unchanged
+    /// (adding it mid-struct shifted the forwarded-path hot fields —
+    /// `request_batch` / `argv_pool` / `reply_scratch` — and cost ~4% on
+    /// the 8sh forward-heavy GET angle). See [`crate::persist_worker`].
+    pub(crate) persist: crate::persist_worker::PersistWorker,
 }
 
 // `SPIN_LIMIT` / `PARK_TIMEOUT_MS` / `TICK_CHECK_EVERY` moved to per-
@@ -166,12 +173,12 @@ impl<C: Commands> Shard<C> {
 
     /// This shard's snapshot file: `<data_dir>/dump-<id>.rdb`.
     pub(crate) fn snapshot_path(&self) -> PathBuf {
-        self.data_dir.join(format!("dump-{}.rdb", self.id))
+        kevy_persist::layout::snapshot_path(&self.data_dir, self.id)
     }
 
     /// This shard's append-only log: `<data_dir>/aof-<id>.aof`.
     pub(crate) fn aof_path(&self) -> PathBuf {
-        self.data_dir.join(format!("aof-{}.aof", self.id))
+        kevy_persist::layout::aof_path(&self.data_dir, self.id)
     }
 
     pub(crate) fn run(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {
@@ -323,7 +330,7 @@ impl<C: Commands> Shard<C> {
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
                         self.apply_live_runtime_config(&mut tick_interval);
-                        self.maybe_auto_rewrite_aof();
+                        self.tick_persist();
                         last_tick = now;
                     }
                 }

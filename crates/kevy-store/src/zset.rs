@@ -3,6 +3,7 @@
 use crate::util::*;
 use crate::value::*;
 use crate::{Entry, Store, StoreError};
+use std::sync::Arc;
 
 impl Store {
     // ---- sorted sets ---------------------------------------------------
@@ -14,11 +15,11 @@ impl Store {
             }
             self.insert_entry(
                 SmallBytes::from_slice(key),
-                Entry::new(Value::ZSet(Box::default()), None),
+                Entry::new(Value::ZSet(Arc::default()), None),
             );
         }
         match &mut self.map.get_mut(key).expect("present").value {
-            Value::ZSet(z) => Ok(Some(z)),
+            Value::ZSet(z) => Ok(Some(Arc::make_mut(z))),
             _ => Err(StoreError::WrongType),
         }
     }
@@ -27,7 +28,7 @@ impl Store {
         match self.live_entry(key) {
             None => Ok(None),
             Some(e) => match &e.value {
-                Value::ZSet(z) => Ok(Some(z)),
+                Value::ZSet(z) => Ok(Some(z.as_ref())),
                 _ => Err(StoreError::WrongType),
             },
         }

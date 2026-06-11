@@ -4,7 +4,6 @@
 
 use kevy_persist::save_snapshot;
 use kevy_resp::Argv;
-use std::time::Instant;
 
 use crate::Commands;
 use crate::message::{DispatchMeta, GatherKind, Gathered, Op, Part, SmallReply};
@@ -26,30 +25,17 @@ impl<C: Commands> Shard<C> {
         proto: RespVersion,
         meta: DispatchMeta,
     ) -> Part {
-        // SLOWLOG OFF (`slower_than_micros < 0`) skips the clock pair.
-        let t0 = if self.slowlog.slower_than_micros >= 0 {
-            Some(Instant::now())
-        } else {
-            None
-        };
-        // Per-cmd proto picks the reply encoder. V2 is the hot path;
-        // the V3 arm only fires after a HELLO 3 negotiation upstream.
+        let t0 = self.slowlog_t0();
         self.reply_scratch.clear();
-        match proto {
-            RespVersion::V2 => {
-                self.commands
-                    .dispatch_into(&mut self.store, args, &mut self.reply_scratch)
-            }
-            RespVersion::V3 => {
-                self.commands
-                    .dispatch_into_resp3(&mut self.store, args, &mut self.reply_scratch)
-            }
-        }
+        crate::exec_dispatch::dispatch_proto(
+            &self.commands,
+            &mut self.store,
+            args,
+            proto,
+            &mut self.reply_scratch,
+        );
         let reply = SmallReply::from_slice(&self.reply_scratch);
-        if let Some(t0) = t0 {
-            let elapsed = t0.elapsed().as_micros().min(u64::MAX as u128) as u64;
-            self.slowlog_record(args, elapsed);
-        }
+        self.slowlog_maybe(t0, args);
         if meta.is_write {
             self.post_write_housekeeping(args, meta);
         }
@@ -222,6 +208,14 @@ impl<C: Commands> Shard<C> {
                 Part::WatchVersions(out)
             }
             Op::Save => {
+                // A synchronous SAVE racing an in-flight background job
+                // would truncate the AOF mid-tee; skip with a log line
+                // (Redis's SAVE-during-BGSAVE error, simplified for the
+                // multi-shard +OK aggregation).
+                if self.persist.busy() || self.aof.as_ref().is_some_and(|a| a.is_rewriting()) {
+                    eprintln!("kevy: shard {} SAVE skipped (background persist in flight)", self.id);
+                    return Part::Ok;
+                }
                 let path = self.snapshot_path();
                 match save_snapshot(&self.store, &path) {
                     // Snapshot now captures full state → reset the AOF.
@@ -278,16 +272,19 @@ impl<C: Commands> Shard<C> {
                 };
                 Part::XReadElement { index, element }
             }
+            // COW background save: freeze the view here (short pause),
+            // serialize + spill on the persist worker; the tick commits.
+            Op::BgSave => {
+                self.start_bg_save();
+                Part::Ok
+            }
             Op::RewriteAof => {
-                // Each shard rewrites its own AOF in place. No-op if AOF is
-                // disabled (Redis returns "ERR" in that case; v1.0 returns
-                // +OK to keep the multi-shard reply aggregation simple — the
-                // disabled-AOF case is documented in BGREWRITEAOF's reply).
-                if let Some(aof) = &mut self.aof
-                    && let Err(e) = aof.rewrite_from(&self.store)
-                {
-                    eprintln!("kevy: shard {} aof rewrite failed: {e}", self.id,);
-                }
+                // Each shard rewrites its own AOF via a COW view dumped on
+                // the persist worker (the tick swaps it in). No-op if AOF
+                // is disabled (Redis returns "ERR" in that case; kevy
+                // returns +OK to keep the multi-shard reply aggregation
+                // simple — documented in BGREWRITEAOF's reply).
+                self.start_bg_rewrite();
                 Part::Ok
             }
         }
