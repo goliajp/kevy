@@ -9,23 +9,29 @@
 
 use crate::SNAPSHOT_BUF_CAP;
 use kevy_resp::{Argv, ArgvView};
-use kevy_store::{Store, StreamData, StreamId, Value};
+use kevy_store::{StreamData, StreamId, Value};
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
 
-/// Write `store`'s current state to `path` as a sequence of mutating RESP
+/// Write `src`'s state (a live [`Store`] or a frozen
+/// [`kevy_store::SnapshotView`]) to `path` as a sequence of mutating RESP
 /// commands prefixed with [`crate::aof::AOF_MAGIC`]; flush + fsync before
 /// returning. Returns `(keys, bytes)`. The magic header is consistent with
 /// `Aof::open`'s fresh-file behavior so BGREWRITEAOF-produced files replay
 /// the same way live-appended ones do.
-pub(crate) fn dump_store_to_aof(path: &Path, store: &Store) -> io::Result<(u64, u64)> {
+///
+/// `pub` (not just crate-internal) because the COW rewrite path calls it
+/// from a background thread: [`crate::Aof::begin_view_rewrite`] starts the
+/// tee, this serializes the frozen view to the temp file off-thread, and
+/// `finish_concurrent_rewrite` swaps it in.
+pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<(u64, u64)> {
     let f = File::create(path)?;
     let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, f);
     w.write_all(crate::aof::AOF_MAGIC)?;
     let mut keys = 0u64;
     let mut err: Option<io::Error> = None;
-    store.snapshot_each(|key, value, ttl_ms| {
+    src.for_each_entry(|key, value, ttl_ms| {
         if err.is_some() {
             return;
         }
@@ -47,16 +53,16 @@ pub(crate) fn dump_store_to_aof(path: &Path, store: &Store) -> io::Result<(u64, 
     Ok((keys, bytes))
 }
 
-/// Serialize `store`'s current state into an in-memory AOF image (magic +
-/// the same RESP command stream `dump_store_to_aof` writes). Returns the
-/// bytes and the key count. Used by the non-blocking rewrite: the caller
-/// produces this buffer under the store lock, then spills it to disk *off*
-/// the lock. `Vec<u8>` is an infallible `Write`, so no error path exists.
-pub(crate) fn dump_store_to_buf(store: &Store) -> (Vec<u8>, u64) {
+/// Serialize `src`'s state into an in-memory AOF image (magic + the same
+/// RESP command stream [`dump_aof`] writes). Returns the bytes and the key
+/// count. Used by the non-blocking rewrite: the caller produces this buffer
+/// under the store lock, then spills it to disk *off* the lock. `Vec<u8>`
+/// is an infallible `Write`, so no error path exists.
+pub(crate) fn dump_store_to_buf<S: crate::SnapshotSource>(src: &S) -> (Vec<u8>, u64) {
     let mut buf = Vec::with_capacity(crate::SNAPSHOT_BUF_CAP);
     buf.extend_from_slice(crate::aof::AOF_MAGIC);
     let mut keys = 0u64;
-    store.snapshot_each(|key, value, ttl_ms| {
+    src.for_each_entry(|key, value, ttl_ms| {
         let _ = write_value_as_commands(&mut buf, key, value, ttl_ms);
         keys += 1;
     });

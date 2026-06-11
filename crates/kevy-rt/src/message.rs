@@ -89,7 +89,10 @@ pub(crate) enum Op {
     Dbsize,
     Flush,
     Save,
-    /// Rebuild the AOF from this shard's in-memory state (BGREWRITEAOF).
+    /// Background snapshot: freeze a COW view now, persist off-thread.
+    BgSave,
+    /// Rebuild the AOF from this shard's in-memory state (BGREWRITEAOF),
+    /// serialized off-thread from a COW view.
     RewriteAof,
     /// Set these key/value pairs (MSET).
     MSet(KvPairs),

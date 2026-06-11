@@ -414,3 +414,68 @@ fn set_extend() {
     s.extend(0..5u64);
     assert_eq!(s.len(), 5);
 }
+
+// ──────────────────── Clone (COW-serialization E-1) ────────────────────
+
+#[test]
+fn clone_preserves_entries_and_independence() {
+    let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();
+    for i in 0..1000u64 {
+        m.insert(format!("k{i}").into_bytes(), i);
+    }
+    let c = m.clone();
+    assert_eq!(c.len(), 1000);
+    for i in 0..1000u64 {
+        assert_eq!(c.get(format!("k{i}").as_bytes()), Some(&i));
+    }
+    // Independence both ways.
+    m.insert(b"k5".to_vec(), 999_999);
+    m.remove(b"k7".as_slice());
+    assert_eq!(c.get(b"k5".as_slice()), Some(&5));
+    assert_eq!(c.get(b"k7".as_slice()), Some(&7));
+}
+
+/// Tombstones must survive the clone: probes walk through DELETED and stop
+/// at EMPTY, so a dropped tombstone would strand every key inserted past it.
+#[test]
+fn clone_after_heavy_deletion_keeps_probes_correct() {
+    let mut m: KevyMap<Vec<u8>, u64> = KevyMap::new();
+    for i in 0..4096u64 {
+        m.insert(format!("key-{i}").into_bytes(), i);
+    }
+    for i in (0..4096u64).step_by(2) {
+        assert!(m.remove(format!("key-{i}").as_bytes()).is_some());
+    }
+    let c = m.clone();
+    assert_eq!(c.len(), m.len());
+    for i in 0..4096u64 {
+        let want = (i % 2 == 1).then_some(i);
+        assert_eq!(c.get(format!("key-{i}").as_bytes()).copied(), want, "key-{i}");
+    }
+}
+
+#[test]
+fn clone_empty_and_unallocated() {
+    let m: KevyMap<Vec<u8>, u64> = KevyMap::new();
+    let c = m.clone();
+    assert!(c.is_empty());
+    assert_eq!(c.capacity(), 0);
+
+    let mut m2: KevyMap<Vec<u8>, u64> = KevyMap::with_capacity(64);
+    m2.insert(b"a".to_vec(), 1);
+    m2.remove(b"a".as_slice());
+    let c2 = m2.clone(); // allocated, zero live entries, one tombstone
+    assert!(c2.is_empty());
+    assert_eq!(c2.capacity(), m2.capacity());
+}
+
+#[test]
+fn clone_set_round_trip() {
+    let mut s: KevySet<Vec<u8>> = KevySet::new();
+    for i in 0..100u32 {
+        s.insert(format!("m{i}").into_bytes());
+    }
+    let c = s.clone();
+    assert_eq!(c.len(), 100);
+    assert!(c.contains(b"m42".as_slice()));
+}

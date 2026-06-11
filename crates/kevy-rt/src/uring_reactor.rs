@@ -238,7 +238,7 @@ impl<C: Commands> Shard<C> {
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
                         self.apply_live_runtime_config(&mut tick_interval);
-                        self.maybe_auto_rewrite_aof();
+                        self.tick_persist();
                         last_tick = now;
                     }
                 }

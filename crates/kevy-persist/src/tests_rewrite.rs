@@ -13,7 +13,7 @@ use std::time::Duration;
 /// canonical mutating verbs the rewriter emits back into Store mutations.
 /// Mirrors a subset of `kevy::dispatch` — enough for the verbs
 /// `dump_store_to_aof` actually emits.
-fn apply_for_test(store: &mut Store, args: &Argv) {
+pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
     let verb = args[0].to_ascii_uppercase();
     match verb.as_slice() {
         b"SET" => {

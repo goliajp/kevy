@@ -89,7 +89,8 @@ impl Commands for KevyCommands {
             | b"CLIENT" | b"SELECT" => Route::Local,
             b"DBSIZE" => Route::Dbsize,
             b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
-            b"SAVE" | b"BGSAVE" => Route::Save,
+            b"SAVE" => Route::Save,
+            b"BGSAVE" => Route::BgSave,
             b"BGREWRITEAOF" => Route::RewriteAof,
             // Cross-shard multi-key (malformed arity falls back to Local so the
             // dispatch stub returns the arity error).

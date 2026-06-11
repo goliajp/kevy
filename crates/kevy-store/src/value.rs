@@ -4,6 +4,7 @@ pub use kevy_bytes::SmallBytes;
 use kevy_map::{KevyMap, KevySet};
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, VecDeque};
+use std::sync::Arc;
 
 /// Backing structure for a Hash value — [`KevyMap`] keyed by [`SmallBytes`]
 /// (22 B inline / heap-else). Field names ≤22B (the vast majority — `name`,
@@ -59,7 +60,7 @@ impl ScoreBound {
 /// Sorted set: a member→score map plus a B-tree ordered by `(score, member)`.
 /// (A B-tree is cache-friendlier than Redis's skiplist; `ZRANK` is O(n) here —
 /// an order-statistics tree for O(log n) rank is a later perf item.)
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ZSetData {
     pub(crate) by_member: KevyMap<SmallBytes, f64>,
     /// The `(score, member)` index is still keyed by `Vec<u8>` member —
@@ -101,23 +102,35 @@ impl ZSetData {
 
 /// A stored value. One variant per Redis type.
 ///
-/// The collection variants are **boxed** so the enum is only as big as `Str`
-/// (24 B) + tag = 32 B, not the 56 B `ZSetData` — every `Entry` (incl. the
-/// common string case) is then ~48 B instead of ~80 B, so the hashbrown bucket
-/// array is ~40% denser/smaller (fewer cache misses on a large keyspace, less
-/// RSS). The extra pointer-chase lands only on collection ops, not the hot
-/// string GET path.
+/// The collection variants live behind a **shared pointer** (`Arc`) so the
+/// enum is only as big as `Str` (24 B) + tag = 32 B, not the 56 B `ZSetData`
+/// — every `Entry` (incl. the common string case) is then ~48 B instead of
+/// ~80 B, so the bucket array is ~40% denser/smaller (fewer cache misses on
+/// a large keyspace, less RSS). The extra pointer-chase lands only on
+/// collection ops, not the hot string GET path.
+///
+/// `Arc` (same 8 B as the previous `Box`) is what makes O(short-pause)
+/// persistence possible: [`crate::Store::collect_snapshot`] bumps each
+/// collection's refcount instead of serializing it, and a background thread
+/// walks the frozen payloads at leisure. Mutations go through
+/// [`std::sync::Arc::make_mut`] — a single uniqueness check (the steady
+/// state, no snapshot in flight) or a copy-on-write deep clone when a
+/// snapshot still holds the payload.
 ///
 /// `Str` holds a [`SmallBytes`] (24 B, same size as `Vec<u8>`) so byte strings
 /// up to 22 bytes live **inline inside the bucket**, killing the second cache
 /// miss the value pointer-chase used to cost on large-keyspace GETs.
+/// `Clone` is the snapshot-collect primitive: `Str` copies its bytes
+/// (inline = 24 B memcpy; heap = one allocation), collections bump a
+/// refcount. See [`crate::Store::collect_snapshot`].
+#[derive(Clone)]
 pub enum Value {
     Str(SmallBytes),
-    Hash(Box<HashData>),
-    List(Box<ListData>),
-    Set(Box<SetData>),
-    ZSet(Box<ZSetData>),
-    Stream(Box<crate::stream::StreamData>),
+    Hash(Arc<HashData>),
+    List(Arc<ListData>),
+    Set(Arc<SetData>),
+    ZSet(Arc<ZSetData>),
+    Stream(Arc<crate::stream::StreamData>),
 }
 
 const _: () = {

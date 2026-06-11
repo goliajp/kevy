@@ -82,6 +82,7 @@ mod exec_rename;
 mod exec_slowlog;
 mod exec_watch;
 mod inbox;
+mod persist_worker;
 mod message;
 mod reduce;
 mod reshard;
