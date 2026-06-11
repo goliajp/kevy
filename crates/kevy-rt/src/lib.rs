@@ -189,6 +189,14 @@ pub trait Commands: Clone + Send + 'static {
     /// Default: no-op.
     fn on_shard_start(&self, _shard: usize) {}
 
+    /// Per-tick persistence-stats publication: whether this shard has a
+    /// background save/rewrite in flight and how many AOF rewrites have
+    /// completed since open. Command layers that serve `INFO persistence`
+    /// stash these in a thread-local (thread-per-core: the answering
+    /// thread *is* the shard, same pattern as [`Self::on_shard_start`]).
+    /// Default: no-op.
+    fn on_persist_stats(&self, _in_flight: bool, _aof_rewrites_total: u64) {}
+
     /// Periodic shard housekeeping (the equivalent of Redis's `serverCron`).
     /// kevy uses this to run [`Store::tick_expire`] at the configured
     /// `[expiry].hz`. Default no-op so non-kevy embedders / runtimes can
