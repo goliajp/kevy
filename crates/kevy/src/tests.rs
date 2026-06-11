@@ -200,7 +200,7 @@ fn route_keyspace_verbs() {
     assert!(matches!(c.route(&argv(&[b"FLUSHDB"])), Route::Flush));
     assert!(matches!(c.route(&argv(&[b"FLUSHALL"])), Route::Flush));
     assert!(matches!(c.route(&argv(&[b"SAVE"])), Route::Save));
-    assert!(matches!(c.route(&argv(&[b"BGSAVE"])), Route::Save));
+    assert!(matches!(c.route(&argv(&[b"BGSAVE"])), Route::BgSave));
     assert!(matches!(c.route(&argv(&[b"BGREWRITEAOF"])), Route::RewriteAof));
     assert!(matches!(c.route(&argv(&[b"RANDOMKEY"])), Route::RandomKey));
 }

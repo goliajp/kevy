@@ -10,7 +10,7 @@ use kevy_resp::ArgvView;
 use kevy_store::Store;
 
 use crate::{
-    dump_store_to_aof, dump_store_to_buf, estimate_multibulk_bytes, write_multibulk,
+    dump_store_to_buf, estimate_multibulk_bytes, write_multibulk,
 };
 
 /// 9-byte file-format header written at the start of every kevy-managed
@@ -272,7 +272,7 @@ impl Aof {
         self.file.flush()?;
 
         let tmp = rewrite_tmp_path(&self.path);
-        let (keys, bytes) = dump_store_to_aof(&tmp, store)?;
+        let (keys, bytes) = crate::dump_aof(&tmp, store)?;
 
         // Atomic replacement. After this, the OLD file descriptor in
         // `self.file` is open against an unlinked inode; new writes would
@@ -341,6 +341,34 @@ impl Aof {
     pub fn abort_concurrent_rewrite(&mut self) {
         self.rewrite_tee = None;
     }
+
+    /// Phase 1 of a **COW** rewrite: flush pending appends and start teeing
+    /// subsequent ones into the diff buffer. O(1) — the keyspace itself is
+    /// already frozen in the caller's `SnapshotView`. Returns the temp path
+    /// the background serializer must write (via [`crate::dump_aof`]),
+    /// after which [`Self::finish_concurrent_rewrite`] (same thread as the
+    /// appends) swaps it in, or [`Self::abort_concurrent_rewrite`] backs out.
+    ///
+    /// **Atomicity contract**: the `collect_snapshot` and this call must
+    /// happen with no `append` between them (same critical section / same
+    /// thread). A write squeezing in between would either miss the new AOF
+    /// (tee started late) or replay twice (tee started early) — and
+    /// commands like LPUSH are not idempotent.
+    pub fn begin_view_rewrite(&mut self) -> io::Result<std::path::PathBuf> {
+        self.file.flush()?;
+        self.rewrite_tee = Some(Vec::new());
+        Ok(rewrite_tmp_path(&self.path))
+    }
+}
+
+/// Write a fresh AOF base at `path`: just the magic header, fsynced. The
+/// COW background-save's log reset starts from this — the post-collect
+/// tee'd writes are appended by `finish_concurrent_rewrite` and the result
+/// swaps over the live AOF (the snapshot now carries the pre-collect state).
+pub fn write_aof_base(path: &Path) -> io::Result<()> {
+    let mut f = File::create(path)?;
+    f.write_all(AOF_MAGIC)?;
+    f.sync_all()
 }
 
 /// `<aof>.rewrite` — same-directory temp path so `rename(2)` stays atomic.

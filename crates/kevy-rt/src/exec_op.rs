@@ -208,6 +208,14 @@ impl<C: Commands> Shard<C> {
                 Part::WatchVersions(out)
             }
             Op::Save => {
+                // A synchronous SAVE racing an in-flight background job
+                // would truncate the AOF mid-tee; skip with a log line
+                // (Redis's SAVE-during-BGSAVE error, simplified for the
+                // multi-shard +OK aggregation).
+                if self.persist.busy() || self.aof.as_ref().is_some_and(|a| a.is_rewriting()) {
+                    eprintln!("kevy: shard {} SAVE skipped (background persist in flight)", self.id);
+                    return Part::Ok;
+                }
                 let path = self.snapshot_path();
                 match save_snapshot(&self.store, &path) {
                     // Snapshot now captures full state → reset the AOF.
@@ -264,16 +272,19 @@ impl<C: Commands> Shard<C> {
                 };
                 Part::XReadElement { index, element }
             }
+            // COW background save: freeze the view here (short pause),
+            // serialize + spill on the persist worker; the tick commits.
+            Op::BgSave => {
+                self.start_bg_save();
+                Part::Ok
+            }
             Op::RewriteAof => {
-                // Each shard rewrites its own AOF in place. No-op if AOF is
-                // disabled (Redis returns "ERR" in that case; v1.0 returns
-                // +OK to keep the multi-shard reply aggregation simple — the
-                // disabled-AOF case is documented in BGREWRITEAOF's reply).
-                if let Some(aof) = &mut self.aof
-                    && let Err(e) = aof.rewrite_from(&self.store)
-                {
-                    eprintln!("kevy: shard {} aof rewrite failed: {e}", self.id,);
-                }
+                // Each shard rewrites its own AOF via a COW view dumped on
+                // the persist worker (the tick swaps it in). No-op if AOF
+                // is disabled (Redis returns "ERR" in that case; kevy
+                // returns +OK to keep the multi-shard reply aggregation
+                // simple — documented in BGREWRITEAOF's reply).
+                self.start_bg_rewrite();
                 Part::Ok
             }
         }

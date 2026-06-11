@@ -281,6 +281,7 @@ impl<C: Commands> Runtime<C> {
                 parked: parked.clone(),
                 data_dir: self.data_dir.clone(),
                 aof,
+                persist: crate::persist_worker::PersistWorker::new(),
                 auto_aof_rewrite_pct: self.auto_aof_rewrite_pct,
                 auto_aof_rewrite_min_size: self.auto_aof_rewrite_min_size,
                 dirty: Vec::new(),

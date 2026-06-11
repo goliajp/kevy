@@ -3,6 +3,7 @@
 use crate::util::*;
 use crate::value::*;
 use crate::{Entry, Store, StoreError};
+use std::sync::Arc;
 use std::time::Instant;
 
 impl Store {
@@ -17,11 +18,11 @@ impl Store {
             }
             self.insert_entry(
                 SmallBytes::from_slice(key),
-                Entry::new(Value::Hash(Box::default()), None),
+                Entry::new(Value::Hash(Arc::default()), None),
             );
         }
         match &mut self.map.get_mut(key).expect("present").value {
-            Value::Hash(h) => Ok(Some(h)),
+            Value::Hash(h) => Ok(Some(Arc::make_mut(h))),
             _ => Err(StoreError::WrongType),
         }
     }
@@ -31,7 +32,7 @@ impl Store {
         match self.live_entry(key) {
             None => Ok(None),
             Some(e) => match &e.value {
-                Value::Hash(h) => Ok(Some(h)),
+                Value::Hash(h) => Ok(Some(h.as_ref())),
                 _ => Err(StoreError::WrongType),
             },
         }
@@ -156,6 +157,7 @@ impl Store {
             let h_entry = self.map.get_mut(key).expect("live");
             match &mut h_entry.value {
                 Value::Hash(h) => {
+                    let h = Arc::make_mut(h);
                     let mut r = 0usize;
                     let mut d: i64 = 0;
                     for f in fields {

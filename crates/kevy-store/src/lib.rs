@@ -51,6 +51,8 @@ mod hash;
 mod keyspace;
 mod list;
 mod set;
+mod snapshot;
+pub use snapshot::SnapshotView;
 mod stream;
 mod string;
 mod util;
@@ -386,3 +388,5 @@ pub(crate) fn key_heap_bytes_for(key: &[u8]) -> u64 {
 mod tests;
 #[cfg(test)]
 mod tests_memory;
+#[cfg(test)]
+mod tests_snapshot;

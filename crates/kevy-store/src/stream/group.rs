@@ -15,6 +15,7 @@ use crate::StoreError;
 
 /// One consumer group's state. Sorted PEL plus a map of known
 /// consumers (with cached pel_count for O(1) XINFO answers).
+#[derive(Clone)]
 pub struct ConsumerGroup {
     /// Highest ID delivered to any consumer in this group. Bumped by
     /// XREADGROUP with `>`; settable via XGROUP SETID.

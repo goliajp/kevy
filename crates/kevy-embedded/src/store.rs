@@ -239,15 +239,43 @@ impl Store {
     pub fn rewrite_aof(&self) -> io::Result<Option<RewriteStats>> {
         let mut agg: Option<RewriteStats> = None;
         for shard in self.shards.iter() {
-            let mut g = lock_write(shard);
-            let Inner { store, aof, bus: _ } = &mut *g;
-            let Some(aof) = aof else { continue };
-            if aof.is_rewriting() {
-                continue;
-            }
-            let before_bytes = aof.size_bytes();
             let start = Instant::now();
-            let stats = aof.rewrite_from(store)?;
+            // Phase 1 (locked): freeze the COW view + start the tee —
+            // O(n)-shallow, no serialization under the lock.
+            let (view, tmp, before_bytes) = {
+                let mut g = lock_write(shard);
+                let Inner { store, aof, bus: _ } = &mut *g;
+                let Some(aof) = aof else { continue };
+                if aof.is_rewriting() {
+                    continue;
+                }
+                let before = aof.size_bytes();
+                let view = store.collect_snapshot();
+                (view, aof.begin_view_rewrite()?, before)
+            };
+            // Phase 2 (unlocked): serialize + fsync the compacted log.
+            let keys = match kevy_persist::dump_aof(&tmp, &view) {
+                Ok((keys, _)) => keys,
+                Err(e) => {
+                    let mut g = lock_write(shard);
+                    if let Some(aof) = &mut g.aof {
+                        aof.abort_concurrent_rewrite();
+                    }
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(e);
+                }
+            };
+            // Phase 3 (locked): append the tee'd diff and swap.
+            let mut g = lock_write(shard);
+            let Some(aof) = &mut g.aof else { continue };
+            let stats = match aof.finish_concurrent_rewrite(&tmp, keys) {
+                Ok(s) => s,
+                Err(e) => {
+                    aof.abort_concurrent_rewrite();
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(e);
+                }
+            };
             if let Some(sink) = &self.config.metric_sink {
                 sink.emit(KevyMetric::Rewrite {
                     keys: stats.keys,
@@ -276,8 +304,14 @@ impl Store {
             } else {
                 kevy_persist::layout::snapshot_file(i)
             };
-            let g = lock_read(shard);
-            save_snapshot(&g.store, &dir.join(name))?;
+            // COW: freeze the view under the lock (O(n)-shallow), then
+            // serialize + fsync with the lock released — writers on this
+            // shard stall for the collect, not the disk write.
+            let view = {
+                let g = lock_read(shard);
+                g.store.collect_snapshot()
+            };
+            save_snapshot(&view, &dir.join(name))?;
         }
         Ok(true)
     }
