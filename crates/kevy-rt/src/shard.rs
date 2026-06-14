@@ -381,6 +381,10 @@ impl<C: Commands> Shard<C> {
                     let mut conn = Conn::new(sock);
                     conn.cluster = cluster;
                     self.conns.insert(id, conn);
+                    // Client connections only — cluster-bus links are internal.
+                    if !cluster {
+                        self.commands.on_connection();
+                    }
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,

@@ -9,6 +9,8 @@ fuzz/coverage/
 # kevy persistence artifacts (snapshots + append-only logs)
 dump-*.rdb
 aof-*.aof
+shards.meta
+.premigration/
 
 # Claude Code workspace — kept entirely local, not part of the public repo.
 .claude/

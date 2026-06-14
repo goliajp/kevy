@@ -62,12 +62,16 @@ impl Store {
                 if nx {
                     return false;
                 }
+                // SET replaces the TTL (cleared unless this SET carried EX/PX),
+                // so account the expire-set delta from the in-place swap.
+                let had_ttl = e.expire_at_ns.is_some();
                 e.value = new_value;
                 e.expire_at_ns = expire_at.and_then(crate::pack_deadline);
                 let new_w = key_heap + e.value.weight();
                 let delta = new_w as i64 - e.weight() as i64;
+                let ttl_delta = e.expire_at_ns.is_some() as i64 - had_ttl as i64;
                 e.set_weight(new_w);
-                Ok(delta)
+                Ok((delta, ttl_delta))
             }
             // Absent (or expired ⇒ already dropped by live_entry_mut): XX aborts.
             None => {
@@ -78,7 +82,11 @@ impl Store {
             }
         };
         match outcome {
-            Ok(delta) => self.apply_weight_delta(delta),
+            Ok((delta, ttl_delta)) => {
+                self.apply_weight_delta(delta);
+                self.adjust_expires(ttl_delta);
+            }
+            // New key: insert_entry accounts the expire-set itself.
             Err(entry) => {
                 self.insert_entry(SmallBytes::from_slice(key), entry);
             }

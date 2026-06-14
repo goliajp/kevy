@@ -71,7 +71,7 @@ fn append_strlen_type_flush() {
     assert_eq!(st.type_of(b"k"), "string");
     assert_eq!(st.type_of(b"missing"), "none");
     assert_eq!(st.dbsize(), 1);
-    st.flush();
+    st.flushall();
     assert_eq!(st.dbsize(), 0);
 }
 
@@ -479,3 +479,65 @@ fn xsetid_scalar_overrides_and_guards() {
     );
 }
 
+
+/// The O(1) `expires` counter must never drift from the O(n) ground truth
+/// across every TTL-transition path (insert / overwrite / EXPIRE / PERSIST /
+/// expire-in-past delete / DEL / FLUSHALL).
+#[test]
+fn expires_counter_tracks_ground_truth() {
+    let mut st = Store::new();
+    let ttl = Some(Duration::from_secs(100));
+    macro_rules! check {
+        () => {
+            assert_eq!(
+                st.expires_count(),
+                st.ttl_pending_count(),
+                "expires counter drifted from ttl_pending_count"
+            );
+        };
+    }
+
+    // New key WITH a TTL → +1; new key WITHOUT → no change.
+    assert!(st.set(b"a", s("v"), ttl, false, false));
+    check!();
+    assert!(st.set(b"b", s("v"), None, false, false));
+    check!();
+    assert_eq!(st.expires_count(), 1);
+
+    // EXPIRE adds a TTL to a key that had none → +1.
+    assert!(st.expire(b"b", Duration::from_secs(100)));
+    check!();
+    assert_eq!(st.expires_count(), 2);
+
+    // SET without EX overwrites and CLEARS the existing TTL → -1.
+    assert!(st.set(b"a", s("v2"), None, false, false));
+    check!();
+    assert_eq!(st.expires_count(), 1);
+
+    // PERSIST drops the remaining TTL → -1.
+    assert!(st.persist(b"b"));
+    check!();
+    assert_eq!(st.expires_count(), 0);
+
+    // DEL of a TTL'd key decrements via remove_entry.
+    assert!(st.set(b"c", s("v"), ttl, false, false));
+    check!();
+    assert_eq!(st.del(&[s("c")]), 1);
+    check!();
+    assert_eq!(st.expires_count(), 0);
+
+    // EXPIREAT in the past deletes immediately (remove_entry path).
+    assert!(st.set(b"d", s("v"), ttl, false, false));
+    check!();
+    assert!(st.expire_at_unix_ms(b"d", 1));
+    check!();
+    assert_eq!(st.expires_count(), 0);
+
+    // FLUSHALL resets the counter to zero.
+    assert!(st.set(b"e", s("v"), ttl, false, false));
+    assert!(st.set(b"f", s("v"), ttl, false, false));
+    assert_eq!(st.expires_count(), 2);
+    st.flushall();
+    check!();
+    assert_eq!(st.expires_count(), 0);
+}
