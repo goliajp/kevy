@@ -179,6 +179,10 @@ impl<C: Commands> Shard<C> {
                             conn.cluster = cluster;
                             self.conns.insert(ncid, conn);
                             io.insert(ncid, UringConn::new());
+                            // Client connections only — cluster-bus is internal.
+                            if !cluster {
+                                self.commands.on_connection();
+                            }
                         }
                     }
                     OP_RECV => {

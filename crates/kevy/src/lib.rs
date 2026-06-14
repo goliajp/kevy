@@ -187,6 +187,9 @@ impl Commands for KevyCommands {
         // thread-local carries per-shard identity into dispatch handlers
         // (CLUSTER MYID / the `myself` flag in CLUSTER NODES).
         ops::cluster::set_current_shard(shard);
+        // Cache this shard's INFO-stats slot for lock-free publish + counter
+        // bumps (see `ops::stats`).
+        ops::stats::register_shard(shard);
     }
 
     fn on_persist_stats(&self, in_flight: bool, aof_rewrites_total: u64) {
@@ -194,6 +197,14 @@ impl Commands for KevyCommands {
         // answers with the answering shard's view (the COUNTKEYSINSLOT
         // precedent), refreshed by the reactor tick.
         ops::set_persist_stats(in_flight, aof_rewrites_total);
+    }
+
+    fn on_command(&self) {
+        ops::stats::add_command();
+    }
+
+    fn on_connection(&self) {
+        ops::stats::add_connection();
     }
 
     fn shard_tick_interval_ms(&self) -> u64 {
@@ -226,6 +237,11 @@ impl Commands for KevyCommands {
             cfg.memory.maxmemory,
             map_eviction_policy(cfg.memory.maxmemory_policy),
         );
+        // Publish this shard's gauges (used_memory, key/expire counts, …) so
+        // `INFO`, answered on any one shard, can sum the process-wide view.
+        ops::stats::publish_gauges(store);
+        // The lead shard advances the process-wide ops-per-sec sampler.
+        ops::stats::sample_ops_if_lead();
     }
 
     fn live_runtime_config(&self) -> kevy_rt::LiveRuntimeConfig {

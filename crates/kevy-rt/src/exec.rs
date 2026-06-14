@@ -147,6 +147,9 @@ impl<C: Commands> Shard<C> {
         resolved: ResolvedCmd,
         cluster_conn: bool,
     ) {
+        // One client command at the dispatch boundary (before fan-out, so a
+        // multi-key command counts once) — INFO's total_commands_processed.
+        self.commands.on_command();
         let ResolvedCmd {
             route,
             is_quit,
