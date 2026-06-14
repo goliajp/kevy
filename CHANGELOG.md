@@ -4,6 +4,45 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.17.0] — 2026-06-14
+
+Minor release: **network `INFO` observability** — the Memory, Keyspace, and
+Stats sections now report the whole process rather than the single shard that
+happened to answer, plus an API-naming footgun fix. Both from a mailrs dogfood
+run of the kevy-server role. Workspace 1.16.0 → 1.17.0; kevy-embedded 1.1.20 →
+1.2.0; kevy-client 1.7.16 → 1.8.0 (the `flush` → `flushall` rename below).
+
+### Added
+
+- **`INFO` cross-shard aggregation.** The server runs one independent store per
+  shard and answers `INFO` on whichever shard the connection landed on, so the
+  Memory / Keyspace / Stats numbers previously reflected ~1/Nth of the process
+  (the same single-shard-view trap `DBSIZE` avoids by fanning out). A
+  process-wide per-shard stats registry now lets `INFO` sum every shard's slot:
+  - **`# Memory`** — `used_memory`, `used_memory_peak`, `evicted_keys` summed
+    across shards (was a single shard's slice, often `0`).
+  - **`# Keyspace`** — `db0:keys=N,expires=M,avg_ttl=0` (was empty).
+  - **`# Stats`** — `total_commands_processed`, `total_connections_received`,
+    `instantaneous_ops_per_sec` (Redis-style ring sampled over a ~1.6 s
+    window), and `expired_keys` (all were stubbed `0`).
+  Each shard publishes its gauges on the reactor tick and bumps command /
+  connection counters in the hot path (one thread-local increment, atomics
+  written only on the tick); the answering shard freshens its own slot from the
+  live store first, so it is never stale.
+- **`Store::expires` O(1) counter** — a live count of TTL-carrying keys backing
+  `INFO keyspace`'s `expires=`, maintained at every TTL transition rather than
+  an O(n) keyspace scan. A drift-guard test asserts it never diverges from the
+  O(n) ground truth.
+
+### Changed
+
+- **`flush()` → `flushall()`** across `kevy_store::Store`,
+  `kevy_embedded::Store`, and `kevy_client::Connection`. The old name read like
+  `Write::flush` (sync-to-disk) but implemented Redis `FLUSHALL` (wipe every
+  key + log it) — a data-loss footgun that cost a downstream debugging cycle.
+  The new name matches the Redis command; a `#[deprecated]` `flush()` alias
+  forwards for one release so callers migrate without a hard break.
+
 ## [v1.16.0] — 2026-06-12
 
 Minor release: **COW persistence** — snapshot/rewrite serialization no
