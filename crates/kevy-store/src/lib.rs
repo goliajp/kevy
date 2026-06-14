@@ -200,6 +200,13 @@ pub struct Store {
     /// [`Self::tick_expire`]). Surfaced via `INFO keyspace` / `MEMORY STATS`
     /// once those fields land.
     pub(crate) expired_keys_total: u64,
+    /// Count of live keys carrying a TTL — the size of Redis's "expire set"
+    /// (`INFO keyspace`'s `expires=`). Maintained in O(1) at every TTL
+    /// transition (`insert_entry` / `remove_entry` deltas + the in-place
+    /// EXPIRE / PERSIST / SET sites) so the gauge never pays an O(n) keyspace
+    /// scan; [`Self::ttl_pending_count`] is the O(n) ground truth used to
+    /// assert this counter never drifts.
+    pub(crate) expires: u64,
     /// `WATCH` version counters — present only for keys that have been
     /// `WATCH`-ed at least once. [`Self::record_watch`] inserts the entry
     /// (version 0 = "never written since first watch"); every subsequent
@@ -279,6 +286,22 @@ impl Store {
     #[inline]
     pub fn evictions_total(&self) -> u64 {
         self.evictions_total
+    }
+
+    /// Live keys carrying a TTL (`INFO keyspace`'s `expires=`). O(1) — reads
+    /// the maintained counter, not an O(n) scan (cf. [`Self::ttl_pending_count`]).
+    #[inline]
+    pub fn expires_count(&self) -> usize {
+        self.expires as usize
+    }
+
+    /// Apply a signed delta to the [`Self::expires`] counter, clamped at 0.
+    /// Centralises the saturating arithmetic for every TTL-transition site.
+    #[inline]
+    pub(crate) fn adjust_expires(&mut self, delta: i64) {
+        if delta != 0 {
+            self.expires = (self.expires as i64 + delta).max(0) as u64;
+        }
     }
 
     /// `WATCH` — record this key in the version tracker and return its

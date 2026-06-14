@@ -24,6 +24,7 @@ impl Store {
             entry.set_lru_clock(self.clock_counter as u32);
         }
         let new_w = entry.weight();
+        let new_has_ttl = entry.expire_at_ns.is_some();
         let prev = self.map.insert(key, entry);
         match &prev {
             Some(old) => {
@@ -36,6 +37,8 @@ impl Store {
                 self.used_memory = self.used_memory.saturating_add(new_w + ENTRY_OVERHEAD);
             }
         }
+        let old_has_ttl = prev.as_ref().is_some_and(|o| o.expire_at_ns.is_some());
+        self.adjust_expires(new_has_ttl as i64 - old_has_ttl as i64);
         self.update_peak();
         prev
     }
@@ -47,6 +50,9 @@ impl Store {
         self.used_memory = self
             .used_memory
             .saturating_sub(old.weight() + ENTRY_OVERHEAD);
+        if old.expire_at_ns.is_some() {
+            self.adjust_expires(-1);
+        }
         Some(old)
     }
 
