@@ -64,7 +64,7 @@ impl<C: Commands> Shard<C> {
             Op::Exists(keys) => Part::Int(self.store.exists(&keys) as i64),
             Op::Dbsize => Part::Int(self.store.dbsize() as i64),
             Op::Flush => {
-                self.store.flush();
+                self.store.flushall();
                 // Every WATCH against this shard is now invalidated.
                 self.store.bump_all_watched();
                 let mut c = Argv::with_capacity(1, 8);

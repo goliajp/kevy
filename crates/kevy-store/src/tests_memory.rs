@@ -41,7 +41,7 @@ fn used_memory_zero_on_flush() {
         st.set(format!("k{i}").as_bytes(), s("v"), None, false, false);
     }
     assert!(st.used_memory() > 0);
-    st.flush();
+    st.flushall();
     assert_eq!(st.used_memory(), 0);
 }
 
