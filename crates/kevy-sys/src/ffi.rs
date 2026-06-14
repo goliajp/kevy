@@ -80,4 +80,8 @@ unsafe extern "C" {
         maxevents: c_int,
         timeout: c_int,
     ) -> c_int;
+    // `cpu_set_t` is an opaque bitmask; we pass our own `[u64; N]` and its
+    // byte length, exactly as glibc's `CPU_SET` macros lay it out.
+    pub fn sched_getaffinity(pid: c_int, cpusetsize: usize, mask: *mut u64) -> c_int;
+    pub fn sched_setaffinity(pid: c_int, cpusetsize: usize, mask: *const u64) -> c_int;
 }
