@@ -373,7 +373,7 @@ fn dispatch_generic<A: ArgvView + ?Sized>(
         }
         b"DBSIZE" => encode_integer(out, store.dbsize() as i64),
         b"FLUSHDB" | b"FLUSHALL" => {
-            store.flush();
+            store.flushall();
             encode_simple_string(out, "OK");
         }
         _ => return false,

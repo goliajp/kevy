@@ -487,3 +487,126 @@ fn pipelined_cross_shard_no_deadlock() {
     c.read_exact(&mut got).unwrap();
     assert_eq!(got, expected);
 }
+
+/// Read a bulk-string INFO reply and return its body.
+fn read_info(s: &mut std::net::TcpStream, section: &str) -> String {
+    s.set_read_timeout(Some(std::time::Duration::from_secs(2)))
+        .unwrap();
+    s.write_all(&req(&[b"INFO", section.as_bytes()])).unwrap();
+    let mut buf = Vec::new();
+    let mut tmp = [0u8; 8192];
+    loop {
+        // Header `$<len>\r\n` then `<len>` body bytes then CRLF.
+        if let Some(hdr_end) = buf.windows(2).position(|w| w == b"\r\n")
+            && buf.first() == Some(&b'$')
+        {
+            let len: usize = std::str::from_utf8(&buf[1..hdr_end])
+                .unwrap()
+                .parse()
+                .unwrap();
+            if buf.len() >= hdr_end + 2 + len {
+                return String::from_utf8_lossy(&buf[hdr_end + 2..hdr_end + 2 + len]).into_owned();
+            }
+        }
+        let n = s.read(&mut tmp).unwrap();
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&tmp[..n]);
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
+/// Parse `field:value` out of an INFO body as u64.
+fn info_field(body: &str, field: &str) -> u64 {
+    body.lines()
+        .find_map(|l| l.strip_prefix(&format!("{field}:")))
+        .unwrap_or_else(|| panic!("field {field} not in INFO:\n{body}"))
+        .trim()
+        .parse()
+        .unwrap_or_else(|_| panic!("field {field} not a u64 in INFO:\n{body}"))
+}
+
+/// INFO is answered on one shard but must report the WHOLE process: memory,
+/// keyspace, and stat counters are summed across every shard's slot — the same
+/// single-shard-view trap DBSIZE avoids. Regression for the 2026-06-14 dogfood
+/// report (used_memory ≈ 1/Nth, empty Keyspace, zero Stats).
+#[test]
+fn info_aggregates_across_shards() {
+    const N: u32 = 400; // plain keys
+    const M: u32 = 120; // keys carrying a TTL
+    let srv = Server::start(4);
+    let mut c = srv.connect();
+
+    for i in 0..N {
+        c.write_all(&req(&[b"SET", format!("k{i}").as_bytes(), b"value-payload"]))
+            .unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+    }
+    for i in 0..M {
+        // Long TTL so none lapse during the test.
+        c.write_all(&req(&[
+            b"SET",
+            format!("t{i}").as_bytes(),
+            b"v",
+            b"EX",
+            b"600",
+        ]))
+        .unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+    }
+
+    let total = u64::from(N + M);
+    // Gauges (incl. the other shards' slices) publish on the reactor tick.
+    // Poll until the keyspace key count reaches the full cross-shard total
+    // rather than sleeping a fixed window — virtualized CI runners' monotonic
+    // clock lags wall-clock, so a fixed sleep races the tick (see the
+    // 2026-06-09 CI-flake lesson). `db0:` line is `keys=N,expires=M,avg_ttl=0`.
+    let db0_field = |body: &str, k: &str| -> Option<u64> {
+        body.lines()
+            .find_map(|l| l.strip_prefix("db0:"))
+            .and_then(|db0| db0.split(',').find_map(|p| p.strip_prefix(&format!("{k}="))))
+            .and_then(|v| v.parse().ok())
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let ks = loop {
+        let ks = read_info(&mut c, "keyspace");
+        if db0_field(&ks, "keys") == Some(total) {
+            break ks;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "INFO keyspace never summed to {total} keys across shards:\n{ks}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+
+    // Every shard has now published; the aggregate is complete.
+    assert_eq!(db0_field(&ks, "keys"), Some(total), "keyspace keys not summed");
+    assert_eq!(
+        db0_field(&ks, "expires"),
+        Some(u64::from(M)),
+        "expire-set count wrong"
+    );
+
+    let mem = read_info(&mut c, "memory");
+    let used = info_field(&mem, "used_memory");
+    // Full cross-shard sum: ~96 B/key overhead × all keys. A single shard's
+    // view would be ~1/4 of this, so the floor cleanly distinguishes them.
+    assert!(
+        used >= total * 48,
+        "used_memory {used} looks like a single shard, not the {total}-key sum"
+    );
+
+    let stats = read_info(&mut c, "stats");
+    // N + M writes + the INFO/SET replies already issued on this conn.
+    assert!(
+        info_field(&stats, "total_commands_processed") >= total,
+        "commands_processed not summed across shards"
+    );
+    assert!(
+        info_field(&stats, "total_connections_received") >= 1,
+        "connections_received not counted"
+    );
+    assert_eq!(info_field(&stats, "expired_keys"), 0, "nothing should expire");
+}

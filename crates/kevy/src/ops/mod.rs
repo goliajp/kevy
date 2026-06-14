@@ -14,6 +14,7 @@ pub(crate) mod client;
 pub(crate) mod cluster;
 pub(crate) mod config;
 mod memory;
+pub(crate) mod stats;
 
 use std::time::SystemTime;
 
@@ -76,6 +77,12 @@ pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
     // none / "default" / "all" / "everything" is requested).
     let section = args.get(1).map(|a| a.to_ascii_lowercase());
     let want = section.as_deref();
+    // Each shard owns an independent store; INFO is answered on one shard but
+    // reports the whole process. Freshen this shard's slot from the live store
+    // it already holds (so the answering shard is never stale, even with the
+    // active reaper disabled), then sum every shard's slot.
+    stats::publish_gauges(store);
+    let totals = stats::aggregate();
     let mut body = String::new();
     if want_section(want, "server") {
         info_server(cfg, &mut body);
@@ -84,13 +91,13 @@ pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
         info_clients(&mut body);
     }
     if want_section(want, "memory") {
-        info_memory(cfg, store, &mut body);
+        info_memory(cfg, &totals, &mut body);
     }
     if want_section(want, "persistence") {
         info_persistence(cfg, &mut body);
     }
     if want_section(want, "stats") {
-        info_stats(&mut body);
+        info_stats(&totals, &mut body);
     }
     if want_section(want, "replication") {
         info_replication(&mut body);
@@ -99,7 +106,7 @@ pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
         info_cluster(cfg, &mut body);
     }
     if want_section(want, "keyspace") {
-        info_keyspace(&mut body);
+        info_keyspace(&totals, &mut body);
     }
     // RESP3: Verbatim text frame (`=N\r\ntxt:<body>\r\n`) so the
     // client can render it as plain text (e.g. redis-cli prints it
@@ -140,9 +147,9 @@ fn info_clients(b: &mut String) {
     b.push_str("\r\n");
 }
 
-fn info_memory(cfg: &Config, store: &Store, b: &mut String) {
-    let used = store.used_memory();
-    let peak = store.used_memory_peak();
+fn info_memory(cfg: &Config, totals: &stats::Totals, b: &mut String) {
+    let used = totals.used_memory;
+    let peak = totals.used_memory_peak;
     b.push_str("# Memory\r\n");
     b.push_str(&format!("used_memory:{used}\r\n"));
     b.push_str(&format!(
@@ -163,10 +170,7 @@ fn info_memory(cfg: &Config, store: &Store, b: &mut String) {
         "maxmemory_policy:{}\r\n",
         eviction_str(cfg.memory.maxmemory_policy)
     ));
-    b.push_str(&format!(
-        "evicted_keys:{}\r\n",
-        store.evictions_total()
-    ));
+    b.push_str(&format!("evicted_keys:{}\r\n", totals.evicted_keys));
     b.push_str("\r\n");
 }
 
@@ -209,11 +213,21 @@ fn info_persistence(cfg: &Config, b: &mut String) {
     b.push_str("\r\n");
 }
 
-fn info_stats(b: &mut String) {
+fn info_stats(totals: &stats::Totals, b: &mut String) {
     b.push_str("# Stats\r\n");
-    b.push_str("total_connections_received:0\r\n");
-    b.push_str("total_commands_processed:0\r\n");
-    b.push_str("instantaneous_ops_per_sec:0\r\n");
+    b.push_str(&format!(
+        "total_connections_received:{}\r\n",
+        totals.connections_received
+    ));
+    b.push_str(&format!(
+        "total_commands_processed:{}\r\n",
+        totals.commands_processed
+    ));
+    b.push_str(&format!(
+        "instantaneous_ops_per_sec:{}\r\n",
+        stats::instantaneous_ops_per_sec(totals.commands_processed)
+    ));
+    b.push_str(&format!("expired_keys:{}\r\n", totals.expired_keys));
     b.push_str("\r\n");
 }
 
@@ -236,9 +250,16 @@ fn info_cluster(cfg: &Config, b: &mut String) {
     b.push_str("\r\n");
 }
 
-fn info_keyspace(b: &mut String) {
+fn info_keyspace(totals: &stats::Totals, b: &mut String) {
     b.push_str("# Keyspace\r\n");
-    // TODO: emit `db0:keys=N,expires=M,avg_ttl=...` when key-count is plumbed.
+    // Redis omits the `dbN:` line entirely for an empty keyspace. `avg_ttl` is
+    // a Redis estimate we don't track; report 0 (its "unknown" value).
+    if totals.keys > 0 {
+        b.push_str(&format!(
+            "db0:keys={},expires={},avg_ttl=0\r\n",
+            totals.keys, totals.expires
+        ));
+    }
     b.push_str("\r\n");
 }
 
