@@ -556,11 +556,39 @@ fn info_aggregates_across_shards() {
         read_reply(&mut c, b"+OK\r\n");
     }
 
-    // Gauges publish on the reactor tick (hz=10 ⇒ 100 ms); wait for every
-    // shard to have ticked at least once after the last write.
-    std::thread::sleep(std::time::Duration::from_millis(300));
-
     let total = u64::from(N + M);
+    // Gauges (incl. the other shards' slices) publish on the reactor tick.
+    // Poll until the keyspace key count reaches the full cross-shard total
+    // rather than sleeping a fixed window — virtualized CI runners' monotonic
+    // clock lags wall-clock, so a fixed sleep races the tick (see the
+    // 2026-06-09 CI-flake lesson). `db0:` line is `keys=N,expires=M,avg_ttl=0`.
+    let db0_field = |body: &str, k: &str| -> Option<u64> {
+        body.lines()
+            .find_map(|l| l.strip_prefix("db0:"))
+            .and_then(|db0| db0.split(',').find_map(|p| p.strip_prefix(&format!("{k}="))))
+            .and_then(|v| v.parse().ok())
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let ks = loop {
+        let ks = read_info(&mut c, "keyspace");
+        if db0_field(&ks, "keys") == Some(total) {
+            break ks;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "INFO keyspace never summed to {total} keys across shards:\n{ks}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+
+    // Every shard has now published; the aggregate is complete.
+    assert_eq!(db0_field(&ks, "keys"), Some(total), "keyspace keys not summed");
+    assert_eq!(
+        db0_field(&ks, "expires"),
+        Some(u64::from(M)),
+        "expire-set count wrong"
+    );
+
     let mem = read_info(&mut c, "memory");
     let used = info_field(&mem, "used_memory");
     // Full cross-shard sum: ~96 B/key overhead × all keys. A single shard's
@@ -569,22 +597,6 @@ fn info_aggregates_across_shards() {
         used >= total * 48,
         "used_memory {used} looks like a single shard, not the {total}-key sum"
     );
-
-    // Keyspace line is `db0:keys=N,expires=M,avg_ttl=0` (comma-separated kv).
-    let ks = read_info(&mut c, "keyspace");
-    let db0 = ks
-        .lines()
-        .find_map(|l| l.strip_prefix("db0:"))
-        .unwrap_or_else(|| panic!("no db0 line in INFO keyspace:\n{ks}"));
-    let kv = |k: &str| -> u64 {
-        db0.split(',')
-            .find_map(|p| p.strip_prefix(&format!("{k}=")))
-            .unwrap()
-            .parse()
-            .unwrap()
-    };
-    assert_eq!(kv("keys"), total, "keyspace keys not summed");
-    assert_eq!(kv("expires"), u64::from(M), "expire-set count wrong");
 
     let stats = read_info(&mut c, "stats");
     // N + M writes + the INFO/SET replies already issued on this conn.
