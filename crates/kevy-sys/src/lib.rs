@@ -430,7 +430,54 @@ pub struct Event {
 /// How many raw events to pull from the kernel per `wait` call.
 const WAIT_CAPACITY: usize = 1024;
 
+/// Pin the current thread to a single CPU core (Linux `sched_setaffinity`).
+///
+/// `n` selects the **n-th currently-allowed** CPU, so it honours a restricted
+/// cpuset / cgroup (a container with `--cpuset-cpus`): shard `i` lands on the
+/// i-th CPU the process may actually run on. Returns `true` if pinned. A
+/// shard-per-core reactor pins each shard to its own core so the kernel never
+/// migrates or time-slices a busy-poll thread off its core — without it, a
+/// cross-shard forward can stall hundreds of µs waiting for a descheduled
+/// owner to be re-run.
+///
+/// No-op returning `false` when `n` exceeds the allowed-CPU count, on any
+/// `sched_*affinity` error, or on non-Linux (macOS offers only advisory
+/// affinity hints — not worth the FFI for a dev-only platform).
+#[cfg(target_os = "linux")]
+pub fn pin_thread_to_nth_cpu(n: usize) -> bool {
+    // 1024 CPUs' worth of mask, matching glibc's default `cpu_set_t`.
+    const NLONGS: usize = 16;
+    const NBYTES: usize = NLONGS * 8;
+    let mut allowed = [0u64; NLONGS];
+    if unsafe { ffi::sched_getaffinity(0, NBYTES, allowed.as_mut_ptr()) } != 0 {
+        return false;
+    }
+    // Find the n-th set bit (the n-th allowed CPU).
+    let mut seen = 0usize;
+    let mut cpu = None;
+    'scan: for (w, &word) in allowed.iter().enumerate() {
+        let mut bits = word;
+        while bits != 0 {
+            let b = bits.trailing_zeros() as usize;
+            if seen == n {
+                cpu = Some(w * 64 + b);
+                break 'scan;
+            }
+            seen += 1;
+            bits &= bits - 1;
+        }
+    }
+    let Some(cpu) = cpu else { return false };
+    let mut one = [0u64; NLONGS];
+    one[cpu / 64] = 1u64 << (cpu % 64);
+    unsafe { ffi::sched_setaffinity(0, NBYTES, one.as_ptr()) == 0 }
+}
 
+/// Non-Linux fallback: affinity pinning is a no-op.
+#[cfg(not(target_os = "linux"))]
+pub fn pin_thread_to_nth_cpu(_n: usize) -> bool {
+    false
+}
 
 #[cfg(test)]
 mod tests;

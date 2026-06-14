@@ -342,11 +342,25 @@ impl<C: Commands> Runtime<C> {
             }
         };
 
+        // Shard-per-core CPU pinning (opt-in, mirrors the KEVY_IO_URING toggle):
+        //   KEVY_PIN_SHARDS unset / 0 / off / no / false → no pinning (default).
+        //   KEVY_PIN_SHARDS=<anything else> → pin shard i to the i-th allowed CPU.
+        // Off by default so existing benchmark numbers translate one-to-one;
+        // turn on for dedicated-core deployments where the kernel must not
+        // migrate a busy-poll shard off its core (a cross-shard forward would
+        // otherwise stall on a descheduled owner — the low-load tail cost).
+        let pin_shards = !matches!(
+            std::env::var("KEVY_PIN_SHARDS").ok().as_deref(),
+            None | Some("0") | Some("off") | Some("no") | Some("false")
+        );
         let mut handles = Vec::with_capacity(n);
         for shard in shards {
             let stop = stop.clone();
             let id = shard.id;
             handles.push(std::thread::spawn(move || {
+                if pin_shards {
+                    kevy_sys::pin_thread_to_nth_cpu(id);
+                }
                 #[cfg(target_os = "linux")]
                 let res = if use_uring { shard.run_uring(stop) } else { shard.run(stop) };
                 #[cfg(not(target_os = "linux"))]
