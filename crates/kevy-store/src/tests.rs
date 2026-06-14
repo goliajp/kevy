@@ -71,7 +71,7 @@ fn append_strlen_type_flush() {
     assert_eq!(st.type_of(b"k"), "string");
     assert_eq!(st.type_of(b"missing"), "none");
     assert_eq!(st.dbsize(), 1);
-    st.flush();
+    st.flushall();
     assert_eq!(st.dbsize(), 0);
 }
 

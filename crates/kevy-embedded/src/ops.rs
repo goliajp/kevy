@@ -142,11 +142,30 @@ impl Store {
 
     /// `FLUSHALL` — empty every shard (each logs `FLUSHALL` so a replay reaches
     /// the same empty state).
-    pub fn flush(&self) -> io::Result<()> {
+    ///
+    /// Named `flushall` — **not** `flush` — to avoid colliding with
+    /// `Write::flush`'s "sync buffered writes to disk" meaning. This call
+    /// WIPES the store; durability needs no explicit call (each write appends
+    /// to the AOF, the shard's `BufWriter` lands per [`AppendFsync`] cadence
+    /// and on drop).
+    ///
+    /// [`AppendFsync`]: crate::AppendFsync
+    pub fn flushall(&self) -> io::Result<()> {
         self.try_for_each_shard(|inner| {
-            inner.store.flush();
+            inner.store.flushall();
             commit_write(inner, &[b"FLUSHALL"])
         })
+    }
+
+    /// Deprecated alias for [`Self::flushall`]. The old name read like
+    /// `Write::flush` (sync-to-disk) but actually WIPES the store — a
+    /// data-loss footgun.
+    #[deprecated(
+        since = "1.2.0",
+        note = "renamed to `flushall`: `flush` collides with Write::flush (sync-to-disk); this WIPES the store"
+    )]
+    pub fn flush(&self) -> io::Result<()> {
+        self.flushall()
     }
 
     /// `MEMORY USAGE` for one key — `Some(bytes)` or `None` if absent.

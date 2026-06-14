@@ -70,7 +70,7 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
                 store.persist(k);
             }
         }
-        b"FLUSHDB" | b"FLUSHALL" => store.flush(),
+        b"FLUSHDB" | b"FLUSHALL" => store.flushall(),
         b"HSET" => apply_hset(store, args),
         b"HDEL" => apply_pairs_strip(store, args, |s, k, fs| {
             let _ = s.hdel(k, fs);

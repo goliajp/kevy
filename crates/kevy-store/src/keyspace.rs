@@ -192,10 +192,27 @@ impl Store {
         self.map.len()
     }
 
-    pub fn flush(&mut self) {
+    /// Wipe every key in this shard's keyspace (the `FLUSHALL`/`FLUSHDB`
+    /// primitive). Resets `used_memory`; `used_memory_peak` is
+    /// lifetime-cumulative and intentionally not reset.
+    ///
+    /// Named `flushall` — **not** `flush` — to avoid colliding with
+    /// `Write::flush`'s "sync buffered writes to disk" meaning. This method
+    /// DESTROYS data; it does not persist it.
+    pub fn flushall(&mut self) {
         self.map.clear();
         self.used_memory = 0;
         // peak is lifetime-cumulative; intentionally not reset.
+    }
+
+    /// Deprecated alias for [`Self::flushall`]. The old name read like
+    /// `Write::flush` (sync-to-disk) but actually WIPES the keyspace.
+    #[deprecated(
+        since = "1.17.0",
+        note = "renamed to `flushall`: `flush` collides with Write::flush (sync-to-disk); this WIPES the keyspace"
+    )]
+    pub fn flush(&mut self) {
+        self.flushall();
     }
 
     /// Count live (non-expired) keys that carry a TTL — the size of the

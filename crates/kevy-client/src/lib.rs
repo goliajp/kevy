@@ -42,6 +42,7 @@ use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
 
 mod collections;
+mod reply;
 mod scan;
 mod subscribe;
 mod subscribe_io;
@@ -51,6 +52,7 @@ mod url;
 pub use subscribe::{PubsubEvent, Subscriber, SubscriberEvents, SubscriberMessages};
 pub use transaction::{Transaction, TransactionReplies};
 
+pub(crate) use reply::{array_to_bulks, store_err, string, unexpected, vec2, vec3};
 pub(crate) use url::{Target, parse_url, resolve_store};
 
 /// One open connection to a kevy backend, opaque about whether the backend
@@ -252,17 +254,31 @@ impl Connection {
         }
     }
 
-    /// `FLUSHDB`. Drops every key. Persistence remains opted-in; embedded
+    /// `FLUSHALL`. Drops every key. Persistence remains opted-in; embedded
     /// `with_persist` will rewrite the AOF on its next sync cycle.
-    pub fn flush(&mut self) -> io::Result<()> {
+    ///
+    /// Named `flushall` — **not** `flush` — to avoid colliding with
+    /// `Write::flush`'s "sync buffered writes to disk" meaning; this WIPES the
+    /// store rather than persisting it.
+    pub fn flushall(&mut self) -> io::Result<()> {
         match self {
-            Self::Embedded(s) => s.flush(),
-            Self::Remote(c) => match c.request(&[b"FLUSHDB".to_vec()])? {
+            Self::Embedded(s) => s.flushall(),
+            Self::Remote(c) => match c.request(&[b"FLUSHALL".to_vec()])? {
                 Reply::Simple(s) if s == b"OK" => Ok(()),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
             },
         }
+    }
+
+    /// Deprecated alias for [`Self::flushall`]. The old name read like
+    /// `Write::flush` (sync-to-disk) but actually WIPES the store.
+    #[deprecated(
+        since = "1.8.0",
+        note = "renamed to `flushall`: `flush` collides with Write::flush (sync-to-disk); this WIPES the store"
+    )]
+    pub fn flush(&mut self) -> io::Result<()> {
+        self.flushall()
     }
 
     /// `SET key value PX ttl_ms`. Convenience for the common
@@ -364,57 +380,6 @@ impl Connection {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Crate-internal helpers, used here + by `collections.rs` + `subscribe.rs`.
-// ─────────────────────────────────────────────────────────────────────────
-
-pub(crate) fn vec2(verb: &[u8], a: &[u8]) -> Vec<Vec<u8>> {
-    vec![verb.to_vec(), a.to_vec()]
-}
-
-pub(crate) fn vec3(verb: &[u8], a: &[u8], b: &[u8]) -> Vec<Vec<u8>> {
-    vec![verb.to_vec(), a.to_vec(), b.to_vec()]
-}
-
-pub(crate) fn string(b: Vec<u8>) -> String {
-    String::from_utf8_lossy(&b).into_owned()
-}
-
-pub(crate) fn unexpected(r: Reply) -> io::Error {
-    let kind = match r {
-        Reply::Simple(_) => "simple-string",
-        Reply::Error(_) => "error",
-        Reply::Int(_) => "integer",
-        Reply::Bulk(_) => "bulk-string",
-        Reply::Nil | Reply::Null => "nil",
-        Reply::Array(_) => "array",
-        Reply::Map(_) => "map",
-        Reply::Set(_) => "set",
-        Reply::Double(_) => "double",
-        Reply::Boolean(_) => "boolean",
-        Reply::Verbatim { .. } => "verbatim-string",
-        Reply::BigNumber(_) => "big-number",
-        Reply::Push(_) => "push",
-        Reply::BlobError(_) => "blob-error",
-    };
-    io::Error::other(format!("unexpected RESP reply variant: {kind}"))
-}
-
-pub(crate) fn array_to_bulks(items: Vec<Reply>) -> io::Result<Vec<Vec<u8>>> {
-    items
-        .into_iter()
-        .map(|r| match r {
-            Reply::Bulk(v) => Ok(v),
-            Reply::Simple(v) => Ok(v),
-            Reply::Nil => Ok(Vec::new()),
-            other => Err(unexpected(other)),
-        })
-        .collect()
-}
-
-pub(crate) fn store_err(e: kevy_embedded::StoreError) -> io::Error {
-    io::Error::other(format!("kevy-store: {e:?}"))
-}
 
 #[cfg(test)]
 mod tests {
@@ -452,7 +417,7 @@ mod tests {
         assert_eq!(c.type_of(b"timed").unwrap(), "string");
 
         assert!(c.dbsize().unwrap() >= 3);
-        c.flush().unwrap();
+        c.flushall().unwrap();
         assert_eq!(c.dbsize().unwrap(), 0);
 
         c.set_with_ttl(b"timed2", b"x", Duration::from_secs(60))
