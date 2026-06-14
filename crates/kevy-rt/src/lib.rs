@@ -203,6 +203,16 @@ pub trait Commands: Clone + Send + 'static {
     /// ignore it.
     fn on_shard_tick(&self, _store: &mut Store) {}
 
+    /// Called once per client command at dispatch entry (before routing /
+    /// fan-out, so a multi-key command counts once). kevy uses it for
+    /// `INFO stats: total_commands_processed`. Hot path — keep it to a single
+    /// thread-local bump. Default no-op so non-kevy embedders pay nothing.
+    fn on_command(&self) {}
+
+    /// Called once per accepted client connection. kevy uses it for
+    /// `INFO stats: total_connections_received`. Default no-op.
+    fn on_connection(&self) {}
+
     /// Interval between [`Self::on_shard_tick`] calls. Default 100 ms
     /// (matching Redis's `hz = 10`). `0` disables ticking entirely.
     fn shard_tick_interval_ms(&self) -> u64 {

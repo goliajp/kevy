@@ -34,12 +34,14 @@ impl Store {
         if !self.reap(key, now) {
             return false;
         }
-        if let Some(e) = self.map.get_mut(key) {
-            e.expire_at_ns = pack_deadline(now + ttl);
-            true
-        } else {
-            false
-        }
+        let Some(e) = self.map.get_mut(key) else {
+            return false;
+        };
+        let had = e.expire_at_ns.is_some();
+        e.expire_at_ns = pack_deadline(now + ttl);
+        let delta = e.expire_at_ns.is_some() as i64 - had as i64;
+        self.adjust_expires(delta);
+        true
     }
 
     /// `EXPIREAT`/`PEXPIREAT` semantics: set an **absolute** wall-clock
@@ -64,7 +66,10 @@ impl Store {
         }
         let remaining = Duration::from_millis(deadline_ms - wall_now);
         if let Some(e) = self.map.get_mut(key) {
+            let had = e.expire_at_ns.is_some();
             e.expire_at_ns = pack_deadline(now + remaining);
+            let delta = e.expire_at_ns.is_some() as i64 - had as i64;
+            self.adjust_expires(delta);
         }
         true
     }
@@ -157,13 +162,17 @@ impl Store {
         if !self.reap(key, now) {
             return false;
         }
-        match self.map.get_mut(key) {
+        let cleared = match self.map.get_mut(key) {
             Some(e) if e.expire_at_ns.is_some() => {
                 e.expire_at_ns = None;
                 true
             }
             _ => false,
+        };
+        if cleared {
+            self.adjust_expires(-1);
         }
+        cleared
     }
 
     /// Remaining TTL in ms: `-2` no key, `-1` no expiry, else `>= 0`.
@@ -202,6 +211,7 @@ impl Store {
     pub fn flushall(&mut self) {
         self.map.clear();
         self.used_memory = 0;
+        self.expires = 0;
         // peak is lifetime-cumulative; intentionally not reset.
     }
 
