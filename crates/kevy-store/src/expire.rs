@@ -11,8 +11,7 @@
 //! embedded users without a runtime call it themselves from whatever event
 //! loop they have (mandatory for WASM, which has no threads).
 
-use crate::Store;
-use std::time::Instant;
+use crate::{Store, now_ns};
 
 /// What [`Store::tick_expire`] saw and did. Surfaced for tests, INFO
 /// keyspace, and (eventually) Wave 2 task #4's crash-safe verifier.
@@ -37,11 +36,7 @@ const EXPIRE_RATE_CONTINUATION: u32 = 25;
 /// `(sampled, expired)` counts for this round. Walking is `O(visited)` —
 /// bounded by `2 * map.capacity()` to keep a sparsely-populated table from
 /// spinning the inner scan forever.
-pub(crate) fn sample_round(
-    store: &mut Store,
-    samples: usize,
-    now: Instant,
-) -> (u32, u32) {
+pub(crate) fn sample_round(store: &mut Store, samples: usize, now: u64) -> (u32, u32) {
     let cap = store.map.capacity();
     if cap == 0 || store.map.is_empty() {
         return (0, 0);
@@ -78,7 +73,7 @@ pub(crate) fn sample_round(
                 continue;
             };
             sampled += 1;
-            if crate::unpack_deadline(deadline_ns) <= now {
+            if deadline_ns.get() <= now {
                 victims.push(k.to_vec());
             }
         }
@@ -118,7 +113,7 @@ impl Store {
         if samples_per_round == 0 || max_rounds == 0 || self.map.is_empty() {
             return ExpireStats::default();
         }
-        let now = Instant::now();
+        let now = now_ns();
         let mut total_sampled = 0u32;
         let mut total_expired = 0u32;
         let mut rounds = 0u32;

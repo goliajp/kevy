@@ -13,10 +13,8 @@
 //! is a consistent instant: an entry that expires *after* the collect still
 //! appears with the remaining TTL it had at that instant.
 
-use std::time::Instant;
-
 use crate::value::Value;
-use crate::{SmallBytes, Store, unpack_deadline};
+use crate::{SmallBytes, Store, now_ns, remaining_ms};
 
 /// A frozen, `Send` view of one store's live entries at a single instant.
 pub struct SnapshotView {
@@ -57,15 +55,13 @@ impl Store {
     /// remaining millis. Expired-but-unreaped entries are skipped, matching
     /// [`Store::snapshot_each`].
     pub fn collect_snapshot(&self) -> SnapshotView {
-        let now = Instant::now();
+        let now = now_ns();
         let mut entries = Vec::with_capacity(self.map.len());
         for (k, e) in &self.map {
             if e.is_expired_at(now) {
                 continue;
             }
-            let ttl = e
-                .expire_at_ns
-                .map(|ns| unpack_deadline(ns).saturating_duration_since(now).as_millis() as u64);
+            let ttl = e.expire_at_ns.map(|ns| remaining_ms(ns, now));
             entries.push((k.clone(), e.value.clone(), ttl));
         }
         SnapshotView { entries }
