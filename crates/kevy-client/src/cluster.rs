@@ -106,6 +106,17 @@ impl ClusterClient {
         }
     }
 
+    /// `PUBLISH channel message` — returns the number of subscribers reached.
+    /// kevy's pub/sub is process-global (delivered to subscribers on every
+    /// core), so a cluster PUBLISH goes to any one shard.
+    pub fn publish(&mut self, channel: &[u8], message: &[u8]) -> io::Result<usize> {
+        match self.request_unkeyed(&vec3(b"PUBLISH", channel, message))? {
+            Reply::Int(n) if n >= 0 => Ok(n as usize),
+            Reply::Error(e) => Err(io::Error::other(string(e))),
+            other => Err(unexpected(other)),
+        }
+    }
+
     /// `SET key value`.
     pub fn set(&mut self, key: &[u8], value: &[u8]) -> io::Result<()> {
         match self.request_keyed(key, &vec3(b"SET", key, value))? {
