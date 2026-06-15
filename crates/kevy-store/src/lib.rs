@@ -68,8 +68,21 @@ pub use stream::{
 pub use util::glob_match;
 pub use value::*;
 
-pub(crate) use clock::{now_ns, pack_deadline, unpack_deadline};
+pub(crate) use clock::{deadline_at, now_ns, pack_deadline, remaining_ms};
 use kevy_map::KevyMap;
+
+/// Feed kevy's monotonic clock on `wasm32-unknown-unknown`, which has no
+/// `Instant`. The embedding host advances time (ns since an arbitrary fixed
+/// epoch, e.g. `Date.now() * 1e6`) before TTL-sensitive ops and once per
+/// reaper tick. No-op concept on native targets, where the OS clock is the
+/// source — hence wasm-only.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub use clock::set_clock_ns;
+/// Feed kevy's wall clock (Unix-epoch millis, e.g. `Date.now()`) on
+/// `wasm32-unknown-unknown`, where `SystemTime::now()` traps. Used by `XADD`
+/// auto-IDs and `EXPIREAT`/`PEXPIREAT`.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub use clock::set_wall_clock_ms;
 
 
 /// Outcome of [`Store::rename`] — three-way result so the dispatch

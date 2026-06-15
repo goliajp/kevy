@@ -2,10 +2,9 @@
 //! weight + LRU/LFU clock. Split from `lib.rs` to keep it under the
 //! 500-LOC house rule.
 
-use crate::clock::{now_ns, pack_deadline, unpack_deadline};
+use crate::clock::{now_ns, pack_deadline};
 use crate::value::Value;
 use std::num::NonZeroU64;
-use std::time::Instant;
 
 /// Per-entry weight ceiling — the field is `u32` so accounting saturates
 /// at 4 GiB per entry. Real-world Redis values are well below this; the
@@ -40,11 +39,13 @@ pub(crate) struct Entry {
 impl Entry {
     /// Build a fresh entry with weight + lru_clock uninitialised (the
     /// caller — usually [`Store::insert_entry`] — will compute and stamp them).
+    /// `deadline_ns` is an absolute monotonic deadline (ns since epoch), or
+    /// `None` for a key that never expires.
     #[inline]
-    pub(crate) fn new(value: Value, expire_at: Option<Instant>) -> Self {
+    pub(crate) fn new(value: Value, deadline_ns: Option<u64>) -> Self {
         Self {
             value,
-            expire_at_ns: expire_at.and_then(pack_deadline),
+            expire_at_ns: deadline_ns.and_then(pack_deadline),
             weight: 0,
             lru_clock: 0,
         }
@@ -90,14 +91,14 @@ impl Entry {
         self.weight = new.min(WEIGHT_MAX as u64) as u32;
     }
 
-    /// Is the entry past its deadline as of `now`? `None` deadline =
-    /// never. Combines the two-step compare into one branch on the
+    /// Is the entry past its deadline as of `now` (ns since epoch)? `None`
+    /// deadline = never. Combines the two-step compare into one branch on the
     /// niche-optimised `Option`.
     #[inline]
-    pub(crate) fn is_expired_at(&self, now: Instant) -> bool {
+    pub(crate) fn is_expired_at(&self, now: u64) -> bool {
         match self.expire_at_ns {
             None => false,
-            Some(ns) => unpack_deadline(ns) <= now,
+            Some(ns) => ns.get() <= now,
         }
     }
 

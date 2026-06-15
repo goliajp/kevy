@@ -13,8 +13,7 @@
 //! a "true" global LRU/LFU pick at the price of mild approximation — the
 //! exact same trade-off Redis ships with.
 
-use crate::{Entry, EvictionPolicy, Store};
-use std::time::Instant;
+use crate::{Entry, EvictionPolicy, Store, now_ns, remaining_ms};
 
 /// `maxmemory-samples` Redis default. Each `evict_one` picks the worst out
 /// of this many randomly-sampled keys.
@@ -148,7 +147,7 @@ fn sample_and_pick(store: &mut Store, n: usize) -> Option<Vec<u8>> {
     }
     let policy = store.eviction_policy;
     let volatile_only = policy.is_volatile();
-    let now = Instant::now();
+    let now = now_ns();
     let clock = store.clock_counter as u32;
     // Random start derived from the access ordinal — every call shifts so we
     // don't sample the same bucket window twice in a row.
@@ -182,7 +181,7 @@ fn sample_and_pick(store: &mut Store, n: usize) -> Option<Vec<u8>> {
 /// callers can compare directly; we never negate-overflow because none of
 /// the inputs reach i64::MIN.
 #[inline]
-fn score_entry(e: &Entry, policy: EvictionPolicy, now: Instant, clock: u32) -> i64 {
+fn score_entry(e: &Entry, policy: EvictionPolicy, now: u64, clock: u32) -> i64 {
     match policy {
         EvictionPolicy::AllKeysLru | EvictionPolicy::VolatileLru => e.lru_clock() as i64,
         EvictionPolicy::AllKeysLfu | EvictionPolicy::VolatileLfu => {
@@ -194,9 +193,7 @@ fn score_entry(e: &Entry, policy: EvictionPolicy, now: Instant, clock: u32) -> i
             splitmix32(clock ^ e.lru_clock()) as i64
         }
         EvictionPolicy::VolatileTtl => match e.expire_at_ns {
-            Some(ns) => crate::unpack_deadline(ns)
-                .saturating_duration_since(now)
-                .as_millis() as i64,
+            Some(ns) => remaining_ms(ns, now) as i64,
             None => i64::MAX, // unreachable under volatile_only, but safe
         },
         EvictionPolicy::NoEviction => i64::MAX,
