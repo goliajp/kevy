@@ -8,15 +8,19 @@
 //!
 //! Build (node-loadable):  `wasm-pack build --target nodejs` → `node run.cjs`
 //!
-//! ⚠️ **Known limitation (tracked):** TTL operations (`set_with_ttl`,
-//! `PEXPIRE`, `PTTL`, the reaper `tick`) are NOT exposed here because
-//! kevy-store's clock reads `std::time::Instant::now()`, which **panics on
-//! `wasm32-unknown-unknown`** (that target has no monotonic clock). The
-//! non-expiring core (set/get/del/dbsize) works fully. Making TTL work on wasm
-//! needs an `Instant`→ns clock port with a host-fed time source — see the
-//! kevy roadmap. (CI only *compile*-checks wasm; this is caught by *running*.)
+//! ## Clock
+//!
+//! `wasm32-unknown-unknown` has no `Instant`/`SystemTime` (calling them traps),
+//! so the host feeds time. Call [`KvCache::set_clock`] with `Date.now()` before
+//! TTL-sensitive operations and once per [`KvCache::tick`]; kevy then drives
+//! expiry off that host clock. (On native targets the OS clock is used directly
+//! — no feeding needed.) This is what makes `set_with_ttl` / `pttl` / `del` /
+//! the reaper work on wasm — earlier they panicked because the store read
+//! `Instant::now()`.
 
-use kevy_embedded::{Config, Store};
+use std::time::Duration;
+
+use kevy_embedded::{Config, Store, set_clock_ns, set_wall_clock_ms};
 use wasm_bindgen::prelude::*;
 
 /// An in-process cache backed by kevy-embedded, usable from JS.
@@ -36,6 +40,15 @@ impl KvCache {
         Ok(KvCache { store })
     }
 
+    /// Feed kevy's clocks. Pass `Date.now()` (Unix-epoch millis). Drives both
+    /// the monotonic deadline clock (TTL) and the wall clock (XADD/EXPIREAT).
+    /// Call before TTL-sensitive ops and once per [`Self::tick`].
+    pub fn set_clock(&self, now_ms: f64) {
+        let ms = now_ms.max(0.0) as u64;
+        set_clock_ns(ms.saturating_mul(1_000_000));
+        set_wall_clock_ms(ms);
+    }
+
     /// `SET key value`.
     pub fn set(&self, key: &str, value: &str) -> Result<(), JsError> {
         self.store
@@ -44,13 +57,42 @@ impl KvCache {
             .map_err(|e| JsError::new(&e.to_string()))
     }
 
-    /// `GET key`. Returns `undefined` (JS) when absent.
+    /// `SET key value PX ttl_ms` — value with an expiry. Feed [`Self::set_clock`]
+    /// first so the deadline anchors to the host clock.
+    pub fn set_with_ttl(&self, key: &str, value: &str, ttl_ms: u32) -> Result<(), JsError> {
+        self.store
+            .set_with_ttl(key.as_bytes(), value.as_bytes(), Duration::from_millis(ttl_ms as u64))
+            .map(|_| ())
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// `GET key`. Returns `undefined` (JS) when absent or expired.
     pub fn get(&self, key: &str) -> Result<Option<String>, JsError> {
         let v = self
             .store
             .get(key.as_bytes())
             .map_err(|e| JsError::new(&e.to_string()))?;
         Ok(v.map(|bytes| String::from_utf8_lossy(&bytes).into_owned()))
+    }
+
+    /// `PTTL key`. ms remaining, `-2` no key, `-1` no TTL.
+    pub fn pttl(&self, key: &str) -> i64 {
+        self.store.ttl_ms(key.as_bytes())
+    }
+
+    /// `DEL key` — returns 1 if the key was present, else 0. (This is the call
+    /// that used to trap on wasm: `del` reaps before removing, and reaping read
+    /// `Instant::now()`.)
+    pub fn del(&self, key: &str) -> Result<usize, JsError> {
+        self.store
+            .del(&[key.as_bytes()])
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Run one manual TTL-reaper sweep (call ~10×/s in a real app). Returns the
+    /// number of keys it expired. Feed [`Self::set_clock`] first.
+    pub fn tick(&self) -> u32 {
+        self.store.tick().expired
     }
 
     /// `DBSIZE` — live key count.
