@@ -41,6 +41,7 @@ use kevy_embedded::Store;
 use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
 
+mod cluster;
 mod collections;
 mod reply;
 mod scan;
@@ -49,6 +50,7 @@ mod subscribe_io;
 mod transaction;
 mod url;
 
+pub use cluster::ClusterClient;
 pub use subscribe::{PubsubEvent, Subscriber, SubscriberEvents, SubscriberMessages};
 pub use transaction::{Transaction, TransactionReplies};
 

@@ -33,3 +33,4 @@ workspace = true
 kevy-embedded = { path = "../kevy-embedded", version = "1.2.0" }
 kevy-resp = { path = "../kevy-resp", version = "1.17.0" }
 kevy-resp-client = { path = "../kevy-resp-client", version = "1.17.0" }
+kevy-hash = { path = "../kevy-hash", version = "1.17.0" }
