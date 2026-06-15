@@ -11,10 +11,13 @@
 //! rather than forwarding. Correct routing here means `-MOVED` never fires.
 
 use std::io;
+use std::time::Duration;
 
 use kevy_hash::key_hash_slot;
 use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
+
+use crate::{string, unexpected, vec2, vec3};
 
 /// Redis-cluster keyspace size: every key hashes to one of these slots.
 const NUM_SLOTS: usize = 16384;
@@ -75,6 +78,159 @@ impl ClusterClient {
     /// Number of distinct shard nodes.
     pub fn shard_count(&self) -> usize {
         self.shards.len()
+    }
+
+}
+
+// ───────────── command surface (routed) ─────────────
+//
+// One connection per shard, so each single-key command goes straight to its
+// owner — no `-MOVED`, no server forwarding hop. Multi-key DEL/EXISTS route
+// per key and sum; keyspace-wide DBSIZE/FLUSHALL fan out to every shard.
+
+impl ClusterClient {
+    /// `PING` — answered by any shard.
+    pub fn ping(&mut self) -> io::Result<()> {
+        match self.request_unkeyed(&[b"PING".to_vec()])? {
+            Reply::Simple(s) if s == b"PONG" || s == b"OK" => Ok(()),
+            Reply::Error(e) => Err(io::Error::other(string(e))),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// `SET key value`.
+    pub fn set(&mut self, key: &[u8], value: &[u8]) -> io::Result<()> {
+        match self.request_keyed(key, &vec3(b"SET", key, value))? {
+            Reply::Simple(s) if s == b"OK" => Ok(()),
+            Reply::Error(e) => Err(io::Error::other(string(e))),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// `SET key value PX ttl_ms` — value with an expiry.
+    pub fn set_with_ttl(&mut self, key: &[u8], value: &[u8], ttl: Duration) -> io::Result<()> {
+        let ms = ttl.as_millis().min(i64::MAX as u128) as i64;
+        let args = vec![
+            b"SET".to_vec(),
+            key.to_vec(),
+            value.to_vec(),
+            b"PX".to_vec(),
+            ms.to_string().into_bytes(),
+        ];
+        match self.request_keyed(key, &args)? {
+            Reply::Simple(s) if s == b"OK" => Ok(()),
+            Reply::Error(e) => Err(io::Error::other(string(e))),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// `GET key`. `None` if absent or expired.
+    pub fn get(&mut self, key: &[u8]) -> io::Result<Option<Vec<u8>>> {
+        match self.request_keyed(key, &vec2(b"GET", key))? {
+            Reply::Bulk(v) => Ok(Some(v)),
+            Reply::Nil => Ok(None),
+            Reply::Error(e) => Err(io::Error::other(string(e))),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// `INCR key`. Returns the post-increment value.
+    pub fn incr(&mut self, key: &[u8]) -> io::Result<i64> {
+        match self.request_keyed(key, &vec2(b"INCR", key))? {
+            Reply::Int(n) => Ok(n),
+            Reply::Error(e) => Err(io::Error::other(string(e))),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// `INCRBY key delta`.
+    pub fn incr_by(&mut self, key: &[u8], delta: i64) -> io::Result<i64> {
+        let args = vec![b"INCRBY".to_vec(), key.to_vec(), delta.to_string().into_bytes()];
+        match self.request_keyed(key, &args)? {
+            Reply::Int(n) => Ok(n),
+            Reply::Error(e) => Err(io::Error::other(string(e))),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// `PEXPIRE key ttl_ms`. Whether the key existed and got a TTL.
+    pub fn expire(&mut self, key: &[u8], ttl: Duration) -> io::Result<bool> {
+        let ms = ttl.as_millis().min(i64::MAX as u128) as i64;
+        let args = vec![b"PEXPIRE".to_vec(), key.to_vec(), ms.to_string().into_bytes()];
+        match self.request_keyed(key, &args)? {
+            Reply::Int(1) => Ok(true),
+            Reply::Int(0) => Ok(false),
+            Reply::Error(e) => Err(io::Error::other(string(e))),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// `PERSIST key`. Whether a TTL was removed.
+    pub fn persist(&mut self, key: &[u8]) -> io::Result<bool> {
+        match self.request_keyed(key, &vec2(b"PERSIST", key))? {
+            Reply::Int(1) => Ok(true),
+            Reply::Int(0) => Ok(false),
+            Reply::Error(e) => Err(io::Error::other(string(e))),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// `PTTL key`. ms remaining, -2 no key, -1 no TTL.
+    pub fn ttl_ms(&mut self, key: &[u8]) -> io::Result<i64> {
+        match self.request_keyed(key, &vec2(b"PTTL", key))? {
+            Reply::Int(n) => Ok(n),
+            Reply::Error(e) => Err(io::Error::other(string(e))),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// `DEL key [key ...]` — routed per key (each to its owner) and summed, so
+    /// keys spanning shards work without a same-slot constraint.
+    pub fn del(&mut self, keys: &[&[u8]]) -> io::Result<usize> {
+        let mut removed = 0;
+        for k in keys {
+            match self.request_keyed(k, &vec2(b"DEL", k))? {
+                Reply::Int(n) if n >= 0 => removed += n as usize,
+                Reply::Error(e) => return Err(io::Error::other(string(e))),
+                other => return Err(unexpected(other)),
+            }
+        }
+        Ok(removed)
+    }
+
+    /// `EXISTS key [key ...]` — routed per key and summed (a repeated key
+    /// counts each time, matching Redis).
+    pub fn exists(&mut self, keys: &[&[u8]]) -> io::Result<usize> {
+        let mut count = 0;
+        for k in keys {
+            match self.request_keyed(k, &vec2(b"EXISTS", k))? {
+                Reply::Int(n) if n >= 0 => count += n as usize,
+                Reply::Error(e) => return Err(io::Error::other(string(e))),
+                other => return Err(unexpected(other)),
+            }
+        }
+        Ok(count)
+    }
+
+    /// `DBSIZE` — the cluster-wide total. kevy answers DBSIZE by fanning out
+    /// across shards internally (`Route::Dbsize`), so a single shard already
+    /// reports the whole-cluster count; no client-side summing.
+    pub fn dbsize(&mut self) -> io::Result<usize> {
+        match self.request_unkeyed(&[b"DBSIZE".to_vec()])? {
+            Reply::Int(n) if n >= 0 => Ok(n as usize),
+            Reply::Error(e) => Err(io::Error::other(string(e))),
+            other => Err(unexpected(other)),
+        }
+    }
+
+    /// `FLUSHALL` — clears every shard. kevy fans FLUSHALL out internally
+    /// (`Route::Flush`), so one call wipes the whole cluster.
+    pub fn flushall(&mut self) -> io::Result<()> {
+        match self.request_unkeyed(&[b"FLUSHALL".to_vec()])? {
+            Reply::Simple(s) if s == b"OK" => Ok(()),
+            Reply::Error(e) => Err(io::Error::other(string(e))),
+            other => Err(unexpected(other)),
+        }
     }
 }
 
