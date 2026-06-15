@@ -42,6 +42,7 @@ use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
 
 mod cluster;
+mod cluster_coll;
 mod collections;
 mod reply;
 mod scan;

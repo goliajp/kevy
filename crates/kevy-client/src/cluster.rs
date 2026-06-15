@@ -63,6 +63,14 @@ impl ClusterClient {
         self.slot_to_shard[key_hash_slot(key) as usize] as usize
     }
 
+    /// The connection to `key`'s owner shard — for callers (collection ops in
+    /// `cluster_coll`) that build a request via a shared helper.
+    #[inline]
+    pub(crate) fn route_mut(&mut self, key: &[u8]) -> &mut RespClient {
+        let i = self.shard_for(key);
+        &mut self.shards[i]
+    }
+
     /// Route a single-key command (`args`) to the shard owning `key`.
     pub fn request_keyed(&mut self, key: &[u8], args: &[Vec<u8>]) -> io::Result<Reply> {
         let i = self.shard_for(key);
