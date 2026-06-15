@@ -130,6 +130,7 @@ fn cluster_client_routes_every_key_to_owner() {
     assert_eq!(cc.dbsize().unwrap(), 400 - 3 + 2); // -3 deleted; +cnt +timed
 
     cc.ping().unwrap();
+    assert_eq!(cc.publish(b"notify", b"hi").unwrap(), 0, "no subscribers yet");
     cc.flushall().unwrap();
     assert_eq!(cc.dbsize().unwrap(), 0, "FLUSHALL cleared every shard");
 
