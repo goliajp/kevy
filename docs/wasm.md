@@ -1,10 +1,22 @@
 # kevy on WebAssembly
 
 `kevy-embedded` (the in-process variant of kevy — see
-[`crates/kevy-embedded/README.md`](../crates/kevy-embedded/README.md)) targets
-WebAssembly out of the box. The full `kevy` server (`kevy-rt`, `kevy-sys`)
-does **not** — it needs sockets, threads, and OS pollers that WASM runtimes
-either don't expose or expose only as stubs.
+[`crates/kevy-embedded/README.md`](../crates/kevy-embedded/README.md)) **compiles**
+to WebAssembly, and its **core in-memory KV runs today** on
+`wasm32-unknown-unknown` (`set` / `get` / `dbsize` — verified end-to-end in Node;
+see [`examples/wasm-kv/`](../examples/wasm-kv)). The full `kevy` server
+(`kevy-rt`, `kevy-sys`) does **not** target wasm — it needs sockets, threads,
+and OS pollers that WASM runtimes don't expose.
+
+> ⚠️ **Runtime gap (tracked).** Any operation that touches the TTL clock —
+> `set_with_ttl`, `PEXPIRE`/`PTTL`, the reaper `tick`, and even `DEL` (it
+> reaps-before-delete) — **panics (`unreachable`) on `wasm32-unknown-unknown`**,
+> because kevy's clock reads `std::time::Instant::now()`, which that target has
+> no implementation for. The compile-only CI check never caught this; *running*
+> the module does. Making TTL/expiry work on wasm needs an `Instant`→ns clock
+> port with a host-fed time source (on the roadmap). **Until then, treat wasm
+> kevy-embedded as a non-expiring in-memory map** — `Config::default()`, no TTL
+> ops, no `DEL`. The non-expiring core is fully functional.
 
 Three WASM runtimes are explicitly supported:
 
@@ -30,23 +42,22 @@ Both succeed today against the v1.0 codebase.
 
 ### TTL reaper must be `Manual` on browser-style wasm32
 
-`wasm32-unknown-unknown` has no thread-spawning runtime. The default
-`TtlReaperMode::Background` calls `std::thread::Builder::spawn` which
-returns `Err` on that target — `Store::open` then propagates the error.
-**Always** use:
+`wasm32-unknown-unknown` has no thread-spawning runtime, so the default
+`TtlReaperMode::Background` (which calls `std::thread::Builder::spawn`) fails —
+open with the manual reaper:
 
 ```rust
 use kevy_embedded::{Config, Store};
 
-let s = Store::open(
-    Config::default().with_ttl_reaper_manual()
-)?;
+let s = Store::open(Config::default().with_ttl_reaper_manual())?;
 ```
 
-…and call `Store::tick()` from whichever event source you control (animation
-frame, polling timer, postMessage handler). 10× per second matches Redis's
-`hz=10`; under-ticking just means TTL'd keys linger slightly longer before
-the active reaper picks them up (lazy expiry on access still works).
+> ⚠️ **Not yet usable on `wasm32-unknown-unknown`.** `Store::tick()` — and any
+> TTL op — currently traps, because the reaper reads `Instant::now()`. The
+> manual-reaper + host-driven `tick()` design above is the *intended* shape
+> **once the clock port lands** (host feeds time → `tick(now_ms)`), but today it
+> panics. Use the non-expiring core only. (WASI `wasm32-wasip1` has a working
+> `Instant`, so this gap is specific to the browser/`-unknown-unknown` target.)
 
 ### WASI persistence needs preopened directories
 
@@ -86,7 +97,8 @@ let kevy-embedded handle the in-memory state.
 | Feature | Reason | Workaround |
 |---|---|---|
 | `kevy::serve()` (TCP server) | wasm32 has no sockets | use kevy-embedded in-process |
-| `TtlReaperMode::Background` on `wasm32-unknown-unknown` | no thread runtime | use `with_ttl_reaper_manual()` + `Store::tick()` |
+| **All TTL/expiry + `DEL` on `wasm32-unknown-unknown`** | the clock reads `Instant::now()`, unimplemented on that target → traps | none yet — non-expiring core only. **Tracked: `Instant`→ns clock port.** Works on `wasm32-wasip1` (WASI has a real `Instant`). |
+| `TtlReaperMode::Background` on `wasm32-unknown-unknown` | no thread runtime | use `with_ttl_reaper_manual()` (open succeeds; TTL itself still gated by the row above) |
 | AOF on browser wasm32 | no file system | pure in-memory `Config::default()` |
 | BGREWRITEAOF on browser wasm32 | no AOF | n/a |
 | Atomic `rename(2)` semantics on KV-backed Workers | KV is eventually consistent | snapshot serialisation handled at the JS layer |
