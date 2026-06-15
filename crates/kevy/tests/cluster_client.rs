@@ -132,4 +132,39 @@ fn cluster_client_routes_every_key_to_owner() {
     cc.ping().unwrap();
     cc.flushall().unwrap();
     assert_eq!(cc.dbsize().unwrap(), 0, "FLUSHALL cleared every shard");
+
+    // ── Collection commands route by their key, across all shards ──
+    // (Same server/config: this binary installs the process config once, so a
+    // second config-reading test would race it — keep it all in one test.)
+    for i in 0..20u32 {
+        let h = format!("h{i}");
+        assert_eq!(cc.hset(h.as_bytes(), &[(b"f", b"v"), (b"g", b"w")]).unwrap(), 2);
+        assert_eq!(cc.hget(h.as_bytes(), b"f").unwrap().as_deref(), Some(&b"v"[..]));
+        assert_eq!(cc.hlen(h.as_bytes()).unwrap(), 2);
+        assert_eq!(cc.hdel(h.as_bytes(), &[b"g"]).unwrap(), 1);
+
+        let l = format!("l{i}");
+        assert_eq!(cc.rpush(l.as_bytes(), &[b"a", b"b", b"c"]).unwrap(), 3);
+        assert_eq!(cc.llen(l.as_bytes()).unwrap(), 3);
+        assert_eq!(cc.lrange(l.as_bytes(), 0, -1).unwrap(), vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()]);
+        assert_eq!(cc.lpop(l.as_bytes(), 1).unwrap(), vec![b"a".to_vec()]);
+
+        let s = format!("s{i}");
+        assert_eq!(cc.sadd(s.as_bytes(), &[b"x", b"y", b"x"]).unwrap(), 2);
+        assert!(cc.sismember(s.as_bytes(), b"x").unwrap());
+        assert_eq!(cc.scard(s.as_bytes()).unwrap(), 2);
+
+        let z = format!("z{i}");
+        assert_eq!(cc.zadd(z.as_bytes(), &[(1.0, b"a"), (2.0, b"b")]).unwrap(), 2);
+        assert_eq!(cc.zscore(z.as_bytes(), b"b").unwrap(), Some(2.0));
+        assert_eq!(cc.zcard(z.as_bytes()).unwrap(), 2);
+        assert_eq!(cc.zrange(z.as_bytes(), 0, -1).unwrap(), vec![b"a".to_vec(), b"b".to_vec()]);
+    }
+
+    // Same-slot multi-key set op via a {hashtag} so both keys share a shard.
+    cc.sadd(b"{t}:a", &[b"1", b"2", b"3"]).unwrap();
+    cc.sadd(b"{t}:b", &[b"2", b"3", b"4"]).unwrap();
+    let mut inter = cc.sinter(&[b"{t}:a", b"{t}:b"]).unwrap();
+    inter.sort();
+    assert_eq!(inter, vec![b"2".to_vec(), b"3".to_vec()]);
 }

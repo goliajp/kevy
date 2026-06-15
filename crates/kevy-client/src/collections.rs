@@ -364,7 +364,7 @@ impl Connection {
 // but the RESP path needs to splat them into a single argv vector.
 // ─────────────────────────────────────────────────────────────────────────
 
-fn list_push(
+pub(crate) fn list_push(
     c: &mut RespClient,
     verb: &[u8],
     key: &[u8],
@@ -381,7 +381,7 @@ fn list_push(
     }
 }
 
-fn list_pop(
+pub(crate) fn list_pop(
     c: &mut RespClient,
     verb: &[u8],
     key: &[u8],
@@ -397,7 +397,7 @@ fn list_pop(
     }
 }
 
-fn set_multi(
+pub(crate) fn set_multi(
     c: &mut RespClient,
     verb: &[u8],
     key: &[u8],
@@ -450,7 +450,7 @@ fn embed_set_combine(
     Ok(acc.into_iter().collect())
 }
 
-fn remote_set_combine(
+pub(crate) fn remote_set_combine(
     c: &mut RespClient,
     verb: &[u8],
     keys: &[&[u8]],
