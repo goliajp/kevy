@@ -9,6 +9,7 @@
 //! implements the entry-side ops.
 
 use std::collections::BTreeMap;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kevy_map::KevyMap;
@@ -409,14 +410,22 @@ pub type LoadedStreamEntry = (u64, u64, Vec<(Vec<u8>, Vec<u8>)>);
 
 // ───────────── small helpers (shared with `store.rs`) ─────────────
 
-/// Wall-clock millis (`SystemTime::now`). Shared with dispatchers so
-/// every XADD on a shard uses the same clock source. Falls back to 0
-/// on a pre-UNIX-EPOCH clock — impossible on supported platforms.
+/// Wall-clock millis. Shared with dispatchers so every XADD on a shard uses
+/// the same clock source. On native targets reads `SystemTime::now()` (falls
+/// back to 0 on a pre-UNIX-EPOCH clock — impossible on supported platforms);
+/// on `wasm32-unknown-unknown`, where `SystemTime::now()` traps, reads the
+/// host-fed wall clock (see [`crate::set_wall_clock_ms`]).
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub fn now_unix_ms() -> u64 {
+    crate::clock::wall_now_unix_ms()
 }
 
 pub(super) fn stream_entry_weight(fields: &[(SmallBytes, SmallBytes)]) -> u64 {

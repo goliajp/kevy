@@ -2,9 +2,8 @@
 
 use crate::util::*;
 use crate::value::*;
-use crate::{Entry, Store, StoreError};
+use crate::{Entry, Store, StoreError, now_ns};
 use std::sync::Arc;
-use std::time::Instant;
 
 impl Store {
     // ---- hashes --------------------------------------------------------
@@ -149,7 +148,7 @@ impl Store {
 
     /// `HDEL` — returns count removed; deletes the key if the hash becomes empty.
     pub fn hdel(&mut self, key: &[u8], fields: &[Vec<u8>]) -> Result<usize, StoreError> {
-        let now = Instant::now();
+        let now = now_ns();
         if !self.reap(key, now) {
             return Ok(0);
         }
