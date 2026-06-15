@@ -36,6 +36,9 @@ redis-cli -p 6004 SET hello world
   reply-checked byte-for-byte. Existing clients and tools just work.
 - **Embeddable** — `kevy-store` is a plain Rust library: no network, no
   runtime, also builds for `wasm32`. The same engine, in your process.
+- **Resource-adaptive** — runs full-speed when memory is unbounded, degrades
+  cleanly when it isn't, and refuses loudly at the edge instead of corrupting
+  silently ([details](#resource-adaptive-by-design)).
 
 Honest about scope: kevy is **single-node** — no replication, clustering,
 AUTH/TLS, or public-internet exposure (see
@@ -70,6 +73,22 @@ Against the C reference for io_uring: kevy's hand-written bindings reach a
 with no liburing linked. Reproduce with
 [`bench/loopback_c50.sh`](bench/loopback_c50.sh) and
 [`bench/loopback_c1.sh`](bench/loopback_c1.sh).
+
+### Cluster routing (key-aware client)
+
+A single-port client that lands on the wrong shard pays an internal
+cross-shard forwarding hop. The cluster-aware [`ClusterClient`](#cluster-mode-single-node-key-aware-routing)
+routes each key straight to its owner shard and removes that hop. Clean
+lx64 16-core box, server/client on disjoint cores, GET at concurrency 64:
+
+| client path | throughput | p99 latency |
+|-------------|-----------:|------------:|
+| single-shard proxy (cross-shard hop) | 333 k/s | 3858 µs |
+| **`ClusterClient` (zero hop)** | **533 k/s** | **260 µs** |
+
+**1.6× throughput, ~15× lower tail latency** — purely from removing the
+forwarding hop, with no measurable overhead vs a hand-rolled raw router.
+Full method in [`docs/cluster.md`](docs/cluster.md).
 
 ### Embedded throughput (in-process, no network)
 
@@ -232,6 +251,28 @@ kevy --threads 8 --cluster          # main port 6004, shard ports 6005-6012
 redis-cli -c -p 6005 SET foo bar    # follows MOVED automatically
 ```
 
+For Rust callers, [`kevy-client`](crates/kevy-client) 1.9.0 ships a typed
+`ClusterClient` — discover the topology once, then route every key to its
+owner shard with no `-MOVED` and no forwarding hop (the **1.6× throughput /
+15× tail-latency** win above):
+
+```rust
+// Cargo.toml: kevy-client = "1.9.0"
+use kevy_client::ClusterClient;
+
+let mut cc = ClusterClient::connect("127.0.0.1", 6005)?;  // any shard port as seed
+cc.set(b"user:42", b"alice")?;                            // routed by CRC16 slot
+let v = cc.get(b"user:42")?;
+let removed = cc.del(&[b"a", b"b", b"c"])?;               // multi-key may span shards
+# Ok::<(), std::io::Error>(())
+```
+
+It wraps string / hash / list / set / sorted-set / del / exists / dbsize /
+flushall / ping / publish; full guide, command table, and same-slot rules in
+[`docs/cluster.md`](docs/cluster.md). Use it when one client drives enough
+load that the hop shows up; the plain single-port `Connection` stays correct
+and simpler for ordinary use.
+
 Superset notes vs Redis Cluster (single machine, single process — there is
 no failover, resharding, MIGRATE/ASK, or gossip): cross-slot multi-key
 commands (`MGET`, `SUNION`, transactions, blocking fan-outs) execute instead
@@ -250,6 +291,35 @@ let mut s = Store::default();
 s.set(b"key".to_vec(), b"value".to_vec(), None, false, false);
 assert_eq!(s.get(b"key").unwrap().unwrap(), b"value");
 ```
+
+## Resource-adaptive by design
+
+kevy follows one rule about resources: **release performance when there's
+room, stay alive when there isn't, gate hard at the edge, and fail loudly —
+never silently.** This runs end to end through the engine:
+
+- **Unbounded = full speed.** With `maxmemory = 0` (the default) there is no
+  accounting overhead at all — the eviction bookkeeping is compiled past on a
+  single not-taken branch. You pay nothing for a limit you don't set.
+- **Bounded = graceful eviction.** Set `maxmemory` + a policy (LRU / LFU /
+  Random / TTL, 8 in total) and writes evict sampled keys back to **5% below**
+  the limit — headroom so the next write doesn't immediately re-enter eviction.
+- **Edge = loud refusal, not corruption.** Under `NoEviction` (the default
+  policy) a write that would exceed the budget is refused with Redis's classic
+  `OOM` error before it runs — an O(1) precheck on the hot path. Only
+  memory-*growing* verbs are gated; shrinkers (`DEL`, `LPOP`, `SREM`,
+  `EXPIRE`, …) and `FLUSH*` always go through, so you can always recover a full
+  instance.
+- **Capability degrades, not crashes.** io_uring is probed at startup and
+  **falls back to epoll** on older kernels / seccomp sandboxes (force either
+  with `KEVY_IO_URING`). The `wasm32` embedded build runs with a host-fed clock
+  and reduced surface rather than refusing to build. A non-loopback `--bind`
+  **prints a warning** (kevy has no AUTH/TLS) instead of silently exposing you.
+
+The cluster-aware [`ClusterClient`](#cluster-mode-single-node-key-aware-routing)
+is the same philosophy on the client: spend the connections to skip the
+forwarding hop when load justifies it, stay on the simple single port when it
+doesn't.
 
 ## When to use kevy
 

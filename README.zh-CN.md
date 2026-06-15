@@ -34,6 +34,8 @@ redis-cli -p 6004 SET hello world
   核对。现有客户端和工具直接可用。
 - **可嵌入** —— `kevy-store` 是一个普通的 Rust 库：无网络、无运行时，还能为
   `wasm32` 构建。同一套引擎，跑在你的进程里。
+- **资源自适应** —— 内存无上限时满速运行，受限时优雅降级，到边界时大声拒绝
+  而非静默损坏（[详见](#资源自适应设计)）。
 
 关于适用范围我们如实说明：kevy 是**单机**的 —— 不做复制、集群、AUTH/TLS，
 也不直接暴露到公网（见[何时使用 kevy](#何时使用-kevy)）。
@@ -64,6 +66,20 @@ io-threads）：
 liburing 2.9 是 152 ns —— 已贴 Linux 内核底线，且未链接 liburing。可用
 [`bench/loopback_c50.sh`](bench/loopback_c50.sh) 和
 [`bench/loopback_c1.sh`](bench/loopback_c1.sh) 复现。
+
+### 集群路由（key 感知客户端）
+
+单端口客户端落到错误 shard 时要付一次跨 shard 转发 hop。集群感知的
+[`ClusterClient`](#集群模式单机key-感知路由) 把每个 key 直接路由到其属主
+shard，消除这一 hop。干净的 lx64 16 核裸机，server/client 异核，GET 并发 64：
+
+| 客户端路径 | 吞吐 | p99 延迟 |
+|------------|-----:|---------:|
+| 单 shard 代理（跨 shard hop） | 333 k/s | 3858 µs |
+| **`ClusterClient`（零 hop）** | **533 k/s** | **260 µs** |
+
+**吞吐 1.6×、尾延迟降约 15×** —— 纯粹来自消除转发 hop，相比手写裸 router
+无可测开销。完整方法见 [`docs/cluster.md`](docs/cluster.md)。
 
 ### 嵌入式吞吐（进程内，无网络）
 
@@ -199,6 +215,56 @@ kevy --bind 0.0.0.0 --port 7000 --threads 4 --dir /var/lib/kevy
 
 带完整注释的配置 schema 见
 [`crates/kevy/kevy.toml.example`](crates/kevy/kevy.toml.example)。
+
+### 集群模式（单机，key 感知路由）
+
+`--cluster`（或 `KEVY_CLUSTER=1` / `[cluster] enabled = true`）把每个 shard
+暴露为一个虚拟集群节点：shard `i` 在 `port + 1 + i` 上多开一个确定端口，
+`CLUSTER SLOTS / SHARDS / NODES` 上报真实拓扑，错误 shard 的 key 在集群端口上
+回 `-MOVED` 而非转发。这不是多机分布式（无 failover / 在线 reshard / gossip），
+而是 shard 路由的载体。
+
+```sh
+kevy --threads 8 --cluster          # 主端口 6004，shard 端口 6005-6012
+redis-cli -c -p 6005 SET foo bar    # 自动跟随 MOVED
+```
+
+Rust 调用方可用 [`kevy-client`](crates/kevy-client) 1.9.0 的类型化
+`ClusterClient`：一次发现拓扑后，每个 key 按 CRC16 slot 直达属主 shard，
+无 `-MOVED`、无转发 hop（即上文 **1.6× 吞吐 / 15× 尾延迟** 的来源）：
+
+```rust
+// Cargo.toml: kevy-client = "1.9.0"
+use kevy_client::ClusterClient;
+
+let mut cc = ClusterClient::connect("127.0.0.1", 6005)?;  // 任一 shard 端口作种子
+cc.set(b"user:42", b"alice")?;                            // 按 CRC16 slot 路由
+let v = cc.get(b"user:42")?;
+let removed = cc.del(&[b"a", b"b", b"c"])?;               // 多 key 可跨 shard
+# Ok::<(), std::io::Error>(())
+```
+
+覆盖 string / hash / list / set / zset / del / exists / dbsize / flushall /
+ping / publish；完整指南、命令表与 same-slot 规则见
+[`docs/cluster.md`](docs/cluster.md)。
+
+### 资源自适应设计
+
+kevy 对资源遵循一条原则：**有空间就释放性能，没空间就保命，到边界就硬卡，
+且永远大声报错——绝不静默。**
+
+- **无上限 = 满速**：`maxmemory = 0`（默认）时零记账开销（eviction 记账被编译期
+  跳过，单条不命中分支）。没设的限制不收你一分钱。
+- **有上限 = 优雅淘汰**：设 `maxmemory` + 策略（LRU / LFU / Random / TTL，共 8
+  种）后,写入会采样淘汰 key 直到回落到限额 **5% 以下**（留 headroom，下一次写
+  不会立即再触发淘汰）。
+- **边界 = 大声拒绝，不损坏**：`NoEviction`（默认策略）下，会超预算的写在执行前
+  就以 Redis 经典 `OOM` 错误被拒（热路径 O(1) precheck）。只卡**会增长内存**的
+  动词；收缩类（`DEL`/`LPOP`/`SREM`/`EXPIRE`…）和 `FLUSH*` 永远放行，让你总能
+  救回实例。
+- **能力降级，不崩溃**：io_uring 启动时探测，旧内核 / seccomp 沙箱下**回退到
+  epoll**；`wasm32` 嵌入构建以宿主喂时钟 + 受限 surface 运行而非拒绝构建；
+  非 loopback 的 `--bind` 会**打印警告**（kevy 无 AUTH/TLS）而非静默暴露。
 
 ### 作为嵌入式库
 
