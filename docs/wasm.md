@@ -1,22 +1,23 @@
 # kevy on WebAssembly
 
 `kevy-embedded` (the in-process variant of kevy — see
-[`crates/kevy-embedded/README.md`](../crates/kevy-embedded/README.md)) **compiles**
-to WebAssembly, and its **core in-memory KV runs today** on
-`wasm32-unknown-unknown` (`set` / `get` / `dbsize` — verified end-to-end in Node;
-see [`examples/wasm-kv/`](../examples/wasm-kv)). The full `kevy` server
-(`kevy-rt`, `kevy-sys`) does **not** target wasm — it needs sockets, threads,
-and OS pollers that WASM runtimes don't expose.
+[`crates/kevy-embedded/README.md`](../crates/kevy-embedded/README.md)) **compiles
+and runs** on WebAssembly. The **full in-memory KV — including TTL/expiry —
+works today** on `wasm32-unknown-unknown` (`set` / `get` / `del` /
+`set_with_ttl` / `pttl` / the reaper `tick`, verified end-to-end in Node; see
+[`examples/wasm-kv/`](../examples/wasm-kv)). The full `kevy` server (`kevy-rt`,
+`kevy-sys`) does **not** target wasm — it needs sockets, threads, and OS pollers
+that WASM runtimes don't expose.
 
-> ⚠️ **Runtime gap (tracked).** Any operation that touches the TTL clock —
-> `set_with_ttl`, `PEXPIRE`/`PTTL`, the reaper `tick`, and even `DEL` (it
-> reaps-before-delete) — **panics (`unreachable`) on `wasm32-unknown-unknown`**,
-> because kevy's clock reads `std::time::Instant::now()`, which that target has
-> no implementation for. The compile-only CI check never caught this; *running*
-> the module does. Making TTL/expiry work on wasm needs an `Instant`→ns clock
-> port with a host-fed time source (on the roadmap). **Until then, treat wasm
-> kevy-embedded as a non-expiring in-memory map** — `Config::default()`, no TTL
-> ops, no `DEL`. The non-expiring core is fully functional.
+> ℹ️ **Host-fed clock required on `wasm32-unknown-unknown`.** That target has no
+> `Instant`/`SystemTime` (calling them traps `unreachable`), so kevy's clock is
+> cfg-gated to a **host-fed source**: the embedding advances time via
+> [`kevy_embedded::set_clock_ns`] (monotonic ns, e.g. `Date.now() * 1e6`) — and
+> [`set_wall_clock_ms`] if you use `XADD` auto-IDs / `EXPIREAT`. Feed it before
+> TTL-sensitive ops and once per `tick`, and all of TTL/expiry/`DEL` work. (On
+> native targets and WASI `wasm32-wasip1` the OS clock is used directly — no
+> feeding needed.) **An earlier version of kevy trapped on every TTL op and
+> `DEL` here, before this clock port landed.**
 
 Three WASM runtimes are explicitly supported:
 
@@ -52,12 +53,30 @@ use kevy_embedded::{Config, Store};
 let s = Store::open(Config::default().with_ttl_reaper_manual())?;
 ```
 
-> ⚠️ **Not yet usable on `wasm32-unknown-unknown`.** `Store::tick()` — and any
-> TTL op — currently traps, because the reaper reads `Instant::now()`. The
-> manual-reaper + host-driven `tick()` design above is the *intended* shape
-> **once the clock port lands** (host feeds time → `tick(now_ms)`), but today it
-> panics. Use the non-expiring core only. (WASI `wasm32-wasip1` has a working
-> `Instant`, so this gap is specific to the browser/`-unknown-unknown` target.)
+### Feed the host clock before TTL ops and each tick
+
+On `wasm32-unknown-unknown` advance kevy's clock from the host, then drive the
+manual reaper. A typical JS-side loop (using the `wasm-bindgen` wrapper from
+[`examples/wasm-kv/`](../examples/wasm-kv)):
+
+```js
+setInterval(() => { cache.set_clock(Date.now()); cache.tick(); }, 100);
+```
+
+…where the wrapper forwards to the wasm-only setters:
+
+```rust
+use kevy_embedded::{set_clock_ns, set_wall_clock_ms};
+
+// ms = Date.now(); call before TTL-sensitive ops and once per tick.
+set_clock_ns(ms.saturating_mul(1_000_000)); // monotonic deadline clock
+set_wall_clock_ms(ms);                       // wall clock (XADD/EXPIREAT)
+store.tick();                                // active reaper sweep
+```
+
+Until the host feeds a value the clock reads `0`, so keys look live and never
+expire early — the safe direction. (WASI `wasm32-wasip1` has a working `Instant`
+and `SystemTime`, so no feeding is needed there.)
 
 ### WASI persistence needs preopened directories
 
@@ -97,8 +116,8 @@ let kevy-embedded handle the in-memory state.
 | Feature | Reason | Workaround |
 |---|---|---|
 | `kevy::serve()` (TCP server) | wasm32 has no sockets | use kevy-embedded in-process |
-| **All TTL/expiry + `DEL` on `wasm32-unknown-unknown`** | the clock reads `Instant::now()`, unimplemented on that target → traps | none yet — non-expiring core only. **Tracked: `Instant`→ns clock port.** Works on `wasm32-wasip1` (WASI has a real `Instant`). |
-| `TtlReaperMode::Background` on `wasm32-unknown-unknown` | no thread runtime | use `with_ttl_reaper_manual()` (open succeeds; TTL itself still gated by the row above) |
+| `TtlReaperMode::Background` on `wasm32-unknown-unknown` | no thread runtime | use `with_ttl_reaper_manual()` + drive `tick()` from the host event loop |
+| Self-advancing clock on `wasm32-unknown-unknown` | no `Instant`/`SystemTime` (they trap) | host feeds time via `set_clock_ns` / `set_wall_clock_ms`; then TTL/expiry/`DEL` all work (WASI `wasm32-wasip1` needs no feeding) |
 | AOF on browser wasm32 | no file system | pure in-memory `Config::default()` |
 | BGREWRITEAOF on browser wasm32 | no AOF | n/a |
 | Atomic `rename(2)` semantics on KV-backed Workers | KV is eventually consistent | snapshot serialisation handled at the JS layer |
