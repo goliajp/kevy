@@ -2,8 +2,8 @@
 
 use crate::util::*;
 use crate::value::*;
-use crate::{Entry, Store, StoreError};
-use std::time::{Duration, Instant};
+use crate::{Entry, Store, StoreError, deadline_at, now_ns};
+use std::time::Duration;
 
 impl Store {
     // ---- strings -------------------------------------------------------
@@ -48,8 +48,9 @@ impl Store {
         nx: bool,
         xx: bool,
     ) -> bool {
-        // Clock read only when a TTL is requested.
-        let expire_at = expire.map(|d| Instant::now() + d);
+        // Clock read only when a TTL is requested. Deadlines stamp from a
+        // fresh clock (`now_ns`), not the coarse cached one.
+        let expire_at = expire.map(|d| deadline_at(now_ns(), d));
         let key_heap = crate::key_heap_bytes_for(key);
         let outcome = match self.live_entry_mut(key) {
             // Key exists and is live: NX must abort; otherwise overwrite the

@@ -110,22 +110,23 @@ pub(crate) fn concurrent_auto_rewrite(
     min_size: u64,
     sink: Option<&MetricSink>,
 ) {
-    let start = Instant::now();
-    // Phase 1 — decide + freeze the COW view + start the tee, under the
-    // lock. O(n)-shallow (refcount bumps + key copies): the lock window no
-    // longer scales with serialized bytes, let alone disk speed.
-    let (view, tmp, before_bytes) = {
+    // Phase 1 — decide + freeze the COW view + start the tee, under the lock.
+    // O(n)-shallow (refcount bumps + key copies). `start` reads the clock only
+    // past the no-op early-out — never on the common idle tick (and
+    // `wasm32-unknown-unknown` has no `Instant`, so reading it up front traps).
+    let (start, view, tmp, before_bytes) = {
         let mut g = lock_inner(inner);
         let ready = g.aof.as_ref().is_some_and(|a| rewrite_threshold_met(a, pct, min_size));
         if !ready {
             return;
         }
+        let start = Instant::now();
         let Inner { store, aof, .. } = &mut *g;
         let aof = aof.as_mut().expect("checked above");
         let before = aof.size_bytes();
         let view = store.collect_snapshot();
         match aof.begin_view_rewrite() {
-            Ok(tmp) => (view, tmp, before),
+            Ok(tmp) => (start, view, tmp, before),
             Err(e) => {
                 eprintln!("kevy: embedded auto AOF rewrite (begin) failed: {e}");
                 return;

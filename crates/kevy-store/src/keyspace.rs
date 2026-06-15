@@ -6,16 +6,19 @@
 //! Split out of [`crate`] for file-size hygiene.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::value::{HashData, SetData, Value, ZSetData};
-use crate::{Entry, RenameOutcome, SmallBytes, Store, glob_match, pack_deadline, unpack_deadline};
+use crate::{
+    Entry, RenameOutcome, SmallBytes, Store, deadline_at, glob_match, now_ns, pack_deadline,
+    remaining_ms,
+};
 
 impl Store {
     // ---- generic key ops (type-agnostic) -------------------------------
 
     pub fn del(&mut self, keys: &[Vec<u8>]) -> usize {
-        let now = Instant::now();
+        let now = now_ns();
         let mut removed = 0;
         for k in keys {
             if self.reap(k, now) && self.remove_entry(k.as_slice()).is_some() {
@@ -30,7 +33,7 @@ impl Store {
     }
 
     pub fn expire(&mut self, key: &[u8], ttl: Duration) -> bool {
-        let now = Instant::now();
+        let now = now_ns();
         if !self.reap(key, now) {
             return false;
         }
@@ -38,7 +41,7 @@ impl Store {
             return false;
         };
         let had = e.expire_at_ns.is_some();
-        e.expire_at_ns = pack_deadline(now + ttl);
+        e.expire_at_ns = pack_deadline(deadline_at(now, ttl));
         let delta = e.expire_at_ns.is_some() as i64 - had as i64;
         self.adjust_expires(delta);
         true
@@ -54,7 +57,7 @@ impl Store {
     /// conversion happens here so callers persist absolute time but the
     /// hot path keeps its cheap monotonic deadline.
     pub fn expire_at_unix_ms(&mut self, key: &[u8], deadline_ms: u64) -> bool {
-        let now = Instant::now();
+        let now = now_ns();
         if !self.reap(key, now) || !self.map.contains_key(key) {
             return false;
         }
@@ -67,7 +70,7 @@ impl Store {
         let remaining = Duration::from_millis(deadline_ms - wall_now);
         if let Some(e) = self.map.get_mut(key) {
             let had = e.expire_at_ns.is_some();
-            e.expire_at_ns = pack_deadline(now + remaining);
+            e.expire_at_ns = pack_deadline(deadline_at(now, remaining));
             let delta = e.expire_at_ns.is_some() as i64 - had as i64;
             self.adjust_expires(delta);
         }
@@ -81,14 +84,12 @@ impl Store {
     /// Lazy-reaps an expired entry before the take (so an expired
     /// key is observed as `None`, not silently rehomed).
     pub fn take_with_ttl(&mut self, key: &[u8]) -> Option<(Value, Option<u64>)> {
-        let now = Instant::now();
+        let now = now_ns();
         if !self.reap(key, now) {
             return None;
         }
         let entry = self.remove_entry(key)?;
-        let ttl_ms = entry.expire_at_ns.map(|ns| {
-            unpack_deadline(ns).saturating_duration_since(now).as_millis() as u64
-        });
+        let ttl_ms = entry.expire_at_ns.map(|ns| remaining_ms(ns, now));
         Some((entry.value, ttl_ms))
     }
 
@@ -98,7 +99,7 @@ impl Store {
     /// the remaining TTL on the source shard via `take_with_ttl` and
     /// is shipping that exact remaining value here).
     pub fn put_with_ttl(&mut self, key: Vec<u8>, value: Value, ttl_ms: Option<u64>) {
-        let expire_at = ttl_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
+        let expire_at = ttl_ms.map(|ms| deadline_at(now_ns(), Duration::from_millis(ms)));
         let entry = Entry::new(value, expire_at);
         // Overwrite — drop any existing entry first so the accounting
         // doesn't double-count.
@@ -110,7 +111,7 @@ impl Store {
     /// expired entry as a side effect. Used by the cross-shard RENAME
     /// orchestrator's `nx` pre-check.
     pub fn key_exists(&mut self, key: &[u8]) -> bool {
-        let now = Instant::now();
+        let now = now_ns();
         self.reap(key, now) && self.map.contains_key(key)
     }
 
@@ -122,7 +123,7 @@ impl Store {
     /// called, both `src` and `dst` are guaranteed to live on the same
     /// shard. See `kevy-rt::start_rename` for the cross-shard split.
     pub fn rename(&mut self, src: &[u8], dst: &[u8], nx: bool) -> RenameOutcome {
-        let now = Instant::now();
+        let now = now_ns();
         if !self.reap(src, now) {
             return RenameOutcome::NoSuchSrc;
         }
@@ -158,7 +159,7 @@ impl Store {
     }
 
     pub fn persist(&mut self, key: &[u8]) -> bool {
-        let now = Instant::now();
+        let now = now_ns();
         if !self.reap(key, now) {
             return false;
         }
@@ -177,20 +178,18 @@ impl Store {
 
     /// Remaining TTL in ms: `-2` no key, `-1` no expiry, else `>= 0`.
     pub fn pttl(&mut self, key: &[u8]) -> i64 {
-        let now = Instant::now();
+        let now = now_ns();
         if !self.reap(key, now) {
             return -2;
         }
         match self.map.get(key).and_then(|e| e.expire_at_ns) {
             None => -1,
-            Some(ns) => unpack_deadline(ns)
-                .saturating_duration_since(now)
-                .as_millis() as i64,
+            Some(ns) => remaining_ms(ns, now) as i64,
         }
     }
 
     pub fn type_of(&mut self, key: &[u8]) -> &'static str {
-        let now = Instant::now();
+        let now = now_ns();
         if !self.reap(key, now) {
             return "none";
         }
@@ -230,7 +229,7 @@ impl Store {
     /// confirming the TTL subsystem actually registered keys. O(n) over the
     /// keyspace; call it for diagnostics, not on the hot path.
     pub fn ttl_pending_count(&self) -> usize {
-        let now = Instant::now();
+        let now = now_ns();
         self.map
             .values()
             .filter(|e| e.expire_at_ns.is_some() && !e.is_expired_at(now))
@@ -241,20 +240,18 @@ impl Store {
 
     /// Visit every live entry as `(key, &value, ttl_ms)` for snapshotting.
     pub fn snapshot_each<F: FnMut(&[u8], &Value, Option<u64>)>(&self, mut f: F) {
-        let now = Instant::now();
+        let now = now_ns();
         for (k, e) in &self.map {
             if e.is_expired_at(now) {
                 continue;
             }
-            let ttl = e
-                .expire_at_ns
-                .map(|ns| unpack_deadline(ns).saturating_duration_since(now).as_millis() as u64);
+            let ttl = e.expire_at_ns.map(|ns| remaining_ms(ns, now));
             f(k.as_slice(), &e.value, ttl);
         }
     }
 
     fn insert_loaded(&mut self, key: Vec<u8>, value: Value, ttl_ms: Option<u64>) {
-        let expire_at = ttl_ms.map(|ms| Instant::now() + Duration::from_millis(ms));
+        let expire_at = ttl_ms.map(|ms| deadline_at(now_ns(), Duration::from_millis(ms)));
         self.insert_entry(SmallBytes::from_vec(key), Entry::new(value, expire_at));
     }
 
@@ -288,7 +285,7 @@ impl Store {
     /// Collect live keys (optionally matching a glob `pattern`, up to `limit`).
     /// Used by KEYS/SCAN/RANDOMKEY. Treats expired keys as absent (no removal).
     pub fn collect_keys(&self, pattern: Option<&[u8]>, limit: Option<usize>) -> Vec<Vec<u8>> {
-        let now = Instant::now();
+        let now = now_ns();
         let mut out = Vec::new();
         for (k, e) in &self.map {
             if e.is_expired_at(now) {
