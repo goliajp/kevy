@@ -4,6 +4,28 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [kevy-client v1.9.0] — 2026-06-15
+
+Independent `kevy-client` minor (workspace stays at 1.17.0): a **cluster-aware
+client**, the ceiling fix for the multi-shard network tail latency a mailrs
+dogfood run flagged.
+
+### Added
+
+- **`ClusterClient`** — discovers the topology via `CLUSTER SLOTS`, opens one
+  connection per shard, and routes every key to its owner shard by CRC16 slot,
+  so no command pays the server-side cross-shard forwarding hop. Requires the
+  server in cluster mode (`--cluster`). Covers the standard surface: string
+  (set/set_with_ttl/get/incr/incr_by/expire/persist/ttl_ms), hash/list/set/
+  zset, multi-key del/exists (routed per key), keyspace-wide dbsize/flushall
+  (the server fans these out internally), and ping/publish.
+
+  Measured on a clean 16-core box (server cores 0-3, client cores 8-15):
+  **conc64 533k ops/s @ p99 260µs**, vs a single shard's 333k @ 3858µs — 1.6×
+  the throughput and a 15× tighter tail, by skipping the forwarding hop. The
+  hop, not co-location or thread migration, was the dominant cost (each ruled
+  out by measurement on the 4-vCPU dogfood box and the 16-core box).
+
 ## [v1.17.0] — 2026-06-14
 
 Minor release: **network `INFO` observability** — the Memory, Keyspace, and
