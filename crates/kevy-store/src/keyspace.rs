@@ -42,7 +42,7 @@ impl Store {
         };
         let had = e.expire_at_ns.is_some();
         e.expire_at_ns = pack_deadline(deadline_at(now, ttl));
-        let delta = e.expire_at_ns.is_some() as i64 - had as i64;
+        let delta = i64::from(e.expire_at_ns.is_some()) - i64::from(had);
         self.adjust_expires(delta);
         true
     }
@@ -71,7 +71,7 @@ impl Store {
         if let Some(e) = self.map.get_mut(key) {
             let had = e.expire_at_ns.is_some();
             e.expire_at_ns = pack_deadline(deadline_at(now, remaining));
-            let delta = e.expire_at_ns.is_some() as i64 - had as i64;
+            let delta = i64::from(e.expire_at_ns.is_some()) - i64::from(had);
             self.adjust_expires(delta);
         }
         true
@@ -326,7 +326,7 @@ impl Store {
                 ttl_ms,
             ),
             Value::List(l) => self.load_list(k, l.iter().cloned().collect(), ttl_ms),
-            Value::Set(s) => self.load_set(k, s.iter().map(|m| m.to_vec()).collect(), ttl_ms),
+            Value::Set(s) => self.load_set(k, s.iter().map(kevy_bytes::SmallBytes::to_vec).collect(), ttl_ms),
             Value::ZSet(z) => self.load_zset(
                 k,
                 z.ordered().map(|(m, sc)| (m.to_vec(), sc)).collect(),

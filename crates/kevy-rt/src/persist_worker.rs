@@ -128,7 +128,7 @@ impl<C: Commands> Shard<C> {
     /// log line if a background job or rewrite is already in flight.
     #[cold]
     pub(crate) fn start_bg_save(&mut self) {
-        if self.persist.busy() || self.aof.as_ref().is_some_and(|a| a.is_rewriting()) {
+        if self.persist.busy() || self.aof.as_ref().is_some_and(kevy_persist::Aof::is_rewriting) {
             eprintln!("kevy: shard {} bgsave skipped (persist job in flight)", self.id);
             return;
         }
@@ -163,7 +163,7 @@ impl<C: Commands> Shard<C> {
     /// old synchronous behavior); skipped if a job is already in flight.
     #[cold]
     pub(crate) fn start_bg_rewrite(&mut self) {
-        if self.persist.busy() || self.aof.as_ref().is_none_or(|a| a.is_rewriting()) {
+        if self.persist.busy() || self.aof.as_ref().is_none_or(kevy_persist::Aof::is_rewriting) {
             if self.aof.is_some() {
                 eprintln!("kevy: shard {} aof rewrite skipped (persist job in flight)", self.id);
             }

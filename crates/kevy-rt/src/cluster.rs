@@ -49,12 +49,12 @@ mod tests {
             let mut next = 0u32;
             for i in 0..n {
                 let (start, end) = shard_slot_range(i, n);
-                assert_eq!(start as u32, next, "n={n} shard {i} contiguous");
+                assert_eq!(u32::from(start), next, "n={n} shard {i} contiguous");
                 assert!(start <= end);
                 for slot in [start, end] {
                     assert_eq!(slot_to_shard(slot, n), i, "n={n} slot {slot}");
                 }
-                next = end as u32 + 1;
+                next = u32::from(end) + 1;
             }
             assert_eq!(next, 16384, "n={n} covers all slots");
         }

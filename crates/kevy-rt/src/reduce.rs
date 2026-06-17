@@ -30,9 +30,9 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
         }
         // `:N` is ≤ 22 bytes — inline, no alloc.
         Agg::SumInt(n) => {
+            use std::io::Write as _;
             let mut out = [0u8; 30];
             let mut cur = std::io::Cursor::new(&mut out[..]);
-            use std::io::Write as _;
             let _ = write!(cur, ":{n}\r\n");
             let len = cur.position() as u8;
             SmallReply::Inline { len, buf: out }

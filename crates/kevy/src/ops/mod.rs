@@ -10,6 +10,12 @@
 //! Subcommand-heavy verbs (currently `CONFIG`) live in submodules to
 //! keep file size in line with the project's ≤ 500 LOC rule.
 
+// INFO emits ~20 lines per call, called once per session handshake — the
+// `push_str(&format!(...))` shape is the legible per-line pattern; `write!`
+// adds `let _ =` boilerplate without measurable savings (INFO is not on the
+// command hot path).
+#![allow(clippy::format_push_string)]
+
 pub(crate) mod client;
 pub(crate) mod cluster;
 pub(crate) mod config;
@@ -75,7 +81,7 @@ pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
 ) {
     // INFO [section]; we always emit the requested section (or all when
     // none / "default" / "all" / "everything" is requested).
-    let section = args.get(1).map(|a| a.to_ascii_lowercase());
+    let section = args.get(1).map(<[u8]>::to_ascii_lowercase);
     let want = section.as_deref();
     // Each shard owns an independent store; INFO is answered on one shard but
     // reports the whole process. Freshen this shard's slot from the live store
@@ -128,8 +134,7 @@ fn want_section(want: Option<&[u8]>, name: &str) -> bool {
 fn info_server(cfg: &Config, b: &mut String) {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     b.push_str("# Server\r\n");
     b.push_str("redis_version:7.4.0\r\n"); // valkey-compat byte-for-byte sniffing
     b.push_str(&format!("kevy_version:{}\r\n", env!("CARGO_PKG_VERSION")));
@@ -190,12 +195,12 @@ pub(crate) fn set_persist_stats(in_flight: bool, aof_rewrites_total: u64) {
 }
 
 fn info_persistence(cfg: &Config, b: &mut String) {
-    let (in_flight, rewrites) = PERSIST_STATS.with(|c| c.get());
+    let (in_flight, rewrites) = PERSIST_STATS.with(std::cell::Cell::get);
     b.push_str("# Persistence\r\n");
     b.push_str("loading:0\r\n");
     b.push_str(&format!(
         "aof_enabled:{}\r\n",
-        if cfg.persistence.aof { 1 } else { 0 }
+        i32::from(cfg.persistence.aof)
     ));
     b.push_str(&format!(
         "appendfsync:{}\r\n",
@@ -206,7 +211,7 @@ fn info_persistence(cfg: &Config, b: &mut String) {
     // a BGSAVE/BGREWRITEAOF starting or finishing.
     b.push_str(&format!(
         "aof_rewrite_in_progress:{}\r\n",
-        if in_flight { 1 } else { 0 }
+        i32::from(in_flight)
     ));
     b.push_str(&format!("aof_rewrites_total:{rewrites}\r\n"));
     b.push_str("aof_last_rewrite_time_sec:-1\r\n");
@@ -283,9 +288,9 @@ fn cmd_debug<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
             }
             encode_simple_string(out, "OK");
         }
-        b"OBJECT" => encode_simple_string(out, "OK"),
-        b"SET-ACTIVE-EXPIRE" => encode_simple_string(out, "OK"),
-        _ => encode_simple_string(out, "OK"), // tolerant stub for any other DEBUG subcommand
+        // OBJECT / SET-ACTIVE-EXPIRE / unknown all return +OK: DEBUG is
+        // intentionally tolerant for compatibility shims.
+        _ => encode_simple_string(out, "OK"),
     }
 }
 
@@ -309,7 +314,7 @@ fn cmd_shutdown<A: ArgvView + ?Sized>(args: &A, _out: &mut Vec<u8>) {
     // for forward compatibility, then exit(0). Wave 2 will add the
     // AOF-flush-on-exit graceful path; for now we rely on appendfsync
     // = always or everysec to have flushed recent writes.
-    let mode = args.get(1).map(|s| s.to_ascii_uppercase());
+    let mode = args.get(1).map(<[u8]>::to_ascii_uppercase);
     let _ = mode; // accepted for parity; behavior identical for now
     std::process::exit(0);
 }
@@ -317,7 +322,7 @@ fn cmd_shutdown<A: ArgvView + ?Sized>(args: &A, _out: &mut Vec<u8>) {
 // ───────────── value → string converters (shared with config submodule) ─────────────
 
 pub(super) fn appendfsync_str(v: kevy_config::AppendFsync) -> &'static str {
-    use kevy_config::AppendFsync::*;
+    use kevy_config::AppendFsync::{Always, EverySec, No};
     match v {
         Always => "always",
         EverySec => "everysec",
@@ -326,7 +331,7 @@ pub(super) fn appendfsync_str(v: kevy_config::AppendFsync) -> &'static str {
 }
 
 pub(super) fn eviction_str(v: kevy_config::EvictionPolicy) -> &'static str {
-    use kevy_config::EvictionPolicy::*;
+    use kevy_config::EvictionPolicy::{NoEviction, AllKeysLru, AllKeysLfu, AllKeysRandom, VolatileLru, VolatileLfu, VolatileRandom, VolatileTtl};
     match v {
         NoEviction => "noeviction",
         AllKeysLru => "allkeys-lru",
@@ -340,7 +345,7 @@ pub(super) fn eviction_str(v: kevy_config::EvictionPolicy) -> &'static str {
 }
 
 pub(super) fn log_level_str(v: kevy_config::LogLevel) -> &'static str {
-    use kevy_config::LogLevel::*;
+    use kevy_config::LogLevel::{Trace, Debug, Info, Warn, Error};
     match v {
         Trace => "trace",
         Debug => "debug",
@@ -381,7 +386,7 @@ mod tests {
     fn info_returns_bulk_with_sections() {
         let out = run(b"INFO", &[]);
         let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("$"), "INFO must reply as bulk string");
+        assert!(s.starts_with('$'), "INFO must reply as bulk string");
         assert!(s.contains("# Server"));
         assert!(s.contains("# Replication"));
         assert!(s.contains("role:master"));

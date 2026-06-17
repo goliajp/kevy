@@ -108,8 +108,7 @@ pub fn commit_reshard<L: ShardLayout>(
     }
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_nanos());
     write_journal(dir, prev_n, target, stamp)?; // ── commit point ──
     finish_reshard(dir, prev_n, target, stamp, lay)?;
     Ok(stamp)

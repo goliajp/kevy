@@ -137,6 +137,7 @@ fn log_replay_summary(
 
 /// Hex + ASCII preview of up to 16 bytes, for diagnostic eprintlns.
 fn preview_bytes(b: &[u8]) -> String {
+    use std::fmt::Write;
     let n = b.len().min(16);
     let mut hex = String::with_capacity(n * 3);
     let mut ascii = String::with_capacity(n);
@@ -144,8 +145,7 @@ fn preview_bytes(b: &[u8]) -> String {
         if !hex.is_empty() {
             hex.push(' ');
         }
-        use std::fmt::Write;
-        let _ = write!(hex, "{:02x}", x);
+        let _ = write!(hex, "{x:02x}");
         ascii.push(if (0x20..0x7f).contains(&x) { x as char } else { '.' });
     }
     format!("hex=[{hex}] ascii=[{ascii}]")

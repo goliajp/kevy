@@ -147,7 +147,7 @@ impl Commands for KevyCommands {
     }
 
     fn dispatch_into<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A, out: &mut Vec<u8>) {
-        dispatch::dispatch_into(store, args, out)
+        dispatch::dispatch_into(store, args, out);
     }
 
     fn dispatch_resp3<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8> {
@@ -162,7 +162,7 @@ impl Commands for KevyCommands {
         args: &A,
         out: &mut Vec<u8>,
     ) {
-        dispatch::dispatch_into_resp3(store, args, out)
+        dispatch::dispatch_into_resp3(store, args, out);
     }
 
     fn is_quit<A: ArgvView + ?Sized>(&self, args: &A) -> bool {
@@ -216,7 +216,7 @@ impl Commands for KevyCommands {
         if hz == 0 {
             0
         } else {
-            (1000 / hz as u64).clamp(1, 10_000)
+            (1000 / u64::from(hz)).clamp(1, 10_000)
         }
     }
 
@@ -260,7 +260,7 @@ impl Commands for KevyCommands {
         let tick_ms = if hz == 0 {
             Some(0)
         } else {
-            Some((1000u64 / hz as u64).clamp(1, 10_000))
+            Some((1000u64 / u64::from(hz)).clamp(1, 10_000))
         };
         kevy_rt::LiveRuntimeConfig {
             appendfsync: Some(map_appendfsync(cfg.persistence.appendfsync)),

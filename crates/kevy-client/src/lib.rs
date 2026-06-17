@@ -410,7 +410,7 @@ mod tests {
         assert_eq!(c.incr_by(b"counter", 9).unwrap(), 10);
 
         c.set(b"timed", b"x").unwrap();
-        assert!(c.expire(b"timed", Duration::from_secs(60)).unwrap());
+        assert!(c.expire(b"timed", Duration::from_mins(1)).unwrap());
         let ttl = c.ttl_ms(b"timed").unwrap();
         assert!((0..=60_000).contains(&ttl), "ttl_ms = {ttl}");
         assert!(c.persist(b"timed").unwrap());
@@ -423,7 +423,7 @@ mod tests {
         c.flushall().unwrap();
         assert_eq!(c.dbsize().unwrap(), 0);
 
-        c.set_with_ttl(b"timed2", b"x", Duration::from_secs(60))
+        c.set_with_ttl(b"timed2", b"x", Duration::from_mins(1))
             .unwrap();
         let ttl = c.ttl_ms(b"timed2").unwrap();
         assert!((0..=60_000).contains(&ttl));

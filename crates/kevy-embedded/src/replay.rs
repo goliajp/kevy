@@ -24,7 +24,7 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
     match verb.as_slice() {
         b"SET" => apply_set(store, args),
         b"DEL" => {
-            let keys: Vec<Vec<u8>> = args.iter().skip(1).map(|a| a.to_vec()).collect();
+            let keys: Vec<Vec<u8>> = args.iter().skip(1).map(<[u8]>::to_vec).collect();
             store.del(&keys);
         }
         b"INCR" => {
@@ -230,14 +230,14 @@ where
     F: FnOnce(&mut Store, &[u8], &[Vec<u8>]),
 {
     let Some(k) = args.get(1) else { return };
-    let rest: Vec<Vec<u8>> = args.iter().skip(2).map(|a| a.to_vec()).collect();
+    let rest: Vec<Vec<u8>> = args.iter().skip(2).map(<[u8]>::to_vec).collect();
     if !rest.is_empty() {
         f(store, k, &rest);
     }
 }
 
 fn ascii_upper(b: &[u8]) -> Vec<u8> {
-    b.iter().map(|c| c.to_ascii_uppercase()).collect()
+    b.iter().map(u8::to_ascii_uppercase).collect()
 }
 
 fn parse_i64(b: &[u8]) -> Option<i64> {

@@ -54,8 +54,7 @@ pub fn read_shards_meta(path: &Path) -> Option<ShardsMeta> {
     let mut lines = text.lines();
     let n: usize = lines.next()?.trim().parse().ok()?;
     let routing = match lines.next().map(str::trim) {
-        None | Some("") => Routing::KevyHash,
-        Some("kevyhash") => Routing::KevyHash,
+        None | Some("" | "kevyhash") => Routing::KevyHash,
         Some("slots") => Routing::Slots,
         Some(_) => return None,
     };

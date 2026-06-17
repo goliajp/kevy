@@ -387,7 +387,7 @@ impl<C: Commands> Shard<C> {
                     }
                 }
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {} // retry accept
                 Err(_) => break,
             }
         }

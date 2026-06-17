@@ -215,23 +215,17 @@ fn cmd_range<A: ArgvView + ?Sized>(
     } else {
         (&args[2], &args[3])
     };
-    let start = match parse_range_start(s_arg) {
-        Ok(id) => id,
-        Err(_) => {
-            return encode_error(
-                out,
-                "ERR Invalid stream ID specified as stream command argument",
-            );
-        }
+    let Ok(start) = parse_range_start(s_arg) else {
+        return encode_error(
+            out,
+            "ERR Invalid stream ID specified as stream command argument",
+        );
     };
-    let end = match parse_range_end(e_arg) {
-        Ok(id) => id,
-        Err(_) => {
-            return encode_error(
-                out,
-                "ERR Invalid stream ID specified as stream command argument",
-            );
-        }
+    let Ok(end) = parse_range_end(e_arg) else {
+        return encode_error(
+            out,
+            "ERR Invalid stream ID specified as stream command argument",
+        );
     };
     let count = match parse_optional_count(args, 4) {
         Ok(c) => c,
@@ -450,10 +444,13 @@ fn xread_parse_kv_u64<A: ArgvView + ?Sized>(
         .ok_or(bad)
 }
 
+/// `(key, last-seen-arg)` pairs as parsed from the `STREAMS …` tail.
+type StreamKeyLastSeen = (Vec<u8>, Vec<u8>);
+
 fn xread_parse_streams<A: ArgvView + ?Sized>(
     args: &A,
     start: usize,
-) -> Result<Vec<(Vec<u8>, Vec<u8>)>, &'static str> {
+) -> Result<Vec<StreamKeyLastSeen>, &'static str> {
     let rest = args.len() - start;
     if rest == 0 || !rest.is_multiple_of(2) {
         return Err(

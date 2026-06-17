@@ -78,7 +78,7 @@ impl<C: Commands> Shard<C> {
                     }
                     Ok(n) => conn.input.extend_from_slice(&self.read_buf[..n]),
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {} // retry the read
                     Err(_) => {
                         conn.closing = true;
                         break;

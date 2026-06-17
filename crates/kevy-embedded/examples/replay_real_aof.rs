@@ -16,9 +16,7 @@ fn main() {
         .nth(1)
         .expect("usage: replay_real_aof <aof-path>");
     let src = PathBuf::from(&path);
-    let bytes = std::fs::metadata(&src)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let bytes = std::fs::metadata(&src).map_or(0, |m| m.len());
     println!("reproducer: staging {} bytes from {}", bytes, src.display());
 
     let dir = std::env::temp_dir().join(format!(

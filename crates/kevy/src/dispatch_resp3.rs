@@ -8,7 +8,7 @@
 //! and short-circuits on a hit, so adding an override is a 1:1 swap
 //! from a V2 helper to a RESP3 helper.
 
-use crate::cmd::*;
+use crate::cmd::{wrong_args, arg_f64, cmd_zrange, cmd_zrangebyscore, store_err};
 use kevy_resp::{
     ArgvView, RespVersion, encode_bulk, encode_double, encode_error, encode_map_header,
     encode_null, encode_set_header,
@@ -32,18 +32,18 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
 ) -> bool {
     match cmd {
         b"HGETALL" => {
-            if args.len() != 2 {
-                wrong_args(out, "hgetall");
-            } else {
+            if args.len() == 2 {
                 emit_hash_map_resp3(store.hgetall(&args[1]), out);
+            } else {
+                wrong_args(out, "hgetall");
             }
             true
         }
         b"ZSCORE" => {
-            if args.len() != 3 {
-                wrong_args(out, "zscore");
-            } else {
+            if args.len() == 3 {
                 emit_zscore_resp3(store.zscore(&args[1], &args[2]), out);
+            } else {
+                wrong_args(out, "zscore");
             }
             true
         }
@@ -58,10 +58,10 @@ pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
             true
         }
         b"SMEMBERS" => {
-            if args.len() != 2 {
-                wrong_args(out, "smembers");
-            } else {
+            if args.len() == 2 {
                 emit_set_resp3(store.smembers(&args[1]), out);
+            } else {
+                wrong_args(out, "smembers");
             }
             true
         }

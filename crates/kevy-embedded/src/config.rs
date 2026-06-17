@@ -96,6 +96,7 @@ impl Config {
     /// Enable persistence under `dir` — snapshot file + AOF land inside.
     /// AOF defaults on; turn it off with [`Self::without_aof`] for pure
     /// snapshot-only durability.
+    #[must_use]
     pub fn with_persist(mut self, dir: impl Into<PathBuf>) -> Self {
         self.data_dir = Some(dir.into());
         self
@@ -103,24 +104,28 @@ impl Config {
 
     /// Disable the AOF (snapshot-only persistence — explicit `save_snapshot`
     /// calls are the only way data survives restart).
+    #[must_use]
     pub fn without_aof(mut self) -> Self {
         self.aof = false;
         self
     }
 
     /// Soft memory ceiling in bytes. `0` keeps the default (unlimited).
+    #[must_use]
     pub fn with_max_memory(mut self, bytes: u64) -> Self {
         self.maxmemory = bytes;
         self
     }
 
     /// Eviction policy when over [`Self::with_max_memory`].
+    #[must_use]
     pub fn with_eviction(mut self, policy: EvictionPolicy) -> Self {
         self.eviction_policy = policy;
         self
     }
 
     /// AOF fsync policy. Default [`AppendFsync::EverySec`].
+    #[must_use]
     pub fn with_appendfsync(mut self, fsync: AppendFsync) -> Self {
         self.appendfsync = fsync;
         self
@@ -132,6 +137,7 @@ impl Config {
     /// in `Manual` mode it runs when you call [`crate::Store::tick`]. Pass
     /// `pct = 0` to disable auto-rewrite (you can still call
     /// [`crate::Store::rewrite_aof`] yourself). Defaults: 100 % / 64 MiB.
+    #[must_use]
     pub fn with_auto_aof_rewrite(mut self, pct: u32, min_size: u64) -> Self {
         self.auto_aof_rewrite_pct = pct;
         self.auto_aof_rewrite_min_size = min_size;
@@ -145,6 +151,7 @@ impl Config {
     /// re-shards the existing `aof-0.aof` into `aof-0..aof-{n-1}` on the next
     /// open (the old file is backed up to `aof-0.aof.premigration.<ts>` first).
     /// Pub/sub is process-wide (handled on shard 0), not sharded.
+    #[must_use]
     pub fn with_shards(mut self, n: usize) -> Self {
         self.shards = n.max(1);
         self
@@ -155,6 +162,7 @@ impl Config {
     /// Prometheus / a log line / a counter. The callback runs synchronously on
     /// the emitting thread (reaper thread for background rewrites), so keep it
     /// fast and non-blocking. Replaces any previously-set sink.
+    #[must_use]
     pub fn with_metric_sink(
         mut self,
         sink: impl Fn(crate::KevyMetric) + Send + Sync + 'static,
@@ -166,24 +174,28 @@ impl Config {
     /// Caller-driven TTL reaping — disables the background thread.
     /// Required for WASM (no threads available). Call
     /// [`crate::Store::tick`] yourself from your event loop.
+    #[must_use]
     pub fn with_ttl_reaper_manual(mut self) -> Self {
         self.ttl_reaper = TtlReaperMode::Manual;
         self
     }
 
     /// Override the background reaper interval. Default 100 ms.
+    #[must_use]
     pub fn with_reaper_interval(mut self, iv: Duration) -> Self {
         self.reaper_interval = iv;
         self
     }
 
     /// Override the snapshot file name inside `data_dir`.
+    #[must_use]
     pub fn with_snapshot_filename(mut self, name: impl Into<String>) -> Self {
         self.snapshot_filename = name.into();
         self
     }
 
     /// Override the AOF file name inside `data_dir`.
+    #[must_use]
     pub fn with_aof_filename(mut self, name: impl Into<String>) -> Self {
         self.aof_filename = name.into();
         self

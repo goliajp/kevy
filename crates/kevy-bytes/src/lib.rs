@@ -231,9 +231,8 @@ impl SmallBytes {
         let layout = unsafe { Layout::from_size_align_unchecked(len, 1) };
         // SAFETY: layout.size() > 0 (caller's heap branch guarantees len > 22).
         let raw = unsafe { alloc(layout) };
-        let ptr = match NonNull::new(raw) {
-            Some(p) => p,
-            None => handle_alloc_error(layout),
+        let Some(ptr) = NonNull::new(raw) else {
+            handle_alloc_error(layout)
         };
         // SAFETY: alloc returned a writable region of `len` bytes; source is a
         // disjoint slice.
@@ -385,9 +384,8 @@ impl SmallBytes {
         let layout = unsafe { Layout::from_size_align_unchecked(len, 1) };
         // SAFETY: layout.size() > 0.
         let raw = unsafe { alloc(layout) };
-        let ptr = match NonNull::new(raw) {
-            Some(p) => p,
-            None => handle_alloc_error(layout),
+        let Some(ptr) = NonNull::new(raw) else {
+            handle_alloc_error(layout)
         };
         // SAFETY: src has `len` valid bytes; dst is freshly-allocated for `len`
         // bytes; regions are disjoint.

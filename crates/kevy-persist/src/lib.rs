@@ -302,7 +302,7 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
 
 fn write_hash_payload<W: Write>(w: &mut W, h: &kevy_store::HashData) -> io::Result<()> {
     w.write_all(&(h.len() as u32).to_le_bytes())?;
-    for (f, v) in h.iter() {
+    for (f, v) in h {
         write_bytes(w, f.as_slice())?;
         write_bytes(w, v)?;
     }
@@ -311,7 +311,7 @@ fn write_hash_payload<W: Write>(w: &mut W, h: &kevy_store::HashData) -> io::Resu
 
 fn write_list_payload<W: Write>(w: &mut W, l: &kevy_store::ListData) -> io::Result<()> {
     w.write_all(&(l.len() as u32).to_le_bytes())?;
-    for item in l.iter() {
+    for item in l {
         write_bytes(w, item)?;
     }
     Ok(())
@@ -319,7 +319,7 @@ fn write_list_payload<W: Write>(w: &mut W, l: &kevy_store::ListData) -> io::Resu
 
 fn write_set_payload<W: Write>(w: &mut W, set: &kevy_store::SetData) -> io::Result<()> {
     w.write_all(&(set.len() as u32).to_le_bytes())?;
-    for m in set.iter() {
+    for m in set {
         write_bytes(w, m.as_slice())?;
     }
     Ok(())

@@ -45,14 +45,11 @@ pub(super) fn cmd_xautoclaim<A: ArgvView + ?Sized>(
         Some(n) => n,
         None => return encode_error(out, "ERR value is not an integer or out of range"),
     };
-    let start = match parse_range_start(&args[5]) {
-        Ok(id) => id,
-        Err(_) => {
-            return encode_error(
-                out,
-                "ERR Invalid stream ID specified as stream command argument",
-            );
-        }
+    let Ok(start) = parse_range_start(&args[5]) else {
+        return encode_error(
+            out,
+            "ERR Invalid stream ID specified as stream command argument",
+        );
     };
     let (count, justid) = match parse_autoclaim_tail(args, 6) {
         Ok(p) => p,

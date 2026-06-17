@@ -36,7 +36,7 @@ impl Store {
             }
         }
         let old_has_ttl = prev.as_ref().is_some_and(|o| o.expire_at_ns.is_some());
-        self.adjust_expires(new_has_ttl as i64 - old_has_ttl as i64);
+        self.adjust_expires(i64::from(new_has_ttl) - i64::from(old_has_ttl));
         self.update_peak();
         prev
     }

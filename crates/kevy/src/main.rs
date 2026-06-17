@@ -68,7 +68,7 @@ fn die<E: std::fmt::Display, T>(e: E) -> T {
 /// the real shard count, not the `0 = auto` sentinel.
 fn resolve_thread_count(cfg: &mut Config) -> usize {
     let threads = if cfg.server.threads == 0 {
-        std::thread::available_parallelism().map_or(1, |n| n.get())
+        std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
     } else {
         cfg.server.threads
     };
