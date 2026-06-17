@@ -79,6 +79,16 @@ fn parse_xclaim_tail<A: ArgvView + ?Sized>(
     start: usize,
     min_idle: u64,
 ) -> Result<(Vec<StreamId>, XClaimOpts, bool), &'static str> {
+    let (ids, opt_start) = parse_xclaim_ids(args, start)?;
+    let opts = parse_xclaim_opts(args, opt_start, min_idle)?;
+    let justid = opts.justid;
+    Ok((ids, opts, justid))
+}
+
+fn parse_xclaim_ids<A: ArgvView + ?Sized>(
+    args: &A,
+    start: usize,
+) -> Result<(Vec<StreamId>, usize), &'static str> {
     let mut ids = Vec::new();
     let mut i = start;
     while i < args.len() {
@@ -94,6 +104,14 @@ fn parse_xclaim_tail<A: ArgvView + ?Sized>(
         ids.push(id);
         i += 1;
     }
+    Ok((ids, i))
+}
+
+fn parse_xclaim_opts<A: ArgvView + ?Sized>(
+    args: &A,
+    start: usize,
+    min_idle: u64,
+) -> Result<XClaimOpts, &'static str> {
     let mut opts = XClaimOpts {
         min_idle_ms: min_idle,
         idle_override_ms: None,
@@ -102,6 +120,7 @@ fn parse_xclaim_tail<A: ArgvView + ?Sized>(
         force: false,
         justid: false,
     };
+    let mut i = start;
     while i < args.len() {
         let tok = args[i].to_ascii_uppercase();
         match tok.as_slice() {
@@ -128,8 +147,7 @@ fn parse_xclaim_tail<A: ArgvView + ?Sized>(
             _ => return Err("ERR syntax error"),
         }
     }
-    let justid = opts.justid;
-    Ok((ids, opts, justid))
+    Ok(opts)
 }
 
 fn parse_autoclaim_tail<A: ArgvView + ?Sized>(
