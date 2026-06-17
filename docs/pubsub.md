@@ -1,4 +1,4 @@
-# Pub/sub in kevy-client (v1.3.0)
+# Pub/sub in kevy-client
 
 The same code drives both an in-process bus and a TCP kevy server.
 Pick the backend with a URL at runtime — no scheme-branching at call
@@ -6,7 +6,7 @@ sites.
 
 ```toml
 [dependencies]
-kevy-client = "1.3.0"
+kevy-client = "1.9.0"
 ```
 
 ## URL semantics
@@ -26,6 +26,13 @@ kevy-client = "1.3.0"
 **Anonymous `mem://` cannot receive published messages** because
 nothing else can reach the same backing `Store`. `Subscriber::open`
 rejects it with `ErrorKind::Unsupported`. Use `mem://<some-name>`.
+
+**Cluster note.** Pub/sub in kevy is **process-level**, not slot-routed:
+publishing on any cluster shard's port reaches subscribers on any
+other shard's port within the same process. You do **not** need
+`ClusterClient` for pub/sub — a plain `Connection::open("kevy://host:port")`
+to any shard port works. See [`docs/cluster.md`](cluster.md) for
+slot-routed keyspace traffic.
 
 ## Pattern 1 — same-thread dev loop
 
@@ -71,7 +78,7 @@ let ev = sub.recv()?;
 
 ## Pattern 3 — environment-driven dev/prod swap
 
-The whole point of v1.3.0 — same code, two backends:
+Same code, three backends:
 
 ```rust
 use kevy_client::{Connection, Subscriber};
@@ -200,7 +207,7 @@ at the network boundary if you need them.
 works, so multiple async tasks (or `spawn_blocking` jobs) can share one
 handle. The blocking `recv` API is intentionally retained: kevy ships
 zero crates.io dependencies, so an async-runtime-agnostic future would
-have to be hand-built. Two clean patterns:
+have to be hand-built. Three clean patterns:
 
 **Pattern A — dedicated OS thread + runtime channel** (single consumer,
 no shared handle needed):
@@ -267,7 +274,7 @@ let task_handle = {
 lock contention — the non-blocking contract is preserved even when
 another task holds the receiver via `recv`.
 
-**Pattern C — borrowing iterators on `kevy-client::Subscriber`** (v1.7.0):
+**Pattern C — borrowing iterators on `kevy-client::Subscriber`**:
 
 ```rust,no_run
 # use kevy_client::Subscriber;
@@ -299,30 +306,16 @@ the wait early. The iterator API is part of `kevy-client`, not
 you want it; reach for `Subscription` directly when you need the
 embed-only primitives.
 
-## Migrating from v1.2.0
-
-Source-compatible. The semantic change is `Connection::publish` on
-embedded URLs:
-
-| URL | v1.2.0 publish | v1.3.0 publish |
-|---|---|---|
-| `mem://` | always `Ok(0)` | always `Ok(0)` (unchanged) |
-| `mem://<name>` | error | `Ok(<recipient count>)` |
-| `file:///path` | always `Ok(0)` | `Ok(<recipient count>)` |
-| `kevy://…` | `Ok(<server count>)` | `Ok(<server count>)` (unchanged) |
-
-`Subscriber::open` accepts `mem://<name>` and `file:///path` in v1.3.0
-(both returned `Unsupported` before). `mem://` (anonymous) still
-returns `Unsupported`.
-
 ## Related
 
-- [`kevy-embedded` v1.1.3+](https://crates.io/crates/kevy-embedded) —
+- [`kevy-embedded` 1.2.0+](https://crates.io/crates/kevy-embedded) —
   the underlying `Store::Clone` + `PubsubBus` primitives. Use directly
   if you don't need the URL-facade indirection.
-- [`kevy-client` v1.6.0+](https://crates.io/crates/kevy-client) — the
-  URL facade itself; ships `Subscriber::recv_message` (v1.6.0) and
-  `events()` / `messages()` iterators (v1.7.0) for ergonomic frame
-  consumption.
-- [`kevy`](https://crates.io/crates/kevy) — the TCP server, when you
-  outgrow single-process.
+- [`kevy-client` 1.9.0+](https://crates.io/crates/kevy-client) — the
+  URL facade itself. Ships `Subscriber::recv_message`, `events()` /
+  `messages()` iterators, and `ClusterClient` for slot-routed keyspace
+  traffic (pub/sub doesn't need it — see the cluster note above).
+- [`kevy`](https://crates.io/crates/kevy) — the TCP server (1.17.0+),
+  when you outgrow single-process.
+- [`docs/cluster.md`](cluster.md) — cluster mode and `ClusterClient`
+  for slot-routed keyspace traffic.
