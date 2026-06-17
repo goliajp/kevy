@@ -104,7 +104,7 @@ impl<'a, K, V> Iterator for IterMut<'a, K, V> {
                 // SAFETY: full slot ⇒ initialised, and `pos` only advances, so
                 // each index is yielded at most once — the returned `&mut V`s
                 // are disjoint and all live within the `'a` borrow of `slots`.
-                let kv = unsafe { &mut *(self.slots.as_mut_ptr().add(i) as *mut (K, V)) };
+                let kv = unsafe { &mut *self.slots.as_mut_ptr().add(i).cast::<(K, V)>() };
                 return Some((&kv.0, &mut kv.1));
             }
         }

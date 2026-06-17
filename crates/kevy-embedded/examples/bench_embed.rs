@@ -101,7 +101,11 @@ fn bench_ttl_get(label: &str, manual_reaper: bool, n: usize, keys: &[Vec<u8>]) {
         Config::default() // background reaper (default) → cached clock trusted
     };
     let store = Store::open(cfg).unwrap();
-    let ttl = std::time::Duration::from_secs(3600); // never expires during the run
+    // `from_secs(3600)` is fine here: example is rust-version = workspace,
+    // and `Duration::from_hours` was 1.86-stable, after the workspace's
+    // current MSRV (1.95). Suppress the suggestion locally.
+    #[allow(clippy::duration_suboptimal_units)]
+    let ttl = std::time::Duration::from_secs(3600); // 1 h — never expires during the run
     for k in keys {
         store.set_with_ttl(k, VAL, ttl).unwrap();
     }

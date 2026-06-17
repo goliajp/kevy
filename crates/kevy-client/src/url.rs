@@ -83,7 +83,7 @@ pub(crate) fn resolve_store(target: &Target) -> io::Result<Store> {
         && let Ok(mut r) = embed_registry().lock()
     {
         r.retain(|_, w| w.upgrade().is_some());
-        if let Some(store) = r.get(k).and_then(|w| w.upgrade()) {
+        if let Some(store) = r.get(k).and_then(kevy_embedded::WeakStore::upgrade) {
             return Ok(store);
         }
     }

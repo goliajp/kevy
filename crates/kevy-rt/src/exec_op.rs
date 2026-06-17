@@ -95,7 +95,7 @@ impl<C: Commands> Shard<C> {
                 for k in keys {
                     let g = match kind {
                         GatherKind::Str => {
-                            Gathered::Str(self.store.get(&k).ok().flatten().map(|v| v.to_vec()))
+                            Gathered::Str(self.store.get(&k).ok().flatten().map(<[u8]>::to_vec))
                         }
                         GatherKind::Set => match self.store.set_snapshot(&k) {
                             Ok(members) => Gathered::Members(members),
@@ -118,7 +118,7 @@ impl<C: Commands> Shard<C> {
                 let dirty = keys
                     .iter()
                     .any(|(k, v)| self.store.key_version(k) != *v);
-                Part::Int(dirty as i64)
+                Part::Int(i64::from(dirty))
             }
             Op::Rename { src, dst, nx } => {
                 // Same-shard atomic rename. The runtime's start_rename
@@ -212,7 +212,7 @@ impl<C: Commands> Shard<C> {
                 // would truncate the AOF mid-tee; skip with a log line
                 // (Redis's SAVE-during-BGSAVE error, simplified for the
                 // multi-shard +OK aggregation).
-                if self.persist.busy() || self.aof.as_ref().is_some_and(|a| a.is_rewriting()) {
+                if self.persist.busy() || self.aof.as_ref().is_some_and(kevy_persist::Aof::is_rewriting) {
                     eprintln!("kevy: shard {} SAVE skipped (background persist in flight)", self.id);
                     return Part::Ok;
                 }
@@ -231,7 +231,7 @@ impl<C: Commands> Shard<C> {
                             "kevy: shard {} failed to save {}: {e}",
                             self.id,
                             path.display()
-                        )
+                        );
                     }
                 }
                 Part::Ok

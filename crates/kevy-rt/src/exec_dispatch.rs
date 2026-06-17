@@ -143,7 +143,7 @@ impl<C: Commands> Shard<C> {
     /// (`None` = SLOWLOG OFF, the default — a no-op).
     pub(crate) fn slowlog_maybe<A: ArgvView + ?Sized>(&mut self, t0: Option<Instant>, args: &A) {
         if let Some(t0) = t0 {
-            let elapsed = t0.elapsed().as_micros().min(u64::MAX as u128) as u64;
+            let elapsed = t0.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
             self.slowlog_record(args, elapsed);
         }
     }

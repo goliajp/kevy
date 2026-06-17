@@ -31,7 +31,7 @@ pub(crate) fn pack_deadline(deadline_ns: u64) -> Option<NonZeroU64> {
 /// rather than wrapping on an absurd TTL.
 #[inline]
 pub(crate) fn deadline_at(now_ns: u64, ttl: Duration) -> u64 {
-    now_ns.saturating_add(ttl.as_nanos().min(u64::MAX as u128) as u64)
+    now_ns.saturating_add(ttl.as_nanos().min(u128::from(u64::MAX)) as u64)
 }
 
 /// Whole millis remaining from `now_ns` to a packed `deadline` (`0` once the

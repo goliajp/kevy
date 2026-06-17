@@ -91,6 +91,10 @@ trait UnsafeCellExt<T> {
 }
 #[cfg(not(loom))]
 impl<T> UnsafeCellExt<T> for std::cell::UnsafeCell<T> {
+    // The shim must vanish at every SPSC-ring hot site: with_mut wraps a
+    // single `UnsafeCell::get()` (one ptr load), so loom-vs-std API parity
+    // can't justify any call overhead in the producer/consumer fast loops.
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn with_mut<F, R>(&self, f: F) -> R
     where
@@ -352,18 +356,21 @@ mod tests {
         assert_eq!(rx.len(), 1);
     }
 
+    use std::sync::Arc as StdArc;
+
+    // Drop-counting payload used by `drops_queued_elements_exactly_once`.
+    struct Bomb(StdArc<AtomicUsize>);
+    impl Drop for Bomb {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
     #[test]
     fn drops_queued_elements_exactly_once() {
         // A payload that bumps a shared counter on drop; verify the ring's Drop
         // releases exactly the still-queued items (no leak, no double free).
-        use std::sync::Arc as StdArc;
         let dropped = StdArc::new(AtomicUsize::new(0));
-        struct Bomb(StdArc<AtomicUsize>);
-        impl Drop for Bomb {
-            fn drop(&mut self) {
-                self.0.fetch_add(1, Ordering::SeqCst);
-            }
-        }
         {
             let (mut tx, mut rx) = ring::<Bomb>(8);
             for _ in 0..5 {
@@ -425,21 +432,18 @@ mod tests {
         let mut next = 0u64;
         let mut spins = 0u64;
         loop {
-            match rx.pop() {
-                Some(v) => {
-                    assert_eq!(v, next);
-                    next += 1;
-                    spins += 1;
-                    if spins.is_multiple_of(1000) {
-                        std::thread::yield_now(); // let the ring fill up
-                    }
+            if let Some(v) = rx.pop() {
+                assert_eq!(v, next);
+                next += 1;
+                spins += 1;
+                if spins.is_multiple_of(1000) {
+                    std::thread::yield_now(); // let the ring fill up
                 }
-                None => {
-                    if done.load(Ordering::Acquire) && rx.is_empty() {
-                        break;
-                    }
-                    std::thread::yield_now();
+            } else {
+                if done.load(Ordering::Acquire) && rx.is_empty() {
+                    break;
                 }
+                std::thread::yield_now();
             }
         }
         producer.join().unwrap();

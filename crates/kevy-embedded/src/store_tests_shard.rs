@@ -22,7 +22,7 @@ fn sharded_in_memory_roundtrip() {
     }
     // Cross-shard DEL: keys hash to different shards.
     let keys: Vec<Vec<u8>> = (0..1000u32).map(|i| format!("k{i}").into_bytes()).collect();
-    let refs: Vec<&[u8]> = keys.iter().map(|k| k.as_slice()).collect();
+    let refs: Vec<&[u8]> = keys.iter().map(std::vec::Vec::as_slice).collect();
     assert_eq!(s.del(&refs).unwrap(), 1000);
     assert_eq!(s.dbsize(), 0);
 }

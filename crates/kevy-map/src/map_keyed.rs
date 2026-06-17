@@ -25,7 +25,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 // SAFETY: slot is full ⇒ initialised. We replace only the V
                 // field; the old K is kept (std HashMap semantics).
                 let v_ptr = unsafe {
-                    let kv: *mut (K, V) = self.slots_ptr.as_ptr().add(idx) as *mut (K, V);
+                    let kv: *mut (K, V) = self.slots_ptr.as_ptr().add(idx).cast::<(K, V)>();
                     ptr::addr_of_mut!((*kv).1)
                 };
                 let old_v = unsafe { ptr::replace(v_ptr, value) };

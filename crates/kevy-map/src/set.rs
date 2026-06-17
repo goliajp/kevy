@@ -108,7 +108,7 @@ pub struct SetIter<'a, K>(Iter<'a, K, ()>);
 impl<'a, K> Iterator for SetIter<'a, K> {
     type Item = &'a K;
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|(k, _)| k)
+        self.0.next().map(|(k, ())| k)
     }
 }
 

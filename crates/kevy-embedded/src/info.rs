@@ -34,7 +34,7 @@ impl Store {
         KevyInfo {
             keys: self.sum_shards(|i| i.store.dbsize()),
             used_memory: self.sum_shards_u64(|i| i.store.used_memory()),
-            aof_bytes: self.sum_shards_u64(|i| i.aof.as_ref().map_or(0, |a| a.size_bytes())),
+            aof_bytes: self.sum_shards_u64(|i| i.aof.as_ref().map_or(0, kevy_persist::Aof::size_bytes)),
             expire_pending: self.sum_shards(|i| i.store.ttl_pending_count()),
             evictions: self.sum_shards_u64(|i| i.store.evictions_total()),
             expired_keys: self.sum_shards_u64(|i| i.store.expired_keys_total()),

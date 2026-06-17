@@ -76,7 +76,7 @@ fn from_vec_heap_reuses_alloc() {
     assert!(!s.is_inline());
     // SAFETY: we know it's heap; peek to verify pointer reuse.
     unsafe {
-        assert_eq!(s.heap.ptr.as_ptr() as *const u8, ptr_before);
+        assert_eq!(s.heap.ptr.as_ptr().cast_const(), ptr_before);
         assert_eq!(s.heap.capacity(), cap_before);
     }
 }
@@ -377,7 +377,7 @@ fn measure_allocs<F: FnOnce()>(f: F) -> usize {
     THREAD_RECORDING.with(|r| r.set(true));
     f();
     THREAD_RECORDING.with(|r| r.set(false));
-    THREAD_ALLOC_CALLS.with(|c| c.get())
+    THREAD_ALLOC_CALLS.with(std::cell::Cell::get)
 }
 
 #[test]
@@ -412,7 +412,7 @@ fn heap_payload_does_allocate() {
     // either way the inline-zero assertion above is meaningless.
     let max_inline = INLINE_LEN_MAX as usize;
     let allocs = measure_allocs(|| {
-        let s = SmallBytes::from_slice(&[7u8; INLINE_CAP + 8][..max_inline + 1]);
+        let s = SmallBytes::from_slice(&[7u8; INLINE_CAP + 8][..=max_inline]);
         std::hint::black_box(&s);
         drop(s);
     });

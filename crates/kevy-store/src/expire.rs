@@ -88,7 +88,7 @@ pub(crate) fn sample_round(store: &mut Store, samples: usize, now: u64) -> (u32,
     if expired > 0 {
         store.expired_keys_total = store
             .expired_keys_total
-            .saturating_add(expired as u64);
+            .saturating_add(u64::from(expired));
     }
     let _ = sampled; // silence unused warning if all returned early
     (sampled, expired)
@@ -191,8 +191,8 @@ mod tests {
     #[test]
     fn tick_expire_no_op_on_fresh_ttls() {
         let mut s = Store::new();
-        s.set(b"k1", b"v".to_vec(), Some(Duration::from_secs(3600)), false, false);
-        s.set(b"k2", b"v".to_vec(), Some(Duration::from_secs(3600)), false, false);
+        s.set(b"k1", b"v".to_vec(), Some(Duration::from_hours(1)), false, false);
+        s.set(b"k2", b"v".to_vec(), Some(Duration::from_hours(1)), false, false);
         let stats = s.tick_expire(20, 16);
         assert_eq!(stats.expired, 0, "no fresh TTL should expire");
         // sampled may be 0..=2 depending on how many our walk hit

@@ -37,7 +37,7 @@ pub(crate) fn spawn_reaper(
             let handle = std::thread::Builder::new()
                 .name(String::from("kevy-embedded-reaper"))
                 .spawn(move || {
-                    reaper_loop(shards_t, stop_t, interval, samples, rounds, rw_pct, rw_min, sink)
+                    reaper_loop(shards_t, stop_t, interval, samples, rounds, rw_pct, rw_min, sink);
                 })?;
             Ok((Some(stop), Some(handle)))
         }
@@ -88,7 +88,7 @@ fn rewrite_threshold_met(aof: &Aof, pct: u32, min_size: u64) -> bool {
     }
     let baseline = aof.size_at_last_rewrite().max(1);
     // (cur - baseline) * 100 / baseline ≥ pct  ⇔  cur * 100 ≥ baseline * (100 + pct)
-    cur.saturating_mul(100) >= baseline.saturating_mul(100u64.saturating_add(pct as u64))
+    cur.saturating_mul(100) >= baseline.saturating_mul(100u64.saturating_add(u64::from(pct)))
 }
 
 /// **Non-blocking** auto-`BGREWRITEAOF`. Three phases bracket the lock so the
@@ -172,5 +172,5 @@ pub(crate) fn concurrent_auto_rewrite(
 /// elsewhere left data intact in memory). The reaper mutates (reap + clock
 /// refresh + rewrite), so it always takes the write side.
 pub(crate) fn lock_inner(inner: &Arc<RwLock<Inner>>) -> RwLockWriteGuard<'_, Inner> {
-    inner.write().unwrap_or_else(|p| p.into_inner())
+    inner.write().unwrap_or_else(std::sync::PoisonError::into_inner)
 }

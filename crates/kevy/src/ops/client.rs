@@ -38,10 +38,10 @@ pub(crate) fn cmd_client<A: ArgvView + ?Sized>(
         // for human-readable identification in CLIENT LIST output;
         // since our CLIENT LIST is also a stub, the discard is consistent.
         b"SETNAME" => {
-            if args.len() != 3 {
-                wrong_args(out, "client|setname");
-            } else {
+            if args.len() == 3 {
                 encode_simple_string(out, "OK");
+            } else {
+                wrong_args(out, "client|setname");
             }
         }
         // LIST: single canonical entry representing this connection.

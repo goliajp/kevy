@@ -25,9 +25,8 @@ fn mock_server(rounds: Vec<(usize, &'static [u8])>) -> u16 {
             let mut total = 0;
             while total < need {
                 match sock.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => total += n,
-                    Err(_) => break,
+                    Ok(n) if n > 0 => total += n,
+                    _ => break, // Ok(0) eof or Err — same handling
                 }
             }
             let _ = sock.write_all(reply);

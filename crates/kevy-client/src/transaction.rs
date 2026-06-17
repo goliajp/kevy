@@ -132,7 +132,7 @@ impl Connection {
     }
 }
 
-impl<'a> Transaction<'a> {
+impl Transaction<'_> {
     /// Queue one command — verb + args as raw byte slices. The server
     /// replies `+QUEUED` synchronously; errors propagate as `io::Error`.
     pub fn queue(&mut self, parts: &[&[u8]]) -> io::Result<()> {
@@ -234,7 +234,7 @@ impl<'a> Transaction<'a> {
 //     txn.set(k, v)?.incr(c)?.del(&[k2])?;
 // ─────────────────────────────────────────────────────────────────────────
 
-impl<'a> Transaction<'a> {
+impl Transaction<'_> {
     /// Queue `SET key value`.
     pub fn set(&mut self, key: &[u8], value: &[u8]) -> io::Result<&mut Self> {
         self.queue_argv(vec3(b"SET", key, value))?;
