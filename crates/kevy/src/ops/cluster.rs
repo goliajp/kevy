@@ -10,6 +10,10 @@
 //! Single-machine scope: no failover, no MIGRATE/ASK, no gossip — the
 //! topology is static and fully derived from the config.
 
+// CLUSTER NODES emits a multi-line description; the `push_str(&format!(...))`
+// shape stays legible vs `write!` boilerplate, and it's not on a hot path.
+#![allow(clippy::format_push_string)]
+
 use std::cell::Cell;
 
 use kevy_config::Config;
@@ -31,7 +35,7 @@ pub(crate) fn set_current_shard(shard: usize) {
 }
 
 fn current_shard() -> usize {
-    let s = CURRENT_SHARD.with(|c| c.get());
+    let s = CURRENT_SHARD.with(std::cell::Cell::get);
     if s == usize::MAX { 0 } else { s }
 }
 
@@ -72,7 +76,7 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
                  cluster_slots_pfail:0\r\ncluster_slots_fail:0\r\n\
                  cluster_known_nodes:{}\r\ncluster_size:{}\r\n\
                  cluster_current_epoch:0\r\ncluster_my_epoch:0\r\n",
-                enabled as u8,
+                u8::from(enabled),
                 if enabled { n } else { 1 },
                 if enabled { n } else { 1 },
             );
@@ -85,13 +89,12 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
             encode_bulk(out, body.as_bytes());
         }
         b"SLOTS" if enabled => encode_slots(cfg, n, out),
-        b"SLOTS" => encode_array_len(out, 0),
         b"SHARDS" if enabled => encode_shards(cfg, n, out),
-        b"SHARDS" => encode_array_len(out, 0),
+        b"SLOTS" | b"SHARDS" => encode_array_len(out, 0),
         b"MYID" if enabled => encode_bulk(out, node_id(current_shard()).as_bytes()),
         b"MYID" => encode_bulk(out, b"0000000000000000000000000000000000000000"),
         b"KEYSLOT" => match args.get(2) {
-            Some(key) => encode_integer(out, kevy_hash::key_hash_slot(key) as i64),
+            Some(key) => encode_integer(out, i64::from(kevy_hash::key_hash_slot(key))),
             None => wrong_args(out, "cluster|keyslot"),
         },
         b"COUNTKEYSINSLOT" => {
@@ -122,7 +125,7 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
 /// `SHARDS`) format from: `f(i, ip, port, start, end)` per virtual node.
 fn for_each_node(cfg: &Config, n: usize, mut f: impl FnMut(usize, &str, i64, u16, u16)) {
     let ip = advertised_ip(cfg);
-    let base = crate::cluster_port_base(cfg) as i64;
+    let base = i64::from(crate::cluster_port_base(cfg));
     for i in 0..n {
         let (start, end) = kevy_rt::shard_slot_range(i, n);
         f(i, &ip, base + i as i64, start, end);
@@ -152,8 +155,8 @@ fn encode_slots(cfg: &Config, n: usize, out: &mut Vec<u8>) {
     encode_array_len(out, n as i64);
     for_each_node(cfg, n, |i, ip, port, start, end| {
         encode_array_len(out, 3);
-        encode_integer(out, start as i64);
-        encode_integer(out, end as i64);
+        encode_integer(out, i64::from(start));
+        encode_integer(out, i64::from(end));
         encode_array_len(out, 4);
         encode_bulk(out, ip.as_bytes());
         encode_integer(out, port);
@@ -170,8 +173,8 @@ fn encode_shards(cfg: &Config, n: usize, out: &mut Vec<u8>) {
         encode_array_len(out, 4); // 2 k/v pairs flattened
         encode_bulk(out, b"slots");
         encode_array_len(out, 2);
-        encode_integer(out, start as i64);
-        encode_integer(out, end as i64);
+        encode_integer(out, i64::from(start));
+        encode_integer(out, i64::from(end));
         encode_bulk(out, b"nodes");
         encode_array_len(out, 1);
         encode_array_len(out, 12); // 6 k/v pairs flattened

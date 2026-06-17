@@ -277,10 +277,13 @@ fn parse_kv_u64<A: ArgvView + ?Sized>(
         .ok_or(bad)
 }
 
+/// `(key, last-seen-arg)` pairs as parsed from the `STREAMS …` tail.
+type StreamKeyLastSeen = (Vec<u8>, Vec<u8>);
+
 fn parse_xreadgroup_streams<A: ArgvView + ?Sized>(
     args: &A,
     start: usize,
-) -> Result<Vec<(Vec<u8>, Vec<u8>)>, &'static str> {
+) -> Result<Vec<StreamKeyLastSeen>, &'static str> {
     let rest = args.len() - start;
     if rest == 0 || !rest.is_multiple_of(2) {
         return Err(
@@ -396,15 +399,12 @@ fn parse_xpending_extended<A: ArgvView + ?Sized>(
 fn emit_pending_summary(out: &mut Vec<u8>, s: &kevy_store::PendingSummary) {
     encode_array_len(out, 4);
     encode_integer(out, s.total as i64);
-    match s.id_range {
-        Some((lo, hi)) => {
-            encode_bulk(out, &lo.encode());
-            encode_bulk(out, &hi.encode());
-        }
-        None => {
-            encode_null_bulk(out);
-            encode_null_bulk(out);
-        }
+    if let Some((lo, hi)) = s.id_range {
+        encode_bulk(out, &lo.encode());
+        encode_bulk(out, &hi.encode());
+    } else {
+        encode_null_bulk(out);
+        encode_null_bulk(out);
     }
     if s.by_consumer.is_empty() {
         encode_array_len(out, -1);
@@ -425,7 +425,7 @@ fn emit_pending_extended(out: &mut Vec<u8>, rows: &[kevy_store::PendingExtendedR
         encode_bulk(out, &r.id.encode());
         encode_bulk(out, &r.consumer);
         encode_integer(out, r.idle_ms as i64);
-        encode_integer(out, r.delivery_count as i64);
+        encode_integer(out, i64::from(r.delivery_count));
     }
 }
 

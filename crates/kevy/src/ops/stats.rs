@@ -97,8 +97,8 @@ fn with_local(f: impl FnOnce(&ShardStats)) {
 /// store; the command / connection counters come from this thread's hot-path
 /// `Cell`s.
 pub(crate) fn publish_gauges(store: &Store) {
-    let cmds = LOCAL_CMDS.with(|c| c.get());
-    let conns = LOCAL_CONNS.with(|c| c.get());
+    let cmds = LOCAL_CMDS.with(std::cell::Cell::get);
+    let conns = LOCAL_CONNS.with(std::cell::Cell::get);
     with_local(|s| {
         s.used_memory.store(store.used_memory(), Relaxed);
         s.used_memory_peak.store(store.used_memory_peak(), Relaxed);
@@ -178,7 +178,7 @@ fn elapsed_ms() -> u128 {
 /// advances once per tick rather than once per shard per tick. Called from
 /// `on_shard_tick`.
 pub(crate) fn sample_ops_if_lead() {
-    if LOCAL_SHARD.with(|c| c.get()) != 0 {
+    if LOCAL_SHARD.with(std::cell::Cell::get) != 0 {
         return;
     }
     let total = aggregate().commands_processed;
@@ -203,5 +203,5 @@ pub(crate) fn instantaneous_ops_per_sec(current: u64) -> u64 {
         return 0;
     }
     let dc = current.saturating_sub(oldest_cmds);
-    ((dc as u128 * 1000) / dt_ms) as u64
+    ((u128::from(dc) * 1000) / dt_ms) as u64
 }

@@ -42,8 +42,7 @@ pub(crate) fn array_to_bulks(items: Vec<Reply>) -> io::Result<Vec<Vec<u8>>> {
     items
         .into_iter()
         .map(|r| match r {
-            Reply::Bulk(v) => Ok(v),
-            Reply::Simple(v) => Ok(v),
+            Reply::Bulk(v) | Reply::Simple(v) => Ok(v),
             Reply::Nil => Ok(Vec::new()),
             other => Err(unexpected(other)),
         })

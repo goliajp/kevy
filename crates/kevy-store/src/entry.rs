@@ -55,7 +55,7 @@ impl Entry {
     /// `Store::used_memory: u64` accumulator. Zero-cost cast.
     #[inline]
     pub(crate) fn weight(&self) -> u64 {
-        self.weight as u64
+        u64::from(self.weight)
     }
 
     /// LRU / LFU clock value (eviction-only).
@@ -67,7 +67,7 @@ impl Entry {
     /// Overwrite the cached weight, saturating at the 4 GiB ceiling.
     #[inline]
     pub(crate) fn set_weight(&mut self, w: u64) {
-        self.weight = w.min(WEIGHT_MAX as u64) as u32;
+        self.weight = w.min(u64::from(WEIGHT_MAX)) as u32;
     }
 
     /// Overwrite the LRU/LFU clock field.
@@ -82,13 +82,13 @@ impl Entry {
         if delta == 0 {
             return;
         }
-        let cur = self.weight as u64;
+        let cur = u64::from(self.weight);
         let new = if delta >= 0 {
             cur.saturating_add(delta as u64)
         } else {
             cur.saturating_sub((-delta) as u64)
         };
-        self.weight = new.min(WEIGHT_MAX as u64) as u32;
+        self.weight = new.min(u64::from(WEIGHT_MAX)) as u32;
     }
 
     /// Is the entry past its deadline as of `now` (ns since epoch)? `None`

@@ -328,9 +328,9 @@ fn emit_reply(hits: &[Hit], opts: &Opts, out: &mut Vec<u8>) {
         return;
     }
     for h in hits {
-        let extras = opts.with_dist as i64
-            + opts.with_hash as i64
-            + opts.with_coord as i64;
+        let extras = i64::from(opts.with_dist)
+            + i64::from(opts.with_hash)
+            + i64::from(opts.with_coord);
         encode_array_len(out, 1 + extras);
         encode_bulk(out, &h.member);
         if opts.with_dist {

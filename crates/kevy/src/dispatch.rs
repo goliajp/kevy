@@ -6,7 +6,7 @@
 //! function carries the whole command set. Command bodies delegate to the
 //! helpers in [`crate::cmd`].
 
-use crate::cmd::*;
+use crate::cmd::{upper_verb, wrong_args, store_err, OOM_ERR, cmd_set, is_growing_write_verb, cmd_hello, emit_int_result, cmd_incr, cmd_incr_by, cmd_setex, arg_f64, rest, emit_bulk_array, cmd_spop_rand, cmd_expire, cmd_expireat, cmd_ttl};
 use kevy_resp::{
     ArgvView, encode_bulk, encode_error, encode_integer, encode_null_bulk, encode_simple_string,
 };
@@ -64,14 +64,14 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
     // grow-verb OOM bracket (precheck + post-write evict) inline.
     match cmd {
         b"GET" => {
-            if args.len() != 2 {
-                wrong_args(out, "get");
-            } else {
+            if args.len() == 2 {
                 match store.get(&args[1]) {
                     Ok(Some(v)) => encode_bulk(out, v),
                     Ok(None) => encode_null_bulk(out),
                     Err(e) => store_err(out, e),
                 }
+            } else {
+                wrong_args(out, "get");
             }
             return;
         }
@@ -169,12 +169,9 @@ fn cmd_select<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     let idx_bytes = &args[1];
     // Redis parses with strtoll-equivalent: leading sign, digits only,
     // no fractional / whitespace. Anything else → "value is not an integer".
-    let s = match std::str::from_utf8(idx_bytes) {
-        Ok(s) => s,
-        Err(_) => {
-            encode_error(out, "ERR value is not an integer or out of range");
-            return;
-        }
+    let Ok(s) = std::str::from_utf8(idx_bytes) else {
+        encode_error(out, "ERR value is not an integer or out of range");
+        return;
     };
     let parsed: Result<i64, _> = s.parse();
     match parsed {
@@ -202,28 +199,28 @@ fn dispatch_string<A: ArgvView + ?Sized>(
     match cmd {
         b"SET" => cmd_set(store, args, out),
         b"GET" => {
-            if args.len() != 2 {
-                wrong_args(out, "get");
-            } else {
+            if args.len() == 2 {
                 match store.get(&args[1]) {
                     Ok(Some(v)) => encode_bulk(out, v),
                     Ok(None) => encode_null_bulk(out),
                     Err(e) => store_err(out, e),
                 }
+            } else {
+                wrong_args(out, "get");
             }
         }
         b"APPEND" => {
-            if args.len() != 3 {
-                wrong_args(out, "append");
-            } else {
+            if args.len() == 3 {
                 emit_int_result(store.append(&args[1], &args[2]).map(|n| n as i64), out);
+            } else {
+                wrong_args(out, "append");
             }
         }
         b"STRLEN" => {
-            if args.len() != 2 {
-                wrong_args(out, "strlen");
-            } else {
+            if args.len() == 2 {
                 emit_int_result(store.strlen(&args[1]).map(|n| n as i64), out);
+            } else {
+                wrong_args(out, "strlen");
             }
         }
         b"INCR" => cmd_incr(store, args, 1, "incr", out),
@@ -231,35 +228,35 @@ fn dispatch_string<A: ArgvView + ?Sized>(
         b"INCRBY" => cmd_incr_by(store, args, false, "incrby", out),
         b"DECRBY" => cmd_incr_by(store, args, true, "decrby", out),
         b"SETNX" => {
-            if args.len() != 3 {
-                wrong_args(out, "setnx");
-            } else {
+            if args.len() == 3 {
                 let set = store.set_slice(&args[1], &args[2], None, true, false);
-                encode_integer(out, set as i64);
+                encode_integer(out, i64::from(set));
+            } else {
+                wrong_args(out, "setnx");
             }
         }
         b"SETEX" => cmd_setex(store, args, 1000, "setex", out),
         b"PSETEX" => cmd_setex(store, args, 1, "psetex", out),
         b"GETSET" => {
-            if args.len() != 3 {
-                wrong_args(out, "getset");
-            } else {
+            if args.len() == 3 {
                 match store.getset(&args[1], args[2].to_vec()) {
                     Ok(Some(v)) => encode_bulk(out, &v),
                     Ok(None) => encode_null_bulk(out),
                     Err(e) => store_err(out, e),
                 }
+            } else {
+                wrong_args(out, "getset");
             }
         }
         b"GETDEL" => {
-            if args.len() != 2 {
-                wrong_args(out, "getdel");
-            } else {
+            if args.len() == 2 {
                 match store.getdel(&args[1]) {
                     Ok(Some(v)) => encode_bulk(out, &v),
                     Ok(None) => encode_null_bulk(out),
                     Err(e) => store_err(out, e),
                 }
+            } else {
+                wrong_args(out, "getdel");
             }
         }
         b"INCRBYFLOAT" => {
@@ -302,24 +299,24 @@ fn dispatch_set<A: ArgvView + ?Sized>(
             }
         }
         b"SCARD" => {
-            if args.len() != 2 {
-                wrong_args(out, "scard");
-            } else {
+            if args.len() == 2 {
                 emit_int_result(store.scard(&args[1]).map(|n| n as i64), out);
+            } else {
+                wrong_args(out, "scard");
             }
         }
         b"SISMEMBER" => {
-            if args.len() != 3 {
-                wrong_args(out, "sismember");
+            if args.len() == 3 {
+                emit_int_result(store.sismember(&args[1], &args[2]).map(i64::from), out);
             } else {
-                emit_int_result(store.sismember(&args[1], &args[2]).map(|b| b as i64), out);
+                wrong_args(out, "sismember");
             }
         }
         b"SMEMBERS" => {
-            if args.len() != 2 {
-                wrong_args(out, "smembers");
-            } else {
+            if args.len() == 2 {
                 emit_bulk_array(store.smembers(&args[1]), out);
+            } else {
+                wrong_args(out, "smembers");
             }
         }
         b"SPOP" => cmd_spop_rand(store, args, true, out),
@@ -358,17 +355,17 @@ fn dispatch_generic<A: ArgvView + ?Sized>(
         b"TTL" => cmd_ttl(store, args, true, "ttl", out),
         b"PTTL" => cmd_ttl(store, args, false, "pttl", out),
         b"PERSIST" => {
-            if args.len() != 2 {
-                wrong_args(out, "persist");
+            if args.len() == 2 {
+                encode_integer(out, i64::from(store.persist(&args[1])));
             } else {
-                encode_integer(out, store.persist(&args[1]) as i64);
+                wrong_args(out, "persist");
             }
         }
         b"TYPE" => {
-            if args.len() != 2 {
-                wrong_args(out, "type");
-            } else {
+            if args.len() == 2 {
                 encode_simple_string(out, store.type_of(&args[1]));
+            } else {
+                wrong_args(out, "type");
             }
         }
         b"DBSIZE" => encode_integer(out, store.dbsize() as i64),

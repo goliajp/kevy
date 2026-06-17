@@ -8,7 +8,7 @@ use super::group::{AutoclaimResult, ReadGroupId};
 use super::{
     GroupCreateMode, PendingExtended, PendingSummary, StreamData, StreamId, XAddIdSpec, XClaimOpts,
 };
-use crate::value::*;
+use crate::value::{SmallBytes, Value};
 use crate::{Entry, Store, StoreError};
 use std::sync::Arc;
 
@@ -90,7 +90,7 @@ impl Store {
 
     /// `XLEN key`. Returns 0 for a missing key.
     pub fn xlen(&mut self, key: &[u8]) -> Result<u64, StoreError> {
-        Ok(self.stream_ref(key)?.map_or(0, |s| s.length()))
+        Ok(self.stream_ref(key)?.map_or(0, super::StreamData::length))
     }
 
     /// `XRANGE key start end [COUNT n]`.
@@ -134,7 +134,7 @@ impl Store {
     /// Resolve `$` as XREAD's "last-seen" to the stream's current last
     /// ID. Returns `MIN` for a missing key.
     pub fn xread_dollar_last_id(&mut self, key: &[u8]) -> Result<StreamId, StoreError> {
-        Ok(self.stream_ref(key)?.map_or(StreamId::MIN, |s| s.last_id()))
+        Ok(self.stream_ref(key)?.map_or(StreamId::MIN, super::StreamData::last_id))
     }
 
     /// `XDEL key id [...]`. Returns count actually removed.

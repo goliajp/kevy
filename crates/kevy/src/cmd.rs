@@ -384,7 +384,10 @@ pub(crate) fn fmt_score(s: f64) -> Vec<u8> {
             b"-inf".to_vec()
         };
     }
-    if s == s.trunc() && s.abs() < 1e17 {
+    // Bit-exact integer-valued check; epsilon would change the wire shape.
+    #[allow(clippy::float_cmp)]
+    let is_integer_valued = s == s.trunc();
+    if is_integer_valued && s.abs() < 1e17 {
         return (s as i64).to_string().into_bytes();
     }
     format!("{s}").into_bytes()

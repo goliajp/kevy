@@ -41,10 +41,10 @@ pub(crate) fn dispatch_geo<A: ArgvView + ?Sized>(
         b"GEOSEARCH" => search::cmd_geosearch(store, args, out),
         b"GEOSEARCHSTORE" => search::cmd_geosearchstore(store, args, out),
         b"GEORADIUS" | b"GEORADIUS_RO" => {
-            radius::cmd_georadius(store, args, out, cmd == b"GEORADIUS_RO")
+            radius::cmd_georadius(store, args, out, cmd == b"GEORADIUS_RO");
         }
         b"GEORADIUSBYMEMBER" | b"GEORADIUSBYMEMBER_RO" => {
-            radius::cmd_georadiusbymember(store, args, out, cmd == b"GEORADIUSBYMEMBER_RO")
+            radius::cmd_georadiusbymember(store, args, out, cmd == b"GEORADIUSBYMEMBER_RO");
         }
         _ => return false,
     }
@@ -80,25 +80,18 @@ fn cmd_geoadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u
     let mut pairs: Vec<(f64, Vec<u8>)> = Vec::with_capacity((args.len() - first_triple) / 3);
     let mut i = first_triple;
     while i < args.len() {
-        let lon = match arg_f64(&args[i]) {
-            Some(v) => v,
-            None => return encode_error(out, "ERR value is not a valid float"),
+        let Some(lon) = arg_f64(&args[i]) else {
+            return encode_error(out, "ERR value is not a valid float");
         };
-        let lat = match arg_f64(&args[i + 1]) {
-            Some(v) => v,
-            None => return encode_error(out, "ERR value is not a valid float"),
+        let Some(lat) = arg_f64(&args[i + 1]) else {
+            return encode_error(out, "ERR value is not a valid float");
         };
         let member = args[i + 2].to_vec();
-        let score = match encode_score(lon, lat) {
-            Some(s) => s,
-            None => {
-                return encode_error(
-                    out,
-                    &format!(
-                        "ERR invalid longitude,latitude pair {lon:.6},{lat:.6}",
-                    ),
-                );
-            }
+        let Some(score) = encode_score(lon, lat) else {
+            return encode_error(
+                out,
+                &format!("ERR invalid longitude,latitude pair {lon:.6},{lat:.6}"),
+            );
         };
         pairs.push((score, member));
         i += 3;
@@ -188,6 +181,10 @@ fn apply_geoadd(
         .iter()
         .filter(|(s, m)| {
             let i = pairs.iter().position(|(_, mm)| mm == m).unwrap();
+            // bit-exact float compare is the contract: "score differs from
+            // what's already stored". Geo scores are quantized integer bits
+            // packed into f64, so an epsilon would be wrong.
+            #[allow(clippy::float_cmp)]
             existing[i].is_some_and(|old| old != *s)
         })
         .count();

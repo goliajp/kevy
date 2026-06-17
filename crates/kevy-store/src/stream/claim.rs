@@ -79,8 +79,7 @@ impl StreamData {
         };
         let next_cursor = candidates
             .last()
-            .map(|id| id.next())
-            .unwrap_or(StreamId::MIN);
+            .map_or(StreamId::MIN, |id| id.next());
         let claimed = self.claim(group, new_owner, &candidates, &opts, now_ms)?;
         let mut deleted = Vec::new();
         for id in &candidates {

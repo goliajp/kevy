@@ -104,7 +104,7 @@ impl Aof {
     /// magic'd) are left untouched.
     pub fn open(path: &Path, fsync: Fsync) -> io::Result<Self> {
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-        let mut size = file.metadata().map(|m| m.len()).unwrap_or(0);
+        let mut size = file.metadata().map_or(0, |m| m.len());
         if size == 0 {
             // Fresh file: stamp the magic header so the replayer can
             // distinguish kevy-written AOFs from accidental writes.
@@ -326,7 +326,7 @@ impl Aof {
         }
         std::fs::rename(tmp, &self.path)?;
         let f = OpenOptions::new().append(true).open(&self.path)?;
-        let bytes = f.metadata().map(|m| m.len()).unwrap_or(0);
+        let bytes = f.metadata().map_or(0, |m| m.len());
         self.file = BufWriter::new(f);
         self.size_bytes = bytes;
         self.size_at_last_rewrite = bytes;

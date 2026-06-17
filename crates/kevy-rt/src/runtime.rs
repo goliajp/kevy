@@ -64,6 +64,7 @@ pub struct Runtime<C: Commands> {
 }
 
 impl<C: Commands> Runtime<C> {
+    #[must_use]
     pub fn new(ip: [u8; 4], port: u16, nshards: usize, commands: C) -> Self {
         Runtime {
             ip,
@@ -91,6 +92,7 @@ impl<C: Commands> Runtime<C> {
     /// answers wrong-shard keys with `-MOVED` instead of forwarding. The
     /// SO_REUSEPORT listener on the main port keeps today's full
     /// forward-anywhere behaviour for non-cluster clients.
+    #[must_use]
     pub fn with_cluster(mut self, port_base: u16) -> Self {
         self.cluster_port_base = Some(port_base);
         self
@@ -102,6 +104,7 @@ impl<C: Commands> Runtime<C> {
     /// pair around dispatch, ~30 ns/op (≈9 % at 3 M ops/s). To match
     /// Redis's 10 ms default, pass `10_000`; `0` records all; `-1`
     /// disables. `max_len` is the per-shard ring cap (default 128).
+    #[must_use]
     pub fn with_slowlog(mut self, slower_than_micros: i64, max_len: u32) -> Self {
         self.slowlog_slower_than_micros = slower_than_micros;
         self.slowlog_max_len = max_len;
@@ -113,6 +116,7 @@ impl<C: Commands> Runtime<C> {
     /// applied at SPSC ring construction (startup only); the other
     /// three are read at each iteration of the reactor loop, so
     /// values applied here take effect from the next shard.run() call.
+    #[must_use]
     pub fn with_advanced(
         mut self,
         spin_limit: u32,
@@ -128,12 +132,14 @@ impl<C: Commands> Runtime<C> {
     }
 
     /// Set the directory where shards snapshot to / load from. Default: `.`.
+    #[must_use]
     pub fn with_data_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.data_dir = dir.into();
         self
     }
 
     /// Enable/disable the append-only log. Default: enabled.
+    #[must_use]
     pub fn with_aof(mut self, on: bool) -> Self {
         self.enable_aof = on;
         self
@@ -142,6 +148,7 @@ impl<C: Commands> Runtime<C> {
     /// fsync policy for the AOF. Default `EverySec` matches Redis (lose at
     /// most ~1 s of writes on a crash). `Always` is zero-loss but ~50 %
     /// throughput; `No` defers everything to the OS pagecache.
+    #[must_use]
     pub fn with_appendfsync(mut self, fsync: Fsync) -> Self {
         self.appendfsync = fsync;
         self
@@ -151,6 +158,7 @@ impl<C: Commands> Runtime<C> {
     /// `pct` percent above its size at the previous rewrite, AND is at
     /// least `min_size` bytes. `pct=0` disables auto-rewrite (clients can
     /// still run BGREWRITEAOF manually). Defaults: 100 % / 64 MiB.
+    #[must_use]
     pub fn with_auto_aof_rewrite(mut self, pct: u32, min_size: u64) -> Self {
         self.auto_aof_rewrite_pct = pct;
         self.auto_aof_rewrite_min_size = min_size;

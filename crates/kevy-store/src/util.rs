@@ -128,7 +128,11 @@ fn match_class(p: &[u8], ch: u8) -> (bool, &[u8]) {
 
 /// Format a number the way Redis does: integral values without a decimal point.
 pub(crate) fn fmt_num(v: f64) -> Vec<u8> {
-    if v == v.trunc() && v.abs() < 1e17 {
+    // Bit-exact compare is the contract: "the f64 carries no fractional bits".
+    // An epsilon would mis-classify 1.0 + 1e-18 as integer-valued.
+    #[allow(clippy::float_cmp)]
+    let is_integer_valued = v == v.trunc();
+    if is_integer_valued && v.abs() < 1e17 {
         (v as i64).to_string().into_bytes()
     } else {
         format!("{v}").into_bytes()

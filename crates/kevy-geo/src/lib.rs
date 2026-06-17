@@ -18,9 +18,9 @@
 /// Inclusive latitude bound (degrees). Matches Redis's Web Mercator
 /// limit — the encoding cannot represent the poles because Web Mercator
 /// maps them to ±∞.
-pub const GEO_LAT_MIN: f64 = -85.05112878;
+pub const GEO_LAT_MIN: f64 = -85.051_128_78;
 /// Inclusive latitude bound (degrees).
-pub const GEO_LAT_MAX: f64 = 85.05112878;
+pub const GEO_LAT_MAX: f64 = 85.051_128_78;
 /// Inclusive longitude bound (degrees).
 pub const GEO_LON_MIN: f64 = -180.0;
 /// Inclusive longitude bound (degrees).
@@ -103,7 +103,7 @@ pub fn encode_base32_geohash(lon: f64, lat: f64) -> [u8; 11] {
 /// `lon_u32` at odd positions, producing the 52-bit score layout. Only
 /// the low 26 bits of each input contribute.
 fn interleave52(lat: u32, lon: u32) -> u64 {
-    spread26(lat as u64) | (spread26(lon as u64) << 1)
+    spread26(u64::from(lat)) | (spread26(u64::from(lon)) << 1)
 }
 
 /// Inverse of [`interleave52`]: extract `(lat_u32, lon_u32)` (26 bits
@@ -178,11 +178,11 @@ fn cell_centre(
     let cells = (1u64 << GEO_STEP) as f64;
     let lon_span = lon_max - lon_min;
     let lat_span = lat_max - lat_min;
-    let lon_lo = lon_min + (ilon as f64 / cells) * lon_span;
-    let lon_hi = lon_min + ((ilon as f64 + 1.0) / cells) * lon_span;
-    let lat_lo = lat_min + (ilat as f64 / cells) * lat_span;
-    let lat_hi = lat_min + ((ilat as f64 + 1.0) / cells) * lat_span;
-    ((lon_lo + lon_hi) / 2.0, (lat_lo + lat_hi) / 2.0)
+    let lon_lo = lon_min + (f64::from(ilon) / cells) * lon_span;
+    let lon_hi = lon_min + ((f64::from(ilon) + 1.0) / cells) * lon_span;
+    let lat_lo = lat_min + (f64::from(ilat) / cells) * lat_span;
+    let lat_hi = lat_min + ((f64::from(ilat) + 1.0) / cells) * lat_span;
+    (f64::midpoint(lon_lo, lon_hi), f64::midpoint(lat_lo, lat_hi))
 }
 
 /// Convert an f64 score back to its 52-bit interleaved integer. Saturates
@@ -292,8 +292,8 @@ mod tests {
     // the canonical Sicily fixture. Regression guards for the two geo
     // encoding bugs the cross-engine differential (`bench/compat3.sh`)
     // caught: GEOHASH 11th-char padding and GEOPOS cell-midpoint rounding.
-    const PALERMO: (f64, f64) = (13.361389, 38.115556);
-    const CATANIA: (f64, f64) = (15.087269, 37.502669);
+    const PALERMO: (f64, f64) = (13.361_389, 38.115_556);
+    const CATANIA: (f64, f64) = (15.087_269, 37.502_669);
 
     #[test]
     fn geohash_string_matches_redis() {

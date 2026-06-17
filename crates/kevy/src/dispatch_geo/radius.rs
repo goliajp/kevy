@@ -24,13 +24,11 @@ pub(super) fn cmd_georadius<A: ArgvView + ?Sized>(
     if args.len() < 6 {
         return wrong_args(out, "georadius");
     }
-    let lon = match arg_f64(&args[2]) {
-        Some(v) => v,
-        None => return encode_error(out, "ERR value is not a valid float"),
+    let Some(lon) = arg_f64(&args[2]) else {
+        return encode_error(out, "ERR value is not a valid float");
     };
-    let lat = match arg_f64(&args[3]) {
-        Some(v) => v,
-        None => return encode_error(out, "ERR value is not a valid float"),
+    let Some(lat) = arg_f64(&args[3]) else {
+        return encode_error(out, "ERR value is not a valid float");
     };
     finish_radius(store, args, out, Anchor::LonLat(lon, lat), 4, read_only);
 }
@@ -57,18 +55,14 @@ fn finish_radius<A: ArgvView + ?Sized>(
     radius_idx: usize,
     read_only: bool,
 ) {
-    let radius = match arg_f64(&args[radius_idx]) {
-        Some(v) => v,
-        None => return encode_error(out, "ERR value is not a valid float"),
+    let Some(radius) = arg_f64(&args[radius_idx]) else {
+        return encode_error(out, "ERR value is not a valid float");
     };
-    let unit = match parse_unit(&args[radius_idx + 1]) {
-        Some(u) => u,
-        None => {
-            return encode_error(
-                out,
-                "ERR unsupported unit provided. please use M, KM, FT, MI",
-            );
-        }
+    let Some(unit) = parse_unit(&args[radius_idx + 1]) else {
+        return encode_error(
+            out,
+            "ERR unsupported unit provided. please use M, KM, FT, MI",
+        );
     };
     let parsed = match search::parse_legacy_radius(args, radius_idx + 2, anchor, radius * unit, unit) {
         Ok(p) => p,

@@ -335,9 +335,7 @@ pub(crate) fn xread_resolve_argv<A: ArgvView + ?Sized>(
         if pos < n && arg == b"$" {
             let key = args.get(keys_start + pos).expect("in range");
             let resolved = store
-                .xread_dollar_last_id(key)
-                .map(|id| id.encode())
-                .unwrap_or_else(|_| arg.to_vec());
+                .xread_dollar_last_id(key).map_or_else(|_| arg.to_vec(), kevy_store::StreamId::encode);
             out.push(&resolved);
         } else {
             out.push(arg);

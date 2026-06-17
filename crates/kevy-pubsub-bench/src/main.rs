@@ -89,6 +89,10 @@ fn read_line(s: &mut impl Read) -> std::io::Result<String> {
 }
 
 fn main() {
+    // BATCH (used in the publisher loop): pipeline depth per publish-and-drain
+    // round; tuned to fit a few socket buffers without filling them.
+    const BATCH: usize = 1024;
+
     let host = arg("--host", "127.0.0.1");
     let port: u16 = arg("--port", "6379").parse().unwrap();
     let subs: usize = arg("--subs", "50").parse().unwrap();
@@ -122,9 +126,8 @@ fn main() {
             let mut got = 0usize;
             while got < target_bytes {
                 match s.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => got += n,
-                    Err(_) => break,
+                    Ok(n) if n > 0 => got += n,
+                    _ => break, // Ok(0) eof or Err(_) socket error — same handling
                 }
             }
             done.fetch_add(1, Ordering::SeqCst);
@@ -142,8 +145,7 @@ fn main() {
 
     let start = Instant::now();
     // Pipeline in batches so the publisher's reply backlog can't fill the socket
-    // and deadlock the write side.
-    const BATCH: usize = 1024;
+    // and deadlock the write side. `BATCH` is declared at the top of `main()`.
     let mut sent = 0usize;
     while sent < msgs {
         let n = BATCH.min(msgs - sent);

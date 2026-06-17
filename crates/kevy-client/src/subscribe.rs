@@ -275,7 +275,7 @@ impl Subscriber {
                 PubsubEvent::Subscribe { .. }
                 | PubsubEvent::Psubscribe { .. }
                 | PubsubEvent::Unsubscribe { .. }
-                | PubsubEvent::Punsubscribe { .. } => continue,
+                | PubsubEvent::Punsubscribe { .. } => {}
             }
         }
     }

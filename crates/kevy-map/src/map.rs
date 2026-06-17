@@ -51,6 +51,11 @@ pub(crate) fn h2(hash: u64) -> u8 {
 /// `cfg(miri)` (miri cannot model inline asm / arch intrinsics, so the hint
 /// degrades to a no-op for unsafe-correctness testing — the semantic
 /// contract of `prefetch_t0` is "may do nothing", so this is sound).
+///
+/// `inline(always)` is the point: prefetch only helps when the load-latency
+/// window the call hides is bigger than the call site itself. A non-inlined
+/// call_site / ret pair (~10 ns out-of-order) wipes the benefit.
+#[allow(clippy::inline_always)]
 #[inline(always)]
 fn prefetch_t0(ptr: *const u8) {
     #[cfg(all(target_arch = "x86_64", not(miri)))]
@@ -198,7 +203,7 @@ impl<K, V> KevyMap<K, V> {
         let meta_byte_ptr = unsafe { base.add(meta_offset) };
         unsafe { ptr::write_bytes(meta_byte_ptr, EMPTY, cap + GROUP_WIDTH) };
 
-        let slots_ptr = base as *mut MaybeUninit<(K, V)>;
+        let slots_ptr = base.cast::<MaybeUninit<(K, V)>>();
         let metadata_ptr = meta_byte_ptr;
 
         // single-buffer redo: hint THP on the entire buffer in
@@ -207,7 +212,7 @@ impl<K, V> KevyMap<K, V> {
         // On 10M+ key tables the metadata alone is 16 MB — well over the
         // 2 MB HP boundary, so the kernel's khugepaged can promote it in
         // place. Cheap on the non-Linux paths (compile-time no-op).
-        kevy_madvise::advise_hugepage(base as *const u8, layout.size());
+        kevy_madvise::advise_hugepage(base.cast_const(), layout.size());
 
         Self {
             // SAFETY: alloc returned non-null; raw pointers are derived
@@ -274,7 +279,7 @@ impl<K, V> KevyMap<K, V> {
                 if meta & 0x80 == 0 {
                     // SAFETY: full slot ⇒ initialised.
                     unsafe {
-                        ptr::drop_in_place(self.slots_ptr.as_ptr().add(i) as *mut (K, V));
+                        ptr::drop_in_place(self.slots_ptr.as_ptr().add(i).cast::<(K, V)>());
                     }
                 }
             }
@@ -369,6 +374,9 @@ impl<K, V> KevyMap<K, V> {
     /// volatile load on other arches via [`std::intrinsics`] — but we
     /// only use stable intrinsics here, so non-x86/aarch64 architectures
     /// degrade to a no-op rather than a fake hint).
+    ///
+    /// `inline(always)` is the point — see the `prefetch_t0` rationale.
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub fn prefetch_for_hash(&self, hash: u64) {
         if self.cap == 0 {
@@ -419,7 +427,7 @@ impl<K, V> Drop for KevyMap<K, V> {
                 if meta & 0x80 == 0 {
                     // SAFETY: full slot ⇒ initialised.
                     unsafe {
-                        ptr::drop_in_place(self.slots_ptr.as_ptr().add(i) as *mut (K, V));
+                        ptr::drop_in_place(self.slots_ptr.as_ptr().add(i).cast::<(K, V)>());
                     }
                 }
             }
@@ -431,7 +439,7 @@ impl<K, V> Drop for KevyMap<K, V> {
         // SAFETY: cap > 0 ⇒ slots_ptr is non-null and was returned by `alloc`
         // with the same Layout (table_layout is deterministic on cap).
         unsafe {
-            dealloc(self.slots_ptr.as_ptr() as *mut u8, layout);
+            dealloc(self.slots_ptr.as_ptr().cast::<u8>(), layout);
         }
     }
 }

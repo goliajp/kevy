@@ -40,7 +40,7 @@ impl Poller {
             data: 0,
             udata: 0,
         };
-        let r = unsafe { ffi::kevent(self.kq, &kev, 1, ptr::null_mut(), 0, ptr::null()) };
+        let r = unsafe { ffi::kevent(self.kq, &raw const kev, 1, ptr::null_mut(), 0, ptr::null()) };
         if r < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -89,7 +89,7 @@ impl Poller {
                     tv_sec: (ms / 1000) as isize,
                     tv_nsec: ((ms % 1000) * 1_000_000) as isize,
                 };
-                &ts as *const ffi::Timespec
+                &raw const ts
             }
             None => ptr::null(),
         };

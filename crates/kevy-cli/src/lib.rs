@@ -16,7 +16,9 @@ pub use kevy_resp::Reply;
 pub fn format_reply(reply: &Reply, indent: usize) -> String {
     match reply {
         Reply::Simple(s) => String::from_utf8_lossy(s).into_owned(),
-        Reply::Error(s) => format!("(error) {}", String::from_utf8_lossy(s)),
+        Reply::Error(s) | Reply::BlobError(s) => {
+            format!("(error) {}", String::from_utf8_lossy(s))
+        }
         Reply::Int(n) => format!("(integer) {n}"),
         Reply::Bulk(b) => format!("\"{}\"", String::from_utf8_lossy(b)),
         Reply::Nil | Reply::Null => "(nil)".to_string(),
@@ -56,6 +58,5 @@ pub fn format_reply(reply: &Reply, indent: usize) -> String {
             String::from_utf8_lossy(data)
         ),
         Reply::BigNumber(s) => format!("(bignum) {}", String::from_utf8_lossy(s)),
-        Reply::BlobError(s) => format!("(error) {}", String::from_utf8_lossy(s)),
     }
 }

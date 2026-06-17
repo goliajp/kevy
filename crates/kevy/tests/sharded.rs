@@ -53,7 +53,7 @@ struct Server {
 impl Server {
     fn start(nshards: usize) -> Server {
         // Held until our runtime is confirmed bound (see START_GATE).
-        let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+        let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port();
         // Isolate persistence per test run (each write hits an AOF now).
         let dir = std::env::temp_dir().join(format!(

@@ -76,7 +76,7 @@ impl<C: Commands> Shard<C> {
         let baseline = aof.size_at_last_rewrite().max(1);
         // (cur - baseline) * 100 / baseline ≥ pct  ⇔  cur * 100 ≥ baseline * (100 + pct)
         let lhs = cur.saturating_mul(100);
-        let rhs = baseline.saturating_mul(100u64.saturating_add(self.auto_aof_rewrite_pct as u64));
+        let rhs = baseline.saturating_mul(100u64.saturating_add(u64::from(self.auto_aof_rewrite_pct)));
         if lhs < rhs {
             return;
         }
@@ -90,8 +90,8 @@ impl<C: Commands> Shard<C> {
         self.poll_persist_done();
         self.maybe_auto_rewrite_aof();
         let in_flight =
-            self.persist.busy() || self.aof.as_ref().is_some_and(|a| a.is_rewriting());
-        let rewrites = self.aof.as_ref().map_or(0, |a| a.rewrites_total());
+            self.persist.busy() || self.aof.as_ref().is_some_and(kevy_persist::Aof::is_rewriting);
+        let rewrites = self.aof.as_ref().map_or(0, kevy_persist::Aof::rewrites_total);
         self.commands.on_persist_stats(in_flight, rewrites);
     }
 }

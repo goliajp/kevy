@@ -267,12 +267,9 @@ fn build_topology(ranges: &[SlotRange]) -> io::Result<Topology> {
     let mut nodes: Vec<(String, u16)> = Vec::new();
     let mut slot_to_shard = vec![0u16; NUM_SLOTS];
     for r in ranges {
-        let idx = match nodes.iter().position(|(h, p)| h == &r.host && *p == r.port) {
-            Some(i) => i,
-            None => {
-                nodes.push((r.host.clone(), r.port));
-                nodes.len() - 1
-            }
+        let idx = if let Some(i) = nodes.iter().position(|(h, p)| h == &r.host && *p == r.port) { i } else {
+            nodes.push((r.host.clone(), r.port));
+            nodes.len() - 1
         } as u16;
         for slot in r.start..=r.end {
             slot_to_shard[slot as usize] = idx;
@@ -305,9 +302,9 @@ fn parse_cluster_slots(reply: Reply) -> io::Result<Vec<SlotRange>> {
         }
         let host = as_str(&node[0]).ok_or_else(bad)?;
         let port = as_int(&node[1]).ok_or_else(bad)?;
-        if !(0..=u16::MAX as i64).contains(&start)
-            || !(0..=u16::MAX as i64).contains(&end)
-            || !(0..=u16::MAX as i64).contains(&port)
+        if !(0..=i64::from(u16::MAX)).contains(&start)
+            || !(0..=i64::from(u16::MAX)).contains(&end)
+            || !(0..=i64::from(u16::MAX)).contains(&port)
         {
             return Err(bad());
         }

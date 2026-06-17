@@ -279,7 +279,7 @@ impl<C: Commands> Shard<C> {
     #[inline]
     pub(crate) fn flush_requests(&mut self) {
         // Outer-empty short-circuit: single-shard never has cross-shard reqs.
-        if self.request_batch.iter().all(|b| b.is_empty()) {
+        if self.request_batch.iter().all(std::vec::Vec::is_empty) {
             return;
         }
         for s in 0..self.nshards {
@@ -352,6 +352,12 @@ impl<C: Commands> Shard<C> {
             let Some(slot) = conn.pending.get_mut(idx) else {
                 return;
             };
+            // (Agg::AllOk, Part::Ok) `{}` body matches the catch-all `_ => {}`
+            // body but documents the *expected* aggregator/part pairing — the
+            // wildcard arm is the fallback for impossible combinations after
+            // the dispatcher arms. match_same_arms would collapse the two and
+            // hide the contract; keep them separate.
+            #[allow(clippy::match_same_arms)]
             match (&mut slot.agg, part) {
                 (Agg::First(dst), Part::Reply(b)) => *dst = Some(b),
                 (Agg::SumInt(acc), Part::Int(n)) => *acc += n,
@@ -421,7 +427,7 @@ impl<C: Commands> Shard<C> {
         if let Some(agg) = watch_agg {
             match agg {
                 Agg::WatchCollect { .. } | Agg::ExecPrep { .. } => {
-                    self.finalize_watch_agg(conn_id, seq, agg)
+                    self.finalize_watch_agg(conn_id, seq, agg);
                 }
                 Agg::RenameOrchestrator { .. } => self.finalize_rename_agg(conn_id, seq, agg),
                 // The match above is exhaustive over what fold ever puts
