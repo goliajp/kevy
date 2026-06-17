@@ -397,38 +397,23 @@ fn parse_xread_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XReadParsed, &'sta
         let tok = args[i].to_ascii_uppercase();
         match tok.as_slice() {
             b"COUNT" => {
-                let n = args.get(i + 1).ok_or("ERR syntax error")?;
-                let n: usize = std::str::from_utf8(n)
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .ok_or("ERR value is not an integer or out of range")?;
-                count = Some(n);
+                count = Some(xread_parse_kv_usize(
+                    args,
+                    i + 1,
+                    "ERR value is not an integer or out of range",
+                )?);
                 i += 2;
             }
             b"BLOCK" => {
-                let ms_arg = args.get(i + 1).ok_or("ERR syntax error")?;
-                let ms: u64 = std::str::from_utf8(ms_arg)
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .ok_or("ERR timeout is not an integer or out of range")?;
-                block_ms = Some(ms);
+                block_ms = Some(xread_parse_kv_u64(
+                    args,
+                    i + 1,
+                    "ERR timeout is not an integer or out of range",
+                )?);
                 i += 2;
             }
             b"STREAMS" => {
-                let rest = args.len() - (i + 1);
-                if rest == 0 || !rest.is_multiple_of(2) {
-                    return Err(
-                        "ERR Unbalanced XREAD list of streams: for each stream key an ID or '$' must be specified.",
-                    );
-                }
-                let n = rest / 2;
-                let mut streams = Vec::with_capacity(n);
-                for k in 0..n {
-                    streams.push((
-                        args[i + 1 + k].to_vec(),
-                        args[i + 1 + n + k].to_vec(),
-                    ));
-                }
+                let streams = xread_parse_streams(args, i + 1)?;
                 return Ok(XReadParsed {
                     count,
                     block_ms,
@@ -439,6 +424,48 @@ fn parse_xread_argv<A: ArgvView + ?Sized>(args: &A) -> Result<XReadParsed, &'sta
         }
     }
     Err("ERR syntax error")
+}
+
+fn xread_parse_kv_usize<A: ArgvView + ?Sized>(
+    args: &A,
+    idx: usize,
+    bad: &'static str,
+) -> Result<usize, &'static str> {
+    let n = args.get(idx).ok_or("ERR syntax error")?;
+    std::str::from_utf8(n)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .ok_or(bad)
+}
+
+fn xread_parse_kv_u64<A: ArgvView + ?Sized>(
+    args: &A,
+    idx: usize,
+    bad: &'static str,
+) -> Result<u64, &'static str> {
+    let n = args.get(idx).ok_or("ERR syntax error")?;
+    std::str::from_utf8(n)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .ok_or(bad)
+}
+
+fn xread_parse_streams<A: ArgvView + ?Sized>(
+    args: &A,
+    start: usize,
+) -> Result<Vec<(Vec<u8>, Vec<u8>)>, &'static str> {
+    let rest = args.len() - start;
+    if rest == 0 || !rest.is_multiple_of(2) {
+        return Err(
+            "ERR Unbalanced XREAD list of streams: for each stream key an ID or '$' must be specified.",
+        );
+    }
+    let n = rest / 2;
+    let mut streams = Vec::with_capacity(n);
+    for k in 0..n {
+        streams.push((args[start + k].to_vec(), args[start + n + k].to_vec()));
+    }
+    Ok(streams)
 }
 
 // ───────────── reply emitters ─────────────

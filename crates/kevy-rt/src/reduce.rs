@@ -136,50 +136,58 @@ fn finalize_gather(
     got: HashMap<Vec<u8>, Gathered>,
     proto: RespVersion,
 ) -> Vec<u8> {
-    let mut out = Vec::new();
     match op {
-        MultiOp::Mget => {
-            encode_array_len(&mut out, keys.len() as i64);
-            for k in &keys {
-                match got.get(k) {
-                    Some(Gathered::Str(Some(v))) => encode_bulk(&mut out, v),
-                    _ => encode_null_bulk(&mut out), // missing / wrong-type → nil (MGET semantics)
-                }
-            }
+        MultiOp::Mget => finalize_mget(&keys, &got),
+        _ => finalize_set_algebra(op, &keys, &got, proto),
+    }
+}
+
+fn finalize_mget(keys: &[Vec<u8>], got: &HashMap<Vec<u8>, Gathered>) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_array_len(&mut out, keys.len() as i64);
+    for k in keys {
+        match got.get(k) {
+            Some(Gathered::Str(Some(v))) => encode_bulk(&mut out, v),
+            _ => encode_null_bulk(&mut out), // missing / wrong-type → nil (MGET semantics)
         }
-        _ => {
-            let mut sets: Vec<Vec<Vec<u8>>> = Vec::with_capacity(keys.len());
-            for k in &keys {
-                match got.get(k) {
-                    Some(Gathered::Members(m)) => sets.push(m.clone()),
-                    Some(Gathered::WrongType) => {
-                        encode_error(&mut out, WRONGTYPE);
-                        return out;
-                    }
-                    _ => sets.push(Vec::new()), // missing key = empty set
-                }
+    }
+    out
+}
+
+fn finalize_set_algebra(
+    op: MultiOp,
+    keys: &[Vec<u8>],
+    got: &HashMap<Vec<u8>, Gathered>,
+    proto: RespVersion,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut sets: Vec<Vec<Vec<u8>>> = Vec::with_capacity(keys.len());
+    for k in keys {
+        match got.get(k) {
+            Some(Gathered::Members(m)) => sets.push(m.clone()),
+            Some(Gathered::WrongType) => {
+                encode_error(&mut out, WRONGTYPE);
+                return out;
             }
-            let result = match op {
-                MultiOp::SInter => set_intersect(&sets),
-                MultiOp::SUnion => set_union(&sets),
-                MultiOp::SDiff => set_diff(&sets),
-                // The outer match already routed Mget to its own arm
-                // above; reaching this arm would mean the outer
-                // dispatcher's wildcard caught Mget after a future
-                // refactor. Replying empty is observably wrong but
-                // doesn't crash the shard. Visible empty-array reply
-                // makes the bug catchable; an `unreachable!()` would
-                // crash-loop the whole reactor.
-                MultiOp::Mget => Vec::new(),
-            };
-            match proto {
-                RespVersion::V2 => encode_array_len(&mut out, result.len() as i64),
-                RespVersion::V3 => encode_set_header(&mut out, result.len() as i64),
-            }
-            for m in &result {
-                encode_bulk(&mut out, m);
-            }
+            _ => sets.push(Vec::new()), // missing key = empty set
         }
+    }
+    let result = match op {
+        MultiOp::SInter => set_intersect(&sets),
+        MultiOp::SUnion => set_union(&sets),
+        MultiOp::SDiff => set_diff(&sets),
+        // The outer match already routed Mget; reaching this arm would
+        // mean a future refactor's wildcard caught Mget here. Replying
+        // empty is observably wrong but doesn't crash the shard;
+        // `unreachable!()` would crash-loop the whole reactor.
+        MultiOp::Mget => Vec::new(),
+    };
+    match proto {
+        RespVersion::V2 => encode_array_len(&mut out, result.len() as i64),
+        RespVersion::V3 => encode_set_header(&mut out, result.len() as i64),
+    }
+    for m in &result {
+        encode_bulk(&mut out, m);
     }
     out
 }

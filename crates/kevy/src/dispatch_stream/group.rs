@@ -237,21 +237,11 @@ fn parse_xreadgroup_argv<A: ArgvView + ?Sized>(
         let tok = args[i].to_ascii_uppercase();
         match tok.as_slice() {
             b"COUNT" => {
-                let n = args.get(i + 1).ok_or("ERR syntax error")?;
-                let n: usize = std::str::from_utf8(n)
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .ok_or("ERR value is not an integer or out of range")?;
-                count = Some(n);
+                count = Some(parse_kv_u64(args, i + 1, "ERR value is not an integer or out of range")? as usize);
                 i += 2;
             }
             b"BLOCK" => {
-                let ms_arg = args.get(i + 1).ok_or("ERR syntax error")?;
-                let ms: u64 = std::str::from_utf8(ms_arg)
-                    .ok()
-                    .and_then(|s| s.parse().ok())
-                    .ok_or("ERR timeout is not an integer or out of range")?;
-                block_ms = Some(ms);
+                block_ms = Some(parse_kv_u64(args, i + 1, "ERR timeout is not an integer or out of range")?);
                 i += 2;
             }
             b"NOACK" => {
@@ -259,17 +249,7 @@ fn parse_xreadgroup_argv<A: ArgvView + ?Sized>(
                 i += 1;
             }
             b"STREAMS" => {
-                let rest = args.len() - (i + 1);
-                if rest == 0 || !rest.is_multiple_of(2) {
-                    return Err(
-                        "ERR Unbalanced XREADGROUP list of streams: for each stream key an ID or '>' must be specified.",
-                    );
-                }
-                let n = rest / 2;
-                let mut streams = Vec::with_capacity(n);
-                for k in 0..n {
-                    streams.push((args[i + 1 + k].to_vec(), args[i + 1 + n + k].to_vec()));
-                }
+                let streams = parse_xreadgroup_streams(args, i + 1)?;
                 return Ok(XReadGroupParsed {
                     group,
                     consumer,
@@ -283,6 +263,36 @@ fn parse_xreadgroup_argv<A: ArgvView + ?Sized>(
         }
     }
     Err("ERR syntax error")
+}
+
+fn parse_kv_u64<A: ArgvView + ?Sized>(
+    args: &A,
+    idx: usize,
+    bad: &'static str,
+) -> Result<u64, &'static str> {
+    let n = args.get(idx).ok_or("ERR syntax error")?;
+    std::str::from_utf8(n)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .ok_or(bad)
+}
+
+fn parse_xreadgroup_streams<A: ArgvView + ?Sized>(
+    args: &A,
+    start: usize,
+) -> Result<Vec<(Vec<u8>, Vec<u8>)>, &'static str> {
+    let rest = args.len() - start;
+    if rest == 0 || !rest.is_multiple_of(2) {
+        return Err(
+            "ERR Unbalanced XREADGROUP list of streams: for each stream key an ID or '>' must be specified.",
+        );
+    }
+    let n = rest / 2;
+    let mut streams = Vec::with_capacity(n);
+    for k in 0..n {
+        streams.push((args[start + k].to_vec(), args[start + n + k].to_vec()));
+    }
+    Ok(streams)
 }
 
 // ───────────── XACK ─────────────

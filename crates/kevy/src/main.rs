@@ -11,11 +11,30 @@ use std::sync::Arc;
 use kevy_config::{CliOverrides, Config};
 
 fn main() -> ! {
-    // --help / --version short-circuit BEFORE we touch the config layer, so
-    // they work even if the env / TOML is misconfigured (the standard CLI
-    // contract: --help always reachable). Spotted in v1.0.x downstream usage
-    // — mailrs's Docker healthcheck silently no-op'd because `kevy --help`
-    // was ignored, leading to a server-process being treated as a CLI tool.
+    handle_help_and_version();
+    let mut cfg = resolve_config();
+    let threads = resolve_thread_count(&mut cfg);
+    print_startup_banner(&cfg, threads);
+    if !is_loopback(cfg.server.bind) {
+        warn_unprotected_bind(cfg.server.bind);
+    }
+    let bind = cfg.server.bind;
+    let port = cfg.server.port;
+    let data_dir = cfg.server.data_dir.clone();
+    let aof = cfg.persistence.aof;
+    // Install the resolved Config process-wide so dispatch handlers
+    // (INFO, CONFIG GET) read live values instead of compile-time
+    // defaults. Must happen before the reactor starts so shards see it.
+    kevy::config_init(Arc::new(cfg));
+    kevy::serve(bind, port, threads, data_dir, aof); // never returns
+}
+
+/// `--help` / `--version` short-circuit BEFORE we touch the config layer, so
+/// they work even if the env / TOML is misconfigured (the standard CLI
+/// contract: --help always reachable). Spotted in v1.0.x downstream usage
+/// — mailrs's Docker healthcheck silently no-op'd because `kevy --help` was
+/// ignored, leading to a server-process being treated as a CLI tool.
+fn handle_help_and_version() {
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--help" | "-h" => {
@@ -29,30 +48,35 @@ fn main() -> ! {
             _ => {}
         }
     }
+}
 
+fn resolve_config() -> Config {
     let (config_path, cli) = parse_cli();
-    let mut cfg = Config::load(config_path.as_deref()).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
-    cfg.merge_env(env_vars()).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
-    cfg.merge_cli(cli).unwrap_or_else(|e| {
-        eprintln!("{e}");
-        std::process::exit(1);
-    });
+    let mut cfg = Config::load(config_path.as_deref()).unwrap_or_else(die);
+    cfg.merge_env(env_vars()).unwrap_or_else(die);
+    cfg.merge_cli(cli).unwrap_or_else(die);
+    cfg
+}
 
+fn die<E: std::fmt::Display, T>(e: E) -> T {
+    eprintln!("{e}");
+    std::process::exit(1);
+}
+
+/// Resolve `threads = 0 (auto)` into the actual count and write it back so
+/// CLUSTER SLOTS / SHARDS / NODES (which read the process-wide config) see
+/// the real shard count, not the `0 = auto` sentinel.
+fn resolve_thread_count(cfg: &mut Config) -> usize {
     let threads = if cfg.server.threads == 0 {
         std::thread::available_parallelism().map_or(1, |n| n.get())
     } else {
         cfg.server.threads
     };
-    // Write the resolved count back so CLUSTER SLOTS / SHARDS / NODES (which
-    // read the process-wide config) see the real shard count, not the `0 =
-    // auto` sentinel.
     cfg.server.threads = threads;
+    threads
+}
+
+fn print_startup_banner(cfg: &Config, threads: usize) {
     let [a, b, c, d] = cfg.server.bind;
     eprintln!(
         "kevy v{} starting: {a}.{b}.{c}.{d}:{}, {threads} shard(s), dir={}, aof={}{} (thread-per-core)",
@@ -62,18 +86,6 @@ fn main() -> ! {
         if cfg.persistence.aof { "on" } else { "off" },
         if cfg.cluster.enabled { ", cluster" } else { "" },
     );
-    if !is_loopback(cfg.server.bind) {
-        warn_unprotected_bind(cfg.server.bind);
-    }
-    let bind = cfg.server.bind;
-    let port = cfg.server.port;
-    let data_dir = cfg.server.data_dir.clone();
-    let aof = cfg.persistence.aof;
-    // Install the resolved Config process-wide so dispatch handlers
-    // (INFO, CONFIG GET) read live values instead of compile-time
-    // defaults. Must happen before the reactor starts so shards see it.
-    kevy::config_init(Arc::new(cfg));
-    kevy::serve(bind, port, threads, data_dir, aof); // never returns
 }
 
 fn print_help() {
