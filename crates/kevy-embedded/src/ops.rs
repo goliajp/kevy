@@ -39,7 +39,7 @@ impl Store {
     pub fn set_with_ttl(&self, key: &[u8], value: &[u8], ttl: Duration) -> io::Result<bool> {
         let mut g = self.wshard(key);
         let ok = g.store.set(key, value.to_vec(), Some(ttl), false, false);
-        let ms = ttl.as_millis().min(u64::MAX as u128) as u64;
+        let ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
         let deadline = kevy_store::now_unix_ms().saturating_add(ms);
         commit_write(&mut g, &[b"SET", key, value])?;
         commit_write(&mut g, &[b"PEXPIREAT", key, deadline.to_string().as_bytes()])?;
@@ -56,10 +56,10 @@ impl Store {
     pub fn get(&self, key: &[u8]) -> io::Result<Option<Vec<u8>>> {
         if self.config().maxmemory == 0 {
             let g = self.rshard(key);
-            return Ok(g.store.get_shared(key).map_err(store_err)?.map(|v| v.to_vec()));
+            return Ok(g.store.get_shared(key).map_err(store_err)?.map(<[u8]>::to_vec));
         }
         let mut g = self.wshard(key);
-        Ok(g.store.get(key).map_err(store_err)?.map(|v| v.to_vec()))
+        Ok(g.store.get(key).map_err(store_err)?.map(<[u8]>::to_vec))
     }
 
     /// `DEL key1 [key2 ...]`. Returns the count of keys actually removed.
@@ -108,7 +108,7 @@ impl Store {
         let mut g = self.wshard(key);
         let touched = g.store.expire(key, ttl);
         if touched {
-            let ms = ttl.as_millis().min(u64::MAX as u128) as u64;
+            let ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
             let deadline = kevy_store::now_unix_ms().saturating_add(ms);
             commit_write(&mut g, &[b"PEXPIREAT", key, deadline.to_string().as_bytes()])?;
         }
@@ -213,7 +213,7 @@ impl Store {
         Ok(g.store
             .hget(key, field)
             .map_err(store_err)?
-            .map(|v| v.to_vec()))
+            .map(<[u8]>::to_vec))
     }
 
     /// `HDEL key field [field ...]`. Returns count actually removed.
@@ -237,12 +237,12 @@ impl Store {
 
     /// `LPUSH key value [value ...]`. Returns the new list length.
     pub fn lpush(&self, key: &[u8], values: &[&[u8]]) -> io::Result<usize> {
-        push_helper(self, key, values, b"LPUSH", |s, k, vs| s.lpush(k, vs))
+        push_helper(self, key, values, b"LPUSH", kevy_store::Store::lpush)
     }
 
     /// `RPUSH key value [value ...]`. Returns the new list length.
     pub fn rpush(&self, key: &[u8], values: &[&[u8]]) -> io::Result<usize> {
-        push_helper(self, key, values, b"RPUSH", |s, k, vs| s.rpush(k, vs))
+        push_helper(self, key, values, b"RPUSH", kevy_store::Store::rpush)
     }
 
     /// `LPOP key count`. Returns popped values from the head.
@@ -264,7 +264,7 @@ impl Store {
 
     /// `SADD key member [member ...]`. Returns count newly added.
     pub fn sadd(&self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
-        push_helper(self, key, members, b"SADD", |s, k, ms| s.sadd(k, ms))
+        push_helper(self, key, members, b"SADD", kevy_store::Store::sadd)
     }
 
     /// `SREM key member [member ...]`. Returns count actually removed.

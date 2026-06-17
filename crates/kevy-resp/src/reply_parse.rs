@@ -447,7 +447,7 @@ mod tests {
     #[test]
     fn parse_resp3_partial_returns_none() {
         // Each new shape: cut at every CRLF boundary and assert None.
-        for cut in [b"_".as_slice(), b"_\r", b"#t", b"#t\r"].iter() {
+        for cut in &[b"_".as_slice(), b"_\r", b"#t", b"#t\r"] {
             assert_eq!(parse_reply(cut).unwrap(), None);
         }
         assert_eq!(parse_reply(b"=15\r\ntxt:Some str").unwrap(), None);

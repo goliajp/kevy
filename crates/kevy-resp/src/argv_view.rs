@@ -127,7 +127,7 @@ mod tests {
     }
 
     fn collect_iter<A: ArgvView>(a: &A) -> Vec<Vec<u8>> {
-        a.iter().map(|s| s.to_vec()).collect()
+        a.iter().map(<[u8]>::to_vec).collect()
     }
 
     #[test]

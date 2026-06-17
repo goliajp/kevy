@@ -98,16 +98,16 @@ fn hash_bytes_pipelined(bytes: &[u8]) -> u64 {
             s0 ^= u64::from_le_bytes(bytes[0..8].try_into().unwrap());
             s1 ^= u64::from_le_bytes(bytes[len - 8..].try_into().unwrap());
         } else if len >= 4 {
-            s0 ^= u32::from_le_bytes(bytes[0..4].try_into().unwrap()) as u64;
-            s1 ^= u32::from_le_bytes(bytes[len - 4..].try_into().unwrap()) as u64;
+            s0 ^= u64::from(u32::from_le_bytes(bytes[0..4].try_into().unwrap()));
+            s1 ^= u64::from(u32::from_le_bytes(bytes[len - 4..].try_into().unwrap()));
         } else if len > 0 {
             // 1-3 byte tail: form a 3-byte key (lo, mid, hi) that
             // distinguishes "ab" from "ba" etc.
             let lo = bytes[0];
             let mid = bytes[len / 2];
             let hi = bytes[len - 1];
-            s0 ^= lo as u64;
-            s1 ^= ((hi as u64) << 8) | mid as u64;
+            s0 ^= u64::from(lo);
+            s1 ^= (u64::from(hi) << 8) | u64::from(mid);
         }
         // len == 0 falls through with s0 == S1, s1 == S2 unchanged.
     } else {
@@ -139,7 +139,7 @@ fn hash_bytes_pipelined(bytes: &[u8]) -> u64 {
 /// changes in the input.
 #[inline]
 fn multiply_mix(x: u64, y: u64) -> u64 {
-    let full = (x as u128).wrapping_mul(y as u128);
+    let full = u128::from(x).wrapping_mul(u128::from(y));
     let lo = full as u64;
     let hi = (full >> 64) as u64;
     lo ^ hi
@@ -166,12 +166,12 @@ impl Hasher for FxHasher {
             bytes = &bytes[8..];
         }
         if bytes.len() >= 4 {
-            let word = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as u64;
+            let word = u64::from(u32::from_le_bytes(bytes[..4].try_into().unwrap()));
             state = mix(state, word);
             bytes = &bytes[4..];
         }
         for &b in bytes {
-            state = mix(state, b as u64);
+            state = mix(state, u64::from(b));
         }
         self.0 = state;
     }
@@ -246,7 +246,7 @@ impl KevyHash for u64 {
 impl KevyHash for u32 {
     #[inline]
     fn kevy_hash(&self) -> u64 {
-        fmix64(mix(0, *self as u64))
+        fmix64(mix(0, u64::from(*self)))
     }
 }
 
@@ -255,7 +255,7 @@ impl KevyHash for i32 {
     fn kevy_hash(&self) -> u64 {
         // Sign-extend to u64 so equal i32 values hash the same as if widened
         // through the integer path; negatives' top bits still fmix64 away.
-        fmix64(mix(0, *self as i64 as u64))
+        fmix64(mix(0, i64::from(*self) as u64))
     }
 }
 
@@ -397,7 +397,7 @@ mod tests {
     fn kevy_hash_u32_agrees_with_widened_u64() {
         // u32 widens through u64 → same hash as the u64 form of the same value.
         let n: u32 = 0xCAFE_BABE;
-        assert_eq!(n.kevy_hash(), (n as u64).kevy_hash());
+        assert_eq!(n.kevy_hash(), u64::from(n).kevy_hash());
         // Distinct values produce distinct hashes.
         let m: u32 = n.wrapping_add(1);
         assert_ne!(n.kevy_hash(), m.kevy_hash());

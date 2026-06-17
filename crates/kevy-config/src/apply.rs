@@ -237,7 +237,9 @@ fn value_as_size(item: &Item) -> Result<u64, ConfigError> {
         Value::Int(n) => u64::try_from(*n)
             .map_err(|_| schema_err(item, format!("size value {n} must be non-negative"))),
         Value::Str(s) => parse_size(s).map_err(|e| schema_err(item, e)),
-        other => Err(schema_err(item, format!("expected size literal, got {other:?}"))),
+        other @ Value::Bool(_) => {
+            Err(schema_err(item, format!("expected size literal, got {other:?}")))
+        }
     }
 }
 

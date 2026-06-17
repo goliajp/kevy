@@ -189,22 +189,19 @@ fn emit_line(
             let canonical = pairs.iter().enumerate().find(|(_, p)| {
                 p.section == section.as_deref().unwrap_or("") && p.key == key
             });
-            match canonical {
-                Some((idx, p)) => {
-                    out.push_str(&line.raw[..*value_start]);
-                    out.push_str(&p.value);
-                    out.push_str(&line.raw[*value_end..]);
-                    out.push('\n');
-                    emitted[idx] = true;
-                }
-                None => {
-                    // Unknown (section, key) — Config::load would have
-                    // rejected it, so this branch is reachable only if
-                    // the file was edited after kevy loaded it. Pass
-                    // through verbatim rather than dropping it.
-                    out.push_str(&line.raw);
-                    out.push('\n');
-                }
+            if let Some((idx, p)) = canonical {
+                out.push_str(&line.raw[..*value_start]);
+                out.push_str(&p.value);
+                out.push_str(&line.raw[*value_end..]);
+                out.push('\n');
+                emitted[idx] = true;
+            } else {
+                // Unknown (section, key) — Config::load would have
+                // rejected it, so this branch is reachable only if
+                // the file was edited after kevy loaded it. Pass
+                // through verbatim rather than dropping it.
+                out.push_str(&line.raw);
+                out.push('\n');
             }
         }
     }

@@ -55,7 +55,7 @@ pub(crate) fn touch_on_access(e: &mut Entry, policy: EvictionPolicy, clock: u32)
         let counter = cur as u8;
         let next = lfu_log_incr(counter, clock);
         // preserve the LFU 16-bit decay-tick (upper bits), update only counter.
-        e.set_lru_clock((cur & 0xFFFF_FF00) | next as u32);
+        e.set_lru_clock((cur & 0xFFFF_FF00) | u32::from(next));
     }
 }
 
@@ -67,7 +67,7 @@ fn lfu_log_incr(counter: u8, clock: u32) -> u8 {
     if counter == LFU_COUNTER_MAX {
         return counter;
     }
-    let baseval = counter.saturating_sub(LFU_INIT_VAL) as u32;
+    let baseval = u32::from(counter.saturating_sub(LFU_INIT_VAL));
     let threshold = baseval.saturating_mul(LFU_LOG_FACTOR).saturating_add(1);
     if threshold == 1 || splitmix32(clock).is_multiple_of(threshold) {
         counter.saturating_add(1)
@@ -183,14 +183,14 @@ fn sample_and_pick(store: &mut Store, n: usize) -> Option<Vec<u8>> {
 #[inline]
 fn score_entry(e: &Entry, policy: EvictionPolicy, now: u64, clock: u32) -> i64 {
     match policy {
-        EvictionPolicy::AllKeysLru | EvictionPolicy::VolatileLru => e.lru_clock() as i64,
+        EvictionPolicy::AllKeysLru | EvictionPolicy::VolatileLru => i64::from(e.lru_clock()),
         EvictionPolicy::AllKeysLfu | EvictionPolicy::VolatileLfu => {
-            (e.lru_clock() & 0xFF) as i64
+            i64::from(e.lru_clock() & 0xFF)
         }
         EvictionPolicy::AllKeysRandom | EvictionPolicy::VolatileRandom => {
             // Stamp each sampled entry with a fresh splitmix bit so the
             // "lowest score" rule picks uniformly at random.
-            splitmix32(clock ^ e.lru_clock()) as i64
+            i64::from(splitmix32(clock ^ e.lru_clock()))
         }
         EvictionPolicy::VolatileTtl => match e.expire_at_ns {
             Some(ns) => remaining_ms(ns, now) as i64,

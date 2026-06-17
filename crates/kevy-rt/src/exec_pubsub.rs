@@ -150,7 +150,7 @@ impl<C: Commands> Shard<C> {
         bits |= pbits;
 
         let mut reply = Vec::new();
-        encode_integer(&mut reply, count as i64);
+        encode_integer(&mut reply, i64::from(count));
         if let Some(c) = self.conns.get_mut(&conn_id) {
             c.pending.push_back(PendingSlot {
                 remaining: 1,
@@ -254,7 +254,7 @@ impl<C: Commands> Shard<C> {
     #[inline]
     pub(crate) fn flush_publish(&mut self) {
         // Outer-empty short-circuit: the common hot path has no pub/sub.
-        if self.publish_batch.iter().all(|b| b.is_empty()) {
+        if self.publish_batch.iter().all(std::vec::Vec::is_empty) {
             return;
         }
         for s in 0..self.nshards {

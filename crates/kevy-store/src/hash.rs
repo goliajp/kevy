@@ -1,7 +1,7 @@
 //! `Store` hash commands.
 
-use crate::util::*;
-use crate::value::*;
+use crate::util::parse_i64;
+use crate::value::{HashData, SmallBytes, Value, hash_field_weight};
 use crate::{Entry, Store, StoreError, now_ns};
 use std::sync::Arc;
 
@@ -96,7 +96,7 @@ impl Store {
         Ok(self
             .hash_ref(key)?
             .and_then(|h| h.get(field))
-            .map(|v| v.as_slice()))
+            .map(std::vec::Vec::as_slice))
     }
 
     pub fn hexists(&mut self, key: &[u8], field: &[u8]) -> Result<bool, StoreError> {
@@ -104,7 +104,7 @@ impl Store {
     }
 
     pub fn hlen(&mut self, key: &[u8]) -> Result<usize, StoreError> {
-        Ok(self.hash_ref(key)?.map_or(0, |h| h.len()))
+        Ok(self.hash_ref(key)?.map_or(0, kevy_map::KevyMap::len))
     }
 
     pub fn hmget(
@@ -137,7 +137,7 @@ impl Store {
     pub fn hkeys(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
         Ok(self
             .hash_ref(key)?
-            .map_or(Vec::new(), |h| h.keys().map(|k| k.to_vec()).collect()))
+            .map_or(Vec::new(), |h| h.keys().map(kevy_bytes::SmallBytes::to_vec).collect()))
     }
 
     pub fn hvals(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {

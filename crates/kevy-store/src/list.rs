@@ -1,7 +1,7 @@
 //! `Store` list commands.
 
-use crate::util::*;
-use crate::value::*;
+use crate::util::{norm_index, range_bounds};
+use crate::value::{ListData, SmallBytes, Value, list_item_weight};
 use crate::{Entry, Store, StoreError};
 use std::sync::Arc;
 
@@ -119,7 +119,7 @@ impl Store {
     }
 
     pub fn llen(&mut self, key: &[u8]) -> Result<usize, StoreError> {
-        Ok(self.list_ref(key)?.map_or(0, |l| l.len()))
+        Ok(self.list_ref(key)?.map_or(0, std::collections::VecDeque::len))
     }
 
     pub fn lindex(&mut self, key: &[u8], idx: i64) -> Result<Option<Vec<u8>>, StoreError> {

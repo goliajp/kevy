@@ -1,7 +1,7 @@
 //! `Store` sorted-set commands.
 
-use crate::util::*;
-use crate::value::*;
+use crate::util::range_bounds;
+use crate::value::{ZSetData, SmallBytes, Value, zset_member_weight, ScoreBound};
 use crate::{Entry, Store, StoreError};
 use std::sync::Arc;
 
@@ -70,7 +70,7 @@ impl Store {
     }
 
     pub fn zcard(&mut self, key: &[u8]) -> Result<usize, StoreError> {
-        Ok(self.zset_ref(key)?.map_or(0, |z| z.len()))
+        Ok(self.zset_ref(key)?.map_or(0, super::value::ZSetData::len))
     }
 
     pub fn zrem(&mut self, key: &[u8], members: &[Vec<u8>]) -> Result<usize, StoreError> {

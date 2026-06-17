@@ -431,12 +431,12 @@ fn freeze_for_save(
 }
 
 pub(crate) fn lock_write(shard: &RwLock<Inner>) -> RwLockWriteGuard<'_, Inner> {
-    shard.write().unwrap_or_else(|p| p.into_inner())
+    shard.write().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Read-lock an `Inner`, recovering from poison.
 pub(crate) fn lock_read(shard: &RwLock<Inner>) -> RwLockReadGuard<'_, Inner> {
-    shard.read().unwrap_or_else(|p| p.into_inner())
+    shard.read().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn log_argv(aof: &mut Option<Aof>, parts: &[&[u8]]) -> io::Result<()> {
@@ -469,7 +469,7 @@ impl Drop for DropGuard {
         if let Some(j) = self
             .reaper_join
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
         {
             let _ = j.join();

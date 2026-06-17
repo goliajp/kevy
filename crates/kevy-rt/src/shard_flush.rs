@@ -83,7 +83,7 @@ impl<C: Commands> Shard<C> {
     pub(crate) fn flush_backlog(&mut self) {
         // Outer-empty short-circuit: in the hot single-shard / no-backlog
         // path this avoids the nshards loop entirely.
-        if self.backlog.iter().all(|b| b.is_empty()) {
+        if self.backlog.iter().all(std::collections::VecDeque::is_empty) {
             return;
         }
         for dst in 0..self.nshards {
@@ -117,7 +117,7 @@ impl<C: Commands> Shard<C> {
                     Ok(0) => break,
                     Ok(n) => conn.write_pos += n,
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {} // retry the write
                     Err(_) => {
                         conn.closing = true;
                         break;

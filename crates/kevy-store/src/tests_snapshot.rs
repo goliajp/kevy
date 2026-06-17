@@ -53,7 +53,7 @@ fn snapshot_view_collections_are_cow() {
     match view_get(&view, b"h") {
         Some(Value::Hash(h)) => {
             assert_eq!(h.len(), 1, "view hash gained post-collect fields");
-            assert_eq!(h.get(b"f".as_slice()).map(|v| v.as_slice()), Some(b"v1".as_slice()));
+            assert_eq!(h.get(b"f".as_slice()).map(std::vec::Vec::as_slice), Some(b"v1".as_slice()));
         }
         other => panic!("expected frozen Hash, got {:?}", other.map(|v| v.type_name())),
     }

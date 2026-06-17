@@ -45,20 +45,7 @@ pub fn glob_match(pat: &[u8], s: &[u8]) -> bool {
 fn glob(mut p: &[u8], mut s: &[u8]) -> bool {
     while let Some(&c) = p.first() {
         match c {
-            b'*' => {
-                while p.get(1) == Some(&b'*') {
-                    p = &p[1..];
-                }
-                if p.len() == 1 {
-                    return true; // trailing '*' matches the rest
-                }
-                for i in 0..=s.len() {
-                    if glob(&p[1..], &s[i..]) {
-                        return true;
-                    }
-                }
-                return false;
-            }
+            b'*' => return glob_star(p, s),
             b'?' => {
                 if s.is_empty() {
                     return false;
@@ -96,6 +83,18 @@ fn glob(mut p: &[u8], mut s: &[u8]) -> bool {
     s.is_empty()
 }
 
+/// Handles the `*` arm of `glob`: collapse a run of `*`s, then try every tail.
+fn glob_star(mut p: &[u8], s: &[u8]) -> bool {
+    while p.get(1) == Some(&b'*') {
+        p = &p[1..];
+    }
+    if p.len() == 1 {
+        return true; // trailing '*' matches the rest
+    }
+    let tail = &p[1..];
+    (0..=s.len()).any(|i| glob(tail, &s[i..]))
+}
+
 /// Match one char against a `[...]` class; return `(matched, pattern_after_class)`.
 fn match_class(p: &[u8], ch: u8) -> (bool, &[u8]) {
     let mut i = 0;
@@ -129,7 +128,11 @@ fn match_class(p: &[u8], ch: u8) -> (bool, &[u8]) {
 
 /// Format a number the way Redis does: integral values without a decimal point.
 pub(crate) fn fmt_num(v: f64) -> Vec<u8> {
-    if v == v.trunc() && v.abs() < 1e17 {
+    // Bit-exact compare is the contract: "the f64 carries no fractional bits".
+    // An epsilon would mis-classify 1.0 + 1e-18 as integer-valued.
+    #[allow(clippy::float_cmp)]
+    let is_integer_valued = v == v.trunc();
+    if is_integer_valued && v.abs() < 1e17 {
         (v as i64).to_string().into_bytes()
     } else {
         format!("{v}").into_bytes()

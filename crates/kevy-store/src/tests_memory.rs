@@ -111,7 +111,7 @@ fn volatile_lru_skips_keys_without_ttl() {
         st.set(
             k.as_bytes(),
             s("xxxxxxxxxxxxxxxxxxxx"),
-            Some(Duration::from_secs(3600)),
+            Some(Duration::from_hours(1)),
             false,
             false,
         );

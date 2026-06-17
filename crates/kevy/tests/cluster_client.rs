@@ -21,12 +21,9 @@ fn free_port_block(n: usize) -> u16 {
         let mut ok = true;
         let mut held = vec![anchor];
         for i in 1..=n as u16 {
-            match std::net::TcpListener::bind(("127.0.0.1", base + i)) {
-                Ok(l) => held.push(l),
-                Err(_) => {
-                    ok = false;
-                    break;
-                }
+            if let Ok(l) = std::net::TcpListener::bind(("127.0.0.1", base + i)) { held.push(l) } else {
+                ok = false;
+                break;
             }
         }
         if ok {
@@ -121,7 +118,7 @@ fn cluster_client_routes_every_key_to_owner() {
     assert!(cc.ttl_ms(b"cnt").unwrap() > 90_000);
     assert!(cc.persist(b"cnt").unwrap());
     assert_eq!(cc.ttl_ms(b"cnt").unwrap(), -1);
-    cc.set_with_ttl(b"timed", b"x", Duration::from_secs(60)).unwrap();
+    cc.set_with_ttl(b"timed", b"x", Duration::from_mins(1)).unwrap();
     assert!(cc.ttl_ms(b"timed").unwrap() > 50_000);
 
     // Multi-key DEL/EXISTS route per key across shards and sum.
