@@ -22,14 +22,19 @@ name = "kevy"
 path = "src/main.rs"
 
 [dependencies]
-kevy-sys = { path = "../kevy-sys", version = "1.17.0" }
-kevy-resp = { path = "../kevy-resp", version = "1.17.0" }
-kevy-store = { path = "../kevy-store", version = "1.17.0" }
-kevy-rt = { path = "../kevy-rt", version = "1.17.0" }
-kevy-config = { path = "../kevy-config", version = "1.17.0" }
-kevy-persist = { path = "../kevy-persist", version = "1.17.0" }
-kevy-geo = { path = "../kevy-geo", version = "1.17.0" }
-kevy-hash = { path = "../kevy-hash", version = "1.17.0" }
+kevy-sys = { path = "../kevy-sys", version = "1.18.0" }
+kevy-resp = { path = "../kevy-resp", version = "1.18.0" }
+kevy-store = { path = "../kevy-store", version = "1.18.0" }
+kevy-rt = { path = "../kevy-rt", version = "1.18.0" }
+kevy-config = { path = "../kevy-config", version = "1.18.0" }
+kevy-persist = { path = "../kevy-persist", version = "1.18.0" }
+kevy-geo = { path = "../kevy-geo", version = "1.18.0" }
+kevy-hash = { path = "../kevy-hash", version = "1.18.0" }
+# kevy-replicate: the server-as-replica runner (T1.29) needs
+# `ReplicaClient` / `ReplicaEvent` at runtime, not just for tests.
+# (Pre-T1.29 the dep was dev-only via `tests/replication.rs` decoding
+# wire frames; T1.29 promotes it to a normal dep.)
+kevy-replicate = { path = "../kevy-replicate", version = "1.18.0" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }

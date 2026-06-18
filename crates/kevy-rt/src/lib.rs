@@ -85,16 +85,26 @@ mod inbox;
 mod persist_worker;
 mod message;
 mod reduce;
+mod replica_inbox;
+mod replication;
+mod replication_apply;
+mod replication_gate;
+mod replication_io;
+mod replication_pump;
 mod reshard;
 mod route;
 mod runtime;
+mod runtime_builders;
 mod shard;
 mod shard_flush;
+mod shard_lifecycle;
 mod shard_tick;
 #[cfg(target_os = "linux")]
 mod uring_conn;
 #[cfg(target_os = "linux")]
 mod uring_inbox;
+#[cfg(target_os = "linux")]
+mod uring_park;
 #[cfg(target_os = "linux")]
 mod uring_reactor;
 
@@ -105,6 +115,8 @@ pub use kevy_config::NotificationFlags;
 pub use kevy_persist::Fsync;
 pub use kevy_resp::{Argv, ArgvBorrowed, ArgvView, RespVersion};
 pub use kevy_store::Store;
+pub use replica_inbox::{ReplicaApply, ReplicaInboxReceiver, ReplicaInboxSender, replica_inbox_pair};
+pub use replication_gate::ReplicatedApplyGuard;
 pub use route::{Route, XGroupCtx};
 pub use runtime::Runtime;
 
@@ -196,6 +208,25 @@ pub trait Commands: Clone + Send + 'static {
     /// thread *is* the shard, same pattern as [`Self::on_shard_start`]).
     /// Default: no-op.
     fn on_persist_stats(&self, _in_flight: bool, _aof_rewrites_total: u64) {}
+
+    /// Per-tick replication-view publication: the answering shard's
+    /// current `master_repl_offset` (== `ReplicationSource::next_offset()`)
+    /// plus the per-replica `(ipv4, port, sent_offset)` triple for
+    /// every handshake-complete replica (in `AckSent`, `Streaming`,
+    /// or `SnapshotShipping`). `connected_slaves` for `INFO` /
+    /// `ROLE` is derived as `replicas.len()`.
+    /// Only called when this shard has a `ReplicationSource`
+    /// installed (i.e. `Runtime::with_replication(true, ...)` was
+    /// requested); standalone setups pay nothing. Command layers
+    /// that serve `ROLE` / `INFO replication` stash the values in a
+    /// thread-local (thread-per-core: the answering thread *is* the
+    /// shard, same pattern as [`Self::on_persist_stats`]). Default
+    /// no-op.
+    fn on_replication_view(
+        &self,
+        _master_repl_offset: u64,
+        _replicas: Vec<(std::net::Ipv4Addr, u16, u64)>,
+    ) {}
 
     /// Periodic shard housekeeping (the equivalent of Redis's `serverCron`).
     /// kevy uses this to run [`Store::tick_expire`] at the configured

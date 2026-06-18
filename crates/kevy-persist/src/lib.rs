@@ -114,6 +114,42 @@ pub fn save_snapshot<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<()> 
     std::fs::rename(&tmp, path)
 }
 
+/// Serialize a point-in-time snapshot of `src` into any `Write` sink.
+/// Used by both [`write_snapshot_tmp`] (sink = `BufWriter<File>` +
+/// extra fsync after) and the v3-cluster replication path (sink =
+/// `&mut Vec<u8>` for in-memory snapshot ship, see
+/// `kevy-replicate/docs/snapshot.md`).
+///
+/// On-disk bytes are identical regardless of sink — the same magic +
+/// version header, same entry stream, same `OP_EOF` trailer. Callers
+/// that need durability (disk) wrap in `BufWriter<File>` and call
+/// `sync_all` themselves; callers that need bytes (network ship)
+/// pass a `Vec<u8>`.
+pub fn write_snapshot_to<S: SnapshotSource, W: Write>(src: &S, sink: &mut W) -> io::Result<()> {
+    let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, sink);
+    w.write_all(MAGIC)?;
+    w.write_all(&[VERSION])?;
+    // The source yields *remaining* ms; v3 persists the absolute
+    // Unix-ms deadline (now + remaining) so the TTL survives a restart.
+    let now = kevy_store::now_unix_ms();
+    // Enumeration is infallible; capture the first write error to surface.
+    let mut err: Option<io::Error> = None;
+    src.for_each_entry(|key, value, ttl| {
+        let deadline = ttl.map(|ms| now.saturating_add(ms));
+        if err.is_none()
+            && let Err(e) = write_entry(&mut w, key, value, deadline)
+        {
+            err = Some(e);
+        }
+    });
+    if let Some(e) = err {
+        return Err(e);
+    }
+    w.write_all(&[OP_EOF])?;
+    w.flush()?;
+    Ok(())
+}
+
 /// The write half of [`save_snapshot`]: produce the durable (fsynced)
 /// `<path>.tmp` and return its path **without** the final rename. For the
 /// COW background-save flow: the serializer thread writes the temp file at
@@ -123,28 +159,9 @@ pub fn save_snapshot<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<()> 
 pub fn write_snapshot_tmp<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<std::path::PathBuf> {
     let tmp = tmp_path(path);
     {
-        let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, File::create(&tmp)?);
-        w.write_all(MAGIC)?;
-        w.write_all(&[VERSION])?;
-        // The source yields *remaining* ms; v3 persists the absolute
-        // Unix-ms deadline (now + remaining) so the TTL survives a restart.
-        let now = kevy_store::now_unix_ms();
-        // Enumeration is infallible; capture the first write error to surface.
-        let mut err: Option<io::Error> = None;
-        src.for_each_entry(|key, value, ttl| {
-            let deadline = ttl.map(|ms| now.saturating_add(ms));
-            if err.is_none()
-                && let Err(e) = write_entry(&mut w, key, value, deadline)
-            {
-                err = Some(e);
-            }
-        });
-        if let Some(e) = err {
-            return Err(e);
-        }
-        w.write_all(&[OP_EOF])?;
-        w.flush()?;
-        w.get_ref().sync_all()?; // durably on disk before the rename
+        let mut file = File::create(&tmp)?;
+        write_snapshot_to(src, &mut file)?;
+        file.sync_all()?; // durably on disk before the rename
     }
     Ok(tmp)
 }
@@ -152,8 +169,17 @@ pub fn write_snapshot_tmp<S: SnapshotSource>(src: &S, path: &Path) -> io::Result
 /// Load a snapshot from `path` into `store` (entries are inserted, not cleared
 /// first — call on a fresh store). Errors on a bad magic/version or truncation.
 pub fn load_snapshot(store: &mut Store, path: &Path) -> io::Result<()> {
-    let mut r = BufReader::new(File::open(path)?);
+    let r = BufReader::new(File::open(path)?);
+    load_snapshot_from(store, r)
+}
 
+/// Load a snapshot from any [`std::io::Read`] sink into `store` —
+/// symmetric to [`write_snapshot_to`]. Used by the v3-cluster
+/// replication path (sink = `&[u8]` wrapped in `std::io::Cursor`) to
+/// apply a primary-shipped snapshot to a fresh local store without
+/// touching disk. Entries are inserted, not cleared first — call on
+/// a fresh store. Errors on bad magic/version or truncation.
+pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()> {
     let mut magic = [0u8; 8];
     r.read_exact(&mut magic)?;
     if &magic != MAGIC {

@@ -20,6 +20,7 @@ pub(crate) mod client;
 pub(crate) mod cluster;
 pub(crate) mod config;
 mod memory;
+pub(crate) mod replication;
 pub(crate) mod stats;
 
 use std::time::SystemTime;
@@ -61,6 +62,8 @@ pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
             config::cmd_config(&cfg, args, out, RespVersion::V2);
         }
         b"CLIENT" => client::cmd_client(args, out, RespVersion::V2),
+        b"ROLE" => replication::cmd_role(args, out),
+        b"REPLICAOF" | b"SLAVEOF" => replication::cmd_replicaof(args, out),
         b"MEMORY" => {
             let cfg = config_global::get();
             memory::cmd_memory(&cfg, store, args, out);
@@ -237,11 +240,38 @@ fn info_stats(totals: &stats::Totals, b: &mut String) {
 }
 
 fn info_replication(b: &mut String) {
+    // T1.31: live `INFO replication` — reads `current_upstream()` to
+    // decide the section shape, then drains the per-tick view
+    // (`replication_view()`) for offset + connected-replicas count.
+    // The fields mirror Redis 7.x; the v1.18 simplifications are:
+    //   - master_replid is a single zeros-string (no failover ID
+    //     bookkeeping yet — kevy-elect (Phase 1.5) introduces real IDs)
+    //   - master_link_status is fixed to "up" when an upstream is
+    //     installed (no runner→view feedback yet — T1.31.x follow-up)
+    //   - the per-replica list is omitted (peer-addr capture is
+    //     T1.28.5 — see plan).
     b.push_str("# Replication\r\n");
-    b.push_str("role:master\r\n");
-    b.push_str("connected_slaves:0\r\n");
-    b.push_str("master_replid:0000000000000000000000000000000000000000\r\n");
-    b.push_str("master_repl_offset:0\r\n");
+    let upstream = crate::replica_state::current_upstream();
+    let view = replication::replication_view();
+    let offset = view.master_repl_offset;
+    let connected = view.replicas.len();
+    match upstream {
+        Some((host, port)) => {
+            b.push_str("role:slave\r\n");
+            b.push_str(&format!("master_host:{host}\r\n"));
+            b.push_str(&format!("master_port:{port}\r\n"));
+            b.push_str("master_link_status:up\r\n");
+            b.push_str("master_sync_in_progress:0\r\n");
+            b.push_str("slave_read_only:0\r\n");
+            b.push_str("slave_repl_offset:0\r\n");
+        }
+        None => {
+            b.push_str("role:master\r\n");
+            b.push_str(&format!("connected_slaves:{connected}\r\n"));
+            b.push_str("master_replid:0000000000000000000000000000000000000000\r\n");
+            b.push_str(&format!("master_repl_offset:{offset}\r\n"));
+        }
+    }
     b.push_str("\r\n");
 }
 
@@ -364,83 +394,6 @@ pub(super) fn wrong_args(out: &mut Vec<u8>, name: &str) {
     );
 }
 
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use kevy_resp::Argv;
-
-    fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
-        let mut a = Argv::default();
-        a.push(verb);
-        for r in rest {
-            a.push(r);
-        }
-        let mut out = Vec::new();
-        let mut store = Store::new();
-        let handled = dispatch_ops(verb, &mut store, &a, &mut out);
-        assert!(handled, "verb {:?} not handled", String::from_utf8_lossy(verb));
-        out
-    }
-
-    #[test]
-    fn info_returns_bulk_with_sections() {
-        let out = run(b"INFO", &[]);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with('$'), "INFO must reply as bulk string");
-        assert!(s.contains("# Server"));
-        assert!(s.contains("# Replication"));
-        assert!(s.contains("role:master"));
-        assert!(s.contains("cluster_enabled:0"));
-    }
-
-    #[test]
-    fn info_specific_section() {
-        let out = run(b"INFO", &[b"memory"]);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.contains("# Memory"));
-        assert!(!s.contains("# Server"));
-    }
-
-    #[test]
-    fn cluster_info_carries_standalone_markers() {
-        let out = run(b"CLUSTER", &[b"INFO"]);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.contains("cluster_enabled:0"));
-        assert!(s.contains("cluster_state:ok"));
-    }
-
-    #[test]
-    fn cluster_nodes_single_self_entry() {
-        let out = run(b"CLUSTER", &[b"NODES"]);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.contains("myself,master"));
-        assert!(s.contains("0-16383"));
-    }
-
-    #[test]
-    fn debug_sleep_zero_returns_immediately() {
-        let out = run(b"DEBUG", &[b"SLEEP", b"0"]);
-        assert_eq!(out, b"+OK\r\n");
-    }
-
-    #[test]
-    fn debug_sleep_small_actually_sleeps() {
-        let t = std::time::Instant::now();
-        let out = run(b"DEBUG", &[b"SLEEP", b"0.05"]);
-        let elapsed = t.elapsed();
-        assert!(elapsed.as_millis() >= 40, "expected ≥ 40ms, got {elapsed:?}");
-        assert_eq!(out, b"+OK\r\n");
-    }
-
-    #[test]
-    fn wait_returns_zero_replicas() {
-        let out = run(b"WAIT", &[b"3", b"1000"]);
-        assert_eq!(out, b":0\r\n");
-    }
-
-    #[test]
-    fn wait_wrong_args_errors() {
-        let out = run(b"WAIT", &[b"3"]);
-        assert!(out.starts_with(b"-ERR"));
-    }
-}
+mod tests;

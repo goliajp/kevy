@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use crate::parse::{Item, Value};
+use crate::replication::ReplicationRole;
 use crate::schema::{
     AppendFsync, Config, ConfigError, EvictionPolicy, LogLevel, LogOutput,
 };
@@ -25,6 +26,7 @@ impl Config {
             "advanced" => self.apply_advanced(item),
             "slowlog" => self.apply_slowlog(item),
             "cluster" => self.apply_cluster(item),
+            "replication" => self.apply_replication(item),
             other => Err(schema_err(&item, format!("unknown section [{other}]"))),
         }
     }
@@ -146,6 +148,27 @@ impl Config {
             "enabled" => self.cluster.enabled = value_as_bool(&item)?,
             "port_base" => self.cluster.port_base = value_as_u16(&item)?,
             k => return Err(schema_err(&item, format!("unknown [cluster] key: {k}"))),
+        }
+        Ok(())
+    }
+
+    fn apply_replication(&mut self, item: Item) -> Result<(), ConfigError> {
+        match item.key.as_str() {
+            "role" => {
+                self.replication.role = ReplicationRole::parse(&value_as_string(&item)?)
+                    .ok_or_else(|| {
+                        schema_err(&item, "role must be 'standalone' | 'primary' | 'replica'")
+                    })?;
+            }
+            "upstream" => self.replication.upstream = Some(value_as_string(&item)?),
+            "listen_port_base" => self.replication.listen_port_base = value_as_u16(&item)?,
+            "replication_buffer_size" => {
+                self.replication.replication_buffer_size = value_as_size(&item)?;
+            }
+            "reconnect_window_ms" => {
+                self.replication.reconnect_window_ms = value_as_u32(&item)?;
+            }
+            k => return Err(schema_err(&item, format!("unknown [replication] key: {k}"))),
         }
         Ok(())
     }
