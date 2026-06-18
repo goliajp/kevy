@@ -14,9 +14,9 @@ use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
 
-/// Write `src`'s state (a live [`Store`] or a frozen
+/// Write `src`'s state (a live `Store` or a frozen
 /// [`kevy_store::SnapshotView`]) to `path` as a sequence of mutating RESP
-/// commands prefixed with [`crate::aof::AOF_MAGIC`]; flush + fsync before
+/// commands prefixed with `crate::aof::AOF_MAGIC`; flush + fsync before
 /// returning. Returns `(keys, bytes)`. The magic header is consistent with
 /// `Aof::open`'s fresh-file behavior so BGREWRITEAOF-produced files replay
 /// the same way live-appended ones do.

@@ -84,8 +84,19 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
         }
         b"NODES" if enabled => encode_bulk(out, nodes_text(cfg, n).as_bytes()),
         b"NODES" => {
-            // Standalone stub (matches the pre-cluster shape).
-            let body = "0000000000000000000000000000000000000000 :0@0 myself,master - 0 0 0 connected 0-16383\r\n";
+            // Standalone stub. T1.33: the flag reflects live state
+            // (`replica_state::current_upstream` is `Some` for a
+            // replica) — clients that discover topology via NODES
+            // can therefore classify the node correctly without a
+            // separate ROLE roundtrip.
+            let role = if crate::replica_state::current_upstream().is_some() {
+                "slave"
+            } else {
+                "master"
+            };
+            let body = format!(
+                "0000000000000000000000000000000000000000 :0@0 myself,{role} - 0 0 0 connected 0-16383\r\n",
+            );
             encode_bulk(out, body.as_bytes());
         }
         b"SLOTS" if enabled => encode_slots(cfg, n, out),
@@ -136,9 +147,22 @@ fn for_each_node(cfg: &Config, n: usize, mut f: impl FnMut(usize, &str, i64, u16
 /// flagged `myself`. No cluster bus — `@cport` mirrors the data port.
 fn nodes_text(cfg: &Config, n: usize) -> String {
     let me = current_shard();
+    // T1.33: the answering node's role from live replication state
+    // — the OTHER shards within this same process share the same
+    // role (they're sibling shards in one process), so we apply
+    // `role` to every entry.
+    let role = if crate::replica_state::current_upstream().is_some() {
+        "slave"
+    } else {
+        "master"
+    };
     let mut body = String::new();
     for_each_node(cfg, n, |i, ip, port, start, end| {
-        let flags = if i == me { "myself,master" } else { "master" };
+        let flags = if i == me {
+            format!("myself,{role}")
+        } else {
+            role.to_string()
+        };
         body.push_str(&format!(
             "{} {ip}:{port}@{port} {flags} - 0 0 {} connected {start}-{end}\r\n",
             node_id(i),

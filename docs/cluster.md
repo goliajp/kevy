@@ -161,3 +161,33 @@ Reproduce with `cargo run -p kevy-client --release --example cluster_bench`.
   proxy behaviour is correct and simpler, and at low load the hop is cheap.
 - **Reach for `redis-cli -c` / a third-party cluster client** only for
   interop testing; the native `ClusterClient` is lighter for Rust callers.
+
+## Read-write split: combining cluster mode with replication (v1.18)
+
+`kevy-cluster-rw` is a sibling client for the **replication** topology — a
+primary kevy node serving writes + a fleet of replica kevy nodes serving
+reads (see [`docs/replication.md`](replication.md) for the server side). It
+is **orthogonal to cluster mode**: the replication topology is one writer per
+*process*, while cluster mode partitions one process into N shards. They
+compose — a primary in cluster mode advertises N shards, every replica also
+runs N shards, and the operator wires up `kevy-cluster-rw` between them.
+
+```rust
+use kevy_cluster_rw::ReadWriteClient;
+
+let mut client = ReadWriteClient::connect(
+    ("primary.local", 6004),
+    &[("replica1.local", 6004), ("replica2.local", 6004)],
+)?;
+// Writes → primary, reads round-robin across replicas (fallback to primary
+// when the fleet is empty). `consistent = true` forces a read to primary.
+client.request(&[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()])?;
+let reply = client.request(&[b"GET".to_vec(), b"k".to_vec()])?;
+# Ok::<(), std::io::Error>(())
+```
+
+The crate is a v1.18 release add. Per-command read/write classification
+lives in `kevy_cluster_rw::is_write_verb`. v1.18 takes the seed list
+explicitly (no automatic `CLUSTER NODES` discovery — a follow-up after
+release); the operator's deployment scripts list primary + replica
+addresses.

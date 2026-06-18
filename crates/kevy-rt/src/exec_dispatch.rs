@@ -220,6 +220,24 @@ impl<C: Commands> Shard<C> {
         if self.aof.is_some() {
             self.log_write(args);
         }
+        // Replication: when `[replication] role = "primary"`, push the
+        // applied mutation to this shard's backlog so connected replicas
+        // can stream it. Generic over ArgvView so no `Argv` is
+        // materialised on the borrowed fast path. `None` (the default)
+        // short-circuits to one Option-discriminant check.
+        //
+        // The `is_applying_replicated` check suppresses the push when
+        // this dispatch is itself applying a frame pulled from an
+        // upstream primary (T1.29 server-as-replica path). Defends
+        // against chain replication / infinite re-emit in the brief
+        // window during `REPLICAOF NO ONE` promotion when both an
+        // upstream link and a downstream source can coexist. The
+        // thread-local read is a cheap branch on the cold path here.
+        if let Some(src) = self.replicate.as_mut()
+            && !crate::replication_gate::is_applying_replicated()
+        {
+            src.push_mutation(args);
+        }
         self.maybe_notify_dispatch(args);
         // BLOCK wake: if this write targets a key a waiter is parked on,
         // wake it. Gated on `wake_idx` (None for non-wake writes), so a

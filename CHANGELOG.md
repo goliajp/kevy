@@ -4,6 +4,100 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.18.0] — 2026-06-18
+
+**v3-cluster Phase 1 — primary-replica replication + read/write split client.**
+A kevy node can now run as a primary that streams every applied mutation to N
+read replicas, or as a replica that connects to a primary and mirrors its
+keyspace. Manual failover via `REPLICAOF` / `REPLICAOF NO ONE`. New companion
+client `kevy-cluster-rw` splits writes to the primary and round-robins reads
+across replicas.
+
+### Added
+
+- **Replication backlog + per-shard listener** (`[replication] role =
+  "primary"`). Each applied mutation is encoded as a RESP envelope
+  (`*2\r\n:<offset>\r\n<argv>`) and pushed into a per-shard bounded ring
+  backlog; the reactor's pump streams frames out to connected replicas on
+  each iteration. Per-shard listener binds at `listen_port_base + shard_id`
+  (mirrors the cluster-listener pattern; per Issue Ledger I2). Tunable
+  backlog size + reconnect-window slot retention.
+- **Server-as-replica** (`[replication] role = "replica"` + `upstream =
+  "host:port"`). At startup kevy spawns one runner thread per local shard,
+  each holding a blocking `ReplicaClient` to the matching upstream shard
+  port. Events flow to the shard's reactor over an MPSC channel and apply
+  on the reactor thread under a `ReplicatedApplyGuard` (prevents chain-
+  replication re-emit).
+- **Snapshot ship** for fall-behind replicas. When a replica's `from_offset`
+  is no longer in the primary's backlog (TooOld), the primary in-line-
+  serializes the shard's keyspace via `kevy_persist::write_snapshot_to`,
+  streams as `+SNAPSHOT` / `$<chunk>` / `+SNAPSHOT_END <ack_offset>`, and
+  the replica loads via `kevy_persist::load_snapshot_from` then resumes on
+  live frames with no gap.
+- **`REPLICAOF host port`** / **`REPLICAOF NO ONE`** (alias `SLAVEOF`) — full
+  dynamic retarget + demote. Stops in-flight runners (via `try_clone`'d
+  socket + `Shutdown::Both` to break the blocking read), parses + resolves
+  the new upstream, spawns fresh runner fleet. Effective role flips live;
+  `ROLE` / `INFO replication` / `CLUSTER NODES` all report from live state,
+  overriding static config.
+- **`ROLE`** — Redis-shape reply. Master form: `["master", offset,
+  [[ip, port, offset], ...]]` (per-replica array populated via the
+  `getpeername(2)` capture added in this release). Slave form:
+  `["slave", host, port, "connect", 0]`.
+- **`INFO replication`** — full section with `role` / `connected_slaves` /
+  `master_repl_offset` (master block) or `master_host` / `master_port` /
+  `master_link_status` / `slave_read_only` / `slave_repl_offset` (slave
+  block).
+- **`kevy-cluster-rw::ReadWriteClient`** — companion client crate. Operator-
+  supplied seed list (primary + replicas), one connection per node. Auto-
+  routed `request` uses `is_write_verb` to dispatch; explicit `request_write`
+  / `request_read(args, consistent: bool)` for tighter control. Replica
+  fallback to primary when fleet empty or `consistent = true`.
+- **Live-state plumbing**: process-global `replica_state` (senders + runners
+  + upstream slot) so `REPLICAOF` can spawn/swap at runtime;
+  `Commands::on_replication_view` hook publishes per-tick offset + connected
+  count to the command layer.
+
+### Anti-scope (locked, do not file issues for these in v1.18)
+
+multi-master / cross-DC active-active / CRDTs / Raft / online resharding /
+gossip discovery / AUTH / TLS / chain replication / non-RESP wire format for
+replication. Automatic quorum failover (`kevy-elect`) is Phase 1.5 — **not**
+in v1.18.
+
+### Performance
+
+Single-machine cluster perfgate on lx64 (Debian 13.1, 6.12 kernel, 16
+hw threads) — all 6 baseline indicators PASS at the × 0.92 floor;
+three of them exceed the recorded baseline outright. Replication
+landing did NOT regress non-replication throughput on either reactor.
+Reproduce with `bash bench/perfgate.sh <KEVY_BIN>`.
+
+### v1.18 has no carved-out simplifications
+
+Every follow-up the v3-cluster plan originally tracked as "lands in
+v1.19+" was actually completed in v1.18: replica peer-addr capture
+(T1.28.5), backlog watermark eviction (T1.22.5), background
+snapshot serialization (T1.23.5), io_uring + replication (T1.12.5).
+
+### Documentation
+
+- New [`docs/replication.md`](docs/replication.md) — server + client
+  recipes, REPLICAOF lifecycle, backlog tuning, simplifications + follow-ups.
+- [`docs/cluster.md`](docs/cluster.md) extended with a read/write split
+  section showing how cluster mode composes with replication.
+- README v3-cluster section.
+
+### Tests
+
+937 workspace tests passing, 0 failures. Highlights:
+
+- `crates/kevy/tests/replication.rs`: full handshake + streaming + snapshot-
+  ship round trip + dynamic REPLICAOF lifecycle.
+- `crates/kevy-cluster-rw/tests/rw_split.rs`: 1-primary + 2-replica
+  ReadWriteClient matrix across every redis-type, READCONSISTENT, reconnect-
+  within-backlog (no snapshot), reconnect-outside-backlog (snapshot).
+
 ## [kevy-client v1.9.0] — 2026-06-15
 
 Independent `kevy-client` minor (workspace stays at 1.17.0): a **cluster-aware

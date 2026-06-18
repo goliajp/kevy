@@ -415,7 +415,7 @@ pub type LoadedStreamEntry = (u64, u64, Vec<(Vec<u8>, Vec<u8>)>);
 /// the same clock source. On native targets reads `SystemTime::now()` (falls
 /// back to 0 on a pre-UNIX-EPOCH clock — impossible on supported platforms);
 /// on `wasm32-unknown-unknown`, where `SystemTime::now()` traps, reads the
-/// host-fed wall clock (see [`crate::set_wall_clock_ms`]).
+/// host-fed wall clock (see `crate::set_wall_clock_ms`, wasm-only).
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub fn now_unix_ms() -> u64 {
     SystemTime::now()

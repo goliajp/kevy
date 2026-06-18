@@ -265,6 +265,31 @@ impl Socket {
         }
         Ok(u16::from_be(addr.sin_port))
     }
+
+    /// The peer's IPv4 address + port. Used by the replication
+    /// listener to record the (ip, port) of every connected replica
+    /// for `INFO replication` / `ROLE` reporting. IPv4 only —
+    /// matches the rest of kevy-sys, which has not yet grown IPv6.
+    pub fn peer_addr(&self) -> io::Result<(std::net::Ipv4Addr, u16)> {
+        let mut addr = SockaddrIn::zeroed();
+        let mut len = size_of::<SockaddrIn>() as u32;
+        let r = unsafe {
+            ffi::getpeername(
+                self.fd,
+                (&raw mut addr).cast::<c_void>(),
+                &raw mut len,
+            )
+        };
+        if r < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // `sin_addr` is stored in network byte order as a u32 of the
+        // packed octets — `u32::from_ne_bytes(ip)` on construction
+        // (see [`SockaddrIn::new_v4`]) is the inverse of the bytes
+        // we want here.
+        let octets = addr.sin_addr.to_ne_bytes();
+        Ok((std::net::Ipv4Addr::from(octets), u16::from_be(addr.sin_port)))
+    }
 }
 
 impl Drop for Socket {

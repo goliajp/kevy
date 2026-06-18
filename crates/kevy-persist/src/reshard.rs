@@ -5,7 +5,7 @@
 //! the shard count (and routing scheme) that wrote them, so changing either
 //! re-homes every key: merge every source file into one temp store
 //! ([`merge_sources`]), redistribute under the new layout (caller-side — the
-//! routing function is the caller's), then commit ([`commit_reshard`]).
+//! routing function is the caller's), then commit (`commit_reshard`).
 //!
 //! Crash-safe ordering (a rename-sources-first order loses the whole
 //! keyspace to a crash between the renames and the new writes): new
@@ -62,7 +62,7 @@ fn reshard_tmp(target: &Path) -> PathBuf {
 /// Merge every `src_n`-layout source file in `dir` into `temp`: snapshots
 /// load directly, AOF frames go through `replay` (the caller applies them
 /// with its own command set). Returns the source paths found — they stay in
-/// place; [`commit_reshard`] backs them up.
+/// place; `commit_reshard` backs them up.
 pub fn merge_sources<L: ShardLayout>(
     dir: &Path,
     src_n: usize,
@@ -176,11 +176,11 @@ fn rename_to_backup(src: &Path, stamp: u128) -> io::Result<()> {
 }
 
 /// Startup half of the crash story: a journal on disk means a reshard
-/// committed but didn't finish — roll it forward via [`finish_reshard`].
+/// committed but didn't finish — roll it forward via `finish_reshard`.
 /// An unparsable journal means the crash hit mid-journal-write, i.e. the
 /// commit point was never reached: the old layout is fully intact, so the
 /// torn journal (and any `.reshard` temps, cleaned by the next
-/// [`commit_reshard`]) is safely discarded.
+/// `commit_reshard`) is safely discarded.
 pub fn recover_journal<L: ShardLayout>(dir: &Path, lay: &L) -> io::Result<()> {
     let path = dir.join(JOURNAL);
     let body = match std::fs::read_to_string(&path) {

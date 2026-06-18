@@ -4,6 +4,12 @@
 # libc (sockets / pollers / mmap / time), bound by hand with `unsafe extern "C"`.
 # Every algorithm and data structure is written in Rust — no third-party crate,
 # no C library for logic. See crates/kevy-sys for the sole libc boundary.
+#
+# Sole carved exemption: `crates/kevy-client-async` may depend on tokio /
+# smol / async-std behind feature gates (the Rust async ecosystem has no
+# std-only viable substrate). Rules + audit method recorded in memory
+# `feedback-pure-rust-no-c-principle.md` and RFC `2026-06-18-v3-cluster.md`
+# F5. The exemption is per-crate, not workspace-wide.
 [workspace]
 resolver = "3"
 members = [
@@ -27,10 +33,12 @@ members = [
     "crates/kevy-embedded",
     "crates/kevy-client",
     "crates/kevy-geo",
+    "crates/kevy-replicate",
+    "crates/kevy-cluster-rw",
 ]
 
 [workspace.package]
-version = "1.17.0"
+version = "1.18.0"
 edition = "2024"
 rust-version = "1.95"
 authors = ["GOLIA K.K."]

@@ -90,6 +90,41 @@ lx64 16-core box, server/client on disjoint cores, GET at concurrency 64:
 forwarding hop, with no measurable overhead vs a hand-rolled raw router.
 Full method in [`docs/cluster.md`](docs/cluster.md).
 
+### Primary-replica replication (v1.18 / v3-cluster Phase 1)
+
+A kevy node can now run as a **primary** that streams every applied mutation
+to N read replicas, or as a **replica** that connects to a primary and
+mirrors its keyspace. Companion client `kevy-cluster-rw` splits writes
+to the primary and round-robins reads across replicas.
+
+```toml
+# primary
+[replication]
+role = "primary"
+listen_port_base = 16004
+
+# replica
+[replication]
+role = "replica"
+upstream = "primary.example:16004"
+```
+
+```sh
+# Re-target / promote at runtime via Redis-compat commands.
+redis-cli -p 6004 REPLICAOF primary.example 16004
+redis-cli -p 6004 REPLICAOF NO ONE
+redis-cli -p 6004 ROLE
+```
+
+Phase 1 covers: per-shard wire backlog + listener, snapshot ship for fall-
+behind replicas, dynamic REPLICAOF / `REPLICAOF NO ONE` retarget + demote,
+`ROLE` / `INFO replication` live state, and the `kevy-cluster-rw` client.
+Anti-scope: multi-master, cross-DC, Raft, gossip, online resharding,
+chain replication, AUTH/TLS — all permanently out. Quorum failover
+(`kevy-elect`) is Phase 1.5, not in v1.18.
+
+Full server + client recipes in [`docs/replication.md`](docs/replication.md).
+
 ### Embedded throughput (in-process, no network)
 
 Drop [`kevy-store`](crates/kevy-store) into your app and call it directly —

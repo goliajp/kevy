@@ -24,11 +24,11 @@ pub(crate) use crate::uring_conn::UringConn;
 use crate::uring_conn::ParkState;
 use kevy_persist::{load_snapshot, replay_aof};
 use kevy_sys::Socket;
-use kevy_uring::{Completion, IoUring, KernelTimespec, ProvidedBufRing};
+use kevy_uring::{Completion, IoUring, ProvidedBufRing};
 use kevy_map::KevyMap;
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering, fence};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// SQ/CQ depth for the per-shard ring.
@@ -76,9 +76,9 @@ const OP_RECV: u64 = 1 << OP_SHIFT;
 const OP_WRITE: u64 = 2 << OP_SHIFT;
 const OP_ACCEPT: u64 = 3 << OP_SHIFT;
 /// The shard's waker pipe became readable (a peer woke a parked shard).
-const OP_WAKER: u64 = 4 << OP_SHIFT;
+pub(crate) const OP_WAKER: u64 = 4 << OP_SHIFT;
 /// The bounded-park timeout fired (see [`ParkState`]).
-const OP_TIMEOUT: u64 = 5 << OP_SHIFT;
+pub(crate) const OP_TIMEOUT: u64 = 5 << OP_SHIFT;
 /// Accept on the per-shard cluster listener (conns marked for `-MOVED`).
 const OP_ACCEPT_CL: u64 = 6 << OP_SHIFT;
 const CONN_MASK: u64 = (1 << OP_SHIFT) - 1;
@@ -243,10 +243,46 @@ impl<C: Commands> Shard<C> {
                         self.commands.on_shard_tick(&mut self.store);
                         self.apply_live_runtime_config(&mut tick_interval);
                         self.tick_persist();
+                        // v3-cluster replication housekeeping (T1.12.5):
+                        // the io_uring path can't watch the replication
+                        // listener / replica fds via epoll, so poll them
+                        // here once per tick (10 Hz). New replica accepts
+                        // see ≤ 100 ms wait; replica handshake bytes ditto.
+                        // The streaming pump path stays per-iter via
+                        // `pump_replication` (below) — that's where the
+                        // throughput-sensitive write side lives.
+                        if let Err(e) = self.accept_ready_replication() {
+                            eprintln!("kevy: shard {} accept_ready_replication: {e}", self.id);
+                        }
+                        for idx in 0..self.replicas.len() {
+                            if let Err(e) = self.replica_readable(idx) {
+                                eprintln!(
+                                    "kevy: shard {} replica_readable[{idx}]: {e}",
+                                    self.id,
+                                );
+                            }
+                            if let Err(e) = self.replica_writable(idx) {
+                                eprintln!(
+                                    "kevy: shard {} replica_writable[{idx}]: {e}",
+                                    self.id,
+                                );
+                            }
+                        }
+                        self.tick_replication_slots(now);
+                        self.tick_replication_view();
+                        self.tick_replication_watermark();
+                        self.drain_replica_inbox();
                         last_tick = now;
                     }
                 }
             }
+
+            // Per-iter replication pump (T1.12.5): writes streaming
+            // frames + drives snapshot ship chunks. Short-circuits when
+            // `replicate.is_none() && replicas.is_empty()` (the standalone
+            // hot path), so non-replication workloads pay nothing.
+            self.pump_replication()?;
+            self.reap_closed_replicas();
 
             // Idle ladder — spin, then nap, then park:
             //   1. busy-poll `URING_SPIN_LIMIT` empty iterations, so a -c1
@@ -276,46 +312,6 @@ impl<C: Commands> Shard<C> {
                 idle_spins = 0;
             }
         }
-        Ok(())
-    }
-
-    /// Blocking wait, epoll-park equivalent: publish `parked[me]`, close the
-    /// park/wake race with a fenced re-drain (same pairing as `Shard::run` /
-    /// `flush_wakes`; loom-verified there), then block in
-    /// `submit_and_wait(1)` until any CQE — socket I/O, the waker-pipe read
-    /// (a peer pushed to our inbox), or the bounding timeout (tick cadence,
-    /// default 50 ms). The CQEs are reaped by the next loop iteration.
-    fn uring_park(&mut self, ring: &mut IoUring, park: &mut ParkState) -> io::Result<()> {
-        let me = self.id;
-        self.parked[me].store(true, Ordering::SeqCst);
-        fence(Ordering::SeqCst);
-        if self.uring_drain_inbound() {
-            // A push landed in the race window — process it, don't block.
-            self.parked[me].store(false, Ordering::SeqCst);
-            return Ok(());
-        }
-        if !park.waker_armed {
-            // SAFETY: `park` lives on `run_uring`'s stack for the reactor's
-            // whole life, so `wake_buf` outlives the SQE.
-            park.waker_armed = unsafe {
-                ring.prep_read(
-                    self.waker.read_fd(),
-                    park.wake_buf.as_mut_ptr(),
-                    park.wake_buf.len() as u32,
-                    OP_WAKER,
-                )
-            };
-        }
-        if !park.timeout_inflight {
-            park.ts = KernelTimespec::from_millis(self.park_timeout_ms.max(1) as u64);
-            // SAFETY: `ts` is only rewritten when no timeout SQE is in
-            // flight, and outlives the SQE (same lifetime as `wake_buf`).
-            park.timeout_inflight = unsafe { ring.prep_timeout(&park.ts, OP_TIMEOUT) };
-        }
-        if park.waker_armed || park.timeout_inflight {
-            ring.submit_and_wait(1)?;
-        }
-        self.parked[me].store(false, Ordering::SeqCst);
         Ok(())
     }
 
