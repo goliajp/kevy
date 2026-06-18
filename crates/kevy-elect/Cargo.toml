@@ -1,0 +1,20 @@
+[package]
+name = "kevy-elect"
+description = "Quorum-based primary failover for kevy (v3 cluster series, Phase 1.5)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-elect"
+readme = "README.md"
+keywords = ["election", "quorum", "failover", "kevy", "replication"]
+categories = ["database", "network-programming"]
+
+[lints]
+workspace = true
+
+[dependencies]
+kevy-resp = { path = "../kevy-resp", version = "1.18.0" }

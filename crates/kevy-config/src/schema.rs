@@ -430,27 +430,6 @@ pub fn parse_notification_flags(s: &str) -> NotificationFlags {
     }
     f
 }
-
-/// `[cluster]` section — single-node cluster mode: keys route by
-/// Redis-cluster slot (CRC16 `{hashtag}` & 16383) and every shard `i`
-/// gets a second, deterministic listener at `port_base + i` that answers
-/// wrong-shard keys with `-MOVED`, so stock cluster-aware clients
-/// (`redis-benchmark --cluster`, `redis-cli -c`) can address shards
-/// directly. The main SO_REUSEPORT port keeps full forward-anywhere
-/// behaviour for non-cluster clients. Not hot-settable: the routing
-/// scheme is a startup property of the data dir (`shards.meta`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct ClusterSection {
-    /// Enable cluster mode. Default `false` (zero change).
-    pub enabled: bool,
-    /// First cluster port (shard `i` listens at `port_base + i`).
-    /// `0` (default) = `server.port + 1`.
-    pub port_base: u16,
-}
-
-// ───────────── top-level Config ─────────────
-
-/// Complete kevy config: defaults + per-section overrides loaded from
 /// the TOML file + env + CLI.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Config {
@@ -471,7 +450,7 @@ pub struct Config {
     /// `[slowlog]` settings (slow-command ring buffer).
     pub slowlog: SlowlogSection,
     /// `[cluster]` settings (single-node cluster mode).
-    pub cluster: ClusterSection,
+    pub cluster: crate::cluster::ClusterSection,
     /// `[replication]` settings (v3-cluster Phase 1 primary/replica).
     pub replication: crate::replication::ReplicationSection,
     /// Path the config was loaded from (for `CONFIG REWRITE`). `None` =

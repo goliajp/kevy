@@ -4,6 +4,80 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.19.0] — UNRELEASED (Phase 1.5 — automatic primary failover)
+
+> **Gate:** v1.19.0 ships only after v1.18 has 72 h of dogfood soak.
+> Code complete, doc complete, perfgate clean — release pipeline
+> blocks on the soak window.
+
+**v3-cluster Phase 1.5 — quorum-based automatic primary failover.**
+Detection is by heartbeat every 200 ms; a peer is flagged DOWN after
+5 s without a heartbeat; the alive replica with the highest
+`repl_offset` (lowest `node_id` on tie) becomes a candidate and
+broadcasts `OFFER`; on `N/2 + 1` `ACCEPT`s the candidate promotes
+via the existing `REPLICAOF NO ONE` path and broadcasts `ANNOUNCE`.
+Peers receiving `ANNOUNCE` retarget their `kevy-replicate` runner
+at the new primary.
+
+### Added
+
+- **`kevy-elect` crate** — quorum failover layer on top of the v1.18
+  manual `REPLICAOF` primitive. Pure-Rust 0-dep, RESP2 control plane
+  over TCP (separate port per shard; election state is per-node).
+  Public surface: `Transport::spawn(elector, hb_interval, listen,
+  peers)`, `Transport::state_snapshot()`, `Transport::set_repl_offset()`,
+  `Transport::shutdown()`.
+- **Election state machine** (`Elector` struct): pure-logic core
+  with `tick(now) → Vec<Outbound>` and `on_message(from, msg, now)`,
+  exhaustively unit-tested against quorum / split-brain / dueling /
+  rejoin / N=2 degenerate scenarios via an in-memory multi-elector
+  simulator (`Sim`).
+- **TCP transport**: one listener thread + one outbound thread per
+  peer + one orchestrator thread, all interruptible via short
+  read/accept timeouts (no Mutex on the hot path). Real-socket e2e
+  test on loopback: 3-node primary kill → replica promotes in ~1 s.
+- **`[cluster]` config extension**: `node_id`, `elect_port_base`,
+  `peers = "id@host:port,..."` (flat-string shape, no parser
+  extension needed). v1.18-era configs need no edit — kevy-elect is
+  dormant unless both `node_id` and `peers` are set.
+- **`ANNOUNCE` epoch handling**: a rejoining old primary sees a
+  higher epoch on its first heartbeat to the new majority and
+  demotes cleanly. No double-write — the partitioned minority never
+  reached quorum so its writes had no durability guarantee.
+
+### Anti-scope (locked)
+
+Not Raft. No log replication consensus. No gossip discovery (peer
+set is operator-declared). No cross-DC (RTT assumptions are LAN-
+scale). No online membership change. No TLS / auth on the control
+plane (consistent with v1.18 anti-scope).
+
+### Recommendations
+
+- **N ≥ 3** for any deployment that needs automatic failover. N=2 is
+  intentionally locked when either node is down (config linter warns
+  at startup).
+- Tune `hb_interval_ms` × `down_after_ms` to your LAN's RTT; the
+  defaults (200 ms / 5 s) assume sub-millisecond network.
+- Use `READCONSISTENT` on the read side to avoid stale reads across
+  a partition; the write side cannot retroactively repair minority
+  writes.
+
+### Documentation
+
+- New "Automatic failover via kevy-elect" section in
+  [`docs/replication.md`](docs/replication.md) — config, quorum
+  table, split-brain protection, tunables.
+- Full wire spec in
+  [`crates/kevy-elect/docs/protocol.md`](crates/kevy-elect/docs/protocol.md).
+
+### Tests
+
+- 36 kevy-elect unit / sim tests (algorithm + 6 chaos drills via
+  `Sim`).
+- 1 real-TCP loopback e2e covering the 3-node primary-kill →
+  promote path.
+
 ## [v1.18.0] — 2026-06-18
 
 **v3-cluster Phase 1 — primary-replica replication + read/write split client.**

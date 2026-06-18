@@ -150,6 +150,10 @@ impl Commands for KevyCommands {
         // view. T1.28.5 added the per-replica list — `connected_slaves`
         // is derived from `replicas.len()` at read time.
         ops::replication::set_replication_view(master_repl_offset, replicas);
+        // v3-cluster Phase 1.5: feed the offset into kevy-elect so
+        // the next heartbeat carries the up-to-date `repl_offset`.
+        // No-op when the elector isn't running.
+        crate::elect_integration::set_view_offset(master_repl_offset);
     }
 
     fn on_command(&self) {

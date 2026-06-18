@@ -35,6 +35,7 @@ members = [
     "crates/kevy-geo",
     "crates/kevy-replicate",
     "crates/kevy-cluster-rw",
+    "crates/kevy-elect",
 ]
 
 [workspace.package]

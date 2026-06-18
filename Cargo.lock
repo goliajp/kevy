@@ -55,6 +55,7 @@ dependencies = [
  "kevy-bench",
  "kevy-client",
  "kevy-config",
+ "kevy-elect",
  "kevy-geo",
  "kevy-hash",
  "kevy-persist",
@@ -109,6 +110,13 @@ dependencies = [
 [[package]]
 name = "kevy-config"
 version = "1.18.0"
+
+[[package]]
+name = "kevy-elect"
+version = "1.18.0"
+dependencies = [
+ "kevy-resp",
+]
 
 [[package]]
 name = "kevy-embedded"

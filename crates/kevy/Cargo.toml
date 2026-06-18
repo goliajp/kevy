@@ -35,6 +35,10 @@ kevy-hash = { path = "../kevy-hash", version = "1.18.0" }
 # (Pre-T1.29 the dep was dev-only via `tests/replication.rs` decoding
 # wire frames; T1.29 promotes it to a normal dep.)
 kevy-replicate = { path = "../kevy-replicate", version = "1.18.0" }
+# kevy-elect: v3-cluster Phase 1.5 quorum failover. Opt-in via
+# `[cluster] peers = "..."`; dormant when not configured, so the
+# v1.18-era deployments are unaffected.
+kevy-elect = { path = "../kevy-elect", version = "1.18.0" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }
