@@ -38,7 +38,7 @@ impl Hasher for Fnv1a {
     fn write(&mut self, bytes: &[u8]) {
         let mut h = self.0;
         for &b in bytes {
-            h ^= b as u64;
+            h ^= u64::from(b);
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
         self.0 = h;
@@ -79,12 +79,12 @@ fn fx_write(mut state: u64, mut bytes: &[u8]) -> u64 {
         bytes = &bytes[8..];
     }
     if bytes.len() >= 4 {
-        let word = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as u64;
+        let word = u64::from(u32::from_le_bytes(bytes[..4].try_into().unwrap()));
         state = fx_mix(state, word);
         bytes = &bytes[4..];
     }
     for &b in bytes {
-        state = fx_mix(state, b as u64);
+        state = fx_mix(state, u64::from(b));
     }
     state
 }

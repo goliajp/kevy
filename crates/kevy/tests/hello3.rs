@@ -37,7 +37,7 @@ struct Server {
 
 impl Server {
     fn start(nshards: usize) -> Server {
-        let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+        let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-hello3-{}",

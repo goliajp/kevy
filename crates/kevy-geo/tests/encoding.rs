@@ -3,6 +3,12 @@
 //! valkey/Redis clients: same (lon, lat) → same ZSet score → same
 //! base32 11-char `GEOHASH`.
 
+// Palermo / Catania coordinates are quoted verbatim from the Redis docs;
+// adding digit separators would obscure the cross-reference. The float==
+// comparisons are intentional bit-exact contract checks (cell-midpoint
+// rounding regressions), not approximate-value asserts.
+#![allow(clippy::unreadable_literal, clippy::float_cmp)]
+
 use kevy_geo::*;
 
 const EPS_COORD: f64 = 1e-3; // ~111 m on lat, the cell-centre quantum

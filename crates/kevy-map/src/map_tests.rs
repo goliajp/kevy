@@ -85,7 +85,7 @@ fn iter_yields_all_entries() {
         m.insert(i, i + 100);
     }
     let mut seen: Vec<(u64, u64)> = m.iter().map(|(&k, &v)| (k, v)).collect();
-    seen.sort();
+    seen.sort_unstable();
     let expected: Vec<(u64, u64)> = (0..20).map(|i| (i, i + 100)).collect();
     assert_eq!(seen, expected);
 }
@@ -243,7 +243,7 @@ fn set_iter_yields_members() {
         s.insert(i);
     }
     let mut got: Vec<u64> = s.iter().copied().collect();
-    got.sort();
+    got.sort_unstable();
     assert_eq!(got, (0..10u64).collect::<Vec<_>>());
 }
 
@@ -287,7 +287,7 @@ fn map_keys_iter() {
         m.insert(i, i + 10);
     }
     let mut ks: Vec<u64> = m.keys().copied().collect();
-    ks.sort();
+    ks.sort_unstable();
     assert_eq!(ks, vec![0, 1, 2, 3, 4]);
 }
 
@@ -298,7 +298,7 @@ fn map_values_iter() {
         m.insert(i, i + 10);
     }
     let mut vs: Vec<u64> = m.values().copied().collect();
-    vs.sort();
+    vs.sort_unstable();
     assert_eq!(vs, vec![10, 11, 12, 13, 14]);
 }
 
@@ -314,7 +314,7 @@ fn map_iter_mut_writes_visible_via_get() {
         m.remove(&i); // tombstones must be skipped, not yielded
     }
     let mut seen = 0usize;
-    for (&k, v) in m.iter_mut() {
+    for (&k, v) in &mut m {
         assert_eq!(k % 2, 1);
         *v += 100;
         seen += 1;

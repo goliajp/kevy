@@ -27,7 +27,7 @@ struct Server {
 
 impl Server {
     fn start() -> Self {
-        let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+        let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-client-resp3-{}",
@@ -88,8 +88,7 @@ fn hello3_then_subscribe_recv_push_frames() {
 
     // Publisher (separate conn, regular RESP2 — proves V3 + V2 mix
     // works server-side, P4).
-    use kevy_client::Connection;
-    let mut pubconn = Connection::open(&srv.url()).unwrap();
+    let mut pubconn = kevy_client::Connection::open(&srv.url()).unwrap();
     let n = pubconn.publish(b"news", b"hello").unwrap();
     assert_eq!(n, 1);
 
@@ -115,8 +114,7 @@ fn hello3_then_psubscribe_recv_pmessage_push() {
     let ack = sub.recv().unwrap();
     assert!(matches!(ack, PubsubEvent::Psubscribe { count: 1, .. }));
 
-    use kevy_client::Connection;
-    let mut pubconn = Connection::open(&srv.url()).unwrap();
+    let mut pubconn = kevy_client::Connection::open(&srv.url()).unwrap();
     let _ = pubconn.publish(b"news.tech", b"hi").unwrap();
 
     let pmsg = sub.recv().unwrap();

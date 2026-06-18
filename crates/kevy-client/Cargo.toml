@@ -14,7 +14,7 @@ description = "Unified client for kevy — switch between in-process embedded an
 # Reply variants out of EXEC's reply array. Patch 1.7.1 picks up the
 # workspace 1.4.2 chain + an internal split of `subscribe.rs` (no
 # API change — pure refactor under the 500-LOC house rule).
-version = "1.8.0"
+version = "1.10.0"
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -31,5 +31,6 @@ workspace = true
 
 [dependencies]
 kevy-embedded = { path = "../kevy-embedded", version = "1.2.0" }
-kevy-resp = { path = "../kevy-resp", version = "1.17.0" }
-kevy-resp-client = { path = "../kevy-resp-client", version = "1.17.0" }
+kevy-resp = { path = "../kevy-resp", version = "1.18.0" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "1.18.0" }
+kevy-hash = { path = "../kevy-hash", version = "1.18.0" }

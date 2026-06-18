@@ -9,11 +9,12 @@
 //! implements the entry-side ops.
 
 use std::collections::BTreeMap;
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kevy_map::KevyMap;
 
-use crate::value::*;
+use crate::value::{SmallBytes, BTREE_SLOT_BYTES};
 use crate::StoreError;
 
 // ───────────── StreamId ─────────────
@@ -41,6 +42,7 @@ impl StreamId {
     }
 
     /// Step one ID past `self`. Saturates at [`Self::MAX`].
+    #[must_use]
     pub fn next(self) -> Self {
         if self.seq < u64::MAX {
             StreamId { ms: self.ms, seq: self.seq + 1 }
@@ -202,7 +204,7 @@ impl StreamData {
 
     /// Lookup one group by name (for `XINFO CONSUMERS`).
     pub fn group(&self, name: &[u8]) -> Option<&group::ConsumerGroup> {
-        self.groups.get(name).map(|b| b.as_ref())
+        self.groups.get(name).map(std::convert::AsRef::as_ref)
     }
 
     /// Group count — `XINFO STREAM`'s `groups` field.
@@ -409,14 +411,21 @@ pub type LoadedStreamEntry = (u64, u64, Vec<(Vec<u8>, Vec<u8>)>);
 
 // ───────────── small helpers (shared with `store.rs`) ─────────────
 
-/// Wall-clock millis (`SystemTime::now`). Shared with dispatchers so
-/// every XADD on a shard uses the same clock source. Falls back to 0
-/// on a pre-UNIX-EPOCH clock — impossible on supported platforms.
+/// Wall-clock millis. Shared with dispatchers so every XADD on a shard uses
+/// the same clock source. On native targets reads `SystemTime::now()` (falls
+/// back to 0 on a pre-UNIX-EPOCH clock — impossible on supported platforms);
+/// on `wasm32-unknown-unknown`, where `SystemTime::now()` traps, reads the
+/// host-fed wall clock (see `crate::set_wall_clock_ms`, wasm-only).
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_millis() as u64)
+}
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub fn now_unix_ms() -> u64 {
+    crate::clock::wall_now_unix_ms()
 }
 
 pub(super) fn stream_entry_weight(fields: &[(SmallBytes, SmallBytes)]) -> u64 {

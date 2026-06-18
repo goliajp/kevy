@@ -1,9 +1,9 @@
 //! `Store` string commands.
 
-use crate::util::*;
-use crate::value::*;
-use crate::{Entry, Store, StoreError};
-use std::time::{Duration, Instant};
+use crate::util::{parse_i64, parse_f64, fmt_num};
+use crate::value::{Value, SmallBytes};
+use crate::{Entry, Store, StoreError, deadline_at, now_ns};
+use std::time::Duration;
 
 impl Store {
     // ---- strings -------------------------------------------------------
@@ -48,9 +48,14 @@ impl Store {
         nx: bool,
         xx: bool,
     ) -> bool {
-        // Clock read only when a TTL is requested.
-        let expire_at = expire.map(|d| Instant::now() + d);
+        // Clock read only when a TTL is requested. Deadlines stamp from a
+        // fresh clock (`now_ns`), not the coarse cached one.
+        let expire_at = expire.map(|d| deadline_at(now_ns(), d));
         let key_heap = crate::key_heap_bytes_for(key);
+        // Keeping the match shape (vs `if let … else`) preserves the in-arm
+        // comments that document the NX/XX semantics next to the code they
+        // describe; the auto-suggested if-let-else collapses them awkwardly.
+        #[allow(clippy::single_match_else)]
         let outcome = match self.live_entry_mut(key) {
             // Key exists and is live: NX must abort; otherwise overwrite the
             // value + TTL in place — no `key.to_vec()` (the key is already in
@@ -69,7 +74,7 @@ impl Store {
                 e.expire_at_ns = expire_at.and_then(crate::pack_deadline);
                 let new_w = key_heap + e.value.weight();
                 let delta = new_w as i64 - e.weight() as i64;
-                let ttl_delta = e.expire_at_ns.is_some() as i64 - had_ttl as i64;
+                let ttl_delta = i64::from(e.expire_at_ns.is_some()) - i64::from(had_ttl);
                 e.set_weight(new_w);
                 Ok((delta, ttl_delta))
             }
@@ -123,7 +128,7 @@ impl Store {
     }
 
     pub fn strlen(&mut self, key: &[u8]) -> Result<usize, StoreError> {
-        Ok(self.get(key)?.map_or(0, |v| v.len()))
+        Ok(self.get(key)?.map_or(0, <[u8]>::len))
     }
 
     pub fn append(&mut self, key: &[u8], data: &[u8]) -> Result<usize, StoreError> {
@@ -228,26 +233,23 @@ impl Store {
 
     /// `INCRBYFLOAT` — returns the new value formatted as Redis would. Preserves TTL.
     pub fn incr_by_float(&mut self, key: &[u8], delta: f64) -> Result<Vec<u8>, StoreError> {
-        let outcome = match self.live_entry_mut(key) {
-            Some(e) => match &mut e.value {
-                Value::Str(v) => {
-                    let next = parse_f64(v.as_slice()).ok_or(StoreError::NotFloat)? + delta;
-                    if !next.is_finite() {
-                        return Err(StoreError::NotFloat);
-                    }
-                    let bytes = fmt_num(next);
-                    *v = SmallBytes::from_slice(&bytes);
-                    FloatOutcome::Reweigh(bytes)
-                }
-                _ => return Err(StoreError::WrongType),
-            },
-            None => {
-                // Absent/expired ⇒ start from 0.0.
-                if !delta.is_finite() {
+        let outcome = if let Some(e) = self.live_entry_mut(key) { match &mut e.value {
+            Value::Str(v) => {
+                let next = parse_f64(v.as_slice()).ok_or(StoreError::NotFloat)? + delta;
+                if !next.is_finite() {
                     return Err(StoreError::NotFloat);
                 }
-                FloatOutcome::Insert(fmt_num(delta))
+                let bytes = fmt_num(next);
+                *v = SmallBytes::from_slice(&bytes);
+                FloatOutcome::Reweigh(bytes)
             }
+            _ => return Err(StoreError::WrongType),
+        } } else {
+            // Absent/expired ⇒ start from 0.0.
+            if !delta.is_finite() {
+                return Err(StoreError::NotFloat);
+            }
+            FloatOutcome::Insert(fmt_num(delta))
         };
         match outcome {
             FloatOutcome::Reweigh(bytes) => {

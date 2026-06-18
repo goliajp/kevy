@@ -294,7 +294,7 @@ pub(crate) fn cmd_expire<A: ArgvView + ?Sized>(
     let ms = n.saturating_mul(unit_ms) as u64;
     encode_integer(
         out,
-        store.expire(&args[1], Duration::from_millis(ms)) as i64,
+        i64::from(store.expire(&args[1], Duration::from_millis(ms))),
     );
 }
 
@@ -320,7 +320,7 @@ pub(crate) fn cmd_expireat<A: ArgvView + ?Sized>(
         return encode_integer(out, 0);
     }
     let deadline_ms = n.saturating_mul(unit_ms).max(0) as u64;
-    encode_integer(out, store.expire_at_unix_ms(&args[1], deadline_ms) as i64);
+    encode_integer(out, i64::from(store.expire_at_unix_ms(&args[1], deadline_ms)));
 }
 
 /// `TTL` (seconds) / `PTTL` (millis). Pass-through of the -2 / -1 sentinels.

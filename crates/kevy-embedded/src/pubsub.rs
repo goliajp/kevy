@@ -122,7 +122,7 @@ impl Subscription {
         let (sender, receiver) = channel();
         let id = inner
             .write()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .bus
             .alloc_id();
         Self {
@@ -142,7 +142,7 @@ impl Subscription {
     fn sender_clone(&self) -> Sender<PubsubFrame> {
         self.sender
             .lock()
-            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
 
@@ -150,7 +150,7 @@ impl Subscription {
     /// enqueued onto the receive queue in order.
     pub fn subscribe(&mut self, channels: &[&[u8]]) {
         let s = self.sender_clone();
-        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.inner.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         for ch in channels {
             let owned = ch.to_vec();
             let added = g.bus.add_channel(self.id, &s, owned.clone());
@@ -169,7 +169,7 @@ impl Subscription {
     /// (`*`, `?`, `[abc]`).
     pub fn psubscribe(&mut self, patterns: &[&[u8]]) {
         let s = self.sender_clone();
-        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.inner.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         for pat in patterns {
             let owned = pat.to_vec();
             let added = g.bus.add_pattern(self.id, &s, owned.clone());
@@ -194,7 +194,7 @@ impl Subscription {
             return;
         }
         let s = self.sender_clone();
-        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.inner.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         for ch in channels {
             let owned = ch.to_vec();
             let _ = g.bus.remove_channel(self.id, &owned);
@@ -214,7 +214,7 @@ impl Subscription {
             return;
         }
         let s = self.sender_clone();
-        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.inner.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         for pat in patterns {
             let owned = pat.to_vec();
             let _ = g.bus.remove_pattern(self.id, &owned);
@@ -230,7 +230,7 @@ impl Subscription {
     fn drain_channel_subs(&mut self) {
         let s = self.sender_clone();
         let owned: Vec<Vec<u8>> = self.channels.drain().collect();
-        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.inner.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if owned.is_empty() {
             let count = g.bus.count_for(self.id);
             let _ = s.send(PubsubFrame::Unsubscribe { channel: None, count });
@@ -249,7 +249,7 @@ impl Subscription {
     fn drain_pattern_subs(&mut self) {
         let s = self.sender_clone();
         let owned: Vec<Vec<u8>> = self.patterns.drain().collect();
-        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.inner.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         if owned.is_empty() {
             let count = g.bus.count_for(self.id);
             let _ = s.send(PubsubFrame::Punsubscribe { pattern: None, count });
@@ -273,7 +273,7 @@ impl Subscription {
     /// `try_recv` calls return `Ok(None)` while a `recv` is blocked (no
     /// wait on the lock); see the type-level doc for the trade-off.
     pub fn recv(&self) -> io::Result<PubsubFrame> {
-        let g = self.receiver.lock().unwrap_or_else(|p| p.into_inner());
+        let g = self.receiver.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         g.recv()
             .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, "bus closed"))
     }
@@ -281,7 +281,7 @@ impl Subscription {
     /// Bounded blocking recv. `Err(io::ErrorKind::TimedOut)` when `dur`
     /// elapses; `Err(io::ErrorKind::UnexpectedEof)` when the bus is gone.
     pub fn recv_timeout(&self, dur: Duration) -> io::Result<PubsubFrame> {
-        let g = self.receiver.lock().unwrap_or_else(|p| p.into_inner());
+        let g = self.receiver.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         g.recv_timeout(dur).map_err(|e| match e {
             RecvTimeoutError::Timeout => io::Error::from(io::ErrorKind::TimedOut),
             RecvTimeoutError::Disconnected => {
@@ -298,9 +298,8 @@ impl Subscription {
     /// (semantically: "no frame available right now"). Same shape callers
     /// already handle for an empty queue.
     pub fn try_recv(&self) -> io::Result<Option<PubsubFrame>> {
-        let g = match self.receiver.try_lock() {
-            Ok(g) => g,
-            Err(_) => return Ok(None),
+        let Ok(g) = self.receiver.try_lock() else {
+            return Ok(None);
         };
         match g.try_recv() {
             Ok(f) => Ok(Some(f)),
@@ -326,7 +325,7 @@ impl Drop for Subscription {
     fn drop(&mut self) {
         // Best-effort cleanup. Recover from poison (a panic elsewhere left the
         // bus intact) so our entries are always removed.
-        let mut g = self.inner.write().unwrap_or_else(|p| p.into_inner());
+        let mut g = self.inner.write().unwrap_or_else(std::sync::PoisonError::into_inner);
         g.bus.remove_all_for(self.id);
     }
 }

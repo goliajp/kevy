@@ -6,8 +6,6 @@
 //! the public surface — all methods are `pub(crate)` and called by sibling
 //! modules (string/hash/list/set/zset/evict/expire/keyspace).
 
-use std::time::Instant;
-
 use kevy_hash::KevyHash;
 
 use crate::value::ENTRY_OVERHEAD;
@@ -38,7 +36,7 @@ impl Store {
             }
         }
         let old_has_ttl = prev.as_ref().is_some_and(|o| o.expire_at_ns.is_some());
-        self.adjust_expires(new_has_ttl as i64 - old_has_ttl as i64);
+        self.adjust_expires(i64::from(new_has_ttl) - i64::from(old_has_ttl));
         self.update_peak();
         prev
     }
@@ -128,15 +126,16 @@ impl Store {
         self.map.prefetch_for_hash(hash);
     }
 
-    pub(crate) fn expired(&self, key: &[u8], now: Instant) -> bool {
+    pub(crate) fn expired(&self, key: &[u8], now: u64) -> bool {
         match self.map.get(key) {
             Some(e) => e.is_expired_at(now),
             None => false,
         }
     }
 
-    /// Drop `key` if expired; returns whether it is live afterwards.
-    pub(crate) fn reap(&mut self, key: &[u8], now: Instant) -> bool {
+    /// Drop `key` if expired; returns whether it is live afterwards. `now` is
+    /// monotonic ns since epoch (from [`crate::now_ns`]).
+    pub(crate) fn reap(&mut self, key: &[u8], now: u64) -> bool {
         if self.expired(key, now) {
             self.remove_entry(key);
             self.expired_keys_total = self.expired_keys_total.saturating_add(1);

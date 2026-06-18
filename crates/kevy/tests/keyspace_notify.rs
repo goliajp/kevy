@@ -129,7 +129,7 @@ impl Drop for Server {
 
 #[test]
 fn keyspace_channel_fires_on_set() {
-    let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // `K` = keyspace channel; `$` = string class. SET → fires
     // `__keyspace@0__:k` with payload `set`.
     let srv = Server::start_with_flags("K$", 1);
@@ -153,7 +153,7 @@ fn keyspace_channel_fires_on_set() {
 
 #[test]
 fn keyevent_channel_fires_on_set() {
-    let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // `E` = keyevent channel; `$` = string class. SET → fires
     // `__keyevent@0__:set` with payload = key name.
     let srv = Server::start_with_flags("E$", 1);
@@ -177,7 +177,7 @@ fn keyevent_channel_fires_on_set() {
 
 #[test]
 fn both_channels_with_alias_all_classes() {
-    let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // `KEA` = both channels + all 6 event classes.
     let srv = Server::start_with_flags("KEA", 1);
 
@@ -213,7 +213,7 @@ fn both_channels_with_alias_all_classes() {
 
 #[test]
 fn default_off_emits_nothing() {
-    let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // No flags → no publish, no measurable difference between conns
     // that subscribe to the keyspace/event channels.
     let srv = Server::start_with_flags("", 1);
@@ -245,7 +245,7 @@ fn default_off_emits_nothing() {
 
 #[test]
 fn xadd_fires_stream_keyspace_event() {
-    let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // `K` channel + `t` class → XADD fires `__keyspace@0__:s` with payload `xadd`.
     let srv = Server::start_with_flags("Kt", 1);
 
@@ -268,7 +268,7 @@ fn xadd_fires_stream_keyspace_event() {
 
 #[test]
 fn class_gate_filters_unrelated_events() {
-    let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     // `K$` enables ONLY string-class events. A HSET (hash class)
     // must NOT trigger any keyspace channel publish — even though
     // the `K` channel itself is on, the class bit is off.

@@ -39,6 +39,8 @@ redis-cli -p 6004 SET hello world
 - **組み込み可能** —— `kevy-store` は普通の Rust ライブラリ：ネットワーク
   なし、ランタイムなし、`wasm32` 向けにもビルドできます。同じエンジンを
   あなたのプロセス内で。
+- **リソース適応的** —— メモリが無制限ならフルスピード、制限があれば優雅に
+  デグレード、境界では静かに壊れず大声で拒否します（[詳細](#リソース適応設計)）。
 
 スコープについては正直に：kevy は**シングルノード**です —— レプリケーション、
 クラスタリング、AUTH/TLS、インターネットへの直接公開は行いません
@@ -73,6 +75,22 @@ io_uring の C リファレンス実装との比較：kevy の手書きバイン
 Linux カーネルの底値に達しています。
 [`bench/loopback_c50.sh`](bench/loopback_c50.sh) と
 [`bench/loopback_c1.sh`](bench/loopback_c1.sh) で再現できます。
+
+### クラスタルーティング（key 認識クライアント）
+
+単一ポートのクライアントが誤った shard に着くと、shard 間の転送ホップを
+支払います。クラスタ対応の [`ClusterClient`](#クラスタモード単一ノードkey-認識ルーティング)
+は各 key をその所有 shard へ直接ルーティングし、このホップを取り除きます。
+クリーンな lx64 16 コアのベアメタル、server/client を別コア、GET 並行 64：
+
+| クライアント経路 | スループット | p99 レイテンシ |
+|------------------|-------------:|---------------:|
+| 単一 shard プロキシ（shard 間ホップ） | 333 k/s | 3858 µs |
+| **`ClusterClient`（ホップなし）** | **533 k/s** | **260 µs** |
+
+**スループット 1.6×、テールレイテンシ約 15× 改善** —— 転送ホップを除いた
+だけで、手書きの生ルーターと比べて計測可能なオーバーヘッドはありません。
+詳しい方法は [`docs/cluster.md`](docs/cluster.md) を参照。
 
 ### 組み込みスループット（プロセス内、ネットワークなし）
 
@@ -216,6 +234,63 @@ kevy --bind 0.0.0.0 --port 7000 --threads 4 --dir /var/lib/kevy
 
 注釈付きの完全な設定 schema は
 [`crates/kevy/kevy.toml.example`](crates/kevy/kevy.toml.example) を参照してください。
+
+### クラスタモード（単一ノード、key 認識ルーティング）
+
+`--cluster`（または `KEVY_CLUSTER=1` / `[cluster] enabled = true`）は各 shard
+を仮想クラスタノードとして公開します：shard `i` は `port + 1 + i` に確定的な
+追加ポートを持ち、`CLUSTER SLOTS / SHARDS / NODES` が実トポロジを報告し、
+誤った shard の key はクラスタポートで転送せず `-MOVED` を返します。これは
+マルチホスト分散ではなく（failover / オンライン reshard / gossip なし）、
+shard ルーティングのためのものです。
+
+```sh
+kevy --threads 8 --cluster          # メインポート 6004、shard ポート 6005-6012
+redis-cli -c -p 6005 SET foo bar    # MOVED を自動追従
+```
+
+Rust からは [`kevy-client`](crates/kevy-client) 1.9.0 の型付き
+`ClusterClient` が使えます：一度トポロジを発見すれば、各 key は CRC16 slot で
+所有 shard へ直行し、`-MOVED` も転送ホップもありません（上記の **1.6×
+スループット / 15× テールレイテンシ** の源）：
+
+```rust
+// Cargo.toml: kevy-client = "1.9.0"
+use kevy_client::ClusterClient;
+
+let mut cc = ClusterClient::connect("127.0.0.1", 6005)?;  // 任意の shard ポートをシードに
+cc.set(b"user:42", b"alice")?;                            // CRC16 slot でルーティング
+let v = cc.get(b"user:42")?;
+let removed = cc.del(&[b"a", b"b", b"c"])?;               // 複数 key は shard をまたげる
+# Ok::<(), std::io::Error>(())
+```
+
+string / hash / list / set / zset / del / exists / dbsize / flushall / ping /
+publish をカバー。完全なガイド、コマンド表、same-slot ルールは
+[`docs/cluster.md`](docs/cluster.md) を参照。
+
+### リソース適応設計
+
+kevy はリソースについて一つの原則に従います：**余裕があれば性能を解放し、
+なければ生き延び、境界では硬くゲートし、そして常に大声でエラーを返す——
+決して静かに壊れない。**
+
+- **無制限 = フルスピード**：`maxmemory = 0`（デフォルト）では記帳オーバー
+  ヘッドはゼロ（eviction 記帳は分岐 1 本でコンパイル時にスキップ）。設定して
+  いない制限のコストは一切払いません。
+- **制限あり = 優雅な eviction**：`maxmemory` + ポリシー（LRU / LFU / Random /
+  TTL、計 8 種）を設定すると、書き込みはサンプリングして上限の **5% 下** まで
+  key を退避します（headroom があるので次の書き込みで即再退避しない）。
+- **境界 = 大声で拒否、破損なし**：`NoEviction`（デフォルトポリシー）では、
+  予算を超える書き込みは実行前に Redis 古典の `OOM` エラーで拒否されます
+  （ホットパスの O(1) precheck）。ゲートするのは**メモリを増やす**動詞のみ；
+  縮小系（`DEL`/`LPOP`/`SREM`/`EXPIRE`…）と `FLUSH*` は常に通すので、満杯の
+  インスタンスを必ず回復できます。
+- **能力はデグレード、クラッシュしない**：io_uring は起動時にプローブされ、
+  古いカーネル / seccomp サンドボックスでは **epoll にフォールバック**；
+  `wasm32` 組み込みビルドはホスト供給のクロック + 制限された surface で動作し
+  ビルド拒否しません；非 loopback の `--bind` は静かに公開せず**警告を出力**
+  します（kevy に AUTH/TLS なし）。
 
 ### 組み込みライブラリとして
 

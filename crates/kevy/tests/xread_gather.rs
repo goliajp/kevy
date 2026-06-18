@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 static GATE: Mutex<()> = Mutex::new(());
 
 fn serial() -> std::sync::MutexGuard<'static, ()> {
-    GATE.lock().unwrap_or_else(|e| e.into_inner())
+    GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn req(parts: &[&[u8]]) -> Vec<u8> {

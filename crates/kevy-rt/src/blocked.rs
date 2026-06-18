@@ -34,8 +34,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub(crate) fn unix_now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+        .map_or(0, |d| d.as_millis() as u64)
 }
 
 /// Emit the RESP nil reply that a timed-out blocking command returns.
@@ -49,10 +48,10 @@ pub(crate) fn encode_block_timeout(out: &mut Vec<u8>, kind: BlockKind, proto: Re
     match (proto, kind) {
         (RespVersion::V3, _) => out.extend_from_slice(b"_\r\n"),
         (RespVersion::V2, BlockKind::Blpop | BlockKind::Brpop) => {
-            out.extend_from_slice(b"*-1\r\n")
+            out.extend_from_slice(b"*-1\r\n");
         }
         (RespVersion::V2, BlockKind::XReadBlock | BlockKind::XReadGroupBlock) => {
-            out.extend_from_slice(b"$-1\r\n")
+            out.extend_from_slice(b"$-1\r\n");
         }
     }
 }

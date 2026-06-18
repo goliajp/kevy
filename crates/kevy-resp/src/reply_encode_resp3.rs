@@ -65,8 +65,12 @@ pub fn encode_double(out: &mut Vec<u8>, v: f64) {
     } else {
         // Match the wire shape RESP3 clients expect: an integer-valued
         // double serialises without a decimal point ("3" not "3.0"),
-        // matching what the parse_double_reply round-trip expects.
-        if v == v.trunc() && v.abs() < 1e17 {
+        // matching what the parse_double_reply round-trip expects. The
+        // bit-exact compare is the point — we mean "no fractional bits
+        // present", not "approximately integer".
+        #[allow(clippy::float_cmp)]
+        let is_integer_valued = v == v.trunc();
+        if is_integer_valued && v.abs() < 1e17 {
             push_int(out, v as i64);
         } else {
             // Rust's default `{}` for f64 emits a shortest round-trippable

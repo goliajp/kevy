@@ -1,0 +1,19 @@
+# Standalone example — NOT a member of the kevy workspace, so kevy's own
+# crates stay zero-dependency. This downstream example is where the wasm
+# integration deps (wasm-bindgen) live; you wire your own in your app.
+[package]
+name = "kevy-wasm-kv"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# An empty [workspace] makes this its own workspace root, decoupled from the
+# parent so `cargo`/`wasm-pack` here never pulls kevy's server crates.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+kevy-embedded = { path = "../../crates/kevy-embedded" }
+wasm-bindgen = "0.2"

@@ -30,6 +30,9 @@ pub fn parse_command_borrowed(
     }
 }
 
+// See note on `parse_inline_into`: signature symmetry with
+// `parse_multibulk_borrowed` is the point; the inline path itself can't fail.
+#[allow(clippy::unnecessary_wraps)]
 fn parse_inline_borrowed(
     buf: &[u8],
 ) -> Result<Option<(ArgvBorrowed<'_>, usize)>, ProtocolError> {
@@ -226,9 +229,9 @@ mod tests {
         for frame in frames {
             let (owned, owned_used) = parse_command(frame).unwrap().unwrap();
             let (borrowed, b_used) = parse_command_borrowed(frame).unwrap().unwrap();
-            assert_eq!(owned_used, b_used, "consumed mismatch for {:?}", frame);
+            assert_eq!(owned_used, b_used, "consumed mismatch for {frame:?}");
             let materialised = borrowed.into_owned();
-            assert_eq!(owned, materialised, "argv mismatch for {:?}", frame);
+            assert_eq!(owned, materialised, "argv mismatch for {frame:?}");
         }
     }
 

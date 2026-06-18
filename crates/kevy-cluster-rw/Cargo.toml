@@ -1,0 +1,28 @@
+[package]
+name = "kevy-cluster-rw"
+description = "Read/write-split cluster client for kevy — routes writes to primary, reads to replicas."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-cluster-rw"
+readme = "README.md"
+keywords = ["kevy", "redis", "cluster", "client", "replication"]
+categories = ["database", "api-bindings"]
+
+[lints]
+workspace = true
+
+[dependencies]
+kevy-resp = { path = "../kevy-resp", version = "1.18.0" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "1.18.0" }
+
+[dev-dependencies]
+# Integration tests spin up real kevy primary + replica Runtimes to
+# verify routing end-to-end.
+kevy = { path = "../kevy" }
+kevy-rt = { path = "../kevy-rt", version = "1.18.0" }
+kevy-replicate = { path = "../kevy-replicate", version = "1.18.0" }

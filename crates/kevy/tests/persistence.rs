@@ -184,8 +184,7 @@ fn bgrewriteaof_shrinks_log_and_preserves_data() {
             (0..nshards)
                 .map(|s| {
                     std::fs::metadata(dir.join(format!("aof-{s}.aof")))
-                        .map(|m| m.len())
-                        .unwrap_or(0)
+                        .map_or(0, |m| m.len())
                 })
                 .sum()
         };
@@ -510,7 +509,7 @@ fn auto_aof_rewrite_respects_pct_zero_disable() {
                 read_reply(&mut c, b"+PONG\r\n");
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
-            let post = std::fs::metadata(&aof_path).map(|m| m.len()).unwrap_or(0);
+            let post = std::fs::metadata(&aof_path).map_or(0, |m| m.len());
             assert!(
                 post >= pre,
                 "auto-rewrite fired despite pct=0: {post} vs {pre} pre"
@@ -534,7 +533,7 @@ fn wait_for_size_at_least_heartbeat(
 ) -> u64 {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     loop {
-        let sz = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let sz = std::fs::metadata(path).map_or(0, |m| m.len());
         if sz >= floor || std::time::Instant::now() >= deadline {
             return sz;
         }
@@ -554,7 +553,7 @@ fn wait_for_size_below_heartbeat(
 ) -> u64 {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     loop {
-        let sz = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let sz = std::fs::metadata(path).map_or(0, |m| m.len());
         if sz < pre || std::time::Instant::now() >= deadline {
             return sz;
         }

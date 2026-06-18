@@ -114,6 +114,42 @@ pub fn save_snapshot<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<()> 
     std::fs::rename(&tmp, path)
 }
 
+/// Serialize a point-in-time snapshot of `src` into any `Write` sink.
+/// Used by both [`write_snapshot_tmp`] (sink = `BufWriter<File>` +
+/// extra fsync after) and the v3-cluster replication path (sink =
+/// `&mut Vec<u8>` for in-memory snapshot ship, see
+/// `kevy-replicate/docs/snapshot.md`).
+///
+/// On-disk bytes are identical regardless of sink — the same magic +
+/// version header, same entry stream, same `OP_EOF` trailer. Callers
+/// that need durability (disk) wrap in `BufWriter<File>` and call
+/// `sync_all` themselves; callers that need bytes (network ship)
+/// pass a `Vec<u8>`.
+pub fn write_snapshot_to<S: SnapshotSource, W: Write>(src: &S, sink: &mut W) -> io::Result<()> {
+    let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, sink);
+    w.write_all(MAGIC)?;
+    w.write_all(&[VERSION])?;
+    // The source yields *remaining* ms; v3 persists the absolute
+    // Unix-ms deadline (now + remaining) so the TTL survives a restart.
+    let now = kevy_store::now_unix_ms();
+    // Enumeration is infallible; capture the first write error to surface.
+    let mut err: Option<io::Error> = None;
+    src.for_each_entry(|key, value, ttl| {
+        let deadline = ttl.map(|ms| now.saturating_add(ms));
+        if err.is_none()
+            && let Err(e) = write_entry(&mut w, key, value, deadline)
+        {
+            err = Some(e);
+        }
+    });
+    if let Some(e) = err {
+        return Err(e);
+    }
+    w.write_all(&[OP_EOF])?;
+    w.flush()?;
+    Ok(())
+}
+
 /// The write half of [`save_snapshot`]: produce the durable (fsynced)
 /// `<path>.tmp` and return its path **without** the final rename. For the
 /// COW background-save flow: the serializer thread writes the temp file at
@@ -123,28 +159,9 @@ pub fn save_snapshot<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<()> 
 pub fn write_snapshot_tmp<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<std::path::PathBuf> {
     let tmp = tmp_path(path);
     {
-        let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, File::create(&tmp)?);
-        w.write_all(MAGIC)?;
-        w.write_all(&[VERSION])?;
-        // The source yields *remaining* ms; v3 persists the absolute
-        // Unix-ms deadline (now + remaining) so the TTL survives a restart.
-        let now = kevy_store::now_unix_ms();
-        // Enumeration is infallible; capture the first write error to surface.
-        let mut err: Option<io::Error> = None;
-        src.for_each_entry(|key, value, ttl| {
-            let deadline = ttl.map(|ms| now.saturating_add(ms));
-            if err.is_none()
-                && let Err(e) = write_entry(&mut w, key, value, deadline)
-            {
-                err = Some(e);
-            }
-        });
-        if let Some(e) = err {
-            return Err(e);
-        }
-        w.write_all(&[OP_EOF])?;
-        w.flush()?;
-        w.get_ref().sync_all()?; // durably on disk before the rename
+        let mut file = File::create(&tmp)?;
+        write_snapshot_to(src, &mut file)?;
+        file.sync_all()?; // durably on disk before the rename
     }
     Ok(tmp)
 }
@@ -152,8 +169,17 @@ pub fn write_snapshot_tmp<S: SnapshotSource>(src: &S, path: &Path) -> io::Result
 /// Load a snapshot from `path` into `store` (entries are inserted, not cleared
 /// first — call on a fresh store). Errors on a bad magic/version or truncation.
 pub fn load_snapshot(store: &mut Store, path: &Path) -> io::Result<()> {
-    let mut r = BufReader::new(File::open(path)?);
+    let r = BufReader::new(File::open(path)?);
+    load_snapshot_from(store, r)
+}
 
+/// Load a snapshot from any [`std::io::Read`] sink into `store` —
+/// symmetric to [`write_snapshot_to`]. Used by the v3-cluster
+/// replication path (sink = `&[u8]` wrapped in `std::io::Cursor`) to
+/// apply a primary-shipped snapshot to a fresh local store without
+/// touching disk. Entries are inserted, not cleared first — call on
+/// a fresh store. Errors on bad magic/version or truncation.
+pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()> {
     let mut magic = [0u8; 8];
     r.read_exact(&mut magic)?;
     if &magic != MAGIC {
@@ -279,76 +305,79 @@ pub fn load_snapshot(store: &mut Store, path: &Path) -> io::Result<()> {
 
 /// Serialize one entry: `[op][ttl][key][payload]`.
 fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>) -> io::Result<()> {
+    let op = match value {
+        Value::Str(_) => OP_STR,
+        Value::Hash(_) => OP_HASH,
+        Value::List(_) => OP_LIST,
+        Value::Set(_) => OP_SET,
+        Value::ZSet(_) => OP_ZSET,
+        Value::Stream(_) => OP_STREAM,
+    };
+    w.write_all(&[op])?;
+    write_ttl(w, ttl)?;
+    write_bytes(w, key)?;
     match value {
-        Value::Str(v) => {
-            w.write_all(&[OP_STR])?;
-            write_ttl(w, ttl)?;
-            write_bytes(w, key)?;
-            write_bytes(w, v.as_slice())?;
-        }
-        Value::Hash(h) => {
-            w.write_all(&[OP_HASH])?;
-            write_ttl(w, ttl)?;
-            write_bytes(w, key)?;
-            w.write_all(&(h.len() as u32).to_le_bytes())?;
-            for (f, v) in h.iter() {
-                write_bytes(w, f.as_slice())?;
-                write_bytes(w, v)?;
-            }
-        }
-        Value::List(l) => {
-            w.write_all(&[OP_LIST])?;
-            write_ttl(w, ttl)?;
-            write_bytes(w, key)?;
-            w.write_all(&(l.len() as u32).to_le_bytes())?;
-            for item in l.iter() {
-                write_bytes(w, item)?;
-            }
-        }
-        Value::Set(set) => {
-            w.write_all(&[OP_SET])?;
-            write_ttl(w, ttl)?;
-            write_bytes(w, key)?;
-            w.write_all(&(set.len() as u32).to_le_bytes())?;
-            for m in set.iter() {
-                write_bytes(w, m.as_slice())?;
-            }
-        }
-        Value::ZSet(z) => {
-            w.write_all(&[OP_ZSET])?;
-            write_ttl(w, ttl)?;
-            write_bytes(w, key)?;
-            let entries: Vec<(&[u8], f64)> = z.ordered().collect();
-            w.write_all(&(entries.len() as u32).to_le_bytes())?;
-            for (m, score) in entries {
-                write_bytes(w, m)?;
-                w.write_all(&score.to_bits().to_le_bytes())?;
-            }
-        }
-        Value::Stream(s) => {
-            w.write_all(&[OP_STREAM])?;
-            write_ttl(w, ttl)?;
-            write_bytes(w, key)?;
-            w.write_all(&s.last_id().ms.to_le_bytes())?;
-            w.write_all(&s.last_id().seq.to_le_bytes())?;
-            w.write_all(&s.max_deleted_id().ms.to_le_bytes())?;
-            w.write_all(&s.max_deleted_id().seq.to_le_bytes())?;
-            w.write_all(&s.entries_added().to_le_bytes())?;
-            let len = s.length() as u32;
-            w.write_all(&len.to_le_bytes())?;
-            for (id, fv) in s.iter_entries() {
-                w.write_all(&id.ms.to_le_bytes())?;
-                w.write_all(&id.seq.to_le_bytes())?;
-                w.write_all(&(fv.len() as u32).to_le_bytes())?;
-                for (f, v) in fv {
-                    write_bytes(w, f.as_slice())?;
-                    write_bytes(w, v.as_slice())?;
-                }
-            }
-            write_stream_groups(w, &s.export_groups())?;
-        }
+        Value::Str(v) => write_bytes(w, v.as_slice()),
+        Value::Hash(h) => write_hash_payload(w, h),
+        Value::List(l) => write_list_payload(w, l),
+        Value::Set(set) => write_set_payload(w, set),
+        Value::ZSet(z) => write_zset_payload(w, z),
+        Value::Stream(s) => write_stream_payload(w, s),
+    }
+}
+
+fn write_hash_payload<W: Write>(w: &mut W, h: &kevy_store::HashData) -> io::Result<()> {
+    w.write_all(&(h.len() as u32).to_le_bytes())?;
+    for (f, v) in h {
+        write_bytes(w, f.as_slice())?;
+        write_bytes(w, v)?;
     }
     Ok(())
+}
+
+fn write_list_payload<W: Write>(w: &mut W, l: &kevy_store::ListData) -> io::Result<()> {
+    w.write_all(&(l.len() as u32).to_le_bytes())?;
+    for item in l {
+        write_bytes(w, item)?;
+    }
+    Ok(())
+}
+
+fn write_set_payload<W: Write>(w: &mut W, set: &kevy_store::SetData) -> io::Result<()> {
+    w.write_all(&(set.len() as u32).to_le_bytes())?;
+    for m in set {
+        write_bytes(w, m.as_slice())?;
+    }
+    Ok(())
+}
+
+fn write_zset_payload<W: Write>(w: &mut W, z: &kevy_store::ZSetData) -> io::Result<()> {
+    let entries: Vec<(&[u8], f64)> = z.ordered().collect();
+    w.write_all(&(entries.len() as u32).to_le_bytes())?;
+    for (m, score) in entries {
+        write_bytes(w, m)?;
+        w.write_all(&score.to_bits().to_le_bytes())?;
+    }
+    Ok(())
+}
+
+fn write_stream_payload<W: Write>(w: &mut W, s: &kevy_store::StreamData) -> io::Result<()> {
+    w.write_all(&s.last_id().ms.to_le_bytes())?;
+    w.write_all(&s.last_id().seq.to_le_bytes())?;
+    w.write_all(&s.max_deleted_id().ms.to_le_bytes())?;
+    w.write_all(&s.max_deleted_id().seq.to_le_bytes())?;
+    w.write_all(&s.entries_added().to_le_bytes())?;
+    w.write_all(&(s.length() as u32).to_le_bytes())?;
+    for (id, fv) in s.iter_entries() {
+        w.write_all(&id.ms.to_le_bytes())?;
+        w.write_all(&id.seq.to_le_bytes())?;
+        w.write_all(&(fv.len() as u32).to_le_bytes())?;
+        for (f, v) in fv {
+            write_bytes(w, f.as_slice())?;
+            write_bytes(w, v.as_slice())?;
+        }
+    }
+    write_stream_groups(w, &s.export_groups())
 }
 
 /// v4 consumer-group section: `[n_groups][per group: name, last_delivered,

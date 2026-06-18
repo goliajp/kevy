@@ -69,3 +69,12 @@ pub use kevy_persist::RewriteStats;
 pub use kevy_store::{ExpireStats, StoreError};
 pub use pubsub::{PubsubFrame, Subscription};
 pub use store::{Store, WeakStore};
+
+/// Feed kevy's clocks on `wasm32-unknown-unknown`, which has neither
+/// `Instant` nor `SystemTime`. Without a host-fed clock, TTL operations and
+/// the reaper would trap. Call [`set_clock_ns`] (monotonic ns, e.g.
+/// `Date.now() * 1e6`) before TTL-sensitive ops and once per `tick`, and
+/// [`set_wall_clock_ms`] (Unix-epoch millis) if you use `XADD` auto-IDs or
+/// `EXPIREAT`. No-ops conceptually on native targets — hence wasm-only.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub use kevy_store::{set_clock_ns, set_wall_clock_ms};

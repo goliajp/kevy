@@ -10,10 +10,17 @@
 //! Subcommand-heavy verbs (currently `CONFIG`) live in submodules to
 //! keep file size in line with the project's ≤ 500 LOC rule.
 
+// INFO emits ~20 lines per call, called once per session handshake — the
+// `push_str(&format!(...))` shape is the legible per-line pattern; `write!`
+// adds `let _ =` boilerplate without measurable savings (INFO is not on the
+// command hot path).
+#![allow(clippy::format_push_string)]
+
 pub(crate) mod client;
 pub(crate) mod cluster;
 pub(crate) mod config;
 mod memory;
+pub(crate) mod replication;
 pub(crate) mod stats;
 
 use std::time::SystemTime;
@@ -55,6 +62,8 @@ pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
             config::cmd_config(&cfg, args, out, RespVersion::V2);
         }
         b"CLIENT" => client::cmd_client(args, out, RespVersion::V2),
+        b"ROLE" => replication::cmd_role(args, out),
+        b"REPLICAOF" | b"SLAVEOF" => replication::cmd_replicaof(args, out),
         b"MEMORY" => {
             let cfg = config_global::get();
             memory::cmd_memory(&cfg, store, args, out);
@@ -75,7 +84,7 @@ pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
 ) {
     // INFO [section]; we always emit the requested section (or all when
     // none / "default" / "all" / "everything" is requested).
-    let section = args.get(1).map(|a| a.to_ascii_lowercase());
+    let section = args.get(1).map(<[u8]>::to_ascii_lowercase);
     let want = section.as_deref();
     // Each shard owns an independent store; INFO is answered on one shard but
     // reports the whole process. Freshen this shard's slot from the live store
@@ -128,8 +137,7 @@ fn want_section(want: Option<&[u8]>, name: &str) -> bool {
 fn info_server(cfg: &Config, b: &mut String) {
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs());
     b.push_str("# Server\r\n");
     b.push_str("redis_version:7.4.0\r\n"); // valkey-compat byte-for-byte sniffing
     b.push_str(&format!("kevy_version:{}\r\n", env!("CARGO_PKG_VERSION")));
@@ -190,12 +198,12 @@ pub(crate) fn set_persist_stats(in_flight: bool, aof_rewrites_total: u64) {
 }
 
 fn info_persistence(cfg: &Config, b: &mut String) {
-    let (in_flight, rewrites) = PERSIST_STATS.with(|c| c.get());
+    let (in_flight, rewrites) = PERSIST_STATS.with(std::cell::Cell::get);
     b.push_str("# Persistence\r\n");
     b.push_str("loading:0\r\n");
     b.push_str(&format!(
         "aof_enabled:{}\r\n",
-        if cfg.persistence.aof { 1 } else { 0 }
+        i32::from(cfg.persistence.aof)
     ));
     b.push_str(&format!(
         "appendfsync:{}\r\n",
@@ -206,7 +214,7 @@ fn info_persistence(cfg: &Config, b: &mut String) {
     // a BGSAVE/BGREWRITEAOF starting or finishing.
     b.push_str(&format!(
         "aof_rewrite_in_progress:{}\r\n",
-        if in_flight { 1 } else { 0 }
+        i32::from(in_flight)
     ));
     b.push_str(&format!("aof_rewrites_total:{rewrites}\r\n"));
     b.push_str("aof_last_rewrite_time_sec:-1\r\n");
@@ -232,11 +240,38 @@ fn info_stats(totals: &stats::Totals, b: &mut String) {
 }
 
 fn info_replication(b: &mut String) {
+    // T1.31: live `INFO replication` — reads `current_upstream()` to
+    // decide the section shape, then drains the per-tick view
+    // (`replication_view()`) for offset + connected-replicas count.
+    // The fields mirror Redis 7.x; the v1.18 simplifications are:
+    //   - master_replid is a single zeros-string (no failover ID
+    //     bookkeeping yet — kevy-elect (Phase 1.5) introduces real IDs)
+    //   - master_link_status is fixed to "up" when an upstream is
+    //     installed (no runner→view feedback yet — T1.31.x follow-up)
+    //   - the per-replica list is omitted (peer-addr capture is
+    //     T1.28.5 — see plan).
     b.push_str("# Replication\r\n");
-    b.push_str("role:master\r\n");
-    b.push_str("connected_slaves:0\r\n");
-    b.push_str("master_replid:0000000000000000000000000000000000000000\r\n");
-    b.push_str("master_repl_offset:0\r\n");
+    let upstream = crate::replica_state::current_upstream();
+    let view = replication::replication_view();
+    let offset = view.master_repl_offset;
+    let connected = view.replicas.len();
+    match upstream {
+        Some((host, port)) => {
+            b.push_str("role:slave\r\n");
+            b.push_str(&format!("master_host:{host}\r\n"));
+            b.push_str(&format!("master_port:{port}\r\n"));
+            b.push_str("master_link_status:up\r\n");
+            b.push_str("master_sync_in_progress:0\r\n");
+            b.push_str("slave_read_only:0\r\n");
+            b.push_str("slave_repl_offset:0\r\n");
+        }
+        None => {
+            b.push_str("role:master\r\n");
+            b.push_str(&format!("connected_slaves:{connected}\r\n"));
+            b.push_str("master_replid:0000000000000000000000000000000000000000\r\n");
+            b.push_str(&format!("master_repl_offset:{offset}\r\n"));
+        }
+    }
     b.push_str("\r\n");
 }
 
@@ -283,9 +318,9 @@ fn cmd_debug<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
             }
             encode_simple_string(out, "OK");
         }
-        b"OBJECT" => encode_simple_string(out, "OK"),
-        b"SET-ACTIVE-EXPIRE" => encode_simple_string(out, "OK"),
-        _ => encode_simple_string(out, "OK"), // tolerant stub for any other DEBUG subcommand
+        // OBJECT / SET-ACTIVE-EXPIRE / unknown all return +OK: DEBUG is
+        // intentionally tolerant for compatibility shims.
+        _ => encode_simple_string(out, "OK"),
     }
 }
 
@@ -309,7 +344,7 @@ fn cmd_shutdown<A: ArgvView + ?Sized>(args: &A, _out: &mut Vec<u8>) {
     // for forward compatibility, then exit(0). Wave 2 will add the
     // AOF-flush-on-exit graceful path; for now we rely on appendfsync
     // = always or everysec to have flushed recent writes.
-    let mode = args.get(1).map(|s| s.to_ascii_uppercase());
+    let mode = args.get(1).map(<[u8]>::to_ascii_uppercase);
     let _ = mode; // accepted for parity; behavior identical for now
     std::process::exit(0);
 }
@@ -317,7 +352,7 @@ fn cmd_shutdown<A: ArgvView + ?Sized>(args: &A, _out: &mut Vec<u8>) {
 // ───────────── value → string converters (shared with config submodule) ─────────────
 
 pub(super) fn appendfsync_str(v: kevy_config::AppendFsync) -> &'static str {
-    use kevy_config::AppendFsync::*;
+    use kevy_config::AppendFsync::{Always, EverySec, No};
     match v {
         Always => "always",
         EverySec => "everysec",
@@ -326,7 +361,7 @@ pub(super) fn appendfsync_str(v: kevy_config::AppendFsync) -> &'static str {
 }
 
 pub(super) fn eviction_str(v: kevy_config::EvictionPolicy) -> &'static str {
-    use kevy_config::EvictionPolicy::*;
+    use kevy_config::EvictionPolicy::{NoEviction, AllKeysLru, AllKeysLfu, AllKeysRandom, VolatileLru, VolatileLfu, VolatileRandom, VolatileTtl};
     match v {
         NoEviction => "noeviction",
         AllKeysLru => "allkeys-lru",
@@ -340,7 +375,7 @@ pub(super) fn eviction_str(v: kevy_config::EvictionPolicy) -> &'static str {
 }
 
 pub(super) fn log_level_str(v: kevy_config::LogLevel) -> &'static str {
-    use kevy_config::LogLevel::*;
+    use kevy_config::LogLevel::{Trace, Debug, Info, Warn, Error};
     match v {
         Trace => "trace",
         Debug => "debug",
@@ -359,83 +394,6 @@ pub(super) fn wrong_args(out: &mut Vec<u8>, name: &str) {
     );
 }
 
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use kevy_resp::Argv;
-
-    fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
-        let mut a = Argv::default();
-        a.push(verb);
-        for r in rest {
-            a.push(r);
-        }
-        let mut out = Vec::new();
-        let mut store = Store::new();
-        let handled = dispatch_ops(verb, &mut store, &a, &mut out);
-        assert!(handled, "verb {:?} not handled", String::from_utf8_lossy(verb));
-        out
-    }
-
-    #[test]
-    fn info_returns_bulk_with_sections() {
-        let out = run(b"INFO", &[]);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.starts_with("$"), "INFO must reply as bulk string");
-        assert!(s.contains("# Server"));
-        assert!(s.contains("# Replication"));
-        assert!(s.contains("role:master"));
-        assert!(s.contains("cluster_enabled:0"));
-    }
-
-    #[test]
-    fn info_specific_section() {
-        let out = run(b"INFO", &[b"memory"]);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.contains("# Memory"));
-        assert!(!s.contains("# Server"));
-    }
-
-    #[test]
-    fn cluster_info_carries_standalone_markers() {
-        let out = run(b"CLUSTER", &[b"INFO"]);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.contains("cluster_enabled:0"));
-        assert!(s.contains("cluster_state:ok"));
-    }
-
-    #[test]
-    fn cluster_nodes_single_self_entry() {
-        let out = run(b"CLUSTER", &[b"NODES"]);
-        let s = String::from_utf8(out).unwrap();
-        assert!(s.contains("myself,master"));
-        assert!(s.contains("0-16383"));
-    }
-
-    #[test]
-    fn debug_sleep_zero_returns_immediately() {
-        let out = run(b"DEBUG", &[b"SLEEP", b"0"]);
-        assert_eq!(out, b"+OK\r\n");
-    }
-
-    #[test]
-    fn debug_sleep_small_actually_sleeps() {
-        let t = std::time::Instant::now();
-        let out = run(b"DEBUG", &[b"SLEEP", b"0.05"]);
-        let elapsed = t.elapsed();
-        assert!(elapsed.as_millis() >= 40, "expected ≥ 40ms, got {elapsed:?}");
-        assert_eq!(out, b"+OK\r\n");
-    }
-
-    #[test]
-    fn wait_returns_zero_replicas() {
-        let out = run(b"WAIT", &[b"3", b"1000"]);
-        assert_eq!(out, b":0\r\n");
-    }
-
-    #[test]
-    fn wait_wrong_args_errors() {
-        let out = run(b"WAIT", &[b"3"]);
-        assert!(out.starts_with(b"-ERR"));
-    }
-}
+mod tests;

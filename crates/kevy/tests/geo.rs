@@ -54,7 +54,7 @@ fn read_reply(s: &mut std::net::TcpStream) -> Vec<u8> {
                 out.extend_from_slice(&read_reply(s));
             }
         }
-        other => panic!("unknown reply prefix {other:?}: {:?}", out),
+        other => panic!("unknown reply prefix {other:?}: {out:?}"),
     }
     out
 }
@@ -85,7 +85,7 @@ struct Server {
 
 impl Server {
     fn start(nshards: usize) -> Self {
-        let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+        let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-geo-{}",

@@ -80,7 +80,7 @@ struct Server {
 
 impl Server {
     fn start(nshards: usize) -> Self {
-        let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+        let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-stream-{}",
@@ -199,7 +199,7 @@ fn xlen_after_inserts() {
     let srv = Server::start(1);
     let mut c = srv.connect();
     for i in 1..=3 {
-        let id = format!("{}-0", i);
+        let id = format!("{i}-0");
         c.write_all(&req(&[b"XADD", b"s", id.as_bytes(), b"f", b"v"]))
             .unwrap();
         let _ = read_reply(&mut c);
