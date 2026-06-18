@@ -1,4 +1,18 @@
-# kevy vs valkey 9.1 — baseline (v0.2)
+# kevy vs valkey 9.1 / redis 7.4 — bench narrative (v0.2 → v1.17)
+
+> **Current headline (v1.17.0, lx64 16-core, 2026-06-15):**
+> 8-shard cluster GET **30.8 M ops/s** · SET **22.3 M ops/s** (long-run, pinned
+> hashtag) — ≈ 80 % of the naive 38 M sequential-key ceiling estimate.
+> `ClusterClient` (kevy-client 1.9.0) at `-c50 -P1`: **533 k ops/s @ p99
+> 260 µs** — 1.6× throughput / 15× p99 vs single-shard, zero MOVED hops.
+> Jump to the latest segments: [v1.17 cluster-aware client](#v117-cluster-aware-clusterclient---tail-latency-fixed-2026-06-15-lx64),
+> [perf-ceiling campaign](#server-perf-ceiling-campaign--regression-recovered-then-peak-surpassed-2026-060910-lx64),
+> [CLUSTER slot routing](#single-node-cluster-slot-routing--the-forwarding-tax-measured-honestly-2026-06-10-lx64).
+> The chronological narrative below preserves the v0.2 → v1.17 journey.
+
+---
+
+# v0.2 — baseline
 
 **Date:** 2026-05-24 · **Goal of this run:** validate the bench harness and
 measure the starting gap. Not a "we're fast" claim — kevy v0.2 is a deliberately
@@ -876,3 +890,59 @@ deep-polished); `shard_of` (4 %) splits roughly half hashtag `{}` scanning,
 half slice-by-4 CRC — a SWAR memchr for the brace scan is worth ~1–2 %,
 below the round-to-round noise floor, recorded as an observation rather
 than claimed. The remaining gap to ceiling is real work, not overhead.
+
+---
+
+## v1.17 — cluster-aware ClusterClient — tail latency fixed (2026-06-15, lx64)
+
+The mailrs dogfood close-out: a load-test report (`~/workspace/kevy-loadtest/
+REPORT-kevy-perf-2026-06-14.md`) flagged kevy `-c50 -P1` p99 at 2–3× redis/
+valkey on a single-shard connection. After ~10 rounds of attribution work
+on lx64 (clean 16-core box, server cores 0-9 / client 10-15 disjoint),
+five candidate "reactor fixes" (spin-scan, `yield_now`, stay-hot, dedicated
+cores, CPU pinning) all measured to zero, and a hand-rolled cluster-routing
+probe brought p99 down to single-shard parity. The remaining tail was the
+**cross-shard forwarding hop**, not park latency, not co-location, not
+fsync, not pinning.
+
+**Fix landed as `kevy-client` 1.9.0 — `ClusterClient`** (Route B
+independent release): `CLUSTER SLOTS` discovers topology at connect time,
+one pooled connection per shard, and `kevy_hash::key_hash_slot` (CRC16
+slice-by-4) routes each command to the owning shard. Zero MOVED hops,
+zero abstraction overhead vs the bare routing probe. Covers
+string/hash/list/set/zset/del/exists/dbsize/flushall/ping/publish (the
+mailrs working set).
+
+| angle (lx64, 4-shard server, `--cluster`)  | throughput | p99 | vs single-shard |
+|---|---:|---:|---:|
+| single-shard `Connection`, `-c50 -P1`      | 333 k ops/s | 3 858 µs | (baseline) |
+| `ClusterClient`, `-c50 -P1`                | **533 k ops/s** | **260 µs** | **+60 %** throughput, **15×** p99 |
+
+**Headline absolute numbers (long-run, 8-shard, pinned hashtag, idle
+box):** GET **30.8 M ops/s**, SET **22.3 M ops/s** (carried unchanged
+from the perf-ceiling campaign — v1.17 reactor changes are
+observability-only and do not move the steady-state ceiling).
+
+### v1.17.0 INFO observability + flush() rename
+
+Same release wave landed two surface changes — neither is a perf claim,
+but both touched reactor-adjacent code:
+
+- **INFO cross-shard aggregation.** Server has per-shard `Store`; `INFO`
+  used to answer from the receiving shard only (`used_memory` reported
+  1/N, Keyspace empty, Stats stuck at 0). `ops::stats` now publishes
+  process-level per-shard gauges from each shard's tick, and a hot-path
+  `thread_local!` counter sums into the answering shard's reply. Added
+  `Memory` / `Keyspace` (`db0:keys=N,expires=M`) / `Stats` (commands,
+  connections, ops_per_sec, expired_keys). The expires count is an O(1)
+  store-level counter (no O(n) scan in the hot path); drift-guard tests
+  hold the convergence.
+- **`flush()` → `flushall()`.** Three surfaces (store / embedded /
+  client) renamed to kill the wipe-vs-sync footgun; `#[deprecated]`
+  alias kept one release for migration.
+
+**Note:** `INFO` adds ~1–2 ns per command (one `thread_local!` `Cell`
+increment) to the reactor `start_command` path. Unit-level `kevy-store`
+perfgate stayed PASS; **the e2e reactor-path replay on lx64 was not
+re-run during the release**. mailrs dogfood has been asked to confirm
+peak ~81 k network ops/s is unchanged.

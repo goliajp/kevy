@@ -29,13 +29,16 @@ mod error;
 mod lex;
 mod parse;
 mod preserve;
+mod replication;
 mod schema;
 mod size;
 
+pub use replication::{ReplicationRole, ReplicationSection};
 pub use schema::{
-    AdvancedSection, AppendFsync, Config, ConfigError, EvictionPolicy, ExpirySection, LogLevel,
-    LogOutput, LogSection, MemorySection, NotificationFlags, NotificationSection,
-    PersistenceSection, ServerSection, SlowlogSection, parse_notification_flags,
+    AdvancedSection, AppendFsync, ClusterSection, Config, ConfigError, EvictionPolicy,
+    ExpirySection, LogLevel, LogOutput, LogSection, MemorySection, NotificationFlags,
+    NotificationSection, PersistenceSection, ServerSection, SlowlogSection,
+    parse_notification_flags,
 };
 pub use size::parse_size;
 

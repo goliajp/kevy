@@ -472,6 +472,8 @@ pub struct Config {
     pub slowlog: SlowlogSection,
     /// `[cluster]` settings (single-node cluster mode).
     pub cluster: ClusterSection,
+    /// `[replication]` settings (v3-cluster Phase 1 primary/replica).
+    pub replication: crate::replication::ReplicationSection,
     /// Path the config was loaded from (for `CONFIG REWRITE`). `None` =
     /// loaded from defaults only / from in-memory string.
     pub source_path: Option<PathBuf>,

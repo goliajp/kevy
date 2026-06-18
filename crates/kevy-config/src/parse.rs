@@ -102,9 +102,8 @@ impl Parser {
         // that, we want a structured error — not a panic in a public
         // `Config::load` call. Treat a non-Ident head as a parser
         // invariant violation reported the same way a malformed file is.
-        let key = match key_span.tok {
-            Token::Ident(k) => k,
-            _ => return Err(unexpected(&key_span, "expected key identifier".into())),
+        let Token::Ident(key) = key_span.tok else {
+            return Err(unexpected(&key_span, "expected key identifier".into()));
         };
         let line = key_span.line;
         self.pos += 1;

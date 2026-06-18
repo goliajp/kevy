@@ -46,13 +46,18 @@ pub fn parse_command_into(buf: &[u8], dst: &mut Argv) -> Result<Option<usize>, P
     }
 }
 
+// Signature mirrors `parse_multibulk_into` so `parse_command_into` can dispatch
+// on the leading byte without converting between Result and Option shapes —
+// the inline path can't actually fail, but the Result wrap is a price we pay
+// for arm symmetry, not a hidden error path.
+#[allow(clippy::unnecessary_wraps)]
 fn parse_inline_into(buf: &[u8], dst: &mut Argv) -> Result<Option<usize>, ProtocolError> {
     let Some(eol) = find_crlf(buf, 0) else {
         return Ok(None);
     };
     let line = &buf[..eol];
     for tok in line
-        .split(|b| b.is_ascii_whitespace())
+        .split(u8::is_ascii_whitespace)
         .filter(|s| !s.is_empty())
     {
         dst.push(tok);
@@ -125,9 +130,8 @@ fn parse_multibulk_into(buf: &[u8], dst: &mut Argv) -> Result<Option<usize>, Pro
     let count = count as usize;
     let start = hdr_end + 2;
 
-    let (end_pos, total) = match validate_multibulk_frame(buf, start, count)? {
-        Some(t) => t,
-        None => return Ok(None),
+    let Some((end_pos, total)) = validate_multibulk_frame(buf, start, count)? else {
+        return Ok(None);
     };
 
     // `reserve` is a no-op when the scratch Argv has already amortised
@@ -172,7 +176,7 @@ pub(crate) fn parse_bulk_len(
             Some(&b) if b.is_ascii_digit() => {
                 acc = acc
                     .checked_mul(10)
-                    .and_then(|a| a.checked_add((b - b'0') as i64))
+                    .and_then(|a| a.checked_add(i64::from(b - b'0')))
                     .ok_or(ProtocolError::Malformed("bad bulk length"))?;
                 q += 1;
             }
@@ -203,9 +207,9 @@ pub(crate) fn parse_bulk_len(
 /// terminate the scan. Safe Rust only — keeps `kevy-resp`'s
 /// `forbid(unsafe_code)` guarantee.
 pub(crate) fn find_crlf(buf: &[u8], start: usize) -> Option<usize> {
-    const CR_BCAST: u64 = 0x0D0D0D0D_0D0D0D0Du64;
-    const ONES: u64 = 0x01010101_01010101u64;
-    const HIGH: u64 = 0x80808080_80808080u64;
+    const CR_BCAST: u64 = 0x0D0D_0D0D_0D0D_0D0D_u64;
+    const ONES: u64 = 0x0101_0101_0101_0101_u64;
+    const HIGH: u64 = 0x8080_8080_8080_8080_u64;
 
     let n = buf.len();
     let mut i = start;
@@ -266,7 +270,7 @@ pub(crate) fn parse_int(bytes: &[u8]) -> Option<i64> {
         if !b.is_ascii_digit() {
             return None;
         }
-        acc = acc.checked_mul(10)?.checked_add((b - b'0') as i64)?;
+        acc = acc.checked_mul(10)?.checked_add(i64::from(b - b'0'))?;
     }
     Some(if neg { -acc } else { acc })
 }

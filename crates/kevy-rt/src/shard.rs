@@ -74,6 +74,45 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) data_dir: PathBuf,
     /// `None` disables the append-only log (e.g. pure in-memory benchmarking).
     pub(crate) aof: Option<Aof>,
+    /// Per-shard replication backlog. `None` when `[replication] role`
+    /// is `standalone` (default — zero hot-path cost: every write checks
+    /// `replicate.is_some()` and skips). `Some` when `role = "primary"`
+    /// — every applied mutation is pushed to the backlog for connected
+    /// replicas to consume.
+    pub(crate) replicate: Option<kevy_replicate::source::ReplicationSource>,
+    /// Per-shard replication listener (per Issue Ledger I2): shard `i`
+    /// binds at `replication_port_base + i`. `Some` only when the
+    /// runtime was built with [`crate::Runtime::with_replication_listener`].
+    /// Accepted connections enter the [`crate::replication::ReplicaConn`]
+    /// state machine — handshake → live frame streaming.
+    pub(crate) replication_listener: Option<Socket>,
+    /// Active replica connections (handshake-pending or streaming).
+    /// Vec rather than KevyMap — N < 16 in practice, linear scan
+    /// beats hashing at that size.
+    pub(crate) replicas: Vec<crate::replication::ReplicaConn>,
+    /// Recently-disconnected replica slots (T1.15). A replica that
+    /// drops within `replication_reconnect_window_ms` is correlated
+    /// against its prior `sent_offset`; expired by the shard tick.
+    pub(crate) slots: kevy_replicate::slot::SlotTable,
+    /// Reconnect window for [`Self::slots`] in ms, fed from
+    /// `[replication] reconnect_window_ms`.
+    pub(crate) replication_reconnect_window_ms: u32,
+    /// Monotonic time origin for slot timestamps. `SlotTable` takes
+    /// `u64` ns; we derive them as
+    /// `Instant::now().duration_since(replication_epoch).as_nanos()`.
+    pub(crate) replication_epoch: Instant,
+    /// Per-shard replica inbox — `Some` when this server runs as a
+    /// replica (T1.29). The replica runner thread sends decoded
+    /// snapshot/frame events into this receiver; the reactor drains
+    /// it once per tick and applies via `kevy::dispatch` (under
+    /// [`crate::ReplicatedApplyGuard`]). `None` when the shard is a
+    /// primary or standalone.
+    pub(crate) replica_inbox: Option<crate::replica_inbox::ReplicaInboxReceiver>,
+    /// Accumulating snapshot bytes for an in-progress
+    /// [`crate::ReplicaApply::SnapshotChunk`] sequence. Reset on each
+    /// `SnapshotBegin`; consumed on `SnapshotEnd` (`load_snapshot_from`
+    /// into `self.store`). Empty when no snapshot is in flight.
+    pub(crate) replica_snapshot_buf: Vec<u8>,
     /// `auto_aof_rewrite_percentage`: trigger BGREWRITEAOF when the live
     /// AOF is at least this percent larger than at the previous rewrite.
     /// `0` disables auto-rewrite.
@@ -217,6 +256,15 @@ impl<C: Commands> Shard<C> {
             self.poller.add(cl.raw(), true, false)?;
             cluster_fd = cl.raw();
         }
+        // Same "fd or -1" trick for the replication listener (per Issue
+        // Ledger I2 — per-shard, deterministic ports). Replication-off
+        // pays one dead integer compare per event and nothing more.
+        let mut replication_fd = -1;
+        if let Some(rl) = &self.replication_listener {
+            rl.set_nonblocking()?;
+            self.poller.add(rl.raw(), true, false)?;
+            replication_fd = rl.raw();
+        }
         let waker_fd = self.waker.read_fd();
         let me = self.id;
 
@@ -278,6 +326,8 @@ impl<C: Commands> Shard<C> {
                         self.accept_ready(false)?;
                     } else if ev.fd == cluster_fd {
                         self.accept_ready(true)?;
+                    } else if ev.fd == replication_fd {
+                        self.accept_ready_replication()?;
                     } else if ev.fd == waker_fd {
                         self.waker.drain();
                     } else if let Some(&conn_id) = self.fd_to_conn.get(&ev.fd) {
@@ -286,9 +336,29 @@ impl<C: Commands> Shard<C> {
                         } else if ev.writable {
                             self.flush_conn(conn_id)?;
                         }
+                    } else if let Some(idx) = self.replica_index_by_fd(ev.fd) {
+                        if ev.readable || ev.hup {
+                            self.replica_readable(idx)?;
+                        }
+                        // A handshake `+ACK` is small (≤ 30 B) and
+                        // usually fits in the first non-blocking write,
+                        // so try the drain unconditionally before
+                        // requesting write-readiness. If it short-writes,
+                        // `replica_writable` is a no-op until the poller
+                        // signals writability (T1.14 wires the
+                        // write-readiness re-arm; v1.18.0 ships with the
+                        // assumption that `+ACK` drains in one syscall —
+                        // which it does on every OS we test).
+                        self.replica_writable(idx)?;
                     }
                 }
                 self.events = events;
+                // Drop conns that hit Closed mid-event (handshake
+                // error / peer EOF / `+ACK` drained in this batch's
+                // terminal state). Reaping before the next poll
+                // prevents a closed fd from re-firing on epoll level-
+                // triggered backends.
+                self.reap_closed_replicas();
             }
 
             // Messages from other cores (forwarded requests + replies to ours).
@@ -309,6 +379,11 @@ impl<C: Commands> Shard<C> {
             if let Some(aof) = &mut self.aof {
                 let _ = aof.maybe_sync();
             }
+            // v3-cluster replication producer pump (per Issue Ledger I2 +
+            // T1.14): drain the per-shard backlog out to streaming
+            // replicas. Short-circuits to a single `Option::is_none()`
+            // check when replication is off (the common case).
+            self.pump_replication()?;
             // Active TTL reaper / shard housekeeping. Skip the wall-clock
             // read on most iters: in busy-poll the tick fires at 10 Hz
             // with negligible overhead (counter saturates in ~us, then
@@ -331,6 +406,26 @@ impl<C: Commands> Shard<C> {
                         self.commands.on_shard_tick(&mut self.store);
                         self.apply_live_runtime_config(&mut tick_interval);
                         self.tick_persist();
+                        // v3-cluster replication slot expiry (T1.15):
+                        // drop slots whose reconnect window has passed.
+                        // No-op short-circuits when replication is off or
+                        // no slot has been recorded yet.
+                        self.tick_replication_slots(now);
+                        // v3-cluster ROLE / INFO replication (T1.28):
+                        // publish master_repl_offset + connected_replicas
+                        // count to the embedder. No-op when replication
+                        // is off.
+                        self.tick_replication_view();
+                        // v3-cluster backlog watermark (T1.22.5): drop
+                        // frames every consumer has moved past so the
+                        // backlog reclaims space proactively. No-op
+                        // when replication is off / no consumers yet.
+                        self.tick_replication_watermark();
+                        // v3-cluster server-as-replica (T1.29): drain
+                        // events from the replica runner thread and
+                        // apply them. No-op (one Option check) when
+                        // this shard isn't a replica.
+                        self.drain_replica_inbox();
                         last_tick = now;
                     }
                 }
@@ -357,70 +452,4 @@ impl<C: Commands> Shard<C> {
     // `send_to` / `flush_backlog` / `flush_conn`) lives in
     // [`crate::shard_flush`] — same `impl<C: Commands> Shard<C>`, split
     // out so this file stays under the 500-LOC house rule.
-
-    /// Drain one listener's accept queue. `cluster` selects the per-shard
-    /// cluster listener (conns marked for `-MOVED` semantics) over the
-    /// shared compat listener.
-    fn accept_ready(&mut self, cluster: bool) -> io::Result<()> {
-        loop {
-            let accepted = if cluster {
-                let Some(cl) = &self.cluster_listener else { return Ok(()) };
-                cl.accept()
-            } else {
-                self.listener.accept()
-            };
-            match accepted {
-                Ok(sock) => {
-                    sock.set_nonblocking()?;
-                    let _ = sock.set_nodelay();
-                    let fd = sock.raw();
-                    let id = self.next_conn_id;
-                    self.next_conn_id += 1;
-                    self.poller.add(fd, true, false)?;
-                    self.fd_to_conn.insert(fd, id);
-                    let mut conn = Conn::new(sock);
-                    conn.cluster = cluster;
-                    self.conns.insert(id, conn);
-                    // Client connections only — cluster-bus links are internal.
-                    if !cluster {
-                        self.commands.on_connection();
-                    }
-                }
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
-            }
-        }
-        Ok(())
-    }
-
-    // `conn_readable` (socket read + parse + dispatch) lives in
-    // [`crate::inbox`] alongside `drain_inbound` + `close_conn` — all the
-    // event handlers the `run` loop dispatches to. Still the same
-    // `impl Shard`.
-
-    // `drain_inbound` + `close_conn` live in [`crate::inbox`] to keep this
-    // file under the 500-LOC house rule; they're still on the same
-    // `impl Shard` and called from `run()` here.
-
-    /// Drop a (closing) connection's subscriptions from the shared registry, so
-    /// PUBLISH counts and the fan-out bitset don't count a gone subscriber.
-    pub(crate) fn unregister_subs(&self, subs: &std::collections::HashSet<Vec<u8>>) {
-        if subs.is_empty() {
-            return;
-        }
-        let mut reg = self.pubsub.write().expect("pubsub registry");
-        for ch in subs {
-            let drop = match reg.get_mut(ch) {
-                Some(e) => {
-                    e.0 = e.0.saturating_sub(1);
-                    e.0 == 0
-                }
-                None => false,
-            };
-            if drop {
-                reg.remove(ch);
-            }
-        }
-    }
 }

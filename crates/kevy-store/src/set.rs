@@ -1,6 +1,6 @@
 //! `Store` set commands.
 
-use crate::value::*;
+use crate::value::{SetData, SmallBytes, Value, set_member_weight};
 use crate::{Entry, Store, StoreError};
 use std::sync::Arc;
 
@@ -85,13 +85,13 @@ impl Store {
     }
 
     pub fn scard(&mut self, key: &[u8]) -> Result<usize, StoreError> {
-        Ok(self.set_ref(key)?.map_or(0, |s| s.len()))
+        Ok(self.set_ref(key)?.map_or(0, kevy_map::KevySet::len))
     }
 
     pub fn smembers(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
         Ok(self
             .set_ref(key)?
-            .map_or(Vec::new(), |s| s.iter().map(|m| m.to_vec()).collect()))
+            .map_or(Vec::new(), |s| s.iter().map(kevy_bytes::SmallBytes::to_vec).collect()))
     }
 
     /// `SPOP key count` — remove and return up to `count` arbitrary members.
@@ -100,7 +100,7 @@ impl Store {
             let mut o: Vec<Vec<u8>> = Vec::new();
             let mut d: i64 = 0;
             if let Some(s) = self.set_mut(key, false)? {
-                let take: Vec<Vec<u8>> = s.iter().take(count).map(|m| m.to_vec()).collect();
+                let take: Vec<Vec<u8>> = s.iter().take(count).map(kevy_bytes::SmallBytes::to_vec).collect();
                 for m in &take {
                     if s.remove(m.as_slice()) {
                         d -= set_member_weight(&SmallBytes::from_slice(m)) as i64;
@@ -120,7 +120,7 @@ impl Store {
         Ok(self
             .set_ref(key)?
             .map_or(Vec::new(), |s| {
-                s.iter().take(count).map(|m| m.to_vec()).collect()
+                s.iter().take(count).map(kevy_bytes::SmallBytes::to_vec).collect()
             }))
     }
 

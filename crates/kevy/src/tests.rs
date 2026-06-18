@@ -1,4 +1,5 @@
 use super::*;
+use kevy_rt::{Commands, Route, TxnKind};
 
 /// Dispatch a command (given as argv pieces) against `store`, returning RESP.
 fn d(store: &mut Store, parts: &[&[u8]]) -> Vec<u8> {
@@ -153,7 +154,7 @@ fn memory_usage_via_dispatch() {
     let reply = d(&mut s, &[b"MEMORY", b"USAGE", b"k"]);
     // Reply is `:N\r\n` — some integer > 0.
     let txt = std::str::from_utf8(&reply).unwrap();
-    assert!(txt.starts_with(":"), "expected integer reply, got {txt:?}");
+    assert!(txt.starts_with(':'), "expected integer reply, got {txt:?}");
     let n: i64 = txt[1..txt.len() - 2].parse().unwrap();
     assert!(n > 0);
     // Missing key → nil.

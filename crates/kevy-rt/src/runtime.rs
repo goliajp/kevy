@@ -23,47 +23,76 @@ const DEFAULT_RING_CAPACITY: usize = 1024;
 
 /// The public entry point: configure and run the thread-per-core server.
 pub struct Runtime<C: Commands> {
-    ip: [u8; 4],
-    port: u16,
-    nshards: usize,
-    commands: C,
+    pub(crate) ip: [u8; 4],
+    pub(crate) port: u16,
+    pub(crate) nshards: usize,
+    pub(crate) commands: C,
     /// Directory for per-shard snapshot files (`dump-<id>.rdb`) and AOF logs.
-    data_dir: PathBuf,
+    pub(crate) data_dir: PathBuf,
     /// Whether the append-only log is enabled.
-    enable_aof: bool,
+    pub(crate) enable_aof: bool,
     /// fsync policy for the AOF. Default `EverySec` matches Redis.
-    appendfsync: Fsync,
+    pub(crate) appendfsync: Fsync,
     /// auto-trigger BGREWRITEAOF when AOF grew this many % above the size
     /// at the previous rewrite. `0` disables. Default `100` (matches Redis).
-    auto_aof_rewrite_pct: u32,
+    pub(crate) auto_aof_rewrite_pct: u32,
     /// Floor below which auto-rewrite is skipped. Default `64 MiB`.
-    auto_aof_rewrite_min_size: u64,
+    pub(crate) auto_aof_rewrite_min_size: u64,
     /// Reactor SPSC ring slot count. See [`DEFAULT_RING_CAPACITY`].
-    ring_capacity: usize,
+    pub(crate) ring_capacity: usize,
     /// Reactor busy-poll iter limit before parking. Stored as `u32`
     /// for the per-shard counter; the [`Shard`] field carries it
     /// forward into the loop.
-    spin_limit: u32,
+    pub(crate) spin_limit: u32,
     /// Reactor blocking-wait timeout in ms when parked.
-    park_timeout_ms: u32,
+    pub(crate) park_timeout_ms: u32,
     /// Wall-clock-read throttle for the tick check (TTL reaper / live
     /// config refresh / auto-AOF-rewrite).
-    tick_check_every: u32,
+    pub(crate) tick_check_every: u32,
     /// `[slowlog].slower_than_micros`. Default: `-1` (OFF — zero
     /// hot-path cost: every command would otherwise pay an
     /// `Instant::now()` pair around dispatch). Set to `10_000` to match
     /// Redis's default 10 ms threshold; see [`Self::with_slowlog`] /
     /// `CONFIG SET slowlog-log-slower-than 10000`.
-    slowlog_slower_than_micros: i64,
+    pub(crate) slowlog_slower_than_micros: i64,
     /// `[slowlog].max_len`. Per-shard cap.
-    slowlog_max_len: u32,
+    pub(crate) slowlog_max_len: u32,
     /// Single-node cluster mode: slot-based key routing (CRC16 `{hashtag}`
     /// → contiguous ranges) + one deterministic extra listener per shard at
     /// `cluster_port_base + id`. `None` = off (default, zero change).
-    cluster_port_base: Option<u16>,
+    pub(crate) cluster_port_base: Option<u16>,
+    /// v3-cluster replication: when `true`, each shard runs a
+    /// `ReplicationSource` with `replication_buffer_size` byte budget;
+    /// every applied mutation is pushed to the backlog. The TCP
+    /// listener + streaming loop arrive in subsequent tasks (T1.12+);
+    /// this batch only wires the producer side. Default `false`.
+    pub(crate) enable_replication: bool,
+    /// Per-shard backlog byte budget when `enable_replication` is set.
+    /// Fed from `[replication] replication_buffer_size`. Default
+    /// `256 MiB` (matches the kevy-config default).
+    pub(crate) replication_buffer_size: u64,
+    /// v3-cluster replication listener: shard `i` binds at
+    /// `replication_port_base + i` (mirrors cluster listener pattern;
+    /// per Issue Ledger I2). `None` = no listener (producer side runs
+    /// without a network surface, backlog accumulates and evicts —
+    /// useful for benchmarks). Default `None`.
+    pub(crate) replication_port_base: Option<u16>,
+    /// Per-shard SlotTable reconnect-window in ms (T1.15). After a
+    /// streaming replica disconnects, its `(replica_id, sent_offset)`
+    /// is recorded in the shard's `slots` map; slots past this age
+    /// are reaped on the next shard tick. Default `60_000` (60 s)
+    /// matches the kevy-config default.
+    pub(crate) replication_reconnect_window_ms: u32,
+    /// Per-shard replica inboxes installed by
+    /// [`Self::with_replica_inboxes`]. Each entry is consumed
+    /// (via `Option::take`) when its shard is constructed, so the
+    /// receiver flows from this Vec to the matching `Shard.replica_inbox`.
+    /// Empty when no replica mode is configured.
+    pub(crate) replica_inboxes: Vec<Option<crate::replica_inbox::ReplicaInboxReceiver>>,
 }
 
 impl<C: Commands> Runtime<C> {
+    #[must_use]
     pub fn new(ip: [u8; 4], port: u16, nshards: usize, commands: C) -> Self {
         Runtime {
             ip,
@@ -82,83 +111,17 @@ impl<C: Commands> Runtime<C> {
             slowlog_slower_than_micros: -1,
             slowlog_max_len: 128,
             cluster_port_base: None,
+            enable_replication: false,
+            replica_inboxes: Vec::new(),
+            replication_buffer_size: 256 * 1024 * 1024,
+            replication_port_base: None,
+            replication_reconnect_window_ms: 60_000,
         }
     }
 
-    /// Enable single-node cluster mode: keys route by Redis-cluster slot
-    /// (CRC16 `{hashtag}` & 16383, contiguous even ranges) and every shard
-    /// `i` binds a second, deterministic listener at `port_base + i` that
-    /// answers wrong-shard keys with `-MOVED` instead of forwarding. The
-    /// SO_REUSEPORT listener on the main port keeps today's full
-    /// forward-anywhere behaviour for non-cluster clients.
-    pub fn with_cluster(mut self, port_base: u16) -> Self {
-        self.cluster_port_base = Some(port_base);
-        self
-    }
-
-    /// SLOWLOG tuning (`[slowlog]` config section). Default
-    /// `slower_than_micros = -1` (OFF) so the hot path never reads the
-    /// clock — every enabled command otherwise pays an `Instant::now()`
-    /// pair around dispatch, ~30 ns/op (≈9 % at 3 M ops/s). To match
-    /// Redis's 10 ms default, pass `10_000`; `0` records all; `-1`
-    /// disables. `max_len` is the per-shard ring cap (default 128).
-    pub fn with_slowlog(mut self, slower_than_micros: i64, max_len: u32) -> Self {
-        self.slowlog_slower_than_micros = slower_than_micros;
-        self.slowlog_max_len = max_len;
-        self
-    }
-
-    /// Reactor tuning knobs (`[advanced]` config section). Defaults
-    /// match the pre-v1.4 hardcoded constants. `ring_capacity` is
-    /// applied at SPSC ring construction (startup only); the other
-    /// three are read at each iteration of the reactor loop, so
-    /// values applied here take effect from the next shard.run() call.
-    pub fn with_advanced(
-        mut self,
-        spin_limit: u32,
-        park_timeout_ms: u32,
-        tick_check_every: u32,
-        ring_capacity: usize,
-    ) -> Self {
-        self.spin_limit = spin_limit;
-        self.park_timeout_ms = park_timeout_ms;
-        self.tick_check_every = tick_check_every;
-        self.ring_capacity = ring_capacity;
-        self
-    }
-
-    /// Set the directory where shards snapshot to / load from. Default: `.`.
-    pub fn with_data_dir(mut self, dir: impl Into<PathBuf>) -> Self {
-        self.data_dir = dir.into();
-        self
-    }
-
-    /// Enable/disable the append-only log. Default: enabled.
-    pub fn with_aof(mut self, on: bool) -> Self {
-        self.enable_aof = on;
-        self
-    }
-
-    /// fsync policy for the AOF. Default `EverySec` matches Redis (lose at
-    /// most ~1 s of writes on a crash). `Always` is zero-loss but ~50 %
-    /// throughput; `No` defers everything to the OS pagecache.
-    pub fn with_appendfsync(mut self, fsync: Fsync) -> Self {
-        self.appendfsync = fsync;
-        self
-    }
-
-    /// Auto-trigger BGREWRITEAOF when the live AOF has grown by at least
-    /// `pct` percent above its size at the previous rewrite, AND is at
-    /// least `min_size` bytes. `pct=0` disables auto-rewrite (clients can
-    /// still run BGREWRITEAOF manually). Defaults: 100 % / 64 MiB.
-    pub fn with_auto_aof_rewrite(mut self, pct: u32, min_size: u64) -> Self {
-        self.auto_aof_rewrite_pct = pct;
-        self.auto_aof_rewrite_min_size = min_size;
-        self
-    }
 
     /// Spawn one thread per shard and run until `stop` is set.
-    pub fn run(self, stop: Arc<AtomicBool>) -> io::Result<()> {
+    pub fn run(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {
         let n = self.nshards;
 
         // Cluster binds shard `i` at `port_base + i`; reject a range that
@@ -171,6 +134,21 @@ impl<C: Commands> Runtime<C> {
                 io::ErrorKind::InvalidInput,
                 format!(
                     "cluster port range {base}..={} exceeds 65535 ({n} shards)",
+                    base as usize + n - 1
+                ),
+            ));
+        }
+
+        // Same overflow check for the replication port range
+        // (`base + 0 .. base + n`). See Issue Ledger I2 for the
+        // per-shard listener decision.
+        if let Some(base) = self.replication_port_base
+            && base as usize + n > u16::MAX as usize + 1
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "replication port range {base}..={} exceeds 65535 ({n} shards)",
                     base as usize + n - 1
                 ),
             ));
@@ -244,6 +222,14 @@ impl<C: Commands> Runtime<C> {
                 Some(base) => Some(kevy_sys::tcp_listen(self.ip, base + id as u16, 1024)?),
                 None => None,
             };
+            // Replication listener (per Issue Ledger I2): per-shard
+            // deterministic port, same `tcp_listen` (no SO_REUSEPORT)
+            // pattern as cluster. A replica's shard-aware client will
+            // connect to every `base + id` to mirror the full keyspace.
+            let replication_listener = match self.replication_port_base {
+                Some(base) => Some(kevy_sys::tcp_listen(self.ip, base + id as u16, 1024)?),
+                None => None,
+            };
             let aof = if self.enable_aof {
                 Some(Aof::open(
                     &kevy_persist::layout::aof_path(&self.data_dir, id),
@@ -281,6 +267,21 @@ impl<C: Commands> Runtime<C> {
                 parked: parked.clone(),
                 data_dir: self.data_dir.clone(),
                 aof,
+                replicate: if self.enable_replication {
+                    Some(kevy_replicate::source::ReplicationSource::new(
+                        usize::try_from(self.replication_buffer_size)
+                            .unwrap_or(usize::MAX),
+                    ))
+                } else {
+                    None
+                },
+                replication_listener,
+                replicas: Vec::new(),
+                slots: kevy_replicate::slot::SlotTable::new(),
+                replication_reconnect_window_ms: self.replication_reconnect_window_ms,
+                replication_epoch: std::time::Instant::now(),
+                replica_inbox: self.replica_inboxes.get_mut(id).and_then(Option::take),
+                replica_snapshot_buf: Vec::new(),
                 persist: crate::persist_worker::PersistWorker::new(),
                 auto_aof_rewrite_pct: self.auto_aof_rewrite_pct,
                 auto_aof_rewrite_min_size: self.auto_aof_rewrite_min_size,
@@ -341,6 +342,17 @@ impl<C: Commands> Runtime<C> {
                 avail
             }
         };
+
+        // v1.18.0: the replication listener + accept path is wired only
+        // through the epoll/kqueue reactor (`shard.run`); the io_uring
+        // T1.12.5: io_uring + replication is now supported. The
+        // replication-adjacent work (accept / read / write / pump /
+        // slot+view+watermark ticks) is poll-driven from the io_uring
+        // reactor's tick path (mostly per-tick @ 10 Hz, with
+        // `pump_replication` + `reap_closed_replicas` per-iter via
+        // their own early returns when nothing's live). Throughput
+        // path stays io_uring-native — only replica metadata uses
+        // polling. See `Shard::run_uring`.
 
         let mut handles = Vec::with_capacity(n);
         for shard in shards {

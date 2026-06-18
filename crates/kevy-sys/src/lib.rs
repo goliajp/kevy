@@ -111,6 +111,9 @@ struct SockaddrIn {
     sin_zero: [u8; 8],
 }
 
+// Field names mirror BSD's `<netinet/in.h>` struct sockaddr_in — the `sin_*`
+// prefix is the ABI; renaming would just obscure the libc binding.
+#[allow(clippy::struct_field_names)]
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 #[repr(C)]
 struct SockaddrIn {
@@ -183,7 +186,7 @@ impl Socket {
     /// On a non-blocking socket with no data, returns `WouldBlock`.
     pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
-            let n = unsafe { ffi::read(self.fd, buf.as_mut_ptr() as *mut c_void, buf.len()) };
+            let n = unsafe { ffi::read(self.fd, buf.as_mut_ptr().cast::<c_void>(), buf.len()) };
             if n < 0 {
                 let e = io::Error::last_os_error();
                 if e.kind() == io::ErrorKind::Interrupted {
@@ -199,7 +202,7 @@ impl Socket {
     /// `WouldBlock` on a full non-blocking socket. Retries on EINTR.
     pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
         loop {
-            let n = unsafe { ffi::write(self.fd, buf.as_ptr() as *const c_void, buf.len()) };
+            let n = unsafe { ffi::write(self.fd, buf.as_ptr().cast::<c_void>(), buf.len()) };
             if n < 0 {
                 let e = io::Error::last_os_error();
                 if e.kind() == io::ErrorKind::Interrupted {
@@ -236,7 +239,7 @@ impl Socket {
                 self.fd,
                 IPPROTO_TCP,
                 TCP_NODELAY,
-                &one as *const c_int as *const c_void,
+                (&raw const one).cast::<c_void>(),
                 size_of::<c_int>() as u32,
             )
         };
@@ -253,14 +256,39 @@ impl Socket {
         let r = unsafe {
             ffi::getsockname(
                 self.fd,
-                &mut addr as *mut SockaddrIn as *mut c_void,
-                &mut len,
+                (&raw mut addr).cast::<c_void>(),
+                &raw mut len,
             )
         };
         if r < 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(u16::from_be(addr.sin_port))
+    }
+
+    /// The peer's IPv4 address + port. Used by the replication
+    /// listener to record the (ip, port) of every connected replica
+    /// for `INFO replication` / `ROLE` reporting. IPv4 only —
+    /// matches the rest of kevy-sys, which has not yet grown IPv6.
+    pub fn peer_addr(&self) -> io::Result<(std::net::Ipv4Addr, u16)> {
+        let mut addr = SockaddrIn::zeroed();
+        let mut len = size_of::<SockaddrIn>() as u32;
+        let r = unsafe {
+            ffi::getpeername(
+                self.fd,
+                (&raw mut addr).cast::<c_void>(),
+                &raw mut len,
+            )
+        };
+        if r < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // `sin_addr` is stored in network byte order as a u32 of the
+        // packed octets — `u32::from_ne_bytes(ip)` on construction
+        // (see [`SockaddrIn::new_v4`]) is the inverse of the bytes
+        // we want here.
+        let octets = addr.sin_addr.to_ne_bytes();
+        Ok((std::net::Ipv4Addr::from(octets), u16::from_be(addr.sin_port)))
     }
 }
 
@@ -290,7 +318,7 @@ fn setsockopt_int(fd: c_int, level: c_int, name: c_int, val: c_int) -> io::Resul
             fd,
             level,
             name,
-            &val as *const c_int as *const c_void,
+            (&raw const val).cast::<c_void>(),
             size_of::<c_int>() as u32,
         )
     };
@@ -318,7 +346,7 @@ fn listen_inner(ip: [u8; 4], port: u16, backlog: i32, reuseport: bool) -> io::Re
     let r = unsafe {
         ffi::bind(
             fd,
-            &addr as *const SockaddrIn as *const c_void,
+            (&raw const addr).cast::<c_void>(),
             size_of::<SockaddrIn>() as u32,
         )
     };
@@ -377,7 +405,7 @@ impl Waker {
     pub fn wake(&self) -> io::Result<()> {
         let byte = [1u8];
         loop {
-            let n = unsafe { ffi::write(self.write_fd, byte.as_ptr() as *const c_void, 1) };
+            let n = unsafe { ffi::write(self.write_fd, byte.as_ptr().cast::<c_void>(), 1) };
             if n < 0 {
                 let e = io::Error::last_os_error();
                 match e.kind() {
@@ -394,7 +422,7 @@ impl Waker {
     pub fn drain(&self) {
         let mut buf = [0u8; 64];
         loop {
-            let n = unsafe { ffi::read(self.read_fd, buf.as_mut_ptr() as *mut c_void, buf.len()) };
+            let n = unsafe { ffi::read(self.read_fd, buf.as_mut_ptr().cast::<c_void>(), buf.len()) };
             if n <= 0 {
                 break; // EAGAIN / EOF / error — nothing more to drain
             }

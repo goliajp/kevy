@@ -20,7 +20,7 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
             store.set(&args[1], args[2].to_vec(), None, false, false);
         }
         b"DEL" => {
-            let keys: Vec<Vec<u8>> = args.iter().skip(1).map(|a| a.to_vec()).collect();
+            let keys: Vec<Vec<u8>> = args.iter().skip(1).map(<[u8]>::to_vec).collect();
             store.del(&keys);
         }
         b"HSET" => {
@@ -33,11 +33,11 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
             store.hset(&args[1], &pairs).unwrap();
         }
         b"RPUSH" => {
-            let items: Vec<Vec<u8>> = args.iter().skip(2).map(|a| a.to_vec()).collect();
+            let items: Vec<Vec<u8>> = args.iter().skip(2).map(<[u8]>::to_vec).collect();
             store.rpush(&args[1], &items).unwrap();
         }
         b"SADD" => {
-            let members: Vec<Vec<u8>> = args.iter().skip(2).map(|a| a.to_vec()).collect();
+            let members: Vec<Vec<u8>> = args.iter().skip(2).map(<[u8]>::to_vec).collect();
             store.sadd(&args[1], &members).unwrap();
         }
         b"ZADD" => {
@@ -148,7 +148,7 @@ fn rewrite_reconstructs_full_keyspace() {
     src.set(
         b"ttl",
         b"x".to_vec(),
-        Some(Duration::from_secs(3600)),
+        Some(Duration::from_hours(1)),
         false,
         false,
     );

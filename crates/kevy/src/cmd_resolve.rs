@@ -82,7 +82,7 @@ fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
     match upper {
         b"HELLO" => Route::Hello,
         b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG" | b"INFO" | b"CLUSTER" | b"DEBUG"
-        | b"WAIT" | b"SHUTDOWN" | b"CLIENT" | b"SELECT" => Route::Local,
+        | b"WAIT" | b"SHUTDOWN" | b"CLIENT" | b"SELECT" | b"BLPOP" | b"BRPOP" => Route::Local,
         b"DBSIZE" => Route::Dbsize,
         b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
         b"SAVE" => Route::Save,
@@ -105,12 +105,11 @@ fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
         b"UNWATCH" => Route::Unwatch,
         b"RENAME" => Route::Rename { nx: false },
         b"RENAMENX" => Route::Rename { nx: true },
-        // Blocking pop verbs always park on the conn's own (origin) shard,
-        // from where the cross-shard arbiter fans watch registrations out
-        // to each key's owning shard (see kevy_rt::block_xshard). Routing
-        // by key instead would strand the waiter on a shard that doesn't
-        // own the connection.
-        b"BLPOP" | b"BRPOP" => Route::Local,
+        // (BLPOP / BRPOP fold into the Local-routed verb list above —
+        // they park on the conn's own origin shard, from where the
+        // cross-shard arbiter fans watch registrations out to each key's
+        // owning shard, see kevy_rt::block_xshard. Routing by key would
+        // strand the waiter on a shard that doesn't own the connection.)
         b"XREAD" => cmd_block::xread_route(args),
         b"XREADGROUP" => cmd_block::xreadgroup_route(args),
         // XGROUP / XINFO put the stream key at args[2] (after the

@@ -309,12 +309,12 @@ impl<C: Commands> Shard<C> {
             ),
             Route::Local => {
                 let meta = DispatchMeta { is_write, wake_idx, key_idx: None };
-                self.start_single_at_seq(conn_id, seq, args, self.id, is_quit, meta)
+                self.start_single_at_seq(conn_id, seq, args, self.id, is_quit, meta);
             }
             Route::Single(idx) => {
                 let shard = self.shard_of(&args[idx]);
                 let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
-                self.start_single_at_seq(conn_id, seq, args, shard, is_quit, meta)
+                self.start_single_at_seq(conn_id, seq, args, shard, is_quit, meta);
             }
             other => self.start_multi_at_seq(conn_id, seq, args, other, is_quit),
         }

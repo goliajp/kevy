@@ -14,9 +14,9 @@ use std::fs::File;
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
 
-/// Write `src`'s state (a live [`Store`] or a frozen
+/// Write `src`'s state (a live `Store` or a frozen
 /// [`kevy_store::SnapshotView`]) to `path` as a sequence of mutating RESP
-/// commands prefixed with [`crate::aof::AOF_MAGIC`]; flush + fsync before
+/// commands prefixed with `crate::aof::AOF_MAGIC`; flush + fsync before
 /// returning. Returns `(keys, bytes)`. The magic header is consistent with
 /// `Aof::open`'s fresh-file behavior so BGREWRITEAOF-produced files replay
 /// the same way live-appended ones do.
@@ -48,7 +48,7 @@ pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<(u
     let inner = w
         .into_inner()
         .map_err(|e| io::Error::other(e.to_string()))?;
-    let bytes = inner.metadata().map(|m| m.len()).unwrap_or(0);
+    let bytes = inner.metadata().map_or(0, |m| m.len());
     inner.sync_all()?;
     Ok((keys, bytes))
 }
@@ -235,7 +235,12 @@ fn write_stream_group_commands<W: Write>(
 /// replay-roundtrip to compare byte-equal, so don't introduce locale
 /// differences (`format!` is locale-free here).
 fn fmt_zset_score(s: f64) -> Vec<u8> {
-    if s.is_finite() && s == s.trunc() && s.abs() < 1e17 {
+    // Bit-exact compare is the contract — "no fractional bits in the f64",
+    // not "approximately integer". An epsilon would mis-classify near-int
+    // values as integers and change wire bytes.
+    #[allow(clippy::float_cmp)]
+    let is_integer_valued = s.is_finite() && s == s.trunc();
+    if is_integer_valued && s.abs() < 1e17 {
         format!("{}", s as i64).into_bytes()
     } else {
         format!("{s:.17}").into_bytes()
@@ -246,10 +251,10 @@ fn fmt_zset_score(s: f64) -> Vec<u8> {
 /// `*<n>\r\n` + per-arg `$<len>\r\n<bytes>\r\n`. No allocation, no
 /// double-pass — accurate to within a couple of bytes per arg.
 pub(crate) fn estimate_multibulk_bytes<A: ArgvView + ?Sized>(args: &A) -> u64 {
-    let mut n: u64 = 3 + decimal_digits(args.len() as u64) as u64;
+    let mut n: u64 = 3 + u64::from(decimal_digits(args.len() as u64));
     for i in 0..args.len() {
         let a = &args[i];
-        n += 3 + decimal_digits(a.len() as u64) as u64 + a.len() as u64 + 2;
+        n += 3 + u64::from(decimal_digits(a.len() as u64)) + a.len() as u64 + 2;
     }
     n
 }

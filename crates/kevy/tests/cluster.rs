@@ -2,9 +2,25 @@
 //! redirects on the cluster ports, full compat behaviour on the main port,
 //! and the routing migration (KevyHash → slots reshard) being lossless.
 
+use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+
+fn build_cluster_slots_reply(n: usize, cluster_base: usize) -> String {
+    let mut s = String::from("*4\r\n");
+    for i in 0..n {
+        let start = i * 4096;
+        let end = (i + 1) * 4096 - 1;
+        let _ = write!(
+            s,
+            "*3\r\n:{start}\r\n:{end}\r\n*4\r\n$9\r\n127.0.0.1\r\n:{}\r\n$40\r\n{:040x}\r\n*0\r\n",
+            cluster_base + i,
+            i + 1,
+        );
+    }
+    s
+}
 
 static START_GATE: Mutex<()> = Mutex::new(());
 
@@ -81,7 +97,7 @@ struct Server {
 
 impl Server {
     fn start(nshards: usize, cluster: bool, dir: Option<std::path::PathBuf>) -> Server {
-        let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+        let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port_block(if cluster { nshards } else { 0 });
         let cluster_base = port + 1;
         let dir = dir.unwrap_or_else(|| {
@@ -233,16 +249,7 @@ fn cluster_slots_topology_is_exact_and_covering() {
 
     // Expected bytes are fully deterministic: 4 ranges of 4096 slots, ports
     // base..base+3, node ids 0...01 — 0...04, trailing empty metadata array.
-    let mut want = String::from("*4\r\n");
-    for i in 0..n {
-        let start = i * 4096;
-        let end = (i + 1) * 4096 - 1;
-        want.push_str(&format!(
-            "*3\r\n:{start}\r\n:{end}\r\n*4\r\n$9\r\n127.0.0.1\r\n:{}\r\n$40\r\n{:040x}\r\n*0\r\n",
-            srv.cluster_base as usize + i,
-            i + 1,
-        ));
-    }
+    let want = build_cluster_slots_reply(n, srv.cluster_base as usize);
     read_reply(&mut c, want.as_bytes());
 
     // INFO reports cluster_enabled:1 with 4 known nodes.
@@ -312,3 +319,4 @@ fn reshard_migrates_kevyhash_data_to_slots_losslessly() {
         .count();
     assert!(backups > 0, "expected .premigration backups in {dir:?}");
 }
+

@@ -25,7 +25,7 @@ fn serial_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Install (idempotent) + reset `config_global` to a fresh `Config`.
@@ -77,9 +77,7 @@ fn read_config_get_value(s: &mut std::net::TcpStream, expected_key: &str) -> Opt
     // Expect `*N\r\n$<klen>\r\n<k>\r\n$<vlen>\r\n<v>\r\n`.
     let mut lines = text.split("\r\n");
     let header = lines.next()?;
-    if !header.starts_with("*") {
-        panic!("expected RESP array header, got {text:?}");
-    }
+    assert!(header.starts_with('*'), "expected RESP array header, got {text:?}");
     let n_elems: usize = header[1..].parse().unwrap();
     if n_elems == 0 {
         return None;

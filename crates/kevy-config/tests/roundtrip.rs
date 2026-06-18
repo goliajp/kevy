@@ -4,6 +4,7 @@
 
 use kevy_config::{
     AppendFsync, CliOverrides, Config, ConfigError, EvictionPolicy, LogLevel, LogOutput,
+    ReplicationRole,
 };
 use std::path::PathBuf;
 
@@ -148,4 +149,50 @@ fn source_path_recorded_when_provided() {
     let p = std::path::Path::new("/tmp/fake-kevy.toml");
     let cfg = Config::from_toml_str("", Some(p)).unwrap();
     assert_eq!(cfg.source_path.as_deref(), Some(p));
+}
+
+#[test]
+fn replication_section_parses_primary_role() {
+    let src = r#"
+[replication]
+role                    = "primary"
+listen_port_base        = 16004
+replication_buffer_size = "128mb"
+reconnect_window_ms     = 30000
+"#;
+    let cfg = Config::from_toml_str(src, None).unwrap();
+    assert_eq!(cfg.replication.role, ReplicationRole::Primary);
+    assert!(cfg.replication.upstream.is_none());
+    assert_eq!(cfg.replication.listen_port_base, 16004);
+    assert_eq!(cfg.replication.replication_buffer_size, 128 * 1024 * 1024);
+    assert_eq!(cfg.replication.reconnect_window_ms, 30_000);
+}
+
+#[test]
+fn replication_section_parses_replica_role() {
+    let src = "[replication]\nrole = \"replica\"\nupstream = \"10.0.0.1:6004\"\n";
+    let cfg = Config::from_toml_str(src, None).unwrap();
+    assert_eq!(cfg.replication.role, ReplicationRole::Replica);
+    assert_eq!(cfg.replication.upstream.as_deref(), Some("10.0.0.1:6004"));
+}
+
+#[test]
+fn replication_role_defaults_to_standalone() {
+    let cfg = Config::default();
+    assert_eq!(cfg.replication.role, ReplicationRole::Standalone);
+    assert!(cfg.replication.upstream.is_none());
+    assert_eq!(cfg.replication.listen_port_base, 0);
+}
+
+#[test]
+fn replication_unknown_role_errors() {
+    let err =
+        Config::from_toml_str("[replication]\nrole = \"witness\"\n", None).unwrap_err();
+    match err {
+        ConfigError::Schema { field, msg, .. } => {
+            assert!(field.contains("role"));
+            assert!(msg.contains("standalone"));
+        }
+        other => panic!("expected Schema, got {other:?}"),
+    }
 }

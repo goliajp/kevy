@@ -81,7 +81,7 @@ fn runtime_with_advanced_runs_cmds_correctly() {
     // over the wire — we just confirm a tuned-down ring + spin doesn't
     // break correctness. Sharded suite (separate file) gives the
     // primary regression coverage for reactor behaviour.
-    let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let port = free_port();
     let dir = std::env::temp_dir().join(format!(
         "kevy-advcfg-{}",

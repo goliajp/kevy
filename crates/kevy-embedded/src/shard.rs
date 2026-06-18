@@ -156,7 +156,7 @@ fn load_in_place(dir: &Path, config: &Config, n: usize, stores: &mut [Keyspace])
         }
         let aof = aof_path(dir, config, i, n);
         if aof.exists() {
-            total_bytes += std::fs::metadata(&aof).map(|m| m.len()).unwrap_or(0);
+            total_bytes += std::fs::metadata(&aof).map_or(0, |m| m.len());
             replay_aof(&aof, |args| {
                 total_cmds += 1;
                 crate::replay::apply(store, &args);

@@ -107,8 +107,7 @@ impl<C: Commands> Shard<C> {
         let id = ((self.id as u64) << 48) | (local_seq & 0x0000_FFFF_FFFF_FFFF);
         let timestamp_secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs() as i64);
         let mut argv: Vec<Vec<u8>> = Vec::with_capacity(args.len().min(MAX_ARGV_RECORDED));
         for i in 0..args.len().min(MAX_ARGV_RECORDED) {
             let a = &args[i];
@@ -140,10 +139,10 @@ impl<C: Commands> Shard<C> {
             SlowlogSub::Help => self.slowlog_immediate(conn_id, seq, slowlog_help_bytes()),
             SlowlogSub::Err(b) => self.slowlog_immediate(conn_id, seq, b),
             SlowlogSub::Reset => {
-                self.slowlog_fanout(conn_id, seq, Agg::AllOk, || Op::SlowlogReset)
+                self.slowlog_fanout(conn_id, seq, Agg::AllOk, || Op::SlowlogReset);
             }
             SlowlogSub::Len => {
-                self.slowlog_fanout(conn_id, seq, Agg::SumInt(0), || Op::SlowlogLen)
+                self.slowlog_fanout(conn_id, seq, Agg::SumInt(0), || Op::SlowlogLen);
             }
             SlowlogSub::Get(count) => self.slowlog_fanout(
                 conn_id,

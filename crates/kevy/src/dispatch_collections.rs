@@ -8,7 +8,7 @@
 //! over the verbs it implements, delegates to a `cmd::*` helper or a
 //! direct `store::*` call, and returns whether the verb was handled.
 
-use crate::cmd::*;
+use crate::cmd::{cmd_hset, wrong_args, emit_int_result, store_err, rest, arg_i64, ERR_NOT_INT, emit_bulk_array, cmd_pop, cmd_blpop, cmd_zadd, fmt_score, arg_f64, cmd_zrange, cmd_zrangebyscore, parse_score_bound};
 use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
     encode_simple_string,
@@ -25,24 +25,24 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
     match cmd {
         b"HSET" => cmd_hset(store, args, out),
         b"HSETNX" => {
-            if args.len() != 4 {
-                wrong_args(out, "hsetnx");
-            } else {
+            if args.len() == 4 {
                 emit_int_result(
-                    store.hsetnx(&args[1], &args[2], &args[3]).map(|b| b as i64),
+                    store.hsetnx(&args[1], &args[2], &args[3]).map(i64::from),
                     out,
                 );
+            } else {
+                wrong_args(out, "hsetnx");
             }
         }
         b"HGET" => {
-            if args.len() != 3 {
-                wrong_args(out, "hget");
-            } else {
+            if args.len() == 3 {
                 match store.hget(&args[1], &args[2]) {
                     Ok(Some(v)) => encode_bulk(out, v),
                     Ok(None) => encode_null_bulk(out),
                     Err(e) => store_err(out, e),
                 }
+            } else {
+                wrong_args(out, "hget");
             }
         }
         b"HDEL" => {
@@ -53,17 +53,17 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
             }
         }
         b"HEXISTS" => {
-            if args.len() != 3 {
-                wrong_args(out, "hexists");
+            if args.len() == 3 {
+                emit_int_result(store.hexists(&args[1], &args[2]).map(i64::from), out);
             } else {
-                emit_int_result(store.hexists(&args[1], &args[2]).map(|b| b as i64), out);
+                wrong_args(out, "hexists");
             }
         }
         b"HLEN" => {
-            if args.len() != 2 {
-                wrong_args(out, "hlen");
-            } else {
+            if args.len() == 2 {
                 emit_int_result(store.hlen(&args[1]).map(|n| n as i64), out);
+            } else {
+                wrong_args(out, "hlen");
             }
         }
         b"HINCRBY" => {
@@ -76,24 +76,24 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
             }
         }
         b"HKEYS" => {
-            if args.len() != 2 {
-                wrong_args(out, "hkeys");
-            } else {
+            if args.len() == 2 {
                 emit_bulk_array(store.hkeys(&args[1]), out);
+            } else {
+                wrong_args(out, "hkeys");
             }
         }
         b"HVALS" => {
-            if args.len() != 2 {
-                wrong_args(out, "hvals");
-            } else {
+            if args.len() == 2 {
                 emit_bulk_array(store.hvals(&args[1]), out);
+            } else {
+                wrong_args(out, "hvals");
             }
         }
         b"HGETALL" => {
-            if args.len() != 2 {
-                wrong_args(out, "hgetall");
-            } else {
+            if args.len() == 2 {
                 emit_bulk_array(store.hgetall(&args[1]), out);
+            } else {
+                wrong_args(out, "hgetall");
             }
         }
         b"HMGET" => {
@@ -146,10 +146,10 @@ pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
         b"BLPOP" => cmd_blpop(store, args, false, out),
         b"BRPOP" => cmd_blpop(store, args, true, out),
         b"LLEN" => {
-            if args.len() != 2 {
-                wrong_args(out, "llen");
-            } else {
+            if args.len() == 2 {
                 emit_int_result(store.llen(&args[1]).map(|n| n as i64), out);
+            } else {
+                wrong_args(out, "llen");
             }
         }
         b"LINDEX" => {
@@ -222,21 +222,21 @@ pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
     match cmd {
         b"ZADD" => cmd_zadd(store, args, out),
         b"ZSCORE" => {
-            if args.len() != 3 {
-                wrong_args(out, "zscore");
-            } else {
+            if args.len() == 3 {
                 match store.zscore(&args[1], &args[2]) {
                     Ok(Some(sc)) => encode_bulk(out, &fmt_score(sc)),
                     Ok(None) => encode_null_bulk(out),
                     Err(e) => store_err(out, e),
                 }
+            } else {
+                wrong_args(out, "zscore");
             }
         }
         b"ZCARD" => {
-            if args.len() != 2 {
-                wrong_args(out, "zcard");
-            } else {
+            if args.len() == 2 {
                 emit_int_result(store.zcard(&args[1]).map(|n| n as i64), out);
+            } else {
+                wrong_args(out, "zcard");
             }
         }
         b"ZREM" => {
@@ -247,14 +247,14 @@ pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
             }
         }
         b"ZRANK" => {
-            if args.len() != 3 {
-                wrong_args(out, "zrank");
-            } else {
+            if args.len() == 3 {
                 match store.zrank(&args[1], &args[2]) {
                     Ok(Some(r)) => encode_integer(out, r as i64),
                     Ok(None) => encode_null_bulk(out),
                     Err(e) => store_err(out, e),
                 }
+            } else {
+                wrong_args(out, "zrank");
             }
         }
         b"ZINCRBY" => {

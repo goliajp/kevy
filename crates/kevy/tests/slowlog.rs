@@ -102,7 +102,7 @@ struct Server {
 
 impl Server {
     fn start(slower_than_micros: i64, max_len: u32, nshards: usize) -> Self {
-        let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+        let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-slowlog-{}",
@@ -263,7 +263,7 @@ fn slowlog_aggregates_across_shards() {
     }
     let total = slowlog_len(&mut c);
     assert!(
-        total >= n as i64,
+        total >= i64::from(n),
         "expected ≥{n} SLOWLOG entries across 4 shards, got {total}"
     );
 

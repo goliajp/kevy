@@ -18,7 +18,7 @@
 use core::arch::x86_64::*;
 
 #[cfg(target_arch = "aarch64")]
-use core::arch::aarch64::*;
+use core::arch::aarch64::{uint8x16_t, vld1q_u8, vdupq_n_u8, vceqq_u8, vreinterpretq_u16_u8, vshrn_n_u16, vget_lane_u64, vreinterpret_u64_u8};
 
 /// 16-byte SIMD chunk of metadata bytes.
 #[cfg(target_arch = "x86_64")]
