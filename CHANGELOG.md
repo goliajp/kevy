@@ -4,11 +4,7 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
-## [v1.19.0] — UNRELEASED (Phase 1.5 — automatic primary failover)
-
-> **Gate:** v1.19.0 ships only after v1.18 has 72 h of dogfood soak.
-> Code complete, doc complete, perfgate clean — release pipeline
-> blocks on the soak window.
+## [v1.19.0] — 2026-06-19 (Phase 1.5 — automatic primary failover)
 
 **v3-cluster Phase 1.5 — quorum-based automatic primary failover.**
 Detection is by heartbeat every 200 ms; a peer is flagged DOWN after
