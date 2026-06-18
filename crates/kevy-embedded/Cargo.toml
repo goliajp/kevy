@@ -22,6 +22,6 @@ categories = ["database-implementations", "caching", "embedded"]
 workspace = true
 
 [dependencies]
-kevy-store = { path = "../kevy-store", version = "1.18.0" }
-kevy-persist = { path = "../kevy-persist", version = "1.18.0" }
-kevy-hash = { path = "../kevy-hash", version = "1.18.0" }
+kevy-store = { path = "../kevy-store", version = "1.19.0" }
+kevy-persist = { path = "../kevy-persist", version = "1.19.0" }
+kevy-hash = { path = "../kevy-hash", version = "1.19.0" }
