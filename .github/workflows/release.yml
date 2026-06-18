@@ -75,8 +75,10 @@ jobs:
             kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo \
             kevy-resp-client kevy-store \
             kevy-persist \
+            kevy-replicate \
             kevy-rt kevy-embedded \
-            kevy kevy-client | sort -u)
+            kevy kevy-client \
+            kevy-cluster-rw | sort -u)
           expected=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages | map(select(.publish == null)) | .[].name' \
             | sort -u)
@@ -127,8 +129,10 @@ jobs:
             kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo \
             kevy-resp-client kevy-store \
             kevy-persist \
+            kevy-replicate \
             kevy-rt kevy-embedded \
-            kevy kevy-client; do
+            kevy kevy-client \
+            kevy-cluster-rw; do
             publish_or_skip "$c"
           done
           echo "all publishable crates handled"
