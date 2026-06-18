@@ -76,6 +76,7 @@ jobs:
             kevy-resp-client kevy-store \
             kevy-persist \
             kevy-replicate \
+            kevy-elect \
             kevy-rt kevy-embedded \
             kevy kevy-client \
             kevy-cluster-rw | sort -u)
@@ -130,6 +131,7 @@ jobs:
             kevy-resp-client kevy-store \
             kevy-persist \
             kevy-replicate \
+            kevy-elect \
             kevy-rt kevy-embedded \
             kevy kevy-client \
             kevy-cluster-rw; do

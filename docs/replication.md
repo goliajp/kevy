@@ -149,6 +149,75 @@ in whatever state the last applied frame left it. To accept downstream
 replicas, also update the config (`role = "primary"` + `listen_port_base`)
 and restart — v1.18 does **not** install a downstream listener dynamically.
 
+## Automatic failover via `kevy-elect` (v1.19+ / Phase 1.5)
+
+v1.19 adds quorum-based primary failover on top of v1.18's manual
+`REPLICAOF`. Detection is by heartbeat (`HB(epoch, node_id, role,
+repl_offset)`) every `hb_interval_ms` (default 200 ms); a peer is flagged
+DOWN after `down_after_ms` (default 5 s) without a heartbeat; the alive
+replica with the highest `repl_offset` (lowest `node_id` on tie) broadcasts
+`OFFER(new_epoch, candidate_id, repl_offset)`; on collecting `N/2 + 1`
+`ACCEPT`s it promotes itself via the existing `REPLICAOF NO ONE` path and
+broadcasts `ANNOUNCE(epoch, new_primary_id, new_primary_addr)`. Peers
+receiving `ANNOUNCE` retarget their `kevy-replicate` runner at the new
+primary. Full spec: [`crates/kevy-elect/docs/protocol.md`](../crates/kevy-elect/docs/protocol.md).
+
+### Config
+
+```toml
+[cluster]
+node_id = "primary-east"              # this node's stable id (≤ 32 B ASCII)
+elect_port_base = 16104               # control-plane TCP port (shard 0 = base + 0)
+peers = "primary-east@10.0.0.1:16104,replica-1@10.0.0.2:16104,replica-2@10.0.0.3:16104"
+```
+
+The `peers` string lists EVERY node in the cluster including this one — the
+elector filters self by `node_id` at run-time. Empty `peers` ⇒ kevy-elect is
+dormant (v1.18-era configs need no edit).
+
+### Quorum and fault tolerance
+
+| N | quorum | tolerates |
+|---|---|---|
+| 3 | 2 | 1 down |
+| 5 | 3 | 2 down |
+| 7 | 4 | 3 down |
+| **2** | **2** | **0 down — degenerate, intentionally locked** |
+
+**N=2 warning.** Quorum is `N/2 + 1`, so N=2 needs both nodes alive: either
+going down means the survivor cannot reach quorum and **stays read-only**
+indefinitely (no writes accepted, no promotion). This is intentional — the
+alternative (single-node quorum) would risk a split-brain double-write on
+partition. The config linter warns at startup when `peers` lists exactly two
+entries. **Recommendation: N ≥ 3** for any deployment that needs automatic
+failover. N=2 is acceptable only when "either down = locked" is preferable to
+"both down = locked" (extremely rare).
+
+### Split-brain protection
+
+Quorum semantics protect against split-brain by construction: a partitioned
+minority cannot reach `N/2 + 1` ACCEPTs, so it cannot promote a new primary.
+Once a partition heals, the minority side sees a higher epoch from the
+majority side and demotes cleanly — at the cost of dropping any writes that
+landed on the minority while partitioned. This is the durability story
+v3-cluster Phase 1.5 ships: **writes have guaranteed durability only on the
+majority side of any partition.** Use `READCONSISTENT` to avoid stale reads;
+the write side cannot retroactively repair minority writes.
+
+### Tunables
+
+| param | default | what it does |
+|---|---|---|
+| `hb_interval_ms` | 200 | period between outbound HBs per peer |
+| `down_after_ms` | 5_000 | mark a peer DOWN after this many ms without HB |
+| `election_timeout_ms` | 3_000 | candidate waits this long for quorum ACCEPT |
+| `election_backoff_ms` | 1_000–5_000 | random jitter on failed-election backoff |
+
+Tune `hb_interval` × `down_after` to your RTT. Defaults assume a single LAN.
+A WAN deployment (which is anti-scope for v1.19 — kevy-elect is single-DC
+only) would need higher values to avoid spurious elections during transient
+WAN blips.
+
 ### Backlog tuning
 
 `replication_buffer_size` is the per-shard ring byte budget. Sizing rule of

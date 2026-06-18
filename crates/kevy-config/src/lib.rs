@@ -25,6 +25,7 @@
 #![warn(missing_docs)]
 
 mod apply;
+mod cluster;
 mod error;
 mod lex;
 mod parse;
@@ -33,9 +34,10 @@ mod replication;
 mod schema;
 mod size;
 
+pub use cluster::{ClusterSection, PeerEntry};
 pub use replication::{ReplicationRole, ReplicationSection};
 pub use schema::{
-    AdvancedSection, AppendFsync, ClusterSection, Config, ConfigError, EvictionPolicy,
+    AdvancedSection, AppendFsync, Config, ConfigError, EvictionPolicy,
     ExpirySection, LogLevel, LogOutput, LogSection, MemorySection, NotificationFlags,
     NotificationSection, PersistenceSection, ServerSection, SlowlogSection,
     parse_notification_flags,

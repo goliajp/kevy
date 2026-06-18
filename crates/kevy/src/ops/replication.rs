@@ -86,6 +86,27 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     if args.len() != 1 {
         return wrong_args(out, "role");
     }
+    // v3-cluster Phase 1.5: kevy-elect's live view wins over both
+    // dynamic REPLICAOF and static config when the operator
+    // configured `[cluster] peers = "..."`. Otherwise fall through
+    // to the v1.18 logic (REPLICAOF state → static config).
+    if let Some(snap) = crate::elect_integration::current_snapshot() {
+        use kevy_elect::message::Role as ElectRole;
+        match snap.role {
+            ElectRole::Primary => return emit_master(out),
+            ElectRole::Replica | ElectRole::Candidate => {
+                // Use the elector's current_primary as the upstream
+                // address-string; v1.19 advertises `host:port` of
+                // the kevy compat port in `ANNOUNCE`, so the
+                // primary id resolves to a parseable addr.
+                let (host, port) = match snap.current_primary.as_deref() {
+                    Some(_addr_or_id) => current_primary_host_port_from_config(),
+                    None => ("".to_string(), 0),
+                };
+                return emit_replica_addr(&host, port, out);
+            }
+        }
+    }
     // Live state from `replica_state` wins over the static config —
     // dynamic REPLICAOF retarget at runtime is the source of truth.
     if let Some((host, port)) = crate::replica_state::current_upstream() {
@@ -97,6 +118,29 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
         ReplicationRole::Standalone | ReplicationRole::Primary => emit_master(out),
         ReplicationRole::Replica => emit_replica(cfg.replication.upstream.as_deref(), out),
     }
+}
+
+/// Walk the configured peer list for the primary node's
+/// host/port. Used by `cmd_role` when kevy-elect names a primary
+/// id and we need to render it as `host:port` for the Redis
+/// reply. Falls back to `("", 0)` when the elector's
+/// `current_primary` doesn't match any peer in the config (the
+/// peer list and ANNOUNCE addr should agree, but defensive).
+fn current_primary_host_port_from_config() -> (String, u16) {
+    let snap = match crate::elect_integration::current_snapshot() {
+        Some(s) => s,
+        None => return (String::new(), 0),
+    };
+    let Some(pid) = snap.current_primary else {
+        return (String::new(), 0);
+    };
+    let cfg = config_global::get();
+    for p in &cfg.cluster.peers {
+        if p.node_id == pid {
+            return (p.host.clone(), p.port);
+        }
+    }
+    (String::new(), 0)
 }
 
 /// `REPLICAOF host port` / `REPLICAOF NO ONE` (T1.29.5 / T1.30).

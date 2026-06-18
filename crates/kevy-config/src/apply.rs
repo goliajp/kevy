@@ -147,6 +147,13 @@ impl Config {
         match item.key.as_str() {
             "enabled" => self.cluster.enabled = value_as_bool(&item)?,
             "port_base" => self.cluster.port_base = value_as_u16(&item)?,
+            "node_id" => self.cluster.node_id = value_as_string(&item)?,
+            "elect_port_base" => self.cluster.elect_port_base = value_as_u16(&item)?,
+            "peers" => {
+                let raw = value_as_string(&item)?;
+                self.cluster.peers = crate::cluster::PeerEntry::parse_list(&raw)
+                    .map_err(|tok| schema_err(&item, format!("bad peer token: {tok:?}")))?;
+            }
             k => return Err(schema_err(&item, format!("unknown [cluster] key: {k}"))),
         }
         Ok(())

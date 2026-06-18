@@ -55,6 +55,7 @@ mod dispatch_collections;
 mod dispatch_resp3;
 mod dispatch_geo;
 mod dispatch_stream;
+mod elect_integration;
 mod ops;
 mod replica_runner;
 mod replica_state;
@@ -134,6 +135,15 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
         runtime = runtime.with_cluster(cluster_port_base(&cfg));
     }
     let runtime = replication::apply(runtime, &cfg, nshards);
+    // v3-cluster Phase 1.5 / v1.19: spawn the kevy-elect control
+    // plane when the operator configured `[cluster] peers = "..."` +
+    // `node_id`. Opt-in; empty peers → no-op (v1.18 behaviour
+    // unchanged).
+    // Allocate per-shard offset slots first (always, even when
+    // elect is dormant — cost is `nshards` AtomicU64 / process,
+    // negligible).
+    elect_integration::install_shard_offsets(nshards);
+    elect_integration::maybe_start(&cfg);
     let stop = Arc::new(AtomicBool::new(false));
     // Replica runners (if any) live in process-global state in
     // `replica_state` — they are started by `replication::apply` for
@@ -142,7 +152,11 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
     // process-global slot; the `Drop` impl signals stop + joins each
     // runner thread, so the process exits cleanly with no orphan TCP
     // fds.
-    if let Err(e) = runtime.run(stop) {
+    let run_result = runtime.run(stop);
+    // Stop kevy-elect after the runtime exits so the control plane
+    // doesn't outlive the data plane.
+    elect_integration::shutdown();
+    if let Err(e) = run_result {
         eprintln!("kevy: runtime error: {e}");
         std::process::exit(1);
     }
