@@ -179,14 +179,31 @@ in-process bench (1 M ops, 12-byte key, 16-byte value):
 | `incr` | 169 ns | 5.9 M ops/s |
 | `del` | 183 ns | 5.5 M ops/s |
 
-That's roughly **130× the same-host network server on GET, 90× on
-SET** — the embedded path skips the entire wire layer (RESP encode/
-decode + TCP + syscalls). Reproduce with
-`cargo run -p kevy-embedded --example embed_throughput --release`.
+Reproduce with `cargo run -p kevy-embedded --example
+embed_throughput --release`.
 
-> This is not a kevy-vs-valkey/redis throughput claim — valkey and
-> redis have no in-process mode, so the only fair statement is
-> "embed skips the wire layer; here is how much that saves."
+#### Same Rust caller, 4 backends
+
+The fair comparison: **the same Rust program** with only the backend
+swapped — that's what an actual application sees. Single connection,
+sequential, N=200k SET + N GET; server columns all go through the
+**same** `kevy_client::Connection` RESP path, only the URL differs:
+
+| backend (same Rust caller) | SET ops/s | GET ops/s |
+|----------------------------|----------:|----------:|
+| **kevy 1.22 embed** | **9.96 M** | **13.20 M** |
+| **kevy 1.22 server @ localhost** | **65 k** | **64 k** |
+| valkey 9.1 server @ localhost | 56 k | 61 k |
+| redis 7.4 server @ localhost | 58 k | 62 k |
+
+Embed is **~150× faster on SET, ~205× on GET** than calling the same
+kevy over TCP-loopback. That's the quantified cost of "no socket, no
+protocol, no reactor" for an app that can embed. **Not** a
+kevy-vs-valkey/redis throughput claim driven by embed — valkey and
+redis have no in-process mode, so the structural gap is unavoidable.
+Reproduce with `cargo run -p kevy-embedded --example
+embed_vs_server --release --kevy-port 7011 --valkey-port 7012
+--redis-port 7013 -N 200000`.
 
 ### Pub/sub fan-out (server mode)
 
