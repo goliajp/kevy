@@ -37,7 +37,7 @@
 #![warn(missing_docs)]
 
 pub use kevy_resp::Reply;
-use kevy_resp::{encode_command, parse_reply};
+use kevy_resp::{encode_command, encode_command_borrowed, parse_reply};
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 
@@ -48,6 +48,13 @@ use std::net::TcpStream;
 pub struct RespClient {
     stream: TcpStream,
     buf: Vec<u8>,
+    /// Reused per-request encode buffer. Zero-allocation for steady-state
+    /// command traffic — the buffer grows once during the first SET, then
+    /// the same allocation backs every subsequent encode (truncated to 0
+    /// at the top of each `request*` call). Added 2026-06-20 (perf-D4)
+    /// after profiling showed Rust-client `Vec<Vec<u8>>` argv + per-call
+    /// `Vec<u8>::new()` was a measurable per-op tax even at -c1.
+    write_buf: Vec<u8>,
 }
 
 impl RespClient {
@@ -58,16 +65,37 @@ impl RespClient {
         Ok(Self {
             stream,
             buf: Vec::with_capacity(8192),
+            write_buf: Vec::with_capacity(1024),
         })
     }
 
     /// Send one command (`args` is RESP-encoded as a multibulk array) and
     /// block until exactly one reply is parsed. Returns the parsed [`Reply`].
+    ///
+    /// **Prefer [`Self::request_borrowed`]** for new code: it takes
+    /// `&[&[u8]]` (a stack-allocated slice array) and skips the per-call
+    /// `Vec<Vec<u8>>` argv heap allocations. This `request` form remains
+    /// for callers that already own `Vec<u8>` argvs.
     pub fn request(&mut self, args: &[Vec<u8>]) -> io::Result<Reply> {
-        let mut out = Vec::new();
-        encode_command(&mut out, args);
-        self.stream.write_all(&out)?;
+        self.write_buf.clear();
+        encode_command(&mut self.write_buf, args);
+        self.stream.write_all(&self.write_buf)?;
+        self.read_one_reply()
+    }
 
+    /// Zero-allocation request: argv is `&[&[u8]]`, so a caller can pass
+    /// `&[b"SET", key, value]` (a stack array of borrowed slices) and the
+    /// only allocation is the one-time growth of `self.write_buf`. The
+    /// hot path becomes `write_buf.clear() + encode + write_all + read`,
+    /// no per-op heap traffic.
+    pub fn request_borrowed(&mut self, args: &[&[u8]]) -> io::Result<Reply> {
+        self.write_buf.clear();
+        encode_command_borrowed(&mut self.write_buf, args);
+        self.stream.write_all(&self.write_buf)?;
+        self.read_one_reply()
+    }
+
+    fn read_one_reply(&mut self) -> io::Result<Reply> {
         let mut chunk = [0u8; 8192];
         loop {
             match parse_reply(&self.buf) {

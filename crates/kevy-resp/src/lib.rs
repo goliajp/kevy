@@ -52,8 +52,8 @@ pub use argv_pool::ArgvPool;
 pub use argv_view::{ArgvIter, ArgvView};
 pub use error::ProtocolError;
 pub use reply_encode::{
-    encode_array_len, encode_bulk, encode_command, encode_error, encode_integer, encode_null_bulk,
-    encode_simple_string,
+    encode_array_len, encode_bulk, encode_command, encode_command_borrowed, encode_error,
+    encode_integer, encode_null_bulk, encode_simple_string,
 };
 pub use reply_encode_resp3::{
     encode_big_number, encode_blob_error, encode_boolean, encode_double, encode_map_header,
