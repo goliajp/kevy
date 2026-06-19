@@ -11,7 +11,7 @@ use std::io;
 use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
 
-use crate::{Connection, array_to_bulks, store_err, string, unexpected, vec2, vec3};
+use crate::{Connection, array_to_bulks, store_err, string, unexpected};
 
 impl Connection {
     // ===== Hash =====
@@ -42,7 +42,7 @@ impl Connection {
     pub fn hget(&mut self, key: &[u8], field: &[u8]) -> io::Result<Option<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s.hget(key, field),
-            Self::Remote(c) => match c.request(&vec3(b"HGET", key, field))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"HGET", key, field])? {
                 Reply::Bulk(v) => Ok(Some(v)),
                 Reply::Nil => Ok(None),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
@@ -74,7 +74,7 @@ impl Connection {
     pub fn hlen(&mut self, key: &[u8]) -> io::Result<usize> {
         match self {
             Self::Embedded(s) => s.with(|inner| inner.hlen(key)).map_err(store_err),
-            Self::Remote(c) => match c.request(&vec2(b"HLEN", key))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"HLEN", key])? {
                 Reply::Int(n) if n >= 0 => Ok(n as usize),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
@@ -87,7 +87,7 @@ impl Connection {
     pub fn hgetall(&mut self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s.with(|inner| inner.hgetall(key)).map_err(store_err),
-            Self::Remote(c) => match c.request(&vec2(b"HGETALL", key))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"HGETALL", key])? {
                 Reply::Array(items) => array_to_bulks(items),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
@@ -99,7 +99,7 @@ impl Connection {
     pub fn hkeys(&mut self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s.with(|inner| inner.hkeys(key)).map_err(store_err),
-            Self::Remote(c) => match c.request(&vec2(b"HKEYS", key))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"HKEYS", key])? {
                 Reply::Array(items) => array_to_bulks(items),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
@@ -111,7 +111,7 @@ impl Connection {
     pub fn hvals(&mut self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s.with(|inner| inner.hvals(key)).map_err(store_err),
-            Self::Remote(c) => match c.request(&vec2(b"HVALS", key))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"HVALS", key])? {
                 Reply::Array(items) => array_to_bulks(items),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
@@ -158,7 +158,7 @@ impl Connection {
     pub fn llen(&mut self, key: &[u8]) -> io::Result<usize> {
         match self {
             Self::Embedded(s) => s.llen(key),
-            Self::Remote(c) => match c.request(&vec2(b"LLEN", key))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"LLEN", key])? {
                 Reply::Int(n) if n >= 0 => Ok(n as usize),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
@@ -211,7 +211,7 @@ impl Connection {
     pub fn smembers(&mut self, key: &[u8]) -> io::Result<Vec<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s.smembers(key),
-            Self::Remote(c) => match c.request(&vec2(b"SMEMBERS", key))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"SMEMBERS", key])? {
                 Reply::Array(items) => array_to_bulks(items),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
@@ -223,7 +223,7 @@ impl Connection {
     pub fn scard(&mut self, key: &[u8]) -> io::Result<usize> {
         match self {
             Self::Embedded(s) => s.scard(key),
-            Self::Remote(c) => match c.request(&vec2(b"SCARD", key))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"SCARD", key])? {
                 Reply::Int(n) if n >= 0 => Ok(n as usize),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
@@ -237,7 +237,7 @@ impl Connection {
             Self::Embedded(s) => s
                 .with(|inner| inner.sismember(key, member))
                 .map_err(store_err),
-            Self::Remote(c) => match c.request(&vec3(b"SISMEMBER", key, member))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"SISMEMBER", key, member])? {
                 Reply::Int(1) => Ok(true),
                 Reply::Int(0) => Ok(false),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
@@ -306,7 +306,7 @@ impl Connection {
     pub fn zscore(&mut self, key: &[u8], member: &[u8]) -> io::Result<Option<f64>> {
         match self {
             Self::Embedded(s) => s.zscore(key, member),
-            Self::Remote(c) => match c.request(&vec3(b"ZSCORE", key, member))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"ZSCORE", key, member])? {
                 Reply::Bulk(v) => {
                     let s = std::str::from_utf8(&v)
                         .map_err(|_| io::Error::other("non-utf8 score reply"))?;
@@ -326,7 +326,7 @@ impl Connection {
     pub fn zcard(&mut self, key: &[u8]) -> io::Result<usize> {
         match self {
             Self::Embedded(s) => s.zcard(key),
-            Self::Remote(c) => match c.request(&vec2(b"ZCARD", key))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"ZCARD", key])? {
                 Reply::Int(n) if n >= 0 => Ok(n as usize),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),

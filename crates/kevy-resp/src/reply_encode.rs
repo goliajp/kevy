@@ -60,6 +60,18 @@ pub fn encode_command(out: &mut Vec<u8>, args: &[Vec<u8>]) {
     }
 }
 
+/// Generic version of [`encode_command`] that takes any slice-of-bytes-
+/// like argv (`&[Vec<u8>]`, `&[&[u8]]`, `&[[u8; N]]`, …). Lets a Rust
+/// caller pass a stack-allocated `[&[u8]; N]` and skip the per-call
+/// `Vec<Vec<u8>>` argv allocation — measured win on the
+/// `kevy-client::Connection` -c1 path (2026-06-20 perf-D4).
+pub fn encode_command_borrowed<A: AsRef<[u8]>>(out: &mut Vec<u8>, args: &[A]) {
+    encode_array_len(out, args.len() as i64);
+    for a in args {
+        encode_bulk(out, a.as_ref());
+    }
+}
+
 /// Append the base-10 representation of `n` without allocating an intermediate
 /// String. Handles `i64::MIN` correctly.
 fn push_int(out: &mut Vec<u8>, n: i64) {

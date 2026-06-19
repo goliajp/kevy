@@ -90,7 +90,7 @@ impl Connection {
     pub fn ping(&mut self) -> io::Result<()> {
         match self {
             Self::Embedded(_) => Ok(()),
-            Self::Remote(c) => match c.request(&[b"PING".to_vec()])? {
+            Self::Remote(c) => match c.request_borrowed(&[b"PING"])? {
                 Reply::Simple(s) if s == b"PONG" => Ok(()),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
@@ -102,7 +102,7 @@ impl Connection {
     pub fn set(&mut self, key: &[u8], value: &[u8]) -> io::Result<()> {
         match self {
             Self::Embedded(s) => s.set(key, value).map(|_| ()),
-            Self::Remote(c) => match c.request(&vec3(b"SET", key, value))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"SET", key, value])? {
                 Reply::Simple(s) if s == b"OK" => Ok(()),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
@@ -114,7 +114,7 @@ impl Connection {
     pub fn get(&mut self, key: &[u8]) -> io::Result<Option<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s.get(key),
-            Self::Remote(c) => match c.request(&vec2(b"GET", key))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"GET", key])? {
                 Reply::Bulk(v) => Ok(Some(v)),
                 Reply::Nil => Ok(None),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
@@ -164,7 +164,7 @@ impl Connection {
     pub fn incr(&mut self, key: &[u8]) -> io::Result<i64> {
         match self {
             Self::Embedded(s) => s.incr(key),
-            Self::Remote(c) => match c.request(&vec2(b"INCR", key))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"INCR", key])? {
                 Reply::Int(n) => Ok(n),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
@@ -212,7 +212,7 @@ impl Connection {
     pub fn persist(&mut self, key: &[u8]) -> io::Result<bool> {
         match self {
             Self::Embedded(s) => s.persist(key),
-            Self::Remote(c) => match c.request(&vec2(b"PERSIST", key))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"PERSIST", key])? {
                 Reply::Int(1) => Ok(true),
                 Reply::Int(0) => Ok(false),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
@@ -225,7 +225,7 @@ impl Connection {
     pub fn ttl_ms(&mut self, key: &[u8]) -> io::Result<i64> {
         match self {
             Self::Embedded(s) => Ok(s.ttl_ms(key)),
-            Self::Remote(c) => match c.request(&vec2(b"PTTL", key))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"PTTL", key])? {
                 Reply::Int(n) => Ok(n),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
@@ -239,7 +239,7 @@ impl Connection {
     pub fn type_of(&mut self, key: &[u8]) -> io::Result<String> {
         match self {
             Self::Embedded(s) => Ok(s.type_of(key).to_string()),
-            Self::Remote(c) => match c.request(&vec2(b"TYPE", key))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"TYPE", key])? {
                 Reply::Simple(s) => Ok(string(s)),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
@@ -251,7 +251,7 @@ impl Connection {
     pub fn dbsize(&mut self) -> io::Result<usize> {
         match self {
             Self::Embedded(s) => Ok(s.dbsize()),
-            Self::Remote(c) => match c.request(&[b"DBSIZE".to_vec()])? {
+            Self::Remote(c) => match c.request_borrowed(&[b"DBSIZE"])? {
                 Reply::Int(n) if n >= 0 => Ok(n as usize),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
@@ -268,7 +268,7 @@ impl Connection {
     pub fn flushall(&mut self) -> io::Result<()> {
         match self {
             Self::Embedded(s) => s.flushall(),
-            Self::Remote(c) => match c.request(&[b"FLUSHALL".to_vec()])? {
+            Self::Remote(c) => match c.request_borrowed(&[b"FLUSHALL"])? {
                 Reply::Simple(s) if s == b"OK" => Ok(()),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
@@ -376,7 +376,7 @@ impl Connection {
     pub fn publish(&mut self, channel: &[u8], message: &[u8]) -> io::Result<usize> {
         match self {
             Self::Embedded(s) => Ok(s.publish(channel, message)),
-            Self::Remote(c) => match c.request(&vec3(b"PUBLISH", channel, message))? {
+            Self::Remote(c) => match c.request_borrowed(&[b"PUBLISH", channel, message])? {
                 Reply::Int(n) if n >= 0 => Ok(n as usize),
                 Reply::Error(e) => Err(io::Error::other(string(e))),
                 other => Err(unexpected(other)),
