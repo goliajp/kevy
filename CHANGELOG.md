@@ -4,18 +4,133 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
-## [v1.22.0] — UNRELEASED (Phase 4 — async client)
+## [v1.22.0] — 2026-06-20 (v3-cluster close — Phase 2 + Phase 3 + Phase 4)
 
-**v3-cluster Phase 4 — `kevy-client-async`, runtime-agnostic async
-mirror of `kevy-client`.** Apps already running on tokio / smol /
-async-std get a 1:1 async surface with the blocking client plus a
-pipeline-first batch sugar (RFC Q4 part b) that collapses N
-sequential round-trips into one. The blocking `kevy-client` stays
-the default and remains 0-dep; async is opt-in.
+Bundle release closing v3-cluster: **embed-as-read-replica**
+(Phase 2), **scoped multi-writer** (Phase 3), and **async client**
+(Phase 4). Three phases shipped together as one coherent v3
+upgrade per user policy. Server / persistence / pub-sub paths are
+unchanged from v1.19; this release lands new surface across
+`kevy-embedded`, `kevy-client`, the new `kevy-scope` and
+`kevy-client-async` crates, plus the cluster cement in `kevy/`
+and topology refinements in `kevy-cluster-rw` / `kevy-elect`.
 
-### Added
+---
 
-- **New crate `kevy-client-async`** (v1.0.0, sole dep-rule
+### Phase 2 — embed-as-read-replica
+
+An application embedding `kevy-embedded` can mirror a server
+primary's keyspace in-process — reads pay zero network round-trip;
+local writes return `READONLY` (the replication stream is the only
+writer). Same `kevy_replicate::ReplicaClient` wire client that
+drives v1.18 server replicas drives the embed runner.
+
+- **`kevy_embedded::Store::open_replica(upstream)`** — convenience
+  constructor (`without_aof` + upstream + default reconnect
+  100 ms → 5 s). Returns a normal `Store` with
+  `is_replica() == true`; cloneable and droppable like any other.
+- **`Config::with_replica_upstream(host:port)`,
+  `with_replica_id(id)`, `with_replica_reconnect(min, max)`** —
+  full builder control. Default replica id is
+  `kevy-embedded-replica`; override per process when multiple
+  replicas share one primary.
+- **`Store::is_replica()`** — live query of replica mode.
+- **READONLY enforcement** — every mutating embed API
+  (`set` / `del` / `incr_by` / `expire` / `flushall` / `hset` /
+  `hdel` / `lpush` / `rpush` / `lpop` / `rpop` / `sadd` / `srem` /
+  `zadd` / `zrem` / `persist`) returns
+  `io::Error::other("READONLY ...")` on a replica. Wire string
+  mirrors the server-side `-READONLY` reply so applications
+  pattern-match the same way against both backends. `PUBLISH`
+  remains allowed (pub/sub is process-local).
+- **`kevy_embedded::replica_runner` (pub(crate))** — one
+  background thread per `Store::open_replica`, drives a real
+  `kevy_replicate::ReplicaClient`. Exponential reconnect
+  (sliceable so shutdown is acted on within `backoff_min`),
+  interruptible `next_event`, joined on last `Store` clone drop
+  via `DropGuard`.
+- **`docs/cluster.md` "embed-as-read-replica" section** + runnable
+  example `crates/kevy-embedded/examples/replica.rs`.
+
+Internals: new `replica_glue.rs` (`spawn_replica_runner`,
+`ensure_writable`), extracted `store_persist.rs` to keep
+`store.rs` under the 500-LOC project ceiling.
+
+Anti-scope contracts: single upstream URL = single primary shard
+mirror (multi-shard upstream is "spawn N replicas" for v1.22). No
+snapshot ingest (a replica connecting at offset 0 against a
+primary whose backlog has rolled past drops the connection — full
+ingest is a follow-up). No auto-retarget on `kevy-elect`
+ANNOUNCE; pair with `kevy-cluster-rw` topology refresh for the
+automated path. No replica writes — `READONLY` is the contract.
+
+---
+
+### Phase 3 — scoped multi-writer
+
+Per-prefix writer ownership with optional server-backed fallback,
+longest-prefix routing, `-MISDIRECTED writer is <host:port>`
+redirect, and `MOVE-SCOPE` quiesce-window migration
+(Q3 = (a) per RFC). Embed-as-writer joins the cluster as a source:
+writes pushed into a replication-source backlog, served to
+subscribers (server replicas + embed read-replicas) over the same
+wire protocol Phase 2 introduced.
+
+- **new `kevy-scope` crate** — pure-data stone layer:
+  `Scope` / `OwnershipTable` (longest-prefix routing + overlap
+  linter + F4 fallback) / `MigrationTable`
+  (start/commit/abort/lookup).
+- **`kevy-config`** — `[cluster] scopes = "prefix=writer[|fallback],..."`
+  flat-string parser (same shape rationale as v1.19's `peers`).
+- **`kevy/src/scope_integration.rs`** — process-global ownership
+  + peer-addr resolution + migration state + ingest guard +
+  wire encoders.
+- **`kevy/src/ops/scope_move.rs`** — `MOVE-SCOPE` +
+  `MOVE-SCOPE-INGEST` cement (operator-issued; serialize prefix
+  slice → ship via RESP2 → ingest with route bypass → commit/abort).
+- **`kevy-cluster-rw::ReadWriteClient`** — follows `-MISDIRECTED`
+  (per-key target cache, lazy conn cache) + retries on
+  `-QUIESCED` (exponential backoff 5 ms → 80 ms, 7 attempts).
+- **`kevy-embedded::replica_source`** — embed-as-writer TCP
+  listener + accept loop + per-conn streaming threads. Reuses
+  `kevy_replicate::source::ReplicationSource`.
+- **`kevy-elect::ElectorSnapshot.down_peers`** — exposes per-peer
+  liveness for F4 fallback decisions.
+
+Wire shapes (Q3 = quiesce-window MOVE-SCOPE):
+- `-MISDIRECTED writer is <host:port>` — final redirect
+  post-migration commit.
+- `-QUIESCED migrating to <host:port>` — transient during quiesce
+  window; client backs off + retries against original primary;
+  once committed, primary returns `-MISDIRECTED` and client
+  follows.
+
+Server-side bug fix: `dispatch.rs` GET/SET fast path was BELOW
+the scope routing check; SET silently bypassed scope ownership.
+Moved scope routing ABOVE the fast path (one Relaxed atomic load
+per dispatch, below measurable noise per perfgate).
+
+Anti-scope (locked): No Raft / gossip / online resharding /
+MIGRATE-ASK. No write-shadowing during migration. No automatic
+migration (operator-issued only). No cross-scope transactions.
+Auto writer-reclaim deferred to v3.1 (v1.22 ships the manual
+recovery procedure in `docs/cluster.md`).
+
+Docs + example: `docs/cluster.md` "Scoped multi-writer" section;
+`crates/kevy-embedded/examples/scoped_writer.rs` demonstrates the
+embed-as-writer pattern.
+
+---
+
+### Phase 4 — `kevy-client-async`
+
+Apps already on tokio / smol / async-std get a 1:1 async surface
+with the blocking client plus pipeline-first batch sugar
+(RFC Q4 part b) that collapses N sequential round-trips into one.
+The blocking `kevy-client` stays the default and remains 0-dep;
+async is opt-in.
+
+- **new `kevy-client-async` crate** (v1.0.0, sole dep-rule
   exemption — RFC F5). 3 feature-gated transports:
   - `tokio` — `tokio::net::TcpStream`, default-features = false,
     minimum surface `["net", "rt", "io-util"]`.
@@ -24,21 +139,20 @@ the default and remains 0-dep; async is opt-in.
     carries an inline `# EXEMPTION — see
     feedback-pure-rust-no-c-principle.md` comment per the
     project's audit rule. T4.8 enforces exactly-one-runtime at
-    compile time (compile_error on zero or more than one).
+    compile time (`compile_error!` on zero or more than one).
     `default = ["tokio"]` as a dev convenience; lib consumers
     should set `default-features = false`.
 - **Runtime-agnostic core.** Self-defined `AsyncRead` /
   `AsyncWrite` / `AsyncTransport` traits in the futures-io shape
   (`&mut [u8]`, `Poll<io::Result<usize>>`). Each runtime ships a
   thin per-type adapter that implements our traits on top of its
-  `TcpStream`. No binding to `futures-io` /
-  `tokio::io::AsyncRead` — that would bleed an ecosystem dep into
-  the core.
+  `TcpStream`. No binding to `futures-io` / `tokio::io::AsyncRead`
+  — that would bleed an ecosystem dep into the core.
 - **`AsyncRespCodec<T>`** — async equivalent of
   `kevy_resp_client::RespClient`. Same state machine; reuses
-  `kevy_resp::{encode_command, parse_reply}` so the wire format
-  has one implementation. `request` / `send` / `read_reply` /
-  `pipeline` cover both per-command and batched paths.
+  `kevy_resp::{encode_command, parse_reply}` so wire format has
+  one implementation. `request` / `send` / `read_reply` /
+  `pipeline` cover per-command and batched paths.
 - **`AsyncConnection`** — TCP mirror of `kevy_client::Connection`.
   `open(url).await`, `from_transport(stream)`, plus 42 1:1 async
   methods across string / hash / list / set / sorted-set families.
@@ -52,127 +166,60 @@ the default and remains 0-dep; async is opt-in.
   one AsyncRespCodec per shard, CRC16 routing. 14 mirror methods.
 - **Pipeline-first sugar.** `AsyncConnection::pipeline()` returns
   a typed-by-name builder (15 commands + `push_raw` escape).
-  `run(&mut conn).await -> Result<Vec<Reply>, io::Error>` — single
-  TCP round-trip. Per-command errors surface as `Reply::Error(_)`
+  `run(&mut conn).await -> io::Result<Vec<Reply>>` — single TCP
+  round-trip. Per-command errors surface as `Reply::Error(_)`
   inside the Vec. `into_cmds()` degrades cleanly onto a blocking
   client.
-- **URL parser** — kevy:// / redis:// / tcp:// schemes accepted.
-  mem:// / file:// rejected with a pointer at the blocking client.
-- **Examples** — `examples/tokio_hello.rs` + `examples/pipeline.rs`.
+- **URL parser** — `kevy://` / `redis://` / `tcp://` schemes
+  accepted. `mem://` / `file://` rejected with a pointer at the
+  blocking client.
+- **Examples** — `examples/tokio_hello.rs` +
+  `examples/pipeline.rs`.
 - **`docs/async.md`** — full guide. README gains an "As an
   async-runtime client" subsection.
 
-### Tests
+---
 
-- 15 unit tests (mock async transport via `Waker::noop()`),
-  runtime-agnostic — verified passing under all three runtimes.
-- Per-runtime integration: `tokio_basic` (5) + `smol_basic` (4) +
-  `async_std_basic` (4). Each spawns a tiny in-process RESP
-  server, verifies both wire encode and reply decode.
-- `tests/bench_vs_blocking.rs` — three `#[ignore]` benches the
-  caller runs against a live kevy server.
-
-### Workspace
+### Tests + perfgate
 
 - `cargo test --workspace -- --test-threads=4` → **1069 passed,
-  0 failed** (was 1049 at P3 squash; +20 new tests).
-- `cargo clippy --features {tokio,smol,async-std} --all-targets
-  -- -D warnings` → clean under all three runtimes.
-- Server / blocking client / kevy-rt / kevy-store / persistence /
-  pub-sub paths untouched. T4.28 perfgate satisfied
-  by-construction; remote lx64 perfgate deferred to the bundle
-  ship gate per ship policy.
-
-### Ship policy
-
-T2.16 (Phase 2 v1.20) + T3.24 (Phase 3 v1.21) + T4.30 (Phase 4
-v1.22) are bundled into one release at the v3-cluster close. The
-final version number is decided at ship time. This entry stays
-**UNRELEASED** until that ship.
-
-## [v1.20.0] — UNRELEASED (Phase 2 — embed-as-read-replica)
-
-**v3-cluster Phase 2 — `kevy-embedded` subscribes to a kevy server's
-replication stream.** An application embedding kevy-embedded can
-mirror a server primary's keyspace in-process, paying zero network
-round-trip on reads; local writes return `READONLY` (the
-replication stream is the only writer). Single-URL upstream =
-single primary shard mirror; the same `ReplicaClient` wire client
-that drives v1.18 server replicas drives the embed runner.
-
-### Added
-
-- **`kevy_embedded::Store::open_replica(upstream)`** — convenience
-  constructor for an in-memory replica (`without_aof` + upstream +
-  default reconnect 100 ms → 5 s). Returns a normal `Store` with
-  `is_replica() == true`; cloneable and droppable like any other.
-- **`Config::with_replica_upstream(host:port)`,
-  `with_replica_id(id)`, `with_replica_reconnect(min, max)`** —
-  full builder control for the v1.20 replica surface. Default
-  replica id is `kevy-embedded-replica`; override per process when
-  multiple replicas share one primary.
-- **`Store::is_replica()`** — live query of replica mode.
-- **READONLY enforcement** — every mutating embed API
-  (`set` / `del` / `incr_by` / `expire` / `flushall` / `hset` /
-  `hdel` / `lpush` / `rpush` / `lpop` / `rpop` / `sadd` / `srem` /
-  `zadd` / `zrem` / `persist`) returns
-  `io::Error::other("READONLY ...")` on a replica. The wire string
-  mirrors the server-side `-READONLY` reply so applications can
-  pattern-match the same way against both backends. `PUBLISH`
-  remains allowed because pub/sub is process-local in kevy.
-- **`kevy_embedded::replica_runner` (`pub(crate)`)** — one
-  background thread per `Store::open_replica`, drives a real
-  `kevy_replicate::ReplicaClient` against the configured primary's
-  replication TCP listener. Exponential reconnect (sliceable so
-  shutdown is acted on within `backoff_min`), interruptible
-  `next_event` via `try_clone`'d socket + `shutdown(Both)`, owned
-  by `DropGuard` so the runner is joined on the last `Store` clone
-  drop.
-- **`docs/cluster.md` "embed-as-read-replica" section** —
-  end-to-end recipe + scope notes + failure modes.
-- **`crates/kevy-embedded/examples/replica.rs`** — runnable
-  example that mirrors a real kevy server, showing READONLY
-  rejection + the polled-catch-up shape.
-
-### Internals (refactor)
-
-- New `crates/kevy-embedded/src/replica_glue.rs` —
-  `spawn_replica_runner` + `ensure_writable`. Kept separate from
-  the runner thread module so the runner stays free of `Store`-
-  shaped dependencies.
-- `crates/kevy-embedded/src/store_persist.rs` — extracted
-  `Store::rewrite_aof` + `Store::save_snapshot` + their helpers
-  from `store.rs` to keep that file under the 500-LOC project
-  ceiling after the replica fields landed.
-- `kevy_client::Connection::Embedded(Box<Store>)` — boxed the
-  variant so the enum stays size-balanced now that `Config`
-  carries replica fields.
-
-### v1.20 scope (anti-feature contracts)
-
-- Single upstream URL = single primary shard mirror; multi-shard
-  upstream is "spawn N replicas" for v1.20. A runner-per-URL
-  surface is a follow-up.
-- No snapshot ingest: a replica connecting at offset 0 against a
-  primary whose backlog has rolled past that point drops the
-  connection. Full snapshot ingest is a v1.20.x follow-up.
-- No auto-retarget on `kevy-elect` ANNOUNCE; pair with
-  `kevy-cluster-rw` topology refresh for the automated path.
-- No replica writes — `READONLY` errors are the contract.
-
-### Tests
-
-- 996 workspace / 0 failures (macOS) + 3 new e2e
-  (`server_replica_e2e`): real `kevy_rt::Runtime` primary + embed
-  replica over real TCP loopback, READONLY rejection across every
-  mutating verb, second-write catch-up on the same connection.
-- lx64 perfgate PASS (pending; see release pipeline).
+  0 failed** (was 996 at v1.20 baseline; +73 across P2 / P3 / P4).
+- `cargo clippy --workspace --all-targets -- -D warnings` → clean.
+  Per-runtime `--features {tokio,smol,async-std} --all-targets --
+  -D warnings` clean under all three.
+- New e2e: `server_replica_e2e` (P2, 3 tests), `embed_writer_e2e`
+  + `scope_misdirected_e2e` + `scope_move_e2e` smoke (P3, 4
+  tests), `tokio_basic` + `smol_basic` + `async_std_basic` (P4,
+  5+4+4 tests).
+- `bench_vs_blocking.rs` — 3 `#[ignore]` benches the operator
+  runs against a live kevy server.
+- lx64 perfgate PASS 6/6 on P3 commit `5649148` (scope routing
+  added to dispatch hot path without measurable regression). P4
+  perfgate by-construction (server / blocking client paths
+  unchanged).
 
 ### Versions
 
-- workspace 1.19.0 → 1.20.0
-- `kevy-embedded` 1.3.0 → 1.4.0
-- `kevy-client` 1.10.0 → 1.11.0 (boxed enum variant)
+- workspace `1.19.0` → `1.22.0`
+- `kevy-embedded` `1.3.0` → `1.4.0` (P2 + P3 surface added)
+- `kevy-client` `1.10.0` → `1.11.0` (P2:
+  `Connection::Embedded(Box<Store>)` — pattern-matches need
+  `Box`-aware adjustment; rebuild required)
+- new crate `kevy-client-async` `1.0.0` (sole crates.io dep
+  exemption — tokio / smol / async-std feature-gated)
+- new crate `kevy-scope` `1.22.0`
+- workspace `rust-version` pin removed — track the latest stable
+  Rust toolchain (CI builds against current stable).
+
+### Deferred to production-vet / v1.22.x
+
+- T3.17 embed-writer-crash + fallback-takeover integration
+  (F4 algorithm unit-tested in `kevy-scope`; multi-process elect
+  integration left to actual deploys).
+- Multi-shard replica upstream (currently 1 URL = 1 primary shard
+  mirror).
+- Replica snapshot ingest on offset-zero with rolled backlog.
+- Auto writer-reclaim on F4 path (manual recovery shipped here).
 
 ## [v1.19.0] — 2026-06-19 (Phase 1.5 — automatic primary failover)
 

@@ -3,7 +3,6 @@ name = "kevy-scope"
 description = "Scoped multi-writer ownership table for kevy — per-prefix writer + fallback + MOVE-SCOPE quiesce-window migration."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

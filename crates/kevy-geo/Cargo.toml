@@ -3,7 +3,6 @@ name = "kevy-geo"
 description = "Zero-dependency geohash + great-circle distance primitives for Redis-style GEO commands in kevy."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

@@ -3,7 +3,6 @@ name = "kevy-cluster-rw"
 description = "Read/write-split cluster client for kevy — routes writes to primary, reads to replicas."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
