@@ -72,14 +72,14 @@ jobs:
           set -euo pipefail
           chain=$(printf '%s\n' \
             kevy-madvise kevy-sys kevy-hash kevy-config kevy-uring \
-            kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo \
+            kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo kevy-scope \
             kevy-resp-client kevy-store \
             kevy-persist \
             kevy-replicate \
             kevy-elect \
             kevy-rt kevy-embedded \
             kevy kevy-client \
-            kevy-cluster-rw | sort -u)
+            kevy-cluster-rw kevy-client-async | sort -u)
           expected=$(cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages | map(select(.publish == null)) | .[].name' \
             | sort -u)
@@ -122,19 +122,21 @@ jobs:
             return 1
           }
           # Topological order — leaves first, then crates that depend on
-          # them. Same chain as RELEASE-DRY-RUN.md plus kevy-client at the
-          # end (added in v1.3.0, depends on kevy-embedded + kevy-resp +
-          # kevy-resp-client).
+          # them. Same chain as RELEASE-DRY-RUN.md. v1.22.0 adds
+          # kevy-scope (pure-data stone, std-only — sits with the other
+          # leaves) and kevy-client-async (deps kevy-resp + kevy-hash;
+          # dev-dep kevy-client doesn't affect publish — placed at the
+          # end alongside kevy-cluster-rw).
           for c in \
             kevy-madvise kevy-sys kevy-hash kevy-config kevy-uring \
-            kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo \
+            kevy-bytes kevy-resp kevy-ring kevy-map kevy-geo kevy-scope \
             kevy-resp-client kevy-store \
             kevy-persist \
             kevy-replicate \
             kevy-elect \
             kevy-rt kevy-embedded \
             kevy kevy-client \
-            kevy-cluster-rw; do
+            kevy-cluster-rw kevy-client-async; do
             publish_or_skip "$c"
           done
           echo "all publishable crates handled"
