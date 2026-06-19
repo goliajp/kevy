@@ -155,12 +155,29 @@ ops,12 字节 key,16 字节 value):
 | `incr` | 169 ns | 5.9 M ops/s |
 | `del` | 183 ns | 5.5 M ops/s |
 
-大约是同主机网络服务器 GET 的 **130×、SET 的 90×** —— 嵌入式路径跳过
-整个 wire 层(RESP 编解码 + TCP + 系统调用)。用
-`cargo run -p kevy-embedded --example embed_throughput --release` 复现。
+用 `cargo run -p kevy-embedded --example embed_throughput --release`
+复现。
 
-> 这不是 kevy-vs-valkey/redis 的吞吐声明 —— valkey 和 redis 没有进程内
-> 模式,所以唯一公平的说法是"嵌入式跳过 wire 层,省了这么多"。
+#### 同一 Rust caller、4 个后端
+
+真公平对比:**同一份 Rust 程序**只换后端 —— 这才是实际应用看到的。单
+连接 sequential,N=200k SET + N GET;3 个 server 列都走**同一**
+`kevy_client::Connection` RESP 路径,只是 URL 不同:
+
+| backend(同一 Rust caller) | SET ops/s | GET ops/s |
+|----------------------------|----------:|----------:|
+| **kevy 1.22 embed** | **9.96 M** | **13.20 M** |
+| **kevy 1.22 server @ localhost** | **65 k** | **64 k** |
+| valkey 9.1 server @ localhost | 56 k | 61 k |
+| redis 7.4 server @ localhost | 58 k | 62 k |
+
+embed 是同 kevy 跑 TCP-loopback 的 **SET ~150×、GET ~205×** —— 这就
+是"无 socket、无协议、无 reactor"对能 embed 的应用而言的真实代价。
+**不是** embed-driven 的 kevy-vs-valkey/redis 吞吐声明 —— valkey 和
+redis 没有进程内模式,结构差距不可避免。用
+`cargo run -p kevy-embedded --example embed_vs_server --release
+--kevy-port 7011 --valkey-port 7012 --redis-port 7013 -N 200000`
+复现。
 
 ### Pub/sub 扇出(服务器模式)
 
