@@ -58,4 +58,10 @@ impl<C: Commands> Shard<C> {
         self.parked[me].store(false, Ordering::SeqCst);
         Ok(())
     }
+
+    // The `uring_nap` middle-rung was removed after both attempts
+    // (timeout-only variant kept here, and an inline state-machine
+    // refactor) deadlocked under Rust-client sequential -c1 load. See
+    // the idle-ladder comment in `run_uring` for the full story; the
+    // current path is spin → park.
 }

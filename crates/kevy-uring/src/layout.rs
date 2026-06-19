@@ -109,6 +109,16 @@ impl KernelTimespec {
             tv_nsec: ((ms % 1000) * 1_000_000) as i64,
         }
     }
+
+    /// A relative timeout of `us` microseconds — for sub-ms nap timers
+    /// (io_uring reactor's bounded nap; the previous `thread::sleep`
+    /// version was wake-deaf and broke -c1 Rust-client latency).
+    pub fn from_micros(us: u64) -> KernelTimespec {
+        KernelTimespec {
+            tv_sec: (us / 1_000_000) as i64,
+            tv_nsec: ((us % 1_000_000) * 1_000) as i64,
+        }
+    }
 }
 
 /// `struct io_uring_buf_reg` — `io_uring_register(IORING_REGISTER_PBUF_RING,

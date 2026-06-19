@@ -191,12 +191,12 @@ sequential, N=200k SET + N GET; server columns all go through the
 
 | backend (same Rust caller) | SET ops/s | GET ops/s |
 |----------------------------|----------:|----------:|
-| **kevy 1.22 embed** | **9.96 M** | **13.20 M** |
-| **kevy 1.22 server @ localhost** | **65 k** | **64 k** |
-| valkey 9.1 server @ localhost | 56 k | 61 k |
-| redis 7.4 server @ localhost | 58 k | 62 k |
+| **kevy 1.22 embed** | **10.10 M** | **13.76 M** |
+| **kevy 1.22 server (io_uring)** | **63.5 k** | **64.4 k** |
+| valkey 9.1 server @ localhost | 54.6 k | 53.8 k |
+| redis 7.4 server @ localhost | 62.3 k | 61.7 k |
 
-Embed is **~150× faster on SET, ~205× on GET** than calling the same
+Embed is **~160× faster on SET, ~214× on GET** than calling the same
 kevy over TCP-loopback. That's the quantified cost of "no socket, no
 protocol, no reactor" for an app that can embed. **Not** a
 kevy-vs-valkey/redis throughput claim driven by embed — valkey and

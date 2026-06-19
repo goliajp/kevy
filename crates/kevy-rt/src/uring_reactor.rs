@@ -37,13 +37,9 @@ const URING_ENTRIES: u32 = 256;
 /// the epoll reactor's `SPIN_LIMIT`). Keeps -c1 latency low without spinning a
 /// quiet shard at 100% forever.
 const URING_SPIN_LIMIT: u32 = 256;
-/// Naps (200 µs sleeps) after the spin stage before properly parking — the
-/// middle rung of the spin → nap → park idle ladder. Naps preserve the
-/// throughput behaviour under load (brief lulls aggregate work into bigger
-/// batches; an instant park/wake per lull was measured −18~21 % on the
-/// 8-shard bench), while the park rung below caps a *truly* idle shard at
-/// ~zero CPU instead of waking every 200 µs forever.
-const URING_NAP_LIMIT: u32 = 64;
+// The nap rung was removed (see the idle-ladder comment in `run_uring`).
+// URING_NAP_LIMIT / URING_NAP_MICROS / `uring_nap` are gone; spin →
+// park is the whole ladder now.
 /// Shared provided-buffer ring per shard: `PBUF_ENTRIES` buffers of `PBUF_SIZE`
 /// bytes feed the multishot recvs of every connection. One recv may fill a whole
 /// buffer; larger arrivals span several (reassembled in `Conn::input`). 128 × 16K
@@ -284,29 +280,38 @@ impl<C: Commands> Shard<C> {
             self.pump_replication()?;
             self.reap_closed_replicas();
 
-            // Idle ladder — spin, then nap, then park:
+            // Idle ladder — spin, then park (no nap rung):
             //   1. busy-poll `URING_SPIN_LIMIT` empty iterations, so a -c1
             //      client's next request is reaped immediately;
-            //   2. nap in 200 µs sleeps for `URING_NAP_LIMIT` rounds — under
-            //      load, brief lulls aggregate inbound work into bigger
-            //      batches (parking instantly here measured −18~21 % on the
-            //      8-shard bench);
-            //   3. park: blocking wait on the ring, woken by socket I/O or
-            //      the waker pipe — a truly idle shard costs ~zero CPU and
-            //      re-parks straight from a fruitless tick (the counter is
-            //      NOT reset, mirroring the epoll path's saturated state).
-            // A non-empty backlog means a peer ring is full — keep spinning
-            // to re-attempt the flush (nothing would wake us when the peer
-            // drains).
+            //   2. park: io_uring blocking wait, woken by any socket I/O
+            //      CQE, the waker pipe, or the bounding timeout. A truly
+            //      idle shard costs ~zero CPU.
+            //
+            // The previous middle rung was a `thread::sleep(200 µs)` nap
+            // intended to aggregate inbound work into bigger batches under
+            // load. It pinned Rust-client `-c1` throughput at ~4 k ops/s
+            // because `thread::sleep` is wake-deaf — a request landing in
+            // the nap window paid the full 200 µs regardless of how fast
+            // the socket data actually arrived. Both attempted nap
+            // replacements (an io_uring `prep_timeout` + `submit_and_wait`
+            // variant, and a state-machine refactor) deadlocked under
+            // sequential single-conn Rust traffic; removing the nap rung
+            // is the simpler, provably-correct fix. Park already wakes
+            // instantly on socket CQE, so latency is unaffected; the only
+            // cost is the 8-shard high-concurrency throughput note
+            // (−18~21 %) that motivated the nap originally, which gets
+            // revisited as a v1.22.x follow-up.
+            //
+            // A non-empty backlog means a peer ring is full — keep
+            // spinning to re-attempt the flush (nothing would wake us
+            // when the peer drains).
             woke_from_park = false;
             let has_backlog = self.backlog.iter().any(|b| !b.is_empty());
             if !io_work && !did_inbound && !has_backlog {
                 idle_spins = idle_spins.saturating_add(1);
-                if idle_spins >= URING_SPIN_LIMIT + URING_NAP_LIMIT {
+                if idle_spins >= URING_SPIN_LIMIT {
                     self.uring_park(&mut ring, &mut park)?;
                     woke_from_park = true;
-                } else if idle_spins >= URING_SPIN_LIMIT {
-                    std::thread::sleep(Duration::from_micros(200));
                 }
             } else {
                 idle_spins = 0;
