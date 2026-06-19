@@ -4,237 +4,263 @@
 
 [![CI](https://github.com/goliajp/kevy/actions/workflows/ci.yml/badge.svg)](https://github.com/goliajp/kevy/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#许可证)
-![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-orange.svg)
+![Rust stable](https://img.shields.io/badge/rust-stable-orange.svg)
 
-纯 Rust、**零依赖**、兼容 Redis 的键值存储 —— 既可作为独立服务器，也可作为
-嵌入式库使用，以硬件允许的最快速度运行。
+纯 Rust、**零依赖**、Redis 协议兼容的键值存储 —— 既可作独立服务器,也
+可作嵌入式库,设计目标是榨干硬件极限。
 
-kevy 使用 Redis 线协议（RESP2），因此 `redis-cli`、`valkey-cli` 以及所有
-Redis 客户端库都能**无需改动**直接连接。底层引擎是完全用 Rust 编写的现代
-thread-per-core、shared-nothing 架构 —— 唯一触及的 C 是无法回避的操作系统
-系统调用边界。
+kevy 说 Redis 线协议(RESP2),`redis-cli` / `valkey-cli` / 任何 Redis
+客户端库都能**无改动**接入。底层是 thread-per-core / shared-nothing
+现代架构,完全 Rust 实现 —— 唯一接触 C 的地方是无法绕过的 OS 系统调用边界。
 
 ```sh
-cargo run -p kevy --bin kevy --release      # 仅 loopback，AOF 开启，端口 6004
+cargo run -p kevy --bin kevy --release      # 回环,AOF 开,端口 6004
 redis-cli -p 6004 SET hello world
 ```
 
 ## 为什么选 kevy
 
-- **快** —— 高并发吞吐达 valkey 9.1 的 2.3–2.7×，pub/sub 扇出 2.7×，嵌入式
-  单核约 1800 万 ops/s（数据见下文）。
-- **占用极小** —— 768 KB 的服务器二进制，启动后内存不到 5 MB。容器 sidecar、
-  小型 VM、边缘设备都装得下。
-- **架构先进** —— thread-per-core、shared-nothing，热路径无锁，Linux 上用
-  io_uring。没有全局锁，没有 GIL 式瓶颈。
-- **无供应链风险** —— 零 crates.io 依赖。整棵依赖树只有 `std` 加 kevy 自己的
-  crate；唯一的 C 是操作系统系统调用边界，在单个 crate 里手写绑定。除了 kevy
-  本身，没有别的要审计。
-- **直接兼容** —— RESP2 线协议，与 valkey 9.1 达成 94 条命令对等，回复逐字节
-  核对。现有客户端和工具直接可用。
-- **可嵌入** —— `kevy-store` 是一个普通的 Rust 库：无网络、无运行时，还能为
-  `wasm32` 构建。同一套引擎，跑在你的进程里。
-- **资源自适应** —— 内存无上限时满速运行，受限时优雅降级，到边界时大声拒绝
-  而非静默损坏（[详见](#资源自适应设计)）。
+- **快** —— 高并发下吞吐 2.7-3.0× valkey 9.1,pub/sub 扇出 2.7×,嵌入式
+  每核 **~9 M GET / 7 M SET**(数字见下文)。
+- **占用极小** —— 768 KB 服务器二进制,启动后驻留 5 MB 以内的 RAM。
+  适合容器 sidecar、小 VM、边缘盒子。
+- **现代架构** —— thread-per-core、shared-nothing、热路径无锁、Linux 上
+  io_uring。没有全局锁、没有 GIL 类似的瓶颈。
+- **零供应链风险** —— 默认的服务器 / 阻塞客户端 / 嵌入式栈在 crates.io 上
+  零依赖。整棵代码树是 `std` + kevy 自家 crate;唯一的 C 是 OS 系统调用
+  边界,手写绑定在一个 crate 里。异步客户端(`kevy-client-async`)是唯一
+  开口的例外 —— opt-in、仅 lib 消费者使用、文档透明记录。
+- **协议兼容** —— RESP2 线协议,98 个命令与 valkey 9.1 对齐(含模式
+  pub/sub 与 `WATCH`/`UNWATCH` 乐观 CAS),逐字节比对验证回复。现有客户
+  端和工具直接可用。
+- **可复制集群**(v1.22)—— 服务器主从 + N 只读副本 + 仲裁失败切换,
+  **嵌入式节点可作为只读副本或按前缀的 writer 加入集群**。同一套线协议
+  贯穿,单份声明式拓扑。
+- **可嵌入** —— `kevy-store` 是纯 Rust 库:无网络、无 runtime,也能构建
+  到 `wasm32`。同一引擎,跑在你进程里。
+- **异步可用** —— `kevy-client-async`(v1.22)1:1 镜像阻塞客户端表面,
+  支持 `tokio` / `smol` / `async-std`,并提供 pipeline-first builder
+  把 N 条命令折叠成单次 TCP 往返。
+- **资源自适应** —— 内存不受限时全速运行,有限时优雅退化,边界处响亮
+  地拒绝而不是默默腐化数据([详见](#资源自适应设计))。
 
-关于适用范围我们如实说明：kevy 是**单机**的 —— 不做复制、集群、AUTH/TLS，
-也不直接暴露到公网（见[何时使用 kevy](#何时使用-kevy)）。
+诚实陈述范围:kevy 是**单 DC** 设计,没有 AUTH/TLS,也没有面向公网的部
+署设计(见[何时使用 kevy](#何时使用-kevy))。复制是单 DC 主从 + 仲裁切
+换;跨 DC active-active、gossip、在线 resharding、Raft 都明确不在范围内。
 
 ## 性能
 
-下列所有数据都在一台**裸金属 Intel Core i7-10700K**（8 核 / 16 线程，
-3.8 GHz 基频 / 5.1 GHz 睿频）、62 GB 内存、Linux 6.12.90 上测得，全内存。
-每项基准都可用 [`bench/`](bench/) 里的脚本复现；完整方法与注意事项见
-[`bench/REPORT.md`](bench/REPORT.md)。
+下面所有数字都在一台 **16 核裸金属 Linux** 机器(lx64)上测得,纯内存,
+服务器 / 客户端 / 负载机分别 pin 到不相交的 CPU。所有 bench 可用
+[`bench/`](bench/) 里的脚本复现;完整方法、注意事项、v0.2 → v1.22 的时
+间线叙事都在 [`bench/REPORT.md`](bench/REPORT.md)。
 
-### 服务器吞吐（走网络）
+### 服务器吞吐(走网络)
 
-> 超越 valkey 9.1 只是下限，不是目标 —— kevy 瞄准的是硬件天花板。
+> 跑赢 valkey 9.1 是底线,不是目标 —— kevy 瞄准的是硬件天花板。
 
-`redis-benchmark`，每个服务端 pin 到 0–9 核、客户端用独立核，且各自单独运行。
-每个引擎都用其最快配置（kevy：-c50 用 io_uring，-c1 用 epoll；valkey/redis：
-io-threads）：
+`redis-benchmark`,服务器 pin 在 0-9 核、客户端在隔离核上,**单独**运行
+每个引擎(启动 → 2 个热身 run → 关停),让 kevy 的 busy-poll 不会饿死同
+驻的竞争者。每个引擎都用最快配置(valkey/redis 都开 `--io-threads 10`):
 
-| 负载 | kevy | valkey 9.1 | redis 7.4 |
-|------|-----:|-----------:|----------:|
-| **-c50 -P16 GET** | **4.4 M/s** | 2.5 M/s | 2.3 M/s |
-| **-c50 -P16 SET** | **4.7 M/s** | 1.9 M/s | 2.0 M/s |
-| **-c1 GET** | **86 k/s** | 65 k/s | 48 k/s |
-| **-c1 SET** | **72 k/s** | 63 k/s | 54 k/s |
+| 工作负载 | kevy 1.22 | valkey 9.1 (io-threads) | redis 7.4 (io-threads) |
+|----------|----------:|------------------------:|-----------------------:|
+| **-c50 -P16 GET** | **6.0 M/s** | 2.0 M/s | 2.0 M/s |
+| **-c50 -P16 SET** | **4.0 M/s** | 1.5 M/s | 1.5 M/s |
+| **-c1 GET** | **68 k/s** | 60 k/s | 55 k/s |
+| **-c1 SET** | **76 k/s** | 60 k/s | 54 k/s |
 
-对比 io_uring 的 C 参考实现：kevy 手写绑定达到 148 ns 的 nop 往返，而
-liburing 2.9 是 152 ns —— 已贴 Linux 内核底线，且未链接 liburing。可用
-[`bench/loopback_c50.sh`](bench/loopback_c50.sh) 和
-[`bench/loopback_c1.sh`](bench/loopback_c1.sh) 复现。
+→ kevy 在高并发下 **GET 3.0× / SET 2.7× 优于次优者**,单连接 sequential
+(任何 busy-poll 引擎最难的工作负载)上也领先 1.13-1.26×。io_uring vs
+epoll 看负载形态(io_uring 在低并发领先,epoll 在 -c50 -P16 因 pipelining
+摊薄系统调用开销而追上)。用 [`bench/loopback_c50.sh`](bench/loopback_c50.sh)
+和 [`bench/loopback_c1.sh`](bench/loopback_c1.sh) 复现。
 
-### 集群路由（key 感知客户端）
+对 io_uring 的 C 参考:kevy 手写绑定 148 ns 完成空 round-trip,vs
+liburing 2.9 的 152 ns —— 已到 Linux 内核地板,且没链 liburing。
 
-单端口客户端落到错误 shard 时要付一次跨 shard 转发 hop。集群感知的
-[`ClusterClient`](#集群模式单机key-感知路由) 把每个 key 直接路由到其属主
-shard，消除这一 hop。干净的 lx64 16 核裸机，server/client 异核，GET 并发 64：
+### 集群路由(key 感知客户端)
+
+单端口客户端落到错误 shard 时会付出一次内部跨 shard 转发开销。集群感知
+的 [`ClusterClient`](#集群模式单机key-感知路由) 把每个 key 路由到拥有
+它的 shard,完全去掉那次跳转。lx64 16 核,服务器/客户端不相交,GET 并发
+64:
 
 | 客户端路径 | 吞吐 | p99 延迟 |
-|------------|-----:|---------:|
-| 单 shard 代理（跨 shard hop） | 333 k/s | 3858 µs |
-| **`ClusterClient`（零 hop）** | **533 k/s** | **260 µs** |
+|----------|----:|-------:|
+| 单 shard 代理(跨 shard 跳) | 333 k/s | 3858 µs |
+| **`ClusterClient`(零跳转)** | **533 k/s** | **260 µs** |
 
-**吞吐 1.6×、尾延迟降约 15×** —— 纯粹来自消除转发 hop，相比手写裸 router
-无可测开销。完整方法见 [`docs/cluster.md`](docs/cluster.md)。
+**吞吐 1.6×、尾延迟约 15× 下降** —— 完全来自去掉转发跳,跟手写裸路由相
+比无可测开销。完整方法在 [`docs/cluster.md`](docs/cluster.md)。
 
-### 嵌入式吞吐（进程内，无网络）
+### 集群模式(复制 + 失败切换 + 嵌入加入)
 
-把 [`kevy-store`](crates/kevy-store) 放进你的应用直接调用 —— 无 socket、
-无 RESP 解析、无 reactor。单核，`Store` API：
+v1.22 收尾 v3-cluster 线。一个 kevy 节点可以作为 **primary** 把每次
+mutation 串流推给 N 个 replica,或作为 **replica** 镜像 primary;**嵌入
+式节点能加入集群**,作只读副本或按前缀的 writer;`kevy-elect` 在 primary
+DOWN 时执行**仲裁自动切换**。配套客户端 `kevy-cluster-rw` 把写发往
+primary、读 round-robin 跨 replica。
 
-| 操作 | 延迟（中位数） | 吞吐 |
-|------|-------------:|-----:|
-| `get`（命中） | 54 ns | 约 1850 万 ops/s |
-| `get`（未命中） | 14 ns | — |
-| `set`（覆盖） | 76 ns | 约 1300 万 ops/s |
-| `incr` | 86 ns | — |
+```toml
+# primary
+[replication]
+role = "primary"
+listen_port_base = 16004
 
-约为**网络服务器单核吞吐的 3 倍** —— 嵌入式路径省掉了整个线协议层。可用
-`cargo run -p kevy-store --example bench_keyspace --release` 复现。
+# replica
+[replication]
+role = "replica"
+upstream = "primary.example:16004"
+```
 
-### Pub/sub 扇出（服务器模式）
+```sh
+# 运行时通过 Redis 兼容命令重定位 / 提升。
+redis-cli -p 6004 REPLICAOF primary.example 16004
+redis-cli -p 6004 REPLICAOF NO ONE
+redis-cli -p 6004 ROLE
+```
 
-1 个发布者 → 50 个订阅者，200 000 条消息，16 字节负载。kevy 是 TCP / RESP
-路径上最快的 broker：
+各阶段功能(在 v1.22 已全部合入):
+- **Phase 1**(v1.18):per-shard 线 backlog + listener、追赶 replica 的
+  快照 ship、动态 REPLICAOF / `REPLICAOF NO ONE` 重定向 + 降级、
+  `ROLE` / `INFO replication` 实时状态、`kevy-cluster-rw` 读写分裂客户端。
+- **Phase 1.5**(v1.19):`kevy-elect` 仲裁自动 primary 切换(心跳 DOWN
+  检测、OFFER/ACCEPT/ANNOUNCE、最高 offset 当选)。
+- **Phase 2**(v1.22):**嵌入式节点可作只读副本加入集群** —— 应用嵌入
+  `kevy-embedded` 后订阅 primary 的复制流,进程内镜像 keyspace。读零网
+  络 round-trip;本地写返回 `READONLY`。
+- **Phase 3**(v1.22):**按 scope 多 writer** —— `[cluster] scopes =
+  "app:billing:=embed-a,app:catalog:=embed-b"` 声明按前缀的 writer 所有
+  权;落到错前缀的节点回复 `-MISDIRECTED writer is <host:port>`。运维触发
+  的 `MOVE-SCOPE` 在 quiesce-window 协议下迁移一个前缀。
 
-| 系统 | 交付 msg/s | 相对 valkey |
-|------|----------:|----------:|
-| Aeron 1.45（IPC，共享内存） | 26.5 M | 3.90× |
-| **kevy** | **18.2 M** | **2.68×** |
-| ZeroMQ 4.3.5 | 9.3 M | 1.37× |
-| redis 7.4 | 8.5 M | 1.25× |
+反范围(永久不做):多 master 重叠、跨 DC active-active / CRDT、Raft、
+gossip 发现、在线 resharding、AUTH/TLS。
+
+完整服务器 + 客户端配方在 [`docs/replication.md`](docs/replication.md)
+和 [`docs/cluster.md`](docs/cluster.md)。
+
+### 嵌入式吞吐(进程内,无网络)
+
+把 [`kevy-embedded`](crates/kevy-embedded) drop 进你的应用,直接调用
+`Store` —— 无 socket、无 RESP 解析、无 reactor。lx64 进程内 bench(1 M
+ops,12 字节 key,16 字节 value):
+
+| 操作 | 延迟 | 吞吐 |
+|------|-----:|----:|
+| `get`(命中) | 111 ns | **9.0 M ops/s** |
+| `get`(未命中) | 24 ns | **42.2 M ops/s** |
+| `set`(覆盖) | 143 ns | **7.0 M ops/s** |
+| `incr` | 169 ns | 5.9 M ops/s |
+| `del` | 183 ns | 5.5 M ops/s |
+
+大约是同主机网络服务器 GET 的 **130×、SET 的 90×** —— 嵌入式路径跳过
+整个 wire 层(RESP 编解码 + TCP + 系统调用)。用
+`cargo run -p kevy-embedded --example embed_throughput --release` 复现。
+
+> 这不是 kevy-vs-valkey/redis 的吞吐声明 —— valkey 和 redis 没有进程内
+> 模式,所以唯一公平的说法是"嵌入式跳过 wire 层,省了这么多"。
+
+### Pub/sub 扇出(服务器模式)
+
+1 个发布者 → 50 个订阅者,200 000 条消息,16 字节负载,热身后跑。在 TCP /
+RESP 路径上 kevy 是最快的 broker:
+
+| 系统 | 投递 msg/s | vs valkey |
+|------|----------:|---------:|
+| Aeron 1.45(IPC、共享内存) | 84 M | 12.4× |
+| **kevy 1.22** | **18.5 M** | **2.72×** |
+| ZeroMQ 4.3.5 | 9.4 M | 1.38× |
+| redis 7.4 | 8.9 M | 1.31× |
 | valkey 9.1 | 6.8 M | 1.00× |
-| Zenoh 1.9 | 2.7 M | 0.40× |
+| Zenoh 1.9 | 2.9 M | 0.43× |
 
-Aeron 的共享内存 IPC 是结构性上限（不经内核网络栈）；在 TCP broker 中 kevy
-领先 —— 同样的传输下达到 ZeroMQ 的 2 倍。Pub/sub 是**服务器模式**的功能；
-嵌入式库是纯键值。方法与 6 路对比工具见
-[`bench/pubsub-compare/`](bench/pubsub-compare/)。
+Aeron 的共享内存 IPC 是结构性天花板(没有内核网络栈);在 TCP broker 里
+kevy 领先 —— 2× ZeroMQ 同传输,还压过非 broker 的 ZeroMQ direct
+messaging。Pub/sub 是**服务器模式**特性;嵌入式库是纯键值。方法 +
+6-way harness:[`bench/pubsub-compare/`](bench/pubsub-compare/)。
 
 ### 二进制大小与内存
 
 | | |
 |---|---|
-| 服务器二进制（`release`，已 strip） | **768 KB** |
-| 服务器二进制（`release-min`，`opt-level="s"`） | **640 KB** |
-| 空载 RSS（默认 16 线程） | **4.9 MB** |
-| 空载 RSS（`--threads 1`） | **2.5 MB** |
-| 每 key 内存（800 万 key 时） | 约 190 B（key + value + 表开销） |
+| 服务器二进制(`release`、stripped) | **768 KB** |
+| 服务器二进制(`release-min`、`opt-level="s"`) | **640 KB** |
+| 空载 RSS(默认 16 线程) | **4.9 MB** |
+| 空载 RSS(`--threads 1`) | **2.5 MB** |
+| 每 key 内存(8.6 M keys 时) | ~190 B(key + value + 表开销) |
 
-`SmallBytes` 把 ≤ 22 B 的负载内联，零堆分配。一个完整的 kevy 服务器是不到
-1 MB 的二进制，启动后内存不到 5 MB。
+`SmallBytes` 把 ≤ 22 B 的 payload 内联,零堆分配。完整 kevy 服务器是
+亚 MB 二进制,启动后驻留 5 MB RAM 以内。
 
 ## 快速上手
 
 ### 安装
 
-每个 [GitHub Release](https://github.com/goliajp/kevy/releases) 都附带预编译的
-`kevy` 服务器二进制。支持的目标：
+预编译的 `kevy` 服务器二进制挂在每个 [GitHub Release](https://github.com/goliajp/kevy/releases)
+上。支持平台:
 
-| 平台 | 归档文件 |
-|------|----------|
-| Linux x86_64 | `kevy-<TAG>-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux aarch64 | `kevy-<TAG>-aarch64-unknown-linux-gnu.tar.gz` |
-| macOS Apple Silicon | `kevy-<TAG>-aarch64-apple-darwin.tar.gz` |
+| 平台 | archive |
+|------|---------|
+| Linux x86_64 (glibc) | `kevy-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux aarch64 (glibc) | `kevy-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS aarch64 (Apple Silicon) | `kevy-vX.Y.Z-aarch64-apple-darwin.tar.gz` |
 
-> Windows：kevy 的 OS 层是 POSIX socket + epoll/kqueue + io_uring，没有
-> 原生 Windows 构建。请使用下面的 Docker 镜像 —— Windows 上的
-> Docker Desktop 会透明地运行 Linux 容器。
-
-一行命令安装（Linux / macOS，按需选择目标）：
+或者从源码编译:
 
 ```sh
-TAG=v1.0.0-rc4
-TARGET=x86_64-unknown-linux-gnu      # 或 aarch64-unknown-linux-gnu、aarch64-apple-darwin
-curl -L "https://github.com/goliajp/kevy/releases/download/$TAG/kevy-$TAG-$TARGET.tar.gz" | tar -xz
-sudo install "kevy-$TAG-$TARGET/kevy" /usr/local/bin/kevy
-kevy --port 6004
+git clone https://github.com/goliajp/kevy
+cd kevy
+cargo build -p kevy --bin kevy --release
+./target/release/kevy --port 6004
 ```
 
-每个归档都包含 `kevy` 二进制、`kevy.toml.example`、`README.md` 以及两份
-license。每个资源旁还发布了对应的 `.sha256`。或者按下面从源码构建。
-
-### 使用 Docker 运行
-
-官方镜像在每次发版时同时推送到 Docker Hub
-（[`goliakk/kevy`](https://hub.docker.com/r/goliakk/kevy)）和 GitHub
-Container Registry
-（[`ghcr.io/goliajp/kevy`](https://github.com/goliajp/kevy/pkgs/container/kevy)），
-两个 registry 上都是多架构（`linux/amd64` + `linux/arm64`），Tag 相同：
-`:<semver>`（如 `:1.0.0-rc6`）、`:rc`（滚动追新 RC）、`:latest`（仅
-stable，RC 期不打）。
+### 用 Docker 运行
 
 ```sh
-# 临时运行
-docker run --rm -p 6379:6379 goliakk/kevy:rc
-
-# 持久化（快照 + AOF 通过命名卷在重启后保留）
-docker run -d --name kevy -p 6379:6379 -v kevy-data:/data goliakk/kevy:rc
-redis-cli -p 6379 SET foo bar
+# 主线镜像:基于 distroless 的 kevy server。
+docker run --rm -p 6004:6004 ghcr.io/goliajp/kevy:1.22 \
+  kevy --bind 0.0.0.0 --port 6004
 ```
 
-镜像默认值：`KEVY_BIND=0.0.0.0`、`KEVY_PORT=6379`、`KEVY_DIR=/data`、
-`KEVY_AOF=1`。用 `-e` 覆盖，或在镜像名后面接 CLI 参数：
-`docker run ... goliakk/kevy:rc --threads 4 --port 7000`。
-
-Linux 内核 5.13+ 可以启用 io_uring reactor。Docker 默认 seccomp 拦截
-`io_uring_setup`，需要放开：
-
-```sh
-docker run --rm -p 6379:6379 -e KEVY_IO_URING=1 \
-  --security-opt seccomp=unconfined goliakk/kevy:rc
-```
-
-更喜欢 GitHub registry？把上面任何 `goliakk/kevy` 替换成
-`ghcr.io/goliajp/kevy` 即可 —— 同一镜像、同样 tag。
+镜像包含 `kevy` 和 `kevy-cli`(redis-cli 替代品),并设了 HEALTHCHECK
+监控 RESP `PING` 回复。
 
 ### 作为服务器
 
 ```sh
-# 用默认配置构建并运行（仅 loopback，AOF 开启，端口 6004）
+# 默认:回环、AOF 关、端口 6004。
 cargo run -p kevy --bin kevy --release
-
-# 或使用 TOML 配置文件
-cp crates/kevy/kevy.toml.example ./kevy.toml
-cargo run -p kevy --bin kevy --release -- --config ./kevy.toml
-
-redis-cli -p 6004 SET foo bar
-redis-cli -p 6004 GET foo
 ```
 
-优先级为 CLI 参数 > 环境变量 > TOML 文件 > 内置默认值：
+配置文件(可选):
+
+```toml
+# kevy.toml
+port = 6004
+bind = "127.0.0.1"
+threads = 8           # shard 数,默认 = CPU 数
+persist_dir = "/var/lib/kevy"
+aof = true
+```
+
+通过 `kevy --config kevy.toml` 装载,或者完全用环境变量:`KEVY_BIND`、
+`KEVY_PORT`、`KEVY_THREADS`、`KEVY_AOF`、`KEVY_IO_URING`。
+
+### 集群模式(单机,key 感知路由)
 
 ```sh
-kevy --bind 0.0.0.0 --port 7000 --threads 4 --dir /var/lib/kevy
-# 等价环境变量：KEVY_BIND  KEVY_PORT  KEVY_THREADS  KEVY_DIR  KEVY_AOF
+kevy --threads 8 --cluster          # 主端口 6004、shard 端口 6005-6012
+redis-cli -c -p 6005 SET foo bar    # 自动跟 MOVED
 ```
 
-带完整注释的配置 schema 见
-[`crates/kevy/kevy.toml.example`](crates/kevy/kevy.toml.example)。
-
-### 集群模式（单机，key 感知路由）
-
-`--cluster`（或 `KEVY_CLUSTER=1` / `[cluster] enabled = true`）把每个 shard
-暴露为一个虚拟集群节点：shard `i` 在 `port + 1 + i` 上多开一个确定端口，
-`CLUSTER SLOTS / SHARDS / NODES` 上报真实拓扑，错误 shard 的 key 在集群端口上
-回 `-MOVED` 而非转发。这不是多机分布式（无 failover / 在线 reshard / gossip），
-而是 shard 路由的载体。
-
-```sh
-kevy --threads 8 --cluster          # 主端口 6004，shard 端口 6005-6012
-redis-cli -c -p 6005 SET foo bar    # 自动跟随 MOVED
-```
-
-Rust 调用方可用 [`kevy-client`](crates/kevy-client) 1.9.0 的类型化
-`ClusterClient`：一次发现拓扑后，每个 key 按 CRC16 slot 直达属主 shard，
-无 `-MOVED`、无转发 hop（即上文 **1.6× 吞吐 / 15× 尾延迟** 的来源）：
+对 Rust 调用者,[`kevy-client`](crates/kevy-client) 1.11 提供了类型化
+`ClusterClient` —— 一次发现拓扑,然后把每个 key 路由到拥有它的 shard,
+无 `-MOVED` 无转发跳(就是上面那个 **1.6× 吞吐 / 15× 尾延迟** 胜利):
 
 ```rust
-// Cargo.toml: kevy-client = "1.9.0"
+// Cargo.toml: kevy-client = "1.11"
 use kevy_client::ClusterClient;
 
 let mut cc = ClusterClient::connect("127.0.0.1", 6005)?;  // 任一 shard 端口作种子
@@ -244,110 +270,191 @@ let removed = cc.del(&[b"a", b"b", b"c"])?;               // 多 key 可跨 shar
 # Ok::<(), std::io::Error>(())
 ```
 
-覆盖 string / hash / list / set / zset / del / exists / dbsize / flushall /
-ping / publish；完整指南、命令表与 same-slot 规则见
-[`docs/cluster.md`](docs/cluster.md)。
+它包了 string / hash / list / set / sorted-set / del / exists /
+dbsize / flushall / ping / publish;完整指南、命令表、same-slot 规则在
+[`docs/cluster.md`](docs/cluster.md)。当一个客户端推的负载大到 hop 显
+眼时用它;普通情况下单端口 `Connection` 仍然正确且更简单。
 
-### 资源自适应设计
+与 Redis Cluster 的超集说明(单机集群模式 —— 无 gossip / MIGRATE-ASK /
+在线 resharding):跨 slot 多 key 命令(`MGET`、`SUNION`、事务、阻塞扇
+出)直接执行而不是 `-CROSSSLOT` 失败;keyspace 级视图(`KEYS`、`SCAN`、
+`DBSIZE`)在每个端口都保持全 keyspace 视图。已有数据目录在集群模式间切
+换会启动时一次性 re-home(原文件备份为 `*.premigration.<ts>`)。
 
-kevy 对资源遵循一条原则：**有空间就释放性能，没空间就保命，到边界就硬卡，
-且永远大声报错——绝不静默。**
+要带 primary + replicas + 自动失败切换的多节点集群,见上方**集群模式
+(复制 + 失败切换 + 嵌入加入)**段 —— v1.22 已交付 server-as-replica、
+embed-as-replica、按 scope 多 writer、仲裁提升。
 
-- **无上限 = 满速**：`maxmemory = 0`（默认）时零记账开销（eviction 记账被编译期
-  跳过，单条不命中分支）。没设的限制不收你一分钱。
-- **有上限 = 优雅淘汰**：设 `maxmemory` + 策略（LRU / LFU / Random / TTL，共 8
-  种）后,写入会采样淘汰 key 直到回落到限额 **5% 以下**（留 headroom，下一次写
-  不会立即再触发淘汰）。
-- **边界 = 大声拒绝，不损坏**：`NoEviction`（默认策略）下，会超预算的写在执行前
-  就以 Redis 经典 `OOM` 错误被拒（热路径 O(1) precheck）。只卡**会增长内存**的
-  动词；收缩类（`DEL`/`LPOP`/`SREM`/`EXPIRE`…）和 `FLUSH*` 永远放行，让你总能
-  救回实例。
-- **能力降级，不崩溃**：io_uring 启动时探测，旧内核 / seccomp 沙箱下**回退到
-  epoll**；`wasm32` 嵌入构建以宿主喂时钟 + 受限 surface 运行而非拒绝构建；
-  非 loopback 的 `--bind` 会**打印警告**（kevy 无 AUTH/TLS）而非静默暴露。
+### 作为异步运行时客户端
+
+已经跑在 `tokio` / `smol` / `async-std` 上的应用,用阻塞客户端的异步镜像:
+
+```rust
+// Cargo.toml: kevy-client-async = { version = "1", features = ["tokio"] }
+use kevy_client_async::AsyncConnection;
+
+let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
+conn.set(b"k", b"v").await?;
+let v = conn.get(b"k").await?;
+
+// 把 N 条命令 pipeline 成单次 TCP round-trip:
+let replies = conn.pipeline()
+    .set(b"a", b"1").get(b"a").incr(b"hits")
+    .run(&mut conn).await?;
+# Ok::<(), std::io::Error>(())
+```
+
+必须显式选一个 runtime feature(`tokio` / `smol` / `async-std`);零个或
+两个以上编译报错。阻塞的 [`kevy-client`](crates/kevy-client) 仍是默认且
+保持 0 依赖 —— async 是 opt-in。完整指南 + runtime 比较 + 何时 pipeline:
+[`docs/async.md`](docs/async.md)。
 
 ### 作为嵌入式库
 
 ```rust
-// Cargo.toml: kevy-store = "0.1"
-use kevy_store::Store;
+// Cargo.toml: kevy-embedded = "1.4"
+use kevy_embedded::{Config, Store};
 
-let mut s = Store::default();
-s.set(b"key".to_vec(), b"value".to_vec(), None, false, false);
-assert_eq!(s.get(b"key").unwrap().unwrap(), b"value");
+let s = Store::open(Config::default().without_aof())?;
+s.set(b"key", b"value")?;
+assert_eq!(s.get(b"key")?, Some(b"value".to_vec()));
+# Ok::<(), std::io::Error>(())
 ```
+
+`Store` 处处 `&self` —— 在线程间随便 clone,shard 内部自己锁。需要持久
+化文件存储用 `Config::default().with_persist("/var/lib/myapp")`。要让
+嵌入式作为服务器 primary 的只读副本(v1.22),见
+[`docs/replication.md`](docs/replication.md)。
+
+## 资源自适应设计
+
+kevy 关于资源遵守一条规则:**有空间就跑全速,没空间就活下去,边界处硬
+拒绝,大声失败 —— 永不静默**。这贯穿引擎:
+
+- **无界 = 全速**。`maxmemory = 0`(默认)时,会计开销编译期就被单分
+  支判定优化掉。你没设置的限制就完全不付任何代价。
+- **有界 = 优雅 eviction**。设 `maxmemory` + 策略(LRU / LFU / Random /
+  TTL,共 8 种),写命令把采样的 key 驱逐到**限额下 5%** —— 留头部空间
+  让下一次写不会立即又进入 eviction。
+- **边界 = 大声拒绝,不腐化**。`NoEviction`(默认策略)下,会超预算的
+  写在执行前就以 Redis 经典 `OOM` 错误被拒绝 —— 热路径上 O(1) 预检。只
+  对内存**增长**的动词加门,缩减(`DEL` / `LPOP` / `SREM` / `EXPIRE` /
+  …)和 `FLUSH*` 总能过,所以满实例总能恢复。
+- **能力降级,不崩**。io_uring 启动时探测,**回退到 epoll** 在旧内核 /
+  seccomp 沙箱里(可用 `KEVY_IO_URING` 强制)。`wasm32` 嵌入式构建走
+  host 喂时钟、surface 缩水,而不是构建失败。非回环 `--bind` **打 warning**
+  (kevy 无 AUTH/TLS),而不是默默暴露你。
+
+集群感知的 [`ClusterClient`](#集群模式单机key-感知路由) 在客户端遵循同
+样哲学:当负载让 hop 显眼时花连接数去跳过它,平时停在简单单端口上。
 
 ## 何时使用 kevy
 
-kevy v1.0 已经为以下四种场景做好了生产就绪：
+✅ 适合:
+- 内部缓存 / 会话存储 / 速率限制 / 排行榜 / 计数 / pub/sub 总线
+- 边缘盒子 / VM sidecar / 容器内同主机协作进程
+- Rust 应用需要进程内 KV(以及可选的本地集群 join)
+- 在更大的 redis 兼容 KV 之前的快速、可信反检索基线
 
-1. **本地开发** —— `cargo run -p kevy` 配上你惯用的 Redis 客户端。
-2. **docker-compose 内部** —— 网络内设 `KEVY_BIND=0.0.0.0`；信任边界就是
-   docker 网络本身。
-3. **嵌入式库** —— 把 [`kevy-store`](crates/kevy-store) 直接放进你的应用：
-   无网络、无 reactor。
-4. **缓存** —— 前面挡着一个真正的数据库，kevy 用 TTL + `maxmemory` +
-   LRU / LFU 淘汰来托管热数据。
-
-**设计上不在范围内：** 复制、集群、AUTH / TLS，以及直接暴露到公网。
-若需要高可用 / 多机，请用 Kubernetes StatefulSet 或 sidecar 代理模式。
-完整的范围取舍说明与 94 条命令对等表见
-[`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md)。
+❌ 不适合:
+- 公网或多租户 SaaS 部署(无 AUTH/TLS,永久不会有)
+- 跨 DC 主主复制 / 强一致性需求(单 DC primary-replica + 仲裁失败切
+  换 —— 是这个范围)
+- 持久数据库 ACID / 全文搜索 / 时序 / 关系查询(不在范围内 —— 用专门
+  的存储)
 
 ## Crates
 
-kevy 由一组小而可复用的 crate 构成 —— 8 个可发布的库，外加服务端内部组件：
+主要的 publish 到 crates.io 的 crate:
 
-| crate | 职责 |
+| crate | 用途 |
 |-------|------|
-| [`kevy-bytes`](crates/kevy-bytes) | 自有字节串，内联或堆分配的小字符串优化 |
-| [`kevy-hash`](crates/kevy-hash) | 面向单一信任域 keyspace 的快速非加密 hash |
-| [`kevy-map`](crates/kevy-map) | 带 SIMD 分组扫描的 Swiss-table hashmap |
-| [`kevy-resp`](crates/kevy-resp) | 零分配 RESP2 / 3 解析器 |
-| [`kevy-ring`](crates/kevy-ring) | 有界无锁 SPSC 队列 |
-| [`kevy-madvise`](crates/kevy-madvise) | Linux `MADV_HUGEPAGE` 封装，其他平台为 no-op |
-| [`kevy-uring`](crates/kevy-uring) | 纯 Rust io_uring 绑定，不依赖 liburing |
-| [`kevy-resp-client`](crates/kevy-resp-client) | 阻塞式 RESP2 客户端 |
-| `kevy-config` · `kevy-store` · `kevy-rt` · `kevy-persist` | 配置、keyspace、运行时、持久化 |
-| `kevy-sys` | 唯一的 libc 边界（服务端内部） |
-| `kevy` | 服务器二进制 |
+| [`kevy`](crates/kevy) | 服务器二进制 `kevy` 与 `kevy-cli` |
+| [`kevy-embedded`](crates/kevy-embedded) | 嵌入式 `Store` + Config + replica/writer 加入 |
+| [`kevy-client`](crates/kevy-client) | 阻塞客户端 + `ClusterClient` |
+| [`kevy-client-async`](crates/kevy-client-async) | 异步客户端(tokio/smol/async-std) |
+| [`kevy-store`](crates/kevy-store) | 底层 shard `Store`(嵌入用,无 config 装配) |
+| [`kevy-resp`](crates/kevy-resp) | RESP2/3 编解码 |
+| [`kevy-resp-client`](crates/kevy-resp-client) | 阻塞 RESP 客户端基础 |
+| [`kevy-scope`](crates/kevy-scope) | 按 scope 的 writer 所有权(P3) |
+| [`kevy-replicate`](crates/kevy-replicate) | 复制流协议 + 客户端 |
+| [`kevy-elect`](crates/kevy-elect) | 仲裁切换协议 |
+| [`kevy-cluster-rw`](crates/kevy-cluster-rw) | 读写分裂 + scope 路由客户端 |
+
+其他次要 crate(`kevy-bytes` / `kevy-hash` / `kevy-map` / `kevy-rt` /
+`kevy-persist` / `kevy-sys` / `kevy-uring` / `kevy-madvise` / `kevy-ring` /
+`kevy-config` / `kevy-geo`)也都在 crates.io,组合时可单独取用。
+
+## 嵌入式 ↔ 服务器,一个 URL
+
+[`kevy-client`](crates/kevy-client) 把两个后端藏在同一个 URL 接口下,所
+以业务代码可以**用 URL 字符串切换** in-process 嵌入式 / TCP 服务器:
+
+| URL | 后端 |
+|-----|------|
+| `mem://` | 进程内嵌入式,纯内存,匿名 bus |
+| `mem://<name>` | 进程内嵌入式,纯内存,**命名 shared bus**(同 name 不同 open 看到一致 pub/sub 总线) |
+| `file:///abs/path` | 进程内嵌入式 + 持久化(AOF) |
+| `kevy://host[:port][/db]` | TCP RESP,kevy 原生别名 |
+| `redis://host[:port][/db]` | TCP RESP,标准 Redis URL |
+| `tcp://host[:port]` | TCP RESP,纯地址(无 SELECT 头) |
+
+```rust
+use kevy_client::Connection;
+
+let url = std::env::var("MY_KEVY_URL").unwrap();
+let mut c = Connection::open(&url)?;
+c.set(b"hello", b"world")?;
+assert_eq!(c.get(b"hello")?, Some(b"world".to_vec()));
+# Ok::<(), std::io::Error>(())
+```
+
+dev/test 用 `mem://`、staging 用 `file:///tmp/staging`、prod 用
+`kevy://prod-host:6004` —— 业务代码不变。
 
 ## 命令
 
-五种 Redis 数据类型 —— **String、Hash、List、Set、Sorted Set** —— 外加
-**Streams**（`XADD` / `XREAD` / `XRANGE` / 消费者组）、**阻塞弹出**
-（`BLPOP` / `BRPOP` / `XREAD BLOCK` / `XREADGROUP BLOCK` —— 单键与多键、
-**可跨分片**）、**pub/sub**（`SUBSCRIBE` / `PSUBSCRIBE` —— 模式 glob）、
-**事务**（`MULTI` / `EXEC` / `DISCARD` / `WATCH` / `UNWATCH` —— 乐观 CAS）、
-持久化（`SAVE` / `BGSAVE` / `BGREWRITEAOF`）和运维命令（`INFO` / `CONFIG`
-（真正的热修改）/ `CLIENT` / …）。多键命令、pub/sub、WATCH 和阻塞弹出都能
-跨每核分片工作，`WRONGTYPE` 的行为与 Redis 一致。
+参见 [`docs/COMMANDS.md`](docs/COMMANDS.md)。简短的话:**string / hash /
+list / set / sorted-set / 模式 pub/sub** 完整;**transactions**
+(`MULTI`/`EXEC`/`WATCH`)完整;**streams**(`XADD`/`XREAD`/`XLEN`)子集;
+**keyspace 通知**(`__keyspace@*__:*` / `__keyevent@*__:*`)完整。
 
-带 valkey 对等说明的完整命令列表见
-[`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md)。
+`SCAN` / `HSCAN` / `SSCAN` / `ZSCAN` 完整 cursor 实现。`OBJECT
+ENCODING` 在每个类型上回退到 valkey 期望的字符串(`ziplist` /
+`hashtable` / `intset` / …)以兼容那些数据形态嗅探的工具。
+
+不支持:`CLUSTER`(子集 —— 见 [`docs/cluster.md`](docs/cluster.md))、
+`SCRIPT EVAL`(等 luna runtime 就绪)、`MODULE`、`MIGRATE` / `ASK`、
+`AUTH` / `ACL`。
 
 ## 构建与测试
 
 ```sh
+# 整 workspace 编译 + 单元测试。
 cargo build --workspace --release
-cargo test  --workspace
-bash bench/run.sh        # 与 valkey 对打的基准（Linux + Docker）
+cargo test --workspace --release
+
+# Bench(本地,需要 lx64 类机器才有公平数字)。
+bash bench/loopback_c50.sh
+bash bench/loopback_c1.sh
+bash bench/pubsub-compare/run.sh
 ```
 
-稳定版 Rust 1.95，Rust 2024 edition。可在 Linux（`x86_64`、`aarch64`）和
-macOS 上构建。`kevy-embedded` 及其依赖闭包还能为
-`wasm32-unknown-unknown` / `wasm32-wasip1` 构建 —— WebAssembly 演示见
-[`docs/wasm.md`](docs/wasm.md)。
+CI 跑 stable Rust(无 MSRV pin)+ `-D warnings` clippy + miri(advisory
+FFI 在 miri 下 short-circuit)+ Docker 镜像构建 + 多目标 cross-build。
 
 ## 路线图与稳定性
 
-kevy 正处于 **v1.0.0-rc** 反馈期。v1.x 承诺保持不变的一切 —— 持久化格式、
-RESP 线协议、公开 Rust API、CLI 参数、环境变量、TOML schema、淘汰语义 ——
-在整个 v1.x 线上都是**只增不改**：v1.0 写出的文件能在任何后续 v1.x 构建上
-加载。完整的稳定性契约见
-[`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md#v1x-stability-commitment)。
+- **v1.22**(2026-06-20,已发布)—— v3-cluster bundle:嵌入式只读副本 +
+  按 scope 多 writer + 异步客户端。详见 [`CHANGELOG.md`](CHANGELOG.md)。
+- **v1.22.x follow-up**(无固定时间)—— 多 shard upstream 副本、滚到尾
+  巴的 backlog 偏移快照 ingest、F4 fallback 路径的 writer 自动 reclaim。
+- **v2-8 Lua**(等 luna runtime 就绪)—— `SCRIPT EVAL` / `EVALSHA` 通过
+  自家 Lua 5.5 runtime 实现,作为 kevy 的 plugin,不在 server 内塞解释器。
+
+API 稳定性:已 publish 的 crate 跟 semver(主版本 1.x);默认 server 保
+持向后兼容 wire 协议;嵌入式 API 加 surface 走 minor 版本号。
 
 ## 许可证
 
-按你的选择，采用 **MIT** 或 **Apache-2.0** 双许可之一。
-© 2026 GOLIA K.K.
+MIT OR Apache-2.0,选你顺手的。
