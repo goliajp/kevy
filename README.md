@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/goliajp/kevy/actions/workflows/ci.yml/badge.svg)](https://github.com/goliajp/kevy/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-![Rust 1.95+](https://img.shields.io/badge/rust-1.95%2B-orange.svg)
+![Rust stable](https://img.shields.io/badge/rust-stable-orange.svg)
 
 A pure-Rust, **zero-dependency**, Redis-compatible key–value store —
 usable as a standalone server **or** as an embedded library, built to run
@@ -22,35 +22,47 @@ redis-cli -p 6004 SET hello world
 
 ## Why kevy
 
-- **Fast** — 2.3–2.7× valkey 9.1's throughput at high concurrency, 2.7× on
-  pub/sub fan-out, and ~18 M ops/s per core when embedded (numbers below).
+- **Fast** — 2.7–3.0× valkey 9.1's throughput at high concurrency, 2.7× on
+  pub/sub fan-out, and **~9 M GET / 7 M SET** per core when embedded
+  (numbers below).
 - **Tiny footprint** — a 768 KB server binary that boots into under 5 MB of
   RAM. Fits a container sidecar, a small VM, or an edge box.
 - **Modern architecture** — thread-per-core, shared-nothing, no locks on
   the hot path, io_uring on Linux. No global lock, no GIL-style bottleneck.
-- **No supply-chain risk** — zero crates.io dependencies. The whole tree is
-  `std` + kevy's own crates; the only C is the OS syscall boundary,
-  hand-bound in one crate. There is nothing else to audit.
+- **No supply-chain risk** — zero crates.io dependencies in the default
+  server / blocking-client / embedded stack. The whole tree is `std` +
+  kevy's own crates; the only C is the OS syscall boundary, hand-bound in
+  one crate. The async client (`kevy-client-async`) is the sole carved
+  exemption — opt-in, lib consumers only, fully documented.
 - **Drop-in compatible** — RESP2 wire protocol, 98-command parity with
   valkey 9.1 (incl. pattern pub/sub and `WATCH`/`UNWATCH` optimistic CAS),
   reply-checked byte-for-byte. Existing clients and tools just work.
+- **Replicated** (v1.22) — server primary + N read replicas, quorum
+  failover, and **embed nodes can join the cluster** as read-replicas or
+  per-prefix writers. Same wire protocol throughout, single declarative
+  topology.
 - **Embeddable** — `kevy-store` is a plain Rust library: no network, no
   runtime, also builds for `wasm32`. The same engine, in your process.
+- **Async-capable** — `kevy-client-async` (v1.22) wraps the blocking
+  surface 1:1 for `tokio` / `smol` / `async-std` plus a pipeline-first
+  builder that collapses N commands into one TCP round-trip.
 - **Resource-adaptive** — runs full-speed when memory is unbounded, degrades
   cleanly when it isn't, and refuses loudly at the edge instead of corrupting
   silently ([details](#resource-adaptive-by-design)).
 
-Honest about scope: kevy is **single-node** — no replication, clustering,
-AUTH/TLS, or public-internet exposure (see
-[when to use kevy](#when-to-use-kevy)).
+Honest about scope: kevy is **single-DC**, with no AUTH/TLS and no
+public-internet exposure design (see [when to use kevy](#when-to-use-kevy)).
+Replication is single-DC primary-replica with quorum failover; cross-DC
+active-active, gossip, online resharding, and Raft are explicitly
+out-of-scope.
 
 ## Performance
 
-All figures below were measured on one **bare-metal Intel Core i7-10700K**
-(8 cores / 16 threads, 3.8 GHz base / 5.1 GHz boost), 62 GB RAM,
-Linux 6.12.90, in-memory. Every benchmark is reproducible with the scripts
-in [`bench/`](bench/); full method and caveats in
-[`bench/REPORT.md`](bench/REPORT.md).
+All figures below were measured on one **bare-metal 16-core Linux box**
+(lx64), in-memory, with server / client / loadgen pinned to disjoint
+cores. Every benchmark is reproducible with the scripts in
+[`bench/`](bench/); full method, caveats, and the v0.2 → v1.22
+chronological narrative live in [`bench/REPORT.md`](bench/REPORT.md).
 
 ### Server throughput (over the network)
 
@@ -58,21 +70,28 @@ in [`bench/`](bench/); full method and caveats in
 > hardware ceiling.
 
 `redis-benchmark`, each server pinned to cores 0–9 with the client on
-isolated cores and run in isolation. Every engine uses its fastest config
-(kevy: io_uring at -c50, epoll at -c1; valkey/redis: io-threads):
+isolated cores and **run in isolation** (start → 2 warm runs → stop) so
+kevy's busy-poll does not starve a co-located competitor. Every engine
+uses its fastest config (valkey/redis with `--io-threads 10`):
 
-| workload | kevy | valkey 9.1 | redis 7.4 |
-|----------|-----:|-----------:|----------:|
-| **-c50 -P16 GET** | **4.4 M/s** | 2.5 M/s | 2.3 M/s |
-| **-c50 -P16 SET** | **4.7 M/s** | 1.9 M/s | 2.0 M/s |
-| **-c1 GET** | **86 k/s** | 65 k/s | 48 k/s |
-| **-c1 SET** | **72 k/s** | 63 k/s | 54 k/s |
+| workload | kevy 1.22 | valkey 9.1 (io-threads) | redis 7.4 (io-threads) |
+|----------|----------:|------------------------:|-----------------------:|
+| **-c50 -P16 GET** | **6.0 M/s** | 2.0 M/s | 2.0 M/s |
+| **-c50 -P16 SET** | **4.0 M/s** | 1.5 M/s | 1.5 M/s |
+| **-c1 GET** | **68 k/s** | 60 k/s | 55 k/s |
+| **-c1 SET** | **76 k/s** | 60 k/s | 54 k/s |
 
-Against the C reference for io_uring: kevy's hand-written bindings reach a
-148 ns nop round-trip vs liburing 2.9's 152 ns — at the Linux kernel floor,
-with no liburing linked. Reproduce with
-[`bench/loopback_c50.sh`](bench/loopback_c50.sh) and
+→ kevy is **3.0× best-other on GET, 2.7× on SET** at high concurrency,
+and still leads single-connection sequential (the hardest workload for
+any busy-poll engine) by 1.13–1.26×. The io_uring vs epoll reactor
+pick is per-workload (io_uring leads at low concurrency, epoll catches
+up at -c50 -P16 where pipelining amortises the syscall savings).
+Reproduce with [`bench/loopback_c50.sh`](bench/loopback_c50.sh) and
 [`bench/loopback_c1.sh`](bench/loopback_c1.sh).
+
+Against the C reference for io_uring: kevy's hand-written bindings reach
+a 148 ns nop round-trip vs liburing 2.9's 152 ns — at the Linux kernel
+floor, with no liburing linked.
 
 ### Cluster routing (key-aware client)
 
@@ -90,12 +109,15 @@ lx64 16-core box, server/client on disjoint cores, GET at concurrency 64:
 forwarding hop, with no measurable overhead vs a hand-rolled raw router.
 Full method in [`docs/cluster.md`](docs/cluster.md).
 
-### Primary-replica replication (v1.18 / v3-cluster Phase 1)
+### Cluster mode (replication + failover + embed-join)
 
-A kevy node can now run as a **primary** that streams every applied mutation
-to N read replicas, or as a **replica** that connects to a primary and
-mirrors its keyspace. Companion client `kevy-cluster-rw` splits writes
-to the primary and round-robins reads across replicas.
+v1.22 closes the v3-cluster track. A kevy node can run as a **primary**
+that streams every applied mutation to N replicas, or as a **replica**
+that mirrors a primary; **embed nodes can join the cluster** as
+read-replicas or as per-prefix writers; and `kevy-elect` performs
+quorum-based **automatic failover** when the primary goes DOWN.
+Companion client `kevy-cluster-rw` splits writes to the primary and
+round-robins reads across replicas.
 
 ```toml
 # primary
@@ -116,44 +138,69 @@ redis-cli -p 6004 REPLICAOF NO ONE
 redis-cli -p 6004 ROLE
 ```
 
-Phase 1 covers: per-shard wire backlog + listener, snapshot ship for fall-
-behind replicas, dynamic REPLICAOF / `REPLICAOF NO ONE` retarget + demote,
-`ROLE` / `INFO replication` live state, and the `kevy-cluster-rw` client.
-Anti-scope: multi-master, cross-DC, Raft, gossip, online resharding,
-chain replication, AUTH/TLS — all permanently out. Quorum failover
-(`kevy-elect`) is Phase 1.5, not in v1.18.
+Coverage by phase (all merged in v1.22):
+- **Phase 1** (v1.18): per-shard wire backlog + listener, snapshot ship
+  for fall-behind replicas, dynamic REPLICAOF / `REPLICAOF NO ONE`
+  retarget + demote, `ROLE` / `INFO replication` live state, the
+  `kevy-cluster-rw` write-to-primary-read-from-replicas client.
+- **Phase 1.5** (v1.19): `kevy-elect` quorum-based automatic primary
+  failover (DOWN detection by heartbeat, OFFER/ACCEPT/ANNOUNCE,
+  highest-offset wins).
+- **Phase 2** (v1.22): **embed nodes can join a cluster as
+  read-replicas** — an application embedding `kevy-embedded`
+  subscribes to a server primary's replication stream and mirrors
+  the keyspace in-process. Reads pay zero network round-trip; local
+  writes return `READONLY`.
+- **Phase 3** (v1.22): **scoped multi-writer** — `[cluster] scopes =
+  "app:billing:=embed-a,app:catalog:=embed-b"` declares per-prefix
+  writer ownership; any node receiving a write to the wrong prefix
+  answers `-MISDIRECTED writer is <host:port>`. Operator-issued
+  `MOVE-SCOPE` migrates a prefix between writers under a
+  quiesce-window protocol.
 
-Full server + client recipes in [`docs/replication.md`](docs/replication.md).
+Anti-scope (permanently out): multi-master with overlap, cross-DC
+active-active / CRDTs, Raft, gossip discovery, online resharding,
+AUTH/TLS.
+
+Full server + client recipes in [`docs/replication.md`](docs/replication.md)
+and [`docs/cluster.md`](docs/cluster.md).
 
 ### Embedded throughput (in-process, no network)
 
-Drop [`kevy-store`](crates/kevy-store) into your app and call it directly —
-no socket, no RESP parsing, no reactor. Single core, `Store` API:
+Drop [`kevy-embedded`](crates/kevy-embedded) into your app and call the
+`Store` directly — no socket, no RESP parsing, no reactor. Lx64
+in-process bench (1 M ops, 12-byte key, 16-byte value):
 
-| operation | latency (median) | throughput |
-|-----------|-----------------:|-----------:|
-| `get` (hit) | 54 ns | ~18.5 M ops/s |
-| `get` (miss) | 14 ns | — |
-| `set` (overwrite) | 76 ns | ~13 M ops/s |
-| `incr` | 86 ns | — |
+| operation | latency | throughput |
+|-----------|--------:|-----------:|
+| `get` (hit) | 111 ns | **9.0 M ops/s** |
+| `get` (miss) | 24 ns | **42.2 M ops/s** |
+| `set` (overwrite) | 143 ns | **7.0 M ops/s** |
+| `incr` | 169 ns | 5.9 M ops/s |
+| `del` | 183 ns | 5.5 M ops/s |
 
-That's roughly **3× the per-core throughput of the network server** — the
-embedded path skips the entire wire layer. Reproduce with
-`cargo run -p kevy-store --example bench_keyspace --release`.
+That's roughly **130× the same-host network server on GET, 90× on
+SET** — the embedded path skips the entire wire layer (RESP encode/
+decode + TCP + syscalls). Reproduce with
+`cargo run -p kevy-embedded --example embed_throughput --release`.
+
+> This is not a kevy-vs-valkey/redis throughput claim — valkey and
+> redis have no in-process mode, so the only fair statement is
+> "embed skips the wire layer; here is how much that saves."
 
 ### Pub/sub fan-out (server mode)
 
-1 publisher → 50 subscribers, 200 000 messages, 16-byte payload. kevy is
-the fastest broker on the TCP / RESP path:
+1 publisher → 50 subscribers, 200 000 messages, 16-byte payload,
+warm-run. kevy is the fastest broker on the TCP / RESP path:
 
 | system | delivered msg/s | vs valkey |
 |--------|----------------:|----------:|
-| Aeron 1.45 (IPC, shared memory) | 26.5 M | 3.90× |
-| **kevy** | **18.2 M** | **2.68×** |
-| ZeroMQ 4.3.5 | 9.3 M | 1.37× |
-| redis 7.4 | 8.5 M | 1.25× |
+| Aeron 1.45 (IPC, shared memory) | 84 M | 12.4× |
+| **kevy 1.22** | **18.5 M** | **2.72×** |
+| ZeroMQ 4.3.5 | 9.4 M | 1.38× |
+| redis 7.4 | 8.9 M | 1.31× |
 | valkey 9.1 | 6.8 M | 1.00× |
-| Zenoh 1.9 | 2.7 M | 0.40× |
+| Zenoh 1.9 | 2.9 M | 0.43× |
 
 Aeron's shared-memory IPC is the structural ceiling (no kernel network
 stack); among TCP brokers kevy leads — 2× ZeroMQ on the same transport.
@@ -292,7 +339,7 @@ owner shard with no `-MOVED` and no forwarding hop (the **1.6× throughput /
 15× tail-latency** win above):
 
 ```rust
-// Cargo.toml: kevy-client = "1.9.0"
+// Cargo.toml: kevy-client = "1.11"
 use kevy_client::ClusterClient;
 
 let mut cc = ClusterClient::connect("127.0.0.1", 6005)?;  // any shard port as seed
@@ -308,13 +355,18 @@ flushall / ping / publish; full guide, command table, and same-slot rules in
 load that the hop shows up; the plain single-port `Connection` stays correct
 and simpler for ordinary use.
 
-Superset notes vs Redis Cluster (single machine, single process — there is
-no failover, resharding, MIGRATE/ASK, or gossip): cross-slot multi-key
-commands (`MGET`, `SUNION`, transactions, blocking fan-outs) execute instead
-of failing with `-CROSSSLOT`, and keyspace-wide views (`KEYS`, `SCAN`,
-`DBSIZE`) stay whole-keyspace on every port. Switching an existing data dir
-in or out of cluster mode re-homes keys once at startup (sources are backed
-up as `*.premigration.<ts>`).
+Superset notes vs Redis Cluster (single machine cluster mode — no
+gossip / MIGRATE-ASK / online resharding): cross-slot multi-key
+commands (`MGET`, `SUNION`, transactions, blocking fan-outs) execute
+instead of failing with `-CROSSSLOT`, and keyspace-wide views
+(`KEYS`, `SCAN`, `DBSIZE`) stay whole-keyspace on every port.
+Switching an existing data dir in or out of cluster mode re-homes
+keys once at startup (sources are backed up as `*.premigration.<ts>`).
+
+For multi-node clusters with primary + replicas + automatic
+failover, see the **Cluster mode (replication + failover)** section
+below — v1.22 ships server-as-replica, embed-as-replica, scoped
+multi-writer, and quorum-based promotion.
 
 ### As an async-runtime client
 
@@ -346,13 +398,20 @@ when-to-pipeline:
 ### As an embedded library
 
 ```rust
-// Cargo.toml: kevy-store = "0.1"
-use kevy_store::Store;
+// Cargo.toml: kevy-embedded = "1.4"
+use kevy_embedded::{Config, Store};
 
-let mut s = Store::default();
-s.set(b"key".to_vec(), b"value".to_vec(), None, false, false);
-assert_eq!(s.get(b"key").unwrap().unwrap(), b"value");
+let s = Store::open(Config::default().without_aof())?;
+s.set(b"key", b"value")?;
+assert_eq!(s.get(b"key")?, Some(b"value".to_vec()));
+# Ok::<(), std::io::Error>(())
 ```
+
+`Store` is `&self` everywhere — clone it freely between threads, the
+shards do their own locking. For a persistent file-backed store use
+`Config::default().with_persist("/var/lib/myapp")`. To embed as a
+read-replica of a server primary (v1.22), see
+[`docs/replication.md`](docs/replication.md).
 
 ## Resource-adaptive by design
 
