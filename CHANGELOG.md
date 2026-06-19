@@ -4,6 +4,90 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.20.0] — UNRELEASED (Phase 2 — embed-as-read-replica)
+
+**v3-cluster Phase 2 — `kevy-embedded` subscribes to a kevy server's
+replication stream.** An application embedding kevy-embedded can
+mirror a server primary's keyspace in-process, paying zero network
+round-trip on reads; local writes return `READONLY` (the
+replication stream is the only writer). Single-URL upstream =
+single primary shard mirror; the same `ReplicaClient` wire client
+that drives v1.18 server replicas drives the embed runner.
+
+### Added
+
+- **`kevy_embedded::Store::open_replica(upstream)`** — convenience
+  constructor for an in-memory replica (`without_aof` + upstream +
+  default reconnect 100 ms → 5 s). Returns a normal `Store` with
+  `is_replica() == true`; cloneable and droppable like any other.
+- **`Config::with_replica_upstream(host:port)`,
+  `with_replica_id(id)`, `with_replica_reconnect(min, max)`** —
+  full builder control for the v1.20 replica surface. Default
+  replica id is `kevy-embedded-replica`; override per process when
+  multiple replicas share one primary.
+- **`Store::is_replica()`** — live query of replica mode.
+- **READONLY enforcement** — every mutating embed API
+  (`set` / `del` / `incr_by` / `expire` / `flushall` / `hset` /
+  `hdel` / `lpush` / `rpush` / `lpop` / `rpop` / `sadd` / `srem` /
+  `zadd` / `zrem` / `persist`) returns
+  `io::Error::other("READONLY ...")` on a replica. The wire string
+  mirrors the server-side `-READONLY` reply so applications can
+  pattern-match the same way against both backends. `PUBLISH`
+  remains allowed because pub/sub is process-local in kevy.
+- **`kevy_embedded::replica_runner` (`pub(crate)`)** — one
+  background thread per `Store::open_replica`, drives a real
+  `kevy_replicate::ReplicaClient` against the configured primary's
+  replication TCP listener. Exponential reconnect (sliceable so
+  shutdown is acted on within `backoff_min`), interruptible
+  `next_event` via `try_clone`'d socket + `shutdown(Both)`, owned
+  by `DropGuard` so the runner is joined on the last `Store` clone
+  drop.
+- **`docs/cluster.md` "embed-as-read-replica" section** —
+  end-to-end recipe + scope notes + failure modes.
+- **`crates/kevy-embedded/examples/replica.rs`** — runnable
+  example that mirrors a real kevy server, showing READONLY
+  rejection + the polled-catch-up shape.
+
+### Internals (refactor)
+
+- New `crates/kevy-embedded/src/replica_glue.rs` —
+  `spawn_replica_runner` + `ensure_writable`. Kept separate from
+  the runner thread module so the runner stays free of `Store`-
+  shaped dependencies.
+- `crates/kevy-embedded/src/store_persist.rs` — extracted
+  `Store::rewrite_aof` + `Store::save_snapshot` + their helpers
+  from `store.rs` to keep that file under the 500-LOC project
+  ceiling after the replica fields landed.
+- `kevy_client::Connection::Embedded(Box<Store>)` — boxed the
+  variant so the enum stays size-balanced now that `Config`
+  carries replica fields.
+
+### v1.20 scope (anti-feature contracts)
+
+- Single upstream URL = single primary shard mirror; multi-shard
+  upstream is "spawn N replicas" for v1.20. A runner-per-URL
+  surface is a follow-up.
+- No snapshot ingest: a replica connecting at offset 0 against a
+  primary whose backlog has rolled past that point drops the
+  connection. Full snapshot ingest is a v1.20.x follow-up.
+- No auto-retarget on `kevy-elect` ANNOUNCE; pair with
+  `kevy-cluster-rw` topology refresh for the automated path.
+- No replica writes — `READONLY` errors are the contract.
+
+### Tests
+
+- 996 workspace / 0 failures (macOS) + 3 new e2e
+  (`server_replica_e2e`): real `kevy_rt::Runtime` primary + embed
+  replica over real TCP loopback, READONLY rejection across every
+  mutating verb, second-write catch-up on the same connection.
+- lx64 perfgate PASS (pending; see release pipeline).
+
+### Versions
+
+- workspace 1.19.0 → 1.20.0
+- `kevy-embedded` 1.3.0 → 1.4.0
+- `kevy-client` 1.10.0 → 1.11.0 (boxed enum variant)
+
 ## [v1.19.0] — 2026-06-19 (Phase 1.5 — automatic primary failover)
 
 **v3-cluster Phase 1.5 — quorum-based automatic primary failover.**

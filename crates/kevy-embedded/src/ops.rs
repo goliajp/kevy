@@ -15,6 +15,7 @@ use std::time::Duration;
 use kevy_store::StoreError;
 
 use crate::pubsub::Subscription;
+use crate::replica_glue::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
 
 impl Store {
@@ -25,6 +26,7 @@ impl Store {
     /// return `false` but we don't expose those here — use [`Store::with`]
     /// for the full surface).
     pub fn set(&self, key: &[u8], value: &[u8]) -> io::Result<bool> {
+        ensure_writable(self)?;
         let mut g = self.wshard(key);
         let ok = g.store.set(key, value.to_vec(), None, false, false);
         commit_write(&mut g, &[b"SET", key, value])?;
@@ -37,6 +39,7 @@ impl Store {
     /// `PEXPIRE` would be re-anchored to replay-time, resetting the TTL to a
     /// fresh full duration on every restart (INC-2026-06-09).
     pub fn set_with_ttl(&self, key: &[u8], value: &[u8], ttl: Duration) -> io::Result<bool> {
+        ensure_writable(self)?;
         let mut g = self.wshard(key);
         let ok = g.store.set(key, value.to_vec(), Some(ttl), false, false);
         let ms = ttl.as_millis().min(u128::from(u64::MAX)) as u64;
@@ -65,6 +68,7 @@ impl Store {
     /// `DEL key1 [key2 ...]`. Returns the count of keys actually removed.
     /// Keys fan out to their owning shards.
     pub fn del(&self, keys: &[&[u8]]) -> io::Result<usize> {
+        ensure_writable(self)?;
         let mut total = 0;
         for k in keys {
             let owned = vec![k.to_vec()];
@@ -95,6 +99,7 @@ impl Store {
 
     /// `INCRBY key delta`. Negative `delta` does DECR-style work.
     pub fn incr_by(&self, key: &[u8], delta: i64) -> io::Result<i64> {
+        ensure_writable(self)?;
         let mut g = self.wshard(key);
         let n = g.store.incr_by(key, delta).map_err(store_err)?;
         commit_write(&mut g, &[b"INCRBY", key, delta.to_string().as_bytes()])?;
@@ -105,6 +110,7 @@ impl Store {
     /// records an absolute `PEXPIREAT` deadline (see [`Self::set_with_ttl`])
     /// so the TTL survives a restart unchanged.
     pub fn expire(&self, key: &[u8], ttl: Duration) -> io::Result<bool> {
+        ensure_writable(self)?;
         let mut g = self.wshard(key);
         let touched = g.store.expire(key, ttl);
         if touched {
@@ -117,6 +123,7 @@ impl Store {
 
     /// `PERSIST key`. Returns `true` if a TTL was actually cleared.
     pub fn persist(&self, key: &[u8]) -> io::Result<bool> {
+        ensure_writable(self)?;
         let mut g = self.wshard(key);
         let touched = g.store.persist(key);
         if touched {
@@ -151,6 +158,7 @@ impl Store {
     ///
     /// [`AppendFsync`]: crate::AppendFsync
     pub fn flushall(&self) -> io::Result<()> {
+        ensure_writable(self)?;
         self.try_for_each_shard(|inner| {
             inner.store.flushall();
             commit_write(inner, &[b"FLUSHALL"])
@@ -192,6 +200,7 @@ impl Store {
 
     /// `HSET key field value [field value ...]`. Returns count newly added.
     pub fn hset(&self, key: &[u8], pairs: &[(&[u8], &[u8])]) -> io::Result<usize> {
+        ensure_writable(self)?;
         let mut g = self.wshard(key);
         let owned: Vec<(Vec<u8>, Vec<u8>)> =
             pairs.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect();
@@ -218,6 +227,7 @@ impl Store {
 
     /// `HDEL key field [field ...]`. Returns count actually removed.
     pub fn hdel(&self, key: &[u8], fields: &[&[u8]]) -> io::Result<usize> {
+        ensure_writable(self)?;
         let mut g = self.wshard(key);
         let owned: Vec<Vec<u8>> = fields.iter().map(|f| f.to_vec()).collect();
         let removed = g.store.hdel(key, &owned).map_err(store_err)?;
@@ -269,6 +279,7 @@ impl Store {
 
     /// `SREM key member [member ...]`. Returns count actually removed.
     pub fn srem(&self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+        ensure_writable(self)?;
         let mut g = self.wshard(key);
         let owned: Vec<Vec<u8>> = members.iter().map(|m| m.to_vec()).collect();
         let removed = g.store.srem(key, &owned).map_err(store_err)?;
@@ -298,6 +309,7 @@ impl Store {
 
     /// `ZADD key score member [score member ...]`. Returns count newly added.
     pub fn zadd(&self, key: &[u8], pairs: &[(f64, &[u8])]) -> io::Result<usize> {
+        ensure_writable(self)?;
         let mut g = self.wshard(key);
         let owned: Vec<(f64, Vec<u8>)> =
             pairs.iter().map(|(s, m)| (*s, m.to_vec())).collect();
@@ -319,6 +331,7 @@ impl Store {
 
     /// `ZREM key member [member ...]`. Returns count actually removed.
     pub fn zrem(&self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+        ensure_writable(self)?;
         let mut g = self.wshard(key);
         let owned: Vec<Vec<u8>> = members.iter().map(|m| m.to_vec()).collect();
         let removed = g.store.zrem(key, &owned).map_err(store_err)?;
@@ -402,6 +415,7 @@ fn push_helper<F>(
 where
     F: FnOnce(&mut kevy_store::Store, &[u8], &[Vec<u8>]) -> Result<usize, StoreError>,
 {
+    ensure_writable(s)?;
     let mut g = s.wshard(key);
     let owned: Vec<Vec<u8>> = values.iter().map(|v| v.to_vec()).collect();
     let n = op(&mut g.store, key, &owned).map_err(store_err)?;
@@ -416,6 +430,7 @@ where
 }
 
 fn pop_helper(s: &Store, key: &[u8], count: usize, from_tail: bool) -> io::Result<Vec<Vec<u8>>> {
+    ensure_writable(s)?;
     let mut g = s.wshard(key);
     let popped = if from_tail {
         g.store.rpop(key, count).map_err(store_err)?

@@ -163,10 +163,22 @@ impl ReplicationSource {
             return Err(FromOffset::Future);
         }
         // from == next_offset → replica is exactly caught up; empty slice.
-        if let Some(oldest) = self.oldest_offset()
-            && from < oldest
-        {
-            return Err(FromOffset::TooOld);
+        if from == self.next_offset {
+            return Ok(FramesIter {
+                buf: &self.buf,
+                cursor: self.buf.len(),
+            });
+        }
+        // from < next_offset: the requested frame either is still in
+        // the backlog or was evicted. Empty buf with from < next_offset
+        // means every frame ever pushed has been evicted — same TooOld
+        // outcome as `from < oldest`. (Without this branch the function
+        // returns an empty iterator and the streaming pump silently
+        // stalls — the v1.20 embed-replica restart test caught this.)
+        match self.oldest_offset() {
+            Some(oldest) if from < oldest => return Err(FromOffset::TooOld),
+            None => return Err(FromOffset::TooOld),
+            _ => {}
         }
         // Locate the start index. Offsets are monotonic so binary search
         // is correct; the deque slices into two parts so we iterate.

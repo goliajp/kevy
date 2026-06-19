@@ -60,7 +60,12 @@ mod reaper;
 mod shard;
 mod pubsub_bus;
 mod replay;
+#[cfg(not(target_arch = "wasm32"))]
+mod replica_glue;
+#[cfg(not(target_arch = "wasm32"))]
+mod replica_runner;
 mod store;
+mod store_persist;
 
 pub use config::{AppendFsync, Config, EvictionPolicy, TtlReaperMode};
 pub use info::KevyInfo;

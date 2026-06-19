@@ -191,3 +191,79 @@ lives in `kevy_cluster_rw::is_write_verb`. v1.18 takes the seed list
 explicitly (no automatic `CLUSTER NODES` discovery — a follow-up after
 release); the operator's deployment scripts list primary + replica
 addresses.
+
+## embed-as-read-replica (v1.20 / Phase 2)
+
+A `kevy-embedded` store can subscribe to a server primary's replication
+stream and mirror its keyspace in-process. Reads pay zero network
+round-trip; writes are refused locally and must go to the primary.
+
+```rust
+use kevy_embedded::Store;
+
+// One-liner: in-memory replica, AOF off, default reconnect (100 ms → 5 s).
+let replica = Store::open_replica("primary.local:16004")?;
+
+// Reads work; writes return io::Error("READONLY ...").
+let v = replica.get(b"hello")?;
+assert!(replica.set(b"k", b"v").is_err());
+# Ok::<(), std::io::Error>(())
+```
+
+For full control:
+
+```rust
+use std::time::Duration;
+use kevy_embedded::{Config, Store};
+
+let cfg = Config::default()
+    .with_replica_upstream("primary.local:16004")
+    .with_replica_id("backup-svc-region-a")
+    .with_replica_reconnect(Duration::from_millis(50), Duration::from_secs(10));
+let replica = Store::open(cfg)?;
+# Ok::<(), std::io::Error>(())
+```
+
+The handshake sends `REPLICATE FROM <last-applied-offset> ID <replica_id>`
+to the primary's replication listener (default `port + 10000` on the
+server side, configured via the server's `--replication-listener` /
+`[replication] listen_port`). The primary acks the offset and starts
+streaming frames; the embed runner thread applies each frame onto the
+local shards via the same dispatch path the server-side replica uses,
+then advances the local offset for resume on reconnect.
+
+### v1.20 scope (MVP)
+
+- **Single upstream URL = single primary shard mirror.** Multi-shard
+  upstream is "spawn one `Store::open_replica` per primary shard"
+  for now; a runner-per-URL convenience surface lands in a follow-up.
+- **No local AOF on a replica.** `open_replica` force-disables it (a
+  local AOF would diverge across restarts and double-apply on the
+  next open). For durability across replica restarts, hold the
+  upstream's backlog long enough that the replica's last-applied
+  offset is still on disk.
+- **No snapshot ingest.** A replica connecting at offset 0 against a
+  primary whose backlog has rolled past that point currently drops
+  the connection; full snapshot ingest (`+SNAPSHOT ... +SNAPSHOT_END`)
+  is a v1.20.x follow-up.
+- **No auto-retarget on `kevy-elect` ANNOUNCE.** Manual reconfigure
+  for primary changes until the failover hook lands; pair with
+  `kevy-cluster-rw`'s topology refresh for a fully-automated path.
+- **PUBLISH is allowed locally on a replica.** Pub/sub is process-
+  local in kevy (not replicated), so a local PUBLISH only reaches
+  this process's subscribers; the keyspace itself remains read-only.
+
+### Failure modes
+
+- **Primary down** — runner reconnects with exponential backoff
+  (`Config::with_replica_reconnect`, default 100 ms → 5 s). Reads
+  keep working against the last-applied snapshot; writes still
+  return `READONLY`.
+- **Offset gap** — the wire client surfaces `OffsetGap`; the runner
+  drops the connection so the next reconnect picks up from the new
+  applied offset (which now lags the primary). v1.20.x snapshot
+  ingest closes this gap automatically; v1.20 requires the operator
+  to refresh from a snapshot manually.
+- **Replica drop** — the runner thread is joined on the last
+  `Store` clone drop; the primary's listener observes a clean FIN
+  and frees the per-replica slot.

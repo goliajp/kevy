@@ -122,8 +122,11 @@ dependencies = [
 name = "kevy-embedded"
 version = "1.3.0"
 dependencies = [
+ "kevy",
  "kevy-hash",
  "kevy-persist",
+ "kevy-replicate",
+ "kevy-rt",
  "kevy-store",
 ]
 
