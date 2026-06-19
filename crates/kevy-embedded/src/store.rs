@@ -6,11 +6,8 @@ use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
 use std::thread::JoinHandle;
-use std::time::Instant;
 
-use crate::metric::KevyMetric;
-
-use kevy_persist::{Aof, Argv, RewriteStats};
+use kevy_persist::{Aof, Argv};
 use kevy_store::{ExpireStats, StoreError};
 
 use crate::config::Config;
@@ -48,11 +45,11 @@ pub(crate) type Shards = Arc<Vec<Arc<RwLock<Inner>>>>;
 /// (handled on shard 0).
 #[derive(Clone)]
 pub struct Store {
-    shards: Shards,
+    pub(crate) shards: Shards,
     /// Shared drop guard: signals + joins reaper and flushes AOFs when the
     /// LAST `Store` clone (or `Subscription`) holding a strong ref drops.
-    guard: Arc<DropGuard>,
-    config: Config,
+    pub(crate) guard: Arc<DropGuard>,
+    pub(crate) config: Config,
 }
 
 /// Weak handle to a `Store` — does not keep the underlying keyspace alive.
@@ -99,6 +96,12 @@ pub(crate) struct DropGuard {
     reaper_stop: Option<Arc<AtomicBool>>,
     reaper_join: Mutex<Option<JoinHandle<()>>>,
     shards_for_flush: Shards,
+    /// Replica runner thread + reconnect machinery, present iff this
+    /// store was opened with `Config::replica_upstream = Some(...)`.
+    /// Joined here so the runner stops cleanly when the last `Store`
+    /// clone goes away.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) replica_runner: Option<crate::replica_runner::ReplicaRunner>,
 }
 
 impl Store {
@@ -109,15 +112,91 @@ impl Store {
     ///   (`config.shards > 1` re-shards a legacy single AOF on first open).
     /// - Spawns a background TTL reaper thread when
     ///   `config.ttl_reaper == Background` (the default).
+    /// - When `config.replica_upstream = Some("host:port")`, spawns a
+    ///   background thread that streams replication frames from the
+    ///   named primary and applies them to this store; local writes are
+    ///   rejected with `READONLY` (see [`Self::open_replica`]).
     pub fn open(config: Config) -> io::Result<Self> {
         let shards: Shards = Arc::new(build_shards(&config)?);
         let (reaper_stop, reaper_join) = crate::reaper::spawn_reaper(&config, &shards)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        let replica_runner = crate::replica_glue::spawn_replica_runner(&config, &shards);
         let guard = Arc::new(DropGuard {
             reaper_stop,
             reaper_join: Mutex::new(reaper_join),
             shards_for_flush: shards.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
+            replica_runner,
         });
         Ok(Store { shards, guard, config })
+    }
+
+    /// Convenience constructor for an embed-as-read-replica store
+    /// streaming writes from `upstream` (`"host:port"` of a kevy
+    /// server's replication listener).
+    ///
+    /// The replica:
+    /// - has its local AOF force-disabled (the upstream stream is the
+    ///   source of truth; replica AOF would diverge and double-apply
+    ///   on restart);
+    /// - rejects every local write with a `READONLY` `io::Error`
+    ///   (you can still call read APIs concurrently);
+    /// - reconnects with exponential backoff on disconnect, resuming
+    ///   from the last applied offset;
+    /// - gets a process-unique `replica_id` so an open / drop / reopen
+    ///   cycle within the primary's reconnect window does not look like
+    ///   the same slot from the primary's POV (which would evict
+    ///   backlog frames the new embed still needs from offset 0).
+    ///   Override via [`Config::with_replica_id`] when you specifically
+    ///   want the slot to be re-claimed across restarts.
+    ///
+    /// For full builder control (custom replica id, backoff bounds,
+    /// snapshot dir, etc.) use [`Self::open`] with
+    /// [`Config::with_replica_upstream`] + the related setters
+    /// instead.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open_replica(upstream: impl Into<String>) -> io::Result<Self> {
+        let cfg = Config::default()
+            .without_aof()
+            .with_replica_id(crate::replica_glue::fresh_replica_id())
+            .with_replica_upstream(upstream);
+        Self::open(cfg)
+    }
+
+    /// `true` when this store was opened against a replication
+    /// upstream — local writes are rejected with `READONLY`.
+    pub fn is_replica(&self) -> bool {
+        self.config.replica_upstream.is_some()
+    }
+
+    /// Retarget this replica at a new primary URL (`host:port`). The
+    /// runner picks up the change on its next connect — which is
+    /// forced now by `shutdown`ing the current socket clone, so the
+    /// retarget lands within `Config::replica_reconnect_min` (default
+    /// 100 ms) of this call.
+    ///
+    /// Returns `Err` with `ErrorKind::InvalidInput` when this store is
+    /// not a replica (no upstream was configured at open). Application
+    /// code typically drives this from a kevy-elect failover signal —
+    /// see `docs/cluster.md` "embed-as-read-replica" / Phase 2 / T2.7.
+    /// kevy-embedded itself stays elect-protocol-agnostic; the
+    /// integration glue lives in the application.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn set_replica_upstream(&self, new_upstream: impl Into<String>) -> io::Result<()> {
+        if !self.is_replica() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "set_replica_upstream called on a non-replica store",
+            ));
+        }
+        let Some(runner) = self.guard.replica_runner.as_ref() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "replica runner is not active (open was racy?)",
+            ));
+        };
+        runner.set_upstream(new_upstream.into());
+        Ok(())
     }
 
     /// Get a weak handle that does not keep the keyspace alive.
@@ -233,82 +312,9 @@ impl Store {
         total
     }
 
-    /// `BGREWRITEAOF`: rebuild every shard's AOF from current state.
-    /// Synchronous. Returns the summed stats (`None` if persistence is off /
-    /// no shard rewrote).
-    pub fn rewrite_aof(&self) -> io::Result<Option<RewriteStats>> {
-        let mut agg: Option<RewriteStats> = None;
-        for shard in self.shards.iter() {
-            let start = Instant::now();
-            // Phase 1 (locked): freeze the COW view + start the tee —
-            // O(n)-shallow, no serialization under the lock.
-            let (view, tmp, before_bytes) = {
-                let mut g = lock_write(shard);
-                let Inner { store, aof, bus: _ } = &mut *g;
-                let Some(aof) = aof else { continue };
-                if aof.is_rewriting() {
-                    continue;
-                }
-                let before = aof.size_bytes();
-                let view = store.collect_snapshot();
-                (view, aof.begin_view_rewrite()?, before)
-            };
-            // Phase 2 (unlocked): serialize + fsync the compacted log.
-            let keys = match kevy_persist::dump_aof(&tmp, &view) {
-                Ok((keys, _)) => keys,
-                Err(e) => {
-                    let mut g = lock_write(shard);
-                    if let Some(aof) = &mut g.aof {
-                        aof.abort_concurrent_rewrite();
-                    }
-                    let _ = std::fs::remove_file(&tmp);
-                    return Err(e);
-                }
-            };
-            // Phase 3 (locked): append the tee'd diff and swap.
-            let mut g = lock_write(shard);
-            let Some(aof) = &mut g.aof else { continue };
-            let stats = match aof.finish_concurrent_rewrite(&tmp, keys) {
-                Ok(s) => s,
-                Err(e) => {
-                    aof.abort_concurrent_rewrite();
-                    let _ = std::fs::remove_file(&tmp);
-                    return Err(e);
-                }
-            };
-            if let Some(sink) = &self.config.metric_sink {
-                sink.emit(KevyMetric::Rewrite {
-                    keys: stats.keys,
-                    before_bytes,
-                    after_bytes: stats.bytes,
-                    elapsed_ms: start.elapsed().as_millis() as u64,
-                });
-            }
-            let acc = agg.get_or_insert(RewriteStats { keys: 0, bytes: 0 });
-            acc.keys += stats.keys;
-            acc.bytes += stats.bytes;
-        }
-        Ok(agg)
-    }
-
-    /// Snapshot every shard to its `dump-{i}.rdb` (single shard: the configured
-    /// name), atomically. `Ok(false)` when persistence is disabled.
-    pub fn save_snapshot(&self) -> io::Result<bool> {
-        let Some(dir) = self.config.data_dir.as_ref() else {
-            return Ok(false);
-        };
-        let n = self.shards.len();
-        for (i, shard) in self.shards.iter().enumerate() {
-            let name = if n == 1 {
-                self.config.snapshot_filename.clone()
-            } else {
-                kevy_persist::layout::snapshot_file(i)
-            };
-            save_shard_snapshot(shard, &dir.join(name))?;
-        }
-        Ok(true)
-    }
-
+    // Durability methods (`rewrite_aof`, `save_snapshot`) live in
+    // `crate::store_persist` to keep this file under the 500-LOC
+    // project ceiling.
     // Data-type methods live in `crate::ops` / `crate::info`.
 
     /// Crate-internal: clone shard 0's handle for a `Subscription`'s bus.
@@ -365,71 +371,6 @@ impl Store {
 
 /// Write-lock an `Inner`, recovering from poison (short critical sections; a
 /// panic in one doesn't corrupt the keyspace).
-/// Save one shard's snapshot with the snapshot+log contract intact: after
-/// a successful save the AOF holds **only post-collect writes**, so a
-/// restart replays them over the snapshot without double-applying history
-/// (non-idempotent commands like RPUSH duplicated before this).
-///
-/// Phase 1 (write lock): freeze the COW view + start the AOF tee — no
-/// write may land between the two (the tee atomicity contract). Phase 2
-/// (unlocked): serialize the view to the snapshot's durable tmp. Phase 3
-/// (write lock): commit — snapshot rename and tee'd AOF reset adjacent,
-/// so the snapshot/log commit window stays microseconds.
-fn save_shard_snapshot(shard: &RwLock<Inner>, path: &std::path::Path) -> io::Result<()> {
-    let (view, reset_tmp) = freeze_for_save(shard)?;
-    let tmp = match kevy_persist::write_snapshot_tmp(&view, path) {
-        Ok(t) => t,
-        Err(e) => {
-            if reset_tmp.is_some()
-                && let Some(aof) = &mut lock_write(shard).aof
-            {
-                aof.abort_concurrent_rewrite();
-            }
-            return Err(e);
-        }
-    };
-    let mut g = lock_write(shard);
-    std::fs::rename(&tmp, path)?;
-    if let (Some(reset), Some(aof)) = (reset_tmp, &mut g.aof) {
-        let swap = kevy_persist::write_aof_base(&reset)
-            .and_then(|()| aof.finish_concurrent_rewrite(&reset, 0));
-        if let Err(e) = swap {
-            aof.abort_concurrent_rewrite();
-            let _ = std::fs::remove_file(&reset);
-            return Err(e);
-        }
-    }
-    Ok(())
-}
-
-/// Phase-1 helper: collect the view and start the tee under one write
-/// lock. A racing background auto-rewrite owns the tee; it runs its slow
-/// half off-lock and finishes in milliseconds, so wait it out (bounded)
-/// rather than saving a snapshot whose log would double-apply on replay.
-fn freeze_for_save(
-    shard: &RwLock<Inner>,
-) -> io::Result<(kevy_store::SnapshotView, Option<std::path::PathBuf>)> {
-    for _ in 0..2000 {
-        {
-            let mut g = lock_write(shard);
-            let Inner { store, aof, .. } = &mut *g;
-            match aof {
-                Some(a) if a.is_rewriting() => {} // racing rewrite — retry
-                Some(a) => {
-                    let view = store.collect_snapshot();
-                    return Ok((view, Some(a.begin_view_rewrite()?)));
-                }
-                None => return Ok((store.collect_snapshot(), None)),
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    Err(io::Error::new(
-        io::ErrorKind::TimedOut,
-        "kevy-embedded: AOF rewrite still in flight after 10s; snapshot aborted",
-    ))
-}
-
 pub(crate) fn lock_write(shard: &RwLock<Inner>) -> RwLockWriteGuard<'_, Inner> {
     shard.write().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -461,6 +402,13 @@ pub(crate) fn store_err(e: StoreError) -> io::Error {
 
 impl Drop for DropGuard {
     fn drop(&mut self) {
+        // Stop the replica runner FIRST so no more frames arrive while
+        // we're shutting down + flushing the AOF (frames would race
+        // with the shutdown path).
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(r) = &self.replica_runner {
+            r.shutdown();
+        }
         // Stop + join the reaper, then flush every shard's AOF so EverySec
         // users don't lose the last sub-second of writes.
         if let Some(stop) = &self.reaper_stop {

@@ -61,8 +61,10 @@ pub(crate) use url::{Target, parse_url, resolve_store};
 /// One open connection to a kevy backend, opaque about whether the backend
 /// is in-process or over TCP.
 pub enum Connection {
-    /// In-process [`kevy_embedded::Store`].
-    Embedded(Store),
+    /// In-process [`kevy_embedded::Store`]. Boxed because `Store` is
+    /// sizeable (carries its `Config`, including v1.20 replica
+    /// upstream/backoff fields) and dwarfs the `RespClient` variant.
+    Embedded(Box<Store>),
     /// TCP [`kevy_resp_client::RespClient`].
     Remote(RespClient),
 }
@@ -79,7 +81,7 @@ impl Connection {
         let parsed = parse_url(url)?;
         match parsed {
             Target::Remote(remote_url) => Ok(Self::Remote(RespClient::from_url(&remote_url)?)),
-            embed => Ok(Self::Embedded(resolve_store(&embed)?)),
+            embed => Ok(Self::Embedded(Box::new(resolve_store(&embed)?))),
         }
     }
 

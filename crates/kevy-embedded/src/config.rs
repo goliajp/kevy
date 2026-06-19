@@ -68,6 +68,29 @@ pub struct Config {
     /// [`Self::with_shards`]; the first open with `> 1` re-shards an existing
     /// single AOF into per-shard files.
     pub shards: usize,
+    /// Replication upstream. `Some("host:port")` makes this store a
+    /// read-replica that streams writes from the named primary; `None`
+    /// (default) is a normal primary store. Configured via
+    /// [`Self::with_replica_upstream`] or the convenience constructor
+    /// [`crate::Store::open_replica`]. See Phase 2 of the v3-cluster RFC.
+    pub replica_upstream: Option<String>,
+    /// Replica identity string sent to the primary at handshake
+    /// (`REPLICATE FROM <offset> ID <replica_id>`). Default
+    /// `"kevy-embedded-replica"`. Override per-process when multiple
+    /// embed replicas connect to the same primary (they'd otherwise
+    /// share the slot and clobber each other's session state on the
+    /// primary side).
+    pub replica_id: String,
+    /// Replica reconnect backoff: lower bound. Default 100 ms. The
+    /// runner sleeps this long after the first connection failure;
+    /// each subsequent failure doubles the wait up to
+    /// [`Self::replica_reconnect_max`].
+    pub replica_reconnect_min: Duration,
+    /// Replica reconnect backoff: upper bound. Default 5 s — picked to
+    /// match the v1.18 server's `reconnect_window_ms` default so embed
+    /// replicas and server replicas behave identically when the same
+    /// primary disappears.
+    pub replica_reconnect_max: Duration,
 }
 
 impl Default for Config {
@@ -88,6 +111,10 @@ impl Default for Config {
             auto_aof_rewrite_min_size: 64 * 1024 * 1024,
             metric_sink: None,
             shards: 1,
+            replica_upstream: None,
+            replica_id: String::from("kevy-embedded-replica"),
+            replica_reconnect_min: Duration::from_millis(100),
+            replica_reconnect_max: Duration::from_secs(5),
         }
     }
 }
@@ -177,6 +204,36 @@ impl Config {
     #[must_use]
     pub fn with_ttl_reaper_manual(mut self) -> Self {
         self.ttl_reaper = TtlReaperMode::Manual;
+        self
+    }
+
+    /// Configure this store as a replication replica of `upstream`
+    /// (`"host:port"` of a kevy server's replication listener). A
+    /// background thread streams writes from the primary and applies
+    /// them locally; this store rejects local writes with a
+    /// `READONLY` error. See [`crate::Store::open_replica`] for the
+    /// convenience constructor. Phase 2 of the v3-cluster RFC.
+    #[must_use]
+    pub fn with_replica_upstream(mut self, upstream: impl Into<String>) -> Self {
+        self.replica_upstream = Some(upstream.into());
+        self
+    }
+
+    /// Override the replica identity sent to the primary at handshake.
+    /// Useful when multiple embed replicas share one primary —
+    /// otherwise they'd share the slot and stomp each other's session
+    /// state.
+    #[must_use]
+    pub fn with_replica_id(mut self, id: impl Into<String>) -> Self {
+        self.replica_id = id.into();
+        self
+    }
+
+    /// Override the replica reconnect backoff bounds.
+    #[must_use]
+    pub fn with_replica_reconnect(mut self, min: Duration, max: Duration) -> Self {
+        self.replica_reconnect_min = min;
+        self.replica_reconnect_max = max.max(min);
         self
     }
 

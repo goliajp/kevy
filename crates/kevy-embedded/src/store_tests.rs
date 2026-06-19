@@ -1,4 +1,5 @@
 use super::*;
+use crate::KevyMetric;
 use crate::config::{AppendFsync, EvictionPolicy};
 use std::path::PathBuf;
 use std::time::Duration;

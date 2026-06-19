@@ -25,3 +25,17 @@ workspace = true
 kevy-store = { path = "../kevy-store", version = "1.19.0" }
 kevy-persist = { path = "../kevy-persist", version = "1.19.0" }
 kevy-hash = { path = "../kevy-hash", version = "1.19.0" }
+# Phase 2 (v1.20+): embed-as-read-replica reuses the server-side
+# replication wire client (kevy-replicate) so the same protocol drives
+# both server replicas and embed replicas. `default-features = false`
+# keeps the dep lean even though kevy-replicate has no optional features
+# today — explicit intent for when it grows them.
+kevy-replicate = { path = "../kevy-replicate", version = "1.19.0", default-features = false }
+
+[dev-dependencies]
+# Phase 2 e2e: brings up a real kevy server primary in-process so the
+# embed-as-read-replica integration test exercises the full TCP path
+# (handshake → streaming → apply). Dev-only — no publish-time cycle
+# because `kevy` does not depend on `kevy-embedded`.
+kevy = { path = "../kevy", version = "1.19.0" }
+kevy-rt = { path = "../kevy-rt", version = "1.19.0" }
