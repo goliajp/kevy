@@ -14,10 +14,11 @@ impl<C: Commands> Shard<C> {
     /// A spinning peer needs no syscall — it will see the message on its next
     /// poll(0). This is what removes the per-message wakeup under load.
     pub(crate) fn flush_wakes(&mut self) {
-        // Fast-path single-shard: pending_wakes is len-nshards; in the common
-        // single-shard benchmark this loop runs nshards times even when no
-        // wakes are pending. Skip outright when nothing's flagged.
-        if !self.pending_wakes.iter().any(|&w| w) {
+        // Hot path: short-circuit on the bitmap. Replaces the previous
+        // `Vec<bool>::iter().any(|&w| w)`, which was N byte loads per
+        // iter — the early-return alone showed up as 2.6 % of -c1 CPU
+        // in the 2026-06-20 profile.
+        if self.pending_wakes == 0 {
             return;
         }
         // Close the park/wake race: the SeqCst fence pairs with the
@@ -33,12 +34,13 @@ impl<C: Commands> Shard<C> {
         // peer's `PARK_TIMEOUT_MS` (50 ms); the timeout remains as
         // defense-in-depth against missed eventfd writes / OS hiccups.
         fence(Ordering::SeqCst);
-        for i in 0..self.pending_wakes.len() {
-            if self.pending_wakes[i] {
-                self.pending_wakes[i] = false;
-                if self.parked[i].load(Ordering::SeqCst) {
-                    let _ = self.wakers[i].wake();
-                }
+        let mut mask = self.pending_wakes;
+        self.pending_wakes = 0;
+        while mask != 0 {
+            let i = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
+            if self.parked[i].load(Ordering::SeqCst) {
+                let _ = self.wakers[i].wake();
             }
         }
     }
@@ -60,11 +62,13 @@ impl<C: Commands> Shard<C> {
     /// fast path is a lock-free ring push; on a full ring it spills to the local
     /// per-target backlog (preserving order), which `flush_backlog` drains later.
     pub(crate) fn send_to(&mut self, dst: usize, msg: Inbound) {
-        if self.backlog[dst].is_empty() {
+        let bit = 1u64 << dst;
+        if self.backlog_nonempty & bit == 0 {
             match self.outboxes[dst].as_mut() {
                 Some(p) => {
                     if let Err(m) = p.push(msg) {
                         self.backlog[dst].push_back(m);
+                        self.backlog_nonempty |= bit;
                     }
                 }
                 // `dst == self.id` has no ring and is never sent to.
@@ -74,32 +78,43 @@ impl<C: Commands> Shard<C> {
             // Order: queue behind the existing backlog rather than jumping the ring.
             self.backlog[dst].push_back(msg);
         }
-        self.pending_wakes[dst] = true;
+        // Tell `dst`'s reactor it has incoming work from us. Release pairs
+        // with the AcqRel swap in `drain_inbound_core` — anything our push
+        // wrote into the ring is visible to the drain that observes our bit.
+        self.inbound_dirty[dst].fetch_or(1u64 << self.id, Ordering::Release);
+        self.pending_wakes |= bit;
     }
 
     /// Re-push each per-target backlog into its ring (filled when a ring was full
     /// last iteration). Stops at the first target whose ring is still full.
     #[inline]
     pub(crate) fn flush_backlog(&mut self) {
-        // Outer-empty short-circuit: in the hot single-shard / no-backlog
-        // path this avoids the nshards loop entirely.
-        if self.backlog.iter().all(std::collections::VecDeque::is_empty) {
+        // Hot path: short-circuit on the bitmap. Replaces the previous
+        // `backlog.iter().all(VecDeque::is_empty)`, which was N struct
+        // accesses per iter — the early-return alone showed up as 2.5 %
+        // of -c1 CPU in the 2026-06-20 profile.
+        if self.backlog_nonempty == 0 {
             return;
         }
-        for dst in 0..self.nshards {
-            if self.backlog[dst].is_empty() {
-                continue;
-            }
+        let mut mask = self.backlog_nonempty;
+        while mask != 0 {
+            let dst = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
             let Some(p) = self.outboxes[dst].as_mut() else {
                 self.backlog[dst].clear();
+                self.backlog_nonempty &= !(1u64 << dst);
                 continue;
             };
             while let Some(msg) = self.backlog[dst].pop_front() {
                 if let Err(m) = p.push(msg) {
                     self.backlog[dst].push_front(m);
+                    // Still non-empty — leave the bit set for next iter.
                     break;
                 }
-                self.pending_wakes[dst] = true;
+                self.pending_wakes |= 1u64 << dst;
+            }
+            if self.backlog[dst].is_empty() {
+                self.backlog_nonempty &= !(1u64 << dst);
             }
         }
     }

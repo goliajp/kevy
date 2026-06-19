@@ -27,7 +27,7 @@ use std::io;
 use std::time::{Duration, Instant};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering, fence};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering, fence};
 
 pub(crate) struct Shard<C: Commands> {
     pub(crate) id: usize,
@@ -63,14 +63,37 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) next_conn_id: u64,
     pub(crate) events: Vec<Event>,
     pub(crate) read_buf: Vec<u8>,
-    /// Targets that received a message this iteration but haven't been woken yet.
-    /// Wakeups are coalesced: each target is woken at most once per loop, not
-    /// once per message (one pipe-write syscall instead of N).
-    pub(crate) pending_wakes: Vec<bool>,
+    /// Bitmap of targets that received a message this iteration but
+    /// haven't been woken yet. Wakeups are coalesced: each target is woken
+    /// at most once per loop, not once per message (one pipe-write
+    /// syscall instead of N). 2026-06-20 perf profile showed `flush_wakes`
+    /// at 2.6% of -c1 CPU on its fast-path early-return alone — the
+    /// `Vec<bool>::iter().any(|&w| w)` was N byte loads per iter. The u64
+    /// folds it to a single `!= 0` load. Limit: `nshards ≤ 64`, shared
+    /// with `inbound_dirty`.
+    pub(crate) pending_wakes: u64,
+    /// Bitmap of `backlog[dst]`'s that are non-empty. Maintained by
+    /// `send_to` (set the bit when we spill) and `flush_backlog` (clear
+    /// the bit when we drain a target empty). Same motivation as
+    /// `pending_wakes`: the early-return path was `backlog.iter().all(
+    /// VecDeque::is_empty)`, N struct accesses per iter; the u64 is one
+    /// load.
+    pub(crate) backlog_nonempty: u64,
     /// Per-shard "is this core parked (blocking) right now?" flags. A sender only
     /// needs a syscall wakeup for a parked peer; a spinning peer sees the message
     /// on its next poll. Indexed by shard id; `parked[self.id]` is our own.
     pub(crate) parked: Vec<Arc<AtomicBool>>,
+    /// Per-shard inbox-dirty bitmaps. `inbound_dirty[me]` is owned by shard
+    /// `me`: a sender from shard `src` calls `inbound_dirty[me].fetch_or(1
+    /// << src, Release)` after pushing a message into `inboxes[src]`, so
+    /// `drain_inbound_core` can `swap(0, AcqRel)` and short-circuit when no
+    /// peer has written. 2026-06-20 perf profile showed
+    /// `uring_drain_inbound` at 17.4% of -c1 CPU even with no cross-shard
+    /// traffic — the per-iteration scan of N empty ring-queue tails was
+    /// the cost; this flag collapses it to one atomic load. Limit:
+    /// `nshards ≤ 64` (one bit per peer in a single `u64`); enforced by
+    /// `debug_assert` in [`Self::run`].
+    pub(crate) inbound_dirty: Vec<Arc<AtomicU64>>,
     pub(crate) data_dir: PathBuf,
     /// `None` disables the append-only log (e.g. pure in-memory benchmarking).
     pub(crate) aof: Option<Aof>,
