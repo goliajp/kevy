@@ -7,6 +7,7 @@
 //! breaking the established two-impl-block layering.
 
 use std::io;
+use std::sync::atomic::Ordering;
 
 use kevy_resp::parse_command_borrowed;
 
@@ -161,10 +162,24 @@ impl<C: Commands> Shard<C> {
     /// by the arm/write loop, and the only fallible step — the AOF group
     /// sync — downgrades to a logged error, so no `Err` is ever built).
     pub(crate) fn drain_inbound_core<const DIRECT_FLUSH: bool>(&mut self) -> io::Result<bool> {
+        // Hot path: short-circuit if no peer has marked us. Senders OR a
+        // bit into `inbound_dirty[me]` after pushing to our ring; we swap
+        // it to 0 and only walk the rings whose bit is set. Profile note
+        // (2026-06-20): this drain was 17.4 % of -c1 CPU even with zero
+        // cross-shard traffic, just from sweeping N empty rings. AcqRel
+        // pairs with the Release `fetch_or` in `send_to`.
+        let me = self.id;
+        let dirty = self.inbound_dirty[me].swap(0, Ordering::AcqRel);
+        if dirty == 0 {
+            return Ok(false);
+        }
         let mut did = false;
-        for src in 0..self.nshards {
-            if src == self.id {
-                continue; // no self-ring
+        let mut mask = dirty;
+        while mask != 0 {
+            let src = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
+            if src == me {
+                continue; // no self-ring (defensive — we never OR our own bit)
             }
             while let Some(msg) = self.inboxes[src].as_mut().expect("peer inbox").pop() {
                 did = true;

@@ -11,7 +11,7 @@ use kevy_sys::{Poller, Waker, tcp_listen_reuseport, waker};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, RwLock};
 
 /// Default slots in each per-core-pair SPSC ring. A full ring spills
@@ -178,6 +178,15 @@ impl<C: Commands> Runtime<C> {
         }
         let parked: Vec<Arc<AtomicBool>> =
             (0..n).map(|_| Arc::new(AtomicBool::new(false))).collect();
+        // Per-shard inbox-dirty bitmaps (one u64 bit per peer src).
+        // Senders OR a bit on the target's dirty word; the target's
+        // `drain_inbound_core` swaps and short-circuits when 0.
+        assert!(
+            n <= 64,
+            "kevy-rt: shard count {n} exceeds 64 — inbound_dirty bitmap holds one bit per peer in a u64. Reduce --threads or extend to a multi-word bitmap.",
+        );
+        let inbound_dirty: Vec<Arc<AtomicU64>> =
+            (0..n).map(|_| Arc::new(AtomicU64::new(0))).collect();
 
         // Shared pub/sub channel registry (one per server, read on every PUBLISH).
         let pubsub: PubSubReg = Arc::new(RwLock::new(HashMap::new()));
@@ -263,8 +272,10 @@ impl<C: Commands> Runtime<C> {
                 next_conn_id: 1,
                 events: Vec::with_capacity(1024),
                 read_buf: vec![0u8; 64 * 1024],
-                pending_wakes: vec![false; n],
+                pending_wakes: 0,
+                backlog_nonempty: 0,
                 parked: parked.clone(),
+                inbound_dirty: inbound_dirty.clone(),
                 data_dir: self.data_dir.clone(),
                 aof,
                 replicate: if self.enable_replication {
