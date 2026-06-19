@@ -1,0 +1,25 @@
+[package]
+name = "kevy-scope"
+description = "Scoped multi-writer ownership table for kevy — per-prefix writer + fallback + MOVE-SCOPE quiesce-window migration."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-scope"
+readme = "README.md"
+keywords = ["kevy", "redis", "cluster", "scope", "multi-writer"]
+categories = ["database", "api-bindings"]
+
+[lints]
+workspace = true
+
+[dependencies]
+# Pure-Rust 0-dep — no crates.io deps, only kevy-* workspace crates.
+# kevy-scope hosts the ownership table + MOVE-SCOPE state machine +
+# longest-prefix routing; everything else (RESP encoding, persistence,
+# replication wire) is plugged in by the kevy server's existing
+# integration glue (no kevy-scope dep on those — keeps the crate the
+# narrowest possible unit per the steel/cement/stone model).

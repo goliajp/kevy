@@ -31,6 +31,9 @@ kevy-hash = { path = "../kevy-hash", version = "1.19.0" }
 # keeps the dep lean even though kevy-replicate has no optional features
 # today — explicit intent for when it grows them.
 kevy-replicate = { path = "../kevy-replicate", version = "1.19.0", default-features = false }
+# kevy-resp: needed for `parse_command` (handshake decoding) inside
+# the Phase 3 / v1.21 embed-as-writer replica source listener.
+kevy-resp = { path = "../kevy-resp", version = "1.19.0" }
 
 [dev-dependencies]
 # Phase 2 e2e: brings up a real kevy server primary in-process so the

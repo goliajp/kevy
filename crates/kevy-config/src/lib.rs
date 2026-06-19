@@ -34,7 +34,7 @@ mod replication;
 mod schema;
 mod size;
 
-pub use cluster::{ClusterSection, PeerEntry};
+pub use cluster::{ClusterSection, PeerEntry, ScopeEntry};
 pub use replication::{ReplicationRole, ReplicationSection};
 pub use schema::{
     AdvancedSection, AppendFsync, Config, ConfigError, EvictionPolicy,

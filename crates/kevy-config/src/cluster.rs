@@ -47,6 +47,80 @@ pub struct ClusterSection {
     /// (including potentially *this* node — kevy-elect filters
     /// self by matching `node_id`).
     pub peers: Vec<PeerEntry>,
+    /// Phase 3 / v1.21 `[[cluster.scope]]` declarations: each
+    /// entry pins a key prefix to a writer node (and optional
+    /// fallback). Empty when scope-based multi-writer is off.
+    /// Same flat-string TOML shape rationale as `peers` —
+    /// `scopes = "prefix=writer[|fallback],..."`.
+    pub scopes: Vec<ScopeEntry>,
+}
+
+/// One scope declaration parsed from the TOML
+/// `scopes = "prefix=writer[|fallback],..."` shape. Mirrors the
+/// `kevy_scope::Scope` data; kept duplicated here so kevy-config
+/// stays leaf-level and doesn't depend on kevy-scope (the dependency
+/// direction is kevy-scope ← kevy-config consumer, not the other
+/// way).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeEntry {
+    /// Key-prefix bytes the scope owns. Bytes (not String) because
+    /// kevy keys are arbitrary; common keys (`app:billing:`) are
+    /// UTF-8 but the type signature stays honest.
+    pub prefix: Vec<u8>,
+    /// Declared writer's node id.
+    pub writer: String,
+    /// Optional fallback node id (F4).
+    pub fallback: Option<String>,
+}
+
+impl ScopeEntry {
+    /// Parse one `prefix=writer[|fallback]` token. The first `=`
+    /// splits prefix from owner spec; the writer may carry an
+    /// optional `|fallback` suffix. Returns `None` on any shape
+    /// problem (missing `=`, empty fields, prefix containing `,`).
+    pub fn parse_one(token: &str) -> Option<Self> {
+        // Reject commas inside the token — `parse_list` already
+        // split on commas, so a comma here means the operator typed
+        // `prefix=a,b` (ambiguous owner list); we treat that as a
+        // parse error rather than silently take only `a`.
+        if token.contains(',') {
+            return None;
+        }
+        let (prefix, owners) = token.split_once('=')?;
+        if prefix.is_empty() || owners.is_empty() {
+            return None;
+        }
+        let (writer, fallback) = match owners.split_once('|') {
+            Some((w, f)) if !w.is_empty() && !f.is_empty() => (w, Some(f.to_string())),
+            Some(_) => return None, // `|` present but one side empty
+            None => (owners, None),
+        };
+        Some(ScopeEntry {
+            prefix: prefix.as_bytes().to_vec(),
+            writer: writer.to_string(),
+            fallback,
+        })
+    }
+
+    /// Parse a `scopes = "..."` value — comma-separated list of
+    /// `prefix=writer[|fallback]` tokens. Empty + whitespace-only
+    /// tokens are dropped; trailing comma tolerated. Same
+    /// error-on-first-bad-token contract as
+    /// [`PeerEntry::parse_list`].
+    pub fn parse_list(s: &str) -> Result<Vec<ScopeEntry>, String> {
+        let mut out = Vec::new();
+        for raw in s.split(',') {
+            let token = raw.trim();
+            if token.is_empty() {
+                continue;
+            }
+            match Self::parse_one(token) {
+                Some(p) => out.push(p),
+                None => return Err(token.to_string()),
+            }
+        }
+        Ok(out)
+    }
 }
 
 /// One peer in the `kevy-elect` quorum, parsed from the TOML
@@ -158,6 +232,71 @@ mod peer_entry_tests {
     fn parse_list_empty_is_empty() {
         assert_eq!(PeerEntry::parse_list("").unwrap(), Vec::<PeerEntry>::new());
         assert_eq!(PeerEntry::parse_list("  ").unwrap(), Vec::<PeerEntry>::new());
+    }
+}
+
+#[cfg(test)]
+mod scope_entry_tests {
+    use super::*;
+
+    #[test]
+    fn parse_one_writer_only() {
+        let s = ScopeEntry::parse_one("app:billing:=embed-billing-1").unwrap();
+        assert_eq!(s.prefix, b"app:billing:");
+        assert_eq!(s.writer, "embed-billing-1");
+        assert_eq!(s.fallback, None);
+    }
+
+    #[test]
+    fn parse_one_writer_and_fallback() {
+        let s = ScopeEntry::parse_one("app:billing:=embed-1|fb-server-eu").unwrap();
+        assert_eq!(s.writer, "embed-1");
+        assert_eq!(s.fallback.as_deref(), Some("fb-server-eu"));
+    }
+
+    #[test]
+    fn parse_one_prefix_with_colons() {
+        // Colon-heavy prefixes are the common case; only `=` and `,`
+        // are reserved.
+        let s = ScopeEntry::parse_one("ns:tenant:42:=w").unwrap();
+        assert_eq!(s.prefix, b"ns:tenant:42:");
+    }
+
+    #[test]
+    fn parse_one_rejects_empty_prefix_or_writer() {
+        assert!(ScopeEntry::parse_one("=writer").is_none());
+        assert!(ScopeEntry::parse_one("prefix=").is_none());
+        assert!(ScopeEntry::parse_one("no-equals").is_none());
+    }
+
+    #[test]
+    fn parse_one_rejects_empty_fallback_side() {
+        assert!(ScopeEntry::parse_one("p=writer|").is_none());
+        assert!(ScopeEntry::parse_one("p=|fb").is_none());
+    }
+
+    #[test]
+    fn parse_one_rejects_embedded_comma() {
+        // The split-on-comma in `parse_list` makes commas inside a
+        // token a parse error — operator probably typo'd
+        // `prefix=writer,fallback` instead of `prefix=writer|fallback`.
+        assert!(ScopeEntry::parse_one("p=writer,other").is_none());
+    }
+
+    #[test]
+    fn parse_list_two_scopes() {
+        let v = ScopeEntry::parse_list("app:billing:=w-bill|fb, app:auth:=w-auth").unwrap();
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].writer, "w-bill");
+        assert_eq!(v[0].fallback.as_deref(), Some("fb"));
+        assert_eq!(v[1].writer, "w-auth");
+        assert!(v[1].fallback.is_none());
+    }
+
+    #[test]
+    fn parse_list_first_bad_token_errs() {
+        let err = ScopeEntry::parse_list("p1=w1,no-eq,p3=w3").unwrap_err();
+        assert_eq!(err, "no-eq");
     }
 }
 

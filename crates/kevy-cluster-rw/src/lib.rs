@@ -21,6 +21,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+use std::collections::HashMap;
 use std::io;
 
 use kevy_resp::Reply;
@@ -38,7 +39,34 @@ pub struct ReadWriteClient {
     /// after-write pattern that pins to a single replica is acceptable
     /// for v1.18 (no fairness guarantee).
     rr_counter: usize,
+    /// v3-cluster Phase 3 scope cache: `host:port` → live
+    /// `RespClient`. Populated on demand when a write returns
+    /// `-MISDIRECTED writer is <host:port>` — the client opens a
+    /// new connection, caches it, and retries against the named
+    /// writer.
+    scope_writers: HashMap<String, RespClient>,
+    /// Per-key target cache: key bytes → `host:port` of the writer
+    /// most recently confirmed by the server. Subsequent writes for
+    /// the same key skip the primary round-trip + go straight to
+    /// the cached writer. Bounded at 4096 entries; the oldest get
+    /// dropped wholesale when exceeded (the cache is rebuilt by
+    /// the next `-MISDIRECTED` reply, so we don't need an LRU).
+    /// Prefix-shape caching is a follow-up — it requires the
+    /// server to include the prefix in the MISDIRECTED reply.
+    scope_key_targets: HashMap<Vec<u8>, String>,
 }
+
+/// Cap for [`ReadWriteClient::scope_key_targets`] before bulk-evict.
+const SCOPE_KEY_CACHE_CAP: usize = 4096;
+
+/// Max retries the client attempts after a `-QUIESCED` reply
+/// (T3.15). Total worst-case wait ≈
+/// `QUIESCE_RETRY_MIN_MS * (2^N - 1)` with N = budget; with
+/// 5 ms / 80 ms / budget = 7 that's ~635 ms ceiling — enough
+/// to ride out a typical KB-sized scope's quiesce window.
+const QUIESCE_RETRY_BUDGET: usize = 7;
+const QUIESCE_RETRY_MIN_MS: u64 = 5;
+const QUIESCE_RETRY_MAX_MS: u64 = 80;
 
 impl ReadWriteClient {
     /// Open one connection to the primary and one per replica.
@@ -60,6 +88,8 @@ impl ReadWriteClient {
             primary: primary_conn,
             replicas: replica_conns,
             rr_counter: 0,
+            scope_writers: HashMap::new(),
+            scope_key_targets: HashMap::new(),
         })
     }
 
@@ -69,9 +99,86 @@ impl ReadWriteClient {
     }
 
     /// Route a write command (or any command that must hit the
-    /// primary) to the primary connection.
+    /// primary) to the primary connection. If the server replies
+    /// `-MISDIRECTED writer is <host:port>` (Phase 3 / v1.21 scoped
+    /// multi-writer), the client transparently opens a connection
+    /// to the named writer (caching it), caches the key→writer
+    /// mapping for follow-up writes on the same key, and retries
+    /// **once**. A second `-MISDIRECTED` from the retry surfaces as
+    /// an error.
     pub fn request_write(&mut self, args: &[Vec<u8>]) -> io::Result<Reply> {
+        // Fast path: a prior MISDIRECTED for this key cached its
+        // writer's address — skip the primary round-trip.
+        if let Some(key) = args.get(1)
+            && let Some(addr) = self.scope_key_targets.get(key.as_slice()).cloned()
+        {
+            return self.request_via_writer(&addr, args);
+        }
+        self.request_write_with_quiesce_retry(args)
+    }
+
+    /// Send `args` to the primary; on `-QUIESCED` (T3.15), back off
+    /// and retry up to `QUIESCE_RETRY_BUDGET` times against the same
+    /// primary. The migration is in-flight; the cluster member that
+    /// answered will start returning `-MISDIRECTED` once the
+    /// migration commits, and the client follows via the existing
+    /// MISDIRECTED branch. Surfaces the final `-QUIESCED` reply as
+    /// a regular `Reply::Error` after exhausting retries — the
+    /// caller decides whether to back off further or fail.
+    fn request_write_with_quiesce_retry(&mut self, args: &[Vec<u8>]) -> io::Result<Reply> {
+        let mut backoff = std::time::Duration::from_millis(QUIESCE_RETRY_MIN_MS);
+        for _ in 0..QUIESCE_RETRY_BUDGET {
+            let reply = self.primary.request(args)?;
+            if let Some(target_addr) = parse_misdirected(&reply) {
+                if let Some(key) = args.get(1) {
+                    self.remember_key_target(key, &target_addr);
+                }
+                return self.request_via_writer(&target_addr, args);
+            }
+            if parse_quiesced(&reply).is_some() {
+                // Migration in flight — back off and retry. Do NOT
+                // cache the QUIESCED `<to-addr>`: the migration may
+                // abort and the original writer would resume.
+                std::thread::sleep(backoff);
+                backoff = (backoff * 2).min(std::time::Duration::from_millis(QUIESCE_RETRY_MAX_MS));
+                continue;
+            }
+            return Ok(reply);
+        }
+        // Exhausted the retry budget. Final attempt; whatever it
+        // returns (likely another -QUIESCED) bubbles to the caller.
         self.primary.request(args)
+    }
+
+    /// Open + cache a connection to `addr` (`"host:port"`) and send
+    /// `args`. A second `-MISDIRECTED` from this hop is **not**
+    /// followed — the client would be in a redirect loop and the
+    /// caller deserves to see the error rather than burn round-trips.
+    fn request_via_writer(&mut self, addr: &str, args: &[Vec<u8>]) -> io::Result<Reply> {
+        if !self.scope_writers.contains_key(addr) {
+            let (host, port) = split_host_port(addr).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("server returned MISDIRECTED with malformed target {addr:?}"),
+                )
+            })?;
+            let conn = RespClient::connect(host, port)?;
+            self.scope_writers.insert(addr.to_string(), conn);
+        }
+        let conn = self
+            .scope_writers
+            .get_mut(addr)
+            .expect("just inserted above");
+        conn.request(args)
+    }
+
+    fn remember_key_target(&mut self, key: &[u8], addr: &str) {
+        if self.scope_key_targets.len() >= SCOPE_KEY_CACHE_CAP {
+            // Bulk-evict — next MISDIRECTED will reseed. The
+            // cache is an optimisation; correctness still holds.
+            self.scope_key_targets.clear();
+        }
+        self.scope_key_targets.insert(key.to_vec(), addr.to_string());
     }
 
     /// Route a read command to a replica (round-robin); fallback to
@@ -156,6 +263,55 @@ fn ascii_upper<'a>(s: &[u8], buf: &'a mut [u8; 32]) -> &'a [u8] {
     &buf[..n]
 }
 
+/// Detect a Phase 3 `-MISDIRECTED writer is <host:port>` reply and
+/// extract the host-port target. `None` for any other Reply (incl.
+/// non-MISDIRECTED `-ERR ...` strings) — caller propagates those
+/// unchanged.
+fn parse_misdirected(reply: &Reply) -> Option<String> {
+    let Reply::Error(bytes) = reply else { return None };
+    // Expect `MISDIRECTED writer is <addr>` — kevy server's
+    // `scope_integration::encode_misdirected` shape.
+    const PREFIX: &[u8] = b"MISDIRECTED writer is ";
+    if !bytes.starts_with(PREFIX) {
+        return None;
+    }
+    let addr = std::str::from_utf8(&bytes[PREFIX.len()..]).ok()?;
+    let addr = addr.trim_end_matches(['\r', '\n']);
+    if addr.is_empty() {
+        return None;
+    }
+    Some(addr.to_string())
+}
+
+/// T3.15: detect a `-QUIESCED migrating to <host:port>` reply and
+/// extract the target. Same shape rationale as
+/// [`parse_misdirected`]; clients use this to know "back off + retry
+/// against the original writer until the migration commits".
+fn parse_quiesced(reply: &Reply) -> Option<String> {
+    let Reply::Error(bytes) = reply else { return None };
+    const PREFIX: &[u8] = b"QUIESCED migrating to ";
+    if !bytes.starts_with(PREFIX) {
+        return None;
+    }
+    let addr = std::str::from_utf8(&bytes[PREFIX.len()..]).ok()?;
+    let addr = addr.trim_end_matches(['\r', '\n']);
+    if addr.is_empty() {
+        return None;
+    }
+    Some(addr.to_string())
+}
+
+/// Parse `"host:port"`. Rejects empty host or non-u16 port.
+fn split_host_port(addr: &str) -> Option<(&str, u16)> {
+    let colon = addr.rfind(':')?;
+    let host = &addr[..colon];
+    if host.is_empty() {
+        return None;
+    }
+    let port: u16 = addr[colon + 1..].parse().ok()?;
+    Some((host, port))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +345,64 @@ mod tests {
         // truncated by the upper-buf — they fall through to the
         // catch-all read classification.
         assert!(!is_write_verb(&[b'X'; 64]));
+    }
+
+    // ---- scope MISDIRECTED parser (T3.9) ----
+
+    #[test]
+    fn parse_misdirected_basic() {
+        let r = Reply::Error(b"MISDIRECTED writer is 10.0.0.1:6004".to_vec());
+        assert_eq!(parse_misdirected(&r).as_deref(), Some("10.0.0.1:6004"));
+    }
+
+    #[test]
+    fn parse_misdirected_strips_trailing_crlf() {
+        // Some encoders leave `\r\n` in the Error payload; parser
+        // tolerates both shapes.
+        let r = Reply::Error(b"MISDIRECTED writer is 10.0.0.1:6004\r\n".to_vec());
+        assert_eq!(parse_misdirected(&r).as_deref(), Some("10.0.0.1:6004"));
+    }
+
+    #[test]
+    fn parse_misdirected_rejects_unrelated_error() {
+        let r = Reply::Error(b"ERR something else".to_vec());
+        assert!(parse_misdirected(&r).is_none());
+        // Non-Error replies are also rejected.
+        let r = Reply::Simple(b"OK".to_vec());
+        assert!(parse_misdirected(&r).is_none());
+    }
+
+    #[test]
+    fn split_host_port_dotted_v4_and_dns() {
+        assert_eq!(split_host_port("10.0.0.1:6004"), Some(("10.0.0.1", 6004)));
+        assert_eq!(split_host_port("db.local:6105"), Some(("db.local", 6105)));
+    }
+
+    #[test]
+    fn parse_quiesced_basic() {
+        let r = Reply::Error(b"QUIESCED migrating to 10.0.0.1:6004".to_vec());
+        assert_eq!(parse_quiesced(&r).as_deref(), Some("10.0.0.1:6004"));
+    }
+
+    #[test]
+    fn parse_quiesced_strips_trailing_crlf() {
+        let r = Reply::Error(b"QUIESCED migrating to 10.0.0.1:6004\r\n".to_vec());
+        assert_eq!(parse_quiesced(&r).as_deref(), Some("10.0.0.1:6004"));
+    }
+
+    #[test]
+    fn parse_quiesced_rejects_unrelated_error() {
+        let r = Reply::Error(b"MISDIRECTED writer is 10.0.0.1:6004".to_vec());
+        assert!(parse_quiesced(&r).is_none());
+        let r = Reply::Simple(b"OK".to_vec());
+        assert!(parse_quiesced(&r).is_none());
+    }
+
+    #[test]
+    fn split_host_port_rejects_bad_inputs() {
+        assert!(split_host_port("nohost:").is_none());
+        assert!(split_host_port(":6004").is_none());
+        assert!(split_host_port("no-colon").is_none());
+        assert!(split_host_port("host:99999").is_none()); // u16 overflow
     }
 }

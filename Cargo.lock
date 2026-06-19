@@ -62,6 +62,7 @@ dependencies = [
  "kevy-replicate",
  "kevy-resp",
  "kevy-rt",
+ "kevy-scope",
  "kevy-store",
  "kevy-sys",
 ]
@@ -126,6 +127,7 @@ dependencies = [
  "kevy-hash",
  "kevy-persist",
  "kevy-replicate",
+ "kevy-resp",
  "kevy-rt",
  "kevy-store",
 ]
@@ -211,6 +213,10 @@ dependencies = [
  "kevy-uring",
  "loom",
 ]
+
+[[package]]
+name = "kevy-scope"
+version = "1.19.0"
 
 [[package]]
 name = "kevy-store"

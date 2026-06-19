@@ -91,6 +91,25 @@ pub struct Config {
     /// replicas and server replicas behave identically when the same
     /// primary disappears.
     pub replica_reconnect_max: Duration,
+    /// Phase 3 / v1.21 **embed-as-writer**: bind address
+    /// (`"host:port"` or `"0.0.0.0:port"`) for the replication
+    /// source listener. When `Some`, every commit on this store
+    /// pushes its argv into a process-local `ReplicationSource`
+    /// backlog, and replicas (other embeds, server-as-replicas)
+    /// connect to this port to stream the writes. `None` (default)
+    /// keeps the embed in pure-local mode. Mutually exclusive in
+    /// spirit with `replica_upstream` (a single store should be
+    /// either a writer source OR a reader sink, not both); the
+    /// builder doesn't reject the combo so tests can exercise the
+    /// guard rails.
+    pub embed_writer_listen_addr: Option<String>,
+    /// Backlog byte budget for the embed-as-writer source. Default
+    /// `1 MiB` (matches the v1.18 server replication default).
+    /// Set higher when consumers may disconnect for longer than
+    /// the backlog can buffer (otherwise reconnects hit `TooOld`
+    /// and v1.21 closes the link — snapshot-ship from embed is a
+    /// follow-up).
+    pub embed_writer_backlog_bytes: usize,
 }
 
 impl Default for Config {
@@ -115,6 +134,8 @@ impl Default for Config {
             replica_id: String::from("kevy-embedded-replica"),
             replica_reconnect_min: Duration::from_millis(100),
             replica_reconnect_max: Duration::from_secs(5),
+            embed_writer_listen_addr: None,
+            embed_writer_backlog_bytes: 1024 * 1024,
         }
     }
 }
@@ -234,6 +255,22 @@ impl Config {
     pub fn with_replica_reconnect(mut self, min: Duration, max: Duration) -> Self {
         self.replica_reconnect_min = min;
         self.replica_reconnect_max = max.max(min);
+        self
+    }
+
+    /// Run this store as a Phase 3 embed-as-writer: bind a
+    /// replication source listener on `bind_addr` so replicas can
+    /// subscribe to the writes applied here.
+    #[must_use]
+    pub fn with_embed_writer(mut self, bind_addr: impl Into<String>) -> Self {
+        self.embed_writer_listen_addr = Some(bind_addr.into());
+        self
+    }
+
+    /// Override the embed-as-writer backlog byte budget.
+    #[must_use]
+    pub fn with_embed_writer_backlog(mut self, bytes: usize) -> Self {
+        self.embed_writer_backlog_bytes = bytes.max(64 * 1024);
         self
     }
 

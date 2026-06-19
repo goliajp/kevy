@@ -25,7 +25,7 @@ impl Store {
             // O(n)-shallow, no serialization under the lock.
             let (view, tmp, before_bytes) = {
                 let mut g = lock_write(shard);
-                let Inner { store, aof, bus: _ } = &mut *g;
+                let Inner { store, aof, .. } = &mut *g;
                 let Some(aof) = aof else { continue };
                 if aof.is_rewriting() {
                     continue;
