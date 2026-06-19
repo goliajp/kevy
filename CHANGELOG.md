@@ -4,6 +4,92 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.22.0] — UNRELEASED (Phase 4 — async client)
+
+**v3-cluster Phase 4 — `kevy-client-async`, runtime-agnostic async
+mirror of `kevy-client`.** Apps already running on tokio / smol /
+async-std get a 1:1 async surface with the blocking client plus a
+pipeline-first batch sugar (RFC Q4 part b) that collapses N
+sequential round-trips into one. The blocking `kevy-client` stays
+the default and remains 0-dep; async is opt-in.
+
+### Added
+
+- **New crate `kevy-client-async`** (v1.0.0, sole dep-rule
+  exemption — RFC F5). 3 feature-gated transports:
+  - `tokio` — `tokio::net::TcpStream`, default-features = false,
+    minimum surface `["net", "rt", "io-util"]`.
+  - `smol` — `smol::net::TcpStream`, default-features = false.
+  - `async-std` — `async_std::net::TcpStream`. Each dep line
+    carries an inline `# EXEMPTION — see
+    feedback-pure-rust-no-c-principle.md` comment per the
+    project's audit rule. T4.8 enforces exactly-one-runtime at
+    compile time (compile_error on zero or more than one).
+    `default = ["tokio"]` as a dev convenience; lib consumers
+    should set `default-features = false`.
+- **Runtime-agnostic core.** Self-defined `AsyncRead` /
+  `AsyncWrite` / `AsyncTransport` traits in the futures-io shape
+  (`&mut [u8]`, `Poll<io::Result<usize>>`). Each runtime ships a
+  thin per-type adapter that implements our traits on top of its
+  `TcpStream`. No binding to `futures-io` /
+  `tokio::io::AsyncRead` — that would bleed an ecosystem dep into
+  the core.
+- **`AsyncRespCodec<T>`** — async equivalent of
+  `kevy_resp_client::RespClient`. Same state machine; reuses
+  `kevy_resp::{encode_command, parse_reply}` so the wire format
+  has one implementation. `request` / `send` / `read_reply` /
+  `pipeline` cover both per-command and batched paths.
+- **`AsyncConnection`** — TCP mirror of `kevy_client::Connection`.
+  `open(url).await`, `from_transport(stream)`, plus 42 1:1 async
+  methods across string / hash / list / set / sorted-set families.
+- **`AsyncSubscriber`** — TCP mirror of
+  `kevy_client::Subscriber`. connect / open / subscribe /
+  psubscribe / unsubscribe / punsubscribe / recv / recv_message /
+  hello3. `set_read_timeout` intentionally not mirrored — async
+  timeouts live at the runtime layer.
+- **`AsyncClusterClient`** — TCP mirror of
+  `kevy_client::ClusterClient`. CLUSTER SLOTS topology discovery,
+  one AsyncRespCodec per shard, CRC16 routing. 14 mirror methods.
+- **Pipeline-first sugar.** `AsyncConnection::pipeline()` returns
+  a typed-by-name builder (15 commands + `push_raw` escape).
+  `run(&mut conn).await -> Result<Vec<Reply>, io::Error>` — single
+  TCP round-trip. Per-command errors surface as `Reply::Error(_)`
+  inside the Vec. `into_cmds()` degrades cleanly onto a blocking
+  client.
+- **URL parser** — kevy:// / redis:// / tcp:// schemes accepted.
+  mem:// / file:// rejected with a pointer at the blocking client.
+- **Examples** — `examples/tokio_hello.rs` + `examples/pipeline.rs`.
+- **`docs/async.md`** — full guide. README gains an "As an
+  async-runtime client" subsection.
+
+### Tests
+
+- 15 unit tests (mock async transport via `Waker::noop()`),
+  runtime-agnostic — verified passing under all three runtimes.
+- Per-runtime integration: `tokio_basic` (5) + `smol_basic` (4) +
+  `async_std_basic` (4). Each spawns a tiny in-process RESP
+  server, verifies both wire encode and reply decode.
+- `tests/bench_vs_blocking.rs` — three `#[ignore]` benches the
+  caller runs against a live kevy server.
+
+### Workspace
+
+- `cargo test --workspace -- --test-threads=4` → **1069 passed,
+  0 failed** (was 1049 at P3 squash; +20 new tests).
+- `cargo clippy --features {tokio,smol,async-std} --all-targets
+  -- -D warnings` → clean under all three runtimes.
+- Server / blocking client / kevy-rt / kevy-store / persistence /
+  pub-sub paths untouched. T4.28 perfgate satisfied
+  by-construction; remote lx64 perfgate deferred to the bundle
+  ship gate per ship policy.
+
+### Ship policy
+
+T2.16 (Phase 2 v1.20) + T3.24 (Phase 3 v1.21) + T4.30 (Phase 4
+v1.22) are bundled into one release at the v3-cluster close. The
+final version number is decided at ship time. This entry stays
+**UNRELEASED** until that ship.
+
 ## [v1.20.0] — UNRELEASED (Phase 2 — embed-as-read-replica)
 
 **v3-cluster Phase 2 — `kevy-embedded` subscribes to a kevy server's

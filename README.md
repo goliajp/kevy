@@ -316,6 +316,33 @@ of failing with `-CROSSSLOT`, and keyspace-wide views (`KEYS`, `SCAN`,
 in or out of cluster mode re-homes keys once at startup (sources are backed
 up as `*.premigration.<ts>`).
 
+### As an async-runtime client
+
+Apps already running on `tokio`, `smol`, or `async-std` can use the
+async mirror of the blocking client:
+
+```rust
+// Cargo.toml: kevy-client-async = { version = "1", features = ["tokio"] }
+use kevy_client_async::AsyncConnection;
+
+let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
+conn.set(b"k", b"v").await?;
+let v = conn.get(b"k").await?;
+
+// Pipeline N commands into one TCP round-trip:
+let replies = conn.pipeline()
+    .set(b"a", b"1").get(b"a").incr(b"hits")
+    .run(&mut conn).await?;
+# Ok::<(), std::io::Error>(())
+```
+
+Exactly one runtime feature must be selected (`tokio`, `smol`, or
+`async-std`); the crate compile-errors on zero or more than one. The
+blocking [`kevy-client`](crates/kevy-client) stays the default and
+remains 0-dep — async is opt-in. Full guide + runtime comparison +
+when-to-pipeline:
+[`docs/async.md`](docs/async.md).
+
 ### As an embedded library
 
 ```rust
