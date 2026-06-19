@@ -3,7 +3,6 @@ name = "kevy-replicate"
 description = "Primary-to-replica streaming replication for kevy (v3 cluster series, Phase 1)."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

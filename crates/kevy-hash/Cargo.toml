@@ -3,7 +3,6 @@ name = "kevy-hash"
 description = "FxHash + fmix64 hasher for single-trust-domain keyspaces."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

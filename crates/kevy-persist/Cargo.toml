@@ -3,7 +3,6 @@ name = "kevy-persist"
 description = "kevy persistence — RDB-style snapshots + AOF, pure Rust, zero deps."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 readme = "README.md"
