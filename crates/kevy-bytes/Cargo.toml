@@ -3,7 +3,6 @@ name = "kevy-bytes"
 description = "24-byte small-byte-string with inline SSO. Pure Rust."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

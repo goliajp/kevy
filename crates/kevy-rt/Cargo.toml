@@ -3,7 +3,6 @@ name = "kevy-rt"
 description = "kevy thread-per-core shared-nothing runtime — pure Rust, zero deps."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 readme = "README.md"

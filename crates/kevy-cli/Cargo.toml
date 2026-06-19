@@ -3,7 +3,6 @@ name = "kevy-cli"
 description = "redis-cli-style REPL for kevy or any RESP server. Dev tool."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 readme = "README.md"

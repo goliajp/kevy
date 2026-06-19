@@ -3,7 +3,6 @@ name = "kevy-resp-client"
 description = "Blocking RESP2 client over TCP. Pure Rust."
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
