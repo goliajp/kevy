@@ -75,3 +75,15 @@ strip = true
 [profile.release-min]
 inherits = "release"
 opt-level = "s"
+
+# Perf-profile profile: same codegen as `release` (LTO + 1 cgu + abort) plus
+# line-table debug info and forced frame pointers so `perf record` /
+# flamegraph can resolve every symbol back to a Rust function + line.
+# Strip is OFF here (would erase the .debug_line we just added). Used by
+# bench/PERF-PROFILE-*.md investigations; never ship binaries built with
+# this — they're ~3× larger.
+[profile.release-perf]
+inherits = "release"
+debug = "line-tables-only"
+strip = false
+split-debuginfo = "off"
