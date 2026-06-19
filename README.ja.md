@@ -197,12 +197,12 @@ N=200k SET + N GET;3 つのサーバー列はすべて **同じ**
 
 | バックエンド(同 Rust caller) | SET ops/s | GET ops/s |
 |------------------------------|----------:|----------:|
-| **kevy 1.22 embed** | **9.96 M** | **13.20 M** |
-| **kevy 1.22 server @ localhost** | **65 k** | **64 k** |
-| valkey 9.1 server @ localhost | 56 k | 61 k |
-| redis 7.4 server @ localhost | 58 k | 62 k |
+| **kevy 1.22 embed** | **10.10 M** | **13.76 M** |
+| **kevy 1.22 server (io_uring)** | **63.5 k** | **64.4 k** |
+| valkey 9.1 server @ localhost | 54.6 k | 53.8 k |
+| redis 7.4 server @ localhost | 62.3 k | 61.7 k |
 
-embed は同じ kevy を TCP-loopback で呼ぶより **SET ~150×、GET ~205×
+embed は同じ kevy を TCP-loopback で呼ぶより **SET ~160×、GET ~214×
 速い** —— これが「ソケットなし、プロトコルなし、reactor なし」が組込
 めるアプリにもたらす定量化された節約です。これは embed が駆動する
 kevy-vs-valkey/redis スループット主張では **ありません** —— valkey と

@@ -1057,18 +1057,18 @@ URL differs.
 
 | backend (same Rust caller) | SET ops/s | GET ops/s |
 |----------------------------|----------:|----------:|
-| **kevy 1.22 embed** | **9.96 M** | **13.20 M** |
-| **kevy 1.22 server @ localhost** | **65 k** | **64 k** |
-| valkey 9.1 server @ localhost | 56 k | 61 k |
-| redis 7.4 server @ localhost | 58 k | 62 k |
+| **kevy 1.22 embed** | **10.10 M** | **13.76 M** |
+| **kevy 1.22 server (io_uring)** | **63.5 k** | **64.4 k** |
+| valkey 9.1 server @ localhost | 54.6 k | 53.8 k |
+| redis 7.4 server @ localhost | 62.3 k | 61.7 k |
 
 Two reads:
-1. **Embed vs server (same caller)**: embed is **~150× faster on
-   SET, ~205× on GET** than calling the same kevy over TCP-loopback.
+1. **Embed vs server (same caller)**: embed is **~160× faster on
+   SET, ~214× on GET** than calling the same kevy over TCP-loopback.
    That's the quantified cost of "no socket, no protocol, no
    reactor" for an app that can embed.
 2. **kevy server vs valkey/redis (same Rust caller)**: kevy SET
-   1.12-1.15×, GET 1.03-1.05× — modest single-connection leads. The
+   1.02-1.16×, GET 1.04-1.20× — modest single-connection leads. The
    bigger 1.26× SET / 1.13× GET that the C-client `redis-benchmark`
    table shows is the C-zero-alloc-argv advantage stripped off here.
 
@@ -1077,23 +1077,30 @@ valkey and redis have no in-process mode, the structural part is
 unchanged. This table answers "what does each backend buy a real
 Rust application" instead.
 
-### io_uring reactor + Rust client latency bug (followup)
+### Fixed: io_uring reactor's wake-deaf nap rung (was -c1 latency bug)
 
-While building the 4-way harness, the kevy-server-via-Rust-client
-column initially measured **4 187 ops/s** — 15× slower than valkey
-and redis on the same Rust caller. Toggling `KEVY_IO_URING=0`
-restored the expected 65 k/s, which says the bug lives **between
-kevy's io_uring reactor and short-write Rust-client sequential
-traffic**. C-client `redis-benchmark` does NOT trigger it (kevy on
-io_uring still reports 68 k GET / 76 k SET at -c1, as shown
-earlier).
+While building the 4-way harness the kevy-server-Rust column
+initially measured **4 187 ops/s** — 15× slower than valkey/redis
+on the same Rust caller. Toggling `KEVY_IO_URING=0` restored 65 k/s,
+which located the bug in the io_uring reactor's idle ladder.
 
-So io_uring + Rust client at -c1 -P1 is currently mis-served.
-Logged as a v1.22.x follow-up; the numbers above deliberately use
-the epoll reactor on the kevy-server-Rust column so the comparison
-is honest about Rust-caller-on-kevy performance. The high-concurrency
-`-c50 -P16` numbers earlier in this section are unaffected because
-pipelining keeps the io_uring reactor saturated.
+The middle rung between spin and park was `std::thread::sleep(200
+µs)` — a "nap" that aggregated lulls into bigger batches under
+load. But `thread::sleep` is wake-deaf: a `-c1` client request
+landing during the nap window paid the full 200 µs regardless of
+how fast the socket data actually arrived. C `redis-benchmark`
+didn't trigger it because its harness keeps the ring saturated;
+sequential Rust-client traffic at -c1 -P1 hit it on every
+request.
+
+**Fix**: removed the nap rung entirely (`spin → park` is the whole
+ladder now). The park rung already wakes instantly on any socket
+CQE, so -c1 latency drops to the steady-state ~15 µs/op. The
+`-c50 -P16` numbers earlier (kevy SET 4.0 M / GET 6.0 M) are
+unchanged because pipelined traffic keeps the reactor in the spin
+phase and never reaches the ladder. The high-concurrency 8-shard
+−18~21 % throughput note that motivated the original nap is
+revisited as a v1.22.x follow-up if a workload re-surfaces it.
 
 ## Pub/sub fan-out — 6-way compare
 

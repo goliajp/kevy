@@ -166,12 +166,12 @@ ops,12 字节 key,16 字节 value):
 
 | backend(同一 Rust caller) | SET ops/s | GET ops/s |
 |----------------------------|----------:|----------:|
-| **kevy 1.22 embed** | **9.96 M** | **13.20 M** |
-| **kevy 1.22 server @ localhost** | **65 k** | **64 k** |
-| valkey 9.1 server @ localhost | 56 k | 61 k |
-| redis 7.4 server @ localhost | 58 k | 62 k |
+| **kevy 1.22 embed** | **10.10 M** | **13.76 M** |
+| **kevy 1.22 server (io_uring)** | **63.5 k** | **64.4 k** |
+| valkey 9.1 server @ localhost | 54.6 k | 53.8 k |
+| redis 7.4 server @ localhost | 62.3 k | 61.7 k |
 
-embed 是同 kevy 跑 TCP-loopback 的 **SET ~150×、GET ~205×** —— 这就
+embed 是同 kevy 跑 TCP-loopback 的 **SET ~160×、GET ~214×** —— 这就
 是"无 socket、无协议、无 reactor"对能 embed 的应用而言的真实代价。
 **不是** embed-driven 的 kevy-vs-valkey/redis 吞吐声明 —— valkey 和
 redis 没有进程内模式,结构差距不可避免。用
