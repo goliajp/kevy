@@ -1041,25 +1041,59 @@ keyspace shard.
 | INCR | 5.9 M | 169 ns |
 | DEL | 5.5 M | 183 ns |
 
-### What this means against valkey/redis
+### Unified Rust caller vs valkey/redis (the honest comparison)
 
-valkey and redis have **no in-process mode**, so the comparison can
-only be "kevy embed vs kevy server vs valkey/redis server", and the
-shape of the comparison has to be `-c1 -P1` (a single in-process
-caller is what an embed user replaces with one Rust function call):
+The initial embed-vs-server table in this report compared a Rust
+`Store::set()` call (embed) against a C `redis-benchmark` SET (server)
+— apples-to-oranges. The real question is **same Rust program, only
+the backend changes**: that's what an actual Rust application sees.
 
-| backend | SET (k ops/s) | GET (k ops/s) |
-|---------|--------------:|--------------:|
-| kevy 1.22 embed | **7 000** | **9 000** |
-| kevy 1.22 server @ localhost | 76 | 68 |
-| valkey 9.1 server @ localhost | 60 | 60 |
-| redis 7.4 server @ localhost | 54 | 55 |
+`cargo run -p kevy-embedded --release --example embed_vs_server --
+--kevy-port 7011 --valkey-port 7012 --redis-port 7013 -N 200000`.
+Single connection, sequential, N=200k SET + N GET, servers pinned to
+cores 0-9 / client pinned to 10-15. The three server columns all go
+through the **same** `kevy_client::Connection` RESP path — only the
+URL differs.
 
-→ embed skips the wire layer entirely and runs **~92× faster on
-SET, ~132× on GET** than a TCP-loopback call to the same server.
-**This is not a kevy-vs-valkey/redis throughput claim** — it is the
-quantified cost of "no socket, no protocol, no reactor". An
-application that can embed instead of TCP wins that overhead back.
+| backend (same Rust caller) | SET ops/s | GET ops/s |
+|----------------------------|----------:|----------:|
+| **kevy 1.22 embed** | **9.96 M** | **13.20 M** |
+| **kevy 1.22 server @ localhost** | **65 k** | **64 k** |
+| valkey 9.1 server @ localhost | 56 k | 61 k |
+| redis 7.4 server @ localhost | 58 k | 62 k |
+
+Two reads:
+1. **Embed vs server (same caller)**: embed is **~150× faster on
+   SET, ~205× on GET** than calling the same kevy over TCP-loopback.
+   That's the quantified cost of "no socket, no protocol, no
+   reactor" for an app that can embed.
+2. **kevy server vs valkey/redis (same Rust caller)**: kevy SET
+   1.12-1.15×, GET 1.03-1.05× — modest single-connection leads. The
+   bigger 1.26× SET / 1.13× GET that the C-client `redis-benchmark`
+   table shows is the C-zero-alloc-argv advantage stripped off here.
+
+**Not** a kevy-vs-valkey/redis throughput claim driven by embed —
+valkey and redis have no in-process mode, the structural part is
+unchanged. This table answers "what does each backend buy a real
+Rust application" instead.
+
+### io_uring reactor + Rust client latency bug (followup)
+
+While building the 4-way harness, the kevy-server-via-Rust-client
+column initially measured **4 187 ops/s** — 15× slower than valkey
+and redis on the same Rust caller. Toggling `KEVY_IO_URING=0`
+restored the expected 65 k/s, which says the bug lives **between
+kevy's io_uring reactor and short-write Rust-client sequential
+traffic**. C-client `redis-benchmark` does NOT trigger it (kevy on
+io_uring still reports 68 k GET / 76 k SET at -c1, as shown
+earlier).
+
+So io_uring + Rust client at -c1 -P1 is currently mis-served.
+Logged as a v1.22.x follow-up; the numbers above deliberately use
+the epoll reactor on the kevy-server-Rust column so the comparison
+is honest about Rust-caller-on-kevy performance. The high-concurrency
+`-c50 -P16` numbers earlier in this section are unaffected because
+pipelining keeps the io_uring reactor saturated.
 
 ## Pub/sub fan-out — 6-way compare
 

@@ -500,6 +500,7 @@ name = "kevy-embedded"
 version = "1.4.0"
 dependencies = [
  "kevy",
+ "kevy-client",
  "kevy-hash",
  "kevy-persist",
  "kevy-replicate",
