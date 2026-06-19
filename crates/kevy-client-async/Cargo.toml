@@ -1,0 +1,82 @@
+[package]
+name = "kevy-client-async"
+description = "Async client for kevy — runtime-agnostic core with feature-gated tokio / smol / async-std transports; mirrors the blocking kevy-client surface."
+# Explicit, not workspace-inherited: kevy-client-async tracks its own
+# version. v1.0.0 = T4.x Phase-4 first cut (mirror + pipeline-first).
+version = "1.0.0-dev"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-client-async"
+readme = "README.md"
+keywords = ["kevy", "redis", "kv", "client", "async"]
+categories = ["database", "caching", "api-bindings", "asynchronous"]
+
+[lints]
+workspace = true
+
+# ─── Dep-rule exemption ────────────────────────────────────────────────
+# This is the ONLY crate in the kevy workspace allowed to depend on a
+# third-party async runtime crate (tokio / smol / async-std). The Rust
+# async ecosystem has no std-only viable substrate; full rationale in
+# RFC 2026-06-18-v3-cluster.md (F5) + memory
+# feedback-pure-rust-no-c-principle.md. Each runtime is feature-gated;
+# default = no transport, so an explicit feature pick is required.
+# ───────────────────────────────────────────────────────────────────────
+[dependencies]
+# Pure kevy-* deps stay here, no version pin (workspace path).
+kevy-resp = { path = "../kevy-resp" }
+kevy-hash = { path = "../kevy-hash" }
+
+# Phase 4 tasks T4.5/T4.6/T4.7 add the runtime deps with their inline
+# `# EXEMPTION — see feedback-pure-rust-no-c-principle.md` comments.
+
+# EXEMPTION — see feedback-pure-rust-no-c-principle.md (T4.5)
+# minimum-surface features: net (TcpStream), io-util (AsyncRead/Write
+# helpers), rt (runtime APIs surfaced to user code in examples/tests).
+tokio = { version = "1", optional = true, default-features = false, features = ["net", "rt", "io-util"] }
+
+# EXEMPTION — see feedback-pure-rust-no-c-principle.md (T4.6)
+# default-features = false: smol's defaults are already minimal but
+# we pin the floor explicitly so future smol releases can't widen the
+# attack surface silently.
+smol = { version = "2", optional = true, default-features = false }
+
+# EXEMPTION — see feedback-pure-rust-no-c-principle.md (T4.7)
+# async-std 1.x exposes `net` (TcpStream) only behind its `default`
+# feature — there is no narrower way to get just the networking
+# types. So we keep default-features and live with that floor; the
+# rest of async-std's surface is unused by this crate.
+async-std = { version = "1", optional = true }
+
+# Test-only deps: each runtime crate at the extra features the test
+# macros + executors need. Not exposed to lib consumers. The exemption
+# rationale still applies — these are kevy-client-async-local.
+[dev-dependencies]
+# EXEMPTION — see feedback-pure-rust-no-c-principle.md (tests)
+tokio = { version = "1", features = ["net", "io-util", "macros", "rt", "rt-multi-thread", "time"] }
+# EXEMPTION — see feedback-pure-rust-no-c-principle.md (tests)
+smol = { version = "2" }
+# EXEMPTION — see feedback-pure-rust-no-c-principle.md (tests)
+async-std = { version = "1", features = ["attributes"] }
+# T4.23 benchmark vs the blocking client. Workspace path, no
+# crates.io dep — blocking client is itself a 0-dep crate.
+kevy-client = { path = "../kevy-client" }
+
+[features]
+# `default = ["tokio"]` is a dev convenience so `cargo test --workspace`
+# (and other zero-arg builds) compile without extra flags — tokio is
+# the most common runtime users land on. **Lib consumers are expected
+# to set `default-features = false` and pick their runtime
+# explicitly**: the compile_error! gate in lib.rs (T4.8) enforces
+# exactly-one selection, so silently inheriting a default would mask
+# accidentally-pulling-tokio. Plan T4.8 only required "≥1 enabled",
+# not "no default" — the lib_user_should_pick contract still holds
+# via the dep-rule exemption comment + docs/async.md.
+default = ["tokio"]
+tokio = ["dep:tokio"]
+smol = ["dep:smol"]
+async-std = ["dep:async-std"]
