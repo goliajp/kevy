@@ -59,6 +59,7 @@ mod elect_integration;
 mod ops;
 mod replica_runner;
 mod replica_state;
+mod scope_integration;
 
 pub use config_global::init as config_init;
 pub use config_global::replace as config_replace;
@@ -74,6 +75,19 @@ pub use kevy_store::Store as KeyspaceStore;
 #[doc(hidden)]
 pub fn install_replica_senders_for_test(senders: Vec<kevy_rt::ReplicaInboxSender>) {
     replica_state::install_senders(senders);
+}
+
+/// Test-only hook to install the Phase 3 scope_integration globals
+/// without bringing up a full `kevy::serve`. Integration tests in
+/// `tests/scope_*.rs` use this to verify routing on a single
+/// Runtime. Calls into `scope_integration::install` and
+/// `install_self_id`; idempotent because both are OnceLocks.
+/// Returns the install_err if `[cluster] scopes` is malformed.
+#[doc(hidden)]
+pub fn install_scope_integration_for_test(cfg: &kevy_config::Config) -> Result<(), String> {
+    scope_integration::install(cfg)?;
+    scope_integration::install_self_id(cfg);
+    Ok(())
 }
 
 /// What to do with a connection after draining its buffered commands.
@@ -144,6 +158,14 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
     // negligible).
     elect_integration::install_shard_offsets(nshards);
     elect_integration::maybe_start(&cfg);
+    // v3-cluster Phase 3 / v1.21 scope-routing setup. Idempotent;
+    // bad scope config fails the boot loudly here rather than at
+    // the first wrong-shard write.
+    if let Err(msg) = scope_integration::install(&cfg) {
+        eprintln!("kevy: bad [cluster] scopes config: {msg}");
+        std::process::exit(1);
+    }
+    scope_integration::install_self_id(&cfg);
     let stop = Arc::new(AtomicBool::new(false));
     // Replica runners (if any) live in process-global state in
     // `replica_state` — they are started by `replication::apply` for

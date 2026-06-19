@@ -64,6 +64,8 @@ mod replay;
 mod replica_glue;
 #[cfg(not(target_arch = "wasm32"))]
 mod replica_runner;
+#[cfg(not(target_arch = "wasm32"))]
+mod replica_source;
 mod store;
 mod store_persist;
 

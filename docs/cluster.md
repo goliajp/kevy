@@ -267,3 +267,113 @@ then advances the local offset for resume on reconnect.
 - **Replica drop** — the runner thread is joined on the last
   `Store` clone drop; the primary's listener observes a clean FIN
   and frees the per-replica slot.
+
+## Scoped multi-writer (v1.21 / Phase 3)
+
+`kevy-scope` lets the operator declare per-prefix ownership: a
+specific writer node owns writes for keys matching `<prefix>`;
+every other node answers `-MISDIRECTED writer is <host:port>`
+so the client follows. An optional fallback takes over when
+`kevy-elect` flags the writer DOWN.
+
+```toml
+[cluster]
+node_id = "embed-billing-1"
+elect_port_base = 16100
+peers   = "embed-billing-1@10.0.0.1:6004,server-eu-1@10.0.0.2:6004,reader-1@10.0.0.3:6004"
+# prefix=writer[|fallback], comma-separated. Embedded `:` in the
+# prefix is fine (the first `=` splits prefix from owner spec).
+scopes  = "app:billing:=embed-billing-1|server-eu-1, app:auth:=embed-auth-1"
+```
+
+### Anti-scope (locked in the v3-cluster RFC)
+
+- **No Raft, no gossip.** The ownership table is static config;
+  the elect quorum signals only "writer DOWN → fallback takes
+  over", not topology consensus.
+- **No write-shadowing during migration.** `MOVE-SCOPE` runs as
+  Q3=(a) quiesce-window: the writer pauses writes for the prefix,
+  ships its slice, then ownership flips. Operator-coordinated,
+  no double-acceptance window.
+- **No automatic migration.** `MOVE-SCOPE` is operator-issued;
+  the cluster never decides to move a scope on its own.
+
+### Wire shapes
+
+- `-MISDIRECTED writer is <host:port>` — the write landed on a
+  node that is not this scope's writer (or active fallback).
+  `kevy-cluster-rw` 1.21+ caches the per-key target and retries
+  transparently; v1.20-and-earlier clients propagate the error.
+- `-QUIESCED migrating to <host:port>` — transient during a
+  MOVE-SCOPE window. Clients should back off briefly and retry
+  rather than panic; the quiesce window is bounded by the slice
+  ship time (single-digit seconds for GB-class scopes over LAN).
+
+### Embed as writer
+
+A scope's writer can be an embed (`embed-as-writer`) or a server.
+For embed:
+
+```rust
+use kevy_embedded::{Config, Store};
+
+let writer = Store::open(
+    Config::default().with_embed_writer("0.0.0.0:6105")
+)?;
+// Every local write pushes into the embed's replication source
+// backlog; readers connect to `0.0.0.0:6105` via
+// `kevy_replicate::ReplicaClient`.
+writer.set(b"app:billing:invoice:42", b"...")?;
+# Ok::<(), std::io::Error>(())
+```
+
+### F4 fallback
+
+When `kevy-elect` reports the scope's writer in `down_peers`
+(last HB older than `down_after`, default 5 s), the declared
+fallback treats itself as the active owner. Writes on the
+fallback succeed; writes on every other node continue to
+MISDIRECT, now naming the fallback. When the writer's HBs
+resume, the auto-reclaim is implicit — the writer leaves
+`down_peers`, so the fallback steps down.
+
+**Manual rejoin recovery (v1.21).** If the writer was DOWN long
+enough that the fallback accepted writes, those writes only
+exist on the fallback. Before re-enabling the writer for the
+scope: stop the writer, copy the fallback's data dir into the
+writer's, then restart the writer. v3.1 automates this via a
+writer-replica handshake from the fallback's stream;
+v1.21 keeps it manual to stay inside the "no fancy consensus"
+contract.
+
+### MOVE-SCOPE
+
+```
+MOVE-SCOPE <prefix> from <from-node-id> to <to-node-id>
+```
+
+Issued against the source writer. Walks the Q3=(a) quiesce
+window:
+
+1. The writer flips its local migration state to MIGRATING for
+   `<prefix>`; subsequent writes to keys under the prefix
+   answer `-QUIESCED migrating to <to-host:port>`.
+2. The writer serializes the prefix's keyspace slice and ships
+   it via `MOVE-SCOPE-INGEST <prefix> <bulk>` to the target's
+   data port.
+3. On `+OK`, the writer commits the migration locally: future
+   writes for the prefix on the source now return
+   `-MISDIRECTED writer is <to-host:port>` (no quiesce — the
+   move is done).
+4. Other cluster members continue routing per their static
+   `[cluster] scopes` config until the operator pushes new
+   config + restarts (v1.21 has no gossip).
+
+**Limitations (v1.21):**
+- The migration state is per-node local. Other members of the
+  cluster need a config push + restart to learn the new writer.
+- The data ship serializes the entire prefix slice in memory.
+  For prefixes ≫ GB, schedule MOVE-SCOPE during a maintenance
+  window; embed-as-writer's MVP isn't sized for that scale.
+- Aborting mid-ship reverts to the source writer; no partial-
+  apply state is left on the target.

@@ -165,10 +165,23 @@ impl Transport {
     /// replication`. Locks the elector mutex briefly; cheap.
     pub fn state_snapshot(&self) -> ElectorSnapshot {
         let e = self.state_view.elector.lock().expect("elector lock");
+        let now = std::time::Instant::now();
+        // T3.11 / F4: include the list of peers this node considers
+        // DOWN at snapshot time. kevy-scope's F4 fallback path reads
+        // this to decide "writer DOWN → fallback takes over"; the
+        // computation here is cheap (one pass over peer_ids).
+        let down_peers: Vec<String> = e
+            .peer_ids
+            .iter()
+            .filter(|id| id.as_str() != e.node_id.as_str())
+            .filter(|id| e.is_peer_down(id, now))
+            .cloned()
+            .collect();
         ElectorSnapshot {
             role: e.role(),
             epoch: e.epoch(),
             current_primary: e.current_primary().map(str::to_string),
+            down_peers,
         }
     }
 
@@ -210,6 +223,13 @@ pub struct ElectorSnapshot {
     pub epoch: u64,
     /// Currently-known primary id (`None` until first ANNOUNCE).
     pub current_primary: Option<String>,
+    /// Peers (excluding self) whose last `HB` is older than
+    /// `ElectConfig::down_after` — i.e. the down-set this node would
+    /// vote on at quorum time. kevy-scope's F4 fallback reads this
+    /// to decide whether the declared scope writer is reachable;
+    /// when the writer's id is present, the fallback takes over the
+    /// scope's writes.
+    pub down_peers: Vec<String>,
 }
 
 // ─────────── per-thread loops ───────────

@@ -154,6 +154,11 @@ impl Config {
                 self.cluster.peers = crate::cluster::PeerEntry::parse_list(&raw)
                     .map_err(|tok| schema_err(&item, format!("bad peer token: {tok:?}")))?;
             }
+            "scopes" => {
+                let raw = value_as_string(&item)?;
+                self.cluster.scopes = crate::cluster::ScopeEntry::parse_list(&raw)
+                    .map_err(|tok| schema_err(&item, format!("bad scope token: {tok:?}")))?;
+            }
             k => return Err(schema_err(&item, format!("unknown [cluster] key: {k}"))),
         }
         Ok(())

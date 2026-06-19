@@ -21,6 +21,7 @@ pub(crate) mod cluster;
 pub(crate) mod config;
 mod memory;
 pub(crate) mod replication;
+pub(crate) mod scope_move;
 pub(crate) mod stats;
 
 use std::time::SystemTime;
@@ -64,6 +65,8 @@ pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
         b"CLIENT" => client::cmd_client(args, out, RespVersion::V2),
         b"ROLE" => replication::cmd_role(args, out),
         b"REPLICAOF" | b"SLAVEOF" => replication::cmd_replicaof(args, out),
+        b"MOVE-SCOPE" => scope_move::cmd_move_scope(store, args, out),
+        b"MOVE-SCOPE-INGEST" => scope_move::cmd_move_scope_ingest(store, args, out),
         b"MEMORY" => {
             let cfg = config_global::get();
             memory::cmd_memory(&cfg, store, args, out);

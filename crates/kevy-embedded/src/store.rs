@@ -81,11 +81,24 @@ pub(crate) struct Inner {
     /// Pub/sub bus. Only shard 0's is ever used (pub/sub is process-wide);
     /// other shards carry an idle one (cheap).
     pub(crate) bus: PubsubBus,
+    /// Phase 3 / v1.21: shared replication source if this store is
+    /// an embed-as-writer. Every shard holds a clone of the same
+    /// `Arc<Mutex<...>>` so `commit_write` can push mutations
+    /// without reaching back up through the `DropGuard`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) writer_source:
+        Option<std::sync::Arc<Mutex<kevy_replicate::source::ReplicationSource>>>,
 }
 
 impl Inner {
     pub(crate) fn new(store: kevy_store::Store, aof: Option<Aof>) -> Self {
-        Inner { store, aof, bus: PubsubBus::new() }
+        Inner {
+            store,
+            aof,
+            bus: PubsubBus::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            writer_source: None,
+        }
     }
 }
 
@@ -102,6 +115,12 @@ pub(crate) struct DropGuard {
     /// clone goes away.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) replica_runner: Option<crate::replica_runner::ReplicaRunner>,
+    /// Replica-source listener + accepted connection threads, present
+    /// iff this store is a Phase 3 embed-as-writer
+    /// (`Config::embed_writer_listen_addr = Some(...)`). Joined on
+    /// last-clone drop.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) replica_source: Option<crate::replica_source::ReplicaSource>,
 }
 
 impl Store {
@@ -121,12 +140,35 @@ impl Store {
         let (reaper_stop, reaper_join) = crate::reaper::spawn_reaper(&config, &shards)?;
         #[cfg(not(target_arch = "wasm32"))]
         let replica_runner = crate::replica_glue::spawn_replica_runner(&config, &shards);
+        #[cfg(not(target_arch = "wasm32"))]
+        let replica_source = match config.embed_writer_listen_addr.as_ref() {
+            Some(addr) => {
+                let rs = crate::replica_source::ReplicaSource::spawn(
+                    addr,
+                    config.embed_writer_backlog_bytes,
+                )?;
+                // Inject the shared source Arc into every shard's
+                // Inner so `commit_write` pushes mutations into the
+                // backlog inline. Done once at open under the
+                // shard's write lock; reads of `Inner::writer_source`
+                // afterwards are uncontended.
+                let shared = rs.shared_source();
+                for shard in shards.iter() {
+                    let mut g = lock_write(shard);
+                    g.writer_source = Some(shared.clone());
+                }
+                Some(rs)
+            }
+            None => None,
+        };
         let guard = Arc::new(DropGuard {
             reaper_stop,
             reaper_join: Mutex::new(reaper_join),
             shards_for_flush: shards.clone(),
             #[cfg(not(target_arch = "wasm32"))]
             replica_runner,
+            #[cfg(not(target_arch = "wasm32"))]
+            replica_source,
         });
         Ok(Store { shards, guard, config })
     }
@@ -388,10 +430,15 @@ fn log_argv(aof: &mut Option<Aof>, parts: &[&[u8]]) -> io::Result<()> {
     Ok(())
 }
 
-/// Complete a write on one shard: AOF-log the canonical RESP command, then run
-/// that shard's post-write eviction sweep.
+/// Complete a write on one shard: AOF-log the canonical RESP command,
+/// publish to the embed-as-writer replication source (if configured),
+/// then run that shard's post-write eviction sweep.
 pub(crate) fn commit_write(inner: &mut Inner, parts: &[&[u8]]) -> io::Result<()> {
     log_argv(&mut inner.aof, parts)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(src) = &inner.writer_source {
+        crate::replica_source::push_into(src, parts);
+    }
     inner.store.try_evict_after_write();
     Ok(())
 }
@@ -408,6 +455,12 @@ impl Drop for DropGuard {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(r) = &self.replica_runner {
             r.shutdown();
+        }
+        // Stop the writer-source accept + connection threads next, so
+        // no new replica picks up bytes mid-flush.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(rs) = &self.replica_source {
+            rs.shutdown();
         }
         // Stop + join the reaper, then flush every shard's AOF so EverySec
         // users don't lose the last sub-second of writes.

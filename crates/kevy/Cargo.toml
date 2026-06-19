@@ -39,6 +39,9 @@ kevy-replicate = { path = "../kevy-replicate", version = "1.19.0" }
 # `[cluster] peers = "..."`; dormant when not configured, so the
 # v1.18-era deployments are unaffected.
 kevy-elect = { path = "../kevy-elect", version = "1.19.0" }
+# kevy-scope: v3-cluster Phase 3 scoped multi-writer ownership.
+# Opt-in via `[cluster] scopes = "..."`; dormant otherwise.
+kevy-scope = { path = "../kevy-scope", version = "1.19.0" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }

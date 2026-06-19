@@ -57,6 +57,27 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
     // the unknown-command error below (which reports the original `name`).
     let mut buf = [0u8; 32];
     let cmd = upper_verb(name, &mut buf);
+    // v3-cluster Phase 3 / v1.21 scope routing. **Above** the GET/SET
+    // fast path because SET must respect scope ownership too (the
+    // fast path otherwise would silently apply locally). `is_active`
+    // is one Relaxed atomic load + branch — predicted away when no
+    // scopes are declared (the v1.20-and-earlier hot path eats one
+    // mispredict-resistant load on every command, which is below
+    // measurable noise per `bench/perfgate.sh`).
+    if crate::cmd::is_write_verb(cmd) && crate::scope_integration::is_active()
+        && let Some(key) = args.get(1)
+        && let Some(redirect) = crate::scope_integration::route_write(key)
+    {
+        match redirect {
+            crate::scope_integration::WriteRedirect::Misdirected(addr) => {
+                crate::scope_integration::encode_misdirected(out, &addr);
+            }
+            crate::scope_integration::WriteRedirect::Quiesced { to_addr } => {
+                crate::scope_integration::encode_quiesced(out, &to_addr);
+            }
+        }
+        return;
+    }
     // Tier-1 fast path: GET / SET are the overwhelming bulk of real traffic;
     // dispatch them in ONE match instead of walking the category-handler
     // chain (conn → ops → string → …) whose every stage re-matches the verb.
