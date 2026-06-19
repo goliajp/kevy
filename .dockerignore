@@ -5,6 +5,9 @@ target/
 docs/
 tests/
 bench/
+# Exception: bench/pubsub-compare/ ships its own Dockerfile.loadgen that
+# COPYs aeron_bench / zenoh_bench / zmq fixture from the repo root context.
+!bench/pubsub-compare/
 node_modules/
 **/*.bak
 **/.DS_Store

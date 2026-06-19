@@ -1,14 +1,34 @@
-# kevy vs valkey 9.1 / redis 7.4 — bench narrative (v0.2 → v1.17)
+# kevy vs valkey 9.1 / redis 7.4 — bench narrative (v0.2 → v1.22)
 
-> **Current headline (v1.17.0, lx64 16-core, 2026-06-15):**
-> 8-shard cluster GET **30.8 M ops/s** · SET **22.3 M ops/s** (long-run, pinned
-> hashtag) — ≈ 80 % of the naive 38 M sequential-key ceiling estimate.
-> `ClusterClient` (kevy-client 1.9.0) at `-c50 -P1`: **533 k ops/s @ p99
-> 260 µs** — 1.6× throughput / 15× p99 vs single-shard, zero MOVED hops.
-> Jump to the latest segments: [v1.17 cluster-aware client](#v117-cluster-aware-clusterclient---tail-latency-fixed-2026-06-15-lx64),
-> [perf-ceiling campaign](#server-perf-ceiling-campaign--regression-recovered-then-peak-surpassed-2026-060910-lx64),
-> [CLUSTER slot routing](#single-node-cluster-slot-routing--the-forwarding-tax-measured-honestly-2026-06-10-lx64).
-> The chronological narrative below preserves the v0.2 → v1.17 journey.
+> **Current headline (v1.22.0, lx64 16-core, 2026-06-20):**
+> - **Server `-c50 -P16` (high concurrency + pipeline)**: kevy SET **4.0 M
+>   ops/s** · GET **6.0 M ops/s** — 2.7×/3.0× best-of-valkey-or-redis
+>   (valkey-iot 1.5 M / 2.0 M; redis-iot 1.5 M / 2.0 M).
+> - **Server `-c1 -P1` (single conn sequential)**: kevy SET **76 k/s** ·
+>   GET **68 k/s** vs valkey-iot 60 k/60 k, redis 55 k/54 k. 1.13-1.49×
+>   best-of-rest, kept the lead from v1.17.
+> - **Embed in-process** (`kevy-embedded::Store`, no socket): SET **7.0 M
+>   ops/s** (143 ns/op) · GET hit **9.0 M ops/s** (111 ns/op) · GET miss
+>   **42.2 M ops/s** (24 ns/op) — ~90× kevy server `-c1` for the same
+>   workload (architecture difference, not apples-to-apples; see embed
+>   section for the honest framing).
+> - **Pub/sub fan-out** (50 subs × 200 k msgs × 16 B, warm run):
+>   Aeron-IPC 84 M msg/s (shared-memory ceiling) → **kevy 18.5 M**
+>   → ZMQ 9.4 M → redis 8.9 M → valkey 6.8 M → Zenoh 2.9 M. kevy is the
+>   fastest TCP-based broker — 2.0× ZMQ, 2.1× redis, 2.7× valkey.
+> - **Async client (`kevy-client-async` 1.0.0, single conn vs steady
+>   kevy server)**: async-sequential 4.2 k ops/s · blocking-sequential
+>   4.2 k ops/s — async client overhead is ≤ noise (RFC F5 ≥ 80 %
+>   target met). Pipeline at batch=64: 172 k ops/s — **41× sequential**,
+>   single RTT amortized over N commands.
+>
+> Jump to the latest segments:
+> - [v1.22 bundle bench (server, embed, pub/sub, async)](#v122-v3-cluster-bundle--bench-refresh-2026-06-20-lx64)
+> - [v1.17 cluster-aware client](#v117-cluster-aware-clusterclient---tail-latency-fixed-2026-06-15-lx64)
+> - [Perf-ceiling campaign](#server-perf-ceiling-campaign--regression-recovered-then-peak-surpassed-2026-060910-lx64)
+> - [CLUSTER slot routing](#single-node-cluster-slot-routing--the-forwarding-tax-measured-honestly-2026-06-10-lx64)
+>
+> The chronological narrative below preserves the v0.2 → v1.22 journey.
 
 ---
 
@@ -946,3 +966,146 @@ increment) to the reactor `start_command` path. Unit-level `kevy-store`
 perfgate stayed PASS; **the e2e reactor-path replay on lx64 was not
 re-run during the release**. mailrs dogfood has been asked to confirm
 peak ~81 k network ops/s is unchanged.
+
+---
+
+# v1.22 (v3-cluster bundle) — bench refresh, 2026-06-20, lx64
+
+**Bundle ships** P2 embed-as-read-replica + P3 scoped multi-writer +
+P4 `kevy-client-async` (runtime-agnostic async client). Server hot
+path is unchanged from v1.19 — scope routing in dispatch is one
+extra Relaxed atomic load per command, well below noise. This
+section refreshes every headline number against v1.22.0 on the same
+lx64 box used since v1.13, and adds the embed-in-process and async
+client numbers v1.22 enables.
+
+Setup:
+- lx64 16-core bare-metal, kernel 6.x, Docker 26.1.
+- Server cpus 0-9 / client cpus 10-15 (×6 threads where applicable)
+  via `taskset`. valkey 9.1 + redis 7.4 run under `docker run
+  --network host` with the same cpuset.
+- All persistence off (kevy `--no-aof`, valkey/redis `--save ''
+  --appendonly no`).
+
+## Server `-c50 -P16` — high-concurrency pipelined throughput
+
+`redis-benchmark -c50 -P16 --threads 6 -n 3000000`. Each engine runs
+in **isolation** (start → 2 warmed runs → stop) so kevy's busy-poll
+does not starve a co-located competitor.
+
+| engine | SET (M ops/s) | GET (M ops/s) |
+|--------|--------------:|--------------:|
+| **kevy 1.22 (io_uring)** | **4.0** | **6.0** |
+| **kevy 1.22 (epoll)**    | **4.0** | **6.0** |
+| valkey 9.1 (io-threads=10) | 1.50 | 2.00 |
+| valkey 9.1 (default)     | 1.20 | 1.33 |
+| redis 7.4 (io-threads=10)  | 1.50 | 2.00 |
+| redis 7.4 (default)       | 1.50 | 1.71 |
+
+→ **kevy 2.7× best-other SET, 3.0× best-other GET**. The io_uring
+vs epoll gap closed at this load shape (pipelining amortises the
+syscall savings io_uring brings at low concurrency). Reproduce:
+`bash bench/loopback_c50.sh`.
+
+## Server `-c1 -P1` — single-connection sequential
+
+`redis-benchmark -c1 -P1 -n 300000`. The honest worst case for any
+busy-poll engine: one client, one in-flight request.
+
+| engine | SET (k ops/s) | GET (k ops/s) |
+|--------|--------------:|--------------:|
+| **kevy 1.22 (epoll)** | **76** | **68** |
+| kevy 1.22 (io_uring) | 68 | 67 |
+| valkey 9.1 (io-threads) | 60 | 60 |
+| valkey 9.1 (default) | 51 | 52 |
+| redis 7.4 (default) | 54 | 55 |
+
+→ **kevy 1.26× best-other SET, 1.13× best-other GET**. io_uring
+behind epoll here is expected — at `-c1 -P1` the kernel CQE
+batching cannot fire, and the extra `io_uring_enter` syscalls
+narrowly lose to epoll's tight `recv`/`send` loop. Reproduce:
+`bash bench/loopback_c1.sh`.
+
+## Embed — in-process throughput (`kevy-embedded::Store`)
+
+`cargo run -p kevy-embedded --release --example embed_throughput`.
+No socket, no RESP encode/decode, no server reactor — the call path
+is `Store::set(key, value) -> io::Result<bool>` straight into the
+keyspace shard.
+
+| op | ops/s | per-op |
+|----|------:|-------:|
+| SET (overwrite) | **7.0 M** | 143 ns |
+| GET (hit) | **9.0 M** | 111 ns |
+| GET (miss) | **42.2 M** | 24 ns |
+| INCR | 5.9 M | 169 ns |
+| DEL | 5.5 M | 183 ns |
+
+### What this means against valkey/redis
+
+valkey and redis have **no in-process mode**, so the comparison can
+only be "kevy embed vs kevy server vs valkey/redis server", and the
+shape of the comparison has to be `-c1 -P1` (a single in-process
+caller is what an embed user replaces with one Rust function call):
+
+| backend | SET (k ops/s) | GET (k ops/s) |
+|---------|--------------:|--------------:|
+| kevy 1.22 embed | **7 000** | **9 000** |
+| kevy 1.22 server @ localhost | 76 | 68 |
+| valkey 9.1 server @ localhost | 60 | 60 |
+| redis 7.4 server @ localhost | 54 | 55 |
+
+→ embed skips the wire layer entirely and runs **~92× faster on
+SET, ~132× on GET** than a TCP-loopback call to the same server.
+**This is not a kevy-vs-valkey/redis throughput claim** — it is the
+quantified cost of "no socket, no protocol, no reactor". An
+application that can embed instead of TCP wins that overhead back.
+
+## Pub/sub fan-out — 6-way compare
+
+`bench/pubsub-compare/run.sh`. 1 publisher → 50 subscribers, 200 000
+messages, 16-byte payload, host-loopback (Aeron uses shared-memory
+IPC). Two consecutive runs; the warm number is reported because the
+cold run is dominated by docker container start + JIT-style warm-up.
+
+| system | mode | delivered msg/s |
+|--------|------|----------------:|
+| Aeron 1.45 (IPC) | shared memory | **84 M** |
+| **kevy 1.22** | RESP broker (TCP) | **18.5 M** |
+| ZeroMQ 4.3.5 | direct messaging (TCP) | 9.4 M |
+| redis 7.4 | RESP broker (TCP) | 8.9 M |
+| valkey 9.1 | RESP broker (TCP) | 6.8 M |
+| Zenoh 1.9 | peer/mesh (TCP) | 2.9 M |
+
+→ **kevy is the fastest TCP-based broker**: 2.0× ZMQ, 2.1× redis,
+2.7× valkey. Aeron IPC is the structural ceiling (no kernel network
+stack); among TCP brokers kevy leads, including beating the
+non-broker ZeroMQ direct-messaging path. The methodology +
+per-system code lives in `bench/pubsub-compare/`.
+
+## Async client (`kevy-client-async` 1.0.0) — single conn
+
+`cargo run -p kevy-client-async --release --features tokio --example
+bench_throughput`. 100 000 SETs after 10 000 warm-ups against a
+kevy 1.22 server on lx64 cores 0-9; client on cores 10-15.
+
+| client | ops/s | vs blocking |
+|--------|------:|------------:|
+| `kevy-client` (blocking, sequential) | **4 180** | 1.00× |
+| `kevy-client-async` (async, sequential) | **4 169** | 1.00× |
+| `kevy-client-async` (async, pipelined batch=64) | **172 355** | **41.2×** |
+
+→ The async client is **architecturally free** on a single connection
+(meets the RFC F5 ≥ 80 % single-conn budget). The pipeline-first
+sugar is where async pays off — `conn.pipeline().set(k1,v1).get(k2)
+.run(&mut conn).await` collapses N RTTs to one, hitting 41× the
+sequential ops/s at batch 64.
+
+Note on the sequential number: 4 k ops/s is **lib-side bound**, not
+server-side. `redis-benchmark -c1 -P1` against the same kevy server
+delivers 76 k SET — the Rust client allocates `Vec<Vec<u8>>` per
+argv and a fresh output `Vec<u8>` per encoded command, where
+`redis-benchmark` (C) packs directly into a stack buffer. The
+server still has ~20× headroom on that single connection. Closing
+this gap is a v2-track candidate — pipelining is the user-side
+workaround until then.
