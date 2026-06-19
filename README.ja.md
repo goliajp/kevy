@@ -185,14 +185,31 @@ resharding、AUTH/TLS。
 | `incr` | 169 ns | 5.9 M ops/s |
 | `del` | 183 ns | 5.5 M ops/s |
 
-同ホストのネットワーク・サーバーに対しておよそ **GET で 130×、SET で
-90×** —— 組込みパスはワイヤ層全体(RESP 編/復号 + TCP + システムコール)
-をスキップします。再現:
+再現:
 `cargo run -p kevy-embedded --example embed_throughput --release`。
 
-> これは kevy-vs-valkey/redis のスループット主張ではありません ——
-> valkey と redis にプロセス内モードはないので、公平なのは「組込みは
-> ワイヤ層をスキップする;ここに節約量がある」という言明だけです。
+#### 同じ Rust caller、4 バックエンド
+
+公平な比較:**同じ Rust プログラム** でバックエンドだけを切り替える
+—— これが実アプリが実際に見る数字です。シングル接続、シーケンシャル、
+N=200k SET + N GET;3 つのサーバー列はすべて **同じ**
+`kevy_client::Connection` の RESP パスを通り、URL だけが異なります:
+
+| バックエンド(同 Rust caller) | SET ops/s | GET ops/s |
+|------------------------------|----------:|----------:|
+| **kevy 1.22 embed** | **9.96 M** | **13.20 M** |
+| **kevy 1.22 server @ localhost** | **65 k** | **64 k** |
+| valkey 9.1 server @ localhost | 56 k | 61 k |
+| redis 7.4 server @ localhost | 58 k | 62 k |
+
+embed は同じ kevy を TCP-loopback で呼ぶより **SET ~150×、GET ~205×
+速い** —— これが「ソケットなし、プロトコルなし、reactor なし」が組込
+めるアプリにもたらす定量化された節約です。これは embed が駆動する
+kevy-vs-valkey/redis スループット主張では **ありません** —— valkey と
+redis にプロセス内モードがないので、構造的なギャップは避けられません。
+再現:
+`cargo run -p kevy-embedded --example embed_vs_server --release
+--kevy-port 7011 --valkey-port 7012 --redis-port 7013 -N 200000`。
 
 ### Pub/sub ファンアウト(サーバー・モード)
 
