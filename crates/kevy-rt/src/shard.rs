@@ -29,6 +29,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering, fence};
 
+pub(crate) use crate::cache_padded::CachePadded;
+
 pub(crate) struct Shard<C: Commands> {
     pub(crate) id: usize,
     pub(crate) nshards: usize,
@@ -92,7 +94,7 @@ pub(crate) struct Shard<C: Commands> {
     /// Per-shard "is this core parked (blocking) right now?" flags. A sender only
     /// needs a syscall wakeup for a parked peer; a spinning peer sees the message
     /// on its next poll. Indexed by shard id; `parked[self.id]` is our own.
-    pub(crate) parked: Vec<Arc<AtomicBool>>,
+    pub(crate) parked: Vec<Arc<CachePadded<AtomicBool>>>,
     /// Per-shard inbox-dirty bitmaps. `inbound_dirty[me]` is owned by shard
     /// `me`: a sender from shard `src` calls `inbound_dirty[me].fetch_or(1
     /// << src, Release)` after pushing a message into `inboxes[src]`, so
@@ -103,7 +105,7 @@ pub(crate) struct Shard<C: Commands> {
     /// the cost; this flag collapses it to one atomic load. Limit:
     /// `nshards ≤ 64` (one bit per peer in a single `u64`); enforced by
     /// `debug_assert` in [`Self::run`].
-    pub(crate) inbound_dirty: Vec<Arc<AtomicU64>>,
+    pub(crate) inbound_dirty: Vec<Arc<CachePadded<AtomicU64>>>,
     pub(crate) data_dir: PathBuf,
     /// `None` disables the append-only log (e.g. pure in-memory benchmarking).
     pub(crate) aof: Option<Aof>,
