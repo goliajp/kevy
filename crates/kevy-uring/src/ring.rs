@@ -10,12 +10,11 @@ use std::io;
 use crate::completion::Completion;
 use crate::ffi::{
     self, IORING_ENTER_GETEVENTS, IORING_ENTER_SQ_WAKEUP, IORING_OFF_CQ_RING, IORING_OFF_SQ_RING,
-    IORING_OFF_SQES, IORING_OP_ACCEPT, IORING_OP_NOP, IORING_OP_READ, IORING_OP_RECV,
-    IORING_OP_TIMEOUT, IORING_OP_WRITE, IORING_RECV_MULTISHOT, IORING_SETUP_SQ_AFF,
-    IORING_SETUP_SQPOLL, IORING_SQ_NEED_WAKEUP, IOSQE_BUFFER_SELECT, MAP_POPULATE, MAP_SHARED,
-    PROT_READ, PROT_WRITE, SOCK_CLOEXEC, SOCK_NONBLOCK, SYS_IO_URING_ENTER, SYS_IO_URING_SETUP,
+    IORING_OFF_SQES, IORING_SETUP_COOP_TASKRUN, IORING_SETUP_SINGLE_ISSUER, IORING_SETUP_SQ_AFF,
+    IORING_SETUP_SQPOLL, IORING_SQ_NEED_WAKEUP, MAP_POPULATE, MAP_SHARED, PROT_READ, PROT_WRITE,
+    SYS_IO_URING_ENTER, SYS_IO_URING_SETUP,
 };
-use crate::layout::{IoUringParams, IoUringSqe, KernelTimespec};
+use crate::layout::{IoUringParams, IoUringSqe};
 use crate::pbr::ProvidedBufRing;
 
 /// A Linux io_uring instance: one submission ring + one completion ring.
@@ -166,31 +165,65 @@ impl IoUring {
 
     /// Issue `io_uring_setup` and return `(ring_fd, params)`. When `sqpoll`
     /// is `Some((idle_ms, cpu))`, configures the kernel-side SQ poll thread.
+    ///
+    /// For the non-SQPOLL path (the default kevy reactor) tries
+    /// `IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN` first
+    /// (Linux 6.0+, +3–5% measured on the lx64 reference) and falls back
+    /// to a plain setup if the kernel rejects them (EINVAL). The fallback
+    /// keeps Linux 5.13+ supported with no hard version check.
+    ///
+    /// **Not enabled**: `IORING_SETUP_DEFER_TASKRUN` (Linux 6.1+) — it
+    /// changes the CQ ring semantics so completions only land after
+    /// `io_uring_enter` is called. kevy's reactor busy-polls the CQ ring
+    /// directly without entering the kernel on the steady state, so
+    /// DEFER_TASKRUN starves completions (measured 65–73% regression in
+    /// the E2 isolation, see `bench/PERF-ATTACK-LOG-2026-06-20.md`).
     fn setup_ring(
         entries: u32,
         sqpoll: Option<(u32, Option<u32>)>,
     ) -> io::Result<(c_int, IoUringParams)> {
-        let mut p = IoUringParams::default();
-        if let Some((idle_ms, cpu)) = sqpoll {
-            p.flags |= IORING_SETUP_SQPOLL;
-            p.sq_thread_idle = idle_ms;
-            if let Some(c) = cpu {
-                p.flags |= IORING_SETUP_SQ_AFF;
-                p.sq_thread_cpu = c;
+        // SQPOLL is mutually exclusive with the cooperative flags
+        // (the SQ poll kernel thread is the one running task_work, not the
+        // user thread). Otherwise prefer the strongest set the kernel
+        // accepts; fall back on EINVAL by dropping flags level by level.
+        let sqpoll_flags: u32 = match sqpoll {
+            Some(_) => IORING_SETUP_SQPOLL,
+            None => 0,
+        };
+        let modern_flag_tiers: &[u32] = if sqpoll.is_some() {
+            &[0]
+        } else {
+            &[IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN, 0]
+        };
+
+        for &modern in modern_flag_tiers {
+            let mut p = IoUringParams::default();
+            p.flags = sqpoll_flags | modern;
+            if let Some((idle_ms, cpu)) = sqpoll {
+                p.sq_thread_idle = idle_ms;
+                if let Some(c) = cpu {
+                    p.flags |= IORING_SETUP_SQ_AFF;
+                    p.sq_thread_cpu = c;
+                }
+            }
+            // SAFETY: `&mut p` lives across this call; kernel writes via ptr.
+            let fd = unsafe {
+                ffi::syscall(
+                    SYS_IO_URING_SETUP,
+                    entries as c_long,
+                    &mut p as *mut IoUringParams,
+                )
+            };
+            if fd >= 0 {
+                return Ok((fd as c_int, p));
+            }
+            let err = io::Error::last_os_error();
+            // EINVAL = kernel doesn't recognise these flags. Try next tier.
+            if err.raw_os_error() != Some(22) {
+                return Err(err);
             }
         }
-        // SAFETY: `&mut p` lives across this call; kernel writes via the ptr.
-        let fd = unsafe {
-            ffi::syscall(
-                SYS_IO_URING_SETUP,
-                entries as c_long,
-                &mut p as *mut IoUringParams,
-            )
-        };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        Ok((fd as c_int, p))
+        Err(io::Error::last_os_error())
     }
 
     /// Compute the three mapping lengths the kernel needs us to map.
@@ -261,7 +294,8 @@ impl IoUring {
 
     /// Reserve the next SQ slot (advancing the producer cursor + array map);
     /// returns its SQE index, or `None` if the submission queue is full.
-    fn reserve(&mut self) -> Option<usize> {
+    /// Called from the `prep_*` helpers in [`crate::prep`].
+    pub(crate) fn reserve(&mut self) -> Option<usize> {
         // SAFETY: `sq_khead` is the kernel-published head ptr.
         let khead = unsafe { (*self.sq_khead).load(Ordering::Acquire) };
         if self.sq_tail.wrapping_sub(khead) >= self.sq_entries {
@@ -275,127 +309,11 @@ impl IoUring {
         Some(idx)
     }
 
-    /// Queue a `read(fd)` of `len` bytes into `buf`, tagged with `user_data`.
-    /// Returns `false` if the SQ is full.
-    ///
-    /// # Safety
-    /// `buf` must point to `len` writable bytes and stay valid until the matching
-    /// completion is reaped.
-    pub unsafe fn prep_read(&mut self, fd: i32, buf: *mut u8, len: u32, user_data: u64) -> bool {
-        let Some(idx) = self.reserve() else {
-            return false;
-        };
-        // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
-        unsafe {
-            ptr::write(
-                self.sqes.add(idx),
-                IoUringSqe::new(IORING_OP_READ, fd, buf as u64, len, user_data),
-            );
-        }
-        true
-    }
-
-    /// Queue a `write(fd)` of `len` bytes from `buf`, tagged with `user_data`.
-    /// Returns `false` if the SQ is full.
-    ///
-    /// # Safety
-    /// `buf` must point to `len` readable bytes and stay valid until the matching
-    /// completion is reaped.
-    pub unsafe fn prep_write(&mut self, fd: i32, buf: *const u8, len: u32, user_data: u64) -> bool {
-        let Some(idx) = self.reserve() else {
-            return false;
-        };
-        // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
-        unsafe {
-            ptr::write(
-                self.sqes.add(idx),
-                IoUringSqe::new(IORING_OP_WRITE, fd, buf as u64, len, user_data),
-            );
-        }
-        true
-    }
-
-    /// Queue a **multishot** `recv(fd)` that draws its destination buffer from
-    /// the provided-buffer group `bgid` (see [`IoUring::register_buf_ring`]): one
-    /// SQE re-fires a completion per arrival, the kernel picking + reporting a
-    /// buffer id each time, until it terminates (error / `ENOBUFS`, signalled by
-    /// [`Completion::has_more`] returning `false`). No per-recv SQE, no read
-    /// buffer to keep alive. Returns `false` if the SQ is full.
-    pub fn prep_recv_multishot(&mut self, fd: i32, bgid: u16, user_data: u64) -> bool {
-        let Some(idx) = self.reserve() else {
-            return false;
-        };
-        // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
-        unsafe {
-            let sqe = self.sqes.add(idx);
-            // addr/len 0: the buffer comes from the group, not from us.
-            ptr::write(sqe, IoUringSqe::new(IORING_OP_RECV, fd, 0, 0, user_data));
-            (*sqe).ioprio = IORING_RECV_MULTISHOT;
-            (*sqe).flags = IOSQE_BUFFER_SELECT;
-            // `buf_index` aliases `buf_group` in the kernel ABI.
-            (*sqe).buf_index = bgid;
-        }
-        true
-    }
-
-    /// Queue an `accept` on `listen_fd`; the accepted fd arrives as the
-    /// completion's `res` (already `O_NONBLOCK | O_CLOEXEC`). Returns `false` if
-    /// the SQ is full.
-    pub fn prep_accept(&mut self, listen_fd: i32, user_data: u64) -> bool {
-        let Some(idx) = self.reserve() else {
-            return false;
-        };
-        // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
-        unsafe {
-            let sqe = self.sqes.add(idx);
-            ptr::write(
-                sqe,
-                IoUringSqe::new(IORING_OP_ACCEPT, listen_fd, 0, 0, user_data),
-            );
-            (*sqe).rw_flags = SOCK_NONBLOCK | SOCK_CLOEXEC;
-        }
-        true
-    }
-
-    /// Queue a relative timeout: the completion (res = `-ETIME`) arrives once
-    /// `ts` elapses, or earlier with res = 0 / `-ECANCELED` if the ring shuts
-    /// down. Bounds a blocking [`IoUring::submit_and_wait`] the way a poller's
-    /// wait-timeout would. Returns `false` if the SQ is full.
-    ///
-    /// # Safety
-    /// `ts` must stay valid (not moved or dropped) until the matching
-    /// completion is reaped — the kernel reads it asynchronously.
-    pub unsafe fn prep_timeout(&mut self, ts: *const KernelTimespec, user_data: u64) -> bool {
-        let Some(idx) = self.reserve() else {
-            return false;
-        };
-        // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
-        unsafe {
-            let sqe = self.sqes.add(idx);
-            // addr = timespec ptr, len = 1 (one timespec), off = 0 (pure
-            // timeout — no completion-count trigger), rw_flags = 0 (relative).
-            ptr::write(
-                sqe,
-                IoUringSqe::new(IORING_OP_TIMEOUT, -1, ts as u64, 1, user_data),
-            );
-        }
-        true
-    }
-
-    /// Queue a no-op tagged with `user_data` (used to prove the round-trip).
-    /// Returns `false` if the SQ is full.
-    pub fn prep_nop(&mut self, user_data: u64) -> bool {
-        let Some(idx) = self.reserve() else {
-            return false;
-        };
-        // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
-        unsafe {
-            ptr::write(
-                self.sqes.add(idx),
-                IoUringSqe::new(IORING_OP_NOP, -1, 0, 0, user_data),
-            );
-        }
-        true
+    /// Raw SQE table pointer — exposed for the `prep_*` helpers in
+    /// [`crate::prep`]. Returned slot `idx` must come from `reserve()`.
+    #[inline]
+    pub(crate) fn sqes_ptr(&mut self) -> *mut IoUringSqe {
+        self.sqes
     }
 
     /// Publish queued submissions and enter the kernel, optionally waiting for

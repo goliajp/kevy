@@ -33,6 +33,7 @@ mod completion;
 mod ffi;
 mod layout;
 mod pbr;
+mod prep;
 mod ring;
 
 #[cfg(test)]
