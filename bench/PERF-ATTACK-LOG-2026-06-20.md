@@ -119,28 +119,52 @@ conversion. Same for `ClusterClient` (all methods, ~14 sites) and
 Deferred to D4.5 if user wants. The profile says the gain is
 small.
 
+## Attack 5 — D3: bitmap fast-path for `request_batch` / `publish_batch`
+
+**Hypothesis**: `Runtime::run::closure` 13% self-time included two
+N-shards `is_empty()` sweeps (`flush_requests` + `flush_publish`) on
+every reactor iter, even in the steady-state -c1 case where only one
+or zero target shards have queued work. Same shape as D1/D2:
+maintain a u64 `*_nonempty` bitmap set at push sites, short-circuit
+flushers on `== 0`, trailing_zeros-iterate only set bits.
+
+**Implementation**: `crates/kevy-rt/src/{shard.rs, runtime.rs,
+exec.rs, exec_pubsub.rs, exec_dispatch.rs, exec_watch.rs}`.
+Push sites: `exec_dispatch.rs:79`, `exec_watch.rs:363`,
+`exec_pubsub.rs:177`. Flushers: `exec.rs::flush_requests`,
+`exec_pubsub.rs::flush_publish`.
+
+**Measured**:
+- `Runtime::run::closure` self-time: **13.3% → 10.4%** (−2.9 pp)
+- Rust -c1 SET: 62 367 → ~65 000 (+4%, within noise band 64–66 k)
+- Rust -c1 GET: 64 949 → ~65 000 (within noise)
+
+**Call**: KEPT. Profile-confirmed reduction is real and there is no
+regression; wallclock gain is absorbed by the kernel/syscall floor
+(see D5/D6) so it doesn't show up as ops/s today. Same shape as D4:
+the lever is real on the profile and will become visible if the
+syscall floor moves.
+
+**Lesson**: -c1 at this point is so deep into the floor that even a
+2.9 pp drop on the top userspace symbol doesn't move ops/s — D5/D6
+must land first to unmask further userspace wins.
+
 ## Status
 
-Levers attacked: 4 (D1, D2, D4). Calls: 3 kept, 0 dropped.
-Branch: `feature/v1-22-x-perf-D1-D2` (merged) + `feature/v1-22-x-perf-D4-client-zero-alloc` (this).
+Levers attacked: 5 (D1, D2, D3, D4). Calls: 4 kept, 0 dropped.
+Merged to develop: 61725d8 (D3), 4de21fd (D4), ce28b92 (D1+D2).
 
 Cumulative measured win (Rust kevy-client -c1):
-- SET: +8% (59 → 64 k ops/s)
-- GET: +12% (59 → 67 k ops/s)
+- SET: +10% (59.2 → ~65 k ops/s)
+- GET: +10% (59.4 → ~65 k ops/s)
 - vs same Rust caller against valkey/redis: kevy lead grew from
-  ~1.04× to ~1.20×
+  ~1.04× to ~1.15–1.20×
 
-C `redis-benchmark`: untouched (D1-D4 didn't move it).
+C `redis-benchmark`: untouched (D1–D4 don't touch C client).
 
 ## What's left in the lever list
 
-Re-ranked based on profile findings:
-
-### D3 — `Runtime::run::closure` 13% investigation
-
-Top userspace symbol still 13-14% in -c1 AND -c50. `perf annotate`
-needed to see what's hiding inside; might be one or two
-non-inlined helpers. Effort: half day investigation. Gain: 0-8%.
+Re-ranked based on profile findings (D3 done):
 
 ### D5 — `io_uring` SQPOLL feature flag
 
@@ -163,10 +187,9 @@ becomes proportionally more visible. Revisit then.
 
 ### Decision point
 
-D5 is the only lever that can pull kevy from ~67 k to ~120 k Rust
+D5 is the only lever that can pull kevy from ~65 k to ~120 k Rust
 -c1 (and ~120 k C -c1 to ~200 k). It's also the longest by far.
-D6 is a documentation update that gives 12% to anyone willing to
-turn off Spectre.
+D6 is a documentation update that gives 13% to anyone willing to
+turn off Spectre on a trusted single-tenant box.
 
-Recommended order: **D6 (doc) → D3 (cheap investigation) → D5
-(real work)**.
+Recommended order (D3 done): **D6 (doc, zero risk) → D5 (real work)**.
