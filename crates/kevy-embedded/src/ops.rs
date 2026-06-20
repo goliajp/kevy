@@ -59,10 +59,10 @@ impl Store {
     pub fn get(&self, key: &[u8]) -> io::Result<Option<Vec<u8>>> {
         if self.config().maxmemory == 0 {
             let g = self.rshard(key);
-            return Ok(g.store.get_shared(key).map_err(store_err)?.map(<[u8]>::to_vec));
+            return Ok(g.store.get_shared(key).map_err(store_err)?.map(|c| c.into_owned()));
         }
         let mut g = self.wshard(key);
-        Ok(g.store.get(key).map_err(store_err)?.map(<[u8]>::to_vec))
+        Ok(g.store.get(key).map_err(store_err)?.map(|c| c.into_owned()))
     }
 
     /// `DEL key1 [key2 ...]`. Returns the count of keys actually removed.

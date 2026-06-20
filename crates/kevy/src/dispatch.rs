@@ -87,7 +87,7 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         b"GET" => {
             if args.len() == 2 {
                 match store.get(&args[1]) {
-                    Ok(Some(v)) => encode_bulk(out, v),
+                    Ok(Some(v)) => encode_bulk(out, &v),
                     Ok(None) => encode_null_bulk(out),
                     Err(e) => store_err(out, e),
                 }
@@ -222,7 +222,7 @@ fn dispatch_string<A: ArgvView + ?Sized>(
         b"GET" => {
             if args.len() == 2 {
                 match store.get(&args[1]) {
-                    Ok(Some(v)) => encode_bulk(out, v),
+                    Ok(Some(v)) => encode_bulk(out, &v),
                     Ok(None) => encode_null_bulk(out),
                     Err(e) => store_err(out, e),
                 }

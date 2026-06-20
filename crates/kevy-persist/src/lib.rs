@@ -306,7 +306,8 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()
 /// Serialize one entry: `[op][ttl][key][payload]`.
 fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>) -> io::Result<()> {
     let op = match value {
-        Value::Str(_) => OP_STR,
+        Value::Str(_) | Value::Int(_) => OP_STR, // L2: Int reuses OP_STR.
+
         Value::Hash(_) => OP_HASH,
         Value::List(_) => OP_LIST,
         Value::Set(_) => OP_SET,
@@ -318,6 +319,7 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
     write_bytes(w, key)?;
     match value {
         Value::Str(v) => write_bytes(w, v.as_slice()),
+        Value::Int(n) => write_bytes(w, n.to_string().as_bytes()),
         Value::Hash(h) => write_hash_payload(w, h),
         Value::List(l) => write_list_payload(w, l),
         Value::Set(set) => write_set_payload(w, set),

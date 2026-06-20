@@ -239,7 +239,7 @@ fn serialize_prefix(store: &mut Store, prefix: &[u8]) -> (Vec<u8>, usize) {
 
 fn emit_string(store: &mut Store, key: &[u8], bulk: &mut Vec<u8>, count: &mut usize) {
     if let Ok(Some(v)) = store.get(key) {
-        append_resp_argv(bulk, &[b"SET", key, v]);
+        append_resp_argv(bulk, &[b"SET", key, &v]);
         *count += 1;
     }
 }
@@ -392,11 +392,11 @@ mod tests {
         assert_eq!(out, b"+OK 2\r\n", "wire reply shape");
         // Store now carries both keys.
         assert_eq!(
-            store.get(b"app:a").map(|v| v.map(<[u8]>::to_vec)),
+            store.get(b"app:a").map(|v| v.map(|c| c.into_owned())),
             Ok(Some(b"1".to_vec()))
         );
         assert_eq!(
-            store.get(b"app:b").map(|v| v.map(<[u8]>::to_vec)),
+            store.get(b"app:b").map(|v| v.map(|c| c.into_owned())),
             Ok(Some(b"2".to_vec()))
         );
     }

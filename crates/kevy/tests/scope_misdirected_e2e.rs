@@ -56,7 +56,7 @@ fn write_to_non_writer_node_returns_misdirected() {
     );
     // The store must NOT have applied the write locally.
     assert_eq!(
-        store.get(b"app:foo").map(|v| v.map(<[u8]>::to_vec)),
+        store.get(b"app:foo").map(|v| v.map(|c| c.into_owned())),
         Ok(None),
         "rejected write must not land in the store",
     );
@@ -66,7 +66,7 @@ fn write_to_non_writer_node_returns_misdirected() {
     let s = String::from_utf8_lossy(&reply);
     assert!(s.starts_with('+') || s.starts_with(':'), "{s:?}");
     assert_eq!(
-        store.get(b"other:k").map(|v| v.map(<[u8]>::to_vec)),
+        store.get(b"other:k").map(|v| v.map(|c| c.into_owned())),
         Ok(Some(b"v".to_vec())),
     );
 }

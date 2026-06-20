@@ -320,6 +320,15 @@ impl Store {
         let k = key.to_vec();
         match value {
             Value::Str(v) => self.load_str(k, v.to_vec(), ttl_ms),
+            // L2: snapshot/replication load keeps the encoding — store as
+            // Int directly to preserve the in-memory shape (and avoid the
+            // SET-detect parse on the load path).
+            Value::Int(n) => {
+                self.insert_entry(
+                    crate::value::SmallBytes::from_slice(&k),
+                    crate::Entry::new(Value::Int(*n), ttl_ms.map(|ms| crate::deadline_at(crate::now_ns(), std::time::Duration::from_millis(ms)))),
+                );
+            }
             Value::Hash(h) => self.load_hash(
                 k,
                 h.iter().map(|(f, v)| (f.to_vec(), v.clone())).collect(),

@@ -255,6 +255,7 @@ fn parse_f64(b: &[u8]) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::borrow::Cow;
 
     fn argv(parts: &[&[u8]]) -> Argv {
         Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>())
@@ -264,7 +265,7 @@ mod tests {
     fn set_get_through_apply() {
         let mut s = Store::new();
         apply(&mut s, &argv(&[b"SET", b"k", b"v"]));
-        assert_eq!(s.get(b"k").unwrap(), Some(&b"v"[..]));
+        assert_eq!(s.get(b"k").unwrap(), Some(Cow::Borrowed(&b"v"[..])));
     }
 
     #[test]
@@ -299,6 +300,6 @@ mod tests {
         apply(&mut s, &argv(&[b"INCRBY", b"n", b"5"]));
         apply(&mut s, &argv(&[b"INCRBY", b"n", b"3"]));
         apply(&mut s, &argv(&[b"DECRBY", b"n", b"4"]));
-        assert_eq!(s.get(b"n").unwrap(), Some(&b"4"[..]));
+        assert_eq!(s.get(b"n").unwrap(), Some(Cow::Borrowed(&b"4"[..])));
     }
 }

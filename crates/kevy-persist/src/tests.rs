@@ -1,5 +1,6 @@
 use super::*;
 use std::time::Duration;
+use std::borrow::Cow;
 
 pub(crate) fn temp_file(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
@@ -33,13 +34,13 @@ fn snapshot_round_trip() {
     load_snapshot(&mut dst, &path).unwrap();
 
     assert_eq!(dst.dbsize(), 4);
-    assert_eq!(dst.get(b"plain").unwrap(), Some(&b"value"[..]));
-    assert_eq!(dst.get(b"empty").unwrap(), Some(&b""[..]));
+    assert_eq!(dst.get(b"plain").unwrap(), Some(Cow::Borrowed(&b"value"[..])));
+    assert_eq!(dst.get(b"empty").unwrap(), Some(Cow::Borrowed(&b""[..])));
     assert_eq!(
         dst.get(b"binary").unwrap(),
-        Some(&[0u8, 1, 2, 255, 254][..])
+        Some(Cow::Borrowed(&[0u8, 1, 2, 255, 254][..]))
     );
-    assert_eq!(dst.get(b"withttl").unwrap(), Some(&b"soon"[..]));
+    assert_eq!(dst.get(b"withttl").unwrap(), Some(Cow::Borrowed(&b"soon"[..])));
     // TTL survived (stored as an absolute Unix-ms deadline, v3 format).
     assert!(dst.pttl(b"withttl") > 90_000);
 
@@ -99,7 +100,7 @@ fn expired_keys_are_not_saved() {
     load_snapshot(&mut dst, &path).unwrap();
 
     assert_eq!(dst.dbsize(), 1);
-    assert_eq!(dst.get(b"live").unwrap(), Some(&b"1"[..]));
+    assert_eq!(dst.get(b"live").unwrap(), Some(Cow::Borrowed(&b"1"[..])));
     assert_eq!(dst.get(b"dead").unwrap(), None);
     let _ = std::fs::remove_file(&path);
 }
@@ -125,7 +126,7 @@ fn hash_snapshot_round_trip() {
     assert_eq!(dst.hget(b"h", b"a").unwrap(), Some(&b"1"[..]));
     assert_eq!(dst.hget(b"h", b"b").unwrap(), Some(&b"two"[..]));
     assert_eq!(dst.hlen(b"h"), Ok(2));
-    assert_eq!(dst.get(b"s").unwrap(), Some(&b"str"[..]));
+    assert_eq!(dst.get(b"s").unwrap(), Some(Cow::Borrowed(&b"str"[..])));
     let _ = std::fs::remove_file(&path);
 }
 
@@ -355,7 +356,7 @@ fn view_aof_round_trips_at_the_collect_instant() {
         crate::tests_rewrite::apply_for_test(&mut restored, &args);
     })
     .unwrap();
-    assert_eq!(restored.get(b"s1").unwrap(), Some(b"plain".as_slice()));
+    assert_eq!(restored.get(b"s1").unwrap(), Some(Cow::Borrowed(b"plain".as_slice())));
     assert_eq!(restored.hget(b"h", b"f2").unwrap(), None);
     assert_eq!(restored.hget(b"h", b"f").unwrap(), Some(b"v".as_slice()));
     let _ = std::fs::remove_file(&p);

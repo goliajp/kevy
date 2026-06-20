@@ -1,5 +1,6 @@
 use super::*;
 use std::time::Duration;
+use std::borrow::Cow;
 
 pub(crate) fn s(x: &str) -> Vec<u8> {
     x.as_bytes().to_vec()
@@ -9,7 +10,7 @@ pub(crate) fn s(x: &str) -> Vec<u8> {
 fn set_get_del_exists() {
     let mut st = Store::new();
     assert!(st.set(b"k", s("v"), None, false, false));
-    assert_eq!(st.get(b"k"), Ok(Some(&b"v"[..])));
+    assert_eq!(st.get(b"k"), Ok(Some(Cow::Borrowed(&b"v"[..]))));
     assert_eq!(st.exists(&[s("k"), s("k"), s("nope")]), 2);
     assert_eq!(st.del(&[s("k"), s("nope")]), 1);
     assert_eq!(st.get(b"k"), Ok(None));
@@ -21,9 +22,9 @@ fn set_nx_xx() {
     assert!(!st.set(b"k", s("v"), None, false, true));
     assert!(st.set(b"k", s("v"), None, true, false));
     assert!(!st.set(b"k", s("w"), None, true, false));
-    assert_eq!(st.get(b"k"), Ok(Some(&b"v"[..])));
+    assert_eq!(st.get(b"k"), Ok(Some(Cow::Borrowed(&b"v"[..]))));
     assert!(st.set(b"k", s("w"), None, false, true));
-    assert_eq!(st.get(b"k"), Ok(Some(&b"w"[..])));
+    assert_eq!(st.get(b"k"), Ok(Some(Cow::Borrowed(&b"w"[..]))));
 }
 
 #[test]
@@ -67,7 +68,7 @@ fn append_strlen_type_flush() {
     assert_eq!(st.append(b"k", b"foo"), Ok(3));
     assert_eq!(st.append(b"k", b"bar"), Ok(6));
     assert_eq!(st.strlen(b"k"), Ok(6));
-    assert_eq!(st.get(b"k"), Ok(Some(&b"foobar"[..])));
+    assert_eq!(st.get(b"k"), Ok(Some(Cow::Borrowed(&b"foobar"[..]))));
     assert_eq!(st.type_of(b"k"), "string");
     assert_eq!(st.type_of(b"missing"), "none");
     assert_eq!(st.dbsize(), 1);

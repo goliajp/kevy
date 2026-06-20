@@ -28,9 +28,10 @@
 //! ```
 //! use kevy_store::Store;
 //!
+//! use std::borrow::Cow;
 //! let mut s = Store::new();
 //! s.set(b"greeting", b"hello".to_vec(), None, false, false);
-//! assert_eq!(s.get(b"greeting").unwrap(), Some(&b"hello"[..]));
+//! assert_eq!(s.get(b"greeting").unwrap(), Some(Cow::Borrowed(&b"hello"[..])));
 //!
 //! s.hset(b"user:1", &[(b"name".to_vec(), b"alice".to_vec())]).unwrap();
 //! assert_eq!(s.hget(b"user:1", b"name").unwrap(), Some(&b"alice"[..]));

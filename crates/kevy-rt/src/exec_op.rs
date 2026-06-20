@@ -95,7 +95,7 @@ impl<C: Commands> Shard<C> {
                 for k in keys {
                     let g = match kind {
                         GatherKind::Str => {
-                            Gathered::Str(self.store.get(&k).ok().flatten().map(<[u8]>::to_vec))
+                            Gathered::Str(self.store.get(&k).ok().flatten().map(|c| c.into_owned()))
                         }
                         GatherKind::Set => match self.store.set_snapshot(&k) {
                             Ok(members) => Gathered::Members(members),
