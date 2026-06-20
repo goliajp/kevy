@@ -110,7 +110,22 @@ impl Store {
         // Refresh the coarse cached clock every tick (the read path's lazy
         // expiry compares against it) — even when there's nothing to reap.
         self.refresh_clock();
-        if samples_per_round == 0 || max_rounds == 0 || self.map.is_empty() {
+        // A13 (2026-06-20): skip the sampling loop entirely when no key
+        // carries a TTL. `expires` is the O(1)-maintained count of
+        // TTL-bearing keys (incremented/decremented in `adjust_expires`).
+        // The standard redis-benchmark workload sets no TTLs, so
+        // `expires == 0` is the common case — saving up to `max_rounds *
+        // samples_per_round` probe lookups per tick (~256 at the default
+        // 16×16 budget). For TTL-bearing workloads (cache patterns) this
+        // adds one comparison; the bigger "splay / skip-list" reaper
+        // structure that the task entry mentioned would only beat the
+        // current random-sample algorithm at very high TTL fractions,
+        // and is left as a future workload-driven follow-up.
+        if samples_per_round == 0
+            || max_rounds == 0
+            || self.map.is_empty()
+            || self.expires == 0
+        {
             return ExpireStats::default();
         }
         let now = now_ns();
