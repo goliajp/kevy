@@ -9,11 +9,11 @@ use std::io;
 
 use crate::completion::Completion;
 use crate::ffi::{
-    self, IORING_ENTER_GETEVENTS, IORING_OFF_CQ_RING, IORING_OFF_SQ_RING, IORING_OFF_SQES,
-    IORING_OP_ACCEPT, IORING_OP_NOP, IORING_OP_READ, IORING_OP_RECV, IORING_OP_TIMEOUT,
-    IORING_OP_WRITE,
-    IORING_RECV_MULTISHOT, IOSQE_BUFFER_SELECT, MAP_POPULATE, MAP_SHARED, PROT_READ, PROT_WRITE,
-    SOCK_CLOEXEC, SOCK_NONBLOCK, SYS_IO_URING_ENTER, SYS_IO_URING_SETUP,
+    self, IORING_ENTER_GETEVENTS, IORING_ENTER_SQ_WAKEUP, IORING_OFF_CQ_RING, IORING_OFF_SQ_RING,
+    IORING_OFF_SQES, IORING_OP_ACCEPT, IORING_OP_NOP, IORING_OP_READ, IORING_OP_RECV,
+    IORING_OP_TIMEOUT, IORING_OP_WRITE, IORING_RECV_MULTISHOT, IORING_SETUP_SQ_AFF,
+    IORING_SETUP_SQPOLL, IORING_SQ_NEED_WAKEUP, IOSQE_BUFFER_SELECT, MAP_POPULATE, MAP_SHARED,
+    PROT_READ, PROT_WRITE, SOCK_CLOEXEC, SOCK_NONBLOCK, SYS_IO_URING_ENTER, SYS_IO_URING_SETUP,
 };
 use crate::layout::{IoUringParams, IoUringSqe, KernelTimespec};
 use crate::pbr::ProvidedBufRing;
@@ -38,6 +38,12 @@ pub struct IoUring {
     cq_khead: *const AtomicU32,
     cq_ktail: *const AtomicU32,
     cqes: *const Completion,
+    /// `*const AtomicU32` to the shared SQ flag word, **only** populated when
+    /// the ring was set up with `IORING_SETUP_SQPOLL`. `None` => classic mode,
+    /// always call `io_uring_enter` to submit; `Some` => check
+    /// `IORING_SQ_NEED_WAKEUP` first and skip the syscall when the SQ poll
+    /// thread is awake.
+    sq_flags: Option<*const AtomicU32>,
 }
 
 // SAFETY: `IoUring` owns its fd and mappings exclusively; moving the whole
@@ -52,6 +58,8 @@ struct SqCursors {
     array: *mut u32,
     mask: u32,
     tail: u32,
+    /// SQ flag word — `IORING_SQ_NEED_WAKEUP` lives here under SQPOLL.
+    flags: *const AtomicU32,
 }
 
 /// Cursors recovered from the CQ ring mapping.
@@ -65,7 +73,34 @@ struct CqCursors {
 impl IoUring {
     /// Create a ring sized for at least `entries` in-flight submissions.
     pub fn new(entries: u32) -> io::Result<IoUring> {
-        let (ring_fd, p) = Self::setup_ring(entries)?;
+        Self::new_inner(entries, None)
+    }
+
+    /// Create a ring backed by a kernel-side **submission poll thread**
+    /// (`IORING_SETUP_SQPOLL`). Submissions are reaped without an
+    /// `io_uring_enter` syscall on the steady state; when the SQ poll
+    /// thread parks (after `idle_ms` ms with no work), userland wakes it
+    /// via [`Self::submit_and_wait`]'s SQ_WAKEUP path.
+    ///
+    /// `cpu = Some(c)` pins the kernel thread to CPU `c` via
+    /// `IORING_SETUP_SQ_AFF`. Costs 1 core at ~100% whenever traffic
+    /// flows; requires Linux 5.13+ (the version that dropped CAP_SYS_NICE
+    /// for SQPOLL).
+    ///
+    /// **Not suitable for kevy's per-shard reactor.** Each ring spawns
+    /// one kernel poll thread; in kevy's shared-nothing layout N shards
+    /// would spawn N poll threads, each contending for the same cores
+    /// as the shard threads (measured 2–15× throughput regression on
+    /// the lx64 reference box, 10 shards on 16 cores — see
+    /// `bench/PERF-ATTACK-LOG-2026-06-20.md` attack D5). Reserved for
+    /// callers with a single-threaded reactor and an unallocated core
+    /// budget for the kernel poll thread.
+    pub fn new_sqpoll(entries: u32, idle_ms: u32, cpu: Option<u32>) -> io::Result<IoUring> {
+        Self::new_inner(entries, Some((idle_ms, cpu)))
+    }
+
+    fn new_inner(entries: u32, sqpoll: Option<(u32, Option<u32>)>) -> io::Result<IoUring> {
+        let (ring_fd, p) = Self::setup_ring(entries, sqpoll)?;
         let (sq_len, cq_len, sqes_len) = Self::region_sizes(&p);
         let (sq_mmap, cq_mmap, sqes_map) =
             Self::map_three_regions(ring_fd, sq_len, cq_len, sqes_len)?;
@@ -74,6 +109,7 @@ impl IoUring {
         // their byte offsets lie inside the just-mapped regions.
         let sq = unsafe { Self::sq_cursors(sq_mmap, &p) };
         let cq = unsafe { Self::cq_cursors(cq_mmap, &p) };
+        let sq_flags = if sqpoll.is_some() { Some(sq.flags) } else { None };
 
         Ok(IoUring {
             ring_fd,
@@ -93,6 +129,7 @@ impl IoUring {
             cq_khead: cq.khead,
             cq_ktail: cq.ktail,
             cqes: cq.cqes,
+            sq_flags,
         })
     }
 
@@ -127,9 +164,21 @@ impl IoUring {
         Ok((sq_mmap, cq_mmap, sqes_map))
     }
 
-    /// Issue `io_uring_setup` and return `(ring_fd, params)`.
-    fn setup_ring(entries: u32) -> io::Result<(c_int, IoUringParams)> {
+    /// Issue `io_uring_setup` and return `(ring_fd, params)`. When `sqpoll`
+    /// is `Some((idle_ms, cpu))`, configures the kernel-side SQ poll thread.
+    fn setup_ring(
+        entries: u32,
+        sqpoll: Option<(u32, Option<u32>)>,
+    ) -> io::Result<(c_int, IoUringParams)> {
         let mut p = IoUringParams::default();
+        if let Some((idle_ms, cpu)) = sqpoll {
+            p.flags |= IORING_SETUP_SQPOLL;
+            p.sq_thread_idle = idle_ms;
+            if let Some(c) = cpu {
+                p.flags |= IORING_SETUP_SQ_AFF;
+                p.sq_thread_cpu = c;
+            }
+        }
         // SAFETY: `&mut p` lives across this call; kernel writes via the ptr.
         let fd = unsafe {
             ffi::syscall(
@@ -184,13 +233,14 @@ impl IoUring {
         let at = |off: u32| (base + off as usize) as *const AtomicU32;
         let khead = at(p.sq_off.head);
         let ktail = at(p.sq_off.tail);
+        let flags = at(p.sq_off.flags);
         let array = (base + p.sq_off.array as usize) as *mut u32;
         // SAFETY: caller's invariant says `ring_mask` is inside the region.
         let mask = unsafe { *((base + p.sq_off.ring_mask as usize) as *const u32) };
         // SAFETY: ktail is published by the kernel; reading current tail at
         // construction lets us start the local cursor in sync.
         let tail = unsafe { (*ktail).load(Ordering::Acquire) };
-        SqCursors { khead, ktail, array, mask, tail }
+        SqCursors { khead, ktail, array, mask, tail, flags }
     }
 
     /// Extract the CQ cursors from a just-mapped CQ region.
@@ -350,13 +400,34 @@ impl IoUring {
 
     /// Publish queued submissions and enter the kernel, optionally waiting for
     /// `wait_nr` completions. Returns the number of SQEs consumed.
+    ///
+    /// **SQPOLL fast path**: when the ring was constructed via
+    /// [`Self::new_sqpoll`] and the SQ poll thread is awake
+    /// (`IORING_SQ_NEED_WAKEUP` clear) and the caller doesn't need to block
+    /// on completions (`wait_nr == 0`), we publish the tail and return
+    /// **without any syscall** — the kernel thread will reap submissions on
+    /// its next poll spin.
     pub fn submit_and_wait(&mut self, wait_nr: u32) -> io::Result<u32> {
         // SAFETY: `sq_ktail` is the kernel-published tail ptr.
         let prev = unsafe { (*self.sq_ktail).load(Ordering::Relaxed) };
         let to_submit = self.sq_tail.wrapping_sub(prev);
         // SAFETY: publishing our local tail to the kernel-shared atomic.
         unsafe { (*self.sq_ktail).store(self.sq_tail, Ordering::Release) };
-        let flags = if wait_nr > 0 { IORING_ENTER_GETEVENTS } else { 0 };
+
+        let mut enter_flags = if wait_nr > 0 { IORING_ENTER_GETEVENTS } else { 0 };
+        if let Some(sq_flags_ptr) = self.sq_flags {
+            // SAFETY: `sq_flags_ptr` lives inside the SQ mmap, valid for ring
+            // lifetime. Kernel writes IORING_SQ_NEED_WAKEUP on park; Acquire
+            // pairs with the kernel's Release on update.
+            let sq_flags = unsafe { (*sq_flags_ptr).load(Ordering::Acquire) };
+            if sq_flags & IORING_SQ_NEED_WAKEUP != 0 {
+                enter_flags |= IORING_ENTER_SQ_WAKEUP;
+            } else if wait_nr == 0 {
+                // SQ poll thread is awake and caller doesn't need to wait —
+                // skip the syscall entirely. This is the SQPOLL fast path.
+                return Ok(to_submit);
+            }
+        }
         // SAFETY: kernel-validated args; no Rust memory is read/written.
         let ret = unsafe {
             ffi::syscall(
@@ -364,7 +435,7 @@ impl IoUring {
                 self.ring_fd as c_long,
                 to_submit as c_long,
                 wait_nr as c_long,
-                flags as c_long,
+                enter_flags as c_long,
                 ptr::null::<c_void>(),
                 0usize,
             )

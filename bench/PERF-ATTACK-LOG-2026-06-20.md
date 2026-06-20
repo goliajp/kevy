@@ -149,10 +149,102 @@ syscall floor moves.
 2.9 pp drop on the top userspace symbol doesn't move ops/s — D5/D6
 must land first to unmask further userspace wins.
 
+## Attack 6 — D6: Spectre `mitigations=off` documentation
+
+**Hypothesis**: `clear_bhb_loop` is the largest single CPU consumer
+in the -c1 profile (13.35%), more than any kevy userspace symbol.
+Booting with `mitigations=off` on trusted single-tenant boxes
+removes it entirely.
+
+**Implementation**: `docs/tuning.md` + ja/zh-CN translations.
+Documentation only — no code change. Wires a pointer from each
+README's Performance epilogue.
+
+**Measured**: Not yet — requires a reboot of the lx64 reference,
+which is the user's call (lx64 is a shared perf box). Predicted:
+SET 65 k → ~75 k, GET 65 k → ~75 k at -c1.
+
+**Call**: KEPT (doc only, zero risk to ship).
+
+## Attack 7 — D5: `io_uring` SQPOLL feature flag
+
+**Hypothesis**: kernel polls SQ — eliminates `io_uring_enter`
+syscall per op. The kernel/syscall bucket is ~60% of -c1 CPU.
+Predicted gain: 1.5–2× at -c1, opt-in via `KEVY_SQPOLL=1`.
+
+**Implementation**: wire-level `IoUring::new_sqpoll(entries,
+idle_ms, cpu)` in `kevy-uring/ring.rs` with `IORING_SETUP_SQPOLL`
+flag, `sq_flags` mmap'd cursor, and a `submit_and_wait` fast path
+that skips `io_uring_enter` when `IORING_SQ_NEED_WAKEUP` is clear
++ caller doesn't need to block. `KEVY_SQPOLL=1` env wired in
+`kevy-rt/uring_reactor.rs::build_ring`.
+
+**Measured** (lx64, 10 shards on 16 cores, KEVY_IO_URING=1):
+
+| Workload         | SQPOLL off       | SQPOLL on       | Δ      |
+|------------------|------------------|-----------------|--------|
+| Rust -c1 SET     | ~67 k ops/s      | ~4 k ops/s      | -94%   |
+| Rust -c1 GET     | ~64 k ops/s      | ~5 k ops/s      | -92%   |
+| redis-bench -c1 SET | 66.2 k       | 19.9 k          | -70%   |
+| redis-bench -c1 GET | 67.2 k       | 29.2 k          | -57%   |
+| redis-bench -c50-P16 SET | 2.05 M  | 922 k           | -55%   |
+| redis-bench -c50-P16 GET | 2.10 M  | 942 k           | -55%   |
+
+**Root cause**: SQPOLL spawns one kernel poll thread *per ring*.
+kevy's per-shard ring layout means N shards → N kernel poll
+threads, each spinning at 100%. On lx64 (16 cores, 10 shards),
+the 10 `iou-sqp-*` kernel threads ended up on cores 0, 3, 9 —
+the **same** `taskset -c 0-9` the user shard threads were pinned
+to. CPU contention halves effective shard CPU and adds scheduler
+noise; the 2–15× regression is the consequence.
+
+**Architectural mismatch**: SQPOLL is designed for
+single-threaded reactors that offload submission to a kernel
+thread (think a single user thread + 1 spare core). kevy's
+shared-nothing thread-per-core layout already saturates each
+core; adding a per-shard kernel poll thread halves it. The math
+would require **2× cores than shards** to host SQPOLL without
+contention — kevy's defaults assume exactly the opposite.
+
+**Call**: **DROPPED**. The wire-level support stays in
+`kevy_uring::IoUring::new_sqpoll` (it is correct code, useful for
+future callers with a single-threaded reactor), but the
+`KEVY_SQPOLL` env in `kevy-rt` is removed. A user who runs `kevy`
+with N shards on a host with ≥ 2N cores could still wire SQPOLL
+in a custom integration, but the default path will never enable it.
+
+**Lesson**: profile-confirmed savings (in this case the predicted
+syscall-floor reduction) can be eclipsed by second-order
+architectural cost. The right test for "ship this knob" is
+end-to-end ops/s on the real layout, not the theoretical syscall
+delta. A future re-attempt would need an "exclusive subset of
+shards uses SQPOLL with affinity to disjoint cores" mode, which
+is a bigger architectural change than this sprint scoped.
+
+## What's left in the lever list
+
+### D4.5 — finish client zero-alloc surface
+
+If a future lever moves the syscall floor (a new io_uring API
+shape, or `mitigations=off` ships on prod), client-side per-op
+cost becomes proportionally more visible. Revisit then.
+
+### Re-profile after `mitigations=off` is verified
+
+Once the lx64 box is rebooted with `mitigations=off` and the
+predicted -12 pp kernel drop materializes, re-run the perf
+flamegraph to find the next top symbol. The current top-15 are
+all kernel/io_uring path; the next ones may be userspace levers
+worth attacking.
+
 ## Status
 
-Levers attacked: 5 (D1, D2, D3, D4). Calls: 4 kept, 0 dropped.
-Merged to develop: 61725d8 (D3), 4de21fd (D4), ce28b92 (D1+D2).
+Levers attacked: 6 (D1, D2, D3, D4, D5, D6). Calls: 5 kept, 1
+dropped (D5). D6 is doc-only, untested on hardware until user
+reboots lx64.
+
+Merged to develop: ce28b92 (D1+D2), 4de21fd (D4), b71f788 (D3),
+plus this branch (D5 partial + D6 + log).
 
 Cumulative measured win (Rust kevy-client -c1):
 - SET: +10% (59.2 → ~65 k ops/s)
@@ -161,35 +253,3 @@ Cumulative measured win (Rust kevy-client -c1):
   ~1.04× to ~1.15–1.20×
 
 C `redis-benchmark`: untouched (D1–D4 don't touch C client).
-
-## What's left in the lever list
-
-Re-ranked based on profile findings (D3 done):
-
-### D5 — `io_uring` SQPOLL feature flag
-
-Kernel polls SQ — eliminates `io_uring_enter` syscall per op. The
-kernel/syscall bucket is ~60% of -c1 CPU; this is the only lever
-that meaningfully cuts it. Costs 1 CPU core 100%, opt-in only.
-Effort: 3-5 days + ops doc. Predicted gain: 1.5-2× at -c1.
-
-### D6 — Spectre `mitigations=off` documentation
-
-`clear_bhb_loop` (12% at -c1, 5% at -c50) is the kernel BHB
-mitigation, per syscall. Boot kernel with `mitigations=off` —
-opt-in for trusted single-tenant boxes. Effort: zero (doc only).
-Gain: -12% kernel cost at -c1.
-
-### D4.5 — finish client zero-alloc surface
-
-If D5 lands and the syscall cost drops, client-side per-op cost
-becomes proportionally more visible. Revisit then.
-
-### Decision point
-
-D5 is the only lever that can pull kevy from ~65 k to ~120 k Rust
--c1 (and ~120 k C -c1 to ~200 k). It's also the longest by far.
-D6 is a documentation update that gives 13% to anyone willing to
-turn off Spectre on a trusted single-tenant box.
-
-Recommended order (D3 done): **D6 (doc, zero risk) → D5 (real work)**.

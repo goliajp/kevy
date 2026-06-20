@@ -33,6 +33,12 @@ use std::time::{Duration, Instant};
 
 /// SQ/CQ depth for the per-shard ring.
 const URING_ENTRIES: u32 = 256;
+// SQPOLL is NOT wired into the shard reactor — it would spawn one kernel
+// poll thread per shard, each spinning at ~100% on the same core set as
+// the shard threads, halving effective CPU. See `bench/PERF-ATTACK-LOG-2026-06-20.md`
+// (attack D5) for the 2-15× regression measurement and the architectural
+// reasoning. The wire-level support stays in `kevy_uring::IoUring::new_sqpoll`
+// for callers with single-threaded reactors and spare cores.
 /// Busy-poll iterations after the last work before yielding the core (mirrors
 /// the epoll reactor's `SPIN_LIMIT`). Keeps -c1 latency low without spinning a
 /// quiet shard at 100% forever.
