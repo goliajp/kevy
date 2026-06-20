@@ -104,6 +104,8 @@ mod uring_conn;
 #[cfg(target_os = "linux")]
 mod uring_inbox;
 #[cfg(target_os = "linux")]
+mod uring_io;
+#[cfg(target_os = "linux")]
 mod uring_park;
 #[cfg(target_os = "linux")]
 mod uring_reactor;
