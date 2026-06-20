@@ -24,7 +24,7 @@ pub(crate) use crate::uring_conn::UringConn;
 use crate::uring_conn::ParkState;
 use kevy_persist::{load_snapshot, replay_aof};
 use kevy_sys::Socket;
-use kevy_uring::{Completion, IoUring, ProvidedBufRing};
+use kevy_uring::{Completion, IoUring};
 use kevy_map::KevyMap;
 use std::io;
 use std::sync::Arc;

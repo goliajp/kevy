@@ -20,6 +20,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
+mod alloc;
 mod clone;
 mod group;
 mod iter;
