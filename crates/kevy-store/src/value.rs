@@ -126,6 +126,13 @@ impl ZSetData {
 #[derive(Clone)]
 pub enum Value {
     Str(SmallBytes),
+    /// L2 (2026-06-21, lessons from valkey OBJ_ENCODING_INT): when a SET
+    /// stores a clean canonical i64 ASCII string (parses round-trip), we
+    /// keep the integer **as i64** rather than as 22 B of inline bytes.
+    /// Wins on INCR (in-place `+= delta`, no parse / no format / no
+    /// SmallBytes wrap) and on memory (8 B vs 24 B). GET formats it via
+    /// a per-`Store` scratch buffer.
+    Int(i64),
     Hash(Arc<HashData>),
     List(Arc<ListData>),
     Set(Arc<SetData>),
@@ -142,7 +149,7 @@ impl Value {
     /// The Redis type name (`TYPE` command).
     pub fn type_name(&self) -> &'static str {
         match self {
-            Value::Str(_) => "string",
+            Value::Str(_) | Value::Int(_) => "string",
             Value::Hash(_) => "hash",
             Value::List(_) => "list",
             Value::Set(_) => "set",
@@ -159,6 +166,8 @@ impl Value {
     pub fn weight(&self) -> u64 {
         match self {
             Value::Str(s) => s.heap_bytes() as u64,
+            // i64 fits in the enum tag's space; no heap.
+            Value::Int(_) => 0,
             Value::Hash(h) => collection_overhead(h.capacity(), HASH_SLOT_BYTES) + h
                 .iter()
                 .map(|(f, v)| f.heap_bytes() as u64 + v.capacity() as u64)

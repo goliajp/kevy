@@ -4,6 +4,7 @@
 //! both under the 500-LOC house rule.
 
 use super::*;
+use std::borrow::Cow;
 use crate::tests_aof::temp_aof;
 use std::time::Duration;
 
@@ -166,8 +167,8 @@ fn rewrite_reconstructs_full_keyspace() {
     let mut dst = Store::new();
     replay_aof(&path, |args| apply_for_test(&mut dst, &args)).unwrap();
     assert_eq!(dst.dbsize(), 7);
-    assert_eq!(dst.get(b"str").unwrap(), Some(&b"hello"[..]));
-    assert_eq!(dst.get(b"binary").unwrap(), Some(&[0u8, 1, 2, 255][..]));
+    assert_eq!(dst.get(b"str").unwrap(), Some(Cow::Borrowed(&b"hello"[..])));
+    assert_eq!(dst.get(b"binary").unwrap(), Some(Cow::Borrowed(&[0u8, 1, 2, 255][..])));
     assert_eq!(dst.hget(b"hash", b"f1").unwrap(), Some(&b"v1"[..]));
     assert_eq!(dst.hget(b"hash", b"f2").unwrap(), Some(&b"v2"[..]));
     assert_eq!(dst.llen(b"list").unwrap(), 3);
@@ -288,8 +289,8 @@ fn concurrent_rewrite_captures_writes_during_spill() {
     let mut dst = Store::new();
     replay_aof(&path, |a| apply_for_test(&mut dst, &a)).unwrap();
     assert_eq!(dst.get(b"a").unwrap(), None, "DEL during spill must apply");
-    assert_eq!(dst.get(b"b").unwrap(), Some(&b"22"[..]), "overwrite must win");
-    assert_eq!(dst.get(b"c").unwrap(), Some(&b"3"[..]), "new key must survive");
+    assert_eq!(dst.get(b"b").unwrap(), Some(Cow::Borrowed(&b"22"[..])), "overwrite must win");
+    assert_eq!(dst.get(b"c").unwrap(), Some(Cow::Borrowed(&b"3"[..])), "new key must survive");
     let _ = std::fs::remove_file(&path);
 }
 

@@ -31,6 +31,59 @@ pub(crate) fn parse_i64(b: &[u8]) -> Option<i64> {
     std::str::from_utf8(b).ok()?.parse::<i64>().ok()
 }
 
+/// L2: try to parse `b` as a CANONICAL `i64` ASCII representation — the same
+/// bytes that `i64::to_string` would produce. Returns the i64 only when the
+/// formatted i64 round-trips byte-for-byte to `b`. Rejects leading `+`,
+/// leading zeros (except `"0"`), and any non-canonical form so SET → GET
+/// stays a perfect echo. Used to decide whether to store a string value as
+/// `Value::Int(n)` (lessons from valkey OBJ_ENCODING_INT).
+pub(crate) fn parse_canonical_i64(b: &[u8]) -> Option<i64> {
+    // Reject extremely long inputs cheaply (i64 max is 20 chars incl sign).
+    if b.is_empty() || b.len() > 20 {
+        return None;
+    }
+    let n = std::str::from_utf8(b).ok()?.parse::<i64>().ok()?;
+    let mut buf = itoa_i64_stack();
+    let s = format_i64_into(n, &mut buf);
+    if s == b { Some(n) } else { None }
+}
+
+/// L2: format `n` as ASCII bytes into `buf` and return the written slice.
+/// Uses `i64::MIN` (20 chars including sign) as the worst-case length.
+pub(crate) fn format_i64_into<'a>(n: i64, buf: &'a mut [u8; 20]) -> &'a [u8] {
+    // Standard digit-by-digit unroll: faster + no alloc vs `n.to_string()`.
+    // For negatives, format the absolute value as u64 (handles i64::MIN
+    // without overflow) then prepend '-'.
+    let (mut n_abs, neg) = if n < 0 {
+        ((n as i128).unsigned_abs() as u64, true)
+    } else {
+        (n as u64, false)
+    };
+    let mut i = buf.len();
+    if n_abs == 0 {
+        i -= 1;
+        buf[i] = b'0';
+    } else {
+        while n_abs > 0 {
+            i -= 1;
+            buf[i] = b'0' + (n_abs % 10) as u8;
+            n_abs /= 10;
+        }
+    }
+    if neg {
+        i -= 1;
+        buf[i] = b'-';
+    }
+    &buf[i..]
+}
+
+/// L2: stack scratch for [`format_i64_into`]. 20 bytes = i64::MIN's digit
+/// count incl sign.
+#[inline]
+pub(crate) fn itoa_i64_stack() -> [u8; 20] {
+    [0u8; 20]
+}
+
 /// Parse a finite f64 from raw bytes (rejects NaN/inf for value storage).
 pub(crate) fn parse_f64(b: &[u8]) -> Option<f64> {
     let f: f64 = std::str::from_utf8(b).ok()?.trim().parse().ok()?;

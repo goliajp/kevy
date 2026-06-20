@@ -2,6 +2,7 @@
 //! keep both under the 500-LOC house rule.
 
 use crate::*;
+use std::borrow::Cow;
 use std::time::Duration;
 
 // ──────────────── collect_snapshot (COW-serialization E-2) ────────────────
@@ -37,7 +38,7 @@ fn snapshot_view_is_point_in_time_for_strings() {
     assert!(view_get(&view, b"gone").is_some(), "deleted key must stay in the view");
     assert!(view_get(&view, b"later").is_none(), "post-collect insert leaked in");
     // The live store sees its own mutations.
-    assert_eq!(s.get(b"a").unwrap(), Some(b"new".as_slice()));
+    assert_eq!(s.get(b"a").unwrap(), Some(Cow::Borrowed(b"new".as_slice())));
 }
 
 /// Collection mutation after collect must copy-on-write: the store's hash

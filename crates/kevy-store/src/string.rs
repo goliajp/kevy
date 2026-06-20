@@ -1,9 +1,32 @@
 //! `Store` string commands.
 
-use crate::util::{parse_i64, parse_f64, fmt_num};
-use crate::value::{Value, SmallBytes};
+use crate::util::{
+    fmt_num, format_i64_into, itoa_i64_stack, parse_canonical_i64, parse_f64, parse_i64,
+};
+use crate::value::{SmallBytes, Value};
 use crate::{Entry, Store, StoreError, deadline_at, now_ns};
+use std::borrow::Cow;
 use std::time::Duration;
+
+/// L2: build the right `Value` for `bytes` — `Int(n)` if `bytes` is a
+/// canonical i64 representation, else `Str(SmallBytes::from_slice(bytes))`.
+/// Used by SET / set_slice to pick the encoding at insert time, matching
+/// valkey's `OBJ_ENCODING_INT` auto-detection.
+#[inline]
+fn pick_value_for_set(bytes: &[u8]) -> Value {
+    match parse_canonical_i64(bytes) {
+        Some(n) => Value::Int(n),
+        None => Value::Str(SmallBytes::from_slice(bytes)),
+    }
+}
+
+#[inline]
+fn pick_value_for_set_owned(bytes: Vec<u8>) -> Value {
+    match parse_canonical_i64(&bytes) {
+        Some(n) => Value::Int(n),
+        None => Value::Str(SmallBytes::from_vec(bytes)),
+    }
+}
 
 impl Store {
     // ---- strings -------------------------------------------------------
@@ -21,7 +44,7 @@ impl Store {
         nx: bool,
         xx: bool,
     ) -> bool {
-        self.set_value(key, Value::Str(SmallBytes::from_vec(value)), expire, nx, xx)
+        self.set_value(key, pick_value_for_set_owned(value), expire, nx, xx)
     }
 
     /// [`Self::set`] for a borrowed value. Values ≤ 22 B store inline in the
@@ -37,7 +60,7 @@ impl Store {
         nx: bool,
         xx: bool,
     ) -> bool {
-        self.set_value(key, Value::Str(SmallBytes::from_slice(value)), expire, nx, xx)
+        self.set_value(key, pick_value_for_set(value), expire, nx, xx)
     }
 
     fn set_value(
@@ -99,11 +122,20 @@ impl Store {
         true
     }
 
-    pub fn get(&mut self, key: &[u8]) -> Result<Option<&[u8]>, StoreError> {
+    /// `GET` — returns a `Cow<[u8]>` so `Value::Int` callers can format the
+    /// integer to ASCII without storing it. L2 (2026-06-21): `Value::Str`
+    /// returns `Cow::Borrowed` (zero copy, same as before); `Value::Int`
+    /// formats to a small owned `Vec<u8>` (up to 20 bytes for `i64::MIN`).
+    pub fn get(&mut self, key: &[u8]) -> Result<Option<Cow<'_, [u8]>>, StoreError> {
         match self.live_entry(key) {
             None => Ok(None),
             Some(e) => match &e.value {
-                Value::Str(v) => Ok(Some(v.as_slice())),
+                Value::Str(v) => Ok(Some(Cow::Borrowed(v.as_slice()))),
+                Value::Int(n) => {
+                    let mut tmp = itoa_i64_stack();
+                    let s = format_i64_into(*n, &mut tmp);
+                    Ok(Some(Cow::Owned(s.to_vec())))
+                }
                 _ => Err(StoreError::WrongType),
             },
         }
@@ -116,19 +148,24 @@ impl Store {
     /// not touched, so this path is only used when eviction is off
     /// (`maxmemory == 0`); with eviction, the caller takes the mutating
     /// [`Self::get`] under an exclusive lock so access still stamps the LRU.
-    pub fn get_shared(&self, key: &[u8]) -> Result<Option<&[u8]>, StoreError> {
+    pub fn get_shared(&self, key: &[u8]) -> Result<Option<Cow<'_, [u8]>>, StoreError> {
         match self.map.get(key) {
             None => Ok(None),
             Some(e) if e.is_expired(self.cached_clock, self.cached_ns) => Ok(None),
             Some(e) => match &e.value {
-                Value::Str(v) => Ok(Some(v.as_slice())),
+                Value::Str(v) => Ok(Some(Cow::Borrowed(v.as_slice()))),
+                Value::Int(n) => {
+                    let mut tmp = itoa_i64_stack();
+                    let s = format_i64_into(*n, &mut tmp);
+                    Ok(Some(Cow::Owned(s.to_vec())))
+                }
                 _ => Err(StoreError::WrongType),
             },
         }
     }
 
     pub fn strlen(&mut self, key: &[u8]) -> Result<usize, StoreError> {
-        Ok(self.get(key)?.map_or(0, <[u8]>::len))
+        Ok(self.get(key)?.map_or(0, |c| c.len()))
     }
 
     pub fn append(&mut self, key: &[u8], data: &[u8]) -> Result<usize, StoreError> {
@@ -162,15 +199,29 @@ impl Store {
     }
 
     /// `INCRBY` family; preserves any TTL.
+    ///
+    /// L2 (2026-06-21, lessons from valkey OBJ_ENCODING_INT): the hot path
+    /// matches `Value::Int(n)` and does the increment in place — no parse,
+    /// no format, no allocation. The legacy `Value::Str` arm parses,
+    /// increments, and **promotes** to `Value::Int(next)` so subsequent
+    /// INCRs land on the fast path. Insert-new path also lands as `Int`.
     pub fn incr_by(&mut self, key: &[u8], delta: i64) -> Result<i64, StoreError> {
         let outcome = match self.live_entry_mut(key) {
             Some(e) => match &mut e.value {
+                Value::Int(n) => {
+                    let next = n.checked_add(delta).ok_or(StoreError::Overflow)?;
+                    *n = next;
+                    // In-place i64 mutation — weight unchanged (still 0
+                    // heap bytes for an Int). Skip the reweigh entirely.
+                    return Ok(next);
+                }
                 Value::Str(v) => {
                     let next = parse_i64(v.as_slice())
                         .ok_or(StoreError::NotInteger)?
                         .checked_add(delta)
                         .ok_or(StoreError::Overflow)?;
-                    *v = SmallBytes::from_vec(next.to_string().into_bytes());
+                    // Promote to Int: future INCRs hit the fast path.
+                    e.value = Value::Int(next);
                     IncrOutcome::Reweigh(next)
                 }
                 _ => return Err(StoreError::WrongType),
@@ -186,10 +237,7 @@ impl Store {
             IncrOutcome::Insert(next) => {
                 self.insert_entry(
                     SmallBytes::from_slice(key),
-                    Entry::new(
-                        Value::Str(SmallBytes::from_vec(next.to_string().into_bytes())),
-                        None,
-                    ),
+                    Entry::new(Value::Int(next), None),
                 );
                 Ok(next)
             }

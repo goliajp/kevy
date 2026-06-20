@@ -88,6 +88,12 @@ fn write_value_as_commands<W: Write>(
             let argv = Argv::from(vec![b"SET".to_vec(), key.to_vec(), s.to_vec()]);
             write_multibulk(w, &argv)?;
         }
+        // L2: persist Int as the canonical ASCII bytes; the replay path's
+        // SET will auto-detect it back to Int via parse_canonical_i64.
+        Value::Int(n) => {
+            let argv = Argv::from(vec![b"SET".to_vec(), key.to_vec(), n.to_string().into_bytes()]);
+            write_multibulk(w, &argv)?;
+        }
         Value::Hash(h) => {
             let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + h.len() * 2);
             argv.push(b"HSET".to_vec());
