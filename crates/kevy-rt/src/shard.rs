@@ -79,6 +79,16 @@ pub(crate) struct Shard<C: Commands> {
     /// VecDeque::is_empty)`, N struct accesses per iter; the u64 is one
     /// load.
     pub(crate) backlog_nonempty: u64,
+    /// Bitmap of `request_batch[dst]`'s that are non-empty. Same shape
+    /// as `backlog_nonempty`: set by the dispatch sites that push into
+    /// `request_batch[s]`, cleared in `flush_requests` when the batch
+    /// is drained. D3 (2026-06-20) — removes the per-iter
+    /// `request_batch.iter().all(Vec::is_empty)` scan from the
+    /// `run_uring` main-loop self-time hot block.
+    pub(crate) request_batch_nonempty: u64,
+    /// Bitmap of `publish_batch[dst]`'s that are non-empty. Mirror of
+    /// `request_batch_nonempty` for the pub/sub fan-out path.
+    pub(crate) publish_batch_nonempty: u64,
     /// Per-shard "is this core parked (blocking) right now?" flags. A sender only
     /// needs a syscall wakeup for a parked peer; a spinning peer sees the message
     /// on its next poll. Indexed by shard id; `parked[self.id]` is our own.

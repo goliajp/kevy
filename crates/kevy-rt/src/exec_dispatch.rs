@@ -76,6 +76,7 @@ impl<C: Commands> Shard<C> {
             // nothing. The -c50 single-shard hot path never reaches here.
             let argv = self.argv_pool.take_filled(args);
             self.request_batch[shard].push((conn_id, seq, argv, proto, meta));
+            self.request_batch_nonempty |= 1u64 << shard;
         }
     }
 
