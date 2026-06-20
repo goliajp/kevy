@@ -278,11 +278,18 @@ impl<C: Commands> Shard<C> {
     /// per loop, not one per command. Call once per reactor loop iteration.
     #[inline]
     pub(crate) fn flush_requests(&mut self) {
-        // Outer-empty short-circuit: single-shard never has cross-shard reqs.
-        if self.request_batch.iter().all(std::vec::Vec::is_empty) {
+        // Hot path: short-circuit on the bitmap (D3 2026-06-20). The
+        // previous `request_batch.iter().all(Vec::is_empty)` was N
+        // struct accesses per iter — invisible alone but rolled into
+        // the run_uring closure's 13 % self-time hot block.
+        if self.request_batch_nonempty == 0 {
             return;
         }
-        for s in 0..self.nshards {
+        let mut mask = self.request_batch_nonempty;
+        self.request_batch_nonempty = 0;
+        while mask != 0 {
+            let s = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
             if s == self.id || self.request_batch[s].is_empty() {
                 continue;
             }

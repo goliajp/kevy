@@ -274,6 +274,8 @@ impl<C: Commands> Runtime<C> {
                 read_buf: vec![0u8; 64 * 1024],
                 pending_wakes: 0,
                 backlog_nonempty: 0,
+                request_batch_nonempty: 0,
+                publish_batch_nonempty: 0,
                 parked: parked.clone(),
                 inbound_dirty: inbound_dirty.clone(),
                 data_dir: self.data_dir.clone(),

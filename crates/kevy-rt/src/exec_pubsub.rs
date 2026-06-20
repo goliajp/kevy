@@ -174,6 +174,7 @@ impl<C: Commands> Shard<C> {
                     self.deliver_publish(&m.0, &m.1);
                 } else {
                     self.publish_batch[s].push(m.clone());
+                    self.publish_batch_nonempty |= 1u64 << s;
                 }
             }
         }
@@ -253,11 +254,16 @@ impl<C: Commands> Shard<C> {
     /// per message. Call once per reactor loop iteration.
     #[inline]
     pub(crate) fn flush_publish(&mut self) {
-        // Outer-empty short-circuit: the common hot path has no pub/sub.
-        if self.publish_batch.iter().all(std::vec::Vec::is_empty) {
+        // Hot path: short-circuit on the bitmap (D3 2026-06-20). Same
+        // shape as flush_requests above.
+        if self.publish_batch_nonempty == 0 {
             return;
         }
-        for s in 0..self.nshards {
+        let mut mask = self.publish_batch_nonempty;
+        self.publish_batch_nonempty = 0;
+        while mask != 0 {
+            let s = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
             if s == self.id || self.publish_batch[s].is_empty() {
                 continue;
             }
