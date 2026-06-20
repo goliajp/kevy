@@ -13,15 +13,28 @@ impl<C: Commands> Shard<C> {
     /// Wake every target enqueued to this iteration that is currently parked.
     /// A spinning peer needs no syscall — it will see the message on its next
     /// poll(0). This is what removes the per-message wakeup under load.
+    ///
+    /// **E16 (2026-06-20)** fast-path split: post-v1.24-chain perf
+    /// diagnostic showed flush_wakes at 0.88 % self per reactor iter
+    /// even with the existing bitmap short-circuit — almost all from
+    /// the fn-call overhead, since at -c1 with no cross-shard traffic
+    /// `pending_wakes` is always zero. The hot bail check inlines flat
+    /// into the reactor loop; the cold wake body is outlined as
+    /// `flush_wakes_slow` with `#[inline(never)]` so its bulk + the
+    /// SeqCst fence + the parked-load chain stay off the hot iTLB
+    /// pages. Same shape as E15's drain_inbound split.
     #[inline]
     pub(crate) fn flush_wakes(&mut self) {
-        // Hot path: short-circuit on the bitmap. Replaces the previous
-        // `Vec<bool>::iter().any(|&w| w)`, which was N byte loads per
-        // iter — the early-return alone showed up as 2.6 % of -c1 CPU
-        // in the 2026-06-20 profile.
         if self.pending_wakes == 0 {
             return;
         }
+        self.flush_wakes_slow();
+    }
+
+    /// Outlined-cold wake body — only called once the fast-path check
+    /// saw `pending_wakes != 0`.
+    #[inline(never)]
+    fn flush_wakes_slow(&mut self) {
         // Close the park/wake race: the SeqCst fence pairs with the
         // matching fence in `Shard::run` after a peer stores `parked=true`.
         // Combined, they guarantee: if our ring push (Release on the
@@ -88,15 +101,23 @@ impl<C: Commands> Shard<C> {
 
     /// Re-push each per-target backlog into its ring (filled when a ring was full
     /// last iteration). Stops at the first target whose ring is still full.
+    ///
+    /// **E16 (2026-06-20)** fast-path split: same shape as flush_wakes —
+    /// 0.76 % self per reactor iter at -c1 was almost all fn-call cost.
+    /// Tiny `#[inline]` wrapper inlines into the loop; cold body is
+    /// outlined as `flush_backlog_slow` with `#[inline(never)]`.
     #[inline]
     pub(crate) fn flush_backlog(&mut self) {
-        // Hot path: short-circuit on the bitmap. Replaces the previous
-        // `backlog.iter().all(VecDeque::is_empty)`, which was N struct
-        // accesses per iter — the early-return alone showed up as 2.5 %
-        // of -c1 CPU in the 2026-06-20 profile.
         if self.backlog_nonempty == 0 {
             return;
         }
+        self.flush_backlog_slow();
+    }
+
+    /// Outlined-cold backlog body — only called once the fast-path check
+    /// saw `backlog_nonempty != 0`.
+    #[inline(never)]
+    fn flush_backlog_slow(&mut self) {
         let mut mask = self.backlog_nonempty;
         while mask != 0 {
             let dst = mask.trailing_zeros() as usize;
