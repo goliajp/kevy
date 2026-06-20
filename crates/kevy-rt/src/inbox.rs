@@ -161,6 +161,7 @@ impl<C: Commands> Shard<C> {
     /// errors) over the io_uring one (`false`: appended output is picked up
     /// by the arm/write loop, and the only fallible step — the AOF group
     /// sync — downgrades to a logged error, so no `Err` is ever built).
+    #[inline]
     pub(crate) fn drain_inbound_core<const DIRECT_FLUSH: bool>(&mut self) -> io::Result<bool> {
         // Hot path: short-circuit if no peer has marked us. Senders OR a
         // bit into `inbound_dirty[me]` after pushing to our ring; we swap
