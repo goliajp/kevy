@@ -4,6 +4,117 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.23.0] — 2026-06-20 (profile-driven perf sprint, 16 attacks)
+
+A profile-driven perf sprint on top of v1.22.0. Headline numbers on the lx64
+reference (Intel Xeon 6, Linux 6.12, 10 shards on 16 cores):
+
+| Workload (io_uring reactor, mitigations=off) | v1.22.0  | v1.23.0  | Δ     |
+|----------------------------------------------|----------|----------|-------|
+| C `redis-benchmark` -c1 GET                  | 68 k     | **84 k** | +24%  |
+| C `redis-benchmark` -c1 SET                  | 76 k     | **84 k** | +11%  |
+| Rust client -c1 GET                          | 59 k     | ~75 k    | +27%  |
+| Rust client -c1 SET                          | 59 k     | ~73 k    | +24%  |
+
+vs valkey 9.1 (io-threads, same host):
+- -c1 GET: 84 k vs 69 k = **1.22×** (was 1.13×)
+- -c1 SET: 84 k vs 64 k = **1.31×** (was 1.27×)
+
+The -c50 -P16 numbers (6 M/s GET, 4 M/s SET) hit the `redis-benchmark`
+client-side cap with `--threads 6`; the server has more headroom but the
+test harness can't push faster.
+
+Sprint methodology: top-down `perf record` flamegraph on the lx64 reference
+(documented in [`bench/PERF-PROFILE-2026-06-20.md`](bench/PERF-PROFILE-2026-06-20.md)).
+Each attack measured before and after; verdicts + per-attack measurement
+in [`bench/PERF-ATTACK-LOG-2026-06-20.md`](bench/PERF-ATTACK-LOG-2026-06-20.md).
+**16 attacks** total: 12 kept, 4 dropped.
+
+### Reactor open-loop wins
+
+- **D1** — `inbound_dirty` u64 bitmap (`kevy-rt`): replaces N-shards
+  `drain_inbound` sweep with single `AtomicU64::swap` on a dirty bitmap.
+  `drain_inbound` self-time 17.4% → 7.2% of -c1 CPU.
+- **D2** — `pending_wakes` + `backlog_nonempty` u64: same bitmap shape
+  for cross-shard wake + backlog short-circuits.
+- **D3** — `request_batch` + `publish_batch` u64: same bitmap shape for
+  cross-shard request/publish flush.
+- **E8** — `Acquire`-load fast path on `inbound_dirty`: cheap `mov` on
+  x86 TSO instead of `lock xchg` per reactor iter when no peer has
+  marked us. `drain_inbound` 4.86% → 2.90%.
+- **E9** — hoist replication-pump gate to call site so the standalone
+  shard pays one branch instead of two function-call frames per iter.
+  `pump_replication` + `reap_closed_replicas` 2.04% → 0 from top 15.
+
+### io_uring kernel-side wins
+
+- **E1.5** — `IORING_REGISTER_RING_FDS` (`kevy-uring`): self-register the
+  ring's fd into the per-thread registered-rings table; `io_uring_enter`
+  references it by index instead of raw fd. Kernel skips `fget`+`fput`
+  per syscall. **8 pp kernel cost eliminated**; C c1 SET +6.4% (in
+  isolation).
+- **E2** — `IORING_SETUP_SINGLE_ISSUER | COOP_TASKRUN`: modern setup
+  flags (Linux 6.0+ / 5.19+). Kernel skips submission-side locking +
+  waits for natural enter instead of IPI. +3–5% Rust c1.
+- **E4** — kernel `mitigations=off` (deployment): the lx64 reference
+  rebooted with `mitigations=off`; `clear_bhb_loop` (Spectre BHB)
+  eliminated from the syscall path. Single biggest lever in the sprint:
+  +12% on C c1 SET, +20% on c1 GET, +24% on c50-P16. Documented as a
+  trade-off in `docs/tuning.md`; **only for trusted single-tenant boxes**.
+  See the doc for the security implications.
+
+### Client surface
+
+- **D4** — `kevy_resp::encode_command_borrowed` + new
+  `kevy_resp_client::Connection::request_borrowed(&[&[u8]])` zero-alloc
+  request path. 20+ `kevy_client::Connection` methods now reuse a
+  pooled `write_buf`. `kevy-client` bumped to **1.12.0** (additive).
+
+### Documentation / inlining
+
+- **D6** — [`docs/tuning.md`](docs/tuning.md) + ja/zh-CN translations:
+  CPU pinning, AOF off for replicas, `KEVY_IO_URING=1`, kernel
+  `mitigations=off` (with full security trade-off discussion).
+- **E7** — `#[inline]` hints on RESP parser hot helpers
+  (`parse_command_borrowed`, `parse_bulk_len`, `find_crlf`, `parse_int`).
+- **E10** — `#[inline]` on remaining reactor flush/drain helpers
+  (`flush_wakes`, `uring_drain_inbound`, `drain_inbound_core`).
+
+### Investigated, NOT shipped
+
+- **D5** + **E5** — `io_uring` SQPOLL (attempted twice). Wire-level
+  `IoUring::new_sqpoll` ships in `kevy-uring` but is **not wired into
+  kevy-rt's shard reactor**. SQPOLL spawns one kernel poll thread per
+  ring; in kevy's shared-nothing thread-per-core layout this either
+  fights the shard threads for cores (D5 measured 2–15× regression),
+  or — with disjoint affinity (E5) — adds cross-core synchronization
+  per SQE that exceeds the saved syscall (E5 measured 2–29% regression).
+- **E1** — `IORING_REGISTER_FILES_SPARSE` + `IOSQE_FIXED_FILE` per-conn
+  registered files. Wire-level API ships in `kevy-uring` but **not
+  wired into kevy-rt**. The visible `fget` in kevy's profile is the
+  ring-fd lookup in `__do_sys_io_uring_enter`, not per-SQE fd lookup;
+  IOSQE_FIXED_FILE wasn't on the right path. E1.5's
+  `IORING_REGISTER_RING_FDS` is the lever that attacked the visible cost.
+- **E3** — skip `io_uring_enter` on `to_submit == 0 && wait_nr == 0`.
+  Regressed 16–25% because E2's `COOP_TASKRUN` flag flips the
+  kernel-userland cooperative contract — kernel waits for the user task
+  to enter naturally to run task_work; skipping starves completion
+  processing.
+
+### Version bumps
+
+- workspace `1.22.0` → `1.23.0`
+- `kevy-client` `1.11.0` → `1.12.0` (D4 additive API)
+- `kevy-embedded` `1.4.0` → `1.4.1` (dep rev only)
+- `kevy-client-async` `1.0.0` → `1.0.1` (dep rev only)
+
+### Wire / persistence / API
+
+No changes. Same RESP wire protocol, same AOF/snapshot format, same CLI
+flags, same public Rust API surface (D4 is additive).
+
+---
+
 ## [v1.22.0] — 2026-06-20 (v3-cluster close — Phase 2 + Phase 3 + Phase 4)
 
 Bundle release closing v3-cluster: **embed-as-read-replica**

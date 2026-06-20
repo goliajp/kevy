@@ -6,7 +6,7 @@ description = "Embedded mode for kevy — in-process Redis-compatible KV without
 # carries the kevy-persist AOF_MAGIC header (forward-compat) + the
 # replay_aof loud-summary fix from 1.1.1. 1.1.5 follows the workspace
 # 1.4.2 chain and an internal split of `pubsub.rs` (no API change).
-version = "1.4.0"
+version = "1.4.1"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
