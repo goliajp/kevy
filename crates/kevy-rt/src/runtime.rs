@@ -176,8 +176,9 @@ impl<C: Commands> Runtime<C> {
         for _ in 0..n {
             wakers.push(Arc::new(waker()?));
         }
-        let parked: Vec<Arc<AtomicBool>> =
-            (0..n).map(|_| Arc::new(AtomicBool::new(false))).collect();
+        let parked: Vec<Arc<crate::shard::CachePadded<AtomicBool>>> = (0..n)
+            .map(|_| Arc::new(crate::shard::CachePadded::new(AtomicBool::new(false))))
+            .collect();
         // Per-shard inbox-dirty bitmaps (one u64 bit per peer src).
         // Senders OR a bit on the target's dirty word; the target's
         // `drain_inbound_core` swaps and short-circuits when 0.
@@ -185,8 +186,12 @@ impl<C: Commands> Runtime<C> {
             n <= 64,
             "kevy-rt: shard count {n} exceeds 64 — inbound_dirty bitmap holds one bit per peer in a u64. Reduce --threads or extend to a multi-word bitmap.",
         );
-        let inbound_dirty: Vec<Arc<AtomicU64>> =
-            (0..n).map(|_| Arc::new(AtomicU64::new(0))).collect();
+        // A2 (2026-06-20): pad each Arc<AtomicU64> to a full 64-byte cache
+        // line. H1 c2c diagnostic showed cross-shard fetch_or vs. owner
+        // swap on adjacent atomics bounced cache lines between cores.
+        let inbound_dirty: Vec<Arc<crate::shard::CachePadded<AtomicU64>>> = (0..n)
+            .map(|_| Arc::new(crate::shard::CachePadded::new(AtomicU64::new(0))))
+            .collect();
 
         // Shared pub/sub channel registry (one per server, read on every PUBLISH).
         let pubsub: PubSubReg = Arc::new(RwLock::new(HashMap::new()));

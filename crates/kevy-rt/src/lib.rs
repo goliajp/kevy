@@ -69,6 +69,7 @@
 
 mod block_xshard;
 mod blocked;
+mod cache_padded;
 mod cluster;
 mod conn;
 mod exec;
