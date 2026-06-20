@@ -4,6 +4,81 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.24.1] — UNRELEASED (autorun perf sprint on top of v1.24.0)
+
+User-authorized **autorun** continuation of the v1.23 → v1.24 perf
+sprint, layered on top of E13 (THP-aligned mmap, v1.24.0). 11 perf
+attacks shipped, 3 retired-with-rationale, 3 audit-closed, 1 deferred.
+
+**Headline measurement (lx64, kernel 6.12, mitigations=off, io_uring):**
+
+| Workload                  | v1.24.0 (E13 alone) | v1.24.1 (this sprint) | Δ      |
+|---------------------------|---------------------|-----------------------|--------|
+| Rust c1 SET               | ~76 k               | **82–84 k**           | +8–11% |
+| Rust c1 GET               | ~77 k               | **83–84 k**           | +8–9%  |
+| C `redis-bench` c1 SET    | ~82 k               | ~82–84 k              | matches |
+| C `redis-bench` c1 GET    | ~82 k               | ~82–84 k              | matches |
+| c100 SET (4-core load)    | ~150 k              | **184–188 k**         | +25%   |
+| c100 GET (4-core load)    | ~140 k              | **187–191 k**         | +35%   |
+
+The Rust client at -c1 has reached **C-client parity** — the prior gap
+was userspace-side; this sprint closed it. Post-sprint H-redo
+diagnostic (`bench/PERF-PROFILE-2026-06-20-POST-V124-CHAIN.md`)
+confirms 38 % of remaining CPU is kernel-side (tcp_sendmsg + io_uring
+admin + 1.26 % nft_do_chain loopback netfilter).
+
+### Shipped (11 attacks + 1 diag doc)
+
+| ID  | Where                              | Win                                          |
+|-----|------------------------------------|----------------------------------------------|
+| E14 | kevy-uring `submit_and_wait`       | threshold-based `io_uring_enter` skip (replaces dropped E3) |
+| A2  | kevy-rt `Shard`                    | `#[repr(align(64))]` CachePadded on `inbound_dirty` + `parked` |
+| A3  | kevy-rt `uring_arm_conns`          | `_mm_prefetch::<T0>` next `UringConn` ahead of loop body |
+| A9  | kevy-rt `exec_dispatch`            | `#[cold]` hint on SLOWLOG-ON / AOF-ON branches |
+| A5  | kevy-resp `ArgvBorrowed`           | InlineRanges (4 inline + heap spill) — pure safe Rust, no malloc on ≤4-arg cmds |
+| A6+A7 | kevy-bytes new `find_crlf`       | SIMD scanner: x86_64 AVX2 (runtime-detected) + aarch64 NEON + SWAR fallback |
+| C6  | kevy-config, kevy-persist          | `#[cold]` on 3 startup/AOF-rewrite-only fns (15.9 + 11.1 + 9.2 KiB) |
+| B4  | kevy-uring, kevy-rt                | `IORING_ACCEPT_MULTISHOT` (Linux 5.19+) + per-CQE F_MORE re-arm gate |
+| A4  | kevy-rt `Conn`                     | `#[repr(C)]` + hot-first field layout → 2 cache lines (vs 4) of hot state |
+| E15 | kevy-rt `drain_inbound`            | fast-path inline + cold-body outline (`drain_inbound_core_slow`) |
+| E16 | kevy-rt `flush_wakes` / `flush_backlog` | same fast-path inline + cold outline pattern |
+| —   | bench docs                         | `PERF-PROFILE-2026-06-20-POST-V124-CHAIN.md` re-diagnosis after the chain |
+
+### Retired with rationale (kept in code as inline notes)
+
+- **A11** `IORING_SETUP_TASKRUN_FLAG` — 30 % c1 GET regression + multi-second 3.6k-rps stalls; bit's set/clear timing under COOP_TASKRUN doesn't align with busy-poll closely enough. Rationale block in `ring.rs::submit_and_wait`.
+- **E17** outline pattern for `flush_requests` / `flush_publish` — body small enough that LLVM was already inlining; forced outline added a fn call on the cross-shard hot path with no upside. lx64 c100 SET/GET -3-8 % vs E16.
+- **E18** `uring_reap_closed` fast-path bail — needed two `any()` scans (io.closing + conn.closing) because `is_quit` sets `conn.closing` only; at c100 the 2×100-iter pre-scan × 62 k reaps/s cost more than the avoided Vec::collect saved (lx64 c100 SET -2.9 %). Single-scan version requires plumbing io map into dispatch QUIT path.
+
+### Audit-closed (no code change)
+
+- **A8** Conn/UringConn slab — KevyMap slot array already IS the slab; Conn inline storage means no per-conn malloc.
+- **B1** generalise E13 to all KevyMap users — already covered by `KevyMap::alloc_table` (the only allocation path); every map >1 MiB auto-uses 2 MiB mmap.
+- **B2** std HashMap → KevyMap audit — 49 std HashMap usages all in cold control planes (kevy-elect, kevy-cluster-rw, per-cmd builders); none on -c1 hot path.
+
+### Deferred
+
+- **C2** AutoFDO from perf data — requires LLVM create_llvm_prof + rustc -Cprofile-sample-use specific build, bigger pipeline scope than an autorun item.
+
+### Public API
+
+No new public API additions. SIMD `find_crlf` is `pub` in kevy-bytes
+(new entry point) but otherwise internal. kevy-uring adds
+`prep_accept_multishot` (pub).
+
+### Wire / persistence
+
+No changes.
+
+### Version bumps (for the release machinery to apply on tag)
+
+- workspace `1.24.0` → `1.24.1` (perf-only, no API break)
+- `kevy-bytes`: new `pub fn find_crlf` is additive minor (could stay
+  patch since it's an addition not a break)
+- All other crates: patch bump for chain rebuild only
+
+---
+
 ## [v1.24.0] — 2026-06-20 (E13 — 2 MiB-aligned mmap path for kevy-map THP)
 
 After v1.23.2 closed the "incremental perf" sprint, user authorized
