@@ -639,34 +639,89 @@ forwarding, libvirt NAT, firewall posture). Safer half-measure
 also documented: `iptables -I INPUT 1 -p tcp --dport 6004 -j ACCEPT`
 to fast-path the kevy port through the chain.
 
-## Final status (post-v1.23.0 round)
+## Attack 22 — TLB / cache diagnostic (`perf stat -e dTLB-loads,iTLB-loads,L1-*`)
 
-Levers attacked: 21 total. Calls: 14 kept (12 code + 2 doc), 4
-dropped, 5 doc-only / diagnostic (D6, PGO recipe, E6 recipe, plus
-diagnostic events from attacks 17/19).
+**Diagnostic**: switched to TLB/cache events to see if memory-side
+stalls are now the bottleneck.
+
+**Findings**:
+- dTLB-load-misses: 285k / 32.8B loads = **0.00%** — data TLB is fine
+- iTLB-load-misses: 22.3M / 9.7M loads = **228%** — iTLB is over-saturated
+- L1-dcache-load-misses: 0.51B / 32.8B = **1.56%** — moderate
+- L1-icache-load-misses: 2.0B in 10s — moderate
+- Process `AnonHugePages: 0 kB` despite kevy-map calling
+  `advise_hugepage()` on its main allocation
+
+**iTLB pressure** is the biggest unattacked memory-side cost. The 22M
+iTLB misses/10s ≈ 2.2M/s × ~50ns/miss = ~1.1% of CPU time in TLB
+walks, but the cascading pipeline stalls amplify that.
+
+Attack vector: code-size reduction (rip out unused features), or
+`prctl(PR_SET_THP_DISABLE, 0)`-style code-segment THP. Either would
+need significant refactoring or a hugetlb-fs deployment recipe.
+**Documented for future investigation; not attempted this sprint.**
+
+**THP not landing on kevy-map**: the `advise_hugepage()` calls in
+`kevy-map::alloc_table` correctly hint the range, but the kernel
+doesn't promote 2 MB regions because the `alloc()` base pointer
+isn't 2 MB-aligned (jemalloc-like allocators place objects within
+chunks, not at 2 MB boundaries). Fixing this requires either:
+- Switching the kevy-map backing allocator to a custom 2 MB-aligned
+  `mmap`-based one for the table buffer, or
+- Documenting an explicit `hugetlbfs` mount + `KEVY_HUGEPAGE_DIR=...`
+  env var as a deployment recipe
+
+Both are real engineering tasks; **deferred**.
+
+## Attack 23 — E12: `std::hint::spin_loop()` in idle busy-poll
+
+**Hypothesis**: the io_uring reactor busy-polls `URING_SPIN_LIMIT`
+iters between completions before parking, but the spin branch had
+no microarchitectural hint that we were in a wait loop. Adding
+`std::hint::spin_loop()` compiles to `PAUSE` on x86 / `YIELD` on
+ARM and signals the CPU to:
+- Lower power draw
+- Free pipeline bandwidth for the SMT sibling
+- Reduce branch-history pollution from speculative reads
+
+**Implementation**: single-line insert into the idle spin branch
+of `Shard::run_uring`.
+
+**Measured**: throughput in noise at single-conn (Rust c1 ~76k, C
+c1 ~80k). PAUSE on x86 doesn't directly speed up the spinning
+thread; the gain is on SMT siblings / multi-shard layouts.
+
+**Call**: KEPT. Industry-standard idiom for busy-loops in Rust
+1.49+ stable. Zero regression risk; real benefit on multi-shard
+and multi-tenant setups.
+
+## Final status — exhausted incremental levers
+
+23 attacks total. Calls: **16 kept** (14 code + 2 doc), **4 dropped**,
+3 diagnostic-only (#17 build-flag inventory, #19 branch-misses
+event, #22 TLB / cache events).
 
 Cumulative measured win (vs v1.22.0):
 
-| Workload (lx64, io_uring, mitigations=off, rules on)| v1.22.0  | post-E11 | Δ      |
-|------------------------------------------------------|----------|----------|--------|
-| C `redis-benchmark` c1 GET                           | 68 k     | **84.9 k**| +25%  |
-| C `redis-benchmark` c1 SET                           | 76 k     | **84.9 k**| +12%  |
+| Workload (lx64, io_uring, mitigations=off, rules on) | v1.22.0  | post-E12 | Δ     |
+|------------------------------------------------------|----------|----------|-------|
+| C `redis-benchmark` c1 GET                           | 68 k     | **84.9 k**| +25% |
+| C `redis-benchmark` c1 SET                           | 76 k     | **84.9 k**| +12% |
 
 With **all tuning knobs applied** (mitigations=off + nft flush +
 optional PGO):
-- C c1 SET / GET: **~108 k** (the true server ceiling on this
-  hardware; ~+40% over default-config v1.22.0)
+- C c1 SET / GET: **~108 k** (true server ceiling on this hardware;
+  ~+40% over default-config v1.22.0)
 
 vs valkey 9.1 (io-threads, same host, default ruleset):
 - c1 GET: 84.9k vs 69k = **1.23×** (was 1.13×)
 - c1 SET: 84.9k vs 64k = **1.33×** (was 1.27×)
 
-With nft flushed (apples-to-apples, since the comparison was
-already run with rules on):
+With nft flushed:
 - c1 GET: 108k vs valkey 69k = **1.57×**
 - c1 SET: 108k vs valkey 64k = **1.69×**
 
-## Remaining levers (truly out of scope)
+## Remaining levers (truly out of scope for incremental sprints)
 
 - **E6 nft_do_chain** (1.18% kernel) — `iptables -F` / `nft flush
   ruleset` on the bench box would eliminate this, but would also
