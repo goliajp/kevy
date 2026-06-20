@@ -40,9 +40,32 @@ pub const IORING_OFF_SQ_RING: i64 = 0;
 pub const IORING_OFF_CQ_RING: i64 = 0x0800_0000;
 pub const IORING_OFF_SQES: i64 = 0x1000_0000;
 
+// ---- io_uring_setup flags -------------------------------------------------
+
+/// Run the kernel-side submission poll thread (SQPOLL). With this flag set,
+/// the kernel polls the SQ from a dedicated kernel thread and does
+/// `io_uring_enter` becomes unnecessary on the steady state — submissions are
+/// reaped without a syscall.
+pub const IORING_SETUP_SQPOLL: u32 = 1 << 1;
+
+/// Pin the SQPOLL kernel thread to `sq_thread_cpu`. Requires `IORING_SETUP_SQPOLL`.
+pub const IORING_SETUP_SQ_AFF: u32 = 1 << 2;
+
 // ---- io_uring_enter flags -------------------------------------------------
 
 pub const IORING_ENTER_GETEVENTS: u32 = 1;
+
+/// Wake the SQPOLL kernel thread if it was parked. Userland must check the
+/// `IORING_SQ_NEED_WAKEUP` bit in the shared `sq_flags` and pass this flag
+/// to `io_uring_enter` whenever it is set.
+pub const IORING_ENTER_SQ_WAKEUP: u32 = 1 << 1;
+
+// ---- shared SQ ring flag bits ---------------------------------------------
+
+/// The SQPOLL kernel thread has parked itself (idle longer than
+/// `sq_thread_idle` ms). Userland MUST call `io_uring_enter` with
+/// `IORING_ENTER_SQ_WAKEUP` to re-arm it.
+pub const IORING_SQ_NEED_WAKEUP: u32 = 1 << 0;
 
 // ---- Operation opcodes (subset we use) ------------------------------------
 

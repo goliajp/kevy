@@ -13,10 +13,9 @@ and a clear cost. Apply only the ones you actually need.
 | Disable AOF (`--no-aof`)      | replica / ephemeral cache                | 5–10%   |
 | Set `KEVY_IO_URING=1`         | Linux 5.13+                              | 10–30%  |
 | Kernel `mitigations=off`      | trusted single-tenant box                | 12–15%  |
-| `io_uring` SQPOLL (planned)   | Linux 5.13+, can spare 1 core            | 1.5–2×  |
 
-`mitigations=off` and SQPOLL are the only knobs that move the kernel
-floor; everything else trims userspace cycles only.
+`mitigations=off` is the only knob that moves the kernel floor;
+everything else trims userspace cycles only.
 
 ## CPU pinning
 
@@ -119,15 +118,23 @@ On the lx64 reference, expected throughput delta after `mitigations=off`:
 than Intel Xeon Spectre BHB; ARM N1/N2 pay yet another. Measure on
 your hardware.)
 
-## `io_uring` SQPOLL (planned, not yet shipped)
+## `io_uring` SQPOLL — investigated, not shipped
 
 Kernel polls the io_uring submission queue from a dedicated thread —
-eliminates `io_uring_enter` syscall per op. Will be an opt-in feature
-flag (`KEVY_SQPOLL=1`), since it costs 1 CPU core at 100% even when
-idle. Predicted gain: **1.5–2×** at -c1, neutral at -c50 (already
-batched).
+removes `io_uring_enter` syscall per op.
 
-Status: tracked as D5 in `bench/PERF-ATTACK-LOG-2026-06-20.md`.
+The wire-level support exists in `kevy_uring::IoUring::new_sqpoll`,
+but it is **not wired into the shard reactor** and we do not recommend
+applying it on top of kevy's thread-per-core layout. Each ring spawns
+one kernel poll thread, so N shards spawn N additional 100%-spin
+kernel threads contending for the same cores as the shard threads. On
+the lx64 reference (10 shards on 16 cores) this **regressed
+throughput 2–15×** at -c1 and -c50.
+
+SQPOLL belongs to single-threaded reactor designs with a spare core
+budget for the poll thread. kevy's per-core design already saturates
+the CPU; adding a kernel poll thread halves it. See attack D5 in
+`bench/PERF-ATTACK-LOG-2026-06-20.md` for the measurement detail.
 
 ## Things that do **not** help (anymore)
 

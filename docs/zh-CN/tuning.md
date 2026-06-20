@@ -13,10 +13,8 @@
 | 关 AOF (`--no-aof`)           | 只读副本 / 易失缓存                  | 5–10%   |
 | 打开 `KEVY_IO_URING=1`        | Linux 5.13+                          | 10–30%  |
 | 内核 `mitigations=off`        | 受信任的单租户机                     | 12–15%  |
-| `io_uring` SQPOLL (计划中)    | Linux 5.13+,能让一核满转            | 1.5–2×  |
 
-`mitigations=off` 和 SQPOLL 是仅有的两个能动**内核地板**的旋钮;其余
-只削用户态周期。
+`mitigations=off` 是唯一能动**内核地板**的旋钮;其余只削用户态周期。
 
 ## CPU 绑定
 
@@ -107,14 +105,20 @@ lx64 参考机上,`mitigations=off` 后预期吞吐:
 (数字看内核 / CPU 厂家。AMD Zen 3+ 跟 Intel Xeon BHB 的代价不同;
 ARM N1/N2 又是另一回事。**在你自己的硬件上量**。)
 
-## `io_uring` SQPOLL(计划中,未发布)
+## `io_uring` SQPOLL —— 实测拒绝接入
 
 内核独立线程轮询 io_uring 提交队列 —— 消除每 op 一次的
-`io_uring_enter` syscall。会做成可选 feature flag(`KEVY_SQPOLL=1`),
-因为它就算闲着也要占满一个核。预测 -c1 **1.5–2×**,-c50 持平(已经
-batch 过)。
+`io_uring_enter` syscall。
 
-进度:见 `bench/PERF-ATTACK-LOG-2026-06-20.md` 里的 D5。
+wire-level 支持在 `kevy_uring::IoUring::new_sqpoll` 里,但**没有接入
+shard reactor**,也不建议套在 kevy 的 thread-per-core 之上。每个 ring
+会生一个内核轮询线程,N 个 shard = N 个额外的 100% 自旋内核线程,跟
+shard 线程抢同一批核。lx64 参考机(10 shard 跑 16 核)实测在 -c1 和
+-c50 上**回归 2–15×**。
+
+SQPOLL 适合单线程 reactor + 有空余核给轮询线程的场景。kevy 的
+per-core 设计已经吃满 CPU,再加一个内核轮询线程相当于砍一半。实测细
+节见 `bench/PERF-ATTACK-LOG-2026-06-20.md` 里的 D5。
 
 ## 不再有用的事
 
