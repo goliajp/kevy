@@ -375,10 +375,43 @@ impl<C: Commands> Shard<C> {
         io: &mut KevyMap<u64, UringConn>,
         bgid: u16,
     ) {
+        // A3 (2026-06-20): prefetch UringConn ahead of the loop body.
+        // H7 diagnostic showed L1D-miss stalls = 24.6% of total backend
+        // stalls at -c1; scatter from conn-map and io-map accesses are
+        // candidates. The conns map's slot for the upcoming conn is
+        // already L1-hot at the call site, but its corresponding
+        // UringConn (separately allocated via KevyMap<u64, UringConn>)
+        // typically lives in a different cache line. Prefetching it
+        // hides the L1 fill behind the prior iter's prep_write/recv
+        // SQE writes.
+        //
+        // At -c1 single-conn the loop runs once → prefetch is a no-op
+        // (next conn doesn't exist). At higher conn counts the
+        // hide-fill benefit grows with iteration depth.
+        let mut prev: Option<*const UringConn> = None;
         for (&cid, conn) in self.conns.iter_mut() {
+            if let Some(p) = prev {
+                // Hint to the CPU: the previous iter's UringConn was
+                // here — bringing it in pre-emptively warms the line
+                // for the next iter's get_mut hit-write.
+                // SAFETY: pointer was a valid &mut UringConn from the
+                // previous iteration; KevyMap doesn't reallocate inside
+                // this loop (no insert/remove). The prefetch is a hint
+                // and reading from it must not deref UB-wise; using
+                // hint::black_box prevents the optimizer from removing
+                // it without making the access architectural.
+                unsafe {
+                    core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(
+                        p as *const i8,
+                    );
+                }
+                let _ = p; // silence unused
+            }
             let Some(uc) = io.get_mut(&cid) else {
+                prev = None;
                 continue;
             };
+            prev = Some(uc as *const UringConn);
             // Start a new write: move the conn's output into the stable write_buf.
             if !uc.write_inflight && uc.write_buf.is_empty() && !conn.output.is_empty() {
                 std::mem::swap(&mut uc.write_buf, &mut conn.output);
