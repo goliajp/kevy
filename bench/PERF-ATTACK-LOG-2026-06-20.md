@@ -441,13 +441,58 @@ lines, or move some checks off the hot loop).
 Still pending lx64 reboot (user call). At 12.69% on the current
 profile, this is the single biggest unattacked lever.
 
-### E5 — SQPOLL retry with disjoint core affinity
+## Attack 12 — E5: SQPOLL retry with **disjoint** affinity
 
-Original D5 dropped because the 10 SQPOLL kernel threads landed
-on the same cores as the 10 shards. **Untried**: 5-shard config
-+ SQPOLL pinned to cores 11–15 via `IORING_SETUP_SQ_AFF`. With
-disjoint affinity SQPOLL should not contend; this is a real
-follow-up.
+**Hypothesis** (response to D5 drop): D5's regression came from
+SQPOLL kernel threads sharing cores with shard threads. Fix the
+affinity: 5 shards pinned to cores 0–4, SQPOLL threads pinned to
+cores 5–9 via `IORING_SETUP_SQ_AFF` (per-shard `sq_thread_cpu =
+5 + shard_id`). No core contention; SQPOLL's syscall savings
+should now compound.
+
+**Implementation**: `kevy-rt/uring_reactor.rs` `build_ring(shard_id)`
+honors `KEVY_SQPOLL_BASE_CPU=N` env: shard i's ring is created
+with `IoUring::new_sqpoll(URING_ENTRIES, 500ms, Some(N + i))`.
+Opt-in via env (default off, matches D5 conservatism).
+
+**Measured (lx64, 5 shards on cores 0–4, SQPOLL on 5–9, client on 10–15)**:
+
+| Workload                  | SQPOLL off   | SQPOLL on   | Δ      |
+|---------------------------|--------------|-------------|--------|
+| Rust c1 SET               | 70-71 k      | 67-69 k     | -5%    |
+| Rust c1 GET               | 73-75 k      | 68-69 k     | -8%    |
+| C c1 SET                  | 75.1 k       | 53.5 k      | -29%   |
+| C c1 GET                  | 67.5 k       | 54.1 k      | -20%   |
+| C c50-P16 SET             | 2.32 M       | 1.91 M      | -18%   |
+| C c50-P16 GET             | 2.35 M       | 1.93 M      | -18%   |
+
+**Root cause** (the *real* one this time, since affinity was
+disjoint): SQPOLL adds inherent latency and cross-core synchronization
+tax. The submitter thread on core 0 publishes the SQ tail; the SQ
+poll thread on core 5 wakes (or is already spinning) and reaps;
+completion processing fires on the user thread again on core 0.
+**Every SQE pays a cross-core round-trip**.
+
+In the classic path, `io_uring_enter` syscall transitions to the
+kernel **on the same core** — the SQE is processed in-kernel inline,
+completion stays in the same L1, returns to user. No cross-core hop.
+
+SQPOLL's win is the **syscall elimination**, but that requires the
+SQE volume to amortize over many ops per enter. kevy submits one
+SQE per op at -c1; the cross-core latency dominates.
+
+**Call**: **DROPPED**. The wire-level support stays in kevy-uring
+(useful for callers with batched-many-SQE-per-enter workloads),
+but the `KEVY_SQPOLL_BASE_CPU` env wiring in kevy-rt is removed.
+Future-proofing: if a workload emerges with high enough SQE batch
+density to amortize the cross-core cost, the env wiring can be
+re-added without changing the kevy-uring ABI.
+
+**Lesson**: SQPOLL is "save one syscall in exchange for cross-core
+sync per SQE". It's a win only when the per-SQE saving > the
+cross-core sync cost. For low-batch workloads (kevy at -c1), the
+ratio inverts. The "disjoint affinity" assumption that fixed D5's
+visible problem didn't change the underlying microarchitecture math.
 
 ### E6 — `nft_do_chain` 1.2-1.8%
 
