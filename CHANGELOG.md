@@ -4,6 +4,79 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.24.0] — 2026-06-20 (E13 — 2 MiB-aligned mmap path for kevy-map THP)
+
+After v1.23.2 closed the "incremental perf" sprint, user authorized
+architectural work as long as API + project principles hold. E13 is
+that architectural win:
+
+### Why
+
+`kevy-map`'s hash table called `kevy_madvise::advise_hugepage()` on its
+allocation. The advise was correct, but the global allocator
+(jemalloc-like chunk placement) returned a 4 KiB-aligned base pointer
+inside a larger arena. `khugepaged` cannot find a 2 MiB-aligned
+candidate to promote inside a 4 KiB-aligned arena. Observed
+empirically: `AnonHugePages: 0 kB` in `/proc/PID/smaps` despite the
+hint, for the entire v1.23.x line.
+
+### Fix
+
+`kevy-madvise` gains two new entry points:
+
+- **`mmap_anon_aligned_2mb(len)`** → `Option<NonNull<u8>>` — anonymous
+  `mmap` with a 2 MiB-aligned base + 2 MiB-multiple length + immediate
+  `MADV_HUGEPAGE`. Implements the classic "over-allocate by one HP,
+  trim prefix/suffix via munmap" alignment trick. Linux only;
+  `None` on other targets so the caller falls back to the global
+  allocator.
+
+- **`munmap_2mb(ptr, len)`** → matching cleanup, rounds `len` up
+  internally to match the allocation.
+
+`kevy-map`'s `alloc_table` (extracted into a new `alloc.rs` for the
+500-LOC house rule) picks between the two paths at a 1 MiB threshold:
+small tables stay on the global allocator (over-allocation cost not
+worth it); large tables go through the mmap path and finally get
+THP-aligned storage. A new `pub(crate)` `mmap_backed: bool` field
+tracks which dealloc to call in `Drop`.
+
+### Measured
+
+On the lx64 reference (Intel i7-10700K Comet Lake, Linux 6.12,
+mitigations=off):
+
+- `/proc/PID/smaps` `AnonHugePages`: **0 kB → 40 960 kB** (20 × 2 MiB
+  pages promoted after a 2 M-key SET workload)
+- C `redis-benchmark` c1 SET: ~80 k → ~82.8 k (+3%)
+- C `redis-benchmark` c1 GET: ~80 k → ~81.9 k (+2%)
+
+The throughput delta is small at -c1 because that workload is syscall-
+bound, not memory-bound. The architectural win is the THP mechanism
+finally working as designed. Memory-bound workloads (large keyspaces
+under -c50 -P16) should see proportionally more.
+
+### Public API
+
+- `kevy-madvise`: **two new pub fns added** (`mmap_anon_aligned_2mb`,
+  `munmap_2mb`); existing `advise_hugepage` unchanged. Minor bump.
+- `kevy-map`: no public API change; the new `mmap_backed` field is
+  `pub(crate)` and internal.
+
+### Version bumps
+
+- workspace `1.23.2` → `1.24.0` (kevy-madvise API additive — minor)
+- `kevy-client` `1.12.2` → `1.12.3` (dep rev only)
+- `kevy-embedded` `1.4.3` → `1.4.4` (dep rev only)
+- `kevy-client-async` `1.0.3` → `1.0.4` (dep rev only)
+
+### Wire / persistence / API
+
+No changes to the RESP wire protocol, AOF/snapshot format, CLI flags,
+or kevy-map's public surface. kevy-madvise gains two additive pub fns.
+
+---
+
 ## [v1.23.2] — 2026-06-20 (perf sprint closeout — E12 + final diagnostic)
 
 Final patch in the v1.23.x perf sprint. After v1.23.1 user asked
