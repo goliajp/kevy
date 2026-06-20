@@ -51,6 +51,28 @@ pub const IORING_SETUP_SQPOLL: u32 = 1 << 1;
 /// Pin the SQPOLL kernel thread to `sq_thread_cpu`. Requires `IORING_SETUP_SQPOLL`.
 pub const IORING_SETUP_SQ_AFF: u32 = 1 << 2;
 
+/// **Linux 5.19+**. Hint that all SQEs come from "cooperative task" context
+/// (the user thread is itself processing CQEs). Lets the kernel skip a
+/// `task_work_add`/IPI on the completion path. Free win when the same
+/// thread that calls `io_uring_enter` is the one that drains CQEs.
+pub const IORING_SETUP_COOP_TASKRUN: u32 = 1 << 8;
+
+/// **Linux 6.0+**. Declare that **only one thread** ever submits to this
+/// ring. Lets the kernel skip locking on the submission path. Safe for
+/// kevy's per-shard rings (one shard thread owns each ring exclusively).
+pub const IORING_SETUP_SINGLE_ISSUER: u32 = 1 << 12;
+
+/// **Linux 6.1+**. Defer all completion task_work to the user thread's
+/// `io_uring_enter` call instead of running it from an IPI. Pairs with
+/// `SINGLE_ISSUER` and slashes the cost of completion-side bookkeeping.
+/// Requires `SINGLE_ISSUER` set as well.
+///
+/// **Defined but not used in kevy** — see the E2 attack notes in
+/// `bench/PERF-ATTACK-LOG-2026-06-20.md`. The constant is kept in the
+/// ABI table for documentation + future single-threaded reactor callers.
+#[allow(dead_code)]
+pub const IORING_SETUP_DEFER_TASKRUN: u32 = 1 << 13;
+
 // ---- io_uring_enter flags -------------------------------------------------
 
 pub const IORING_ENTER_GETEVENTS: u32 = 1;
