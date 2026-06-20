@@ -6,16 +6,28 @@
 use crate::Commands;
 use crate::shard::Shard;
 use crate::uring_reactor::UringConn;
+use core::sync::atomic::Ordering;
 use kevy_map::KevyMap;
 
 impl<C: Commands> Shard<C> {
     /// Drain cross-core rings: execute forwarded requests, fold replies into
     /// their connection's output (no direct write — the io_uring arm/write
     /// loop flushes it). The message handling itself is
-    /// [`Shard::drain_inbound_core`], shared with the epoll reactor.
+    /// [`Shard::drain_inbound_core_slow`], shared with the epoll reactor.
+    ///
+    /// **E15 (2026-06-20)** fast-path split: post-v1.24-chain perf
+    /// diagnostic showed this at 3.59 % self — almost all from the per-iter
+    /// fn call overhead despite the cheap Acquire load inside. Now the
+    /// Acquire load lives here in a tiny `#[inline]` wrapper that LLVM
+    /// folds into the reactor loop body; the cold drain body is
+    /// `#[inline(never)]` so its bulk stays off the hot iTLB pages.
     #[inline]
     pub(crate) fn uring_drain_inbound(&mut self) -> bool {
-        self.drain_inbound_core::<false>()
+        let me = self.id;
+        if self.inbound_dirty[me].load(Ordering::Acquire) == 0 {
+            return false;
+        }
+        self.drain_inbound_core_slow::<false>()
             .expect("DIRECT_FLUSH=false drain has no fallible step")
     }
 
