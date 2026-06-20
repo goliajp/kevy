@@ -6,9 +6,9 @@
 use core::ptr;
 
 use crate::ffi::{
-    IORING_OP_ACCEPT, IORING_OP_NOP, IORING_OP_READ, IORING_OP_RECV, IORING_OP_TIMEOUT,
-    IORING_OP_WRITE, IORING_RECV_MULTISHOT, IOSQE_BUFFER_SELECT, IOSQE_FIXED_FILE, SOCK_CLOEXEC,
-    SOCK_NONBLOCK,
+    IORING_ACCEPT_MULTISHOT, IORING_OP_ACCEPT, IORING_OP_NOP, IORING_OP_READ, IORING_OP_RECV,
+    IORING_OP_TIMEOUT, IORING_OP_WRITE, IORING_RECV_MULTISHOT, IOSQE_BUFFER_SELECT,
+    IOSQE_FIXED_FILE, SOCK_CLOEXEC, SOCK_NONBLOCK,
 };
 use crate::layout::{IoUringSqe, KernelTimespec};
 use crate::ring::IoUring;
@@ -150,6 +150,35 @@ impl IoUring {
                 IoUringSqe::new(IORING_OP_ACCEPT, listen_fd, 0, 0, user_data),
             );
             (*sqe).rw_flags = SOCK_NONBLOCK | SOCK_CLOEXEC;
+        }
+        true
+    }
+
+    /// Queue a **multishot** accept on `listen_fd` (Linux 5.19+). The kernel
+    /// keeps one SQE armed across many connections — each new fd arrives as
+    /// its own CQE with `IORING_CQE_F_MORE` set in `flags` while still armed.
+    /// When `F_MORE` is clear the multishot has terminated and userland must
+    /// re-arm via this fn (or fall back to [`Self::prep_accept`]). Caller
+    /// must keep `user_data` stable across the run of one multishot — each
+    /// CQE replays the same tag.
+    ///
+    /// B4 (2026-06-20): replaces the one-SQE-per-accept call site in
+    /// `kevy_rt::uring_reactor`. At -c1 (one persistent conn) zero
+    /// difference; under high-conn-churn workloads cuts an SQE + an
+    /// `arm_conns`-loop trip per accept.
+    pub fn prep_accept_multishot(&mut self, listen_fd: i32, user_data: u64) -> bool {
+        let Some(idx) = self.reserve() else {
+            return false;
+        };
+        // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
+        unsafe {
+            let sqe = self.sqes_ptr().add(idx);
+            ptr::write(
+                sqe,
+                IoUringSqe::new(IORING_OP_ACCEPT, listen_fd, 0, 0, user_data),
+            );
+            (*sqe).rw_flags = SOCK_NONBLOCK | SOCK_CLOEXEC;
+            (*sqe).ioprio = IORING_ACCEPT_MULTISHOT;
         }
         true
     }

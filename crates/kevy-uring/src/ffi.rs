@@ -107,6 +107,13 @@ pub const SOCK_CLOEXEC: u32 = 0x8_0000;
 
 pub const IOSQE_BUFFER_SELECT: u8 = 1 << 5; // SQE picks a buffer from a group
 pub const IORING_RECV_MULTISHOT: u16 = 2; // (ioprio) re-fire one recv per arrival
+/// **Linux 5.19+**. `(ioprio)` re-fire one accept per arriving connection.
+/// Kernel keeps the accept SQE armed across completions; each CQE carries
+/// the new fd in `res` and `IORING_CQE_F_MORE` in `flags` while still armed.
+/// When the kernel drops the multishot (listener closed, EAGAIN-like errors),
+/// `F_MORE` is clear and userland must re-submit. B4 (2026-06-20): cuts the
+/// one-SQE-per-accept overhead under high-conn-churn workloads.
+pub const IORING_ACCEPT_MULTISHOT: u16 = 1; // (ioprio bit for IORING_OP_ACCEPT)
 
 // ---- io_uring_register opcodes --------------------------------------------
 

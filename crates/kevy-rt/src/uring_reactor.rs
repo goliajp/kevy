@@ -134,14 +134,23 @@ impl<C: Commands> Shard<C> {
         let mut reap_counter: u32 = 0;
 
         while !stop.load(Ordering::Relaxed) {
-            // Always keep one accept in flight (per listener).
+            // B4 (2026-06-20): one multishot accept SQE per listener stays
+            // armed across many connections. The kernel re-fires it per
+            // incoming conn, each CQE carrying the new fd in `res` and
+            // `IORING_CQE_F_MORE` set while still armed. We only re-submit
+            // when F_MORE clears (kernel dropped the multishot — listener
+            // close, ENOBUFS, etc.). Zero -c1 cost (one persistent conn
+            // takes one accept ever); cuts the per-accept SQE under
+            // high-conn-churn workloads.
             if !accept_inflight {
-                accept_inflight = ring.prep_accept(self.listener.raw(), OP_ACCEPT);
+                accept_inflight =
+                    ring.prep_accept_multishot(self.listener.raw(), OP_ACCEPT);
             }
             if !cl_accept_inflight
                 && let Some(cl) = &self.cluster_listener
             {
-                cl_accept_inflight = ring.prep_accept(cl.raw(), OP_ACCEPT_CL);
+                cl_accept_inflight =
+                    ring.prep_accept_multishot(cl.raw(), OP_ACCEPT_CL);
             }
             self.uring_arm_conns(&mut ring, &mut io, pbuf.group());
 
@@ -185,10 +194,18 @@ impl<C: Commands> Shard<C> {
                     OP_ACCEPT | OP_ACCEPT_CL => {
                         cold_path_hint();
                         let cluster = op == OP_ACCEPT_CL;
-                        if cluster {
-                            cl_accept_inflight = false;
-                        } else {
-                            accept_inflight = false;
+                        // B4: only clear the in-flight flag when the
+                        // multishot terminates (F_MORE clear). While
+                        // F_MORE is set the kernel still has the SQE
+                        // armed and will re-fire on the next conn — no
+                        // need to re-submit, and the top-of-loop
+                        // re-arm gate would queue a duplicate.
+                        if !c.has_more() {
+                            if cluster {
+                                cl_accept_inflight = false;
+                            } else {
+                                accept_inflight = false;
+                            }
                         }
                         io_work = true;
                         if c.res >= 0 {
