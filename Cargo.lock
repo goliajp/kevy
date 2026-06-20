@@ -557,6 +557,7 @@ name = "kevy-resp"
 version = "1.24.0"
 dependencies = [
  "kevy-bench",
+ "kevy-bytes",
 ]
 
 [[package]]

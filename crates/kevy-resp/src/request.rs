@@ -201,57 +201,16 @@ pub(crate) fn parse_bulk_len(
 
 /// Find the index of `\r\n` at or after `start`, returning the index of `\r`.
 ///
-/// SWAR-accelerated: scans 8 bytes at a time using the classic "has-zero-byte"
-/// bit trick (XOR each byte with `\r`, then `(x - 0x01..) & !x & 0x80..`
-/// isolates bytes that were zero). On a CR hit we confirm the next byte is
-/// `\n` and return; otherwise we resume from `pos + 1` so a stray `\r` doesn't
-/// terminate the scan. Safe Rust only — keeps `kevy-resp`'s
-/// `forbid(unsafe_code)` guarantee.
+/// A6 + A7 (2026-06-20): delegates to `kevy_bytes::find_crlf`, which picks
+/// AVX2 (x86_64 runtime-detected) / NEON (aarch64 baseline) / u64 SWAR
+/// fallback. The previous in-crate SWAR loop is now the fallback tier
+/// of that dispatch. Pulling the SIMD path into kevy-bytes keeps this
+/// crate under #![forbid(unsafe_code)] — kevy-bytes already wraps
+/// SmallBytes' unsafe union work so it's the right home for arch
+/// intrinsics.
 #[inline]
 pub(crate) fn find_crlf(buf: &[u8], start: usize) -> Option<usize> {
-    const CR_BCAST: u64 = 0x0D0D_0D0D_0D0D_0D0D_u64;
-    const ONES: u64 = 0x0101_0101_0101_0101_u64;
-    const HIGH: u64 = 0x8080_8080_8080_8080_u64;
-
-    let n = buf.len();
-    let mut i = start;
-    // Need at least 2 bytes (CR + LF) to find a CRLF.
-    if i + 1 >= n {
-        return None;
-    }
-    // SWAR loop: read 8 bytes, find any byte == 0x0D, then check the next
-    // byte. We require the WHOLE 8-byte window to be within `buf` AND the
-    // byte just past it to also exist (so a CR at position 7 of the window
-    // can be confirmed by reading position 8). That's `i + 9 <= n`, i.e.
-    // `i + 8 < n` (strict, since we may need [pos+1] which is at most i+8
-    // when pos == i+7).
-    while i + 8 < n {
-        let word = u64::from_le_bytes(buf[i..i + 8].try_into().expect("8 bytes"));
-        let x = word ^ CR_BCAST;
-        let zeroed = x.wrapping_sub(ONES) & !x & HIGH;
-        if zeroed != 0 {
-            // The low set bit's byte index = first CR in this 8-byte window.
-            let bit_idx = zeroed.trailing_zeros();
-            let pos = i + (bit_idx / 8) as usize;
-            // pos < i + 8 ≤ n - 1, so pos + 1 < n is valid to read.
-            if buf[pos + 1] == b'\n' {
-                return Some(pos);
-            }
-            // Lone CR — resume scanning from the byte after it.
-            i = pos + 1;
-            continue;
-        }
-        i += 8;
-    }
-    // Tail: scalar over the last < 8 bytes (or what's left after a partial
-    // resume above).
-    while i + 1 < n {
-        if buf[i] == b'\r' && buf[i + 1] == b'\n' {
-            return Some(i);
-        }
-        i += 1;
-    }
-    None
+    kevy_bytes::find_crlf(buf, start)
 }
 
 /// Parse a base-10 signed integer from ASCII bytes (no surrounding whitespace).

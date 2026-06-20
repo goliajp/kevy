@@ -30,7 +30,10 @@
 #[cfg(target_endian = "big")]
 compile_error!("kevy-bytes requires little-endian: heap-tag byte overlaps inline length byte");
 
+mod find_crlf;
 mod traits;
+
+pub use find_crlf::find_crlf;
 
 use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 use std::mem::{self, ManuallyDrop};
