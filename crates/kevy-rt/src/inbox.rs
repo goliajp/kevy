@@ -152,39 +152,48 @@ impl<C: Commands> Shard<C> {
 
     /// Drain inbound cross-core messages from every peer ring; returns
     /// whether any were processed (the epoll reactor's entry point).
-    pub(crate) fn drain_inbound(&mut self) -> io::Result<bool> {
-        self.drain_inbound_core::<true>()
-    }
-
-    /// The drain shared by both reactors. `DIRECT_FLUSH` selects the epoll
-    /// behavior (write each touched conn's output here, propagating I/O
-    /// errors) over the io_uring one (`false`: appended output is picked up
-    /// by the arm/write loop, and the only fallible step — the AOF group
-    /// sync — downgrades to a logged error, so no `Err` is ever built).
+    ///
+    /// **E15 (2026-06-20)** fast-path split: the post-v1.24-chain perf
+    /// diagnostic showed `uring_drain_inbound` at 3.59 % self at -c1
+    /// despite the E8 Acquire-load short-circuit — almost all of that
+    /// was the cost of *calling* a non-trivial monomorphised function
+    /// per busy-poll iter. Split the fast-path Acquire check into a
+    /// tiny `#[inline]` wrapper that LLVM can fold into the reactor
+    /// loop body and outline the cold drain logic as
+    /// `#[inline(never)]` so its bulk stays off the hot iTLB pages.
     #[inline]
-    pub(crate) fn drain_inbound_core<const DIRECT_FLUSH: bool>(&mut self) -> io::Result<bool> {
-        // Hot path: short-circuit if no peer has marked us. Senders OR a
-        // bit into `inbound_dirty[me]` after pushing to our ring; we swap
-        // it to 0 and only walk the rings whose bit is set. Profile note
-        // (2026-06-20): this drain was 17.4 % of -c1 CPU even with zero
-        // cross-shard traffic, just from sweeping N empty rings.
-        //
-        // E8: the common-case fast path is "no peer dirty" — load with
-        // Acquire (cheap mov on x86 TSO) and bail immediately. Only when
-        // a bit is actually set do we pay the `lock xchg` of the swap to
-        // atomically clear + read. AcqRel-on-swap synchronises with the
-        // Release `fetch_or` in `send_to`; the load is Acquire so we
-        // don't miss bits set before our snapshot. Bits set BETWEEN
-        // load and swap are still atomically captured by the swap.
+    pub(crate) fn drain_inbound(&mut self) -> io::Result<bool> {
         let me = self.id;
         if self.inbound_dirty[me].load(Ordering::Acquire) == 0 {
             return Ok(false);
         }
+        self.drain_inbound_core_slow::<true>()
+    }
+
+    /// Outlined-cold drain body — only called once the fast-path Acquire
+    /// load saw a non-zero dirty mask. Atomically swaps the mask to 0,
+    /// walks each set bit's peer ring, and dispatches whatever it finds.
+    ///
+    /// `DIRECT_FLUSH` selects the epoll behavior (write each touched
+    /// conn's output here, propagating I/O errors) over the io_uring one
+    /// (`false`: appended output is picked up by the arm/write loop, and
+    /// the only fallible step — the AOF group sync — downgrades to a
+    /// logged error, so no `Err` is ever built).
+    #[inline(never)]
+    pub(crate) fn drain_inbound_core_slow<const DIRECT_FLUSH: bool>(
+        &mut self,
+    ) -> io::Result<bool> {
+        // E8 / E15: callers already paid the Acquire load. We do the
+        // `lock xchg` swap unconditionally here. AcqRel-on-swap
+        // synchronises with the Release `fetch_or` in `send_to`; bits
+        // set BETWEEN the caller's load and our swap are still
+        // atomically captured.
+        let me = self.id;
         let dirty = self.inbound_dirty[me].swap(0, Ordering::AcqRel);
         if dirty == 0 {
-            // A peer raced — observed bit, but a concurrent drainer
-            // already cleared it. Defensive (single-drainer per shard
-            // today, so this branch is dead).
+            // A peer raced — caller observed bit, but a concurrent
+            // drainer already cleared it. Defensive (single-drainer per
+            // shard today, so this branch is dead).
             return Ok(false);
         }
         let mut did = false;
