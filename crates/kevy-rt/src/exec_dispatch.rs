@@ -131,22 +131,36 @@ impl<C: Commands> Shard<C> {
 
     /// SLOWLOG start instant — `None` when SLOWLOG is OFF
     /// (`slower_than_micros < 0`, the default), skipping the clock pair.
+    /// A9: invert the early-return so the SLOWLOG-OFF hot path bails first
+    /// + tag the SLOWLOG-ON branch as cold so LLVM keeps it off the
+    /// predicted-taken fall-through.
     #[inline]
     pub(crate) fn slowlog_t0(&self) -> Option<Instant> {
-        if self.slowlog.slower_than_micros >= 0 {
-            Some(Instant::now())
-        } else {
-            None
+        if self.slowlog.slower_than_micros < 0 {
+            return None;
         }
+        // SLOWLOG enabled: cold-tag so LLVM puts the Instant::now() + the
+        // call site cleanup off the hot fall-through. Lets the branch
+        // predictor learn the OFF default. SLOWLOG can be CONFIG SET on
+        // at runtime so we don't use unreachable_unchecked.
+        #[cold]
+        #[inline(never)]
+        fn cold() {}
+        cold();
+        Some(Instant::now())
     }
 
     /// Record `args` in the SLOWLOG if a start instant was captured
     /// (`None` = SLOWLOG OFF, the default — a no-op).
     pub(crate) fn slowlog_maybe<A: ArgvView + ?Sized>(&mut self, t0: Option<Instant>, args: &A) {
-        if let Some(t0) = t0 {
-            let elapsed = t0.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
-            self.slowlog_record(args, elapsed);
-        }
+        // A9: invert + cold-tag — None is the steady-state hot path.
+        let Some(t0) = t0 else { return };
+        #[cold]
+        #[inline(never)]
+        fn cold() {}
+        cold();
+        let elapsed = t0.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+        self.slowlog_record(args, elapsed);
     }
 
     /// Park a blocking command whose `dispatch_into` produced no reply.
@@ -218,7 +232,14 @@ impl<C: Commands> Shard<C> {
         {
             self.store.bump_if_watched(&args[idx as usize]);
         }
+        // A9: AOF off is the default (--no-aof). cold-tag the AOF-enabled
+        // branch so the predictor learns the off case + LLVM keeps the
+        // log_write call site off the predicted fall-through.
         if self.aof.is_some() {
+            #[cold]
+            #[inline(never)]
+            fn cold() {}
+            cold();
             self.log_write(args);
         }
         // Replication: when `[replication] role = "primary"`, push the
