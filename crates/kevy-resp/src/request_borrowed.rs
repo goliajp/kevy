@@ -17,6 +17,7 @@ use crate::request::{find_crlf, parse_bulk_len, parse_int};
 ///
 /// Return shape matches [`crate::parse_command`]: `Ok(Some((argv, consumed)))`,
 /// `Ok(None)` if more bytes are needed, `Err` on malformed input.
+#[inline]
 pub fn parse_command_borrowed(
     buf: &[u8],
 ) -> Result<Option<(ArgvBorrowed<'_>, usize)>, ProtocolError> {
@@ -63,6 +64,7 @@ fn parse_inline_borrowed(
 /// the whole parse cost at the 8-shard bench corner. On `Ok(None)` /
 /// `Err` the partially-built argv is simply dropped (a range vec; no
 /// bytes were copied).
+#[inline]
 fn parse_multibulk_borrowed(
     buf: &[u8],
 ) -> Result<Option<(ArgvBorrowed<'_>, usize)>, ProtocolError> {
