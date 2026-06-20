@@ -166,11 +166,24 @@ impl<C: Commands> Shard<C> {
         // bit into `inbound_dirty[me]` after pushing to our ring; we swap
         // it to 0 and only walk the rings whose bit is set. Profile note
         // (2026-06-20): this drain was 17.4 % of -c1 CPU even with zero
-        // cross-shard traffic, just from sweeping N empty rings. AcqRel
-        // pairs with the Release `fetch_or` in `send_to`.
+        // cross-shard traffic, just from sweeping N empty rings.
+        //
+        // E8: the common-case fast path is "no peer dirty" — load with
+        // Acquire (cheap mov on x86 TSO) and bail immediately. Only when
+        // a bit is actually set do we pay the `lock xchg` of the swap to
+        // atomically clear + read. AcqRel-on-swap synchronises with the
+        // Release `fetch_or` in `send_to`; the load is Acquire so we
+        // don't miss bits set before our snapshot. Bits set BETWEEN
+        // load and swap are still atomically captured by the swap.
         let me = self.id;
+        if self.inbound_dirty[me].load(Ordering::Acquire) == 0 {
+            return Ok(false);
+        }
         let dirty = self.inbound_dirty[me].swap(0, Ordering::AcqRel);
         if dirty == 0 {
+            // A peer raced — observed bit, but a concurrent drainer
+            // already cleared it. Defensive (single-drainer per shard
+            // today, so this branch is dead).
             return Ok(false);
         }
         let mut did = false;
