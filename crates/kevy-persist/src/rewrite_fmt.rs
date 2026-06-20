@@ -94,6 +94,12 @@ fn write_value_as_commands<W: Write>(
             let argv = Argv::from(vec![b"SET".to_vec(), key.to_vec(), n.to_string().into_bytes()]);
             write_multibulk(w, &argv)?;
         }
+        // L1: Arc-bulk serialises via the same SET argv path; replay's
+        // SET routing picks ArcBulk again for > BULK_THRESHOLD bytes.
+        Value::ArcBulk(a) => {
+            let argv = Argv::from(vec![b"SET".to_vec(), key.to_vec(), a.as_ref().to_vec()]);
+            write_multibulk(w, &argv)?;
+        }
         Value::Hash(h) => {
             let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + h.len() * 2);
             argv.push(b"HSET".to_vec());

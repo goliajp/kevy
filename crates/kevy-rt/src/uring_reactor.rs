@@ -429,21 +429,81 @@ impl<C: Commands> Shard<C> {
                 continue;
             };
             prev = Some(uc as *const UringConn);
-            // Start a new write: move the conn's output into the stable write_buf.
-            if !uc.write_inflight && uc.write_buf.is_empty() && !conn.output.is_empty() {
+            // Start a new write: move the conn's output (bytes + arc-bulk
+            // references) into stable per-`UringConn` state.
+            if !uc.write_inflight
+                && uc.write_buf.is_empty()
+                && uc.write_arcs.is_empty()
+                && (!conn.output.is_empty() || !conn.output_arcs.is_empty())
+            {
                 std::mem::swap(&mut uc.write_buf, &mut conn.output);
+                std::mem::swap(&mut uc.write_arcs, &mut conn.output_arcs);
                 uc.write_off = 0;
             }
-            // Submit the write (fresh or a partial-write continuation).
-            if !uc.write_inflight && uc.write_off < uc.write_buf.len() {
-                // SAFETY: write_buf is owned, stable, and outlives the SQE.
-                let ok = unsafe {
-                    ring.prep_write(
-                        conn.sock.raw(),
-                        uc.write_buf.as_ptr().add(uc.write_off),
-                        (uc.write_buf.len() - uc.write_off) as u32,
-                        OP_WRITE | cid,
-                    )
+            // L1 (2026-06-21): if the write carries arc-bulk fragments, use
+            // `prep_writev` with an iovec list — header bytes from write_buf
+            // and value bytes from the pinned Arc<[u8]> sources fuse into ONE
+            // syscall and avoid the per-GET memcpy of the value into
+            // write_buf. Otherwise the simple `prep_write` path (no
+            // overhead).
+            if !uc.write_inflight
+                && (uc.write_off < uc.write_buf.len() || !uc.write_arcs.is_empty())
+            {
+                let ok = if uc.write_arcs.is_empty() {
+                    // Simple linear path — no arc-bulks pinned. Same as
+                    // before.
+                    unsafe {
+                        ring.prep_write(
+                            conn.sock.raw(),
+                            uc.write_buf.as_ptr().add(uc.write_off),
+                            (uc.write_buf.len() - uc.write_off) as u32,
+                            OP_WRITE | cid,
+                        )
+                    }
+                } else {
+                    // Build the iovec scratch: walk write_arcs sorted by
+                    // position. For each (pos, arc) pair, emit:
+                    //   1. write_buf[prev_pos..pos] (header / static bytes)
+                    //   2. arc.as_ref()             (zero-copy value bytes)
+                    // Then a final write_buf[last_pos..len()] tail. Start
+                    // from write_off to honour any prior partial-write
+                    // resume — but in v1 we treat partial-write as a full
+                    // restart (write_off only resumes the linear case).
+                    uc.write_iovecs.clear();
+                    let mut prev = uc.write_off;
+                    for (pos, arc) in &uc.write_arcs {
+                        let pos = *pos;
+                        if pos > prev {
+                            uc.write_iovecs.push(kevy_uring::Iovec {
+                                iov_base: uc.write_buf.as_ptr().wrapping_add(prev),
+                                iov_len: pos - prev,
+                            });
+                        }
+                        uc.write_iovecs.push(kevy_uring::Iovec {
+                            iov_base: arc.as_ptr(),
+                            iov_len: arc.len(),
+                        });
+                        prev = pos;
+                    }
+                    if prev < uc.write_buf.len() {
+                        uc.write_iovecs.push(kevy_uring::Iovec {
+                            iov_base: uc.write_buf.as_ptr().wrapping_add(prev),
+                            iov_len: uc.write_buf.len() - prev,
+                        });
+                    }
+                    // SAFETY: write_buf, write_arcs (Arc keeps bytes
+                    // alive), and write_iovecs all live in `uc`, which
+                    // is in the io map — they outlive any SQE we submit
+                    // before reaping its CQE. The Iovec ptrs reference
+                    // those memories.
+                    unsafe {
+                        ring.prep_writev(
+                            conn.sock.raw(),
+                            uc.write_iovecs.as_ptr(),
+                            uc.write_iovecs.len() as u32,
+                            OP_WRITE | cid,
+                        )
+                    }
                 };
                 if ok {
                     uc.write_inflight = true;

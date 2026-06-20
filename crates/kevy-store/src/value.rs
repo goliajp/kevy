@@ -133,12 +133,29 @@ pub enum Value {
     /// SmallBytes wrap) and on memory (8 B vs 24 B). GET formats it via
     /// a per-`Store` scratch buffer.
     Int(i64),
+    /// L1 (2026-06-21): values larger than [`BULK_THRESHOLD`] bytes get
+    /// stored behind an `Arc<[u8]>` instead of a heap-backed
+    /// `SmallBytes`. The Arc lets the io_uring reactor's reply path
+    /// borrow the bytes across the SQE→CQE window safely (Arc clone
+    /// keeps them alive even if the keyspace mutates) — the prerequisite
+    /// for the writev zero-copy bulk reply path, which skips the per-GET
+    /// memcpy from value storage into the per-conn output buffer. Small
+    /// values stay on `Str(SmallBytes)` because the inline cache-line
+    /// storage beats an Arc indirection for the common case.
+    ArcBulk(Arc<[u8]>),
     Hash(Arc<HashData>),
     List(Arc<ListData>),
     Set(Arc<SetData>),
     ZSet(Arc<ZSetData>),
     Stream(Arc<crate::stream::StreamData>),
 }
+
+/// Threshold (bytes) above which a SET stores its value as
+/// [`Value::ArcBulk`] (writev-eligible on GET) instead of [`Value::Str`]
+/// (inline `SmallBytes`). 64 B ≈ one cache line — below that the
+/// inline-SmallBytes storage wins on L1 locality; above it the
+/// writev-borrow win dominates.
+pub const BULK_THRESHOLD: usize = 64;
 
 const _: () = {
     // Don't let future variants undo box-collection's Entry-48B win.
@@ -149,7 +166,7 @@ impl Value {
     /// The Redis type name (`TYPE` command).
     pub fn type_name(&self) -> &'static str {
         match self {
-            Value::Str(_) | Value::Int(_) => "string",
+            Value::Str(_) | Value::Int(_) | Value::ArcBulk(_) => "string",
             Value::Hash(_) => "hash",
             Value::List(_) => "list",
             Value::Set(_) => "set",
@@ -168,6 +185,9 @@ impl Value {
             Value::Str(s) => s.heap_bytes() as u64,
             // i64 fits in the enum tag's space; no heap.
             Value::Int(_) => 0,
+            // Arc<[u8]> heap = the byte slice itself (refcount overhead
+            // is amortised across shared clones).
+            Value::ArcBulk(a) => a.len() as u64,
             Value::Hash(h) => collection_overhead(h.capacity(), HASH_SLOT_BYTES) + h
                 .iter()
                 .map(|(f, v)| f.heap_bytes() as u64 + v.capacity() as u64)

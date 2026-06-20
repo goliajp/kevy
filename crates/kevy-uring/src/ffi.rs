@@ -95,7 +95,27 @@ pub const IORING_OP_NOP: u8 = 0;
 pub const IORING_OP_TIMEOUT: u8 = 11;
 pub const IORING_OP_ACCEPT: u8 = 13;
 pub const IORING_OP_READ: u8 = 22;
+pub const IORING_OP_WRITEV: u8 = 2;
 pub const IORING_OP_WRITE: u8 = 23;
+
+/// POSIX `struct iovec` for `IORING_OP_WRITEV`. Matches the kernel
+/// layout (pointer + length). L1 (2026-06-21): the reactor's reply
+/// path submits an `&[Iovec]` so [bulk-header, value-bytes,
+/// trailing-CRLF] fuse into ONE syscall — skipping the per-GET
+/// memcpy of the value into the per-conn output Vec.
+///
+/// **Lifetime**: the kernel reads the iovec array AND each iovec's
+/// `base` slice asynchronously. The caller must keep both alive until
+/// the matching CQE fires (`uring_arm_conns` parks them in the conn's
+/// pending-writes state and drops on completion).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Iovec {
+    /// Pointer to bytes.
+    pub iov_base: *const u8,
+    /// Number of bytes at `iov_base`.
+    pub iov_len: usize,
+}
 pub const IORING_OP_RECV: u8 = 27;
 
 // accept4 flags set on the accepted socket (carried in the SQE's accept_flags
