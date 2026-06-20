@@ -343,6 +343,15 @@ impl<C: Commands> Shard<C> {
                 if idle_spins >= URING_SPIN_LIMIT {
                     self.uring_park(&mut ring, &mut park)?;
                     woke_from_park = true;
+                } else {
+                    // E12: signal the CPU that we are in a spin-wait loop.
+                    // Compiles to `PAUSE` on x86 / `YIELD` on ARM. Reduces
+                    // power draw, frees pipeline bandwidth for the SMT
+                    // sibling, and lowers branch-history pollution from the
+                    // outer iter's speculative reads. Cheap when nothing's
+                    // arrived; no effect when there IS work since this
+                    // branch isn't reached.
+                    std::hint::spin_loop();
                 }
             } else {
                 idle_spins = 0;
