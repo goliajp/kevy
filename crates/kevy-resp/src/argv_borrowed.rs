@@ -8,6 +8,7 @@
 //! a normal `Argv` and preserve current owned semantics there.
 
 use crate::argv::Argv;
+use crate::inline_ranges::InlineRanges;
 
 /// A parsed command's argument vector that borrows its bytes from a contiguous
 /// input buffer.
@@ -17,10 +18,17 @@ use crate::argv::Argv;
 /// `get(i)` returns `&input[s..e]`, so no copy happens on the parse → dispatch
 /// path. Calls that need to outlive the buffer (cross-shard, MULTI queue, AOF)
 /// use [`into_owned`](Self::into_owned) to convert to `Argv`.
+///
+/// A5 (2026-06-20): the range table is a `(u32, u32) × 4` inline + heap-spill
+/// `InlineRanges`. Commands with ≤4 args (PING/GET/SET/INCR/MGET ≤4 keys —
+/// the vast majority of the -c1 hot mix) pay zero `malloc`/`free` for the
+/// ranges. H1 (`perf c2c`) confirmed libc cfree on the per-request `Vec`
+/// allocation showed up in cross-thread contention; the inline tier removes
+/// that source.
 #[derive(Clone, Debug)]
 pub struct ArgvBorrowed<'a> {
     input: &'a [u8],
-    ranges: Vec<(u32, u32)>,
+    ranges: InlineRanges,
 }
 
 impl<'a> ArgvBorrowed<'a> {
@@ -28,7 +36,7 @@ impl<'a> ArgvBorrowed<'a> {
     pub fn new(input: &'a [u8]) -> Self {
         Self {
             input,
-            ranges: Vec::new(),
+            ranges: InlineRanges::new(),
         }
     }
 
@@ -36,7 +44,7 @@ impl<'a> ArgvBorrowed<'a> {
     pub fn with_capacity(input: &'a [u8], argc: usize) -> Self {
         Self {
             input,
-            ranges: Vec::with_capacity(argc),
+            ranges: InlineRanges::with_capacity(argc),
         }
     }
 
@@ -58,7 +66,7 @@ impl<'a> ArgvBorrowed<'a> {
 
     /// Argument `i` as a byte slice into the original input, or `None`.
     pub fn get(&self, i: usize) -> Option<&[u8]> {
-        let (s, e) = *self.ranges.get(i)?;
+        let (s, e) = self.ranges.get(i)?;
         Some(&self.input[s as usize..e as usize])
     }
 
@@ -76,13 +84,14 @@ impl<'a> ArgvBorrowed<'a> {
     /// Used at any handoff juncture (cross-shard dispatch, MULTI queue, AOF
     /// logging) that needs to outlive the original input buffer.
     pub fn into_owned(self) -> Argv {
-        let total: usize = self
-            .ranges
-            .iter()
-            .map(|&(s, e)| (e - s) as usize)
-            .sum();
+        let mut total: usize = 0;
+        for i in 0..self.ranges.len() {
+            let (s, e) = self.ranges.get(i).expect("in range");
+            total += (e - s) as usize;
+        }
         let mut a = Argv::with_capacity(self.ranges.len(), total);
-        for &(s, e) in &self.ranges {
+        for i in 0..self.ranges.len() {
+            let (s, e) = self.ranges.get(i).expect("in range");
             a.push(&self.input[s as usize..e as usize]);
         }
         a
@@ -114,7 +123,6 @@ mod tests {
         assert_eq!(a.len(), 0);
         let b = ArgvBorrowed::with_capacity(buf, 8);
         assert!(b.is_empty());
-        assert!(b.ranges.capacity() >= 8);
     }
 
     #[test]
