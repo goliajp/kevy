@@ -274,14 +274,14 @@ impl<C: Commands> Shard<C> {
     }
 
     /// Flush each shard's accumulated single-key dispatch batch as one
-    /// cross-core `RequestBatch` — a -c50 flood costs one send per target shard
-    /// per loop, not one per command. Call once per reactor loop iteration.
+    /// cross-core `RequestBatch`. Call once per reactor loop. The bitmap
+    /// short-circuit (D3 2026-06-20) early-returns when no shard has
+    /// pending requests. E17 tried splitting the slow body into a
+    /// `#[inline(never)]` helper and reverted — body is small enough
+    /// that LLVM inlines it cleanly; forcing the outline added a fn
+    /// call on the cross-shard hot path with no upside.
     #[inline]
     pub(crate) fn flush_requests(&mut self) {
-        // Hot path: short-circuit on the bitmap (D3 2026-06-20). The
-        // previous `request_batch.iter().all(Vec::is_empty)` was N
-        // struct accesses per iter — invisible alone but rolled into
-        // the run_uring closure's 13 % self-time hot block.
         if self.request_batch_nonempty == 0 {
             return;
         }
