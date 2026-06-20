@@ -78,6 +78,12 @@ impl Config {
 
     /// Parse a TOML string (no file I/O). `source_path` is used for error
     /// reporting and `CONFIG REWRITE` write-back; pass `None` for in-memory.
+    ///
+    /// C6: marked `#[cold]` — only ever runs at server startup + on
+    /// `CONFIG REWRITE`, never on the request hot path. Keeps the
+    /// ~15.9 KB TOML-parse code off the iTLB pages around the steady-state
+    /// dispatcher.
+    #[cold]
     pub fn from_toml_str(text: &str, source_path: Option<&Path>) -> Result<Self, ConfigError> {
         let mut cfg = Self::default();
         let items = parse::parse(text)?;

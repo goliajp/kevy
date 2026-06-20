@@ -69,6 +69,7 @@ impl Config {
     /// section. Returns a [`ConfigError::Parse`] if `original_source`
     /// can't be re-parsed line-by-line (caller is expected to fall back
     /// to [`Self::to_toml_string`]).
+    #[cold]
     pub fn to_toml_string_preserving(
         &self,
         original_source: &str,
