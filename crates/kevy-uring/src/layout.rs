@@ -131,3 +131,46 @@ pub struct IoUringBufReg {
     pub pad: u16,
     pub resv: [u64; 3],
 }
+
+/// `struct io_uring_files_update` — `io_uring_register(IORING_REGISTER_FILES_UPDATE,
+/// …)`'s argument layout. Updates a contiguous range of `len` slots starting
+/// at `offset` in the registered files table; `fds` points to `len` i32 fds
+/// (use -1 to clear a slot).
+#[repr(C)]
+pub struct IoUringFilesUpdate {
+    pub offset: u32,
+    pub resv: u32,
+    pub fds: u64,
+}
+
+/// `struct io_uring_rsrc_update` — kernel `struct io_uring_rsrc_update`,
+/// the argument layout for [`crate::ffi::IORING_REGISTER_RING_FDS`]. The
+/// caller fills `data` with the raw ring fd to register; the kernel writes
+/// the assigned index back into `offset`. `nr_args` in the syscall is the
+/// number of entries in the array (we register one at a time).
+#[repr(C)]
+#[derive(Default)]
+pub struct IoUringRsrcUpdate {
+    pub offset: u32,
+    pub resv: u32,
+    pub data: u64,
+}
+
+/// `struct io_uring_rsrc_register` — `io_uring_register(IORING_REGISTER_FILES2,
+/// …)`'s argument layout. With `flags = IORING_RSRC_REGISTER_SPARSE` and
+/// `nr = slot_count` it registers an empty registered-files table of that
+/// size. `data`/`tags` are unused for sparse registration. `nr_args` in the
+/// syscall must equal `sizeof::<Self>()` = 32.
+#[repr(C)]
+#[derive(Default)]
+pub struct IoUringRsrcRegister {
+    pub nr: u32,
+    pub flags: u32,
+    pub resv2: u64,
+    pub data: u64,
+    pub tags: u64,
+}
+
+/// `IORING_RSRC_REGISTER_SPARSE` — tells the kernel "no initial fds, just
+/// give me an empty table of size `nr`."
+pub const IORING_RSRC_REGISTER_SPARSE: u32 = 1 << 0;

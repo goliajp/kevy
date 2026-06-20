@@ -34,6 +34,7 @@ mod ffi;
 mod layout;
 mod pbr;
 mod prep;
+mod register;
 mod ring;
 
 #[cfg(test)]
