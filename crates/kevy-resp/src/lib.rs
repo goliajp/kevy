@@ -40,6 +40,7 @@ mod argv_borrowed;
 mod argv_pool;
 mod argv_view;
 mod error;
+mod inline_ranges;
 mod reply_encode;
 mod reply_encode_resp3;
 mod reply_parse;
