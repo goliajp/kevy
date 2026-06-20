@@ -221,35 +221,202 @@ delta. A future re-attempt would need an "exclusive subset of
 shards uses SQPOLL with affinity to disjoint cores" mode, which
 is a bigger architectural change than this sprint scoped.
 
-## What's left in the lever list
+## Re-profile after D1–D4
 
-### D4.5 — finish client zero-alloc surface
+Re-running `perf record` on develop with D1–D4 in place showed the
+shape had shifted — the old PERF-PROFILE numbers no longer applied.
+The new top-15 at -c1 (post-D1-D4, develop):
 
-If a future lever moves the syscall floor (a new io_uring API
-shape, or `mitigations=off` ships on prod), client-side per-op
-cost becomes proportionally more visible. Revisit then.
+- `clear_bhb_loop` 12.69% (kernel Spectre BHB)
+- `Runtime::run::closure` 11.51% (reactor main loop body)
+- `syscall` 7.98% (libc)
+- `entry_SYSRETQ_unsafe_stack` 5.91% (kernel)
+- `fget` 5.59% (kernel — fd-table lookup on **ring fd** per syscall)
+- `uring_drain_inbound` 5.13%
+- `fput` 2.71% (kernel — matching ring-fd release)
+- `nft_do_chain` 1.10% (kernel netfilter on loopback!)
 
-### Re-profile after `mitigations=off` is verified
+This re-profile killed the original D5/D6 attack rationale and
+generated a new lever list (E1–E7). The lesson: **always re-profile
+between attack waves**; the floor shifts as you eliminate symbols.
 
-Once the lx64 box is rebooted with `mitigations=off` and the
-predicted -12 pp kernel drop materializes, re-run the perf
-flamegraph to find the next top symbol. The current top-15 are
-all kernel/io_uring path; the next ones may be userspace levers
-worth attacking.
+## Attack 8 — E2: `SINGLE_ISSUER | COOP_TASKRUN`
 
-## Status
+**Hypothesis**: modern io_uring setup flags reduce per-syscall
+overhead. `SINGLE_ISSUER` (Linux 6.0+) tells the kernel only one
+thread submits → submission-side lock skipped. `COOP_TASKRUN`
+(Linux 5.19+) avoids IPI-ing the user task → wait for natural
+syscall entry.
 
-Levers attacked: 6 (D1, D2, D3, D4, D5, D6). Calls: 5 kept, 1
-dropped (D5). D6 is doc-only, untested on hardware until user
-reboots lx64.
+**Implementation**: `crates/kevy-uring/src/{ffi.rs, ring.rs,
+prep.rs}`. New flag constants in ffi; setup_ring tries the
+modern tier first then falls back to flags=0 on EINVAL (Linux
+5.13+ stays supported). Also extracted `prep_*` helpers from
+ring.rs into a new prep.rs to stay under the 500-LOC house rule.
 
-Merged to develop: ce28b92 (D1+D2), 4de21fd (D4), b71f788 (D3),
-plus this branch (D5 partial + D6 + log).
+**Measured**:
+- Rust c1: SET 65 k → 67 k / GET 65 k → 67 k (**+3-5%**)
+- C c1: SET 67 k → 70 k / GET 67 k → 71 k (**+3-5%**)
+- Profile: no single symbol moved >0.5 pp; uniform path-overhead
+  reduction (task_work elision + submission lock skip)
+
+**Isolation finding**: `DEFER_TASKRUN` (Linux 6.1+) — a related
+flag in the same tier — **regresses 65–73%** when combined with
+kevy's busy-poll reactor. It changes the CQ ring semantics so
+completions only land after `io_uring_enter` is called. kevy
+busy-polls the CQ ring without entering on the steady state,
+so DEFER_TASKRUN starves completions. The ABI constant ships
+for documentation but is never set in `p.flags`.
+
+**Call**: KEPT.
+
+**Lesson**: per `code/no-blind-bugfix-pattern` — modern kernel
+flags aren't free. Each one needs **per-flag isolation** before
+ship. The initial dead-code-warning loop also wasted ~4 build
+cycles because a stale binary in target/release served the bench
+while my "fixed" code wasn't actually compiling. Always grep
+the cargo log for `error:` even when the test "ran".
+
+## Attack 9 — E1: `IORING_REGISTER_FILES_SPARSE` + `IOSQE_FIXED_FILE`
+
+**Hypothesis**: 8.3% of -c1 CPU is `fget`+`fput`. Register a
+sparse table of conn fds and have SQEs use slot index +
+`IOSQE_FIXED_FILE` to skip the per-op fd-table lookup.
+
+**Implementation**: full wire-level support in kevy-uring
+(`register_files_sparse` + `update_file_slot` ABI methods,
+`prep_write_fixed` / `prep_recv_multishot_fixed` SQE shapes); the
+kevy-rt reactor was wired to register a 1000-slot table per shard,
+allocate a slot per accept, free the slot per close, and use the
+`*_fixed` SQE variants for hot-path write/recv.
+
+**Implementation pitfalls (recorded for future)**:
+- IORING_REGISTER_FILES_SPARSE is NOT a separate opcode. It's a
+  flag on `IORING_REGISTER_FILES2` (#13) via the rsrc-struct API.
+  I initially used #16 (which is IORING_REGISTER_BUFFERS_UPDATE)
+  and got silent EINVAL — caught only via strace.
+- Kernel rejects `nr > RLIMIT_NOFILE`. Default soft limit is 1024;
+  capped URING_FIXED_FILES at 1000 (with ulimit bump as a future
+  improvement).
+- Pre-EMFILE-fix builds got the wrong opcode AND the wrong arg
+  shape — a perfect "two bugs cancel" — but produced EINVAL too,
+  so the symptom was identical.
+
+**Measured (after correct ABI)**:
+- Rust c1 / C c1 / c50 -P16: throughput **all flat** (±1%)
+- Profile: `fget` 5.59% → 5.36% (essentially unchanged)
+
+**Root cause of zero impact**: `fget` in the profile resolves
+into `__do_sys_io_uring_enter` → that's the kernel doing
+**one fget per `io_uring_enter` syscall on the RING fd**, not
+per-SQE fd lookup. IOSQE_FIXED_FILE optimises a path that
+**wasn't on the profile**. The actual fget visible in kevy's hot
+path is the ring-fd lookup at syscall entry — different opcode
+attacks it (see E1.5).
+
+**Call**: **DROPPED** from kevy-rt wiring (revert UringConn /
+uring_reactor / uring_inbox changes). Wire-level support kept in
+kevy-uring (`register_files_sparse`, `update_file_slot`,
+`prep_*_fixed`) for callers whose profile genuinely shows per-SQE
+fd lookups.
+
+**Lesson**: a perf attack must **target the symbol the profile
+actually shows**, not the lever's lore. Just because the io_uring
+docs say "registered files skips fget" doesn't mean YOUR fget
+came from a registered-files-eligible code path. Always read the
+profile's callstack (`perf report --symbols fget`) before
+committing to a fix shape.
+
+## Attack 10 — E1.5: `IORING_REGISTER_RING_FDS`
+
+**Hypothesis** (formed after E1's root cause): the visible
+`fget`+`fput` is on the **ring fd itself**, not per-SQE.
+`IORING_REGISTER_RING_FDS` (Linux 5.18+) registers the ring fd
+into a per-thread table; subsequent `io_uring_enter` syscalls
+pass the index + `IORING_ENTER_REGISTERED_RING` flag instead of
+the raw fd. Kernel skips fget on the ring per syscall.
+
+**Implementation**: ring.rs `try_register_ring_fd` is called from
+`new_inner` automatically on each new IoUring. On success
+`enter_ring` is set to `Some((idx, flag))`; `submit_and_wait`
+passes `idx` as the fd argument and ORs the flag into enter_flags.
+Failure (older kernel) silently leaves `enter_ring = None`. Also
+split the register methods to a new `register.rs` to keep
+`ring.rs` under 500 LOC.
+
+**Measured**:
+- Profile (-c1): `fget` 5.5% → **not in top 15** (eliminated);
+  `fput` 2.7% → **not in top 15** (eliminated). ~8 pp gone.
+- Throughput: C c1 SET **70 k → 74.5 k (+6.4%)**, C c1 GET ~flat
+  (in noise), Rust c1 within noise band.
+
+The saved kernel cycles partly resurface as the userspace
+`Runtime::run::closure` (was 11.5%, now 13.6%) — that loop was
+already on the critical path; now it dominates it. Net wallclock
+is positive.
+
+**Call**: KEPT. The first attack of the sprint to actually move
+a top-15 kernel symbol off the profile.
+
+**Thread caveat**: registered-rings entries are per OS thread.
+Each shard's ring is created on its own thread and stays there,
+so the registration sticks. If a future change moves rings between
+threads (unlikely), the registration would be stale.
+
+## Status (post-E sprint)
+
+Levers attacked: 10 (D1, D2, D3, D4, D5, D6, E1, E2, E1.5).
+Calls: 7 kept (D1+D2, D3, D4, D6, E2, E1.5 + E1 wire-level),
+2 dropped at runtime layer (D5, E1), 1 unverified on hardware (D6).
 
 Cumulative measured win (Rust kevy-client -c1):
-- SET: +10% (59.2 → ~65 k ops/s)
-- GET: +10% (59.4 → ~65 k ops/s)
-- vs same Rust caller against valkey/redis: kevy lead grew from
-  ~1.04× to ~1.15–1.20×
+- SET: 59.2 k → ~67 k (+13%)
+- GET: 59.4 k → ~68 k (+14%)
 
-C `redis-benchmark`: untouched (D1–D4 don't touch C client).
+C `redis-benchmark` -c1:
+- SET: 67 k → 74.5 k (+11%) — E1.5 finally moved it
+- GET: 67 k → ~70 k (within noise)
+
+The 8 pp profile drop from E1.5 hasn't yet fully materialized in
+wallclock (esp. on Rust c1) — the `Runtime::run::closure` symbol
+absorbed most of the freed cycles. The next sprint round should
+attack that (E3).
+
+## What's left in the lever list (E series)
+
+### E3 — `Runtime::run::closure` 13.6% — userspace #1 now
+
+Was 11.5% before E1.5; the ring-fd-lookup elimination pushed it
+to the very top of the profile. Need `perf annotate` on the exact
+closure to see what's in the inlined main loop. Likely candidates:
+inner conn-iter (arm loop), idle-spin check, completion drain.
+Cheap investigation; gain 3-5 pp predicted.
+
+### E4 — `mitigations=off` measurement
+
+Still pending lx64 reboot (user call). At 12.69% on the current
+profile, this is the single biggest unattacked lever.
+
+### E5 — SQPOLL retry with disjoint core affinity
+
+Original D5 dropped because the 10 SQPOLL kernel threads landed
+on the same cores as the 10 shards. **Untried**: 5-shard config
++ SQPOLL pinned to cores 11–15 via `IORING_SETUP_SQ_AFF`. With
+disjoint affinity SQPOLL should not contend; this is a real
+follow-up.
+
+### E6 — `nft_do_chain` 1.2-1.8%
+
+Linux netfilter on loopback. `iptables -F` on the bench box (not
+a kevy code change). Worth measuring once.
+
+### E7 — RESP path / `parse_command_borrowed` 1.2% at -c50
+
+Userspace lever in the RESP parser. Profile-confirmed; small but
+real.
+
+### E8 — `uring_drain_inbound` 5.1-5.8% still
+
+D1 took it from 17.4% to 7.2%; new profile shows 5.1-5.8%. There
+may be a further fast path here (the inner peer-iteration loop or
+the per-message match arm).
