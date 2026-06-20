@@ -110,8 +110,47 @@ pub const IORING_RECV_MULTISHOT: u16 = 2; // (ioprio) re-fire one recv per arriv
 
 // ---- io_uring_register opcodes --------------------------------------------
 
+/// Defined for completeness — the registered files table is auto-released
+/// when the ring fd closes, so explicit unregister is unused.
+#[allow(dead_code)]
+pub const IORING_REGISTER_FILES: c_int = 2;
+#[allow(dead_code)]
+pub const IORING_UNREGISTER_FILES: c_int = 3;
+/// **Linux 5.13+**. Replace one slot's fd in a previously-registered files
+/// table. Caller passes a `struct io_uring_files_update` describing the
+/// slot index + fd; -1 in the fd field unmaps the slot.
+pub const IORING_REGISTER_FILES_UPDATE: c_int = 6;
+/// **Linux 5.13+**. Register an files table via the rsrc-struct API. Pair
+/// with `IORING_RSRC_REGISTER_SPARSE` in the struct's flags to allocate
+/// an empty table of `nr` slots without supplying initial fds.
+pub const IORING_REGISTER_FILES2: c_int = 13;
+
 pub const IORING_REGISTER_PBUF_RING: c_int = 22;
 pub const IORING_UNREGISTER_PBUF_RING: c_int = 23;
+
+/// **Linux 5.18+**. Register the ring's own fd into the user task's
+/// io_uring-registered-rings table. After registration, callers pass the
+/// returned index (with `IORING_ENTER_REGISTERED_RING` set) instead of
+/// the raw ring fd; the kernel skips `fget`/`fput` per `io_uring_enter`
+/// syscall — the largest visible kernel-side cost in kevy's perf-record
+/// (5.5% / 2.7% of -c1 CPU before this attack).
+pub const IORING_REGISTER_RING_FDS: c_int = 20;
+#[allow(dead_code)]
+pub const IORING_UNREGISTER_RING_FDS: c_int = 21;
+
+/// **Linux 5.18+**. Tells `io_uring_enter` that its `fd` argument is an
+/// index into the registered-rings table from
+/// [`IORING_REGISTER_RING_FDS`], not a raw fd.
+pub const IORING_ENTER_REGISTERED_RING: u32 = 1 << 4;
+
+// ---- SQE flags for fixed-file ops ----------------------------------------
+
+/// **Linux 5.1+**. Treat the SQE's `fd` field as an **index into the
+/// registered files table** (see [`IORING_REGISTER_FILES_SPARSE`]) instead
+/// of a real fd. The kernel skips the per-op `fget`/`fput` fd-table lookup
+/// — the largest single non-Spectre kernel cost in kevy's hot path
+/// (8 pp of -c1 CPU on the lx64 reference; see attack E1).
+pub const IOSQE_FIXED_FILE: u8 = 1 << 0;
 
 // ---- Completion `flags` bits ----------------------------------------------
 // A buffer was used (id in the top 16 bits) / the multishot SQE remains armed.

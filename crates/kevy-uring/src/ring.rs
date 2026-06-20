@@ -15,11 +15,10 @@ use crate::ffi::{
     SYS_IO_URING_ENTER, SYS_IO_URING_SETUP,
 };
 use crate::layout::{IoUringParams, IoUringSqe};
-use crate::pbr::ProvidedBufRing;
 
 /// A Linux io_uring instance: one submission ring + one completion ring.
 pub struct IoUring {
-    ring_fd: c_int,
+    pub(crate) ring_fd: c_int,
     sq_mmap: *mut c_void,
     sq_mmap_len: usize,
     cq_mmap: *mut c_void,
@@ -43,6 +42,12 @@ pub struct IoUring {
     /// `IORING_SQ_NEED_WAKEUP` first and skip the syscall when the SQ poll
     /// thread is awake.
     sq_flags: Option<*const AtomicU32>,
+    /// `(index, enter_flag)` for a successful registered-ring-fd setup. When
+    /// `Some((i, _))`, `submit_and_wait` passes `i` as the syscall fd and
+    /// ORs `IORING_ENTER_REGISTERED_RING` into the enter flags — the kernel
+    /// resolves the ring via the registered-rings table, skipping
+    /// `fget`/`fput` per syscall. `None` = raw `ring_fd` path.
+    pub(crate) enter_ring: Option<(u32, u32)>,
 }
 
 // SAFETY: `IoUring` owns its fd and mappings exclusively; moving the whole
@@ -110,7 +115,7 @@ impl IoUring {
         let cq = unsafe { Self::cq_cursors(cq_mmap, &p) };
         let sq_flags = if sqpoll.is_some() { Some(sq.flags) } else { None };
 
-        Ok(IoUring {
+        let mut ring = IoUring {
             ring_fd,
             sq_mmap,
             sq_mmap_len: sq_len,
@@ -129,7 +134,15 @@ impl IoUring {
             cq_ktail: cq.ktail,
             cqes: cq.cqes,
             sq_flags,
-        })
+            enter_ring: None,
+        };
+        // Best-effort: register the ring's own fd into the calling thread's
+        // io_uring registered-rings table (Linux 5.18+). On success, subsequent
+        // `submit_and_wait` syscalls reference the ring by index and the
+        // kernel skips fget/fput on the ring fd per syscall. On older kernels
+        // this fails with EINVAL — the raw fd path stays in use.
+        ring.try_register_ring_fd();
+        Ok(ring)
     }
 
     /// `mmap` all three io_uring shared regions. On any failure, cleans up
@@ -346,11 +359,19 @@ impl IoUring {
                 return Ok(to_submit);
             }
         }
+        // E1.5: when the ring is self-registered (IORING_REGISTER_RING_FDS),
+        // pass the registered index instead of the raw fd. The kernel skips
+        // its per-syscall fget/fput on the ring.
+        let (syscall_fd, extra_flags) = match self.enter_ring {
+            Some((idx, flag)) => (idx as c_long, flag),
+            None => (self.ring_fd as c_long, 0),
+        };
+        enter_flags |= extra_flags;
         // SAFETY: kernel-validated args; no Rust memory is read/written.
         let ret = unsafe {
             ffi::syscall(
                 SYS_IO_URING_ENTER,
-                self.ring_fd as c_long,
+                syscall_fd,
                 to_submit as c_long,
                 wait_nr as c_long,
                 enter_flags as c_long,
@@ -383,20 +404,7 @@ impl IoUring {
         n
     }
 
-    /// Register a **provided-buffer ring** of `entries` (power of two) buffers of
-    /// `buf_size` bytes each under group id `bgid`, for multishot
-    /// [`prep_recv_multishot`](Self::prep_recv_multishot). The kernel draws a
-    /// buffer per arrival and reports its id; the application recycles it via
-    /// [`ProvidedBufRing::recycle`]. The registration is auto-released when the
-    /// ring fd closes; the returned handle also unregisters + unmaps on drop.
-    pub fn register_buf_ring(
-        &self,
-        entries: u16,
-        buf_size: u32,
-        bgid: u16,
-    ) -> io::Result<ProvidedBufRing> {
-        ProvidedBufRing::new(self.ring_fd, entries, buf_size, bgid)
-    }
+
 }
 
 impl Drop for IoUring {
