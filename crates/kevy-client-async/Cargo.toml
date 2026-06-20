@@ -3,7 +3,7 @@ name = "kevy-client-async"
 description = "Async client for kevy — runtime-agnostic core with feature-gated tokio / smol / async-std transports; mirrors the blocking kevy-client surface."
 # Explicit, not workspace-inherited: kevy-client-async tracks its own
 # version. v1.0.0 = T4.x Phase-4 first cut (mirror + pipeline-first).
-version = "1.0.1"
+version = "1.0.2"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
@@ -29,8 +29,8 @@ workspace = true
 # Pure kevy-* deps. `version` is required for crates.io publish even
 # when `path` is set — cargo strips the path on publish and the
 # version is what crates.io uses to resolve.
-kevy-resp = { path = "../kevy-resp", version = "1.23.0" }
-kevy-hash = { path = "../kevy-hash", version = "1.23.0" }
+kevy-resp = { path = "../kevy-resp", version = "1.23.1" }
+kevy-hash = { path = "../kevy-hash", version = "1.23.1" }
 
 # Phase 4 tasks T4.5/T4.6/T4.7 add the runtime deps with their inline
 # `# EXEMPTION — see feedback-pure-rust-no-c-principle.md` comments.
