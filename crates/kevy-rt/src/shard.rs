@@ -390,8 +390,11 @@ impl<C: Commands> Shard<C> {
                 // error / peer EOF / `+ACK` drained in this batch's
                 // terminal state). Reaping before the next poll
                 // prevents a closed fd from re-firing on epoll level-
-                // triggered backends.
-                self.reap_closed_replicas();
+                // triggered backends. E9: standalone shards skip even
+                // the gate inside the function.
+                if !self.replicas.is_empty() {
+                    self.reap_closed_replicas();
+                }
             }
 
             // Messages from other cores (forwarded requests + replies to ours).
@@ -414,9 +417,12 @@ impl<C: Commands> Shard<C> {
             }
             // v3-cluster replication producer pump (per Issue Ledger I2 +
             // T1.14): drain the per-shard backlog out to streaming
-            // replicas. Short-circuits to a single `Option::is_none()`
-            // check when replication is off (the common case).
-            self.pump_replication()?;
+            // replicas. E9: gate at the call site so the steady-state
+            // standalone shard pays one branch instead of a function-call
+            // frame on every reactor iter.
+            if self.replicate.is_some() || !self.replicas.is_empty() {
+                self.pump_replication()?;
+            }
             // Active TTL reaper / shard housekeeping. Skip the wall-clock
             // read on most iters: in busy-poll the tick fires at 10 Hz
             // with negligible overhead (counter saturates in ~us, then

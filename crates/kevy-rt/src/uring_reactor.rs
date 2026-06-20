@@ -280,11 +280,18 @@ impl<C: Commands> Shard<C> {
             }
 
             // Per-iter replication pump (T1.12.5): writes streaming
-            // frames + drives snapshot ship chunks. Short-circuits when
-            // `replicate.is_none() && replicas.is_empty()` (the standalone
-            // hot path), so non-replication workloads pay nothing.
-            self.pump_replication()?;
-            self.reap_closed_replicas();
+            // frames + drives snapshot ship chunks. E9: hoist the
+            // "is this shard actually doing replication" predicate to
+            // the call site so the steady-state standalone workload
+            // pays one branch instead of two function-call frames
+            // (perf-record measured 1.0% + 1.0% self-time on the empty
+            // gates inside the functions; the gate-hoist drops both to
+            // 0). If new replication-side work shows up here, audit
+            // whether it needs to run on standalone shards too.
+            if self.replicate.is_some() || !self.replicas.is_empty() {
+                self.pump_replication()?;
+                self.reap_closed_replicas();
+            }
 
             // Idle ladder — spin, then park (no nap rung):
             //   1. busy-poll `URING_SPIN_LIMIT` empty iterations, so a -c1
