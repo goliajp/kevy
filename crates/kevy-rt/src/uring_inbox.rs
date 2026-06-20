@@ -33,6 +33,14 @@ impl<C: Commands> Shard<C> {
 
     /// Close connections that are done: EOF/QUIT seen, all output flushed, no
     /// SQE in flight. Dropping the `Conn` closes the fd.
+    ///
+    /// E18 attempted a two-`any()`-scan fast-path bail (skip the Vec
+    /// collect when no conn carries a closing flag) and reverted —
+    /// at c100 the 2×N pre-scan added more cost than the avoided alloc
+    /// saved (lx64 c100 SET -2.9 %), and the only sound way to use a
+    /// single scan is to keep io.closing + conn.closing in sync (which
+    /// requires plumbing the io map down into the dispatch QUIT path).
+    /// Left for a future iteration that's willing to take that plumb.
     pub(crate) fn uring_reap_closed(&mut self, io: &mut KevyMap<u64, UringConn>) {
         let done: Vec<u64> = io
             .iter()
