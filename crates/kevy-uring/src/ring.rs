@@ -372,6 +372,18 @@ impl IoUring {
         // path is gated on the non-SQPOLL case (SQPOLL has its own skip
         // below) and on wait_nr == 0 (the caller doesn't need a
         // completion to arrive).
+        //
+        // **A11 attempted (2026-06-20), REVERTED.** Tried adding
+        // `IORING_SETUP_TASKRUN_FLAG` (Linux 6.0+) so the kernel sets
+        // `IORING_SQ_TASKRUN` in sq_flags when task_work is pending,
+        // skipping the syscall whenever the bit was clear. On the lx64
+        // reference box this regressed -c1 GET by ~30% with multi-second
+        // 3.6k-rps stalls mid-test; the bit's set/clear timing under
+        // COOP_TASKRUN didn't match the busy-poll loop closely enough
+        // to remain race-free, and adding the E14 counter as a safety
+        // net on top still left a window where CQEs piled up between
+        // bit-clear observations. See bench/PERF-ATTACK-LOG-2026-06-20.md
+        // for the data.
         if to_submit == 0 && wait_nr == 0 && self.sq_flags.is_none() {
             self.iters_since_enter = self.iters_since_enter.saturating_add(1);
             if self.iters_since_enter < ENTER_SKIP_THRESHOLD {
