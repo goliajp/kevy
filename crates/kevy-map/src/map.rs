@@ -17,7 +17,7 @@
 //! the previous two-`Box<[…]>` layout, and keeps metadata + slots in
 //! adjacent pages (warmer TLB, contiguous OS-prefetch).
 
-use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
+use std::alloc::Layout;
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
@@ -130,9 +130,14 @@ pub struct KevyMap<K, V> {
     pub(crate) occupied: usize,
     /// Tombstones (not yet reclaimed).
     pub(crate) deleted: usize,
+    /// `true` when the table buffer was obtained from
+    /// [`kevy_madvise::mmap_anon_aligned_2mb`] (large tables that wanted
+    /// THP-aligned storage); `false` when it came from the global allocator.
+    /// Drives the dispatch in [`Drop`] between `munmap_2mb` and `dealloc`.
+    pub(crate) mmap_backed: bool,
     /// Marker so dropck and variance treat us as owning `(K, V)` like a
     /// `Box<[MaybeUninit<(K, V)>]>` would.
-    _marker: PhantomData<(K, V)>,
+    pub(crate) _marker: PhantomData<(K, V)>,
 }
 
 // SAFETY: KevyMap owns its `(K, V)` entries (via the slot allocation). The
@@ -168,6 +173,7 @@ impl<K, V> KevyMap<K, V> {
             mask: 0,
             occupied: 0,
             deleted: 0,
+            mmap_backed: false,
             _marker: PhantomData,
         }
     }
@@ -184,48 +190,8 @@ impl<K, V> KevyMap<K, V> {
         Self::alloc_table(cap)
     }
 
-    pub(crate) fn alloc_table(cap: usize) -> Self {
-        debug_assert!(cap.is_power_of_two());
-        debug_assert!(cap >= MIN_CAP);
-
-        let (layout, meta_offset) = table_layout::<(K, V)>(cap);
-        // SAFETY: layout has non-zero size (metadata alone is ≥ MIN_CAP +
-        // GROUP_WIDTH - 1 ≥ 31 bytes). alloc returns either a valid
-        // allocation of `layout` or null.
-        let base = unsafe { alloc(layout) };
-        if base.is_null() {
-            handle_alloc_error(layout);
-        }
-        // Initialise the metadata range (real + mirror tail) to EMPTY in a
-        // single memset. The slot array is left uninitialised — slots
-        // become initialised only when their metadata byte transitions
-        // out of the high-bit-set state (EMPTY/DELETED).
-        let meta_byte_ptr = unsafe { base.add(meta_offset) };
-        unsafe { ptr::write_bytes(meta_byte_ptr, EMPTY, cap + GROUP_WIDTH) };
-
-        let slots_ptr = base.cast::<MaybeUninit<(K, V)>>();
-        let metadata_ptr = meta_byte_ptr;
-
-        // single-buffer redo: hint THP on the entire buffer in
-        // one madvise call. The combined allocation is `meta_offset +
-        // cap + GROUP_WIDTH` bytes (== `layout.size()` minus padding).
-        // On 10M+ key tables the metadata alone is 16 MB — well over the
-        // 2 MB HP boundary, so the kernel's khugepaged can promote it in
-        // place. Cheap on the non-Linux paths (compile-time no-op).
-        kevy_madvise::advise_hugepage(base.cast_const(), layout.size());
-
-        Self {
-            // SAFETY: alloc returned non-null; raw pointers are derived
-            // within the same allocation.
-            slots_ptr: unsafe { NonNull::new_unchecked(slots_ptr) },
-            metadata_ptr: unsafe { NonNull::new_unchecked(metadata_ptr) },
-            cap,
-            mask: cap - 1,
-            occupied: 0,
-            deleted: 0,
-            _marker: PhantomData,
-        }
-    }
+    // alloc_table + Drop live in `crate::alloc` so this file stays under
+    // the 500-LOC house rule.
 
     /// Write `v` into metadata slot `i`, also updating the mirror byte
     /// at `cap + i` when `i < GROUP_WIDTH`. Every metadata mutation goes
@@ -412,35 +378,6 @@ where
     type Output = V;
     fn index(&self, key: &Q) -> &V {
         self.get(key).expect("no entry found for key")
-    }
-}
-
-impl<K, V> Drop for KevyMap<K, V> {
-    fn drop(&mut self) {
-        if self.cap == 0 {
-            return;
-        }
-        if std::mem::needs_drop::<(K, V)>() {
-            for i in 0..self.cap {
-                // SAFETY: i < cap ⇒ in-bounds.
-                let meta = unsafe { *self.metadata_ptr.as_ptr().add(i) };
-                if meta & 0x80 == 0 {
-                    // SAFETY: full slot ⇒ initialised.
-                    unsafe {
-                        ptr::drop_in_place(self.slots_ptr.as_ptr().add(i).cast::<(K, V)>());
-                    }
-                }
-            }
-        }
-        // Free the single combined allocation. `slots_ptr` IS the base of
-        // the allocation (see alloc_table's layout computation: slots are
-        // at offset 0; metadata sits at meta_offset).
-        let (layout, _) = table_layout::<(K, V)>(self.cap);
-        // SAFETY: cap > 0 ⇒ slots_ptr is non-null and was returned by `alloc`
-        // with the same Layout (table_layout is deterministic on cap).
-        unsafe {
-            dealloc(self.slots_ptr.as_ptr().cast::<u8>(), layout);
-        }
     }
 }
 
