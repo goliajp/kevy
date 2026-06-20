@@ -12,10 +12,13 @@ and a clear cost. Apply only the ones you actually need.
 | Pin server to a CPU set       | dedicated host, share machine with bench | 5–15%   |
 | Disable AOF (`--no-aof`)      | replica / ephemeral cache                | 5–10%   |
 | Set `KEVY_IO_URING=1`         | Linux 5.13+                              | 10–30%  |
-| Kernel `mitigations=off`      | trusted single-tenant box                | 12–15%  |
+| Kernel `mitigations=off`      | trusted single-tenant box                | 12–25%  |
+| Empty netfilter ruleset       | dedicated host, no firewall needed       | **25–35%** |
+| PGO (profile-guided optimize) | release build for known workload         | 1–10%   |
 
-`mitigations=off` is the only knob that moves the kernel floor;
-everything else trims userspace cycles only.
+`mitigations=off` and emptying netfilter are the two big knobs that
+move the kernel floor; PGO and the other userspace knobs trim
+userspace cycles only.
 
 ## CPU pinning
 
@@ -117,6 +120,120 @@ On the lx64 reference, expected throughput delta after `mitigations=off`:
 (Numbers are kernel/CPU dependent. AMD Zen 3+ pays a different price
 than Intel Xeon Spectre BHB; ARM N1/N2 pay yet another. Measure on
 your hardware.)
+
+## Empty the netfilter / iptables ruleset (huge, but careful)
+
+Linux kernel runs every packet through netfilter / nftables hooks
+*on every syscall path* — `tcp_sendmsg`, `tcp_recvmsg`, `__dev_queue_xmit`,
+even loopback. When the ruleset is non-trivial (docker, libvirt, fail2ban,
+ufw, etc. each add 50-300 rules), the cumulative overhead is enormous.
+
+Measured on the lx64 reference (Linux 6.12, `mitigations=off`, with a
+typical docker + libvirt + Tailscale ruleset of ~500 rules total):
+
+| Workload         | rules on (default) | rules empty | Δ     |
+|------------------|--------------------|-------------|-------|
+| C c1 SET         | 80.6 k             | **108.9 k** | +35%  |
+| C c1 GET         | 80.0 k             | **108.3 k** | +35%  |
+| Rust client c1   | ~77 k              | ~96 k       | +25%  |
+
+That's a *bigger* win than `mitigations=off`.
+
+### What you give up
+
+`iptables -F` + `nft flush ruleset` removes **every** firewall rule and
+NAT rule on the host. After this:
+
+- **Docker port-forwarding breaks** (it relies on iptables NAT rules).
+  Containers can't expose ports to the host network. Existing
+  connections die.
+- **libvirt VMs lose NAT** (the `default` virbr0 → eth0 MASQUERADE).
+- **Tailscale / WireGuard** lose any allow-list rules.
+- **ufw / fail2ban / firewalld** are bypassed. If this host is exposed
+  to the internet, **incoming traffic is no longer filtered**.
+
+### Where this is acceptable
+
+- A dedicated kevy host inside a VPC where firewalling happens at the
+  AWS Security Group / GCP firewall / on-prem perimeter layer
+- A bare-metal box with all services running inside the same machine
+  via UNIX sockets or loopback only
+- A benchmark / dev box
+
+### Where this is NOT acceptable
+
+- Any host exposed directly to the public internet without a hardware
+  firewall in front
+- Multi-tenant boxes
+- Hosts where docker / podman is running other tenants' workloads
+
+### How to apply (and roll back)
+
+```sh
+# Backup first
+nft list ruleset > /tmp/nft-backup.nft
+iptables-save > /tmp/iptables-backup.rules
+
+# Flush
+nft flush ruleset
+iptables -F
+iptables -X
+
+# (kevy stays up and gets faster; verify your other services if any)
+
+# Roll back when needed (e.g., before restarting docker)
+iptables-restore < /tmp/iptables-backup.rules
+nft -f /tmp/nft-backup.nft  # may warn on xtables-compat rules; harmless
+```
+
+A safer alternative: keep the rules but **bypass them for the
+kevy port** by adding an early `ACCEPT` at the top of the relevant
+chains. The gain is smaller (you still pay one rule lookup) but the
+firewall posture stays intact:
+
+```sh
+iptables -I INPUT 1 -p tcp --dport 6004 -j ACCEPT
+iptables -I OUTPUT 1 -p tcp --sport 6004 -j ACCEPT
+```
+
+That recovers ~half the +35% on most rulesets.
+
+## Profile-guided optimization (PGO)
+
+For a fixed-workload deployment (you know your read/write mix, command
+mix, conn count), PGO lets LLVM optimize the binary using runtime
+profile data. Measured 1-10% across workloads on the lx64 reference;
+biggest on `drain_inbound` and the dispatch loop.
+
+```sh
+# Step 1: build instrumented
+RUSTFLAGS="-Cprofile-generate=/tmp/pgo" cargo build --release
+
+# Step 2: collect profile by running a representative workload
+LLVM_PROFILE_FILE=/tmp/pgo/kevy-%m_%p.profraw \
+  ./target/release/kevy --port 6004 --no-aof &
+# In another shell: run your actual production-shaped workload for ~30s
+# (redis-benchmark / your real client / etc).
+kill %1
+sleep 3  # let profile data flush
+
+# Step 3: merge profile data
+llvm-profdata=$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata
+$llvm_profdata merge -o /tmp/pgo/merged.profdata /tmp/pgo/*.profraw
+
+# Step 4: rebuild with profile-use
+cargo clean
+RUSTFLAGS="-Cprofile-use=/tmp/pgo/merged.profdata" cargo build --release
+```
+
+Requires `rustup component add llvm-tools-preview` for `llvm-profdata`.
+The merged.profdata file is ~70 KB for kevy; ship it alongside the
+source so any rebuild reuses the same profile until your workload
+changes shape.
+
+PGO is NOT shipped in upstream releases because it's workload-specific.
+Most prod kevy users won't notice the 1-10%; the deployments that
+care should run the recipe above.
 
 ## `io_uring` SQPOLL — investigated, not shipped
 

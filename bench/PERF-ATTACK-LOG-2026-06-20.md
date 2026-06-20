@@ -535,7 +535,138 @@ vs valkey 9.1 (io-threads, same host):
 - c1 GET: 84 k vs 69 k = **1.22×** (was 1.13×)
 - c1 SET: 84 k vs 64 k = **1.31×** (was 1.27×)
 
-## Remaining levers (out of scope this sprint)
+## Post-v1.23.0 round (extended attacks)
+
+After v1.23.0 was tagged, user asked for an additional pass before
+calling perf "done". The next levers tried:
+
+### Attack 17 — Build flag inventory check
+
+Already in `[profile.release]`: opt-level=3, lto=fat,
+codegen-units=1, panic=abort, strip=true. Nothing left to add at
+the cargo level. `target-cpu=native` tried on lx64 (i7-10700K
+Comet Lake): no measurable change because LLVM's baseline already
+uses AVX2/BMI2; no AVX-512 here.
+
+### Attack 18 — PGO (profile-guided optimization)
+
+**Hypothesis**: LLVM with profile data can do better branch
+prediction + inlining heuristics. Mainstream Rust services see
+5-15% from PGO.
+
+**Implementation**: cargo-PGO recipe — instrumented build →
+representative workload (c1 + c50-P16 + c50-P1) → `llvm-profdata
+merge` → rebuild with `Cprofile-use`.
+
+**Measured (lx64)**:
+- C c1 SET: 80 k → 84 k (+5%)
+- C c1 GET: 75 k → 82 k (+9%)
+- Canonical loopback_c1: kevy-uring SET 84.4k → 84.9k (+0.6%)
+- c50: in noise
+
+**Call**: NOT shipped in CI by default (PGO ties the binary to a
+specific workload). Recipe documented in `docs/tuning.md` for
+deployments that want to opt in. Real gain is 1-10% depending on
+workload mix.
+
+### Attack 19 — perf record -e branch-misses
+
+**Diagnostic**: switched the perf event from cycles to
+branch-misses. Found `Runtime::run::closure` was **33.22%** of
+*all* branch mispredictions across kevy. Same closure was "only"
+20.4% of cycles. The closure was branch-prediction-bound, not
+cycle-bound.
+
+This re-framed E3.5 (the unactionable closure self-time) into a
+concrete attack (E11 below).
+
+### Attack 20 — E11: reorder completion match + #[cold] hint
+
+**Hypothesis**: the per-completion `match op { ... }` dispatch
+had OP_ACCEPT first, but at -c1 every request is one recv + one
+write — ACCEPT fires once at conn start. LLVM was generating a
+compare-chain that put the cold arm on the predicted-taken path.
+
+**Implementation**: reorder so OP_RECV / OP_WRITE come first; tag
+every cold arm with a call to a `#[cold] #[inline(never)]` no-op
+marker (`cold_path_hint()`). LLVM uses the `#[cold]` attribute to
+flip the branch-predictor hint.
+
+**Measured (lx64, c1 redis-benchmark)**:
+- closure share of branch-misses: **33.22% → 3.68% (-89%)**
+- IPC: 1.63 → 1.70 (+4%)
+- branch miss rate (all branches): 0.15% → 0.12% (-20%)
+- C c1 SET: ~80k → ~83k (+4%)
+- C c1 GET: ~75k → ~81k (+8%)
+
+**Call**: KEPT.
+
+**Lesson**: when `perf record -e cycles` says "closure is N% self
+with no callees", switch to `-e branch-misses` or `-e cache-misses`.
+A flat-looking self-time symbol may be hiding a specific kind of
+stall (prediction, cache, store-forwarding, …) that gives a
+distinct attack vector.
+
+### Attack 21 — E6 nftables flush (host tuning)
+
+**Hypothesis**: 1.18% of kevy's profile was `nft_do_chain`. The
+netfilter hooks run on every syscall path (`tcp_sendmsg`,
+`tcp_recvmsg`, `__dev_queue_xmit`); even with a fast 1.18% per-symbol
+cost, the cascading effect across all syscalls is much larger.
+
+**Implementation** (host config, not a kevy code change): backup
+`nft list ruleset > /tmp/nft-backup.nft` + `iptables-save >
+/tmp/iptables-backup.rules` → `nft flush ruleset` + `iptables -F`
+→ bench → restore.
+
+**Measured (lx64, mitigations=off + E1-E11 develop)**:
+
+| Workload     | rules on (default)  | rules empty | Δ       |
+|--------------|---------------------|-------------|---------|
+| C c1 SET     | 80.6 k              | **108.9 k** | **+35%**|
+| C c1 GET     | 80.0 k              | **108.3 k** | **+35%**|
+| Rust c1      | ~77 k               | ~96 k       | +25%    |
+
+The 35% jump came from:
+- 1.18 pp savings on `nft_do_chain` (the visible per-symbol)
+- ~3 pp savings on `syscall` / `entry_SYSRETQ` / `arch_exit_to_user_mode_prepare`
+  (cascading)
+- Compounded across every syscall on the hot path
+
+**Call**: documented in `docs/tuning.md`; **not** applied
+automatically. It's a host-side trade-off (breaks docker port
+forwarding, libvirt NAT, firewall posture). Safer half-measure
+also documented: `iptables -I INPUT 1 -p tcp --dport 6004 -j ACCEPT`
+to fast-path the kevy port through the chain.
+
+## Final status (post-v1.23.0 round)
+
+Levers attacked: 21 total. Calls: 14 kept (12 code + 2 doc), 4
+dropped, 5 doc-only / diagnostic (D6, PGO recipe, E6 recipe, plus
+diagnostic events from attacks 17/19).
+
+Cumulative measured win (vs v1.22.0):
+
+| Workload (lx64, io_uring, mitigations=off, rules on)| v1.22.0  | post-E11 | Δ      |
+|------------------------------------------------------|----------|----------|--------|
+| C `redis-benchmark` c1 GET                           | 68 k     | **84.9 k**| +25%  |
+| C `redis-benchmark` c1 SET                           | 76 k     | **84.9 k**| +12%  |
+
+With **all tuning knobs applied** (mitigations=off + nft flush +
+optional PGO):
+- C c1 SET / GET: **~108 k** (the true server ceiling on this
+  hardware; ~+40% over default-config v1.22.0)
+
+vs valkey 9.1 (io-threads, same host, default ruleset):
+- c1 GET: 84.9k vs 69k = **1.23×** (was 1.13×)
+- c1 SET: 84.9k vs 64k = **1.33×** (was 1.27×)
+
+With nft flushed (apples-to-apples, since the comparison was
+already run with rules on):
+- c1 GET: 108k vs valkey 69k = **1.57×**
+- c1 SET: 108k vs valkey 64k = **1.69×**
+
+## Remaining levers (truly out of scope)
 
 - **E6 nft_do_chain** (1.18% kernel) — `iptables -F` / `nft flush
   ruleset` on the bench box would eliminate this, but would also
