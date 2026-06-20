@@ -345,6 +345,13 @@ impl IoUring {
         // SAFETY: publishing our local tail to the kernel-shared atomic.
         unsafe { (*self.sq_ktail).store(self.sq_tail, Ordering::Release) };
 
+        // **E3 — DROPPED** (measured 16-25% regression on lx64). Skipping
+        // io_uring_enter on `to_submit == 0 && wait_nr == 0` conflicts with
+        // the `IORING_SETUP_COOP_TASKRUN` flag enabled in E2 — the kernel
+        // cooperative model needs userland to enter periodically so
+        // task_work runs and CQEs flush. Detail in
+        // `bench/PERF-ATTACK-LOG-2026-06-20.md` attack E3.
+
         let mut enter_flags = if wait_nr > 0 { IORING_ENTER_GETEVENTS } else { 0 };
         if let Some(sq_flags_ptr) = self.sq_flags {
             // SAFETY: `sq_flags_ptr` lives inside the SQ mmap, valid for ring

@@ -382,15 +382,59 @@ wallclock (esp. on Rust c1) — the `Runtime::run::closure` symbol
 absorbed most of the freed cycles. The next sprint round should
 attack that (E3).
 
+## Attack 11 — E3: skip `io_uring_enter` on empty submit + no wait
+
+**Hypothesis**: `perf report --children` showed `syscall` 73% of
+the closure's children tree at -c1, and the reactor's
+`submit_and_wait(0)` always calls `io_uring_enter` regardless of
+whether new SQEs were queued. Idle-spin iterations submit nothing
+and don't wait — so the syscall does nothing useful and could be
+skipped.
+
+**Implementation**: gate the syscall on `to_submit == 0 &&
+wait_nr == 0` and return early. Single-conditional fast path.
+
+**Measured (lx64)**:
+- Rust c1: 67 k → 56 k (**-16%**)
+- C c1 SET: 70 k → 53 k (**-25%**)
+- C c50-P16: 2.1 M → 2.0 M (-5%)
+
+**Root cause** (deferred until measurement caught it): E2's
+`IORING_SETUP_COOP_TASKRUN` flag flips the kernel-userland
+cooperative contract — the kernel **waits** for the user task to
+enter naturally before running `task_work` (the deferred-completion
+processing). Skipping `io_uring_enter` means `task_work` never
+runs, so multishot recv completions and write completions stack
+up internally and never appear on the visible CQ ring until
+something else triggers a flush.
+
+E3 + E2 are mutually exclusive: COOP_TASKRUN's value rests on
+the assumption that userland WILL enter periodically. Removing
+that breaks the kernel side.
+
+**Call**: **DROPPED**. The DROPPED marker stays as a doc comment
+in `submit_and_wait` so future attempts don't repeat the trap.
+
+**Lesson**: io_uring setup flags + enter-side optimizations have
+non-obvious interactions. Whenever you stack two flags from
+different attacks, **bench against the most-recent develop, not
+the pre-attack baseline**, to catch ordering interactions. And
+when a "should be safe" syscall optimization regresses, check
+whether a flag from a prior attack changed the syscall's
+contract.
+
 ## What's left in the lever list (E series)
 
-### E3 — `Runtime::run::closure` 13.6% — userspace #1 now
+### E3.5 — explore `Runtime::run::closure` self-time more
 
-Was 11.5% before E1.5; the ring-fd-lookup elimination pushed it
-to the very top of the profile. Need `perf annotate` on the exact
-closure to see what's in the inlined main loop. Likely candidates:
-inner conn-iter (arm loop), idle-spin check, completion drain.
-Cheap investigation; gain 3-5 pp predicted.
+`perf report --children` shows the closure has only ~1 pp of
+non-self callees (i.e., 13.6% self + small drain_inbound call).
+The self-time is the inlined main-loop body — needs `perf
+annotate` for instruction-level breakdown. The E3 "skip enter on
+idle iter" attempt regressed (E3 conflicts with E2's
+COOP_TASKRUN); next idea: **collapse the idle-spin path**
+(consolidate the per-iter polling/check work into fewer cache
+lines, or move some checks off the hot loop).
 
 ### E4 — `mitigations=off` measurement
 
