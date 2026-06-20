@@ -4,6 +4,72 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.23.1] — 2026-06-20 (perf sprint extension — branch-prediction + host knobs)
+
+A follow-on patch release after v1.23.0. User pushed back on
+declaring perf "done" too early; this round added 5 more attacks
+(17–21 in the cumulative log) including the biggest single
+host-tuning lever found in the entire sprint.
+
+### Code changes
+
+- **E11** (`kevy-rt`) — reorder the per-completion match dispatch
+  in `Shard::run_uring`: hot arms `OP_RECV` / `OP_WRITE` come
+  first, cold arms `OP_ACCEPT` / `OP_WAKER` / `OP_TIMEOUT` call a
+  `#[cold] #[inline(never)]` no-op marker fn to flip LLVM's
+  branch-predictor hint. Diagnostic that drove the attack: switched
+  perf event from `cycles` to `branch-misses` and found
+  `Runtime::run::closure` was **33.22%** of all branch
+  mispredictions across kevy.
+  - Closure share of branch-misses: 33.22% → **3.68%** (-89%)
+  - IPC: 1.63 → 1.70 (+4%)
+  - C c1 SET: ~80k → ~83k (+4%)
+  - C c1 GET: ~75k → ~81k (+8%)
+
+### Documentation
+
+- **E6** — `docs/tuning.md` (en/ja/zh-CN): added a major section on
+  emptying the netfilter / iptables ruleset. Measured **25-35%
+  throughput jump** on the lx64 reference (C c1 SET 80.6k → 108.9k);
+  the biggest single host-tuning lever found in the sprint. Trade-off
+  documented in full (breaks docker port forwarding, libvirt NAT,
+  firewall posture). Safer half-measure (`iptables -I INPUT 1 -p
+  tcp --dport 6004 -j ACCEPT`) recovers ~half the gain while keeping
+  the firewall intact.
+
+- **PGO recipe** — `docs/tuning.md` (en/ja/zh-CN): step-by-step
+  PGO recipe for fixed-workload deployments. Measured 1-10% on the
+  lx64 reference; workload-bound so NOT shipped in CI default.
+
+- **PERF-ATTACK-LOG-2026-06-20.md** — updated with attacks 17-21.
+  21 attacks total in the cumulative sprint: 14 kept (12 code + 2
+  doc), 4 dropped, 5 doc-only / diagnostic.
+
+### Cumulative status (post-v1.23.1)
+
+Default-friendly config (mitigations=off but ruleset on):
+- C `redis-benchmark` c1 GET: 68 k (v1.22) → **84.9 k** (+25%)
+- C `redis-benchmark` c1 SET: 76 k (v1.22) → **84.9 k** (+12%)
+- vs valkey-iot c1 lead: 1.13× → **1.23-1.33×**
+
+Fully tuned (mitigations=off + nft flush + PGO):
+- C c1: **~108 k** SET/GET — the true server ceiling on this
+  hardware; **1.57-1.69×** valkey-iot
+
+### Version bumps
+
+- workspace `1.23.0` → `1.23.1`
+- `kevy-client` `1.12.0` → `1.12.1` (dep rev only)
+- `kevy-embedded` `1.4.1` → `1.4.2` (dep rev only)
+- `kevy-client-async` `1.0.1` → `1.0.2` (dep rev only)
+
+### Wire / persistence / API
+
+No changes. Same RESP wire protocol, same AOF/snapshot format,
+same CLI flags, same public Rust API surface.
+
+---
+
 ## [v1.23.0] — 2026-06-20 (profile-driven perf sprint, 16 attacks)
 
 A profile-driven perf sprint on top of v1.22.0. Headline numbers on the lx64
