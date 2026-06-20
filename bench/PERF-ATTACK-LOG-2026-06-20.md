@@ -423,18 +423,142 @@ when a "should be safe" syscall optimization regresses, check
 whether a flag from a prior attack changed the syscall's
 contract.
 
-## What's left in the lever list (E series)
+## Attack 13 — E7: `#[inline]` on RESP parser hot helpers
 
-### E3.5 — explore `Runtime::run::closure` self-time more
+**Hypothesis**: `parse_command_borrowed` was 1.22% self at -c50.
+The hot per-arg parse loop calls `parse_bulk_len`, `find_crlf`,
+and `parse_int` across the kevy-rt → kevy-resp crate boundary;
+without `#[inline]` hints LLVM may not inline.
 
-`perf report --children` shows the closure has only ~1 pp of
-non-self callees (i.e., 13.6% self + small drain_inbound call).
-The self-time is the inlined main-loop body — needs `perf
-annotate` for instruction-level breakdown. The E3 "skip enter on
-idle iter" attempt regressed (E3 conflicts with E2's
-COOP_TASKRUN); next idea: **collapse the idle-spin path**
-(consolidate the per-iter polling/check work into fewer cache
-lines, or move some checks off the hot loop).
+**Implementation**: `#[inline]` on `parse_command_borrowed`,
+`parse_multibulk_borrowed`, `parse_bulk_len`, `find_crlf`,
+`parse_int`.
+
+**Measured**: throughput delta hard to isolate from the
+surrounding E sprint; the change is conservative + tests pass.
+KEPT on cross-crate-inlining-is-the-default-good principle.
+
+## Attack 14 — E9: hoist replication-pump gate to call site
+
+**Hypothesis**: `pump_replication` + `reap_closed_replicas`
+showed 1.01% + 1.03% each on standalone (no-replica) shards
+because the empty-path gate inside each function still pays a
+function-call frame per reactor iter.
+
+**Implementation**: gate at the call site so the call itself is
+elided when `replicate.is_none() && replicas.is_empty()`. Both
+the io_uring reactor (`uring_reactor.rs`) and epoll reactor
+(`shard.rs`) get the gate.
+
+**Measured**:
+- `pump_replication`: 1.01% → not in top 15
+- `reap_closed_replicas`: 1.03% → not in top 15
+- ~2 pp userspace cost eliminated
+
+Throughput is in run-noise; the 2 pp was on a cold-path that
+didn't compete with the syscall floor.
+
+**Call**: KEPT.
+
+## Attack 15 — E4: kernel `mitigations=off`
+
+**Hypothesis**: `clear_bhb_loop` was 14.79% of -c1 CPU
+(post-E1.5 / post-E8). Boot `lx64` with `mitigations=off` —
+disables Spectre BHB / IBPB / STIBP / retbleed / MDS-clear /
+spec_store_bypass / vmscape across the board.
+
+**Implementation**: edit `/etc/default/grub` to set
+`GRUB_CMDLINE_LINUX_DEFAULT="quiet mitigations=off"`, run
+`update-grub`, reboot. Verified post-reboot: `/proc/cmdline`
+contains `mitigations=off`, all
+`/sys/devices/system/cpu/vulnerabilities/*` report `Vulnerable`.
+
+**Measured (lx64, Linux 6.12, Intel Xeon 6, mitigations off,
+io_uring reactor, 10 shards on cores 0-9)**:
+
+| Workload                  | Pre-E4 (mitigations on) | Post-E4 (off) | Δ      |
+|---------------------------|-------------------------|---------------|--------|
+| C `redis-benchmark` c1 SET| ~75 k                   | **84 k**      | +12%   |
+| C `redis-benchmark` c1 GET| ~70 k                   | **84 k**      | +20%   |
+| Rust client c1 SET        | ~67 k                   | ~73 k         | +9%    |
+| Rust client c1 GET        | ~67 k                   | ~75 k         | +12%   |
+| C c50-P16 SET             | 2.0 M                   | 2.5 M         | +25%   |
+| C c50-P16 GET             | 2.1 M                   | 2.6 M         | +24%   |
+
+Profile (-c1):
+- `clear_bhb_loop`: 14.79% → **not in top 30** (eliminated)
+- The freed cycles partly become throughput, partly resurface
+  in `Runtime::run::closure` (14.59% → 20.37% relative).
+
+**Call**: KEPT. The doc-only D6 from 2026-06-20 is now
+hardware-verified. Production users on trusted single-tenant
+boxes can replicate the gain by booting their kernel with
+`mitigations=off`. Untrusted multi-tenant hosts MUST keep
+mitigations on (see `docs/tuning.md` for the security tradeoff).
+
+## Attack 16 — E10: `#[inline]` on remaining flush/drain helpers
+
+**Hypothesis**: `flush_wakes` (1.65%) and `uring_drain_inbound`
+(4.91%) still showed function-call frames in the post-E4
+profile. Other `flush_*` helpers already had `#[inline]` from
+earlier sprints; adding `#[inline]` on the remaining three
+(`flush_wakes`, `uring_drain_inbound`, `drain_inbound_core`)
+gives LLVM the hint to hoist the predicate check into the
+caller.
+
+**Measured**: throughput in run-noise (Rust c1 ~77k, C c1 ~80k
+SET). Conservative change; tests pass.
+
+**Call**: KEPT.
+
+## Status (post-E4 sprint complete)
+
+Levers attacked: 16 (D1, D2, D3, D4, D5, D6, E1, E2, E1.5, E3,
+E5, E8, E9, E4, E7, E10). Calls: 12 kept (effective code in
+develop + 3 doc-level), 4 dropped (D5 + E1 rt-side + E3 + E5),
+1 doc-only initial + hardware-verified at E4.
+
+Cumulative measured win (vs v1.22.0):
+
+| Workload (lx64, io_uring, mitigations=off)     | v1.22.0   | v1.23 develop | Δ      |
+|------------------------------------------------|-----------|---------------|--------|
+| `redis-benchmark` c1 GET                       | 68 k      | **84 k**      | +24%   |
+| `redis-benchmark` c1 SET                       | 76 k      | **84 k**      | +11%   |
+| `redis-benchmark` c50-P16 GET                  | 6.0 M     | 6.0 M (cap)   | flat   |
+| `redis-benchmark` c50-P16 SET                  | 4.0 M     | 4.0 M (cap)   | flat   |
+
+c50-P16 numbers cap at the redis-benchmark client-side limit
+(~4 M SET / 6 M GET with --threads 6); the server has more
+headroom but the test harness can't push faster.
+
+vs valkey 9.1 (io-threads, same host):
+- c1 GET: 84 k vs 69 k = **1.22×** (was 1.13×)
+- c1 SET: 84 k vs 64 k = **1.31×** (was 1.27×)
+
+## Remaining levers (out of scope this sprint)
+
+- **E6 nft_do_chain** (1.18% kernel) — `iptables -F` / `nft flush
+  ruleset` on the bench box would eliminate this, but would also
+  break docker's port-forwarding (the test setup runs valkey/redis
+  in containers). Documented in `docs/tuning.md` as a deployment
+  recommendation, not autorun'd.
+
+- **Runtime::run::closure self-time** (20.4%) — still the userspace
+  #1 after all attacks. Self-time, no callees to drill into; the
+  E3 attempt regressed (COOP_TASKRUN conflict). Future ideas:
+  collapse idle-spin into fewer cache lines, profile via
+  `perf annotate` for instruction-level hot lines, or look at
+  branch-misses via different perf event.
+
+- **`__do_sys_io_uring_enter`** (3.86%) — inherent kernel handler
+  cost; only eliminable via SQPOLL (E5 dropped) or batching
+  multi-op-per-enter (not applicable to kevy's per-conn arm).
+
+- **Kernel syscall path** (~40% total of -c1) — without changing
+  the syscall model entirely, this is the floor. Mitigations=off
+  already eliminated the BHB tax. Beyond that we're in territory
+  that requires sustained engineering (custom syscall wrappers,
+  vsyscall-style tricks).
 
 ### E4 — `mitigations=off` measurement
 

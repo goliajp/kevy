@@ -23,7 +23,7 @@ redis-cli -p 6004 SET hello world
 
 ## kevy を選ぶ理由
 
-- **速い** —— 高並行で valkey 9.1 のスループットの 2.7-3.0 倍、pub/sub
+- **速い** —— 高並行で valkey 9.1 のスループットの 2.4-2.5 倍、pub/sub
   ファンアウトで 2.7 倍、組込み時に **コア当たり ~9 M GET / 7 M SET**
   (数字は後述)。
 - **小さい** —— 768 KB のサーバ・バイナリ、起動後 5 MB 未満の RAM 常駐。
@@ -77,18 +77,23 @@ redis-cli -p 6004 SET hello world
 kevy の busy-poll が同居の競合相手を飢えさせないようにしました。各
 エンジンは最速設定(valkey/redis は `--io-threads 10` 有効化):
 
-| ワークロード | kevy 1.22 | valkey 9.1 (io-threads) | redis 7.4 (io-threads) |
+| ワークロード | kevy 1.23 | valkey 9.1 (io-threads) | redis 7.4 (io-threads) |
 |--------------|----------:|------------------------:|-----------------------:|
-| **-c50 -P16 GET** | **6.0 M/s** | 2.0 M/s | 2.0 M/s |
-| **-c50 -P16 SET** | **4.0 M/s** | 1.5 M/s | 1.5 M/s |
-| **-c1 GET** | **68 k/s** | 60 k/s | 55 k/s |
-| **-c1 SET** | **76 k/s** | 60 k/s | 54 k/s |
+| **-c50 -P16 GET** | **6.0 M/s** | 2.4 M/s | 1.5 M/s |
+| **-c50 -P16 SET** | **4.0 M/s** | 1.7 M/s | 1.2 M/s |
+| **-c1 GET** | **84 k/s** | 69 k/s | 63 k/s |
+| **-c1 SET** | **84 k/s** | 64 k/s | 62 k/s |
 
-→ 高並行で kevy は **best-other 比 GET 3.0× / SET 2.7×**、
-シングル接続シーケンシャル(busy-poll エンジンにとって最も厳しい
-ワークロード)でも 1.13-1.26× リード。io_uring vs epoll は負荷形によ
-る(io_uring は低並行で勝ち、epoll は -c50 -P16 で pipelining が
-syscall 節約をならして追いつく)。再現方法:
+→ 高並行で kevy は **best-other 比 GET 2.5× / SET 2.4×**、
+シングル接続シーケンシャルでのリードも **1.22-1.31×** まで広がり
+ました(v1.22 は 1.13-1.26×)。v1.23 は profile-driven な perf 投資
+の結果で、カーネル + reactor アタックの詳細は
+[`bench/PERF-ATTACK-LOG-2026-06-20.md`](bench/PERF-ATTACK-LOG-2026-06-20.md)
+と [`CHANGELOG`](CHANGELOG.md) に。
+io_uring vs epoll は負荷形による(io_uring は低並行で勝ち、epoll は
+-c50 -P16 で pipelining が syscall 節約をならして追いつく)。表の
+-c50-P16 数値は `redis-benchmark` クライアント側の上限で、サーバー側
+にはまだ余裕があります。再現方法:
 [`bench/loopback_c50.sh`](bench/loopback_c50.sh) と
 [`bench/loopback_c1.sh`](bench/loopback_c1.sh)。
 
