@@ -27,7 +27,7 @@ diagnostic (`bench/PERF-PROFILE-2026-06-20-POST-V124-CHAIN.md`)
 confirms 38 % of remaining CPU is kernel-side (tcp_sendmsg + io_uring
 admin + 1.26 % nft_do_chain loopback netfilter).
 
-### Shipped (11 attacks + 1 diag doc)
+### Shipped (12 attacks + 1 diag doc)
 
 | ID  | Where                              | Win                                          |
 |-----|------------------------------------|----------------------------------------------|
@@ -42,6 +42,7 @@ admin + 1.26 % nft_do_chain loopback netfilter).
 | A4  | kevy-rt `Conn`                     | `#[repr(C)]` + hot-first field layout → 2 cache lines (vs 4) of hot state |
 | E15 | kevy-rt `drain_inbound`            | fast-path inline + cold-body outline (`drain_inbound_core_slow`) |
 | E16 | kevy-rt `flush_wakes` / `flush_backlog` | same fast-path inline + cold outline pattern |
+| A13 | kevy-store `tick_expire`           | skip sampling loop when `expires == 0` (TTL-free workloads) |
 | —   | bench docs                         | `PERF-PROFILE-2026-06-20-POST-V124-CHAIN.md` re-diagnosis after the chain |
 
 ### Retired with rationale (kept in code as inline notes)
@@ -56,9 +57,48 @@ admin + 1.26 % nft_do_chain loopback netfilter).
 - **B1** generalise E13 to all KevyMap users — already covered by `KevyMap::alloc_table` (the only allocation path); every map >1 MiB auto-uses 2 MiB mmap.
 - **B2** std HashMap → KevyMap audit — 49 std HashMap usages all in cold control planes (kevy-elect, kevy-cluster-rw, per-cmd builders); none on -c1 hot path.
 
-### Deferred
+### Deferred (rationale documented per item in task tracker)
 
-- **C2** AutoFDO from perf data — requires LLVM create_llvm_prof + rustc -Cprofile-sample-use specific build, bigger pipeline scope than an autorun item.
+All remaining backlog items reviewed and triaged for this sprint:
+
+- **A1** split run_uring — readability refactor; LLVM already inlines all
+  helpers into one symbol so split without `#[inline(never)]` doesn't
+  separate perf attribution, and with `#[inline(never)]` it costs (E17
+  pattern). Pure-readability win at non-trivial bug risk.
+- **A10** adaptive URING_SPIN_LIMIT — fixed 256 works across all
+  measured workloads; no signal it's wrong.
+- **A12** linked SQE write→close — restructures Socket Drop + fd
+  transfer for 1 saved libc::close per conn; 0 closes at -c1.
+- **A14** PubSub RCU — 0-dep lock-free Arc swap needs hazard pointers
+  or epoch GC (multi-hundred LOC unsafe); no PubSub workload in bench.
+- **B3** per-shard arena — malloc bucket already 0.50% post-A5+E13.
+- **B5 / E5** MSG_ZEROCOPY (send + recv) — two-CQE flow only wins on
+  > 4 KB payloads; redis-benchmark replies are < 20 bytes.
+- **B6** REGISTER_BUFFERS — needs fixed-size Conn output buffers (kevy
+  grows Vec per reply); restructure breaks unbounded reply pattern.
+- **B7** RESP3 push-frame default-on — **NOT DOING** (RESP2 wire compat
+  lock).
+- **C1** BOLT — needs llvm-bolt installed on lx64 (host write).
+- **C2** AutoFDO — needs LLVM create_llvm_prof + rustc nightly profile-
+  sample-use; CI pipeline scope.
+- **C3** hot-section linker — needs custom ld script + RUSTFLAGS infra;
+  real win requires D1 hugetlbfs to land alongside.
+- **C4** strip panic strings — `-Z fmt-debug=none` is nightly-only.
+- **C5** musl static link — `x86_64-unknown-linux-musl` target not
+  installed on either build host.
+- **C7** mold linker — not installed on lx64.
+- **C8** PGO in CI — depends on C2 landing first.
+- **D1–D9** all host-side (kernel boot params, irqaffinity, cpupower,
+  SMT toggle, SCHED_FIFO, TCP sysctls, custom kernel, iptables fast-
+  path). Shared-box no-touch policy.
+- **E6** shared-mem transport — new wire + client + multi-process shm
+  mgmt; multi-week scope.
+- **F3** LZ4 compression — storage/memory feature; pure-Rust 0-dep
+  impl is ~1k LOC fuzz-clean.
+- **F4** QUIC/HTTP3, **F5** gRPC — **NOT DOING** (RESP wire compat
+  lock).
+- **G2** NUMA routing, **G3** topology-aware client — lx64 is single-
+  socket; no NUMA topology to exploit.
 
 ### Public API
 
