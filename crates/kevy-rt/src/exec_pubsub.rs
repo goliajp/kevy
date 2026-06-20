@@ -254,8 +254,10 @@ impl<C: Commands> Shard<C> {
     /// per message. Call once per reactor loop iteration.
     #[inline]
     pub(crate) fn flush_publish(&mut self) {
-        // Hot path: short-circuit on the bitmap (D3 2026-06-20). Same
-        // shape as flush_requests above.
+        // E17 attempted same outline pattern as E15/E16 for this fn too
+        // and reverted (see flush_requests revert note in exec.rs) —
+        // body is small enough that LLVM already inlines it; forcing
+        // the outline added a fn call on the cross-shard fan-out path.
         if self.publish_batch_nonempty == 0 {
             return;
         }
