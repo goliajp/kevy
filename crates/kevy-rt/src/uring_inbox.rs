@@ -13,6 +13,7 @@ impl<C: Commands> Shard<C> {
     /// their connection's output (no direct write — the io_uring arm/write
     /// loop flushes it). The message handling itself is
     /// [`Shard::drain_inbound_core`], shared with the epoll reactor.
+    #[inline]
     pub(crate) fn uring_drain_inbound(&mut self) -> bool {
         self.drain_inbound_core::<false>()
             .expect("DIRECT_FLUSH=false drain has no fallible step")

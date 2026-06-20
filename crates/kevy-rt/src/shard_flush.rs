@@ -13,6 +13,7 @@ impl<C: Commands> Shard<C> {
     /// Wake every target enqueued to this iteration that is currently parked.
     /// A spinning peer needs no syscall — it will see the message on its next
     /// poll(0). This is what removes the per-message wakeup under load.
+    #[inline]
     pub(crate) fn flush_wakes(&mut self) {
         // Hot path: short-circuit on the bitmap. Replaces the previous
         // `Vec<bool>::iter().any(|&w| w)`, which was N byte loads per
