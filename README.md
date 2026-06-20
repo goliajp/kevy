@@ -238,6 +238,9 @@ key–value. Method + the 6-way harness:
 `SmallBytes` inlines payloads ≤ 22 B with zero heap allocation. A complete
 kevy server is a sub-megabyte binary that boots into under 5 MB of RAM.
 
+Tuning the box itself (CPU pinning, AOF, io_uring, Spectre mitigations) is
+documented in [`docs/tuning.md`](docs/tuning.md).
+
 ## Quick start
 
 ### Install
