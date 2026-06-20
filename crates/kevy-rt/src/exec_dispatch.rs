@@ -35,6 +35,42 @@ pub(crate) fn dispatch_proto<C: Commands, A: ArgvView + ?Sized>(
     }
 }
 
+/// L1: case-insensitive 3-byte compare against "GET". Three byte ops
+/// + a length check; inlines flat at the call site.
+#[inline]
+fn eq_ascii_get(name: &[u8]) -> bool {
+    name.len() == 3
+        && (name[0] == b'G' || name[0] == b'g')
+        && (name[1] == b'E' || name[1] == b'e')
+        && (name[2] == b'T' || name[2] == b't')
+}
+
+/// L1: write `$<len>\r\n` into `out` for a bulk header.
+#[inline]
+fn bulk_header_into(out: &mut Vec<u8>, len: usize) {
+    out.push(b'$');
+    let mut buf = [0u8; 20];
+    let s = format_usize_into(len, &mut buf);
+    out.extend_from_slice(s);
+    out.extend_from_slice(b"\r\n");
+}
+
+#[inline]
+fn format_usize_into(mut n: usize, buf: &mut [u8; 20]) -> &[u8] {
+    let mut i = buf.len();
+    if n == 0 {
+        i -= 1;
+        buf[i] = b'0';
+    } else {
+        while n > 0 {
+            i -= 1;
+            buf[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+    }
+    &buf[i..]
+}
+
 impl<C: Commands> Shard<C> {
     /// Single-target command (keyless `Local` or single-key `Single`) — the
     /// overwhelming majority (GET/SET/INCR/PING/…). Skips the
@@ -102,6 +138,56 @@ impl<C: Commands> Shard<C> {
     ) -> bool {
         // Field-only read, before the conn borrow.
         let t0 = self.slowlog_t0();
+        // L1 (2026-06-21): GET handled in ONE keyspace lookup here, with
+        // zero-copy for ArcBulk (push the Arc to conn.output_arcs so the
+        // reactor's writev sends value bytes direct from keyspace) and
+        // the normal memcpy for Str/Int. Replaces the dispatch_proto →
+        // commands.dispatch_into → b"GET" arm path for GET specifically.
+        // Same shape as valkey's tryAvoidBulkStrCopyToReply
+        // (`networking.c:1462`).
+        if args.len() == 2
+            && let Some(name) = args.first()
+            && eq_ascii_get(name)
+        {
+            let reply = self.store.get_for_reply(&args[1]);
+            let Some(conn) = self.conns.get_mut(&conn_id) else { return false };
+            if !conn.pending.is_empty() {
+                return false;
+            }
+            match reply {
+                Ok(Some(kevy_store::GetReply::ArcBulk(arc))) => {
+                    bulk_header_into(&mut conn.output, arc.len());
+                    let insert_pos = conn.output.len();
+                    conn.output_arcs.push((insert_pos, arc));
+                    conn.output.extend_from_slice(b"\r\n");
+                }
+                Ok(Some(kevy_store::GetReply::Bytes(b))) => {
+                    bulk_header_into(&mut conn.output, b.len());
+                    conn.output.extend_from_slice(&b);
+                    conn.output.extend_from_slice(b"\r\n");
+                }
+                Ok(None) => {
+                    conn.output.extend_from_slice(b"$-1\r\n");
+                }
+                Err(_) => {
+                    // WRONGTYPE — only error a string-only GET can hit
+                    // here (key holds a non-string value). Inline the
+                    // canonical Redis text so we don't pay a fn call.
+                    conn.output.extend_from_slice(
+                        b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n",
+                    );
+                }
+            }
+            conn.next_emit += 1;
+            if is_quit {
+                conn.closing = true;
+            }
+            self.slowlog_maybe(t0, args);
+            if meta.is_write {
+                self.post_write_housekeeping(args, meta);
+            }
+            return true;
+        }
         let Some(conn) = self.conns.get_mut(&conn_id) else { return false };
         if !conn.pending.is_empty() {
             return false;

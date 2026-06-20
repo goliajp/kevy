@@ -107,6 +107,46 @@ impl<C: Commands> Shard<C> {
             self.uring_mark_closing(cid, io);
             return;
         }
+        // L1 (2026-06-21): the writev path mixes write_buf bytes with
+        // arc-bulk borrowed bytes via the iovec list. On a full
+        // completion (res == total submitted) we clear everything and
+        // drop the Arcs; on a SHORT write we fall back — copy any
+        // unsent arc payloads into write_buf so the next iter can
+        // resume via the plain `prep_write` path. The short-write case
+        // is rare (TCP loopback rarely backpressures); this fallback
+        // preserves correctness without iovec-level resume bookkeeping.
+        if !uc.write_arcs.is_empty() {
+            let written = res as usize;
+            let total: usize = uc.write_iovecs.iter().map(|v| v.iov_len).sum();
+            if written == total {
+                uc.write_buf.clear();
+                uc.write_arcs.clear();
+                uc.write_iovecs.clear();
+                uc.write_off = 0;
+            } else {
+                // Materialise the full payload into write_buf; drop arcs;
+                // advance write_off to where we left off. Next iter
+                // submits the remainder via the simple prep_write path.
+                let mut linear: Vec<u8> = Vec::with_capacity(total);
+                let mut prev = 0usize;
+                for (pos, arc) in &uc.write_arcs {
+                    let pos = *pos;
+                    if pos > prev {
+                        linear.extend_from_slice(&uc.write_buf[prev..pos]);
+                    }
+                    linear.extend_from_slice(arc.as_ref());
+                    prev = pos;
+                }
+                if prev < uc.write_buf.len() {
+                    linear.extend_from_slice(&uc.write_buf[prev..]);
+                }
+                uc.write_buf = linear;
+                uc.write_arcs.clear();
+                uc.write_iovecs.clear();
+                uc.write_off = written;
+            }
+            return;
+        }
         uc.write_off += res as usize;
         if uc.write_off >= uc.write_buf.len() {
             uc.write_buf.clear();

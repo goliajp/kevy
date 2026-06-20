@@ -7,8 +7,8 @@ use core::ptr;
 
 use crate::ffi::{
     IORING_ACCEPT_MULTISHOT, IORING_OP_ACCEPT, IORING_OP_NOP, IORING_OP_READ, IORING_OP_RECV,
-    IORING_OP_TIMEOUT, IORING_OP_WRITE, IORING_RECV_MULTISHOT, IOSQE_BUFFER_SELECT,
-    IOSQE_FIXED_FILE, SOCK_CLOEXEC, SOCK_NONBLOCK,
+    IORING_OP_TIMEOUT, IORING_OP_WRITE, IORING_OP_WRITEV, IORING_RECV_MULTISHOT,
+    IOSQE_BUFFER_SELECT, IOSQE_FIXED_FILE, Iovec, SOCK_CLOEXEC, SOCK_NONBLOCK,
 };
 use crate::layout::{IoUringSqe, KernelTimespec};
 use crate::ring::IoUring;
@@ -49,6 +49,39 @@ impl IoUring {
             ptr::write(
                 self.sqes_ptr().add(idx),
                 IoUringSqe::new(IORING_OP_WRITE, fd, buf as u64, len, user_data),
+            );
+        }
+        true
+    }
+
+    /// Queue a `writev(fd, iov, iovcnt)`. L1 (2026-06-21): the reactor's
+    /// reply path uses this to fuse [header iovec, value-borrow iovec,
+    /// CRLF iovec] into one syscall — the per-GET memcpy of the value
+    /// into the conn output buffer is avoided.
+    ///
+    /// # Safety
+    /// `iov` must point to `iovcnt` valid `Iovec` entries, each `iov_base`
+    /// pointing to a readable byte range of length `iov_len`. The kernel
+    /// reads the iovec array AND each base asynchronously — both must
+    /// stay valid until the matching completion is reaped (the reactor
+    /// parks them in the conn's pending-writev state and drops on CQE).
+    pub unsafe fn prep_writev(
+        &mut self,
+        fd: i32,
+        iov: *const Iovec,
+        iovcnt: u32,
+        user_data: u64,
+    ) -> bool {
+        let Some(idx) = self.reserve() else {
+            return false;
+        };
+        // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own
+        // alone. addr = iov pointer; len = iovcnt; off field (unused here)
+        // stays 0.
+        unsafe {
+            ptr::write(
+                self.sqes_ptr().add(idx),
+                IoUringSqe::new(IORING_OP_WRITEV, fd, iov as u64, iovcnt, user_data),
             );
         }
         true

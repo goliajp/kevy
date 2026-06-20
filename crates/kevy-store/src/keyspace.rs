@@ -329,6 +329,14 @@ impl Store {
                     crate::Entry::new(Value::Int(*n), ttl_ms.map(|ms| crate::deadline_at(crate::now_ns(), std::time::Duration::from_millis(ms)))),
                 );
             }
+            // L1: preserve the Arc-backed encoding on snapshot/replication
+            // load. Arc::clone is cheap; avoids re-copying the bytes.
+            Value::ArcBulk(a) => {
+                self.insert_entry(
+                    crate::value::SmallBytes::from_slice(&k),
+                    crate::Entry::new(Value::ArcBulk(a.clone()), ttl_ms.map(|ms| crate::deadline_at(crate::now_ns(), std::time::Duration::from_millis(ms)))),
+                );
+            }
             Value::Hash(h) => self.load_hash(
                 k,
                 h.iter().map(|(f, v)| (f.to_vec(), v.clone())).collect(),

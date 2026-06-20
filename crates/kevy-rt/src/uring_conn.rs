@@ -2,7 +2,8 @@
 //! addresses in-flight SQEs point at. Split from [`crate::uring_reactor`]
 //! to keep that file under the 500-LOC house rule.
 
-use kevy_uring::KernelTimespec;
+use kevy_uring::{Iovec, KernelTimespec};
+use std::sync::Arc;
 
 /// io_uring-specific per-connection state (the byte buffers that must outlive
 /// their in-flight SQEs). The command-level state stays in the shard's [`Conn`].
@@ -15,6 +16,19 @@ pub(crate) struct UringConn {
     pub(crate) write_buf: Vec<u8>,
     pub(crate) write_off: usize,
     pub(crate) write_inflight: bool,
+    /// L1 (2026-06-21): Arc-backed value bytes pinned for the in-flight
+    /// `writev`. Each `(pos, arc)` means "insert `arc.as_ref()` after byte
+    /// `pos` in `write_buf` when building the iovec list". Sorted by `pos`
+    /// (encode pushes in order so they're naturally sorted). The Arcs keep
+    /// the bytes alive across the SQE→CQE window even if the keyspace
+    /// mutates. Empty in the steady-state small-reply path → reactor stays
+    /// on `prep_write` (no overhead).
+    pub(crate) write_arcs: Vec<(usize, Arc<[u8]>)>,
+    /// Reusable iovec scratch for `prep_writev` — sized to hold the iovecs
+    /// for one writev submission. Lives in `UringConn` rather than on the
+    /// stack so the kernel's async iovec read sees a stable address until
+    /// the matching CQE fires.
+    pub(crate) write_iovecs: Vec<Iovec>,
     /// EOF/error seen on the socket — close once writes drain.
     pub(crate) closing: bool,
 }
@@ -26,6 +40,8 @@ impl UringConn {
             write_buf: Vec::new(),
             write_off: 0,
             write_inflight: false,
+            write_arcs: Vec::new(),
+            write_iovecs: Vec::new(),
             closing: false,
         }
     }

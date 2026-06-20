@@ -3,29 +3,54 @@
 use crate::util::{
     fmt_num, format_i64_into, itoa_i64_stack, parse_canonical_i64, parse_f64, parse_i64,
 };
-use crate::value::{SmallBytes, Value};
+use crate::value::{BULK_THRESHOLD, SmallBytes, Value};
 use crate::{Entry, Store, StoreError, deadline_at, now_ns};
 use std::borrow::Cow;
+use std::sync::Arc;
 use std::time::Duration;
 
-/// L2: build the right `Value` for `bytes` — `Int(n)` if `bytes` is a
-/// canonical i64 representation, else `Str(SmallBytes::from_slice(bytes))`.
-/// Used by SET / set_slice to pick the encoding at insert time, matching
-/// valkey's `OBJ_ENCODING_INT` auto-detection.
+/// L1 return shape for [`Store::get_for_reply`] — lets the reactor's reply
+/// path choose between memcpy (`Bytes`) and writev zero-copy (`ArcBulk`)
+/// off one keyspace lookup.
+pub enum GetReply<'a> {
+    /// Inline-encoded value — caller memcpys the bytes into its output Vec
+    /// (small replies; encoding cost is tiny vs the RTT floor).
+    Bytes(Cow<'a, [u8]>),
+    /// L1 (2026-06-21): Arc-backed bulk. The reactor's reply path pushes
+    /// the Arc into the conn's `output_arcs` so the next `writev` iovec
+    /// list points DIRECTLY at the value bytes — skipping the per-GET
+    /// memcpy that valkey's `tryAvoidBulkStrCopyToReply` likewise avoids.
+    ArcBulk(Arc<[u8]>),
+}
+
+/// L2 + L1: pick the optimal encoding for `bytes` at SET time:
+/// 1. Canonical i64 ASCII → `Value::Int(n)` (smallest + INCR fast path)
+/// 2. > [`BULK_THRESHOLD`] bytes → `Value::ArcBulk(Arc<[u8]>)` (lets the
+///    reactor reply path borrow the bytes for `writev` zero-copy GET)
+/// 3. Else → `Value::Str(SmallBytes::from_slice(bytes))` (inline-cache-
+///    line storage, beats Arc indirection for small values)
 #[inline]
 fn pick_value_for_set(bytes: &[u8]) -> Value {
-    match parse_canonical_i64(bytes) {
-        Some(n) => Value::Int(n),
-        None => Value::Str(SmallBytes::from_slice(bytes)),
+    if let Some(n) = parse_canonical_i64(bytes) {
+        return Value::Int(n);
     }
+    if bytes.len() > BULK_THRESHOLD {
+        return Value::ArcBulk(Arc::from(bytes));
+    }
+    Value::Str(SmallBytes::from_slice(bytes))
 }
 
 #[inline]
 fn pick_value_for_set_owned(bytes: Vec<u8>) -> Value {
-    match parse_canonical_i64(&bytes) {
-        Some(n) => Value::Int(n),
-        None => Value::Str(SmallBytes::from_vec(bytes)),
+    if let Some(n) = parse_canonical_i64(&bytes) {
+        return Value::Int(n);
     }
+    if bytes.len() > BULK_THRESHOLD {
+        // Vec<u8> → Box<[u8]> → Arc<[u8]> reuses the existing allocation
+        // for the Box step; Arc::from(Box<[u8]>) wraps without copying.
+        return Value::ArcBulk(Arc::from(bytes.into_boxed_slice()));
+    }
+    Value::Str(SmallBytes::from_vec(bytes))
 }
 
 impl Store {
@@ -122,6 +147,28 @@ impl Store {
         true
     }
 
+    /// L1 (2026-06-21): GET variant that exposes the underlying encoding
+    /// so the reactor's reply path can choose zero-copy
+    /// (`Value::ArcBulk` → push the Arc to the conn's `output_arcs` for a
+    /// writev iovec) vs memcpy (`Value::Str` / `Value::Int` → encode bytes
+    /// into the conn's output Vec). ONE keyspace lookup; the variant tag
+    /// chooses the encoding without a second probe.
+    pub fn get_for_reply(&mut self, key: &[u8]) -> Result<Option<GetReply<'_>>, StoreError> {
+        match self.live_entry(key) {
+            None => Ok(None),
+            Some(e) => match &e.value {
+                Value::Str(v) => Ok(Some(GetReply::Bytes(Cow::Borrowed(v.as_slice())))),
+                Value::ArcBulk(a) => Ok(Some(GetReply::ArcBulk(Arc::clone(a)))),
+                Value::Int(n) => {
+                    let mut tmp = itoa_i64_stack();
+                    let s = format_i64_into(*n, &mut tmp);
+                    Ok(Some(GetReply::Bytes(Cow::Owned(s.to_vec()))))
+                }
+                _ => Err(StoreError::WrongType),
+            },
+        }
+    }
+
     /// `GET` — returns a `Cow<[u8]>` so `Value::Int` callers can format the
     /// integer to ASCII without storing it. L2 (2026-06-21): `Value::Str`
     /// returns `Cow::Borrowed` (zero copy, same as before); `Value::Int`
@@ -131,6 +178,12 @@ impl Store {
             None => Ok(None),
             Some(e) => match &e.value {
                 Value::Str(v) => Ok(Some(Cow::Borrowed(v.as_slice()))),
+                // L1: Arc-backed bulk — return borrow into the Arc's
+                // bytes. Caller can either memcpy via Cow::Borrowed
+                // (default `encode_bulk` path) OR look up the
+                // underlying `Value::ArcBulk(arc)` separately for the
+                // writev zero-copy reply path.
+                Value::ArcBulk(a) => Ok(Some(Cow::Borrowed(a.as_ref()))),
                 Value::Int(n) => {
                     let mut tmp = itoa_i64_stack();
                     let s = format_i64_into(*n, &mut tmp);
@@ -154,6 +207,7 @@ impl Store {
             Some(e) if e.is_expired(self.cached_clock, self.cached_ns) => Ok(None),
             Some(e) => match &e.value {
                 Value::Str(v) => Ok(Some(Cow::Borrowed(v.as_slice()))),
+                Value::ArcBulk(a) => Ok(Some(Cow::Borrowed(a.as_ref()))),
                 Value::Int(n) => {
                     let mut tmp = itoa_i64_stack();
                     let s = format_i64_into(*n, &mut tmp);
@@ -177,6 +231,16 @@ impl Store {
                     owned.extend_from_slice(data);
                     let new_len = owned.len();
                     *v = SmallBytes::from_vec(owned);
+                    AppendOutcome::Reweigh(new_len)
+                }
+                // L1: APPEND on Arc-backed bulk → materialise to a fresh
+                // Vec (no other reader has refs to the old Arc post-replace),
+                // append, then pick the new encoding via SET routing rules.
+                Value::ArcBulk(a) => {
+                    let mut owned: Vec<u8> = a.as_ref().to_vec();
+                    owned.extend_from_slice(data);
+                    let new_len = owned.len();
+                    e.value = pick_value_for_set_owned(owned);
                     AppendOutcome::Reweigh(new_len)
                 }
                 _ => return Err(StoreError::WrongType),
@@ -221,6 +285,16 @@ impl Store {
                         .checked_add(delta)
                         .ok_or(StoreError::Overflow)?;
                     // Promote to Int: future INCRs hit the fast path.
+                    e.value = Value::Int(next);
+                    IncrOutcome::Reweigh(next)
+                }
+                Value::ArcBulk(a) => {
+                    // L1: large value claimed to be numeric — parse and
+                    // promote to Int. Subsequent INCRs hit the fast path.
+                    let next = parse_i64(a.as_ref())
+                        .ok_or(StoreError::NotInteger)?
+                        .checked_add(delta)
+                        .ok_or(StoreError::Overflow)?;
                     e.value = Value::Int(next);
                     IncrOutcome::Reweigh(next)
                 }

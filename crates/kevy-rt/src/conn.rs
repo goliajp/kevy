@@ -4,6 +4,7 @@ use crate::message::PendingSlot;
 use kevy_resp::{Argv, RespVersion};
 use kevy_sys::Socket;
 use std::collections::{HashSet, VecDeque};
+use std::sync::Arc;
 
 /// Per-connection state owned by its origin shard.
 ///
@@ -47,6 +48,13 @@ pub(crate) struct Conn {
     pub(crate) sock: Socket,
     pub(crate) input: Vec<u8>,
     pub(crate) output: Vec<u8>,
+    /// L1 (2026-06-21): Arc-backed value bytes scheduled to be `writev`-sent
+    /// alongside `output`. Each `(pos, arc)` means "insert `arc.as_ref()`
+    /// after byte `pos` in `output` when building the iovec list for the
+    /// reactor's writev SQE". Sorted by `pos`; pushed by `encode_bulk_arc`
+    /// at the bulk-reply emit site. Empty in the common small-reply path,
+    /// so the reactor stays on `prep_write` with no overhead.
+    pub(crate) output_arcs: Vec<(usize, Arc<[u8]>)>,
     /// Outstanding commands in seq order; front == `next_emit`. An O(1) ring
     /// that replaces the per-command HashMap churn.
     pub(crate) pending: VecDeque<PendingSlot>,
@@ -97,6 +105,7 @@ impl Conn {
             sock,
             input: Vec::new(),
             output: Vec::new(),
+            output_arcs: Vec::new(),
             write_pos: 0,
             want_write: false,
             next_seq: 0,
