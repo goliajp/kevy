@@ -12,9 +12,12 @@
 | 把 server 钉在固定 CPU 集     | 独占主机,或同机跑 bench             | 5–15%   |
 | 关 AOF (`--no-aof`)           | 只读副本 / 易失缓存                  | 5–10%   |
 | 打开 `KEVY_IO_URING=1`        | Linux 5.13+                          | 10–30%  |
-| 内核 `mitigations=off`        | 受信任的单租户机                     | 12–15%  |
+| 内核 `mitigations=off`        | 受信任的单租户机                     | 12–25%  |
+| 清空 netfilter 规则           | 独占主机,不需要本机防火墙           | **25–35%** |
+| PGO(profile-guided)          | 工作负载固定的 release build         | 1–10%   |
 
-`mitigations=off` 是唯一能动**内核地板**的旋钮;其余只削用户态周期。
+`mitigations=off` 和清空 netfilter 是仅有的两个能动**内核地板**的旋
+钮;PGO 和其余只削用户态周期。
 
 ## CPU 绑定
 
@@ -104,6 +107,107 @@ lx64 参考机上,`mitigations=off` 后预期吞吐:
 
 (数字看内核 / CPU 厂家。AMD Zen 3+ 跟 Intel Xeon BHB 的代价不同;
 ARM N1/N2 又是另一回事。**在你自己的硬件上量**。)
+
+## 清空 netfilter / iptables 规则(很大,但危险)
+
+Linux 内核每个 syscall 经过 netfilter / nftables hook —— `tcp_sendmsg`、
+`tcp_recvmsg`、`__dev_queue_xmit`,**包括 loopback**。规则集复杂(docker、
+libvirt、fail2ban、ufw 每个加 50-300 条规则)时,累计开销巨大。
+
+lx64 参考机实测(Linux 6.12,`mitigations=off`,典型 docker + libvirt
++ Tailscale 规则集 ~500 条):
+
+| 工作负载         | 规则开启(默认) | 规则清空    | Δ     |
+|------------------|------------------|-------------|-------|
+| C c1 SET         | 80.6 k           | **108.9 k** | +35%  |
+| C c1 GET         | 80.0 k           | **108.3 k** | +35%  |
+| Rust 客户端 c1   | ~77 k            | ~96 k       | +25%  |
+
+比 `mitigations=off` 还大。
+
+### 代价
+
+`iptables -F` + `nft flush ruleset` 清除主机上**所有**防火墙和 NAT
+规则。之后:
+
+- **docker 端口转发坏掉**(依赖 iptables NAT)
+- **libvirt VM 失去 NAT**(default virbr0 → eth0 的 MASQUERADE)
+- **Tailscale / WireGuard** 失去 allow-list 规则
+- **ufw / fail2ban / firewalld** 被绕过 —— 公网暴露的主机**入站流量不再过滤**
+
+### 可接受场景
+
+- 专用 kevy 主机,放在 VPC 后面,防火墙在 AWS SG / GCP firewall / 边界
+  网关层
+- 裸金属机,所有服务跑同机内,只走 UNIX socket 或 loopback
+- bench / dev 机
+
+### 不能用的场景
+
+- 任何直接暴露公网的主机(前面没硬件防火墙)
+- 多租户主机
+- docker / podman 上跑别人 workload 的主机
+
+### 怎么应用(以及回滚)
+
+```sh
+# 先备份
+nft list ruleset > /tmp/nft-backup.nft
+iptables-save > /tmp/iptables-backup.rules
+
+# 清空
+nft flush ruleset
+iptables -F
+iptables -X
+
+# (kevy 不动而变快;如有其他服务自己验)
+
+# 需要时回滚(比如重启 docker 前)
+iptables-restore < /tmp/iptables-backup.rules
+nft -f /tmp/nft-backup.nft  # xtables-compat 规则可能有警告,无害
+```
+
+更安全的方案:**保留规则但单独给 kevy 端口开通早期 ACCEPT**:
+
+```sh
+iptables -I INPUT 1 -p tcp --dport 6004 -j ACCEPT
+iptables -I OUTPUT 1 -p tcp --sport 6004 -j ACCEPT
+```
+
+可以拿回大约一半的 +35%,但防火墙姿态保持完整。
+
+## Profile-guided optimization(PGO)
+
+工作负载固定的部署(知道读写比、命令分布、连接数),PGO 让 LLVM 用
+runtime profile 数据优化二进制。lx64 实测 1-10%;`drain_inbound` 和
+dispatch 循环上最大。
+
+```sh
+# Step 1: build instrumented
+RUSTFLAGS="-Cprofile-generate=/tmp/pgo" cargo build --release
+
+# Step 2: 跑代表性 workload 收 profile
+LLVM_PROFILE_FILE=/tmp/pgo/kevy-%m_%p.profraw \
+  ./target/release/kevy --port 6004 --no-aof &
+# 另一终端跑实际生产形状的 workload ~30 秒
+kill %1
+sleep 3  # 让 profile data flush
+
+# Step 3: merge
+llvm_profdata=$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata
+$llvm_profdata merge -o /tmp/pgo/merged.profdata /tmp/pgo/*.profraw
+
+# Step 4: rebuild
+cargo clean
+RUSTFLAGS="-Cprofile-use=/tmp/pgo/merged.profdata" cargo build --release
+```
+
+需要 `rustup component add llvm-tools-preview` 拿 `llvm-profdata`。
+merged.profdata 约 70 KB,可以跟源码一起 commit,只要 workload 形态
+不变就一直用同一份 profile。
+
+PGO **不在** 上游 release 里默认开 —— 它跟 workload 绑死。大部分生产
+用户不会在意 1-10%;真正在意的部署照上面 recipe 自己跑。
 
 ## `io_uring` SQPOLL —— 实测拒绝接入
 
