@@ -48,7 +48,23 @@ pub struct IoUring {
     /// resolves the ring via the registered-rings table, skipping
     /// `fget`/`fput` per syscall. `None` = raw `ring_fd` path.
     pub(crate) enter_ring: Option<(u32, u32)>,
+    /// E14: iterations since the last `io_uring_enter` syscall. The reactor
+    /// calls `submit_and_wait(0)` every iter; if neither new SQEs were
+    /// queued nor `wait_nr > 0`, the syscall does no useful work (just
+    /// runs task_work for COOP_TASKRUN). Tracking this lets us skip the
+    /// syscall for up to [`ENTER_SKIP_THRESHOLD`] empty iterations — a
+    /// forced enter every N iters still flushes deferred task_work so
+    /// completions don't stall.
+    iters_since_enter: u32,
 }
+
+/// E14: maximum empty reactor iterations between forced `io_uring_enter`
+/// syscalls. Tuned so that completion delivery (task_work flush under
+/// COOP_TASKRUN) is bounded to ~16 microseconds even on a quiet shard
+/// (~1 M iters/s observed at -c1). The H4 diagnostic measured 10.7 M
+/// enter/s = ~12 wasted enters per actual op; capping at 16 cuts this to
+/// roughly 1 enter per op while preserving completion latency.
+const ENTER_SKIP_THRESHOLD: u32 = 2;
 
 // SAFETY: `IoUring` owns its fd and mappings exclusively; moving the whole
 // engine to another thread (one per shard) is sound. It is not `Sync`
@@ -135,6 +151,7 @@ impl IoUring {
             cqes: cq.cqes,
             sq_flags,
             enter_ring: None,
+            iters_since_enter: 0,
         };
         // Best-effort: register the ring's own fd into the calling thread's
         // io_uring registered-rings table (Linux 5.18+). On success, subsequent
@@ -345,12 +362,24 @@ impl IoUring {
         // SAFETY: publishing our local tail to the kernel-shared atomic.
         unsafe { (*self.sq_ktail).store(self.sq_tail, Ordering::Release) };
 
-        // **E3 — DROPPED** (measured 16-25% regression on lx64). Skipping
-        // io_uring_enter on `to_submit == 0 && wait_nr == 0` conflicts with
-        // the `IORING_SETUP_COOP_TASKRUN` flag enabled in E2 — the kernel
-        // cooperative model needs userland to enter periodically so
-        // task_work runs and CQEs flush. Detail in
-        // `bench/PERF-ATTACK-LOG-2026-06-20.md` attack E3.
+        // **E14 (replaces dropped E3).** H4 diagnostic showed 10.7 M
+        // io_uring_enter/s aggregate = ~12 wasted enters per actual op
+        // on the steady -c1 hot path. E3's naive "skip when to_submit==0
+        // && wait_nr==0" regressed because COOP_TASKRUN delays
+        // completion task_work until the next enter. E14 keeps a
+        // periodic forced enter: skip up to ENTER_SKIP_THRESHOLD empty
+        // iters in a row, then enter once to flush task_work. The skip
+        // path is gated on the non-SQPOLL case (SQPOLL has its own skip
+        // below) and on wait_nr == 0 (the caller doesn't need a
+        // completion to arrive).
+        if to_submit == 0 && wait_nr == 0 && self.sq_flags.is_none() {
+            self.iters_since_enter = self.iters_since_enter.saturating_add(1);
+            if self.iters_since_enter < ENTER_SKIP_THRESHOLD {
+                return Ok(0);
+            }
+            // Reached the threshold — fall through to the syscall path
+            // below so task_work flushes. Counter resets after syscall.
+        }
 
         let mut enter_flags = if wait_nr > 0 { IORING_ENTER_GETEVENTS } else { 0 };
         if let Some(sq_flags_ptr) = self.sq_flags {
@@ -389,6 +418,8 @@ impl IoUring {
         if ret < 0 {
             return Err(io::Error::last_os_error());
         }
+        // E14: real enter happened — counter resets.
+        self.iters_since_enter = 0;
         Ok(ret as u32)
     }
 
