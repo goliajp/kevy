@@ -151,6 +151,7 @@ fn parse_multibulk_into(buf: &[u8], dst: &mut Argv) -> Result<Option<usize>, Pro
 /// request, matching [`validate_multibulk_frame`].
 ///
 /// Returns `(len, data_start)`; `Ok(None)` = need more bytes.
+#[inline]
 pub(crate) fn parse_bulk_len(
     buf: &[u8],
     pos: usize,
@@ -206,6 +207,7 @@ pub(crate) fn parse_bulk_len(
 /// `\n` and return; otherwise we resume from `pos + 1` so a stray `\r` doesn't
 /// terminate the scan. Safe Rust only — keeps `kevy-resp`'s
 /// `forbid(unsafe_code)` guarantee.
+#[inline]
 pub(crate) fn find_crlf(buf: &[u8], start: usize) -> Option<usize> {
     const CR_BCAST: u64 = 0x0D0D_0D0D_0D0D_0D0D_u64;
     const ONES: u64 = 0x0101_0101_0101_0101_u64;
@@ -253,6 +255,7 @@ pub(crate) fn find_crlf(buf: &[u8], start: usize) -> Option<usize> {
 }
 
 /// Parse a base-10 signed integer from ASCII bytes (no surrounding whitespace).
+#[inline]
 pub(crate) fn parse_int(bytes: &[u8]) -> Option<i64> {
     if bytes.is_empty() {
         return None;
