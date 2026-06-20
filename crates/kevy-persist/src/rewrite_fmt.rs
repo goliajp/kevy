@@ -71,6 +71,12 @@ pub(crate) fn dump_store_to_buf<S: crate::SnapshotSource>(src: &S) -> (Vec<u8>, 
 
 /// Emit one (or two, if TTL'd) RESP write commands that, when replayed,
 /// reconstruct `key`'s `value` and TTL exactly.
+///
+/// C6: marked `#[cold]` — AOF rewrite only runs on `BGREWRITEAOF`
+/// or `auto-aof-rewrite-percentage`, never on the live write path.
+/// The full type-switch over `Value` variants is ~9 KB; pushing it
+/// off the hot iTLB pages around `start_command` is the point.
+#[cold]
 fn write_value_as_commands<W: Write>(
     w: &mut W,
     key: &[u8],
