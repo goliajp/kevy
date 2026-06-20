@@ -22,7 +22,7 @@ redis-cli -p 6004 SET hello world
 
 ## Why kevy
 
-- **Fast** — 2.7–3.0× valkey 9.1's throughput at high concurrency, 2.7× on
+- **Fast** — 2.4–2.5× valkey 9.1's throughput at high concurrency, 2.7× on
   pub/sub fan-out, and **~9 M GET / 7 M SET** per core when embedded
   (numbers below).
 - **Tiny footprint** — a 768 KB server binary that boots into under 5 MB of
@@ -74,18 +74,23 @@ isolated cores and **run in isolation** (start → 2 warm runs → stop) so
 kevy's busy-poll does not starve a co-located competitor. Every engine
 uses its fastest config (valkey/redis with `--io-threads 10`):
 
-| workload | kevy 1.22 | valkey 9.1 (io-threads) | redis 7.4 (io-threads) |
+| workload | kevy 1.23 | valkey 9.1 (io-threads) | redis 7.4 (io-threads) |
 |----------|----------:|------------------------:|-----------------------:|
-| **-c50 -P16 GET** | **6.0 M/s** | 2.0 M/s | 2.0 M/s |
-| **-c50 -P16 SET** | **4.0 M/s** | 1.5 M/s | 1.5 M/s |
-| **-c1 GET** | **68 k/s** | 60 k/s | 55 k/s |
-| **-c1 SET** | **76 k/s** | 60 k/s | 54 k/s |
+| **-c50 -P16 GET** | **6.0 M/s** | 2.4 M/s | 1.5 M/s |
+| **-c50 -P16 SET** | **4.0 M/s** | 1.7 M/s | 1.2 M/s |
+| **-c1 GET** | **84 k/s** | 69 k/s | 63 k/s |
+| **-c1 SET** | **84 k/s** | 64 k/s | 62 k/s |
 
-→ kevy is **3.0× best-other on GET, 2.7× on SET** at high concurrency,
-and still leads single-connection sequential (the hardest workload for
-any busy-poll engine) by 1.13–1.26×. The io_uring vs epoll reactor
-pick is per-workload (io_uring leads at low concurrency, epoll catches
-up at -c50 -P16 where pipelining amortises the syscall savings).
+→ kevy is **2.5× best-other on GET, 2.4× on SET** at high concurrency,
+and the -c1 lead grew to **1.22-1.31×** vs the strongest competitor
+(v1.22 was 1.13-1.26×) thanks to the v1.23 perf sprint:
+profile-driven kernel + reactor wins documented in
+[`bench/PERF-ATTACK-LOG-2026-06-20.md`](bench/PERF-ATTACK-LOG-2026-06-20.md)
+and the [`CHANGELOG`](CHANGELOG.md).
+io_uring vs epoll reactor pick is per-workload (io_uring leads at low
+concurrency, epoll catches up at -c50 -P16 where pipelining amortises
+the syscall savings). The -c50-P16 SET/GET above are
+`redis-benchmark` client-side caps (the server has more headroom).
 Reproduce with [`bench/loopback_c50.sh`](bench/loopback_c50.sh) and
 [`bench/loopback_c1.sh`](bench/loopback_c1.sh).
 

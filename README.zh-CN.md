@@ -20,7 +20,7 @@ redis-cli -p 6004 SET hello world
 
 ## 为什么选 kevy
 
-- **快** —— 高并发下吞吐 2.7-3.0× valkey 9.1,pub/sub 扇出 2.7×,嵌入式
+- **快** —— 高并发下吞吐 2.4-2.5× valkey 9.1,pub/sub 扇出 2.7×,嵌入式
   每核 **~9 M GET / 7 M SET**(数字见下文)。
 - **占用极小** —— 768 KB 服务器二进制,启动后驻留 5 MB 以内的 RAM。
   适合容器 sidecar、小 VM、边缘盒子。
@@ -63,18 +63,23 @@ redis-cli -p 6004 SET hello world
 每个引擎(启动 → 2 个热身 run → 关停),让 kevy 的 busy-poll 不会饿死同
 驻的竞争者。每个引擎都用最快配置(valkey/redis 都开 `--io-threads 10`):
 
-| 工作负载 | kevy 1.22 | valkey 9.1 (io-threads) | redis 7.4 (io-threads) |
+| 工作负载 | kevy 1.23 | valkey 9.1 (io-threads) | redis 7.4 (io-threads) |
 |----------|----------:|------------------------:|-----------------------:|
-| **-c50 -P16 GET** | **6.0 M/s** | 2.0 M/s | 2.0 M/s |
-| **-c50 -P16 SET** | **4.0 M/s** | 1.5 M/s | 1.5 M/s |
-| **-c1 GET** | **68 k/s** | 60 k/s | 55 k/s |
-| **-c1 SET** | **76 k/s** | 60 k/s | 54 k/s |
+| **-c50 -P16 GET** | **6.0 M/s** | 2.4 M/s | 1.5 M/s |
+| **-c50 -P16 SET** | **4.0 M/s** | 1.7 M/s | 1.2 M/s |
+| **-c1 GET** | **84 k/s** | 69 k/s | 63 k/s |
+| **-c1 SET** | **84 k/s** | 64 k/s | 62 k/s |
 
-→ kevy 在高并发下 **GET 3.0× / SET 2.7× 优于次优者**,单连接 sequential
-(任何 busy-poll 引擎最难的工作负载)上也领先 1.13-1.26×。io_uring vs
-epoll 看负载形态(io_uring 在低并发领先,epoll 在 -c50 -P16 因 pipelining
-摊薄系统调用开销而追上)。用 [`bench/loopback_c50.sh`](bench/loopback_c50.sh)
-和 [`bench/loopback_c1.sh`](bench/loopback_c1.sh) 复现。
+→ kevy 高并发下 **GET 2.5× / SET 2.4× 优于次优者**,单连接 sequential
+领先扩到 **1.22-1.31×**(v1.22 是 1.13-1.26×)—— v1.23 profile-driven
+性能冲刺,内核 + reactor 攻击单详见
+[`bench/PERF-ATTACK-LOG-2026-06-20.md`](bench/PERF-ATTACK-LOG-2026-06-20.md)
+和 [`CHANGELOG`](CHANGELOG.md)。
+io_uring vs epoll 看负载形态(io_uring 在低并发领先,epoll 在 -c50 -P16
+因 pipelining 摊薄系统调用开销而追上)。表里 -c50-P16 数字是
+`redis-benchmark` 客户端瓶颈(服务端还有余量)。
+用 [`bench/loopback_c50.sh`](bench/loopback_c50.sh) 和
+[`bench/loopback_c1.sh`](bench/loopback_c1.sh) 复现。
 
 对 io_uring 的 C 参考:kevy 手写绑定 148 ns 完成空 round-trip,vs
 liburing 2.9 的 152 ns —— 已到 Linux 内核地板,且没链 liburing。
