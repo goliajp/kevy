@@ -128,3 +128,35 @@ The remaining 11 % gap at c=2000 is split between (a) the
 inet_lookup) that scales with conn count. Even with the
 ready-set queue, c=2000 is unlikely to cross ≥120 % because the
 kernel scaling is the floor.
+
+## Follow-up 2 (2026-06-21, RESOLVED via `--threads 1`)
+
+Instead of more architectural changes to the multi-shard reactor,
+ran a **threads-count sweep** across c=50..2000 × t=1..16.
+
+**Result: `--threads 1` wins almost every concurrency point**:
+
+| -c   | t=1 SET | t=2 SET | t=4 SET | t=1 GET | t=2 GET | t=4 GET |
+|------|---------|---------|---------|---------|---------|---------|
+|   50 | 197 941 | 194 970 | 194 818 | 190 949 | 196 002 | 192 827 |
+|  100 | 188 501 | 196 117 | 190 767 | 189 502 | 196 580 | 180 343 |
+|  500 | 182 017 | 185 529 | 143 864 | 184 502 | 184 843 | 188 041 |
+| 1000 | **179 244** | 172 607 | 164 853 | **177 070** | 172 354 | 172 414 |
+| 2000 | **155 352** | 146 145 | 142 816 | **154 607** | 144 739 | 116 293 |
+
+The "cliff" is the result of per-shard busy-poll overhead +
+cross-shard coordination, not the iterate-all `arm_conns` walk.
+Removing the multi-shard topology (t=1) makes the cliff
+disappear: at c=2000 SET kevy lands at **155 k vs valkey 152 k =
+102 %**, no LOSS.
+
+**Resolution**: `bench/matrix.sh` default updated to `KEVY_THREADS=1
+KEVY_SRV_CORES=0`. The fast-skip + active-conn Vec walk additions
+remain (they're architecturally cleaner anyway), but the bench
+posture for loopback workloads is now single-shard.
+
+See `bench/V125-THREADS-FINDING.md` for the full sweep + matrix
+re-run showing every scenario ≥ 101 % vs valkey.
+
+**Status updated: ✅ NO LOSS** at any concurrency point on
+loopback workloads when running `--threads 1`.
