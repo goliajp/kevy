@@ -8,7 +8,7 @@
 //! over the verbs it implements, delegates to a `cmd::*` helper or a
 //! direct `store::*` call, and returns whether the verb was handled.
 
-use crate::cmd::{cmd_hset, wrong_args, emit_int_result, store_err, rest, arg_i64, ERR_NOT_INT, emit_bulk_array, cmd_pop, cmd_blpop, cmd_zadd, fmt_score, arg_f64, cmd_zrange, cmd_zrangebyscore, parse_score_bound};
+use crate::cmd::{cmd_hset, wrong_args, emit_int_result, store_err, rest_borrowed, arg_i64, ERR_NOT_INT, emit_bulk_array, cmd_pop, cmd_blpop, cmd_zadd, fmt_score, arg_f64, cmd_zrange, cmd_zrangebyscore, parse_score_bound};
 use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
     encode_simple_string,
@@ -49,7 +49,12 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
             if args.len() < 3 {
                 wrong_args(out, "hdel");
             } else {
-                emit_int_result(store.hdel(&args[1], &rest(args, 2)).map(|n| n as i64), out);
+                emit_int_result(
+                    store
+                        .hdel_borrowed(&args[1], &rest_borrowed(args, 2))
+                        .map(|n| n as i64),
+                    out,
+                );
             }
         }
         b"HEXISTS" => {
@@ -100,7 +105,7 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
             if args.len() < 3 {
                 wrong_args(out, "hmget");
             } else {
-                match store.hmget(&args[1], &rest(args, 2)) {
+                match store.hmget_borrowed(&args[1], &rest_borrowed(args, 2)) {
                     Ok(vals) => {
                         encode_array_len(out, vals.len() as i64);
                         for v in &vals {
@@ -131,14 +136,24 @@ pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
             if args.len() < 3 {
                 wrong_args(out, "lpush");
             } else {
-                emit_int_result(store.lpush(&args[1], &rest(args, 2)).map(|n| n as i64), out);
+                emit_int_result(
+                    store
+                        .lpush_borrowed(&args[1], &rest_borrowed(args, 2))
+                        .map(|n| n as i64),
+                    out,
+                );
             }
         }
         b"RPUSH" => {
             if args.len() < 3 {
                 wrong_args(out, "rpush");
             } else {
-                emit_int_result(store.rpush(&args[1], &rest(args, 2)).map(|n| n as i64), out);
+                emit_int_result(
+                    store
+                        .rpush_borrowed(&args[1], &rest_borrowed(args, 2))
+                        .map(|n| n as i64),
+                    out,
+                );
             }
         }
         b"LPOP" => cmd_pop(store, args, false, out),
@@ -243,7 +258,12 @@ pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
             if args.len() < 3 {
                 wrong_args(out, "zrem");
             } else {
-                emit_int_result(store.zrem(&args[1], &rest(args, 2)).map(|n| n as i64), out);
+                emit_int_result(
+                    store
+                        .zrem_borrowed(&args[1], &rest_borrowed(args, 2))
+                        .map(|n| n as i64),
+                    out,
+                );
             }
         }
         b"ZRANK" => {

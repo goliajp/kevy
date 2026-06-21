@@ -37,6 +37,39 @@ impl Store {
         }
     }
 
+    /// G4 (v1.25): borrowed-pair `HSET` — kills the per-field+value
+    /// `Vec<u8>` allocs the dispatch layer used to do before calling
+    /// [`Self::hset`]. The per-value `to_vec()` still happens here because
+    /// the hash stores `Vec<u8>` values; the win is the OUTER pair vector
+    /// + the field `to_vec()` build-up at the dispatch hand-off.
+    pub fn hset_borrowed(
+        &mut self,
+        key: &[u8],
+        pairs: &[(&[u8], &[u8])],
+    ) -> Result<usize, StoreError> {
+        let (added, delta) = {
+            let h = self.hash_mut(key, true)?.expect("created");
+            let mut a = 0usize;
+            let mut d: i64 = 0;
+            for (f, v) in pairs {
+                let smb = SmallBytes::from_slice(f);
+                let new_w = hash_field_weight(&smb, v.len()) as i64;
+                match h.insert(smb, v.to_vec()) {
+                    None => {
+                        a += 1;
+                        d += new_w;
+                    }
+                    Some(old) => {
+                        d += v.len() as i64 - old.len() as i64;
+                    }
+                }
+            }
+            (a, d)
+        };
+        self.account_delta(key, delta);
+        Ok(added)
+    }
+
     /// `HSET` — returns the count of newly-added fields.
     pub fn hset(&mut self, key: &[u8], pairs: &[(Vec<u8>, Vec<u8>)]) -> Result<usize, StoreError> {
         let (added, delta) = {
@@ -119,6 +152,19 @@ impl Store {
             .collect())
     }
 
+    /// G4 (v1.25): borrowed-slice `HMGET` — see [`Self::sadd_borrowed`].
+    pub fn hmget_borrowed(
+        &mut self,
+        key: &[u8],
+        fields: &[&[u8]],
+    ) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
+        let h = self.hash_ref(key)?;
+        Ok(fields
+            .iter()
+            .map(|f| h.and_then(|h| h.get(*f)).cloned())
+            .collect())
+    }
+
     /// `HGETALL` — flat `[field, value, field, value, ...]` (clones; perf-polish later).
     pub fn hgetall(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
         match self.hash_ref(key)? {
@@ -165,6 +211,44 @@ impl Store {
                             // The field key matters as a SmallBytes only for
                             // heap_bytes/slot overhead; reconstruct the same
                             // weight figure that hset paid in.
+                            let smb = SmallBytes::from_slice(f);
+                            d -= hash_field_weight(&smb, old_v.len()) as i64;
+                        }
+                    }
+                    let drop_now = h.is_empty();
+                    (r, d, drop_now)
+                }
+                _ => return Err(StoreError::WrongType),
+            }
+        };
+        if drop_key {
+            self.remove_entry(key);
+        } else {
+            self.account_delta(key, delta);
+        }
+        Ok(removed)
+    }
+
+    /// G4 (v1.25): borrowed-slice `HDEL` — see [`Self::sadd_borrowed`].
+    pub fn hdel_borrowed(
+        &mut self,
+        key: &[u8],
+        fields: &[&[u8]],
+    ) -> Result<usize, StoreError> {
+        let now = now_ns();
+        if !self.reap(key, now) {
+            return Ok(0);
+        }
+        let (removed, delta, drop_key) = {
+            let h_entry = self.map.get_mut(key).expect("live");
+            match &mut h_entry.value {
+                Value::Hash(h) => {
+                    let h = Arc::make_mut(h);
+                    let mut r = 0usize;
+                    let mut d: i64 = 0;
+                    for f in fields {
+                        if let Some(old_v) = h.remove(*f) {
+                            r += 1;
                             let smb = SmallBytes::from_slice(f);
                             d -= hash_field_weight(&smb, old_v.len()) as i64;
                         }

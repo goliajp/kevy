@@ -41,6 +41,31 @@ impl Store {
         }
     }
 
+    /// G4 (v1.25): borrowed-pair `ZADD` — kills the per-member `Vec<u8>`
+    /// allocs the dispatch layer used to do before calling [`Self::zadd`].
+    pub fn zadd_borrowed(
+        &mut self,
+        key: &[u8],
+        pairs: &[(f64, &[u8])],
+    ) -> Result<usize, StoreError> {
+        let (added, delta) = {
+            let z = self.zset_mut(key, true)?.expect("created");
+            let mut a = 0usize;
+            let mut d: i64 = 0;
+            for (score, m) in pairs {
+                let smb = SmallBytes::from_slice(m);
+                let w = zset_member_weight(&smb) as i64;
+                if z.insert(*m, *score) {
+                    a += 1;
+                    d += w;
+                }
+            }
+            (a, d)
+        };
+        self.account_delta(key, delta);
+        Ok(added)
+    }
+
     /// `ZADD` — returns the count of newly-added members (updates don't count).
     pub fn zadd(&mut self, key: &[u8], pairs: &[(f64, Vec<u8>)]) -> Result<usize, StoreError> {
         let (added, delta) = {
@@ -80,6 +105,30 @@ impl Store {
             if let Some(z) = self.zset_mut(key, false)? {
                 for m in members {
                     if z.remove(m.as_slice()) {
+                        r += 1;
+                        d -= zset_member_weight(&SmallBytes::from_slice(m)) as i64;
+                    }
+                }
+            }
+            (r, d)
+        };
+        self.account_delta(key, delta);
+        self.drop_if_empty_zset(key);
+        Ok(removed)
+    }
+
+    /// G4 (v1.25): borrowed-slice `ZREM` — see [`Self::sadd_borrowed`].
+    pub fn zrem_borrowed(
+        &mut self,
+        key: &[u8],
+        members: &[&[u8]],
+    ) -> Result<usize, StoreError> {
+        let (removed, delta) = {
+            let mut r = 0usize;
+            let mut d: i64 = 0;
+            if let Some(z) = self.zset_mut(key, false)? {
+                for m in members {
+                    if z.remove(*m) {
                         r += 1;
                         d -= zset_member_weight(&SmallBytes::from_slice(m)) as i64;
                     }

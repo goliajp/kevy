@@ -236,33 +236,34 @@ pub(crate) fn emit_bulk_array(res: Result<Vec<Vec<u8>>, StoreError>, out: &mut V
     }
 }
 
-/// `HSET key field value [field value ...]`.
+/// `HSET key field value [field value ...]`. G4 (v1.25): borrowed-pair path —
+/// the per-field+value `Vec<u8>` allocs the pair list used to do are gone.
 pub(crate) fn cmd_hset<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 4 || !args.len().is_multiple_of(2) {
         return wrong_args(out, "hset");
     }
-    let pairs: Vec<(Vec<u8>, Vec<u8>)> = (2..args.len())
+    let pairs: Vec<(&[u8], &[u8])> = (2..args.len())
         .step_by(2)
-        .map(|i| (args[i].to_vec(), args[i + 1].to_vec()))
+        .map(|i| (&args[i], &args[i + 1]))
         .collect();
-    emit_int_result(store.hset(&args[1], &pairs).map(|n| n as i64), out);
+    emit_int_result(store.hset_borrowed(&args[1], &pairs).map(|n| n as i64), out);
 }
 
-/// `ZADD key score member [score member ...]`.
+/// `ZADD key score member [score member ...]`. G4 (v1.25): borrowed-pair path.
 pub(crate) fn cmd_zadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 4 || !(args.len() - 2).is_multiple_of(2) {
         return wrong_args(out, "zadd");
     }
-    let mut pairs = Vec::with_capacity((args.len() - 2) / 2);
+    let mut pairs: Vec<(f64, &[u8])> = Vec::with_capacity((args.len() - 2) / 2);
     let mut i = 2;
     while i < args.len() {
         let Some(score) = arg_f64(&args[i]) else {
             return encode_error(out, "ERR value is not a valid float");
         };
-        pairs.push((score, args[i + 1].to_vec()));
+        pairs.push((score, &args[i + 1]));
         i += 2;
     }
-    emit_int_result(store.zadd(&args[1], &pairs).map(|n| n as i64), out);
+    emit_int_result(store.zadd_borrowed(&args[1], &pairs).map(|n| n as i64), out);
 }
 
 /// `ZRANGE key start stop [WITHSCORES]` — by rank.
@@ -394,12 +395,17 @@ pub(crate) fn fmt_score(s: f64) -> Vec<u8> {
 }
 
 
-/// Owned copy of `args[from..]` as a `Vec<Vec<u8>>`, for the variadic
-/// (multi-value) store calls that take `&[Vec<u8>]`. The headline single-key
-/// commands don't use this; these multi-value commands hand the bytes to the
-/// store to keep anyway.
-pub(crate) fn rest<A: ArgvView + ?Sized>(args: &A, from: usize) -> Vec<Vec<u8>> {
-    (from..args.len()).map(|i| args[i].to_vec()).collect()
+/// G4 (v1.25): borrowed `args[from..]` as `Vec<&[u8]>` — zero per-member heap
+/// alloc. Mirrors valkey's `c->argv[j]`-without-copy hand-off (`t_set.c:611`
+/// `setTypeAdd(set, objectGetVal(c->argv[j]))`). Paired with the Store
+/// `*_borrowed` family that takes `&[&[u8]]`; the Store then materialises
+/// `SmallBytes` per member once at insert (same as before), but the dispatch
+/// hand-off no longer pays a `Vec<u8>` per arg.
+pub(crate) fn rest_borrowed<'a, A: ArgvView + ?Sized>(
+    args: &'a A,
+    from: usize,
+) -> Vec<&'a [u8]> {
+    (from..args.len()).map(|i| &args[i]).collect()
 }
 
 /// Parse an `i64` argument from raw bytes.

@@ -72,6 +72,48 @@ impl Store {
         Ok(new_len)
     }
 
+    /// G4 (v1.25): borrowed-slice `LPUSH` — kills the outer `Vec<Vec<u8>>`
+    /// build-up the dispatch layer used to do via `rest(args, 2)`. The
+    /// per-value `to_vec()` still happens here because `VecDeque<Vec<u8>>`
+    /// owns its items; the win is the OUTER Vec + the `args[i].to_vec()`
+    /// build-up at the dispatch hand-off.
+    pub fn lpush_borrowed(
+        &mut self,
+        key: &[u8],
+        values: &[&[u8]],
+    ) -> Result<usize, StoreError> {
+        let (new_len, delta) = {
+            let l = self.list_mut(key, true)?.expect("created");
+            let mut d: i64 = 0;
+            for v in values {
+                d += list_item_weight(v.len()) as i64;
+                l.push_front(v.to_vec());
+            }
+            (l.len(), d)
+        };
+        self.account_delta(key, delta);
+        Ok(new_len)
+    }
+
+    /// G4 (v1.25): borrowed-slice `RPUSH` — see [`Self::lpush_borrowed`].
+    pub fn rpush_borrowed(
+        &mut self,
+        key: &[u8],
+        values: &[&[u8]],
+    ) -> Result<usize, StoreError> {
+        let (new_len, delta) = {
+            let l = self.list_mut(key, true)?.expect("created");
+            let mut d: i64 = 0;
+            for v in values {
+                d += list_item_weight(v.len()) as i64;
+                l.push_back(v.to_vec());
+            }
+            (l.len(), d)
+        };
+        self.account_delta(key, delta);
+        Ok(new_len)
+    }
+
     /// `LPOP` — pop up to `count` from the head (deleting an emptied key).
     pub fn lpop(&mut self, key: &[u8], count: usize) -> Result<Vec<Vec<u8>>, StoreError> {
         let (out, delta) = {
