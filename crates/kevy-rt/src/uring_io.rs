@@ -12,9 +12,73 @@ use crate::uring_reactor::ENOBUFS;
 use kevy_map::KevyMap;
 use kevy_uring::{Completion, ProvidedBufRing};
 
+/// Threshold above which the tail `$<N>\r\n` header in a freshly-received
+/// chunk triggers an explicit `Vec::reserve` on the conn-input buffer. Set
+/// to the multishot recv slab size so big-arg ingress avoids the 0→16→32→
+/// 48→64K realloc storm on cold conns (Axis B / v1.25 deco B-A3).
+const BIG_ARG_RESERVE_THRESHOLD: usize = 16 * 1024;
+
+/// Scan the tail of `buf` for a `$<digits>\r\n` bulk header and, if found
+/// for a body ≥ [`BIG_ARG_RESERVE_THRESHOLD`], call `Vec::reserve` so the
+/// subsequent recv chunks in the same batch can land without realloc.
+///
+/// Caller-cheap: walks at most ~32 trailing bytes per invocation (the
+/// header is always tiny). When there is no trailing `$<digits>\r\n`
+/// (or the implied body is small or already fits in the current
+/// capacity) the function returns without touching `buf`.
+fn preallocate_for_big_arg_tail(buf: &mut Vec<u8>) {
+    // Must end in CRLF for the header to be complete in this chunk.
+    let n = buf.len();
+    if n < 4 || buf[n - 2] != b'\r' || buf[n - 1] != b'\n' {
+        return;
+    }
+    // Walk backwards from CRLF skipping ASCII digits; stop at `$`.
+    let mut i = n - 2; // position of the trailing '\r'
+    let digits_end = i;
+    while i > 0 && buf[i - 1].is_ascii_digit() {
+        i -= 1;
+    }
+    if i == digits_end || i == 0 || buf[i - 1] != b'$' {
+        return;
+    }
+    // SAFETY: i..digits_end is an ASCII-digit slice, parse as usize.
+    let mut bulk_len: usize = 0;
+    for &b in &buf[i..digits_end] {
+        // 20-digit cap (u64 max is 20 chars); bail to avoid overflow.
+        if bulk_len > usize::MAX / 10 {
+            return;
+        }
+        bulk_len = bulk_len * 10 + (b - b'0') as usize;
+    }
+    if bulk_len < BIG_ARG_RESERVE_THRESHOLD {
+        return;
+    }
+    // Reserve room for the body bytes plus the trailing `\r\n` (+ a small
+    // pad for the next command's header in pipelined traffic).
+    let need = bulk_len + 32;
+    let have = buf.capacity() - buf.len();
+    if need > have {
+        buf.reserve(need - have);
+    }
+}
+
 impl<C: Commands> Shard<C> {
-    /// A multishot recv completed: copy the kernel-picked buffer's bytes into the
-    /// conn, recycle it, run every complete command, and re-arm if the SQE ended.
+    /// A multishot recv completed: dispatch every complete command parsed
+    /// directly out of the kernel-picked buffer when possible (avoiding
+    /// the pbuf→conn.input memcpy), fall back to append-then-parse when
+    /// a prior partial frame is already buffered, recycle the slab, and
+    /// re-arm if the SQE ended.
+    ///
+    /// **v1.25 deco G2 (Axis I + B)** restructures this path:
+    /// - **A1 (parse-from-slab)** when `conn.input` is empty, the parser
+    ///   borrows directly from `pbuf.bytes(bid, n)` and only the unparsed
+    ///   suffix (rare — only on a partial trailing frame) is copied into
+    ///   `conn.input`. Eliminates the always-on pbuf→input memcpy on the
+    ///   single-chunk hot path (10 K SET / GET arrive in one chunk).
+    /// - **B-A3 (pre-grow)** when a `$<N>\r\n` bulk header tails the
+    ///   buffer with N ≥ slab size, reserve N+32 bytes up front so the
+    ///   subsequent multishot recv chunks of the same big SET body land
+    ///   without the 0→16→32→48→64K realloc storm on a cold connection.
     pub(crate) fn uring_on_recv(
         &mut self,
         cid: u64,
@@ -37,44 +101,75 @@ impl<C: Commands> Shard<C> {
             }
             return;
         }
-        // res > 0: a buffer was filled; copy it out and return it to the ring.
-        // (A zero-copy parse straight from the provided buffer was measured
-        // flat — the copy is cheap next to dispatch — so the single
-        // append-then-parse shape stays.)
         let Some(bid) = c.buffer_id() else {
             return; // no buffer (shouldn't happen for a successful recv)
         };
         let n = c.res as usize;
-        if let Some(conn) = self.conns.get_mut(&cid) {
-            conn.input.extend_from_slice(pbuf.bytes(bid, n));
-        }
-        pbuf.recycle(bid);
-        // Swap `conn.input` onto the stack so the borrowed argvs don't
-        // collide with `&mut self` in dispatch; one tail drain at the end,
-        // then the buf swaps back (if the conn still exists).
+        // Take conn.input onto the stack so dispatch's borrowed argv
+        // doesn't collide with `&mut self`. If the conn vanished between
+        // the recv arming and the CQE (rare; close races), still need to
+        // recycle the slab buffer to avoid starving the ring.
         let mut input_buf = match self.conns.get_mut(&cid) {
             Some(c) => std::mem::take(&mut c.input),
-            None => return,
-        };
-        // AOF group-commit window (mirrors the epoll `conn_readable` path):
-        // `appendfsync always` buffers this batch's writes and fsyncs once in
-        // `aof_end_group`, which runs before the io_uring write loop submits
-        // the replies — so durability still precedes reply.
-        self.aof_begin_group();
-        let outcome = self.dispatch_batch(cid, &input_buf);
-        self.aof_end_group_logged();
-        if !outcome.conn_gone {
-            input_buf.drain(..outcome.consumed);
-            if let Some(c) = self.conns.get_mut(&cid) {
-                c.input = input_buf;
+            None => {
+                pbuf.recycle(bid);
+                return;
             }
-        }
+        };
+        self.aof_begin_group();
+        let outcome = self.uring_recv_dispatch(cid, pbuf.bytes(bid, n), &mut input_buf);
+        pbuf.recycle(bid);
+        self.aof_end_group_logged();
         if outcome.conn_gone {
             return;
+        }
+        if let Some(c) = self.conns.get_mut(&cid) {
+            c.input = input_buf;
         }
         if outcome.protocol_error {
             self.protocol_error(cid);
             self.uring_mark_closing(cid, io);
+        }
+    }
+
+    /// Inner recv → parse → dispatch step. Picks the parse-from-slab fast
+    /// path when `input_buf` is empty, otherwise appends + parses out of
+    /// the combined buffer. AOF group-commit + slab recycle bookkeeping
+    /// stays in [`Self::uring_on_recv`] (the caller).
+    #[inline]
+    fn uring_recv_dispatch(
+        &mut self,
+        cid: u64,
+        slab: &[u8],
+        input_buf: &mut Vec<u8>,
+    ) -> crate::inbox::BatchOutcome {
+        if input_buf.is_empty() {
+            // A1 fast path: parse straight from the slab. The kernel's
+            // provided-buffer slice lives until `pbuf.recycle(bid)`, which
+            // the caller defers until after dispatch_batch returns. Any
+            // bytes dispatch stores (e.g. `Arc::from(&[u8])` for SET) get
+            // copied, so no slab byte escapes. Any unparsed suffix —
+            // partial trailing frame mid-batch — is copied into
+            // `input_buf` for the next CQE.
+            let o = self.dispatch_batch(cid, slab);
+            if !o.conn_gone && o.consumed < slab.len() {
+                input_buf.extend_from_slice(&slab[o.consumed..]);
+                preallocate_for_big_arg_tail(input_buf);
+            }
+            o
+        } else {
+            // Slow path: a prior partial frame already lives in
+            // input_buf. Append + parse out of the combined buffer.
+            // Triggers on multi-chunk frames (big SET ≥ slab size). The
+            // pre-grow heuristic also applies after the append, so the
+            // rest of the body lands without the realloc storm.
+            input_buf.extend_from_slice(slab);
+            preallocate_for_big_arg_tail(input_buf);
+            let o = self.dispatch_batch(cid, input_buf);
+            if !o.conn_gone {
+                input_buf.drain(..o.consumed);
+            }
+            o
         }
     }
 

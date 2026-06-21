@@ -144,11 +144,47 @@ impl<C: Commands> Shard<C> {
     /// Write a connection's staged output to its socket: drain until done or
     /// WouldBlock, drop the conn once closing + fully drained, and keep the
     /// poller's write-interest in sync with whether output remains.
+    ///
+    /// **Bug fix (v1.25 G2)**: the GET inline fast path
+    /// (`exec_dispatch::try_inline_local`) pushes `Value::ArcBulk` bodies
+    /// into `conn.output_arcs` instead of memcpying them into
+    /// `conn.output` — the io_uring reactor's `prep_writev` builds an
+    /// iovec list spanning both, but this epoll path used to ignore
+    /// `output_arcs` entirely (writing only the header + CRLF, dropping
+    /// the value body silently). lx64 bench runs io_uring and never hit
+    /// this, but a macOS / older-kernel epoll fallback would have served
+    /// truncated GET replies for any value > `BULK_THRESHOLD`. We now
+    /// materialise the iovec content into `output` before the write loop.
     pub(crate) fn flush_conn(&mut self, conn_id: u64) -> io::Result<()> {
         let (close, want_write, fd) = {
             let Some(conn) = self.conns.get_mut(&conn_id) else {
                 return Ok(());
             };
+            // Splice any pending arc-bulk bodies into `output` at their
+            // recorded positions. Drains output_arcs; safe to repeat
+            // (idempotent — output_arcs is cleared at the end). Common
+            // case: no arc-bulks pending → single is_empty check, no copy.
+            if !conn.output_arcs.is_empty() {
+                let arcs = std::mem::take(&mut conn.output_arcs);
+                let mut total = conn.output.len();
+                for (_, arc) in &arcs {
+                    total += arc.len();
+                }
+                let mut linear: Vec<u8> = Vec::with_capacity(total);
+                let mut prev = 0usize;
+                for (pos, arc) in &arcs {
+                    let pos = *pos;
+                    if pos > prev {
+                        linear.extend_from_slice(&conn.output[prev..pos]);
+                    }
+                    linear.extend_from_slice(arc.as_ref());
+                    prev = pos;
+                }
+                if prev < conn.output.len() {
+                    linear.extend_from_slice(&conn.output[prev..]);
+                }
+                conn.output = linear;
+            }
             while conn.write_pos < conn.output.len() {
                 match conn.sock.write(&conn.output[conn.write_pos..]) {
                     Ok(0) => break,
