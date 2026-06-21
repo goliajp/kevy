@@ -310,6 +310,16 @@ impl<C: Commands> Shard<C> {
             // target shards drop their registrations.
             self.cancel_xshard_on_close(conn_id);
             self.unregister_subs(&conn.sub);
+            // H1.B: drop this conn from each channel's local subscriber
+            // index. Channels with no remaining subs lose their entry.
+            for ch in &conn.sub {
+                if let Some(ids) = self.subs_by_channel.get_mut(ch) {
+                    ids.retain(|&id| id != conn_id);
+                    if ids.is_empty() {
+                        self.subs_by_channel.remove(ch);
+                    }
+                }
+            }
             // Drop the conn's psub local table entries first (`unregister_psubs`
             // reads `psub_local` to decide if our shard bit should be cleared).
             for pat in &conn.psub {

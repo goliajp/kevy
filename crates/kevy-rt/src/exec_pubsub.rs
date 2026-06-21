@@ -5,12 +5,36 @@
 
 use crate::Commands;
 use crate::message::{Agg, Inbound, Part, PendingSlot};
-use crate::reduce::pubsub_message;
+use crate::reduce::{pubsub_message, pubsub_message_header};
 use crate::shard::Shard;
 use kevy_resp::{
     ArgvView, RespVersion, encode_array_len, encode_bulk, encode_integer, encode_null_bulk,
     encode_push_header,
 };
+use std::sync::Arc;
+
+/// **H2.A (v1.25)**: minimum message body size to take the
+/// `Arc<[u8]>` + splice path. Below this we keep the in-place
+/// `Vec::extend_from_slice` because:
+///   - 50 × 30 B memcpy ≈ 1500 B, costs ~50 ns total (cache-hot)
+///   - 50 × (Arc::clone atomic-inc + output_arcs push + per-conn
+///     splice walk + iovec entry) ≈ 50 × 20 ns = ~1000 ns
+/// At ~256 B body the breakeven flips (50 × 256 B = 12.8 KB memcpy ≈
+/// 4-6 µs); above that, copy avoidance wins linearly. Mirrors the
+/// intent of valkey's `COPY_AVOID_MIN_STRING_SIZE` heuristic
+/// (`networking.c::tryAvoidBulkStrCopyToReply`).
+const PUBSUB_BODY_ARC_THRESHOLD: usize = 256;
+
+/// **H2.A correctness cap (v1.25)**: maximum `output_arcs` entries we
+/// allow per connection before falling back to memcpy on subsequent
+/// publishes (until the current arcs drain). Linux `IOV_MAX = 1024`
+/// for both `writev(2)` and io_uring `IORING_OP_WRITEV`; the splice
+/// produces up to `2 × arcs + 1` iovecs (one header run + one arc per
+/// entry, plus a final tail), so 256 arcs → ≤ 513 iovecs, well under
+/// the kernel limit. Without this cap, a pipelined PUBLISH flood (the
+/// bench's `BATCH = 1024`) overruns `IOV_MAX`, the writev returns
+/// `-EINVAL`, the conn is closed, and the subscriber hangs reading.
+const PUBSUB_ARC_FLUSH_AT: usize = 256;
 
 impl<C: Commands> Shard<C> {
     pub(crate) fn do_subscribe<A: ArgvView + ?Sized>(
@@ -89,6 +113,25 @@ impl<C: Commands> Shard<C> {
             encode_bulk(&mut out, verb);
             encode_bulk(&mut out, ch);
             encode_integer(&mut out, c.sub.len() as i64);
+        }
+        // H1.B: mirror real (sub/unsub) transitions into the per-channel
+        // local subscriber index. Done here (not in
+        // `apply_sub_to_registry`) because the registry is the cross-
+        // shard count/bits view, while `subs_by_channel` is this shard's
+        // local conn-id list keyed by channel — used by `deliver_publish`
+        // to skip the global conns iter.
+        for ch in &changed {
+            if subscribe {
+                let ids = self.subs_by_channel.entry(ch.clone()).or_default();
+                if !ids.contains(&conn_id) {
+                    ids.push(conn_id);
+                }
+            } else if let Some(ids) = self.subs_by_channel.get_mut(ch) {
+                ids.retain(|&id| id != conn_id);
+                if ids.is_empty() {
+                    self.subs_by_channel.remove(ch);
+                }
+            }
         }
         Some((out, changed))
     }
@@ -201,34 +244,104 @@ impl<C: Commands> Shard<C> {
     /// upfront so the per-subscriber loop is one extend, not a full
     /// reencode (saves N alloc on a wide fan-out).
     pub(crate) fn deliver_publish(&mut self, channel: &[u8], msg: &[u8]) -> usize {
-        let ids: Vec<u64> = self
-            .conns
-            .iter()
-            .filter(|(_, c)| c.sub.contains(channel))
-            .map(|(id, _)| *id)
-            .collect();
-        if !ids.is_empty() {
-            let v2 = pubsub_message(channel, msg, kevy_resp::RespVersion::V2);
-            let mut v3_cache: Option<Vec<u8>> = None;
-            for id in &ids {
-                if let Some(c) = self.conns.get_mut(id) {
-                    let frame = match c.proto {
-                        kevy_resp::RespVersion::V2 => &v2,
-                        kevy_resp::RespVersion::V3 => {
-                            v3_cache.get_or_insert_with(|| {
-                                pubsub_message(channel, msg, kevy_resp::RespVersion::V3)
-                            })
-                        }
-                    };
-                    c.output.extend_from_slice(frame);
-                }
+        // H1.B: O(1) per-channel index lookup replaces the O(total_conns)
+        // global iter + filter. Empty/missing-channel = zero subscribers
+        // on this shard — pattern path still runs below.
+        let n_subs = match self.subs_by_channel.get(channel) {
+            Some(v) => v.len(),
+            None => 0,
+        };
+        if n_subs > 0 {
+            // H2.A: above-threshold bodies splice via Arc<[u8]> + iovec
+            // (one alloc + memcpy of the body for the whole publish,
+            // then per-subscriber: one Arc::clone atomic-inc + one
+            // header memcpy of ~30 B + one (pos, arc) tuple). Below
+            // threshold falls back to the cache-hot per-sub memcpy of
+            // the full frame.
+            if msg.len() >= PUBSUB_BODY_ARC_THRESHOLD {
+                self.deliver_publish_arc(channel, msg);
+            } else {
+                self.deliver_publish_copy(channel, msg);
             }
-            self.dirty.extend_from_slice(&ids);
         }
         // Pattern path: defer to the pattern helper. Empty-map short-circuit
         // there too — channel-only workloads pay one `HashMap::is_empty`.
         self.deliver_pmessages(channel, msg);
-        ids.len()
+        n_subs
+    }
+
+    /// Small-body path (< PUBSUB_BODY_ARC_THRESHOLD): build the full V2/V3
+    /// frame once and memcpy into each subscriber's `output`. Cheap when
+    /// the frame is L1-hot; avoids the per-conn iovec/splice bookkeeping
+    /// for tiny frames.
+    fn deliver_publish_copy(&mut self, channel: &[u8], msg: &[u8]) {
+        // Snapshot ids to avoid borrow conflict with self.conns mutation.
+        let ids: Vec<u64> = self
+            .subs_by_channel
+            .get(channel)
+            .map(|v| v.clone())
+            .unwrap_or_default();
+        let v2 = pubsub_message(channel, msg, kevy_resp::RespVersion::V2);
+        let mut v3_cache: Option<Vec<u8>> = None;
+        for id in &ids {
+            if let Some(c) = self.conns.get_mut(id) {
+                let frame = match c.proto {
+                    kevy_resp::RespVersion::V2 => &v2,
+                    kevy_resp::RespVersion::V3 => v3_cache.get_or_insert_with(|| {
+                        pubsub_message(channel, msg, kevy_resp::RespVersion::V3)
+                    }),
+                };
+                c.output.extend_from_slice(frame);
+                // H1.C dedup: only push the conn id onto `dirty` if not
+                // already pending a write this drain.
+                if !c.pending_write {
+                    c.pending_write = true;
+                    self.dirty.push(*id);
+                }
+            }
+        }
+    }
+
+    /// Large-body path (≥ PUBSUB_BODY_ARC_THRESHOLD): wrap the message
+    /// once in `Arc<[u8]>`, write `<header>` into each subscriber's
+    /// `output`, record `(pos, arc.clone())` in `output_arcs`, then
+    /// write the trailing CRLF. `flush_conn` / the io_uring writev
+    /// path splices the body bytes in via iovec — zero memcpy of the
+    /// body per subscriber. Mirrors valkey's `bulkStrRef` (`networking.c:618-697`).
+    fn deliver_publish_arc(&mut self, channel: &[u8], msg: &[u8]) {
+        let ids: Vec<u64> = self
+            .subs_by_channel
+            .get(channel)
+            .map(|v| v.clone())
+            .unwrap_or_default();
+        // One alloc + one memcpy of `msg` (4 KB at the 50/4K endpoint)
+        // into a refcounted slice that all subscribers share.
+        let arc: Arc<[u8]> = Arc::from(msg);
+        for id in &ids {
+            if let Some(c) = self.conns.get_mut(id) {
+                // Cap arcs per conn to stay under Linux IOV_MAX. Once
+                // hit, fall back to memcpy for *this* publish on this
+                // conn — the existing arcs will drain on the next
+                // writev completion and the next publish can rejoin
+                // the zero-copy path. Net effect: a high-pipelining
+                // burst still gets most of the copy-avoid win, but
+                // never violates the writev(2) iovec cap.
+                if c.output_arcs.len() >= PUBSUB_ARC_FLUSH_AT {
+                    pubsub_message_header(&mut c.output, channel, msg.len(), c.proto);
+                    c.output.extend_from_slice(msg);
+                    c.output.extend_from_slice(b"\r\n");
+                } else {
+                    pubsub_message_header(&mut c.output, channel, msg.len(), c.proto);
+                    let pos = c.output.len();
+                    c.output_arcs.push((pos, arc.clone()));
+                    c.output.extend_from_slice(b"\r\n");
+                }
+                if !c.pending_write {
+                    c.pending_write = true;
+                    self.dirty.push(*id);
+                }
+            }
+        }
     }
 
     /// `HELLO [protover [AUTH user pass] [SETNAME name]]` — defer the

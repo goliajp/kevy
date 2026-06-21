@@ -200,6 +200,12 @@ impl<C: Commands> Shard<C> {
             if conn.write_pos == conn.output.len() {
                 conn.output.clear();
                 conn.write_pos = 0;
+                // H1.C: output fully drained — clear the pub/sub dedup
+                // flag so the next deliver_publish to this conn pushes
+                // it back onto `dirty`. Setting it false when output
+                // remains would re-push on every flush_conn no-op and
+                // defeat the dedup; gated on full-drain only.
+                conn.pending_write = false;
             }
             let out_remaining = conn.write_pos < conn.output.len();
             let close = conn.closing && conn.pending.is_empty() && !out_remaining;

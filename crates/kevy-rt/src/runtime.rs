@@ -308,6 +308,7 @@ impl<C: Commands> Runtime<C> {
                 pubsub: pubsub.clone(),
                 pubsub_patterns: pubsub_patterns.clone(),
                 psub_local: HashMap::new(),
+                subs_by_channel: HashMap::new(),
                 publish_batch: (0..n).map(|_| Vec::new()).collect(),
                 request_batch: (0..n).map(|_| Vec::new()).collect(),
                 // Seed from the live config at construction, not default():
