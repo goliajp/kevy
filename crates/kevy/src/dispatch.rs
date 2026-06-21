@@ -6,7 +6,7 @@
 //! function carries the whole command set. Command bodies delegate to the
 //! helpers in [`crate::cmd`].
 
-use crate::cmd::{upper_verb, wrong_args, store_err, OOM_ERR, cmd_set, is_growing_write_verb, cmd_hello, emit_int_result, cmd_incr, cmd_incr_by, cmd_setex, arg_f64, rest, emit_bulk_array, cmd_spop_rand, cmd_expire, cmd_expireat, cmd_ttl};
+use crate::cmd::{upper_verb, wrong_args, store_err, OOM_ERR, cmd_set, is_growing_write_verb, cmd_hello, emit_int_result, cmd_incr, cmd_incr_by, cmd_setex, arg_f64, rest_borrowed, emit_bulk_array, cmd_spop_rand, cmd_expire, cmd_expireat, cmd_ttl};
 use kevy_resp::{
     ArgvView, encode_bulk, encode_error, encode_integer, encode_null_bulk, encode_simple_string,
 };
@@ -317,14 +317,24 @@ fn dispatch_set<A: ArgvView + ?Sized>(
             if args.len() < 3 {
                 wrong_args(out, "sadd");
             } else {
-                emit_int_result(store.sadd(&args[1], &rest(args, 2)).map(|n| n as i64), out);
+                emit_int_result(
+                    store
+                        .sadd_borrowed(&args[1], &rest_borrowed(args, 2))
+                        .map(|n| n as i64),
+                    out,
+                );
             }
         }
         b"SREM" => {
             if args.len() < 3 {
                 wrong_args(out, "srem");
             } else {
-                emit_int_result(store.srem(&args[1], &rest(args, 2)).map(|n| n as i64), out);
+                emit_int_result(
+                    store
+                        .srem_borrowed(&args[1], &rest_borrowed(args, 2))
+                        .map(|n| n as i64),
+                    out,
+                );
             }
         }
         b"SCARD" => {
@@ -367,14 +377,14 @@ fn dispatch_generic<A: ArgvView + ?Sized>(
             if args.len() < 2 {
                 wrong_args(out, "del");
             } else {
-                encode_integer(out, store.del(&rest(args, 1)) as i64);
+                encode_integer(out, store.del_borrowed(&rest_borrowed(args, 1)) as i64);
             }
         }
         b"EXISTS" => {
             if args.len() < 2 {
                 wrong_args(out, "exists");
             } else {
-                encode_integer(out, store.exists(&rest(args, 1)) as i64);
+                encode_integer(out, store.exists_borrowed(&rest_borrowed(args, 1)) as i64);
             }
         }
         b"EXPIRE" => cmd_expire(store, args, 1000, "expire", out),

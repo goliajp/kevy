@@ -28,7 +28,26 @@ impl Store {
         removed
     }
 
+    /// G4 (v1.25): borrowed-slice `DEL` — kills the per-key `Vec<u8>` alloc
+    /// the dispatch layer used to do via `rest(args, 1)`. Behaviour identical
+    /// to [`Self::del`].
+    pub fn del_borrowed(&mut self, keys: &[&[u8]]) -> usize {
+        let now = now_ns();
+        let mut removed = 0;
+        for k in keys {
+            if self.reap(k, now) && self.remove_entry(k).is_some() {
+                removed += 1;
+            }
+        }
+        removed
+    }
+
     pub fn exists(&mut self, keys: &[Vec<u8>]) -> usize {
+        keys.iter().filter(|k| self.live_entry(k).is_some()).count()
+    }
+
+    /// G4 (v1.25): borrowed-slice `EXISTS` — see [`Self::del_borrowed`].
+    pub fn exists_borrowed(&mut self, keys: &[&[u8]]) -> usize {
         keys.iter().filter(|k| self.live_entry(k).is_some()).count()
     }
 

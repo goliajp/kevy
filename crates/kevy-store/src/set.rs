@@ -60,6 +60,33 @@ impl Store {
         Ok(added)
     }
 
+    /// G4 (v1.25): borrowed-slice SADD — kills the per-member `Vec<u8>` alloc
+    /// the dispatch layer used to do via `rest(args, 2)`. Behaviour identical
+    /// to [`Self::sadd`]; mirrors valkey's `setTypeAdd(set, objectGetVal(
+    /// c->argv[j]))` zero-copy hand-off (`t_set.c:611`).
+    pub fn sadd_borrowed(
+        &mut self,
+        key: &[u8],
+        members: &[&[u8]],
+    ) -> Result<usize, StoreError> {
+        let (added, delta) = {
+            let s = self.set_mut(key, true)?.expect("created");
+            let mut a = 0usize;
+            let mut d: i64 = 0;
+            for m in members {
+                let smb = SmallBytes::from_slice(m);
+                let w = set_member_weight(&smb) as i64;
+                if s.insert(smb) {
+                    a += 1;
+                    d += w;
+                }
+            }
+            (a, d)
+        };
+        self.account_delta(key, delta);
+        Ok(added)
+    }
+
     /// `SREM` — returns the count removed (deleting an emptied key).
     pub fn srem(&mut self, key: &[u8], members: &[Vec<u8>]) -> Result<usize, StoreError> {
         let (removed, delta) = {
@@ -68,6 +95,30 @@ impl Store {
             if let Some(s) = self.set_mut(key, false)? {
                 for m in members {
                     if s.remove(m.as_slice()) {
+                        r += 1;
+                        d -= set_member_weight(&SmallBytes::from_slice(m)) as i64;
+                    }
+                }
+            }
+            (r, d)
+        };
+        self.account_delta(key, delta);
+        self.drop_if_empty_set(key);
+        Ok(removed)
+    }
+
+    /// G4 (v1.25): borrowed-slice SREM — see [`Self::sadd_borrowed`].
+    pub fn srem_borrowed(
+        &mut self,
+        key: &[u8],
+        members: &[&[u8]],
+    ) -> Result<usize, StoreError> {
+        let (removed, delta) = {
+            let mut r = 0usize;
+            let mut d: i64 = 0;
+            if let Some(s) = self.set_mut(key, false)? {
+                for m in members {
+                    if s.remove(*m) {
                         r += 1;
                         d -= set_member_weight(&SmallBytes::from_slice(m)) as i64;
                     }
