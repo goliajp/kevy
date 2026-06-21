@@ -97,21 +97,29 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
             return;
         }
         b"SET" => {
-            if store.precheck_for_write().is_err() {
-                encode_error(out, OOM_ERR);
-                return;
+            // F3 (v1.25): hoist the maxmemory gate out of the precheck/evict
+            // function calls so the default `maxmemory=0` case is a single
+            // not-taken branch right here, skipping two `#[inline]` function
+            // invocations + their internal branches. Per
+            // .claude/notes/v125-deco-axis-c-churn.md F3.
+            if store.maxmemory() > 0 {
+                if store.precheck_for_write().is_err() {
+                    encode_error(out, OOM_ERR);
+                    return;
+                }
+                cmd_set(store, args, out);
+                store.try_evict_after_write();
+            } else {
+                cmd_set(store, args, out);
             }
-            cmd_set(store, args, out);
-            store.try_evict_after_write();
             return;
         }
         _ => {}
     }
-    // OOM precheck for memory-growing writes only. When `maxmemory == 0` this
-    // is a single not-taken branch inside `Store::precheck_for_write`, so the
-    // unlimited-mode hot path keeps its perf budget.
+    // OOM precheck for memory-growing writes only. Gated on `maxmemory > 0`
+    // so the default unlimited case skips both calls (F3 v1.25).
     let is_grow = is_growing_write_verb(cmd);
-    if is_grow && store.precheck_for_write().is_err() {
+    if store.maxmemory() > 0 && is_grow && store.precheck_for_write().is_err() {
         encode_error(out, OOM_ERR);
         return;
     }
@@ -133,10 +141,10 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         encode_error(out, &format!("ERR unknown command '{shown}'"));
         return;
     }
-    // Post-write: trim back under `maxmemory` per the active policy. Same
-    // cost profile as the precheck — fast when disabled, sample-loop only
-    // when the just-finished command actually pushed us over.
-    if is_grow {
+    // Post-write: trim back under `maxmemory` per the active policy. Gated on
+    // both `maxmemory > 0` (the F3 hoist) and `is_grow` so the default unlimited
+    // case is two not-taken branches.
+    if is_grow && store.maxmemory() > 0 {
         store.try_evict_after_write();
     }
 }

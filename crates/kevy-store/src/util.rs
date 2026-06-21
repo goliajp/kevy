@@ -42,6 +42,14 @@ pub(crate) fn parse_canonical_i64(b: &[u8]) -> Option<i64> {
     if b.is_empty() || b.len() > 20 {
         return None;
     }
+    // F2' (v1.25): single-byte guard — canonical i64 starts with '-' or an
+    // ASCII digit. `redis-benchmark` defaults to 3-byte random alphanumeric
+    // values ("xxx"), which paid the full UTF-8 → parse → itoa round-trip
+    // only to reject at the round-trip compare. Reject up-front in ~1 ns.
+    let first = b[0];
+    if !first.is_ascii_digit() && first != b'-' {
+        return None;
+    }
     let n = std::str::from_utf8(b).ok()?.parse::<i64>().ok()?;
     let mut buf = itoa_i64_stack();
     let s = format_i64_into(n, &mut buf);
