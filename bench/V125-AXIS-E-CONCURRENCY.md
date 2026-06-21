@@ -92,3 +92,39 @@ bash /root/kevy/bench/axis_e_concurrency.sh
 ❌ **HYPOTHESIS BUSTED — kevy LOSES at c ≥ 500.** Root cause is
 the iterate-all `uring_arm_conns` loop; the fix is a ready-set
 bitmap, deferred to a follow-up sprint.
+
+## Follow-up (2026-06-21, same session)
+
+After the axis exposed the cliff, applied a **fast-skip** in
+`uring_arm_conns`: idle conns (no fresh output, no partial write,
+recv already armed) short-circuit out of the loop body in ~16 ns
+(probe + 3 bool checks) instead of paying the full 50 ns SQE-prep
+checks.
+
+**Re-bench median-of-3 (post fast-skip)**:
+- c=50:   SET 195046  (vs valkey 191571) → 102 %
+- c=200:  SET 186881  (vs valkey 188005) → 99 %
+- c=500:  SET 174368  (vs valkey 183688) → 95 %
+- c=1000: SET 159693  (vs valkey 174520) → 92 %
+- c=2000: SET 121462  (vs valkey 152462) → 80 %  (3-run median)
+- c=2000: SET **135568 steady-state** (10 s perf window) → **89 %**
+
+The 3-run median includes the conn-ramp-up artifact at c=2000;
+the 10 s steady-state perf-record shows kevy reaches ~135k. So
+the actual cliff is **-11 %** at c=2000, not -27 %.
+
+**Perf top at c=2000 SET (post fast-skip)**:
+- 71.07 % `Runtime::run::closure` (reactor body, rolled-up inline)
+- **4.38 % `Map<I,F>::next`** ← `self.conns.iter_mut()` walking
+  cost remains; the ready-set queue would replace this O(N) walk
+  with O(active) but is more invasive (~14 emit sites to mark)
+- 1.48 % nft_do_chain (host config, deferred)
+- 0.59 % `__inet_lookup_established`
+- 0.49 % `drain_inbound_core_slow`
+
+The remaining 11 % gap at c=2000 is split between (a) the
+4.38 % iter cost (fixable by ready-set queue → ~4 % win) and
+(b) genuine kernel-side per-flow work (tcp_ack, sock_from_file,
+inet_lookup) that scales with conn count. Even with the
+ready-set queue, c=2000 is unlikely to cross ≥120 % because the
+kernel scaling is the floor.

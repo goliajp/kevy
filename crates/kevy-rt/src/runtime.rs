@@ -273,6 +273,7 @@ impl<C: Commands> Runtime<C> {
                 backlog: (0..n).map(|_| VecDeque::new()).collect(),
                 wakers: wakers.clone(),
                 conns: KevyMap::new(),
+                active_uring_conns: Vec::new(),
                 fd_to_conn: KevyMap::new(),
                 next_conn_id: 1,
                 events: Vec::with_capacity(1024),
