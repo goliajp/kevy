@@ -218,6 +218,7 @@ impl<C: Commands> Shard<C> {
                             conn.cluster = cluster;
                             self.conns.insert(ncid, conn);
                             io.insert(ncid, UringConn::new());
+                            self.active_uring_conns.push(ncid);
                             // Client connections only — cluster-bus is internal.
                             if !cluster {
                                 self.commands.on_connection();
@@ -405,18 +406,28 @@ impl<C: Commands> Shard<C> {
         // At -c1 single-conn the loop runs once → prefetch is a no-op
         // (next conn doesn't exist). At higher conn counts the
         // hide-fill benefit grows with iteration depth.
+        // Axis E follow-up (2026-06-21): iterate the dense
+        // `active_uring_conns: Vec<u64>` instead of `self.conns.iter_mut()`.
+        // The Vec walk is a sequential cache-friendly scan (50 ns for
+        // 200 cids @ c=2000); the KevyMap iter walks 512-entry metadata
+        // + scattered slot reads, which perf record showed as 4.4 %
+        // self of c=2000 SET. Conn id list is maintained at accept
+        // (push) + reap_closed (swap_remove) so it stays dense.
         let mut prev: Option<*const UringConn> = None;
-        for (&cid, conn) in self.conns.iter_mut() {
+        let len = self.active_uring_conns.len();
+        for i in 0..len {
+            let cid = self.active_uring_conns[i];
+            let Some(conn) = self.conns.get_mut(&cid) else {
+                prev = None;
+                continue;
+            };
             if let Some(p) = prev {
                 // Hint to the CPU: the previous iter's UringConn was
                 // here — bringing it in pre-emptively warms the line
                 // for the next iter's get_mut hit-write.
                 // SAFETY: pointer was a valid &mut UringConn from the
                 // previous iteration; KevyMap doesn't reallocate inside
-                // this loop (no insert/remove). The prefetch is a hint
-                // and reading from it must not deref UB-wise; using
-                // hint::black_box prevents the optimizer from removing
-                // it without making the access architectural.
+                // this loop (no insert/remove).
                 unsafe {
                     core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(
                         p as *const i8,

@@ -68,6 +68,11 @@ impl<C: Commands> Shard<C> {
             // never registered the fd with the readiness poller).
             self.close_conn(cid);
             io.remove(&cid);
+            // Axis E follow-up: remove from the active list (swap_remove
+            // keeps the list dense; order is irrelevant for arm_conns).
+            if let Some(pos) = self.active_uring_conns.iter().position(|&c| c == cid) {
+                self.active_uring_conns.swap_remove(pos);
+            }
         }
     }
 }
