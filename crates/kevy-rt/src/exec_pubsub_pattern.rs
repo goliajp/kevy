@@ -258,7 +258,6 @@ impl<C: Commands> Shard<C> {
         if plans.is_empty() {
             return;
         }
-        let mut touched: Vec<u64> = Vec::with_capacity(plans.len());
         for (pat, id) in plans {
             if let Some(c) = self.conns.get_mut(&id) {
                 // Per-conn proto: a single PUBLISH that fans out to a
@@ -267,10 +266,13 @@ impl<C: Commands> Shard<C> {
                 // the dominant work is the bytes write into c.output.
                 let frame = pubsub_pmessage(&pat, channel, msg, c.proto);
                 c.output.extend_from_slice(&frame);
-                touched.push(id);
+                // H1.C dedup: same flag as the channel-precise path.
+                if !c.pending_write {
+                    c.pending_write = true;
+                    self.dirty.push(id);
+                }
             }
         }
-        self.dirty.extend_from_slice(&touched);
     }
 
     /// Drop a (closing) conn's patterns from this shard's `psub_local`

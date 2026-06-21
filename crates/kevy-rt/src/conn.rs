@@ -33,6 +33,7 @@ use std::sync::Arc;
 ///   114     1      want_write
 ///   115     1      blocked
 ///   116     1      cluster
+///   117     1      pending_write
 ///   ──── ~120 B = 2 cache lines worth of hot state ────
 ///   COLD
 ///   ?       ?      sub, psub, multi, watched
@@ -81,6 +82,17 @@ pub(crate) struct Conn {
     /// SO_REUSEPORT compat port). Cluster conns get `-MOVED` for
     /// wrong-shard single-key commands instead of transparent forwarding.
     pub(crate) cluster: bool,
+    /// **H1.C (v1.25)**: dedup flag for `Shard::dirty`. PUBLISH fan-out at
+    /// N subscribers × M pipelined publishes used to push `N×M` ids onto
+    /// the dirty list, then `flush_dirty` paid `N×M` `HashMap::get_mut`
+    /// probes to no-op the redundant entries (output drained on the
+    /// first flush_conn for each conn). Mirrors redis's
+    /// `CLIENT_PENDING_WRITE` flag (`networking.c:284-302`):
+    /// `deliver_publish` only pushes a conn id if `!pending_write`, then
+    /// sets the flag; `flush_conn` clears it once output is drained.
+    /// Effect: dirty list shrinks from `N×M` to at most `N` (one entry
+    /// per actually-touched conn per drain).
+    pub(crate) pending_write: bool,
 
     // ── COLD (PUBLISH / MULTI / WATCH only; never touched on the
     //    GET/SET steady state) ──
@@ -119,6 +131,7 @@ impl Conn {
             proto: RespVersion::default(),
             blocked: false,
             cluster: false,
+            pending_write: false,
         }
     }
 }

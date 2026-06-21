@@ -178,6 +178,11 @@ pub(crate) struct Shard<C: Commands> {
     /// the steady-state O(1) `is_empty()` short-circuit keeps the
     /// channel-only PUBLISH hot path untouched).
     pub(crate) psub_local: HashMap<Vec<u8>, Vec<u64>>,
+    /// **H1.B (v1.25)** per-channel local subscriber index — mirrors
+    /// redis `pubsub.c:479-485`. Replaces the O(total_conns) global
+    /// scan in `deliver_publish` with O(1) `HashMap::get`. Maintained
+    /// on SUBSCRIBE/UNSUBSCRIBE + close_conn; entry removed at zero.
+    pub(crate) subs_by_channel: HashMap<Vec<u8>, Vec<u64>>,
     /// Per-target-shard accumulated pub/sub deliveries, flushed once per loop
     /// (`flush_publish`) so a PUBLISH flood batches into one send per shard.
     pub(crate) publish_batch: Vec<Vec<PubMsg>>,

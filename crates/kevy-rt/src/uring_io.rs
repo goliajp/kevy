@@ -218,6 +218,16 @@ impl<C: Commands> Shard<C> {
                 uc.write_arcs.clear();
                 uc.write_iovecs.clear();
                 uc.write_off = 0;
+                // H1.C: per-conn pending_write flag tracks the pub/sub
+                // dirty-list dedup. write_buf was swapped from
+                // conn.output earlier; once fully sent and conn.output
+                // is empty too, the conn is idle wrt outbound and the
+                // next publish should re-push it onto `dirty`.
+                if let Some(conn) = self.conns.get_mut(&cid)
+                    && conn.output.is_empty()
+                {
+                    conn.pending_write = false;
+                }
             } else {
                 // Materialise the full payload into write_buf; drop arcs;
                 // advance write_off to where we left off. Next iter
@@ -246,6 +256,12 @@ impl<C: Commands> Shard<C> {
         if uc.write_off >= uc.write_buf.len() {
             uc.write_buf.clear();
             uc.write_off = 0;
+            // H1.C: see comment in the arc-write branch above.
+            if let Some(conn) = self.conns.get_mut(&cid)
+                && conn.output.is_empty()
+            {
+                conn.pending_write = false;
+            }
         }
     }
 }
