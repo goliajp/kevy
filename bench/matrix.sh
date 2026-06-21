@@ -9,11 +9,11 @@
 set -u
 
 SRV_CORES=${SRV_CORES:-0-9}
-KEVY_SRV_CORES=${KEVY_SRV_CORES:-0-1}
+KEVY_SRV_CORES=${KEVY_SRV_CORES:-0}
 CLI_CORE=${CLI_CORE:-10}
 CLI_CORES_MULTI=${CLI_CORES_MULTI:-10-13}
 KEVY_BIN=${KEVY_BIN:-/root/kevy/target/release-perf/kevy}
-KEVY_THREADS=${KEVY_THREADS:-2}
+KEVY_THREADS=${KEVY_THREADS:-1}
 REDIS_BIN=/root/srcbench/redis/src/redis-server
 VALKEY_BIN=/root/srcbench/valkey/src/valkey-server
 REDIS_BENCH=/root/srcbench/redis/src/redis-benchmark
