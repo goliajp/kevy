@@ -1,5 +1,39 @@
 # Axis C — high key churn
 
+> **v1.25 outcome (supersedes the historical body below)**
+>
+> Phase A decomposition: `.claude/notes/v125-deco-axis-c-churn.md`.
+>
+> **R3 ★ flipped finding**: the original "SmallBytes saves the
+> malloc → kevy wins" story is half right. The malloc saving is
+> real, but it's absorbed by `live_entry_mut`'s 2-probe shape under
+> default `maxmemory=0`. The two structural advantages that actually
+> hold kevy to parity (and would otherwise put it at -6 % vs valkey)
+> were **not in the original hypothesis**:
+> - kevy's inline `Entry::expire_at_ns: Option<NonZeroU64>` ≈ 18 ns
+>   saved per SET (vs valkey's separate `db->expires` 2nd hashtable
+>   that requires a probe per `removeExpire`).
+> - kevy skips valkey's `t_string.c:262::tryObjectEncoding` path,
+>   which allocates a `robj` via `createEmbeddedStringObject` on
+>   every SET ≈ 30 ns saved.
+>
+> **Shipped in v1.25**:
+> - G3 F3 (`9d2c03f`) — hoisted the maxmemory>0 gate out of
+>   `precheck_for_write` / `try_evict_after_write` to dispatch (skips
+>   two `#[inline]` calls per SET on default unlimited memory).
+> - G3 F2' (`9d2c03f`) — first-byte guard in `parse_canonical_i64`
+>   (rejects the redis-benchmark default `"xxx"` in ~1 ns instead of
+>   a full UTF-8 → parse → itoa round-trip).
+>
+> **Deferred to v1.26**:
+> - **D-A1 / F1 single-probe `live_entry`** — blocked on `kevy-map`
+>   needing a raw-entry API; the borrow checker forbids the 1-probe
+>   shape without it. Estimated -15-20 ns/SET (and /GET).
+
+---
+
+# Historical body (pre-v1.25 framing)
+
 **Hypothesis**: SmallBytes inline (key + value ≤22 B fits in the
 KevyMap bucket) means SET pays **0 malloc** per insert; valkey
 allocates a `robj` per SET regardless of size. Predict kevy ≥120 %

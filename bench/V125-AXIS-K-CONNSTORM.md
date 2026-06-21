@@ -1,5 +1,49 @@
 # Axis K — connection storm (c = 3 000 / 5 000 / 8 000 / 10 000)
 
+> **v1.25 outcome — cliff RESOLVED**
+>
+> Phase A decomposition: `.claude/notes/v125-deco-axis-k-c10000.md`.
+>
+> **R3 ★ dramatically flipped finding**: the historical "valkey 10-
+> io_threads amortises kernel per-flow cost better" framing in this
+> doc was wrong. The cliff was a **kevy-internal positive-feedback
+> meltdown**, not a kernel scaling property:
+> - Linux multishot recv terminates with `F_MORE` clear on `-ENOBUFS`
+> - `PBUF_ENTRIES=128` shared across N=10 000 conns → every burst
+>   exhausted the pool → multishot tore down
+> - Each torn-down recv needs a re-arm SQE; `URING_ENTRIES=256`
+>   capped re-arms to 256/iter → ~38 reactor iters per useful 128-op
+>   batch → throughput collapsed to 270 rps
+> - valkey side-steps the entire failure mode by using readiness
+>   (epoll) instead of completion; no shared limited-resource analog
+>   to PBUF exists in valkey's per-client-querybuf model.
+>
+> The bonus puzzle ("backlog 1024 → 16384 made c=8 000 SET WORSE,
+> not better") had its own R3 ★: bigger backlog meant AOF flushes
+> got more spurious wake-ups, stretching the bad-budget window.
+> Trigger was PBUF, AOF was the amplifier. Backlog was a distractor.
+>
+> **Shipped in v1.25**:
+> - G1 (`01948ca`) — `PBUF_ENTRIES: 128 → 4096` + `URING_ENTRIES: 256
+>   → 2048`. Two-line change. Measured:
+>   - c=10 000 t=1 SET: **270 rps → 120 178 rps (+44 511×)**
+>   - c=10 000 t=1 GET: **400 rps → 119 460 rps (+298×)**
+>   - vs valkey c=10 000: kevy 120 k vs valkey 117 k = 103 % WIN
+>   - vs valkey c=3 000…8 000: every cell 100-138 % (kevy wins or ties)
+> - `923b928` — Negative-learning case: reverted the polish-trap
+>   backlog bump (`tcp_listen(.., 16384)` → `1024`). Logged in this
+>   doc's "Negative-learning case" section below as the canonical
+>   `.claude/rule/perf-vs-foss.md` R1-R3 violation example.
+>
+> **Deferred to v1.26 (optional further wins)**:
+> - K4 ready-set bitmap arm-loop — `O(active)` per-iter instead of
+>   `O(N=10 000)` Vec walk. Currently bench shows G1 alone makes t=1
+>   the winning config at every conn count, so K4 is not blocking.
+
+---
+
+# Historical body (pre-v1.25 framing — cliff cause was wrong)
+
 Extends the threads-sweep finding (`V125-THREADS-FINDING.md`)
 beyond c=2 000 to confirm where the t=1 sweet spot ends. lx64,
 mitigations=off, `ulimit -n 200000`, n=2 000 000 per run.

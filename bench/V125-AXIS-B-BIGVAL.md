@@ -1,5 +1,39 @@
 # Axis B — big value sweep
 
+> **v1.25 outcome (supersedes the historical body below)**
+>
+> Phase A decomposition: `.claude/notes/v125-deco-axis-b-64kb.md`.
+> The pre-v1.25 framing in this doc ("tied 99-104 %", "valkey already
+> zero-copies") was overruled — read the decomp for the actual stage
+> breakdown.
+>
+> **R3 ★ flipped finding**: kevy's reply path was already zero-copy
+> (via `Value::ArcBulk` + writev); valkey defaults to memcpy at 10 KB
+> (`min-string-size-avoid-copy-reply=16384`). The 64 KB gap was on
+> the **input** side — `uring_io.rs` unconditionally memcpied the
+> kernel slab into `conn.input`, and SET added a second
+> `Arc::from(&[u8])` alloc+copy on top.
+>
+> **Shipped in v1.25**:
+> - G2 (`f763146`) — parse-from-slab fast path + `$<N>` pre-grow
+>   (skips one 10-64 KB memcpy per recv). c=50 -d 65536 SET 68.4 k vs
+>   valkey 66.5 k = **103 %** (was -3-5 %).
+> - Bonus: `shard_flush.rs` epoll path's `output_arcs` write-through
+>   was discovered dead during decomposition — fixed in same commit.
+>
+> **Deferred to v1.26**:
+> - **A3 / B-A1 take-into-Arc on SET path** — needs `kevy-resp` to
+>   expose argv ownership.
+> - **B-A2 recv-into-Arc for big bulks (N ≥ PBUF_SIZE)** — eliminates
+>   5× pbuf→input memcpy per 64 KB SET. Deeper io_uring reactor
+>   change; estimated -6-8 µs additional /SET.
+> - 64 KB GET ratio 95 % vs valkey remains; depends on B-A2 ingress
+>   pair.
+
+---
+
+# Historical body (pre-v1.25 framing)
+
 **Hypothesis**: L1 `Value::ArcBulk` + `writev` iovec means kevy GET
 on values > BULK_THRESHOLD (64 B) skips the per-GET memcpy of value
 into per-conn output. Predicted kevy ≥120 % at -d 4 KB+ (where the

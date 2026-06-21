@@ -1,5 +1,41 @@
 # Axis G — collection ops
 
+> **v1.25 outcome (the bench shape was the problem)**
+>
+> Phase A decomposition: `.claude/notes/v125-deco-axis-g-sadd-pilot.md`.
+>
+> **R3 ★ bench-shape finding**: `redis-benchmark -t sadd` defaults to
+> `-r 0`, meaning every SADD inserts the literal string
+> `"element:__rand_int__"` — the set holds 1 member forever. valkey
+> runs in `OBJ_ENCODING_LISTPACK` 1-entry mode for the entire bench
+> (1 cache line). kevy's `KevySet` 16-slot Swiss table **cannot
+> structurally match** a 1-cell listpack. The pre-v1.25 "tied 99-103 %"
+> result was specifically vs that 1-entry shape.
+>
+> The real attack lever was different: `kevy/src/cmd.rs::rest()` was
+> cloning **every member's bytes into an owned `Vec<u8>` per multi-arg
+> command** (SADD, SREM, HSET, HMGET, HDEL, LPUSH, RPUSH, ZADD, ZREM,
+> DEL, EXISTS). valkey's `setTypeAdd(set, objectGetVal(c->argv[j]))`
+> hands the parsed sds directly from argv — 0 copies, 0 allocs.
+>
+> **Shipped in v1.25**:
+> - G4 (`4ec1278`) — `cmd::rest_borrowed` + `Store::*_borrowed`
+>   variants for all 11 multi-arg cmds. Kills N+1 mallocs/command.
+>   Measured ≈ +1 % at c=50 -P 1 (within variance band — the per-op
+>   µs save is < 1 % of c=50 wire RTT; the structural correctness
+>   matters more than the bench number).
+>
+> **Deferred to v1.26**:
+> - **G-A2 `SmallSet<SmallBytes, N ≤ 8>` inline encoding** — mirror
+>   valkey's intset/listpack for small sets. Caveat: `Value` enum
+>   has a 32 B cap; inline N may only fit 2-3 cells.
+> - Re-bench with `-r 100k` to force valkey into `OBJ_ENCODING_HT`
+>   so the comparison is structurally fair.
+
+---
+
+# Historical body (pre-v1.25 framing — bench-shape unrecognised)
+
 **Hypothesis**: kevy's KevyMap (Swiss table) for hash/set/zset
 backing vs valkey's listpack-or-dict hybrid might give differential
 performance at certain collection sizes. Predict ≥120 % somewhere.

@@ -1,5 +1,56 @@
 # Axis H — pub/sub fan-out throughput
 
+> **v1.25 outcome — biggest win of the sprint**
+>
+> Phase A decomposition: `.claude/notes/v125-deco-axis-h-pubsub-edges.md`.
+>
+> **R3 ★ two flipped predictions (both originally in this doc)**:
+> - "subs=10 vs redis -16 % is SPSC batch amortisation below N=20"
+>   → wrong. Under `--threads 1`, `nshards=1`, the SPSC fan-out
+>   path is dead code. Real causes: O(N_conns) `conns.iter().filter()`
+>   in `deliver_publish`, no dedup on `dirty.extend_from_slice(&ids)`
+>   (10 K entries/burst), and a wasted Arc + 2 to_vec when nshards==1.
+> - "size=4 KB -7 % vs valkey is 10-io-thread parallelism" → wrong.
+>   Real lever is valkey's `bulkStrRef` (`networking.c::addReplyBulk
+>   WithFlag(avoid_copy=1)`): 16 B handle per client + writev gather,
+>   not memcpying the 4 KB. IO threads only ~5 µs of the 25 µs gap.
+>
+> **Shipped in v1.25** (G5 chain):
+> - `4b72ec0` H1.A — nshards==1 fast path (skip Arc + 2 to_vec).
+> - `6587032` H1.B + H1.C + H2.A — per-channel `subs_by_channel`
+>   index, `pending_write` flag dedup, Arc-shared message body +
+>   writev gather (kevy's `bulkStrRef` equivalent).
+>
+> **Bench (lx64, --threads 1, median of 3)** — same numbers in the
+> master:
+>
+> | subs / size       | kevy / valkey     | kevy / redis |
+> |-------------------|------------------:|-------------:|
+> | subs=50  16 B     | 23.10 M / 5.11 M = **452 %** | 2.01× |
+> | subs=100 16 B     | 28.38 M / 5.67 M = **500 %** | 2.41× |
+> | subs=200 16 B     | 31.25 M / 6.27 M = **498 %** | 2.70× |
+> | subs=500 16 B     | 31.68 M / 6.13 M = **517 %** | 3.02× |
+> | subs=10  16 B     | 6.38 M  / 4.01 M = 159 %; vs redis 6.09 M = **105 %** (was 0.84×) |
+> | subs=50  256 B    | 7.62 M  / 5.53 M = 138 % | 1.28× |
+> | subs=50  4 KB     | 1.11 M / 2.26 M = **49 %** (LOSS — deferred) | 1.47× |
+>
+> **R3 ★ implementation-time finding (not in Phase A)**: Linux
+> `IOV_MAX=1024` cap surfaced during H2.A bench — uncapped Arc
+> accumulator hung the bench at subs ≥ 50 / size ≥ 256 because
+> writev returned `-EINVAL` for ~3000 iovecs. Correctness fix:
+> `PUBSUB_ARC_FLUSH_AT=256`. This means at subs=50 / 4 KB we still
+> hit the cap and can only zero-copy 256 of every 1024 pipelined
+> publishes per conn.
+>
+> **Deferred to v1.26**:
+> - **H 4 KB writev-chunking** — split the iovec list across multiple
+>   writev syscalls per drain when `IOV_MAX=1024` is the bottleneck.
+>   Target: pub/sub size=4 KB rises from 49 % → ≥ 120 % vs valkey.
+
+---
+
+# Historical body (pre-v1.25 framing — both edge-case stories refuted)
+
 Refresh of the v1.18-era 2.3× pub/sub finding against the v1.25
 codebase, plus a fan-out sweep across subscriber counts and
 payload sizes. **`kevy --threads 1`** vs **valkey 9.1.0** vs
