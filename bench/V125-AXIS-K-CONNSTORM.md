@@ -100,3 +100,44 @@ bash /tmp/axis_k_connstorm.sh
 ⚠ **Mixed**: kevy t=1 wins decisively at c=5 000 (130 % SET) and
 holds parity at c=3 000 / 8 000. The c=10 000 cliff is a known
 limit; t=2 recovers but loses 3-4 % to valkey.
+
+## Negative-learning case (2026-06-22, post-methodology read)
+
+After the initial run, I tried a R1-R2 violation surgical polish:
+bumped `tcp_listen(.., 1024)` → `tcp_listen(.., 16384)` in
+`crates/kevy-rt/src/runtime.rs` on the hypothesis that the c=10 000
+t=1 cliff was accept-queue overflow.
+
+**Prediction**: backlog bump fixes the cliff.
+
+**Measurement** (re-bench with backlog=16384, kernel-capped to
+somaxconn=4096):
+
+```
+kevy c=8000 t=1  SET = 6 921       ← was 104 134 in prior run (-93 %)
+kevy c=8000 t=1  GET = 102 833     ← roughly unchanged
+kevy c=8000 t=2  SET = 100 522     ← unchanged
+valkey c=8000    SET = 101 040     ← unchanged
+kevy c=10000 t=1 SET = <hung — bench killed after hours>
+```
+
+**Refutation**: the polish was actively harmful — c=8 000 t=1 SET
+crashed from 104 k to 6.9 k (-93 %). c=10 000 t=1 SET became so
+slow it never completed 2 M requests in the bench window.
+
+The fix was reverted in this commit. The root cause of the c=10 000
+t=1 cliff (and now the c=8 000 SET-only regression under bigger
+backlog) is **not understood** — it needs Phase A decomposition
+(see `.claude/notes/v125-deco-axis-k-c10000.md`, task #82), not
+more polish.
+
+**Lesson for the methodology log**: this is a textbook
+`.claude/rule/perf-vs-foss.md` R1-R3 violation. Two rounds of
+polish would have caught it sooner; one round + the trigger-word
+mental check ("backlog should fix it, *probably*") was already
+enough to say "no, decompose". I didn't, paid hours of zombie
+bench time, almost broke the shared lx64 perf box (caught by
+[[feedback-no-zombie-background-shells]] reflex).
+
+Revert commit message: revert backlog bump; the cliff demands
+decomposition, not surgical polish.
