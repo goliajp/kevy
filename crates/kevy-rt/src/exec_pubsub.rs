@@ -162,19 +162,30 @@ impl<C: Commands> Shard<C> {
         self.fold(conn_id, seq, Part::Reply(crate::message::SmallReply::from_vec(reply)));
 
         if bits != 0 {
-            // Share one payload across all target shards (Arc, no per-target byte
-            // clone). Deliver locally inline; queue remote shards into per-target
-            // batches flushed once per drain (see `flush_publish`).
-            let m = std::sync::Arc::new((args[1].to_vec(), args[2].to_vec()));
-            for s in 0..self.nshards {
-                if bits & (1u64 << s) == 0 {
-                    continue;
-                }
-                if s == self.id {
-                    self.deliver_publish(&m.0, &m.1);
-                } else {
-                    self.publish_batch[s].push(m.clone());
-                    self.publish_batch_nonempty |= 1u64 << s;
+            // H1.A (v1.25): when nshards==1 (every `--threads 1` deployment),
+            // the cross-shard fan-out path is dead code — skip the
+            // Arc::new + 2 × to_vec allocation and deliver inline from the
+            // borrowed argv slices. Saves ~0.18 µs/publish at subs=10 (per
+            // .claude/notes/v125-deco-axis-h-pubsub-edges.md sub-Q1).
+            if self.nshards == 1 {
+                debug_assert!(bits == 1 && self.id == 0);
+                self.deliver_publish(&args[1], &args[2]);
+            } else {
+                // Multi-shard: share one payload across target shards (Arc, no
+                // per-target byte clone). Deliver locally inline; queue remote
+                // shards into per-target batches flushed once per drain (see
+                // `flush_publish`).
+                let m = std::sync::Arc::new((args[1].to_vec(), args[2].to_vec()));
+                for s in 0..self.nshards {
+                    if bits & (1u64 << s) == 0 {
+                        continue;
+                    }
+                    if s == self.id {
+                        self.deliver_publish(&m.0, &m.1);
+                    } else {
+                        self.publish_batch[s].push(m.clone());
+                        self.publish_batch_nonempty |= 1u64 << s;
+                    }
                 }
             }
         }
