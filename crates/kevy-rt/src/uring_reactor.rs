@@ -31,8 +31,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-/// SQ/CQ depth for the per-shard ring.
-const URING_ENTRIES: u32 = 256;
+/// SQ/CQ depth per-shard. Paired with `PBUF_ENTRIES` — v1.25 G1/K2 bumped
+/// both to fix the c=10 000 cliff (deco-axis-k-c10000).
+const URING_ENTRIES: u32 = 2048;
 // SQPOLL is NOT wired into the shard reactor — it would spawn one kernel
 // poll thread per shard, each spinning at ~100% on the same core set as
 // the shard threads, halving effective CPU. See `bench/PERF-ATTACK-LOG-2026-06-20.md`
@@ -46,11 +47,9 @@ const URING_SPIN_LIMIT: u32 = 256;
 // The nap rung was removed (see the idle-ladder comment in `run_uring`).
 // URING_NAP_LIMIT / URING_NAP_MICROS / `uring_nap` are gone; spin →
 // park is the whole ladder now.
-/// Shared provided-buffer ring per shard: `PBUF_ENTRIES` buffers of `PBUF_SIZE`
-/// bytes feed the multishot recvs of every connection. One recv may fill a whole
-/// buffer; larger arrivals span several (reassembled in `Conn::input`). 128 × 16K
-/// = 2 MiB/shard, recycled immediately after each completion is drained.
-const PBUF_ENTRIES: u16 = 128;
+/// Shared provided-buffer ring: 4096 × 16K = 64 MiB/shard. Linux multishot
+/// recv terminates on ENOBUFS — must size for max conns (deco-axis-k-c10000).
+const PBUF_ENTRIES: u16 = 4096;
 const PBUF_SIZE: u32 = 16 * 1024;
 const PBUF_GROUP: u16 = 0;
 /// `-ENOBUFS`: the buf ring was momentarily empty; just re-arm (don't close).
