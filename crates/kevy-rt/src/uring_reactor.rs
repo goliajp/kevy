@@ -429,6 +429,22 @@ impl<C: Commands> Shard<C> {
                 continue;
             };
             prev = Some(uc as *const UringConn);
+            // **Axis E fix (2026-06-21)**: fast-skip for idle conns. Most
+            // conns at high -c have NO pending output, NO partial-write to
+            // resume, AND have their multishot recv already armed (recv
+            // arms once at accept and stays armed across all CQEs until
+            // it terminates). Branch out in ~5 ns so the per-iter
+            // arm_conns cost at c=2000 doesn't dominate the reactor.
+            let has_fresh_output =
+                !conn.output.is_empty() || !conn.output_arcs.is_empty();
+            let has_partial_write =
+                !uc.write_buf.is_empty() && uc.write_off < uc.write_buf.len();
+            if !has_fresh_output
+                && !has_partial_write
+                && (uc.recv_armed || uc.closing)
+            {
+                continue;
+            }
             // Start a new write: move the conn's output (bytes + arc-bulk
             // references) into stable per-`UringConn` state.
             if !uc.write_inflight
