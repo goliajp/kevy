@@ -4,7 +4,81 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
-## [v1.24.1] — UNRELEASED (autorun perf sprint on top of v1.24.0)
+## [v1.25.0] — UNRELEASED (Phase-A decomposition sprint on top of v1.24.1)
+
+This release adopts and ships the
+**decomposition-then-attack methodology** (`.claude/rule/perf-vs-foss.md`,
+adapted from the SPG project's `PERF_METHODOLOGY_VS_FOSS.md`). Every
+v1.25 attack started from a per-axis Phase A decomposition
+(`.claude/notes/v125-deco-axis-*.md`) that enumerated 18+ stages of
+the kevy and valkey paths side-by-side, file:line × atomic-op-count,
+total ±20 % of measured wire RTT. Phase B attacks then implemented
+the Top-N attack list from each decomposition.
+
+**8 of 11 pre-v1.25 axis hypotheses were refuted** by Phase A reading.
+The full outcomes report is `bench/V125-AXES-MASTER.md`.
+
+v1.25.0 supersedes v1.24.1 UNRELEASED — both ship together (v1.24.1's
+12-attack chain remains, listed below; the new v1.25 attacks are
+additive on top).
+
+### v1.25 — Shipped (Phase B attacks)
+
+| Group | Commit   | Axis | Attack                                                                                                | Result                                                                |
+|-------|----------|------|-------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------|
+| G1    | 01948ca  | K    | `PBUF_ENTRIES` 128 → 4096 + `URING_ENTRIES` 256 → 2048 (kevy-rt/uring_reactor.rs)                     | c=10 000 t=1 SET **270 → 120 178 rps (+44 511×)**; cliff resolved     |
+| G2    | f763146  | I+B  | Parse-from-slab fast path + big-arg pre-grow + epoll output_arcs correctness fix                       | Axis I GET p999 0.527 → 0.407 ms (-23 % vs valkey); B 64K SET 95→103 % |
+| G3    | 9d2c03f  | C    | Hoist `maxmemory>0` gate (F3) + canonical-i64 first-byte guard (F2')                                  | Cross-axis -10-15 ns/SET; below variance band at c=50 -P 1            |
+| H1.A  | 4b72ec0  | H    | pub/sub `nshards==1` fast path                                                                        | Component of G5 chain                                                  |
+| G5    | 6587032  | H    | per-channel `subs_by_channel` index + `pending_write` dedup + Arc-shared message body + writev gather | subs=50 **452 %** vs valkey; subs=500 **517 %**; subs=10 flipped to WIN vs redis |
+| G4    | 4ec1278  | G    | Borrowed-slice dispatch for SADD/SREM/HSET/HMGET/HDEL/LPUSH/RPUSH/ZADD/ZREM/DEL/EXISTS                | Kills N+1 mallocs per multi-arg cmd; structural, +1 % bench           |
+
+### v1.25 — Reverted with measurement (R3 ★)
+
+Two attacks from `.claude/notes/v125-deco-axis-i-c50-10kb.md` did NOT
+match their Phase A predictions; reverted after bench:
+
+- **G6 A2 lazy-drop big values** — predicted -20-150 µs p999;
+  measured **+144 µs** (worse). Single-thread deferred bunching
+  produces periodic batched stalls bigger than the inline drops it
+  replaced. valkey's `lazyfree.c` wins via a separate bio thread,
+  not the deferral itself.
+- **G6 A4 `submit_and_wait(1)` only-writes** — predicted -50-200 µs
+  p999; measured **+44 % p999**. The spin ladder existed precisely
+  so burst arrival catches the next recv within the spin window.
+
+Both negative results are captured in `bench/V125-AXIS-I-LATENCY.md`
+and `bench/V125-AXES-MASTER.md` as R3 ★ flipped predictions.
+
+### v1.25 — Deferred (named cause + fix path, not ceiling claims)
+
+| Item                                          | Blocker / fix path                                                          | Estimated gain |
+|----------------------------------------------|-----------------------------------------------------------------------------|----------------|
+| Axis I SET p999 / max at -d 10240             | A3 take-into-Arc on SET path; needs argv ownership in kevy-resp             | match valkey 0.335 ms p999 |
+| Axis H size=4 KB pub/sub                     | writev-chunking for IOV_MAX=1024 cap                                        | ≥ 120 % vs valkey |
+| Axis D single-probe `live_entry`              | `kevy-map` raw-entry API                                                    | -15-20 ns/GET |
+| 64 KB GET / recv-into-Arc for big bulks       | B-A2 io_uring reactor change                                                | -6-8 µs / 64 K SET |
+| `lazyfree` deferred drop                      | Bio thread for free-work                                                    | unblocks Axis I tail attack |
+
+### v1.25 — Trigger-word ban applied to bench docs
+
+11 bench docs (`bench/V125-AXIS-*.md` + `V125-AXES-MASTER.md`)
+rewritten in commit `dcaeadc`: removed "tied / kernel-bound / loopback
+floor / valkey absorbed / structural ceiling / RTT-bound hides X"
+claims, replaced with file:line + atomic-op-count + named fix paths
+per `.claude/rule/perf-vs-foss.md` R2.
+
+### v1.25 — Methodology rule + memory artifacts
+
+- `.claude/rule/perf-vs-foss.md` — R1-R8 codified rules for kevy +
+  any future vs-FOSS project. CLAUDE.md project link added.
+- Auto-memory entry `feedback-perf-vs-foss-decomposition` records
+  the methodology + my own pre-adoption mistakes (V125-AXIS-* dev
+  trail) as negative-learning case studies.
+
+---
+
+## [v1.24.1] — UNRELEASED, superseded by v1.25.0 (autorun perf sprint on top of v1.24.0)
 
 User-authorized **autorun** continuation of the v1.23 → v1.24 perf
 sprint, layered on top of E13 (THP-aligned mmap, v1.24.0). 11 perf
