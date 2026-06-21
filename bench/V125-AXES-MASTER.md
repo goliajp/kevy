@@ -56,7 +56,7 @@ Hypothesis-driven, not opportunistic. Each axis has:
 - **100-119 %** = lead but below bar
 - **<100 %** = loss
 
-## Status board — all six axes complete (2026-06-21)
+## Status board — all seven axes complete (2026-06-21)
 
 | ID | hypothesis | result | crossing | peak headline |
 |----|-----------|--------|----------|----------------|
@@ -64,8 +64,9 @@ Hypothesis-driven, not opportunistic. Each axis has:
 | **B** | L1 ArcBulk + writev wins big-value GET | ❌ not confirmed | — | tied with valkey across 64 B → 64 KB (valkey already zero-copies); kevy LOSES -3-5 % at 64 KB |
 | **C** | SmallBytes inline wins SET churn | ❌ not confirmed | — | tied at 99-100 % across 100k / 1M / 10M keyspace (malloc savings sub-noise at c50-P1 RTT) |
 | **D** | E13 THP keyspace wins TLB | ⚠ **mechanism verified, bench shape doesn't expose** | — | `AnonHugePages=588 MiB` confirmed at 10 M keys; bench TIED 99 % (RTT-bound hides TLB savings) |
-| **E** | shared-nothing wins at high conn count | ❌ **BUSTED — opposite held** | — | **kevy LOSES from -c 500** (95 %), worsens to **-c 2000 → 73 % (-27 %)** — `arm_conns` iterate-all model has structural scalability cliff |
+| **E** | shared-nothing wins at high conn count | ❌ **BUSTED — opposite held** | — | **kevy LOSES from -c 500** (95 %), worsens to **-c 2000 → 80 % (-20 %)** after fast-skip + Vec-walk mitigations — `arm_conns` cliff is fundamentally kernel-scaling-bound at high conn |
 | **F** | kevy-unique embedded mode | ✅ **CONFIRMED unique** | n/a | **9.15 M GET/s, 8 M INCR/s, 38 M GET-miss/s** in-process. valkey has no embedded mode at all. |
+| **G** | KevyMap vs listpack/dict gives collection edge | ❌ not confirmed | — | tied across SADD/HSET/ZADD/LPUSH/RPUSH/LRANGE_{100,300,600} at 99-103 % vs valkey |
 
 ## Headline results vs the ≥120 % bar
 
@@ -107,8 +108,49 @@ refactor (a clear future-sprint item).
 - `V125-AXIS-B-BIGVAL.md` — big value sweep (tied)
 - `V125-AXIS-C-CHURN.md` — high key churn (tied)
 - `V125-AXIS-D-KEYSPACE.md` — large keyspace TLB (verified-working, bench-invisible)
-- `V125-AXIS-E-CONCURRENCY.md` — deep concurrency (kevy loses — known cause)
+- `V125-AXIS-E-CONCURRENCY.md` — deep concurrency (kevy loses — known cause, fast-skip + Vec-walk mitigations applied)
 - `V125-AXIS-F-EMBEDDED.md` — embedded mode (kevy-unique capability)
+- `V125-AXIS-G-COLLECTIONS.md` — collection ops (tied across 8 ops)
 
 Each doc includes raw data, methodology, interpretation, and
 reproducibility instructions.
+
+## Final v1.25 sprint summary
+
+**Where kevy hits ≥120 % vs the best competitor:**
+1. **Axis A `-P 64+`** — 308 % SET / 223 % GET at -P 64, peaking
+   **411 % / 366 %** at -P 256. io_uring batched async is kevy's
+   killer architecture lever.
+2. **c1-P1** (v1.24 matrix) — 122-126 % SET/GET. Busy-poll
+   single-conn latency.
+3. **Axis F embedded** — 9 M+ ops/s in-process, kevy-unique
+   (valkey has no comparable mode).
+
+**Where kevy ties valkey (99-119 %)**: Axes B/C/D/G + most matrix
+concurrent scenarios. Valkey's mature epoll + tcache + listpack
+have absorbed the same optimisations kevy brings.
+
+**Where kevy loses**: Axis E at c ≥ 500 (95 → 80 % vs valkey at
+c=2000). Mitigations (fast-skip, Vec-walk) closed marginal cost
+but the root issue is kernel per-flow scaling. The arm_conns
+ready-set queue is a known fix path for a follow-up sprint;
+beyond that, only valkey-style architecture pivot would close it.
+
+**Net positioning for v1.25**:
+
+kevy wins **decisively** on:
+- Pipelined throughput (Axis A — 4-5× valkey at -P 256)
+- Single-conn latency (matrix c1-P1)
+- In-process embedded (Axis F — kevy-unique)
+
+kevy is **at parity** on:
+- Small-value c=50-200 concurrent (matrix + Axes B/C/G)
+- Big-value GET (Axis B, after L1 zero-copy)
+- Large keyspace lookup (Axis D, with verified THP)
+
+kevy **loses** on:
+- High-conn-count (c ≥ 500) — known structural limitation
+
+This is **the architecturally honest positioning** of kevy v1.25
+against the current state-of-the-art (valkey 9.1, redis 8.8) on
+loopback with all servers source-built and pinned identically.
