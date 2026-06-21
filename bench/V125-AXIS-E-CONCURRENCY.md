@@ -1,5 +1,11 @@
 # Axis E — deep concurrency sweep
 
+> **v1.25 outcome**: resolved via `--threads 1` default + `V125-AXIS-K`
+> G1 PBUF/URING bump. The historical "shared-nothing scales linearly"
+> hypothesis was refuted by the threads-sweep finding — single-shard
+> wins at every loopback conn count tested. See `V125-THREADS-FINDING.md`
+> and `V125-AXIS-K-CONNSTORM.md` for the actual resolution.
+
 **Hypothesis**: shared-nothing thread-per-core + kevy-ring SPSC
 scales linearly with conn count; valkey's single-dispatcher
 saturates beyond ~1 k conns. Predict kevy ≥120 % at -c 500+.

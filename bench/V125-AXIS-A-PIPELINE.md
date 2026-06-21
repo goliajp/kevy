@@ -1,5 +1,10 @@
 # Axis A — deep pipelining sweep
 
+> **v1.25 outcome**: confirmed wins (411 % SET / 366 % GET at -P 256)
+> with no further attack needed. See `bench/V125-AXES-MASTER.md` for
+> the full sprint summary. Body below stands as-is; hypothesis
+> matched measurement.
+
 **Hypothesis**: kevy's io_uring multishot recv + L1 `writev` + E14
 threshold-based `io_uring_enter` skip together let the per-cmd
 kernel cost stay **flat as `-P` (pipeline depth) grows**, while

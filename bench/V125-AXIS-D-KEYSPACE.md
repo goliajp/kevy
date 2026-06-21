@@ -1,5 +1,40 @@
 # Axis D — large keyspace TLB pressure
 
+> **v1.25 outcome ★★★ (the lever was wrong — see decomp)**
+>
+> Phase A decomposition: `.claude/notes/v125-deco-axis-d-keyspace.md`.
+>
+> **R3 ★ flipped finding (the most dramatic of the sprint)**: the
+> THP hypothesis was the wrong lever. Stage-by-stage Phase A reading
+> shows kevy's keyspace GET path is **already ~30-50 ns/GET faster**
+> than valkey's:
+> - FxHash beats valkey's SipHash
+> - inline `SmallBytes` in the slot beats valkey's `robj` pointer chase
+> - `inbox.rs::prefetch_for_hash` hides one DRAM miss
+> - valkey 9.1 also runs Swiss-style `hashtable.c` (not the legacy
+>   `dict.c`), so per-probe shape is symmetric
+>
+> THP genuinely helps ~5-10 ns/GET — but it is **eaten by
+> `live_entry`'s 2-probe shape** (~18 ns), so net "99 %".
+>
+> The 99 % vs 100 % outcome at c=50 -P1 is **not** the THP being
+> hidden — the entire keyspace CPU delta is < 1 % of the 30 µs c=50
+> RTT envelope. Re-bench at c=1 -P1 to make the lever visible.
+>
+> **Shipped in v1.25**: nothing kevy-specific to this axis (G3 helps
+> indirectly via `live_entry_mut` fast path attempts; D-A1 needs
+> kevy-map API work).
+>
+> **Deferred to v1.26**:
+> - **D-A1 single-probe `live_entry`** (blocked on `kevy-map` needing
+>   raw-entry API). Then re-bench at c=1 -P1.
+> - **D-A2 fuse `get_for_reply` into `try_inline_local`** — skip the
+>   `GetReply` enum tag round-trip. Estimated -5-8 ns/GET.
+
+---
+
+# Historical body (pre-v1.25 framing — THP attribution was wrong)
+
 **Hypothesis**: E13 2 MiB-aligned mmap THP for kevy-map (verified
 working — `AnonHugePages` in `/proc/PID/smaps` is populated for the
 key bucket array) means GETs on a 10 M-key keyspace hit fewer TLB

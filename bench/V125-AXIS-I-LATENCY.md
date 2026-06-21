@@ -1,5 +1,48 @@
 # Axis I — tail latency (p50 / p95 / p99 / p99.9 / max)
 
+> **v1.25 outcome**
+>
+> Phase A decomposition: `.claude/notes/v125-deco-axis-i-c50-10kb.md`.
+>
+> **R3 ★ flipped finding**: the original "kevy `Bytes::copy_from_slice`
+> on 10 KB hits the allocator harder than valkey's reusable buffers"
+> claim (at the bottom of this doc, pre-v1.25) was wrong. kevy's GET
+> reply path is already zero-copy via `Value::ArcBulk` + writev;
+> valkey actually memcpies 10 KB by default
+> (`min-string-size-avoid-copy-reply=16384`, so 10 KB < 16 KB
+> threshold). The real input-side waste was `uring_io.rs`
+> unconditionally copying the kernel slab into `conn.input`.
+>
+> **Shipped in v1.25**:
+> - G2 (`f763146`) — parse-from-slab fast path + `$<N>` pre-grow +
+>   epoll `output_arcs` correctness fix. Measured:
+>   - GET p999: **0.527 ms → 0.407 ms = -23 %** (vs valkey)
+>   - GET p99: kevy 0.279 vs valkey 0.279 = tied
+>   - SET rps c=50 -d 10240: +2 %
+>
+> **R3 ★ Phase B reverts (predictions overruled by measurement)**:
+> - G6 A2 lazy-drop big values via `pending_drops`: predicted
+>   -20 to -150 µs p999; measured **+144 µs p999** (worse). Single-
+>   thread deferred bunching produces periodic batched-drop stalls
+>   bigger than the inline drops it replaced. valkey's `lazyfree.c`
+>   works because it has a separate bio thread. Reverted.
+> - G6 A4 `submit_and_wait(1)` only-writes: predicted -50 to -200 µs
+>   p999; measured **+44 % p999** (worse). The spin ladder existed
+>   precisely so burst arrival catches the next recv within the spin
+>   window. Reverted.
+>
+> **Deferred to v1.26** (the actual SET-tail amplifier):
+> - **A3 / B-A1 take-into-Arc on SET path** — `cmd_data.rs::set_slice`
+>   pays `Arc::from(&[u8])` alloc+copy of the 10 KB on every SET. The
+>   fix requires argv ownership exposure from `kevy-resp`. Without
+>   it, kevy SET p999/max at -d 10240 remains worse than valkey
+>   (`0.487 ms / 1.519 ms` vs `0.335 ms / 1.039 ms`).
+> - **Bio thread for free-work** — would unblock lazy-drop.
+
+---
+
+# Historical body (pre-v1.25 framing — input-side memcpy not yet identified)
+
 When the average rps numbers tie at ~100 %, tail latency is the
 real differentiator. This axis runs `redis-benchmark --precision
 3` across the same scenarios as the matrix and pulls the

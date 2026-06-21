@@ -1,5 +1,10 @@
 # Axis F — embedded (kevy-embedded direct calls)
 
+> **v1.25 outcome**: confirmed kevy-unique capability (9.15 M GET/s
+> in-process). No attack work — valkey has no embedded mode to
+> compare against. See `bench/V125-AXES-MASTER.md` for the v1.25
+> sprint summary.
+
 **Hypothesis**: kevy-embedded is a unique capability — valkey-server
 is a TCP-only daemon with no in-process mode, so this axis is
 **kevy-unique** rather than side-by-side. Goal: quantify the
