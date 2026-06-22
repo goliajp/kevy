@@ -93,6 +93,8 @@ pub(crate) const OP_WAKER: u64 = 4 << OP_SHIFT;
 pub(crate) const OP_TIMEOUT: u64 = 5 << OP_SHIFT;
 /// Accept on the per-shard cluster listener (conns marked for `-MOVED`).
 const OP_ACCEPT_CL: u64 = 6 << OP_SHIFT;
+/// v1.25 UDS: accept on the (shard-0-only) Unix-domain listener.
+const OP_ACCEPT_UN: u64 = 7 << OP_SHIFT;
 const CONN_MASK: u64 = (1 << OP_SHIFT) - 1;
 
 impl<C: Commands> Shard<C> {
@@ -125,6 +127,8 @@ impl<C: Commands> Shard<C> {
         // Starts "in flight" when cluster mode is off, so the arm loop never
         // preps an accept on a listener that doesn't exist.
         let mut cl_accept_inflight = self.cluster_listener.is_none();
+        // v1.25 UDS: only shard 0 may hold a unix listener.
+        let mut un_accept_inflight = self.unix_listener.is_none();
         let mut comps: Vec<Completion> = Vec::with_capacity(URING_ENTRIES as usize);
         let mut idle_spins: u32 = 0;
         let mut park = ParkState::default();
@@ -161,6 +165,12 @@ impl<C: Commands> Shard<C> {
             {
                 cl_accept_inflight =
                     ring.prep_accept_multishot(cl.raw(), OP_ACCEPT_CL);
+            }
+            if !un_accept_inflight
+                && let Some(un) = &self.unix_listener
+            {
+                un_accept_inflight =
+                    ring.prep_accept_multishot(un.raw(), OP_ACCEPT_UN);
             }
             self.uring_arm_conns(&mut ring, &mut io, pbuf.group());
 
@@ -208,9 +218,10 @@ impl<C: Commands> Shard<C> {
                         // out of the queue.
                         self.mark_arm_pending(cid, &mut io);
                     }
-                    OP_ACCEPT | OP_ACCEPT_CL => {
+                    OP_ACCEPT | OP_ACCEPT_CL | OP_ACCEPT_UN => {
                         cold_path_hint();
                         let cluster = op == OP_ACCEPT_CL;
+                        let is_unix = op == OP_ACCEPT_UN;
                         // B4: only clear the in-flight flag when the
                         // multishot terminates (F_MORE clear). While
                         // F_MORE is set the kernel still has the SQE
@@ -220,6 +231,8 @@ impl<C: Commands> Shard<C> {
                         if !c.has_more() {
                             if cluster {
                                 cl_accept_inflight = false;
+                            } else if is_unix {
+                                un_accept_inflight = false;
                             } else {
                                 accept_inflight = false;
                             }
@@ -228,7 +241,10 @@ impl<C: Commands> Shard<C> {
                         if c.res >= 0 {
                             // SAFETY: a freshly accepted fd we now own.
                             let sock = unsafe { Socket::from_raw_fd(c.res) };
-                            let _ = sock.set_nodelay();
+                            // TCP_NODELAY doesn't apply to AF_UNIX; skip for UDS.
+                            if !is_unix {
+                                let _ = sock.set_nodelay();
+                            }
                             let ncid = self.next_conn_id;
                             self.next_conn_id += 1;
                             let mut conn = Conn::new(sock);
