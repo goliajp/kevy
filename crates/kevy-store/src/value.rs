@@ -162,6 +162,43 @@ const _: () = {
     assert!(std::mem::size_of::<Value>() <= 32);
 };
 
+/// Heap-size threshold above which an overwritten `Value` is sent to the
+/// runtime's bio thread for off-reactor drop instead of being freed inline
+/// (v1.25 A.3 lazy-drop).
+///
+/// **Calibrated 2026-06-22 from the bench-with-256-B-floor R3 ★ finding**:
+/// dropping the threshold to 256 B regressed Axis I c=50 -d 10240 SET
+/// p999 from 0.487 → 1.583 ms (worse by 3.25×). The cause: `std::sync::mpsc::Sender::send`
+/// is a few hundred ns of atomic + Box clone, which EXCEEDS the inline
+/// `Box::<[u8]>::drop` cost when jemalloc serves the free from a hot
+/// large-class slab (~ 1-3 µs for 10 KB; the bench's steady state).
+/// Off-loading only wins when the inline drop's tail risk (cold-slab
+/// `munmap`/`madvise` consolidation stall, observed at 50-150 µs and
+/// occasionally millisecond-range) exceeds the per-send channel cost
+/// PLUS the cross-thread cache-line bouncing.
+///
+/// 16 KB is jemalloc's `huge`/`large` class boundary on glibc Linux —
+/// allocations at or above this size are far more likely to backed by
+/// `mmap` directly and freed via `munmap` (the stall mode). 10 KB
+/// allocations (the Axis I workload) stay on inline-drop because at
+/// median they're fast; the bio path catches the genuinely huge
+/// (≥ 16 KB) cases where the stall risk dominates.
+///
+/// Future work (per `bench/V125-OPEN-ITEMS.md` follow-up): a
+/// drain-on-batch model — accumulate `Box<Value>` into a per-shard
+/// `Vec` and send the WHOLE batch over one mpsc message at flush
+/// time. Amortises the channel cost across N drops, restoring the
+/// 256-B floor as profitable. Out of scope for the bio-thread
+/// infrastructure landing.
+pub const HEAP_HEAVY_BYTES: usize = 16 * 1024;
+
+/// Sender half of the runtime's bio-drop channel. Wired from
+/// `kevy-rt`'s `bio.rs` via [`crate::Store::set_bio_drop_sender`]; the
+/// concrete payload is `Box<Value>` so the store crate can ship the
+/// type without a back-dep on the rt crate's enum. The bio thread
+/// (`kevy-rt::bio::spawn`) just runs `drop(boxed_value)`.
+pub type BioDropSender = std::sync::mpsc::Sender<Box<Value>>;
+
 impl Value {
     /// The Redis type name (`TYPE` command).
     pub fn type_name(&self) -> &'static str {
@@ -207,7 +244,53 @@ impl Value {
             Value::Stream(s) => s.weight(),
         }
     }
+
+    /// Whether this value's `Drop` is heavy enough to deserve being
+    /// shipped to the bio thread instead of freed inline. Fast: every
+    /// variant decides off a sub-field cheap to inspect (no recursive
+    /// walk), so it's safe to call on every overwrite-SET on the hot
+    /// path. The threshold is intentionally conservative — small Arcs
+    /// + every short string stay on inline-drop where jemalloc small-
+    /// class is sub-µs and a cross-thread hand-off would lose.
+    #[inline]
+    pub fn is_heap_heavy(&self) -> bool {
+        match self {
+            // Inline 22 B / heap ≤ small-class — fast to free inline.
+            Value::Str(_) | Value::Int(_) => false,
+            // The Axis I culprit. v1.25 A.3 lazy-drop's primary case.
+            Value::ArcBulk(a) => a.len() >= HEAP_HEAVY_BYTES,
+            // Collection drops walk every element + the bucket array;
+            // worst-case microseconds on a multi-KB hash/zset. Send to
+            // bio so a SET that overwrites a collection-typed key (the
+            // Redis polymorphic case) doesn't stall the reactor.
+            //
+            // The check uses `Arc::strong_count == 1` to avoid sending
+            // a still-shared Arc: another holder (a SnapshotView in
+            // flight, a same-shard live read) would force the bio
+            // thread to only do a refcount-decrement, which is wasted
+            // cross-thread traffic. A unique Arc IS the case where
+            // drop is expensive (it really frees the inner payload).
+            Value::Hash(a) => std::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
+            Value::List(a) => std::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
+            Value::Set(a) => std::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
+            Value::ZSet(a) => {
+                std::sync::Arc::strong_count(a) == 1 && a.by_member.len() > 0
+            }
+            Value::Stream(a) => {
+                std::sync::Arc::strong_count(a) == 1 && a.length() > 0
+            }
+        }
+    }
 }
+
+// `BioDropSender = mpsc::Sender<Box<Value>>` requires `Value: Send`. Static
+// assert: if a future variant inadvertently makes Value `!Send` (e.g. an
+// `Rc<...>` payload) this fails at compile time, BEFORE the runtime tries
+// to hand a value to the bio thread.
+const _: fn() = || {
+    fn assert_send<T: Send>() {}
+    assert_send::<Value>();
+};
 
 /// Per-bucket footprint for `KevyMap`/`KevySet`-backed collections (open-
 /// addressing Swiss table). Approximation, not exact: includes metadata byte

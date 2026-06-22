@@ -235,6 +235,14 @@ pub struct Store {
     /// the entry is `Vec<u8>` + `u64` (~ 30 B + key length) and only
     /// touched on writes / WATCH calls.
     pub(crate) watch_versions: std::collections::HashMap<Vec<u8>, u64>,
+    /// Optional handle to the runtime's bio thread (v1.25 A.3). Set by
+    /// `kevy-rt::Runtime::run` via [`Self::set_bio_drop_sender`] before
+    /// the shard reactor loop starts. `None` = inline drop (bare-Store
+    /// embedders, snapshots-loader programs, the test harness — anything
+    /// without a kevy-rt runtime around it). Reads on the hot path are
+    /// one `Option::as_ref` branch; the steady-state inline-drop path
+    /// pays nothing beyond that branch.
+    pub(crate) bio_drop_sender: Option<value::BioDropSender>,
 }
 
 impl Store {
@@ -271,6 +279,52 @@ impl Store {
     pub fn set_max_memory(&mut self, maxmemory: u64, policy: EvictionPolicy) {
         self.maxmemory = maxmemory;
         self.eviction_policy = policy;
+    }
+
+    /// Install the runtime's bio-drop channel (v1.25 A.3). Called once
+    /// from `kevy-rt::Runtime::run` per shard before the reactor loop
+    /// starts. After install, [`Self::maybe_offload_drop`] (invoked from
+    /// the SET overwrite fast path) ships oversize `Value`s to the bio
+    /// thread instead of freeing them inline — bounded the Axis I
+    /// 10 KB SET p999/max blow-up that synchronous `Box::<[u8]>::drop`
+    /// of a jemalloc large-class slot caused (see `kevy_rt::bio`).
+    #[inline]
+    pub fn set_bio_drop_sender(&mut self, sender: value::BioDropSender) {
+        self.bio_drop_sender = Some(sender);
+    }
+
+    /// Ship `old` to the bio thread if it's worth the cross-thread hop
+    /// AND a bio channel is installed. Otherwise drop inline. The hot
+    /// path is one branch on `bio_drop_sender.is_none()` followed by
+    /// the variant-cheap [`Value::is_heap_heavy`] check; for the
+    /// `Value::Str(SmallBytes)` steady state of typical bench shapes
+    /// the inline-drop path is preserved unchanged.
+    #[inline]
+    pub(crate) fn maybe_offload_drop(&self, old: Value) {
+        match self.bio_drop_sender.as_ref() {
+            // No channel (bare Store): the Value falls out of scope and
+            // drops inline. Same behaviour as v1.24.
+            None => drop(old),
+            Some(tx) => {
+                if !old.is_heap_heavy() {
+                    drop(old);
+                    return;
+                }
+                // try_send semantics: `mpsc::Sender::send` only fails
+                // when the receiver (bio thread) is gone. In that
+                // case we have no choice but to free inline — that's
+                // shutdown territory anyway, so the stall is benign.
+                // The returned `SendError(work)` hands us the Box
+                // back; dropping it runs the same Drop the bio thread
+                // would have.
+                if let Err(_send_err) = tx.send(Box::new(old)) {
+                    // SendError already carries the Box; it drops here
+                    // (inline free) and the next ship will discover
+                    // the channel is closed too. No observable change
+                    // beyond the one-time stall.
+                }
+            }
+        }
     }
 
     /// Live byte estimate (see field doc).

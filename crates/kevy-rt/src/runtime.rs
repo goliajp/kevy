@@ -124,6 +124,22 @@ impl<C: Commands> Runtime<C> {
     pub fn run(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {
         let n = self.nshards;
 
+        // v1.25 A.3 (B2: single global bio thread, per
+        // `bench/V125-DECISIONS-PENDING.md`). Spawn BEFORE shards so
+        // every shard's first overwrite already has a live consumer.
+        // The held `bio_send` is moved into the shard loop below
+        // (`store.set_bio_drop_sender`); shutdown ordering is:
+        //   1. shards return → their `Store`s drop → their cloned
+        //      Sender halves drop
+        //   2. this fn's local `bio_send` is dropped here at end of
+        //      scope → channel closes → bio thread's `recv()` returns
+        //      Err → bio thread exits
+        //   3. `bio_handle.join()` blocks until that exit so a final
+        //      large free isn't truncated by process tear-down
+        // (`madvise` returning the page to the kernel still needs the
+        // process alive). See `crate::bio` for the full rationale.
+        let (bio_send, bio_handle) = crate::bio::spawn();
+
         // Cluster binds shard `i` at `port_base + i`; reject a range that
         // overflows u16 up front (loud) instead of wrapping a listener onto
         // a low/privileged port while CLUSTER SLOTS advertises 65536+.
@@ -257,6 +273,12 @@ impl<C: Commands> Runtime<C> {
             // lazy expiry can trust the cached clock (skip per-command
             // `Instant::now()`).
             store.set_cached_clock(true);
+            // v1.25 A.3: hand the bio-drop channel sender to the store so
+            // SET overwrites of heavy values (Arc<[u8]> ≥ 256 B, non-empty
+            // collections) get freed off-reactor. Sender clone is cheap
+            // (`Arc::clone`); the bio thread is shared across all shards
+            // (B2 single-global, mirrors valkey `bio.c`).
+            store.set_bio_drop_sender(bio_send.clone());
             self.commands.on_shard_init(&mut store);
             shards.push(Shard {
                 id,
@@ -391,6 +413,16 @@ impl<C: Commands> Runtime<C> {
         for h in handles {
             let _ = h.join();
         }
+        // v1.25 A.3 shutdown: every shard has joined → every cloned
+        // sender on every Store has been dropped. Drop the last live
+        // sender (this fn's `bio_send`) so the channel closes; the bio
+        // thread's `recv()` returns Err and it exits its loop. The
+        // `join()` then blocks until that exit completes — guarding
+        // against process tear-down while a final large free is in
+        // flight (an unsafe wrt `madvise`/`munmap` semantics — the
+        // kernel needs the process alive to actually release pages).
+        drop(bio_send);
+        let _ = bio_handle.join();
         Ok(())
     }
 }

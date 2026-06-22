@@ -112,25 +112,34 @@ impl Store {
         let expire_at = expire.map(|d| deadline_at(now_ns(), d));
         let key_heap = crate::key_heap_bytes_for(key);
         #[allow(clippy::single_match_else)]
-        let outcome = match self.live_entry_mut(key) {
+        // Phase 1: in-place overwrite or remember we need to insert.
+        // The old value (if any) is taken via `mem::replace` so the bio
+        // hand-off in phase 2 happens AFTER `self.live_entry_mut`'s
+        // borrow on `self.map` is released — without splitting the
+        // borrow we couldn't call `self.maybe_offload_drop`.
+        let (outcome, old_value) = match self.live_entry_mut(key) {
             Some(e) => {
                 if nx {
                     return false;
                 }
                 let had_ttl = e.expire_at_ns.is_some();
-                e.value = new_value;
+                // v1.25 A.3: capture the old Value so it can be shipped
+                // to the bio thread post-borrow rather than dropped
+                // inline (the Drop of a Value::ArcBulk over the heap
+                // heavy threshold is the Axis I tail amplifier).
+                let old = std::mem::replace(&mut e.value, new_value);
                 e.expire_at_ns = expire_at.and_then(crate::pack_deadline);
                 let new_w = key_heap + e.value.weight();
                 let delta = new_w as i64 - e.weight() as i64;
                 let ttl_delta = i64::from(e.expire_at_ns.is_some()) - i64::from(had_ttl);
                 e.set_weight(new_w);
-                Ok((delta, ttl_delta))
+                (Ok((delta, ttl_delta)), Some(old))
             }
             None => {
                 if xx {
                     return false;
                 }
-                Err(Entry::new(new_value, expire_at))
+                (Err(Entry::new(new_value, expire_at)), None)
             }
         };
         match outcome {
@@ -141,6 +150,12 @@ impl Store {
             Err(entry) => {
                 self.insert_entry(SmallBytes::from_slice(key), entry);
             }
+        }
+        // Phase 2: hand the old value off if heavy. Done last so the
+        // critical mutation + bookkeeping commit before any (sub-µs in
+        // steady state) channel send.
+        if let Some(old) = old_value {
+            self.maybe_offload_drop(old);
         }
         true
     }
@@ -166,11 +181,13 @@ impl Store {
         // (overwrite arm vs insert-after-expired arm) is moved-once.
         let mut value_slot = Some(new_value);
 
-        // Phase 1: probe + decide. Two outcomes — overwrite-finished
-        // (delta + ttl_delta) or needs-insert (with expired bookkeeping
-        // already done if applicable).
+        // Phase 1: probe + decide. Three outcomes — overwrite-finished
+        // (delta + ttl_delta + the displaced old `Value` to maybe ship
+        // to the bio thread), an expired-removed `Entry` whose `Value`
+        // ditto needs offload, or needs-insert with no prior value.
         enum Outcome {
-            Updated { delta: i64, ttl_delta: i64 },
+            Updated { delta: i64, ttl_delta: i64, old: Value },
+            ExpiredThenInsert { old: Value },
             NeedInsert,
         }
         let outcome = match self.map.raw_entry_mut(key) {
@@ -191,23 +208,29 @@ impl Store {
                     self.expired_keys_total =
                         self.expired_keys_total.saturating_add(1);
                     if xx {
+                        // No insert; the expired `Value` still needs
+                        // to drop. Ship via the bio path on its way out.
+                        self.maybe_offload_drop(old.value);
                         return false;
                     }
-                    Outcome::NeedInsert
+                    Outcome::ExpiredThenInsert { old: old.value }
                 } else {
                     if nx {
                         return false;
                     }
                     let e = occ.get_mut();
                     let had_ttl = e.expire_at_ns.is_some();
-                    e.value = value_slot.take().unwrap();
+                    // v1.25 A.3: take the old Value before overwriting
+                    // so phase 2 can hand it to the bio thread instead
+                    // of dropping inline (the Axis I tail amplifier).
+                    let old = std::mem::replace(&mut e.value, value_slot.take().unwrap());
                     e.expire_at_ns = expire_at.and_then(crate::pack_deadline);
                     let new_w = key_heap + e.value.weight();
                     let delta = new_w as i64 - e.weight() as i64;
                     let ttl_delta = i64::from(e.expire_at_ns.is_some())
                         - i64::from(had_ttl);
                     e.set_weight(new_w);
-                    Outcome::Updated { delta, ttl_delta }
+                    Outcome::Updated { delta, ttl_delta, old }
                 }
             }
             RawEntryMut::Vacant(_) => {
@@ -219,15 +242,27 @@ impl Store {
         };
 
         // Phase 2: bookkeeping + maybe insert. Borrow on self.map is gone.
-        match outcome {
-            Outcome::Updated { delta, ttl_delta } => {
+        let old_value: Option<Value> = match outcome {
+            Outcome::Updated { delta, ttl_delta, old } => {
                 self.apply_weight_delta(delta);
                 self.adjust_expires(ttl_delta);
+                Some(old)
+            }
+            Outcome::ExpiredThenInsert { old } => {
+                let entry = Entry::new(value_slot.take().unwrap(), expire_at);
+                self.insert_entry(SmallBytes::from_slice(key), entry);
+                Some(old)
             }
             Outcome::NeedInsert => {
                 let entry = Entry::new(value_slot.take().unwrap(), expire_at);
                 self.insert_entry(SmallBytes::from_slice(key), entry);
+                None
             }
+        };
+        // Phase 3: ship the displaced Value if any. Last so the keyspace
+        // commit precedes any (sub-µs steady-state) channel send.
+        if let Some(old) = old_value {
+            self.maybe_offload_drop(old);
         }
         true
     }

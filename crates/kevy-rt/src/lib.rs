@@ -67,6 +67,7 @@
 // kevy-sys.
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod bio;
 mod block_xshard;
 mod blocked;
 mod cache_padded;
