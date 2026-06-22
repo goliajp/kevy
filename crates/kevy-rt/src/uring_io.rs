@@ -257,36 +257,64 @@ impl<C: Commands> Shard<C> {
             self.uring_mark_closing(cid, io);
             return;
         }
-        // L1 (2026-06-21): the writev path mixes write_buf bytes with
-        // arc-bulk borrowed bytes via the iovec list. On a full
-        // completion (res == total submitted) we clear everything and
-        // drop the Arcs; on a SHORT write we fall back — copy any
-        // unsent arc payloads into write_buf so the next iter can
-        // resume via the plain `prep_write` path. The short-write case
-        // is rare (TCP loopback rarely backpressures); this fallback
-        // preserves correctness without iovec-level resume bookkeeping.
+        // L1 (2026-06-21) + A.4 (v1.25): the writev path mixes write_buf
+        // bytes with arc-bulk borrowed bytes via the iovec list. A4
+        // chunked writev: the SQE may cover only the leading
+        // `arcs_in_flight` arcs + write_buf up through `write_byte_cap`;
+        // remaining arcs / write_buf tail stay queued for the next
+        // arm_conns iter. On a full completion we drop the processed
+        // prefix; on a SHORT write we materialise EVERYTHING (in-flight
+        // chunk's unsent suffix + all remaining arcs + remaining
+        // write_buf tail) into a linear write_buf so the next iter
+        // resumes via the plain `prep_write` path.
         if !uc.write_arcs.is_empty() {
             let written = res as usize;
-            let total: usize = uc.write_iovecs.iter().map(|v| v.iov_len).sum();
-            if written == total {
-                uc.write_buf.clear();
-                uc.write_arcs.clear();
-                uc.write_iovecs.clear();
-                uc.write_off = 0;
-                // H1.C: per-conn pending_write flag tracks the pub/sub
-                // dirty-list dedup. write_buf was swapped from
-                // conn.output earlier; once fully sent and conn.output
-                // is empty too, the conn is idle wrt outbound and the
-                // next publish should re-push it onto `dirty`.
-                if let Some(conn) = self.conns.get_mut(&cid)
-                    && conn.output.is_empty()
-                {
-                    conn.pending_write = false;
+            let submitted = uc.write_inflight_bytes;
+            if written == submitted {
+                // Full chunk completed. Drop the processed-prefix arcs;
+                // advance write_off through the included header bytes.
+                let consumed = uc.arcs_in_flight;
+                let everything_done = consumed == uc.write_arcs.len()
+                    && uc.write_byte_cap == uc.write_buf.len();
+                if everything_done {
+                    uc.write_buf.clear();
+                    uc.write_arcs.clear();
+                    uc.write_iovecs.clear();
+                    uc.write_off = 0;
+                    uc.arcs_in_flight = 0;
+                    uc.write_byte_cap = 0;
+                    uc.write_inflight_bytes = 0;
+                    // H1.C: per-conn pending_write flag tracks the
+                    // pub/sub dirty-list dedup. write_buf was swapped
+                    // from conn.output earlier; once fully sent and
+                    // conn.output is empty too, the conn is idle wrt
+                    // outbound and the next publish should re-push it
+                    // onto `dirty`.
+                    if let Some(conn) = self.conns.get_mut(&cid)
+                        && conn.output.is_empty()
+                    {
+                        conn.pending_write = false;
+                    }
+                } else {
+                    // A.4: leave the unsent tail in place. write_off
+                    // advances to the cap; the next arm_conns iter
+                    // submits the next chunk starting from there.
+                    uc.write_off = uc.write_byte_cap;
+                    uc.write_arcs.drain(..consumed);
+                    uc.write_iovecs.clear();
+                    uc.arcs_in_flight = 0;
+                    uc.write_byte_cap = 0;
+                    uc.write_inflight_bytes = 0;
                 }
             } else {
-                // Materialise the full payload into write_buf; drop arcs;
-                // advance write_off to where we left off. Next iter
-                // submits the remainder via the simple prep_write path.
+                // Short write: materialise the entire still-unsent
+                // payload (in-flight chunk's unsent suffix + remaining
+                // chunked-out arcs + write_buf tail past byte_cap) into
+                // a linear write_buf; drop all arcs; reset chunked
+                // state; advance write_off by the bytes actually
+                // written. Next iter takes the simple prep_write path.
+                let total: usize = uc.write_buf.len()
+                    + uc.write_arcs.iter().map(|(_, a)| a.len()).sum::<usize>();
                 let mut linear: Vec<u8> = Vec::with_capacity(total);
                 let mut prev = 0usize;
                 for (pos, arc) in &uc.write_arcs {
@@ -304,6 +332,9 @@ impl<C: Commands> Shard<C> {
                 uc.write_arcs.clear();
                 uc.write_iovecs.clear();
                 uc.write_off = written;
+                uc.arcs_in_flight = 0;
+                uc.write_byte_cap = 0;
+                uc.write_inflight_bytes = 0;
             }
             return;
         }
