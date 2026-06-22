@@ -48,10 +48,13 @@
 //!   flight (correctness for `madvise` returning the page to the
 //!   kernel before the process state is torn down).
 //!
-//! **Channel shape extension**: today the `BioWork` enum only carries
-//! `DropValue(Box<kevy_store::Value>)`. The follow-up uses are wired by
-//! adding variants here; the per-shard `BioSender` clone is already in
-//! place. Candidates (from `bench/V125-DECISIONS-PENDING.md` A.3):
+//! **Channel shape extension**: today the channel carries
+//! `Vec<Box<kevy_store::Value>>` (v1.25 A.2 batch model — one mpsc
+//! send per shard-flush, amortising the per-send atomic + cross-
+//! thread cacheline cost across N drops). The follow-up uses are
+//! wired by promoting this to a `BioWork` enum here; the per-shard
+//! `BioSender` clone is already in place. Candidates (from
+//! `bench/V125-DECISIONS-PENDING.md` A.3):
 //! - `Save { view, snap_path, … }` — migrate `start_bg_save` off the
 //!   per-shard `PersistWorker` mpsc onto this thread to consolidate
 //!   resource use (the orthodox valkey model: one bio thread total).
@@ -75,31 +78,38 @@ use std::thread;
 /// is `join()`-ed after the shard threads exit so the process doesn't
 /// tear down while a free is still in flight.
 ///
-/// **Channel shape**: today the sender carries `Box<Value>` directly
-/// (the v1.25 A.3 scope is drop-only). Future extensions —
-/// `BGSAVE`/`BGREWRITEAOF` migration off `PersistWorker`, `Fsync`
-/// off-thread for `appendfsync=always` — will replace this with a
-/// `BioWork` enum carrying both `DropValue(Box<Value>)` and a `Save{…}`
-/// variant; the `BioDropSender` type alias on `kevy-store` will then
-/// re-shape to `Sender<BioWork>`. Per
+/// **Channel shape**: the sender carries `Vec<Box<Value>>` — a batch
+/// of heavy values produced by one shard since its last flush
+/// (v1.25 A.2 batch-send model). The reactor calls
+/// `Store::flush_pending_drops` at the end of every iter to push the
+/// batch; the bio thread iterates the Vec and drops each `Box<Value>`.
+/// Future extensions — `BGSAVE`/`BGREWRITEAOF` migration off
+/// `PersistWorker`, `Fsync` off-thread for `appendfsync=always` — will
+/// replace this with a `BioWork` enum carrying both `DropBatch(Vec<…>)`
+/// and a `Save{…}` variant; the `BioDropSender` type alias on
+/// `kevy-store` will then re-shape to `Sender<BioWork>`. Per
 /// `bench/V125-DECISIONS-PENDING.md` A.3, those follow-ups share the
 /// same single-thread B2 topology, so the call-site plumbing established
 /// here (sender clone per shard, drop-on-shutdown channel close, join
 /// on the held handle) is reused unchanged.
 pub(crate) fn spawn() -> (BioDropSender, thread::JoinHandle<()>) {
-    let (tx, rx) = mpsc::channel::<Box<Value>>();
+    let (tx, rx) = mpsc::channel::<Vec<Box<Value>>>();
     let handle = thread::Builder::new()
         .name("kevy-bio".to_string())
         .spawn(move || {
             // Blocking recv = zero idle CPU. Loop until every Sender
             // clone has been dropped (shards joined + runtime exits),
             // at which point `recv()` returns `Err` and we fall out.
-            while let Ok(v) = rx.recv() {
-                // The interesting work is the implicit `Drop` at scope
-                // end (Box → Value → ArcBulk → Box<[u8]> → free).
-                // Naming the binding (rather than `drop(v)`) keeps the
-                // intent legible: we are the off-reactor `free`.
-                drop(v);
+            while let Ok(batch) = rx.recv() {
+                // The interesting work is the implicit `Drop` of each
+                // Box<Value> as the Vec is consumed (Box → Value →
+                // ArcBulk → Box<[u8]> → free). Naming the binding
+                // (rather than `drop(batch)` in one shot) keeps the
+                // per-item Drop intent legible: we are the off-reactor
+                // `free` for every item the shard handed us.
+                for boxed in batch {
+                    drop(boxed);
+                }
             }
         })
         .expect("spawn kevy-bio thread");

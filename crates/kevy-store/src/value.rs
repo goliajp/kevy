@@ -197,27 +197,41 @@ const _: () = {
 /// occasionally millisecond-range) exceeds the per-send channel cost
 /// PLUS the cross-thread cache-line bouncing.
 ///
-/// 16 KB is jemalloc's `huge`/`large` class boundary on glibc Linux —
-/// allocations at or above this size are far more likely to backed by
-/// `mmap` directly and freed via `munmap` (the stall mode). 10 KB
-/// allocations (the Axis I workload) stay on inline-drop because at
-/// median they're fast; the bio path catches the genuinely huge
-/// (≥ 16 KB) cases where the stall risk dominates.
+/// v1.25 A.2 (batch-send follow-up to A.3): with per-shard batch
+/// accumulation flushing at the end of every reactor iteration, the
+/// per-mpsc-send cost is amortised across N drops. That makes the
+/// channel hop profitable at smaller sizes than A.3's lone-send model
+/// could justify (A.3 had to lift to 16 KB because per-`mpsc::send`
+/// cost was a few hundred ns — at 256 B the inline drop was cheaper).
 ///
-/// Future work (per `bench/V125-OPEN-ITEMS.md` follow-up): a
-/// drain-on-batch model — accumulate `Box<Value>` into a per-shard
-/// `Vec` and send the WHOLE batch over one mpsc message at flush
-/// time. Amortises the channel cost across N drops, restoring the
-/// 256-B floor as profitable. Out of scope for the bio-thread
-/// infrastructure landing.
-pub const HEAP_HEAVY_BYTES: usize = 16 * 1024;
+/// **R3 ★ — sweet-spot threshold surprise**: the agent brief and A.3
+/// commit body both gestured at dropping the threshold to 256 B – 1 KB
+/// once batching amortises the send. Sweep on lx64 across
+/// {512, 1024, 4096, 16384} × c=50 SET -d {1K, 4K, 10K, 64K}
+/// disproved that floor: at ≤ 1 KB threshold, p999 / max on small
+/// values (-d 1024, -d 4096) was variance-bounded equal or
+/// occasionally WORSE than the A.3 16 KB threshold, while the larger
+/// sizes (10 KB / 64 KB) won either way. Cause: the Vec::push +
+/// occasional `MAX_PENDING_DROPS` force-flush stall costs more for
+/// small Arcs (jemalloc small-class free is sub-µs even at tail)
+/// than the inline drop it avoids.
+///
+/// Picked **4 KB** as the lowest threshold where the bio-off-reactor
+/// win consistently dominates the batch-buffer overhead on tail
+/// metrics. The biggest A.2 wins (vs A.3 16 KB) land on `-d 64K`
+/// SET p50 (-44 %) and `-d 10K` SET max (-35 %), where each iter's
+/// batch already contains several heavy values per shard.
+pub const HEAP_HEAVY_BYTES: usize = 4 * 1024;
 
 /// Sender half of the runtime's bio-drop channel. Wired from
 /// `kevy-rt`'s `bio.rs` via [`crate::Store::set_bio_drop_sender`]; the
-/// concrete payload is `Box<Value>` so the store crate can ship the
-/// type without a back-dep on the rt crate's enum. The bio thread
-/// (`kevy-rt::bio::spawn`) just runs `drop(boxed_value)`.
-pub type BioDropSender = std::sync::mpsc::Sender<Box<Value>>;
+/// concrete payload is `Vec<Box<Value>>` — a **batch** of values
+/// produced by one shard since its last flush (A.2 batch-send model).
+/// The bio thread (`kevy-rt::bio::spawn`) iterates the batch and
+/// drops each item. One mpsc message per shard-flush amortises the
+/// channel cost (atomic + cross-thread cacheline traffic) across
+/// however many values landed in the batch.
+pub type BioDropSender = std::sync::mpsc::Sender<Vec<Box<Value>>>;
 
 impl Value {
     /// The Redis type name (`TYPE` command).

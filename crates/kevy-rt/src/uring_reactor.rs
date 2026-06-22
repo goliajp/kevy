@@ -276,6 +276,17 @@ impl<C: Commands> Shard<C> {
             self.flush_requests();
             self.flush_publish();
             self.flush_wakes();
+            // v1.25 A.2: ship the per-shard bio-drop batch to the bio
+            // thread BEFORE the AOF fsync window. Two reasons:
+            // (1) a pending fsync stall (EverySec / Always) would
+            //     otherwise pin a batch's worth of `Box<Value>` heap
+            //     in this shard's RSS for the fsync duration;
+            // (2) keeps the per-iter drop latency window bounded to
+            //     one reactor iteration regardless of AOF state.
+            // Empty-buffer fast path = predicted-not-taken length
+            // check, so the cost on iters that did no overwrite is
+            // sub-ns.
+            self.store.flush_pending_drops();
             if let Some(aof) = &mut self.aof {
                 let _ = aof.maybe_sync();
             }

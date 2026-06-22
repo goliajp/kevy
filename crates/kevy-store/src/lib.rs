@@ -251,7 +251,42 @@ pub struct Store {
     /// one `Option::as_ref` branch; the steady-state inline-drop path
     /// pays nothing beyond that branch.
     pub(crate) bio_drop_sender: Option<value::BioDropSender>,
+    /// v1.25 A.2 batch-send buffer. Heavy `Value`s displaced by SET
+    /// overwrites accumulate here instead of paying one mpsc send per
+    /// drop; flushed in one `mpsc::Sender::send` at the end of every
+    /// reactor iteration (via [`Self::flush_pending_drops`], invoked
+    /// from `kevy-rt`'s epoll + io_uring reactor loops before the AOF
+    /// fsync window). Amortising the channel cost over N drops lets
+    /// the heap-heavy threshold sit at 1 KB — small enough that the
+    /// Axis I 256 B – 16 KB SET tail benefits, big enough that
+    /// sub-µs small-class drops still go inline (the push + flush
+    /// branch would cost more than the inline free).
+    ///
+    /// **Latency window**: drops sit in this buffer ≤ one reactor
+    /// iteration (10s of µs at busy-poll, ≤ park-timeout at idle —
+    /// 50 ms by default). On a reactor with no traffic the buffer
+    /// stays small (no new SETs to displace anything); on a reactor
+    /// with sustained writes the per-iter flush fires fast enough
+    /// that worst-case stall is bounded by `MAX_PENDING_DROPS`.
+    ///
+    /// **Bounded growth**: at `MAX_PENDING_DROPS` items the
+    /// `maybe_offload_drop` path force-flushes — protects against
+    /// pathological "thousand SETs in one iter never flush" cases
+    /// (would otherwise hold thousands of Box<Value>s in RAM until
+    /// the iter ends).
+    pub(crate) pending_drops: Vec<Box<Value>>,
 }
+
+/// Maximum [`Store::pending_drops`] depth before forcing a flush
+/// inside `maybe_offload_drop` (rather than waiting for the reactor's
+/// per-iter `flush_pending_drops`). Caps memory held in the batch
+/// buffer at ≤ 64 × sizeof(Box<Value>) (≤ 512 B of pointers + whatever
+/// the boxed payloads weigh — which we WANT to ship anyway, since
+/// holding the bio-bound batch defeats the point of off-reactor frees).
+/// 64 picked as: amortises mpsc send cost (~few hundred ns) across
+/// enough drops that per-drop overhead is ≤ 10 ns, while staying small
+/// enough that worst-case bunch-up latency at the bio thread is bounded.
+pub(crate) const MAX_PENDING_DROPS: usize = 64;
 
 impl Store {
     pub fn new() -> Self {
@@ -289,49 +324,92 @@ impl Store {
         self.eviction_policy = policy;
     }
 
-    /// Install the runtime's bio-drop channel (v1.25 A.3). Called once
-    /// from `kevy-rt::Runtime::run` per shard before the reactor loop
-    /// starts. After install, [`Self::maybe_offload_drop`] (invoked from
-    /// the SET overwrite fast path) ships oversize `Value`s to the bio
-    /// thread instead of freeing them inline — bounded the Axis I
-    /// 10 KB SET p999/max blow-up that synchronous `Box::<[u8]>::drop`
-    /// of a jemalloc large-class slot caused (see `kevy_rt::bio`).
+    /// Install the runtime's bio-drop channel (v1.25 A.3 + A.2). Called
+    /// once from `kevy-rt::Runtime::run` per shard before the reactor
+    /// loop starts. After install, [`Self::maybe_offload_drop`] (invoked
+    /// from the SET overwrite fast path) accumulates oversize `Value`s
+    /// into a per-shard batch; the reactor calls
+    /// [`Self::flush_pending_drops`] at the end of every iter to ship
+    /// the batch in one mpsc send. Bounded the Axis I 10 KB SET p999/max
+    /// blow-up that synchronous `Box::<[u8]>::drop` of a jemalloc
+    /// large-class slot caused (see `kevy_rt::bio`).
     #[inline]
     pub fn set_bio_drop_sender(&mut self, sender: value::BioDropSender) {
         self.bio_drop_sender = Some(sender);
     }
 
-    /// Ship `old` to the bio thread if it's worth the cross-thread hop
-    /// AND a bio channel is installed. Otherwise drop inline. The hot
-    /// path is one branch on `bio_drop_sender.is_none()` followed by
-    /// the variant-cheap [`Value::is_heap_heavy`] check; for the
-    /// `Value::Str(SmallBytes)` steady state of typical bench shapes
-    /// the inline-drop path is preserved unchanged.
+    /// Accumulate `old` into the per-shard bio-drop batch buffer
+    /// ([`Store::pending_drops`]) if it's heap-heavy AND a bio channel
+    /// is installed. Otherwise drop inline. The hot path is one branch
+    /// on `bio_drop_sender.is_none()` followed by the variant-cheap
+    /// [`Value::is_heap_heavy`] check; for the `Value::Str(SmallBytes)`
+    /// steady state of typical bench shapes the inline-drop path is
+    /// preserved unchanged.
+    ///
+    /// **v1.25 A.2 batch model**: per-send mpsc cost (atomic +
+    /// cross-thread cacheline) is amortised across the batch by
+    /// [`Self::flush_pending_drops`], which the reactor calls once per
+    /// iter. Force-flushes here when the buffer hits
+    /// [`MAX_PENDING_DROPS`] to bound RAM in-flight.
     #[inline]
-    pub(crate) fn maybe_offload_drop(&self, old: Value) {
-        match self.bio_drop_sender.as_ref() {
-            // No channel (bare Store): the Value falls out of scope and
-            // drops inline. Same behaviour as v1.24.
-            None => drop(old),
-            Some(tx) => {
-                if !old.is_heap_heavy() {
-                    drop(old);
-                    return;
-                }
-                // try_send semantics: `mpsc::Sender::send` only fails
-                // when the receiver (bio thread) is gone. In that
-                // case we have no choice but to free inline — that's
-                // shutdown territory anyway, so the stall is benign.
-                // The returned `SendError(work)` hands us the Box
-                // back; dropping it runs the same Drop the bio thread
-                // would have.
-                if let Err(_send_err) = tx.send(Box::new(old)) {
-                    // SendError already carries the Box; it drops here
-                    // (inline free) and the next ship will discover
-                    // the channel is closed too. No observable change
-                    // beyond the one-time stall.
-                }
+    pub(crate) fn maybe_offload_drop(&mut self, old: Value) {
+        if self.bio_drop_sender.is_none() {
+            // No channel (bare Store / embedded reaper / tests): the
+            // Value falls out of scope and drops inline. Same
+            // behaviour as v1.24.
+            drop(old);
+            return;
+        }
+        if !old.is_heap_heavy() {
+            // Under-threshold: jemalloc small-class free is sub-µs.
+            // The Vec::push + force-flush branch costs more than the
+            // inline free for this size — leave it inline.
+            drop(old);
+            return;
+        }
+        self.pending_drops.push(Box::new(old));
+        if self.pending_drops.len() >= MAX_PENDING_DROPS {
+            self.flush_pending_drops();
+        }
+    }
+
+    /// Ship the per-shard bio-drop batch buffer to the bio thread in
+    /// one mpsc send. Called from `kevy-rt`'s reactor loop at the end
+    /// of every iteration (both the epoll `Shard::run` and the io_uring
+    /// `Shard::run_uring` paths, just before the AOF fsync window so a
+    /// pending fsync stall doesn't pin a batch-ful of heavy values in
+    /// per-shard memory).
+    ///
+    /// Empty-buffer fast path: zero work, predictable not-taken
+    /// branch. Reactor calls this unconditionally per iter; the steady-
+    /// state cost for a no-SET-overwrite iter is one length check.
+    ///
+    /// `SendError` here means the bio thread has exited (shutdown
+    /// territory — `Runtime::run` has dropped its sender AFTER the
+    /// shard threads joined). Drop the batch inline; the `SendError`
+    /// payload carries the `Vec` back so its `Box<Value>`s run their
+    /// Drop here, preserving correctness.
+    #[inline]
+    pub fn flush_pending_drops(&mut self) {
+        if self.pending_drops.is_empty() {
+            return;
+        }
+        let tx = match self.bio_drop_sender.as_ref() {
+            Some(tx) => tx,
+            // Shouldn't happen — caller (`maybe_offload_drop`) only
+            // pushes when the sender exists. Defensive: if a future
+            // refactor invokes `flush_pending_drops` from somewhere
+            // unconditional, drop the batch inline.
+            None => {
+                self.pending_drops.clear();
+                return;
             }
+        };
+        let batch = std::mem::take(&mut self.pending_drops);
+        if let Err(_send_err) = tx.send(batch) {
+            // Bio thread is gone (shutdown). The SendError carries
+            // the Vec, which drops here — every Box<Value> runs its
+            // Drop inline. Benign one-time stall during tear-down.
         }
     }
 
