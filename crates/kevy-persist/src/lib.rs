@@ -42,6 +42,7 @@ mod replay;
 pub mod reshard;
 mod rewrite_fmt;
 mod shards_meta;
+mod snapshot_payload;
 
 pub use aof::{Aof, Fsync, RewritePlan, RewriteStats, write_aof_base};
 pub use replay::replay_aof;
@@ -308,14 +309,14 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
     let op = match value {
         Value::Str(_) | Value::Int(_) | Value::ArcBulk(_) => OP_STR, // L1/L2: all reuse OP_STR.
 
-        Value::Hash(_) => OP_HASH,
-        Value::List(_) => OP_LIST,
+        Value::Hash(_) | Value::SmallHashInline(_) => OP_HASH,
+        Value::List(_) | Value::SmallListInline(_) => OP_LIST,
         // A.7 O5: both Set encodings share the OP_SET wire format —
         // payload is `[len: u32 LE][bulk: len-prefixed bytes]*`, agnostic
         // of whether the in-memory representation is `SmallSetInline` or
         // `Arc<KevySet>`.
         Value::Set(_) | Value::SmallSetInline(_) => OP_SET,
-        Value::ZSet(_) => OP_ZSET,
+        Value::ZSet(_) | Value::SmallZSetInline(_) => OP_ZSET,
         Value::Stream(_) => OP_STREAM,
     };
     w.write_all(&[op])?;
@@ -325,91 +326,23 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
         Value::Str(v) => write_bytes(w, v.as_slice()),
         Value::Int(n) => write_bytes(w, n.to_string().as_bytes()),
         Value::ArcBulk(a) => write_bytes(w, a.as_ref()),
-        Value::Hash(h) => write_hash_payload(w, h),
-        Value::List(l) => write_list_payload(w, l),
-        Value::Set(set) => write_set_payload(w, set),
-        Value::SmallSetInline(s) => write_small_set_payload(w, s),
-        Value::ZSet(z) => write_zset_payload(w, z),
-        Value::Stream(s) => write_stream_payload(w, s),
+        Value::Hash(h) => snapshot_payload::write_hash_payload(w, h),
+        Value::SmallHashInline(h) => snapshot_payload::write_small_hash_payload(w, h),
+        Value::List(l) => snapshot_payload::write_list_payload(w, l),
+        Value::SmallListInline(l) => snapshot_payload::write_small_list_payload(w, l),
+        Value::Set(set) => snapshot_payload::write_set_payload(w, set),
+        Value::SmallSetInline(s) => snapshot_payload::write_small_set_payload(w, s),
+        Value::ZSet(z) => snapshot_payload::write_zset_payload(w, z),
+        Value::SmallZSetInline(z) => snapshot_payload::write_small_zset_payload(w, z),
+        Value::Stream(s) => snapshot_payload::write_stream_payload(w, s),
     }
-}
-
-fn write_hash_payload<W: Write>(w: &mut W, h: &kevy_store::HashData) -> io::Result<()> {
-    w.write_all(&(h.len() as u32).to_le_bytes())?;
-    for (f, v) in h {
-        write_bytes(w, f.as_slice())?;
-        write_bytes(w, v)?;
-    }
-    Ok(())
-}
-
-fn write_list_payload<W: Write>(w: &mut W, l: &kevy_store::ListData) -> io::Result<()> {
-    w.write_all(&(l.len() as u32).to_le_bytes())?;
-    for item in l {
-        write_bytes(w, item)?;
-    }
-    Ok(())
-}
-
-fn write_set_payload<W: Write>(w: &mut W, set: &kevy_store::SetData) -> io::Result<()> {
-    w.write_all(&(set.len() as u32).to_le_bytes())?;
-    for m in set {
-        write_bytes(w, m.as_slice())?;
-    }
-    Ok(())
-}
-
-/// A.7 O5: inline-encoded set payload — same OP_SET wire shape as
-/// [`write_set_payload`], just sourced from the packed inline buffer
-/// instead of the heap-backed `KevySet`. Snapshot/replication is
-/// encoding-agnostic; the loader rebuilds whichever encoding it sees
-/// fit (currently always `Value::Set(Arc<KevySet>)` via
-/// `Store::load_set`, see `keyspace.rs::load_value`).
-fn write_small_set_payload<W: Write>(
-    w: &mut W,
-    s: &kevy_store::SmallSetData,
-) -> io::Result<()> {
-    w.write_all(&(s.len() as u32).to_le_bytes())?;
-    for m in s.iter() {
-        write_bytes(w, m)?;
-    }
-    Ok(())
-}
-
-fn write_zset_payload<W: Write>(w: &mut W, z: &kevy_store::ZSetData) -> io::Result<()> {
-    let entries: Vec<(&[u8], f64)> = z.ordered().collect();
-    w.write_all(&(entries.len() as u32).to_le_bytes())?;
-    for (m, score) in entries {
-        write_bytes(w, m)?;
-        w.write_all(&score.to_bits().to_le_bytes())?;
-    }
-    Ok(())
-}
-
-fn write_stream_payload<W: Write>(w: &mut W, s: &kevy_store::StreamData) -> io::Result<()> {
-    w.write_all(&s.last_id().ms.to_le_bytes())?;
-    w.write_all(&s.last_id().seq.to_le_bytes())?;
-    w.write_all(&s.max_deleted_id().ms.to_le_bytes())?;
-    w.write_all(&s.max_deleted_id().seq.to_le_bytes())?;
-    w.write_all(&s.entries_added().to_le_bytes())?;
-    w.write_all(&(s.length() as u32).to_le_bytes())?;
-    for (id, fv) in s.iter_entries() {
-        w.write_all(&id.ms.to_le_bytes())?;
-        w.write_all(&id.seq.to_le_bytes())?;
-        w.write_all(&(fv.len() as u32).to_le_bytes())?;
-        for (f, v) in fv {
-            write_bytes(w, f.as_slice())?;
-            write_bytes(w, v.as_slice())?;
-        }
-    }
-    write_stream_groups(w, &s.export_groups())
 }
 
 /// v4 consumer-group section: `[n_groups][per group: name, last_delivered,
 /// consumers (name + last_seen_ms), PEL rows]`. Tombstone PEL rows are kept
 /// — the snapshot path is the full-fidelity one (the AOF rewrite can't
 /// re-create them via XCLAIM, see `rewrite_fmt`).
-fn write_stream_groups<W: Write>(w: &mut W, groups: &[kevy_store::LoadedGroup]) -> io::Result<()> {
+pub(crate) fn write_stream_groups<W: Write>(w: &mut W, groups: &[kevy_store::LoadedGroup]) -> io::Result<()> {
     w.write_all(&(groups.len() as u32).to_le_bytes())?;
     for g in groups {
         write_bytes(w, &g.name)?;
@@ -485,7 +418,7 @@ fn tmp_path(path: &Path) -> std::path::PathBuf {
     s.into()
 }
 
-fn write_bytes<W: Write>(w: &mut W, b: &[u8]) -> io::Result<()> {
+pub(crate) fn write_bytes<W: Write>(w: &mut W, b: &[u8]) -> io::Result<()> {
     w.write_all(&(b.len() as u32).to_le_bytes())?;
     w.write_all(b)
 }

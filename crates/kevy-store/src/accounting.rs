@@ -155,15 +155,24 @@ impl Store {
     /// `get` = 2). The two-phase shape (decide, then mutate/fetch) keeps the
     /// borrow checker happy without an owning key clone.
     pub(crate) fn live_entry(&mut self, key: &[u8]) -> Option<&Entry> {
-        let (uc, cn) = (self.cached_clock, self.cached_ns);
-        let expired = match self.map.get(key) {
+        // G-A4 (v1.25): TTL-free fast path. Read cached clock fields
+        // ONLY when the entry actually carries a TTL — most keys don't,
+        // and the prior implementation paid two field reads + a pass
+        // through `is_expired` (which itself short-circuits on None)
+        // unconditionally. Saves ~5 ns / hot lookup across every
+        // collection / string read path.
+        let needs_check = match self.map.get(key) {
             None => return None,
-            Some(e) => e.is_expired(uc, cn),
+            Some(e) => e.expire_at_ns.is_some(),
         };
-        if expired {
-            self.remove_entry(key);
-            self.expired_keys_total = self.expired_keys_total.saturating_add(1);
-            return None;
+        if needs_check {
+            let (uc, cn) = (self.cached_clock, self.cached_ns);
+            let expired = self.map.get(key).is_some_and(|e| e.is_expired(uc, cn));
+            if expired {
+                self.remove_entry(key);
+                self.expired_keys_total = self.expired_keys_total.saturating_add(1);
+                return None;
+            }
         }
         if self.maxmemory > 0 {
             self.tick_clock();
@@ -181,15 +190,19 @@ impl Store {
     /// Read-modify commands (INCR/APPEND/…) get the entry once and mutate in
     /// place, preserving any TTL on it.
     pub(crate) fn live_entry_mut(&mut self, key: &[u8]) -> Option<&mut Entry> {
-        let (uc, cn) = (self.cached_clock, self.cached_ns);
-        let expired = match self.map.get(key) {
+        // G-A4 (v1.25): see `live_entry` doc — TTL-free fast path.
+        let needs_check = match self.map.get(key) {
             None => return None,
-            Some(e) => e.is_expired(uc, cn),
+            Some(e) => e.expire_at_ns.is_some(),
         };
-        if expired {
-            self.remove_entry(key);
-            self.expired_keys_total = self.expired_keys_total.saturating_add(1);
-            return None;
+        if needs_check {
+            let (uc, cn) = (self.cached_clock, self.cached_ns);
+            let expired = self.map.get(key).is_some_and(|e| e.is_expired(uc, cn));
+            if expired {
+                self.remove_entry(key);
+                self.expired_keys_total = self.expired_keys_total.saturating_add(1);
+                return None;
+            }
         }
         if self.maxmemory > 0 {
             self.tick_clock();

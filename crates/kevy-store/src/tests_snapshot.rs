@@ -45,21 +45,38 @@ fn snapshot_view_is_point_in_time_for_strings() {
 /// changes, the view's stays at the collect-time contents.
 #[test]
 fn snapshot_view_collections_are_cow() {
+    // A.8: use field/value sizes that don't fit the SmallHashInline
+    // budget so we exercise the Arc-COW path (the snapshot guarantee).
+    // Inline-encoded hashes are Clone-on-collect (they live in the
+    // Value body) — they're "trivially CoW" by being copy types,
+    // independent of any Arc.
     let mut s = Store::new();
-    s.hset(b"h", &[(b"f".to_vec(), b"v1".to_vec())]).unwrap();
+    let big_v1: Vec<u8> = vec![b'1'; 30];
+    let big_v2: Vec<u8> = vec![b'2'; 30];
+    let big_w: Vec<u8> = vec![b'w'; 30];
+    let big_f: Vec<u8> = vec![b'f'; 8];
+    let big_g: Vec<u8> = vec![b'g'; 8];
+    s.hset(b"h", &[(big_f.clone(), big_v1.clone())]).unwrap();
 
     let view = s.collect_snapshot();
-    s.hset(b"h", &[(b"f".to_vec(), b"v2".to_vec()), (b"g".to_vec(), b"w".to_vec())]).unwrap();
+    s.hset(
+        b"h",
+        &[(big_f.clone(), big_v2.clone()), (big_g.clone(), big_w.clone())],
+    )
+    .unwrap();
 
     match view_get(&view, b"h") {
         Some(Value::Hash(h)) => {
             assert_eq!(h.len(), 1, "view hash gained post-collect fields");
-            assert_eq!(h.get(b"f".as_slice()).map(std::vec::Vec::as_slice), Some(b"v1".as_slice()));
+            assert_eq!(
+                h.get(big_f.as_slice()).map(std::vec::Vec::as_slice),
+                Some(big_v1.as_slice())
+            );
         }
         other => panic!("expected frozen Hash, got {:?}", other.map(|v| v.type_name())),
     }
-    assert_eq!(s.hget(b"h", b"f").unwrap(), Some(b"v2".as_slice()));
-    assert_eq!(s.hget(b"h", b"g").unwrap(), Some(b"w".as_slice()));
+    assert_eq!(s.hget(b"h", &big_f).unwrap(), Some(big_v2.as_slice()));
+    assert_eq!(s.hget(b"h", &big_g).unwrap(), Some(big_w.as_slice()));
 }
 
 /// Deleting the only live owner must not free what the view still holds —
