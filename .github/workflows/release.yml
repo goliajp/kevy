@@ -113,34 +113,39 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # crates.io rate-limits "updates to existing crates" at roughly
-          # 30/minute. Our 16-crate workspace fits inside one minute, but
-          # back-to-back tag retries (v1.26.2 + v1.26.3 + v1.26.4 → 48
-          # publishes in a few minutes) tripped it on 2026-06-22. Two
-          # mitigations live in `publish_or_skip` now:
-          #   - sleep 3s between publish attempts (~5/min cap = safe)
-          #   - on 429, wait + retry up to 3 times before giving up
+          # crates.io rate-limits "updates to existing crates" — empirically
+          # ~30 publishes within a 10-minute sliding window per token. The
+          # v1.26.2 → v1.26.3 → v1.26.4 → v1.26.5 retag sequence on
+          # 2026-06-22 published 48+ versions in 20 minutes and got hard
+          # 429s. The 65s × 3 retry from v1.26.5 wasn't long enough — each
+          # cargo retry attempt counts against the burst window too.
+          #
+          # New ceiling: 35s sleep after every successful publish, so a
+          # 22-crate chain takes ~13 min wall-clock but stays well under
+          # any per-10-min limit. On 429, sleep 300s × up to 5 retries
+          # (max 25 min wait per crate) — enough to outwait even a fully
+          # depleted window.
           publish_or_skip() {
             local crate=$1
             echo "::group::publish $crate"
             local log; log=$(mktemp)
             local attempt
-            for attempt in 1 2 3; do
+            for attempt in 1 2 3 4 5; do
               if cargo publish -p "$crate" 2>&1 | tee "$log"; then
                 echo "::endgroup::"
                 echo "✓ published $crate (attempt $attempt)"
-                sleep 3
+                sleep 35
                 return 0
               fi
               if grep -qE "already uploaded|crate version .* is already|already exists on crates.io" "$log"; then
                 echo "::endgroup::"
                 echo "↷ skipped $crate (already on crates.io)"
-                sleep 3
+                sleep 5
                 return 0
               fi
               if grep -qE "429 Too Many Requests|too many updates" "$log"; then
-                echo "::warning::rate-limited on $crate (attempt $attempt) — sleeping 65s and retrying"
-                sleep 65
+                echo "::warning::rate-limited on $crate (attempt $attempt of 5) — sleeping 300s"
+                sleep 300
                 continue
               fi
               echo "::endgroup::"
@@ -148,7 +153,7 @@ jobs:
               return 1
             done
             echo "::endgroup::"
-            echo "✗ FAILED $crate after 3 retries (rate-limit didn't clear)" >&2
+            echo "✗ FAILED $crate after 5 retries (rate-limit didn't clear in 25 min)" >&2
             return 1
           }
           # Topological order — leaves first, then crates that depend on
