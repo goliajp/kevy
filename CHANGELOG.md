@@ -4,6 +4,25 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.26.4] — 2026-06-22 (v1.26.3 follow-up — aarch64-linux build fix)
+
+v1.26.3 published all 16 crates to crates.io successfully (the
+v1.25 → v1.26.3 publish chain is complete), but the `aarch64-linux`
+binary build for the GitHub Release archive failed with E0308: the
+v1.25 UDS FFI declared `pub fn unlink(path: *const i8)` /
+`chmod(path: *const i8, ...)`. That compiles on x86_64-linux and
+aarch64-apple-darwin where `c_char = i8`, but on aarch64-linux
+`c_char = u8` and the `CStr::as_ptr() -> *const c_char` callsite
+mismatches.
+
+Fix: switch the two FFI signatures to `*const core::ffi::c_char`,
+which resolves to the right primitive on every target.
+
+- workspace 1.26.3 → 1.26.4
+- kevy-client 1.12.7 → 1.12.8
+- kevy-client-async 1.0.8 → 1.0.9
+- kevy-embedded 1.4.8 → 1.4.9
+
 ## [v1.26.3] — 2026-06-22 (v1.26.2 follow-up — kevy-resp manifest fix)
 
 `cargo publish` failed in v1.26.2 because `crates/kevy-resp/Cargo.toml`
