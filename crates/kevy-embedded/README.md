@@ -170,6 +170,139 @@ Channel + pattern subscriptions (`PSUBSCRIBE` glob syntax). Drop the
 make the same code work against an in-process bus (`mem://name`) in dev
 and a kevy server (`kevy://host:port`) in prod — no scheme branching.
 
+## Embed + server: join a cluster from your own process (v1.22+)
+
+`kevy-embedded` isn't only "kevy without the network" — it also
+**plugs into a server cluster** as a first-class participant. The
+same `Store` handle that serves your in-process reads can subscribe
+to a server primary's replication stream, or own a key-prefix in a
+multi-writer cluster. RESP2 / replication wire-format is identical
+to a `kevy-server` replica, so the cluster sees no difference.
+
+Three deployment shapes, all backed by the same `Store` API:
+
+### 1. Pure embed — no network at all
+
+The default. Reads and writes hit the in-process keyspace. Use this
+when one process owns the data.
+
+```rust
+use kevy_embedded::{Store, Config};
+let s = Store::open(Config::default().with_persist("./data"))?;
+s.set(b"k", b"v")?;
+# Ok::<(), std::io::Error>(())
+```
+
+### 2. Embed-as-read-replica (Phase 2 of v3-cluster, v1.22)
+
+Subscribe to a server primary's replication stream — every applied
+mutation flows into the in-process `Store` over RESP. Local reads
+pay **zero network round-trip**; local writes return `READONLY`
+(send them to the primary instead). Catch-up on reconnect is
+automatic (per-shard offsets + snapshot ship for fall-behind
+replicas).
+
+```rust
+use kevy_embedded::Store;
+
+// One-liner: connect to primary, fresh replica-id, sensible reconnect.
+let s = Store::open_replica("primary.internal:16004")?;
+
+// Read fan-out scales with N application processes; primary handles writes.
+let v: Option<Vec<u8>> = s.get(b"hot-key")?;
+assert!(s.is_replica());
+// s.set(b"k", b"v") → Err(READONLY)
+# Ok::<(), std::io::Error>(())
+```
+
+Tunable variant when you need a custom reconnect window or a stable
+replica-id (so the primary reuses your backlog after a quick
+restart):
+
+```rust
+use kevy_embedded::{Store, Config};
+use std::time::Duration;
+
+let s = Store::open(
+    Config::default()
+        .with_replica_upstream("primary.internal:16004")
+        .with_replica_id("app-billing-pod-7")
+        .with_replica_reconnect(Duration::from_millis(50), Duration::from_secs(5))
+)?;
+# Ok::<(), std::io::Error>(())
+```
+
+What you get for free vs running a `kevy` server as the replica:
+
+- **No extra process** — the replica state lives in the same address
+  space as your app, so reads are a `Store::get` call, not a TCP
+  round-trip.
+- **Cache locality** — application code that reads via this `Store`
+  doesn't compete with a `redis-cli` proxy port for the page cache.
+- **Same wire protocol** — the primary serves embed-replicas and
+  server-replicas off the same per-shard backlog; `INFO replication`
+  on the primary lists both.
+
+When to use it: read-heavy apps that want **eventual** consistency
+with a single writeable primary, deployed as N stateless application
+pods that each carry the keyspace in-process for read fan-out.
+
+Full server-side recipe in
+[`docs/replication.md`](https://github.com/goliajp/kevy/blob/develop/docs/replication.md);
+cluster topology + failover in
+[`docs/cluster.md`](https://github.com/goliajp/kevy/blob/develop/docs/cluster.md).
+
+### 3. Embed-as-scoped-writer (Phase 3 of v3-cluster, v1.22)
+
+`[cluster] scopes = "app:billing:=embed-a,app:catalog:=embed-b"` on
+the server side declares per-prefix writer ownership; an embed
+process that owns a prefix can **write locally** and the cluster
+routes wrong-prefix writes to the correct owner via the
+`-MISDIRECTED writer is <host:port>` redirect (in the spirit of
+`-MOVED`, scoped to writer identity).
+
+This makes "the writer" a piece of application logic that lives
+inside your app process, while everyone else sees a normal cluster
+client. Use it when one application module is the natural source of
+truth for a key-prefix (the billing service owns `app:billing:*`,
+the catalog service owns `app:catalog:*`), and you want the writes
+to skip the network entirely while reads stay cluster-cached.
+
+Server-side TOML and the `MOVE-SCOPE` migration protocol live in
+[`docs/cluster.md`](https://github.com/goliajp/kevy/blob/develop/docs/cluster.md);
+the embed side is just `Store::open(Config::default())` — the cluster
+wiring is operator config, not embed config.
+
+### 4. URL facade — same code, dev = embed, prod = server
+
+`kevy-client` v1.6.0+ accepts both `mem://` (in-process via
+`kevy-embedded`) and `kevy://host:port` / `redis://…` (TCP):
+
+```rust
+let url = std::env::var("KEVY_URL").unwrap_or_else(|_| "mem://app".into());
+let mut conn = kevy_client::Connection::open(&url)?;  // works for both
+conn.set(b"k", b"v")?;
+# Ok::<(), std::io::Error>(())
+```
+
+So a single Rust binary can boot **as a server, as a pure embedded
+library, or as a hybrid** (embed-as-replica + server primary
+elsewhere) — the calling code never branches on transport. Pub/sub,
+`WATCH`-driven transactions, and typed `Transaction::exec_typed`
+reply cursors are all URL-symmetric.
+
+Caveats:
+
+- Embed-as-replica is **single-DC** and shares all of kevy's
+  out-of-scope items (no AUTH/TLS, no cross-DC active-active —
+  primary + embeds in the same trust domain).
+- Scope ownership conflicts at startup are fatal (the boot prints
+  `bad [cluster] scopes config` and exits) rather than ambiguous —
+  the operator picks one writer per prefix.
+- `Store::is_replica()` lets your code branch when a write would
+  return `READONLY`; route writes via `Connection::open(kevy_url)`
+  for the read-replica deployment shape.
+
 ## Migrating from `lru` / `moka` / `dashmap`
 
 | If you had... | kevy-embedded equivalent | Notes |

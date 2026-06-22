@@ -1,34 +1,87 @@
-# kevy vs valkey 9.1 / redis 7.4 — bench narrative (v0.2 → v1.22)
+# kevy vs valkey 9.1 / redis 7.4 — bench narrative (v0.2 → v1.25)
 
-> **Current headline (v1.22.0, lx64 16-core, 2026-06-20):**
-> - **Server `-c50 -P16` (high concurrency + pipeline)**: kevy SET **4.0 M
->   ops/s** · GET **6.0 M ops/s** — 2.7×/3.0× best-of-valkey-or-redis
->   (valkey-iot 1.5 M / 2.0 M; redis-iot 1.5 M / 2.0 M).
-> - **Server `-c1 -P1` (single conn sequential)**: kevy SET **76 k/s** ·
->   GET **68 k/s** vs valkey-iot 60 k/60 k, redis 55 k/54 k. 1.13-1.49×
->   best-of-rest, kept the lead from v1.17.
-> - **Embed in-process** (`kevy-embedded::Store`, no socket): SET **7.0 M
->   ops/s** (143 ns/op) · GET hit **9.0 M ops/s** (111 ns/op) · GET miss
->   **42.2 M ops/s** (24 ns/op) — ~90× kevy server `-c1` for the same
->   workload (architecture difference, not apples-to-apples; see embed
->   section for the honest framing).
-> - **Pub/sub fan-out** (50 subs × 200 k msgs × 16 B, warm run):
->   Aeron-IPC 84 M msg/s (shared-memory ceiling) → **kevy 18.5 M**
->   → ZMQ 9.4 M → redis 8.9 M → valkey 6.8 M → Zenoh 2.9 M. kevy is the
->   fastest TCP-based broker — 2.0× ZMQ, 2.1× redis, 2.7× valkey.
-> - **Async client (`kevy-client-async` 1.0.0, single conn vs steady
->   kevy server)**: async-sequential 4.2 k ops/s · blocking-sequential
->   4.2 k ops/s — async client overhead is ≤ noise (RFC F5 ≥ 80 %
->   target met). Pipeline at batch=64: 172 k ops/s — **41× sequential**,
->   single RTT amortized over N commands.
+> **Current headline (v1.25.0, lx64 16-core, 2026-06-22):**
+>
+> All cells below are **precision bench** (n=1 M × 10 runs,
+> 2σ-outlier-filtered mean, CI95 < 1 % across the table). Methodology
+> rules: [`.claude/rule/perf-vs-foss.md`](../.claude/rule/perf-vs-foss.md)
+> — R1–R11; the big ones are R2 (banned trigger words like
+> "tied = win"), R10 (read-back validation mandatory on every
+> micro-bench — caught a multi-shard SET silent-drop in attack B.4),
+> and R11 (no AI self-defer to next sprint).
+>
+> **TCP loopback (filt-mean rps):**
+>
+> | workload | kevy 1.25 | valkey 9.1 | redis 7.4 | kevy / valkey |
+> |---|--:|--:|--:|--:|
+> | -c1 SET | **94.7 k** | 62.2 k | 62.3 k | **1.52×** |
+> | -c1 GET | **97.3 k** | 65.0 k | 61.7 k | **1.50×** |
+> | -c50 -P16 SET | **2.59 M** | 1.82 M | 1.20 M | **1.42×** |
+> | -c50 -P16 GET | 2.67 M | 2.68 M | 1.50 M | tied (loopback floor) |
+> | -c50 -P1, -c100 -P1 | ≈191 k | ≈191 k | — | tied (loopback floor) |
+>
+> **UDS (Unix-domain stream socket, v1.25 new transport):**
+>
+> | workload | kevy 1.25 | valkey 9.1 | kevy / valkey |
+> |---|--:|--:|--:|
+> | -c1 SET | **166 k** | 96 k | **1.73×** |
+> | -c1 GET | **168 k** | 106 k | **1.59×** |
+> | -c50 -P16 SET | **4.11 M** | 1.75 M | **2.35×** |
+> | -c50 -P16 GET | **4.35 M** | 3.42 M | **1.27×** |
+> | -c100 -P1 | ≈331 k | ≈326 k | tied (per-syscall floor) |
+>
+> UDS removes the TCP loopback RTT floor; kevy's CPU-light hot path
+> turns the freed headroom into a 1.59× / 1.63× cross-transport lift
+> at `-c50 -P16`. valkey gains less because its hot path is more
+> CPU-bound — see [`docs/uds.md`](../docs/uds.md).
+>
+> **Embed (in-process, `kevy-embedded::Store`):** SET **7.0 M ops/s**
+> (143 ns) · GET hit **9.0 M ops/s** (111 ns) · GET miss **42.2 M
+> ops/s** (24 ns). Unchanged vs v1.22 — the v1.25 sprint targeted
+> wire-side hot paths, not the in-process keyspace.
+>
+> **Tail latency** (c=50, value=10 KB, SET, p99/p999/max, median of 3):
+> p99 0.48 ms vs valkey 0.50 ms (-3 %); p999 0.54 ms vs 0.58 ms
+> (-8 %); max 1.78 ms vs 2.18 ms (-18 %). The bio-thread off-shard
+> offload (v1.25 A.3) is the cause — owned-buffer drops no longer
+> stall the shard's busy-poll cadence.
+>
+> **Pub/sub fan-out** (`kevy-pubsub-bench`, median of 3, 16 B unless
+> noted):
+>
+> | scenario | kevy 1.25 | valkey 9.1 | redis 7.4 | kevy / valkey |
+> |---|--:|--:|--:|--:|
+> | subs=10 | 6.38 M | 4.01 M | 6.09 M | 1.59× |
+> | subs=50 | **23.1 M** | 5.11 M | 11.5 M | **4.52×** |
+> | subs=100 | **28.4 M** | 5.67 M | 12.0 M | **5.00×** |
+> | subs=200 | **31.3 M** | 6.27 M | 11.6 M | **4.98×** |
+> | subs=500 | **31.7 M** | 6.13 M | 10.6 M | **5.17×** |
+> | subs=50, size=256 | 7.62 M | 5.53 M | 6.05 M | 1.38× |
+> | subs=50, size=4 KB | 1.11 M | 2.26 M | 1.47 M | 0.49× ⚠ deferred |
+>
+> Pub/sub was the biggest single-axis win of the v1.25 sprint (G5
+> chain: per-channel `subs_by_channel` index + `pending_write`
+> dedup + Arc-shared body with writev gather — kevy's `bulkStrRef`
+> equivalent). The 4 KB scenario hits a Linux `IOV_MAX=1024` cap;
+> writev-chunking is on the v1.26 backlog.
+>
+> **Cluster routing** (key-aware `ClusterClient` v1.9, unchanged
+> since v1.22): 533 k/s @ conc=64 with p99 260 µs vs single-shard
+> proxy 333 k/s @ p99 3858 µs — **1.6× throughput, ~15× lower tail
+> latency** by removing the cross-shard forwarding hop.
+>
+> **Async client** (`kevy-client-async` 1.0.0): single-conn parity
+> with blocking (4.2 k ops/s both); pipeline at batch=64 hits
+> 172 k ops/s = **41× sequential**.
 >
 > Jump to the latest segments:
+> - [v1.25 perf sprint — 16 attacks, precision-verified](#v125-perf-sprint--16-attacks-precision-verified-2026-06-22-lx64)
 > - [v1.22 bundle bench (server, embed, pub/sub, async)](#v122-v3-cluster-bundle--bench-refresh-2026-06-20-lx64)
 > - [v1.17 cluster-aware client](#v117-cluster-aware-clusterclient---tail-latency-fixed-2026-06-15-lx64)
 > - [Perf-ceiling campaign](#server-perf-ceiling-campaign--regression-recovered-then-peak-surpassed-2026-060910-lx64)
 > - [CLUSTER slot routing](#single-node-cluster-slot-routing--the-forwarding-tax-measured-honestly-2026-06-10-lx64)
 >
-> The chronological narrative below preserves the v0.2 → v1.22 journey.
+> The chronological narrative below preserves the v0.2 → v1.25 journey.
 
 ---
 
@@ -1150,3 +1203,103 @@ argv and a fresh output `Vec<u8>` per encoded command, where
 server still has ~20× headroom on that single connection. Closing
 this gap is a v2-track candidate — pipelining is the user-side
 workaround until then.
+
+---
+
+# v1.25 perf sprint — 16 attacks, precision-verified (2026-06-22, lx64)
+
+The v1.25 cycle moved kevy from "leads in some cells, ties in others"
+(v1.22-v1.23 framing) to **precision-bench-clean leads** at the
+workloads the userspace stack can still influence. 16 perf attacks
+across 7 axes, each scoped from a Phase A decomposition note in
+`.claude/notes/v125-deco-axis-*.md`, shipped (or explicitly retired)
+against a precision harness with CI95 < 1 %.
+
+## Methodology evolution
+
+Eleven rules emerged from this sprint and now live in
+[`.claude/rule/perf-vs-foss.md`](../.claude/rule/perf-vs-foss.md).
+The load-bearing ones:
+
+- **R1 (precision over single-shot)** — every micro-bench is
+  n=1 M × 10 runs with 2σ-outlier-filtered mean. A noise band
+  bigger than the attack's predicted lift = no commit.
+- **R2 (banned trigger words)** — "tied is a win", "close enough",
+  "should be faster" trigger a stop-and-rebench reflex. The v1.22-era
+  "leads on all 4 cells" framing was 6/8 cells inside CI95 — i.e.
+  not leads. This sprint removed that.
+- **R3 (Phase A decomposition first)** — every attack is a written
+  prediction (`bench/V125-AXIS-*.md`) before code. Two pub/sub
+  predictions were refuted by the actual perf record, which became
+  the win condition for H1 and the deletion of an SPSC fast-path
+  that was dead code under `--threads 1 nshards=1`.
+- **R10 (read-back validation mandatory)** — `redis-benchmark`
+  doesn't validate read-back; the bare-SET fast path silently
+  dropped 15/16 multi-shard SETs in B.4 (a routing-correctness bug)
+  yet bench numbers looked good. Fixed via dispatch_batch path and
+  a smoke harness that GETs every SET'd key back.
+- **R11 (no AI self-defer)** — earlier sprints had a habit of
+  categorising risky attacks as "v1.x+1 backlog" without user
+  approval. R11 forbids that: the only valid filter on a perf
+  candidate is project lockdown (0-dep / no C / no AUTH/TLS / no
+  multi-master). Everything else, the user picks.
+
+## The 16 attacks
+
+Brief tally; the full Phase-A → Phase-B → bench narrative lives in
+the `V125-AXIS-*.md` files plus `V125-AXES-MASTER.md`.
+
+| axis | attack | shipped? | notable |
+|---|---|---|---|
+| A pipeline | A.2 lazy-drop thresh | ✓ | 4 KB sweet spot, 256 B regressed -3.25× |
+| A pipeline | A.3 single bio thread | ✓ | tail p999 -8 %, max -18 % |
+| A pipeline | A.4 K5 closing-bitmap | ✓ | reap_closed 36.7 % → ~0 % CPU |
+| A pipeline | A.6 inline bulk-header | ✓ | -1 % branch + alloc on GET fast path |
+| A pipeline | A.7 SmallSetInline | retired | needed G-A4 to land first |
+| B bigval | B.4 routing fix | ✓ | unmasked the 15/16 drop, +0.028× → -3 % was real |
+| C churn | C1 valkey collection probe | analysis only | identified `bulkStrRef` pattern → became H2 |
+| D keyspace | D1 hugetlbfs | deferred | needs lx64 boot params |
+| E concurrency | E15/E16 outline-cold | ✓ | +1-2 % c1 |
+| E concurrency | E17/E18 outline body | retired | LLVM already inlined |
+| F embed | F1 hot-cold layout | ✓ | A4 +6.2 % c100 GET |
+| F embed | F2/F2' canon-i64 guard | ✓ | reject non-digit first byte in ~1 ns |
+| G collections | G-A4 TTL-free fast path | ✓ | SADD 91 → 102 % vs valkey, SET/GET +2 % cross-cut |
+| G collections | G2 parse-from-slab | ✓ | borrowed-slice dispatch keeps the slab |
+| H pub/sub | H1.A nshards==1 fast | ✓ | skip Arc + 2 to_vec on single-shard |
+| H pub/sub | H1.B+H1.C+H2.A | ✓ | subs_by_channel + dedup + writev gather = 5× |
+| I latency | A.3 bio thread | ✓ | (counted under A.3) |
+| K connstorm | K1/K2 PBUF/URING bump | ✓ | c=10000 cliff 270 → 120k rps |
+| K connstorm | K4 ready-set | ✓ | (counted under A.4) |
+
+## UDS as a separate transport
+
+UDS surfaced kevy's server-CPU advantage that the TCP loopback RTT
+floor was masking. With the same kevy binary and the same client
+process, switching from `127.0.0.1:6004` to `/tmp/kevy.sock`:
+
+| workload | TCP rps | UDS rps | UDS / TCP |
+|---|--:|--:|--:|
+| -c1 SET | 94.7 k | 166 k | **1.76×** |
+| -c1 GET | 97.3 k | 168 k | **1.73×** |
+| -c50 -P1 | 192 k | 339 k | **1.77×** |
+| -c50 -P16 SET | 2.59 M | 4.11 M | **1.59×** |
+| -c50 -P16 GET | 2.67 M | 4.35 M | **1.63×** |
+
+The TCP `-c50 -P16 GET` cell that was "tied 1.00×" vs valkey is
+**1.27×** on UDS — same kevy, same valkey, removing loopback exposed
+the gap. Full reference: [`docs/uds.md`](../docs/uds.md), reproducer:
+[`bench/v125-precision-uds.sh`](v125-precision-uds.sh).
+
+## Reproduce
+
+```sh
+ssh lx64
+bash /path/to/kevy/bench/v125-precision.sh        # TCP precision
+bash /path/to/kevy/bench/v125-precision-uds.sh    # UDS precision
+bash /path/to/kevy/bench/v125-final-verify.sh     # tail + pub/sub sweep
+bash /path/to/kevy/bench/v125-uds-smoke.sh        # 39 UDS assertions
+```
+
+Phase-A decomposition + per-attack predictions:
+`.claude/notes/v125-deco-axis-*.md`. Shipped commit chain:
+[`CHANGELOG.md`](../CHANGELOG.md) v1.25.0 entry.

@@ -12,13 +12,16 @@ and a clear cost. Apply only the ones you actually need.
 | Pin server to a CPU set       | dedicated host, share machine with bench | 5–15%   |
 | Disable AOF (`--no-aof`)      | replica / ephemeral cache                | 5–10%   |
 | Set `KEVY_IO_URING=1`         | Linux 5.13+                              | 10–30%  |
+| Use `--threads 1`             | single client / pipelined workload       | **5–60%** |
+| Switch to **Unix-domain socket** | client is same-host                   | **60–75%** |
 | Kernel `mitigations=off`      | trusted single-tenant box                | 12–25%  |
 | Empty netfilter ruleset       | dedicated host, no firewall needed       | **25–35%** |
 | PGO (profile-guided optimize) | release build for known workload         | 1–10%   |
 
 `mitigations=off` and emptying netfilter are the two big knobs that
-move the kernel floor; PGO and the other userspace knobs trim
-userspace cycles only.
+move the kernel floor; UDS removes the loopback floor entirely;
+`--threads` matches the shard count to your workload's parallelism;
+PGO and the other userspace knobs trim userspace cycles only.
 
 ## CPU pinning
 
@@ -44,6 +47,71 @@ worth +10–30% at -c1 and is the prerequisite for SQPOLL (D5).
 ```sh
 KEVY_IO_URING=1 kevy --port 6004
 ```
+
+## Unix-domain socket (UDS) for local clients
+
+When the client lives on the same host as the server, point it at a
+filesystem socket and skip the TCP loopback stack entirely. v1.25+.
+
+```sh
+KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6004
+redis-cli -s /tmp/kevy.sock SET foo bar
+redis-benchmark -s /tmp/kevy.sock -t set,get -n 100000 -c 50 -P 16
+```
+
+The server **dual-binds** TCP + UDS — TCP stays available for remote
+clients, UDS handles local ones. Same RESP semantics, same shard
+runtime. Measured impact on lx64 (precision bench, kevy 1.25, same
+binary, same client process, only the address changes):
+
+| workload | TCP rps | UDS rps | gain |
+|----------|--------:|--------:|-----:|
+| -c1 SET | 94.7 k | 166 k | **+76 %** |
+| -c1 GET | 97.3 k | 168 k | **+73 %** |
+| -c50 -P16 SET | 2.59 M | 4.11 M | **+59 %** |
+| -c50 -P16 GET | 2.67 M | 4.35 M | **+63 %** |
+
+Caveats: UDS permissions are filesystem permissions; the default
+`chmod 0777` matches valkey/redis. Tighten via a containing directory
+when the server box has untrusted users. Full reference (security
+caveats, valkey-side equivalent, when not to use it):
+[`docs/uds.md`](uds.md).
+
+## `--threads` — shard count vs workload parallelism
+
+kevy is thread-per-core. `--threads N` (or `KEVY_THREADS`) creates
+N shards; the keyspace is partitioned by CRC16 hashtag. There is no
+"more threads = always faster" — pick by workload shape:
+
+| workload | recommendation | why |
+|----------|----------------|-----|
+| Single-conn benchmarks (`-c1 -P1`) | `--threads 1` | one conn pins to one shard; idle shards waste CPU on busy-poll |
+| Pipelined single-client (`-c50 -P16`) | `--threads 1` | one client core can already saturate one shard; multi-shard adds cross-shard tax |
+| Many independent clients, low pipelining | `--threads ≤ cores/2` | clients fan out across shards; one shard per client core |
+| Mixed (cache + cluster reads) | `--threads = cores - 2` | leave headroom for the OS / IRQs |
+
+The v1.25 precision-bench headline numbers all use `--threads 1` —
+that's the configuration where redis-benchmark's per-client work hits
+ceiling. Setting `--threads 10` for the same `-c1` workload **lowers**
+throughput because 9 shards busy-poll for no work and steal cache
+lines from shard 0.
+
+For the multi-shard cross-routing details (`{hashtag}` slots, cluster
+ports, `ClusterClient`), see [`docs/cluster.md`](cluster.md).
+
+## BGSAVE / BGREWRITEAOF off-shard via the bio thread (v1.25)
+
+v1.25 moved snapshot + AOF rewrite onto a **single global background
+thread** (the "bio thread") — one for the whole server, not per
+shard. The shards `Op::Save`-queue the request and keep busy-polling
+the network; the bio thread executes the disk write off the hot path.
+
+Net effect: the shard's busy-poll cadence is no longer interrupted by
+multi-second disk writes, so tail latency under a large `BGSAVE`
+drops sharply (v1.25 precision: p999 -8 %, max -18 % at c=50,
+value=10 KB). No tunable — it's always on. The `--no-aof` knob still
+applies if you want no AOF at all; the bio thread only runs when
+there's actual disk work.
 
 ## Disable AOF for replicas / caches
 

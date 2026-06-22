@@ -20,8 +20,10 @@ redis-cli -p 6004 SET hello world
 
 ## 为什么选 kevy
 
-- **快** —— 高并发下吞吐 2.4-2.5× valkey 9.1,pub/sub 扇出 2.7×,嵌入式
-  每核 **~9 M GET / 7 M SET**(数字见下文)。
+- **快** —— 单连接 1.5–1.7× valkey 9.1(precision-verified,CI95 < 1 %),
+  TCP 管线化 SET 1.4×、**UDS(Unix-domain socket)2.4×**,pub/sub 扇出
+  **subs ≥ 100 时 5.0–5.2×**,嵌入式每核 **~9 M GET / 7 M SET**
+  (数字见下文)。
 - **占用极小** —— 768 KB 服务器二进制,启动后驻留 5 MB 以内的 RAM。
   适合容器 sidecar、小 VM、边缘盒子。
 - **现代架构** —— thread-per-core、shared-nothing、热路径无锁、Linux 上
@@ -52,37 +54,71 @@ redis-cli -p 6004 SET hello world
 
 下面所有数字都在一台 **16 核裸金属 Linux** 机器(lx64)上测得,纯内存,
 服务器 / 客户端 / 负载机分别 pin 到不相交的 CPU。所有 bench 可用
-[`bench/`](bench/) 里的脚本复现;完整方法、注意事项、v0.2 → v1.22 的时
+[`bench/`](bench/) 里的脚本复现;完整方法、注意事项、v0.2 → v1.25 的时
 间线叙事都在 [`bench/REPORT.md`](bench/REPORT.md)。
 
 ### 服务器吞吐(走网络)
 
-> 跑赢 valkey 9.1 是底线,不是目标 —— kevy 瞄准的是硬件天花板。
+> 跑赢 valkey 9.1 是底线,不是目标 —— kevy 瞄准的是硬件天花板。v1.25
+> 不再把"打平"算作胜利:precision bench(n=1 M × 10 runs,2σ 过滤,
+> CI95)给每个数字一个置信区间,只有清晰超出置信区间的才算领先。
 
-`redis-benchmark`,服务器 pin 在 0-9 核、客户端在隔离核上,**单独**运行
-每个引擎(启动 → 2 个热身 run → 关停),让 kevy 的 busy-poll 不会饿死同
-驻的竞争者。每个引擎都用最快配置(valkey/redis 都开 `--io-threads 10`):
+`redis-benchmark`,服务器和客户端都 pin 在不相交核上,**单独**运行每个
+引擎(启动 → 2 个热身 run → 关停),让 kevy 的 busy-poll 不会饿死同驻
+的竞争者。kevy 用 `--threads 1`(单 shard 即可饱和一个客户端核);
+valkey/redis 用 `--io-threads 10` 跑满多线程预算。
 
-| 工作负载 | kevy 1.23 | valkey 9.1 (io-threads) | redis 7.4 (io-threads) |
-|----------|----------:|------------------------:|-----------------------:|
-| **-c50 -P16 GET** | **6.0 M/s** | 2.4 M/s | 1.5 M/s |
-| **-c50 -P16 SET** | **4.0 M/s** | 1.7 M/s | 1.2 M/s |
-| **-c1 GET** | **84 k/s** | 69 k/s | 63 k/s |
-| **-c1 SET** | **84 k/s** | 64 k/s | 62 k/s |
+**TCP loopback**(precision bench,mitigations=off):
 
-→ kevy 高并发下 **GET 2.5× / SET 2.4× 优于次优者**,单连接 sequential
-领先扩到 **1.22-1.31×**(v1.22 是 1.13-1.26×)—— v1.23 profile-driven
-性能冲刺,内核 + reactor 攻击单详见
-[`bench/PERF-ATTACK-LOG-2026-06-20.md`](bench/PERF-ATTACK-LOG-2026-06-20.md)
-和 [`CHANGELOG`](CHANGELOG.md)。
-io_uring vs epoll 看负载形态(io_uring 在低并发领先,epoll 在 -c50 -P16
-因 pipelining 摊薄系统调用开销而追上)。表里 -c50-P16 数字是
-`redis-benchmark` 客户端瓶颈(服务端还有余量)。
-用 [`bench/loopback_c50.sh`](bench/loopback_c50.sh) 和
-[`bench/loopback_c1.sh`](bench/loopback_c1.sh) 复现。
+| 工作负载 | kevy 1.25 | valkey 9.1 | redis 7.4 | kevy / valkey |
+|----------|----------:|-----------:|----------:|--------------:|
+| **-c1 SET** | **94.7 k/s** | 62.2 k/s | 62.3 k/s | **1.52×** |
+| **-c1 GET** | **97.3 k/s** | 65.0 k/s | 61.7 k/s | **1.50×** |
+| **-c50 -P16 SET** | **2.59 M/s** | 1.82 M/s | 1.20 M/s | **1.42×** |
+| -c50 -P16 GET | 2.67 M/s | 2.68 M/s | 1.50 M/s | 打平(loopback RTT 地板) |
+| -c50 -P1、-c100 -P1 | ≈191 k/s | ≈191 k/s | — | 打平(loopback RTT 地板) |
+
+`-P1 -c50/100` 的打平不是 kevy 的弱项 —— 两个服务器都被 TCP loopback
+RTT 卡住(~250 ns/RT × 50 连接 ≈ 5 µs 上限 = 200 k rps 客户端侧)。
+切到 Unix-domain socket,kevy 的服务端 CPU 优势完全浮现:
+
+**Unix-domain socket**(`KEVY_UNIX_SOCKET=/tmp/kevy.sock`,
+`valkey --unixsocket /tmp/valkey.sock`):
+
+| 工作负载 | kevy 1.25 | valkey 9.1 | kevy / valkey |
+|----------|----------:|-----------:|--------------:|
+| **-c1 SET** | **166 k/s** | 96 k/s | **1.73×** |
+| **-c1 GET** | **168 k/s** | 106 k/s | **1.59×** |
+| **-c50 -P16 SET** | **4.11 M/s** | 1.75 M/s | **2.35×** |
+| **-c50 -P16 GET** | **4.35 M/s** | 3.42 M/s | **1.27×** |
+| -c100 -P1 | ≈331 k/s | ≈326 k/s | 打平(单 syscall 地板) |
+
+UDS 把 kevy 的 pipelined GET 上限拉高 1.6×(4.35 M vs 2.67 M);
+valkey 涨幅小因为它热路径更 CPU-bound,移除 loopback 留给它的余量
+不多。配置和安全说明见 [`docs/uds.md`](docs/uds.md)。
+
+用 [`bench/v125-precision.sh`](bench/v125-precision.sh)(TCP)和
+[`bench/v125-precision-uds.sh`](bench/v125-precision-uds.sh)(UDS)
+复现。v1.25 落地的 16 项性能攻击详见
+[`bench/V125-AXES-MASTER.md`](bench/V125-AXES-MASTER.md) 和
+[`CHANGELOG`](CHANGELOG.md);方法论 11 条规则在
+[`.claude/rule/perf-vs-foss.md`](.claude/rule/perf-vs-foss.md)。
 
 对 io_uring 的 C 参考:kevy 手写绑定 148 ns 完成空 round-trip,vs
 liburing 2.9 的 152 ns —— 已到 Linux 内核地板,且没链 liburing。
+
+### 尾延迟
+
+c=50,value=10 KB,SET,p99/p999/max(3 次 precision 中位数):
+
+| 指标 | kevy 1.25 | valkey 9.1 | kevy 优势 |
+|------|----------:|-----------:|----------:|
+| p99 | 0.479 ms | 0.495 ms | -3 % |
+| p999 | 0.535 ms | 0.583 ms | **-8 %** |
+| max | 1.78 ms | 2.18 ms | **-18 %** |
+
+单全局 bio 线程(v1.25 A.3)把 10 KB owned-buffer 的回收挪出 shard
+热循环,这是尾延迟优势的来源。
 
 ### 集群路由(key 感知客户端)
 
@@ -171,12 +207,12 @@ ops,12 字节 key,16 字节 value):
 
 | backend(同一 Rust caller) | SET ops/s | GET ops/s |
 |----------------------------|----------:|----------:|
-| **kevy 1.22 embed** | **10.10 M** | **13.76 M** |
-| **kevy 1.22 server (io_uring)** | **63.5 k** | **64.4 k** |
-| valkey 9.1 server @ localhost | 54.6 k | 53.8 k |
+| **kevy 1.25 embed** | **10.10 M** | **13.76 M** |
+| **kevy 1.25 server (io_uring)** | **94.7 k** | **97.3 k** |
+| valkey 9.1 server @ localhost | 62.2 k | 65.0 k |
 | redis 7.4 server @ localhost | 62.3 k | 61.7 k |
 
-embed 是同 kevy 跑 TCP-loopback 的 **SET ~160×、GET ~214×** —— 这就
+embed 是同 kevy 跑 TCP-loopback 的 **SET ~107×、GET ~141×** —— 这就
 是"无 socket、无协议、无 reactor"对能 embed 的应用而言的真实代价。
 **不是** embed-driven 的 kevy-vs-valkey/redis 吞吐声明 —— valkey 和
 redis 没有进程内模式,结构差距不可避免。用
@@ -184,24 +220,35 @@ redis 没有进程内模式,结构差距不可避免。用
 --kevy-port 7011 --valkey-port 7012 --redis-port 7013 -N 200000`
 复现。
 
+> **embed + server,一个进程** —— v1.22 加了 Phase 2(只读副本)和
+> Phase 3(按前缀的 scoped writer)两种嵌入集成:应用可以持有进程内
+> `Store`,它订阅 server primary 的复制流(读零 RTT,写发给 primary);
+> 也可以通过 `[cluster] scopes = "app:billing:=embed-a"` 拥有某个前缀。
+> 完整说明见 [`crates/kevy-embedded/README.md`](crates/kevy-embedded/README.md)。
+
 ### Pub/sub 扇出(服务器模式)
 
-1 个发布者 → 50 个订阅者,200 000 条消息,16 字节负载,热身后跑。在 TCP /
-RESP 路径上 kevy 是最快的 broker:
+v1.25 G5 链(per-channel `subs_by_channel` 索引、`pending_write` 去重、
+Arc-shared 消息体 + writev gather —— kevy 的 `bulkStrRef` 等价物)让
+pub/sub 成为本轮单轴**最大胜利**。3 次中位数,`kevy-pubsub-bench`,
+16 字节负载(除非另注):
 
-| 系统 | 投递 msg/s | vs valkey |
-|------|----------:|---------:|
-| Aeron 1.45(IPC、共享内存) | 84 M | 12.4× |
-| **kevy 1.22** | **18.5 M** | **2.72×** |
-| ZeroMQ 4.3.5 | 9.4 M | 1.38× |
-| redis 7.4 | 8.9 M | 1.31× |
-| valkey 9.1 | 6.8 M | 1.00× |
-| Zenoh 1.9 | 2.9 M | 0.43× |
+| scenario | kevy 1.25 | valkey 9.1 | redis 7.4 | kevy / valkey |
+|----------|----------:|-----------:|----------:|--------------:|
+| subs=10 | 6.38 M/s | 4.01 M/s | 6.09 M/s | **1.59×** |
+| **subs=50** | **23.1 M/s** | 5.11 M/s | 11.5 M/s | **4.52×** |
+| **subs=100** | **28.4 M/s** | 5.67 M/s | 12.0 M/s | **5.00×** |
+| **subs=200** | **31.3 M/s** | 6.27 M/s | 11.6 M/s | **4.98×** |
+| **subs=500** | **31.7 M/s** | 6.13 M/s | 10.6 M/s | **5.17×** |
+| subs=50, size=256 B | 7.62 M/s | 5.53 M/s | 6.05 M/s | 1.38× |
+| subs=50, size=4 KB | 1.11 M/s | 2.26 M/s | 1.47 M/s | 0.49× ⚠ |
 
-Aeron 的共享内存 IPC 是结构性天花板(没有内核网络栈);在 TCP broker 里
-kevy 领先 —— 2× ZeroMQ 同传输,还压过非 broker 的 ZeroMQ direct
-messaging。Pub/sub 是**服务器模式**特性;嵌入式库是纯键值。方法 +
-6-way harness:[`bench/pubsub-compare/`](bench/pubsub-compare/)。
+4 KB 场景撞上 Linux `IOV_MAX=1024` 上限(writev-gather flush 为正确性
+固定在每次 256 iovec);writev-chunking 在 v1.26 backlog。从 subs=50
+往上每个场景都是干净的 **4–5× vs valkey** 和 **2–3× vs redis**(同 TCP /
+RESP)。Pub/sub 是**服务器模式**特性;嵌入式库是纯键值。方法 + harness:
+[`docs/zh-CN/pubsub.md`](docs/zh-CN/pubsub.md) 和
+[`crates/kevy-pubsub-bench`](crates/kevy-pubsub-bench)。
 
 ### 二进制大小与内存
 
@@ -272,6 +319,17 @@ aof = true
 
 通过 `kevy --config kevy.toml` 装载,或者完全用环境变量:`KEVY_BIND`、
 `KEVY_PORT`、`KEVY_THREADS`、`KEVY_AOF`、`KEVY_IO_URING`。
+
+要让本机客户端走 **Unix-domain socket**(与 TCP 并存),把
+`KEVY_UNIX_SOCKET` 指向一个文件路径即可。RESP 语义一致,没有 TCP
+loopback 开销 —— `redis-cli -s` / `redis-benchmark -s` 直接可用:
+
+```sh
+KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6004
+redis-cli -s /tmp/kevy.sock SET foo bar
+```
+
+何时使用、安全注意事项见 [`docs/uds.md`](docs/uds.md)。
 
 ### 集群模式(单机,key 感知路由)
 

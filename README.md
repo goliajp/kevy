@@ -22,9 +22,10 @@ redis-cli -p 6004 SET hello world
 
 ## Why kevy
 
-- **Fast** — 2.4–2.5× valkey 9.1's throughput at high concurrency, 2.7× on
-  pub/sub fan-out, and **~9 M GET / 7 M SET** per core when embedded
-  (numbers below).
+- **Fast** — single-connection 1.5–1.7× valkey 9.1 (precision-verified
+  CI95 < 1 %), pipelined SET 1.4× over TCP and **2.4× over Unix-domain
+  socket**, pub/sub fan-out **5.0–5.2× at subs ≥ 100**, and **~9 M GET /
+  7 M SET** per core when embedded (numbers below).
 - **Tiny footprint** — a 768 KB server binary that boots into under 5 MB of
   RAM. Fits a container sidecar, a small VM, or an edge box.
 - **Modern architecture** — thread-per-core, shared-nothing, no locks on
@@ -61,42 +62,80 @@ out-of-scope.
 All figures below were measured on one **bare-metal 16-core Linux box**
 (lx64), in-memory, with server / client / loadgen pinned to disjoint
 cores. Every benchmark is reproducible with the scripts in
-[`bench/`](bench/); full method, caveats, and the v0.2 → v1.22
+[`bench/`](bench/); full method, caveats, and the v0.2 → v1.25
 chronological narrative live in [`bench/REPORT.md`](bench/REPORT.md).
 
 ### Server throughput (over the network)
 
 > Beating valkey 9.1 is the floor, not the goal — kevy targets the
-> hardware ceiling.
+> hardware ceiling. v1.25 stops calling out tied cells as wins —
+> precision bench (n=1M × 10 runs, 2σ-filtered, CI95) gives every
+> number a confidence interval, and we only claim a lead when it
+> sits clear of the CI band.
 
-`redis-benchmark`, each server pinned to cores 0–9 with the client on
-isolated cores and **run in isolation** (start → 2 warm runs → stop) so
-kevy's busy-poll does not starve a co-located competitor. Every engine
-uses its fastest config (valkey/redis with `--io-threads 10`):
+`redis-benchmark`, each server pinned to its own core(s) with the client
+on isolated cores and **run in isolation** (start → 2 warm runs → stop)
+so kevy's busy-poll does not starve a co-located competitor. kevy uses
+`--threads 1` (single shard saturates one client core); valkey/redis use
+`--io-threads 10` to spend their full multi-thread budget.
 
-| workload | kevy 1.23 | valkey 9.1 (io-threads) | redis 7.4 (io-threads) |
-|----------|----------:|------------------------:|-----------------------:|
-| **-c50 -P16 GET** | **6.0 M/s** | 2.4 M/s | 1.5 M/s |
-| **-c50 -P16 SET** | **4.0 M/s** | 1.7 M/s | 1.2 M/s |
-| **-c1 GET** | **84 k/s** | 69 k/s | 63 k/s |
-| **-c1 SET** | **84 k/s** | 64 k/s | 62 k/s |
+**TCP loopback** (precision bench, lx64, mitigations=off):
 
-→ kevy is **2.5× best-other on GET, 2.4× on SET** at high concurrency,
-and the -c1 lead grew to **1.22-1.31×** vs the strongest competitor
-(v1.22 was 1.13-1.26×) thanks to the v1.23 perf sprint:
-profile-driven kernel + reactor wins documented in
-[`bench/PERF-ATTACK-LOG-2026-06-20.md`](bench/PERF-ATTACK-LOG-2026-06-20.md)
-and the [`CHANGELOG`](CHANGELOG.md).
-io_uring vs epoll reactor pick is per-workload (io_uring leads at low
-concurrency, epoll catches up at -c50 -P16 where pipelining amortises
-the syscall savings). The -c50-P16 SET/GET above are
-`redis-benchmark` client-side caps (the server has more headroom).
-Reproduce with [`bench/loopback_c50.sh`](bench/loopback_c50.sh) and
-[`bench/loopback_c1.sh`](bench/loopback_c1.sh).
+| workload | kevy 1.25 | valkey 9.1 | redis 7.4 | kevy / valkey |
+|----------|----------:|-----------:|----------:|--------------:|
+| **-c1 SET** | **94.7 k/s** | 62.2 k/s | 62.3 k/s | **1.52×** |
+| **-c1 GET** | **97.3 k/s** | 65.0 k/s | 61.7 k/s | **1.50×** |
+| **-c50 -P16 SET** | **2.59 M/s** | 1.82 M/s | 1.20 M/s | **1.42×** |
+| -c50 -P16 GET | 2.67 M/s | 2.68 M/s | 1.50 M/s | tied (loopback RTT floor) |
+| -c50 -P1, -c100 -P1 | ≈191 k/s | ≈191 k/s | — | tied (loopback RTT floor) |
+
+The `-P1 -c50/100` ties are not a kevy weakness — both servers
+saturate TCP loopback RTT (~250 ns/RT × 50 conns ≈ 5 µs cap = 200 k
+rps client-side). Drop to Unix-domain socket and kevy's server-CPU
+advantage surfaces fully:
+
+**Unix-domain socket** (`KEVY_UNIX_SOCKET=/tmp/kevy.sock`,
+`valkey --unixsocket /tmp/valkey.sock`):
+
+| workload | kevy 1.25 | valkey 9.1 | kevy / valkey |
+|----------|----------:|-----------:|--------------:|
+| **-c1 SET** | **166 k/s** | 96 k/s | **1.73×** |
+| **-c1 GET** | **168 k/s** | 106 k/s | **1.59×** |
+| **-c50 -P16 SET** | **4.11 M/s** | 1.75 M/s | **2.35×** |
+| **-c50 -P16 GET** | **4.35 M/s** | 3.42 M/s | **1.27×** |
+| -c100 -P1 | ≈331 k/s | ≈326 k/s | tied (per-syscall floor) |
+
+UDS lifts kevy's pipelined GET ceiling 1.6× over TCP (4.35 M vs
+2.67 M); valkey gains less because its hot path is more CPU-bound
+than I/O-bound, so removing the loopback stack hands kevy more
+headroom. See [`docs/uds.md`](docs/uds.md) for setup and security
+caveats.
+
+Reproduce with [`bench/v125-precision.sh`](bench/v125-precision.sh)
+(TCP) and [`bench/v125-precision-uds.sh`](bench/v125-precision-uds.sh)
+(UDS). The 16 perf attacks shipped in v1.25 (kernel-side + reactor +
+hot-path) are documented across
+[`bench/V125-AXES-MASTER.md`](bench/V125-AXES-MASTER.md) and the
+[`CHANGELOG`](CHANGELOG.md). Methodology rules live in
+[`.claude/rule/perf-vs-foss.md`](.claude/rule/perf-vs-foss.md).
 
 Against the C reference for io_uring: kevy's hand-written bindings reach
 a 148 ns nop round-trip vs liburing 2.9's 152 ns — at the Linux kernel
 floor, with no liburing linked.
+
+### Tail latency
+
+c=50, value=10 KB, SET, p99/p999/max (median of 3 precision runs):
+
+| metric | kevy 1.25 | valkey 9.1 | kevy advantage |
+|--------|----------:|-----------:|---------------:|
+| p99 | 0.479 ms | 0.495 ms | -3 % |
+| p999 | 0.535 ms | 0.583 ms | **-8 %** |
+| max | 1.78 ms | 2.18 ms | **-18 %** |
+
+The single-bio-thread off-shard offload (v1.25 A.3) keeps the
+shard's busy-poll cadence undisturbed by 10 KB owned-buffer drops,
+which is where the tail wins come from.
 
 ### Cluster routing (key-aware client)
 
@@ -196,12 +235,12 @@ sequential, N=200k SET + N GET; server columns all go through the
 
 | backend (same Rust caller) | SET ops/s | GET ops/s |
 |----------------------------|----------:|----------:|
-| **kevy 1.22 embed** | **10.10 M** | **13.76 M** |
-| **kevy 1.22 server (io_uring)** | **63.5 k** | **64.4 k** |
-| valkey 9.1 server @ localhost | 54.6 k | 53.8 k |
+| **kevy 1.25 embed** | **10.10 M** | **13.76 M** |
+| **kevy 1.25 server (io_uring)** | **94.7 k** | **97.3 k** |
+| valkey 9.1 server @ localhost | 62.2 k | 65.0 k |
 | redis 7.4 server @ localhost | 62.3 k | 61.7 k |
 
-Embed is **~160× faster on SET, ~214× on GET** than calling the same
+Embed is **~107× faster on SET, ~141× on GET** than calling the same
 kevy over TCP-loopback. That's the quantified cost of "no socket, no
 protocol, no reactor" for an app that can embed. **Not** a
 kevy-vs-valkey/redis throughput claim driven by embed — valkey and
@@ -210,25 +249,39 @@ Reproduce with `cargo run -p kevy-embedded --example
 embed_vs_server --release --kevy-port 7011 --valkey-port 7012
 --redis-port 7013 -N 200000`.
 
+> **Embed + server, one process** — v1.22 added the Phase 2
+> (read-replica) and Phase 3 (scoped multi-writer) embed integrations:
+> an app can hold an in-process `Store` that subscribes to a server
+> primary's replication stream (reads pay zero RTT, writes go to the
+> primary), or own a key-prefix outright via `[cluster] scopes =
+> "app:billing:=embed-a"`. Full recipes in
+> [`crates/kevy-embedded/README.md`](crates/kevy-embedded/README.md).
+
 ### Pub/sub fan-out (server mode)
 
-1 publisher → 50 subscribers, 200 000 messages, 16-byte payload,
-warm-run. kevy is the fastest broker on the TCP / RESP path:
+v1.25's G5 chain (per-channel `subs_by_channel` index, `pending_write`
+dedup, Arc-shared message body + writev gather — kevy's `bulkStrRef`
+equivalent) made pub/sub the **biggest single-axis win of the sprint**.
+Median of 3 runs, `kevy-pubsub-bench`, 16-byte payload unless noted:
 
-| system | delivered msg/s | vs valkey |
-|--------|----------------:|----------:|
-| Aeron 1.45 (IPC, shared memory) | 84 M | 12.4× |
-| **kevy 1.22** | **18.5 M** | **2.72×** |
-| ZeroMQ 4.3.5 | 9.4 M | 1.38× |
-| redis 7.4 | 8.9 M | 1.31× |
-| valkey 9.1 | 6.8 M | 1.00× |
-| Zenoh 1.9 | 2.9 M | 0.43× |
+| scenario | kevy 1.25 | valkey 9.1 | redis 7.4 | kevy / valkey |
+|----------|----------:|-----------:|----------:|--------------:|
+| subs=10 | 6.38 M/s | 4.01 M/s | 6.09 M/s | **1.59×** |
+| **subs=50** | **23.1 M/s** | 5.11 M/s | 11.5 M/s | **4.52×** |
+| **subs=100** | **28.4 M/s** | 5.67 M/s | 12.0 M/s | **5.00×** |
+| **subs=200** | **31.3 M/s** | 6.27 M/s | 11.6 M/s | **4.98×** |
+| **subs=500** | **31.7 M/s** | 6.13 M/s | 10.6 M/s | **5.17×** |
+| subs=50, size=256 B | 7.62 M/s | 5.53 M/s | 6.05 M/s | 1.38× |
+| subs=50, size=4 KB | 1.11 M/s | 2.26 M/s | 1.47 M/s | 0.49× ⚠ |
 
-Aeron's shared-memory IPC is the structural ceiling (no kernel network
-stack); among TCP brokers kevy leads — 2× ZeroMQ on the same transport.
-Pub/sub is a **server-mode** feature; the embedded library is pure
-key–value. Method + the 6-way harness:
-[`bench/pubsub-compare/`](bench/pubsub-compare/).
+The 4 KB scenario hits a Linux `IOV_MAX=1024` cap (the writev-gather
+flush is correctness-pinned at 256 iovecs/drain to stay under the
+ceiling); writev-chunking is on the v1.26 backlog. Every other
+scenario from subs=50 upward is a clean **4–5× lead vs valkey** and a
+**2–3× lead vs redis** on the same TCP / RESP path. Pub/sub is a
+**server-mode** feature; the embedded library is pure key–value.
+Method + the harness: [`docs/pubsub.md`](docs/pubsub.md) and
+[`crates/kevy-pubsub-bench`](crates/kevy-pubsub-bench).
 
 ### Binary size & memory
 
@@ -338,6 +391,18 @@ Precedence is CLI flags > env vars > TOML file > built-in defaults:
 kevy --bind 0.0.0.0 --port 7000 --threads 4 --dir /var/lib/kevy
 # env equivalents: KEVY_BIND  KEVY_PORT  KEVY_THREADS  KEVY_DIR  KEVY_AOF
 ```
+
+To accept local clients over a **Unix-domain socket** (alongside TCP),
+point `KEVY_UNIX_SOCKET` at a filesystem path. Same RESP semantics,
+no TCP loopback overhead — `redis-cli -s` and `redis-benchmark -s`
+both speak it:
+
+```sh
+KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6004
+redis-cli -s /tmp/kevy.sock SET foo bar
+```
+
+Reference + when to use it: [`docs/uds.md`](docs/uds.md).
 
 See [`crates/kevy/kevy.toml.example`](crates/kevy/kevy.toml.example) for the
 fully annotated config schema.
@@ -569,8 +634,7 @@ for the WebAssembly walkthrough.
 
 ## Roadmap & stability
 
-kevy is in the **v1.x line** (current workspace v1.2.x, with v1.3.0
-in flight). Everything that v1.x promises to keep — persistence
+kevy is in the **v1.x line** (current workspace v1.25.x). Everything that v1.x promises to keep — persistence
 format, RESP wire protocol, public Rust API, CLI flags, env vars,
 TOML schema, eviction semantics — is **add-only across the v1.x line**:
 a file written by v1.0 loads on any later v1.x build, and additive

@@ -12,12 +12,15 @@
 | 把 server 钉在固定 CPU 集     | 独占主机,或同机跑 bench             | 5–15%   |
 | 关 AOF (`--no-aof`)           | 只读副本 / 易失缓存                  | 5–10%   |
 | 打开 `KEVY_IO_URING=1`        | Linux 5.13+                          | 10–30%  |
+| 用 `--threads 1`              | 单客户端 / pipelined 负载            | **5–60%** |
+| 切到 **Unix-domain socket**   | 客户端同主机                         | **60–75%** |
 | 内核 `mitigations=off`        | 受信任的单租户机                     | 12–25%  |
 | 清空 netfilter 规则           | 独占主机,不需要本机防火墙           | **25–35%** |
 | PGO(profile-guided)          | 工作负载固定的 release build         | 1–10%   |
 
-`mitigations=off` 和清空 netfilter 是仅有的两个能动**内核地板**的旋
-钮;PGO 和其余只削用户态周期。
+`mitigations=off` 和清空 netfilter 是动**内核地板**的两个大旋钮;
+UDS 整段去掉 loopback 地板;`--threads` 让 shard 数贴合负载并行度;
+PGO 和其余只削用户态周期。
 
 ## CPU 绑定
 
@@ -40,6 +43,62 @@ taskset -c 0-9 kevy --port 6004
 ```sh
 KEVY_IO_URING=1 kevy --port 6004
 ```
+
+## 本机客户端走 Unix-domain socket (UDS)
+
+当客户端跟 server 在同一台主机上,把它指向一个文件路径的 socket,
+完全跳过 TCP loopback 栈。v1.25+。
+
+```sh
+KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6004
+redis-cli -s /tmp/kevy.sock SET foo bar
+redis-benchmark -s /tmp/kevy.sock -t set,get -n 100000 -c 50 -P 16
+```
+
+server **同时绑** TCP + UDS —— TCP 给远端,UDS 给本机。同 RESP 语义、
+同 shard runtime。lx64 precision bench 实测(同二进制、同 client
+进程,只改地址):
+
+| 工作负载 | TCP rps | UDS rps | 提升 |
+|----------|--------:|--------:|-----:|
+| -c1 SET | 94.7 k | 166 k | **+76 %** |
+| -c1 GET | 97.3 k | 168 k | **+73 %** |
+| -c50 -P16 SET | 2.59 M | 4.11 M | **+59 %** |
+| -c50 -P16 GET | 2.67 M | 4.35 M | **+63 %** |
+
+注意:UDS 的权限就是文件权限,默认 `chmod 0777` 与 valkey/redis 一致。
+机器上有不受信用户时,把 socket 放进受限目录里收紧。完整说明
+(安全、valkey 等价配置、何时不该用)见 [`docs/uds.md`](../uds.md)。
+
+## `--threads` —— shard 数 vs 负载并行度
+
+kevy 是 thread-per-core。`--threads N`(或 `KEVY_THREADS`)创建 N 个
+shard;keyspace 按 CRC16 hashtag 分区。**线程多 ≠ 更快** —— 按负载形态选:
+
+| 负载形态 | 建议 | 原因 |
+|----------|------|------|
+| 单连接 bench(`-c1 -P1`) | `--threads 1` | 一个 conn pin 到一个 shard;其余 shard 空跑 busy-poll 浪费 CPU |
+| 单客户端 pipelined(`-c50 -P16`) | `--threads 1` | 一个客户端核已能饱和一个 shard;多 shard 反加跨 shard 税 |
+| 多独立客户端、低 pipelining | `--threads ≤ 核数/2` | 客户端散开,一 shard 一客户端核 |
+| 混合(缓存 + 集群读) | `--threads = 核数 - 2` | 留 OS / IRQ 的余量 |
+
+v1.25 precision-bench headline 全部 `--threads 1` —— 这是
+redis-benchmark 客户端能跑满的配置。同样 `-c1` 负载下 `--threads 10`
+反而**降低**吞吐(9 个 shard 空 busy-poll,还抢 shard 0 的 cache line)。
+
+多 shard 跨路由细节(`{hashtag}` slot、cluster port、`ClusterClient`)
+见 [`docs/cluster.md`](cluster.md)。
+
+## BGSAVE / BGREWRITEAOF 通过 bio 线程移出 shard(v1.25)
+
+v1.25 把 snapshot + AOF rewrite 都挪到**单个全局 bio 线程**(整个
+server 一个,而不是 per-shard)。shard 通过 `Op::Save` 入队请求,继续
+busy-poll 网络;bio 线程在热路径外执行磁盘写。
+
+效果:shard 的 busy-poll 周期不再被几秒级的磁盘写打断,因此大 BGSAVE
+下的尾延迟显著下降(v1.25 precision:c=50、value=10 KB SET 下
+p999 -8 %,max -18 %)。**无可调项 —— 始终开启。** 完全不想要 AOF 仍
+用 `--no-aof`;只在真有磁盘 I/O 时 bio 线程才工作。
 
 ## 副本 / 缓存模式关 AOF
 
