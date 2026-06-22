@@ -1,4 +1,5 @@
 use super::*;
+use crate::raw_entry::RawEntryMut;
 use crate::set::KevySet;
 use std::cell::Cell;
 
@@ -478,4 +479,109 @@ fn clone_set_round_trip() {
     let c = s.clone();
     assert_eq!(c.len(), 100);
     assert!(c.contains(b"m42".as_slice()));
+}
+
+// --- raw_entry_mut --------------------------------------------------------
+
+#[test]
+fn raw_entry_mut_occupied_get_and_get_mut() {
+    let mut m = KevyMap::<u64, u64>::new();
+    m.insert(7, 100);
+    match m.raw_entry_mut(&7u64) {
+        RawEntryMut::Occupied(mut occ) => {
+            assert_eq!(occ.key(), &7u64);
+            assert_eq!(occ.get(), &100);
+            *occ.get_mut() = 200;
+            assert_eq!(occ.get(), &200);
+        }
+        RawEntryMut::Vacant(_) => panic!("expected Occupied for present key"),
+    }
+    assert_eq!(m.get(&7u64), Some(&200));
+}
+
+#[test]
+fn raw_entry_mut_into_mut_returns_existing_borrow() {
+    // into_mut consumes the handle but the &mut V it returns must
+    // borrow from the original map borrow (lifetime 'a), not from the
+    // (now-gone) handle. Compile-checks the lifetime contract.
+    let mut m = KevyMap::<u64, u64>::new();
+    m.insert(1, 42);
+    let v: &mut u64 = match m.raw_entry_mut(&1u64) {
+        RawEntryMut::Occupied(occ) => occ.into_mut(),
+        RawEntryMut::Vacant(_) => panic!("expected Occupied"),
+    };
+    *v = 999;
+    assert_eq!(m.get(&1u64), Some(&999));
+}
+
+#[test]
+fn raw_entry_mut_remove_drops_entry_and_releases_borrow() {
+    let mut m = KevyMap::<u64, u64>::new();
+    m.insert(11, 110);
+    m.insert(22, 220);
+    let removed = match m.raw_entry_mut(&11u64) {
+        RawEntryMut::Occupied(occ) => occ.remove(),
+        RawEntryMut::Vacant(_) => panic!("expected Occupied"),
+    };
+    assert_eq!(removed, 110);
+    assert_eq!(m.len(), 1);
+    assert_eq!(m.get(&11u64), None);
+    assert_eq!(m.get(&22u64), Some(&220));
+    // Re-insert into the slot we just freed (tombstone reuse path).
+    assert!(m.insert(11, 111).is_none());
+    assert_eq!(m.get(&11u64), Some(&111));
+}
+
+#[test]
+fn raw_entry_mut_vacant_insert_returns_new_mut() {
+    let mut m = KevyMap::<u64, u64>::new();
+    let v: &mut u64 = match m.raw_entry_mut(&5u64) {
+        RawEntryMut::Vacant(vac) => vac.insert(5, 50),
+        RawEntryMut::Occupied(_) => panic!("expected Vacant on empty map"),
+    };
+    assert_eq!(*v, 50);
+    *v = 51;
+    assert_eq!(m.get(&5u64), Some(&51));
+    assert_eq!(m.len(), 1);
+}
+
+#[test]
+fn raw_entry_mut_vacant_insert_grows_when_needed() {
+    // Fill to ≥ threshold (7/8 of MIN_CAP = 14 entries) so the next
+    // raw-entry vacant insert triggers maybe_grow internally.
+    let mut m = KevyMap::<u64, u64>::new();
+    for i in 0..20u64 {
+        m.insert(i, i.wrapping_mul(3));
+    }
+    match m.raw_entry_mut(&999u64) {
+        RawEntryMut::Vacant(vac) => {
+            let v = vac.insert(999, 1234);
+            assert_eq!(*v, 1234);
+        }
+        RawEntryMut::Occupied(_) => panic!("expected Vacant for fresh key"),
+    }
+    assert_eq!(m.get(&999u64), Some(&1234));
+    for i in 0..20u64 {
+        assert_eq!(m.get(&i), Some(&i.wrapping_mul(3)));
+    }
+}
+
+#[test]
+fn raw_entry_mut_borrow_lookup_with_bytes_key() {
+    // Mirrors the Store::live_entry use case: lookup by &[u8] borrow,
+    // hold the entry, then either keep the borrow or remove via the
+    // same handle.
+    let mut m = KevyMap::<Vec<u8>, u64>::new();
+    m.insert(b"alpha".to_vec(), 1);
+    m.insert(b"beta".to_vec(), 2);
+    match m.raw_entry_mut(b"alpha".as_slice()) {
+        RawEntryMut::Occupied(occ) => {
+            assert_eq!(occ.get(), &1);
+            let val = occ.remove();
+            assert_eq!(val, 1);
+        }
+        RawEntryMut::Vacant(_) => panic!("expected Occupied"),
+    }
+    assert_eq!(m.get(b"alpha".as_slice()), None);
+    assert_eq!(m.get(b"beta".as_slice()), Some(&2));
 }

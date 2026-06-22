@@ -26,9 +26,11 @@ mod group;
 mod iter;
 mod map;
 mod map_keyed;
+mod raw_entry;
 mod set;
 
 pub use kevy_hash::KevyHash;
 pub use iter::{Iter, IterMut, Keys, Values};
 pub use map::KevyMap;
+pub use raw_entry::{RawEntryMut, RawOccupiedEntryMut, RawVacantEntryMut};
 pub use set::{KevySet, SetIter};
