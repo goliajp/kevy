@@ -4,6 +4,25 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.26.3] — 2026-06-22 (v1.26.2 follow-up — kevy-resp manifest fix)
+
+`cargo publish` failed in v1.26.2 because `crates/kevy-resp/Cargo.toml`
+declared its `kevy-bytes` dependency with `path = "../kevy-bytes"`
+but no `version = "..."` floor (added in commit 47cd0eb on 2026-06-20
+along with the SIMD `find_crlf` work — local builds didn't notice
+because path-deps resolve fine, and v1.22.0 was the last successful
+publish so no later workspace publish exercised the manifest).
+
+Fix: pin `kevy-bytes = { path = "../kevy-bytes", version = "1.19.0" }`
+matching the pattern in `kevy-store/Cargo.toml`.
+
+No source change.
+
+- workspace 1.26.2 → 1.26.3
+- kevy-client 1.12.6 → 1.12.7
+- kevy-client-async 1.0.7 → 1.0.8
+- kevy-embedded 1.4.7 → 1.4.8
+
 ## [v1.26.2] — 2026-06-22 (v1.26.1 follow-up — lx64 runner CARGO_HOME override)
 
 v1.26.1 failed verify on lx64 because the runner runs as `gha-runner`

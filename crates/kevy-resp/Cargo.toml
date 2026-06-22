@@ -16,7 +16,7 @@ categories = ["network-programming", "parser-implementations", "encoding"]
 workspace = true
 
 [dependencies]
-kevy-bytes = { path = "../kevy-bytes" }
+kevy-bytes = { path = "../kevy-bytes", version = "1.19.0" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }
