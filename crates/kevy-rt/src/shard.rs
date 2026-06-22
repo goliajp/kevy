@@ -79,6 +79,27 @@ pub(crate) struct Shard<C: Commands> {
     /// Dedup via `UringConn::arm_queued`.
     #[allow(dead_code)] // io_uring path only — epoll reactor doesn't use it
     pub(crate) arm_pending: Vec<u64>,
+    /// **K5 (v1.25 A.4 redo, 2026-06-22)**: ready-set for
+    /// `uring_reap_closed`. Mirror of `arm_pending`, applied to the reap
+    /// path. Populated by `uring_mark_closing` + QUIT dispatch sites
+    /// (`exec_dispatch::try_inline_local` + `start_single_at_seq` —
+    /// every place that flips `conn.closing = true`). Drained via
+    /// `mem::take` on each reap pass.
+    ///
+    /// **Why this exists** (perf-record-dwarf, c=10 000 -P 1 SET, 10 s
+    /// sustained): the old `uring_reap_closed` body
+    /// `io.iter().filter(...).map(|(cid,_)| (cid, self.conns.get(cid)))
+    /// .collect::<Vec<u64>>()` was 36.74 % of CPU at c=10 000 — pure
+    /// O(N) scan + per-entry second hash lookup into `self.conns`. A.9
+    /// K4 split this for `arm_conns` but left `uring_reap_closed`
+    /// untouched, hence A.9 bench-neutral. K5 finishes the K3 ready-set
+    /// shape across BOTH callsites.
+    ///
+    /// Dedup: a conn pushed twice ends up reaped on the first hit (the
+    /// second hit's `self.conns.get(cid)` returns None and the filter
+    /// short-circuits).
+    #[allow(dead_code)] // io_uring path only
+    pub(crate) closing_uring_conns: Vec<u64>,
     pub(crate) fd_to_conn: KevyMap<i32, u64>,
     pub(crate) next_conn_id: u64,
     pub(crate) events: Vec<Event>,

@@ -254,6 +254,11 @@ impl<C: Commands> Shard<C> {
         // them up — gives the arm loop a chance to drain any
         // outstanding write_buf before close_conn drops the fd.
         self.mark_arm_pending(cid, io);
+        // K5 (v1.25 A.4 redo): push to closing ready-set so
+        // `uring_reap_closed` iterates O(closing) instead of O(N=conns).
+        // Duplicates are harmless — the reap-side filter short-circuits
+        // when self.conns.get(cid) returns None (already reaped).
+        self.closing_uring_conns.push(cid);
         self.blocked.drop_for_conn(cid);
         self.cancel_xshard_on_close(cid);
     }
