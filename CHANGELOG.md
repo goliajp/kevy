@@ -4,6 +4,21 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.26.1] — 2026-06-22 (v1.26.0 follow-up — rustup PATH on lx64 runner)
+
+v1.26.0 verify ran on the self-hosted lx64 runner as intended but
+failed because the actions step shell didn't inherit `$HOME/.cargo/bin`
+in `$PATH` — `rustup` lives there but the step couldn't find it.
+Fix: prepend `$HOME/.cargo/bin` to `GITHUB_PATH` as the first step
+of every job that touches Rust.
+
+No code change; only `.github/workflows/release.yml` and version bumps.
+
+- workspace 1.26.0 → 1.26.1
+- kevy-client 1.12.4 → 1.12.5
+- kevy-client-async 1.0.5 → 1.0.6
+- kevy-embedded 1.4.5 → 1.4.6
+
 ## [v1.26.0] — 2026-06-22 (v1.25 redo — docs sweep + self-hosted CI runner)
 
 Re-ship of v1.25.0. The v1.25.0 tag was pushed but the Release
