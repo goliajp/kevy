@@ -105,6 +105,24 @@ impl<C: Commands> Shard<C> {
             return; // no buffer (shouldn't happen for a successful recv)
         };
         let n = c.res as usize;
+        // **v1.25 B.4 + A.2** BigBulk routing: if this conn has a SET
+        // value body in flight, feed slab bytes straight into the owned
+        // dest Vec — ONE memcpy per chunk (slab → dest), same byte cost
+        // as the prior slab→input path but the dest Vec is pre-sized
+        // (no realloc storm) AND becomes the Arc<[u8]> body zero-copy
+        // at completion (eliminating the final `Arc::from(&[u8])`
+        // 64K memcpy). The slab can be recycled the moment its bytes
+        // are appended — no need for an intermediate owned copy.
+        if let Some(uc) = io.get_mut(&cid)
+            && uc.pending_big_arg.is_some()
+        {
+            self.aof_begin_group();
+            let slab_bytes = pbuf.bytes(bid, n);
+            self.uring_bigbulk_feed(cid, io, slab_bytes);
+            pbuf.recycle(bid);
+            self.aof_end_group_logged();
+            return;
+        }
         // Take conn.input onto the stack so dispatch's borrowed argv
         // doesn't collide with `&mut self`. If the conn vanished between
         // the recv arming and the CQE (rare; close races), still need to
@@ -117,7 +135,7 @@ impl<C: Commands> Shard<C> {
             }
         };
         self.aof_begin_group();
-        let outcome = self.uring_recv_dispatch(cid, pbuf.bytes(bid, n), &mut input_buf);
+        let outcome = self.uring_recv_dispatch(cid, pbuf.bytes(bid, n), &mut input_buf, io);
         pbuf.recycle(bid);
         self.aof_end_group_logged();
         if outcome.conn_gone {
@@ -136,14 +154,22 @@ impl<C: Commands> Shard<C> {
     /// path when `input_buf` is empty, otherwise appends + parses out of
     /// the combined buffer. AOF group-commit + slab recycle bookkeeping
     /// stays in [`Self::uring_on_recv`] (the caller).
+    ///
+    /// **v1.25 B.4 + A.2** — after the regular dispatch, the leftover
+    /// (unparsed) tail is checked for a `SET key $<N>` BigBulk shape; if
+    /// matched, the conn flips into BigBulk-recv mode (subsequent CQE
+    /// bytes go straight into an owned dest Vec). This avoids both the
+    /// `conn.input` realloc storm AND the final `Arc::from(slice)`
+    /// 64K memcpy on big SETs.
     #[inline]
-    fn uring_recv_dispatch(
+    pub(crate) fn uring_recv_dispatch(
         &mut self,
         cid: u64,
         slab: &[u8],
         input_buf: &mut Vec<u8>,
+        io: &mut KevyMap<u64, UringConn>,
     ) -> crate::inbox::BatchOutcome {
-        if input_buf.is_empty() {
+        let o = if input_buf.is_empty() {
             // A1 fast path: parse straight from the slab. The kernel's
             // provided-buffer slice lives until `pbuf.recycle(bid)`, which
             // the caller defers until after dispatch_batch returns. Any
@@ -153,7 +179,17 @@ impl<C: Commands> Shard<C> {
             // `input_buf` for the next CQE.
             let o = self.dispatch_batch(cid, slab);
             if !o.conn_gone && o.consumed < slab.len() {
-                input_buf.extend_from_slice(&slab[o.consumed..]);
+                // **v1.25 B.4 + A.2** — before staging the tail into
+                // `input_buf` (where it would otherwise drive the
+                // realloc storm for any subsequent body CQEs), probe
+                // for the SET BigBulk shape. On a hit, promote: the
+                // tail's body bytes (if any) go into the dest Vec; no
+                // copy into `input_buf` at all.
+                let tail = &slab[o.consumed..];
+                if self.try_promote_bigbulk(cid, tail, io) {
+                    return o;
+                }
+                input_buf.extend_from_slice(tail);
                 preallocate_for_big_arg_tail(input_buf);
             }
             o
@@ -168,9 +204,28 @@ impl<C: Commands> Shard<C> {
             let o = self.dispatch_batch(cid, input_buf);
             if !o.conn_gone {
                 input_buf.drain(..o.consumed);
+                // Probe the residue post-drain for a SET BigBulk shape.
+                // If it matches, move the body bytes into the dest Vec
+                // and CLEAR `input_buf` (the residue header bytes are
+                // consumed by the probe; no need to keep them around).
+                if !input_buf.is_empty() {
+                    let promoted = {
+                        let snapshot = std::mem::take(input_buf);
+                        if self.try_promote_bigbulk(cid, &snapshot, io) {
+                            true
+                        } else {
+                            *input_buf = snapshot;
+                            false
+                        }
+                    };
+                    if promoted {
+                        return o;
+                    }
+                }
             }
             o
-        }
+        };
+        o
     }
 
     /// Mark `cid` closing and eagerly cancel its block waiters (local
