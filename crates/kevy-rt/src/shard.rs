@@ -436,6 +436,13 @@ impl<C: Commands> Shard<C> {
             self.flush_dirty()?;
             // One wakeup per touched (and parked) target this iteration.
             self.flush_wakes();
+            // v1.25 A.2: ship the per-shard bio-drop batch to the bio
+            // thread BEFORE the AOF fsync window. Same rationale as the
+            // io_uring path: don't let a pending fsync stall pin the
+            // batch in RSS, and bound the per-iter drop latency
+            // window. Empty-buffer fast path = predicted-not-taken
+            // length check, sub-ns on iters that did no overwrite.
+            self.store.flush_pending_drops();
             // Honor the EverySec AOF fsync window.
             if let Some(aof) = &mut self.aof {
                 let _ = aof.maybe_sync();
