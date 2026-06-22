@@ -361,7 +361,21 @@ impl Store {
                 h.iter().map(|(f, v)| (f.to_vec(), v.clone())).collect(),
                 ttl_ms,
             ),
+            // A.8: same shape as A.7 — re-materialise to the heap-backed
+            // variant on snapshot/replication load. First mutation that
+            // targets the key will go through the encoding-switch path
+            // and (if size still fits) re-promote to the inline variant.
+            Value::SmallHashInline(h) => self.load_hash(
+                k,
+                h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
+                ttl_ms,
+            ),
             Value::List(l) => self.load_list(k, l.iter().cloned().collect(), ttl_ms),
+            Value::SmallListInline(l) => self.load_list(
+                k,
+                l.iter().map(<[u8]>::to_vec).collect(),
+                ttl_ms,
+            ),
             Value::Set(s) => self.load_set(k, s.iter().map(kevy_bytes::SmallBytes::to_vec).collect(), ttl_ms),
             // A.7 O5: snapshot/replication load — re-materialise the
             // inline-encoded set as a `Value::Set`-backed `KevySet`. We
@@ -379,6 +393,11 @@ impl Store {
             Value::ZSet(z) => self.load_zset(
                 k,
                 z.ordered().map(|(m, sc)| (m.to_vec(), sc)).collect(),
+                ttl_ms,
+            ),
+            Value::SmallZSetInline(z) => self.load_zset(
+                k,
+                z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect(),
                 ttl_ms,
             ),
             Value::Stream(st) => {

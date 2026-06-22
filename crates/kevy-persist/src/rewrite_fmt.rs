@@ -110,12 +110,36 @@ fn write_value_as_commands<W: Write>(
             }
             write_multibulk(w, &Argv::from(argv))?;
         }
+        // A.8: inline hash rewrites to the same HSET command form as the
+        // heap-backed `Value::Hash`. Replay routes the pairs back through
+        // the encoding switch so small hashes land inline again.
+        Value::SmallHashInline(h) => {
+            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + h.len() * 2);
+            argv.push(b"HSET".to_vec());
+            argv.push(key.to_vec());
+            for (f, v) in h.iter() {
+                argv.push(f.to_vec());
+                argv.push(v.to_vec());
+            }
+            write_multibulk(w, &Argv::from(argv))?;
+        }
         Value::List(l) => {
             let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + l.len());
             argv.push(b"RPUSH".to_vec());
             argv.push(key.to_vec());
             for v in l.iter() {
                 argv.push(v.clone());
+            }
+            write_multibulk(w, &Argv::from(argv))?;
+        }
+        // A.8: inline list rewrites to the same RPUSH command form as
+        // the heap-backed `Value::List`.
+        Value::SmallListInline(l) => {
+            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + l.len());
+            argv.push(b"RPUSH".to_vec());
+            argv.push(key.to_vec());
+            for v in l.iter() {
+                argv.push(v.to_vec());
             }
             write_multibulk(w, &Argv::from(argv))?;
         }
@@ -147,6 +171,18 @@ fn write_value_as_commands<W: Write>(
             argv.push(b"ZADD".to_vec());
             argv.push(key.to_vec());
             for (m, sc) in z.ordered() {
+                argv.push(fmt_zset_score(sc));
+                argv.push(m.to_vec());
+            }
+            write_multibulk(w, &Argv::from(argv))?;
+        }
+        // A.8: inline zset rewrites to the same ZADD command form as
+        // the heap-backed `Value::ZSet`.
+        Value::SmallZSetInline(z) => {
+            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + z.len() * 2);
+            argv.push(b"ZADD".to_vec());
+            argv.push(key.to_vec());
+            for (m, sc) in z.iter() {
                 argv.push(fmt_zset_score(sc));
                 argv.push(m.to_vec());
             }

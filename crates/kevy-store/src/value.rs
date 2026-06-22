@@ -157,6 +157,17 @@ pub enum Value {
     /// returns `NoRoom`) the set is promoted to `Value::Set(Arc<SetData>)`
     /// — the Swiss-table path that wins for larger cardinalities.
     SmallSetInline(crate::small_set::SmallSetData),
+    /// v1.25 A.8 (extension of A.7 to hashes): tiny hashes
+    /// (1-2 short field-value pairs) live inline in 24 bytes; promoted
+    /// to `Value::Hash(Arc<HashData>)` on overflow. Mirrors valkey's
+    /// `OBJ_ENCODING_LISTPACK` for hashes.
+    SmallHashInline(crate::small_hash::SmallHashData),
+    /// v1.25 A.8: tiny lists inline encoding; promoted to
+    /// `Value::List(Arc<ListData>)` on overflow.
+    SmallListInline(crate::small_list::SmallListData),
+    /// v1.25 A.8: tiny sorted sets inline encoding; promoted to
+    /// `Value::ZSet(Arc<ZSetData>)` on overflow.
+    SmallZSetInline(crate::small_zset::SmallZSetData),
 }
 
 /// Threshold (bytes) above which a SET stores its value as
@@ -213,10 +224,10 @@ impl Value {
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Str(_) | Value::Int(_) | Value::ArcBulk(_) => "string",
-            Value::Hash(_) => "hash",
-            Value::List(_) => "list",
+            Value::Hash(_) | Value::SmallHashInline(_) => "hash",
+            Value::List(_) | Value::SmallListInline(_) => "list",
             Value::Set(_) | Value::SmallSetInline(_) => "set",
-            Value::ZSet(_) => "zset",
+            Value::ZSet(_) | Value::SmallZSetInline(_) => "zset",
             Value::Stream(_) => "stream",
         }
     }
@@ -244,10 +255,13 @@ impl Value {
                 .iter()
                 .map(|m| m.heap_bytes() as u64)
                 .sum::<u64>(),
-            // Inline set lives entirely in the Value variant body —
-            // zero heap, zero bucket overhead. Accounting matches
+            // Inline collections live entirely in the Value variant
+            // body — zero heap, zero bucket overhead. Accounting matches
             // `Value::Int` / inline `Value::Str` (both also return 0).
-            Value::SmallSetInline(_) => 0,
+            Value::SmallSetInline(_)
+            | Value::SmallHashInline(_)
+            | Value::SmallListInline(_)
+            | Value::SmallZSetInline(_) => 0,
             Value::ZSet(z) => collection_overhead(z.by_member.capacity(), HASH_SLOT_BYTES)
                 + z.by_member
                     .iter()
@@ -269,7 +283,12 @@ impl Value {
     pub fn is_heap_heavy(&self) -> bool {
         match self {
             // Inline 22 B / heap ≤ small-class — fast to free inline.
-            Value::Str(_) | Value::Int(_) | Value::SmallSetInline(_) => false,
+            Value::Str(_)
+            | Value::Int(_)
+            | Value::SmallSetInline(_)
+            | Value::SmallHashInline(_)
+            | Value::SmallListInline(_)
+            | Value::SmallZSetInline(_) => false,
             // The Axis I culprit. v1.25 A.3 lazy-drop's primary case.
             Value::ArcBulk(a) => a.len() >= HEAP_HEAVY_BYTES,
             // Collection drops walk every element + the bucket array;
