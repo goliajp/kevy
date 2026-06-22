@@ -96,27 +96,27 @@ impl Store {
         nx: bool,
         xx: bool,
     ) -> bool {
-        // Clock read only when a TTL is requested. Deadlines stamp from a
-        // fresh clock (`now_ns`), not the coarse cached one.
+        // F1 (v1.25): single-probe overwrite-SET fast path for default
+        // `maxmemory == 0` (the bench and production-common case). Goes
+        // through `kevy_map::RawEntryMut` (B.1, commit 1a9f9af) so the
+        // Occupied arm mutates the entry in place and returns owned
+        // (delta, ttl_delta) — no escaping reference, no second probe.
+        // Overwrite path drops from 2 probes (live_entry_mut: get+get_mut)
+        // to 1 probe. New-key + expired-removed paths still pay the
+        // insert_entry probe (same as before).
+        if self.maxmemory == 0 {
+            return self.set_value_no_evict(key, new_value, expire, nx, xx);
+        }
+        // Eviction path (maxmemory > 0): keep the 2-probe shape so
+        // `live_entry_mut`'s touch_on_access bookkeeping runs.
         let expire_at = expire.map(|d| deadline_at(now_ns(), d));
         let key_heap = crate::key_heap_bytes_for(key);
-        // Keeping the match shape (vs `if let … else`) preserves the in-arm
-        // comments that document the NX/XX semantics next to the code they
-        // describe; the auto-suggested if-let-else collapses them awkwardly.
         #[allow(clippy::single_match_else)]
         let outcome = match self.live_entry_mut(key) {
-            // Key exists and is live: NX must abort; otherwise overwrite the
-            // value + TTL in place — no `key.to_vec()` (the key is already in
-            // the table, std `insert` would clone it only to drop it). The
-            // weight delta is computed HERE on the `&mut Entry` we already
-            // hold — `reweigh_entry(key)` would re-hash + re-probe the map
-            // for the entry we just mutated (the overwrite-SET hot path).
             Some(e) => {
                 if nx {
                     return false;
                 }
-                // SET replaces the TTL (cleared unless this SET carried EX/PX),
-                // so account the expire-set delta from the in-place swap.
                 let had_ttl = e.expire_at_ns.is_some();
                 e.value = new_value;
                 e.expire_at_ns = expire_at.and_then(crate::pack_deadline);
@@ -126,7 +126,6 @@ impl Store {
                 e.set_weight(new_w);
                 Ok((delta, ttl_delta))
             }
-            // Absent (or expired ⇒ already dropped by live_entry_mut): XX aborts.
             None => {
                 if xx {
                     return false;
@@ -139,8 +138,94 @@ impl Store {
                 self.apply_weight_delta(delta);
                 self.adjust_expires(ttl_delta);
             }
-            // New key: insert_entry accounts the expire-set itself.
             Err(entry) => {
+                self.insert_entry(SmallBytes::from_slice(key), entry);
+            }
+        }
+        true
+    }
+
+    /// Single-probe overwrite-SET via `kevy_map::RawEntryMut` for the
+    /// `maxmemory == 0` fast path (F1, v1.25). Skips the `live_entry_mut`
+    /// 2-probe shape: Occupied arm mutates in place + returns owned
+    /// (delta, ttl_delta); Expired arm removes via raw-entry handle + falls
+    /// through to insert; Vacant arm goes to insert.
+    fn set_value_no_evict(
+        &mut self,
+        key: &[u8],
+        new_value: Value,
+        expire: Option<Duration>,
+        nx: bool,
+        xx: bool,
+    ) -> bool {
+        use kevy_map::RawEntryMut;
+        let expire_at = expire.map(|d| deadline_at(now_ns(), d));
+        let key_heap = crate::key_heap_bytes_for(key);
+        let (uc, cn) = (self.cached_clock, self.cached_ns);
+        // Hold new_value behind Option so the multi-arm consumption
+        // (overwrite arm vs insert-after-expired arm) is moved-once.
+        let mut value_slot = Some(new_value);
+
+        // Phase 1: probe + decide. Two outcomes — overwrite-finished
+        // (delta + ttl_delta) or needs-insert (with expired bookkeeping
+        // already done if applicable).
+        enum Outcome {
+            Updated { delta: i64, ttl_delta: i64 },
+            NeedInsert,
+        }
+        let outcome = match self.map.raw_entry_mut(key) {
+            RawEntryMut::Occupied(mut occ) => {
+                // Decide via shared ref first so we don't touch the entry
+                // (avoiding a needless cache-line dirtying) on the
+                // is_expired+remove path.
+                let expired = occ.get().is_expired(uc, cn);
+                if expired {
+                    let old = occ.remove();
+                    // borrow on self.map released by remove(self).
+                    self.used_memory = self
+                        .used_memory
+                        .saturating_sub(old.weight() + crate::value::ENTRY_OVERHEAD);
+                    if old.expire_at_ns.is_some() {
+                        self.adjust_expires(-1);
+                    }
+                    self.expired_keys_total =
+                        self.expired_keys_total.saturating_add(1);
+                    if xx {
+                        return false;
+                    }
+                    Outcome::NeedInsert
+                } else {
+                    if nx {
+                        return false;
+                    }
+                    let e = occ.get_mut();
+                    let had_ttl = e.expire_at_ns.is_some();
+                    e.value = value_slot.take().unwrap();
+                    e.expire_at_ns = expire_at.and_then(crate::pack_deadline);
+                    let new_w = key_heap + e.value.weight();
+                    let delta = new_w as i64 - e.weight() as i64;
+                    let ttl_delta = i64::from(e.expire_at_ns.is_some())
+                        - i64::from(had_ttl);
+                    e.set_weight(new_w);
+                    Outcome::Updated { delta, ttl_delta }
+                }
+            }
+            RawEntryMut::Vacant(_) => {
+                if xx {
+                    return false;
+                }
+                Outcome::NeedInsert
+            }
+        };
+
+        // Phase 2: bookkeeping + maybe insert. Borrow on self.map is gone.
+        match outcome {
+            Outcome::Updated { delta, ttl_delta } => {
+                self.apply_weight_delta(delta);
+                self.adjust_expires(ttl_delta);
+            }
+            Outcome::NeedInsert => {
+                let entry = Entry::new(value_slot.take().unwrap(), expire_at);
                 self.insert_entry(SmallBytes::from_slice(key), entry);
             }
         }
