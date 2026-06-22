@@ -19,6 +19,11 @@ jobs:
     runs-on: [self-hosted, lx64]
     steps:
       - uses: actions/checkout@v5
+      # Self-hosted lx64: rustup lives under root's $HOME/.cargo/bin
+      # but the actions step shell does not source ~/.bashrc, so $PATH
+      # comes up bare. Prepend the cargo bin dir once for every later step.
+      - name: Expose cargo / rustup to $PATH
+        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - run: |
           rustup toolchain install stable --no-self-update
           rustup default stable
