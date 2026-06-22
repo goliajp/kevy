@@ -3,7 +3,7 @@
 //! the 500-LOC house rule. Stays `pub(crate)` — every consumer is a
 //! sibling module of this crate.
 
-use core::ffi::{c_int, c_void};
+use core::ffi::{c_char, c_int, c_void};
 
 // socklen_t is u32 on both Linux and macOS.
 unsafe extern "C" {
@@ -28,8 +28,11 @@ unsafe extern "C" {
     pub fn pipe(fds: *mut c_int) -> c_int;
     // unlink / chmod for Unix-domain socket file management
     // (pre-bind cleanup + permissions, mirroring valkey/redis).
-    pub fn unlink(path: *const i8) -> c_int;
-    pub fn chmod(path: *const i8, mode: u32) -> c_int;
+    // Use `c_char` (not `i8`) so the signatures stay correct on
+    // aarch64 Linux where `c_char = u8`; x86_64 + macOS where
+    // `c_char = i8` continue to type-check.
+    pub fn unlink(path: *const c_char) -> c_int;
+    pub fn chmod(path: *const c_char, mode: u32) -> c_int;
 }
 
 /// `struct timespec` — used by kqueue's `kevent` timeout (macOS only).
