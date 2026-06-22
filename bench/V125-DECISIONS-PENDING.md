@@ -112,3 +112,56 @@ User 看完上面两题,挑选项(可用"O2"/"B2"这样回复)或提其他设计
 
 如果倾向跳过其中之一,直接说"跳过 A.7" / "跳过 A.3" 也可 — 不算 R8 defer(user
 判断 = 项目锁定 / 合法 filter)。
+
+---
+
+## 2026-06-22 — 决策(user 委派"按项目原则决策吧")
+
+### A.7 → **O5(valkey-style encoding switch)**
+
+- **O2/O3 violate `value.rs:162` Value enum 32B hard cap** — 直接撕 -25-37%
+  bucket density,核心 cache layout 设计在文件注释里明示("Entry-48B
+  win")。要扩需 RFC 级讨论,跟当下 perf 攻击 scope 不齐。
+- **O4 Box<SmallSetData>** 引入 heap alloc + pointer chase per small-set
+  access,违反 Value enum 注释的"inline 赢 Arc"设计哲学。
+- **O1 inline-only** 不足以 match valkey listpack 在 N≥4 时;部分覆盖
+  case 但 G axis bench shape 仍有问题。
+- **O5 valkey-orthodox encoding switch**(SmallSetInline 23B 紧凑序列化
+  for N≤一阈值,自动 grow 到 KevyMap)= 完整 match valkey listpack/HT
+  路径,符合 `feedback-greenfield-advanced-compat`(behavior compat,
+  modern core)+ `feedback-orthodox-no-shortcuts`(不发明新轮子)。
+
+实施:Value enum 加 `SmallSetInline([u8; 23], u8 used, u8 count)` 变体
+(或类似 23-25B 包),sadd/srem 操作触发 encoding upgrade KevyMap;先做
+SET (SADD) pilot 然后扩 HSET/HMSET/ZADD/LPUSH/RPUSH。
+
+### A.3 → **B2(single global bio thread)**
+
+- **B3 per-NUMA** = 当前单 socket lx64/prod 的 over-engineering
+  (`feedback-orthodox-no-shortcuts`)。
+- **B4 thread pool work-stealing** 需要 ~1k LOC unsafe + 复杂 sync,违反
+  "纯 Rust + safe by default" 倾向 + 增加 review/audit 难度。
+- **B1 per-shard** 在 `--threads N` 时 2N 线程,跟 thread-per-core 模型
+  叠加资源压力;同时 BGSAVE 通常一个全局就够,不需要 per-shard。
+- **B2 single global bio thread** = 最简 valkey-orthodox(valkey 本身
+  也是 1 bio thread for fsync + lazyfree)+ MPSC 队列用 std 即可
+  (kevy-ring SPSC 或 std::mpsc;前者已在 use)+ 一线程的 contention
+  后续遇到再 partition。**符合 orthodox-no-shortcuts** + 不增 dep。
+
+实施:Runtime::run 在 spawn shards 之前 spawn 1 个 bio thread + 持有
+SPMC 入口(per-shard producer → 1 bio consumer);Value: Send 边界
+audit;bio thread 跑 drop + fsync queue;重做 A.2 lazy-drop(把大
+Value 排队进 bio 而非 inline drop)。预期 Axis I tail max 真正闭合
+(B.4 R3 ★ 指出 130-160ms outliers 是 sync Drop,不是 memcpy)。
+
+兼带顺势改:server-side SAVE/BGREWRITEAOF migration(memory 记的
+"比真 COW 便宜的 80% 解 = 把三段式移植到 server")可以走同一 bio
+thread,unblock 现有 shard-sync 阻塞 disk 写的 known 问题。
+
+### 实施顺序(per #105 → #106 → #107 序列 / blocked 关系)
+
+1. A.3 B2 bio thread 基础设施 + A.2 lazy-drop 重做(unblock Axis I tail max + 可能解 Axis H 4K 剩 26%)
+2. A.7 O5 SmallSetInline encoding(pilot 用 SADD)
+3. A.8 G 其他 6 ops(HSET/HMSET/ZADD/LPUSH/RPUSH/LRANGE — 用 SmallSetInline 同模式扩)
+4. SET-with-options / MSET / SETEX / APPEND / GETSET 的 BigBulk 扩展(B.4 agent 报告 scope only 是 *3 SET)
+5. 不 ship(user 红线)。完整 perf 后再统一评估 ship。
