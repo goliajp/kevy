@@ -2,7 +2,18 @@
 
 > 收尾要求(2026-06-22 user):**不 close 不 ship**;先把所有 open 项列清楚。
 > 本文档分类汇总 Phase A 决komp + Phase B 实施 + bench 过程中累积的全部
-> 未解决项,每条带:**类别 / 范围 / 阻塞点 / 估算影响 / 建议归属 v1.25 还是 v1.26**。
+> 未解决项。
+>
+> **2026-06-22 correction — defer-to-v1.26 framing 是 R8 反例**
+>
+> 原本表格里 "建议归属 v1.26" 的所有项 user 已点破:**没有一项触
+> 0-dep / no-C-for-algorithms / RESP wire-compat / no-AUTH-TLS 的项目
+> lockdown**,全部该在 v1.25 perf 专题里做完。"defer 到 v1.26" =
+> "polish 的另一种话术"(占未来 sprint 资源 + 自我下台阶)。
+>
+> 已撤销 v1.25-vs-v1.26 分流。任务 #97-#108 是真正的串行 attack queue
+> (`TaskList`),按 unblocks 最多下游 + 已知 gap 大小排序。下面的"推荐
+> 归属"列保留作历史,实际执行按 task 顺序。
 
 ---
 
