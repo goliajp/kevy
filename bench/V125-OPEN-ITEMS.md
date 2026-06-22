@@ -14,6 +14,22 @@
 > 已撤销 v1.25-vs-v1.26 分流。任务 #97-#108 是真正的串行 attack queue
 > (`TaskList`),按 unblocks 最多下游 + 已知 gap 大小排序。下面的"推荐
 > 归属"列保留作历史,实际执行按 task 顺序。
+>
+> **2026-06-22 update — B.2 argv-ownership API DROPPED (R3 ★ in agent verification)**
+>
+> a2d255b6 attack agent 验证 prompt 设计时翻盘 3 个核心前提:
+> (i) `Vec::split_off` 实测**不是** zero-copy(stdlib `alloc/vec/mod.rs:3080`
+> 走 `with_capacity + memcpy`); (ii) Axis I 10 KB SET 走 G2 fast slab
+> path,根本不经 owned-input 路径,argv-take API 用不上; (iii) Argv 是
+> packed `buf: Vec<u8>` 一个分配,middle-range 不能 take 不 copy。
+>
+> 真正解 Axis I + Axis B SET take-into-Arc 的是 **per-conn BigBulk 状态机**
+> (原 A.2 / B.4):见 $N header 且 N≥threshold → 切到 owned recv slab,
+> 完成后 `vec.into_boxed_slice() → Arc::from(Box)` 才是真 zero-copy
+> (`Vec::into_boxed_slice` 在 cap==len 时复用 allocation)。
+>
+> 任务 #99 (B.2) + #100 (A.1) **deleted**;任务 #101 (B.4+A.2) 合并 A.1
+> 实际工作。
 
 ---
 
