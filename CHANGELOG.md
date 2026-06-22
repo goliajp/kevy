@@ -4,7 +4,7 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
-## [v1.25.0] — UNRELEASED (Phase-A decomposition sprint on top of v1.24.1)
+## [v1.25.0] — 2026-06-22 (decomposition-driven perf sprint + UDS support)
 
 This release adopts and ships the
 **decomposition-then-attack methodology** (`.claude/rule/perf-vs-foss.md`,
