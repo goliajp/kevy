@@ -2,7 +2,6 @@
 //! `Shard` like the rest of `crate::exec`; split into its own file to keep
 //! that one under the 500-LOC house rule.
 
-use kevy_persist::save_snapshot;
 use kevy_resp::Argv;
 
 use crate::Commands;
@@ -208,32 +207,45 @@ impl<C: Commands> Shard<C> {
                 Part::WatchVersions(out)
             }
             Op::Save => {
-                // A synchronous SAVE racing an in-flight background job
-                // would truncate the AOF mid-tee; skip with a log line
-                // (Redis's SAVE-during-BGSAVE error, simplified for the
-                // multi-shard +OK aggregation).
-                if self.persist.busy() || self.aof.as_ref().is_some_and(kevy_persist::Aof::is_rewriting) {
-                    eprintln!("kevy: shard {} SAVE skipped (background persist in flight)", self.id);
-                    return Part::Ok;
-                }
-                let path = self.snapshot_path();
-                match save_snapshot(&self.store, &path) {
-                    // Snapshot now captures full state → reset the AOF.
-                    Ok(()) => {
-                        if let Some(aof) = &mut self.aof
-                            && let Err(e) = aof.truncate()
-                        {
-                            eprintln!("kevy: shard {} aof truncate failed: {e}", self.id);
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "kevy: shard {} failed to save {}: {e}",
-                            self.id,
-                            path.display()
-                        );
-                    }
-                }
+                // v1.25.x A.3 follow-up: `SAVE` was previously a synchronous
+                // `save_snapshot(&self.store, &path)` on the shard thread,
+                // holding the reactor for the entire RDB serialize + disk
+                // write — the last shard-blocker on the persistence path
+                // (BGSAVE/BGREWRITEAOF/auto-rewrite migrated to the per-shard
+                // `PersistWorker` in `8cc2bcf` 2026-06-11). It now delegates
+                // to [`Self::start_bg_save`]: freeze a COW [`SnapshotView`]
+                // on this thread (O(n) shallow — 8 ns/entry, see
+                // `kevy_store::Store::collect_snapshot`), hand off the
+                // serialize + fsync + rename to the per-shard persist
+                // worker, and reply `+OK` immediately. The AOF reset that
+                // used to be `aof.truncate()` after a successful save is
+                // now the `aof_reset` path inside `start_bg_save` →
+                // `poll_persist_done` (COW tee + `finish_concurrent_rewrite`
+                // → atomic swap to the post-collect log).
+                //
+                // **Semantic change**: SAVE no longer blocks the *client*
+                // until the snapshot is durable on disk. The reply is `+OK`
+                // as soon as the COW view is frozen; durability lands
+                // microseconds-to-seconds later via the persist worker's
+                // completion, committed in the next tick's
+                // `poll_persist_done` rename. Workflows that depend on
+                // "SAVE returned → safe to rsync the .rdb" must now wait
+                // for the next `LASTSAVE` increment / read the file
+                // exists at `dump-{i}.rdb` (the worker's rename is atomic).
+                // The previous behaviour also already pre-committed this
+                // direction for the multi-shard case: a multi-shard SAVE
+                // already aggregated `+OK` after each shard's local
+                // save, with no cross-shard durability barrier — making
+                // the conn block per-shard for completion via a deferred-
+                // reply Inbound channel is a larger refactor (Part::Defer
+                // through fold + cross-shard Response holdback) and was
+                // explicitly out-of-scope for the unblock-the-reactor goal.
+                //
+                // The in-flight-already case still short-circuits: the
+                // existing log + `Part::Ok` matches the previous
+                // `SAVE-during-BGSAVE` behaviour, and `start_bg_save`'s
+                // own busy check is the second line of defence.
+                self.start_bg_save();
                 Part::Ok
             }
             Op::SlowlogGet => Part::SlowlogEntries(self.slowlog.buf.iter().cloned().collect()),

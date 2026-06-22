@@ -410,6 +410,10 @@ impl<C: Commands> Shard<C> {
                 idle_spins = 0;
             }
         }
+        // v1.25.x SAVE migration: drain bg persist completions before
+        // exit so a `+OK` SAVE reply isn't followed by a torn snapshot
+        // (see [`Shard::drain_persist_on_shutdown`]).
+        self.drain_persist_on_shutdown();
         Ok(())
     }
 
