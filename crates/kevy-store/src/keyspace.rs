@@ -363,6 +363,19 @@ impl Store {
             ),
             Value::List(l) => self.load_list(k, l.iter().cloned().collect(), ttl_ms),
             Value::Set(s) => self.load_set(k, s.iter().map(kevy_bytes::SmallBytes::to_vec).collect(), ttl_ms),
+            // A.7 O5: snapshot/replication load — re-materialise the
+            // inline-encoded set as a `Value::Set`-backed `KevySet`. We
+            // don't preserve the SmallSetInline encoding on reload
+            // because (a) the upgrade path will naturally rebuild it on
+            // the first SADD that targets the key, and (b) the snapshot
+            // wire format already uses the OP_SET length-prefixed
+            // payload — losing the inline encoding bit costs nothing
+            // beyond one re-promotion on the first mutation.
+            Value::SmallSetInline(s) => self.load_set(
+                k,
+                s.iter_slices().map(<[u8]>::to_vec).collect(),
+                ttl_ms,
+            ),
             Value::ZSet(z) => self.load_zset(
                 k,
                 z.ordered().map(|(m, sc)| (m.to_vec(), sc)).collect(),

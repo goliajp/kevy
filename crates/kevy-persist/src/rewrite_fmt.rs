@@ -128,6 +128,20 @@ fn write_value_as_commands<W: Write>(
             }
             write_multibulk(w, &Argv::from(argv))?;
         }
+        // A.7 O5: inline-encoded set rewrites to the same SADD command
+        // form as the heap-backed `Value::Set`. Replay through the live
+        // SADD handler routes the members back through the encoding
+        // switch — small sets land in `SmallSetInline` again, oversized
+        // ones promote to `KevySet` naturally.
+        Value::SmallSetInline(s) => {
+            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + s.len());
+            argv.push(b"SADD".to_vec());
+            argv.push(key.to_vec());
+            for m in s.iter() {
+                argv.push(m.to_vec());
+            }
+            write_multibulk(w, &Argv::from(argv))?;
+        }
         Value::ZSet(z) => {
             let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + z.ordered().count() * 2);
             argv.push(b"ZADD".to_vec());
