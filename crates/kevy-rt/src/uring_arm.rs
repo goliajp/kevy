@@ -131,16 +131,22 @@ impl<C: Commands> Shard<C> {
             if let Some(p) = prev {
                 // Hint to the CPU: the previous iter's UringConn was
                 // here — bringing it in pre-emptively warms the line
-                // for the next iter's get_mut hit-write.
+                // for the next iter's get_mut hit-write. x86_64 has a
+                // dedicated `_mm_prefetch` intrinsic; aarch64 has
+                // `__pld` but exposing it via the unstable `prfm`
+                // intrinsic would gate on nightly, so on non-x86_64
+                // targets we skip the hint and rely on the natural
+                // hardware prefetcher.
                 // SAFETY: pointer was a valid &mut UringConn from the
                 // previous iteration; KevyMap doesn't reallocate inside
                 // this loop (no insert/remove).
+                #[cfg(target_arch = "x86_64")]
                 unsafe {
                     core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(
                         p as *const i8,
                     );
                 }
-                let _ = p; // silence unused
+                let _ = p; // silence unused on non-x86_64
             }
             let Some(uc) = io.get_mut(&cid) else {
                 prev = None;
