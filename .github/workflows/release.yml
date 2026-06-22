@@ -19,11 +19,16 @@ jobs:
     runs-on: [self-hosted, lx64]
     steps:
       - uses: actions/checkout@v5
-      # Self-hosted lx64: rustup lives under root's $HOME/.cargo/bin
-      # but the actions step shell does not source ~/.bashrc, so $PATH
-      # comes up bare. Prepend the cargo bin dir once for every later step.
-      - name: Expose cargo / rustup to $PATH
-        run: echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      # Self-hosted lx64: the actions runner runs as the `gha-runner`
+      # user. rustup is installed under that user's $HOME/.cargo/bin.
+      # The runner's systemd unit sets CARGO_HOME=/mnt/ssd980/cargo-cache
+      # (root-owned shared build cache) which makes cargo unwritable —
+      # override it back to gha-runner's home for the publish chain.
+      - name: Expose cargo / rustup to $PATH (lx64 self-hosted)
+        run: |
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "CARGO_HOME=$HOME/.cargo" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$HOME/.rustup" >> "$GITHUB_ENV"
       - run: |
           rustup toolchain install stable --no-self-update
           rustup default stable
