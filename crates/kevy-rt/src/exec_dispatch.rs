@@ -45,31 +45,10 @@ fn eq_ascii_get(name: &[u8]) -> bool {
         && (name[2] == b'T' || name[2] == b't')
 }
 
-/// L1: write `$<len>\r\n` into `out` for a bulk header.
-#[inline]
-fn bulk_header_into(out: &mut Vec<u8>, len: usize) {
-    out.push(b'$');
-    let mut buf = [0u8; 20];
-    let s = format_usize_into(len, &mut buf);
-    out.extend_from_slice(s);
-    out.extend_from_slice(b"\r\n");
-}
-
-#[inline]
-fn format_usize_into(mut n: usize, buf: &mut [u8; 20]) -> &[u8] {
-    let mut i = buf.len();
-    if n == 0 {
-        i -= 1;
-        buf[i] = b'0';
-    } else {
-        while n > 0 {
-            i -= 1;
-            buf[i] = b'0' + (n % 10) as u8;
-            n /= 10;
-        }
-    }
-    &buf[i..]
-}
+// A.6 (v1.25): `bulk_header_into` + `format_usize_into` deleted — fused
+// into `kevy_store::Store::get_into_output` so the GET inline fast path
+// emits the RESP frame directly from the store with no caller match arm
+// + no GetReply enum tag round-trip.
 
 impl<C: Commands> Shard<C> {
     /// Single-target command (keyless `Local` or single-key `Single`) — the
@@ -149,24 +128,23 @@ impl<C: Commands> Shard<C> {
             && let Some(name) = args.first()
             && eq_ascii_get(name)
         {
-            let reply = self.store.get_for_reply(&args[1]);
+            // A.6 (v1.25): fused get → output. Skip the GetReply enum tag +
+            // caller-side match arm by having store write the frame into
+            // conn.output / conn.output_arcs directly. ~5-8 ns/GET saved
+            // per Phase A deco D-A2.
+            //
+            // Conn lookup happens FIRST so we can pre-check `conn.pending`
+            // (and bail without touching the store on out-of-order conns).
             let Some(conn) = self.conns.get_mut(&conn_id) else { return false };
             if !conn.pending.is_empty() {
                 return false;
             }
+            let reply = self
+                .store
+                .get_into_output(&args[1], &mut conn.output, &mut conn.output_arcs);
             match reply {
-                Ok(Some(kevy_store::GetReply::ArcBulk(arc))) => {
-                    bulk_header_into(&mut conn.output, arc.len());
-                    let insert_pos = conn.output.len();
-                    conn.output_arcs.push((insert_pos, arc));
-                    conn.output.extend_from_slice(b"\r\n");
-                }
-                Ok(Some(kevy_store::GetReply::Bytes(b))) => {
-                    bulk_header_into(&mut conn.output, b.len());
-                    conn.output.extend_from_slice(&b);
-                    conn.output.extend_from_slice(b"\r\n");
-                }
-                Ok(None) => {
+                Ok(true) => {}
+                Ok(false) => {
                     conn.output.extend_from_slice(b"$-1\r\n");
                 }
                 Err(_) => {

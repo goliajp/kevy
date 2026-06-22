@@ -254,6 +254,50 @@ impl Store {
         }
     }
 
+    /// A.6 (v1.25): fused GET-into-output. Skips the [`GetReply`] enum tag
+    /// round-trip + caller match arm by writing the RESP frame directly into
+    /// `output` (header + bytes + CRLF for Str/Int) or pushing the Arc into
+    /// `output_arcs` at the right offset (ArcBulk zero-copy via writev).
+    /// Returns the same outcomes as [`Self::get_for_reply`]: `Ok(true)` if
+    /// the key was found and emitted, `Ok(false)` if absent (the caller
+    /// emits the `$-1` null bulk — preserves the existing inline-null
+    /// semantics on the reactor side), `Err` for WRONGTYPE.
+    pub fn get_into_output(
+        &mut self,
+        key: &[u8],
+        output: &mut Vec<u8>,
+        output_arcs: &mut Vec<(usize, Arc<[u8]>)>,
+    ) -> Result<bool, StoreError> {
+        match self.live_entry(key) {
+            None => Ok(false),
+            Some(e) => match &e.value {
+                Value::Str(v) => {
+                    let bytes = v.as_slice();
+                    crate::util::bulk_header_into(output, bytes.len());
+                    output.extend_from_slice(bytes);
+                    output.extend_from_slice(b"\r\n");
+                    Ok(true)
+                }
+                Value::ArcBulk(a) => {
+                    crate::util::bulk_header_into(output, a.len());
+                    let pos = output.len();
+                    output_arcs.push((pos, Arc::clone(a)));
+                    output.extend_from_slice(b"\r\n");
+                    Ok(true)
+                }
+                Value::Int(n) => {
+                    let mut tmp = itoa_i64_stack();
+                    let s = format_i64_into(*n, &mut tmp);
+                    crate::util::bulk_header_into(output, s.len());
+                    output.extend_from_slice(s);
+                    output.extend_from_slice(b"\r\n");
+                    Ok(true)
+                }
+                _ => Err(StoreError::WrongType),
+            },
+        }
+    }
+
     /// `GET` — returns a `Cow<[u8]>` so `Value::Int` callers can format the
     /// integer to ASCII without storing it. L2 (2026-06-21): `Value::Str`
     /// returns `Cow::Borrowed` (zero copy, same as before); `Value::Int`

@@ -92,6 +92,30 @@ pub(crate) fn itoa_i64_stack() -> [u8; 20] {
     [0u8; 20]
 }
 
+/// A.6 (v1.25): emit `$<len>\r\n` into `out` for a RESP bulk header. Inlined
+/// at the GET fast path's `get_into_output` callsite to skip the GetReply
+/// enum tag round-trip + caller match arm. Mirror of kevy-rt's local helper.
+#[inline]
+pub(crate) fn bulk_header_into(out: &mut Vec<u8>, len: usize) {
+    out.push(b'$');
+    // usize fits in 20 ASCII digits (u64::MAX is 20 digits).
+    let mut buf = [0u8; 20];
+    let mut n = len;
+    let mut i = buf.len();
+    if n == 0 {
+        i -= 1;
+        buf[i] = b'0';
+    } else {
+        while n > 0 {
+            i -= 1;
+            buf[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+    }
+    out.extend_from_slice(&buf[i..]);
+    out.extend_from_slice(b"\r\n");
+}
+
 /// Parse a finite f64 from raw bytes (rejects NaN/inf for value storage).
 pub(crate) fn parse_f64(b: &[u8]) -> Option<f64> {
     let f: f64 = std::str::from_utf8(b).ok()?.trim().parse().ok()?;
