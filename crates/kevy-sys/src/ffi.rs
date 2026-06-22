@@ -26,6 +26,10 @@ unsafe extern "C" {
     // Variadic in C; we only ever pass a single int arg (F_GETFL/F_SETFL).
     pub fn fcntl(fd: c_int, cmd: c_int, ...) -> c_int;
     pub fn pipe(fds: *mut c_int) -> c_int;
+    // unlink / chmod for Unix-domain socket file management
+    // (pre-bind cleanup + permissions, mirroring valkey/redis).
+    pub fn unlink(path: *const i8) -> c_int;
+    pub fn chmod(path: *const i8, mode: u32) -> c_int;
 }
 
 /// `struct timespec` — used by kqueue's `kevent` timeout (macOS only).

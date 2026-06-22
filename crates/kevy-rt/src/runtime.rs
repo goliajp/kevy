@@ -89,6 +89,12 @@ pub struct Runtime<C: Commands> {
     /// receiver flows from this Vec to the matching `Shard.replica_inbox`.
     /// Empty when no replica mode is configured.
     pub(crate) replica_inboxes: Vec<Option<crate::replica_inbox::ReplicaInboxReceiver>>,
+    /// v1.25 UDS: when `Some(path)`, ALSO bind a Unix-domain stream
+    /// listener at `path` on shard 0 (single global socket, like valkey's
+    /// `unixsocket` config). Lets benches/local clients skip TCP loopback
+    /// overhead. TCP listener stays bound regardless.
+    #[allow(dead_code)] // consumed during run() via take-into-Shard
+    pub(crate) unix_socket_path: Option<PathBuf>,
 }
 
 impl<C: Commands> Runtime<C> {
@@ -116,11 +122,23 @@ impl<C: Commands> Runtime<C> {
             replication_buffer_size: 256 * 1024 * 1024,
             replication_port_base: None,
             replication_reconnect_window_ms: 60_000,
+            unix_socket_path: None,
         }
     }
 
 
     /// Spawn one thread per shard and run until `stop` is set.
+    /// v1.25 UDS: also bind a Unix-domain stream listener at `path`. Lets
+    /// local clients (and benchmarks) skip the TCP loopback round-trip.
+    /// Bound on shard 0 only (no SO_REUSEPORT for AF_UNIX, single global
+    /// socket like valkey's `unixsocket` config). TCP listener stays
+    /// bound at the configured `port` regardless.
+    #[must_use]
+    pub fn with_unix_socket(mut self, path: PathBuf) -> Self {
+        self.unix_socket_path = Some(path);
+        self
+    }
+
     pub fn run(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {
         let n = self.nshards;
 
@@ -244,6 +262,14 @@ impl<C: Commands> Runtime<C> {
 
         // Build every shard up front so a bind/open failure aborts before we spawn.
         let mut shards = Vec::with_capacity(n);
+        // UDS listener: only ONE per server (no SO_REUSEPORT for AF_UNIX), so
+        // it lives on shard 0. Bound up-front so a bind failure aborts before
+        // any shard spawns.
+        let mut unix_listener: Option<kevy_sys::Socket> = None;
+        if let Some(p) = self.unix_socket_path.as_ref() {
+            let path_bytes = p.to_string_lossy();
+            unix_listener = Some(kevy_sys::unix_listen(path_bytes.as_bytes(), 1024)?);
+        }
         for id in 0..n {
             let listener = tcp_listen_reuseport(self.ip, self.port, 1024)?;
             // Cluster mode: a second, deterministic per-shard listener at
@@ -285,6 +311,8 @@ impl<C: Commands> Runtime<C> {
                 nshards: n,
                 cluster: topo.clone(),
                 cluster_listener,
+                // UDS: only shard 0 holds the (single) unix listener.
+                unix_listener: if id == 0 { unix_listener.take() } else { None },
                 store,
                 commands: self.commands.clone(),
                 poller: Poller::new()?,

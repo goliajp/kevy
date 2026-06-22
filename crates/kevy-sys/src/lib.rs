@@ -76,6 +76,7 @@ pub use poller_ep::Poller;
 // ---- constants -------------------------------------------------------------
 
 const AF_INET: c_int = 2;
+const AF_UNIX: c_int = 1;
 const SOCK_STREAM: c_int = 1;
 const IPPROTO_TCP: c_int = 6;
 const TCP_NODELAY: c_int = 1;
@@ -369,6 +370,86 @@ pub fn tcp_listen(ip: [u8; 4], port: u16, backlog: i32) -> io::Result<Socket> {
 /// share one port (one per thread-per-core shard).
 pub fn tcp_listen_reuseport(ip: [u8; 4], port: u16, backlog: i32) -> io::Result<Socket> {
     listen_inner(ip, port, backlog, true)
+}
+
+// ---- sockaddr_un (AF_UNIX) -------------------------------------------------
+
+/// Unix-domain `sockaddr_un`. sun_path is 108 bytes on Linux + macOS BSD.
+#[repr(C)]
+struct SockaddrUn {
+    #[cfg(target_os = "linux")]
+    sun_family: u16,
+    #[cfg(not(target_os = "linux"))]
+    sun_len: u8,
+    #[cfg(not(target_os = "linux"))]
+    sun_family: u8,
+    sun_path: [u8; 108],
+}
+
+impl SockaddrUn {
+    fn new(path: &[u8]) -> io::Result<(Self, u32)> {
+        if path.is_empty() || path.len() >= 108 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unix socket path must be 1..=107 bytes",
+            ));
+        }
+        let mut sun_path = [0u8; 108];
+        sun_path[..path.len()].copy_from_slice(path);
+        // The actual length passed to bind() is offset_of(sun_path) + strlen(path) + 1
+        // (for the NUL); using full struct size also works on Linux + BSD.
+        let sa = SockaddrUn {
+            #[cfg(target_os = "linux")]
+            sun_family: AF_UNIX as u16,
+            #[cfg(not(target_os = "linux"))]
+            sun_len: size_of::<SockaddrUn>() as u8,
+            #[cfg(not(target_os = "linux"))]
+            sun_family: AF_UNIX as u8,
+            sun_path,
+        };
+        Ok((sa, size_of::<SockaddrUn>() as u32))
+    }
+}
+
+/// Create a blocking AF_UNIX stream listener bound to `path`. Unlinks any
+/// existing file at the path first (mirroring valkey/redis's `unixsocket`
+/// option). UDS bypasses the TCP stack — useful when client+server are on
+/// the same host and the TCP loopback round-trip is the bench-shape floor.
+pub fn unix_listen(path: &[u8], backlog: i32) -> io::Result<Socket> {
+    // Best-effort unlink so subsequent bind doesn't EADDRINUSE on restart.
+    // Convert path to a NUL-terminated CString for libc::unlink.
+    if let Ok(c) = std::ffi::CString::new(path) {
+        unsafe {
+            ffi::unlink(c.as_ptr());
+        }
+    }
+
+    let fd = unsafe { ffi::socket(AF_UNIX, SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let sock = Socket { fd };
+
+    let (addr, len) = SockaddrUn::new(path)?;
+    let r = unsafe {
+        ffi::bind(
+            fd,
+            (&raw const addr).cast::<c_void>(),
+            len,
+        )
+    };
+    if r < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if unsafe { ffi::listen(fd, backlog) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // World-writable so clients with different uid can connect (redis SOP).
+    // Use libc::chmod via CString.
+    if let Ok(c) = std::ffi::CString::new(path) {
+        unsafe { ffi::chmod(c.as_ptr(), 0o777) };
+    }
+    Ok(sock)
 }
 
 /// A self-pipe used to wake a [`Poller`] blocked in `wait` from another thread.

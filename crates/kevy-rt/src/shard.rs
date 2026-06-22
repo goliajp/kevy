@@ -44,6 +44,13 @@ pub(crate) struct Shard<C: Commands> {
     /// `Some` iff cluster mode is on. Conns accepted here are marked
     /// [`Conn::cluster`] and get `-MOVED` instead of forwarding.
     pub(crate) cluster_listener: Option<Socket>,
+    /// v1.25 UDS: optional Unix-domain stream listener. Only shard 0 ever
+    /// holds it (no SO_REUSEPORT for AF_UNIX, so a single global socket
+    /// like valkey's `unixsocket` config). The reactor accepts on it
+    /// alongside the TCP listener. `None` on all other shards + when
+    /// `Runtime::with_unix_socket` wasn't called.
+    #[allow(dead_code)] // used by uring_reactor and shard_run accept paths
+    pub(crate) unix_listener: Option<Socket>,
     pub(crate) store: Store,
     pub(crate) commands: C,
     pub(crate) poller: Poller,

@@ -148,6 +148,14 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
     if cfg.cluster.enabled {
         runtime = runtime.with_cluster(cluster_port_base(&cfg));
     }
+    // v1.25 UDS: opt-in via `KEVY_UNIX_SOCKET=/path/to/sock` env var. Lets
+    // local clients (and benches) skip TCP loopback overhead — fair
+    // comparison against valkey/redis's `unixsocket` config.
+    if let Ok(path) = std::env::var("KEVY_UNIX_SOCKET") {
+        if !path.is_empty() {
+            runtime = runtime.with_unix_socket(PathBuf::from(path));
+        }
+    }
     let runtime = replication::apply(runtime, &cfg, nshards);
     // v3-cluster Phase 1.5 / v1.19: spawn the kevy-elect control
     // plane when the operator configured `[cluster] peers = "..."` +
