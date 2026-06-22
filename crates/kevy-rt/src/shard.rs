@@ -511,6 +511,13 @@ impl<C: Commands> Shard<C> {
                 idle_spins.saturating_add(1)
             };
         }
+        // v1.25.x SAVE migration: drain any in-flight bg persist job
+        // before exit so a `Op::Save` that returned `+OK` to a client
+        // still lands its `dump-{i}.rdb` rename + AOF reset (the
+        // commit phase otherwise runs on the next tick, which won't
+        // happen after `stop=true`). See
+        // [`Self::drain_persist_on_shutdown`].
+        self.drain_persist_on_shutdown();
         Ok(())
     }
 

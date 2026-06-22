@@ -852,3 +852,141 @@ fn info_persistence_reports_rewrite_completion() {
     });
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// v1.25.x A.3 follow-up: `SAVE` was migrated from inline
+/// `save_snapshot` (synchronous, held the reactor for the disk write)
+/// to [`Shard::start_bg_save`] (per-shard `PersistWorker` does the
+/// disk work; reactor returns `+OK` as soon as the COW
+/// `SnapshotView` is frozen). This test exercises the unblock by
+/// populating a keyspace large enough that a synchronous save would
+/// take noticeable wall time, then proving GET/SET continue to be
+/// served within milliseconds of submitting `SAVE` — long before the
+/// snapshot file lands on disk.
+#[test]
+fn save_does_not_block_reactor_for_disk_write() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-save-async-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let nshards = 4;
+    let port = free_port();
+    with_runtime(port, &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        // 20k 256-byte values ≈ 5 MB — enough that the per-shard
+        // RDB write takes >>1 ms even on NVMe, so a synchronous
+        // save would be observable as a GET stall.
+        let big = vec![b'x'; 256];
+        for i in 0..20_000u32 {
+            let mut argv = req(&[b"SET", format!("k{i}").as_bytes(), &big]);
+            argv.extend_from_slice(&[]);
+            c.write_all(&argv).unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+        }
+        // SAVE: async since v1.25.x — should return `+OK` near-instantly.
+        let save_t0 = std::time::Instant::now();
+        c.write_all(&req(&[b"SAVE"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        let save_reply_us = save_t0.elapsed().as_micros();
+        // A synchronous 5 MB × 4-shard write is typically 5-30 ms.
+        // The async path frees the reactor in <1 ms (the COW view
+        // freeze + mpsc send to the worker). Be generous to soak
+        // up CI noise (loaded macs in particular).
+        assert!(
+            save_reply_us < 50_000,
+            "SAVE +OK took {save_reply_us} µs — expected <50 ms (\
+             reactor blocked? sync save regression?)"
+        );
+        // Reactor is still serving — issue a GET on a key the
+        // pre-SAVE writes inserted. With sync SAVE this would be
+        // queued behind the disk write; async SAVE serves immediately.
+        let get_t0 = std::time::Instant::now();
+        c.write_all(&req(&[b"GET", b"k1"])).unwrap();
+        let mut prefix = [0u8; 7];
+        c.read_exact(&mut prefix).unwrap();
+        assert_eq!(&prefix, b"$256\r\nx");
+        // Drain the rest of the value (255 x's + \r\n).
+        let mut rest = vec![0u8; 255 + 2];
+        c.read_exact(&mut rest).unwrap();
+        let get_us = get_t0.elapsed().as_micros();
+        assert!(
+            get_us < 50_000,
+            "GET after SAVE took {get_us} µs — expected <50 ms (reactor blocked?)"
+        );
+        // Wait for the bg save to land all shards' dump files
+        // (shutdown drain would do this anyway, but make it explicit
+        // for the assertion below).
+        wait_for("background SAVE to land all shard dumps", || {
+            (0..nshards).all(|s| dir.join(format!("dump-{s}.rdb")).exists())
+        });
+    });
+    // Restart over the same dir: data must be there (i.e. the async
+    // SAVE actually finished durably before runtime exit, via the
+    // shutdown drain).
+    let port2 = free_port();
+    with_runtime(port2, &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        c.write_all(&req(&[b"DBSIZE"])).unwrap();
+        let mut buf = [0u8; 16];
+        let n = c.read(&mut buf).unwrap();
+        let reply = String::from_utf8_lossy(&buf[..n]).to_string();
+        assert!(
+            reply.starts_with(":20000\r\n"),
+            "DBSIZE after restart = {reply:?} (expected :20000\\r\\n — \
+             async SAVE failed to land before shutdown?)"
+        );
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Shutdown drain (v1.25.x A.3 follow-up): a `SAVE` submitted just
+/// before `stop=true` must still land its `dump-{i}.rdb` rename + AOF
+/// reset, because the client got `+OK` on the COW view freeze and
+/// would otherwise be lied to. `with_runtime`'s normal `stop` →
+/// `handle.join()` is sufficient because both reactor loops
+/// (`run` / `run_uring`) call `drain_persist_on_shutdown` before
+/// returning.
+#[test]
+fn save_at_shutdown_drains_to_disk() {
+    let dir = std::env::temp_dir().join(format!(
+        "kevy-save-shutdown-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let nshards = 4;
+    let port = free_port();
+    with_runtime(port, &dir, nshards, |p| {
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
+        // Large enough that the worker is still mid-write when
+        // `with_runtime` flips `stop=true` and joins. The drain
+        // has to actually block on the worker.
+        let big = vec![b'y'; 1024];
+        for i in 0..5_000u32 {
+            c.write_all(&req(&[b"SET", format!("k{i}").as_bytes(), &big]))
+                .unwrap();
+            read_reply(&mut c, b"+OK\r\n");
+        }
+        c.write_all(&req(&[b"SAVE"])).unwrap();
+        read_reply(&mut c, b"+OK\r\n");
+        // Don't `wait_for` here — leave the runtime to drop while
+        // the bg save is (most likely) still in flight, exercising
+        // the shutdown drain path.
+    });
+    // Every shard's snapshot must exist post-shutdown — the drain
+    // forced the bg-save rename to complete before runtime exit.
+    let dumps_after = (0..nshards)
+        .filter(|i| dir.join(format!("dump-{i}.rdb")).exists())
+        .count();
+    assert_eq!(
+        dumps_after, nshards,
+        "shutdown drain did not flush all shards' snapshots: \
+         only {dumps_after}/{nshards} dump-N.rdb files exist"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
