@@ -310,7 +310,11 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
 
         Value::Hash(_) => OP_HASH,
         Value::List(_) => OP_LIST,
-        Value::Set(_) => OP_SET,
+        // A.7 O5: both Set encodings share the OP_SET wire format —
+        // payload is `[len: u32 LE][bulk: len-prefixed bytes]*`, agnostic
+        // of whether the in-memory representation is `SmallSetInline` or
+        // `Arc<KevySet>`.
+        Value::Set(_) | Value::SmallSetInline(_) => OP_SET,
         Value::ZSet(_) => OP_ZSET,
         Value::Stream(_) => OP_STREAM,
     };
@@ -324,6 +328,7 @@ fn write_entry<W: Write>(w: &mut W, key: &[u8], value: &Value, ttl: Option<u64>)
         Value::Hash(h) => write_hash_payload(w, h),
         Value::List(l) => write_list_payload(w, l),
         Value::Set(set) => write_set_payload(w, set),
+        Value::SmallSetInline(s) => write_small_set_payload(w, s),
         Value::ZSet(z) => write_zset_payload(w, z),
         Value::Stream(s) => write_stream_payload(w, s),
     }
@@ -350,6 +355,23 @@ fn write_set_payload<W: Write>(w: &mut W, set: &kevy_store::SetData) -> io::Resu
     w.write_all(&(set.len() as u32).to_le_bytes())?;
     for m in set {
         write_bytes(w, m.as_slice())?;
+    }
+    Ok(())
+}
+
+/// A.7 O5: inline-encoded set payload — same OP_SET wire shape as
+/// [`write_set_payload`], just sourced from the packed inline buffer
+/// instead of the heap-backed `KevySet`. Snapshot/replication is
+/// encoding-agnostic; the loader rebuilds whichever encoding it sees
+/// fit (currently always `Value::Set(Arc<KevySet>)` via
+/// `Store::load_set`, see `keyspace.rs::load_value`).
+fn write_small_set_payload<W: Write>(
+    w: &mut W,
+    s: &kevy_store::SmallSetData,
+) -> io::Result<()> {
+    w.write_all(&(s.len() as u32).to_le_bytes())?;
+    for m in s.iter() {
+        write_bytes(w, m)?;
     }
     Ok(())
 }

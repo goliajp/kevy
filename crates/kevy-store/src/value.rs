@@ -148,6 +148,15 @@ pub enum Value {
     Set(Arc<SetData>),
     ZSet(Arc<ZSetData>),
     Stream(Arc<crate::stream::StreamData>),
+    /// v1.25 A.7 O5 (valkey-orthodox encoding switch): tiny sets (1-N
+    /// short members) live inline in 24 bytes instead of behind
+    /// `Arc<SetData>` — matches valkey's `OBJ_ENCODING_LISTPACK` for
+    /// sets, which is what `redis-benchmark -t sadd` default `-r 0`
+    /// (cardinality stays at 1 forever, single 20-byte literal member)
+    /// measures. On overflow ([`crate::small_set::SmallSetData::try_add`]
+    /// returns `NoRoom`) the set is promoted to `Value::Set(Arc<SetData>)`
+    /// — the Swiss-table path that wins for larger cardinalities.
+    SmallSetInline(crate::small_set::SmallSetData),
 }
 
 /// Threshold (bytes) above which a SET stores its value as
@@ -206,7 +215,7 @@ impl Value {
             Value::Str(_) | Value::Int(_) | Value::ArcBulk(_) => "string",
             Value::Hash(_) => "hash",
             Value::List(_) => "list",
-            Value::Set(_) => "set",
+            Value::Set(_) | Value::SmallSetInline(_) => "set",
             Value::ZSet(_) => "zset",
             Value::Stream(_) => "stream",
         }
@@ -235,6 +244,10 @@ impl Value {
                 .iter()
                 .map(|m| m.heap_bytes() as u64)
                 .sum::<u64>(),
+            // Inline set lives entirely in the Value variant body —
+            // zero heap, zero bucket overhead. Accounting matches
+            // `Value::Int` / inline `Value::Str` (both also return 0).
+            Value::SmallSetInline(_) => 0,
             Value::ZSet(z) => collection_overhead(z.by_member.capacity(), HASH_SLOT_BYTES)
                 + z.by_member
                     .iter()
@@ -256,7 +269,7 @@ impl Value {
     pub fn is_heap_heavy(&self) -> bool {
         match self {
             // Inline 22 B / heap ≤ small-class — fast to free inline.
-            Value::Str(_) | Value::Int(_) => false,
+            Value::Str(_) | Value::Int(_) | Value::SmallSetInline(_) => false,
             // The Axis I culprit. v1.25 A.3 lazy-drop's primary case.
             Value::ArcBulk(a) => a.len() >= HEAP_HEAVY_BYTES,
             // Collection drops walk every element + the bucket array;

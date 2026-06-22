@@ -52,6 +52,8 @@ mod hash;
 mod keyspace;
 mod list;
 mod set;
+mod small_set;
+pub use small_set::{SmallSetData, SmallSetIter};
 mod snapshot;
 pub use snapshot::SnapshotView;
 mod stream;
