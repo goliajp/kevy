@@ -16,7 +16,7 @@ jobs:
   # ───────────── verify the tag actually compiles cleanly ─────────────
   verify:
     name: Verify tag builds (release profile)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, lx64]
     steps:
       - uses: actions/checkout@v5
       - run: |

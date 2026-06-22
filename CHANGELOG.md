@@ -4,6 +4,35 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.26.0] — 2026-06-22 (v1.25 redo — docs sweep + self-hosted CI runner)
+
+Re-ship of v1.25.0. The v1.25.0 tag was pushed but the Release
+workflow failed at the `Verify tag builds` step on a free
+GitHub-hosted runner (8-shard `blocking_cross_shard::blpop_remote_key_immediate_hit`
+test allocates more memory than the 2-vCPU / 7-GB runner has after
+the v1.25 K1/K2 PBUF + io_uring ring bump). v1.25.0 therefore never
+reached crates.io / GH Releases. Two changes vs the v1.25.0 tag:
+
+- `.github/workflows/release.yml` — `verify` job switched from
+  `ubuntu-latest` to `[self-hosted, lx64]` (the org-registered lx64
+  bare-metal runner the perf work already runs on; 16 cores / 64 GB
+  RAM, no ENOMEM).
+- Comprehensive doc sweep landing on top: README.md (en/ja/zh),
+  bench/REPORT.md, crates/kevy-embedded/README.md, kevy-sys + kevy
+  READMEs, docs/tuning.md (en/ja/zh), and a new docs/uds.md (en/ja/zh)
+  covering precision-bench numbers + embed-server联合 deployment
+  shapes — see commit `25e074b`.
+
+Code-side `kevy-*` crates are byte-identical to the v1.25.0 build;
+only Cargo.toml `version` fields and three crate-local versions move:
+
+- workspace `1.25.0 → 1.26.0`
+- `kevy-client 1.12.3 → 1.12.4`
+- `kevy-client-async 1.0.4 → 1.0.5`
+- `kevy-embedded 1.4.4 → 1.4.5`
+
+Everything below remains true (it's the v1.25.0 entry, unchanged).
+
 ## [v1.25.0] — 2026-06-22 (decomposition-driven perf sprint + UDS support)
 
 This release adopts and ships the
