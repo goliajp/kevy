@@ -51,7 +51,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         }
     }
 
-    fn maybe_grow(&mut self) {
+    pub(crate) fn maybe_grow(&mut self) {
         if self.cap == 0 || (self.occupied + self.deleted) >= self.threshold() {
             self.grow();
         }
@@ -242,7 +242,7 @@ impl<K, V> KevyMap<K, V> {
         Some(v)
     }
 
-    fn find_by_borrow<Q>(&self, key: &Q) -> Option<usize>
+    pub(crate) fn find_by_borrow<Q>(&self, key: &Q) -> Option<usize>
     where
         K: Borrow<Q>,
         Q: KevyHash + Eq + ?Sized,
@@ -268,6 +268,97 @@ impl<K, V> KevyMap<K, V> {
             // EMPTY in this group ⇒ key cannot be later in the probe.
             if !g.match_byte(EMPTY).is_empty() {
                 return None;
+            }
+            group_start = (group_start + GROUP_WIDTH) & self.mask;
+        }
+    }
+
+    /// Full probe: returns `Found(idx)` if `key` is present, else
+    /// `NotFound { insert_at, via_tombstone }` describing the slot a future
+    /// insert would take. Mirrors [`probe_with_key`](Self::probe_with_key)
+    /// but accepts a `Borrow<Q>` key.
+    ///
+    /// Used by the [`raw_entry_mut`](Self::raw_entry_mut) API to fuse a read
+    /// and a possible insert into a single probe.
+    pub(crate) fn probe_by_borrow<Q>(&self, key: &Q) -> ProbeOutcome
+    where
+        K: Borrow<Q>,
+        Q: KevyHash + Eq + ?Sized,
+    {
+        if self.cap == 0 {
+            return ProbeOutcome::NotFound {
+                insert_at: 0,
+                via_tombstone: false,
+            };
+        }
+        let hash = key.kevy_hash();
+        let h2v = h2(hash);
+        let group_start = (hash as usize) & self.mask;
+        if self.deleted == 0 {
+            self.probe_by_borrow_fast(key, h2v, group_start)
+        } else {
+            self.probe_by_borrow_slow(key, h2v, group_start)
+        }
+    }
+
+    /// Fast path for `probe_by_borrow`: no tombstones in the table, so we
+    /// can stop tracking DELETED slots entirely.
+    fn probe_by_borrow_fast<Q>(&self, key: &Q, h2v: u8, mut group_start: usize) -> ProbeOutcome
+    where
+        K: Borrow<Q>,
+        Q: KevyHash + Eq + ?Sized,
+    {
+        loop {
+            // SAFETY: see [insert_known_unique].
+            let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
+            for m in g.match_byte(h2v).iter() {
+                let slot = (group_start + m) & self.mask;
+                // SAFETY: matched h2 ⇒ slot occupied ⇒ initialised.
+                let kv = unsafe { (*self.slots_ptr.as_ptr().add(slot)).assume_init_ref() };
+                if kv.0.borrow() == key {
+                    return ProbeOutcome::Found(slot);
+                }
+            }
+            if let Some(m) = g.match_byte(EMPTY).lowest_set() {
+                return ProbeOutcome::NotFound {
+                    insert_at: (group_start + m) & self.mask,
+                    via_tombstone: false,
+                };
+            }
+            group_start = (group_start + GROUP_WIDTH) & self.mask;
+        }
+    }
+
+    /// Slow path for `probe_by_borrow`: tombstones present; remember the
+    /// first DELETED so a later insert can reclaim it.
+    fn probe_by_borrow_slow<Q>(&self, key: &Q, h2v: u8, mut group_start: usize) -> ProbeOutcome
+    where
+        K: Borrow<Q>,
+        Q: KevyHash + Eq + ?Sized,
+    {
+        let mut first_deleted: Option<usize> = None;
+        loop {
+            // SAFETY: see [insert_known_unique].
+            let g = unsafe { Group::load(self.metadata_ptr.as_ptr().add(group_start)) };
+            for m in g.match_byte(h2v).iter() {
+                let slot = (group_start + m) & self.mask;
+                // SAFETY: matched h2 ⇒ slot occupied ⇒ initialised.
+                let kv = unsafe { (*self.slots_ptr.as_ptr().add(slot)).assume_init_ref() };
+                if kv.0.borrow() == key {
+                    return ProbeOutcome::Found(slot);
+                }
+            }
+            if first_deleted.is_none()
+                && let Some(m) = g.match_byte(DELETED).lowest_set()
+            {
+                first_deleted = Some((group_start + m) & self.mask);
+            }
+            if let Some(m) = g.match_byte(EMPTY).lowest_set() {
+                let probe_empty = (group_start + m) & self.mask;
+                return ProbeOutcome::NotFound {
+                    insert_at: first_deleted.unwrap_or(probe_empty),
+                    via_tombstone: first_deleted.is_some(),
+                };
             }
             group_start = (group_start + GROUP_WIDTH) & self.mask;
         }
