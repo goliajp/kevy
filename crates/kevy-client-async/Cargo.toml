@@ -3,7 +3,7 @@ name = "kevy-client-async"
 description = "Async client for kevy — runtime-agnostic core with feature-gated tokio / smol / async-std transports; mirrors the blocking kevy-client surface."
 # Explicit, not workspace-inherited: kevy-client-async tracks its own
 # version. v1.0.0 = T4.x Phase-4 first cut (mirror + pipeline-first).
-version = "1.0.10"
+version = "1.0.11"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

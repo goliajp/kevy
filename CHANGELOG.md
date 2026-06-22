@@ -4,6 +4,30 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.26.6] — 2026-06-22 (v1.26.5 follow-up — stronger crates.io 429 backoff)
+
+v1.26.5's publish chain made it to crate #9 (kevy-map) before
+crates.io 429'd; the 65 s × 3 retry wasn't long enough to outwait
+the burst window after 16+ publishes had already happened that hour.
+
+Workflow `publish_or_skip` now:
+- sleeps 35 s after every successful publish (instead of 3 s) — stays
+  well under any plausible per-10-minute publish limit even on a
+  clean chain
+- on 429: 300 s × up to 5 retries (was 65 s × 3) — max 25 min wait
+  per crate
+
+No source change. Worst-case 22-crate chain: ~13 min happy path,
+~38 min if the first publish trips a depleted window.
+
+8 / 22 crates are at 1.26.5 on crates.io from v1.26.5's partial
+chain; v1.26.6 republishes all 22 fresh.
+
+- workspace 1.26.5 → 1.26.6
+- kevy-client 1.12.9 → 1.12.10
+- kevy-client-async 1.0.10 → 1.0.11
+- kevy-embedded 1.4.10 → 1.4.11
+
 ## [v1.26.5] — 2026-06-22 (v1.26.4 follow-up — aarch64-linux prefetch cfg-guard + crates.io rate-limit retry)
 
 v1.26.4 fixed the unlink/chmod FFI signature but the
