@@ -55,6 +55,17 @@ const PBUF_GROUP: u16 = 0;
 /// `-ENOBUFS`: the buf ring was momentarily empty; just re-arm (don't close).
 pub(crate) const ENOBUFS: i32 = 105;
 
+/// **A.4 (v1.25)**: maximum iovec entries packed into one `writev` SQE.
+/// Linux caps `writev(2)` (and `IORING_OP_WRITEV`) at `IOV_MAX = 1024`
+/// vectors; over the cap the kernel returns `-EINVAL`. The chunked-
+/// writev state machine on `UringConn` (`arcs_in_flight` +
+/// `write_byte_cap` + `write_inflight_bytes`) submits one chunk per
+/// arm_conns iter and drops the processed prefix in the CQE handler,
+/// so a 50-sub × 1024-publish pub/sub burst lands in ~2 SQEs per conn
+/// (TCP-ordered, never violating IOV_MAX) instead of forcing the
+/// in-shard memcpy fallback after the prior 256-arc cap.
+pub(crate) const MAX_IOVECS_PER_WRITEV: usize = 1024;
+
 /// Probe whether this host can build the io_uring + provided-buffer ring that
 /// [`Shard::run_uring`] needs: `io_uring_setup` not blocked by seccomp (Docker's
 /// default profile blocks it) and a kernel new enough for the buf ring (5.19+).
@@ -493,12 +504,34 @@ impl<C: Commands> Shard<C> {
                     //   2. arc.as_ref()             (zero-copy value bytes)
                     // Then a final write_buf[last_pos..len()] tail. Start
                     // from write_off to honour any prior partial-write
-                    // resume — but in v1 we treat partial-write as a full
-                    // restart (write_off only resumes the linear case).
+                    // resume.
+                    //
+                    // **A.4 (v1.25)**: cap iovec count at
+                    // [`MAX_IOVECS_PER_WRITEV`] (Linux `IOV_MAX = 1024`).
+                    // A pipelined pub/sub burst (1024 publishes × 50
+                    // subs) puts >2000 iovecs onto a single conn; we
+                    // submit one chunk per arm_conns iter and let the
+                    // CQE handler drop the processed prefix. Without
+                    // the cap the kernel returns -EINVAL.
                     uc.write_iovecs.clear();
                     let mut prev = uc.write_off;
-                    for (pos, arc) in &uc.write_arcs {
+                    let mut arcs_consumed = 0usize;
+                    let mut byte_cap = uc.write_buf.len();
+                    for (i, (pos, arc)) in uc.write_arcs.iter().enumerate() {
                         let pos = *pos;
+                        // We may push up to 2 iovecs this iter (a header
+                        // gap before the arc + the arc itself). Reserve
+                        // one slot for the trailing tail-after-last-arc
+                        // entry so capped submissions still end on a
+                        // contiguous byte boundary.
+                        let need = if pos > prev { 2 } else { 1 };
+                        if uc.write_iovecs.len() + need > MAX_IOVECS_PER_WRITEV - 1 {
+                            // Submit through end of the LAST included arc
+                            // (the previous iter): byte_cap = `prev`.
+                            // arcs_consumed already captures the count.
+                            byte_cap = prev;
+                            break;
+                        }
                         if pos > prev {
                             uc.write_iovecs.push(kevy_uring::Iovec {
                                 iov_base: uc.write_buf.as_ptr().wrapping_add(prev),
@@ -510,13 +543,18 @@ impl<C: Commands> Shard<C> {
                             iov_len: arc.len(),
                         });
                         prev = pos;
+                        arcs_consumed = i + 1;
                     }
-                    if prev < uc.write_buf.len() {
+                    if prev < byte_cap {
                         uc.write_iovecs.push(kevy_uring::Iovec {
                             iov_base: uc.write_buf.as_ptr().wrapping_add(prev),
-                            iov_len: uc.write_buf.len() - prev,
+                            iov_len: byte_cap - prev,
                         });
                     }
+                    uc.arcs_in_flight = arcs_consumed;
+                    uc.write_byte_cap = byte_cap;
+                    uc.write_inflight_bytes =
+                        uc.write_iovecs.iter().map(|v| v.iov_len).sum();
                     // SAFETY: write_buf, write_arcs (Arc keeps bytes
                     // alive), and write_iovecs all live in `uc`, which
                     // is in the io map — they outlive any SQE we submit

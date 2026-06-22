@@ -92,6 +92,27 @@ pub(crate) struct UringConn {
     /// stack so the kernel's async iovec read sees a stable address until
     /// the matching CQE fires.
     pub(crate) write_iovecs: Vec<Iovec>,
+    /// **A.4 (v1.25)**: how many leading entries of `write_arcs` are
+    /// covered by the currently in-flight `writev` SQE. A pipelined
+    /// pub/sub flood (`BATCH = 1024` publishes × 50 subs) accumulates
+    /// thousands of arcs per conn; one writev is capped by Linux
+    /// `IOV_MAX = 1024`, so a single SQE can only cover a prefix. The
+    /// reactor submits one chunk per arm_conns iter and drops the
+    /// processed prefix on CQE. Zero in the small-output / non-arc
+    /// path.
+    pub(crate) arcs_in_flight: usize,
+    /// **A.4 (v1.25)**: byte position in `write_buf` where the current
+    /// in-flight writev submission stops including header bytes (i.e.
+    /// the right edge of the last write_buf range packed into the
+    /// iovec). On CQE we advance `write_off` to this value. When the
+    /// submission covers all arcs and the full tail this equals
+    /// `write_buf.len()`. Zero when no chunked writev is in flight.
+    pub(crate) write_byte_cap: usize,
+    /// **A.4 (v1.25)**: total bytes the kernel was asked to write for
+    /// the in-flight writev (sum of all iovec lens). On CQE compared
+    /// against `res` to distinguish full vs short writes for the
+    /// chunked-writev state machine. Zero when no writev is in flight.
+    pub(crate) write_inflight_bytes: usize,
     /// EOF/error seen on the socket — close once writes drain.
     pub(crate) closing: bool,
     /// **v1.25 B.4 + A.2** — when `Some`, the multishot recv handler
@@ -111,6 +132,9 @@ impl UringConn {
             write_inflight: false,
             write_arcs: Vec::new(),
             write_iovecs: Vec::new(),
+            arcs_in_flight: 0,
+            write_byte_cap: 0,
+            write_inflight_bytes: 0,
             closing: false,
             pending_big_arg: None,
         }

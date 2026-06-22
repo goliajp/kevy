@@ -25,16 +25,26 @@ use std::sync::Arc;
 /// (`networking.c::tryAvoidBulkStrCopyToReply`).
 const PUBSUB_BODY_ARC_THRESHOLD: usize = 256;
 
-/// **H2.A correctness cap (v1.25)**: maximum `output_arcs` entries we
-/// allow per connection before falling back to memcpy on subsequent
-/// publishes (until the current arcs drain). Linux `IOV_MAX = 1024`
-/// for both `writev(2)` and io_uring `IORING_OP_WRITEV`; the splice
-/// produces up to `2 × arcs + 1` iovecs (one header run + one arc per
-/// entry, plus a final tail), so 256 arcs → ≤ 513 iovecs, well under
-/// the kernel limit. Without this cap, a pipelined PUBLISH flood (the
-/// bench's `BATCH = 1024`) overruns `IOV_MAX`, the writev returns
-/// `-EINVAL`, the conn is closed, and the subscriber hangs reading.
-const PUBSUB_ARC_FLUSH_AT: usize = 256;
+/// **H2.A correctness cap (v1.25)** / **A.4 lifted (v1.25)**:
+/// maximum `output_arcs` entries we allow per connection before
+/// falling back to memcpy on subsequent publishes (until the current
+/// arcs drain).
+///
+/// Until A.4, this had to stay ≤ 511 because one `writev(2)` /
+/// `IORING_OP_WRITEV` SQE is capped at Linux `IOV_MAX = 1024`
+/// vectors, and the splice produces up to `2 × arcs + 1` iovecs.
+/// 256 arcs ⇒ ≤ 513 iovecs, well under the kernel cap. With
+/// A.4's chunked writev (see `uring_reactor::MAX_IOVECS_PER_WRITEV`
+/// + `UringConn::arcs_in_flight`), the reactor now submits one
+/// writev chunk per arm_conns iter and the per-conn arc accumulator
+/// can grow past IOV_MAX without truncation — the bottleneck moved
+/// from the iovec cap to per-conn memory footprint. Bumped to
+/// 4096 so a pipelined PUBLISH flood (`BATCH = 1024` × multi-iter
+/// stacking) zero-copies almost every publish; epoll's flush_conn
+/// path still materialises arcs into a linear `Vec` so any cap on
+/// per-conn memory is more about steady-state liveness than wire
+/// correctness.
+const PUBSUB_ARC_FLUSH_AT: usize = 4096;
 
 impl<C: Commands> Shard<C> {
     pub(crate) fn do_subscribe<A: ArgvView + ?Sized>(
