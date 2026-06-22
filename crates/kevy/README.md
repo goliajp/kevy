@@ -24,6 +24,16 @@ redis-cli -p 6379 get foo
 Flags: `--bind --port --threads --dir --no-aof` · env: `KEVY_BIND KEVY_PORT
 KEVY_THREADS KEVY_DIR KEVY_AOF`.
 
+For same-host clients, point `KEVY_UNIX_SOCKET` at a filesystem path
+and the server dual-binds TCP + Unix-domain socket (RESP semantics
+identical; ~60–75 % faster than TCP loopback at every workload —
+see [`docs/uds.md`](https://github.com/goliajp/kevy/blob/develop/docs/uds.md)):
+
+```sh
+KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6004
+redis-cli -s /tmp/kevy.sock SET foo bar
+```
+
 Built from a small stack of reusable crates: `kevy-sys`, `kevy-resp`,
 `kevy-store`, `kevy-net`, `kevy-rt`, `kevy-persist`.
 
