@@ -4,6 +4,26 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.26.2] — 2026-06-22 (v1.26.1 follow-up — lx64 runner CARGO_HOME override)
+
+v1.26.1 failed verify on lx64 because the runner runs as `gha-runner`
+(not root), whose `$HOME/.cargo/bin` was empty and whose systemd
+unit sets a root-owned `CARGO_HOME=/mnt/ssd980/cargo-cache` for
+shared build caching. Two fixes:
+
+- Server-side: install rustup + stable toolchain into
+  `/home/gha-runner/.cargo` (one-time, no workflow change).
+- Workflow-side: also export `CARGO_HOME` and `RUSTUP_HOME` to the
+  gha-runner's home for the verify job, so cargo's package cache is
+  writable.
+
+No code change.
+
+- workspace 1.26.1 → 1.26.2
+- kevy-client 1.12.5 → 1.12.6
+- kevy-client-async 1.0.6 → 1.0.7
+- kevy-embedded 1.4.6 → 1.4.7
+
 ## [v1.26.1] — 2026-06-22 (v1.26.0 follow-up — rustup PATH on lx64 runner)
 
 v1.26.0 verify ran on the self-hosted lx64 runner as intended but
