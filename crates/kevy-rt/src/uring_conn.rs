@@ -113,6 +113,12 @@ pub(crate) struct UringConn {
     /// against `res` to distinguish full vs short writes for the
     /// chunked-writev state machine. Zero when no writev is in flight.
     pub(crate) write_inflight_bytes: usize,
+    /// **K4 (v1.25 A.9)**: this conn is already on the shard's
+    /// `arm_pending` queue this iter. Dedupes wake-up pushes from the
+    /// recv / write / accept / dispatch / publish paths so a single
+    /// `arm_conns` visit covers all of them. Cleared in `arm_conns`
+    /// right before processing.
+    pub(crate) arm_queued: bool,
     /// EOF/error seen on the socket — close once writes drain.
     pub(crate) closing: bool,
     /// **v1.25 B.4 + A.2** — when `Some`, the multishot recv handler
@@ -135,6 +141,7 @@ impl UringConn {
             arcs_in_flight: 0,
             write_byte_cap: 0,
             write_inflight_bytes: 0,
+            arm_queued: false,
             closing: false,
             pending_big_arg: None,
         }

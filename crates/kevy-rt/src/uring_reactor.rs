@@ -84,8 +84,8 @@ pub(crate) fn io_uring_available() -> bool {
 
 // `user_data` layout: top 3 bits = op, low 61 bits = conn id.
 const OP_SHIFT: u32 = 61;
-const OP_RECV: u64 = 1 << OP_SHIFT;
-const OP_WRITE: u64 = 2 << OP_SHIFT;
+pub(crate) const OP_RECV: u64 = 1 << OP_SHIFT;
+pub(crate) const OP_WRITE: u64 = 2 << OP_SHIFT;
 const OP_ACCEPT: u64 = 3 << OP_SHIFT;
 /// The shard's waker pipe became readable (a peer woke a parked shard).
 pub(crate) const OP_WAKER: u64 = 4 << OP_SHIFT;
@@ -200,6 +200,13 @@ impl<C: Commands> Shard<C> {
                     OP_WRITE => {
                         io_work = true;
                         self.uring_on_write(cid, c.res, &mut io);
+                        // K4: a write CQE — even a fully-drained one —
+                        // wants an arm visit so a chunked-writev tail
+                        // (pub/sub burst > IOV_MAX) gets its next
+                        // chunk out. Cheap when nothing remains: the
+                        // visit's `needs_more` check drops the conn
+                        // out of the queue.
+                        self.mark_arm_pending(cid, &mut io);
                     }
                     OP_ACCEPT | OP_ACCEPT_CL => {
                         cold_path_hint();
@@ -227,8 +234,12 @@ impl<C: Commands> Shard<C> {
                             let mut conn = Conn::new(sock);
                             conn.cluster = cluster;
                             self.conns.insert(ncid, conn);
-                            io.insert(ncid, UringConn::new());
-                            self.active_uring_conns.push(ncid);
+                            let mut uc = UringConn::new();
+                            // K4: new conn needs an arm visit so its
+                            // multishot recv gets queued.
+                            uc.arm_queued = true;
+                            io.insert(ncid, uc);
+                            self.arm_pending.push(ncid);
                             // Client connections only — cluster-bus is internal.
                             if !cluster {
                                 self.commands.on_connection();
@@ -254,10 +265,13 @@ impl<C: Commands> Shard<C> {
             // Cross-core: forwarded requests + replies (output accumulates; the
             // io_uring write path below flushes it).
             let did_inbound = self.uring_drain_inbound();
-            // PUBLISH appended to subscribers' output + marked them dirty; the
-            // arm loop above already submits a write for any conn with output, so
-            // io_uring batches the delivery — just drop the (epoll-only) marks.
-            self.dirty.clear();
+            // K4 (v1.25 A.9): `self.dirty` is no longer cleared here —
+            // pub/sub deliver paths push into it and `uring_arm_conns`
+            // drains it into `arm_pending` on the next iter. The prior
+            // shape relied on arm_conns scanning every conn each iter
+            // (idle conns were a ~5 ns fast-skip), so the marks could be
+            // discarded; with the dirty-set arm loop, the marks are
+            // load-bearing.
             self.flush_backlog();
             self.flush_requests();
             self.flush_publish();
@@ -388,202 +402,17 @@ impl<C: Commands> Shard<C> {
         Ok(())
     }
 
-    /// Submit a read for every idle open conn and a write for every conn with
-    /// pending output, reusing one fixed buffer per direction per conn.
-    ///
-    /// One pass over `conns` with one `io` probe per conn: this loop runs
-    /// every reactor iteration, and the previous shape (a `keys()` snapshot
-    /// Vec + 3-8 map probes per conn to appease the borrow checker) was the
-    /// hottest block of `run_uring` self time on the 8-shard profile. `conns`
-    /// and `io` are disjoint borrows (`io` lives on `run_uring`'s stack), so
-    /// `iter_mut` needs no snapshot — nothing here inserts or removes.
-    fn uring_arm_conns(
-        &mut self,
-        ring: &mut IoUring,
-        io: &mut KevyMap<u64, UringConn>,
-        bgid: u16,
-    ) {
-        // A3 (2026-06-20): prefetch UringConn ahead of the loop body.
-        // H7 diagnostic showed L1D-miss stalls = 24.6% of total backend
-        // stalls at -c1; scatter from conn-map and io-map accesses are
-        // candidates. The conns map's slot for the upcoming conn is
-        // already L1-hot at the call site, but its corresponding
-        // UringConn (separately allocated via KevyMap<u64, UringConn>)
-        // typically lives in a different cache line. Prefetching it
-        // hides the L1 fill behind the prior iter's prep_write/recv
-        // SQE writes.
-        //
-        // At -c1 single-conn the loop runs once → prefetch is a no-op
-        // (next conn doesn't exist). At higher conn counts the
-        // hide-fill benefit grows with iteration depth.
-        // Axis E follow-up (2026-06-21): iterate the dense
-        // `active_uring_conns: Vec<u64>` instead of `self.conns.iter_mut()`.
-        // The Vec walk is a sequential cache-friendly scan (50 ns for
-        // 200 cids @ c=2000); the KevyMap iter walks 512-entry metadata
-        // + scattered slot reads, which perf record showed as 4.4 %
-        // self of c=2000 SET. Conn id list is maintained at accept
-        // (push) + reap_closed (swap_remove) so it stays dense.
-        let mut prev: Option<*const UringConn> = None;
-        let len = self.active_uring_conns.len();
-        for i in 0..len {
-            let cid = self.active_uring_conns[i];
-            let Some(conn) = self.conns.get_mut(&cid) else {
-                prev = None;
-                continue;
-            };
-            if let Some(p) = prev {
-                // Hint to the CPU: the previous iter's UringConn was
-                // here — bringing it in pre-emptively warms the line
-                // for the next iter's get_mut hit-write.
-                // SAFETY: pointer was a valid &mut UringConn from the
-                // previous iteration; KevyMap doesn't reallocate inside
-                // this loop (no insert/remove).
-                unsafe {
-                    core::arch::x86_64::_mm_prefetch::<{ core::arch::x86_64::_MM_HINT_T0 }>(
-                        p as *const i8,
-                    );
-                }
-                let _ = p; // silence unused
-            }
-            let Some(uc) = io.get_mut(&cid) else {
-                prev = None;
-                continue;
-            };
-            prev = Some(uc as *const UringConn);
-            // **Axis E fix (2026-06-21)**: fast-skip for idle conns. Most
-            // conns at high -c have NO pending output, NO partial-write to
-            // resume, AND have their multishot recv already armed (recv
-            // arms once at accept and stays armed across all CQEs until
-            // it terminates). Branch out in ~5 ns so the per-iter
-            // arm_conns cost at c=2000 doesn't dominate the reactor.
-            let has_fresh_output =
-                !conn.output.is_empty() || !conn.output_arcs.is_empty();
-            let has_partial_write =
-                !uc.write_buf.is_empty() && uc.write_off < uc.write_buf.len();
-            if !has_fresh_output
-                && !has_partial_write
-                && (uc.recv_armed || uc.closing)
-            {
-                continue;
-            }
-            // Start a new write: move the conn's output (bytes + arc-bulk
-            // references) into stable per-`UringConn` state.
-            if !uc.write_inflight
-                && uc.write_buf.is_empty()
-                && uc.write_arcs.is_empty()
-                && (!conn.output.is_empty() || !conn.output_arcs.is_empty())
-            {
-                std::mem::swap(&mut uc.write_buf, &mut conn.output);
-                std::mem::swap(&mut uc.write_arcs, &mut conn.output_arcs);
-                uc.write_off = 0;
-            }
-            // L1 (2026-06-21): if the write carries arc-bulk fragments, use
-            // `prep_writev` with an iovec list — header bytes from write_buf
-            // and value bytes from the pinned Arc<[u8]> sources fuse into ONE
-            // syscall and avoid the per-GET memcpy of the value into
-            // write_buf. Otherwise the simple `prep_write` path (no
-            // overhead).
-            if !uc.write_inflight
-                && (uc.write_off < uc.write_buf.len() || !uc.write_arcs.is_empty())
-            {
-                let ok = if uc.write_arcs.is_empty() {
-                    // Simple linear path — no arc-bulks pinned. Same as
-                    // before.
-                    unsafe {
-                        ring.prep_write(
-                            conn.sock.raw(),
-                            uc.write_buf.as_ptr().add(uc.write_off),
-                            (uc.write_buf.len() - uc.write_off) as u32,
-                            OP_WRITE | cid,
-                        )
-                    }
-                } else {
-                    // Build the iovec scratch: walk write_arcs sorted by
-                    // position. For each (pos, arc) pair, emit:
-                    //   1. write_buf[prev_pos..pos] (header / static bytes)
-                    //   2. arc.as_ref()             (zero-copy value bytes)
-                    // Then a final write_buf[last_pos..len()] tail. Start
-                    // from write_off to honour any prior partial-write
-                    // resume.
-                    //
-                    // **A.4 (v1.25)**: cap iovec count at
-                    // [`MAX_IOVECS_PER_WRITEV`] (Linux `IOV_MAX = 1024`).
-                    // A pipelined pub/sub burst (1024 publishes × 50
-                    // subs) puts >2000 iovecs onto a single conn; we
-                    // submit one chunk per arm_conns iter and let the
-                    // CQE handler drop the processed prefix. Without
-                    // the cap the kernel returns -EINVAL.
-                    uc.write_iovecs.clear();
-                    let mut prev = uc.write_off;
-                    let mut arcs_consumed = 0usize;
-                    let mut byte_cap = uc.write_buf.len();
-                    for (i, (pos, arc)) in uc.write_arcs.iter().enumerate() {
-                        let pos = *pos;
-                        // We may push up to 2 iovecs this iter (a header
-                        // gap before the arc + the arc itself). Reserve
-                        // one slot for the trailing tail-after-last-arc
-                        // entry so capped submissions still end on a
-                        // contiguous byte boundary.
-                        let need = if pos > prev { 2 } else { 1 };
-                        if uc.write_iovecs.len() + need > MAX_IOVECS_PER_WRITEV - 1 {
-                            // Submit through end of the LAST included arc
-                            // (the previous iter): byte_cap = `prev`.
-                            // arcs_consumed already captures the count.
-                            byte_cap = prev;
-                            break;
-                        }
-                        if pos > prev {
-                            uc.write_iovecs.push(kevy_uring::Iovec {
-                                iov_base: uc.write_buf.as_ptr().wrapping_add(prev),
-                                iov_len: pos - prev,
-                            });
-                        }
-                        uc.write_iovecs.push(kevy_uring::Iovec {
-                            iov_base: arc.as_ptr(),
-                            iov_len: arc.len(),
-                        });
-                        prev = pos;
-                        arcs_consumed = i + 1;
-                    }
-                    if prev < byte_cap {
-                        uc.write_iovecs.push(kevy_uring::Iovec {
-                            iov_base: uc.write_buf.as_ptr().wrapping_add(prev),
-                            iov_len: byte_cap - prev,
-                        });
-                    }
-                    uc.arcs_in_flight = arcs_consumed;
-                    uc.write_byte_cap = byte_cap;
-                    uc.write_inflight_bytes =
-                        uc.write_iovecs.iter().map(|v| v.iov_len).sum();
-                    // SAFETY: write_buf, write_arcs (Arc keeps bytes
-                    // alive), and write_iovecs all live in `uc`, which
-                    // is in the io map — they outlive any SQE we submit
-                    // before reaping its CQE. The Iovec ptrs reference
-                    // those memories.
-                    unsafe {
-                        ring.prep_writev(
-                            conn.sock.raw(),
-                            uc.write_iovecs.as_ptr(),
-                            uc.write_iovecs.len() as u32,
-                            OP_WRITE | cid,
-                        )
-                    }
-                };
-                if ok {
-                    uc.write_inflight = true;
-                }
-            }
-            // Arm a multishot recv if one isn't already running (it re-fires per
-            // arrival into the shared provided-buffer ring, so this happens once
-            // per connection, not once per read — the syscall-batching win).
-            if !uc.recv_armed
-                && !uc.closing
-                && ring.prep_recv_multishot(conn.sock.raw(), bgid, OP_RECV | cid)
-            {
-                uc.recv_armed = true;
-            }
-        }
-    }
+    // `uring_arm_conns` lives in [`crate::uring_arm`] (v1.25 A.9: this
+    // file was 592 LOC pre-K4, over the 500-LOC house rule, and the K4
+    // ready-set rewrite needed a clean home). `uring_on_recv` /
+    // `uring_mark_closing` / `uring_on_write` live in
+    // [`crate::uring_io`]; `uring_drain_inbound` + `uring_reap_closed`
+    // live in [`crate::uring_inbox`]; the bounded park lives in
+    // [`crate::uring_park`]. All on the same `impl<C: Commands> Shard<C>`
+    // and only ever called from `run_uring` above.
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    fn _uring_module_map() {}
 
     // `uring_on_recv` / `uring_mark_closing` / `uring_on_write` live in
     // [`crate::uring_io`]; `uring_drain_inbound` + `uring_reap_closed`

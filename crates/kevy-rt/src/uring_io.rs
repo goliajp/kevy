@@ -88,10 +88,12 @@ impl<C: Commands> Shard<C> {
     ) {
         // The multishot SQE stops firing once a completion lacks F_MORE (error,
         // ENOBUFS, or EOF) — mark it for re-arming next loop.
-        if !c.has_more()
-            && let Some(uc) = io.get_mut(&cid)
-        {
-            uc.recv_armed = false;
+        if !c.has_more() {
+            if let Some(uc) = io.get_mut(&cid) {
+                uc.recv_armed = false;
+            }
+            // K4: needs an arm visit to re-prep the recv SQE.
+            self.mark_arm_pending(cid, io);
         }
         if c.res <= 0 {
             // Close on EOF (0) or a real error, but NOT on -ENOBUFS (the ring was
@@ -121,6 +123,10 @@ impl<C: Commands> Shard<C> {
             self.uring_bigbulk_feed(cid, io, slab_bytes);
             pbuf.recycle(bid);
             self.aof_end_group_logged();
+            // K4: feed may have completed the body and pushed +OK to
+            // conn.output; queue the conn so the next arm visit
+            // submits a write SQE.
+            self.mark_arm_pending(cid, io);
             return;
         }
         // Take conn.input onto the stack so dispatch's borrowed argv
@@ -148,6 +154,12 @@ impl<C: Commands> Shard<C> {
             self.protocol_error(cid);
             self.uring_mark_closing(cid, io);
         }
+        // K4: dispatch may have appended reply bytes to `conn.output` and/or
+        // arc references to `conn.output_arcs` — queue the conn so the
+        // next arm visit submits the write SQE. Cheap (one map probe +
+        // a dedup flag) and unconditional: under bench-shape -P1 every
+        // recv produces a reply, so the branch predictor stays hot.
+        self.mark_arm_pending(cid, io);
     }
 
     /// Inner recv → parse → dispatch step. Picks the parse-from-slab fast
@@ -238,6 +250,10 @@ impl<C: Commands> Shard<C> {
         if let Some(uc) = io.get_mut(&cid) {
             uc.closing = true;
         }
+        // K4: closing conns stay in the arm queue until reap picks
+        // them up — gives the arm loop a chance to drain any
+        // outstanding write_buf before close_conn drops the fd.
+        self.mark_arm_pending(cid, io);
         self.blocked.drop_for_conn(cid);
         self.cancel_xshard_on_close(cid);
     }

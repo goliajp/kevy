@@ -61,14 +61,24 @@ pub(crate) struct Shard<C: Commands> {
     // + fold) and per event; std's SipHash on the u64/i32 keys profiled at ~17%
     // of single-shard CPU, the dominant non-command-CPU cost.
     pub(crate) conns: KevyMap<u64, Conn>,
-    /// Axis E follow-up (2026-06-21): linear list of currently-live conn
-    /// ids for the io_uring reactor's `uring_arm_conns` walk. Replaces
-    /// `self.conns.iter_mut()` (which costs `Map::next` ≈ 4.4 % self at
-    /// c=2000 per perf record). Updated on accept (push) and reap_closed
-    /// (swap_remove); order is irrelevant — arm_conns processes each
-    /// independently.
+    /// **K4 (v1.25 A.9, 2026-06-22)**: per-iter "needs arm work" queue
+    /// for the io_uring reactor. Populated by:
+    ///   - accept handler (new conn, needs recv arm)
+    ///   - `uring_on_recv` (produced output via dispatch / recv
+    ///     terminated and needs re-arm)
+    ///   - `uring_on_write` (chunked-writev tail still queued)
+    ///   - `drain_inbound` (folded reply pushed to `conn.output`)
+    ///   - pub/sub `deliver_publish*` paths (already push `self.dirty`;
+    ///     `uring_arm_conns` drains those into `arm_pending`)
+    ///   - block / xshard reply paths (same dirty-list reuse)
+    ///   - `uring_mark_closing` (closing conn needs visit until reap)
+    ///
+    /// Drained by `uring_arm_conns` each iter. Replaces the O(N=conns)
+    /// `active_uring_conns` Vec scan (Axis E follow-up shape), which at
+    /// c=10k was 50 µs/iter raw — now O(active) per iter.
+    /// Dedup via `UringConn::arm_queued`.
     #[allow(dead_code)] // io_uring path only — epoll reactor doesn't use it
-    pub(crate) active_uring_conns: Vec<u64>,
+    pub(crate) arm_pending: Vec<u64>,
     pub(crate) fd_to_conn: KevyMap<i32, u64>,
     pub(crate) next_conn_id: u64,
     pub(crate) events: Vec<Event>,

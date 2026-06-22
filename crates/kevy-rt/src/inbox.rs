@@ -220,6 +220,14 @@ impl<C: Commands> Shard<C> {
                         self.fold(conn, seq, part);
                         if DIRECT_FLUSH {
                             self.flush_conn(conn)?;
+                        } else {
+                            // K4 (v1.25 A.9): folded reply may have
+                            // appended bytes to `conn.output` via
+                            // `drain_front`. Push to the dirty list
+                            // so the io_uring arm loop drains it
+                            // into `arm_pending` and submits the
+                            // write SQE.
+                            self.mark_pending_write_dirty(conn);
                         }
                     }
                     // Batched single-key dispatches to this (owning) shard:
@@ -250,8 +258,14 @@ impl<C: Commands> Shard<C> {
                         for (conn, seq, part, husk) in resps {
                             self.argv_pool.put(husk);
                             self.fold(conn, seq, part);
-                            if DIRECT_FLUSH && !to_flush.contains(&conn) {
-                                to_flush.push(conn);
+                            if DIRECT_FLUSH {
+                                if !to_flush.contains(&conn) {
+                                    to_flush.push(conn);
+                                }
+                            } else {
+                                // K4: see the `Inbound::Response`
+                                // branch above for the rationale.
+                                self.mark_pending_write_dirty(conn);
                             }
                         }
                         for conn in to_flush {
@@ -284,6 +298,9 @@ impl<C: Commands> Shard<C> {
                         self.origin_on_serve_resp(conn, key, reply);
                         if DIRECT_FLUSH {
                             self.flush_conn(conn)?;
+                        } else {
+                            // K4: see above.
+                            self.mark_pending_write_dirty(conn);
                         }
                     }
                     Inbound::BlockCancel { origin, conn } => self.target_cancel(origin, conn),
@@ -291,6 +308,30 @@ impl<C: Commands> Shard<C> {
             }
         }
         Ok(did)
+    }
+
+    /// **K4 (v1.25 A.9)**: signal that `cid` just had output appended
+    /// (forwarded reply folded, BLPOP served, etc.) so the io_uring
+    /// arm loop visits it on the next iter. Routes via `self.dirty`;
+    /// `uring_arm_conns` drains that into `arm_pending` and the
+    /// per-`UringConn` `arm_queued` flag dedupes the final push, so
+    /// a redundant call here costs at most one extra Vec entry.
+    ///
+    /// We deliberately do NOT short-circuit on `conn.pending_write`:
+    /// that flag tracks the pub/sub write-coalesce state (cleared
+    /// only when the entire `write_buf` drains in `uring_on_write`).
+    /// A forwarded reply that lands while `pending_write` is still
+    /// set — common on a fast pipelined cross-shard SET stream where
+    /// the prior reply's write hasn't completed — would otherwise
+    /// never reach the arm queue.
+    ///
+    /// The epoll reactor flushes inline via `flush_conn` and never
+    /// reaches this; the helper is a no-op when the conn is gone.
+    #[inline]
+    pub(crate) fn mark_pending_write_dirty(&mut self, cid: u64) {
+        if self.conns.contains_key(&cid) {
+            self.dirty.push(cid);
+        }
     }
 
     /// Tear down a closing connection: deregister from the poller, drop

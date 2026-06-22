@@ -101,6 +101,8 @@ mod shard_flush;
 mod shard_lifecycle;
 mod shard_tick;
 #[cfg(target_os = "linux")]
+mod uring_arm;
+#[cfg(target_os = "linux")]
 mod uring_bigbulk;
 #[cfg(target_os = "linux")]
 mod uring_conn;
