@@ -4,68 +4,56 @@
 
 use kevy_uring::{Iovec, KernelTimespec};
 use std::sync::Arc;
-use std::time::Duration;
 
-/// **v1.25 B.4 + A.2 (post-2026-06-22)** — per-conn state for the BigBulk
-/// SET ingest path. When the parser sees `SET key $<N>\r\n` with N ≥
-/// [`crate::uring_io::BIG_ARG_PROMOTE_THRESHOLD`] and the value body is not
-/// yet complete in the current recv chunk, the reactor:
+/// **v1.25 B.4 + A.2 / B.5 (post-2026-06-22)** — per-conn state for the
+/// BigBulk frame-stitch ingest path.
 ///
-/// 1. Pre-parses verb (SET only for now), key, and SET options off the
-///    header bytes (which already arrived).
-/// 2. Allocates `buf = Vec::with_capacity(N + 2)` — exactly the body + CRLF.
-/// 3. Copies any body bytes already received (slab tail past the header)
-///    into `buf`.
-/// 4. Routes every subsequent multishot-recv CQE on this conn into `buf`
-///    instead of the conn's `input` Vec, until `buf.len() == N + 2`.
-/// 5. Builds the value via `pick_value_for_set_owned(buf)` — `Vec` →
-///    `Box<[u8]>` (cap == len after `into_boxed_slice`) → `Arc::from(Box)`
-///    is **zero-copy**: the existing heap allocation becomes the Arc body.
-/// 6. Calls `Store::set(...)` to apply the SET, writes `+OK\r\n` to the
-///    conn's output, and clears `pending_big_arg`. Multishot recv stays
-///    armed throughout — only the routing of CQE bytes changes.
+/// When the parser sees a `*<argc> <supported-verb> … $N` frame whose
+/// LAST bulk has `N ≥ BIG_ARG_PROMOTE_THRESHOLD` and whose body isn't
+/// fully present in the current recv chunk, the reactor:
 ///
-/// Eliminates both:
-/// - The realloc storm in `conn.input` (0→16→32→48→64 K for a 64 K SET);
-/// - The final `Arc::from(&[u8])` 64 K alloc + memcpy (which currently
-///   doubles the per-byte work for any value > slab size).
+/// 1. Walks the frame header to compute the total RESP frame length
+///    (header + every bulk's body + every CRLF).
+/// 2. Allocates `frame = Vec::with_capacity(total)` — exactly the
+///    expected frame size so subsequent `extend_from_slice` calls never
+///    reallocate (no 0→16→32→48→64K realloc storm in `conn.input`).
+/// 3. Copies all already-received bytes (slab head past the parsed
+///    prefix) into `frame`.
+/// 4. Routes every subsequent multishot-recv CQE on this conn into
+///    `frame` until `frame.len() == total`.
+/// 5. Re-dispatches the assembled frame through the normal parser
+///    (`Shard::dispatch_batch`). Every existing command handler (SET,
+///    SETEX, PSETEX, APPEND, GETSET, MSET, …) runs unchanged — same
+///    routing, same AOF, same reply emission.
 ///
-/// Scope: SET only. Other multi-arg-with-value commands (MSET, SETEX,
-/// APPEND, GETSET, …) keep the current borrowed-slice path.
+/// Eliminates the conn.input realloc storm. The final `Arc::from(&[u8])`
+/// memcpy at SET adoption remains (the handlers take borrowed slices)
+/// — that's a v1.25.x lever once frame stitching is proven. The
+/// originally-shipped B.4 bare-SET zero-copy adoption was retired
+/// because it bypassed cross-shard routing (`self.store.set` writes
+/// directly to the connection's owning shard rather than the key's
+/// owning shard — a silent data-loss bug on multi-shard setups when
+/// the key hashes off-shard).
+///
+/// Variants supported (last bulk must be the big one):
+/// - `SET key <BIG>` (plain 3-arg)
+/// - `SETEX key ttl <BIG>`
+/// - `PSETEX key ms <BIG>`
+/// - `APPEND key <BIG>`
+/// - `GETSET key <BIG>`
+/// - `MSET k1 v1 … kn <BIG>` (only when LAST value is big)
+///
+/// Out of scope (v1.25.x follow-up): `SET k <BIG> EX 10` (big value not
+/// last); `MSET k1 <BIG> k2 v2` (big value not last). These keep the
+/// borrowed-slice path.
 pub(crate) struct BigArgState {
-    /// Owned destination for the value bulk body **only** — capacity is
-    /// exactly `body_len` so `Vec::into_boxed_slice()` is genuinely
-    /// zero-copy at completion (no `realloc(cap → len)` shrink). The
-    /// trailing CRLF is consumed separately via [`Self::crlf_needed`].
-    pub(crate) buf: Vec<u8>,
-    /// Length of the value bulk (in bytes), i.e. `N` from `$<N>\r\n`.
-    pub(crate) body_len: usize,
-    /// Bytes of trailing `\r\n` still to consume off the wire AFTER the
-    /// body completes. Starts at 2; decrements as the kernel delivers
-    /// the trailer. The body is "done" when `buf.len() == body_len AND
-    /// crlf_needed == 0`.
-    pub(crate) crlf_needed: u8,
-    /// SET key (owned copy; the slab buffer that originally carried the
-    /// header bytes gets recycled before we re-enter `uring_on_recv` for
-    /// the body, so we can't keep a borrow).
-    pub(crate) key: Box<[u8]>,
-    /// SET option set parsed from the header.
-    pub(crate) opts: BigArgSetOptions,
-}
-
-/// SET-command options pre-parsed from the header (mirror of the option
-/// loop in `kevy/src/cmd_data.rs::cmd_set`). Defaults to no-option for the
-/// bench shape `SET key value`.
-#[derive(Default, Clone, Copy)]
-pub(crate) struct BigArgSetOptions {
-    pub(crate) expire: Option<Duration>,
-    pub(crate) nx: bool,
-    pub(crate) xx: bool,
-    /// Set if header parsing rejects the options (syntax error / invalid
-    /// expire / NX+XX). The body still has to be drained off the wire so
-    /// the next frame stays aligned; on completion we emit the RESP error
-    /// rather than a SET.
-    pub(crate) syntax_error: bool,
+    /// Accumulating full RESP frame bytes (header + already-received
+    /// body bytes). Capacity equals `total` so subsequent
+    /// `extend_from_slice` never reallocates.
+    pub(crate) frame: Vec<u8>,
+    /// Total expected RESP frame length. Frame is complete when
+    /// `frame.len() == total`.
+    pub(crate) total: usize,
 }
 
 /// io_uring-specific per-connection state (the byte buffers that must outlive
