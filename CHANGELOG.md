@@ -4,6 +4,29 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.26.5] — 2026-06-22 (v1.26.4 follow-up — aarch64-linux prefetch cfg-guard + crates.io rate-limit retry)
+
+v1.26.4 fixed the unlink/chmod FFI signature but the
+`aarch64-unknown-linux-gnu` binary build still failed because
+`crates/kevy-rt/src/uring_arm.rs:139` uses `core::arch::x86_64::_mm_prefetch`
+unconditionally. x86_64-only intrinsic; gate it behind
+`#[cfg(target_arch = "x86_64")]`. The hardware prefetcher handles
+the cold-cache hint on non-x86_64.
+
+Also: v1.26.4's publish chain tripped crates.io's "30 updates/min"
+rate limit at kevy-elect (the v1.26.2 + v1.26.3 + v1.26.4 tag
+sequence published >40 crate versions in a few minutes). Add to
+the workflow's `publish_or_skip`:
+- 3 s sleep between successful publishes (~5/min cap = safe)
+- on `429 Too Many Requests`, sleep 65 s + retry up to 3×
+
+No source change beyond the cfg-guard. Workflow only.
+
+- workspace 1.26.4 → 1.26.5
+- kevy-client 1.12.8 → 1.12.9
+- kevy-client-async 1.0.9 → 1.0.10
+- kevy-embedded 1.4.9 → 1.4.10
+
 ## [v1.26.4] — 2026-06-22 (v1.26.3 follow-up — aarch64-linux build fix)
 
 v1.26.3 published all 16 crates to crates.io successfully (the

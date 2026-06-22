@@ -113,22 +113,42 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # crates.io rate-limits "updates to existing crates" at roughly
+          # 30/minute. Our 16-crate workspace fits inside one minute, but
+          # back-to-back tag retries (v1.26.2 + v1.26.3 + v1.26.4 → 48
+          # publishes in a few minutes) tripped it on 2026-06-22. Two
+          # mitigations live in `publish_or_skip` now:
+          #   - sleep 3s between publish attempts (~5/min cap = safe)
+          #   - on 429, wait + retry up to 3 times before giving up
           publish_or_skip() {
             local crate=$1
             echo "::group::publish $crate"
             local log; log=$(mktemp)
-            if cargo publish -p "$crate" 2>&1 | tee "$log"; then
+            local attempt
+            for attempt in 1 2 3; do
+              if cargo publish -p "$crate" 2>&1 | tee "$log"; then
+                echo "::endgroup::"
+                echo "✓ published $crate (attempt $attempt)"
+                sleep 3
+                return 0
+              fi
+              if grep -qE "already uploaded|crate version .* is already|already exists on crates.io" "$log"; then
+                echo "::endgroup::"
+                echo "↷ skipped $crate (already on crates.io)"
+                sleep 3
+                return 0
+              fi
+              if grep -qE "429 Too Many Requests|too many updates" "$log"; then
+                echo "::warning::rate-limited on $crate (attempt $attempt) — sleeping 65s and retrying"
+                sleep 65
+                continue
+              fi
               echo "::endgroup::"
-              echo "✓ published $crate"
-              return 0
-            fi
-            if grep -qE "already uploaded|crate version .* is already|already exists on crates.io" "$log"; then
-              echo "::endgroup::"
-              echo "↷ skipped $crate (already on crates.io)"
-              return 0
-            fi
+              echo "✗ FAILED $crate (attempt $attempt — not rate-limit)" >&2
+              return 1
+            done
             echo "::endgroup::"
-            echo "✗ FAILED $crate" >&2
+            echo "✗ FAILED $crate after 3 retries (rate-limit didn't clear)" >&2
             return 1
           }
           # Topological order — leaves first, then crates that depend on
