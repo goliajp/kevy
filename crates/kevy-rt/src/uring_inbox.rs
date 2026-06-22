@@ -42,21 +42,44 @@ impl<C: Commands> Shard<C> {
     /// requires plumbing the io map down into the dispatch QUIT path).
     /// Left for a future iteration that's willing to take that plumb.
     pub(crate) fn uring_reap_closed(&mut self, io: &mut KevyMap<u64, UringConn>) {
-        let done: Vec<u64> = io
-            .iter()
-            .filter(|(cid, uc)| {
-                let conn = self.conns.get(cid);
-                let drained = conn.is_none_or(|c| {
-                    c.output.is_empty() && c.pending.is_empty() && c.write_pos == 0
-                });
-                let closing = uc.closing || conn.is_some_and(|c| c.closing);
-                // The multishot recv may still be armed; closing the fd (on Conn
-                // drop) terminates it and its final completion is ignored (conn
-                // gone). We only need writes fully flushed before closing.
-                closing && !uc.write_inflight && uc.write_buf.is_empty() && drained
-            })
-            .map(|(&cid, _)| cid)
-            .collect();
+        // K5 (v1.25 A.4 redo): drain the closing ready-set instead of
+        // walking the whole io map. perf-record-dwarf at c=10 000 -P 1
+        // SET sustained showed the prior `io.iter().filter(...).map(
+        // |(cid, _)| (cid, self.conns.get(cid))).collect::<Vec<u64>>()`
+        // body at 36.74 % of CPU — pure O(N) scan + per-entry second
+        // hash lookup into `self.conns`. With the ready-set populated
+        // by `uring_mark_closing` + the QUIT dispatch sites, this is
+        // O(closing) per reap pass — typically 0-few entries at any
+        // moment.
+        //
+        // Conns whose write path hasn't drained yet are re-pushed to
+        // the closing set tail (so reap retries on a subsequent iter).
+        let candidates: Vec<u64> = std::mem::take(&mut self.closing_uring_conns);
+        let mut done: Vec<u64> = Vec::with_capacity(candidates.len());
+        let mut requeue: Vec<u64> = Vec::new();
+        for cid in candidates {
+            // Already reaped (e.g. dedup on a doubly-pushed cid)?
+            let Some(uc) = io.get(&cid) else { continue };
+            let conn = self.conns.get(&cid);
+            let drained = conn.is_none_or(|c| {
+                c.output.is_empty() && c.pending.is_empty() && c.write_pos == 0
+            });
+            let closing = uc.closing || conn.is_some_and(|c| c.closing);
+            // Sanity: cid was pushed because something flipped closing — but
+            // accept-fail / EOF races could land it without `closing == true`.
+            // Skip non-closing rather than reap.
+            if !closing {
+                continue;
+            }
+            let writes_quiet = !uc.write_inflight && uc.write_buf.is_empty();
+            if writes_quiet && drained {
+                done.push(cid);
+            } else {
+                requeue.push(cid);
+            }
+        }
+        // Restore retries for the next reap pass.
+        self.closing_uring_conns.append(&mut requeue);
         for cid in done {
             // Use the shared teardown (not a local conns.remove): it also
             // cancels block waiters (local + cross-shard arbiter) and drops

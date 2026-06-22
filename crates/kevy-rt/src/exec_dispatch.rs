@@ -159,6 +159,10 @@ impl<C: Commands> Shard<C> {
             conn.next_emit += 1;
             if is_quit {
                 conn.closing = true;
+                // K5 (v1.25 A.4 redo): push to closing ready-set so
+                // `uring_reap_closed` finds this conn in O(closing)
+                // instead of an O(N=conns) scan. Duplicates harmless.
+                self.closing_uring_conns.push(conn_id);
             }
             self.slowlog_maybe(t0, args);
             if meta.is_write {
@@ -185,6 +189,8 @@ impl<C: Commands> Shard<C> {
         conn.next_emit += 1;
         if is_quit {
             conn.closing = true;
+            // K5 (v1.25 A.4 redo): see comment above.
+            self.closing_uring_conns.push(conn_id);
         }
         self.slowlog_maybe(t0, args);
         if meta.is_write {

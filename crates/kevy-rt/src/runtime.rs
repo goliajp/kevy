@@ -296,6 +296,7 @@ impl<C: Commands> Runtime<C> {
                 wakers: wakers.clone(),
                 conns: KevyMap::new(),
                 arm_pending: Vec::new(),
+                closing_uring_conns: Vec::new(),
                 fd_to_conn: KevyMap::new(),
                 next_conn_id: 1,
                 events: Vec::with_capacity(1024),
