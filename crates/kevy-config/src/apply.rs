@@ -27,6 +27,7 @@ impl Config {
             "slowlog" => self.apply_slowlog(item),
             "cluster" => self.apply_cluster(item),
             "replication" => self.apply_replication(item),
+            "lua" => self.apply_lua(item),
             other => Err(schema_err(&item, format!("unknown section [{other}]"))),
         }
     }
@@ -139,6 +140,31 @@ impl Config {
             "slower_than_micros" => self.slowlog.slower_than_micros = value_as_i64(&item)?,
             "max_len" => self.slowlog.max_len = value_as_u32(&item)?,
             k => return Err(schema_err(&item, format!("unknown [slowlog] key: {k}"))),
+        }
+        Ok(())
+    }
+
+    fn apply_lua(&mut self, item: Item) -> Result<(), ConfigError> {
+        match item.key.as_str() {
+            "time_limit_ms" => {
+                let n = value_as_i64(&item)?;
+                if n < 0 {
+                    return Err(schema_err(&item, "time_limit_ms must be >= 0"));
+                }
+                self.lua.time_limit_ms = n as u64;
+            }
+            "allow_dialects" => {
+                // Comma-separated dialect list, same shape as cluster
+                // `peers` / `scopes`. Empty string = all allowed.
+                let s = value_as_string(&item)?;
+                self.lua.allow_dialects = s
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(String::from)
+                    .collect();
+            }
+            k => return Err(schema_err(&item, format!("unknown [lua] key: {k}"))),
         }
         Ok(())
     }

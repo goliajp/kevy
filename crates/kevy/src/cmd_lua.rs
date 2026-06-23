@@ -37,7 +37,7 @@ thread_local! {
 /// argv through `kevy::dispatch::dispatch_into` against the host
 /// `&mut Store`.
 fn make_lua_host() -> LuaHost<Store> {
-    LuaHost::<Store>::new(|store, argv, read_only| {
+    let mut host = LuaHost::<Store>::new(|store, argv, read_only| {
         // P7c: read-only enforcement. EVAL_RO / EVALSHA_RO set
         // read_only=true; reject writes per Redis semantics.
         if read_only {
@@ -55,7 +55,41 @@ fn make_lua_host() -> LuaHost<Store> {
         let mut out = Vec::new();
         crate::dispatch::dispatch_into(store, &a, &mut out);
         out
-    })
+    });
+    // v1.27 P7e: read `[lua] time_limit_ms` + `[lua] allow_dialects`
+    // from the process-wide config at first-EVAL time. Operators who
+    // hot-reload `[lua]` settings after the first EVAL need to also
+    // SCRIPT FLUSH (drops the per-dialect Vm pool) or restart the
+    // server — v1.28 backlog if there's real demand.
+    let cfg = crate::config_global::get();
+    // Translate ms → instruction budget. Rough conservative
+    // calibration: 40 000 instr/ms on M-series hardware (the same
+    // ratio implied by the original 200 M / 5000 ms default).
+    if cfg.lua.time_limit_ms > 0 {
+        let budget = (cfg.lua.time_limit_ms as i64).saturating_mul(40_000);
+        host.set_instr_budget(budget);
+    } else {
+        host.set_instr_budget(0); // unlimited
+    }
+    if !cfg.lua.allow_dialects.is_empty() {
+        let versions: Vec<kevy_lua::LuaVersion> = cfg
+            .lua
+            .allow_dialects
+            .iter()
+            .filter_map(|s| match s.as_str() {
+                "5.1" | "51" => Some(kevy_lua::LuaVersion::Lua51),
+                "5.2" | "52" => Some(kevy_lua::LuaVersion::Lua52),
+                "5.3" | "53" => Some(kevy_lua::LuaVersion::Lua53),
+                "5.4" | "54" => Some(kevy_lua::LuaVersion::Lua54),
+                "5.5" | "55" => Some(kevy_lua::LuaVersion::Lua55),
+                _ => None,
+            })
+            .collect();
+        if !versions.is_empty() {
+            host.set_allowed_dialects(&versions);
+        }
+    }
+    host
 }
 
 /// Run `f` with the per-shard `LuaHost`. Returns `None` if the host

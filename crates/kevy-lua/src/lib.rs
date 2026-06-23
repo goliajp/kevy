@@ -31,7 +31,6 @@
 #![warn(missing_docs)]
 
 use luna_core::runtime::value::Value;
-use luna_core::version::LuaVersion;
 use luna_core::vm::exec::Vm;
 use std::cell::Cell;
 use std::rc::Rc;
@@ -48,10 +47,19 @@ mod shebang;
 /// ASCII hex Redis uses on the wire.
 pub mod sha1;
 
+/// Re-export so callers can name the dialect without depending on
+/// luna-core directly.
+pub use luna_core::version::LuaVersion;
+
 pub(crate) use dispatch::{DispatchHandle, DispatchSlot, DISPATCH_KEY};
 
 /// Lua 5.1 / 5.2 / 5.3 / 5.4 / 5.5 — five fixed slots.
 const N_DIALECTS: usize = 5;
+
+/// 200 M ≈ 5 s on modern hardware; matches Redis's default
+/// `lua-time-limit`. Overridable via [`Bridge::set_instr_budget`].
+/// `0` = unlimited (no budget cap).
+const DEFAULT_INSTR_BUDGET: i64 = 200_000_000;
 
 fn dialect_slot(v: LuaVersion) -> usize {
     // `LuaVersion` is a `#[repr(...)]` C-style enum with the variants
@@ -105,6 +113,17 @@ pub struct Bridge {
     /// dispatch userdata sees the same bit without us having to
     /// walk the pool. Shared with each `DispatchSlot`.
     read_only: Rc<Cell<bool>>,
+    /// Per-Vm instruction budget applied at construction time
+    /// (`Vm::sandbox(...).with_instr_budget(N)`). Default 200 M,
+    /// matches the v1.27 P1-P6 hard-coded behaviour. The kevy
+    /// operator wires `[lua] time_limit_ms` through here via
+    /// [`Bridge::set_instr_budget`].
+    ///
+    /// Changes only affect VMs spawned **after** the setter call;
+    /// the kevy-side wiring sets it before any EVAL so this is fine
+    /// in practice. If a config reload needs to take effect on
+    /// in-flight VMs, call `script_flush` afterwards.
+    instr_budget: i64,
     /// Allow-mask, one bit per [`dialect_slot`]. `true` at slot `i`
     /// means dialect `i` is permitted; an EVAL whose shebang asks
     /// for a denied dialect gets a wire `-ERR` reply. All-true by
@@ -150,7 +169,19 @@ impl Bridge {
             read_only: Rc::new(Cell::new(false)),
             allow: [true; N_DIALECTS],
             script_cache: std::collections::HashMap::new(),
+            instr_budget: DEFAULT_INSTR_BUDGET,
         }
+    }
+
+    /// Override the per-Vm instruction budget (~5 s ≈ 200 M instr by
+    /// default). `0` disables the cap (unlimited execution).
+    ///
+    /// Setting it does NOT affect already-spawned VMs in the pool —
+    /// you can pair the call with [`Bridge::script_flush`] to force
+    /// a respawn under the new budget, or leave existing VMs as-is
+    /// and only catch new dialects.
+    pub fn set_instr_budget(&mut self, n: i64) {
+        self.instr_budget = n;
     }
 
     /// Bridge with a no-op dispatcher: every `redis.call` returns a
@@ -310,13 +341,15 @@ impl Bridge {
     fn vm_for(&mut self, version: LuaVersion) -> &mut Vm {
         let slot = &mut self.vms[dialect_slot(version)];
         if slot.is_none() {
-            let mut vm = Vm::sandbox(version)
+            let mut builder = Vm::sandbox(version)
                 .open_base()
                 .open_math()
                 .open_string()
-                .open_table()
-                .with_instr_budget(200_000_000)
-                .build();
+                .open_table();
+            if self.instr_budget > 0 {
+                builder = builder.with_instr_budget(self.instr_budget);
+            }
+            let mut vm = builder.build();
             host::install_redis_table(&mut vm);
             // Install the dispatch handle as a luna userdata global
             // (luna v1.1 B8). `redis.call` retrieves it via

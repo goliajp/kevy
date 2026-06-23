@@ -281,3 +281,31 @@ fn eval_writeable_resumes_after_eval_ro() {
     );
     assert_eq!(r2, b"+OK\r\n");
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// P7e — [lua] config + instr_budget plumbing.
+// Config is process-global (kevy::config_global) and the LuaHost
+// reads it at first-EVAL-on-this-thread time. These tests rely on
+// the DEFAULT config being applied; the budget is large enough
+// (5000 ms × 40_000 instr/ms = 200 M) that existing tests aren't
+// affected. We do NOT mutate the process-global config here — that
+// would race other tests; the budget application path is covered by
+// the LuaHost-level set_instr_budget unit test in kevy-lua-host.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn eval_under_default_budget_runs_modest_loop() {
+    let mut store = Store::new();
+    // 1000-iter pure compute; well under the 200 M default budget.
+    let reply = kevy::dispatch(
+        &mut store,
+        &argv(&[
+            b"EVAL",
+            b"local s = 0\nfor i = 1, 1000 do s = s + i end\nreturn s",
+            b"0",
+        ]),
+    );
+    // 1+2+...+1000 = 500500. Lua 5.1 returns Float; kevy collapses
+    // to integer when round-trippable.
+    assert_eq!(reply, b":500500\r\n");
+}
