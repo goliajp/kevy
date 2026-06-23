@@ -33,21 +33,36 @@
 use luna_core::runtime::value::Value;
 use luna_core::vm::error::LuaError;
 use luna_core::vm::exec::Vm;
+use std::cell::Cell;
 use std::rc::Rc;
 
-/// Dispatch callable shape: receive a RESP argv, return the RESP
-/// reply bytes. `&[&[u8]]` mirrors the wire-side `Vec<&[u8]>` the
-/// kevy-rt dispatcher already uses.
-pub type DispatchFn = dyn Fn(&[&[u8]]) -> Vec<u8>;
+/// Dispatch callable shape. The `read_only` flag is set by
+/// [`crate::Bridge::eval_ro`] / [`crate::Bridge::evalsha_ro`]; the
+/// dispatcher is responsible for rejecting write commands with
+/// `-READONLY can't write against a read-only script\r\n` (kevy-rt
+/// owns the canonical command-flag table and does this check
+/// natively). Tests provide a minimal in-memory dispatcher that
+/// hard-codes a few write commands.
+pub type DispatchFn = dyn Fn(&[&[u8]], bool) -> Vec<u8>;
 
 /// The boxed handle Bridge owns + every per-dialect Vm holds via
 /// userdata. `Rc` so it's `Clone` for the install-per-Vm path and
 /// `Any + 'static` so luna's userdata can store it.
 pub type DispatchHandle = Rc<DispatchFn>;
 
-/// Wrapper that luna's userdata can downcast back to. Owns one
-/// `Rc<DispatchFn>` — each Vm gets its own clone.
-pub(crate) struct DispatchSlot(pub DispatchHandle);
+/// Wrapper that luna's userdata can downcast back to. Carries:
+/// - `f`: the user-supplied dispatch callback;
+/// - `read_only`: shared mode flag set by `Bridge::eval_ro` /
+///   `evalsha_ro` before invoking `vm.eval` and cleared right after.
+///   Native fns read this when dispatching so the flag travels into
+///   the user's closure without changing the closure type.
+///
+/// `Rc<Cell<bool>>` so every per-dialect Vm sees the same mode bit
+/// without us having to walk the Vm pool when toggling.
+pub(crate) struct DispatchSlot {
+    pub f: DispatchHandle,
+    pub read_only: Rc<Cell<bool>>,
+}
 
 /// Global name we stash the dispatch userdata under. Scripts never
 /// reference it directly; the leading underscores match the
@@ -98,9 +113,9 @@ pub(crate) fn redis_pcall(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaEr
 
 /// Read the dispatch userdata, collect args, dispatch, return reply.
 fn invoke_dispatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<Vec<u8>, LuaError> {
-    let dispatch = vm
+    let (dispatch, read_only) = vm
         .userdata_borrow::<DispatchSlot>(DISPATCH_KEY)
-        .map(|s| Rc::clone(&s.0))
+        .map(|s| (Rc::clone(&s.f), Rc::clone(&s.read_only)))
         .ok_or_else(|| {
             LuaError(Value::Str(
                 vm.heap
@@ -119,7 +134,7 @@ fn invoke_dispatch(vm: &mut Vm, fs: u32, nargs: u32) -> Result<Vec<u8>, LuaError
         argv.push(value_to_bytes(v));
     }
     let arg_refs: Vec<&[u8]> = argv.iter().map(|v| v.as_slice()).collect();
-    Ok(dispatch(&arg_refs))
+    Ok(dispatch(&arg_refs, read_only.get()))
 }
 
 /// Lua Value → wire bytes for redis.call args. Strings pass through

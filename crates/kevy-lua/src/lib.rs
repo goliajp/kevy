@@ -33,14 +33,20 @@
 use luna_core::runtime::value::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::exec::Vm;
+use std::cell::Cell;
 use std::rc::Rc;
 
 mod dispatch;
 mod host;
 mod marshal;
 mod resp;
-mod sha1;
 mod shebang;
+
+/// SHA-1 digest helpers. Exposed because the operator-side wire
+/// layer (kevy-rt's SCRIPT LOAD / EVALSHA codec) needs to convert
+/// between the 20-byte digest used as a cache key and the 40-char
+/// ASCII hex Redis uses on the wire.
+pub mod sha1;
 
 pub(crate) use dispatch::{DispatchHandle, DispatchSlot, DISPATCH_KEY};
 
@@ -93,6 +99,12 @@ pub struct Bridge {
     /// `Rc` so cheaply cloned into per-Vm userdata at construction
     /// time without consuming the original.
     dispatch: DispatchHandle,
+    /// Read-only mode flag set by [`Bridge::eval_ro`] /
+    /// [`Bridge::evalsha_ro`] before running the script and cleared
+    /// right after. `Rc<Cell<...>>` so every per-dialect Vm's
+    /// dispatch userdata sees the same bit without us having to
+    /// walk the pool. Shared with each `DispatchSlot`.
+    read_only: Rc<Cell<bool>>,
     /// Allow-mask, one bit per [`dialect_slot`]. `true` at slot `i`
     /// means dialect `i` is permitted; an EVAL whose shebang asks
     /// for a denied dialect gets a wire `-ERR` reply. All-true by
@@ -115,10 +127,14 @@ impl Bridge {
     /// EVAL.
     ///
     /// The dispatch closure receives the script's argv (`&[&[u8]]`,
-    /// command name at index 0) and must return RESP reply bytes.
-    /// In production, kevy-rt provides a closure that routes through
-    /// the normal kevy command dispatch path; tests pass a stub
-    /// in-memory keyspace (see `tests/integration.rs`).
+    /// command name at index 0) plus a `read_only` flag and must
+    /// return RESP reply bytes. When `read_only` is true the
+    /// dispatcher MUST reject write commands with
+    /// `-READONLY can't write against a read-only script\r\n` so
+    /// `EVAL_RO` / `EVALSHA_RO` deliver Redis semantics. kevy-rt
+    /// owns the canonical command-flag table and does this check
+    /// natively in production; tests provide a stub dispatcher
+    /// hard-coding a few write commands (see `tests/integration.rs`).
     ///
     /// For embedders that don't need real keyspace access (e.g.
     /// pure-computation EVAL), [`Bridge::with_no_dispatch`] installs
@@ -126,11 +142,12 @@ impl Bridge {
     /// for every call.
     pub fn new<F>(dispatch: F) -> Self
     where
-        F: Fn(&[&[u8]]) -> Vec<u8> + 'static,
+        F: Fn(&[&[u8]], bool) -> Vec<u8> + 'static,
     {
         Self {
             vms: [const { None }; N_DIALECTS],
             dispatch: Rc::new(dispatch),
+            read_only: Rc::new(Cell::new(false)),
             allow: [true; N_DIALECTS],
             script_cache: std::collections::HashMap::new(),
         }
@@ -142,7 +159,7 @@ impl Bridge {
     /// scripts during early development).
     #[must_use]
     pub fn with_no_dispatch() -> Self {
-        Self::new(|_argv: &[&[u8]]| {
+        Self::new(|_argv: &[&[u8]], _ro: bool| {
             b"-ERR redis.call: no host dispatch wired\r\n".to_vec()
         })
     }
@@ -214,6 +231,29 @@ impl Bridge {
         }
     }
 
+    /// Read-only variant of [`Bridge::eval`]. The dispatcher receives
+    /// `read_only = true` for every `redis.call` from this script;
+    /// kevy-rt rejects write commands with
+    /// `-READONLY can't write against a read-only script\r\n`.
+    /// Redis 7.0+ `EVAL_RO`.
+    ///
+    /// All other semantics (KEYS / ARGV / SHA1 cache fill /
+    /// dialect routing) are identical to `eval`.
+    pub fn eval_ro(&mut self, script: &[u8], keys: &[&[u8]], args: &[&[u8]]) -> Reply {
+        self.read_only.set(true);
+        let r = self.eval(script, keys, args);
+        self.read_only.set(false);
+        r
+    }
+
+    /// Read-only variant of [`Bridge::evalsha`]. Redis 7.0+ `EVALSHA_RO`.
+    pub fn evalsha_ro(&mut self, sha1: ScriptSha1, keys: &[&[u8]], args: &[&[u8]]) -> Reply {
+        self.read_only.set(true);
+        let r = self.evalsha(sha1, keys, args);
+        self.read_only.set(false);
+        r
+    }
+
     /// Run a previously-cached script by SHA1 hex.
     ///
     /// Returns `-NOSCRIPT ...` if the script isn't in the cache.
@@ -253,22 +293,6 @@ impl Bridge {
         self.script_cache.clear();
     }
 
-    /// Hex-encode a SHA1 digest as a 40-char ASCII string. The Redis
-    /// SCRIPT LOAD wire reply needs hex; the bridge stores raw bytes
-    /// so the operator side calls this when emitting the bulk-string
-    /// reply.
-    #[must_use]
-    pub fn sha1_to_hex(digest: &ScriptSha1) -> [u8; 40] {
-        sha1::hex(digest)
-    }
-
-    /// Parse a 40-char ASCII hex SHA1 to the 20-byte digest used as
-    /// the cache key. Returns `None` on malformed input (caller emits
-    /// `-NOSCRIPT` on `None`).
-    #[must_use]
-    pub fn sha1_from_hex(hex_str: &[u8]) -> Option<ScriptSha1> {
-        sha1::parse_hex(hex_str)
-    }
 
     /// Number of dialect VMs currently spawned. Test-only helper —
     /// production code doesn't need to inspect the pool.
@@ -299,7 +323,13 @@ impl Bridge {
             // `vm.userdata_borrow::<DispatchSlot>(DISPATCH_KEY)`. We
             // clone the Rc so each Vm holds an independent handle
             // pointing at the shared closure.
-            let _ = vm.set_userdata(DISPATCH_KEY, DispatchSlot(Rc::clone(&self.dispatch)));
+            let _ = vm.set_userdata(
+                DISPATCH_KEY,
+                DispatchSlot {
+                    f: Rc::clone(&self.dispatch),
+                    read_only: Rc::clone(&self.read_only),
+                },
+            );
             *slot = Some(vm);
         }
         slot.as_mut().expect("just-inserted Vm")

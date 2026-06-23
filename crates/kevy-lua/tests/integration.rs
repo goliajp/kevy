@@ -320,16 +320,29 @@ use std::rc::Rc;
 /// bytes per the protocol — the same shape kevy-rt's dispatcher
 /// will produce in production.
 fn make_stub_dispatch()
--> (Rc<RefCell<HashMap<Vec<u8>, Vec<u8>>>>, impl Fn(&[&[u8]]) -> Vec<u8> + 'static)
+-> (Rc<RefCell<HashMap<Vec<u8>, Vec<u8>>>>, impl Fn(&[&[u8]], bool) -> Vec<u8> + 'static)
 {
     let store: Rc<RefCell<HashMap<Vec<u8>, Vec<u8>>>> =
         Rc::new(RefCell::new(HashMap::new()));
     let store_in = Rc::clone(&store);
-    let dispatch = move |argv: &[&[u8]]| -> Vec<u8> {
+    // Minimal writes-list for the read-only check. In production
+    // kevy-rt's command-flag table is the source of truth; this is
+    // enough for the v1.27 P6 round-trip tests.
+    fn is_write_command(cmd: &[u8]) -> bool {
+        matches!(
+            cmd,
+            b"SET" | b"DEL" | b"INCRBY" | b"HMSET" | b"LPUSH" | b"RPUSH"
+                | b"SADD" | b"ZADD" | b"EXPIRE" | b"PEXPIRE"
+        )
+    }
+    let dispatch = move |argv: &[&[u8]], read_only: bool| -> Vec<u8> {
         if argv.is_empty() {
             return b"-ERR no command\r\n".to_vec();
         }
         let cmd: Vec<u8> = argv[0].iter().map(|b| b.to_ascii_uppercase()).collect();
+        if read_only && is_write_command(&cmd) {
+            return b"-READONLY can't write against a read-only script\r\n".to_vec();
+        }
         let store = &mut *store_in.borrow_mut();
         match cmd.as_slice() {
             b"PING" => b"+PONG\r\n".to_vec(),
@@ -536,7 +549,7 @@ fn script_load_returns_real_sha1() {
     let mut b = Bridge::with_no_dispatch();
     let sha = b.script_load(b"return 1");
     // openssl: SHA1("return 1") = e0e1f9fabfc9d4800c877a703b823ac0578ff8db
-    let hex = Bridge::sha1_to_hex(&sha);
+    let hex = kevy_lua::sha1::hex(&sha);
     assert_eq!(&hex, b"e0e1f9fabfc9d4800c877a703b823ac0578ff8db");
 }
 
@@ -610,15 +623,15 @@ fn script_flush_drops_cache_and_pool() {
 fn sha1_hex_round_trips() {
     let mut b = Bridge::with_no_dispatch();
     let sha = b.script_load(b"return 'x'");
-    let hex = Bridge::sha1_to_hex(&sha);
-    let back = Bridge::sha1_from_hex(&hex).expect("valid hex");
+    let hex = kevy_lua::sha1::hex(&sha);
+    let back = kevy_lua::sha1::parse_hex(&hex).expect("valid hex");
     assert_eq!(sha, back);
 }
 
 #[test]
 fn sha1_from_hex_rejects_garbage() {
-    assert!(Bridge::sha1_from_hex(b"too short").is_none());
-    assert!(Bridge::sha1_from_hex(&[b'z'; 40]).is_none());
+    assert!(kevy_lua::sha1::parse_hex(b"too short").is_none());
+    assert!(kevy_lua::sha1::parse_hex(&[b'z'; 40]).is_none());
 }
 
 #[test]
@@ -765,4 +778,85 @@ fn redlock_unlock_runs_on_5_3() {
                    end\n";
     let reply = b.eval(script, &[b"lock:foo"], &[b"token-abc"]);
     assert_eq!(reply, b":1\r\n");
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// P6 — EVAL_RO / EVALSHA_RO read-only enforcement
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn eval_ro_allows_read_command() {
+    let (store, dispatch) = make_stub_dispatch();
+    store.borrow_mut().insert(b"k".to_vec(), b"hello".to_vec());
+    let mut b = Bridge::new(dispatch);
+    let reply = b.eval_ro(b"return redis.call('GET', KEYS[1])", &[b"k"], &[]);
+    assert_eq!(reply, b"$5\r\nhello\r\n");
+}
+
+#[test]
+fn eval_ro_blocks_write_command() {
+    let (_store, dispatch) = make_stub_dispatch();
+    let mut b = Bridge::new(dispatch);
+    let reply = b.eval_ro(
+        b"return redis.call('SET', KEYS[1], 'v')",
+        &[b"k"],
+        &[],
+    );
+    // SET → -READONLY ... → raised as Lua error → wrapped as -READONLY.
+    assert!(reply.starts_with(b"-READONLY "));
+}
+
+#[test]
+fn eval_ro_blocks_del_command() {
+    let (store, dispatch) = make_stub_dispatch();
+    store.borrow_mut().insert(b"k".to_vec(), b"v".to_vec());
+    let mut b = Bridge::new(dispatch);
+    let reply = b.eval_ro(b"return redis.call('DEL', KEYS[1])", &[b"k"], &[]);
+    assert!(reply.starts_with(b"-READONLY "));
+    // Key still present.
+    assert!(store.borrow().contains_key(&b"k".to_vec()));
+}
+
+#[test]
+fn eval_ro_pcall_returns_err_table_on_write() {
+    let (_store, dispatch) = make_stub_dispatch();
+    let mut b = Bridge::new(dispatch);
+    let reply = b.eval_ro(
+        b"return redis.pcall('SET', KEYS[1], 'v')",
+        &[b"k"],
+        &[],
+    );
+    // pcall caught the error → {err = "READONLY ..."} → -READONLY ...
+    assert!(reply.starts_with(b"-READONLY "));
+}
+
+#[test]
+fn eval_following_eval_ro_resumes_write_access() {
+    let (_store, dispatch) = make_stub_dispatch();
+    let mut b = Bridge::new(dispatch);
+    // First call read-only → blocked.
+    let r1 = b.eval_ro(b"return redis.call('SET', 'k', 'v')", &[], &[]);
+    assert!(r1.starts_with(b"-READONLY "));
+    // Second call without _ro → write works.
+    let r2 = b.eval(b"return redis.call('SET', 'k', 'v')", &[], &[]);
+    assert_eq!(r2, b"+OK\r\n");
+}
+
+#[test]
+fn evalsha_ro_blocks_write_in_cached_script() {
+    let (_store, dispatch) = make_stub_dispatch();
+    let mut b = Bridge::new(dispatch);
+    let sha = b.script_load(b"return redis.call('SET', KEYS[1], ARGV[1])");
+    let reply = b.evalsha_ro(sha, &[b"k"], &[b"v"]);
+    assert!(reply.starts_with(b"-READONLY "));
+    // Same script via regular EVALSHA writes fine.
+    let reply2 = b.evalsha(sha, &[b"k"], &[b"v"]);
+    assert_eq!(reply2, b"+OK\r\n");
+}
+
+#[test]
+fn evalsha_ro_unknown_sha_is_noscript() {
+    let mut b = Bridge::with_no_dispatch();
+    let reply = b.evalsha_ro([0u8; 20], &[], &[]);
+    assert!(reply.starts_with(b"-NOSCRIPT "));
 }
