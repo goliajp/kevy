@@ -38,9 +38,9 @@ pub use cluster::{ClusterSection, PeerEntry, ScopeEntry};
 pub use replication::{ReplicationRole, ReplicationSection};
 pub use schema::{
     AdvancedSection, AppendFsync, Config, ConfigError, EvictionPolicy,
-    ExpirySection, LogLevel, LogOutput, LogSection, MemorySection, NotificationFlags,
-    NotificationSection, PersistenceSection, ServerSection, SlowlogSection,
-    parse_notification_flags,
+    ExpirySection, LogLevel, LogOutput, LogSection, LuaSection, MemorySection,
+    NotificationFlags, NotificationSection, PersistenceSection, ServerSection,
+    SlowlogSection, parse_notification_flags,
 };
 pub use size::parse_size;
 

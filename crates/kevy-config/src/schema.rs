@@ -375,6 +375,35 @@ impl NotificationFlags {
 /// ops/s). To enable Redis-style 10 ms tracking, set
 /// `slower_than_micros = 10000` in `[slowlog]` or run
 /// `CONFIG SET slowlog-log-slower-than 10000`.
+/// `[lua]` section — v1.27 Lua scripting limits.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LuaSection {
+    /// Hard cap on per-`EVAL` Lua execution time in milliseconds.
+    /// Matches Redis's `lua-time-limit`. The bridge translates this
+    /// to a luna instruction budget at VM construction time using a
+    /// conservative 40 000-instr/ms estimate (so 5000 ms ≈ 200 M
+    /// instructions, the same hard-coded default kevy v1.27 P1-P6
+    /// shipped). Set to 0 to disable the cap (unlimited execution).
+    /// Default: 5000.
+    pub time_limit_ms: u64,
+    /// Whitelist of allowed Lua dialects. Empty = all five
+    /// (5.1/5.2/5.3/5.4/5.5) accepted. Set to `["5.1"]` to lock the
+    /// server to pure Redis ecosystem-compat mode and reject any
+    /// EVAL whose `#!lua version=N` shebang asks for a newer
+    /// dialect. Default: empty (all dialects).
+    pub allow_dialects: Vec<String>,
+}
+
+impl Default for LuaSection {
+    fn default() -> Self {
+        Self {
+            time_limit_ms: 5000,
+            allow_dialects: Vec::new(),
+        }
+    }
+}
+
+/// `[slowlog]` section — ring buffer of slow commands per shard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlowlogSection {
     /// Record any command whose execution took at least this many
@@ -451,6 +480,9 @@ pub struct Config {
     pub slowlog: SlowlogSection,
     /// `[cluster]` settings (single-node cluster mode).
     pub cluster: crate::cluster::ClusterSection,
+    /// `[lua]` settings (v1.27 server-side Lua scripting via the
+    /// kevy-lua bridge).
+    pub lua: LuaSection,
     /// `[replication]` settings (v3-cluster Phase 1 primary/replica).
     pub replication: crate::replication::ReplicationSection,
     /// Path the config was loaded from (for `CONFIG REWRITE`). `None` =

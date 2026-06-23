@@ -197,6 +197,18 @@ impl<T: 'static> LuaHost<T> {
     pub fn script_flush(&mut self, mode: FlushMode) {
         self.bridge.script_flush(mode);
     }
+
+    /// Forward [`kevy_lua::Bridge::set_instr_budget`] — set the
+    /// per-Vm instruction cap. The operator wires `[lua]
+    /// time_limit_ms` here at server startup.
+    pub fn set_instr_budget(&mut self, n: i64) {
+        self.bridge.set_instr_budget(n);
+    }
+
+    /// Forward [`kevy_lua::Bridge::set_allowed_dialects`].
+    pub fn set_allowed_dialects(&mut self, versions: &[kevy_lua::LuaVersion]) {
+        self.bridge.set_allowed_dialects(versions);
+    }
 }
 
 #[cfg(test)]
@@ -321,5 +333,51 @@ mod tests {
         let restored = CURRENT.with(Cell::get);
         assert_eq!(restored, sentinel_addr);
         CURRENT.with(|c| c.set(0));
+    }
+}
+
+#[cfg(test)]
+mod p7e_tests {
+    use super::*;
+
+    /// P7e — set_instr_budget on a busy-ish loop. Default budget is
+    /// 200 M (5 s on modern hardware); we shrink to 100 instructions
+    /// and confirm a 10 000-iter loop trips the budget. Then we
+    /// flush and run the same script under unlimited (0) budget to
+    /// confirm the setter is live.
+    #[test]
+    fn instr_budget_trips_on_long_loop() {
+        let mut host = LuaHost::<()>::new(|_ctx, _argv, _ro| Vec::new());
+        host.set_instr_budget(100); // very tight cap
+        let mut nothing = ();
+        let reply = host.eval(
+            &mut nothing,
+            b"local s = 0\nfor i = 1, 10000 do s = s + i end\nreturn s",
+            &[],
+            &[],
+        );
+        // Budget exceeded → luna surfaces an error → bridge wraps in
+        // -ERR. Don't be picky about the exact wording — just confirm
+        // it's an error, not an integer result.
+        assert!(
+            reply.starts_with(b"-ERR "),
+            "expected -ERR budget reply, got: {:?}",
+            String::from_utf8_lossy(&reply)
+        );
+    }
+
+    #[test]
+    fn unlimited_budget_runs_to_completion() {
+        let mut host = LuaHost::<()>::new(|_ctx, _argv, _ro| Vec::new());
+        host.set_instr_budget(0); // unlimited
+        let mut nothing = ();
+        let reply = host.eval(
+            &mut nothing,
+            b"local s = 0\nfor i = 1, 10000 do s = s + i end\nreturn s",
+            &[],
+            &[],
+        );
+        // 1+...+10000 = 50005000
+        assert_eq!(reply, b":50005000\r\n");
     }
 }

@@ -422,6 +422,8 @@ dependencies = [
  "kevy-elect",
  "kevy-geo",
  "kevy-hash",
+ "kevy-lua",
+ "kevy-lua-host",
  "kevy-persist",
  "kevy-replicate",
  "kevy-resp",
@@ -528,6 +530,13 @@ dependencies = [
  "kevy-bytes",
  "kevy-resp",
  "luna-core",
+]
+
+[[package]]
+name = "kevy-lua-host"
+version = "1.26.6"
+dependencies = [
+ "kevy-lua",
 ]
 
 [[package]]
