@@ -121,6 +121,7 @@ mod uring_reactor;
 
 pub use blocked::{BlockHint, BlockKind};
 pub use lua_wake_bridge::push_lua_wake_key;
+pub use reduce::shard_of as shard_of_key;
 pub use cluster::shard_slot_range;
 pub use exec_slowlog::{SlowlogSub, parse_slowlog_sub};
 pub use kevy_config::NotificationFlags;
