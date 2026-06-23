@@ -45,3 +45,8 @@ kevy-resp = { path = "../kevy-resp", version = "1.19.0" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }
+# luna-core in dev-deps so integration tests can use `LuaVersion` to
+# call `Bridge::set_allowed_dialects`. The crate is already in the
+# regular `[dependencies]` of kevy-lua — this is just a re-declaration
+# so the dev `tests/*.rs` files can name the type directly.
+luna-core = "=1.1.0"

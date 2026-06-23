@@ -39,6 +39,7 @@ mod dispatch;
 mod host;
 mod marshal;
 mod resp;
+mod shebang;
 
 pub(crate) use dispatch::{DispatchHandle, DispatchSlot, DISPATCH_KEY};
 
@@ -91,6 +92,11 @@ pub struct Bridge {
     /// `Rc` so cheaply cloned into per-Vm userdata at construction
     /// time without consuming the original.
     dispatch: DispatchHandle,
+    /// Allow-mask, one bit per [`dialect_slot`]. `true` at slot `i`
+    /// means dialect `i` is permitted; an EVAL whose shebang asks
+    /// for a denied dialect gets a wire `-ERR` reply. All-true by
+    /// default.
+    allow: [bool; N_DIALECTS],
 }
 
 impl Bridge {
@@ -115,6 +121,7 @@ impl Bridge {
         Self {
             vms: [const { None }; N_DIALECTS],
             dispatch: Rc::new(dispatch),
+            allow: [true; N_DIALECTS],
         }
     }
 
@@ -131,12 +138,23 @@ impl Bridge {
 
     /// Restrict which Lua dialects this bridge will spawn VMs for.
     /// An EVAL with `#!lua version=N` for a non-allowed dialect is
-    /// rejected with `-ERR dialect 5.X disabled by [lua]
-    /// allow_dialects`.
+    /// rejected with a `-ERR` reply. The 5.1 default is always
+    /// accessible via scripts with no shebang regardless of this
+    /// setting (you can't disable the ecosystem-default dialect
+    /// without taking a different `with_allowed_dialects` API).
     ///
-    /// P1 stub — accepted but unused; enforcement lands in P4 when
-    /// the shebang parser arrives.
-    pub fn set_allowed_dialects(&mut self, _versions: &[LuaVersion]) {}
+    /// Passing an empty slice = no restriction = all five dialects
+    /// permitted (the constructor default).
+    pub fn set_allowed_dialects(&mut self, versions: &[LuaVersion]) {
+        if versions.is_empty() {
+            self.allow = [true; N_DIALECTS];
+            return;
+        }
+        self.allow = [false; N_DIALECTS];
+        for v in versions {
+            self.allow[dialect_slot(*v)] = true;
+        }
+    }
 
     /// Compile-or-execute a script and marshal its first return value
     /// into a RESP reply.
@@ -146,12 +164,26 @@ impl Bridge {
     /// no SHA1 cache (P5). The point is to confirm
     /// `EVAL "return 1" 0` produces `:1\r\n`.
     pub fn eval(&mut self, script: &[u8], keys: &[&[u8]], args: &[&[u8]]) -> Reply {
-        // P2+ will accept binary; for now, scripts must be UTF-8.
-        let src = match std::str::from_utf8(script) {
-            Ok(s) => s,
-            Err(_) => return resp::err(b"script is not valid UTF-8"),
+        // P4: peel off the `#!lua version=N` shebang first so we know
+        // which dialect Vm to route to before parsing the body.
+        let (sh, body) = match shebang::parse(script) {
+            Ok(t) => t,
+            Err(e) => return resp::err(format!("{e}").as_bytes()),
         };
-        let vm = self.vm_for(LuaVersion::Lua51);
+        if !self.allow[dialect_slot(sh.version)] {
+            return resp::err(
+                format!(
+                    "dialect {} disabled by [lua] allow_dialects",
+                    version_tag(sh.version)
+                )
+                .as_bytes(),
+            );
+        }
+        let src = match std::str::from_utf8(body) {
+            Ok(s) => s,
+            Err(_) => return resp::err(b"script body is not valid UTF-8"),
+        };
+        let vm = self.vm_for(sh.version);
         // Bind KEYS / ARGV freshly per invocation. The `redis` host
         // table was installed once when the Vm was constructed.
         host::bind_keys_argv(vm, keys, args);
@@ -242,6 +274,16 @@ fn format_lua_error(e: &luna_core::vm::error::LuaError) -> String {
     // luna v1.1 B6: `impl Display for LuaError` — embedders no longer
     // need to case-split on the inner Value type.
     format!("{e}")
+}
+
+fn version_tag(v: LuaVersion) -> &'static str {
+    match v {
+        LuaVersion::Lua51 => "5.1",
+        LuaVersion::Lua52 => "5.2",
+        LuaVersion::Lua53 => "5.3",
+        LuaVersion::Lua54 => "5.4",
+        LuaVersion::Lua55 => "5.5",
+    }
 }
 
 

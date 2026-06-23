@@ -5,6 +5,7 @@
 //! (`Bridge::vm_count`, `#[cfg(test)]`-gated) stay in `src/lib.rs`.
 
 use kevy_lua::{Bridge, FlushMode};
+use luna_core::version::LuaVersion;
 
 // ─────────────────────────────────────────────────────────────────────
 // P1 — return values from pure Lua
@@ -520,4 +521,142 @@ fn evalsha_unknown_is_noscript_error() {
     let mut b = Bridge::with_no_dispatch();
     let reply = b.evalsha([0u8; 20], &[], &[]);
     assert!(reply.starts_with(b"-NOSCRIPT "));
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// P4 — shebang `#!lua version=N` + multi-dialect routing
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn eval_no_shebang_runs_on_5_1() {
+    // `i // 2` is 5.3+ syntax; under the 5.1 default it must fail.
+    let mut b = Bridge::with_no_dispatch();
+    let reply = b.eval(b"return 5 // 2", &[], &[]);
+    assert!(reply.starts_with(b"-ERR "));
+}
+
+#[test]
+fn shebang_lua_53_enables_integer_divide() {
+    // Same script with the 5.3 shebang now works.
+    let mut b = Bridge::with_no_dispatch();
+    let reply = b.eval(b"#!lua version=5.3\nreturn 5 // 2", &[], &[]);
+    assert_eq!(reply, b":2\r\n");
+}
+
+#[test]
+fn shebang_lua_53_enables_bitwise_ops() {
+    let mut b = Bridge::with_no_dispatch();
+    let reply = b.eval(b"#!lua version=5.3\nreturn 0xF & 0x9", &[], &[]);
+    assert_eq!(reply, b":9\r\n");
+}
+
+#[test]
+fn shebang_lua_52_enables_goto() {
+    // `goto` is a reserved word in 5.2+; rejected at parse time
+    // in 5.1.
+    let mut b = Bridge::with_no_dispatch();
+    let reply = b.eval(
+        b"#!lua version=5.2\n\
+          for i = 1, 3 do\n\
+            if i == 2 then goto skip end\n\
+          ::skip::\n\
+          end\n\
+          return 'ok'\n",
+        &[],
+        &[],
+    );
+    assert_eq!(reply, b"$2\r\nok\r\n");
+}
+
+#[test]
+fn shebang_lua_54_enables_const_attrib() {
+    let mut b = Bridge::with_no_dispatch();
+    let reply = b.eval(
+        b"#!lua version=5.4\nlocal x <const> = 7\nreturn x",
+        &[],
+        &[],
+    );
+    assert_eq!(reply, b":7\r\n");
+}
+
+#[test]
+fn shebang_unknown_version_returns_resp_error() {
+    let mut b = Bridge::with_no_dispatch();
+    let reply = b.eval(b"#!lua version=5.6\nreturn 1", &[], &[]);
+    assert!(reply.starts_with(b"-ERR "));
+    assert!(reply.windows(16).any(|w| w == b"unknown lua vers"));
+}
+
+#[test]
+fn shebang_with_extra_keys_doesnt_break_routing() {
+    let mut b = Bridge::with_no_dispatch();
+    let reply = b.eval(
+        b"#!lua version=5.3 flags=no-writes name=mylib\nreturn 5 // 2",
+        &[],
+        &[],
+    );
+    assert_eq!(reply, b":2\r\n");
+}
+
+#[test]
+fn allow_dialects_blocks_disallowed() {
+    let mut b = Bridge::with_no_dispatch();
+    b.set_allowed_dialects(&[LuaVersion::Lua51]);
+    let reply = b.eval(b"#!lua version=5.3\nreturn 1", &[], &[]);
+    assert!(reply.starts_with(b"-ERR "));
+    assert!(reply.windows(8).any(|w| w == b"disabled"));
+}
+
+#[test]
+fn allow_dialects_empty_resets_to_all_allowed() {
+    let mut b = Bridge::with_no_dispatch();
+    b.set_allowed_dialects(&[LuaVersion::Lua51]);
+    let reply = b.eval(b"#!lua version=5.3\nreturn 1", &[], &[]);
+    assert!(reply.starts_with(b"-ERR "));
+    b.set_allowed_dialects(&[]);
+    let reply = b.eval(b"#!lua version=5.3\nreturn 5 // 2", &[], &[]);
+    assert_eq!(reply, b":2\r\n");
+}
+
+#[test]
+fn allow_dialects_default_5_1_always_works() {
+    // 5.1 is the ecosystem default; even with allow_dialects set to
+    // only 5.5, plain (no-shebang) scripts still default to 5.1 and
+    // are blocked, so an embedder relying on 5.1 must keep it
+    // allowed.
+    let mut b = Bridge::with_no_dispatch();
+    b.set_allowed_dialects(&[LuaVersion::Lua55]);
+    let reply = b.eval(b"return 1", &[], &[]);
+    // Default routing → 5.1 → 5.1 not in allow list → error.
+    assert!(reply.starts_with(b"-ERR "));
+}
+
+#[test]
+fn shebang_dialects_share_no_vm() {
+    // Each dialect gets its own lazily-spawned Vm; their state
+    // doesn't bleed. A global set in 5.3 isn't visible from 5.5.
+    let mut b = Bridge::with_no_dispatch();
+    let _ = b.eval(b"#!lua version=5.3\nmy_global = 42", &[], &[]);
+    let reply = b.eval(b"#!lua version=5.5\nreturn my_global", &[], &[]);
+    // 5.5 sees its own global table → my_global is nil → false → $-1.
+    assert_eq!(reply, b"$-1\r\n");
+}
+
+#[test]
+fn redlock_unlock_runs_on_5_3() {
+    // Same Redlock script, shebang-bumped to 5.3 to exercise the
+    // multi-dialect path with a real ecosystem snippet.
+    let (store, dispatch) = make_stub_dispatch();
+    store
+        .borrow_mut()
+        .insert(b"lock:foo".to_vec(), b"token-abc".to_vec());
+    let mut b = Bridge::new(dispatch);
+    let script = b"#!lua version=5.3\n\
+                   if redis.call('GET', KEYS[1]) == ARGV[1] then\n\
+                       return redis.call('DEL', KEYS[1])\n\
+                   else\n\
+                       return 0\n\
+                   end\n";
+    let reply = b.eval(script, &[b"lock:foo"], &[b"token-abc"]);
+    assert_eq!(reply, b":1\r\n");
 }
