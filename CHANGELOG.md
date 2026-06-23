@@ -4,6 +4,54 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.27.4] — 2026-06-24 (multi-shard EVAL routing — BullMQ on default 16-shard)
+
+Closes the v1.27.3 multi-shard EVAL inner-call gap **in the same
+session**. v1.27.3 worked under `--threads 1`; the silent
+mis-route on `--threads > 1` is now fixed.
+
+### Two changes
+
+1. **CROSSSLOT enforcement for EVAL inner-calls.** `cmd_lua`'s
+   dispatch closure now validates every `redis.call` target key
+   lives on the same shard as the EVAL itself. If not, returns
+   `-CROSSSLOT Lua redis.call target key is on a different shard
+   ...` — loud failure instead of silent corruption. Matches Redis
+   Cluster semantics.
+2. **`{hashtag}` respect in non-cluster mode.** Non-cluster
+   routing (`reduce::shard_of`) now extracts `{tag}` if present,
+   matching the Redis Cluster hashtag pattern. Keys WITHOUT `{...}`
+   hash whole-key as before — byte-identical to pre-v1.27.4
+   routing, no migration for existing keyspaces. Lets EVAL scripts
+   colocate keys via the standard `{tag}:k1` / `{tag}:k2` pattern.
+
+### End-to-end verification
+
+BullMQ 5.79.1 against default 16-shard kevy with `{hashtag}` queue
+name:
+
+```
+queue: {bullmq-multishard-...}
+✓ enqueued j1=1 j2=2 j3=3                ← atomic INCR same-shard
+✓ worker got 1 / 2 / 3                    ← BZPOPMIN wakes
+← completed event for job 1/2/3           ← XREAD BLOCK wakes
+counts = {"completed":3, "failed":0}
+=== ALL 3 JOBS COMPLETED + EVENTS RECEIVED on 16-SHARD ===
+```
+
+Operator note: BullMQ users on multi-shard kevy should set queue
+name with `{queue}` hashtag so derived keys colocate. e.g.
+`new Queue('{my-queue}')`. Real Redis Cluster requires the same
+pattern.
+
+### Per-crate bumps
+- workspace        1.27.3 → 1.27.4
+- kevy-client      1.12.14 → 1.12.15
+- kevy-client-async 1.0.15 → 1.0.16
+- kevy-embedded     1.4.15 → 1.4.16
+- kevy-lua         1.27.3 → 1.27.4
+- kevy-lua-host    1.27.3 → 1.27.4
+
 ## [v1.27.3] — 2026-06-24 (BullMQ end-to-end compatibility)
 
 **Headline: BullMQ — full Worker / Queue / QueueEvents lifecycle —

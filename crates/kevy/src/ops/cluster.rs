@@ -49,6 +49,14 @@ pub(crate) fn current_shard_for_elect() -> usize {
     current_shard()
 }
 
+/// v1.27.4: same thread-local exposed for `cmd_lua`. The Lua
+/// dispatch closure consults this to validate that every inner
+/// `redis.call` target key lives on the same shard as the EVAL
+/// itself — matches Redis Cluster CROSSSLOT semantics for scripts.
+pub(crate) fn current_shard_for_lua() -> usize {
+    current_shard()
+}
+
 /// Deterministic 40-hex node id for shard `i` (stable across restarts;
 /// `i + 1` so no id collides with the all-zero "unknown node" sentinel).
 fn node_id(i: usize) -> String {

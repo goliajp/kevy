@@ -69,6 +69,26 @@ fn make_lua_host() -> LuaHost<Store> {
                 }
             }
         }
+        // v1.27.4: cross-shard inner-call enforcement. Under
+        // `--threads > 1`, EVAL runs on KEYS[1]'s shard (v1.27.1
+        // routing fix); the inner `redis.call` hits this same
+        // shard's Store. Calling on a key that lives on a different
+        // shard silently mis-routes — matches Redis Cluster's
+        // intended-disallowed behaviour. Return CROSSSLOT loudly
+        // instead of corrupting state. Same rule Redis Cluster
+        // applies via slot validation at EVAL dispatch.
+        let cfg = crate::config_global::get();
+        let nshards = cfg.server.threads;
+        if nshards > 1
+            && let Some(target_key) = argv.get(1)
+        {
+            let target_shard =
+                kevy_rt::shard_of_key(target_key, nshards, cfg.cluster.enabled);
+            let my_shard = crate::ops::cluster::current_shard_for_lua();
+            if target_shard != my_shard {
+                return b"-CROSSSLOT Lua redis.call target key is on a different shard than the EVAL. Use {hashtag} to colocate keys, or run kevy --threads 1.\r\n".to_vec();
+            }
+        }
         let mut a = Argv::default();
         for slice in argv {
             a.push(slice);
