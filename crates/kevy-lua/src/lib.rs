@@ -1,10 +1,9 @@
 //! kevy-lua — Redis EVAL / EVALSHA / SCRIPT surface backed by luna-core.
 //!
 //! kevy's v1.27 script-host layer. Thin "cement" crate (per the
-//! stone-cement-stone model in `methodology/steel-cement-stone.md`) —
-//! it carries no algorithmic content, only the bridge between
-//! kevy-rt's command dispatch path, kevy-resp's wire codec, and
-//! luna-core's sandboxed `Vm`.
+//! stone-cement-stone model) — it carries no algorithmic content, only
+//! the bridge between kevy-rt's command dispatch path, kevy-resp's
+//! wire codec, and luna-core's sandboxed `Vm`.
 //!
 //! Design lock-in (see `.claude/rfcs/2026-06-23-v1.27-luna-bridge.md`):
 //!
@@ -20,28 +19,35 @@
 //! - **Atomic execution** — entering EVAL pauses other dispatch on
 //!   that shard until the script returns. Matches Redis semantics.
 //!
-//! # P0 scope (this file's current state)
+//! # Phase status — P1
 //!
-//! Skeleton only. The public API surface is stubbed; calling any
-//! method returns a placeholder error until P1 lands the real
-//! implementation. P0 ships:
-//!
-//! - Workspace member registration (`crates/kevy-lua` in root
-//!   `Cargo.toml`).
-//! - `luna-core` exemption documented in workspace lockdown comment.
-//! - Public API shape ≤ 10 functions (per CLAUDE.md house rule).
-//! - Compile + one passing smoke test that exercises the dep wiring.
-//!
-//! P1+ adds the actual EVAL plumbing — see the RFC.
+//! - `Bridge` holds a per-dialect Vm pool (lazy-spawned).
+//! - `eval()` runs the script under the default 5.1 sandbox and
+//!   marshals the first returned `Value` into a RESP reply.
+//! - Shebang parsing, SHA1 cache, EVALSHA, SCRIPT LOAD/EXISTS/FLUSH,
+//!   and `redis.call` host plumbing land in P2-P5 per the RFC.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+use luna_core::runtime::value::Value;
 use luna_core::version::LuaVersion;
+use luna_core::vm::exec::Vm;
 
-/// A wire-level reply: just the encoded RESP bytes. The bridge
-/// hands these to kevy-rt's dispatch path, same as every other
-/// kevy command.
+mod resp;
+
+/// Lua 5.1 / 5.2 / 5.3 / 5.4 / 5.5 — five fixed slots.
+const N_DIALECTS: usize = 5;
+
+fn dialect_slot(v: LuaVersion) -> usize {
+    // `LuaVersion` is a `#[repr(...)]` C-style enum with the variants
+    // in version order (Lua51 = 0, …, Lua55 = 4). Stable per luna's
+    // semver promise (the variant declaration order is the wire layout
+    // — luna's docs explicitly say "New variants must be appended").
+    v as usize
+}
+
+/// A wire-level reply: just the encoded RESP bytes.
 pub type Reply = Vec<u8>;
 
 /// SCRIPT FLUSH mode (Redis 6.2+ semantics).
@@ -63,29 +69,27 @@ pub type ScriptSha1 = [u8; 20];
 
 /// kevy-lua per-shard bridge. One `Bridge` lives in each shard's
 /// runtime; it owns the per-dialect VM pool, the SHA1 cache, and
-/// the kevy-side dispatch callback that `redis.call` invokes.
+/// (P3+) the kevy-side dispatch callback that `redis.call` invokes.
 ///
 /// The bridge is intentionally NOT `Send` / `Sync` — same constraint
 /// as luna's `Vm`, which is `!Send + !Sync` by design. kevy's
 /// thread-per-core model means every shard owns its bridge
 /// exclusively.
 pub struct Bridge {
-    /// Reserved for P1+ — luna VMs keyed by dialect.
-    _placeholder: core::marker::PhantomData<*const ()>,
+    /// Lazily-spawned VM per dialect. First EVAL hitting a dialect
+    /// creates the VM; reused for every subsequent script on that
+    /// dialect. Five fixed slots indexed by [`dialect_slot`] (luna
+    /// `LuaVersion` is a 0-4 discriminant in version order).
+    vms: [Option<Vm>; N_DIALECTS],
 }
 
 impl Bridge {
-    /// Create a fresh bridge with the conservative-default sandbox
-    /// (whitelisted stdlib: base + math + string + table; JIT off;
-    /// bytecode loading off). Configure further with the builder
-    /// methods.
-    ///
-    /// P0 stub — returns an empty bridge that rejects every command
-    /// until P1 wires the real Vm pool.
+    /// Create a fresh bridge. No VMs are spawned until the first
+    /// EVAL.
     #[must_use]
     pub fn new() -> Self {
         Self {
-            _placeholder: core::marker::PhantomData,
+            vms: [const { None }; N_DIALECTS],
         }
     }
 
@@ -94,48 +98,82 @@ impl Bridge {
     /// rejected with `-ERR dialect 5.X disabled by [lua]
     /// allow_dialects`.
     ///
-    /// Empty slice = no restriction = all five dialects allowed
-    /// (the default).
-    ///
-    /// P0 stub — accepted but unused.
-    pub fn set_allowed_dialects(&mut self, _versions: &[LuaVersion]) {
-        // P1: persist the allow-list + filter shebang lookups.
-    }
+    /// P1 stub — accepted but unused; enforcement lands in P4 when
+    /// the shebang parser arrives.
+    pub fn set_allowed_dialects(&mut self, _versions: &[LuaVersion]) {}
 
-    /// Compile-or-cache a script by SHA1, execute it, marshal the
-    /// reply.
+    /// Compile-or-execute a script and marshal its first return value
+    /// into a RESP reply.
     ///
-    /// P0 stub — returns the placeholder reply
-    /// `-ERR kevy-lua P0 stub`.
-    pub fn eval(&mut self, _script: &[u8], _keys: &[&[u8]], _args: &[&[u8]]) -> Reply {
-        stub_reply(b"kevy-lua P0 stub")
+    /// P1 scope: default to Lua 5.1, ignore KEYS/ARGV (P3 binds them
+    /// to globals), no `redis.call` (P3), no shebang parsing (P4),
+    /// no SHA1 cache (P5). The point is to confirm
+    /// `EVAL "return 1" 0` produces `:1\r\n`.
+    pub fn eval(&mut self, script: &[u8], _keys: &[&[u8]], _args: &[&[u8]]) -> Reply {
+        // P2+ will accept binary; for now, scripts must be UTF-8.
+        let src = match std::str::from_utf8(script) {
+            Ok(s) => s,
+            Err(_) => return resp::err(b"script is not valid UTF-8"),
+        };
+        let vm = self.vm_for(LuaVersion::Lua51);
+        match vm.eval(src) {
+            Ok(results) => resp::reply_from_value(results.first().copied().unwrap_or(Value::Nil)),
+            Err(e) => resp::err(format_lua_error(&e).as_bytes()),
+        }
     }
 
     /// Run a previously-cached script by SHA1 hex.
     ///
-    /// P0 stub — same placeholder reply.
+    /// P1 stub — cache lands in P5.
     pub fn evalsha(&mut self, _sha1: ScriptSha1, _keys: &[&[u8]], _args: &[&[u8]]) -> Reply {
-        stub_reply(b"kevy-lua P0 stub")
+        resp::err(b"NOSCRIPT No matching script. Please use EVAL.")
     }
 
     /// Cache a script without running it. Returns the SHA1.
     ///
-    /// P0 stub — returns an all-zero SHA1.
+    /// P1 stub — returns an all-zero SHA1.
     pub fn script_load(&mut self, _script: &[u8]) -> ScriptSha1 {
         [0u8; 20]
     }
 
     /// Test which of the given SHA1s are in the cache.
     ///
-    /// P0 stub — returns all-false.
+    /// P1 stub — returns all-false.
     #[must_use]
     pub fn script_exists(&self, sha1s: &[ScriptSha1]) -> Vec<bool> {
         vec![false; sha1s.len()]
     }
 
-    /// Drop the SHA1 cache.
+    /// Drop the SHA1 cache + all per-dialect VMs. Next EVAL spawns
+    /// a fresh sandbox.
     pub fn script_flush(&mut self, _mode: FlushMode) {
-        // P1: clear per-dialect caches.
+        for slot in &mut self.vms {
+            *slot = None;
+        }
+    }
+
+    /// Number of dialect VMs currently spawned. Test-only helper —
+    /// production code doesn't need to inspect the pool.
+    #[cfg(test)]
+    fn vm_count(&self) -> usize {
+        self.vms.iter().filter(|s| s.is_some()).count()
+    }
+
+    /// Lazily build the sandbox Vm for `version`. Conservative
+    /// default: base + math + string + table libraries, no JIT,
+    /// no bytecode loading, 200M instruction budget (~5 s on modern
+    /// hardware — Redis's default `lua-time-limit`).
+    fn vm_for(&mut self, version: LuaVersion) -> &mut Vm {
+        let slot = &mut self.vms[dialect_slot(version)];
+        slot.get_or_insert_with(|| {
+            Vm::sandbox(version)
+                .open_base()
+                .open_math()
+                .open_string()
+                .open_table()
+                .with_instr_budget(200_000_000)
+                .build()
+        })
     }
 }
 
@@ -145,47 +183,91 @@ impl Default for Bridge {
     }
 }
 
-fn stub_reply(msg: &[u8]) -> Reply {
-    // RESP error reply: `-ERR <msg>\r\n`. Hand-rolled (no kevy-resp
-    // encoder dep needed at P0) to keep the stub minimal.
-    let mut out = Vec::with_capacity(msg.len() + 7);
-    out.push(b'-');
-    out.extend_from_slice(b"ERR ");
-    out.extend_from_slice(msg);
-    out.extend_from_slice(b"\r\n");
-    out
+fn format_lua_error(e: &luna_core::vm::error::LuaError) -> String {
+    // luna v1.1 B6: `impl Display for LuaError` — embedders no longer
+    // need to case-split on the inner Value type.
+    format!("{e}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// P0 smoke — bridge constructs and the stub eval path
-    /// produces a syntactically-valid RESP error reply. Confirms
-    /// luna-core wired into the build graph (the `use luna_core::*`
-    /// at the top of the file fails to compile if the dep is
-    /// misconfigured).
     #[test]
-    fn p0_skeleton_compiles_and_stubs_return_resp_error() {
+    fn eval_return_one_is_resp_integer_one() {
         let mut b = Bridge::new();
         let reply = b.eval(b"return 1", &[], &[]);
-        assert!(reply.starts_with(b"-ERR "));
-        assert!(reply.ends_with(b"\r\n"));
-        // SCRIPT EXISTS over an empty slice → empty Vec.
-        assert!(b.script_exists(&[]).is_empty());
-        // FlushMode round-trips.
-        b.script_flush(FlushMode::Sync);
-        b.script_flush(FlushMode::Async);
+        // 5.1 default: `return 1` yields a Float in Lua 5.1 (no int
+        // type at 5.1) — we encode as RESP integer when the value
+        // round-trips through i64 losslessly.
+        assert_eq!(reply, b":1\r\n", "got: {:?}", String::from_utf8_lossy(&reply));
     }
 
-    /// Sanity-check that luna-core's sandbox API path actually
-    /// links — we don't yet build a Vm in production code but the
-    /// dep wiring should already let one come up cleanly so P1 has
-    /// nothing structural to fight.
     #[test]
-    fn luna_core_dep_wires_through_sandbox_builder() {
-        // P1 will replace the marker; for P0 the goal is purely
-        // "this compiles and the linker resolves".
-        let _v = LuaVersion::Lua51;
+    fn eval_return_string_is_resp_bulk_string() {
+        let mut b = Bridge::new();
+        let reply = b.eval(b"return 'hello'", &[], &[]);
+        assert_eq!(reply, b"$5\r\nhello\r\n");
+    }
+
+    #[test]
+    fn eval_return_nil_is_resp_nil_bulk() {
+        let mut b = Bridge::new();
+        let reply = b.eval(b"return nil", &[], &[]);
+        assert_eq!(reply, b"$-1\r\n");
+    }
+
+    #[test]
+    fn eval_return_true_is_resp_integer_one() {
+        let mut b = Bridge::new();
+        let reply = b.eval(b"return true", &[], &[]);
+        assert_eq!(reply, b":1\r\n");
+    }
+
+    #[test]
+    fn eval_return_false_is_resp_nil_bulk() {
+        let mut b = Bridge::new();
+        let reply = b.eval(b"return false", &[], &[]);
+        assert_eq!(reply, b"$-1\r\n");
+    }
+
+    #[test]
+    fn eval_syntax_error_is_resp_error() {
+        let mut b = Bridge::new();
+        let reply = b.eval(b"return ((", &[], &[]);
+        assert!(reply.starts_with(b"-ERR "));
+        assert!(reply.ends_with(b"\r\n"));
+    }
+
+    #[test]
+    fn eval_no_return_is_resp_nil_bulk() {
+        let mut b = Bridge::new();
+        let reply = b.eval(b"local x = 1", &[], &[]);
+        assert_eq!(reply, b"$-1\r\n");
+    }
+
+    #[test]
+    fn eval_non_utf8_script_is_resp_error() {
+        let mut b = Bridge::new();
+        let reply = b.eval(&[0xff, 0xfe], &[], &[]);
+        assert!(reply.starts_with(b"-ERR "));
+    }
+
+    #[test]
+    fn eval_reuses_vm_across_calls() {
+        let mut b = Bridge::new();
+        assert_eq!(b.eval(b"return 1", &[], &[]), b":1\r\n");
+        assert_eq!(b.eval(b"return 2", &[], &[]), b":2\r\n");
+        // One VM should be cached for the 5.1 default dialect.
+        assert_eq!(b.vm_count(), 1);
+    }
+
+    #[test]
+    fn script_flush_drops_vm_pool() {
+        let mut b = Bridge::new();
+        let _ = b.eval(b"return 1", &[], &[]);
+        assert_eq!(b.vm_count(), 1);
+        b.script_flush(FlushMode::Sync);
+        assert_eq!(b.vm_count(), 0);
     }
 }
