@@ -250,12 +250,24 @@ fn eval_redis_error_reply_round_trips_as_error() {
 }
 
 #[test]
-fn eval_redis_sha1hex_returns_40_chars() {
+fn eval_redis_sha1hex_returns_real_sha1() {
     let mut b = Bridge::with_no_dispatch();
-    let reply = b.eval(b"return redis.sha1hex('whatever')", &[], &[]);
+    // SHA1("abc") = a9993e364706816aba3e25717850c26c9cd0d89d
+    let reply = b.eval(b"return redis.sha1hex('abc')", &[], &[]);
     assert_eq!(
         reply,
-        b"$40\r\n0000000000000000000000000000000000000000\r\n"
+        b"$40\r\na9993e364706816aba3e25717850c26c9cd0d89d\r\n"
+    );
+}
+
+#[test]
+fn eval_redis_sha1hex_empty_string() {
+    let mut b = Bridge::with_no_dispatch();
+    // SHA1("") = da39a3ee5e6b4b0d3255bfef95601890afd80709
+    let reply = b.eval(b"return redis.sha1hex('')", &[], &[]);
+    assert_eq!(
+        reply,
+        b"$40\r\nda39a3ee5e6b4b0d3255bfef95601890afd80709\r\n"
     );
 }
 
@@ -509,18 +521,112 @@ fn script_exists_empty_returns_empty() {
 }
 
 #[test]
-fn script_load_returns_zeroed_sha1() {
-    // P1 stub — real SHA1 lands in P5.
-    let mut b = Bridge::with_no_dispatch();
-    let sha = b.script_load(b"return 1");
-    assert_eq!(sha, [0u8; 20]);
-}
-
-#[test]
 fn evalsha_unknown_is_noscript_error() {
     let mut b = Bridge::with_no_dispatch();
     let reply = b.evalsha([0u8; 20], &[], &[]);
     assert!(reply.starts_with(b"-NOSCRIPT "));
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// P5 — SHA1 cache + EVALSHA + SCRIPT LOAD/EXISTS/FLUSH
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn script_load_returns_real_sha1() {
+    let mut b = Bridge::with_no_dispatch();
+    let sha = b.script_load(b"return 1");
+    // openssl: SHA1("return 1") = e0e1f9fabfc9d4800c877a703b823ac0578ff8db
+    let hex = Bridge::sha1_to_hex(&sha);
+    assert_eq!(&hex, b"e0e1f9fabfc9d4800c877a703b823ac0578ff8db");
+}
+
+#[test]
+fn script_load_then_exists_true() {
+    let mut b = Bridge::with_no_dispatch();
+    let sha = b.script_load(b"return 1");
+    let exists = b.script_exists(&[sha]);
+    assert_eq!(exists, vec![true]);
+}
+
+#[test]
+fn script_exists_mixed_hits() {
+    let mut b = Bridge::with_no_dispatch();
+    let sha_a = b.script_load(b"return 'A'");
+    let sha_b = b.script_load(b"return 'B'");
+    let sha_missing = [0xee; 20];
+    let exists = b.script_exists(&[sha_a, sha_missing, sha_b]);
+    assert_eq!(exists, vec![true, false, true]);
+}
+
+#[test]
+fn evalsha_runs_a_previously_loaded_script() {
+    let mut b = Bridge::with_no_dispatch();
+    let sha = b.script_load(b"return 42");
+    let reply = b.evalsha(sha, &[], &[]);
+    assert_eq!(reply, b":42\r\n");
+}
+
+#[test]
+fn evalsha_picks_dialect_via_cached_shebang() {
+    // The shebang is part of the script bytes, so SHA1 includes it
+    // and the cached script reproduces the dialect routing.
+    let mut b = Bridge::with_no_dispatch();
+    let sha = b.script_load(b"#!lua version=5.3\nreturn 5 // 2");
+    let reply = b.evalsha(sha, &[], &[]);
+    assert_eq!(reply, b":2\r\n");
+}
+
+#[test]
+fn eval_auto_fills_cache_so_evalsha_works() {
+    let mut b = Bridge::with_no_dispatch();
+    let r1 = b.eval(b"return 'hi'", &[], &[]);
+    assert_eq!(r1, b"$2\r\nhi\r\n");
+    // SHA1 of the same source.
+    let sha = b.script_load(b"return 'hi'");
+    let r2 = b.evalsha(sha, &[], &[]);
+    assert_eq!(r2, b"$2\r\nhi\r\n");
+}
+
+#[test]
+fn evalsha_uses_keys_and_argv() {
+    let mut b = Bridge::with_no_dispatch();
+    let sha = b.script_load(b"return KEYS[1] .. '/' .. ARGV[1]");
+    let reply = b.evalsha(sha, &[b"foo"], &[b"bar"]);
+    assert_eq!(reply, b"$7\r\nfoo/bar\r\n");
+}
+
+#[test]
+fn script_flush_drops_cache_and_pool() {
+    let mut b = Bridge::with_no_dispatch();
+    let sha = b.script_load(b"return 1");
+    assert_eq!(b.script_exists(&[sha]), vec![true]);
+    b.script_flush(FlushMode::Sync);
+    assert_eq!(b.script_exists(&[sha]), vec![false]);
+    let reply = b.evalsha(sha, &[], &[]);
+    assert!(reply.starts_with(b"-NOSCRIPT "));
+}
+
+#[test]
+fn sha1_hex_round_trips() {
+    let mut b = Bridge::with_no_dispatch();
+    let sha = b.script_load(b"return 'x'");
+    let hex = Bridge::sha1_to_hex(&sha);
+    let back = Bridge::sha1_from_hex(&hex).expect("valid hex");
+    assert_eq!(sha, back);
+}
+
+#[test]
+fn sha1_from_hex_rejects_garbage() {
+    assert!(Bridge::sha1_from_hex(b"too short").is_none());
+    assert!(Bridge::sha1_from_hex(&[b'z'; 40]).is_none());
+}
+
+#[test]
+fn script_load_idempotent_same_bytes_same_sha() {
+    let mut b = Bridge::with_no_dispatch();
+    let sha1a = b.script_load(b"return 1");
+    let sha1b = b.script_load(b"return 1");
+    assert_eq!(sha1a, sha1b);
 }
 
 // ─────────────────────────────────────────────────────────────────────

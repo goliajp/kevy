@@ -39,6 +39,7 @@ mod dispatch;
 mod host;
 mod marshal;
 mod resp;
+mod sha1;
 mod shebang;
 
 pub(crate) use dispatch::{DispatchHandle, DispatchSlot, DISPATCH_KEY};
@@ -97,6 +98,15 @@ pub struct Bridge {
     /// for a denied dialect gets a wire `-ERR` reply. All-true by
     /// default.
     allow: [bool; N_DIALECTS],
+    /// SHA1 → raw script bytes (including shebang). Populated by
+    /// `script_load` and by every successful `eval`. EVALSHA reads
+    /// from here; SCRIPT FLUSH empties it; SCRIPT EXISTS probes it.
+    ///
+    /// Per-shard cache: kevy runs thread-per-core and each shard
+    /// owns its own Bridge, so we don't share a global cache. The
+    /// trade-off (cache miss on first hit per shard) is dwarfed by
+    /// the locking we'd otherwise need.
+    script_cache: std::collections::HashMap<ScriptSha1, Vec<u8>>,
 }
 
 impl Bridge {
@@ -122,6 +132,7 @@ impl Bridge {
             vms: [const { None }; N_DIALECTS],
             dispatch: Rc::new(dispatch),
             allow: [true; N_DIALECTS],
+            script_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -183,6 +194,13 @@ impl Bridge {
             Ok(s) => s,
             Err(_) => return resp::err(b"script body is not valid UTF-8"),
         };
+        // Redis EVAL semantics: every script that successfully runs
+        // (or even compiles) is added to the SCRIPT cache so a later
+        // EVALSHA can find it. We insert before running so a script
+        // that runs forever still gets a SCRIPT EXISTS hit (matches
+        // Redis behaviour).
+        let digest = sha1::sha1(script);
+        self.script_cache.entry(digest).or_insert_with(|| script.to_vec());
         let vm = self.vm_for(sh.version);
         // Bind KEYS / ARGV freshly per invocation. The `redis` host
         // table was installed once when the Vm was constructed.
@@ -198,32 +216,58 @@ impl Bridge {
 
     /// Run a previously-cached script by SHA1 hex.
     ///
-    /// P1 stub — cache lands in P5.
-    pub fn evalsha(&mut self, _sha1: ScriptSha1, _keys: &[&[u8]], _args: &[&[u8]]) -> Reply {
-        resp::err(b"NOSCRIPT No matching script. Please use EVAL.")
+    /// Returns `-NOSCRIPT ...` if the script isn't in the cache.
+    /// Identical to running `eval` with the cached bytes — the same
+    /// shebang routing, KEYS/ARGV binding, and redis.* host plumbing
+    /// apply.
+    pub fn evalsha(&mut self, sha1: ScriptSha1, keys: &[&[u8]], args: &[&[u8]]) -> Reply {
+        let Some(script) = self.script_cache.get(&sha1).cloned() else {
+            return resp::err(b"NOSCRIPT No matching script. Please use EVAL.");
+        };
+        self.eval(&script, keys, args)
     }
 
-    /// Cache a script without running it. Returns the SHA1.
-    ///
-    /// P1 stub — returns an all-zero SHA1.
-    pub fn script_load(&mut self, _script: &[u8]) -> ScriptSha1 {
-        [0u8; 20]
+    /// Cache a script without running it. Returns the SHA1 digest;
+    /// the operator-side wire layer hex-encodes it for the Redis
+    /// SCRIPT LOAD reply.
+    pub fn script_load(&mut self, script: &[u8]) -> ScriptSha1 {
+        let digest = sha1::sha1(script);
+        self.script_cache.insert(digest, script.to_vec());
+        digest
     }
 
-    /// Test which of the given SHA1s are in the cache.
-    ///
-    /// P1 stub — returns all-false.
+    /// Test which of the given SHA1s are in the cache. Returns a
+    /// vector with `true`/`false` for each input SHA1 in order.
     #[must_use]
     pub fn script_exists(&self, sha1s: &[ScriptSha1]) -> Vec<bool> {
-        vec![false; sha1s.len()]
+        sha1s.iter().map(|s| self.script_cache.contains_key(s)).collect()
     }
 
-    /// Drop the SHA1 cache + all per-dialect VMs. Next EVAL spawns
-    /// a fresh sandbox.
+    /// Drop the SHA1 cache + all per-dialect VMs. `ASYNC` and `SYNC`
+    /// are currently both implemented as synchronous; the tag is
+    /// preserved for future differentiation.
     pub fn script_flush(&mut self, _mode: FlushMode) {
         for slot in &mut self.vms {
             *slot = None;
         }
+        self.script_cache.clear();
+    }
+
+    /// Hex-encode a SHA1 digest as a 40-char ASCII string. The Redis
+    /// SCRIPT LOAD wire reply needs hex; the bridge stores raw bytes
+    /// so the operator side calls this when emitting the bulk-string
+    /// reply.
+    #[must_use]
+    pub fn sha1_to_hex(digest: &ScriptSha1) -> [u8; 40] {
+        sha1::hex(digest)
+    }
+
+    /// Parse a 40-char ASCII hex SHA1 to the 20-byte digest used as
+    /// the cache key. Returns `None` on malformed input (caller emits
+    /// `-NOSCRIPT` on `None`).
+    #[must_use]
+    pub fn sha1_from_hex(hex_str: &[u8]) -> Option<ScriptSha1> {
+        sha1::parse_hex(hex_str)
     }
 
     /// Number of dialect VMs currently spawned. Test-only helper —
