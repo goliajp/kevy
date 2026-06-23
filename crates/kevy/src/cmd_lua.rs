@@ -75,6 +75,26 @@ fn make_lua_host() -> LuaHost<Store> {
         }
         let mut out = Vec::new();
         crate::dispatch::dispatch_into(store, &a, &mut out);
+        // v1.27.3: bridge inner-EVAL writes to the runtime's BLOCK
+        // wake hook. `dispatch_into` hits the Store directly and
+        // bypasses `post_write_housekeeping` where wake_key normally
+        // fires. Push the affected key to a thread-local buffer so
+        // the runtime drains + wakes after the outer EVAL returns
+        // (see kevy_rt::lua_wake_bridge). Cheap: one match + push.
+        if !out.is_empty()
+            && out[0] != b'-'
+            && let Some(verb) = argv.first()
+        {
+            let mut buf = [0u8; 32];
+            let upper = crate::cmd::upper_verb(verb, &mut buf);
+            if matches!(
+                upper,
+                b"LPUSH" | b"RPUSH" | b"XADD" | b"ZADD" | b"ZINCRBY"
+            ) && let Some(key) = argv.get(1)
+            {
+                kevy_rt::push_lua_wake_key(key);
+            }
+        }
         out
     });
     // v1.27 P7e: read `[lua] time_limit_ms` + `[lua] allow_dialects`

@@ -339,6 +339,15 @@ impl<C: Commands> Shard<C> {
         {
             self.wake_key(&key);
         }
+        // v1.27.3: drain the Lua wake bridge. `redis.call` inside an
+        // EVAL script pushes affected write keys to a thread-local
+        // buffer (see `crate::lua_wake_bridge`); this is the runtime's
+        // catch-point. The drain is cheap on non-Lua dispatches —
+        // empty buffer → one Vec capacity check.
+        let lua_wakes = crate::lua_wake_bridge::drain_lua_wake_buffer();
+        for key in lua_wakes {
+            self.wake_key(&key);
+        }
     }
 
     /// Wake both block registries for a write that landed on `key`: the
