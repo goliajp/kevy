@@ -47,6 +47,11 @@ redis-cli -p 6004 SET hello world
 - **Async-capable** — `kevy-client-async` (v1.22) wraps the blocking
   surface 1:1 for `tokio` / `smol` / `async-std` plus a pipeline-first
   builder that collapses N commands into one TCP round-trip.
+- **Scriptable** (v1.27) — server-side Lua via `EVAL` / `EVALSHA` /
+  `SCRIPT` backed by the in-house pure-Rust [`luna`](https://github.com/goliajp/luna)
+  runtime. Default Lua 5.1 (Redis ecosystem compat), per-script opt-in
+  to 5.2–5.5 via `#!lua version=N` shebang. BullMQ / Redlock /
+  rate-limiter scripts run unmodified. Full reference: [`docs/lua.md`](docs/lua.md).
 - **Resource-adaptive** — runs full-speed when memory is unbounded, degrades
   cleanly when it isn't, and refuses loudly at the edge instead of corrupting
   silently ([details](#resource-adaptive-by-design)).
