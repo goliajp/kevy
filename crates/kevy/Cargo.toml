@@ -41,6 +41,12 @@ kevy-elect = { path = "../kevy-elect", version = "1.19.0" }
 # kevy-scope: v3-cluster Phase 3 scoped multi-writer ownership.
 # Opt-in via `[cluster] scopes = "..."`; dormant otherwise.
 kevy-scope = { path = "../kevy-scope", version = "1.19.0" }
+# v1.27 P7b: Lua scripting bridge — pulls the carved-exemption
+# kevy-lua + kevy-lua-host crates. See workspace Cargo.toml exemption
+# #2/#3: the only transitive third-party crate is `luna-core` (GOLIA
+# family, CI-gated 0-dep on luna's side).
+kevy-lua = { path = "../kevy-lua", version = "=1.26.6" }
+kevy-lua-host = { path = "../kevy-lua-host", version = "=1.26.6" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }
