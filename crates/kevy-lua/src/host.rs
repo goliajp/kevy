@@ -15,7 +15,7 @@
 //! callback. The native fn signatures stay the same; only the body
 //! grows.
 
-use luna_core::runtime::value::{NativeFn, Value};
+use luna_core::runtime::value::Value;
 use luna_core::vm::error::LuaError;
 use luna_core::vm::exec::Vm;
 
@@ -40,8 +40,10 @@ pub(crate) fn install_redis_table(vm: &mut Vm) {
     // luna v1.1 B3: `vm.table_of` chains a fixed-size set of
     // (key, value) pairs into a freshly-allocated table. K=&str,
     // V=Value both impl IntoValue (luna v1.1 B4).
-    let call_fn = vm.native(redis_call);
-    let pcall_fn = vm.native(redis_pcall);
+    // P3b: redis.call / redis.pcall now dispatch through the host
+    // callback installed in the per-Vm userdata (see crate::dispatch).
+    let call_fn = vm.native(crate::dispatch::redis_call);
+    let pcall_fn = vm.native(crate::dispatch::redis_pcall);
     let status_fn = vm.native(redis_status_reply);
     let error_fn = vm.native(redis_error_reply);
     let sha1_fn = vm.native(redis_sha1hex);
@@ -80,24 +82,6 @@ fn build_byte_array(vm: &mut Vm, items: &[&[u8]]) -> luna_core::runtime::heap::G
 // ─────────────────────────────────────────────────────────────────────
 // redis.* host functions
 // ─────────────────────────────────────────────────────────────────────
-
-/// `redis.call(cmd, ...)` — P3a stub. P3b plumbs the kevy dispatch
-/// callback. Until then, calling redis.call raises a Lua error so
-/// scripts that try to touch the keyspace fail loudly.
-const REDIS_CALL: NativeFn = redis_call;
-fn redis_call(vm: &mut Vm, _fs: u32, _nargs: u32) -> Result<u32, LuaError> {
-    Err(LuaError(Value::Str(
-        vm.heap.intern(b"redis.call: kevy v1.27 P3a stub - no host dispatch wired yet"),
-    )))
-}
-
-/// `redis.pcall(cmd, ...)` — same stub, returns a `{err=...}` table
-/// instead of raising. P3b replaces with the real catching form.
-fn redis_pcall(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
-    let msg = vm.heap.intern(b"redis.pcall: kevy v1.27 P3a stub");
-    let t = vm.new_table().with("err", Value::Str(msg)).build();
-    Ok(vm.nat_return(fs, &[Value::Table(t)]))
-}
 
 /// `redis.status_reply(msg)` — wraps `msg` into `{ok = msg}` which
 /// marshals as a RESP simple string.
@@ -160,7 +144,3 @@ fn first_arg_as_str_or(vm: &mut Vm, fs: u32, nargs: u32, default_msg: &[u8]) -> 
     }
 }
 
-/// Force the `REDIS_CALL` const to be referenced so `dead_code` lint
-/// stays quiet until P3b actually starts dispatching through it.
-#[allow(dead_code)]
-const _FORCE_REDIS_CALL_REF: NativeFn = REDIS_CALL;
