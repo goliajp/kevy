@@ -90,6 +90,56 @@ pub(crate) fn cmd_lpos<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &
     }
 }
 
+/// `BZPOPMIN key [key ...] timeout` — blocking `ZPOPMIN` across a set of
+/// candidate sorted sets. On hit, replies with a 3-bulk array:
+/// `*3 [<key>, <member>, <score>]` (RESP2). On empty + timeout=0 the
+/// dispatcher parks the conn forever; otherwise the reactor's
+/// blocked-timeout tick fires a nil array reply (`*-1\r\n`) at the
+/// deadline.
+///
+/// Behavior split mirrors `cmd_blpop`:
+/// - Multi-key form (`len > 3`) — leaves `out` untouched so the
+///   dispatcher parks the conn across all watched keys via the
+///   cross-shard arbiter; each per-key wake replays the single-key form
+///   built by `cmd_block_serve::pop_serve(b"BZPOPMIN", key)`.
+/// - Single-key form (`len == 3`) — pops one member with the lowest
+///   score; on empty, leaves `out` untouched so the in-shard fast path
+///   registers the conn as a waiter on `args[1]`.
+pub(crate) fn cmd_bzpopmin<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) {
+    if args.len() < 3 {
+        return wrong_args(out, "bzpopmin");
+    }
+    let timeout_idx = args.len() - 1;
+    let valid = std::str::from_utf8(&args[timeout_idx])
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .is_some_and(|f| f.is_finite() && f >= 0.0);
+    if !valid {
+        return encode_error(out, "ERR timeout is not a float or out of range");
+    }
+    if args.len() > 3 {
+        // Multi-key: leave out untouched → arbiter parks + per-key
+        // replay built from `BZPOPMIN key 0` (the len == 3 path here).
+        return;
+    }
+    match store.zpopmin(&args[1], 1) {
+        Err(e) => store_err(out, e),
+        Ok(items) => {
+            if let Some((member, score)) = items.into_iter().next() {
+                encode_array_len(out, 3);
+                encode_bulk(out, &args[1]);
+                encode_bulk(out, &member);
+                encode_bulk(out, &fmt_score(score));
+            }
+            // else: empty key — out untouched; runtime parks the conn.
+        }
+    }
+}
+
 /// `ZPOPMIN key [count]` — pop the `count` lowest-scored members and
 /// reply with `[m1, s1, m2, s2, ...]` (RESP2 V2 flat shape, mirrors
 /// `ZRANGE ... WITHSCORES`). `count` defaults to `1`.

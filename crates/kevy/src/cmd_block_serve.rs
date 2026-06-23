@@ -23,6 +23,7 @@ pub(crate) fn block_serve_argv<A: ArgvView + ?Sized>(
     match kind {
         BlockKind::Blpop => pop_serve(b"BLPOP", key),
         BlockKind::Brpop => pop_serve(b"BRPOP", key),
+        BlockKind::Bzpopmin => pop_serve(b"BZPOPMIN", key),
         BlockKind::XReadBlock => xread_serve(args, key).unwrap_or_else(|| args.to_argv()),
         BlockKind::XReadGroupBlock => {
             xreadgroup_serve(args, key).unwrap_or_else(|| args.to_argv())
@@ -154,6 +155,9 @@ pub(crate) fn block_ready<A: ArgvView + ?Sized>(
         BlockKind::Blpop | BlockKind::Brpop => serve_argv
             .get(1)
             .is_some_and(|k| store.llen(k).is_ok_and(|n| n > 0)),
+        BlockKind::Bzpopmin => serve_argv
+            .get(1)
+            .is_some_and(|k| store.zcard(k).is_ok_and(|n| n > 0)),
         BlockKind::XReadBlock => {
             // XREAD is read-only, so dispatching the replay is itself a
             // safe peek: non-empty output ⇒ data is available.

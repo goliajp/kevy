@@ -106,6 +106,7 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"ZREM"
             | b"ZINCRBY"
             | b"ZPOPMIN"
+            | b"BZPOPMIN"
             | b"ZREMRANGEBYRANK"
             | b"ZREMRANGEBYSCORE"
             | b"GEOADD"
