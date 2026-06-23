@@ -6,8 +6,11 @@
 //! P5+ may switch to the full `kevy-resp` encoder once the bridge
 //! command surface settles. The encoded bytes are wire-equivalent
 //! either way.
-
-use luna_core::runtime::value::Value;
+//!
+//! This module is **pure** — encoders only, no luna types. The
+//! Lua-aware marshaling (table → array, `{ok=}` / `{err=}`
+//! recognition) lives in the parent module's `marshal` function
+//! which composes these encoders.
 
 /// `:N\r\n` — RESP integer.
 pub(crate) fn integer(n: i64) -> Vec<u8> {
@@ -28,6 +31,25 @@ pub(crate) fn bulk(bytes: &[u8]) -> Vec<u8> {
     out.extend_from_slice(bytes);
     out.extend_from_slice(b"\r\n");
     out
+}
+
+/// `+MSG\r\n` — RESP simple string. MSG must NOT contain CR or LF
+/// (RESP2 simple-string grammar). Caller is responsible for that —
+/// when in doubt, use [`bulk`] which is binary-safe.
+pub(crate) fn simple_string(msg: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(msg.len() + 3);
+    out.push(b'+');
+    out.extend_from_slice(msg);
+    out.extend_from_slice(b"\r\n");
+    out
+}
+
+/// `*N\r\n` — RESP array header. The N elements follow, each
+/// individually encoded. N = -1 produces the null-array form
+/// `*-1\r\n` (kevy never emits this from EVAL, but it's part of the
+/// RESP2 grammar).
+pub(crate) fn array_header(n: i64) -> Vec<u8> {
+    format!("*{n}\r\n").into_bytes()
 }
 
 /// `-ERR <msg>\r\n` — RESP simple error. Caller should not include
@@ -57,47 +79,16 @@ fn needs_err_prefix(msg: &[u8]) -> bool {
     !token.iter().all(|b| b.is_ascii_uppercase())
 }
 
-/// Marshal a luna `Value` into a RESP reply per the kevy-lua P1
-/// rules. Mirrors the Redis EVAL marshalling table from the RFC §
-/// "Marshaling — RESP ↔ Lua":
-///
-/// | Lua             | RESP                  |
-/// |-----------------|-----------------------|
-/// | nil             | `$-1\r\n` (nil bulk)  |
-/// | boolean true    | `:1\r\n`              |
-/// | boolean false   | `$-1\r\n` (nil bulk)  |
-/// | integer         | `:N\r\n`              |
-/// | float           | bulk string           |
-/// | string          | bulk string           |
-/// | `{ok=...}`      | simple string         |
-/// | `{err=...}`     | error                 |
-/// | array table     | (P2 — first-nil rule) |
-///
-/// `{ok=...}` / `{err=...}` table detection and array marshalling
-/// land in P2; for now any `Table` value falls back to `nil bulk` so
-/// the encoder always produces well-formed RESP.
-pub(crate) fn reply_from_value(v: Value) -> Vec<u8> {
-    match v {
-        Value::Nil => nil_bulk(),
-        Value::Bool(true) => integer(1),
-        Value::Bool(false) => nil_bulk(),
-        Value::Int(n) => integer(n),
-        Value::Float(f) => {
-            // Lua 5.1 returns every numeric literal as a Float. When
-            // the value round-trips through i64 losslessly, present
-            // it as a RESP integer (matches Redis behaviour). This
-            // is what makes `EVAL "return 1" 0` produce `:1\r\n` even
-            // though luna 5.1 hands us `Value::Float(1.0)`.
-            if f.is_finite() && f.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(&f)
-            {
-                integer(f as i64)
-            } else {
-                bulk(format!("{f}").as_bytes())
-            }
-        }
-        Value::Str(s) => bulk(s.as_bytes()),
-        Value::Table(_) | Value::Closure(_) | Value::Native(_) | Value::Coro(_)
-        | Value::Userdata(_) | Value::LightUserdata(_) => nil_bulk(),
+/// Encode a finite f64 as a RESP integer when it round-trips through
+/// i64 losslessly, otherwise as a bulk string. Lua 5.1 has no integer
+/// subtype, so every `return 1` arrives as `Value::Float(1.0)` — the
+/// caller has to pick the on-wire shape, which this helper does
+/// per the Redis-EVAL convention.
+pub(crate) fn float(f: f64) -> Vec<u8> {
+    if f.is_finite() && f.fract() == 0.0 && (i64::MIN as f64..=i64::MAX as f64).contains(&f) {
+        integer(f as i64)
+    } else {
+        bulk(format!("{f}").as_bytes())
     }
 }
 
@@ -131,5 +122,32 @@ mod tests {
     fn integer_max_min() {
         assert_eq!(integer(i64::MAX), format!(":{}\r\n", i64::MAX).into_bytes());
         assert_eq!(integer(i64::MIN), format!(":{}\r\n", i64::MIN).into_bytes());
+    }
+
+    #[test]
+    fn simple_string_basic() {
+        assert_eq!(simple_string(b"OK"), b"+OK\r\n");
+        assert_eq!(simple_string(b""), b"+\r\n");
+    }
+
+    #[test]
+    fn array_header_shapes() {
+        assert_eq!(array_header(0), b"*0\r\n");
+        assert_eq!(array_header(3), b"*3\r\n");
+        assert_eq!(array_header(-1), b"*-1\r\n");
+    }
+
+    #[test]
+    fn float_round_trips_to_integer_for_integral() {
+        assert_eq!(float(1.0), b":1\r\n");
+        assert_eq!(float(0.0), b":0\r\n");
+        assert_eq!(float(-42.0), b":-42\r\n");
+    }
+
+    #[test]
+    fn float_falls_back_to_bulk_for_non_integral() {
+        assert_eq!(float(1.5), b"$3\r\n1.5\r\n");
+        assert_eq!(float(f64::NAN).starts_with(b"$"), true);
+        assert_eq!(float(f64::INFINITY).starts_with(b"$"), true);
     }
 }
