@@ -33,10 +33,14 @@
 use luna_core::runtime::value::Value;
 use luna_core::version::LuaVersion;
 use luna_core::vm::exec::Vm;
+use std::rc::Rc;
 
+mod dispatch;
 mod host;
 mod marshal;
 mod resp;
+
+pub(crate) use dispatch::{DispatchHandle, DispatchSlot, DISPATCH_KEY};
 
 /// Lua 5.1 / 5.2 / 5.3 / 5.4 / 5.5 — five fixed slots.
 const N_DIALECTS: usize = 5;
@@ -83,16 +87,46 @@ pub struct Bridge {
     /// dialect. Five fixed slots indexed by [`dialect_slot`] (luna
     /// `LuaVersion` is a 0-4 discriminant in version order).
     vms: [Option<Vm>; N_DIALECTS],
+    /// Host dispatch closure invoked by `redis.call` / `redis.pcall`.
+    /// `Rc` so cheaply cloned into per-Vm userdata at construction
+    /// time without consuming the original.
+    dispatch: DispatchHandle,
 }
 
 impl Bridge {
-    /// Create a fresh bridge. No VMs are spawned until the first
+    /// Create a fresh bridge with `dispatch` as the host callback
+    /// behind `redis.call`. No Vms are spawned until the first
     /// EVAL.
-    #[must_use]
-    pub fn new() -> Self {
+    ///
+    /// The dispatch closure receives the script's argv (`&[&[u8]]`,
+    /// command name at index 0) and must return RESP reply bytes.
+    /// In production, kevy-rt provides a closure that routes through
+    /// the normal kevy command dispatch path; tests pass a stub
+    /// in-memory keyspace (see `tests/integration.rs`).
+    ///
+    /// For embedders that don't need real keyspace access (e.g.
+    /// pure-computation EVAL), [`Bridge::with_no_dispatch`] installs
+    /// a default that returns `-ERR redis.call: no dispatch wired`
+    /// for every call.
+    pub fn new<F>(dispatch: F) -> Self
+    where
+        F: Fn(&[&[u8]]) -> Vec<u8> + 'static,
+    {
         Self {
             vms: [const { None }; N_DIALECTS],
+            dispatch: Rc::new(dispatch),
         }
+    }
+
+    /// Bridge with a no-op dispatcher: every `redis.call` returns a
+    /// RESP error. Convenience for embedders that want EVAL but
+    /// don't have the host dispatch wired yet (e.g. pure-computation
+    /// scripts during early development).
+    #[must_use]
+    pub fn with_no_dispatch() -> Self {
+        Self::new(|_argv: &[&[u8]]| {
+            b"-ERR redis.call: no host dispatch wired\r\n".to_vec()
+        })
     }
 
     /// Restrict which Lua dialects this bridge will spawn VMs for.
@@ -184,6 +218,12 @@ impl Bridge {
                 .with_instr_budget(200_000_000)
                 .build();
             host::install_redis_table(&mut vm);
+            // Install the dispatch handle as a luna userdata global
+            // (luna v1.1 B8). `redis.call` retrieves it via
+            // `vm.userdata_borrow::<DispatchSlot>(DISPATCH_KEY)`. We
+            // clone the Rc so each Vm holds an independent handle
+            // pointing at the shared closure.
+            let _ = vm.set_userdata(DISPATCH_KEY, DispatchSlot(Rc::clone(&self.dispatch)));
             *slot = Some(vm);
         }
         slot.as_mut().expect("just-inserted Vm")
@@ -191,8 +231,10 @@ impl Bridge {
 }
 
 impl Default for Bridge {
+    /// Equivalent to [`Bridge::with_no_dispatch`] — the safe default
+    /// for embedders that don't have a host dispatch wired yet.
     fn default() -> Self {
-        Self::new()
+        Self::with_no_dispatch()
     }
 }
 
@@ -214,7 +256,7 @@ mod tests {
 
     #[test]
     fn eval_reuses_vm_across_calls() {
-        let mut b = Bridge::new();
+        let mut b = Bridge::with_no_dispatch();
         assert_eq!(b.eval(b"return 1", &[], &[]), b":1\r\n");
         assert_eq!(b.eval(b"return 2", &[], &[]), b":2\r\n");
         // One VM should be cached for the 5.1 default dialect.
@@ -223,7 +265,7 @@ mod tests {
 
     #[test]
     fn script_flush_drops_vm_pool() {
-        let mut b = Bridge::new();
+        let mut b = Bridge::with_no_dispatch();
         let _ = b.eval(b"return 1", &[], &[]);
         assert_eq!(b.vm_count(), 1);
         b.script_flush(FlushMode::Sync);
