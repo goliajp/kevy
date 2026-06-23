@@ -87,6 +87,7 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"FLUSHALL"
             | b"HSET"
             | b"HSETNX"
+            | b"HMSET"
             | b"HDEL"
             | b"HINCRBY"
             | b"LPUSH"
@@ -96,12 +97,17 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"LSET"
             | b"LREM"
             | b"LTRIM"
+            | b"RPOPLPUSH"
+            | b"LMOVE"
             | b"SADD"
             | b"SREM"
             | b"SPOP"
             | b"ZADD"
             | b"ZREM"
             | b"ZINCRBY"
+            | b"ZPOPMIN"
+            | b"ZREMRANGEBYRANK"
+            | b"ZREMRANGEBYSCORE"
             | b"GEOADD"
             | b"GEOSEARCHSTORE"
             | b"GEORADIUS"
@@ -137,16 +143,16 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
             NotifyClass::String
         }
         // Hash — class `h`.
-        b"HSET" | b"HSETNX" | b"HDEL" | b"HINCRBY" => NotifyClass::Hash,
+        b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" => NotifyClass::Hash,
         // List — class `l`.
-        b"LPUSH" | b"RPUSH" | b"LPOP" | b"RPOP" | b"LSET" | b"LREM" | b"LTRIM" => {
-            NotifyClass::List
-        }
+        b"LPUSH" | b"RPUSH" | b"LPOP" | b"RPOP" | b"LSET" | b"LREM" | b"LTRIM"
+        | b"RPOPLPUSH" | b"LMOVE" => NotifyClass::List,
         // Set — class `s` (SINTERSTORE/SUNIONSTORE/SDIFFSTORE not yet impl'd).
         b"SADD" | b"SREM" | b"SPOP" => NotifyClass::Set,
         // Sorted set — class `z`. GEOADD writes a ZSet under the hood,
         // so it fires `zadd` notifications too (matches Redis).
-        b"ZADD" | b"ZREM" | b"ZINCRBY" | b"GEOADD" => NotifyClass::Zset,
+        b"ZADD" | b"ZREM" | b"ZINCRBY" | b"ZPOPMIN" | b"ZREMRANGEBYRANK"
+        | b"ZREMRANGEBYSCORE" | b"GEOADD" => NotifyClass::Zset,
         // Stream — class `t`. XADD/XDEL/XTRIM/XGROUP/XACK/XCLAIM/
         // XREADGROUP all fire their lowercased verb name.
         b"XADD" | b"XDEL" | b"XTRIM" | b"XSETID" | b"XGROUP" | b"XACK" | b"XCLAIM"
@@ -181,9 +187,12 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"APPEND"
             | b"HSET"
             | b"HSETNX"
+            | b"HMSET"
             | b"HINCRBY"
             | b"LPUSH"
             | b"RPUSH"
+            | b"RPOPLPUSH"
+            | b"LMOVE"
             | b"LSET"
             | b"SADD"
             | b"ZADD"
@@ -286,24 +295,77 @@ pub(crate) fn cmd_zrange<A: ArgvView + ?Sized>(
     emit_zrange(store.zrange(&args[1], s, e), withscores, proto, out);
 }
 
-/// `ZRANGEBYSCORE key min max [WITHSCORES]`.
+/// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`.
+///
+/// v1.27.3: BullMQ uses `LIMIT 0 1` inside its `moveToActive` /
+/// `addJob` scripts; the modifier may appear in either order
+/// relative to `WITHSCORES`. We accept either order to match Redis.
 pub(crate) fn cmd_zrangebyscore<A: ArgvView + ?Sized>(
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
     proto: RespVersion,
 ) {
-    if args.len() < 4 || args.len() > 5 {
+    if args.len() < 4 {
         return wrong_args(out, "zrangebyscore");
-    }
-    let withscores = args.len() == 5;
-    if withscores && !args[4].eq_ignore_ascii_case(b"WITHSCORES") {
-        return encode_error(out, "ERR syntax error");
     }
     let (Some(min), Some(max)) = (parse_score_bound(&args[2]), parse_score_bound(&args[3])) else {
         return encode_error(out, "ERR min or max is not a float");
     };
-    emit_zrange(store.zrange_by_score(&args[1], min, max), withscores, proto, out);
+    // Parse optional modifiers — `WITHSCORES` and `LIMIT offset count`
+    // can appear in either order, no more than once each.
+    let mut withscores = false;
+    let mut limit: Option<(i64, i64)> = None;
+    let mut i = 4;
+    while i < args.len() {
+        let tok = &args[i];
+        if tok.eq_ignore_ascii_case(b"WITHSCORES") {
+            if withscores {
+                return encode_error(out, "ERR syntax error");
+            }
+            withscores = true;
+            i += 1;
+        } else if tok.eq_ignore_ascii_case(b"LIMIT") {
+            if limit.is_some() || i + 2 >= args.len() {
+                return encode_error(out, "ERR syntax error");
+            }
+            let Some(off) = std::str::from_utf8(&args[i + 1])
+                .ok()
+                .and_then(|s| s.parse::<i64>().ok())
+            else {
+                return encode_error(out, ERR_NOT_INT);
+            };
+            let Some(cnt) = std::str::from_utf8(&args[i + 2])
+                .ok()
+                .and_then(|s| s.parse::<i64>().ok())
+            else {
+                return encode_error(out, ERR_NOT_INT);
+            };
+            limit = Some((off, cnt));
+            i += 3;
+        } else {
+            return encode_error(out, "ERR syntax error");
+        }
+    }
+    let res = store.zrange_by_score(&args[1], min, max);
+    match res {
+        Err(e) => store_err(out, e),
+        Ok(mut items) => {
+            if let Some((off, cnt)) = limit {
+                let start = off.max(0) as usize;
+                if start >= items.len() {
+                    items.clear();
+                } else if cnt < 0 {
+                    // Redis: negative count = all remaining.
+                    items.drain(..start);
+                } else {
+                    let end = (start + cnt as usize).min(items.len());
+                    items = items[start..end].to_vec();
+                }
+            }
+            emit_zrange(Ok(items), withscores, proto, out);
+        }
+    }
 }
 
 /// Encode a `(member, score)` list per `withscores` + `proto`:

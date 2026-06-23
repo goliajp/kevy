@@ -53,6 +53,7 @@ mod config_global;
 mod replication;
 mod dispatch;
 mod dispatch_collections;
+mod dispatch_collections_v127;
 mod dispatch_resp3;
 mod dispatch_geo;
 mod dispatch_stream;
