@@ -4,6 +4,70 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.27.1] — 2026-06-24 (multi-shard EVAL/EVALSHA routing fix)
+
+Bug fix discovered in real-ecosystem validation (`ioredis` against a
+default 16-shard kevy):
+
+1. **EVAL routing bug** — v1.27.0 classified EVAL as the generic
+   `Route::Single(1)`, routing by the script body's hash. Under
+   `--threads N` with N > 1, a `SET key v` on the key's owner shard
+   followed by an `EVAL "redis.call('GET', KEYS[1])" 1 key` landed
+   on a different shard and read `$-1\r\n` instead of the value.
+2. **SCRIPT cache per-shard** — v1.27.0 kept the SHA1 → source
+   cache inside the per-shard Bridge. `SCRIPT LOAD` arriving on
+   shard X filled X's cache; a subsequent `EVALSHA` arriving on
+   shard Y returned `-NOSCRIPT`.
+
+Both bugs were silent under `--threads 1` (the default for
+`cargo run -p kevy --bin kevy`), so the v1.27.0 single-Store
+integration tests never surfaced them. Surfaced by the real-ecosystem
+test harness in the kevy maintainer's notes.
+
+Fixes:
+
+- `cmd_resolve.rs::route_for_verb` now classifies
+  `EVAL`/`EVALSHA`/`EVAL_RO`/`EVALSHA_RO` with `numkeys ≥ 1` as
+  `Route::Single(3)` (route by KEYS[1]); `numkeys == 0` stays
+  `Route::Local`. `SCRIPT` subcommands stay `Route::Local` (they
+  hit the global cache).
+- `cmd_lua.rs` script cache moved to a process-global
+  `OnceLock<Mutex<HashMap<[u8; 20], Vec<u8>>>>`. `SCRIPT LOAD`
+  writes there; `EVAL` auto-fills it; `EVALSHA` looks up source
+  and calls `LuaHost::eval(source, ...)` directly (bypassing the
+  per-Bridge `evalsha` whose cache is shard-local).
+- The same fix applies to `cmd_lua.rs::SCRIPT EXISTS` and
+  `SCRIPT FLUSH` — both operate on the global cache, no per-shard
+  LuaHost touched.
+
+Tests:
+
+- New `crates/kevy/tests/lua_multishard.rs` — boots a real 4-shard
+  kevy server in-process and verifies:
+  - SET then EVAL `GET KEYS[1]` consistent across 50 keys
+  - Redlock canonical unlock script consistent across 30 keys
+  - SCRIPT LOAD on any shard reaches EVALSHA on any shard across
+    30 different keys
+  - SCRIPT FLUSH clears the global cache
+- 25/25 real-ecosystem canonical script tests via `ioredis` pass
+  against default-shard (16) kevy. Equivalent test failed 2/25
+  under v1.27.0 same config.
+
+Independent crate version bumps:
+- workspace        1.27.0 → 1.27.1
+- kevy-client      1.12.11 → 1.12.12
+- kevy-client-async 1.0.12 → 1.0.13
+- kevy-embedded     1.4.12 → 1.4.13
+- kevy-lua         1.27.0 → 1.27.1
+- kevy-lua-host    1.27.0 → 1.27.1
+
+Still deferred to v1.28 (per the L1 "v1.27 = Lua only" lockdown):
+- `cjson` / `cmsgpack` host stdlib (BullMQ / Sidekiq Pro unblock)
+- `FUNCTION LOAD` / `FCALL`
+- LDB debugger
+- i18n `docs/lua` mirrors (ja + zh-CN)
+
+
 ## [v1.27.0] — 2026-06-23 (server-side Lua scripting via luna)
 
 Lua scripting headline:

@@ -52,6 +52,26 @@ impl Commands for KevyCommands {
             b"UNWATCH" => Route::Unwatch,
             b"RENAME" => Route::Rename { nx: false },
             b"RENAMENX" => Route::Rename { nx: true },
+            // v1.27.1: keep in sync with cmd_resolve::route_for_verb —
+            // the runtime hot path goes through `resolve()` →
+            // `route_for_verb`, but tests + future direct callers of
+            // `route()` need the same answer.
+            b"EVAL" | b"EVALSHA" | b"EVAL_RO" | b"EVALSHA_RO" => {
+                if args.len() >= 4 {
+                    let nk = std::str::from_utf8(&args[2])
+                        .ok()
+                        .and_then(|s| s.parse::<i64>().ok())
+                        .unwrap_or(0);
+                    if nk >= 1 && (args.len() as i64) >= 3 + nk {
+                        Route::Single(3)
+                    } else {
+                        Route::Local
+                    }
+                } else {
+                    Route::Local
+                }
+            }
+            b"SCRIPT" => Route::Local,
             b"XREAD" => cmd_block::xread_route(args),
             b"XREADGROUP" => cmd_block::xreadgroup_route(args),
             // XGROUP / XINFO key is at args[2] (after the subcommand).

@@ -110,6 +110,29 @@ fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
         // cross-shard arbiter fans watch registrations out to each key's
         // owning shard, see kevy_rt::block_xshard. Routing by key would
         // strand the waiter on a shard that doesn't own the connection.)
+        // v1.27.1: EVAL/EVALSHA route by KEYS[1] (at argv[3]) when
+        // numkeys ≥ 1, so a multi-shard server lands the script on
+        // the shard that owns the keys it'll touch. With numkeys=0
+        // the script doesn't touch any specific shard's keyspace, so
+        // we let it run on the connection's own shard.
+        // SCRIPT subcommands all hit a process-global cache
+        // (see `crate::cmd_lua`), so Route::Local is fine for them.
+        b"EVAL" | b"EVALSHA" | b"EVAL_RO" | b"EVALSHA_RO" => {
+            if args.len() >= 4 {
+                let nk = std::str::from_utf8(&args[2])
+                    .ok()
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .unwrap_or(0);
+                if nk >= 1 && (args.len() as i64) >= 3 + nk {
+                    Route::Single(3)
+                } else {
+                    Route::Local
+                }
+            } else {
+                Route::Local
+            }
+        }
+        b"SCRIPT" => Route::Local,
         b"XREAD" => cmd_block::xread_route(args),
         b"XREADGROUP" => cmd_block::xreadgroup_route(args),
         // XGROUP / XINFO put the stream key at args[2] (after the
