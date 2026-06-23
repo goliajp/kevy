@@ -37,11 +37,17 @@ thread_local! {
 /// argv through `kevy::dispatch::dispatch_into` against the host
 /// `&mut Store`.
 fn make_lua_host() -> LuaHost<Store> {
-    LuaHost::<Store>::new(|store, argv, _read_only| {
-        // P7b: the read_only flag is currently ignored. Production
-        // wiring (P7c follow-up) consults `crate::cmd::is_write_verb`
-        // and rejects writes with the -READONLY reply. For now every
-        // call routes straight through — same shape as a non-RO EVAL.
+    LuaHost::<Store>::new(|store, argv, read_only| {
+        // P7c: read-only enforcement. EVAL_RO / EVALSHA_RO set
+        // read_only=true; reject writes per Redis semantics.
+        if read_only {
+            if let Some(cmd) = argv.first() {
+                let upper: Vec<u8> = cmd.iter().map(|b| b.to_ascii_uppercase()).collect();
+                if crate::cmd::is_write_verb(&upper) {
+                    return b"-READONLY can't write against a read-only script\r\n".to_vec();
+                }
+            }
+        }
         let mut a = Argv::default();
         for slice in argv {
             a.push(slice);
