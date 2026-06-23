@@ -17,7 +17,7 @@
 //! purpose, that's a separate `kevy-crypto` stone, not here.
 
 /// Compute the SHA-1 of `data`. Returns the 20-byte digest.
-pub(crate) fn sha1(data: &[u8]) -> [u8; 20] {
+pub fn sha1(data: &[u8]) -> [u8; 20] {
     let mut h: [u32; 5] = [
         0x6745_2301,
         0xEFCD_AB89,
@@ -85,7 +85,7 @@ pub(crate) fn sha1(data: &[u8]) -> [u8; 20] {
 }
 
 /// Format a 20-byte SHA-1 digest as 40 lowercase ASCII hex chars.
-pub(crate) fn hex(digest: &[u8; 20]) -> [u8; 40] {
+pub fn hex(digest: &[u8; 20]) -> [u8; 40] {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = [0u8; 40];
     for (i, &byte) in digest.iter().enumerate() {
@@ -97,7 +97,7 @@ pub(crate) fn hex(digest: &[u8; 20]) -> [u8; 40] {
 
 /// Parse a 40-character ASCII hex string into a SHA-1 digest.
 /// Returns `None` on malformed input (wrong length or non-hex chars).
-pub(crate) fn parse_hex(hex_str: &[u8]) -> Option<[u8; 20]> {
+pub fn parse_hex(hex_str: &[u8]) -> Option<[u8; 20]> {
     if hex_str.len() != 40 {
         return None;
     }
