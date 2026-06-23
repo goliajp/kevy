@@ -190,12 +190,10 @@ perf sprint.
 
 | Item | Status |
 |---|---|
-| `cjson` / `cmsgpack` | Not implemented. C interface dependencies — violate kevy's 0-dep rule. Will revisit if a pure-Rust replacement appears. |
+| `cjson` / `cmsgpack` | Not implemented in v1.27 — **scope decision, not a dependency blocker**. Both algorithms can be implemented in pure Rust (~500 LOC each) as kevy-lua host stdlib modules. **Required to unblock BullMQ / Sidekiq Pro and other ecosystem libraries that bundle them as runtime deps.** Target v1.28. |
 | `FUNCTION LOAD` / `FCALL` | Not implemented. Redis 7.0 Functions surface. v1.28+. |
 | `LDB` debugger | Not implemented. Same on the Redis side for most users. v1.28+ if real demand. |
-| `EVAL_RO` write-flag enforcement | Stubbed. P7c follow-up consults `kevy::cmd::is_write_verb` and rejects writes. v1.27 currently doesn't error on writes in `EVAL_RO`. |
-| Cross-slot KEYS check in cluster mode | Not implemented. Single-shard EVAL works fine. v1.27 P7d. |
-| `lua-time-limit` config TOML | Not wired. Default 200M instr ≈ 5 s. v1.27 P7e. |
+| ~~Multi-shard EVAL routing~~ | **Fixed in v1.27.1.** EVAL/EVALSHA with `numkeys ≥ 1` now route to KEYS[1]'s shard via `Route::Single(3)`. SCRIPT cache moved to a process-global `Mutex<HashMap>` so SCRIPT LOAD on any shard reaches EVALSHA on any shard. Verified end-to-end against a 4-shard server in `crates/kevy/tests/lua_multishard.rs`. |
 | Nested EVAL (script calls `redis.call('EVAL', ...)`) | Returns `-ERR EVAL inside EVAL is not supported in v1.27`. Same restriction as real Redis. |
 
 See `.claude/rfcs/2026-06-23-v1.27-luna-bridge.md` for the
