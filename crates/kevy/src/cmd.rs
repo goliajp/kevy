@@ -123,6 +123,11 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"XCLAIM"
             | b"XAUTOCLAIM"
             | b"MSET"
+            // v1.27.3: EVAL/EVALSHA → writes so post_write_housekeeping
+            // fires (Lua wake-bridge drain). Read-only variants stay
+            // reads — cmd_lua already rejects writes inside _RO scripts.
+            | b"EVAL"
+            | b"EVALSHA"
     )
 }
 

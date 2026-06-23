@@ -4,6 +4,77 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.27.3] — 2026-06-24 (BullMQ end-to-end compatibility)
+
+**Headline: BullMQ — full Worker / Queue / QueueEvents lifecycle —
+runs end-to-end against kevy.** v1.27.0 shipped EVAL but BullMQ
+(and any Lua-using ecosystem library that depends on cmsgpack /
+cjson / BZPOPMIN / RPOPLPUSH / LMOVE / ZPOPMIN / LPOS / inner-Lua
+writes that should wake parked BLPOP / XREAD BLOCK) was blocked.
+v1.27.3 closes the loop.
+
+### Closed gates
+
+1. **`cmsgpack` Lua stdlib** — pure-Rust MessagePack
+   encoder/decoder installed as `cmsgpack` global. v1.27.0
+   blocker: `attempt to index a nil value (global 'cmsgpack')`.
+2. **`cjson` Lua stdlib** — pure-Rust JSON encoder/decoder
+   installed as `cjson` global. `cjson.null = nil` for v1.27.3.
+3. **`ZRANGEBYSCORE LIMIT offset count`** — was rejected with
+   wrong-arity; BullMQ uses `LIMIT 0 1` in its `moveToActive`.
+4. **8 missing Redis commands** that BullMQ scripts call:
+   `HMSET`, `RPOPLPUSH`, `LMOVE`, `ZPOPMIN`, `LPOS`,
+   `ZREMRANGEBYRANK`, `ZREMRANGEBYSCORE`, `ZREVRANGEBYSCORE`.
+   31 new unit tests.
+5. **`BZPOPMIN key [key ...] timeout`** — blocking ZPOPMIN, used
+   by BullMQ Worker to wait for new jobs. New `BlockKind::Bzpopmin`
+   variant mirrors BLPOP/BRPOP pattern. 11 new end-to-end tests
+   including wake-on-ZADD verification.
+6. **`redis.call` writes wake parked waiters** — root-cause fix.
+   v1.27.0/1/2 EVAL inner writes hit the Store directly and
+   bypassed the runtime's `post_write_housekeeping` (where
+   `wake_blocked_on_key` fires for parked BLPOP/BZPOPMIN/XREAD
+   BLOCK). Net effect: BullMQ Worker's BZPOPMIN never woke on
+   addJob; QueueEvents' XREAD BLOCK never woke on completed. Fix:
+   new `kevy_rt::lua_wake_bridge` thread-local buffer; the
+   `cmd_lua` dispatch closure pushes wake-triggering write keys
+   (LPUSH/RPUSH/XADD/ZADD/ZINCRBY) after each `redis.call`; the
+   runtime drains and fires `wake_key` for each at
+   post_write_housekeeping. Also marks EVAL/EVALSHA as `is_write`
+   so the runtime invokes post_write_housekeeping at all (was
+   missing — script body may write any key).
+
+### End-to-end verification
+
+Real BullMQ 5.79.1 against single-shard kevy (`--threads 1`):
+
+```
+✓ enqueued j1=1 j2=2 j3=3                ← atomic INCR + addJob script
+✓ worker got 1 x=7 / 2 x=21 / 3 x=100    ← BZPOPMIN wakes on enqueue
+← completed event for job 1/2/3          ← QueueEvents XREAD BLOCK wakes
+counts = {"completed":3, "failed":0}      ← Full lifecycle
+```
+
+### Known v1.27.3 limitation: cross-shard EVAL inner-call routing
+
+Under `--threads > 1`, `redis.call` inside EVAL still hits the
+local shard's Store (not the actual key's owner shard). This can
+cause atomic INCR collisions across shards (two `q.add()` may
+return the same job ID under default 16 shards) and silent
+mis-routes for multi-key Lua scripts whose keys hash to different
+shards. **Workaround for BullMQ today: `kevy --threads 1`.** Real
+Redis Cluster makes the same restriction explicit (CROSSSLOT
+error inside EVAL); v1.27.4 will either return CROSSSLOT or route
+inner calls to the actual key's shard.
+
+### Per-crate bumps
+- workspace        1.27.2 → 1.27.3
+- kevy-client      1.12.13 → 1.12.14
+- kevy-client-async 1.0.14 → 1.0.15
+- kevy-embedded     1.4.14 → 1.4.15
+- kevy-lua         1.27.2 → 1.27.3
+- kevy-lua-host    1.27.2 → 1.27.3
+
 ## [v1.27.2] — 2026-06-24 (test serialization fix for v1.27.1 cache change)
 
 v1.27.1 ship caught by CI verify on the lx64 runner: the v1.27.1
