@@ -46,6 +46,7 @@ mod cmd_block;
 mod cmd_block_serve;
 mod cmd_data;
 mod cmd_hello;
+mod cmd_lua;
 mod cmd_resolve;
 mod commands;
 mod config_global;

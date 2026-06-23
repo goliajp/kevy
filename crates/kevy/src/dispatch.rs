@@ -134,6 +134,8 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         || crate::dispatch_collections::dispatch_zset(cmd, store, args, out)
         || crate::dispatch_geo::dispatch_geo(cmd, store, args, out)
         || crate::dispatch_stream::dispatch_stream(cmd, store, args, out)
+        // v1.27 P7b: EVAL / EVALSHA / EVAL_RO / EVALSHA_RO / SCRIPT.
+        || crate::cmd_lua::dispatch_lua(cmd, store, args, out)
         || dispatch_generic(cmd, store, args, out)
         || dispatch_multikey_stub(cmd, out);
     if !handled {
