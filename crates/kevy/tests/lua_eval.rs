@@ -5,6 +5,7 @@
 
 use kevy_resp::Argv;
 use kevy_store::Store;
+use std::sync::{Mutex, OnceLock};
 
 /// Build an Argv from a slice of byte slices. Helper for the
 /// EVAL <script> <numkeys> <key>... <arg>... protocol shape.
@@ -14,6 +15,19 @@ fn argv(parts: &[&[u8]]) -> Argv {
         a.push(p);
     }
     a
+}
+
+/// v1.27.1 moved the SCRIPT cache from per-Bridge to a process-
+/// global Mutex<HashMap>. That makes a `SCRIPT FLUSH` from one test
+/// wipe scripts loaded by every other test in this binary.
+/// Serialize the SCRIPT-cache-touching tests so they don't race —
+/// silent on light schedulers (local Mac dev) but reliably observed
+/// on the heavily-parallel lx64 CI runner.
+fn script_cache_gate() -> std::sync::MutexGuard<'static, ()> {
+    static G: OnceLock<Mutex<()>> = OnceLock::new();
+    G.get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
 }
 
 #[test]
@@ -74,6 +88,7 @@ fn eval_missing_args_returns_wrong_args_err() {
 
 #[test]
 fn script_load_then_evalsha_round_trips() {
+    let _g = script_cache_gate();
     let mut store = Store::new();
     let load_reply = kevy::dispatch(
         &mut store,
@@ -90,6 +105,7 @@ fn script_load_then_evalsha_round_trips() {
 
 #[test]
 fn script_exists_reports_hits_and_misses() {
+    let _g = script_cache_gate();
     let mut store = Store::new();
     let load_reply = kevy::dispatch(
         &mut store,
@@ -106,6 +122,7 @@ fn script_exists_reports_hits_and_misses() {
 
 #[test]
 fn script_flush_clears_cache() {
+    let _g = script_cache_gate();
     let mut store = Store::new();
     let load_reply = kevy::dispatch(
         &mut store,
@@ -246,6 +263,7 @@ fn eval_ro_blocks_incrby_via_pcall_returns_err_table() {
 
 #[test]
 fn evalsha_ro_blocks_write_in_cached_script() {
+    let _g = script_cache_gate();
     let mut store = Store::new();
     let load_reply = kevy::dispatch(
         &mut store,
