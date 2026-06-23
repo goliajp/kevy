@@ -186,3 +186,98 @@ fn eval_shebang_lua_53_integer_divide_through_kevy() {
     // 10 // 3 = 3 (5.3+ integer divide) → INCRBY counter 3 → :3
     assert_eq!(reply, b":3\r\n");
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// P7c — EVAL_RO / EVALSHA_RO write-flag enforcement
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn eval_ro_blocks_set() {
+    let mut store = Store::new();
+    let reply = kevy::dispatch(
+        &mut store,
+        &argv(&[b"EVAL_RO", b"return redis.call('SET', KEYS[1], 'v')", b"1", b"k"]),
+    );
+    assert!(reply.starts_with(b"-READONLY "));
+}
+
+#[test]
+fn eval_ro_allows_get() {
+    let mut store = Store::new();
+    let _ = kevy::dispatch(&mut store, &argv(&[b"SET", b"k", b"hello"]));
+    let reply = kevy::dispatch(
+        &mut store,
+        &argv(&[b"EVAL_RO", b"return redis.call('GET', KEYS[1])", b"1", b"k"]),
+    );
+    assert_eq!(reply, b"$5\r\nhello\r\n");
+}
+
+#[test]
+fn eval_ro_blocks_del() {
+    let mut store = Store::new();
+    let _ = kevy::dispatch(&mut store, &argv(&[b"SET", b"k", b"v"]));
+    let reply = kevy::dispatch(
+        &mut store,
+        &argv(&[b"EVAL_RO", b"return redis.call('DEL', KEYS[1])", b"1", b"k"]),
+    );
+    assert!(reply.starts_with(b"-READONLY "));
+    // Key still present.
+    assert_eq!(
+        kevy::dispatch(&mut store, &argv(&[b"EXISTS", b"k"])),
+        b":1\r\n"
+    );
+}
+
+#[test]
+fn eval_ro_blocks_incrby_via_pcall_returns_err_table() {
+    let mut store = Store::new();
+    let reply = kevy::dispatch(
+        &mut store,
+        &argv(&[
+            b"EVAL_RO",
+            b"return redis.pcall('INCRBY', KEYS[1], 5)",
+            b"1",
+            b"counter",
+        ]),
+    );
+    // pcall catches the error → {err = "READONLY ..."} → -READONLY ...
+    assert!(reply.starts_with(b"-READONLY "));
+}
+
+#[test]
+fn evalsha_ro_blocks_write_in_cached_script() {
+    let mut store = Store::new();
+    let load_reply = kevy::dispatch(
+        &mut store,
+        &argv(&[b"SCRIPT", b"LOAD", b"return redis.call('SET', KEYS[1], ARGV[1])"]),
+    );
+    let sha_hex = load_reply[5..45].to_vec();
+    let ro = kevy::dispatch(
+        &mut store,
+        &argv(&[b"EVALSHA_RO", &sha_hex, b"1", b"k", b"v"]),
+    );
+    assert!(ro.starts_with(b"-READONLY "));
+    // Same SHA via writeable EVALSHA works.
+    let rw = kevy::dispatch(
+        &mut store,
+        &argv(&[b"EVALSHA", &sha_hex, b"1", b"k", b"v"]),
+    );
+    assert_eq!(rw, b"+OK\r\n");
+}
+
+#[test]
+fn eval_writeable_resumes_after_eval_ro() {
+    let mut store = Store::new();
+    let r1 = kevy::dispatch(
+        &mut store,
+        &argv(&[b"EVAL_RO", b"return redis.call('SET', KEYS[1], 'v')", b"1", b"k"]),
+    );
+    assert!(r1.starts_with(b"-READONLY "));
+    // The next non-RO EVAL writes fine — the read_only flag was
+    // cleared by the LuaHost::eval_ro RAII guard.
+    let r2 = kevy::dispatch(
+        &mut store,
+        &argv(&[b"EVAL", b"return redis.call('SET', KEYS[1], 'v')", b"1", b"k"]),
+    );
+    assert_eq!(r2, b"+OK\r\n");
+}
