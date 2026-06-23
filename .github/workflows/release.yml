@@ -88,6 +88,7 @@ jobs:
             kevy-replicate \
             kevy-elect \
             kevy-rt kevy-embedded \
+            kevy-lua kevy-lua-host \
             kevy kevy-client \
             kevy-cluster-rw kevy-client-async | sort -u)
           expected=$(cargo metadata --no-deps --format-version 1 \
@@ -170,6 +171,7 @@ jobs:
             kevy-replicate \
             kevy-elect \
             kevy-rt kevy-embedded \
+            kevy-lua kevy-lua-host \
             kevy kevy-client \
             kevy-cluster-rw kevy-client-async; do
             publish_or_skip "$c"

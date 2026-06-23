@@ -4,6 +4,83 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.27.0] — 2026-06-23 (server-side Lua scripting via luna)
+
+Lua scripting headline:
+
+- New commands: `EVAL`, `EVALSHA`, `EVAL_RO`, `EVALSHA_RO`,
+  `SCRIPT LOAD` / `EXISTS` / `FLUSH`.
+- Backed by the in-house pure-Rust [luna](https://github.com/goliajp/luna)
+  runtime (`luna-core 1.1`, 0-dep interpreter — the kevy 0-dep
+  workspace rule is preserved; `cargo tree -p kevy-lua-host`
+  shows luna-core as the only third-party crate).
+- **Default Lua 5.1** (Redis ecosystem default — BullMQ / Redlock /
+  rate-limiter scripts run unmodified).
+- **Per-script `#!lua version=N` shebang** opts into Lua 5.2 / 5.3 /
+  5.4 / 5.5. Extends Redis 7.0's `#!lua name=...` Functions syntax
+  with a `version=` key. Unknown tags rejected with `-ERR unknown
+  lua version`.
+- Full `redis.*` host surface (call / pcall / status_reply /
+  error_reply / sha1hex / log / replicate_commands).
+- Read-only enforcement via `kevy::cmd::is_write_verb` — `EVAL_RO`
+  rejects writes with `-READONLY can't write against a read-only
+  script` (P7c).
+- Cluster-mode cross-slot enforcement — when `[cluster] enabled =
+  true`, multi-key EVAL whose KEYS hash to different CRC16 slots
+  returns `-CROSSSLOT Keys in request don't hash to the same slot`
+  (P7d).
+- TOML config:
+
+      [lua]
+      time_limit_ms = 5000              # match Redis lua-time-limit
+      allow_dialects = "5.1,5.3"        # comma-list; empty = all 5
+
+  Wires to luna's `set_instr_budget` (~40 000 instr/ms) + the
+  bridge's `allow_dialects` mask. Default `time_limit_ms = 5000`,
+  `allow_dialects = "" (all)` (P7e).
+- Two new crates added under the workspace 0-dep carved exemption
+  rule:
+  - `kevy-lua` — bridge (sandbox + redis.* + RESP marshaling +
+    shebang + SHA1 cache).
+  - `kevy-lua-host` — kevy-side glue (`LuaHost<T>` scoped-pointer
+    indirection so the dispatch closure can reach `&mut Store`).
+
+Coverage:
+
+- 112 kevy-lua + kevy-lua-host unit/integration tests.
+- 26 kevy-side end-to-end tests (`tests/lua_eval.rs` +
+  `tests/lua_cluster.rs`) covering EVAL/EVALSHA/SCRIPT round-trips,
+  shebang routing, read-only enforcement, cluster cross-slot, and
+  the canonical Redlock + atomic-counter scripts from the v1.27
+  ecosystem-survey corpus.
+- SHA-1 verified against openssl + 7 standard FIPS / RFC 3174
+  vectors.
+
+Independent crate version bumps (kevy-client tracks its own minor
+cadence, kevy-embedded + kevy-client-async are patch-level for the
+workspace bump):
+
+- workspace 1.26.6 → **1.27.0**
+- kevy-client 1.12.10 → 1.12.11
+- kevy-client-async 1.0.11 → 1.0.12
+- kevy-embedded 1.4.11 → 1.4.12
+- kevy-lua (new) → 1.27.0
+- kevy-lua-host (new) → 1.27.0
+
+Deferred to v1.28+:
+
+- `cjson` / `cmsgpack` (need pure-Rust replacements — kevy 0-dep
+  rule rejects C-interface ports).
+- `FUNCTION LOAD` / `FCALL` (Redis 7.0 Functions surface).
+- LDB-style script debugger.
+- Sliding-window rate limiter — needs kevy `ZREMRANGEBYSCORE`,
+  scheduled for the v1.26.x patch line.
+- i18n docs/lua mirrors (ja + zh-CN).
+
+Reference: [`docs/lua.md`](docs/lua.md).
+Reference: [`.claude/rfcs/2026-06-23-v1.27-luna-bridge.md`](.claude/rfcs/2026-06-23-v1.27-luna-bridge.md) (the v1.27 phase plan).
+
+
 ## [v1.26.6] — 2026-06-22 (v1.26.5 follow-up — stronger crates.io 429 backoff)
 
 v1.26.5's publish chain made it to crate #9 (kevy-map) before
