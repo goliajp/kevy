@@ -46,6 +46,8 @@ mod shebang;
 /// between the 20-byte digest used as a cache key and the 40-char
 /// ASCII hex Redis uses on the wire.
 pub mod sha1;
+mod cmsgpack;
+mod cjson;
 
 /// Re-export so callers can name the dialect without depending on
 /// luna-core directly.
@@ -351,6 +353,9 @@ impl Bridge {
             }
             let mut vm = builder.build();
             host::install_redis_table(&mut vm);
+            // v1.27.3: BullMQ + Sidekiq Pro require `cmsgpack` global.
+            cmsgpack::install_cmsgpack(&mut vm);
+            cjson::install_cjson(&mut vm);
             // Install the dispatch handle as a luna userdata global
             // (luna v1.1 B8). `redis.call` retrieves it via
             // `vm.userdata_borrow::<DispatchSlot>(DISPATCH_KEY)`. We

@@ -51,6 +51,7 @@ pub(crate) use entry::Entry;
 mod hash;
 mod keyspace;
 mod list;
+mod list_ops;
 mod set;
 mod small_set;
 pub use small_set::{SmallSetData, SmallSetIter};

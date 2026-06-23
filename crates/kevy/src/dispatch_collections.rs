@@ -9,6 +9,7 @@
 //! direct `store::*` call, and returns whether the verb was handled.
 
 use crate::cmd::{cmd_hset, wrong_args, emit_int_result, store_err, rest_borrowed, arg_i64, ERR_NOT_INT, emit_bulk_array, cmd_pop, cmd_blpop, cmd_zadd, fmt_score, arg_f64, cmd_zrange, cmd_zrangebyscore, parse_score_bound};
+use crate::dispatch_collections_v127::{cmd_lpos, cmd_zpopmin, cmd_zrevrangebyscore};
 use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
     encode_simple_string,
@@ -24,6 +25,24 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
 ) -> bool {
     match cmd {
         b"HSET" => cmd_hset(store, args, out),
+        // v1.27.3: deprecated `HMSET` alias — same wire shape as
+        // HSET (`HMSET key field value [field value ...]`), but
+        // returns `+OK` instead of the integer added-count. BullMQ
+        // ships scripts that still use it.
+        b"HMSET" => {
+            if args.len() < 4 || !args.len().is_multiple_of(2) {
+                wrong_args(out, "hmset");
+            } else {
+                let pairs: Vec<(&[u8], &[u8])> = (2..args.len())
+                    .step_by(2)
+                    .map(|i| (&args[i], &args[i + 1]))
+                    .collect();
+                match store.hset_borrowed(&args[1], &pairs) {
+                    Ok(_) => encode_simple_string(out, "OK"),
+                    Err(e) => store_err(out, e),
+                }
+            }
+        }
         b"HSETNX" => {
             if args.len() == 4 {
                 emit_int_result(
@@ -222,6 +241,50 @@ pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
                 encode_error(out, ERR_NOT_INT);
             }
         }
+        // v1.27.3: BullMQ uses RPOPLPUSH / LMOVE to shuffle jobs
+        // between `wait` and `active` lists. Same-shard only.
+        b"RPOPLPUSH" => {
+            if args.len() != 3 {
+                wrong_args(out, "rpoplpush");
+            } else {
+                match store.rpoplpush(&args[1], &args[2]) {
+                    Ok(Some(v)) => encode_bulk(out, &v),
+                    Ok(None) => encode_null_bulk(out),
+                    Err(e) => store_err(out, e),
+                }
+            }
+        }
+        b"LMOVE" => {
+            if args.len() != 5 {
+                wrong_args(out, "lmove");
+            } else {
+                let from = if args[3].eq_ignore_ascii_case(b"LEFT") {
+                    Some(true)
+                } else if args[3].eq_ignore_ascii_case(b"RIGHT") {
+                    Some(false)
+                } else {
+                    None
+                };
+                let to = if args[4].eq_ignore_ascii_case(b"LEFT") {
+                    Some(true)
+                } else if args[4].eq_ignore_ascii_case(b"RIGHT") {
+                    Some(false)
+                } else {
+                    None
+                };
+                match (from, to) {
+                    (Some(f), Some(t)) => match store.lmove(&args[1], &args[2], f, t) {
+                        Ok(Some(v)) => encode_bulk(out, &v),
+                        Ok(None) => encode_null_bulk(out),
+                        Err(e) => store_err(out, e),
+                    },
+                    _ => encode_error(out, "ERR syntax error"),
+                }
+            }
+        }
+        // v1.27.3: `LPOS key element [RANK n] [COUNT n] [MAXLEN n]`.
+        // BullMQ probes pending jobs by id via LPOS.
+        b"LPOS" => cmd_lpos(store, args, out),
         _ => return false,
     }
     true
@@ -302,6 +365,39 @@ pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
                 encode_error(out, "ERR min or max is not a float");
             }
         }
+        // v1.27.3: BullMQ scripts pop the lowest-scored delayed job
+        // with ZPOPMIN, and trim completed/failed job sets via the
+        // ZREMRANGEBY* family.
+        b"ZPOPMIN" => cmd_zpopmin(store, args, out),
+        b"ZREMRANGEBYRANK" => {
+            if args.len() != 4 {
+                wrong_args(out, "zremrangebyrank");
+            } else if let (Some(s), Some(e)) = (arg_i64(&args[2]), arg_i64(&args[3])) {
+                emit_int_result(
+                    store.zrem_range_by_rank(&args[1], s, e).map(|n| n as i64),
+                    out,
+                );
+            } else {
+                encode_error(out, ERR_NOT_INT);
+            }
+        }
+        b"ZREMRANGEBYSCORE" => {
+            if args.len() != 4 {
+                wrong_args(out, "zremrangebyscore");
+            } else if let (Some(min), Some(max)) =
+                (parse_score_bound(&args[2]), parse_score_bound(&args[3]))
+            {
+                emit_int_result(
+                    store
+                        .zrem_range_by_score(&args[1], min, max)
+                        .map(|n| n as i64),
+                    out,
+                );
+            } else {
+                encode_error(out, "ERR min or max is not a float");
+            }
+        }
+        b"ZREVRANGEBYSCORE" => cmd_zrevrangebyscore(store, args, out, kevy_resp::RespVersion::V2),
         _ => return false,
     }
     true
