@@ -178,6 +178,10 @@ fn cmd_eval<A: ArgvView + ?Sized>(
     let argv: Vec<&[u8]> = ((3 + numkeys)..args.len())
         .map(|i| args.get(i).unwrap_or(b""))
         .collect();
+    if let Some(crossslot) = cross_slot_check(&keys) {
+        out.extend_from_slice(&crossslot);
+        return;
+    }
     let reply = with_host(|h| {
         if read_only {
             h.eval_ro(store, script, &keys, &argv)
@@ -234,6 +238,10 @@ fn cmd_evalsha<A: ArgvView + ?Sized>(
     let argv: Vec<&[u8]> = ((3 + numkeys)..args.len())
         .map(|i| args.get(i).unwrap_or(b""))
         .collect();
+    if let Some(crossslot) = cross_slot_check(&keys) {
+        out.extend_from_slice(&crossslot);
+        return;
+    }
     let reply = with_host(|h| {
         if read_only {
             h.evalsha_ro(store, sha, &keys, &argv)
@@ -349,4 +357,37 @@ fn parse_uint(bytes: &[u8]) -> Option<usize> {
     let s = std::str::from_utf8(bytes).ok()?;
     let n: i64 = s.parse().ok()?;
     if n < 0 { None } else { Some(n as usize) }
+}
+
+/// v1.27 P7d: cluster-mode cross-slot check.
+///
+/// When `[cluster] enabled = true`, every key in a single EVAL /
+/// EVALSHA must hash to the same CRC16 slot — same constraint kevy
+/// already enforces for built-in multi-key commands at the cluster
+/// port. Returns `Some(-CROSSSLOT ...)` reply if the keys disagree;
+/// `None` when the check passes (single-key, empty-keys, or cluster
+/// mode off).
+///
+/// Single-shard mode (the v1.x default) skips the check entirely so
+/// non-cluster operators keep their existing behaviour.
+fn cross_slot_check(keys: &[&[u8]]) -> Option<Vec<u8>> {
+    if keys.len() < 2 {
+        return None;
+    }
+    let cfg = crate::config_global::get();
+    if !cfg.cluster.enabled {
+        return None;
+    }
+    let first = kevy_hash::key_hash_slot(keys[0]);
+    for k in &keys[1..] {
+        if kevy_hash::key_hash_slot(k) != first {
+            let mut out = Vec::new();
+            encode_error(
+                &mut out,
+                "CROSSSLOT Keys in request don't hash to the same slot",
+            );
+            return Some(out);
+        }
+    }
+    None
 }

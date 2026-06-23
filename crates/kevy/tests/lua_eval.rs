@@ -309,3 +309,49 @@ fn eval_under_default_budget_runs_modest_loop() {
     // to integer when round-trippable.
     assert_eq!(reply, b":500500\r\n");
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// P7d — cluster mode cross-slot enforcement.
+// Single-key / no-key EVALs are always safe regardless of cluster
+// state; the cross-slot path needs cluster mode globally enabled and
+// keys hashing to different slots. We don't flip the process-global
+// config here (would race other tests in the same binary); a
+// dedicated test binary `lua_cluster.rs` covers the cluster-enabled
+// CROSSSLOT path in isolation.
+// ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn eval_single_key_never_cross_slots() {
+    let mut store = Store::new();
+    // Single key, irrelevant of cluster mode.
+    let reply = kevy::dispatch(
+        &mut store,
+        &argv(&[b"EVAL", b"return KEYS[1]", b"1", b"k"]),
+    );
+    assert_eq!(reply, b"$1\r\nk\r\n");
+}
+
+#[test]
+fn eval_zero_keys_never_cross_slots() {
+    let mut store = Store::new();
+    let reply = kevy::dispatch(&mut store, &argv(&[b"EVAL", b"return 1", b"0"]));
+    assert_eq!(reply, b":1\r\n");
+}
+
+#[test]
+fn eval_multi_key_cluster_off_passes() {
+    let mut store = Store::new();
+    // Cluster off (default) — multi-key EVAL must NOT be rejected
+    // even when the keys would map to different slots.
+    let reply = kevy::dispatch(
+        &mut store,
+        &argv(&[
+            b"EVAL",
+            b"return KEYS[1] .. '+' .. KEYS[2]",
+            b"2",
+            b"foo",
+            b"bar",
+        ]),
+    );
+    assert_eq!(reply, b"$7\r\nfoo+bar\r\n");
+}
