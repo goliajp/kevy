@@ -5,11 +5,24 @@
 # Every algorithm and data structure is written in Rust — no third-party crate,
 # no C library for logic. See crates/kevy-sys for the sole libc boundary.
 #
-# Sole carved exemption: `crates/kevy-client-async` may depend on tokio /
-# smol / async-std behind feature gates (the Rust async ecosystem has no
-# std-only viable substrate). Rules + audit method recorded in memory
-# `feedback-pure-rust-no-c-principle.md` and RFC `2026-06-18-v3-cluster.md`
-# F5. The exemption is per-crate, not workspace-wide.
+# Carved exemptions (per-crate, NOT workspace-wide):
+# 1. `crates/kevy-client-async` may depend on tokio / smol / async-std behind
+#    feature gates — the Rust async ecosystem has no std-only viable
+#    substrate. Rules + audit recorded in memory
+#    `feedback-pure-rust-no-c-principle.md` + RFC
+#    `2026-06-18-v3-cluster.md` F5.
+# 2. `crates/kevy-lua` (v1.27) depends on `luna-core` — GOLIA's own pure-Rust
+#    Lua runtime, itself 0-dep (CI-enforced via cargo-deny on luna's side).
+#    Adding luna-core to kevy adds **0 new transitive third-party crates**.
+#    Verify (filter workspace path-deps + (*) repeats):
+#      cargo tree -p kevy-lua --prefix none \
+#        | grep -E " v[0-9]" | grep -v "(\*)" \
+#        | grep -v "(/Users/doracawl/workspace/goliajp/kevy/" | wc -l
+#    must equal 1 (just luna-core). Rules + decision history in memory
+#    `project-lua-runtime-direction.md`.
+#
+# Both exemptions are per-crate. The default server, blocking-client,
+# embedded, and persistence stacks remain 0 third-party deps.
 [workspace]
 resolver = "3"
 members = [
@@ -38,6 +51,7 @@ members = [
     "crates/kevy-elect",
     "crates/kevy-scope",
     "crates/kevy-client-async",
+    "crates/kevy-lua",
 ]
 
 [workspace.package]

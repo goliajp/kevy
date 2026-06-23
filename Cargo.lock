@@ -521,6 +521,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-lua"
+version = "1.26.6"
+dependencies = [
+ "kevy-bench",
+ "kevy-bytes",
+ "kevy-resp",
+ "luna-core",
+]
+
+[[package]]
 name = "kevy-madvise"
 version = "1.26.6"
 
@@ -662,6 +672,12 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
 ]
+
+[[package]]
+name = "luna-core"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d94110b474c347baf1348ae7fd083c768243b4626c45f2e5fc4b3f830b8df48"
 
 [[package]]
 name = "matchers"

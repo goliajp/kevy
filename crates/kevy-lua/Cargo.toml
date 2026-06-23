@@ -1,0 +1,47 @@
+[package]
+name = "kevy-lua"
+description = "Lua scripting bridge for kevy — wraps the luna-core interpreter into the Redis EVAL/EVALSHA/SCRIPT command surface with default Lua 5.1 + per-script `#!lua version=N` dialect opt-in (5.1-5.5)."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-lua"
+readme = "README.md"
+keywords = ["redis", "lua", "kevy", "script", "embedded"]
+categories = ["database-implementations", "embedded"]
+
+[lints]
+workspace = true
+
+# v1.27 carved exemption from the workspace's "0 third-party deps" rule.
+# Justification (memory `project-lua-runtime-direction.md`):
+#   1. luna is GOLIA's own pure-Rust Lua runtime — same author,
+#      same audit standard.
+#   2. luna-core itself is 0-dep (CI-enforced via cargo-deny on the
+#      luna side; `cargo tree -p luna-core` must equal 1).
+#   3. Adding luna-core here adds **0 new transitive third-party deps**
+#      to kevy's tree (luna-core's own [dependencies] is empty). Verify
+#      (filter out workspace path-deps and `(*)` repeats):
+#         cargo tree -p kevy-lua --prefix none \
+#           | grep -E " v[0-9]" \
+#           | grep -v "(\*)" \
+#           | grep -v "(/Users/doracawl/workspace/goliajp/kevy/" \
+#           | wc -l
+#      must equal 1 (luna-core only).
+#   4. DO NOT use the `luna` or `luna-jit` crates — `luna` was renamed to
+#      `luna-jit` at v1.1 ship time (the `luna` name on crates.io was
+#      taken by an unrelated utilities crate), and `luna-jit` pulls in
+#      74 transitive cranelift + std-ecosystem crates. kevy must stay
+#      with `luna-core`.
+[dependencies]
+luna-core = "=1.1.0"   # pinned exact: luna v1.1 ergo surface (B1-B6,
+                       # native_typed, Lua facade) is what kevy-lua
+                       # is wired against. Bumping to 1.2+ needs a
+                       # bridge audit pass.
+kevy-bytes = { path = "../kevy-bytes", version = "1.19.0" }
+kevy-resp = { path = "../kevy-resp", version = "1.19.0" }
+
+[dev-dependencies]
+kevy-bench = { path = "../kevy-bench" }
