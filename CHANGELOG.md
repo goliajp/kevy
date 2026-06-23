@@ -4,6 +4,29 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.27.2] — 2026-06-24 (test serialization fix for v1.27.1 cache change)
+
+v1.27.1 ship caught by CI verify on the lx64 runner: the v1.27.1
+process-global SCRIPT cache (which is correct production behaviour)
+means `SCRIPT FLUSH` from one test in `tests/lua_eval.rs` wipes
+scripts loaded by other tests in the same binary. Local Mac dev's
+lighter parallelism let this slide; lx64's heavier scheduler
+surfaced `evalsha_ro_blocks_write_in_cached_script` failing because
+another concurrent test flushed mid-LOAD-then-EVALSHA.
+
+Fix: same `script_cache_gate()` Mutex pattern already used in
+`tests/lua_multishard.rs` (added in v1.27.1) applied to the four
+SCRIPT-cache-touching tests in `lua_eval.rs`. No production code
+changes.
+
+Independent crate version bumps:
+- workspace        1.27.1 → 1.27.2
+- kevy-client      1.12.12 → 1.12.13
+- kevy-client-async 1.0.13 → 1.0.14
+- kevy-embedded     1.4.13 → 1.4.14
+- kevy-lua         1.27.1 → 1.27.2
+- kevy-lua-host    1.27.1 → 1.27.2
+
 ## [v1.27.1] — 2026-06-24 (multi-shard EVAL/EVALSHA routing fix)
 
 Bug fix discovered in real-ecosystem validation (`ioredis` against a
