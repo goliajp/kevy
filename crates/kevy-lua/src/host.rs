@@ -101,12 +101,22 @@ fn redis_error_reply(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> 
     Ok(vm.nat_return(fs, &[Value::Table(t)]))
 }
 
-/// `redis.sha1hex(s)` — SHA1 hex digest. Used by scripts that
-/// compute SCRIPT cache keys client-side. Implementation deferred to
-/// P5 (alongside the real SHA1 cache) — for now returns 40 zeros so
-/// callers see a syntactically-correct hex string.
-fn redis_sha1hex(vm: &mut Vm, fs: u32, _nargs: u32) -> Result<u32, LuaError> {
-    let v = Value::Str(vm.heap.intern(b"0000000000000000000000000000000000000000"));
+/// `redis.sha1hex(s)` — SHA1 hex digest of the argument. Used by
+/// scripts that pre-compute SCRIPT cache keys client-side.
+fn redis_sha1hex(vm: &mut Vm, fs: u32, nargs: u32) -> Result<u32, LuaError> {
+    let bytes = if nargs >= 1 {
+        match vm.nat_arg(fs, nargs, 0) {
+            Value::Str(s) => s.as_bytes().to_vec(),
+            Value::Int(n) => n.to_string().into_bytes(),
+            Value::Float(f) => format!("{f}").into_bytes(),
+            _ => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    let digest = crate::sha1::sha1(&bytes);
+    let hex = crate::sha1::hex(&digest);
+    let v = Value::Str(vm.heap.intern(&hex));
     Ok(vm.nat_return(fs, &[v]))
 }
 
