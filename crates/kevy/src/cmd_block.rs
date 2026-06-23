@@ -31,6 +31,10 @@ pub(crate) fn block_hint_for_verb<A: ArgvView + ?Sized>(
     match upper {
         b"BLPOP" => blpop_hint(BlockKind::Blpop, args),
         b"BRPOP" => blpop_hint(BlockKind::Brpop, args),
+        // BZPOPMIN has the same argv shape as BLPOP/BRPOP
+        // (`key [key ...] timeout`), so the same parser applies — only the
+        // BlockKind discriminator (and downstream serve / reply shape) differ.
+        b"BZPOPMIN" => blpop_hint(BlockKind::Bzpopmin, args),
         b"XREAD" => xread_block_hint(args),
         b"XREADGROUP" => xreadgroup_block_hint(args),
         _ => BlockHint::None,
@@ -300,7 +304,12 @@ pub(crate) fn xreadgroup_route<A: ArgvView + ?Sized>(args: &A) -> Route {
 /// workload (the steady state) pays one inline `Option` discriminant
 /// check on every write.
 pub(crate) fn wake_idx_for_verb(upper: &[u8]) -> Option<u8> {
-    matches!(upper, b"LPUSH" | b"RPUSH" | b"XADD").then_some(1)
+    // LPUSH / RPUSH feed BLPOP / BRPOP; XADD feeds XREAD BLOCK / XREADGROUP
+    // BLOCK; ZADD / ZINCRBY feed BZPOPMIN (the only ways a sorted set gains
+    // a member from being empty / a smaller-scored member arrives at the
+    // front). ZREM / ZPOPMIN / ZREMRANGEBY* only shrink, so they can't
+    // satisfy a parked BZPOPMIN — leaving them out of the wake set.
+    matches!(upper, b"LPUSH" | b"RPUSH" | b"XADD" | b"ZADD" | b"ZINCRBY").then_some(1)
 }
 
 /// Materialise the parked argv for an `XREAD BLOCK ... STREAMS k1 ...

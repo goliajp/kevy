@@ -47,7 +47,7 @@ pub(crate) fn unix_now_ms() -> u64 {
 pub(crate) fn encode_block_timeout(out: &mut Vec<u8>, kind: BlockKind, proto: RespVersion) {
     match (proto, kind) {
         (RespVersion::V3, _) => out.extend_from_slice(b"_\r\n"),
-        (RespVersion::V2, BlockKind::Blpop | BlockKind::Brpop) => {
+        (RespVersion::V2, BlockKind::Blpop | BlockKind::Brpop | BlockKind::Bzpopmin) => {
             out.extend_from_slice(b"*-1\r\n");
         }
         (RespVersion::V2, BlockKind::XReadBlock | BlockKind::XReadGroupBlock) => {
@@ -62,6 +62,10 @@ pub(crate) fn encode_block_timeout(out: &mut Vec<u8>, kind: BlockKind, proto: Re
 pub enum BlockKind {
     Blpop,
     Brpop,
+    /// `BZPOPMIN key [key ...] timeout` — block until a sorted set has a
+    /// member, then pop the lowest-scored one. Same arm-and-serve flow as
+    /// `BLPOP`; the reply shape adds a third bulk (the score).
+    Bzpopmin,
     XReadBlock,
     XReadGroupBlock,
 }
