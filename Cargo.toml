@@ -20,6 +20,12 @@
 #        | grep -v "(/Users/doracawl/workspace/goliajp/kevy/" | wc -l
 #    must equal 1 (just luna-core). Rules + decision history in memory
 #    `project-lua-runtime-direction.md`.
+# 3. `crates/kevy-lua-host` (v1.27 P7) is the kevy-side glue that lets
+#    kevy-lua's `Bridge` reach `&mut Store` via a tiny scoped-pointer
+#    indirection. Pulls one (1) crates.io dep transitively: same
+#    `luna-core` as exemption #2 (via path-dep on kevy-lua). Same
+#    verification: `cargo tree -p kevy-lua-host` must show luna-core
+#    as the only third-party crate.
 #
 # Both exemptions are per-crate. The default server, blocking-client,
 # embedded, and persistence stacks remain 0 third-party deps.
@@ -52,6 +58,7 @@ members = [
     "crates/kevy-scope",
     "crates/kevy-client-async",
     "crates/kevy-lua",
+    "crates/kevy-lua-host",
 ]
 
 [workspace.package]

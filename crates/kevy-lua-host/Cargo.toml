@@ -1,0 +1,25 @@
+[package]
+name = "kevy-lua-host"
+description = "kevy-side glue between the kevy-lua bridge and the kevy server's command dispatch path. Owns the per-shard Lua Bridge plus the scoped raw-pointer indirection that lets the bridge's dispatch closure reach `&mut T` shard state without crates.io thread-local helpers."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-lua-host"
+readme = "README.md"
+keywords = ["redis", "lua", "kevy", "host", "script"]
+categories = ["database-implementations"]
+
+[lints]
+workspace = true
+
+# Carved exemption matches kevy-lua's: transitively pulls luna-core (0 dep)
+# and nothing else third-party. Verify:
+#   cargo tree -p kevy-lua-host --prefix none \
+#     | grep -E " v[0-9]" | grep -v "(\*)" \
+#     | grep -v "(/Users/doracawl/workspace/goliajp/kevy/" | wc -l
+# must equal 1 (luna-core).
+[dependencies]
+kevy-lua = { path = "../kevy-lua", version = "=1.26.6" }
