@@ -73,6 +73,7 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"GETDEL"
             | b"INCRBYFLOAT"
             | b"DEL"
+            | b"UNLINK"
             | b"INCR"
             | b"DECR"
             | b"INCRBY"
@@ -123,11 +124,8 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"XCLAIM"
             | b"XAUTOCLAIM"
             | b"MSET"
-            // v1.27.3: EVAL/EVALSHA → writes so post_write_housekeeping
-            // fires (Lua wake-bridge drain). Read-only variants stay
-            // reads — cmd_lua already rejects writes inside _RO scripts.
-            | b"EVAL"
-            | b"EVALSHA"
+            // v1.27.3: EVAL/EVALSHA writes so Lua wake-bridge drains.
+            | b"EVAL" | b"EVALSHA"
     )
 }
 
@@ -165,7 +163,7 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
         | b"XAUTOCLAIM" | b"XREADGROUP" => NotifyClass::Stream,
         // Generic — class `g`. (DEL single-key falls here; multi-key DEL
         // is routed through Op::Del + maybe_notify_del directly.)
-        b"DEL" | b"EXPIRE" | b"PEXPIRE" | b"PERSIST" => NotifyClass::Generic,
+        b"DEL" | b"UNLINK" | b"EXPIRE" | b"PEXPIRE" | b"PERSIST" => NotifyClass::Generic,
         // Reads, admin, pub/sub etc. — no notification.
         _ => return None,
     })

@@ -78,7 +78,7 @@ impl Commands for KevyCommands {
             b"XGROUP" | b"XINFO" if args.len() >= 3 => Route::Single(2),
             b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),
             // DEL/EXISTS are single-key (fast path) unless given multiple keys.
-            b"DEL" => {
+            b"DEL" | b"UNLINK" => {
                 if args.len() == 2 {
                     Route::Single(1)
                 } else {

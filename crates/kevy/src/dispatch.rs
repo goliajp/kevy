@@ -375,9 +375,15 @@ fn dispatch_generic<A: ArgvView + ?Sized>(
     out: &mut Vec<u8>,
 ) -> bool {
     match cmd {
-        b"DEL" => {
+        // UNLINK is the Redis 4.0+ async-delete variant; kevy's
+        // single-thread-per-shard model makes the "async" part
+        // moot (no other reactor steps happen during DEL), so it
+        // aliases DEL byte-for-byte. Sidekiq's heartbeat depends
+        // on it.
+        b"DEL" | b"UNLINK" => {
+            let verb = if cmd == b"DEL" { "del" } else { "unlink" };
             if args.len() < 2 {
-                wrong_args(out, "del");
+                wrong_args(out, verb);
             } else {
                 encode_integer(out, store.del_borrowed(&rest_borrowed(args, 1)) as i64);
             }

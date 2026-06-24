@@ -9,7 +9,9 @@
 //! direct `store::*` call, and returns whether the verb was handled.
 
 use crate::cmd::{cmd_hset, wrong_args, emit_int_result, store_err, rest_borrowed, arg_i64, ERR_NOT_INT, emit_bulk_array, cmd_pop, cmd_blpop, cmd_zadd, fmt_score, arg_f64, cmd_zrange, cmd_zrangebyscore, parse_score_bound};
-use crate::dispatch_collections_v127::{cmd_bzpopmin, cmd_lpos, cmd_zpopmin, cmd_zrevrangebyscore};
+use crate::dispatch_collections_v127::{
+    cmd_bzpopmin, cmd_hscan, cmd_lpos, cmd_sscan, cmd_zpopmin, cmd_zrevrangebyscore, cmd_zscan,
+};
 use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
     encode_simple_string,
@@ -369,6 +371,9 @@ pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
         // with ZPOPMIN, and trim completed/failed job sets via the
         // ZREMRANGEBY* family.
         b"ZPOPMIN" => cmd_zpopmin(store, args, out),
+        b"SSCAN" => cmd_sscan(store, args, out),
+        b"HSCAN" => cmd_hscan(store, args, out),
+        b"ZSCAN" => cmd_zscan(store, args, out),
         // v1.27.3: BullMQ workers dequeue jobs by blocking on the
         // `wait` zset via BZPOPMIN (lowest-scored = oldest priority).
         b"BZPOPMIN" => cmd_bzpopmin(store, args, out),
