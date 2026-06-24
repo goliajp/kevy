@@ -4,6 +4,40 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.27.7] — 2026-06-24 (Bee Queue + Celery ecosystem unblock — BRPOPLPUSH)
+
+Two more ecosystems verified end-to-end against kevy:
+
+### Bee Queue 1.7 (Node) — **5/5 passed**
+5 jobs enqueued + processed by worker. Bee Queue is the BullMQ-author's
+leaner alternative; uses ~12 Lua scripts + BRPOPLPUSH for atomic
+job moves.
+
+### Celery 5.6.3 (Python) — **4/4 passed**
+Real `celery worker` process running against kevy as both broker
+and result backend. 3 tasks dispatched + results fetched
+back through Celery's `AsyncResult.get()` API.
+
+### BRPOPLPUSH added
+
+Blocking variant of RPOPLPUSH that Bee Queue (and other older Lua
+queue libs) use. Pattern mirrors BZPOPMIN: new `BlockKind::Brpoplpush`
+variant, `brpoplpush_hint`/`brpoplpush_serve` follow the
+single-key park shape. Reply is single bulk (the moved element)
+on success, nil bulk on timeout. Wakes on LPUSH/RPUSH to the
+source key — same `wake_idx` already declared by those write verbs.
+
+Deprecated by Redis 6.2 in favour of BLMOVE, but Bee Queue uses
+the older form.
+
+### Per-crate bumps
+- workspace        1.27.6 → 1.27.7
+- kevy-client      1.12.17 → 1.12.18
+- kevy-client-async 1.0.18 → 1.0.19
+- kevy-embedded     1.4.18 → 1.4.19
+- kevy-lua         1.27.6 → 1.27.7
+- kevy-lua-host    1.27.6 → 1.27.7
+
 ## [v1.27.6] — 2026-06-24 (CI stability — replication test race fix)
 
 v1.27.5 verify failed on the lx64 self-hosted CI runner with a

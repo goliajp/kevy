@@ -256,6 +256,29 @@ pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
                 }
             }
         }
+        // v1.27.7 BRPOPLPUSH source destination timeout — blocking
+        // form of RPOPLPUSH. Tries the eager pop first; on empty
+        // source, leaves `out` untouched so the dispatcher parks the
+        // conn via the BlockHint registered for this verb.
+        b"BRPOPLPUSH" => {
+            if args.len() != 4 {
+                wrong_args(out, "brpoplpush");
+            } else if std::str::from_utf8(&args[3])
+                .ok()
+                .and_then(|s| s.parse::<f64>().ok())
+                .filter(|f| f.is_finite() && *f >= 0.0)
+                .is_none()
+            {
+                encode_error(out, "ERR timeout is not a float or out of range");
+            } else {
+                match store.rpoplpush(&args[1], &args[2]) {
+                    Ok(Some(v)) => encode_bulk(out, &v),
+                    // Empty src → leave out empty so runtime parks.
+                    Ok(None) => {}
+                    Err(e) => store_err(out, e),
+                }
+            }
+        }
         b"LMOVE" => {
             if args.len() != 5 {
                 wrong_args(out, "lmove");

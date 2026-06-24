@@ -53,6 +53,11 @@ pub(crate) fn encode_block_timeout(out: &mut Vec<u8>, kind: BlockKind, proto: Re
         (RespVersion::V2, BlockKind::XReadBlock | BlockKind::XReadGroupBlock) => {
             out.extend_from_slice(b"$-1\r\n");
         }
+        // BRPOPLPUSH on timeout returns nil bulk (the would-be moved
+        // element). Same shape as XREAD timeout.
+        (RespVersion::V2, BlockKind::Brpoplpush) => {
+            out.extend_from_slice(b"$-1\r\n");
+        }
     }
 }
 
@@ -66,6 +71,13 @@ pub enum BlockKind {
     /// member, then pop the lowest-scored one. Same arm-and-serve flow as
     /// `BLPOP`; the reply shape adds a third bulk (the score).
     Bzpopmin,
+    /// `BRPOPLPUSH source destination timeout` — atomic blocking
+    /// right-pop from `source` + left-push to `destination`. Parks
+    /// on `source` only. Reply: single bulk of the moved element on
+    /// success, nil bulk on timeout. Deprecated since Redis 6.2 in
+    /// favour of BLMOVE, but Bee Queue (and many older clients)
+    /// still emit it.
+    Brpoplpush,
     XReadBlock,
     XReadGroupBlock,
 }
