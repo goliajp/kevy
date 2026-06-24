@@ -35,6 +35,8 @@ pub(crate) fn block_hint_for_verb<A: ArgvView + ?Sized>(
         // (`key [key ...] timeout`), so the same parser applies — only the
         // BlockKind discriminator (and downstream serve / reply shape) differ.
         b"BZPOPMIN" => blpop_hint(BlockKind::Bzpopmin, args),
+        // BRPOPLPUSH src dst timeout — single-key park on `src`.
+        b"BRPOPLPUSH" => brpoplpush_hint(args),
         b"XREAD" => xread_block_hint(args),
         b"XREADGROUP" => xreadgroup_block_hint(args),
         _ => BlockHint::None,
@@ -44,6 +46,30 @@ pub(crate) fn block_hint_for_verb<A: ArgvView + ?Sized>(
 /// `BLPOP key [key …] timeout` — last arg is the timeout, the rest are
 /// watched list keys (≥ 1). Malformed timeout → `None` so `cmd_blpop`
 /// emits the precise error and the dispatcher skips registration.
+/// `BRPOPLPUSH source destination timeout` — argv shape is fixed-3,
+/// park on `source` only (single-key form). The replay reconstructs
+/// destination from the original argv via
+/// `cmd_block_serve::brpoplpush_serve`.
+fn brpoplpush_hint<A: ArgvView + ?Sized>(args: &A) -> BlockHint {
+    if args.len() != 4 {
+        return BlockHint::None;
+    }
+    let Ok(s) = std::str::from_utf8(&args[3]) else {
+        return BlockHint::None;
+    };
+    let Ok(secs) = s.parse::<f64>() else {
+        return BlockHint::None;
+    };
+    if !secs.is_finite() || secs < 0.0 {
+        return BlockHint::None;
+    }
+    BlockHint::Block {
+        kind: BlockKind::Brpoplpush,
+        keys: vec![args[1].to_vec()],
+        timeout_ms: (secs * 1000.0) as u64,
+    }
+}
+
 fn blpop_hint<A: ArgvView + ?Sized>(kind: BlockKind, args: &A) -> BlockHint {
     if args.len() < 3 {
         return BlockHint::None;

@@ -24,11 +24,31 @@ pub(crate) fn block_serve_argv<A: ArgvView + ?Sized>(
         BlockKind::Blpop => pop_serve(b"BLPOP", key),
         BlockKind::Brpop => pop_serve(b"BRPOP", key),
         BlockKind::Bzpopmin => pop_serve(b"BZPOPMIN", key),
+        BlockKind::Brpoplpush => brpoplpush_serve(args, key),
         BlockKind::XReadBlock => xread_serve(args, key).unwrap_or_else(|| args.to_argv()),
         BlockKind::XReadGroupBlock => {
             xreadgroup_serve(args, key).unwrap_or_else(|| args.to_argv())
         }
     }
+}
+
+/// `BRPOPLPUSH src dst 0` — single-key form for the replay. `key`
+/// (passed by the arbiter) is the source that woke; the destination
+/// is at `args[2]` of the original `BRPOPLPUSH source destination
+/// timeout` argv.
+fn brpoplpush_serve<A: ArgvView + ?Sized>(args: &A, key: &[u8]) -> Argv {
+    let mut a = Argv::default();
+    a.push(b"BRPOPLPUSH");
+    a.push(key);
+    if let Some(dst) = args.get(2) {
+        a.push(dst);
+    } else {
+        // Malformed original — fall back to a no-op key so dispatch
+        // emits the args error rather than panicking.
+        a.push(b"");
+    }
+    a.push(b"0");
+    a
 }
 
 /// `BLPOP key 0` / `BRPOP key 0` — a single-key, block-forever replay; the
@@ -152,7 +172,7 @@ pub(crate) fn block_ready<A: ArgvView + ?Sized>(
     kind: BlockKind,
 ) -> bool {
     match kind {
-        BlockKind::Blpop | BlockKind::Brpop => serve_argv
+        BlockKind::Blpop | BlockKind::Brpop | BlockKind::Brpoplpush => serve_argv
             .get(1)
             .is_some_and(|k| store.llen(k).is_ok_and(|n| n > 0)),
         BlockKind::Bzpopmin => serve_argv
