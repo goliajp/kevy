@@ -1117,7 +1117,20 @@ fn server_as_replica_applies_upstream_writes() {
     let replica = ReplicaServer::start(primary.replication_base);
 
     // Poll the replica until all 5 keys are visible (or timeout).
-    let mut reader = std::net::TcpStream::connect(("127.0.0.1", replica.port)).unwrap();
+    // Retry connect — on heavily-loaded lx64 CI the runtime may
+    // bind the port (which start's poll saw) but the accept loop
+    // needs an extra moment before serving on it. 20ms × 500 = 10s
+    // hard cap.
+    let mut reader = (0..500)
+        .find_map(|_| {
+            std::net::TcpStream::connect(("127.0.0.1", replica.port))
+                .ok()
+                .or_else(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    None
+                })
+        })
+        .expect("replica accept loop never became ready within 10s");
     let mut all_seen = false;
     for _ in 0..200 {
         let mut got_all = true;

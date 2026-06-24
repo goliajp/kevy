@@ -4,6 +4,29 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.27.6] — 2026-06-24 (CI stability — replication test race fix)
+
+v1.27.5 verify failed on the lx64 self-hosted CI runner with a
+`ConnectionRefused` in `server_as_replica_applies_upstream_writes`.
+`ReplicaServer::start`'s 2s port-poll succeeded but the runtime's
+accept loop needed an extra moment to fully bind on the loaded
+runner — the test's subsequent unwrap()'d connect raced and lost.
+
+Fix: retry-with-backoff on the post-start connect (20ms × 500 =
+10s hard cap). No production code changes; verify on local Mac
+passes immediately, lx64 CI now has the headroom it needed.
+
+v1.27.5's actual content (Sidekiq + node-redlock unblock + UNLINK +
+SSCAN/HSCAN/ZSCAN) is included transitively in v1.27.6's tag.
+
+### Per-crate bumps
+- workspace        1.27.5 → 1.27.6
+- kevy-client      1.12.16 → 1.12.17
+- kevy-client-async 1.0.17 → 1.0.18
+- kevy-embedded     1.4.17 → 1.4.18
+- kevy-lua         1.27.5 → 1.27.6
+- kevy-lua-host    1.27.5 → 1.27.6
+
 ## [v1.27.5] — 2026-06-24 (Sidekiq + node-redlock ecosystem unblock)
 
 User: "都跑" — run BOTH Sidekiq (Ruby) and node-redlock end-to-end against kevy. Surfaced 4 more missing commands; all fixed in this same session per the no-defer rule.
