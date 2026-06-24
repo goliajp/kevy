@@ -14,7 +14,7 @@ description = "Unified client for kevy — switch between in-process embedded an
 # Reply variants out of EXEC's reply array. Patch 1.7.1 picks up the
 # workspace 1.4.2 chain + an internal split of `subscribe.rs` (no
 # API change — pure refactor under the 500-LOC house rule).
-version = "1.12.16"
+version = "1.12.17"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true

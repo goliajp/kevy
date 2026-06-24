@@ -414,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "kevy"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy-bench",
  "kevy-client",
@@ -435,11 +435,11 @@ dependencies = [
 
 [[package]]
 name = "kevy-bench"
-version = "1.27.5"
+version = "1.27.6"
 
 [[package]]
 name = "kevy-bytes"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy-bench",
  "kevy-hash",
@@ -447,7 +447,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-cli"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy-resp",
  "kevy-resp-client",
@@ -455,7 +455,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-client"
-version = "1.12.16"
+version = "1.12.17"
 dependencies = [
  "kevy-embedded",
  "kevy-hash",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-client-async"
-version = "1.0.17"
+version = "1.0.18"
 dependencies = [
  "async-std",
  "kevy-client",
@@ -477,7 +477,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-cluster-rw"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy",
  "kevy-replicate",
@@ -488,18 +488,18 @@ dependencies = [
 
 [[package]]
 name = "kevy-config"
-version = "1.27.5"
+version = "1.27.6"
 
 [[package]]
 name = "kevy-elect"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy-resp",
 ]
 
 [[package]]
 name = "kevy-embedded"
-version = "1.4.17"
+version = "1.4.18"
 dependencies = [
  "kevy",
  "kevy-client",
@@ -513,18 +513,18 @@ dependencies = [
 
 [[package]]
 name = "kevy-geo"
-version = "1.27.5"
+version = "1.27.6"
 
 [[package]]
 name = "kevy-hash"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy-bench",
 ]
 
 [[package]]
 name = "kevy-lua"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy-bench",
  "kevy-bytes",
@@ -534,18 +534,18 @@ dependencies = [
 
 [[package]]
 name = "kevy-lua-host"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy-lua",
 ]
 
 [[package]]
 name = "kevy-madvise"
-version = "1.27.5"
+version = "1.27.6"
 
 [[package]]
 name = "kevy-map"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy-bench",
  "kevy-hash",
@@ -554,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-persist"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy-resp",
  "kevy-store",
@@ -562,18 +562,18 @@ dependencies = [
 
 [[package]]
 name = "kevy-pubsub-bench"
-version = "1.27.5"
+version = "1.27.6"
 
 [[package]]
 name = "kevy-replicate"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy-resp",
 ]
 
 [[package]]
 name = "kevy-resp"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy-bench",
  "kevy-bytes",
@@ -581,14 +581,14 @@ dependencies = [
 
 [[package]]
 name = "kevy-resp-client"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy-resp",
 ]
 
 [[package]]
 name = "kevy-ring"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy-bench",
  "loom",
@@ -596,7 +596,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-rt"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy-config",
  "kevy-hash",
@@ -613,11 +613,11 @@ dependencies = [
 
 [[package]]
 name = "kevy-scope"
-version = "1.27.5"
+version = "1.27.6"
 
 [[package]]
 name = "kevy-store"
-version = "1.27.5"
+version = "1.27.6"
 dependencies = [
  "kevy-bench",
  "kevy-bytes",
@@ -627,11 +627,11 @@ dependencies = [
 
 [[package]]
 name = "kevy-sys"
-version = "1.27.5"
+version = "1.27.6"
 
 [[package]]
 name = "kevy-uring"
-version = "1.27.5"
+version = "1.27.6"
 
 [[package]]
 name = "kv-log-macro"
