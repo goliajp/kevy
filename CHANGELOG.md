@@ -4,6 +4,40 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.27.5] — 2026-06-24 (Sidekiq + node-redlock ecosystem unblock)
+
+User: "都跑" — run BOTH Sidekiq (Ruby) and node-redlock end-to-end against kevy. Surfaced 4 more missing commands; all fixed in this same session per the no-defer rule.
+
+### node-redlock — **9/9 passed**
+Acquire / release / mutual-exclusion / extend-TTL / multi-key with shared `{hashtag}` / `using()` callback pattern. All canonical Redlock Lua scripts ran clean through kevy v1.27.4's EVAL stack.
+
+### Sidekiq 6.5.12 (Ruby) — **end-to-end works**
+Spawned actual `bundle exec sidekiq` worker process against kevy:
+```
+stat:processed = 3, stat:failed = 0
+processes set has Sidekiq worker registered
+3 jobs processed → returnvalues correct
+```
+
+### 4 missing commands added (all blockers Sidekiq hit)
+
+1. **UNLINK** — Redis 4.0+ async DEL. Sidekiq's heartbeat calls it every 5s. Aliased to DEL in kevy (single-thread-per-shard makes the "async" part moot).
+2. **SSCAN** — set scan cursor. Sidekiq's scheduler iterates the `processes` set.
+3. **HSCAN** — hash scan cursor.
+4. **ZSCAN** — zset scan cursor.
+
+All three SCAN-family variants return cursor `"0"` (everything in one batch — Redis "small collection" optimisation). MATCH glob filter supported via `kevy_store::glob_match`; COUNT parsed but ignored.
+
+Wired in `dispatch_collections_v127.rs` next to v1.27.3's BullMQ helpers. Route/is_write classifications updated.
+
+### Per-crate bumps
+- workspace        1.27.4 → 1.27.5
+- kevy-client      1.12.15 → 1.12.16
+- kevy-client-async 1.0.16 → 1.0.17
+- kevy-embedded     1.4.16 → 1.4.17
+- kevy-lua         1.27.4 → 1.27.5
+- kevy-lua-host    1.27.4 → 1.27.5
+
 ## [v1.27.4] — 2026-06-24 (multi-shard EVAL routing — BullMQ on default 16-shard)
 
 Closes the v1.27.3 multi-shard EVAL inner-call gap **in the same

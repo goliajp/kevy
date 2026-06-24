@@ -233,3 +233,138 @@ pub(crate) fn cmd_zrevrangebyscore<A: ArgvView + ?Sized>(
         }
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// v1.27.5 ecosystem-unblock additions: SSCAN / HSCAN / ZSCAN
+// ─────────────────────────────────────────────────────────────────────
+//
+// Cursor-based iterators for Set / Hash / Sorted-Set. Sidekiq's
+// scheduler thread depends on SSCAN ("processes" set). kevy returns
+// every element in one batch (cursor = "0") — matches Redis's
+// small-collection optimisation where SCAN doesn't actually paginate.
+// COUNT is parsed but ignored (we always return everything).
+//
+// Reply shape:
+//   *2\r\n
+//   $1\r\n0\r\n         ← next-cursor as bulk string
+//   *N\r\n              ← elements array
+//   $<len>\r\n<bytes>\r\n  (repeated)
+
+/// Parse `[MATCH pattern] [COUNT n]` modifiers starting at argv idx.
+/// Returns `(maybe_pattern, _count_ignored)` or None on syntax error.
+fn parse_scan_opts<A: ArgvView + ?Sized>(
+    args: &A,
+    start: usize,
+) -> Option<Option<Vec<u8>>> {
+    let mut pat: Option<Vec<u8>> = None;
+    let mut i = start;
+    while i < args.len() {
+        let tok = &args[i];
+        if tok.eq_ignore_ascii_case(b"MATCH") {
+            if i + 1 >= args.len() { return None; }
+            pat = Some(args[i + 1].to_vec());
+            i += 2;
+        } else if tok.eq_ignore_ascii_case(b"COUNT") {
+            if i + 1 >= args.len() { return None; }
+            // Validate but ignore — kevy returns everything in one shot.
+            arg_i64(&args[i + 1])?;
+            i += 2;
+        } else {
+            return None; // unknown modifier
+        }
+    }
+    Some(pat)
+}
+
+fn emit_scan_reply(out: &mut Vec<u8>, elems: &[Vec<u8>]) {
+    encode_array_len(out, 2);
+    encode_bulk(out, b"0"); // cursor = "0" (done in one batch)
+    encode_array_len(out, elems.len() as i64);
+    for e in elems {
+        encode_bulk(out, e);
+    }
+}
+
+/// `SSCAN key cursor [MATCH pattern] [COUNT n]`
+pub(crate) fn cmd_sscan<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+    if args.len() < 3 {
+        return wrong_args(out, "sscan");
+    }
+    if arg_i64(&args[2]).is_none() {
+        return encode_error(out, ERR_NOT_INT);
+    }
+    let Some(pat) = parse_scan_opts(args, 3) else {
+        return encode_error(out, "ERR syntax error");
+    };
+    match store.smembers(&args[1]) {
+        Err(e) => store_err(out, e),
+        Ok(all) => {
+            let filtered: Vec<Vec<u8>> = match pat {
+                None => all,
+                Some(p) => all.into_iter()
+                    .filter(|m| kevy_store::glob_match(&p, m))
+                    .collect(),
+            };
+            emit_scan_reply(out, &filtered);
+        }
+    }
+}
+
+/// `HSCAN key cursor [MATCH pattern] [COUNT n]` — field-then-value
+/// pairs interleaved.
+pub(crate) fn cmd_hscan<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+    if args.len() < 3 {
+        return wrong_args(out, "hscan");
+    }
+    if arg_i64(&args[2]).is_none() {
+        return encode_error(out, ERR_NOT_INT);
+    }
+    let Some(pat) = parse_scan_opts(args, 3) else {
+        return encode_error(out, "ERR syntax error");
+    };
+    match store.hgetall(&args[1]) {
+        Err(e) => store_err(out, e),
+        Ok(flat) => {
+            // hgetall returns [field, value, field, value, ...] flat.
+            // Filter pairs by MATCH on the field name.
+            let mut out_v: Vec<Vec<u8>> = Vec::with_capacity(flat.len());
+            for pair in flat.chunks(2) {
+                if pair.len() != 2 { continue; }
+                let field = &pair[0];
+                let val = &pair[1];
+                if pat.as_ref().is_none_or(|p| kevy_store::glob_match(p, field)) {
+                    out_v.push(field.clone());
+                    out_v.push(val.clone());
+                }
+            }
+            emit_scan_reply(out, &out_v);
+        }
+    }
+}
+
+/// `ZSCAN key cursor [MATCH pattern] [COUNT n]` — member-then-score
+/// pairs interleaved (score as fmt_score-formatted bulk).
+pub(crate) fn cmd_zscan<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+    if args.len() < 3 {
+        return wrong_args(out, "zscan");
+    }
+    if arg_i64(&args[2]).is_none() {
+        return encode_error(out, ERR_NOT_INT);
+    }
+    let Some(pat) = parse_scan_opts(args, 3) else {
+        return encode_error(out, "ERR syntax error");
+    };
+    match store.zrange(&args[1], 0, -1) {
+        Err(e) => store_err(out, e),
+        Ok(items) => {
+            let mut out_v: Vec<Vec<u8>> = Vec::with_capacity(items.len() * 2);
+            for (m, sc) in items {
+                if pat.as_ref().is_none_or(|p| kevy_store::glob_match(p, &m)) {
+                    out_v.push(m);
+                    out_v.push(fmt_score(sc));
+                }
+            }
+            emit_scan_reply(out, &out_v);
+        }
+    }
+}

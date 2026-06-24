@@ -149,7 +149,7 @@ fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
             }
         }
         b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),
-        b"DEL" => {
+        b"DEL" | b"UNLINK" => {
             if args.len() == 2 {
                 Route::Single(1)
             } else {
