@@ -4,39 +4,37 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
-## [v1.27.7] — 2026-06-24 (Bee Queue + Celery ecosystem unblock — BRPOPLPUSH)
+## [v1.27.8] — 2026-06-24 (Bee Queue + Celery ecosystem unblock — BRPOPLPUSH; v1.27.7 withdrawn)
+
+**v1.27.7 was withdrawn.** Its commit `2c0ad32` accidentally staged 4011 files of `node_modules/` + `package*.json` from an ad-hoc ecosystem test that ran `npm install` in the kevy repo root. The workflow was cancelled before publish; nothing reached crates.io as v1.27.7. v1.27.8 ships the same intended content cleanly, plus a hardened `.gitignore` to block recurrence (excludes `node_modules/`, `package*.json`, Python `.venv/`, Ruby `vendor/bundle/`).
+
+### Actual content (intended for v1.27.7)
 
 Two more ecosystems verified end-to-end against kevy:
 
-### Bee Queue 1.7 (Node) — **5/5 passed**
-5 jobs enqueued + processed by worker. Bee Queue is the BullMQ-author's
-leaner alternative; uses ~12 Lua scripts + BRPOPLPUSH for atomic
-job moves.
+#### Bee Queue 1.7 (Node) — **5/5 passed**
+5 jobs enqueued + processed by worker. BullMQ-author's leaner alternative; uses ~12 Lua scripts + BRPOPLPUSH for atomic job moves.
 
-### Celery 5.6.3 (Python) — **4/4 passed**
-Real `celery worker` process running against kevy as both broker
-and result backend. 3 tasks dispatched + results fetched
-back through Celery's `AsyncResult.get()` API.
+#### Celery 5.6.3 (Python) — **4/4 passed**
+Real `celery worker` process against kevy as both broker + result backend. 3 tasks dispatched + results fetched via `AsyncResult.get()`.
 
 ### BRPOPLPUSH added
 
-Blocking variant of RPOPLPUSH that Bee Queue (and other older Lua
-queue libs) use. Pattern mirrors BZPOPMIN: new `BlockKind::Brpoplpush`
-variant, `brpoplpush_hint`/`brpoplpush_serve` follow the
-single-key park shape. Reply is single bulk (the moved element)
-on success, nil bulk on timeout. Wakes on LPUSH/RPUSH to the
-source key — same `wake_idx` already declared by those write verbs.
+Blocking variant of RPOPLPUSH that Bee Queue (and other older Lua queue libs) use. Pattern mirrors BZPOPMIN added in v1.27.3: new `BlockKind::Brpoplpush` variant, `brpoplpush_hint`/`brpoplpush_serve` follow the single-key park shape. Reply is single bulk (the moved element) on success, nil bulk on timeout. Wakes on LPUSH/RPUSH to the source key — same `wake_idx` already declared by those write verbs.
 
-Deprecated by Redis 6.2 in favour of BLMOVE, but Bee Queue uses
-the older form.
+Deprecated by Redis 6.2 in favour of BLMOVE, but Bee Queue still emits it.
 
 ### Per-crate bumps
-- workspace        1.27.6 → 1.27.7
-- kevy-client      1.12.17 → 1.12.18
-- kevy-client-async 1.0.18 → 1.0.19
-- kevy-embedded     1.4.18 → 1.4.19
-- kevy-lua         1.27.6 → 1.27.7
-- kevy-lua-host    1.27.6 → 1.27.7
+- workspace        1.27.6 → 1.27.8
+- kevy-client      1.12.17 → 1.12.19
+- kevy-client-async 1.0.18 → 1.0.20
+- kevy-embedded     1.4.18 → 1.4.20
+- kevy-lua         1.27.6 → 1.27.8
+- kevy-lua-host    1.27.6 → 1.27.8
+
+## ~~[v1.27.7]~~ — 2026-06-24 (WITHDRAWN — commit pollution; superseded by v1.27.8)
+
+Polluted commit `2c0ad32` accidentally included 4011 files of `node_modules/` + `package*.json` from an ad-hoc ecosystem test that ran `npm install` in the kevy repo root. Release workflow cancelled before publish; nothing on crates.io. Tag exists in git history for forensic clarity. See v1.27.8 for the intended content.
 
 ## [v1.27.6] — 2026-06-24 (CI stability — replication test race fix)
 

@@ -14,3 +14,27 @@ shards.meta
 
 # Claude Code workspace — kept entirely local, not part of the public repo.
 .claude/
+
+# Node ecosystem pollution — kevy has no Node.js dependencies in
+# this repo. Any node_modules/ + package*.json here come from
+# ad-hoc ecosystem-compat tests that should never have been
+# `git add`-ed (caused the v1.27.7 4024-file disaster). Belt-and-
+# braces with `.npmrc prefix=` too if a future test needs npm in
+# this tree.
+node_modules/
+**/node_modules/
+package.json
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Python virtualenvs — same reasoning as node_modules.
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+
+# Ruby Bundler — same reasoning.
+vendor/bundle/
+**/vendor/bundle/
+.bundle/

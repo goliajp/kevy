@@ -62,7 +62,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.27.7"
+version = "1.27.8"
 edition = "2024"
 authors = ["GOLIA K.K."]
 license = "Apache-2.0 OR MIT"
