@@ -860,3 +860,53 @@ priority for Phase B: A0 (measure valkey c100) BEFORE any code change.
 Without A0, A6 / A9 / A14 polish would land but no one could tell if
 the result moved the needle vs the real ceiling — repeating the
 2026-06-20 anti-pattern.*
+
+---
+
+## A0 measurement (2026-06-28, post-decomp)
+
+Decomp's Top-N flagged **A0** as the unconditional gate. Ran it:
+
+### Setup
+- Host: lx64 (16-core Linux 6.12), valkey-server 9.1.0 running in container on `*:6379` (default config, no taskset, no `io-threads` tuning — i.e. baseline container deployment).
+- Tool: `redis-benchmark 8.0.2` (lx64 host binary), localhost loopback.
+
+### Results
+
+| Workload | valkey 9.1.0 (default container) | kevy v1.24+ (tuned, 2026-06-20 doc) | kevy lead |
+|---|---|---|---|
+| c1 GET (`-c 1 -P 1 -n 500k`) | **27,820 rps** / p50 0.031 ms | 82,891 rps | **2.98×** |
+| c100 GET (`-c 100 -P 1 -n 1.5M`) | **136,091 rps** / p50 0.439 ms | 191,000 rps | **1.40×** |
+
+### Honest caveats
+
+- valkey was the **container default**, not a tuned valkey deployment (no `taskset`, no `io-threads`). The c1 result of 28k is suspiciously low for a tuned valkey (idiomatic ~100k); this is a **lower-bound** baseline of valkey's wire perf on this box.
+- kevy's 191k was from the v1.24+ chain on 2026-06-20 with explicit `taskset -c 0-9` for server, `-c 10` for client.
+- **Apples-to-apples requires either tuning valkey or running kevy in default mode**. Both directions are easy follow-ups.
+
+### What this flips in the decomp framing
+
+The decomp was written assuming **kevy was behind valkey** at c100 (the framing inherited from the 2026-06-20 "userspace ceiling reached" handoff which compared kevy to its own prior versions and to the C client baseline, never to valkey directly). A0 shows kevy is **ahead of valkey** at both c1 (3×) and c100 (1.4×).
+
+The Top-N attacks remain valid as decomposition findings, but their **framing changes**:
+
+- **A8 (conn-affinity rebalance, ~40-60 µs/op)** — was framed as "closing the gap". Now correctly framed: **extending a 6.6 µs/op kevy advantage at c100** by reclaiming the per-iter tax at low conn-density per shard. Still high-value attack (closer to hardware ceiling).
+- **A7 (conn-density-aware spin_limit, ~20-30 µs/op)** — same reframing. Architectural lever to push further beyond valkey.
+- **A1-A6, A9, A12-A14 userspace polish (~5-10% bundle)** — was framed as "ceiling polish". Now correctly framed: **incremental headroom on top of an existing lead**. Lower priority unless one of them is needed to keep up after valkey tunes their own stack.
+
+### What A0 does NOT settle
+
+- **vs tuned valkey** — defer until needed (would change valkey c1 from 28k to maybe ~100-130k; kevy still leads, but the gap on c1 shrinks). Not blocking.
+- **vs hardware ceiling** — the project's actual north star. valkey beat is the floor; hardware (~5M ops/s/thread theoretical) is the goal. kevy at 12k/thread on c100 GET → 400× headroom theoretical. Real ceiling is set by redis-benchmark's wire protocol (1 req/RTT) + TCP loopback, not by anything kevy or valkey can fix at the application layer for this specific workload shape.
+- **per-stage µs reconciliation to valkey side** — the decomp's ±20% budget validation could now be re-attempted with the 136k = 7.35 µs/op valkey number. Future Phase-A polish pass.
+
+### Decision (2026-06-28)
+
+Phase B attack queue stays as listed in Top-N, with **A8 (40-60 µs/op) as the natural #1**. But the priority is now **opportunistic**, not gap-closing — kevy already leads valkey 9.1 at both measured workloads. Next session can either:
+
+(a) implement A8 to push the lead further (real architectural win), or
+(b) pivot to a workload kevy might *actually* lose at — multi-key pipelines (`-P 16`), large values, pub/sub fan-out, or persistence-heavy mixed workloads. A0 of one of those would be the next "is there a real gap" question.
+
+The 2026-06-20 "userspace ceiling reached" doc was wrong on two axes simultaneously:
+1. There ARE userspace levers (A7/A8 architectural axis the doc never explored).
+2. There WAS no gap to close at c100 — kevy was already 1.4× ahead.
