@@ -36,10 +36,12 @@ workspace = true
 #      74 transitive cranelift + std-ecosystem crates. kevy must stay
 #      with `luna-core`.
 [dependencies]
-luna-core = "=1.1.0"   # pinned exact: luna v1.1 ergo surface (B1-B6,
-                       # native_typed, Lua facade) is what kevy-lua
-                       # is wired against. Bumping to 1.2+ needs a
-                       # bridge audit pass.
+luna-core = "=2.1.0"   # pinned exact: luna v2.1 (industrial-grade
+                       # release after v1.3) — bridge surface
+                       # (Vm/Value/Table/Gc/LuaError/LuaVersion)
+                       # remained source-compatible through the
+                       # v2.0 dev sprint per CHANGELOG. Bumping
+                       # past 2.1 needs a bridge audit pass.
 kevy-bytes = { path = "../kevy-bytes", version = "1.19.0" }
 kevy-resp = { path = "../kevy-resp", version = "1.19.0" }
 
@@ -48,5 +50,7 @@ kevy-bench = { path = "../kevy-bench" }
 # luna-core in dev-deps so integration tests can use `LuaVersion` to
 # call `Bridge::set_allowed_dialects`. The crate is already in the
 # regular `[dependencies]` of kevy-lua — this is just a re-declaration
-# so the dev `tests/*.rs` files can name the type directly.
-luna-core = "=1.1.0"
+# so the dev `tests/*.rs` files can name the type directly. Must
+# match the regular [dependencies] pin to avoid pulling two luna-core
+# semver buckets into the workspace cache.
+luna-core = "=2.1.0"
