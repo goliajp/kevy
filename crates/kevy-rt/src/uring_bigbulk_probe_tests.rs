@@ -16,9 +16,22 @@ fn make_set_frame(key: &[u8], val_len: usize) -> Vec<u8> {
 fn generic_probe_matches_4k_set_just_header() {
     let frame = make_set_frame(b"key", 4096);
     match probe_generic_bigbulk(&frame) {
-        BigArgGenericProbe::Promote { total, bytes_present } => {
+        BigArgGenericProbe::Promote {
+            total,
+            bytes_present,
+            body_start_in_tail,
+            body_len,
+            bare_set_key_range,
+        } => {
             assert_eq!(total, frame.len() + 4096 + 2);
             assert_eq!(bytes_present, frame.len());
+            assert_eq!(body_start_in_tail, frame.len());
+            assert_eq!(body_len, 4096);
+            // The key bulk is `$3\r\nkey\r\n`; the 3-byte content sits
+            // at offset = `*3\r\n$3\r\nSET\r\n$3\r\n`.len() == 14.
+            let key_start = b"*3\r\n$3\r\nSET\r\n$3\r\n".len();
+            assert_eq!(bare_set_key_range, Some((key_start, key_start + 3)));
+            assert_eq!(&frame[key_start..key_start + 3], b"key");
         }
         _ => panic!("expected Promote"),
     }
@@ -116,9 +129,19 @@ fn make_getset_frame(key: &[u8], val_len: usize) -> Vec<u8> {
 fn generic_probe_matches_setex_header_only() {
     let frame = make_setex_frame(b"k", b"100", 8192);
     match probe_generic_bigbulk(&frame) {
-        BigArgGenericProbe::Promote { total, bytes_present } => {
+        BigArgGenericProbe::Promote {
+            total,
+            bytes_present,
+            body_start_in_tail,
+            body_len,
+            bare_set_key_range,
+        } => {
             assert_eq!(total, frame.len() + 8192 + 2);
             assert_eq!(bytes_present, frame.len());
+            assert_eq!(body_start_in_tail, frame.len());
+            assert_eq!(body_len, 8192);
+            // SETEX is not a bare-SET shape.
+            assert_eq!(bare_set_key_range, None);
         }
         _ => panic!("expected Promote"),
     }
@@ -200,7 +223,11 @@ fn generic_probe_matches_setex_with_partial_body() {
     let header_len = f.len();
     f.extend_from_slice(&[b'Y'; 1000]);
     match probe_generic_bigbulk(&f) {
-        BigArgGenericProbe::Promote { total, bytes_present } => {
+        BigArgGenericProbe::Promote {
+            total,
+            bytes_present,
+            ..
+        } => {
             assert_eq!(total, header_len + 16384 + 2);
             assert_eq!(bytes_present, header_len + 1000);
         }

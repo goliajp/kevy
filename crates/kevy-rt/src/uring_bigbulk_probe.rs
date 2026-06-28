@@ -60,7 +60,40 @@ pub(crate) enum BigArgGenericProbe {
     /// Caller pre-allocates `Vec::with_capacity(total)`, copies the head,
     /// installs the BigBulk frame-stitch state, and re-dispatches the
     /// assembled bytes on completion.
-    Promote { total: usize, bytes_present: usize },
+    ///
+    /// v1.29 (B3) — added `body_start_in_tail`, `body_len`, and
+    /// `bare_set_key_range` so the caller can split a per-conn dest
+    /// state into a header buf + a sized body buf, and (for the bare
+    /// `SET key <BIG>` shape) bypass the dispatch_batch re-parse on
+    /// completion to call `store.set(key, owned_body, …)` directly,
+    /// eliminating the value-bytes memcpy through `Arc::from(&[u8])`.
+    Promote {
+        total: usize,
+        bytes_present: usize,
+        /// Index into `tail` where the big-value body bytes begin
+        /// (immediately after the `$<bulklen>\r\n` line). Always
+        /// `header_len_in_tail = body_start_in_tail`.
+        ///
+        /// v1.29 C1 — consumed by the C2 BigArgState refactor + C3
+        /// bare-SET fast path. Currently dead at the C1 commit point;
+        /// kept declared to lock the public-shape of `Promote` so C2/C3
+        /// changes are pure additions (zero retracing of upstream
+        /// callers when those land).
+        #[allow(dead_code)]
+        body_start_in_tail: usize,
+        /// The N from `$<N>\r\n` of the big bulk. Always
+        /// `body_start_in_tail + body_len + 2 == total`.
+        #[allow(dead_code)]
+        body_len: usize,
+        /// **v1.29 B3** — when the promoted shape is exactly bare
+        /// `*3\r\n$3\r\nSET\r\n$<klen>\r\n<key>\r\n$<bodylen>\r\n…`,
+        /// `Some((start, end))` is the `tail` byte range of `<key>`.
+        /// `None` for SETEX / PSETEX / APPEND / GETSET / MSET — those
+        /// shapes still promote but the v1.29.0 fast path is bare-SET
+        /// only; broader variants come in v1.29.x.
+        #[allow(dead_code)]
+        bare_set_key_range: Option<(usize, usize)>,
+    },
 }
 
 /// Walk an ASCII decimal integer at `buf[i..]` until a non-digit; returns
@@ -136,7 +169,14 @@ fn generic_bigbulk_verb_supported(verb: &[u8]) -> bool {
 ///
 /// `None` if the header itself isn't fully present (incomplete probe).
 enum BulkStep {
-    Complete { after: usize },
+    /// Bulk fully present in buf. `body_start..body_start + body_len` is
+    /// the bulk's content range; `after` is the index just past the
+    /// trailing CRLF (next bulk's first byte).
+    Complete {
+        body_start: usize,
+        body_len: usize,
+        after: usize,
+    },
     HeaderOnlyBigBody { body_len: usize, after: usize },
     Incomplete,
 }
@@ -158,7 +198,11 @@ fn step_bulk(buf: &[u8], i: usize) -> BulkStep {
         if &buf[body_start + body_len..body_start + body_len + 2] != b"\r\n" {
             return BulkStep::Incomplete;
         }
-        BulkStep::Complete { after }
+        BulkStep::Complete {
+            body_start,
+            body_len,
+            after,
+        }
     } else {
         // Header present, body not (fully) — record the total `after`
         // so the caller knows the frame extent.
@@ -207,9 +251,21 @@ pub(crate) fn probe_generic_bigbulk(buf: &[u8]) -> BigArgGenericProbe {
     // bulk (`bulk_idx == argc - 1`) AND must have `N >=
     // BIG_ARG_PROMOTE_THRESHOLD` for promotion.
     let mut cursor = after_verb;
+    // v1.29 B3 — capture the key bulk's content range for the bare-SET
+    // shape so the dispatch path can call `store.set(key, owned_body, …)`
+    // directly without re-parsing the frame on completion.
+    let is_bare_set = verb[..verb_len] == *b"SET" && argc == 3;
+    let mut key_range: Option<(usize, usize)> = None;
     for bulk_idx in 1..argc {
         match step_bulk(buf, cursor) {
-            BulkStep::Complete { after } => {
+            BulkStep::Complete {
+                body_start,
+                body_len,
+                after,
+            } => {
+                if is_bare_set && bulk_idx == 1 {
+                    key_range = Some((body_start, body_start + body_len));
+                }
                 cursor = after;
             }
             BulkStep::HeaderOnlyBigBody { body_len, after } => {
@@ -225,7 +281,17 @@ pub(crate) fn probe_generic_bigbulk(buf: &[u8]) -> BigArgGenericProbe {
                 }
                 let total = after;
                 let bytes_present = buf.len();
-                return BigArgGenericProbe::Promote { total, bytes_present };
+                // body_start_in_tail = `after - body_len - 2`. That's the
+                // index just past the `$<bodylen>\r\n` line — first byte
+                // of body.
+                let body_start_in_tail = total - body_len - 2;
+                return BigArgGenericProbe::Promote {
+                    total,
+                    bytes_present,
+                    body_start_in_tail,
+                    body_len,
+                    bare_set_key_range: if is_bare_set { key_range } else { None },
+                };
             }
             BulkStep::Incomplete => {
                 // Even the bulk HEADER isn't fully present — can't
