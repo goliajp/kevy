@@ -760,3 +760,79 @@ as the architectural pair** to bring kevy's big-SET path to valkey's
 zero-memcpy posture. The local-shard fast path within B3 also handles
 the `--threads 1` workload (which is how multi-shard Lua / ecosystem
 tests now run, per v1.27.x ship history).*
+
+---
+
+## §I — Runtime verification via perf record (2026-06-28, post-decomp)
+
+§C flagged 4 source-only stage estimates needing runtime counters. The
+most decisive of them — whether the predicted 2 memcpys actually show
+up in CPU% under load — can be answered by perf record alone, no
+counter patches needed. Did that.
+
+### Setup
+
+- Host: lx64 16-core, mitigations=off (from session 8), kernel 6.12.
+- kevy: `/root/kevy/target/release/kevy --threads 2`, taskset 0-1.
+- valkey: 9.1.0 `--io-threads 10 --io-threads-do-reads yes`, taskset 0-9.
+- Bench: `redis-benchmark -c 50 -P 1 -d 65536 -n 1.5M -t set`,
+  taskset 10-13. Warmup 50k, then perf record over 12s while bench
+  ran at steady state.
+- Sampling: `perf record -F 999 --call-graph fp -p <pid>`.
+
+### Results
+
+**kevy top symbols (self time, no children):**
+
+| % self | symbol |
+|---|---|
+| 16.31% | `rep_movs_alternative` (kernel — TCP recv/send copy) |
+| 15.92% | `libc.so.6 0x162e47` (= `__memcpy_avx_unaligned_erms`, userspace memcpy) |
+| 9.54%  | unresolved `kevy 0x6c56c` (release binary, no debug symbols) |
+| 2.88%  | `nft_do_chain` (kernel netfilter — same as 2026-06-20 finding) |
+| <1% each | misc syscall/kernel symbols |
+
+**valkey top symbols (self time, no children, summed across threads):**
+
+| % self | symbol |
+|---|---|
+| 6.71% | `rep_movs_alternative` (kernel, summed io_thd_1 4.90% + io_thd_2 1.81%) |
+| 4.94% | `libc.so.6 0x162e47` (userspace memcpy, summed io_thd_1 2.14% + io_thd_2 0.80% + main 2.00%) |
+| 5.71% | `getMonotonicUs_x86` (clock reads — valkey-specific) |
+| 3.61% | `beforeSleep` |
+| 2.49-2.40% | `pthread_mutex_lock` (io threads coordinating) |
+| 2.49% | `spmcDequeue` (io thread work queue) |
+
+### Verdict on §C runtime flags
+
+**S05+S06 (the 2 extra userspace memcpys) — CONFIRMED.**
+
+- kevy userspace memcpy = **15.92%** of CPU at -d 65536 SET
+- valkey userspace memcpy = **4.94%** of CPU at the same workload
+- **kevy spends ~3.2× more userspace CPU on memcpy than valkey** — directly visible in perf record. Maps to the source-level finding of 2 extra memcpys (slab→frame at uring_bigbulk.rs:87/115, frame→Arc at string.rs:38).
+
+**Kernel rep_movs (TCP copy) — caveat:**
+
+- kevy 16.31% kernel rep_movs > valkey 6.71% kernel rep_movs.
+- A part of this delta is thread-count amortization: valkey has 10 io threads parallelizing the kernel-copy work, kevy has 2. Per-thread the gap shrinks.
+- But not fully — kevy's per-thread kernel copy share (16.31% / 2 threads = 8.16% per kevy thread) is still higher than valkey's per-io-thread share (4.90%/2 = 2.45% per io thread). So there's a real per-conn-read extra kernel-copy in kevy too, likely the same memcpy path going through the provided-buffer recv mechanism.
+
+**Unresolved 9.54% kevy symbol at `0x6c56c`:**
+
+- Release binary lacks debug symbols → addr2line lookup deferred. Likely candidates per the decomp doc: `Shard::uring_drain_inbound` body, `bigbulk_feed`, or `Arc::from(bytes)`. Rebuild with `[profile.release-perf] debug = "line-tables-only"` (matches the 2026-06-20 setup) gives addr2line on this hop.
+
+### What this changes for Phase B
+
+The structural finding (2 extra memcpys) is now both source-confirmed AND runtime-confirmed. Phase B priority order unchanged:
+
+1. **B3** — owned-Vec value-bulks plumbing. Highest confidence, biggest gain.
+2. **B2-alt** — single-shot prep_read with sized buffer. Additive on top of B3 OR alternative if B3 too invasive.
+
+Sizing estimate: closing the 11pp userspace-memcpy gap (15.92% → ~5%) corresponds to ~10-11% throughput recovery at this workload. The measured gap is 8%; recovering 10-11pp suggests B2-alt + B3 not only closes the gap but **inverts the lead** to ~2-3%. That's the upper bound; actual lower due to other constraints (e.g. heap allocator pressure on freed buffers, cache disturbance from the new path).
+
+### §C remaining flags — unverified
+
+- **S18 cross-shard 50% guess** — not verified. Needs counter patch; perf can't see it directly. Defer to first commit on the Phase B attack branch.
+- **S15 idle multiplier at --threads 2** — same. Defer.
+
+These don't gate Phase B start; they refine the µs apportionment but not the attack target.
