@@ -256,8 +256,18 @@ jobs:
           if-no-files-found: error
 
   # ───────────── attach binaries + GitHub release notes ─────────────
+  # v1.28 — drops the historical `--draft` flag. Reasoning:
+  # `release-notes` has `needs: [verify, publish, build-binaries]`, so by
+  # the time this job runs every upstream gate has already passed —
+  # crates.io is already published, every binary is built. There's no
+  # failure path left that `--draft` could shield users from. The flag
+  # was just creating manual `gh release edit --draft=false` busy-work
+  # on every v1.27.x ship.
+  #
+  # rc / beta tags still ship as Pre-release (blue badge) — that's a
+  # signal to users, not a hidden state.
   release-notes:
-    name: Draft GitHub release
+    name: Publish GitHub release
     runs-on: ubuntu-latest
     needs: [verify, publish, build-binaries]
     permissions:
@@ -277,13 +287,13 @@ jobs:
       - name: List staged assets (debug aid)
         run: ls -lh dist
 
-      - name: Create / update release draft + attach binaries
+      - name: Create release + attach binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           tag=${GITHUB_REF#refs/tags/}
-          # rc / beta tags ship as Pre-release (shows the blue badge on GitHub);
-          # plain v1.0.0-style tags become a stable release.
+          # rc / beta tags ship as Pre-release (shows the blue badge on
+          # GitHub); plain v1.0.0-style tags become a stable release.
           prerelease_flag=""
           case "$tag" in
             *-rc*|*-beta*) prerelease_flag="--prerelease" ;;
@@ -292,9 +302,11 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag already exists — uploading assets (overwrite)."
             gh release upload "$tag" dist/* --clobber
+            # Earlier v1.27.x runs left releases stuck in draft state.
+            # If a re-run lands on one, lift it now.
+            gh release edit "$tag" --draft=false || true
           else
             gh release create "$tag" \
-              --draft \
               $prerelease_flag \
               --generate-notes \
               --title "$tag" \
