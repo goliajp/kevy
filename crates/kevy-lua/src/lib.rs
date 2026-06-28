@@ -55,8 +55,13 @@ pub use luna_core::version::LuaVersion;
 
 pub(crate) use dispatch::{DispatchHandle, DispatchSlot, DISPATCH_KEY};
 
-/// Lua 5.1 / 5.2 / 5.3 / 5.4 / 5.5 — five fixed slots.
-const N_DIALECTS: usize = 5;
+/// Lua 5.1 / 5.2 / 5.3 / 5.4 / MacroLua / 5.5 — six fixed slots.
+/// luna v1.3 inserted `MacroLua` between `Lua54` and `Lua55` (it's a
+/// 5.4-superset compile-time-macro dialect). luna's v2.0 major bump
+/// retired the "variants appended only" promise; we explicitly map
+/// every variant to a stable slot via [`dialect_slot`] now so future
+/// luna inserts don't silently re-index the VM pool.
+const N_DIALECTS: usize = 6;
 
 /// 200 M ≈ 5 s on modern hardware; matches Redis's default
 /// `lua-time-limit`. Overridable via [`Bridge::set_instr_budget`].
@@ -64,11 +69,14 @@ const N_DIALECTS: usize = 5;
 const DEFAULT_INSTR_BUDGET: i64 = 200_000_000;
 
 fn dialect_slot(v: LuaVersion) -> usize {
-    // `LuaVersion` is a `#[repr(...)]` C-style enum with the variants
-    // in version order (Lua51 = 0, …, Lua55 = 4). Stable per luna's
-    // semver promise (the variant declaration order is the wire layout
-    // — luna's docs explicitly say "New variants must be appended").
-    v as usize
+    match v {
+        LuaVersion::Lua51 => 0,
+        LuaVersion::Lua52 => 1,
+        LuaVersion::Lua53 => 2,
+        LuaVersion::Lua54 => 3,
+        LuaVersion::MacroLua => 4,
+        LuaVersion::Lua55 => 5,
+    }
 }
 
 /// A wire-level reply: just the encoded RESP bytes.
@@ -394,6 +402,7 @@ fn version_tag(v: LuaVersion) -> &'static str {
         LuaVersion::Lua52 => "5.2",
         LuaVersion::Lua53 => "5.3",
         LuaVersion::Lua54 => "5.4",
+        LuaVersion::MacroLua => "macro",
         LuaVersion::Lua55 => "5.5",
     }
 }

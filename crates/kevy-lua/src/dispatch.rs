@@ -64,6 +64,13 @@ pub(crate) struct DispatchSlot {
     pub read_only: Rc<Cell<bool>>,
 }
 
+// luna v1.3 Phase TB introduced `pub trait LuaUserdata` as the new
+// `set_userdata` bound (replaces the v1.1 unbounded `T: Any + 'static`).
+// `DispatchSlot` carries no `Gc<…>` fields — `f` is `Rc<dyn Fn…>`,
+// `read_only` is `Rc<Cell<bool>>` — so the default no-op `trace` is
+// correct and the impl is a pure marker.
+impl luna_core::vm::LuaUserdata for DispatchSlot {}
+
 /// Global name we stash the dispatch userdata under. Scripts never
 /// reference it directly; the leading underscores match the
 /// "host-private global" convention.
