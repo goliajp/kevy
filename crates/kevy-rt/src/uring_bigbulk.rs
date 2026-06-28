@@ -69,7 +69,13 @@ impl<C: Commands> Shard<C> {
         tail: &[u8],
         io: &mut KevyMap<u64, UringConn>,
     ) -> bool {
-        let BigArgGenericProbe::Promote { total, bytes_present } = probe_generic_bigbulk(tail)
+        let BigArgGenericProbe::Promote {
+            total,
+            bytes_present,
+            body_start_in_tail: _,
+            body_len: _,
+            bare_set_key_range: _,
+        } = probe_generic_bigbulk(tail)
         else {
             return false;
         };
