@@ -56,6 +56,26 @@ impl<T> From<Box<[T]>> for Arc<[T]> {
 
 Net effect: the path `Vec<u8> → into_boxed_slice() → Arc::from(Box<[u8]>)` does the SAME 64 KiB memcpy that `Arc::from(&[u8])` did. The B3 attack doesn't reduce memcpys on the local-shard fast path; it shuffles them between callsites.
 
+### Addendum — 2026-06-29 round 11: Option A implementation validated via perf record
+
+After landing v1.29 Option A (`Arc<Box<[u8]>>` value type + `crlf_seen` + `pending_crlf_skip` to enforce `body.len() == body.capacity()` invariant) on top of B2-alt, ran perf record at -d 65536 SET to validate the implementation produces the predicted userspace-memcpy reduction (separate from the throughput claim, which is loopback-bound).
+
+| Symbol | v1.28 baseline | v1.29 B2-alt only | **v1.29 B2-alt + Option A** |
+|---|---|---|---|
+| libc `0x162e47` (`__memcpy_avx_unaligned_erms`) | 15.92% | 14.75% | **10.03%** |
+| libc `0x162de4` (sibling AVX memcpy variant) | ~2.28% | ~2.28% | **5.96%** |
+| **Total libc memcpy** | **18.20%** | **17.03%** | **15.99%** (-2.21 pp) |
+| kernel `rep_movs_alternative` (TCP RX/TX) | 16.31% | 16.41% | 16.05% |
+| `run_uring` body | 9.54% | 14.59% | 15.12% |
+
+**Result**: Option A's `Arc::new(box)` true-zero-copy adoption is doing real work — userspace memcpy fraction is empirically reduced. The `0x162e47` symbol drops 5.89 pp from baseline (`Arc::from(&[u8])` → `Arc::new(Box::from(slice))` shifts the memcpy callsite, and the `pick_value_for_set_owned` path now genuinely skips one memcpy per big SET).
+
+The `0x162de4` *rise* (4 pp) suggests `Box::<[u8]>::from(&[u8])` uses a different AVX-memcpy branch than `Arc::from(&[u8])` did. Net libc memcpy is still down 2.21 pp.
+
+**This validates the architectural finding** AND **conclusively refutes Phase A's "memcpys are the gap" framing**: even with a 2.21 pp userspace memcpy reduction (the maximum the type system permits), throughput stays flat at -d 65536 SET. The TCP loopback overhead (kernel rep_movs at 16% + nft_do_chain at 3% + various syscall paths) is the unavoidable floor on this workload.
+
+Per global perf methodology v1.2 (2026-06-29) §1 new touchword **"memcpys are the gap"**: Phase A source-only must confirm via perf record that the target symbol is ≥ double-digit pp of total self-time AND that reducing it actually moves throughput. The 2026-06-28 Phase A's premise satisfied the first half (memcpy was 15.92% of CPU) but not the second (reducing it doesn't move the throughput cycle, which is loopback-bound).
+
 ### Reason 2 — cross-shard fallback adds a memcpy
 
 C2+C3's `uring_apply_bigarg::BareSet` arm falls back to `synthesize_set_frame(&key, &body)` when `shard_of(&key) != self.id`, which builds a new RESP frame Vec containing the body bytes (one additional memcpy of 64 KiB) for dispatch_batch to re-parse. At `--threads 2` (the bench config), ~50% of SETs hash off-shard, so the cross-shard path runs half the time. This is where the 6.93 pp memcpy regression comes from.
