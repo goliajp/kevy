@@ -59,10 +59,11 @@ members = [
     "crates/kevy-client-async",
     "crates/kevy-lua",
     "crates/kevy-lua-host",
+    "crates/kevy-chaos",
 ]
 
 [workspace.package]
-version = "1.30.0"
+version = "1.31.0"
 edition = "2024"
 authors = ["GOLIA K.K."]
 license = "Apache-2.0 OR MIT"
