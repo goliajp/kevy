@@ -140,19 +140,51 @@ impl<C: Commands> Shard<C> {
             return; // no buffer (shouldn't happen for a successful recv)
         };
         let n = c.res as usize;
+        // **v1.29 B2-alt** — if this conn is waiting for the trailing
+        // CRLF of a kernel-direct prep_read'd big-arg body, slice it
+        // off the slab head before the regular dispatch sees it.
+        let n = if let Some(uc) = io.get_mut(&cid)
+            && uc.pending_crlf_skip > 0
+        {
+            let skip = (uc.pending_crlf_skip as usize).min(n);
+            uc.pending_crlf_skip -= skip as u8;
+            let slab_bytes = pbuf.bytes(bid, n);
+            if skip > 0
+                && let Some(uc) = io.get_mut(&cid)
+                && uc.pending_big_arg.is_none()
+            {
+                // Verify and consume — if the leading bytes aren't
+                // CRLF, protocol corruption: close.
+                if !slab_bytes[..skip].iter().all(|b| matches!(*b, b'\r' | b'\n')) {
+                    self.protocol_error(cid);
+                    self.uring_mark_closing(cid, io);
+                    pbuf.recycle(bid);
+                    return;
+                }
+            }
+            if skip == n {
+                // Slab is entirely CRLF skip — nothing left to dispatch.
+                pbuf.recycle(bid);
+                self.mark_arm_pending(cid, io);
+                return;
+            }
+            n - skip
+        } else {
+            n
+        };
+        // Recompute slab offset for the BigBulk routing below.
+        let slab_offset = c.res as usize - n;
         // **v1.25 B.4 + A.2** BigBulk routing: if this conn has a SET
         // value body in flight, feed slab bytes straight into the owned
         // dest Vec — ONE memcpy per chunk (slab → dest), same byte cost
         // as the prior slab→input path but the dest Vec is pre-sized
-        // (no realloc storm) AND becomes the Arc<[u8]> body zero-copy
-        // at completion (eliminating the final `Arc::from(&[u8])`
-        // 64K memcpy). The slab can be recycled the moment its bytes
-        // are appended — no need for an intermediate owned copy.
+        // (no realloc storm).
         if let Some(uc) = io.get_mut(&cid)
             && uc.pending_big_arg.is_some()
         {
             self.aof_begin_group();
-            let slab_bytes = pbuf.bytes(bid, n);
+            let total = slab_offset + n;
+            let slab_bytes = &pbuf.bytes(bid, total)[slab_offset..];
             self.uring_bigbulk_feed(cid, io, slab_bytes);
             pbuf.recycle(bid);
             self.aof_end_group_logged();
@@ -174,7 +206,9 @@ impl<C: Commands> Shard<C> {
             }
         };
         self.aof_begin_group();
-        let outcome = self.uring_recv_dispatch(cid, pbuf.bytes(bid, n), &mut input_buf, io);
+        let total = slab_offset + n;
+        let slab_for_dispatch = &pbuf.bytes(bid, total)[slab_offset..];
+        let outcome = self.uring_recv_dispatch(cid, slab_for_dispatch, &mut input_buf, io);
         pbuf.recycle(bid);
         self.aof_end_group_logged();
         if outcome.conn_gone {

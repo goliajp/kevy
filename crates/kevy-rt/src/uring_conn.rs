@@ -79,18 +79,23 @@ pub(crate) enum BigArgState {
     BareSetCancelling {
         /// Pre-extracted SET key (small alloc at promote).
         key: Vec<u8>,
-        /// Body Vec. Capacity = `body_len + 2` so the trailing CRLF
-        /// lands without realloc. Bytes 0..body_len are the value;
-        /// the last two are the terminating CRLF (stripped before the
-        /// owned-Vec hand-off to `store.set`).
+        /// Body Vec. **Capacity is fixed at `body_len` EXACTLY** so
+        /// `Vec::into_boxed_slice` (called inside
+        /// `pick_value_for_set_owned`'s `Arc::new(bytes.into_boxed_slice())`)
+        /// is a zero-copy allocation reuse — the v1.29 Option A win
+        /// hinges on `len == capacity` at hand-off (else shrink_to_fit
+        /// triggers a realloc + memcpy). Trailing CRLF is tracked in
+        /// `crlf_seen` and never enters this Vec.
         body: Vec<u8>,
         /// Target value length (the N from `$<N>\r\n`).
         body_len: usize,
+        /// Count of trailing CRLF bytes consumed from the wire. `0` at
+        /// promote, `2` when the trailing `\r\n` has been seen. Body
+        /// Vec stays at `len == capacity == body_len`.
+        crlf_seen: u8,
         /// `OP_BIG_CANCEL` CQE seen yet.
         cancel_acked: bool,
-        /// Terminal `OP_RECV` CQE seen with `res = -ECANCELED` (or
-        /// `res = -ENOENT` if the multishot had already terminated
-        /// when cancel landed — same semantic: no more multishot CQEs).
+        /// Terminal `OP_RECV` CQE seen with `res = -ECANCELED`.
         target_canceled: bool,
     },
     /// **v1.29 B2-alt** — single-shot `prep_read` is in flight; kernel
@@ -102,8 +107,14 @@ pub(crate) enum BigArgState {
     /// re-arm the multishot for pipelined commands.
     BareSetReading {
         key: Vec<u8>,
+        /// Capacity = `body_len` exactly (same invariant as
+        /// `BareSetCancelling`).
         body: Vec<u8>,
         body_len: usize,
+        /// CRLF bytes already consumed (carried over from
+        /// `BareSetCancelling` at transition). Body Vec is complete
+        /// when `body.len() == body_len && crlf_seen == 2`.
+        crlf_seen: u8,
     },
 }
 
@@ -125,7 +136,7 @@ pub(crate) struct UringConn {
     /// the bytes alive across the SQE→CQE window even if the keyspace
     /// mutates. Empty in the steady-state small-reply path → reactor stays
     /// on `prep_write` (no overhead).
-    pub(crate) write_arcs: Vec<(usize, Arc<[u8]>)>,
+    pub(crate) write_arcs: Vec<(usize, Arc<Box<[u8]>>)>,
     /// Reusable iovec scratch for `prep_writev` — sized to hold the iovecs
     /// for one writev submission. Lives in `UringConn` rather than on the
     /// stack so the kernel's async iovec read sees a stable address until
@@ -175,6 +186,14 @@ pub(crate) struct UringConn {
     /// is fully received and the conn returns to normal recv mode).
     /// Cleared once the recv SQE is queued.
     pub(crate) big_arg_rearm_recv: bool,
+    /// **v1.29 B2-alt** — count of leading bytes to discard from the
+    /// next multishot recv slab(s) before resuming normal RESP
+    /// dispatch. Set to 2 after the kernel-direct `prep_read` finishes
+    /// the body without consuming the trailing `\r\n` (which is still
+    /// in the TCP buffer and arrives via the re-armed multishot).
+    /// `uring_recv_dispatch` checks this counter and slices the slab
+    /// head before parsing.
+    pub(crate) pending_crlf_skip: u8,
     /// EOF/error seen on the socket — close once writes drain.
     pub(crate) closing: bool,
     /// **v1.25 B.4 + A.2** — when `Some`, the multishot recv handler
@@ -201,6 +220,7 @@ impl UringConn {
             big_arg_cancel_pending: false,
             big_arg_read_pending: false,
             big_arg_rearm_recv: false,
+            pending_crlf_skip: 0,
             closing: false,
             pending_big_arg: None,
         }

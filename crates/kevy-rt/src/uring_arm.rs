@@ -289,20 +289,28 @@ impl<C: Commands> Shard<C> {
             if uc.big_arg_read_pending && !uc.closing {
                 if let Some(boxed) = uc.pending_big_arg.as_mut()
                     && let crate::uring_conn::BigArgState::BareSetReading {
-                        body, body_len, ..
+                        body,
+                        body_len,
+                        ..
                     } = boxed.as_mut()
                 {
-                    let cap = *body_len + 2;
-                    let remaining = cap - body.len();
-                    if remaining > 0 {
+                    // prep_read SQE length = remaining body bytes.
+                    // The trailing CRLF is consumed via the re-armed
+                    // multishot after dispatch (slab head is checked
+                    // for the 2 leading CRLF bytes and skipped in
+                    // `uring_on_recv` / `uring_recv_dispatch`).
+                    let body_remaining = *body_len - body.len();
+                    if body_remaining > 0 {
                         let read_user_data = crate::uring_reactor::OP_BIG_READ | cid;
-                        let ptr =
-                            unsafe { body.as_mut_ptr().add(body.len()) };
+                        // SAFETY: body Vec capacity is exactly
+                        // `body_len`; pointer is valid for writes up to
+                        // `body_remaining` bytes.
+                        let ptr = unsafe { body.as_mut_ptr().add(body.len()) };
                         let ok = unsafe {
                             ring.prep_read(
                                 conn.sock.raw(),
                                 ptr,
-                                remaining as u32,
+                                body_remaining as u32,
                                 read_user_data,
                             )
                         };
