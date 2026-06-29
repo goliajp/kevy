@@ -27,6 +27,11 @@ redis-cli -p 6004 SET hello world
   CI95 < 1 %)、TCP パイプライン SET 1.4×、**Unix-domain socket では
   2.4×**、pub/sub ファンアウトは **subs ≥ 100 で 5.0–5.2×**、組込み時に
   **コア当たり ~9 M GET / 7 M SET**(数字は後述)。
+- **疎な接続ワークロードへの調整**(v1.30)—— `--accept-shards N` で
+  接続を N 個のシャードに集約。conns/shards が低い場面で有効。
+  `-c 50 -d 65536` SET(fair-core 10c)では `--accept-shards 3` が
+  デフォルト比 +10.6 % のスループット。詳細は
+  [`docs/accept-shards.md`](docs/accept-shards.md)。
 - **小さい** —— 768 KB のサーバ・バイナリ、起動後 5 MB 未満の RAM 常駐。
   コンテナ sidecar、小規模 VM、エッジ箱に収まる。
 - **モダンなアーキテクチャ** —— thread-per-core・shared-nothing・ホット

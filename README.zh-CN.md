@@ -24,6 +24,10 @@ redis-cli -p 6004 SET hello world
   TCP 管线化 SET 1.4×、**UDS(Unix-domain socket)2.4×**,pub/sub 扇出
   **subs ≥ 100 时 5.0–5.2×**,嵌入式每核 **~9 M GET / 7 M SET**
   (数字见下文)。
+- **稀疏连接 workload 可调**(v1.30)—— `--accept-shards N` 把连接折叠
+  到 N 个 shards 上,适用于 conns/shards 较低的场景。`-c 50 -d 65536`
+  SET(fair-core 10c)下,`--accept-shards 3` 比默认 +10.6% 吞吐。
+  详见 [`docs/accept-shards.md`](docs/accept-shards.md)。
 - **占用极小** —— 768 KB 服务器二进制,启动后驻留 5 MB 以内的 RAM。
   适合容器 sidecar、小 VM、边缘盒子。
 - **现代架构** —— thread-per-core、shared-nothing、热路径无锁、Linux 上
