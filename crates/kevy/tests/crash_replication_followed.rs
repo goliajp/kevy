@@ -85,6 +85,23 @@ fn crash_replication_followed_no_corruption() {
     let pool = WriterPool::spawn(primary_port, 4, Arc::clone(&stop));
     std::thread::sleep(Duration::from_secs(3));
     let pre_kill_acks = pool.log.lock().unwrap().len();
+    if pre_kill_acks < 1000 {
+        // Surface diagnostic BEFORE the vacuous-test assert so it's
+        // clear what happened on the kevy side. The stderr logs include
+        // the AOF replay summary + any replication-handshake error.
+        if let Ok(s) = std::fs::read_to_string(primary_tmp.join("kevy.stderr.log")) {
+            eprintln!("--- primary kevy.stderr.log (vacuous-test diagnostic):");
+            for line in s.lines().take(30) {
+                eprintln!("  {line}");
+            }
+        }
+        if let Ok(s) = std::fs::read_to_string(replica_tmp.join("kevy.stderr.log")) {
+            eprintln!("--- replica kevy.stderr.log (vacuous-test diagnostic):");
+            for line in s.lines().take(30) {
+                eprintln!("  {line}");
+            }
+        }
+    }
     assert!(
         pre_kill_acks >= 1000,
         "vacuous test: only {pre_kill_acks} primary-ACKs before kill"
