@@ -9,4 +9,4 @@ mod harness;
 mod writer_pool;
 
 pub use harness::{Harness, HarnessConfig, KillSignal, pick_free_port};
-pub use writer_pool::{AckEntry, AckLog, WriterPool, verify_all_present};
+pub use writer_pool::{AckEntry, AckLog, WriterPool, pipelined_verify_counts, verify_all_present};

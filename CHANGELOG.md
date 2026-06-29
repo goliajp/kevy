@@ -4,6 +4,37 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.31.2] — 2026-06-30 (test fix — pipelined verify; v1.31.x finding **withdrawn** — kevy everysec is excellent)
+
+**WITHDRAWAL of v1.31.0/v1.31.1 finding**: The crash_everysec test reported an "86 % lost-fraction" hypothesis pending v1.31.x investigation. v1.31.x investigation completed and the finding is **WITHDRAWN**: the 86 % was a TEST BUG (per-GET TCP connect exhausted Mac's ~16 k ephemeral ports × 60 s TIME_WAIT, masking present-but-unreadable keys as "lost"). After fixing the verify path to use a single pipelined TCP connection, the real loss-fraction is **0.05 % (342 of 622 k ACKs lost)** on the same workload — **vastly better than the naive "1 s window ≈ 20 %" expectation**.
+
+**Corrected empirical conclusion**:
+- `appendfsync = always`: 0 lost / 0 corrupted (zero-loss strict contract holds).
+- `appendfsync = everysec`: **0.05 % lost / 0 corrupted** on sustained 117 k SET/s SIGKILL+restart. The lost tail is bounded by the BufWriter capacity at kill time, not by the everysec timer cadence — kevy keeps writes very close to the kernel page cache.
+
+### Changed
+
+- `crates/kevy-chaos::verify_all_present` rewritten to use a single pipelined TCP connection (one big batched write + drain read + streaming RESP parser). The previous per-GET TCP connect approach hit ephemeral-port exhaustion at hundreds of thousands of verifications.
+- New public `kevy_chaos::pipelined_verify_counts(port, &acks) -> (present, lost, corrupted)` for tests that want counts instead of fail-fast.
+- `crates/kevy/tests/crash_everysec.rs`: switch to `pipelined_verify_counts`; log AOF file sizes + kevy.stderr replay summary for diagnostics.
+- `crates/kevy-chaos::Harness`: route kevy child stderr to `<data_dir>/kevy.stderr.log` so the AOF replay summary (and any panic) survives the test run for diagnosis.
+
+### Per-crate bumps
+
+- workspace 1.31.1 → 1.31.2
+- kevy-chaos 1.31.2 (test-only, `publish = false`)
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow
+
+### Tests
+
+`cargo test --workspace --lib` green. Chaos test runtimes after the fix:
+- `crash_always`: 2.22 s wall-clock (was 2.47 s — small dataset never hit port exhaustion).
+- `crash_everysec`: **5.28 s wall-clock** (was 144 s — pipelined verify is 27× faster than per-GET TCP connect).
+
+### Methodology lesson
+
+This is a positive case for the chaos-test framework: **the test surfaced a bug, but the bug was in the test, not in kevy**. v1.31.0 / v1.31.1 shipped with a "finding" that turned out to be wrong — investigating before celebrating the apparent bug surfaced the right answer. The methodology of chaos-test-then-investigate worked; only the v1.31.0 ship-time write-up overstated the open question.
+
 ## [v1.31.1] — 2026-06-30 (clean re-ship of v1.31.0 — `publish = false` on kevy-chaos)
 
 **v1.31.0 was withdrawn.** Its tag `v1.31.0` pushed but the release workflow's "publish chain self-check" caught a real-but-untrapped condition: the new `kevy-chaos` crate wasn't on the publish loop AND wasn't marked `publish = false`. Failed before any `cargo publish` ran; nothing reached crates.io as v1.31.0. v1.31.1 ships the same intended content with `publish = false` added to `crates/kevy-chaos/Cargo.toml` (test-only crate, doesn't belong on crates.io).
