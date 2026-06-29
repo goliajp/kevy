@@ -26,6 +26,10 @@ redis-cli -p 6004 SET hello world
   CI95 < 1 %), pipelined SET 1.4× over TCP and **2.4× over Unix-domain
   socket**, pub/sub fan-out **5.0–5.2× at subs ≥ 100**, and **~9 M GET /
   7 M SET** per core when embedded (numbers below).
+- **Tunable for sparse-conn workloads** (v1.30) — `--accept-shards N`
+  folds connections onto N shards when conns/shards is low. At
+  `-c 50 -d 65536` SET (fair-core 10c), `--accept-shards 3` lifts
+  throughput +10.6 % over default. See [`docs/accept-shards.md`](docs/accept-shards.md).
 - **Tiny footprint** — a 768 KB server binary that boots into under 5 MB of
   RAM. Fits a container sidecar, a small VM, or an edge box.
 - **Modern architecture** — thread-per-core, shared-nothing, no locks on
