@@ -275,7 +275,14 @@ impl<C: Commands> Runtime<C> {
             unix_listener = Some(kevy_sys::unix_listen(path_bytes.as_bytes(), 1024)?);
         }
         for id in 0..n {
-            let listener = tcp_listen_reuseport(self.ip, self.port, 1024)?;
+            let arms_accept = self.accept_shards.map_or(true, |k| id < k);
+            // v1.30 — off-accept-set shards skip the SO_REUSEPORT bind so
+            // the kernel routes new conns only to the armed subset.
+            let listener = if arms_accept {
+                Some(tcp_listen_reuseport(self.ip, self.port, 1024)?)
+            } else {
+                None
+            };
             // Cluster mode: a second, deterministic per-shard listener at
             // port_base + id (plain bind — exactly one owner per port).
             let cluster_listener = match self.cluster_port_base {

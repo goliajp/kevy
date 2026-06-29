@@ -19,7 +19,8 @@ impl<C: Commands> Shard<C> {
                 let Some(cl) = &self.cluster_listener else { return Ok(()) };
                 cl.accept()
             } else {
-                self.listener.accept()
+                let Some(l) = &self.listener else { return Ok(()) };
+                l.accept()
             };
             match accepted {
                 Ok(sock) => {

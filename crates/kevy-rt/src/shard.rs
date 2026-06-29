@@ -54,7 +54,8 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) store: Store,
     pub(crate) commands: C,
     pub(crate) poller: Poller,
-    pub(crate) listener: Socket,
+    /// **v1.30** — `None` on off-accept-set shards; they don't bind the listener so SO_REUSEPORT redirects.
+    pub(crate) listener: Option<Socket>,
     pub(crate) waker: Arc<Waker>,
     /// Inbound SPSC ring from each peer shard (index = source id; `self` = None).
     pub(crate) inboxes: Vec<Option<Consumer<Inbound>>>,
@@ -332,11 +333,15 @@ impl<C: Commands> Shard<C> {
             })?;
         }
 
-        self.listener.set_nonblocking()?;
-        // v1.30 — off-accept-set shards skip listener registration; kernel SO_REUSEPORT routes elsewhere.
-        if self.arms_accept { self.poller.add(self.listener.raw(), true, false)?; }
+        // v1.30 — off-accept-set shards have no listener (None); skip register.
+        let listener_fd = if let Some(l) = &self.listener {
+            l.set_nonblocking()?;
+            self.poller.add(l.raw(), true, false)?;
+            l.raw()
+        } else {
+            -1
+        };
         self.poller.add(self.waker.read_fd(), true, false)?;
-        let listener_fd = self.listener.raw();
         // -1 never matches an event fd, so the cluster-off loop below pays
         // one dead integer compare per event and nothing else.
         let mut cluster_fd = -1;

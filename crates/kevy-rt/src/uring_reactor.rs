@@ -177,9 +177,12 @@ impl<C: Commands> Shard<C> {
             // the kernel SO_REUSEPORT layer routes new conns only to the
             // armed subset. Off-accept-set shards still receive cross-shard
             // dispatched work via drain_inbound below.
-            if self.arms_accept && !accept_inflight {
+            if self.arms_accept
+                && !accept_inflight
+                && let Some(l) = &self.listener
+            {
                 accept_inflight =
-                    ring.prep_accept_multishot(self.listener.raw(), OP_ACCEPT);
+                    ring.prep_accept_multishot(l.raw(), OP_ACCEPT);
             }
             if self.arms_accept
                 && !cl_accept_inflight
