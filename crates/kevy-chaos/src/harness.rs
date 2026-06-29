@@ -103,12 +103,19 @@ impl Harness {
                 self.config.appendfsync,
             ),
         )?;
+        // Route kevy's stderr to a file under the data dir so test
+        // diagnostics (AOF replay summary, etc.) survive the test.
+        let stderr_path = self.config.data_dir.join("kevy.stderr.log");
+        let stderr_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&stderr_path)?;
         let mut cmd = Command::new(&self.config.kevy_bin);
         cmd.arg("--config")
             .arg(&cfg_path)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::from(stderr_file));
         let child = cmd.spawn()?;
         self.child = Some(child);
         self.wait_ready()

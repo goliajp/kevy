@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use kevy_chaos::{Harness, HarnessConfig, KillSignal, WriterPool, pick_free_port};
-use kevy_chaos::AckEntry;
+use kevy_chaos::{AckEntry, pipelined_verify_counts};
 
 #[test]
 #[ignore = "chaos test — opt-in via --ignored, needs `cargo build --release -p kevy` first"]
@@ -63,24 +63,36 @@ fn crash_everysec_no_corruption_bounded_loss() {
     let acks: Vec<AckEntry> = log.lock().unwrap().clone();
     eprintln!("crash_everysec: {} total ACKs", acks.len());
 
-    h.restart().expect("restart");
-
-    // Count present/lost/corrupted.
-    let mut present = 0usize;
-    let mut lost = 0usize;
-    let mut corrupted: Vec<String> = Vec::new();
-    for ack in &acks {
-        match read_value(port, &ack.key) {
-            Some(v) if v == ack.value => present += 1,
-            Some(wrong) => corrupted.push(format!(
-                "key={:?} expected={:?} got={:?}",
-                String::from_utf8_lossy(&ack.key),
-                String::from_utf8_lossy(&ack.value),
-                String::from_utf8_lossy(&wrong),
-            )),
-            None => lost += 1,
+    // v1.31.x diagnostic: dump AOF file sizes immediately post-kill.
+    // If sizes are tiny vs expected (~40 B × ACKs / threads), the bug
+    // is in the write→AOF-BufWriter path (writes not even reaching the
+    // kernel page cache). If sizes are roughly correct, the bug is in
+    // restart/replay.
+    let bytes_per_set_estimate = 40u64;
+    let expected_per_shard = acks.len() as u64 * bytes_per_set_estimate / 2;
+    for entry in std::fs::read_dir(&tmp).unwrap().flatten() {
+        let name = entry.file_name();
+        let n = name.to_string_lossy();
+        if n.starts_with("aof-") {
+            let sz = std::fs::metadata(entry.path()).map(|m| m.len()).unwrap_or(0);
+            eprintln!("  {n} = {sz} bytes (expected ~{expected_per_shard})");
         }
     }
+
+    h.restart().expect("restart");
+
+    // Dump kevy.stderr.log post-restart so the AOF replay summary is
+    // visible in test output.
+    if let Ok(s) = std::fs::read_to_string(tmp.join("kevy.stderr.log")) {
+        eprintln!("--- kevy.stderr.log (post-restart):");
+        for line in s.lines().take(30) {
+            eprintln!("  {line}");
+        }
+    }
+
+    // Count present/lost/corrupted using a SINGLE pipelined TCP conn.
+    // Per-GET TCP connect would exhaust ephemeral ports at 600 k+ ACKs.
+    let (present, lost, corrupted) = pipelined_verify_counts(port, &acks);
     eprintln!(
         "crash_everysec: present={present}, lost={lost}, corrupted={}",
         corrupted.len()
@@ -122,39 +134,6 @@ fn crash_everysec_no_corruption_bounded_loss() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
-fn read_value(port: u16, key: &[u8]) -> Option<Vec<u8>> {
-    use std::io::{Read, Write};
-    let mut s = std::net::TcpStream::connect(format!("127.0.0.1:{port}")).ok()?;
-    let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
-    let mut frame = Vec::with_capacity(key.len() + 24);
-    frame.extend_from_slice(b"*2\r\n$3\r\nGET\r\n");
-    frame.extend_from_slice(format!("${}\r\n", key.len()).as_bytes());
-    frame.extend_from_slice(key);
-    frame.extend_from_slice(b"\r\n");
-    s.write_all(&frame).ok()?;
-    let mut buf = vec![0u8; 1024];
-    let n = s.read(&mut buf).ok()?;
-    parse_bulk_reply(&buf[..n])
-}
-
-/// Parse `$<len>\r\n<bytes>\r\n` → Some(bytes), or `$-1\r\n` → None.
-fn parse_bulk_reply(reply: &[u8]) -> Option<Vec<u8>> {
-    if reply.starts_with(b"$-1\r\n") {
-        return None;
-    }
-    if reply.first() != Some(&b'$') {
-        return None;
-    }
-    let nl = reply.iter().position(|&b| b == b'\n')?;
-    let len_str = std::str::from_utf8(&reply[1..nl - 1]).ok()?;
-    let len: usize = len_str.parse().ok()?;
-    let body_start = nl + 1;
-    let body_end = body_start + len;
-    if reply.len() < body_end {
-        return None;
-    }
-    Some(reply[body_start..body_end].to_vec())
-}
 
 fn resolve_kevy_bin() -> PathBuf {
     if let Ok(p) = std::env::var("KEVY_BIN") {
