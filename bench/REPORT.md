@@ -36,6 +36,17 @@
 > `-d 65536 SET` (loopback-bound) and 10 KB+ SET tails (same root
 > cause).**
 >
+> **2026-06-29 v1.30.0 partial close on `-d 65536 SET`:**
+> v1.30 added `--accept-shards N` (static accept-set). At fair-core
+> 10c with `--accept-shards 3 --threads 10`, kevy 10c reaches 62.3 k
+> SET/s vs default 56.4 k (+10.6 %) — closing the gap to valkey
+> from -13.4 % to -9.5 %. A2-A3 plateau is the empirical sweet spot
+> (acceptable range `ceil(conns/25)..ceil(conns/15)`). The remaining
+> -9.5 % is the kernel-TCP-path residue — same root cause as the
+> §9 gate finding above, unchanged by app-layer work. See
+> [`PERF-FINDING-2026-06-29-v1-30-accept-shards-bench.md`](PERF-FINDING-2026-06-29-v1-30-accept-shards-bench.md)
+> for the perfgate + A-curve.
+>
 > ---
 >
 > **Current headline (v1.25.0, lx64 16-core, 2026-06-22):**
