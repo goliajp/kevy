@@ -234,6 +234,9 @@ fn push_server(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "server", "bind", format!("\"{a}.{b}.{c}.{d}\""));
     push(v, "server", "port", cfg.server.port.to_string());
     push(v, "server", "threads", cfg.server.threads.to_string());
+    if let Some(n) = cfg.server.accept_shards {
+        push(v, "server", "accept_shards", n.to_string());
+    }
     push(
         v,
         "server",

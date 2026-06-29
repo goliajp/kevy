@@ -14,6 +14,7 @@ fn main() -> ! {
     handle_help_and_version();
     let mut cfg = resolve_config();
     let threads = resolve_thread_count(&mut cfg);
+    validate_accept_shards(&cfg, threads);
     print_startup_banner(&cfg, threads);
     if !is_loopback(cfg.server.bind) {
         warn_unprotected_bind(cfg.server.bind);
@@ -61,6 +62,18 @@ fn resolve_config() -> Config {
 fn die<E: std::fmt::Display, T>(e: E) -> T {
     eprintln!("{e}");
     std::process::exit(1);
+}
+
+/// v1.30 — `--accept-shards` runtime validation. `None` (default) = every
+/// shard arms accept (v1.29 behavior). `Some(N)` requires `1 <= N <= threads`.
+fn validate_accept_shards(cfg: &Config, threads: usize) {
+    let Some(n) = cfg.server.accept_shards else { return };
+    if n == 0 || n > threads {
+        eprintln!(
+            "kevy: --accept-shards must be in 1..={threads}, got {n} (threads = {threads})"
+        );
+        std::process::exit(2);
+    }
 }
 
 /// Resolve `threads = 0 (auto)` into the actual count and write it back so
@@ -146,6 +159,9 @@ fn parse_cli() -> (Option<PathBuf>, CliOverrides) {
         bind: arg_value("--bind").and_then(|s| parse_ipv4(&s)),
         port: arg_value("--port").and_then(|s| s.parse().ok()),
         threads: arg_value("--threads")
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|&n| n > 0),
+        accept_shards: arg_value("--accept-shards")
             .and_then(|s| s.parse::<usize>().ok())
             .filter(|&n| n > 0),
         data_dir: arg_value("--dir").map(PathBuf::from),
