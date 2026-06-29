@@ -54,7 +54,8 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) store: Store,
     pub(crate) commands: C,
     pub(crate) poller: Poller,
-    pub(crate) listener: Socket,
+    /// **v1.30** — `None` on off-accept-set shards; they don't bind the listener so SO_REUSEPORT redirects.
+    pub(crate) listener: Option<Socket>,
     pub(crate) waker: Arc<Waker>,
     /// Inbound SPSC ring from each peer shard (index = source id; `self` = None).
     pub(crate) inboxes: Vec<Option<Consumer<Inbound>>>,
@@ -246,6 +247,8 @@ pub(crate) struct Shard<C: Commands> {
     /// Reactor loop iterations between wall-clock reads for the tick
     /// check. Replaces the old `TICK_CHECK_EVERY` const.
     pub(crate) tick_check_every: u32,
+    /// **v1.30** — `false` = compute-only shard (no accept SQE). See RFC.
+    pub(crate) arms_accept: bool,
     /// SLOWLOG ring + threshold (see [`crate::exec_slowlog::SlowlogState`]).
     /// Hot-reload via `apply_live_runtime_config` when the embedder
     /// returns `Some` in `LiveRuntimeConfig::slowlog_*`.
@@ -330,16 +333,21 @@ impl<C: Commands> Shard<C> {
             })?;
         }
 
-        self.listener.set_nonblocking()?;
-        self.poller.add(self.listener.raw(), true, false)?;
+        // v1.30 — off-accept-set shards have no listener (None); skip register.
+        let listener_fd = if let Some(l) = &self.listener {
+            l.set_nonblocking()?;
+            self.poller.add(l.raw(), true, false)?;
+            l.raw()
+        } else {
+            -1
+        };
         self.poller.add(self.waker.read_fd(), true, false)?;
-        let listener_fd = self.listener.raw();
         // -1 never matches an event fd, so the cluster-off loop below pays
         // one dead integer compare per event and nothing else.
         let mut cluster_fd = -1;
         if let Some(cl) = &self.cluster_listener {
             cl.set_nonblocking()?;
-            self.poller.add(cl.raw(), true, false)?;
+            if self.arms_accept { self.poller.add(cl.raw(), true, false)?; }
             cluster_fd = cl.raw();
         }
         // Same "fd or -1" trick for the replication listener (per Issue

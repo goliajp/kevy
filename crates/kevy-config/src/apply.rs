@@ -41,6 +41,7 @@ impl Config {
             }
             "port" => self.server.port = value_as_u16(&item)?,
             "threads" => self.server.threads = value_as_usize(&item)?,
+            "accept_shards" => self.server.accept_shards = Some(value_as_usize(&item)?),
             "data_dir" => self.server.data_dir = PathBuf::from(value_as_string(&item)?),
             k => return Err(schema_err(&item, format!("unknown [server] key: {k}"))),
         }
@@ -240,6 +241,13 @@ impl Config {
                     field: "[env] KEVY_THREADS".into(),
                     msg: format!("must be a non-negative integer, got {value:?}"),
                 })?;
+            }
+            "KEVY_ACCEPT_SHARDS" => {
+                self.server.accept_shards = Some(value.parse().map_err(|_| ConfigError::Schema {
+                    line: 0,
+                    field: "[env] KEVY_ACCEPT_SHARDS".into(),
+                    msg: format!("must be a positive integer, got {value:?}"),
+                })?);
             }
             "KEVY_DIR" => self.server.data_dir = PathBuf::from(value),
             "KEVY_AOF" => {

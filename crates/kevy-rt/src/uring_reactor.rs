@@ -173,17 +173,26 @@ impl<C: Commands> Shard<C> {
             // close, ENOBUFS, etc.). Zero -c1 cost (one persistent conn
             // takes one accept ever); cuts the per-accept SQE under
             // high-conn-churn workloads.
-            if !accept_inflight {
+            // v1.30 — `arms_accept = false` shards skip every accept arm so
+            // the kernel SO_REUSEPORT layer routes new conns only to the
+            // armed subset. Off-accept-set shards still receive cross-shard
+            // dispatched work via drain_inbound below.
+            if self.arms_accept
+                && !accept_inflight
+                && let Some(l) = &self.listener
+            {
                 accept_inflight =
-                    ring.prep_accept_multishot(self.listener.raw(), OP_ACCEPT);
+                    ring.prep_accept_multishot(l.raw(), OP_ACCEPT);
             }
-            if !cl_accept_inflight
+            if self.arms_accept
+                && !cl_accept_inflight
                 && let Some(cl) = &self.cluster_listener
             {
                 cl_accept_inflight =
                     ring.prep_accept_multishot(cl.raw(), OP_ACCEPT_CL);
             }
-            if !un_accept_inflight
+            if self.arms_accept
+                && !un_accept_inflight
                 && let Some(un) = &self.unix_listener
             {
                 un_accept_inflight =
