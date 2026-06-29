@@ -46,14 +46,65 @@ use std::sync::Arc;
 /// Out of scope (v1.25.x follow-up): `SET k <BIG> EX 10` (big value not
 /// last); `MSET k1 <BIG> k2 v2` (big value not last). These keep the
 /// borrowed-slice path.
-pub(crate) struct BigArgState {
-    /// Accumulating full RESP frame bytes (header + already-received
-    /// body bytes). Capacity equals `total` so subsequent
-    /// `extend_from_slice` never reallocates.
-    pub(crate) frame: Vec<u8>,
-    /// Total expected RESP frame length. Frame is complete when
-    /// `frame.len() == total`.
-    pub(crate) total: usize,
+pub(crate) enum BigArgState {
+    /// **v1.25 B.5 path** — SETEX / PSETEX / APPEND / GETSET / MSET,
+    /// OR cross-shard bare-SET, OR (defensive) bare-SET probe that
+    /// failed shard-affinity at promote time. Frame Vec accumulates
+    /// the whole RESP message via slab→memcpy; on completion runs
+    /// through `dispatch_batch`. v1.28 byte-identical behavior.
+    Frame {
+        /// Capacity equals `total`; subsequent `extend_from_slice`
+        /// never reallocates.
+        frame: Vec<u8>,
+        /// Total expected RESP frame length. Frame complete when
+        /// `frame.len() == total`.
+        total: usize,
+    },
+    /// **v1.29 B2-alt** — local-shard bare-SET, mid-cancel of the
+    /// multishot recv. Both flag fields start `false`; the kernel
+    /// emits two CQEs in either order:
+    /// - `OP_BIG_CANCEL` CQE: handler sets `cancel_acked = true`.
+    /// - Terminal `OP_RECV` CQE with `res = -ECANCELED`: handler in
+    ///   `uring_on_recv` sets `target_canceled = true`.
+    /// When BOTH flip, the state transitions to [`Self::BareSetReading`]
+    /// and a single-shot `prep_read` SQE is submitted directly into
+    /// `body` for the remaining bytes.
+    ///
+    /// In-flight multishot CQEs carrying actual data may also arrive
+    /// during this phase (after cancel was queued but before kernel
+    /// processed it). They land in `uring_on_recv`'s normal path and
+    /// `extend_from_slice` into `body` as in v1.25 B.5 — same slab→
+    /// body memcpy cost as v1.28 for those bytes. The B2-alt win is on
+    /// the bytes that arrive AFTER ECANCELED, via the single-shot read.
+    BareSetCancelling {
+        /// Pre-extracted SET key (small alloc at promote).
+        key: Vec<u8>,
+        /// Body Vec. Capacity = `body_len + 2` so the trailing CRLF
+        /// lands without realloc. Bytes 0..body_len are the value;
+        /// the last two are the terminating CRLF (stripped before the
+        /// owned-Vec hand-off to `store.set`).
+        body: Vec<u8>,
+        /// Target value length (the N from `$<N>\r\n`).
+        body_len: usize,
+        /// `OP_BIG_CANCEL` CQE seen yet.
+        cancel_acked: bool,
+        /// Terminal `OP_RECV` CQE seen with `res = -ECANCELED` (or
+        /// `res = -ENOENT` if the multishot had already terminated
+        /// when cancel landed — same semantic: no more multishot CQEs).
+        target_canceled: bool,
+    },
+    /// **v1.29 B2-alt** — single-shot `prep_read` is in flight; kernel
+    /// writes recv bytes directly into `body` (no userspace memcpy).
+    /// On `OP_BIG_READ` CQE: advance `body.set_len(body.len() + res)`;
+    /// if `body.len() < body.capacity()`, re-submit another
+    /// `prep_read` for the remaining bytes; if `body.len() ==
+    /// body.capacity()`, finalize via the local-shard fast path and
+    /// re-arm the multishot for pipelined commands.
+    BareSetReading {
+        key: Vec<u8>,
+        body: Vec<u8>,
+        body_len: usize,
+    },
 }
 
 /// io_uring-specific per-connection state (the byte buffers that must outlive
@@ -107,6 +158,23 @@ pub(crate) struct UringConn {
     /// `arm_conns` visit covers all of them. Cleared in `arm_conns`
     /// right before processing.
     pub(crate) arm_queued: bool,
+    /// **v1.29 B2-alt** — the conn needs a cancel SQE for its in-flight
+    /// multishot recv on the next [`Shard::uring_arm_conns`] visit (the
+    /// big-arg state machine is transitioning to single-shot `prep_read`
+    /// for the remaining body bytes). Cleared once the cancel SQE is
+    /// queued.
+    pub(crate) big_arg_cancel_pending: bool,
+    /// **v1.29 B2-alt** — the conn needs a single-shot `prep_read` SQE
+    /// on the next [`Shard::uring_arm_conns`] visit. Set when the
+    /// cancel/target cancellation pair completes, OR after a partial
+    /// `prep_read` CQE leaves body bytes still pending. Cleared once
+    /// the SQE is queued.
+    pub(crate) big_arg_read_pending: bool,
+    /// **v1.29 B2-alt** — the conn needs its multishot recv re-armed
+    /// on the next [`Shard::uring_arm_conns`] visit (the big-arg body
+    /// is fully received and the conn returns to normal recv mode).
+    /// Cleared once the recv SQE is queued.
+    pub(crate) big_arg_rearm_recv: bool,
     /// EOF/error seen on the socket — close once writes drain.
     pub(crate) closing: bool,
     /// **v1.25 B.4 + A.2** — when `Some`, the multishot recv handler
@@ -130,6 +198,9 @@ impl UringConn {
             write_byte_cap: 0,
             write_inflight_bytes: 0,
             arm_queued: false,
+            big_arg_cancel_pending: false,
+            big_arg_read_pending: false,
+            big_arg_rearm_recv: false,
             closing: false,
             pending_big_arg: None,
         }

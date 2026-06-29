@@ -9,6 +9,10 @@ use crate::Commands;
 use crate::shard::Shard;
 use crate::uring_conn::UringConn;
 use crate::uring_reactor::ENOBUFS;
+/// Linux `errno`s referenced by [`Shard::uring_on_recv`]'s big-arg
+/// cancel handling. `ECANCELED = 125` (kernel emits `-ECANCELED` on
+/// the target's terminal CQE after a successful `IORING_OP_ASYNC_CANCEL`).
+const ECANCELED: i32 = 125;
 use kevy_map::KevyMap;
 use kevy_uring::{Completion, ProvidedBufRing};
 
@@ -86,14 +90,43 @@ impl<C: Commands> Shard<C> {
         io: &mut KevyMap<u64, UringConn>,
         pbuf: &mut ProvidedBufRing,
     ) {
+        // v1.29 B2-alt: -ECANCELED (-125) on a multishot recv is ALWAYS
+        // the big-arg cancel cycle's terminal CQE (kevy doesn't issue
+        // recv cancels anywhere else). Route to the state-machine
+        // handler regardless of whether `pending_big_arg` is still set
+        // — the body may have completed via in-flight multishot CQEs
+        // between cancel submission and ECANCELED arrival, in which
+        // case the handler safely no-ops state and re-arms multishot.
+        if c.res == -ECANCELED {
+            if let Some(uc) = io.get_mut(&cid) {
+                uc.recv_armed = false;
+            }
+            self.uring_on_big_arg_target_canceled(cid, io);
+            return;
+        }
         // The multishot SQE stops firing once a completion lacks F_MORE (error,
         // ENOBUFS, or EOF) — mark it for re-arming next loop.
+        // Suppress the auto-rearm only while we're mid-big-arg-cancel
+        // (so the state machine drives recv mode).
+        let mut suppress_rearm = false;
+        if let Some(uc) = io.get_mut(&cid)
+            && let Some(state) = uc.pending_big_arg.as_ref()
+            && matches!(
+                state.as_ref(),
+                crate::uring_conn::BigArgState::BareSetCancelling { .. }
+                    | crate::uring_conn::BigArgState::BareSetReading { .. }
+            )
+        {
+            suppress_rearm = true;
+        }
         if !c.has_more() {
             if let Some(uc) = io.get_mut(&cid) {
                 uc.recv_armed = false;
             }
-            // K4: needs an arm visit to re-prep the recv SQE.
-            self.mark_arm_pending(cid, io);
+            if !suppress_rearm {
+                // K4: needs an arm visit to re-prep the recv SQE.
+                self.mark_arm_pending(cid, io);
+            }
         }
         if c.res <= 0 {
             // Close on EOF (0) or a real error, but NOT on -ENOBUFS (the ring was

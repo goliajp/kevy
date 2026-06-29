@@ -261,14 +261,78 @@ impl<C: Commands> Shard<C> {
                     uc.write_inflight = true;
                 }
             }
-            // Arm a multishot recv if one isn't already running (it re-fires per
-            // arrival into the shared provided-buffer ring, so this happens once
-            // per connection, not once per read — the syscall-batching win).
-            if !uc.recv_armed
+            // v1.29 B2-alt — three SQE submissions for the big-arg
+            // cancel / single-shot read / re-arm cycle. Each gated on a
+            // per-conn flag set by the state machine.
+            if uc.big_arg_cancel_pending {
+                // Belt-and-braces: only cancel if the state still wants
+                // it. The body-completed-via-multishot race in
+                // `uring_bigbulk_feed::BareSetCancelling` clears this
+                // flag pre-arm-pass, but if a future code path
+                // accidentally leaves it set when the state has been
+                // taken, we'd cancel the freshly re-armed multishot
+                // and wedge the conn.
+                let still_cancelling = matches!(
+                    uc.pending_big_arg.as_deref(),
+                    Some(crate::uring_conn::BigArgState::BareSetCancelling { .. })
+                );
+                if !still_cancelling {
+                    uc.big_arg_cancel_pending = false;
+                } else {
+                    let target = OP_RECV | cid;
+                    let user_data = crate::uring_reactor::OP_BIG_CANCEL | cid;
+                    if ring.prep_cancel(target, user_data) {
+                        uc.big_arg_cancel_pending = false;
+                    }
+                }
+            }
+            if uc.big_arg_read_pending && !uc.closing {
+                if let Some(boxed) = uc.pending_big_arg.as_mut()
+                    && let crate::uring_conn::BigArgState::BareSetReading {
+                        body, body_len, ..
+                    } = boxed.as_mut()
+                {
+                    let cap = *body_len + 2;
+                    let remaining = cap - body.len();
+                    if remaining > 0 {
+                        let read_user_data = crate::uring_reactor::OP_BIG_READ | cid;
+                        let ptr =
+                            unsafe { body.as_mut_ptr().add(body.len()) };
+                        let ok = unsafe {
+                            ring.prep_read(
+                                conn.sock.raw(),
+                                ptr,
+                                remaining as u32,
+                                read_user_data,
+                            )
+                        };
+                        if ok {
+                            uc.big_arg_read_pending = false;
+                        }
+                    } else {
+                        uc.big_arg_read_pending = false;
+                    }
+                } else {
+                    // State went away (completed via multishot before
+                    // arm pass) — clear the flag.
+                    uc.big_arg_read_pending = false;
+                }
+            }
+            // Re-arm multishot recv:
+            //  (a) v1.25 default — when nothing else is gating it.
+            //  (b) v1.29 B2-alt — after big-arg completion, when
+            //      `big_arg_rearm_recv` is set.
+            // Both paths converge on the same `prep_recv_multishot` call.
+            let want_multishot = !uc.recv_armed
+                && !uc.closing
+                && uc.pending_big_arg.is_none();
+            if (want_multishot || uc.big_arg_rearm_recv)
+                && !uc.recv_armed
                 && !uc.closing
                 && ring.prep_recv_multishot(conn.sock.raw(), bgid, OP_RECV | cid)
             {
                 uc.recv_armed = true;
+                uc.big_arg_rearm_recv = false;
             }
             // K4: re-queue if more work remains. A chunked writev
             // capped the SQE before all arcs/tail bytes were covered;
