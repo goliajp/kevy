@@ -69,7 +69,13 @@ impl<C: Commands> Shard<C> {
         tail: &[u8],
         io: &mut KevyMap<u64, UringConn>,
     ) -> bool {
-        let BigArgGenericProbe::Promote { total, bytes_present } = probe_generic_bigbulk(tail)
+        let BigArgGenericProbe::Promote {
+            total,
+            bytes_present,
+            body_start_in_tail,
+            body_len,
+            bare_set_key_range,
+        } = probe_generic_bigbulk(tail)
         else {
             return false;
         };
@@ -82,25 +88,86 @@ impl<C: Commands> Shard<C> {
             // already caps body size; add a small slack for headers.
             return false;
         }
+        // v1.29 B2-alt — bare-SET local-shard fast path: kernel writes
+        // the value body directly into an owned Vec via single-shot
+        // `prep_read` (no userspace memcpy through the slab). Gated on
+        // shard-affinity at promote time so the v1.25 B.4 cross-shard
+        // data-loss bug never re-emerges.
+        if let Some((k_start, k_end)) = bare_set_key_range {
+            let key = tail[k_start..k_end].to_vec();
+            if self.shard_of(&key) == self.id {
+                // Capacity = body_len EXACTLY. `Vec::into_boxed_slice`
+                // (called inside `pick_value_for_set_owned`) is
+                // zero-copy only when `len == capacity`; trailing CRLF
+                // is sunk into `crlf_seen`, never into this Vec.
+                let mut body = Vec::with_capacity(body_len);
+                let body_in_slab =
+                    bytes_present.saturating_sub(body_start_in_tail).min(body_len);
+                body.extend_from_slice(
+                    &tail[body_start_in_tail..body_start_in_tail + body_in_slab],
+                );
+                // CRLF bytes potentially present after body in this slab.
+                let crlf_in_slab = bytes_present
+                    .saturating_sub(body_start_in_tail + body_in_slab)
+                    .min(2);
+                if body.len() == body_len && crlf_in_slab == 2 {
+                    // Whole frame in slab — dispatch immediately, no
+                    // cancel/single-shot dance needed.
+                    self.dispatch_bareset_owned(cid, key, body, body_len, io);
+                    return true;
+                }
+                let Some(uc) = io.get_mut(&cid) else { return false };
+                uc.pending_big_arg = Some(Box::new(BigArgState::BareSetCancelling {
+                    key,
+                    body,
+                    body_len,
+                    crlf_seen: crlf_in_slab as u8,
+                    cancel_acked: false,
+                    target_canceled: false,
+                }));
+                // Defer the cancel-SQE submission to the next arm pass;
+                // `uring_arm_conns` checks this flag and queues
+                // `prep_cancel(OP_RECV|cid, OP_BIG_CANCEL|cid)`.
+                uc.big_arg_cancel_pending = true;
+                self.mark_arm_pending(cid, io);
+                return true;
+            }
+            // Cross-shard bare-SET: fall through to Frame path (no
+            // regression vs v1.28).
+        }
+        // Frame path — every non-bare-SET promote + cross-shard bare-SET.
+        self.install_frame_state(cid, total, bytes_present, tail, io)
+    }
+
+    /// Frame-variant install + maybe-finalize. Extracted from
+    /// `try_promote_bigbulk` so the B2-alt cross-shard fallback shares it.
+    fn install_frame_state(
+        &mut self,
+        cid: u64,
+        total: usize,
+        bytes_present: usize,
+        tail: &[u8],
+        io: &mut KevyMap<u64, UringConn>,
+    ) -> bool {
         let take = bytes_present.min(total);
         let mut frame = Vec::with_capacity(total);
         frame.extend_from_slice(&tail[..take]);
         if frame.len() == total {
-            // Pathological: the entire frame including the big-bulk
-            // body+CRLF landed in this slab. Re-dispatch immediately,
-            // don't install state.
             self.uring_apply_frame_stitch(cid, frame, io);
             return true;
         }
-        uc.pending_big_arg = Some(Box::new(BigArgState { frame, total }));
+        let Some(uc) = io.get_mut(&cid) else { return false };
+        uc.pending_big_arg = Some(Box::new(BigArgState::Frame { frame, total }));
         true
     }
 
-    /// **v1.25 B.4 + A.2 / B.5** — append slab bytes into the conn's
-    /// `pending_big_arg.frame`, completing the frame when `frame.len() ==
-    /// total`. Excess bytes past the frame end are a pipelined next
-    /// command; they get routed through the regular dispatch path so the
-    /// next frame in the pipeline can also promote.
+    /// **v1.25 B.5 / v1.29 B2-alt** — append multishot-recv slab bytes
+    /// into the conn's in-progress big-arg dest Vec (`frame` for the
+    /// Frame variant, `body` for the BareSetCancelling variant). After
+    /// the cancel takes effect — both flags set in `BareSetCancelling`
+    /// — incoming bytes come via single-shot `prep_read` CQEs through
+    /// [`Self::uring_on_big_arg_read`] instead. BareSetReading never
+    /// receives multishot CQEs (multishot is cancelled by then).
     pub(crate) fn uring_bigbulk_feed(
         &mut self,
         cid: u64,
@@ -109,20 +176,74 @@ impl<C: Commands> Shard<C> {
     ) {
         let Some(uc) = io.get_mut(&cid) else { return };
         let Some(state) = uc.pending_big_arg.as_mut() else { return };
-        let need = state.total - state.frame.len();
-        let take = slab.len().min(need);
-        if take > 0 {
-            state.frame.extend_from_slice(&slab[..take]);
-        }
-        let total_v = state.total;
-        if state.frame.len() == total_v {
-            let state = uc.pending_big_arg.take().expect("just observed");
-            self.uring_apply_frame_stitch(cid, state.frame, io);
-        }
+        let take = match state.as_mut() {
+            BigArgState::Frame { frame, total } => {
+                let need = *total - frame.len();
+                let t = slab.len().min(need);
+                if t > 0 {
+                    frame.extend_from_slice(&slab[..t]);
+                }
+                if frame.len() == *total {
+                    if let Some(boxed) = uc.pending_big_arg.take()
+                        && let BigArgState::Frame { frame, .. } = *boxed
+                    {
+                        self.uring_apply_frame_stitch(cid, frame, io);
+                    }
+                }
+                t
+            }
+            BigArgState::BareSetCancelling {
+                body,
+                body_len,
+                crlf_seen,
+                ..
+            } => {
+                // Phase 1 — fill body up to body_len (preserves the
+                // `cap == body_len` invariant the C3 zero-copy
+                // adoption requires).
+                let take_body = (*body_len - body.len()).min(slab.len());
+                if take_body > 0 {
+                    body.extend_from_slice(&slab[..take_body]);
+                }
+                // Phase 2 — consume up to 2 trailing CRLF bytes.
+                let crlf_pending = 2 - *crlf_seen as usize;
+                let take_crlf = crlf_pending.min(slab.len() - take_body);
+                *crlf_seen += take_crlf as u8;
+                let t = take_body + take_crlf;
+                let complete = body.len() == *body_len && *crlf_seen == 2;
+                if complete {
+                    // Body finished entirely via multishot slabs before
+                    // the cancel pair completed. Drop the state +
+                    // dispatch. **Critical**: clear `big_arg_cancel_pending`
+                    // so the next arm pass doesn't submit a cancel SQE
+                    // that would cancel the newly re-armed multishot
+                    // (which would wedge the conn). The target ECANCELED
+                    // CQE will not fire because we never submitted the
+                    // cancel — the multishot stays armed.
+                    uc.big_arg_cancel_pending = false;
+                    if let Some(boxed) = uc.pending_big_arg.take()
+                        && let BigArgState::BareSetCancelling { key, body, body_len, .. } = *boxed
+                    {
+                        self.dispatch_bareset_owned(cid, key, body, body_len, io);
+                    }
+                }
+                t
+            }
+            BigArgState::BareSetReading { .. } => {
+                // Defensive: multishot is cancelled in this phase, so a
+                // CQE here shouldn't fire. If it does (kernel race), drop
+                // the bytes — the conn would be wedged either way.
+                0
+            }
+        };
         if take < slab.len() {
             self.uring_bigbulk_feed_pipelined(cid, io, &slab[take..]);
         }
     }
+
+    // v1.29 B2-alt cancel/single-shot/re-arm handlers + bareset
+    // dispatch live in `crate::uring_bigbulk_b2alt` so this file stays
+    // under the 500-LOC house rule. Same `impl<C: Commands> Shard<C>`.
 
     /// Route pipelined bytes past the BigBulk frame through the regular
     /// dispatch path — they might be a fresh big-value command that
