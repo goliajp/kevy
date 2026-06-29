@@ -5,12 +5,8 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-repository.workspace = true
-homepage.workspace = true
-documentation = "https://docs.rs/kevy-chaos"
-readme = "README.md"
-keywords = ["redis", "kevy", "chaos", "stress", "crash"]
-categories = ["development-tools::testing"]
+# Test-only crate. Not published to crates.io.
+publish = false
 
 [lints]
 workspace = true

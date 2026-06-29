@@ -4,7 +4,16 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
-## [v1.31.0] — 2026-06-30 (industrial-grade testing — chaos test scaffolding, step 1 of 5)
+## [v1.31.1] — 2026-06-30 (clean re-ship of v1.31.0 — `publish = false` on kevy-chaos)
+
+**v1.31.0 was withdrawn.** Its tag `v1.31.0` pushed but the release workflow's "publish chain self-check" caught a real-but-untrapped condition: the new `kevy-chaos` crate wasn't on the publish loop AND wasn't marked `publish = false`. Failed before any `cargo publish` ran; nothing reached crates.io as v1.31.0. v1.31.1 ships the same intended content with `publish = false` added to `crates/kevy-chaos/Cargo.toml` (test-only crate, doesn't belong on crates.io).
+
+### Fix (v1.31.0 → v1.31.1)
+
+- `crates/kevy-chaos/Cargo.toml`: add `publish = false` per the workflow self-check's "test-only ⇒ don't publish" rule. Test-only crates remain workspace members (so chaos tests still build via path-dep) but never reach crates.io.
+- All other v1.31.0 content unchanged (see below).
+
+## [v1.31.0] — 2026-06-30 (WITHDRAWN — industrial-grade testing chaos test scaffolding, step 1 of 5)
 
 **Theme**: v2 = kevy 工业级 (full industrial-grade). v1.x 是过程 (process). v1.31 is step 1 toward v2 — raising the testing standard. **No new server features.** Per user direction: 5 categories to cover (并发 / 锁 / 竞争 / 多写 / 断电); v1.31 starts with 断电 = crash safety (highest blast-radius for users).
 
