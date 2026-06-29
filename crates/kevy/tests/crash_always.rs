@@ -45,11 +45,7 @@ fn crash_always_fsync_zero_loss() {
 
     let cfg = HarnessConfig {
         kevy_bin: bin_path,
-        port,
-        threads: 2,
-        data_dir: tmp.clone(),
-        appendfsync: "always".to_string(),
-        spawn_timeout: Duration::from_secs(10),
+        ..HarnessConfig::new(tmp.clone(), port).with_fsync("always")
     };
 
     let mut h = Harness::spawn(cfg).expect("spawn kevy");
