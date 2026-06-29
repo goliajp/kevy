@@ -417,6 +417,7 @@ name = "kevy"
 version = "1.30.0"
 dependencies = [
  "kevy-bench",
+ "kevy-chaos",
  "kevy-client",
  "kevy-config",
  "kevy-elect",
@@ -443,6 +444,13 @@ version = "1.30.0"
 dependencies = [
  "kevy-bench",
  "kevy-hash",
+]
+
+[[package]]
+name = "kevy-chaos"
+version = "1.30.0"
+dependencies = [
+ "kevy-resp-client",
 ]
 
 [[package]]
