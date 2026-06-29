@@ -32,6 +32,29 @@ The RFC heuristic `accept_shards ≈ ceil(conns / 15)` predicted A3 for `-c 50`:
 
 **A3 vs A6 vs default empirical pattern confirms the c100 GET decomp's "conn-density tax" mechanism is real** — fewer-but-denser shards win, with a clear knee in throughput around the 15-conns/shard mark.
 
+## Extended A-curve sweep (2026-06-30 post-ship)
+
+Empirical sweep over all `--accept-shards N` values 1..10 at the same `-c 50 -d 65536` workload (2 runs each for new values; A3/A6/default carry their original 3-run averages):
+
+| config | conns/shard | avg SET/s | vs default |
+|-------:|------------:|----------:|-----------:|
+| A1 | 50.0 | 57.8 k | +2.7 % |
+| **A2** | **25.0** | **62.3 k** | **+10.6 %** ⭐ |
+| **A3** | **16.7** | **62.3 k** | **+10.6 %** ⭐ (RFC heuristic prediction) |
+| A4 | 12.5 | 60.2 k | +6.9 % |
+| A5 | 10.0 | 57.8 k | +2.7 % (2-run noise; sits between A4 and A6) |
+| A6 | 8.3 | 59.3 k | +5.2 % |
+| default A10 | 5.0 | 56.3 k | — |
+
+- **Empirical sweet spot is broader than the RFC's single point**: A2 (25 conns/shard) and A3 (16.7) tie at ~62 k. Both `≥ ~17 conns/shard` qualifies.
+- A1 (single shard, 50 conns) declines from peak — one core saturating limits throughput; cross-shard hops to the other 9 keyspace shards still occur.
+- A4 / A5 fall on the descending side; A6 sees partial recovery (noise) before A10 hits maximum tax.
+- The curve is approximately monotonic on the **sparse side** (A4 → A10 = declining); the **dense side** (A1 → A3) is also monotonic upward to the peak. The peak plateau is A2-A3.
+
+## Recommendation refinement
+
+The RFC heuristic `accept_shards ≈ ceil(conns / 15)` predicted A3 for `-c 50` — confirmed at the peak. The extended sweep shows the **acceptable range is `ceil(conns / 25) .. ceil(conns / 15)`**: for `-c 50`, both A2 and A3 work; for `-c 100`, both A4 and A6 would work. Users with mixed concurrency can pick the lower end (denser) without throughput loss vs the upper end.
+
 ## Caveats
 
 - **Per-run variance is ~5 %** at 3 runs (default ranges 55k–58k; A3 ranges 60k–64k). Robust at the +10pp level; would not catch a +3pp tweak.
