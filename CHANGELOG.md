@@ -4,6 +4,89 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.29.0] — 2026-06-29 (perf architectural prep + empirical Phase A re-verification)
+
+**Honest framing**: no per-workload throughput headline. The v1.29 cycle landed three real architectural improvements on the big-value SET hot path, all perf-record-verified to do real work, but throughput stays within noise of v1.28 at every measured workload because the actual bottleneck is in the kernel TCP path — beyond app-code reach. The cycle's lasting deliverables are (a) the architectural infrastructure (reusable for future kernel-bypass work), (b) six cross-project Discovery findings landing in the global perf methodology, and (c) the first empirical doc-of-record that kevy's userspace hot-path is at the architectural ceiling vs valkey 9.1.
+
+### Changed — architectural
+
+- **`Value::ArcBulk`: `Arc<[u8]>` → `Arc<Box<[u8]>>`** (Option A). The previous type forced a mandatory memcpy at every big-SET via Rust std's `Arc::from(Box<[u8]>) = copy_from_slice` (the `Arc<[T]>` DST layout puts data past the refcount words, incompatible with Box's allocation). The new type makes `Arc::new(box)` truly zero-copy (boxed slice's heap buffer stays put; only a 32 B `ArcInner<Box<[u8]>>` is freshly malloced). Per-GET cost: one extra pointer dereference; per-SET save: one 64 KiB-class memcpy. Touches `kevy-store/value+string+keyspace`, `kevy-rt/conn+uring_conn+exec_pubsub`, `kevy-persist/lib+rewrite_fmt`. `pick_value_for_set_owned` is now true zero-copy on the owned-Vec adoption path.
+- **`kevy-rt` big-arg bareset recv state machine** (B2-alt). When a `SET key <BIG>` with key hashing to the current shard arrives, the multishot recv is cancelled and replaced with a single-shot `prep_read` SQE that writes the kernel-side recv bytes directly into the destination `Vec<u8>` (no userspace memcpy through the provided-buffer slab). Multishot is re-armed after the body completes. Body Vec capacity is sized to `body_len` EXACTLY (trailing CRLF tracked separately in `crlf_seen` + `pending_crlf_skip`), preserving the `len == capacity` invariant required for `Vec::into_boxed_slice` to be zero-copy. Cross-shard correctness preserved via shard-affinity check at promote time (cross-shard bare-SETs fall through to the v1.28 Frame path).
+- **`kevy-uring`: `prep_cancel`** for `IORING_OP_ASYNC_CANCEL` (Step 1 of B2-alt). General-purpose helper for cancelling in-flight SQEs by `user_data` tag. Tested standalone (phantom-target → `-ENOENT`; in-flight timeout cancel → `-ECANCELED`).
+- **`OP_SHIFT` widened from 61 to 60** in the io_uring user_data layout to make room for two new op tags (`OP_BIG_CANCEL`, `OP_BIG_READ`). Conn-id space stays 60-bit (~1.15 × 10^18), orders of magnitude beyond any realistic `next_conn_id` growth.
+
+### Verified — perf-record validation
+
+`perf record -F 999 --call-graph dwarf` at `-c 50 -P 1 -d 65536 -t set` on lx64 (v1.29 B2-alt + Option A binary):
+
+- libc `__memcpy_avx_unaligned_erms` self-time: 15.92 % → **10.03 %** (-5.89 pp)
+- Total libc memcpy: 18.20 % → **15.99 %** (-2.21 pp)
+
+The architectural changes are doing real work. Throughput stays neutral because the saved cycles overlap with kernel TCP work (rep_movs at 16 %, nft_do_chain 2.4 %, syscall path) and don't shorten the total per-op cycle.
+
+### Verified — methodology v1.2 §9 Pre-Phase-B gate compliance
+
+`perf record` on c100 GET (`--call-graph dwarf,32768`) found **NO actionable userspace symbol ≥ 10 pp self-time**. The 40 % `run_uring` aggregate decomposes to ~50 % syscall chain (`tcp_sendmsg_locked` 21.22 % inclusive → `__tcp_transmit_skb` 17.76 % → softirq), ~25 % `spin_loop` PAUSE, ~10 % softirq processing, ~5-15 % actual userspace dispatch. Every ≥ 10 pp symbol is kernel-side or already-attacked. Methodology gate says NO Phase B userspace attack is justified.
+
+### Project standing perf claim — first doc-of-record
+
+After a 19-round empirical Phase A sweep across 5 workload axes (A pipelining / B big-value / G collections / H pub/sub / I tail latency) + fair-core 10c-vs-10c verification:
+
+**kevy is competitive-or-ahead of valkey 9.1 at every measured workload axis except `-d 65536 SET` (and 10 KB+ SET tails by extension), where the gap is structurally located in the kernel TCP path — beyond app-code reach.**
+
+Specific axes:
+- Pipelining `-P 256`: kevy 11.9M GET vs valkey 2.9M = **4.1× ahead** (kevy 2-core vs valkey 10-core)
+- Collections (SADD/HSET/ZADD/LPUSH/RPUSH/LRANGE): kevy 2-core ties valkey 10-core (per-core kevy more efficient)
+- Pub/sub fan-out: kevy 4-7× ahead at small msg; **+8.9 % ahead** at subs=50 size=4 KB (yesterday's "-3 % loss" was valkey 24% noise misread)
+- Tail latency: kevy clearly better at c100-P1 SET (max 0.559 ms vs valkey 1.207 ms) and c50-P16 pipelined (2.5× p50)
+- `-d 65536 SET`: kevy 2-core -5 %, 10-core fair-core -13 % (loopback-bound; 3 Phase B attacks all throughput-neutral via methodology v1.2 §9 gate compliance)
+
+### Reverted / not shipped
+
+- **B3 C2+C3** (bareset enum + dispatch_bareset_owned via dispatch_batch fallback) — implemented round 5, perf-record showed userspace memcpy REGRESSED 6.93 pp (synthesize_set_frame on cross-shard fallback added a memcpy). REVERTED 2026-06-29. Replaced by B2-alt + Option A which avoid the cross-shard regression.
+- **A7 conn-density-aware spin_limit** — implemented round 15, throughput-neutral on both targeted workloads (bigval-SET fair-core: -1.2 %, c100 GET: -0.5 %, both within noise). REVERTED 2026-06-29. The c100 GET decomposition's "conn-density tax" was source-only Phase A reasoning; methodology v1.2 §9 gate added in round 10 would have caught it before implementation (the gate was added BECAUSE of rounds 1-5 findings; rounds 18-19 applied it correctly on c100 GET v1.29 binary).
+
+### Methodology — global doc upgrade
+
+`~/.claude-shared/global/methodology/perf-decomposition-vs-polish.md` upgraded **v1.1 → v1.2**:
+- §1 triggers blacklist gained 3 new anti-patterns: **"memcpys are the gap"** / **"structural Rust type forces memcpy"** / **"single run shows -X% loss"** (each session-derived).
+- New §8 case study: "kevy bigval-SET / pub/sub 9 轮 autorun 周期" (parallel to luna fib_28 §7). Records the 7-commit chain + 4 Discovery findings + Top-N prediction-vs-measured table.
+- New §9: **Phase A → Phase B 双 gate 协议**. Pre-Phase-A gate: must measure competitor baseline variance (median-of-3 + stdev) before reporting a gap. Pre-Phase-B gate: must perf-record verify Top-1 attack target ≥ 10 pp self-time before any code change.
+
+### Per-crate bumps
+
+- workspace 1.28.0 → 1.29.0
+- kevy-client / kevy-client-async / kevy-embedded — unchanged (perf prep is fully workspace-internal; no API touched on the independent client/embed tracks).
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow workspace = 1.29.0
+
+### Tests
+
+`cargo test --workspace --lib`: 320 unit tests pass. lx64 `cargo test -p kevy-rt --lib`: 38/38 pass. Scaling probe at `-c 50 -d 65536` for n = 1000 / 5000 / 20000: no throughput collapse, no conn wedge (2 race-fix invariants documented in B2-alt commit `d899801`).
+
+### What v1.29.0 does NOT include
+
+- **A8 conn-affinity rebalance** — empirically supported (fair-core 10c LOSES MORE than 2c, validates the "conn-density inversion" the c100 GET decomp identified at 6 conns/shard). 200+ LOC, breaks stateless-shard model, multi-session work. Deferred to v1.30 or v1.29.x patch line if pursued.
+- **D-series kernel-side experiments** (per-port iptables fast-path; hugepage `.text`; MSG_ZEROCOPY for big writes). Deployer-side, not app code; require system-wide changes.
+- **Per-workload throughput headline win** — empirically not available without one of the above two paths. Honest framing is "architectural prep + empirical userspace ceiling verification + cross-project methodology upgrade".
+
+### Where the actual perf findings live (link rot guard)
+
+| Finding | Doc |
+|---------|-----|
+| Phase A c100 GET decomp + A0 baseline | [`bench/PERF-DECOMP-2026-06-28-c100-GET-vs-valkey-9.1.md`](bench/PERF-DECOMP-2026-06-28-c100-GET-vs-valkey-9.1.md) |
+| Axis sweep probe (5 axes) | [`bench/PERF-PROBE-2026-06-28-axis-sweep-vs-valkey.md`](bench/PERF-PROBE-2026-06-28-axis-sweep-vs-valkey.md) |
+| Bigval-SET Phase A decomp + perf record §I | [`bench/PERF-DECOMP-2026-06-28-bigval-SET-vs-valkey-9.1.md`](bench/PERF-DECOMP-2026-06-28-bigval-SET-vs-valkey-9.1.md) |
+| Arc-from-Box memcpy is real (B3 revert + Option A validation addendum) | [`bench/PERF-FINDING-2026-06-29-arc-from-box-memcpys.md`](bench/PERF-FINDING-2026-06-29-arc-from-box-memcpys.md) |
+| Axis H 4 KB pub/sub no real gap (valkey noise) | [`bench/PERF-FINDING-2026-06-29-axis-H-no-real-gap.md`](bench/PERF-FINDING-2026-06-29-axis-H-no-real-gap.md) |
+| Axis G + I sweep | [`bench/PERF-FINDING-2026-06-29-axis-G-I-no-new-gaps.md`](bench/PERF-FINDING-2026-06-29-axis-G-I-no-new-gaps.md) |
+| Fair-core 10c-vs-10c bigval-SET (validates A8) | [`bench/PERF-FINDING-2026-06-29-fair-core-bigval-SET.md`](bench/PERF-FINDING-2026-06-29-fair-core-bigval-SET.md) |
+| A7 throughput-neutral (reverted) | [`bench/PERF-FINDING-2026-06-29-A7-spin-limit-throughput-neutral.md`](bench/PERF-FINDING-2026-06-29-A7-spin-limit-throughput-neutral.md) |
+| c100 GET methodology gate compliance | [`bench/PERF-FINDING-2026-06-29-c100-GET-methodology-gate-says-no.md`](bench/PERF-FINDING-2026-06-29-c100-GET-methodology-gate-says-no.md) |
+
+---
+
+
+
 ## [v1.28.0] — 2026-06-28 (release.yml infra — `--draft` flag dropped)
 
 Workflow-only release. Every v1.27.x ship since v1.27.0 created the GH Release in draft state, requiring a manual `gh release edit --draft=false` to make it user-visible. The flag was never load-bearing: by the time the `release-notes` job runs, `verify` + `publish` + `build-binaries` have all passed, so there's no failure path the draft could shield users from. The flag was busy-work, not safety.
