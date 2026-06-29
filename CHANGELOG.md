@@ -4,6 +4,50 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.30.0] — 2026-06-29 (perf — `--accept-shards N` reverses conn-density inversion on sparse-conn workloads)
+
+**Theme**: A8 simplified — static accept-set folds connections onto fewer shards on sparse-conn workloads where kevy's many-shard config inverts (more shards → lower throughput) due to per-shard busy-poll body amortization failing below ~5-10 conns/shard.
+
+### Added
+
+- **`--accept-shards N` runtime config** (also TOML `[server] accept_shards = N`, env `KEVY_ACCEPT_SHARDS=N`). `None` (default) = every shard arms accept SQE = v1.29 byte-identical. `Some(N)` = only shards `0..N` arm accept; shards `N..nshards` are **compute-only** (still receive cross-shard dispatched work via `Inbound::RequestBatch`, just don't own conns). Validation: `1 <= N <= threads`; else `exit(2)` at startup.
+- **`Runtime::with_accept_shards(Option<usize>)`** builder for library users.
+- **`docs/accept-shards.md`** — when to use, picking the value, what it doesn't do.
+
+### Changed
+
+- **`Shard.listener: Socket` → `Option<Socket>`**. Off-accept-set shards skip `tcp_listen_reuseport` entirely; SO_REUSEPORT redistributes new conns across only the bound subset.
+- **`uring_reactor.rs` + `shard.rs` (epoll) + `shard_lifecycle.rs`** — all listener call sites destructure `Option<Socket>` and return / skip on `None`.
+
+### Perf validation ([`bench/PERF-FINDING-2026-06-29-v1-30-accept-shards-bench.md`](bench/PERF-FINDING-2026-06-29-v1-30-accept-shards-bench.md))
+
+Fair-core bigval-SET (`-c 50 -d 65536 -t set -n 200k`, kevy 10c taskset 0-9 vs valkey 10c same):
+
+| config | avg SET/s | vs default | vs valkey |
+|--------|----------:|-----------:|----------:|
+| kevy default (no flag = v1.29) | 56,351 | — | -18.2 % |
+| **kevy `--accept-shards 3`** | **62,317** | **+10.6 %** | **-9.5 %** |
+| kevy `--accept-shards 6` | 59,302 | +5.2 % | -13.9 % |
+| valkey 9.1 (`--io-threads 10`) | 68,889 | — | — |
+
+A3 (16.7 conns/shard) is the sweet spot per the RFC heuristic `accept_shards ≈ ceil(conns / 15)`. A6 (8.3 conns/shard) still has some conn-density tax. The remaining -9.5 % gap to valkey is structurally located in the kernel TCP path — same loopback-bound root cause as the v1.29 §9 gate compliance findings.
+
+### What v1.30.0 does NOT include
+
+- **No dynamic accept-set adjustment**. Static config only.
+- **No automatic detection** of appropriate `accept_shards`. User configures per workload.
+- **No combination with A7 spin_limit-by-density tuning** (left for v1.30.x or v1.31).
+
+### Per-crate bumps
+
+- workspace 1.29.0 → 1.30.0
+- kevy-client / kevy-client-async / kevy-embedded — unchanged.
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow workspace.
+
+### Tests
+
+`cargo test --workspace --lib` green. Manual smoke on lx64: `--accept-shards 3 --threads 10` accepts conns, PING / SET / GET work end-to-end.
+
 ## [v1.29.0] — 2026-06-29 (perf architectural prep + empirical Phase A re-verification)
 
 **Honest framing**: no per-workload throughput headline. The v1.29 cycle landed three real architectural improvements on the big-value SET hot path, all perf-record-verified to do real work, but throughput stays within noise of v1.28 at every measured workload because the actual bottleneck is in the kernel TCP path — beyond app-code reach. The cycle's lasting deliverables are (a) the architectural infrastructure (reusable for future kernel-bypass work), (b) six cross-project Discovery findings landing in the global perf methodology, and (c) the first empirical doc-of-record that kevy's userspace hot-path is at the architectural ceiling vs valkey 9.1.

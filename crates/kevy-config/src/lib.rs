@@ -130,6 +130,9 @@ impl Config {
         if let Some(t) = cli.threads {
             self.server.threads = t;
         }
+        if let Some(n) = cli.accept_shards {
+            self.server.accept_shards = Some(n);
+        }
         if let Some(d) = cli.data_dir {
             self.server.data_dir = d;
         }
@@ -254,6 +257,10 @@ pub struct CliOverrides {
     pub port: Option<u16>,
     /// Override `server.threads` (`--threads N`).
     pub threads: Option<usize>,
+    /// **v1.30** — override `server.accept_shards` (`--accept-shards N`).
+    /// `Some(N)` = only shards 0..N arm accept SQE; rest are compute-only.
+    /// Use to fold conns onto fewer shards on sparse-conn workloads.
+    pub accept_shards: Option<usize>,
     /// Override `server.data_dir` (`--dir PATH`).
     pub data_dir: Option<PathBuf>,
     /// Override `persistence.aof` (`--no-aof` → `Some(false)`).

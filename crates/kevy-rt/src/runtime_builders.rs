@@ -122,6 +122,14 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
+    /// **v1.30** — Only shards `0..N` arm accept SQE; rest stay compute-only.
+    /// `None` = every shard accepts (v1.29 byte-identical, the default).
+    #[must_use]
+    pub fn with_accept_shards(mut self, n: Option<usize>) -> Self {
+        self.accept_shards = n;
+        self
+    }
+
     /// Enable/disable the append-only log. Default: enabled.
     #[must_use]
     pub fn with_aof(mut self, on: bool) -> Self {

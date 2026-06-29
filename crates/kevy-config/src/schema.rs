@@ -173,6 +173,8 @@ pub struct ServerSection {
     pub port: u16,
     /// Shard / reactor thread count. `0` = auto (CPU count). Default `0`.
     pub threads: usize,
+    /// **v1.30** — Only shards `0..N` arm accept SQE; rest stay compute-only.
+    pub accept_shards: Option<usize>,
     /// Snapshot + AOF location. Default `.`.
     pub data_dir: PathBuf,
 }
@@ -183,6 +185,7 @@ impl Default for ServerSection {
             bind: [127, 0, 0, 1],
             port: 6004,
             threads: 0,
+            accept_shards: None,
             data_dir: PathBuf::from("."),
         }
     }
