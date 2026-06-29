@@ -1,0 +1,20 @@
+[package]
+name = "kevy-chaos"
+description = "Chaos test harness for kevy — spawns kevy as a child, drives concurrent writes, simulates crashes, verifies invariants. Test-only; not for production server inclusion."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-chaos"
+readme = "README.md"
+keywords = ["redis", "kevy", "chaos", "stress", "crash"]
+categories = ["development-tools::testing"]
+
+[lints]
+workspace = true
+
+# 0-dep: std-only + path-deps on kevy-* crates.
+[dependencies]
+kevy-resp-client = { path = "../kevy-resp-client", version = "1.31.0" }
