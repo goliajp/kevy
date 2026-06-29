@@ -4,6 +4,58 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.32.0] — 2026-06-30 (industrial-grade testing — AOF rewrite race + cross-platform validation)
+
+**Theme**: v2 = kevy 工业级 step 2. Adds the next-most-blast-radius testing axis (AOF rewrite race coverage) on top of v1.31's crash-safety scaffolding. Also bundles the cross-platform empirical validation (lx64 Linux x86_64) that v1.31.x ran post-ship as a doc-only update.
+
+### Added
+
+- **`crates/kevy/tests/crash_during_rewrite.rs`** — chaos test for AOF rewrite race. Configures kevy with aggressive `auto_aof_rewrite_min_size` + `auto_aof_rewrite_percentage` to force frequent rewrites, drives concurrent writes, abrupt SIGKILL at a random point (often mid-rewrite — `.rewrite` temp file is visible in the data dir post-kill), restarts, verifies ZERO CORRUPTION via the pipelined-verify path.
+- **`kevy_chaos::HarnessConfig.aof_rewrite_min_size` + `.aof_rewrite_pct`** — optional fields written into the spawned kevy's TOML so chaos tests can pin the rewrite cadence.
+
+### Empirical (local Mac aarch64)
+
+- **570 k ACKs / 5 s, 24 AOF rewrites completed pre-kill** (so the rewrite path was actively exercised when SIGKILL hit).
+- After restart: **569 806 present / 233 lost / 0 corrupted** = **0.04 % loss**.
+- The `aof-0.aof.rewrite` temp file was on disk at kill time — kevy was mid-rewrite. Recovery still worked.
+- Wall-clock: 5.75 s.
+
+### v1.32 cross-platform validation (doc-only, landed on master pre-tag)
+
+See [`bench/PERF-FINDING-2026-06-30-v1-32-chaos-cross-platform-lx64.md`](bench/PERF-FINDING-2026-06-30-v1-32-chaos-cross-platform-lx64.md):
+
+| Test | Mac aarch64 | lx64 x86_64 |
+|------|-------------|-------------|
+| crash_always (zero-loss strict) | 530 ACKs / 2 s | **373 317 ACKs / 2 s** |
+| crash_everysec loss-fraction | 0.055 % | **0.013 %** |
+
+Linux is both faster AND tighter on loss-fraction. The chaos framework runs cross-platform without modification.
+
+### Updated standing industrial-grade claim
+
+> kevy's `appendfsync = everysec` on Linux (production target) loses ~0.013 % of ACK'd writes on abrupt SIGKILL+restart at sustained 322 k SET/s. The AOF rewrite swap path is crash-safe — SIGKILL mid-rewrite leaves NO corruption and ~0.04 % loss.
+
+### Per-crate bumps
+
+- workspace 1.31.2 → 1.32.0
+- kevy-chaos 1.32.0 (still `publish = false`)
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow.
+
+### Tests
+
+`cargo test --workspace --lib` green. Chaos tests:
+- `crash_always`: 2.22 s wall-clock.
+- `crash_everysec`: 5.28 s wall-clock.
+- `crash_during_rewrite` (NEW): 5.75 s wall-clock.
+
+All three gated `#[ignore]`. Opt-in via `--ignored`.
+
+### What v1.32.0 does NOT include
+
+- **Replication failover under crash** (v1.33+).
+- **Sustained-load soak** (1 h+ stability) (v1.34+).
+- **Loom enumeration expansion** for inbox / replication state machines (v1.35+).
+
 ## [v1.31.2] — 2026-06-30 (test fix — pipelined verify; v1.31.x finding **withdrawn** — kevy everysec is excellent)
 
 **WITHDRAWAL of v1.31.0/v1.31.1 finding**: The crash_everysec test reported an "86 % lost-fraction" hypothesis pending v1.31.x investigation. v1.31.x investigation completed and the finding is **WITHDRAWN**: the 86 % was a TEST BUG (per-GET TCP connect exhausted Mac's ~16 k ephemeral ports × 60 s TIME_WAIT, masking present-but-unreadable keys as "lost"). After fixing the verify path to use a single pipelined TCP connection, the real loss-fraction is **0.05 % (342 of 622 k ACKs lost)** on the same workload — **vastly better than the naive "1 s window ≈ 20 %" expectation**.

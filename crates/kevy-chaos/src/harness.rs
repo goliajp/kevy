@@ -31,6 +31,12 @@ pub struct HarnessConfig {
     pub data_dir: PathBuf,
     /// AOF fsync policy. `"always"` / `"everysec"` / `"no"`. Default: `"always"`.
     pub appendfsync: String,
+    /// Optional: force frequent AOF rewrites by setting this low. Bytes.
+    /// `None` keeps the kevy default (64 MiB).
+    pub aof_rewrite_min_size: Option<u64>,
+    /// Optional: percentage growth-since-last-rewrite that triggers an
+    /// auto-rewrite. `None` keeps the kevy default (100 = 2× growth).
+    pub aof_rewrite_pct: Option<u32>,
     /// Timeout for "kevy ready" wait after spawn. Default: 10 s.
     pub spawn_timeout: Duration,
 }
@@ -46,6 +52,8 @@ impl HarnessConfig {
             threads: 2,
             data_dir,
             appendfsync: "always".to_string(),
+            aof_rewrite_min_size: None,
+            aof_rewrite_pct: None,
             spawn_timeout: Duration::from_secs(10),
         }
     }
@@ -92,17 +100,23 @@ impl Harness {
         // `--no-aof` but not `--appendfsync`; the env-var path is the
         // documented override per kevy-config).
         let cfg_path = self.config.data_dir.join("kevy.toml");
-        std::fs::write(
-            &cfg_path,
-            format!(
-                "[server]\nport = {}\nthreads = {}\ndata_dir = \"{}\"\n\
-                 [persistence]\nappendfsync = \"{}\"\n",
-                self.config.port,
-                self.config.threads,
-                self.config.data_dir.display(),
-                self.config.appendfsync,
-            ),
-        )?;
+        let mut toml = format!(
+            "[server]\nport = {}\nthreads = {}\ndata_dir = \"{}\"\n\
+             [persistence]\nappendfsync = \"{}\"\n",
+            self.config.port,
+            self.config.threads,
+            self.config.data_dir.display(),
+            self.config.appendfsync,
+        );
+        if let Some(sz) = self.config.aof_rewrite_min_size {
+            use std::fmt::Write as _;
+            let _ = writeln!(toml, "auto_aof_rewrite_min_size = \"{sz}\"");
+        }
+        if let Some(pct) = self.config.aof_rewrite_pct {
+            use std::fmt::Write as _;
+            let _ = writeln!(toml, "auto_aof_rewrite_percentage = {pct}");
+        }
+        std::fs::write(&cfg_path, toml)?;
         // Route kevy's stderr to a file under the data dir so test
         // diagnostics (AOF replay summary, etc.) survive the test.
         let stderr_path = self.config.data_dir.join("kevy.stderr.log");

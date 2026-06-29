@@ -36,11 +36,7 @@ fn crash_everysec_no_corruption_bounded_loss() {
 
     let cfg = HarnessConfig {
         kevy_bin: bin_path,
-        port,
-        threads: 2,
-        data_dir: tmp.clone(),
-        appendfsync: "everysec".to_string(),
-        spawn_timeout: Duration::from_secs(10),
+        ..HarnessConfig::new(tmp.clone(), port).with_fsync("everysec")
     };
     let mut h = Harness::spawn(cfg).expect("spawn kevy");
 
