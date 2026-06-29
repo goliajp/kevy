@@ -134,6 +134,7 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
     let fsync = map_appendfsync(cfg.persistence.appendfsync);
     let mut runtime = Runtime::new(ip, port, nshards, KevyCommands)
         .with_data_dir(data_dir)
+        .with_accept_shards(cfg.server.accept_shards)
         .with_aof(enable_aof)
         .with_appendfsync(fsync)
         .with_auto_aof_rewrite(

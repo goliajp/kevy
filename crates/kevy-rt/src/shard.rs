@@ -246,6 +246,8 @@ pub(crate) struct Shard<C: Commands> {
     /// Reactor loop iterations between wall-clock reads for the tick
     /// check. Replaces the old `TICK_CHECK_EVERY` const.
     pub(crate) tick_check_every: u32,
+    /// **v1.30** — `false` = compute-only shard (no accept SQE). See RFC.
+    pub(crate) arms_accept: bool,
     /// SLOWLOG ring + threshold (see [`crate::exec_slowlog::SlowlogState`]).
     /// Hot-reload via `apply_live_runtime_config` when the embedder
     /// returns `Some` in `LiveRuntimeConfig::slowlog_*`.
@@ -331,7 +333,8 @@ impl<C: Commands> Shard<C> {
         }
 
         self.listener.set_nonblocking()?;
-        self.poller.add(self.listener.raw(), true, false)?;
+        // v1.30 — off-accept-set shards skip listener registration; kernel SO_REUSEPORT routes elsewhere.
+        if self.arms_accept { self.poller.add(self.listener.raw(), true, false)?; }
         self.poller.add(self.waker.read_fd(), true, false)?;
         let listener_fd = self.listener.raw();
         // -1 never matches an event fd, so the cluster-off loop below pays
@@ -339,7 +342,7 @@ impl<C: Commands> Shard<C> {
         let mut cluster_fd = -1;
         if let Some(cl) = &self.cluster_listener {
             cl.set_nonblocking()?;
-            self.poller.add(cl.raw(), true, false)?;
+            if self.arms_accept { self.poller.add(cl.raw(), true, false)?; }
             cluster_fd = cl.raw();
         }
         // Same "fd or -1" trick for the replication listener (per Issue
