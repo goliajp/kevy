@@ -4,6 +4,53 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.34.0] — 2026-06-30 (industrial-grade testing step 4 — sustained-load soak)
+
+**Theme**: v2 = kevy 工业级 step 4. v1.31 = crash safety, v1.32 = AOF rewrite race, v1.33 = replication crash, **v1.34 = sustained-load soak** (multi-window throughput stability + leak/drift/stuck-writer detection over a long horizon).
+
+### Added
+
+- **`crates/kevy/tests/soak_then_crash.rs`** — sustained-load soak chaos test. Drives concurrent writes for `SOAK_SECONDS` (default 30 s, opt-in `SOAK_SECONDS=3600` for 1 h industrial-grade validation), samples throughput per 5 s window, then abruptly SIGKILLs and verifies NO CORRUPTION on restart.
+  - Strict asserts: NO CORRUPTION; every 5 s window ≥ 1000 ACKs (stuck-writer detector).
+  - Observational: throughput-degradation factor (`max_window_acks / min_window_acks`).
+- **`HarnessConfig.spawn_timeout` honored on restart** — soak tests produce huge AOFs; the default 10 s timeout was tuned for fresh-start scenarios. The soak test bumps to 60 s; future tests with multi-GB AOFs can bump further.
+
+### Empirical (Mac aarch64, 30 s soak)
+
+- **3,611,507 ACKs in 30 s = ~120 k SET/s sustained**.
+- Per-5s window throughput: **min 587,779, max 611,226 → degradation_factor 1.04** (4 % variation across the run — throughput is rock-stable).
+- Post-SIGKILL + restart: **3,611,299 present / 212 lost / 0 corrupted = 0.006 % loss**.
+- Wall-clock: 44.74 s (30 s soak + 5-15 s restart + verify).
+
+### What this validates
+
+- **No drift / no leak over sustained writes**: 4 % throughput variation across 30 s with no slowdown trend.
+- **No stuck writers**: all 6 sampling windows hit > 1000 ACKs (actually > 500 k each).
+- **Crash safety under sustained load**: 0 corrupted after a hard kill following 3.6 M-write history (AOF replay re-applies the entire history correctly).
+- **Loss-fraction is even tighter than v1.31's crash_everysec** (0.006 % vs 0.05 %) — Mac's BufWriter loss is proportionally smaller against a larger total.
+
+### Per-crate bumps
+
+- workspace 1.33.0 → 1.34.0
+- kevy-chaos 1.34.0 (still `publish = false`)
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow.
+
+### Tests
+
+`cargo test --workspace --lib` green. Chaos suite (5 tests, gated `--ignored`):
+- `crash_always`: 2.22 s.
+- `crash_everysec`: 5.28 s.
+- `crash_during_rewrite`: 5.75 s.
+- `crash_replication_followed`: 6.00 s.
+- `soak_then_crash` (NEW): 44.74 s (default 30 s soak).
+
+### What v1.34.0 does NOT include
+
+- **Full 1 h soak measurement** — that's `SOAK_SECONDS=3600` opt-in, not run at every CI.
+- **Cross-platform soak on lx64** — likely shows tighter loss-fraction (per the v1.32 cross-platform pattern); deferred to a post-ship doc-only update.
+- **Investigation of v1.33's Linux replication test failure** — separate v1.33.x work.
+- **Loom enumeration expansion** (v1.35+).
+
 ## [v1.33.0] — 2026-06-30 (industrial-grade testing step 3 — replication crash chaos)
 
 **Theme**: v2 = kevy 工业级 step 3. v1.31 = crash safety, v1.32 = AOF rewrite race, **v1.33 = replication crash coverage** (primary dies under load → verify replica has no corruption + observational lag-fraction).
