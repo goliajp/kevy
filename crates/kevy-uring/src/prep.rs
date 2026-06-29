@@ -6,9 +6,10 @@
 use core::ptr;
 
 use crate::ffi::{
-    IORING_ACCEPT_MULTISHOT, IORING_OP_ACCEPT, IORING_OP_NOP, IORING_OP_READ, IORING_OP_RECV,
-    IORING_OP_TIMEOUT, IORING_OP_WRITE, IORING_OP_WRITEV, IORING_RECV_MULTISHOT,
-    IOSQE_BUFFER_SELECT, IOSQE_FIXED_FILE, Iovec, SOCK_CLOEXEC, SOCK_NONBLOCK,
+    IORING_ACCEPT_MULTISHOT, IORING_OP_ACCEPT, IORING_OP_ASYNC_CANCEL, IORING_OP_NOP,
+    IORING_OP_READ, IORING_OP_RECV, IORING_OP_TIMEOUT, IORING_OP_WRITE, IORING_OP_WRITEV,
+    IORING_RECV_MULTISHOT, IOSQE_BUFFER_SELECT, IOSQE_FIXED_FILE, Iovec, SOCK_CLOEXEC,
+    SOCK_NONBLOCK,
 };
 use crate::layout::{IoUringSqe, KernelTimespec};
 use crate::ring::IoUring;
@@ -252,6 +253,39 @@ impl IoUring {
             ptr::write(
                 self.sqes_ptr().add(idx),
                 IoUringSqe::new(IORING_OP_NOP, -1, 0, 0, user_data),
+            );
+        }
+        true
+    }
+
+    /// Queue an `IORING_OP_ASYNC_CANCEL` SQE targeting a previously-armed
+    /// SQE whose `user_data == target`. Used by v1.29 B2-alt to cancel
+    /// an in-flight multishot recv before switching the conn to single-
+    /// shot `prep_read` for big-arg ingest.
+    ///
+    /// The kernel emits two CQEs:
+    /// - one for THIS cancel SQE, tagged `user_data`: `res = 0` on
+    ///   success, `-ENOENT` if no matching target found (already
+    ///   completed / never existed), `-EALREADY` if the target had
+    ///   already started executing.
+    /// - one for the target SQE, tagged with the target's user_data:
+    ///   `res = -ECANCELED` (`-125`) when cancellation succeeded.
+    ///
+    /// Caller MUST be prepared to reap both CQEs in either order; the
+    /// kernel does not guarantee ordering between the cancel-result CQE
+    /// and the target-cancelled CQE.
+    ///
+    /// Returns `false` if the SQ is full.
+    pub fn prep_cancel(&mut self, target: u64, user_data: u64) -> bool {
+        let Some(idx) = self.reserve() else {
+            return false;
+        };
+        // SAFETY: `idx` is a freshly reserved, in-bounds SQE slot we own alone.
+        // fd is unused for ASYNC_CANCEL; addr carries the target user_data.
+        unsafe {
+            ptr::write(
+                self.sqes_ptr().add(idx),
+                IoUringSqe::new(IORING_OP_ASYNC_CANCEL, -1, target, 0, user_data),
             );
         }
         true

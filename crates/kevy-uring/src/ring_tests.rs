@@ -114,6 +114,60 @@ fn reads_a_file() {
 }
 
 #[test]
+fn cancel_unknown_target_reports_enoent() {
+    // ASYNC_CANCEL targeting a user_data with no in-flight SQE: kernel
+    // emits a single CQE for the cancel SQE itself with res = -ENOENT.
+    let Some(mut ring) = ring_or_skip(8) else {
+        return;
+    };
+    const CANCEL_TAG: u64 = 0xCA10;
+    const PHANTOM_TARGET: u64 = 0xDEAD;
+    assert!(ring.prep_cancel(PHANTOM_TARGET, CANCEL_TAG));
+    assert_eq!(ring.submit_and_wait(1).unwrap(), 1);
+    let mut got = None;
+    ring.for_each_completion(|c| got = Some(c));
+    let c = got.expect("cancel completion");
+    assert_eq!(c.user_data, CANCEL_TAG);
+    // Linux's ENOENT is 2 → -ENOENT == -2.
+    assert_eq!(c.res, -2, "cancel of unknown target should return -ENOENT");
+}
+
+#[test]
+fn cancel_an_in_flight_timeout() {
+    // Arm a 60-second timeout, then cancel it. Expect two CQEs:
+    // - cancel's own (res = 0 on successful match)
+    // - target timeout's (res = -ECANCELED)
+    let Some(mut ring) = ring_or_skip(8) else {
+        return;
+    };
+    const TIMEOUT_TAG: u64 = 0x71;
+    const CANCEL_TAG: u64 = 0xCA11;
+    let ts = KernelTimespec::from_millis(60_000);
+    // SAFETY: `&ts` outlives the SQE — both go out of scope at end of fn,
+    // and we drain both CQEs before then via submit_and_wait + reap.
+    assert!(unsafe { ring.prep_timeout(&ts, TIMEOUT_TAG) });
+    ring.submit_and_wait(0).unwrap();
+    assert!(ring.prep_cancel(TIMEOUT_TAG, CANCEL_TAG));
+    // submit_and_wait's return is "SQEs submitted this call" (1 — just the
+    // cancel; the timeout was submitted in the previous call). wait_nr=2
+    // makes the kernel block until ≥ 2 CQEs are queued.
+    ring.submit_and_wait(2).unwrap();
+    let mut cancel_res: Option<i32> = None;
+    let mut target_res: Option<i32> = None;
+    ring.for_each_completion(|c| match c.user_data {
+        CANCEL_TAG => cancel_res = Some(c.res),
+        TIMEOUT_TAG => target_res = Some(c.res),
+        _ => {}
+    });
+    // Cancel SQE itself: res 0 means matched and cancelled.
+    assert_eq!(cancel_res, Some(0), "cancel should report success");
+    // Target SQE: res -ECANCELED (-125) means cancellation succeeded.
+    // Linux timeout can ALSO report -ETIME (-62) if it expired
+    // concurrently, but at 60s that's structurally impossible here.
+    assert_eq!(target_res, Some(-125), "target should report -ECANCELED");
+}
+
+#[test]
 fn batched_nops() {
     // Submit a full batch, reap them all — exercises ring wrap + counts.
     let Some(mut ring) = ring_or_skip(8) else {
