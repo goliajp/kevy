@@ -94,6 +94,14 @@ pub const IORING_SQ_NEED_WAKEUP: u32 = 1 << 0;
 pub const IORING_OP_NOP: u8 = 0;
 pub const IORING_OP_TIMEOUT: u8 = 11;
 pub const IORING_OP_ACCEPT: u8 = 13;
+/// `IORING_OP_ASYNC_CANCEL` — cancel a previously-armed SQE. The SQE's
+/// `addr` field carries the `user_data` of the target SQE. The kernel
+/// emits two CQEs: one for the cancel itself (`res = 0` on success,
+/// `-ENOENT` if no matching SQE found, `-EALREADY` if target already
+/// started executing) and one `-ECANCELED` for the target SQE. v1.29
+/// B2-alt uses this to cancel an in-flight multishot recv before
+/// switching the conn to single-shot `prep_read` for big-arg ingest.
+pub const IORING_OP_ASYNC_CANCEL: u8 = 14;
 pub const IORING_OP_READ: u8 = 22;
 pub const IORING_OP_WRITEV: u8 = 2;
 pub const IORING_OP_WRITE: u8 = 23;
