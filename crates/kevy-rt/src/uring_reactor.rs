@@ -82,8 +82,12 @@ pub(crate) fn io_uring_available() -> bool {
     }
 }
 
-// `user_data` layout: top 3 bits = op, low 61 bits = conn id.
-const OP_SHIFT: u32 = 61;
+// `user_data` layout: top 4 bits = op, low 60 bits = conn id.
+// v1.29 B2-alt widened OP_SHIFT from 61 to 60 to add two new op tags
+// (`OP_BIG_CANCEL` + `OP_BIG_READ`) for the bigval-SET kernel-direct
+// recv state machine. The 60-bit conn id space (~1.15 × 10^18) stays
+// orders of magnitude beyond any realistic next_conn_id growth rate.
+const OP_SHIFT: u32 = 60;
 pub(crate) const OP_RECV: u64 = 1 << OP_SHIFT;
 pub(crate) const OP_WRITE: u64 = 2 << OP_SHIFT;
 const OP_ACCEPT: u64 = 3 << OP_SHIFT;
@@ -95,6 +99,19 @@ pub(crate) const OP_TIMEOUT: u64 = 5 << OP_SHIFT;
 const OP_ACCEPT_CL: u64 = 6 << OP_SHIFT;
 /// v1.25 UDS: accept on the (shard-0-only) Unix-domain listener.
 const OP_ACCEPT_UN: u64 = 7 << OP_SHIFT;
+/// **v1.29 B2-alt**: the cancel SQE issued to abort a multishot recv
+/// before switching the conn to single-shot `prep_read` for big-arg
+/// ingest. The CQE for THIS SQE reports `res = 0` on successful match
+/// or `-ENOENT` if the target multishot already terminated. The target
+/// multishot's terminal `-ECANCELED` CQE arrives under the existing
+/// `OP_RECV` tag (handled in `uring_on_recv`).
+pub(crate) const OP_BIG_CANCEL: u64 = 8 << OP_SHIFT;
+/// **v1.29 B2-alt**: the single-shot `prep_read` SQE that draws body
+/// bytes directly from the kernel into the destination `Vec<u8>` (no
+/// userspace memcpy through the provided-buffer slab). Re-submitted
+/// until the entire body is received; the multishot is re-armed on
+/// completion to accept any pipelined commands after the big body.
+pub(crate) const OP_BIG_READ: u64 = 9 << OP_SHIFT;
 const CONN_MASK: u64 = (1 << OP_SHIFT) - 1;
 
 impl<C: Commands> Shard<C> {
@@ -271,6 +288,16 @@ impl<C: Commands> Shard<C> {
                     OP_TIMEOUT => {
                         cold_path_hint();
                         park.timeout_inflight = false;
+                    }
+                    OP_BIG_CANCEL => {
+                        cold_path_hint();
+                        io_work = true;
+                        self.uring_on_big_arg_cancel(cid, c.res, &mut io);
+                    }
+                    OP_BIG_READ => {
+                        cold_path_hint();
+                        io_work = true;
+                        self.uring_on_big_arg_read(cid, c.res, &mut io);
                     }
                     _ => {
                         cold_path_hint();
