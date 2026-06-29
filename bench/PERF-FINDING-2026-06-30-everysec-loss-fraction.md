@@ -1,3 +1,21 @@
+# ⚠ WITHDRAWN — finding was a TEST BUG, not a kevy bug
+
+> **Status**: WITHDRAWN as of v1.31.2 (2026-06-30). The "86 % lost-
+> fraction" reported below was due to ephemeral-port exhaustion in the
+> chaos test's per-GET TCP connect loop, NOT a kevy fsync issue.
+>
+> After fixing the chaos verify to use a single pipelined TCP
+> connection, the real loss-fraction is **0.05 % (342 of 622 k ACKs
+> lost)** — vastly better than the naive "1 s window ≈ 20 %"
+> expectation. kevy's `appendfsync = everysec` implementation is
+> excellent. See the v1.31.2 CHANGELOG entry for the corrected
+> empirical conclusion.
+>
+> The text below is kept verbatim for the historical trail
+> (the v1.31.0 / v1.31.1 ship-time write-up).
+
+---
+
 # Finding — `appendfsync = everysec` lost-fraction far above 1-second window expectation
 
 Date: 2026-06-30 (v1.31 chaos test scaffolding round 34)
