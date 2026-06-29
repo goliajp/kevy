@@ -57,31 +57,49 @@ impl<C: Commands> Shard<C> {
             return;
         }
         let Some(state) = uc.pending_big_arg.as_mut() else { return };
-        let BigArgState::BareSetReading { body, body_len, .. } = state.as_mut() else {
+        let BigArgState::BareSetReading {
+            body,
+            body_len,
+            crlf_seen,
+            ..
+        } = state.as_mut()
+        else {
             // Not in reading phase — defensive ignore.
             return;
         };
+        // The kernel-direct read landed `n` bytes; route into body
+        // first (preserving `body.len() ≤ body.capacity() == body_len`),
+        // then bump `crlf_seen` for any trailing CRLF bytes that
+        // arrived in the same CQE.
         let n = res as usize;
-        let cap = *body_len + 2;
-        let new_len = (body.len() + n).min(cap);
-        // SAFETY: the kernel wrote `n` bytes into the Vec's heap buffer
-        // starting at `body.len()`. Capacity was sized to `cap` at
-        // promote; the partial-read state machine never sets
-        // `prep_read` larger than `cap - body.len()`, so the kernel
-        // can't overrun.
-        unsafe {
-            body.set_len(new_len);
+        let body_room = *body_len - body.len();
+        let body_n = n.min(body_room);
+        if body_n > 0 {
+            // SAFETY: kernel wrote into `body.as_mut_ptr().add(body.len())`
+            // for at most `body_room` bytes (the arm-pass `prep_read`
+            // submission caps the SQE length).
+            unsafe {
+                body.set_len(body.len() + body_n);
+            }
         }
-        if body.len() == cap {
-            // Body fully received — dispatch + re-arm multishot.
+        let crlf_n = ((n - body_n).min(2 - *crlf_seen as usize)) as u8;
+        *crlf_seen += crlf_n;
+        if body.len() == *body_len {
+            // Body fully received. Trailing CRLF (if not yet seen) is
+            // still in the TCP buffer — set `pending_crlf_skip` so the
+            // re-armed multishot's slab head gets sliced before
+            // dispatch. Dispatch + re-arm multishot now (body Vec is
+            // zero-copy-adoptable: len == capacity == body_len).
+            let crlf_pending_after_dispatch = 2 - *crlf_seen as usize;
             if let Some(boxed) = uc.pending_big_arg.take()
-                && let BigArgState::BareSetReading { key, body, body_len } = *boxed
+                && let BigArgState::BareSetReading { key, body, body_len, .. } = *boxed
             {
                 self.dispatch_bareset_owned(cid, key, body, body_len, io);
             }
             if let Some(uc) = io.get_mut(&cid) {
                 uc.big_arg_read_pending = false;
                 uc.big_arg_rearm_recv = true;
+                uc.pending_crlf_skip = crlf_pending_after_dispatch as u8;
             }
             self.mark_arm_pending(cid, io);
         } else {
@@ -169,13 +187,17 @@ impl<C: Commands> Shard<C> {
     ) {
         let Some(uc) = io.get_mut(&cid) else { return };
         let Some(state) = uc.pending_big_arg.take() else { return };
-        let BigArgState::BareSetCancelling { key, body, body_len, .. } = *state else {
-            // Defensive: not the variant we expected. Drop state — the
-            // conn would be wedged either way; better to lose the conn
-            // than to leak the state machine.
+        let BigArgState::BareSetCancelling {
+            key,
+            body,
+            body_len,
+            crlf_seen,
+            ..
+        } = *state
+        else {
             return;
         };
-        if body.len() == body_len + 2 {
+        if body.len() == body_len && crlf_seen == 2 {
             // Body already complete (last multishot CQE finished it
             // before transition fired) — dispatch + re-arm.
             self.dispatch_bareset_owned(cid, key, body, body_len, io);
@@ -189,6 +211,7 @@ impl<C: Commands> Shard<C> {
             key,
             body,
             body_len,
+            crlf_seen,
         }));
         uc.big_arg_read_pending = true;
         self.mark_arm_pending(cid, io);
@@ -205,12 +228,16 @@ impl<C: Commands> Shard<C> {
         &mut self,
         cid: u64,
         key: Vec<u8>,
-        mut body: Vec<u8>,
+        body: Vec<u8>,
         body_len: usize,
         io: &mut KevyMap<u64, UringConn>,
     ) {
-        // Drop the trailing CRLF — `body[0..body_len]` is the value.
-        body.truncate(body_len);
+        // body's capacity invariant: `len == capacity == body_len` (CRLF
+        // was sunk into `crlf_seen`, never appended). That's the
+        // requirement for `pick_value_for_set_owned`'s
+        // `Vec::into_boxed_slice` to be zero-copy.
+        debug_assert_eq!(body.len(), body_len);
+        debug_assert_eq!(body.capacity(), body_len);
         let view = ThreeSliceView {
             verb: b"SET",
             key: &key,

@@ -133,16 +133,34 @@ pub enum Value {
     /// SmallBytes wrap) and on memory (8 B vs 24 B). GET formats it via
     /// a per-`Store` scratch buffer.
     Int(i64),
-    /// L1 (2026-06-21): values larger than [`BULK_THRESHOLD`] bytes get
-    /// stored behind an `Arc<[u8]>` instead of a heap-backed
-    /// `SmallBytes`. The Arc lets the io_uring reactor's reply path
-    /// borrow the bytes across the SQE→CQE window safely (Arc clone
-    /// keeps them alive even if the keyspace mutates) — the prerequisite
-    /// for the writev zero-copy bulk reply path, which skips the per-GET
-    /// memcpy from value storage into the per-conn output buffer. Small
-    /// values stay on `Str(SmallBytes)` because the inline cache-line
-    /// storage beats an Arc indirection for the common case.
-    ArcBulk(Arc<[u8]>),
+    /// L1 (2026-06-21) / v1.29 Option A (2026-06-29): values larger
+    /// than [`BULK_THRESHOLD`] bytes get stored behind an
+    /// `Arc<Box<[u8]>>` instead of a heap-backed `SmallBytes`. The Arc
+    /// lets the io_uring reactor's reply path borrow the bytes across
+    /// the SQE→CQE window safely (Arc clone keeps them alive even if
+    /// the keyspace mutates) — the prerequisite for the writev
+    /// zero-copy bulk reply path, which skips the per-GET memcpy from
+    /// value storage into the per-conn output buffer.
+    ///
+    /// **Why `Arc<Box<[u8]>>` and not `Arc<[u8]>`**: `Arc<[u8]>` is a
+    /// DST-backed `ArcInner<[u8]> = { strong, weak, [u8; N] }` whose
+    /// data slot sits past the refcount words. `Arc::from(Vec<u8>)`
+    /// allocates a fresh `ArcInner` and `copy_from_slice`s the bytes
+    /// — a hard mandatory 64 KiB memcpy on every big SET. With
+    /// `Arc<Box<[u8]>>`, the `Box<[u8]>` wrapper occupies the Arc's
+    /// data slot (16 B), pointing AT an unchanged heap buffer; so
+    /// `Arc::new(vec.into_boxed_slice())` is **truly zero-copy**
+    /// (the boxed slice's allocation stays put — only the 32-byte
+    /// `ArcInner` is freshly malloced). Per-GET cost: one extra
+    /// pointer dereference (`&**arc` to get `&[u8]`), measured to be
+    /// negligible vs the per-SET memcpy savings. See
+    /// `bench/PERF-FINDING-2026-06-29-arc-from-box-memcpys.md` for
+    /// the empirical perf-record evidence of the original
+    /// `Arc<[u8]>` mandatory copy.
+    ///
+    /// Small values stay on `Str(SmallBytes)` because the inline
+    /// cache-line storage beats an Arc indirection for the common case.
+    ArcBulk(Arc<Box<[u8]>>),
     Hash(Arc<HashData>),
     List(Arc<ListData>),
     Set(Arc<SetData>),

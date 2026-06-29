@@ -96,14 +96,21 @@ impl<C: Commands> Shard<C> {
         if let Some((k_start, k_end)) = bare_set_key_range {
             let key = tail[k_start..k_end].to_vec();
             if self.shard_of(&key) == self.id {
-                let body_cap = body_len + 2;
-                let mut body = Vec::with_capacity(body_cap);
+                // Capacity = body_len EXACTLY. `Vec::into_boxed_slice`
+                // (called inside `pick_value_for_set_owned`) is
+                // zero-copy only when `len == capacity`; trailing CRLF
+                // is sunk into `crlf_seen`, never into this Vec.
+                let mut body = Vec::with_capacity(body_len);
                 let body_in_slab =
-                    bytes_present.saturating_sub(body_start_in_tail).min(body_cap);
+                    bytes_present.saturating_sub(body_start_in_tail).min(body_len);
                 body.extend_from_slice(
                     &tail[body_start_in_tail..body_start_in_tail + body_in_slab],
                 );
-                if body.len() == body_cap {
+                // CRLF bytes potentially present after body in this slab.
+                let crlf_in_slab = bytes_present
+                    .saturating_sub(body_start_in_tail + body_in_slab)
+                    .min(2);
+                if body.len() == body_len && crlf_in_slab == 2 {
                     // Whole frame in slab — dispatch immediately, no
                     // cancel/single-shot dance needed.
                     self.dispatch_bareset_owned(cid, key, body, body_len, io);
@@ -114,15 +121,13 @@ impl<C: Commands> Shard<C> {
                     key,
                     body,
                     body_len,
+                    crlf_seen: crlf_in_slab as u8,
                     cancel_acked: false,
                     target_canceled: false,
                 }));
                 // Defer the cancel-SQE submission to the next arm pass;
                 // `uring_arm_conns` checks this flag and queues
-                // `prep_cancel(OP_RECV|cid, OP_BIG_CANCEL|cid)`. The
-                // pending state stays correct even if a multishot CQE
-                // arrives in the gap (handler routes those slab bytes
-                // into `body` via `BareSetCancelling`'s feed arm).
+                // `prep_cancel(OP_RECV|cid, OP_BIG_CANCEL|cid)`.
                 uc.big_arg_cancel_pending = true;
                 self.mark_arm_pending(cid, io);
                 return true;
@@ -187,14 +192,26 @@ impl<C: Commands> Shard<C> {
                 }
                 t
             }
-            BigArgState::BareSetCancelling { body, body_len, .. } => {
-                let cap = *body_len + 2;
-                let need = cap - body.len();
-                let t = slab.len().min(need);
-                if t > 0 {
-                    body.extend_from_slice(&slab[..t]);
+            BigArgState::BareSetCancelling {
+                body,
+                body_len,
+                crlf_seen,
+                ..
+            } => {
+                // Phase 1 — fill body up to body_len (preserves the
+                // `cap == body_len` invariant the C3 zero-copy
+                // adoption requires).
+                let take_body = (*body_len - body.len()).min(slab.len());
+                if take_body > 0 {
+                    body.extend_from_slice(&slab[..take_body]);
                 }
-                if body.len() == cap {
+                // Phase 2 — consume up to 2 trailing CRLF bytes.
+                let crlf_pending = 2 - *crlf_seen as usize;
+                let take_crlf = crlf_pending.min(slab.len() - take_body);
+                *crlf_seen += take_crlf as u8;
+                let t = take_body + take_crlf;
+                let complete = body.len() == *body_len && *crlf_seen == 2;
+                if complete {
                     // Body finished entirely via multishot slabs before
                     // the cancel pair completed. Drop the state +
                     // dispatch. **Critical**: clear `big_arg_cancel_pending`
