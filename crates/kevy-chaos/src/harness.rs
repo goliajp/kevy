@@ -37,6 +37,11 @@ pub struct HarnessConfig {
     /// Optional: percentage growth-since-last-rewrite that triggers an
     /// auto-rewrite. `None` keeps the kevy default (100 = 2× growth).
     pub aof_rewrite_pct: Option<u32>,
+    /// **v1.33** — Free-form TOML appended to the spawned kevy's
+    /// `kevy.toml`. Empty by default. Use to set `[replication]`
+    /// sections for primary/replica chaos tests, or any other section
+    /// not yet covered by typed fields above.
+    pub extra_toml: String,
     /// Timeout for "kevy ready" wait after spawn. Default: 10 s.
     pub spawn_timeout: Duration,
 }
@@ -54,8 +59,16 @@ impl HarnessConfig {
             appendfsync: "always".to_string(),
             aof_rewrite_min_size: None,
             aof_rewrite_pct: None,
+            extra_toml: String::new(),
             spawn_timeout: Duration::from_secs(10),
         }
+    }
+
+    /// Builder for `extra_toml`.
+    #[must_use]
+    pub fn with_extra_toml(mut self, extra: impl Into<String>) -> Self {
+        self.extra_toml = extra.into();
+        self
     }
     /// Override the AOF fsync policy.
     #[must_use]
@@ -115,6 +128,13 @@ impl Harness {
         if let Some(pct) = self.config.aof_rewrite_pct {
             use std::fmt::Write as _;
             let _ = writeln!(toml, "auto_aof_rewrite_percentage = {pct}");
+        }
+        if !self.config.extra_toml.is_empty() {
+            toml.push('\n');
+            toml.push_str(&self.config.extra_toml);
+            if !self.config.extra_toml.ends_with('\n') {
+                toml.push('\n');
+            }
         }
         std::fs::write(&cfg_path, toml)?;
         // Route kevy's stderr to a file under the data dir so test

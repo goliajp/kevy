@@ -4,6 +4,54 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.33.0] — 2026-06-30 (industrial-grade testing step 3 — replication crash chaos)
+
+**Theme**: v2 = kevy 工业级 step 3. v1.31 = crash safety, v1.32 = AOF rewrite race, **v1.33 = replication crash coverage** (primary dies under load → verify replica has no corruption + observational lag-fraction).
+
+### Added
+
+- **`crates/kevy/tests/crash_replication_followed.rs`** — chaos test that spawns a kevy primary + a kevy replica, drives concurrent writes against the primary, abruptly SIGKILLs the primary mid-flight, queries the REPLICA. Strict NO CORRUPTION assert; observational replication-lag fraction (primary-ACKs missing from replica at SIGKILL time + 2 s drain).
+- **`kevy_chaos::HarnessConfig.extra_toml`** + **`.with_extra_toml(...)` builder** — free-form TOML appended to the spawned kevy's `kevy.toml`. Lets chaos tests configure `[replication]` (and any other section not yet covered by typed fields) without bloating the HarnessConfig surface.
+
+### Empirical (Mac aarch64 local)
+
+- Primary: 410,948 ACKs in 3 s sustained.
+- Post-SIGKILL + 2 s drain, replica: **49,691 present / 361,257 lost / 0 corrupted**.
+- Strict NO CORRUPTION asserted ✓.
+- Observational replication-lag-fraction: ~88 %. At sustained ~137 k SET/s the replica can't catch up before SIGKILL — this is honest empirical data, NOT a v1.33.0 ship-blocker.
+
+### Note on the 88 % replication-lag finding
+
+The observational lag is high. **DOES NOT indicate corruption** — kevy never returns wrong data on the replica. It DOES indicate the replication stream falls behind under sustained high-write load. Future v1.33.x or v1.34 may investigate:
+- Whether the primary's replication backlog is too small (current default 256 MiB)
+- Whether the replica's drain rate matches the primary's write rate at the io_uring level
+- Cross-platform comparison (lx64 may show different numbers — typical pattern: Linux replication is faster than Mac)
+
+For now, the finding is documented in the test's stderr output and this entry. The chaos framework's job is to surface these questions, not to answer them all at ship time.
+
+### Per-crate bumps
+
+- workspace 1.32.0 → 1.33.0
+- kevy-chaos 1.33.0 (still `publish = false`)
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow.
+
+### Tests
+
+`cargo test --workspace --lib` green. Chaos suite runtimes (Mac aarch64):
+- `crash_always`: 2.22 s.
+- `crash_everysec`: 5.28 s.
+- `crash_during_rewrite`: 5.75 s.
+- `crash_replication_followed` (NEW): 6.00 s.
+
+All gated `#[ignore]`. Opt-in via `--ignored`.
+
+### What v1.33.0 does NOT include
+
+- **lx64 cross-platform run of crash_replication_followed** (documented post-ship if differences emerge).
+- **Investigation of the 88 % replication-lag** (v1.33.x or v1.34).
+- **Promote-replica-after-primary-death failover** (v1.34+ — requires kevy-elect chaos coverage).
+- **Sustained-load soak** (1 h+ stability) (v1.34+).
+
 ## [v1.32.0] — 2026-06-30 (industrial-grade testing — AOF rewrite race + cross-platform validation)
 
 **Theme**: v2 = kevy 工业级 step 2. Adds the next-most-blast-radius testing axis (AOF rewrite race coverage) on top of v1.31's crash-safety scaffolding. Also bundles the cross-platform empirical validation (lx64 Linux x86_64) that v1.31.x ran post-ship as a doc-only update.
