@@ -4,6 +4,53 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.31.0] — 2026-06-30 (industrial-grade testing — chaos test scaffolding, step 1 of 5)
+
+**Theme**: v2 = kevy 工业级 (full industrial-grade). v1.x 是过程 (process). v1.31 is step 1 toward v2 — raising the testing standard. **No new server features.** Per user direction: 5 categories to cover (并发 / 锁 / 竞争 / 多写 / 断电); v1.31 starts with 断电 = crash safety (highest blast-radius for users).
+
+### Added
+
+- **`crates/kevy-chaos`** — 0-dep test-only crate hosting the chaos test harness.
+  - `Harness` — spawn kevy as a child process via `--config <toml>`, wait for PING ack (or 10s timeout), `kill(KillSignal::Sigkill|Sigterm)`, `restart()` on same data dir.
+  - `WriterPool::spawn(port, n_writers, stop)` — N TCP `SET key value` writer threads; each `+OK` reply captures `(key, value, seq)` into a shared `Arc<Mutex<Vec<AckEntry>>>`.
+  - `verify_all_present(port, &acks)` — drives GETs through a fresh TCP conn, returns Err on first mismatch.
+- **`crates/kevy/tests/crash_always.rs`** — concurrent-writers + abrupt SIGKILL + restart → STRICT assert: every ACK'd write reads back the ACK'd value (ZERO loss for `appendfsync = always`).
+- **`crates/kevy/tests/crash_everysec.rs`** — same shape with `appendfsync = everysec`, 5s pre-kill window. STRICT assert: NO CORRUPTION (every present read matches its ACK'd value). Observational metric: lost-fraction logged but not failure-bound.
+- **`docs/chaos-tests.md`** — invocation, assertion table, future-step roadmap (v1.32+ covering 并发 / 锁 / 竞争 / 多写).
+
+### Surfaced (pending v1.31.x investigation)
+
+The `crash_everysec` test surfaces a real product-relevant question: empirical lost-fraction at high write rate is **~86 %** vs the naive `≤ 1 s window ≈ 20 %` expectation (at `~117 k SET/s × 5 s = 588 k ACKs`, ~507 k lost). Two hypotheses:
+
+1. **everysec fsync deferral under sustained write load** — bio thread + AOF sync handler timing may drift past 1 s when shards are 100 % busy on writes.
+2. **ACK-before-AOF-flush race** — if kevy ACKs SET before the AOF write hits the kernel page cache, the `everysec` contract may be weaker than advertised.
+
+**Important**: NO CORRUPTION ever observed across multiple runs. kevy never returns wrong values, only nil for lost writes. The "lost more than expected" question is the kind of question v1.31 is meant to surface — actionable for v1.31.x but **not** a v1.31.0 ship-blocker.
+
+See [`bench/PERF-FINDING-2026-06-30-everysec-loss-fraction.md`](bench/PERF-FINDING-2026-06-30-everysec-loss-fraction.md) for the finding + investigation roadmap.
+
+### Empirical validation (passing tests)
+
+- `crash_always`: 571 ACKs in 2 s, SIGKILL, restart → **0 lost, 0 corrupted** (`appendfsync = always` zero-loss contract validated). Wall-clock 2.47 s.
+- `crash_everysec`: 588 k ACKs in 5 s, SIGKILL, restart → **0 corrupted** (no-corruption invariant validated; lost-fraction observational). Wall-clock 144 s.
+
+### Per-crate bumps
+
+- workspace 1.30.0 → 1.31.0
+- `kevy-chaos` 1.31.0 (NEW crate; test-only)
+- kevy-client / kevy-client-async / kevy-embedded — unchanged.
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow workspace.
+
+### Tests
+
+`cargo test --workspace --lib` green (existing 320+ tests unaffected — kevy-chaos is dev-dep only). Chaos tests gated `#[ignore]`; run via `cargo test --release -p kevy --test crash_always -- --ignored` (or `crash_everysec`).
+
+### What v1.31.0 does NOT include
+
+- **Investigation of the everysec lost-fraction finding** — that's v1.31.x.
+- **Sustained-load soak / loom / TSan integration** — v1.32+.
+- **No new server features.** Per user round-33 direction: "不要轻易补特性，主要是各种测试标准要提起来".
+
 ## [v1.30.0] — 2026-06-29 (perf — `--accept-shards N` reverses conn-density inversion on sparse-conn workloads)
 
 **Theme**: A8 simplified — static accept-set folds connections onto fewer shards on sparse-conn workloads where kevy's many-shard config inverts (more shards → lower throughput) due to per-shard busy-poll body amortization failing below ~5-10 conns/shard.
