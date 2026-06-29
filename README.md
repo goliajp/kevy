@@ -50,8 +50,18 @@ redis-cli -p 6004 SET hello world
 - **Scriptable** (v1.27) — server-side Lua via `EVAL` / `EVALSHA` /
   `SCRIPT` backed by the in-house pure-Rust [`luna`](https://github.com/goliajp/luna)
   runtime. Default Lua 5.1 (Redis ecosystem compat), per-script opt-in
-  to 5.2–5.5 via `#!lua version=N` shebang. BullMQ / Redlock /
-  rate-limiter scripts run unmodified. Full reference: [`docs/lua.md`](docs/lua.md).
+  to 5.2–5.5 via `#!lua version=N` shebang. Includes pure-Rust `cmsgpack`
+  + `cjson` stdlibs. Full reference: [`docs/lua.md`](docs/lua.md).
+- **Battle-tested with the Redis ecosystem** (v1.27.x) — every job
+  queue / lock library a Redis user actually runs has been verified
+  end-to-end against kevy, including the Lua-script-heavy paths:
+  [BullMQ](https://github.com/taskforcesh/bullmq) (Node, 5.79)
+  on the default 16-shard cluster · [Sidekiq](https://sidekiq.org/)
+  (Ruby, 6.5) · [Bee Queue](https://github.com/bee-queue/bee-queue)
+  (Node, 1.7) · [Celery](https://docs.celeryq.dev/) (Python, 5.6, as
+  broker + result backend) · [node-redlock](https://github.com/mike-marcacci/node-redlock)
+  (5) · canonical [ioredis](https://github.com/redis/ioredis) (5.7).
+  All run unmodified.
 - **Resource-adaptive** — runs full-speed when memory is unbounded, degrades
   cleanly when it isn't, and refuses loudly at the edge instead of corrupting
   silently ([details](#resource-adaptive-by-design)).

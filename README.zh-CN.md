@@ -43,6 +43,21 @@ redis-cli -p 6004 SET hello world
 - **异步可用** —— `kevy-client-async`(v1.22)1:1 镜像阻塞客户端表面,
   支持 `tokio` / `smol` / `async-std`,并提供 pipeline-first builder
   把 N 条命令折叠成单次 TCP 往返。
+- **可脚本化**(v1.27)—— 通过 `EVAL` / `EVALSHA` / `SCRIPT` 跑服务端
+  Lua,后端是自家纯 Rust [`luna`](https://github.com/goliajp/luna)
+  runtime。默认 Lua 5.1(Redis 生态兼容锚),每脚本经 `#!lua version=N`
+  shebang opt-in 到 5.2–5.5。内置纯 Rust 的 `cmsgpack` + `cjson` stdlib。
+  详见 [`docs/lua.md`](docs/lua.md)。
+- **真生态实证验证**(v1.27.x)—— Redis 用户实际跑的每一个 job queue /
+  锁库都对 kevy 端到端跑通过(含 Lua-script-heavy 路径):
+  [BullMQ](https://github.com/taskforcesh/bullmq)(Node, 5.79)
+  在默认 16-shard 集群 ·
+  [Sidekiq](https://sidekiq.org/)(Ruby, 6.5)·
+  [Bee Queue](https://github.com/bee-queue/bee-queue)(Node, 1.7)·
+  [Celery](https://docs.celeryq.dev/)(Python, 5.6,作 broker + result
+  backend)· [node-redlock](https://github.com/mike-marcacci/node-redlock)
+  (5)· 官方 [ioredis](https://github.com/redis/ioredis)(5.7)。
+  全部不改一行代码就跑。
 - **资源自适应** —— 内存不受限时全速运行,有限时优雅退化,边界处响亮
   地拒绝而不是默默腐化数据([详见](#资源自适应设计))。
 
