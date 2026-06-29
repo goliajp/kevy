@@ -1,5 +1,43 @@
-# kevy vs valkey 9.1 / redis 7.4 — bench narrative (v0.2 → v1.25)
+# kevy vs valkey 9.1 / redis 7.4 — bench narrative (v0.2 → v1.25, with 2026-06-29 empirical Phase A re-verification)
 
+> **2026-06-29 empirical Phase A sweep — addendum to the v1.25 headline below:**
+>
+> Ran a 19-round broad empirical sweep on kevy v1.29 OptA + v1.28
+> baseline + valkey 9.1 across 5 axes (A pipelining / B big-value /
+> G collections / H pub/sub / I tail latency) + fair-core comparison
+> + perf-record validation. The v1.25 precision headline numbers
+> below **stay empirically verified at the parity-or-ahead level**.
+> Three updates from the sweep:
+>
+> 1. **Pub/sub 4 KB "0.49× deferred ⚠"** in the v1.25 headline below
+>    was a **valkey noise misread** (3-run repro shows valkey 24%
+>    sample stdev, kevy 0.4%). Re-measured: **kevy actually 8.9 %
+>    ahead at subs=50 size=4 KB**. See
+>    [`PERF-FINDING-2026-06-29-axis-H-no-real-gap.md`](PERF-FINDING-2026-06-29-axis-H-no-real-gap.md).
+> 2. **`-d 65536 SET` shows a -5 % / -13 % gap** (kevy 2-core /
+>    10-core fair-core respectively) **structurally located in the
+>    kernel TCP path**, not in kevy app code. perf-record dwarf
+>    decomposition: `tcp_sendmsg_locked` 21 % inclusive, with `nft_do_chain`
+>    + softirq the next largest buckets. No userspace attack moves
+>    this gap (verified via 3 Phase B attempts: B2-alt prep_cancel,
+>    Option A `Arc<Box<[u8]>>`, A7 conn-density-aware spin_limit —
+>    all throughput-neutral). Findings:
+>    [`PERF-FINDING-2026-06-29-fair-core-bigval-SET.md`](PERF-FINDING-2026-06-29-fair-core-bigval-SET.md) +
+>    [`PERF-FINDING-2026-06-29-arc-from-box-memcpys.md`](PERF-FINDING-2026-06-29-arc-from-box-memcpys.md).
+> 3. **c100 GET methodology v1.2 §9 Pre-Phase-B gate compliance test**
+>    found NO actionable userspace symbol ≥ 10 pp self-time on v1.29.
+>    kevy's userspace hot-path is at the architectural ceiling on
+>    every measured workload. The remaining throughput delta vs
+>    valkey 9.1 lives in kernel paths beyond app-code reach. Finding:
+>    [`PERF-FINDING-2026-06-29-c100-GET-methodology-gate-says-no.md`](PERF-FINDING-2026-06-29-c100-GET-methodology-gate-says-no.md).
+>
+> Empirical project standing perf claim: **kevy is competitive-or-
+> ahead of valkey 9.1 at every measured workload axis except
+> `-d 65536 SET` (loopback-bound) and 10 KB+ SET tails (same root
+> cause).**
+>
+> ---
+>
 > **Current headline (v1.25.0, lx64 16-core, 2026-06-22):**
 >
 > All cells below are **precision bench** (n=1 M × 10 runs,
