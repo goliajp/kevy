@@ -55,3 +55,6 @@ kevy-bench = { path = "../kevy-bench" }
 # Subscriber round-trip). Dev-only — never enters the published kevy
 # binary's dep graph.
 kevy-client = { path = "../kevy-client" }
+# v1.31: chaos test harness — spawns kevy as a child for crash safety
+# tests. Test-only; never reaches the production server.
+kevy-chaos = { path = "../kevy-chaos" }

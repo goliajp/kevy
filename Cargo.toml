@@ -59,6 +59,7 @@ members = [
     "crates/kevy-client-async",
     "crates/kevy-lua",
     "crates/kevy-lua-host",
+    "crates/kevy-chaos",
 ]
 
 [workspace.package]
