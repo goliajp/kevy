@@ -20,7 +20,7 @@ pub enum GetReply<'a> {
     /// the Arc into the conn's `output_arcs` so the next `writev` iovec
     /// list points DIRECTLY at the value bytes — skipping the per-GET
     /// memcpy that valkey's `tryAvoidBulkStrCopyToReply` likewise avoids.
-    ArcBulk(Arc<[u8]>),
+    ArcBulk(Arc<Box<[u8]>>),
 }
 
 /// L2 + L1: pick the optimal encoding for `bytes` at SET time:
@@ -35,7 +35,7 @@ fn pick_value_for_set(bytes: &[u8]) -> Value {
         return Value::Int(n);
     }
     if bytes.len() > BULK_THRESHOLD {
-        return Value::ArcBulk(Arc::from(bytes));
+        return Value::ArcBulk(Arc::new(Box::<[u8]>::from(bytes)));
     }
     Value::Str(SmallBytes::from_slice(bytes))
 }
@@ -46,9 +46,9 @@ fn pick_value_for_set_owned(bytes: Vec<u8>) -> Value {
         return Value::Int(n);
     }
     if bytes.len() > BULK_THRESHOLD {
-        // Vec<u8> → Box<[u8]> → Arc<[u8]> reuses the existing allocation
-        // for the Box step; Arc::from(Box<[u8]>) wraps without copying.
-        return Value::ArcBulk(Arc::from(bytes.into_boxed_slice()));
+        // v1.29 Option A — `Arc::new(box)` is zero-copy when `len ==
+        // capacity` (shrink-to-fit no-ops). See `Value::ArcBulk` doc.
+        return Value::ArcBulk(Arc::new(bytes.into_boxed_slice()));
     }
     Value::Str(SmallBytes::from_vec(bytes))
 }
@@ -301,7 +301,7 @@ impl Store {
         &mut self,
         key: &[u8],
         output: &mut Vec<u8>,
-        output_arcs: &mut Vec<(usize, Arc<[u8]>)>,
+        output_arcs: &mut Vec<(usize, Arc<Box<[u8]>>)>,
     ) -> Result<bool, StoreError> {
         match self.live_entry(key) {
             None => Ok(false),

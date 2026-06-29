@@ -325,8 +325,12 @@ impl<C: Commands> Shard<C> {
             .map(|v| v.clone())
             .unwrap_or_default();
         // One alloc + one memcpy of `msg` (4 KB at the 50/4K endpoint)
-        // into a refcounted slice that all subscribers share.
-        let arc: Arc<[u8]> = Arc::from(msg);
+        // into a refcounted boxed slice that all subscribers share.
+        // v1.29 Option A — `Arc<Box<[u8]>>` instead of `Arc<[u8]>` so
+        // the writev iovec path keeps a stable byte pointer (see
+        // `kevy_store::Value::ArcBulk` doc for rationale). One memcpy
+        // per publish vs one per subscriber on the fallback path.
+        let arc: Arc<Box<[u8]>> = Arc::new(Box::<[u8]>::from(msg));
         for id in &ids {
             if let Some(c) = self.conns.get_mut(id) {
                 // Cap arcs per conn to stay under Linux IOV_MAX. Once

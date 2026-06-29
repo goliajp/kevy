@@ -55,7 +55,7 @@ pub(crate) struct Conn {
     /// reactor's writev SQE". Sorted by `pos`; pushed by `encode_bulk_arc`
     /// at the bulk-reply emit site. Empty in the common small-reply path,
     /// so the reactor stays on `prep_write` with no overhead.
-    pub(crate) output_arcs: Vec<(usize, Arc<[u8]>)>,
+    pub(crate) output_arcs: Vec<(usize, Arc<Box<[u8]>>)>,
     /// Outstanding commands in seq order; front == `next_emit`. An O(1) ring
     /// that replaces the per-command HashMap churn.
     pub(crate) pending: VecDeque<PendingSlot>,
