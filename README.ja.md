@@ -51,6 +51,23 @@ redis-cli -p 6004 SET hello world
 - **非同期対応** —— `kevy-client-async`(v1.22)はブロッキング表面を
   1:1 ミラーし、`tokio` / `smol` / `async-std` をサポート。pipeline-first
   ビルダーで N コマンドを 1 TCP round-trip にまとめられます。
+- **スクリプト対応**(v1.27)—— `EVAL` / `EVALSHA` / `SCRIPT` でサーバー
+  サイド Lua を実行。バックエンドは自家の純粋 Rust 製
+  [`luna`](https://github.com/goliajp/luna) ランタイム。デフォルト Lua
+  5.1(Redis エコシステム互換アンカー)、`#!lua version=N` シェバンで
+  5.2–5.5 にスクリプト単位でオプトイン。純粋 Rust の `cmsgpack` +
+  `cjson` stdlib を同梱。詳細は [`docs/lua.md`](docs/lua.md)。
+- **実エコシステムで実地検証済み**(v1.27.x)—— Redis ユーザーが実際に
+  使うジョブキュー/ロック・ライブラリは Lua スクリプトを多用する経路まで
+  含めて全て kevy に対して end-to-end 検証済み:
+  [BullMQ](https://github.com/taskforcesh/bullmq)(Node, 5.79)を
+  デフォルト 16-shard クラスタで ·
+  [Sidekiq](https://sidekiq.org/)(Ruby, 6.5)·
+  [Bee Queue](https://github.com/bee-queue/bee-queue)(Node, 1.7)·
+  [Celery](https://docs.celeryq.dev/)(Python, 5.6、broker + result
+  backend として)· [node-redlock](https://github.com/mike-marcacci/node-redlock)
+  (5)· 公式 [ioredis](https://github.com/redis/ioredis)(5.7)。
+  全てコード変更なしで動作。
 - **リソース適応型** —— メモリ無制限なら全速、制限ありなら優雅に縮退、
   境界では大声で拒否してデータを静かに破損させたりしない([詳細](#リソース適応型設計))。
 
