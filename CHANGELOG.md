@@ -4,6 +4,49 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.28.0] — 2026-06-28 (release.yml infra — `--draft` flag dropped)
+
+Workflow-only release. Every v1.27.x ship since v1.27.0 created the GH Release in draft state, requiring a manual `gh release edit --draft=false` to make it user-visible. The flag was never load-bearing: by the time the `release-notes` job runs, `verify` + `publish` + `build-binaries` have all passed, so there's no failure path the draft could shield users from. The flag was busy-work, not safety.
+
+### Changed
+- `.github/workflows/release.yml`: drop `--draft` from `gh release create`. Job renamed "Draft GitHub release" → "Publish GitHub release". Re-upload branch (used by workflow re-runs) gained `gh release edit "$tag" --draft=false || true` belt-and-braces to lift any historical draft on re-run.
+- rc / beta tags continue to ship as Pre-release (blue badge) — that's a signal, not a hidden state.
+
+### Per-crate bumps
+- workspace 1.27.9 → 1.28.0
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow
+
+Independent tracks (kevy-client / kevy-client-async / kevy-embedded) unchanged — pure workflow ship, no code touches them. `cargo publish` hit "already uploaded" for those and skipped, per the existing `publish_or_skip` retry logic.
+
+## [v1.27.9] — 2026-06-28 (luna-core 1.1.0 → 2.1.0 bridge bump)
+
+[luna 2.1.0](https://crates.io/crates/luna-core) shipped — industrial-grade release after v1.3, collapsing the v1.4–v1.8 line per the `nodefer` upgrade decision. kevy-lua's bridge surface needed three source-level updates to stay in lock-step:
+
+### Changed
+- `Vm::set_userdata<T>` gained a `T: LuaUserdata` trait bound (luna v1.3 Phase TB — replaces the v1.1 unbounded `T: Any + 'static`). `DispatchSlot` now `impl luna_core::vm::LuaUserdata for DispatchSlot {}` — DispatchSlot carries `Rc<dyn Fn…>` + `Rc<Cell<bool>>`, no `Gc<…>` fields, so the default no-op `trace` is correct and the impl is a pure marker.
+- `LuaVersion` gained a new `MacroLua` variant inserted **between** `Lua54` and `Lua55` (luna v1.3 Phase ML — 5.4 base + compile-time macros). luna's v2.0 major bump retired the "variants appended only" promise from 1.x.
+  - `kevy-lua::dialect_slot` rewritten from `v as usize` to explicit `match` so future luna inserts can't silently re-index the per-shard VM pool.
+  - `N_DIALECTS` 5 → 6. `version_tag` adds the `MacroLua => "macro"` arm.
+- The `#!lua version=` shebang grammar is unchanged: it still accepts `5.1` / `5.2` / `5.3` / `5.4` / `5.5`. `MacroLua` is not exposed on the wire — opt-in remains a host-side API decision (Bridge programmatic dialect selection).
+
+### 0-dep exemption — verified intact
+
+```sh
+cargo tree -p kevy-lua | wc -l       # 1 (luna-core v2.1.0)
+cargo tree -p kevy-lua-host | wc -l  # 1 (luna-core v2.1.0)
+```
+
+### Workspace test
+`cargo test --workspace --release`: all green (kevy-lua 79 / kevy-lua-host 8 + every other crate's existing test set unchanged).
+
+### Per-crate bumps
+- workspace 1.27.8 → 1.27.9
+- kevy-client 1.12.19 → 1.12.20
+- kevy-client-async 1.0.20 → 1.0.21
+- kevy-embedded 1.4.20 → 1.4.21
+- kevy-lua / kevy-lua-host follow workspace = 1.27.9
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow
+
 ## [v1.27.8] — 2026-06-24 (Bee Queue + Celery ecosystem unblock — BRPOPLPUSH; v1.27.7 withdrawn)
 
 **v1.27.7 was withdrawn.** Its commit `2c0ad32` accidentally staged 4011 files of `node_modules/` + `package*.json` from an ad-hoc ecosystem test that ran `npm install` in the kevy repo root. The workflow was cancelled before publish; nothing reached crates.io as v1.27.7. v1.27.8 ships the same intended content cleanly, plus a hardened `.gitignore` to block recurrence (excludes `node_modules/`, `package*.json`, Python `.venv/`, Ruby `vendor/bundle/`).
