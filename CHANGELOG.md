@@ -4,6 +4,52 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.46.0] — 2026-06-30 (v2 roadmap Phase C step 4 — client-side network-partition chaos)
+
+**Theme**: v2 roadmap Phase C step 4 of 5. Chaos test for production-realistic client-side network failures — burst-abandoned partial frames, half-closed sockets, reconnect storms — proving kevy's accept path and conn cleanup survive abrupt RST patterns without leaking state.
+
+### Added
+
+- **`crates/kevy/tests/network_partition_chaos.rs`** — gated `#[ignore]` 4-phase chaos test:
+  - **Phase 1**: 200 conns each writing a partial RESP frame (`*3\r\n$3\r\nSET\r\n$3\r\nfo`), then abrupt drop. kevy must not panic on torn-frame disconnects.
+  - **Phase 2**: 50 half-close patterns (write PING, shutdown write side, read reply, drop). Exercises the FIN-then-reply cleanup path.
+  - **Phase 3**: 1000-conn reconnect storm — fast connect → PING → disconnect cycles. Strict assert: ≥ 95 % of PINGs must answer +PONG (kevy must not refuse conns under accept pressure).
+  - **Phase 4**: Post-storm health PING on a fresh conn.
+
+### Empirical findings (Mac M2 Pro, kevy v1.46 release binary)
+
+```
+network_partition: phase 1 — burst-abandon 200 conns with partial frames
+network_partition: opened 200 conns with partial frames
+network_partition: phase 2 — 50 half-close patterns
+network_partition: phase 3 — 1000-conn reconnect storm
+network_partition: storm 1000 = 1000 OK / 0 err in 0.10 s
+network_partition: phase 4 — fresh-conn PING
+network_partition: kevy alive across all 4 phases
+test network_partition_client_side_disconnects ... ok in 1.11s
+```
+
+- **1000 / 1000 storm conns succeeded** in 0.10 s = sustained ~10 k conn/sec accept rate, zero refusals.
+- No panic on 200 partial-frame torn disconnects.
+- Half-close path clean.
+- Post-storm fresh-conn PING immediately +PONG.
+
+### Out of scope (deferred to v1.46.x or later phase)
+
+- Inter-node TCP partition (would need std-only TCP forwarder proxy with kill-switch — substantial work).
+- Asymmetric partition (A can hear B, B can't hear A).
+- Latency injection (50 ms RTT) / packet-loss simulation.
+- Replication catch-up after a partition heals — superseded by v1.33.x replication-chaos work on Linux.
+
+### v2 roadmap progress
+
+- Phase A (failure-mode robustness): v1.36 + v1.37 + v1.38 ✅
+- Phase B (operability + observability): v1.39 + v1.40 + v1.41 + v1.42 ✅
+- Phase C (cluster correctness under chaos): v1.43 + v1.44 + v1.45 + v1.46 ✅; one step (v1.47 = rolling-upgrade + AOF compat matrix) remaining.
+- Phase D / E / F: pending.
+
+11 / 20 versions complete = 55 % toward v2.0.
+
 ## [v1.45.0] — 2026-06-30 (v2 roadmap Phase C step 3 — kevy-scope MISDIRECTED chaos + survivor)
 
 **Theme**: v2 roadmap Phase C step 3 of 5. Chaos test for kevy-scope's scoped multi-writer routing — verify the `-MISDIRECTED` reply mechanism fires across a 2-node cluster + the non-owner survives a SIGKILL of the owner.
