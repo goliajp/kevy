@@ -4,6 +4,49 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.57.0] — 2026-06-30 (v2 roadmap Phase F step 4 — third RC fix: v1.44.x cluster_known_nodes observability)
+
+**Theme**: v2 roadmap Phase F step 4 of 6 — third RC iteration. Fixes the v1.44.x finding (`CLUSTER INFO` reported `cluster_known_nodes` equal to the shard count instead of the peer count — broke observability tools that watch cluster topology). Now reports `peers.len()` when cluster mode is enabled (1 when no peers configured, since the local node is always known to itself).
+
+### Changed
+
+- **`crates/kevy/src/ops/cluster.rs`** — `CLUSTER INFO` `cluster_known_nodes` field now reflects `cfg.cluster.peers.len().max(1)` when cluster mode is enabled. `cluster_size` continues to reflect shard count (= Redis spec: number of masters serving slots). Non-cluster nodes still report `cluster_known_nodes:1`.
+
+### Added
+
+- **`crates/kevy/tests/cluster_known_nodes_count.rs`** — gated `#[ignore]` chaos test with 2 sub-phases:
+  - Single-node cluster (no `peers = ...`) → assert `cluster_known_nodes:1` + `cluster_size:2` (threads = 2).
+  - 3-peer cluster (`peers = "nodeA@127.0.0.1:elect_b,nodeB@127.0.0.1:9971,nodeC@127.0.0.1:9981"`) → assert `cluster_known_nodes:3` + `cluster_size:4` (threads = 4).
+
+### Empirical findings (Mac M2 Pro, kevy v1.57 release binary)
+
+```
+known_nodes: single-node CLUSTER INFO:
+  cluster_known_nodes:1
+  cluster_size:2
+known_nodes: 3-peer CLUSTER INFO:
+  cluster_known_nodes:3
+  cluster_size:4
+known_nodes: both invariants OK (1 + 3 peers)
+test ... ok in 0.69s
+```
+
+- Single-node: `cluster_known_nodes` honestly says "1 node known" (was `2` = shard count, misleading).
+- 3-peer: `cluster_known_nodes:3` correctly counts the 3 declared peers (was `4` = shard count, also misleading).
+- `cluster_size` semantics unchanged — Redis-spec compliant.
+
+### Compat note
+
+- **No config break, no API break, no behaviour change** for non-cluster nodes (still report 1).
+- Observability tools that watched `cluster_known_nodes` for topology size now get the real peer count. This is the field they expected to read per Redis spec.
+- v1.44.x finding closed.
+
+### v2 roadmap progress
+
+- Phase F: v1.54 + v1.55 + v1.56 + v1.57 ✅; 2 RC steps remaining (v1.58 + v1.59) before v2.0.
+
+Third RC complete. 2 steps from v2.0 ship.
+
 ## [v1.56.0] — 2026-06-30 (v2 roadmap Phase F step 3 — second RC fix: v1.43.x MGET cross-slot -CROSSSLOT)
 
 **Theme**: v2 roadmap Phase F step 3 of 6 — second RC iteration. Fixes the v1.43.x finding (cluster-mode multi-key commands MGET / MSET / SINTER / SUNION / SDIFF previously returned silent multi-bulk nils when keys spanned slots, instead of the Redis-Cluster-spec `-CROSSSLOT` error). Non-cluster conns keep the legacy single-DB fan-out behaviour (no break).

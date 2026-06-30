@@ -88,6 +88,18 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
     let enabled = cfg.cluster.enabled;
     match sub.as_slice() {
         b"INFO" => {
+            // v1.57 (closes v1.44.x finding): `cluster_known_nodes` is
+            // peer count (self + every entry in `[cluster] peers`),
+            // not shard count. `cluster_size` stays = shard count
+            // (Redis semantics: number of masters serving slots).
+            // Without `peers` we report 1 (this node only) when
+            // cluster is enabled — clients see a real single-node
+            // topology instead of 0.
+            let known = if enabled {
+                cfg.cluster.peers.len().max(1)
+            } else {
+                1
+            };
             let body = format!(
                 "cluster_enabled:{}\r\ncluster_state:ok\r\n\
                  cluster_slots_assigned:16384\r\ncluster_slots_ok:16384\r\n\
@@ -95,7 +107,7 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
                  cluster_known_nodes:{}\r\ncluster_size:{}\r\n\
                  cluster_current_epoch:0\r\ncluster_my_epoch:0\r\n",
                 u8::from(enabled),
-                if enabled { n } else { 1 },
+                known,
                 if enabled { n } else { 1 },
             );
             encode_bulk(out, body.as_bytes());
