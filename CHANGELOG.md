@@ -4,6 +4,50 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.15] — 2026-07-01 — **Linux primary-replication unblocked** (v1.33.x finding closed)
+
+**Theme**: closes the long-standing v1.33.x Linux-only finding. When kevy was configured `[replication] role = "primary"` AND running on Linux's io_uring reactor (the default on Linux), the primary became UNRESPONSIVE to client traffic — `redis-cli PING` would hang forever. The chaos test `crash_replication_followed_no_corruption` had been failing on Linux CI since v1.33 with `"vacuous test: only 0 primary-ACKs before kill"`.
+
+### Root cause
+
+`kevy_sys::tcp_listen` creates a **blocking** TCP listener by design. The epoll reactor's `shard::run` calls `replication_listener.set_nonblocking()` before adding it to the poller (`shard.rs:362`). The io_uring reactor's `run_uring` did NOT — the listener stayed in blocking mode. The tick-driven `accept_ready_replication()` loop then blocked on the first `accept()` syscall waiting for an incoming replica connection that never came, stalling the entire shard's I/O processing.
+
+### Fix
+
+- **`crates/kevy-rt/src/uring_reactor.rs`** — adds `if let Some(rl) = &self.replication_listener { rl.set_nonblocking()?; }` at the top of `run_uring` (right after the ring + provided-buffer-ring setup). Three lines + comment. Mirrors what the epoll path already did.
+
+### Empirical (Linux lx64 / kernel 6.12 / io_uring reactor, kevy v2.0.15)
+
+```
+=== PING:
+PONG
+=== SET:
+OK
+=== GET:
+bar
+
+cargo test --release -p kevy --test crash_replication_followed -- --ignored
+test result: ok. 1 passed; 0 failed in 5.91s
+```
+
+Pre-fix: `redis-cli PING` hung indefinitely; the chaos test recorded 0 primary-ACKs and failed `vacuous test`.
+
+### Finding status — updated
+
+| # | Surfaced | Status |
+|---|---|---|
+| v1.33.x Linux replication chaos | v1.33.0 | **CLOSED in v2.0.15** |
+| Linux CI `blocking_cross_shard.rs` failures | session-recent | **CLOSED at v2.0.14** (resolved by an earlier ship; verified passing 8/8 on lx64 at v2.0.14) |
+| v1.34.x 1h opt-in soak on lx64 | v1.34.0 | open — runtime budget |
+| v1.49.x INFO memory empty when keyspace empty | v1.49.0 | CLOSED in v2.0.1 (not a bug) |
+| v1.52.x CLIENT SETNAME persistence | v1.52.0 | open — needs `dispatch_into` trait refactor |
+
+**Open findings remaining**: 2 (v1.34.x 1h soak + v1.52.x CLIENT SETNAME).
+
+### Significance
+
+Before this fix, **kevy on Linux + `[replication] role = "primary"` was effectively broken** — any production Linux deployment with the default io_uring reactor enabled would have had a frozen primary. This is the kind of issue that exclusively reproduces on Linux io_uring (not Mac kqueue, not Linux epoll), so the Mac-based local chaos suite couldn't catch it.
+
 ## [v2.0.14] — 2026-07-01 — **`kevy-embedded` 1.13.0**: multi-shard atomic transaction
 
 **Theme**: extends transaction surface. Existing `Store::atomic` (v1.10.0) is single-shard (shard 0). This ship adds `Store::atomic_all_shards` for true cross-shard atomicity — holds write locks on EVERY shard for the closure's duration, so any key combination works inside one transaction with full read-modify-write visibility.
