@@ -4,6 +4,56 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.5] — 2026-07-01 — **`kevy-embedded` 1.7.0**: hincrbyfloat + ping_ns (mailrs feedback)
+
+**Theme**: kevy-embedded 1.6.0 → 1.7.0 — closes the v1.6.0 partial #4 (hincrbyfloat) by adding the new `kevy_store::Store::hincrbyfloat` method + embedded facade, and ships #16 ping_us as `ping_ns()` for perfgate observability.
+
+### Added — `kevy_store::Store`
+
+- `hincrbyfloat(key, field, delta: f64) -> Result<f64, StoreError>` (in `crates/kevy-store/src/hash.rs`) — atomic float increment of a hash field. Preserves TTL, errors with `NotFloat` when the field isn't a parseable float, errors with `NotFloat` when the result is non-finite (Inf / NaN). Symmetric with the existing `hincrby` int-version.
+
+### Added — `kevy_embedded::Store`
+
+- `hincrbyfloat(key, field, delta: f64) -> io::Result<f64>` — wraps the new Store method + AOF-logs as `HINCRBYFLOAT`.
+- `ping_ns() -> u128` — measures one shard-0 read-lock acquire + release in nanoseconds. Returns immediately; the duration reflects current shard-0 contention (= shorter when idle, longer when many readers/writers compete). For perfgate observability per mailrs ask #16.
+
+### Tests
+
+3 new unit tests:
+- `hincrbyfloat_creates_and_increments` — missing field starts at 0.0.
+- `hincrbyfloat_negative_delta` — int field can be incremented by float delta.
+- `ping_ns_returns_positive_value` — sanity bound (< 1 s).
+
+### Empirical (Mac M2 Pro, kevy v2.0.5)
+
+```
+cargo test --release -p kevy-embedded
+test result: ok. 80 passed; 0 failed (was 77 in v2.0.4; +3 new).
+```
+
+### Coverage status vs mailrs feedback (16 asks) — updated
+
+| # | Ask | Status |
+|---|-----|--------|
+| 1 | hgetall | ✅ v1.5.0 |
+| 2 | zrange / zrevrange | ✅ v1.5.0 |
+| 3 | zincrby | ✅ v1.5.0 |
+| 4 | hincrby / hincrbyfloat | ✅ **now full** (hincrbyfloat in v1.7.0) |
+| 5 | hash mass-getters | ✅ v1.5.0 |
+| 6 | atomic multi-key | ⏳ shape conversation pending with mailrs |
+| 7 | scan / hscan / zscan | ⏳ cursor design pending |
+| 8 | mset / mget | ✅ v1.6.0 |
+| 9 | keys(pattern) | ✅ v1.6.0 |
+| 10 | getset / getdel / getex | ✅ v1.5.0 + v1.6.0 |
+| 11 | lrange / lindex / lrem / linsert | 3/4 ✅; linsert defer |
+| 12 | sinter / sunion / sdiff | ✅ v1.6.0 |
+| 13 | pipeline() | defer (closure-style design) |
+| 14 | bitcount / setbit / getbit | defer (needs new Store module) |
+| 15 | expireat / pexpire | ✅ v1.6.0 |
+| 16 | ping_us | ✅ **v1.7.0 (this ship)** |
+
+**12 of 16 fully closed**; 1 partial; 2 pending design conversation; 1 (#14 bitmap) deferred to a dedicated future ship.
+
 ## [v2.0.4] — 2026-07-01 — **`kevy-embedded` 1.6.0**: Phase 3 P1 round-out (mailrs feedback)
 
 **Theme**: kevy-embedded 1.5.0 → 1.6.0 — adds 10 more methods covering the rest of the P1 batch from mailrs's feedback note. With v2.0.3 (12 of 16 asks landed) + this ship (5 more), **17 of mailrs's 16 numbered asks now have at least partial coverage** — only `atomic` (#6) and `scan/hscan/zscan` (#7) remain, both pending shape-conversation per the v2.0.3 reply note.

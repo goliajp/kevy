@@ -173,4 +173,39 @@ impl Store {
     pub fn pexpire(&self, key: &[u8], ms: u64) -> io::Result<bool> {
         self.expire(key, Duration::from_millis(ms))
     }
+
+    // ---- hash float increment (kevy-embedded 1.7.0) ------------------
+
+    /// `HINCRBYFLOAT key field delta` — atomic float increment of a
+    /// hash field. Returns the post-increment value. Errors on
+    /// `NotFloat` when the field is present but not parseable.
+    pub fn hincrbyfloat(
+        &self,
+        key: &[u8],
+        field: &[u8],
+        delta: f64,
+    ) -> io::Result<f64> {
+        ensure_writable(self)?;
+        let mut g = self.wshard(key);
+        let new_val = g
+            .store
+            .hincrbyfloat(key, field, delta)
+            .map_err(store_err)?;
+        let delta_str = format!("{delta}");
+        commit_write(&mut g, &[b"HINCRBYFLOAT", key, field, delta_str.as_bytes()])?;
+        Ok(new_val)
+    }
+
+    // ---- observability (kevy-embedded 1.7.0) -------------------------
+
+    /// `Store::ping_us()` — return the round-trip duration of a
+    /// shard-0 read-lock acquire + release in **nanoseconds**, for
+    /// perfgate observability. Always returns immediately; the
+    /// duration reflects current shard-0 contention (= shorter when
+    /// idle, longer when many readers/writers compete).
+    pub fn ping_ns(&self) -> u128 {
+        let t = std::time::Instant::now();
+        let _g = self.lock();
+        t.elapsed().as_nanos()
+    }
 }

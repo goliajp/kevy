@@ -163,3 +163,36 @@ fn pexpire_sets_relative_ms() {
         "expected TTL in (0..30_000], got {ttl}"
     );
 }
+
+// ---- hincrbyfloat -------------------------------------------------------
+
+#[test]
+fn hincrbyfloat_creates_and_increments() {
+    let s = s();
+    // missing field starts at 0.0.
+    let v1 = s.hincrbyfloat(b"h", b"f", 1.5).unwrap();
+    assert!((v1 - 1.5).abs() < 1e-9, "got {v1}");
+    let v2 = s.hincrbyfloat(b"h", b"f", 2.25).unwrap();
+    assert!((v2 - 3.75).abs() < 1e-9, "got {v2}");
+}
+
+#[test]
+fn hincrbyfloat_negative_delta() {
+    let s = s();
+    s.hset(b"h", &[(b"f", b"10")]).unwrap();
+    let v = s.hincrbyfloat(b"h", b"f", -2.5).unwrap();
+    assert!((v - 7.5).abs() < 1e-9, "got {v}");
+}
+
+// ---- ping_ns ------------------------------------------------------------
+
+#[test]
+fn ping_ns_returns_positive_value() {
+    let s = s();
+    let n = s.ping_ns();
+    // anything >= 0 is technically valid; on Mac/Linux the lock
+    // acquire + release pair is typically tens to hundreds of ns.
+    // Hard upper bound: 1 second is comically high but guards against
+    // a hung implementation.
+    assert!(n < 1_000_000_000, "ping_ns suspiciously large: {n}");
+}
