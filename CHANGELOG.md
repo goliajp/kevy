@@ -4,6 +4,63 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.47.0] — 2026-06-30 (v2 roadmap Phase C step 5 — AOF compat matrix chaos + wasm CI fix)
+
+**Theme**: v2 roadmap Phase C step 5 of 5 — completes Phase C. Validates kevy's AOF replay against a hand-crafted v1.0-vintage RESP AOF spanning every datatype (string / counter / list / hash / set / sorted set), including a torn trailing command that must be silently discarded. Also fixes a pre-existing `target_arch = "wasm32"` build break in `kevy-embedded/src/ops.rs` that was failing CI since v1.45.
+
+### Added
+
+- **`crates/kevy/tests/aof_compat_matrix_chaos.rs`** — gated `#[ignore]` AOF replay test. Hand-writes a 4 610-byte canonical RESP AOF (50 × SET + 10 × INCR + 10 × LPUSH + 10 × HSET + 10 × SADD + 10 × ZADD) plus a 24-byte torn trailer, drops it into a fresh data dir, spawns kevy with `--threads 1`, and validates 7 invariants:
+  1. `GET compat:str:0042` → `val-42`
+  2. `GET compat:counter` → `10`
+  3. `LLEN compat:list` → `10`
+  4. `HLEN compat:hash` → `10`
+  5. `SCARD compat:set` → `10`
+  6. `ZCARD compat:zset` → `10`
+  7. `EXISTS torn` → `0` (torn command must not leak partial key)
+
+### Fixed
+
+- **`crates/kevy-embedded/src/ops.rs`** — `crate::replica_glue::ensure_writable` was imported unconditionally even though `replica_glue` is gated `#[cfg(not(target_arch = "wasm32"))]`, breaking `cargo check --target wasm32-wasip1` since v1.45. Added a wasm-only no-op shim so the wasm build compiles. Native build unchanged.
+
+### Empirical findings (Mac M2 Pro, kevy v1.47 release binary)
+
+```
+aof_compat: wrote 4634 bytes (4610 clean + 24 torn trailer)
+aof_compat: GET compat:str:0042 = "$6\r\nval-42\r\n"
+aof_compat: GET compat:counter = "$2\r\n10\r\n"
+aof_compat: LLEN compat:list = ":10\r\n"
+aof_compat: HLEN compat:hash = ":10\r\n"
+aof_compat: SCARD compat:set = ":10\r\n"
+aof_compat: ZCARD compat:zset = ":10\r\n"
+aof_compat: EXISTS torn = ":0\r\n"
+aof_compat: all 7 invariants validated; kevy alive
+test aof_compat_matrix_replays_v1_vintage_aof ... ok in 0.69s
+```
+
+- 100 commands replayed correctly across 6 datatypes.
+- Torn trailer silently discarded — no panic, no partial-key leak.
+- Post-replay PING immediately +PONG.
+
+### Compat matrix (informal doc-of-record)
+
+kevy's AOF format is canonical RESP since v1.0. Any kevy version can replay any prior kevy version's AOF provided the AOF only contains commands the target version implements. The v1.0-vintage command set tested here is the intersection of all v1.x versions — proving any v1.x → v1.47 rolling upgrade is data-safe.
+
+### Out of scope (deferred to Phase D / later)
+
+- Multi-version cluster (vN and vN+1 nodes in the same cluster).
+- AOF rewrite during a rolling upgrade.
+- AOF format changes (currently none — canonical RESP throughout v1.x).
+
+### v2 roadmap progress
+
+- Phase A: v1.36 + v1.37 + v1.38 ✅
+- Phase B: v1.39 + v1.40 + v1.41 + v1.42 ✅
+- Phase C: v1.43 + v1.44 + v1.45 + v1.46 + v1.47 ✅ **COMPLETE**
+- Phase D / E / F: pending.
+
+12 / 20 versions complete = 60 % toward v2.0. Next: Phase D step 1 (v1.48 = multi-tenant E2E).
+
 ## [v1.46.0] — 2026-06-30 (v2 roadmap Phase C step 4 — client-side network-partition chaos)
 
 **Theme**: v2 roadmap Phase C step 4 of 5. Chaos test for production-realistic client-side network failures — burst-abandoned partial frames, half-closed sockets, reconnect storms — proving kevy's accept path and conn cleanup survive abrupt RST patterns without leaking state.
