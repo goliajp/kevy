@@ -29,6 +29,7 @@ impl Config {
             "replication" => self.apply_replication(item),
             "lua" => self.apply_lua(item),
             "metrics" => self.apply_metrics(item),
+            "audit" => self.apply_audit(item),
             other => Err(schema_err(&item, format!("unknown section [{other}]"))),
         }
     }
@@ -37,6 +38,14 @@ impl Config {
         match item.key.as_str() {
             "listen_port" => self.metrics.listen_port = value_as_u16(&item)?,
             k => return Err(schema_err(&item, format!("unknown [metrics] key: {k}"))),
+        }
+        Ok(())
+    }
+
+    fn apply_audit(&mut self, item: Item) -> Result<(), ConfigError> {
+        match item.key.as_str() {
+            "log_path" => self.audit.log_path = PathBuf::from(value_as_string(&item)?),
+            k => return Err(schema_err(&item, format!("unknown [audit] key: {k}"))),
         }
         Ok(())
     }

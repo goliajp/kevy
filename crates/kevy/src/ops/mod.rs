@@ -308,6 +308,13 @@ fn cmd_debug<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
         Some(s) => s.to_ascii_uppercase(),
         None => return wrong_args(out, "debug"),
     };
+    // v1.42 — audit every DEBUG call (admin command).
+    let mut event: Vec<&[u8]> = Vec::with_capacity(args.len());
+    event.push(b"DEBUG");
+    for i in 1..args.len() {
+        event.push(&args[i]);
+    }
+    crate::audit_log::record(&event);
     match sub.as_slice() {
         b"SLEEP" => {
             let secs: f64 = args

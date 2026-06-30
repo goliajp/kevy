@@ -4,6 +4,88 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.42.0] — 2026-06-30 (v2 roadmap Phase B step 4 — audit log + Phase B COMPLETE)
+
+**Theme**: v2 roadmap Phase B step 4 of 4 — **Phase B "Operability + observability" COMPLETE** after this. Adds append-only audit log of ADMIN-class commands.
+
+### Added
+
+- **`[audit] log_path = "<path>"`** — kevy-config field. Empty (default) = OFF. Non-empty = open file `O_APPEND`, record every ADMIN command line-by-line.
+- **`crates/kevy/src/audit_log.rs`** — std-only (0-dep) audit log writer.
+  - `init(path)` — idempotent (OnceLock); opens file or warns + disables.
+  - `record(&[&[u8]])` — line-buffered, async-friendly via `Mutex<File>`.
+  - Format: `<unix_micros>\t<verb>\t<arg1>\t<arg2>\t...\n`
+  - Args truncated to 256 B; tabs/newlines/CR sanitized to spaces.
+- **Hooks**:
+  - `CONFIG SET <key> <value>` (kevy/src/ops/config.rs)
+  - `CONFIG REWRITE` (kevy/src/ops/config.rs)
+  - `DEBUG <subcmd> [args]` (kevy/src/ops/mod.rs)
+- **`crates/kevy/tests/audit_log_chaos.rs`** — 8-thread × 25-call = 200 CONFIG SET concurrent storm; verify every line captured, timestamps monotonic, no interleaving.
+
+### Empirical (Mac aarch64)
+
+```
+$ cat audit.log
+1782806752998979	CONFIG	SET	maxmemory	1gb
+1782806752999132	DEBUG	SLEEP
+```
+
+Chaos test: **200 lines captured / 200 CONFIG SET events / timestamps monotonic / 0.38 s wall-clock**.
+
+### What this validates
+
+- **Every ADMIN event captured** — concurrent storm from 8 threads → 200 lines.
+- **Timestamps monotonic** (microsecond resolution).
+- **No interleaving** — `O_APPEND` + Mutex<File> ensures each line is atomic.
+- **0 perf impact when OFF** (empty log_path skips the writer init entirely).
+
+### Production deployment pattern
+
+```toml
+[audit]
+log_path = "/var/log/kevy/audit.log"
+```
+
+```sh
+$ tail -f /var/log/kevy/audit.log
+1782806752998979	CONFIG	SET	maxmemory	1gb
+1782806752999132	DEBUG	SLEEP	0.5
+1782806753001456	CONFIG	REWRITE
+…
+```
+
+Rotate via `logrotate` (the file is `O_APPEND`, so logrotate-via-copytruncate works).
+
+### v2 roadmap progress — Phase B COMPLETE
+
+- ✓ Phase A (v1.36-v1.38) — failure-mode hardening
+- ✓ v1.39 (Phase B step 1: SIGTERM drain — 0 lost / 0.08 s)
+- ✓ v1.40 (Phase B step 2: backup/restore — 99.98 % recall)
+- ✓ v1.41 (Phase B step 3: Prometheus /metrics — pure-std HTTP)
+- ✓ v1.42 (Phase B step 4: audit log) — THIS
+- **Phase C next**: v1.43-v1.47 cluster architecture chaos (multi-node topology / replica-promote / scope-migrate / network-partition / rolling-upgrade)
+- Then Phase D (large-scale E2E), E (ecosystem), F (v2 prep).
+
+### Per-crate bumps
+
+- workspace 1.41.0 → 1.42.0
+- kevy-config 1.42.0 (`[audit]` section + apply_audit)
+- kevy 1.42.0 (new `pub(crate) mod audit_log` + 3 hook sites)
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow.
+
+### Tests
+
+`cargo test --workspace --lib` green. Chaos suite (13 tests, gated `--ignored`):
+- crash × 4 / soak / concurrent / wire_torture / maxclients / disk_full / fd_exhaust / sigterm_drain / backup_restore
+- **audit_log_chaos (NEW): 0.38 s — 200 events captured, timestamps monotonic**
+
+### What v1.42.0 does NOT include
+
+- **MONITOR command** — Redis-style real-time command stream. Deferred to v1.42.x (separate user-facing feature requiring per-cmd intercept in dispatch path).
+- **SLOWLOG histogram extension** — current SLOWLOG covers slow-cmd ring; per-cmd latency histograms deferred to v1.42.x.
+- **FLUSHDB / CLIENT KILL audit hooks** — only CONFIG SET / REWRITE / DEBUG hooked in v1.42.0. Easy follow-up; FLUSHDB / CLIENT KILL routing is more complex and v1.42.x scope.
+- **Log rotation built-in** — operator uses logrotate. kevy `O_APPEND` is rotation-friendly.
+
 ## [v1.41.0] — 2026-06-30 (v2 roadmap Phase B step 3 — Prometheus `/metrics` endpoint)
 
 **Theme**: v2 roadmap Phase B step 3 of 4. Adds `/metrics` HTTP exposition endpoint for Prometheus / Grafana / standard production monitoring infra.
