@@ -4,6 +4,55 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.53.0] — 2026-06-30 (v2 roadmap Phase E step 2 — go-redis v9 + redis-py 5.x battle test; Phase E COMPLETE)
+
+**Theme**: v2 roadmap Phase E step 2 of 2 — completes Phase E. Closes the tier-1 client ecosystem matrix with go-redis v9 (dominant Go) and redis-py 5.x (dominant Python). Exercises the patterns those clients distinctively use: CLIENT INFO probe, MULTI/EXEC atomic batches, WATCH/MULTI/EXEC optimistic locking, and pub/sub round-trip across two conns.
+
+### Added
+
+- **`crates/kevy/tests/goredis_redispy_battle.rs`** — gated `#[ignore]` battle test with two sub-tests:
+  - **`goredis_v9_golden_path`**: HELLO 2 → CLIENT INFO → MULTI / SET / INCR / INCR / EXEC → post-EXEC PING.
+  - **`redispy_5x_golden_path`**: WATCH counter → MULTI / INCR / INCR / EXEC (100 → 102) → SUBSCRIBE on conn-A + PUBLISH on conn-B cross-conn round-trip → UNSUBSCRIBE → post-battle PINGs.
+
+### Empirical findings (Mac M2 Pro, kevy v1.53 release binary)
+
+```
+goredis: HELLO 2
+goredis: CLIENT INFO reply = "$141\r\nid=1 addr=127.0.0.1:0 laddr=127.0.0.1:0
+                              fd=0 name= age=0 idle=0 flags=N db=0 sub=0
+                              psub=0 ssub=0 multi=-1 cmd=client|info
+                              user=default resp=2\r\n"
+goredis: MULTI..EXEC reply = "+OK\r\n+QUEUED\r\n+QUEUED\r\n+QUEUED\r\n
+                              *3\r\n+OK\r\n:1\r\n:2\r\n"
+goredis: golden path OK
+
+redispy: SET counter 100 + WATCH + MULTI + INCR + EXEC
+redispy: MULTI..EXEC reply = "+OK\r\n+QUEUED\r\n+QUEUED\r\n*2\r\n:101\r\n:102\r\n"
+redispy: SUBSCRIBE ack = "*3\r\n$9\r\nsubscribe\r\n$15\r\nredispy:channel\r\n:1\r\n"
+redispy: PUBLISH reply = ":1\r\n" (subscriber count)
+redispy: subscriber received = "*3\r\n$7\r\nmessage\r\n$15\r\nredispy:channel\r\n
+                                $18\r\nhello-from-redispy\r\n"
+redispy: golden path OK
+
+test result: ok. 2 passed; 0 failed; finished in 0.53s
+```
+
+- **CLIENT INFO returns a full 141-byte bulk** with all 16 fields go-redis expects (`id=1 addr=... user=default resp=2`). `name=` is empty per v1.52 finding.
+- **go-redis MULTI / SET / INCR / INCR / EXEC**: `+OK +QUEUED×3 *3 +OK :1 :2` — atomic batch + EXEC array commit, exact match to redis-server behaviour.
+- **redis-py WATCH / MULTI / INCR / INCR / EXEC**: optimistic lock holds, counter goes 100 → 101 → 102, EXEC returns `*2 :101 :102`.
+- **Pub/sub cross-conn round-trip**: subscriber conn-A receives `*3 $7 message $15 redispy:channel $18 hello-from-redispy` after publisher conn-B publishes — proves the in-process PubsubBus delivers across reactor connections.
+
+### v2 roadmap progress
+
+- Phase A: v1.36 + v1.37 + v1.38 ✅
+- Phase B: v1.39 + v1.40 + v1.41 + v1.42 ✅
+- Phase C: v1.43 + v1.44 + v1.45 + v1.46 + v1.47 ✅
+- Phase D: v1.48 + v1.49 + v1.50 + v1.51 ✅
+- Phase E: v1.52 + v1.53 ✅ **COMPLETE**
+- Phase F (RC + ship): v1.54 + ... + v2.0 pending.
+
+18 / 20 versions complete = 90 % toward v2.0. Next: Phase F step 1 (v1.54 = docs polish + release-notes drafting).
+
 ## [v1.52.0] — 2026-06-30 (v2 roadmap Phase E step 1 — Jedis 5.x + StackExchange.Redis battle test)
 
 **Theme**: v2 roadmap Phase E (ecosystem battle-test) step 1 of 2. Enterprise Java (Jedis 5.x) and .NET (StackExchange.Redis 2.x) golden-path RESP wire patterns differ from the Node.js / Python clients already battle-tested in `bullmq_*.rs` / `sidekiq.rs` / `celery.rs` / `ioredis_canonical.rs`. This step proves kevy speaks both libraries' golden paths.
