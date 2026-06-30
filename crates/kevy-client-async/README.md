@@ -1,32 +1,69 @@
 # kevy-client-async
 
-Async client for [kevy](https://github.com/goliajp/kevy) — a
-runtime-agnostic core with feature-gated transports for `tokio`,
-`smol`, and `async-std`. Mirrors the blocking
-[`kevy-client`](https://docs.rs/kevy-client) surface 1:1 so existing
-code paths can grep-replace `Connection` → `AsyncConnection` and
-add `.await`.
+The async mirror of [`kevy-client`](https://crates.io/crates/kevy-client).
+The API surface mirrors blocking 1:1 — every method takes `.await`,
+and the same URL backends are accepted.
 
-## Status
+```rust,no_run
+use kevy_client_async::AsyncConnection;
 
-Phase-4 first cut (kevy v3-cluster). Surface stabilizes when the
-v1.22.0 bundle ships — see the v3-cluster RFC for the locked Q4
-design (mirror + pipeline-first).
-
-## Runtime selection
-
-This crate has **no default runtime**. Exactly one of the following
-features must be enabled:
-
-```toml
-kevy-client-async = { version = "1", features = ["tokio"] }     # or "smol", or "async-std"
+# async fn run() -> std::io::Result<()> {
+let mut conn = AsyncConnection::open("tcp://127.0.0.1:6379").await?;
+conn.set(b"k", b"v").await?;
+let v = conn.get(b"k").await?;
+# Ok(())
+# }
 ```
 
-Enabling zero or more than one triggers a `compile_error!`.
+## Install
 
-## Dep-rule exemption
+Pick exactly one runtime feature:
 
-This is the only kevy workspace crate allowed to take a third-party
-dep — the Rust async ecosystem has no std-only viable substrate. The
-exemption is documented inline in `Cargo.toml` and explained in the
-v3-cluster RFC (F5).
+```toml
+[dependencies]
+kevy-client-async = { version = "1", features = ["tokio"] }
+# or "smol", or "async-std"
+```
+
+Enabling zero or more than one runtime feature triggers a
+`compile_error!`.
+
+## Pipeline
+
+Collapse N commands into one TCP round-trip:
+
+```rust,no_run
+use kevy_client_async::AsyncConnection;
+
+# async fn run() -> std::io::Result<()> {
+let mut conn = AsyncConnection::open("tcp://127.0.0.1:6379").await?;
+let replies = conn.pipeline()
+    .set(b"a", b"1")
+    .get(b"a")
+    .incr(b"hits")
+    .run(&mut conn).await?;
+# Ok(())
+# }
+```
+
+## URL backends
+
+Same set as the blocking client: `mem://`, `mem://<name>`,
+`file:///abs/path`, `kevy://host:port`, `redis://host:port`,
+`tcp://host:port`. See the [`kevy-client`
+README](https://crates.io/crates/kevy-client) for the per-URL
+semantics table.
+
+## Why this is a separate crate
+
+The kevy workspace is pure Rust with zero `crates.io` dependencies in
+the default server, blocking-client, and embedded stacks. The Rust
+async ecosystem has no `std`-only viable substrate, so the async
+client is the single carved exemption: it may pull `tokio`, `smol`, or
+`async-std` behind feature gates. The exemption is opt-in (you have to
+add `kevy-client-async` to your `Cargo.toml`), and it does not enter
+the default dependency graph of any other kevy crate.
+
+## License
+
+MIT OR Apache-2.0, at your option.

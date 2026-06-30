@@ -1,17 +1,14 @@
-//! Pipeline — cross-shard batched-AOF-fsync handle
-//! (kevy-embedded 1.10.0).
+//! Non-atomic batched-fsync write queue: `Store::pipeline`.
 //!
 //! Builder-style queue: enqueue any number of writes via fluent
 //! methods, then `commit()` applies them in queue order. Per-shard
 //! AOF appends are batched into one fsync per shard at commit
-//! time, cutting fsync cost from N to (≤ shard_count).
+//! time, cutting fsync cost from `N` to `min(N, shard_count)`.
 //!
-//! `Pipeline` is NOT atomic — each op acquires its own per-shard
-//! write lock as it's applied, so other writers see intermediate
-//! states. For transactional semantics use `Store::atomic` (single
-//! shard, full lock for closure body).
-//!
-//! Lives outside `ops.rs` for the 500-LOC house rule.
+//! `Pipeline` is not atomic — each op acquires its own per-shard
+//! write lock as it is applied, so other writers see intermediate
+//! states. For transactional semantics use
+//! [`Store::atomic`](crate::Store::atomic).
 
 use std::io;
 

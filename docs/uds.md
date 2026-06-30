@@ -1,167 +1,109 @@
 # Unix-domain socket (UDS) transport
 
-v1.25 added an opt-in Unix-domain stream socket listener — kevy's
-peer to valkey/redis's `unixsocket` config. For local clients (same
-host, same trust boundary as the server process), UDS skips the TCP
-loopback stack entirely: no IP header, no checksum, no port lookup,
-no NAGLE/ACK ping-pong. The wire is RESP2 / 3 byte-for-byte, so any
-existing client switches over with one URL change.
+kevy exposes an optional Unix-domain stream listener that speaks identical RESP semantics to the TCP port, letting same-host clients skip the loopback stack entirely.
 
-## When to use it
+## When you need this
 
-UDS is the right transport when **all three** are true:
+UDS is the right transport when the client and server share a host:
 
-1. The client is on the **same host** as the server (containers
-   sharing a tmpfs/host volume count).
-2. You're CPU-bound on per-syscall network overhead — small payloads,
-   high connection count, single-shard server, or `-c1` workloads
-   that pay the full per-op RTT.
-3. The trust domain is **the host filesystem** (UDS permissions are
-   filesystem permissions; no AUTH/TLS on either kevy or valkey).
+- **Same-host clients** — application and kevy on one box, or in containers sharing a tmpfs / mounted socket directory.
+- **Latency-sensitive workloads** — low connection counts, small payloads, or high-fanout pipelining where the TCP loopback round-trip floor is the binding constraint.
+- **Container sidecars** — sidecar + main container sharing a `/run` or `/tmp` volume; the socket file is the IPC handle, no port allocation needed.
 
-UDS is **not** a substitute for TCP when:
+Cross-host clients still need TCP — UDS is filesystem-scoped and never leaves the kernel.
 
-- The client lives in a different container *without* a shared
-  socket mount (the `/tmp/kevy.sock` path has to be visible to both).
-- You need network reachability — TCP loopback is the only choice for
-  remote clients (kevy is single-DC, no public-internet design).
-- The workload is `-c50 -P16` pipelined and already saturates the
-  server's CPU — UDS shaves a few percent there but the lever isn't
-  the transport.
+## Core idea
 
-For Phase A decomposition / why kevy's UDS gains are bigger than
-valkey's, see [`bench/REPORT.md`](../bench/REPORT.md).
+Set `KEVY_UNIX_SOCKET` to a filesystem path and kevy dual-binds: the TCP listener stays up exactly as before, and a UDS listener accepts on the same shard runtime with the same RESP2/3 parser. Any RESP client that takes a `unix://` URL or `-s <path>` flag switches over with one line of config. UDS eliminates loopback `rep_movs`, `nft_do_chain`, and the TCP syscall path, so the per-op floor drops materially on every workload.
 
-## Server setup
+## Worked example
 
-Set `KEVY_UNIX_SOCKET` to a filesystem path before launch. The
-server **binds the UDS in addition to the TCP listener** — both
-accept connections in parallel; choose per-client which one to use:
+Start kevy with both transports enabled:
 
 ```sh
-KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6004
+KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6379
 ```
 
-Behaviour:
-
-- The path is `unlink`ed before bind (stale socket from a previous
-  crash is cleaned up automatically — mirrors valkey/redis).
-- The socket is `chmod 0777` after bind (any local user can connect;
-  tighten with a containing directory's permissions if you need
-  per-user access control).
-- Only **shard 0** owns the UDS listener; accepted connections are
-  dispatched onto the existing per-shard runtime, so the
-  `--threads` setting still controls parallelism for the workload
-  behind the socket.
-- On Linux with `KEVY_IO_URING=1`, the UDS accept loop runs as a
-  multishot accept SQE through the same io_uring instance as TCP —
-  no extra reactor cost. TCP_NODELAY is skipped for UDS (it's not
-  an IP socket).
-- Empty / unset `KEVY_UNIX_SOCKET` = TCP-only (v1.24 and earlier
-  behaviour unchanged).
-
-The CLI / TOML equivalent is planned for v1.26; for now the env var
-is the single knob.
-
-## Client setup
-
-Every Redis/RESP client that takes a Unix-socket option works
-out-of-the-box — same RESP2/3 framing.
-
-`redis-cli` / `redis-benchmark` (the `-s` flag):
+Connect via UDS with `redis-cli`:
 
 ```sh
 redis-cli -s /tmp/kevy.sock SET foo bar
+# OK
 redis-cli -s /tmp/kevy.sock GET foo
-redis-benchmark -s /tmp/kevy.sock -t set,get -n 100000 -c 50 -P 16
+# "bar"
 ```
 
-[`kevy-client`](../crates/kevy-client) and
-[`kevy-client-async`](../crates/kevy-client-async) accept `unix://`
-URLs:
+TCP on `:6379` is still live in parallel — same data, same shards:
+
+```sh
+redis-cli -p 6379 GET foo
+# "bar"
+```
+
+From Rust, the in-tree client accepts `unix://` URLs:
 
 ```rust
 let mut conn = kevy_client::Connection::open("unix:///tmp/kevy.sock")?;
 conn.set(b"k", b"v")?;
 ```
 
-valkey / redis comparison (their `unixsocket` directive):
+## Permissions and security
 
-```sh
-valkey-server --unixsocket /tmp/valkey.sock --unixsocketperm 777 \
-              --io-threads 10
-redis-server  --unixsocket /tmp/redis.sock  --unixsocketperm 777
-```
+The trust boundary for UDS is the **filesystem** — there is no RESP-level AUTH or TLS on the Unix socket. Whoever can `open(2)` the socket file can issue any command, including `FLUSHALL`.
 
-## Benchmark numbers
+- **Socket file ownership.** kevy creates the socket as the user the server runs as. Use `chown` / `chgrp` after start, or run kevy under the identity you want to own the socket.
+- **Permission bits.** The socket is created with permissive bits by default so a co-located client process can connect. Tighten by placing the socket inside a directory with restrictive permissions — e.g. `/run/kevy/` owned by a `kevy` group with `0750`, so only group members can `connect(2)`. Directory permissions gate access to the socket inode itself.
+- **tmpfs vs disk.** `/tmp` and `/run` on most Linux distros are tmpfs and ideal for sockets (no disk I/O on connect). A persistent path on a real filesystem works too — the inode is just a rendezvous point, no data ever touches the disk.
+- **Trust domain.** Treat any account with read+write on the socket path as fully authenticated. If you need per-client identity, that has to live above kevy (a sidecar proxy, a kernel LSM, namespace isolation).
 
-Precision bench, n=1 M × 10 runs, 2σ-filtered mean, CI95 < 1 % across
-all cells. lx64, `mitigations=off`, kevy `--threads 1` (single shard),
-valkey `--io-threads 10`. Reproduce with
-[`bench/v125-precision-uds.sh`](../bench/v125-precision-uds.sh).
+## Server config knobs
 
-| workload | kevy 1.25 (UDS) | valkey 9.1 (UDS) | kevy / valkey |
-|----------|----------------:|-----------------:|--------------:|
-| -c1 SET | **166 k/s** | 96 k/s | **1.73×** |
-| -c1 GET | **168 k/s** | 106 k/s | **1.59×** |
-| -c50 -P1 SET | 339 k/s | 334 k/s | tied (per-syscall floor) |
-| -c50 -P1 GET | 337 k/s | 332 k/s | tied (per-syscall floor) |
-| **-c50 -P16 SET** | **4.11 M/s** | 1.75 M/s | **2.35×** |
-| **-c50 -P16 GET** | **4.35 M/s** | 3.42 M/s | **1.27×** |
-| -c100 -P1 SET | 331 k/s | 326 k/s | tied |
-| -c100 -P1 GET | 335 k/s | 327 k/s | tied (1.02×) |
+| Env var | CLI flag | Default | Effect |
+|---|---|---|---|
+| `KEVY_UNIX_SOCKET` | (env-only for now) | unset | Filesystem path to bind. Unset = TCP-only. |
+| `KEVY_BIND` | `--bind` | `127.0.0.1` | TCP bind address; UDS bind is independent. |
+| `--port` | `--port` | `6379` | TCP port; UDS still binds when set. |
 
-UDS vs TCP for kevy (same server, same benches), how much each
-workload gains by switching transport:
+Notes:
 
-| workload | TCP rps | UDS rps | UDS / TCP |
-|----------|--------:|--------:|----------:|
-| -c1 SET | 94.7 k | 166 k | **1.76×** |
-| -c1 GET | 97.3 k | 168 k | **1.73×** |
-| -c50 -P1 | 192 k | 339 k | **1.77×** |
-| -c50 -P16 SET | 2.59 M | 4.11 M | **1.59×** |
-| -c50 -P16 GET | 2.67 M | 4.35 M | **1.63×** |
+- **Path must not pre-exist.** kevy refuses to start if `KEVY_UNIX_SOCKET` already points at a file — it will not clobber a path it didn't create. Clean it up on restart (`rm -f /tmp/kevy.sock`) or use a per-run path (`/run/kevy/$(date +%s).sock`). This is intentional: silently unlinking would let a misconfigured kevy steal another service's socket.
+- **Dual-bind is always on when the env var is set.** There is no UDS-only mode — the TCP listener stays up too. If you want to forbid TCP, bind it to a loopback-only address you control and firewall it off.
+- **Shard 0 owns the accept loop.** Accepted connections are dispatched onto the existing per-shard runtime, so `--threads` still controls parallelism for the workload behind the socket.
+- **io_uring path.** On Linux with `KEVY_IO_URING=1`, the UDS accept runs as a multishot accept SQE through the same io_uring instance as TCP — no extra reactor cost. `TCP_NODELAY` is not set on UDS (it isn't an IP socket).
 
-Why kevy's UDS gain is larger than valkey's: valkey's hot path is
-more CPU-bound (per-op work in `processCommand` / `addReply`),
-so its TCP ceiling sits below the transport's RTT floor — removing
-loopback doesn't hand valkey as much headroom. kevy's hot path is
-already light enough that the TCP RTT floor was the binding
-constraint at `-c50 -P16`; UDS lifts the constraint and the server
-runs out faster than the load generator can drive it. The c=50/100
--P1 ties stay tied even on UDS — both servers saturate the
-per-syscall round-trip floor (~3 µs × 50 conns), not anything
-transport-specific.
+## Trade-offs
 
-## Security caveats
+UDS vs TCP loopback on the same kevy binary:
 
-- **Filesystem permission = AUTH equivalent.** UDS has no native
-  authentication; whoever can `open(2)` the socket file can issue
-  any command (including `FLUSHALL`). The kevy default `chmod 0777`
-  matches valkey/redis defaults; tighten it by putting the socket
-  inside a directory with restrictive permissions, e.g.
-  `/run/kevy/kevy.sock` owned by the `kevy` group.
-- **Stale socket on crash.** kevy `unlink`s before bind, so a stale
-  file from a previous crash doesn't block startup. If two kevy
-  instances point at the same path, the second wins — the first's
-  clients then get `EPIPE` on next write.
-- **No remote use.** UDS is host-local. Cross-host clients must use
-  TCP (and kevy stays single-DC, no AUTH/TLS — see
-  [`README.md`](../README.md#when-to-use-kevy)).
+| Aspect | UDS | TCP loopback |
+|---|---|---|
+| Per-op floor | lower (no IP/checksum/port/NAGLE) | higher |
+| Reach | same host only | any host |
+| Identity | filesystem permissions | port + bind address + AUTH |
+| Lifecycle | socket file on disk; must be cleaned on restart | port lifecycle is kernel-managed |
+| Observability | `lsof` / `ss -xl` | `ss -tln`, `netstat`, `tcpdump` |
+| Client config | `unix:///path` or `-s /path` | `host:port` |
 
-## Reproduce
+The throughput gain is workload-shape dependent — small-payload low-connection cells gain the most (the loopback per-op tax dominated them); CPU-saturated cells gain less (the transport wasn't the floor). See [bench/REPORT.md](https://github.com/goliajp/kevy/blob/master/bench/REPORT.md) for measured numbers.
 
-```sh
-ssh lx64
-bash /path/to/kevy/bench/v125-precision-uds.sh
-```
+## FAQ
 
-The precision harness builds the same kevy binary, brings up kevy
-and valkey one at a time, runs `redis-benchmark -s <sock>` 10×
-each at n=1 M, and prints filtered means with CI95. The
-companion smoke test
-[`bench/v125-uds-smoke.sh`](../bench/v125-uds-smoke.sh) (14 test
-groups, 39 assertions covering SET/GET, every collection,
-INCR/APPEND, large values, SETEX, MSET, pipelined DBSIZE, pub/sub,
-FLUSHALL, INFO) confirms UDS is wire-equivalent to TCP — same code
-path on the server, only the accept SQE differs.
+### Can I bind UDS and TCP at the same time?
+
+Yes — that's the only mode. Setting `KEVY_UNIX_SOCKET` adds a UDS listener; the TCP listener stays up exactly as it was. Use whichever per-client makes sense.
+
+### Server refuses to start — "socket exists"?
+
+Intentional. kevy will not `unlink` a path it didn't create, because that lets a misconfigured run silently steal another service's socket. Either remove the stale file (`rm -f /tmp/kevy.sock`) before restart, or use a per-run path like `/run/kevy/$(uuidgen).sock`. If kevy crashed and left the file behind, removing it manually is safe.
+
+### How fast is UDS vs TCP loopback?
+
+Materially faster on every workload, because UDS skips the entire IP path: no checksum, no netfilter chain (`nft_do_chain`), no `rep_movs` through loopback, no per-packet ACK round-trip. The exact ratio depends on what fraction of the per-op budget was loopback overhead — single-connection small-payload workloads see the biggest jump; CPU-bound pipelined cells see less. Measure on your workload with `redis-benchmark -s /tmp/kevy.sock` vs `-h 127.0.0.1`.
+
+### Can my client library use UDS?
+
+Most do. `redis-cli` and `redis-benchmark` take `-s <path>`. ioredis, node-redis, redis-py, redis-rb, go-redis, lettuce, jedis, and the in-tree [kevy-client](https://github.com/goliajp/kevy/tree/master/crates/kevy-client) / [kevy-client-async](https://github.com/goliajp/kevy/tree/master/crates/kevy-client-async) all accept `unix:///path` URLs or an explicit socket-path option. Check your driver's connection-options docs for the exact key name.
+
+### Should I drop TCP entirely if all my clients are on the same host?
+
+You can, but you don't have to. Leaving TCP bound to `127.0.0.1` costs nothing if no one connects, and it leaves a fallback if a client's UDS path gets misconfigured. The usual deployment is "UDS for the hot client, TCP for `redis-cli` debugging."

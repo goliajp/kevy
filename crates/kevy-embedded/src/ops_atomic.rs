@@ -1,19 +1,14 @@
-//! Atomic single-shard transaction closure (kevy-embedded 1.10.0).
+//! Single-shard read-modify-write closure: `Store::atomic`.
 //!
-//! `atomic(|tx| { ... })` runs the closure body holding a write
-//! lock on shard 0 for its entire duration. Inside the closure
-//! every read sees previous writes, so read-modify-write loops
-//! work as expected. All AOF writes are deferred + batched into a
-//! single fsync at commit time.
+//! `atomic(|tx| { ... })` holds the shard's write lock for the
+//! closure body. Reads inside the closure see prior writes inside
+//! the same closure, so read-modify-write loops work as expected.
+//! AOF writes are deferred and batched into a single fsync at
+//! commit time.
 //!
-//! Single-shard scope: every key touched inside the closure must
-//! hash to shard 0. The default embedded config (1 shard) matches.
-//! Multi-shard atomic transactions would block every writer for
-//! the closure's duration — defer to a future ship if the use case
-//! demands it.
-//!
-//! Lives outside `ops.rs` to keep the file under the 500-LOC
-//! house rule.
+//! Every key touched inside the closure must hash to the same
+//! shard. For closures that span shards use
+//! [`Store::atomic_all_shards`](crate::Store::atomic_all_shards).
 
 use std::io;
 use std::sync::RwLockWriteGuard;

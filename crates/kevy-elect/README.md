@@ -1,17 +1,32 @@
 # kevy-elect
 
-Quorum-based primary failover for [kevy](https://crates.io/crates/kevy)
-— the v3-cluster Phase 1.5 layer on top of the v1.18 manual `REPLICAOF`
-primitive.
+Quorum-based primary failover for kevy. Pure Rust, zero `crates.io`
+dependencies.
 
-Detect a primary's death by quorum heartbeat, run an offset-ordered
-election among the live replicas, promote the winner via
-`REPLICAOF NO ONE`, and retarget the survivors at the new primary.
-Driven by an operator-declared peer list (no gossip discovery — the
-peer set is static for the lifetime of a cluster generation).
+Detects a primary's death by quorum heartbeat, runs an offset-ordered
+election among the live replicas, promotes the winner via
+`REPLICAOF NO ONE`, and retargets the survivors at the new primary.
+Driven by an operator-declared peer list — there is no gossip
+discovery; the peer set is static for the lifetime of a cluster
+generation.
 
-**Anti-scope (locked):** no Raft / no log replication consensus / no
-cross-DC / no online resharding. The kevy storage layer remains the
-single source of truth; this crate only chooses who writes to it.
+## Out of scope
 
-Wire protocol: see [`docs/protocol.md`](docs/protocol.md).
+- No Raft. No log-replication consensus.
+- No cross-DC failover.
+- No online resharding.
+
+The kevy storage layer remains the single source of truth; this
+crate only chooses who writes to it.
+
+## Audience
+
+Internal infrastructure activated by the kevy server when the
+operator configures `[cluster] peers` and `[cluster] node_id`. End
+users configure failover via the server's TOML — see
+[`docs/replication.md`](https://github.com/goliajp/kevy/blob/develop/docs/replication.md)
+and [`docs/cluster.md`](https://github.com/goliajp/kevy/blob/develop/docs/cluster.md).
+
+## License
+
+MIT OR Apache-2.0, at your option.

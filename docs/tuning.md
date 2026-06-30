@@ -1,336 +1,168 @@
-# Tuning kevy for raw throughput
+# Tuning kevy
 
-This page lists the levers that materially change kevy's per-op
-overhead. Each has measured impact numbers (lx64, Intel Xeon 6, Linux
-6.12 / io_uring; methodology in [`bench/REPORT.md`](../bench/REPORT.md))
-and a clear cost. Apply only the ones you actually need.
+A reference for the runtime knobs that change kevy's per-op cost — CPU layout, reactor choice, persistence, memory limits, network transport, and a few Linux-side levers.
 
-## tl;dr
+## When you need this
 
-| Lever                         | When                                     | Gain    |
-|-------------------------------|------------------------------------------|---------|
-| Pin server to a CPU set       | dedicated host, share machine with bench | 5–15%   |
-| Disable AOF (`--no-aof`)      | replica / ephemeral cache                | 5–10%   |
-| Set `KEVY_IO_URING=1`         | Linux 5.13+                              | 10–30%  |
-| Use `--threads 1`             | single client / pipelined workload       | **5–60%** |
-| Switch to **Unix-domain socket** | client is same-host                   | **60–75%** |
-| Kernel `mitigations=off`      | trusted single-tenant box                | 12–25%  |
-| Empty netfilter ruleset       | dedicated host, no firewall needed       | **25–35%** |
-| PGO (profile-guided optimize) | release build for known workload         | 1–10%   |
+Reach for this doc when:
 
-`mitigations=off` and emptying netfilter are the two big knobs that
-move the kernel floor; UDS removes the loopback floor entirely;
-`--threads` matches the shard count to your workload's parallelism;
-PGO and the other userspace knobs trim userspace cycles only.
+- A benchmark is showing kevy under your throughput or latency target and you want to know which knob to turn next.
+- You are deploying kevy on a host where the defaults (TCP loopback, io_uring auto-detect, `appendfsync everysec`, no `maxmemory`) do not match the workload — e.g. sparse-conn services, NVMe-backed durability requirements, or memory-capped cache tiers.
+- You are profiling kevy with `perf` and need the build profile that keeps debug line tables on.
 
-## CPU pinning
+If you are just starting kevy on a laptop and the numbers look fine, you do not need this page. Defaults are tuned to be reasonable across workloads.
 
-io_uring's reactor benefits from sticking to a fixed CPU set so the
-NIC IRQ → softirq → user thread path stays on the same L1/L2:
+## Core idea
 
-```sh
-taskset -c 0-9 kevy --port 6004
-```
+kevy is a thread-per-core server: one shard per OS thread, shared-nothing keyspace partitioned by CRC16 hashtag, busy-poll reactor on each shard. The defaults aim at "decent on every workload"; tuning means matching the shard count, the reactor, and the persistence policy to **what your perf data actually shows is the bottleneck**. Do not pre-emptively flip knobs. Measure, identify the cost, then change one variable at a time.
 
-If you bench in the same box, **pin server and client to disjoint
-core ranges** — server on `0-9`, client on `10-15` (or whatever your
-topology gives). Sharing cores re-introduces scheduler ping-pong that
-swamps any io_uring gain. See `feedback-kevy-bench-isolation` for the
-gory details.
+## Tuning playbook
 
-## `KEVY_IO_URING=1`
+### CPU and shards
 
-Switches the reactor from epoll to io_uring. Linux 5.13+ required;
-older kernels silently fall back to epoll. On the lx64 box this is
-worth +10–30% at -c1 and is the prerequisite for SQPOLL (D5).
+| Knob | Where | Default | Effect |
+|------|-------|---------|--------|
+| `--threads N` / `KEVY_THREADS` | CLI / env | number of online cores | shard count; one OS thread per shard |
+| `--accept-shards K` | CLI | all shards accept | only the first K shards bind a listener; the rest are compute-only |
+| CPU pinning | `taskset` / `numactl` | none | locks shards to a fixed core set |
+
+**Picking `--threads`.** Set this to the parallelism actually present in the workload. A single-client pipelined benchmark (`-c 1 -P 16`) saturates one shard; setting `--threads 10` here makes nine shards busy-poll for no work and steal cache lines from shard 0. For real multi-client workloads, start at `min(cores, expected concurrent clients / 4)` and measure.
+
+**Picking `--accept-shards`.** When the connection-to-shard ratio is low (sparse-conn workloads — say, 50 clients across 10 shards = 5 conns/shard), the per-iteration busy-poll overhead stops amortizing and throughput drops. The rule of thumb is `ceil(conns / 20)` — for 50 conns, set `--accept-shards 3` and let three listening shards each take roughly 17 connections while the remaining shards stay compute-only and still receive cross-shard work via the internal dispatcher. The empirical sweet spot is broader than the point estimate; see [docs/accept-shards.md](https://github.com/goliajp/kevy/blob/develop/docs/accept-shards.md) for the full sweep and a discussion of when the cross-shard hop tax outweighs the accept-concentration win.
+
+**CPU pinning.** On a benchmark or single-tenant host, pinning kevy to a fixed core set keeps the NIC IRQ → softirq → user-thread path on the same L1/L2:
 
 ```sh
-KEVY_IO_URING=1 kevy --port 6004
+taskset -c 0-9 kevy --port 6004 --threads 10
 ```
 
-## Unix-domain socket (UDS) for local clients
+If the client runs on the same machine, pin server and client to **disjoint** core ranges (server `0-9`, client `10-15`). Shared cores reintroduce scheduler ping-pong that swamps any reactor gain.
 
-When the client lives on the same host as the server, point it at a
-filesystem socket and skip the TCP loopback stack entirely. v1.25+.
+### Reactor choice
+
+| Platform | Default | Override |
+|----------|---------|----------|
+| Linux ≥ 5.19 | io_uring (auto-detected) | `KEVY_IO_URING=0` forces epoll; `KEVY_IO_URING=1` requires io_uring and exits loudly if `io_uring_setup` is blocked by seccomp |
+| macOS / *BSD | kqueue | not configurable |
+| Older Linux | epoll | n/a |
+
+The Linux auto-detect runs `io_uring_setup` at startup; if the syscall is blocked (seccomp profile, locked-down container) kevy silently falls back to epoll. In a hardened deployment that you *want* to fail loudly rather than silently degrade, set `KEVY_IO_URING=1` so the server refuses to start unless io_uring is actually available. Conversely, when you need to take io_uring out of the picture for a reproducible epoll-vs-io_uring benchmark or to work around a kernel regression, set `KEVY_IO_URING=0`.
+
+```sh
+KEVY_IO_URING=1 kevy --port 6004   # require io_uring, exit if blocked
+KEVY_IO_URING=0 kevy --port 6004   # force epoll
+```
+
+### Persistence
+
+AOF policy is controlled by `appendfsync` (config file or `CONFIG SET`). The three values match Redis semantics:
+
+| `appendfsync` | Durability | Cost |
+|---------------|------------|------|
+| `always` | every write `fsync`-ed before reply | highest latency; bounded by NVMe sync latency |
+| `everysec` (default) | `fsync` once per second on a background thread | bounded data loss window of 1 s; near-zero hot-path cost |
+| `no` | never `fsync`; kernel flushes on its own schedule | fastest; data loss window = page-cache flush interval |
+
+The background `fsync` for `everysec` runs on a dedicated bio thread off the shard hot path, so shard tail latency is not coupled to disk latency. For a pure cache or a read-replica, also consider disabling AOF entirely with `--no-aof` (no AOF file is written at all, not even buffered).
+
+### Memory
+
+| Knob | Default | What it does |
+|------|---------|--------------|
+| `maxmemory` | unlimited | hard memory cap in bytes; once reached, the eviction policy kicks in |
+| `maxmemory-policy` | `noeviction` | which keys to drop when the cap is hit |
+| `maxmemory-samples` | 5 | sample size for the approximate-LRU/LFU policies |
+
+Eviction policies mirror Redis: `noeviction`, `allkeys-lru`, `allkeys-lfu`, `allkeys-random`, `volatile-lru`, `volatile-lfu`, `volatile-random`, `volatile-ttl`. `noeviction` makes writes fail with OOM once the cap is hit and is the safe default for a primary store; the `allkeys-*` policies are correct for a cache tier where any key is disposable.
+
+`maxmemory-samples` is a quality-vs-cost dial for the approximate policies — sampling more keys produces a closer approximation to true LRU/LFU at a per-eviction CPU cost. The default of 5 is sufficient for most cache workloads; raise to 10 if you can see eviction picking poor victims in your access pattern, lower to 3 only if eviction itself is showing up in profiles.
+
+### Network
+
+The default transport is TCP. When the client lives on the same host, switch to a Unix-domain socket and skip the loopback TCP stack entirely:
 
 ```sh
 KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6004
 redis-cli -s /tmp/kevy.sock SET foo bar
-redis-benchmark -s /tmp/kevy.sock -t set,get -n 100000 -c 50 -P 16
 ```
 
-The server **dual-binds** TCP + UDS — TCP stays available for remote
-clients, UDS handles local ones. Same RESP semantics, same shard
-runtime. Measured impact on lx64 (precision bench, kevy 1.25, same
-binary, same client process, only the address changes):
+The server dual-binds: TCP stays available for remote clients, UDS handles local ones. Same RESP semantics, same shard runtime. The gain on local-client workloads is large (the loopback TCP path is the dominant cost at small payload sizes); see [docs/uds.md](https://github.com/goliajp/kevy/blob/develop/docs/uds.md) for the full numbers, the permissions model, and the cases where UDS does not apply.
 
-| workload | TCP rps | UDS rps | gain |
-|----------|--------:|--------:|-----:|
-| -c1 SET | 94.7 k | 166 k | **+76 %** |
-| -c1 GET | 97.3 k | 168 k | **+73 %** |
-| -c50 -P16 SET | 2.59 M | 4.11 M | **+59 %** |
-| -c50 -P16 GET | 2.67 M | 4.35 M | **+63 %** |
+**Bind address warning.** kevy has no AUTH and no TLS today. Binding to a non-loopback address (`--bind 0.0.0.0` or any public interface) prints a startup warning, because anything on the network can then issue commands. Run kevy behind a private network boundary or behind a proxy that terminates auth.
 
-Caveats: UDS permissions are filesystem permissions; the default
-`chmod 0777` matches valkey/redis. Tighten via a containing directory
-when the server box has untrusted users. Full reference (security
-caveats, valkey-side equivalent, when not to use it):
-[`docs/uds.md`](uds.md).
+### Linux kernel knobs
 
-## `--threads` — shard count vs workload parallelism
+Two host-level levers move the kernel floor that sits underneath kevy. Both are benchmark / single-tenant-only — read the trade-offs before applying.
 
-kevy is thread-per-core. `--threads N` (or `KEVY_THREADS`) creates
-N shards; the keyspace is partitioned by CRC16 hashtag. There is no
-"more threads = always faster" — pick by workload shape:
-
-| workload | recommendation | why |
-|----------|----------------|-----|
-| Single-conn benchmarks (`-c1 -P1`) | `--threads 1` | one conn pins to one shard; idle shards waste CPU on busy-poll |
-| Pipelined single-client (`-c50 -P16`) | `--threads 1` | one client core can already saturate one shard; multi-shard adds cross-shard tax |
-| Many independent clients, low pipelining | `--threads ≤ cores/2` | clients fan out across shards; one shard per client core |
-| Mixed (cache + cluster reads) | `--threads = cores - 2` | leave headroom for the OS / IRQs |
-
-The v1.25 precision-bench headline numbers all use `--threads 1` —
-that's the configuration where redis-benchmark's per-client work hits
-ceiling. Setting `--threads 10` for the same `-c1` workload **lowers**
-throughput because 9 shards busy-poll for no work and steal cache
-lines from shard 0.
-
-For the multi-shard cross-routing details (`{hashtag}` slots, cluster
-ports, `ClusterClient`), see [`docs/cluster.md`](cluster.md).
-
-## BGSAVE / BGREWRITEAOF off-shard via the bio thread (v1.25)
-
-v1.25 moved snapshot + AOF rewrite onto a **single global background
-thread** (the "bio thread") — one for the whole server, not per
-shard. The shards `Op::Save`-queue the request and keep busy-polling
-the network; the bio thread executes the disk write off the hot path.
-
-Net effect: the shard's busy-poll cadence is no longer interrupted by
-multi-second disk writes, so tail latency under a large `BGSAVE`
-drops sharply (v1.25 precision: p999 -8 %, max -18 % at c=50,
-value=10 KB). No tunable — it's always on. The `--no-aof` knob still
-applies if you want no AOF at all; the bio thread only runs when
-there's actual disk work.
-
-## Disable AOF for replicas / caches
-
-Default is `--aof` (durability). For a read-replica / pure cache, every
-write you take is wasted disk I/O:
+**Spectre / BHB mitigations.** On Linux 6.x kernels with mitigations enabled (the default), every syscall pays for `clear_bhb_loop` and friends. On a small-payload `-c 1` workload this is the single largest CPU consumer in a kevy run. Disabling mitigations at the kernel cmdline:
 
 ```sh
-kevy --port 6004 --no-aof
-```
-
-Wallclock impact depends on your write rate; tail latency drop is
-larger than median.
-
-## Kernel `mitigations=off` (Spectre / BHB)
-
-> **Read the entire section before flipping this. It is a security
-> trade-off, not a free lunch.**
-
-On Linux kernels with Spectre BHB mitigations enabled (the default
-since Linux 6.x), every syscall pays for `clear_bhb_loop` — a small
-in-kernel loop that flushes the branch history buffer to prevent
-speculative-execution side-channel leaks across the user/kernel
-boundary.
-
-On the lx64 reference box (Intel Xeon 6, Linux 6.12), `clear_bhb_loop`
-is the **single largest CPU consumer on the kevy server** during
-`-c1` workloads — **13.3%** of CPU time, more than any kevy userspace
-symbol. At `-c50` it drops to ~5% because the syscall is amortized
-across more work per op.
-
-### What you give up
-
-Booting with `mitigations=off` disables hardware-vulnerability
-mitigations *across the board*: Spectre v1/v2/BHB, Meltdown, MDS,
-TAA, L1TF, retbleed, etc. This is **only acceptable** on:
-- single-tenant boxes (you own the kernel, no untrusted code runs)
-- machines isolated from the network at L3 (or behind a trusted gateway)
-- benchmark / test rigs
-
-Do **not** apply this to multi-tenant hosts, shared CI runners, or
-anything that processes untrusted user code (Lua eval-from-the-wire,
-embedded plugins from third parties, etc.).
-
-### How to apply
-
-Edit your bootloader's kernel cmdline (e.g. `/etc/default/grub`'s
-`GRUB_CMDLINE_LINUX_DEFAULT`), add `mitigations=off`, regenerate:
-
-```sh
-# Debian / Ubuntu
-sudo update-grub
-sudo reboot
-```
-
-Verify after reboot:
-
-```sh
+# Add `mitigations=off` to GRUB_CMDLINE_LINUX_DEFAULT, then:
+sudo update-grub && sudo reboot
 cat /proc/cmdline | grep mitigations
-# ... mitigations=off ...
-
-cat /sys/devices/system/cpu/vulnerabilities/* | head
-# ... should report "Vulnerable" or "Mitigation: ..." disabled
 ```
 
-### Measured gain
+is only acceptable on single-tenant boxes where no untrusted code runs (no Lua-from-the-wire, no third-party plugins, no multi-tenant containers). Do not apply to multi-tenant hosts, shared CI runners, or anything processing untrusted user code. The gain is in the +10–15% range on `-c 1`, smaller as the workload pipelines more.
 
-On the lx64 reference, expected throughput delta after `mitigations=off`:
+**Hugepages for the `.text` segment.** kevy can call `madvise(MADV_HUGEPAGE)` on its own code segment, which lets the kernel back the kevy binary's instructions with 2 MiB pages instead of 4 KiB. The win is a smaller iTLB footprint on the hot dispatch loop. This costs effectively nothing at runtime and is worth enabling on Linux hosts where `/sys/kernel/mm/transparent_hugepage/enabled` is `always` or `madvise`. The trade-off is purely the small one-time cost of the `madvise` call at startup; there is no security trade-off, unlike `mitigations=off`.
 
-| Workload    | Rust client -c1 | C `redis-benchmark` -c1 |
-|-------------|-----------------|--------------------------|
-| Before      | ~65 k ops/s     | ~67 k ops/s              |
-| After (pred)| ~75 k ops/s     | ~78 k ops/s              |
+## Profiling
 
-(Numbers are kernel/CPU dependent. AMD Zen 3+ pays a different price
-than Intel Xeon Spectre BHB; ARM N1/N2 pay yet another. Measure on
-your hardware.)
-
-## Empty the netfilter / iptables ruleset (huge, but careful)
-
-Linux kernel runs every packet through netfilter / nftables hooks
-*on every syscall path* — `tcp_sendmsg`, `tcp_recvmsg`, `__dev_queue_xmit`,
-even loopback. When the ruleset is non-trivial (docker, libvirt, fail2ban,
-ufw, etc. each add 50-300 rules), the cumulative overhead is enormous.
-
-Measured on the lx64 reference (Linux 6.12, `mitigations=off`, with a
-typical docker + libvirt + Tailscale ruleset of ~500 rules total):
-
-| Workload         | rules on (default) | rules empty | Δ     |
-|------------------|--------------------|-------------|-------|
-| C c1 SET         | 80.6 k             | **108.9 k** | +35%  |
-| C c1 GET         | 80.0 k             | **108.3 k** | +35%  |
-| Rust client c1   | ~77 k              | ~96 k       | +25%  |
-
-That's a *bigger* win than `mitigations=off`.
-
-### What you give up
-
-`iptables -F` + `nft flush ruleset` removes **every** firewall rule and
-NAT rule on the host. After this:
-
-- **Docker port-forwarding breaks** (it relies on iptables NAT rules).
-  Containers can't expose ports to the host network. Existing
-  connections die.
-- **libvirt VMs lose NAT** (the `default` virbr0 → eth0 MASQUERADE).
-- **Tailscale / WireGuard** lose any allow-list rules.
-- **ufw / fail2ban / firewalld** are bypassed. If this host is exposed
-  to the internet, **incoming traffic is no longer filtered**.
-
-### Where this is acceptable
-
-- A dedicated kevy host inside a VPC where firewalling happens at the
-  AWS Security Group / GCP firewall / on-prem perimeter layer
-- A bare-metal box with all services running inside the same machine
-  via UNIX sockets or loopback only
-- A benchmark / dev box
-
-### Where this is NOT acceptable
-
-- Any host exposed directly to the public internet without a hardware
-  firewall in front
-- Multi-tenant boxes
-- Hosts where docker / podman is running other tenants' workloads
-
-### How to apply (and roll back)
+For a `perf record` flamegraph that resolves to actual symbols, build with the `release-perf` profile — same optimization level as `release` but with debug line tables retained:
 
 ```sh
-# Backup first
-nft list ruleset > /tmp/nft-backup.nft
-iptables-save > /tmp/iptables-backup.rules
+cargo build --profile release-perf
+./target/release-perf/kevy --port 6004 --threads 1 &
+KEVY_PID=$!
 
-# Flush
-nft flush ruleset
-iptables -F
-iptables -X
+perf record -F 999 -p $KEVY_PID -g --call-graph=fp -- sleep 30
+perf report --stdio | head -60
 
-# (kevy stays up and gets faster; verify your other services if any)
-
-# Roll back when needed (e.g., before restarting docker)
-iptables-restore < /tmp/iptables-backup.rules
-nft -f /tmp/nft-backup.nft  # may warn on xtables-compat rules; harmless
+# Resolve raw addresses for inlined symbols:
+addr2line -e ./target/release-perf/kevy -f -i 0x<addr>
 ```
 
-A safer alternative: keep the rules but **bypass them for the
-kevy port** by adding an early `ACCEPT` at the top of the relevant
-chains. The gain is smaller (you still pay one rule lookup) but the
-firewall posture stays intact:
+The standard `release` profile strips line tables, so `perf` reports raw addresses with no symbols and `addr2line` returns `??`. Don't profile a `release` binary; rebuild with `release-perf` first.
 
-```sh
-iptables -I INPUT 1 -p tcp --dport 6004 -j ACCEPT
-iptables -I OUTPUT 1 -p tcp --sport 6004 -j ACCEPT
-```
+For symbol-level attribution of `clear_bhb_loop` and other kernel-side cost, capture with `--call-graph=dwarf` instead of `fp` and use the same `addr2line` flow. The dwarf unwinder is slower but unwinds across the syscall boundary correctly.
 
-That recovers ~half the +35% on most rulesets.
+## Trade-offs
 
-## Profile-guided optimization (PGO)
+| Knob | Costs | Buys |
+|------|-------|------|
+| `--threads N` (raise) | wasted CPU on idle busy-poll shards if N > workload parallelism | more concurrent client capacity |
+| `--threads N` (lower) | one shard's worth of cross-shard hop tax avoided | less wasted CPU on sparse-conn workloads |
+| `--accept-shards K` | listener concentration; fewer entry points if clients connect via raw `connect` | per-iter overhead amortizes across more conns on each accepting shard |
+| `KEVY_IO_URING=1` (force) | server refuses to start when seccomp blocks io_uring | no silent degradation to epoll on hardened hosts |
+| `KEVY_IO_URING=0` (force epoll) | gives up io_uring's per-op saving | reproducible epoll baseline; works around kernel regressions |
+| `appendfsync always` | every write blocks on `fsync` | zero-data-loss durability |
+| `appendfsync no` | data loss window = page-cache flush interval | fastest write path |
+| `--no-aof` | no persistence at all | minimum disk I/O; useful for replicas / caches |
+| `maxmemory` set | writes can fail (`noeviction`) or evict (`allkeys-*`) | bounded memory footprint |
+| `maxmemory-samples` raise | per-eviction CPU cost | better approximate-LRU/LFU victim choice |
+| Unix-domain socket | local-only; filesystem-permission security model | skips the TCP loopback stack |
+| `mitigations=off` | Spectre / Meltdown / MDS / etc. mitigations all off | reclaims the syscall-path tax |
+| `MADV_HUGEPAGE` on `.text` | none meaningful | smaller iTLB footprint on the dispatch loop |
+| `release-perf` build | larger binary (debug line tables) | `perf` resolves to symbols |
 
-For a fixed-workload deployment (you know your read/write mix, command
-mix, conn count), PGO lets LLVM optimize the binary using runtime
-profile data. Measured 1-10% across workloads on the lx64 reference;
-biggest on `drain_inbound` and the dispatch loop.
+## FAQ
 
-```sh
-# Step 1: build instrumented
-RUSTFLAGS="-Cprofile-generate=/tmp/pgo" cargo build --release
+**Should I always set `--accept-shards`?**
 
-# Step 2: collect profile by running a representative workload
-LLVM_PROFILE_FILE=/tmp/pgo/kevy-%m_%p.profraw \
-  ./target/release/kevy --port 6004 --no-aof &
-# In another shell: run your actual production-shaped workload for ~30s
-# (redis-benchmark / your real client / etc).
-kill %1
-sleep 3  # let profile data flush
+No. The knob exists for sparse-conn workloads where conns/shards is low and the busy-poll body fails to amortize. For dense-conn workloads (say, 1000 clients on 10 shards = 100 conns/shard), the default — every shard accepts — is correct, because spreading the listener evenly reduces accept-side contention. Apply `ceil(conns / 20)` only when you actually have a sparse-conn case.
 
-# Step 3: merge profile data
-llvm-profdata=$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata
-$llvm_profdata merge -o /tmp/pgo/merged.profdata /tmp/pgo/*.profraw
+**Is io_uring always faster than epoll?**
 
-# Step 4: rebuild with profile-use
-cargo clean
-RUSTFLAGS="-Cprofile-use=/tmp/pgo/merged.profdata" cargo build --release
-```
+On Linux ≥ 5.19 with a workload that batches submissions, yes, materially. On older kernels, on kernels with seccomp filters that block `io_uring_setup`, or on workloads dominated by a single syscall per op with no batching opportunity, the difference shrinks. Auto-detect is the right default; override only when you have a measured reason or a hardened deployment that should fail loudly rather than silently fall back.
 
-Requires `rustup component add llvm-tools-preview` for `llvm-profdata`.
-The merged.profdata file is ~70 KB for kevy; ship it alongside the
-source so any rebuild reuses the same profile until your workload
-changes shape.
+**What's the production sweet spot for `appendfsync`?**
 
-PGO is NOT shipped in upstream releases because it's workload-specific.
-Most prod kevy users won't notice the 1-10%; the deployments that
-care should run the recipe above.
+`everysec` for almost everyone. It bounds data loss to one second, runs the `fsync` off the hot path, and has near-zero impact on tail latency. Use `always` only when your durability story actually requires zero data loss (and accept that NVMe `fsync` latency now bounds your tail latency). Use `no` only for pure caches where the AOF exists just for warm-restart speed.
 
-## `io_uring` SQPOLL — investigated, not shipped
+**When do I need `MADV_HUGEPAGE`?**
 
-Kernel polls the io_uring submission queue from a dedicated thread —
-removes `io_uring_enter` syscall per op.
+When `perf` shows iTLB misses on the hot dispatch loop, or when the host's `/sys/kernel/mm/transparent_hugepage/enabled` is set to `madvise` (in which case nothing else opts kevy in). It's a no-cost knob on Linux hosts where THP is enabled at all, so the default position is "leave it on." There is no equivalent on macOS / BSD.
 
-The wire-level support exists in `kevy_uring::IoUring::new_sqpoll`,
-but it is **not wired into the shard reactor** and we do not recommend
-applying it on top of kevy's thread-per-core layout. Each ring spawns
-one kernel poll thread, so N shards spawn N additional 100%-spin
-kernel threads contending for the same cores as the shard threads. On
-the lx64 reference (10 shards on 16 cores) this **regressed
-throughput 2–15×** at -c1 and -c50.
+**My `perf` report is full of raw addresses. What did I do wrong?**
 
-SQPOLL belongs to single-threaded reactor designs with a spare core
-budget for the poll thread. kevy's per-core design already saturates
-the CPU; adding a kernel poll thread halves it. See attack D5 in
-`bench/PERF-ATTACK-LOG-2026-06-20.md` for the measurement detail.
-
-## Things that do **not** help (anymore)
-
-- `taskset` to single core: io_uring loses parallelism, slower than
-  shared-nothing shard layout
-- Disabling THP: no measurable effect on kevy's allocator pattern
-- `numactl --interleave`: only matters on multi-socket; lx64 is single-socket
-- Disabling slowlog: already off by default (`slower-than-micros = -1`)
-
-## See also
-
-- [`bench/PERF-PROFILE-2026-06-20.md`](../bench/PERF-PROFILE-2026-06-20.md) — flamegraph diagnosis that motivated this knob list
-- [`bench/PERF-ATTACK-LOG-2026-06-20.md`](../bench/PERF-ATTACK-LOG-2026-06-20.md) — per-lever measurement log
-- [`bench/REPORT.md`](../bench/REPORT.md) — benchmark methodology
+You profiled a `cargo build --release` binary. The standard release profile strips debug line tables, so `perf` and `addr2line` have nothing to resolve against. Rebuild with `cargo build --profile release-perf` and re-record.

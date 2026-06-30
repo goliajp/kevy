@@ -3,635 +3,260 @@
 [English](README.md) · [简体中文](README.zh-CN.md) · **日本語**
 
 [![CI](https://github.com/goliajp/kevy/actions/workflows/ci.yml/badge.svg)](https://github.com/goliajp/kevy/actions/workflows/ci.yml)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#ライセンス)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 ![Rust stable](https://img.shields.io/badge/rust-stable-orange.svg)
 
-純 Rust・**ゼロ依存**・Redis 互換のキーバリュー・ストア。スタンドア
-ロン・サーバーとしても、組込みライブラリとしても使えます。ハードウェア
-の限界を引き出すことを目標に設計しました。
-
-kevy は Redis ワイヤプロトコル(RESP2)を喋るため、`redis-cli` /
-`valkey-cli` / 任意の Redis クライアント・ライブラリが**そのまま**接続
-できます。内部はモダンな thread-per-core / shared-nothing アーキテクチャ
-で、完全に Rust 実装 —— C に触れるのは避けられない OS システムコール境
-界だけです。
+純粋な Rust で書かれた、依存ゼロの Redis 互換キーバリューストアです。
+スタンドアロンサーバとして、プロセス内ライブラリとして、あるいはその両方として
+利用できます。どの形態でも RESP2 を話すため、`redis-cli` や任意の Redis
+クライアントライブラリがそのまま動作します。
 
 ```sh
-cargo run -p kevy --bin kevy --release      # ループバック・AOF on・ポート 6004
-redis-cli -p 6004 SET hello world
+cargo install kevy
+kevy --port 6379 &
+redis-cli -p 6379 SET hello world
+redis-cli -p 6379 GET hello
 ```
 
-## kevy を選ぶ理由
+## kevy とは
 
-- **速い** —— 単一接続で valkey 9.1 の 1.5–1.7×(precision-verified、
-  CI95 < 1 %)、TCP パイプライン SET 1.4×、**Unix-domain socket では
-  2.4×**、pub/sub ファンアウトは **subs ≥ 100 で 5.0–5.2×**、組込み時に
-  **コア当たり ~9 M GET / 7 M SET**(数字は後述)。
-- **疎な接続ワークロードへの調整**(v1.30)—— `--accept-shards N` で
-  接続を N 個のシャードに集約。conns/shards が低い場面で有効。
-  `-c 50 -d 65536` SET(fair-core 10c)では `--accept-shards 3` が
-  デフォルト比 +10.6 % のスループット。詳細は
-  [`docs/accept-shards.md`](docs/accept-shards.md)。
-- **小さい** —— 768 KB のサーバ・バイナリ、起動後 5 MB 未満の RAM 常駐。
-  コンテナ sidecar、小規模 VM、エッジ箱に収まる。
-- **モダンなアーキテクチャ** —— thread-per-core・shared-nothing・ホット
-  パスは無ロック・Linux では io_uring。グローバル・ロックも GIL 様の
-  ボトルネックもない。
-- **サプライチェーン・リスクなし** —— デフォルトのサーバー /
-  ブロッキング・クライアント / 組込みスタックは crates.io 依存ゼロ。
-  ツリー全体が `std` + kevy 自家の crate で、C は OS システムコール境界
-  だけ、1 つの crate に手書きでバインドされています。非同期クライアント
-  (`kevy-client-async`)は唯一許された例外 —— オプトイン、lib 利用者
-  のみ、文書で透明に記録。
-- **互換性** —— RESP2 ワイヤプロトコル、valkey 9.1 と 98 コマンドのパリ
-  ティ(パターン pub/sub と `WATCH`/`UNWATCH` 楽観 CAS を含む)、応答を
-  バイト単位で照合。既存クライアントとツールはそのまま動きます。
-- **レプリケーション**(v1.22)—— サーバー primary + N read replica +
-  クォーラム・フェイルオーバー、**組込みノードがクラスタに参加可能**
-  (read-replica またはプリフィックス単位の writer)。同一ワイヤプロト
-  コルが貫通、宣言的なトポロジー一つ。
-- **組込み可能** —— `kevy-store` は単なる Rust ライブラリ:ネットワーク
-  も runtime もなし、`wasm32` ビルドもサポート。同じエンジンを自分の
-  プロセスで動かせます。
-- **非同期対応** —— `kevy-client-async`(v1.22)はブロッキング表面を
-  1:1 ミラーし、`tokio` / `smol` / `async-std` をサポート。pipeline-first
-  ビルダーで N コマンドを 1 TCP round-trip にまとめられます。
-- **スクリプト対応**(v1.27)—— `EVAL` / `EVALSHA` / `SCRIPT` でサーバー
-  サイド Lua を実行。バックエンドは自家の純粋 Rust 製
-  [`luna`](https://github.com/goliajp/luna) ランタイム。デフォルト Lua
-  5.1(Redis エコシステム互換アンカー)、`#!lua version=N` シェバンで
-  5.2–5.5 にスクリプト単位でオプトイン。純粋 Rust の `cmsgpack` +
-  `cjson` stdlib を同梱。詳細は [`docs/lua.md`](docs/lua.md)。
-- **実エコシステムで実地検証済み**(v1.27.x + v1.52 / v1.53)—— Redis
-  ユーザーが実際に使うジョブキュー / ロック・ライブラリ / クライアント
-  SDK は Lua スクリプトを多用する経路まで含めて全て kevy に対して
-  end-to-end 検証済み:
-  [BullMQ](https://github.com/taskforcesh/bullmq)(Node, 5.79)を
-  デフォルト 16-shard クラスタで ·
-  [Sidekiq](https://sidekiq.org/)(Ruby, 6.5)·
-  [Bee Queue](https://github.com/bee-queue/bee-queue)(Node, 1.7)·
-  [Celery](https://docs.celeryq.dev/)(Python, 5.6、broker + result
-  backend として)· [node-redlock](https://github.com/mike-marcacci/node-redlock)
-  (5)· 公式 [ioredis](https://github.com/redis/ioredis)(5.7)·
-  [Jedis](https://github.com/redis/jedis)(Java, 5.x)·
-  [StackExchange.Redis](https://stackexchange.github.io/StackExchange.Redis/)
-  (.NET, 2.x)· [go-redis](https://github.com/redis/go-redis)(Go, v9)·
-  [redis-py](https://github.com/redis/redis-py)(Python, 5.x)。
-  全てコード変更なしで動作。v2 acceptance ゲート一覧は
-  [`docs/v2-acceptance-baseline.md`](docs/v2-acceptance-baseline.md)。
-- **リソース適応型** —— メモリ無制限なら全速、制限ありなら優雅に縮退、
-  境界では大声で拒否してデータを静かに破損させたりしない([詳細](#リソース適応型設計))。
+kevy は同一のエンジンから三つの形態で提供されます。
 
-スコープを正直に:kevy は**単一 DC** 設計、AUTH/TLS なし、公インターネッ
-ト露出を想定しない(see [kevy をいつ使うか](#kevy-をいつ使うか))。
-レプリケーションは単一 DC の primary-replica + クォーラム・フェイル
-オーバー;クロス DC active-active・gossip・オンライン resharding・Raft
-は明示的にスコープ外。
+- **サーバ** — Redis ワイヤ互換のデーモンです。RESP2 を話し、98 個のコマンドに
+  ついて valkey 9.1 と返答をバイト単位で照合しています。
+- **組み込みライブラリ** — `kevy-embedded` はネットワークのない同じエンジンです。
+  Rust バイナリに組み込んで `Store` を直接呼び出せます。純粋な Rust、依存ゼロで、
+  `wasm32` 向けにもビルドできます。
+- **クライアント** — `kevy-client`(ブロッキング)と `kevy-client-async`
+  (ランタイムごとに feature flag 一つ: tokio / smol / async-std)があります。
+  どちらも URL を受け取るため、同一のコードで TCP サーバ(`kevy://host:port`)にも
+  プロセス内バス(`mem://name`)にも接続できます。
 
-## 性能
+## どれを使えばよいか
 
-下記の数字はすべて **16 コアのベアメタル Linux 機** (lx64)で計測、純
-インメモリ、サーバー / クライアント / loadgen を別々の CPU に pin 済み。
-すべての bench は [`bench/`](bench/) のスクリプトで再現可能;完全な
-メソドロジー、注意事項、v0.2 → v1.25 の時系列叙述は
-[`bench/REPORT.md`](bench/REPORT.md) にあります。
-
-### サーバー・スループット(ネットワーク経由)
-
-> valkey 9.1 を超えるのは床であって目標ではない —— kevy が狙うのは
-> ハードウェア天井。v1.25 では「タイ = 勝ち」のような表現を廃止し、
-> precision bench(n=1 M × 10 runs、2σ フィルタ、CI95)で信頼区間を
-> 明確に超えたときだけリードと呼びます。
-
-`redis-benchmark`、サーバーとクライアントをそれぞれ別コアに pin、
-各エンジンを**単独**実行(起動 → 2 回ウォーム ラン → 停止)。kevy は
-`--threads 1`(シングル shard でクライアント 1 コアを飽和);valkey /
-redis は `--io-threads 10` でマルチスレッド予算を使い切ります。
-
-**TCP loopback**(precision bench、mitigations=off):
-
-| ワークロード | kevy 1.25 | valkey 9.1 | redis 7.4 | kevy / valkey |
-|--------------|----------:|-----------:|----------:|--------------:|
-| **-c1 SET** | **94.7 k/s** | 62.2 k/s | 62.3 k/s | **1.52×** |
-| **-c1 GET** | **97.3 k/s** | 65.0 k/s | 61.7 k/s | **1.50×** |
-| **-c50 -P16 SET** | **2.59 M/s** | 1.82 M/s | 1.20 M/s | **1.42×** |
-| -c50 -P16 GET | 2.67 M/s | 2.68 M/s | 1.50 M/s | タイ(loopback RTT 床) |
-| -c50 -P1、-c100 -P1 | ≈191 k/s | ≈191 k/s | — | タイ(loopback RTT 床) |
-
-`-P1 -c50/100` のタイは kevy の弱点ではなく、両サーバとも TCP
-loopback RTT(~250 ns/RT × 50 conn ≈ 5 µs = 200 k rps クライアント
-上限)で頭打ちです。Unix-domain socket に切替えると、kevy のサーバ
-CPU 優位が完全に表面化します:
-
-**Unix-domain socket**(`KEVY_UNIX_SOCKET=/tmp/kevy.sock`、
-`valkey --unixsocket /tmp/valkey.sock`):
-
-| ワークロード | kevy 1.25 | valkey 9.1 | kevy / valkey |
-|--------------|----------:|-----------:|--------------:|
-| **-c1 SET** | **166 k/s** | 96 k/s | **1.73×** |
-| **-c1 GET** | **168 k/s** | 106 k/s | **1.59×** |
-| **-c50 -P16 SET** | **4.11 M/s** | 1.75 M/s | **2.35×** |
-| **-c50 -P16 GET** | **4.35 M/s** | 3.42 M/s | **1.27×** |
-| -c100 -P1 | ≈331 k/s | ≈326 k/s | タイ(per-syscall 床) |
-
-UDS は kevy の pipelined GET 上限を 1.6× 押し上げ(4.35 M vs 2.67 M);
-valkey の上昇幅は小さい(ホットパスが CPU-bound 寄りで loopback を
-取り除いても余地が少ない)。設定・セキュリティ注意点は
-[`docs/uds.md`](docs/uds.md) を参照。
-
-再現:[`bench/v125-precision.sh`](bench/v125-precision.sh)(TCP)、
-[`bench/v125-precision-uds.sh`](bench/v125-precision-uds.sh)(UDS)。
-v1.25 で投入した 16 個の perf アタックは
-[`bench/V125-AXES-MASTER.md`](bench/V125-AXES-MASTER.md) と
-[`CHANGELOG`](CHANGELOG.md)。メソドロジ 11 ルールは
-[`.claude/rule/perf-vs-foss.md`](.claude/rule/perf-vs-foss.md)。
-
-io_uring の C 参照との比較:kevy の手書きバインディングで 148 ns の
-nop round-trip 達成、対する liburing 2.9 は 152 ns —— Linux カーネル
-の床、しかも liburing をリンクしていない。
-
-### テイル・レイテンシ
-
-c=50、value=10 KB、SET、p99/p999/max(precision 3 回の中央値):
-
-| 指標 | kevy 1.25 | valkey 9.1 | kevy 優位 |
-|------|----------:|-----------:|----------:|
-| p99 | 0.479 ms | 0.495 ms | -3 % |
-| p999 | 0.535 ms | 0.583 ms | **-8 %** |
-| max | 1.78 ms | 2.18 ms | **-18 %** |
-
-単一グローバル bio スレッド(v1.25 A.3)が 10 KB owned-buffer の
-解放を shard のホットループ外に追い出しており、これがテイル優位の
-原因です。
-
-### クラスタ・ルーティング(キー対応クライアント)
-
-シングル・ポートのクライアントが間違った shard に着いたとき、内部の
-クロス shard 転送ホップが発生します。クラスタ対応の
-[`ClusterClient`](#クラスタモード単機キー対応ルーティング) は各キーを
-所有 shard に直接ルーティングし、そのホップを完全に取り除きます。lx64
-16 コア、サーバー/クライアント別コア、GET 並行 64:
-
-| クライアント・パス | スループット | p99 レイテンシ |
-|-------------------|-----------:|-------------:|
-| シングル shard プロキシ(クロス shard ホップ) | 333 k/s | 3858 µs |
-| **`ClusterClient`(ゼロ・ホップ)** | **533 k/s** | **260 µs** |
-
-**スループット 1.6 倍、テール・レイテンシ約 15 倍低下** —— 純粋に転送
-ホップを取り除いただけで、手書き生ルーターと比べて計測可能なオーバー
-ヘッドなし。完全なメソドロジーは
-[`docs/cluster.md`](docs/cluster.md)。
-
-### クラスタモード(レプリケーション + フェイルオーバー + 組込み参加)
-
-v1.22 で v3-cluster トラックを閉じました。kevy ノードは **primary**
-として、適用された各 mutation を N replica にストリーミング配信でき、
-**replica** として primary をミラーすることもできます;**組込みノード
-がクラスタに参加可能**(read-replica としても、プリフィックス単位の
-writer としても);`kevy-elect` が primary DOWN 時に**クォーラムに基づく
-自動フェイルオーバー**を実行します。コンパニオン・クライアント
-`kevy-cluster-rw` は書き込みを primary に送り、読み取りを replica で
-round-robin します。
-
-```toml
-# primary
-[replication]
-role = "primary"
-listen_port_base = 16004
-
-# replica
-[replication]
-role = "replica"
-upstream = "primary.example:16004"
-```
-
-```sh
-# 実行時に Redis 互換コマンドで再ターゲット / 昇格。
-redis-cli -p 6004 REPLICAOF primary.example 16004
-redis-cli -p 6004 REPLICAOF NO ONE
-redis-cli -p 6004 ROLE
-```
-
-フェーズ別カバレッジ(v1.22 ですべてマージ):
-- **Phase 1**(v1.18):per-shard ワイヤ backlog + listener、フォール
-  バック replica 向けスナップショット出荷、動的 REPLICAOF /
-  `REPLICAOF NO ONE` 再ターゲット + 降格、`ROLE` / `INFO replication`
-  ライブ状態、`kevy-cluster-rw` 読み書き分離クライアント。
-- **Phase 1.5**(v1.19):`kevy-elect` クォーラムに基づく自動 primary
-  フェイルオーバー(ハートビートによる DOWN 検出、OFFER/ACCEPT/
-  ANNOUNCE、最高 offset 当選)。
-- **Phase 2**(v1.22):**組込みノードが read-replica としてクラスタに
-  参加可能** —— `kevy-embedded` を組み込むアプリケーションがサーバー
-  primary のレプリケーション・ストリームを購読し、キースペースをプロ
-  セス内でミラーします。読み取りはネットワーク round-trip ゼロ;
-  ローカル書き込みは `READONLY` で返ります。
-- **Phase 3**(v1.22):**スコープ別マルチ writer** —— `[cluster] scopes
-  = "app:billing:=embed-a,app:catalog:=embed-b"` でプリフィックス単位の
-  writer 所有権を宣言;間違ったプリフィックスを受け取ったノードは
-  `-MISDIRECTED writer is <host:port>` を返します。オペレータ起動の
-  `MOVE-SCOPE` が quiesce-window プロトコルでプリフィックスを移行します。
-
-スコープ外(永久に対応しない):オーバーラップする multi-master、
-クロス DC active-active / CRDT、Raft、gossip ディスカバリ、オンライン
-resharding、AUTH/TLS。
-
-サーバー + クライアントの完全なレシピは
-[`docs/replication.md`](docs/replication.md) と
-[`docs/cluster.md`](docs/cluster.md) を参照。
-
-### 組込みスループット(プロセス内、ネットワークなし)
-
-[`kevy-embedded`](crates/kevy-embedded) をアプリに drop して `Store`
-を直接呼ぶ —— ソケットなし、RESP 解析なし、reactor なし。lx64 でプロ
-セス内 bench(1 M ops、12 バイトキー、16 バイト値):
-
-| 操作 | レイテンシ | スループット |
-|------|---------:|----------:|
-| `get`(ヒット) | 111 ns | **9.0 M ops/s** |
-| `get`(ミス) | 24 ns | **42.2 M ops/s** |
-| `set`(上書き) | 143 ns | **7.0 M ops/s** |
-| `incr` | 169 ns | 5.9 M ops/s |
-| `del` | 183 ns | 5.5 M ops/s |
-
-再現:
-`cargo run -p kevy-embedded --example embed_throughput --release`。
-
-#### 同じ Rust caller、4 バックエンド
-
-公平な比較:**同じ Rust プログラム** でバックエンドだけを切り替える
-—— これが実アプリが実際に見る数字です。シングル接続、シーケンシャル、
-N=200k SET + N GET;3 つのサーバー列はすべて **同じ**
-`kevy_client::Connection` の RESP パスを通り、URL だけが異なります:
-
-| バックエンド(同 Rust caller) | SET ops/s | GET ops/s |
-|------------------------------|----------:|----------:|
-| **kevy 1.25 embed** | **10.10 M** | **13.76 M** |
-| **kevy 1.25 server (io_uring)** | **94.7 k** | **97.3 k** |
-| valkey 9.1 server @ localhost | 62.2 k | 65.0 k |
-| redis 7.4 server @ localhost | 62.3 k | 61.7 k |
-
-embed は同じ kevy を TCP-loopback で呼ぶより **SET ~107×、GET ~141×
-速い** —— これが「ソケットなし、プロトコルなし、reactor なし」が組込
-めるアプリにもたらす定量化された節約です。これは embed が駆動する
-kevy-vs-valkey/redis スループット主張では **ありません** —— valkey と
-redis にプロセス内モードがないので、構造的なギャップは避けられません。
-再現:
-`cargo run -p kevy-embedded --example embed_vs_server --release
---kevy-port 7011 --valkey-port 7012 --redis-port 7013 -N 200000`。
-
-> **embed + server を 1 プロセスで** —— v1.22 で Phase 2(read-replica)
-> と Phase 3(scoped writer)の embed 統合が入りました:アプリが in-process
-> `Store` を持ち、サーバ primary のレプリケーション・ストリームを購読
-> (読みは RTT ゼロ、書きは primary 行き)できますし、
-> `[cluster] scopes = "app:billing:=embed-a"` でキー・プレフィクスを
-> 単独所有することも可能。詳しいレシピは
-> [`crates/kevy-embedded/README.md`](crates/kevy-embedded/README.md)。
-
-### Pub/sub ファンアウト(サーバー・モード)
-
-v1.25 G5 チェイン(per-channel `subs_by_channel` インデックス、
-`pending_write` 重複排除、Arc-shared 本文 + writev gather —— kevy の
-`bulkStrRef` 等価物)で pub/sub が本スプリント単軸最大の勝利になりました。
-`kevy-pubsub-bench`、3 回の中央値、16 B ペイロード(別途記載がない限り):
-
-| シナリオ | kevy 1.25 | valkey 9.1 | redis 7.4 | kevy / valkey |
-|---------|----------:|-----------:|----------:|--------------:|
-| subs=10 | 6.38 M/s | 4.01 M/s | 6.09 M/s | **1.59×** |
-| **subs=50** | **23.1 M/s** | 5.11 M/s | 11.5 M/s | **4.52×** |
-| **subs=100** | **28.4 M/s** | 5.67 M/s | 12.0 M/s | **5.00×** |
-| **subs=200** | **31.3 M/s** | 6.27 M/s | 11.6 M/s | **4.98×** |
-| **subs=500** | **31.7 M/s** | 6.13 M/s | 10.6 M/s | **5.17×** |
-| subs=50, size=256 B | 7.62 M/s | 5.53 M/s | 6.05 M/s | 1.38× |
-| subs=50, size=4 KB | 1.11 M/s | 2.26 M/s | 1.47 M/s | 0.49× ⚠ |
-
-4 KB シナリオは Linux `IOV_MAX=1024` の上限に当たり(writev-gather
-flush を正しさのため 256 iovec/drain に固定);writev-chunking は
-v1.26 backlog です。subs=50 以上では一貫して **vs valkey で 4–5×**、
-**vs redis で 2–3×**(同 TCP / RESP)。Pub/sub は**サーバーモード**
-機能;組込みライブラリは純粋なキーバリューです。方法とハーネスは
-[`docs/ja/pubsub.md`](docs/ja/pubsub.md) と
-[`crates/kevy-pubsub-bench`](crates/kevy-pubsub-bench)。
-
-### バイナリ・サイズとメモリ
-
-| | |
+| 状況 | 選ぶもの |
 |---|---|
-| サーバー・バイナリ(`release`、stripped) | **768 KB** |
-| サーバー・バイナリ(`release-min`、`opt-level="s"`) | **640 KB** |
-| アイドル RSS(デフォルト 16 スレッド) | **4.9 MB** |
-| アイドル RSS(`--threads 1`) | **2.5 MB** |
-| キー当たりメモリ(8.6 M キー時) | ~190 B(キー + 値 + テーブル・オーバヘッド) |
+| すでに Redis クライアントライブラリがあり、より速く軽い Redis が欲しい | サーバ(`kevy`) |
+| Rust アプリがあり、別プロセスを起動したくない | 組み込みライブラリ(`kevy-embedded`) |
+| Rust から kevy または Redis サーバと話したい | `kevy-client`(ブロッキング) |
+| `tokio` / `smol` / `async-std` の Rust で書いている | `kevy-client-async` |
+| URL 一つで組み込みとサーバを切り替えられる同一コードが欲しい | `kevy-client` + `kevy-embedded` |
 
-`SmallBytes` は ≤ 22 B のペイロードをヒープ・アロケーションなしで
-インライン化します。完全な kevy サーバーはサブ MB のバイナリで、起動後
-5 MB 未満の RAM 常駐です。
-
-ホスト自体のチューニング(CPU ピン留め、AOF、io_uring、Spectre 緩和)
-は [`docs/ja/tuning.md`](docs/ja/tuning.md) を参照してください。
-
-## クイック・スタート
-
-### インストール
-
-ビルド済みの `kevy` サーバー・バイナリは各
-[GitHub Release](https://github.com/goliajp/kevy/releases) に添付されて
-います。対応プラットフォーム:
-
-| プラットフォーム | archive |
-|----------------|---------|
-| Linux x86_64 (glibc) | `kevy-vX.Y.Z-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux aarch64 (glibc) | `kevy-vX.Y.Z-aarch64-unknown-linux-gnu.tar.gz` |
-| macOS aarch64 (Apple Silicon) | `kevy-vX.Y.Z-aarch64-apple-darwin.tar.gz` |
-
-ソースからビルド:
+## インストール
 
 ```sh
-git clone https://github.com/goliajp/kevy
-cd kevy
-cargo build -p kevy --bin kevy --release
-./target/release/kevy --port 6004
+# サーバ
+cargo install kevy
+
+# 組み込みライブラリ
+cargo add kevy-embedded
+
+# ブロッキングクライアント
+cargo add kevy-client
+
+# 非同期クライアント(ランタイム feature を一つ選ぶ)
+cargo add kevy-client-async --features tokio
 ```
 
-### Docker で起動
+ビルド済みのサーババイナリは各 [GitHub Release](https://github.com/goliajp/kevy/releases)
+に添付されており、Linux x86_64、Linux aarch64、macOS Apple Silicon に対応しています。
+マルチアーキテクチャの Docker イメージは [Docker Hub](https://hub.docker.com/r/goliakk/kevy)
+と [GitHub Container Registry](https://github.com/goliajp/kevy/pkgs/container/kevy)
+の両方に公開されています。
 
 ```sh
-# メインライン・イメージ:distroless ベースの kevy サーバー。
-docker run --rm -p 6004:6004 ghcr.io/goliajp/kevy:1.22 \
-  kevy --bind 0.0.0.0 --port 6004
+docker run --rm -p 6379:6379 goliakk/kevy:latest
 ```
 
-イメージは `kevy` と `kevy-cli`(redis-cli 代替)を含み、RESP `PING`
-応答を監視する HEALTHCHECK が設定されています。
+## クイックスタート
 
-### サーバーとして
+### サーバ
 
 ```sh
-# デフォルト:ループバック、AOF オフ、ポート 6004。
-cargo run -p kevy --bin kevy --release
+kevy --port 6379 &
+redis-cli -p 6379 SET foo bar
+redis-cli -p 6379 GET foo
 ```
 
-設定ファイル(任意):
+設定の優先順位は CLI フラグ → 環境変数 → TOML ファイル → 組み込みデフォルトの順です。
+注釈付きの完全なスキーマは
+[`crates/kevy/kevy.toml.example`](crates/kevy/kevy.toml.example) にあります。
 
-```toml
-# kevy.toml
-port = 6004
-bind = "127.0.0.1"
-threads = 8           # shard 数、デフォルトは CPU 数
-persist_dir = "/var/lib/kevy"
-aof = true
-```
-
-`kevy --config kevy.toml` でロード、または完全に環境変数で:
-`KEVY_BIND`、`KEVY_PORT`、`KEVY_THREADS`、`KEVY_AOF`、`KEVY_IO_URING`。
-
-同一ホストのクライアント向けに **Unix-domain socket** を併設するには、
-`KEVY_UNIX_SOCKET` をファイルパスに指定します(TCP と並行で listen)。
-RESP セマンティクスは同一、TCP loopback のオーバーヘッドなし。
-`redis-cli -s` / `redis-benchmark -s` がそのまま使えます:
-
-```sh
-KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6004
-redis-cli -s /tmp/kevy.sock SET foo bar
-```
-
-使いどころ・セキュリティ注意点は [`docs/uds.md`](docs/uds.md)。
-
-### クラスタモード(単機、キー対応ルーティング)
-
-```sh
-kevy --threads 8 --cluster          # メイン・ポート 6004、shard ポート 6005-6012
-redis-cli -c -p 6005 SET foo bar    # MOVED を自動追従
-```
-
-Rust 呼び出し元向けに、[`kevy-client`](crates/kevy-client) 1.11 は型付
-き `ClusterClient` を提供します —— 一度トポロジーを発見してから各キー
-を所有 shard に直接ルーティング、`-MOVED` なし・転送ホップなし(上記
-の **スループット 1.6×・テール・レイテンシ 15×** 勝利):
+### 組み込みライブラリ
 
 ```rust
-// Cargo.toml: kevy-client = "1.11"
-use kevy_client::ClusterClient;
-
-let mut cc = ClusterClient::connect("127.0.0.1", 6005)?;  // 任意の shard ポートを seed に
-cc.set(b"user:42", b"alice")?;                            // CRC16 slot でルーティング
-let v = cc.get(b"user:42")?;
-let removed = cc.del(&[b"a", b"b", b"c"])?;               // 複数キーは shard を跨ぐ可能性あり
-# Ok::<(), std::io::Error>(())
-```
-
-string / hash / list / set / sorted-set / del / exists / dbsize /
-flushall / ping / publish をラップします;完全ガイド・コマンド表・
-same-slot 規則は [`docs/cluster.md`](docs/cluster.md)。一つのクライ
-アントが押し込む負荷でホップが目立つときに使う;通常はシンプルな単一
-ポートの `Connection` で正しく、より簡単です。
-
-Redis Cluster のスーパーセット注記(単機クラスタモード —— gossip /
-MIGRATE-ASK / オンライン resharding なし):クロス slot 複数キー
-コマンド(`MGET`、`SUNION`、トランザクション、ブロッキング・ファン
-アウト)は `-CROSSSLOT` で失敗するのではなく実行されます;キース
-ペース全域ビュー(`KEYS`、`SCAN`、`DBSIZE`)は各ポートでも全キース
-ペース範囲を保ちます。既存データ・ディレクトリのクラスタモード切り
-替えは起動時に一度キーを re-home します(元ファイルは
-`*.premigration.<ts>` にバックアップ)。
-
-primary + replicas + 自動フェイルオーバーの多ノード・クラスタには、
-上の**クラスタモード(レプリケーション + フェイルオーバー + 組込み参加)**
-セクションを参照 —— v1.22 で server-as-replica、embed-as-replica、
-スコープ別マルチ writer、クォーラム昇格を提供しています。
-
-### 非同期ランタイム・クライアントとして
-
-`tokio` / `smol` / `async-std` 上で動くアプリは、ブロッキング・クライ
-アントの非同期ミラーが使えます:
-
-```rust
-// Cargo.toml: kevy-client-async = { version = "1", features = ["tokio"] }
-use kevy_client_async::AsyncConnection;
-
-let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
-conn.set(b"k", b"v").await?;
-let v = conn.get(b"k").await?;
-
-// N コマンドを 1 TCP round-trip にパイプライン化:
-let replies = conn.pipeline()
-    .set(b"a", b"1").get(b"a").incr(b"hits")
-    .run(&mut conn).await?;
-# Ok::<(), std::io::Error>(())
-```
-
-ランタイム feature(`tokio` / `smol` / `async-std`)を**正確に 1 つ**
-選択する必要があります;ゼロまたは 2 つ以上だとコンパイル・エラー。
-ブロッキング [`kevy-client`](crates/kevy-client) はデフォルトであり、
-0 依存を維持 —— async は opt-in。完全ガイド + ランタイム比較 +
-パイプライン判断:[`docs/async.md`](docs/async.md)。
-
-### 組込みライブラリとして
-
-```rust
-// Cargo.toml: kevy-embedded = "1.4"
 use kevy_embedded::{Config, Store};
 
-let s = Store::open(Config::default().without_aof())?;
-s.set(b"key", b"value")?;
-assert_eq!(s.get(b"key")?, Some(b"value".to_vec()));
+let store = Store::open(Config::default().without_aof())?;
+store.set(b"key", b"value")?;
+assert_eq!(store.get(b"key")?, Some(b"value".to_vec()));
 # Ok::<(), std::io::Error>(())
 ```
 
-`Store` はどこでも `&self` —— スレッド間で自由に clone できます、shard
-内部で自分でロックします。永続化ファイル・ストレージには
-`Config::default().with_persist("/var/lib/myapp")`。組込みをサーバー
-primary の read-replica として動かす(v1.22)には、
-[`docs/replication.md`](docs/replication.md) を参照。
+`Store` は `Clone` であり、すべてのメソッドが `&self` を取るため、クローンを
+スレッド間で自由に移動できます。ファイルバックドストアにするには
+`Config::default().with_persist("/var/lib/myapp")` を使ってください。
 
-## リソース適応型設計
-
-kevy のリソース・ルールは一つ:**空きがあれば全速、なければ生き延びる、
-境界では硬く拒否し、大声で失敗する —— 決して静かに腐らせない**。これ
-はエンジンを貫通します:
-
-- **無制限 = 全速**。`maxmemory = 0`(デフォルト)時、アカウンティング・
-  オーバーヘッドはコンパイル時に単一分岐の判定で除去されます。設定し
-  ていない制限のコストは一切払いません。
-- **制限あり = 優雅な eviction**。`maxmemory` + ポリシー(LRU / LFU /
-  Random / TTL、計 8 種)を設定すると、書き込みはサンプルされたキーを
-  **制限の 5% 下**まで evict します —— 次の書き込みがすぐ eviction に
-  再突入しないよう余裕を残します。
-- **境界 = 大声で拒否、腐らせない**。`NoEviction`(デフォルト・ポリシー)
-  下、予算を超える書き込みは実行前に Redis 古典の `OOM` エラーで拒否
-  されます —— ホットパス上 O(1) 事前チェック。メモリを**増やす**動詞
-  のみゲートで、縮小(`DEL` / `LPOP` / `SREM` / `EXPIRE` / …)と
-  `FLUSH*` は常に通るため、満杯インスタンスから常に回復可能。
-- **能力は降格、クラッシュしない**。io_uring は起動時に検出され、古い
-  カーネル / seccomp サンドボックスでは **epoll にフォールバック**
-  (`KEVY_IO_URING` で強制可能)。`wasm32` 組込みビルドはホストからの
-  クロック投入 + サーフェスの縮小で動き、ビルド失敗にはしません。
-  非ループバック `--bind` は **警告を出力**(kevy には AUTH/TLS なし)
-  し、静かに露出しません。
-
-クラスタ対応の [`ClusterClient`](#クラスタモード単機キー対応ルーティング)
-はクライアント側で同じ哲学に従います:負荷でホップが目立つときは接続
-数を費やしてスキップ、そうでないときは単純な単一ポートに留まります。
-
-## kevy をいつ使うか
-
-✅ 向いている:
-- 内部キャッシュ / セッション・ストア / レート制限 / リーダーボード /
-  カウンタ / pub/sub バス
-- エッジ箱 / VM sidecar / コンテナ内で同ホスト・プロセス間連携
-- Rust アプリケーションがプロセス内 KV を必要とする(オプションでロー
-  カル・クラスタ参加も)
-- より大きな redis 互換 KV の前に置く高速で信頼できるバックエンド・
-  ベースライン
-
-❌ 向いていない:
-- 公インターネットまたはマルチテナント SaaS デプロイ(AUTH/TLS なし、
-  永久にない)
-- クロス DC active-active レプリケーション / 強整合性要件(単一 DC
-  primary-replica + クォーラム・フェイルオーバーがスコープ)
-- 永続データベースの ACID / 全文検索 / 時系列 / 関係クエリ(スコープ外
-  —— 専用ストレージを使う)
-
-## Crates
-
-主要な crates.io 公開 crate:
-
-| crate | 用途 |
-|-------|------|
-| [`kevy`](crates/kevy) | サーバー・バイナリ `kevy` と `kevy-cli` |
-| [`kevy-embedded`](crates/kevy-embedded) | 組込み `Store` + Config + replica/writer 参加 |
-| [`kevy-client`](crates/kevy-client) | ブロッキング・クライアント + `ClusterClient` |
-| [`kevy-client-async`](crates/kevy-client-async) | 非同期クライアント(tokio/smol/async-std) |
-| [`kevy-store`](crates/kevy-store) | 低レベル shard `Store`(組込み用、config 組立てなし) |
-| [`kevy-resp`](crates/kevy-resp) | RESP2/3 編復号 |
-| [`kevy-resp-client`](crates/kevy-resp-client) | ブロッキング RESP クライアント基盤 |
-| [`kevy-scope`](crates/kevy-scope) | スコープ別 writer 所有権(P3) |
-| [`kevy-replicate`](crates/kevy-replicate) | レプリケーション・ストリーム・プロトコル + クライアント |
-| [`kevy-elect`](crates/kevy-elect) | クォーラム・フェイルオーバー・プロトコル |
-| [`kevy-cluster-rw`](crates/kevy-cluster-rw) | 読み書き分離 + scope ルーティング・クライアント |
-
-その他のサポート crate(`kevy-bytes` / `kevy-hash` / `kevy-map` /
-`kevy-rt` / `kevy-persist` / `kevy-sys` / `kevy-uring` / `kevy-madvise` /
-`kevy-ring` / `kevy-config` / `kevy-geo`)もすべて crates.io 公開で、
-組み合わせ用に個別に取り込めます。
-
-## 組込み ↔ サーバー、1 つの URL
-
-[`kevy-client`](crates/kevy-client) は両バックエンドを同じ URL イン
-ターフェース下に隠すので、ビジネス・コードは**URL 文字列の切替え**で
-プロセス内組込み / TCP サーバーを切替えられます:
-
-| URL | バックエンド |
-|-----|------------|
-| `mem://` | プロセス内組込み、純メモリ、匿名 bus |
-| `mem://<name>` | プロセス内組込み、純メモリ、**名前付き共有 bus**(同名で別 open でも同じ pub/sub バスを見る) |
-| `file:///abs/path` | プロセス内組込み + 永続化(AOF) |
-| `kevy://host[:port][/db]` | TCP RESP、kevy ネイティブ別名 |
-| `redis://host[:port][/db]` | TCP RESP、標準 Redis URL |
-| `tcp://host[:port]` | TCP RESP、生アドレス(SELECT ヘッダなし) |
+### ブロッキングクライアント
 
 ```rust
 use kevy_client::Connection;
 
-let url = std::env::var("MY_KEVY_URL").unwrap();
-let mut c = Connection::open(&url)?;
-c.set(b"hello", b"world")?;
-assert_eq!(c.get(b"hello")?, Some(b"world".to_vec()));
+let mut conn = Connection::open("tcp://127.0.0.1:6379")?;
+conn.set(b"k", b"v")?;
+let v = conn.get(b"k")?;
+assert_eq!(v.as_deref(), Some(&b"v"[..]));
 # Ok::<(), std::io::Error>(())
 ```
 
-dev/test に `mem://`、staging に `file:///tmp/staging`、prod に
-`kevy://prod-host:6004` —— ビジネス・コードは不変。
+同じ URL の表面に `mem://app` を渡せばプロセス内のバックエンドに接続できるため、
+同じコードパスがテストでは組み込みストアに、本番ではネットワーク経由のサーバに
+対して動作します。
 
-## コマンド
+### 非同期クライアント
 
-[`docs/COMMANDS.md`](docs/COMMANDS.md) を参照。要点:**string / hash /
-list / set / sorted-set / パターン pub/sub** 完全;**トランザクション**
-(`MULTI` / `EXEC` / `WATCH`)完全;**streams**(`XADD` / `XREAD` /
-`XLEN`)サブセット;**キースペース通知**(`__keyspace@*__:*` /
-`__keyevent@*__:*`)完全。
+```rust,no_run
+use kevy_client_async::AsyncConnection;
 
-`SCAN` / `HSCAN` / `SSCAN` / `ZSCAN` は完全な cursor 実装。`OBJECT
-ENCODING` は各型で valkey が期待する文字列(`ziplist` / `hashtable` /
-`intset` / …)にフォールバックして、データ形状検出ツールとの互換性を
-保ちます。
-
-非サポート:`CLUSTER`(サブセット —— [`docs/cluster.md`](docs/cluster.md)
-参照)、`SCRIPT EVAL`(luna runtime 待ち)、`MODULE`、`MIGRATE` /
-`ASK`、`AUTH` / `ACL`。
-
-## ビルド & テスト
-
-```sh
-# ワークスペース全体のコンパイル + ユニット・テスト。
-cargo build --workspace --release
-cargo test --workspace --release
-
-# Bench(ローカル;公平な数字には lx64 級のマシンが必要)。
-bash bench/loopback_c50.sh
-bash bench/loopback_c1.sh
-bash bench/pubsub-compare/run.sh
+# async fn run() -> std::io::Result<()> {
+let mut conn = AsyncConnection::open("tcp://127.0.0.1:6379").await?;
+conn.set(b"k", b"v").await?;
+let v = conn.get(b"k").await?;
+# Ok(())
+# }
 ```
 
-CI は stable Rust(MSRV pin なし)+ `-D warnings` clippy + miri
-(advisory FFI は miri 下で short-circuit)+ Docker イメージ・ビルド +
-マルチターゲット・クロス・ビルドを実行します。
+`tokio`、`smol`、`async-std` のうちちょうど一つを Cargo feature として選んでください。
+ゼロ個または二つ以上を選ぶとクレートはコンパイルを拒否します。
+
+## パフォーマンス
+
+ベアメタルベンチマークスイートからの代表的な抜粋です(16 コアの Linux マシン、
+サーバとクライアントは互いに重ならないコアにピン留め、TCP loopback、精密モードで
+CI95 < 1%)。詳細な手法、全ワークロード、注意点は
+[`bench/REPORT.md`](bench/REPORT.md) にあり、すべての数値は
+[`bench/`](bench/) のスクリプトから再現可能です。
+
+| ワークロード | kevy | valkey 9.1 | 比率 |
+|---|---:|---:|---:|
+| `SET -c 1` | 94.7 k/s | 62.2 k/s | **1.52×** |
+| `GET -c 1` | 97.3 k/s | 65.0 k/s | **1.50×** |
+| `SET -c 50 -P 16` | 2.59 M/s | 1.82 M/s | **1.42×** |
+| Pub/sub ファンアウト(50 subs) | 23.1 M/s | 5.1 M/s | **4.52×** |
+| 組み込み `get`(ヒット) | 9.0 M/s | — | (プロセス内 Redis なし) |
+| 組み込み `set`(上書き) | 7.0 M/s | — | (プロセス内 Redis なし) |
+
+完全なサーバはストリップ後 768 KB のバイナリで、5 MB 未満の RSS で起動します。
+
+## 互換性
+
+98 個のコマンドが valkey 9.1 と返答をバイト単位で照合されており、Redis の 5 つの
+データ型(String、Hash、List、Set、Sorted Set)すべてに加えて Streams、
+Pub/Sub(channel + pattern)、トランザクション(`MULTI` / `EXEC` / `WATCH` /
+`UNWATCH`)、ブロッキング pop、および標準的な操作・永続化系コマンドをカバーしています。
+コマンドの完全な一覧は
+[`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md) にあります。
+
+kevy に対してエンドツーエンドで検証済みのクライアントライブラリ:
+
+| 言語 | ライブラリ | バージョン |
+|---|---|---|
+| Java | [Jedis](https://github.com/redis/jedis) | 5.x |
+| .NET | [StackExchange.Redis](https://stackexchange.github.io/StackExchange.Redis/) | 2.x |
+| Go | [go-redis](https://github.com/redis/go-redis) | v9 |
+| Python | [redis-py](https://github.com/redis/redis-py) | 5.x |
+| Python | [Celery](https://docs.celeryq.dev/) | 5.6 |
+| Ruby | [Sidekiq](https://sidekiq.org/) | 6.5 |
+| Node.js | [ioredis](https://github.com/redis/ioredis) | 5.7 |
+| Node.js | [BullMQ](https://github.com/taskforcesh/bullmq) | 5.79 |
+| Node.js | [Bee Queue](https://github.com/bee-queue/bee-queue) | 1.7 |
+| Node.js | [node-redlock](https://github.com/mike-marcacci/node-redlock) | 5 |
+
+いずれもデフォルトの `kevy --port 6379` インスタンスに対して無修正で動作します。
+
+## クレート
+
+| クレート | 役割 |
+|---|---|
+| [`kevy`](crates/kevy) | サーババイナリとライブラリのエントリポイント |
+| [`kevy-embedded`](crates/kevy-embedded) | Redis 形状の Rust API を持つプロセス内 KV |
+| [`kevy-client`](crates/kevy-client) | ブロッキング RESP クライアント。サーバまたはプロセス内バックエンドに対する URL ファサード |
+| [`kevy-client-async`](crates/kevy-client-async) | tokio / smol / async-std 向けの `kevy-client` の非同期版 |
+| [`kevy-cluster-rw`](crates/kevy-cluster-rw) | プライマリ書き込み・レプリカ読み取りのクライアントラッパー |
+| [`kevy-cli`](crates/kevy-cli) | 運用 CLI。バックアップ、リストア、スモークテスト |
+| [`kevy-config`](crates/kevy-config) | CLI/env/file の優先順位を持つ TOML 設定スキーマ |
+| [`kevy-resp-client`](crates/kevy-resp-client) | 低レベル RESP2 クライアントプリミティブ |
+| [`kevy-bytes`](crates/kevy-bytes) | インラインまたはヒープの小文字列最適化付き owned バイト文字列 |
+| [`kevy-hash`](crates/kevy-hash) | 単一信頼ドメインのキースペース向け高速非暗号学的ハッシュ |
+| [`kevy-map`](crates/kevy-map) | SIMD グループスキャン付き Swiss-table ハッシュマップ |
+| [`kevy-resp`](crates/kevy-resp) | ゼロアロケーション RESP2 / 3 パーサ |
+| [`kevy-ring`](crates/kevy-ring) | 上限付きロックフリー SPSC キュー |
+| [`kevy-madvise`](crates/kevy-madvise) | Linux `MADV_HUGEPAGE` ラッパー。他環境では no-op |
+| [`kevy-uring`](crates/kevy-uring) | 純粋 Rust の io_uring バインディング。liburing にリンクしない |
+| [`kevy-geo`](crates/kevy-geo) | 地理空間コマンドプリミティブ |
+| [`kevy-lua`](crates/kevy-lua) | Lua スクリプトブリッジ([luna](https://github.com/goliajp/luna) ランタイムによる) |
+
+残りのクレート(`kevy-store`、`kevy-rt`、`kevy-persist`、`kevy-sys`、
+`kevy-elect`、`kevy-replicate`、`kevy-scope`、`kevy-lua-host`、`kevy-chaos`、
+`kevy-bench`、`kevy-pubsub-bench`)はサーバと組み込みライブラリのための内部
+インフラです。ワークスペースが再現可能にビルドできるよう公開していますが、
+エンドユーザは通常上記の表面に手を伸ばすことになります。
+
+## トピックガイド
+
+| トピック | ドキュメント |
+|---|---|
+| 設定チューニング | [`docs/tuning.md`](docs/tuning.md) |
+| 永続化(AOF + RDB) | [`docs/persistence.md`](docs/persistence.md) |
+| Pub/Sub | [`docs/pubsub.md`](docs/pubsub.md) |
+| レプリケーション | [`docs/replication.md`](docs/replication.md) |
+| クラスタモード | [`docs/cluster.md`](docs/cluster.md) |
+| Lua スクリプト | [`docs/lua.md`](docs/lua.md) |
+| Unix ドメインソケット | [`docs/uds.md`](docs/uds.md) |
+| 非同期クライアント | [`docs/async.md`](docs/async.md) |
+| WebAssembly ビルド | [`docs/wasm.md`](docs/wasm.md) |
+| accept-shard サイジング | [`docs/accept-shards.md`](docs/accept-shards.md) |
+| エラー応答リファレンス | [`docs/error-replies.md`](docs/error-replies.md) |
+
+## スコープ外
+
+kevy はやらないことについて正直です。チャーターにより、以下は永続的にスコープ外で、
+追加する計画はありません。
+
+- **AUTH と TLS。** kevy は信頼されたネットワークを前提とします。どちらかが必要なら、
+  TLS 終端のサイドカー(envoy、stunnel)と認証プロキシを前段に置いてください。
+- **マルチ DC のアクティブ-アクティブおよび DC 間レプリケーション。** 単一 DC のみです。
+- **マルチデータベース `SELECT`。** サーバごとに一つのキースペースです。
+- **ACL。** 信頼ドメインは一つです。
+- **gossip ディスカバリとオンラインリシャーディング。** クラスタトポロジは宣言的で、
+  リシャーディングはオフラインです。
+
+これらのいずれかが必要なら、Redis Cluster、Valkey、またはホスト型 KV サービスが
+適しています。
+
+## ビルドとテスト
+
+```sh
+cargo build --workspace --release
+cargo test  --workspace
+```
+
+stable Rust 1.95、Rust 2024 edition。Linux(`x86_64`、`aarch64`)と macOS で
+ビルドできます。`kevy-embedded` とその依存クロージャは
+`wasm32-unknown-unknown` および `wasm32-wasip1` 向けにもビルドできます。
 
 ## ロードマップと安定性
 
-- **v1.22**(2026-06-20、リリース済み)—— v3-cluster バンドル:組込み
-  read-replica + スコープ別マルチ writer + 非同期クライアント。詳細
-  は [`CHANGELOG.md`](CHANGELOG.md)。
-- **v1.22.x 後続**(時期未定)—— マルチ shard upstream レプリカ、
-  末尾まで進んだ backlog オフセット・スナップショット ingest、
-  F4 フォールバック・パスでの writer 自動 reclaim。
-- **v2-8 Lua**(luna runtime 待ち)—— `SCRIPT EVAL` / `EVALSHA` を
-  自家 Lua 5.5 runtime で実装、kevy のプラグインとして提供、サーバー
-  内にインタプリタを詰め込まない。
-
-API 安定性:公開された crate は semver(メジャー 1.x)に従う;デフォル
-ト・サーバーは後方互換のワイヤ・プロトコルを維持;組込み API のサー
-フェス追加はマイナー・バージョンで行う。
+ワークスペースは v2.x ラインに乗っています。永続化フォーマット、RESP ワイヤ
+プロトコル、公開 Rust API、CLI フラグ、環境変数、TOML スキーマ、エビクション
+セマンティクスはメジャーラインを通じて加算のみです。v2.0 で書かれたファイルは
+それ以降のすべての v2.x ビルドで読み込め、追加機能は既存コードを壊すことなく
+マイナーリリースで導入されます。完全な安定性契約は
+[`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md#v1x-stability-commitment)
+にあります。
 
 ## ライセンス
 
-MIT または Apache-2.0、お好みで。
+MIT または Apache-2.0 のいずれか、お好きな方でライセンスされています。
+
+© 2026 GOLIA K.K.

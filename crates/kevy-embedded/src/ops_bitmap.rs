@@ -1,11 +1,8 @@
-//! Bitmap ops on the embedded `Store` (kevy-embedded 1.8.0).
+//! Bitmap reads, writes, and aggregates: `GETBIT` / `SETBIT` /
+//! `BITCOUNT` / `BITPOS` / `BITOP` / `GETRANGE` / `SETRANGE`.
 //!
-//! Wraps the new `kevy_store::Store::{getbit, setbit, bitcount}`
-//! methods. Strings act as bit arrays addressed MSB-first within
-//! each byte, matching Redis semantics.
-//!
-//! Lives outside `ops.rs` / `ops_p2.rs` / `ops_p3.rs` to keep
-//! every embedded file under the 500-LOC house rule.
+//! Strings act as bit arrays addressed MSB-first within each byte,
+//! matching Redis semantics.
 
 use std::io;
 

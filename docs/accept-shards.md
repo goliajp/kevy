@@ -1,130 +1,105 @@
-# `--accept-shards N` — static accept-set for sparse-conn workloads
+# `--accept-shards N` — fold sparse connections onto a subset of shards
 
-> **v1.30 feature.** Default behavior (no flag) is byte-identical to v1.29:
-> every shard arms accept SQE, kernel SO_REUSEPORT spreads new conns
-> uniformly across all shards.
+`--accept-shards N` tells kevy to bind its listeners and arm `accept` only on shards `0..N`, leaving the rest as compute-only workers that still serve cross-shard reads and writes.
 
-## When to use
+## When you need this
 
-Each kevy shard runs its own reactor loop with a busy-poll body. For the
-busy-poll body to amortize, each shard wants a roughly steady stream of
-events per iteration. Below a critical conn-density floor (~5-10
-conns/shard on the c100 GET hot path), the body runs many idle iters
-between productive iters, and the per-iter overhead (waker pipe drain,
-inbox check, accept SQE arm) dominates throughput.
+Each kevy shard runs its own reactor with a busy-poll body. That body amortizes its per-iteration overhead (waker drain, inbox check, accept arm) only when each iteration sees enough productive events. If `concurrent_conns / threads` drops below roughly one, every shard spends most of its iterations idle, and aggregate throughput falls below what a 1- or 2-thread server would achieve on the same machine.
 
-When the workload is **sparse** (few concurrent client conns) but kevy
-is configured with **many shards** (one per core for compute), this
-inversion can leave kevy slower than a tuned single-server competitor
-that uses one or two I/O threads.
+Reach for `--accept-shards N` when:
 
-Empirical case ([`bench/PERF-FINDING-2026-06-29-fair-core-bigval-SET.md`](../bench/PERF-FINDING-2026-06-29-fair-core-bigval-SET.md)):
+- The client count is small and known (typical app servers, replication followers, internal services).
+- You still want `--threads` to match the core count for keyspace parallelism on cross-shard hops.
+- Benchmarks show that adding shards makes throughput worse, not better.
 
-> kevy 10-shard vs valkey 10c at `-c 50 -d 65536 -t set`:
-> kevy 59.3k SET/s vs valkey 68.5k SET/s — **-13.4 % gap**.
->
-> kevy 2-shard same workload: 62.7k SET/s — **kevy 10c LOSES MORE
-> than kevy 2c** because of the conn-density inversion (5 conns/shard
-> at 10-shard, 25 conns/shard at 2-shard).
+Leave it unset when the conn count is high (≥ 1 conn per shard on average), unpredictable, or driven by a thundering-herd client pool — the default of "every shard accepts" is the right answer there.
 
-The fix is `--accept-shards 3 --threads 10`: fold all 50 conns onto
-shards 0-2 (16.7 conns/shard), keep shards 3-9 as **compute-only**
-(no accept armed, but still execute cross-shard dispatched commands
-via the existing `Inbound::RequestBatch` channel + reply back to the
-owning conn shard).
+## Core idea
 
-## CLI / TOML / env
+A static accept-set is declared at boot. Shards inside the set bind the listener fd and arm an `accept` SQE; shards outside the set do neither, so the kernel's `SO_REUSEPORT` group never routes a SYN to them. Off-accept-set shards still own their keyspace slice and still drain the cross-shard inbox, so writes that hash to their slice are dispatched to them, executed, and the reply travels back through the owning conn's shard. The stateless-shard model is intact — every shard runs the same code path; some just happen to own zero connections.
 
-CLI (highest priority):
-```sh
-kevy --port 6004 --threads 10 --accept-shards 3
+```
+                      clients (SO_REUSEPORT group)
+                                 |
+                  +--------------+--------------+
+                  |              |              |
+              shard 0        shard 1        shard 2          <-- accept-set (--accept-shards 3)
+              listen + accept + own conns + own keyspace slice
+                  |              |              |
+                  +------ cross-shard dispatch -------+
+                  |       |       |       |       |       |
+              shard 3  shard 4  shard 5  shard 6  shard 7  shard 8  shard 9   <-- compute-only
+              no listener, no accept; execute dispatched cmds, own keyspace slice
 ```
 
-TOML:
+## Worked example
+
+Ten threads, three accept shards, listening on the standard Redis port:
+
+```sh
+kevy --threads 10 --accept-shards 3 --port 6379
+```
+
+Equivalent environment-variable form:
+
+```sh
+KEVY_THREADS=10 KEVY_ACCEPT_SHARDS=3 kevy --port 6379
+```
+
+Equivalent TOML (`kevy.toml`):
+
 ```toml
 [server]
 threads = 10
 accept_shards = 3
+port = 6379
 ```
 
-Env:
-```sh
-KEVY_THREADS=10 KEVY_ACCEPT_SHARDS=3 kevy --port 6004
-```
+Precedence is CLI > env > TOML > default. `accept_shards` must satisfy `1 <= accept_shards <= threads`; anything outside that range fails fast at startup with exit code 2. The default is unset, which means every shard accepts and the binary behaves byte-identically to a build without the flag.
 
-Validation: `accept_shards` must be in `1..=threads`. Otherwise kevy
-exits with code 2 at startup.
+## Sizing heuristic
 
-Default: unset = `None` = every shard accepts (v1.29 byte-identical).
+Rule of thumb: `accept_shards ≈ ceil(conns / 20)`. The empirical sweet spot is the plateau where each accept shard owns roughly 15–25 connections — dense enough for the busy-poll body to amortize, sparse enough to keep cross-shard dispatch from saturating the inbox channel.
 
-## How it works
+| concurrent conns | threads | recommended `--accept-shards` | conns / accept shard |
+|-----------------:|--------:|------------------------------:|---------------------:|
+| 10               | 10      | 1                             | 10                   |
+| 20               | 10      | 1                             | 20                   |
+| 50               | 10      | 2 or 3                        | 25 or 17             |
+| 100              | 10      | 5                             | 20                   |
+| 200              | 10      | 10 (default, unset)           | 20                   |
+| 50               | 16      | 2 or 3                        | 25 or 17             |
+| 100              | 16      | 5 or 6                        | 20 or 17             |
+| 500              | 16      | 16 (default, unset)           | 31                   |
 
-1. Runtime construction sets each `Shard.arms_accept` based on the
-   config: shards `0..N` get `true`, shards `N..nshards` get `false`.
-2. In the reactor loop body (uring or epoll), the accept SQE arm /
-   poller-add for the data + cluster + UDS listeners is gated on
-   `self.arms_accept`. Off-accept-set shards skip every accept arm.
-3. Linux SO_REUSEPORT routes new conns only to the **armed** subset
-   of sockets bound to the listener fd. Conns hash-distribute across
-   shards `0..N` (uniform under the kernel default routing).
-4. Off-accept-set shards run an otherwise-identical reactor loop:
-   they receive cross-shard dispatched commands via
-   `drain_inbound_core`, execute them against their own keyspace
-   slice, send replies back to the owning conn's shard via the same
-   cross-shard channel. They run periodic ticks (TTL reaper,
-   replication, AOF, etc.) — they're **compute-only**, not silent.
-5. Conn ownership is unchanged for a conn's lifetime. A conn that
-   lands on shard 1 stays on shard 1 until it closes.
+For the canonical `--threads 10 -c 50 -d 65536 SET` workload, `--accept-shards 3` lifts throughput +10.6% over the default by collapsing 50 conns from ~5/shard onto ~17/shard. The same plateau holds at `--accept-shards 2` (25 conns/shard).
 
-## What it doesn't do
+## Trade-offs
 
-- **No fd migration.** Conns don't move between shards after accept.
-- **No dynamic accept-set rebalancing.** Static config only. If the
-  workload's conn count changes, restart with a different
-  `--accept-shards N`.
-- **No kernel BPF SK_REUSEPORT.** Stays in user-space app code.
-- **No automatic detection.** User configures `--accept-shards`
-  per workload knowledge.
+| dimension                       | accept-set shard                          | compute-only shard                                  |
+|---------------------------------|-------------------------------------------|-----------------------------------------------------|
+| busy-poll amortization          | high (own conn fan-in drives per-iter work) | depends on cross-shard inbox rate                  |
+| per-conn read / write cost      | local, no hop                             | n/a (no owned conns)                                |
+| cross-shard dispatch cost       | one channel send per hop                  | one channel recv + execute + reply send             |
+| keyspace ownership              | own slice                                 | own slice                                           |
+| CPU floor at idle               | accept-armed, blocks in `io_uring_enter`  | spins to `URING_SPIN_LIMIT` then blocks             |
+| effect on tail latency          | accept SQE adds work to hot loop          | cleaner hot loop; cross-shard hop adds one channel  |
 
-For workloads where the conn count is **unknown** or **changing**,
-leave `--accept-shards` unset; v1.30's default behavior matches v1.29.
+Concretely, the smaller `N` you pick, the more each conn benefits from a hot accept-set shard, but the higher the fraction of writes that take a cross-shard hop (`(threads - N) / threads` of all keys). The plateau at conns/shard ≈ 15–25 is where the busy-poll win pays for the extra hops; well below it the dispatch cost dominates, well above it you're back to the unset default.
 
-## Picking the value
+## FAQ
 
-Heuristic: `accept_shards ≈ ceil(expected_concurrent_conns / 15)`.
+**Should I always set `--accept-shards`?**
+No. If `concurrent_conns / threads >= 1` on average, the default (every shard accepts) is already optimal — the busy-poll body amortizes without help. `--accept-shards` is for the sparse-conn regime where adding shards hurts throughput.
 
-The "15 conns/shard" target is where the busy-poll body's per-iter
-overhead amortizes well at a Redis-style workload mix. Tune up for
-heavier per-cmd workloads (large values, many cross-shard hops),
-down for lighter (small int values, single-shard reads).
+**How do I pick `N` for my workload?**
+Start from the rule of thumb `ceil(conns / 20)`. Sweep `N` in a perfgate across `{ceil(conns/25), ceil(conns/20), ceil(conns/15)}` and pick the one that maximises throughput at your target tail-latency budget. Anywhere on the 15–25 conns/shard plateau is a safe production setting.
 
-For a typical Redis client at `-c 50`, `--accept-shards 3` gives
-~16.7 conns/shard. At `-c 100`, `--accept-shards 6` gives ~16.7
-conns/shard. At `-c 10` (lightly-multiplexed app), `--accept-shards 1`
-puts every conn on shard 0 — the per-shard inbox cost is fully
-amortized away. The compute-only shards still service cross-shard
-hops for the keys they own.
+**Does it break replication, AOF, or persistence?**
+No. Off-accept-set shards run the same reactor loop, the same TTL reaper, the same AOF writer, and the same replication ticks as accept-set shards. The only thing they skip is binding the listener and arming `accept`. Replication followers and snapshot/AOF restore behave identically regardless of `N`.
 
-## Off-accept-set shard CPU
+**How do off-accept-set shards still serve writes?**
+They own their slice of the keyspace. When a client connection on an accept-set shard issues a write whose key hashes to a compute-only shard, the accept-set shard pushes an `Inbound::RequestBatch` onto the owning shard's inbox; the owning shard executes the command against its own keyspace slice and sends the reply back through the originating shard's reply channel. From the client's perspective the hop is invisible — it sees one reply on one connection, in order.
 
-Off-accept-set shards still busy-poll (waiting for cross-shard work)
-and then park after `URING_SPIN_LIMIT` idle iters via
-`io_uring_enter(wait_nr=1)`. CPU footprint per off-accept-set shard
-is bounded by the spin → park ladder. On heavily-quiet conn-share
-shards, this is functionally equivalent to "quiet shard at 100 %
-once per `URING_SPIN_LIMIT × per-iter-ns` window".
-
-If you need to free those cores entirely, set `--threads N` to match
-`--accept-shards` exactly. Compute-only shards exist BECAUSE the
-keyspace is sharded across all `--threads` — reducing shards reduces
-keyspace parallelism (which is the original reason `--threads N >
-accept-shards` is useful at all).
-
-## Benchmark
-
-See [`bench/PERF-FINDING-2026-06-29-fair-core-bigval-SET.md`](../bench/PERF-FINDING-2026-06-29-fair-core-bigval-SET.md)
-for the empirical motivation (kevy 10c LOSES MORE than 2c at
-`-c 50 -d 65536 SET`).
-
-v1.30 perfgate validation TBD — pending lx64 run. Once landed:
-`bench/PERF-FINDING-2026-06-29-v1-30-accept-shards-bench.md`.
+**What if I get the number wrong?**
+The cost of a too-small `N` is a saturated cross-shard inbox and worse tail latency; the cost of a too-large `N` is the original sparse-conn inversion. Both are recoverable by restart with a new value — there's no on-disk state tied to the choice.

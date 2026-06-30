@@ -1,323 +1,221 @@
-# kevy-client の Pub/sub
+# Pub/sub
 
-同じコードがプロセス内バスと TCP kevy サーバーの両方を駆動。実行時
-に URL でバックエンドを選ぶ —— 呼び出し現場で scheme 分岐は不要。
+kevy で 1 つの発行者から多数の購読者にメッセージをファンアウトする方法 — ワイヤ上では `PUBLISH` / `SUBSCRIBE`、プロセス内では組み込みの `Store` 経由、そして `kevy-client` の他部分と同じ URL ファサード越し — を説明します。
 
-```toml
-[dependencies]
-kevy-client = "1.11"
+## このドキュメントが必要になるとき
+
+1 つのライターがゼロまたはそれ以上のリーダーに*いま*通知したく、リーダーがオフラインの間に届いたメッセージは気にしない、という場面で pub/sub に手を伸ばします:
+
+- 「全 Web ワーカーに config キャッシュをリフレッシュしろと伝える。」
+- 「あるシャードから書き込まれたばかりの行を、tail している誰かにストリーミングする。」
+- 「ジョブが着地したらワーカープールを起こす。ジョブ本体はリストに置く。」
+- 「開発ループ: プロデューサスレッドとコンシューマスレッドが同じバイナリ内。Redis サーバー不要。」
+
+耐久性のある hand-off(リトライ付きジョブキュー、再起動を超えるファンアウト、メッセージリプレイ)が必要なら、リストまたはストリームを使ってください — 何がディスクに書かれるかは [`docs/persistence.md`](persistence.md) を参照。
+
+## 中心となる考え方
+
+pub/sub のチャネルは名前です。購読者はその名前(またはグロブパターン)への関心を登録します。同じ名前への publish は購読者インデックスを歩き、マッチする購読者それぞれにボディのコピーを 1 つキューします。ブローカーキューも、オフラインバッファも、ack もありません — publish の瞬間に誰も聴いていなければ、メッセージは消えます。
+
+```
+                   publish("news", body)
+                          |
+                          v
+             +-----------------------+
+             |  channel "news"       |   <- チャネルごとの購読者インデックス
+             |  subscribers: [A,B,C] |
+             +-----------------------+
+                  |       |       |
+                  v       v       v
+               sub A   sub B   sub C    <- それぞれが自分のコピーを受ける
 ```
 
-## URL セマンティクス
+内部では各 publish はワイヤフレームを 1 度だけ構築し、ボディを `Arc` で包み、`writev` でマッチする全 TCP 購読者に scatter-gather します — ファンアウトがどれだけ広くてもボディバイトは追加コピー**ゼロ**です。同じチャネル別インデックスがサーバー接続とプロセス内 `Subscription` ハンドルの両方を扱います。
 
-| URL | バックエンド | open をまたいで共有? |
-|-----|------------|------------------|
-| `mem://` | プロセス内、インメモリ | **いいえ** —— open 毎に新規 |
-| `mem://<name>` | プロセス内、インメモリ | **はい** —— 同 `<name>` → 同バス |
-| `file:///abs/path` | プロセス内 + snapshot/AOF 永続化 | **はい** —— 同パス → 同バス |
-| `kevy://host[:port][/db]` | TCP kevy/Redis サーバー | (open 毎に 1 ソケット、サーバー側で扇出) |
-| `redis://host[:port][/db]` | TCP —— `kevy://` のエイリアス | 同 |
-| `tcp://host[:port]` | TCP —— 生、先頭 `SELECT` なし | 同 |
+## 動かしてみる例
 
-`rediss://` / `kevys://` / `redis://user:pass@…` は
-`ErrorKind::Unsupported` で拒否 —— kevy は TLS / AUTH なしで出荷。
+### `redis-cli` でスモークテスト
 
-**匿名 `mem://` は publish されたメッセージを受信できません** ——
-同じバッキング `Store` に到達できる他のものがないからです。
-`Subscriber::open` は `ErrorKind::Unsupported` でそれを拒否します。
-`mem://<some-name>` を使ってください。
+動作中の kevy サーバーに対して 2 つのシェルを開きます:
 
-**クラスタ注記**:kevy の pub/sub は **プロセス・レベル**、slot
-ルーティングではありません:任意の cluster shard ポートでの publish
-は、同プロセス内の他の shard ポートの subscriber に到達します。
-pub/sub に `ClusterClient` は **不要** —— 任意の shard ポートへの
-普通の `Connection::open("kevy://host:port")` で動作します。slot
-ルーティングされた keyspace トラフィックについては
-[`docs/cluster.md`](cluster.md) を参照。
+```sh
+# シェル 1 — 購読者
+$ redis-cli -p 6379 SUBSCRIBE news
+Reading messages... (press Ctrl-C to quit)
+1) "subscribe"
+2) "news"
+3) (integer) 1
+```
 
-## Pattern 1 —— 同一スレッドの dev ループ
+```sh
+# シェル 2 — 発行者
+$ redis-cli -p 6379 PUBLISH news "hello"
+(integer) 1   # 1 人の購読者が受け取った
+```
+
+シェル 1 に戻ると:
+
+```
+1) "message"
+2) "news"
+3) "hello"
+```
+
+購読者ゼロのチャネルへの `PUBLISH` は `(integer) 0` を返し、メッセージは捨てられます。これが契約です — 「配信を試みた」シグナルは出ません。
+
+### URL ファサード越しの Rust — `kevy-client`
+
+同じ呼び出し形状で TCP サーバー、名前付きプロセス内バス、永続的なプロセス内ストアを狙えます。URL を切り替えて再コンパイルするだけで、呼び出し側に `match scheme { … }` はいりません。
 
 ```rust
 use kevy_client::{Connection, Subscriber, PubsubEvent};
 
-let mut sub  = Subscriber::open("mem://app", &[b"news"])?;
-let mut conn = Connection::open("mem://app")?;
-
-// publish 前に SUBSCRIBE ack をドレイン —— bus は順序付き、ack は
-// キュー内の最初の Message の前に到着します。
-let _ack = sub.recv()?;
-
-conn.publish(b"news", b"hello")?;
-
-if let PubsubEvent::Message { channel, payload } = sub.recv()? {
-    assert_eq!(channel, b"news");
-    assert_eq!(payload, b"hello");
-}
-# Ok::<(), std::io::Error>(())
-```
-
-## Pattern 2 —— クロス・スレッド producer / consumer
-
-```rust
-use kevy_client::{Connection, Subscriber, PubsubEvent};
-use std::thread;
-
-const URL: &str = "mem://orders";
-
-let mut sub = Subscriber::open(URL, &[b"order.placed"])?;
-let _ack = sub.recv()?;
-
-thread::spawn(|| {
-    let mut conn = Connection::open(URL).unwrap();
-    conn.publish(b"order.placed", b"order-42").unwrap();
-});
-
-let ev = sub.recv()?;
-// PubsubEvent::Message { channel: "order.placed", payload: "order-42" }
-# Ok::<(), std::io::Error>(())
-```
-
-## Pattern 3 —— 環境駆動の dev/prod スワップ
-
-同コード、3 バックエンド:
-
-```rust
-use kevy_client::{Connection, Subscriber};
-
-fn run_app(url: &str) -> std::io::Result<()> {
-    let mut sub  = Subscriber::open(url, &[b"jobs"])?;
-    let mut conn = Connection::open(url)?;
+fn run(url: &str) -> std::io::Result<()> {
+    // `news` に対する購読者を開く。バスが最初に返すフレームは subscribe ack なので、
+    // ボディをアサートする前にドレインする。
+    let mut sub = Subscriber::open(url, &[b"news"])?;
     let _ack = sub.recv()?;
-    conn.publish(b"jobs", b"compute pi")?;
-    // ... events をドレイン ...
+
+    let mut conn = Connection::open(url)?;
+    let received = conn.publish(b"news", b"hello")?;
+    assert_eq!(received, 1);
+
+    match sub.recv()? {
+        PubsubEvent::Message { channel, payload } => {
+            assert_eq!(channel, b"news");
+            assert_eq!(payload, b"hello");
+        }
+        other => panic!("unexpected frame: {other:?}"),
+    }
     Ok(())
 }
 
-// Dev:
-run_app("mem://app")?;
-// 永続化付きテスト:
-run_app("file:///tmp/app-test")?;
-// Prod:
-run_app("kevy://prod-cache:6379")?;
+// 開発:  名前付きのプロセス内共有バス。
+run("mem://app")?;
+// 本番: 実際の TCP サーバー。
+run("kevy://prod-cache:6379")?;
 # Ok::<(), std::io::Error>(())
 ```
 
-呼び出し現場に `match scheme { ... }` なし。1 つの URL を open、両端
-が同じバッキング・バスにアタッチします。
+クロススレッドは同じコードで、別スレッドから同じ URL に対して `Subscriber` 1 つと `Connection` 1 つを開くだけです — `mem://<name>` レジストリが両端に同じバッキングバスを渡すので、プロデューサスレッドが `Connection::publish` し、コンシューマスレッドが `sub.recv()` でブロックします。
 
-## Pattern 4 —— glob パターン
+### `kevy-embedded` 経由のプロセス内
+
+組み込みコードが既に `Store` を持っているなら、URL 経由を飛ばして直接バスと話します:
+
+```rust
+use kevy_embedded::{Config, PubsubFrame, Store};
+
+let store = Store::open(Config::default().with_ttl_reaper_manual())?;
+
+// 購読者は受信キューを所有する。
+let sub = store.subscribe(&[b"jobs"]);
+let _ack = sub.recv()?; // PubsubFrame::Subscribe
+
+// `store` のどのクローンも同じバスに届く。
+let writer = store.clone();
+assert_eq!(writer.publish(b"jobs", b"compute-pi"), 1);
+
+match sub.recv()? {
+    PubsubFrame::Message { channel, payload } => {
+        assert_eq!(channel, b"jobs");
+        assert_eq!(payload, b"compute-pi");
+    }
+    other => panic!("unexpected frame: {other:?}"),
+}
+# Ok::<(), std::io::Error>(())
+```
+
+`Store::clone` は安い(`Arc` のバンプ)ので、典型形は「各スレッドに `store.clone()` を渡し、必要なときに `publish` か `subscribe` をさせる」です。購読者の drop はアトミックに登録解除されます。コンシューマスレッドがパニックしてもインデックスにゾンビエントリは残りません。
+
+### パターン購読
+
+`PSUBSCRIBE` はグロブを登録し、それにマッチするどのチャネルのメッセージも受けます。グロブ構文 — `*`、`?`、`[abc]` — は `KEYS` と `SCAN` が使うマッチャと同じです。
 
 ```rust
 use kevy_client::{Connection, Subscriber, PubsubEvent};
 
 let mut sub = Subscriber::connect("mem://signals")?;
-sub.psubscribe(&[b"sensor.*"])?;
-let _ack = sub.recv()?;  // Psubscribe ack
+sub.psubscribe(&[b"news.*"])?;
+let _ack = sub.recv()?;            // PubsubEvent::Psubscribe
 
 let mut conn = Connection::open("mem://signals")?;
-conn.publish(b"sensor.temp", b"22.5")?;  // マッチ
-conn.publish(b"weather", b"sunny")?;     // マッチ **しない**
+conn.publish(b"news.tech", b"breaking")?; // マッチ
+conn.publish(b"weather",   b"sunny")?;    // マッチしない
 
-if let PubsubEvent::Pmessage { pattern, channel, payload } = sub.recv()? {
-    assert_eq!(pattern, b"sensor.*");
-    assert_eq!(channel, b"sensor.temp");
-    assert_eq!(payload, b"22.5");
-}
-# Ok::<(), std::io::Error>(())
-```
-
-Glob 構文:`*`(任意)、`?`(1 文字)、`[abc]`(文字クラス) ——
-`KEYS` / `SCAN` と同じ matcher。
-
-## Pattern 5 —— 複数 subscriber への扇出
-
-```rust
-use kevy_client::{Connection, Subscriber};
-
-const URL: &str = "mem://fanout";
-let mut s1 = Subscriber::open(URL, &[b"chan"])?;
-let mut s2 = Subscriber::open(URL, &[b"chan"])?;
-let _ = s1.recv()?;
-let _ = s2.recv()?;
-
-let mut conn = Connection::open(URL)?;
-let received = conn.publish(b"chan", b"broadcast")?;
-assert_eq!(received, 2);  // 両方とも受信
-# Ok::<(), std::io::Error>(())
-```
-
-## API 要約
-
-```rust
-// Producer
-let mut conn = Connection::open(url)?;
-let recv_count = conn.publish(channel, payload)?;
-
-// Consumer
-let mut sub = Subscriber::open(url, &[channel])?;          // open + subscribe
-// または
-let mut sub = Subscriber::connect(url)?;                    // open、後で subscribe
-sub.subscribe(&[chan1, chan2])?;
-sub.psubscribe(&[b"foo.*"])?;
-sub.unsubscribe(&[chan1])?;       // 空 &[] → 全 channel 解除
-sub.punsubscribe(&[])?;            // 空 &[] → 全 pattern 解除
-sub.set_read_timeout(Some(Duration::from_secs(1)))?;
-let ev: PubsubEvent = sub.recv()?;
-```
-
-`PubsubEvent` は 6 つの variant を持ちます:`Subscribe`、`Psubscribe`、
-`Unsubscribe`、`Punsubscribe`、`Message`、`Pmessage`。`Unsubscribe` /
-`Punsubscribe` は channel/pattern スロットに `Option<Vec<u8>>` を使い
-ます —— `None` は "subscribed なし" の nil-bulk ワイヤ形状にマッチ。
-
-## ライフサイクル + 落とし穴
-
-**プロセス・ローカル・レジストリ**:URL → `Store` マップはプロセス
-毎、`Weak` 参照でバックされています。名前付き URL の最後の
-`Connection` / `Subscriber` が drop すると entry が解放;同 URL の次
-の open は新しい `Store` を取得します。(`file:///` URL ではディスク
-の AOF + snapshot は残り、re-open で replay。)
-
-**クロス・プロセス**:`mem://name` と `file:///path` は他のプロセス
-から **見えません**。本物のクロス・プロセス配信には、kevy サーバーを
-起動して `kevy://host:port` を使用。
-
-**Ack 順序**:`SUBSCRIBE` はそのチャネルの任意の `Message` の前に
-`Subscribe` ack を受信キューに enqueue します。テストでメッセージ本体
-を assert する前に ack をドレインしてください。
-
-**送信タイミング**:bus mutex は `Sender::send()` 呼び出しの前に
-drop されるため、遅い receiver が無関係のチャネルへの publish を
-stall させることはできません。各 subscriber は自分の `mpsc::Receiver`
-キューを持ちます(共有 bound なし)。
-
-**`Subscription` drop はアトミックに登録解除**:スレッドがパニック
-しても "stale subscriber" zombie 状態は残りません —— `Drop` impl が
-bus テーブルを walk して subscription id でタグ付けられた全エントリを
-削除します。
-
-**匿名 `mem://` 上の `Connection::publish`** は永遠に 0 を返します
-(subscriber は存在不可)。`mem://<name>` 上では実際の receiver 数を
-返します。
-
-**TLS / AUTH** は非サポート。必要ならネットワーク境界で stunnel + IP
-allowlist で前置きしてください。
-
-## 非同期 runtime(tokio / async-std / smol)
-
-`Subscription` と `Subscriber` は `Send + Sync` —— `Arc<Subscription>`
-が動作するため、複数の async タスク(または `spawn_blocking` ジョブ)
-が 1 つのハンドルを共有可能。ブロッキングの `recv` API は意図的に保持:
-kevy は crates.io 依存ゼロで出荷するため、async-runtime-agnostic な
-future は手書きが必要です。3 つのクリーン・パターン:
-
-**Pattern A —— 専用 OS スレッド + runtime チャネル**(単一 consumer、
-共有ハンドル不要):
-
-```rust,no_run
-# use kevy_embedded::{Config, PubsubFrame, Store};
-# let store = Store::open(Config::default().with_ttl_reaper_manual())?;
-// 擬似コード —— `runtime_channel` を tokio::sync::mpsc /
-// async_channel / 等、runtime に応じて置換。
-let (tx, rx) = /* runtime_channel */;
-std::thread::spawn({
-    let store = store.clone();
-    move || {
-        let sub = store.subscribe(&[b"queue:notify"]);
-        while let Ok(frame) = sub.recv() {
-            if matches!(
-                frame,
-                PubsubFrame::Message { .. } | PubsubFrame::Pmessage { .. }
-            ) && tx.blocking_send(()).is_err()
-            {
-                break; // receiver dropped
-            }
-        }
+match sub.recv()? {
+    PubsubEvent::Pmessage { pattern, channel, payload } => {
+        assert_eq!(pattern, b"news.*");
+        assert_eq!(channel, b"news.tech");
+        assert_eq!(payload, b"breaking");
     }
-});
-// `rx` が async 側ハンドル;async ループから await。
-# Ok::<(), std::io::Error>(())
-```
-
-これは mailrs の outbound-queue worker が使うもの —— 小さい、長命の
-タスク;recv 毎の tokio blocking-pool スロットを回避します。
-
-**Pattern B —— `Arc<Subscription>` + `spawn_blocking`**(複数 async
-タスクが 1 ハンドルを共有):
-
-```rust,no_run
-# use kevy_embedded::{Config, Store};
-# use std::sync::Arc;
-# let store = Store::open(Config::default().with_ttl_reaper_manual())?;
-let sub = Arc::new(store.subscribe(&[b"queue:notify"]));
-// 各 async タスクは Arc のクローンを取得し spawn_blocking 経由で
-// recv;receiver mutex が並行 recv を直列化します。各フレームは
-// ちょうど 1 タスクに配信(broadcast **ではない**)。
-//
-// ブロードキャスト扇出(全 consumer が全メッセージを見る)には、
-// consumer 毎に別 Subscription を open —— 安価です。
-let task_handle = {
-    let sub = sub.clone();
-    // tokio::task::spawn_blocking 擬似:
-    std::thread::spawn(move || {
-        loop {
-            match sub.recv() {
-                Ok(frame) => { /* 処理 */ let _ = frame; }
-                Err(_) => break, // bus closed
-            }
-        }
-    })
-};
-# let _ = task_handle;
-# Ok::<(), std::io::Error>(())
-```
-
-`Subscription::try_recv` は `try_lock` を使い、ロック競合下では
-`Ok(None)` を返します —— 別タスクが `recv` 経由で receiver を持って
-いても non-blocking 契約は保たれます。
-
-**Pattern C —— `kevy-client::Subscriber` の借用イテレータ**:
-
-```rust,no_run
-# use kevy_client::Subscriber;
-let mut sub = Subscriber::open("mem://news", &[b"updates"])?;
-
-// `events()` は全フレーム(ack 含む)を yield。UnexpectedEof で終了;
-// 他のエラーは Some(Err(_)) として出るので、呼び出し側が retry
-// (例:read timeout)か break かを判断。
-for event in sub.events() {
-    let _ = event?; // dispatch
-    # break;
-}
-
-// `messages()` は ack を静かに消費し、`(channel, payload)` だけを
-// yield —— recv_message が返す形と同じ。
-let mut sub2 = Subscriber::open("mem://news", &[b"updates"])?;
-for msg in sub2.messages() {
-    let (_channel, _payload) = msg?;
-    # break;
+    other => panic!("unexpected frame: {other:?}"),
 }
 # Ok::<(), std::io::Error>(())
 ```
 
-同じ `spawn_blocking` ルールが適用:イテレータは `recv` /
-`recv_message` をラップし、各ブロッキング wait の期間 receiver
-mutex を取ります。drop または break で wait を早期解放してください。
-イテレータ API は `kevy-client` のもの、`kevy-embedded` のものではあ
-りません —— 欲しい場合は URL facade に対して `Subscriber` を open し
-てください;embed-only プリミティブが必要なら `Subscription` に直接
-リーチしてください。
+チャネル購読と**かつ**マッチするパターン購読の両方を持つ購読者は**2 つ**のコピーを受けます — `Message` 1 つと `Pmessage` 1 つ。発行ごとの dedup は「同じ `Subscription` が同じチャネルインデックスに 2 回並んでいる」重複だけを抑止し、チャネル vs パターンの重なりは抑止しません。
 
-## 関連
+## URL バックエンド表
 
-- [`kevy-embedded` 1.2.0+](https://crates.io/crates/kevy-embedded) ——
-  基盤の `Store::Clone` + `PubsubBus` プリミティブ。URL facade の間接
-  層が不要なら直接使用してください。
-- [`kevy-client` 1.9.0+](https://crates.io/crates/kevy-client) —— URL
-  facade 自体。`Subscriber::recv_message`、`events()` / `messages()`
-  イテレータ、slot ルーティングされた keyspace トラフィック用の
-  `ClusterClient` を ship(pub/sub には不要 —— 上のクラスタ注記参照)。
-- [`kevy`](https://crates.io/crates/kevy) —— TCP サーバー(1.17.0+)、
-  単一プロセスを超えた場合に。
-- [`docs/cluster.md`](cluster.md) —— クラスタ・モードと slot ルー
-  ティングされた keyspace トラフィック用の `ClusterClient`。
+| URL                                | バッキングストア              | 開くたびに共有?                              | プロセスを跨いで可視? |
+|------------------------------------|----------------------------|---------------------------------------------------|-----------------------|
+| `mem://`                           | プロセス内、匿名      | **いいえ** — 開くたびに新しい `Store`           | いいえ                    |
+| `mem://<name>`                     | プロセス内、名前付きレジストリ | **はい** — 同じ `<name>` ⇒ 同じ `Store`            | いいえ                    |
+| `file:///abs/path`                 | プロセス内 + AOF/snapshot  | **はい** — 同じ path ⇒ 同じ `Store`、永続      | いいえ                    |
+| `kevy://host[:port][/db]`          | TCP の kevy サーバー            | 開くごとに 1 ソケット、サーバー側でファンアウト         | **はい**               |
+| `redis://host[:port][/db]`         | TCP — `kevy://` のエイリアス   | 同じ                                              | **はい**               |
+| `tcp://host[:port]`                | TCP — 生、`SELECT` 先導なし | 同じ                                          | **はい**               |
+
+匿名 `mem://` は発行されたメッセージを受け取れません — 同じバッキング `Store` に他のものは届かないので、`Subscriber::open` は `ErrorKind::Unsupported` で拒否します。発行する意図があるときは常に `mem://<some-name>` を使ってください。
+
+`rediss://`、`kevys://`、`redis://user:pass@…` は同じ理由で拒否されます: kevy は TLS や `AUTH` なしで出荷されます。どちらかが必要ならネットワーク境界で stunnel + IP allowlist を被せてください。
+
+`mem://<name>` と `file:///` のレジストリは**プロセス単位**です: 同じ名前を開いた無関係な 2 つの OS プロセスは独立した 2 つのバスを見ます。プロセスを跨いだ配信が欲しいなら、kevy サーバーを動かして両側から `kevy://host:port` を開いてください。
+
+## トレードオフと限界
+
+- **At-most-once 配信。** フレーム途中で切断した購読者はそのフレームを失います。購読者ごとの耐久性カーソルも再配信もありません。フレームが重要なら、リストかストリームで永続化し、pub/sub は「起こす」シグナルとしてだけ使ってください。
+- **オフラインバックログなし。** 購読者ゼロを見つけた publish は `0` を返してボディを破棄します。切断中に見逃したものを購読者に追いつかせるバッファはありません。
+- **購読者のバックプレッシャは購読者単位で、グローバルではありません。** 各購読者は自分の有界キューを所有します。遅いコンシューマは自分のキューを埋め、それからフレームを落とすか、TCP ならサーバーのクライアント出力バッファポリシーで閉じられます。publish パスは送信前にバスのミューテックスを離すので、遅いリスナー 1 人が無関係なチャネルの publish を止めることはできません — が、発行者へバックプレッシャを掛けることもできません。
+- **Linux `writev` の上限。** Linux 上、`writev` は呼び出しごとに最大 `IOV_MAX = 1024` の iovec エントリしかカーネルに渡せません。サーバーは購読者ごとのフレームヘッダと共有ボディの Arc を iovec にまとめます。チャネルあたり約 340 を超える購読者(各 iovec 3 つ)へのファンアウトでは、サーバーは複数の `writev` 呼び出しに自動分割します。上限はソフトな性能の天井としてしか出ず、配信失敗にはなりません。
+- **subscribed クライアントは制限されます。** `Subscriber` コネクションは pub/sub 以外のコマンドを拒否します。だから `kevy-client` は発行者と購読者を**別の 2 つの型**として、同じ URL を共有させて公開します。
+
+## 運用イントロスペクション
+
+標準の `PUBSUB` 管理サブコマンドは TCP サーバーでも URL ファサードでも動きます — 呼び出すには `Subscriber` ではなく通常の `Connection` を開きます。
+
+| サブコマンド              | 戻り値                                                                        |
+|-------------------------|--------------------------------------------------------------------------------|
+| `PUBSUB CHANNELS [pat]` | 少なくとも 1 人の購読者がいるチャネルの配列。オプションでグロブフィルタ。      |
+| `PUBSUB NUMSUB [ch …]`  | 名前付きチャネルごとに `channel, count` ペアをインターリーブ(なければ 0)。       |
+| `PUBSUB NUMPAT`         | 整数: 全クライアントを通じて登録された `PSUBSCRIBE` パターンの異なり数。  |
+
+```sh
+$ redis-cli -p 6379 PUBSUB CHANNELS '*'
+1) "news"
+2) "jobs"
+$ redis-cli -p 6379 PUBSUB NUMSUB news jobs missing
+1) "news"
+2) (integer) 3
+3) "jobs"
+4) (integer) 1
+5) "missing"
+6) (integer) 0
+$ redis-cli -p 6379 PUBSUB NUMPAT
+(integer) 2
+```
+
+3 つともシャードごとの pub/sub レジストリに対する O(channels) または O(args) のポイントルックアップで、監視エージェントからのポーリングは安全です。
+
+## FAQ
+
+**publish の後で接続した購読者にメッセージは届きますか?**  いいえ。pub/sub にリプレイはありません。購読者インデックスは publish 時点で参照されます。後から購読した者は、自分の subscribe ack が着地した*後*に発行されたフレームしか見ません。
+
+**`PUBLISH` は購読者がドレインするまで発行者をブロックしますか?**  いいえ。発行者の `publish` 呼び出しは、ボディがマッチする全購読者の購読者別キューにキューされ次第(TCP 購読者なら加えてそれぞれのソケットの書き込みキューにスケジュールされ次第)戻ります。遅い購読者は自分のキューを止めるだけで、あなたのを止めません。
+
+**1 つの `Subscriber` を async タスク間で共有できますか?**  はい — `Arc` で包んで `recv` 呼び出しを `spawn_blocking` してください。受信ミューテックスがブロッキング待機を直列化するので、各フレームは**ちょうど 1 つ**のタスクに配信されます。本当のブロードキャストファンアウト(全タスクが全フレームを見る)が欲しければ、タスクごとに 1 つの `Subscriber` を開いてください — 安いです。完全な async パターンは [`docs/async.md`](async.md) を参照。
+
+**なぜテストはメッセージより前に subscribe ack を見ますか?**  バスは順序付きですが、各 `SUBSCRIBE` / `PSUBSCRIBE` は、そのチャネルの最初のボディフレームより*先に* ack フレームをキューします。ペイロードをアサートする前に `sub.recv()?` 1 回で ack をドレインしてください — これは redis-cli のワイヤ形状と一致します。
+
+**pub/sub にクラスタルーティングは必要ですか?**  いいえ。Pub/sub ファンアウトはプロセスレベルでスロットルーティングではありません: 任意のシャードのポートで publish すれば、同じプロセス内の任意のシャードのポートの全購読者に届きます。任意のシャードポートに対する `Connection::open("kevy://host:port")` で十分です。*キー空間*コマンドが使うスロットルーティングについては [`docs/cluster.md`](cluster.md) を参照。

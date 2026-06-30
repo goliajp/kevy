@@ -1,18 +1,16 @@
-//! `[replication]` section schema — primary/replica streaming replication
-//! (v3-cluster Phase 1). Split out of [`crate::schema`] so that file stays
-//! under the 500-LOC house rule.
+//! `[replication]` section schema — primary/replica streaming
+//! replication.
 
-/// `[replication]` section — primary/replica streaming replication
-/// (v3-cluster Phase 1). When `role = "standalone"` (default) this whole
-/// subsystem is dormant: no listener, no upstream connection, no buffer
+/// `[replication]` section — primary/replica streaming replication.
+/// When `role = "standalone"` (default) this whole subsystem is
+/// dormant: no listener, no upstream connection, no buffer
 /// allocated. `role = "primary"` brings up a TCP listener on
 /// `listen_port` that streams every applied mutation to connected
-/// replicas. `role = "replica"` connects to `upstream`, full-syncs from a
-/// snapshot, then applies live frames.
+/// replicas. `role = "replica"` connects to `upstream`, full-syncs
+/// from a snapshot, then applies live frames.
 ///
-/// Peer/quorum config (`[[cluster.node]]`) lands in Phase 1.5 alongside
-/// `kevy-elect`; see `.claude/plans/2026-06-18-v3-cluster-plan.md`
-/// Issue Ledger I1.
+/// Quorum failover is configured separately via the `[cluster]`
+/// `node_id` + `peers` keys; see [`crate::cluster::ClusterSection`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReplicationSection {
     /// Node role. `Standalone` (default) disables the whole subsystem.

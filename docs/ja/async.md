@@ -1,176 +1,131 @@
-# 非同期クライアント(`kevy-client-async`)
+# 非同期クライアント
 
-`kevy-client-async` は [`kevy-client`](https://docs.rs/kevy-client)
-の runtime-agnostic な非同期版です。ブロッキング・クライアントは新規
-コードのデフォルトのまま(純 Rust、ゼロ依存、非同期でないワークロード
-ではレイテンシも低い)。この crate は、既に `tokio` / `smol` /
-`async-std` runtime を持っていて `await` フローを貫通させたいアプリ
-向け —— 特にパイプライニング、ここが async で N round-trip を 1 回に
-畳める場所です。
+`kevy-client-async` はブロッキング版 [`kevy-client`](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client) の非同期ミラーです — 同じ面、同じ URL ファサード、各呼び出しに `.await` が付きます。
 
-## どれを使うか
+## このドキュメントが必要になるとき
 
-| 状況 | 選ぶ |
-|------|------|
-| runtime なし、シンプルな request-response | `kevy-client` |
-| tokio アプリ、コマンド毎に 1 `await` | `kevy-client-async` |
-| tokio アプリ、バッチ毎に 1 `await` | `kevy-client-async` + `pipeline()` |
-| 任意の runtime で組込み `mem://` / `file://` | `kevy-client` |
+アプリが既に `tokio`、`smol`、`async-std` ランタイム上で動いていて、`await` フローを端から端まで通したい(ブロッキングスレッドプールへのホップなし、`spawn_blocking` ラップなし、コネクションごとスレッドなし)ときに非同期クライアントを使ってください。コードパスが通常スレッド上のリクエスト・レスポンスなら、ブロッキングクライアントの方がシンプルで低遅延です — 同期コードに非同期税はかかりません。
 
-`AsyncConnection::open` は `mem://` と `file://` URL を拒否します ——
-それらはプロセス内同期バックエンドで、ブロッキング・クライアントの方
-が厳密に速いからです。
+## 中心となる考え方
 
-## Runtime 選択
+Cargo 機能で正確に 1 つのランタイム(`tokio`、`smol`、`async-std`)を選びます。クレートはそのランタイムの `TcpStream` アダプタにだけコンパイルされ、他は含まれません。公開面はブロッキングクライアントを 1:1 でミラーします — `AsyncConnection::open(url).await?`、`conn.set(k, v).await?`、`conn.get(k).await?` — なので、ブロッキングからの移植は `Connection` → `AsyncConnection` と各呼び出しへの `.await` です。遅延が問題のときは pipeline builder が N コマンドを 1 回の TCP 往復に畳みます。
 
-`tokio` / `smol` / `async-std` の **ちょうど 1 つ** を有効化する必要
-があります。ゼロ個または 2 つ以上を有効化するとコンパイル時エラーに
-なります。
+## 動かしてみる例
+
+### Tokio
 
 ```toml
 [dependencies]
 kevy-client-async = { version = "1", features = ["tokio"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 ```
 
-各 runtime は自分の `TcpStream` アダプタを持ちます:
+```rust
+use kevy_client_async::AsyncConnection;
 
-| feature | トランスポート |
-|---------|--------------|
-| `tokio` | `tokio::net::TcpStream` |
-| `smol`  | `smol::net::TcpStream` |
-| `async-std` | `async_std::net::TcpStream` |
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
+    let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
+    conn.set(b"k", b"v").await?;
+    let v = conn.get(b"k").await?;
+    assert_eq!(v.as_deref(), Some(&b"v"[..]));
+    Ok(())
+}
+```
 
-各 runtime 依存は `default-features = false` + アダプタが必要とする最
-小限の feature だけを取り込みます。
+### Smol
 
-## サーフェス —— ブロッキングのミラー
+同じコード。ランタイム機能だけ入れ替えます。
+
+```toml
+[dependencies]
+kevy-client-async = { version = "1", features = ["smol"] }
+smol = "2"
+```
+
+```rust
+use kevy_client_async::AsyncConnection;
+
+fn main() -> std::io::Result<()> {
+    smol::block_on(async {
+        let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
+        conn.set(b"k", b"v").await?;
+        let v = conn.get(b"k").await?;
+        assert_eq!(v.as_deref(), Some(&b"v"[..]));
+        Ok(())
+    })
+}
+```
+
+### Pipeline builder
+
+バッチ全体で 1 往復。応答はキュー順に返り、コマンドごとの失敗はバッチを破壊せず `Vec` 内に `Reply::Error(_)` として着地します。
 
 ```rust
 use kevy_client_async::AsyncConnection;
 
 let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
-conn.set(b"k", b"v").await?;
-let v = conn.get(b"k").await?;
-```
-
-`AsyncConnection` のメソッド名は `kevy_client::Connection` と 1:1
-(`.await` が付くだけ)。ブロッキングからの移行は `Connection` →
-`AsyncConnection` の grep-replace と、各呼び出しへの `.await` 追加です。
-
-利用可能なコマンド・ファミリ(42 メソッド):
-
-- **string + generic**:ping / set / get / del / exists / incr /
-  incr_by / expire / persist / ttl_ms / type_of / dbsize / flushall /
-  set_with_ttl / mget / mset / publish
-- **hash**:hset / hget / hdel / hlen / hgetall / hkeys / hvals
-- **list**:lpush / rpush / lpop / rpop / llen / lrange
-- **set**:sadd / srem / smembers / scard / sismember / sinter /
-  sunion / sdiff
-- **sorted set**:zadd / zrem / zscore / zcard / zrange
-
-## Pipeline-first シュガー
-
-async が本当に成果を出すのはここ —— バッチ毎に 1 回のネットワーク
-round-trip で、コマンド毎ではありません。
-
-```rust
 let replies = conn
     .pipeline()
-    .set(b"k1", b"v1")
-    .get(b"k2")
-    .incr(b"counter")
+    .set(b"a", b"1")
+    .get(b"a")
+    .incr(b"hits")
     .run(&mut conn)
     .await?;
-// replies: Vec<Reply>、enqueue 順に各コマンド 1 エントリ。
+// replies.len() == 3; キューしたコマンドごとに 1 つの Reply、順序保持。
 ```
 
-コマンド単位のエラーは返却された `Vec` の中で `Reply::Error(_)` と
-して現れます —— 1 つの不正コマンドがバッチ全体を壊しません。外側の
-`Err` は接続レベルの失敗(トランスポート、不正フレーム)向けに予約
-されています。
+## ランタイム機能
 
-タイプ付きビルダーにないコマンドには `push_raw(argv)` を:
+これらのうちちょうど 1 つが有効でなければなりません。ゼロ機能、あるいは 2 つ以上同時はコンパイル時エラーです — 暗黙のデフォルトはありません。
 
-```rust
-conn.pipeline()
-    .push_raw(vec![b"CUSTOM".to_vec(), b"arg".to_vec()])
-    .run(&mut conn).await?;
-```
+| 機能      | トランスポートアダプタ                  | 引かれるランタイムクレート |
+|--------------|------------------------------------|----------------------|
+| `tokio`      | `tokio::net::TcpStream`            | `tokio`              |
+| `smol`       | `smol::net::TcpStream`             | `smol`               |
+| `async-std`  | `async_std::net::TcpStream`        | `async-std`          |
 
-### 降格パス
+各ランタイムクレートは `default-features = false` で、アダプタが必要な最小機能だけを付けて引かれます。これらは kevy ワークスペースで唯一の crates.io 依存です — 純粋 Rust・ゼロ依存ルールに対する意図的な切り出しです。Rust の async エコシステムには std だけで実現可能な基盤がないためです。
 
-`Pipeline::into_cmds()` は `Vec<Vec<Vec<u8>>>` を返します —— 生の argv
-バッチ。フォールバックでブロッキング・クライアントに 1 つずつ送り込み
-たい場合に:
+## URL バックエンド
 
-```rust
-let cmds = conn.pipeline().get(b"a").set(b"b", b"v").into_cmds();
-// ブロッキング kevy_client::Connection 上で:
-// for cmd in &cmds { blocking_conn.codec_mut().request(cmd)?; }
-```
+`AsyncConnection::open` はブロッキングクライアントと同じ URL ファサードを取ります。TCP 形状のスキームはランタイムの非同期ソケットを通り、プロセス内スキームは拒否されます(ブロッキングクライアントの方がそれらには厳密に速いので、エグゼキュータ経由にする意味がありません)。
 
-## Cluster client
+| スキーム       | ターゲット                          | 非同期クライアントでサポート |
+|--------------|---------------------------------|---------------------------|
+| `tcp://`     | kevy または Redis 互換サーバー     | はい                       |
+| `kevy://`    | kevy サーバー(`tcp://` のエイリアス) | はい                       |
+| `redis://`   | Redis または Redis 互換サーバー    | はい                       |
+| `mem://`     | プロセス内組み込みストア       | いいえ — ブロッキングクライアントを  |
+| `file:///`   | オンディスク組み込みストア          | いいえ — ブロッキングクライアントを  |
 
-`AsyncClusterClient` は cluster モード・サーバー向けに
-`kevy_client::ClusterClient` をミラーします —— shard 毎に 1 TCP 接続、
-key 毎に CRC16 ルーティング、正しいルーティング下では `-MOVED` は発火
-しません。
+`AsyncConnection::open` で `mem://` や `file:///` URL を開くと `ErrorKind::Unsupported` を返します。
 
-```rust
-use kevy_client_async::cluster::AsyncClusterClient;
+## トレードオフ
 
-let mut c = AsyncClusterClient::connect("127.0.0.1", 6004).await?;
-c.set(b"user:42", b"…").await?;
-```
+ブロッキングクライアントがデフォルトで、これからもデフォルトであるのには理由があります:
 
-## Subscriber
+- **同期コードパス**: まだランタイムがなければ、クライアントのためにランタイムを立てないでください。`kevy-client` は純粋 Rust・ゼロ依存で、各コマンドでエグゼキュータのスケジューリングオーバーヘッドを避けます。
+- **組み込みバックエンド**: `mem://` と `file:///` は同期のプロセス内ストアです。ブロッキングクライアントは直接話せます。非同期クライアントは話せません。
+- **シングルショットコマンド**: 通常のマルチスレッドエグゼキュータでコマンドごとの `.await` 1 つは、直接 syscall と比べて計測可能なオーバーヘッドです。非同期の利得は並行性(タスクをまたぐ多数の in-flight コマンド)やバッチング(往復を畳む pipeline)で見えます。
 
-`AsyncSubscriber` は `kevy_client::Subscriber` をミラーします ——
-subscribe 済みの RESP 接続は通常コマンドを送れないため、
-`AsyncConnection` とは別の型です。ブロッキング形状の drop-in、
-ただし socket 級 `set_read_timeout` は外しています(runtime のタイム
-アウト原語を使ってください:`tokio::time::timeout`、`async_io::Timer`
-など)。
+周囲のアプリが既に async なら async を使ってください。独立したコマンドのバッチがあり往復がボトルネックなら pipeline builder を使ってください。それ以外はブロッキングのままで。
 
-```rust
-use kevy_client_async::subscriber::AsyncSubscriber;
+## FAQ
 
-let mut sub = AsyncSubscriber::open("tcp://127.0.0.1:6004", &[b"ch"]).await?;
-let (channel, payload) = sub.recv_message().await?;
-```
+**なぜランタイムを正確に 1 つ選ぶ必要がありますか?**
+クレートは 1 つの `TcpStream` アダプタにコンパイルされます。1 バイナリ内に 2 つのアダプタを入れると、各 I/O ごとのランタイム非依存な間接化(オーバーヘッド)か、誰も保守できない巨大な cfg マトリクスのどちらかになります。ゼロアダプタは公開型を未実装にします。機能数のコンパイル時チェックが、設定ミスを大きく早く拾います。
 
-## エラー
+**同期と非同期の kevy クライアントを 1 プロセスで混ぜられますか?**
+はい。`kevy-client`(ブロッキング)と `kevy-client-async` は独立したクレートで自由に共存します — 例えば同じバイナリで組み込みの `file:///` ストアにはブロッキング、ネットワークシャードには async、と使えます。コネクションは共有しません。
 
-各 async メソッドは `std::io::Result<T>` を返し、ブロッキング・
-クライアントと同じ `ErrorKind` マッピングを使います:
+**pub/sub はどうですか?**
+`AsyncSubscriber` がブロッキングの `Subscriber` をミラーします。subscribed な RESP コネクションは通常コマンドを送れないので、`AsyncConnection` とは別の型です。メッセージごとのタイムアウトはソケットレベルの read タイムアウトではなく、あなたのランタイム自身のプリミティブ(`tokio::time::timeout`、`async_io::Timer` 等)を使ってください。
 
-| 出典 | `ErrorKind` |
-|------|------------|
-| RESP `-ERR …` 応答 | `Other` |
-| 想定外の応答 variant | `Other` |
-| 不正な RESP フレーム | `InvalidData` |
-| 読み込み途中の EOF | `UnexpectedEof` |
-| 不正な URL / ポート / scheme | `InvalidInput` |
-| TLS / AUTH / embed URL scheme | `Unsupported` |
-| 生 socket I/O | (native kind) |
+**pipeline builder は送信側のバッファリングを強制しますか?**
+はい — それが要点です。`pipeline().…run(&mut conn).await` はバッチ全体を 1 回の write にシリアライズし、N 応答を順序で読みます。コマンド単位のバックプレッシャが必要なら、pipeline を組まずに `set` / `get` を直接呼んでください。
 
-より広いエラー・コンテキスト —— RESP エラー文字列、想定外の variant
-名 —— は `io::Error` の message にあります(`.to_string()` /
-`.into_inner()`)。
+## リポジトリ内のサンプル
 
-## 依存規則の例外
-
-`kevy-client-async` は kevy workspace の中で crates.io 依存を取って
-よい**唯一の** crate です。例外は crate 単位 + dep 単位:`tokio`、
-`smol`、`async-std` だけが取り込まれる crate(各々 `Cargo.toml` に
-インラインの `# EXEMPTION` コメントを持つ)。他の workspace crate
-は `kevy-client-async` を依存に取ってはいけません —— それは例外を
-推移的に漏らしてしまいます。完全な根拠は v3-cluster RFC(F5)と
-`feedback-pure-rust-no-c-principle.md` memory にあります。
-
-## サンプル
-
-- [`tokio_hello`](../../crates/kevy-client-async/examples/tokio_hello.rs)
-  —— open + ping + set/get + del。
-- [`pipeline`](../../crates/kevy-client-async/examples/pipeline.rs)
-  —— 1 round-trip で混合バッチを実行。
+- [`tokio_hello`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client-async/examples/tokio_hello.rs) — 開く、ping、set/get、del。
+- [`pipeline`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client-async/examples/pipeline.rs) — 混在バッチを 1 往復で。

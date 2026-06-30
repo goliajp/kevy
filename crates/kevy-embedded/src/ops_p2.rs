@@ -1,14 +1,9 @@
-//! Phase 2 ops — mailrs feedback round-out (2026-07-01).
+//! Hash field reads, sorted-set range queries, list slice access, and
+//! the atomic single-call string helpers `getset` / `getdel`.
 //!
-//! Adds the `hgetall` / `hmget` / `hkeys` / `hvals` / `hexists` /
-//! `hlen` / `hincrby`, `zrange` / `zrevrange` / `zincrby`,
-//! `lrange` / `lindex` / `lrem`, and `getset` / `getdel` methods to
-//! the embedded `Store` facade.
-//!
-//! Lives outside `ops.rs` to keep that file under the 500-LOC house
-//! rule. Every method is a thin facade over the existing
-//! `kevy_store::Store::<method>` (the keyspace) plus the standard
-//! `commit_write` AOF logging on the write paths.
+//! Every method is a thin facade over the corresponding
+//! `kevy_store::Store` method, with `commit_write` AOF logging on the
+//! write paths.
 
 use std::io;
 

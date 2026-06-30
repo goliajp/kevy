@@ -1,321 +1,168 @@
-# kevy を極限スループットまで詰める
+# kevy のチューニング
 
-kevy の op あたりオーバーヘッドを目に見えて動かすツマミを並べたページ
-です。各ツマミに実測値(lx64、Intel Xeon 6、Linux 6.12 / io_uring;
-方法論は [`bench/REPORT.md`](../../bench/REPORT.md))と明確なコストを
-書いています。本当に必要なものだけ適用してください。
+kevy の op あたりのコストを変えるランタイムノブのリファレンスです — CPU レイアウト、リアクター選択、永続化、メモリ上限、ネットワークトランスポート、そして Linux 側のいくつかのレバー。
 
-## 早見表
+## このドキュメントが必要になるとき
 
-| ツマミ                            | いつ使う                          | 効果    |
-|-----------------------------------|-----------------------------------|---------|
-| server を CPU セットにピン留め    | 専用ホスト、bench 同居             | 5–15%   |
-| AOF オフ (`--no-aof`)             | レプリカ / 揮発キャッシュ          | 5–10%   |
-| `KEVY_IO_URING=1`                 | Linux 5.13+                        | 10–30%  |
-| `--threads 1` を使う              | 単一クライアント / pipelined 負荷  | **5–60%** |
-| **Unix-domain socket** に切替     | クライアントが同一ホスト           | **60–75%** |
-| カーネル `mitigations=off`        | 信頼できる単一テナント機           | 12–25%  |
-| netfilter ルール空                | 専用ホスト、ローカル FW 不要       | **25–35%** |
-| PGO(profile-guided)              | ワークロード固定のリリース         | 1–10%   |
+参照すべきとき:
 
-カーネル床を動かせるのは `mitigations=off` と netfilter 空の二つ;
-UDS は loopback 床自体を取り除く;`--threads` は shard 数を負荷の並列
-度に合わせる;PGO とそれ以外はユーザー空間サイクルを削るだけです。
+- ベンチマークが kevy をスループットや遅延のターゲット以下に出していて、次にどのノブを回すか知りたい。
+- デフォルト(TCP ループバック、io_uring 自動検出、`appendfsync everysec`、`maxmemory` なし)がワークロードに合わないホストに kevy をデプロイする — 例えばスパースコネクションのサービス、NVMe バックドの耐久性要件、メモリ上限付きのキャッシュティア。
+- `perf` で kevy をプロファイルしていて、デバッグ行テーブルを残すビルドプロファイルが必要。
 
-## CPU ピン留め
+ノート PC で kevy を立ち上げて数字が良ければ、このページは不要です。デフォルトは各ワークロードで適度に良くなるよう調整されています。
 
-io_uring の reactor は固定 CPU セットに留めると安定します —— NIC IRQ
-→ softirq → ユーザースレッドが同じ L1/L2 にとどまるためです:
+## 中心となる考え方
 
-```sh
-taskset -c 0-9 kevy --port 6004
-```
+kevy はスレッド・パー・コアのサーバーです。OS スレッドごとに 1 シャード、CRC16 ハッシュタグで分割した共有なしのキー空間、各シャードに busy-poll リアクターがあります。デフォルトは「各ワークロードでまあまあ」を狙います。チューニングとは、**実際のパフォーマンスデータがボトルネックだと示すもの**に合わせてシャード数、リアクター、永続化ポリシーをマッチさせることです。先回りでノブを切り替えないでください。計測し、コストを特定し、変数を 1 つずつ変えてください。
 
-同じマシンで bench を走らせる場合、**server と client は互いに重なら
-ない範囲にピン留め** —— server を `0-9`、client を `10-15`(構成に応じ
-て)。コアを共有するとスケジューラの取り合いが io_uring の効果を相殺
-します。詳細は `feedback-kevy-bench-isolation`。
+## チューニングプレイブック
 
-## `KEVY_IO_URING=1`
+### CPU とシャード
 
-reactor を epoll から io_uring に切り替えます。Linux 5.13+ 必須、古い
-カーネルでは静かに epoll にフォールバックします。lx64 で -c1 +10–30%、
-SQPOLL (D5) の前提でもあります。
+| ノブ | どこ | デフォルト | 効果 |
+|------|-------|---------|--------|
+| `--threads N` / `KEVY_THREADS` | CLI / env | オンラインコア数 | シャード数。OS スレッドごとに 1 シャード |
+| `--accept-shards K` | CLI | 全シャードが accept | 最初の K シャードだけがリスナーを bind、残りは compute-only |
+| CPU pinning | `taskset` / `numactl` | なし | シャードを固定のコア集合にロック |
+
+**`--threads` の選択。** ワークロードに実在する並列性に設定してください。シングルクライアントのパイプラインベンチ(`-c 1 -P 16`)は 1 シャードを飽和させます。ここで `--threads 10` にすると 9 つのシャードが仕事のない busy-poll を走らせ、シャード 0 のキャッシュラインを奪います。本物のマルチクライアントなら、`min(cores, expected concurrent clients / 4)` から始めて計測してください。
+
+**`--accept-shards` の選択。** コネクション対シャードの比率が低い(スパースコネクションのワークロード — 例 50 クライアントを 10 シャードで = 5 conns/shard)とき、イテレーションごとの busy-poll オーバーヘッドが分摊らなくなりスループットが落ちます。経験則は `ceil(conns / 20)` — 50 conns なら `--accept-shards 3` にし、3 つの listen シャードがそれぞれおよそ 17 接続を取り、残りのシャードは compute-only ですが内部ディスパッチャ経由でクロスシャード仕事を受け続けます。経験的なスイートスポットは点推定より広いです。フルスイープと、クロスシャードホップ税が accept 集中の利得を上回るケースの議論は [docs/accept-shards.md](https://github.com/goliajp/kevy/blob/develop/docs/accept-shards.md) を参照。
+
+**CPU pinning。** ベンチや単一テナントのホストでは、kevy を固定コア集合に pin すると NIC IRQ → softirq → ユーザースレッドのパスを同じ L1/L2 に保てます:
 
 ```sh
-KEVY_IO_URING=1 kevy --port 6004
+taskset -c 0-9 kevy --port 6004 --threads 10
 ```
 
-## 同一ホスト向けに Unix-domain socket (UDS)
+同じマシン上でクライアントが動くなら、サーバーとクライアントを**互いに素**なコアレンジに pin します(サーバー `0-9`、クライアント `10-15`)。共有コアは reactor の利得を圧倒するスケジューラ ping-pong を再導入します。
 
-クライアントが server と同一ホストにいるなら、ファイル経由の socket
-を指し、TCP loopback スタックを完全に飛ばします。v1.25+。
+### リアクター選択
+
+| プラットフォーム | デフォルト | 上書き |
+|----------|---------|----------|
+| Linux ≥ 5.19 | io_uring(自動検出) | `KEVY_IO_URING=0` で epoll に強制、`KEVY_IO_URING=1` で io_uring 必須、seccomp で `io_uring_setup` がブロックされていれば大きく終了 |
+| macOS / *BSD | kqueue | 設定不可 |
+| 旧 Linux | epoll | n/a |
+
+Linux の自動検出は起動時に `io_uring_setup` を走らせます。syscall がブロック(seccomp プロファイル、ロックダウンされたコンテナ)されていれば kevy は無言で epoll にフォールバックします。無言で劣化させず大きく失敗させたい硬化デプロイでは `KEVY_IO_URING=1` を設定し、io_uring が本当に使えなければサーバーが起動を拒否するようにしてください。逆に、再現可能な epoll vs io_uring ベンチや、カーネルリグレッション回避のために io_uring を外したい場合は `KEVY_IO_URING=0` を設定します。
+
+```sh
+KEVY_IO_URING=1 kevy --port 6004   # io_uring 必須、ブロックされていれば終了
+KEVY_IO_URING=0 kevy --port 6004   # epoll 強制
+```
+
+### 永続化
+
+AOF ポリシーは `appendfsync`(config ファイルまたは `CONFIG SET`)で制御します。3 つの値は Redis セマンティクスに一致します:
+
+| `appendfsync` | 耐久性 | コスト |
+|---------------|------------|------|
+| `always` | 各書き込みは応答前に `fsync` | 最高遅延。NVMe sync 遅延で律速 |
+| `everysec`(デフォルト) | バックグラウンドスレッドで毎秒 `fsync` | データロス窓は最大 1 秒。ホットパスコストはほぼゼロ |
+| `no` | `fsync` しない。カーネルが自分のスケジュールで flush | 最速。データロス窓はページキャッシュ flush 間隔 |
+
+`everysec` のバックグラウンド `fsync` はシャードのホットパスから外れた専用 bio スレッドで走るので、シャードのテール遅延はディスク遅延に結合しません。純粋なキャッシュや読み取りレプリカでは、`--no-aof` で AOF を完全に無効にする(AOF ファイルがまったく書かれず、バッファにも入らない)選択もあります。
+
+### メモリ
+
+| ノブ | デフォルト | やること |
+|------|---------|--------------|
+| `maxmemory` | 無制限 | バイト単位のハードメモリ上限。達するとエビクションポリシーが動く |
+| `maxmemory-policy` | `noeviction` | 上限に達したときどのキーを落とすか |
+| `maxmemory-samples` | 5 | 近似 LRU/LFU ポリシーのサンプルサイズ |
+
+エビクションポリシーは Redis をミラーします: `noeviction`、`allkeys-lru`、`allkeys-lfu`、`allkeys-random`、`volatile-lru`、`volatile-lfu`、`volatile-random`、`volatile-ttl`。`noeviction` は上限に達すると書き込みを OOM で失敗させ、プライマリストアの安全な既定です。`allkeys-*` 系は任意のキーが使い捨てなキャッシュ層で正しい選択です。
+
+`maxmemory-samples` は近似ポリシーにとって品質 vs コストのダイヤルです — サンプルキーを増やすほど真の LRU/LFU により近い近似が、エビクションごとの CPU コストと引き換えに得られます。既定の 5 はほとんどのキャッシュワークロードで十分です。アクセスパターンでエビクションが悪い犠牲者を選んでいるのが見えるなら 10 に上げ、エビクション自身がプロファイルに出てくるときだけ 3 に下げてください。
+
+### ネットワーク
+
+デフォルトのトランスポートは TCP です。クライアントが同一ホストに居るなら、Unix-domain ソケットに切り替えてループバック TCP スタックを完全にスキップします:
 
 ```sh
 KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6004
 redis-cli -s /tmp/kevy.sock SET foo bar
-redis-benchmark -s /tmp/kevy.sock -t set,get -n 100000 -c 50 -P 16
 ```
 
-server は TCP + UDS を**同時バインド** —— TCP はリモート、UDS は
-ローカル。RESP セマンティクスも shard runtime も同一。lx64 precision
-bench(同一バイナリ、同一クライアント、アドレスのみ変更):
+サーバーは dual-bind します: TCP はリモートクライアント用に上がったまま、UDS がローカルを扱います。RESP セマンティクスは同じ、シャードランタイムも同じ。ローカルクライアントのワークロードでは利得が大きいです(小ペイロードサイズではループバック TCP パスが支配コスト)。詳細な数値、権限モデル、UDS が当てはまらないケースは [docs/uds.md](uds.md) を参照。
 
-| ワークロード | TCP rps | UDS rps | 改善 |
-|------------|--------:|--------:|----:|
-| -c1 SET | 94.7 k | 166 k | **+76 %** |
-| -c1 GET | 97.3 k | 168 k | **+73 %** |
-| -c50 -P16 SET | 2.59 M | 4.11 M | **+59 %** |
-| -c50 -P16 GET | 2.67 M | 4.35 M | **+63 %** |
+**bind アドレスの警告。** kevy には今日 AUTH も TLS もありません。非ループバックアドレス(`--bind 0.0.0.0` または任意の公開インタフェース)に bind すると起動警告が出ます。ネットワーク上の誰でもコマンドを発行できてしまうためです。kevy はプライベートネットワーク境界、または認証を終端させるプロキシの背後で動かしてください。
 
-注意:UDS のパーミッションはファイル・パーミッション。既定の
-`chmod 0777` は valkey/redis と同じです。サーバ上に信頼できない
-ユーザがいる場合は包含ディレクトリで絞ってください。詳細(セキュリ
-ティ、valkey 側相当設定、使うべきでないとき)は
-[`docs/uds.md`](../uds.md)。
+### Linux カーネルノブ
 
-## `--threads` —— shard 数 vs 負荷の並列度
+ホストレベルのレバーが 2 つあり、kevy の下にあるカーネルフロアを動かします。両方ベンチ/単一テナント専用です — 適用前にトレードオフを読んでください。
 
-kevy は thread-per-core。`--threads N`(または `KEVY_THREADS`)で
-N 個の shard を作り、keyspace を CRC16 hashtag で分割します。
-**スレッドを増やせば常に速い、ではありません** —— 負荷の形で選ぶ:
-
-| 負荷の形 | 推奨 | 理由 |
-|---------|------|------|
-| 単一接続 bench(`-c1 -P1`) | `--threads 1` | conn は 1 shard に張り付く;余の shard は空転で CPU を浪費 |
-| 単一クライアント pipelined(`-c50 -P16`) | `--threads 1` | クライアント 1 コアで 1 shard を飽和;多 shard はクロス税を払う |
-| 多独立クライアント、低 pipelining | `--threads ≤ コア数 / 2` | クライアントが散る;1 shard に 1 クライアント・コア |
-| 混合(キャッシュ + クラスタ読) | `--threads = コア数 - 2` | OS / IRQ 用の余裕を残す |
-
-v1.25 precision-bench headline はすべて `--threads 1` —— これが
-redis-benchmark のクライアント側が天井に到達する構成です。同じ
-`-c1` 負荷で `--threads 10` にすると **スループットが下がります**
-(9 個の shard が無駄に busy-poll し、shard 0 の cache line を奪う)。
-
-複数 shard のクロス・ルーティング詳細(`{hashtag}` slot、cluster
-port、`ClusterClient`)は [`docs/cluster.md`](cluster.md)。
-
-## BGSAVE / BGREWRITEAOF を bio スレッドで shard 外実行(v1.25)
-
-v1.25 で snapshot + AOF rewrite は **server 全体で 1 つのグローバル
-bio スレッド**(per-shard ではない)に移されました。shard は
-`Op::Save` でリクエストをキューイングし、ネットワーク busy-poll を
-継続;bio スレッドがホットパス外でディスク書き込みを実行します。
-
-効果:shard の busy-poll の周期が数秒級のディスク書き込みで中断され
-なくなり、大きな BGSAVE 下でのテール遅延が顕著に下がります(v1.25
-precision:c=50、value=10 KB SET で p999 -8 %、max -18 %)。
-**ツマミなし、常時有効。** AOF 自体が不要なときは `--no-aof` を
-そのまま使ってください。実際にディスク I/O があるときだけ bio
-スレッドは動きます。
-
-## レプリカ / キャッシュ用途では AOF オフ
-
-既定は `--aof`(永続化)。読み取り専用レプリカや純キャッシュ用途では
-書き込みごとにディスク I/O が無駄になります:
+**Spectre / BHB ミティゲーション。** ミティゲーションが有効(デフォルト)の Linux 6.x カーネルでは、全 syscall が `clear_bhb_loop` 等の代金を払います。小ペイロード `-c 1` ワークロードではこれが kevy run で単独最大の CPU 消費です。カーネルコマンドラインで無効化:
 
 ```sh
-kevy --port 6004 --no-aof
-```
-
-スループットへの影響は書き込み比率次第。**テール遅延の下がり方は
-中央値より顕著**。
-
-## カーネル `mitigations=off`(Spectre / BHB)
-
-> **動かす前に全文を読むこと。これはセキュリティのトレードオフであり、
-> タダ飯ではありません。**
-
-Linux 6.x 以降、Spectre BHB 緩和が既定で有効です。すべての syscall が
-`clear_bhb_loop`(分岐履歴バッファを掃いてユーザー / カーネル境界
-越しの投機実行サイドチャネル漏洩を防ぐ小さなカーネル内ループ)を
-通過します。
-
-lx64 参照機(Intel Xeon 6、Linux 6.12)では、`clear_bhb_loop` は
-kevy server の `-c1` ワークロード中で**最大の CPU 消費者** ——
-**13.3%**、kevy のどのユーザー空間シンボルよりも多く食べます。`-c50`
-では syscall が op に対して薄められるため 約 5% に落ちます。
-
-### 失うもの
-
-`mitigations=off` でブートすると、**ハードウェア脆弱性緩和を全部** 切
-ります:Spectre v1/v2/BHB、Meltdown、MDS、TAA、L1TF、retbleed など
-全部。**許容できる状況** は以下のみ:
-- 単一テナント機(カーネルを自分で握り、信頼できないコードが動かない)
-- ネットワーク L3 で隔離(または信頼できるゲートウェイの背後)
-- ベンチ / テスト機
-
-**やってはいけない場所**:マルチテナントホスト、共有 CI ランナー、
-信頼できないユーザーコード(ワイヤ越しの Lua eval、第三者プラグイン
-読み込みなど)を扱う機械。
-
-### 適用方法
-
-ブートローダのカーネル cmdline(例: `/etc/default/grub` の
-`GRUB_CMDLINE_LINUX_DEFAULT`)に `mitigations=off` を足して再生成:
-
-```sh
-# Debian / Ubuntu
-sudo update-grub
-sudo reboot
-```
-
-再起動後に確認:
-
-```sh
+# GRUB_CMDLINE_LINUX_DEFAULT に `mitigations=off` を追加、その後:
+sudo update-grub && sudo reboot
 cat /proc/cmdline | grep mitigations
-# ... mitigations=off ...
-
-cat /sys/devices/system/cpu/vulnerabilities/* | head
-# ... "Vulnerable" または "Mitigation: ..." が無効化されているはず
 ```
 
-### 実測効果
+は untrusted コードが走らない単一テナントマシンでだけ受け入れられます(ワイヤから来る Lua なし、サードパーティプラグインなし、マルチテナントコンテナなし)。マルチテナントホスト、共有 CI ランナー、untrusted ユーザーコードを処理する任意のものには適用しないでください。利得は `-c 1` で +10–15% 範囲、ワークロードがパイプライニングするほど縮みます。
 
-lx64 参照機で `mitigations=off` 適用後の予測スループット:
+**`.text` セグメントのヒュージページ。** kevy は自分のコードセグメントに `madvise(MADV_HUGEPAGE)` を呼べます。これでカーネルが kevy バイナリの命令を 4 KiB ではなく 2 MiB ページで裏付けます。利得はホット dispatch ループの iTLB フットプリントが小さくなることです。ランタイムコストは事実上ゼロで、`/sys/kernel/mm/transparent_hugepage/enabled` が `always` または `madvise` の Linux ホストでは有効にする価値があります。トレードオフは起動時の `madvise` 呼び出し 1 回分の小さなコストだけです。`mitigations=off` とは違ってセキュリティのトレードオフはありません。
 
-| ワークロード | Rust client -c1 | C `redis-benchmark` -c1 |
-|--------------|-----------------|--------------------------|
-| 前           | ~65 k ops/s     | ~67 k ops/s              |
-| 後(予測)   | ~75 k ops/s     | ~78 k ops/s              |
+## プロファイリング
 
-(数字はカーネル / CPU 依存。AMD Zen 3+ と Intel Xeon BHB と
-ARM N1/N2 ではコストが異なります。**自分のハードウェアで計測のこと**。)
-
-## netfilter / iptables ルールをカラにする(大きいが要注意)
-
-Linux カーネルは syscall ごとに netfilter / nftables フックを通します
-—— `tcp_sendmsg`、`tcp_recvmsg`、`__dev_queue_xmit`、**loopback も含めて**。
-ルール集が複雑なとき(docker、libvirt、fail2ban、ufw それぞれ 50-300
-ルール)、累積オーバーヘッドは巨大です。
-
-lx64 参照機で実測(Linux 6.12、`mitigations=off`、docker + libvirt
-+ Tailscale の典型的なルール ~500 本):
-
-| ワークロード     | ルール有り(既定)| ルール空      | Δ     |
-|------------------|------------------|---------------|-------|
-| C c1 SET         | 80.6 k           | **108.9 k**   | +35%  |
-| C c1 GET         | 80.0 k           | **108.3 k**   | +35%  |
-| Rust client c1   | ~77 k            | ~96 k         | +25%  |
-
-`mitigations=off` よりも大きい勝ち。
-
-### 失うもの
-
-`iptables -F` + `nft flush ruleset` でホスト上の**すべての**ファイア
-ウォール / NAT ルールが消えます。その結果:
-
-- **docker のポートフォワーディングが壊れる**(iptables NAT に依存)
-- **libvirt VM が NAT を失う**(default virbr0 → eth0 の MASQUERADE)
-- **Tailscale / WireGuard** の allow-list が消える
-- **ufw / fail2ban / firewalld** がバイパスされる —— インターネット
-  に直接さらされているホストは入力トラフィックがフィルタされなくなる
-
-### 許容できる場面
-
-- 専用 kevy ホストで、ファイアウォールが AWS SG / GCP firewall /
-  オンプレ境界で行われている VPC 内
-- すべてのサービスが同一マシン内で UNIX socket / loopback だけで通信
-  するベアメタル
-- ベンチ / 開発機
-
-### NG な場面
-
-- ハードウェアファイアウォールなしでインターネットに直接さらされている
-- マルチテナント
-- docker / podman に他人のワークロードが乗っている
-
-### 適用とロールバック
+実シンボルに解決される `perf record` フレームグラフのためには、`release-perf` プロファイルでビルドしてください — 最適化レベルは `release` と同じで、デバッグ行テーブルが残ります:
 
 ```sh
-# 先にバックアップ
-nft list ruleset > /tmp/nft-backup.nft
-iptables-save > /tmp/iptables-backup.rules
+cargo build --profile release-perf
+./target/release-perf/kevy --port 6004 --threads 1 &
+KEVY_PID=$!
 
-# 空にする
-nft flush ruleset
-iptables -F
-iptables -X
+perf record -F 999 -p $KEVY_PID -g --call-graph=fp -- sleep 30
+perf report --stdio | head -60
 
-# (kevy はそのまま速くなる; 他のサービスは自分で確認)
-
-# 必要時に戻す(例: docker を再起動する前)
-iptables-restore < /tmp/iptables-backup.rules
-nft -f /tmp/nft-backup.nft  # xtables-compat の警告は無害
+# インライン展開シンボルの生アドレスを解決:
+addr2line -e ./target/release-perf/kevy -f -i 0x<addr>
 ```
 
-より安全な代替: **ルールは残したまま kevy ポートだけ早期 ACCEPT**:
+標準 `release` プロファイルは行テーブルを strip するので、`perf` は生アドレスを返してシンボルなし、`addr2line` は `??` を返します。`release` バイナリをプロファイルしないでください。まず `release-perf` でリビルドを。
 
-```sh
-iptables -I INPUT 1 -p tcp --dport 6004 -j ACCEPT
-iptables -I OUTPUT 1 -p tcp --sport 6004 -j ACCEPT
-```
+`clear_bhb_loop` 等のカーネル側コストをシンボル単位で帰属させるには、`fp` の代わりに `--call-graph=dwarf` でキャプチャし、同じ `addr2line` フローを使ってください。dwarf アンワインダは遅いですが syscall 境界を越えて正しく展開します。
 
-+35% の半分くらいを回収しつつ、ファイアウォールの姿勢は維持できます。
+## トレードオフ
 
-## Profile-guided optimization(PGO)
+| ノブ | コスト | 買えるもの |
+|------|-------|------|
+| `--threads N`(上げる) | N > ワークロード並列なら遊休 busy-poll シャードに無駄な CPU | 同時クライアント容量増 |
+| `--threads N`(下げる) | クロスシャードホップ税 1 シャード分回避 | スパースコネクションでの無駄 CPU 減 |
+| `--accept-shards K` | リスナー集中。クライアントが生 `connect` するならエントリポイントが減る | accept する各シャード上で iter ごとのオーバーヘッドが多コネクション間で分摊 |
+| `KEVY_IO_URING=1`(強制) | seccomp で io_uring がブロックされていればサーバー起動拒否 | 硬化ホストでの epoll への無言劣化なし |
+| `KEVY_IO_URING=0`(epoll 強制) | io_uring の op あたり節約を諦める | 再現可能な epoll ベースライン。カーネルリグレッション回避 |
+| `appendfsync always` | 全書き込みが `fsync` でブロック | データロスゼロの耐久性 |
+| `appendfsync no` | データロス窓 = ページキャッシュ flush 間隔 | 最速の書き込みパス |
+| `--no-aof` | 永続化まったくなし | ディスク I/O 最小化。レプリカ/キャッシュ用途 |
+| `maxmemory` 設定 | 書き込みが失敗(`noeviction`)またはエビクト(`allkeys-*`)し得る | メモリフットプリント有界化 |
+| `maxmemory-samples` 上げる | エビクションごとの CPU コスト | 近似 LRU/LFU の犠牲者選択が改善 |
+| Unix-domain socket | ローカル限定。ファイルシステム権限のセキュリティモデル | TCP ループバックスタックをスキップ |
+| `mitigations=off` | Spectre / Meltdown / MDS 等のミティゲーション全 off | syscall パス税を取り戻す |
+| `.text` への `MADV_HUGEPAGE` | 意味のあるコストなし | dispatch ループの iTLB フットプリント縮小 |
+| `release-perf` ビルド | バイナリが大きくなる(デバッグ行テーブル) | `perf` がシンボル解決 |
 
-ワークロード固定のデプロイ(read/write 比、コマンド分布、接続数が
-判っている)では PGO がランタイムプロファイルを使ってバイナリを
-最適化できます。lx64 で 1-10% を実測; `drain_inbound` とディスパッチ
-ループで最も大きい。
+## FAQ
 
-```sh
-# Step 1: 計装ビルド
-RUSTFLAGS="-Cprofile-generate=/tmp/pgo" cargo build --release
+**`--accept-shards` は常に設定すべきですか?**
 
-# Step 2: 代表的ワークロードを走らせて profile 収集
-LLVM_PROFILE_FILE=/tmp/pgo/kevy-%m_%p.profraw \
-  ./target/release/kevy --port 6004 --no-aof &
-# 別シェルで実本番形状のワークロードを ~30 秒
-kill %1
-sleep 3  # profile data flush
+いいえ。このノブは conns/shards が低く busy-poll body が分摊できないスパースコネクション用です。デンスコネクション(例 1000 クライアント × 10 シャード = 100 conns/shard)ではデフォルト — 全シャードが accept — が正しいです。リスナーを均等に広げると accept 側競合が減るからです。`ceil(conns / 20)` は実際にスパースコネクションのケースになっているときだけ適用してください。
 
-# Step 3: merge
-llvm_profdata=$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata
-$llvm_profdata merge -o /tmp/pgo/merged.profdata /tmp/pgo/*.profraw
+**io_uring は常に epoll より速いですか?**
 
-# Step 4: 再ビルド
-cargo clean
-RUSTFLAGS="-Cprofile-use=/tmp/pgo/merged.profdata" cargo build --release
-```
+Linux ≥ 5.19 で投入をバッチするワークロードでは、はい、目に見えてです。古いカーネル、`io_uring_setup` をブロックする seccomp フィルタ、バッチ機会のない op ごと 1 syscall に支配されたワークロードでは差が縮みます。自動検出が正しいデフォルトです。実測の理由か、無言にフォールバックせず大きく失敗させるべき硬化デプロイがある場合だけ上書きしてください。
 
-`llvm-profdata` を取るには `rustup component add llvm-tools-preview`
-が必要。merged.profdata は約 70 KB で、ワークロード形状が変わらない
-限り同じ profile を使い回せます。
+**`appendfsync` の本番スイートスポットは?**
 
-PGO はアップストリームのリリースには**入れていません** —— ワーク
-ロードに紐づくため。1-10% を気にしないユーザーが大多数; 気にするデプロイ
-は上記レシピで自分で焼いてください。
+ほぼ全員 `everysec`。データロスを 1 秒に有界化し、`fsync` をホットパスから外し、テール遅延への影響はほぼゼロです。本当にゼロデータロスが必要な耐久性ストーリーがあるときだけ `always`(その時 NVMe `fsync` 遅延がテール遅延を律速します)。AOF がウォームリスタートのためだけに存在する純粋キャッシュにのみ `no`。
 
-## `io_uring` SQPOLL — 実測で却下
+**`MADV_HUGEPAGE` はいつ必要ですか?**
 
-カーネルが専用スレッドで io_uring 投入キューを polling —— op 毎の
-`io_uring_enter` syscall を消します。
+`perf` がホット dispatch ループ上で iTLB ミスを示すとき、あるいはホストの `/sys/kernel/mm/transparent_hugepage/enabled` が `madvise` のとき(その場合は他に kevy を opt-in させるものがありません)。THP がそもそも有効な Linux ホストではコストなしのノブなので、デフォルト姿勢は「on のままにしておく」です。macOS / BSD には等価物がありません。
 
-ワイヤレベルの実装は `kevy_uring::IoUring::new_sqpoll` にありますが
-**シャード reactor には接続していません**。kevy の thread-per-core
-配置との組み合わせは推奨しません。ring 1 つに付きカーネル poll
-スレッドが 1 つ立つので、N シャード = N 個の 100% スピンする
-カーネルスレッドが シャードスレッドと同じコアを取り合います。
-lx64 参照機(10 シャード / 16 コア)で -c1 と -c50 ともに
-**2–15× 回帰** を実測しました。
+**`perf` レポートが生アドレスばかりです。何を間違えましたか?**
 
-SQPOLL は単一スレッド reactor + poll スレッド用の余剰コアがある
-構成に向いた設計です。kevy の per-core 設計はすでに CPU を使い
-切っているため、カーネル poll スレッドを足すと CPU が半分になり
-ます。詳細は `bench/PERF-ATTACK-LOG-2026-06-20.md` の D5。
-
-## もう効かないこと
-
-- `taskset` で単一コアに絞る: io_uring が並列性を失い、shared-nothing
-  シャード配置のほうが速い
-- THP を無効化: kevy のアロケータパターンに目に見える効果なし
-- `numactl --interleave`: 多 socket でしか意味なし。lx64 は単一 socket
-- slowlog を無効化: 既定でオフ(`slower-than-micros = -1`)
-
-## 関連
-
-- [`bench/PERF-PROFILE-2026-06-20.md`](../../bench/PERF-PROFILE-2026-06-20.md) —— このツマミ一覧を導いたフレームグラフ診断
-- [`bench/PERF-ATTACK-LOG-2026-06-20.md`](../../bench/PERF-ATTACK-LOG-2026-06-20.md) —— ツマミ毎の実測ログ
-- [`bench/REPORT.md`](../../bench/REPORT.md) —— ベンチ方法論
+`cargo build --release` バイナリをプロファイルしました。標準 release プロファイルはデバッグ行テーブルを strip するので、`perf` と `addr2line` には解決対象がありません。`cargo build --profile release-perf` でリビルドして再記録してください。

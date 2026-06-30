@@ -1,271 +1,198 @@
-# Primary-replica replication + the read/write-split client (v1.18 / v3-cluster Phase 1)
+# Replication
 
-kevy v1.18 ships the v3-cluster **Phase 1 functional core**: a kevy node can
-run as a primary that streams every applied mutation to N read replicas, or as
-a replica that connects to a primary and mirrors its keyspace. A new client
-crate, `kevy-cluster-rw`, splits writes to the primary and round-robins reads
-across replicas.
+How kevy streams writes from a primary to one or more replicas, how to fail over by hand or by quorum, and how an embedded process can subscribe to the same stream as a read replica.
 
-**Anti-scope reminder** (locked in the plan; do **not** ask for these in v1.18
-issues):
+## When you need this
 
-- multi-master / sharded-multi-master — only one writer per scope.
-- cross-DC active-active / CRDTs.
-- Raft / strong-log replication.
-- online resharding / gossip discovery — peer list is operator-declared.
-- AUTH / TLS — permanently out of scope for kevy.
-- chain replication (replica-of-replica) — the dispatch-without-emit gate is
-  defensive against the misconfig but the wire shape only supports one hop.
+Reach for replication when one of these is true:
 
-Automatic quorum failover (`kevy-elect`) is Phase 1.5, **not** in v1.18.
-Manual promote via `REPLICAOF NO ONE` is the v1.18 failover surface.
+- **Read fan-out.** A single primary takes every write; one or more replicas absorb the read load and round-robin behind the [`kevy-cluster-rw`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-cluster-rw) client.
+- **HA failover.** You want the surviving replicas to elect a new primary automatically when the current one goes away. Add [`kevy-elect`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-elect) for quorum-based promotion; otherwise promote by hand with `REPLICAOF NO ONE`.
+- **Embed-as-replica.** An application uses [`kevy-embedded`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded) as an in-process keyspace but wants the source of truth to live on a `kevy` server. The embed mirrors the primary in-memory and serves reads with zero network round-trip; writes are rejected locally and must be sent to the primary.
 
-## Server side
+If you only run one `kevy` node, you do not need this doc. If you need cross-DC active-active, gossip discovery, online resharding, Raft, AUTH, or TLS, kevy will never give them to you — pick a different system.
 
-### Primary
+## Core idea
+
+A primary `kevy` opens a dedicated replication listener per shard. Every applied mutation is encoded as a RESP envelope (`*2\r\n:<offset>\r\n<argv>`) with a monotonically increasing 64-bit offset and pushed into a per-shard bounded ring backlog. Each connected replica streams from its last-acked offset; if the requested offset has aged out of the backlog, the primary in-line-ships a snapshot of that shard's keyspace, then resumes live streaming with no gap. A replica may retarget at runtime with `REPLICAOF host port`, and demote itself with `REPLICAOF NO ONE`. Chain replication (replica-of-replica) is not supported on the wire and is rejected defensively in the apply path.
+
+```
+                  +-----------------+
+   writes ──────► |    primary      |
+                  |  shard 0..N-1   |
+                  |  port_base + i  |
+                  +--------+--------+
+                           │ per-shard RESP stream (offset, argv)
+            ┌──────────────┼──────────────┐
+            ▼              ▼              ▼
+       +---------+    +---------+    +---------+
+       | replica |    | replica |    | embed   |
+       |   A     |    |   B     |    | (in-proc|
+       |  reads  |    |  reads  |    |  reader)|
+       +---------+    +---------+    +---------+
+```
+
+The same replication stream feeds three kinds of subscribers: a full `kevy` server running as a replica, an embedded `kevy-embedded` `Store` opened in replica mode, and (transitively) the quorum elector that watches everyone's `repl_offset` for failover decisions.
+
+## Worked example
+
+The example below brings up one primary, one replica, retargets the replica at runtime, probes role, and attaches an in-process embedded reader to the same primary.
+
+### 1. Primary `kevy.toml`
 
 ```toml
-# kevy.toml
 [replication]
-role = "primary"
-listen_port_base = 16004      # shard i binds replication on this + i
+role             = "primary"
+listen_port_base = 16004        # shard i binds replication on listen_port_base + i
 replication_buffer_size = 268435456   # 256 MiB ring backlog per shard
-reconnect_window_ms = 60000   # keep a slot for a replica's offset this long
+reconnect_window_ms     = 60000       # how long to hold a slot for a reconnecting replica
 ```
 
-Shard `i` binds a dedicated replication TCP listener at `listen_port_base + i`
-(per Issue Ledger I2 — mirrors the per-shard cluster listener pattern). Each
-applied write is encoded as a RESP envelope (`*2\r\n:<offset>\r\n<argv>`) and
-pushed into a per-shard bounded ring backlog; the reactor's pump streams those
-frames out to every connected replica on each iteration.
+Start it:
 
-The protocol is RESP3-extended ([`crates/kevy-replicate/docs/wire.md`]). The
-offset is `i64`-encoded; at 10 M writes/s the i64::MAX cap is ≈ 30 000 years
-out.
+```sh
+kevy --config /etc/kevy/primary.toml --port 6004
+```
 
-### Replica
+Shard 0 of the primary now accepts RESP client traffic on `:6004` and replication connections on `:16004`.
+
+### 2. Replica `kevy.toml`
 
 ```toml
 [replication]
-role = "replica"
-upstream = "primary.example:16004"    # primary's listen_port_base
+role     = "replica"
+upstream = "primary.internal:16004"   # the primary's listen_port_base
 ```
 
-When kevy starts with `role = "replica"`, the server spawns one **runner
-thread** per local shard. Runner `i` opens a blocking TCP connection to
-`(upstream_host, upstream_port_base + i)`, sends the handshake
-(`REPLICATE FROM <offset> ID <replica_id>`), reads `+ACK <offset>`, then
-loops on the wire stream. Each `ReplicaEvent` (live frame, or one of
-`SnapshotBegin` / `SnapshotChunk` / `SnapshotEnd`) is forwarded over an MPSC
-channel to the matching shard's reactor thread; the shard drains the channel
-once per tick and applies via the usual dispatch path inside a
-`ReplicatedApplyGuard` scope.
+Start it on a second host:
 
-The guard suppresses the local `ReplicationSource::push_mutation` for the
-duration of the apply — without it, a replica that also had a downstream
-listener installed would re-emit every applied frame and double-count
-offsets. v1.18 forbids chain replication; the gate is defensive.
+```sh
+kevy --config /etc/kevy/replica.toml --port 6004
+```
 
-Snapshot ship: if the replica's requested `from_offset` is no longer in the
-primary's backlog (TooOld), the primary in-line-serializes the shard's
-keyspace via `kevy_persist::write_snapshot_to`, prefixes with
-`+SNAPSHOT\r\n`, streams `$<chunk>\r\n` bulks, and ends with
-`+SNAPSHOT_END <ack_offset>\r\n`. The replica accumulates chunks, calls
-`kevy_persist::load_snapshot_from` into its local `Store`, then continues at
-`ack_offset` for live frames with no gap.
+Each local shard opens a runner thread, connects to `(upstream_host, upstream_port_base + shard_index)`, handshakes with `REPLICATE FROM <offset> ID <replica_id>`, reads `+ACK <offset>`, then streams frames into the shard's apply path inside a guard that suppresses local re-emission.
 
-## Commands
+### 3. Retarget the replica at runtime
 
-| command | effect |
-|---|---|
-| `ROLE` | `master <offset> []` when no upstream is active, `slave <host> <port> connect 0` when running as a replica. Live state from `REPLICAOF` wins over static config. |
-| `INFO replication` | role / connected_slaves / master_repl_offset (master) or master_host / master_port / master_link_status (replica). |
-| `REPLICAOF host port` (alias `SLAVEOF`) | Stop any in-flight runner fleet, parse + resolve the new upstream, spawn fresh runners. Replies `+OK`. |
-| `REPLICAOF NO ONE` | Stop every runner; demote to standalone (the local store is **not** wiped — operator's choice whether to FLUSH before promoting). |
-| `CLUSTER NODES` | The answering node's role flag reflects live replication state (`myself,master` or `myself,slave`). |
+```sh
+redis-cli -p 6004 REPLICAOF new-primary.internal 16004
+# +OK
+```
 
-## Client side — `kevy-cluster-rw::ReadWriteClient`
+The replica stops its runner fleet (sockets are shut down so blocked reads unblock), parses the new upstream, and spawns new runners. The local store is **not** wiped — frames from the new primary land on top of the existing data. Call `FLUSHALL` first if you want a clean replay.
+
+### 4. Promote a replica by hand
+
+```sh
+redis-cli -p 6004 REPLICAOF NO ONE
+# +OK
+```
+
+All runner threads stop and the effective role flips to `master`. Local data stays exactly where the last applied frame left it. To accept downstream replicas, you must also edit the config (`role = "primary"` + `listen_port_base`) and restart — the runtime `REPLICAOF NO ONE` does not bind a downstream listener.
+
+### 5. Probe the role
+
+```sh
+redis-cli -p 6004 ROLE
+# 1) "master"
+# 2) (integer) 12345678
+# 3) 1) 1) "10.0.0.21"
+#       2) (integer) 6004
+#       3) (integer) 12345670
+
+redis-cli -p 6004 INFO replication
+# role:master
+# connected_slaves:1
+# master_repl_offset:12345678
+# slave0:ip=10.0.0.21,port=6004,offset=12345670
+```
+
+Live runtime state from `REPLICAOF` always wins over the static config in the reply.
+
+### 6. Embed-as-replica (one-liner)
+
+An application can join the same replication stream in-process via [`kevy-embedded`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded):
 
 ```rust
-use kevy_cluster_rw::ReadWriteClient;
+use kevy_embedded::Store;
 
-let mut client = ReadWriteClient::connect(
-    ("primary.local", 6004),
-    &[("replica1.local", 6004), ("replica2.local", 6004)],
-)?;
+let store = Store::open_replica("primary.internal:16004")?;
+assert!(store.is_replica());
 
-// Auto-routed: SET goes to primary, GET round-robins replicas.
-client.request(&[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()])?;
-let reply = client.request(&[b"GET".to_vec(), b"k".to_vec()])?;
+// Local writes are rejected with READONLY.
+assert!(store.set(b"local", b"nope").is_err());
 
-// READCONSISTENT — force the read to primary (fresh-write-followed-by-read).
-let reply = client.request_read(
-    &[b"GET".to_vec(), b"k".to_vec()],
-    /* consistent = */ true,
-)?;
+// Reads pay zero network round-trip — the keyspace lives in this process.
+if let Some(v) = store.get(b"hello")? {
+    println!("{:?}", v);
+}
 ```
 
-v1.18 takes the seed list explicitly — there is no automatic CLUSTER NODES
-walk for replica discovery. (A follow-up after release can add an
-auto-discover overload for cluster-mode deployments where the operator wants
-the client to find replicas itself.)
+The embed connects to the same `listen_port_base` shard, applies frames as they arrive, and serves reads directly from its local arena. A runnable copy lives at [`crates/kevy-embedded/examples/replica.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded/examples/replica.rs).
 
-Write/read classification is in [`kevy_cluster_rw::is_write_verb`]. The table
-mirrors `kevy::cmd::is_write_verb` server-side; the duplication is on purpose
-(this crate is downstream of `kevy-resp-client` only — it never depends on
-the server crate).
+## Knobs
 
-## Operating recipes
+Server-side TOML keys under `[replication]`:
 
-### Add a fresh replica
-
-1. Start the new kevy with `[replication] role = "replica"` and
-   `upstream = "primary:16004"`.
-2. The runner connects with `from_offset = 0`. The primary's backlog has long
-   evicted offset 0 → TooOld → snapshot ship.
-3. After the snapshot loads, the runner resumes at `ack_offset` and lives on
-   live frames.
-
-### Re-target a running replica
-
-```
-REPLICAOF new-primary.example 16004
-```
-
-Stops the old runner fleet (sockets are `Shutdown::Both`'d so any in-flight
-read unblocks), parses the new upstream, spawns new runners. Replies `+OK`
-within milliseconds. The replica's local store is **kept** — frames from the
-new primary land on top. If the operator wants a clean replay, follow with
-`FLUSHALL` before or after.
-
-### Manual promote (replica → primary)
-
-```
-REPLICAOF NO ONE
-```
-
-Stops every runner. Effective role flips to `master`. The local store remains
-in whatever state the last applied frame left it. To accept downstream
-replicas, also update the config (`role = "primary"` + `listen_port_base`)
-and restart — v1.18 does **not** install a downstream listener dynamically.
-
-## Automatic failover via `kevy-elect` (v1.19+ / Phase 1.5)
-
-v1.19 adds quorum-based primary failover on top of v1.18's manual
-`REPLICAOF`. Detection is by heartbeat (`HB(epoch, node_id, role,
-repl_offset)`) every `hb_interval_ms` (default 200 ms); a peer is flagged
-DOWN after `down_after_ms` (default 5 s) without a heartbeat; the alive
-replica with the highest `repl_offset` (lowest `node_id` on tie) broadcasts
-`OFFER(new_epoch, candidate_id, repl_offset)`; on collecting `N/2 + 1`
-`ACCEPT`s it promotes itself via the existing `REPLICAOF NO ONE` path and
-broadcasts `ANNOUNCE(epoch, new_primary_id, new_primary_addr)`. Peers
-receiving `ANNOUNCE` retarget their `kevy-replicate` runner at the new
-primary. Full spec: [`crates/kevy-elect/docs/protocol.md`](../crates/kevy-elect/docs/protocol.md).
-
-### Config
-
-```toml
-[cluster]
-node_id = "primary-east"              # this node's stable id (≤ 32 B ASCII)
-elect_port_base = 16104               # control-plane TCP port (shard 0 = base + 0)
-peers = "primary-east@10.0.0.1:16104,replica-1@10.0.0.2:16104,replica-2@10.0.0.3:16104"
-```
-
-The `peers` string lists EVERY node in the cluster including this one — the
-elector filters self by `node_id` at run-time. Empty `peers` ⇒ kevy-elect is
-dormant (v1.18-era configs need no edit).
-
-### Quorum and fault tolerance
-
-| N | quorum | tolerates |
+| key | default | meaning |
 |---|---|---|
-| 3 | 2 | 1 down |
-| 5 | 3 | 2 down |
-| 7 | 4 | 3 down |
-| **2** | **2** | **0 down — degenerate, intentionally locked** |
+| `role` | `"primary"` | `"primary"` opens a replication listener; `"replica"` spawns runners that pull from `upstream`. |
+| `listen_port_base` | `16004` (primary) | Shard `i` of the primary binds replication on `listen_port_base + i`. Replicas connect to the same offset. |
+| `upstream` | unset | Replica-only. `host:port` of the primary's `listen_port_base`. Each local shard targets `(host, port + shard_index)`. |
+| `replication_buffer_size` | `268435456` (256 MiB) | Per-shard ring backlog in bytes. Reconnects within this window stay on the live path; older offsets trigger snapshot ship. |
+| `reconnect_window_ms` | `60000` | How long the primary keeps a slot reserved for a disconnected replica's offset before reclaiming it. |
 
-**N=2 warning.** Quorum is `N/2 + 1`, so N=2 needs both nodes alive: either
-going down means the survivor cannot reach quorum and **stays read-only**
-indefinitely (no writes accepted, no promotion). This is intentional — the
-alternative (single-node quorum) would risk a split-brain double-write on
-partition. The config linter warns at startup when `peers` lists exactly two
-entries. **Recommendation: N ≥ 3** for any deployment that needs automatic
-failover. N=2 is acceptable only when "either down = locked" is preferable to
-"both down = locked" (extremely rare).
+When [`kevy-elect`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-elect) is configured, the `[cluster]` block adds quorum knobs:
 
-### Split-brain protection
-
-Quorum semantics protect against split-brain by construction: a partitioned
-minority cannot reach `N/2 + 1` ACCEPTs, so it cannot promote a new primary.
-Once a partition heals, the minority side sees a higher epoch from the
-majority side and demotes cleanly — at the cost of dropping any writes that
-landed on the minority while partitioned. This is the durability story
-v3-cluster Phase 1.5 ships: **writes have guaranteed durability only on the
-majority side of any partition.** Use `READCONSISTENT` to avoid stale reads;
-the write side cannot retroactively repair minority writes.
-
-### Tunables
-
-| param | default | what it does |
+| key | default | meaning |
 |---|---|---|
-| `hb_interval_ms` | 200 | period between outbound HBs per peer |
-| `down_after_ms` | 5_000 | mark a peer DOWN after this many ms without HB |
-| `election_timeout_ms` | 3_000 | candidate waits this long for quorum ACCEPT |
-| `election_backoff_ms` | 1_000–5_000 | random jitter on failed-election backoff |
+| `node_id` | unset | Stable id of this node (≤ 32 B ASCII). Used as the tie-breaker in elections. |
+| `elect_port_base` | unset | Control-plane TCP port for heartbeats and ballots. Shard 0 binds on `elect_port_base + 0`. |
+| `peers` | empty | `id@host:port,…` for every node in the cluster including self. Empty means the elector is dormant. |
+| `hb_interval_ms` | `200` | Period between outbound heartbeats per peer. |
+| `down_after_ms` | `5000` | A peer is flagged DOWN after this many ms without a heartbeat. |
+| `election_timeout_ms` | `3000` | A candidate waits this long for quorum `ACCEPT`s. |
 
-Tune `hb_interval` × `down_after` to your RTT. Defaults assume a single LAN.
-A WAN deployment (which is anti-scope for v1.19 — kevy-elect is single-DC
-only) would need higher values to avoid spurious elections during transient
-WAN blips.
+Quorum is `N/2 + 1`. N=2 needs both nodes alive (either down locks the survivor read-only); the linter warns and any deployment that needs failover should use N ≥ 3.
 
-### Backlog tuning
+## Trade-offs and limits
 
-`replication_buffer_size` is the per-shard ring byte budget. Sizing rule of
-thumb:
+Replication is **asynchronous**. The primary commits and replies before it knows any replica has applied the frame; replicas trail by the time it takes a frame to ride the wire and drain the per-shard channel into the apply path. There is no `WAIT`-style barrier and no synchronous mode.
 
-```
-backlog_size ≈ peak_writes_per_sec * avg_argv_bytes * reconnect_window_seconds
-```
+| concern | answer |
+|---|---|
+| Write durability | Acknowledged by the primary as soon as it lands in the local store and the backlog ring. Replicas catch up afterwards. |
+| Read consistency | Replicas may lag. Send `request_read(…, consistent = true)` through `kevy-cluster-rw` to force a read at the primary when read-after-write matters. |
+| Replica falls behind | If the reconnect needs an offset that has aged out of the ring, the primary in-line-ships a snapshot of that shard and resumes live frames at the snapshot's end offset — no gap, no operator action. |
+| Sizing the backlog | `replication_buffer_size ≈ peak_writes_per_sec × avg_argv_bytes × reconnect_window_seconds`. Oversize is harmless; undersize falls back to snapshot ship. |
+| What fails over | Writes to the new primary, automatically when `kevy-elect` is configured, by hand otherwise. Existing `kevy-cluster-rw` clients re-route writes once they learn the new primary; in-flight writes during the gap fail loudly. |
+| What does not fail over | Cross-DC traffic, gossip-discovered peers, online resharding, AUTH/TLS — kevy does not ship any of these. Single-DC only. |
+| Chain replication | Not on the wire. A replica's apply path will not re-emit downstream; a misconfiguration is rejected defensively. |
+| Minority writes during partition | Lost. A partitioned minority cannot reach quorum, cannot promote, and when the partition heals it demotes and accepts the majority's history. Use the consistent-read path on the write side to avoid stale reads. |
 
-For 200k writes/sec at 40 B average argv and a 60 s window, 480 MiB per shard
-keeps every reconnect on the backlog path. Smaller backlogs are fine —
-oversized ones fall back to snapshot ship cleanly.
+The wire format (live frame envelope, snapshot ship, handshake) is documented in [`crates/kevy-replicate/docs/wire.md`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-replicate/docs/wire.md) and [`crates/kevy-replicate/docs/snapshot.md`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-replicate/docs/snapshot.md). The elector's protocol is in [`crates/kevy-elect/docs/protocol.md`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-elect/docs/protocol.md).
 
-## Known v1.18 simplifications (tracked as follow-ups)
+## FAQ
 
-- **Background snapshot serialization** — *landed in v1.18*. The primary
-  freezes a COW `SnapshotView` (O(n) shallow clone — ns/entry) and hands
-  it to a worker thread that serializes off the reactor; chunks stream
-  back via channel. Reactor pause shrinks to the collect alone.
-- **Per-replica peer-addr** — *landed in v1.18*. The ROLE master reply
-  carries `(ip, port, offset)` per connected replica; `connected_slaves`
-  in `INFO replication` is derived from this list.
-- **Replication on io_uring** — *landed in v1.18*. The io_uring reactor's
-  tick path drives accept / read / write / pump for replicas; the throughput-
-  sensitive write side stays io_uring-native via short-writes + the
-  existing non-blocking drain. `KEVY_IO_URING=1` + replication runs and
-  matches the epoll reactor's perfgate numbers.
-- **CLUSTER NODES live-replica list** — a primary doesn't currently track
-  the client-side addresses of its connected replicas (the runner's REPLICATE
-  handshake carries only an id). Clients use `kevy-cluster-rw` with explicit
-  seeds instead.
-- **Auth / link encryption** — never (anti-scope).
+**How do I promote a replica?**
+By hand: connect to the replica and run `REPLICAOF NO ONE`. The effective role flips to `master` immediately, the local store is preserved, and writes are accepted. To accept downstream replicas, also update `role` and `listen_port_base` in the TOML and restart. Automatically: configure `kevy-elect` with `node_id`, `elect_port_base`, and a `peers` list on every node; the alive replica with the highest `repl_offset` wins on quorum.
 
-## Wire format references
+**Can a replica become a primary, and then back to a replica?**
+Yes. `REPLICAOF NO ONE` demotes the upstream link without touching data; a subsequent `REPLICAOF host port` re-attaches to a new primary. The local store is kept across both transitions. Call `FLUSHALL` first if you want a clean replay from the new upstream.
 
-- Live frame envelope: [`crates/kevy-replicate/docs/wire.md`].
-- Snapshot ship: [`crates/kevy-replicate/docs/snapshot.md`].
-- Handshake: `*5\r\n$9\r\nREPLICATE\r\n$4\r\nFROM\r\n$<n>\r\n<offset>\r\n$2\r\nID\r\n$<m>\r\n<replica_id>\r\n` → `+ACK <offset>\r\n`.
+**What's the data loss window?**
+The interval between "primary acks the client" and "every replica has applied the frame." Replication is asynchronous, so a primary that crashes after acking a write but before any replica has the frame loses that write. Sizing the gap is workload-dependent — on a single-DC LAN it is typically sub-millisecond. There is no synchronous mode; if you need durability across a power-off, pair replication with [`docs/persistence.md`](https://github.com/goliajp/kevy/blob/develop/docs/persistence.md) (AOF + RDB) on the primary.
+
+**Can I read from a replica?**
+Yes — that is the main reason to add one. Use [`kevy-cluster-rw::ReadWriteClient`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-cluster-rw) and it will send writes to the primary and round-robin reads across the replica seeds you pass in. When a read must observe the latest write, use the consistent-read path on the same client to force that read through the primary.
+
+**A replica fell too far behind — how do I recover it?**
+Do nothing. The primary detects that the replica's requested offset is no longer in the backlog ring, returns `TooOld`, in-line-ships a snapshot of the shard's keyspace via the same RESP wire connection, then resumes live frames at the snapshot's end offset. The replica swaps in the snapshot, applies the live tail, and is caught up. If you would rather rebuild from empty, stop the replica, delete its data directory, and restart — the runner will connect with `from_offset = 0` and snapshot-ship the whole keyspace.
 
 ## See also
 
-- [`docs/cluster.md`](cluster.md) — multi-shard exposure + the slot-routing
-  `ClusterClient`; orthogonal to (but composable with) replication.
-- [`docs/persistence.md`](persistence.md) — RDB / AOF; the snapshot path
-  reuses kevy-persist for the on-wire ship format.
-- `.claude/plans/2026-06-18-v3-cluster-plan.md` — the canonical execution
-  plan; row state reflects what's in this release.
-
-[`crates/kevy-replicate/docs/wire.md`]: ../crates/kevy-replicate/docs/wire.md
-[`crates/kevy-replicate/docs/snapshot.md`]: ../crates/kevy-replicate/docs/snapshot.md
-[`kevy_cluster_rw::is_write_verb`]: ../crates/kevy-cluster-rw/src/lib.rs
+- [`docs/cluster.md`](https://github.com/goliajp/kevy/blob/develop/docs/cluster.md) — multi-shard exposure and the slot-routing `ClusterClient`; orthogonal to replication and composable with it.
+- [`docs/persistence.md`](https://github.com/goliajp/kevy/blob/develop/docs/persistence.md) — RDB and AOF; the snapshot ship path reuses the same on-disk format on the wire.
+- [`crates/kevy-cluster-rw`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-cluster-rw) — the read/write-split client.
+- [`crates/kevy-elect`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-elect) — quorum failover.
+- [`crates/kevy-embedded`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded) — embed-as-replica `Store::open_replica`.

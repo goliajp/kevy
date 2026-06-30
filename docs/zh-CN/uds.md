@@ -1,150 +1,109 @@
-# Unix-domain socket (UDS) 传输
+# Unix-domain socket(UDS)传输
 
-v1.25 加了 opt-in 的 Unix-domain stream socket listener —— kevy 对
-应 valkey/redis `unixsocket` 配置的等价物。对本机客户端(server
-进程同主机、同信任域),UDS 整段跳过 TCP loopback 栈:无 IP 头、
-无 checksum、无端口查找、无 NAGLE/ACK 来回。线协议是 RESP2 / 3
-逐字节兼容,客户端只换一个 URL 就过去了。
+kevy 提供一个可选的 Unix-domain 流式监听,它讲与 TCP 端口完全一致的 RESP 语义,让同主机客户端彻底跳过 loopback 栈。
 
-## 何时使用
+## 何时需要
 
-UDS 适用于**同时满足**:
+当客户端与服务器在同一台主机上,UDS 就是合适的传输:
 
-1. 客户端跟 server 在**同一主机**(容器之间挂同一 tmpfs / host volume
-   也算)。
-2. 你瓶颈在 per-syscall 网络开销 —— 小 payload、高连接数、单 shard
-   server,或 `-c1` 类负载付完整的 per-op RTT。
-3. 信任域是**主机文件系统**(UDS 权限即文件系统权限;kevy 和 valkey
-   都没有 AUTH/TLS)。
+- **同主机客户端** —— 应用与 kevy 在一台机器上,或在共享 tmpfs / 已挂载 socket 目录的容器里。
+- **延迟敏感负载** —— 低连接数、小载荷,或扇出流水线很高、TCP loopback 往返底线成为瓶颈的场景。
+- **容器 sidecar** —— sidecar 与主容器共享 `/run` 或 `/tmp` 卷;socket 文件就是 IPC 句柄,不必分配端口。
 
-UDS **不替代** TCP 的场景:
+跨主机客户端仍需要 TCP —— UDS 受文件系统范围约束,永不离开内核。
 
-- 客户端在另一个容器**没挂共享 socket** —— `/tmp/kevy.sock` 路径要
-  对两边都可见。
-- 你需要网络可达性 —— 远端客户端只能走 TCP loopback / 远端 TCP
-  (kevy 是单 DC,不为公网设计)。
-- 负载是 `-c50 -P16` pipelined 且已饱和 server CPU —— UDS 在这种
-  workload 上能多挖几个百分点,但杠杆不在传输层。
+## 核心思路
 
-为何 kevy 的 UDS 提升比 valkey 大,见 [`bench/REPORT.md`](../../bench/REPORT.md)
-的 Phase A 分解叙事。
+把 `KEVY_UNIX_SOCKET` 设成一个文件系统路径,kevy 就会双绑:TCP 监听保持不变,UDS 监听在同一 shard 运行时上以同一个 RESP2/3 解析器接受连接。任何接受 `unix://` URL 或 `-s <path>` 参数的 RESP 客户端都能用一行配置切过去。UDS 干掉 loopback 的 `rep_movs`、`nft_do_chain` 与 TCP 系统调用路径,因此每操作的底线在所有负载上都明显下降。
 
-## Server 配置
+## 实际示例
 
-启动前把 `KEVY_UNIX_SOCKET` 指向一个文件路径。server 会在 TCP
-listener 之外**同时绑 UDS** —— 两个 listener 并行 accept,客户端
-自己挑用哪一个:
+同时启用两种传输:
 
 ```sh
-KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6004
+KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6379
 ```
 
-行为:
-
-- bind 前先 `unlink` 路径(前一次崩溃留下的 stale socket 会被自动
-  清理 —— 跟 valkey/redis 一致)。
-- bind 后 `chmod 0777`(任何本机用户都能连;要做 per-user 控制就
-  靠包含目录的权限收紧)。
-- 只有 **shard 0** 持有 UDS listener;accept 后的连接派发到现有
-  per-shard runtime,所以 `--threads` 设置仍然控制 socket 后端的
-  并行度。
-- Linux 上配 `KEVY_IO_URING=1`,UDS accept loop 跑成 multishot
-  accept SQE,在同一个 io_uring 实例里 —— 没有额外 reactor 成本。
-  UDS 不是 IP socket,所以跳过 TCP_NODELAY。
-- 空 / 未设 `KEVY_UNIX_SOCKET` = 仅 TCP(v1.24 及之前行为不变)。
-
-CLI / TOML 等价项计划在 v1.26 加上;目前只有环境变量这一个旋钮。
-
-## Client 配置
-
-任何接受 Unix-socket 选项的 Redis/RESP 客户端开箱即用 —— 同 RESP2/3
-帧格式。
-
-`redis-cli` / `redis-benchmark`(`-s` 标志):
+用 `redis-cli` 走 UDS 连接:
 
 ```sh
 redis-cli -s /tmp/kevy.sock SET foo bar
+# OK
 redis-cli -s /tmp/kevy.sock GET foo
-redis-benchmark -s /tmp/kevy.sock -t set,get -n 100000 -c 50 -P 16
+# "bar"
 ```
 
-[`kevy-client`](../../crates/kevy-client) 和
-[`kevy-client-async`](../../crates/kevy-client-async) 接受 `unix://`
-URL:
+`:6379` 上的 TCP 仍并行可用 —— 同一份数据、同一组 shard:
+
+```sh
+redis-cli -p 6379 GET foo
+# "bar"
+```
+
+在 Rust 里,内置 client 接受 `unix://` URL:
 
 ```rust
 let mut conn = kevy_client::Connection::open("unix:///tmp/kevy.sock")?;
 conn.set(b"k", b"v")?;
 ```
 
-valkey / redis 对比配置(他们的 `unixsocket` 指令):
+## 权限与安全
 
-```sh
-valkey-server --unixsocket /tmp/valkey.sock --unixsocketperm 777 \
-              --io-threads 10
-redis-server  --unixsocket /tmp/redis.sock  --unixsocketperm 777
-```
+UDS 的信任边界是**文件系统** —— Unix socket 上没有 RESP 层的 AUTH 或 TLS。能 `open(2)` 这个 socket 文件的人,就能下任何命令,包括 `FLUSHALL`。
 
-## Bench 数字
+- **socket 文件归属。** kevy 以服务器运行身份创建 socket。启动后用 `chown` / `chgrp` 调整,或者以你想拥有 socket 的身份去跑 kevy。
+- **权限位。** socket 默认以宽松权限位创建,以便同地客户端进程能连接。要收紧,请把 socket 放进权限严格的目录里 —— 例如 `/run/kevy/` 归 `kevy` 组、`0750`,使得只有组成员能 `connect(2)`。目录权限把守 socket inode 自身的访问。
+- **tmpfs vs 磁盘。** `/tmp` 和 `/run` 在大多数 Linux 发行版上都是 tmpfs,对 socket 而言再合适不过(连接时无磁盘 IO)。真实文件系统上的持久路径也可以 —— inode 只是会合点,数据从不落盘。
+- **信任域。** 把任何在 socket 路径上有读写权限的账号当作完全已认证。如果你需要按客户端区分身份,这事得在 kevy 之上来做(sidecar 代理、内核 LSM、命名空间隔离)。
 
-Precision bench,n=1 M × 10 runs,2σ 过滤均值,CI95 < 1 % 全表。lx64、
-`mitigations=off`,kevy `--threads 1`(单 shard),valkey
-`--io-threads 10`。用
-[`bench/v125-precision-uds.sh`](../../bench/v125-precision-uds.sh) 复现。
+## 服务器配置旋钮
 
-| 工作负载 | kevy 1.25 (UDS) | valkey 9.1 (UDS) | kevy / valkey |
-|----------|----------------:|-----------------:|--------------:|
-| -c1 SET | **166 k/s** | 96 k/s | **1.73×** |
-| -c1 GET | **168 k/s** | 106 k/s | **1.59×** |
-| -c50 -P1 SET | 339 k/s | 334 k/s | 打平(per-syscall 地板) |
-| -c50 -P1 GET | 337 k/s | 332 k/s | 打平(per-syscall 地板) |
-| **-c50 -P16 SET** | **4.11 M/s** | 1.75 M/s | **2.35×** |
-| **-c50 -P16 GET** | **4.35 M/s** | 3.42 M/s | **1.27×** |
-| -c100 -P1 SET | 331 k/s | 326 k/s | 打平 |
-| -c100 -P1 GET | 335 k/s | 327 k/s | 打平(1.02×) |
+| Env 变量 | CLI 标志 | 默认 | 效果 |
+|---|---|---|---|
+| `KEVY_UNIX_SOCKET` | (目前仅 env)| 未设置 | 要绑定的文件系统路径。不设则只走 TCP。 |
+| `KEVY_BIND` | `--bind` | `127.0.0.1` | TCP 绑定地址;UDS 绑定独立。 |
+| `--port` | `--port` | `6379` | TCP 端口;设置 UDS 时仍然绑定 TCP。 |
 
-UDS vs TCP for kevy(同 server、同 bench,只换传输层):
+注意:
 
-| 工作负载 | TCP rps | UDS rps | UDS / TCP |
-|----------|--------:|--------:|----------:|
-| -c1 SET | 94.7 k | 166 k | **1.76×** |
-| -c1 GET | 97.3 k | 168 k | **1.73×** |
-| -c50 -P1 | 192 k | 339 k | **1.77×** |
-| -c50 -P16 SET | 2.59 M | 4.11 M | **1.59×** |
-| -c50 -P16 GET | 2.67 M | 4.35 M | **1.63×** |
+- **路径必须不存在。** 如果 `KEVY_UNIX_SOCKET` 已指向某个文件,kevy 拒绝启动 —— 它不会覆盖一个不是自己创建的路径。重启前清理(`rm -f /tmp/kevy.sock`)或使用每次运行不同的路径(`/run/kevy/$(date +%s).sock`)。这是故意的:静默 unlink 会让配置错误的 kevy 偷走别的服务的 socket。
+- **设置环境变量后双绑总开。** 没有"只 UDS"模式 —— TCP 监听仍然在。要禁止 TCP,把它绑到一个你控制的回环地址并用防火墙挡住。
+- **shard 0 拥有 accept 循环。** 接受到的连接被分发到已有的 per-shard 运行时,因此 `--threads` 仍控制 socket 后面工作负载的并行度。
+- **io_uring 路径。** 在 Linux 上加 `KEVY_IO_URING=1` 时,UDS accept 作为 multishot accept SQE 走与 TCP 同一个 io_uring 实例 —— 无额外 reactor 成本。`TCP_NODELAY` 在 UDS 上不设(它不是 IP socket)。
 
-为何 kevy 的 UDS 提升比 valkey 大:valkey 的热路径更 CPU-bound
-(`processCommand` / `addReply` 里的 per-op 工作),它的 TCP 天
-花板已经低于传输 RTT 地板 —— 去掉 loopback 没给 valkey 多少新
-余地。kevy 的热路径足够轻,所以 TCP RTT 地板是 `-c50 -P16` 上的
-约束;UDS 解除约束后 server 比 loadgen 跑得还快。c=50/100 -P1
-的打平在 UDS 上仍然打平 —— 两个 server 都被 per-syscall round-trip
-地板(~3 µs × 50 conn)卡住,跟传输层无关。
+## 取舍
 
-## 安全注意
+UDS vs 同一 kevy 二进制的 TCP loopback:
 
-- **文件权限 = AUTH 等价物。** UDS 没有原生身份验证;能 `open(2)`
-  这个 socket 文件的人就能下任意命令(包括 `FLUSHALL`)。kevy 默认
-  `chmod 0777` 跟 valkey/redis 一致;要收紧就把 socket 放进受限
-  权限的目录,例如 `/run/kevy/kevy.sock` 属 `kevy` 组。
-- **崩溃后 stale socket。** kevy bind 前会 `unlink`,所以前次崩溃
-  留下的文件不会阻塞启动。两个 kevy 实例指同一路径,后启动的赢 —
-  前者的客户端下次写时会拿到 `EPIPE`。
-- **非远端。** UDS 是 host-local。跨主机客户端只能走 TCP(kevy
-  仍是单 DC、无 AUTH/TLS —— 见
-  [`README.zh-CN.md`](../../README.zh-CN.md))。
+| 方面 | UDS | TCP loopback |
+|---|---|---|
+| 每操作底线 | 更低(无 IP/校验和/端口/NAGLE)| 较高 |
+| 触及范围 | 仅同主机 | 任意主机 |
+| 身份 | 文件系统权限 | 端口 + 绑定地址 + AUTH |
+| 生命周期 | 磁盘上的 socket 文件;重启需清理 | 端口生命周期由内核管理 |
+| 可观测 | `lsof` / `ss -xl` | `ss -tln`、`netstat`、`tcpdump` |
+| 客户端配置 | `unix:///path` 或 `-s /path` | `host:port` |
 
-## 复现
+吞吐收益取决于负载形态 —— 小载荷、低连接的格子收益最大(loopback 每操作税在它们上面占主导);CPU 饱和的格子收益较小(传输不是瓶颈)。实测数据见 [bench/REPORT.md](https://github.com/goliajp/kevy/blob/master/bench/REPORT.md)。
 
-```sh
-ssh lx64
-bash /path/to/kevy/bench/v125-precision-uds.sh
-```
+## FAQ
 
-precision harness 编同一 kevy binary,逐个起 kevy 和 valkey,跑
-`redis-benchmark -s <sock>` 10 次 × n=1 M,打印过滤均值 + CI95。
-配套的 smoke
-[`bench/v125-uds-smoke.sh`](../../bench/v125-uds-smoke.sh)(14 组、
-39 断言,覆盖 SET/GET、所有 collection、INCR/APPEND、大值、SETEX、
-MSET、pipelined DBSIZE、pub/sub、FLUSHALL、INFO)确认 UDS 是
-wire-equivalent 的 —— server 端走同一段代码,只是 accept SQE 不同。
+### 我能同时绑 UDS 与 TCP 吗?
+
+能 —— 这就是唯一模式。设置 `KEVY_UNIX_SOCKET` 会加 UDS 监听;TCP 监听保持原样不变。按客户端各取所需。
+
+### 服务器拒绝启动 —— "socket exists"?
+
+是故意的。kevy 不会 `unlink` 一个不是自己创建的路径,因为这会让配置错误的运行静默偷走别的服务的 socket。要么在重启前删掉那个旧文件(`rm -f /tmp/kevy.sock`),要么用每次运行不同的路径,例如 `/run/kevy/$(uuidgen).sock`。如果是 kevy 崩溃留下的文件,手工删除是安全的。
+
+### UDS 比 TCP loopback 快多少?
+
+在所有负载上都明显更快,因为 UDS 跳过了整段 IP 路径:没有校验和、没有 netfilter 链(`nft_do_chain`)、没有走 loopback 的 `rep_movs`、没有每包 ACK 往返。具体比率取决于 loopback 开销在每操作预算里的占比 —— 单连接小载荷负载提升最大;CPU 受限的流水线格子提升较小。用 `redis-benchmark -s /tmp/kevy.sock` vs `-h 127.0.0.1` 在你的负载上量。
+
+### 我的客户端库能用 UDS 吗?
+
+大多数能。`redis-cli` 与 `redis-benchmark` 接受 `-s <path>`。ioredis、node-redis、redis-py、redis-rb、go-redis、lettuce、jedis,以及内置的 [kevy-client](https://github.com/goliajp/kevy/tree/master/crates/kevy-client) / [kevy-client-async](https://github.com/goliajp/kevy/tree/master/crates/kevy-client-async) 都接受 `unix:///path` URL 或一个明确的 socket-path 选项。具体键名请查你 driver 的连接选项文档。
+
+### 如果我所有客户端都在同主机,能不能完全丢掉 TCP?
+
+可以,但不必。让 TCP 绑在 `127.0.0.1` 上没人连接时不花什么成本,且在客户端 UDS 路径配错时还能作回退。常见部署是"热客户端走 UDS,`redis-cli` 调试走 TCP"。

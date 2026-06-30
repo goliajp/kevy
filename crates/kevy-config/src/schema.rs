@@ -520,10 +520,10 @@ pub struct Config {
     pub slowlog: SlowlogSection,
     /// `[cluster]` settings (single-node cluster mode).
     pub cluster: crate::cluster::ClusterSection,
-    /// `[lua]` settings (v1.27 server-side Lua scripting via the
-    /// kevy-lua bridge).
+    /// `[lua]` settings — server-side Lua scripting via the
+    /// `kevy-lua` bridge.
     pub lua: LuaSection,
-    /// `[replication]` settings (v3-cluster Phase 1 primary/replica).
+    /// `[replication]` settings — primary/replica streaming.
     pub replication: crate::replication::ReplicationSection,
     /// Path the config was loaded from (for `CONFIG REWRITE`). `None` =
     /// loaded from defaults only / from in-memory string.

@@ -1,4 +1,4 @@
-//! Replica runner for embed-as-read-replica (Phase 2 of v3-cluster).
+//! Replica runner for embed-as-read-replica.
 //!
 //! When `Config::replica_upstream = Some(...)` (or constructed via
 //! [`crate::Store::open_replica`]), the embed store spawns a single

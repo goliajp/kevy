@@ -19,9 +19,9 @@ missing too much; it's not a generic foundation, it's the OS-boundary
 piece of the kevy server.
 
 - **Sockets** — `tcp_listen` / `tcp_listen_reuseport` / `unix_listen`
-  (v1.25 — `AF_UNIX` stream, unlink-before-bind + `chmod 0777`,
-  mirroring valkey/redis), non-blocking I/O, `TCP_NODELAY`, owned fds
-  that close on drop.
+  (`AF_UNIX` stream, unlink-before-bind + `chmod 0777`, mirroring
+  valkey/redis), non-blocking I/O, `TCP_NODELAY`, owned fds that
+  close on drop.
 - **Readiness poller** — one API over **kqueue** (macOS) and **epoll** (Linux).
 - **Cross-thread `Waker`** — a self-pipe to wake a blocked poller.
 - Cross-platform `sockaddr_in` / `kevent` / `epoll_event` layouts (incl.

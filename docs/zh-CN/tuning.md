@@ -1,297 +1,168 @@
-# 调优 kevy 拿到极限吞吐
+# 调优 kevy
 
-本页列出会显著改变 kevy 单 op 开销的调优旋钮。每个旋钮都给了实测影响
-(lx64,Intel Xeon 6,Linux 6.12 / io_uring;方法学见
-[`bench/REPORT.md`](../../bench/REPORT.md))和明确的代价。只挑你确实需
-要的那几条。
+一份关于会改变 kevy 每操作开销的运行时旋钮参考 —— CPU 布局、reactor 选择、持久化、内存上限、网络传输,以及若干 Linux 侧的杠杆。
 
-## 速查
+## 何时需要
 
-| 旋钮                          | 适用                                | 收益    |
-|-------------------------------|-------------------------------------|---------|
-| 把 server 钉在固定 CPU 集     | 独占主机,或同机跑 bench             | 5–15%   |
-| 关 AOF (`--no-aof`)           | 只读副本 / 易失缓存                  | 5–10%   |
-| 打开 `KEVY_IO_URING=1`        | Linux 5.13+                          | 10–30%  |
-| 用 `--threads 1`              | 单客户端 / pipelined 负载            | **5–60%** |
-| 切到 **Unix-domain socket**   | 客户端同主机                         | **60–75%** |
-| 内核 `mitigations=off`        | 受信任的单租户机                     | 12–25%  |
-| 清空 netfilter 规则           | 独占主机,不需要本机防火墙           | **25–35%** |
-| PGO(profile-guided)          | 工作负载固定的 release build         | 1–10%   |
+下列情况下查阅本页:
 
-`mitigations=off` 和清空 netfilter 是动**内核地板**的两个大旋钮;
-UDS 整段去掉 loopback 地板;`--threads` 让 shard 数贴合负载并行度;
-PGO 和其余只削用户态周期。
+- 一个 benchmark 显示 kevy 落在你的吞吐或延迟目标之下,你想知道下一个该转什么旋钮。
+- 你正在部署 kevy 的主机,默认值(TCP loopback、io_uring 自动检测、`appendfsync everysec`、无 `maxmemory`)与负载不匹配 —— 例如稀疏连接服务、NVMe 支撑的耐久要求,或限内存的缓存层。
+- 你正用 `perf` 给 kevy 做 profiling,需要保留调试行表的构建 profile。
 
-## CPU 绑定
+如果你只是在笔记本上启动 kevy 看着数还行,就不需要本页。默认值的目标是"对各种负载都还过得去"。
 
-io_uring reactor 钉在固定 CPU 集上跑得最稳 —— 网卡 IRQ → softirq →
-用户线程一路保持在同一颗 L1/L2:
+## 核心思路
 
-```sh
-taskset -c 0-9 kevy --port 6004
-```
+kevy 是 thread-per-core 服务器:每个 OS 线程一个 shard、按 CRC16 hashtag 分区、shared-nothing 键空间、每 shard 一个 busy-poll reactor。默认值的目标是"对各种负载都不错";调优意味着把 shard 数、reactor、与持久化策略匹配到**你的性能数据真正显示的瓶颈**上。不要预先翻旋钮。测量,识别成本,然后一次改一个变量。
 
-如果你在同一台机器上跑 bench,**server 和 client 必须绑到不相交的核段**
-—— server `0-9`,client `10-15`(看具体拓扑)。共核会让调度器抢占抵消
-掉 io_uring 的所有收益。细节见 `feedback-kevy-bench-isolation`。
+## 调优 playbook
 
-## `KEVY_IO_URING=1`
+### CPU 与 shard
 
-把 reactor 从 epoll 换到 io_uring。需要 Linux 5.13+,老内核会静默回退
-到 epoll。lx64 实测 -c1 +10–30%,也是 SQPOLL (D5) 的前置。
+| 旋钮 | 位置 | 默认 | 效果 |
+|------|------|------|------|
+| `--threads N` / `KEVY_THREADS` | CLI / env | 在线核数 | shard 数;每 shard 一个 OS 线程 |
+| `--accept-shards K` | CLI | 所有 shard 接受 | 只有前 K 个 shard 绑监听,其余只计算 |
+| CPU 绑定 | `taskset` / `numactl` | 无 | 把 shard 锁到固定核集合 |
+
+**挑选 `--threads`。** 把它设到负载里实际存在的并行度。单客户端流水线 benchmark(`-c 1 -P 16`)只压满一个 shard;此时设 `--threads 10` 会让另外九个 shard 给没事干的事情 busy-poll,还顺便从 shard 0 偷 cache line。对真实多客户端负载,从 `min(cores, 期望并发客户端 / 4)` 开始,然后测。
+
+**挑选 `--accept-shards`。** 当连接数对 shard 数的比值很低(稀疏连接 —— 比如 50 个客户端摊到 10 个 shard = 每 shard 5 连)时,每轮 busy-poll 开销摊不开,吞吐下降。经验法则是 `ceil(conns / 20)` —— 50 conns 设 `--accept-shards 3`,让 3 个监听 shard 各负担约 17 个连接,其余 shard 留作只计算,通过内部 dispatcher 仍然接收跨 shard 工作。实测甜区比单点估算更宽;完整扫描以及何时跨 shard 跳的税会盖过 accept 集中收益的讨论见 [docs/accept-shards.md](https://github.com/goliajp/kevy/blob/develop/docs/accept-shards.md)。
+
+**CPU 绑定。** 在 benchmark 或单租户主机上,把 kevy 绑到固定核集合可以让 NIC IRQ → softirq → 用户线程路径留在同一片 L1/L2 上:
 
 ```sh
-KEVY_IO_URING=1 kevy --port 6004
+taskset -c 0-9 kevy --port 6004 --threads 10
 ```
 
-## 本机客户端走 Unix-domain socket (UDS)
+如果客户端跑在同台机器上,把服务器与客户端绑到**互不相交**的核范围(服务器 `0-9`、客户端 `10-15`)。共享核会带来调度乒乓,把任何 reactor 收益淹没。
 
-当客户端跟 server 在同一台主机上,把它指向一个文件路径的 socket,
-完全跳过 TCP loopback 栈。v1.25+。
+### Reactor 选择
+
+| 平台 | 默认 | 覆盖 |
+|------|------|------|
+| Linux ≥ 5.19 | io_uring(自动检测)| `KEVY_IO_URING=0` 强制 epoll;`KEVY_IO_URING=1` 要求 io_uring,若 `io_uring_setup` 被 seccomp 拦截则大声退出 |
+| macOS / *BSD | kqueue | 不可配 |
+| 较旧 Linux | epoll | 不适用 |
+
+Linux 自动检测在启动时跑 `io_uring_setup`;如果该 syscall 被拦(seccomp profile、锁定容器),kevy 静默回退到 epoll。在希望*响亮失败*而不是静默降级的强化部署里,把 `KEVY_IO_URING=1` 设上,服务器在 io_uring 不可用时就拒绝启动。反过来,要为可复现的 epoll-vs-io_uring benchmark 把 io_uring 从画面里拿掉,或绕开某个内核回归,设 `KEVY_IO_URING=0`。
+
+```sh
+KEVY_IO_URING=1 kevy --port 6004   # 要求 io_uring,被拦则退出
+KEVY_IO_URING=0 kevy --port 6004   # 强制 epoll
+```
+
+### 持久化
+
+AOF 策略由 `appendfsync` 控制(配置文件或 `CONFIG SET`)。三个值与 Redis 语义匹配:
+
+| `appendfsync` | 耐久 | 代价 |
+|---------------|------|------|
+| `always` | 每次写入回复前 `fsync` | 延迟最高;受 NVMe sync 延迟约束 |
+| `everysec`(默认)| 后台线程每秒 `fsync` | 数据丢失窗口 1 秒;热路径近零成本 |
+| `no` | 永不 `fsync`;内核按自己日程刷 | 最快;数据丢失窗口 = page-cache 刷写间隔 |
+
+`everysec` 的后台 `fsync` 跑在 shard 热路径之外的专用 bio 线程,因此 shard 尾延迟不与磁盘延迟耦合。对纯缓存或只读副本,也可考虑直接用 `--no-aof` 关掉 AOF(根本不写 AOF 文件,甚至不缓冲)。
+
+### 内存
+
+| 旋钮 | 默认 | 作用 |
+|------|------|------|
+| `maxmemory` | 无限 | 字节硬上限;达到上限后启动驱逐策略 |
+| `maxmemory-policy` | `noeviction` | 上限时丢哪些键 |
+| `maxmemory-samples` | 5 | 近似 LRU/LFU 策略的采样大小 |
+
+驱逐策略与 Redis 一致:`noeviction`、`allkeys-lru`、`allkeys-lfu`、`allkeys-random`、`volatile-lru`、`volatile-lfu`、`volatile-random`、`volatile-ttl`。`noeviction` 让上限到达后的写以 OOM 失败,是主存储的安全默认;`allkeys-*` 策略适合任何键都可丢弃的缓存层。
+
+`maxmemory-samples` 是近似策略的"质量 vs 成本"刻度 —— 采更多键得到更接近真 LRU/LFU 的近似,代价是每次驱逐的 CPU。默认 5 对大部分缓存负载够用;如果你看到驱逐挑了糟糕的牺牲品,提到 10;只有驱逐本身出现在 profile 里才降到 3。
+
+### 网络
+
+默认传输是 TCP。客户端在同主机时,切到 Unix-domain socket,彻底跳过 loopback TCP 栈:
 
 ```sh
 KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6004
 redis-cli -s /tmp/kevy.sock SET foo bar
-redis-benchmark -s /tmp/kevy.sock -t set,get -n 100000 -c 50 -P 16
 ```
 
-server **同时绑** TCP + UDS —— TCP 给远端,UDS 给本机。同 RESP 语义、
-同 shard runtime。lx64 precision bench 实测(同二进制、同 client
-进程,只改地址):
+服务器双绑:TCP 留给远程客户端,UDS 处理本地。相同 RESP 语义、相同 shard 运行时。本地客户端负载的提升很大(在小载荷尺寸下 loopback TCP 路径是主要成本);完整数字、权限模型与不适用 UDS 的情形见 [docs/uds.md](uds.md)。
 
-| 工作负载 | TCP rps | UDS rps | 提升 |
-|----------|--------:|--------:|-----:|
-| -c1 SET | 94.7 k | 166 k | **+76 %** |
-| -c1 GET | 97.3 k | 168 k | **+73 %** |
-| -c50 -P16 SET | 2.59 M | 4.11 M | **+59 %** |
-| -c50 -P16 GET | 2.67 M | 4.35 M | **+63 %** |
+**绑定地址警告。** kevy 目前没有 AUTH 也没有 TLS。绑到非 loopback 地址(`--bind 0.0.0.0` 或任何公网接口)会打印启动警告,因为网络上任何东西都能下命令。把 kevy 跑在私网边界之内,或在前面放一个做认证的代理。
 
-注意:UDS 的权限就是文件权限,默认 `chmod 0777` 与 valkey/redis 一致。
-机器上有不受信用户时,把 socket 放进受限目录里收紧。完整说明
-(安全、valkey 等价配置、何时不该用)见 [`docs/uds.md`](../uds.md)。
+### Linux 内核旋钮
 
-## `--threads` —— shard 数 vs 负载并行度
+两个主机级杠杆能挪动 kevy 之下的内核底线。两者都只适合 benchmark / 单租户场景 —— 应用前先读取舍。
 
-kevy 是 thread-per-core。`--threads N`(或 `KEVY_THREADS`)创建 N 个
-shard;keyspace 按 CRC16 hashtag 分区。**线程多 ≠ 更快** —— 按负载形态选:
-
-| 负载形态 | 建议 | 原因 |
-|----------|------|------|
-| 单连接 bench(`-c1 -P1`) | `--threads 1` | 一个 conn pin 到一个 shard;其余 shard 空跑 busy-poll 浪费 CPU |
-| 单客户端 pipelined(`-c50 -P16`) | `--threads 1` | 一个客户端核已能饱和一个 shard;多 shard 反加跨 shard 税 |
-| 多独立客户端、低 pipelining | `--threads ≤ 核数/2` | 客户端散开,一 shard 一客户端核 |
-| 混合(缓存 + 集群读) | `--threads = 核数 - 2` | 留 OS / IRQ 的余量 |
-
-v1.25 precision-bench headline 全部 `--threads 1` —— 这是
-redis-benchmark 客户端能跑满的配置。同样 `-c1` 负载下 `--threads 10`
-反而**降低**吞吐(9 个 shard 空 busy-poll,还抢 shard 0 的 cache line)。
-
-多 shard 跨路由细节(`{hashtag}` slot、cluster port、`ClusterClient`)
-见 [`docs/cluster.md`](cluster.md)。
-
-## BGSAVE / BGREWRITEAOF 通过 bio 线程移出 shard(v1.25)
-
-v1.25 把 snapshot + AOF rewrite 都挪到**单个全局 bio 线程**(整个
-server 一个,而不是 per-shard)。shard 通过 `Op::Save` 入队请求,继续
-busy-poll 网络;bio 线程在热路径外执行磁盘写。
-
-效果:shard 的 busy-poll 周期不再被几秒级的磁盘写打断,因此大 BGSAVE
-下的尾延迟显著下降(v1.25 precision:c=50、value=10 KB SET 下
-p999 -8 %,max -18 %)。**无可调项 —— 始终开启。** 完全不想要 AOF 仍
-用 `--no-aof`;只在真有磁盘 I/O 时 bio 线程才工作。
-
-## 副本 / 缓存模式关 AOF
-
-默认 `--aof`(持久化)。如果是只读副本或纯缓存,每次写都是浪费的磁盘
-I/O:
+**Spectre / BHB 缓解。** Linux 6.x 内核默认启用缓解后,每次 syscall 都为 `clear_bhb_loop` 及其同伴付钱。在小载荷的 `-c 1` 负载下,这是 kevy 单次运行最大的 CPU 消耗。从内核命令行关掉缓解:
 
 ```sh
-kevy --port 6004 --no-aof
-```
-
-吞吐影响看你的写比例;**尾延迟下降比中位数明显**。
-
-## 内核 `mitigations=off`(Spectre / BHB)
-
-> **整段读完再决定要不要动。这是安全 trade-off,不是免费午餐。**
-
-Linux 6.x 起默认开 Spectre BHB 缓解,每次 syscall 都要走一遍
-`clear_bhb_loop` —— 一段内核里的小循环,刷分支历史缓存,防止跨用户/
-内核态边界的推测执行侧信道泄露。
-
-lx64 参考机(Intel Xeon 6,Linux 6.12)上,`clear_bhb_loop` 是 kevy
-server `-c1` 工作负载下**单一最大的 CPU 消费者** —— **13.3%**,超过任何
-kevy 用户态 symbol。`-c50` 下降到约 5%,因为 syscall 被批量摊薄了。
-
-### 你要放弃什么
-
-启动加 `mitigations=off` 等于**全面关掉**硬件漏洞缓解:Spectre v1/v2/
-BHB、Meltdown、MDS、TAA、L1TF、retbleed 等全没。**只能用在:**
-- 单租户机(内核自己控,不跑不受信任的代码)
-- 网络 L3 隔离(或在受信任网关后)
-- bench / 测试机
-
-**不要**用在多租户主机、共享 CI runner、或会跑不受信任用户代码的场景
-(从网线吃 Lua eval、加载第三方插件等)。
-
-### 怎么打开
-
-改 bootloader 内核 cmdline(比如 `/etc/default/grub` 的
-`GRUB_CMDLINE_LINUX_DEFAULT`),加 `mitigations=off`,重新生成:
-
-```sh
-# Debian / Ubuntu
-sudo update-grub
-sudo reboot
-```
-
-重启后核实:
-
-```sh
+# 在 GRUB_CMDLINE_LINUX_DEFAULT 里加 `mitigations=off`,然后:
+sudo update-grub && sudo reboot
 cat /proc/cmdline | grep mitigations
-# ... mitigations=off ...
-
-cat /sys/devices/system/cpu/vulnerabilities/* | head
-# ... 应该报 "Vulnerable" 或 "Mitigation: ..." 已禁
 ```
 
-### 实测收益
+只在没有不可信代码运行的单租户机器上可接受(没有线协议过来的 Lua、没有第三方插件、没有多租户容器)。不要应用到多租户主机、共享 CI runner,或任何处理不可信用户代码的地方。`-c 1` 上的提升在 +10–15% 范围内,流水线越多提升越小。
 
-lx64 参考机上,`mitigations=off` 后预期吞吐:
+**`.text` 段大页。** kevy 可以对自己的代码段调用 `madvise(MADV_HUGEPAGE)`,让内核用 2 MiB 页而不是 4 KiB 页来支撑 kevy 二进制的指令。收益是热分派循环的 iTLB 占用更小。运行时基本没成本,值得在 `/sys/kernel/mm/transparent_hugepage/enabled` 为 `always` 或 `madvise` 的 Linux 主机上启用。代价就是启动时一次小的 `madvise` 调用;与 `mitigations=off` 不同,没有安全代价。
 
-| 负载        | Rust 客户端 -c1 | C `redis-benchmark` -c1 |
-|-------------|-----------------|--------------------------|
-| 关前        | ~65 k ops/s     | ~67 k ops/s              |
-| 关后(预测) | ~75 k ops/s     | ~78 k ops/s              |
+## Profiling
 
-(数字看内核 / CPU 厂家。AMD Zen 3+ 跟 Intel Xeon BHB 的代价不同;
-ARM N1/N2 又是另一回事。**在你自己的硬件上量**。)
-
-## 清空 netfilter / iptables 规则(很大,但危险)
-
-Linux 内核每个 syscall 经过 netfilter / nftables hook —— `tcp_sendmsg`、
-`tcp_recvmsg`、`__dev_queue_xmit`,**包括 loopback**。规则集复杂(docker、
-libvirt、fail2ban、ufw 每个加 50-300 条规则)时,累计开销巨大。
-
-lx64 参考机实测(Linux 6.12,`mitigations=off`,典型 docker + libvirt
-+ Tailscale 规则集 ~500 条):
-
-| 工作负载         | 规则开启(默认) | 规则清空    | Δ     |
-|------------------|------------------|-------------|-------|
-| C c1 SET         | 80.6 k           | **108.9 k** | +35%  |
-| C c1 GET         | 80.0 k           | **108.3 k** | +35%  |
-| Rust 客户端 c1   | ~77 k            | ~96 k       | +25%  |
-
-比 `mitigations=off` 还大。
-
-### 代价
-
-`iptables -F` + `nft flush ruleset` 清除主机上**所有**防火墙和 NAT
-规则。之后:
-
-- **docker 端口转发坏掉**(依赖 iptables NAT)
-- **libvirt VM 失去 NAT**(default virbr0 → eth0 的 MASQUERADE)
-- **Tailscale / WireGuard** 失去 allow-list 规则
-- **ufw / fail2ban / firewalld** 被绕过 —— 公网暴露的主机**入站流量不再过滤**
-
-### 可接受场景
-
-- 专用 kevy 主机,放在 VPC 后面,防火墙在 AWS SG / GCP firewall / 边界
-  网关层
-- 裸金属机,所有服务跑同机内,只走 UNIX socket 或 loopback
-- bench / dev 机
-
-### 不能用的场景
-
-- 任何直接暴露公网的主机(前面没硬件防火墙)
-- 多租户主机
-- docker / podman 上跑别人 workload 的主机
-
-### 怎么应用(以及回滚)
+要让 `perf record` 火焰图能解析到真正符号,请用 `release-perf` profile 构建 —— 与 `release` 同等优化级别,但保留调试行表:
 
 ```sh
-# 先备份
-nft list ruleset > /tmp/nft-backup.nft
-iptables-save > /tmp/iptables-backup.rules
+cargo build --profile release-perf
+./target/release-perf/kevy --port 6004 --threads 1 &
+KEVY_PID=$!
 
-# 清空
-nft flush ruleset
-iptables -F
-iptables -X
+perf record -F 999 -p $KEVY_PID -g --call-graph=fp -- sleep 30
+perf report --stdio | head -60
 
-# (kevy 不动而变快;如有其他服务自己验)
-
-# 需要时回滚(比如重启 docker 前)
-iptables-restore < /tmp/iptables-backup.rules
-nft -f /tmp/nft-backup.nft  # xtables-compat 规则可能有警告,无害
+# 为内联符号解析原始地址:
+addr2line -e ./target/release-perf/kevy -f -i 0x<addr>
 ```
 
-更安全的方案:**保留规则但单独给 kevy 端口开通早期 ACCEPT**:
+标准 `release` profile 会剥掉行表,`perf` 报告就只剩原始地址、`addr2line` 只返回 `??`。不要给 `release` 二进制做 profile;先用 `release-perf` 重编。
 
-```sh
-iptables -I INPUT 1 -p tcp --dport 6004 -j ACCEPT
-iptables -I OUTPUT 1 -p tcp --sport 6004 -j ACCEPT
-```
+要做 `clear_bhb_loop` 等内核侧成本的符号级归因,用 `--call-graph=dwarf` 抓取(不是 `fp`),其余流程相同。dwarf unwinder 较慢,但能正确穿过 syscall 边界。
 
-可以拿回大约一半的 +35%,但防火墙姿态保持完整。
+## 取舍
 
-## Profile-guided optimization(PGO)
+| 旋钮 | 成本 | 收益 |
+|------|------|------|
+| `--threads N`(调高)| N 大于负载并行度时,空闲 busy-poll shard 浪费 CPU | 更多并发客户端容量 |
+| `--threads N`(调低)| 少了一个 shard 的跨 shard 跳税 | 稀疏连接负载下少浪费 CPU |
+| `--accept-shards K` | 监听集中;客户端用原始 `connect` 时入口更少 | 每轮开销在每个接受 shard 上的更多连接上摊开 |
+| `KEVY_IO_URING=1`(强制)| seccomp 拦截 io_uring 时服务器拒启 | 强化主机上不再静默降级到 epoll |
+| `KEVY_IO_URING=0`(强制 epoll)| 放弃 io_uring 的每操作节省 | 可复现 epoll 基线;绕开内核回归 |
+| `appendfsync always` | 每次写都阻塞在 `fsync` | 零数据丢失耐久 |
+| `appendfsync no` | 数据丢失窗口 = page-cache 刷写间隔 | 最快写路径 |
+| `--no-aof` | 完全无持久化 | 最小磁盘 IO;副本 / 缓存有用 |
+| 设 `maxmemory` | 写入可能失败(`noeviction`)或触发驱逐(`allkeys-*`)| 内存占用有界 |
+| 提高 `maxmemory-samples` | 每次驱逐 CPU 上升 | 近似 LRU/LFU 选牺牲品更好 |
+| Unix-domain socket | 仅本地;文件系统权限的安全模型 | 跳过 TCP loopback 栈 |
+| `mitigations=off` | Spectre / Meltdown / MDS / 等缓解全关 | 把 syscall 路径税收回来 |
+| 对 `.text` 上 `MADV_HUGEPAGE` | 无意义成本 | 分派循环 iTLB 占用更小 |
+| `release-perf` 构建 | 二进制更大(带调试行表)| `perf` 能解析到符号 |
 
-工作负载固定的部署(知道读写比、命令分布、连接数),PGO 让 LLVM 用
-runtime profile 数据优化二进制。lx64 实测 1-10%;`drain_inbound` 和
-dispatch 循环上最大。
+## FAQ
 
-```sh
-# Step 1: build instrumented
-RUSTFLAGS="-Cprofile-generate=/tmp/pgo" cargo build --release
+**我是不是应该总是设 `--accept-shards`?**
 
-# Step 2: 跑代表性 workload 收 profile
-LLVM_PROFILE_FILE=/tmp/pgo/kevy-%m_%p.profraw \
-  ./target/release/kevy --port 6004 --no-aof &
-# 另一终端跑实际生产形状的 workload ~30 秒
-kill %1
-sleep 3  # 让 profile data flush
+不是。这个旋钮存在是为稀疏连接负载,即 conns/shards 低、busy-poll 摊不开的情形。对密集连接负载(比如 1000 个客户端摊到 10 个 shard = 每 shard 100 连),默认 —— 每 shard 都接受 —— 才对,因为均匀摊开监听会降低 accept 侧争用。只有真有稀疏连接情况时才用 `ceil(conns / 20)`。
 
-# Step 3: merge
-llvm_profdata=$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/llvm-profdata
-$llvm_profdata merge -o /tmp/pgo/merged.profdata /tmp/pgo/*.profraw
+**io_uring 是不是永远比 epoll 快?**
 
-# Step 4: rebuild
-cargo clean
-RUSTFLAGS="-Cprofile-use=/tmp/pgo/merged.profdata" cargo build --release
-```
+在 Linux ≥ 5.19 上,对会批量提交的负载,是,显著。在更老的内核、拦截 `io_uring_setup` 的 seccomp 过滤、或每操作只有一次 syscall 且没有批量机会的负载上,差距收窄。自动检测就是合适默认;只有在你有实测理由或需要响亮失败的强化部署时才覆盖。
 
-需要 `rustup component add llvm-tools-preview` 拿 `llvm-profdata`。
-merged.profdata 约 70 KB,可以跟源码一起 commit,只要 workload 形态
-不变就一直用同一份 profile。
+**`appendfsync` 的生产甜区在哪?**
 
-PGO **不在** 上游 release 里默认开 —— 它跟 workload 绑死。大部分生产
-用户不会在意 1-10%;真正在意的部署照上面 recipe 自己跑。
+`everysec` 对几乎所有人都适合。它把数据丢失界定在一秒,把 `fsync` 移出热路径,对尾延迟接近零冲击。只有当你的耐久需求真的要求零丢失时才用 `always`(并接受 NVMe `fsync` 延迟现在就是尾延迟上限)。`no` 只用于纯缓存,那里 AOF 只为热重启速度而存在。
 
-## `io_uring` SQPOLL —— 实测拒绝接入
+**什么时候需要 `MADV_HUGEPAGE`?**
 
-内核独立线程轮询 io_uring 提交队列 —— 消除每 op 一次的
-`io_uring_enter` syscall。
+当 `perf` 在热分派循环上显示 iTLB miss,或主机的 `/sys/kernel/mm/transparent_hugepage/enabled` 为 `madvise`(那种情况下只有 kevy 自己 opt-in)。这是 Linux 上启用 THP 的主机上的无成本旋钮,所以默认立场是"留着开"。macOS / BSD 没有等价物。
 
-wire-level 支持在 `kevy_uring::IoUring::new_sqpoll` 里,但**没有接入
-shard reactor**,也不建议套在 kevy 的 thread-per-core 之上。每个 ring
-会生一个内核轮询线程,N 个 shard = N 个额外的 100% 自旋内核线程,跟
-shard 线程抢同一批核。lx64 参考机(10 shard 跑 16 核)实测在 -c1 和
--c50 上**回归 2–15×**。
+**我的 `perf` 报告全是原始地址,做错了什么?**
 
-SQPOLL 适合单线程 reactor + 有空余核给轮询线程的场景。kevy 的
-per-core 设计已经吃满 CPU,再加一个内核轮询线程相当于砍一半。实测细
-节见 `bench/PERF-ATTACK-LOG-2026-06-20.md` 里的 D5。
-
-## 不再有用的事
-
-- `taskset` 单核:io_uring 失去并行,反而不如 shared-nothing 分片
-- 关 THP:对 kevy 的 allocator 模式没明显影响
-- `numactl --interleave`:只在多 socket 才有用;lx64 单 socket
-- 关 slowlog:默认就是关的(`slower-than-micros = -1`)
-
-## 见
-
-- [`bench/PERF-PROFILE-2026-06-20.md`](../../bench/PERF-PROFILE-2026-06-20.md) —— 引出这一页旋钮单的火焰图诊断
-- [`bench/PERF-ATTACK-LOG-2026-06-20.md`](../../bench/PERF-ATTACK-LOG-2026-06-20.md) —— 每个旋钮的实测日志
-- [`bench/REPORT.md`](../../bench/REPORT.md) —— 基准方法学
+你 profile 了 `cargo build --release` 的二进制。标准 release profile 剥掉了调试行表,所以 `perf` 和 `addr2line` 都没东西能解析。用 `cargo build --profile release-perf` 重编再重录。

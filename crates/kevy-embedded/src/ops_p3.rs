@@ -1,15 +1,11 @@
-//! Phase 3 ops — mailrs feedback P1 round-out (2026-07-01,
-//! kevy-embedded 1.6.0).
+//! Multi-key string operations, keyspace scan, atomic `getex`, set
+//! algebra (`sinter` / `sunion` / `sdiff`), and absolute-time TTL
+//! variants (`expireat` / `pexpire`).
 //!
-//! Adds the remaining P1 methods (`mset` / `mget`, `keys(pattern)`,
-//! `getex`, `sinter` / `sunion` / `sdiff`) plus a couple of P2
-//! absolute-time TTL variants (`expireat` / `pexpire`).
-//!
-//! Lives outside `ops.rs` / `ops_p2.rs` to keep all three files
-//! under the 500-LOC house rule. The set algebra is implemented at
-//! the embedded layer (compose `smembers` per key + Rust set ops)
-//! instead of touching `kevy_store::Store` — `sinter` over N small
-//! sets is faster client-side than serialising N RESP arrays.
+//! The set algebra is implemented at the embedded layer (compose
+//! `smembers` per key + Rust set operations) instead of touching
+//! `kevy_store::Store` — over N small sets that is faster than
+//! serialising N RESP arrays.
 
 use std::collections::BTreeSet;
 use std::io;
@@ -174,7 +170,7 @@ impl Store {
         self.expire(key, Duration::from_millis(ms))
     }
 
-    // ---- hash float increment (kevy-embedded 1.7.0) ------------------
+    // ---- hash float increment ----------------------------------------
 
     /// `HINCRBYFLOAT key field delta` — atomic float increment of a
     /// hash field. Returns the post-increment value. Errors on
@@ -196,7 +192,7 @@ impl Store {
         Ok(new_val)
     }
 
-    // ---- list positional insert (kevy-embedded 1.7.1) ----------------
+    // ---- list positional insert --------------------------------------
 
     /// `LINSERT key BEFORE|AFTER pivot value` — insert `value` before
     /// or after the first occurrence of `pivot` in the list. Returns:
@@ -226,7 +222,7 @@ impl Store {
         Ok(new_len)
     }
 
-    // ---- observability (kevy-embedded 1.7.0) -------------------------
+    // ---- observability ----------------------------------------------
 
     /// `Store::ping_us()` — return the round-trip duration of a
     /// shard-0 read-lock acquire + release in **nanoseconds**, for

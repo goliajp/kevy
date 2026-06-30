@@ -30,11 +30,11 @@ fn main() -> ! {
     kevy::serve(bind, port, threads, data_dir, aof); // never returns
 }
 
-/// `--help` / `--version` short-circuit BEFORE we touch the config layer, so
-/// they work even if the env / TOML is misconfigured (the standard CLI
-/// contract: --help always reachable). Spotted in v1.0.x downstream usage
-/// — mailrs's Docker healthcheck silently no-op'd because `kevy --help` was
-/// ignored, leading to a server-process being treated as a CLI tool.
+/// `--help` / `--version` short-circuit BEFORE the config layer
+/// touches anything, so they work even when the environment or
+/// TOML is misconfigured. The standard CLI contract is "`--help`
+/// is always reachable", which Docker healthchecks in particular
+/// depend on.
 fn handle_help_and_version() {
     for arg in std::env::args().skip(1) {
         match arg.as_str() {

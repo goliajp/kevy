@@ -1,4 +1,5 @@
-//! MOVE-SCOPE + MOVE-SCOPE-INGEST cement (Phase 3 / v1.21).
+//! `MOVE-SCOPE` + `MOVE-SCOPE-INGEST` — scope migration operator
+//! commands.
 //!
 //! Q3=(a) quiesce-window mechanism per the RFC `## Q3 resolution`.
 //! Operator runs `MOVE-SCOPE <prefix> FROM <from-id> TO <to-id>`

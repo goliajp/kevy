@@ -1,250 +1,198 @@
-# 主从复制 + 读写分离客户端(v1.18 / v3-cluster Phase 1)
+# 复制
 
-kevy v1.18 ships v3-cluster **Phase 1 功能核心**:一个 kevy 节点可以
-作为 primary 把每次 mutation 串流推给 N 个只读副本,或作为 replica
-连接 primary 镜像 keyspace。新客户端 crate `kevy-cluster-rw` 把写发到
-primary、读 round-robin 跨 replica。
+kevy 如何把写入从主节点流式同步到一个或多个副本节点、如何手工或按多数票完成切主,以及一个嵌入式进程如何像只读副本一样订阅同一条流。
 
-**反范围提醒**(plan 已锁;**不要**在 v1.18 issue 里提):
+## 何时需要这份文档
 
-- 多 master / sharded-multi-master —— 每个 scope 只允许一个 writer。
-- 跨 DC active-active / CRDT。
-- Raft / 强日志复制。
-- 在线 resharding / gossip 发现 —— peer 列表由运维声明。
-- AUTH / TLS —— kevy 永久不在范围内。
-- 链式复制(replica-of-replica)—— dispatch-without-emit 闸门防御误配,
-  但 wire 形状只支持单跳。
+当下面任一情况成立时请查阅复制:
 
-自动仲裁失败切换(`kevy-elect`)是 Phase 1.5,**不**在 v1.18 里。手
-动通过 `REPLICAOF NO ONE` 提升是 v1.18 的 failover surface。
+- **读扇出。** 单个主节点承担所有写入;一个或多个副本承担读负载,并在 [`kevy-cluster-rw`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-cluster-rw) 客户端后面轮询。
+- **高可用切换。** 你希望在当前主节点失联时,幸存的副本能自动选举出新主。加入 [`kevy-elect`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-elect) 做基于多数派的提升;否则用 `REPLICAOF NO ONE` 手工切换。
+- **以 embed 作只读副本。** 应用使用 [`kevy-embedded`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded) 作为进程内键空间,但希望真相之源仍在一个 `kevy` 服务器上。Embed 在内存中镜像主节点,提供零网络往返的本地读;本地写入会被拒绝,必须发送到主节点。
 
-## 服务器端
+如果你只跑一个 `kevy` 节点,你不需要这份文档。如果你需要跨数据中心多活、gossip 发现、在线 reshard、Raft、AUTH 或 TLS,kevy 永远不会提供这些 —— 请选择另一个系统。
 
-### Primary
+## 核心思路
 
-```toml
-# kevy.toml
-[replication]
-role = "primary"
-listen_port_base = 16004      # shard i 把复制绑在这个 + i
-replication_buffer_size = 268435456   # 256 MiB 每 shard ring backlog
-reconnect_window_ms = 60000   # 给一个 replica 的 offset 保留这么久的槽位
+主 `kevy` 为每个 shard 打开一个专用的复制监听端口。每次施加的改动都被编码成一个 RESP 信封(`*2\r\n:<offset>\r\n<argv>`),带一个单调递增的 64-bit offset,并推入每个 shard 的有界环形 backlog。每个已连接的副本从它最后 ack 的 offset 流式拉取;如果请求的 offset 已经从 backlog 老化掉,主节点会就地内联推送一份该 shard 键空间的快照,然后无缝衔接到实时流。副本可以在运行时通过 `REPLICAOF host port` 切换上游,通过 `REPLICAOF NO ONE` 自降为独立节点。链式复制(副本之副本)在协议层不支持,并在 apply 路径上做了防御性拒绝。
+
+```
+                  +-----------------+
+   writes ──────► |    primary      |
+                  |  shard 0..N-1   |
+                  |  port_base + i  |
+                  +--------+--------+
+                           │ per-shard RESP stream (offset, argv)
+            ┌──────────────┼──────────────┐
+            ▼              ▼              ▼
+       +---------+    +---------+    +---------+
+       | replica |    | replica |    | embed   |
+       |   A     |    |   B     |    | (in-proc|
+       |  reads  |    |  reads  |    |  reader)|
+       +---------+    +---------+    +---------+
 ```
 
-Shard `i` 在 `listen_port_base + i` 上绑一个专用复制 TCP listener
-(per Issue Ledger I2 —— 镜像 per-shard cluster listener 模式)。每条
-应用的写编码为 RESP 信封(`*2\r\n:<offset>\r\n<argv>`),推进 per-shard
-有界 ring backlog;reactor 的 pump 在每次循环把这些帧串流给每个连接
-的 replica。
+同一条复制流向三类订阅者投递:作为副本运行的完整 `kevy` 服务器、以副本模式开启的嵌入式 `kevy-embedded` `Store`,以及(间接地)用每个节点的 `repl_offset` 做切主决策的多数派选举器。
 
-协议是 RESP3-扩展的([`crates/kevy-replicate/docs/wire.md`])。offset
-是 `i64` 编码;10 M 写/秒下,i64::MAX 上限约 30 000 年外。
+## 实际示例
 
-### Replica
+下面的示例拉起一个主、一个副本,在运行时切换副本的上游,探查角色,并把一个进程内嵌入式 reader 挂到同一个主节点上。
+
+### 1. 主节点 `kevy.toml`
 
 ```toml
 [replication]
-role = "replica"
-upstream = "primary.example:16004"    # primary 的 listen_port_base
+role             = "primary"
+listen_port_base = 16004        # shard i 在 listen_port_base + i 上绑定复制端口
+replication_buffer_size = 268435456   # 每 shard 256 MiB 的环形 backlog
+reconnect_window_ms     = 60000       # 为重连副本保留 slot 的窗口
 ```
 
-当 kevy 以 `role = "replica"` 启动时,服务器给每个本地 shard 派出一个
-**runner 线程**。Runner `i` 开一个阻塞 TCP 连接到
-`(upstream_host, upstream_port_base + i)`,发握手
-(`REPLICATE FROM <offset> ID <replica_id>`),读 `+ACK <offset>`,然后
-在线路流上循环。每个 `ReplicaEvent`(live frame,或者
-`SnapshotBegin` / `SnapshotChunk` / `SnapshotEnd` 之一)通过 MPSC 通道
-转发到匹配 shard 的 reactor 线程;shard 每 tick 排空一次通道,在
-`ReplicatedApplyGuard` scope 内通过常规 dispatch 路径应用。
+启动:
 
-guard 在 apply 期间抑制本地 `ReplicationSource::push_mutation` —— 如
-果没有它,一个安装了下游 listener 的 replica 会重发每条 apply 帧,offset
-双计。v1.18 禁止链式复制;闸门是防御性的。
+```sh
+kevy --config /etc/kevy/primary.toml --port 6004
+```
 
-Snapshot 派送:如果 replica 请求的 `from_offset` 已不在 primary
-backlog 里(TooOld),primary 通过 `kevy_persist::write_snapshot_to`
-in-line 序列化 shard 的 keyspace,加前缀 `+SNAPSHOT\r\n`,串流
-`$<chunk>\r\n` bulks,以 `+SNAPSHOT_END <ack_offset>\r\n` 结束。replica
-累积 chunks,调 `kevy_persist::load_snapshot_from` 到本地 `Store`,然
-后在 `ack_offset` 无缝续 live frame。
+主节点的 shard 0 现在在 `:6004` 接受 RESP 客户端流量,在 `:16004` 接受复制连接。
 
-## 命令
+### 2. 副本节点 `kevy.toml`
 
-| 命令 | 效果 |
-|------|------|
-| `ROLE` | 无 upstream 在跑时回 `master <offset> []`,作为 replica 跑时回 `slave <host> <port> connect 0`。`REPLICAOF` 的 live 状态优先于静态配置。 |
-| `INFO replication` | role / connected_slaves / master_repl_offset(master)或 master_host / master_port / master_link_status(replica)。 |
-| `REPLICAOF host port`(别名 `SLAVEOF`) | 停止任何在跑的 runner fleet,parse + 解析新 upstream,派出新 runner。回 `+OK`。 |
-| `REPLICAOF NO ONE` | 停止每个 runner;降级到 standalone(本地 store **不**被清空 —— 运维自己决定 promote 前是否 FLUSH)。 |
-| `CLUSTER NODES` | 应答节点的 role 标记反映 live 复制状态(`myself,master` 或 `myself,slave`)。 |
+```toml
+[replication]
+role     = "replica"
+upstream = "primary.internal:16004"   # 主节点的 listen_port_base
+```
 
-## 客户端 —— `kevy-cluster-rw::ReadWriteClient`
+在第二台主机上启动:
+
+```sh
+kevy --config /etc/kevy/replica.toml --port 6004
+```
+
+每个本地 shard 开一个 runner 线程,连接到 `(upstream_host, upstream_port_base + shard_index)`,以 `REPLICATE FROM <offset> ID <replica_id>` 握手,读取 `+ACK <offset>`,然后把帧流式写入 shard 的 apply 路径,过程中处于一个抑制本地重新发出的 guard 之内。
+
+### 3. 在运行时切换副本上游
+
+```sh
+redis-cli -p 6004 REPLICAOF new-primary.internal 16004
+# +OK
+```
+
+副本停止它的 runner 集群(socket 被关闭,以解除阻塞中的读),解析新的上游,然后生成新的 runner。本地 store **不会**被清空 —— 新主节点的帧会在已有数据上施加。如果你想要干净重放,请先 `FLUSHALL`。
+
+### 4. 手工提升一个副本
+
+```sh
+redis-cli -p 6004 REPLICAOF NO ONE
+# +OK
+```
+
+所有 runner 线程停止,生效角色翻转为 `master`。本地数据保持在最后施加的帧所在位置。要接受下游副本,你还得编辑配置(`role = "primary"` + `listen_port_base`)并重启 —— 运行时的 `REPLICAOF NO ONE` 不会绑定下游监听端口。
+
+### 5. 探查角色
+
+```sh
+redis-cli -p 6004 ROLE
+# 1) "master"
+# 2) (integer) 12345678
+# 3) 1) 1) "10.0.0.21"
+#       2) (integer) 6004
+#       3) (integer) 12345670
+
+redis-cli -p 6004 INFO replication
+# role:master
+# connected_slaves:1
+# master_repl_offset:12345678
+# slave0:ip=10.0.0.21,port=6004,offset=12345670
+```
+
+回复里总是 `REPLICAOF` 设置的实时运行状态优先,而不是静态配置。
+
+### 6. 以 embed 作副本(一行)
+
+应用可以通过 [`kevy-embedded`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded) 在进程内加入同一条复制流:
 
 ```rust
-use kevy_cluster_rw::ReadWriteClient;
+use kevy_embedded::Store;
 
-let mut client = ReadWriteClient::connect(
-    ("primary.local", 6004),
-    &[("replica1.local", 6004), ("replica2.local", 6004)],
-)?;
+let store = Store::open_replica("primary.internal:16004")?;
+assert!(store.is_replica());
 
-// 自动路由:SET 走 primary,GET round-robin replica。
-client.request(&[b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()])?;
-let reply = client.request(&[b"GET".to_vec(), b"k".to_vec()])?;
+// 本地写入被以 READONLY 拒绝。
+assert!(store.set(b"local", b"nope").is_err());
 
-// READCONSISTENT —— 强制读走 primary(刚写完接着读)。
-let reply = client.request_read(
-    &[b"GET".to_vec(), b"k".to_vec()],
-    /* consistent = */ true,
-)?;
+// 读取零网络往返 —— 键空间就活在这个进程里。
+if let Some(v) = store.get(b"hello")? {
+    println!("{:?}", v);
+}
 ```
 
-v1.18 显式接受 seed 列表 —— 没有自动 CLUSTER NODES walk 来发现 replica。
-(release 之后的 follow-up 可以加一个 auto-discover overload,给 cluster
-模式部署里希望客户端自己找 replica 的运维用。)
+Embed 连到同一个 `listen_port_base` 对应的 shard,按到达顺序施加帧,并直接从本地 arena 提供读取。可运行示例在 [`crates/kevy-embedded/examples/replica.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded/examples/replica.rs)。
 
-写/读分类在 [`kevy_cluster_rw::is_write_verb`]。表对齐 server 端的
-`kevy::cmd::is_write_verb`;重复是故意的(这个 crate 只下游
-`kevy-resp-client` —— 永远不依赖 server crate)。
+## 旋钮
 
-## 运维 recipe
+服务器侧 TOML 在 `[replication]` 下:
 
-### 加新 replica
+| 键 | 默认值 | 含义 |
+|---|---|---|
+| `role` | `"primary"` | `"primary"` 打开复制监听;`"replica"` 生成从 `upstream` 拉取的 runner。 |
+| `listen_port_base` | `16004`(主)| 主节点的 shard `i` 在 `listen_port_base + i` 上绑定复制端口。副本连同样的偏移。 |
+| `upstream` | 未设置 | 仅副本。主节点 `listen_port_base` 的 `host:port`。每个本地 shard 连接 `(host, port + shard_index)`。 |
+| `replication_buffer_size` | `268435456`(256 MiB)| 每 shard 环形 backlog 字节数。窗口内的重连走实时路径;更老的 offset 触发快照发送。 |
+| `reconnect_window_ms` | `60000` | 主节点在回收某副本断开后保留它 offset slot 的时长。 |
 
-1. 启新 kevy,带 `[replication] role = "replica"` 和
-   `upstream = "primary:16004"`。
-2. runner 用 `from_offset = 0` 连接。primary 的 backlog 早已驱逐
-   offset 0 → TooOld → snapshot ship。
-3. snapshot 加载完成后,runner 从 `ack_offset` 续上,在 live frame 上
-   常驻。
+当配置了 [`kevy-elect`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-elect) 时,`[cluster]` 块再加入多数派相关旋钮:
 
-### 重定位一个跑着的 replica
+| 键 | 默认值 | 含义 |
+|---|---|---|
+| `node_id` | 未设置 | 本节点的稳定 id(≤ 32 B ASCII)。选举里作为 tie-breaker。 |
+| `elect_port_base` | 未设置 | 控制面 TCP 端口,用于心跳与选票。shard 0 绑在 `elect_port_base + 0`。 |
+| `peers` | 空 | `id@host:port,…`,集群里每个节点都写,包含自己。空表示选举器休眠。 |
+| `hb_interval_ms` | `200` | 对每个 peer 发出心跳的周期。 |
+| `down_after_ms` | `5000` | 一个 peer 在这么多毫秒没有心跳后被标记 DOWN。 |
+| `election_timeout_ms` | `3000` | 候选人等待多数派 `ACCEPT` 的时长。 |
 
-```
-REPLICAOF new-primary.example 16004
-```
+法定人数是 `N/2 + 1`。N=2 要求两个节点都在线(任何一个宕机都会让幸存者被锁成只读);linter 会警告,任何需要切换的部署都应使用 N ≥ 3。
 
-停旧的 runner fleet(socket 被 `Shutdown::Both`,让任何 in-flight 读
-解除阻塞),parse 新 upstream,派出新 runner。毫秒级回 `+OK`。replica
-的本地 store **保留** —— 新 primary 的帧落在上面。如果运维想干净
-replay,前后接 `FLUSHALL`。
+## 取舍与限制
 
-### 手动提升(replica → primary)
+复制是**异步**的。主节点在它知道任何副本是否已经施加该帧之前就先提交并回复;副本会落后于"一帧穿过网线并从 per-shard 通道汲取到 apply 路径"所需的时间。没有 `WAIT` 风格的栅栏,也没有同步模式。
 
-```
-REPLICAOF NO ONE
-```
+| 关注点 | 答 |
+|---|---|
+| 写入耐久 | 主节点把帧落入本地 store 和 backlog 环之后就 ack。副本随后追上。 |
+| 读一致性 | 副本可能落后。通过 `kevy-cluster-rw` 发送 `request_read(…, consistent = true)`,在需要 read-after-write 时把读强制走到主节点。 |
+| 副本掉队 | 如果重连请求的 offset 已从环里老化,主节点会就地内联推送一份该 shard 的快照,然后从快照末端的 offset 衔接实时帧 —— 没有 gap,无需人工介入。 |
+| backlog 容量估算 | `replication_buffer_size ≈ peak_writes_per_sec × avg_argv_bytes × reconnect_window_seconds`。略大无害;过小会回退到快照发送。 |
+| 切主后什么会变 | 写入会到新主,配置了 `kevy-elect` 时自动,否则手工。已有的 `kevy-cluster-rw` 客户端在学到新主后会把写入重路由;切换 gap 期间正在进行的写入会显式失败。 |
+| 切主后什么不会变 | 跨数据中心流量、gossip 发现的 peer、在线 reshard、AUTH/TLS —— kevy 都不提供。仅限单数据中心。 |
+| 链式复制 | 协议层不支持。副本的 apply 路径不会再向下游发出;配置错误会被防御性地拒绝。 |
+| 分区少数派写入 | 丢失。分区内的少数派无法达成多数派,无法提升;分区恢复时它会自降并接受多数派的历史。在写入侧使用 consistent-read 路径以避免脏读。 |
 
-停止每个 runner。生效 role 翻成 `master`。本地 store 停在最后一帧应
-用后的状态。要接受下游 replica,还需更新配置(`role = "primary"` +
-`listen_port_base`)并重启 —— v1.18 **不**动态安装下游 listener。
+线协议(实时帧信封、快照发送、握手)记录在 [`crates/kevy-replicate/docs/wire.md`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-replicate/docs/wire.md) 与 [`crates/kevy-replicate/docs/snapshot.md`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-replicate/docs/snapshot.md)。选举协议见 [`crates/kevy-elect/docs/protocol.md`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-elect/docs/protocol.md)。
 
-## 通过 `kevy-elect` 的自动失败切换(v1.19+ / Phase 1.5)
+## FAQ
 
-v1.19 在 v1.18 的手动 `REPLICAOF` 上加了仲裁式 primary 失败切换。检测
-通过心跳(`HB(epoch, node_id, role, repl_offset)`)每 `hb_interval_ms`
-(默认 200 ms)一次;一个 peer 在 `down_after_ms`(默认 5 s)无心跳后
-标记 DOWN;活着的 replica 中 `repl_offset` 最高(并列时 `node_id` 最
-小)的广播 `OFFER(new_epoch, candidate_id, repl_offset)`;收集到
-`N/2 + 1` `ACCEPT` 后通过现有 `REPLICAOF NO ONE` 路径自我提升,广播
-`ANNOUNCE(epoch, new_primary_id, new_primary_addr)`。收到 `ANNOUNCE`
-的 peer 把它们的 `kevy-replicate` runner 重定位到新 primary。完整规
-范:[`crates/kevy-elect/docs/protocol.md`](../../crates/kevy-elect/docs/protocol.md)。
+**如何提升副本?**
+手工:连上副本运行 `REPLICAOF NO ONE`。生效角色立即翻为 `master`,本地 store 保留,并开始接受写入。要接受下游副本,还要在 TOML 里更新 `role` 与 `listen_port_base` 并重启。自动:在每个节点上配置带 `node_id`、`elect_port_base` 与 `peers` 列表的 `kevy-elect`;`repl_offset` 最高的在线副本在多数派下胜出。
 
-### 配置
+**副本能晋升为主节点,然后再变回副本吗?**
+可以。`REPLICAOF NO ONE` 只切断上游链接,不动数据;之后再 `REPLICAOF host port` 即可挂到新主。两次切换之间本地 store 都保留。如果你想从新上游做干净重放,先 `FLUSHALL`。
 
-```toml
-[cluster]
-node_id = "primary-east"              # 本节点稳定 id(≤ 32 B ASCII)
-elect_port_base = 16104               # 控制面 TCP 端口(shard 0 = base + 0)
-peers = "primary-east@10.0.0.1:16104,replica-1@10.0.0.2:16104,replica-2@10.0.0.3:16104"
-```
+**数据丢失窗口有多大?**
+就是"主节点 ack 客户端"与"每个副本都已施加该帧"之间的时间间隔。复制是异步的,所以一个在 ack 写入之后、在任何副本拿到帧之前崩溃的主节点会丢失这次写入。窗口大小取决于负载 —— 单数据中心 LAN 一般在亚毫秒级。没有同步模式;若需要跨断电也耐久,主节点上把复制配合 [`docs/persistence.md`](persistence.md) (AOF + RDB) 一起使用。
 
-`peers` 字符串列**集群里每个**节点(包括本节点)—— elector 运行时按
-`node_id` 过滤自己。空 `peers` ⇒ kevy-elect 休眠(v1.18 时代的配置无
-需改)。
+**我能从副本读吗?**
+能 —— 加副本的主要目的就是这个。使用 [`kevy-cluster-rw::ReadWriteClient`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-cluster-rw),它会把写发到主、按你传入的副本种子轮询读。当一次读必须看到最新写时,用同一个 client 的 consistent-read 路径强制这次读走主节点。
 
-### 仲裁 / 容错
+**有个副本落后太多了 —— 如何恢复?**
+什么都不做。主节点发现副本请求的 offset 不在 backlog 环里时返回 `TooOld`,然后通过同一个 RESP 线连接就地内联推送一份该 shard 键空间的快照,再从快照末端的 offset 衔接实时帧。副本把快照换入,施加实时尾巴就追上了。如果你更想从空重建,停掉副本,删它的数据目录再重启 —— runner 会以 `from_offset = 0` 重新连接,并对整个键空间做一次快照发送。
 
-| N | 仲裁 | 容忍 |
-|---|----|----|
-| 3 | 2 | 1 down |
-| 5 | 3 | 2 down |
-| 7 | 4 | 3 down |
-| **2** | **2** | **0 down —— 退化,故意锁定** |
+## 参见
 
-**N=2 警告**。仲裁是 `N/2 + 1`,所以 N=2 需要俩节点都活着:任何一个
-down 都意味着幸存者达不到仲裁,**永久只读**(不接受写、不能 promote)。
-这是故意的 —— 替代方案(单节点仲裁)会让分区时双写脑裂。配置 linter
-在 `peers` 恰好列出两项时启动时 warning。**建议:N ≥ 3** 对任何需要
-自动切换的部署。N=2 只在"任何一个 down = 锁定"比"俩 down = 锁定"
-更优时可接受(非常罕见)。
-
-### 脑裂保护
-
-仲裁语义结构上防脑裂:分区少数边达不到 `N/2 + 1` ACCEPT,所以不能 promote 新
-primary。一旦分区愈合,少数边看到多数边更高的 epoch,干净降级 ——
-代价是丢掉分区期间落到少数边的写。这是 v3-cluster Phase 1.5 提供的持
-久性故事:**写只在任何分区的多数边有持久性保证**。用 `READCONSISTENT`
-避免陈旧读;写侧不能事后修复少数边的写。
-
-### 可调项
-
-| 参数 | 默认 | 作用 |
-|------|-----|------|
-| `hb_interval_ms` | 200 | 每 peer 出站 HB 的周期 |
-| `down_after_ms` | 5_000 | 这么多毫秒无 HB 后标记 peer DOWN |
-| `election_timeout_ms` | 3_000 | candidate 等仲裁 ACCEPT 这么久 |
-| `election_backoff_ms` | 1_000–5_000 | 失败选举后退随机抖动 |
-
-按你的 RTT 调 `hb_interval` × `down_after`。默认假定单 LAN。WAN 部署
-(v1.19 反范围 —— kevy-elect 只单 DC)需要更高值避免临时 WAN 抖动触发
-误选举。
-
-### Backlog 调优
-
-`replication_buffer_size` 是 per-shard ring 字节预算。粗略规则:
-
-```
-backlog_size ≈ 峰值写每秒 * 平均 argv 字节 * reconnect 窗口秒数
-```
-
-200k 写/秒、40 B 平均 argv、60 s 窗口,每 shard 480 MiB 让每次重连都
-走 backlog 路径。更小的 backlog 没问题 —— 超大时干净回落到 snapshot
-ship。
-
-## 已知 v1.18 简化(作为 follow-up 跟踪)
-
-- **后台 snapshot 序列化** —— *v1.18 已落地*。primary 冻结 COW
-  `SnapshotView`(O(n) 浅 clone —— ns/entry)然后交给 worker 线程在
-  reactor 外序列化;chunk 通过通道流回。reactor pause 缩到只收集。
-- **per-replica peer-addr** —— *v1.18 已落地*。ROLE master 应答按每个
-  连接的 replica 携带 `(ip, port, offset)`;`INFO replication` 的
-  `connected_slaves` 来自这个列表。
-- **io_uring 上的复制** —— *v1.18 已落地*。io_uring reactor tick 路径
-  驱动 replica 的 accept / read / write / pump;吞吐敏感的写侧保持
-  io_uring 原生(短写 + 现有非阻塞 drain)。`KEVY_IO_URING=1` + 复制
-  跑动,匹配 epoll reactor 的 perfgate 数字。
-- **CLUSTER NODES live-replica 列表** —— primary 当前不追踪其连接
-  replica 的客户端侧地址(runner 的 REPLICATE 握手只带 id)。客户端
-  用 `kevy-cluster-rw` 配显式 seed 替代。
-- **Auth / link 加密** —— 永不(反范围)。
-
-## Wire 格式参考
-
-- Live 帧信封:[`crates/kevy-replicate/docs/wire.md`]。
-- Snapshot ship:[`crates/kevy-replicate/docs/snapshot.md`]。
-- 握手:`*5\r\n$9\r\nREPLICATE\r\n$4\r\nFROM\r\n$<n>\r\n<offset>\r\n$2\r\nID\r\n$<m>\r\n<replica_id>\r\n` → `+ACK <offset>\r\n`。
-
-## 另见
-
-- [`docs/cluster.md`](cluster.md) —— 多 shard 暴露 + slot 路由
-  `ClusterClient`;跟复制正交(但可组合)。
-- [`docs/persistence.md`](persistence.md) —— RDB / AOF;snapshot 路径
-  复用 kevy-persist 的 wire ship 格式。
-- `.claude/plans/2026-06-18-v3-cluster-plan.md` —— 规范执行计划;行状
-  态反映本 release 里的内容。
-
-[`crates/kevy-replicate/docs/wire.md`]: ../../crates/kevy-replicate/docs/wire.md
-[`crates/kevy-replicate/docs/snapshot.md`]: ../../crates/kevy-replicate/docs/snapshot.md
-[`kevy_cluster_rw::is_write_verb`]: ../../crates/kevy-cluster-rw/src/lib.rs
+- [`docs/cluster.md`](cluster.md) —— 多 shard 暴露与槽路由 `ClusterClient`;与复制正交,可组合。
+- [`docs/persistence.md`](persistence.md) —— RDB 与 AOF;快照发送路径在线协议上复用同一份磁盘格式。
+- [`crates/kevy-cluster-rw`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-cluster-rw) —— 读写分离 client。
+- [`crates/kevy-elect`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-elect) —— 多数派切换。
+- [`crates/kevy-embedded`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded) —— `Store::open_replica` 以 embed 作副本。

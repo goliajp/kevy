@@ -1,4 +1,4 @@
-//! Replica-source listener for embed-as-writer (Phase 3 / v1.21).
+//! Replica-source listener for embed-as-writer.
 //!
 //! When `Config::embed_writer_listen_addr` is set, every commit on
 //! this embed pushes its argv into a shared [`ReplicationSource`]
@@ -33,8 +33,8 @@ use kevy_replicate::handshake::{encode_ack, parse_replicate_from};
 use kevy_replicate::source::{FromOffset, ReplicationSource};
 use kevy_resp::Argv;
 
-/// Replication source attached to this embed when it is a Phase 3
-/// scope writer. Pushes from `commit_write` flow into the source;
+/// Replication source attached to this embed when it is a scope
+/// writer. Pushes from `commit_write` flow into the source;
 /// accepted replicas stream out of it.
 pub(crate) struct ReplicaSource {
     source: Arc<Mutex<ReplicationSource>>,

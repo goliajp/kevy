@@ -1,27 +1,15 @@
-//! Multi-shard atomic transaction (kevy-embedded 1.13.0).
+//! Cross-shard read-modify-write closure:
+//! `Store::atomic_all_shards`.
 //!
-//! `atomic_all_shards(|tx| { ... })` holds a write lock on EVERY
-//! shard for the closure's duration. Inside the closure all
-//! operations are routed to their owning shards (so keys spanning
-//! shards work correctly), and AOF writes batch per-shard with one
-//! fsync per shard at commit time.
+//! `atomic_all_shards(|tx| { ... })` holds a write lock on every
+//! shard for the closure body. Operations inside the closure are
+//! routed to their owning shards, and AOF writes are batched
+//! per-shard with one fsync per shard at commit time.
 //!
-//! Use this when:
-//! - The transaction touches keys that hash to multiple shards AND
-//!   atomicity across them is required.
-//!
-//! Don't use this when:
-//! - The transaction is single-shard — `Store::atomic` is cheaper
-//!   (one shard lock vs N).
-//! - The transaction reads but doesn't modify — concurrent readers
-//!   would block unnecessarily.
-//!
-//! Trade-off: every other writer (and reader on the same shards)
-//! blocks for the closure's duration. Use sparingly.
-//!
-//! Lives outside `ops_atomic.rs` so the existing single-shard
-//! `atomic` keeps its tight scope + tests; this is the deliberate
-//! escalation path.
+//! Heavier than [`Store::atomic`](crate::Store::atomic): every
+//! reader and writer on the affected shards blocks until the
+//! closure returns. Use it only when the closure genuinely needs
+//! more than one shard and atomicity across them is required.
 
 use std::io;
 use std::sync::RwLockWriteGuard;

@@ -81,10 +81,10 @@ pub(crate) struct Inner {
     /// Pub/sub bus. Only shard 0's is ever used (pub/sub is process-wide);
     /// other shards carry an idle one (cheap).
     pub(crate) bus: PubsubBus,
-    /// Phase 3 / v1.21: shared replication source if this store is
-    /// an embed-as-writer. Every shard holds a clone of the same
-    /// `Arc<Mutex<...>>` so `commit_write` can push mutations
-    /// without reaching back up through the `DropGuard`.
+    /// Shared replication source if this store is an embed-as-writer.
+    /// Every shard holds a clone of the same `Arc<Mutex<...>>` so
+    /// `commit_write` can push mutations without reaching back up
+    /// through the `DropGuard`.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) writer_source:
         Option<std::sync::Arc<Mutex<kevy_replicate::source::ReplicationSource>>>,
@@ -116,7 +116,7 @@ pub(crate) struct DropGuard {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) replica_runner: Option<crate::replica_runner::ReplicaRunner>,
     /// Replica-source listener + accepted connection threads, present
-    /// iff this store is a Phase 3 embed-as-writer
+    /// iff this store is an embed-as-writer
     /// (`Config::embed_writer_listen_addr = Some(...)`). Joined on
     /// last-clone drop.
     #[cfg(not(target_arch = "wasm32"))]
@@ -219,9 +219,9 @@ impl Store {
     ///
     /// Returns `Err` with `ErrorKind::InvalidInput` when this store is
     /// not a replica (no upstream was configured at open). Application
-    /// code typically drives this from a kevy-elect failover signal —
-    /// see `docs/cluster.md` "embed-as-read-replica" / Phase 2 / T2.7.
-    /// kevy-embedded itself stays elect-protocol-agnostic; the
+    /// code typically drives this from a `kevy-elect` failover signal —
+    /// see [`docs/cluster.md`](https://github.com/goliajp/kevy/blob/develop/docs/cluster.md).
+    /// `kevy-embedded` itself stays elect-protocol-agnostic; the
     /// integration glue lives in the application.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn set_replica_upstream(&self, new_upstream: impl Into<String>) -> io::Result<()> {

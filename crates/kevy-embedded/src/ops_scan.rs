@@ -1,26 +1,18 @@
-//! Scan family — `scan` / `hscan` / `zscan` (kevy-embedded 1.9.0,
-//! closes mailrs feedback ask #7).
+//! Cursor-based and iterator-based scanning: `scan` / `hscan` /
+//! `zscan` plus the `keys_iter` / `hash_iter` / `zset_iter` adapters.
 //!
-//! Two API shapes shipped:
+//! Two API shapes:
 //!
 //! - **Cursor-based** (Redis-shaped): `scan(cursor, pattern, count) ->
-//!   (next_cursor, batch)`. Matches mailrs's suggested signature
-//!   exactly. `cursor = 0` starts a fresh walk; `next_cursor = 0`
-//!   means the walk completed.
+//!   (next_cursor, batch)`. A `cursor` of `0` starts a fresh walk; a
+//!   returned `next_cursor` of `0` means the walk completed.
 //! - **Iterator-based** (Rust-shaped): `keys_iter(pattern) -> impl
-//!   Iterator<Item = Vec<u8>>` etc. Same data; ergonomic for `for k
-//!   in store.keys_iter(...) { ... }`.
+//!   Iterator<Item = Vec<u8>>`, etc.
 //!
-//! Implementation note: every scan call snapshots the matching key
-//! set in one shot (via `collect_keys` / `hgetall` / `zrange`) then
-//! slices into it by cursor. For in-process embedded use this is
-//! the simplest correct semantics — the snapshot is stable inside
-//! one walk even if other writers mutate concurrently, and the
-//! memory cost is bounded by the matching subset.
-//!
-//! For very large keyspaces a future ship can add a truly
-//! incremental cursor that walks the underlying B-tree without
-//! materialising the whole match set. The API shape stays the same.
+//! Each call snapshots the matching set in one shot and slices into
+//! it by cursor. The snapshot is stable across a single walk even
+//! while other writers mutate concurrently, and the memory cost is
+//! bounded by the matching subset.
 
 use std::io;
 

@@ -1,113 +1,102 @@
 # Error reply catalog
 
-> v1.36 — every wire-level error kevy emits, with its trigger condition + recovery action. Treated as part of the user-facing contract; commands that change error semantics must update this catalog.
+A lookup table of every wire-level error reply kevy emits, what triggers it, and what the client should do next.
 
-Errors are emitted as RESP simple-error strings: `-<ERR-CLASS> <message>\r\n`. The first space-separated token is the **class** (`ERR`, `WRONGTYPE`, `MOVED`, etc.). Catalog is grouped by class.
+## How to read this
 
-## `-ERR` (generic)
+kevy errors travel over RESP as a simple-error string: `-<PREFIX> <message>\r\n`. The first whitespace-separated token is the **prefix** (`ERR`, `WRONGTYPE`, `MOVED`, `CROSSSLOT`, ...). Client libraries typically surface this as an error variant or exception whose `.kind` / `.code` / class name matches the prefix; the rest of the line is a human-readable message.
 
-| Trigger | Recovery |
-|---------|----------|
-| `unknown command '<cmd>'` | Wrong / unsupported command name. Check kevy's command coverage in README. |
-| `wrong number of arguments for '<cmd>' command` | Re-issue with correct argc per the Redis docs. |
-| `value is not an integer or out of range` | Sent for INCR/DECR-class commands when the existing value isn't a parsable i64. Use `SET` to overwrite. |
-| `no such key` | RENAME / RENAMENX / COPY / GETEX targets a key that doesn't exist. Treat as absent. |
-| `kevy only supports DB 0` | `SELECT N` with N ≠ 0. kevy doesn't expose Redis's multi-DB feature; use kevy-scope or separate instances. |
-| `MULTI calls can not be nested` | Already inside a MULTI block. Wait for EXEC / DISCARD first. |
-| `EXEC without MULTI` / `DISCARD without MULTI` | Either pair with the matching opener or drop the command. |
-| `WATCH inside MULTI is not allowed` | Issue WATCH BEFORE MULTI. |
-| `pub/sub or WATCH or HELLO or RENAME not allowed inside MULTI` (v2-3a) | These commands aren't queue-safe yet (v2-3b lands the queued-RENAME orchestration). |
-| `Protocol error` | The client sent malformed RESP. Reconnect + retry; if persistent, check the client library. |
-| `CONFIG SET failed for '<key>': <reason>` | Field is invalid / out of range. Check `CONFIG GET` for the supported set. |
-| `CONFIG REWRITE could not write <path>: <io-error>` | TOML file location is read-only or missing. Check `--config` path + filesystem permissions. |
+This catalog is grouped by prefix. If you handle errors structurally (recommended), match on the prefix; the trailing message is intended for logs and operators, not for parsing.
 
-## `-WRONGTYPE`
+Errors are part of kevy's user-facing contract. Adding, renaming, or repurposing a prefix is a breaking change for clients that pattern-match.
 
-| Trigger | Recovery |
-|---------|----------|
-| `Operation against a key holding the wrong kind of value` | The key exists but is a different Redis type (e.g., HGET on a string key). Either DEL + re-create with the right type, or use a different key. |
+## Core reference
 
-## `-EXECABORT`
+| Prefix | Triggers when | Recovery / next step |
+|--------|---------------|----------------------|
+| `-ERR unknown command '<cmd>'` | Command name is not implemented or not recognized. | Check README command coverage; verify spelling. |
+| `-ERR wrong number of arguments for '<cmd>' command` | argc doesn't match the command's accepted shapes. | Re-issue with the documented argument count. |
+| `-ERR value is not an integer or out of range` | INCR/DECR-class command on a value that isn't a parsable i64, or numeric arg out of range. | Use `SET` to overwrite with a parsable integer; clamp the input. |
+| `-ERR no such key` | RENAME / RENAMENX / COPY / GETEX targets a key that does not exist. | Treat the key as absent (use `EXISTS` to pre-check if needed). |
+| `-ERR kevy only supports DB 0` | `SELECT N` issued with N ≠ 0. | kevy has no multi-DB; use separate instances or namespaced keys. |
+| `-ERR MULTI calls can not be nested` | `MULTI` sent while already inside a MULTI block. | Wait for `EXEC` / `DISCARD` before opening another transaction. |
+| `-ERR EXEC without MULTI` | `EXEC` sent with no open transaction. | Pair with `MULTI`, or drop the command. |
+| `-ERR DISCARD without MULTI` | `DISCARD` sent with no open transaction. | Pair with `MULTI`, or drop the command. |
+| `-ERR WATCH inside MULTI is not allowed` | `WATCH` sent inside a MULTI block. | Issue `WATCH` before `MULTI`. |
+| `-ERR <cmd> not allowed inside MULTI` | A command that isn't queue-safe (pub/sub, `WATCH`, `HELLO`, `RENAME`) was queued inside MULTI. | Issue these outside the transaction. |
+| `-ERR Protocol error` | Inbound bytes are not valid RESP. | Reconnect and retry; if persistent, audit the client serializer. |
+| `-ERR CONFIG SET failed for '<key>': <reason>` | Unknown CONFIG field or value out of range. | `CONFIG GET *` to see supported fields and current values. |
+| `-ERR CONFIG REWRITE could not write <path>: <io-error>` | Config TOML path is missing or not writable. | Check `--config` path and filesystem permissions. |
+| `-WRONGTYPE Operation against a key holding the wrong kind of value` | Command run against an existing key of a different Redis type. | See [Wrong-type rules](#wrong-type-rules). |
+| `-EXECABORT Transaction discarded because of previous errors.` | A queued command had a syntax error during MULTI; EXEC refuses the batch. | Fix the offending queued command, then `MULTI` / queue / `EXEC` again. |
+| `-MOVED <slot> <host:port>` | Key's hash slot is not owned by this node. | See [Cluster-routing replies](#cluster-routing-replies). |
+| `-CROSSSLOT Keys in request don't hash to the same slot` | Multi-key command spans more than one hash slot. | See [Cluster-routing replies](#cluster-routing-replies). |
+| `-MISDIRECTED writer is <host:port>` | Write landed on a node that doesn't own this key's scope. | See [Cluster-routing replies](#cluster-routing-replies). |
+| `-QUIESCED migrating to <host:port>` | The slot or scope is mid-migration and frozen on this node. | See [Cluster-routing replies](#cluster-routing-replies). |
+| `-OOM command not allowed when used memory > 'maxmemory'` | Write-class command with policy `noeviction` after the limit is exceeded. | Raise `maxmemory`, set an eviction policy (e.g. `allkeys-lru`), or `DEL` to free room. Existing data is intact. |
+| `-READONLY You can't write against a read only replica.` | Write command sent to a replica node. | Send to the primary, or use a routing client. |
+| `-READONLY can't write against a read-only script` | Script was evaluated via `EVAL_RO` / `EVALSHA_RO` and attempted a write. | Use the writable `EVAL` / `EVALSHA` variant. |
+| `-MISCONF Errors writing to the AOF file: <io-error>` | AOF append failed (commonly `ENOSPC`). | Free disk space; in-memory state remains consistent; restart replays whatever reached disk. |
+| `-MISCONF BGSAVE failed: <io-error>` | Background snapshot writer failed. | Free disk space or repair the `data_dir` mount. Live data is unaffected. |
+| `-NOSCRIPT No matching script. Please use EVAL.` | `EVALSHA <sha>` requested a script not in the cache. | Call `EVAL` directly (kevy auto-caches) or `SCRIPT LOAD` first. |
+| `-BUSY Script is running.` | A long-running Lua script is blocking the shard. | `SCRIPT KILL` to interrupt (no-op if nothing is running). The `lua-time-limit` config caps runaway scripts. |
+| `-LOADING kevy is loading the dataset in memory` | Server is replaying AOF or loading snapshot at startup. | Wait and retry; `PING` is accepted during loading. |
 
-| Trigger | Recovery |
-|---------|----------|
-| Queued command had a syntax error during MULTI; the EXEC is aborted. | Fix the queued command and re-issue MULTI / queue / EXEC. |
+### Prefixes kevy never emits
 
-## `-MOVED <slot> <host:port>` (cluster mode)
+By design, kevy does not authenticate or authorize at the protocol layer; these Redis-compatible prefixes are deliberately absent:
 
-| Trigger | Recovery |
-|---------|----------|
-| Client sent a key whose hash-slot doesn't live on this node. | Follow the redirect: reconnect to `<host:port>` and re-issue. Cluster-aware clients (e.g., `redis-cli -c`) do this transparently. |
+- `-NOAUTH` — no `AUTH` command surface.
+- `-WRONGPASS` — no password check.
+- `-NOPERM` — no ACL system.
 
-## `-CROSSSLOT`
+If your client expects these to be possible, treat them as unreachable on kevy. Access control is delegated to the deployment perimeter (kevy binds `127.0.0.1` by default).
 
-| Trigger | Recovery |
-|---------|----------|
-| Multi-key command (MGET / MSET / DEL / EVAL with multiple KEYS) whose keys hash to DIFFERENT slots. | Either co-locate keys with `{hashtag}` syntax (so they hash to the same slot), or split the command into per-slot batches. |
+## Wrong-type rules
 
-## `-MISDIRECTED writer is <host:port>` (kevy-scope)
+A `WRONGTYPE` reply means the key already exists with a different Redis data type than the command expects. The rules:
 
-| Trigger | Recovery |
-|---------|----------|
-| Write landed on a node that doesn't own this key's scope. | Follow the redirect to the scope owner. kevy-cluster-rw client does this transparently. |
+- Type is decided at key creation and persists until the key is deleted (or expires).
+- `DEL <key>` followed by the original command will succeed (you've reset the type).
+- `EXPIRE` / `PERSIST` / `TYPE` / `OBJECT ENCODING` / `EXISTS` / `DEL` / `UNLINK` are type-agnostic and never raise `WRONGTYPE`.
+- `WRONGTYPE` is never returned for a missing key; missing-key semantics follow each command's documented behavior (`GET` returns nil, `LPUSH` creates the list, and so on).
 
-## `-OOM <message>` (out-of-memory)
+Recovery is always one of: pick a different key, or `DEL` the existing one and re-create with the intended type.
 
-| Trigger | Recovery |
-|---------|----------|
-| `command not allowed when used memory > 'maxmemory'` (v1.37+) with `noeviction` policy. | Either lift maxmemory, set an eviction policy (`allkeys-lru`), or DEL keys to free room. |
+## Cluster-routing replies
 
-## `-READONLY`
+These prefixes only appear when kevy is running in a routed mode (cluster or scoped). A non-cluster client may never see them.
 
-| Trigger | Recovery |
-|---------|----------|
-| Write command sent to a replica node. | Send to the primary; or use `kevy-cluster-rw` which routes writes correctly. |
-| `can't write against a read-only script` | Lua script was evaluated via the read-only variant (`EVAL_RO`); use `EVAL` instead. |
+- **`-MOVED <slot> <host:port>`** — Fires when a key's hash slot is permanently owned by another node. The client should reconnect to `<host:port>` and re-issue. Cluster-aware clients (e.g., `redis-cli -c`, `ioredis` in cluster mode) follow the redirect transparently and update their slot map.
+- **`-CROSSSLOT Keys in request don't hash to the same slot`** — Fires on multi-key commands (`MGET`, `MSET`, `DEL` with multiple keys, `EVAL` with multiple `KEYS`, `SUNIONSTORE`, etc.) when the keys do not all hash to the same slot. Co-locate the keys with a shared `{hashtag}` segment, or split the command into per-slot batches client-side.
+- **`-MISDIRECTED writer is <host:port>`** — Fires on a write that landed on a node that does not own the key's scope. Routing clients follow the redirect; manual clients should reconnect to `<host:port>`.
+- **`-QUIESCED migrating to <host:port>`** — Fires while a slot or scope is being migrated and is frozen on this node. The client should treat it like `MOVED` and retry against `<host:port>`. Once migration completes, that node will respond authoritatively.
 
-## `-MISCONF <message>` (v1.38+)
+See the protocol notes in [docs/](https://github.com/goliajp/kevy/tree/master/docs) for the full routing model.
 
-| Trigger | Recovery |
-|---------|----------|
-| `Errors writing to the AOF file: No space left on device` | Free disk space, then reissue (the in-memory state is consistent; on restart, kevy replays what made it to disk). |
-| `BGSAVE failed: <io-error>` | Free disk space or fix the data_dir mount. Existing data is unaffected. |
+## FAQ
 
-## `-NOSCRIPT`
+**My client treats `-MOVED` as a fatal error — how do I fix it?**
+The client isn't cluster-aware. Either switch to a cluster-aware client (e.g., `redis-cli -c`, `ioredis` with `Cluster`, `redis-py` with `RedisCluster`, the kevy routing client), or wrap your driver to catch `MOVED`, reconnect to the host in the message, and re-issue.
 
-| Trigger | Recovery |
-|---------|----------|
-| `EVALSHA <sha>` where the script wasn't pre-loaded. | Use `EVAL` directly (kevy auto-caches) or pre-load via `SCRIPT LOAD`. |
+**Single-key command came back with `-CROSSSLOT` — is that a bug?**
+No. `CROSSSLOT` only fires for multi-key commands. If you see it on what looks like a single-key call, the command is actually multi-key (e.g., `EVAL` with two `KEYS`, `SUNIONSTORE` with source + destination). Use `{tag}` notation to force shared slot placement, or split the call.
 
-## `-BUSY <message>`
+**I got `-OOM` — is my data corrupt?**
+No. `-OOM` is rejected at command-admission time; the write never landed. The keyspace is in exactly the state it was before the command. Free room (`DEL` / set an eviction policy / raise `maxmemory`) and retry.
 
-| Trigger | Recovery |
-|---------|----------|
-| Long-running Lua script blocking the shard. | Send `SCRIPT KILL` (no-op if no script running). The kevy default `lua-time-limit` (5 s) prevents indefinite blocks. |
+**`-LOADING` keeps coming back — how long should I wait?**
+For as long as the AOF / snapshot replay takes (proportional to dataset size). `PING` is accepted during loading, so health checks still work. If `-LOADING` persists indefinitely, inspect server logs — a partially corrupt AOF can stall replay.
 
-## `-LOADING <message>`
+**A queued MULTI command returned `-EXECABORT` — were any writes applied?**
+No. `EXECABORT` means the transaction was rejected as a batch; nothing in the queued sequence was executed. Fix the offending command and reopen with `MULTI`.
 
-| Trigger | Recovery |
-|---------|----------|
-| kevy is still replaying AOF / loading snapshot at startup; commands rejected until ready. | Wait + retry; PING is allowed during loading. |
+## Updating this catalog
 
-## Other reply classes
+If you add or modify a code path that emits a `-<PREFIX> ...` reply:
 
-These don't strictly start with `-` but are wire-level errors when consumed:
+1. Update the row in [Core reference](#core-reference) (or add a new one).
+2. Extend the wire-level chaos test at [crates/kevy/tests/wire_torture_chaos.rs](https://github.com/goliajp/kevy/blob/master/crates/kevy/tests/wire_torture_chaos.rs) if a new prefix is introduced.
+3. Note the change in [CHANGELOG.md](https://github.com/goliajp/kevy/blob/master/CHANGELOG.md) for the release that ships it.
 
-- **`+PONG`** as a reply to anything other than `PING` — usually a parser desync on the client; reconnect.
-
-## Categories that kevy DOES NOT emit (deliberately)
-
-Per project charter:
-- **`-NOAUTH`** — kevy has no AUTH (permanent design decision per `feedback-auth-tls-out`).
-- **`-WRONGPASS`** — same.
-- **`-NOPERM`** — no ACL system.
-- **`-DENIED`** — no `protected-mode` style refusal (kevy binds 127.0.0.1 by default; deployer-side concern).
-
-## How to update this catalog
-
-If you add or change a code path that emits a `-<CLASS>` error, update:
-1. This file — add or revise the trigger + recovery row.
-2. The v1.36 (or later) chaos test `crates/kevy/tests/wire_torture_chaos.rs` if the new error is for a new class.
-3. The release CHANGELOG note for the patch that introduced it.
-
-Errors are part of the user contract; silent changes can break ecosystem libraries that pattern-match on the message.
+Errors are part of the client contract. Silent message changes can break ecosystem libraries that pattern-match on them.

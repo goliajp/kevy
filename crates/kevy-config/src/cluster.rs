@@ -1,16 +1,12 @@
-//! `[cluster]` section schema — single-node cluster mode + the
-//! v3-cluster Phase 1.5 election peer list. Split out of
-//! [`crate::schema`] so that file stays under the 500-LOC house
-//! rule.
+//! `[cluster]` section schema — single-node cluster mode plus the
+//! quorum-election peer list.
 //!
-//! Why the peer list is a flat comma-separated string (per
-//! T1.5.4.5 decision (b)): TOML's `[[array_of_tables]]` would be
-//! the idiomatic shape, but kevy-config's hand-rolled 0-dep
-//! parser doesn't support it (and won't for one feature). A
-//! `peers = "id@host:port,id@host:port,..."` value parses with
-//! the existing flat KV grammar and the structural future-need
-//! is bounded (kevy-elect's anti-scope forbids per-peer TLS,
-//! auth, region etc).
+//! The peer list is a flat comma-separated string
+//! (`peers = "id@host:port,..."`) rather than TOML's
+//! `[[array_of_tables]]`: the hand-rolled 0-dep parser does not
+//! support arrays of tables, and the structural future-need is
+//! bounded (per-peer TLS, auth, and region are explicitly out of
+//! charter for the election subsystem).
 
 
 /// `[cluster]` section — single-node cluster mode: keys route by
@@ -22,10 +18,10 @@
 /// behaviour for non-cluster clients. Not hot-settable: the routing
 /// scheme is a startup property of the data dir (`shards.meta`).
 ///
-/// `Copy` was dropped in v1.19 once `peers` (a `Vec<PeerEntry>` for
-/// `kevy-elect` Phase 1.5) joined this struct. Most call sites just
-/// clone the per-tick `Config` snapshot via `Arc<Config>`, so the
-/// Copy removal is invisible in the hot path.
+/// The struct is `Clone` but not `Copy` (since `peers` and `scopes`
+/// hold owned vectors). Most call sites just clone the per-tick
+/// `Config` snapshot via `Arc<Config>`, so this is invisible in the
+/// hot path.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ClusterSection {
     /// Enable cluster mode. Default `false` (zero change).
@@ -33,10 +29,10 @@ pub struct ClusterSection {
     /// First cluster port (shard `i` listens at `port_base + i`).
     /// `0` (default) = `server.port + 1`.
     pub port_base: u16,
-    /// This node's stable id for the v3-cluster Phase 1.5
-    /// election (≤ 32 B ASCII; unique across the cluster). Default
-    /// empty — `kevy-elect` is dormant unless both `node_id` and
-    /// `peers` are set (so v1.18-era configs need no edit).
+    /// This node's stable id for the quorum election (≤ 32 B
+    /// ASCII; unique across the cluster). Default empty —
+    /// `kevy-elect` is dormant unless both `node_id` and `peers`
+    /// are set, so existing configs need no edit.
     pub node_id: String,
     /// First election-control listener port; shard `i` binds at
     /// `elect_port_base + i`. Default `0` → `port_base + 100` (or
@@ -47,11 +43,10 @@ pub struct ClusterSection {
     /// (including potentially *this* node — kevy-elect filters
     /// self by matching `node_id`).
     pub peers: Vec<PeerEntry>,
-    /// Phase 3 / v1.21 `[[cluster.scope]]` declarations: each
-    /// entry pins a key prefix to a writer node (and optional
-    /// fallback). Empty when scope-based multi-writer is off.
-    /// Same flat-string TOML shape rationale as `peers` —
-    /// `scopes = "prefix=writer[|fallback],..."`.
+    /// Scope declarations: each entry pins a key prefix to a writer
+    /// node (and optional fallback). Empty when scope-based
+    /// multi-writer is off. Same flat-string TOML shape as `peers`
+    /// — `scopes = "prefix=writer[|fallback],..."`.
     pub scopes: Vec<ScopeEntry>,
 }
 
