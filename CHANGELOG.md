@@ -4,6 +4,34 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.2] — 2026-07-01 — CI regression fix: unit test caught up to v1.57 `cluster_known_nodes` semantics
+
+**Theme**: short patch. v1.57 changed `CLUSTER INFO cluster_known_nodes` from shard count → peer count (`peers.len().max(1)`). v1.57 added a new chaos test for the change, but a pre-existing v1.x unit test (`crates/kevy/tests/cluster.rs:261 cluster_slots_topology_is_exact_and_covering`) was still asserting `cluster_known_nodes:4` (the old shard-count behaviour for `--threads 4`). The chaos suite is `#[ignore]`-gated so the local quick-run never caught it; the GH Actions Release workflow exercises `cargo test --release` (no `--ignored`) which DID catch it, failing the v1.58 / v1.59 / v2.0.0 / v2.0.1 Release jobs.
+
+### Changed
+
+- **`crates/kevy/tests/cluster.rs:261`** — assertion updated:
+  - `cluster_known_nodes:4` → `cluster_known_nodes:1` (single-node, no `peers = ...` → 1 known node = this node).
+  - `cluster_size:4` retained as separate assert (Redis-spec shard count, unchanged).
+  - Inline doc comment explains the v1.57+ semantics so future readers don't re-regress.
+
+### Empirical (Mac M2 Pro, kevy v2.0.2 release binary)
+
+```
+cargo test -p kevy --test cluster --release
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; finished in 0.21s
+```
+
+### Why this is a v2.0.x patch, not part of v1.57
+
+The v1.57 ship validated the new behaviour via a new chaos test (`cluster_known_nodes_count.rs`) but never re-ran the gated-off unit tests under the new binary. The release workflow caught it; the local autorun shipped through v1.58 / v1.59 / v2.0.0 / v2.0.1 with red Release jobs (caught at v2.0.1 retrospect). Fixing it now keeps the production v2.0.x line cleanly green.
+
+### v2.0.x patch cadence
+
+- v2.0.0: ship.
+- v2.0.1: 5 min soak validation + v1.34.x partial + v1.49.x closed.
+- v2.0.2 (this): CI regression fix.
+
 ## [v2.0.1] — 2026-07-01 — post-v2.0 patch: 5 min soak validation + 2 open findings closed
 
 **Theme**: first v2.0.x patch. No code changes — empirical validation of the v2.0 binary under a 5 min sustained soak (300 s, 5× the 60 s CI smoke), plus formal closure of two open findings (v1.34.x partial, v1.49.x as "not a bug").
