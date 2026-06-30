@@ -21,32 +21,32 @@ name = "kevy"
 path = "src/main.rs"
 
 [dependencies]
-kevy-sys = { path = "../kevy-sys", version = "1.19.0" }
-kevy-resp = { path = "../kevy-resp", version = "1.19.0" }
-kevy-store = { path = "../kevy-store", version = "1.19.0" }
-kevy-rt = { path = "../kevy-rt", version = "1.19.0" }
-kevy-config = { path = "../kevy-config", version = "1.19.0" }
-kevy-persist = { path = "../kevy-persist", version = "1.19.0" }
-kevy-geo = { path = "../kevy-geo", version = "1.19.0" }
-kevy-hash = { path = "../kevy-hash", version = "1.19.0" }
+kevy-sys = { path = "../kevy-sys", version = "2.0.0" }
+kevy-resp = { path = "../kevy-resp", version = "2.0.0" }
+kevy-store = { path = "../kevy-store", version = "2.0.0" }
+kevy-rt = { path = "../kevy-rt", version = "2.0.0" }
+kevy-config = { path = "../kevy-config", version = "2.0.0" }
+kevy-persist = { path = "../kevy-persist", version = "2.0.0" }
+kevy-geo = { path = "../kevy-geo", version = "2.0.0" }
+kevy-hash = { path = "../kevy-hash", version = "2.0.0" }
 # kevy-replicate: the server-as-replica runner (T1.29) needs
 # `ReplicaClient` / `ReplicaEvent` at runtime, not just for tests.
 # (Pre-T1.29 the dep was dev-only via `tests/replication.rs` decoding
 # wire frames; T1.29 promotes it to a normal dep.)
-kevy-replicate = { path = "../kevy-replicate", version = "1.19.0" }
+kevy-replicate = { path = "../kevy-replicate", version = "2.0.0" }
 # kevy-elect: v3-cluster Phase 1.5 quorum failover. Opt-in via
 # `[cluster] peers = "..."`; dormant when not configured, so the
 # v1.18-era deployments are unaffected.
-kevy-elect = { path = "../kevy-elect", version = "1.19.0" }
+kevy-elect = { path = "../kevy-elect", version = "2.0.0" }
 # kevy-scope: v3-cluster Phase 3 scoped multi-writer ownership.
 # Opt-in via `[cluster] scopes = "..."`; dormant otherwise.
-kevy-scope = { path = "../kevy-scope", version = "1.19.0" }
+kevy-scope = { path = "../kevy-scope", version = "2.0.0" }
 # v1.27 P7b: Lua scripting bridge — pulls the carved-exemption
 # kevy-lua + kevy-lua-host crates. See workspace Cargo.toml exemption
 # #2/#3: the only transitive third-party crate is `luna-core` (GOLIA
 # family, CI-gated 0-dep on luna's side).
-kevy-lua = { path = "../kevy-lua", version = "=1.59.0" }
-kevy-lua-host = { path = "../kevy-lua-host", version = "=1.59.0" }
+kevy-lua = { path = "../kevy-lua", version = "=2.0.0" }
+kevy-lua-host = { path = "../kevy-lua-host", version = "=2.0.0" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }

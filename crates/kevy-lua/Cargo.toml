@@ -42,8 +42,8 @@ luna-core = "=2.1.0"   # pinned exact: luna v2.1 (industrial-grade
                        # remained source-compatible through the
                        # v2.0 dev sprint per CHANGELOG. Bumping
                        # past 2.1 needs a bridge audit pass.
-kevy-bytes = { path = "../kevy-bytes", version = "1.19.0" }
-kevy-resp = { path = "../kevy-resp", version = "1.19.0" }
+kevy-bytes = { path = "../kevy-bytes", version = "2.0.0" }
+kevy-resp = { path = "../kevy-resp", version = "2.0.0" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }

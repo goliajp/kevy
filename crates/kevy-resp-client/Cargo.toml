@@ -16,4 +16,4 @@ categories = ["network-programming", "database"]
 workspace = true
 
 [dependencies]
-kevy-resp = { path = "../kevy-resp", version = "1.19.0" }
+kevy-resp = { path = "../kevy-resp", version = "2.0.0" }
