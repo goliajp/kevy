@@ -175,6 +175,10 @@ pub struct ServerSection {
     pub threads: usize,
     /// **v1.30** — Only shards `0..N` arm accept SQE; rest stay compute-only.
     pub accept_shards: Option<usize>,
+    /// **v1.37** — Cap on total active client connections. `0` = unlimited.
+    /// Default `10000` (matches Redis). New connection past cap is closed
+    /// + `rejected_connections` counter increments + INFO clients reports.
+    pub max_clients: usize,
     /// Snapshot + AOF location. Default `.`.
     pub data_dir: PathBuf,
 }
@@ -186,6 +190,7 @@ impl Default for ServerSection {
             port: 6004,
             threads: 0,
             accept_shards: None,
+            max_clients: 10_000,
             data_dir: PathBuf::from("."),
         }
     }

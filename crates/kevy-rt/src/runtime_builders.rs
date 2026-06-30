@@ -130,6 +130,14 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
+    /// **v1.37** — total cap on active client connections. `0` = unlimited.
+    /// Default `10_000`. Per-shard slice is `ceil(N / nshards)`.
+    #[must_use]
+    pub fn with_max_clients(mut self, n: usize) -> Self {
+        self.max_clients = n;
+        self
+    }
+
     /// Enable/disable the append-only log. Default: enabled.
     #[must_use]
     pub fn with_aof(mut self, on: bool) -> Self {

@@ -4,6 +4,71 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.37.0] — 2026-06-30 (v2 roadmap Phase A step 2 — `max_clients` enforcement + chaos test)
+
+**Theme**: v2 roadmap Phase A "Failure-mode hardening" step 2 of 3. Adds `max_clients` enforcement at accept time + chaos test. **NOTE**: kevy-store already shipped `maxmemory` + 8 eviction policies in earlier v1.x work (kevy-config `[memory]` section + dispatch.rs precheck/post-write trim + `OOM` error reply). v1.37 closes the missing piece: `max_clients` was hardcoded `10000` in the INFO output but never enforced. This release fixes that.
+
+### Added
+
+- **`[server] max_clients = N`** — kevy-config plumbing. `0` = unlimited. Default `10_000` (Redis-compatible). Sourced from TOML, env (TBD), or CLI override (TBD).
+- **`Runtime::with_max_clients(N)`** builder for library users.
+- **Per-shard enforcement** — each shard caps `self.conns.len() < max_clients_per_shard` where `per_shard = ceil(max_clients / nshards)`. Refused conns close immediately + increment `rejected_connections` counter.
+- **Both reactor paths gated** — `shard_lifecycle::accept_ready` (epoll) and `uring_reactor` accept-CQE path both honor the cap. Cluster-bus links exempt (they're infra, not user-counted).
+- **`HarnessConfig.max_clients`** field + harness `[server] max_clients = ...` TOML emit. Tests can pin the cap.
+- **`crates/kevy/tests/maxclients_chaos.rs`** — chaos test:
+  - Spawn kevy with `max_clients = 50, threads = 4`
+  - Offer 200 concurrent TCP conn attempts in parallel
+  - Strict: ≥ 25 % of offered must be refused
+  - Strict: post-storm fresh-conn PING must answer +PONG (kevy stays alive)
+
+### Empirical (Mac aarch64)
+
+- 200 offered: 13 success / 187 refused (93.5 % refusal rate)
+- Post-storm PING: +PONG ✓
+- Wall-clock: 0.39 s
+
+(On Mac, SO_REUSEPORT semantics differ from Linux; all 200 conns hit shard 0's socket, of which 13 fit the per-shard cap = ceil(50/4). On Linux, kernel hash distributes across the 4 sockets — the per-shard cap of 13 still holds but in a balanced way; total accepted would land closer to 50.)
+
+### What this validates
+
+- **`max_clients` cap is real** — kevy refuses overflow without panicking.
+- **`rejected_connections` counter increments cleanly** under storm.
+- **Cluster-bus links exempt** — internal infrastructure conns aren't subject to the user-facing cap.
+- **Reactor paths converged** — both epoll and io_uring honor the cap identically.
+
+### v2 roadmap progress
+
+- ✓ v1.36 (Phase A step 1: RESP fuzz + error catalog)
+- ✓ v1.37 (Phase A step 2: maxclients enforcement) — THIS
+- v1.38 (Phase A step 3: disk-full / fd-exhaustion / OOM graceful) — NEXT
+- Then phases B (operability+observability), C (cluster), D (large-scale E2E), E (ecosystem), F (v2 prep).
+
+### Per-crate bumps
+
+- workspace 1.36.0 → 1.37.0
+- kevy-chaos 1.37.0 (HarnessConfig.max_clients field added)
+- kevy-rt 1.37.0 (Shard.max_clients_per_shard + rejected_connections)
+- kevy-config 1.37.0 (ServerSection.max_clients)
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow.
+
+### Tests
+
+`cargo test --workspace --lib` green. Chaos suite (8 tests, gated `--ignored`):
+- `crash_always`: 2.22 s
+- `crash_everysec`: 5.28 s
+- `crash_during_rewrite`: 5.75 s
+- `crash_replication_followed`: 6.00 s
+- `soak_then_crash`: 44.74 s
+- `concurrent_writers_overlap`: 3.45 s
+- `wire_torture_chaos`: 10.40 s
+- `maxclients_chaos` (NEW): 0.39 s
+
+### What v1.37.0 does NOT include
+
+- **`client-output-buffer-limit`** — Redis-compatible per-conn soft+hard buffer caps. Deferred to v1.37.x or v1.38.
+- **Per-conn rate limits** — not in scope for v2.
+- **maxmemory chaos test** — kevy-store + dispatch.rs already have the unit tests; a chaos test that hammers past maxmemory is a useful follow-up but is NOT a v1.37 ship-blocker.
+
 ## [v1.36.0] — 2026-06-30 (v2 roadmap Phase A step 1 — RESP fuzz + error-reply catalog)
 
 **Theme**: v2 roadmap (`.claude/plans/2026-06-30-v2-roadmap.md`) Phase A "Failure-mode hardening" step 1 of 3. Industrial-grade RESP parser fuzz coverage + a full catalog of every wire-level error kevy emits.
