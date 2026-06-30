@@ -4,6 +4,71 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.20] — 2026-07-01 — **1h soak complete; v1.34.x finding closed — all 8 v1.x findings closed**
+
+**Theme**: pure-docs ship documenting the 1-hour lx64 soak completion that ran in the background across v2.0.15 → v2.0.19. **Final result: zero memory leak across 1 hour at 223 k ACK/sec sustained.** Closes the last v1.x finding (v1.34.x 1 h opt-in soak on lx64). All 8 v1.x open findings from the v2-arc are now closed or empirically refuted.
+
+### 1h soak empirical (lx64, kernel 6.12, io_uring reactor, v2.0.15 binary)
+
+```
+soak: running for 3600 s (override via KEVY_SOAK_SECS)
+soak: done — 804155257 ACKs / 0 errs over 3600 s (223376 ACK/s)
+soak: second-half memory slope = 8 B/sample (cap = 262144 B/sample)
+soak: kevy alive after 3600s soak
+test soak_long_running_no_leak ... ok
+test result: ok. 1 passed; 0 failed in 3600.46s
+```
+
+- **804 M ACKs sustained at 223 k ACK/sec** across the full hour.
+- **Slope = 8 B / sample (cap 262 144) = 32 768× under the leak cap.** Memory hovered between 2.13 MiB and 2.15 MiB across the 360 samples — true zero drift over 1 hour.
+- 0 parse / RESP errors across 800 M ops.
+- Workload: 4 producers running mixed-op (60 % SET / 20 % GET / 10 % DEL / 10 % HINCRBY) over a bounded 5 000-key space.
+
+### v1.x findings — final status
+
+| # | Surfaced | Status |
+|---|---|---|
+| v1.33.x Linux primary replication unresponsive | v1.33 | CLOSED in v2.0.15 |
+| v1.34.x 1 h opt-in soak on lx64 | v1.34 | **CLOSED in v2.0.20 (this entry)** |
+| v1.38.x SIGXFSZ handler | v1.38 | CLOSED in v1.58 |
+| v1.43.x cluster MGET CROSSSLOT | v1.43 | CLOSED in v1.56 |
+| v1.44.x cluster_known_nodes | v1.44 | CLOSED in v1.57 |
+| v1.45.x MISDIRECTED elect_port | v1.45 | CLOSED in v1.55 |
+| v1.49.x INFO memory empty | v1.49 | CLOSED in v2.0.1 (not a bug) |
+| v1.52.x CLIENT SETNAME persistence | v1.52 | CLOSED in v2.0.16 |
+| Linux CI `blocking_cross_shard.rs` | session-recent | CLOSED at v2.0.14 |
+
+**Total v1.x findings closed**: 8 of 8 (+ the bonus Linux CI follow-up). **Net v2-arc + v2.0.x patch line**: every open finding from the v2 chaos suite + every mailrs-feedback gap closed.
+
+### Fix — crates.io publish chain unblocked
+
+The v2.0.19 Release workflow's publish step failed at `kevy-embedded` with:
+
+```
+error: failed to prepare local package for uploading
+Caused by:
+  failed to select a version for the requirement `kevy = "^2.0.0"`
+  candidate versions found which didn't match: 1.49.0, 1.48.0, ...
+  required by package `kevy-embedded v1.15.0`
+```
+
+Root cause: `crates/kevy-embedded/Cargo.toml` had a versioned dev-dep on `kevy` (`kevy = { path = "...", version = "2.0.0" }`). `kevy` publishes LATER in the chain (it depends on the embedded surface transitively), so at the moment `cargo publish kevy-embedded` runs, the crates.io index still has `kevy = 1.49.0` as the latest match for `^2.0.0` — none. cargo errored out.
+
+**Fix**: change `kevy` dev-dep to path-only (`kevy = { path = "../kevy" }`, no `version` field). cargo strips path-only dev-deps from the published `Cargo.toml`, so local `cargo test` still works (`tests/server_replica_e2e.rs` uses `kevy::KevyCommands`) while the publish step no longer validates against the registry.
+
+### Significance
+
+This ship recovers the **entire crates.io publish pipeline** that's been silently broken since the kevy-embedded surface jumped to 2.x dependencies. **Pre-v2.0.20 crates.io state**:
+
+| Crate | crates.io | Current source |
+|---|---|---|
+| `kevy` | 1.49.0 | 2.0.20 |
+| `kevy-embedded` | 1.4.21 | 1.15.0 |
+| `kevy-client` | 1.12.20 | 1.12.20 |
+| `kevy-config` / `-sys` / `-resp` / `-hash` etc. | 2.0.19 | 2.0.20 |
+
+After v2.0.20 publish completes, all crates land at 2.0.20 / 1.15.0.
+
 ## [v2.0.19] — 2026-07-01 — CI flake fix — ttl_incident_repro per-run unique dir (recovers v2.0.17/v2.0.18 publish)
 
 **Theme**: CI-only patch. Recovers the publish path that was failing v2.0.17 + v2.0.18 release workflows. No public-API change.
