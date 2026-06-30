@@ -42,4 +42,48 @@ impl Store {
     pub fn bitcount(&self, key: &[u8], range: Option<(i64, i64)>) -> io::Result<u64> {
         self.wshard(key).store.bitcount(key, range).map_err(store_err)
     }
+
+    /// `BITPOS key bit [start [end]]` — find first bit equal to
+    /// `bit` (0 or 1) in the optional byte range. Returns `None`
+    /// when not found (Redis would reply `:-1`).
+    pub fn bitpos(
+        &self,
+        key: &[u8],
+        bit: u8,
+        range: Option<(i64, i64)>,
+    ) -> io::Result<Option<u64>> {
+        self.wshard(key)
+            .store
+            .bitpos(key, bit, range)
+            .map_err(store_err)
+    }
+
+    /// `GETRANGE key start end` — substring with Redis negative
+    /// indexing; `[start, end]` inclusive.
+    pub fn getrange(&self, key: &[u8], start: i64, end: i64) -> io::Result<Vec<u8>> {
+        self.wshard(key)
+            .store
+            .getrange(key, start, end)
+            .map_err(store_err)
+    }
+
+    /// `SETRANGE key offset value` — overwrite bytes at `offset`;
+    /// extends with zero padding if past current length. Returns
+    /// the new total length.
+    pub fn setrange(
+        &self,
+        key: &[u8],
+        offset: u64,
+        value: &[u8],
+    ) -> io::Result<usize> {
+        ensure_writable(self)?;
+        let mut g = self.wshard(key);
+        let new_len = g
+            .store
+            .setrange(key, offset, value)
+            .map_err(store_err)?;
+        let off_str = format!("{offset}");
+        commit_write(&mut g, &[b"SETRANGE", key, off_str.as_bytes(), value])?;
+        Ok(new_len)
+    }
 }

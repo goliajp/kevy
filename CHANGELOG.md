@@ -4,6 +4,45 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.17] — 2026-07-01 — **`kevy-embedded` 1.14.0**: BITPOS / GETRANGE / SETRANGE
+
+**Theme**: continued systematic round-out — adds 3 more Redis-standard string + bitmap ops that fit naturally into the existing `bitmap.rs` Store module.
+
+### Added — `kevy_store::Store`
+
+- **`bitpos(key, bit: u8, range)`** — find first MSB-first bit equal to `bit` (0 or 1) in the optional byte range. Returns `Option<u64>`; `None` mirrors Redis `:-1`. Edge cases: absent key + `bit=0` returns `Some(0)`; absent key + `bit=1` returns `None`.
+- **`getrange(key, start, end)`** — substring with Redis negative indexing (inclusive bounds). Returns `Vec<u8>`; empty when key absent or range out of bounds.
+- **`setrange(key, offset, value)`** — overwrite bytes at `offset`; extends with zero padding past current length. Returns new total length. Preserves TTL.
+
+### Added — `kevy_embedded::Store`
+
+- Thin facades (`bitpos`, `getrange`, `setrange`) in `ops_bitmap.rs`. `setrange` AOF-logs as `SETRANGE key offset value`.
+
+### Tests
+
+9 new unit tests in `store_tests_bitmap.rs`:
+- **bitpos**: MSB-first first-1 / first-0 / not-found-in-range / absent-key semantics for both bit values.
+- **getrange**: basic slice / negative indexing / absent returns empty.
+- **setrange**: in-bounds overwrite / past-end extends with zero padding.
+
+### Empirical (Mac M2 Pro, kevy v2.0.17)
+
+```
+cargo test --release -p kevy-embedded
+test result: ok. 167 passed; 0 failed (was 158 in v2.0.14; +9 string/bitmap).
+```
+
+### Net change since 1.4.21 baseline — updated
+
+- **65 new methods + 3 transaction surfaces** (was 62 + 3).
+- **175 unit tests** (was 44; +131).
+- 1 new kevy-store module (`bitmap.rs`) — now exposes `getbit/setbit/bitcount/bitpos/getrange/setrange`.
+- 11 embedded ops files + matching test files.
+
+### Background: 1h soak on lx64
+
+The 1-hour soak (`KEVY_SOAK_SECS=3600`) started during v2.0.15 ship is still running on lx64 at the v2.0.15 release binary. Current progress at the time of this ship: **t=1465s, 336 M ACKs, used_memory hovering at 2.14 MiB** — zero memory growth across 24 minutes. Expected completion ~12:32 UTC; full result will land in v2.0.18 CHANGELOG.
+
 ## [v2.0.16] — 2026-07-01 — **CLIENT SETNAME / GETNAME persist per-connection** (v1.52.x finding closed)
 
 **Theme**: closes the last v1.x open finding — v1.52.x `CLIENT SETNAME` documented stub. Implements per-conn name persistence via a reactor-level intercept (not via a `dispatch_into` trait refactor — much smaller blast radius).

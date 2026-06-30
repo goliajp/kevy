@@ -117,4 +117,116 @@ impl Store {
             .map(|b| u64::from(b.count_ones()))
             .sum())
     }
+
+    /// `BITPOS key bit [start [end]]` — return the position (bit
+    /// index, MSB-first) of the first bit equal to `bit` (0 or 1)
+    /// in the byte range `[start, end]` (inclusive, Redis-style
+    /// negative indexing). Returns `None` (Redis `-1`) when not
+    /// found. Errors with `OutOfRange` if `bit` > 1.
+    pub fn bitpos(
+        &mut self,
+        key: &[u8],
+        bit: u8,
+        range: Option<(i64, i64)>,
+    ) -> Result<Option<u64>, StoreError> {
+        if bit > 1 {
+            return Err(StoreError::OutOfRange);
+        }
+        let bytes = match self.get(key)? {
+            Some(cow) => cow,
+            None => return Ok(if bit == 0 { Some(0) } else { None }),
+        };
+        if bytes.is_empty() {
+            return Ok(if bit == 0 { Some(0) } else { None });
+        }
+        let len = bytes.len() as i64;
+        let (s, e) = match range {
+            None => (0usize, (len - 1) as usize),
+            Some((start, end)) => {
+                let norm = |x: i64| -> i64 {
+                    if x < 0 { (len + x).max(0) } else { x.min(len - 1) }
+                };
+                let s = norm(start);
+                let e = norm(end);
+                if s > e {
+                    return Ok(None);
+                }
+                (s as usize, e as usize)
+            }
+        };
+        for (i, &b) in bytes[s..=e].iter().enumerate() {
+            let target_mask = if bit == 1 { b } else { !b };
+            if target_mask != 0 {
+                let bit_in_byte = target_mask.leading_zeros() as u64;
+                let byte_idx = (s + i) as u64;
+                return Ok(Some(byte_idx * 8 + bit_in_byte));
+            }
+        }
+        Ok(None)
+    }
+
+    /// `GETRANGE key start end` — substring with Redis-style
+    /// negative indexing; `[start, end]` inclusive. Returns empty
+    /// `Vec` when key absent or range out of bounds.
+    pub fn getrange(
+        &mut self,
+        key: &[u8],
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<u8>, StoreError> {
+        let bytes = match self.get(key)? {
+            Some(cow) => cow,
+            None => return Ok(Vec::new()),
+        };
+        if bytes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let len = bytes.len() as i64;
+        let norm = |x: i64| -> i64 {
+            if x < 0 { (len + x).max(0) } else { x.min(len - 1) }
+        };
+        let s = norm(start) as usize;
+        let e = norm(end) as usize;
+        if s > e {
+            return Ok(Vec::new());
+        }
+        Ok(bytes[s..=e].to_vec())
+    }
+
+    /// `SETRANGE key offset value` — overwrite bytes at `offset`
+    /// with `value`. Extends the string with zero padding if
+    /// `offset > len`. Returns the new total length. Preserves
+    /// any existing TTL.
+    pub fn setrange(
+        &mut self,
+        key: &[u8],
+        offset: u64,
+        value: &[u8],
+    ) -> Result<usize, StoreError> {
+        let offset = offset as usize;
+        let mut owned: Vec<u8> = match self.get(key)? {
+            Some(Cow::Borrowed(b)) => b.to_vec(),
+            Some(Cow::Owned(v)) => v,
+            None => Vec::new(),
+        };
+        let needed = offset + value.len();
+        if needed > owned.len() {
+            owned.resize(needed, 0);
+        }
+        owned[offset..offset + value.len()].copy_from_slice(value);
+        let new_len = owned.len();
+        let new_val = if owned.is_empty() {
+            Value::Str(SmallBytes::from_slice(&[]))
+        } else {
+            Value::ArcBulk(Arc::new(owned.into_boxed_slice()))
+        };
+        let ttl_ns = self
+            .live_entry(key)
+            .and_then(|e| e.expire_at_ns.map(NonZeroU64::get));
+        self.insert_entry(
+            SmallBytes::from_slice(key),
+            Entry::new(new_val, ttl_ns),
+        );
+        Ok(new_len)
+    }
 }

@@ -91,3 +91,82 @@ fn bitcount_negative_indexing() {
     // Last byte = 'c' = 4 set bits.
     assert_eq!(s.bitcount(b"k", Some((-1, -1))).unwrap(), 4);
 }
+
+// ---- bitpos (kevy-embedded 1.14.0) -------------------------------------
+
+#[test]
+fn bitpos_first_set_bit_msb_first() {
+    let s = s();
+    // byte 0 = 0x40 = 0b01000000; first 1 = bit index 1.
+    s.set(b"k", &[0x40]).unwrap();
+    assert_eq!(s.bitpos(b"k", 1, None).unwrap(), Some(1));
+}
+
+#[test]
+fn bitpos_first_zero_bit() {
+    let s = s();
+    // byte 0 = 0xff (all set); byte 1 = 0xfe = 0b11111110; first 0 = bit 15.
+    s.set(b"k", &[0xff, 0xfe]).unwrap();
+    assert_eq!(s.bitpos(b"k", 0, None).unwrap(), Some(15));
+}
+
+#[test]
+fn bitpos_not_found_returns_none() {
+    let s = s();
+    // All set; searching for 0 in a defined range returns None.
+    s.set(b"k", &[0xff, 0xff]).unwrap();
+    assert_eq!(s.bitpos(b"k", 0, Some((0, 1))).unwrap(), None);
+}
+
+#[test]
+fn bitpos_absent_key_returns_zero_for_clear_bit() {
+    let s = s();
+    // Searching for bit=0 in absent key returns Some(0) per Redis semantics.
+    assert_eq!(s.bitpos(b"absent", 0, None).unwrap(), Some(0));
+    // Searching for bit=1 in absent key returns None.
+    assert_eq!(s.bitpos(b"absent", 1, None).unwrap(), None);
+}
+
+// ---- getrange / setrange (kevy-embedded 1.14.0) -----------------------
+
+#[test]
+fn getrange_basic_slice() {
+    let s = s();
+    s.set(b"k", b"Hello, World!").unwrap();
+    assert_eq!(s.getrange(b"k", 0, 4).unwrap(), b"Hello".to_vec());
+    assert_eq!(s.getrange(b"k", 7, 11).unwrap(), b"World".to_vec());
+}
+
+#[test]
+fn getrange_negative_indexing() {
+    let s = s();
+    s.set(b"k", b"abcde").unwrap();
+    // -3..=-1 = "cde"
+    assert_eq!(s.getrange(b"k", -3, -1).unwrap(), b"cde".to_vec());
+}
+
+#[test]
+fn getrange_absent_returns_empty() {
+    let s = s();
+    assert_eq!(s.getrange(b"absent", 0, 10).unwrap(), Vec::<u8>::new());
+}
+
+#[test]
+fn setrange_in_bounds_overwrites() {
+    let s = s();
+    s.set(b"k", b"Hello, World!").unwrap();
+    let n = s.setrange(b"k", 7, b"Redis").unwrap();
+    assert_eq!(n, 13);
+    assert_eq!(s.get(b"k").unwrap(), Some(b"Hello, Redis!".to_vec()));
+}
+
+#[test]
+fn setrange_past_end_extends_with_zeros() {
+    let s = s();
+    let n = s.setrange(b"k", 5, b"World").unwrap();
+    assert_eq!(n, 10);
+    assert_eq!(
+        s.get(b"k").unwrap(),
+        Some(vec![0, 0, 0, 0, 0, b'W', b'o', b'r', b'l', b'd'])
+    );
+}
