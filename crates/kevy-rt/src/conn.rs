@@ -109,6 +109,12 @@ pub(crate) struct Conn {
     /// `WATCH` time. `EXEC` fans these out via `Op::CheckWatch`; if any
     /// shard reports a mismatch, the transaction aborts (nil multi-bulk).
     pub(crate) watched: Vec<(Vec<u8>, u64)>,
+    /// **v2.0.16** — `CLIENT SETNAME` persisted value. Set by
+    /// `handle_command`'s CLIENT-intercept arm; read by the same
+    /// arm on `CLIENT GETNAME`. Empty by default (matches Redis).
+    /// Lives in the cold section since CLIENT SETNAME is a
+    /// once-per-connection housekeeping op. Closes v1.52.x finding.
+    pub(crate) client_name: Vec<u8>,
 }
 
 impl Conn {
@@ -128,6 +134,7 @@ impl Conn {
             psub: HashSet::new(),
             multi: None,
             watched: Vec::new(),
+            client_name: Vec::new(),
             proto: RespVersion::default(),
             blocked: false,
             cluster: false,

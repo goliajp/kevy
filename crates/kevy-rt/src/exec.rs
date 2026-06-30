@@ -15,6 +15,15 @@ use kevy_resp::{Argv, ArgvView, RespVersion, encode_array_len};
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
     pub(crate) fn handle_command<A: ArgvView + ?Sized>(&mut self, conn_id: u64, args: &A) {
+        // v2.0.16: CLIENT SETNAME / CLIENT GETNAME intercept (closes
+        // v1.52.x finding). These need per-conn state which the
+        // stateless `cmd_client` dispatch can't access; handle in-line
+        // here where we already own `&mut Conn` via `self.conns`. All
+        // other CLIENT subcommands fall through to the standard
+        // dispatch unchanged.
+        if Self::try_intercept_client(self, conn_id, args) {
+            return;
+        }
         // One verb-resolution per cmd (was 4: txn_kind + route + is_quit +
         // is_write each scanned the verb separately). KevyCommands overrides
         // resolve() with a single match; non-overriding impls still pay 4×.
@@ -78,7 +87,7 @@ impl<C: Commands> Shard<C> {
     }
 
     /// Push a slot that resolves immediately to `bytes` (preserves seq order).
-    fn immediate_reply(&mut self, conn_id: u64, bytes: Vec<u8>) {
+    pub(crate) fn immediate_reply(&mut self, conn_id: u64, bytes: Vec<u8>) {
         let seq = match self.conns.get_mut(&conn_id) {
             Some(c) => {
                 let s = c.next_seq;
