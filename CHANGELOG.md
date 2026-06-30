@@ -4,6 +4,61 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.52.0] — 2026-06-30 (v2 roadmap Phase E step 1 — Jedis 5.x + StackExchange.Redis battle test)
+
+**Theme**: v2 roadmap Phase E (ecosystem battle-test) step 1 of 2. Enterprise Java (Jedis 5.x) and .NET (StackExchange.Redis 2.x) golden-path RESP wire patterns differ from the Node.js / Python clients already battle-tested in `bullmq_*.rs` / `sidekiq.rs` / `celery.rs` / `ioredis_canonical.rs`. This step proves kevy speaks both libraries' golden paths.
+
+### Added
+
+- **`crates/kevy/tests/jedis_stackex_battle.rs`** — gated `#[ignore]` battle test with two sub-tests:
+  - **`jedis_5x_golden_path`**: HELLO 2 → CLIENT SETNAME → CLIENT GETNAME → 100-command pipeline → post-pipeline PING.
+  - **`stackexchange_redis_golden_path`**: HELLO 3 → CLIENT SETNAME → CLIENT NO-EVICT ON → 5-key MGET batching → post-battle PING.
+- The battle test ships a small RESP frame-counter (`count_replies` / `advance_one`) that handles RESP2 + RESP3 (`+ - : $N *N %N`) so the pipeline assertion can require N replies on the wire, not just a non-zero byte count.
+
+### New finding (v1.52.x candidate)
+
+- **`CLIENT GETNAME` returns empty bulk after `CLIENT SETNAME`**. kevy's `ops/client.rs:35-37` accepts the SETNAME write and returns `+OK` but does NOT persist the name; subsequent GETNAME returns `$0\r\n\r\n`. This is documented behavior (`scope-decisions.md`) — Jedis records the name client-side so app correctness is unaffected, but `CLIENT LIST` observability sees `name=""`. Candidate fix: ~30 LOC per-conn `name: Vec<u8>` field. Battle test relaxed to accept the documented stub OR a future round-trip.
+
+### Empirical findings (Mac M2 Pro, kevy v1.52 release binary)
+
+```
+jedis: HELLO 2
+jedis: CLIENT SETNAME jedis-client-1
+jedis: CLIENT GETNAME = "$0\r\n\r\n" (kevy stub returns empty bulk)
+jedis: pipeline 100 mixed commands
+jedis: pipeline got 100/100 replies in 441 bytes
+jedis: golden path OK
+
+stackex: HELLO 3
+stackex: CLIENT NO-EVICT ON reply = "+OK\r\n"
+stackex: MGET reply = "*5\r\n$5\r\nval-0\r\n...$5\r\nval-4\r\n"
+stackex: golden path OK
+
+test result: ok. 2 passed; 0 failed; finished in 0.38s
+```
+
+- Both library golden paths complete in 0.38 s combined.
+- Pipeline of 100 mixed commands (SET / INCR / LPUSH / HSET) replied with exactly 100 well-formed RESP frames in 441 bytes.
+- HELLO 3 proto upgrade clean; CLIENT NO-EVICT ON returns +OK (kevy implements the subcommand).
+- 5-key MGET returns proper RESP `*5` array with all 5 values in order.
+
+### Out of scope (deferred to Phase E step 2 / Phase F)
+
+- Redisson 3.x (Java Redis Object Mapper) — RESP3 push-based notification subscription model.
+- Lettuce (Java async client) — uses Netty event loop; battle test would need RESP3 push validation.
+- ServiceStack.Redis (.NET legacy stack) — superseded by StackExchange.Redis in modern deployments.
+
+### v2 roadmap progress
+
+- Phase A: v1.36 + v1.37 + v1.38 ✅
+- Phase B: v1.39 + v1.40 + v1.41 + v1.42 ✅
+- Phase C: v1.43 + v1.44 + v1.45 + v1.46 + v1.47 ✅
+- Phase D: v1.48 + v1.49 + v1.50 + v1.51 ✅
+- Phase E: v1.52 ✅; 1 step remaining (v1.53 Go / Python).
+- Phase F (RC + ship): pending.
+
+17 / 20 versions complete = 85 % toward v2.0.
+
 ## [v1.51.0] — 2026-06-30 (v2 roadmap Phase D step 4 — v2 acceptance baseline doc; Phase D COMPLETE)
 
 **Theme**: v2 roadmap Phase D step 4 of 4 — completes Phase D. Catalogs the entire chaos / soak / fuzz suite shipped v1.36 through v1.50 into a single authoritative `docs/v2-acceptance-baseline.md`, with the empirical headline number from each test and the v2.0 acceptance gate it covers.
