@@ -505,3 +505,6 @@ mod tests_bonus;
 #[cfg(test)]
 #[path = "store_tests_scan.rs"]
 mod tests_scan;
+#[cfg(test)]
+#[path = "store_tests_atomic.rs"]
+mod tests_atomic;
