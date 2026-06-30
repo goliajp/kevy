@@ -42,6 +42,7 @@
 #![forbid(unsafe_code)]
 
 mod accounting;
+mod bitmap;
 mod clock;
 mod entry;
 pub mod evict;
