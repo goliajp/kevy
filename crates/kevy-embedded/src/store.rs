@@ -493,3 +493,6 @@ mod tests_shard;
 #[cfg(test)]
 #[path = "store_tests_p2.rs"]
 mod tests_p2;
+#[cfg(test)]
+#[path = "store_tests_p3.rs"]
+mod tests_p3;

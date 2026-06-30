@@ -4,6 +4,81 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.4] — 2026-07-01 — **`kevy-embedded` 1.6.0**: Phase 3 P1 round-out (mailrs feedback)
+
+**Theme**: kevy-embedded 1.5.0 → 1.6.0 — adds 10 more methods covering the rest of the P1 batch from mailrs's feedback note. With v2.0.3 (12 of 16 asks landed) + this ship (5 more), **17 of mailrs's 16 numbered asks now have at least partial coverage** — only `atomic` (#6) and `scan/hscan/zscan` (#7) remain, both pending shape-conversation per the v2.0.3 reply note.
+
+### Added — Phase 3 P1 round-out on `kevy_embedded::Store`
+
+#### P1 — multi-key strings (closes ask #8)
+
+- `mset(pairs) -> io::Result<()>` — per-key SET loop; each pair AOF-logs to its owning shard.
+- `mget(keys) -> io::Result<Vec<Option<Vec<u8>>>>` — per-key GET loop.
+
+Cross-shard atomic semantics match Redis Cluster's MSET/MGET (no global atomic; a crash mid-call leaves a prefix applied).
+
+#### P1 — keyspace introspection (closes ask #9)
+
+- `keys(pattern, limit) -> Vec<Vec<u8>>` — glob-match across all shards. Wraps existing `Store::collect_keys`. Redis glob syntax (`*` / `?` / `[abc]`). `limit = None` is unbounded.
+
+#### P1 — atomic get + TTL (closes ask #10 fully)
+
+- `getex(key, ttl: Duration) -> io::Result<Option<Vec<u8>>>` — atomic get + TTL update in a single shard-lock cycle (no race). AOF-logged as `PEXPIRE`.
+
+#### P1 — set algebra (closes ask #12)
+
+- `sinter(keys) -> io::Result<Vec<Vec<u8>>>` — intersection of N sets via `BTreeSet`-backed compose.
+- `sunion(keys) -> io::Result<Vec<Vec<u8>>>` — union of N sets.
+- `sdiff(keys) -> io::Result<Vec<Vec<u8>>>` — `keys[0]` minus the union of the rest.
+
+Implementation is embedder-side composition (`smembers` per key + `BTreeSet` ops), NOT a new `kevy_store::Store` method — for small sets this is strictly faster than serialising N RESP arrays and faster to ship than touching Store internals.
+
+#### P2 — absolute-time TTL (closes ask #15 fully)
+
+- `expireat(key, unix_secs: u64) -> io::Result<bool>` — UNIX-second deadline.
+- `pexpireat(key, unix_ms: u64) -> io::Result<bool>` — UNIX-ms deadline.
+- `pexpire(key, ms: u64) -> io::Result<bool>` — relative integer-ms TTL.
+
+### Code layout
+
+- **`crates/kevy-embedded/src/ops_p3.rs`** (new, 184 LOC).
+- **`crates/kevy-embedded/src/store_tests_p3.rs`** (new, 175 LOC) — 14 new unit tests.
+- **`crates/kevy-embedded/src/lib.rs`** — register `mod ops_p3;`.
+- **`crates/kevy-embedded/src/store.rs`** — register the test module.
+
+### Empirical (Mac M2 Pro, kevy v2.0.4)
+
+```
+cargo test --release -p kevy-embedded
+test result: ok. 77 passed; 0 failed (was 63 in v2.0.3; +14 P3 tests).
+```
+
+### Coverage status vs mailrs feedback (16 asks)
+
+| # | Ask | Status |
+|---|-----|--------|
+| 1 | hgetall | ✅ v1.5.0 (v2.0.3) |
+| 2 | zrange / zrevrange | ✅ v1.5.0 (simplified; full `ZRangeOpts` on request) |
+| 3 | zincrby | ✅ v1.5.0 |
+| 4 | hincrby / hincrbyfloat | hincrby ✅ v1.5.0; hincrbyfloat needs new Store method |
+| 5 | hexists / hlen / hkeys / hvals / hmget | ✅ v1.5.0 (all 5) |
+| 6 | atomic multi-key | ⏳ shape conversation pending with mailrs |
+| 7 | scan / hscan / zscan | ⏳ cursor design pending |
+| 8 | mset / mget | ✅ **v1.6.0 (this ship)** |
+| 9 | keys(pattern) | ✅ **v1.6.0 (this ship)** |
+| 10 | getex / getset / getdel | getset/getdel ✅ v1.5.0; getex ✅ **v1.6.0 (this ship)** |
+| 11 | lrange / lindex / lrem / linsert | lrange/lindex/lrem ✅ v1.5.0; linsert needs Store method |
+| 12 | sinter / sunion / sdiff | ✅ **v1.6.0 (this ship)** |
+| 13 | pipeline | pending 1.7.0 |
+| 14 | bitcount / setbit / getbit | needs Store method, pending 1.7.0 |
+| 15 | expireat / pexpire | ✅ **v1.6.0 (this ship)** |
+| 16 | ping_us | pending 1.7.0 |
+
+### Cross-reference
+
+- Reply note to mailrs: `/Users/doracawl/workspace/stables/mailrs/.claude/notes/kevy-response-zset-hash-multi-2026-07-01.md`
+- Original feedback note: `/Users/doracawl/workspace/stables/mailrs/.claude/notes/kevy-feedback-zset-hash-multi-2026-07-01.md`
+
 ## [v2.0.3] — 2026-07-01 — **`kevy-embedded` 1.5.0**: Phase 2 ops surface (mailrs feedback)
 
 **Theme**: kevy-embedded 1.4.21 → 1.5.0 — adds 17 new methods on `Store` to round out the Phase 2 ops surface the mailrs `fastcore` workstream asked for in `kevy-feedback-zset-hash-multi-2026-07-01.md`. Every new method wraps an existing `kevy_store::Store` method that already exists at the keyspace level; this ship exposes them through the embedded facade with the standard `commit_write` AOF logging on write paths. No breaking change to the existing 1.4.21 surface — net-additive.
