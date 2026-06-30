@@ -47,6 +47,14 @@ pub struct HarnessConfig {
     /// **v1.37** — `[server] max_clients = N`. `0` keeps the kevy
     /// default (10 000). Set explicitly for the maxclients chaos test.
     pub max_clients: usize,
+    /// **v1.38** — `RLIMIT_NOFILE` for the spawned kevy. `0` = inherit
+    /// from parent. Use to test fd-exhaustion behavior.
+    pub rlimit_nofile: u64,
+    /// **v1.38** — `RLIMIT_FSIZE` for the spawned kevy. `0` = inherit.
+    /// Use to test disk-full / quota-exhaustion behavior. kevy writes
+    /// past this limit get `SIGXFSZ` from the kernel; kevy must
+    /// catch / report cleanly without panicking.
+    pub rlimit_fsize: u64,
     /// Timeout for "kevy ready" wait after spawn. Default: 10 s.
     pub spawn_timeout: Duration,
 }
@@ -66,6 +74,8 @@ impl HarnessConfig {
             aof_rewrite_pct: None,
             extra_toml: String::new(),
             max_clients: 0,
+            rlimit_nofile: 0,
+            rlimit_fsize: 0,
             spawn_timeout: Duration::from_secs(10),
         }
     }
@@ -165,6 +175,20 @@ impl Harness {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::from(stderr_file));
+        // v1.38 — apply RLIMIT_NOFILE / RLIMIT_FSIZE on Unix via
+        // pre_exec. Run BEFORE exec so kevy starts with the cap.
+        #[cfg(unix)]
+        {
+            let nofile = self.config.rlimit_nofile;
+            let fsize = self.config.rlimit_fsize;
+            use std::os::unix::process::CommandExt as _;
+            // SAFETY: pre_exec runs in the forked child between fork and
+            // exec; only async-signal-safe + simple syscalls. We do
+            // setrlimit(2) calls — safe + signal-safe. No allocator.
+            unsafe {
+                cmd.pre_exec(move || apply_rlimits(nofile, fsize));
+            }
+        }
         let child = cmd.spawn()?;
         self.child = Some(child);
         self.wait_ready()
@@ -243,6 +267,43 @@ impl Drop for Harness {
             let _ = child.wait();
         }
     }
+}
+
+/// Apply `RLIMIT_NOFILE` and `RLIMIT_FSIZE` to the calling process via
+/// raw `setrlimit(2)` syscalls. Async-signal-safe; suitable for
+/// `Command::pre_exec`. `0` for either limit = skip.
+#[cfg(unix)]
+fn apply_rlimits(nofile: u64, fsize: u64) -> io::Result<()> {
+    #[repr(C)]
+    struct RawRlimit {
+        rlim_cur: u64,
+        rlim_max: u64,
+    }
+    const RLIMIT_NOFILE: i32 = 7;
+    #[cfg(target_os = "macos")]
+    const RLIMIT_FSIZE: i32 = 1;
+    #[cfg(target_os = "linux")]
+    const RLIMIT_FSIZE: i32 = 1;
+    unsafe extern "C" {
+        fn setrlimit(resource: i32, rlim: *const RawRlimit) -> i32;
+    }
+    if nofile > 0 {
+        let lim = RawRlimit { rlim_cur: nofile, rlim_max: nofile };
+        // SAFETY: lim is on the stack and stays alive for the call; FFI
+        // takes a const ptr; no aliasing.
+        let rc = unsafe { setrlimit(RLIMIT_NOFILE, &lim) };
+        if rc != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    if fsize > 0 {
+        let lim = RawRlimit { rlim_cur: fsize, rlim_max: fsize };
+        let rc = unsafe { setrlimit(RLIMIT_FSIZE, &lim) };
+        if rc != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
 }
 
 /// Pick an ephemeral free port (bind 127.0.0.1:0 → return port → drop).

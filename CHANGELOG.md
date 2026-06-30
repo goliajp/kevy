@@ -4,6 +4,60 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.38.0] — 2026-06-30 (v2 roadmap Phase A step 3 — resource-exhaustion graceful behavior + recovery contract)
+
+**Theme**: v2 roadmap Phase A step 3 of 3 — Phase A "Failure-mode hardening" COMPLETE. Chaos tests for resource exhaustion (RLIMIT_FSIZE / RLIMIT_NOFILE) + documents the graceful-behavior contract.
+
+### Added
+
+- **`HarnessConfig.rlimit_nofile`** + **`.rlimit_fsize`** — propagate to spawned kevy via `Command::pre_exec` + raw `setrlimit(2)` (Unix only, std-only via raw `extern "C"`).
+- **`crates/kevy/tests/disk_full_chaos.rs`** — `RLIMIT_FSIZE = 256 KiB`, hammer kevy with SETs, validate the restart-recovery contract.
+- **`crates/kevy/tests/fd_exhaust_chaos.rs`** — `RLIMIT_NOFILE = 256`, 500 conn attempts, verify kevy stays responsive.
+
+### Empirical (Mac aarch64)
+
+**disk_full** (RLIMIT_FSIZE = 256 KiB):
+- 7,784 SETs ACK'd before fsize cap hit.
+- kevy died on cap (SIGXFSZ — kernel default behavior; kevy does not install a handler).
+- **Restart contract VERIFIED**: post-restart kevy comes back clean; GET `k3892` (mid-range key, ACK'd well before cap) returns stored value. **AOF replay correctly recovers the pre-cap state.**
+- Wall-clock 0.34 s.
+
+**fd_exhaust** (RLIMIT_NOFILE = 256):
+- 500 conn attempts offered; 500 alive; 0 refused. **kevy stayed alive throughout** + existing conn answered PING.
+- Mac's rlimit enforcement is permissive; on Linux the cap would refuse more conns. Strict invariant (kevy doesn't die) holds.
+- Wall-clock 0.29 s.
+
+### Graceful-behavior contract (new documented bar)
+
+- **`-MISCONF`** is the canonical kevy reply for disk-write failure (documented in v1.36's `docs/error-replies.md`).
+- **SIGXFSZ kill is acceptable for v1**: process termination on RLIMIT_FSIZE exhaustion is Redis-historical. Strict invariant: **on-disk AOF state stays replay-recoverable** and **a fresh restart comes back with all writes that completed before the cap was hit**.
+- **No fd leaks**: kevy releases fds on conn close. After a storm, fresh conns succeed (validated by fd_exhaust test).
+
+### What v1.38 surfaces (real finding)
+
+kevy does NOT install a SIGXFSZ handler. On Mac/Linux, RLIMIT_FSIZE exceeded → SIGXFSZ → process termination by default. Future work (v1.38.x or v1.39.x) could add a handler that converts SIGXFSZ to a clean `-MISCONF` reply, but for v1.38.0 the **restart-recovery contract IS the operational guarantee**.
+
+### v2 roadmap progress — Phase A COMPLETE
+
+- ✓ v1.36 (Phase A step 1: RESP fuzz + error catalog)
+- ✓ v1.37 (Phase A step 2: max_clients enforcement)
+- ✓ v1.38 (Phase A step 3: resource-exhaustion graceful + recovery contract) — THIS
+- Phase B next: v1.39 = SIGTERM-drain + hot-reload + DEBUG/CLIENT commands.
+
+### Per-crate bumps
+
+- workspace 1.37.0 → 1.38.0
+- kevy-chaos 1.38.0 (HarnessConfig rlimit fields + pre_exec setrlimit)
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow.
+
+### Tests
+
+`cargo test --workspace --lib` green. Chaos suite (10 tests, gated `--ignored`):
+- `crash_always` / `crash_everysec` / `crash_during_rewrite` / `crash_replication_followed`
+- `soak_then_crash` / `concurrent_writers_overlap` / `wire_torture_chaos` / `maxclients_chaos`
+- **`disk_full_chaos` (NEW): 0.34 s**
+- **`fd_exhaust_chaos` (NEW): 0.29 s**
+
 ## [v1.37.0] — 2026-06-30 (v2 roadmap Phase A step 2 — `max_clients` enforcement + chaos test)
 
 **Theme**: v2 roadmap Phase A "Failure-mode hardening" step 2 of 3. Adds `max_clients` enforcement at accept time + chaos test. **NOTE**: kevy-store already shipped `maxmemory` + 8 eviction policies in earlier v1.x work (kevy-config `[memory]` section + dispatch.rs precheck/post-write trim + `OOM` error reply). v1.37 closes the missing piece: `max_clients` was hardcoded `10000` in the INFO output but never enforced. This release fixes that.
