@@ -496,3 +496,6 @@ mod tests_p2;
 #[cfg(test)]
 #[path = "store_tests_p3.rs"]
 mod tests_p3;
+#[cfg(test)]
+#[path = "store_tests_bitmap.rs"]
+mod tests_bitmap;

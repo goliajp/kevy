@@ -4,6 +4,58 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.7] — 2026-07-01 — **`kevy-embedded` 1.8.0**: bitmap ops (mailrs feedback ask #14 closed)
+
+**Theme**: kevy-embedded 1.7.1 → 1.8.0 — closes mailrs ask #14 fully (bitmap). Adds a new `crates/kevy-store/src/bitmap.rs` module + the embedded facade so the mailrs anti-spam fingerprint tracker (their use case for the ask) has the native bitmap surface, cutting their HashSet-per-shard memory by the ratio mentioned in their feedback note.
+
+### Added — `kevy_store::Store` (new module)
+
+- **`crates/kevy-store/src/bitmap.rs`** (124 LOC) — new module.
+- `getbit(key, offset: u64) -> Result<u8, StoreError>` — MSB-first bit read; `0` for missing key or past-end.
+- `setbit(key, offset: u64, value: u8) -> Result<u8, StoreError>` — bit write; auto-extends with zero padding; preserves any existing TTL; returns the previous bit value. Errors on `value > 1`.
+- `bitcount(key, range: Option<(i64, i64)>) -> Result<u64, StoreError>` — set-bit count over the optional byte-offset range (inclusive, Redis-style negative indexing). `None` = whole string.
+
+### Added — `kevy_embedded::Store`
+
+- **`crates/kevy-embedded/src/ops_bitmap.rs`** (50 LOC) — thin facade. AOF-logs `SETBIT key offset value` matching Redis wire format.
+- `getbit(key, offset)`, `setbit(key, offset, value)`, `bitcount(key, range)`.
+
+### Tests
+
+9 new unit tests at `crates/kevy-embedded/src/store_tests_bitmap.rs` (159 LOC):
+- `getbit_absent_returns_zero`
+- `setbit_at_offset_zero_msb_first` (validates MSB-first semantics)
+- `setbit_growing_extends_with_zero_padding` (3-byte extension)
+- `setbit_returns_previous`
+- `setbit_invalid_value_errors`
+- `bitcount_empty_or_absent_is_zero`
+- `bitcount_full_string` (validates `"abc"` = 10 set bits)
+- `bitcount_with_byte_range` (validates byte-offset partial range)
+- `bitcount_negative_indexing`
+
+### Empirical (Mac M2 Pro, kevy v2.0.7)
+
+```
+cargo test --release -p kevy-embedded
+test result: ok. 93 passed; 0 failed (was 84 in v2.0.6; +9 bitmap).
+```
+
+### Coverage status vs mailrs feedback (16 asks) — updated
+
+| # | Ask | Status |
+|---|-----|--------|
+| 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 15, 16 | ✅ fully closed |
+| 14 | ✅ **now full** (bitmap in v1.8.0) |
+| 6 | ⏳ shape conversation pending |
+| 7 | ⏳ cursor design pending |
+| 13 | ⏳ pipeline shape pending |
+
+**14 of 16 fully closed**; 2 pending design conversation (#6 atomic) + 1 pending design (#7 scan, #13 pipeline).
+
+### Cross-reference
+
+- mailrs ask #14 context: their anti-spam fingerprint tracker was implemented as `HashSet<u64>` per shard; the bitmap replacement gives 1-bit-per-fingerprint (vs ~24 bytes for `HashSet::<u64>` entry = ~192× compression ratio for the data structure alone). The atomic-OR property of `SETBIT` removes their per-bit lock contention too.
+
 ## [v2.0.6] — 2026-07-01 — **`kevy-embedded` 1.7.1**: linsert (mailrs feedback ask #11 closed)
 
 **Theme**: kevy-embedded 1.7.0 → 1.7.1 — closes mailrs ask #11 fully (`linsert`). Adds the new `kevy_store::Store::linsert` method + embedded facade.
