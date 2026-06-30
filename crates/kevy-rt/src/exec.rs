@@ -196,21 +196,25 @@ impl<C: Commands> Shard<C> {
                 let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
                 self.start_single(conn_id, seq, proto, args, shard, is_quit, block_hint, meta);
             }
-            // Multi-target / aggregating commands (DEL, MGET, DBSIZE, fan-outs, …).
-            other => self.start_multi(conn_id, seq, args, other, is_quit),
+            // v1.56: cluster conns get `-CROSSSLOT` on cross-slot multi-key
+            // (MGET/MSET/SINTER/SUNION/SDIFF); else fan-out as before.
+            other => self.start_multi_or_crossslot(
+                conn_id, seq, args, other, is_quit, cluster_conn,
+            ),
         }
     }
 
     // `start_single` + `try_inline_local` (and their helpers `park_blocked`
     // / `post_write_housekeeping`) live in [`crate::exec_dispatch`] —
     // same `impl<C: Commands> Shard<C>`, split out so this file stays
-    // under the 500-LOC house rule.
+    // under the 500-LOC house rule. v1.56 CROSSSLOT helpers live in
+    // [`crate::exec_crossslot`] for the same reason.
 
     /// Multi-target / aggregating command (DEL, MGET, DBSIZE, fan-outs, …).
     /// Builds the per-shard target list, registers a pending slot for the
     /// aggregator, then dispatches each target (locally exec or cross-core
     /// send).
-    fn start_multi<A: ArgvView + ?Sized>(
+    pub(crate) fn start_multi<A: ArgvView + ?Sized>(
         &mut self,
         conn_id: u64,
         seq: u64,

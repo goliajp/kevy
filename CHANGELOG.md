@@ -4,6 +4,52 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.56.0] — 2026-06-30 (v2 roadmap Phase F step 3 — second RC fix: v1.43.x MGET cross-slot -CROSSSLOT)
+
+**Theme**: v2 roadmap Phase F step 3 of 6 — second RC iteration. Fixes the v1.43.x finding (cluster-mode multi-key commands MGET / MSET / SINTER / SUNION / SDIFF previously returned silent multi-bulk nils when keys spanned slots, instead of the Redis-Cluster-spec `-CROSSSLOT` error). Non-cluster conns keep the legacy single-DB fan-out behaviour (no break).
+
+### Changed
+
+- **`crates/kevy-rt/src/exec.rs`** — `start_command` now intercepts cluster-conn multi-key commands before `start_multi` dispatch and emits `-CROSSSLOT Keys in request don't hash to the same slot` when at least two keys hash to different CRC16 slots. Two new helpers:
+  - `is_crossslot_checked(&Route)` — `true` for MGET / MSET / SInter / SUnion / SDiff (matches Redis spec; DEL / EXISTS / SUBSCRIBE / DBSIZE legally span slots and are NOT checked).
+  - `keys_span_slots(&Route, args)` — walks argv with the route's correct stride (MSET = step 2, else step 1), hashes each key, returns `true` on the first slot disagreement.
+- Hot-path cost: one branch + (in cluster-mode multi-key only) a CRC16 per key up to the first disagreement. Single-DB / non-cluster conns pay one always-false branch.
+
+### Added
+
+- **`crates/kevy/tests/cluster_crossslot_mget.rs`** — gated `#[ignore]` chaos test with 5 invariants:
+  1. Cluster MGET cross-slot → `-CROSSSLOT`
+  2. Cluster MGET same-slot via `{shared}` hash-tag → `*3` array (no CROSSSLOT)
+  3. Cluster MSET cross-slot → `-CROSSSLOT`
+  4. Cluster SINTER cross-slot → `-CROSSSLOT`
+  5. Non-cluster MGET cross-slot → `*2` array (compat — legacy single-DB fan-out preserved)
+
+### Empirical findings (Mac M2 Pro, kevy v1.56 release binary)
+
+```
+crossslot: cluster MGET reply = "-CROSSSLOT Keys in request don't hash to the same slot"
+crossslot: cluster MGET same-slot reply = "*3\r\n$1\r\nv\r\n$1\r\nv\r\n$1\r\nv\r\n"
+crossslot: cluster MSET reply = "-CROSSSLOT Keys in request don't hash to the same slot"
+crossslot: cluster SINTER reply = "-CROSSSLOT Keys in request don't hash to the same slot"
+crossslot: non-cluster MGET reply = "*2\r\n$2\r\nv1\r\n$2\r\nv2\r\n"
+crossslot: non-cluster conn retains legacy fan-out (compat OK)
+test ... ok in 0.65s
+```
+
+Plus v1.43 cluster_topology_chaos pre-existing test now reports `-CROSSSLOT` (was multi-bulk nils) — still passes (it accepts either form).
+
+### Compat note
+
+- **No config break, no API break**. Non-cluster operators see zero behavior change.
+- Cluster-mode operators whose Redis-client libraries rely on `-CROSSSLOT` for retry / split-batch logic (go-redis, redis-py, Jedis cluster mode, StackExchange.Redis) now get spec-compliant replies.
+- v1.43.x finding closed.
+
+### v2 roadmap progress
+
+- Phase F: v1.54 + v1.55 + v1.56 ✅; 3 RC steps remaining (v1.57 - v1.59) before v2.0.
+
+Second RC complete. 3 steps from v2.0 ship.
+
 ## [v1.55.0] — 2026-06-30 (v2 roadmap Phase F step 2 — first RC fix: v1.45.x MISDIRECTED client port)
 
 **Theme**: v2 roadmap Phase F step 2 of 6 — first RC iteration. Fixes the v1.45.x finding (kevy-scope `-MISDIRECTED writer is …` reply quotes the kevy-elect election-control port instead of the client-facing port a Redis client can actually reconnect to). Backwards-compatible: the legacy `id@host:port` peer syntax still works (legacy semantics retained); new `id@host:elect_port:client_port` syntax opts into the fixed behaviour.
