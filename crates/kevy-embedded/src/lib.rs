@@ -55,6 +55,7 @@ mod config;
 mod info;
 mod metric;
 mod ops;
+mod ops_p2;
 mod pubsub;
 mod reaper;
 mod shard;
@@ -73,7 +74,7 @@ pub use config::{AppendFsync, Config, EvictionPolicy, TtlReaperMode};
 pub use info::KevyInfo;
 pub use metric::KevyMetric;
 pub use kevy_persist::RewriteStats;
-pub use kevy_store::{ExpireStats, StoreError};
+pub use kevy_store::{ExpireStats, ScoreBound, StoreError};
 pub use pubsub::{PubsubFrame, Subscription};
 pub use store::{Store, WeakStore};
 

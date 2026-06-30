@@ -4,6 +4,70 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.3] — 2026-07-01 — **`kevy-embedded` 1.5.0**: Phase 2 ops surface (mailrs feedback)
+
+**Theme**: kevy-embedded 1.4.21 → 1.5.0 — adds 17 new methods on `Store` to round out the Phase 2 ops surface the mailrs `fastcore` workstream asked for in `kevy-feedback-zset-hash-multi-2026-07-01.md`. Every new method wraps an existing `kevy_store::Store` method that already exists at the keyspace level; this ship exposes them through the embedded facade with the standard `commit_write` AOF logging on write paths. No breaking change to the existing 1.4.21 surface — net-additive.
+
+### Added — Phase 2 ops on `kevy_embedded::Store`
+
+#### P0 — hash mass-getters + atomic incr (closes asks #1, #4, #5)
+
+- `hgetall(key) -> io::Result<Vec<(Vec<u8>, Vec<u8>)>>` — every field/value pair in one round-trip. Closes ask #1 (biggest gap per mailrs).
+- `hexists(key, field) -> io::Result<bool>`
+- `hlen(key) -> io::Result<usize>`
+- `hkeys(key) -> io::Result<Vec<Vec<u8>>>`
+- `hvals(key) -> io::Result<Vec<Vec<u8>>>`
+- `hmget(key, fields) -> io::Result<Vec<Option<Vec<u8>>>>` — multi-field read in one call.
+- `hincrby(key, field, delta: i64) -> io::Result<i64>` — atomic per-field integer increment.
+
+#### P0 — zset range + atomic incr (closes asks #2, #3)
+
+- `zrange(key, start: i64, stop: i64) -> io::Result<Vec<(Vec<u8>, f64)>>` — rank-based ascending range with scores.
+- `zrevrange(key, start: i64, stop: i64) -> io::Result<Vec<(Vec<u8>, f64)>>` — descending range with scores.
+- `zrange_by_score(key, min: f64, max: f64) -> io::Result<Vec<(Vec<u8>, f64)>>` — inclusive score range.
+- `zrange_by_score_excl(key, min: ScoreBound, max: ScoreBound) -> io::Result<…>` — explicit inclusive/exclusive bounds.
+- `zincrby(key, delta: f64, member) -> io::Result<f64>` — atomic score increment.
+
+#### P1 — list slice + index (closes ask #11 partial)
+
+- `lrange(key, start: i64, stop: i64) -> io::Result<Vec<Vec<u8>>>`
+- `lindex(key, idx: i64) -> io::Result<Option<Vec<u8>>>` — supports negative indexing from tail.
+- `lrem(key, count: i64, value) -> io::Result<usize>` — Redis-spec `count > 0` head / `< 0` tail / `0` all.
+
+#### P1 — string single-call atomic patterns (closes ask #10 partial)
+
+- `getset(key, new) -> io::Result<Option<Vec<u8>>>`
+- `getdel(key) -> io::Result<Option<Vec<u8>>>`
+
+Re-export from kevy-store: `pub use kevy_store::ScoreBound` available to embedders that need the explicit inclusive/exclusive constructor.
+
+### Code layout
+
+- **`crates/kevy-embedded/src/ops_p2.rs`** (new, 200 LOC) — all new methods, plus the wasm32 no-op `ensure_writable` shim for cross-target build parity.
+- **`crates/kevy-embedded/src/store_tests_p2.rs`** (new, 165 LOC) — 19 unit tests covering each new method (`hgetall` empty/non-empty, `hexists` hits/misses, `hincrby` atomic, `zrange` asc/desc, `zrange_by_score` inclusive, `zincrby` atomic + new-member, `lrange`/`lindex` +/- indices, `lrem` head-count, `getset` previous/none, `getdel` present/absent).
+- **`crates/kevy-embedded/src/lib.rs`** — register `mod ops_p2;`.
+- **`crates/kevy-embedded/src/store.rs`** — register the test module.
+
+### Empirical (Mac M2 Pro, kevy v2.0.3)
+
+```
+cargo test --release -p kevy-embedded
+test result: ok. 63 passed; 0 failed (was 44 pre-ship; +19 P2 tests).
+```
+
+### Deferred to kevy-embedded 1.6.0 / 1.7.0
+
+Per mailrs's suggested release shape, this ships the methods that already had a `kevy_store::Store` impl. Items needing new `kevy_store::Store` impls or runtime-layer plumbing are batched for the next ship:
+
+- **1.6.0 (P1 round-out)**: `mset` / `mget` (cross-shard scatter), `keys(pattern)` (full-keyspace scan), `getex` (TTL on read), `linsert` (positional insert), `sinter` / `sunion` / `sdiff` (set algebra — kevy-server handles these via dispatch, needs Store-level impl for the embedded path).
+- **1.7.0 (P2 quality-of-life)**: `pipeline()` handle (in-process batching), `bitcount` / `setbit` / `getbit`, `expireat` / `pexpire`, `Store::ping_us()` (round-trip nanos for perfgate).
+- **Atomic multi-key write** (ask #6) and `scan` / `hscan` / `zscan` (ask #7) — design split between MULTI/EXEC handle vs closure-style `atomic(|guard| { … })` block. Targeting kevy-embedded 1.5.x once we converge with mailrs on the preferred shape (their note says they prefer Option B = closure).
+
+### Cross-reference
+
+- Original feedback note: `/Users/doracawl/workspace/stables/mailrs/.claude/notes/kevy-feedback-zset-hash-multi-2026-07-01.md`
+- mailrs's KV layout this ship enables: `/Users/doracawl/workspace/stables/mailrs/crates/mailbox-kevy/src/lib.rs:25-46`
+
 ## [v2.0.2] — 2026-07-01 — CI regression fix: unit test caught up to v1.57 `cluster_known_nodes` semantics
 
 **Theme**: short patch. v1.57 changed `CLUSTER INFO cluster_known_nodes` from shard count → peer count (`peers.len().max(1)`). v1.57 added a new chaos test for the change, but a pre-existing v1.x unit test (`crates/kevy/tests/cluster.rs:261 cluster_slots_topology_is_exact_and_covering`) was still asserting `cluster_known_nodes:4` (the old shard-count behaviour for `--threads 4`). The chaos suite is `#[ignore]`-gated so the local quick-run never caught it; the GH Actions Release workflow exercises `cargo test --release` (no `--ignored`) which DID catch it, failing the v1.58 / v1.59 / v2.0.0 / v2.0.1 Release jobs.
