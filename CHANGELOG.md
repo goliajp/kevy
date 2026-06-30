@@ -4,6 +4,38 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.59.0] — 2026-07-01 (v2 roadmap Phase F step 6 — final RC: docs roll-up + findings closure log)
+
+**Theme**: v2 roadmap Phase F step 6 of 6 — final RC. Pure docs ship — no code changes. Rolls up the 4 RC fixes (v1.55 → v1.58) into both authoritative v2.0 docs so the v2.0 release notes + acceptance baseline accurately reflect what's closed and what's still open at ship time.
+
+### Changed
+
+- **`docs/v2.0-RELEASE-NOTES.md`** — rewrites the "Known open findings" section as two sub-sections:
+  - **"RC fixes (v1.55 → v1.58)"** — 4 closure entries, each with a one-paragraph explanation + reference to the chaos test that validates it (`cluster_crossslot_mget.rs`, `cluster_known_nodes_count.rs`, `scope_misdirected_client_port.rs`, `sigxfsz_survival_chaos.rs`).
+  - **"Open findings (4 remaining, non-blocking)"** — 4 remaining items (v1.33.x Linux replication, v1.34.x 1 h soak, v1.49.x INFO memory semantic, v1.52.x CLIENT SETNAME), each with a clear "why this doesn't block v2.0" note.
+- **`docs/v2-acceptance-baseline.md`** — "Open findings" → "Findings status" with a Status column. 4 rows marked **CLOSED in v1.55/56/57/58**, 4 rows marked open. "Phase E and F" section becomes "Phase F status" with per-step ✅ checkmarks; v2.0 is the next-and-final ship.
+
+### Why this is "code-empty" by design
+
+v1.59 is the standard final-RC step in the v2 charter: assemble the
+narrative for the v2.0 tag. Any further code change at this point
+would expand v2.0's scope past what the chaos suite has empirically
+validated — which is the whole point of an RC cycle. The v2.0 tag is
+the next ship.
+
+### v2 roadmap progress
+
+- Phase A: v1.36 + v1.37 + v1.38 ✅
+- Phase B: v1.39 + v1.40 + v1.41 + v1.42 ✅
+- Phase C: v1.43 + v1.44 + v1.45 + v1.46 + v1.47 ✅
+- Phase D: v1.48 + v1.49 + v1.50 + v1.51 ✅
+- Phase E: v1.52 + v1.53 ✅
+- Phase F: v1.54 + v1.55 + v1.56 + v1.57 + v1.58 + v1.59 ✅ **COMPLETE**
+
+**Phase F closed. Next tag = v2.0.**
+
+20 / 20 + 0 = 100 % toward v2.0 ship; v2.0 itself is one tag away. The 4 closed findings have empirical regression chaos tests; the 4 open findings have either deferred-fix RFCs or empirical evidence they don't affect production correctness.
+
 ## [v1.58.0] — 2026-06-30 (v2 roadmap Phase F step 5 — fourth RC fix: v1.38.x SIGXFSZ handler)
 
 **Theme**: v2 roadmap Phase F step 5 of 6 — fourth RC iteration. Fixes the v1.38.x finding (kevy had no SIGXFSZ handler — when an AOF write exceeded `RLIMIT_FSIZE`, the kernel terminated kevy with a core dump per the signal's default `Core` action). v1.58 installs a no-op handler so the signal is absorbed; the failing write returns `EFBIG` to the AOF writer (logged + ignored via the existing `exec.rs:319` path) and kevy keeps serving.
