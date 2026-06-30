@@ -145,11 +145,17 @@ pub(crate) fn install(cfg: &Config) -> Result<(), String> {
     // Build the peer-address map from `[cluster] peers`. Empty
     // peer list ⇒ empty map (the MISDIRECTED encoder will use the
     // node id alone).
+    // v1.55: prefer the v1.55-extended `client_port` if set, fall
+    // back to the legacy `port` (which is the elect-control port —
+    // not what a client can connect to, but kept for compat).
     let peers: Vec<(String, String)> = cfg
         .cluster
         .peers
         .iter()
-        .map(|p| (p.node_id.clone(), format!("{}:{}", p.host, p.port)))
+        .map(|p| {
+            let reported = p.client_port.unwrap_or(p.port);
+            (p.node_id.clone(), format!("{}:{}", p.host, reported))
+        })
         .collect();
     let _ = PEER_ADDRS.set(peers);
     Ok(())
