@@ -252,13 +252,16 @@ fn cluster_slots_topology_is_exact_and_covering() {
     let want = build_cluster_slots_reply(n, srv.cluster_base as usize);
     read_reply(&mut c, want.as_bytes());
 
-    // INFO reports cluster_enabled:1 with 4 known nodes.
+    // INFO reports cluster_enabled:1. cluster_known_nodes reflects
+    // peer count (v1.57+): without a `peers = ...` config, it's 1
+    // (this node only). `cluster_size` retains shard count = 4.
     c.write_all(&req(&[b"CLUSTER", b"INFO"])).unwrap();
     let mut buf = [0u8; 512];
     let got = c.read(&mut buf).unwrap();
     let text = String::from_utf8_lossy(&buf[..got]).to_string();
     assert!(text.contains("cluster_enabled:1"), "{text}");
-    assert!(text.contains("cluster_known_nodes:4"), "{text}");
+    assert!(text.contains("cluster_known_nodes:1"), "{text}");
+    assert!(text.contains("cluster_size:4"), "{text}");
 }
 
 #[test]
