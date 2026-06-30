@@ -95,6 +95,14 @@ fn cmd_config_set<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     }
     let key = args[2].to_ascii_lowercase();
     let value = &args[3];
+    // v1.42 — record the CONFIG SET event to the audit log (if enabled).
+    let v_slice: &[u8] = value;
+    crate::audit_log::record(&[
+        &b"CONFIG"[..],
+        &b"SET"[..],
+        &key[..],
+        v_slice,
+    ]);
     let live = config_global::get();
     let mut new_cfg = (*live).clone();
     match apply_hot_set(&mut new_cfg, &key, value) {
@@ -118,6 +126,8 @@ fn cmd_config_set<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
 }
 
 fn cmd_config_rewrite(out: &mut Vec<u8>) {
+    // v1.42 — audit the admin event.
+    crate::audit_log::record(&[&b"CONFIG"[..], &b"REWRITE"[..]]);
     let cfg = config_global::get();
     let Some(path) = cfg.source_path.clone() else {
         return encode_error(

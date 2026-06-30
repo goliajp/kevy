@@ -254,6 +254,21 @@ impl Default for MetricsSection {
     }
 }
 
+/// `[audit]` section — v1.42. Append-only audit log of ADMIN-class
+/// commands (`CONFIG SET` / `CONFIG REWRITE` / `DEBUG` / `FLUSHDB` /
+/// `FLUSHALL` / `CLIENT KILL` / `SCRIPT FLUSH` etc.).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuditSection {
+    /// Append-only audit log file. Empty string = OFF (default).
+    pub log_path: PathBuf,
+}
+
+impl Default for AuditSection {
+    fn default() -> Self {
+        Self { log_path: PathBuf::new() }
+    }
+}
+
 /// `[expiry]` section. Controls the TTL background reaper.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExpirySection {
@@ -491,6 +506,8 @@ pub struct Config {
     pub memory: MemorySection,
     /// `[metrics]` settings (Prometheus /metrics endpoint — v1.41).
     pub metrics: MetricsSection,
+    /// `[audit]` settings (append-only ADMIN-command audit — v1.42).
+    pub audit: AuditSection,
     /// `[expiry]` settings.
     pub expiry: ExpirySection,
     /// `[log]` settings.

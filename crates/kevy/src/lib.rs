@@ -44,6 +44,7 @@ use std::sync::atomic::AtomicBool;
 mod cmd;
 mod cmd_block;
 mod metrics_http;
+pub(crate) mod audit_log;
 mod cmd_block_serve;
 mod cmd_data;
 mod cmd_hello;
@@ -220,6 +221,8 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
     install_signal_handlers(Arc::clone(&stop));
     // v1.41 — Prometheus /metrics endpoint. No-op when port = 0.
     metrics_http::spawn_if_enabled(&config_global::get());
+    // v1.42 — audit log init. No-op when log_path is empty.
+    audit_log::init(&config_global::get().audit.log_path);
     // Replica runners (if any) live in process-global state in
     // `replica_state` — they are started by `replication::apply` for
     // the startup `role = "replica"` path and by `REPLICAOF` at
