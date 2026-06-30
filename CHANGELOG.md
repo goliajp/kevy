@@ -4,6 +4,34 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.19] — 2026-07-01 — CI flake fix — ttl_incident_repro per-run unique dir (recovers v2.0.17/v2.0.18 publish)
+
+**Theme**: CI-only patch. Recovers the publish path that was failing v2.0.17 + v2.0.18 release workflows. No public-API change.
+
+### Root cause
+
+`crates/kevy-embedded/tests/ttl_incident_repro.rs::t3_ttl_survives_restart_and_still_expires` used a hardcoded `/tmp/kevy_ttl_repro_t3_unique` path. On the GH Actions runner the prior run left the directory existing + (in some runs) owned by a different uid; the `remove_dir_all().ok()` swallowed the error and the subsequent `create_dir_all().unwrap()` panicked with `PermissionDenied`. The local Mac runs always passed because the path was usually clean.
+
+### Fix
+
+- **`crates/kevy-embedded/tests/ttl_incident_repro.rs`** — uses `temp_dir().join(format!("kevy_ttl_repro_t3_{nanos}_{pid}"))` so every run gets a fresh directory. No dependency on a tempfile crate (per the 0-dep charter).
+
+### Empirical
+
+```
+cargo test --release -p kevy-embedded --test ttl_incident_repro
+test result: ok. 2 passed; 0 failed.
+```
+
+### Other CI failures observed but not addressed in this ship
+
+- **`blocking_cross_shard.rs` 3 sub-tests fail on GH Actions x86_64-linux** — same tests pass cleanly on lx64 (real hardware) at v2.0.14+. The GH Actions runners may have container constraints (older kernel? no io_uring?) that cause epoll-path timing skew; investigating separately.
+- **compat3 differential**: 133/135 vs valkey 9.1 (2 `GETDEL` mismatches around int-encoded values). Documented as a known divergence; not blocking ship.
+
+### Background: 1h soak on lx64
+
+Still running on v2.0.15 binary. Final result lands in the next CHANGELOG entry.
+
 ## [v2.0.18] — 2026-07-01 — **`kevy-embedded` 1.15.0**: BITOP (multi-key bitwise) + TIME
 
 **Theme**: continued systematic round-out — adds multi-key bitwise ops + a `TIME` accessor.
