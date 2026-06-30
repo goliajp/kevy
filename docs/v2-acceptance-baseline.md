@@ -170,35 +170,38 @@ cap)**. Production gate via `KEVY_SOAK_SECS=86400`.
 
 Cataloged above. Phase D **complete**.
 
-## Open findings
+## Findings status
 
-These are non-blocking observational findings raised during chaos work
-and queued for v1.x.x patch consideration:
+| # | Surfaced | Status | Description | Impact |
+|---|---|---|---|---|
+| 1 | v1.43 | **CLOSED in v1.56** | MGET cross-slot now returns `-CROSSSLOT` (was multi-bulk nils). Test: `cluster_crossslot_mget.rs`. | UX (Redis-spec) |
+| 2 | v1.44 | **CLOSED in v1.57** | `cluster_known_nodes` now reports peer count (was shard count). Test: `cluster_known_nodes_count.rs`. | observability |
+| 3 | v1.45 | **CLOSED in v1.55** | `-MISDIRECTED` reply uses CLIENT port via extended `id@host:elect:client` syntax. Legacy syntax retained for compat. Test: `scope_misdirected_client_port.rs`. | client compat |
+| 4 | v1.38.x | **CLOSED in v1.58** | `SIGXFSZ` no-op handler installed; failing AOF write returns `EFBIG` instead of kernel-killing kevy. Test: `sigxfsz_survival_chaos.rs`. | survival vs restart |
+| 5 | v1.33.x | open | Linux replication chaos test fails to fire | needs Linux repro |
+| 6 | v1.34.x | open | 1 h opt-in soak not yet run on lx64 | runtime budget |
+| 7 | v1.49.x | open | INFO memory reports `used_memory:0` when keyspace empty | observability nit |
+| 8 | v1.52.x | open | CLIENT SETNAME stub (no per-conn name persistence) | needs trait refactor |
 
-| # | Surfaced | Description | Impact |
-|---|---|---|---|
-| 1 | v1.43 | MGET cross-slot returns multi-bulk nils, not -CROSSSLOT | UX (non-standard) |
-| 2 | v1.44 | kevy-elect `cluster_known_nodes` reports 0 | observability |
-| 3 | v1.45 | MISDIRECTED reply uses elect_port, not main port | client compat |
-| 4 | v1.33.x | Linux replication chaos test fails to fire | needs Linux repro |
-| 5 | v1.34.x | 1 h opt-in soak not yet run | runtime budget |
-| 6 | v1.49.x | INFO memory reports 0 when keyspace empty | observability |
-| 7 | v1.38.x | SIGXFSZ handler not installed | survival vs restart |
+The 4 open findings are documented in their respective CHANGELOG
+entries. None block v2.0 ship — they are either observability nits or
+behaviors that already have a working alternative (e.g. AOF replay
+covers SIGXFSZ recovery contract; Jedis records the client name
+client-side so app correctness is unaffected).
 
-All are documented in their respective CHANGELOG entries. None block
-v2.0 ship — they are either observability nits or behaviors that
-already have a working alternative (e.g. AOF replay covers SIGXFSZ
-recovery contract).
+## Phase F status
 
-## Phases E and F (pending)
+- **v1.52** ✅ — Java / .NET ecosystem battle-test (Jedis 5.x, StackExchange.Redis)
+- **v1.53** ✅ — Go / Python ecosystem battle-test (go-redis v9, redis-py 5.x)
+- **v1.54** ✅ — docs polish + release notes drafting
+- **v1.55** ✅ — RC fix: v1.45.x MISDIRECTED client port
+- **v1.56** ✅ — RC fix: v1.43.x MGET cross-slot -CROSSSLOT
+- **v1.57** ✅ — RC fix: v1.44.x cluster_known_nodes observability
+- **v1.58** ✅ — RC fix: v1.38.x SIGXFSZ handler
+- **v1.59** ✅ (this) — final RC: docs roll-up + findings closure log
+- **v2.0** — ship
 
-- **v1.52 — Java / .NET ecosystem battle-test** (Jedis 5.x, StackExchange.Redis)
-- **v1.53 — Go / Python ecosystem battle-test** (go-redis v9, redis-py 5.x)
-- **v1.54 — docs polish + release notes drafting**
-- **v1.55 - v1.59 — RC fixes from ecosystem battle-test feedback**
-- **v2.0 — ship**
-
-Phase E maps each ecosystem library's golden-path workflow to a chaos
-test in `crates/kevy/tests/<lib>_*.rs` (following the existing
+Phase E mapped each ecosystem library's golden-path workflow to a
+chaos test in `crates/kevy/tests/<lib>_*.rs` (following the existing
 `bullmq_*.rs` / `sidekiq.rs` / `celery.rs` / `ioredis_canonical.rs`
-pattern). Phase F is doc + RC iterations driven by Phase E findings.
+pattern). Phase F closed the 4 RC findings driven by Phase E feedback.
