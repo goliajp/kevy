@@ -4,6 +4,70 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.11] — 2026-07-01 — **`kevy-embedded` 1.10.0**: atomic + pipeline — **all 16 mailrs feedback asks closed**
+
+**Theme**: kevy-embedded 1.9.0 → 1.10.0 — closes the last 2 open mailrs asks (#6 atomic + #13 pipeline) via systematically-designed defaults rather than waiting on external design conversation. Per user directive "系统化的设计与处理", these are kevy team's design calls; mailrs's note was one input among potential users.
+
+### #6 atomic — closure-style single-shard transaction
+
+```rust
+let result: i64 = store.atomic(|tx| {
+    let cur = tx.get(b"counter")?.unwrap_or_default();
+    let next = parse_i64(&cur) * 2 + 1;
+    tx.set(b"counter", next.to_string().as_bytes());
+    Ok(next)
+})?;
+```
+
+- Holds shard 0 write lock for the closure's entire duration → reads inside the closure see prior writes (full read-modify-write).
+- All AOF writes are deferred + replayed under one fsync at commit time.
+- **Single-shard scope** by design: every key must hash to shard 0. Default embedded config uses 1 shard so any key works. Multi-shard atomic would block every writer for the closure's duration — defer until a real use case justifies the trade-off.
+- `AtomicCtx` exposes: `set`, `get`, `incr`, `incr_by`, `hset`, `hget`, `hincrby`, `zadd`, `zincrby`, `zscore`. Add more methods if downstream usage shows a gap.
+
+### #13 pipeline — builder-style cross-shard batched commit
+
+```rust
+store.pipeline()
+    .set(b"a", b"1")
+    .hset(b"h", &[(b"f", b"v")])
+    .zadd(b"z", &[(1.0, b"m")])
+    .commit()?;
+```
+
+- Fluent builder; chain `.set(...).hset(...).zadd(...).commit()`.
+- **NOT atomic** — each op acquires its own per-shard write lock as applied; other writers see intermediate states.
+- Per-shard AOF fsync batches: N ops with K touched shards = K fsyncs (vs N without pipeline). For most use cases (1-shard embedded), one fsync per `commit()`.
+- For transactional semantics use `atomic` instead.
+- `Pipeline` exposes: `set` / `del` / `incr` / `incr_by` / `hset` / `hdel` / `hincrby` / `zadd` / `zrem` / `zincrby` / `sadd` / `srem` / `lpush` / `rpush`.
+
+### Code layout
+
+- **`crates/kevy-embedded/src/ops_atomic.rs`** (~190 LOC) — `AtomicCtx` + `Store::atomic` impl.
+- **`crates/kevy-embedded/src/ops_pipeline.rs`** (~225 LOC) — `Pipeline` builder + `Store::pipeline` impl.
+- **`crates/kevy-embedded/src/store_tests_atomic.rs`** (~175 LOC) — 12 new unit tests.
+- **`crates/kevy-embedded/src/lib.rs`** — registers both modules + `pub use AtomicCtx, Pipeline`.
+
+### Empirical (Mac M2 Pro, kevy v2.0.11)
+
+```
+cargo test --release -p kevy-embedded
+test result: ok. 126 passed; 0 failed (was 114 in v2.0.10; +12).
+```
+
+### Coverage status vs mailrs feedback — **16 of 16 closed**
+
+| # | Status |
+|---|--------|
+| 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 | ✅ **all fully closed** |
+
+### Net change since 1.4.21 baseline (final tally)
+
+- **46 new methods** (was 17 in v1.5.0 + 10 in v1.6.0 + 2 in v1.7.0 + 1 in v1.7.1 + 3 in v1.8.0 + 8 in v1.8.1 + 3 in v1.9.0 + 2 transaction surfaces in v1.10.0).
+- **134 unit tests** (was 44; +90).
+- **2 new Store modules** (`bitmap.rs` in kevy-store + `ops_atomic.rs`/`ops_pipeline.rs` adding the transaction layer in kevy-embedded).
+- **8 new embedded ops files** (`ops_p2.rs` / `ops_p3.rs` / `ops_bitmap.rs` / `ops_bonus.rs` / `ops_scan.rs` / `ops_atomic.rs` / `ops_pipeline.rs` + matching test files).
+- Comprehensive doc-tested README.
+
 ## [v2.0.10] — 2026-07-01 — **`kevy-embedded` 1.9.0**: scan family (mailrs feedback ask #7 closed)
 
 **Theme**: kevy-embedded 1.8.2 → 1.9.0 — closes mailrs ask #7 fully (`scan` / `hscan` / `zscan`) by shipping BOTH API shapes from the v1.5.0 reply note: cursor-based (Redis-shaped, matching mailrs's suggested signature) AND iterator-based (Rust-shaped, ergonomic).
