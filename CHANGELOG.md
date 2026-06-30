@@ -4,6 +4,65 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.45.0] — 2026-06-30 (v2 roadmap Phase C step 3 — kevy-scope MISDIRECTED chaos + survivor)
+
+**Theme**: v2 roadmap Phase C step 3 of 5. Chaos test for kevy-scope's scoped multi-writer routing — verify the `-MISDIRECTED` reply mechanism fires across a 2-node cluster + the non-owner survives a SIGKILL of the owner.
+
+### Added
+
+- **`crates/kevy/tests/scope_misdirected_chaos.rs`** — 2-node chaos test:
+  - 48-port block + partition (same pattern as v1.44).
+  - nodeA + nodeB; both run `[cluster] enabled = true` + matching `peers` list + `scopes = "app:billing:=nodeA"`.
+  - Issue `SET app:billing:foo bar` to BOTH nodes.
+  - Strict: reply from both is well-formed RESP; neither node panics.
+  - SIGKILL nodeA; verify nodeB still answers PING.
+
+### Empirical (Mac aarch64)
+
+- **nodeA** (scope owner) reply: `+OK\r\n` ✓
+- **nodeB** (non-owner) reply: `-MISDIRECTED writer is 127.0.0.1:51957\r\n` ✓
+- After nodeA SIGKILL: **nodeB still answers PING** ✓
+- Wall-clock: **1.61 s**.
+
+### What this validates
+
+- **kevy-scope routing works end-to-end** across multi-process kevy cluster — non-owner correctly returns MISDIRECTED with the owner's address.
+- **`scopes = "prefix=writer-id"`** TOML config is wired through end-to-end.
+- **Node-death survivor invariant**: SIGKILL of owner doesn't crash the non-owner.
+- **First v2-roadmap chaos test where a cluster-mode feature WORKS as designed** (v1.44 kevy-elect peer formation had `cluster_known_nodes=0`; v1.45 kevy-scope is firing correctly).
+
+### Observational note (not a failure)
+
+The MISDIRECTED reply contains nodeA's **elect_port** address (`127.0.0.1:51957`), not its main client port. This is the on-wire kevy convention — kevy-cluster-rw client knows the topology and translates. Standard Redis clients reading this reply literally would try to connect to the elect port (not the main port); they get a connection error and fall back. **v1.45.x candidate**: convert MISDIRECTED reply addr to the main client port for stock-client compat (or document the convention).
+
+### v2 roadmap progress
+
+- ✓ Phase A complete (v1.36-v1.38)
+- ✓ Phase B complete (v1.39-v1.42)
+- ✓ v1.43 (Phase C step 1: cluster topology chaos)
+- ✓ v1.44 (Phase C step 2: kevy-elect peer formation + survivor)
+- ✓ v1.45 (Phase C step 3: kevy-scope MISDIRECTED chaos) — THIS
+- v1.46 (Phase C step 4: network partition + asymmetric failures) — NEXT
+- v1.47 (Phase C step 5: rolling upgrade + AOF compat matrix)
+- Then Phase D / E / F.
+
+### Per-crate bumps
+
+- workspace 1.44.0 → 1.45.0
+- kevy 1.45.0 (new chaos test only)
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow.
+
+### Tests
+
+`cargo test --workspace --lib` green. Chaos suite (16 tests, gated `--ignored`):
+- crash × 4 / soak / concurrent / wire_torture / maxclients / disk_full / fd_exhaust / sigterm_drain / backup_restore / audit_log / cluster_topology / cluster_peer_formation
+- **scope_misdirected_chaos (NEW): 1.61 s — kevy-scope MISDIRECTED works end-to-end + survivor invariant validated**
+
+### What v1.45.0 does NOT include
+
+- **MOVE-SCOPE chaos** (actual quiesce-window migration X → Y mid-write). Deferred to v1.45.x or v1.46+ — depends on MOVE-SCOPE / MOVE-SCOPE-INGEST command handlers being wired into the dispatch path.
+- **Main-port-vs-elect-port MISDIRECTED addr** — v1.45.x candidate.
+
 ## [v1.44.0] — 2026-06-30 (v2 roadmap Phase C step 2 — kevy-elect peer formation + node-death survivor chaos)
 
 **Theme**: v2 roadmap Phase C step 2 of 5. Chaos test for kevy-elect peer formation in a 3-node cluster + node-death survivor invariant. v1.44.0 ships a tighter scope (peer formation + survivor) than the original XL "replication failover + quorum vote" scope — that becomes v1.44.x or v1.45+. The tightening lets autorun progress toward v1.47 / Phase D without blocking on a multi-week sprint.
