@@ -129,6 +129,39 @@ pub(crate) fn map_eviction_policy(p: kevy_config::EvictionPolicy) -> kevy_store:
 /// Reads `cfg.persistence.appendfsync` from the process-wide config (set by
 /// `config_init`) to pick the AOF fsync policy. Defaults to `EverySec`
 /// when no config is installed (matches the Wave 1 behaviour).
+/// **v1.39** — signal flag flipped by the SIGTERM / SIGINT handler.
+/// Async-signal-safe; AtomicBool::store is signal-safe per the C
+/// memory model.
+#[cfg(unix)]
+static SIGNAL_RECEIVED: AtomicBool = AtomicBool::new(false);
+
+/// **v1.39** — installed on first call to [`serve`]. Catches SIGTERM
+/// (graceful shutdown) and SIGINT (Ctrl-C). Both flip the per-run
+/// `stop` flag via a polling bridge thread.
+#[cfg(unix)]
+fn install_signal_handlers(stop: Arc<AtomicBool>) {
+    extern "C" fn handler(_: std::ffi::c_int) {
+        SIGNAL_RECEIVED.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    kevy_sys::install_signal_handler(kevy_sys::SIGTERM, handler);
+    kevy_sys::install_signal_handler(kevy_sys::SIGINT, handler);
+    // Polling-bridge thread: signal handlers can't easily touch the
+    // per-run Arc, so we poll the static AtomicBool every 100 ms and
+    // mirror it into `stop`. Daemon thread; exits when the process does.
+    std::thread::spawn(move || loop {
+        if SIGNAL_RECEIVED.load(std::sync::atomic::Ordering::SeqCst) {
+            stop.store(true, std::sync::atomic::Ordering::SeqCst);
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    });
+}
+
+#[cfg(not(unix))]
+fn install_signal_handlers(_stop: Arc<AtomicBool>) {
+    // No-op on non-Unix; production deployments are Unix anyway.
+}
+
 pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_aof: bool) -> ! {
     let cfg = config_global::get();
     let fsync = map_appendfsync(cfg.persistence.appendfsync);
@@ -179,6 +212,11 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
     }
     scope_integration::install_self_id(&cfg);
     let stop = Arc::new(AtomicBool::new(false));
+    // v1.39 — install SIGTERM + SIGINT handlers that flip `stop`,
+    // triggering the runtime's existing drain path (fsync AOF, close
+    // listeners, exit 0). std-only: raw `signal(2)` + a poller thread
+    // that bridges the signal-safe static into the per-run `Arc`.
+    install_signal_handlers(Arc::clone(&stop));
     // Replica runners (if any) live in process-global state in
     // `replica_state` — they are started by `replication::apply` for
     // the startup `role = "replica"` path and by `REPLICAOF` at

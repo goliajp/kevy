@@ -452,6 +452,23 @@ pub fn unix_listen(path: &[u8], backlog: i32) -> io::Result<Socket> {
     Ok(sock)
 }
 
+/// **v1.39** — `SIGTERM` constant.
+pub const SIGTERM: c_int = 15;
+/// **v1.39** — `SIGINT` constant (Ctrl-C).
+pub const SIGINT: c_int = 2;
+
+/// **v1.39** — install a C-style handler for `signum`. Safe wrapper
+/// around `signal(2)`; the handler must be async-signal-safe (no
+/// allocator, no syscall beyond a tiny set). Typical use: handler
+/// stores into a `static AtomicBool` which the main loop polls.
+pub fn install_signal_handler(signum: c_int, handler: extern "C" fn(c_int)) {
+    // SAFETY: signal(2) is signal-safe; we just register a static
+    // handler. No allocation, no aliasing.
+    unsafe {
+        ffi::signal(signum, handler);
+    }
+}
+
 /// A self-pipe used to wake a [`Poller`] blocked in `wait` from another thread.
 /// Register `read_fd()` in the poller for read-readiness; call `wake()` from any
 /// thread to make the poll return; call `drain()` when the read end fires.

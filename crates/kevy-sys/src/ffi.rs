@@ -33,6 +33,12 @@ unsafe extern "C" {
     // `c_char = i8` continue to type-check.
     pub fn unlink(path: *const c_char) -> c_int;
     pub fn chmod(path: *const c_char, mode: u32) -> c_int;
+    // v1.39 — signal(2) for SIGTERM / SIGINT handling. Variadic-ish
+    // in glibc but the fixed two-arg form is universally supported.
+    pub fn signal(
+        signum: c_int,
+        handler: extern "C" fn(c_int),
+    ) -> *mut c_void;
 }
 
 /// `struct timespec` — used by kqueue's `kevent` timeout (macOS only).
