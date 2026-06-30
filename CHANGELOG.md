@@ -4,6 +4,31 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.51.0] — 2026-06-30 (v2 roadmap Phase D step 4 — v2 acceptance baseline doc; Phase D COMPLETE)
+
+**Theme**: v2 roadmap Phase D step 4 of 4 — completes Phase D. Catalogs the entire chaos / soak / fuzz suite shipped v1.36 through v1.50 into a single authoritative `docs/v2-acceptance-baseline.md`, with the empirical headline number from each test and the v2.0 acceptance gate it covers.
+
+### Added
+
+- **`docs/v2-acceptance-baseline.md`** — single source of truth for "what does industrial-grade mean for kevy?" Sections:
+  - How to run the whole suite (one cargo invocation; 60 s wall-clock excluding soak).
+  - 24 h soak operator runbook (`KEVY_SOAK_SECS=86400`).
+  - 15-row v2 acceptance gates table — every gate, its test, its empirical baseline, its roadmap step.
+  - Per-phase summary of every chaos test from v1.36 → v1.50.
+  - Open-findings table (7 non-blocking observational items queued for v1.x.x patches).
+  - Phase E + F roadmap.
+
+### v2 roadmap progress
+
+- Phase A: v1.36 + v1.37 + v1.38 ✅
+- Phase B: v1.39 + v1.40 + v1.41 + v1.42 ✅
+- Phase C: v1.43 + v1.44 + v1.45 + v1.46 + v1.47 ✅
+- Phase D: v1.48 + v1.49 + v1.50 + v1.51 ✅ **COMPLETE**
+- Phase E (ecosystem battle-test): v1.52 + v1.53 pending.
+- Phase F (RC + ship): v1.54 + ... + v2.0 pending.
+
+16 / 20 versions complete = 80 % toward v2.0. Next: Phase E step 1 (v1.52 = Java/.NET ecosystem battle-test).
+
 ## [v1.50.0] — 2026-06-30 (v2 roadmap Phase D step 3 — long-running soak chaos)
 
 **Theme**: v2 roadmap Phase D step 3 of 4. Memory leaks, fd leaks, lock starvation, and slow background-thread regressions only surface after sustained load. This step ships an opt-in long-running soak test with a memory-slope leak detector.
