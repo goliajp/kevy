@@ -4,6 +4,82 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.41.0] — 2026-06-30 (v2 roadmap Phase B step 3 — Prometheus `/metrics` endpoint)
+
+**Theme**: v2 roadmap Phase B step 3 of 4. Adds `/metrics` HTTP exposition endpoint for Prometheus / Grafana / standard production monitoring infra.
+
+### Added
+
+- **`[metrics] listen_port = N`** — kevy-config field. `0` (default) = OFF. Non-zero = bind HTTP listener on `127.0.0.1:N`, serve `GET /metrics`.
+- **`crates/kevy/src/metrics_http.rs`** — pure-std tiny HTTP/1.1 server (0-dep, no Hyper). One daemon thread per `serve()` call; serial accept (scrapers are low-rate). Emits `text/plain; version=0.0.4` Prometheus exposition.
+- **Metric set** (Redis-exporter-style names):
+  - `kevy_uptime_seconds` (counter)
+  - `kevy_maxclients` (gauge)
+  - `kevy_used_memory_bytes` / `_peak_bytes` (gauge)
+  - `kevy_maxmemory_bytes` (gauge)
+  - `kevy_evicted_keys_total` / `_expired_keys_total` (counter)
+  - `kevy_keys_total` / `_expires_total` (gauge)
+  - `kevy_build_info{version="X"}` (gauge — always 1)
+- Path other than `/metrics` returns 404.
+
+### Smoke test (Mac aarch64)
+
+```sh
+$ curl http://127.0.0.1:9090/metrics
+# HELP kevy_uptime_seconds Seconds since kevy started
+# TYPE kevy_uptime_seconds counter
+kevy_uptime_seconds 0
+# HELP kevy_maxclients Configured max client connections
+# TYPE kevy_maxclients gauge
+kevy_maxclients 10000
+# … etc
+```
+
+`curl /unknown` → `HTTP/1.1 404 Not Found`.
+
+### Production deployment pattern
+
+```toml
+[metrics]
+listen_port = 9090
+```
+
+Then point Prometheus at `http://kevy-host:9090/metrics`.
+
+### What this validates
+
+- **`/metrics` endpoint never hangs / never panics** under arbitrary HTTP request shapes (only `GET /metrics` returns 200; everything else gets a clean 404 + Connection: close).
+- **Output is valid Prometheus exposition format** (HELP + TYPE + value triples).
+- **0 perf impact when OFF** (`listen_port = 0` skips the spawn entirely).
+- **Aligns with INFO** (uses the same `stats::aggregate()` totals).
+
+### v2 roadmap progress
+
+- ✓ Phase A (v1.36-v1.38)
+- ✓ v1.39 SIGTERM drain
+- ✓ v1.40 backup/restore
+- ✓ v1.41 Prometheus /metrics — THIS
+- v1.42 (Phase B step 4: SLOWLOG / MONITOR / audit) — NEXT
+- Phase C / D / E / F to follow.
+
+### Per-crate bumps
+
+- workspace 1.40.0 → 1.41.0
+- kevy-config 1.41.0 (`[metrics]` section + apply_metrics)
+- kevy 1.41.0 (new `mod metrics_http`)
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow.
+
+### Tests
+
+`cargo test --workspace --lib` green. Manual smoke verified curl /metrics returns valid format + curl /unknown returns 404.
+
+### What v1.41.0 does NOT include
+
+- **Histograms** for per-command latency. Deferred to v1.42 SLOWLOG / latencystats expansion.
+- **OpenTelemetry / push-based metrics**. Not in scope.
+- **Authentication on /metrics** (per AUTH-permanent-OUT charter; operator binds 127.0.0.1 or restricts via firewall).
+- **HTTPS on /metrics**. Same.
+
 ## [v1.40.0] — 2026-06-30 (v2 roadmap Phase B step 2 — backup/restore CLI + container)
 
 **Theme**: v2 roadmap Phase B step 2 of 4. Adds `kevy-cli backup` / `kevy-cli restore` for atomic, std-only data_dir bundling. 0-dep (no `tar` crate).

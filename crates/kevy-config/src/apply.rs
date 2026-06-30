@@ -28,8 +28,17 @@ impl Config {
             "cluster" => self.apply_cluster(item),
             "replication" => self.apply_replication(item),
             "lua" => self.apply_lua(item),
+            "metrics" => self.apply_metrics(item),
             other => Err(schema_err(&item, format!("unknown section [{other}]"))),
         }
+    }
+
+    fn apply_metrics(&mut self, item: Item) -> Result<(), ConfigError> {
+        match item.key.as_str() {
+            "listen_port" => self.metrics.listen_port = value_as_u16(&item)?,
+            k => return Err(schema_err(&item, format!("unknown [metrics] key: {k}"))),
+        }
+        Ok(())
     }
 
     fn apply_server(&mut self, item: Item) -> Result<(), ConfigError> {

@@ -241,6 +241,19 @@ impl Default for MemorySection {
     }
 }
 
+/// `[metrics]` section — v1.41. Prometheus-format HTTP exposition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MetricsSection {
+    /// TCP port for the `/metrics` HTTP endpoint. `0` = OFF (default).
+    pub listen_port: u16,
+}
+
+impl Default for MetricsSection {
+    fn default() -> Self {
+        Self { listen_port: 0 }
+    }
+}
+
 /// `[expiry]` section. Controls the TTL background reaper.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExpirySection {
@@ -476,6 +489,8 @@ pub struct Config {
     pub persistence: PersistenceSection,
     /// `[memory]` settings.
     pub memory: MemorySection,
+    /// `[metrics]` settings (Prometheus /metrics endpoint — v1.41).
+    pub metrics: MetricsSection,
     /// `[expiry]` settings.
     pub expiry: ExpirySection,
     /// `[log]` settings.
