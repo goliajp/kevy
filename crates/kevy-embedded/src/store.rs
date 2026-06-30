@@ -499,3 +499,6 @@ mod tests_p3;
 #[cfg(test)]
 #[path = "store_tests_bitmap.rs"]
 mod tests_bitmap;
+#[cfg(test)]
+#[path = "store_tests_bonus.rs"]
+mod tests_bonus;

@@ -56,6 +56,7 @@ mod info;
 mod metric;
 mod ops;
 mod ops_bitmap;
+mod ops_bonus;
 mod ops_p2;
 mod ops_p3;
 mod pubsub;
