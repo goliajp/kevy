@@ -4,6 +4,55 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.12] — 2026-07-01 — **`kevy-embedded` 1.11.0**: 12 more Redis-standard ops (systematic round-out)
+
+**Theme**: kevy-embedded 1.10.0 → 1.11.0 — past the mailrs-feedback closure (16/16 in v2.0.11), this ship is **kevy team systematic round-out**: audit the existing `kevy_store::Store` surface for any Redis-standard method not yet exposed in the embedded facade, and ship the wrappers. Found 12 such methods across set / sorted-set / list / keyspace.
+
+### Added — `kevy_embedded::Store` (`crates/kevy-embedded/src/ops_more.rs`, ~200 LOC)
+
+#### Set extras
+
+- `sismember(key, member) -> io::Result<bool>` — set-membership check.
+- `spop(key, count) -> io::Result<Vec<Vec<u8>>>` — atomic remove + return up to `count` random members.
+- `srandmember(key, count) -> io::Result<Vec<Vec<u8>>>` — read up to `count` random members without removing.
+
+#### Sorted-set extras
+
+- `zrank(key, member) -> io::Result<Option<usize>>` — 0-based ascending rank; `None` if absent.
+- `zcount(key, min, max) -> io::Result<usize>` — count members in score range (inclusive; pass ±INFINITY for open bounds).
+- `zpopmin(key, count) -> io::Result<Vec<(Vec<u8>, f64)>>` — atomic remove + return up to `count` lowest-score members.
+- `zremrangebyrank(key, start, stop) -> io::Result<usize>` — remove rank range (inclusive, Redis negative indexing).
+- `zremrangebyscore(key, min, max) -> io::Result<usize>` — remove score range.
+- `zrev_range_by_score(key, max, min) -> io::Result<Vec<(Vec<u8>, f64)>>` — descending score range read.
+
+#### List extras
+
+- `lset(key, idx, value) -> io::Result<()>` — set element at index; negative indexes from tail.
+- `ltrim(key, start, stop) -> io::Result<()>` — trim list to inclusive range.
+
+#### Keyspace extras
+
+- `rename(src, dst) -> io::Result<bool>` — atomic rename; errors on missing `src`.
+- `renamenx(src, dst) -> io::Result<bool>` — rename only when `dst` doesn't exist.
+
+### Tests
+
+16 new unit tests at `crates/kevy-embedded/src/store_tests_more.rs` (170 LOC) covering each method's hit + miss + edge case.
+
+### Empirical (Mac M2 Pro, kevy v2.0.12)
+
+```
+cargo test --release -p kevy-embedded
+test result: ok. 142 passed; 0 failed (was 126 in v2.0.11; +16 more).
+```
+
+### Net change since 1.4.21 baseline — updated
+
+- **58 new methods + 2 transaction surfaces** (46 + 12).
+- **150 unit tests** (was 44; +106).
+- 1 new kevy-store module (`bitmap.rs`).
+- 9 new embedded ops files (`ops_p2/p3/bitmap/bonus/scan/atomic/pipeline/more.rs`).
+
 ## [v2.0.11] — 2026-07-01 — **`kevy-embedded` 1.10.0**: atomic + pipeline — **all 16 mailrs feedback asks closed**
 
 **Theme**: kevy-embedded 1.9.0 → 1.10.0 — closes the last 2 open mailrs asks (#6 atomic + #13 pipeline) via systematically-designed defaults rather than waiting on external design conversation. Per user directive "系统化的设计与处理", these are kevy team's design calls; mailrs's note was one input among potential users.

@@ -508,3 +508,6 @@ mod tests_scan;
 #[cfg(test)]
 #[path = "store_tests_atomic.rs"]
 mod tests_atomic;
+#[cfg(test)]
+#[path = "store_tests_more.rs"]
+mod tests_more;
