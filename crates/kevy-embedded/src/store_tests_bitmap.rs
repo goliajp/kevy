@@ -2,6 +2,7 @@
 //! (kevy-embedded 1.8.0).
 
 use crate::Config;
+use crate::ops_bitmap::BitOp;
 use crate::store::Store;
 
 fn s() -> Store {
@@ -169,4 +170,74 @@ fn setrange_past_end_extends_with_zeros() {
         s.get(b"k").unwrap(),
         Some(vec![0, 0, 0, 0, 0, b'W', b'o', b'r', b'l', b'd'])
     );
+}
+
+// ---- BITOP --------------------------------------------------------------
+
+#[test]
+fn bitop_and_intersection() {
+    let s = s();
+    s.set(b"a", &[0xf0, 0x0f]).unwrap();
+    s.set(b"b", &[0xff, 0xff]).unwrap();
+    let n = s.bitop(BitOp::And, b"d", &[b"a", b"b"]).unwrap();
+    assert_eq!(n, 2);
+    assert_eq!(s.get(b"d").unwrap(), Some(vec![0xf0, 0x0f]));
+}
+
+#[test]
+fn bitop_or_union() {
+    let s = s();
+    s.set(b"a", &[0xf0, 0x00]).unwrap();
+    s.set(b"b", &[0x0f, 0xff]).unwrap();
+    let n = s.bitop(BitOp::Or, b"d", &[b"a", b"b"]).unwrap();
+    assert_eq!(n, 2);
+    assert_eq!(s.get(b"d").unwrap(), Some(vec![0xff, 0xff]));
+}
+
+#[test]
+fn bitop_xor_diff() {
+    let s = s();
+    s.set(b"a", &[0xff]).unwrap();
+    s.set(b"b", &[0x0f]).unwrap();
+    let n = s.bitop(BitOp::Xor, b"d", &[b"a", b"b"]).unwrap();
+    assert_eq!(n, 1);
+    assert_eq!(s.get(b"d").unwrap(), Some(vec![0xf0]));
+}
+
+#[test]
+fn bitop_not_one_source() {
+    let s = s();
+    s.set(b"a", &[0x0f]).unwrap();
+    let n = s.bitop(BitOp::Not, b"d", &[b"a"]).unwrap();
+    assert_eq!(n, 1);
+    assert_eq!(s.get(b"d").unwrap(), Some(vec![0xf0]));
+}
+
+#[test]
+fn bitop_not_rejects_multiple_sources() {
+    let s = s();
+    s.set(b"a", &[0x00]).unwrap();
+    s.set(b"b", &[0x00]).unwrap();
+    assert!(s.bitop(BitOp::Not, b"d", &[b"a", b"b"]).is_err());
+}
+
+#[test]
+fn bitop_extends_shorter_sources_with_zeros() {
+    let s = s();
+    s.set(b"a", &[0xff, 0xff, 0xff]).unwrap();
+    s.set(b"b", &[0x0f]).unwrap();
+    // OR with a 1-byte src + a 3-byte src = 3-byte result.
+    let n = s.bitop(BitOp::Or, b"d", &[b"a", b"b"]).unwrap();
+    assert_eq!(n, 3);
+    assert_eq!(s.get(b"d").unwrap(), Some(vec![0xff, 0xff, 0xff]));
+}
+
+// ---- TIME ---------------------------------------------------------------
+
+#[test]
+fn time_returns_unix_seconds_and_micros() {
+    let s = s();
+    let (secs, micros) = s.time();
+    assert!(secs > 1_700_000_000, "expected post-2023 timestamp, got {secs}");
+    assert!(micros < 1_000_000, "micros must be < 1s, got {micros}");
 }

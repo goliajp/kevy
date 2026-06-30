@@ -67,6 +67,7 @@ mod ops_pipeline;
 mod ops_scan;
 pub use ops_atomic::AtomicCtx;
 pub use ops_atomic_all::AtomicAllShards;
+pub use ops_bitmap::BitOp;
 pub use ops_pipeline::Pipeline;
 mod pubsub;
 mod reaper;
