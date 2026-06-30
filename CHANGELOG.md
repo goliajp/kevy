@@ -4,6 +4,44 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.13] — 2026-07-01 — **`kevy-embedded` 1.12.0**: keyspace cross-key ops (COPY/RANDOMKEY/UNLINK/TOUCH)
+
+**Theme**: systematic round-out continued. v2.0.12 covered single-key gaps in the Store surface; this ship adds 4 cross-key / keyspace-introspection ops that were missing from the embedded facade. Composed from existing primitives at the embedded layer (no new `kevy_store::Store` methods needed).
+
+### Added — `kevy_embedded::Store` (`crates/kevy-embedded/src/ops_keyspace.rs`, ~115 LOC)
+
+- `copy(src, dst, replace: bool) -> io::Result<bool>` — copy src's value AND TTL to dst. Returns `false` when src absent or when dst exists and `replace = false`. TTL is preserved via `pexpireat` so the absolute deadline matches the source.
+- `randomkey() -> Option<Vec<u8>>` — return a randomly-chosen existing key. `None` when keyspace is empty. Implementation: snapshot via `collect_keys` then uniform index pick.
+- `unlink(keys) -> io::Result<usize>` — alias for `del`. Redis treats UNLINK as async; kevy is in-process so the sync delete IS the unblocking semantic.
+- `touch(keys) -> io::Result<usize>` — count existing keys among the requested; reads bump LRU/LFU bookkeeping as a side effect.
+
+### Tests
+
+11 new unit tests at `crates/kevy-embedded/src/store_tests_keyspace.rs` (135 LOC):
+- copy: absent src / new dst / existing dst veto / replace overwrites / TTL preservation / short-TTL.
+- randomkey: empty returns None / picks an existing key.
+- unlink: deletes like del.
+- touch: counts existing keys / zero for all missing.
+
+### Empirical (Mac M2 Pro, kevy v2.0.13)
+
+```
+cargo test --release -p kevy-embedded
+test result: ok. 153 passed; 0 failed (was 142 in v2.0.12; +11 keyspace).
+```
+
+### Net change since 1.4.21 baseline — updated
+
+- **62 new methods** + 2 transaction surfaces (was 58 + 2).
+- **161 unit tests** (was 44; +117).
+- 1 new kevy-store module (`bitmap.rs`).
+- 10 new embedded ops files (`ops_p2/p3/bitmap/bonus/scan/atomic/pipeline/more/keyspace.rs`).
+- Comprehensive doc-tested README.
+
+### Coverage philosophy
+
+Past the mailrs feedback closure (16/16 in v2.0.11), kevy team systematically audits the existing kevy-store surface + Redis command set for any standard op not yet in the embedded facade. v2.0.12 took 12 single-key methods; v2.0.13 takes 4 cross-key + introspection methods. Future systematic ships can target OBJECT ENCODING / FREQ / IDLETIME (need new Store methods) + multi-shard atomic transaction.
+
 ## [v2.0.12] — 2026-07-01 — **`kevy-embedded` 1.11.0**: 12 more Redis-standard ops (systematic round-out)
 
 **Theme**: kevy-embedded 1.10.0 → 1.11.0 — past the mailrs-feedback closure (16/16 in v2.0.11), this ship is **kevy team systematic round-out**: audit the existing `kevy_store::Store` surface for any Redis-standard method not yet exposed in the embedded facade, and ship the wrappers. Found 12 such methods across set / sorted-set / list / keyspace.
