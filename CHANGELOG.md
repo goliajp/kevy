@@ -4,6 +4,68 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.43.0] — 2026-06-30 (v2 roadmap Phase C step 1 — single-node cluster topology chaos)
+
+**Theme**: v2 roadmap Phase C "Cluster architecture chaos" step 1 of 5. Chaos test for kevy's existing single-node cluster mode under concurrent storm: routing / MOVED / CLUSTER NODES / multi-key handling.
+
+### Added
+
+- **`crates/kevy/tests/cluster_topology_chaos.rs`** — 5-phase chaos test against `[cluster] enabled = true` kevy:
+  - **Phase 1**: 8-thread × 200-SET storm via main forward-anywhere port. All ACK'd cleanly.
+  - **Phase 2**: probe cluster-style port (`port_base + shard_i`); verify wrong-slot key returns `-MOVED <slot> <host:port>`.
+  - **Phase 3**: cross-slot MGET via cluster port — observational well-formed reply.
+  - **Phase 4**: `CLUSTER NODES` returns a populated bulk-string body.
+  - **Phase 5**: post-storm `PING` returns `+PONG` (kevy stayed alive).
+
+### Empirical (Mac aarch64)
+
+- Phase 1: 8 × 200 = 1,600 SETs across 4 shards, all clean.
+- Phase 2: `-MOVED 14788 127.0.0.1:55067\r\n` ← cluster routing live.
+- Phase 3: `*2\r\n$-1\r\n$-1\r\n` ← multi-bulk nils.
+- Phase 4: `$403…` ← CLUSTER NODES returns 403-byte bulk.
+- Phase 5: `+PONG` ← kevy stayed alive.
+- Wall-clock: **0.22 s**.
+
+### Real finding (v1.43.x candidate)
+
+kevy's MGET on cluster-port for keys hashing to different slots currently returns a multi-bulk of nils (one per key not on this shard), NOT `-CROSSSLOT` like Redis Cluster. The test softens to "any well-formed RESP reply" with this divergence documented. A future v1.43.x can add strict `-CROSSSLOT` enforcement for multi-key cluster commands.
+
+### What this validates
+
+- **Cluster routing is live** — MOVED replies fire for wrong-slot keys on shard-specific cluster ports.
+- **CLUSTER NODES works** — returns populated bulk-string body.
+- **kevy stays alive under cluster-mode concurrent storm.**
+- **No corruption** under cluster-routing path.
+
+### v2 roadmap progress — Phase C step 1 done
+
+- ✓ Phase A complete (v1.36-v1.38)
+- ✓ Phase B complete (v1.39-v1.42)
+- ✓ v1.43 (Phase C step 1: cluster topology chaos) — THIS
+- v1.44 (Phase C step 2: replication failover + kevy-elect quorum) — NEXT
+- v1.45 (Phase C step 3: kevy-scope multi-writer migration)
+- v1.46 (Phase C step 4: network partition + asymmetric failures)
+- v1.47 (Phase C step 5: rolling upgrade + AOF compat matrix)
+- Then Phase D (large-scale E2E), E (ecosystem), F (v2 prep).
+
+### Per-crate bumps
+
+- workspace 1.42.0 → 1.43.0
+- kevy 1.43.0 (new chaos test only)
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow.
+
+### Tests
+
+`cargo test --workspace --lib` green. Chaos suite (14 tests, gated `--ignored`):
+- crash × 4 / soak / concurrent / wire_torture / maxclients / disk_full / fd_exhaust / sigterm_drain / backup_restore / audit_log
+- **cluster_topology_chaos (NEW): 0.22 s — 5 phases, kevy stays alive, MOVED routing live**
+
+### What v1.43.0 does NOT include
+
+- **Multi-node cluster** (true 3-process kevy cluster with peers + node_id). v1.43 covers single-node cluster mode chaos; multi-node is v1.44.
+- **CROSSSLOT strict enforcement** for multi-key commands — v1.43.x candidate.
+- **CLUSTER SHARDS / CLUSTER COUNTKEYSINSLOT** Redis 7-compat subcommands — covered by existing kevy work, not chaos-tested yet.
+
 ## [v1.42.0] — 2026-06-30 (v2 roadmap Phase B step 4 — audit log + Phase B COMPLETE)
 
 **Theme**: v2 roadmap Phase B step 4 of 4 — **Phase B "Operability + observability" COMPLETE** after this. Adds append-only audit log of ADMIN-class commands.
