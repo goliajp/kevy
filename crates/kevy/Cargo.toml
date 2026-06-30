@@ -45,8 +45,8 @@ kevy-scope = { path = "../kevy-scope", version = "1.19.0" }
 # kevy-lua + kevy-lua-host crates. See workspace Cargo.toml exemption
 # #2/#3: the only transitive third-party crate is `luna-core` (GOLIA
 # family, CI-gated 0-dep on luna's side).
-kevy-lua = { path = "../kevy-lua", version = "=1.56.0" }
-kevy-lua-host = { path = "../kevy-lua-host", version = "=1.56.0" }
+kevy-lua = { path = "../kevy-lua", version = "=1.57.0" }
+kevy-lua-host = { path = "../kevy-lua-host", version = "=1.57.0" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }
