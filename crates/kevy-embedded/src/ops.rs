@@ -15,8 +15,15 @@ use std::time::Duration;
 use kevy_store::StoreError;
 
 use crate::pubsub::Subscription;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::replica_glue::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
+
+// wasm has no replica runner, so the read-only guard is unconditionally a
+// no-op. Mirrors `replica_glue::ensure_writable`'s signature so the rest of
+// this file is target-agnostic.
+#[cfg(target_arch = "wasm32")]
+fn ensure_writable(_s: &Store) -> io::Result<()> { Ok(()) }
 
 impl Store {
     // ---- string ops -----------------------------------------------------
