@@ -58,6 +58,7 @@ mod ops;
 mod ops_atomic;
 mod ops_bitmap;
 mod ops_bonus;
+mod ops_keyspace;
 mod ops_more;
 mod ops_p2;
 mod ops_p3;
