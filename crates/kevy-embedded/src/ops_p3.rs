@@ -196,6 +196,36 @@ impl Store {
         Ok(new_val)
     }
 
+    // ---- list positional insert (kevy-embedded 1.7.1) ----------------
+
+    /// `LINSERT key BEFORE|AFTER pivot value` — insert `value` before
+    /// or after the first occurrence of `pivot` in the list. Returns:
+    /// - `Ok(new_len)` on success (`>= 1`);
+    /// - `Ok(0)` when `key` does not exist;
+    /// - `Ok(-1)` when `pivot` was not found in the list.
+    ///
+    /// `before = true` matches Redis `LINSERT … BEFORE`, `false`
+    /// matches `LINSERT … AFTER`.
+    pub fn linsert(
+        &self,
+        key: &[u8],
+        before: bool,
+        pivot: &[u8],
+        value: &[u8],
+    ) -> io::Result<i64> {
+        ensure_writable(self)?;
+        let mut g = self.wshard(key);
+        let new_len = g
+            .store
+            .linsert(key, before, pivot, value)
+            .map_err(store_err)?;
+        if new_len > 0 {
+            let dir = if before { b"BEFORE".as_slice() } else { b"AFTER".as_slice() };
+            commit_write(&mut g, &[b"LINSERT", key, dir, pivot, value])?;
+        }
+        Ok(new_len)
+    }
+
     // ---- observability (kevy-embedded 1.7.0) -------------------------
 
     /// `Store::ping_us()` — return the round-trip duration of a
