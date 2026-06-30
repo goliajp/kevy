@@ -100,7 +100,7 @@ pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
         info_server(cfg, &mut body);
     }
     if want_section(want, "clients") {
-        info_clients(&mut body);
+        info_clients(cfg, &mut body);
     }
     if want_section(want, "memory") {
         info_memory(cfg, &totals, &mut body);
@@ -151,10 +151,10 @@ fn info_server(cfg: &Config, b: &mut String) {
     b.push_str("\r\n");
 }
 
-fn info_clients(b: &mut String) {
+fn info_clients(cfg: &Config, b: &mut String) {
     b.push_str("# Clients\r\n");
     b.push_str("connected_clients:1\r\n"); // TODO: real count when conn-info plumbed
-    b.push_str("maxclients:10000\r\n");
+    b.push_str(&format!("maxclients:{}\r\n", cfg.server.max_clients));
     b.push_str("\r\n");
 }
 

@@ -24,6 +24,16 @@ impl<C: Commands> Shard<C> {
             };
             match accepted {
                 Ok(sock) => {
+                    // v1.37 — refuse client conns past max_clients_per_shard
+                    // (cluster-bus links exempt; they're infra, not user-counted).
+                    if !cluster
+                        && self.max_clients_per_shard > 0
+                        && self.conns.len() >= self.max_clients_per_shard
+                    {
+                        self.rejected_connections = self.rejected_connections.saturating_add(1);
+                        drop(sock); // close immediately; client sees EOF/RST.
+                        continue;
+                    }
                     sock.set_nonblocking()?;
                     let _ = sock.set_nodelay();
                     let fd = sock.raw();

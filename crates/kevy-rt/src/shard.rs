@@ -249,6 +249,10 @@ pub(crate) struct Shard<C: Commands> {
     pub(crate) tick_check_every: u32,
     /// **v1.30** — `false` = compute-only shard (no accept SQE). See RFC.
     pub(crate) arms_accept: bool,
+    /// **v1.37** — per-shard cap (`max_clients / nshards`). `0` = unlimited.
+    pub(crate) max_clients_per_shard: usize,
+    /// **v1.37** — accumulator for `rejected_connections` (INFO clients).
+    pub(crate) rejected_connections: u64,
     /// SLOWLOG ring + threshold (see [`crate::exec_slowlog::SlowlogState`]).
     /// Hot-reload via `apply_live_runtime_config` when the embedder
     /// returns `Some` in `LiveRuntimeConfig::slowlog_*`.

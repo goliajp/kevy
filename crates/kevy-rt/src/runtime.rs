@@ -47,6 +47,8 @@ pub struct Runtime<C: Commands> {
     /// **v1.30** — `Some(N)` = only shards `0..N` arm accept SQE. `None`
     /// = every shard accepts (v1.29 byte-identical).
     pub(crate) accept_shards: Option<usize>,
+    /// **v1.37** — total cap on active client conns. `0` = unlimited.
+    pub(crate) max_clients: usize,
     /// Reactor blocking-wait timeout in ms when parked.
     pub(crate) park_timeout_ms: u32,
     /// Wall-clock-read throttle for the tick check (TTL reaper / live
@@ -116,6 +118,7 @@ impl<C: Commands> Runtime<C> {
             ring_capacity: DEFAULT_RING_CAPACITY,
             spin_limit: 256,
             accept_shards: None,
+            max_clients: 10_000,
             park_timeout_ms: 50,
             tick_check_every: 256,
             slowlog_slower_than_micros: -1,
@@ -385,6 +388,12 @@ impl<C: Commands> Runtime<C> {
                     .unwrap_or_default(),
                 spin_limit: self.spin_limit,
                 arms_accept: self.accept_shards.map_or(true, |n| id < n),
+                max_clients_per_shard: if self.max_clients == 0 {
+                    0
+                } else {
+                    self.max_clients.div_ceil(n)
+                },
+                rejected_connections: 0,
                 // `Poller::wait` takes the timeout as `i32` (POSIX
                 // poll/epoll convention). The config knob is `u32` —
                 // we clamp to i32::MAX, far above any sane park-timeout.

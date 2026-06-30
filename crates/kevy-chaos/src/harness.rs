@@ -40,8 +40,13 @@ pub struct HarnessConfig {
     /// **v1.33** — Free-form TOML appended to the spawned kevy's
     /// `kevy.toml`. Empty by default. Use to set `[replication]`
     /// sections for primary/replica chaos tests, or any other section
-    /// not yet covered by typed fields above.
+    /// not yet covered by typed fields above. NOTE: appended after
+    /// `[persistence]`; lines without a section header attach to
+    /// persistence. Use `[server]\n` etc. prefix if needed.
     pub extra_toml: String,
+    /// **v1.37** — `[server] max_clients = N`. `0` keeps the kevy
+    /// default (10 000). Set explicitly for the maxclients chaos test.
+    pub max_clients: usize,
     /// Timeout for "kevy ready" wait after spawn. Default: 10 s.
     pub spawn_timeout: Duration,
 }
@@ -60,6 +65,7 @@ impl HarnessConfig {
             aof_rewrite_min_size: None,
             aof_rewrite_pct: None,
             extra_toml: String::new(),
+            max_clients: 0,
             spawn_timeout: Duration::from_secs(10),
         }
     }
@@ -114,12 +120,21 @@ impl Harness {
         // documented override per kevy-config).
         let cfg_path = self.config.data_dir.join("kevy.toml");
         let mut toml = format!(
-            "[server]\nport = {}\nthreads = {}\ndata_dir = \"{}\"\n\
-             [persistence]\nappendfsync = \"{}\"\n",
+            "[server]\nport = {}\nthreads = {}\ndata_dir = \"{}\"\n",
             self.config.port,
             self.config.threads,
             self.config.data_dir.display(),
-            self.config.appendfsync,
+        );
+        if self.config.max_clients > 0 {
+            use std::fmt::Write as _;
+            let _ = writeln!(toml, "max_clients = {}", self.config.max_clients);
+        }
+        let _ = std::fmt::Write::write_fmt(
+            &mut toml,
+            format_args!(
+                "[persistence]\nappendfsync = \"{}\"\n",
+                self.config.appendfsync,
+            ),
         );
         if let Some(sz) = self.config.aof_rewrite_min_size {
             use std::fmt::Write as _;

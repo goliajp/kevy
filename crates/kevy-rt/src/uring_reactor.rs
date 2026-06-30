@@ -267,6 +267,17 @@ impl<C: Commands> Shard<C> {
                         if c.res >= 0 {
                             // SAFETY: a freshly accepted fd we now own.
                             let sock = unsafe { Socket::from_raw_fd(c.res) };
+                            // v1.37 — refuse client conns past max_clients_per_shard
+                            // (cluster-bus links exempt as infrastructure).
+                            if !cluster
+                                && self.max_clients_per_shard > 0
+                                && self.conns.len() >= self.max_clients_per_shard
+                            {
+                                self.rejected_connections =
+                                    self.rejected_connections.saturating_add(1);
+                                drop(sock); // close fd immediately
+                                continue;
+                            }
                             // TCP_NODELAY doesn't apply to AF_UNIX; skip for UDS.
                             if !is_unix {
                                 let _ = sock.set_nodelay();
