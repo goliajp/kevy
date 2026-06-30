@@ -4,6 +4,43 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.18] — 2026-07-01 — **`kevy-embedded` 1.15.0**: BITOP (multi-key bitwise) + TIME
+
+**Theme**: continued systematic round-out — adds multi-key bitwise ops + a `TIME` accessor.
+
+### Added — `kevy_embedded::Store`
+
+- **`bitop(BitOp, dst, srcs)`** — bitwise AND/OR/XOR/NOT across N source keys, stored at `dst`. Returns the destination length (= longest source length, with shorter sources zero-padded). `BitOp::Not` requires exactly one source key (rejects multiple per Redis spec). For-NOT past-source bytes are set to `0xff` matching Redis semantics.
+- **`time() -> (u64, u32)`** — current Unix `(seconds, microseconds)`. Useful for embedded users implementing time-based logic without re-querying `std::time::SystemTime` everywhere.
+- Re-exports: `pub use ops_bitmap::BitOp`.
+
+### Tests
+
+7 new unit tests:
+- `bitop_and_intersection` / `bitop_or_union` / `bitop_xor_diff` (basic bitwise).
+- `bitop_not_one_source` — single-source NOT.
+- `bitop_not_rejects_multiple_sources` — error path.
+- `bitop_extends_shorter_sources_with_zeros` — zero-pad shorter src.
+- `time_returns_unix_seconds_and_micros` — sanity bounds.
+
+### Empirical (Mac M2 Pro, kevy v2.0.18)
+
+```
+cargo test --release -p kevy-embedded
+test result: ok. 174 passed; 0 failed (was 167 in v2.0.17; +7 BITOP/time).
+```
+
+### Background: 1h soak on lx64 — half-way checkpoint
+
+At t=1810s (≈ 30 min, half-way through the 1h gate): **390 M ACKs, used_memory 2.14 MiB stable** — zero memory growth across half the run. Final result lands in v2.0.x patch after the soak completes (~30 min more).
+
+### Net change since 1.4.21 baseline — updated
+
+- **67 new methods + 3 transaction surfaces** (was 65 + 3).
+- **182 unit tests** (was 44; +138).
+- 1 new kevy-store module (`bitmap.rs`).
+- 11 embedded ops files + matching test files.
+
 ## [v2.0.17] — 2026-07-01 — **`kevy-embedded` 1.14.0**: BITPOS / GETRANGE / SETRANGE
 
 **Theme**: continued systematic round-out — adds 3 more Redis-standard string + bitmap ops that fit naturally into the existing `bitmap.rs` Store module.
