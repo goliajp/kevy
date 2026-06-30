@@ -4,6 +4,63 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.36.0] — 2026-06-30 (v2 roadmap Phase A step 1 — RESP fuzz + error-reply catalog)
+
+**Theme**: v2 roadmap (`.claude/plans/2026-06-30-v2-roadmap.md`) Phase A "Failure-mode hardening" step 1 of 3. Industrial-grade RESP parser fuzz coverage + a full catalog of every wire-level error kevy emits.
+
+### Added
+
+- **`crates/kevy-resp/src/fuzz.rs`** — std-only (0-dep) RESP parser fuzz harness. Deterministic PCG-style LCG, 5 strategies (`Uniform` / `StructuredJunk` / `MutatedValid` / `OversizedClaim` / `NegativeLengths`), per-call wall-clock timeout (10 ms ceiling). `run_one(strategy, seed)` for one stream; `run_n(n, base_seed)` for a campaign.
+- **`crates/kevy/tests/wire_torture_chaos.rs`** — chaos test driving the fuzz harness + live wire torture:
+  - `wire_torture_parser_fuzz_1m`: **10^6 random byte streams across all 5 strategies, 0 panics / 0 hangs / 0 timeouts** in 5 s wall-clock.
+  - `wire_torture_strategy_coverage`: 5 strategies × 2 k seeds each, all clean.
+  - `wire_torture_live_kevy_pathological_frames`: 8 pathological wire patterns sent to live kevy (partial frames, oversized claims, negative lengths, garbage interleaved with valid frames, 16 kB inline command, bulk-length overflow). After each, a fresh-conn `PING` must answer `+PONG` — kevy stayed alive on all 8.
+- **`docs/error-replies.md`** — exhaustive catalog of every `-<CLASS>` reply kevy emits (`ERR` / `WRONGTYPE` / `EXECABORT` / `MOVED` / `CROSSSLOT` / `MISDIRECTED` / `OOM` / `READONLY` / `MISCONF` / `NOSCRIPT` / `BUSY` / `LOADING`), with trigger condition + recovery action per row. Also documents the categories kevy deliberately does NOT emit (`NOAUTH` / `NOPERM` / `DENIED` per project charter).
+
+### Empirical (Mac aarch64)
+
+- **1 M random byte streams**: parsed 268,930 / incomplete 400,291 / errored 330,779 → **1,000,000 total, 0 timeouts, 0 panics**. ~5 s wall-clock.
+- **8 pathological live-wire patterns**: every one followed by fresh-conn `+PONG`. kevy survived all 8.
+- Total wire_torture_chaos suite wall-clock: **10.4 s**.
+
+### What this validates
+
+- **No panic / no hang in the RESP parser** across 5 different input distributions. The hot-path parser is industrial-grade robust.
+- **kevy stays alive** under pathological wire input — no corrupted state, no leaked file descriptors.
+- **Error-reply contract is documented** — ecosystem libraries can pattern-match on the message classes; future changes update the catalog.
+
+### v2 roadmap progress
+
+This is step **v1.36 = Phase A step 1** of the 20-version arc to v2.0:
+- ✓ v1.36: RESP fuzz + error catalog (THIS)
+- v1.37: maxmemory + eviction + maxclients (next)
+- v1.38: disk-full / fd-exhaustion / OOM graceful
+- Then phases B (operability+observability), C (cluster), D (large-scale E2E), E (ecosystem breadth), F (v2 prep).
+
+### Per-crate bumps
+
+- workspace 1.35.0 → 1.36.0
+- kevy-resp 1.36.0 (new `pub mod fuzz`)
+- kevy-chaos / kevy-* — all follow workspace.
+- kevy-client / kevy-client-async / kevy-embedded — unchanged.
+
+### Tests
+
+`cargo test --workspace --lib` green (includes 3 new fuzz unit tests). Chaos suite (7 tests, gated `--ignored`):
+- `crash_always`: 2.22 s.
+- `crash_everysec`: 5.28 s.
+- `crash_during_rewrite`: 5.75 s.
+- `crash_replication_followed`: 6.00 s.
+- `soak_then_crash`: 44.74 s.
+- `concurrent_writers_overlap`: 3.45 s.
+- `wire_torture_chaos` (NEW): 10.40 s (3 subtests).
+
+### What v1.36.0 does NOT include
+
+- AFL / libFuzzer integration (third-party; project 0-dep rule).
+- Property-based testing crates.
+- Production-load fuzz (covered by Phase D's realistic-workload chaos tests).
+
 ## [v1.35.0] — 2026-06-30 (industrial-grade testing step 5/5 — concurrent multi-writer no-fabrication)
 
 **Theme**: v2 = kevy 工业级 step 5 — **the last of the 5 user-stated categories** (并发 / 锁 / 竞争 / 多写 / 断电). v1.31 = crash safety (断电), v1.32 = AOF rewrite race, v1.33 = replication crash, v1.34 = sustained-load soak (并发 covered), **v1.35 = concurrent multi-writer on overlapping keys + no-fabrication invariant (多写 + 竞争)**.

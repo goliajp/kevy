@@ -46,6 +46,7 @@ mod reply_encode_resp3;
 mod reply_parse;
 mod request;
 mod request_borrowed;
+pub mod fuzz;
 
 pub use argv::{Argv, Command};
 pub use argv_borrowed::ArgvBorrowed;
