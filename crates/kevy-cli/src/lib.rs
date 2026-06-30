@@ -11,6 +11,10 @@
 
 pub use kevy_resp::Reply;
 
+/// **v1.40** — backup / restore container support. See
+/// [`backup::pack`] and [`backup::unpack`].
+pub mod backup;
+
 /// Pretty-print a reply roughly the way `redis-cli` does. Arrays are
 /// numbered + indented; bulk strings are quoted; nil shows as `(nil)`.
 pub fn format_reply(reply: &Reply, indent: usize) -> String {

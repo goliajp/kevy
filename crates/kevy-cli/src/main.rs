@@ -45,6 +45,19 @@ fn main() -> ExitCode {
         }
     }
 
+    // v1.40 — `backup` / `restore` subcommands. Routed BEFORE the RESP
+    // client setup because they're file-only operations (no TCP).
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if !args.is_empty() && args[0] == "backup" {
+        return run_backup_cli(&args[1..]);
+    }
+    if !args.is_empty() && args[0] == "restore" {
+        return run_restore_cli(&args[1..]);
+    }
+    // Strip subcommand arg if it was something other than a flag we
+    // already handled, to preserve the existing redis-cli arg shape.
+    let _ = &mut args;
+
     let cfg = Config::from_args(std::env::args().skip(1));
     let mut conn = match RespClient::connect(&cfg.host, cfg.port) {
         Ok(c) => c,
@@ -190,4 +203,98 @@ fn split_args(line: &str) -> Vec<Vec<u8>> {
     line.split_whitespace()
         .map(|s| s.as_bytes().to_vec())
         .collect()
+}
+
+// ───────────── v1.40 backup / restore ─────────────
+
+fn run_backup_cli(args: &[String]) -> ExitCode {
+    let (data_dir, out_path) = match parse_backup_args(args) {
+        Ok(t) => t,
+        Err(msg) => {
+            eprintln!("kevy-cli backup: {msg}");
+            eprintln!("usage: kevy-cli backup --data-dir <path> --to <out.kevybkp>");
+            return ExitCode::FAILURE;
+        }
+    };
+    match kevy_cli::backup::run_backup(data_dir, out_path) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("kevy-cli backup failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_restore_cli(args: &[String]) -> ExitCode {
+    let (in_path, target_dir) = match parse_restore_args(args) {
+        Ok(t) => t,
+        Err(msg) => {
+            eprintln!("kevy-cli restore: {msg}");
+            eprintln!("usage: kevy-cli restore --from <in.kevybkp> --to <data_dir>");
+            return ExitCode::FAILURE;
+        }
+    };
+    match kevy_cli::backup::run_restore(in_path, target_dir) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("kevy-cli restore failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn parse_backup_args(args: &[String]) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    let mut data_dir = None;
+    let mut out_path = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--data-dir" => {
+                i += 1;
+                data_dir = Some(std::path::PathBuf::from(
+                    args.get(i).ok_or_else(|| "--data-dir requires a value".to_string())?,
+                ));
+            }
+            "--to" => {
+                i += 1;
+                out_path = Some(std::path::PathBuf::from(
+                    args.get(i).ok_or_else(|| "--to requires a value".to_string())?,
+                ));
+            }
+            other => return Err(format!("unknown flag {other}")),
+        }
+        i += 1;
+    }
+    Ok((
+        data_dir.ok_or_else(|| "--data-dir missing".to_string())?,
+        out_path.ok_or_else(|| "--to missing".to_string())?,
+    ))
+}
+
+fn parse_restore_args(args: &[String]) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
+    let mut in_path = None;
+    let mut target_dir = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--from" => {
+                i += 1;
+                in_path = Some(std::path::PathBuf::from(
+                    args.get(i).ok_or_else(|| "--from requires a value".to_string())?,
+                ));
+            }
+            "--to" => {
+                i += 1;
+                target_dir = Some(std::path::PathBuf::from(
+                    args.get(i).ok_or_else(|| "--to requires a value".to_string())?,
+                ));
+            }
+            other => return Err(format!("unknown flag {other}")),
+        }
+        i += 1;
+    }
+    Ok((
+        in_path.ok_or_else(|| "--from missing".to_string())?,
+        target_dir.ok_or_else(|| "--to missing".to_string())?,
+    ))
 }

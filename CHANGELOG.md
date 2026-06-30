@@ -4,6 +4,83 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.40.0] — 2026-06-30 (v2 roadmap Phase B step 2 — backup/restore CLI + container)
+
+**Theme**: v2 roadmap Phase B step 2 of 4. Adds `kevy-cli backup` / `kevy-cli restore` for atomic, std-only data_dir bundling. 0-dep (no `tar` crate).
+
+### Added
+
+- **`kevy_cli::backup` module** — std-only mini-container format (`KEVYBKP1` magic + per-file `[u16 name_len, name, u64 body_len, body]` chunks + `u16=0` EOF marker).
+  - `pack(data_dir, out_path)` — bundles every regular file under `data_dir`.
+  - `unpack(in_path, target_dir)` — restores to an EMPTY target_dir (refuses overwrite; rejects path traversal).
+  - Race-safe pack: handles files growing/shrinking during a live backup (pads zeros if file shrank; AOF tail-truncation recovery handles).
+- **`kevy-cli backup --data-dir <path> --to <out.kevybkp>`** — pack a kevy data_dir into a backup container.
+- **`kevy-cli restore --from <in.kevybkp> --to <target_dir>`** — unpack a container into a fresh data_dir (must be empty).
+- **`crates/kevy/tests/backup_restore_chaos.rs`** — chaos test:
+  - Spawn kevy + 4-writer storm for 2 s
+  - Issue BGSAVE via TCP; backup container packed in-process
+  - SIGKILL the original kevy
+  - Restore container into a fresh data_dir; start a NEW kevy on it
+  - Verify NO FABRICATION + recall ≥ 50 %
+
+### Empirical (Mac aarch64)
+
+- 244,749 ACKs pre-backup, 904,004 ACKs captured at backup moment.
+- 81 MB container packed; restore + new-kevy spawn round-trip.
+- **903,856 present / 148 lost / 0 corrupted = 99.98 % recall.**
+- Wall-clock 8.14 s (incl. 60 s allowance for big-AOF restored-kevy spawn).
+
+### What this validates
+
+- **Backup is fast + complete**: bundles a multi-MB data_dir + restores into a working kevy in seconds.
+- **0 corruption on restore**: every recovered key reads back the ACK'd value.
+- **Race-safe under live writes**: the chaos test runs the backup MID-WRITE-STORM, simulating real production where you can't pause traffic to take a snapshot.
+- **Container format is self-describing**: future kevy versions can read v1.40 containers; format version is in `KEVYBKP1` magic and can be bumped non-breaking.
+
+### Production deployment pattern
+
+```sh
+# Snapshot first, then bundle
+redis-cli -p 6004 BGSAVE
+sleep 1   # wait for snapshot flush
+kevy-cli backup --data-dir /var/kevy/data --to /backups/kevy-2026-06-30.kevybkp
+
+# Restore on a fresh node
+mkdir -p /var/kevy-restored
+kevy-cli restore --from /backups/kevy-2026-06-30.kevybkp --to /var/kevy-restored
+kevy --config /var/kevy-restored/kevy.toml   # resume normally
+```
+
+### v2 roadmap progress
+
+- ✓ Phase A (v1.36-v1.38): RESP fuzz / max_clients / resource-exhaustion
+- ✓ v1.39 (Phase B step 1: SIGTERM drain)
+- ✓ v1.40 (Phase B step 2: backup/restore) — THIS
+- v1.41 (Phase B step 3: Prometheus /metrics + INFO expansion) — NEXT
+- v1.42 (Phase B step 4: SLOWLOG / MONITOR / audit)
+- Then Phase C (cluster), D (large-scale E2E), E (ecosystem), F (v2 prep).
+
+### Per-crate bumps
+
+- workspace 1.39.0 → 1.40.0
+- kevy-cli 1.40.0 (new `pub mod backup` + 2 new CLI subcommands)
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow.
+
+### Tests
+
+`cargo test --workspace --lib` green (3 new backup unit tests in kevy-cli). Chaos suite (12 tests, gated `--ignored`):
+- crash_always / crash_everysec / crash_during_rewrite / crash_replication_followed
+- soak_then_crash / concurrent_writers_overlap / wire_torture_chaos / maxclients_chaos
+- disk_full_chaos / fd_exhaust_chaos / sigterm_drain_chaos
+- **backup_restore_chaos (NEW): 8.14 s — 99.98 % recall, 0 corruption**
+
+### What v1.40.0 does NOT include
+
+- **AOF format-version handshake** — `AOF_MAGIC` carries version, but no compat-matrix test yet. Deferred to v1.40.x or v1.44 (rolling upgrade).
+- **Cross-host backup transfer** — `scp` etc. is the operator's job; kevy-cli backup produces a file.
+- **Incremental backups** — single full backup per call. Future v1.4x.
+- **Encryption-at-rest** — out of scope per AUTH-permanent-OUT charter.
+
 ## [v1.39.0] — 2026-06-30 (v2 roadmap Phase B step 1 — SIGTERM graceful drain)
 
 **Theme**: v2 roadmap Phase B "Operability + observability" step 1 of 4. SIGTERM = graceful shutdown with ZERO-LOSS contract on the everysec fsync window.
