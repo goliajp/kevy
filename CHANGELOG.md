@@ -4,6 +4,48 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.58.0] — 2026-06-30 (v2 roadmap Phase F step 5 — fourth RC fix: v1.38.x SIGXFSZ handler)
+
+**Theme**: v2 roadmap Phase F step 5 of 6 — fourth RC iteration. Fixes the v1.38.x finding (kevy had no SIGXFSZ handler — when an AOF write exceeded `RLIMIT_FSIZE`, the kernel terminated kevy with a core dump per the signal's default `Core` action). v1.58 installs a no-op handler so the signal is absorbed; the failing write returns `EFBIG` to the AOF writer (logged + ignored via the existing `exec.rs:319` path) and kevy keeps serving.
+
+### Changed
+
+- **`crates/kevy-sys/src/lib.rs`** — adds `pub const SIGXFSZ: c_int = 25`.
+- **`crates/kevy/src/lib.rs`** — `install_signal_handlers` now also registers a no-op handler for SIGXFSZ alongside the existing SIGTERM / SIGINT handlers. The no-op intentionally does NOT touch the stop flag — one bad write should not trigger a full graceful drain, just be absorbed and reported via the existing AOF eprintln path.
+
+### Added
+
+- **`crates/kevy/tests/sigxfsz_survival_chaos.rs`** — gated `#[ignore]` chaos test:
+  - Spawns kevy.
+  - Locates its PID via `lsof -ti :<port>`.
+  - Sends SIGXFSZ via `kill -25 <pid>`.
+  - Asserts post-signal PING still answers `+PONG`.
+  - The test decouples from kevy's specific AOF write path (io_uring vs std::fs) by sending the signal directly — proves the signal handler itself does its job.
+
+### Empirical findings (Mac M2 Pro, kevy v1.58 release binary)
+
+```
+xfsz: located kevy pid = 1318, sending SIGXFSZ
+xfsz: post-SIGXFSZ PING
+xfsz: kevy alive after SIGXFSZ — handler absorbed the signal
+test ... ok in 0.67s
+```
+
+- kevy survives SIGXFSZ delivery; pre-v1.58 this would have core-dumped.
+- Post-signal connection accepted + PING + `+PONG` reply.
+
+### Compat note
+
+- **No config break, no API break, no behaviour change** for code paths that never raise SIGXFSZ.
+- Disk-full scenarios (the v1.38 chaos test) now have a graceful path: write fails with `EFBIG` → AOF code logs `kevy: shard N aof append failed: …` → kevy keeps serving reads + accepts new writes (which may also fail, but never crash the server).
+- v1.38.x finding closed.
+
+### v2 roadmap progress
+
+- Phase F: v1.54 + v1.55 + v1.56 + v1.57 + v1.58 ✅; 1 RC step remaining (v1.59) before v2.0.
+
+Fourth RC complete. 1 step from v2.0 ship.
+
 ## [v1.57.0] — 2026-06-30 (v2 roadmap Phase F step 4 — third RC fix: v1.44.x cluster_known_nodes observability)
 
 **Theme**: v2 roadmap Phase F step 4 of 6 — third RC iteration. Fixes the v1.44.x finding (`CLUSTER INFO` reported `cluster_known_nodes` equal to the shard count instead of the peer count — broke observability tools that watch cluster topology). Now reports `peers.len()` when cluster mode is enabled (1 when no peers configured, since the local node is always known to itself).

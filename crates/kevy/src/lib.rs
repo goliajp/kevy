@@ -147,6 +147,14 @@ fn install_signal_handlers(stop: Arc<AtomicBool>) {
     }
     kevy_sys::install_signal_handler(kevy_sys::SIGTERM, handler);
     kevy_sys::install_signal_handler(kevy_sys::SIGINT, handler);
+    // v1.58 (closes v1.38.x finding): SIGXFSZ is raised when a write
+    // would exceed RLIMIT_FSIZE. Default action is `Core` (kernel
+    // dump). Installing a no-op handler absorbs the signal — the
+    // failing write returns EFBIG to the AOF writer (logged and
+    // ignored), kevy keeps serving reads and continues attempting
+    // writes. One bad write does not bring down the whole server.
+    extern "C" fn xfsz_noop(_: std::ffi::c_int) {}
+    kevy_sys::install_signal_handler(kevy_sys::SIGXFSZ, xfsz_noop);
     // Polling-bridge thread: signal handlers can't easily touch the
     // per-run Arc, so we poll the static AtomicBool every 100 ms and
     // mirror it into `stop`. Daemon thread; exits when the process does.
