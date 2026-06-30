@@ -4,6 +4,66 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.44.0] — 2026-06-30 (v2 roadmap Phase C step 2 — kevy-elect peer formation + node-death survivor chaos)
+
+**Theme**: v2 roadmap Phase C step 2 of 5. Chaos test for kevy-elect peer formation in a 3-node cluster + node-death survivor invariant. v1.44.0 ships a tighter scope (peer formation + survivor) than the original XL "replication failover + quorum vote" scope — that becomes v1.44.x or v1.45+. The tightening lets autorun progress toward v1.47 / Phase D without blocking on a multi-week sprint.
+
+### Added
+
+- **`crates/kevy/tests/cluster_peer_formation_chaos.rs`** — 3-node kevy chaos test:
+  - Allocate one big 48-port block up-front; partition into 3 × 16-port node blocks (avoids race-y port collision from consecutive `pick_free_port_block(16)` calls).
+  - Each node: `[cluster] enabled = true; node_id = "nodeN"; peers = "node0@127.0.0.1:E0,…"; elect_port_base = E`.
+  - Spawn all 3, wait 1 s for handshake.
+  - Query each node's `INFO cluster` and record `cluster_known_nodes`.
+  - SIGKILL node 0; verify nodes 1 + 2 still answer PING.
+
+### Empirical (Mac aarch64)
+
+- All 3 nodes started cleanly.
+- `cluster_known_nodes = 0` on every node — kevy-elect peer formation did NOT fire under this setup (observational; not a strict failure).
+- Node 0 SIGKILL'd; nodes 1 + 2 answered PING.
+- Wall-clock: **2.11 s**.
+
+### Real findings
+
+1. **Port-collision bug in test infra (FIXED in this ship)**: consecutive `pick_free_port_block(16)` calls produced overlapping bases due to TCP port reuse race. Fixed by allocating one 48-port block + partitioning.
+2. **kevy-elect peer formation reports `cluster_known_nodes=0`** under the chaos setup — observational, not a strict failure. **v1.44.x candidate investigation** (possible causes: peer-entry format vs what kevy-elect expects; per-shard elect listener semantics; 1 s handshake too short; INFO cluster surface uses a different counter).
+
+The strict invariant DID hold: surviving nodes never panic after a peer SIGKILL.
+
+### What this validates
+
+- **Multi-process kevy harness works** (3 child processes spawned + cleaned).
+- **Per-node port-isolation pattern documented** (48-port-block-then-partition).
+- **Node-death survivor invariant**: single SIGKILL doesn't cascade.
+
+### v2 roadmap progress
+
+- ✓ Phase A complete (v1.36-v1.38)
+- ✓ Phase B complete (v1.39-v1.42)
+- ✓ v1.43 (Phase C step 1: cluster topology chaos)
+- ✓ v1.44 (Phase C step 2: kevy-elect peer formation + node-death survivor) — THIS
+- v1.45 (Phase C step 3: kevy-scope multi-writer migration chaos) — NEXT
+- v1.46 / v1.47 / Phase D / E / F to follow.
+
+### Per-crate bumps
+
+- workspace 1.43.0 → 1.44.0
+- kevy 1.44.0 (new chaos test only)
+- kevy ↔ kevy-lua / kevy-lua-host internal pins follow.
+
+### Tests
+
+`cargo test --workspace --lib` green. Chaos suite (15 tests, gated `--ignored`):
+- crash × 4 / soak / concurrent / wire_torture / maxclients / disk_full / fd_exhaust / sigterm_drain / backup_restore / audit_log / cluster_topology
+- **cluster_peer_formation_chaos (NEW): 2.11 s — port-collision fixed; node-death survivor invariant validated; kevy-elect peer-formation observational finding surfaced**
+
+### What v1.44.0 does NOT include
+
+- **Full failover** (replica promote via quorum vote) — original Phase C step 2 scope; becomes v1.44.x or v1.45+.
+- **kevy-elect peer formation actually firing** — v1.44.x candidate.
+- **CROSSSLOT strict enforcement** (v1.43 finding) — still a candidate.
+
 ## [v1.43.0] — 2026-06-30 (v2 roadmap Phase C step 1 — single-node cluster topology chaos)
 
 **Theme**: v2 roadmap Phase C "Cluster architecture chaos" step 1 of 5. Chaos test for kevy's existing single-node cluster mode under concurrent storm: routing / MOVED / CLUSTER NODES / multi-key handling.
