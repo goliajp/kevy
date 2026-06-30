@@ -96,20 +96,16 @@ fn jedis_5x_golden_path() {
     eprintln!("jedis: CLIENT GETNAME");
     s.write_all(&build(&[b"CLIENT", b"GETNAME"])).unwrap();
     let getname = read_one_reply(&mut s);
-    // OBSERVATIONAL FINDING (v1.52.x candidate): kevy's CLIENT SETNAME
-    // is a documented stub (`crates/kevy/src/ops/client.rs:35-37` +
-    // `scope-decisions.md`). It accepts the SETNAME write but does NOT
-    // persist; GETNAME always returns an empty bulk `$0\r\n\r\n`.
-    // Jedis 5.x records the name client-side so the round-trip isn't
-    // required for app correctness — but observability tools that read
-    // `CLIENT LIST` for the name will see "". We accept either the
-    // documented stub reply or a real round-trip if a future patch
-    // closes the gap.
+    // v2.0.16: CLIENT SETNAME now persists per-connection via the
+    // reactor-level intercept in `kevy-rt::exec_client_intercept` —
+    // see CHANGELOG v2.0.16 and `crates/kevy-rt/src/exec_client_intercept.rs`.
+    // Closes v1.52.x finding. The round-trip MUST now return the
+    // name the SETNAME call wrote.
     assert!(
-        getname.starts_with("$0\r\n") || getname.contains("jedis-client-1"),
-        "CLIENT GETNAME expected stub `$0\\r\\n\\r\\n` or round-trip, got: {getname:?}"
+        getname.contains("jedis-client-1"),
+        "CLIENT GETNAME expected round-trip of 'jedis-client-1', got: {getname:?}"
     );
-    eprintln!("jedis: CLIENT GETNAME = {getname:?} (kevy stub returns empty bulk)");
+    eprintln!("jedis: CLIENT GETNAME = {getname:?}");
 
     // PHASE 2: Jedis-style pipeline — 100 commands written in one shot,
     // 100 replies read in order.

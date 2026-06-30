@@ -4,6 +4,74 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.16] — 2026-07-01 — **CLIENT SETNAME / GETNAME persist per-connection** (v1.52.x finding closed)
+
+**Theme**: closes the last v1.x open finding — v1.52.x `CLIENT SETNAME` documented stub. Implements per-conn name persistence via a reactor-level intercept (not via a `dispatch_into` trait refactor — much smaller blast radius).
+
+### Approach
+
+The dispatch trait `Commands::dispatch_into(&self, store, args, out)` doesn't expose `&mut Conn`, so the stateless `cmd_client` in `kevy/src/ops/client.rs` can't persist a per-conn name. Adding a `&mut Conn` parameter would touch every command's dispatch path.
+
+The `handle_command` reactor entry point in `kevy-rt/src/exec.rs` already owns `&mut Conn` via `self.conns.get_mut(conn_id)` — exactly how MULTI / EXEC / WATCH / DISCARD already persist per-conn state. v2.0.16 adds an interception arm there for `CLIENT SETNAME` and `CLIENT GETNAME` that handles them directly + emits the reply with `immediate_reply`. All other CLIENT subcommands (`ID`, `LIST`, `INFO`, `KILL`, `NO-EVICT`, etc.) fall through to the standard dispatch unchanged.
+
+### Changed
+
+- **`crates/kevy-rt/src/conn.rs`** — `Conn` struct adds `client_name: Vec<u8>` in the cold section + default-empty init.
+- **`crates/kevy-rt/src/exec.rs`** — `handle_command` calls the new `try_intercept_client` helper before resolving the verb; method visibility of `immediate_reply` changed from private to `pub(crate)` so the intercept file can use it.
+- **`crates/kevy-rt/src/exec_client_intercept.rs`** (new, ~85 LOC) — `try_intercept_client` implementation. Handles:
+  - `CLIENT SETNAME <name>` — persists `name` on the conn, replies `+OK`. Empty name allowed (clears). Whitespace + control bytes rejected with `-ERR Client names cannot contain spaces, newlines or special characters.` matching Redis.
+  - `CLIENT GETNAME` — replies with the persisted name as a RESP bulk string.
+- **`crates/kevy-rt/src/lib.rs`** — registers the new module.
+- **`crates/kevy/tests/jedis_stackex_battle.rs`** — assertion that observed the v1.52.x stub is upgraded to require the round-trip; CHANGELOG cross-reference added.
+
+### Added
+
+- **`crates/kevy/tests/client_setname_persistence.rs`** (new, gated `#[ignore]`, 6 phases):
+  1. Single-conn round-trip `SETNAME conn1` → `GETNAME` returns `conn1`.
+  2. Per-connection isolation — second conn's GETNAME stays empty.
+  3. Rename overwrite — `SETNAME bar2` after `SETNAME foo1` returns `bar2`.
+  4. Whitespace rejected — `SETNAME "ha ck1"` → `-ERR …`.
+  5. Empty SETNAME allowed — clears the name.
+  6. Other `CLIENT` subcommands (`ID`, `NO-EVICT`) still work via standard dispatch.
+
+### Empirical
+
+**Mac M2 Pro (v2.0.16 release binary):**
+
+```
+cargo test --release -p kevy --test client_setname_persistence -- --ignored
+test result: ok. 1 passed; 0 failed in 0.37s
+```
+
+**Linux lx64 (kernel 6.12, io_uring reactor):**
+
+```
+cargo test --release -p kevy --test client_setname_persistence -- --ignored
+test result: ok. 1 passed; 0 failed in 0.25s
+```
+
+Updated `jedis_stackex_battle::jedis_5x_golden_path`:
+```
+jedis: CLIENT GETNAME = "$14\r\njedis-client-1\r\n"
+```
+(was the v1.52.x stub `$0\r\n\r\n`).
+
+### Finding status
+
+| # | Surfaced | Status |
+|---|---|---|
+| v1.52.x CLIENT SETNAME | v1.52.0 | **CLOSED in v2.0.16** |
+| v1.33.x Linux replication | v1.33.0 | CLOSED in v2.0.15 |
+| Linux CI `blocking_cross_shard.rs` | session-recent | CLOSED at v2.0.14 |
+| v1.49.x INFO memory empty | v1.49.0 | CLOSED in v2.0.1 |
+| v1.34.x 1h opt-in soak | v1.34.0 | **running on lx64 background** at v2.0.15 |
+
+**All v1.x open findings either closed or running for verification.**
+
+### Limitation
+
+`CLIENT LIST` / `CLIENT INFO` still emit `name=` (empty) — the bulk-string body construction in `kevy/src/ops/client.rs` runs in the stateless dispatch path and can't read the per-conn name without the broader trait refactor. Observability tools that watch the name field via `CLIENT LIST` will continue to see empty. For the primary use case (Jedis / StackExchange.Redis recording the name for log correlation) the round-trip via `GETNAME` is what's queried, and that works now.
+
 ## [v2.0.15] — 2026-07-01 — **Linux primary-replication unblocked** (v1.33.x finding closed)
 
 **Theme**: closes the long-standing v1.33.x Linux-only finding. When kevy was configured `[replication] role = "primary"` AND running on Linux's io_uring reactor (the default on Linux), the primary became UNRESPONSIVE to client traffic — `redis-cli PING` would hang forever. The chaos test `crash_replication_followed_no_corruption` had been failing on Linux CI since v1.33 with `"vacuous test: only 0 primary-ACKs before kill"`.
