@@ -4,6 +4,70 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.50.0] — 2026-06-30 (v2 roadmap Phase D step 3 — long-running soak chaos)
+
+**Theme**: v2 roadmap Phase D step 3 of 4. Memory leaks, fd leaks, lock starvation, and slow background-thread regressions only surface after sustained load. This step ships an opt-in long-running soak test with a memory-slope leak detector.
+
+### Added
+
+- **`crates/kevy/tests/soak_long_running_chaos.rs`** — gated `#[ignore]` chaos test:
+  - 4 producers, mixed-op workload (60 % SET / 20 % GET / 10 % DEL / 10 % HINCRBY) over a bounded key space (5 000 keys per producer — exercises overwrite + delete paths to keep memory bounded).
+  - Deterministic std-only LCG seeded `0xBA53_BA11_BA51_C000 + producer_id`.
+  - Samples `INFO memory` → `used_memory:N` every 5 s into a vector.
+  - Linear-regression OLS slope of `(sample_index, used_memory)` over the **second half** of the run — second half excludes initial keyspace fill, so a non-zero slope is leak-suspect.
+  - 3 strict invariants:
+    1. Slope ≤ 256 KiB / sample (= 51 KiB / s) — guards against unbounded growth.
+    2. Zero parse / RESP errors throughout the soak.
+    3. Post-soak PING +PONG.
+  - Duration overridable via `KEVY_SOAK_SECS` env var (default 60 s for CI; 3 600 / 86 400 for production validation).
+
+### Empirical findings (Mac M2 Pro, kevy v1.50 release binary, 30 s smoke)
+
+```
+soak: running for 30 s (override via KEVY_SOAK_SECS)
+soak: t=   0s used_memory=0 ACKs=0
+soak: t=   5s used_memory=2115012 ACKs=746814
+soak: t=  10s used_memory=2119485 ACKs=1513964
+soak: t=  15s used_memory=2118889 ACKs=2210062
+soak: t=  20s used_memory=2119068 ACKs=2916377
+soak: t=  25s used_memory=2128288 ACKs=3643365
+soak: done — 4303790 ACKs / 0 errs over 30 s (143459 ACK/s)
+soak: second-half memory slope = 4699 B/sample (cap = 262144 B/sample)
+soak: kevy alive after 30s soak
+test ... ok in 30.56s
+```
+
+- **143 k ACK / s sustained** over 30 s (single-conn-per-producer, blocking round-trip).
+- 4.3 M total ACKs / 0 errs / 0 parse errors.
+- **Second-half slope = 4 699 B / sample = 56× under the leak cap** — memory genuinely stable after initial keyspace fill.
+- 0 errs throughout — no transient parse failures under sustained load.
+
+### Operator runbook — the 24 h acceptance gate
+
+```text
+KEVY_SOAK_SECS=86400 cargo test -p kevy --test soak_long_running_chaos \
+    --release -- --ignored --nocapture
+```
+
+- Expected duration: ~24 h + small overhead.
+- Expected aggregate: ≥ 12 G ACKs at the 143 k / s rate observed at 30 s (rate may drift down with disk pressure from the AOF; sample slope is the load-bearing invariant, not the rate).
+
+### Out of scope (deferred to Phase D step 4 or later)
+
+- File-descriptor sampling — `INFO clients` exists but soak doesn't yet pull it.
+- Latency-distribution drift — soak only watches memory; latency drift is real but needs histogram infra.
+- 24 h CI runtime — opt-in only; CI runs the 60 s default.
+
+### v2 roadmap progress
+
+- Phase A: v1.36 + v1.37 + v1.38 ✅
+- Phase B: v1.39 + v1.40 + v1.41 + v1.42 ✅
+- Phase C: v1.43 + v1.44 + v1.45 + v1.46 + v1.47 ✅
+- Phase D: v1.48 + v1.49 + v1.50 ✅; 1 step remaining (v1.51 deferred bench-suite enhancements).
+- Phase E / F: pending.
+
+15 / 20 versions complete = 75 % toward v2.0.
+
 ## [v1.49.0] — 2026-06-30 (v2 roadmap Phase D step 2 — burst/ramp + realistic-data chaos)
 
 **Theme**: v2 roadmap Phase D step 2 of 4. Drives kevy through a 4-phase traffic shape (steady → burst → cooldown → resume) with a realistic mixed-op distribution (70 % short SET / 15 % HSET / 10 % LPUSH / 5 % 4 KB SET) and asserts the burst is absorbed without parse errors and post-burst memory stays bounded.
