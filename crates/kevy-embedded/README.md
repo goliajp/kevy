@@ -73,6 +73,89 @@ assert_eq!(s.zscore(b"leaderboard", b"bob")?, Some(200.0));
 # Ok::<(), std::io::Error>(())
 ```
 
+## Phase 2+ ops (v1.5.0 → v1.8.1, +41 new methods)
+
+The 1.4.21 surface was sufficient for cache / session / pubsub / job-queue
+use; v1.5.0 → v1.8.1 round out the embedded API to "Redis-shaped expected"
+parity. Net-additive — every 1.4.21 user upgrades drop-in.
+
+```rust
+use kevy_embedded::{Store, Config};
+use std::time::Duration;
+
+let s = Store::open(Config::default())?;
+
+// === Hash mass-getters (v1.5.0) ===
+s.hset(b"thread:1", &[(b"subject", b"Re: hi"), (b"unread", b"3")])?;
+let row: Vec<(Vec<u8>, Vec<u8>)> = s.hgetall(b"thread:1")?;
+let some_fields = s.hmget(b"thread:1", &[b"subject", b"unread"])?;
+assert!(s.hexists(b"thread:1", b"subject")?);
+assert_eq!(s.hlen(b"thread:1")?, 2);
+
+// === Hash atomic increments (v1.5.0 + v1.7.0) ===
+s.hincrby(b"thread:1", b"unread", 1)?;       // +1
+s.hincrbyfloat(b"stat", b"avg_latency", 0.5)?;
+
+// === Sorted set range + atomic incr (v1.5.0) ===
+s.zadd(b"by_activity", &[(100.0, b"thread:1"), (200.0, b"thread:2")])?;
+let top: Vec<(Vec<u8>, f64)> = s.zrevrange(b"by_activity", 0, 9)?;
+s.zincrby(b"by_activity", 50.0, b"thread:1")?; // atomic bump
+
+// === Multi-key strings (v1.6.0) ===
+s.mset(&[(b"k1", b"v1"), (b"k2", b"v2"), (b"k3", b"v3")])?;
+let vals: Vec<Option<Vec<u8>>> = s.mget(&[b"k1", b"k2", b"missing"])?;
+
+// === Keyspace introspection (v1.6.0) ===
+let user_keys: Vec<Vec<u8>> = s.keys(Some(b"user:*"), None);
+
+// === Atomic get + TTL (v1.6.0) ===
+let val = s.getex(b"session:42", Duration::from_secs(3600))?;
+
+// === Set algebra (v1.6.0) ===
+s.sadd(b"allow:user:1", &[b"a", b"b"])?;
+s.sadd(b"allow:user:2", &[b"b", b"c"])?;
+let common: Vec<Vec<u8>> = s.sinter(&[b"allow:user:1", b"allow:user:2"])?;
+
+// === List slice + index (v1.5.0) ===
+s.rpush(b"log", &[b"a", b"b", b"c", b"d"])?;
+let window: Vec<Vec<u8>> = s.lrange(b"log", 0, 1)?;
+let last = s.lindex(b"log", -1)?;
+let removed = s.lrem(b"log", 0, b"a")?;          // remove all "a"
+let new_len = s.linsert(b"log", true, b"c", b"NEW")?; // before "c"
+
+// === String single-call atomic (v1.5.0 + v1.6.0 + v1.8.1) ===
+let prev = s.getset(b"counter", b"0")?;
+let deleted = s.getdel(b"once-only")?;
+let set_ok = s.setnx(b"singleton", b"locked")?;
+s.append(b"log", b" + more")?;
+assert!(s.strlen(b"log")? > 0);
+s.decr(b"countdown")?;
+s.decrby(b"countdown", 5)?;
+s.incrbyfloat(b"price", 1.99)?;
+
+// === Hash conditional + bonus (v1.8.1) ===
+s.hsetnx(b"thread:1", b"created_at", b"2026-07-01")?;
+
+// === TTL — absolute + relative (v1.6.0) ===
+s.expireat(b"session:42", 1_900_000_000)?;
+s.pexpire(b"cache:k", 30_000)?;                // 30 seconds in ms
+let ttl_s = s.ttl_secs(b"session:42");         // -1 no TTL, -2 absent
+
+// === Bitmap (v1.8.0) ===
+s.setbit(b"bloom:1", 0xff, 1)?;
+let bit = s.getbit(b"bloom:1", 0xff)?;
+let n = s.bitcount(b"bloom:1", None)?;
+
+// === Perfgate observability (v1.7.0) ===
+let lock_ns: u128 = s.ping_ns();
+# Ok::<(), std::io::Error>(())
+```
+
+**Full method list per release**: see the [CHANGELOG](https://github.com/goliajp/kevy/blob/master/CHANGELOG.md)
+entries for v2.0.3 through v2.0.8. **Open items** (pending design conversation
+with downstream embedded users): `atomic { … }` closure-style transaction,
+cursor-based `scan` / `hscan` / `zscan`, and `pipeline()` for batched writes.
+
 ## Persistence
 
 `Config::default().with_persist(dir)` enables both snapshot
