@@ -327,6 +327,39 @@ impl Store {
         Ok(())
     }
 
+    /// `LINSERT key BEFORE|AFTER pivot value` — insert `value`
+    /// before/after the first occurrence of `pivot` in the list at
+    /// `key`. Returns:
+    /// - new list length on success (`>= 1`);
+    /// - `0` when `key` does not exist;
+    /// - `-1` when `pivot` was not found in the list.
+    ///
+    /// Matches Redis semantics.
+    pub fn linsert(
+        &mut self,
+        key: &[u8],
+        before: bool,
+        pivot: &[u8],
+        val: &[u8],
+    ) -> Result<i64, StoreError> {
+        self.promote_list_inline_to_heap(key);
+        let (result, delta) = match self.list_mut(key, false)? {
+            None => return Ok(0),
+            Some(l) => {
+                let Some(idx) = l.iter().position(|v| v.as_slice() == pivot) else {
+                    return Ok(-1);
+                };
+                let insert_at = if before { idx } else { idx + 1 };
+                l.insert(insert_at, val.to_vec());
+                let new_len = l.len();
+                let d = list_item_weight(val.len()) as i64;
+                (new_len as i64, d)
+            }
+        };
+        self.account_delta(key, delta);
+        Ok(result)
+    }
+
     /// `LREM` — remove `count` occurrences (>0 head, <0 tail, 0 all).
     pub fn lrem(&mut self, key: &[u8], count: i64, val: &[u8]) -> Result<usize, StoreError> {
         self.promote_list_inline_to_heap(key);

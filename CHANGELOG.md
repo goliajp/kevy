@@ -4,6 +4,46 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.6] — 2026-07-01 — **`kevy-embedded` 1.7.1**: linsert (mailrs feedback ask #11 closed)
+
+**Theme**: kevy-embedded 1.7.0 → 1.7.1 — closes mailrs ask #11 fully (`linsert`). Adds the new `kevy_store::Store::linsert` method + embedded facade.
+
+### Added — `kevy_store::Store`
+
+- `linsert(key, before: bool, pivot, val) -> Result<i64, StoreError>` (in `crates/kevy-store/src/list.rs`) — insert `val` before/after the first occurrence of `pivot`. Returns new list length on success; `0` when key doesn't exist; `-1` when pivot not found. Matches Redis `LINSERT key BEFORE|AFTER pivot value` semantics.
+
+### Added — `kevy_embedded::Store`
+
+- `linsert(key, before: bool, pivot, value) -> io::Result<i64>` — wraps the new Store method. AOF-logs as `LINSERT key BEFORE|AFTER pivot value` matching Redis wire format.
+
+### Tests
+
+4 new unit tests:
+- `linsert_before_pivot` — insert before first match.
+- `linsert_after_pivot` — insert after first match.
+- `linsert_pivot_not_found_returns_negative_one`.
+- `linsert_absent_key_returns_zero`.
+
+### Empirical (Mac M2 Pro, kevy v2.0.6)
+
+```
+cargo test --release -p kevy-embedded
+test result: ok. 84 passed; 0 failed (was 80 in v2.0.5; +4 new).
+```
+
+### Coverage status vs mailrs feedback (16 asks) — updated
+
+| # | Ask | Status |
+|---|-----|--------|
+| 1, 2, 3, 4, 5, 8, 9, 10, 12, 15, 16 | ✅ fully closed |
+| 11 | ✅ **now full** (linsert in v1.7.1) |
+| 6 | ⏳ shape conversation pending |
+| 7 | ⏳ cursor design pending |
+| 13 | ⏳ pipeline shape pending |
+| 14 | 🟡 bitmap defer (needs new Store module) |
+
+**13 of 16 fully closed**; 1 partial; 3 pending design conversation.
+
 ## [v2.0.5] — 2026-07-01 — **`kevy-embedded` 1.7.0**: hincrbyfloat + ping_ns (mailrs feedback)
 
 **Theme**: kevy-embedded 1.6.0 → 1.7.0 — closes the v1.6.0 partial #4 (hincrbyfloat) by adding the new `kevy_store::Store::hincrbyfloat` method + embedded facade, and ships #16 ping_us as `ping_ns()` for perfgate observability.
