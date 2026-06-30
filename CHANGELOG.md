@@ -4,6 +4,59 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.55.0] — 2026-06-30 (v2 roadmap Phase F step 2 — first RC fix: v1.45.x MISDIRECTED client port)
+
+**Theme**: v2 roadmap Phase F step 2 of 6 — first RC iteration. Fixes the v1.45.x finding (kevy-scope `-MISDIRECTED writer is …` reply quotes the kevy-elect election-control port instead of the client-facing port a Redis client can actually reconnect to). Backwards-compatible: the legacy `id@host:port` peer syntax still works (legacy semantics retained); new `id@host:elect_port:client_port` syntax opts into the fixed behaviour.
+
+### Changed
+
+- **`crates/kevy-config/src/cluster.rs`** — `PeerEntry` adds optional `client_port: Option<u16>`. `parse_one` accepts both forms:
+  - Legacy: `id@host:port` (sets `port` = elect, `client_port = None`).
+  - v1.55+: `id@host:elect_port:client_port` (sets both).
+- **`crates/kevy/src/scope_integration.rs`** — `PEER_ADDRS` now stores `host:client_port` when extended syntax is used (else falls back to `host:port` = legacy elect-port behaviour). Hot-path change is one `Option::unwrap_or` per peer-table build (no per-request cost).
+
+### Added
+
+- **`crates/kevy-config/src/cluster.rs`** — 2 new `parse_one` tests covering the v1.55 extended form (with IPv4 + DNS hosts).
+- **`crates/kevy/tests/scope_misdirected_client_port.rs`** — gated `#[ignore]` chaos test that spawns 2 nodes with the extended syntax + verifies MISDIRECTED reply contains nodeA's CLIENT port + does NOT contain nodeA's elect port (regression guard).
+
+### Empirical findings (Mac M2 Pro, kevy v1.55 release binary)
+
+```
+# Extended-form (the fix):
+scope_client_port: peers = nodeA@127.0.0.1:57307:57299,nodeB@...
+scope_client_port: nodeB SET reply = "-MISDIRECTED writer is 127.0.0.1:57299"
+scope_client_port: MISDIRECTED correctly reports CLIENT port 57299,
+                   not elect port 57307
+test ... ok in 1.36s
+
+# Legacy form (compat — v1.45 behaviour unchanged):
+scope_misdirected: nodeB SET reply = "-MISDIRECTED writer is 127.0.0.1:57277"
+                   (elect port — documented v1.45.x behaviour retained)
+test ... ok in 1.61s
+```
+
+- Extended form: client port `57299` correctly emitted; elect port `57307` correctly absent.
+- Legacy form: still uses elect port `57277` (intentional — no config break).
+- `parse_one` unit tests: 17 tests pass (was 15) — 2 new for extended syntax.
+
+### Compat note
+
+- **No config break**. Operators on v1.x can upgrade to v1.55 without touching `peers = "..."`. The legacy elect-port-in-MISDIRECTED behaviour is preserved exactly.
+- To opt into the fix: change `peers = "node@host:elect"` to `peers = "node@host:elect:client"`.
+- The v1.45.x finding stays in the open-findings list with status updated: "legacy syntax retained for compat; extended syntax (v1.55) closes the gap when opted in."
+
+### v2 roadmap progress
+
+- Phase A: v1.36 + v1.37 + v1.38 ✅
+- Phase B: v1.39 + v1.40 + v1.41 + v1.42 ✅
+- Phase C: v1.43 + v1.44 + v1.45 + v1.46 + v1.47 ✅
+- Phase D: v1.48 + v1.49 + v1.50 + v1.51 ✅
+- Phase E: v1.52 + v1.53 ✅
+- Phase F: v1.54 + v1.55 ✅; 4 RC steps remaining (v1.56 - v1.59) before v2.0.
+
+20 / 20 + 4 = first v2.0 RC complete; 5 / 20 of v2.0 ship sequence done. Next RC: v1.56 (additional ecosystem-feedback fixes).
+
 ## [v1.54.0] — 2026-06-30 (v2 roadmap Phase F step 1 — docs polish + v2.0 release-notes draft)
 
 **Theme**: v2 roadmap Phase F (RC + ship prep) step 1 of 6. No code changes — pure docs polish to prepare for the v2.0 ship narrative. Adds a draft v2.0 release-notes document + brings the three-language README ecosystem bullet up to date with the Phase E battle suite.

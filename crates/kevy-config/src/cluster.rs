@@ -127,6 +127,15 @@ impl ScopeEntry {
 /// shape `peers = "id@host:port,id@host:port,..."` (per
 /// T1.5.4.5 decision (b) — a parser-extension-free representation
 /// that works with kevy-config's flat KV-only TOML).
+///
+/// **v1.55** extends the syntax with an optional second port for
+/// **client-facing** address (used by `-MISDIRECTED writer is`
+/// replies): `id@host:elect_port:client_port`. When the extended
+/// form is used, kevy-elect still binds the elect_port, while
+/// kevy-scope's MISDIRECTED encoder reports `host:client_port` to
+/// the client so the client can actually reconnect to the writer.
+/// Without the extended form, MISDIRECTED reports `host:elect_port`
+/// (the v1.45 documented behaviour, retained for compat).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerEntry {
     /// Peer's stable node id.
@@ -136,26 +145,58 @@ pub struct PeerEntry {
     /// Peer's election-control port (= peer's
     /// `cluster.elect_port_base + 0`, the shard 0 listener).
     pub port: u16,
+    /// **v1.55** — Peer's client-facing TCP port (the port other
+    /// kevy nodes / `redis-cli` connect to for normal operations).
+    /// `None` = unset (legacy syntax `id@host:port`); MISDIRECTED
+    /// replies fall back to `port` in that case. Set via extended
+    /// syntax `id@host:elect_port:client_port`.
+    pub client_port: Option<u16>,
 }
 
 impl PeerEntry {
-    /// Parse one `id@host:port` token. Returns `None` on any shape
-    /// problem (empty fields, non-numeric port, port overflow).
+    /// Parse one peer token. Accepts two shapes:
+    /// - **Legacy**: `id@host:port` (v1.x — `port` = elect port).
+    /// - **v1.55+**: `id@host:elect_port:client_port` (sets
+    ///   `client_port` so MISDIRECTED reports a port the client
+    ///   can actually connect to).
+    ///
+    /// Returns `None` on any shape problem (empty fields, non-numeric
+    /// ports, port overflow).
     pub fn parse_one(token: &str) -> Option<Self> {
         let (node_id, rest) = token.split_once('@')?;
         if node_id.is_empty() {
             return None;
         }
-        let colon = rest.rfind(':')?;
-        let host = &rest[..colon];
+        // Find the last colon (== client_port if extended, else elect_port).
+        let last_colon = rest.rfind(':')?;
+        let after_last: u16 = rest[last_colon + 1..].parse().ok()?;
+        let before_last = &rest[..last_colon];
+        // Try the extended form: split `before_last` on its own last colon.
+        if let Some(second_last) = before_last.rfind(':') {
+            // before_last = `host:elect_port`; after_last = `client_port`.
+            let host = &before_last[..second_last];
+            if host.is_empty() {
+                return None;
+            }
+            if let Ok(elect) = before_last[second_last + 1..].parse::<u16>() {
+                return Some(PeerEntry {
+                    node_id: node_id.to_string(),
+                    host: host.to_string(),
+                    port: elect,
+                    client_port: Some(after_last),
+                });
+            }
+        }
+        // Legacy form: `host:port` (port = elect).
+        let host = before_last;
         if host.is_empty() {
             return None;
         }
-        let port: u16 = rest[colon + 1..].parse().ok()?;
         Some(PeerEntry {
             node_id: node_id.to_string(),
             host: host.to_string(),
-            port,
+            port: after_last,
+            client_port: None,
         })
     }
 
@@ -190,6 +231,27 @@ mod peer_entry_tests {
         assert_eq!(p.node_id, "node-1");
         assert_eq!(p.host, "10.0.0.1");
         assert_eq!(p.port, 6004);
+        assert_eq!(p.client_port, None);
+    }
+
+    #[test]
+    fn parse_one_v1_55_extended_form_sets_client_port() {
+        // v1.55: `id@host:elect_port:client_port` syntax — addresses
+        // v1.45.x finding (MISDIRECTED reply uses elect_port instead
+        // of main client port).
+        let p = PeerEntry::parse_one("node-1@10.0.0.1:6011:6004").unwrap();
+        assert_eq!(p.node_id, "node-1");
+        assert_eq!(p.host, "10.0.0.1");
+        assert_eq!(p.port, 6011);
+        assert_eq!(p.client_port, Some(6004));
+    }
+
+    #[test]
+    fn parse_one_extended_form_dns_host() {
+        let p = PeerEntry::parse_one("primary@db-east.local:6011:6004").unwrap();
+        assert_eq!(p.host, "db-east.local");
+        assert_eq!(p.port, 6011);
+        assert_eq!(p.client_port, Some(6004));
     }
 
     #[test]
