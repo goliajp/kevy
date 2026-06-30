@@ -17,7 +17,15 @@ fn t1_ttl_in_memory_expires() {
 /// T3: TTL survives an AOF restart and STILL expires at the *original* deadline.
 #[test]
 fn t3_ttl_survives_restart_and_still_expires() {
-    let dir = std::env::temp_dir().join("kevy_ttl_repro_t3_unique");
+    // Use a per-run unique dir so re-running the test on a CI machine
+    // that has a stale `/tmp/kevy_ttl_repro_t3_unique` from a prior run
+    // (potentially owned by a different user) doesn't fail with
+    // PermissionDenied. `nanos` is good enough for in-test uniqueness.
+    let uniq = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!("kevy_ttl_repro_t3_{uniq}_{}", std::process::id()));
     std::fs::remove_dir_all(&dir).ok();
     std::fs::create_dir_all(&dir).unwrap();
 
