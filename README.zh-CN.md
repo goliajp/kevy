@@ -52,16 +52,22 @@ redis-cli -p 6004 SET hello world
   runtime。默认 Lua 5.1(Redis 生态兼容锚),每脚本经 `#!lua version=N`
   shebang opt-in 到 5.2–5.5。内置纯 Rust 的 `cmsgpack` + `cjson` stdlib。
   详见 [`docs/lua.md`](docs/lua.md)。
-- **真生态实证验证**(v1.27.x)—— Redis 用户实际跑的每一个 job queue /
-  锁库都对 kevy 端到端跑通过(含 Lua-script-heavy 路径):
+- **真生态实证验证**(v1.27.x + v1.52 / v1.53)—— Redis 用户实际跑的
+  每一个 job queue / 锁库 / 客户端 SDK 都对 kevy 端到端跑通过(含
+  Lua-script-heavy 路径):
   [BullMQ](https://github.com/taskforcesh/bullmq)(Node, 5.79)
   在默认 16-shard 集群 ·
   [Sidekiq](https://sidekiq.org/)(Ruby, 6.5)·
   [Bee Queue](https://github.com/bee-queue/bee-queue)(Node, 1.7)·
   [Celery](https://docs.celeryq.dev/)(Python, 5.6,作 broker + result
   backend)· [node-redlock](https://github.com/mike-marcacci/node-redlock)
-  (5)· 官方 [ioredis](https://github.com/redis/ioredis)(5.7)。
-  全部不改一行代码就跑。
+  (5)· 官方 [ioredis](https://github.com/redis/ioredis)(5.7)·
+  [Jedis](https://github.com/redis/jedis)(Java, 5.x)·
+  [StackExchange.Redis](https://stackexchange.github.io/StackExchange.Redis/)
+  (.NET, 2.x)· [go-redis](https://github.com/redis/go-redis)(Go, v9)·
+  [redis-py](https://github.com/redis/redis-py)(Python, 5.x)。
+  全部不改一行代码就跑。v2 acceptance 网关清单见
+  [`docs/v2-acceptance-baseline.md`](docs/v2-acceptance-baseline.md)。
 - **资源自适应** —— 内存不受限时全速运行,有限时优雅退化,边界处响亮
   地拒绝而不是默默腐化数据([详见](#资源自适应设计))。
 

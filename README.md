@@ -56,16 +56,21 @@ redis-cli -p 6004 SET hello world
   runtime. Default Lua 5.1 (Redis ecosystem compat), per-script opt-in
   to 5.2–5.5 via `#!lua version=N` shebang. Includes pure-Rust `cmsgpack`
   + `cjson` stdlibs. Full reference: [`docs/lua.md`](docs/lua.md).
-- **Battle-tested with the Redis ecosystem** (v1.27.x) — every job
-  queue / lock library a Redis user actually runs has been verified
-  end-to-end against kevy, including the Lua-script-heavy paths:
+- **Battle-tested with the Redis ecosystem** (v1.27.x + v1.52 / v1.53)
+  — every job queue / lock library a Redis user actually runs has been
+  verified end-to-end against kevy, including the Lua-script-heavy paths:
   [BullMQ](https://github.com/taskforcesh/bullmq) (Node, 5.79)
   on the default 16-shard cluster · [Sidekiq](https://sidekiq.org/)
   (Ruby, 6.5) · [Bee Queue](https://github.com/bee-queue/bee-queue)
   (Node, 1.7) · [Celery](https://docs.celeryq.dev/) (Python, 5.6, as
   broker + result backend) · [node-redlock](https://github.com/mike-marcacci/node-redlock)
-  (5) · canonical [ioredis](https://github.com/redis/ioredis) (5.7).
-  All run unmodified.
+  (5) · canonical [ioredis](https://github.com/redis/ioredis) (5.7) ·
+  [Jedis](https://github.com/redis/jedis) (Java, 5.x) ·
+  [StackExchange.Redis](https://stackexchange.github.io/StackExchange.Redis/) (.NET, 2.x) ·
+  [go-redis](https://github.com/redis/go-redis) (Go, v9) ·
+  [redis-py](https://github.com/redis/redis-py) (Python, 5.x).
+  All run unmodified. v2-acceptance gates catalogued in
+  [`docs/v2-acceptance-baseline.md`](docs/v2-acceptance-baseline.md).
 - **Resource-adaptive** — runs full-speed when memory is unbounded, degrades
   cleanly when it isn't, and refuses loudly at the edge instead of corrupting
   silently ([details](#resource-adaptive-by-design)).
