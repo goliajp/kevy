@@ -490,3 +490,6 @@ mod tests;
 #[cfg(test)]
 #[path = "store_tests_shard.rs"]
 mod tests_shard;
+#[cfg(test)]
+#[path = "store_tests_p2.rs"]
+mod tests_p2;
