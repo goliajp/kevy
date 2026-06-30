@@ -179,8 +179,8 @@ Cataloged above. Phase D **complete**.
 | 3 | v1.45 | **CLOSED in v1.55** | `-MISDIRECTED` reply uses CLIENT port via extended `id@host:elect:client` syntax. Legacy syntax retained for compat. Test: `scope_misdirected_client_port.rs`. | client compat |
 | 4 | v1.38.x | **CLOSED in v1.58** | `SIGXFSZ` no-op handler installed; failing AOF write returns `EFBIG` instead of kernel-killing kevy. Test: `sigxfsz_survival_chaos.rs`. | survival vs restart |
 | 5 | v1.33.x | open | Linux replication chaos test fails to fire | needs Linux repro |
-| 6 | v1.34.x | open | 1 h opt-in soak not yet run on lx64 | runtime budget |
-| 7 | v1.49.x | open | INFO memory reports `used_memory:0` when keyspace empty | observability nit |
+| 6 | v1.34.x | **PARTIAL in v2.0.1** | 5 min soak on v2.0 binary: 38 M ACKs / 0 errs / slope = -184 B/sample (NEGATIVE). 1 h lx64 run still pending. | runtime budget |
+| 7 | v1.49.x | **CLOSED in v2.0.1 (not a bug)** | `INFO memory` emits `used_memory:0` correctly; v1.49 chaos test parser read 0 as "unknown" + floored. Confirmed by v2.0.1 soak. | observability nit |
 | 8 | v1.52.x | open | CLIENT SETNAME stub (no per-conn name persistence) | needs trait refactor |
 
 The 4 open findings are documented in their respective CHANGELOG
