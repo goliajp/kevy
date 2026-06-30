@@ -139,6 +139,17 @@ impl<C: Commands> Shard<C> {
         // One provided-buffer ring per shard feeds every conn's multishot recv
         // (needs Linux 5.19+; the epoll reactor is the fallback for older kernels).
         let mut pbuf = ring.register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP)?;
+        // v2.0.15: replication listener accept must NOT block the reactor.
+        // The epoll path sets this in `shard::run` via `poller.add`-side
+        // setup; the io_uring path didn't. `accept_ready_replication`
+        // (called per-tick) loops until `WouldBlock` — which never fires
+        // on a blocking socket, so the first `accept()` call stalls the
+        // entire shard until a replica connects. Closes v1.33.x finding:
+        // primary kevy with `[replication] role = "primary"` was
+        // unresponsive to client PING under the io_uring reactor.
+        if let Some(rl) = &self.replication_listener {
+            rl.set_nonblocking()?;
+        }
         let mut io: KevyMap<u64, UringConn> = KevyMap::new();
         let mut accept_inflight = false;
         // Starts "in flight" when cluster mode is off, so the arm loop never
