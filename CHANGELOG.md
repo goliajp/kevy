@@ -4,6 +4,49 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.14] — 2026-07-01 — **`kevy-embedded` 1.13.0**: multi-shard atomic transaction
+
+**Theme**: extends transaction surface. Existing `Store::atomic` (v1.10.0) is single-shard (shard 0). This ship adds `Store::atomic_all_shards` for true cross-shard atomicity — holds write locks on EVERY shard for the closure's duration, so any key combination works inside one transaction with full read-modify-write visibility.
+
+### Added — `kevy_embedded::Store` (`crates/kevy-embedded/src/ops_atomic_all.rs`, ~200 LOC)
+
+- `atomic_all_shards<R>(body: impl FnOnce(&mut AtomicAllShards<'_>) -> io::Result<R>) -> io::Result<R>`
+- `AtomicAllShards<'_>` — context handle. Methods route to the right shard by hashing the key. Available ops: `set` / `get` / `incr` / `incr_by` / `hset` / `hget` / `hincrby` / `zadd` / `zincrby`.
+
+### Design choice — when to use which
+
+| Transaction | Lock cost | Use when |
+|---|---|---|
+| `Store::atomic` (single-shard) | 1 shard lock | All keys hash to shard 0; cheaper |
+| `Store::atomic_all_shards` (multi-shard) | N shard locks | Keys span shards AND atomicity required |
+| `Store::pipeline` (builder) | per-op shard lock | Just want batched fsync; no transaction |
+
+The multi-shard variant blocks every other writer + reader on the Store for the closure's duration — use sparingly. Single-shard `atomic` is cheaper and matches the embedded default (1 shard).
+
+### Tests
+
+5 new unit tests at `crates/kevy-embedded/src/store_tests_atomic_all.rs` (105 LOC):
+- `atomic_all_sees_each_keys_writes_across_shards` — 4 shards × 8 keys.
+- `atomic_all_rmw_across_shards` — counter:a + counter:b on different shards.
+- `atomic_all_hash_and_zset_ops`.
+- `atomic_all_error_propagates`.
+- `atomic_all_works_on_single_shard_config`.
+
+### Empirical (Mac M2 Pro, kevy v2.0.14)
+
+```
+cargo test --release -p kevy-embedded
+test result: ok. 158 passed; 0 failed (was 153 in v2.0.13; +5 atomic_all).
+```
+
+### Net change since 1.4.21 baseline — updated
+
+- **62 new methods + 3 transaction surfaces** (atomic + atomic_all_shards + pipeline).
+- **166 unit tests** (was 44; +122).
+- 1 new kevy-store module (`bitmap.rs`).
+- 11 new embedded ops files (`ops_p2/p3/bitmap/bonus/scan/atomic/atomic_all/pipeline/more/keyspace.rs`).
+- Comprehensive doc-tested README.
+
 ## [v2.0.13] — 2026-07-01 — **`kevy-embedded` 1.12.0**: keyspace cross-key ops (COPY/RANDOMKEY/UNLINK/TOUCH)
 
 **Theme**: systematic round-out continued. v2.0.12 covered single-key gaps in the Store surface; this ship adds 4 cross-key / keyspace-introspection ops that were missing from the embedded facade. Composed from existing primitives at the embedded layer (no new `kevy_store::Store` methods needed).
