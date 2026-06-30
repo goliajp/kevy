@@ -4,6 +4,27 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.9] — 2026-07-01 — **`kevy-embedded` 1.8.2**: README Phase 2+ ops showcase
+
+**Theme**: pure docs ship. No code changes — adds a comprehensive "Phase 2+ ops (v1.5.0 → v1.8.1, +41 new methods)" section to `crates/kevy-embedded/README.md` that exhibits every new method shipped across v2.0.3 → v2.0.8 with working Rust examples. The example compiles cleanly under `cargo test --doc` (verified locally).
+
+### Changed
+
+- **`crates/kevy-embedded/README.md`** — inserts a top-level section between "All five Redis data types" and "Persistence". 13 grouped subsections matching the actual ship sequence (hash mass-getters → atomic increments → zset range → multi-key strings → keys → getex → set algebra → list slice → string atomic → hsetnx → TTL units → bitmap → ping_ns).
+
+### Why this is its own ship
+
+`docs.rs` shows the latest crates.io version's README; updating the source without a publish leaves the public README at the v1.8.0 contents. v1.8.2 forces a republish so `docs.rs/kevy-embedded` reflects the comprehensive surface.
+
+### Empirical (Mac M2 Pro, kevy v2.0.9)
+
+```
+cargo test --release -p kevy-embedded --doc
+test result: ok. 3 passed; 0 failed.
+```
+
+The new doc example actually executes — all 41 newly-added methods round-trip correctly inside one block.
+
 ## [v2.0.8] — 2026-07-01 — **`kevy-embedded` 1.8.1**: 8 bonus Redis-shaped methods (exceeds mailrs feedback)
 
 **Theme**: kevy-embedded 1.8.0 → 1.8.1 — the user directive was "系统地超越他们要求的全面做好" (systematically EXCEED what they require). With 14 of 16 numbered asks closed, this ship adds 8 BONUS methods that mailrs didn't request but that round out the embedded surface to "Redis-shaped expected" parity.
