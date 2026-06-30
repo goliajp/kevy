@@ -4,6 +4,42 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.8] — 2026-07-01 — **`kevy-embedded` 1.8.1**: 8 bonus Redis-shaped methods (exceeds mailrs feedback)
+
+**Theme**: kevy-embedded 1.8.0 → 1.8.1 — the user directive was "系统地超越他们要求的全面做好" (systematically EXCEED what they require). With 14 of 16 numbered asks closed, this ship adds 8 BONUS methods that mailrs didn't request but that round out the embedded surface to "Redis-shaped expected" parity.
+
+### Added — `kevy_embedded::Store` (`crates/kevy-embedded/src/ops_bonus.rs`, 90 LOC)
+
+- `setnx(key, value) -> io::Result<bool>` — set only if absent.
+- `incrbyfloat(key, delta: f64) -> io::Result<f64>` — atomic float increment of a string.
+- `decr(key) -> io::Result<i64>` — atomic decrement by 1.
+- `decrby(key, delta: i64) -> io::Result<i64>` — atomic decrement by `delta`.
+- `strlen(key) -> io::Result<usize>` — length of the string value; 0 if absent.
+- `append(key, data) -> io::Result<usize>` — append `data`, return new total length.
+- `hsetnx(key, field, value) -> io::Result<bool>` — set hash field only if absent.
+- `ttl_secs(key) -> i64` — TTL in seconds (truncated from ms). `-1` no TTL; `-2` absent.
+
+### Tests
+
+13 new unit tests at `crates/kevy-embedded/src/store_tests_bonus.rs` (122 LOC).
+
+### Empirical (Mac M2 Pro, kevy v2.0.8)
+
+```
+cargo test --release -p kevy-embedded
+test result: ok. 106 passed; 0 failed (was 93 in v2.0.7; +13 bonus).
+```
+
+### Net methods added since 1.4.21 — surface growth summary
+
+- v1.5.0 (v2.0.3): 17 methods.
+- v1.6.0 (v2.0.4): 10 methods.
+- v1.7.0 (v2.0.5): 2 methods.
+- v1.7.1 (v2.0.6): 1 method.
+- v1.8.0 (v2.0.7): 3 methods + new `bitmap.rs` Store module.
+- v1.8.1 (v2.0.8, this ship): 8 bonus methods.
+- **Net: 41 new methods over the 1.4.21 baseline; 106 unit tests (was 44).**
+
 ## [v2.0.7] — 2026-07-01 — **`kevy-embedded` 1.8.0**: bitmap ops (mailrs feedback ask #14 closed)
 
 **Theme**: kevy-embedded 1.7.1 → 1.8.0 — closes mailrs ask #14 fully (bitmap). Adds a new `crates/kevy-store/src/bitmap.rs` module + the embedded facade so the mailrs anti-spam fingerprint tracker (their use case for the ask) has the native bitmap surface, cutting their HashSet-per-shard memory by the ratio mentioned in their feedback note.
