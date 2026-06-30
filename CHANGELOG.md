@@ -4,6 +4,41 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.54.0] — 2026-06-30 (v2 roadmap Phase F step 1 — docs polish + v2.0 release-notes draft)
+
+**Theme**: v2 roadmap Phase F (RC + ship prep) step 1 of 6. No code changes — pure docs polish to prepare for the v2.0 ship narrative. Adds a draft v2.0 release-notes document + brings the three-language README ecosystem bullet up to date with the Phase E battle suite.
+
+### Added
+
+- **`docs/v2.0-RELEASE-NOTES.md`** — draft canonical v2.0 release-notes document. Sections:
+  - TL;DR (industrial-grade hardening, drop-in upgrade).
+  - Per-phase summary of v1.36 → v1.53 changes (Phases A / B / C / D / E).
+  - The chaos suite + 24 h soak runbook.
+  - Explicit "does NOT change" section (perf, API, wire format, 0-dep, AUTH/TLS scope).
+  - 8 open findings (non-blocking, filed as v1.x.x patch candidates).
+  - Upgrade procedure (drop-in SIGTERM-drain + binary swap).
+  - Acknowledgments + what's-next.
+
+  This file is the **draft**; it iterates through v1.55-v1.59 RC cycles as ecosystem-battle feedback comes in, and becomes the canonical v2.0 release notes on the final `v2.0` tag.
+
+### Changed
+
+- **`README.md` + `README.zh-CN.md` + `README.ja.md`** — ecosystem bullet now lists 10 battle-tested libraries (was 6 at v1.27.x):
+  - existing: BullMQ 5.79 · Sidekiq 6.5 · Bee Queue 1.7 · Celery 5.6 · node-redlock 5 · ioredis 5.7
+  - added: Jedis 5.x (v1.52) · StackExchange.Redis 2.x (v1.52) · go-redis v9 (v1.53) · redis-py 5.x (v1.53)
+  - Each translated README updated; cross-link to `docs/v2-acceptance-baseline.md` added.
+
+### v2 roadmap progress
+
+- Phase A: v1.36 + v1.37 + v1.38 ✅
+- Phase B: v1.39 + v1.40 + v1.41 + v1.42 ✅
+- Phase C: v1.43 + v1.44 + v1.45 + v1.46 + v1.47 ✅
+- Phase D: v1.48 + v1.49 + v1.50 + v1.51 ✅
+- Phase E: v1.52 + v1.53 ✅
+- Phase F: v1.54 ✅; 5 steps remaining (v1.55 - v1.59 RC fixes, then v2.0 ship).
+
+19 / 20 versions complete = 95 % toward v2.0. Next: Phase F step 2 (v1.55 = first RC iteration).
+
 ## [v1.53.0] — 2026-06-30 (v2 roadmap Phase E step 2 — go-redis v9 + redis-py 5.x battle test; Phase E COMPLETE)
 
 **Theme**: v2 roadmap Phase E step 2 of 2 — completes Phase E. Closes the tier-1 client ecosystem matrix with go-redis v9 (dominant Go) and redis-py 5.x (dominant Python). Exercises the patterns those clients distinctively use: CLIENT INFO probe, MULTI/EXEC atomic batches, WATCH/MULTI/EXEC optimistic locking, and pub/sub round-trip across two conns.

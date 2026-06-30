@@ -62,17 +62,23 @@ redis-cli -p 6004 SET hello world
   5.1(Redis エコシステム互換アンカー)、`#!lua version=N` シェバンで
   5.2–5.5 にスクリプト単位でオプトイン。純粋 Rust の `cmsgpack` +
   `cjson` stdlib を同梱。詳細は [`docs/lua.md`](docs/lua.md)。
-- **実エコシステムで実地検証済み**(v1.27.x)—— Redis ユーザーが実際に
-  使うジョブキュー/ロック・ライブラリは Lua スクリプトを多用する経路まで
-  含めて全て kevy に対して end-to-end 検証済み:
+- **実エコシステムで実地検証済み**(v1.27.x + v1.52 / v1.53)—— Redis
+  ユーザーが実際に使うジョブキュー / ロック・ライブラリ / クライアント
+  SDK は Lua スクリプトを多用する経路まで含めて全て kevy に対して
+  end-to-end 検証済み:
   [BullMQ](https://github.com/taskforcesh/bullmq)(Node, 5.79)を
   デフォルト 16-shard クラスタで ·
   [Sidekiq](https://sidekiq.org/)(Ruby, 6.5)·
   [Bee Queue](https://github.com/bee-queue/bee-queue)(Node, 1.7)·
   [Celery](https://docs.celeryq.dev/)(Python, 5.6、broker + result
   backend として)· [node-redlock](https://github.com/mike-marcacci/node-redlock)
-  (5)· 公式 [ioredis](https://github.com/redis/ioredis)(5.7)。
-  全てコード変更なしで動作。
+  (5)· 公式 [ioredis](https://github.com/redis/ioredis)(5.7)·
+  [Jedis](https://github.com/redis/jedis)(Java, 5.x)·
+  [StackExchange.Redis](https://stackexchange.github.io/StackExchange.Redis/)
+  (.NET, 2.x)· [go-redis](https://github.com/redis/go-redis)(Go, v9)·
+  [redis-py](https://github.com/redis/redis-py)(Python, 5.x)。
+  全てコード変更なしで動作。v2 acceptance ゲート一覧は
+  [`docs/v2-acceptance-baseline.md`](docs/v2-acceptance-baseline.md)。
 - **リソース適応型** —— メモリ無制限なら全速、制限ありなら優雅に縮退、
   境界では大声で拒否してデータを静かに破損させたりしない([詳細](#リソース適応型設計))。
 
