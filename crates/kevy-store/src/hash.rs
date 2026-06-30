@@ -1,7 +1,7 @@
 //! `Store` hash commands.
 
 use crate::small_hash::{self, AddResult as HAddResult, SmallHashData};
-use crate::util::parse_i64;
+use crate::util::{parse_f64, parse_i64};
 use crate::value::{HashData, SmallBytes, Value, hash_field_weight};
 use crate::{Entry, Store, StoreError, now_ns};
 use std::sync::Arc;
@@ -304,6 +304,39 @@ impl Store {
             self.account_delta(key, delta);
         }
         Ok(removed)
+    }
+
+    /// `HINCRBYFLOAT` — atomic float increment of a hash field.
+    /// Preserves TTL; errors with `NotFloat` if the field isn't a
+    /// parseable float. Returns the post-increment value.
+    pub fn hincrbyfloat(
+        &mut self,
+        key: &[u8],
+        field: &[u8],
+        delta: f64,
+    ) -> Result<f64, StoreError> {
+        let (next, weight_delta) = {
+            let h = self.hash_mut(key, true)?.expect("created");
+            let cur = match h.get(field) {
+                Some(v) => parse_f64(v).ok_or(StoreError::NotFloat)?,
+                None => 0.0,
+            };
+            let next = cur + delta;
+            if !next.is_finite() {
+                return Err(StoreError::NotFloat);
+            }
+            let new_bytes = format!("{next}").into_bytes();
+            let smb = SmallBytes::from_slice(field);
+            let new_field_w = hash_field_weight(&smb, new_bytes.len()) as i64;
+            let new_value_len = new_bytes.len();
+            let wd = match h.insert(smb, new_bytes) {
+                None => new_field_w,
+                Some(old) => new_value_len as i64 - old.len() as i64,
+            };
+            (next, wd)
+        };
+        self.account_delta(key, weight_delta);
+        Ok(next)
     }
 
     /// `HINCRBY` — preserves TTL; errors if the field isn't an integer.
