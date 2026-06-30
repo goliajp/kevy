@@ -4,6 +4,55 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v1.48.0] — 2026-06-30 (v2 roadmap Phase D step 1 — multi-tenant E2E isolation + fairness)
+
+**Theme**: v2 roadmap Phase D (large-scale E2E) step 1 of 4. Validates kevy provides tenant-pair isolation under concurrent load — no cross-tenant key leakage, no tenant starvation, exact total ACK accounting.
+
+### Added
+
+- **`crates/kevy/tests/multi_tenant_e2e_chaos.rs`** — gated `#[ignore]` chaos test:
+  - 5 tenants, each with prefix `tenant{i}:`.
+  - 4 concurrent writer threads per tenant (20 total threads).
+  - 250 SETs per writer = 1 000 SETs per tenant = 5 000 SETs total.
+  - Each writer holds a dedicated TCP conn and counts +OK ACKs into a per-tenant atomic.
+  - 5 strict invariants validated:
+    1. Per-tenant ACK count == 1 000 (exact, no dropped writes).
+    2. Total aggregate ACK count == 5 000 (no system-level loss).
+    3. Per-tenant `KEYS tenant{i}:*` count == 1 000 (no cross-tenant key leak).
+    4. Fairness skew (max-tenant − min-tenant ACKs) == 0.
+    5. Post-load PING → +PONG (kevy alive).
+
+### Empirical findings (Mac M2 Pro, kevy v1.48 release binary)
+
+```
+multi_tenant: all 20 writers done in 0.05 s
+multi_tenant: tenant0..4 ACKs = 1000/1000 each
+multi_tenant: tenant0..4 KEYS count = 1000 each
+multi_tenant: fairness skew = 0 (min=1000, max=1000)
+multi_tenant: 5000 total ACKs, 0 cross-tenant leaks, kevy alive
+test multi_tenant_e2e_isolation_and_fairness ... ok in 0.65s
+```
+
+- **5 000 SETs across 20 threads in 0.05 s** = ~100 k SET/s effective rate (writer-pool, not pipelined).
+- Per-tenant skew = 0 — perfect fair-share scheduling at this load level.
+- Zero cross-tenant key leakage across all 5 prefix scans.
+
+### Out of scope (deferred to later Phase D steps)
+
+- Per-tenant rate limiting / quota enforcement (would be a feature, not a test).
+- Tenant-pair noisy-neighbor (one tenant doing 1 M ops while another does 100) — deferred to v1.49 burst/ramp.
+- Multi-DB SELECT-style isolation (kevy is single-DB by design under cluster mode).
+
+### v2 roadmap progress
+
+- Phase A: v1.36 + v1.37 + v1.38 ✅
+- Phase B: v1.39 + v1.40 + v1.41 + v1.42 ✅
+- Phase C: v1.43 + v1.44 + v1.45 + v1.46 + v1.47 ✅
+- Phase D (large-scale E2E): v1.48 ✅; 3 steps remaining (v1.49 realistic-data + burst/ramp, v1.50 24h soak, v1.51 deferred bench-suite enhancements).
+- Phase E / F: pending.
+
+13 / 20 versions complete = 65 % toward v2.0.
+
 ## [v1.47.0] — 2026-06-30 (v2 roadmap Phase C step 5 — AOF compat matrix chaos + wasm CI fix)
 
 **Theme**: v2 roadmap Phase C step 5 of 5 — completes Phase C. Validates kevy's AOF replay against a hand-crafted v1.0-vintage RESP AOF spanning every datatype (string / counter / list / hash / set / sorted set), including a torn trailing command that must be silently discarded. Also fixes a pre-existing `target_arch = "wasm32"` build break in `kevy-embedded/src/ops.rs` that was failing CI since v1.45.
