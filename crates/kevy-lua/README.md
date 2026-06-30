@@ -1,34 +1,19 @@
 # kevy-lua
 
-Lua scripting bridge for [kevy](https://crates.io/crates/kevy). Wraps the
-pure-Rust [`luna-core`](https://crates.io/crates/luna-core) interpreter
-into the Redis `EVAL` / `EVALSHA` / `SCRIPT` command surface, defaulting
-to Lua 5.1 (for Redis ecosystem compatibility) with per-script opt-in
-to 5.2 / 5.3 / 5.4 / 5.5 via the shebang `#!lua version=N`.
+The Lua scripting bridge for kevy. Wraps the in-house pure-Rust
+[`luna-core`](https://crates.io/crates/luna-core) interpreter into
+the Redis `EVAL` / `EVALSHA` / `SCRIPT` command surface. Default
+dialect is Lua 5.1 (for Redis ecosystem compatibility); per-script
+opt-in to 5.2 / 5.3 / 5.4 / 5.5 via the shebang `#!lua version=N`.
+Includes pure-Rust `cmsgpack` and `cjson` standard libraries.
 
-## Status
+## Why Lua 5.1 by default
 
-**v1.27 functional complete.** Every Redis Lua command works end-to-end
-against a real kevy server: `EVAL`, `EVALSHA`, `EVAL_RO`,
-`EVALSHA_RO`, `SCRIPT LOAD/EXISTS/FLUSH`. The canonical Redis-Lua
-ecosystem scripts (Redlock unlock/extend, atomic incr-or-init, etc.)
-run byte-for-byte from the `/tmp/lua-ecosystem-survey/` corpus. Read
-the full reference at [`docs/lua.md`](../../docs/lua.md).
-
-Known v1.28 follow-ups: `cjson` / `cmsgpack`, `FUNCTION LOAD`, LDB
-debugger, full TOML config plumbing. None of these block ecosystem
-compat for the standard Redis Lua API.
-
-## Why default to Lua 5.1?
-
-Every real-world Redis Lua script in the ecosystem — BullMQ's command
-suite, Redlock, rate limiters, anything copied from Redis docs — is
-written against PUC Lua 5.1.5 (the version Redis itself ships). A
-multi-dialect kevy that defaulted to 5.5 would break drop-in
-compatibility on day one.
-
-Instead, kevy-lua keeps 5.1 as the default and lets new scripts opt
-into newer dialects with a single shebang line:
+Every real-world Redis Lua script in the ecosystem — BullMQ's
+command suite, Redlock, rate limiters, anything copied from the
+Redis docs — is written against PUC Lua 5.1.5 (the version Redis
+itself ships). A multi-dialect runtime that defaulted to 5.5 would
+break drop-in compatibility on day one.
 
 ```lua
 #!lua version=5.3
@@ -36,21 +21,26 @@ into newer dialects with a single shebang line:
 local count = redis.call("INCR", KEYS[1])  -- typed integer in 5.3+
 ```
 
-This pattern extends Redis 7.0's existing `#!lua name=...` Functions
-shebang syntax with a new `version=` key. Redis-ecosystem scripts that
-don't use the shebang continue to run on 5.1 exactly as they would on
-real Redis.
+This pattern extends Redis 7.0's `#!lua name=...` Functions shebang
+syntax with a new `version=` key. Scripts that don't carry a shebang
+continue to run on 5.1 exactly as they would on real Redis.
 
-## Why luna-core?
+## Audience
 
-luna is GOLIA's own pure-Rust Lua runtime (910 tests / 0 failures /
-123 PUC official test files passing across all five dialects). The
-v1.1 split publishes `luna-core` as the 0-dep interpreter and
-`luna-jit` as the Cranelift-JIT-equipped variant. kevy uses
-`luna-core` exclusively — adding it pulls **0 new transitive
-third-party crates** into the kevy dependency tree, preserving kevy's
-0-dep workspace rule.
+The bridge is consumed by the kevy server through the
+[`kevy-lua-host`](https://crates.io/crates/kevy-lua-host) glue
+crate. End users invoke Lua via `redis-cli EVAL` or the equivalent in
+any Redis client library — see
+[`docs/lua.md`](https://github.com/goliajp/kevy/blob/develop/docs/lua.md).
+
+## Dependencies
+
+This crate is one of three carved exemptions to the workspace's
+pure-Rust 0-dependency rule. It depends on `luna-core` — the
+in-house pure-Rust Lua runtime, itself zero-dependency on the `luna`
+side. The net effect on the kevy server's dependency graph is one
+transitive crate (`luna-core`).
 
 ## License
 
-Apache-2.0 OR MIT, at your option.
+MIT OR Apache-2.0, at your option.

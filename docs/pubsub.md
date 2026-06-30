@@ -1,321 +1,312 @@
-# Pub/sub in kevy-client
+# Pub/sub
 
-The same code drives both an in-process bus and a TCP kevy server.
-Pick the backend with a URL at runtime — no scheme-branching at call
-sites.
+How publishers fan messages out to many subscribers in kevy — over the
+wire with `PUBLISH` / `SUBSCRIBE`, in-process via the embedded `Store`,
+and through the same URL facade that the rest of `kevy-client` uses.
 
-```toml
-[dependencies]
-kevy-client = "1.9.0"
+## When you need this
+
+Reach for pub/sub when one writer needs to notify zero-or-more readers
+*right now*, and you do not care about messages that arrive while a
+reader is offline:
+
+- "Tell every web worker to refresh its config cache."
+- "Stream just-written rows from one shard to whoever is tailing."
+- "Wake a worker pool when a job lands; the job itself is in a list."
+- "Dev loop: a producer thread and a consumer thread in the same
+  binary, no Redis box required."
+
+If you need durable hand-off (job queue with retries, fan-out over
+restarts, message replay), use a list or stream instead — see
+[`docs/persistence.md`](https://github.com/goliajp/kevy/blob/develop/docs/persistence.md)
+for what gets written to disk.
+
+## Core idea
+
+A pub/sub channel is a name. Subscribers register interest in that
+name (or a glob pattern); a publish on the same name walks the
+subscriber index and enqueues one copy of the body per matching
+subscriber. There is no broker queue, no offline buffer, no ack — if
+nobody is listening the moment you publish, the message is gone.
+
+```
+                   publish("news", body)
+                          |
+                          v
+             +-----------------------+
+             |  channel "news"       |   <- per-channel subscriber index
+             |  subscribers: [A,B,C] |
+             +-----------------------+
+                  |       |       |
+                  v       v       v
+               sub A   sub B   sub C    <- each gets its own copy
 ```
 
-## URL semantics
+Internally each publish builds the wire frame once, wraps the body in
+an `Arc`, and uses `writev` to scatter-gather it to every matching
+TCP subscriber — so the body bytes are copied **zero** extra times
+no matter how wide the fan-out. The same per-channel index handles
+both server connections and in-process `Subscription` handles.
 
-| URL | Backend | Shared across opens? |
-|---|---|---|
-| `mem://` | in-process, in-memory | **No** — fresh each open |
-| `mem://<name>` | in-process, in-memory | **Yes** — same `<name>` → same bus |
-| `file:///abs/path` | in-process + snapshot/AOF persistence | **Yes** — same path → same bus |
-| `kevy://host[:port][/db]` | TCP kevy/Redis server | (one socket per open, server-side fan-out) |
-| `redis://host[:port][/db]` | TCP — alias of `kevy://` | same |
-| `tcp://host[:port]` | TCP — raw, no leading `SELECT` | same |
+## Worked examples
 
-`rediss://` / `kevys://` / `redis://user:pass@…` are rejected with
-`ErrorKind::Unsupported` — kevy ships without TLS or AUTH.
+### Smoke-test with `redis-cli`
 
-**Anonymous `mem://` cannot receive published messages** because
-nothing else can reach the same backing `Store`. `Subscriber::open`
-rejects it with `ErrorKind::Unsupported`. Use `mem://<some-name>`.
+Open two shells against a running kevy server:
 
-**Cluster note.** Pub/sub in kevy is **process-level**, not slot-routed:
-publishing on any cluster shard's port reaches subscribers on any
-other shard's port within the same process. You do **not** need
-`ClusterClient` for pub/sub — a plain `Connection::open("kevy://host:port")`
-to any shard port works. See [`docs/cluster.md`](cluster.md) for
-slot-routed keyspace traffic.
+```sh
+# shell 1 — subscriber
+$ redis-cli -p 6379 SUBSCRIBE news
+Reading messages... (press Ctrl-C to quit)
+1) "subscribe"
+2) "news"
+3) (integer) 1
+```
 
-## Pattern 1 — same-thread dev loop
+```sh
+# shell 2 — publisher
+$ redis-cli -p 6379 PUBLISH news "hello"
+(integer) 1   # one subscriber received it
+```
+
+Back in shell 1:
+
+```
+1) "message"
+2) "news"
+3) "hello"
+```
+
+A `PUBLISH` to a channel with no subscribers returns `(integer) 0`
+and the message is dropped on the floor. That is the contract — you
+do not get a "we tried to deliver this" signal.
+
+### Rust over the URL facade — `kevy-client`
+
+The same call shape targets a TCP server, a named in-process bus, or
+a persistent in-process store; flip the URL and recompile, no
+`match scheme { … }` at call sites.
 
 ```rust
 use kevy_client::{Connection, Subscriber, PubsubEvent};
 
-let mut sub  = Subscriber::open("mem://app", &[b"news"])?;
-let mut conn = Connection::open("mem://app")?;
-
-// Drain the SUBSCRIBE ack before publishing — the bus is ordered,
-// but the ack arrives ahead of the first Message in the queue.
-let _ack = sub.recv()?;
-
-conn.publish(b"news", b"hello")?;
-
-if let PubsubEvent::Message { channel, payload } = sub.recv()? {
-    assert_eq!(channel, b"news");
-    assert_eq!(payload, b"hello");
-}
-# Ok::<(), std::io::Error>(())
-```
-
-## Pattern 2 — cross-thread producer / consumer
-
-```rust
-use kevy_client::{Connection, Subscriber, PubsubEvent};
-use std::thread;
-
-const URL: &str = "mem://orders";
-
-let mut sub = Subscriber::open(URL, &[b"order.placed"])?;
-let _ack = sub.recv()?;
-
-thread::spawn(|| {
-    let mut conn = Connection::open(URL).unwrap();
-    conn.publish(b"order.placed", b"order-42").unwrap();
-});
-
-let ev = sub.recv()?;
-// PubsubEvent::Message { channel: "order.placed", payload: "order-42" }
-# Ok::<(), std::io::Error>(())
-```
-
-## Pattern 3 — environment-driven dev/prod swap
-
-Same code, three backends:
-
-```rust
-use kevy_client::{Connection, Subscriber};
-
-fn run_app(url: &str) -> std::io::Result<()> {
-    let mut sub  = Subscriber::open(url, &[b"jobs"])?;
-    let mut conn = Connection::open(url)?;
+fn run(url: &str) -> std::io::Result<()> {
+    // Open a subscriber against `news`. The first frame the bus
+    // hands back is the subscribe ack; drain it before asserting
+    // on bodies.
+    let mut sub = Subscriber::open(url, &[b"news"])?;
     let _ack = sub.recv()?;
-    conn.publish(b"jobs", b"compute pi")?;
-    // ... drain events ...
+
+    let mut conn = Connection::open(url)?;
+    let received = conn.publish(b"news", b"hello")?;
+    assert_eq!(received, 1);
+
+    match sub.recv()? {
+        PubsubEvent::Message { channel, payload } => {
+            assert_eq!(channel, b"news");
+            assert_eq!(payload, b"hello");
+        }
+        other => panic!("unexpected frame: {other:?}"),
+    }
     Ok(())
 }
 
-// Dev:
-run_app("mem://app")?;
-// Tests with persistence:
-run_app("file:///tmp/app-test")?;
-// Prod:
-run_app("kevy://prod-cache:6379")?;
+// Dev:  in-process shared bus by name.
+run("mem://app")?;
+// Prod: real TCP server.
+run("kevy://prod-cache:6379")?;
 # Ok::<(), std::io::Error>(())
 ```
 
-No `match scheme { ... }` at any call site. Open one URL, both ends
-attach to the same backing bus.
+Cross-thread is the same code with one `Subscriber` and one
+`Connection` opened against the same URL from different threads —
+the `mem://<name>` registry hands both ends the same backing bus, so
+the producer thread can `Connection::publish` and the consumer
+thread blocks in `sub.recv()`.
 
-## Pattern 4 — glob patterns
+### In-process via `kevy-embedded`
+
+When the embedding code already has a `Store`, skip the URL
+indirection and talk to the bus directly:
+
+```rust
+use kevy_embedded::{Config, PubsubFrame, Store};
+
+let store = Store::open(Config::default().with_ttl_reaper_manual())?;
+
+// Subscriber owns the receive queue.
+let sub = store.subscribe(&[b"jobs"]);
+let _ack = sub.recv()?; // PubsubFrame::Subscribe
+
+// Any clone of `store` reaches the same bus.
+let writer = store.clone();
+assert_eq!(writer.publish(b"jobs", b"compute-pi"), 1);
+
+match sub.recv()? {
+    PubsubFrame::Message { channel, payload } => {
+        assert_eq!(channel, b"jobs");
+        assert_eq!(payload, b"compute-pi");
+    }
+    other => panic!("unexpected frame: {other:?}"),
+}
+# Ok::<(), std::io::Error>(())
+```
+
+`Store::clone` is cheap (it's an `Arc` bump), so the common shape is
+"hand each thread a `store.clone()` and let it `publish` or
+`subscribe` whenever it needs to." Subscribers drop unregisters
+atomically; a panicking consumer thread does not leave a zombie
+entry in the index.
+
+### Pattern subscriptions
+
+`PSUBSCRIBE` registers a glob and receives messages on every channel
+that matches it. The glob syntax — `*`, `?`, `[abc]` — is the same
+matcher `KEYS` and `SCAN` use.
 
 ```rust
 use kevy_client::{Connection, Subscriber, PubsubEvent};
 
 let mut sub = Subscriber::connect("mem://signals")?;
-sub.psubscribe(&[b"sensor.*"])?;
-let _ack = sub.recv()?;  // Psubscribe ack
+sub.psubscribe(&[b"news.*"])?;
+let _ack = sub.recv()?;            // PubsubEvent::Psubscribe
 
 let mut conn = Connection::open("mem://signals")?;
-conn.publish(b"sensor.temp", b"22.5")?;  // matches
-conn.publish(b"weather", b"sunny")?;     // does NOT match
+conn.publish(b"news.tech", b"breaking")?; // matches
+conn.publish(b"weather",   b"sunny")?;    // does NOT match
 
-if let PubsubEvent::Pmessage { pattern, channel, payload } = sub.recv()? {
-    assert_eq!(pattern, b"sensor.*");
-    assert_eq!(channel, b"sensor.temp");
-    assert_eq!(payload, b"22.5");
-}
-# Ok::<(), std::io::Error>(())
-```
-
-Glob syntax: `*` (any), `?` (one char), `[abc]` (char class) — the same
-matcher as `KEYS` / `SCAN`.
-
-## Pattern 5 — fan-out to multiple subscribers
-
-```rust
-use kevy_client::{Connection, Subscriber};
-
-const URL: &str = "mem://fanout";
-let mut s1 = Subscriber::open(URL, &[b"chan"])?;
-let mut s2 = Subscriber::open(URL, &[b"chan"])?;
-let _ = s1.recv()?;
-let _ = s2.recv()?;
-
-let mut conn = Connection::open(URL)?;
-let received = conn.publish(b"chan", b"broadcast")?;
-assert_eq!(received, 2);  // both got it
-# Ok::<(), std::io::Error>(())
-```
-
-## API summary
-
-```rust
-// Producer
-let mut conn = Connection::open(url)?;
-let recv_count = conn.publish(channel, payload)?;
-
-// Consumer
-let mut sub = Subscriber::open(url, &[channel])?;          // open + subscribe
-// or
-let mut sub = Subscriber::connect(url)?;                    // open, subscribe later
-sub.subscribe(&[chan1, chan2])?;
-sub.psubscribe(&[b"foo.*"])?;
-sub.unsubscribe(&[chan1])?;       // empty &[] → unsubscribe all channels
-sub.punsubscribe(&[])?;            // empty &[] → unsubscribe all patterns
-sub.set_read_timeout(Some(Duration::from_secs(1)))?;
-let ev: PubsubEvent = sub.recv()?;
-```
-
-`PubsubEvent` carries six variants: `Subscribe`, `Psubscribe`,
-`Unsubscribe`, `Punsubscribe`, `Message`, `Pmessage`. `Unsubscribe` /
-`Punsubscribe` use `Option<Vec<u8>>` for the channel/pattern slot —
-`None` matches the "no channels were subscribed" nil-bulk wire shape.
-
-## Lifecycle + gotchas
-
-**Process-local registry.** The URL → `Store` map is per-process,
-backed by `Weak` refs. When the last `Connection` / `Subscriber` for a
-named URL drops, the entry frees; the next open of the same URL gets
-a fresh `Store`. (For `file:///` URLs the on-disk AOF + snapshot stays;
-re-open replays.)
-
-**Cross-process.** `mem://name` and `file:///path` are **not**
-visible from another process. For real cross-process delivery, run a
-kevy server and use `kevy://host:port`.
-
-**Ack ordering.** `SUBSCRIBE` enqueues a `Subscribe` ack on the
-receive queue before any `Message` for that channel. Drain the ack
-before asserting on message bodies in tests.
-
-**Send timing.** The bus mutex is dropped before `Sender::send()` is
-called, so a slow receiver can't stall publishes on unrelated
-channels. Each subscriber has its own `mpsc::Receiver` queue (no
-shared bound).
-
-**`Subscription` drop unregisters atomically.** No "stale subscriber"
-zombie state if a thread panics — the `Drop` impl walks the bus
-tables and removes every entry tagged with the subscription id.
-
-**`Connection::publish` on anonymous `mem://`** returns 0 forever
-(no possible subscribers). On `mem://<name>` it returns the real
-receiver count.
-
-**TLS / AUTH** are not supported. Front with stunnel + IP allowlist
-at the network boundary if you need them.
-
-## Async runtimes (tokio / async-std / smol)
-
-`Subscription` and `Subscriber` are `Send + Sync` — `Arc<Subscription>`
-works, so multiple async tasks (or `spawn_blocking` jobs) can share one
-handle. The blocking `recv` API is intentionally retained: kevy ships
-zero crates.io dependencies, so an async-runtime-agnostic future would
-have to be hand-built. Three clean patterns:
-
-**Pattern A — dedicated OS thread + runtime channel** (single consumer,
-no shared handle needed):
-
-```rust,no_run
-# use kevy_embedded::{Config, PubsubFrame, Store};
-# let store = Store::open(Config::default().with_ttl_reaper_manual())?;
-// Pseudocode — replace `runtime_channel` with tokio::sync::mpsc /
-// async_channel / etc. as your runtime dictates.
-let (tx, rx) = /* runtime_channel */;
-std::thread::spawn({
-    let store = store.clone();
-    move || {
-        let sub = store.subscribe(&[b"queue:notify"]);
-        while let Ok(frame) = sub.recv() {
-            if matches!(
-                frame,
-                PubsubFrame::Message { .. } | PubsubFrame::Pmessage { .. }
-            ) && tx.blocking_send(()).is_err()
-            {
-                break; // receiver dropped
-            }
-        }
+match sub.recv()? {
+    PubsubEvent::Pmessage { pattern, channel, payload } => {
+        assert_eq!(pattern, b"news.*");
+        assert_eq!(channel, b"news.tech");
+        assert_eq!(payload, b"breaking");
     }
-});
-// `rx` is the async-side handle; await it from your async loop.
-# Ok::<(), std::io::Error>(())
-```
-
-This is what mailrs's outbound-queue worker uses — small, long-lived
-task; avoids the tokio blocking-pool slot per recv.
-
-**Pattern B — `Arc<Subscription>` + `spawn_blocking`** (multiple async
-tasks share one handle):
-
-```rust,no_run
-# use kevy_embedded::{Config, Store};
-# use std::sync::Arc;
-# let store = Store::open(Config::default().with_ttl_reaper_manual())?;
-let sub = Arc::new(store.subscribe(&[b"queue:notify"]));
-// Each async task gets its own clone of the Arc and recvs via
-// spawn_blocking; the receiver mutex serialises concurrent recvs.
-// Each frame is delivered to exactly one task (NOT broadcast).
-//
-// For broadcast fanout (every consumer sees every message), open a
-// separate Subscription per consumer — they're cheap.
-let task_handle = {
-    let sub = sub.clone();
-    // tokio::task::spawn_blocking pseudo:
-    std::thread::spawn(move || {
-        loop {
-            match sub.recv() {
-                Ok(frame) => { /* process */ let _ = frame; }
-                Err(_) => break, // bus closed
-            }
-        }
-    })
-};
-# let _ = task_handle;
-# Ok::<(), std::io::Error>(())
-```
-
-`Subscription::try_recv` uses `try_lock` and returns `Ok(None)` under
-lock contention — the non-blocking contract is preserved even when
-another task holds the receiver via `recv`.
-
-**Pattern C — borrowing iterators on `kevy-client::Subscriber`**:
-
-```rust,no_run
-# use kevy_client::Subscriber;
-let mut sub = Subscriber::open("mem://news", &[b"updates"])?;
-
-// `events()` yields every frame (acks included). Terminates on
-// UnexpectedEof; other errors surface as Some(Err(_)) so the caller
-// decides whether to retry (e.g. a read timeout) or break.
-for event in sub.events() {
-    let _ = event?; // dispatch
-    # break;
-}
-
-// `messages()` silently consumes acks and yields just
-// `(channel, payload)` — same shape recv_message returns.
-let mut sub2 = Subscriber::open("mem://news", &[b"updates"])?;
-for msg in sub2.messages() {
-    let (_channel, _payload) = msg?;
-    # break;
+    other => panic!("unexpected frame: {other:?}"),
 }
 # Ok::<(), std::io::Error>(())
 ```
 
-Same `spawn_blocking` rules apply: the iterators wrap `recv` /
-`recv_message`, which take the receiver mutex for the duration of
-each blocking wait. Drop or break out of the iterator to release
-the wait early. The iterator API is part of `kevy-client`, not
-`kevy-embedded` — open a `Subscriber` against the URL facade if
-you want it; reach for `Subscription` directly when you need the
-embed-only primitives.
+A subscriber that holds both a channel subscription **and** a
+matching pattern subscription receives **two** copies — one
+`Message`, one `Pmessage`. Per-publish dedup only suppresses the
+"same `Subscription` listed twice in the same channel index"
+duplicate, not channel-vs-pattern overlap.
 
-## Related
+## URL backend table
 
-- [`kevy-embedded` 1.2.0+](https://crates.io/crates/kevy-embedded) —
-  the underlying `Store::Clone` + `PubsubBus` primitives. Use directly
-  if you don't need the URL-facade indirection.
-- [`kevy-client` 1.9.0+](https://crates.io/crates/kevy-client) — the
-  URL facade itself. Ships `Subscriber::recv_message`, `events()` /
-  `messages()` iterators, and `ClusterClient` for slot-routed keyspace
-  traffic (pub/sub doesn't need it — see the cluster note above).
-- [`kevy`](https://crates.io/crates/kevy) — the TCP server (1.17.0+),
-  when you outgrow single-process.
-- [`docs/cluster.md`](cluster.md) — cluster mode and `ClusterClient`
-  for slot-routed keyspace traffic.
+| URL                                | Backing store              | Shared across opens?                              | Cross-process visible? |
+|------------------------------------|----------------------------|---------------------------------------------------|-----------------------|
+| `mem://`                           | in-process, anonymous      | **No** — each open gets a fresh `Store`           | No                    |
+| `mem://<name>`                     | in-process, named registry | **Yes** — same `<name>` ⇒ same `Store`            | No                    |
+| `file:///abs/path`                 | in-process + AOF/snapshot  | **Yes** — same path ⇒ same `Store`, persists      | No                    |
+| `kevy://host[:port][/db]`          | TCP kevy server            | One socket per open; server-side fan-out          | **Yes**               |
+| `redis://host[:port][/db]`         | TCP — alias of `kevy://`   | same                                              | **Yes**               |
+| `tcp://host[:port]`                | TCP — raw, no leading `SELECT` | same                                          | **Yes**               |
+
+Anonymous `mem://` cannot receive published messages — nothing else
+can reach the same backing `Store`, so `Subscriber::open` rejects
+it with `ErrorKind::Unsupported`. Use `mem://<some-name>` whenever
+you intend to publish.
+
+`rediss://`, `kevys://`, and `redis://user:pass@…` are rejected for
+the same reason: kevy ships without TLS or `AUTH`. Front the socket
+with stunnel + IP allowlist at the network boundary if you need
+either.
+
+The `mem://<name>` and `file:///` registries are **per-process**:
+two unrelated OS processes that open the same name see two
+independent buses. Cross-process delivery means running a kevy
+server and opening `kevy://host:port` from both sides.
+
+## Trade-offs and limits
+
+- **At-most-once delivery.** A subscriber that disconnects mid-frame
+  loses that frame. There is no per-subscriber durable cursor and no
+  redelivery. If a frame matters, persist it in a list or stream and
+  use pub/sub only as the "wake up" signal.
+- **No offline backlog.** A publish that finds zero subscribers
+  returns `0` and the body is discarded. There is no buffer that
+  catches a subscriber up on what it missed while disconnected.
+- **Subscriber back-pressure is per-subscriber, not global.** Each
+  subscriber owns its own bounded queue. A slow consumer fills its
+  own queue and then drops frames or, on TCP, gets closed by the
+  server's client-output-buffer policy. The publish path drops the
+  bus mutex before sending, so one slow listener cannot stall
+  publishes on unrelated channels — but it also cannot exert
+  back-pressure on the publisher.
+- **Linux `writev` cap.** On Linux, `writev` hands the kernel at most
+  `IOV_MAX = 1024` iovec entries per call. The server batches the
+  per-subscriber frame headers and the shared body Arc into iovecs;
+  for fan-outs wider than ~340 subscribers per channel (each takes
+  three iovec slots) the server splits into multiple `writev` calls
+  automatically. The cap shows up only as a soft performance
+  ceiling, never as a delivery failure.
+- **Subscribed clients are restricted.** A `Subscriber` connection
+  rejects non-pub/sub commands; that is why `kevy-client` exposes
+  publisher and subscriber as **two separate types** sharing the
+  same URL.
+
+## Operational introspection
+
+The standard `PUBSUB` admin subcommand works on both the TCP server
+and the URL facade — open a normal `Connection`, not a `Subscriber`,
+to call them.
+
+| Subcommand              | Returns                                                                        |
+|-------------------------|--------------------------------------------------------------------------------|
+| `PUBSUB CHANNELS [pat]` | Array of channels with at least one subscriber, optionally glob-filtered.      |
+| `PUBSUB NUMSUB [ch …]`  | Interleaved `channel, count` pairs for each named channel (0 if absent).       |
+| `PUBSUB NUMPAT`         | Integer: number of distinct `PSUBSCRIBE` patterns registered, across clients.  |
+
+```sh
+$ redis-cli -p 6379 PUBSUB CHANNELS '*'
+1) "news"
+2) "jobs"
+$ redis-cli -p 6379 PUBSUB NUMSUB news jobs missing
+1) "news"
+2) (integer) 3
+3) "jobs"
+4) (integer) 1
+5) "missing"
+6) (integer) 0
+$ redis-cli -p 6379 PUBSUB NUMPAT
+(integer) 2
+```
+
+All three are O(channels) or O(args) point lookups against the
+per-shard pub/sub registry; safe to poll from monitoring agents.
+
+## FAQ
+
+**Will a message arrive if the subscriber connected after the
+publish?**  No. Pub/sub has no replay. The subscriber index is
+consulted at publish time; later subscribers see only frames
+published *after* their subscribe ack lands.
+
+**Does `PUBLISH` block the publisher until subscribers drain?**  No.
+The publisher's `publish` call returns once the body has been
+queued onto every matching subscriber's per-subscriber queue (and,
+for TCP subscribers, scheduled onto their socket's write queue). A
+slow subscriber holds up its own queue, not yours.
+
+**Can I share one `Subscriber` between async tasks?**  Yes — wrap it
+in an `Arc` and `spawn_blocking` the `recv` call. The receive mutex
+serialises blocking waits, so each frame is delivered to **exactly
+one** task. For real broadcast fan-out (every task sees every
+frame), open one `Subscriber` per task — they are cheap. See
+[`docs/async.md`](https://github.com/goliajp/kevy/blob/develop/docs/async.md)
+for the full async pattern.
+
+**Why does my test see the subscribe ack before any messages?**  The
+bus is ordered, but every `SUBSCRIBE` / `PSUBSCRIBE` enqueues an ack
+frame *before* the first body frame for that channel arrives. Drain
+the ack with one `sub.recv()?` before asserting on payloads — this
+matches the redis-cli wire shape.
+
+**Do I need cluster routing for pub/sub?**  No. Pub/sub fan-out is
+process-level, not slot-routed: publishing on any shard's port
+reaches every subscriber on every shard's port in the same process.
+A plain `Connection::open("kevy://host:port")` against any shard
+port works. See
+[`docs/cluster.md`](https://github.com/goliajp/kevy/blob/develop/docs/cluster.md)
+for the slot routing that *keyspace* commands use.

@@ -1,6 +1,6 @@
 //! Bridge between `kevy-config`'s `[replication]` section and
 //! `kevy-rt`'s `Runtime` builder. Split out of `lib.rs` to keep that
-//! file under the 500-LOC house rule once the v3-cluster wiring landed.
+//! file under the 500-LOC house rule.
 
 use std::net::{IpAddr, Ipv4Addr};
 

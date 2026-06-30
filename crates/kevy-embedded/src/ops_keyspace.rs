@@ -1,18 +1,15 @@
-//! Keyspace introspection + cross-key ops — `copy` / `randomkey` /
-//! `unlink` / `touch` (kevy-embedded 1.12.0).
+//! Cross-key operations: `copy`, `randomkey`, `unlink`, `touch`.
 //!
 //! These compose existing `kevy_store::Store` primitives at the
-//! embedded layer rather than adding new Store methods:
+//! embedded layer:
 //!
-//! - `copy` = get + (optional) read TTL + set on dst + expire on dst.
-//! - `randomkey` = `collect_keys(None, None)` then index-based pick.
-//! - `unlink` = alias for `del` (kevy has no async deletion — the
-//!   sync delete IS the unblocking semantic).
-//! - `touch` = exists count; reads bump LRU/LFU bookkeeping as a
-//!   side effect of `get_for_reply`-style access.
-//!
-//! Lives outside the other `ops_*.rs` files for the 500-LOC house
-//! rule.
+//! - `copy` is `get` + (optional) read TTL + `set` on dst + `expire`
+//!   on dst.
+//! - `randomkey` collects matching keys and picks one by index.
+//! - `unlink` is an alias for `del`; kevy has no async deletion, so
+//!   sync delete is the unblocking semantic.
+//! - `touch` counts existing keys and reads bump LRU/LFU bookkeeping
+//!   as a side effect.
 
 use std::io;
 

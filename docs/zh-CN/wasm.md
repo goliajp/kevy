@@ -1,130 +1,81 @@
 # kevy 在 WebAssembly 上
 
-`kevy-embedded`(kevy 的进程内变体 —— 见
-[`crates/kevy-embedded/README.md`](../../crates/kevy-embedded/README.md))
-在 WebAssembly 上**可编译且可运行**。**完整的内存 KV —— 含 TTL/过期 —
-现今**在 `wasm32-unknown-unknown` 上工作(`set` / `get` / `del` /
-`set_with_ttl` / `pttl` / reaper `tick`,在 Node 端 end-to-end 验证过;见
-[`examples/wasm-kv/`](../../examples/wasm-kv))。完整的 `kevy` 服务器
-(`kevy-rt`、`kevy-sys`)**不**面向 wasm —— 它需要 socket、thread、
-WASM runtime 不暴露的 OS poller。
+`kevy-embedded` 与它的依赖闭包能编译到 WebAssembly,因此同一份进程内 KV 引擎可以跑在浏览器、边缘运行时与 WASI 宿主里。
 
-> ℹ️ **`wasm32-unknown-unknown` 上需 host 喂时钟**。该 target 没有
-> `Instant`/`SystemTime`(调用会 trap `unreachable`),所以 kevy 的时
-> 钟 cfg-gate 到一个 **host-fed** 来源:embedding 通过
-> [`kevy_embedded::set_clock_ns`] 推进时间(单调 ns,例如
-> `Date.now() * 1e6`)—— 用到 `XADD` auto-ID / `EXPIREAT` 时还需要
-> [`set_wall_clock_ms`]。在 TTL-敏感操作之前以及每 `tick` 喂一次,
-> TTL / 过期 / `DEL` 全部工作。(在原生 target 和 WASI
-> `wasm32-wasip1` 上直接用 OS 时钟,无需喂入。)**早期版本的 kevy 在
-> 这里每条 TTL 操作和 `DEL` 都会 trap,在 clock port 落地之前。**
+## 何时需要
 
-显式支持三个 WASM runtime:
+- **浏览器内 KV** —— web 应用里的高速进程内 KV 缓存,接口面与你在服务端用的一致。
+- **Cloudflare Workers**(以及类似的边缘运行时)—— 一个隔离体内的热缓存,坐在平台提供的耐久 store 前面。
+- **嵌入式 WASM 缓存** —— 更大宿主里(游戏引擎、脚本宿主、无服务容器)的沙箱化插件,需要 Redis 形态的 store 但不愿拖入网络栈。
+- **服务端 WASI 插件** —— `wasmtime` / `wasmer` 下的长寿 `wasm32-wasip1` 模块,需要持久化到宿主文件系统。
 
-| Runtime | Target triple | 线程 | 持久化 | 用途 |
-|---------|--------------|----|------|------|
-| 浏览器 | `wasm32-unknown-unknown` | 无 | 仅内存 | 客户端缓存、JS 互操作 |
-| WASI | `wasm32-wasip1` | 无 | 是(preopened dirs) | wasmtime、wasmer、服务端 WASI host |
-| Cloudflare Workers | `wasm32-unknown-unknown`(配 Workers shim) | 无 | KV-binding 桥接(本文不涉及) | 边缘缓存 |
+## 核心思路
 
-## 编译检查
+同一份引擎,拿掉两样东西:OS 时钟与 OS 线程。`kevy-embedded` 拉入 `kevy-store`、`kevy-persist`、`kevy-hash`、`kevy-bytes`、`kevy-map`、`kevy-resp` —— 它们都能为 `wasm32-unknown-unknown` 与 `wasm32-wasip1` 构建。网络 reactor 相关 crate(`kevy-rt`、`kevy-sys`、`kevy-uring`)是有意不在那份闭包里的,所以 WASM 构建是干净的。引擎在原本会产生 TTL reaper 线程的地方,改为暴露一个 `Store::tick()` 让你从宿主事件循环里调用;在无线程的浏览器目标上,它读取宿主喂进来的时钟。数据结构、命令、持久化格式都保持不变。
 
-```bash
-# 浏览器风格 WASM(此处不带 JS bindings,user 自己接)
-cargo check --target wasm32-unknown-unknown -p kevy-embedded
-
-# WASI(通过 preopened directories 上的 std::fs 实现文件系统持久化)
-cargo check --target wasm32-wasip1 -p kevy-embedded
-```
-
-两个在 v1.0 代码上都成功。
-
-## 必需配置
-
-### 浏览器风格 wasm32 上 TTL reaper 必须 `Manual`
-
-`wasm32-unknown-unknown` 没有线程派生 runtime,所以默认的
-`TtlReaperMode::Background`(它调 `std::thread::Builder::spawn`)会失
-败 —— 用 manual reaper 打开:
+## 实际示例
 
 ```rust
-use kevy_embedded::{Config, Store};
+use kevy_embedded::{Config, Store, set_clock_ns, set_wall_clock_ms};
 
-let s = Store::open(Config::default().with_ttl_reaper_manual())?;
+// 1. 用手动 reaper 打开,这样不会尝试 spawn 线程。
+let store = Store::open(Config::default().with_ttl_reaper_manual())?;
+
+// 2. 使用引擎。wasm32-unknown-unknown 上先喂时钟;
+//    wasm32-wasip1 与原生上从 OS 自动读取。
+set_clock_ns(now_ms_from_host().saturating_mul(1_000_000));
+set_wall_clock_ms(now_ms_from_host());
+
+store.set(b"hello", b"world")?;
+let v = store.get(b"hello")?;            // Some(b"world".to_vec())
+store.set_with_ttl(b"flash", b"x", std::time::Duration::from_millis(500))?;
+
+// 3. 从宿主循环驱动驱逐。在 web 上你用
+//    setInterval / requestAnimationFrame 排,WASI 下就是 sleep 循环。
+loop {
+    set_clock_ns(now_ms_from_host().saturating_mul(1_000_000));
+    set_wall_clock_ms(now_ms_from_host());
+    let _stats = store.tick();           // 过期到期键
+    host_sleep_ms(100);
+}
 ```
 
-### 在 TTL 操作前和每 tick 喂 host 时钟
+宿主侧粘合代码很少:浏览器上是一段 JS `setInterval(() => { mod.tick(now()); }, 100)`,WASI 下就是普通的 `std::thread::sleep` 循环。其它一切 —— `set`、`get`、`del`、hash、list、sorted set、脚本、AOF —— 都走你在 Linux 上发布的同一份代码路径。
 
-`wasm32-unknown-unknown` 上,从 host 推进 kevy 的时钟,然后驱动 manual
-reaper。一个典型的 JS 端循环(用
-[`examples/wasm-kv/`](../../examples/wasm-kv) 里的 `wasm-bindgen`
-wrapper):
+## 构建矩阵
 
-```js
-setInterval(() => { cache.set_clock(Date.now()); cache.tick(); }, 100);
-```
+| 目标 | Cargo 命令 | 备注 |
+|---|---|---|
+| `wasm32-unknown-unknown`(浏览器)| `cargo build --target wasm32-unknown-unknown -p kevy-embedded` | 无线程。无 `Instant` / `SystemTime` —— 宿主通过 [`set_clock_ns`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-store/src/lib.rs) 与 [`set_wall_clock_ms`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-store/src/lib.rs) 喂时钟。持久化是内存中的目录。 |
+| `wasm32-unknown-unknown`(Cloudflare Workers)| `cargo build --target wasm32-unknown-unknown -p kevy-embedded` | 同一份模块;时钟源用 Workers 运行时的 `Date.now()`。耐久持久化由 JS 一侧通过 Workers KV 绑定承担。 |
+| `wasm32-wasip1`(服务端 WASI)| `cargo build --target wasm32-wasip1 -p kevy-embedded` | 线程仍然没有,但 `Instant` 与 `SystemTime` 可用,因此不需要宿主喂时钟。`std::fs` 对预打开的目录有效(`wasmtime --dir=/data`)。 |
+| 原生(`x86_64-*`、`aarch64-*`)| `cargo build -p kevy-embedded` | 作参考:默认 spawn 后台 reaper 线程;无需手动驱动。 |
 
-…wrapper 转发到 wasm-only setter:
+依赖闭包见 [`crates/kevy-embedded/Cargo.toml`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded/Cargo.toml),re-export 见 [`crates/kevy-embedded/src/lib.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded/src/lib.rs)。
 
-```rust
-use kevy_embedded::{set_clock_ns, set_wall_clock_ms};
+## 与原生的差异
 
-// ms = Date.now(); 在 TTL 敏感 op 前,以及每 tick 调一次。
-set_clock_ns(ms.saturating_mul(1_000_000)); // 单调 deadline 时钟
-set_wall_clock_ms(ms);                       // 墙钟(XADD/EXPIREAT)
-store.tick();                                // 主动 reaper sweep
-```
+| 关注点 | 原生 | WASM |
+|---|---|---|
+| TTL reaper | 后台线程,自动 spawn | 手动:`Config::with_ttl_reaper_manual()` + 宿主调用 `Store::tick()` |
+| 时钟 | OS `Instant` / `SystemTime` | `wasm32-wasip1`:OS。`wasm32-unknown-unknown`:宿主喂入 `set_clock_ns` / `set_wall_clock_ms` |
+| 网络服务器 | `kevy-rt` + `kevy-sys` + `kevy-uring` 监听 TCP | 这些 crate 都不在 WASM 构建闭包里;通过 `Store` 直接嵌入 |
+| 持久化 | 在传给 `with_persist` 的目录里写 AOF | `wasm32-wasip1`:同样,落到预打开的宿主目录。`wasm32-unknown-unknown`:只在内存目录(想要耐久就由宿主把写镜像出去) |
+| 异步运行时 | 用户代码里的 Tokio / std 线程 | 宿主给你什么用什么(JS 事件循环、Workers fetch handler、WASI 单线程循环)|
 
-在 host 喂值之前时钟读 `0`,所以 key 看起来活着且永不早过期 —— 这是安
-全方向。(WASI `wasm32-wasip1` 有可用的 `Instant` 和 `SystemTime`,所
-以那里不需要喂。)
+## 取舍
 
-### WASI 持久化需要 preopened 目录
+- **TTL 精度跟随你的循环节拍。** 500 ms TTL 的键只在截止时间之后的下一次 `tick()` 时过期。100 ms 的循环很典型;更紧也行,缓存形态用更松也行,但引擎不可能比宿主给的更准。
+- **不绑定异步运行时。** kevy-embedded 不拉 `tokio` 或 `wasm-bindgen-futures`。循环由宿主拥有;库暴露的是微秒级完成的同步方法。
+- **没有后台工作意味着没有惊喜,也没有隐藏成本**,但这也意味着遗忘 `tick()` 会让过期键继续活着并把内存撑大。把这个调用接在你接其它周期任务的同一个位置上。
+- **`wasm32-unknown-unknown` 的耐久不是自动的。** 没有文件系统,你要么作纯内存缓存,要么把写镜像到宿主侧 sink(Workers KV、IndexedDB 等)。
 
-`std::fs::File::create` 和同类只在 `wasm32-wasip1` 上工作,**当且仅当**
-host 已通过 `--dir`(或等价 runtime API)授予 WASM module 对某目录的访
-问。把持久化路径串进 `Config::with_persist`,确保 runtime 启动也授权它:
+## FAQ
 
-```bash
-wasmtime --dir=/data myapp.wasm
-```
+**它在浏览器里能用吗?** 能。为 `wasm32-unknown-unknown` 构建,带 `wasm-bindgen` 或类似绑定发出 `.wasm`,用 `Config::default().with_ttl_reaper_manual()` 打开,然后在每次 `tick()` 之前从 `Date.now()` 喂时钟。全部命令面 —— 字符串、hash、list、set、sorted set、pub/sub、脚本 —— 都在进程内可用。
 
-Rust 内:
+**Cloudflare Workers —— 最小搭起来是什么?** 把 `kevy-embedded` 编到 `wasm32-unknown-unknown`,每个隔离体实例化一个 `Store`,在 TTL 敏感读之前懒调用 `tick()`,或者从 scheduled handler 里调用。时钟源是 Workers 运行时的 `Date.now()`。跨隔离体重启的耐久,从 JS handler 里把写镜像到 Workers KV 或 D1;引擎自身保持在内存里。
 
-```rust
-let s = Store::open(
-    Config::default()
-        .with_persist("/data")
-        .with_ttl_reaper_manual()
-)?;
-```
+**怎么持久化?** 在 `wasm32-wasip1` 下,调用 `Config::with_persist("/data")` 并以 `wasmtime --dir=/data`(或你运行时的等价物)启动模块。AOF 落到预打开的目录,下次打开时回放。在 `wasm32-unknown-unknown` 下没有文件系统,所以持久化得由宿主中介 —— 通常把写镜像到平台提供的耐久 store。
 
-像 wasmtime、wasmer 这样的 WASI shell 会把 `/data` 读写路由到你映射
-的 host 目录。
-
-### Cloudflare Workers
-
-Workers 在 `wasm32-unknown-unknown` 风格的沙箱里跑 WASM,没有直接的文
-件访问。用 kevy-embedded 的纯内存模式,把持久化通过 JS 端的平台 KV
-bindings 路由出去。`Store::log(...)` 这个 escape hatch 让你把每次写
-mirror 到自定义 sink —— 用 Workers KV 写来实现外部 "AOF",让
-kevy-embedded 负责内存状态。
-
-## WASM 上**不**工作的东西
-
-| 功能 | 原因 | 变通 |
-|------|------|------|
-| `kevy::serve()`(TCP 服务器) | wasm32 没有 socket | 用 kevy-embedded 进程内 |
-| `wasm32-unknown-unknown` 上的 `TtlReaperMode::Background` | 无线程 runtime | 用 `with_ttl_reaper_manual()` + 从 host 事件循环驱动 `tick()` |
-| `wasm32-unknown-unknown` 上自走的时钟 | 无 `Instant`/`SystemTime`(它们会 trap) | host 通过 `set_clock_ns` / `set_wall_clock_ms` 喂入;然后 TTL/过期/`DEL` 都工作(WASI `wasm32-wasip1` 无需喂入) |
-| 浏览器 wasm32 上的 AOF | 无文件系统 | 纯内存 `Config::default()` |
-| 浏览器 wasm32 上的 BGREWRITEAOF | 无 AOF | n/a |
-| KV-backed Workers 上的原子 `rename(2)` 语义 | KV 是最终一致 | snapshot 序列化在 JS 层处理 |
-
-## 依赖说明
-
-`kevy-embedded` 自身 ship 零 crates.io 依赖。浏览器 / Cloudflare 集成
-需要 `wasm-bindgen`(浏览器 DOM 互操作)或 `worker`(Cloudflare)——
-那是应用级依赖,**不**是 kevy-embedded 的,你在下游 crate 里自己接。
-我们刻意没有 ship 一个 `examples/wasm-browser`,让仓库内 crate 保持零
-依赖;用户基于公共的 `kevy_embedded::Store` API 构建自己的浏览器桥接。
+**线程 —— 启用 Atomics 的 WASM 怎么办?** 默认 WASM 构建跑单线程,这与每个出货的浏览器形态目标一致。如果你的宿主运行时暴露共享内存线程(`wasm32-unknown-unknown` 加 `--target-feature=+atomics,+bulk-memory` 再加一个线程池),`Store` 仍可安全使用,但后台 reaper 模式仍然关闭 —— 手动 `tick()` 模型仍是支持的路径,你代码里的线程可以共享同一个 `Store` 并发地调用。

@@ -41,8 +41,8 @@ implements it for the kevy hot path. Other hashers can plug in.
 
 ## Status
 
-Used in production inside `kevy-store` and `kevy-rt`; covered by ≥98% line
-coverage and a perf-gate test (`tests/perf_gate.rs`).
+Used inside `kevy-store` and `kevy-rt` for the hot-path lookup. Covered
+by ≥98% line coverage and a perf-gate test (`tests/perf_gate.rs`).
 
 ## License
 

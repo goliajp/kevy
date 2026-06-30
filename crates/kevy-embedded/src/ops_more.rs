@@ -1,15 +1,10 @@
-//! More Redis-standard ops — sismember / spop / srandmember,
-//! zrank / zcount / zpopmin / zrem_range_by_{rank,score} /
-//! zrev_range_by_score, lset / ltrim, rename / renamenx
-//! (kevy-embedded 1.11.0).
+//! Set membership and pop, sorted-set ranking and pop, list `lset` /
+//! `ltrim`, and key rename: `sismember`, `spop`, `srandmember`,
+//! `zrank`, `zcount`, `zpopmin`, `zremrangebyrank`,
+//! `zremrangebyscore`, `zrev_range_by_score`, `lset`, `ltrim`,
+//! `rename`, `renamenx`.
 //!
-//! Net-additive round-out. Every method here wraps an existing
-//! `kevy_store::Store` method that already exists at the keyspace
-//! level.
-//!
-//! Lives outside `ops.rs` / `ops_p2.rs` / `ops_p3.rs` / `ops_bitmap.rs` /
-//! `ops_bonus.rs` / `ops_scan.rs` / `ops_atomic.rs` / `ops_pipeline.rs`
-//! to keep all files under the 500-LOC house rule.
+//! Every method wraps a corresponding `kevy_store::Store` method.
 
 use std::io;
 

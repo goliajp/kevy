@@ -1,9 +1,7 @@
-//! Bonus ops on the embedded `Store` (kevy-embedded 1.8.0) —
-//! methods mailrs didn't ask for in the feedback note, but that
-//! round out the surface to "Redis-shaped expected" parity.
-//!
-//! Lives outside `ops.rs` / `ops_p2.rs` / `ops_p3.rs` / `ops_bitmap.rs`
-//! to keep every file under the 500-LOC house rule.
+//! String `SET` variants (`SETNX`, `APPEND`, `STRLEN`), hash
+//! conditional set (`HSETNX`), decrement helpers (`DECR`, `DECRBY`,
+//! `INCRBYFLOAT`), and the seconds-precision TTL accessor
+//! (`ttl_secs`).
 
 use std::io;
 

@@ -1,5 +1,4 @@
-//! `ROLE` — v3-cluster Phase 1.F operational surface for the
-//! primary/replica topology.
+//! `ROLE` — operational surface for the primary/replica topology.
 //!
 //! The per-tick `master_repl_offset` + `connected_replicas` count is
 //! stashed in [`REPLICATION_VIEW`] by `KevyCommands::on_replication_view`
@@ -7,7 +6,7 @@
 //! that thread-local + `config.replication.role` and emits the
 //! Redis-shaped reply.
 //!
-//! v1.18 simplifications:
+//! Current simplifications:
 //! - Per-replica IP / port / offset entries in the master reply are
 //!   intentionally empty. Capturing replica peer addresses needs a
 //!   `getpeername` FFI binding in `kevy-sys` + threading it through

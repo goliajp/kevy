@@ -1,15 +1,25 @@
 # kevy-replicate
 
-Primary-to-replica streaming replication for [kevy](https://crates.io/crates/kevy).
+Primary-to-replica streaming replication for kevy. Pure Rust, zero
+`crates.io` dependencies.
 
-Phase 1 of the v3-cluster series: a single primary streams every applied
-mutation to N read replicas over a long-lived TCP connection, using a
-RESP3-extended frame format carrying a monotonic offset envelope. New
-replicas first receive an inline snapshot, then catch up live from the
-frame stream.
+A single primary streams every applied mutation to N read replicas
+over a long-lived TCP connection, framed in a RESP-extended format
+that carries a monotonic offset envelope. New replicas first receive
+an inline snapshot, then catch up live from the frame stream.
 
-**Status:** scaffolding. Wire format, source, replica, and snapshot
-modules land in subsequent tasks of the v3-1 feature branch.
+Used by both the kevy server (the primary side and the
+server-as-replica runner) and the embedded library
+(`Store::open_replica`).
 
-See `.claude/plans/2026-06-18-v3-cluster-plan.md` in the kevy repo for the
-full execution plan.
+## Audience
+
+Internal infrastructure for the kevy server and the
+`kevy-embedded` library. End users configure replication via the
+server's `[replication]` TOML section or `Store::open_replica` /
+`Config::with_replica_upstream` on the embedded side. See
+[`docs/replication.md`](https://github.com/goliajp/kevy/blob/develop/docs/replication.md).
+
+## License
+
+MIT OR Apache-2.0, at your option.

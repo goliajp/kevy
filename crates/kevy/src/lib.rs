@@ -81,7 +81,7 @@ pub fn install_replica_senders_for_test(senders: Vec<kevy_rt::ReplicaInboxSender
     replica_state::install_senders(senders);
 }
 
-/// Test-only hook to install the Phase 3 scope_integration globals
+/// Test-only hook to install the scope_integration globals
 /// without bringing up a full `kevy::serve`. Integration tests in
 /// `tests/scope_*.rs` use this to verify routing on a single
 /// Runtime. Calls into `scope_integration::install` and
@@ -204,18 +204,17 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
         }
     }
     let runtime = replication::apply(runtime, &cfg, nshards);
-    // v3-cluster Phase 1.5 / v1.19: spawn the kevy-elect control
-    // plane when the operator configured `[cluster] peers = "..."` +
-    // `node_id`. Opt-in; empty peers → no-op (v1.18 behaviour
-    // unchanged).
+    // Spawn the kevy-elect control plane when the operator
+    // configured `[cluster] peers = "..."` + `node_id`. Opt-in;
+    // empty peers leaves the subsystem dormant.
     // Allocate per-shard offset slots first (always, even when
     // elect is dormant — cost is `nshards` AtomicU64 / process,
     // negligible).
     elect_integration::install_shard_offsets(nshards);
     elect_integration::maybe_start(&cfg);
-    // v3-cluster Phase 3 / v1.21 scope-routing setup. Idempotent;
-    // bad scope config fails the boot loudly here rather than at
-    // the first wrong-shard write.
+    // Scope-routing setup. Idempotent; a bad scope config fails
+    // the boot loudly here rather than at the first wrong-shard
+    // write.
     if let Err(msg) = scope_integration::install(&cfg) {
         eprintln!("kevy: bad [cluster] scopes config: {msg}");
         std::process::exit(1);

@@ -1,161 +1,109 @@
 # Unix-domain socket (UDS) トランスポート
 
-v1.25 で opt-in の Unix-domain stream socket listener を追加 ——
-valkey/redis の `unixsocket` 設定に相当します。同一ホスト上の
-ローカル・クライアント(server プロセスと同じ信頼境界)向けに、
-UDS は TCP loopback スタックを完全に飛ばします:IP ヘッダ無し、
-checksum 無し、ポート照合無し、NAGLE/ACK の応酬無し。ワイヤは
-RESP2 / 3 でバイト等価なので、既存クライアントは URL を 1 つ変える
-だけで切り替わります。
+kevy はオプションの Unix-domain stream リスナーを公開しており、TCP ポートと同一の RESP セマンティクスを話します。同一ホストのクライアントはこれでループバックスタックを完全にスキップできます。
 
-## いつ使うか
+## このドキュメントが必要になるとき
 
-UDS は次の **3 つすべて** が成立するときに適切:
+クライアントとサーバーが同じホストを共有するときに UDS は適切な選択です:
 
-1. クライアントが server と**同一ホスト**(共有 tmpfs / host volume
-   をマウントしたコンテナも該当)。
-2. per-syscall のネットワーク・オーバーヘッドで CPU bound —— 小さな
-   payload、多接続、シングル shard server、または `-c1` 系で
-   per-op RTT をフルに払うワークロード。
-3. 信頼境界が**ホストのファイルシステム**(UDS のパーミッションは
-   ファイルシステム・パーミッション;kevy と valkey どちらにも
-   AUTH/TLS は無い)。
+- **同一ホストのクライアント** — 1 台のマシン上でアプリと kevy、あるいは tmpfs / マウント済みソケットディレクトリを共有するコンテナ。
+- **遅延に敏感なワークロード** — 低コネクション数、小ペイロード、または TCP ループバック往復のフロアが制約になっている高ファンアウトのパイプライニング。
+- **コンテナサイドカー** — サイドカー + メインコンテナが `/run` または `/tmp` ボリュームを共有。ソケットファイルが IPC ハンドルで、ポート割り当ては不要。
 
-UDS は TCP の**代替にならない**ケース:
+クロスホストのクライアントは依然 TCP が必要です — UDS はファイルシステムスコープで、カーネルから出ません。
 
-- クライアントが別コンテナで、共有 socket マウントが**ない**
-  (`/tmp/kevy.sock` パスが両側から見えなければならない)。
-- ネットワーク到達性が必要 —— リモート・クライアントは TCP
-  loopback のみ(kevy は単 DC、公インターネット設計なし)。
-- ワークロードが `-c50 -P16` pipelined で既に server の CPU を
-  飽和済み —— UDS でも数 % は取れるが、テコは transport ではない。
+## 中心となる考え方
 
-なぜ kevy の UDS 利得が valkey より大きいか / Phase A 分解の経緯
-は [`bench/REPORT.md`](../../bench/REPORT.md)。
+`KEVY_UNIX_SOCKET` をファイルシステムのパスに設定すると、kevy は dual-bind します: TCP リスナーはこれまで通りそのまま生きており、UDS リスナーが同じシャードランタイム上で同じ RESP2/3 パーサーで accept します。`unix://` URL または `-s <path>` フラグを取る RESP クライアントは config 1 行で切り替えられます。UDS はループバックの `rep_movs`、`nft_do_chain`、TCP syscall パスをなくすので、各ワークロードで op あたりのフロアが目に見えて下がります。
 
-## サーバ設定
+## 動かしてみる例
 
-起動前に `KEVY_UNIX_SOCKET` をファイルパスに設定。server は TCP
-listener と**並行で UDS をバインド**します —— 両方が並列で accept
-し、クライアント側でどちらを使うか選ぶ:
+両方のトランスポートを有効にして kevy を起動:
 
 ```sh
-KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6004
+KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6379
 ```
 
-挙動:
-
-- bind 前にパスを `unlink`(前回クラッシュで残った stale socket は
-  自動掃除 —— valkey/redis と同じ)。
-- bind 後に `chmod 0777`(任意のローカル・ユーザが接続可能;
-  per-user アクセス制御は包含ディレクトリのパーミッションで)。
-- **shard 0 のみ** が UDS listener を持ち、accept された接続は
-  既存の per-shard runtime に振り分けられます。つまり `--threads`
-  設定は socket 越しのワークロードの並列度を依然として制御します。
-- Linux で `KEVY_IO_URING=1` を設定すると、UDS accept loop は TCP
-  と同じ io_uring インスタンスで multishot accept SQE として動き
-  ます —— reactor の追加コスト無し。UDS は IP socket ではないので
-  TCP_NODELAY はスキップ。
-- 空 / 未設の `KEVY_UNIX_SOCKET` = TCP のみ(v1.24 以前の挙動)。
-
-CLI / TOML の等価項は v1.26 で予定;現状は環境変数 1 つのみ。
-
-## クライアント設定
-
-Unix-socket オプションを取る Redis/RESP クライアントはそのまま
-動きます —— RESP2/3 フレーミング同一。
-
-`redis-cli` / `redis-benchmark`(`-s` フラグ):
+`redis-cli` で UDS 経由接続:
 
 ```sh
 redis-cli -s /tmp/kevy.sock SET foo bar
+# OK
 redis-cli -s /tmp/kevy.sock GET foo
-redis-benchmark -s /tmp/kevy.sock -t set,get -n 100000 -c 50 -P 16
+# "bar"
 ```
 
-[`kevy-client`](../../crates/kevy-client) と
-[`kevy-client-async`](../../crates/kevy-client-async) は `unix://`
-URL を受け付けます:
+TCP の `:6379` も並行で生きています — 同じデータ、同じシャード:
+
+```sh
+redis-cli -p 6379 GET foo
+# "bar"
+```
+
+Rust では、リポジトリ内クライアントが `unix://` URL を受け取ります:
 
 ```rust
 let mut conn = kevy_client::Connection::open("unix:///tmp/kevy.sock")?;
 conn.set(b"k", b"v")?;
 ```
 
-valkey / redis 相当設定(`unixsocket` ディレクティブ):
+## 権限とセキュリティ
 
-```sh
-valkey-server --unixsocket /tmp/valkey.sock --unixsocketperm 777 \
-              --io-threads 10
-redis-server  --unixsocket /tmp/redis.sock  --unixsocketperm 777
-```
+UDS の信頼境界は**ファイルシステム**です — Unix ソケット上に RESP レベルの AUTH や TLS はありません。ソケットファイルを `open(2)` できる誰でも、任意のコマンド(`FLUSHALL` 含む)を発行できます。
 
-## ベンチ数字
+- **ソケットファイルの所有者。** kevy はサーバーが動いているユーザーとしてソケットを作ります。起動後 `chown` / `chgrp` するか、ソケットを所有させたい ID で kevy を動かしてください。
+- **パーミッションビット。** 同居するクライアントプロセスが接続できるよう、デフォルトでは緩いビットでソケットを作ります。引き締めたければ、ソケットを制限付きディレクトリ — 例えば `kevy` グループ所有の `0750` の `/run/kevy/` — に置いて、グループメンバだけが `connect(2)` できるようにします。ディレクトリ権限がソケット inode 自体へのアクセスを守ります。
+- **tmpfs vs ディスク。** ほとんどの Linux ディストロの `/tmp` と `/run` は tmpfs で、ソケットには理想的です(connect 時のディスク I/O なし)。実ファイルシステム上の永続パスでも動きます — inode はランデブー点にすぎず、データがディスクに触れることはありません。
+- **信頼ドメイン。** ソケットパスへの読み書きを持つアカウントはすべて完全認証済みとして扱ってください。クライアントごとの ID が必要なら、それは kevy より上(サイドカープロキシ、カーネル LSM、名前空間分離)に居る必要があります。
 
-Precision bench、n=1 M × 10 runs、2σ フィルタ平均、全セルで CI95
-< 1 %。lx64、`mitigations=off`、kevy `--threads 1`(シングル shard)、
-valkey `--io-threads 10`。再現:
-[`bench/v125-precision-uds.sh`](../../bench/v125-precision-uds.sh)。
+## サーバー設定ノブ
 
-| ワークロード | kevy 1.25 (UDS) | valkey 9.1 (UDS) | kevy / valkey |
-|------------|----------------:|-----------------:|--------------:|
-| -c1 SET | **166 k/s** | 96 k/s | **1.73×** |
-| -c1 GET | **168 k/s** | 106 k/s | **1.59×** |
-| -c50 -P1 SET | 339 k/s | 334 k/s | タイ(per-syscall 床) |
-| -c50 -P1 GET | 337 k/s | 332 k/s | タイ(per-syscall 床) |
-| **-c50 -P16 SET** | **4.11 M/s** | 1.75 M/s | **2.35×** |
-| **-c50 -P16 GET** | **4.35 M/s** | 3.42 M/s | **1.27×** |
-| -c100 -P1 SET | 331 k/s | 326 k/s | タイ |
-| -c100 -P1 GET | 335 k/s | 327 k/s | タイ(1.02×) |
+| 環境変数 | CLI フラグ | デフォルト | 効果 |
+|---|---|---|---|
+| `KEVY_UNIX_SOCKET` | (今のところ env 専用) | 未設定 | bind するファイルシステムパス。未設定で TCP のみ。 |
+| `KEVY_BIND` | `--bind` | `127.0.0.1` | TCP の bind アドレス。UDS の bind は独立。 |
+| `--port` | `--port` | `6379` | TCP ポート。設定時も UDS は bind される。 |
 
-UDS vs TCP for kevy(同 server、同 bench、transport だけ切替え):
+注意:
 
-| ワークロード | TCP rps | UDS rps | UDS / TCP |
-|------------|--------:|--------:|----------:|
-| -c1 SET | 94.7 k | 166 k | **1.76×** |
-| -c1 GET | 97.3 k | 168 k | **1.73×** |
-| -c50 -P1 | 192 k | 339 k | **1.77×** |
-| -c50 -P16 SET | 2.59 M | 4.11 M | **1.59×** |
-| -c50 -P16 GET | 2.67 M | 4.35 M | **1.63×** |
+- **パスは事前に存在してはいけません。** kevy は `KEVY_UNIX_SOCKET` が既存ファイルを指している場合は起動を拒否します — 自分が作ったのではないパスを上書きしません。再起動時に掃除する(`rm -f /tmp/kevy.sock`)か、run ごとのパス(`/run/kevy/$(date +%s).sock`)を使ってください。これは意図的で、黙って unlink すると誤設定の kevy が他サービスのソケットを奪い得るためです。
+- **環境変数が設定されていれば常に dual-bind。** UDS のみのモードはありません — TCP リスナーも上がります。TCP を禁止したければ、制御できるループバック専用アドレスに bind し、firewall で塞いでください。
+- **シャード 0 が accept ループを所有します。** accept された接続は既存のシャード別ランタイムへディスパッチされるので、`--threads` は依然ソケット越しのワークロードの並列性を制御します。
+- **io_uring パス。** Linux 上 `KEVY_IO_URING=1` のとき、UDS の accept は TCP と同じ io_uring インスタンスを通る multishot accept SQE として動きます — 余計な reactor コストなし。`TCP_NODELAY` は UDS には設定されません(IP ソケットではないので)。
 
-なぜ kevy の UDS 利得が valkey より大きいか:valkey の hot path は
-より CPU bound(`processCommand` / `addReply` の per-op 仕事)で、
-TCP 天井がそもそも transport の RTT 床を下回っていた —— loopback
-を取り除いても valkey に余地はあまり生まれません。kevy の hot
-path は十分に軽いので、`-c50 -P16` での束縛は TCP RTT 床でした;
-UDS で束縛が外れると server は loadgen より先に走り切ります。
-c=50/100 -P1 のタイは UDS 上でもタイのまま —— 両 server とも
-per-syscall round-trip 床(~3 µs × 50 conn)で飽和しており、
-transport とは無関係。
+## トレードオフ
 
-## セキュリティ注意
+同じ kevy バイナリ上での UDS vs TCP ループバック:
 
-- **ファイル・パーミッション = AUTH 相当。** UDS にネイティブの認証
-  はありません;socket ファイルを `open(2)` できる相手なら任意の
-  コマンド(`FLUSHALL` 含む)を発行できます。kevy 既定の
-  `chmod 0777` は valkey/redis 既定と同じ;絞りたいときは
-  socket を制限的パーミッションのディレクトリに置く(例:
-  `/run/kevy/kevy.sock` を `kevy` グループ所有)。
-- **クラッシュ後の stale socket。** kevy は bind 前に `unlink`
-  するので前回クラッシュの残骸が起動を妨げません。同一パスを 2 つの
-  kevy インスタンスが指せば後勝ち —— 前者のクライアントは次の write
-  で `EPIPE`。
-- **リモート不可。** UDS はホスト・ローカル。クロス・ホストの
-  クライアントは TCP のみ(kevy は依然として単 DC・AUTH/TLS なし
-  —— [`README.ja.md`](../../README.ja.md))。
+| 側面 | UDS | TCP ループバック |
+|---|---|---|
+| op あたりのフロア | 低い(IP/checksum/port/NAGLE なし) | 高い |
+| 到達範囲 | 同一ホストのみ | 任意のホスト |
+| ID | ファイルシステムのパーミッション | port + bind アドレス + AUTH |
+| ライフサイクル | ディスク上のソケットファイル。再起動時に掃除必要 | ポートのライフサイクルはカーネル管理 |
+| 観測 | `lsof` / `ss -xl` | `ss -tln`、`netstat`、`tcpdump` |
+| クライアント設定 | `unix:///path` または `-s /path` | `host:port` |
 
-## 再現
+スループットの利得はワークロード形状依存です — 小ペイロード低コネクション数のセルが最も得をします(ループバックの op あたり税が支配的だった)。CPU 飽和セルの利得は小さくなります(トランスポートがフロアではなかった)。実測値は [bench/REPORT.md](https://github.com/goliajp/kevy/blob/master/bench/REPORT.md) を参照。
 
-```sh
-ssh lx64
-bash /path/to/kevy/bench/v125-precision-uds.sh
-```
+## FAQ
 
-precision harness は同じ kevy バイナリをビルドし、kevy と valkey
-を順に立ち上げ、`redis-benchmark -s <sock>` を 10 回 × n=1 M 走らせ、
-フィルタ平均と CI95 を表示します。お供の smoke
-[`bench/v125-uds-smoke.sh`](../../bench/v125-uds-smoke.sh)(14
-テスト・グループ、39 アサーション、SET/GET、各コレクション、
-INCR/APPEND、大きな値、SETEX、MSET、pipelined DBSIZE、pub/sub、
-FLUSHALL、INFO をカバー)で UDS が TCP と wire 等価であることを
-確認 —— server 側のコード経路は同じで、accept SQE のみ異なります。
+### UDS と TCP を同時に bind できますか?
+
+はい — それが唯一のモードです。`KEVY_UNIX_SOCKET` を設定すると UDS リスナーが足され、TCP リスナーはそのまま生きます。クライアントごとに筋の通る方を使ってください。
+
+### サーバーが「socket exists」と言って起動を拒否します。
+
+意図的です。kevy は自分が作っていないパスを `unlink` しません。誤設定の run が他サービスのソケットを黙って奪うのを防ぐためです。再起動前に古いファイルを消す(`rm -f /tmp/kevy.sock`)か、`/run/kevy/$(uuidgen).sock` のような run ごとのパスを使ってください。kevy がクラッシュしてファイルを残したなら手で消すのは安全です。
+
+### UDS は TCP ループバックよりどれくらい速いですか?
+
+各ワークロードで目に見えて速いです。UDS は IP パス全体をスキップするからです: checksum なし、netfilter チェーン(`nft_do_chain`)なし、ループバックの `rep_movs` なし、パケットごとの ACK 往復なし。比率は op 予算のうちループバックオーバーヘッドがどれくらいを占めていたかに依存します — 単一コネクション・小ペイロードが最大の跳ね、CPU バウンドでパイプライニングしたセルは小さくなります。あなたのワークロードでの計測は `redis-benchmark -s /tmp/kevy.sock` vs `-h 127.0.0.1` で。
+
+### 自分のクライアントライブラリは UDS を使えますか?
+
+多くが使えます。`redis-cli` と `redis-benchmark` は `-s <path>` を取ります。ioredis、node-redis、redis-py、redis-rb、go-redis、lettuce、jedis、およびリポジトリ内の [kevy-client](https://github.com/goliajp/kevy/tree/master/crates/kevy-client) / [kevy-client-async](https://github.com/goliajp/kevy/tree/master/crates/kevy-client-async) はすべて `unix:///path` URL または明示的なソケットパスオプションを受けます。正確なキー名はドライバの接続オプション docs で確認してください。
+
+### 全クライアントが同一ホストにあるなら TCP を完全に外すべきですか?
+
+外せますが、必須ではありません。TCP を `127.0.0.1` に bind したままにするのは誰も繋がなければコストゼロで、もしクライアントの UDS パスが誤設定になってもフォールバックになります。よくあるデプロイは「ホットなクライアントには UDS、`redis-cli` デバッグには TCP」です。

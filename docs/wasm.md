@@ -1,133 +1,82 @@
 # kevy on WebAssembly
 
-`kevy-embedded` (the in-process variant of kevy — see
-[`crates/kevy-embedded/README.md`](../crates/kevy-embedded/README.md)) **compiles
-and runs** on WebAssembly. The **full in-memory KV — including TTL/expiry —
-works today** on `wasm32-unknown-unknown` (`set` / `get` / `del` /
-`set_with_ttl` / `pttl` / the reaper `tick`, verified end-to-end in Node; see
-[`examples/wasm-kv/`](../examples/wasm-kv)). The full `kevy` server (`kevy-rt`,
-`kevy-sys`) does **not** target wasm — it needs sockets, threads, and OS pollers
-that WASM runtimes don't expose.
+`kevy-embedded` and its dependency closure compile to WebAssembly so the same in-process KV engine runs inside browsers, edge runtimes, and WASI hosts.
 
-> ℹ️ **Host-fed clock required on `wasm32-unknown-unknown`.** That target has no
-> `Instant`/`SystemTime` (calling them traps `unreachable`), so kevy's clock is
-> cfg-gated to a **host-fed source**: the embedding advances time via
-> [`kevy_embedded::set_clock_ns`] (monotonic ns, e.g. `Date.now() * 1e6`) — and
-> [`set_wall_clock_ms`] if you use `XADD` auto-IDs / `EXPIREAT`. Feed it before
-> TTL-sensitive ops and once per `tick`, and all of TTL/expiry/`DEL` work. (On
-> native targets and WASI `wasm32-wasip1` the OS clock is used directly — no
-> feeding needed.) **An earlier version of kevy trapped on every TTL op and
-> `DEL` here, before this clock port landed.**
+## When you need this
 
-Three WASM runtimes are explicitly supported:
+- **Browser KV** — a fast in-memory key/value cache inside a web app, with the same API surface you use on the server.
+- **Cloudflare Workers** (and similar edge runtimes) — an in-isolate hot cache that sits in front of platform-provided durable stores.
+- **Embedded WASM caches** — sandboxed plugins inside a larger host (game engines, scripting hosts, serverless containers) that want a Redis-shaped store without dragging in a network stack.
+- **Server-side WASI plugins** — long-lived `wasm32-wasip1` modules under `wasmtime` / `wasmer` that need persistence to the host filesystem.
 
-| Runtime | Target triple | Threads | Persistence | Use case |
-|---|---|---|---|---|
-| Browser | `wasm32-unknown-unknown` | no | in-memory only | client-side cache, JS interop |
-| WASI | `wasm32-wasip1` | no | yes (preopened dirs) | wasmtime, wasmer, server-side WASI hosts |
-| Cloudflare Workers | `wasm32-unknown-unknown` (with Workers shim) | no | KV-binding bridge (out of scope here) | edge cache |
+## Core idea
 
-## Compile checks
+It is the same engine, with two things taken out: the OS clock and the OS threads. `kevy-embedded` pulls in `kevy-store`, `kevy-persist`, `kevy-hash`, `kevy-bytes`, `kevy-map`, and `kevy-resp` — all of which build for `wasm32-unknown-unknown` and `wasm32-wasip1`. The network reactor crates (`kevy-rt`, `kevy-sys`, `kevy-uring`) are deliberately not part of that closure, so the WASM build is clean. Where the engine would normally spawn a TTL reaper thread, it instead exposes a `Store::tick()` you call from the host's event loop, and on the threadless browser target it reads a clock the host feeds in. The data structures, commands, and persistence format are unchanged.
 
-```bash
-# Browser-style WASM (no JS bindings here; user wires their own)
-cargo check --target wasm32-unknown-unknown -p kevy-embedded
-
-# WASI (file-system persistence via std::fs over preopened directories)
-cargo check --target wasm32-wasip1 -p kevy-embedded
-```
-
-Both succeed today against the v1.0 codebase.
-
-## Required configuration
-
-### TTL reaper must be `Manual` on browser-style wasm32
-
-`wasm32-unknown-unknown` has no thread-spawning runtime, so the default
-`TtlReaperMode::Background` (which calls `std::thread::Builder::spawn`) fails —
-open with the manual reaper:
+## Worked example
 
 ```rust
-use kevy_embedded::{Config, Store};
+use kevy_embedded::{Config, Store, set_clock_ns, set_wall_clock_ms};
 
-let s = Store::open(Config::default().with_ttl_reaper_manual())?;
+// 1. Open with the manual reaper so we don't try to spawn a thread.
+let store = Store::open(Config::default().with_ttl_reaper_manual())?;
+
+// 2. Use the engine. On wasm32-unknown-unknown feed the clock first;
+//    on wasm32-wasip1 and native it's read from the OS for you.
+set_clock_ns(now_ms_from_host().saturating_mul(1_000_000));
+set_wall_clock_ms(now_ms_from_host());
+
+store.set(b"hello", b"world")?;
+let v = store.get(b"hello")?;            // Some(b"world".to_vec())
+store.set_with_ttl(b"flash", b"x", std::time::Duration::from_millis(500))?;
+
+// 3. Drive eviction from the host loop. On the web you'd schedule this
+//    with setInterval / requestAnimationFrame; under WASI it's a plain
+//    sleep loop.
+loop {
+    set_clock_ns(now_ms_from_host().saturating_mul(1_000_000));
+    set_wall_clock_ms(now_ms_from_host());
+    let _stats = store.tick();           // expires due keys
+    host_sleep_ms(100);
+}
 ```
 
-### Feed the host clock before TTL ops and each tick
+The host-side glue is small: a JS `setInterval(() => { mod.tick(now()); }, 100)` for the browser, or a regular `std::thread::sleep` loop under WASI. Everything else — `set`, `get`, `del`, hashes, lists, sorted sets, scripting, AOF — is the same code path you ship on Linux.
 
-On `wasm32-unknown-unknown` advance kevy's clock from the host, then drive the
-manual reaper. A typical JS-side loop (using the `wasm-bindgen` wrapper from
-[`examples/wasm-kv/`](../examples/wasm-kv)):
+## Build matrix
 
-```js
-setInterval(() => { cache.set_clock(Date.now()); cache.tick(); }, 100);
-```
-
-…where the wrapper forwards to the wasm-only setters:
-
-```rust
-use kevy_embedded::{set_clock_ns, set_wall_clock_ms};
-
-// ms = Date.now(); call before TTL-sensitive ops and once per tick.
-set_clock_ns(ms.saturating_mul(1_000_000)); // monotonic deadline clock
-set_wall_clock_ms(ms);                       // wall clock (XADD/EXPIREAT)
-store.tick();                                // active reaper sweep
-```
-
-Until the host feeds a value the clock reads `0`, so keys look live and never
-expire early — the safe direction. (WASI `wasm32-wasip1` has a working `Instant`
-and `SystemTime`, so no feeding is needed there.)
-
-### WASI persistence needs preopened directories
-
-`std::fs::File::create` and friends work on `wasm32-wasip1` ONLY when the
-host has granted the WASM module access to a directory via `--dir` (or the
-equivalent runtime API). Plumb the persisted path through `Config::with_persist`
-and ensure the runtime invocation grants it:
-
-```bash
-wasmtime --dir=/data myapp.wasm
-```
-
-Inside Rust:
-
-```rust
-let s = Store::open(
-    Config::default()
-        .with_persist("/data")
-        .with_ttl_reaper_manual()
-)?;
-```
-
-WASI shells like wasmtime and wasmer will route the `/data` reads/writes
-through to the host directory you mapped.
-
-### Cloudflare Workers
-
-Workers run WASM in a `wasm32-unknown-unknown`-style sandbox without
-direct file access. Use kevy-embedded's pure-in-memory mode and route
-durability through the platform's KV bindings on the JS side. The
-`Store::log(...)` escape hatch lets you mirror any write to a custom
-sink — implement an external "AOF" via Workers KV writes from JS, then
-let kevy-embedded handle the in-memory state.
-
-## What does NOT work on WASM
-
-| Feature | Reason | Workaround |
+| Target | Cargo command | Notes |
 |---|---|---|
-| `kevy::serve()` (TCP server) | wasm32 has no sockets | use kevy-embedded in-process |
-| `TtlReaperMode::Background` on `wasm32-unknown-unknown` | no thread runtime | use `with_ttl_reaper_manual()` + drive `tick()` from the host event loop |
-| Self-advancing clock on `wasm32-unknown-unknown` | no `Instant`/`SystemTime` (they trap) | host feeds time via `set_clock_ns` / `set_wall_clock_ms`; then TTL/expiry/`DEL` all work (WASI `wasm32-wasip1` needs no feeding) |
-| AOF on browser wasm32 | no file system | pure in-memory `Config::default()` |
-| BGREWRITEAOF on browser wasm32 | no AOF | n/a |
-| Atomic `rename(2)` semantics on KV-backed Workers | KV is eventually consistent | snapshot serialisation handled at the JS layer |
+| `wasm32-unknown-unknown` (browser) | `cargo build --target wasm32-unknown-unknown -p kevy-embedded` | No threads. No `Instant` / `SystemTime` — host feeds the clock via [`set_clock_ns`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-store/src/lib.rs) and [`set_wall_clock_ms`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-store/src/lib.rs). Persistence is an in-memory directory. |
+| `wasm32-unknown-unknown` (Cloudflare Workers) | `cargo build --target wasm32-unknown-unknown -p kevy-embedded` | Same module; use `Date.now()` from the Workers runtime as the clock source. Durable persistence goes through Workers KV bindings on the JS side. |
+| `wasm32-wasip1` (server-side WASI) | `cargo build --target wasm32-wasip1 -p kevy-embedded` | Threads still absent, but `Instant` and `SystemTime` work, so no host clock feeding is needed. `std::fs` works against preopened directories (`wasmtime --dir=/data`). |
+| Native (`x86_64-*`, `aarch64-*`) | `cargo build -p kevy-embedded` | For reference: spawns a background reaper thread by default; nothing manual to drive. |
 
-## Dependency note
+See [`crates/kevy-embedded/Cargo.toml`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded/Cargo.toml) for the dependency closure and [`crates/kevy-embedded/src/lib.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded/src/lib.rs) for the re-exports.
 
-`kevy-embedded` itself ships zero crates.io dependencies. The browser /
-Cloudflare integrations need `wasm-bindgen` (browser DOM interop) or
-`worker` (Cloudflare) — those are app-level dependencies, NOT
-kevy-embedded's, and you wire them yourself in your downstream crate.
-We deliberately do not ship a `examples/wasm-browser` here so the
-in-tree crates stay zero-dependency; instead, users build their own browser
-bridge against the public `kevy_embedded::Store` API.
+## Differences from native
+
+| Concern | Native | WASM |
+|---|---|---|
+| TTL reaper | Background thread, auto-spawned | Manual: `Config::with_ttl_reaper_manual()` + host calls `Store::tick()` |
+| Clock | OS `Instant` / `SystemTime` | `wasm32-wasip1`: OS. `wasm32-unknown-unknown`: host-fed via `set_clock_ns` / `set_wall_clock_ms` |
+| Network server | `kevy-rt` + `kevy-sys` + `kevy-uring` listen on TCP | None of those crates are in the WASM build closure; embed directly via `Store` |
+| Persistence | AOF in the directory passed to `with_persist` | `wasm32-wasip1`: same, against a preopened host dir. `wasm32-unknown-unknown`: in-memory directory only (mirror writes out from the host if you want durability) |
+| Async runtime | Tokio / std threads in user code | Whatever the host gives you (JS event loop, Workers fetch handler, WASI single-threaded loop) |
+
+## Trade-offs
+
+- **TTL precision tracks your loop cadence.** Keys with a 500 ms TTL only expire on the next `tick()` after the deadline. A 100 ms loop is typical; tighter is fine, looser is fine for cache-style use, but the engine cannot do better than the host gives it.
+- **No async runtime is bundled.** kevy-embedded does not pull in `tokio` or `wasm-bindgen-futures`. The host owns the loop; the library exposes synchronous methods that finish in microseconds.
+- **No background work means no surprises and no hidden costs**, but it also means a forgotten `tick()` will leave expired keys live and grow memory. Wire the call into the same place you wire your other periodic work.
+- **`wasm32-unknown-unknown` durability is not automatic.** Without a filesystem you either run as a pure in-memory cache or mirror writes to a host-side sink (Workers KV, IndexedDB, etc.).
+
+## FAQ
+
+**Does it work in the browser?** Yes. Build for `wasm32-unknown-unknown`, ship the resulting `.wasm` with `wasm-bindgen` or similar bindings, open with `Config::default().with_ttl_reaper_manual()`, and feed the clock from `Date.now()` before each `tick()`. The full command surface — strings, hashes, lists, sets, sorted sets, pub/sub, scripting — works in-process.
+
+**Cloudflare Workers — what's the minimal setup?** Compile `kevy-embedded` for `wasm32-unknown-unknown`, instantiate one `Store` per isolate, and call `tick()` either lazily (before TTL-sensitive reads) or from a scheduled handler. The clock source is `Date.now()` from the Workers runtime. For durability across isolate restarts, mirror writes to Workers KV or D1 from your JS handler; the engine itself stays in-memory.
+
+**How do I persist?** Under `wasm32-wasip1`, call `Config::with_persist("/data")` and launch your module with `wasmtime --dir=/data` (or the equivalent for your runtime). The AOF goes to the preopened directory and replays on the next open. Under `wasm32-unknown-unknown` there is no filesystem, so persistence has to be host-mediated — typically mirroring writes to whatever durable store the platform provides.
+
+**Threads — what about Atomics-enabled WASM?** The default WASM build runs single-threaded, which matches every shipping browser-style target. If your host runtime exposes shared-memory threads (`wasm32-unknown-unknown` with `--target-feature=+atomics,+bulk-memory` plus a thread pool), `Store` is still safe to use, but the background reaper mode is still off — the manual `tick()` model is the supported path, and threads in your code can share a `Store` and call into it concurrently.

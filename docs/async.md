@@ -1,173 +1,131 @@
-# Async client (`kevy-client-async`)
+# Async client
 
-`kevy-client-async` is the runtime-agnostic async counterpart to
-[`kevy-client`](https://docs.rs/kevy-client). The blocking client stays
-the default for greenfield code (it's pure-Rust, 0-dep, and the lower
-latency under non-async workloads). This crate exists for apps that
-already have a `tokio` / `smol` / `async-std` runtime and want to keep
-`await`-flow throughout — pipelining especially, which is where async
-collapses N round-trips into one.
+`kevy-client-async` is the async mirror of the blocking [`kevy-client`](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client) — same surface, same URL facade, with `.await` on every call.
 
-## When to use which
+## When you need this
 
-| You have…                                    | Use                  |
-|----------------------------------------------|----------------------|
-| no runtime, simple request-response code     | `kevy-client`        |
-| a tokio app, want one `await` per command    | `kevy-client-async`  |
-| a tokio app, want one `await` per batch      | `kevy-client-async` + `pipeline()` |
-| any runtime, embedded `mem://` / `file://`   | `kevy-client`        |
+Reach for the async client when your app already runs on a `tokio`, `smol`, or `async-std` runtime and you want `await`-flow end-to-end: no blocking threadpool hops, no `spawn_blocking` wrapping, no thread-per-connection. If your code path is request-response on a regular thread, the blocking client is simpler and lower-latency — there is no async tax to pay for being synchronous.
 
-`mem://` and `file://` URLs are rejected by `AsyncConnection::open` —
-those are in-process synchronous backends; the blocking client is
-strictly faster for them.
+## Core idea
 
-## Runtime selection
+Pick exactly one runtime via a Cargo feature (`tokio`, `smol`, or `async-std`); the crate compiles down to that runtime's `TcpStream` adapter and nothing else. The public surface mirrors the blocking client 1:1 — `AsyncConnection::open(url).await?`, `conn.set(k, v).await?`, `conn.get(k).await?` — so porting from blocking is `Connection` → `AsyncConnection` plus an `.await` per call. A pipeline builder collapses N commands into one TCP round-trip when latency matters.
 
-Exactly one of `tokio`, `smol`, `async-std` must be enabled.
-Enabling zero or more than one triggers a compile-time error.
+## Worked examples
+
+### Tokio
 
 ```toml
 [dependencies]
 kevy-client-async = { version = "1", features = ["tokio"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 ```
 
-Each runtime gets its own `TcpStream` adapter:
+```rust
+use kevy_client_async::AsyncConnection;
 
-| feature       | transport                          |
-|---------------|------------------------------------|
-| `tokio`       | `tokio::net::TcpStream`            |
-| `smol`        | `smol::net::TcpStream`             |
-| `async-std`   | `async_std::net::TcpStream`        |
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
+    let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
+    conn.set(b"k", b"v").await?;
+    let v = conn.get(b"k").await?;
+    assert_eq!(v.as_deref(), Some(&b"v"[..]));
+    Ok(())
+}
+```
 
-Each runtime dep ships with `default-features = false` plus the
-minimum-surface features the adapter needs.
+### Smol
 
-## Surface — mirror of blocking
+Same code; swap the runtime feature.
+
+```toml
+[dependencies]
+kevy-client-async = { version = "1", features = ["smol"] }
+smol = "2"
+```
+
+```rust
+use kevy_client_async::AsyncConnection;
+
+fn main() -> std::io::Result<()> {
+    smol::block_on(async {
+        let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
+        conn.set(b"k", b"v").await?;
+        let v = conn.get(b"k").await?;
+        assert_eq!(v.as_deref(), Some(&b"v"[..]));
+        Ok(())
+    })
+}
+```
+
+### Pipeline builder
+
+One round-trip for the whole batch. Replies come back in queue order; per-command failures land as `Reply::Error(_)` inside the `Vec` rather than tearing down the batch.
 
 ```rust
 use kevy_client_async::AsyncConnection;
 
 let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
-conn.set(b"k", b"v").await?;
-let v = conn.get(b"k").await?;
-```
-
-The named methods on `AsyncConnection` are 1:1 with `kevy_client::Connection`
-modulo `.await`. Migration from blocking is grep-replace
-`Connection` → `AsyncConnection` plus an `.await` on every call.
-
-Available command families (42 methods):
-
-- **string + generic**: ping / set / get / del / exists / incr /
-  incr_by / expire / persist / ttl_ms / type_of / dbsize / flushall /
-  set_with_ttl / mget / mset / publish
-- **hash**: hset / hget / hdel / hlen / hgetall / hkeys / hvals
-- **list**: lpush / rpush / lpop / rpop / llen / lrange
-- **set**: sadd / srem / smembers / scard / sismember / sinter /
-  sunion / sdiff
-- **sorted set**: zadd / zrem / zscore / zcard / zrange
-
-## Pipeline-first sugar
-
-This is where async actually pays off — single network round-trip per
-batch instead of per command.
-
-```rust
 let replies = conn
     .pipeline()
-    .set(b"k1", b"v1")
-    .get(b"k2")
-    .incr(b"counter")
+    .set(b"a", b"1")
+    .get(b"a")
+    .incr(b"hits")
     .run(&mut conn)
     .await?;
-// replies: Vec<Reply>, one entry per queued command, in order.
+// replies.len() == 3; one Reply per queued command, in order.
 ```
 
-Per-command errors land as `Reply::Error(_)` inside the returned `Vec`
-— a single bad command does not tear down the batch. Outer `Err` is
-reserved for connection-level failures (transport, malformed frame).
+## Runtime features
 
-For commands not on the typed builder, use `push_raw(argv)`:
+Exactly one of these must be enabled. Zero features, or two-plus features at once, is a compile-time error — there is no implicit default.
 
-```rust
-conn.pipeline()
-    .push_raw(vec![b"CUSTOM".to_vec(), b"arg".to_vec()])
-    .run(&mut conn).await?;
-```
+| feature      | transport adapter                  | runtime crate pulled |
+|--------------|------------------------------------|----------------------|
+| `tokio`      | `tokio::net::TcpStream`            | `tokio`              |
+| `smol`       | `smol::net::TcpStream`             | `smol`               |
+| `async-std`  | `async_std::net::TcpStream`        | `async-std`          |
 
-### Degrade path
+Each runtime crate is pulled with `default-features = false` plus the minimum surface the adapter needs. These are the only crates.io dependencies in the kevy workspace — a deliberate carved exemption to the pure-Rust, zero-dependency rule, because the Rust async ecosystem has no std-only viable substrate.
 
-`Pipeline::into_cmds()` returns `Vec<Vec<Vec<u8>>>` — the raw argv
-batch. Feed them into a blocking client one at a time if you need to
-fall back:
+## URL backends
 
-```rust
-let cmds = conn.pipeline().get(b"a").set(b"b", b"v").into_cmds();
-// On blocking kevy_client::Connection:
-// for cmd in &cmds { blocking_conn.codec_mut().request(cmd)?; }
-```
+`AsyncConnection::open` takes the same URL facade as the blocking client. The TCP-shaped schemes go over the runtime's async socket; the in-process schemes are rejected (the blocking client is strictly faster for them — no point routing through an executor).
 
-## Cluster client
+| scheme       | target                          | supported by async client |
+|--------------|---------------------------------|---------------------------|
+| `tcp://`     | kevy or Redis-compat server     | yes                       |
+| `kevy://`    | kevy server (alias of `tcp://`) | yes                       |
+| `redis://`   | Redis or Redis-compat server    | yes                       |
+| `mem://`     | in-process embedded store       | no — use blocking client  |
+| `file:///`   | on-disk embedded store          | no — use blocking client  |
 
-`AsyncClusterClient` mirrors `kevy_client::ClusterClient` for
-cluster-mode servers — one TCP connection per shard, CRC16 routing per
-key, `-MOVED` never fires for correct routing.
+Opening a `mem://` or `file:///` URL with `AsyncConnection::open` returns `ErrorKind::Unsupported`.
 
-```rust
-use kevy_client_async::cluster::AsyncClusterClient;
+## Trade-offs
 
-let mut c = AsyncClusterClient::connect("127.0.0.1", 6004).await?;
-c.set(b"user:42", b"…").await?;
-```
+The blocking client is the default and stays the default for a reason:
 
-## Subscriber
+- **Sync code paths**: if you do not already have a runtime, do not stand one up for the client. `kevy-client` is pure-Rust, zero-dep, and avoids the executor's scheduling overhead on every command.
+- **Embedded backends**: `mem://` and `file:///` are synchronous in-process stores. The blocking client talks to them directly; the async client cannot.
+- **Single-shot commands**: one `.await` per command on a stock multi-threaded executor is measurable overhead vs. a direct syscall. The async win shows up under concurrency (many in-flight commands across tasks) or batching (pipeline collapsing round-trips).
 
-`AsyncSubscriber` mirrors `kevy_client::Subscriber` — a subscribed RESP
-connection can't send normal commands so it's a separate type from
-`AsyncConnection`. Drop-in for the blocking shape minus the
-socket-level `set_read_timeout` (use your runtime's timeout primitive:
-`tokio::time::timeout`, `async_io::Timer`, etc.).
+Use async when the surrounding app is already async. Use the pipeline builder when you have a batch of independent commands and the round-trip is the bottleneck. Stay on blocking otherwise.
 
-```rust
-use kevy_client_async::subscriber::AsyncSubscriber;
+## FAQ
 
-let mut sub = AsyncSubscriber::open("tcp://127.0.0.1:6004", &[b"ch"]).await?;
-let (channel, payload) = sub.recv_message().await?;
-```
+**Why must I pick exactly one runtime?**
+The crate compiles a single `TcpStream` adapter. Two adapters in one binary would mean either runtime-agnostic indirection on every I/O (overhead) or a giant cfg matrix nobody can maintain. Zero adapters would leave the public types unimplemented. A compile-time check on feature count keeps the misconfiguration loud and early.
 
-## Errors
+**Can I mix sync and async kevy clients in one process?**
+Yes. `kevy-client` (blocking) and `kevy-client-async` are independent crates and coexist freely — use blocking for an embedded `file:///` store and async for a network shard from the same binary, for instance. They do not share connections.
 
-Every async method returns `std::io::Result<T>` using the same
-`ErrorKind` mapping the blocking client uses:
+**What about pub/sub?**
+`AsyncSubscriber` mirrors the blocking `Subscriber`. A subscribed RESP connection cannot send normal commands, so it is a separate type from `AsyncConnection`. Per-message timeouts use your runtime's own primitive (`tokio::time::timeout`, `async_io::Timer`, etc.) rather than a socket-level read timeout.
 
-| source                                | `ErrorKind`        |
-|---------------------------------------|--------------------|
-| RESP `-ERR …` reply                   | `Other`            |
-| unexpected reply variant              | `Other`            |
-| malformed RESP frame                  | `InvalidData`      |
-| mid-read EOF                          | `UnexpectedEof`    |
-| bad URL / port / scheme               | `InvalidInput`     |
-| TLS / AUTH / embed URL scheme         | `Unsupported`      |
-| raw socket I/O                        | (native kind)      |
+**Does the pipeline builder force buffering on the send side?**
+Yes — that is the point. `pipeline().…run(&mut conn).await` serializes the whole batch into one write and reads N replies in order. If you need command-by-command back-pressure, call `set` / `get` directly instead of building a pipeline.
 
-Wider error context — the RESP error string, the unexpected
-variant name — is in the `io::Error`'s message
-(`.to_string()` / `.into_inner()`).
+## Examples in the repo
 
-## Dep-rule exemption
-
-`kevy-client-async` is the **only** crate in the kevy workspace
-permitted to take a crates.io dep. The exemption is per-crate +
-per-dep: `tokio`, `smol`, `async-std` are the only crates ever
-pulled (each with an inline `# EXEMPTION` comment in `Cargo.toml`).
-No other workspace crate may take `kevy-client-async` as a dep — that
-would bleed the exemption transitively. Full rationale lives in the
-v3-cluster RFC (F5) and the
-`feedback-pure-rust-no-c-principle.md` memory.
-
-## Examples
-
-- [`tokio_hello`](../crates/kevy-client-async/examples/tokio_hello.rs)
-  — open + ping + set/get + del.
-- [`pipeline`](../crates/kevy-client-async/examples/pipeline.rs)
-  — mixed batch in one round-trip.
+- [`tokio_hello`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client-async/examples/tokio_hello.rs) — open, ping, set/get, del.
+- [`pipeline`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client-async/examples/pipeline.rs) — mixed batch in one round-trip.

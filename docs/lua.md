@@ -1,211 +1,146 @@
 # Lua scripting
 
-kevy v1.27 ships Redis-compatible server-side Lua scripting via the
-in-house [`luna`](https://github.com/goliajp/luna) runtime. The
-ecosystem default is Lua 5.1 (every script copied from Redis docs,
-BullMQ, Redlock, or rate-limiter libraries Just Works); per-script
-opt-in to 5.2 / 5.3 / 5.4 / 5.5 is available via a one-line shebang.
+Server-side Lua scripting in kevy: how to run atomic scripts with `EVAL` / `EVALSHA`, what bindings exist, and how to opt into Lua dialects newer than 5.1.
 
-> **TL;DR.** `EVAL "return 1" 0` returns `:1`. Every Redis Lua API
-> from the official docs is implemented. The default dialect is 5.1.
-> Add `#!lua version=5.3` (or 5.2 / 5.4 / 5.5) on the first line of
-> a script to use a newer dialect.
+## When you need this
 
-## Why kevy doesn't use PUC Lua
+Reach for Lua scripting when you want to:
 
-Real Redis embeds PUC Lua 5.1, a small but C-bound interpreter. kevy
-is pure Rust with zero crates.io dependencies in the default server
-stack; embedding C would break that promise. The
-[`luna`](https://github.com/goliajp/luna) project is a pure-Rust Lua
-runtime authored by the same team. luna passes 123/123 of the
-official PUC test suite across Lua 5.1-5.5 (910 unit tests total, 0
-failures), so the compatibility floor is verified the same way PUC
-verifies itself.
+- Execute a small multi-command sequence atomically against one key (check-then-set, conditional counters, distributed locks).
+- Push read-modify-write logic that a single command can't express into the server, eliminating round trips.
+- Run a script published by an ecosystem library (BullMQ, Sidekiq, Bee Queue, Redlock, sliding-window rate limiters) unchanged.
 
-The carved exemption is documented in the workspace `Cargo.toml`:
-`kevy-lua` and `kevy-lua-host` transitively pull `luna-core` (and
-nothing else third-party — luna-core itself is 0-dep, CI-gated via
-`cargo-deny`). The default server / blocking-client / embedded
-stacks remain 0 third-party deps.
+For ordinary single-command access or for transactions across many keys with explicit optimistic locking, use plain commands or `MULTI` / `EXEC` instead.
 
-## Quick start
+## Core idea
 
-Run a kevy server, then:
+`EVAL` ships a Lua source string to the server, compiles it, and runs it on the shard that owns `KEYS[1]`. While the script runs, no other command on that shard interleaves with it — the whole script is one atomic unit. Inside the script, `redis.call("CMD", ...)` dispatches back through the normal command path, `KEYS` and `ARGV` give 1-indexed binary-safe access to the inputs, and the script's return value is marshaled to RESP. Loaded scripts are cached by SHA1, so `SCRIPT LOAD` + `EVALSHA` lets clients send the hash instead of the body on every call. The Lua runtime is [luna](https://github.com/goliajp/luna), a pure-Rust 5.1 – 5.5 interpreter. Default dialect is Lua 5.1 (matching what every Redis-ecosystem script expects); a one-line shebang opts a single script into 5.2, 5.3, 5.4, or 5.5.
+
+## Worked example: capped counter
+
+The script bumps a counter by 1, but only if the new value would stay at or below a cap. Returns the new value, or `nil` if the cap would be exceeded.
+
+```lua
+-- KEYS[1] = counter key
+-- ARGV[1] = cap (integer)
+local cur = tonumber(redis.call("GET", KEYS[1]) or "0")
+local cap = tonumber(ARGV[1])
+if cur + 1 > cap then
+  return nil
+end
+return redis.call("INCR", KEYS[1])
+```
+
+### Inline via `EVAL`
 
 ```sh
-redis-cli -p 6004 EVAL "return 1 + 1" 0
-# (integer) 2
-
-redis-cli -p 6004 EVAL "redis.call('SET', KEYS[1], ARGV[1]); return redis.call('GET', KEYS[1])" 1 mykey hello
-# "hello"
+redis-cli -p 6004 EVAL \
+  "local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
+   local cap = tonumber(ARGV[1])
+   if cur + 1 > cap then return nil end
+   return redis.call('INCR', KEYS[1])" \
+  1 quota:user:42 5
+# (integer) 1
+# … four more calls …
+# (integer) 5
+# next call:
+# (nil)
 ```
 
-## Commands
+### Cached via `SCRIPT LOAD` + `EVALSHA`
 
-| Command | Behaviour |
-|---|---|
-| `EVAL script numkeys key... arg...` | Compile + execute; auto-fills SCRIPT cache by SHA1. |
-| `EVALSHA sha1 numkeys key... arg...` | Run a previously-cached script; `-NOSCRIPT` if missing. |
-| `EVAL_RO` / `EVALSHA_RO` | Read-only variants. Write commands raise `-READONLY`. |
-| `SCRIPT LOAD script` | Cache without running. Returns the SHA1 hex (`$40\r\n...\r\n`). |
-| `SCRIPT EXISTS sha1...` | Array of `:1`/`:0` per input SHA1 in order. |
-| `SCRIPT FLUSH [SYNC\|ASYNC]` | Drop the cache + per-dialect VM pool. Both modes synchronous in v1.27 (the tag is preserved for future differentiation). |
+```sh
+SHA=$(redis-cli -p 6004 SCRIPT LOAD \
+  "local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
+   local cap = tonumber(ARGV[1])
+   if cur + 1 > cap then return nil end
+   return redis.call('INCR', KEYS[1])")
+echo "$SHA"
+# e.g. 7c3e0a9b1d4f...
 
-### KEYS and ARGV
+redis-cli -p 6004 EVALSHA "$SHA" 1 quota:user:42 5
+# (integer) 1
 
-Scripts see `KEYS` and `ARGV` as 1-indexed Lua tables of byte
-strings. Both are binary-safe — embedded NULs, `0xFF`, and other
-non-UTF-8 bytes round-trip cleanly.
+redis-cli -p 6004 SCRIPT EXISTS "$SHA"
+# 1) (integer) 1
+```
+
+If a client sends `EVALSHA` for a hash the server has never seen (cold start, `SCRIPT FLUSH`), kevy returns `-NOSCRIPT` and the client should fall back to `EVAL`. The script body cached by SHA1 includes any shebang line, so a 5.1 and a 5.4 copy of the same source are distinct cache entries.
+
+### Lua 5.4 dialect via shebang
 
 ```lua
--- EVAL "return KEYS[1] .. '/' .. ARGV[1]" 1 mykey hello
--- → "mykey/hello"
+#!lua version=5.4
+-- ARGV[1] = max retries before giving up
+local tries = tonumber(ARGV[1])
+local i = 0
+::again::
+i = i + 1
+local ok = redis.call("SET", KEYS[1], "owned", "NX", "PX", 3000)
+if type(ok) == "table" and ok.ok == "OK" then
+  return i
+end
+if i < tries then goto again end
+return redis.error_reply("LOCK_FAILED")
 ```
 
-## Dialect routing — `#!lua version=N`
+`goto` / labels and integer-typed arithmetic are 5.3+ features; the shebang routes this one script to the 5.4 VM pool while other scripts keep running on 5.1.
 
-The shebang is the v1.27 differentiator vs Redis / valkey. By
-default scripts run under Lua 5.1 (the Redis ecosystem default —
-BullMQ, Redlock, etc. are all 5.1-clean). Add a shebang as the first
-line to opt into newer dialects:
-
-```lua
-#!lua version=5.3
--- Now using Lua 5.3 — integer subtype, bitwise ops, `//` integer
--- divide, `string.pack`, etc.
-local i = 10 // 3              -- 5.3+ integer divide → 3
-local mask = 0xFF & 0x0F       -- 5.3+ bitwise → 0x0F
-```
-
-Recognised dialect tags: `5.1` / `51` / `5.2` / `52` / `5.3` / `53` /
-`5.4` / `54` / `5.5` / `55`. Unknown values return
-`-ERR unknown lua version: <X>`.
-
-The shebang is **part of the script bytes**, so the SHA1 cache key
-covers it: the same script source with vs without a shebang has two
-distinct entries. This means `EVALSHA` reproduces dialect routing
-without an extra command field.
-
-Extra Redis 7.0 Functions keys (`flags=` / `name=`) are recognised
-and tolerated (parsed and ignored at v1.27; FUNCTION LOAD comes in
-v1.28+).
-
-### Operator-side dialect lockdown
-
-Embedders who want to lock the server to pure-Redis-compat
-(5.1 only) can call `Bridge::set_allowed_dialects(&[LuaVersion::Lua51])`
-in code, or use the equivalent TOML config when wired through
-the kevy CLI (config wiring TBD post-P7c). Disallowed dialects
-return `-ERR dialect 5.3 disabled by [lua] allow_dialects`.
-
-## The `redis.*` host API
+## Bindings
 
 | Symbol | Behaviour |
 |---|---|
-| `redis.call(cmd, ...)` | Dispatch through the normal kevy command path. RESP error replies (anything starting with `-`) raise a Lua error. |
-| `redis.pcall(cmd, ...)` | Same, but errors become `{err = "msg"}` tables. |
-| `redis.status_reply(msg)` | Returns `{ok = msg}` which marshals as a RESP simple string. |
-| `redis.error_reply(msg)` | Returns `{err = msg}` which marshals as a RESP error reply. |
-| `redis.sha1hex(s)` | Hex SHA-1 digest (40 lowercase ASCII chars). |
-| `redis.log(level, msg)` | No-op stub. Production logging wiring is on the v1.28 backlog. |
-| `redis.replicate_commands()` | No-op. Redis 7+ semantics — every command is replicated. |
+| `redis.call(cmd, ...)` | Dispatch a kevy command. RESP errors raise a Lua error and abort the script unless caught with `pcall`. |
+| `redis.pcall(cmd, ...)` | Same dispatch, but RESP errors return as `{err = "msg"}` instead of raising. |
+| `redis.error_reply(msg)` | Build `{err = msg}`; when returned from the script it marshals to `-msg\r\n`. |
+| `redis.status_reply(msg)` | Build `{ok = msg}`; marshals to `+msg\r\n` (simple string). |
+| `redis.sha1hex(s)` | 40-char lowercase hex SHA-1 of the input bytes. |
+| `redis.replicate_commands()` | No-op. Every script already replicates atomically as a unit. |
+| `KEYS` | 1-indexed table of `numkeys` byte strings declared in the `EVAL` call. Binary-safe. |
+| `ARGV` | 1-indexed table of the remaining arguments. Binary-safe. |
+| `cjson.encode(v)` / `cjson.decode(s)` | Pure-Rust JSON codec. Same surface as the Redis `cjson` library. |
+| `cmsgpack.pack(v)` / `cmsgpack.unpack(s)` | Pure-Rust MessagePack codec. Same surface as the Redis `cmsgpack` library. |
 
-### Lua → RESP marshaling
+Lua return values marshal to RESP using the standard Redis rules: `nil` and `false` become nil-bulk, `true` becomes `:1`, integers and lossless-integer floats become integer replies, other floats and strings become bulk strings, `{ok=...}` becomes a simple string, `{err=...}` becomes an error reply, and a plain array becomes a multi-bulk reply (with the first-nil truncation rule).
 
-A script's return value is marshaled per the Redis EVAL rules:
+## Dialect selection
 
-| Lua | RESP |
+| First line of script | Dialect used |
 |---|---|
-| `nil` | `$-1\r\n` (nil bulk) |
-| `false` | `$-1\r\n` (Redis quirk) |
-| `true` | `:1\r\n` |
-| integer (5.3+) | `:N\r\n` |
-| integral float | `:N\r\n` (5.1 returns `1` as `Float(1.0)` — kevy collapses to integer when lossless) |
-| non-integral float | bulk string |
-| string | bulk string (binary-safe) |
-| `{ok = "msg"}` table | `+msg\r\n` (simple string) |
-| `{err = "msg"}` table | `-msg\r\n` (error — caller controls the prefix, so `{err = "NOSCRIPT no script"}` round-trips through as `-NOSCRIPT no script\r\n`) |
-| array table `{v1, v2, ...}` | `*N\r\n` + N marshaled elements (first-nil rule applies: `{1, nil, 3}` → `*1\r\n:1\r\n`) |
+| (no shebang) | Lua 5.1 (default; what BullMQ, Sidekiq, Redlock, and most published Redis-Lua snippets assume) |
+| `#!lua version=5.1` (or `51`) | Lua 5.1, explicit |
+| `#!lua version=5.2` (or `52`) | Lua 5.2 — `goto`, `_ENV`, ephemeron tables |
+| `#!lua version=5.3` (or `53`) | Lua 5.3 — integer subtype, bitwise operators, `//`, `string.pack` / `string.unpack` |
+| `#!lua version=5.4` (or `54`) | Lua 5.4 — to-be-closed variables, integer `for` semantics, new bitwise corners |
+| `#!lua version=5.5` (or `55`) | Lua 5.5 — latest published dialect |
+| `#!lua version=<other>` | `-ERR unknown lua version: <X>` |
 
-When `redis.call` returns an array reply (e.g. `MGET`), the Lua side
-sees a 1-indexed table; nil-bulk replies (`$-1\r\n`) become Lua
-`false`. Same shape as Redis.
+Redis 7.0 Functions metadata (`flags=`, `name=`) on the shebang line is parsed and ignored, so scripts written for the Functions surface load cleanly under `EVAL`.
 
-## Ecosystem scripts
+## Trade-offs and limits
 
-Every canonical real-world Redis-Lua script in the kevy test corpus
-runs unmodified through `EVAL`. From the integration test suite
-(`crates/kevy/tests/lua_ecosystem.rs`):
+- **No filesystem, network, or OS access.** `io`, `os`, `package`, `debug`, and `coroutine` are not loaded. Scripts cannot open files, make sockets, spawn processes, or read environment variables.
+- **No bytecode loading.** `load(bytecode)` and `string.dump` are blocked. Only Lua source can enter the VM, which closes the bytecode-verifier escape route that has historically broken Lua sandboxes.
+- **Whitelisted standard library.** `base`, `math`, `string`, `table`, `cjson`, and `cmsgpack` are available. Other standard modules are absent.
+- **Per-script time budget.** Each `EVAL` runs under an instruction budget of roughly 200 M ops (about 5 s of CPU on modern hardware, matching Redis's default `lua-time-limit`). Exceeding it returns a catchable Lua error and aborts the script.
+- **Per-script memory budget.** Each script runs in a fresh interpreter state seeded from a per-dialect VM pool; tables and strings created during the call are reclaimed when it returns. There is no shared mutable Lua state between calls — use kevy keys to persist anything.
+- **No nested `EVAL`.** A script calling `redis.call("EVAL", ...)` returns an error, matching Redis behaviour.
+- **One shard per script.** All `KEYS` must hash to the same slot. Scripts that touch multiple keys across shards get `-CROSSSLOT` at dispatch.
+- **JIT off by design.** The interpreter is used directly; the Cranelift JIT in luna is not linked into the kevy server, keeping the dependency surface minimal and avoiding JIT-time pauses.
 
-- **Redlock** unlock + extend (canonical antirez snippets)
-- **Atomic incr-or-init** counter pattern
-- **Rate limiters** (token-bucket exercised in the bridge tests;
-  sliding-window pending kevy `ZREMRANGEBYSCORE` implementation)
+## FAQ
 
-Reproducible reference scripts and the verification harness live in
-the v1.27 design package; see
-[`/tmp/lua-ecosystem-survey/LUNA-FEEDBACK-REPORT.md`](file:///tmp/lua-ecosystem-survey/LUNA-FEEDBACK-REPORT.md)
-on the kevy maintainer's machine (or the same path on any developer
-who runs the survey harness).
+**Will my existing Redis Lua script run unmodified?**
+If it targets Lua 5.1 (the Redis default) and only uses `redis.call` / `redis.pcall` / `redis.error_reply` / `redis.status_reply` / `KEYS` / `ARGV` / `cjson` / `cmsgpack`, yes. If it relies on the debug library, the OS library, or loading precompiled bytecode, no — those are sandboxed out.
 
-## Sandbox
+**How do I run a script across keys on different shards?**
+You can't — atomicity is the whole point. Split the work into per-shard scripts and coordinate at the client, or design the key layout so the relevant keys share a hash tag (`{user:42}:quota` and `{user:42}:counter` route to the same shard).
 
-Every per-dialect VM is built via luna's `Vm::sandbox(version)`
-builder with conservative defaults:
+**`EVALSHA` returns `-NOSCRIPT`. What do I do?**
+Re-send the same body via `EVAL`. The server caches it again and answers the call. Most client libraries handle this fallback automatically. `SCRIPT FLUSH` and process restarts both reset the cache.
 
-- Whitelisted stdlib only — `base` + `math` + `string` + `table`.
-  No `io`, `os`, `debug`, `package`, `coroutine`, `bit32`, or
-  `utf8` (the latter is on the v1.28 backlog if real demand
-  appears).
-- JIT off — luna's Cranelift JIT is intentionally disabled at the
-  Vm level. kevy uses `luna-core` (interpreter only), not
-  `luna-jit`, so the Cranelift deps are not in the kevy tree at
-  all.
-- Bytecode loading off — `load(bytecode)` and `string.dump` are
-  blocked. Only Lua source can enter the Vm.
-- Instruction budget: 200 M ops per `eval` (~5 s on modern
-  hardware, matching Redis's default `lua-time-limit`). Scripts
-  that exceed it return a catchable Lua error.
+**Can a script call `BLPOP` or other blocking commands?**
+No. Blocking commands inside `EVAL` would defeat the atomicity contract — the shard would either freeze waiting for itself or have to interleave other work. Blocking commands return an error when dispatched from a script.
 
-The TOML config plumbing for `[lua] time_limit_ms`, `[lua]
-allow_dialects`, and the eventual `[lua] max_memory` is on the v1.27
-P7c follow-up. The defaults are reasonable for the v1.27 ship.
-
-## Performance
-
-luna's interpreter is approximately **1.25–2.8× slower than PUC Lua
-5.1** on real Redis-Lua workloads (token-bucket / sliding-window /
-heavy method dispatch), per the LUNA-FEEDBACK-REPORT.md measurements.
-For typical Redis-Lua usage — small atomic ops, ≤ 10 `redis.call`
-per script — this is invisible: the per-EVAL overhead is a few
-microseconds, dwarfed by network RTT for any client outside the same
-host.
-
-luna's perf gap is largely concentrated in dispatch-heavy patterns
-that PUC's tight C interpreter handles well. The luna team is
-tracking this; expected improvements via the v1.2 ergonomics +
-perf sprint.
-
-## Limitations and future work
-
-| Item | Status |
-|---|---|
-| `cjson` / `cmsgpack` | Not implemented in v1.27 — **scope decision, not a dependency blocker**. Both algorithms can be implemented in pure Rust (~500 LOC each) as kevy-lua host stdlib modules. **Required to unblock BullMQ / Sidekiq Pro and other ecosystem libraries that bundle them as runtime deps.** Target v1.28. |
-| `FUNCTION LOAD` / `FCALL` | Not implemented. Redis 7.0 Functions surface. v1.28+. |
-| `LDB` debugger | Not implemented. Same on the Redis side for most users. v1.28+ if real demand. |
-| ~~Multi-shard EVAL routing~~ | **Fixed in v1.27.1.** EVAL/EVALSHA with `numkeys ≥ 1` now route to KEYS[1]'s shard via `Route::Single(3)`. SCRIPT cache moved to a process-global `Mutex<HashMap>` so SCRIPT LOAD on any shard reaches EVALSHA on any shard. Verified end-to-end against a 4-shard server in `crates/kevy/tests/lua_multishard.rs`. |
-| Nested EVAL (script calls `redis.call('EVAL', ...)`) | Returns `-ERR EVAL inside EVAL is not supported in v1.27`. Same restriction as real Redis. |
-
-See `.claude/rfcs/2026-06-23-v1.27-luna-bridge.md` for the
-complete v1.27 phase plan and follow-ups.
-
-## Related
-
-- [`crates/kevy-lua`](../crates/kevy-lua) — the bridge library
-  (sandbox + redis.* + RESP marshaling + shebang routing + SHA1
-  cache). Documented in its own `README.md`.
-- [`crates/kevy-lua-host`](../crates/kevy-lua-host) — the
-  kevy-side glue that lets the bridge reach `&mut Store`.
-- [`docs/uds.md`](uds.md) — UDS transport for low-latency local
-  clients (often paired with EVAL for atomic write-set scripts).
-- [`docs/tuning.md`](tuning.md) — server tuning knobs.
+**Why Lua 5.1 by default when newer versions exist?**
+Every script published in the Redis ecosystem assumes 5.1. Defaulting to 5.1 means those scripts copy-paste in without surprises around integer subtypes, bitwise operators, or `goto`. Opting individual scripts into a newer dialect via the shebang is a one-line change when you actively want the newer features.

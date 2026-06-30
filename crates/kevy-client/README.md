@@ -1,31 +1,23 @@
 # kevy-client
 
-Unified KV facade for kevy — switch between **in-process embedded** and
-**TCP server** backends with one URL string. Pure Rust, zero
-`crates.io` runtime deps.
+A URL-driven, blocking RESP client for kevy. The same code switches
+between an in-process backend and a remote TCP server by changing one
+URL string.
+
+- Pure Rust, zero `crates.io` runtime dependencies.
+- Backends: in-process (anonymous, named, or persistent), kevy server,
+  any Redis-protocol server.
+- All five Redis data types, transactions with `WATCH`, scan iteration,
+  and pub/sub with a borrowing iterator.
 
 ```rust
 use kevy_client::Connection;
 
-let mut conn = Connection::open(&std::env::var("MY_KEVY_URL").unwrap())?;
+let mut conn = Connection::open("tcp://127.0.0.1:6379")?;
 conn.set(b"hello", b"world")?;
 assert_eq!(conn.get(b"hello")?, Some(b"world".to_vec()));
 # Ok::<(), std::io::Error>(())
 ```
-
-The same business code runs against any of:
-
-| `MY_KEVY_URL` | Backend |
-|---|---|
-| `mem://` | in-process, in-memory only |
-| `file:///var/lib/myapp/` | in-process, persistent (snapshot + AOF) |
-| `kevy://prod-cache:6379` | TCP RESP server, kevy-native scheme |
-| `redis://prod-cache:6379/0` | TCP RESP server, standard Redis URL |
-| `tcp://prod-cache:6379` | TCP RESP server, raw (no SELECT round-trip) |
-
-Auth (`redis://user:pass@…`) and TLS (`rediss://`) are rejected up
-front — kevy ships without either; reach for stunnel / a proxy if you
-need them at the network boundary.
 
 ## Install
 
@@ -33,153 +25,24 @@ need them at the network boundary.
 cargo add kevy-client
 ```
 
-## Why a facade
+## URL backends
 
-Without this crate the typical downstream config has two parallel
-codepaths — one for "open an embedded `Store` with a path" and one for
-"validate a `redis://` URL and open a TCP client". They share none of
-their setup, error handling, or test fixtures. `Connection::open(url)`
-replaces all of that with one builder.
+| URL | Backend |
+|---|---|
+| `mem://` | Anonymous in-process, per-open fresh; no shared bus. |
+| `mem://<name>` | Shared in-process bus keyed by `<name>` — two opens of the same name share one `Store` + pub/sub bus, even across threads. |
+| `file:///abs/path` | Shared in-process with snapshot + AOF persistence in `path`. |
+| `kevy://host:port` | TCP RESP server, kevy-native URL scheme. |
+| `redis://host:port` | TCP RESP server, standard Redis URL. |
+| `tcp://host:port` | TCP RESP, raw — no `SELECT` round-trip on connect. |
 
-The two backends were the kevy story anyway:
+`redis://user:pass@host` (AUTH) and `rediss://` (TLS) are rejected up
+front — kevy ships without either. Front it with a TLS-terminating
+sidecar and an authentication proxy if you need them.
 
-- **Embedded** (`kevy-embedded`): in-process, zero network, builds for
-  `wasm32`. Use it for embedded caches and single-process apps.
-- **Server** (`kevy` binary or Docker image): thread-per-core
-  reactor + shared-nothing routing across cores + TCP RESP wire.
+## Quick start
 
-`kevy-client` ties both into one API so your app picks at runtime via
-environment variable / config file — develop against `mem://`,
-integration-test against `file:///tmp/test`, deploy against
-`kevy://prod-cache:6379`. No code change.
-
-## Command coverage (v1.7.0)
-
-All five Redis data types plus generic-key ops, persistence, the full
-pub/sub cycle (including in-process embedded delivery), multi-key
-operations, scan/keys, and `MULTI`/`EXEC`/`DISCARD` transactions on the
-remote backend. Methods on `Connection`:
-
-**Connection / generic:** `ping`, `dbsize`, `flush`, `type_of`,
-`exists`, `del`, `expire`, `persist`, `ttl_ms`.
-
-**String:** `set`, `set_with_ttl`, `get`, `incr`, `incr_by`.
-
-**Hash:** `hset`, `hget`, `hdel`, `hlen`, `hgetall`, `hkeys`, `hvals`.
-
-**List:** `lpush`, `rpush`, `lpop`, `rpop`, `llen`, `lrange`.
-
-**Set:** `sadd`, `srem`, `smembers`, `scard`, `sismember`.
-
-**Sorted set:** `zadd`, `zrem`, `zscore`, `zcard`, `zrange`.
-
-**Multi-key (v1.4.0):** `mget`, `mset`, `sinter`, `sunion`, `sdiff`.
-
-**Keyspace iteration (v1.4.0):** `keys(pattern)`, `scan(cursor, pattern, count)`,
-`randomkey`. Embedded `scan` finishes in one round (any non-zero cursor
-returns empty); the remote backend honours the server's real cursor.
-
-**Transactions (v1.4.0 + v1.5.0 + v1.7.0, remote only):** `conn.multi()` →
-`Transaction` handle. Three queue surfaces — raw
-`queue(&[verb, args...])`, v1.5.0's typed builders (`set`, `get`, `del`,
-`exists`, `incr`, `incr_by`, `mget`, `mset`) that chain via `&mut Self`,
-and v1.7.0's typed reply cursor (`exec_typed` / `exec_watched_typed`
-returns a [`TransactionReplies`] with `next_int` / `next_bulk` /
-`next_ok` / `next_array_of_bulks` / `expect_empty`). Plus
-[`Connection::watch`] / [`unwatch`] for optimistic concurrency.
-Embedded returns `ErrorKind::Unsupported` — every Connection method
-already serialises on the embed mutex, so MULTI's locking guarantee
-maps to a no-op there.
-
-```rust
-// raw shape, unchanged from v1.4.0
-let mut txn = conn.multi()?;
-txn.queue(&[b"SET", b"counter", b"0"])?;
-txn.queue(&[b"INCR", b"counter"])?;
-let replies = txn.exec()?;  // Vec<kevy_resp::Reply>
-
-// v1.5.0: typed builders chain with `?` directly
-let mut txn = conn.multi()?;
-txn.set(b"a", b"1")?
-    .incr(b"counter")?
-    .del(&[b"tmp"])?;
-let replies = txn.exec()?;
-
-// v1.5.0: WATCH-driven optimistic concurrency
-conn.watch(&[b"counter"])?;
-let mut txn = conn.multi()?;
-txn.incr(b"counter")?;
-match txn.exec_watched()? {
-    Some(replies) => assert_eq!(replies.len(), 1),
-    None         => { /* watched key changed — retry the whole block */ }
-}
-
-// v1.7.0: typed reply cursor — drop the manual `Reply` matches
-let mut txn = conn.multi()?;
-txn.set(b"a", b"1")?.incr(b"counter")?.get(b"a")?;
-let mut r = txn.exec_typed()?;
-r.next_ok()?;                                 // SET → +OK
-let counter: i64 = r.next_int()?;             // INCR → :N
-let prior: Option<Vec<u8>> = r.next_bulk()?;  // GET  → $… or nil
-r.expect_empty()?;                            // arity gate
-```
-
-**Pub/sub:** `Connection::publish` for the producer side. The consumer
-side is `Subscriber`, a separate type with its own backing channel
-because subscribed connections cannot send normal commands per the
-RESP spec. v1.6.0 added `recv_message` (auto-skips
-`(p)?(un)?subscribe` ack frames and returns `(channel, payload)`),
-and `psubscribe` / `punsubscribe` for pattern subscriptions. v1.7.0
-adds borrowing iterators — `Subscriber::events()` for every frame and
-`Subscriber::messages()` for ack-skipped `(channel, payload)` tuples
-— so consumers can write `for msg in sub.messages() { … }` instead of
-hand-rolling a `loop { match sub.recv() … }`. Both iterators
-terminate only on `UnexpectedEof`; transient errors (e.g. a read
-timeout) surface as `Some(Err(_))` so callers decide whether to keep
-going. Async runtimes consume via `spawn_blocking` (see
-`docs/pubsub.md` in the workspace).
-
-**v1.3.0 makes embed work the same way as the network**: two opens of the
-same `mem://<name>` or `file:///path` URL route through a process-local
-registry and share one backing `Store` + pub/sub bus. So the same code
-runs against `mem://` in dev and `kevy://` in prod with **no scheme
-branching**:
-
-```rust
-use kevy_client::{Connection, Subscriber, PubsubEvent};
-
-let url = std::env::var("KEVY_URL").unwrap_or_else(|_| "mem://mailbus".into());
-let mut sub = Subscriber::open(&url, &[b"news"])?;
-let mut pubconn = Connection::open(&url)?;
-
-// Drain the SUBSCRIBE ack first.
-let _ack = sub.recv()?;
-
-// Same URL → same bus, even across threads.
-pubconn.publish(b"news", b"hello world")?;
-
-if let PubsubEvent::Message { channel, payload } = sub.recv()? {
-    println!("{}: {}", String::from_utf8_lossy(&channel),
-                       String::from_utf8_lossy(&payload));
-}
-# Ok::<(), std::io::Error>(())
-```
-
-Anonymous `mem://` (no name) stays per-call isolated — `Subscriber::open`
-rejects it with `ErrorKind::Unsupported` since no other producer can
-reach it. Use `mem://<some-name>` for a shared bus.
-
-If you need a command this crate doesn't expose yet, drop down to the
-raw backend:
-
-```rust
-match &mut conn {
-    kevy_client::Connection::Embedded(s) => { /* call any kevy_embedded::Store method */ }
-    kevy_client::Connection::Remote(c)   => { /* call c.request(&[...]) directly */ }
-}
-```
-
-## Same code, two backends — test pattern
+### Same code, two backends
 
 ```rust
 use kevy_client::Connection;
@@ -190,19 +53,178 @@ fn cache_smoke(c: &mut Connection) -> std::io::Result<()> {
     Ok(())
 }
 
-#[test]
-fn smoke_embedded() -> std::io::Result<()> {
-    cache_smoke(&mut Connection::open("mem://")?)
-}
-
-# // Run when a kevy server is up at $TEST_KEVY:
-#[test]
-#[ignore]   // gated on $TEST_KEVY env var pointing at a running server
-fn smoke_remote() -> std::io::Result<()> {
-    let url = std::env::var("TEST_KEVY").unwrap();
-    cache_smoke(&mut Connection::open(&url)?)
-}
+let url = std::env::var("KEVY_URL")
+    .unwrap_or_else(|_| "mem://app".into());
+cache_smoke(&mut Connection::open(&url)?)?;
+# Ok::<(), std::io::Error>(())
 ```
+
+Set `KEVY_URL=mem://app` for dev, `KEVY_URL=kevy://prod:6379` for
+production. No code change.
+
+### Transactions
+
+```rust
+use kevy_client::Connection;
+
+# fn run() -> std::io::Result<()> {
+let mut conn = Connection::open("tcp://127.0.0.1:6379")?;
+
+let mut txn = conn.multi()?;
+txn.set(b"a", b"1")?
+    .incr(b"counter")?
+    .get(b"a")?;
+let mut r = txn.exec_typed()?;
+r.next_ok()?;                                 // SET → +OK
+let counter: i64 = r.next_int()?;             // INCR → :N
+let prior: Option<Vec<u8>> = r.next_bulk()?;  // GET  → $... or nil
+r.expect_empty()?;                            // arity check
+# Ok(())
+# }
+```
+
+For optimistic concurrency, watch a key before the transaction:
+
+```rust
+use kevy_client::Connection;
+
+# fn run() -> std::io::Result<()> {
+let mut conn = Connection::open("tcp://127.0.0.1:6379")?;
+
+conn.watch(&[&b"counter"[..]])?;
+let mut txn = conn.multi()?;
+txn.incr(b"counter")?;
+match txn.exec_watched()? {
+    Some(replies) => { /* committed */ }
+    None         => { /* watched key changed — retry the whole block */ }
+}
+# Ok(())
+# }
+```
+
+Transactions on the in-process backends return `ErrorKind::Unsupported`
+— every `Connection` method already serialises on the embed mutex, so
+`MULTI`'s locking guarantee is a no-op in-process.
+
+### Pub/sub
+
+```rust
+use kevy_client::{Connection, Subscriber, PubsubEvent};
+
+# fn run() -> std::io::Result<()> {
+let url = std::env::var("KEVY_URL")
+    .unwrap_or_else(|_| "mem://news".into());
+
+let mut sub = Subscriber::open(&url, &[&b"updates"[..]])?;
+let mut pubconn = Connection::open(&url)?;
+
+let _ack = sub.recv()?;                       // drain the SUBSCRIBE ack
+pubconn.publish(b"updates", b"hello")?;
+
+for event in sub.messages().take(1) {
+    let (channel, payload) = event?;
+    println!("{}: {}",
+        String::from_utf8_lossy(&channel),
+        String::from_utf8_lossy(&payload));
+}
+# Ok(())
+# }
+```
+
+Pattern subscriptions use `psubscribe(&[&b"news.*"[..]])`.
+
+`Subscriber::messages()` and `Subscriber::events()` are borrowing
+iterators. The `messages()` form auto-skips the
+`(p)?(un)?subscribe` ack frames and yields `(channel, payload)` tuples
+directly. Both iterators terminate on `UnexpectedEof`; transient
+errors surface as `Some(Err(_))` so callers decide whether to keep
+going.
+
+Anonymous `mem://` (no name) is rejected by `Subscriber::open` —
+no other producer can reach it. Use `mem://<some-name>` for a shared
+bus.
+
+### Cluster-aware routing
+
+`ClusterClient` discovers the topology of a cluster-mode kevy server
+and routes each key straight to the owning shard, eliminating the
+cross-shard forwarding hop:
+
+```rust,no_run
+use kevy_client::ClusterClient;
+
+let mut cc = ClusterClient::connect("127.0.0.1", 6380)?;  // any shard port as seed
+cc.set(b"user:42", b"alice")?;                             // routed by CRC16
+let v = cc.get(b"user:42")?;
+let removed = cc.del(&[&b"a"[..], &b"b"[..], &b"c"[..]])?; // multi-key may span shards
+# Ok::<(), std::io::Error>(())
+```
+
+Full cluster-mode guide: [`docs/cluster.md`](https://github.com/goliajp/kevy/blob/develop/docs/cluster.md).
+
+### Drop down to the raw backend
+
+```rust
+use kevy_client::Connection;
+
+# fn handle(conn: &mut Connection) -> std::io::Result<()> {
+match conn {
+    Connection::Embedded(s) => {
+        // call any kevy_embedded::Store method
+    }
+    Connection::Remote(c)   => {
+        // call c.request(&[...]) directly
+    }
+}
+# Ok(())
+# }
+```
+
+## API surface
+
+**Connection / generic**: `ping`, `dbsize`, `flush`, `type_of`,
+`exists`, `del`, `expire`, `persist`, `ttl_ms`.
+
+**Strings**: `set`, `set_with_ttl`, `get`, `incr`, `incr_by`.
+
+**Hashes**: `hset`, `hget`, `hdel`, `hlen`, `hgetall`, `hkeys`,
+`hvals`.
+
+**Lists**: `lpush`, `rpush`, `lpop`, `rpop`, `llen`, `lrange`.
+
+**Sets**: `sadd`, `srem`, `smembers`, `scard`, `sismember`.
+
+**Sorted sets**: `zadd`, `zrem`, `zscore`, `zcard`, `zrange`.
+
+**Multi-key**: `mget`, `mset`, `sinter`, `sunion`, `sdiff`.
+
+**Keyspace iteration**: `keys(pattern)`,
+`scan(cursor, pattern, count)`, `randomkey`. In-process backends
+finish in one round (any non-zero cursor returns empty); the remote
+backend honours the server's real cursor.
+
+**Transactions** (remote only): `Connection::multi` returns a
+`Transaction`. Queue commands via the typed builders (`set`, `get`,
+`del`, `exists`, `incr`, `incr_by`, `mget`, `mset`), commit with
+`exec`, `exec_typed`, `exec_watched`, or `exec_watched_typed`. The
+typed cursor (`exec_typed`) hands back a `TransactionReplies` with
+`next_ok` / `next_int` / `next_bulk` / `next_array_of_bulks` /
+`expect_empty`.
+
+**Pub/sub**: `Connection::publish` for the producer side;
+`Subscriber` for the consumer side, with `recv`, `recv_message`,
+`subscribe`, `unsubscribe`, `psubscribe`, `punsubscribe`, and the
+`messages()` / `events()` iterators.
+
+**Cluster routing**: `ClusterClient::connect` discovers topology and
+routes by CRC16 slot.
+
+## Async mirror
+
+For applications already running on `tokio`, `smol`, or `async-std`,
+use [`kevy-client-async`](https://crates.io/crates/kevy-client-async)
+— the API surface mirrors `kevy-client` exactly, with `.await` on
+every call.
 
 ## License
 
