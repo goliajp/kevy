@@ -4,6 +4,50 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.10] — 2026-07-01 — **`kevy-embedded` 1.9.0**: scan family (mailrs feedback ask #7 closed)
+
+**Theme**: kevy-embedded 1.8.2 → 1.9.0 — closes mailrs ask #7 fully (`scan` / `hscan` / `zscan`) by shipping BOTH API shapes from the v1.5.0 reply note: cursor-based (Redis-shaped, matching mailrs's suggested signature) AND iterator-based (Rust-shaped, ergonomic).
+
+### Added — `kevy_embedded::Store` (cursor-based)
+
+- **`crates/kevy-embedded/src/ops_scan.rs`** (~115 LOC).
+- `scan(cursor, pattern, count) -> (u64, Vec<Vec<u8>>)` — keyspace walk. `cursor = 0` starts; `next_cursor = 0` means done.
+- `hscan(key, cursor, count) -> io::Result<(u64, Vec<(Vec<u8>, Vec<u8>)>)>` — hash field walk.
+- `zscan(key, cursor, count) -> io::Result<(u64, Vec<(Vec<u8>, f64)>)>` — sorted-set member walk in ascending score order.
+
+### Added — `kevy_embedded::Store` (iterator-based wrappers)
+
+- `keys_iter(pattern) -> impl Iterator<Item = Vec<u8>>` — Rust-idiomatic `for k in store.keys_iter(...)`.
+- `hash_iter(key) -> impl Iterator<Item = (Vec<u8>, Vec<u8>)>`.
+- `zset_iter(key) -> impl Iterator<Item = (Vec<u8>, f64)>`.
+
+### Implementation note (semantics)
+
+Each scan call **snapshots the matching subset in one shot** (via `collect_keys` / `hgetall` / `zrange`) then slices by cursor. For in-process embedded use this is the simplest correct semantics — the snapshot is stable inside one walk even under concurrent writers, and memory cost is bounded by the matching subset.
+
+For very large keyspaces a future ship can add a truly incremental cursor that walks the underlying B-tree without materialising the whole match set. The API shape stays the same; only the implementation changes.
+
+### Tests
+
+8 new unit tests at `crates/kevy-embedded/src/store_tests_scan.rs` (130 LOC) covering full-keyspace paged walk, pattern filter, zero-count edge case, iterator wrappers for keys/hash/zset, and score-order verification on zscan.
+
+### Empirical (Mac M2 Pro, kevy v2.0.10)
+
+```
+cargo test --release -p kevy-embedded
+test result: ok. 114 passed; 0 failed (was 106 in v2.0.9; +8 scan).
+```
+
+### Coverage status vs mailrs feedback (16 asks) — updated
+
+| # | Status |
+|---|--------|
+| 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 14, 15, 16 | ✅ fully closed (= **15 of 16**) |
+| 6 | ⏳ atomic — shape conversation pending |
+| 13 | ⏳ pipeline — shape conversation pending |
+
+**15 of 16 fully closed; only #6 atomic and #13 pipeline remain.** Both still need 1 short reply from mailrs (see [v1.7.0 update note](/Users/doracawl/workspace/stables/mailrs/.claude/notes/kevy-response-zset-hash-multi-2026-07-01.md)).
+
 ## [v2.0.9] — 2026-07-01 — **`kevy-embedded` 1.8.2**: README Phase 2+ ops showcase
 
 **Theme**: pure docs ship. No code changes — adds a comprehensive "Phase 2+ ops (v1.5.0 → v1.8.1, +41 new methods)" section to `crates/kevy-embedded/README.md` that exhibits every new method shipped across v2.0.3 → v2.0.8 with working Rust examples. The example compiles cleanly under `cargo test --doc` (verified locally).

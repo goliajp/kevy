@@ -502,3 +502,6 @@ mod tests_bitmap;
 #[cfg(test)]
 #[path = "store_tests_bonus.rs"]
 mod tests_bonus;
+#[cfg(test)]
+#[path = "store_tests_scan.rs"]
+mod tests_scan;
