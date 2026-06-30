@@ -35,14 +35,19 @@ kevy-replicate = { path = "../kevy-replicate", version = "2.0.0", default-featur
 kevy-resp = { path = "../kevy-resp", version = "2.0.0" }
 
 [dev-dependencies]
-# Phase 2 e2e: brings up a real kevy server primary in-process so the
-# embed-as-read-replica integration test exercises the full TCP path
-# (handshake → streaming → apply). Dev-only — no publish-time cycle
-# because `kevy` does not depend on `kevy-embedded`.
-kevy = { path = "../kevy", version = "2.0.0" }
+# v2.0.20: the `kevy` dev-dep blocks `cargo publish kevy-embedded`
+# because the chain publishes `kevy` LATER (kevy depends on the
+# embedded surface transitively, so kevy-embedded MUST publish
+# first). cargo strips path-only dev-deps (no `version` field) from
+# the published Cargo.toml, so leaving it as a path-only dev-dep
+# lets local `cargo test` use it (`tests/server_replica_e2e.rs`
+# needs `kevy::KevyCommands`) while keeping the publish path
+# unblocked.
+kevy = { path = "../kevy" }
 kevy-rt = { path = "../kevy-rt", version = "2.0.0" }
 # Used by examples/embed_vs_server.rs to give the Rust caller a single
 # unified blocking-client surface so the embed-vs-server bench compares
 # the same Rust code against different backends (kevy embed vs kevy
-# server vs valkey vs redis). Dev-only.
+# server vs valkey vs redis). Dev-only; `kevy-client` is published
+# BEFORE `kevy-embedded` in the chain.
 kevy-client = { path = "../kevy-client" }
