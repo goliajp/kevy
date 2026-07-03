@@ -107,3 +107,60 @@ campaign closes — with both improvements and the restored legacy line.
   per-thread runs.
 - scripts `/tmp/kevy-profile-one.sh`, `/tmp/kevy-perthread.sh`,
   `/tmp/kevy-spin-probe.sh`(pkill 模式已修), `/tmp/kevy-bisect-probe.sh`.
+
+## Round 2 (same day) — era sweep + step-1 attribution
+
+### Era sweep (2 instances each, plain release, spin probe N=60M)
+
+| ref | instances | read |
+|---|---|---|
+| v1.16.0 | 9.98M · 9.97M | full speed, tight — pre-decay |
+| v1.17.0 | 9.59M · 9.59M | **step 1: -4%** |
+| v1.18.0 | 9.21M · 8.87M | drift + spread begins |
+| v1.22.0 | 9.59M · 9.21M | mixed |
+| v1.23.0 | 8.02M · 8.26M | **step 2: the v1.23 perf sprint itself** |
+| v1.24.0 | 9.20M · 8.26M | mode mixture |
+| v1.25.0 | 8.56M · 8.53M | settled at today's band |
+
+E15 (0f9e1d7) A/B: 8.56M vs parent 8.25M — E15 exonerated (both
+already decayed; the v1.25-era micro-attacks are not the step).
+
+### Step 1 = 286c4a2 (v1.17 INFO cross-shard observability)
+
+The only hot-path commit in v1.16.0..v1.17.0. A/B/A:
+
+- parent: 10.41M · 9.97M (0/2 low; old-era baseline never draws low)
+- at 286c4a2 (5 instances): 9.58 · 9.99 · 9.98 · 9.58 · 10.41 —
+  **2/5 draw a new 9.58M mode** that the parent never draws.
+
+So the commit does not shift the mean uniformly — it **introduces a
+lower attractor** and per-instance luck picks it. This is also the
+2026-06-14 debt coming due verbatim: the v1.17 ship note said
+"per-command TLS counters ~1-2ns, e2e throughput NOT perfgated on
+Linux — asked dogfood to re-measure"; nobody ever did.
+
+Micro-mechanism inside 286c4a2 still open (candidates: per-command
+thread-local Cell access cost incl. lazy-init branch, the O(1)
+`Store::expires` counter on every write's insert/remove path,
+`ShardStats` Arc allocation adjacency). `ShardStats` is exactly 64 B
+(8×AtomicU64) but only tick-published at 10 Hz — false sharing of the
+slots themselves cannot cost 4%.
+
+### Attribution so far
+
+- **Step 1 (-4%, mode instability introduced): 286c4a2** — empirical,
+  5+2 instances.
+- **Step 2 (additional ~-10%): inside v1.22.0..v1.23.0** (the 16-attack
+  perf sprint that bought pinned +19%). Needs its own within-sprint
+  sweep — predicate: any instance < 8.8M (8.0–8.3 vs 9.2–9.6
+  separation).
+
+### Next probes (updated)
+
+1. Step-2 sweep across the v1.23 sprint attack commits (same
+   spin-probe harness, 2 instances/point; ~16 points ≈ 40 min).
+2. 286c4a2 micro-mechanism: diag builds of the commit minus (a) the
+   start_command counter hook, (b) the expires counter — one angle
+   probe each.
+3. Fix design once both steps are pinned; joint perfgate (legacy n>3
+   + pinned angles must hold +19%).
