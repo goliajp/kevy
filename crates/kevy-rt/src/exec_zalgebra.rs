@@ -13,6 +13,9 @@
 
 use std::collections::HashMap;
 
+/// One source key's scored members in request order.
+type ScoredInput = Vec<(Vec<u8>, f64)>;
+
 use crate::Commands;
 use crate::message::{Agg, Gathered, Inbound, Op, SmallReply, ZCombine};
 use crate::shard::Shard;
@@ -113,7 +116,7 @@ impl<C: Commands> Shard<C> {
 fn collect_scored(
     keys: &[Vec<u8>],
     got: &HashMap<Vec<u8>, Gathered>,
-) -> (Vec<Vec<(Vec<u8>, f64)>>, bool) {
+) -> (Vec<ScoredInput>, bool) {
     let mut inputs = Vec::with_capacity(keys.len());
     for k in keys {
         match got.get(k) {

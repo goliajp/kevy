@@ -17,6 +17,9 @@ use std::io;
 
 use kevy_store::{ZAggregate, zdiff, zinter, zintercard, zunion};
 
+/// One source key's scored members (sets contribute score 1.0).
+type ScoredInput = Vec<(Vec<u8>, f64)>;
+
 #[cfg(not(target_arch = "wasm32"))]
 use crate::replica_glue::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
@@ -27,7 +30,7 @@ fn ensure_writable(_s: &Store) -> io::Result<()> {
 }
 
 impl Store {
-    fn gather_scored(&self, keys: &[&[u8]]) -> io::Result<Vec<Vec<(Vec<u8>, f64)>>> {
+    fn gather_scored(&self, keys: &[&[u8]]) -> io::Result<Vec<ScoredInput>> {
         keys.iter()
             .map(|k| self.wshard(k).store.zset_or_set_members(k).map_err(store_err))
             .collect()
