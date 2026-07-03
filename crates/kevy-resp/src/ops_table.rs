@@ -244,11 +244,13 @@ pub const OP_TABLE: &[OpSpec] = &[
     // NB: catalog mutations are deliberately NOT data writes — the
     // `write` column tracks the AOF/propagation path, and the catalog
     // persists via its own sidecar (indexes are derived state).
-    op("IDX.CREATE",   RD, NG,   None,            None,    SERVER),
-    op("IDX.DROP",     RD, NG,   None,            None,    SERVER),
-    op("IDX.LIST",     RD, NG,   None,            None,    SERVER),
-    op("IDX.QUERY",    RD, NG,   None,            None,    SERVER),
-    op("IDX.COUNT",    RD, NG,   None,            None,    SERVER),
+    op("IDX.CREATE",   RD, NG,   None,            None,    SERVER | ESTORE),
+    op("IDX.DROP",     RD, NG,   None,            None,    SERVER | ESTORE),
+    op("IDX.LIST",     RD, NG,   None,            None,    SERVER | ESTORE),
+    op("IDX.QUERY",    RD, NG,   None,            None,    SERVER | ESTORE),
+    op("IDX.COUNT",    RD, NG,   None,            None,    SERVER | ESTORE),
+    // IDX.VERIFY: server-only for now (embedded exposes idx_stats;
+    // the drift audit arrives with the五轴 verify hardening).
     op("IDX.VERIFY",   RD, NG,   None,            None,    SERVER),
     op("FEED.READ",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("FEED.TAIL",    RD, NG,   None,            None,    SERVER | ESTORE),
