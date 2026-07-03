@@ -262,3 +262,47 @@ fn clean_restart_keeps_cursor_unclean_bumps() {
     drop(srv3);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn save_snapshot_records_feed_cursor() {
+    let srv = Feed::start();
+    let mut c = srv.connect();
+    for i in 0..16 {
+        cmd(&mut c, &[b"SET", format!("sc{i}").as_bytes(), b"v"]);
+    }
+    let r = cmd(&mut c, &[b"SAVE"]);
+    assert!(r.starts_with(b"+OK"), "{:?}", String::from_utf8_lossy(&r));
+    // Give the bg persist commit a beat, then read each shard's dump
+    // header: its cursor must equal that shard's tail at freeze time
+    // (no writes happened since).
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let mut seen_any = false;
+    for sh in 0..NSHARDS {
+        let dump = srv.dir.join(format!("dump-{sh}.rdb"));
+        if !dump.exists() {
+            continue;
+        }
+        let cur = kevy_persist::read_snapshot_cursor(&dump).unwrap();
+        let (g, off) = parse_tail(&cmd(&mut c, &[b"FEED.TAIL", sh.to_string().as_bytes()]));
+        assert_eq!(cur, Some((g, off)), "shard {sh} snapshot cursor = live tail");
+        if off > 0 {
+            seen_any = true;
+        }
+    }
+    assert!(seen_any, "at least one shard had frames + a cursor");
+}
+
+#[test]
+fn prefix_stats_fanout() {
+    let srv = Feed::start();
+    let mut c = srv.connect();
+    for i in 0..20 {
+        cmd(&mut c, &[b"SET", format!("ps:{i}").as_bytes(), b"v"]);
+    }
+    cmd(&mut c, &[b"SET", b"other:1", b"v"]);
+    cmd(&mut c, &[b"EXPIRE", b"ps:1", b"1000"]);
+    let r = cmd(&mut c, &[b"PREFIX.STATS", b"ps:"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("keys\r\n:20\r\n"), "20 keys under ps:, got {s}");
+    assert!(s.contains("expires\r\n:1\r\n"), "1 ttl'd, got {s}");
+}

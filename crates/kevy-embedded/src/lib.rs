@@ -95,7 +95,7 @@ pub use metric::KevyMetric;
 pub use kevy_persist::RewriteStats;
 pub use kevy_store::{ExpireStats, ScoreBound, StoreError, ZAggregate, ZaddFlags, ZaddReport};
 #[cfg(not(target_arch = "wasm32"))]
-pub use ops_feed::{Change, ChangeBatch, FeedError};
+pub use ops_feed::{Change, ChangeBatch, FeedError, PrefixInfo};
 pub use pubsub::{PubsubFrame, Subscription};
 pub use store::{Store, WeakStore};
 

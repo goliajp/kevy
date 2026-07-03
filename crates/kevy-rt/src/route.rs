@@ -47,6 +47,8 @@ pub enum Route {
     FeedTail,
     /// v2.3 `FEED.SHARDS` — answered locally.
     FeedShards,
+    /// v2.3 `PREFIX.STATS <prefix>` — all-shard fanout, summed.
+    PrefixStats,
     /// `KEYS pattern` — every shard returns its matching keys.
     Keys(Option<Vec<u8>>),
     /// `SCAN` (cursor-0 approximation) — like KEYS but replies `[cursor, keys]`.

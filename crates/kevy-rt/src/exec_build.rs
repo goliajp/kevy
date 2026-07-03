@@ -78,6 +78,13 @@ impl<C: Commands> Shard<C> {
             Route::SInter => self.build_gather(args, GatherKind::Set, MultiOp::SInter),
             Route::ZAlgebraStore(combine) => self.build_zalgebra_store(args, combine),
             Route::ZInterCard => self.build_zintercard(args),
+            Route::PrefixStats => {
+                let prefix = args.get(1).map(|p| p.to_vec()).unwrap_or_default();
+                let targets = (0..self.nshards)
+                    .map(|s| (s, Op::PrefixStats(prefix.clone())))
+                    .collect();
+                (targets, Agg::PrefixStats { keys: 0, expires: 0 })
+            }
             // FEED.* is intercepted in `start_command` before the
             // multi path; reaching here is a routing bug — resolve
             // with an error reply rather than crashing the shard.
