@@ -30,12 +30,20 @@ command -v cargo-llvm-cov >/dev/null 2>&1 || {
 }
 
 echo "covgate: measuring workspace line coverage (instrumented build + tests)..."
-SUMMARY=$(cargo llvm-cov --workspace --lib --tests --summary-only --json 2>/dev/null)
-PCT=$(echo "$SUMMARY" | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-print(f"{d["data"][0]["totals"]["lines"]["percent"]:.2f}")
-')
+COVJSON=$(mktemp)
+# --output-path keeps the JSON pure: runners interleave rustup/cargo
+# info lines into stdout, which broke stdout capture (2026-07-03).
+cargo llvm-cov --workspace --lib --tests --summary-only --json \
+    --output-path "$COVJSON" >/dev/null 2>&1 || {
+    echo "covgate: cargo llvm-cov run failed" >&2
+    exit 2
+}
+PCT=$(python3 -c "
+import json
+d = json.load(open('$COVJSON'))
+print(f\"{d['data'][0]['totals']['lines']['percent']:.2f}\")
+")
+rm -f "$COVJSON"
 
 if [ "$MODE" = "--update-baseline" ]; then
     printf '{\n  "workspace_line_coverage_pct": %s,\n  "recorded": "%s",\n  "note": "ratchet: only raise via --update-baseline after a deliberate improvement"\n}\n' \
