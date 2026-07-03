@@ -488,7 +488,7 @@ impl<C: Commands> Shard<C> {
                         napped = false;
                         last_inbound_batch = 0;
                         diag_parks += 1;
-                        if diag_parks % 100_000 == 0 {
+                        if diag_parks % 10_000 == 0 {
                             eprintln!(
                                 "DIAG shard {}: parks={} naps={} avg_batch={}",
                                 self.id, diag_parks, diag_naps,
