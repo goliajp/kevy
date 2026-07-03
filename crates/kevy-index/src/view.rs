@@ -190,14 +190,18 @@ pub struct MaterializedSet {
     back: std::collections::HashMap<Vec<u8>, IndexValue>,
     /// 0 = unbounded.
     top_k: u32,
+    /// DESC view: the bound keeps the LARGEST members (evict the
+    /// smallest past the cap); ASC keeps the smallest.
+    desc: bool,
     /// Members excluded because they're absent from the order index.
     pub order_excluded: u64,
 }
 
 impl MaterializedSet {
-    /// New set with the declared bound (0 = unbounded).
-    pub fn new(top_k: u32) -> Self {
-        Self { top_k, ..Default::default() }
+    /// New set with the declared bound (0 = unbounded) and order
+    /// direction (the bound evicts from the view's WORST end).
+    pub fn new(top_k: u32, desc: bool) -> Self {
+        Self { top_k, desc, ..Default::default() }
     }
 
     fn cap(&self) -> usize {
@@ -219,12 +223,18 @@ impl MaterializedSet {
             (true, Some(v)) => {
                 self.back.insert(key.to_vec(), v.clone());
                 self.set.insert((v, key.to_vec()));
-                // bound: evict the WORST member past K+Δ
-                if self.set.len() > self.cap()
-                    && let Some(last) = self.set.iter().next_back().cloned()
-                {
-                    self.set.remove(&last);
-                    self.back.remove(&last.1);
+                // bound: evict the view's WORST member past K+Δ —
+                // the largest for ASC, the SMALLEST for DESC.
+                if self.set.len() > self.cap() {
+                    let worst = if self.desc {
+                        self.set.iter().next().cloned()
+                    } else {
+                        self.set.iter().next_back().cloned()
+                    };
+                    if let Some(w) = worst {
+                        self.set.remove(&w);
+                        self.back.remove(&w.1);
+                    }
                 }
                 false
             }
@@ -373,7 +383,7 @@ mod tests {
 
     #[test]
     fn materialized_bounds_and_underflow() {
-        let mut m = MaterializedSet::new(4); // cap = 4 + 1 = 5
+        let mut m = MaterializedSet::new(4, false); // cap = 4 + 1 = 5
         for i in 0..8 {
             let under = m.apply(
                 format!("k{i}").as_bytes(),
@@ -387,6 +397,18 @@ mod tests {
         assert_eq!(page[0].1, b"k0".to_vec(), "best kept");
         assert_eq!(page.last().unwrap().1, b"k4".to_vec(), "worst evicted");
 
+    }
+
+    #[test]
+    fn materialized_desc_bound_keeps_largest() {
+        let mut m = MaterializedSet::new(4, true); // cap 5
+        for i in 0..8 {
+            m.apply(format!("k{i}").as_bytes(), true, Some(IndexValue::I64(i)));
+        }
+        assert_eq!(m.len(), 5);
+        let page = m.page(None, 10, true);
+        assert_eq!(page[0].1, b"k7".to_vec(), "largest kept on top");
+        assert_eq!(page.last().unwrap().1, b"k3".to_vec(), "smallest evicted");
     }
 
     #[test]
@@ -430,7 +452,7 @@ mod tests {
 
     #[test]
     fn materialized_underflow_signals() {
-        let mut m = MaterializedSet::new(4);
+        let mut m = MaterializedSet::new(4, false);
         for i in 0..5 {
             m.apply(format!("k{i}").as_bytes(), true, Some(IndexValue::I64(i)));
         }
@@ -441,7 +463,7 @@ mod tests {
         m.apply(b"kx", true, None);
         assert_eq!(m.order_excluded, 1);
         // unbounded never underflows
-        let mut u = MaterializedSet::new(0);
+        let mut u = MaterializedSet::new(0, false);
         u.apply(b"a", true, Some(IndexValue::I64(1)));
         assert!(!u.apply(b"a", false, None));
     }

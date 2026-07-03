@@ -174,7 +174,7 @@ fn refresh(st: &mut ShardViews) {
                 None => {
                     let mat = match spec.mode {
                         ViewMode::Virtual => None,
-                        ViewMode::Materialized { top_k } => Some(MaterializedSet::new(top_k)),
+                        ViewMode::Materialized { top_k } => Some(MaterializedSet::new(top_k, spec.desc)),
                     };
                     next.push(ViewState {
                         spec: spec.clone(),

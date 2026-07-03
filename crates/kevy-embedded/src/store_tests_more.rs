@@ -561,3 +561,64 @@ fn idx_create_query_maintain_reopen() {
     drop(s2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- v2.6: embedded views ---------------------------------------------------
+
+#[test]
+fn view_create_query_maintain_reopen() {
+    use crate::{IndexKind, IndexValType, IndexValue, ViewLeaf, ViewMode, ViewTree};
+    let dir = crate::store::tests::tmp_dir("view-reopen");
+    let leaf = |idx: &str, lo: i64, hi: i64| {
+        ViewTree::Leaf(ViewLeaf {
+            index: idx.into(),
+            min: IndexValue::I64(lo),
+            max: IndexValue::I64(hi),
+        })
+    };
+    {
+        let s = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
+        for i in 0..20 {
+            s.hset(
+                format!("t:{i}").as_bytes(),
+                &[
+                    (b"pri", format!("{i}").as_bytes()),
+                    (b"flag", if i % 2 == 0 { b"1" } else { b"0" }),
+                ],
+            )
+            .unwrap();
+        }
+        s.idx_create(b"t_pri", b"t:", b"pri", IndexValType::I64, IndexKind::Range).unwrap();
+        s.idx_create(b"t_flag", b"t:", b"flag", IndexValType::I64, IndexKind::Range).unwrap();
+        // materialized top-3 DESC: even (flag=1) rows with pri ≤ 15
+        let tree = ViewTree::And(
+            Box::new(leaf("t_pri", 0, 15)),
+            Box::new(leaf("t_flag", 1, 1)),
+        );
+        s.view_create(b"v_top", tree, b"t_pri", true, ViewMode::Materialized { top_k: 3 })
+            .unwrap();
+        let (page, _) = s.view_query(b"v_top", None, 3).unwrap();
+        let keys: Vec<_> = page.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).collect();
+        assert_eq!(keys, vec!["t:14", "t:12", "t:10"], "top-3 desc evens ≤15");
+        // maintenance: a new higher even member enters
+        s.hset(b"t:15", &[(b"flag", b"1")]).unwrap();
+        let (page, _) = s.view_query(b"v_top", None, 3).unwrap();
+        assert_eq!(page[0].0, b"t:15".to_vec());
+        // leaving member drops (flag flips)
+        s.hset(b"t:14", &[(b"flag", b"0")]).unwrap();
+        let (page, _) = s.view_query(b"v_top", None, 10).unwrap();
+        assert!(!page.iter().any(|(k, _)| k == b"t:14"));
+        // virtual view + count + list + unknown-index rejection
+        s.view_create(b"v_all", leaf("t_pri", 0, 100), b"t_pri", false, ViewMode::Virtual).unwrap();
+        assert_eq!(s.view_count(b"v_all").unwrap(), 20);
+        assert_eq!(s.view_list().len(), 2);
+        assert!(s.view_create(b"bad", leaf("nope", 0, 1), b"t_pri", false, ViewMode::Virtual).is_err());
+    }
+    // reopen: view catalog persisted; rebuilt lazily against replayed data
+    let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
+    let (page, _) = s2.view_query(b"v_top", None, 3).unwrap();
+    assert_eq!(page[0].0, b"t:15".to_vec(), "reopen rebuild honest");
+    assert!(s2.view_drop(b"v_top"));
+    assert!(s2.view_query(b"v_top", None, 1).is_err());
+    drop(s2);
+    let _ = std::fs::remove_dir_all(&dir);
+}

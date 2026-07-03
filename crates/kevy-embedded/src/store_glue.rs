@@ -48,6 +48,10 @@ pub(crate) fn commit_write(inner: &mut Inner, parts: &[&[u8]]) -> io::Result<()>
         let inner = &mut *inner;
         crate::ops_index::on_commit(&reg, &mut inner.idx_segs, &mut inner.store, parts);
     }
+    if let Some(vreg) = inner.view_reg.clone() {
+        let inner = &mut *inner;
+        crate::ops_view::on_commit(&vreg, &mut inner.view_segs, &inner.idx_segs, parts);
+    }
     inner.store.try_evict_after_write();
     Ok(())
 }
