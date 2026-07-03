@@ -38,3 +38,5 @@ __pycache__/
 vendor/bundle/
 **/vendor/bundle/
 .bundle/
+view-catalog.meta
+index-catalog.meta
