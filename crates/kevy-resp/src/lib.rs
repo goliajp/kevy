@@ -36,6 +36,7 @@
 #![warn(missing_docs)]
 
 mod argv;
+pub mod ops_table;
 mod argv_borrowed;
 mod argv_pool;
 mod argv_view;

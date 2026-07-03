@@ -8,7 +8,8 @@
 //! over the verbs it implements, delegates to a `cmd::*` helper or a
 //! direct `store::*` call, and returns whether the verb was handled.
 
-use crate::cmd::{cmd_hset, wrong_args, emit_int_result, store_err, rest_borrowed, arg_i64, ERR_NOT_INT, emit_bulk_array, cmd_pop, cmd_blpop, cmd_zadd, fmt_score, arg_f64, cmd_zrange, cmd_zrangebyscore, parse_score_bound};
+use crate::cmd_zadd::cmd_zadd;
+use crate::cmd::{cmd_hset, wrong_args, emit_int_result, store_err, rest_borrowed, arg_i64, ERR_NOT_INT, emit_bulk_array, cmd_pop, cmd_blpop, fmt_score, arg_f64, cmd_zrange, cmd_zrangebyscore, parse_score_bound};
 use crate::dispatch_collections_v127::{
     cmd_bzpopmin, cmd_hscan, cmd_lpos, cmd_sscan, cmd_zpopmin, cmd_zrevrangebyscore, cmd_zscan,
 };

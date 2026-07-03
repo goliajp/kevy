@@ -264,23 +264,6 @@ pub(crate) fn cmd_hset<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &
     emit_int_result(store.hset_borrowed(&args[1], &pairs).map(|n| n as i64), out);
 }
 
-/// `ZADD key score member [score member ...]`. G4 (v1.25): borrowed-pair path.
-pub(crate) fn cmd_zadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    if args.len() < 4 || !(args.len() - 2).is_multiple_of(2) {
-        return wrong_args(out, "zadd");
-    }
-    let mut pairs: Vec<(f64, &[u8])> = Vec::with_capacity((args.len() - 2) / 2);
-    let mut i = 2;
-    while i < args.len() {
-        let Some(score) = arg_f64(&args[i]) else {
-            return encode_error(out, "ERR value is not a valid float");
-        };
-        pairs.push((score, &args[i + 1]));
-        i += 2;
-    }
-    emit_int_result(store.zadd_borrowed(&args[1], &pairs).map(|n| n as i64), out);
-}
-
 /// `ZRANGE key start stop [WITHSCORES]` — by rank.
 pub(crate) fn cmd_zrange<A: ArgvView + ?Sized>(
     store: &mut Store,

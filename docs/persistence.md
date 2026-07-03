@@ -229,3 +229,53 @@ store.evictions_total();        // total evicted by maxmemory
 | `dump-<id>.rdb.reshard` + `reshard.journal` | In-progress shard-layout migration. Rolled forward on next start; never delete the journal by hand. |
 | `*.premigration.<unix_ts>` | Pre-migration source backups, kept for rollback. |
 | `aof-<id>.aof.panic-quarantine.<unix_ts>` | Corrupt AOF tail set aside during recovery. Inspect by hand if you need to salvage anything; kevy will not re-apply it. |
+
+## Durability contract (v2.1)
+
+What "the call returned OK" guarantees, per `appendfsync` × write path.
+"Durable" = on stable storage (`fdatasync` completed); "windowed" = in
+the OS page cache, lost only if the *machine* (not just the process)
+dies inside the window.
+
+| Write path | `always` | `everysec` | `no` |
+|---|---|---|---|
+| Server command reply | durable before the reply leaves the shard (group-committed per batch) | windowed ≤ 1 s | OS-paced |
+| Embedded facade op (`set`, `zadd`, …) | durable on return | windowed ≤ 1 s | OS-paced |
+| Embedded `atomic` / `atomic_all_shards` block | durable on commit (one fsync per touched shard) | windowed ≤ 1 s | OS-paced |
+| Embedded `Pipeline::commit` | durable on return, fsyncs batched per shard | windowed ≤ 1 s | OS-paced |
+| …any of the above + **`Store::fsync_aof()`** | no-op | **durable at the barrier** | **durable at the barrier** |
+
+`Store::fsync_aof()` is the per-write durability escape hatch
+(Postgres `synchronous_commit`-per-transaction genre): run a
+deployment on `everysec` for throughput, and place the barrier after
+the few writes that must survive a machine crash the moment they are
+acknowledged. Cost: one `fdatasync` per dirty shard.
+
+Process crash (SIGKILL) never loses acknowledged writes under `always`
+and loses at most the fsync window otherwise; the AOF tail is
+replayed on the next open, and a torn final frame is quarantined
+(`panic-quarantine`), never silently applied.
+
+## Atomicity charter (embedded serving-store, v2.1)
+
+- **`Store::atomic(body)`** — single-shard transaction: takes that
+  shard's write lock for the closure, reads inside see the closure's
+  own writes, AOF appends are deferred and committed with **one fsync
+  at commit** (under `always`). Every key touched must hash to the
+  same shard — the blessed serving-store config is therefore
+  **1 shard** when your write patterns span arbitrary keys: you keep
+  full atomicity and pay no cross-shard coordination. The ceiling of
+  the 1-shard config is single-core write throughput; measured
+  numbers live in `bench/REPORT.md`.
+- **`Store::atomic_all_shards(body)`** — multi-shard transaction:
+  acquires **every** shard's write lock in shard-index order
+  (deterministic order = no deadlock), commits per-shard AOF batches
+  on return. Cost: blocks all other readers + writers for the
+  closure's duration — use it for cross-shard invariants, not as the
+  default write path.
+- **`Store::pipeline()`** — NOT atomic: each op takes its own lock;
+  other writers interleave. It batches fsyncs (N ops → ≤ shard-count
+  fsyncs), nothing more.
+- Both atomic forms log the **effect** of conditional ops (`ZADD GT`,
+  `SPOP`) as unconditional verbs, so replay and replica-apply are
+  deterministic by construction.

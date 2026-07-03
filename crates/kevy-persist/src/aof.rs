@@ -203,6 +203,22 @@ impl Aof {
         Ok(())
     }
 
+    /// Durability barrier (v2.1): flush + `fdatasync` NOW, regardless
+    /// of the fsync policy. On return, every append made so far is on
+    /// stable storage. Lets an `EverySec` deployment make individual
+    /// critical writes durable-on-ack (Postgres
+    /// `synchronous_commit`-per-transaction genre) without paying
+    /// `Always` on every op. No-op cost when nothing is dirty.
+    pub fn sync_now(&mut self) -> io::Result<()> {
+        if self.dirty {
+            self.file.flush()?;
+            self.file.get_ref().sync_data()?;
+            self.dirty = false;
+            self.last_sync = Instant::now();
+        }
+        Ok(())
+    }
+
     /// Flush+fsync if the `EverySec` window has elapsed. Call once per loop tick.
     pub fn maybe_sync(&mut self) -> io::Result<()> {
         if matches!(self.fsync, Fsync::EverySec)
