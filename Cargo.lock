@@ -521,6 +521,7 @@ dependencies = [
  "kevy-resp",
  "kevy-rt",
  "kevy-store",
+ "kevy-text",
 ]
 
 [[package]]

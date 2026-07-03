@@ -622,3 +622,33 @@ fn view_create_query_maintain_reopen() {
     drop(s2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn text_index_match_embedded() {
+    use crate::{IndexKind, IndexValType};
+    let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    let docs: &[(&str, &str)] = &[
+        ("n:1", "Rust systems programming"),
+        ("n:2", "rust full text search in kevy"),
+        ("n:3", "全文检索は日本語でも動く"),
+    ];
+    for (k, body) in docs {
+        s.hset(k.as_bytes(), &[(b"body", body.as_bytes())]).unwrap();
+    }
+    s.idx_create(b"n_body", b"n:", b"body", IndexValType::Str, IndexKind::Text).unwrap();
+    // ranked: n:2 hits more query terms
+    let hits = s.idx_match(b"n_body", b"rust search", 10).unwrap();
+    assert_eq!(hits.len(), 2);
+    assert_eq!(hits[0].0, b"n:2".to_vec());
+    // CJK bigrams
+    let hits = s.idx_match(b"n_body", "检索".as_bytes(), 10).unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].0, b"n:3".to_vec());
+    // live maintenance via commit hook
+    s.hset(b"n:1", &[(b"body", b"now completely other")]).unwrap();
+    assert!(s.idx_match(b"n_body", b"systems", 10).unwrap().is_empty());
+    s.del(&[b"n:2" as &[u8]]).unwrap();
+    assert!(s.idx_match(b"n_body", b"kevy", 10).unwrap().is_empty());
+    // unknown index errors
+    assert!(s.idx_match(b"nope", b"x", 10).is_err());
+}

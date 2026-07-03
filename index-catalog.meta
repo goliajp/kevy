@@ -1,0 +1,3 @@
+kevy-index-catalog v1
+j_pri	job:	pri	i64	range	0
+j_state	job:	state	str	range	0
