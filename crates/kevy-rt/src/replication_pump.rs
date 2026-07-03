@@ -44,7 +44,7 @@ impl<C: Commands> Shard<C> {
     ///    replica's pending output non-blocking; partial writes wait
     ///    on the next writability event.
     pub(crate) fn pump_replication(&mut self) -> io::Result<()> {
-        let Some(src) = self.replicate.as_ref() else {
+        let Some(src) = self.replicate.as_ref().map(|f| f.source()) else {
             return Ok(());
         };
         if self.replicas.is_empty() {
@@ -77,7 +77,7 @@ impl<C: Commands> Shard<C> {
         if pending >= STREAMING_OUTPUT_CAP / 2 {
             return; // backpressure — let the socket drain first
         }
-        let Some(src) = self.replicate.as_ref() else {
+        let Some(src) = self.replicate.as_ref().map(|f| f.source()) else {
             return;
         };
         let frames = match src.frames_from(sent_offset) {

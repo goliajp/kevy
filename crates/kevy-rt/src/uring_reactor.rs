@@ -513,6 +513,7 @@ impl<C: Commands> Shard<C> {
         // exit so a `+OK` SAVE reply isn't followed by a torn snapshot
         // (see [`Shard::drain_persist_on_shutdown`]).
         self.drain_persist_on_shutdown();
+        self.write_feed_shutdown_marker();
         Ok(())
     }
 

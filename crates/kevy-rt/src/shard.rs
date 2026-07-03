@@ -169,7 +169,10 @@ pub(crate) struct Shard<C: Commands> {
     /// `replicate.is_some()` and skips). `Some` when `role = "primary"`
     /// — every applied mutation is pushed to the backlog for connected
     /// replicas to consume.
-    pub(crate) replicate: Option<kevy_replicate::source::ReplicationSource>,
+    /// Replication backlog + v2.3 feed cursor. Populated when
+    /// replication is on OR `feed_enabled` (FEED.* consumers need the
+    /// backlog even with no replicas); `None` = both features off.
+    pub(crate) replicate: Option<kevy_replicate::feed::FeedSource>,
     /// Per-shard replication listener (per Issue Ledger I2): shard `i`
     /// binds at `replication_port_base + i`. `Some` only when the
     /// runtime was built with [`crate::Runtime::with_replication_listener`].
@@ -566,6 +569,7 @@ impl<C: Commands> Shard<C> {
         // happen after `stop=true`). See
         // [`Self::drain_persist_on_shutdown`].
         self.drain_persist_on_shutdown();
+        self.write_feed_shutdown_marker();
         Ok(())
     }
 

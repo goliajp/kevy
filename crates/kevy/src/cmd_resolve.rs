@@ -112,6 +112,9 @@ fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
         b"SUNIONSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SUnion),
         b"SDIFFSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SDiff),
         b"ZINTERCARD" if args.len() >= 3 => Route::ZInterCard,
+        b"FEED.READ" if args.len() >= 4 => Route::FeedRead,
+        b"FEED.TAIL" if args.len() == 2 => Route::FeedTail,
+        b"FEED.SHARDS" if args.len() == 1 => Route::FeedShards,
         b"RENAME" => Route::Rename { nx: false },
         b"RENAMENX" => Route::Rename { nx: true },
         // (BLPOP / BRPOP fold into the Local-routed verb list above —

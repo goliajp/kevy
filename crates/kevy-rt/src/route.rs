@@ -41,6 +41,12 @@ pub enum Route {
     ZAlgebraStore(crate::ZCombine),
     /// `ZINTERCARD numkeys key… [LIMIT n]` — read-only gathered count.
     ZInterCard,
+    /// v2.3 `FEED.READ <shard> <gen> <offset> …` — shard-index routed.
+    FeedRead,
+    /// v2.3 `FEED.TAIL <shard>`.
+    FeedTail,
+    /// v2.3 `FEED.SHARDS` — answered locally.
+    FeedShards,
     /// `KEYS pattern` — every shard returns its matching keys.
     Keys(Option<Vec<u8>>),
     /// `SCAN` (cursor-0 approximation) — like KEYS but replies `[cursor, keys]`.
