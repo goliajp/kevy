@@ -55,6 +55,11 @@ impl<C: Commands> Shard<C> {
             mask &= mask - 1;
             if self.parked[i].load(Ordering::SeqCst) {
                 let _ = self.wakers[i].wake();
+                // DIAG (temporary): wake-rate telemetry
+                self.diag_wakes += 1;
+                if self.diag_wakes % 100_000 == 0 {
+                    eprintln!("DIAG-WAKE shard {}: wakes={}", self.id, self.diag_wakes);
+                }
             }
         }
     }

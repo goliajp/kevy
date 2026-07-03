@@ -32,6 +32,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering, fence};
 pub(crate) use crate::cache_padded::CachePadded;
 
 pub(crate) struct Shard<C: Commands> {
+    /// DIAG (temporary): waker.wake() call counter.
+    pub(crate) diag_wakes: u64,
     pub(crate) id: usize,
     pub(crate) nshards: usize,
     /// Cluster mode (`Some` = on): switches key→shard routing from KevyHash
