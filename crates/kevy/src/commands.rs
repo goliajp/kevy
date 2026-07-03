@@ -217,11 +217,11 @@ impl Commands for KevyCommands {
     }
 
     fn extension_op(&self, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-        crate::cmd_index::extension_op(store, argv)
+        crate::cmd_index_query::extension_op(store, argv)
     }
 
     fn extension_reduce(&self, argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
-        crate::cmd_index::extension_reduce(argv, chunks)
+        crate::cmd_index_query::extension_reduce(argv, chunks)
     }
 
     fn on_shard_tick(&self, store: &mut Store) {

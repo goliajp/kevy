@@ -123,6 +123,29 @@ pub(crate) fn with_ready_segment<R>(
     })
 }
 
+/// Two-segment variant for COMPOSE — one RefCell borrow (nesting
+/// [`with_ready_segment`] would double-borrow the thread-local).
+pub(crate) fn with_two_ready_segments<R>(
+    store: &mut Store,
+    a: &[u8],
+    b: &[u8],
+    f: impl FnOnce(&IndexSpec, &Segment, &IndexSpec, &Segment) -> R,
+) -> Result<R, &'static str> {
+    SHARD_INDEXES.with(|tl| {
+        let mut st = tl.borrow_mut();
+        refresh(&mut st, store);
+        let ia = st.idx.iter().position(|si| si.spec.name == a).ok_or("ERR no such index")?;
+        let ib = st.idx.iter().position(|si| si.spec.name == b).ok_or("ERR no such index")?;
+        for i in [ia, ib] {
+            if matches!(st.idx[i].build, BuildState::Backfilling { .. }) {
+                return Err("INDEXBUILDING index is still building");
+            }
+        }
+        let (sa, sb) = (&st.idx[ia], &st.idx[ib]);
+        Ok(f(&sa.spec, &sa.seg, &sb.spec, &sb.seg))
+    })
+}
+
 /// Whether this shard's slice of `name` is still backfilling.
 pub(crate) fn segment_building(store: &mut Store, name: &[u8]) -> bool {
     SHARD_INDEXES.with(|tl| {
