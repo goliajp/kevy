@@ -64,6 +64,8 @@ mod ops_more;
 mod ops_p2;
 mod ops_p3;
 mod ops_pipeline;
+#[cfg(not(target_arch = "wasm32"))]
+mod ops_feed;
 mod ops_zset_algebra;
 mod ops_zset_flags;
 mod op_manifest;
@@ -92,6 +94,8 @@ pub use info::KevyInfo;
 pub use metric::KevyMetric;
 pub use kevy_persist::RewriteStats;
 pub use kevy_store::{ExpireStats, ScoreBound, StoreError, ZAggregate, ZaddFlags, ZaddReport};
+#[cfg(not(target_arch = "wasm32"))]
+pub use ops_feed::{Change, ChangeBatch, FeedError};
 pub use pubsub::{PubsubFrame, Subscription};
 pub use store::{Store, WeakStore};
 

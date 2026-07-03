@@ -166,10 +166,14 @@ impl Store {
     /// [`AppendFsync`]: crate::AppendFsync
     pub fn flushall(&self) -> io::Result<()> {
         ensure_writable(self)?;
-        self.try_for_each_shard(|inner| {
+        let r = self.try_for_each_shard(|inner| {
             inner.store.flushall();
             commit_write(inner, &[b"FLUSHALL"])
-        })
+        });
+        // v2.3 feed contract: FLUSHALL breaks stream continuity.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.feed_bump_on_flush();
+        r
     }
 
     /// Deprecated alias for [`Self::flushall`]. The old name read like
