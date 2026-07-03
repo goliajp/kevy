@@ -273,6 +273,7 @@ impl<C: Commands> Shard<C> {
                 self.fold(conn_id, seq, part);
             } else {
                 // Multi-key ops (Del/MSet/Gather/…) use the unbatched path.
+                self.xshard_inflight += 1;
                 self.send_to(
                     shard,
                     Inbound::Request {
@@ -307,6 +308,7 @@ impl<C: Commands> Shard<C> {
                 continue;
             }
             let reqs = std::mem::take(&mut self.request_batch[s]);
+            self.xshard_inflight += reqs.len() as u64;
             self.send_to(s, Inbound::RequestBatch { origin: self.id, reqs });
         }
     }
