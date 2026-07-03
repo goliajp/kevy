@@ -256,6 +256,13 @@ pub trait Commands: Clone + Send + 'static {
     /// ignore it.
     fn on_shard_tick(&self, _store: &mut Store) {}
 
+    /// v2.5: called after every applied write with the written key
+    /// (when the resolver knew one). Default no-op; kevy uses it for
+    /// synchronous secondary-index maintenance (derived-by-
+    /// construction). Runs on the shard thread with store access —
+    /// implementations must be cheap when their feature is off.
+    fn on_write(&self, _store: &mut Store, _key: &[u8]) {}
+
     /// Called once per client command at dispatch entry (before routing /
     /// fan-out, so a multi-key command counts once). kevy uses it for
     /// `INFO stats: total_commands_processed`. Hot path — keep it to a single
