@@ -60,6 +60,7 @@ pub(crate) fn catalog() -> Option<Arc<Catalog>> {
 
 /// Swap in a new catalog version (IDX.CREATE / IDX.DROP). Bumps the
 /// generation; shards refresh lazily.
+#[allow(dead_code)] // v2.5 step 2b consumes this
 pub(crate) fn install_catalog(c: Catalog) {
     let nonempty = !c.is_empty();
     *CATALOG

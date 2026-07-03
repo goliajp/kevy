@@ -424,6 +424,7 @@ dependencies = [
  "kevy-elect",
  "kevy-geo",
  "kevy-hash",
+ "kevy-index",
  "kevy-lua",
  "kevy-lua-host",
  "kevy-persist",
