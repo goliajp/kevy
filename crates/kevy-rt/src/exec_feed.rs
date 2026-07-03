@@ -84,6 +84,47 @@ pub(crate) fn parse_feed_read<A: ArgvView + ?Sized>(args: &A) -> Result<FeedRead
 }
 
 impl<C: Commands> Shard<C> {
+    /// Entry from `start_command`: parse the FEED.* argv shape and
+    /// dispatch to the target shard (or answer locally / with a parse
+    /// error).
+    pub(crate) fn start_feed_route<A: ArgvView + ?Sized>(
+        &mut self,
+        conn_id: u64,
+        seq: u64,
+        args: &A,
+        route: &crate::Route,
+        is_quit: bool,
+    ) {
+        match route {
+            crate::Route::FeedShards => {
+                self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
+                let n = self.nshards;
+                self.fold(
+                    conn_id,
+                    seq,
+                    Part::Reply(SmallReply::from_vec(format!(":{n}\r\n").into_bytes())),
+                );
+            }
+            crate::Route::FeedTail => match parse_shard_arg(args) {
+                Ok(sh) => self.start_feed_op(conn_id, seq, sh, Op::FeedTail, is_quit),
+                Err(msg) => self.reply_feed_error(conn_id, seq, msg, is_quit),
+            },
+            crate::Route::FeedRead => match parse_feed_read(args) {
+                Ok(p) => {
+                    let op = Op::FeedRead {
+                        cursor_gen: p.cursor_gen,
+                        offset: p.offset,
+                        count: p.count,
+                        prefixes: p.prefixes,
+                    };
+                    self.start_feed_op(conn_id, seq, p.shard, op, is_quit);
+                }
+                Err(msg) => self.reply_feed_error(conn_id, seq, msg, is_quit),
+            },
+            _ => {}
+        }
+    }
+
     /// Ship a feed op to its target shard (or exec locally), replying
     /// through a plain `Agg::First` slot.
     pub(crate) fn start_feed_op(&mut self, conn_id: u64, seq: u64, shard: usize, op: Op, is_quit: bool) {
