@@ -51,6 +51,7 @@ mod cmd_data;
 mod cmd_hash_ttl;
 mod cmd_index;
 mod cmd_index_query;
+mod cmd_index_reduce;
 mod index_runtime;
 mod cmd_hello;
 mod cmd_lua;
