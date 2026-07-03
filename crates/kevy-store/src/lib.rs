@@ -72,6 +72,8 @@ pub use types::{EvictionPolicy, RenameOutcome, StoreError};
 mod util;
 mod value;
 mod zset;
+mod zset_algebra;
+pub use zset_algebra::{ZAggregate, zdiff, zinter, zintercard, zunion};
 mod zset_flags;
 pub use zset_flags::{ZaddFlags, ZaddReport};
 pub use stream::{

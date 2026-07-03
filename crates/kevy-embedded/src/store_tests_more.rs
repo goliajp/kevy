@@ -153,3 +153,64 @@ fn renamenx_succeeds_when_dst_absent() {
     assert!(s.renamenx(b"src", b"dst").unwrap());
     assert_eq!(s.get(b"dst").unwrap(), Some(b"val".to_vec()));
 }
+
+// ---- v2.2: zset algebra facades ------------------------------------------
+
+#[test]
+fn zset_algebra_store_forms_and_reopen() {
+    use crate::ZAggregate;
+    use crate::config::AppendFsync;
+    let dir = crate::store::tests::tmp_dir("zalg-reopen");
+    {
+        let s = Store::open(
+            Config::default()
+                .with_persist(&dir)
+                .with_ttl_reaper_manual()
+                .with_appendfsync(AppendFsync::Always),
+        )
+        .unwrap();
+        s.zadd(b"za", &[(1.0, b"x"), (2.0, b"y")]).unwrap();
+        s.zadd(b"zb", &[(3.0, b"y"), (4.0, b"z")]).unwrap();
+        s.sadd(b"set1", &[b"y", b"q"]).unwrap();
+
+        // inter: zset ∩ zset
+        assert_eq!(s.zinterstore(b"d1", &[b"za", b"zb"], None, ZAggregate::Sum).unwrap(), 1);
+        assert_eq!(s.zscore(b"d1", b"y").unwrap(), Some(5.0));
+        // weights + MAX
+        assert_eq!(
+            s.zinterstore(b"d2", &[b"za", b"zb"], Some(&[10.0, 1.0]), ZAggregate::Max).unwrap(),
+            1
+        );
+        assert_eq!(s.zscore(b"d2", b"y").unwrap(), Some(20.0));
+        // union with a plain set participating at score 1.0
+        assert_eq!(s.zunionstore(b"d3", &[b"za", b"set1"], None, ZAggregate::Sum).unwrap(), 3);
+        assert_eq!(s.zscore(b"d3", b"y").unwrap(), Some(3.0)); // 2.0 + 1.0
+        assert_eq!(s.zscore(b"d3", b"q").unwrap(), Some(1.0));
+        // diff + intercard
+        assert_eq!(s.zdiffstore(b"d4", &[b"za", b"zb"]).unwrap(), 1);
+        assert_eq!(s.zscore(b"d4", b"x").unwrap(), Some(1.0));
+        assert_eq!(s.zintercard(&[b"za", b"zb"], 0).unwrap(), 1);
+        // *STORE overwrites any old dst; empty result deletes dst
+        s.set(b"d5", b"old").unwrap();
+        assert_eq!(s.zinterstore(b"d5", &[b"za", b"missing"], None, ZAggregate::Sum).unwrap(), 0);
+        assert_eq!(s.exists(&[b"d5"]).unwrap(), 0);
+        // set-algebra store forms
+        s.sadd(b"sa", &[b"a", b"b"]).unwrap();
+        s.sadd(b"sb", &[b"b", b"c"]).unwrap();
+        assert_eq!(s.sinterstore(b"sd1", &[b"sa", b"sb"]).unwrap(), 1);
+        assert!(s.sismember(b"sd1", b"b").unwrap());
+        assert_eq!(s.sunionstore(b"sd2", &[b"sa", b"sb"]).unwrap(), 3);
+        assert_eq!(s.sdiffstore(b"sd3", &[b"sa", b"sb"]).unwrap(), 1);
+        assert!(s.sismember(b"sd3", b"a").unwrap());
+    }
+    // effect-logged AOF replays to identical state
+    let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
+    assert_eq!(s2.zscore(b"d1", b"y").unwrap(), Some(5.0));
+    assert_eq!(s2.zscore(b"d2", b"y").unwrap(), Some(20.0));
+    assert_eq!(s2.zscore(b"d3", b"q").unwrap(), Some(1.0));
+    assert_eq!(s2.zscore(b"d4", b"x").unwrap(), Some(1.0));
+    assert_eq!(s2.exists(&[b"d5"]).unwrap(), 0);
+    assert!(s2.sismember(b"sd1", b"b").unwrap());
+    drop(s2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
