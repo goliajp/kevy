@@ -86,15 +86,22 @@ def pick():
     # inverse-CDF Zipf-ish sample over ranks
     u = random.random()
     return VOCAB[min(int(10_000 ** u) - 1, 9_999)]
-CJK = "全文检索引擎支持中文分词高速缓存数据结构性能优化内存管理并发网络协议解析持久化复制订阅频道集群拓扑"
+# CJK likewise Zipfian: 2000 synthetic two-char words over a char
+# pool (a uniform rotating window is the same degenerate shape —
+# every bigram ~11% df with equal upper bounds, unprunable).
+POOL = [chr(c) for c in range(0x4E00, 0x4E00 + 900)]
+CJK_VOCAB = ["".join((POOL[(i * 37) % 900], POOL[(i * 61 + 13) % 900])) for i in range(2000)]
+def pick_cjk():
+    u = random.random()
+    return CJK_VOCAB[min(int(2000 ** u) - 1, 1999)]
 N = 1_000_000
 s = connect(); buf = [b""]
 t0 = time.time()
 batch = []
 for i in range(N):
     w = " ".join(pick() for _ in range(10))
-    c0 = (i * 7) % (len(CJK) - 6)
-    body = f"{w} {CJK[c0:c0+6]} doc{i}"
+    cj = "".join(pick_cjk() for _ in range(3))
+    body = f"{w} {cj} doc{i}"
     batch.append(enc("HSET", f"a:{i}", "body", body))
     if len(batch) == 2000:
         s.sendall(b"".join(batch))
@@ -122,8 +129,9 @@ print(f"textgate: text index built in {time.time()-t0:.1f}s")
 
 # ---- clamp 1: MATCH p95 median-conn < 20ms ----
 # query mix: head terms (w0/w1 ~ in most docs), mid, tail, CJK
-queries = [("w0 w1 w512",), ("检索引擎",), ("w3 w800 w4000",),
-           ("性能优化",), ("w0 w9000",)]
+# (CJK words drawn from the same Zipf vocab: head + mid + tail)
+queries = [("w0 w1 w512",), (CJK_VOCAB[0] + CJK_VOCAB[70],), ("w3 w800 w4000",),
+           (CJK_VOCAB[2] + " " + CJK_VOCAB[900],), ("w0 w9000",)]
 p95s = []
 for _ in range(6):
     c = connect(); cb = [b""]
