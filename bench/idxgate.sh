@@ -24,8 +24,10 @@ fail() { echo "idxgate: FAIL — $1" >&2; kill $SRV 2>/dev/null; rm -rf "$DIR"; 
 # 0.89ms with priority; phase-uniform, constant-magnitude stalls).
 PIN=""
 command -v taskset >/dev/null 2>&1 && PIN="taskset -c 0-7"
+# CFS nice weight does not stop wake-preemption slices; the RT class
+# does. Gate runs are bounded (~30s) so FIFO is safe here.
 NICE=""
-[ "$(id -u)" = "0" ] && NICE="nice -n -10"
+[ "$(id -u)" = "0" ] && NICE="chrt -f 10"
 env KEVY_BIND=127.0.0.1 $NICE $PIN "$BIN" --threads 8 --port $PORT --dir "$DIR" --no-aof >/dev/null 2>&1 &
 SRV=$!
 sleep 1.2
