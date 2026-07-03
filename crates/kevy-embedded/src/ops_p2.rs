@@ -147,6 +147,36 @@ impl Store {
             .map_err(store_err)
     }
 
+    /// `ZRANGEBYSCORE key min max LIMIT offset count` — score-range
+    /// read with pagination (v2.2; closes the embedded LIMIT gap —
+    /// the server parser always had it).
+    pub fn zrange_by_score_limit(
+        &self,
+        key: &[u8],
+        min: f64,
+        max: f64,
+        offset: usize,
+        count: usize,
+    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+        let all = self.zrange_by_score(key, min, max)?;
+        Ok(all.into_iter().skip(offset).take(count).collect())
+    }
+
+    /// `ZREVRANGEBYSCORE key max min LIMIT offset count` — descending
+    /// score-range read with pagination.
+    pub fn zrevrange_by_score_limit(
+        &self,
+        key: &[u8],
+        max: f64,
+        min: f64,
+        offset: usize,
+        count: usize,
+    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+        let mut all = self.zrange_by_score(key, min, max)?;
+        all.reverse();
+        Ok(all.into_iter().skip(offset).take(count).collect())
+    }
+
     /// `ZINCRBY key delta member` — atomic float increment of a member's
     /// score. Returns the post-increment score.
     pub fn zincrby(&self, key: &[u8], delta: f64, member: &[u8]) -> io::Result<f64> {

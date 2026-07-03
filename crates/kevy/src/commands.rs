@@ -37,6 +37,13 @@ impl Commands for KevyCommands {
             // dispatch stub returns the arity error).
             b"MSET" if args.len() >= 3 && !args.len().is_multiple_of(2) => Route::MSet,
             b"MGET" if args.len() >= 2 => Route::MGet,
+            b"ZINTERSTORE" if args.len() >= 4 => Route::ZAlgebraStore(kevy_rt::ZCombine::ZInter),
+            b"ZUNIONSTORE" if args.len() >= 4 => Route::ZAlgebraStore(kevy_rt::ZCombine::ZUnion),
+            b"ZDIFFSTORE" if args.len() >= 4 => Route::ZAlgebraStore(kevy_rt::ZCombine::ZDiff),
+            b"SINTERSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SInter),
+            b"SUNIONSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SUnion),
+            b"SDIFFSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SDiff),
+            b"ZINTERCARD" if args.len() >= 3 => Route::ZInterCard,
             b"SINTER" if args.len() >= 2 => Route::SInter,
             b"SUNION" if args.len() >= 2 => Route::SUnion,
             b"SDIFF" if args.len() >= 2 => Route::SDiff,
