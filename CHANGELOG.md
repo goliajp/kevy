@@ -4,6 +4,39 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.0.21] — 2026-07-03 — **HOTFIX: `kevy-embedded` 1.15.1 — AOF replay verb coverage (silent data loss on reopen)**
+
+**Theme**: emergency data-integrity fix on the embedded persistence path. Found by the v2.1 op-surface sweep (op × surface matrix) on day one of the v3 arc.
+
+### The bug
+
+`kevy-embedded`'s AOF replay (`replay.rs`, also used by the embed-as-replica frame apply and the reshard merge) matched a fixed set of 33 verbs and **silently skipped anything else** ("forward-compat"). Meanwhile the facade ops added across 1.7.0–1.15.0 log their own verbs via `commit_write`. Result: **writes through 10 ops vanished on reopen** — reproduced by test before the fix (6/7 matrix tests red):
+
+- `SETBIT` / `SETRANGE` (1.8.0 bitmap family)
+- `HSETNX` / `HINCRBYFLOAT`
+- `LINSERT`
+- `RENAME` / `RENAMENX` — worse than loss: replay resurrected the **old** key (its original `SET` replayed; the rename didn't)
+- `ZPOPMIN` / `ZREMRANGEBYRANK` / `ZREMRANGEBYSCORE` — removals forgotten, removed members resurrected
+
+Two adjacent defects found in the same sweep:
+
+- **`COPY` never wrote its dst value to the AOF at all** (a comment claimed it did; the code didn't) — copied keys vanished on reopen, while their TTL (logged via the `pexpireat` facade) survived.
+- **`SPOP` was logged as `SPOP key count`** — a random pick. Replay from empty happens to be deterministic, but a replica applying frames onto snapshot-loaded state (different internal layout) could pop **different members** and silently diverge. Now logged as `SREM key <actually-popped members…>`, the Redis propagation form. The replay arm for old `SPOP` frames is kept for existing AOFs.
+
+### The fix
+
+- `replay.rs`: arms for all 10 missing verbs, exactly matching the argv forms `commit_write` emits; doc-comment now states the invariant — *every verb any facade method logs MUST have a replay arm* (the v2.1 OP_TABLE makes this cross-check structural in CI).
+- `ops_keyspace.rs` `copy()`: dst `SET` is AOF-logged under dst's shard lock (log-before-apply, no value clone).
+- `ops_more.rs` `spop()`: logs `SREM` of the actually-popped members.
+- New `store_tests_replay_all.rs`: reopen matrix — every affected op → drop → reopen → assert. 7 tests, all red before / green after.
+
+### Impact assessment
+
+- Affected: embedded deployments using any of the 12 ops with persistence enabled, on any reopen (crash or clean restart) replaying an AOF tail written since the last snapshot/rewrite. AOF **rewrite** re-emits canonical verbs (`SET`/`HSET`/…), so fully-rewritten logs were safe — the exposure is the post-rewrite tail.
+- Not affected: the server (`kevy` binary) — it replays via the full command dispatch, which covers all verbs. `kevy-embedded` ≤ 1.6.x (none of the affected ops existed).
+
+Ships as `kevy-embedded` **1.15.1** / workspace **v2.0.21**. No API changes.
+
 ## [v2.0.20] — 2026-07-01 — **1h soak complete; v1.34.x finding closed — all 8 v1.x findings closed**
 
 **Theme**: pure-docs ship documenting the 1-hour lx64 soak completion that ran in the background across v2.0.15 → v2.0.19. **Final result: zero memory leak across 1 hour at 223 k ACK/sec sustained.** Closes the last v1.x finding (v1.34.x 1 h opt-in soak on lx64). All 8 v1.x open findings from the v2-arc are now closed or empirically refuted.
