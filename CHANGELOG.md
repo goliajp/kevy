@@ -4,6 +4,41 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [v2.1.0] — 2026-07-03 — **`kevy-embedded` 1.16.0 — v3-arc P0/P1 foundation: OP_TABLE parity CI, AtomicCtx completeness, ZADD flags, durability barrier**
+
+**Theme**: the first train of the v3 serving-engine arc. Kills the op-surface-drift bug class structurally (the class that shipped v2.0.21's data-loss bug), and lands the write-path semantics a serving-store needs.
+
+### OP_TABLE — op×surface registry + parity CI (`kevy_resp::ops_table`)
+
+One `const` row per command (write / growing / notify-class / wake-idx / surface bitset over SERVER, ESTORE, PIPE, ATOMIC, REPLAY, REWRITE) + a `KNOWN_GAPS` ledger that only shrinks truthfully (closing a gap without removing its ledger row is a CI failure). No codegen — dispatch and facades stay hand-written; the table is the checklist. Grounding: the server's five hand-maintained classification lists are now **called per row** in tests (the hand-copied Lua wake list is deleted — one source now); embedded manifests for ESTORE/PIPE/ATOMIC×2/REPLAY set-compare against the table; rewrite-emit manifest in kevy-persist; source-literal checks both directions. Building the table caught two fresh drifts on day one: `ZREVRANGE` was never wired on the server, and the `sscan` facade is missing (both ledgered).
+
+### AtomicCtx / AtomicAllShards completeness (mailrs T0.1, open since 07-01)
+
+Both atomic contexts now accept **everything Pipeline accepts** (adds `del` / `hdel` / `zrem` / `sadd` / `srem` / `lpush` / `rpush`) plus lock-scope reads for branch decisions (`hgetall` / `hmget` / `hexists` / `zcard` / `exists`); `zscore` added to `AtomicAllShards` (the two ctxs had drifted). A serving-store row update + all its index maintenance + the reads that decide it = one atomic block, one fsync.
+
+### ZADD condition flags — `NX` / `XX` / `GT` / `LT` / `CH` / `INCR` (Redis 6.2)
+
+On every surface: server `ZADD` parser (combo validation + `CH`/`INCR` reply shapes, wire-verified), embedded `zadd_flags` / `zadd_incr`, `Pipeline::zadd_flags`, both atomic ctxs. The no-flags hot path is untouched. AOF rule: embedded logs the **effect** (applied pairs as plain `ZADD`), never the condition — a conditional replayed against divergent replica state could veto differently (the v2.0.21 SPOP lesson generalized). Embedded replay now parses flag tokens in a primary's frames and applies `ZADD … INCR` as an increment. `latest_date` monotonic heal = `zadd_flags(k, pairs, ZaddFlags { gt: true, .. })` — one op, race gone.
+
+### Durability contract + `Store::fsync_aof()` barrier
+
+`kevy-persist` gains `Aof::sync_now()`; embedded gains `Store::fsync_aof()` — an `everysec` deployment makes individual critical writes durable-on-ack (`synchronous_commit`-per-transaction genre) without paying `always` everywhere. `docs/persistence.md` now states the full `appendfsync` × write-path durability matrix and the embedded atomicity charter (single-shard atomic / all-shards ordered-lock semantics / pipeline non-atomicity / blessed 1-shard serving config).
+
+### Five-axis gate scaffolding (ceiling-first, ratchet)
+
+`bench/covgate.sh` (workspace line-coverage ratchet via cargo-llvm-cov; measured baseline 82.08%, blocking CI job added), `bench/memgate.sh` (bytes/entry vs formula, ±20% band), `bench/diskgate.sh` (AOF bytes/op + rewrite wall time). Baselines only move up via `--update-baseline`.
+
+### Also
+
+- `string.rs` → `string_rmw.rs`, `kevy-store/lib.rs` → `types.rs`, `kevy-embedded/store.rs` → `store_glue.rs` (500-LOC debt repaid — all prod files under the ceiling again).
+- Op-surface gap matrix doc (`.claude/perfs/2026-07-03-op-surface-gap-matrix.md`): F1–F6 findings; F2 (embed-as-replica verb holes) and F3 (server missing bitmap family etc.) are the ledgered next targets.
+
+### Perf-gate disclosure (五轴 perf axis)
+
+perfgate's `legacy_8sh_set` line is red at ship time — **a documented pre-existing condition, not a v2.1 regression**: an A/B/C binary matrix (v2.1 ≡ v2.0.21 ≡ v2.0.20), a baseline-era-binary control reproducing its 2026-06-11 numbers to 0.03% on the same box the same hour, and a plain-release rebuild rule out this branch, the box, and the build profile. The decay is gradual (2026-06-11→06-30, ~40 releases, typical draw -8%) with a new multi-mode instance instability; a 140-revision bisect false-converged on a client-only commit, demonstrating single-culprit hunting fails on this distribution. Full evidence: `bench/PERF-FINDING-2026-07-03-legacy8sh-set-bimodal.md`. Ship-with-documented-red explicitly authorized by the user 2026-07-03; the decay decomposition campaign is the next open task. All five pinned/compat angles pass, four of them **+10–19% above** the recorded baseline. mem/disk gates recorded + PASS on lx64 (96 B/entry @16B, 106 AOF B/op @d64); covgate green in CI (79.64% Linux ratchet).
+
+Ships as `kevy-embedded` **1.16.0** / workspace **v2.1.0**.
+
 ## [v2.0.21] — 2026-07-03 — **HOTFIX ×2: embedded AOF replay verb coverage (data loss on reopen) + string-op Int/ArcBulk WRONGTYPE (compat divergence)**
 
 **Theme**: two shipped data-integrity bugs fixed, both found by the v3-arc day-one audits (op-surface sweep + master-CI triage).

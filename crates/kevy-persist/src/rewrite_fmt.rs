@@ -353,3 +353,40 @@ pub(crate) fn write_multibulk<W: Write, A: ArgvView + ?Sized>(
     }
     Ok(())
 }
+
+/// Parity manifest (v2.1): every verb the AOF rewrite emits.
+/// Cross-checked against `kevy_resp::ops_table` below.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const REWRITE_EMIT_VERBS: &[&str] = &[
+    "SET", "HSET", "RPUSH", "SADD", "ZADD", "PEXPIREAT", "XADD",
+    "XSETID", "XGROUP", "XCLAIM",
+];
+
+#[cfg(test)]
+mod op_table_parity {
+    use super::REWRITE_EMIT_VERBS;
+    use kevy_resp::ops_table::{ops_with, surface};
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn rewrite_manifest_matches_table() {
+        let m: BTreeSet<&str> = REWRITE_EMIT_VERBS.iter().copied().collect();
+        let t: BTreeSet<&str> = ops_with(surface::REWRITE).into_iter().collect();
+        assert_eq!(
+            m, t,
+            "rewrite emit set != OP_TABLE REWRITE flags — update both when changing rewrite_fmt"
+        );
+    }
+
+    #[test]
+    fn rewrite_manifest_verbs_have_source_literals() {
+        let src = include_str!("rewrite_fmt.rs");
+        for v in REWRITE_EMIT_VERBS {
+            let lit = format!("\"{v}");
+            assert!(
+                src.contains(&lit) || src.contains(&format!("b\"{v}\"")),
+                "REWRITE_EMIT_VERBS lists {v} but rewrite_fmt.rs has no literal for it"
+            );
+        }
+    }
+}

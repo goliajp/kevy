@@ -42,6 +42,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 mod cmd;
+mod cmd_zadd;
 mod cmd_block;
 mod metrics_http;
 pub(crate) mod audit_log;
@@ -324,3 +325,5 @@ pub fn handle_conn(conn: &Socket, store: &mut Store) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_op_table;

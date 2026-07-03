@@ -1,0 +1,6 @@
+{
+  "aof_bytes_per_set_d64": 106,
+  "rewrite_ms_at_100000_keys": 24,
+  "band_pct": 20,
+  "recorded": "2026-07-03T14:12:31Z"
+}

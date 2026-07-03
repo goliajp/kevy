@@ -179,3 +179,28 @@ fn spop_replay_removes_exactly_the_popped_members() {
     drop(s2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// v2.1 durability barrier: everysec store + `fsync_aof()` → writes
+/// are on disk at the barrier (verified via reopen; the crash-window
+/// semantics are the documented contract, exercised by chaos suites).
+#[test]
+fn fsync_aof_barrier_flushes_everysec() {
+    let dir = tmp_dir("fsync-barrier");
+    {
+        let s = Store::open(
+            Config::default()
+                .with_persist(&dir)
+                .with_ttl_reaper_manual()
+                .with_appendfsync(AppendFsync::EverySec),
+        )
+        .unwrap();
+        s.set(b"critical", b"v").unwrap();
+        s.fsync_aof().unwrap();
+        // Under `always` it's a no-op and must still be Ok.
+        s.fsync_aof().unwrap();
+    }
+    let s2 = Store::open(reopen_cfg(&dir)).unwrap();
+    assert_eq!(s2.get(b"critical").unwrap(), Some(b"v".to_vec()));
+    drop(s2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
