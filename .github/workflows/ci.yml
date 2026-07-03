@@ -41,6 +41,13 @@ jobs:
             target
           key: cov-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       - name: covgate (ratchet vs bench/COV-BASELINE.json)
+        # Forced epoll: the cov axis measures line coverage, not the
+        # reactor; GH runners ENOMEM on per-shard ring setup (the
+        # io_uring-fallback gap, tracked for v2.0.22) which would kill
+        # the instrumented test run. uring paths are exercised by the
+        # test matrix and the lx64 gates.
+        env:
+          KEVY_IO_URING: "0"
         run: bash bench/covgate.sh
 
   # ───────────── native cargo test on the OS matrix ─────────────
