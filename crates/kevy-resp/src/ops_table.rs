@@ -136,6 +136,14 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("HMSET",        WR, GROW, Some(N::Hash),   None,    SERVER),
     op("HSCAN",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("HSET",         WR, GROW, Some(N::Hash),   None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
+    // v2.4 hash field TTLs (Redis 7.4). Relative forms are
+    // effect-logged as the absolute HPEXPIREAT (exemption below);
+    // HPEXPIREAT is the canonical replay/rewrite carrier.
+    op("HEXPIRE",      WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE),
+    op("HPEXPIRE",     WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE),
+    op("HPEXPIREAT",   WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY | REWRITE),
+    op("HTTL",         RD, NG,   None,            None,    SERVER | ESTORE),
+    op("HPERSIST",     WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
     op("HSETNX",       WR, GROW, Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
     op("HVALS",        RD, NG,   None,            None,    SERVER | ESTORE),
     // ---- lists --------------------------------------------------------
@@ -183,6 +191,8 @@ pub const OP_TABLE: &[OpSpec] = &[
     // v2.2 algebra: effect-logged as DEL+ZADD/SADD, so no REPLAY arm
     // of their own is needed (the effect verbs replay).
     op("ZINTERSTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
+    // v2.4 delayed-job primitive; embedded logs the ZREM effect.
+    op("ZPOPMIN.BELOW", WR, NG,  Some(N::Zset),   None,    SERVER | ESTORE),
     op("ZUNIONSTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
     op("ZDIFFSTORE",   WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
     op("ZINTERCARD",   RD, NG,   None,            None,    SERVER | ESTORE),
@@ -380,6 +390,8 @@ mod tests {
                 "MSET" | "SETNX" | "GETEX" | "BITOP" | "COPY" | "UNLINK" | "TOUCH"
                     // v2.2 algebra: effect-logged as DEL + plain ZADD/SADD.
                     | "ZINTERSTORE" | "ZUNIONSTORE" | "ZDIFFSTORE"
+                    | "ZPOPMIN.BELOW"
+                    | "HEXPIRE" | "HPEXPIRE"
                     | "SINTERSTORE" | "SUNIONSTORE" | "SDIFFSTORE"
             );
             assert!(

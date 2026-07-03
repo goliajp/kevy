@@ -50,6 +50,8 @@ pub mod expire;
 pub use expire::ExpireStats;
 pub(crate) use entry::Entry;
 mod hash;
+mod hash_ttl;
+pub use hash_ttl::{HExpireCode, HExpireCond};
 mod keyspace;
 mod list;
 mod list_ops;
@@ -115,6 +117,10 @@ pub use clock::set_wall_clock_ms;
 #[derive(Default)]
 pub struct Store {
     pub(crate) map: KevyMap<SmallBytes, Entry>,
+    /// v2.4 per-field hash TTLs: key → (field → absolute unix-ms
+    /// deadline). Holds ONLY keys with live field TTLs — one
+    /// `is_empty()` branch per hash access when the feature is unused.
+    pub(crate) hfttl: std::collections::HashMap<SmallBytes, KevyMap<SmallBytes, u64>>,
     /// Coarse cached monotonic clock (ns since [`epoch`]), refreshed by the
     /// reactor loop / reaper tick via [`Self::refresh_clock`]. Lazy expiry on
     /// the read path (`live_entry`) compares deadlines against this instead of

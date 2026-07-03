@@ -41,6 +41,9 @@ pub(crate) fn commit_write(inner: &mut Inner, parts: &[&[u8]]) -> io::Result<()>
     if let Some(feed) = &inner.feed {
         crate::store::Store::feed_push(feed, parts);
     }
+    if let Some(b) = &inner.blocker {
+        b.wake_all();
+    }
     inner.store.try_evict_after_write();
     Ok(())
 }

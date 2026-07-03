@@ -60,3 +60,41 @@ fn hmset_on_wrong_type_errors() {
         String::from_utf8_lossy(&reply)
     );
 }
+
+// ---- v2.4: hash field TTLs --------------------------------------------------
+
+#[test]
+fn hexpire_httl_hpersist_dispatch() {
+    let mut store = Store::new();
+    kevy::dispatch(&mut store, &argv(&[b"HSET", b"ht", b"a", b"1", b"b", b"2"]));
+    // HEXPIRE with GT cond keyword + FIELDS
+    let r = kevy::dispatch(
+        &mut store,
+        &argv(&[b"HEXPIRE", b"ht", b"100", b"FIELDS", b"2", b"a", b"nope"]),
+    );
+    assert_eq!(r, b"*2\r\n:1\r\n:-2\r\n");
+    let r = kevy::dispatch(&mut store, &argv(&[b"HTTL", b"ht", b"FIELDS", b"2", b"a", b"b"]));
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.starts_with("*2\r\n:"), "{s}");
+    assert!(s.ends_with(":-1\r\n"), "b has no ttl: {s}");
+    // NX refused on a
+    let r = kevy::dispatch(
+        &mut store,
+        &argv(&[b"HEXPIRE", b"ht", b"200", b"NX", b"FIELDS", b"1", b"a"]),
+    );
+    assert_eq!(r, b"*1\r\n:0\r\n");
+    // HPERSIST clears
+    let r = kevy::dispatch(&mut store, &argv(&[b"HPERSIST", b"ht", b"FIELDS", b"1", b"a"]));
+    assert_eq!(r, b"*1\r\n:1\r\n");
+    // HPEXPIREAT with past deadline deletes (code 2)
+    let r = kevy::dispatch(
+        &mut store,
+        &argv(&[b"HPEXPIREAT", b"ht", b"1", b"FIELDS", b"1", b"b"]),
+    );
+    assert_eq!(r, b"*1\r\n:2\r\n");
+    let r = kevy::dispatch(&mut store, &argv(&[b"HEXISTS", b"ht", b"b"]));
+    assert_eq!(r, b":0\r\n");
+    // FIELDS keyword mandatory
+    let r = kevy::dispatch(&mut store, &argv(&[b"HEXPIRE", b"ht", b"5", b"1", b"a"]));
+    assert!(r.starts_with(b"-ERR"));
+}

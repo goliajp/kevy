@@ -346,6 +346,17 @@ impl<C: Commands> Shard<C> {
     /// `PEXPIREAT`) replay correctly and need no follow-up.
     pub(crate) fn log_write<A: ArgvView + ?Sized>(&mut self, args: &A) {
         self.log(args);
+        // v2.4: hash field-TTL relative forms get the same absolute
+        // follow-up discipline — `HPEXPIREAT key <abs> FIELDS …`
+        // re-anchors the replay-time deadline to the original wall
+        // clock. HPEXPIREAT itself is already absolute.
+        if args
+            .get(0)
+            .is_some_and(|v| v.eq_ignore_ascii_case(b"HEXPIRE") || v.eq_ignore_ascii_case(b"HPEXPIRE"))
+        {
+            self.log_hash_ttl_followup(args);
+            return;
+        }
         if !relative_ttl_write(args) {
             return;
         }
@@ -360,6 +371,33 @@ impl<C: Commands> Shard<C> {
         c.push(b"PEXPIREAT");
         c.push(&key);
         c.push(abs.to_string().as_bytes());
+        self.log(&c);
+    }
+
+    /// v2.4 log_write helper: rewrite a relative `HEXPIRE`/`HPEXPIRE`
+    /// frame's deadline as absolute unix-ms and append the canonical
+    /// `HPEXPIREAT` follow-up (fields tail copied verbatim).
+    fn log_hash_ttl_followup<A: ArgvView + ?Sized>(&mut self, args: &A) {
+        if args.len() < 6 {
+            return;
+        }
+        let Some(raw) = std::str::from_utf8(&args[2]).ok().and_then(|s| s.parse::<i64>().ok())
+        else {
+            return;
+        };
+        let ms = if args[0].eq_ignore_ascii_case(b"HEXPIRE") {
+            raw.saturating_mul(1000)
+        } else {
+            raw
+        };
+        let abs = kevy_store::now_unix_ms().saturating_add_signed(ms);
+        let mut c = Argv::with_capacity(args.len(), 0);
+        c.push(b"HPEXPIREAT");
+        c.push(&args[1]);
+        c.push(abs.to_string().as_bytes());
+        for i in 3..args.len() {
+            c.push(&args[i]);
+        }
         self.log(&c);
     }
 

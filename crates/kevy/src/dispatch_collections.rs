@@ -11,7 +11,8 @@
 use crate::cmd_zadd::cmd_zadd;
 use crate::cmd::{cmd_hset, wrong_args, emit_int_result, store_err, rest_borrowed, arg_i64, ERR_NOT_INT, emit_bulk_array, cmd_pop, cmd_blpop, fmt_score, arg_f64, cmd_zrange, cmd_zrangebyscore, parse_score_bound};
 use crate::dispatch_collections_v127::{
-    cmd_bzpopmin, cmd_hscan, cmd_lpos, cmd_sscan, cmd_zpopmin, cmd_zrevrangebyscore, cmd_zscan,
+    cmd_bzpopmin, cmd_hscan, cmd_lpos, cmd_sscan, cmd_zpopmin, cmd_zpopmin_below,
+    cmd_zrevrangebyscore, cmd_zscan,
 };
 use kevy_resp::{
     ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_null_bulk,
@@ -28,6 +29,12 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
 ) -> bool {
     match cmd {
         b"HSET" => cmd_hset(store, args, out),
+        // v2.4 hash field TTLs (Redis 7.4 family).
+        b"HEXPIRE" => crate::cmd_hash_ttl::cmd_hexpire(store, args, out),
+        b"HPEXPIRE" => crate::cmd_hash_ttl::cmd_hpexpire(store, args, out),
+        b"HPEXPIREAT" => crate::cmd_hash_ttl::cmd_hpexpireat(store, args, out),
+        b"HTTL" => crate::cmd_hash_ttl::cmd_httl(store, args, out),
+        b"HPERSIST" => crate::cmd_hash_ttl::cmd_hpersist(store, args, out),
         // v1.27.3: deprecated `HMSET` alias — same wire shape as
         // HSET (`HMSET key field value [field value ...]`), but
         // returns `+OK` instead of the integer added-count. BullMQ
@@ -395,6 +402,8 @@ pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
         // with ZPOPMIN, and trim completed/failed job sets via the
         // ZREMRANGEBY* family.
         b"ZPOPMIN" => cmd_zpopmin(store, args, out),
+        // v2.4 delayed-job primitive (kevy extension, dot-namespaced).
+        b"ZPOPMIN.BELOW" => cmd_zpopmin_below(store, args, out),
         b"SSCAN" => cmd_sscan(store, args, out),
         b"HSCAN" => cmd_hscan(store, args, out),
         b"ZSCAN" => cmd_zscan(store, args, out),
