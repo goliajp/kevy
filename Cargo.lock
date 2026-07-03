@@ -655,6 +655,10 @@ name = "kevy-uring"
 version = "2.1.0"
 
 [[package]]
+name = "kevy-vector"
+version = "2.1.0"
+
+[[package]]
 name = "kv-log-macro"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
