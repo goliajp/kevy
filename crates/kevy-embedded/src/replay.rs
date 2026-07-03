@@ -9,7 +9,7 @@
 //! so the embedded crate stays free of `kevy-rt` / `kevy-sys` deps.
 
 use kevy_persist::Argv;
-use kevy_store::Store;
+use kevy_store::{ScoreBound, Store};
 use std::time::Duration;
 
 /// Apply one command from an AOF frame to `store`. Mirrors the verbs
@@ -18,6 +18,11 @@ use std::time::Duration;
 /// "append-side" verbs (DEL, FLUSHALL, EXPIRE, PERSIST, INCR family,
 /// LPUSH, LPOP, RPOP, HDEL, SREM, ZREM, LSET, LREM, LTRIM, SPOP) that
 /// the server's `KevyCommands::is_write` set logs as-is.
+///
+/// Invariant (v1.15.1): every verb any `kevy-embedded` facade method
+/// passes to `commit_write` MUST have an arm here — a missing arm is
+/// silent data loss on reopen (`store_tests_replay_all.rs` is the
+/// guard). The v2.1 OP_TABLE makes this cross-check structural.
 pub(crate) fn apply(store: &mut Store, args: &Argv) {
     let Some(name) = args.first() else { return };
     let verb = ascii_upper(name);
@@ -51,6 +56,20 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
                 let _ = store.append(k, v);
             }
         }
+        b"SETBIT" => {
+            if let (Some(k), Some(off), Some(v)) = (args.get(1), args.get(2), args.get(3))
+                && let (Some(offset), Some(bit)) = (parse_u64(off), parse_u64(v))
+            {
+                let _ = store.setbit(k, offset, (bit != 0) as u8);
+            }
+        }
+        b"SETRANGE" => {
+            if let (Some(k), Some(off), Some(v)) = (args.get(1), args.get(2), args.get(3))
+                && let Some(offset) = parse_u64(off)
+            {
+                let _ = store.setrange(k, offset, v);
+            }
+        }
         b"GETSET" => {
             if let (Some(k), Some(v)) = (args.get(1), args.get(2)) {
                 let _ = store.getset(k, v.to_vec());
@@ -82,6 +101,18 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
                 let _ = store.hincrby(k, f, d);
             }
         }
+        b"HINCRBYFLOAT" => {
+            if let (Some(k), Some(f), Some(amt)) = (args.get(1), args.get(2), args.get(3))
+                && let Some(d) = parse_f64(amt)
+            {
+                let _ = store.hincrbyfloat(k, f, d);
+            }
+        }
+        b"HSETNX" => {
+            if let (Some(k), Some(f), Some(v)) = (args.get(1), args.get(2), args.get(3)) {
+                let _ = store.hsetnx(k, f, v);
+            }
+        }
         b"RPUSH" => apply_pairs_strip(store, args, |s, k, vs| {
             let _ = s.rpush(k, vs);
         }),
@@ -111,6 +142,24 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
                 let _ = store.ltrim(k, start, stop);
             }
         }
+        b"LINSERT" => {
+            if let (Some(k), Some(dir), Some(pivot), Some(v)) =
+                (args.get(1), args.get(2), args.get(3), args.get(4))
+            {
+                let before = dir.eq_ignore_ascii_case(b"BEFORE");
+                let _ = store.linsert(k, before, pivot, v);
+            }
+        }
+        b"RENAME" => {
+            if let (Some(src), Some(dst)) = (args.get(1), args.get(2)) {
+                let _ = store.rename(src, dst, false);
+            }
+        }
+        b"RENAMENX" => {
+            if let (Some(src), Some(dst)) = (args.get(1), args.get(2)) {
+                let _ = store.rename(src, dst, true);
+            }
+        }
         b"SADD" => apply_pairs_strip(store, args, |s, k, ms| {
             let _ = s.sadd(k, ms);
         }),
@@ -135,6 +184,35 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
                 && let Some(d) = parse_f64(incr)
             {
                 let _ = store.zincrby(k, d, m);
+            }
+        }
+        // ZPOPMIN replays deterministically: min-by-(score, member) is
+        // well-defined, so re-popping `count` reproduces the live pop.
+        b"ZPOPMIN" => {
+            if let Some(k) = args.get(1) {
+                let count = args
+                    .get(2)
+                    .and_then(parse_i64)
+                    .map_or(1usize, |c| c.max(0) as usize);
+                let _ = store.zpopmin(k, count);
+            }
+        }
+        b"ZREMRANGEBYRANK" => {
+            if let (Some(k), Some(s), Some(e)) = (args.get(1), args.get(2), args.get(3))
+                && let (Some(start), Some(stop)) = (parse_i64(s), parse_i64(e))
+            {
+                let _ = store.zrem_range_by_rank(k, start, stop);
+            }
+        }
+        b"ZREMRANGEBYSCORE" => {
+            if let (Some(k), Some(mn), Some(mx)) = (args.get(1), args.get(2), args.get(3))
+                && let (Some(min), Some(max)) = (parse_f64(mn), parse_f64(mx))
+            {
+                let _ = store.zrem_range_by_score(
+                    k,
+                    ScoreBound { value: min, exclusive: false },
+                    ScoreBound { value: max, exclusive: false },
+                );
             }
         }
         _ => {

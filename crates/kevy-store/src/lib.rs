@@ -66,6 +66,7 @@ mod snapshot;
 pub use snapshot::SnapshotView;
 mod stream;
 mod string;
+mod string_rmw;
 mod util;
 mod value;
 mod zset;
@@ -570,3 +571,5 @@ mod tests;
 mod tests_memory;
 #[cfg(test)]
 mod tests_snapshot;
+#[cfg(test)]
+mod tests_string_encoding;
