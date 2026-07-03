@@ -50,6 +50,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod feed;
 pub mod handshake;
 pub mod replica;
 mod replica_decode;
