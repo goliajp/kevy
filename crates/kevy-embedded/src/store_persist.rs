@@ -17,6 +17,28 @@ impl Store {
     /// `BGREWRITEAOF`: rebuild every shard's AOF from current state.
     /// Synchronous. Returns the summed stats (`None` if persistence is off /
     /// no shard rewrote).
+    /// Durability barrier (v2.1): flush + `fdatasync` every shard's
+    /// AOF now, regardless of the configured `appendfsync` policy. On
+    /// `Ok(())`, every write acknowledged before this call is on
+    /// stable storage. The `EverySec` serving-store idiom:
+    ///
+    /// ```ignore
+    /// store.atomic(|c| { /* critical write */ Ok(()) })?;
+    /// store.fsync_aof()?; // durable-on-ack for THIS block only
+    /// ```
+    ///
+    /// Cost: one `fdatasync` per dirty shard; a no-op on clean shards.
+    /// Under `appendfsync = always` it is a no-op (already durable).
+    pub fn fsync_aof(&self) -> io::Result<()> {
+        for shard in self.shards.iter() {
+            let mut g = lock_write(shard);
+            if let Some(aof) = &mut g.aof {
+                aof.sync_now()?;
+            }
+        }
+        Ok(())
+    }
+
     pub fn rewrite_aof(&self) -> io::Result<Option<RewriteStats>> {
         let mut agg: Option<RewriteStats> = None;
         for shard in self.shards.iter() {
