@@ -83,6 +83,10 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"PEXPIRE"
             | b"EXPIREAT"
             | b"PEXPIREAT"
+            | b"HEXPIRE"
+            | b"HPEXPIRE"
+            | b"HPEXPIREAT"
+            | b"HPERSIST"
             | b"PERSIST"
             | b"FLUSHDB"
             | b"FLUSHALL"
@@ -155,7 +159,8 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
             NotifyClass::String
         }
         // Hash — class `h`.
-        b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" => NotifyClass::Hash,
+        b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" | b"HEXPIRE"
+        | b"HPEXPIRE" | b"HPEXPIREAT" | b"HPERSIST" => NotifyClass::Hash,
         // List — class `l`.
         b"LPUSH" | b"RPUSH" | b"LPOP" | b"RPOP" | b"LSET" | b"LREM" | b"LTRIM"
         | b"RPOPLPUSH" | b"LMOVE" => NotifyClass::List,
