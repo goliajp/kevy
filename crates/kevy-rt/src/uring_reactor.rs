@@ -476,9 +476,18 @@ impl<C: Commands> Shard<C> {
             woke_from_park = false;
             let has_backlog = self.backlog.iter().any(|b| !b.is_empty());
             if !io_work && did_inbound == 0 && !has_backlog {
+                // v2.2-perf: forwarded requests outstanding ⇒ replies land
+                // within ~one cross-shard RTT — stay in the spin rung
+                // rather than paying a kernel sleep + wake per reply
+                // batch. Bounded: inflight can only drain (the owner
+                // answers) or the conn dies (folds error responses).
+                if self.xshard_inflight > 0 {
+                    std::hint::spin_loop();
+                    continue;
+                }
                 idle_spins = idle_spins.saturating_add(1);
                 if idle_spins >= URING_SPIN_LIMIT {
-                    if !napped { // DIAG-EXPERIMENT: unconditional nap (exact-old-ladder replica)
+                    if !napped && last_inbound_batch >= NAP_BATCH_MIN {
                         std::thread::sleep(Duration::from_micros(NAP_US));
                         napped = true;
                         diag_naps += 1;
