@@ -13,6 +13,13 @@ pub(crate) fn bm25_score(tf: f64, df: f64, n_docs: f64, dl: f64, avgdl: f64) -> 
     idf * tf * (BM25_K1 + 1.0) / denom
 }
 
+/// Length-independent upper bound of one term's score (dl→0 floor of
+/// the denominator) — the MaxScore pruning bound.
+pub(crate) fn bm25_upper(max_tf: f64, df: f64, n_docs: f64) -> f64 {
+    let idf = ((n_docs - df + 0.5) / (df + 0.5) + 1.0).ln();
+    idf * max_tf * (BM25_K1 + 1.0) / (max_tf + BM25_K1 * (1.0 - BM25_B))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
