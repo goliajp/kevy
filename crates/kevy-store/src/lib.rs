@@ -70,6 +70,8 @@ mod string_rmw;
 mod util;
 mod value;
 mod zset;
+mod zset_flags;
+pub use zset_flags::{ZaddFlags, ZaddReport};
 pub use stream::{
     AutoclaimResult, ConsumerGroup, ConsumerState, EntryBatch, GroupCreateMode,
     LoadedGroup, LoadedPelEntry, LoadedStreamEntry, PelEntry, PendingExtended,

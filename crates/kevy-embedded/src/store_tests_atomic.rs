@@ -288,3 +288,57 @@ fn atomic_new_writes_survive_reopen() {
     drop(s2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- v2.1: ZADD flags across embedded surfaces ---------------------------
+
+#[test]
+fn zadd_flags_facade_pipeline_atomic_and_reopen() {
+    use crate::ZaddFlags;
+    use crate::config::AppendFsync;
+    let gt = ZaddFlags { gt: true, ..ZaddFlags::default() };
+    let dir = crate::store::tests::tmp_dir("zadd-flags-reopen");
+    {
+        let s = Store::open(
+            Config::default()
+                .with_persist(&dir)
+                .with_ttl_reaper_manual()
+                .with_appendfsync(AppendFsync::Always),
+        )
+        .unwrap();
+        // Facade: GT heal — stale write vetoed, newer applied.
+        s.zadd(b"z", &[(5.0, b"m")]).unwrap();
+        assert_eq!(s.zadd_flags(b"z", &[(3.0, b"m")], gt).unwrap().changed, 0);
+        assert_eq!(s.zadd_flags(b"z", &[(7.0, b"m")], gt).unwrap().changed, 1);
+        // INCR form: veto returns None and writes nothing.
+        assert_eq!(s.zadd_incr(b"z", -1.0, b"m", gt).unwrap(), None);
+        assert_eq!(s.zadd_incr(b"z", 2.0, b"m", gt).unwrap(), Some(9.0));
+        // Pipeline surface.
+        s.pipeline().zadd_flags(b"z", &[(1.0, b"m"), (4.0, b"p")], gt).commit().unwrap();
+        assert_eq!(s.zscore(b"z", b"m").unwrap(), Some(9.0)); // vetoed
+        assert_eq!(s.zscore(b"z", b"p").unwrap(), Some(4.0)); // added
+        // Atomic surfaces.
+        s.atomic(|c| {
+            let rep = c.zadd_flags(b"z", &[(2.0, b"m"), (11.0, b"m2")], gt)?;
+            assert_eq!((rep.added, rep.changed), (1, 1));
+            Ok(())
+        })
+        .unwrap();
+        s.atomic_all_shards(|c| {
+            let rep = c.zadd_flags(b"z", &[(12.0, b"m")], gt)?;
+            assert_eq!(rep.changed, 1);
+            Ok(())
+        })
+        .unwrap();
+        // Invalid combo rejected at the typed boundary.
+        assert!(s
+            .zadd_flags(b"z", &[(1.0, b"q")], ZaddFlags { nx: true, xx: true, ..ZaddFlags::default() })
+            .is_err());
+    }
+    // Reopen: the logged *effects* replay to the exact same state.
+    let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
+    assert_eq!(s2.zscore(b"z", b"m").unwrap(), Some(12.0));
+    assert_eq!(s2.zscore(b"z", b"m2").unwrap(), Some(11.0));
+    assert_eq!(s2.zscore(b"z", b"p").unwrap(), Some(4.0));
+    drop(s2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
