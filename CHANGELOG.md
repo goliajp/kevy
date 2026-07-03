@@ -31,6 +31,24 @@ train, versions bump at ship time.
 - Batch-gated 200µs nap retained as the second ladder rung for the
   no-inflight idle shape (`NAP_BATCH_MIN` 4).
 
+### v2.7 — full-text search (P2, text kind)
+
+- **New stone crate `kevy-text`** (pure logic, zero deps):
+  script-aware dictionary-free tokenization — Latin words lowercased
+  (min 2 chars), CJK (ideographs/kana/hangul) as adjacent bigrams
+  with lone-char fallback, tokens never crossing script boundaries;
+  inverted per-shard segments; BM25 (k1=1.2 b=0.75, non-negative idf).
+- **`KIND text`**: third index kind riding the same catalog / write
+  hook / backfill skeleton — the field's raw bytes tokenize
+  synchronously with every write. `IDX.QUERY <name> MATCH <text>
+  [LIMIT ≤1000] [FIELDS …]` fans out per-shard BM25 top-LIMIT with
+  owning-shard hydration and merges by score. Shard-local statistics
+  and no-cursor are documented approximations (docs/text-search.md).
+  Embedded: `idx_match`. LIST/VERIFY report docs/bytes/postings/
+  tokens for text kinds.
+- bench/textgate.sh: MATCH p95 < 20ms @ 1M mixed-script docs
+  (median-conn) + memory formula vs real RSS growth.
+
 ### v2.6 — views (P3)
 
 - **`VIEW.*` / embedded `view_*`**: named AND/OR/DIFF compositions of
