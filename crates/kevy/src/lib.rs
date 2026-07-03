@@ -50,6 +50,7 @@ mod cmd_block_serve;
 mod cmd_data;
 mod cmd_hash_ttl;
 mod cmd_index;
+mod cmd_index_query;
 mod index_runtime;
 mod cmd_hello;
 mod cmd_lua;

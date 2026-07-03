@@ -168,3 +168,75 @@ fn create_backfill_query_cursor_count_verify_drop() {
     let r = cmd(&mut c, &[b"IDX.QUERY", b"age_idx", b"EQ", b"25"]);
     assert!(r.starts_with(b"-ERR no such index"));
 }
+
+#[test]
+fn hydration_and_compose() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    for i in 0..20 {
+        cmd(
+            &mut c,
+            &[
+                b"HSET", format!("emp:{i}").as_bytes(),
+                b"age", format!("{}", 20 + i).as_bytes(),
+                b"dept", if i % 2 == 0 { b"eng" } else { b"ops" },
+                b"name", format!("emp-{i}").as_bytes(),
+            ],
+        );
+    }
+    cmd(&mut c, &[b"IDX.CREATE", b"e_age", b"ON", b"PREFIX", b"emp:", b"FIELD", b"age", b"TYPE", b"i64", b"KIND", b"range"]);
+    cmd(&mut c, &[b"IDX.CREATE", b"e_dept", b"ON", b"PREFIX", b"emp:", b"FIELD", b"dept", b"TYPE", b"str", b"KIND", b"range"]);
+
+    // FIELDS hydration: rows come back with name+dept from the owner shard.
+    let r = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"e_age", b"RANGE", b"20", b"24", b"LIMIT", b"100", b"FIELDS", b"name", b"dept"],
+    );
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("emp-0"), "hydrated name: {s}");
+    assert!(s.contains("eng") && s.contains("ops"), "hydrated dept: {s}");
+    assert_eq!(s.matches("name\r").count(), 5, "5 rows × field labels: {s}");
+
+    // COMPOSE AND: age in [20,29] AND dept == eng → emp:0,2,4,6,8.
+    let r = query_ready(
+        &mut c,
+        &[b"IDX.QUERY", b"COMPOSE", b"AND", b"e_age", b"RANGE", b"20", b"29", b"e_dept", b"EQ", b"eng", b"LIMIT", b"100"],
+    );
+    let s = String::from_utf8_lossy(&r);
+    assert_eq!(s.matches("emp:").count(), 5, "{s}");
+    assert!(s.contains("emp:0") && s.contains("emp:8") && !s.contains("emp:1\r"), "{s}");
+
+    // COMPOSE OR: age in [20,21] OR dept == eng → 0..=1 ∪ evens = 11 keys.
+    let r = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"COMPOSE", b"OR", b"e_age", b"RANGE", b"20", b"21", b"e_dept", b"EQ", b"eng", b"LIMIT", b"100"],
+    );
+    let s = String::from_utf8_lossy(&r);
+    assert_eq!(s.matches("emp:").count(), 11, "{s}");
+
+    // COMPOSE cursor pagination (key-ordered, no overlap).
+    let r1 = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"COMPOSE", b"OR", b"e_age", b"RANGE", b"20", b"21", b"e_dept", b"EQ", b"eng", b"LIMIT", b"4"],
+    );
+    let s1 = String::from_utf8_lossy(&r1);
+    let cursor = s1.lines().nth(2).unwrap().to_string();
+    assert_ne!(cursor, "0");
+    let r2 = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"COMPOSE", b"OR", b"e_age", b"RANGE", b"20", b"21", b"e_dept", b"EQ", b"eng", b"LIMIT", b"100", b"CURSOR", cursor.as_bytes()],
+    );
+    let s2 = String::from_utf8_lossy(&r2);
+    assert_eq!(s1.matches("emp:").count() + s2.matches("emp:").count(), 11, "{s1} // {s2}");
+    for key in s1.lines().filter(|l| l.starts_with("emp:")) {
+        assert!(!s2.contains(&format!("{key}\r")), "no overlap on {key}");
+    }
+
+    // COMPOSE with hydration.
+    let r = cmd(
+        &mut c,
+        &[b"IDX.QUERY", b"COMPOSE", b"AND", b"e_age", b"RANGE", b"20", b"23", b"e_dept", b"EQ", b"eng", b"LIMIT", b"10", b"FIELDS", b"name"],
+    );
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("emp-0") && s.contains("emp-2"), "{s}");
+}
