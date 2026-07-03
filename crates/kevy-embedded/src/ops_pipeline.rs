@@ -31,6 +31,7 @@ enum PendingOp {
     HDel { key: Vec<u8>, fields: Vec<Vec<u8>> },
     HIncrBy { key: Vec<u8>, field: Vec<u8>, delta: i64 },
     ZAdd { key: Vec<u8>, pairs: Vec<(f64, Vec<u8>)> },
+    ZAddFlags { key: Vec<u8>, pairs: Vec<(f64, Vec<u8>)>, flags: kevy_store::ZaddFlags },
     ZRem { key: Vec<u8>, members: Vec<Vec<u8>> },
     ZIncrBy { key: Vec<u8>, delta: f64, member: Vec<u8> },
     SAdd { key: Vec<u8>, members: Vec<Vec<u8>> },
@@ -110,6 +111,21 @@ impl<'a> Pipeline<'a> {
         self.ops.push(PendingOp::ZAdd {
             key: key.to_vec(),
             pairs: pairs.iter().map(|(s, m)| (*s, m.to_vec())).collect(),
+        });
+        self
+    }
+
+    /// Flags-aware `ZADD` (v2.1) — e.g. the `GT` monotonic-heal form.
+    pub fn zadd_flags(
+        mut self,
+        key: &[u8],
+        pairs: &[(f64, &[u8])],
+        flags: kevy_store::ZaddFlags,
+    ) -> Self {
+        self.ops.push(PendingOp::ZAddFlags {
+            key: key.to_vec(),
+            pairs: pairs.iter().map(|(s, m)| (*s, m.to_vec())).collect(),
+            flags,
         });
         self
     }
@@ -206,6 +222,11 @@ impl<'a> Pipeline<'a> {
                 let refs: Vec<(f64, &[u8])> =
                     pairs.iter().map(|(s, m)| (*s, m.as_slice())).collect();
                 self.store.zadd(&key, &refs)?;
+            }
+            PendingOp::ZAddFlags { key, pairs, flags } => {
+                let refs: Vec<(f64, &[u8])> =
+                    pairs.iter().map(|(s, m)| (*s, m.as_slice())).collect();
+                self.store.zadd_flags(&key, &refs, flags)?;
             }
             PendingOp::ZRem { key, members } => {
                 let refs: Vec<&[u8]> = members.iter().map(|m| m.as_slice()).collect();

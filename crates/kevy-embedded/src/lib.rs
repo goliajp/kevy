@@ -64,6 +64,7 @@ mod ops_more;
 mod ops_p2;
 mod ops_p3;
 mod ops_pipeline;
+mod ops_zset_flags;
 mod ops_scan;
 pub use ops_atomic::AtomicCtx;
 pub use ops_atomic_all::AtomicAllShards;
@@ -87,7 +88,7 @@ pub use config::{AppendFsync, Config, EvictionPolicy, TtlReaperMode};
 pub use info::KevyInfo;
 pub use metric::KevyMetric;
 pub use kevy_persist::RewriteStats;
-pub use kevy_store::{ExpireStats, ScoreBound, StoreError};
+pub use kevy_store::{ExpireStats, ScoreBound, StoreError, ZaddFlags, ZaddReport};
 pub use pubsub::{PubsubFrame, Subscription};
 pub use store::{Store, WeakStore};
 

@@ -42,6 +42,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 mod cmd;
+mod cmd_zadd;
 mod cmd_block;
 mod metrics_http;
 pub(crate) mod audit_log;

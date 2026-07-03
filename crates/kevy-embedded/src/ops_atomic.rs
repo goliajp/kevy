@@ -275,6 +275,40 @@ impl AtomicCtx<'_> {
         self.inner.store.zcard(key).map_err(store_err)
     }
 
+    /// Flags-aware `ZADD` (v2.1). AOF logs the applied pairs as plain
+    /// `ZADD` — the effect, never the condition (deterministic replay).
+    pub fn zadd_flags(
+        &mut self,
+        key: &[u8],
+        pairs: &[(f64, &[u8])],
+        flags: kevy_store::ZaddFlags,
+    ) -> io::Result<kevy_store::ZaddReport> {
+        if !flags.valid() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid ZADD flag combo"));
+        }
+        let rep = self
+            .inner
+            .store
+            .zadd_flags_borrowed(key, pairs, flags)
+            .map_err(store_err)?;
+        if !rep.applied.is_empty() {
+            let score_strs: Vec<Vec<u8>> = rep
+                .applied
+                .iter()
+                .map(|(s, _)| format!("{s}").into_bytes())
+                .collect();
+            let mut parts: Vec<&[u8]> = Vec::with_capacity(2 + rep.applied.len() * 2);
+            parts.push(b"ZADD");
+            parts.push(key);
+            for (i, (_, m)) in rep.applied.iter().enumerate() {
+                parts.push(&score_strs[i]);
+                parts.push(m);
+            }
+            self.log_arg(&parts);
+        }
+        Ok(rep)
+    }
+
     fn log_arg(&mut self, parts: &[&[u8]]) {
         self.log.push(parts.iter().map(|p| p.to_vec()).collect());
     }
