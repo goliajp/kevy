@@ -104,6 +104,19 @@ run_legacy() { # $1 = get|set -> echoes overall rps (fixed key, REUSEPORT)
     | awk '{printf "%.0f", $1}'
 }
 
+# v2.2 zset-algebra hot line: pipelined ZINTERSTORE over two warmed
+# zsets on the plain-mode server (arbitrary-command form; reuses the
+# legacy topology). Sources warmed once per instance by the caller.
+run_zalg() {
+  local raw
+  raw=$(taskset -c 8-15 redis-benchmark -h 127.0.0.1 -p 7001 \
+    -n 200000 -c 50 -P 16 --threads 8 -q \
+    ZINTERSTORE "zalg:dst:__rand_int__" 2 zalg:a zalg:b 2>/dev/null)
+  printf "%s" "$raw" | tr "\r" "\n" \
+    | grep -oE "[0-9.]+ requests per second" | tail -1 \
+    | awk '{printf "%.0f", $1}'
+}
+
 median_of() { printf "%s\n" "$@" | sort -n | awk '{a[NR]=$1} END {print a[int((NR+1)/2)]}'; }
 
 # ---------- measure: 3 fresh instances per angle, median across them ----------
@@ -138,10 +151,18 @@ for inst in $(seq 1 "$INSTANCES"); do
   taskset -c 8-15 redis-benchmark -p 7001 -t set -n 300000 -P 64 -q >/dev/null 2>&1
   sample legacy_8sh_get 'run_legacy get'
   sample legacy_8sh_set 'run_legacy set'
+  # zalgebra angle: two 1k-member source zsets, then pipelined ZINTERSTORE.
+  for i in $(seq 0 9); do
+    args=""
+    for j in $(seq 0 99); do args="$args $((i*100+j)) m$((i*100+j))"; done
+    redis-cli -p 7001 ZADD zalg:a $args >/dev/null 2>&1
+    redis-cli -p 7001 ZADD zalg:b $args >/dev/null 2>&1
+  done
+  sample zalg_zinterstore 'run_zalg'
   server_stop
 done
 for m in pinned_cluster_get pinned_cluster_set pinned_compat_get pinned_compat_set \
-         legacy_8sh_get legacy_8sh_set; do
+         legacy_8sh_get legacy_8sh_set zalg_zinterstore; do
   # shellcheck disable=SC2086 — word-splitting the collected samples is the point
   MED[$m]=$(median_of ${SAMPLES[$m]})
   echo "  $m: instances [${SAMPLES[$m]%% }] -> median ${MED[$m]}"
@@ -157,7 +178,7 @@ if [ "$MODE" = "--update-baseline" ]; then
     echo "  \"metrics\": {"
     first=1
     for k in pinned_cluster_get pinned_cluster_set pinned_compat_get \
-             pinned_compat_set legacy_8sh_get legacy_8sh_set; do
+             pinned_compat_set legacy_8sh_get legacy_8sh_set zalg_zinterstore; do
       [ $first -eq 0 ] && echo ","
       printf '    "%s": %s' "$k" "${MED[$k]}"
       first=0
@@ -175,8 +196,15 @@ TOL=$(python3 -c "import json;print(json.load(open('$BASELINE'))['tolerance'])")
 STATUS=0
 echo "perfgate: gate vs $(basename "$BASELINE") (floor = baseline x $TOL)"
 for k in pinned_cluster_get pinned_cluster_set pinned_compat_get \
-         pinned_compat_set legacy_8sh_get legacy_8sh_set; do
-  BASE=$(python3 -c "import json;print(json.load(open('$BASELINE'))['metrics']['$k'])")
+         pinned_compat_set legacy_8sh_get legacy_8sh_set zalg_zinterstore; do
+  # A metric measured but absent from the baseline is NEW this train:
+  # report it, skip the floor (it enters the ratchet at the next
+  # --update-baseline), never silently pass a real regression.
+  BASE=$(python3 -c "import json,sys;m=json.load(open('$BASELINE'))['metrics'];print(m.get('$k',''))")
+  if [ -z "$BASE" ]; then
+    echo "  ~ $k: ${MED[$k]} (new metric — no baseline yet, records at next --update-baseline)"
+    continue
+  fi
   FLOOR=$(awk -v b="$BASE" -v t="$TOL" 'BEGIN{printf "%.0f", b*t}')
   GOT=${MED[$k]}
   if [ "$GOT" -lt "$FLOOR" ]; then
