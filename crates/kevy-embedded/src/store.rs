@@ -517,3 +517,6 @@ mod tests_keyspace;
 #[cfg(test)]
 #[path = "store_tests_atomic_all.rs"]
 mod tests_atomic_all;
+#[cfg(test)]
+#[path = "store_tests_replay_all.rs"]
+mod tests_replay_all;

@@ -27,13 +27,22 @@ impl Store {
 
     /// `SPOP key count` — atomically remove + return up to `count`
     /// random members.
+    ///
+    /// AOF form: logged as `SREM key <popped…>` (the members actually
+    /// removed), not `SPOP key count` — a random pick replayed against
+    /// a store whose internal layout differs (replica applying frames
+    /// onto snapshot-loaded state) would remove *different* members.
+    /// Redis propagates SPOP the same way.
     pub fn spop(&self, key: &[u8], count: usize) -> io::Result<Vec<Vec<u8>>> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let popped = g.store.spop(key, count).map_err(store_err)?;
         if !popped.is_empty() {
-            let count_str = format!("{count}");
-            commit_write(&mut g, &[b"SPOP", key, count_str.as_bytes()])?;
+            let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + popped.len());
+            argv.push(b"SREM");
+            argv.push(key);
+            argv.extend(popped.iter().map(Vec::as_slice));
+            commit_write(&mut g, &argv)?;
         }
         Ok(popped)
     }
