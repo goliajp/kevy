@@ -478,7 +478,7 @@ impl<C: Commands> Shard<C> {
             if !io_work && did_inbound == 0 && !has_backlog {
                 idle_spins = idle_spins.saturating_add(1);
                 if idle_spins >= URING_SPIN_LIMIT {
-                    if !napped && last_inbound_batch >= NAP_BATCH_MIN {
+                    if !napped { // DIAG-EXPERIMENT: unconditional nap (exact-old-ladder replica)
                         std::thread::sleep(Duration::from_micros(NAP_US));
                         napped = true;
                         diag_naps += 1;
