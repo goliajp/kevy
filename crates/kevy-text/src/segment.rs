@@ -32,13 +32,19 @@ pub struct TextStats {
 }
 
 /// One scoring candidate list: (postings, df, MaxScore upper bound).
-type ScoredList<'s> = (&'s Vec<(Vec<u8>, u32)>, f64, f64);
+type ScoredList<'s> = (&'s HashMap<Vec<u8>, u32>, f64, f64);
 
 /// One shard's inverted segment.
+///
+/// `postings` maps token → (key → tf) so a pruned list is PROBED per
+/// accumulated candidate (O(candidates)) instead of walked
+/// (O(postings)); `docs` keeps each row's original text so an update
+/// removes exactly its own tokens (re-tokenize the old text) instead
+/// of scanning every posting list.
 #[derive(Debug, Default)]
 pub struct TextSegment {
-    postings: HashMap<Vec<u8>, Vec<(Vec<u8>, u32)>>,
-    doc_len: HashMap<Vec<u8>, u32>,
+    postings: HashMap<Vec<u8>, HashMap<Vec<u8>, u32>>,
+    docs: HashMap<Vec<u8>, (u32, Vec<u8>)>,
     total_len: u64,
 }
 
@@ -50,27 +56,28 @@ impl TextSegment {
 
     /// (Re-)index one row's text (`None` = row removed / excluded).
     pub fn apply(&mut self, key: &[u8], text: Option<&[u8]>) {
-        if let Some(old_len) = self.doc_len.remove(key) {
+        if let Some((old_len, old_text)) = self.docs.remove(key) {
             self.total_len -= u64::from(old_len);
-            // Remove this key from every posting list it appears in.
-            self.postings.retain(|_, list| {
-                list.retain(|(k, _)| k != key);
-                !list.is_empty()
-            });
+            // Remove exactly this doc's tokens (re-derive from the
+            // old text — O(doc), not O(index)).
+            for t in tokenize(&old_text) {
+                if let Some(list) = self.postings.get_mut(&t) {
+                    list.remove(key);
+                    if list.is_empty() {
+                        self.postings.remove(&t);
+                    }
+                }
+            }
         }
         let Some(text) = text else { return };
         let toks = tokenize(text);
         if toks.is_empty() {
             return;
         }
-        let mut tf: HashMap<Vec<u8>, u32> = HashMap::new();
-        for t in &toks {
-            *tf.entry(t.clone()).or_insert(0) += 1;
-        }
-        self.doc_len.insert(key.to_vec(), toks.len() as u32);
+        self.docs.insert(key.to_vec(), (toks.len() as u32, text.to_vec()));
         self.total_len += toks.len() as u64;
-        for (t, n) in tf {
-            self.postings.entry(t).or_default().push((key.to_vec(), n));
+        for t in toks {
+            *self.postings.entry(t).or_default().entry(key.to_vec()).or_insert(0) += 1;
         }
     }
 
@@ -87,10 +94,10 @@ impl TextSegment {
         let mut q_tokens = tokenize(query);
         q_tokens.sort();
         q_tokens.dedup();
-        if q_tokens.is_empty() || self.doc_len.is_empty() {
+        if q_tokens.is_empty() || self.docs.is_empty() {
             return Vec::new();
         }
-        let n_docs = self.doc_len.len() as f64;
+        let n_docs = self.docs.len() as f64;
         let avgdl = self.total_len as f64 / n_docs;
         // (list, df, upper bound) — dl-independent bound: denom ≥
         // tf + k1(1-b), so score ≤ idf·tf(k1+1)/(tf + k1(1-b)).
@@ -98,7 +105,7 @@ impl TextSegment {
         for t in &q_tokens {
             let Some(list) = self.postings.get(t) else { continue };
             let df = list.len() as f64;
-            let max_tf = f64::from(list.iter().map(|(_, tf)| *tf).max().unwrap_or(1));
+            let max_tf = f64::from(list.values().copied().max().unwrap_or(1));
             lists.push((list, df, crate::bm25::bm25_upper(max_tf, df, n_docs)));
         }
         if lists.is_empty() {
@@ -125,7 +132,7 @@ impl TextSegment {
             }
             walked = i + 1;
             for (key, tf) in list.iter() {
-                let dl = f64::from(self.doc_len.get(key.as_slice()).copied().unwrap_or(1));
+                let dl = f64::from(self.docs.get(key.as_slice()).map_or(1, |d| d.0));
                 *scores.entry(key.as_slice()).or_insert(0.0) +=
                     bm25_score(f64::from(*tf), *df, n_docs, dl, avgdl);
             }
@@ -133,12 +140,19 @@ impl TextSegment {
                 kth_threshold = kth_of(&scores, limit);
             }
         }
-        // Probe un-walked lists for docs already accumulated.
-        for (list, df, _) in &lists[walked..] {
-            for (key, tf) in list.iter() {
-                if let Some(sc) = scores.get_mut(key.as_slice()) {
-                    let dl = f64::from(self.doc_len.get(key.as_slice()).copied().unwrap_or(1));
-                    *sc += bm25_score(f64::from(*tf), *df, n_docs, dl, avgdl);
+        // Probe un-walked lists PER ACCUMULATED DOC — O(candidates)
+        // hash gets, never a walk of the common list (walking here
+        // was the measured 30ms p95: a pruned 500k-posting head list
+        // still cost a full scan).
+        if walked < lists.len() {
+            let keys: Vec<&[u8]> = scores.keys().copied().collect();
+            for (list, df, _) in &lists[walked..] {
+                for key in &keys {
+                    if let Some(tf) = list.get(*key) {
+                        let dl = f64::from(self.docs.get(*key).map_or(1, |d| d.0));
+                        *scores.get_mut(key).expect("accumulated") +=
+                            bm25_score(f64::from(*tf), *df, n_docs, dl, avgdl);
+                    }
                 }
             }
         }
@@ -170,17 +184,24 @@ impl TextSegment {
     pub fn stats(&self) -> TextStats {
         let postings: u64 = self.postings.values().map(|l| l.len() as u64).sum();
         let token_bytes: u64 = self.postings.keys().map(|t| (t.len() + 48) as u64).sum();
+        let doc_bytes: u64 = self
+            .docs
+            .iter()
+            .map(|(k, (_, text))| (k.len() + text.len() + 72) as u64)
+            .sum();
         TextStats {
-            docs: self.doc_len.len() as u64,
+            docs: self.docs.len() as u64,
             tokens: self.postings.len() as u64,
             postings,
-            approx_bytes: token_bytes + postings * 24 + self.doc_len.len() as u64 * 32,
+            // per-posting ≈ key copy + tf + bucket ≈ 64B; docs keep
+            // their original text (update path re-derives tokens).
+            approx_bytes: token_bytes + postings * 64 + doc_bytes,
         }
     }
 
     /// Verify hook: is `key` indexed here?
     pub fn contains(&self, key: &[u8]) -> bool {
-        self.doc_len.contains_key(key)
+        self.docs.contains_key(key)
     }
 }
 
@@ -267,14 +288,14 @@ mod tests {
         // Naive reference: walk everything.
         let naive = |query: &str, limit: usize| -> Vec<(Vec<u8>, f64)> {
             let q = tokenize(query.as_bytes());
-            let n_docs = s.doc_len.len() as f64;
+            let n_docs = s.docs.len() as f64;
             let avgdl = s.total_len as f64 / n_docs;
             let mut sc: HashMap<Vec<u8>, f64> = HashMap::new();
             for t in &q {
                 let Some(list) = s.postings.get(t) else { continue };
                 let df = list.len() as f64;
                 for (k, tf) in list {
-                    let dl = f64::from(s.doc_len[k]);
+                    let dl = f64::from(s.docs[k].0);
                     *sc.entry(k.clone()).or_insert(0.0) +=
                         bm25_score(f64::from(*tf), df, n_docs, dl, avgdl);
                 }
