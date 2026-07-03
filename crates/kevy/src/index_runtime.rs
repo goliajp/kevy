@@ -129,6 +129,26 @@ pub(crate) fn with_ready_segment<R>(
     })
 }
 
+/// v2.6: run `f` with a name→segment resolver over this shard's READY
+/// segments (views probe several indexes per call). Building/failed
+/// segments resolve to None.
+pub(crate) fn with_segment_resolver<R>(
+    store: &mut Store,
+    f: impl for<'s> FnOnce(&'s dyn Fn(&[u8]) -> Option<&'s Segment>) -> R,
+) -> R {
+    SHARD_INDEXES.with(|tl| {
+        let mut st = tl.borrow_mut();
+        refresh(&mut st, store);
+        let idx = &st.idx;
+        let resolver = |name: &[u8]| -> Option<&Segment> {
+            idx.iter()
+                .find(|si| si.spec.name == name && matches!(si.build, BuildState::Ready))
+                .map(|si| &si.seg)
+        };
+        f(&resolver)
+    })
+}
+
 /// Two-segment variant for COMPOSE — one RefCell borrow (nesting
 /// [`with_ready_segment`] would double-borrow the thread-local).
 pub(crate) fn with_two_ready_segments<R>(

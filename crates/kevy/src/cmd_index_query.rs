@@ -183,6 +183,10 @@ fn op_list(store: &mut Store) -> Vec<u8> {
     chunk
 }
 
+pub(crate) fn decode_view_cursor(raw: &[u8]) -> Option<(IndexValue, Vec<u8>)> {
+    decode_cursor(raw).map(|c| (c.value, c.key))
+}
+
 pub(crate) fn encode_value(out: &mut Vec<u8>, v: &IndexValue) {
     match v {
         IndexValue::I64(i) => {
