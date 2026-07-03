@@ -78,6 +78,13 @@ impl<C: Commands> Shard<C> {
             Route::SInter => self.build_gather(args, GatherKind::Set, MultiOp::SInter),
             Route::ZAlgebraStore(combine) => self.build_zalgebra_store(args, combine),
             Route::ZInterCard => self.build_zintercard(args),
+            Route::Extension => {
+                let argv: Vec<Vec<u8>> = (0..args.len()).map(|i| args[i].to_vec()).collect();
+                let targets = (0..self.nshards)
+                    .map(|s| (s, Op::Extension { argv: argv.clone() }))
+                    .collect();
+                (targets, Agg::ExtensionGather { argv, chunks: Vec::new() })
+            }
             Route::PrefixStats => {
                 let prefix = args.get(1).map(|p| p.to_vec()).unwrap_or_default();
                 let targets = (0..self.nshards)

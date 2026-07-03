@@ -60,7 +60,6 @@ pub(crate) fn catalog() -> Option<Arc<Catalog>> {
 
 /// Swap in a new catalog version (IDX.CREATE / IDX.DROP). Bumps the
 /// generation; shards refresh lazily.
-#[allow(dead_code)] // v2.5 step 2b consumes this
 pub(crate) fn install_catalog(c: Catalog) {
     let nonempty = !c.is_empty();
     *CATALOG
@@ -104,7 +103,6 @@ pub(crate) fn on_tick(store: &mut Store) {
 /// Query entry: run `f` against this shard's segment for `name`.
 /// `None` = index unknown here (stale TL is refreshed first) or still
 /// backfilling. Wired to IDX.QUERY fan-out in step 2b.
-#[allow(dead_code)] // v2.5 step 2b consumes this
 pub(crate) fn with_ready_segment<R>(
     store: &mut Store,
     name: &[u8],
@@ -126,7 +124,6 @@ pub(crate) fn with_ready_segment<R>(
 }
 
 /// Whether this shard's slice of `name` is still backfilling.
-#[allow(dead_code)] // v2.5 step 2b consumes this
 pub(crate) fn segment_building(store: &mut Store, name: &[u8]) -> bool {
     SHARD_INDEXES.with(|tl| {
         let mut st = tl.borrow_mut();

@@ -171,6 +171,10 @@ impl<C: Commands> Shard<C> {
                 self.exec_feed_read(cursor_gen, offset, count, prefixes)
             }
             Op::FeedTail => self.exec_feed_tail(),
+            Op::Extension { argv } => {
+                let chunk = self.commands.extension_op(&mut self.store, &argv);
+                Part::ExtensionChunk(chunk)
+            }
             Op::PrefixStats(prefix) => {
                 let (keys, expires) = self.store.prefix_stats(&prefix);
                 Part::PrefixStats { keys, expires }

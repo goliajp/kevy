@@ -65,7 +65,8 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
         Agg::WatchCollect { .. }
         | Agg::ExecPrep { .. }
         | Agg::RenameOrchestrator { .. }
-        | Agg::ZStoreGather { .. } => {
+        | Agg::ZStoreGather { .. }
+        | Agg::ExtensionGather { .. } => {
             let mut out = Vec::new();
             encode_error(&mut out, "ERR internal: orchestrator agg hit materialize");
             SmallReply::from_vec(out)

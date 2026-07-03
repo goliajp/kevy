@@ -238,6 +238,18 @@ pub const OP_TABLE: &[OpSpec] = &[
     // v2.3 CDC surface: FEED.* / PREFIX.STATS are new-genre namespaced
     // commands (three-laws); embedded parity = changes_since /
     // changes_tail / feed_shards / info_prefix.
+    // v2.5 index engine (IDX.* namespace). CREATE/DROP mutate the
+    // catalog (sidecar-persisted, not data writes — no AOF/replay);
+    // reads ride the extension fan-out. ESTORE arrives in v2.5 step 3.
+    // NB: catalog mutations are deliberately NOT data writes — the
+    // `write` column tracks the AOF/propagation path, and the catalog
+    // persists via its own sidecar (indexes are derived state).
+    op("IDX.CREATE",   RD, NG,   None,            None,    SERVER),
+    op("IDX.DROP",     RD, NG,   None,            None,    SERVER),
+    op("IDX.LIST",     RD, NG,   None,            None,    SERVER),
+    op("IDX.QUERY",    RD, NG,   None,            None,    SERVER),
+    op("IDX.COUNT",    RD, NG,   None,            None,    SERVER),
+    op("IDX.VERIFY",   RD, NG,   None,            None,    SERVER),
     op("FEED.READ",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("FEED.TAIL",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("FEED.SHARDS",  RD, NG,   None,            None,    SERVER | ESTORE),

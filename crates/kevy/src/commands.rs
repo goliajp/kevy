@@ -44,6 +44,10 @@ impl Commands for KevyCommands {
             b"SUNIONSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SUnion),
             b"SDIFFSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SDiff),
             b"ZINTERCARD" if args.len() >= 3 => Route::ZInterCard,
+            b"IDX.QUERY" if args.len() >= 4 => Route::Extension,
+            b"IDX.COUNT" if args.len() >= 4 => Route::Extension,
+            b"IDX.VERIFY" if args.len() == 2 => Route::Extension,
+            b"IDX.LIST" if args.len() == 1 => Route::Extension,
             b"PREFIX.STATS" if args.len() == 2 => Route::PrefixStats,
             b"FEED.READ" if args.len() >= 4 => Route::FeedRead,
             b"FEED.TAIL" if args.len() == 2 => Route::FeedTail,
@@ -210,6 +214,14 @@ impl Commands for KevyCommands {
 
     fn on_write(&self, store: &mut Store, key: &[u8]) {
         crate::index_runtime::on_write(store, key);
+    }
+
+    fn extension_op(&self, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+        crate::cmd_index::extension_op(store, argv)
+    }
+
+    fn extension_reduce(&self, argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
+        crate::cmd_index::extension_reduce(argv, chunks)
     }
 
     fn on_shard_tick(&self, store: &mut Store) {

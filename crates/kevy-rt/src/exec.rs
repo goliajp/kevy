@@ -427,6 +427,9 @@ impl<C: Commands> Shard<C> {
                 (Agg::First(dst), Part::Reply(b)) => *dst = Some(b),
                 (Agg::SumInt(acc), Part::Int(n)) => *acc += n,
                 (Agg::AllOk, Part::Ok) => {}
+                (Agg::ExtensionGather { chunks, .. }, Part::ExtensionChunk(c)) => {
+                    chunks.push(c);
+                }
                 (Agg::Gather { got, .. }, Part::Gathered(items))
                 | (Agg::ZStoreGather { got, .. }, Part::Gathered(items)) => {
                     for (k, g) in items {
@@ -487,6 +490,7 @@ impl<C: Commands> Shard<C> {
                         | Agg::ExecPrep { .. }
                         | Agg::RenameOrchestrator { .. }
                         | Agg::ZStoreGather { .. }
+                        | Agg::ExtensionGather { .. }
                 ) {
                     Some(agg)
                 } else {
@@ -505,6 +509,10 @@ impl<C: Commands> Shard<C> {
                 }
                 Agg::RenameOrchestrator { .. } => self.finalize_rename_agg(conn_id, seq, agg),
                 Agg::ZStoreGather { .. } => self.finalize_zstore_agg(conn_id, seq, agg),
+                Agg::ExtensionGather { argv, chunks } => {
+                    let reply = self.commands.extension_reduce(&argv, chunks);
+                    self.fill_extension_slot(conn_id, seq, reply);
+                }
                 // The match above is exhaustive over what fold ever puts
                 // into `watch_agg` (only the orchestrator aggs). Anything
                 // else is a bug; ignore so a stray slot doesn't crash

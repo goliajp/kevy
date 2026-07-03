@@ -49,6 +49,9 @@ pub enum Route {
     FeedShards,
     /// v2.3 `PREFIX.STATS <prefix>` — all-shard fanout, summed.
     PrefixStats,
+    /// v2.5 extension fan-out (IDX.* reads): every shard runs
+    /// `Commands::extension_op`, the origin reduces.
+    Extension,
     /// `KEYS pattern` — every shard returns its matching keys.
     Keys(Option<Vec<u8>>),
     /// `SCAN` (cursor-0 approximation) — like KEYS but replies `[cursor, keys]`.
