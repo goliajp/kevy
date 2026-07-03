@@ -158,6 +158,162 @@ impl<'a> AtomicAllShards<'a> {
         self.log_arg(i, &[b"ZINCRBY", key, s.as_bytes(), member]);
         Ok(n)
     }
+
+    /// `ZSCORE key member` (v2.1: parity with [`super::ops_atomic::AtomicCtx`]).
+    pub fn zscore(&mut self, key: &[u8], member: &[u8]) -> io::Result<Option<f64>> {
+        let i = self.idx(key);
+        self.guards[i].store.zscore(key, member).map_err(store_err)
+    }
+
+    // ---- keyspace ops (v2.1 — Pipeline write parity) ---------------
+
+    /// `DEL key [key ...]` — keys may span shards; each key's delete
+    /// is applied and AOF-logged on its own shard.
+    pub fn del(&mut self, keys: &[&[u8]]) -> usize {
+        let mut n = 0;
+        for k in keys {
+            let i = self.idx(k);
+            if self.guards[i].store.del_borrowed(&[k]) > 0 {
+                n += 1;
+                self.log_arg(i, &[b"DEL", k]);
+            }
+        }
+        n
+    }
+
+    /// `EXISTS key [key ...]` — count of the given keys that exist.
+    pub fn exists(&mut self, keys: &[&[u8]]) -> usize {
+        keys.iter()
+            .filter(|k| {
+                let i = self.idx(k);
+                self.guards[i].store.key_exists(k)
+            })
+            .count()
+    }
+
+    // ---- hash ops --------------------------------------------------
+
+    /// `HDEL key field [field ...]`.
+    pub fn hdel(&mut self, key: &[u8], fields: &[&[u8]]) -> io::Result<usize> {
+        let i = self.idx(key);
+        let owned: Vec<Vec<u8>> = fields.iter().map(|f| f.to_vec()).collect();
+        let removed = self.guards[i].store.hdel(key, &owned).map_err(store_err)?;
+        if removed > 0 {
+            let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + fields.len());
+            argv.push(b"HDEL");
+            argv.push(key);
+            argv.extend_from_slice(fields);
+            self.log_arg(i, &argv);
+        }
+        Ok(removed)
+    }
+
+    /// `HGETALL key` — `(field, value)` pairs.
+    pub fn hgetall(&mut self, key: &[u8]) -> io::Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let i = self.idx(key);
+        let flat = self.guards[i].store.hgetall(key).map_err(store_err)?;
+        let mut out = Vec::with_capacity(flat.len() / 2);
+        let mut it = flat.into_iter();
+        while let (Some(f), Some(v)) = (it.next(), it.next()) {
+            out.push((f, v));
+        }
+        Ok(out)
+    }
+
+    /// `HMGET key field [field ...]` — `None` per absent field.
+    pub fn hmget(&mut self, key: &[u8], fields: &[&[u8]]) -> io::Result<Vec<Option<Vec<u8>>>> {
+        let i = self.idx(key);
+        self.guards[i].store.hmget_borrowed(key, fields).map_err(store_err)
+    }
+
+    /// `HEXISTS key field`.
+    pub fn hexists(&mut self, key: &[u8], field: &[u8]) -> io::Result<bool> {
+        let i = self.idx(key);
+        self.guards[i].store.hexists(key, field).map_err(store_err)
+    }
+
+    // ---- set ops ---------------------------------------------------
+
+    /// `SADD key member [member ...]`.
+    pub fn sadd(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+        let i = self.idx(key);
+        let owned: Vec<Vec<u8>> = members.iter().map(|m| m.to_vec()).collect();
+        let added = self.guards[i].store.sadd(key, &owned).map_err(store_err)?;
+        if added > 0 {
+            let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + members.len());
+            argv.push(b"SADD");
+            argv.push(key);
+            argv.extend_from_slice(members);
+            self.log_arg(i, &argv);
+        }
+        Ok(added)
+    }
+
+    /// `SREM key member [member ...]`.
+    pub fn srem(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+        let i = self.idx(key);
+        let owned: Vec<Vec<u8>> = members.iter().map(|m| m.to_vec()).collect();
+        let removed = self.guards[i].store.srem(key, &owned).map_err(store_err)?;
+        if removed > 0 {
+            let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + members.len());
+            argv.push(b"SREM");
+            argv.push(key);
+            argv.extend_from_slice(members);
+            self.log_arg(i, &argv);
+        }
+        Ok(removed)
+    }
+
+    // ---- list ops --------------------------------------------------
+
+    /// `LPUSH key value [value ...]` — returns the new list length.
+    pub fn lpush(&mut self, key: &[u8], values: &[&[u8]]) -> io::Result<usize> {
+        let i = self.idx(key);
+        let owned: Vec<Vec<u8>> = values.iter().map(|v| v.to_vec()).collect();
+        let len = self.guards[i].store.lpush(key, &owned).map_err(store_err)?;
+        let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + values.len());
+        argv.push(b"LPUSH");
+        argv.push(key);
+        argv.extend_from_slice(values);
+        self.log_arg(i, &argv);
+        Ok(len)
+    }
+
+    /// `RPUSH key value [value ...]` — returns the new list length.
+    pub fn rpush(&mut self, key: &[u8], values: &[&[u8]]) -> io::Result<usize> {
+        let i = self.idx(key);
+        let owned: Vec<Vec<u8>> = values.iter().map(|v| v.to_vec()).collect();
+        let len = self.guards[i].store.rpush(key, &owned).map_err(store_err)?;
+        let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + values.len());
+        argv.push(b"RPUSH");
+        argv.push(key);
+        argv.extend_from_slice(values);
+        self.log_arg(i, &argv);
+        Ok(len)
+    }
+
+    // ---- zset ops --------------------------------------------------
+
+    /// `ZREM key member [member ...]`.
+    pub fn zrem(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+        let i = self.idx(key);
+        let owned: Vec<Vec<u8>> = members.iter().map(|m| m.to_vec()).collect();
+        let removed = self.guards[i].store.zrem(key, &owned).map_err(store_err)?;
+        if removed > 0 {
+            let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + members.len());
+            argv.push(b"ZREM");
+            argv.push(key);
+            argv.extend_from_slice(members);
+            self.log_arg(i, &argv);
+        }
+        Ok(removed)
+    }
+
+    /// `ZCARD key` — member count; 0 when absent.
+    pub fn zcard(&mut self, key: &[u8]) -> io::Result<usize> {
+        let i = self.idx(key);
+        self.guards[i].store.zcard(key).map_err(store_err)
+    }
 }
 
 impl Store {
