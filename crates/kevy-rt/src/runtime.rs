@@ -321,7 +321,6 @@ impl<C: Commands> Runtime<C> {
             store.set_bio_drop_sender(bio_send.clone());
             self.commands.on_shard_init(&mut store);
             shards.push(Shard {
-                diag_wakes: 0,
                 xshard_inflight: 0,
                 id,
                 nshards: n,

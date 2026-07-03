@@ -32,8 +32,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering, fence};
 pub(crate) use crate::cache_padded::CachePadded;
 
 pub(crate) struct Shard<C: Commands> {
-    /// DIAG (temporary): waker.wake() call counter.
-    pub(crate) diag_wakes: u64,
     /// Outstanding cross-shard requests this shard has forwarded and
     /// not yet folded replies for. While non-zero, replies are
     /// certainly inbound within ~one cross-shard RTT — the idle
