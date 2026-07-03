@@ -220,6 +220,7 @@ impl<C: Commands> Shard<C> {
                         self.send_to(origin, Inbound::Response { conn, seq, part });
                     }
                     Inbound::Response { conn, seq, part } => {
+                        self.xshard_inflight = self.xshard_inflight.saturating_sub(1);
                         self.fold(conn, seq, part);
                         if DIRECT_FLUSH {
                             self.flush_conn(conn)?;
@@ -260,6 +261,8 @@ impl<C: Commands> Shard<C> {
                     // conn).
                     Inbound::ResponseBatch(resps) => {
                         did += resps.len().saturating_sub(1);
+                        self.xshard_inflight =
+                            self.xshard_inflight.saturating_sub(resps.len() as u64);
                         let mut to_flush: Vec<u64> = Vec::new();
                         for (conn, seq, part, husk) in resps {
                             self.argv_pool.put(husk);
