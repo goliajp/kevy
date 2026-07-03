@@ -240,3 +240,27 @@ fn hydration_and_compose() {
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("emp-0") && s.contains("emp-2"), "{s}");
 }
+
+#[test]
+fn maxmem_budget_fails_declaratively() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    for i in 0..200 {
+        cmd(&mut c, &[b"HSET", format!("big:{i}").as_bytes(), b"v", format!("{i}").as_bytes()]);
+    }
+    // 64-byte budget cannot hold 200 entries → FailedOverBudget.
+    cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"tiny", b"ON", b"PREFIX", b"big:", b"FIELD", b"v", b"TYPE", b"i64", b"KIND", b"range", b"MAXMEM", b"64"],
+    );
+    let mut over = false;
+    for _ in 0..100 {
+        let r = cmd(&mut c, &[b"IDX.QUERY", b"tiny", b"RANGE", b"0", b"300"]);
+        if r.starts_with(b"-INDEXOVERBUDGET") {
+            over = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(over, "budget breach surfaces declaratively");
+}

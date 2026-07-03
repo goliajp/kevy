@@ -32,6 +32,9 @@ enum BuildState {
     Backfilling { keys: Vec<Vec<u8>>, pos: usize },
     /// Serving.
     Ready,
+    /// Build crossed the spec's MAXMEM budget (RFC D7): declarative
+    /// failure, queries answer an error, no OOM.
+    FailedOverBudget,
 }
 
 struct ShardIndex {
@@ -119,6 +122,9 @@ pub(crate) fn with_ready_segment<R>(
         match si.build {
             BuildState::Ready => Ok(f(&si.spec, &si.seg)),
             BuildState::Backfilling { .. } => Err("INDEXBUILDING index is still building"),
+            BuildState::FailedOverBudget => {
+                Err("INDEXOVERBUDGET index build exceeded MAXMEM")
+            }
         }
     })
 }
@@ -245,6 +251,13 @@ fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: usize) {
         if si.seg.verify_entry(key).is_none() {
             apply_row_backfill(store, si, key);
         }
+    }
+    // RFC D7: a MAXMEM budget is enforced at build time —
+    // declarative failure instead of OOM.
+    if si.spec.max_bytes > 0 && si.seg.stats().approx_bytes > si.spec.max_bytes {
+        si.seg = Segment::new();
+        si.build = BuildState::FailedOverBudget;
+        return;
     }
     if done {
         si.build = BuildState::Ready;

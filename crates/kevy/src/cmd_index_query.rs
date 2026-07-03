@@ -16,6 +16,7 @@ pub(crate) const ST_OK: u8 = 0;
 pub(crate) const ST_BUILDING: u8 = 1;
 pub(crate) const ST_NOINDEX: u8 = 2;
 pub(crate) const ST_BADARGS: u8 = 3;
+pub(crate) const ST_OVERBUDGET: u8 = 4;
 
 /// Per-shard half: parse the IDX.* argv, run against this shard's
 /// segment, emit a status-tagged chunk.
@@ -77,6 +78,7 @@ pub(crate) fn extension_op(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
             chunk
         }
         Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
 }
@@ -140,6 +142,7 @@ fn op_compose(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
         }
         Ok(None) => vec![ST_BADARGS],
         Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
 }
