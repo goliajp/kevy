@@ -260,6 +260,26 @@ fn value_repr(v: &IndexValue) -> Vec<u8> {
     }
 }
 
+/// v2.6: view reduce reuses the (value,key) cursor encoding.
+pub(crate) fn encode_view_cursor_bytes(v: &IndexValue, k: &[u8]) -> Vec<u8> {
+    encode_cursor(v, k)
+}
+
+/// v2.6: shared chunk readers + value repr for the view reduce.
+pub(crate) fn read_u32_at(c: &[u8], pos: &mut usize) -> Option<u32> {
+    read_u32(c, pos)
+}
+
+/// See [`read_u32_at`].
+pub(crate) fn read_kbytes_at(c: &[u8], pos: &mut usize) -> Option<Vec<u8>> {
+    read_kbytes(c, pos)
+}
+
+/// See [`read_u32_at`].
+pub(crate) fn value_repr_pub(v: &IndexValue) -> Vec<u8> {
+    value_repr(v)
+}
+
 fn encode_cursor(v: &IndexValue, k: &[u8]) -> Vec<u8> {
     let mut payload = Vec::new();
     encode_value(&mut payload, v);

@@ -50,9 +50,11 @@ mod cmd_block_serve;
 mod cmd_data;
 mod cmd_hash_ttl;
 mod cmd_index;
+mod cmd_view;
 mod cmd_index_query;
 mod cmd_index_reduce;
 mod index_runtime;
+mod view_runtime;
 mod cmd_hello;
 mod cmd_lua;
 mod cmd_resolve;
@@ -182,6 +184,7 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
     let cfg = config_global::get();
     let fsync = map_appendfsync(cfg.persistence.appendfsync);
     cmd_index::boot(&data_dir);
+    cmd_view::boot(&data_dir);
     let mut runtime = Runtime::new(ip, port, nshards, KevyCommands)
         .with_data_dir(data_dir)
         .with_accept_shards(cfg.server.accept_shards)
