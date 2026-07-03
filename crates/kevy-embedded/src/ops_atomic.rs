@@ -139,6 +139,176 @@ impl AtomicCtx<'_> {
 
     // ---- helpers ----------------------------------------------------
 
+    // ---- keyspace ops (v2.1 — Pipeline write parity) ---------------
+
+    /// `DEL key [key ...]` — every key must hash to this shard.
+    pub fn del(&mut self, keys: &[&[u8]]) -> usize {
+        let n = self.inner.store.del_borrowed(keys);
+        if n > 0 {
+            let mut argv: Vec<&[u8]> = Vec::with_capacity(1 + keys.len());
+            argv.push(b"DEL");
+            argv.extend_from_slice(keys);
+            self.log_arg(&argv);
+        }
+        n
+    }
+
+    /// `EXISTS key [key ...]` — count of the given keys that exist.
+    pub fn exists(&mut self, keys: &[&[u8]]) -> usize {
+        keys.iter()
+            .filter(|k| self.inner.store.key_exists(k))
+            .count()
+    }
+
+    // ---- hash ops --------------------------------------------------
+
+    /// `HDEL key field [field ...]`.
+    pub fn hdel(&mut self, key: &[u8], fields: &[&[u8]]) -> io::Result<usize> {
+        let owned: Vec<Vec<u8>> = fields.iter().map(|f| f.to_vec()).collect();
+        let removed = self.inner.store.hdel(key, &owned).map_err(store_err)?;
+        if removed > 0 {
+            let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + fields.len());
+            argv.push(b"HDEL");
+            argv.push(key);
+            argv.extend_from_slice(fields);
+            self.log_arg(&argv);
+        }
+        Ok(removed)
+    }
+
+    /// `HGETALL key` — `(field, value)` pairs; reads see the
+    /// closure's own prior writes.
+    pub fn hgetall(&mut self, key: &[u8]) -> io::Result<Vec<(Vec<u8>, Vec<u8>)>> {
+        let flat = self.inner.store.hgetall(key).map_err(store_err)?;
+        let mut out = Vec::with_capacity(flat.len() / 2);
+        let mut it = flat.into_iter();
+        while let (Some(f), Some(v)) = (it.next(), it.next()) {
+            out.push((f, v));
+        }
+        Ok(out)
+    }
+
+    /// `HMGET key field [field ...]` — `None` per absent field.
+    pub fn hmget(&mut self, key: &[u8], fields: &[&[u8]]) -> io::Result<Vec<Option<Vec<u8>>>> {
+        self.inner.store.hmget_borrowed(key, fields).map_err(store_err)
+    }
+
+    /// `HEXISTS key field`.
+    pub fn hexists(&mut self, key: &[u8], field: &[u8]) -> io::Result<bool> {
+        self.inner.store.hexists(key, field).map_err(store_err)
+    }
+
+    // ---- set ops ---------------------------------------------------
+
+    /// `SADD key member [member ...]`.
+    pub fn sadd(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+        let owned: Vec<Vec<u8>> = members.iter().map(|m| m.to_vec()).collect();
+        let added = self.inner.store.sadd(key, &owned).map_err(store_err)?;
+        if added > 0 {
+            let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + members.len());
+            argv.push(b"SADD");
+            argv.push(key);
+            argv.extend_from_slice(members);
+            self.log_arg(&argv);
+        }
+        Ok(added)
+    }
+
+    /// `SREM key member [member ...]`.
+    pub fn srem(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+        let owned: Vec<Vec<u8>> = members.iter().map(|m| m.to_vec()).collect();
+        let removed = self.inner.store.srem(key, &owned).map_err(store_err)?;
+        if removed > 0 {
+            let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + members.len());
+            argv.push(b"SREM");
+            argv.push(key);
+            argv.extend_from_slice(members);
+            self.log_arg(&argv);
+        }
+        Ok(removed)
+    }
+
+    // ---- list ops --------------------------------------------------
+
+    /// `LPUSH key value [value ...]` — returns the new list length.
+    pub fn lpush(&mut self, key: &[u8], values: &[&[u8]]) -> io::Result<usize> {
+        let owned: Vec<Vec<u8>> = values.iter().map(|v| v.to_vec()).collect();
+        let len = self.inner.store.lpush(key, &owned).map_err(store_err)?;
+        let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + values.len());
+        argv.push(b"LPUSH");
+        argv.push(key);
+        argv.extend_from_slice(values);
+        self.log_arg(&argv);
+        Ok(len)
+    }
+
+    /// `RPUSH key value [value ...]` — returns the new list length.
+    pub fn rpush(&mut self, key: &[u8], values: &[&[u8]]) -> io::Result<usize> {
+        let owned: Vec<Vec<u8>> = values.iter().map(|v| v.to_vec()).collect();
+        let len = self.inner.store.rpush(key, &owned).map_err(store_err)?;
+        let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + values.len());
+        argv.push(b"RPUSH");
+        argv.push(key);
+        argv.extend_from_slice(values);
+        self.log_arg(&argv);
+        Ok(len)
+    }
+
+    // ---- zset ops --------------------------------------------------
+
+    /// `ZREM key member [member ...]`.
+    pub fn zrem(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+        let owned: Vec<Vec<u8>> = members.iter().map(|m| m.to_vec()).collect();
+        let removed = self.inner.store.zrem(key, &owned).map_err(store_err)?;
+        if removed > 0 {
+            let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + members.len());
+            argv.push(b"ZREM");
+            argv.push(key);
+            argv.extend_from_slice(members);
+            self.log_arg(&argv);
+        }
+        Ok(removed)
+    }
+
+    /// `ZCARD key` — member count; 0 when absent.
+    pub fn zcard(&mut self, key: &[u8]) -> io::Result<usize> {
+        self.inner.store.zcard(key).map_err(store_err)
+    }
+
+    /// Flags-aware `ZADD` (v2.1). AOF logs the applied pairs as plain
+    /// `ZADD` — the effect, never the condition (deterministic replay).
+    pub fn zadd_flags(
+        &mut self,
+        key: &[u8],
+        pairs: &[(f64, &[u8])],
+        flags: kevy_store::ZaddFlags,
+    ) -> io::Result<kevy_store::ZaddReport> {
+        if !flags.valid() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid ZADD flag combo"));
+        }
+        let rep = self
+            .inner
+            .store
+            .zadd_flags_borrowed(key, pairs, flags)
+            .map_err(store_err)?;
+        if !rep.applied.is_empty() {
+            let score_strs: Vec<Vec<u8>> = rep
+                .applied
+                .iter()
+                .map(|(s, _)| format!("{s}").into_bytes())
+                .collect();
+            let mut parts: Vec<&[u8]> = Vec::with_capacity(2 + rep.applied.len() * 2);
+            parts.push(b"ZADD");
+            parts.push(key);
+            for (i, (_, m)) in rep.applied.iter().enumerate() {
+                parts.push(&score_strs[i]);
+                parts.push(m);
+            }
+            self.log_arg(&parts);
+        }
+        Ok(rep)
+    }
+
     fn log_arg(&mut self, parts: &[&[u8]]) {
         self.log.push(parts.iter().map(|p| p.to_vec()).collect());
     }
@@ -170,3 +340,11 @@ impl Store {
         Ok(r)
     }
 }
+
+/// Parity manifest (v2.1): command names `AtomicCtx` implements.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const ATOMIC_OPS: &[&str] = &[
+    "SET", "GET", "INCR", "INCRBY", "HSET", "HGET", "HINCRBY", "ZADD",
+    "ZINCRBY", "ZSCORE", "DEL", "EXISTS", "HDEL", "HGETALL", "HMGET",
+    "HEXISTS", "SADD", "SREM", "LPUSH", "RPUSH", "ZREM", "ZCARD",
+];

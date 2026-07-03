@@ -289,16 +289,55 @@ fn apply_pop(store: &mut Store, args: &Argv, from_tail: bool) {
 
 fn apply_zadd(store: &mut Store, args: &Argv) {
     let Some(k) = args.get(1) else { return };
-    let mut pairs: Vec<(f64, Vec<u8>)> = Vec::new();
+    // v2.1: a primary's frame stream may carry the Redis 6.2 flag
+    // tokens (`ZADD key [NX|XX] [GT|LT] [CH] score member …`). Apply
+    // them — misparsing a flag as a score would shift every following
+    // pair. (Embedded's own AOF never contains flags: the facades log
+    // the applied effect as plain ZADD.)
+    let mut flags = kevy_store::ZaddFlags::default();
+    let mut incr = false;
     let mut i = 2;
+    while i < args.len() {
+        let a = &args[i];
+        if a.eq_ignore_ascii_case(b"NX") {
+            flags.nx = true;
+        } else if a.eq_ignore_ascii_case(b"XX") {
+            flags.xx = true;
+        } else if a.eq_ignore_ascii_case(b"GT") {
+            flags.gt = true;
+        } else if a.eq_ignore_ascii_case(b"LT") {
+            flags.lt = true;
+        } else if a.eq_ignore_ascii_case(b"CH") {
+            // CH only shapes the reply — no replay effect.
+        } else if a.eq_ignore_ascii_case(b"INCR") {
+            incr = true;
+        } else {
+            break;
+        }
+        i += 1;
+    }
+    let mut pairs: Vec<(f64, Vec<u8>)> = Vec::new();
     while i + 1 < args.len() {
         if let Some(score) = parse_f64(&args[i]) {
             pairs.push((score, args[i + 1].to_vec()));
         }
         i += 2;
     }
-    if !pairs.is_empty() {
+    if pairs.is_empty() || !flags.valid() {
+        return;
+    }
+    if incr {
+        // `ZADD … INCR delta member` is an increment, NOT an absolute
+        // score — applying it as one would silently diverge.
+        if pairs.len() == 1 {
+            let _ = store.zadd_incr(k, pairs[0].0, &pairs[0].1, flags);
+        }
+    } else if flags == kevy_store::ZaddFlags::default() {
         let _ = store.zadd(k, &pairs);
+    } else {
+        let borrowed: Vec<(f64, &[u8])> =
+            pairs.iter().map(|(s, m)| (*s, m.as_slice())).collect();
+        let _ = store.zadd_flags_borrowed(k, &borrowed, flags);
     }
 }
 
@@ -381,3 +420,55 @@ mod tests {
         assert_eq!(s.get(b"n").unwrap(), Some(Cow::Borrowed(&b"4"[..])));
     }
 }
+
+#[cfg(test)]
+mod tests_zadd_flags {
+    use super::*;
+    use std::borrow::Cow;
+
+    fn argv(parts: &[&[u8]]) -> Argv {
+        Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>())
+    }
+
+    /// A primary's frame stream can carry flag tokens — they must be
+    /// honored, never misparsed as scores (which would shift pairs).
+    #[test]
+    fn zadd_frame_with_flags_applies_conditionally() {
+        let mut s = Store::new();
+        apply(&mut s, &argv(&[b"ZADD", b"z", b"5", b"m"]));
+        apply(&mut s, &argv(&[b"ZADD", b"z", b"GT", b"3", b"m"]));
+        assert_eq!(s.zscore(b"z", b"m").unwrap(), Some(5.0));
+        apply(&mut s, &argv(&[b"ZADD", b"z", b"GT", b"CH", b"7", b"m"]));
+        assert_eq!(s.zscore(b"z", b"m").unwrap(), Some(7.0));
+        apply(&mut s, &argv(&[b"ZADD", b"z", b"NX", b"1", b"m", b"2", b"n"]));
+        assert_eq!(s.zscore(b"z", b"m").unwrap(), Some(7.0));
+        assert_eq!(s.zscore(b"z", b"n").unwrap(), Some(2.0));
+    }
+
+    /// `ZADD … INCR delta member` is an increment, not an absolute
+    /// score.
+    #[test]
+    fn zadd_incr_frame_increments() {
+        let mut s = Store::new();
+        apply(&mut s, &argv(&[b"ZADD", b"z", b"5", b"m"]));
+        apply(&mut s, &argv(&[b"ZADD", b"z", b"INCR", b"2", b"m"]));
+        assert_eq!(s.zscore(b"z", b"m").unwrap(), Some(7.0));
+        apply(&mut s, &argv(&[b"ZADD", b"z", b"GT", b"INCR", b"-3", b"m"]));
+        assert_eq!(s.zscore(b"z", b"m").unwrap(), Some(7.0)); // vetoed
+        let _ = Cow::Borrowed(&b""[..]); // keep Cow import parity with sibling mod
+    }
+}
+
+/// Parity manifest (v2.1): every verb `apply` has an arm for. The
+/// v2.0.21 invariant lives in the ops_table cross-check: any verb an
+/// embedded facade logs MUST appear here.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const REPLAY_VERBS: &[&str] = &[
+    "SET", "DEL", "INCR", "DECR", "INCRBY", "DECRBY", "INCRBYFLOAT",
+    "APPEND", "SETBIT", "SETRANGE", "GETSET", "GETDEL", "EXPIRE",
+    "PEXPIRE", "EXPIREAT", "PEXPIREAT", "PERSIST", "FLUSHDB",
+    "FLUSHALL", "HSET", "HDEL", "HINCRBY", "HINCRBYFLOAT", "HSETNX",
+    "RPUSH", "LPUSH", "LPOP", "RPOP", "LSET", "LREM", "LTRIM",
+    "LINSERT", "RENAME", "RENAMENX", "SADD", "SREM", "SPOP", "ZADD",
+    "ZREM", "ZINCRBY", "ZPOPMIN", "ZREMRANGEBYRANK", "ZREMRANGEBYSCORE",
+];
