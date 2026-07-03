@@ -207,8 +207,8 @@ fn atomic_full_surface_write_and_read() {
     assert_eq!(s.zcard(b"idx:unread").unwrap(), 0);
     assert_eq!(s.zscore(b"idx:cat:new", b"t1").unwrap(), Some(2.0));
     assert_eq!(s.smembers(b"s-none").unwrap().len(), 0);
-    assert_eq!(s.sismember(b"tags", b"a").unwrap(), true);
-    assert_eq!(s.sismember(b"tags", b"b").unwrap(), false);
+    assert!(s.sismember(b"tags", b"a").unwrap());
+    assert!(!s.sismember(b"tags", b"b").unwrap());
     assert_eq!(s.llen(b"log").unwrap(), 2);
     assert_eq!(s.exists(&[b"idx:cat:old"]).unwrap(), 0);
 }

@@ -122,6 +122,8 @@ mod uring_io;
 mod uring_park;
 #[cfg(target_os = "linux")]
 mod uring_reactor;
+#[cfg(target_os = "linux")]
+mod uring_setup;
 
 pub use blocked::{BlockHint, BlockKind};
 pub use lua_wake_bridge::push_lua_wake_key;

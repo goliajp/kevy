@@ -183,13 +183,12 @@ impl<C: Commands> Shard<C> {
                 if t > 0 {
                     frame.extend_from_slice(&slab[..t]);
                 }
-                if frame.len() == *total {
-                    if let Some(boxed) = uc.pending_big_arg.take()
+                if frame.len() == *total
+                    && let Some(boxed) = uc.pending_big_arg.take()
                         && let BigArgState::Frame { frame, .. } = *boxed
                     {
                         self.uring_apply_frame_stitch(cid, frame, io);
                     }
-                }
                 t
             }
             BigArgState::BareSetCancelling {

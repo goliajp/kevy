@@ -59,9 +59,9 @@ fn multi_tenant_e2e_isolation_and_fairness() {
         .collect();
     let start = Instant::now();
     let mut handles = Vec::with_capacity(N_TENANTS * WRITERS_PER_TENANT);
-    for t in 0..N_TENANTS {
+    for (t, tenant_ack) in tenant_acks.iter().enumerate() {
         for w in 0..WRITERS_PER_TENANT {
-            let acks = Arc::clone(&tenant_acks[t]);
+            let acks = Arc::clone(tenant_ack);
             handles.push(thread::spawn(move || {
                 tenant_writer(port, t, w, acks);
             }));
@@ -187,11 +187,7 @@ fn read_keys_count(s: &mut TcpStream) -> usize {
     let mut buf = vec![0u8; 64 * 1024];
     let mut acc = Vec::with_capacity(128 * 1024);
     let deadline = Instant::now() + Duration::from_secs(3);
-    loop {
-        let n = match s.read(&mut buf) {
-            Ok(n) => n,
-            Err(_) => break,
-        };
+    while let Ok(n) = s.read(&mut buf) {
         if n == 0 { break; }
         acc.extend_from_slice(&buf[..n]);
         // Expected array length appears as `*<count>\r\n` at the head.

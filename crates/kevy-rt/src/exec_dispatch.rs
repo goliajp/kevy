@@ -202,7 +202,7 @@ impl<C: Commands> Shard<C> {
     /// SLOWLOG start instant — `None` when SLOWLOG is OFF
     /// (`slower_than_micros < 0`, the default), skipping the clock pair.
     /// A9: invert the early-return so the SLOWLOG-OFF hot path bails first
-    /// + tag the SLOWLOG-ON branch as cold so LLVM keeps it off the
+    /// and tag the SLOWLOG-ON branch as cold so LLVM keeps it off the
     /// predicted-taken fall-through.
     #[inline]
     pub(crate) fn slowlog_t0(&self) -> Option<Instant> {

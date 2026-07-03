@@ -18,6 +18,13 @@ use std::io;
 
 use crate::store::{Store, store_err};
 
+/// One `HSCAN`/`ZSCAN`-style page: `(next_cursor, items)` where each
+/// item is a `(member, value-or-score)` pair.
+type PairPage = (u64, Vec<(Vec<u8>, Vec<u8>)>);
+
+/// One `ZSCAN` page: `(next_cursor, (member, score) pairs)`.
+type ScorePage = (u64, Vec<(Vec<u8>, f64)>);
+
 impl Store {
     // ---- keyspace scan ----------------------------------------------
 
@@ -54,7 +61,7 @@ impl Store {
         key: &[u8],
         cursor: u64,
         count: usize,
-    ) -> io::Result<(u64, Vec<(Vec<u8>, Vec<u8>)>)> {
+    ) -> io::Result<PairPage> {
         let pairs = self.hgetall(key)?;
         Ok(page_into(pairs, cursor, count))
     }
@@ -77,7 +84,7 @@ impl Store {
         key: &[u8],
         cursor: u64,
         count: usize,
-    ) -> io::Result<(u64, Vec<(Vec<u8>, f64)>)> {
+    ) -> io::Result<ScorePage> {
         let pairs = self
             .wshard(key)
             .store

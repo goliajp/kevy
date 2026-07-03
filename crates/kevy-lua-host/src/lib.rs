@@ -275,7 +275,7 @@ mod tests {
             &[b"hello"],
         );
         assert_eq!(reply, b"$5\r\nhello\r\n");
-        assert_eq!(store.kv.get(&b"k".to_vec()), Some(&b"hello".to_vec()));
+        assert_eq!(store.kv.get(b"k".as_slice()), Some(&b"hello".to_vec()));
         assert_eq!(store.calls_seen, 2);
     }
 
@@ -290,7 +290,7 @@ mod tests {
             &[],
         );
         assert!(reply.starts_with(b"-READONLY "));
-        assert!(!store.kv.contains_key(&b"k".to_vec()));
+        assert!(!store.kv.contains_key(b"k".as_slice()));
     }
 
     #[test]

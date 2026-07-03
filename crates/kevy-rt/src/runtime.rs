@@ -278,7 +278,7 @@ impl<C: Commands> Runtime<C> {
             unix_listener = Some(kevy_sys::unix_listen(path_bytes.as_bytes(), 1024)?);
         }
         for id in 0..n {
-            let arms_accept = self.accept_shards.map_or(true, |k| id < k);
+            let arms_accept = self.accept_shards.is_none_or(|k| id < k);
             // v1.30 — off-accept-set shards skip the SO_REUSEPORT bind so
             // the kernel routes new conns only to the armed subset.
             let listener = if arms_accept {
@@ -387,7 +387,7 @@ impl<C: Commands> Runtime<C> {
                     .notify_flags
                     .unwrap_or_default(),
                 spin_limit: self.spin_limit,
-                arms_accept: self.accept_shards.map_or(true, |n| id < n),
+                arms_accept: self.accept_shards.is_none_or(|n| id < n),
                 max_clients_per_shard: if self.max_clients == 0 {
                     0
                 } else {
@@ -421,9 +421,9 @@ impl<C: Commands> Runtime<C> {
         // it catches a seccomp-blocked io_uring_setup (Docker's default profile)
         // and pre-5.19 kernels before any shard loads data. (macOS = kqueue.)
         #[cfg(target_os = "linux")]
-        let use_uring = match std::env::var("KEVY_IO_URING").ok().as_deref() {
-            Some("0") | Some("off") | Some("no") | Some("false") => false,
-            Some(_) => true,
+        let (use_uring, uring_forced) = match std::env::var("KEVY_IO_URING").ok().as_deref() {
+            Some("0") | Some("off") | Some("no") | Some("false") => (false, true),
+            Some(_) => (true, true),
             None => {
                 let avail = crate::uring_reactor::io_uring_available();
                 eprintln!(
@@ -431,7 +431,7 @@ impl<C: Commands> Runtime<C> {
                     if avail { "io_uring" } else { "epoll" },
                     if avail { "available" } else { "unavailable — kernel <5.19 or seccomp; using epoll" },
                 );
-                avail
+                (avail, false)
             }
         };
 
@@ -451,8 +451,30 @@ impl<C: Commands> Runtime<C> {
             let stop = stop.clone();
             let id = shard.id;
             handles.push(std::thread::spawn(move || {
+                // v2.1.1: per-shard ring setup is attempted BEFORE
+                // committing to the io_uring path. The global probe
+                // proves one ring builds; N shards need N rings, and a
+                // late failure (ENOMEM under pressure) used to kill the
+                // shard thread and leave a half-dead server (found via
+                // GH-runner CI: blocking_cross_shard hangs). Auto mode
+                // now degrades that shard to epoll, loudly. A forced
+                // KEVY_IO_URING=1 keeps the old fail-loud contract.
                 #[cfg(target_os = "linux")]
-                let res = if use_uring { shard.run_uring(stop) } else { shard.run(stop) };
+                let res = if use_uring {
+                    match crate::uring_reactor::build_uring() {
+                        Ok(pair) => shard.run_uring(pair, stop),
+                        Err(e) if !uring_forced => {
+                            eprintln!(
+                                "kevy: shard {id}: io_uring setup failed ({e}); \
+                                 falling back to the epoll reactor for this shard"
+                            );
+                            shard.run(stop)
+                        }
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    shard.run(stop)
+                };
                 #[cfg(not(target_os = "linux"))]
                 let res = shard.run(stop);
                 if let Err(e) = res {

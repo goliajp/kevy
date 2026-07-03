@@ -200,7 +200,7 @@ pub struct Store {
     /// pathological "thousand SETs in one iter never flush" cases
     /// (would otherwise hold thousands of Box<Value>s in RAM until
     /// the iter ends).
-    pub(crate) pending_drops: Vec<Box<Value>>,
+    pub(crate) pending_drops: Vec<Value>,
 }
 
 /// Maximum [`Store::pending_drops`] depth before forcing a flush
@@ -293,7 +293,7 @@ impl Store {
             drop(old);
             return;
         }
-        self.pending_drops.push(Box::new(old));
+        self.pending_drops.push(old);
         if self.pending_drops.len() >= MAX_PENDING_DROPS {
             self.flush_pending_drops();
         }

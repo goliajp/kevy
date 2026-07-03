@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn float_falls_back_to_bulk_for_non_integral() {
         assert_eq!(float(1.5), b"$3\r\n1.5\r\n");
-        assert_eq!(float(f64::NAN).starts_with(b"$"), true);
-        assert_eq!(float(f64::INFINITY).starts_with(b"$"), true);
+        assert!(float(f64::NAN).starts_with(b"$"));
+        assert!(float(f64::INFINITY).starts_with(b"$"));
     }
 }

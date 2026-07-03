@@ -452,10 +452,10 @@ pub(crate) fn fmt_score(s: f64) -> Vec<u8> {
 /// `*_borrowed` family that takes `&[&[u8]]`; the Store then materialises
 /// `SmallBytes` per member once at insert (same as before), but the dispatch
 /// hand-off no longer pays a `Vec<u8>` per arg.
-pub(crate) fn rest_borrowed<'a, A: ArgvView + ?Sized>(
-    args: &'a A,
+pub(crate) fn rest_borrowed<A: ArgvView + ?Sized>(
+    args: &A,
     from: usize,
-) -> Vec<&'a [u8]> {
+) -> Vec<&[u8]> {
     (from..args.len()).map(|i| &args[i]).collect()
 }
 
