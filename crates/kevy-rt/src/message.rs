@@ -131,6 +131,15 @@ pub(crate) enum Op {
     ZStoreResult { dst: Vec<u8>, pairs: Vec<(Vec<u8>, f64)> },
     /// Set-form step-2 (`SINTERSTORE` family).
     SetStoreResult { dst: Vec<u8>, members: Vec<Vec<u8>> },
+    /// v2.3 FEED.READ executed on the target shard.
+    FeedRead {
+        cursor_gen: u64,
+        offset: u64,
+        count: usize,
+        prefixes: Vec<Vec<u8>>,
+    },
+    /// v2.3 FEED.TAIL executed on the target shard.
+    FeedTail,
     /// Collect this shard's keys (optional glob + limit) — KEYS/SCAN/RANDOMKEY.
     CollectKeys(Option<Vec<u8>>, Option<usize>),
     /// `WATCH key [key ...]` — register each key in this shard's

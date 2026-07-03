@@ -251,6 +251,24 @@ impl<C: Commands> Shard<C> {
     /// A `stop=true` between the `start_bg_save` and that tick
     /// would leave the snapshot orphan + the client's `+OK`
     /// dishonored. This drain closes the window.
+    /// v2.3 clean-shutdown half of the feed cursor contract: persist
+    /// the `(generation, next_offset)` continuity marker. Only written
+    /// here — an unclean stop leaves no marker and the next boot bumps
+    /// the generation (see `kevy_persist::feed_meta`).
+    pub(crate) fn write_feed_shutdown_marker(&self) {
+        if let Some(f) = &self.replicate {
+            let (generation, next) = f.tail();
+            if let Err(e) = kevy_persist::feed_meta::write_feed_meta(
+                &self.data_dir,
+                self.id,
+                generation,
+                next,
+            ) {
+                eprintln!("kevy: shard {} feed marker write failed: {e}", self.id);
+            }
+        }
+    }
+
     pub(crate) fn drain_persist_on_shutdown(&mut self) {
         // The persist worker only handles one job at a time, but a
         // completion could still be sitting in the done channel

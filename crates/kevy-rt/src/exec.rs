@@ -177,6 +177,35 @@ impl<C: Commands> Shard<C> {
             Route::Unwatch => self.do_unwatch(conn_id, seq),
             Route::Hello => self.do_hello(conn_id, seq, args),
             Route::Rename { nx } => self.start_rename(conn_id, seq, args, nx),
+            // v2.3 FEED.* — shard-index routed / local.
+            Route::FeedShards => {
+                self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
+                let n = self.nshards;
+                self.fold(
+                    conn_id,
+                    seq,
+                    Part::Reply(SmallReply::from_vec(format!(":{n}\r\n").into_bytes())),
+                );
+            }
+            Route::FeedTail => {
+                let shard = crate::exec_feed::parse_shard_arg(args);
+                match shard {
+                    Ok(sh) => self.start_feed_op(conn_id, seq, sh, Op::FeedTail, is_quit),
+                    Err(msg) => self.reply_feed_error(conn_id, seq, msg, is_quit),
+                }
+            }
+            Route::FeedRead => match crate::exec_feed::parse_feed_read(args) {
+                Ok(p) => {
+                    let op = Op::FeedRead {
+                        cursor_gen: p.cursor_gen,
+                        offset: p.offset,
+                        count: p.count,
+                        prefixes: p.prefixes,
+                    };
+                    self.start_feed_op(conn_id, seq, p.shard, op, is_quit);
+                }
+                Err(msg) => self.reply_feed_error(conn_id, seq, msg, is_quit),
+            },
             Route::Slowlog(sub) => self.start_slowlog(conn_id, seq, sub),
             Route::Local => {
                 let meta = DispatchMeta { is_write, wake_idx, key_idx: None };

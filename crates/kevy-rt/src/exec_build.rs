@@ -78,6 +78,12 @@ impl<C: Commands> Shard<C> {
             Route::SInter => self.build_gather(args, GatherKind::Set, MultiOp::SInter),
             Route::ZAlgebraStore(combine) => self.build_zalgebra_store(args, combine),
             Route::ZInterCard => self.build_zintercard(args),
+            // FEED.* is intercepted in `start_command` before the
+            // multi path; reaching here is a routing bug — resolve
+            // with an error reply rather than crashing the shard.
+            Route::FeedRead | Route::FeedTail | Route::FeedShards => {
+                gather_error("ERR internal: feed route hit multi builder")
+            }
             Route::SUnion => self.build_gather(args, GatherKind::Set, MultiOp::SUnion),
             Route::SDiff => self.build_gather(args, GatherKind::Set, MultiOp::SDiff),
             Route::Keys(pat) => self.fanout_keys(pat, None, KeyShape::Keys),

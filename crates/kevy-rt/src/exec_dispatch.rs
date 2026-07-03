@@ -325,7 +325,7 @@ impl<C: Commands> Shard<C> {
         // window during `REPLICAOF NO ONE` promotion when both an
         // upstream link and a downstream source can coexist. The
         // thread-local read is a cheap branch on the cold path here.
-        if let Some(src) = self.replicate.as_mut()
+        if let Some(src) = self.replicate.as_mut().map(|f| f.source_mut())
             && !crate::replication_gate::is_applying_replicated()
         {
             src.push_mutation(args);
