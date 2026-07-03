@@ -48,18 +48,28 @@ fn persist_sidecar(cat: &Catalog) {
 
 /// `IDX.CREATE <name> ON PREFIX <p> FIELD <f> TYPE <t> KIND <k>`.
 pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
-    if args.len() != 11
+    let with_maxmem = args.len() == 13;
+    if !(args.len() == 11 || with_maxmem)
         || !args[2].eq_ignore_ascii_case(b"ON")
         || !args[3].eq_ignore_ascii_case(b"PREFIX")
         || !args[5].eq_ignore_ascii_case(b"FIELD")
         || !args[7].eq_ignore_ascii_case(b"TYPE")
         || !args[9].eq_ignore_ascii_case(b"KIND")
+        || (with_maxmem && !args[11].eq_ignore_ascii_case(b"MAXMEM"))
     {
         return encode_error(
             out,
-            "ERR usage: IDX.CREATE name ON PREFIX p FIELD f TYPE i64|f64|str KIND range|unique",
+            "ERR usage: IDX.CREATE name ON PREFIX p FIELD f TYPE i64|f64|str KIND range|unique [MAXMEM bytes]",
         );
     }
+    let max_bytes: u64 = if with_maxmem {
+        match std::str::from_utf8(&args[12]).ok().and_then(|s| s.parse().ok()) {
+            Some(v) => v,
+            None => return encode_error(out, "ERR MAXMEM must be an integer byte count"),
+        }
+    } else {
+        0
+    };
     let Some(ty) = ValType::parse(&args[8]) else {
         return encode_error(out, "ERR TYPE must be i64|f64|str");
     };
@@ -75,7 +85,7 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) 
         field: args[6].to_vec(),
         ty,
         kind,
-        max_bytes: 0,
+        max_bytes,
     };
     let mut cat = index_runtime::catalog().map(|c| (*c).clone()).unwrap_or_default();
     match cat.create(spec) {

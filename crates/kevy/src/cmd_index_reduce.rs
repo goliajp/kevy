@@ -5,8 +5,8 @@ use kevy_index::IndexValue;
 use kevy_resp::{encode_array_len, encode_bulk, encode_error, encode_integer};
 
 use crate::cmd_index_query::{
-    ComposeQuery, Hydrated, Query, ST_BADARGS, ST_BUILDING, ST_NOINDEX, decode_value,
-    encode_value, hex,
+    ComposeQuery, Hydrated, Query, ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OVERBUDGET,
+    decode_value, encode_value, hex,
 };
 use crate::index_runtime;
 
@@ -27,6 +27,10 @@ pub(crate) fn extension_reduce(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8
             }
             Some(ST_BUILDING) => {
                 encode_error(&mut out, "INDEXBUILDING index is still building");
+                return out;
+            }
+            Some(ST_OVERBUDGET) => {
+                encode_error(&mut out, "INDEXOVERBUDGET index build exceeded MAXMEM");
                 return out;
             }
             _ => {}
