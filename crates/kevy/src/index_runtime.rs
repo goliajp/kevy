@@ -40,6 +40,8 @@ enum BuildState {
 struct ShardIndex {
     spec: IndexSpec,
     seg: Segment,
+    /// v2.7: populated instead of `seg` for KIND text.
+    text: Option<kevy_text::TextSegment>,
     build: BuildState,
 }
 
@@ -129,6 +131,29 @@ pub(crate) fn with_ready_segment<R>(
     })
 }
 
+/// v2.7: run `f` against a READY text segment.
+pub(crate) fn with_ready_text_segment<R>(
+    store: &mut Store,
+    name: &[u8],
+    f: impl FnOnce(&kevy_text::TextSegment) -> R,
+) -> Result<R, &'static str> {
+    SHARD_INDEXES.with(|tl| {
+        let mut st = tl.borrow_mut();
+        refresh(&mut st, store);
+        let si = st
+            .idx
+            .iter()
+            .find(|si| si.spec.name == name)
+            .ok_or("ERR no such index")?;
+        match (&si.build, &si.text) {
+            (BuildState::Ready, Some(ts)) => Ok(f(ts)),
+            (BuildState::Backfilling { .. }, _) => Err("INDEXBUILDING index is still building"),
+            (BuildState::FailedOverBudget, _) => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
+            (_, None) => Err("ERR not a text index"),
+        }
+    })
+}
+
 /// v2.6: run `f` with a name→segment resolver over this shard's READY
 /// segments (views probe several indexes per call). Building/failed
 /// segments resolve to None.
@@ -205,6 +230,8 @@ fn refresh(st: &mut ShardIndexes, store: &mut Store) {
                     pat.push(b'*');
                     let keys = store.collect_keys(Some(&pat), None);
                     next.push(ShardIndex {
+                        text: (spec.kind == kevy_index::IndexKind::Text)
+                            .then(kevy_text::TextSegment::new),
                         spec: spec.clone(),
                         seg: Segment::new(),
                         build: BuildState::Backfilling { keys, pos: 0 },
@@ -220,6 +247,18 @@ fn refresh(st: &mut ShardIndexes, store: &mut Store) {
 /// Index one row: read the field from the hash at `key`, coerce,
 /// apply. A missing key / non-hash / missing field clears the row.
 fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
+    // v2.7 text kind: raw field bytes tokenize into the inverted
+    // segment (no scalar coercion).
+    if let Some(ts) = &mut si.text {
+        match store.hget(key, &si.spec.field) {
+            Ok(Some(raw)) => {
+                let raw = raw.to_vec();
+                ts.apply(key, Some(&raw));
+            }
+            _ => ts.apply(key, None),
+        }
+        return;
+    }
     let val = row_value(store, &si.spec, key);
     match val {
         RowValue::Value(v) => si.seg.apply(key, Some(v)),
@@ -268,7 +307,11 @@ fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: usize) {
     let done = *pos >= keys.len();
     for key in &slice {
         // Hook-applied entries win: only fill keys not yet indexed.
-        if si.seg.verify_entry(key).is_none() {
+        let already = match &si.text {
+            Some(ts) => ts.contains(key),
+            None => si.seg.verify_entry(key).is_some(),
+        };
+        if !already {
             apply_row_backfill(store, si, key);
         }
     }
@@ -285,6 +328,10 @@ fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: usize) {
 }
 
 fn apply_row_backfill(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
+    if si.text.is_some() {
+        apply_row(store, si, key);
+        return;
+    }
     match row_value(store, &si.spec, key) {
         RowValue::Value(v) => si.seg.apply(key, Some(v)),
         RowValue::CoerceFailed => si.seg.apply(key, None),
