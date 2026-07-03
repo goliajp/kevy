@@ -334,7 +334,7 @@ impl Hnsw {
             tombstones,
             links,
             approx_bytes,
-            rebuild_recommended: self.nodes.len() > 0 && tombstones * 10 > self.nodes.len() as u64 * 3,
+            rebuild_recommended: !self.nodes.is_empty() && tombstones * 10 > self.nodes.len() as u64 * 3,
         }
     }
 
@@ -373,7 +373,7 @@ mod tests {
         let hits = h.knn(&[5.1, 7.05], 3);
         assert_eq!(hits[0].0, b"p0229".to_vec(), "{hits:?}");
         assert_eq!(hits.len(), 3);
-        assert!(hits[0].1 < hits[1].1 || (hits[0].1 == hits[1].1));
+        assert!(hits[0].1 <= hits[1].1);
     }
 
     #[test]
