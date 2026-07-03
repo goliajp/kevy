@@ -164,6 +164,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("SCARD",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("SDIFF",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("SINTER",       RD, NG,   None,            None,    SERVER | ESTORE),
+    op("SINTERSTORE",  WR, GROW, Some(N::Set),    None,    SERVER | ESTORE),
     op("SISMEMBER",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("SMEMBERS",     RD, NG,   None,            None,    SERVER | ESTORE),
     op("SPOP",         WR, NG,   Some(N::Set),    None,    SERVER | ESTORE | REPLAY),
@@ -171,12 +172,20 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("SREM",         WR, NG,   Some(N::Set),    None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("SSCAN",        RD, NG,   None,            None,    SERVER),
     op("SUNION",       RD, NG,   None,            None,    SERVER | ESTORE),
+    op("SUNIONSTORE",  WR, GROW, Some(N::Set),    None,    SERVER | ESTORE),
+    op("SDIFFSTORE",   WR, GROW, Some(N::Set),    None,    SERVER | ESTORE),
     // ---- zsets --------------------------------------------------------
     op("BZPOPMIN",     WR, NG,   None,            None,    SERVER),
     op("ZADD",         WR, GROW, Some(N::Zset),   Some(1), SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
     op("ZCARD",        RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("ZCOUNT",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZINCRBY",      WR, GROW, Some(N::Zset),   Some(1), SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
+    // v2.2 algebra: effect-logged as DEL+ZADD/SADD, so no REPLAY arm
+    // of their own is needed (the effect verbs replay).
+    op("ZINTERSTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
+    op("ZUNIONSTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
+    op("ZDIFFSTORE",   WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
+    op("ZINTERCARD",   RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZPOPMIN",      WR, NG,   Some(N::Zset),   None,    SERVER | ESTORE | REPLAY),
     op("ZRANGE",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZRANGEBYSCORE", RD, NG,  None,            None,    SERVER | ESTORE),
@@ -359,7 +368,13 @@ mod tests {
             // Ops whose AOF form is a DIFFERENT verb (documented effect
             // logging): SPOP→SREM handled by SPOP retaining REPLAY for
             // legacy frames; MSET/SETNX/GETEX log SET/PEXPIREAT forms.
-            let logs_as_other_verb = matches!(o.name, "MSET" | "SETNX" | "GETEX" | "BITOP" | "COPY" | "UNLINK" | "TOUCH");
+            let logs_as_other_verb = matches!(
+                o.name,
+                "MSET" | "SETNX" | "GETEX" | "BITOP" | "COPY" | "UNLINK" | "TOUCH"
+                    // v2.2 algebra: effect-logged as DEL + plain ZADD/SADD.
+                    | "ZINTERSTORE" | "ZUNIONSTORE" | "ZDIFFSTORE"
+                    | "SINTERSTORE" | "SUNIONSTORE" | "SDIFFSTORE"
+            );
             assert!(
                 replayable || ledgered || logs_as_other_verb,
                 "{}: embedded write surface without a replay arm and not ledgered — \

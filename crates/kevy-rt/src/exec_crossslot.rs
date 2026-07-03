@@ -46,7 +46,13 @@ impl<C: Commands> Shard<C> {
 pub(crate) fn is_crossslot_checked(route: &Route) -> bool {
     matches!(
         route,
-        Route::MGet | Route::MSet | Route::SInter | Route::SUnion | Route::SDiff
+        Route::MGet
+            | Route::MSet
+            | Route::SInter
+            | Route::SUnion
+            | Route::SDiff
+            | Route::ZAlgebraStore(_)
+            | Route::ZInterCard
     )
 }
 
@@ -55,6 +61,35 @@ pub(crate) fn is_crossslot_checked(route: &Route) -> bool {
 /// arg starting at 1; everything else uses args[1..]). Short-circuits
 /// on the first slot disagreement.
 pub(crate) fn keys_span_slots<A: ArgvView + ?Sized>(route: &Route, args: &A) -> bool {
+    // numkeys-form argv: keys are NOT a uniform args[1..] walk.
+    //   ZINTERSTORE/ZUNIONSTORE/ZDIFFSTORE dst numkeys k…  → dst + args[3..3+n]
+    //   ZINTERCARD numkeys k…                              → args[2..2+n]
+    // (the set-form *STOREs are a plain dst+keys walk, handled below).
+    match route {
+        Route::ZAlgebraStore(
+            crate::ZCombine::ZInter | crate::ZCombine::ZUnion | crate::ZCombine::ZDiff,
+        ) => {
+            let Some(n) = parse_numkeys(args, 2) else { return false };
+            let mut slots = key_slot_at(args, 1).into_iter().collect::<Vec<_>>();
+            for i in 3..(3 + n).min(args.len()) {
+                if let Some(sl) = key_slot_at(args, i) {
+                    slots.push(sl);
+                }
+            }
+            return slots.windows(2).any(|w| w[0] != w[1]);
+        }
+        Route::ZInterCard => {
+            let Some(n) = parse_numkeys(args, 1) else { return false };
+            let mut slots = Vec::new();
+            for i in 2..(2 + n).min(args.len()) {
+                if let Some(sl) = key_slot_at(args, i) {
+                    slots.push(sl);
+                }
+            }
+            return slots.windows(2).any(|w| w[0] != w[1]);
+        }
+        _ => {}
+    }
     let step = if matches!(route, Route::MSet) { 2 } else { 1 };
     let n = args.len();
     if n < 1 + step + 1 {
@@ -72,4 +107,14 @@ pub(crate) fn keys_span_slots<A: ArgvView + ?Sized>(route: &Route, args: &A) -> 
         i += step;
     }
     false
+}
+
+fn parse_numkeys<A: ArgvView + ?Sized>(args: &A, idx: usize) -> Option<usize> {
+    args.get(idx)
+        .and_then(|v| std::str::from_utf8(v).ok())
+        .and_then(|s| s.parse().ok())
+}
+
+fn key_slot_at<A: ArgvView + ?Sized>(args: &A, idx: usize) -> Option<u16> {
+    args.get(idx).map(kevy_hash::key_hash_slot)
 }

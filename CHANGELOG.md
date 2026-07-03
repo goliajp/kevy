@@ -4,6 +4,61 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
+## [Unreleased — v3.0 accumulation]
+
+Trains merge to develop without releases (standing directive
+2026-07-03: one-shot release at v3.0.0). Entries accumulate here per
+train, versions bump at ship time.
+
+### perf campaign close-out (task #10, 2026-07-04)
+
+- **stay-hot-while-inflight** (`kevy-rt`): a shard with forwarded
+  cross-shard requests outstanding stays in the idle ladder's spin
+  rung instead of parking — replies land within ~one cross-shard RTT
+  and the kernel sleep/wake per reply batch was the throughput tax.
+  Closes the legacy_8sh decay traced to 4fa4631 (v1.23, nap-rung
+  removal, single-commit -20% — the commit's own foreseen "-18~21%
+  8-shard" trade whose follow-up never happened) plus the v1.17 INFO
+  counters' -4% mode attractor (286c4a2, masked by headroom).
+  legacy_8sh_set restored to 9.99M median (instances to 10.89M, above
+  the pre-decay ceiling); legacy_8sh_get 10.88M (+9% over the old
+  baseline); pinned angles held (+8~18%); -c1 sequential IMPROVED to
+  80.3k ops/s @ p50 15µs (above the post-4fa4631 63-65k — both sides
+  of the historical trade now win). perfgate 6/6 PASS on the
+  untouched 2026-06-11 baseline, then honestly re-recorded. Full
+  archaeology: bench/PERF-FINDING-2026-07-03-legacy8sh-set-bimodal.md
+  + bench/PERF-DECOMP-2026-07-04-legacy8sh-owner-starvation.md.
+- Batch-gated 200µs nap retained as the second ladder rung for the
+  no-inflight idle shape (`NAP_BATCH_MIN` 4).
+
+### v2.2 — zset/set algebra (P3 Redis parity)
+
+- **New commands (server + embedded)**: `ZINTERSTORE` / `ZUNIONSTORE`
+  (full Redis 6.2 `WEIGHTS` + `AGGREGATE SUM|MIN|MAX`), `ZDIFFSTORE`,
+  `ZINTERCARD` (with `LIMIT` short-circuit), and the set-algebra
+  store forms `SINTERSTORE` / `SUNIONSTORE` / `SDIFFSTORE` (audit A3
+  gap). Plain sets participate in zset combinations at score 1.0;
+  `*STORE` overwrites any dst type; empty results delete dst — Redis
+  semantics throughout.
+- **Cross-shard orchestration** (`kevy-rt`): sources gather per shard
+  (scored payloads), the origin combines via `kevy-store`'s pure
+  algebra, and a second hop materializes at dst's owning shard —
+  rename-orchestrator pattern. Cluster conns get numkeys-aware
+  CROSSSLOT checks.
+- **AOF/replication**: effect logging (`DEL dst` + plain
+  `ZADD`/`SADD` of the result) — deterministic replay and
+  replica-apply regardless of source state; parity-CI exemption
+  documented in `every_logged_verb_is_replayable`.
+- **Embedded**: `zinterstore`/`zunionstore`/`zdiffstore`/`zintercard`
+  + `sinterstore`/`sunionstore`/`sdiffstore` facades (documented
+  copy-style non-atomic window; use `atomic_all_shards` for atomic
+  combination), plus `zrange_by_score_limit` /
+  `zrevrange_by_score_limit` closing the embedded LIMIT pagination
+  gap.
+- **OP_TABLE**: 7 rows; ESTORE manifest +7; perfgate gains the
+  `zalg_zinterstore` angle (new metrics report-only until the next
+  baseline record).
+
 ## [v2.1.0] — 2026-07-03 — **`kevy-embedded` 1.16.0 — v3-arc P0/P1 foundation: OP_TABLE parity CI, AtomicCtx completeness, ZADD flags, durability barrier**
 
 **Theme**: the first train of the v3 serving-engine arc. Kills the op-surface-drift bug class structurally (the class that shipped v2.0.21's data-loss bug), and lands the write-path semantics a serving-store needs.

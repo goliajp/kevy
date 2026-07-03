@@ -36,6 +36,11 @@ pub enum Route {
     SInter,
     SUnion,
     SDiff,
+    /// v2.2 zset/set algebra `*STORE` family: gather sources, combine
+    /// per [`crate::message::ZCombine`], materialize at `args[1]`.
+    ZAlgebraStore(crate::ZCombine),
+    /// `ZINTERCARD numkeys key… [LIMIT n]` — read-only gathered count.
+    ZInterCard,
     /// `KEYS pattern` — every shard returns its matching keys.
     Keys(Option<Vec<u8>>),
     /// `SCAN` (cursor-0 approximation) — like KEYS but replies `[cursor, keys]`.
