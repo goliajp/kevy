@@ -28,9 +28,32 @@ pub(crate) fn extension_op(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"COMPOSE")) {
         return op_compose(store, argv);
     }
+    // v2.7: IDX.QUERY <name> MATCH <text> [LIMIT n] [FIELDS f…]
+    if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"MATCH")) {
+        return op_match(store, argv);
+    }
     let Some(q) = Query::parse(argv) else {
         return vec![ST_BADARGS];
     };
+    // Text indexes answer VERIFY with their text stats.
+    if matches!(q.shape, Shape::Verify)
+        && index_runtime::catalog()
+            .and_then(|c| c.get(&q.name).map(|(s, _)| s.kind))
+            == Some(kevy_index::IndexKind::Text)
+    {
+        return match index_runtime::with_ready_text_segment(store, &q.name, |ts| ts.stats()) {
+            Ok(st) => {
+                let mut chunk = vec![ST_OK];
+                chunk.extend_from_slice(&st.docs.to_le_bytes());
+                chunk.extend_from_slice(&st.approx_bytes.to_le_bytes());
+                chunk.extend_from_slice(&st.postings.to_le_bytes());
+                chunk.extend_from_slice(&st.tokens.to_le_bytes());
+                chunk
+            }
+            Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+            Err(_) => vec![ST_NOINDEX],
+        };
+    }
     let res = index_runtime::with_ready_segment(store, &q.name, |spec, seg| match q.shape {
         Shape::Range { .. } | Shape::Eq { .. } => {
             let Some((min, max)) = q.bounds(spec.ty) else {
@@ -80,6 +103,71 @@ pub(crate) fn extension_op(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
         Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
+    }
+}
+
+/// v2.7 text MATCH per-shard: BM25-ranked hits + owning-shard
+/// hydration. Chunk: `[ST_OK][n][(klen,key,score f64,fcount,fields)*]`.
+fn op_match(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+    let Some(q) = MatchArgs::parse(argv) else {
+        return vec![ST_BADARGS];
+    };
+    let res = index_runtime::with_ready_text_segment(store, &q.name, |ts| {
+        ts.matches(&q.text, q.limit)
+    });
+    match res {
+        Ok(hits) => {
+            let mut chunk = vec![ST_OK];
+            chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
+            for h in &hits {
+                chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
+                chunk.extend_from_slice(&h.key);
+                chunk.extend_from_slice(&h.score.to_le_bytes());
+                encode_hydration(store, &mut chunk, &h.key, &q.fields);
+            }
+            chunk
+        }
+        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(_) => vec![ST_NOINDEX],
+    }
+}
+
+/// `IDX.QUERY name MATCH text [LIMIT n] [FIELDS f…]` (no cursor —
+/// BM25 deep pagination is an anti-pattern; LIMIT caps at 1000).
+pub(crate) struct MatchArgs {
+    pub(crate) name: Vec<u8>,
+    pub(crate) text: Vec<u8>,
+    pub(crate) limit: usize,
+    pub(crate) fields: Vec<Vec<u8>>,
+}
+
+impl MatchArgs {
+    pub(crate) fn parse(argv: &[Vec<u8>]) -> Option<MatchArgs> {
+        let name = argv.get(1)?.clone();
+        if !argv.get(2)?.eq_ignore_ascii_case(b"MATCH") {
+            return None;
+        }
+        let text = argv.get(3)?.clone();
+        let mut limit = 10usize;
+        let mut fields = Vec::new();
+        let mut i = 4;
+        while i < argv.len() {
+            let t = &argv[i];
+            if t.eq_ignore_ascii_case(b"LIMIT") {
+                limit = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
+                i += 2;
+            } else if t.eq_ignore_ascii_case(b"FIELDS") {
+                fields = argv[i + 1..].to_vec();
+                if fields.is_empty() {
+                    return None;
+                }
+                break;
+            } else {
+                return None;
+            }
+        }
+        Some(MatchArgs { name, text, limit: limit.clamp(1, 1000), fields })
     }
 }
 
@@ -172,13 +260,25 @@ fn op_list(store: &mut Store) -> Vec<u8> {
     let mut chunk = vec![ST_OK];
     for (spec, _) in cat.iter() {
         let building = index_runtime::segment_building(store, &spec.name);
-        let stats = index_runtime::with_ready_segment(store, &spec.name, |_, seg| seg.stats())
-            .unwrap_or_default();
+        // (entries, bytes, coerce_failures/postings, duplicates/tokens)
+        let quad = if spec.kind == kevy_index::IndexKind::Text {
+            index_runtime::with_ready_text_segment(store, &spec.name, |ts| {
+                let st = ts.stats();
+                (st.docs, st.approx_bytes, st.postings, st.tokens)
+            })
+            .unwrap_or_default()
+        } else {
+            index_runtime::with_ready_segment(store, &spec.name, |_, seg| {
+                let st = seg.stats();
+                (st.entries, st.approx_bytes, st.coerce_failures, st.duplicates)
+            })
+            .unwrap_or_default()
+        };
         chunk.push(u8::from(building));
-        chunk.extend_from_slice(&stats.entries.to_le_bytes());
-        chunk.extend_from_slice(&stats.approx_bytes.to_le_bytes());
-        chunk.extend_from_slice(&stats.coerce_failures.to_le_bytes());
-        chunk.extend_from_slice(&stats.duplicates.to_le_bytes());
+        chunk.extend_from_slice(&quad.0.to_le_bytes());
+        chunk.extend_from_slice(&quad.1.to_le_bytes());
+        chunk.extend_from_slice(&quad.2.to_le_bytes());
+        chunk.extend_from_slice(&quad.3.to_le_bytes());
     }
     chunk
 }

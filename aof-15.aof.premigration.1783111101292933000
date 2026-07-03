@@ -1,0 +1,13 @@
+KEVYAOF1
+*3
+$5
+LPUSH
+$3
+lst
+$1
+e
+*2
+$6
+GETDEL
+$3
+lst

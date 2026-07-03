@@ -46,6 +46,9 @@ pub enum IndexKind {
     /// Point lookup by value; duplicates recorded (declarative fence —
     /// RFC D3: uniqueness is verified, not write-enforced).
     Unique,
+    /// v2.7 full-text: the field tokenizes into an inverted segment
+    /// (kevy-text); queried with `MATCH`, BM25-ranked.
+    Text,
 }
 
 impl IndexKind {
@@ -54,6 +57,7 @@ impl IndexKind {
         match self {
             IndexKind::Range => "range",
             IndexKind::Unique => "unique",
+            IndexKind::Text => "text",
         }
     }
 
@@ -63,6 +67,8 @@ impl IndexKind {
             Some(IndexKind::Range)
         } else if raw.eq_ignore_ascii_case(b"unique") {
             Some(IndexKind::Unique)
+        } else if raw.eq_ignore_ascii_case(b"text") {
+            Some(IndexKind::Text)
         } else {
             None
         }
