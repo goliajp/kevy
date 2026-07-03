@@ -227,8 +227,10 @@ impl IoUring {
         };
 
         for &modern in modern_flag_tiers {
-            let mut p = IoUringParams::default();
-            p.flags = sqpoll_flags | modern;
+            let mut p = IoUringParams {
+                flags: sqpoll_flags | modern,
+                ..Default::default()
+            };
             if let Some((idle_ms, cpu)) = sqpoll {
                 p.sq_thread_idle = idle_ms;
                 if let Some(c) = cpu {
