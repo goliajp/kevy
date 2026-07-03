@@ -139,11 +139,10 @@ fn info_cluster_known_nodes(port: u16) -> u32 {
     let n = s.read(&mut buf).unwrap_or(0);
     let body = String::from_utf8_lossy(&buf[..n]);
     for line in body.lines() {
-        if let Some(rest) = line.strip_prefix("cluster_known_nodes:") {
-            if let Ok(v) = rest.trim().parse::<u32>() {
+        if let Some(rest) = line.strip_prefix("cluster_known_nodes:")
+            && let Ok(v) = rest.trim().parse::<u32>() {
                 return v;
             }
-        }
     }
     0
 }

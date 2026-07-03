@@ -243,16 +243,12 @@ impl Default for MemorySection {
 
 /// `[metrics]` section — v1.41. Prometheus-format HTTP exposition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub struct MetricsSection {
     /// TCP port for the `/metrics` HTTP endpoint. `0` = OFF (default).
     pub listen_port: u16,
 }
 
-impl Default for MetricsSection {
-    fn default() -> Self {
-        Self { listen_port: 0 }
-    }
-}
 
 /// `[audit]` section — v1.42. Append-only audit log of ADMIN-class
 /// commands (`CONFIG SET` / `CONFIG REWRITE` / `DEBUG` / `FLUSHDB` /

@@ -61,14 +61,13 @@ fn make_lua_host() -> LuaHost<Store> {
     let mut host = LuaHost::<Store>::new(|store, argv, read_only| {
         // P7c: read-only enforcement. EVAL_RO / EVALSHA_RO set
         // read_only=true; reject writes per Redis semantics.
-        if read_only {
-            if let Some(cmd) = argv.first() {
+        if read_only
+            && let Some(cmd) = argv.first() {
                 let upper: Vec<u8> = cmd.iter().map(|b| b.to_ascii_uppercase()).collect();
                 if crate::cmd::is_write_verb(&upper) {
                     return b"-READONLY can't write against a read-only script\r\n".to_vec();
                 }
             }
-        }
         // v1.27.4: cross-shard inner-call enforcement. Under
         // `--threads > 1`, EVAL runs on KEYS[1]'s shard (v1.27.1
         // routing fix); the inner `redis.call` hits this same

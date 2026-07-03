@@ -319,9 +319,10 @@ use std::rc::Rc;
 /// GET / SET / DEL / EXISTS / INCRBY / PING. Returns RESP reply
 /// bytes per the protocol — the same shape kevy-rt's dispatcher
 /// will produce in production.
-fn make_stub_dispatch()
--> (Rc<RefCell<HashMap<Vec<u8>, Vec<u8>>>>, impl Fn(&[&[u8]], bool) -> Vec<u8> + 'static)
-{
+type StubStore = Rc<RefCell<HashMap<Vec<u8>, Vec<u8>>>>;
+
+#[allow(clippy::type_complexity)] // impl Trait in a return tuple has no alias form
+fn make_stub_dispatch() -> (StubStore, impl Fn(&[&[u8]], bool) -> Vec<u8> + 'static) {
     let store: Rc<RefCell<HashMap<Vec<u8>, Vec<u8>>>> =
         Rc::new(RefCell::new(HashMap::new()));
     let store_in = Rc::clone(&store);

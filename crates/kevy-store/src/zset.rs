@@ -77,7 +77,7 @@ impl Store {
         let mut added = 0usize;
         let mut delta: i64 = 0;
         for (score, m) in pairs {
-            match self.zadd_one(key, *m, *score)? {
+            match self.zadd_one(key, m, *score)? {
                 ZaddOutcome::AddedInline => added += 1,
                 ZaddOutcome::UpdatedInline => {}
                 ZaddOutcome::AddedHeap(w) => {
@@ -140,7 +140,7 @@ impl Store {
                         // G-A3: hoist Arc::make_mut OUT of loop.
                         let z = Arc::make_mut(z);
                         for m in members {
-                            if z.remove(*m) {
+                            if z.remove(m) {
                                 r += 1;
                                 d -= zset_member_weight(&SmallBytes::from_slice(m)) as i64;
                             }

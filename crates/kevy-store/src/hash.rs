@@ -3,6 +3,9 @@
 use crate::small_hash::{self, AddResult as HAddResult, SmallHashData};
 use crate::util::{parse_f64, parse_i64};
 use crate::value::{HashData, SmallBytes, Value, hash_field_weight};
+/// `(field, value)` pairs collected off either hash encoding.
+type FieldValuePairs = Vec<(Vec<u8>, Vec<u8>)>;
+
 use crate::{Entry, Store, StoreError, now_ns};
 use std::sync::Arc;
 
@@ -72,7 +75,7 @@ impl Store {
     /// pairs as a vector of `(&[u8], &[u8])`. None if absent.
     /// Internal helper for read-only paths; collects into a new Vec to
     /// avoid the two-encoding match dance at every callsite.
-    fn hash_pairs(&mut self, key: &[u8]) -> Result<Option<Vec<(Vec<u8>, Vec<u8>)>>, StoreError> {
+    fn hash_pairs(&mut self, key: &[u8]) -> Result<Option<FieldValuePairs>, StoreError> {
         match self.live_entry(key) {
             None => Ok(None),
             Some(e) => match &e.value {
@@ -206,7 +209,7 @@ impl Store {
                 Value::Hash(h) => Ok(fields.iter().map(|f| h.get(*f).cloned()).collect()),
                 Value::SmallHashInline(h) => Ok(fields
                     .iter()
-                    .map(|f| h.get(*f).map(<[u8]>::to_vec))
+                    .map(|f| h.get(f).map(<[u8]>::to_vec))
                     .collect()),
                 _ => Err(StoreError::WrongType),
             },

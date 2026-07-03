@@ -78,7 +78,7 @@ use std::thread;
 /// is `join()`-ed after the shard threads exit so the process doesn't
 /// tear down while a free is still in flight.
 ///
-/// **Channel shape**: the sender carries `Vec<Box<Value>>` — a batch
+/// **Channel shape**: the sender carries `Vec<Value>` — a batch
 /// of heavy values produced by one shard since its last flush
 /// (v1.25 A.2 batch-send model). The reactor calls
 /// `Store::flush_pending_drops` at the end of every iter to push the
@@ -93,7 +93,7 @@ use std::thread;
 /// here (sender clone per shard, drop-on-shutdown channel close, join
 /// on the held handle) is reused unchanged.
 pub(crate) fn spawn() -> (BioDropSender, thread::JoinHandle<()>) {
-    let (tx, rx) = mpsc::channel::<Vec<Box<Value>>>();
+    let (tx, rx) = mpsc::channel::<Vec<Value>>();
     let handle = thread::Builder::new()
         .name("kevy-bio".to_string())
         .spawn(move || {
