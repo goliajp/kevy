@@ -31,6 +31,33 @@ train, versions bump at ship time.
 - Batch-gated 200µs nap retained as the second ladder rung for the
   no-inflight idle shape (`NAP_BATCH_MIN` 4).
 
+### v2.3 — CDC / offset spine (P4)
+
+- **Change feed**: every applied write consumable as effect frames
+  under a `(generation, offset)` cursor — `FEED.SHARDS` / `FEED.TAIL`
+  / `FEED.READ … [COUNT] [PREFIX …]` on the server (`-FEEDRESYNC
+  <gen> <tail>` when unservable), `changes_since` / `changes_tail` /
+  `feed_shards` embedded (`FeedError::{Resync,Future,Disabled}`).
+  At-least-once; prefix filter is fail-open and never moves the
+  cursor; per-key order guaranteed within a stream. `[feed]` config
+  section (`enabled`, `feed_buffer_size` 64 MB default / 1 GB cap);
+  one backlog serves replicas and feed consumers
+  (`max(replication_buffer_size, feed_buffer_size)`).
+- **Cursor continuity contract**: `feed-{i}.gen` (fsynced generation
+  high-water, bump-only) + `feed-{i}.meta` (clean-shutdown marker,
+  consumed at boot) — clean restart resumes the cursor exactly;
+  crash / FLUSHALL / restore bumps the generation so consumers know
+  to rebuild.
+- **Recovery points**: snapshots record the feed cursor in their
+  header (format v5; v4 stays byte-identical when no cursor),
+  `kevy_persist::read_snapshot_cursor()`; contract "snapshot + feed
+  frames from its cursor = exact state" proven by
+  `bench/restore-drill.sh` (a `diskgate` line: 300-key drill incl.
+  post-snapshot overwrite, byte-exact).
+- **Per-prefix stats**: `PREFIX.STATS <prefix>` (all-shard fanout) /
+  embedded `info_prefix` — live keys + TTL'd count, O(keyspace).
+- OP_TABLE +4 (FEED.READ/TAIL/SHARDS, PREFIX.STATS); docs/cdc.md.
+
 ### v2.2 — zset/set algebra (P3 Redis parity)
 
 - **New commands (server + embedded)**: `ZINTERSTORE` / `ZUNIONSTORE`

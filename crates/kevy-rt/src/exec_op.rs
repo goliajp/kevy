@@ -66,6 +66,18 @@ impl<C: Commands> Shard<C> {
                 self.store.flushall();
                 // Every WATCH against this shard is now invalidated.
                 self.store.bump_all_watched();
+                // v2.3 feed contract: FLUSHALL breaks stream continuity
+                // — bump the generation (offsets restart at 0) and
+                // persist the high-water before serving under it.
+                if let Some(f) = self.replicate.as_mut() {
+                    f.bump_generation();
+                    let g = f.generation();
+                    if let Err(e) =
+                        kevy_persist::feed_meta::write_feed_gen(&self.data_dir, self.id, g)
+                    {
+                        eprintln!("kevy: shard {} feed gen write failed: {e}", self.id);
+                    }
+                }
                 let mut c = Argv::with_capacity(1, 8);
                 c.push(b"FLUSHALL");
                 self.log(&c);
@@ -154,6 +166,14 @@ impl<C: Commands> Shard<C> {
                     self.log(&a);
                 }
                 Part::Int(n as i64)
+            }
+            Op::FeedRead { cursor_gen, offset, count, prefixes } => {
+                self.exec_feed_read(cursor_gen, offset, count, prefixes)
+            }
+            Op::FeedTail => self.exec_feed_tail(),
+            Op::PrefixStats(prefix) => {
+                let (keys, expires) = self.store.prefix_stats(&prefix);
+                Part::PrefixStats { keys, expires }
             }
             Op::CollectKeys(pat, limit) => {
                 Part::Keys(self.store.collect_keys(pat.as_deref(), limit))

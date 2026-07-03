@@ -33,7 +33,7 @@ command -v redis-benchmark >/dev/null 2>&1 || {
 DIR=$(mktemp -d)
 "$BIN" --port "$PORT" --threads 1 &> "$DIR/server.log" &
 SRV=$!
-trap 'kill $SRV 2>/dev/null; rm -rf "$DIR"' EXIT
+trap 'kill $SRV 2>/dev/null; sleep 0.2; kill -9 $SRV 2>/dev/null; wait $SRV 2>/dev/null; rm -rf "$DIR"' EXIT
 sleep 1
 
 measure() { # $1 = value size → echoes bytes/entry

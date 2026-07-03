@@ -72,6 +72,15 @@ pub struct Runtime<C: Commands> {
     /// listener + streaming loop arrive in subsequent tasks (T1.12+);
     /// this batch only wires the producer side. Default `false`.
     pub(crate) enable_replication: bool,
+    /// v2.3: FEED.* consumer surface. When set, every shard keeps a
+    /// backlog (even with no replicas) and persists the (generation,
+    /// offset) cursor via the feed sidecars.
+    pub(crate) feed_enabled: bool,
+    /// Per-shard backlog byte budget for the feed (`[feed]
+    /// feed_buffer_size`); the effective budget is
+    /// `max(replication_buffer_size, feed_buffer_size)` when both
+    /// features are on (one backlog, two readers).
+    pub(crate) feed_buffer_size: u64,
     /// Per-shard backlog byte budget when `enable_replication` is set.
     /// Fed from `[replication] replication_buffer_size`. Default
     /// `256 MiB` (matches the kevy-config default).
@@ -125,6 +134,8 @@ impl<C: Commands> Runtime<C> {
             slowlog_max_len: 128,
             cluster_port_base: None,
             enable_replication: false,
+            feed_enabled: false,
+            feed_buffer_size: 64 * 1024 * 1024,
             replica_inboxes: Vec::new(),
             replication_buffer_size: 256 * 1024 * 1024,
             replication_port_base: None,
@@ -352,11 +363,18 @@ impl<C: Commands> Runtime<C> {
                 inbound_dirty: inbound_dirty.clone(),
                 data_dir: self.data_dir.clone(),
                 aof,
-                replicate: if self.enable_replication {
-                    Some(kevy_replicate::source::ReplicationSource::new(
-                        usize::try_from(self.replication_buffer_size)
-                            .unwrap_or(usize::MAX),
-                    ))
+                replicate: if self.enable_replication || self.feed_enabled {
+                    let budget = if self.feed_enabled {
+                        self.replication_buffer_size.max(self.feed_buffer_size)
+                    } else {
+                        self.replication_buffer_size
+                    };
+                    let boot = kevy_persist::feed_meta::load_feed_boot(&self.data_dir, id)?;
+                    let mut src = kevy_replicate::source::ReplicationSource::new(
+                        usize::try_from(budget).unwrap_or(usize::MAX),
+                    );
+                    src.set_next_offset(boot.next_offset);
+                    Some(kevy_replicate::feed::FeedSource::new(boot.generation, src))
                 } else {
                     None
                 },

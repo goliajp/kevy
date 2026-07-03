@@ -39,6 +39,14 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
             SmallReply::Inline { len, buf: out }
         }
         Agg::AllOk => SmallReply::from_slice(b"+OK\r\n"),
+        Agg::PrefixStats { keys, expires } => {
+            let mut out = Vec::with_capacity(48);
+            out.extend_from_slice(
+                format!("*4\r\n$4\r\nkeys\r\n:{keys}\r\n$7\r\nexpires\r\n:{expires}\r\n")
+                    .as_bytes(),
+            );
+            SmallReply::from_vec(out)
+        }
         Agg::Gather { op, keys, got } => {
             SmallReply::from_vec(finalize_gather(op, keys, got, proto))
         }

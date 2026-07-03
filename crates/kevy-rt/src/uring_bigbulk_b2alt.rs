@@ -246,7 +246,7 @@ impl<C: Commands> Shard<C> {
         if self.aof.is_some() {
             self.log_write(&view);
         }
-        if let Some(src) = self.replicate.as_mut()
+        if let Some(src) = self.replicate.as_mut().map(|f| f.source_mut())
             && !crate::replication_gate::is_applying_replicated()
         {
             src.push_mutation(&view);

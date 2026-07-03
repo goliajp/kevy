@@ -2,6 +2,7 @@
 //! (kevy-embedded 1.11.0).
 
 use crate::Config;
+use crate::FeedError;
 use crate::store::Store;
 
 fn s() -> Store {
@@ -213,4 +214,104 @@ fn zset_algebra_store_forms_and_reopen() {
     assert!(s2.sismember(b"sd1", b"b").unwrap());
     drop(s2);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- v2.3: CDC feed (changes_since / changes_tail) ------------------------
+
+#[test]
+fn feed_consume_loop_and_prefix() {
+    let s = Store::open(Config::default().with_ttl_reaper_manual().with_feed(0)).unwrap();
+    assert_eq!(s.feed_shards(), 1);
+    let (g, off) = s.changes_tail().unwrap();
+    assert_eq!((g, off), (1, 0));
+
+    s.set(b"user:1", b"a").unwrap();
+    s.set(b"sess:1", b"b").unwrap();
+    s.zadd(b"user:z", &[(1.0, b"m")]).unwrap();
+
+    // full stream
+    let batch = s.changes_since(1, 0, 100, &[]).unwrap();
+    assert_eq!(batch.changes.len(), 3);
+    assert_eq!(batch.changes[0].argv[0], b"SET".to_vec());
+    assert_eq!(batch.next, (1, 3));
+    // caught up
+    let empty = s.changes_since(1, 3, 100, &[]).unwrap();
+    assert!(empty.changes.is_empty());
+    assert_eq!(empty.next, (1, 3));
+    // prefix filter drops sess:, keeps user: (cursor unchanged by filter)
+    let user = s.changes_since(1, 0, 100, &[b"user:"]).unwrap();
+    assert_eq!(user.changes.len(), 2);
+    assert_eq!(user.next, (1, 3));
+    // future cursor rejected
+    assert!(matches!(s.changes_since(1, 99, 10, &[]), Err(FeedError::Future)));
+    // disabled store answers Disabled
+    let off_store = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    assert!(matches!(off_store.changes_tail(), Err(FeedError::Disabled)));
+}
+
+#[test]
+fn feed_flushall_bumps_generation() {
+    let s = Store::open(Config::default().with_ttl_reaper_manual().with_feed(0)).unwrap();
+    s.set(b"k", b"v").unwrap();
+    s.flushall().unwrap();
+    let (g, off) = s.changes_tail().unwrap();
+    assert_eq!((g, off), (2, 0));
+    match s.changes_since(1, 0, 10, &[]) {
+        Err(FeedError::Resync { generation, tail }) => {
+            assert_eq!(generation, 2);
+            assert_eq!(tail, 0);
+        }
+        other => panic!("expected Resync, got {other:?}"),
+    }
+}
+
+#[test]
+fn feed_clean_reopen_continues_crash_bumps() {
+    let dir = crate::store::tests::tmp_dir("feed-reopen");
+    {
+        let s = Store::open(
+            Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0),
+        )
+        .unwrap();
+        s.set(b"a", b"1").unwrap();
+        s.set(b"b", b"2").unwrap();
+        assert_eq!(s.changes_tail().unwrap(), (1, 2));
+    } // clean drop → marker written after AOF flush
+
+    {
+        let s2 = Store::open(
+            Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0),
+        )
+        .unwrap();
+        // clean reopen: same generation, offset continues
+        assert_eq!(s2.changes_tail().unwrap(), (1, 2));
+        s2.set(b"c", b"3").unwrap();
+        let batch = s2.changes_since(1, 2, 10, &[]).unwrap();
+        assert_eq!(batch.changes.len(), 1);
+        assert_eq!(batch.changes[0].offset, 2);
+    }
+
+    // simulate crash: markers gone → next open bumps
+    std::fs::remove_file(std::path::Path::new(&dir).join("feed-0.meta")).unwrap();
+    let s3 = Store::open(
+        Config::default().with_persist(&dir).with_ttl_reaper_manual().with_feed(0),
+    )
+    .unwrap();
+    assert_eq!(s3.changes_tail().unwrap(), (2, 0));
+    drop(s3);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn info_prefix_counts() {
+    let s = s();
+    for i in 0..15 {
+        s.set(format!("ip:{i}").as_bytes(), b"v").unwrap();
+    }
+    s.set(b"zz:1", b"v").unwrap();
+    s.set_with_ttl(b"ip:0", b"v", std::time::Duration::from_secs(100)).unwrap();
+    let info = s.info_prefix(b"ip:");
+    assert_eq!(info.keys, 15);
+    assert_eq!(info.expires, 1);
+    assert_eq!(s.info_prefix(b"none:").keys, 0);
 }

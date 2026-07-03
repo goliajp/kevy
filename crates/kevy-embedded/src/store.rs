@@ -50,6 +50,10 @@ pub struct Store {
     /// LAST `Store` clone (or `Subscription`) holding a strong ref drops.
     pub(crate) guard: Arc<DropGuard>,
     pub(crate) config: Config,
+    /// v2.3 CDC feed handle (read API side); shards carry clones for
+    /// the write side. `None` = feed off (or wasm).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) feed: Option<std::sync::Arc<Mutex<kevy_replicate::feed::FeedSource>>>,
 }
 
 /// Weak handle to a `Store` — does not keep the underlying keyspace alive.
@@ -61,6 +65,8 @@ pub struct WeakStore {
     shards: Weak<Vec<Arc<RwLock<Inner>>>>,
     guard: Weak<DropGuard>,
     config: Config,
+    #[cfg(not(target_arch = "wasm32"))]
+    feed_weak: Option<std::sync::Weak<Mutex<kevy_replicate::feed::FeedSource>>>,
 }
 
 impl WeakStore {
@@ -71,6 +77,8 @@ impl WeakStore {
             shards: self.shards.upgrade()?,
             guard: self.guard.upgrade()?,
             config: self.config.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
+            feed: self.feed_weak.as_ref().and_then(std::sync::Weak::upgrade),
         })
     }
 }
@@ -88,6 +96,10 @@ pub(crate) struct Inner {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) writer_source:
         Option<std::sync::Arc<Mutex<kevy_replicate::source::ReplicationSource>>>,
+    /// v2.3 CDC feed (one stream per store); every shard holds a clone
+    /// so `commit_write` pushes effects inline. `None` = feed off.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) feed: Option<std::sync::Arc<Mutex<kevy_replicate::feed::FeedSource>>>,
 }
 
 impl Inner {
@@ -98,6 +110,8 @@ impl Inner {
             bus: PubsubBus::new(),
             #[cfg(not(target_arch = "wasm32"))]
             writer_source: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            feed: None,
         }
     }
 }
@@ -115,6 +129,14 @@ pub(crate) struct DropGuard {
     /// clone goes away.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) replica_runner: Option<crate::replica_runner::ReplicaRunner>,
+    /// v2.3: feed close-marker inputs — the feed handle + data dir,
+    /// present iff feed enabled AND persistent. Written after the AOF
+    /// flush so the marker's cursor describes durable state.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) feed_close: Option<(
+        std::sync::Arc<Mutex<kevy_replicate::feed::FeedSource>>,
+        std::path::PathBuf,
+    )>,
     /// Replica-source listener + accepted connection threads, present
     /// iff this store is an embed-as-writer
     /// (`Config::embed_writer_listen_addr = Some(...)`). Joined on
@@ -161,6 +183,15 @@ impl Store {
             }
             None => None,
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        let feed = Store::feed_open(&config)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(f) = &feed {
+            for shard in shards.iter() {
+                let mut g = lock_write(shard);
+                g.feed = Some(f.clone());
+            }
+        }
         let guard = Arc::new(DropGuard {
             reaper_stop,
             reaper_join: Mutex::new(reaper_join),
@@ -168,9 +199,20 @@ impl Store {
             #[cfg(not(target_arch = "wasm32"))]
             replica_runner,
             #[cfg(not(target_arch = "wasm32"))]
+            feed_close: match (&feed, &config.data_dir) {
+                (Some(f), Some(d)) => Some((f.clone(), d.clone())),
+                _ => None,
+            },
+            #[cfg(not(target_arch = "wasm32"))]
             replica_source,
         });
-        Ok(Store { shards, guard, config })
+        Ok(Store {
+            shards,
+            guard,
+            config,
+            #[cfg(not(target_arch = "wasm32"))]
+            feed,
+        })
     }
 
     /// Convenience constructor for an embed-as-read-replica store
@@ -247,6 +289,8 @@ impl Store {
             shards: Arc::downgrade(&self.shards),
             guard: Arc::downgrade(&self.guard),
             config: self.config.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
+            feed_weak: self.feed.as_ref().map(Arc::downgrade),
         }
     }
 
@@ -447,6 +491,12 @@ impl Drop for DropGuard {
             if let Some(aof) = &mut g.aof {
                 let _ = aof.maybe_sync();
             }
+        }
+        // v2.3: with the AOF durable, record the feed continuity
+        // marker — the cursor now exactly describes on-disk state.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((feed, dir)) = &self.feed_close {
+            Store::feed_write_close_marker(feed, dir);
         }
     }
 }

@@ -113,7 +113,7 @@ impl<C: Commands> Shard<C> {
     /// fast/closed replicas no longer hold bytes the slow one is
     /// catching up to.
     pub(crate) fn tick_replication_watermark(&mut self) {
-        let Some(src) = self.replicate.as_mut() else { return };
+        let Some(src) = self.replicate.as_mut().map(|f| f.source_mut()) else { return };
         let mut watermark: Option<u64> = None;
         for c in &self.replicas {
             let off = match &c.state {
@@ -133,7 +133,7 @@ impl<C: Commands> Shard<C> {
     }
 
     pub(crate) fn tick_replication_view(&mut self) {
-        let Some(src) = &self.replicate else { return };
+        let Some(src) = self.replicate.as_ref().map(|f| f.source()) else { return };
         let offset = src.next_offset();
         // Collect per-replica `(ipv4, port, sent_offset)` from every
         // handshake-complete replica conn. `peer` was captured at
