@@ -64,5 +64,10 @@ if [ "${BASE_RW:-0}" != "0" ]; then
     OK=$(python3 -c "b=$BASE_RW; print(1 if $REWRITE_MS <= b*2 else 0)")
     [ "$OK" = "1" ] || { echo "diskgate: FAIL — rewrite ${REWRITE_MS}ms > 2x baseline ${BASE_RW}ms" >&2; FAIL=1; }
 fi
-[ "$FAIL" = "0" ] && echo "diskgate: PASS"
+# v2.3: recovery-point contract line — snapshot + feed replay must
+# reconstruct exact state (docs/cdc.md).
+if [ "$FAIL" = "0" ]; then
+    bash "$(dirname "$0")/restore-drill.sh" "$BIN" || { echo "diskgate: FAIL — restore drill" >&2; exit 1; }
+    echo "diskgate: PASS"
+fi
 exit "$FAIL"
