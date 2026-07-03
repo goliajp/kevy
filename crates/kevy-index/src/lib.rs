@@ -18,7 +18,7 @@ mod segment;
 mod value;
 mod view;
 
-pub use catalog::{Catalog, IndexKind, IndexSpec, IndexState, ValType};
+pub use catalog::{AnnSpec, Catalog, IndexKind, IndexSpec, IndexState, ValType};
 pub use segment::{Cursor, Segment, SegmentStats};
 pub use value::IndexValue;
 pub use view::{

@@ -66,6 +66,7 @@ impl Store {
             ty,
             kind,
             max_bytes: 0,
+            ann: None,
         };
         {
             let mut g = self

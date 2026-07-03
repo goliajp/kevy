@@ -316,3 +316,77 @@ fn text_kind_match_bm25() {
     let s = String::from_utf8_lossy(&r);
     assert!(s.contains("entries\r\n$1\r\n4"), "4 live docs: {s}");
 }
+
+#[test]
+fn ann_kind_knn_e2e() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    // 200 points on a 3-d helix; f32 LE blobs
+    let blob = |x: f32, y: f32, z: f32| -> Vec<u8> {
+        let mut b = Vec::new();
+        for v in [x, y, z] {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        b
+    };
+    for i in 0..200 {
+        let t = i as f32 * 0.1;
+        let mut argv: Vec<&[u8]> = vec![b"HSET"];
+        let key = format!("e:{i}");
+        argv.push(key.as_bytes());
+        argv.push(b"v");
+        let b = blob(t.cos(), t.sin(), t * 0.05);
+        argv.push(&b);
+        cmd(&mut c, &argv);
+    }
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"e_v", b"ON", b"PREFIX", b"e:", b"FIELD", b"v",
+          b"TYPE", b"vector", b"KIND", b"ann", b"DIM", b"3", b"DISTANCE", b"l2"],
+    );
+    assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
+    // query near point i=100 (t=10.0)
+    let t = 10.0f32;
+    let q = blob(t.cos(), t.sin(), t * 0.05);
+    let mut argv: Vec<&[u8]> = vec![b"IDX.QUERY", b"e_v", b"KNN"];
+    argv.push(&q);
+    argv.extend_from_slice(&[b"LIMIT", b"3"]);
+    let r = query_ready(&mut c, &argv);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("e:100"), "nearest is the exact point: {s}");
+    assert!(s.find("e:100\r").unwrap() < s.find("e:99\r").map_or(usize::MAX, |x| x), "{s}");
+
+    // csv debug form + hydration
+    let mut argv: Vec<&[u8]> = vec![b"IDX.QUERY", b"e_v", b"KNN"];
+    let qs = format!("csv:{},{},{}", t.cos(), t.sin(), t * 0.05);
+    argv.push(qs.as_bytes());
+    argv.extend_from_slice(&[b"LIMIT", b"1", b"FIELDS", b"v"]);
+    let r = cmd(&mut c, &argv);
+    assert!(String::from_utf8_lossy(&r).contains("e:100"));
+
+    // update moves a point; delete removes it
+    let far = blob(50.0, 50.0, 50.0);
+    let mut argv: Vec<&[u8]> = vec![b"HSET", b"e:0", b"v"];
+    argv.push(&far);
+    cmd(&mut c, &argv);
+    let mut argv: Vec<&[u8]> = vec![b"IDX.QUERY", b"e_v", b"KNN"];
+    argv.push(&far);
+    argv.extend_from_slice(&[b"LIMIT", b"1"]);
+    let r = cmd(&mut c, &argv);
+    assert!(String::from_utf8_lossy(&r).contains("e:0"), "moved point found at new spot");
+    cmd(&mut c, &[b"DEL", b"e:0"]);
+    let r = cmd(&mut c, &argv);
+    assert!(!String::from_utf8_lossy(&r).contains("e:0\r"), "deleted point gone");
+
+    // VERIFY reports vectors + tombstones; REBUILD compacts
+    let r = cmd(&mut c, &[b"IDX.VERIFY", b"e_v"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("entries\r\n$3\r\n199"), "199 living: {s}");
+    assert_eq!(cmd(&mut c, &[b"IDX.REBUILD", b"e_v"]), b"+OK\r\n");
+    let r = cmd(&mut c, &argv);
+    assert!(!String::from_utf8_lossy(&r).contains("e:0\r"), "post-rebuild consistent");
+
+    // dim-mismatch query rejected
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"e_v", b"KNN", b"csv:1,2", b"LIMIT", b"1"]);
+    assert!(String::from_utf8_lossy(&r).contains("ERR"), "{:?}", String::from_utf8_lossy(&r));
+}

@@ -51,6 +51,8 @@ impl IndexValue {
     /// is excluded from the index (and counted as a coerce failure).
     pub fn coerce(ty: crate::ValType, raw: &[u8]) -> Option<IndexValue> {
         match ty {
+            // ANN kinds never coerce through IndexValue.
+            crate::ValType::Vector => None,
             crate::ValType::I64 => std::str::from_utf8(raw)
                 .ok()?
                 .trim()
