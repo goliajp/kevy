@@ -51,6 +51,44 @@ pub(crate) fn extension_reduce(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8
     if verb.eq_ignore_ascii_case(b"IDX.VERIFY") {
         return reduce_verify(&chunks);
     }
+    // v2.7 MATCH: merge score-ranked chunks (shard-local BM25 —
+    // documented approximation), take the global top LIMIT.
+    if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"MATCH")) {
+        let Some(q) = crate::cmd_index_query::MatchArgs::parse(argv) else {
+            encode_error(&mut out, "ERR bad IDX arguments");
+            return out;
+        };
+        let mut all: Vec<(f64, Vec<u8>, Hydrated)> = Vec::new();
+        for c in &chunks {
+            let mut pos = 1usize;
+            let Some(n) = read_u32(c, &mut pos) else { continue };
+            for _ in 0..n {
+                let Some(key) = read_kbytes(c, &mut pos) else { break };
+                let Some(sb) = c.get(pos..pos + 8) else { break };
+                let score = f64::from_le_bytes(sb.try_into().expect("8 bytes"));
+                pos += 8;
+                let Some(fv) = read_hydration(c, &mut pos) else { break };
+                all.push((score, key, fv));
+            }
+        }
+        all.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        all.truncate(q.limit);
+        encode_array_len(&mut out, all.len() as i64);
+        for (score, key, fv) in &all {
+            let base = 2 + q.fields.len() * 2;
+            encode_array_len(&mut out, base as i64);
+            encode_bulk(&mut out, key);
+            encode_bulk(&mut out, format!("{score:.4}").as_bytes());
+            for (f, v) in q.fields.iter().zip(fv.iter().chain(std::iter::repeat(&None))) {
+                encode_bulk(&mut out, f);
+                match v {
+                    Some(b) => encode_bulk(&mut out, b),
+                    None => out.extend_from_slice(b"$-1\r\n"),
+                }
+            }
+        }
+        return out;
+    }
     // IDX.QUERY COMPOSE: merge key-ordered chunks.
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"COMPOSE")) {
         let Some(cq) = ComposeQuery::parse(argv) else {
