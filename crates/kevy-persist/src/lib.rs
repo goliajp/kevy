@@ -76,6 +76,10 @@ const VERSION: u8 = 4;
 /// a cursor is supplied; cursor-less writes stay at v4 so every
 /// existing path is byte-identical.
 const VERSION_FEED_CURSOR: u8 = 5;
+/// v2.4: version 6 additionally carries `OP_HFTTL` hash field-TTL
+/// records after the entry stream. Written only when field TTLs
+/// exist; the header still carries the (possibly zero) feed cursor.
+const VERSION_HASH_TTL: u8 = 6;
 const VERSION_RELATIVE_TTL: u8 = 2;
 const VERSION_ABSOLUTE_TTL: u8 = 3;
 
@@ -88,6 +92,10 @@ const OP_LIST: u8 = 3;
 const OP_SET: u8 = 4;
 const OP_ZSET: u8 = 5;
 const OP_STREAM: u8 = 6;
+/// v2.4 hash field TTL record: `[key][field][deadline_ms: u64 LE]`.
+/// Appears only in format v6+ snapshots, after the entry stream's
+/// records (before OP_EOF).
+const OP_HFTTL: u8 = 7;
 
 /// BufWriter capacity for bulk snapshot / AOF-rewrite writes. The 8 KiB
 /// default made SAVE ~12 % of disk bandwidth (tens of thousands of small
@@ -101,17 +109,28 @@ pub(crate) const SNAPSHOT_BUF_CAP: usize = 1 << 20;
 pub trait SnapshotSource {
     /// Visit every live entry as `(key, &value, remaining_ttl_ms)`.
     fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>));
+
+    /// v2.4: visit every live hash field TTL as `(key, field,
+    /// absolute_unix_ms)`. Default = none (sources predating the
+    /// feature).
+    fn for_each_hash_ttl(&self, _f: impl FnMut(&[u8], &[u8], u64)) {}
 }
 
 impl SnapshotSource for Store {
     fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>)) {
         self.snapshot_each(f);
     }
+    fn for_each_hash_ttl(&self, f: impl FnMut(&[u8], &[u8], u64)) {
+        self.hash_ttl_each(f);
+    }
 }
 
 impl SnapshotSource for kevy_store::SnapshotView {
     fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>)) {
         self.each(f);
+    }
+    fn for_each_hash_ttl(&self, f: impl FnMut(&[u8], &[u8], u64)) {
+        self.each_hash_ttl(f);
     }
 }
 
@@ -147,15 +166,24 @@ pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
     sink: &mut W,
     cursor: Option<(u64, u64)>,
 ) -> io::Result<()> {
+    // v2.4: field-TTL records force format v6; collect them first so
+    // the header version is known before anything is written.
+    let mut fttl: Vec<(Vec<u8>, Vec<u8>, u64)> = Vec::new();
+    src.for_each_hash_ttl(|k, f, d| fttl.push((k.to_vec(), f.to_vec(), d)));
     let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, sink);
     w.write_all(MAGIC)?;
-    match cursor {
-        Some((generation, offset)) => {
-            w.write_all(&[VERSION_FEED_CURSOR])?;
-            w.write_all(&generation.to_le_bytes())?;
-            w.write_all(&offset.to_le_bytes())?;
-        }
-        None => w.write_all(&[VERSION])?,
+    let version = if !fttl.is_empty() {
+        VERSION_HASH_TTL
+    } else if cursor.is_some() {
+        VERSION_FEED_CURSOR
+    } else {
+        VERSION
+    };
+    w.write_all(&[version])?;
+    if version >= VERSION_FEED_CURSOR {
+        let (generation, offset) = cursor.unwrap_or((0, 0));
+        w.write_all(&generation.to_le_bytes())?;
+        w.write_all(&offset.to_le_bytes())?;
     }
     // The source yields *remaining* ms; v3 persists the absolute
     // Unix-ms deadline (now + remaining) so the TTL survives a restart.
@@ -172,6 +200,12 @@ pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
     });
     if let Some(e) = err {
         return Err(e);
+    }
+    for (k, f, d) in &fttl {
+        w.write_all(&[OP_HFTTL])?;
+        write_bytes(&mut w, k)?;
+        write_bytes(&mut w, f)?;
+        w.write_all(&d.to_le_bytes())?;
     }
     w.write_all(&[OP_EOF])?;
     w.flush()?;
@@ -238,7 +272,7 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()
         ));
     }
     let version = read_u8(&mut r)?;
-    if !(VERSION_RELATIVE_TTL..=VERSION_FEED_CURSOR).contains(&version) {
+    if !(VERSION_RELATIVE_TTL..=VERSION_HASH_TTL).contains(&version) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "kevy snapshot: bad version",
@@ -262,6 +296,15 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()
         let op = read_u8(&mut r)?;
         if op == OP_EOF {
             return Ok(());
+        }
+        // v2.4 field-TTL records: no ttl/value framing of their own.
+        if op == OP_HFTTL {
+            let key = read_bytes(&mut r)?;
+            let field = read_bytes(&mut r)?;
+            let mut d = [0u8; 8];
+            r.read_exact(&mut d)?;
+            store.load_hash_field_ttl(&key, &field, u64::from_le_bytes(d));
+            continue;
         }
         let raw_ttl = read_ttl(&mut r)?;
         let ttl = if absolute_ttl {

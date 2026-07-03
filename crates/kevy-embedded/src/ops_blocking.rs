@@ -27,6 +27,9 @@ use std::time::{Duration, Instant};
 
 use crate::store::Store;
 
+/// `(key, member, score)` from a zset blocking pop.
+type ZPopHit = (Vec<u8>, Vec<u8>, f64);
+
 /// Process-wide wake channel for blocking pops.
 pub(crate) struct Blocker {
     waiters: AtomicUsize,
@@ -129,7 +132,7 @@ impl Store {
         &self,
         keys: &[&[u8]],
         timeout: Option<Duration>,
-    ) -> io::Result<Option<(Vec<u8>, Vec<u8>, f64)>> {
+    ) -> io::Result<Option<ZPopHit>> {
         self.block_on(keys, timeout, |s, k| {
             Ok(s
                 .zpopmin(k, 1)?

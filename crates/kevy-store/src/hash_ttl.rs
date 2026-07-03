@@ -248,6 +248,15 @@ impl Store {
         out
     }
 
+    /// Snapshot loader hook: restore one field TTL (deadlines already
+    /// absolute unix-ms; past deadlines simply purge on first access).
+    pub fn load_hash_field_ttl(&mut self, key: &[u8], field: &[u8], deadline_ms: u64) {
+        self.hfttl
+            .entry(SmallBytes::from_slice(key))
+            .or_default()
+            .insert(SmallBytes::from_slice(field), deadline_ms);
+    }
+
     /// Snapshot support: visit every live (key, field, deadline_ms).
     pub fn hash_ttl_each<F: FnMut(&[u8], &[u8], u64)>(&self, mut f: F) {
         for (k, m) in self.hfttl.iter() {

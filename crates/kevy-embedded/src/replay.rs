@@ -91,6 +91,10 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
         }
         b"FLUSHDB" | b"FLUSHALL" => store.flushall(),
         b"HSET" => apply_hset(store, args),
+        // v2.4 hash field TTLs: HPEXPIREAT is the canonical logged
+        // form; HPERSIST logs itself.
+        b"HPEXPIREAT" => apply_hpexpireat(store, args),
+        b"HPERSIST" => apply_hpersist(store, args),
         b"HDEL" => apply_pairs_strip(store, args, |s, k, fs| {
             let _ = s.hdel(k, fs);
         }),
@@ -258,6 +262,28 @@ fn apply_expireat(store: &mut Store, args: &Argv, unit_ms: u64) {
     {
         store.expire_at_unix_ms(k, n.saturating_mul(unit_ms));
     }
+}
+
+
+/// `HPEXPIREAT key unix-ms FIELDS n f…` (v2.4 canonical field-TTL frame).
+fn apply_hpexpireat(store: &mut kevy_store::Store, args: &Argv) {
+    if args.len() < 6 {
+        return;
+    }
+    let Ok(deadline) = std::str::from_utf8(&args[2]).unwrap_or("").parse::<u64>() else {
+        return;
+    };
+    let fields: Vec<&[u8]> = (5..args.len()).map(|i| &args[i] as &[u8]).collect();
+    let _ = store.hexpire_at(&args[1], &fields, deadline, kevy_store::HExpireCond::Always);
+}
+
+/// `HPERSIST key FIELDS n f…`.
+fn apply_hpersist(store: &mut kevy_store::Store, args: &Argv) {
+    if args.len() < 5 {
+        return;
+    }
+    let fields: Vec<&[u8]> = (4..args.len()).map(|i| &args[i] as &[u8]).collect();
+    let _ = store.hpersist(&args[1], &fields);
 }
 
 fn apply_hset(store: &mut Store, args: &Argv) {
@@ -468,6 +494,7 @@ pub(crate) const REPLAY_VERBS: &[&str] = &[
     "APPEND", "SETBIT", "SETRANGE", "GETSET", "GETDEL", "EXPIRE",
     "PEXPIRE", "EXPIREAT", "PEXPIREAT", "PERSIST", "FLUSHDB",
     "FLUSHALL", "HSET", "HDEL", "HINCRBY", "HINCRBYFLOAT", "HSETNX",
+    "HPEXPIREAT", "HPERSIST",
     "RPUSH", "LPUSH", "LPOP", "RPOP", "LSET", "LREM", "LTRIM",
     "LINSERT", "RENAME", "RENAMENX", "SADD", "SREM", "SPOP", "ZADD",
     "ZREM", "ZINCRBY", "ZPOPMIN", "ZREMRANGEBYRANK", "ZREMRANGEBYSCORE",

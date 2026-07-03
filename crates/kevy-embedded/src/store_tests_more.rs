@@ -428,3 +428,57 @@ fn snapshot_view_is_point_in_time_and_prefix_scoped() {
     });
     assert_eq!(string_count, 10);
 }
+
+// ---- v2.4: hash field TTLs (embedded matrix) --------------------------------
+
+#[test]
+fn hash_field_ttl_full_matrix_with_reopen() {
+    use crate::HExpireCond;
+    use crate::config::AppendFsync;
+    let dir = crate::store::tests::tmp_dir("hfttl-reopen");
+    let far = kevy_store::now_unix_ms() + 200_000;
+    {
+        let s = Store::open(
+            Config::default()
+                .with_persist(&dir)
+                .with_ttl_reaper_manual()
+                .with_appendfsync(AppendFsync::Always),
+        )
+        .unwrap();
+        s.hset(b"h", &[(b"keep", b"1"), (b"ttl", b"2"), (b"soon", b"3")]).unwrap();
+        // absolute deadline via relative facade
+        let codes = s
+            .hexpire(b"h", &[b"ttl", b"missing"], std::time::Duration::from_secs(200), HExpireCond::Always)
+            .unwrap();
+        assert_eq!(codes, vec![1, -2]);
+        // immediate-past absolute → delete, code 2
+        assert_eq!(
+            s.hpexpire_at(b"h", &[b"soon"], 1, HExpireCond::Always).unwrap(),
+            vec![2]
+        );
+        assert!(!s.hexists(b"h", b"soon").unwrap());
+        // httl visible
+        let ttls = s.httl(b"h", &[b"ttl", b"keep"]).unwrap();
+        assert!(ttls[0] > 100_000);
+        assert_eq!(ttls[1], -1);
+        // persist round-trip for another field then re-set ttl
+        s.hpexpire_at(b"h", &[b"keep"], far, HExpireCond::Always).unwrap();
+        assert_eq!(s.hpersist(b"h", &[b"keep"]).unwrap(), vec![1]);
+    }
+    // AOF replay: ttl field still carries its deadline, keep does not
+    {
+        let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
+        let ttls = s2.httl(b"h", &[b"ttl", b"keep"]).unwrap();
+        assert!(ttls[0] > 0, "deadline survived replay: {ttls:?}");
+        assert_eq!(ttls[1], -1, "persisted field stays persisted");
+        // snapshot path: SAVE then reopen from the dump
+        s2.save_snapshot().unwrap();
+    }
+    {
+        let s3 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
+        let ttls = s3.httl(b"h", &[b"ttl"]).unwrap();
+        assert!(ttls[0] > 0, "deadline survived snapshot round-trip: {ttls:?}");
+        drop(s3);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
