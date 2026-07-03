@@ -23,7 +23,9 @@ env KEVY_BIND=127.0.0.1 $PIN "$BIN" --threads 8 --port $PORT --dir "$DIR" --no-a
 SRV=$!
 sleep 1.2
 
-python3 - "$PORT" <<'PYEOF' || { kill $SRV 2>/dev/null; rm -rf "$DIR"; echo "idxgate: FAIL" >&2; exit 1; }
+CLIENT_PIN=""
+command -v taskset >/dev/null 2>&1 && CLIENT_PIN="taskset -c 8-15"
+$CLIENT_PIN python3 - "$PORT" <<'PYEOF' || { kill $SRV 2>/dev/null; rm -rf "$DIR"; echo "idxgate: FAIL" >&2; exit 1; }
 import socket, sys, time
 
 port = int(sys.argv[1])
