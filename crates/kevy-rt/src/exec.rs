@@ -396,6 +396,13 @@ impl<C: Commands> Shard<C> {
                     }
                 }
                 (Agg::Keys { acc, .. }, Part::Keys(ks)) => acc.extend(ks),
+                (
+                    Agg::PrefixStats { keys, expires },
+                    Part::PrefixStats { keys: k, expires: e },
+                ) => {
+                    *keys += k;
+                    *expires += e;
+                }
                 (Agg::SlowlogGet { entries, .. }, Part::SlowlogEntries(es)) => {
                     entries.extend(es);
                 }

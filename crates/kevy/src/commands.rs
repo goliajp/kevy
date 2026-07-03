@@ -44,6 +44,7 @@ impl Commands for KevyCommands {
             b"SUNIONSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SUnion),
             b"SDIFFSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SDiff),
             b"ZINTERCARD" if args.len() >= 3 => Route::ZInterCard,
+            b"PREFIX.STATS" if args.len() == 2 => Route::PrefixStats,
             b"FEED.READ" if args.len() >= 4 => Route::FeedRead,
             b"FEED.TAIL" if args.len() == 2 => Route::FeedTail,
             b"FEED.SHARDS" if args.len() == 1 => Route::FeedShards,

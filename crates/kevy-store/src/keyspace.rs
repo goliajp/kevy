@@ -303,6 +303,25 @@ impl Store {
 
     /// Collect live keys (optionally matching a glob `pattern`, up to `limit`).
     /// Used by KEYS/SCAN/RANDOMKEY. Treats expired keys as absent (no removal).
+    /// v2.3 `info_prefix` walk: count live keys under a byte prefix and
+    /// how many of them carry a TTL. O(keyspace) — a stats/ops call,
+    /// not a hot-path primitive.
+    pub fn prefix_stats(&self, prefix: &[u8]) -> (u64, u64) {
+        let now = now_ns();
+        let mut keys = 0u64;
+        let mut expires = 0u64;
+        for (k, e) in &self.map {
+            if e.is_expired_at(now) || !k.as_slice().starts_with(prefix) {
+                continue;
+            }
+            keys += 1;
+            if e.expire_at_ns.is_some() {
+                expires += 1;
+            }
+        }
+        (keys, expires)
+    }
+
     pub fn collect_keys(&self, pattern: Option<&[u8]>, limit: Option<usize>) -> Vec<Vec<u8>> {
         let now = now_ns();
         let mut out = Vec::new();

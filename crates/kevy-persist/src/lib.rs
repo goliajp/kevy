@@ -69,6 +69,13 @@ use std::path::Path;
 /// loader still accepts v2 (relative TTL) and v3 (no group section).
 const MAGIC: &[u8; 8] = b"KEVYSNAP";
 const VERSION: u8 = 4;
+/// v2.3: version 5 carries a 16-byte feed cursor (`gen u64 LE` +
+/// `offset u64 LE`) right after the version byte — the snapshot half
+/// of the recovery-point contract (docs/cdc.md): snapshot S + feed
+/// frames from S's cursor = exact restore. Writers emit v5 only when
+/// a cursor is supplied; cursor-less writes stay at v4 so every
+/// existing path is byte-identical.
+const VERSION_FEED_CURSOR: u8 = 5;
 const VERSION_RELATIVE_TTL: u8 = 2;
 const VERSION_ABSOLUTE_TTL: u8 = 3;
 
@@ -128,9 +135,28 @@ pub fn save_snapshot<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<()> 
 /// `sync_all` themselves; callers that need bytes (network ship)
 /// pass a `Vec<u8>`.
 pub fn write_snapshot_to<S: SnapshotSource, W: Write>(src: &S, sink: &mut W) -> io::Result<()> {
+    write_snapshot_to_with_cursor(src, sink, None)
+}
+
+/// [`write_snapshot_to`] with the v2.3 recovery-point header: when
+/// `cursor = Some((generation, offset))` the snapshot records the feed
+/// position it was taken at (format v5); `None` writes the legacy v4
+/// stream unchanged.
+pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
+    src: &S,
+    sink: &mut W,
+    cursor: Option<(u64, u64)>,
+) -> io::Result<()> {
     let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, sink);
     w.write_all(MAGIC)?;
-    w.write_all(&[VERSION])?;
+    match cursor {
+        Some((generation, offset)) => {
+            w.write_all(&[VERSION_FEED_CURSOR])?;
+            w.write_all(&generation.to_le_bytes())?;
+            w.write_all(&offset.to_le_bytes())?;
+        }
+        None => w.write_all(&[VERSION])?,
+    }
     // The source yields *remaining* ms; v3 persists the absolute
     // Unix-ms deadline (now + remaining) so the TTL survives a restart.
     let now = kevy_store::now_unix_ms();
@@ -168,6 +194,27 @@ pub fn write_snapshot_tmp<S: SnapshotSource>(src: &S, path: &Path) -> io::Result
     Ok(tmp)
 }
 
+/// Read the v2.3 recovery-point cursor from a snapshot's header:
+/// `Some((generation, offset))` for format v5+, `None` for older
+/// (cursor-less) snapshots. Does not load entries.
+pub fn read_snapshot_cursor(path: &Path) -> io::Result<Option<(u64, u64)>> {
+    let mut r = BufReader::new(File::open(path)?);
+    let mut magic = [0u8; 8];
+    r.read_exact(&mut magic)?;
+    if &magic != MAGIC {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "kevy snapshot: bad magic"));
+    }
+    let version = read_u8(&mut r)?;
+    if version < VERSION_FEED_CURSOR {
+        return Ok(None);
+    }
+    let mut cur = [0u8; 16];
+    r.read_exact(&mut cur)?;
+    let generation = u64::from_le_bytes(cur[..8].try_into().expect("8 bytes"));
+    let offset = u64::from_le_bytes(cur[8..].try_into().expect("8 bytes"));
+    Ok(Some((generation, offset)))
+}
+
 /// Load a snapshot from `path` into `store` (entries are inserted, not cleared
 /// first — call on a fresh store). Errors on a bad magic/version or truncation.
 pub fn load_snapshot(store: &mut Store, path: &Path) -> io::Result<()> {
@@ -191,11 +238,17 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()
         ));
     }
     let version = read_u8(&mut r)?;
-    if !(VERSION_RELATIVE_TTL..=VERSION).contains(&version) {
+    if !(VERSION_RELATIVE_TTL..=VERSION_FEED_CURSOR).contains(&version) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "kevy snapshot: bad version",
         ));
+    }
+    if version >= VERSION_FEED_CURSOR {
+        // Loader-side the cursor is advisory (read via
+        // [`read_snapshot_cursor`] by restore tooling); skip it here.
+        let mut cur = [0u8; 16];
+        r.read_exact(&mut cur)?;
     }
     // v3+ stores absolute Unix-ms deadlines; convert each to remaining ms
     // against one `now` read so the load is internally consistent. A deadline

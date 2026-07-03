@@ -140,6 +140,9 @@ pub(crate) enum Op {
     },
     /// v2.3 FEED.TAIL executed on the target shard.
     FeedTail,
+    /// v2.3 `PREFIX.STATS <prefix>` — per-shard prefix walk, summed at
+    /// the origin.
+    PrefixStats(Vec<u8>),
     /// Collect this shard's keys (optional glob + limit) — KEYS/SCAN/RANDOMKEY.
     CollectKeys(Option<Vec<u8>>, Option<usize>),
     /// `WATCH key [key ...]` — register each key in this shard's
@@ -254,6 +257,8 @@ impl SmallReply {
 
 /// A partial result shipped back to the originating shard.
 pub(crate) enum Part {
+    /// v2.3 PREFIX.STATS per-shard result.
+    PrefixStats { keys: u64, expires: u64 },
     Reply(SmallReply),
     Int(i64),
     Ok,
@@ -391,6 +396,8 @@ pub(crate) enum Agg {
         keys: Vec<Vec<u8>>,
         got: HashMap<Vec<u8>, Gathered>,
     },
+    /// v2.3 PREFIX.STATS accumulator (summed across shards).
+    PrefixStats { keys: u64, expires: u64 },
     /// v2.2 zset-algebra `*STORE` orchestrator, step 1: gather scored
     /// (or set) members per source key; on completion the origin
     /// computes the combination and ships `Op::ZStoreResult` /

@@ -171,6 +171,10 @@ impl<C: Commands> Shard<C> {
                 self.exec_feed_read(cursor_gen, offset, count, prefixes)
             }
             Op::FeedTail => self.exec_feed_tail(),
+            Op::PrefixStats(prefix) => {
+                let (keys, expires) = self.store.prefix_stats(&prefix);
+                Part::PrefixStats { keys, expires }
+            }
             Op::CollectKeys(pat, limit) => {
                 Part::Keys(self.store.collect_keys(pat.as_deref(), limit))
             }

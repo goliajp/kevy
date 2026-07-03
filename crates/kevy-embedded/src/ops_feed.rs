@@ -19,6 +19,7 @@ use kevy_replicate::feed::{FeedRead, FeedSource};
 
 use crate::store::Store;
 
+
 /// One mutation delivered by [`Store::changes_since`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Change {
@@ -76,7 +77,31 @@ fn matches_prefixes(argv: &[Vec<u8>], prefixes: &[&[u8]]) -> bool {
     }
 }
 
+/// Per-prefix keyspace stats from [`Store::info_prefix`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrefixInfo {
+    /// Live keys under the prefix.
+    pub keys: u64,
+    /// How many of them carry a TTL.
+    pub expires: u64,
+}
+
 impl Store {
+    /// v2.3 `info_prefix`: count live keys (and TTL'd keys) under a
+    /// byte prefix, across all shards. O(keyspace) — an ops/stats
+    /// call, not a hot-path primitive.
+    pub fn info_prefix(&self, prefix: &[u8]) -> PrefixInfo {
+        let mut keys = 0u64;
+        let mut expires = 0u64;
+        for shard in self.shards.iter() {
+            let g = crate::store::lock_read(shard);
+            let (k, e) = g.store.prefix_stats(prefix);
+            keys += k;
+            expires += e;
+        }
+        PrefixInfo { keys, expires }
+    }
+
     /// Number of independent change streams this store exposes (the
     /// embedded write path serializes all shards: always 1).
     pub fn feed_shards(&self) -> usize {

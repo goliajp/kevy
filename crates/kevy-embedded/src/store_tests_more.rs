@@ -301,3 +301,17 @@ fn feed_clean_reopen_continues_crash_bumps() {
     drop(s3);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn info_prefix_counts() {
+    let s = s();
+    for i in 0..15 {
+        s.set(format!("ip:{i}").as_bytes(), b"v").unwrap();
+    }
+    s.set(b"zz:1", b"v").unwrap();
+    s.set_with_ttl(b"ip:0", b"v", std::time::Duration::from_secs(100)).unwrap();
+    let info = s.info_prefix(b"ip:");
+    assert_eq!(info.keys, 15);
+    assert_eq!(info.expires, 1);
+    assert_eq!(s.info_prefix(b"none:").keys, 0);
+}
