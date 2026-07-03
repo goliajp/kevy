@@ -28,7 +28,7 @@ DIR=$(mktemp -d)
 mkdir -p "$DIR/data"
 "$BIN" --port "$PORT" --threads 1 --dir "$DIR/data" &> "$DIR/server.log" &
 SRV=$!
-trap 'kill $SRV 2>/dev/null; rm -rf "$DIR"' EXIT
+trap 'kill $SRV 2>/dev/null; sleep 0.2; kill -9 $SRV 2>/dev/null; wait $SRV 2>/dev/null; rm -rf "$DIR"' EXIT
 sleep 1
 
 redis-benchmark -p "$PORT" -t set -n "$N" -r "$N" -d 64 -q >/dev/null 2>&1
