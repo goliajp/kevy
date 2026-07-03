@@ -44,6 +44,14 @@ Two declared approximations:
 No phrase queries, no boolean syntax, no highlighting — that's the
 query-engine slope (REFUSED list).
 
+Top-K evaluation uses MaxScore pruning (rarest terms first; commoner
+lists are probed per candidate once they can't lift new documents
+into the top K). Worst case is a query consisting of a single very
+common term — with no second list to prune against it degrades to a
+scan of that term's postings (~tens of ms at millions of postings);
+impact-ordered lists are the eventual structure if that shape
+matters to your workload.
+
 ## Sizing
 
 `bytes ≈ Σ_token (token_len + 48) + postings × 24 + docs × 32`,
