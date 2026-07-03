@@ -199,11 +199,10 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
     // v1.25 UDS: opt-in via `KEVY_UNIX_SOCKET=/path/to/sock` env var. Lets
     // local clients (and benches) skip TCP loopback overhead — fair
     // comparison against valkey/redis's `unixsocket` config.
-    if let Ok(path) = std::env::var("KEVY_UNIX_SOCKET") {
-        if !path.is_empty() {
+    if let Ok(path) = std::env::var("KEVY_UNIX_SOCKET")
+        && !path.is_empty() {
             runtime = runtime.with_unix_socket(PathBuf::from(path));
         }
-    }
     let runtime = replication::apply(runtime, &cfg, nshards);
     // Spawn the kevy-elect control plane when the operator
     // configured `[cluster] peers = "..."` + `node_id`. Opt-in;

@@ -25,15 +25,13 @@ use crate::uring_conn::ParkState;
 use kevy_persist::{load_snapshot, replay_aof};
 use kevy_sys::Socket;
 use kevy_uring::{Completion, IoUring};
+pub(crate) use crate::uring_setup::{URING_ENTRIES, build_uring, io_uring_available};
 use kevy_map::KevyMap;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-/// SQ/CQ depth per-shard. Paired with `PBUF_ENTRIES` — v1.25 G1/K2 bumped
-/// both to fix the c=10 000 cliff (deco-axis-k-c10000).
-const URING_ENTRIES: u32 = 2048;
 // SQPOLL is NOT wired into the shard reactor — it would spawn one kernel
 // poll thread per shard, each spinning at ~100% on the same core set as
 // the shard threads, halving effective CPU. See `bench/PERF-ATTACK-LOG-2026-06-20.md`
@@ -44,14 +42,6 @@ const URING_ENTRIES: u32 = 2048;
 /// the epoll reactor's `SPIN_LIMIT`). Keeps -c1 latency low without spinning a
 /// quiet shard at 100% forever.
 const URING_SPIN_LIMIT: u32 = 256;
-// The nap rung was removed (see the idle-ladder comment in `run_uring`).
-// URING_NAP_LIMIT / URING_NAP_MICROS / `uring_nap` are gone; spin →
-// park is the whole ladder now.
-/// Shared provided-buffer ring: 4096 × 16K = 64 MiB/shard. Linux multishot
-/// recv terminates on ENOBUFS — must size for max conns (deco-axis-k-c10000).
-const PBUF_ENTRIES: u16 = 4096;
-const PBUF_SIZE: u32 = 16 * 1024;
-const PBUF_GROUP: u16 = 0;
 /// `-ENOBUFS`: the buf ring was momentarily empty; just re-arm (don't close).
 pub(crate) const ENOBUFS: i32 = 105;
 
@@ -66,21 +56,6 @@ pub(crate) const ENOBUFS: i32 = 105;
 /// in-shard memcpy fallback after the prior 256-arc cap.
 pub(crate) const MAX_IOVECS_PER_WRITEV: usize = 1024;
 
-/// Probe whether this host can build the io_uring + provided-buffer ring that
-/// [`Shard::run_uring`] needs: `io_uring_setup` not blocked by seccomp (Docker's
-/// default profile blocks it) and a kernel new enough for the buf ring (5.19+).
-/// Builds and immediately drops a real ring with the same parameters, so a
-/// success here means `run_uring` will start. [`crate::Runtime`] calls this once
-/// before spawning shards to auto-select io_uring with a graceful epoll fallback
-/// — so an unavailable io_uring degrades to epoll instead of failing startup.
-pub(crate) fn io_uring_available() -> bool {
-    match IoUring::new(URING_ENTRIES) {
-        Ok(ring) => ring
-            .register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP)
-            .is_ok(),
-        Err(_) => false,
-    }
-}
 
 // `user_data` layout: top 4 bits = op, low 60 bits = conn id.
 // v1.29 B2-alt widened OP_SHIFT from 61 to 60 to add two new op tags
@@ -114,10 +89,17 @@ pub(crate) const OP_BIG_CANCEL: u64 = 8 << OP_SHIFT;
 pub(crate) const OP_BIG_READ: u64 = 9 << OP_SHIFT;
 const CONN_MASK: u64 = (1 << OP_SHIFT) - 1;
 
+
 impl<C: Commands> Shard<C> {
     /// Completion-based run loop (Linux io_uring). Mirrors [`Shard::run`] but
     /// drives socket I/O through io_uring instead of the readiness poller.
-    pub(crate) fn run_uring(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {
+    /// The ring pair comes from [`build_uring`] at the spawn site (see the
+    /// fallback rationale there).
+    pub(crate) fn run_uring(
+        mut self,
+        ring_pair: (IoUring, kevy_uring::ProvidedBufRing),
+        stop: Arc<AtomicBool>,
+    ) -> io::Result<()> {
         self.commands.on_shard_start(self.id);
         // Restore: snapshot then AOF replay (same as the readiness path).
         let snap = self.snapshot_path();
@@ -135,10 +117,10 @@ impl<C: Commands> Shard<C> {
             })?;
         }
 
-        let mut ring = IoUring::new(URING_ENTRIES)?;
         // One provided-buffer ring per shard feeds every conn's multishot recv
-        // (needs Linux 5.19+; the epoll reactor is the fallback for older kernels).
-        let mut pbuf = ring.register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP)?;
+        // (needs Linux 5.19+; the epoll reactor is the fallback for older
+        // kernels AND for per-shard setup failure — see `build_uring`).
+        let (mut ring, mut pbuf) = ring_pair;
         // v2.0.15: replication listener accept must NOT block the reactor.
         // The epoll path sets this in `shard::run` via `poller.add`-side
         // setup; the io_uring path didn't. `accept_ready_replication`

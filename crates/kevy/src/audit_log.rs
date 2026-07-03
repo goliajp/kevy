@@ -70,7 +70,7 @@ pub fn record(args: &[&[u8]]) {
             }
         }
         if arg.len() > 256 {
-            line.push_str("…");
+            line.push('…');
         }
     }
     line.push('\n');

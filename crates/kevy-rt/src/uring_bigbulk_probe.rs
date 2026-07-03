@@ -227,7 +227,7 @@ pub(crate) fn probe_generic_bigbulk(buf: &[u8]) -> BigArgGenericProbe {
     let Some((argc, after_argc_digits)) = parse_decimal_at(buf, 1) else {
         return BigArgGenericProbe::NotApplicable;
     };
-    if argc < 2 || argc > MAX_PROBE_BULKS {
+    if !(2..=MAX_PROBE_BULKS).contains(&argc) {
         return BigArgGenericProbe::NotApplicable;
     }
     if buf.get(after_argc_digits..after_argc_digits + 2) != Some(b"\r\n") {

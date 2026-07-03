@@ -19,6 +19,7 @@ use std::sync::Arc;
 ///   - 50 × 30 B memcpy ≈ 1500 B, costs ~50 ns total (cache-hot)
 ///   - 50 × (Arc::clone atomic-inc + output_arcs push + per-conn
 ///     splice walk + iovec entry) ≈ 50 × 20 ns = ~1000 ns
+///
 /// At ~256 B body the breakeven flips (50 × 256 B = 12.8 KB memcpy ≈
 /// 4-6 µs); above that, copy avoidance wins linearly. Mirrors the
 /// intent of valkey's `COPY_AVOID_MIN_STRING_SIZE` heuristic
@@ -35,7 +36,7 @@ const PUBSUB_BODY_ARC_THRESHOLD: usize = 256;
 /// vectors, and the splice produces up to `2 × arcs + 1` iovecs.
 /// 256 arcs ⇒ ≤ 513 iovecs, well under the kernel cap. With
 /// A.4's chunked writev (see `uring_reactor::MAX_IOVECS_PER_WRITEV`
-/// + `UringConn::arcs_in_flight`), the reactor now submits one
+/// and `UringConn::arcs_in_flight`), the reactor now submits one
 /// writev chunk per arm_conns iter and the per-conn arc accumulator
 /// can grow past IOV_MAX without truncation — the bottleneck moved
 /// from the iovec cap to per-conn memory footprint. Bumped to
@@ -288,8 +289,7 @@ impl<C: Commands> Shard<C> {
         // Snapshot ids to avoid borrow conflict with self.conns mutation.
         let ids: Vec<u64> = self
             .subs_by_channel
-            .get(channel)
-            .map(|v| v.clone())
+            .get(channel).cloned()
             .unwrap_or_default();
         let v2 = pubsub_message(channel, msg, kevy_resp::RespVersion::V2);
         let mut v3_cache: Option<Vec<u8>> = None;
@@ -321,8 +321,7 @@ impl<C: Commands> Shard<C> {
     fn deliver_publish_arc(&mut self, channel: &[u8], msg: &[u8]) {
         let ids: Vec<u64> = self
             .subs_by_channel
-            .get(channel)
-            .map(|v| v.clone())
+            .get(channel).cloned()
             .unwrap_or_default();
         // One alloc + one memcpy of `msg` (4 KB at the 50/4K endpoint)
         // into a refcounted boxed slice that all subscribers share.
