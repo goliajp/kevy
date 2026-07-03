@@ -81,7 +81,7 @@ impl IoUring {
     ///
     /// **Call shape**: `IORING_REGISTER_FILES2` (#13) with
     /// `IoUringRsrcRegister { nr, flags: IORING_RSRC_REGISTER_SPARSE, .. }`
-    /// + `nr_args = sizeof::<IoUringRsrcRegister>() = 32`. There is no
+    /// with `nr_args = sizeof::<IoUringRsrcRegister>() = 32`. There is no
     /// stand-alone "FILES_SPARSE" opcode in mainline.
     pub fn register_files_sparse(&self, nr: u32) -> io::Result<()> {
         let reg = IoUringRsrcRegister {
@@ -107,7 +107,7 @@ impl IoUring {
 
     /// Place `fd` into registered-files slot `index`, or unmap the slot if
     /// `fd < 0`. After a successful call SQEs referencing `IOSQE_FIXED_FILE`
-    /// + `fd = index` will skip the fd-table lookup. Cheaper than the full
+    /// with `fd = index` will skip the fd-table lookup. Cheaper than the full
     /// per-op fget/fput once amortised across many ops per conn.
     pub fn update_file_slot(&self, index: u32, fd: i32) -> io::Result<()> {
         let fd_val: i32 = fd;
