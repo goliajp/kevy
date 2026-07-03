@@ -263,3 +263,12 @@ impl Store {
         Pipeline::new(self)
     }
 }
+
+/// Parity manifest (v2.1): command names `Pipeline` implements.
+/// Cross-checked against `kevy_resp::ops_table` in
+/// `store_tests_op_table.rs` — update BOTH when adding an op.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const PIPELINE_OPS: &[&str] = &[
+    "SET", "DEL", "INCR", "INCRBY", "HSET", "HDEL", "HINCRBY", "ZADD",
+    "ZREM", "ZINCRBY", "SADD", "SREM", "LPUSH", "RPUSH",
+];

@@ -107,10 +107,10 @@ fn make_lua_host() -> LuaHost<Store> {
         {
             let mut buf = [0u8; 32];
             let upper = crate::cmd::upper_verb(verb, &mut buf);
-            if matches!(
-                upper,
-                b"LPUSH" | b"RPUSH" | b"XADD" | b"ZADD" | b"ZINCRBY"
-            ) && let Some(key) = argv.get(1)
+            // Single source: the wake set lives in cmd_block (grounded
+            // against the OP_TABLE); this used to be a hand-copied list.
+            if crate::cmd_block::wake_idx_for_verb(upper).is_some()
+                && let Some(key) = argv.get(1)
             {
                 kevy_rt::push_lua_wake_key(key);
             }

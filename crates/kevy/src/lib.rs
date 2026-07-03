@@ -325,3 +325,5 @@ pub fn handle_conn(conn: &Socket, store: &mut Store) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_op_table;
