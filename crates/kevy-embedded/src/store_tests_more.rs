@@ -482,3 +482,82 @@ fn hash_field_ttl_full_matrix_with_reopen() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- v2.5: embedded secondary indexes ---------------------------------------
+
+#[test]
+fn idx_create_query_maintain_reopen() {
+    use crate::{IndexKind, IndexValue, IndexValType};
+    let dir = crate::store::tests::tmp_dir("idx-reopen");
+    {
+        let s = Store::open(
+            Config::default().with_persist(&dir).with_ttl_reaper_manual(),
+        )
+        .unwrap();
+        for i in 0..30 {
+            s.hset(
+                format!("row:{i}").as_bytes(),
+                &[(b"score", format!("{}", i * 10).as_bytes())],
+            )
+            .unwrap();
+        }
+        s.hset(b"row:bad", &[(b"score", b"junk")]).unwrap();
+        // create builds synchronously from pre-existing rows
+        s.idx_create(b"score_idx", b"row:", b"score", IndexValType::I64, IndexKind::Range)
+            .unwrap();
+        let (hits, next) = s
+            .idx_query(
+                b"score_idx",
+                &IndexValue::I64(0),
+                &IndexValue::I64(100),
+                None,
+                100,
+            )
+            .unwrap();
+        assert_eq!(hits.len(), 11, "0..=100 step 10");
+        assert!(next.is_none());
+        assert_eq!(hits[0].0, b"row:0".to_vec());
+
+        // live maintenance: update / delete / new row
+        s.hset(b"row:0", &[(b"score", b"999")]).unwrap();
+        s.del(&[b"row:1"]).unwrap();
+        s.hset(b"row:new", &[(b"score", b"50")]).unwrap();
+        assert_eq!(
+            s.idx_count(b"score_idx", &IndexValue::I64(0), &IndexValue::I64(100)).unwrap(),
+            10,
+            "row:0 moved out, row:1 gone, row:new in"
+        );
+        // cursor pagination
+        let (page1, cur) = s
+            .idx_query(b"score_idx", &IndexValue::I64(0), &IndexValue::I64(100), None, 4)
+            .unwrap();
+        let cur = cur.expect("more");
+        let (page2, _) = s
+            .idx_query(b"score_idx", &IndexValue::I64(0), &IndexValue::I64(100), Some(&cur), 100)
+            .unwrap();
+        assert_eq!(page1.len() + page2.len(), 10);
+        for (k, _) in &page1 {
+            assert!(!page2.iter().any(|(k2, _)| k2 == k), "disjoint pages");
+        }
+        // stats + coerce fence
+        let st = s.idx_stats(b"score_idx").unwrap();
+        assert_eq!(st.entries, 30, "29 numeric + new");
+        assert_eq!(st.coerce_failures, 1);
+        assert_eq!(s.idx_list().len(), 1);
+        // another row lands at the same value (duplicate handling)
+        s.hset(b"row:extra", &[(b"score", b"50")]).unwrap();
+        assert_eq!(
+            s.idx_count(b"score_idx", &IndexValue::I64(50), &IndexValue::I64(50)).unwrap(),
+            3,
+            "row:5 + row:new + row:extra all at 50"
+        );
+    }
+    // reopen: catalog persisted, segments rebuild lazily on first touch
+    let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
+    let st = s2.idx_stats(b"score_idx").unwrap();
+    assert_eq!(st.entries, 31, "30 + copied, rebuilt from replayed data");
+    assert!(s2.idx_drop(b"score_idx"));
+    assert!(s2.idx_query(b"score_idx", &IndexValue::I64(0), &IndexValue::I64(1), None, 10).is_err());
+    drop(s2);
+    let _ = std::fs::remove_dir_all(&dir);
+}

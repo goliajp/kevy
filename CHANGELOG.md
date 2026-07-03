@@ -31,6 +31,37 @@ train, versions bump at ship time.
 - Batch-gated 200µs nap retained as the second ladder rung for the
   no-inflight idle shape (`NAP_BATCH_MIN` 4).
 
+### v2.5 — secondary indexes ⭐ (P2, the index engine)
+
+- **New stone crate `kevy-index`** + the engine wiring: declarative
+  indexes over prefix domains (`IDX.CREATE name ON PREFIX p FIELD f
+  TYPE i64|f64|str KIND range|unique [MAXMEM n]`), maintained
+  synchronously with every write — derived-by-construction, zero
+  drift by design and `IDX.VERIFY`-falsifiable. An empty catalog
+  costs one untaken branch per write.
+- **Index-follows-key sharding**: segments live with their rows;
+  writes never cross shards, queries fan out and merge in global
+  `(value, key)` order with a single-point cursor. Backfill is
+  tick-incremental on the server (live writes double-write and win),
+  synchronous per-shard in embedded.
+- **Query surface**: `IDX.QUERY RANGE|EQ` (+ `FIELDS` hydration on
+  the owning shard), `IDX.QUERY COMPOSE AND|OR` (two-index, key-
+  ordered — per-shard set algebra composes globally), `IDX.COUNT`,
+  `IDX.VERIFY`, `IDX.LIST`, `IDX.DROP`. Unique kind = declarative
+  fence (duplicates counted + visible; write-time global enforcement
+  deliberately rejected — see docs/indexes.md). `MAXMEM` budgets fail
+  builds declaratively (`-INDEXOVERBUDGET`), no OOM.
+- **Generic extension fan-out** in kevy-rt (`Commands::extension_op`
+  / `extension_reduce`) — the reusable substrate v2.6 views and
+  v2.7 text ride next.
+- **Embedded**: typed `idx_create/drop/query/count/stats/list`
+  (exact multi-key maintenance table; no FIELDS — in-process callers
+  read fields directly). Catalog persists via sidecar; index content
+  is derived state — never snapshotted, rebuilt after restart.
+- **bench/idxgate.sh** gates the RFC clamps: 1M-row build (7.3s
+  tick-incremental), `IDX.QUERY` p99 < 2ms (measured 0.52ms), D7
+  memory formula ±20% (measured ratio 1.01). docs/indexes.md.
+
 ### v2.4 — P4 flow round-out
 
 - **`ZPOPMIN.BELOW key below [count]`** (+ embedded `zpopmin_below`):

@@ -424,6 +424,7 @@ dependencies = [
  "kevy-elect",
  "kevy-geo",
  "kevy-hash",
+ "kevy-index",
  "kevy-lua",
  "kevy-lua-host",
  "kevy-persist",
@@ -530,6 +531,10 @@ version = "2.1.0"
 dependencies = [
  "kevy-bench",
 ]
+
+[[package]]
+name = "kevy-index"
+version = "2.1.0"
 
 [[package]]
 name = "kevy-lua"

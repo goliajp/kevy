@@ -68,6 +68,7 @@ mod ops_pipeline;
 mod ops_feed;
 mod ops_blocking;
 mod ops_hash_ttl;
+mod ops_index;
 mod ops_snapshot_view;
 mod ops_zset_algebra;
 mod ops_zset_flags;
@@ -100,6 +101,8 @@ pub use kevy_store::{ExpireStats, HExpireCode, HExpireCond, ScoreBound, StoreErr
 #[cfg(not(target_arch = "wasm32"))]
 pub use ops_feed::{Change, ChangeBatch, FeedError, PrefixInfo};
 pub use ops_snapshot_view::{Snapshot, SnapshotEntry};
+pub use ops_index::IndexPage;
+pub use kevy_index::{Cursor as IndexCursor, IndexKind, IndexValue, SegmentStats as IndexStats, ValType as IndexValType};
 pub use pubsub::{PubsubFrame, Subscription};
 pub use store::{Store, WeakStore};
 

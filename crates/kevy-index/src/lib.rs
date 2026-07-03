@@ -1,0 +1,22 @@
+//! kevy-index — declarative secondary indexes over prefix domains
+//! (RFC 2026-07-04, LOCKED).
+//!
+//! Pure logic crate: [`Catalog`] holds the index declarations and a
+//! compiled prefix matcher; [`Segment`] holds one shard's slice of one
+//! index (entries follow the indexed key's shard — index-follows-key).
+//! The embedding runtime calls [`Segment::apply`] synchronously with
+//! every write in the index's domain (derived-by-construction: the
+//! index can never drift from the data, and [`Segment::verify_entry`]
+//! makes that falsifiable), and serves queries by fanning
+//! [`Segment::range`] / [`Segment::eq`] across shards and merging.
+//!
+//! No I/O, no threads, no runtime types — everything here is
+//! deterministic and unit-testable in isolation.
+
+mod catalog;
+mod segment;
+mod value;
+
+pub use catalog::{Catalog, IndexKind, IndexSpec, IndexState, ValType};
+pub use segment::{Cursor, Segment, SegmentStats};
+pub use value::IndexValue;

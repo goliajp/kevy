@@ -57,6 +57,8 @@ pub struct Store {
     /// v2.4 blocking-pop wake channel (always present; writers pay one
     /// Relaxed load while nobody blocks).
     pub(crate) blocker: Arc<crate::ops_blocking::Blocker>,
+    /// v2.5 index registry (catalog + version).
+    pub(crate) indexes: Arc<crate::ops_index::IndexReg>,
 }
 
 /// Weak handle to a `Store` — does not keep the underlying keyspace alive.
@@ -71,6 +73,7 @@ pub struct WeakStore {
     #[cfg(not(target_arch = "wasm32"))]
     feed_weak: Option<std::sync::Weak<Mutex<kevy_replicate::feed::FeedSource>>>,
     blocker_weak: Weak<crate::ops_blocking::Blocker>,
+    indexes_weak: Weak<crate::ops_index::IndexReg>,
 }
 
 impl WeakStore {
@@ -84,6 +87,7 @@ impl WeakStore {
             #[cfg(not(target_arch = "wasm32"))]
             feed: self.feed_weak.as_ref().and_then(std::sync::Weak::upgrade),
             blocker: self.blocker_weak.upgrade()?,
+            indexes: self.indexes_weak.upgrade()?,
         })
     }
 }
@@ -107,6 +111,10 @@ pub(crate) struct Inner {
     pub(crate) feed: Option<std::sync::Arc<Mutex<kevy_replicate::feed::FeedSource>>>,
     /// v2.4 blocking-pop wake channel clone (see `Store::blocker`).
     pub(crate) blocker: Option<Arc<crate::ops_blocking::Blocker>>,
+    /// v2.5: this shard's index segments + the store-level registry
+    /// handle (for the commit_write hook).
+    pub(crate) idx_segs: crate::ops_index::ShardSegs,
+    pub(crate) idx_reg: Option<Arc<crate::ops_index::IndexReg>>,
 }
 
 impl Inner {
@@ -120,6 +128,8 @@ impl Inner {
             #[cfg(not(target_arch = "wasm32"))]
             feed: None,
             blocker: None,
+            idx_segs: crate::ops_index::ShardSegs::default(),
+            idx_reg: None,
         }
     }
 }
@@ -201,9 +211,11 @@ impl Store {
             }
         }
         let blocker = Arc::new(crate::ops_blocking::Blocker::new());
+        let indexes = Arc::new(crate::ops_index::IndexReg::default());
         for shard in shards.iter() {
             let mut g = lock_write(shard);
             g.blocker = Some(blocker.clone());
+            g.idx_reg = Some(indexes.clone());
         }
         let guard = Arc::new(DropGuard {
             reaper_stop,
@@ -219,14 +231,17 @@ impl Store {
             #[cfg(not(target_arch = "wasm32"))]
             replica_source,
         });
-        Ok(Store {
+        let store = Store {
             shards,
             guard,
             config,
             #[cfg(not(target_arch = "wasm32"))]
             feed,
             blocker,
-        })
+            indexes,
+        };
+        store.idx_boot();
+        Ok(store)
     }
 
     /// Convenience constructor for an embed-as-read-replica store
@@ -306,6 +321,7 @@ impl Store {
             #[cfg(not(target_arch = "wasm32"))]
             feed_weak: self.feed.as_ref().map(Arc::downgrade),
             blocker_weak: Arc::downgrade(&self.blocker),
+            indexes_weak: Arc::downgrade(&self.indexes),
         }
     }
 
