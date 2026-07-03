@@ -3,7 +3,7 @@
 //! the per-type `match` tables in [`crate::dispatch_collections`], so
 //! the table rows delegate to the `cmd_*` functions defined here.
 
-use crate::cmd::{arg_i64, emit_zrange, fmt_score, parse_score_bound, store_err, wrong_args, ERR_NOT_INT};
+use crate::cmd::{arg_i64, emit_zrange, fmt_score, parse_score_bound, store_err, wrong_args, ERR_NOT_INT, arg_f64};
 use kevy_resp::{
     ArgvView, RespVersion, encode_array_len, encode_bulk, encode_error, encode_integer,
     encode_null_bulk,
@@ -159,6 +159,44 @@ pub(crate) fn cmd_zpopmin<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out
         1
     };
     match store.zpopmin(&args[1], count) {
+        Err(e) => store_err(out, e),
+        Ok(items) => {
+            encode_array_len(out, (items.len() * 2) as i64);
+            for (m, sc) in &items {
+                encode_bulk(out, m);
+                encode_bulk(out, &fmt_score(*sc));
+            }
+        }
+    }
+}
+
+/// v2.4 `ZPOPMIN.BELOW key below [count]` — pop up to `count` (default
+/// 1) lowest members with score strictly `< below`. The delayed-job
+/// primitive: score = due time, `below` = now → "pop what's due"
+/// atomically. Reply mirrors `ZPOPMIN` (member/score pairs).
+pub(crate) fn cmd_zpopmin_below<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) {
+    if args.len() < 3 || args.len() > 4 {
+        return wrong_args(out, "zpopmin.below");
+    }
+    let Some(below) = arg_f64(&args[2]) else {
+        return encode_error(out, "ERR value is not a valid float");
+    };
+    let count = if args.len() == 4 {
+        let Some(c) = arg_i64(&args[3]) else {
+            return encode_error(out, ERR_NOT_INT);
+        };
+        if c < 0 {
+            return encode_error(out, "ERR value is out of range, must be positive");
+        }
+        c as usize
+    } else {
+        1
+    };
+    match store.zpopmin_below(&args[1], below, count) {
         Err(e) => store_err(out, e),
         Ok(items) => {
             encode_array_len(out, (items.len() * 2) as i64);

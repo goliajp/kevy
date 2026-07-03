@@ -247,3 +247,25 @@ fn zrevrangebyscore_bad_bound_errors() {
     );
     assert!(r.starts_with(b"-ERR min or max"));
 }
+
+// ---- v2.4: ZPOPMIN.BELOW (delayed-job pop) --------------------------------
+
+#[test]
+fn zpopmin_below_pops_only_due() {
+    let mut store = Store::new();
+    zadd(&mut store, b"delayed", &[(b"10", b"j1"), (b"20", b"j2"), (b"99", b"j3")]);
+    // strictly below 20 → only j1
+    let r = kevy::dispatch(&mut store, &argv(&[b"ZPOPMIN.BELOW", b"delayed", b"20"]));
+    assert_eq!(r, b"*2\r\n$2\r\nj1\r\n$2\r\n10\r\n");
+    // below 100 count 5 → j2 then j3
+    let r = kevy::dispatch(&mut store, &argv(&[b"ZPOPMIN.BELOW", b"delayed", b"100", b"5"]));
+    assert_eq!(r, b"*4\r\n$2\r\nj2\r\n$2\r\n20\r\n$2\r\nj3\r\n$2\r\n99\r\n");
+    // drained
+    let r = kevy::dispatch(&mut store, &argv(&[b"ZPOPMIN.BELOW", b"delayed", b"100"]));
+    assert_eq!(r, b"*0\r\n");
+    // arity + float errors
+    let r = kevy::dispatch(&mut store, &argv(&[b"ZPOPMIN.BELOW", b"delayed"]));
+    assert!(r.starts_with(b"-ERR"));
+    let r = kevy::dispatch(&mut store, &argv(&[b"ZPOPMIN.BELOW", b"delayed", b"nan-ish"]));
+    assert!(r.starts_with(b"-ERR"));
+}

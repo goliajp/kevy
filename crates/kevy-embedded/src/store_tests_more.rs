@@ -315,3 +315,34 @@ fn info_prefix_counts() {
     assert_eq!(info.expires, 1);
     assert_eq!(s.info_prefix(b"none:").keys, 0);
 }
+
+// ---- v2.4: zpopmin_below ---------------------------------------------------
+
+#[test]
+fn zpopmin_below_pops_due_jobs_and_replays() {
+    let dir = crate::store::tests::tmp_dir("zpb-reopen");
+    {
+        let s = Store::open(
+            Config::default().with_persist(&dir).with_ttl_reaper_manual(),
+        )
+        .unwrap();
+        s.zadd(b"jobs", &[(10.0, b"due1"), (20.0, b"due2"), (99.0, b"later")]).unwrap();
+        // strictly-below semantics: 20.0 is NOT < 20.0
+        let due = s.zpopmin_below(b"jobs", 20.0, 10).unwrap();
+        assert_eq!(due, vec![(b"due1".to_vec(), 10.0)]);
+        // pop the rest that are due before 100
+        let due = s.zpopmin_below(b"jobs", 100.0, 1).unwrap(); // count cap
+        assert_eq!(due[0].0, b"due2".to_vec());
+        assert_eq!(s.zcard(b"jobs").unwrap(), 1);
+        // empty/absent + wrongtype
+        assert!(s.zpopmin_below(b"missing", 5.0, 3).unwrap().is_empty());
+        s.set(b"str", b"v").unwrap();
+        assert!(s.zpopmin_below(b"str", 5.0, 3).is_err());
+    }
+    // ZREM effect replays
+    let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
+    assert_eq!(s2.zcard(b"jobs").unwrap(), 1);
+    assert_eq!(s2.zscore(b"jobs", b"later").unwrap(), Some(99.0));
+    drop(s2);
+    let _ = std::fs::remove_dir_all(&dir);
+}

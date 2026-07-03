@@ -108,6 +108,7 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"ZREM"
             | b"ZINCRBY"
             | b"ZPOPMIN"
+            | b"ZPOPMIN.BELOW"
             | b"BZPOPMIN"
             | b"ZREMRANGEBYRANK"
             | b"ZREMRANGEBYSCORE"
@@ -163,7 +164,7 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
         | b"SDIFFSTORE" => NotifyClass::Set,
         // Sorted set — class `z`. GEOADD writes a ZSet under the hood,
         // so it fires `zadd` notifications too (matches Redis).
-        b"ZADD" | b"ZREM" | b"ZINCRBY" | b"ZPOPMIN" | b"ZREMRANGEBYRANK"
+        b"ZADD" | b"ZREM" | b"ZINCRBY" | b"ZPOPMIN" | b"ZPOPMIN.BELOW" | b"ZREMRANGEBYRANK"
         | b"ZREMRANGEBYSCORE" | b"ZINTERSTORE" | b"ZUNIONSTORE" | b"ZDIFFSTORE"
         | b"GEOADD" => NotifyClass::Zset,
         // Stream — class `t`. XADD/XDEL/XTRIM/XGROUP/XACK/XCLAIM/
