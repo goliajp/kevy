@@ -76,15 +76,23 @@ def rss_kb():
                 return int(ln.split()[1])
     return 0
 
-WORDS = ["rust", "kevy", "index", "search", "engine", "shard", "reactor",
-         "uring", "latency", "throughput", "vector", "text", "view", "feed"]
-CJK = "全文检索引擎支持中文分词高速缓存数据结构性能优化内存管理"
+# Zipfian-ish vocabulary (rank r keyword appears with frequency ~1/r):
+# a 14-word corpus is degenerate — every term hits ~40% of docs and NO
+# ranking engine can prune a uniform corpus. Real text is Zipfian.
+import random
+random.seed(7)
+VOCAB = [f"w{r}" for r in range(10_000)]
+def pick():
+    # inverse-CDF Zipf-ish sample over ranks
+    u = random.random()
+    return VOCAB[min(int(10_000 ** u) - 1, 9_999)]
+CJK = "全文检索引擎支持中文分词高速缓存数据结构性能优化内存管理并发网络协议解析持久化复制订阅频道集群拓扑"
 N = 1_000_000
 s = connect(); buf = [b""]
 t0 = time.time()
 batch = []
 for i in range(N):
-    w = " ".join(WORDS[(i + j) % len(WORDS)] for j in range(6))
+    w = " ".join(pick() for _ in range(10))
     c0 = (i * 7) % (len(CJK) - 6)
     body = f"{w} {CJK[c0:c0+6]} doc{i}"
     batch.append(enc("HSET", f"a:{i}", "body", body))
@@ -113,8 +121,9 @@ while True:
 print(f"textgate: text index built in {time.time()-t0:.1f}s")
 
 # ---- clamp 1: MATCH p95 median-conn < 20ms ----
-queries = [("rust search engine",), ("检索引擎",), ("latency uring shard",),
-           ("性能优化",), ("kevy text view feed",)]
+# query mix: head terms (w0/w1 ~ in most docs), mid, tail, CJK
+queries = [("w0 w1 w512",), ("检索引擎",), ("w3 w800 w4000",),
+           ("性能优化",), ("w0 w9000",)]
 p95s = []
 for _ in range(6):
     c = connect(); cb = [b""]

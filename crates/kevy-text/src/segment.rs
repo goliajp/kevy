@@ -31,6 +31,9 @@ pub struct TextStats {
     pub approx_bytes: u64,
 }
 
+/// One scoring candidate list: (postings, df, MaxScore upper bound).
+type ScoredList<'s> = (&'s Vec<(Vec<u8>, u32)>, f64, f64);
+
 /// One shard's inverted segment.
 #[derive(Debug, Default)]
 pub struct TextSegment {
@@ -73,30 +76,94 @@ impl TextSegment {
 
     /// BM25-ranked matches for `query` (tokenized with the same rules;
     /// OR semantics), best `limit` hits, score-descending.
+    ///
+    /// MaxScore pruning: query tokens process rarest-first; once the
+    /// running top-`limit` threshold exceeds the summed upper bounds
+    /// of the remaining (commoner) tokens, documents seen ONLY in
+    /// those lists can no longer enter — their lists are then probed
+    /// per accumulated doc instead of walked. Selection is a bounded
+    /// heap over borrowed keys (no per-candidate allocation).
     pub fn matches(&self, query: &[u8], limit: usize) -> Vec<TextMatch> {
-        let q_tokens = tokenize(query);
+        let mut q_tokens = tokenize(query);
+        q_tokens.sort();
+        q_tokens.dedup();
         if q_tokens.is_empty() || self.doc_len.is_empty() {
             return Vec::new();
         }
         let n_docs = self.doc_len.len() as f64;
         let avgdl = self.total_len as f64 / n_docs;
-        let mut scores: HashMap<&[u8], f64> = HashMap::new();
+        // (list, df, upper bound) — dl-independent bound: denom ≥
+        // tf + k1(1-b), so score ≤ idf·tf(k1+1)/(tf + k1(1-b)).
+        let mut lists: Vec<ScoredList<'_>> = Vec::new();
         for t in &q_tokens {
             let Some(list) = self.postings.get(t) else { continue };
             let df = list.len() as f64;
-            for (key, tf) in list {
+            let max_tf = f64::from(list.iter().map(|(_, tf)| *tf).max().unwrap_or(1));
+            lists.push((list, df, crate::bm25::bm25_upper(max_tf, df, n_docs)));
+        }
+        if lists.is_empty() {
+            return Vec::new();
+        }
+        // rarest (highest upper bound) first
+        lists.sort_by(|a, b| b.2.total_cmp(&a.2));
+        let tail_ub: Vec<f64> = {
+            // tail_ub[i] = Σ upper bounds of lists[i..]
+            let mut acc = 0.0;
+            let mut v: Vec<f64> = lists.iter().rev().map(|l| { acc += l.2; acc }).collect();
+            v.reverse();
+            v
+        };
+        let mut scores: HashMap<&[u8], f64> = HashMap::new();
+        let mut kth_threshold = 0.0_f64;
+        let mut walked = 0usize;
+        for (i, (list, df, _ub)) in lists.iter().enumerate() {
+            // Docs appearing only in the remaining lists can't reach
+            // the current top-limit floor → stop WALKING; the loop
+            // below PROBES these lists for already-seen docs.
+            if i > 0 && scores.len() >= limit && tail_ub[i] < kth_threshold {
+                break;
+            }
+            walked = i + 1;
+            for (key, tf) in list.iter() {
                 let dl = f64::from(self.doc_len.get(key.as_slice()).copied().unwrap_or(1));
                 *scores.entry(key.as_slice()).or_insert(0.0) +=
-                    bm25_score(f64::from(*tf), df, n_docs, dl, avgdl);
+                    bm25_score(f64::from(*tf), *df, n_docs, dl, avgdl);
+            }
+            if scores.len() >= limit && i + 1 < lists.len() {
+                kth_threshold = kth_of(&scores, limit);
             }
         }
-        let mut out: Vec<TextMatch> = scores
-            .into_iter()
-            .map(|(k, score)| TextMatch { key: k.to_vec(), score })
-            .collect();
-        out.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.key.cmp(&b.key)));
-        out.truncate(limit);
-        out
+        // Probe un-walked lists for docs already accumulated.
+        for (list, df, _) in &lists[walked..] {
+            for (key, tf) in list.iter() {
+                if let Some(sc) = scores.get_mut(key.as_slice()) {
+                    let dl = f64::from(self.doc_len.get(key.as_slice()).copied().unwrap_or(1));
+                    *sc += bm25_score(f64::from(*tf), *df, n_docs, dl, avgdl);
+                }
+            }
+        }
+        // Bounded selection: only the winners get cloned.
+        let mut top: Vec<(f64, &[u8])> = Vec::with_capacity(limit + 1);
+        for (k, score) in &scores {
+            let cand = (*score, *k);
+            if top.len() < limit {
+                top.push(cand);
+                if top.len() == limit {
+                    top.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+                }
+            } else if better(cand, top[limit - 1]) {
+                let pos = top
+                    .partition_point(|e| better(*e, cand));
+                top.insert(pos, cand);
+                top.pop();
+            }
+        }
+        if top.len() < limit {
+            top.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+        }
+        top.into_iter()
+            .map(|(score, k)| TextMatch { key: k.to_vec(), score })
+            .collect()
     }
 
     /// Live counters.
@@ -115,6 +182,21 @@ impl TextSegment {
     pub fn contains(&self, key: &[u8]) -> bool {
         self.doc_len.contains_key(key)
     }
+}
+
+/// Strict "ranks ahead of" for (score, key) — higher score first,
+/// key ascending as the tiebreak.
+fn better(a: (f64, &[u8]), b: (f64, &[u8])) -> bool {
+    a.0 > b.0 || (a.0 == b.0 && a.1 < b.1)
+}
+
+/// The `limit`-th best score currently accumulated (the MaxScore
+/// entry floor). O(n) selection, called only between list walks.
+fn kth_of(scores: &HashMap<&[u8], f64>, limit: usize) -> f64 {
+    let mut v: Vec<f64> = scores.values().copied().collect();
+    let idx = limit - 1;
+    v.select_nth_unstable_by(idx, |a, b| b.total_cmp(a));
+    v[idx]
 }
 
 #[cfg(test)]
@@ -162,6 +244,52 @@ mod tests {
         let st = s.stats();
         assert_eq!(st.docs, 2);
         assert!(st.tokens > 0 && st.approx_bytes > 0);
+    }
+
+    #[test]
+    fn maxscore_pruning_matches_naive() {
+        // df spread: "common" in every doc, "mid" in 1/5, "rare" in 2.
+        let mut s = TextSegment::new();
+        for i in 0..500u32 {
+            let mut body = String::from("common filler words here");
+            if i % 5 == 0 {
+                body.push_str(" mid");
+            }
+            if i == 42 || i == 99 {
+                body.push_str(" rare");
+            }
+            // vary length for dl normalization variety
+            for _ in 0..(i % 7) {
+                body.push_str(" pad");
+            }
+            s.apply(format!("k{i:03}").as_bytes(), Some(body.as_bytes()));
+        }
+        // Naive reference: walk everything.
+        let naive = |query: &str, limit: usize| -> Vec<(Vec<u8>, f64)> {
+            let q = tokenize(query.as_bytes());
+            let n_docs = s.doc_len.len() as f64;
+            let avgdl = s.total_len as f64 / n_docs;
+            let mut sc: HashMap<Vec<u8>, f64> = HashMap::new();
+            for t in &q {
+                let Some(list) = s.postings.get(t) else { continue };
+                let df = list.len() as f64;
+                for (k, tf) in list {
+                    let dl = f64::from(s.doc_len[k]);
+                    *sc.entry(k.clone()).or_insert(0.0) +=
+                        bm25_score(f64::from(*tf), df, n_docs, dl, avgdl);
+                }
+            }
+            let mut v: Vec<(Vec<u8>, f64)> = sc.into_iter().collect();
+            v.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            v.truncate(limit);
+            v
+        };
+        for (q, limit) in [("rare common", 10), ("mid common", 5), ("rare mid common", 3), ("common", 7)] {
+            let got: Vec<(Vec<u8>, f64)> =
+                s.matches(q.as_bytes(), limit).into_iter().map(|m| (m.key, m.score)).collect();
+            let want = naive(q, limit);
+            assert_eq!(got, want, "query {q:?} limit {limit}");
+        }
     }
 
     #[test]
