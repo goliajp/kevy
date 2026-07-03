@@ -22,10 +22,9 @@ fn argv(parts: &[&[u8]]) -> Argv {
 fn install_cluster_enabled() {
     // Use `replace` so re-running individual tests in the same
     // binary is safe (init can only be called once globally).
-    let mut cfg = Config::default();
-    cfg.cluster = ClusterSection {
-        enabled: true,
-        ..ClusterSection::default()
+    let cfg = Config {
+        cluster: ClusterSection { enabled: true, ..ClusterSection::default() },
+        ..Config::default()
     };
     // Try init first (idempotent across the test-binary lifetime);
     // fall back to replace if another test already initialised it.

@@ -51,17 +51,17 @@ fn notify_class_matches_table() {
         }
         let got = notify_class_for_verb(o.name.as_bytes());
         let want = o.notify;
-        let matches = match (got, want) {
-            (None, None) => true,
-            (Some(NotifyClass::String), Some(NotifyKind::String)) => true,
-            (Some(NotifyClass::Hash), Some(NotifyKind::Hash)) => true,
-            (Some(NotifyClass::List), Some(NotifyKind::List)) => true,
-            (Some(NotifyClass::Set), Some(NotifyKind::Set)) => true,
-            (Some(NotifyClass::Zset), Some(NotifyKind::Zset)) => true,
-            (Some(NotifyClass::Stream), Some(NotifyKind::Stream)) => true,
-            (Some(NotifyClass::Generic), Some(NotifyKind::Generic)) => true,
-            _ => false,
-        };
+        let matches = matches!(
+            (got, want),
+            (None, None)
+                | (Some(NotifyClass::String), Some(NotifyKind::String))
+                | (Some(NotifyClass::Hash), Some(NotifyKind::Hash))
+                | (Some(NotifyClass::List), Some(NotifyKind::List))
+                | (Some(NotifyClass::Set), Some(NotifyKind::Set))
+                | (Some(NotifyClass::Zset), Some(NotifyKind::Zset))
+                | (Some(NotifyClass::Stream), Some(NotifyKind::Stream))
+                | (Some(NotifyClass::Generic), Some(NotifyKind::Generic))
+        );
         assert!(
             matches,
             "{}: notify_class_for_verb = {:?}, OP_TABLE.notify = {:?}",
