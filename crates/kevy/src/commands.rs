@@ -48,6 +48,11 @@ impl Commands for KevyCommands {
             b"IDX.COUNT" if args.len() >= 4 => Route::Extension,
             b"IDX.VERIFY" if args.len() == 2 => Route::Extension,
             b"IDX.LIST" if args.len() == 1 => Route::Extension,
+            b"VIEW.QUERY" if args.len() >= 2 => Route::Extension,
+            b"VIEW.LIST" if args.len() == 1 => Route::Extension,
+            b"VIEW.VERIFY" if args.len() == 2 => Route::Extension,
+            b"VIEW.REBUILD" if args.len() == 2 => Route::Extension,
+            b"VIEW.EXPLAIN" if args.len() == 2 => Route::Extension,
             b"PREFIX.STATS" if args.len() == 2 => Route::PrefixStats,
             b"FEED.READ" if args.len() >= 4 => Route::FeedRead,
             b"FEED.TAIL" if args.len() == 2 => Route::FeedTail,
@@ -214,18 +219,27 @@ impl Commands for KevyCommands {
 
     fn on_write(&self, store: &mut Store, key: &[u8]) {
         crate::index_runtime::on_write(store, key);
+        // Views probe the segments the line above just refreshed.
+        crate::view_runtime::on_write(store, key);
     }
 
     fn extension_op(&self, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+        if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
+            return crate::cmd_view::extension_op(store, argv);
+        }
         crate::cmd_index_query::extension_op(store, argv)
     }
 
     fn extension_reduce(&self, argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
+        if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
+            return crate::cmd_view::extension_reduce(argv, chunks);
+        }
         crate::cmd_index_reduce::extension_reduce(argv, chunks)
     }
 
     fn on_shard_tick(&self, store: &mut Store) {
         crate::index_runtime::on_tick(store);
+        crate::view_runtime::on_tick(store);
         // Run Redis's `activeExpireCycle` per shard. `sample` controls the
         // batch size; up to 16 rounds per tick is well below Redis's 25 %
         // CPU budget at the default 10 Hz cadence. Cheap when no TTL'd

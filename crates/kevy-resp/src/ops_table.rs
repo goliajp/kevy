@@ -252,6 +252,17 @@ pub const OP_TABLE: &[OpSpec] = &[
     // IDX.VERIFY: server-only for now (embedded exposes idx_stats;
     // the drift audit arrives with the五轴 verify hardening).
     op("IDX.VERIFY",   RD, NG,   None,            None,    SERVER),
+    // v2.6 views (VIEW.* namespace; catalog ops are sidecar-persisted,
+    // not data writes — same reasoning as IDX.*). VERIFY/REBUILD/
+    // EXPLAIN are server-only (embedded rebuilds inline and exposes
+    // view_count instead).
+    op("VIEW.CREATE",  RD, NG,   None,            None,    SERVER | ESTORE),
+    op("VIEW.DROP",    RD, NG,   None,            None,    SERVER | ESTORE),
+    op("VIEW.LIST",    RD, NG,   None,            None,    SERVER | ESTORE),
+    op("VIEW.QUERY",   RD, NG,   None,            None,    SERVER | ESTORE),
+    op("VIEW.VERIFY",  RD, NG,   None,            None,    SERVER),
+    op("VIEW.REBUILD", RD, NG,   None,            None,    SERVER),
+    op("VIEW.EXPLAIN", RD, NG,   None,            None,    SERVER),
     op("FEED.READ",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("FEED.TAIL",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("FEED.SHARDS",  RD, NG,   None,            None,    SERVER | ESTORE),

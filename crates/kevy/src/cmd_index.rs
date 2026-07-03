@@ -35,6 +35,11 @@ pub(crate) fn boot(data_dir: &std::path::Path) {
     }
 }
 
+/// v2.6: the view catalog persists next to the index catalog.
+pub(crate) fn sidecar_dir() -> Option<&'static std::path::Path> {
+    SIDECAR_DIR.get().map(PathBuf::as_path)
+}
+
 fn persist_sidecar(cat: &Catalog) {
     if let Some(dir) = SIDECAR_DIR.get() {
         let tmp = dir.join("index-catalog.meta.tmp");

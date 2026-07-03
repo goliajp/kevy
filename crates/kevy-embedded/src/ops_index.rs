@@ -293,6 +293,10 @@ pub(crate) fn on_commit(
 /// EXACT written-key walk per verb shape (the logged effect argv is a
 /// closed set — new effect verbs must be added here; the parity test
 /// in `store_tests_index.rs` pins the list).
+pub(crate) fn each_written_key_pub(verb: &[u8], parts: &[&[u8]], f: impl FnMut(&[u8])) {
+    each_written_key(verb, parts, f);
+}
+
 fn each_written_key(verb: &[u8], parts: &[&[u8]], mut f: impl FnMut(&[u8])) {
     let up = |v: &[u8], t: &[u8]| v.eq_ignore_ascii_case(t);
     if up(verb, b"DEL") || up(verb, b"UNLINK") {
