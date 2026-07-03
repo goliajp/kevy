@@ -1,0 +1,6 @@
+{
+  "workspace_line_coverage_pct": 82.08,
+  "recorded": "2026-07-03",
+  "recorded_on": "macOS aarch64, rustc 1.96.0, cargo-llvm-cov, --workspace --lib --tests",
+  "note": "ratchet: only raise via covgate.sh --update-baseline after a deliberate improvement"
+}
