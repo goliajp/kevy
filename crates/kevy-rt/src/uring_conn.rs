@@ -66,6 +66,7 @@ pub(crate) enum BigArgState {
     /// - `OP_BIG_CANCEL` CQE: handler sets `cancel_acked = true`.
     /// - Terminal `OP_RECV` CQE with `res = -ECANCELED`: handler in
     ///   `uring_on_recv` sets `target_canceled = true`.
+    ///
     /// When BOTH flip, the state transitions to [`Self::BareSetReading`]
     /// and a single-shot `prep_read` SQE is submitted directly into
     /// `body` for the remaining bytes.
