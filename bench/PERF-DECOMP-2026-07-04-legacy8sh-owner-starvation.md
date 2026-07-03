@@ -219,3 +219,46 @@ a concrete wait-for-signal gap.
 Branch `feature/perf-legacy8sh-nap-rung` holds the falsified
 experiments + diag (NOT for merge as-is; telemetry eprintln must be
 removed or feature-gated before any land).
+
+## Round 4 — FIX LANDED: stay-hot-while-inflight, gate 6/6 PASS untouched-baseline
+
+Design (v3, after v1/v2 falsified): a shard with forwarded cross-shard
+requests outstanding (`Shard::xshard_inflight > 0`) stays in the spin
+rung — replies are certain within ~one cross-shard RTT, and the kernel
+sleep/wake transition per reply batch WAS the tax. Increments at the
+two forward sites (Request / RequestBatch by inner count), decrements
+at the two fold sites; saturating; dead conns still fold so it drains.
+The batch-gated nap remains as the second rung for no-inflight idle.
+
+### Verification (lx64, release-perf, full perfgate vs the 2026-06-11 baseline)
+
+| angle | median (instances) | vs baseline |
+|---|---|---|
+| pinned_cluster_get | 30.15M [30.12 · 30.23 · 30.15] | +18% ✓ held |
+| pinned_cluster_set | 24.28M | +10% ✓ held |
+| pinned_compat_get | 20.19M | +12% ✓ held |
+| pinned_compat_set | 17.91M | +8% ✓ held |
+| **legacy_8sh_get** | **10.88M** [10.88 · 11.98 · 10.88] | **+9% ABOVE the pre-decay baseline** |
+| **legacy_8sh_set** | **9.99M** [9.99 · 10.89 · 9.98] | **restored + head-room** |
+
+**perfgate: PASS — first honest 6/6 since the decay began**, no
+baseline edits. Plus the -c1 sequential probe (the 4fa4631
+motivation): SET 80.3k / GET 80.7k @ p50 = 15 µs — **above** the
+post-4fa4631 63-65k (stay-hot removes the park/wake latency for the
+-c1 origin too; both sides of the historical trade now win).
+Correctness: workspace 122 suites, blocking_cross_shard 8/8 on
+io_uring.
+
+### Remaining campaign tail (lower priority, tracked)
+
+- 286c4a2 step-1 (-4% mode attractor from the v1.17 INFO counters):
+  masked by the fix's headroom on this angle; still worth a
+  micro-mechanism pin + fix on its own (thread-local access / expires
+  counter diag builds).
+- Epoll-reactor parity for stay-hot (its shape was not the regressed
+  one; apply the same inflight gate for symmetry).
+- Baseline re-record on develop AFTER this branch merges (record the
+  pinned +19% gains AND the restored legacy line together).
+- perfgate legacy instance-count: instances still spread on the high
+  side ([9.99 · 10.89]); gate risk is now zero at the current floor —
+  keep INSTANCES=3, revisit only if flakiness returns.
