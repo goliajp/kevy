@@ -66,12 +66,9 @@ pub(crate) fn keys_span_slots<A: ArgvView + ?Sized>(route: &Route, args: &A) -> 
     //   ZINTERCARD numkeys k…                              → args[2..2+n]
     // (the set-form *STOREs are a plain dst+keys walk, handled below).
     match route {
-        Route::ZAlgebraStore(c)
-            if matches!(
-                c,
-                crate::ZCombine::ZInter | crate::ZCombine::ZUnion | crate::ZCombine::ZDiff
-            ) =>
-        {
+        Route::ZAlgebraStore(
+            crate::ZCombine::ZInter | crate::ZCombine::ZUnion | crate::ZCombine::ZDiff,
+        ) => {
             let Some(n) = parse_numkeys(args, 2) else { return false };
             let mut slots = key_slot_at(args, 1).into_iter().collect::<Vec<_>>();
             for i in 3..(3 + n).min(args.len()) {
@@ -119,5 +116,5 @@ fn parse_numkeys<A: ArgvView + ?Sized>(args: &A, idx: usize) -> Option<usize> {
 }
 
 fn key_slot_at<A: ArgvView + ?Sized>(args: &A, idx: usize) -> Option<u16> {
-    args.get(idx).map(|k| kevy_hash::key_hash_slot(k))
+    args.get(idx).map(kevy_hash::key_hash_slot)
 }
