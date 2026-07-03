@@ -248,7 +248,8 @@ impl<C: Commands> Shard<C> {
         input_buf: &mut Vec<u8>,
         io: &mut KevyMap<u64, UringConn>,
     ) -> crate::inbox::BatchOutcome {
-        let o = if input_buf.is_empty() {
+        
+        if input_buf.is_empty() {
             // A1 fast path: parse straight from the slab. The kernel's
             // provided-buffer slice lives until `pbuf.recycle(bid)`, which
             // the caller defers until after dispatch_batch returns. Any
@@ -303,8 +304,7 @@ impl<C: Commands> Shard<C> {
                 }
             }
             o
-        };
-        o
+        }
     }
 
     /// Mark `cid` closing and eagerly cancel its block waiters (local
