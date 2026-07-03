@@ -33,11 +33,14 @@ echo "covgate: measuring workspace line coverage (instrumented build + tests)...
 COVJSON=$(mktemp)
 # --output-path keeps the JSON pure: runners interleave rustup/cargo
 # info lines into stdout, which broke stdout capture (2026-07-03).
+COVLOG=$(mktemp)
 cargo llvm-cov --workspace --lib --tests --summary-only --json \
-    --output-path "$COVJSON" >/dev/null 2>&1 || {
-    echo "covgate: cargo llvm-cov run failed" >&2
+    --output-path "$COVJSON" >"$COVLOG" 2>&1 || {
+    echo "covgate: cargo llvm-cov run failed — last 40 lines:" >&2
+    tail -40 "$COVLOG" >&2
     exit 2
 }
+rm -f "$COVLOG"
 PCT=$(python3 -c "
 import json
 d = json.load(open('$COVJSON'))
