@@ -10,6 +10,7 @@ use kevy_hash::KevyHash;
 use kevy_resp::{
     RespVersion, encode_array_len, encode_bulk, encode_error, encode_null_bulk,
     encode_push_header, encode_set_header,
+    encode_integer,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -53,7 +54,10 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
         // never reach here. Defensive: emit an error rather than
         // silently dropping the slot — a misroute would otherwise
         // hang the connection.
-        Agg::WatchCollect { .. } | Agg::ExecPrep { .. } | Agg::RenameOrchestrator { .. } => {
+        Agg::WatchCollect { .. }
+        | Agg::ExecPrep { .. }
+        | Agg::RenameOrchestrator { .. }
+        | Agg::ZStoreGather { .. } => {
             let mut out = Vec::new();
             encode_error(&mut out, "ERR internal: orchestrator agg hit materialize");
             SmallReply::from_vec(out)
@@ -161,6 +165,23 @@ fn finalize_set_algebra(
     proto: RespVersion,
 ) -> Vec<u8> {
     let mut out = Vec::new();
+    // v2.2: ZINTERCARD rides the Scored gather; reduce to `:count`.
+    if let MultiOp::ZInterCard(limit) = op {
+        let mut inputs: Vec<Vec<(Vec<u8>, f64)>> = Vec::with_capacity(keys.len());
+        for k in keys {
+            match got.get(k) {
+                Some(Gathered::Scored(p)) => inputs.push(p.clone()),
+                Some(Gathered::WrongType) => {
+                    encode_error(&mut out, WRONGTYPE);
+                    return out;
+                }
+                _ => inputs.push(Vec::new()),
+            }
+        }
+        let n = kevy_store::zintercard(&inputs, limit) as i64;
+        encode_integer(&mut out, n);
+        return out;
+    }
     let mut sets: Vec<Vec<Vec<u8>>> = Vec::with_capacity(keys.len());
     for k in keys {
         match got.get(k) {
@@ -180,7 +201,7 @@ fn finalize_set_algebra(
         // mean a future refactor's wildcard caught Mget here. Replying
         // empty is observably wrong but doesn't crash the shard;
         // `unreachable!()` would crash-loop the whole reactor.
-        MultiOp::Mget => Vec::new(),
+        MultiOp::Mget | MultiOp::ZInterCard(_) => Vec::new(),
     };
     match proto {
         RespVersion::V2 => encode_array_len(&mut out, result.len() as i64),
@@ -272,7 +293,7 @@ pub(crate) fn pubsub_pmessage(
     out
 }
 
-fn set_intersect(sets: &[Vec<Vec<u8>>]) -> Vec<Vec<u8>> {
+pub(crate) fn set_intersect(sets: &[Vec<Vec<u8>>]) -> Vec<Vec<u8>> {
     let Some((first, rest)) = sets.split_first() else {
         return Vec::new();
     };
@@ -284,7 +305,7 @@ fn set_intersect(sets: &[Vec<Vec<u8>>]) -> Vec<Vec<u8>> {
     acc.into_iter().cloned().collect()
 }
 
-fn set_union(sets: &[Vec<Vec<u8>>]) -> Vec<Vec<u8>> {
+pub(crate) fn set_union(sets: &[Vec<Vec<u8>>]) -> Vec<Vec<u8>> {
     let mut acc: HashSet<&Vec<u8>> = HashSet::new();
     for s in sets {
         for m in s {
@@ -294,7 +315,7 @@ fn set_union(sets: &[Vec<Vec<u8>>]) -> Vec<Vec<u8>> {
     acc.into_iter().cloned().collect()
 }
 
-fn set_diff(sets: &[Vec<Vec<u8>>]) -> Vec<Vec<u8>> {
+pub(crate) fn set_diff(sets: &[Vec<Vec<u8>>]) -> Vec<Vec<u8>> {
     let Some((first, rest)) = sets.split_first() else {
         return Vec::new();
     };

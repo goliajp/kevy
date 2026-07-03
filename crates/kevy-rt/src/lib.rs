@@ -84,6 +84,7 @@ mod exec_op;
 mod exec_pubsub;
 mod exec_pubsub_pattern;
 mod exec_rename;
+mod exec_zalgebra;
 mod exec_slowlog;
 mod exec_watch;
 mod inbox;
@@ -137,6 +138,7 @@ pub use kevy_store::Store;
 pub use replica_inbox::{ReplicaApply, ReplicaInboxReceiver, ReplicaInboxSender, replica_inbox_pair};
 pub use replication_gate::ReplicatedApplyGuard;
 pub use route::{Route, XGroupCtx};
+pub use message::ZCombine;
 pub use runtime::Runtime;
 
 /// Command-set semantics injected into the runtime. Cloned to every core, so it
