@@ -197,6 +197,7 @@ fn producer_loop(
     );
 }
 
+#[allow(clippy::too_many_arguments)] // chaos-test driver; a params struct adds noise, not clarity
 fn run_phase(
     name: &str,
     producer_id: usize,

@@ -2,7 +2,7 @@
 //!
 //! Spawn kevy with `RLIMIT_NOFILE = small` (256). kevy uses its own
 //! fds at startup (listeners + AOF + snapshot file + waker + ring fds
-//! + uring SQEs). Once ~200-220 are consumed, every new accept must
+//! and uring SQEs). Once ~200-220 are consumed, every new accept must
 //! refuse cleanly (EMFILE → kevy emits no panic). Verify:
 //! - kevy stays alive.
 //! - Past-cap conns get refused (TCP RST or connect timeout).
