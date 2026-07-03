@@ -1,0 +1,18 @@
+[package]
+name = "kevy-text"
+description = "Dictionary-free full-text search core: CJK bigram tokenizer, inverted segments, BM25 scoring."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-text"
+readme = "README.md"
+keywords = ["full-text-search", "bm25", "cjk", "tokenizer", "inverted-index"]
+categories = ["text-processing", "database-implementations"]
+
+[lints]
+workspace = true
+
+[dependencies]
