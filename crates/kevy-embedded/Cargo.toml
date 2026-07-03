@@ -23,6 +23,7 @@ workspace = true
 [dependencies]
 kevy-store = { path = "../kevy-store", version = "2.0.0" }
 kevy-index = { path = "../kevy-index", version = "2.0.0" }
+kevy-text = { path = "../kevy-text", version = "2.0.0" }
 kevy-persist = { path = "../kevy-persist", version = "2.0.0" }
 kevy-hash = { path = "../kevy-hash", version = "2.0.0" }
 # Phase 2 (v1.20+): embed-as-read-replica reuses the server-side

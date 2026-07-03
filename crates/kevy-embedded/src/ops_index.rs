@@ -38,6 +38,9 @@ pub(crate) struct IndexReg {
 pub(crate) struct ShardSegs {
     pub(crate) version: u64,
     pub(crate) segs: Vec<(IndexSpec, Segment)>,
+    /// v2.7: inverted segments for KIND text specs (parallel list —
+    /// a spec appears in exactly one of the two).
+    pub(crate) text: Vec<(IndexSpec, kevy_text::TextSegment)>,
 }
 
 const SIDECAR: &str = "index-catalog.meta";
@@ -166,6 +169,34 @@ impl Store {
             .collect()
     }
 
+    /// v2.7 `MATCH` — BM25-ranked hits merged across shards
+    /// (shard-local statistics; see docs/text-search.md).
+    pub fn idx_match(
+        &self,
+        name: &[u8],
+        query: &[u8],
+        limit: usize,
+    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+        let limit = limit.clamp(1, 1000);
+        let mut all: Vec<kevy_text::TextMatch> = Vec::new();
+        let mut found = false;
+        for shard in self.shards.iter() {
+            let mut g = lock_write(shard);
+            let inner = &mut *g;
+            sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
+            if let Some((_, ts)) = inner.idx_segs.text.iter().find(|(s, _)| s.name == name) {
+                found = true;
+                all.extend(ts.matches(query, limit));
+            }
+        }
+        if !found {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "no such text index"));
+        }
+        all.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.key.cmp(&b.key)));
+        all.truncate(limit);
+        Ok(all.into_iter().map(|m| (m.key, m.score)).collect())
+    }
+
     fn for_each_segment(
         &self,
         name: &[u8],
@@ -236,7 +267,23 @@ pub(crate) fn sync_segs(
         return;
     }
     let mut next: Vec<(IndexSpec, Segment)> = Vec::new();
+    let mut next_text: Vec<(IndexSpec, kevy_text::TextSegment)> = Vec::new();
     for (spec, _) in cat.iter() {
+        if spec.kind == kevy_index::IndexKind::Text {
+            match shard_segs.text.iter().position(|(s, _)| s == spec) {
+                Some(i) => next_text.push(shard_segs.text.swap_remove(i)),
+                None => {
+                    let mut ts = kevy_text::TextSegment::new();
+                    let mut pat = spec.prefix.clone();
+                    pat.push(b'*');
+                    for key in store.collect_keys(Some(&pat), None) {
+                        apply_text_key(store, spec, &mut ts, &key);
+                    }
+                    next_text.push((spec.clone(), ts));
+                }
+            }
+            continue;
+        }
         match shard_segs.segs.iter().position(|(s, _)| s == spec) {
             Some(i) => next.push(shard_segs.segs.swap_remove(i)),
             None => {
@@ -251,7 +298,23 @@ pub(crate) fn sync_segs(
         }
     }
     shard_segs.segs = next;
+    shard_segs.text = next_text;
     shard_segs.version = *ver;
+}
+
+fn apply_text_key(
+    store: &mut kevy_store::Store,
+    spec: &IndexSpec,
+    ts: &mut kevy_text::TextSegment,
+    key: &[u8],
+) {
+    match store.hget(key, &spec.field) {
+        Ok(Some(raw)) => {
+            let raw = raw.to_vec();
+            ts.apply(key, Some(&raw));
+        }
+        _ => ts.apply(key, None),
+    }
 }
 
 /// The write-path hook body — called from `commit_write` with the
@@ -279,12 +342,20 @@ pub(crate) fn on_commit(
         for (_, seg) in &mut shard_segs.segs {
             *seg = Segment::new();
         }
+        for (_, ts) in &mut shard_segs.text {
+            *ts = kevy_text::TextSegment::new();
+        }
         return;
     }
     each_written_key(verb, parts, |key| {
         for (spec, seg) in &mut shard_segs.segs {
             if key.starts_with(&spec.prefix) {
                 apply_key(store, spec, seg, key);
+            }
+        }
+        for (spec, ts) in &mut shard_segs.text {
+            if key.starts_with(&spec.prefix) {
+                apply_text_key(store, spec, ts, key);
             }
         }
     });

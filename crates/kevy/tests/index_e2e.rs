@@ -264,3 +264,55 @@ fn maxmem_budget_fails_declaratively() {
     }
     assert!(over, "budget breach surfaces declaratively");
 }
+
+#[test]
+fn text_kind_match_bm25() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    let docs: &[(&str, &str)] = &[
+        ("doc:1", "Rust is a systems programming language"),
+        ("doc:2", "kevy is a pure Rust key value store with full text search"),
+        ("doc:3", "全文检索引擎支持中文分词"),
+        ("doc:4", "The quick brown fox jumps over the lazy dog"),
+        ("doc:5", "検索エンジンを実装する"),
+    ];
+    for (k, body) in docs {
+        cmd(&mut c, &[b"HSET", k.as_bytes(), b"body", body.as_bytes()]);
+    }
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"d_body", b"ON", b"PREFIX", b"doc:", b"FIELD", b"body", b"TYPE", b"str", b"KIND", b"text"],
+    );
+    assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
+
+    // Latin match, ranked: doc:2 mentions rust AND search-adjacent terms.
+    let r = query_ready(&mut c, &[b"IDX.QUERY", b"d_body", b"MATCH", b"rust text search", b"LIMIT", b"10"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("doc:1") && s.contains("doc:2"), "{s}");
+    assert!(s.find("doc:2\r").unwrap() < s.find("doc:1\r").unwrap(), "doc:2 ranks first: {s}");
+    assert!(!s.contains("doc:4"), "unrelated doc absent: {s}");
+
+    // CJK bigram match.
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"d_body", b"MATCH", "中文分词".as_bytes(), b"LIMIT", b"10"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("doc:3"), "{s}");
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"d_body", b"MATCH", "検索".as_bytes(), b"LIMIT", b"10"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("doc:5") && !s.contains("doc:3"), "{s}");
+
+    // live update re-indexes; delete drops.
+    cmd(&mut c, &[b"HSET", b"doc:4", b"body", b"now about rust too"]);
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"d_body", b"MATCH", b"rust", b"LIMIT", b"10"]);
+    assert!(String::from_utf8_lossy(&r).contains("doc:4"));
+    cmd(&mut c, &[b"DEL", b"doc:1"]);
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"d_body", b"MATCH", b"systems", b"LIMIT", b"10"]);
+    assert!(!String::from_utf8_lossy(&r).contains("doc:1"));
+
+    // hydration + VERIFY stats + LIST.
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"d_body", b"MATCH", b"rust", b"LIMIT", b"5", b"FIELDS", b"body"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("key value store"), "hydrated body: {s}");
+    let r = cmd(&mut c, &[b"IDX.VERIFY", b"d_body"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("entries\r\n$1\r\n4"), "4 live docs: {s}");
+}
