@@ -217,3 +217,33 @@ pub(crate) fn temp_aof(name: &str) -> std::path::PathBuf {
     p.push(format!("kevy-{name}-{uniq}.aof"));
     p
 }
+
+// ---- v2.3: snapshot feed-cursor header ------------------------------------
+
+#[test]
+fn snapshot_cursor_roundtrip_and_legacy_none() {
+    let dir = std::env::temp_dir().join(format!("kevy-snapcur-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut store = kevy_store::Store::new();
+    store.set(b"k", b"v".to_vec(), None, false, false);
+
+    // v5: cursor written + read back; entries load fine.
+    let p5 = dir.join("v5.rdb");
+    {
+        let mut f = std::fs::File::create(&p5).unwrap();
+        crate::write_snapshot_to_with_cursor(&store, &mut f, Some((3, 42))).unwrap();
+    }
+    assert_eq!(crate::read_snapshot_cursor(&p5).unwrap(), Some((3, 42)));
+    let mut loaded = kevy_store::Store::new();
+    crate::load_snapshot(&mut loaded, &p5).unwrap();
+    assert_eq!(loaded.get(b"k").unwrap().unwrap().as_ref(), b"v");
+
+    // legacy v4 (no cursor): None + loads fine.
+    let p4 = dir.join("v4.rdb");
+    crate::save_snapshot(&store, &p4).unwrap();
+    assert_eq!(crate::read_snapshot_cursor(&p4).unwrap(), None);
+    let mut loaded4 = kevy_store::Store::new();
+    crate::load_snapshot(&mut loaded4, &p4).unwrap();
+    assert_eq!(loaded4.get(b"k").unwrap().unwrap().as_ref(), b"v");
+    let _ = std::fs::remove_dir_all(&dir);
+}

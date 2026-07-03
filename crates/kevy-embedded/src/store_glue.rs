@@ -37,6 +37,10 @@ pub(crate) fn commit_write(inner: &mut Inner, parts: &[&[u8]]) -> io::Result<()>
     if let Some(src) = &inner.writer_source {
         crate::replica_source::push_into(src, parts);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(feed) = &inner.feed {
+        crate::store::Store::feed_push(feed, parts);
+    }
     inner.store.try_evict_after_write();
     Ok(())
 }

@@ -225,6 +225,13 @@ pub const OP_TABLE: &[OpSpec] = &[
     // ---- keyspace -------------------------------------------------------
     op("COPY",         WR, GROW, None,            None,    ESTORE),
     op("DBSIZE",       RD, NG,   None,            None,    SERVER | ESTORE),
+    // v2.3 CDC surface: FEED.* / PREFIX.STATS are new-genre namespaced
+    // commands (three-laws); embedded parity = changes_since /
+    // changes_tail / feed_shards / info_prefix.
+    op("FEED.READ",    RD, NG,   None,            None,    SERVER | ESTORE),
+    op("FEED.TAIL",    RD, NG,   None,            None,    SERVER | ESTORE),
+    op("FEED.SHARDS",  RD, NG,   None,            None,    SERVER | ESTORE),
+    op("PREFIX.STATS", RD, NG,   None,            None,    SERVER | ESTORE),
     op("DEL",          WR, NG,   Some(N::Generic), None,   SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("EXISTS",       RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("EXPIRE",       WR, NG,   Some(N::Generic), None,   SERVER | ESTORE | REPLAY),

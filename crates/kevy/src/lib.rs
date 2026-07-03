@@ -196,6 +196,9 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
     if cfg.cluster.enabled {
         runtime = runtime.with_cluster(cluster_port_base(&cfg));
     }
+    if cfg.feed.enabled {
+        runtime = runtime.with_feed(true, cfg.feed.feed_buffer_size);
+    }
     // v1.25 UDS: opt-in via `KEVY_UNIX_SOCKET=/path/to/sock` env var. Lets
     // local clients (and benches) skip TCP loopback overhead — fair
     // comparison against valkey/redis's `unixsocket` config.

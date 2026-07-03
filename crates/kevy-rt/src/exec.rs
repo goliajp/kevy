@@ -177,6 +177,11 @@ impl<C: Commands> Shard<C> {
             Route::Unwatch => self.do_unwatch(conn_id, seq),
             Route::Hello => self.do_hello(conn_id, seq, args),
             Route::Rename { nx } => self.start_rename(conn_id, seq, args, nx),
+            // v2.3 FEED.* — parse + shard-index dispatch live in
+            // [`crate::exec_feed`] (500-LOC house rule).
+            r @ (Route::FeedShards | Route::FeedTail | Route::FeedRead) => {
+                self.start_feed_route(conn_id, seq, args, &r, is_quit);
+            }
             Route::Slowlog(sub) => self.start_slowlog(conn_id, seq, sub),
             Route::Local => {
                 let meta = DispatchMeta { is_write, wake_idx, key_idx: None };
@@ -391,6 +396,13 @@ impl<C: Commands> Shard<C> {
                     }
                 }
                 (Agg::Keys { acc, .. }, Part::Keys(ks)) => acc.extend(ks),
+                (
+                    Agg::PrefixStats { keys, expires },
+                    Part::PrefixStats { keys: k, expires: e },
+                ) => {
+                    *keys += k;
+                    *expires += e;
+                }
                 (Agg::SlowlogGet { entries, .. }, Part::SlowlogEntries(es)) => {
                     entries.extend(es);
                 }

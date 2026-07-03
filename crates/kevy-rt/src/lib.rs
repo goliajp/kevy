@@ -84,6 +84,7 @@ mod exec_op;
 mod exec_pubsub;
 mod exec_pubsub_pattern;
 mod exec_rename;
+mod exec_feed;
 mod exec_zalgebra;
 mod exec_slowlog;
 mod exec_watch;
