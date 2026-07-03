@@ -42,6 +42,14 @@ use std::time::{Duration, Instant};
 /// the epoll reactor's `SPIN_LIMIT`). Keeps -c1 latency low without spinning a
 /// quiet shard at 100% forever.
 const URING_SPIN_LIMIT: u32 = 256;
+/// Nap rung (batch-gated, see the idle ladder): deaf-sleep length. Long
+/// enough for all 7 origin shards to enqueue another round of forwards,
+/// short enough that a once-per-burst straggler barely notices.
+const NAP_US: u64 = 200;
+/// Minimum size of the previous inbound drain for the nap rung to arm.
+/// Sequential -c1 traffic drains 1 message per request and must never
+/// nap (that was the 15× -c1 bug the batch gate exists to prevent).
+const NAP_BATCH_MIN: usize = 4;
 /// `-ENOBUFS`: the buf ring was momentarily empty; just re-arm (don't close).
 pub(crate) const ENOBUFS: i32 = 105;
 
@@ -141,6 +149,11 @@ impl<C: Commands> Shard<C> {
         let mut un_accept_inflight = self.unix_listener.is_none();
         let mut comps: Vec<Completion> = Vec::with_capacity(URING_ENTRIES as usize);
         let mut idle_spins: u32 = 0;
+        // v2.2-perf (nap rung restored, batch-gated): size of the last
+        // non-empty inbound drain + whether this idle episode already
+        // napped. See the idle-ladder comment below.
+        let mut last_inbound_batch: usize = 0;
+        let mut napped = false;
         let mut park = ParkState::default();
         let mut woke_from_park = false;
 
@@ -420,38 +433,55 @@ impl<C: Commands> Shard<C> {
                 self.reap_closed_replicas();
             }
 
-            // Idle ladder — spin, then park (no nap rung):
+            // Idle ladder — spin, then a BATCH-GATED deaf nap, then park:
             //   1. busy-poll `URING_SPIN_LIMIT` empty iterations, so a -c1
             //      client's next request is reaped immediately;
-            //   2. park: io_uring blocking wait, woken by any socket I/O
+            //   2. nap (only when the last inbound drain was a real batch,
+            //      `>= NAP_BATCH_MIN`, and once per idle episode): a
+            //      bounded `thread::sleep(NAP_US)` that lets the 7 origin
+            //      shards' forwards accumulate so the owner drains one big
+            //      batch per wake instead of park/wake-churning per small
+            //      batch;
+            //   3. park: io_uring blocking wait, woken by any socket I/O
             //      CQE, the waker pipe, or the bounding timeout. A truly
             //      idle shard costs ~zero CPU.
             //
-            // The previous middle rung was a `thread::sleep(200 µs)` nap
-            // intended to aggregate inbound work into bigger batches under
-            // load. It pinned Rust-client `-c1` throughput at ~4 k ops/s
-            // because `thread::sleep` is wake-deaf — a request landing in
-            // the nap window paid the full 200 µs regardless of how fast
-            // the socket data actually arrived. Both attempted nap
-            // replacements (an io_uring `prep_timeout` + `submit_and_wait`
-            // variant, and a state-machine refactor) deadlocked under
-            // sequential single-conn Rust traffic; removing the nap rung
-            // is the simpler, provably-correct fix. Park already wakes
-            // instantly on socket CQE, so latency is unaffected; the only
-            // cost is the 8-shard high-concurrency throughput note
-            // (−18~21 %) that motivated the nap originally, which gets
-            // revisited as a v1.22.x follow-up.
+            // History (the whole point of the batch gate): the original
+            // v1.16-era nap was UNCONDITIONAL `thread::sleep(200 µs)` —
+            // great for the 8-shard cross-shard shape (aggregation), but
+            // wake-deaf, so a sequential -c1 Rust client paid the full
+            // 200 µs per request (~4 k ops/s, 15× slower than valkey).
+            // 4fa4631 (v1.23 sprint) removed the rung entirely, fixing -c1
+            // but silently costing the foreseen −18~21 % on the 8-shard
+            // shape (`legacy_8sh_set` 9.98M → 7.6M single-commit step,
+            // measured 2026-07-04 — the "v1.22.x follow-up if a workload
+            // re-surfaces it" that never happened). The batch gate keeps
+            // both: -c1 traffic drains batches of 1 (< NAP_BATCH_MIN) and
+            // goes straight to the wake-aware park — its 15 µs steady
+            // state is untouched; the cross-shard owner sees large drains
+            // and earns the aggregation nap. Worst-case added latency for
+            // a lone request that lands right after a burst: one NAP_US,
+            // once (the `napped` flag forces park next).
+            // Full evidence chain:
+            // bench/PERF-DECOMP-2026-07-04-legacy8sh-owner-starvation.md.
             //
             // A non-empty backlog means a peer ring is full — keep
             // spinning to re-attempt the flush (nothing would wake us
             // when the peer drains).
             woke_from_park = false;
             let has_backlog = self.backlog.iter().any(|b| !b.is_empty());
-            if !io_work && !did_inbound && !has_backlog {
+            if !io_work && did_inbound == 0 && !has_backlog {
                 idle_spins = idle_spins.saturating_add(1);
                 if idle_spins >= URING_SPIN_LIMIT {
-                    self.uring_park(&mut ring, &mut park)?;
-                    woke_from_park = true;
+                    if !napped && last_inbound_batch >= NAP_BATCH_MIN {
+                        std::thread::sleep(Duration::from_micros(NAP_US));
+                        napped = true;
+                    } else {
+                        self.uring_park(&mut ring, &mut park)?;
+                        woke_from_park = true;
+                        napped = false;
+                        last_inbound_batch = 0;
+                    }
                 } else {
                     // E12: signal the CPU that we are in a spin-wait loop.
                     // Compiles to `PAUSE` on x86 / `YIELD` on ARM. Reduces
@@ -464,6 +494,10 @@ impl<C: Commands> Shard<C> {
                 }
             } else {
                 idle_spins = 0;
+                if did_inbound > 0 {
+                    last_inbound_batch = did_inbound;
+                    napped = false;
+                }
             }
         }
         // v1.25.x SAVE migration: drain bg persist completions before

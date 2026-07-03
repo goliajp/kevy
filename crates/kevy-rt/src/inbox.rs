@@ -167,7 +167,7 @@ impl<C: Commands> Shard<C> {
         if self.inbound_dirty[me].load(Ordering::Acquire) == 0 {
             return Ok(false);
         }
-        self.drain_inbound_core_slow::<true>()
+        Ok(self.drain_inbound_core_slow::<true>()? > 0)
     }
 
     /// Outlined-cold drain body — only called once the fast-path Acquire
@@ -182,7 +182,7 @@ impl<C: Commands> Shard<C> {
     #[inline(never)]
     pub(crate) fn drain_inbound_core_slow<const DIRECT_FLUSH: bool>(
         &mut self,
-    ) -> io::Result<bool> {
+    ) -> io::Result<usize> {
         // E8 / E15: callers already paid the Acquire load. We do the
         // `lock xchg` swap unconditionally here. AcqRel-on-swap
         // synchronises with the Release `fetch_or` in `send_to`; bits
@@ -194,9 +194,12 @@ impl<C: Commands> Shard<C> {
             // A peer raced — caller observed bit, but a concurrent
             // drainer already cleared it. Defensive (single-drainer per
             // shard today, so this branch is dead).
-            return Ok(false);
+            return Ok(0);
         }
-        let mut did = false;
+        // Count of messages processed — the reactor's nap rung uses the
+        // batch size as its aggregation signal (a RequestBatch counts
+        // its inner requests: that is the unit being aggregated).
+        let mut did: usize = 0;
         let mut mask = dirty;
         while mask != 0 {
             let src = mask.trailing_zeros() as usize;
@@ -205,7 +208,7 @@ impl<C: Commands> Shard<C> {
                 continue; // no self-ring (defensive — we never OR our own bit)
             }
             while let Some(msg) = self.inboxes[src].as_mut().expect("peer inbox").pop() {
-                did = true;
+                did += 1;
                 match msg {
                     Inbound::Request {
                         origin,
@@ -234,6 +237,8 @@ impl<C: Commands> Shard<C> {
                     // exec each locally, reply as one `ResponseBatch` to the
                     // origin.
                     Inbound::RequestBatch { origin, reqs } => {
+                        // Aggregation unit = inner requests, not envelopes.
+                        did += reqs.len().saturating_sub(1);
                         let mut resps = Vec::with_capacity(reqs.len());
                         self.aof_begin_group();
                         for (conn, seq, argv, proto, meta) in reqs {
@@ -254,6 +259,7 @@ impl<C: Commands> Shard<C> {
                     // touched conn once (dedup — pipelined replies share a
                     // conn).
                     Inbound::ResponseBatch(resps) => {
+                        did += resps.len().saturating_sub(1);
                         let mut to_flush: Vec<u64> = Vec::new();
                         for (conn, seq, part, husk) in resps {
                             self.argv_pool.put(husk);
