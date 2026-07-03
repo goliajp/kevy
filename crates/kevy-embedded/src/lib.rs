@@ -66,6 +66,9 @@ mod ops_p3;
 mod ops_pipeline;
 #[cfg(not(target_arch = "wasm32"))]
 mod ops_feed;
+mod ops_blocking;
+mod ops_hash_ttl;
+mod ops_snapshot_view;
 mod ops_zset_algebra;
 mod ops_zset_flags;
 mod op_manifest;
@@ -93,9 +96,10 @@ pub use config::{AppendFsync, Config, EvictionPolicy, TtlReaperMode};
 pub use info::KevyInfo;
 pub use metric::KevyMetric;
 pub use kevy_persist::RewriteStats;
-pub use kevy_store::{ExpireStats, ScoreBound, StoreError, ZAggregate, ZaddFlags, ZaddReport};
+pub use kevy_store::{ExpireStats, HExpireCode, HExpireCond, ScoreBound, StoreError, ZAggregate, ZaddFlags, ZaddReport};
 #[cfg(not(target_arch = "wasm32"))]
 pub use ops_feed::{Change, ChangeBatch, FeedError, PrefixInfo};
+pub use ops_snapshot_view::{Snapshot, SnapshotEntry};
 pub use pubsub::{PubsubFrame, Subscription};
 pub use store::{Store, WeakStore};
 

@@ -177,6 +177,28 @@ impl Store {
         Ok(all.into_iter().skip(offset).take(count).collect())
     }
 
+    /// v2.4 `zpopmin_below` — pop up to `count` lowest members with
+    /// score strictly `< below` (delayed-job "pop what's due").
+    /// AOF logs the effect (`ZREM` of the popped members).
+    pub fn zpopmin_below(
+        &self,
+        key: &[u8],
+        below: f64,
+        count: usize,
+    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+        ensure_writable(self)?;
+        let mut g = self.wshard(key);
+        let items = g.store.zpopmin_below(key, below, count).map_err(store_err)?;
+        if !items.is_empty() {
+            let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + items.len());
+            argv.push(b"ZREM");
+            argv.push(key);
+            argv.extend(items.iter().map(|(m, _)| m.as_slice()));
+            commit_write(&mut g, &argv)?;
+        }
+        Ok(items)
+    }
+
     /// `ZINCRBY key delta member` — atomic float increment of a member's
     /// score. Returns the post-increment score.
     pub fn zincrby(&self, key: &[u8], delta: f64, member: &[u8]) -> io::Result<f64> {

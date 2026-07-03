@@ -98,6 +98,12 @@ impl Store {
         key: &[u8],
         pairs: &[(&[u8], &[u8])],
     ) -> Result<usize, StoreError> {
+        self.purge_hash_ttl(key);
+        // v2.4: overwriting a field discards its TTL (Redis 7.4).
+        if !self.hfttl.is_empty() {
+            let fs: Vec<&[u8]> = pairs.iter().map(|(f, _)| *f).collect();
+            self.clear_hash_field_ttls(key, &fs);
+        }
         if pairs.is_empty() {
             return Ok(0);
         }
@@ -126,6 +132,11 @@ impl Store {
 
     /// `HSET` — returns the count of newly-added fields.
     pub fn hset(&mut self, key: &[u8], pairs: &[(Vec<u8>, Vec<u8>)]) -> Result<usize, StoreError> {
+        self.purge_hash_ttl(key);
+        if !self.hfttl.is_empty() {
+            let fs: Vec<&[u8]> = pairs.iter().map(|(f, _)| f.as_slice()).collect();
+            self.clear_hash_field_ttls(key, &fs);
+        }
         let borrowed: Vec<(&[u8], &[u8])> =
             pairs.iter().map(|(f, v)| (f.as_slice(), v.as_slice())).collect();
         self.hset_borrowed(key, &borrowed)
@@ -133,6 +144,7 @@ impl Store {
 
     /// `HSETNX` — set only if the field is absent; returns whether it was set.
     pub fn hsetnx(&mut self, key: &[u8], field: &[u8], val: &[u8]) -> Result<bool, StoreError> {
+        self.purge_hash_ttl(key);
         // Existing-field fast check via the encoding-aware reader.
         let exists = match self.live_entry(key) {
             None => false,
@@ -156,6 +168,7 @@ impl Store {
     }
 
     pub fn hget(&mut self, key: &[u8], field: &[u8]) -> Result<Option<&[u8]>, StoreError> {
+        self.purge_hash_ttl(key);
         match self.live_entry(key) {
             None => Ok(None),
             Some(e) => match &e.value {
@@ -167,6 +180,7 @@ impl Store {
     }
 
     pub fn hexists(&mut self, key: &[u8], field: &[u8]) -> Result<bool, StoreError> {
+        self.purge_hash_ttl(key);
         match self.live_entry(key) {
             None => Ok(false),
             Some(e) => match &e.value {
@@ -178,6 +192,7 @@ impl Store {
     }
 
     pub fn hlen(&mut self, key: &[u8]) -> Result<usize, StoreError> {
+        self.purge_hash_ttl(key);
         match self.live_entry(key) {
             None => Ok(0),
             Some(e) => match &e.value {
@@ -193,6 +208,7 @@ impl Store {
         key: &[u8],
         fields: &[Vec<u8>],
     ) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
+        self.purge_hash_ttl(key);
         let borrowed: Vec<&[u8]> = fields.iter().map(Vec::as_slice).collect();
         self.hmget_borrowed(key, &borrowed)
     }
@@ -203,6 +219,7 @@ impl Store {
         key: &[u8],
         fields: &[&[u8]],
     ) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
+        self.purge_hash_ttl(key);
         match self.live_entry(key) {
             None => Ok(fields.iter().map(|_| None).collect()),
             Some(e) => match &e.value {
@@ -218,6 +235,7 @@ impl Store {
 
     /// `HGETALL` — flat `[field, value, field, value, ...]`.
     pub fn hgetall(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
+        self.purge_hash_ttl(key);
         match self.hash_pairs(key)? {
             None => Ok(Vec::new()),
             Some(pairs) => {
@@ -232,6 +250,7 @@ impl Store {
     }
 
     pub fn hkeys(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
+        self.purge_hash_ttl(key);
         match self.live_entry(key) {
             None => Ok(Vec::new()),
             Some(e) => match &e.value {
@@ -243,6 +262,7 @@ impl Store {
     }
 
     pub fn hvals(&mut self, key: &[u8]) -> Result<Vec<Vec<u8>>, StoreError> {
+        self.purge_hash_ttl(key);
         match self.live_entry(key) {
             None => Ok(Vec::new()),
             Some(e) => match &e.value {
@@ -255,6 +275,7 @@ impl Store {
 
     /// `HDEL` — returns count removed; deletes the key if hash becomes empty.
     pub fn hdel(&mut self, key: &[u8], fields: &[Vec<u8>]) -> Result<usize, StoreError> {
+        self.purge_hash_ttl(key);
         let borrowed: Vec<&[u8]> = fields.iter().map(Vec::as_slice).collect();
         self.hdel_borrowed(key, &borrowed)
     }
@@ -265,6 +286,7 @@ impl Store {
         key: &[u8],
         fields: &[&[u8]],
     ) -> Result<usize, StoreError> {
+        self.purge_hash_ttl(key);
         let now = now_ns();
         if !self.reap(key, now) {
             return Ok(0);
@@ -318,6 +340,8 @@ impl Store {
         field: &[u8],
         delta: f64,
     ) -> Result<f64, StoreError> {
+        self.purge_hash_ttl(key);
+        self.clear_hash_field_ttls(key, &[field]);
         let (next, weight_delta) = {
             let h = self.hash_mut(key, true)?.expect("created");
             let cur = match h.get(field) {
@@ -344,6 +368,8 @@ impl Store {
 
     /// `HINCRBY` — preserves TTL; errors if the field isn't an integer.
     pub fn hincrby(&mut self, key: &[u8], field: &[u8], delta: i64) -> Result<i64, StoreError> {
+        self.purge_hash_ttl(key);
+        self.clear_hash_field_ttls(key, &[field]);
         let (next, weight_delta) = {
             let h = self.hash_mut(key, true)?.expect("created");
             let cur = match h.get(field) {

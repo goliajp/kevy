@@ -31,6 +31,30 @@ train, versions bump at ship time.
 - Batch-gated 200µs nap retained as the second ladder rung for the
   no-inflight idle shape (`NAP_BATCH_MIN` 4).
 
+### v2.4 — P4 flow round-out
+
+- **`ZPOPMIN.BELOW key below [count]`** (+ embedded `zpopmin_below`):
+  pop the due members of a delayed-job zset (score strictly below a
+  threshold) in one atomic call. Verbatim AOF on the server
+  (deterministic); embedded logs the `ZREM` effect.
+- **Embedded blocking pops** — `blpop` / `brpop` / `bzpopmin` with
+  optional timeout: a process-wide wake-generation condvar; writers
+  pay one Relaxed load while nobody blocks; recheck-after-wait closes
+  the lost-wakeup window.
+- **Public `Store::snapshot()`** — a consistent point-in-time view of
+  the whole keyspace (all shard locks taken in deterministic order for
+  the O(n)-shallow collection only); `each_prefix` / `keys_prefix`.
+  The FEEDRESYNC rebuild companion.
+- **Hash field TTLs (Redis 7.4)** — `HEXPIRE` / `HPEXPIRE` /
+  `HPEXPIREAT` / `HTTL` / `HPERSIST` with full `NX|XX|GT|LT`
+  conditions and per-field reply codes, server + embedded. Sidecar
+  storage (zero cost when unused), key-TTL discipline end-to-end:
+  lazy purge on access, reaper sweeps, `HSET` overwrite discards the
+  field's TTL, relative forms carry an absolute `HPEXPIREAT` AOF
+  follow-up (no replay re-anchoring — e2e-proven), snapshot format v6
+  `OP_HFTTL` records, AOF rewrite re-emits deadlines.
+- OP_TABLE +6 rows; parity suites green across all manifests.
+
 ### v2.3 — CDC / offset spine (P4)
 
 - **Change feed**: every applied write consumable as effect frames

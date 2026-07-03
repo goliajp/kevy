@@ -315,3 +315,170 @@ fn info_prefix_counts() {
     assert_eq!(info.expires, 1);
     assert_eq!(s.info_prefix(b"none:").keys, 0);
 }
+
+// ---- v2.4: zpopmin_below ---------------------------------------------------
+
+#[test]
+fn zpopmin_below_pops_due_jobs_and_replays() {
+    let dir = crate::store::tests::tmp_dir("zpb-reopen");
+    {
+        let s = Store::open(
+            Config::default().with_persist(&dir).with_ttl_reaper_manual(),
+        )
+        .unwrap();
+        s.zadd(b"jobs", &[(10.0, b"due1"), (20.0, b"due2"), (99.0, b"later")]).unwrap();
+        // strictly-below semantics: 20.0 is NOT < 20.0
+        let due = s.zpopmin_below(b"jobs", 20.0, 10).unwrap();
+        assert_eq!(due, vec![(b"due1".to_vec(), 10.0)]);
+        // pop the rest that are due before 100
+        let due = s.zpopmin_below(b"jobs", 100.0, 1).unwrap(); // count cap
+        assert_eq!(due[0].0, b"due2".to_vec());
+        assert_eq!(s.zcard(b"jobs").unwrap(), 1);
+        // empty/absent + wrongtype
+        assert!(s.zpopmin_below(b"missing", 5.0, 3).unwrap().is_empty());
+        s.set(b"str", b"v").unwrap();
+        assert!(s.zpopmin_below(b"str", 5.0, 3).is_err());
+    }
+    // ZREM effect replays
+    let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
+    assert_eq!(s2.zcard(b"jobs").unwrap(), 1);
+    assert_eq!(s2.zscore(b"jobs", b"later").unwrap(), Some(99.0));
+    drop(s2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- v2.4: blocking pops ---------------------------------------------------
+
+#[test]
+fn blpop_wakes_on_push_and_times_out() {
+    use std::time::{Duration, Instant};
+    let s = s();
+    // immediate hit (no blocking)
+    s.rpush(b"bq", &[b"ready"]).unwrap();
+    let hit = s.blpop(&[b"bq"], Some(Duration::from_millis(50))).unwrap();
+    assert_eq!(hit, Some((b"bq".to_vec(), b"ready".to_vec())));
+
+    // timeout on empty
+    let t0 = Instant::now();
+    let miss = s.blpop(&[b"bq"], Some(Duration::from_millis(80))).unwrap();
+    assert_eq!(miss, None);
+    assert!(t0.elapsed() >= Duration::from_millis(75), "waited the timeout");
+
+    // cross-thread wake: consumer parks, producer pushes after 60ms
+    let consumer = s.clone();
+    let h = std::thread::spawn(move || {
+        consumer.blpop(&[b"bq1", b"bq2"], Some(Duration::from_secs(5))).unwrap()
+    });
+    std::thread::sleep(Duration::from_millis(60));
+    s.rpush(b"bq2", &[b"pushed"]).unwrap();
+    let got = h.join().unwrap();
+    assert_eq!(got, Some((b"bq2".to_vec(), b"pushed".to_vec())));
+}
+
+#[test]
+fn bzpopmin_and_brpop_block_variants() {
+    use std::time::Duration;
+    let s = s();
+    let consumer = s.clone();
+    let h = std::thread::spawn(move || {
+        consumer.bzpopmin(&[b"bz"], Some(Duration::from_secs(5))).unwrap()
+    });
+    std::thread::sleep(Duration::from_millis(40));
+    s.zadd(b"bz", &[(7.0, b"m")]).unwrap();
+    assert_eq!(h.join().unwrap(), Some((b"bz".to_vec(), b"m".to_vec(), 7.0)));
+
+    s.rpush(b"br", &[b"a", b"b"]).unwrap();
+    let got = s.brpop(&[b"br"], None).unwrap();
+    assert_eq!(got, Some((b"br".to_vec(), b"b".to_vec()))); // tail end
+}
+
+// ---- v2.4: public snapshot view --------------------------------------------
+
+#[test]
+fn snapshot_view_is_point_in_time_and_prefix_scoped() {
+    let s = s();
+    for i in 0..10 {
+        s.set(format!("sv:{i}").as_bytes(), b"v").unwrap();
+    }
+    s.set(b"other:1", b"v").unwrap();
+    s.set_with_ttl(b"sv:0", b"v", std::time::Duration::from_secs(500)).unwrap();
+
+    let snap = s.snapshot();
+    // mutations AFTER the freeze are invisible in the view
+    s.set(b"sv:999", b"late").unwrap();
+    s.del(&[b"sv:1"]).unwrap();
+
+    let keys = snap.keys_prefix(b"sv:");
+    assert_eq!(keys.len(), 10, "10 sv: keys at freeze time");
+    assert!(keys.iter().any(|e| e.key == b"sv:1"), "deleted-after still in view");
+    assert!(!keys.iter().any(|e| e.key == b"sv:999"), "added-after not in view");
+    assert!(
+        keys.iter().find(|e| e.key == b"sv:0").unwrap().ttl_ms.is_some(),
+        "ttl carried"
+    );
+    assert_eq!(snap.keys_prefix(b"other:").len(), 1);
+    assert_eq!(snap.len(), 11);
+
+    // typed access via each_prefix
+    let mut string_count = 0;
+    snap.each_prefix(b"sv:", |_, v, _| {
+        if matches!(v, kevy_store::Value::Str(_) | kevy_store::Value::Int(_) | kevy_store::Value::ArcBulk(_)) {
+            string_count += 1;
+        }
+    });
+    assert_eq!(string_count, 10);
+}
+
+// ---- v2.4: hash field TTLs (embedded matrix) --------------------------------
+
+#[test]
+fn hash_field_ttl_full_matrix_with_reopen() {
+    use crate::HExpireCond;
+    use crate::config::AppendFsync;
+    let dir = crate::store::tests::tmp_dir("hfttl-reopen");
+    let far = kevy_store::now_unix_ms() + 200_000;
+    {
+        let s = Store::open(
+            Config::default()
+                .with_persist(&dir)
+                .with_ttl_reaper_manual()
+                .with_appendfsync(AppendFsync::Always),
+        )
+        .unwrap();
+        s.hset(b"h", &[(b"keep", b"1"), (b"ttl", b"2"), (b"soon", b"3")]).unwrap();
+        // absolute deadline via relative facade
+        let codes = s
+            .hexpire(b"h", &[b"ttl", b"missing"], std::time::Duration::from_secs(200), HExpireCond::Always)
+            .unwrap();
+        assert_eq!(codes, vec![1, -2]);
+        // immediate-past absolute → delete, code 2
+        assert_eq!(
+            s.hpexpire_at(b"h", &[b"soon"], 1, HExpireCond::Always).unwrap(),
+            vec![2]
+        );
+        assert!(!s.hexists(b"h", b"soon").unwrap());
+        // httl visible
+        let ttls = s.httl(b"h", &[b"ttl", b"keep"]).unwrap();
+        assert!(ttls[0] > 100_000);
+        assert_eq!(ttls[1], -1);
+        // persist round-trip for another field then re-set ttl
+        s.hpexpire_at(b"h", &[b"keep"], far, HExpireCond::Always).unwrap();
+        assert_eq!(s.hpersist(b"h", &[b"keep"]).unwrap(), vec![1]);
+    }
+    // AOF replay: ttl field still carries its deadline, keep does not
+    {
+        let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
+        let ttls = s2.httl(b"h", &[b"ttl", b"keep"]).unwrap();
+        assert!(ttls[0] > 0, "deadline survived replay: {ttls:?}");
+        assert_eq!(ttls[1], -1, "persisted field stays persisted");
+        // snapshot path: SAVE then reopen from the dump
+        s2.save_snapshot().unwrap();
+    }
+    {
+        let s3 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
+        let ttls = s3.httl(b"h", &[b"ttl"]).unwrap();
+        assert!(ttls[0] > 0, "deadline survived snapshot round-trip: {ttls:?}");
+        drop(s3);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
