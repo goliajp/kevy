@@ -28,6 +28,7 @@ kevy-rt = { path = "../kevy-rt", version = "2.0.0" }
 kevy-config = { path = "../kevy-config", version = "2.0.0" }
 kevy-persist = { path = "../kevy-persist", version = "2.0.0" }
 kevy-geo = { path = "../kevy-geo", version = "2.0.0" }
+kevy-index = { path = "../kevy-index", version = "2.0.0" }
 kevy-hash = { path = "../kevy-hash", version = "2.0.0" }
 # kevy-replicate: the server-as-replica runner (T1.29) needs
 # `ReplicaClient` / `ReplicaEvent` at runtime, not just for tests.

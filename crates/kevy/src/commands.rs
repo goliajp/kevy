@@ -208,7 +208,12 @@ impl Commands for KevyCommands {
         }
     }
 
+    fn on_write(&self, store: &mut Store, key: &[u8]) {
+        crate::index_runtime::on_write(store, key);
+    }
+
     fn on_shard_tick(&self, store: &mut Store) {
+        crate::index_runtime::on_tick(store);
         // Run Redis's `activeExpireCycle` per shard. `sample` controls the
         // batch size; up to 16 rounds per tick is well below Redis's 25 %
         // CPU budget at the default 10 Hz cadence. Cheap when no TTL'd

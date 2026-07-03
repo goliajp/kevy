@@ -301,6 +301,10 @@ impl<C: Commands> Shard<C> {
             && (idx as usize) < args.len()
         {
             self.store.bump_if_watched(&args[idx as usize]);
+            // v2.5: synchronous index maintenance (default no-op; the
+            // kevy impl gates on a process-wide catalog-empty atomic).
+            let key = args[idx as usize].to_vec();
+            self.commands.on_write(&mut self.store, &key);
         }
         // A9: AOF off is the default (--no-aof). cold-tag the AOF-enabled
         // branch so the predictor learns the off case + LLVM keeps the
