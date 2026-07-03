@@ -1,6 +1,7 @@
 {
-  "workspace_line_coverage_pct": 82.08,
+  "workspace_line_coverage_pct": 79.64,
   "recorded": "2026-07-03",
-  "recorded_on": "macOS aarch64, rustc 1.96.0, cargo-llvm-cov, --workspace --lib --tests",
-  "note": "ratchet: only raise via covgate.sh --update-baseline after a deliberate improvement"
+  "recorded_on": "ubuntu-latest CI (the enforcing platform), KEVY_IO_URING=0, cargo-llvm-cov --workspace --lib --tests",
+  "reference_macos": 82.08,
+  "note": "ratchet: only raise via covgate.sh --update-baseline after a deliberate improvement; Linux number differs from macOS because cfg(linux) reactor code is in the denominator"
 }
