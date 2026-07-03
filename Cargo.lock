@@ -532,6 +532,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-index"
+version = "2.1.0"
+
+[[package]]
 name = "kevy-lua"
 version = "2.1.0"
 dependencies = [
