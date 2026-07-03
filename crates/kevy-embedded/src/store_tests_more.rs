@@ -391,3 +391,40 @@ fn bzpopmin_and_brpop_block_variants() {
     let got = s.brpop(&[b"br"], None).unwrap();
     assert_eq!(got, Some((b"br".to_vec(), b"b".to_vec()))); // tail end
 }
+
+// ---- v2.4: public snapshot view --------------------------------------------
+
+#[test]
+fn snapshot_view_is_point_in_time_and_prefix_scoped() {
+    let s = s();
+    for i in 0..10 {
+        s.set(format!("sv:{i}").as_bytes(), b"v").unwrap();
+    }
+    s.set(b"other:1", b"v").unwrap();
+    s.set_with_ttl(b"sv:0", b"v", std::time::Duration::from_secs(500)).unwrap();
+
+    let snap = s.snapshot();
+    // mutations AFTER the freeze are invisible in the view
+    s.set(b"sv:999", b"late").unwrap();
+    s.del(&[b"sv:1"]).unwrap();
+
+    let keys = snap.keys_prefix(b"sv:");
+    assert_eq!(keys.len(), 10, "10 sv: keys at freeze time");
+    assert!(keys.iter().any(|e| e.key == b"sv:1"), "deleted-after still in view");
+    assert!(!keys.iter().any(|e| e.key == b"sv:999"), "added-after not in view");
+    assert!(
+        keys.iter().find(|e| e.key == b"sv:0").unwrap().ttl_ms.is_some(),
+        "ttl carried"
+    );
+    assert_eq!(snap.keys_prefix(b"other:").len(), 1);
+    assert_eq!(snap.len(), 11);
+
+    // typed access via each_prefix
+    let mut string_count = 0;
+    snap.each_prefix(b"sv:", |_, v, _| {
+        if matches!(v, kevy_store::Value::Str(_) | kevy_store::Value::Int(_) | kevy_store::Value::ArcBulk(_)) {
+            string_count += 1;
+        }
+    });
+    assert_eq!(string_count, 10);
+}
