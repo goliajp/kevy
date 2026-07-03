@@ -346,3 +346,48 @@ fn zpopmin_below_pops_due_jobs_and_replays() {
     drop(s2);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// ---- v2.4: blocking pops ---------------------------------------------------
+
+#[test]
+fn blpop_wakes_on_push_and_times_out() {
+    use std::time::{Duration, Instant};
+    let s = s();
+    // immediate hit (no blocking)
+    s.rpush(b"bq", &[b"ready"]).unwrap();
+    let hit = s.blpop(&[b"bq"], Some(Duration::from_millis(50))).unwrap();
+    assert_eq!(hit, Some((b"bq".to_vec(), b"ready".to_vec())));
+
+    // timeout on empty
+    let t0 = Instant::now();
+    let miss = s.blpop(&[b"bq"], Some(Duration::from_millis(80))).unwrap();
+    assert_eq!(miss, None);
+    assert!(t0.elapsed() >= Duration::from_millis(75), "waited the timeout");
+
+    // cross-thread wake: consumer parks, producer pushes after 60ms
+    let consumer = s.clone();
+    let h = std::thread::spawn(move || {
+        consumer.blpop(&[b"bq1", b"bq2"], Some(Duration::from_secs(5))).unwrap()
+    });
+    std::thread::sleep(Duration::from_millis(60));
+    s.rpush(b"bq2", &[b"pushed"]).unwrap();
+    let got = h.join().unwrap();
+    assert_eq!(got, Some((b"bq2".to_vec(), b"pushed".to_vec())));
+}
+
+#[test]
+fn bzpopmin_and_brpop_block_variants() {
+    use std::time::Duration;
+    let s = s();
+    let consumer = s.clone();
+    let h = std::thread::spawn(move || {
+        consumer.bzpopmin(&[b"bz"], Some(Duration::from_secs(5))).unwrap()
+    });
+    std::thread::sleep(Duration::from_millis(40));
+    s.zadd(b"bz", &[(7.0, b"m")]).unwrap();
+    assert_eq!(h.join().unwrap(), Some((b"bz".to_vec(), b"m".to_vec(), 7.0)));
+
+    s.rpush(b"br", &[b"a", b"b"]).unwrap();
+    let got = s.brpop(&[b"br"], None).unwrap();
+    assert_eq!(got, Some((b"br".to_vec(), b"b".to_vec()))); // tail end
+}

@@ -54,6 +54,9 @@ pub struct Store {
     /// the write side. `None` = feed off (or wasm).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) feed: Option<std::sync::Arc<Mutex<kevy_replicate::feed::FeedSource>>>,
+    /// v2.4 blocking-pop wake channel (always present; writers pay one
+    /// Relaxed load while nobody blocks).
+    pub(crate) blocker: Arc<crate::ops_blocking::Blocker>,
 }
 
 /// Weak handle to a `Store` — does not keep the underlying keyspace alive.
@@ -67,6 +70,7 @@ pub struct WeakStore {
     config: Config,
     #[cfg(not(target_arch = "wasm32"))]
     feed_weak: Option<std::sync::Weak<Mutex<kevy_replicate::feed::FeedSource>>>,
+    blocker_weak: Weak<crate::ops_blocking::Blocker>,
 }
 
 impl WeakStore {
@@ -79,6 +83,7 @@ impl WeakStore {
             config: self.config.clone(),
             #[cfg(not(target_arch = "wasm32"))]
             feed: self.feed_weak.as_ref().and_then(std::sync::Weak::upgrade),
+            blocker: self.blocker_weak.upgrade()?,
         })
     }
 }
@@ -100,6 +105,8 @@ pub(crate) struct Inner {
     /// so `commit_write` pushes effects inline. `None` = feed off.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) feed: Option<std::sync::Arc<Mutex<kevy_replicate::feed::FeedSource>>>,
+    /// v2.4 blocking-pop wake channel clone (see `Store::blocker`).
+    pub(crate) blocker: Option<Arc<crate::ops_blocking::Blocker>>,
 }
 
 impl Inner {
@@ -112,6 +119,7 @@ impl Inner {
             writer_source: None,
             #[cfg(not(target_arch = "wasm32"))]
             feed: None,
+            blocker: None,
         }
     }
 }
@@ -192,6 +200,11 @@ impl Store {
                 g.feed = Some(f.clone());
             }
         }
+        let blocker = Arc::new(crate::ops_blocking::Blocker::new());
+        for shard in shards.iter() {
+            let mut g = lock_write(shard);
+            g.blocker = Some(blocker.clone());
+        }
         let guard = Arc::new(DropGuard {
             reaper_stop,
             reaper_join: Mutex::new(reaper_join),
@@ -212,6 +225,7 @@ impl Store {
             config,
             #[cfg(not(target_arch = "wasm32"))]
             feed,
+            blocker,
         })
     }
 
@@ -291,6 +305,7 @@ impl Store {
             config: self.config.clone(),
             #[cfg(not(target_arch = "wasm32"))]
             feed_weak: self.feed.as_ref().map(Arc::downgrade),
+            blocker_weak: Arc::downgrade(&self.blocker),
         }
     }
 

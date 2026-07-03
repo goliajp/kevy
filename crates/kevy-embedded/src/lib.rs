@@ -66,6 +66,7 @@ mod ops_p3;
 mod ops_pipeline;
 #[cfg(not(target_arch = "wasm32"))]
 mod ops_feed;
+mod ops_blocking;
 mod ops_zset_algebra;
 mod ops_zset_flags;
 mod op_manifest;
