@@ -340,3 +340,11 @@ impl Store {
         Ok(r)
     }
 }
+
+/// Parity manifest (v2.1): command names `AtomicCtx` implements.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const ATOMIC_OPS: &[&str] = &[
+    "SET", "GET", "INCR", "INCRBY", "HSET", "HGET", "HINCRBY", "ZADD",
+    "ZINCRBY", "ZSCORE", "DEL", "EXISTS", "HDEL", "HGETALL", "HMGET",
+    "HEXISTS", "SADD", "SREM", "LPUSH", "RPUSH", "ZREM", "ZCARD",
+];

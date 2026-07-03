@@ -65,6 +65,8 @@ mod ops_p2;
 mod ops_p3;
 mod ops_pipeline;
 mod ops_zset_flags;
+mod op_manifest;
+mod store_glue;
 mod ops_scan;
 pub use ops_atomic::AtomicCtx;
 pub use ops_atomic_all::AtomicAllShards;

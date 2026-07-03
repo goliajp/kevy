@@ -458,3 +458,17 @@ mod tests_zadd_flags {
         let _ = Cow::Borrowed(&b""[..]); // keep Cow import parity with sibling mod
     }
 }
+
+/// Parity manifest (v2.1): every verb `apply` has an arm for. The
+/// v2.0.21 invariant lives in the ops_table cross-check: any verb an
+/// embedded facade logs MUST appear here.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const REPLAY_VERBS: &[&str] = &[
+    "SET", "DEL", "INCR", "DECR", "INCRBY", "DECRBY", "INCRBYFLOAT",
+    "APPEND", "SETBIT", "SETRANGE", "GETSET", "GETDEL", "EXPIRE",
+    "PEXPIRE", "EXPIREAT", "PEXPIREAT", "PERSIST", "FLUSHDB",
+    "FLUSHALL", "HSET", "HDEL", "HINCRBY", "HINCRBYFLOAT", "HSETNX",
+    "RPUSH", "LPUSH", "LPOP", "RPOP", "LSET", "LREM", "LTRIM",
+    "LINSERT", "RENAME", "RENAMENX", "SADD", "SREM", "SPOP", "ZADD",
+    "ZREM", "ZINCRBY", "ZPOPMIN", "ZREMRANGEBYRANK", "ZREMRANGEBYSCORE",
+];
