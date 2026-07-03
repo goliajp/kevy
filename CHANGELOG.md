@@ -4,9 +4,15 @@ All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
 
-## [v2.0.21] — 2026-07-03 — **HOTFIX: `kevy-embedded` 1.15.1 — AOF replay verb coverage (silent data loss on reopen)**
+## [v2.0.21] — 2026-07-03 — **HOTFIX ×2: embedded AOF replay verb coverage (data loss on reopen) + string-op Int/ArcBulk WRONGTYPE (compat divergence)**
 
-**Theme**: emergency data-integrity fix on the embedded persistence path. Found by the v2.1 op-surface sweep (op × surface matrix) on day one of the v3 arc.
+**Theme**: two shipped data-integrity bugs fixed, both found by the v3-arc day-one audits (op-surface sweep + master-CI triage).
+
+### Fix 2 — `kevy-store`: GETDEL / GETSET / INCRBYFLOAT / APPEND rejected `Value::Int` / `Value::ArcBulk` encodings
+
+These four RMW ops carried pre-L2 (2026-06-21) `Value::Str`-only match arms. Any value stored as `Value::Int` (canonical i64 ASCII — `SET x 5`) or `Value::ArcBulk` (> BULK_THRESHOLD) got a spurious `-WRONGTYPE` where Redis/valkey succeed. This was the compat3 CI divergence (kevy 133/135 vs valkey — the `MSET → GETDEL` pair) and had master CI red since the L2 encoding landed. All four verified over the wire pre/post-fix; GETSET's new value now routes through the canonical SET encoding rules. Affects server and embedded equally (shared `kevy-store`). New `tests_string_encoding.rs` guard (4/6 red before, 6/6 green after); `string.rs` split to `string.rs` + `string_rmw.rs` (500-LOC rule).
+
+### Fix 1 — `kevy-embedded` 1.15.1: AOF replay verb coverage
 
 ### The bug
 
