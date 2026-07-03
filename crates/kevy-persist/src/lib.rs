@@ -37,6 +37,7 @@
 #![forbid(unsafe_code)]
 
 mod aof;
+pub mod feed_meta;
 pub mod layout;
 mod replay;
 pub mod reshard;

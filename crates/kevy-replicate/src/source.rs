@@ -69,6 +69,11 @@ impl ReplicationSource {
         }
     }
 
+    /// The byte budget this source was created with.
+    pub fn max_bytes(&self) -> usize {
+        self.max_bytes
+    }
+
     /// Next offset this source would assign. Equal to one past the
     /// last assigned offset; equals `0` for a fresh source.
     pub fn next_offset(&self) -> u64 {
