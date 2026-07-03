@@ -177,6 +177,39 @@ impl Segment {
         self.back.get(key)
     }
 
+    /// Ordered streaming scan over the WHOLE segment: ascending (or
+    /// descending) `(value, key)` order, resuming exclusively past
+    /// `after`. The virtual-view pager drives this and probes
+    /// membership per candidate — O(limit × selectivity⁻¹) instead of
+    /// materializing the full member set.
+    pub fn scan<'s>(
+        &'s self,
+        after: Option<&Cursor>,
+        desc: bool,
+    ) -> Box<dyn Iterator<Item = (&'s IndexValue, &'s [u8])> + 's> {
+        match (after, desc) {
+            (None, false) => Box::new(self.tree.keys().map(|(v, k)| (v, k.as_slice()))),
+            (None, true) => Box::new(self.tree.keys().rev().map(|(v, k)| (v, k.as_slice()))),
+            (Some(c), false) => Box::new(
+                self.tree
+                    .range((
+                        Bound::Excluded((c.value.clone(), c.key.clone())),
+                        Bound::Unbounded,
+                    ))
+                    .map(|((v, k), ())| (v, k.as_slice())),
+            ),
+            (Some(c), true) => Box::new(
+                self.tree
+                    .range((
+                        Bound::Unbounded,
+                        Bound::Excluded((c.value.clone(), c.key.clone())),
+                    ))
+                    .rev()
+                    .map(|((v, k), ())| (v, k.as_slice())),
+            ),
+        }
+    }
+
     /// Visit every `(key, value)` entry (verify / audit walks).
     pub fn each_entry<F: FnMut(&[u8], &IndexValue)>(&self, mut f: F) {
         for (k, v) in &self.back {

@@ -180,6 +180,22 @@ pub fn key_in_tree<'a>(
     }
 }
 
+/// [`key_in_tree`] variant over PRE-FETCHED per-index values — the
+/// write hook probes each referenced index ONCE per key and evaluates
+/// every view against the same small table (bounds compares only; no
+/// per-view re-hashing).
+pub fn key_in_tree_vals(
+    tree: &Tree,
+    vals: &impl Fn(&[u8]) -> Option<IndexValue>,
+) -> bool {
+    match tree {
+        Tree::Leaf(l) => vals(&l.index).is_some_and(|v| v >= l.min && v <= l.max),
+        Tree::And(a, b) => key_in_tree_vals(a, vals) && key_in_tree_vals(b, vals),
+        Tree::Or(a, b) => key_in_tree_vals(a, vals) || key_in_tree_vals(b, vals),
+        Tree::Diff(a, b) => key_in_tree_vals(a, vals) && !key_in_tree_vals(b, vals),
+    }
+}
+
 /// One shard's materialized result set: ordered `(order_value, key)`
 /// members with the bounded top-K discipline (keep `K + Δ` where
 /// `Δ = K/4`; underflow requests a local rebuild from the base
@@ -216,6 +232,26 @@ impl MaterializedSet {
     /// `true` if the set UNDERFLOWED below K after a removal (the
     /// caller must schedule a local rebuild).
     pub fn apply(&mut self, key: &[u8], member: bool, order: Option<IndexValue>) -> bool {
+        // Bounded fast path: a NON-member of a full top-K set whose
+        // value is worse than the current worst can neither enter nor
+        // change anything — one comparison, no tree ops, no allocs.
+        // This is the write-tax fast path for hot-list views (most
+        // writes touch rows outside the top K).
+        if self.top_k != 0
+            && member
+            && !self.back.contains_key(key)
+            && self.set.len() >= self.cap()
+            && let Some(v) = &order
+        {
+            let enters = if self.desc {
+                self.set.iter().next().is_some_and(|(worst, _)| v > worst)
+            } else {
+                self.set.iter().next_back().is_some_and(|(worst, _)| v < worst)
+            };
+            if !enters {
+                return false;
+            }
+        }
         if let Some(old) = self.back.remove(key) {
             self.set.remove(&(old, key.to_vec()));
         }

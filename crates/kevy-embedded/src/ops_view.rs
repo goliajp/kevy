@@ -148,18 +148,23 @@ impl Store {
             match &vs.mat {
                 Some(m) => all.extend(m.page(after, limit, vs.spec.desc)),
                 None => {
-                    let mut rows = eval_shard(&vs.spec, &inner.idx_segs);
-                    rows.sort();
-                    if vs.spec.desc {
-                        rows.reverse();
-                        if let Some(c) = after {
-                            rows.retain(|r| r < c);
+                    // Order-driven streaming (same clamp rationale as
+                    // the server pager).
+                    let r = resolver(&inner.idx_segs);
+                    if let Some(order_seg) = r(&vs.spec.order_by) {
+                        let cursor = after
+                            .map(|(v, k)| kevy_index::Cursor { value: v.clone(), key: k.clone() });
+                        let mut got = 0usize;
+                        for (v, k) in order_seg.scan(cursor.as_ref(), vs.spec.desc) {
+                            if key_in_tree(&vs.spec.tree, k, &&r) {
+                                all.push((v.clone(), k.to_vec()));
+                                got += 1;
+                                if got == limit {
+                                    break;
+                                }
+                            }
                         }
-                    } else if let Some(c) = after {
-                        rows.retain(|r| r > c);
                     }
-                    rows.truncate(limit);
-                    all.extend(rows);
                 }
             }
         }
