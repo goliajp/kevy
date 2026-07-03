@@ -54,7 +54,9 @@ matters to your workload.
 
 ## Sizing
 
-`bytes ≈ Σ_token (token_len + 48) + postings × 24 + docs × 32`,
+`bytes ≈ Σ_token (token_len + 48) + postings × 64 + Σ_doc (key_len +
+text_len + 72)` (docs keep their original text so updates remove
+exactly their own tokens),
 reported live by `IDX.VERIFY` / `IDX.LIST` (entries/bytes/postings/
 tokens for text kinds). `bench/textgate.sh` gates MATCH p95 < 20ms @
 1M mixed-script docs and the formula against real RSS growth.
