@@ -164,3 +164,58 @@ slots themselves cannot cost 4%.
    probe each.
 3. Fix design once both steps are pinned; joint perfgate (legacy n>3
    + pinned angles must hold +19%).
+
+## Round 3 (same day) — step-2 pinned to 4fa4631; two fix designs falsified
+
+### Sweep 2 (v1.23 sprint hot commits, 2 instances each)
+
+| ref | instances |
+|---|---|
+| **4fa4631^ (anchor)** | **9,973,405 · 9,990,138 — full speed** |
+| 4fa4631 (nap-rung removal) | 7,247,252 · 7,973,422 |
+| ce28b92 D1+D2 | 8,248,556 · 8,544,574 |
+| b71f788 D3 | 8,249,691 · 7,983,004 |
+| 341791d D5-infra | 7,715,058 · 7,732,956 |
+| acca152 E8 | 7,715,058 · 7,970,244 |
+| 36d06f1 E9 | 7,975,542 · 7,976,602 |
+| 17ccdbc E10 | 7,979,784 · 7,707,129 |
+
+**Step 2 = 4fa4631, single-commit -20~27%** — exactly the commit's own
+foreseen "−18~21 % 8-shard throughput … revisited as a v1.22.x
+follow-up if a workload re-surfaces it" (the follow-up never
+happened). Later sprint commits recover partially (~8.5M band).
+
+### Phase B round 1 — falsified designs (with telemetry)
+
+1. **Batch-gated nap** (nap 200 µs once per idle episode iff last
+   inbound drain ≥ 4 msgs; -c1-safe by construction): implemented on
+   `feature/perf-legacy8sh-nap-rung`, correctness green (kevy-rt 38 +
+   blocking_cross_shard 8/8), **no throughput effect** — [8.86 · 8.26
+   · 8.55]M, same band as unfixed. Diag telemetry shows the rung DOES
+   fire (~50% of ladder exits nap, avg observed batch 650–1224 on
+   origin shards) — the mechanism fires, the benefit doesn't come.
+2. **Exact-old-ladder replica** (unconditional nap before park):
+   **also no effect** — 8.88M.
+
+**Conclusion: the old ladder's benefit is not reproducible by
+re-adding the nap to v2.x code.** The -20% loss at 4fa4631 and the
+inverse gain do not commute across the 20 releases in between — the
+nap's aggregation benefit depended on the OLD era's cross-shard wake
+topology, which the E-series (E8 acquire fast path, E10 inlining,
+E15 outline) and D-series (bitmap open-loop paths) have since
+restructured.
+
+### Next thread (the real Phase B aperture)
+
+Diff the cross-shard **wake topology** old vs new end-to-end:
+`send_to` (similar in both: deferred `pending_wakes` / dirty-bit),
+**`flush_wakes`** (where waker-pipe writes actually happen — cost,
+批量, parked-gating), `parked[]` semantics, and who wakes whom how
+often per second on this shape (add wake-count diag both eras).
+Quantify: waker-pipe writes/s, wakes consumed/s, avg drain batch at
+owner + origins, old vs new. The owner's 12% halt deficit must map to
+a concrete wait-for-signal gap.
+
+Branch `feature/perf-legacy8sh-nap-rung` holds the falsified
+experiments + diag (NOT for merge as-is; telemetry eprintln must be
+removed or feature-gated before any land).
