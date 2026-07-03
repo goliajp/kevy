@@ -107,8 +107,8 @@ fn cluster_peer_formation_survives_node_death() {
     eprintln!("cluster_peer: node 0 SIGKILL'd");
     std::thread::sleep(Duration::from_millis(500));
 
-    for i in 1..3 {
-        let port = ports[i].0;
+    for (i, port_pair) in ports.iter().enumerate().take(3).skip(1) {
+        let port = port_pair.0;
         let mut s = TcpStream::connect(format!("127.0.0.1:{port}"))
             .unwrap_or_else(|e| panic!("post-kill PING conn to node{i} failed: {e}"));
         let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
