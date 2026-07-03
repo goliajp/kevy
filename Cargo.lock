@@ -434,6 +434,7 @@ dependencies = [
  "kevy-scope",
  "kevy-store",
  "kevy-sys",
+ "kevy-text",
 ]
 
 [[package]]
@@ -514,6 +515,7 @@ dependencies = [
  "kevy",
  "kevy-client",
  "kevy-hash",
+ "kevy-index",
  "kevy-persist",
  "kevy-replicate",
  "kevy-resp",
@@ -641,6 +643,10 @@ dependencies = [
 
 [[package]]
 name = "kevy-sys"
+version = "2.1.0"
+
+[[package]]
+name = "kevy-text"
 version = "2.1.0"
 
 [[package]]

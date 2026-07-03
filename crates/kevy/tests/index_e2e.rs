@@ -298,7 +298,7 @@ fn text_kind_match_bm25() {
     assert!(s.contains("doc:3"), "{s}");
     let r = cmd(&mut c, &[b"IDX.QUERY", b"d_body", b"MATCH", "検索".as_bytes(), b"LIMIT", b"10"]);
     let s = String::from_utf8_lossy(&r);
-    assert!(s.contains("doc:5") && s.contains("doc:3") == false, "{s}");
+    assert!(s.contains("doc:5") && !s.contains("doc:3"), "{s}");
 
     // live update re-indexes; delete drops.
     cmd(&mut c, &[b"HSET", b"doc:4", b"body", b"now about rust too"]);
