@@ -238,8 +238,27 @@ impl MaterializedSet {
         }
     }
 
-    /// Ordered page (ascending; the runtime reverses for DESC).
-    pub fn page(&self, after: Option<&(IndexValue, Vec<u8>)>, limit: usize) -> Vec<(IndexValue, Vec<u8>)> {
+    /// Ordered page. `desc = false`: ascending from just past `after`;
+    /// `desc = true`: DESCENDING from just below `after` (a DESC view
+    /// must take each shard's LARGEST members — taking the ascending
+    /// head and reversing at the merge yields the wrong member set).
+    pub fn page(
+        &self,
+        after: Option<&(IndexValue, Vec<u8>)>,
+        limit: usize,
+        desc: bool,
+    ) -> Vec<(IndexValue, Vec<u8>)> {
+        if desc {
+            let iter: Box<dyn Iterator<Item = &(IndexValue, Vec<u8>)>> = match after {
+                Some(c) => Box::new(
+                    self.set
+                        .range((std::ops::Bound::Unbounded, std::ops::Bound::Excluded(c.clone())))
+                        .rev(),
+                ),
+                None => Box::new(self.set.iter().rev()),
+            };
+            return iter.take(limit).cloned().collect();
+        }
         let iter: Box<dyn Iterator<Item = &(IndexValue, Vec<u8>)>> = match after {
             Some(c) => Box::new(self.set.range((
                 std::ops::Bound::Excluded(c.clone()),
@@ -364,7 +383,7 @@ mod tests {
             assert!(!under);
         }
         assert_eq!(m.len(), 5, "bounded at K+Δ");
-        let page = m.page(None, 10);
+        let page = m.page(None, 10, false);
         assert_eq!(page[0].1, b"k0".to_vec(), "best kept");
         assert_eq!(page.last().unwrap().1, b"k4".to_vec(), "worst evicted");
 

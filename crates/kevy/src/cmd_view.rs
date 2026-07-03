@@ -199,7 +199,53 @@ pub(crate) fn extension_op(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     if verb.eq_ignore_ascii_case(b"VIEW.EXPLAIN") {
         return op_explain(store, argv);
     }
+    if verb.eq_ignore_ascii_case(b"VIEW.HYDRATE") {
+        return op_hydrate(store, argv);
+    }
     vec![ST_NOINDEX]
+}
+
+/// Phase-2 per-shard: `argv = [verb, cursor, nfields, f…, (member,
+/// order, target)*]` — read `f…` from every TARGET this shard owns.
+/// Chunk: `(row_idx: u32, (flen|MAX, bytes)*)*`.
+fn op_hydrate(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+    let Some(nf) = argv
+        .get(2)
+        .and_then(|b| b.get(..4))
+        .map(|b| u32::from_le_bytes(b.try_into().expect("4 bytes")) as usize)
+    else {
+        return vec![crate::cmd_index_query::ST_BADARGS];
+    };
+    let fields = &argv[3..3 + nf];
+    let rows = &argv[3 + nf..];
+    // No shard-identity check needed: each shard's store holds only
+    // its own keys, so "target present here" IS ownership. Missing
+    // targets are nobody's row — the reduce fills them with nils
+    // (RFC: target missing = nil).
+    let mut chunk = vec![ST_OK];
+    let mut body = Vec::new();
+    let mut hits = 0u32;
+    for (row_idx, row) in rows.chunks(3).enumerate() {
+        let [_member, _order, target] = row else { break };
+        if store.exists(&[target.to_vec()]) == 0 {
+            continue;
+        }
+        hits += 1;
+        body.extend_from_slice(&(row_idx as u32).to_le_bytes());
+        for f in fields {
+            match store.hget(target, f) {
+                Ok(Some(v)) => {
+                    let v = v.to_vec();
+                    body.extend_from_slice(&(v.len() as u32).to_le_bytes());
+                    body.extend_from_slice(&v);
+                }
+                _ => body.extend_from_slice(&u32::MAX.to_le_bytes()),
+            }
+        }
+    }
+    chunk.extend_from_slice(&hits.to_le_bytes());
+    chunk.extend_from_slice(&body);
+    chunk
 }
 
 fn op_query(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
@@ -264,11 +310,13 @@ fn op_explain(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     chunk
 }
 
-/// `VIEW.QUERY <name> [LIMIT n] [CURSOR c]` (FIELDS/VIA = step 3).
+/// `VIEW.QUERY <name> [LIMIT n] [CURSOR c] [FIELDS f…]` — FIELDS
+/// requires the view to declare VIA (targets are template-derived).
 pub(crate) struct QueryArgs {
     pub name: Vec<u8>,
     pub limit: usize,
     pub after: Option<(IndexValue, Vec<u8>)>,
+    pub fields: Vec<Vec<u8>>,
 }
 
 impl QueryArgs {
@@ -276,6 +324,7 @@ impl QueryArgs {
         let name = argv.get(1)?.clone();
         let mut limit = 100usize;
         let mut after = None;
+        let mut fields = Vec::new();
         let mut i = 2;
         while i < argv.len() {
             let t = &argv[i];
@@ -289,11 +338,17 @@ impl QueryArgs {
                     after.as_ref()?;
                 }
                 i += 2;
+            } else if t.eq_ignore_ascii_case(b"FIELDS") {
+                fields = argv[i + 1..].to_vec();
+                if fields.is_empty() {
+                    return None;
+                }
+                break;
             } else {
                 return None;
             }
         }
-        Some(QueryArgs { name, limit: limit.clamp(1, 10_000), after })
+        Some(QueryArgs { name, limit: limit.clamp(1, 10_000), after, fields })
     }
 }
 
@@ -326,6 +381,9 @@ pub(crate) fn extension_reduce(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8
         out.extend_from_slice(b"+OK\r\n");
         return out;
     }
+    if verb.eq_ignore_ascii_case(b"VIEW.HYDRATE") {
+        return reduce_hydrate(argv, &chunks);
+    }
     if verb.eq_ignore_ascii_case(b"VIEW.LIST") || verb.eq_ignore_ascii_case(b"VIEW.VERIFY") {
         return reduce_stats(argv, &chunks);
     }
@@ -341,9 +399,8 @@ fn reduce_query(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
         encode_error(&mut out, "ERR bad VIEW arguments");
         return out;
     };
-    let desc = view_runtime::catalog()
-        .and_then(|c| c.get(&q.name).map(|s| s.desc))
-        .unwrap_or(false);
+    let spec = view_runtime::catalog().and_then(|c| c.get(&q.name).cloned());
+    let desc = spec.as_ref().is_some_and(|s| s.desc);
     let mut all: Vec<(IndexValue, Vec<u8>)> = Vec::new();
     for c in &chunks {
         let mut pos = 1usize;
@@ -351,7 +408,7 @@ fn reduce_query(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
         for _ in 0..n {
             let Some(key) = crate::cmd_index_reduce::read_kbytes_at(c, &mut pos) else { break };
             let Some(v) = crate::cmd_index_query::decode_value(c, &mut pos) else { break };
-            pos += 1; // hydration count (0 until step 3)
+            pos += 1; // per-shard hydration count is always 0 here
             all.push((v, key));
         }
     }
@@ -367,6 +424,30 @@ fn reduce_query(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
     } else {
         b"0".to_vec()
     };
+    // FIELDS + VIA: phase 2 — derive target keys via the template and
+    // continue with an internal hydration fan-out (the continuation
+    // argv carries the full phase-1 result, stateless).
+    if !q.fields.is_empty() {
+        let Some(via) = spec.as_ref().and_then(|s| s.via.clone()) else {
+            encode_error(&mut out, "ERR FIELDS requires the view to declare VIA");
+            return out;
+        };
+        let mut argv2: Vec<Vec<u8>> = vec![b"VIEW.HYDRATE".to_vec(), next.clone()];
+        argv2.push((q.fields.len() as u32).to_le_bytes().to_vec());
+        argv2.extend(q.fields.iter().cloned());
+        for (v, k) in &all {
+            argv2.push(k.clone());
+            argv2.push(crate::cmd_index_reduce::value_repr_pub(v));
+            argv2.push(expand_via(&via, k));
+        }
+        let mut cont = vec![0u8];
+        cont.extend_from_slice(&(argv2.len() as u32).to_le_bytes());
+        for item in &argv2 {
+            cont.extend_from_slice(&(item.len() as u32).to_le_bytes());
+            cont.extend_from_slice(item);
+        }
+        return cont;
+    }
     encode_array_len(&mut out, 2);
     encode_bulk(&mut out, &next);
     encode_array_len(&mut out, (all.len() * 2) as i64);
@@ -375,6 +456,32 @@ fn reduce_query(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
         encode_bulk(&mut out, &crate::cmd_index_reduce::value_repr_pub(v));
     }
     out
+}
+
+/// Expand a VIA template: `{key}` = the member key, `{key.N}` = the
+/// member key's N-th ':'-separated segment (missing segment = empty).
+fn expand_via(tpl: &[u8], key: &[u8]) -> Vec<u8> {
+    let t = String::from_utf8_lossy(tpl);
+    let k = String::from_utf8_lossy(key);
+    let mut out = String::with_capacity(t.len() + k.len());
+    let mut rest = t.as_ref();
+    while let Some(start) = rest.find('{') {
+        out.push_str(&rest[..start]);
+        let Some(end) = rest[start..].find('}') else {
+            out.push_str(&rest[start..]);
+            rest = "";
+            break;
+        };
+        let ph = &rest[start + 1..start + end];
+        if ph == "key" {
+            out.push_str(&k);
+        } else if let Some(n) = ph.strip_prefix("key.").and_then(|s| s.parse::<usize>().ok()) {
+            out.push_str(k.split(':').nth(n).unwrap_or(""));
+        }
+        rest = &rest[start + end + 1..];
+    }
+    out.push_str(rest);
+    out.into_bytes()
 }
 
 fn reduce_stats(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
@@ -491,4 +598,64 @@ fn render_tree(t: &Tree, out: &mut String) {
             out.push(')');
         }
     }
+}
+
+/// Phase-2 reduce: argv carries the phase-1 result (cursor + fields +
+/// (member, order, target) rows); chunks carry per-target field
+/// values from the owning shards. Reply = the final hydrated rows.
+fn reduce_hydrate(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let cursor = argv.get(1).cloned().unwrap_or_else(|| b"0".to_vec());
+    let nf = argv
+        .get(2)
+        .and_then(|b| b.get(..4))
+        .map(|b| u32::from_le_bytes(b.try_into().expect("4 bytes")) as usize)
+        .unwrap_or(0);
+    let fields: Vec<&[u8]> = argv[3..3 + nf].iter().map(Vec::as_slice).collect();
+    let rows: Vec<&[Vec<u8>]> = argv[3 + nf..].chunks(3).collect();
+    // row_idx → field values
+    let mut hydrated: Vec<Option<Vec<Option<Vec<u8>>>>> = vec![None; rows.len()];
+    for c in chunks {
+        let Some(hits) = c.get(1..5).map(|b| u32::from_le_bytes(b.try_into().expect("4"))) else {
+            continue;
+        };
+        let mut pos = 5usize;
+        for _ in 0..hits {
+            let Some(idx) = c.get(pos..pos + 4).map(|b| u32::from_le_bytes(b.try_into().expect("4")) as usize) else { break };
+            pos += 4;
+            let mut vals = Vec::with_capacity(nf);
+            for _ in 0..nf {
+                let Some(len) = c.get(pos..pos + 4).map(|b| u32::from_le_bytes(b.try_into().expect("4"))) else { break };
+                pos += 4;
+                if len == u32::MAX {
+                    vals.push(None);
+                } else {
+                    let Some(v) = c.get(pos..pos + len as usize) else { break };
+                    vals.push(Some(v.to_vec()));
+                    pos += len as usize;
+                }
+            }
+            if idx < hydrated.len() {
+                hydrated[idx] = Some(vals);
+            }
+        }
+    }
+    encode_array_len(&mut out, 2);
+    encode_bulk(&mut out, &cursor);
+    encode_array_len(&mut out, rows.len() as i64);
+    for (i, row) in rows.iter().enumerate() {
+        let (member, order) = (&row[0], &row[1]);
+        encode_array_len(&mut out, (2 + fields.len() * 2) as i64);
+        encode_bulk(&mut out, member);
+        encode_bulk(&mut out, order);
+        let vals = hydrated[i].clone().unwrap_or_else(|| vec![None; nf]);
+        for (f, v) in fields.iter().zip(vals.iter().chain(std::iter::repeat(&None))) {
+            encode_bulk(&mut out, f);
+            match v {
+                Some(b) => encode_bulk(&mut out, b),
+                None => out.extend_from_slice(b"$-1\r\n"),
+            }
+        }
+    }
+    out
 }

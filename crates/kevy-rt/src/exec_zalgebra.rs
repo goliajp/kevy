@@ -97,6 +97,22 @@ impl<C: Commands> Shard<C> {
         }
     }
 
+    /// v2.6: re-arm the slot for a continuation phase and fan the new
+    /// argv to every shard (stateless two-phase — see exec.rs fold).
+    pub(crate) fn start_extension_phase(&mut self, conn_id: u64, seq: u64, argv: Vec<Vec<u8>>) {
+        if let Some(c) = self.conns.get_mut(&conn_id) {
+            let idx = (seq - c.next_emit) as usize;
+            if let Some(slot) = c.pending.get_mut(idx) {
+                slot.remaining = self.nshards as u32;
+                slot.agg = Agg::ExtensionGather { argv: argv.clone(), chunks: Vec::new() };
+            }
+        }
+        let targets: Vec<(usize, Op)> = (0..self.nshards)
+            .map(|s| (s, Op::Extension { argv: argv.clone() }))
+            .collect();
+        self.dispatch_targets(conn_id, seq, targets);
+    }
+
     /// v2.5: complete an extension fan-out slot with the reduced reply.
     pub(crate) fn fill_extension_slot(&mut self, conn_id: u64, seq: u64, reply: Vec<u8>) {
         self.fill_zstore_slot(conn_id, seq, reply);

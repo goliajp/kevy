@@ -95,17 +95,28 @@ pub(crate) fn shard_page(
             .iter_mut()
             .find(|v| v.spec.name == name)
             .ok_or("ERR no such view")?;
+        if referenced_index_building(store, &vs.spec) {
+            return Err("INDEXBUILDING view's base index is still building");
+        }
         if vs.needs_rebuild {
             rebuild_local(store, vs);
         }
+        let desc = vs.spec.desc;
         match &vs.mat {
-            Some(m) => Ok(m.page(after, limit)),
+            Some(m) => Ok(m.page(after, limit, desc)),
             None => {
-                // Virtual: evaluate now.
+                // Virtual: evaluate now (DESC takes the large end —
+                // taking the ascending head would pick the wrong
+                // members before the merge).
                 let spec = vs.spec.clone();
                 let mut rows = eval_with_order(store, &spec);
                 rows.sort();
-                if let Some(c) = after {
+                if desc {
+                    rows.reverse();
+                    if let Some(c) = after {
+                        rows.retain(|r| r < c);
+                    }
+                } else if let Some(c) = after {
                     rows.retain(|r| r > c);
                 }
                 rows.truncate(limit);
@@ -207,7 +218,7 @@ fn maintain_key(store: &mut Store, vs: &mut ViewState, key: &[u8]) {
         // A key freshly REMOVED from every leaf still needs its
         // eviction processed; membership probe below covers it. Treat
         // "was in the set" as affected too.
-        hit || mat.page(None, 0).is_empty() // cheap no-op; real gate below
+        hit || mat.page(None, 0, false).is_empty() // cheap no-op; real gate below
     });
     let _ = affected; // the membership probe is itself O(leaves) — just run it
     let (member, order) = crate::index_runtime::with_segment_resolver(store, |seg| {
@@ -240,4 +251,15 @@ fn rebuild_local(store: &mut Store, vs: &mut ViewState) {
         mat.apply(&k, true, Some(v));
     }
     vs.needs_rebuild = false;
+}
+
+/// A view is unanswerable while ANY referenced index (leaves + the
+/// order index) is still backfilling — the resolver hides Building
+/// segments, and an empty leaf would silently misreport membership.
+fn referenced_index_building(store: &mut Store, spec: &ViewSpec) -> bool {
+    let mut names: Vec<Vec<u8>> = vec![spec.order_by.clone()];
+    spec.tree.each_leaf(&mut |l| names.push(l.index.clone()));
+    names
+        .iter()
+        .any(|n| crate::index_runtime::segment_building(store, n))
 }

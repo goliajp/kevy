@@ -16,12 +16,58 @@ fn req(parts: &[&[u8]]) -> Vec<u8> {
     v
 }
 
+/// Read exactly ONE complete RESP value (types parsed recursively) —
+/// a single timed recv desyncs when a reply lands late.
+fn read_value(s: &mut std::net::TcpStream, buf: &mut Vec<u8>, out: &mut Vec<u8>) {
+    fn read_line(s: &mut std::net::TcpStream, buf: &mut Vec<u8>, out: &mut Vec<u8>) -> Vec<u8> {
+        loop {
+            if let Some(pos) = buf.windows(2).position(|w| w == b"\r\n") {
+                let line: Vec<u8> = buf.drain(..pos + 2).collect();
+                out.extend_from_slice(&line);
+                return line;
+            }
+            let mut tmp = [0u8; 65536];
+            let n = s.read(&mut tmp).unwrap();
+            buf.extend_from_slice(&tmp[..n]);
+        }
+    }
+    let line = read_line(s, buf, out);
+    match line[0] {
+        b'+' | b'-' | b':' => {}
+        b'$' => {
+            let n: i64 = std::str::from_utf8(&line[1..line.len() - 2]).unwrap().parse().unwrap();
+            if n >= 0 {
+                let want = n as usize + 2;
+                while buf.len() < want {
+                    let mut tmp = [0u8; 65536];
+                    let got = s.read(&mut tmp).unwrap();
+                    buf.extend_from_slice(&tmp[..got]);
+                }
+                let payload: Vec<u8> = buf.drain(..want).collect();
+                out.extend_from_slice(&payload);
+            }
+        }
+        b'*' => {
+            let n: i64 = std::str::from_utf8(&line[1..line.len() - 2]).unwrap().parse().unwrap();
+            for _ in 0..n.max(0) {
+                read_value(s, buf, out);
+            }
+        }
+        _ => panic!("unexpected RESP head: {line:?}"),
+    }
+}
+
 fn cmd(s: &mut std::net::TcpStream, parts: &[&[u8]]) -> Vec<u8> {
     s.write_all(&req(parts)).unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(30));
-    let mut buf = [0u8; 65536];
-    let n = s.read(&mut buf).unwrap();
-    buf[..n].to_vec()
+    thread_local! {
+        static RESIDUE: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    RESIDUE.with(|r| {
+        let mut buf = r.borrow_mut();
+        let mut out = Vec::new();
+        read_value(s, &mut buf, &mut out);
+        out
+    })
 }
 
 struct Server {
@@ -32,8 +78,12 @@ struct Server {
 }
 
 impl Server {
-    fn start() -> Self {
-        let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    /// NB: the view/index catalogs are process-global statics — tests
+    /// in this binary must NOT run concurrently. Each test holds the
+    /// START_GATE guard for its whole body via [`Server::start`]'s
+    /// returned guard.
+    fn start() -> (Self, std::sync::MutexGuard<'static, ()>) {
+        let gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
         let dir = std::env::temp_dir().join(format!(
             "kevy-view-{}",
@@ -54,7 +104,7 @@ impl Server {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        Self { port, dir, stop, handle: Some(handle) }
+        (Self { port, dir, stop, handle: Some(handle) }, gate)
     }
 
     fn connect(&self) -> std::net::TcpStream {
@@ -103,7 +153,7 @@ fn seed(c: &mut std::net::TcpStream) {
 
 #[test]
 fn virtual_view_query_order_cursor() {
-    let srv = Server::start();
+    let (srv, _gate) = Server::start();
     let mut c = srv.connect();
     seed(&mut c);
     // ready jobs with pri in [0, 20], ordered by pri
@@ -139,7 +189,7 @@ fn virtual_view_query_order_cursor() {
 
 #[test]
 fn materialized_topk_desc_maintenance() {
-    let srv = Server::start();
+    let (srv, _gate) = Server::start();
     let mut c = srv.connect();
     seed(&mut c);
     // top-5 highest-pri ready jobs (DESC + TOPK)
@@ -182,4 +232,43 @@ fn materialized_topk_desc_maintenance() {
     assert_eq!(cmd(&mut c, &[b"VIEW.DROP", b"v_top"]), b":1\r\n");
     let r = cmd(&mut c, &[b"VIEW.QUERY", b"v_top"]);
     assert!(r.starts_with(b"-ERR no such view"));
+}
+
+#[test]
+fn via_hydration_two_phase() {
+    let (srv, _gate) = Server::start();
+    let mut c = srv.connect();
+    // rows: task:<n> with owner field; owner profiles: user:<n>
+    for i in 0..12 {
+        cmd(
+            &mut c,
+            &[b"HSET", format!("task:{i}").as_bytes(), b"due", format!("{i}").as_bytes()],
+        );
+        cmd(
+            &mut c,
+            &[b"HSET", format!("user:{i}").as_bytes(), b"name", format!("owner-{i}").as_bytes()],
+        );
+    }
+    cmd(&mut c, &[b"IDX.CREATE", b"t_due", b"ON", b"PREFIX", b"task:", b"FIELD", b"due", b"TYPE", b"i64", b"KIND", b"range"]);
+    // view over due tasks, VIA maps task:<n> → user:<n>
+    let r = cmd(
+        &mut c,
+        &[b"VIEW.CREATE", b"v_due", b"QUERY", b"t_due", b"RANGE", b"0", b"5",
+          b"ORDER", b"BY", b"t_due", b"VIA", b"user:{key.1}"],
+    );
+    assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
+    let r = ready(&mut c, &[b"VIEW.QUERY", b"v_due", b"LIMIT", b"10", b"FIELDS", b"name"]);
+    let s = String::from_utf8_lossy(&r);
+    assert_eq!(s.matches("task:").count(), 6, "{s}");
+    assert!(s.contains("owner-0") && s.contains("owner-5"), "hydrated via template: {s}");
+    // missing target = nil, row still present
+    cmd(&mut c, &[b"DEL", b"user:3"]);
+    let r = cmd(&mut c, &[b"VIEW.QUERY", b"v_due", b"LIMIT", b"10", b"FIELDS", b"name"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("task:3"), "row present: {s}");
+    assert!(!s.contains("owner-3"), "hydration nil for deleted target: {s}");
+    // FIELDS without VIA errors
+    cmd(&mut c, &[b"VIEW.CREATE", b"v_novia", b"QUERY", b"t_due", b"EQ", b"1", b"ORDER", b"BY", b"t_due"]);
+    let r = cmd(&mut c, &[b"VIEW.QUERY", b"v_novia", b"FIELDS", b"name"]);
+    assert!(String::from_utf8_lossy(&r).contains("requires the view to declare VIA"), "{:?}", String::from_utf8_lossy(&r));
 }
