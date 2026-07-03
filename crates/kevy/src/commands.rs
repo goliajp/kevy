@@ -216,6 +216,10 @@ impl Commands for KevyCommands {
         let cfg = config_global::get();
         let samples = cfg.expiry.sample as usize;
         store.tick_expire(samples, 16);
+        // v2.4: sweep due hash field TTLs. Deadlines live in the AOF
+        // (HPEXPIREAT frames), so replay purges identically — no
+        // logging needed here, same determinism argument as key TTLs.
+        let _ = store.tick_hash_ttl(64);
         // Re-apply maxmemory + eviction policy in case `CONFIG SET` has
         // swapped the global since the previous tick. `store.set_max_memory`
         // is idempotent and cheap (compares + assigns two scalars + may

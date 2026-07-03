@@ -44,6 +44,28 @@ pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<(u
     if let Some(e) = err {
         return Err(e);
     }
+    // v2.4: hash field TTLs re-emitted as absolute HPEXPIREAT frames
+    // (after the HSETs that recreate their fields).
+    let mut ferr: Option<io::Error> = None;
+    src.for_each_hash_ttl(|key, field, deadline_ms| {
+        if ferr.is_some() {
+            return;
+        }
+        let ms = deadline_ms.to_string();
+        let mut argv = kevy_resp::Argv::with_capacity(6, 0);
+        argv.push(b"HPEXPIREAT");
+        argv.push(key);
+        argv.push(ms.as_bytes());
+        argv.push(b"FIELDS");
+        argv.push(b"1");
+        argv.push(field);
+        if let Err(e) = write_multibulk(&mut w, &argv) {
+            ferr = Some(e);
+        }
+    });
+    if let Some(e) = ferr {
+        return Err(e);
+    }
     w.flush()?;
     let inner = w
         .into_inner()
@@ -358,8 +380,8 @@ pub(crate) fn write_multibulk<W: Write, A: ArgvView + ?Sized>(
 /// Cross-checked against `kevy_resp::ops_table` below.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const REWRITE_EMIT_VERBS: &[&str] = &[
-    "SET", "HSET", "RPUSH", "SADD", "ZADD", "PEXPIREAT", "XADD",
-    "XSETID", "XGROUP", "XCLAIM",
+    "SET", "HSET", "RPUSH", "SADD", "ZADD", "PEXPIREAT", "HPEXPIREAT",
+    "XADD", "XSETID", "XGROUP", "XCLAIM",
 ];
 
 #[cfg(test)]

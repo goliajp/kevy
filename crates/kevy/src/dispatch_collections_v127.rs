@@ -170,10 +170,10 @@ pub(crate) fn cmd_zpopmin<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out
     }
 }
 
-/// v2.4 `ZPOPMIN.BELOW key below [count]` — pop up to `count` (default
-/// 1) lowest members with score strictly `< below`. The delayed-job
-/// primitive: score = due time, `below` = now → "pop what's due"
-/// atomically. Reply mirrors `ZPOPMIN` (member/score pairs).
+/// v2.4 `ZPOPMIN.BELOW key below [count]` — pop up to `count`
+/// (default one) lowest members with score strictly `< below`. The
+/// delayed-job primitive: score = due time, `below` = now → "pop
+/// what's due" atomically. Reply mirrors `ZPOPMIN`.
 pub(crate) fn cmd_zpopmin_below<A: ArgvView + ?Sized>(
     store: &mut Store,
     args: &A,

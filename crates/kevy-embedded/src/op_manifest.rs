@@ -15,7 +15,7 @@ pub(crate) const ESTORE_OPS: &[&str] = &[
     "BITCOUNT", "BITOP", "BITPOS", "GETBIT", "SETBIT",
     // hashes
     "HDEL", "HEXISTS", "HGET", "HGETALL", "HINCRBY", "HINCRBYFLOAT",
-    "HKEYS", "HLEN", "HMGET", "HSCAN", "HSET", "HSETNX", "HVALS",
+    "HKEYS", "HLEN", "HMGET", "HSCAN", "HSET", "HSETNX", "HEXPIRE", "HPEXPIRE", "HPEXPIREAT", "HTTL", "HPERSIST", "HVALS",
     // lists
     "LINDEX", "LINSERT", "LLEN", "LPOP", "LPUSH", "LRANGE", "LREM",
     "LSET", "LTRIM", "RPOP", "RPUSH",
