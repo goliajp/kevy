@@ -59,6 +59,8 @@ pub struct Store {
     pub(crate) blocker: Arc<crate::ops_blocking::Blocker>,
     /// v2.5 index registry (catalog + version).
     pub(crate) indexes: Arc<crate::ops_index::IndexReg>,
+    /// v2.6 view registry.
+    pub(crate) views: Arc<crate::ops_view::ViewReg>,
 }
 
 /// Weak handle to a `Store` — does not keep the underlying keyspace alive.
@@ -74,6 +76,7 @@ pub struct WeakStore {
     feed_weak: Option<std::sync::Weak<Mutex<kevy_replicate::feed::FeedSource>>>,
     blocker_weak: Weak<crate::ops_blocking::Blocker>,
     indexes_weak: Weak<crate::ops_index::IndexReg>,
+    views_weak: Weak<crate::ops_view::ViewReg>,
 }
 
 impl WeakStore {
@@ -88,6 +91,7 @@ impl WeakStore {
             feed: self.feed_weak.as_ref().and_then(std::sync::Weak::upgrade),
             blocker: self.blocker_weak.upgrade()?,
             indexes: self.indexes_weak.upgrade()?,
+            views: self.views_weak.upgrade()?,
         })
     }
 }
@@ -115,6 +119,9 @@ pub(crate) struct Inner {
     /// handle (for the commit_write hook).
     pub(crate) idx_segs: crate::ops_index::ShardSegs,
     pub(crate) idx_reg: Option<Arc<crate::ops_index::IndexReg>>,
+    /// v2.6: this shard's view states + registry handle.
+    pub(crate) view_segs: crate::ops_view::ShardViews,
+    pub(crate) view_reg: Option<Arc<crate::ops_view::ViewReg>>,
 }
 
 impl Inner {
@@ -130,6 +137,8 @@ impl Inner {
             blocker: None,
             idx_segs: crate::ops_index::ShardSegs::default(),
             idx_reg: None,
+            view_segs: crate::ops_view::ShardViews::default(),
+            view_reg: None,
         }
     }
 }
@@ -212,10 +221,12 @@ impl Store {
         }
         let blocker = Arc::new(crate::ops_blocking::Blocker::new());
         let indexes = Arc::new(crate::ops_index::IndexReg::default());
+        let views = Arc::new(crate::ops_view::ViewReg::default());
         for shard in shards.iter() {
             let mut g = lock_write(shard);
             g.blocker = Some(blocker.clone());
             g.idx_reg = Some(indexes.clone());
+            g.view_reg = Some(views.clone());
         }
         let guard = Arc::new(DropGuard {
             reaper_stop,
@@ -239,8 +250,10 @@ impl Store {
             feed,
             blocker,
             indexes,
+            views,
         };
         store.idx_boot();
+        store.view_boot();
         Ok(store)
     }
 
@@ -322,6 +335,7 @@ impl Store {
             feed_weak: self.feed.as_ref().map(Arc::downgrade),
             blocker_weak: Arc::downgrade(&self.blocker),
             indexes_weak: Arc::downgrade(&self.indexes),
+            views_weak: Arc::downgrade(&self.views),
         }
     }
 
