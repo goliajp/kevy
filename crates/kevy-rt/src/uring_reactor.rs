@@ -154,6 +154,11 @@ impl<C: Commands> Shard<C> {
         // napped. See the idle-ladder comment below.
         let mut last_inbound_batch: usize = 0;
         let mut napped = false;
+        // DIAG (temporary): ladder telemetry
+        let mut diag_naps: u64 = 0;
+        let mut diag_parks: u64 = 0;
+        let mut diag_batch_sum: u64 = 0;
+        let mut diag_batches: u64 = 0;
         let mut park = ParkState::default();
         let mut woke_from_park = false;
 
@@ -476,11 +481,20 @@ impl<C: Commands> Shard<C> {
                     if !napped && last_inbound_batch >= NAP_BATCH_MIN {
                         std::thread::sleep(Duration::from_micros(NAP_US));
                         napped = true;
+                        diag_naps += 1;
                     } else {
                         self.uring_park(&mut ring, &mut park)?;
                         woke_from_park = true;
                         napped = false;
                         last_inbound_batch = 0;
+                        diag_parks += 1;
+                        if diag_parks % 100_000 == 0 {
+                            eprintln!(
+                                "DIAG shard {}: parks={} naps={} avg_batch={}",
+                                self.id, diag_parks, diag_naps,
+                                if diag_batches > 0 { diag_batch_sum / diag_batches } else { 0 }
+                            );
+                        }
                     }
                 } else {
                     // E12: signal the CPU that we are in a spin-wait loop.
@@ -497,6 +511,8 @@ impl<C: Commands> Shard<C> {
                 if did_inbound > 0 {
                     last_inbound_batch = did_inbound;
                     napped = false;
+                    diag_batch_sum += did_inbound as u64;
+                    diag_batches += 1;
                 }
             }
         }
