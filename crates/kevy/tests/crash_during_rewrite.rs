@@ -146,11 +146,10 @@ fn info_aof_rewrites(port: u16) -> u64 {
     let n = s.read(&mut buf).unwrap_or(0);
     let body = String::from_utf8_lossy(&buf[..n]);
     for line in body.lines() {
-        if let Some(rest) = line.strip_prefix("aof_rewrites_total:") {
-            if let Ok(v) = rest.trim().parse::<u64>() {
+        if let Some(rest) = line.strip_prefix("aof_rewrites_total:")
+            && let Ok(v) = rest.trim().parse::<u64>() {
                 return v;
             }
-        }
     }
     0
 }

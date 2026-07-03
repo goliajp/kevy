@@ -120,19 +120,19 @@ fn encode_int(n: i64, out: &mut Vec<u8>) {
     } else if (-0x80..=0x7f).contains(&n) {
         out.push(0xd0);
         out.push(n as u8);
-    } else if n >= 0 && n <= 0xff {
+    } else if (0..=0xff).contains(&n) {
         out.push(0xcc);
         out.push(n as u8);
     } else if (-0x8000..=0x7fff).contains(&n) {
         out.push(0xd1);
         out.extend_from_slice(&(n as i16).to_be_bytes());
-    } else if n >= 0 && n <= 0xffff {
+    } else if (0..=0xffff).contains(&n) {
         out.push(0xcd);
         out.extend_from_slice(&(n as u16).to_be_bytes());
     } else if (-0x8000_0000..=0x7fff_ffff).contains(&n) {
         out.push(0xd2);
         out.extend_from_slice(&(n as i32).to_be_bytes());
-    } else if n >= 0 && n <= 0xffff_ffff {
+    } else if (0..=0xffff_ffff).contains(&n) {
         out.push(0xce);
         out.extend_from_slice(&(n as u32).to_be_bytes());
     } else if n >= 0 {

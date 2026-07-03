@@ -206,11 +206,10 @@ impl Harness {
                 let _ = s.set_read_timeout(Some(Duration::from_millis(200)));
                 if s.write_all(b"*1\r\n$4\r\nPING\r\n").is_ok() {
                     let mut buf = [0u8; 16];
-                    if let Ok(n) = s.read(&mut buf) {
-                        if n > 0 && buf.starts_with(b"+PONG") {
+                    if let Ok(n) = s.read(&mut buf)
+                        && n > 0 && buf.starts_with(b"+PONG") {
                             return Ok(());
                         }
-                    }
                 }
             }
             if Instant::now() > deadline {

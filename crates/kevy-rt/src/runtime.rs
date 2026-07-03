@@ -278,7 +278,7 @@ impl<C: Commands> Runtime<C> {
             unix_listener = Some(kevy_sys::unix_listen(path_bytes.as_bytes(), 1024)?);
         }
         for id in 0..n {
-            let arms_accept = self.accept_shards.map_or(true, |k| id < k);
+            let arms_accept = self.accept_shards.is_none_or(|k| id < k);
             // v1.30 — off-accept-set shards skip the SO_REUSEPORT bind so
             // the kernel routes new conns only to the armed subset.
             let listener = if arms_accept {
@@ -387,7 +387,7 @@ impl<C: Commands> Runtime<C> {
                     .notify_flags
                     .unwrap_or_default(),
                 spin_limit: self.spin_limit,
-                arms_accept: self.accept_shards.map_or(true, |n| id < n),
+                arms_accept: self.accept_shards.is_none_or(|n| id < n),
                 max_clients_per_shard: if self.max_clients == 0 {
                     0
                 } else {

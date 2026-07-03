@@ -102,11 +102,10 @@ impl Store {
         if rank == 0 {
             return Err(StoreError::OutOfRange);
         }
-        if let Some(c) = count {
-            if c < 0 {
+        if let Some(c) = count
+            && c < 0 {
                 return Err(StoreError::OutOfRange);
             }
-        }
         let entries: Vec<Vec<u8>> = match self.live_entry(key) {
             None => return Ok(Vec::new()),
             Some(e) => match &e.value {
@@ -128,18 +127,13 @@ impl Store {
         let want_reverse = rank < 0;
         let scan_limit = if maxlen == 0 { n } else { maxlen.min(n) };
         let mut out = Vec::new();
-        let mut scanned = 0usize;
         let mut skipped = 0usize;
         let iter: Box<dyn Iterator<Item = (usize, &Vec<u8>)>> = if want_reverse {
             Box::new(entries.iter().enumerate().rev())
         } else {
             Box::new(entries.iter().enumerate())
         };
-        for (idx, v) in iter {
-            if scanned >= scan_limit {
-                break;
-            }
-            scanned += 1;
+        for (idx, v) in iter.take(scan_limit) {
             if v.as_slice() == element {
                 if skipped < skip {
                     skipped += 1;

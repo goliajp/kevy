@@ -46,12 +46,12 @@ pub fn pack(data_dir: &Path, out_path: &Path) -> io::Result<u64> {
         }
         let name = path
             .strip_prefix(data_dir)
-            .map_err(|_| io::Error::new(io::ErrorKind::Other, "name not under data_dir"))?
+            .map_err(|_| io::Error::other("name not under data_dir"))?
             .to_string_lossy()
             .into_owned();
         let name_bytes = name.as_bytes();
         if name_bytes.len() > u16::MAX as usize {
-            return Err(io::Error::new(io::ErrorKind::Other, "file name too long"));
+            return Err(io::Error::other("file name too long"));
         }
         let body_len = meta.len();
         w.write_all(&(name_bytes.len() as u16).to_be_bytes())?;
