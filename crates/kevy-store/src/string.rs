@@ -1,8 +1,6 @@
 //! `Store` string commands.
 
-use crate::util::{
-    fmt_num, format_i64_into, itoa_i64_stack, parse_canonical_i64, parse_f64, parse_i64,
-};
+use crate::util::{format_i64_into, itoa_i64_stack, parse_canonical_i64, parse_i64};
 use crate::value::{BULK_THRESHOLD, SmallBytes, Value};
 use crate::{Entry, Store, StoreError, deadline_at, now_ns};
 use std::borrow::Cow;
@@ -41,7 +39,7 @@ fn pick_value_for_set(bytes: &[u8]) -> Value {
 }
 
 #[inline]
-fn pick_value_for_set_owned(bytes: Vec<u8>) -> Value {
+pub(crate) fn pick_value_for_set_owned(bytes: Vec<u8>) -> Value {
     if let Some(n) = parse_canonical_i64(&bytes) {
         return Value::Int(n);
     }
@@ -386,46 +384,6 @@ impl Store {
         Ok(self.get(key)?.map_or(0, |c| c.len()))
     }
 
-    pub fn append(&mut self, key: &[u8], data: &[u8]) -> Result<usize, StoreError> {
-        let outcome = match self.live_entry_mut(key) {
-            Some(e) => match &mut e.value {
-                Value::Str(v) => {
-                    // SmallBytes is immutable; pop out, grow via Vec, re-wrap.
-                    let mut owned = std::mem::take(v).into_vec();
-                    owned.extend_from_slice(data);
-                    let new_len = owned.len();
-                    *v = SmallBytes::from_vec(owned);
-                    AppendOutcome::Reweigh(new_len)
-                }
-                // L1: APPEND on Arc-backed bulk → materialise to a fresh
-                // Vec (no other reader has refs to the old Arc post-replace),
-                // append, then pick the new encoding via SET routing rules.
-                Value::ArcBulk(a) => {
-                    let mut owned: Vec<u8> = a.as_ref().to_vec();
-                    owned.extend_from_slice(data);
-                    let new_len = owned.len();
-                    e.value = pick_value_for_set_owned(owned);
-                    AppendOutcome::Reweigh(new_len)
-                }
-                _ => return Err(StoreError::WrongType),
-            },
-            None => AppendOutcome::Insert,
-        };
-        match outcome {
-            AppendOutcome::Reweigh(new_len) => {
-                self.reweigh_entry(key);
-                Ok(new_len)
-            }
-            AppendOutcome::Insert => {
-                self.insert_entry(
-                    SmallBytes::from_slice(key),
-                    Entry::new(Value::Str(SmallBytes::from_slice(data)), None),
-                );
-                Ok(data.len())
-            }
-        }
-    }
-
     /// `INCRBY` family; preserves any TTL.
     ///
     /// L2 (2026-06-21, lessons from valkey OBJ_ENCODING_INT): the hot path
@@ -482,80 +440,6 @@ impl Store {
         }
     }
 
-    /// `GETSET` — set to `val`, return the previous string (WRONGTYPE if the old
-    /// value isn't a string). Clears any TTL, like SET.
-    pub fn getset(&mut self, key: &[u8], val: Vec<u8>) -> Result<Option<Vec<u8>>, StoreError> {
-        let old = match self.live_entry(key) {
-            Some(e) => match &e.value {
-                Value::Str(v) => Some(v.to_vec()),
-                _ => return Err(StoreError::WrongType),
-            },
-            None => None,
-        };
-        self.insert_entry(
-            SmallBytes::from_slice(key),
-            Entry::new(Value::Str(SmallBytes::from_vec(val)), None),
-        );
-        Ok(old)
-    }
-
-    /// `GETDEL` — get then delete (WRONGTYPE if non-string).
-    pub fn getdel(&mut self, key: &[u8]) -> Result<Option<Vec<u8>>, StoreError> {
-        let is_str = match self.live_entry(key) {
-            None => return Ok(None),
-            Some(e) => matches!(e.value, Value::Str(_)),
-        };
-        if !is_str {
-            return Err(StoreError::WrongType);
-        }
-        match self.remove_entry(key) {
-            Some(Entry {
-                value: Value::Str(v),
-                ..
-            }) => Ok(Some(v.into_vec())),
-            _ => Ok(None),
-        }
-    }
-
-    /// `INCRBYFLOAT` — returns the new value formatted as Redis would. Preserves TTL.
-    pub fn incr_by_float(&mut self, key: &[u8], delta: f64) -> Result<Vec<u8>, StoreError> {
-        let outcome = if let Some(e) = self.live_entry_mut(key) { match &mut e.value {
-            Value::Str(v) => {
-                let next = parse_f64(v.as_slice()).ok_or(StoreError::NotFloat)? + delta;
-                if !next.is_finite() {
-                    return Err(StoreError::NotFloat);
-                }
-                let bytes = fmt_num(next);
-                *v = SmallBytes::from_slice(&bytes);
-                FloatOutcome::Reweigh(bytes)
-            }
-            _ => return Err(StoreError::WrongType),
-        } } else {
-            // Absent/expired ⇒ start from 0.0.
-            if !delta.is_finite() {
-                return Err(StoreError::NotFloat);
-            }
-            FloatOutcome::Insert(fmt_num(delta))
-        };
-        match outcome {
-            FloatOutcome::Reweigh(bytes) => {
-                self.reweigh_entry(key);
-                Ok(bytes)
-            }
-            FloatOutcome::Insert(bytes) => {
-                self.insert_entry(
-                    SmallBytes::from_slice(key),
-                    Entry::new(Value::Str(SmallBytes::from_slice(&bytes)), None),
-                );
-                Ok(bytes)
-            }
-        }
-    }
-}
-
-enum AppendOutcome {
-    Reweigh(usize),
-    Insert,
 }
 
 enum IncrOutcome {
@@ -563,7 +447,3 @@ enum IncrOutcome {
     Insert(i64),
 }
 
-enum FloatOutcome {
-    Reweigh(Vec<u8>),
-    Insert(Vec<u8>),
-}
