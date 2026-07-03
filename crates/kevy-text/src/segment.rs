@@ -32,7 +32,75 @@ pub struct TextStats {
 }
 
 /// One scoring candidate list: (postings, df, MaxScore upper bound).
-type ScoredList<'s> = (&'s HashMap<Vec<u8>, u32>, f64, f64);
+type ScoredList<'s> = (&'s Buckets, f64, f64);
+
+/// One token's postings, IMPACT-BUCKETED: keys grouped by tf, buckets
+/// kept tf-DESCENDING. Within one list, scores fall as tf falls (dl
+/// aside), so a walk can stop at the first bucket whose dl-free upper
+/// bound can't beat the current kth — the single-common-term shape
+/// (no second list to prune against) stops after the high-tf buckets
+/// instead of scanning everything.
+#[derive(Debug, Default)]
+pub struct Buckets {
+    /// (tf, keys) — sorted tf-descending; ≤ max_tf entries (tf is
+    /// small: a token rarely repeats many times in one row).
+    buckets: Vec<(u32, HashMap<Vec<u8>, ()>)>,
+    total: usize,
+}
+
+impl Buckets {
+    fn insert(&mut self, tf: u32, key: Vec<u8>) {
+        let pos = self.buckets.iter().position(|(t, _)| *t <= tf);
+        match pos {
+            Some(i) if self.buckets[i].0 == tf => {
+                self.buckets[i].1.insert(key, ());
+            }
+            Some(i) => {
+                let mut m = HashMap::new();
+                m.insert(key, ());
+                self.buckets.insert(i, (tf, m));
+            }
+            None => {
+                let mut m = HashMap::new();
+                m.insert(key, ());
+                self.buckets.push((tf, m));
+            }
+        }
+        self.total += 1;
+    }
+
+    fn remove(&mut self, tf: u32, key: &[u8]) {
+        if let Some(i) = self.buckets.iter().position(|(t, _)| *t == tf)
+            && self.buckets[i].1.remove(key).is_some()
+        {
+            self.total -= 1;
+            if self.buckets[i].1.is_empty() {
+                self.buckets.remove(i);
+            }
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.total
+    }
+
+    fn is_empty(&self) -> bool {
+        self.total == 0
+    }
+
+    /// O(1): buckets are tf-descending.
+    fn max_tf(&self) -> u32 {
+        self.buckets.first().map_or(1, |(t, _)| *t)
+    }
+
+    /// O(#buckets) membership probe.
+    fn get(&self, key: &[u8]) -> Option<u32> {
+        self.buckets
+            .iter()
+            .find(|(_, m)| m.contains_key(key))
+            .map(|(t, _)| *t)
+    }
+}
 
 /// One shard's inverted segment.
 ///
@@ -43,7 +111,7 @@ type ScoredList<'s> = (&'s HashMap<Vec<u8>, u32>, f64, f64);
 /// of scanning every posting list.
 #[derive(Debug, Default)]
 pub struct TextSegment {
-    postings: HashMap<Vec<u8>, HashMap<Vec<u8>, u32>>,
+    postings: HashMap<Vec<u8>, Buckets>,
     docs: HashMap<Vec<u8>, (u32, Vec<u8>)>,
     total_len: u64,
 }
@@ -58,11 +126,11 @@ impl TextSegment {
     pub fn apply(&mut self, key: &[u8], text: Option<&[u8]>) {
         if let Some((old_len, old_text)) = self.docs.remove(key) {
             self.total_len -= u64::from(old_len);
-            // Remove exactly this doc's tokens (re-derive from the
+            // Remove exactly this doc's tokens (re-derive tf from the
             // old text — O(doc), not O(index)).
-            for t in tokenize(&old_text) {
+            for (t, tf) in tf_of(&tokenize(&old_text)) {
                 if let Some(list) = self.postings.get_mut(&t) {
-                    list.remove(key);
+                    list.remove(tf, key);
                     if list.is_empty() {
                         self.postings.remove(&t);
                     }
@@ -76,8 +144,8 @@ impl TextSegment {
         }
         self.docs.insert(key.to_vec(), (toks.len() as u32, text.to_vec()));
         self.total_len += toks.len() as u64;
-        for t in toks {
-            *self.postings.entry(t).or_default().entry(key.to_vec()).or_insert(0) += 1;
+        for (t, tf) in tf_of(&toks) {
+            self.postings.entry(t).or_default().insert(tf, key.to_vec());
         }
     }
 
@@ -105,7 +173,7 @@ impl TextSegment {
         for t in &q_tokens {
             let Some(list) = self.postings.get(t) else { continue };
             let df = list.len() as f64;
-            let max_tf = f64::from(list.values().copied().max().unwrap_or(1));
+            let max_tf = f64::from(list.max_tf());
             lists.push((list, df, crate::bm25::bm25_upper(max_tf, df, n_docs)));
         }
         if lists.is_empty() {
@@ -131,10 +199,40 @@ impl TextSegment {
                 break;
             }
             walked = i + 1;
-            for (key, tf) in list.iter() {
-                let dl = f64::from(self.docs.get(key.as_slice()).map_or(1, |d| d.0));
-                *scores.entry(key.as_slice()).or_insert(0.0) +=
-                    bm25_score(f64::from(*tf), *df, n_docs, dl, avgdl);
+            for (bi, (tf, bucket)) in list.buckets.iter().enumerate() {
+                // Bucket-level early stop: buckets are tf-descending,
+                // so once even the dl-free bound of THIS tf (plus
+                // everything later lists could add) can't reach the
+                // kth floor, no NEW doc from here on can enter. Docs
+                // already accumulated still need this list's
+                // contribution — the remaining buckets are PROBED for
+                // them (a key has exactly one tf per token, so no
+                // double count with earlier buckets).
+                if scores.len() >= limit {
+                    let bound = crate::bm25::bm25_upper(f64::from(*tf), *df, n_docs);
+                    if bound + tail_ub[i + 1..].first().copied().unwrap_or(0.0)
+                        < kth_of(&scores, limit)
+                    {
+                        let keys: Vec<&[u8]> = scores.keys().copied().collect();
+                        for (tf2, bucket2) in &list.buckets[bi..] {
+                            for key in &keys {
+                                if bucket2.contains_key(*key) {
+                                    let dl = f64::from(
+                                        self.docs.get(*key).map_or(1, |d| d.0),
+                                    );
+                                    *scores.get_mut(key).expect("accumulated") +=
+                                        bm25_score(f64::from(*tf2), *df, n_docs, dl, avgdl);
+                                }
+                            }
+                        }
+                        break;
+                    }
+                }
+                for key in bucket.keys() {
+                    let dl = f64::from(self.docs.get(key.as_slice()).map_or(1, |d| d.0));
+                    *scores.entry(key.as_slice()).or_insert(0.0) +=
+                        bm25_score(f64::from(*tf), *df, n_docs, dl, avgdl);
+                }
             }
             if scores.len() >= limit && i + 1 < lists.len() {
                 kth_threshold = kth_of(&scores, limit);
@@ -148,10 +246,10 @@ impl TextSegment {
             let keys: Vec<&[u8]> = scores.keys().copied().collect();
             for (list, df, _) in &lists[walked..] {
                 for key in &keys {
-                    if let Some(tf) = list.get(*key) {
+                    if let Some(tf) = list.get(key) {
                         let dl = f64::from(self.docs.get(*key).map_or(1, |d| d.0));
                         *scores.get_mut(key).expect("accumulated") +=
-                            bm25_score(f64::from(*tf), *df, n_docs, dl, avgdl);
+                            bm25_score(f64::from(tf), *df, n_docs, dl, avgdl);
                     }
                 }
             }
@@ -203,6 +301,15 @@ impl TextSegment {
     pub fn contains(&self, key: &[u8]) -> bool {
         self.docs.contains_key(key)
     }
+}
+
+/// Aggregate token counts for one document's token stream.
+fn tf_of(toks: &[Vec<u8>]) -> HashMap<Vec<u8>, u32> {
+    let mut tf = HashMap::new();
+    for t in toks {
+        *tf.entry(t.clone()).or_insert(0) += 1;
+    }
+    tf
 }
 
 /// Strict "ranks ahead of" for (score, key) — higher score first,
@@ -294,10 +401,12 @@ mod tests {
             for t in &q {
                 let Some(list) = s.postings.get(t) else { continue };
                 let df = list.len() as f64;
-                for (k, tf) in list {
-                    let dl = f64::from(s.docs[k].0);
-                    *sc.entry(k.clone()).or_insert(0.0) +=
-                        bm25_score(f64::from(*tf), df, n_docs, dl, avgdl);
+                for (tf, bucket) in &list.buckets {
+                    for k in bucket.keys() {
+                        let dl = f64::from(s.docs[k].0);
+                        *sc.entry(k.clone()).or_insert(0.0) +=
+                            bm25_score(f64::from(*tf), df, n_docs, dl, avgdl);
+                    }
                 }
             }
             let mut v: Vec<(Vec<u8>, f64)> = sc.into_iter().collect();
@@ -311,6 +420,42 @@ mod tests {
             let want = naive(q, limit);
             assert_eq!(got, want, "query {q:?} limit {limit}");
         }
+    }
+
+    #[test]
+    fn bucket_stop_keeps_walked_doc_contributions() {
+        // Force the early stop: many tf=2 docs of a common term fill
+        // the top-limit; the tf=1 bucket is skipped for NEW docs, but
+        // a doc already accumulated via the rare term (sitting in
+        // that tf=1 bucket) must still receive its contribution.
+        let mut s = TextSegment::new();
+        for i in 0..2000u32 {
+            // "common common" → tf=2, short docs (strong scores)
+            s.apply(format!("c{i:04}").as_bytes(), Some(b"common common"));
+        }
+        // the special doc: rare term + common ONCE (tf=1 bucket),
+        // and a filler doc so `rare` df stays comparable
+        s.apply(b"special", Some(b"rare common pad pad pad"));
+        let naive_ok = {
+            // by both-term score, special must beat every c-doc when
+            // querying "rare common" (rare idf is huge)
+            let hits = s.matches(b"rare common", 5);
+            hits[0].key == b"special".to_vec()
+        };
+        assert!(naive_ok);
+        // and its score must include the common-term part: compare
+        // against a segment where special lacks "common".
+        let mut s2 = TextSegment::new();
+        for i in 0..2000u32 {
+            s2.apply(format!("c{i:04}").as_bytes(), Some(b"common common"));
+        }
+        s2.apply(b"special", Some(b"rare only pad pad pad"));
+        let with_common = s.matches(b"rare common", 1)[0].score;
+        let without_common = s2.matches(b"rare common", 1)[0].score;
+        assert!(
+            with_common > without_common + 1e-9,
+            "skipped-bucket contribution lost: {with_common} vs {without_common}"
+        );
     }
 
     #[test]
