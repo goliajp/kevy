@@ -384,7 +384,8 @@ impl<C: Commands> Shard<C> {
                 (Agg::First(dst), Part::Reply(b)) => *dst = Some(b),
                 (Agg::SumInt(acc), Part::Int(n)) => *acc += n,
                 (Agg::AllOk, Part::Ok) => {}
-                (Agg::Gather { got, .. }, Part::Gathered(items)) => {
+                (Agg::Gather { got, .. }, Part::Gathered(items))
+                | (Agg::ZStoreGather { got, .. }, Part::Gathered(items)) => {
                     for (k, g) in items {
                         got.insert(k, g);
                     }
@@ -435,6 +436,7 @@ impl<C: Commands> Shard<C> {
                     Agg::WatchCollect { .. }
                         | Agg::ExecPrep { .. }
                         | Agg::RenameOrchestrator { .. }
+                        | Agg::ZStoreGather { .. }
                 ) {
                     Some(agg)
                 } else {
@@ -452,6 +454,7 @@ impl<C: Commands> Shard<C> {
                     self.finalize_watch_agg(conn_id, seq, agg);
                 }
                 Agg::RenameOrchestrator { .. } => self.finalize_rename_agg(conn_id, seq, agg),
+                Agg::ZStoreGather { .. } => self.finalize_zstore_agg(conn_id, seq, agg),
                 // The match above is exhaustive over what fold ever puts
                 // into `watch_agg` (only the orchestrator aggs). Anything
                 // else is a bug; ignore so a stray slot doesn't crash

@@ -100,10 +100,60 @@ impl<C: Commands> Shard<C> {
                             Ok(members) => Gathered::Members(members),
                             Err(_) => Gathered::WrongType,
                         },
+                        GatherKind::Scored => match self.store.zset_or_set_members(&k) {
+                            Ok(pairs) => Gathered::Scored(pairs),
+                            Err(_) => Gathered::WrongType,
+                        },
                     };
                     results.push((k, g));
                 }
                 Part::Gathered(results)
+            }
+            Op::ZStoreResult { dst, pairs } => {
+                let n = self.store.zstore_result(&dst, &pairs);
+                self.store.bump_if_watched(&dst);
+                // Propagate the EFFECT: DEL + plain ZADD (deterministic
+                // on replay/replica regardless of source state — the
+                // campaign's effect-not-condition rule).
+                let mut c = Argv::with_capacity(2, 0);
+                c.push(b"DEL");
+                c.push(&dst);
+                self.log(&c);
+                if !pairs.is_empty() {
+                    let mut z = Argv::with_capacity(2 + pairs.len() * 2, 0);
+                    z.push(b"ZADD");
+                    z.push(&dst);
+                    for (m, sc) in &pairs {
+                        z.push(format!("{sc}").as_bytes());
+                        z.push(m);
+                    }
+                    self.log(&z);
+                }
+                Part::Int(n as i64)
+            }
+            Op::SetStoreResult { dst, members } => {
+                let del = [dst.clone()];
+                self.store.del(&del);
+                let n = if members.is_empty() {
+                    0
+                } else {
+                    self.store.sadd(&dst, &members).unwrap_or(0)
+                };
+                self.store.bump_if_watched(&dst);
+                let mut c = Argv::with_capacity(2, 0);
+                c.push(b"DEL");
+                c.push(&dst);
+                self.log(&c);
+                if !members.is_empty() {
+                    let mut a = Argv::with_capacity(2 + members.len(), 0);
+                    a.push(b"SADD");
+                    a.push(&dst);
+                    for m in &members {
+                        a.push(m);
+                    }
+                    self.log(&a);
+                }
+                Part::Int(n as i64)
             }
             Op::CollectKeys(pat, limit) => {
                 Part::Keys(self.store.collect_keys(pat.as_deref(), limit))
