@@ -16,6 +16,9 @@ impl Store {
     /// the live value and key, then updates `used_memory` for either the
     /// new-key (charges [`ENTRY_OVERHEAD`]) or overwrite (weight swap) case.
     pub(crate) fn insert_entry(&mut self, key: SmallBytes, mut entry: Entry) -> Option<Entry> {
+        // v2.4: a wholesale value replacement (type change / RESTORE)
+        // discards any per-field hash TTLs; a fresh create is a no-op.
+        self.clear_hash_key_ttls(key.as_slice());
         entry.set_weight(key.heap_bytes() as u64 + entry.value.weight());
         if self.maxmemory > 0 {
             self.tick_clock();
@@ -44,6 +47,7 @@ impl Store {
     /// Remove a key, returning the displaced entry (`None` if absent).
     /// Frees the entry's cached weight + [`ENTRY_OVERHEAD`].
     pub(crate) fn remove_entry(&mut self, key: &[u8]) -> Option<Entry> {
+        self.clear_hash_key_ttls(key);
         let old = self.map.remove(key)?;
         self.used_memory = self
             .used_memory

@@ -48,6 +48,7 @@ mod metrics_http;
 pub(crate) mod audit_log;
 mod cmd_block_serve;
 mod cmd_data;
+mod cmd_hash_ttl;
 mod cmd_hello;
 mod cmd_lua;
 mod cmd_resolve;
