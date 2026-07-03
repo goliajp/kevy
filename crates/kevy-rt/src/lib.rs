@@ -256,6 +256,21 @@ pub trait Commands: Clone + Send + 'static {
     /// ignore it.
     fn on_shard_tick(&self, _store: &mut Store) {}
 
+    /// v2.5: per-shard half of an extension fan-out command (IDX.* /
+    /// future VIEW.* / FT.*): compute this shard's raw chunk for
+    /// `argv`. The payload encoding is the embedder's own — the
+    /// runtime treats it as opaque bytes and hands all chunks to
+    /// [`Commands::extension_reduce`] at the origin.
+    fn extension_op(&self, _store: &mut Store, _argv: &[Vec<u8>]) -> Vec<u8> {
+        Vec::new()
+    }
+
+    /// v2.5: origin-side reduce of an extension fan-out — merge every
+    /// shard's chunk into the final RESP reply bytes.
+    fn extension_reduce(&self, _argv: &[Vec<u8>], _chunks: Vec<Vec<u8>>) -> Vec<u8> {
+        b"-ERR extension commands not supported\r\n".to_vec()
+    }
+
     /// v2.5: called after every applied write with the written key
     /// (when the resolver knew one). Default no-op; kevy uses it for
     /// synchronous secondary-index maintenance (derived-by-

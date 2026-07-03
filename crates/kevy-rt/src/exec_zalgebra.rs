@@ -97,6 +97,11 @@ impl<C: Commands> Shard<C> {
         }
     }
 
+    /// v2.5: complete an extension fan-out slot with the reduced reply.
+    pub(crate) fn fill_extension_slot(&mut self, conn_id: u64, seq: u64, reply: Vec<u8>) {
+        self.fill_zstore_slot(conn_id, seq, reply);
+    }
+
     /// Complete the pending slot with a pre-encoded reply (parse /
     /// WRONGTYPE aborts).
     fn fill_zstore_slot(&mut self, conn_id: u64, seq: u64, reply: Vec<u8>) {

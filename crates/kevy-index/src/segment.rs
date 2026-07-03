@@ -177,6 +177,13 @@ impl Segment {
         self.back.get(key)
     }
 
+    /// Visit every `(key, value)` entry (verify / audit walks).
+    pub fn each_entry<F: FnMut(&[u8], &IndexValue)>(&self, mut f: F) {
+        for (k, v) in &self.back {
+            f(k.as_slice(), v);
+        }
+    }
+
     /// Live counters.
     pub fn stats(&self) -> SegmentStats {
         self.stats
