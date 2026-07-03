@@ -184,7 +184,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     // of their own is needed (the effect verbs replay).
     op("ZINTERSTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
     // v2.4 delayed-job primitive; embedded logs the ZREM effect.
-    op("ZPOPMIN.BELOW", WR, NG,  Some(N::Zset),   Some(1), SERVER | ESTORE),
+    op("ZPOPMIN.BELOW", WR, NG,  Some(N::Zset),   None,    SERVER | ESTORE),
     op("ZUNIONSTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
     op("ZDIFFSTORE",   WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
     op("ZINTERCARD",   RD, NG,   None,            None,    SERVER | ESTORE),
