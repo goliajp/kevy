@@ -23,5 +23,5 @@ pub use segment::{Cursor, Segment, SegmentStats};
 pub use value::IndexValue;
 pub use view::{
     Leaf, MAX_TREE_DEPTH, MAX_TREE_LEAVES, MAX_VIEWS, MaterializedSet, Tree, ViewCatalog,
-    ViewMode, ViewSpec, eval_tree, key_in_tree,
+    ViewMode, ViewSpec, eval_tree, key_in_tree, key_in_tree_vals,
 };

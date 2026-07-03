@@ -31,6 +31,34 @@ train, versions bump at ship time.
 - Batch-gated 200µs nap retained as the second ladder rung for the
   no-inflight idle shape (`NAP_BATCH_MIN` 4).
 
+### v2.6 — views (P3)
+
+- **`VIEW.*` / embedded `view_*`**: named AND/OR/DIFF compositions of
+  declared indexes with an ordering index. Virtual mode streams the
+  order index and probes membership per candidate (a LIMIT-100 page
+  costs O(limit/selectivity), measured p99 0.29ms @ 1M rows × 2
+  components — 10× under the RFC clamp); materialized mode maintains
+  per-shard ordered member sets in the same write hook as indexes
+  (one probe per referenced index per write shared across views;
+  top-K bounds with worst-end eviction + single-compare fast reject —
+  steady-state write tax 2.3% for 3 indexes + 4 top-K views vs the
+  15% clamp). Views store membership + order only, never field
+  values.
+- **`VIA` hydration**: template dereference ({key}/{key.N}) resolved
+  in a second internal fan-out on the targets' owning shards —
+  kevy-rt's extension surface gains a stateless two-phase
+  continuation reusable by later trains. Missing targets hydrate as
+  nils.
+- `VIEW.CREATE/DROP/LIST/QUERY/EXPLAIN/VERIFY/REBUILD` (rebuild is
+  answer-preserving, e2e-asserted); catalog sidecar-persisted,
+  content rebuilt after restart; `-INDEXBUILDING` while any
+  referenced index backfills. bench/viewgate.sh gates all four RFC
+  clamps; docs/views.md.
+- Bugs caught by the gates/e2e along the way: DESC views paged each
+  shard's ascending head (wrong member set); bounded eviction removed
+  the DESC view's best member; views over building indexes silently
+  answered empty.
+
 ### v2.5 — secondary indexes ⭐ (P2, the index engine)
 
 - **New stone crate `kevy-index`** + the engine wiring: declarative
