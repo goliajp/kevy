@@ -45,6 +45,7 @@ members = [
     "crates/kevy-pubsub-bench",
     "crates/kevy-bench",
     "crates/kevy-hash",
+    "crates/kevy-index",
     "crates/kevy-bytes",
     "crates/kevy-map",
     "crates/kevy-resp-client",

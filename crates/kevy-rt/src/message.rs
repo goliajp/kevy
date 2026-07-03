@@ -140,6 +140,9 @@ pub(crate) enum Op {
     },
     /// v2.3 FEED.TAIL executed on the target shard.
     FeedTail,
+    /// v2.5 extension fan-out: run `Commands::extension_op` on this
+    /// shard with the original argv; reply is an opaque chunk.
+    Extension { argv: Vec<Vec<u8>> },
     /// v2.3 `PREFIX.STATS <prefix>` — per-shard prefix walk, summed at
     /// the origin.
     PrefixStats(Vec<u8>),
@@ -259,6 +262,8 @@ impl SmallReply {
 pub(crate) enum Part {
     /// v2.3 PREFIX.STATS per-shard result.
     PrefixStats { keys: u64, expires: u64 },
+    /// v2.5 extension fan-out per-shard chunk (opaque to the runtime).
+    ExtensionChunk(Vec<u8>),
     Reply(SmallReply),
     Int(i64),
     Ok,
@@ -398,6 +403,9 @@ pub(crate) enum Agg {
     },
     /// v2.3 PREFIX.STATS accumulator (summed across shards).
     PrefixStats { keys: u64, expires: u64 },
+    /// v2.5 extension fan-out accumulator; reduced by
+    /// `Commands::extension_reduce` when the last chunk lands.
+    ExtensionGather { argv: Vec<Vec<u8>>, chunks: Vec<Vec<u8>> },
     /// v2.2 zset-algebra `*STORE` orchestrator, step 1: gather scored
     /// (or set) members per source key; on completion the origin
     /// computes the combination and ships `Op::ZStoreResult` /
