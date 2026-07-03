@@ -15,7 +15,7 @@ use std::io;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::replica_glue::ensure_writable;
-use crate::store::Store;
+use crate::store::{Store, commit_write};
 
 #[cfg(target_arch = "wasm32")]
 fn ensure_writable(_s: &Store) -> io::Result<()> { Ok(()) }
@@ -45,10 +45,14 @@ impl Store {
             if g.store.key_exists(dst) {
                 return Ok(false);
             }
-            // Write dst (still holding its shard lock so no race).
+            // AOF-log first (SET dst <value>), then write dst — both
+            // under dst's shard lock. Log-before-apply avoids cloning
+            // the value; an AOF error leaves memory untouched.
+            commit_write(&mut g, &[b"SET", dst, &src_val])?;
             g.store.set(dst, src_val, None, false, false);
         } else {
             let mut g = self.wshard(dst);
+            commit_write(&mut g, &[b"SET", dst, &src_val])?;
             g.store.set(dst, src_val, None, false, false);
         }
         // Re-attach absolute deadline if the source had one.
@@ -60,15 +64,10 @@ impl Store {
                 .saturating_add(src_ttl_ms as u64);
             self.pexpireat(dst, unix_ms)?;
         }
-        // AOF-log the copy as a SET (with optional PEXPIREAT) on dst.
-        // Standard `set` + `expire` paths handle this via individual
-        // `commit_write` calls in their respective methods — but we
-        // bypassed those above (direct `store.set`) to keep the
-        // atomic-per-shard semantics, so log the SET ourselves.
-        // Easiest: re-emit via `Self::set(dst, &src_val_as_ref)`.
-        // For simplicity in v1.12.0 we DO emit via the high-level
-        // facade methods — the cost is a redundant Store::set call,
-        // which is acceptable for a COPY op.
+        // The dst SET is AOF-logged above under dst's shard lock; the
+        // TTL re-attach goes through the `pexpireat` facade which logs
+        // its own PEXPIREAT. (v1.15.1: before this, the dst value was
+        // written to memory only and vanished on reopen.)
         Ok(true)
     }
 
