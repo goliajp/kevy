@@ -2,7 +2,7 @@
 
 **English** · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
-[![CI](https://github.com/goliajp/kevy/actions/workflows/ci.yml/badge.svg)](https://github.com/goliajp/kevy/actions/workflows/ci.yml)
+[![CI](https://github.com/goliajp/kevy/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/goliajp/kevy/actions/workflows/ci.yml?query=branch%3Adevelop)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 ![Rust stable](https://img.shields.io/badge/rust-stable-orange.svg)
 
