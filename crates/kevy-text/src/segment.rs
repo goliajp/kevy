@@ -42,11 +42,14 @@ type ScoredList<'s> = (&'s Buckets, f64, f64);
 /// visits ~k·buckets postings instead of the whole list (the
 /// single-common-term shape measured 1.5ms at 66k postings under the
 /// tf-only stop; dl-ordering makes the within-bucket cut).
+/// (dl, key) ascending — one tf bucket's postings.
+type DlSet = std::collections::BTreeSet<(u32, Vec<u8>)>;
+
 #[derive(Debug, Default)]
 pub struct Buckets {
     /// (tf, (dl, key) ascending) — sorted tf-descending; ≤ max_tf
     /// entries (tf is small).
-    buckets: Vec<(u32, std::collections::BTreeSet<(u32, Vec<u8>)>)>,
+    buckets: Vec<(u32, DlSet)>,
     total: usize,
 }
 
@@ -58,12 +61,12 @@ impl Buckets {
                 self.buckets[i].1.insert((dl, key));
             }
             Some(i) => {
-                let mut m = std::collections::BTreeSet::new();
+                let mut m = DlSet::new();
                 m.insert((dl, key));
                 self.buckets.insert(i, (tf, m));
             }
             None => {
-                let mut m = std::collections::BTreeSet::new();
+                let mut m = DlSet::new();
                 m.insert((dl, key));
                 self.buckets.push((tf, m));
             }
@@ -427,10 +430,9 @@ mod tests {
                 let Some(list) = s.postings.get(t) else { continue };
                 let df = list.len() as f64;
                 for (tf, bucket) in &list.buckets {
-                    for k in bucket.keys() {
-                        let dl = f64::from(s.docs[k].0);
+                    for (dl_u, k) in bucket.iter() {
                         *sc.entry(k.clone()).or_insert(0.0) +=
-                            bm25_score(f64::from(*tf), df, n_docs, dl, avgdl);
+                            bm25_score(f64::from(*tf), df, n_docs, f64::from(*dl_u), avgdl);
                     }
                 }
             }
