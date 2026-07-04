@@ -24,6 +24,10 @@ pub enum TtlReaperMode {
 /// [`Config::default`].
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// v2.9: optional READ-ONLY RESP listener address (ops tooling —
+    /// redis-cli against a live embedded store). `None` (default) =
+    /// no listener thread, no socket, zero tax.
+    pub resp_listener: Option<std::net::SocketAddr>,
     /// Soft memory ceiling in bytes. `0` (default) = unlimited.
     pub maxmemory: u64,
     /// Eviction policy when over `maxmemory`. Default `NoEviction`.
@@ -118,6 +122,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            resp_listener: None,
             maxmemory: 0,
             eviction_policy: EvictionPolicy::NoEviction,
             data_dir: None,
@@ -146,6 +151,14 @@ impl Default for Config {
 }
 
 impl Config {
+    /// v2.9: enable the read-only RESP listener on `addr`
+    /// (e.g. `"127.0.0.1:6009".parse().unwrap()`).
+    #[must_use]
+    pub fn with_resp_listener(mut self, addr: std::net::SocketAddr) -> Self {
+        self.resp_listener = Some(addr);
+        self
+    }
+
     /// Enable persistence under `dir` — snapshot file + AOF land inside.
     /// AOF defaults on; turn it off with [`Self::without_aof`] for pure
     /// snapshot-only durability.
