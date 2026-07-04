@@ -40,7 +40,10 @@ pub enum ReplicaApply {
     /// Upstream finished the snapshot. The shard hands its buffered
     /// bytes to `kevy_persist::load_snapshot_from` (replacing the
     /// `Store` contents) and resumes at `ack_offset` for live frames.
-    SnapshotEnd { ack_offset: u64 },
+    /// `routed = true` (v3.2 single-source mode) means the payload is
+    /// the WHOLE upstream keyspace broadcast to every shard — each
+    /// shard loads only its own hash slice.
+    SnapshotEnd { ack_offset: u64, routed: bool },
     /// One live mutation frame to be applied via `kevy::dispatch`
     /// (inside a [`crate::ReplicatedApplyGuard`] scope so the apply
     /// doesn't re-push into this shard's downstream
