@@ -105,7 +105,7 @@ query-language slope. Filter GROUPS results in the app.
 Embedded: `idx_create_agg(name, prefix, field, ty, group_by)` /
 `idx_group(name, g)` / `idx_groups(name, by, limit)`.
 
-Memory ≈ `groups × (gkey+64) + distinct_values × 40 + rows ×
-(key+24)`; gated vs real RSS by `bench/agggate.sh` along with GROUP
+Memory ≈ `groups × (gkey+64) + distinct_values × 18 + rows ×
+(key+10)` (constants calibrated against measured RSS); gated vs real RSS by `bench/agggate.sh` along with GROUP
 p99 < 1ms @ 1M×10k groups, GROUPS top-100 < 5ms, and write tax < 10%.
 
