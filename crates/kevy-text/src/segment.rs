@@ -63,76 +63,173 @@ const BAND_MIN_DL: [u32; 16] = [
     1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768,
 ];
 
-/// One tf bucket: ≤16 dl bands, each a dense id Vec (ordered walks
-/// are sequential 4B scans; per-id EXACT dl comes from the segment's
-/// id_dl table — bands only set the CUT granularity).
-#[derive(Debug, Default)]
-struct Bands {
-    bands: [Vec<u32>; 16],
+/// One tf bucket: SPARSE dl bands (band asc), each a dense id Vec —
+/// ordered walks are sequential 4B scans; per-id EXACT dl comes from
+/// the segment's id_dl table (bands only set the CUT granularity).
+type Bands = Vec<(u8, Vec<u32>)>;
+
+/// One token's postings. Zipf text is mostly hapax legomena — a
+/// unique id / email / doc number appears in exactly one row — so
+/// the one-posting case stays INLINE (zero heap): the full structure
+/// only materializes from the second posting on. (textgate caught
+/// the eager shape at +2GiB RSS over 1M singleton tokens.)
+#[derive(Debug)]
+pub enum Buckets {
+    One { id: u32, tf: u32, dl: u32 },
+    Many(Box<ManyBuckets>),
 }
 
 #[derive(Debug, Default)]
-pub struct Buckets {
+pub struct ManyBuckets {
     /// (tf, bands) — sorted tf-descending; ≤ max_tf entries.
     buckets: Vec<(u32, Bands)>,
     /// id → location, for O(1) probe / remove across the whole list.
     index: HashMap<u32, Loc>,
 }
 
-impl Buckets {
+impl Default for Buckets {
+    fn default() -> Self {
+        Buckets::Many(Box::default())
+    }
+}
+
+impl ManyBuckets {
     fn insert(&mut self, tf: u32, dl: u32, id: u32) {
         let pos = self.buckets.iter().position(|(t, _)| *t <= tf);
-        let (bi, slot) = match pos {
-            Some(i) if self.buckets[i].0 == tf => (i, &mut self.buckets[i].1),
+        let slot = match pos {
+            Some(i) if self.buckets[i].0 == tf => &mut self.buckets[i].1,
             Some(i) => {
-                self.buckets.insert(i, (tf, Bands::default()));
-                (i, &mut self.buckets[i].1)
+                self.buckets.insert(i, (tf, Bands::new()));
+                &mut self.buckets[i].1
             }
             None => {
-                self.buckets.push((tf, Bands::default()));
-                let i = self.buckets.len() - 1;
-                (i, &mut self.buckets[i].1)
+                self.buckets.push((tf, Bands::new()));
+                &mut self.buckets.last_mut().expect("just pushed").1
             }
         };
-        let _ = bi;
         let band = band_of(dl);
-        let v = &mut slot.bands[band as usize];
+        let bi = match slot.binary_search_by_key(&band, |(b, _)| *b) {
+            Ok(i) => i,
+            Err(i) => {
+                slot.insert(i, (band, Vec::new()));
+                i
+            }
+        };
+        let v = &mut slot[bi].1;
         self.index.insert(id, Loc { tf, band, slot: v.len() as u32 });
         v.push(id);
     }
 
-    fn remove(&mut self, tf: u32, _dl: u32, id: u32) {
+    fn remove(&mut self, id: u32) {
         let Some(loc) = self.index.remove(&id) else { return };
-        debug_assert_eq!(loc.tf, tf);
-        if let Some(i) = self.buckets.iter().position(|(t, _)| *t == loc.tf) {
-            let v = &mut self.buckets[i].1.bands[loc.band as usize];
+        if let Some(i) = self.buckets.iter().position(|(t, _)| *t == loc.tf)
+            && let Ok(bi) = self.buckets[i].1.binary_search_by_key(&loc.band, |(b, _)| *b)
+        {
+            let v = &mut self.buckets[i].1[bi].1;
             let si = loc.slot as usize;
             v.swap_remove(si);
             if let Some(&moved) = v.get(si) {
                 self.index.get_mut(&moved).expect("indexed posting").slot = loc.slot;
             }
-            if self.buckets[i].1.bands.iter().all(|b| b.is_empty()) {
+            if v.is_empty() {
+                self.buckets[i].1.remove(bi);
+            }
+            if self.buckets[i].1.is_empty() {
                 self.buckets.remove(i);
             }
         }
     }
+}
+
+impl Buckets {
+    fn new_one(tf: u32, dl: u32, id: u32) -> Self {
+        Buckets::One { id, tf, dl }
+    }
+
+    fn insert(&mut self, tf: u32, dl: u32, id: u32) {
+        match self {
+            Buckets::One { id: id0, tf: tf0, dl: dl0 } => {
+                let (id0, tf0, dl0) = (*id0, *tf0, *dl0);
+                let mut many = ManyBuckets::default();
+                many.insert(tf0, dl0, id0);
+                many.insert(tf, dl, id);
+                *self = Buckets::Many(Box::new(many));
+            }
+            Buckets::Many(m) => m.insert(tf, dl, id),
+        }
+    }
+
+    fn remove(&mut self, _tf: u32, _dl: u32, id: u32) {
+        match self {
+            Buckets::One { id: id0, .. } => {
+                if *id0 == id {
+                    // caller drops empty lists via is_empty()
+                    *self = Buckets::Many(Box::default());
+                }
+            }
+            Buckets::Many(m) => m.remove(id),
+        }
+    }
 
     fn len(&self) -> usize {
-        self.index.len()
+        match self {
+            Buckets::One { .. } => 1,
+            Buckets::Many(m) => m.index.len(),
+        }
     }
 
     fn is_empty(&self) -> bool {
-        self.index.is_empty()
+        self.len() == 0
     }
 
     /// O(1): buckets are tf-descending.
     fn max_tf(&self) -> u32 {
-        self.buckets.first().map_or(1, |(t, _)| *t)
+        match self {
+            Buckets::One { tf, .. } => *tf,
+            Buckets::Many(m) => m.buckets.first().map_or(1, |(t, _)| *t),
+        }
     }
 
     /// O(1) membership probe over the whole list.
     fn get(&self, id: u32) -> Option<u32> {
-        self.index.get(&id).map(|l| l.tf)
+        match self {
+            Buckets::One { id: id0, tf, .. } => (*id0 == id).then_some(*tf),
+            Buckets::Many(m) => m.index.get(&id).map(|l| l.tf),
+        }
+    }
+
+    /// Per-query view: tf groups descending, each with its bands
+    /// ascending. The One case borrows its single posting as a
+    /// 1-slice; only the tiny outer Vec allocates (per query, per
+    /// list).
+    fn tf_groups(&self) -> Vec<(u32, BandsView<'_>)> {
+        match self {
+            Buckets::One { id, tf, dl } => {
+                vec![(*tf, BandsView::One(band_of(*dl), std::slice::from_ref(id)))]
+            }
+            Buckets::Many(m) => m
+                .buckets
+                .iter()
+                .map(|(t, bands)| (*t, BandsView::Slice(bands.as_slice())))
+                .collect(),
+        }
+    }
+}
+
+/// Bands of one tf group, borrowed — see [`Buckets::tf_groups`].
+enum BandsView<'a> {
+    One(u8, &'a [u32]),
+    Slice(&'a [(u8, Vec<u32>)]),
+}
+
+impl BandsView<'_> {
+    /// (band, ids) pairs, band ascending.
+    fn iter(&self) -> impl Iterator<Item = (u8, &[u32])> + '_ {
+        let (one, slice) = match self {
+            BandsView::One(b, ids) => (Some((*b, *ids)), [].as_slice()),
+            BandsView::Slice(s) => (None, *s),
+        };
+        one.into_iter().chain(slice.iter().map(|(b, v)| (*b, v.as_slice())))
     }
 }
 
@@ -200,7 +297,14 @@ impl TextSegment {
         self.docs.insert(key.to_vec(), (id, dl, text.to_vec()));
         self.total_len += u64::from(dl);
         for (t, tf) in tf_of(&toks) {
-            self.postings.entry(t).or_default().insert(tf, dl, id);
+            match self.postings.entry(t) {
+                std::collections::hash_map::Entry::Occupied(mut e) => {
+                    e.get_mut().insert(tf, dl, id);
+                }
+                std::collections::hash_map::Entry::Vacant(v) => {
+                    v.insert(Buckets::new_one(tf, dl, id));
+                }
+            }
         }
     }
 
@@ -254,7 +358,8 @@ impl TextSegment {
                 break;
             }
             walked = i + 1;
-            for (bi, (tf, bucket)) in list.buckets.iter().enumerate() {
+            let groups = list.tf_groups();
+            for (bi, (tf, bands)) in groups.iter().enumerate() {
                 // Bucket-level early stop: buckets are tf-descending,
                 // so once even the dl-free bound of THIS tf (plus
                 // everything later lists could add) can't reach the
@@ -270,7 +375,7 @@ impl TextSegment {
                     {
                         let ids: Vec<u32> = scores.keys().copied().collect();
                         let walked_tfs: Vec<u32> =
-                            list.buckets[..bi].iter().map(|(t, _)| *t).collect();
+                            groups[..bi].iter().map(|(t, _)| *t).collect();
                         for &id in &ids {
                             // One O(1) list-level probe replaces the
                             // per-bucket scan: contribute unless this
@@ -292,7 +397,7 @@ impl TextSegment {
                         break;
                     }
                 }
-                for (b, band) in bucket.bands.iter().enumerate() {
+                for (b, band) in bands.iter() {
                     if band.is_empty() {
                         continue;
                     }
@@ -309,7 +414,7 @@ impl TextSegment {
                         f64::from(*tf),
                         *df,
                         n_docs,
-                        f64::from(BAND_MIN_DL[b]),
+                        f64::from(BAND_MIN_DL[b as usize]),
                         avgdl,
                     );
                     if lists.len() == 1
@@ -381,6 +486,17 @@ impl TextSegment {
     /// Live counters.
     pub fn stats(&self) -> TextStats {
         let postings: u64 = self.postings.values().map(|l| l.len() as u64).sum();
+        // Hapax lists are INLINE (enum One) — no heap beyond their
+        // postings-map slot; only Many lists pay the per-posting
+        // band-vec + index costs.
+        let many_postings: u64 = self
+            .postings
+            .values()
+            .map(|l| match l {
+                Buckets::One { .. } => 0,
+                Buckets::Many(m) => m.index.len() as u64,
+            })
+            .sum();
         let token_bytes: u64 = self.postings.keys().map(|t| (t.len() + 48) as u64).sum();
         // docs table + the id→key/id→dl tables (key stored twice).
         let doc_bytes: u64 = self
@@ -392,10 +508,11 @@ impl TextSegment {
             docs: self.docs.len() as u64,
             tokens: self.postings.len() as u64,
             postings,
-            // per-posting ≈ 4B band-vec slot + ~26B list-index entry
-            // (doc-id postings + log2 dl bands, v3.5); docs keep
-            // their original text (update path re-derives tokens).
-            approx_bytes: token_bytes + postings * 30 + doc_bytes,
+            // per-Many-posting ≈ 4B band-vec slot + ~26B list-index
+            // entry (doc-id postings + log2 dl bands, v3.5); hapax
+            // lists are inline. Docs keep their original text
+            // (update path re-derives tokens).
+            approx_bytes: token_bytes + many_postings * 30 + doc_bytes,
         }
     }
 
@@ -503,13 +620,13 @@ mod tests {
             for t in &q {
                 let Some(list) = s.postings.get(t) else { continue };
                 let df = list.len() as f64;
-                for (tf, bucket) in &list.buckets {
-                    for band in &bucket.bands {
+                for (tf, bands) in list.tf_groups() {
+                    for (_b, band) in bands.iter() {
                         for &id in band {
                             let k = s.id_key[id as usize].clone().expect("live id");
                             let dl = f64::from(s.id_dl[id as usize]);
                             *sc.entry(k).or_insert(0.0) +=
-                                bm25_score(f64::from(*tf), df, n_docs, dl, avgdl);
+                                bm25_score(f64::from(tf), df, n_docs, dl, avgdl);
                         }
                     }
                 }
