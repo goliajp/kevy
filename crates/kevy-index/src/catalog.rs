@@ -6,6 +6,9 @@ use crate::value::IndexValue;
 /// Declared scalar type of an index (`TYPE i64|f64|str`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValType {
+    /// v2.8: f32 LE vector blob (ANN kinds parse the field
+    /// themselves — never coerced through IndexValue).
+    Vector,
     /// Signed 64-bit integer.
     I64,
     /// Finite 64-bit float (NaN coerce-fails).
@@ -21,6 +24,7 @@ impl ValType {
             ValType::I64 => "i64",
             ValType::F64 => "f64",
             ValType::Str => "str",
+            ValType::Vector => "vector",
         }
     }
 
@@ -32,6 +36,8 @@ impl ValType {
             Some(ValType::F64)
         } else if raw.eq_ignore_ascii_case(b"str") {
             Some(ValType::Str)
+        } else if raw.eq_ignore_ascii_case(b"vector") {
+            Some(ValType::Vector)
         } else {
             None
         }
@@ -49,6 +55,9 @@ pub enum IndexKind {
     /// v2.7 full-text: the field tokenizes into an inverted segment
     /// (kevy-text); queried with `MATCH`, BM25-ranked.
     Text,
+    /// v2.8 ANN: the field holds an f32 LE vector indexed in an HNSW
+    /// graph (kevy-vector); queried with `KNN`, distance-ranked.
+    Ann,
 }
 
 impl IndexKind {
@@ -58,6 +67,7 @@ impl IndexKind {
             IndexKind::Range => "range",
             IndexKind::Unique => "unique",
             IndexKind::Text => "text",
+            IndexKind::Ann => "ann",
         }
     }
 
@@ -69,6 +79,8 @@ impl IndexKind {
             Some(IndexKind::Unique)
         } else if raw.eq_ignore_ascii_case(b"text") {
             Some(IndexKind::Text)
+        } else if raw.eq_ignore_ascii_case(b"ann") {
+            Some(IndexKind::Ann)
         } else {
             None
         }
@@ -101,6 +113,21 @@ pub struct IndexSpec {
     pub kind: IndexKind,
     /// Optional per-index byte budget (`MAXMEM`); 0 = unlimited.
     pub max_bytes: u64,
+    /// v2.8: ANN parameters (`Some` iff kind == Ann).
+    pub ann: Option<AnnSpec>,
+}
+
+/// v2.8 — HNSW declaration (immutable once created; RFC D2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnnSpec {
+    /// Vector dimensionality (field bytes must be dim×4 f32 LE).
+    pub dim: u32,
+    /// 0=cosine 1=l2 2=ip (kevy-vector's Distance tags).
+    pub distance: u8,
+    /// Max links per node per layer.
+    pub m: u16,
+    /// Construction beam width.
+    pub ef: u16,
 }
 
 /// Hard cap on declared indexes (RFC D1).
@@ -186,13 +213,14 @@ impl Catalog {
     }
 
     /// Serialize to the sidecar text form (one line per index:
-    /// `name<TAB>prefix<TAB>field<TAB>ty<TAB>kind<TAB>max_bytes`,
-    /// fields hex-escaped for tabs/newlines via `%XX`).
+    /// `name<TAB>prefix<TAB>field<TAB>ty<TAB>kind<TAB>max_bytes[<TAB>ann]`,
+    /// fields hex-escaped for tabs/newlines via `%XX`; the 7th column
+    /// is `dim,distance,m,ef` for ANN kinds).
     pub fn to_sidecar(&self) -> String {
         let mut out = String::from("kevy-index-catalog v1\n");
         for (s, _) in &self.specs {
             out.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}",
                 esc(&s.name),
                 esc(&s.prefix),
                 esc(&s.field),
@@ -200,6 +228,10 @@ impl Catalog {
                 s.kind.tag(),
                 s.max_bytes
             ));
+            if let Some(a) = &s.ann {
+                out.push_str(&format!("\t{},{},{},{}", a.dim, a.distance, a.m, a.ef));
+            }
+            out.push('\n');
         }
         out
     }
@@ -217,16 +249,31 @@ impl Catalog {
                 continue;
             }
             let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() != 6 {
+            if !(parts.len() == 6 || parts.len() == 7) {
                 return None;
             }
+            let ann = if parts.len() == 7 {
+                let nums: Vec<&str> = parts[6].split(',').collect();
+                if nums.len() != 4 {
+                    return None;
+                }
+                Some(AnnSpec {
+                    dim: nums[0].parse().ok()?,
+                    distance: nums[1].parse().ok()?,
+                    m: nums[2].parse().ok()?,
+                    ef: nums[3].parse().ok()?,
+                })
+            } else {
+                None
+            };
             let spec = IndexSpec {
                 name: unesc(parts[0])?,
                 prefix: unesc(parts[1])?,
                 field: unesc(parts[2])?,
                 ty: ValType::parse(parts[3].as_bytes())?,
                 kind: IndexKind::parse(parts[4].as_bytes())?,
-                max_bytes: parts[5].parse().ok()?,
+            max_bytes: parts[5].parse().ok()?,
+                ann,
             };
             c.create(spec).ok()?;
         }
@@ -274,6 +321,7 @@ mod tests {
             field: b"age".to_vec(),
             ty: ValType::I64,
             kind: IndexKind::Range,
+            ann: None,
             max_bytes: 0,
         }
     }

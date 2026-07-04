@@ -51,39 +51,80 @@ fn persist_sidecar(cat: &Catalog) {
 
 // ---------- catalog mutations (Local dispatch) ----------
 
-/// `IDX.CREATE <name> ON PREFIX <p> FIELD <f> TYPE <t> KIND <k>`.
+/// `IDX.CREATE <name> ON PREFIX <p> FIELD <f> TYPE <t> KIND <k>
+/// [MAXMEM b] [DIM d] [DISTANCE cosine|l2|ip] [M m] [EF ef]`.
 pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
-    let with_maxmem = args.len() == 13;
-    if !(args.len() == 11 || with_maxmem)
+    if args.len() < 11
+        || args.len() % 2 != 1
         || !args[2].eq_ignore_ascii_case(b"ON")
         || !args[3].eq_ignore_ascii_case(b"PREFIX")
         || !args[5].eq_ignore_ascii_case(b"FIELD")
         || !args[7].eq_ignore_ascii_case(b"TYPE")
         || !args[9].eq_ignore_ascii_case(b"KIND")
-        || (with_maxmem && !args[11].eq_ignore_ascii_case(b"MAXMEM"))
     {
         return encode_error(
             out,
-            "ERR usage: IDX.CREATE name ON PREFIX p FIELD f TYPE i64|f64|str KIND range|unique [MAXMEM bytes]",
+            "ERR usage: IDX.CREATE name ON PREFIX p FIELD f TYPE i64|f64|str|vector KIND range|unique|text|ann [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]",
         );
     }
-    let max_bytes: u64 = if with_maxmem {
-        match std::str::from_utf8(&args[12]).ok().and_then(|s| s.parse().ok()) {
-            Some(v) => v,
-            None => return encode_error(out, "ERR MAXMEM must be an integer byte count"),
+    let mut max_bytes = 0u64;
+    let (mut dim, mut m, mut ef) = (0u32, 16u16, 200u16);
+    let mut distance = 0u8;
+    let mut i = 11;
+    while i + 1 < args.len() {
+        let (opt, val) = (&args[i], &args[i + 1]);
+        let parsed: Option<u64> = std::str::from_utf8(val).ok().and_then(|s| s.parse().ok());
+        if opt.eq_ignore_ascii_case(b"MAXMEM") {
+            let Some(v) = parsed else {
+                return encode_error(out, "ERR MAXMEM must be an integer byte count");
+            };
+            max_bytes = v;
+        } else if opt.eq_ignore_ascii_case(b"DIM") {
+            match parsed {
+                Some(v) if (1..=65_536).contains(&v) => dim = v as u32,
+                _ => return encode_error(out, "ERR DIM must be 1-65536"),
+            }
+        } else if opt.eq_ignore_ascii_case(b"M") {
+            match parsed {
+                Some(v) if (4..=64).contains(&v) => m = v as u16,
+                _ => return encode_error(out, "ERR M must be 4-64"),
+            }
+        } else if opt.eq_ignore_ascii_case(b"EF") {
+            match parsed {
+                Some(v) if (16..=1024).contains(&v) => ef = v as u16,
+                _ => return encode_error(out, "ERR EF must be 16-1024"),
+            }
+        } else if opt.eq_ignore_ascii_case(b"DISTANCE") {
+            match kevy_vector::Distance::parse(val) {
+                Some(d) => distance = d as u8,
+                None => return encode_error(out, "ERR DISTANCE must be cosine|l2|ip"),
+            }
+        } else {
+            return encode_error(out, "ERR syntax error");
         }
-    } else {
-        0
-    };
+        i += 2;
+    }
     let Some(ty) = ValType::parse(&args[8]) else {
-        return encode_error(out, "ERR TYPE must be i64|f64|str");
+        return encode_error(out, "ERR TYPE must be i64|f64|str|vector");
     };
     let Some(kind) = IndexKind::parse(&args[10]) else {
-        return encode_error(out, "ERR KIND must be range|unique");
+        return encode_error(out, "ERR KIND must be range|unique|text|ann");
     };
     if args[4].is_empty() {
         return encode_error(out, "ERR PREFIX must be non-empty");
     }
+    let ann = match (kind, ty) {
+        (IndexKind::Ann, ValType::Vector) if dim > 0 => {
+            Some(kevy_index::AnnSpec { dim, distance, m, ef })
+        }
+        (IndexKind::Ann, _) => {
+            return encode_error(out, "ERR KIND ann requires TYPE vector and DIM");
+        }
+        (_, ValType::Vector) => {
+            return encode_error(out, "ERR TYPE vector requires KIND ann");
+        }
+        _ => None,
+    };
     let spec = IndexSpec {
         name: args[1].to_vec(),
         prefix: args[4].to_vec(),
@@ -91,6 +132,7 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) 
         ty,
         kind,
         max_bytes,
+        ann,
     };
     let mut cat = index_runtime::catalog().map(|c| (*c).clone()).unwrap_or_default();
     match cat.create(spec) {

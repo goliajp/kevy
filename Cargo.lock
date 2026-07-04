@@ -435,6 +435,7 @@ dependencies = [
  "kevy-store",
  "kevy-sys",
  "kevy-text",
+ "kevy-vector",
 ]
 
 [[package]]
@@ -522,6 +523,7 @@ dependencies = [
  "kevy-rt",
  "kevy-store",
  "kevy-text",
+ "kevy-vector",
 ]
 
 [[package]]
@@ -652,6 +654,10 @@ version = "2.1.0"
 
 [[package]]
 name = "kevy-uring"
+version = "2.1.0"
+
+[[package]]
+name = "kevy-vector"
 version = "2.1.0"
 
 [[package]]

@@ -31,6 +31,24 @@ train, versions bump at ship time.
 - Batch-gated 200µs nap retained as the second ladder rung for the
   no-inflight idle shape (`NAP_BATCH_MIN` 4).
 
+### v2.8 — vector search (P2, ann kind)
+
+- **New stone crate `kevy-vector`**: HNSW with deterministic level
+  generation, Malkov Alg-4 diversity neighbor selection (preserves
+  bridge links — plain closest-K pruning disconnected outliers),
+  tombstone deletes filtered at search, bounded answer-preserving
+  rebuild. Distances: cosine (insert-normalized) / L2 / IP, all
+  oriented smaller-is-closer.
+- **`KIND ann`**: fourth index kind on the same catalog/hook/backfill
+  skeleton — fields hold f32 LE blobs (`DIM` declared; wrong shape =
+  excluded). `IDX.QUERY <name> KNN <blob|csv:> [LIMIT ≤1000]
+  [FIELDS…]` fans out per-shard graph search and merges ascending by
+  distance; `IDX.REBUILD` compacts tombstones. Embedded:
+  `idx_create_ann` / `idx_knn`.
+- bench/vectorgate.sh: KNN p95 < 30ms @ 1M×128d, **recall@10 ≥ 0.90
+  vs brute-force ground truth** (witness-cluster construction), and
+  the memory formula vs real RSS growth. docs/vector-search.md.
+
 ### v2.7 — full-text search (P2, text kind)
 
 - **New stone crate `kevy-text`** (pure logic, zero deps):

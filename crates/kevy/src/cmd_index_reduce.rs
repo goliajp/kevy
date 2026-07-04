@@ -51,43 +51,37 @@ pub(crate) fn extension_reduce(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8
     if verb.eq_ignore_ascii_case(b"IDX.VERIFY") {
         return reduce_verify(&chunks);
     }
-    // v2.7 MATCH: merge score-ranked chunks (shard-local BM25 —
-    // documented approximation), take the global top LIMIT.
-    if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"MATCH")) {
-        let Some(q) = crate::cmd_index_query::MatchArgs::parse(argv) else {
-            encode_error(&mut out, "ERR bad IDX arguments");
-            return out;
-        };
-        let mut all: Vec<(f64, Vec<u8>, Hydrated)> = Vec::new();
+    // v2.8 KNN: merge distance-ranked chunks ascending (smaller =
+    // closer for every metric).
+    if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"KNN")) {
+        return reduce_ranked(argv, &chunks, true);
+    }
+
+    // v2.8 REBUILD: all shards OK → +OK.
+    if argv
+        .first()
+        .is_some_and(|v| v.eq_ignore_ascii_case(b"IDX.REBUILD"))
+    {
         for c in &chunks {
-            let mut pos = 1usize;
-            let Some(n) = read_u32(c, &mut pos) else { continue };
-            for _ in 0..n {
-                let Some(key) = read_kbytes(c, &mut pos) else { break };
-                let Some(sb) = c.get(pos..pos + 8) else { break };
-                let score = f64::from_le_bytes(sb.try_into().expect("8 bytes"));
-                pos += 8;
-                let Some(fv) = read_hydration(c, &mut pos) else { break };
-                all.push((score, key, fv));
-            }
-        }
-        all.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-        all.truncate(q.limit);
-        encode_array_len(&mut out, all.len() as i64);
-        for (score, key, fv) in &all {
-            let base = 2 + q.fields.len() * 2;
-            encode_array_len(&mut out, base as i64);
-            encode_bulk(&mut out, key);
-            encode_bulk(&mut out, format!("{score:.4}").as_bytes());
-            for (f, v) in q.fields.iter().zip(fv.iter().chain(std::iter::repeat(&None))) {
-                encode_bulk(&mut out, f);
-                match v {
-                    Some(b) => encode_bulk(&mut out, b),
-                    None => out.extend_from_slice(b"$-1\r\n"),
+            match c.first().copied() {
+                Some(x) if x == crate::cmd_index_query::ST_BUILDING => {
+                    encode_error(&mut out, "INDEXBUILDING index is still building");
+                    return out;
+                }
+                Some(x) if x == crate::cmd_index_query::ST_OK => {}
+                _ => {
+                    encode_error(&mut out, "ERR no such vector index");
+                    return out;
                 }
             }
         }
+        out.extend_from_slice(b"+OK\r\n");
         return out;
+    }
+    // v2.7 MATCH / v2.8 KNN: merge ranked chunks (identical layout);
+    // MATCH sorts score-descending, KNN distance-ascending.
+    if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"MATCH")) {
+        return reduce_ranked(argv, &chunks, false);
     }
     // IDX.QUERY COMPOSE: merge key-ordered chunks.
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"COMPOSE")) {
@@ -325,4 +319,60 @@ fn encode_cursor(v: &IndexValue, k: &[u8]) -> Vec<u8> {
     hex(&payload)
 }
 
-
+/// Shared MATCH/KNN reduce: decode `[n][(key, f64, hydration)*]`
+/// chunks, sort (ascending for KNN distances, descending for BM25
+/// scores), truncate to LIMIT, emit `[key, value, fields…]` rows.
+fn reduce_ranked(argv: &[Vec<u8>], chunks: &[Vec<u8>], ascending: bool) -> Vec<u8> {
+    let mut out = Vec::new();
+    let (limit, fields) = if ascending {
+        match crate::cmd_index_query::KnnArgs::parse(argv) {
+            Some(q) => (q.limit, q.fields),
+            None => {
+                encode_error(&mut out, "ERR bad IDX arguments");
+                return out;
+            }
+        }
+    } else {
+        match crate::cmd_index_query::MatchArgs::parse(argv) {
+            Some(q) => (q.limit, q.fields),
+            None => {
+                encode_error(&mut out, "ERR bad IDX arguments");
+                return out;
+            }
+        }
+    };
+    let mut all: Vec<(f64, Vec<u8>, Hydrated)> = Vec::new();
+    for c in chunks {
+        let mut pos = 1usize;
+        let Some(n) = read_u32(c, &mut pos) else { continue };
+        for _ in 0..n {
+            let Some(key) = read_kbytes(c, &mut pos) else { break };
+            let Some(sb) = c.get(pos..pos + 8) else { break };
+            let v = f64::from_le_bytes(sb.try_into().expect("8 bytes"));
+            pos += 8;
+            let Some(fv) = read_hydration(c, &mut pos) else { break };
+            all.push((v, key, fv));
+        }
+    }
+    if ascending {
+        all.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    } else {
+        all.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    }
+    all.truncate(limit);
+    encode_array_len(&mut out, all.len() as i64);
+    for (v, key, fv) in &all {
+        let base = 2 + fields.len() * 2;
+        encode_array_len(&mut out, base as i64);
+        encode_bulk(&mut out, key);
+        encode_bulk(&mut out, format!("{v:.4}").as_bytes());
+        for (f, val) in fields.iter().zip(fv.iter().chain(std::iter::repeat(&None))) {
+            encode_bulk(&mut out, f);
+            match val {
+                Some(b) => encode_bulk(&mut out, b),
+                None => out.extend_from_slice(b"$-1\r\n"),
+            }
+        }
+    }
+    out
+}
