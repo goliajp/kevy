@@ -257,6 +257,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     // EXPLAIN are server-only (embedded rebuilds inline and exposes
     // view_count instead).
     op("IDX.REBUILD",  RD, NG,   None,            None,    SERVER),
+    op("PREFIX.DIGEST", RD, NG,  None,            None,    SERVER | ESTORE),
     op("VIEW.CREATE",  RD, NG,   None,            None,    SERVER | ESTORE),
     op("VIEW.DROP",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("VIEW.LIST",    RD, NG,   None,            None,    SERVER | ESTORE),

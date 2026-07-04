@@ -108,3 +108,76 @@ impl Store {
         self.exists(keys)
     }
 }
+
+impl crate::Store {
+    /// v2.10 — order-insensitive prefix checksum for migration
+    /// verification: `(row_count, xor_of_row_digests)`. Matches the
+    /// server's `PREFIX.DIGEST` bit for bit (same canonicalization).
+    pub fn prefix_digest(&self, prefix: &[u8]) -> (u64, u64) {
+        let mut pat = prefix.to_vec();
+        pat.push(b'*');
+        let keys = self.keys(Some(&pat), None);
+        let mut xor = 0u64;
+        for key in &keys {
+            xor ^= self.row_digest_embedded(key);
+        }
+        (keys.len() as u64, xor)
+    }
+
+    fn row_digest_embedded(&self, key: &[u8]) -> u64 {
+        const FNV_OFFSET: u64 = 0xCBF2_9CE4_8422_2325;
+        const FNV_PRIME: u64 = 0x0000_0100_0000_01B3;
+        fn fnv(h: &mut u64, bytes: &[u8]) {
+            for &b in bytes {
+                *h ^= u64::from(b);
+                *h = h.wrapping_mul(FNV_PRIME);
+            }
+        }
+        let mut h = FNV_OFFSET;
+        fnv(&mut h, key);
+        let ty = self.type_of(key);
+        fnv(&mut h, ty.as_bytes());
+        match ty {
+            "string" => {
+                if let Ok(Some(v)) = self.get(key) {
+                    fnv(&mut h, &v);
+                }
+            }
+            "hash" => {
+                if let Ok(mut pairs) = self.hgetall(key) {
+                    pairs.sort();
+                    for (f, v) in pairs {
+                        fnv(&mut h, &f);
+                        fnv(&mut h, &v);
+                    }
+                }
+            }
+            "list" => {
+                if let Ok(items) = self.lrange(key, 0, -1) {
+                    for i in items {
+                        fnv(&mut h, &i);
+                    }
+                }
+            }
+            "set" => {
+                if let Ok(mut ms) = self.smembers(key) {
+                    ms.sort();
+                    for m in ms {
+                        fnv(&mut h, &m);
+                    }
+                }
+            }
+            "zset" => {
+                if let Ok(items) = self.zrange(key, 0, -1) {
+                    for (member, score) in items {
+                        fnv(&mut h, &score.to_bits().to_le_bytes());
+                        fnv(&mut h, &member);
+                    }
+                }
+            }
+            _ => {}
+        }
+        h
+    }
+}
+

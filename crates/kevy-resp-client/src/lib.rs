@@ -95,6 +95,19 @@ impl RespClient {
         self.read_one_reply()
     }
 
+    /// v2.10 — pipelined batch: send every pre-encoded command in
+    /// `raw` as one write, then read exactly `n` replies. The caller
+    /// encodes with [`encode_command`]/[`encode_command_borrowed`]
+    /// into one buffer (migration import path: 512-deep batches).
+    pub fn pipeline_raw(&mut self, raw: &[u8], n: usize) -> io::Result<Vec<Reply>> {
+        self.stream.write_all(raw)?;
+        let mut out = Vec::with_capacity(n);
+        for _ in 0..n {
+            out.push(self.read_one_reply()?);
+        }
+        Ok(out)
+    }
+
     fn read_one_reply(&mut self) -> io::Result<Reply> {
         let mut chunk = [0u8; 8192];
         loop {

@@ -55,6 +55,7 @@ impl Commands for KevyCommands {
             b"VIEW.REBUILD" if args.len() == 2 => Route::Extension,
             b"VIEW.EXPLAIN" if args.len() == 2 => Route::Extension,
             b"PREFIX.STATS" if args.len() == 2 => Route::PrefixStats,
+            b"PREFIX.DIGEST" if args.len() == 2 => Route::Extension,
             b"FEED.READ" if args.len() >= 4 => Route::FeedRead,
             b"FEED.TAIL" if args.len() == 2 => Route::FeedTail,
             b"FEED.SHARDS" if args.len() == 1 => Route::FeedShards,
@@ -225,6 +226,9 @@ impl Commands for KevyCommands {
     }
 
     fn extension_op(&self, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+        if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"PREFIX.DIGEST")) {
+            return crate::cmd_digest::extension_op(store, argv);
+        }
         if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
             return crate::cmd_view::extension_op(store, argv);
         }
@@ -232,6 +236,9 @@ impl Commands for KevyCommands {
     }
 
     fn extension_reduce(&self, argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
+        if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"PREFIX.DIGEST")) {
+            return crate::cmd_digest::extension_reduce(chunks);
+        }
         if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
             return crate::cmd_view::extension_reduce(argv, chunks);
         }

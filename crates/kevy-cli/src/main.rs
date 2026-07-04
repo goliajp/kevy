@@ -54,6 +54,15 @@ fn main() -> ExitCode {
     if !args.is_empty() && args[0] == "restore" {
         return run_restore_cli(&args[1..]);
     }
+    // v2.10 — migration subcommands (TCP, host/port flags inline).
+    if !args.is_empty() && (args[0] == "export" || args[0] == "import") {
+        return run_migrate_cli(&args);
+    }
+    if !args.is_empty()
+        && matches!(args[0].as_str(), "copy-prefix" | "delete-prefix" | "digest" | "diff" | "inspect")
+    {
+        return run_bulk_cli(&args);
+    }
     // Strip subcommand arg if it was something other than a flag we
     // already handled, to preserve the existing redis-cli arg shape.
     let _ = &mut args;
@@ -298,3 +307,172 @@ fn parse_restore_args(args: &[String]) -> Result<(std::path::PathBuf, std::path:
         target_dir.ok_or_else(|| "--to missing".to_string())?,
     ))
 }
+
+/// `export [-h host] [-p port] [--prefix p] <out-file>` /
+/// `import [-h host] [-p port] [--resume] [--strict] <file>`.
+fn run_migrate_cli(args: &[String]) -> ExitCode {
+    let verb = args[0].as_str();
+    let (mut host, mut port) = (DEFAULT_HOST.to_string(), DEFAULT_PORT);
+    let mut prefix: Option<Vec<u8>> = None;
+    let (mut resume, mut strict) = (false, false);
+    let mut file: Option<String> = None;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-h" if i + 1 < args.len() => {
+                host = args[i + 1].clone();
+                i += 2;
+            }
+            "-p" if i + 1 < args.len() => {
+                port = args[i + 1].parse().unwrap_or(DEFAULT_PORT);
+                i += 2;
+            }
+            "--prefix" if i + 1 < args.len() => {
+                prefix = Some(args[i + 1].clone().into_bytes());
+                i += 2;
+            }
+            "--resume" => {
+                resume = true;
+                i += 1;
+            }
+            "--strict" => {
+                strict = true;
+                i += 1;
+            }
+            other => {
+                file = Some(other.to_string());
+                i += 1;
+            }
+        }
+    }
+    let Some(file) = file else {
+        eprintln!("usage: kevy-cli {verb} [-h host] [-p port] [--prefix p | --resume --strict] <file>");
+        return ExitCode::FAILURE;
+    };
+    let mut client = match kevy_resp_client::RespClient::connect(&host, port) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("kevy-cli: connect {host}:{port}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let res = if verb == "export" {
+        kevy_cli::migrate::run_export(&mut client, prefix.as_deref(), std::path::Path::new(&file))
+            .map(|n| println!("exported {n} keys -> {file}"))
+    } else {
+        kevy_cli::migrate::run_import(&mut client, std::path::Path::new(&file), resume, strict)
+            .map(|r| {
+                println!(
+                    "imported: {} ok, {} errors, offset {}",
+                    r.sent, r.errors, r.offset
+                )
+            })
+    };
+    match res {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("kevy-cli {verb}: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// v2.10 bulk/diagnostic subcommands. Shapes:
+/// `copy-prefix [-h host -p port] [--rate N] <src-prefix> <dst-prefix>`
+/// `delete-prefix [-h host -p port] [--rate N] [--dry-run] <prefix>`
+/// `digest [-h host -p port] <prefix>`
+/// `diff <hostA:portA> <hostB:portB> <prefix…>`
+/// `inspect [-h host -p port] <prefix>`
+fn run_bulk_cli(args: &[String]) -> ExitCode {
+    let verb = args[0].as_str();
+    let (mut host, mut port) = (DEFAULT_HOST.to_string(), DEFAULT_PORT);
+    let mut rate = 0u64;
+    let mut dry_run = false;
+    let mut pos: Vec<String> = Vec::new();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-h" if i + 1 < args.len() => {
+                host = args[i + 1].clone();
+                i += 2;
+            }
+            "-p" if i + 1 < args.len() => {
+                port = args[i + 1].parse().unwrap_or(DEFAULT_PORT);
+                i += 2;
+            }
+            "--rate" if i + 1 < args.len() => {
+                rate = args[i + 1].parse().unwrap_or(0);
+                i += 2;
+            }
+            "--dry-run" => {
+                dry_run = true;
+                i += 1;
+            }
+            other => {
+                pos.push(other.to_string());
+                i += 1;
+            }
+        }
+    }
+    let connect = |host: &str, port: u16| kevy_resp_client::RespClient::connect(host, port);
+    let fail = |e: io::Error| {
+        eprintln!("kevy-cli {verb}: {e}");
+        ExitCode::FAILURE
+    };
+    match verb {
+        "diff" => {
+            if pos.len() < 3 {
+                eprintln!("usage: kevy-cli diff <hostA:portA> <hostB:portB> <prefix…>");
+                return ExitCode::FAILURE;
+            }
+            let parse = |hp: &str| -> Option<(String, u16)> {
+                let (h, p) = hp.rsplit_once(':')?;
+                Some((h.to_string(), p.parse().ok()?))
+            };
+            let (Some((ha, pa)), Some((hb, pb))) = (parse(&pos[0]), parse(&pos[1])) else {
+                eprintln!("kevy-cli diff: endpoints must be host:port");
+                return ExitCode::FAILURE;
+            };
+            let (mut ca, mut cb) = match (connect(&ha, pa), connect(&hb, pb)) {
+                (Ok(a), Ok(b)) => (a, b),
+                (Err(e), _) | (_, Err(e)) => return fail(e),
+            };
+            let prefixes: Vec<Vec<u8>> = pos[2..].iter().map(|p| p.clone().into_bytes()).collect();
+            match kevy_cli::bulk::run_diff(&mut ca, &mut cb, &prefixes, &mut io::stdout()) {
+                Ok(bad) if bad.is_empty() => ExitCode::SUCCESS,
+                Ok(_) => ExitCode::FAILURE,
+                Err(e) => fail(e),
+            }
+        }
+        _ => {
+            let mut client = match connect(&host, port) {
+                Ok(c) => c,
+                Err(e) => return fail(e),
+            };
+            let res: io::Result<()> = match (verb, pos.as_slice()) {
+                ("copy-prefix", [src, dst]) => {
+                    kevy_cli::bulk::run_copy_prefix(&mut client, src.as_bytes(), dst.as_bytes(), rate)
+                        .map(|n| println!("copied {n} keys"))
+                }
+                ("delete-prefix", [p]) => {
+                    kevy_cli::bulk::run_delete_prefix(&mut client, p.as_bytes(), rate, dry_run)
+                        .map(|n| println!("{}{n} keys", if dry_run { "would delete " } else { "deleted " }))
+                }
+                ("digest", [p]) => kevy_cli::bulk::run_digest(&mut client, p.as_bytes())
+                    .map(|(n, d)| println!("{n} keys {d}")),
+                ("inspect", [p]) => {
+                    kevy_cli::bulk::run_inspect(&mut client, p.as_bytes(), &mut io::stdout())
+                }
+                _ => {
+                    eprintln!("kevy-cli {verb}: wrong arguments");
+                    return ExitCode::FAILURE;
+                }
+            };
+            match res {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => fail(e),
+            }
+        }
+    }
+}
+
