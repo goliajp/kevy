@@ -32,7 +32,7 @@ fn main() {
             .hset(format!("row:{k}").as_bytes(), &[(b"s", format!("u{i}").as_bytes())])
             .expect("update");
         i += 1;
-        if i % 4096 == 0 {
+        if i.is_multiple_of(4096) {
             std::thread::yield_now();
         }
     }
