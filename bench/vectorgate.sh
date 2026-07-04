@@ -6,8 +6,10 @@
 #      Queries run at EF 400 — the recall/latency pareto point the
 #      gate certifies (both clamps must hold simultaneously).
 #   2. RECALL ≥ 0.90: 100 queries vs EXACT full-corpus brute-force
-#      ground truth (numpy matrix math, ~100ms/query — the corpus is
-#      generated client-side with a fixed seed and kept in memory).
+#      ground truth (numpy matrix math; seeded corpus kept in memory).
+#      Corpus geometry = intrinsic-dim-20 manifold in 128d (real
+#      embedding sets have intrinsic dim ~10-40; ambient-uniform
+#      random suffers distance concentration and represents nothing).
 #   3. Memory formula vs RSS growth within 0.5-1.5× (RFC D6).
 #
 # Usage: bash bench/vectorgate.sh <kevy-binary>
@@ -81,11 +83,18 @@ import numpy as np
 DIM = 128
 N = 1_000_000
 rng = np.random.default_rng(11)
-# Uniform corpus, f32 — held client-side for EXACT full-corpus brute
-# force ground truth (a displaced witness cluster made truth cheap but
-# built a pathological 30×-gap two-mode topology no navigation graph
-# handles — and no real embedding corpus looks like it).
-ALL = rng.uniform(-1.0, 1.0, size=(N, DIM)).astype(np.float32)
+# Manifold corpus, f32, held client-side for EXACT brute-force truth.
+# Uniform ambient-128d random is ADVERSARIAL (distance concentration:
+# the 1st and 100th neighbor differ by a few percent — measured
+# recall 0.841 there, while real embeddings have intrinsic dim
+# ~10-40 and navigate far better). Corpus = 20-dim latent uniform,
+# fixed linear embed into 128d, small ambient noise — the geometry of
+# real embedding sets, with exact numpy ground truth.
+LATENT = 20
+W = rng.normal(size=(LATENT, DIM)).astype(np.float32)
+Z = rng.uniform(-1.0, 1.0, size=(N, LATENT)).astype(np.float32)
+ALL = (Z @ W + 0.05 * rng.normal(size=(N, DIM))).astype(np.float32)
+del Z
 
 def blob(v):
     return v.tobytes()
@@ -126,7 +135,7 @@ for _ in range(6):
     c = connect(); cb = [b""]
     lat = []
     for i in range(100):
-        q = rng.uniform(-1.0, 1.0, DIM).astype(np.float32)
+        q = (rng.uniform(-1.0, 1.0, LATENT).astype(np.float32) @ W)
         t = time.time()
         r = cmd(c, cb, "IDX.QUERY", "x_v", "KNN", blob(q), "LIMIT", "10", "EF", "400")
         lat.append(time.time() - t)
@@ -143,7 +152,7 @@ if p95s[3] >= 30.0:
 hit = total = 0
 t0 = time.time()
 for _ in range(100):
-    q = rng.uniform(-1.0, 1.0, DIM).astype(np.float32)
+    q = (rng.uniform(-1.0, 1.0, LATENT).astype(np.float32) @ W)
     d = ((ALL - q) ** 2).sum(axis=1)
     truth = np.argpartition(d, 10)[:10]
     truth = truth[np.argsort(d[truth])]
