@@ -262,7 +262,20 @@ pub fn load_snapshot(store: &mut Store, path: &Path) -> io::Result<()> {
 /// apply a primary-shipped snapshot to a fresh local store without
 /// touching disk. Entries are inserted, not cleared first — call on
 /// a fresh store. Errors on bad magic/version or truncation.
-pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()> {
+pub fn load_snapshot_from<R: Read>(store: &mut Store, r: R) -> io::Result<()> {
+    load_snapshot_filtered(store, r, |_| true)
+}
+
+/// v3.2 — [`load_snapshot_from`] with a key predicate: only records
+/// whose key satisfies `keep` are loaded (skipped records are still
+/// parsed to stay in frame). The single-source replica path broadcasts
+/// one snapshot payload to every shard and each loads its own hash
+/// slice — no intermediate store, no re-serialization.
+pub fn load_snapshot_filtered<R: Read>(
+    store: &mut Store,
+    mut r: R,
+    keep: impl Fn(&[u8]) -> bool,
+) -> io::Result<()> {
     let mut magic = [0u8; 8];
     r.read_exact(&mut magic)?;
     if &magic != MAGIC {
@@ -303,7 +316,9 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()
             let field = read_bytes(&mut r)?;
             let mut d = [0u8; 8];
             r.read_exact(&mut d)?;
-            store.load_hash_field_ttl(&key, &field, u64::from_le_bytes(d));
+            if keep(&key) {
+                store.load_hash_field_ttl(&key, &field, u64::from_le_bytes(d));
+            }
             continue;
         }
         let raw_ttl = read_ttl(&mut r)?;
@@ -316,7 +331,9 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()
         match op {
             OP_STR => {
                 let val = read_bytes(&mut r)?;
-                store.load_str(key, val, ttl);
+                if keep(&key) {
+                    store.load_str(key, val, ttl);
+                }
             }
             OP_HASH => {
                 let n = read_u32(&mut r)? as usize;
@@ -326,7 +343,9 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()
                     let v = read_bytes(&mut r)?;
                     fields.push((f, v));
                 }
-                store.load_hash(key, fields, ttl);
+                if keep(&key) {
+                    store.load_hash(key, fields, ttl);
+                }
             }
             OP_LIST => {
                 let n = read_u32(&mut r)? as usize;
@@ -334,7 +353,9 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()
                 for _ in 0..n {
                     items.push(read_bytes(&mut r)?);
                 }
-                store.load_list(key, items, ttl);
+                if keep(&key) {
+                    store.load_list(key, items, ttl);
+                }
             }
             OP_SET => {
                 let n = read_u32(&mut r)? as usize;
@@ -342,7 +363,9 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()
                 for _ in 0..n {
                     members.push(read_bytes(&mut r)?);
                 }
-                store.load_set(key, members, ttl);
+                if keep(&key) {
+                    store.load_set(key, members, ttl);
+                }
             }
             OP_ZSET => {
                 let n = read_u32(&mut r)? as usize;
@@ -352,7 +375,9 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()
                     let score = f64::from_bits(read_u64(&mut r)?);
                     pairs.push((m, score));
                 }
-                store.load_zset(key, pairs, ttl);
+                if keep(&key) {
+                    store.load_zset(key, pairs, ttl);
+                }
             }
             OP_STREAM => {
                 let last_ms = read_u64(&mut r)?;
@@ -381,15 +406,17 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()
                 } else {
                     Vec::new()
                 };
-                store.load_stream(
-                    key,
-                    entries,
-                    (last_ms, last_seq),
-                    (mxd_ms, mxd_seq),
-                    entries_added,
-                    groups,
-                    ttl,
-                );
+                if keep(&key) {
+                    store.load_stream(
+                        key,
+                        entries,
+                        (last_ms, last_seq),
+                        (mxd_ms, mxd_seq),
+                        entries_added,
+                        groups,
+                        ttl,
+                    );
+                }
             }
             other => {
                 return Err(io::Error::new(

@@ -94,16 +94,40 @@ pub(crate) fn start_runners(upstream: (IpAddr, u16)) -> Result<(), &'static str>
     // shuts down their sockets so the reads unblock and join
     // completes within ~one event.
     stop_runners();
-    let mut new_runners = Vec::with_capacity(senders.len());
     let (host, port_base) = upstream;
-    for (shard_id, sender) in senders.into_iter().enumerate() {
-        let port = port_base.saturating_add(u16::try_from(shard_id).unwrap_or(u16::MAX));
-        let replica_id = format!("kevy-replica-{shard_id}");
-        new_runners.push(ReplicaRunner::spawn((host, port), replica_id, sender));
-    }
+    let new_runners = if single_source() {
+        // v3.2 embedded-as-primary: ONE upstream port, one stream —
+        // a single routing runner fans into every shard inbox.
+        vec![ReplicaRunner::spawn_routed(
+            (host, port_base),
+            "kevy-replica-single".to_string(),
+            senders,
+        )]
+    } else {
+        let mut fleet = Vec::with_capacity(senders.len());
+        for (shard_id, sender) in senders.into_iter().enumerate() {
+            let port = port_base.saturating_add(u16::try_from(shard_id).unwrap_or(u16::MAX));
+            let replica_id = format!("kevy-replica-{shard_id}");
+            fleet.push(ReplicaRunner::spawn((host, port), replica_id, sender));
+        }
+        fleet
+    };
     *REPLICA_RUNNERS.lock().expect("REPLICA_RUNNERS poisoned") = new_runners;
     *REPLICA_UPSTREAM.lock().expect("REPLICA_UPSTREAM poisoned") = Some(upstream);
     Ok(())
+}
+
+/// v3.2 — process-wide single-source flag (config
+/// `--replica-single-source`; set once by `kevy::serve`).
+static SINGLE_SOURCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Set at serve() from config.
+pub(crate) fn set_single_source(on: bool) {
+    SINGLE_SOURCE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn single_source() -> bool {
+    SINGLE_SOURCE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Read the current upstream — `(host, port_base)` when running as a
