@@ -56,6 +56,25 @@ impl ReplicaRunner {
         replica_id: String,
         sender: ReplicaInboxSender,
     ) -> Self {
+        Self::spawn_target(upstream_addr, replica_id, Target::PerShard(sender))
+    }
+
+    /// v3.2 — single-source mode: ONE runner drains one upstream
+    /// stream and fans events into EVERY shard's inbox (see
+    /// [`route_event`]).
+    pub(crate) fn spawn_routed(
+        upstream_addr: (std::net::IpAddr, u16),
+        replica_id: String,
+        senders: Vec<ReplicaInboxSender>,
+    ) -> Self {
+        Self::spawn_target(upstream_addr, replica_id, Target::Routed(senders))
+    }
+
+    fn spawn_target(
+        upstream_addr: (std::net::IpAddr, u16),
+        replica_id: String,
+        target: Target,
+    ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let socket: Arc<Mutex<Option<TcpStream>>> = Arc::new(Mutex::new(None));
@@ -63,7 +82,7 @@ impl ReplicaRunner {
         let handle = std::thread::Builder::new()
             .name(format!("kevy-replica-{replica_id}"))
             .spawn(move || {
-                run_loop(upstream_addr, replica_id, sender, stop_thread, socket_thread);
+                run_loop(upstream_addr, replica_id, target, stop_thread, socket_thread);
             })
             .expect("spawn replica runner thread");
         Self {
@@ -116,10 +135,18 @@ impl Drop for ReplicaRunner {
 /// holds the current upstream socket's `try_clone`'d handle so the
 /// shutdown path can `Shutdown::Both` it from another thread,
 /// unblocking any in-flight blocking read.
+/// Where a runner delivers events.
+enum Target {
+    /// v1.18 fleet model: this runner feeds exactly one shard.
+    PerShard(ReplicaInboxSender),
+    /// v3.2 single-source model: one runner feeds every shard.
+    Routed(Vec<ReplicaInboxSender>),
+}
+
 fn run_loop(
     upstream_addr: (std::net::IpAddr, u16),
     replica_id: String,
-    sender: ReplicaInboxSender,
+    target: Target,
     stop: Arc<AtomicBool>,
     socket_slot: Arc<Mutex<Option<TcpStream>>>,
 ) {
@@ -134,7 +161,10 @@ fn run_loop(
                 {
                     *guard = Some(handle);
                 }
-                from_offset = drain_client(&mut client, &sender, &stop);
+                from_offset = match &target {
+                    Target::PerShard(sender) => drain_client(&mut client, sender, &stop),
+                    Target::Routed(senders) => drain_client_routed(&mut client, senders, &stop),
+                };
                 // Clear the slot — the socket the slot held now owns
                 // a half-closed fd (or is going to be shut down).
                 if let Ok(mut guard) = socket_slot.lock() {
@@ -192,7 +222,7 @@ fn event_to_apply(event: ReplicaEvent, from_offset: &mut u64) -> ReplicaApply {
         ReplicaEvent::SnapshotChunk(bytes) => ReplicaApply::SnapshotChunk(bytes),
         ReplicaEvent::SnapshotEnd { ack_offset } => {
             *from_offset = ack_offset;
-            ReplicaApply::SnapshotEnd { ack_offset }
+            ReplicaApply::SnapshotEnd { ack_offset, routed: false }
         }
         ReplicaEvent::Frame(frame) => {
             *from_offset = frame.offset.saturating_add(1);
@@ -202,6 +232,79 @@ fn event_to_apply(event: ReplicaEvent, from_offset: &mut u64) -> ReplicaApply {
             }
         }
     }
+}
+
+// ---------- v3.2 single-source (embedded-as-primary) mode ----------
+
+/// Route one event fan into N shard inboxes: snapshot control/chunks
+/// BROADCAST (each shard loads its own hash slice — SnapshotEnd
+/// carries `routed: true`); keyed frames route by hash slot; the
+/// keyless flushes broadcast; other keyless frames go to shard 0
+/// (pub/sub convention).
+fn route_event(
+    event: ReplicaEvent,
+    from_offset: &mut u64,
+    senders: &[ReplicaInboxSender],
+) -> Result<(), ()> {
+    let n = senders.len();
+    let send_all = |apply: &dyn Fn() -> ReplicaApply| -> Result<(), ()> {
+        for s in senders {
+            s.send(apply()).map_err(|_| ())?;
+        }
+        Ok(())
+    };
+    match event {
+        ReplicaEvent::SnapshotBegin => send_all(&|| ReplicaApply::SnapshotBegin),
+        ReplicaEvent::SnapshotChunk(bytes) => {
+            send_all(&|| ReplicaApply::SnapshotChunk(bytes.clone()))
+        }
+        ReplicaEvent::SnapshotEnd { ack_offset } => {
+            *from_offset = ack_offset;
+            send_all(&|| ReplicaApply::SnapshotEnd { ack_offset, routed: true })
+        }
+        ReplicaEvent::Frame(frame) => {
+            *from_offset = frame.offset.saturating_add(1);
+            let verb = frame.argv.get(0).unwrap_or_default();
+            if verb.eq_ignore_ascii_case(b"FLUSHALL") || verb.eq_ignore_ascii_case(b"FLUSHDB") {
+                return send_all(&|| ReplicaApply::Frame {
+                    offset: frame.offset,
+                    argv: frame.argv.clone(),
+                });
+            }
+            let slot = match frame.argv.get(1) {
+                Some(key) => (kevy_hash::key_hash_slot(key) as usize) % n,
+                None => 0,
+            };
+            senders[slot]
+                .send(ReplicaApply::Frame { offset: frame.offset, argv: frame.argv })
+                .map_err(|_| ())
+        }
+    }
+}
+
+/// v3.2: drain loop for single-source mode (one upstream conn, all
+/// shard inboxes).
+fn drain_client_routed(
+    client: &mut ReplicaClient,
+    senders: &[ReplicaInboxSender],
+    stop: &Arc<AtomicBool>,
+) -> u64 {
+    let mut from_offset = client.expected_offset();
+    while !stop.load(Ordering::Relaxed) {
+        match client.next_event() {
+            Some(Ok(event)) => {
+                if route_event(event, &mut from_offset, senders).is_err() {
+                    return from_offset;
+                }
+            }
+            Some(Err(e)) => {
+                eprintln!("kevy: replica runner upstream error: {e}");
+                return from_offset;
+            }
+            None => return from_offset,
+        }
+    }
+    from_offset
 }
 
 #[cfg(test)]
@@ -221,7 +324,7 @@ mod tests {
         let mut off = 0;
         let out = event_to_apply(ReplicaEvent::SnapshotEnd { ack_offset: 42 }, &mut off);
         match out {
-            ReplicaApply::SnapshotEnd { ack_offset } => assert_eq!(ack_offset, 42),
+            ReplicaApply::SnapshotEnd { ack_offset, .. } => assert_eq!(ack_offset, 42),
             other => panic!("unexpected: {other:?}"),
         }
         assert_eq!(off, 42, "SnapshotEnd must jump from_offset to ack_offset");

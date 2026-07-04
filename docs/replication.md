@@ -196,3 +196,48 @@ Do nothing. The primary detects that the replica's requested offset is no longer
 - [`crates/kevy-cluster-rw`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-cluster-rw) — the read/write-split client.
 - [`crates/kevy-elect`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-elect) — quorum failover.
 - [`crates/kevy-embedded`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded) — embed-as-replica `Store::open_replica`.
+
+## Embedded-as-primary (v3.2)
+
+An embedded application can be the PRIMARY, with a kevy server as its
+replica — read scaling and a full query surface (the replica declares
+its own indexes/views/aggregates over the replicated data) for an
+in-process store:
+
+```rust
+// the application (primary)
+let store = Store::open(
+    Config::default().with_shards(4).with_embed_writer("127.0.0.1:7101"),
+)?;
+```
+
+```toml
+# the server replica (replica.toml)
+[replication]
+role = "replica"
+upstream = "127.0.0.1:7101"
+single_source = true          # ONE upstream stream, hash-routed locally
+```
+
+`single_source = true` tells the server the upstream is a single
+stream (an embed writer source) rather than the per-shard port fleet
+of server↔server replication: one runner connects, keyed frames route
+to local shards by key hash, FLUSHALL/FLUSHDB broadcast, and a
+snapshot ship broadcasts the whole payload with each shard loading
+only its own hash slice.
+
+A replica handshaking from offset 0 (fresh) or from past the backlog
+window receives a full snapshot ship from the embed source (the
+v1.21 anti-scope, closed in v3.2): a point-in-time freeze of every
+shard plus the as-of offset, then live frames.
+
+Relationship to the CDC feed (docs/cdc.md): they coexist by design.
+The replication source serves REPLICA CONSISTENCY (infra plane,
+per-source offsets); the feed serves APPLICATION CDC ((generation,
+offset) cursors, prefix filters, at-least-once). Unifying them would
+tie app-facing CDC semantics to the replica protocol.
+
+Gate: `bench/repligate.sh` — true two-process: snapshot ship to a
+fresh replica, quiesced digest stability, restart re-sync, and
+replica-local `IDX.CREATE`/`IDX.QUERY` over replicated data.
+
