@@ -42,8 +42,10 @@ type ScoredList<'s> = (&'s Buckets, f64, f64);
 /// visits ~k·buckets postings instead of the whole list (the
 /// single-common-term shape measured 1.5ms at 66k postings under the
 /// tf-only stop; dl-ordering makes the within-bucket cut).
-/// (dl, key) ascending — one tf bucket's postings.
-type DlSet = std::collections::BTreeSet<(u32, Vec<u8>)>;
+/// One tf bucket's postings grouped by dl ascending: probes stay
+/// zero-alloc O(1) hash lookups (dl comes from the docs table), and
+/// ordered walks go dl-group by dl-group (few distinct dls per tf).
+type DlSet = std::collections::BTreeMap<u32, HashMap<Vec<u8>, ()>>;
 
 #[derive(Debug, Default)]
 pub struct Buckets {
@@ -56,29 +58,30 @@ pub struct Buckets {
 impl Buckets {
     fn insert(&mut self, tf: u32, dl: u32, key: Vec<u8>) {
         let pos = self.buckets.iter().position(|(t, _)| *t <= tf);
-        match pos {
-            Some(i) if self.buckets[i].0 == tf => {
-                self.buckets[i].1.insert((dl, key));
-            }
+        let slot = match pos {
+            Some(i) if self.buckets[i].0 == tf => &mut self.buckets[i].1,
             Some(i) => {
-                let mut m = DlSet::new();
-                m.insert((dl, key));
-                self.buckets.insert(i, (tf, m));
+                self.buckets.insert(i, (tf, DlSet::new()));
+                &mut self.buckets[i].1
             }
             None => {
-                let mut m = DlSet::new();
-                m.insert((dl, key));
-                self.buckets.push((tf, m));
+                self.buckets.push((tf, DlSet::new()));
+                &mut self.buckets.last_mut().expect("just pushed").1
             }
-        }
+        };
+        slot.entry(dl).or_default().insert(key, ());
         self.total += 1;
     }
 
     fn remove(&mut self, tf: u32, dl: u32, key: &[u8]) {
         if let Some(i) = self.buckets.iter().position(|(t, _)| *t == tf)
-            && self.buckets[i].1.remove(&(dl, key.to_vec()))
+            && let Some(group) = self.buckets[i].1.get_mut(&dl)
+            && group.remove(key).is_some()
         {
             self.total -= 1;
+            if group.is_empty() {
+                self.buckets[i].1.remove(&dl);
+            }
             if self.buckets[i].1.is_empty() {
                 self.buckets.remove(i);
             }
@@ -98,12 +101,12 @@ impl Buckets {
         self.buckets.first().map_or(1, |(t, _)| *t)
     }
 
-    /// Membership probe: `dl` comes from the caller's docs table, so
-    /// this is an exact O(log) set lookup per bucket.
+    /// Membership probe: `dl` comes from the caller's docs table —
+    /// zero-alloc, O(log #dls) + one hash lookup per bucket.
     fn get(&self, key: &[u8], dl: u32) -> Option<u32> {
         self.buckets
             .iter()
-            .find(|(_, m)| m.contains(&(dl, key.to_vec())))
+            .find(|(_, m)| m.get(&dl).is_some_and(|g| g.contains_key(key)))
             .map(|(t, _)| *t)
     }
 }
@@ -224,7 +227,7 @@ impl TextSegment {
                         for (tf2, bucket2) in &list.buckets[bi..] {
                             for key in &keys {
                                 let dl_u = self.docs.get(*key).map_or(1, |d| d.0);
-                                if bucket2.contains(&(dl_u, key.to_vec())) {
+                                if bucket2.get(&dl_u).is_some_and(|g| g.contains_key(*key)) {
                                     *scores.get_mut(key).expect("accumulated") += bm25_score(
                                         f64::from(*tf2),
                                         *df,
@@ -238,13 +241,14 @@ impl TextSegment {
                         break;
                     }
                 }
-                for (dl_u, key) in bucket.iter() {
-                    // v3.5 single-list within-bucket cut: postings are
-                    // dl-ASCENDING and BM25 falls as dl rises, so on a
-                    // one-list query (each doc appears exactly ONCE in
-                    // the whole list — no later contribution to lose)
-                    // the first posting that can't beat the kth floor
-                    // ends the bucket exactly. The tf-descending
+                for (dl_u, group) in bucket.iter() {
+                    // v3.5 single-list within-bucket cut: dl groups
+                    // are ASCENDING and BM25 falls as dl rises (every
+                    // key in one group scores identically), so on a
+                    // one-list query — each doc appears exactly ONCE
+                    // in the whole list, no later contribution to
+                    // lose — the first group that can't beat the kth
+                    // floor ends the bucket exactly. The tf-descending
                     // bucket-level bound above still ends the LIST.
                     let score =
                         bm25_score(f64::from(*tf), *df, n_docs, f64::from(*dl_u), avgdl);
@@ -254,7 +258,9 @@ impl TextSegment {
                     {
                         break;
                     }
-                    *scores.entry(key.as_slice()).or_insert(0.0) += score;
+                    for key in group.keys() {
+                        *scores.entry(key.as_slice()).or_insert(0.0) += score;
+                    }
                 }
             }
             if scores.len() >= limit && i + 1 < lists.len() {
@@ -430,9 +436,11 @@ mod tests {
                 let Some(list) = s.postings.get(t) else { continue };
                 let df = list.len() as f64;
                 for (tf, bucket) in &list.buckets {
-                    for (dl_u, k) in bucket.iter() {
-                        *sc.entry(k.clone()).or_insert(0.0) +=
-                            bm25_score(f64::from(*tf), df, n_docs, f64::from(*dl_u), avgdl);
+                    for (dl_u, group) in bucket.iter() {
+                        for k in group.keys() {
+                            *sc.entry(k.clone()).or_insert(0.0) +=
+                                bm25_score(f64::from(*tf), df, n_docs, f64::from(*dl_u), avgdl);
+                        }
                     }
                 }
             }
