@@ -305,7 +305,10 @@ impl Store {
         limit: usize,
     ) -> io::Result<Vec<(Vec<u8>, kevy_index::GroupStats)>> {
         let limit = limit.clamp(1, 1000);
-        let mut merged: Vec<(Vec<u8>, kevy_index::GroupStats)> = Vec::new();
+        // HashMap merge (same O(rows×groups) trap the server reduce
+        // had — hashing keeps it linear).
+        let mut merged: std::collections::HashMap<Vec<u8>, kevy_index::GroupStats> =
+            std::collections::HashMap::new();
         let mut found = false;
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
@@ -313,10 +316,12 @@ impl Store {
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
             if let Some((_, a)) = inner.idx_segs.agg.iter().find(|(s, _)| s.name == name) {
                 found = true;
-                for (gk, st) in a.top_groups(kevy_index::AggBy::Count, usize::MAX) {
-                    match merged.iter_mut().find(|(k, _)| *k == gk) {
-                        Some((_, m)) => kevy_index::merge_group(m, &st),
-                        None => merged.push((gk, st)),
+                for (gk, st) in a.all_groups() {
+                    match merged.get_mut(&gk) {
+                        Some(m) => kevy_index::merge_group(m, &st),
+                        None => {
+                            merged.insert(gk, st);
+                        }
                     }
                 }
             }
@@ -324,9 +329,10 @@ impl Store {
         if !found {
             return Err(io::Error::new(io::ErrorKind::NotFound, "no such aggregate index"));
         }
-        kevy_index::sort_groups(&mut merged, by);
-        merged.truncate(limit);
-        Ok(merged)
+        let mut ranked: Vec<(Vec<u8>, kevy_index::GroupStats)> = merged.into_iter().collect();
+        kevy_index::sort_groups(&mut ranked, by);
+        ranked.truncate(limit);
+        Ok(ranked)
     }
 
     /// v2.8 `KNN` — nearest neighbors merged ascending across shards.

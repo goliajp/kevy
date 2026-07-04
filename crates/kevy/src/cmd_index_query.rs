@@ -207,7 +207,7 @@ fn op_agg(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
         } else {
             // full local partials, unranked — ranking happens at the
             // reduce after cross-shard merge
-            rows = a.top_groups(kevy_index::AggBy::Count, usize::MAX);
+            rows = a.all_groups();
         }
         Some(rows)
     });

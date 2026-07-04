@@ -417,7 +417,11 @@ fn reduce_agg(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
         }
     }
     let limit = limit.clamp(1, 1000);
-    let mut merged: Vec<(Vec<u8>, kevy_index::GroupStats)> = Vec::new();
+    // HashMap merge — the first cut used a linear find over the
+    // merged list and measured 1217ms at 8 shards × 10k groups
+    // (O(rows × groups) byte compares); hashing makes it O(rows).
+    let mut merged: std::collections::HashMap<Vec<u8>, kevy_index::GroupStats> =
+        std::collections::HashMap::new();
     for c in chunks {
         let mut pos = 1usize;
         let Some(n) = read_u32(c, &mut pos) else { continue };
@@ -451,16 +455,18 @@ fn reduce_agg(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
                 break;
             }
             let part = kevy_index::GroupStats { count, sum, min: mm[0].clone(), max: mm[1].clone() };
-            match merged.iter_mut().find(|(k, _)| *k == g) {
-                Some((_, st)) => kevy_index::merge_group(st, &part),
-                None => merged.push((g, part)),
+            match merged.get_mut(&g) {
+                Some(st) => kevy_index::merge_group(st, &part),
+                None => {
+                    merged.insert(g, part);
+                }
             }
         }
     }
     if single {
         let st = merged
-            .pop()
-            .map(|(_, st)| st)
+            .into_values()
+            .next()
             .unwrap_or(kevy_index::GroupStats { count: 0, sum: 0.0, min: None, max: None });
         encode_array_len(&mut out, 5);
         encode_bulk(&mut out, st.count.to_string().as_bytes());
@@ -477,10 +483,11 @@ fn reduce_agg(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
         }
         return out;
     }
-    kevy_index::sort_groups(&mut merged, by);
-    merged.truncate(limit);
-    encode_array_len(&mut out, merged.len() as i64);
-    for (g, st) in &merged {
+    let mut ranked: Vec<(Vec<u8>, kevy_index::GroupStats)> = merged.into_iter().collect();
+    kevy_index::sort_groups(&mut ranked, by);
+    ranked.truncate(limit);
+    encode_array_len(&mut out, ranked.len() as i64);
+    for (g, st) in &ranked {
         encode_array_len(&mut out, 5);
         encode_bulk(&mut out, g);
         encode_bulk(&mut out, st.count.to_string().as_bytes());
