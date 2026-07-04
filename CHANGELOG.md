@@ -1,5 +1,45 @@
 # Changelog
 
+## v3.0.0 — kevy is a serving engine (2026-07-04)
+
+The v3 arc: eleven trains (v2.1 → v2.11), all five-axis gated
+(perf ratchet / memory formula / disk envelope / docs / coverage
+ratchet), each merged only fully green. This release is the sum:
+
+- **P0/P1 foundation** (v2.1): OP_TABLE with CI-enforced 6-surface
+  parity, atomicity charter (single-shard + deterministic-order
+  all-shard blocks), durability matrix, covgate/memgate/diskgate.
+- **Algebra parity** (v2.2): zset/set algebra, full Redis 6.2
+  semantics.
+- **CDC spine** (v2.3): (generation, offset) cursors, at-least-once
+  feeds, prefix filters, the recovery-point contract.
+- **Flow round-out** (v2.4): blocking pops, hash-field TTLs,
+  snapshot read views, zpopmin-below.
+- **The index engine** (v2.5 ⭐): declared indexes,
+  derived-by-construction, one-hop hydration, cursors, budgets.
+- **Views** (v2.6): named compositions, virtual + materialized top-K
+  (steady-state write tax 1.9% vs 15% line).
+- **Full-text** (v2.7): kevy-text — dictionary-free CJK bigram +
+  BM25 with MaxScore/impact-bucket pruning (17.4ms p95 @ 1M docs).
+- **Vector search** (v2.8): kevy-vector — HNSW with diversity
+  selection, EF pareto knob (recall@10 = 1.000 at the gate point).
+- **Topology** (v2.9): embedded read-only RESP listener (0.067ms
+  reader p99, zero tax off).
+- **RDS on-ramp** (v2.10): export/import (1.26M cmd/s, kill-9
+  resumable), PREFIX.DIGEST verification, rate-limited bulk ops.
+- **Validation arc** (v2.11): servinggate (row-list 0.24ms / write
+  fan-out 64µs on the full stack), chaosfsck (crash-survivor ==
+  fresh rebuild), 32M-key mixed soak (13ms worst rewrite stall),
+  and the cross-train VALIDATION-LEDGER.
+
+New docs arc: designing-on-kevy (six planes + the three laws +
+REFUSED table), the RDS→kevy cookbook (15 recipes), migration,
+views, text-search, vector-search, embedded-listener, cdc.
+
+Workspace: all crates at 3.0.0 (kevy-embedded included — the v2.x
+embedded line 1.x ends here). New stone crates since v2: kevy-index,
+kevy-text, kevy-vector.
+
 All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.

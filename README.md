@@ -31,6 +31,22 @@ kevy ships in three forms, all built from the same engine:
   URL so the same code targets a TCP server (`kevy://host:port`) or an
   in-process bus (`mem://name`).
 
+## kevy v3 — a serving engine
+
+v3 declares kevy a **serving engine**: the primary store for
+applications that would otherwise run an RDS with a cache in front.
+On top of full Redis parity you get declared secondary indexes
+(range / unique / CJK full-text / vector ANN) with one-hop hydration,
+composable views (virtual and materialized top-K), a CDC feed with
+exact recovery points (the built-in outbox), and a migration
+toolchain with checksummed verification — all derived-by-construction
+(maintained in the write path, never drifting, rebuilt from data).
+Every headline number is gated and re-measured on every train:
+hydrated row-list pages p99 < 1ms, write fan-out p99 < 200µs, ANN
+recall ≥ 0.9 — see [the design map](docs/designing-on-kevy.md),
+[the cookbook](docs/cookbook.md), and
+[the validation ledger](bench/VALIDATION-LEDGER.md).
+
 ## Which one do I want?
 
 | Situation | Use this |
