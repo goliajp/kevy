@@ -31,6 +31,18 @@ kevy 以三种形态提供,全部由同一个引擎构建:
   一个 URL,所以同一段代码既能对接 TCP 服务器(`kevy://host:port`),
   也能对接进程内总线(`mem://name`)。
 
+## kevy v3 — serving engine(服务引擎)
+
+v3 宣告 kevy 成为 **serving engine**:让原本"RDS + 前置缓存"的应用
+把主数据模型直接建在 kevy 上。在完整 Redis 兼容之上:声明式二级索引
+(range / unique / CJK 全文 / 向量 ANN)+ 一跳 hydration、可组合视图
+(虚拟 / 物化 top-K)、带精确恢复点的 CDC feed(内建 outbox)、带校验
+和验证的迁移工具链——全部 derived-by-construction(写路径同步维护、
+零漂移、可从数据重建)。所有 headline 指标每列 train 门禁复测:混合
+行列表页 p99 < 1ms、写扇出 p99 < 200µs、ANN recall ≥ 0.9——见
+[设计地图](docs/designing-on-kevy.md)、[cookbook](docs/cookbook.md)
+与[验证对账表](bench/VALIDATION-LEDGER.md)。
+
 ## 我应该选哪一个
 
 | 场景 | 选择 |
