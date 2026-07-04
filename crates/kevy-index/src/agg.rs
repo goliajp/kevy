@@ -173,15 +173,40 @@ impl AggSegment {
 
     /// Top `limit` groups ranked by `by` (count/sum/max descending,
     /// min ascending), ties broken by group key ascending.
+    ///
+    /// Bounded selection over BORROWED keys — the first cut cloned
+    /// and sorted every group per query (measured as the dominant
+    /// per-shard cost at 10k groups); only the winners materialize.
     pub fn top_groups(&self, by: AggBy, limit: usize) -> Vec<(Vec<u8>, GroupStats)> {
-        let mut all: Vec<(Vec<u8>, GroupStats)> = self
-            .groups
-            .keys()
-            .map(|k| (k.clone(), self.group(k)))
-            .collect();
-        sort_groups(&mut all, by);
-        all.truncate(limit);
-        all
+        let score_of = |g: &Group| -> f64 {
+            match by {
+                AggBy::Count => g.count as f64,
+                AggBy::Sum => g.sum,
+                AggBy::Max => g.values.keys().next_back().map_or(f64::NEG_INFINITY, IndexValue::as_f64),
+                AggBy::Min => g.values.keys().next().map_or(f64::NEG_INFINITY, |v| -v.as_f64()),
+            }
+        };
+        let better = |a: (f64, &[u8]), b: (f64, &[u8])| a.0 > b.0 || (a.0 == b.0 && a.1 < b.1);
+        let mut top: Vec<(f64, &Vec<u8>)> = Vec::with_capacity(limit.min(1024) + 1);
+        for (k, g) in &self.groups {
+            let cand = (score_of(g), k);
+            if top.len() < limit {
+                top.push(cand);
+                if top.len() == limit {
+                    top.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+                }
+            } else if let Some(last) = top.last()
+                && better((cand.0, cand.1), (last.0, last.1))
+            {
+                let pos = top.partition_point(|e| better((e.0, e.1), (cand.0, cand.1)));
+                top.insert(pos, cand);
+                top.pop();
+            }
+        }
+        if top.len() < limit {
+            top.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+        }
+        top.into_iter().map(|(_, k)| (k.clone(), self.group(k))).collect()
     }
 
     /// Every group, UNRANKED — the fan-out chunk shape (ranking
