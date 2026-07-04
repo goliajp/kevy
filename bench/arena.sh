@@ -6,6 +6,9 @@
 #     pinned client — the loopback_c50.sh fair-fight protocol;
 #   - median-of-5 runs + sample stdev PER CELL; a gap smaller than
 #     the stdev is reported as NOISE, not a gap;
+#   - N sized so one run lasts ≥2s at kevy speed — 2M-request cells
+#     finished in ~0.5s and QUANTIZED LOW (ledger v1 recorded
+#     3.99M/s; the ceiling ladder measured 5.3M/s truth);
 #   - competitor version recorded in the output header.
 #
 # Output: markdown table rows for bench/PERF-LEDGER.md.
@@ -18,7 +21,7 @@ cd "$(dirname "$0")"
 SRV_CORES=${SRV_CORES:-0-7}
 CLI_CORES=${CLI_CORES:-8-15}
 CLI_THREADS=${CLI_THREADS:-6}
-N=${N:-2000000}
+N=${N:-8000000}
 CONC=${CONC:-50}
 PIPE=${PIPE:-16}
 RUNS=${RUNS:-5}
