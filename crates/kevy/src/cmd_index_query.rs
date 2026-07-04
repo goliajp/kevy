@@ -221,15 +221,22 @@ fn op_agg(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
                 chunk.extend_from_slice(g);
                 chunk.extend_from_slice(&st.count.to_le_bytes());
                 chunk.extend_from_slice(&st.sum.to_le_bytes());
+                // min/max ride in a LENGTH-PREFIXED block so the
+                // reduce's ranking pass can skip it without parsing
+                // (they're only decoded for the groups that survive
+                // the LIMIT cut).
+                let mut mm = Vec::new();
                 for v in [&st.min, &st.max] {
                     match v {
                         Some(x) => {
-                            chunk.push(1);
-                            encode_value(&mut chunk, x);
+                            mm.push(1);
+                            encode_value(&mut mm, x);
                         }
-                        None => chunk.push(0),
+                        None => mm.push(0),
                     }
                 }
+                chunk.extend_from_slice(&(mm.len() as u32).to_le_bytes());
+                chunk.extend_from_slice(&mm);
             }
             chunk
         }
