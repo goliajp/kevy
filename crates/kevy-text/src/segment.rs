@@ -34,44 +34,46 @@ pub struct TextStats {
 /// One scoring candidate list: (postings, df, MaxScore upper bound).
 type ScoredList<'s> = (&'s Buckets, f64, f64);
 
-/// One token's postings, IMPACT-BUCKETED: keys grouped by tf, buckets
-/// kept tf-DESCENDING. Within one list, scores fall as tf falls (dl
-/// aside), so a walk can stop at the first bucket whose dl-free upper
-/// bound can't beat the current kth — the single-common-term shape
-/// (no second list to prune against) stops after the high-tf buckets
-/// instead of scanning everything.
+/// One token's postings, IMPACT-BUCKETED two ways (v3.5): keys
+/// grouped by tf (buckets tf-DESCENDING), and WITHIN a bucket ordered
+/// by dl ascending. BM25 is monotone ↑tf / ↓dl, so a single-list walk
+/// goes bucket-by-bucket high-tf-first and INSIDE each bucket stops
+/// the moment score(tf, dl) can't reach the kth floor — exact top-K
+/// visits ~k·buckets postings instead of the whole list (the
+/// single-common-term shape measured 1.5ms at 66k postings under the
+/// tf-only stop; dl-ordering makes the within-bucket cut).
 #[derive(Debug, Default)]
 pub struct Buckets {
-    /// (tf, keys) — sorted tf-descending; ≤ max_tf entries (tf is
-    /// small: a token rarely repeats many times in one row).
-    buckets: Vec<(u32, HashMap<Vec<u8>, ()>)>,
+    /// (tf, (dl, key) ascending) — sorted tf-descending; ≤ max_tf
+    /// entries (tf is small).
+    buckets: Vec<(u32, std::collections::BTreeSet<(u32, Vec<u8>)>)>,
     total: usize,
 }
 
 impl Buckets {
-    fn insert(&mut self, tf: u32, key: Vec<u8>) {
+    fn insert(&mut self, tf: u32, dl: u32, key: Vec<u8>) {
         let pos = self.buckets.iter().position(|(t, _)| *t <= tf);
         match pos {
             Some(i) if self.buckets[i].0 == tf => {
-                self.buckets[i].1.insert(key, ());
+                self.buckets[i].1.insert((dl, key));
             }
             Some(i) => {
-                let mut m = HashMap::new();
-                m.insert(key, ());
+                let mut m = std::collections::BTreeSet::new();
+                m.insert((dl, key));
                 self.buckets.insert(i, (tf, m));
             }
             None => {
-                let mut m = HashMap::new();
-                m.insert(key, ());
+                let mut m = std::collections::BTreeSet::new();
+                m.insert((dl, key));
                 self.buckets.push((tf, m));
             }
         }
         self.total += 1;
     }
 
-    fn remove(&mut self, tf: u32, key: &[u8]) {
+    fn remove(&mut self, tf: u32, dl: u32, key: &[u8]) {
         if let Some(i) = self.buckets.iter().position(|(t, _)| *t == tf)
-            && self.buckets[i].1.remove(key).is_some()
+            && self.buckets[i].1.remove(&(dl, key.to_vec()))
         {
             self.total -= 1;
             if self.buckets[i].1.is_empty() {
@@ -93,11 +95,12 @@ impl Buckets {
         self.buckets.first().map_or(1, |(t, _)| *t)
     }
 
-    /// O(#buckets) membership probe.
-    fn get(&self, key: &[u8]) -> Option<u32> {
+    /// Membership probe: `dl` comes from the caller's docs table, so
+    /// this is an exact O(log) set lookup per bucket.
+    fn get(&self, key: &[u8], dl: u32) -> Option<u32> {
         self.buckets
             .iter()
-            .find(|(_, m)| m.contains_key(key))
+            .find(|(_, m)| m.contains(&(dl, key.to_vec())))
             .map(|(t, _)| *t)
     }
 }
@@ -130,7 +133,7 @@ impl TextSegment {
             // old text — O(doc), not O(index)).
             for (t, tf) in tf_of(&tokenize(&old_text)) {
                 if let Some(list) = self.postings.get_mut(&t) {
-                    list.remove(tf, key);
+                    list.remove(tf, old_len, key);
                     if list.is_empty() {
                         self.postings.remove(&t);
                     }
@@ -142,10 +145,11 @@ impl TextSegment {
         if toks.is_empty() {
             return;
         }
-        self.docs.insert(key.to_vec(), (toks.len() as u32, text.to_vec()));
-        self.total_len += toks.len() as u64;
+        let dl = toks.len() as u32;
+        self.docs.insert(key.to_vec(), (dl, text.to_vec()));
+        self.total_len += u64::from(dl);
         for (t, tf) in tf_of(&toks) {
-            self.postings.entry(t).or_default().insert(tf, key.to_vec());
+            self.postings.entry(t).or_default().insert(tf, dl, key.to_vec());
         }
     }
 
@@ -216,22 +220,38 @@ impl TextSegment {
                         let keys: Vec<&[u8]> = scores.keys().copied().collect();
                         for (tf2, bucket2) in &list.buckets[bi..] {
                             for key in &keys {
-                                if bucket2.contains_key(*key) {
-                                    let dl = f64::from(
-                                        self.docs.get(*key).map_or(1, |d| d.0),
+                                let dl_u = self.docs.get(*key).map_or(1, |d| d.0);
+                                if bucket2.contains(&(dl_u, key.to_vec())) {
+                                    *scores.get_mut(key).expect("accumulated") += bm25_score(
+                                        f64::from(*tf2),
+                                        *df,
+                                        n_docs,
+                                        f64::from(dl_u),
+                                        avgdl,
                                     );
-                                    *scores.get_mut(key).expect("accumulated") +=
-                                        bm25_score(f64::from(*tf2), *df, n_docs, dl, avgdl);
                                 }
                             }
                         }
                         break;
                     }
                 }
-                for key in bucket.keys() {
-                    let dl = f64::from(self.docs.get(key.as_slice()).map_or(1, |d| d.0));
-                    *scores.entry(key.as_slice()).or_insert(0.0) +=
-                        bm25_score(f64::from(*tf), *df, n_docs, dl, avgdl);
+                for (dl_u, key) in bucket.iter() {
+                    // v3.5 single-list within-bucket cut: postings are
+                    // dl-ASCENDING and BM25 falls as dl rises, so on a
+                    // one-list query (each doc appears exactly ONCE in
+                    // the whole list — no later contribution to lose)
+                    // the first posting that can't beat the kth floor
+                    // ends the bucket exactly. The tf-descending
+                    // bucket-level bound above still ends the LIST.
+                    let score =
+                        bm25_score(f64::from(*tf), *df, n_docs, f64::from(*dl_u), avgdl);
+                    if lists.len() == 1
+                        && scores.len() >= limit
+                        && score < kth_of(&scores, limit)
+                    {
+                        break;
+                    }
+                    *scores.entry(key.as_slice()).or_insert(0.0) += score;
                 }
             }
             if scores.len() >= limit && i + 1 < lists.len() {
@@ -246,10 +266,15 @@ impl TextSegment {
             let keys: Vec<&[u8]> = scores.keys().copied().collect();
             for (list, df, _) in &lists[walked..] {
                 for key in &keys {
-                    if let Some(tf) = list.get(key) {
-                        let dl = f64::from(self.docs.get(*key).map_or(1, |d| d.0));
-                        *scores.get_mut(key).expect("accumulated") +=
-                            bm25_score(f64::from(tf), *df, n_docs, dl, avgdl);
+                    let dl_u = self.docs.get(*key).map_or(1, |d| d.0);
+                    if let Some(tf) = list.get(key, dl_u) {
+                        *scores.get_mut(key).expect("accumulated") += bm25_score(
+                            f64::from(tf),
+                            *df,
+                            n_docs,
+                            f64::from(dl_u),
+                            avgdl,
+                        );
                     }
                 }
             }
