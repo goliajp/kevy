@@ -681,3 +681,35 @@ fn ann_index_knn_embedded() {
     assert!(s.idx_create_ann(b"bad", b"g:", b"v", crate::AnnSpec { dim: 0, distance: 0, m: 0, ef: 0 }).is_err());
     assert!(s.idx_knn(b"nope", &[1.0, 2.0], 3, 0).is_err());
 }
+
+#[test]
+fn prefix_digest_matrix() {
+    let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    s.set(b"m:str", b"hello").unwrap();
+    s.hset(b"m:hash", &[(b"b", b"2"), (b"a", b"1")]).unwrap();
+    s.rpush(b"m:list", &[b"x", b"y"]).unwrap();
+    s.sadd(b"m:set", &[b"q", b"p"]).unwrap();
+    s.zadd(b"m:zset", &[(2.0, b"n" as &[u8]), (1.0, b"m")]).unwrap();
+    s.set(b"other:1", b"z").unwrap();
+    let (n, d) = s.prefix_digest(b"m:");
+    assert_eq!(n, 5);
+    assert_ne!(d, 0);
+    // order-insensitive: same data in a second store, inserted differently
+    let s2 = Store::open(Config::default().with_ttl_reaper_manual().with_shards(4)).unwrap();
+    s2.zadd(b"m:zset", &[(1.0, b"m" as &[u8]), (2.0, b"n")]).unwrap();
+    s2.sadd(b"m:set", &[b"p", b"q"]).unwrap();
+    s2.rpush(b"m:list", &[b"x", b"y"]).unwrap();
+    s2.hset(b"m:hash", &[(b"a", b"1"), (b"b", b"2")]).unwrap();
+    s2.set(b"m:str", b"hello").unwrap();
+    assert_eq!(s2.prefix_digest(b"m:"), (n, d), "shard count + insert order irrelevant");
+    // any value difference flips the digest
+    s2.set(b"m:str", b"HELLO").unwrap();
+    assert_ne!(s2.prefix_digest(b"m:").1, d);
+    // list order IS identity
+    let s3 = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    s3.rpush(b"o:l", &[b"a", b"b"]).unwrap();
+    let d3 = s3.prefix_digest(b"o:").1;
+    let s4 = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
+    s4.rpush(b"o:l", &[b"b", b"a"]).unwrap();
+    assert_ne!(s4.prefix_digest(b"o:").1, d3);
+}

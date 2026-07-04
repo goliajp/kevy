@@ -390,3 +390,30 @@ fn ann_kind_knn_e2e() {
     let r = cmd(&mut c, &[b"IDX.QUERY", b"e_v", b"KNN", b"csv:1,2", b"LIMIT", b"1"]);
     assert!(String::from_utf8_lossy(&r).contains("ERR"), "{:?}", String::from_utf8_lossy(&r));
 }
+
+#[test]
+fn prefix_digest_server_matches_embedded() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    cmd(&mut c, &[b"SET", b"pd:str", b"hello"]);
+    cmd(&mut c, &[b"HSET", b"pd:hash", b"b", b"2", b"a", b"1"]);
+    cmd(&mut c, &[b"RPUSH", b"pd:list", b"x", b"y"]);
+    cmd(&mut c, &[b"SADD", b"pd:set", b"q", b"p"]);
+    cmd(&mut c, &[b"ZADD", b"pd:zset", b"2", b"n", b"1", b"m"]);
+    let r = cmd(&mut c, &[b"PREFIX.DIGEST", b"pd:"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.starts_with("*2\r\n:5\r\n"), "count 5: {s}");
+    // must equal the embedded digest of identical data (cross-surface pin)
+    let store = kevy_embedded::Store::open(
+        kevy_embedded::Config::default().with_ttl_reaper_manual(),
+    )
+    .unwrap();
+    store.set(b"pd:str", b"hello").unwrap();
+    store.hset(b"pd:hash", &[(b"a", b"1"), (b"b", b"2")]).unwrap();
+    store.rpush(b"pd:list", &[b"x", b"y"]).unwrap();
+    store.sadd(b"pd:set", &[b"p", b"q"]).unwrap();
+    store.zadd(b"pd:zset", &[(1.0, b"m" as &[u8]), (2.0, b"n")]).unwrap();
+    let (n, d) = store.prefix_digest(b"pd:");
+    assert_eq!(n, 5);
+    assert!(s.contains(&format!("{d:016x}")), "server {s} vs embedded {d:016x}");
+}
