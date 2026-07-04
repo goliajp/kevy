@@ -60,29 +60,46 @@ pub fn run_export(
 /// Emit one key's rebuild frames. Returns false if the key vanished
 /// between SCAN and read (point-in-time per key).
 fn export_key(client: &mut RespClient, key: &[u8], out: &mut impl Write) -> io::Result<bool> {
+    match rebuild_frames(client, key, key)? {
+        Some(frame) => {
+            out.write_all(&frame)?;
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+/// Read `key` and produce DEL+rebuild frames addressed to `dst`
+/// (`dst == key` for export; a re-prefixed name for copy-prefix —
+/// the server has no COPY verb, so copying IS read+rebuild).
+pub(crate) fn rebuild_frames(
+    client: &mut RespClient,
+    key: &[u8],
+    dst: &[u8],
+) -> io::Result<Option<Vec<u8>>> {
     let ty = match client.request_borrowed(&[b"TYPE", key])? {
         Reply::Simple(t) => t,
-        _ => return Ok(false),
+        _ => return Ok(None),
     };
     let mut frame = Vec::new();
     // DEL first: replay rebuilds from scratch (idempotence for
     // append-shaped verbs like RPUSH).
-    encode_command_borrowed(&mut frame, &[b"DEL", key]);
+    encode_command_borrowed(&mut frame, &[b"DEL", dst]);
     match ty.as_slice() {
         b"string" => {
             let Reply::Bulk(v) = client.request_borrowed(&[b"GET", key])? else {
-                return Ok(false);
+                return Ok(None);
             };
-            encode_command_borrowed(&mut frame, &[b"SET", key, &v]);
+            encode_command_borrowed(&mut frame, &[b"SET", dst, &v]);
         }
         b"hash" => {
             let Reply::Array(flat) = client.request_borrowed(&[b"HGETALL", key])? else {
-                return Ok(false);
+                return Ok(None);
             };
             if flat.is_empty() {
-                return Ok(false);
+                return Ok(None);
             }
-            let mut argv: Vec<&[u8]> = vec![b"HSET", key];
+            let mut argv: Vec<&[u8]> = vec![b"HSET", dst];
             let items: Vec<Vec<u8>> = flat
                 .into_iter()
                 .filter_map(|r| if let Reply::Bulk(b) = r { Some(b) } else { None })
@@ -93,31 +110,31 @@ fn export_key(client: &mut RespClient, key: &[u8], out: &mut impl Write) -> io::
         b"list" => {
             let Reply::Array(items) = client.request_borrowed(&[b"LRANGE", key, b"0", b"-1"])?
             else {
-                return Ok(false);
+                return Ok(None);
             };
             if items.is_empty() {
-                return Ok(false);
+                return Ok(None);
             }
             let vals: Vec<Vec<u8>> = items
                 .into_iter()
                 .filter_map(|r| if let Reply::Bulk(b) = r { Some(b) } else { None })
                 .collect();
-            let mut argv: Vec<&[u8]> = vec![b"RPUSH", key];
+            let mut argv: Vec<&[u8]> = vec![b"RPUSH", dst];
             argv.extend(vals.iter().map(Vec::as_slice));
             encode_command_borrowed(&mut frame, &argv);
         }
         b"set" => {
             let Reply::Array(items) = client.request_borrowed(&[b"SMEMBERS", key])? else {
-                return Ok(false);
+                return Ok(None);
             };
             if items.is_empty() {
-                return Ok(false);
+                return Ok(None);
             }
             let ms: Vec<Vec<u8>> = items
                 .into_iter()
                 .filter_map(|r| if let Reply::Bulk(b) = r { Some(b) } else { None })
                 .collect();
-            let mut argv: Vec<&[u8]> = vec![b"SADD", key];
+            let mut argv: Vec<&[u8]> = vec![b"SADD", dst];
             argv.extend(ms.iter().map(Vec::as_slice));
             encode_command_borrowed(&mut frame, &argv);
         }
@@ -125,17 +142,17 @@ fn export_key(client: &mut RespClient, key: &[u8], out: &mut impl Write) -> io::
             let Reply::Array(items) =
                 client.request_borrowed(&[b"ZRANGE", key, b"0", b"-1", b"WITHSCORES"])?
             else {
-                return Ok(false);
+                return Ok(None);
             };
             if items.is_empty() {
-                return Ok(false);
+                return Ok(None);
             }
             let flat: Vec<Vec<u8>> = items
                 .into_iter()
                 .filter_map(|r| if let Reply::Bulk(b) = r { Some(b) } else { None })
                 .collect();
             // ZADD wants score member; ZRANGE gives member score
-            let mut argv: Vec<&[u8]> = vec![b"ZADD", key];
+            let mut argv: Vec<&[u8]> = vec![b"ZADD", dst];
             for pair in flat.chunks(2) {
                 if pair.len() == 2 {
                     argv.push(&pair[1]);
@@ -144,7 +161,7 @@ fn export_key(client: &mut RespClient, key: &[u8], out: &mut impl Write) -> io::
             }
             encode_command_borrowed(&mut frame, &argv);
         }
-        _ => return Ok(false), // streams etc. — out of the rebuild set
+        _ => return Ok(None), // streams etc. — out of the rebuild set
     }
     // TTL rides as an absolute PEXPIREAT follow-up
     if let Reply::Int(ms) = client.request_borrowed(&[b"PTTL", key])?
@@ -156,11 +173,10 @@ fn export_key(client: &mut RespClient, key: &[u8], out: &mut impl Write) -> io::
             .as_millis() as i64;
         encode_command_borrowed(
             &mut frame,
-            &[b"PEXPIREAT", key, (now + ms).to_string().as_bytes()],
+            &[b"PEXPIREAT", dst, (now + ms).to_string().as_bytes()],
         );
     }
-    out.write_all(&frame)?;
-    Ok(true)
+    Ok(Some(frame))
 }
 
 /// Import stats.
@@ -252,6 +268,11 @@ fn write_progress(f: &mut File, offset: u64) -> io::Result<()> {
     f.seek(SeekFrom::Start(0))?;
     f.write_all(offset.to_string().as_bytes())?;
     f.sync_data()
+}
+
+/// Crate-visible alias for [`command_len`] (bulk copy counts frames).
+pub(crate) fn command_len_pub(b: &[u8]) -> Option<usize> {
+    command_len(b)
 }
 
 /// Length of one complete RESP command at the head of `b`, or `None`.
