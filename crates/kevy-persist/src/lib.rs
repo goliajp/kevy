@@ -37,6 +37,7 @@
 #![forbid(unsafe_code)]
 
 mod aof;
+pub mod feed_meta;
 pub mod layout;
 mod replay;
 pub mod reshard;
@@ -68,6 +69,17 @@ use std::path::Path;
 /// loader still accepts v2 (relative TTL) and v3 (no group section).
 const MAGIC: &[u8; 8] = b"KEVYSNAP";
 const VERSION: u8 = 4;
+/// v2.3: version 5 carries a 16-byte feed cursor (`gen u64 LE` +
+/// `offset u64 LE`) right after the version byte — the snapshot half
+/// of the recovery-point contract (docs/cdc.md): snapshot S + feed
+/// frames from S's cursor = exact restore. Writers emit v5 only when
+/// a cursor is supplied; cursor-less writes stay at v4 so every
+/// existing path is byte-identical.
+const VERSION_FEED_CURSOR: u8 = 5;
+/// v2.4: version 6 additionally carries `OP_HFTTL` hash field-TTL
+/// records after the entry stream. Written only when field TTLs
+/// exist; the header still carries the (possibly zero) feed cursor.
+const VERSION_HASH_TTL: u8 = 6;
 const VERSION_RELATIVE_TTL: u8 = 2;
 const VERSION_ABSOLUTE_TTL: u8 = 3;
 
@@ -80,6 +92,10 @@ const OP_LIST: u8 = 3;
 const OP_SET: u8 = 4;
 const OP_ZSET: u8 = 5;
 const OP_STREAM: u8 = 6;
+/// v2.4 hash field TTL record: `[key][field][deadline_ms: u64 LE]`.
+/// Appears only in format v6+ snapshots, after the entry stream's
+/// records (before OP_EOF).
+const OP_HFTTL: u8 = 7;
 
 /// BufWriter capacity for bulk snapshot / AOF-rewrite writes. The 8 KiB
 /// default made SAVE ~12 % of disk bandwidth (tens of thousands of small
@@ -93,17 +109,28 @@ pub(crate) const SNAPSHOT_BUF_CAP: usize = 1 << 20;
 pub trait SnapshotSource {
     /// Visit every live entry as `(key, &value, remaining_ttl_ms)`.
     fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>));
+
+    /// v2.4: visit every live hash field TTL as `(key, field,
+    /// absolute_unix_ms)`. Default = none (sources predating the
+    /// feature).
+    fn for_each_hash_ttl(&self, _f: impl FnMut(&[u8], &[u8], u64)) {}
 }
 
 impl SnapshotSource for Store {
     fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>)) {
         self.snapshot_each(f);
     }
+    fn for_each_hash_ttl(&self, f: impl FnMut(&[u8], &[u8], u64)) {
+        self.hash_ttl_each(f);
+    }
 }
 
 impl SnapshotSource for kevy_store::SnapshotView {
     fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>)) {
         self.each(f);
+    }
+    fn for_each_hash_ttl(&self, f: impl FnMut(&[u8], &[u8], u64)) {
+        self.each_hash_ttl(f);
     }
 }
 
@@ -127,9 +154,37 @@ pub fn save_snapshot<S: SnapshotSource>(src: &S, path: &Path) -> io::Result<()> 
 /// `sync_all` themselves; callers that need bytes (network ship)
 /// pass a `Vec<u8>`.
 pub fn write_snapshot_to<S: SnapshotSource, W: Write>(src: &S, sink: &mut W) -> io::Result<()> {
+    write_snapshot_to_with_cursor(src, sink, None)
+}
+
+/// [`write_snapshot_to`] with the v2.3 recovery-point header: when
+/// `cursor = Some((generation, offset))` the snapshot records the feed
+/// position it was taken at (format v5); `None` writes the legacy v4
+/// stream unchanged.
+pub fn write_snapshot_to_with_cursor<S: SnapshotSource, W: Write>(
+    src: &S,
+    sink: &mut W,
+    cursor: Option<(u64, u64)>,
+) -> io::Result<()> {
+    // v2.4: field-TTL records force format v6; collect them first so
+    // the header version is known before anything is written.
+    let mut fttl: Vec<(Vec<u8>, Vec<u8>, u64)> = Vec::new();
+    src.for_each_hash_ttl(|k, f, d| fttl.push((k.to_vec(), f.to_vec(), d)));
     let mut w = BufWriter::with_capacity(SNAPSHOT_BUF_CAP, sink);
     w.write_all(MAGIC)?;
-    w.write_all(&[VERSION])?;
+    let version = if !fttl.is_empty() {
+        VERSION_HASH_TTL
+    } else if cursor.is_some() {
+        VERSION_FEED_CURSOR
+    } else {
+        VERSION
+    };
+    w.write_all(&[version])?;
+    if version >= VERSION_FEED_CURSOR {
+        let (generation, offset) = cursor.unwrap_or((0, 0));
+        w.write_all(&generation.to_le_bytes())?;
+        w.write_all(&offset.to_le_bytes())?;
+    }
     // The source yields *remaining* ms; v3 persists the absolute
     // Unix-ms deadline (now + remaining) so the TTL survives a restart.
     let now = kevy_store::now_unix_ms();
@@ -145,6 +200,12 @@ pub fn write_snapshot_to<S: SnapshotSource, W: Write>(src: &S, sink: &mut W) -> 
     });
     if let Some(e) = err {
         return Err(e);
+    }
+    for (k, f, d) in &fttl {
+        w.write_all(&[OP_HFTTL])?;
+        write_bytes(&mut w, k)?;
+        write_bytes(&mut w, f)?;
+        w.write_all(&d.to_le_bytes())?;
     }
     w.write_all(&[OP_EOF])?;
     w.flush()?;
@@ -165,6 +226,27 @@ pub fn write_snapshot_tmp<S: SnapshotSource>(src: &S, path: &Path) -> io::Result
         file.sync_all()?; // durably on disk before the rename
     }
     Ok(tmp)
+}
+
+/// Read the v2.3 recovery-point cursor from a snapshot's header:
+/// `Some((generation, offset))` for format v5+, `None` for older
+/// (cursor-less) snapshots. Does not load entries.
+pub fn read_snapshot_cursor(path: &Path) -> io::Result<Option<(u64, u64)>> {
+    let mut r = BufReader::new(File::open(path)?);
+    let mut magic = [0u8; 8];
+    r.read_exact(&mut magic)?;
+    if &magic != MAGIC {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "kevy snapshot: bad magic"));
+    }
+    let version = read_u8(&mut r)?;
+    if version < VERSION_FEED_CURSOR {
+        return Ok(None);
+    }
+    let mut cur = [0u8; 16];
+    r.read_exact(&mut cur)?;
+    let generation = u64::from_le_bytes(cur[..8].try_into().expect("8 bytes"));
+    let offset = u64::from_le_bytes(cur[8..].try_into().expect("8 bytes"));
+    Ok(Some((generation, offset)))
 }
 
 /// Load a snapshot from `path` into `store` (entries are inserted, not cleared
@@ -190,11 +272,17 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()
         ));
     }
     let version = read_u8(&mut r)?;
-    if !(VERSION_RELATIVE_TTL..=VERSION).contains(&version) {
+    if !(VERSION_RELATIVE_TTL..=VERSION_HASH_TTL).contains(&version) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "kevy snapshot: bad version",
         ));
+    }
+    if version >= VERSION_FEED_CURSOR {
+        // Loader-side the cursor is advisory (read via
+        // [`read_snapshot_cursor`] by restore tooling); skip it here.
+        let mut cur = [0u8; 16];
+        r.read_exact(&mut cur)?;
     }
     // v3+ stores absolute Unix-ms deadlines; convert each to remaining ms
     // against one `now` read so the load is internally consistent. A deadline
@@ -208,6 +296,15 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, mut r: R) -> io::Result<()
         let op = read_u8(&mut r)?;
         if op == OP_EOF {
             return Ok(());
+        }
+        // v2.4 field-TTL records: no ttl/value framing of their own.
+        if op == OP_HFTTL {
+            let key = read_bytes(&mut r)?;
+            let field = read_bytes(&mut r)?;
+            let mut d = [0u8; 8];
+            r.read_exact(&mut d)?;
+            store.load_hash_field_ttl(&key, &field, u64::from_le_bytes(d));
+            continue;
         }
         let raw_ttl = read_ttl(&mut r)?;
         let ttl = if absolute_ttl {

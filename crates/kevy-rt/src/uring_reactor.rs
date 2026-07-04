@@ -25,15 +25,13 @@ use crate::uring_conn::ParkState;
 use kevy_persist::{load_snapshot, replay_aof};
 use kevy_sys::Socket;
 use kevy_uring::{Completion, IoUring};
+pub(crate) use crate::uring_setup::{URING_ENTRIES, build_uring, io_uring_available};
 use kevy_map::KevyMap;
 use std::io;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-/// SQ/CQ depth per-shard. Paired with `PBUF_ENTRIES` — v1.25 G1/K2 bumped
-/// both to fix the c=10 000 cliff (deco-axis-k-c10000).
-const URING_ENTRIES: u32 = 2048;
 // SQPOLL is NOT wired into the shard reactor — it would spawn one kernel
 // poll thread per shard, each spinning at ~100% on the same core set as
 // the shard threads, halving effective CPU. See `bench/PERF-ATTACK-LOG-2026-06-20.md`
@@ -44,14 +42,14 @@ const URING_ENTRIES: u32 = 2048;
 /// the epoll reactor's `SPIN_LIMIT`). Keeps -c1 latency low without spinning a
 /// quiet shard at 100% forever.
 const URING_SPIN_LIMIT: u32 = 256;
-// The nap rung was removed (see the idle-ladder comment in `run_uring`).
-// URING_NAP_LIMIT / URING_NAP_MICROS / `uring_nap` are gone; spin →
-// park is the whole ladder now.
-/// Shared provided-buffer ring: 4096 × 16K = 64 MiB/shard. Linux multishot
-/// recv terminates on ENOBUFS — must size for max conns (deco-axis-k-c10000).
-const PBUF_ENTRIES: u16 = 4096;
-const PBUF_SIZE: u32 = 16 * 1024;
-const PBUF_GROUP: u16 = 0;
+/// Nap rung (batch-gated, see the idle ladder): deaf-sleep length. Long
+/// enough for all 7 origin shards to enqueue another round of forwards,
+/// short enough that a once-per-burst straggler barely notices.
+const NAP_US: u64 = 200;
+/// Minimum size of the previous inbound drain for the nap rung to arm.
+/// Sequential -c1 traffic drains 1 message per request and must never
+/// nap (that was the 15× -c1 bug the batch gate exists to prevent).
+const NAP_BATCH_MIN: usize = 4;
 /// `-ENOBUFS`: the buf ring was momentarily empty; just re-arm (don't close).
 pub(crate) const ENOBUFS: i32 = 105;
 
@@ -66,21 +64,6 @@ pub(crate) const ENOBUFS: i32 = 105;
 /// in-shard memcpy fallback after the prior 256-arc cap.
 pub(crate) const MAX_IOVECS_PER_WRITEV: usize = 1024;
 
-/// Probe whether this host can build the io_uring + provided-buffer ring that
-/// [`Shard::run_uring`] needs: `io_uring_setup` not blocked by seccomp (Docker's
-/// default profile blocks it) and a kernel new enough for the buf ring (5.19+).
-/// Builds and immediately drops a real ring with the same parameters, so a
-/// success here means `run_uring` will start. [`crate::Runtime`] calls this once
-/// before spawning shards to auto-select io_uring with a graceful epoll fallback
-/// — so an unavailable io_uring degrades to epoll instead of failing startup.
-pub(crate) fn io_uring_available() -> bool {
-    match IoUring::new(URING_ENTRIES) {
-        Ok(ring) => ring
-            .register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP)
-            .is_ok(),
-        Err(_) => false,
-    }
-}
 
 // `user_data` layout: top 4 bits = op, low 60 bits = conn id.
 // v1.29 B2-alt widened OP_SHIFT from 61 to 60 to add two new op tags
@@ -114,10 +97,17 @@ pub(crate) const OP_BIG_CANCEL: u64 = 8 << OP_SHIFT;
 pub(crate) const OP_BIG_READ: u64 = 9 << OP_SHIFT;
 const CONN_MASK: u64 = (1 << OP_SHIFT) - 1;
 
+
 impl<C: Commands> Shard<C> {
     /// Completion-based run loop (Linux io_uring). Mirrors [`Shard::run`] but
     /// drives socket I/O through io_uring instead of the readiness poller.
-    pub(crate) fn run_uring(mut self, stop: Arc<AtomicBool>) -> io::Result<()> {
+    /// The ring pair comes from [`build_uring`] at the spawn site (see the
+    /// fallback rationale there).
+    pub(crate) fn run_uring(
+        mut self,
+        ring_pair: (IoUring, kevy_uring::ProvidedBufRing),
+        stop: Arc<AtomicBool>,
+    ) -> io::Result<()> {
         self.commands.on_shard_start(self.id);
         // Restore: snapshot then AOF replay (same as the readiness path).
         let snap = self.snapshot_path();
@@ -135,10 +125,10 @@ impl<C: Commands> Shard<C> {
             })?;
         }
 
-        let mut ring = IoUring::new(URING_ENTRIES)?;
         // One provided-buffer ring per shard feeds every conn's multishot recv
-        // (needs Linux 5.19+; the epoll reactor is the fallback for older kernels).
-        let mut pbuf = ring.register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP)?;
+        // (needs Linux 5.19+; the epoll reactor is the fallback for older
+        // kernels AND for per-shard setup failure — see `build_uring`).
+        let (mut ring, mut pbuf) = ring_pair;
         // v2.0.15: replication listener accept must NOT block the reactor.
         // The epoll path sets this in `shard::run` via `poller.add`-side
         // setup; the io_uring path didn't. `accept_ready_replication`
@@ -159,6 +149,11 @@ impl<C: Commands> Shard<C> {
         let mut un_accept_inflight = self.unix_listener.is_none();
         let mut comps: Vec<Completion> = Vec::with_capacity(URING_ENTRIES as usize);
         let mut idle_spins: u32 = 0;
+        // v2.2-perf (nap rung restored, batch-gated): size of the last
+        // non-empty inbound drain + whether this idle episode already
+        // napped. See the idle-ladder comment below.
+        let mut last_inbound_batch: usize = 0;
+        let mut napped = false;
         let mut park = ParkState::default();
         let mut woke_from_park = false;
 
@@ -438,38 +433,64 @@ impl<C: Commands> Shard<C> {
                 self.reap_closed_replicas();
             }
 
-            // Idle ladder — spin, then park (no nap rung):
+            // Idle ladder — spin, then a BATCH-GATED deaf nap, then park:
             //   1. busy-poll `URING_SPIN_LIMIT` empty iterations, so a -c1
             //      client's next request is reaped immediately;
-            //   2. park: io_uring blocking wait, woken by any socket I/O
+            //   2. nap (only when the last inbound drain was a real batch,
+            //      `>= NAP_BATCH_MIN`, and once per idle episode): a
+            //      bounded `thread::sleep(NAP_US)` that lets the 7 origin
+            //      shards' forwards accumulate so the owner drains one big
+            //      batch per wake instead of park/wake-churning per small
+            //      batch;
+            //   3. park: io_uring blocking wait, woken by any socket I/O
             //      CQE, the waker pipe, or the bounding timeout. A truly
             //      idle shard costs ~zero CPU.
             //
-            // The previous middle rung was a `thread::sleep(200 µs)` nap
-            // intended to aggregate inbound work into bigger batches under
-            // load. It pinned Rust-client `-c1` throughput at ~4 k ops/s
-            // because `thread::sleep` is wake-deaf — a request landing in
-            // the nap window paid the full 200 µs regardless of how fast
-            // the socket data actually arrived. Both attempted nap
-            // replacements (an io_uring `prep_timeout` + `submit_and_wait`
-            // variant, and a state-machine refactor) deadlocked under
-            // sequential single-conn Rust traffic; removing the nap rung
-            // is the simpler, provably-correct fix. Park already wakes
-            // instantly on socket CQE, so latency is unaffected; the only
-            // cost is the 8-shard high-concurrency throughput note
-            // (−18~21 %) that motivated the nap originally, which gets
-            // revisited as a v1.22.x follow-up.
+            // History (the whole point of the batch gate): the original
+            // v1.16-era nap was UNCONDITIONAL `thread::sleep(200 µs)` —
+            // great for the 8-shard cross-shard shape (aggregation), but
+            // wake-deaf, so a sequential -c1 Rust client paid the full
+            // 200 µs per request (~4 k ops/s, 15× slower than valkey).
+            // 4fa4631 (v1.23 sprint) removed the rung entirely, fixing -c1
+            // but silently costing the foreseen −18~21 % on the 8-shard
+            // shape (`legacy_8sh_set` 9.98M → 7.6M single-commit step,
+            // measured 2026-07-04 — the "v1.22.x follow-up if a workload
+            // re-surfaces it" that never happened). The batch gate keeps
+            // both: -c1 traffic drains batches of 1 (< NAP_BATCH_MIN) and
+            // goes straight to the wake-aware park — its 15 µs steady
+            // state is untouched; the cross-shard owner sees large drains
+            // and earns the aggregation nap. Worst-case added latency for
+            // a lone request that lands right after a burst: one NAP_US,
+            // once (the `napped` flag forces park next).
+            // Full evidence chain:
+            // bench/PERF-DECOMP-2026-07-04-legacy8sh-owner-starvation.md.
             //
             // A non-empty backlog means a peer ring is full — keep
             // spinning to re-attempt the flush (nothing would wake us
             // when the peer drains).
             woke_from_park = false;
             let has_backlog = self.backlog.iter().any(|b| !b.is_empty());
-            if !io_work && !did_inbound && !has_backlog {
+            if !io_work && did_inbound == 0 && !has_backlog {
+                // v2.2-perf: forwarded requests outstanding ⇒ replies land
+                // within ~one cross-shard RTT — stay in the spin rung
+                // rather than paying a kernel sleep + wake per reply
+                // batch. Bounded: inflight can only drain (the owner
+                // answers) or the conn dies (folds error responses).
+                if self.xshard_inflight > 0 {
+                    std::hint::spin_loop();
+                    continue;
+                }
                 idle_spins = idle_spins.saturating_add(1);
                 if idle_spins >= URING_SPIN_LIMIT {
-                    self.uring_park(&mut ring, &mut park)?;
-                    woke_from_park = true;
+                    if !napped && last_inbound_batch >= NAP_BATCH_MIN {
+                        std::thread::sleep(Duration::from_micros(NAP_US));
+                        napped = true;
+                    } else {
+                        self.uring_park(&mut ring, &mut park)?;
+                        woke_from_park = true;
+                        napped = false;
+                        last_inbound_batch = 0;
+                    }
                 } else {
                     // E12: signal the CPU that we are in a spin-wait loop.
                     // Compiles to `PAUSE` on x86 / `YIELD` on ARM. Reduces
@@ -482,12 +503,17 @@ impl<C: Commands> Shard<C> {
                 }
             } else {
                 idle_spins = 0;
+                if did_inbound > 0 {
+                    last_inbound_batch = did_inbound;
+                    napped = false;
+                }
             }
         }
         // v1.25.x SAVE migration: drain bg persist completions before
         // exit so a `+OK` SAVE reply isn't followed by a torn snapshot
         // (see [`Shard::drain_persist_on_shutdown`]).
         self.drain_persist_on_shutdown();
+        self.write_feed_shutdown_marker();
         Ok(())
     }
 

@@ -197,6 +197,7 @@ fn producer_loop(
     );
 }
 
+#[allow(clippy::too_many_arguments)] // chaos-test driver; a params struct adds noise, not clarity
 fn run_phase(
     name: &str,
     producer_id: usize,
@@ -302,11 +303,10 @@ fn read_used_memory(port: u16) -> u64 {
     };
     let text = String::from_utf8_lossy(&buf[..n]);
     for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("used_memory:") {
-            if let Ok(v) = rest.trim().parse::<u64>() {
+        if let Some(rest) = line.strip_prefix("used_memory:")
+            && let Ok(v) = rest.trim().parse::<u64>() {
                 return v;
             }
-        }
     }
     0
 }

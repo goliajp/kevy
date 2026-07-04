@@ -32,6 +32,22 @@ kevy は同一のエンジンから三つの形態で提供されます。
   どちらも URL を受け取るため、同一のコードで TCP サーバ(`kevy://host:port`)にも
   プロセス内バス(`mem://name`)にも接続できます。
 
+## kevy v3 — サービングエンジン
+
+v3 で kevy は **serving engine** となりました。従来「RDS +
+キャッシュ」で構成していたアプリケーションの主データモデルを、
+そのまま kevy 上に構築できます。完全な Redis 互換に加え、宣言型
+セカンダリインデックス(range / unique / CJK 全文検索 / ベクトル
+ANN)とワンホップ hydration、合成可能なビュー(仮想 / マテリアラ
+イズド top-K)、正確な復旧ポイントを持つ CDC フィード(組み込み
+outbox)、チェックサム検証付き移行ツールチェーンを備えます。すべて
+derived-by-construction(書き込みパスで同期維持、ドリフトなし、
+データから再構築可能)。主要指標は毎トレインでゲート再計測:行リスト
+ページ p99 < 1ms、書き込みファンアウト p99 < 200µs、ANN recall ≥
+0.9 — [設計マップ](docs/designing-on-kevy.md)、
+[クックブック](docs/cookbook.md)、
+[検証台帳](bench/VALIDATION-LEDGER.md)を参照。
+
 ## どれを使えばよいか
 
 | 状況 | 選ぶもの |

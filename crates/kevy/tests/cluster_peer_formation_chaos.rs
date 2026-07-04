@@ -107,8 +107,8 @@ fn cluster_peer_formation_survives_node_death() {
     eprintln!("cluster_peer: node 0 SIGKILL'd");
     std::thread::sleep(Duration::from_millis(500));
 
-    for i in 1..3 {
-        let port = ports[i].0;
+    for (i, port_pair) in ports.iter().enumerate().take(3).skip(1) {
+        let port = port_pair.0;
         let mut s = TcpStream::connect(format!("127.0.0.1:{port}"))
             .unwrap_or_else(|e| panic!("post-kill PING conn to node{i} failed: {e}"));
         let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
@@ -139,11 +139,10 @@ fn info_cluster_known_nodes(port: u16) -> u32 {
     let n = s.read(&mut buf).unwrap_or(0);
     let body = String::from_utf8_lossy(&buf[..n]);
     for line in body.lines() {
-        if let Some(rest) = line.strip_prefix("cluster_known_nodes:") {
-            if let Ok(v) = rest.trim().parse::<u32>() {
+        if let Some(rest) = line.strip_prefix("cluster_known_nodes:")
+            && let Ok(v) = rest.trim().parse::<u32>() {
                 return v;
             }
-        }
     }
     0
 }

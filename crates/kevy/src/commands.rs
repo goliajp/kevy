@@ -37,6 +37,28 @@ impl Commands for KevyCommands {
             // dispatch stub returns the arity error).
             b"MSET" if args.len() >= 3 && !args.len().is_multiple_of(2) => Route::MSet,
             b"MGET" if args.len() >= 2 => Route::MGet,
+            b"ZINTERSTORE" if args.len() >= 4 => Route::ZAlgebraStore(kevy_rt::ZCombine::ZInter),
+            b"ZUNIONSTORE" if args.len() >= 4 => Route::ZAlgebraStore(kevy_rt::ZCombine::ZUnion),
+            b"ZDIFFSTORE" if args.len() >= 4 => Route::ZAlgebraStore(kevy_rt::ZCombine::ZDiff),
+            b"SINTERSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SInter),
+            b"SUNIONSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SUnion),
+            b"SDIFFSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SDiff),
+            b"ZINTERCARD" if args.len() >= 3 => Route::ZInterCard,
+            b"IDX.QUERY" if args.len() >= 4 => Route::Extension,
+            b"IDX.REBUILD" if args.len() == 2 => Route::Extension,
+            b"IDX.COUNT" if args.len() >= 4 => Route::Extension,
+            b"IDX.VERIFY" if args.len() == 2 => Route::Extension,
+            b"IDX.LIST" if args.len() == 1 => Route::Extension,
+            b"VIEW.QUERY" if args.len() >= 2 => Route::Extension,
+            b"VIEW.LIST" if args.len() == 1 => Route::Extension,
+            b"VIEW.VERIFY" if args.len() == 2 => Route::Extension,
+            b"VIEW.REBUILD" if args.len() == 2 => Route::Extension,
+            b"VIEW.EXPLAIN" if args.len() == 2 => Route::Extension,
+            b"PREFIX.STATS" if args.len() == 2 => Route::PrefixStats,
+            b"PREFIX.DIGEST" if args.len() == 2 => Route::Extension,
+            b"FEED.READ" if args.len() >= 4 => Route::FeedRead,
+            b"FEED.TAIL" if args.len() == 2 => Route::FeedTail,
+            b"FEED.SHARDS" if args.len() == 1 => Route::FeedShards,
             b"SINTER" if args.len() >= 2 => Route::SInter,
             b"SUNION" if args.len() >= 2 => Route::SUnion,
             b"SDIFF" if args.len() >= 2 => Route::SDiff,
@@ -197,7 +219,35 @@ impl Commands for KevyCommands {
         }
     }
 
+    fn on_write(&self, store: &mut Store, key: &[u8]) {
+        crate::index_runtime::on_write(store, key);
+        // Views probe the segments the line above just refreshed.
+        crate::view_runtime::on_write(store, key);
+    }
+
+    fn extension_op(&self, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+        if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"PREFIX.DIGEST")) {
+            return crate::cmd_digest::extension_op(store, argv);
+        }
+        if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
+            return crate::cmd_view::extension_op(store, argv);
+        }
+        crate::cmd_index_query::extension_op(store, argv)
+    }
+
+    fn extension_reduce(&self, argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
+        if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"PREFIX.DIGEST")) {
+            return crate::cmd_digest::extension_reduce(chunks);
+        }
+        if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
+            return crate::cmd_view::extension_reduce(argv, chunks);
+        }
+        crate::cmd_index_reduce::extension_reduce(argv, chunks)
+    }
+
     fn on_shard_tick(&self, store: &mut Store) {
+        crate::index_runtime::on_tick(store);
+        crate::view_runtime::on_tick(store);
         // Run Redis's `activeExpireCycle` per shard. `sample` controls the
         // batch size; up to 16 rounds per tick is well below Redis's 25 %
         // CPU budget at the default 10 Hz cadence. Cheap when no TTL'd
@@ -205,6 +255,10 @@ impl Commands for KevyCommands {
         let cfg = config_global::get();
         let samples = cfg.expiry.sample as usize;
         store.tick_expire(samples, 16);
+        // v2.4: sweep due hash field TTLs. Deadlines live in the AOF
+        // (HPEXPIREAT frames), so replay purges identically — no
+        // logging needed here, same determinism argument as key TTLs.
+        let _ = store.tick_hash_ttl(64);
         // Re-apply maxmemory + eviction policy in case `CONFIG SET` has
         // swapped the global since the previous tick. `store.set_max_memory`
         // is idempotent and cheap (compares + assigns two scalars + may

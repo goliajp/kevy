@@ -24,6 +24,10 @@ pub enum TtlReaperMode {
 /// [`Config::default`].
 #[derive(Debug, Clone)]
 pub struct Config {
+    /// v2.9: optional READ-ONLY RESP listener address (ops tooling —
+    /// redis-cli against a live embedded store). `None` (default) =
+    /// no listener thread, no socket, zero tax.
+    pub resp_listener: Option<std::net::SocketAddr>,
     /// Soft memory ceiling in bytes. `0` (default) = unlimited.
     pub maxmemory: u64,
     /// Eviction policy when over `maxmemory`. Default `NoEviction`.
@@ -102,6 +106,10 @@ pub struct Config {
     /// both); the builder does not reject the combo so tests can
     /// exercise the guard rails.
     pub embed_writer_listen_addr: Option<String>,
+    /// v2.3 CDC feed (changes_since / changes_tail). Default off.
+    pub feed_enabled: bool,
+    /// Feed backlog byte budget. Default 64 MB, capped at 1 GB.
+    pub feed_buffer_size: u64,
     /// Backlog byte budget for the embed-as-writer source. Default
     /// `1 MiB` (matches the v1.18 server replication default).
     /// Set higher when consumers may disconnect for longer than
@@ -114,6 +122,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            resp_listener: None,
             maxmemory: 0,
             eviction_policy: EvictionPolicy::NoEviction,
             data_dir: None,
@@ -134,12 +143,22 @@ impl Default for Config {
             replica_reconnect_min: Duration::from_millis(100),
             replica_reconnect_max: Duration::from_secs(5),
             embed_writer_listen_addr: None,
+            feed_enabled: false,
+            feed_buffer_size: 64 * 1024 * 1024,
             embed_writer_backlog_bytes: 1024 * 1024,
         }
     }
 }
 
 impl Config {
+    /// v2.9: enable the read-only RESP listener on `addr`
+    /// (e.g. `"127.0.0.1:6009".parse().unwrap()`).
+    #[must_use]
+    pub fn with_resp_listener(mut self, addr: std::net::SocketAddr) -> Self {
+        self.resp_listener = Some(addr);
+        self
+    }
+
     /// Enable persistence under `dir` — snapshot file + AOF land inside.
     /// AOF defaults on; turn it off with [`Self::without_aof`] for pure
     /// snapshot-only durability.
@@ -263,6 +282,17 @@ impl Config {
     #[must_use]
     pub fn with_embed_writer(mut self, bind_addr: impl Into<String>) -> Self {
         self.embed_writer_listen_addr = Some(bind_addr.into());
+        self
+    }
+
+    /// v2.3: enable the CDC feed (`changes_since` / `changes_tail`).
+    /// `buffer_size` = 0 keeps the 64 MB default; values cap at 1 GB.
+    #[must_use]
+    pub fn with_feed(mut self, buffer_size: u64) -> Self {
+        self.feed_enabled = true;
+        if buffer_size > 0 {
+            self.feed_buffer_size = buffer_size.min(1024 * 1024 * 1024);
+        }
         self
     }
 

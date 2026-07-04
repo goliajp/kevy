@@ -66,6 +66,18 @@ impl<C: Commands> Shard<C> {
                 self.store.flushall();
                 // Every WATCH against this shard is now invalidated.
                 self.store.bump_all_watched();
+                // v2.3 feed contract: FLUSHALL breaks stream continuity
+                // — bump the generation (offsets restart at 0) and
+                // persist the high-water before serving under it.
+                if let Some(f) = self.replicate.as_mut() {
+                    f.bump_generation();
+                    let g = f.generation();
+                    if let Err(e) =
+                        kevy_persist::feed_meta::write_feed_gen(&self.data_dir, self.id, g)
+                    {
+                        eprintln!("kevy: shard {} feed gen write failed: {e}", self.id);
+                    }
+                }
                 let mut c = Argv::with_capacity(1, 8);
                 c.push(b"FLUSHALL");
                 self.log(&c);
@@ -100,10 +112,72 @@ impl<C: Commands> Shard<C> {
                             Ok(members) => Gathered::Members(members),
                             Err(_) => Gathered::WrongType,
                         },
+                        GatherKind::Scored => match self.store.zset_or_set_members(&k) {
+                            Ok(pairs) => Gathered::Scored(pairs),
+                            Err(_) => Gathered::WrongType,
+                        },
                     };
                     results.push((k, g));
                 }
                 Part::Gathered(results)
+            }
+            Op::ZStoreResult { dst, pairs } => {
+                let n = self.store.zstore_result(&dst, &pairs);
+                self.store.bump_if_watched(&dst);
+                // Propagate the EFFECT: DEL + plain ZADD (deterministic
+                // on replay/replica regardless of source state — the
+                // campaign's effect-not-condition rule).
+                let mut c = Argv::with_capacity(2, 0);
+                c.push(b"DEL");
+                c.push(&dst);
+                self.log(&c);
+                if !pairs.is_empty() {
+                    let mut z = Argv::with_capacity(2 + pairs.len() * 2, 0);
+                    z.push(b"ZADD");
+                    z.push(&dst);
+                    for (m, sc) in &pairs {
+                        z.push(format!("{sc}").as_bytes());
+                        z.push(m);
+                    }
+                    self.log(&z);
+                }
+                Part::Int(n as i64)
+            }
+            Op::SetStoreResult { dst, members } => {
+                let del = [dst.clone()];
+                self.store.del(&del);
+                let n = if members.is_empty() {
+                    0
+                } else {
+                    self.store.sadd(&dst, &members).unwrap_or(0)
+                };
+                self.store.bump_if_watched(&dst);
+                let mut c = Argv::with_capacity(2, 0);
+                c.push(b"DEL");
+                c.push(&dst);
+                self.log(&c);
+                if !members.is_empty() {
+                    let mut a = Argv::with_capacity(2 + members.len(), 0);
+                    a.push(b"SADD");
+                    a.push(&dst);
+                    for m in &members {
+                        a.push(m);
+                    }
+                    self.log(&a);
+                }
+                Part::Int(n as i64)
+            }
+            Op::FeedRead { cursor_gen, offset, count, prefixes } => {
+                self.exec_feed_read(cursor_gen, offset, count, prefixes)
+            }
+            Op::FeedTail => self.exec_feed_tail(),
+            Op::Extension { argv } => {
+                let chunk = self.commands.extension_op(&mut self.store, &argv);
+                Part::ExtensionChunk(chunk)
+            }
+            Op::PrefixStats(prefix) => {
+                let (keys, expires) = self.store.prefix_stats(&prefix);
+                Part::PrefixStats { keys, expires }
             }
             Op::CollectKeys(pat, limit) => {
                 Part::Keys(self.store.collect_keys(pat.as_deref(), limit))

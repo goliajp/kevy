@@ -243,13 +243,13 @@ pub const HEAP_HEAVY_BYTES: usize = 4 * 1024;
 
 /// Sender half of the runtime's bio-drop channel. Wired from
 /// `kevy-rt`'s `bio.rs` via [`crate::Store::set_bio_drop_sender`]; the
-/// concrete payload is `Vec<Box<Value>>` — a **batch** of values
+/// concrete payload is `Vec<Value>` — a **batch** of values
 /// produced by one shard since its last flush (A.2 batch-send model).
 /// The bio thread (`kevy-rt::bio::spawn`) iterates the batch and
 /// drops each item. One mpsc message per shard-flush amortises the
 /// channel cost (atomic + cross-thread cacheline traffic) across
 /// however many values landed in the batch.
-pub type BioDropSender = std::sync::mpsc::Sender<Vec<Box<Value>>>;
+pub type BioDropSender = std::sync::mpsc::Sender<Vec<Value>>;
 
 impl Value {
     /// The Redis type name (`TYPE` command).
@@ -309,7 +309,7 @@ impl Value {
     /// variant decides off a sub-field cheap to inspect (no recursive
     /// walk), so it's safe to call on every overwrite-SET on the hot
     /// path. The threshold is intentionally conservative — small Arcs
-    /// + every short string stay on inline-drop where jemalloc small-
+    /// and every short string stay on inline-drop where jemalloc small-
     /// class is sub-µs and a cross-thread hand-off would lose.
     #[inline]
     pub fn is_heap_heavy(&self) -> bool {
@@ -338,7 +338,7 @@ impl Value {
             Value::List(a) => std::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
             Value::Set(a) => std::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
             Value::ZSet(a) => {
-                std::sync::Arc::strong_count(a) == 1 && a.by_member.len() > 0
+                std::sync::Arc::strong_count(a) == 1 && !a.by_member.is_empty()
             }
             Value::Stream(a) => {
                 std::sync::Arc::strong_count(a) == 1 && a.length() > 0

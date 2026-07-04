@@ -24,7 +24,7 @@ pub enum GetReply<'a> {
 /// L2 + L1: pick the optimal encoding for `bytes` at SET time:
 /// 1. Canonical i64 ASCII → `Value::Int(n)` (smallest + INCR fast path)
 /// 2. > [`BULK_THRESHOLD`] bytes → `Value::ArcBulk(Arc<[u8]>)` (lets the
-///    reactor reply path borrow the bytes for `writev` zero-copy GET)
+///    > reactor reply path borrow the bytes for `writev` zero-copy GET)
 /// 3. Else → `Value::Str(SmallBytes::from_slice(bytes))` (inline-cache-
 ///    line storage, beats Arc indirection for small values)
 #[inline]

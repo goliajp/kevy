@@ -31,7 +31,7 @@ impl Store {
     fn drop_if_empty_set(&mut self, key: &[u8]) {
         let empty = match self.map.get(key).map(|e| &e.value) {
             Some(Value::Set(s)) => s.is_empty(),
-            Some(Value::SmallSetInline(s)) => s.len() == 0,
+            Some(Value::SmallSetInline(s)) => s.is_empty(),
             _ => false,
         };
         if empty {

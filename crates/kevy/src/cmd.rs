@@ -83,6 +83,10 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"PEXPIRE"
             | b"EXPIREAT"
             | b"PEXPIREAT"
+            | b"HEXPIRE"
+            | b"HPEXPIRE"
+            | b"HPEXPIREAT"
+            | b"HPERSIST"
             | b"PERSIST"
             | b"FLUSHDB"
             | b"FLUSHALL"
@@ -108,9 +112,16 @@ pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
             | b"ZREM"
             | b"ZINCRBY"
             | b"ZPOPMIN"
+            | b"ZPOPMIN.BELOW"
             | b"BZPOPMIN"
             | b"ZREMRANGEBYRANK"
             | b"ZREMRANGEBYSCORE"
+            | b"ZINTERSTORE"
+            | b"ZUNIONSTORE"
+            | b"ZDIFFSTORE"
+            | b"SINTERSTORE"
+            | b"SUNIONSTORE"
+            | b"SDIFFSTORE"
             | b"GEOADD"
             | b"GEOSEARCHSTORE"
             | b"GEORADIUS"
@@ -148,16 +159,19 @@ pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
             NotifyClass::String
         }
         // Hash — class `h`.
-        b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" => NotifyClass::Hash,
+        b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" | b"HEXPIRE"
+        | b"HPEXPIRE" | b"HPEXPIREAT" | b"HPERSIST" => NotifyClass::Hash,
         // List — class `l`.
         b"LPUSH" | b"RPUSH" | b"LPOP" | b"RPOP" | b"LSET" | b"LREM" | b"LTRIM"
         | b"RPOPLPUSH" | b"LMOVE" => NotifyClass::List,
         // Set — class `s` (SINTERSTORE/SUNIONSTORE/SDIFFSTORE not yet impl'd).
-        b"SADD" | b"SREM" | b"SPOP" => NotifyClass::Set,
+        b"SADD" | b"SREM" | b"SPOP" | b"SINTERSTORE" | b"SUNIONSTORE"
+        | b"SDIFFSTORE" => NotifyClass::Set,
         // Sorted set — class `z`. GEOADD writes a ZSet under the hood,
         // so it fires `zadd` notifications too (matches Redis).
-        b"ZADD" | b"ZREM" | b"ZINCRBY" | b"ZPOPMIN" | b"ZREMRANGEBYRANK"
-        | b"ZREMRANGEBYSCORE" | b"GEOADD" => NotifyClass::Zset,
+        b"ZADD" | b"ZREM" | b"ZINCRBY" | b"ZPOPMIN" | b"ZPOPMIN.BELOW" | b"ZREMRANGEBYRANK"
+        | b"ZREMRANGEBYSCORE" | b"ZINTERSTORE" | b"ZUNIONSTORE" | b"ZDIFFSTORE"
+        | b"GEOADD" => NotifyClass::Zset,
         // Stream — class `t`. XADD/XDEL/XTRIM/XGROUP/XACK/XCLAIM/
         // XREADGROUP all fire their lowercased verb name.
         b"XADD" | b"XDEL" | b"XTRIM" | b"XSETID" | b"XGROUP" | b"XACK" | b"XCLAIM"
@@ -203,6 +217,12 @@ pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
             | b"SADD"
             | b"ZADD"
             | b"ZINCRBY"
+            | b"ZINTERSTORE"
+            | b"ZUNIONSTORE"
+            | b"ZDIFFSTORE"
+            | b"SINTERSTORE"
+            | b"SUNIONSTORE"
+            | b"SDIFFSTORE"
             | b"GEOADD"
             | b"GEOSEARCHSTORE"
             | b"GEORADIUS"
@@ -452,10 +472,10 @@ pub(crate) fn fmt_score(s: f64) -> Vec<u8> {
 /// `*_borrowed` family that takes `&[&[u8]]`; the Store then materialises
 /// `SmallBytes` per member once at insert (same as before), but the dispatch
 /// hand-off no longer pays a `Vec<u8>` per arg.
-pub(crate) fn rest_borrowed<'a, A: ArgvView + ?Sized>(
-    args: &'a A,
+pub(crate) fn rest_borrowed<A: ArgvView + ?Sized>(
+    args: &A,
     from: usize,
-) -> Vec<&'a [u8]> {
+) -> Vec<&[u8]> {
     (from..args.len()).map(|i| &args[i]).collect()
 }
 

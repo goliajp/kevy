@@ -1,0 +1,18 @@
+[package]
+name = "kevy-index"
+description = "Declarative secondary indexes over prefix domains: range/unique kinds, derived-by-construction, cursor pagination."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-index"
+readme = "README.md"
+keywords = ["index", "secondary-index", "range-query", "kv", "database"]
+categories = ["data-structures", "database-implementations"]
+
+[lints]
+workspace = true
+
+[dependencies]

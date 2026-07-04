@@ -44,12 +44,17 @@ pub(crate) enum GatherKind {
     Str,
     /// Set members (for SINTER/SUNION/SDIFF).
     Set,
+    /// Scored members: zsets as-is, plain sets at score 1.0 (for the
+    /// zset algebra family — Redis lets sets participate).
+    Scored,
 }
 
 /// A single key's gathered payload.
 pub(crate) enum Gathered {
     Str(Option<Vec<u8>>),
     Members(Vec<Vec<u8>>),
+    /// `(member, score)` payload for [`GatherKind::Scored`].
+    Scored(Vec<(Vec<u8>, f64)>),
     WrongType,
 }
 
@@ -59,6 +64,28 @@ pub(crate) enum MultiOp {
     Mget,
     SInter,
     SUnion,
+    SDiff,
+    /// `ZINTERCARD numkeys key… [LIMIT n]` — reduce replies `:count`
+    /// (0 = unlimited).
+    ZInterCard(usize),
+}
+
+/// Which algebra combination a `*STORE` orchestrator runs after its
+/// gather completes (v2.2). Public: [`crate::Route::ZAlgebraStore`]
+/// carries it, and embedders' `route()` implementations construct it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZCombine {
+    /// `ZINTERSTORE`.
+    ZInter,
+    /// `ZUNIONSTORE`.
+    ZUnion,
+    /// `ZDIFFSTORE`.
+    ZDiff,
+    /// `SINTERSTORE`.
+    SInter,
+    /// `SUNIONSTORE`.
+    SUnion,
+    /// `SDIFFSTORE`.
     SDiff,
 }
 
@@ -98,6 +125,27 @@ pub(crate) enum Op {
     MSet(KvPairs),
     /// Fetch per-key payloads (MGET / set algebra).
     Gather(GatherKind, Vec<Vec<u8>>),
+    /// v2.2 step-2 of the zset-algebra orchestrator: materialize the
+    /// combined result at `dst` on its owning shard (overwrite; empty
+    /// deletes). Replies `Part::Int(cardinality)`.
+    ZStoreResult { dst: Vec<u8>, pairs: Vec<(Vec<u8>, f64)> },
+    /// Set-form step-2 (`SINTERSTORE` family).
+    SetStoreResult { dst: Vec<u8>, members: Vec<Vec<u8>> },
+    /// v2.3 FEED.READ executed on the target shard.
+    FeedRead {
+        cursor_gen: u64,
+        offset: u64,
+        count: usize,
+        prefixes: Vec<Vec<u8>>,
+    },
+    /// v2.3 FEED.TAIL executed on the target shard.
+    FeedTail,
+    /// v2.5 extension fan-out: run `Commands::extension_op` on this
+    /// shard with the original argv; reply is an opaque chunk.
+    Extension { argv: Vec<Vec<u8>> },
+    /// v2.3 `PREFIX.STATS <prefix>` — per-shard prefix walk, summed at
+    /// the origin.
+    PrefixStats(Vec<u8>),
     /// Collect this shard's keys (optional glob + limit) — KEYS/SCAN/RANDOMKEY.
     CollectKeys(Option<Vec<u8>>, Option<usize>),
     /// `WATCH key [key ...]` — register each key in this shard's
@@ -212,6 +260,10 @@ impl SmallReply {
 
 /// A partial result shipped back to the originating shard.
 pub(crate) enum Part {
+    /// v2.3 PREFIX.STATS per-shard result.
+    PrefixStats { keys: u64, expires: u64 },
+    /// v2.5 extension fan-out per-shard chunk (opaque to the runtime).
+    ExtensionChunk(Vec<u8>),
     Reply(SmallReply),
     Int(i64),
     Ok,
@@ -346,6 +398,24 @@ pub(crate) enum Agg {
     /// Gathered per-key payloads, reduced by `op` over `keys` (request order).
     Gather {
         op: MultiOp,
+        keys: Vec<Vec<u8>>,
+        got: HashMap<Vec<u8>, Gathered>,
+    },
+    /// v2.3 PREFIX.STATS accumulator (summed across shards).
+    PrefixStats { keys: u64, expires: u64 },
+    /// v2.5 extension fan-out accumulator; reduced by
+    /// `Commands::extension_reduce` when the last chunk lands.
+    ExtensionGather { argv: Vec<Vec<u8>>, chunks: Vec<Vec<u8>> },
+    /// v2.2 zset-algebra `*STORE` orchestrator, step 1: gather scored
+    /// (or set) members per source key; on completion the origin
+    /// computes the combination and ships `Op::ZStoreResult` /
+    /// `Op::SetStoreResult` to `dst`'s shard (step 2 folds through a
+    /// re-armed `Agg::SumInt`).
+    ZStoreGather {
+        combine: ZCombine,
+        weights: Option<Vec<f64>>,
+        aggregate: kevy_store::ZAggregate,
+        dst: Vec<u8>,
         keys: Vec<Vec<u8>>,
         got: HashMap<Vec<u8>, Gathered>,
     },

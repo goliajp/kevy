@@ -64,6 +64,7 @@ fn reaper_loop(
             {
                 let mut g = lock_inner(shard);
                 let _ = g.store.tick_expire(samples, rounds);
+                let _ = g.store.tick_hash_ttl(64);
                 // EverySec AOF fsync window check — runs from the same tick.
                 if let Some(aof) = &mut g.aof {
                     let _ = aof.maybe_sync();

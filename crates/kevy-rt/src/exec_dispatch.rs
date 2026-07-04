@@ -202,7 +202,7 @@ impl<C: Commands> Shard<C> {
     /// SLOWLOG start instant — `None` when SLOWLOG is OFF
     /// (`slower_than_micros < 0`, the default), skipping the clock pair.
     /// A9: invert the early-return so the SLOWLOG-OFF hot path bails first
-    /// + tag the SLOWLOG-ON branch as cold so LLVM keeps it off the
+    /// and tag the SLOWLOG-ON branch as cold so LLVM keeps it off the
     /// predicted-taken fall-through.
     #[inline]
     pub(crate) fn slowlog_t0(&self) -> Option<Instant> {
@@ -301,6 +301,10 @@ impl<C: Commands> Shard<C> {
             && (idx as usize) < args.len()
         {
             self.store.bump_if_watched(&args[idx as usize]);
+            // v2.5: synchronous index maintenance (default no-op; the
+            // kevy impl gates on a process-wide catalog-empty atomic).
+            let key = args[idx as usize].to_vec();
+            self.commands.on_write(&mut self.store, &key);
         }
         // A9: AOF off is the default (--no-aof). cold-tag the AOF-enabled
         // branch so the predictor learns the off case + LLVM keeps the
@@ -325,7 +329,7 @@ impl<C: Commands> Shard<C> {
         // window during `REPLICAOF NO ONE` promotion when both an
         // upstream link and a downstream source can coexist. The
         // thread-local read is a cheap branch on the cold path here.
-        if let Some(src) = self.replicate.as_mut()
+        if let Some(src) = self.replicate.as_mut().map(|f| f.source_mut())
             && !crate::replication_gate::is_applying_replicated()
         {
             src.push_mutation(args);

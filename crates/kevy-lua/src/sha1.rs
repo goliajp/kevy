@@ -51,7 +51,7 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
         let mut c = h[2];
         let mut d = h[3];
         let mut e = h[4];
-        for i in 0..80 {
+        for (i, &wi) in w.iter().enumerate() {
             let (f, k) = match i {
                 0..=19 => ((b & c) | ((!b) & d), 0x5A82_7999),
                 20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
@@ -63,7 +63,7 @@ pub fn sha1(data: &[u8]) -> [u8; 20] {
                 .wrapping_add(f)
                 .wrapping_add(e)
                 .wrapping_add(k)
-                .wrapping_add(w[i]);
+                .wrapping_add(wi);
             e = d;
             d = c;
             c = b.rotate_left(30);

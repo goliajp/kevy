@@ -50,6 +50,17 @@ pub struct Store {
     /// LAST `Store` clone (or `Subscription`) holding a strong ref drops.
     pub(crate) guard: Arc<DropGuard>,
     pub(crate) config: Config,
+    /// v2.3 CDC feed handle (read API side); shards carry clones for
+    /// the write side. `None` = feed off (or wasm).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) feed: Option<std::sync::Arc<Mutex<kevy_replicate::feed::FeedSource>>>,
+    /// v2.4 blocking-pop wake channel (always present; writers pay one
+    /// Relaxed load while nobody blocks).
+    pub(crate) blocker: Arc<crate::ops_blocking::Blocker>,
+    /// v2.5 index registry (catalog + version).
+    pub(crate) indexes: Arc<crate::ops_index::IndexReg>,
+    /// v2.6 view registry.
+    pub(crate) views: Arc<crate::ops_view::ViewReg>,
 }
 
 /// Weak handle to a `Store` — does not keep the underlying keyspace alive.
@@ -57,10 +68,16 @@ pub struct Store {
 /// Used by the URL-keyed registry in `kevy-client` so that multiple
 /// `Connection::open("mem://name")` calls share the same backing store
 /// without leaking it when all strong handles go away.
+#[derive(Clone)]
 pub struct WeakStore {
     shards: Weak<Vec<Arc<RwLock<Inner>>>>,
     guard: Weak<DropGuard>,
     config: Config,
+    #[cfg(not(target_arch = "wasm32"))]
+    feed_weak: Option<std::sync::Weak<Mutex<kevy_replicate::feed::FeedSource>>>,
+    blocker_weak: Weak<crate::ops_blocking::Blocker>,
+    indexes_weak: Weak<crate::ops_index::IndexReg>,
+    views_weak: Weak<crate::ops_view::ViewReg>,
 }
 
 impl WeakStore {
@@ -71,6 +88,11 @@ impl WeakStore {
             shards: self.shards.upgrade()?,
             guard: self.guard.upgrade()?,
             config: self.config.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
+            feed: self.feed_weak.as_ref().and_then(std::sync::Weak::upgrade),
+            blocker: self.blocker_weak.upgrade()?,
+            indexes: self.indexes_weak.upgrade()?,
+            views: self.views_weak.upgrade()?,
         })
     }
 }
@@ -88,6 +110,19 @@ pub(crate) struct Inner {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) writer_source:
         Option<std::sync::Arc<Mutex<kevy_replicate::source::ReplicationSource>>>,
+    /// v2.3 CDC feed (one stream per store); every shard holds a clone
+    /// so `commit_write` pushes effects inline. `None` = feed off.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) feed: Option<std::sync::Arc<Mutex<kevy_replicate::feed::FeedSource>>>,
+    /// v2.4 blocking-pop wake channel clone (see `Store::blocker`).
+    pub(crate) blocker: Option<Arc<crate::ops_blocking::Blocker>>,
+    /// v2.5: this shard's index segments + the store-level registry
+    /// handle (for the commit_write hook).
+    pub(crate) idx_segs: crate::ops_index::ShardSegs,
+    pub(crate) idx_reg: Option<Arc<crate::ops_index::IndexReg>>,
+    /// v2.6: this shard's view states + registry handle.
+    pub(crate) view_segs: crate::ops_view::ShardViews,
+    pub(crate) view_reg: Option<Arc<crate::ops_view::ViewReg>>,
 }
 
 impl Inner {
@@ -98,6 +133,13 @@ impl Inner {
             bus: PubsubBus::new(),
             #[cfg(not(target_arch = "wasm32"))]
             writer_source: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            feed: None,
+            blocker: None,
+            idx_segs: crate::ops_index::ShardSegs::default(),
+            idx_reg: None,
+            view_segs: crate::ops_view::ShardViews::default(),
+            view_reg: None,
         }
     }
 }
@@ -115,6 +157,14 @@ pub(crate) struct DropGuard {
     /// clone goes away.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) replica_runner: Option<crate::replica_runner::ReplicaRunner>,
+    /// v2.3: feed close-marker inputs — the feed handle + data dir,
+    /// present iff feed enabled AND persistent. Written after the AOF
+    /// flush so the marker's cursor describes durable state.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) feed_close: Option<(
+        std::sync::Arc<Mutex<kevy_replicate::feed::FeedSource>>,
+        std::path::PathBuf,
+    )>,
     /// Replica-source listener + accepted connection threads, present
     /// iff this store is an embed-as-writer
     /// (`Config::embed_writer_listen_addr = Some(...)`). Joined on
@@ -161,6 +211,24 @@ impl Store {
             }
             None => None,
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        let feed = Store::feed_open(&config)?;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(f) = &feed {
+            for shard in shards.iter() {
+                let mut g = lock_write(shard);
+                g.feed = Some(f.clone());
+            }
+        }
+        let blocker = Arc::new(crate::ops_blocking::Blocker::new());
+        let indexes = Arc::new(crate::ops_index::IndexReg::default());
+        let views = Arc::new(crate::ops_view::ViewReg::default());
+        for shard in shards.iter() {
+            let mut g = lock_write(shard);
+            g.blocker = Some(blocker.clone());
+            g.idx_reg = Some(indexes.clone());
+            g.view_reg = Some(views.clone());
+        }
         let guard = Arc::new(DropGuard {
             reaper_stop,
             reaper_join: Mutex::new(reaper_join),
@@ -168,9 +236,30 @@ impl Store {
             #[cfg(not(target_arch = "wasm32"))]
             replica_runner,
             #[cfg(not(target_arch = "wasm32"))]
+            feed_close: match (&feed, &config.data_dir) {
+                (Some(f), Some(d)) => Some((f.clone(), d.clone())),
+                _ => None,
+            },
+            #[cfg(not(target_arch = "wasm32"))]
             replica_source,
         });
-        Ok(Store { shards, guard, config })
+        let store = Store {
+            shards,
+            guard,
+            config,
+            #[cfg(not(target_arch = "wasm32"))]
+            feed,
+            blocker,
+            indexes,
+            views,
+        };
+        store.idx_boot();
+        store.view_boot();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(addr) = store.config.resp_listener {
+            crate::listener::spawn(addr, store.downgrade())?;
+        }
+        Ok(store)
     }
 
     /// Convenience constructor for an embed-as-read-replica store
@@ -247,6 +336,11 @@ impl Store {
             shards: Arc::downgrade(&self.shards),
             guard: Arc::downgrade(&self.guard),
             config: self.config.clone(),
+            #[cfg(not(target_arch = "wasm32"))]
+            feed_weak: self.feed.as_ref().map(Arc::downgrade),
+            blocker_weak: Arc::downgrade(&self.blocker),
+            indexes_weak: Arc::downgrade(&self.indexes),
+            views_weak: Arc::downgrade(&self.views),
         }
     }
 
@@ -447,6 +541,12 @@ impl Drop for DropGuard {
             if let Some(aof) = &mut g.aof {
                 let _ = aof.maybe_sync();
             }
+        }
+        // v2.3: with the AOF durable, record the feed continuity
+        // marker — the cursor now exactly describes on-disk state.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some((feed, dir)) = &self.feed_close {
+            Store::feed_write_close_marker(feed, dir);
         }
     }
 }

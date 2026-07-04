@@ -147,6 +147,58 @@ impl Store {
             .map_err(store_err)
     }
 
+    /// `ZRANGEBYSCORE key min max LIMIT offset count` — score-range
+    /// read with pagination (v2.2; closes the embedded LIMIT gap —
+    /// the server parser always had it).
+    pub fn zrange_by_score_limit(
+        &self,
+        key: &[u8],
+        min: f64,
+        max: f64,
+        offset: usize,
+        count: usize,
+    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+        let all = self.zrange_by_score(key, min, max)?;
+        Ok(all.into_iter().skip(offset).take(count).collect())
+    }
+
+    /// `ZREVRANGEBYSCORE key max min LIMIT offset count` — descending
+    /// score-range read with pagination.
+    pub fn zrevrange_by_score_limit(
+        &self,
+        key: &[u8],
+        max: f64,
+        min: f64,
+        offset: usize,
+        count: usize,
+    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+        let mut all = self.zrange_by_score(key, min, max)?;
+        all.reverse();
+        Ok(all.into_iter().skip(offset).take(count).collect())
+    }
+
+    /// v2.4 `zpopmin_below` — pop up to `count` lowest members with
+    /// score strictly `< below` (delayed-job "pop what's due").
+    /// AOF logs the effect (`ZREM` of the popped members).
+    pub fn zpopmin_below(
+        &self,
+        key: &[u8],
+        below: f64,
+        count: usize,
+    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+        ensure_writable(self)?;
+        let mut g = self.wshard(key);
+        let items = g.store.zpopmin_below(key, below, count).map_err(store_err)?;
+        if !items.is_empty() {
+            let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + items.len());
+            argv.push(b"ZREM");
+            argv.push(key);
+            argv.extend(items.iter().map(|(m, _)| m.as_slice()));
+            commit_write(&mut g, &argv)?;
+        }
+        Ok(items)
+    }
+
     /// `ZINCRBY key delta member` — atomic float increment of a member's
     /// score. Returns the post-increment score.
     pub fn zincrby(&self, key: &[u8], delta: f64, member: &[u8]) -> io::Result<f64> {

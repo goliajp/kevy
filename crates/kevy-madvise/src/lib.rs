@@ -177,7 +177,7 @@ pub fn mmap_anon_aligned_2mb(len: usize) -> Option<core::ptr::NonNull<u8>> {
         unsafe {
             let _ = ffi::madvise(aligned_start as *mut c_void, rounded, MADV_HUGEPAGE);
         }
-        return core::ptr::NonNull::new(aligned_start as *mut u8);
+        core::ptr::NonNull::new(aligned_start as *mut u8)
     }
     #[cfg(not(target_os = "linux"))]
     {

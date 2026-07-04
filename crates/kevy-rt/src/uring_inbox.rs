@@ -22,10 +22,10 @@ impl<C: Commands> Shard<C> {
     /// folds into the reactor loop body; the cold drain body is
     /// `#[inline(never)]` so its bulk stays off the hot iTLB pages.
     #[inline]
-    pub(crate) fn uring_drain_inbound(&mut self) -> bool {
+    pub(crate) fn uring_drain_inbound(&mut self) -> usize {
         let me = self.id;
         if self.inbound_dirty[me].load(Ordering::Acquire) == 0 {
-            return false;
+            return 0;
         }
         self.drain_inbound_core_slow::<false>()
             .expect("DIRECT_FLUSH=false drain has no fallible step")

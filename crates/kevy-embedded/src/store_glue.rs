@@ -37,6 +37,21 @@ pub(crate) fn commit_write(inner: &mut Inner, parts: &[&[u8]]) -> io::Result<()>
     if let Some(src) = &inner.writer_source {
         crate::replica_source::push_into(src, parts);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(feed) = &inner.feed {
+        crate::store::Store::feed_push(feed, parts);
+    }
+    if let Some(b) = &inner.blocker {
+        b.wake_all();
+    }
+    if let Some(reg) = inner.idx_reg.clone() {
+        let inner = &mut *inner;
+        crate::ops_index::on_commit(&reg, &mut inner.idx_segs, &mut inner.store, parts);
+    }
+    if let Some(vreg) = inner.view_reg.clone() {
+        let inner = &mut *inner;
+        crate::ops_view::on_commit(&vreg, &mut inner.view_segs, &inner.idx_segs, parts);
+    }
     inner.store.try_evict_after_write();
     Ok(())
 }
