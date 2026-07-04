@@ -1,8 +1,299 @@
 # Changelog
 
+## v3.0.0 — kevy is a serving engine (2026-07-04)
+
+The v3 arc: eleven trains (v2.1 → v2.11), all five-axis gated
+(perf ratchet / memory formula / disk envelope / docs / coverage
+ratchet), each merged only fully green. This release is the sum:
+
+- **P0/P1 foundation** (v2.1): OP_TABLE with CI-enforced 6-surface
+  parity, atomicity charter (single-shard + deterministic-order
+  all-shard blocks), durability matrix, covgate/memgate/diskgate.
+- **Algebra parity** (v2.2): zset/set algebra, full Redis 6.2
+  semantics.
+- **CDC spine** (v2.3): (generation, offset) cursors, at-least-once
+  feeds, prefix filters, the recovery-point contract.
+- **Flow round-out** (v2.4): blocking pops, hash-field TTLs,
+  snapshot read views, zpopmin-below.
+- **The index engine** (v2.5 ⭐): declared indexes,
+  derived-by-construction, one-hop hydration, cursors, budgets.
+- **Views** (v2.6): named compositions, virtual + materialized top-K
+  (steady-state write tax 1.9% vs 15% line).
+- **Full-text** (v2.7): kevy-text — dictionary-free CJK bigram +
+  BM25 with MaxScore/impact-bucket pruning (17.4ms p95 @ 1M docs).
+- **Vector search** (v2.8): kevy-vector — HNSW with diversity
+  selection, EF pareto knob (recall@10 = 1.000 at the gate point).
+- **Topology** (v2.9): embedded read-only RESP listener (0.067ms
+  reader p99, zero tax off).
+- **RDS on-ramp** (v2.10): export/import (1.26M cmd/s, kill-9
+  resumable), PREFIX.DIGEST verification, rate-limited bulk ops.
+- **Validation arc** (v2.11): servinggate (row-list 0.24ms / write
+  fan-out 64µs on the full stack), chaosfsck (crash-survivor ==
+  fresh rebuild), 32M-key mixed soak (13ms worst rewrite stall),
+  and the cross-train VALIDATION-LEDGER.
+
+New docs arc: designing-on-kevy (six planes + the three laws +
+REFUSED table), the RDS→kevy cookbook (15 recipes), migration,
+views, text-search, vector-search, embedded-listener, cdc.
+
+Workspace: all crates at 3.0.0 (kevy-embedded included — the v2.x
+embedded line 1.x ends here). New stone crates since v2: kevy-index,
+kevy-text, kevy-vector.
+
 All notable changes to kevy. The format is loosely
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); kevy's release
 cadence is "tag when a Wave closes," not strict semver below v1.0.
+
+## [Unreleased — v3.0 accumulation]
+
+Trains merge to develop without releases (standing directive
+2026-07-03: one-shot release at v3.0.0). Entries accumulate here per
+train, versions bump at ship time.
+
+### perf campaign close-out (task #10, 2026-07-04)
+
+- **stay-hot-while-inflight** (`kevy-rt`): a shard with forwarded
+  cross-shard requests outstanding stays in the idle ladder's spin
+  rung instead of parking — replies land within ~one cross-shard RTT
+  and the kernel sleep/wake per reply batch was the throughput tax.
+  Closes the legacy_8sh decay traced to 4fa4631 (v1.23, nap-rung
+  removal, single-commit -20% — the commit's own foreseen "-18~21%
+  8-shard" trade whose follow-up never happened) plus the v1.17 INFO
+  counters' -4% mode attractor (286c4a2, masked by headroom).
+  legacy_8sh_set restored to 9.99M median (instances to 10.89M, above
+  the pre-decay ceiling); legacy_8sh_get 10.88M (+9% over the old
+  baseline); pinned angles held (+8~18%); -c1 sequential IMPROVED to
+  80.3k ops/s @ p50 15µs (above the post-4fa4631 63-65k — both sides
+  of the historical trade now win). perfgate 6/6 PASS on the
+  untouched 2026-06-11 baseline, then honestly re-recorded. Full
+  archaeology: bench/PERF-FINDING-2026-07-03-legacy8sh-set-bimodal.md
+  + bench/PERF-DECOMP-2026-07-04-legacy8sh-owner-starvation.md.
+- Batch-gated 200µs nap retained as the second ladder rung for the
+  no-inflight idle shape (`NAP_BATCH_MIN` 4).
+
+### v2.11 — validation arc (P5, serving-scale evidence)
+
+- **servinggate**: one server carrying the full serving stack (1M
+  rows + 2 indexes + 1 materialized view) measured on the arc's
+  headline lines — hydrated row-list page p99 0.24ms (< 1ms line),
+  view page 0.15ms, write fan-out through 3 hooks 64µs (< 200µs).
+- **chaosfsck**: kill -9 mid-write under AOF → replay + backfill →
+  index/view answers identical to a fresh drop+recreate rebuild.
+- **scalesoak**: 30M strings + 1M indexed rows + 1M vectors (128d
+  ANN) + a materialized view on ONE server — mixed p99 rowlist
+  0.45ms / view 0.31ms / knn 7.5ms / get 0.083ms; worst PING stall
+  through BGREWRITEAOF at 32M keys: 13ms (vs the 2s envelope).
+- **bench/VALIDATION-LEDGER.md**: cross-train reconciliation — every
+  declared perf line, memory formula, durability contract and
+  documented approximation vs its measured value.
+
+### v2.10 — RDS on-ramp (migration toolchain)
+
+- **kevy-cli grows the migration set**: `export` (RESP command stream
+  of DEL+rebuild frames + absolute PEXPIREAT — bidirectionally
+  compatible with redis-cli --pipe; leading DEL makes replay
+  genuinely idempotent), `import` (512-deep pipeline, fsynced
+  `.progress`, `--resume`/`--strict`), `copy-prefix` /
+  `delete-prefix` (token bucket `--rate` with strict empty-bucket
+  pacing, `--dry-run`), `digest`, `diff` (exit code on mismatch),
+  `inspect`.
+- **`PREFIX.DIGEST`** (server + embedded `prefix_digest`):
+  order-insensitive canonical checksum, shard-count and insert-order
+  invariant — the migration verification primitive.
+- Deferred index build documented as order-of-operations (bulk load,
+  then IDX.CREATE — backfill beats per-write maintenance).
+- bench/onrampgate.sh: 1M-row round trip, ≥200k cmd/s import,
+  kill -9 → --resume digest convergence, ±20% rate accuracy.
+  docs/migration.md.
+
+### v2.9 — topology (P4, embedded RESP listener)
+
+- **`Config::with_resp_listener(addr)`**: an embedded store exposes
+  itself read-only to external RESP clients (redis-cli, ops tooling)
+  — 26-verb whitelist straight onto the Store API, everything else
+  `-ERR READONLY`. Zero tax off (no thread, no socket; gated), weak
+  handle (never keeps the store alive), one thread per connection.
+  FEED.READ/TAIL/SHARDS ride the listener — the transport groundwork
+  for embedded-as-primary replication (deferred by RFC fork
+  decision). Cross-process read-your-writes = feed cursor pattern
+  (documented, no blocking primitive).
+- bench/topogate.sh: true two-process gate — writer binary under
+  load, reader asserts live data + GET p99 < 1ms + READONLY + the
+  idle-listener zero-tax clamp. docs/embedded-listener.md.
+
+### v2.8 — vector search (P2, ann kind)
+
+- **New stone crate `kevy-vector`**: HNSW with deterministic level
+  generation, Malkov Alg-4 diversity neighbor selection (preserves
+  bridge links — plain closest-K pruning disconnected outliers),
+  tombstone deletes filtered at search, bounded answer-preserving
+  rebuild. Distances: cosine (insert-normalized) / L2 / IP, all
+  oriented smaller-is-closer.
+- **`KIND ann`**: fourth index kind on the same catalog/hook/backfill
+  skeleton — fields hold f32 LE blobs (`DIM` declared; wrong shape =
+  excluded). `IDX.QUERY <name> KNN <blob|csv:> [LIMIT ≤1000]
+  [FIELDS…]` fans out per-shard graph search and merges ascending by
+  distance; `IDX.REBUILD` compacts tombstones. Embedded:
+  `idx_create_ann` / `idx_knn`.
+- bench/vectorgate.sh: KNN p95 < 30ms @ 1M×128d, **recall@10 ≥ 0.90
+  vs brute-force ground truth** (witness-cluster construction), and
+  the memory formula vs real RSS growth. docs/vector-search.md.
+
+### v2.7 — full-text search (P2, text kind)
+
+- **New stone crate `kevy-text`** (pure logic, zero deps):
+  script-aware dictionary-free tokenization — Latin words lowercased
+  (min 2 chars), CJK (ideographs/kana/hangul) as adjacent bigrams
+  with lone-char fallback, tokens never crossing script boundaries;
+  inverted per-shard segments; BM25 (k1=1.2 b=0.75, non-negative idf).
+- **`KIND text`**: third index kind riding the same catalog / write
+  hook / backfill skeleton — the field's raw bytes tokenize
+  synchronously with every write. `IDX.QUERY <name> MATCH <text>
+  [LIMIT ≤1000] [FIELDS …]` fans out per-shard BM25 top-LIMIT with
+  owning-shard hydration and merges by score. Shard-local statistics
+  and no-cursor are documented approximations (docs/text-search.md).
+  Embedded: `idx_match`. LIST/VERIFY report docs/bytes/postings/
+  tokens for text kinds.
+- bench/textgate.sh: MATCH p95 < 20ms @ 1M mixed-script docs
+  (median-conn) + memory formula vs real RSS growth.
+
+### v2.6 — views (P3)
+
+- **`VIEW.*` / embedded `view_*`**: named AND/OR/DIFF compositions of
+  declared indexes with an ordering index. Virtual mode streams the
+  order index and probes membership per candidate (a LIMIT-100 page
+  costs O(limit/selectivity), measured p99 0.29ms @ 1M rows × 2
+  components — 10× under the RFC clamp); materialized mode maintains
+  per-shard ordered member sets in the same write hook as indexes
+  (one probe per referenced index per write shared across views;
+  top-K bounds with worst-end eviction + single-compare fast reject —
+  steady-state write tax 2.3% for 3 indexes + 4 top-K views vs the
+  15% clamp). Views store membership + order only, never field
+  values.
+- **`VIA` hydration**: template dereference ({key}/{key.N}) resolved
+  in a second internal fan-out on the targets' owning shards —
+  kevy-rt's extension surface gains a stateless two-phase
+  continuation reusable by later trains. Missing targets hydrate as
+  nils.
+- `VIEW.CREATE/DROP/LIST/QUERY/EXPLAIN/VERIFY/REBUILD` (rebuild is
+  answer-preserving, e2e-asserted); catalog sidecar-persisted,
+  content rebuilt after restart; `-INDEXBUILDING` while any
+  referenced index backfills. bench/viewgate.sh gates all four RFC
+  clamps; docs/views.md.
+- Bugs caught by the gates/e2e along the way: DESC views paged each
+  shard's ascending head (wrong member set); bounded eviction removed
+  the DESC view's best member; views over building indexes silently
+  answered empty.
+
+### v2.5 — secondary indexes ⭐ (P2, the index engine)
+
+- **New stone crate `kevy-index`** + the engine wiring: declarative
+  indexes over prefix domains (`IDX.CREATE name ON PREFIX p FIELD f
+  TYPE i64|f64|str KIND range|unique [MAXMEM n]`), maintained
+  synchronously with every write — derived-by-construction, zero
+  drift by design and `IDX.VERIFY`-falsifiable. An empty catalog
+  costs one untaken branch per write.
+- **Index-follows-key sharding**: segments live with their rows;
+  writes never cross shards, queries fan out and merge in global
+  `(value, key)` order with a single-point cursor. Backfill is
+  tick-incremental on the server (live writes double-write and win),
+  synchronous per-shard in embedded.
+- **Query surface**: `IDX.QUERY RANGE|EQ` (+ `FIELDS` hydration on
+  the owning shard), `IDX.QUERY COMPOSE AND|OR` (two-index, key-
+  ordered — per-shard set algebra composes globally), `IDX.COUNT`,
+  `IDX.VERIFY`, `IDX.LIST`, `IDX.DROP`. Unique kind = declarative
+  fence (duplicates counted + visible; write-time global enforcement
+  deliberately rejected — see docs/indexes.md). `MAXMEM` budgets fail
+  builds declaratively (`-INDEXOVERBUDGET`), no OOM.
+- **Generic extension fan-out** in kevy-rt (`Commands::extension_op`
+  / `extension_reduce`) — the reusable substrate v2.6 views and
+  v2.7 text ride next.
+- **Embedded**: typed `idx_create/drop/query/count/stats/list`
+  (exact multi-key maintenance table; no FIELDS — in-process callers
+  read fields directly). Catalog persists via sidecar; index content
+  is derived state — never snapshotted, rebuilt after restart.
+- **bench/idxgate.sh** gates the RFC clamps: 1M-row build (7.3s
+  tick-incremental), `IDX.QUERY` p99 < 2ms (measured 0.52ms), D7
+  memory formula ±20% (measured ratio 1.01). docs/indexes.md.
+
+### v2.4 — P4 flow round-out
+
+- **`ZPOPMIN.BELOW key below [count]`** (+ embedded `zpopmin_below`):
+  pop the due members of a delayed-job zset (score strictly below a
+  threshold) in one atomic call. Verbatim AOF on the server
+  (deterministic); embedded logs the `ZREM` effect.
+- **Embedded blocking pops** — `blpop` / `brpop` / `bzpopmin` with
+  optional timeout: a process-wide wake-generation condvar; writers
+  pay one Relaxed load while nobody blocks; recheck-after-wait closes
+  the lost-wakeup window.
+- **Public `Store::snapshot()`** — a consistent point-in-time view of
+  the whole keyspace (all shard locks taken in deterministic order for
+  the O(n)-shallow collection only); `each_prefix` / `keys_prefix`.
+  The FEEDRESYNC rebuild companion.
+- **Hash field TTLs (Redis 7.4)** — `HEXPIRE` / `HPEXPIRE` /
+  `HPEXPIREAT` / `HTTL` / `HPERSIST` with full `NX|XX|GT|LT`
+  conditions and per-field reply codes, server + embedded. Sidecar
+  storage (zero cost when unused), key-TTL discipline end-to-end:
+  lazy purge on access, reaper sweeps, `HSET` overwrite discards the
+  field's TTL, relative forms carry an absolute `HPEXPIREAT` AOF
+  follow-up (no replay re-anchoring — e2e-proven), snapshot format v6
+  `OP_HFTTL` records, AOF rewrite re-emits deadlines.
+- OP_TABLE +6 rows; parity suites green across all manifests.
+
+### v2.3 — CDC / offset spine (P4)
+
+- **Change feed**: every applied write consumable as effect frames
+  under a `(generation, offset)` cursor — `FEED.SHARDS` / `FEED.TAIL`
+  / `FEED.READ … [COUNT] [PREFIX …]` on the server (`-FEEDRESYNC
+  <gen> <tail>` when unservable), `changes_since` / `changes_tail` /
+  `feed_shards` embedded (`FeedError::{Resync,Future,Disabled}`).
+  At-least-once; prefix filter is fail-open and never moves the
+  cursor; per-key order guaranteed within a stream. `[feed]` config
+  section (`enabled`, `feed_buffer_size` 64 MB default / 1 GB cap);
+  one backlog serves replicas and feed consumers
+  (`max(replication_buffer_size, feed_buffer_size)`).
+- **Cursor continuity contract**: `feed-{i}.gen` (fsynced generation
+  high-water, bump-only) + `feed-{i}.meta` (clean-shutdown marker,
+  consumed at boot) — clean restart resumes the cursor exactly;
+  crash / FLUSHALL / restore bumps the generation so consumers know
+  to rebuild.
+- **Recovery points**: snapshots record the feed cursor in their
+  header (format v5; v4 stays byte-identical when no cursor),
+  `kevy_persist::read_snapshot_cursor()`; contract "snapshot + feed
+  frames from its cursor = exact state" proven by
+  `bench/restore-drill.sh` (a `diskgate` line: 300-key drill incl.
+  post-snapshot overwrite, byte-exact).
+- **Per-prefix stats**: `PREFIX.STATS <prefix>` (all-shard fanout) /
+  embedded `info_prefix` — live keys + TTL'd count, O(keyspace).
+- OP_TABLE +4 (FEED.READ/TAIL/SHARDS, PREFIX.STATS); docs/cdc.md.
+
+### v2.2 — zset/set algebra (P3 Redis parity)
+
+- **New commands (server + embedded)**: `ZINTERSTORE` / `ZUNIONSTORE`
+  (full Redis 6.2 `WEIGHTS` + `AGGREGATE SUM|MIN|MAX`), `ZDIFFSTORE`,
+  `ZINTERCARD` (with `LIMIT` short-circuit), and the set-algebra
+  store forms `SINTERSTORE` / `SUNIONSTORE` / `SDIFFSTORE` (audit A3
+  gap). Plain sets participate in zset combinations at score 1.0;
+  `*STORE` overwrites any dst type; empty results delete dst — Redis
+  semantics throughout.
+- **Cross-shard orchestration** (`kevy-rt`): sources gather per shard
+  (scored payloads), the origin combines via `kevy-store`'s pure
+  algebra, and a second hop materializes at dst's owning shard —
+  rename-orchestrator pattern. Cluster conns get numkeys-aware
+  CROSSSLOT checks.
+- **AOF/replication**: effect logging (`DEL dst` + plain
+  `ZADD`/`SADD` of the result) — deterministic replay and
+  replica-apply regardless of source state; parity-CI exemption
+  documented in `every_logged_verb_is_replayable`.
+- **Embedded**: `zinterstore`/`zunionstore`/`zdiffstore`/`zintercard`
+  + `sinterstore`/`sunionstore`/`sdiffstore` facades (documented
+  copy-style non-atomic window; use `atomic_all_shards` for atomic
+  combination), plus `zrange_by_score_limit` /
+  `zrevrange_by_score_limit` closing the embedded LIMIT pagination
+  gap.
+- **OP_TABLE**: 7 rows; ESTORE manifest +7; perfgate gains the
+  `zalg_zinterstore` angle (new metrics report-only until the next
+  baseline record).
 
 ## [v2.1.0] — 2026-07-03 — **`kevy-embedded` 1.16.0 — v3-arc P0/P1 foundation: OP_TABLE parity CI, AtomicCtx completeness, ZADD flags, durability barrier**
 

@@ -50,6 +50,8 @@ pub mod expire;
 pub use expire::ExpireStats;
 pub(crate) use entry::Entry;
 mod hash;
+mod hash_ttl;
+pub use hash_ttl::{HExpireCode, HExpireCond};
 mod keyspace;
 mod list;
 mod list_ops;
@@ -72,6 +74,8 @@ pub use types::{EvictionPolicy, RenameOutcome, StoreError};
 mod util;
 mod value;
 mod zset;
+mod zset_algebra;
+pub use zset_algebra::{ZAggregate, zdiff, zinter, zintercard, zunion};
 mod zset_flags;
 pub use zset_flags::{ZaddFlags, ZaddReport};
 pub use stream::{
@@ -113,6 +117,10 @@ pub use clock::set_wall_clock_ms;
 #[derive(Default)]
 pub struct Store {
     pub(crate) map: KevyMap<SmallBytes, Entry>,
+    /// v2.4 per-field hash TTLs: key → (field → absolute unix-ms
+    /// deadline). Holds ONLY keys with live field TTLs — one
+    /// `is_empty()` branch per hash access when the feature is unused.
+    pub(crate) hfttl: std::collections::HashMap<SmallBytes, KevyMap<SmallBytes, u64>>,
     /// Coarse cached monotonic clock (ns since [`epoch`]), refreshed by the
     /// reactor loop / reaper tick via [`Self::refresh_clock`]. Lazy expiry on
     /// the read path (`live_entry`) compares deadlines against this instead of
@@ -200,7 +208,7 @@ pub struct Store {
     /// pathological "thousand SETs in one iter never flush" cases
     /// (would otherwise hold thousands of Box<Value>s in RAM until
     /// the iter ends).
-    pub(crate) pending_drops: Vec<Box<Value>>,
+    pub(crate) pending_drops: Vec<Value>,
 }
 
 /// Maximum [`Store::pending_drops`] depth before forcing a flush
@@ -293,7 +301,7 @@ impl Store {
             drop(old);
             return;
         }
-        self.pending_drops.push(Box::new(old));
+        self.pending_drops.push(old);
         if self.pending_drops.len() >= MAX_PENDING_DROPS {
             self.flush_pending_drops();
         }

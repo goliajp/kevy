@@ -27,6 +27,7 @@ impl Config {
             "slowlog" => self.apply_slowlog(item),
             "cluster" => self.apply_cluster(item),
             "replication" => self.apply_replication(item),
+            "feed" => self.apply_feed(item),
             "lua" => self.apply_lua(item),
             "metrics" => self.apply_metrics(item),
             "audit" => self.apply_audit(item),
@@ -206,6 +207,21 @@ impl Config {
                     .map_err(|tok| schema_err(&item, format!("bad scope token: {tok:?}")))?;
             }
             k => return Err(schema_err(&item, format!("unknown [cluster] key: {k}"))),
+        }
+        Ok(())
+    }
+
+    fn apply_feed(&mut self, item: Item) -> Result<(), ConfigError> {
+        match item.key.as_str() {
+            "enabled" => self.feed.enabled = value_as_bool(&item)?,
+            "feed_buffer_size" => {
+                let v = value_as_size(&item)?;
+                if v > 1024 * 1024 * 1024 {
+                    return Err(schema_err(&item, "feed_buffer_size caps at 1gb per shard"));
+                }
+                self.feed.feed_buffer_size = v;
+            }
+            k => return Err(schema_err(&item, format!("unknown [feed] key: {k}"))),
         }
         Ok(())
     }

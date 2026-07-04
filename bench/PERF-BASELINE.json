@@ -1,13 +1,14 @@
 {
-  "recorded": "2026-06-11T01:46:23Z",
-  "bin": "kevy_gate",
+  "recorded": "2026-07-03T16:59:21Z",
+  "bin": "kevy",
   "tolerance": 0.92,
   "metrics": {
-    "pinned_cluster_get": 25568982,
-    "pinned_cluster_set": 22163968,
-    "pinned_compat_get": 17994362,
-    "pinned_compat_set": 16607428,
-    "legacy_8sh_get": 9973447,
-    "legacy_8sh_set": 9980082
+    "pinned_cluster_get": 30403762,
+    "pinned_cluster_set": 24311952,
+    "pinned_compat_get": 19392766,
+    "pinned_compat_set": 17521321,
+    "legacy_8sh_get": 10877494,
+    "legacy_8sh_set": 9973447,
+    "zalg_zinterstore": 2846
   }
 }

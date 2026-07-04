@@ -137,7 +137,7 @@ impl SmallHashData {
             let new_used = new_used_i as usize;
             // Shift the tail to make room (or close the gap).
             if delta != 0 {
-                self.buf.copy_within(old_end..used, (val_off + new_vlen) as usize);
+                self.buf.copy_within(old_end..used, val_off + new_vlen);
                 if delta < 0 {
                     // Zero freed tail.
                     self.buf[new_used..used].fill(0);

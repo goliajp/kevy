@@ -19,6 +19,8 @@ use crate::{SmallBytes, Store, now_ns, remaining_ms};
 /// A frozen, `Send` view of one store's live entries at a single instant.
 pub struct SnapshotView {
     entries: Vec<(SmallBytes, Value, Option<u64>)>,
+    /// v2.4: hash field TTLs frozen with the view.
+    hfttl: Vec<(SmallBytes, SmallBytes, u64)>,
 }
 
 // Compile-time guarantee that a view can cross to a serializer thread.
@@ -33,6 +35,13 @@ impl SnapshotView {
     pub fn each<F: FnMut(&[u8], &Value, Option<u64>)>(&self, mut f: F) {
         for (k, v, ttl) in &self.entries {
             f(k.as_slice(), v, *ttl);
+        }
+    }
+
+    /// v2.4: visit the frozen hash field TTLs.
+    pub fn each_hash_ttl<F: FnMut(&[u8], &[u8], u64)>(&self, mut f: F) {
+        for (k, field, d) in &self.hfttl {
+            f(k.as_slice(), field.as_slice(), *d);
         }
     }
 
@@ -64,6 +73,14 @@ impl Store {
             let ttl = e.expire_at_ns.map(|ns| remaining_ms(ns, now));
             entries.push((k.clone(), e.value.clone(), ttl));
         }
-        SnapshotView { entries }
+        let mut hfttl = Vec::new();
+        self.hash_ttl_each(|k, f, d| {
+            hfttl.push((
+                crate::SmallBytes::from_slice(k),
+                crate::SmallBytes::from_slice(f),
+                d,
+            ));
+        });
+        SnapshotView { entries, hfttl }
     }
 }

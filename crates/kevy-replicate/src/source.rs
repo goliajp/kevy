@@ -69,6 +69,19 @@ impl ReplicationSource {
         }
     }
 
+    /// Resume offset assignment at `next` (boot continuity from the
+    /// feed sidecar). Only meaningful on an empty, freshly created
+    /// source — asserts the backlog has no frames.
+    pub fn set_next_offset(&mut self, next: u64) {
+        assert!(self.buf.is_empty(), "set_next_offset on non-empty backlog");
+        self.next_offset = next;
+    }
+
+    /// The byte budget this source was created with.
+    pub fn max_bytes(&self) -> usize {
+        self.max_bytes
+    }
+
     /// Next offset this source would assign. Equal to one past the
     /// last assigned offset; equals `0` for a fresh source.
     pub fn next_offset(&self) -> u64 {

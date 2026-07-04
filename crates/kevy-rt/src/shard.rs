@@ -32,6 +32,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering, fence};
 pub(crate) use crate::cache_padded::CachePadded;
 
 pub(crate) struct Shard<C: Commands> {
+    /// Outstanding cross-shard requests this shard has forwarded and
+    /// not yet folded replies for. While non-zero, replies are
+    /// certainly inbound within ~one cross-shard RTT — the idle
+    /// ladder stays in the spin rung instead of paying a kernel
+    /// sleep/wake transition per reply batch (the v2.2-perf fix for
+    /// the 4fa4631 legacy_8sh step; see
+    /// bench/PERF-DECOMP-2026-07-04-legacy8sh-owner-starvation.md).
+    pub(crate) xshard_inflight: u64,
     pub(crate) id: usize,
     pub(crate) nshards: usize,
     /// Cluster mode (`Some` = on): switches key→shard routing from KevyHash
@@ -161,7 +169,10 @@ pub(crate) struct Shard<C: Commands> {
     /// `replicate.is_some()` and skips). `Some` when `role = "primary"`
     /// — every applied mutation is pushed to the backlog for connected
     /// replicas to consume.
-    pub(crate) replicate: Option<kevy_replicate::source::ReplicationSource>,
+    /// Replication backlog + v2.3 feed cursor. Populated when
+    /// replication is on OR `feed_enabled` (FEED.* consumers need the
+    /// backlog even with no replicas); `None` = both features off.
+    pub(crate) replicate: Option<kevy_replicate::feed::FeedSource>,
     /// Per-shard replication listener (per Issue Ledger I2): shard `i`
     /// binds at `replication_port_base + i`. `Some` only when the
     /// runtime was built with [`crate::Runtime::with_replication_listener`].
@@ -558,6 +569,7 @@ impl<C: Commands> Shard<C> {
         // happen after `stop=true`). See
         // [`Self::drain_persist_on_shutdown`].
         self.drain_persist_on_shutdown();
+        self.write_feed_shutdown_marker();
         Ok(())
     }
 

@@ -36,6 +36,22 @@ pub enum Route {
     SInter,
     SUnion,
     SDiff,
+    /// v2.2 zset/set algebra `*STORE` family: gather sources, combine
+    /// per [`crate::message::ZCombine`], materialize at `args[1]`.
+    ZAlgebraStore(crate::ZCombine),
+    /// `ZINTERCARD numkeys key… [LIMIT n]` — read-only gathered count.
+    ZInterCard,
+    /// v2.3 `FEED.READ <shard> <gen> <offset> …` — shard-index routed.
+    FeedRead,
+    /// v2.3 `FEED.TAIL <shard>`.
+    FeedTail,
+    /// v2.3 `FEED.SHARDS` — answered locally.
+    FeedShards,
+    /// v2.3 `PREFIX.STATS <prefix>` — all-shard fanout, summed.
+    PrefixStats,
+    /// v2.5 extension fan-out (IDX.* reads): every shard runs
+    /// `Commands::extension_op`, the origin reduces.
+    Extension,
     /// `KEYS pattern` — every shard returns its matching keys.
     Keys(Option<Vec<u8>>),
     /// `SCAN` (cursor-0 approximation) — like KEYS but replies `[cursor, keys]`.

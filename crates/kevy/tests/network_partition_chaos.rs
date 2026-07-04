@@ -83,12 +83,11 @@ fn network_partition_client_side_disconnects() {
                 let _ = s.set_read_timeout(Some(Duration::from_secs(1)));
                 if s.write_all(b"*1\r\n$4\r\nPING\r\n").is_ok() {
                     let mut buf = [0u8; 32];
-                    if let Ok(n) = s.read(&mut buf) {
-                        if n >= 5 && buf[..5] == *b"+PONG" {
+                    if let Ok(n) = s.read(&mut buf)
+                        && n >= 5 && buf[..5] == *b"+PONG" {
                             storm_ok += 1;
                             continue;
                         }
-                    }
                 }
                 storm_err += 1;
             }

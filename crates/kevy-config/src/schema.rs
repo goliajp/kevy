@@ -243,16 +243,12 @@ impl Default for MemorySection {
 
 /// `[metrics]` section — v1.41. Prometheus-format HTTP exposition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub struct MetricsSection {
     /// TCP port for the `/metrics` HTTP endpoint. `0` = OFF (default).
     pub listen_port: u16,
 }
 
-impl Default for MetricsSection {
-    fn default() -> Self {
-        Self { listen_port: 0 }
-    }
-}
 
 /// `[audit]` section — v1.42. Append-only audit log of ADMIN-class
 /// commands (`CONFIG SET` / `CONFIG REWRITE` / `DEBUG` / `FLUSHDB` /
@@ -525,9 +521,31 @@ pub struct Config {
     pub lua: LuaSection,
     /// `[replication]` settings — primary/replica streaming.
     pub replication: crate::replication::ReplicationSection,
+    /// `[feed]` settings — v2.3 CDC consumer surface (FEED.*).
+    pub feed: FeedSection,
     /// Path the config was loaded from (for `CONFIG REWRITE`). `None` =
     /// loaded from defaults only / from in-memory string.
     pub source_path: Option<PathBuf>,
+}
+
+/// `[feed]` — the v2.3 CDC consumer surface. When enabled every shard
+/// keeps a mutation backlog (even with no replicas) and serves
+/// `FEED.READ` / `FEED.TAIL` under the `(generation, offset)` cursor
+/// contract (docs/cdc.md).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FeedSection {
+    /// Enable the FEED.* surface. Default `false`.
+    pub enabled: bool,
+    /// Per-shard backlog byte budget. Default `64mb`; hard cap `1gb`
+    /// (bring-up refuses louder budgets — memory formula:
+    /// `nshards × feed_buffer_size` upper bound).
+    pub feed_buffer_size: u64,
+}
+
+impl Default for FeedSection {
+    fn default() -> Self {
+        Self { enabled: false, feed_buffer_size: 64 * 1024 * 1024 }
+    }
 }
 
 // `ConfigError` lives in [`crate::error`] — split out so this file

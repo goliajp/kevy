@@ -84,6 +84,8 @@ mod exec_op;
 mod exec_pubsub;
 mod exec_pubsub_pattern;
 mod exec_rename;
+mod exec_feed;
+mod exec_zalgebra;
 mod exec_slowlog;
 mod exec_watch;
 mod inbox;
@@ -122,6 +124,8 @@ mod uring_io;
 mod uring_park;
 #[cfg(target_os = "linux")]
 mod uring_reactor;
+#[cfg(target_os = "linux")]
+mod uring_setup;
 
 pub use blocked::{BlockHint, BlockKind};
 pub use lua_wake_bridge::push_lua_wake_key;
@@ -135,6 +139,7 @@ pub use kevy_store::Store;
 pub use replica_inbox::{ReplicaApply, ReplicaInboxReceiver, ReplicaInboxSender, replica_inbox_pair};
 pub use replication_gate::ReplicatedApplyGuard;
 pub use route::{Route, XGroupCtx};
+pub use message::ZCombine;
 pub use runtime::Runtime;
 
 /// Command-set semantics injected into the runtime. Cloned to every core, so it
@@ -250,6 +255,28 @@ pub trait Commands: Clone + Send + 'static {
     /// `[expiry].hz`. Default no-op so non-kevy embedders / runtimes can
     /// ignore it.
     fn on_shard_tick(&self, _store: &mut Store) {}
+
+    /// v2.5: per-shard half of an extension fan-out command (IDX.* /
+    /// future VIEW.* / FT.*): compute this shard's raw chunk for
+    /// `argv`. The payload encoding is the embedder's own — the
+    /// runtime treats it as opaque bytes and hands all chunks to
+    /// [`Commands::extension_reduce`] at the origin.
+    fn extension_op(&self, _store: &mut Store, _argv: &[Vec<u8>]) -> Vec<u8> {
+        Vec::new()
+    }
+
+    /// v2.5: origin-side reduce of an extension fan-out — merge every
+    /// shard's chunk into the final RESP reply bytes.
+    fn extension_reduce(&self, _argv: &[Vec<u8>], _chunks: Vec<Vec<u8>>) -> Vec<u8> {
+        b"-ERR extension commands not supported\r\n".to_vec()
+    }
+
+    /// v2.5: called after every applied write with the written key
+    /// (when the resolver knew one). Default no-op; kevy uses it for
+    /// synchronous secondary-index maintenance (derived-by-
+    /// construction). Runs on the shard thread with store access —
+    /// implementations must be cheap when their feature is off.
+    fn on_write(&self, _store: &mut Store, _key: &[u8]) {}
 
     /// Called once per client command at dispatch entry (before routing /
     /// fan-out, so a multi-key command counts once). kevy uses it for

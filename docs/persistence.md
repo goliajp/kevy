@@ -279,3 +279,26 @@ replayed on the next open, and a torn final frame is quarantined
 - Both atomic forms log the **effect** of conditional ops (`ZADD GT`,
   `SPOP`) as unconditional verbs, so replay and replica-apply are
   deterministic by construction.
+
+## Recovery points (v2.3)
+
+With the change feed enabled (`[feed] enabled = true`, see
+[cdc.md](cdc.md)), every snapshot records the feed cursor it was taken
+at — frozen in the same no-append window as the snapshot data itself.
+That yields the recovery-point contract:
+
+> **snapshot S + the feed frames from S's recorded cursor = the exact
+> state at any later cursor.**
+
+`kevy_persist::read_snapshot_cursor(path)` reads the cursor back
+(`None` for pre-v2.3 snapshots — format v4 and older carry no cursor
+and remain fully loadable). The executable form of the contract is
+`bench/restore-drill.sh`, run as a `diskgate` line: write → SAVE →
+write more → kill → restore the dumps alone → replay the captured
+feed frames → byte-exact key-by-key verification.
+
+Scope note: the feed window is the in-memory backlog. Frames older
+than the window are gone — a snapshot older than the window's reach
+is a plain snapshot restore (state at S), not a PITR base. Take
+snapshots at least as often as the window turns over if you rely on
+exact-point recovery.

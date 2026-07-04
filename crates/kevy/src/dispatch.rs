@@ -164,6 +164,10 @@ fn dispatch_conn<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, out: &mut Vec<u8>) 
             2 => encode_bulk(out, &args[1]),
             _ => wrong_args(out, "ping"),
         },
+        b"IDX.CREATE" => crate::cmd_index::cmd_idx_create(args, out),
+        b"VIEW.CREATE" => crate::cmd_view::cmd_view_create(args, out, crate::cmd_index::sidecar_dir()),
+        b"VIEW.DROP" => crate::cmd_view::cmd_view_drop(args, out, crate::cmd_index::sidecar_dir()),
+        b"IDX.DROP" => crate::cmd_index::cmd_idx_drop(args, out),
         b"ECHO" => {
             if args.len() == 2 {
                 encode_bulk(out, &args[1]);

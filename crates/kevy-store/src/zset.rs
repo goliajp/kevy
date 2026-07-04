@@ -77,7 +77,7 @@ impl Store {
         let mut added = 0usize;
         let mut delta: i64 = 0;
         for (score, m) in pairs {
-            match self.zadd_one(key, *m, *score)? {
+            match self.zadd_one(key, m, *score)? {
                 ZaddOutcome::AddedInline => added += 1,
                 ZaddOutcome::UpdatedInline => {}
                 ZaddOutcome::AddedHeap(w) => {
@@ -140,7 +140,7 @@ impl Store {
                         // G-A3: hoist Arc::make_mut OUT of loop.
                         let z = Arc::make_mut(z);
                         for m in members {
-                            if z.remove(*m) {
+                            if z.remove(m) {
                                 r += 1;
                                 d -= zset_member_weight(&SmallBytes::from_slice(m)) as i64;
                             }
@@ -320,6 +320,55 @@ impl Store {
                         z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect();
                     entries.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
                     entries.into_iter().take(count).collect()
+                }
+                _ => return Err(StoreError::WrongType),
+            },
+        };
+        if to_pop.is_empty() {
+            return Ok(to_pop);
+        }
+        let borrowed: Vec<&[u8]> = to_pop.iter().map(|(m, _)| m.as_slice()).collect();
+        self.zrem_borrowed(key, &borrowed)?;
+        Ok(to_pop)
+    }
+
+    /// v2.4 `zpopmin_below` — pop up to `count` lowest-scored members
+    /// whose score is `< below` (strictly). The delayed-job primitive:
+    /// "pop everything that is due" in one atomic call (score = due
+    /// time, `below` = now). Absent key = empty; wrong type errors.
+    pub fn zpopmin_below(
+        &mut self,
+        key: &[u8],
+        below: f64,
+        count: usize,
+    ) -> Result<Vec<(Vec<u8>, f64)>, StoreError> {
+        if count == 0 {
+            if let Some(e) = self.live_entry(key) {
+                match &e.value {
+                    Value::ZSet(_) | Value::SmallZSetInline(_) => {}
+                    _ => return Err(StoreError::WrongType),
+                }
+            }
+            return Ok(Vec::new());
+        }
+        let to_pop: Vec<(Vec<u8>, f64)> = match self.live_entry(key) {
+            None => return Ok(Vec::new()),
+            Some(e) => match &e.value {
+                Value::ZSet(z) => z
+                    .ordered()
+                    .take_while(|(_, sc)| *sc < below)
+                    .take(count)
+                    .map(|(m, sc)| (m.to_vec(), sc))
+                    .collect(),
+                Value::SmallZSetInline(z) => {
+                    let mut entries: Vec<(Vec<u8>, f64)> =
+                        z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect();
+                    entries.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+                    entries
+                        .into_iter()
+                        .take_while(|(_, sc)| *sc < below)
+                        .take(count)
+                        .collect()
                 }
                 _ => return Err(StoreError::WrongType),
             },

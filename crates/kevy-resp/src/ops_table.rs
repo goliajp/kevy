@@ -136,6 +136,14 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("HMSET",        WR, GROW, Some(N::Hash),   None,    SERVER),
     op("HSCAN",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("HSET",         WR, GROW, Some(N::Hash),   None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
+    // v2.4 hash field TTLs (Redis 7.4). Relative forms are
+    // effect-logged as the absolute HPEXPIREAT (exemption below);
+    // HPEXPIREAT is the canonical replay/rewrite carrier.
+    op("HEXPIRE",      WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE),
+    op("HPEXPIRE",     WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE),
+    op("HPEXPIREAT",   WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY | REWRITE),
+    op("HTTL",         RD, NG,   None,            None,    SERVER | ESTORE),
+    op("HPERSIST",     WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
     op("HSETNX",       WR, GROW, Some(N::Hash),   None,    SERVER | ESTORE | REPLAY),
     op("HVALS",        RD, NG,   None,            None,    SERVER | ESTORE),
     // ---- lists --------------------------------------------------------
@@ -164,6 +172,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("SCARD",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("SDIFF",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("SINTER",       RD, NG,   None,            None,    SERVER | ESTORE),
+    op("SINTERSTORE",  WR, GROW, Some(N::Set),    None,    SERVER | ESTORE),
     op("SISMEMBER",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("SMEMBERS",     RD, NG,   None,            None,    SERVER | ESTORE),
     op("SPOP",         WR, NG,   Some(N::Set),    None,    SERVER | ESTORE | REPLAY),
@@ -171,12 +180,22 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("SREM",         WR, NG,   Some(N::Set),    None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("SSCAN",        RD, NG,   None,            None,    SERVER),
     op("SUNION",       RD, NG,   None,            None,    SERVER | ESTORE),
+    op("SUNIONSTORE",  WR, GROW, Some(N::Set),    None,    SERVER | ESTORE),
+    op("SDIFFSTORE",   WR, GROW, Some(N::Set),    None,    SERVER | ESTORE),
     // ---- zsets --------------------------------------------------------
     op("BZPOPMIN",     WR, NG,   None,            None,    SERVER),
     op("ZADD",         WR, GROW, Some(N::Zset),   Some(1), SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
     op("ZCARD",        RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("ZCOUNT",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZINCRBY",      WR, GROW, Some(N::Zset),   Some(1), SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
+    // v2.2 algebra: effect-logged as DEL+ZADD/SADD, so no REPLAY arm
+    // of their own is needed (the effect verbs replay).
+    op("ZINTERSTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
+    // v2.4 delayed-job primitive; embedded logs the ZREM effect.
+    op("ZPOPMIN.BELOW", WR, NG,  Some(N::Zset),   None,    SERVER | ESTORE),
+    op("ZUNIONSTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
+    op("ZDIFFSTORE",   WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
+    op("ZINTERCARD",   RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZPOPMIN",      WR, NG,   Some(N::Zset),   None,    SERVER | ESTORE | REPLAY),
     op("ZRANGE",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZRANGEBYSCORE", RD, NG,  None,            None,    SERVER | ESTORE),
@@ -216,6 +235,40 @@ pub const OP_TABLE: &[OpSpec] = &[
     // ---- keyspace -------------------------------------------------------
     op("COPY",         WR, GROW, None,            None,    ESTORE),
     op("DBSIZE",       RD, NG,   None,            None,    SERVER | ESTORE),
+    // v2.3 CDC surface: FEED.* / PREFIX.STATS are new-genre namespaced
+    // commands (three-laws); embedded parity = changes_since /
+    // changes_tail / feed_shards / info_prefix.
+    // v2.5 index engine (IDX.* namespace). CREATE/DROP mutate the
+    // catalog (sidecar-persisted, not data writes — no AOF/replay);
+    // reads ride the extension fan-out. ESTORE arrives in v2.5 step 3.
+    // NB: catalog mutations are deliberately NOT data writes — the
+    // `write` column tracks the AOF/propagation path, and the catalog
+    // persists via its own sidecar (indexes are derived state).
+    op("IDX.CREATE",   RD, NG,   None,            None,    SERVER | ESTORE),
+    op("IDX.DROP",     RD, NG,   None,            None,    SERVER | ESTORE),
+    op("IDX.LIST",     RD, NG,   None,            None,    SERVER | ESTORE),
+    op("IDX.QUERY",    RD, NG,   None,            None,    SERVER | ESTORE),
+    op("IDX.COUNT",    RD, NG,   None,            None,    SERVER | ESTORE),
+    // IDX.VERIFY: server-only for now (embedded exposes idx_stats;
+    // the drift audit arrives with the五轴 verify hardening).
+    op("IDX.VERIFY",   RD, NG,   None,            None,    SERVER),
+    // v2.6 views (VIEW.* namespace; catalog ops are sidecar-persisted,
+    // not data writes — same reasoning as IDX.*). VERIFY/REBUILD/
+    // EXPLAIN are server-only (embedded rebuilds inline and exposes
+    // view_count instead).
+    op("IDX.REBUILD",  RD, NG,   None,            None,    SERVER),
+    op("PREFIX.DIGEST", RD, NG,  None,            None,    SERVER | ESTORE),
+    op("VIEW.CREATE",  RD, NG,   None,            None,    SERVER | ESTORE),
+    op("VIEW.DROP",    RD, NG,   None,            None,    SERVER | ESTORE),
+    op("VIEW.LIST",    RD, NG,   None,            None,    SERVER | ESTORE),
+    op("VIEW.QUERY",   RD, NG,   None,            None,    SERVER | ESTORE),
+    op("VIEW.VERIFY",  RD, NG,   None,            None,    SERVER),
+    op("VIEW.REBUILD", RD, NG,   None,            None,    SERVER),
+    op("VIEW.EXPLAIN", RD, NG,   None,            None,    SERVER),
+    op("FEED.READ",    RD, NG,   None,            None,    SERVER | ESTORE),
+    op("FEED.TAIL",    RD, NG,   None,            None,    SERVER | ESTORE),
+    op("FEED.SHARDS",  RD, NG,   None,            None,    SERVER | ESTORE),
+    op("PREFIX.STATS", RD, NG,   None,            None,    SERVER | ESTORE),
     op("DEL",          WR, NG,   Some(N::Generic), None,   SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
     op("EXISTS",       RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("EXPIRE",       WR, NG,   Some(N::Generic), None,   SERVER | ESTORE | REPLAY),
@@ -359,7 +412,15 @@ mod tests {
             // Ops whose AOF form is a DIFFERENT verb (documented effect
             // logging): SPOP→SREM handled by SPOP retaining REPLAY for
             // legacy frames; MSET/SETNX/GETEX log SET/PEXPIREAT forms.
-            let logs_as_other_verb = matches!(o.name, "MSET" | "SETNX" | "GETEX" | "BITOP" | "COPY" | "UNLINK" | "TOUCH");
+            let logs_as_other_verb = matches!(
+                o.name,
+                "MSET" | "SETNX" | "GETEX" | "BITOP" | "COPY" | "UNLINK" | "TOUCH"
+                    // v2.2 algebra: effect-logged as DEL + plain ZADD/SADD.
+                    | "ZINTERSTORE" | "ZUNIONSTORE" | "ZDIFFSTORE"
+                    | "ZPOPMIN.BELOW"
+                    | "HEXPIRE" | "HPEXPIRE"
+                    | "SINTERSTORE" | "SUNIONSTORE" | "SDIFFSTORE"
+            );
             assert!(
                 replayable || ledgered || logs_as_other_verb,
                 "{}: embedded write surface without a replay arm and not ledgered — \

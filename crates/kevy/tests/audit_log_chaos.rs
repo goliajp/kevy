@@ -50,7 +50,6 @@ fn audit_log_captures_admin_calls_in_order() {
     let mut handles = Vec::with_capacity(8);
     for tid in 0..8 {
         let stop = Arc::clone(&stop);
-        let port = port;
         handles.push(std::thread::spawn(move || {
             let mut s = TcpStream::connect(format!("127.0.0.1:{port}")).expect("conn");
             let _ = s.set_read_timeout(Some(Duration::from_secs(2)));

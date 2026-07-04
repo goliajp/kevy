@@ -1,0 +1,18 @@
+[package]
+name = "kevy-vector"
+description = "Approximate nearest-neighbor core: HNSW graph with cosine/L2/inner-product distances, tombstone deletes, bounded rebuild."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/kevy-vector"
+readme = "README.md"
+keywords = ["ann", "hnsw", "vector-search", "knn", "embeddings"]
+categories = ["data-structures", "database-implementations"]
+
+[lints]
+workspace = true
+
+[dependencies]

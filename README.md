@@ -2,7 +2,7 @@
 
 **English** · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
-[![CI](https://github.com/goliajp/kevy/actions/workflows/ci.yml/badge.svg)](https://github.com/goliajp/kevy/actions/workflows/ci.yml)
+[![CI](https://github.com/goliajp/kevy/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/goliajp/kevy/actions/workflows/ci.yml?query=branch%3Adevelop)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 ![Rust stable](https://img.shields.io/badge/rust-stable-orange.svg)
 
@@ -30,6 +30,22 @@ kevy ships in three forms, all built from the same engine:
   feature flag per runtime: tokio / smol / async-std). Both accept a
   URL so the same code targets a TCP server (`kevy://host:port`) or an
   in-process bus (`mem://name`).
+
+## kevy v3 — a serving engine
+
+v3 declares kevy a **serving engine**: the primary store for
+applications that would otherwise run an RDS with a cache in front.
+On top of full Redis parity you get declared secondary indexes
+(range / unique / CJK full-text / vector ANN) with one-hop hydration,
+composable views (virtual and materialized top-K), a CDC feed with
+exact recovery points (the built-in outbox), and a migration
+toolchain with checksummed verification — all derived-by-construction
+(maintained in the write path, never drifting, rebuilt from data).
+Every headline number is gated and re-measured on every train:
+hydrated row-list pages p99 < 1ms, write fan-out p99 < 200µs, ANN
+recall ≥ 0.9 — see [the design map](docs/designing-on-kevy.md),
+[the cookbook](docs/cookbook.md), and
+[the validation ledger](bench/VALIDATION-LEDGER.md).
 
 ## Which one do I want?
 

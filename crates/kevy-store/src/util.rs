@@ -58,7 +58,7 @@ pub(crate) fn parse_canonical_i64(b: &[u8]) -> Option<i64> {
 
 /// L2: format `n` as ASCII bytes into `buf` and return the written slice.
 /// Uses `i64::MIN` (20 chars including sign) as the worst-case length.
-pub(crate) fn format_i64_into<'a>(n: i64, buf: &'a mut [u8; 20]) -> &'a [u8] {
+pub(crate) fn format_i64_into(n: i64, buf: &mut [u8; 20]) -> &[u8] {
     // Standard digit-by-digit unroll: faster + no alloc vs `n.to_string()`.
     // For negatives, format the absolute value as u64 (handles i64::MIN
     // without overflow) then prepend '-'.

@@ -34,6 +34,9 @@ pub(crate) enum PersistJob {
         view: SnapshotView,
         snap_path: PathBuf,
         aof_reset: Option<PathBuf>,
+        /// v2.3: feed cursor at view-freeze — written into the
+        /// snapshot header (recovery-point contract).
+        cursor: Option<(u64, u64)>,
     },
     /// Dump `view` as RESP commands at the AOF's `.rewrite` tmp.
     Rewrite { view: SnapshotView, tmp: PathBuf },
@@ -142,8 +145,8 @@ impl PersistWorker {
 
 fn run_job(job: PersistJob) -> PersistDone {
     match job {
-        PersistJob::Save { view, snap_path, aof_reset } => PersistDone::Save {
-            result: kevy_persist::write_snapshot_tmp(&view, &snap_path),
+        PersistJob::Save { view, snap_path, aof_reset, cursor } => PersistDone::Save {
+            result: write_snapshot_tmp_with_cursor(&view, &snap_path, cursor),
             snap_path,
             aof_reset,
         },
@@ -181,7 +184,11 @@ impl<C: Commands> Shard<C> {
             },
             None => None,
         };
-        let job = PersistJob::Save { view, snap_path: self.snapshot_path(), aof_reset };
+        // v2.3 recovery point: the feed cursor at view-freeze time —
+        // frozen in the same no-append window as the view itself, so
+        // "snapshot + frames from cursor" is exact.
+        let cursor = self.replicate.as_ref().map(|f| f.tail());
+        let job = PersistJob::Save { view, snap_path: self.snapshot_path(), aof_reset, cursor };
         if !self.persist.submit(self.id, job) {
             eprintln!("kevy: shard {} persist worker unavailable", self.id);
             if let Some(aof) = &mut self.aof {
@@ -251,6 +258,24 @@ impl<C: Commands> Shard<C> {
     /// A `stop=true` between the `start_bg_save` and that tick
     /// would leave the snapshot orphan + the client's `+OK`
     /// dishonored. This drain closes the window.
+    /// v2.3 clean-shutdown half of the feed cursor contract: persist
+    /// the `(generation, next_offset)` continuity marker. Only written
+    /// here — an unclean stop leaves no marker and the next boot bumps
+    /// the generation (see `kevy_persist::feed_meta`).
+    pub(crate) fn write_feed_shutdown_marker(&self) {
+        if let Some(f) = &self.replicate {
+            let (generation, next) = f.tail();
+            if let Err(e) = kevy_persist::feed_meta::write_feed_meta(
+                &self.data_dir,
+                self.id,
+                generation,
+                next,
+            ) {
+                eprintln!("kevy: shard {} feed marker write failed: {e}", self.id);
+            }
+        }
+    }
+
     pub(crate) fn drain_persist_on_shutdown(&mut self) {
         // The persist worker only handles one job at a time, but a
         // completion could still be sitting in the done channel
@@ -322,4 +347,20 @@ impl<C: Commands> Shard<C> {
             }
         }
     }
+}
+
+/// [`kevy_persist::write_snapshot_tmp`] with the v2.3 cursor header —
+/// same durable-tmp discipline (fsync before the caller's rename).
+fn write_snapshot_tmp_with_cursor(
+    view: &SnapshotView,
+    path: &std::path::Path,
+    cursor: Option<(u64, u64)>,
+) -> std::io::Result<PathBuf> {
+    let tmp = path.with_extension("rdb.tmp");
+    {
+        let mut file = std::fs::File::create(&tmp)?;
+        kevy_persist::write_snapshot_to_with_cursor(view, &mut file, cursor)?;
+        file.sync_all()?;
+    }
+    Ok(tmp)
 }

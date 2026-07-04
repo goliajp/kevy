@@ -29,6 +29,21 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
+    /// v2.3: enable the FEED.* consumer surface. Keeps a per-shard
+    /// backlog (even with no replicas) and persists the (generation,
+    /// offset) cursor via the feed sidecars. `buffer_size` = 0 keeps
+    /// the default (64 MB/shard); effective budget is
+    /// `max(replication_buffer_size, feed_buffer_size)` when both
+    /// features are on.
+    #[must_use]
+    pub fn with_feed(mut self, enabled: bool, buffer_size: u64) -> Self {
+        self.feed_enabled = enabled;
+        if buffer_size > 0 {
+            self.feed_buffer_size = buffer_size;
+        }
+        self
+    }
+
     /// Bring up a replication listener per shard at
     /// `port_base + shard_id` (per Issue Ledger I2 — mirrors the
     /// cluster listener pattern). Replica clients connect to each
