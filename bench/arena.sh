@@ -40,10 +40,13 @@ wait_ready() {
 
 # one full benchmark pass → "test rps" lines on stdout
 bench_once() {
+    # -q still emits \r-overwritten progress on the same line; pull
+    # the final "NAME: RATE requests per second" fragment out of
+    # whatever surrounds it.
     taskset -c "$CLI_CORES" redis-benchmark -h 127.0.0.1 -p "$PORT" \
         -t "$TESTS" -n "$N" -c "$CONC" -P "$PIPE" --threads "$CLI_THREADS" -q 2>/dev/null \
-        | grep -E "requests per second" \
-        | sed -E 's/^([A-Z_]+):.* ([0-9.]+) requests per second.*/\1 \2/'
+        | grep -oE "[A-Z_]+: [0-9.]+ requests per second" \
+        | sed -E 's/^([A-Z_]+): ([0-9.]+) requests per second/\1 \2/'
 }
 
 # run RUNS passes against the live server; emit "test median stdev"
