@@ -11,8 +11,9 @@
 # Output: markdown table rows for bench/PERF-LEDGER.md.
 # Usage (lx64): bash bench/arena.sh <kevy-binary>
 set -u
-cd "$(dirname "$0")"
 KBIN=${1:?usage: arena.sh <kevy-binary>}
+KBIN=$(cd "$(dirname "$KBIN")" && pwd)/$(basename "$KBIN")
+cd "$(dirname "$0")"
 
 SRV_CORES=${SRV_CORES:-0-7}
 CLI_CORES=${CLI_CORES:-8-15}
