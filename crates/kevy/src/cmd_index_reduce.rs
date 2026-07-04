@@ -460,11 +460,13 @@ fn reduce_agg(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
         taus.iter().copied().fold(f64::NEG_INFINITY, f64::max)
     };
     let depth = groups_depth(argv);
-    if unseen_bound > theta && depth < 1_048_576 {
-        // phase 1 again, 4× deeper (rare on skewed real data; the
-        // uniform worst case walks up to a full materialization)
+    if unseen_bound > theta && depth != 0 {
+        // One 4× deepening, then jump STRAIGHT to full
+        // materialization (DEPTH=0): uniform near-tie data defeats
+        // thresholds information-theoretically, and a geometric crawl
+        // just multiplies fan-out rounds (measured 51ms).
         let mut argv2: Vec<Vec<u8>> = argv.to_vec();
-        set_groups_depth(&mut argv2, depth * 4);
+        set_groups_depth(&mut argv2, if depth == 1 { 4 } else { 0 });
         return continuation(&argv2);
     }
     // ---- phase 2: exact totals for potential top-k members ----
