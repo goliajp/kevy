@@ -12,21 +12,23 @@ host loopback,client 绑异核,median-of-5 + sample stdev。
 | redis-stack-server | Redis 7.4.7 + RediSearch(image 3b02c41b1595) | docker redis/redis-stack-server:latest |
 | kevy | 3.0.0-dev(develop @ v3.2)| release-perf,8 shards |
 
-## 裸面(redis-benchmark,-c50 -P16 -n2M,7 类)— **全胜 1.67-2.5×**
+## 裸面(redis-benchmark,-c50 -P16,7 类)— **全胜 1.6-3.3×**
+(v1.1 校正 2026-07-05:v1 的 2M/cell 短跑量子化低估了 kevy;
+8M/cell ≥2s 定真值。v3.4 上限阶梯佐证:client 加宽不再抬升 =
+server-bound 真值。)
 
-| test | kevy | valkey | 比 | 判定 |
+| test | kevy(8M/cell) | valkey | 比 | 判定 |
 |---|---|---|---|---|
-| GET | 3,992,016 ±3.6k | 1,998,002 ±1.4k | **2.00×** | WIN |
-| SET | 3,984,064 ±22k | 1,596,169 ±0.6k | **2.50×** | WIN |
-| INCR | 4,000,000 ±4.4k | 1,998,002 ±0 | **2.00×** | WIN |
-| HSET | 3,992,016 ±0 | 1,598,721 ±0.7k | **2.50×** | WIN |
-| SADD | 3,992,016 ±3.6k | 1,998,002 ±0.9k | **2.00×** | WIN |
-| LPUSH | 2,666,667 ±1.9k | 1,598,721 ±0.6k | **1.67×** | WIN |
-| ZADD | 2,663,116 ±0 | 1,598,721 ±0.7k | **1.67×** | WIN |
+| GET | 6,394,884 ±478k | 2,131,628 ±69k | **3.00×** | WIN |
+| SET | 5,329,780 ±787k | 1,599,041 ±46k | **3.33×** | WIN |
+| INCR | 5,326,232 ±789k | 2,131,628 ±83k | **2.50×** | WIN |
+| HSET | 3,996,004 ±360k | 1,776,199 ±47k | **2.25×** | WIN |
+| SADD | 5,326,232 ±608k | 2,131,628 ±0.7k | **2.50×** | WIN |
+| LPUSH | 2,909,091 ±303k | 1,776,199 ±0.2k | **1.64×** | WIN |
+| ZADD | 2,906,977 ±226k | 1,682,440 ±0.5k | **1.73×** | WIN |
 
-**注记(诚实边界)**:kevy 多类目数字量子化重合(3,992,016 等)——
-疑似 client-bound(6 线程 benchmark 打满);kevy 真上限可能更高。
-v3.4 以更宽 client 复测定真值。
+kevy 侧 stdev 7-15%(高吞吐下 run 间波动);全部 gap 仍远超
+max(stdev) = 真赢。
 
 ## Serving 面(200k 同种子语料:Zipf 文本 / 流形 128d 向量 / Zipf 组;
 kevy 四索引 vs RediSearch 单复合 FT 索引;200 查询 × median-of-5)
