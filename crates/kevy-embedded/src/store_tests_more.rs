@@ -713,3 +713,31 @@ fn prefix_digest_matrix() {
     s4.rpush(b"o:l", &[b"b", b"a"]).unwrap();
     assert_ne!(s4.prefix_digest(b"o:").1, d3);
 }
+
+#[test]
+fn agg_index_group_by_embedded() {
+    use crate::{AggBy, IndexValType};
+    let s = Store::open(Config::default().with_ttl_reaper_manual().with_shards(4)).unwrap();
+    for (i, (g, v)) in [("a", 10), ("a", 20), ("b", 5), ("b", 500), ("c", 1)].iter().enumerate() {
+        s.hset(format!("m:{i}").as_bytes(), &[(b"grp", g.as_bytes()), (b"val", v.to_string().as_bytes())]).unwrap();
+    }
+    s.idx_create_agg(b"m_agg", b"m:", b"val", IndexValType::I64, b"grp").unwrap();
+    let g = s.idx_group(b"m_agg", b"a").unwrap();
+    assert_eq!((g.count, g.sum), (2, 30.0));
+    assert_eq!(g.avg(), Some(15.0));
+    // top by sum: b(505) > a(30) > c(1); shard merge exact
+    let top = s.idx_groups(b"m_agg", AggBy::Sum, 10).unwrap();
+    assert_eq!(top[0].0, b"b".to_vec());
+    assert_eq!(top[0].1.sum, 505.0);
+    assert_eq!(top.len(), 3);
+    // live: regroup + delete
+    s.hset(b"m:3", &[(b"grp", b"a")]).unwrap(); // 500 moves b→a
+    let g = s.idx_group(b"m_agg", b"a").unwrap();
+    assert_eq!((g.count, g.sum), (3, 530.0));
+    s.del(&[b"m:3" as &[u8]]).unwrap();
+    let g = s.idx_group(b"m_agg", b"a").unwrap();
+    assert_eq!((g.count, g.sum), (2, 30.0));
+    // rejections
+    assert!(s.idx_create_agg(b"bad", b"m:", b"val", IndexValType::Str, b"grp").is_err());
+    assert!(s.idx_group(b"nope", b"a").is_err());
+}

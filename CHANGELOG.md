@@ -1,5 +1,19 @@
 # Changelog
 
+### v3.1 — aggregate kind (write-time GROUP BY)
+
+- **`KIND agg GROUPBY <field>`**: fifth index kind — per-group
+  count/sum/min/max (avg derived) maintained in the write path, the
+  declared-access-path answer to GROUP BY (Law 3 intact: zero
+  query-time row scanning). min/max exact under deletion via
+  per-group value multisets; exclusions counted; f64 sums.
+  `IDX.QUERY <name> GROUP <g>` and `GROUPS [BY count|sum|min|max]
+  [LIMIT ≤1000]` with exact cross-shard merge (shared
+  merge/sort code between shard and reduce — orderings cannot
+  drift). Embedded: idx_create_agg / idx_group / idx_groups.
+  bench/agggate.sh gates point query < 1ms @ 1M×10k groups, top-100
+  < 5ms, write tax < 10%, memory formula.
+
 ## v3.0.0 — kevy is a serving engine (2026-07-04)
 
 The v3 arc: eleven trains (v2.1 → v2.11), all five-axis gated
