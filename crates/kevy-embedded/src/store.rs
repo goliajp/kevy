@@ -68,6 +68,7 @@ pub struct Store {
 /// Used by the URL-keyed registry in `kevy-client` so that multiple
 /// `Connection::open("mem://name")` calls share the same backing store
 /// without leaking it when all strong handles go away.
+#[derive(Clone)]
 pub struct WeakStore {
     shards: Weak<Vec<Arc<RwLock<Inner>>>>,
     guard: Weak<DropGuard>,
@@ -254,6 +255,10 @@ impl Store {
         };
         store.idx_boot();
         store.view_boot();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(addr) = store.config.resp_listener {
+            crate::listener::spawn(addr, store.downgrade())?;
+        }
         Ok(store)
     }
 
