@@ -152,7 +152,7 @@ fn export_key(client: &mut RespClient, key: &[u8], out: &mut impl Write) -> io::
     {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?
+            .map_err(io::Error::other)?
             .as_millis() as i64;
         encode_command_borrowed(
             &mut frame,
@@ -195,7 +195,7 @@ pub fn run_import(
     let mut chunk = vec![0u8; 1 << 20];
     let mut batch_bytes = 0usize;
     let mut batch_cmds = 0usize;
-    let mut progress = OpenOptions::new().create(true).write(true).open(&progress_path)?;
+    let mut progress = OpenOptions::new().create(true).truncate(false).write(true).open(&progress_path)?;
     loop {
         let n = f.read(&mut chunk)?;
         if n == 0 {
@@ -203,8 +203,7 @@ pub fn run_import(
         }
         pending.extend_from_slice(&chunk[..n]);
         // carve complete commands off `pending`
-        loop {
-            let Some(used) = command_len(&pending[batch_bytes..]) else { break };
+        while let Some(used) = command_len(&pending[batch_bytes..]) {
             batch_bytes += used;
             batch_cmds += 1;
             if batch_cmds == PIPELINE {
