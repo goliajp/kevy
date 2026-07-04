@@ -18,7 +18,7 @@ impl ReplicaClient {
     /// Snapshot bookkeeping:
     /// - Entering `SnapshotBegin` sets `in_snapshot = true`; chunk
     ///   bytes are valid until `SnapshotEnd`.
-    /// - `SnapshotEnd { ack_offset }` sets `expected_offset =
+    /// - `SnapshotEnd { ack_offset, routed: false }` sets `expected_offset =
     ///   ack_offset` (so the next live `Frame` has no gap) and
     ///   clears `in_snapshot`.
     /// - Live `*2\r\n` bytes during a snapshot return

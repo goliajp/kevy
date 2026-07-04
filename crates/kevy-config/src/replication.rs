@@ -33,6 +33,11 @@ pub struct ReplicationSection {
     /// dropping it (and forcing a full snapshot on reconnect). Default
     /// `60_000` (60 s).
     pub reconnect_window_ms: u32,
+    /// v3.2 — the upstream is a SINGLE stream on one port (an embedded
+    /// writer's `embed_writer_listen_addr` source) rather than a
+    /// per-shard port fleet: one routing runner fans frames into local
+    /// shards by key hash. Only meaningful when `role = "replica"`.
+    pub single_source: bool,
 }
 
 impl Default for ReplicationSection {
@@ -43,6 +48,7 @@ impl Default for ReplicationSection {
             listen_port_base: 0,
             replication_buffer_size: 256 * 1024 * 1024,
             reconnect_window_ms: 60_000,
+            single_source: false,
         }
     }
 }

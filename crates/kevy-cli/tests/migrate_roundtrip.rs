@@ -18,12 +18,18 @@ impl Srv {
             .parent()
             .unwrap()
             .join("kevy");
-        assert!(
-            bin.exists(),
-            "kevy server binary missing at {bin:?} — run `cargo build -p kevy --bin kevy` first \
-             (cargo does not know this test depends on it; a STALE binary silently lacks new \
-             verbs like PREFIX.DIGEST)"
-        );
+        if !bin.exists() {
+            // cargo doesn't know this test depends on the kevy bin;
+            // under full-workspace parallelism the build order races.
+            // Build it deterministically (no-op when fresh).
+            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+            let status = Command::new(cargo)
+                .args(["build", "-p", "kevy", "--bin", "kevy"])
+                .status()
+                .expect("spawn cargo build");
+            assert!(status.success(), "cargo build -p kevy --bin kevy failed");
+        }
+        assert!(bin.exists(), "kevy server binary still missing at {bin:?}");
         let child = Command::new(&bin)
             .args(["--port", &port.to_string(), "--threads", "2", "--no-aof"])
             .stdout(std::process::Stdio::null())

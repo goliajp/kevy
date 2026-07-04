@@ -62,12 +62,21 @@ impl<C: Commands> Shard<C> {
             ReplicaApply::SnapshotChunk(bytes) => {
                 self.replica_snapshot_buf.extend_from_slice(&bytes);
             }
-            ReplicaApply::SnapshotEnd { ack_offset: _ } => {
+            ReplicaApply::SnapshotEnd { ack_offset: _, routed } => {
                 let buf = std::mem::take(&mut self.replica_snapshot_buf);
-                if let Err(e) = kevy_persist::load_snapshot_from(
-                    &mut self.store,
-                    Cursor::new(buf.as_slice()),
-                ) {
+                let res = if routed {
+                    // v3.2 single-source: the payload is the whole
+                    // upstream keyspace — keep only this shard's slice
+                    let (id, n) = (self.id, self.nshards);
+                    kevy_persist::load_snapshot_filtered(
+                        &mut self.store,
+                        Cursor::new(buf.as_slice()),
+                        |key| (kevy_hash::key_hash_slot(key) as usize) % n == id,
+                    )
+                } else {
+                    kevy_persist::load_snapshot_from(&mut self.store, Cursor::new(buf.as_slice()))
+                };
+                if let Err(e) = res {
                     eprintln!(
                         "kevy: shard {} replica snapshot load failed: {e}",
                         self.id,
