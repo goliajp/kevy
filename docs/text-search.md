@@ -46,11 +46,12 @@ query-engine slope (REFUSED list).
 
 Top-K evaluation uses MaxScore pruning (rarest terms first; commoner
 lists are probed per candidate once they can't lift new documents
-into the top K). Worst case is a query consisting of a single very
-common term — with no second list to prune against it degrades to a
-scan of that term's postings (~tens of ms at millions of postings);
-impact-ordered lists are the eventual structure if that shape
-matters to your workload.
+into the top K). Postings are impact-ordered two ways (v3.5): tf
+buckets descending, and dl groups ascending inside each bucket — a
+single-term query (no second list to prune against) stops exactly at
+the first dl group that can't beat the kth floor, so even the most
+common term answers in ~0.1ms at 200k docs (was ~6ms as a full
+postings scan).
 
 ## Sizing
 
