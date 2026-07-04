@@ -98,3 +98,68 @@ fn export_import_roundtrip_digest_equal() {
     assert_eq!(digest(&mut cd, "mig:"), ds);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn bulk_ops_and_diff() {
+    let srv = Srv::start();
+    let mut c = srv.client();
+    for i in 0..200 {
+        c.request_borrowed(&[b"SET", format!("bk:{i}").as_bytes(), format!("v{i}").as_bytes()]).unwrap();
+    }
+    c.request_borrowed(&[b"SET", b"bk:ttl", b"x"]).unwrap();
+    c.request_borrowed(&[b"PEXPIRE", b"bk:ttl", b"60000"]).unwrap();
+
+    // copy-prefix carries values + TTL (COPY REPLACE)
+    let n = kevy_cli::bulk::run_copy_prefix(&mut c, b"bk:", b"ck:", 0).unwrap();
+    assert_eq!(n, 201);
+    let (na, da) = kevy_cli::bulk::run_digest(&mut c, b"bk:").unwrap();
+    let (nb, _db) = kevy_cli::bulk::run_digest(&mut c, b"ck:").unwrap();
+    assert_eq!((na, nb), (201, 201));
+    // digests differ because the KEY participates in the row digest —
+    // value equality is checked via a spot key + TTL carry
+    let r = c.request_borrowed(&[b"GET", b"ck:42"]).unwrap();
+    assert_eq!(format!("{r:?}"), format!("{:?}", kevy_cli::Reply::Bulk(b"v42".to_vec())));
+    let r = c.request_borrowed(&[b"PTTL", b"ck:ttl"]).unwrap();
+    let ms: i64 = format!("{r:?}").trim_start_matches("Int(").trim_end_matches(')').parse().unwrap();
+    assert!(ms > 0, "COPY carries TTL: {ms}");
+    let _ = da;
+
+    // dry-run counts without deleting
+    let n = kevy_cli::bulk::run_delete_prefix(&mut c, b"ck:", 0, true).unwrap();
+    assert_eq!(n, 201);
+    let (still, _) = kevy_cli::bulk::run_digest(&mut c, b"ck:").unwrap();
+    assert_eq!(still, 201);
+    // rate-limited real delete: 201 keys at 400/s ≈ 0.5s (±20% gate lives in onrampgate)
+    let t0 = std::time::Instant::now();
+    let n = kevy_cli::bulk::run_delete_prefix(&mut c, b"ck:", 400, false).unwrap();
+    let dt = t0.elapsed().as_secs_f64();
+    assert_eq!(n, 201);
+    assert!(dt > 0.3, "rate limit engaged: {dt:.2}s");
+    let (gone, _) = kevy_cli::bulk::run_digest(&mut c, b"ck:").unwrap();
+    assert_eq!(gone, 0);
+
+    // diff: same server twice → OK; after a mutation → MISMATCH
+    let srv2 = Srv::start();
+    let mut c2 = srv2.client();
+    let mut c1b = srv.client();
+    let mut out = Vec::new();
+    let bad = kevy_cli::bulk::run_diff(&mut c1b, &mut c2, &[b"bk:".to_vec()], &mut out).unwrap();
+    assert_eq!(bad.len(), 1, "empty dst mismatches: {}", String::from_utf8_lossy(&out));
+    // import bk: into srv2 → diff clean
+    let dir = std::env::temp_dir().join(format!("kevy-bulk-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("bk.resp");
+    let mut c1c = srv.client();
+    kevy_cli::migrate::run_export(&mut c1c, Some(b"bk:"), &file).unwrap();
+    kevy_cli::migrate::run_import(&mut c2, &file, false, true).unwrap();
+    let mut out = Vec::new();
+    let bad = kevy_cli::bulk::run_diff(&mut c1c, &mut c2, &[b"bk:".to_vec()], &mut out).unwrap();
+    assert!(bad.is_empty(), "{}", String::from_utf8_lossy(&out));
+
+    // inspect renders counts
+    let mut out = Vec::new();
+    kevy_cli::bulk::run_inspect(&mut c1c, b"bk:", &mut out).unwrap();
+    let s = String::from_utf8_lossy(&out);
+    assert!(s.contains("201 keys") && s.contains("string: 201"), "{s}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

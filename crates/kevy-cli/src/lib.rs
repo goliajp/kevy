@@ -19,6 +19,10 @@ pub mod backup;
 /// [`migrate::run_export`] and [`migrate::run_import`].
 pub mod migrate;
 
+/// **v2.10** — prefix bulk ops + diagnostics (`copy-prefix` /
+/// `delete-prefix` / `digest` / `diff` / `inspect`).
+pub mod bulk;
+
 /// Pretty-print a reply roughly the way `redis-cli` does. Arrays are
 /// numbered + indented; bulk strings are quoted; nil shows as `(nil)`.
 pub fn format_reply(reply: &Reply, indent: usize) -> String {
