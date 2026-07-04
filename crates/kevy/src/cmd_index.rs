@@ -70,6 +70,7 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) 
     let mut max_bytes = 0u64;
     let (mut dim, mut m, mut ef) = (0u32, 16u16, 200u16);
     let mut distance = 0u8;
+    let mut group_by: Option<Vec<u8>> = None;
     let mut i = 11;
     while i + 1 < args.len() {
         let (opt, val) = (&args[i], &args[i + 1]);
@@ -94,6 +95,11 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) 
                 Some(v) if (16..=1024).contains(&v) => ef = v as u16,
                 _ => return encode_error(out, "ERR EF must be 16-1024"),
             }
+        } else if opt.eq_ignore_ascii_case(b"GROUPBY") {
+            if val.is_empty() {
+                return encode_error(out, "ERR GROUPBY requires a field");
+            }
+            group_by = Some(val.to_vec());
         } else if opt.eq_ignore_ascii_case(b"DISTANCE") {
             match kevy_vector::Distance::parse(val) {
                 Some(d) => distance = d as u8,
@@ -125,6 +131,18 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) 
         }
         _ => None,
     };
+    match (kind, &group_by, ty) {
+        (IndexKind::Agg, None, _) => {
+            return encode_error(out, "ERR KIND agg requires GROUPBY <field>");
+        }
+        (IndexKind::Agg, Some(_), ValType::Str | ValType::Vector) => {
+            return encode_error(out, "ERR KIND agg requires TYPE i64|f64");
+        }
+        (k, Some(_), _) if k != IndexKind::Agg => {
+            return encode_error(out, "ERR GROUPBY requires KIND agg");
+        }
+        _ => {}
+    }
     let spec = IndexSpec {
         name: args[1].to_vec(),
         prefix: args[4].to_vec(),
@@ -133,7 +151,8 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) 
         kind,
         max_bytes,
         ann,
-    };
+        group_by,
+        };
     let mut cat = index_runtime::catalog().map(|c| (*c).clone()).unwrap_or_default();
     match cat.create(spec) {
         Ok(()) => {
