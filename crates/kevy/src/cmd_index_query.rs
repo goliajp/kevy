@@ -237,6 +237,11 @@ fn op_agg(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
         .find_map(|a| std::str::from_utf8(a).ok()?.strip_prefix("DEPTH=")?.parse().ok())
         .unwrap_or(1);
     let res = index_runtime::with_ready_agg(store, &argv[1], |a| {
+        if depth == 0 {
+            // fallback sentinel: full local materialization (uniform
+            // near-tie data is unprunable — see reduce_agg)
+            return (a.all_groups(), true);
+        }
         let fetch = (limit * 4 * depth).max(64 * depth);
         let rows = a.top_groups(by, fetch);
         let exhausted = rows.len() < fetch;

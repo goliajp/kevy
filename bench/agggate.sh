@@ -3,7 +3,12 @@
 #
 #   1. GROUP point query p99 < 1ms @ 1M rows × 10k groups
 #      (median of 6 connections).
-#   2. GROUPS top-100 (BY sum) p99 < 5ms.
+#   2. GROUPS top-100 (BY sum) p99 < 5ms. Group sizes are
+#      Zipf-distributed — real GROUP BY columns (status, tenant,
+#      category) are heavy-tailed; a uniform corpus makes every sum a
+#      near-tie, which defeats ANY exact pruning
+#      information-theoretically (the engine then falls back to full
+#      materialization by design).
 #   3. WRITE TAX: HSET with one agg index < 10% vs bare (paired
 #      alternation ×3, medians — the viewgate protocol).
 #   4. Memory formula vs RSS growth 0.5-1.5×.
@@ -81,8 +86,11 @@ s = connect(); buf = [b""]
 t0 = time.time()
 batch = []
 random.seed(5)
+def zipf_group():
+    u = random.random()
+    return min(int(GROUPS ** u) - 1, GROUPS - 1)
 for i in range(N):
-    g = f"g{random.randrange(GROUPS)}"
+    g = f"g{zipf_group()}"
     batch.append(enc("HSET", f"a:{i}", "grp", g, "val", str(random.randrange(1_000_000))))
     if len(batch) == 2000:
         s.sendall(b"".join(batch))
