@@ -31,6 +31,25 @@ train, versions bump at ship time.
 - Batch-gated 200µs nap retained as the second ladder rung for the
   no-inflight idle shape (`NAP_BATCH_MIN` 4).
 
+### v2.10 — RDS on-ramp (migration toolchain)
+
+- **kevy-cli grows the migration set**: `export` (RESP command stream
+  of DEL+rebuild frames + absolute PEXPIREAT — bidirectionally
+  compatible with redis-cli --pipe; leading DEL makes replay
+  genuinely idempotent), `import` (512-deep pipeline, fsynced
+  `.progress`, `--resume`/`--strict`), `copy-prefix` /
+  `delete-prefix` (token bucket `--rate` with strict empty-bucket
+  pacing, `--dry-run`), `digest`, `diff` (exit code on mismatch),
+  `inspect`.
+- **`PREFIX.DIGEST`** (server + embedded `prefix_digest`):
+  order-insensitive canonical checksum, shard-count and insert-order
+  invariant — the migration verification primitive.
+- Deferred index build documented as order-of-operations (bulk load,
+  then IDX.CREATE — backfill beats per-write maintenance).
+- bench/onrampgate.sh: 1M-row round trip, ≥200k cmd/s import,
+  kill -9 → --resume digest convergence, ±20% rate accuracy.
+  docs/migration.md.
+
 ### v2.9 — topology (P4, embedded RESP listener)
 
 - **`Config::with_resp_listener(addr)`**: an embedded store exposes
