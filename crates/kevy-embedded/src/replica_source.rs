@@ -213,6 +213,15 @@ fn run_conn(
         Some(off) => off,
         None => return,
     };
+    // The accept loop's listener is non-blocking and accepted sockets
+    // INHERIT that on some platforms (BSD/macOS semantics) — flip to
+    // blocking BEFORE any bulk write, or a snapshot ship dies with
+    // EWOULDBLOCK the moment the socket buffer fills (measured: EOF
+    // at ~319KB, one buffer's worth).
+    if stream.set_nonblocking(false).is_err() {
+        return;
+    }
+    let _ = stream.set_read_timeout(None);
     // Snapshot path (closing the v1.21 anti-scope): a fresh replica
     // (offset 0 against a non-empty history) or one that fell past
     // the backlog gets the keyspace shipped, then live frames from
@@ -250,10 +259,6 @@ fn run_conn(
     // any pending frame bytes, then release before writing to the
     // socket. Sleep when caught up so we don't busy-spin.
     let mut sent_offset = from_offset;
-    if stream.set_nonblocking(false).is_err() {
-        return;
-    }
-    let _ = stream.set_read_timeout(None);
     while !stop.load(Ordering::Relaxed) {
         let next = next_frame_bytes(&source, sent_offset);
         match next {
