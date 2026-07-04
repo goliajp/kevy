@@ -40,6 +40,18 @@ pub(crate) fn extension_op(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"GROUP") || a.eq_ignore_ascii_case(b"GROUPS")) {
         return op_agg(store, argv);
     }
+    // v3.1 phase 2 (internal): AGG.FETCH <name> <g…> — exact partials
+    // for the candidate groups that survived phase-1 ranking.
+    if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"AGG.FETCH")) {
+        let res = index_runtime::with_ready_agg(store, &argv[1], |a| {
+            argv[2..].iter().map(|g| (g.clone(), a.group(g))).collect::<Vec<_>>()
+        });
+        return match res {
+            Ok(rows) => encode_agg_chunk(&rows),
+            Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+            Err(_) => vec![ST_NOINDEX],
+        };
+    }
     // v2.8: IDX.REBUILD <name> (ANN tombstone compaction)
     if argv
         .first()
@@ -199,51 +211,92 @@ fn op_match(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
 /// group (the reduce needs full partials to merge exactly).
 fn op_agg(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let single = argv[2].eq_ignore_ascii_case(b"GROUP");
+    if single {
+        let res = index_runtime::with_ready_agg(store, &argv[1], |a| {
+            argv.get(3).map(|g| vec![(g.clone(), a.group(g))])
+        });
+        return match res {
+            Ok(None) => vec![ST_BADARGS],
+            Ok(Some(rows)) => encode_agg_chunk(&rows),
+            Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+            Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+            Err(_) => vec![ST_NOINDEX],
+        };
+    }
+    // GROUPS phase 1 (distributed exact top-K, TPUT-style): send only
+    // the local top-(4×limit) by the ranking metric plus an
+    // `exhausted` flag (a shard that sent EVERYTHING has τ = nothing
+    // unsent — the reduce's uncertainty test needs to know). Full
+    // materialization measured 14-18ms at 8×10k groups; this keeps
+    // chunks at ~4·limit rows.
+    let Some((by, limit)) = parse_groups_args(argv) else {
+        return vec![ST_BADARGS];
+    };
+    let depth: usize = argv
+        .iter()
+        .find_map(|a| std::str::from_utf8(a).ok()?.strip_prefix("DEPTH=")?.parse().ok())
+        .unwrap_or(1);
     let res = index_runtime::with_ready_agg(store, &argv[1], |a| {
-        let mut rows: Vec<(Vec<u8>, kevy_index::GroupStats)> = Vec::new();
-        if single {
-            let g = argv.get(3)?;
-            rows.push((g.clone(), a.group(g)));
-        } else {
-            // full local partials, unranked — ranking happens at the
-            // reduce after cross-shard merge
-            rows = a.all_groups();
-        }
-        Some(rows)
+        let fetch = (limit * 4 * depth).max(64 * depth);
+        let rows = a.top_groups(by, fetch);
+        let exhausted = rows.len() < fetch;
+        (rows, exhausted)
     });
     match res {
-        Ok(None) => vec![ST_BADARGS],
-        Ok(Some(rows)) => {
-            let mut chunk = vec![ST_OK];
-            chunk.extend_from_slice(&(rows.len() as u32).to_le_bytes());
-            for (g, st) in &rows {
-                chunk.extend_from_slice(&(g.len() as u32).to_le_bytes());
-                chunk.extend_from_slice(g);
-                chunk.extend_from_slice(&st.count.to_le_bytes());
-                chunk.extend_from_slice(&st.sum.to_le_bytes());
-                // min/max ride in a LENGTH-PREFIXED block so the
-                // reduce's ranking pass can skip it without parsing
-                // (they're only decoded for the groups that survive
-                // the LIMIT cut).
-                let mut mm = Vec::new();
-                for v in [&st.min, &st.max] {
-                    match v {
-                        Some(x) => {
-                            mm.push(1);
-                            encode_value(&mut mm, x);
-                        }
-                        None => mm.push(0),
-                    }
-                }
-                chunk.extend_from_slice(&(mm.len() as u32).to_le_bytes());
-                chunk.extend_from_slice(&mm);
-            }
+        Ok((rows, exhausted)) => {
+            let mut chunk = encode_agg_chunk(&rows);
+            chunk.push(u8::from(exhausted));
             chunk
         }
         Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
+}
+
+/// `GROUPS [BY m] [LIMIT n]` tail — shared by op and reduce.
+pub(crate) fn parse_groups_args(argv: &[Vec<u8>]) -> Option<(kevy_index::AggBy, usize)> {
+    let (mut by, mut limit) = (kevy_index::AggBy::Count, 100usize);
+    let mut i = 3;
+    while i < argv.len() {
+        if argv[i].eq_ignore_ascii_case(b"BY") {
+            by = kevy_index::AggBy::parse(argv.get(i + 1)?)?;
+            i += 2;
+        } else if argv[i].eq_ignore_ascii_case(b"LIMIT") {
+            limit = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
+            i += 2;
+        } else if argv[i].starts_with(b"DEPTH=") {
+            i += 1; // internal iterative-deepening marker
+        } else {
+            return None;
+        }
+    }
+    Some((by, limit.clamp(1, 1000)))
+}
+
+/// Shared agg chunk encoding: `[ST_OK][n][(glen,g,count,sum,mmlen,mm)*]`.
+fn encode_agg_chunk(rows: &[(Vec<u8>, kevy_index::GroupStats)]) -> Vec<u8> {
+    let mut chunk = vec![ST_OK];
+    chunk.extend_from_slice(&(rows.len() as u32).to_le_bytes());
+    for (g, st) in rows {
+        chunk.extend_from_slice(&(g.len() as u32).to_le_bytes());
+        chunk.extend_from_slice(g);
+        chunk.extend_from_slice(&st.count.to_le_bytes());
+        chunk.extend_from_slice(&st.sum.to_le_bytes());
+        let mut mm = Vec::new();
+        for v in [&st.min, &st.max] {
+            match v {
+                Some(x) => {
+                    mm.push(1);
+                    encode_value(&mut mm, x);
+                }
+                None => mm.push(0),
+            }
+        }
+        chunk.extend_from_slice(&(mm.len() as u32).to_le_bytes());
+        chunk.extend_from_slice(&mm);
+    }
+    chunk
 }
 
 /// v2.8 KNN per-shard: distance-ranked hits + hydration. Chunk:
