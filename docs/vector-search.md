@@ -7,12 +7,12 @@ HNSW graph, maintained synchronously with every write.
 ```
 IDX.CREATE embs ON PREFIX doc: FIELD v TYPE vector KIND ann DIM 768
     [DISTANCE cosine|l2|ip] [M 16] [EF 200]
-IDX.QUERY embs KNN <f32-le-blob> LIMIT 10 [FIELDS title]
+IDX.QUERY embs KNN <f32-le-blob> LIMIT 10 [EF 400] [FIELDS title]
 IDX.REBUILD embs
 ```
 
 Embedded: `idx_create_ann(name, prefix, field, dim, distance, m, ef)`
-+ `idx_knn(name, &[f32], k) -> Vec<(key, distance)>`.
++ `idx_knn(name, &[f32], k, ef) -> Vec<(key, distance)>`.
 
 ## Wire format
 
@@ -32,8 +32,14 @@ cursor (deep ANN pagination is an anti-pattern).
 
 Per-shard graphs are independent (index-follows-key, zero cross-shard
 write coordination); a query fans out, takes each shard's top-k, and
-merges. Recall is gated ≥ 0.90 against brute-force ground truth by
-`bench/vectorgate.sh`.
+merges.
+
+`EF` (16-4096, default max(4·LIMIT, 100)) is the query beam width —
+the canonical HNSW recall/latency knob. Dense near-duplicate regions
+need wider beams (measured on a 20k cluster @128d: EF 64 → 0.67
+recall@10, 100 → 0.77, 400 → the ≥ 0.90 gate line). Embedded:
+`idx_knn(…, ef)` (0 = default). Recall is gated ≥ 0.90 at EF 400
+against brute-force ground truth by `bench/vectorgate.sh`.
 
 ## Parameters, deletes, rebuild
 

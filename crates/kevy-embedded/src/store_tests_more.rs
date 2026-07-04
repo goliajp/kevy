@@ -667,17 +667,17 @@ fn ann_index_knn_embedded() {
         s.hset(format!("g:{i}").as_bytes(), &[(b"v", blob(x, y).as_slice())]).unwrap();
     }
     s.idx_create_ann(b"g_v", b"g:", b"v", crate::AnnSpec { dim: 2, distance: 1, m: 0, ef: 0 }).unwrap(); // l2, defaults
-    let hits = s.idx_knn(b"g_v", &[5.1, 7.05], 3).unwrap();
+    let hits = s.idx_knn(b"g_v", &[5.1, 7.05], 3, 0).unwrap();
     assert_eq!(hits[0].0, b"g:75".to_vec(), "{hits:?}"); // (5,7)
     assert_eq!(hits.len(), 3);
     // update + delete via commit hook
     s.hset(b"g:0", &[(b"v", blob(50.0, 50.0).as_slice())]).unwrap();
-    let hits = s.idx_knn(b"g_v", &[50.0, 50.0], 1).unwrap();
+    let hits = s.idx_knn(b"g_v", &[50.0, 50.0], 1, 0).unwrap();
     assert_eq!(hits[0].0, b"g:0".to_vec());
     s.del(&[b"g:0" as &[u8]]).unwrap();
-    let hits = s.idx_knn(b"g_v", &[50.0, 50.0], 1).unwrap();
+    let hits = s.idx_knn(b"g_v", &[50.0, 50.0], 1, 0).unwrap();
     assert_ne!(hits[0].0, b"g:0".to_vec());
     // bad params + unknown index
     assert!(s.idx_create_ann(b"bad", b"g:", b"v", crate::AnnSpec { dim: 0, distance: 0, m: 0, ef: 0 }).is_err());
-    assert!(s.idx_knn(b"nope", &[1.0, 2.0], 3).is_err());
+    assert!(s.idx_knn(b"nope", &[1.0, 2.0], 3, 0).is_err());
 }

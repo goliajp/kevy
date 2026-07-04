@@ -277,7 +277,9 @@ impl Hnsw {
     }
 
     /// k nearest LIVING vectors to `query` (raw form; prepared here).
-    pub fn knn(&self, query: &[f32], k: usize) -> Vec<(Vec<u8>, f32)> {
+    /// `ef` = query beam width (0 → the max(4k, 100) default); larger
+    /// beams trade latency for recall — the canonical HNSW knob.
+    pub fn knn(&self, query: &[f32], k: usize, ef: usize) -> Vec<(Vec<u8>, f32)> {
         let Some(entry) = self.entry else { return Vec::new() };
         if query.len() != self.dim {
             return Vec::new();
@@ -306,11 +308,10 @@ impl Hnsw {
                 cur = next;
             }
         }
-        // Query beam: recall on dense/near-duplicate regions needs a
-        // beam well above k (measured: ef=64 gave 0.67 recall@10 on a
-        // tight 20k cluster; 4k/100 floor restores ≥0.9 with p95 still
-        // far under the gate line).
-        let ef = (k * 4).max(100);
+        // Recall grows with beam width (measured on a dense 20k
+        // cluster @128d: ef 64 → 0.67 recall@10, 100 → 0.77); the
+        // default floor suits easy corpora, hard ones pass EF.
+        let ef = if ef == 0 { (k * 4).max(100) } else { ef.max(k) };
         let found = self.search_layer_vec(cur, &q, 0, ef);
         found
             .into_iter()
@@ -374,7 +375,7 @@ mod tests {
     fn knn_exact_on_grid() {
         let h = grid(1024);
         // nearest to (5.1, 7.05) is p(7*32+5)=p0229, then p0197/p0230…
-        let hits = h.knn(&[5.1, 7.05], 3);
+        let hits = h.knn(&[5.1, 7.05], 3, 0);
         assert_eq!(hits[0].0, b"p0229".to_vec(), "{hits:?}");
         assert_eq!(hits.len(), 3);
         assert!(hits[0].1 <= hits[1].1);
@@ -385,11 +386,11 @@ mod tests {
         let mut h = grid(256);
         h.apply(b"p0000", None);
         assert!(!h.contains(b"p0000"));
-        let hits = h.knn(&[0.0, 0.0], 1);
+        let hits = h.knn(&[0.0, 0.0], 1, 0);
         assert_ne!(hits[0].0, b"p0000".to_vec(), "dead filtered");
         // replace moves the point
         h.apply(b"p0001", Some(vec![100.0, 100.0]));
-        let hits = h.knn(&[100.0, 100.0], 1);
+        let hits = h.knn(&[100.0, 100.0], 1, 0);
         assert_eq!(hits[0].0, b"p0001".to_vec());
         let st = h.stats();
         assert_eq!(st.vectors, 255);
@@ -417,7 +418,7 @@ mod tests {
         let mut total = 0usize;
         for qi in 0..20 {
             let q: Vec<f32> = (0..64).map(|_| rnd()).collect();
-            let got: Vec<Vec<u8>> = h.knn(&q, 10).into_iter().map(|(k, _)| k).collect();
+            let got: Vec<Vec<u8>> = h.knn(&q, 10, 0).into_iter().map(|(k, _)| k).collect();
             // brute force with the same metric incl. normalization
             let mut qq = q.clone();
             Distance::Cosine.prepare(&mut qq);
@@ -450,12 +451,12 @@ mod tests {
             h.apply(format!("p{i:04}").as_bytes(), None);
         }
         assert!(h.stats().rebuild_recommended);
-        let before = h.knn(&[20.0, 10.0], 5);
+        let before = h.knn(&[20.0, 10.0], 5, 0);
         h.rebuild();
         let st = h.stats();
         assert_eq!(st.tombstones, 0);
         assert_eq!(st.vectors, 312);
-        let after = h.knn(&[20.0, 10.0], 5);
+        let after = h.knn(&[20.0, 10.0], 5, 0);
         assert_eq!(
             before.iter().map(|(k, _)| k).collect::<Vec<_>>(),
             after.iter().map(|(k, _)| k).collect::<Vec<_>>()
@@ -465,10 +466,10 @@ mod tests {
     #[test]
     fn empty_and_dim_mismatch() {
         let h = Hnsw::new(4, HnswParams::default());
-        assert!(h.knn(&[1.0, 2.0, 3.0, 4.0], 5).is_empty());
+        assert!(h.knn(&[1.0, 2.0, 3.0, 4.0], 5, 0).is_empty());
         let mut h = grid(16);
         h.apply(b"bad", Some(vec![1.0, 2.0, 3.0])); // wrong dim ignored
         assert!(!h.contains(b"bad"));
-        assert!(h.knn(&[1.0], 5).is_empty(), "query dim mismatch");
+        assert!(h.knn(&[1.0], 5, 0).is_empty(), "query dim mismatch");
     }
 }

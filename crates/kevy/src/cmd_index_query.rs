@@ -178,7 +178,7 @@ fn op_knn(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
         return vec![ST_BADARGS];
     };
     let res = index_runtime::with_ready_ann(store, &q.name, |g| {
-        kevy_vector::parse_vector(&q.vec, g.dim()).map(|v| g.knn(&v, q.limit))
+        kevy_vector::parse_vector(&q.vec, g.dim()).map(|v| g.knn(&v, q.limit, q.ef))
     });
     match res {
         Ok(None) => vec![ST_BADARGS], // vector doesn't match DIM
@@ -205,6 +205,8 @@ pub(crate) struct KnnArgs {
     pub(crate) name: Vec<u8>,
     pub(crate) vec: Vec<u8>,
     pub(crate) limit: usize,
+    /// Query beam width (`EF`); 0 = engine default.
+    pub(crate) ef: usize,
     pub(crate) fields: Vec<Vec<u8>>,
 }
 
@@ -216,12 +218,19 @@ impl KnnArgs {
         }
         let vec = argv.get(3)?.clone();
         let mut limit = 10usize;
+        let mut ef = 0usize;
         let mut fields = Vec::new();
         let mut i = 4;
         while i < argv.len() {
             let t = &argv[i];
             if t.eq_ignore_ascii_case(b"LIMIT") {
                 limit = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
+                i += 2;
+            } else if t.eq_ignore_ascii_case(b"EF") {
+                ef = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
+                if !(16..=4096).contains(&ef) {
+                    return None;
+                }
                 i += 2;
             } else if t.eq_ignore_ascii_case(b"FIELDS") {
                 fields = argv[i + 1..].to_vec();
@@ -233,7 +242,7 @@ impl KnnArgs {
                 return None;
             }
         }
-        Some(KnnArgs { name, vec, limit: limit.clamp(1, 1000), fields })
+        Some(KnnArgs { name, vec, limit: limit.clamp(1, 1000), ef, fields })
     }
 }
 
