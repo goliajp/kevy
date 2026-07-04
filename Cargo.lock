@@ -422,6 +422,7 @@ dependencies = [
  "kevy-client",
  "kevy-config",
  "kevy-elect",
+ "kevy-embedded",
  "kevy-geo",
  "kevy-hash",
  "kevy-index",
