@@ -51,6 +51,11 @@ pub(crate) fn extension_reduce(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8
     if verb.eq_ignore_ascii_case(b"IDX.VERIFY") {
         return reduce_verify(&chunks);
     }
+    // v3.1 GROUP/GROUPS: merge per-group partials exactly
+    // (count/sum add, min/max extremes), then rank.
+    if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"GROUP") || a.eq_ignore_ascii_case(b"GROUPS")) {
+        return reduce_agg(argv, &chunks);
+    }
     // v2.8 KNN: merge distance-ranked chunks ascending (smaller =
     // closer for every metric).
     if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"KNN")) {
@@ -370,6 +375,119 @@ fn reduce_ranked(argv: &[Vec<u8>], chunks: &[Vec<u8>], ascending: bool) -> Vec<u
             encode_bulk(&mut out, f);
             match val {
                 Some(b) => encode_bulk(&mut out, b),
+                None => out.extend_from_slice(b"$-1\r\n"),
+            }
+        }
+    }
+    out
+}
+
+/// v3.1 reduce: decode per-shard group partials, merge, rank, emit.
+/// GROUP → `[count, sum, min, max, avg]`; GROUPS → array of
+/// `[group, count, sum, min, max]` rows ranked by the BY metric.
+fn reduce_agg(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let single = argv[2].eq_ignore_ascii_case(b"GROUP");
+    let (mut by, mut limit) = (kevy_index::AggBy::Count, 100usize);
+    if !single {
+        let mut i = 3;
+        while i < argv.len() {
+            if argv[i].eq_ignore_ascii_case(b"BY") {
+                match argv.get(i + 1).and_then(|b| kevy_index::AggBy::parse(b)) {
+                    Some(m) => by = m,
+                    None => {
+                        encode_error(&mut out, "ERR BY must be count|sum|min|max");
+                        return out;
+                    }
+                }
+                i += 2;
+            } else if argv[i].eq_ignore_ascii_case(b"LIMIT") {
+                match argv.get(i + 1).and_then(|v| std::str::from_utf8(v).ok()).and_then(|s| s.parse().ok()) {
+                    Some(n) => limit = n,
+                    None => {
+                        encode_error(&mut out, "ERR LIMIT must be an integer");
+                        return out;
+                    }
+                }
+                i += 2;
+            } else {
+                encode_error(&mut out, "ERR syntax error");
+                return out;
+            }
+        }
+    }
+    let limit = limit.clamp(1, 1000);
+    let mut merged: Vec<(Vec<u8>, kevy_index::GroupStats)> = Vec::new();
+    for c in chunks {
+        let mut pos = 1usize;
+        let Some(n) = read_u32(c, &mut pos) else { continue };
+        for _ in 0..n {
+            let Some(g) = read_kbytes(c, &mut pos) else { break };
+            let Some(cb) = c.get(pos..pos + 8) else { break };
+            let count = u64::from_le_bytes(cb.try_into().expect("8"));
+            pos += 8;
+            let Some(sb) = c.get(pos..pos + 8) else { break };
+            let sum = f64::from_le_bytes(sb.try_into().expect("8"));
+            pos += 8;
+            let mut mm = [None, None];
+            let mut bad = false;
+            for slot in &mut mm {
+                match c.get(pos).copied() {
+                    Some(1) => {
+                        pos += 1;
+                        match crate::cmd_index_query::decode_value(c, &mut pos) {
+                            Some(v) => *slot = Some(v),
+                            None => bad = true,
+                        }
+                    }
+                    Some(0) => pos += 1,
+                    _ => bad = true,
+                }
+                if bad {
+                    break;
+                }
+            }
+            if bad {
+                break;
+            }
+            let part = kevy_index::GroupStats { count, sum, min: mm[0].clone(), max: mm[1].clone() };
+            match merged.iter_mut().find(|(k, _)| *k == g) {
+                Some((_, st)) => kevy_index::merge_group(st, &part),
+                None => merged.push((g, part)),
+            }
+        }
+    }
+    if single {
+        let st = merged
+            .pop()
+            .map(|(_, st)| st)
+            .unwrap_or(kevy_index::GroupStats { count: 0, sum: 0.0, min: None, max: None });
+        encode_array_len(&mut out, 5);
+        encode_bulk(&mut out, st.count.to_string().as_bytes());
+        encode_bulk(&mut out, format!("{}", st.sum).as_bytes());
+        for v in [&st.min, &st.max] {
+            match v {
+                Some(x) => encode_bulk(&mut out, &value_repr(x)),
+                None => out.extend_from_slice(b"$-1\r\n"),
+            }
+        }
+        match st.avg() {
+            Some(a) => encode_bulk(&mut out, format!("{a}").as_bytes()),
+            None => out.extend_from_slice(b"$-1\r\n"),
+        }
+        return out;
+    }
+    kevy_index::sort_groups(&mut merged, by);
+    merged.truncate(limit);
+    encode_array_len(&mut out, merged.len() as i64);
+    for (g, st) in &merged {
+        encode_array_len(&mut out, 5);
+        encode_bulk(&mut out, g);
+        encode_bulk(&mut out, st.count.to_string().as_bytes());
+        encode_bulk(&mut out, format!("{}", st.sum).as_bytes());
+        for v in [&st.min, &st.max] {
+            match v {
+                Some(x) => encode_bulk(&mut out, &value_repr(x)),
                 None => out.extend_from_slice(b"$-1\r\n"),
             }
         }
