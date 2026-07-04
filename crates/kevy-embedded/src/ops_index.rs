@@ -39,8 +39,26 @@ pub(crate) struct ShardSegs {
     pub(crate) version: u64,
     pub(crate) segs: Vec<(IndexSpec, Segment)>,
     /// v2.7: inverted segments for KIND text specs (parallel list —
-    /// a spec appears in exactly one of the two).
+    /// a spec appears in exactly one of the lists).
     pub(crate) text: Vec<(IndexSpec, kevy_text::TextSegment)>,
+    /// v2.8: HNSW graphs for KIND ann specs.
+    pub(crate) ann: Vec<(IndexSpec, kevy_vector::Hnsw)>,
+}
+
+fn new_graph(spec: &IndexSpec) -> kevy_vector::Hnsw {
+    let a = spec.ann.as_ref().expect("ann spec");
+    kevy_vector::Hnsw::new(
+        a.dim as usize,
+        kevy_vector::HnswParams {
+            m: a.m as usize,
+            ef_construction: a.ef as usize,
+            distance: match a.distance {
+                1 => kevy_vector::Distance::L2,
+                2 => kevy_vector::Distance::Ip,
+                _ => kevy_vector::Distance::Cosine,
+            },
+        },
+    )
 }
 
 const SIDECAR: &str = "index-catalog.meta";
@@ -66,7 +84,12 @@ impl Store {
             ty,
             kind,
             max_bytes: 0,
+            ann: None,
         };
+        self.register_spec(spec)
+    }
+
+    fn register_spec(&self, spec: IndexSpec) -> io::Result<()> {
         {
             let mut g = self
                 .indexes
@@ -89,6 +112,34 @@ impl Store {
     }
 
     /// `IDX.DROP` equivalent; `false` if absent.
+    /// v2.8: declare an ANN index (KIND ann, TYPE vector). `params.m`
+    /// / `params.ef` of 0 select the defaults (16 / 200).
+    pub fn idx_create_ann(
+        &self,
+        name: &[u8],
+        prefix: &[u8],
+        field: &[u8],
+        params: kevy_index::AnnSpec,
+    ) -> io::Result<()> {
+        if params.dim == 0 || params.distance > 2 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "bad ann parameters"));
+        }
+        let spec = IndexSpec {
+            name: name.to_vec(),
+            prefix: prefix.to_vec(),
+            field: field.to_vec(),
+            ty: ValType::Vector,
+            kind: IndexKind::Ann,
+            max_bytes: 0,
+            ann: Some(kevy_index::AnnSpec {
+                m: if params.m == 0 { 16 } else { params.m },
+                ef: if params.ef == 0 { 200 } else { params.ef },
+                ..params
+            }),
+        };
+        self.register_spec(spec)
+    }
+
     pub fn idx_drop(&self, name: &[u8]) -> bool {
         let hit = {
             let mut g = self
@@ -197,6 +248,35 @@ impl Store {
         Ok(all.into_iter().map(|m| (m.key, m.score)).collect())
     }
 
+    /// v2.8 `KNN` — nearest neighbors merged ascending across shards.
+    /// `ef` = query beam width (0 = engine default; recall knob).
+    pub fn idx_knn(
+        &self,
+        name: &[u8],
+        query: &[f32],
+        k: usize,
+        ef: usize,
+    ) -> io::Result<Vec<(Vec<u8>, f32)>> {
+        let k = k.clamp(1, 1000);
+        let mut all: Vec<(Vec<u8>, f32)> = Vec::new();
+        let mut found = false;
+        for shard in self.shards.iter() {
+            let mut g = lock_write(shard);
+            let inner = &mut *g;
+            sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
+            if let Some((_, graph)) = inner.idx_segs.ann.iter().find(|(s, _)| s.name == name) {
+                found = true;
+                all.extend(graph.knn(query, k, ef));
+            }
+        }
+        if !found {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "no such vector index"));
+        }
+        all.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+        all.truncate(k);
+        Ok(all)
+    }
+
     fn for_each_segment(
         &self,
         name: &[u8],
@@ -268,7 +348,23 @@ pub(crate) fn sync_segs(
     }
     let mut next: Vec<(IndexSpec, Segment)> = Vec::new();
     let mut next_text: Vec<(IndexSpec, kevy_text::TextSegment)> = Vec::new();
+    let mut next_ann: Vec<(IndexSpec, kevy_vector::Hnsw)> = Vec::new();
     for (spec, _) in cat.iter() {
+        if spec.kind == kevy_index::IndexKind::Ann {
+            match shard_segs.ann.iter().position(|(s, _)| s == spec) {
+                Some(i) => next_ann.push(shard_segs.ann.swap_remove(i)),
+                None => {
+                    let mut g = new_graph(spec);
+                    let mut pat = spec.prefix.clone();
+                    pat.push(b'*');
+                    for key in store.collect_keys(Some(&pat), None) {
+                        apply_ann_key(store, spec, &mut g, &key);
+                    }
+                    next_ann.push((spec.clone(), g));
+                }
+            }
+            continue;
+        }
         if spec.kind == kevy_index::IndexKind::Text {
             match shard_segs.text.iter().position(|(s, _)| s == spec) {
                 Some(i) => next_text.push(shard_segs.text.swap_remove(i)),
@@ -299,7 +395,24 @@ pub(crate) fn sync_segs(
     }
     shard_segs.segs = next;
     shard_segs.text = next_text;
+    shard_segs.ann = next_ann;
     shard_segs.version = *ver;
+}
+
+fn apply_ann_key(
+    store: &mut kevy_store::Store,
+    spec: &IndexSpec,
+    g: &mut kevy_vector::Hnsw,
+    key: &[u8],
+) {
+    let v = match store.hget(key, &spec.field) {
+        Ok(Some(raw)) => {
+            let raw = raw.to_vec();
+            kevy_vector::parse_vector(&raw, g.dim())
+        }
+        _ => None,
+    };
+    g.apply(key, v);
 }
 
 fn apply_text_key(
@@ -345,6 +458,9 @@ pub(crate) fn on_commit(
         for (_, ts) in &mut shard_segs.text {
             *ts = kevy_text::TextSegment::new();
         }
+        for (spec, g) in &mut shard_segs.ann {
+            *g = new_graph(spec);
+        }
         return;
     }
     each_written_key(verb, parts, |key| {
@@ -356,6 +472,11 @@ pub(crate) fn on_commit(
         for (spec, ts) in &mut shard_segs.text {
             if key.starts_with(&spec.prefix) {
                 apply_text_key(store, spec, ts, key);
+            }
+        }
+        for (spec, g) in &mut shard_segs.ann {
+            if key.starts_with(&spec.prefix) {
+                apply_ann_key(store, spec, g, key);
             }
         }
     });

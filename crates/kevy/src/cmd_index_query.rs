@@ -32,9 +32,46 @@ pub(crate) fn extension_op(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"MATCH")) {
         return op_match(store, argv);
     }
+    // v2.8: IDX.QUERY <name> KNN <vec> [LIMIT k] [FIELDS f…]
+    if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"KNN")) {
+        return op_knn(store, argv);
+    }
+    // v2.8: IDX.REBUILD <name> (ANN tombstone compaction)
+    if argv
+        .first()
+        .is_some_and(|v| v.eq_ignore_ascii_case(b"IDX.REBUILD"))
+    {
+        let Some(name) = argv.get(1) else {
+            return vec![ST_BADARGS];
+        };
+        return match index_runtime::with_ready_ann(store, name, |g| g.rebuild()) {
+            Ok(()) => vec![ST_OK],
+            Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+            Err(_) => vec![ST_NOINDEX],
+        };
+    }
     let Some(q) = Query::parse(argv) else {
         return vec![ST_BADARGS];
     };
+    // ANN indexes answer VERIFY with their graph stats.
+    if matches!(q.shape, Shape::Verify)
+        && index_runtime::catalog()
+            .and_then(|c| c.get(&q.name).map(|(s, _)| s.kind))
+            == Some(kevy_index::IndexKind::Ann)
+    {
+        return match index_runtime::with_ready_ann(store, &q.name, |g| g.stats()) {
+            Ok(st) => {
+                let mut chunk = vec![ST_OK];
+                chunk.extend_from_slice(&st.vectors.to_le_bytes());
+                chunk.extend_from_slice(&st.approx_bytes.to_le_bytes());
+                chunk.extend_from_slice(&st.tombstones.to_le_bytes());
+                chunk.extend_from_slice(&(st.links + u64::from(st.rebuild_recommended)).to_le_bytes());
+                chunk
+            }
+            Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+            Err(_) => vec![ST_NOINDEX],
+        };
+    }
     // Text indexes answer VERIFY with their text stats.
     if matches!(q.shape, Shape::Verify)
         && index_runtime::catalog()
@@ -130,6 +167,82 @@ fn op_match(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
         Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
+    }
+}
+
+/// v2.8 KNN per-shard: distance-ranked hits + hydration. Chunk:
+/// `[ST_OK][n][(klen,key,dist f64,fcount,fields)*]` — same layout as
+/// MATCH chunks, so the reduce shares the decoder.
+fn op_knn(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+    let Some(q) = KnnArgs::parse(argv) else {
+        return vec![ST_BADARGS];
+    };
+    let res = index_runtime::with_ready_ann(store, &q.name, |g| {
+        kevy_vector::parse_vector(&q.vec, g.dim()).map(|v| g.knn(&v, q.limit, q.ef))
+    });
+    match res {
+        Ok(None) => vec![ST_BADARGS], // vector doesn't match DIM
+        Ok(Some(hits)) => {
+            let mut chunk = vec![ST_OK];
+            chunk.extend_from_slice(&(hits.len() as u32).to_le_bytes());
+            for (key, dist) in &hits {
+                chunk.extend_from_slice(&(key.len() as u32).to_le_bytes());
+                chunk.extend_from_slice(key);
+                chunk.extend_from_slice(&f64::from(*dist).to_le_bytes());
+                encode_hydration(store, &mut chunk, key, &q.fields);
+            }
+            chunk
+        }
+        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(_) => vec![ST_NOINDEX],
+    }
+}
+
+/// `IDX.QUERY name KNN vec [LIMIT k] [FIELDS f…]` (no cursor; k ≤
+/// 1000 — same rationale as MATCH).
+pub(crate) struct KnnArgs {
+    pub(crate) name: Vec<u8>,
+    pub(crate) vec: Vec<u8>,
+    pub(crate) limit: usize,
+    /// Query beam width (`EF`); 0 = engine default.
+    pub(crate) ef: usize,
+    pub(crate) fields: Vec<Vec<u8>>,
+}
+
+impl KnnArgs {
+    pub(crate) fn parse(argv: &[Vec<u8>]) -> Option<KnnArgs> {
+        let name = argv.get(1)?.clone();
+        if !argv.get(2)?.eq_ignore_ascii_case(b"KNN") {
+            return None;
+        }
+        let vec = argv.get(3)?.clone();
+        let mut limit = 10usize;
+        let mut ef = 0usize;
+        let mut fields = Vec::new();
+        let mut i = 4;
+        while i < argv.len() {
+            let t = &argv[i];
+            if t.eq_ignore_ascii_case(b"LIMIT") {
+                limit = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
+                i += 2;
+            } else if t.eq_ignore_ascii_case(b"EF") {
+                ef = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
+                if !(16..=4096).contains(&ef) {
+                    return None;
+                }
+                i += 2;
+            } else if t.eq_ignore_ascii_case(b"FIELDS") {
+                fields = argv[i + 1..].to_vec();
+                if fields.is_empty() {
+                    return None;
+                }
+                break;
+            } else {
+                return None;
+            }
+        }
+        Some(KnnArgs { name, vec, limit: limit.clamp(1, 1000), ef, fields })
     }
 }
 
@@ -261,7 +374,13 @@ fn op_list(store: &mut Store) -> Vec<u8> {
     for (spec, _) in cat.iter() {
         let building = index_runtime::segment_building(store, &spec.name);
         // (entries, bytes, coerce_failures/postings, duplicates/tokens)
-        let quad = if spec.kind == kevy_index::IndexKind::Text {
+        let quad = if spec.kind == kevy_index::IndexKind::Ann {
+            index_runtime::with_ready_ann(store, &spec.name, |g| {
+                let st = g.stats();
+                (st.vectors, st.approx_bytes, st.tombstones, st.links)
+            })
+            .unwrap_or_default()
+        } else if spec.kind == kevy_index::IndexKind::Text {
             index_runtime::with_ready_text_segment(store, &spec.name, |ts| {
                 let st = ts.stats();
                 (st.docs, st.approx_bytes, st.postings, st.tokens)

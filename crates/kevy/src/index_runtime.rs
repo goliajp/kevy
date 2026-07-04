@@ -42,6 +42,8 @@ struct ShardIndex {
     seg: Segment,
     /// v2.7: populated instead of `seg` for KIND text.
     text: Option<kevy_text::TextSegment>,
+    /// v2.8: populated instead of `seg` for KIND ann.
+    ann: Option<kevy_vector::Hnsw>,
     build: BuildState,
 }
 
@@ -127,6 +129,29 @@ pub(crate) fn with_ready_segment<R>(
             BuildState::FailedOverBudget => {
                 Err("INDEXOVERBUDGET index build exceeded MAXMEM")
             }
+        }
+    })
+}
+
+/// v2.8: run `f` against a READY ANN graph (mutable for REBUILD).
+pub(crate) fn with_ready_ann<R>(
+    store: &mut Store,
+    name: &[u8],
+    f: impl FnOnce(&mut kevy_vector::Hnsw) -> R,
+) -> Result<R, &'static str> {
+    SHARD_INDEXES.with(|tl| {
+        let mut st = tl.borrow_mut();
+        refresh(&mut st, store);
+        let si = st
+            .idx
+            .iter_mut()
+            .find(|si| si.spec.name == name)
+            .ok_or("ERR no such index")?;
+        match (&si.build, &mut si.ann) {
+            (BuildState::Ready, Some(g)) => Ok(f(g)),
+            (BuildState::Backfilling { .. }, _) => Err("INDEXBUILDING index is still building"),
+            (BuildState::FailedOverBudget, _) => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
+            (_, None) => Err("ERR not a vector index"),
         }
     })
 }
@@ -232,6 +257,20 @@ fn refresh(st: &mut ShardIndexes, store: &mut Store) {
                     next.push(ShardIndex {
                         text: (spec.kind == kevy_index::IndexKind::Text)
                             .then(kevy_text::TextSegment::new),
+                        ann: spec.ann.as_ref().map(|a| {
+                            kevy_vector::Hnsw::new(
+                                a.dim as usize,
+                                kevy_vector::HnswParams {
+                                    m: a.m as usize,
+                                    ef_construction: a.ef as usize,
+                                    distance: match a.distance {
+                                        1 => kevy_vector::Distance::L2,
+                                        2 => kevy_vector::Distance::Ip,
+                                        _ => kevy_vector::Distance::Cosine,
+                                    },
+                                },
+                            )
+                        }),
                         spec: spec.clone(),
                         seg: Segment::new(),
                         build: BuildState::Backfilling { keys, pos: 0 },
@@ -247,6 +286,19 @@ fn refresh(st: &mut ShardIndexes, store: &mut Store) {
 /// Index one row: read the field from the hash at `key`, coerce,
 /// apply. A missing key / non-hash / missing field clears the row.
 fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
+    // v2.8 ann kind: field bytes parse as an f32 vector (wrong shape
+    // = excluded, same discipline as scalar coerce failure).
+    if let Some(g) = &mut si.ann {
+        let v = match store.hget(key, &si.spec.field) {
+            Ok(Some(raw)) => {
+                let raw = raw.to_vec();
+                kevy_vector::parse_vector(&raw, g.dim())
+            }
+            _ => None,
+        };
+        g.apply(key, v);
+        return;
+    }
     // v2.7 text kind: raw field bytes tokenize into the inverted
     // segment (no scalar coercion).
     if let Some(ts) = &mut si.text {
@@ -307,9 +359,10 @@ fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: usize) {
     let done = *pos >= keys.len();
     for key in &slice {
         // Hook-applied entries win: only fill keys not yet indexed.
-        let already = match &si.text {
-            Some(ts) => ts.contains(key),
-            None => si.seg.verify_entry(key).is_some(),
+        let already = match (&si.text, &si.ann) {
+            (Some(ts), _) => ts.contains(key),
+            (_, Some(g)) => g.contains(key),
+            _ => si.seg.verify_entry(key).is_some(),
         };
         if !already {
             apply_row_backfill(store, si, key);
@@ -328,7 +381,7 @@ fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: usize) {
 }
 
 fn apply_row_backfill(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
-    if si.text.is_some() {
+    if si.text.is_some() || si.ann.is_some() {
         apply_row(store, si, key);
         return;
     }
@@ -351,6 +404,7 @@ mod tests {
             field: b"age".to_vec(),
             ty: ValType::I64,
             kind: IndexKind::Range,
+            ann: None,
             max_bytes: 0,
         }
     }
