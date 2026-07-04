@@ -221,16 +221,19 @@ impl AggSegment {
         self.rows.contains_key(key)
     }
 
-    /// Live counters.
+    /// Live counters. Byte constants calibrated against measured RSS
+    /// growth at 1M rows / 10k Zipf groups (the first-cut 40/24
+    /// constants overestimated 2× — BTreeMap packs ~11 entries per
+    /// node and the reverse map's vecs are small-alloc pooled).
     pub fn stats(&self) -> AggStats {
         let distinct: u64 = self.groups.values().map(|g| g.values.len() as u64).sum();
         let gkey: u64 = self.groups.keys().map(|k| k.len() as u64).sum();
-        let rowbytes: u64 = self.rows.keys().map(|k| (k.len() + 24) as u64).sum();
+        let rowbytes: u64 = self.rows.keys().map(|k| (k.len() + 10) as u64).sum();
         AggStats {
             groups: self.groups.len() as u64,
             rows: self.rows.len() as u64,
             excluded: self.excluded,
-            approx_bytes: gkey + self.groups.len() as u64 * 64 + distinct * 40 + rowbytes,
+            approx_bytes: gkey + self.groups.len() as u64 * 64 + distinct * 18 + rowbytes,
         }
     }
 }
