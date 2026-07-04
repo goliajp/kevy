@@ -43,6 +43,8 @@ pub(crate) struct ShardSegs {
     pub(crate) text: Vec<(IndexSpec, kevy_text::TextSegment)>,
     /// v2.8: HNSW graphs for KIND ann specs.
     pub(crate) ann: Vec<(IndexSpec, kevy_vector::Hnsw)>,
+    /// v3.1: aggregate segments for KIND agg specs.
+    pub(crate) agg: Vec<(IndexSpec, kevy_index::AggSegment)>,
 }
 
 fn new_graph(spec: &IndexSpec) -> kevy_vector::Hnsw {
@@ -250,6 +252,83 @@ impl Store {
         Ok(all.into_iter().map(|m| (m.key, m.score)).collect())
     }
 
+    /// v3.1: declare an aggregate index (KIND agg — write-time GROUP
+    /// BY). `ty` must be numeric.
+    pub fn idx_create_agg(
+        &self,
+        name: &[u8],
+        prefix: &[u8],
+        field: &[u8],
+        ty: ValType,
+        group_by: &[u8],
+    ) -> io::Result<()> {
+        if !matches!(ty, ValType::I64 | ValType::F64) || group_by.is_empty() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "agg requires numeric type + group field"));
+        }
+        let spec = IndexSpec {
+            name: name.to_vec(),
+            prefix: prefix.to_vec(),
+            field: field.to_vec(),
+            ty,
+            kind: IndexKind::Agg,
+            max_bytes: 0,
+            ann: None,
+            group_by: Some(group_by.to_vec()),
+        };
+        self.register_spec(spec)
+    }
+
+    /// v3.1: one group's merged stats across shards.
+    pub fn idx_group(&self, name: &[u8], group: &[u8]) -> io::Result<kevy_index::GroupStats> {
+        let mut merged = kevy_index::GroupStats { count: 0, sum: 0.0, min: None, max: None };
+        let mut found = false;
+        for shard in self.shards.iter() {
+            let mut g = lock_write(shard);
+            let inner = &mut *g;
+            sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
+            if let Some((_, a)) = inner.idx_segs.agg.iter().find(|(s, _)| s.name == name) {
+                found = true;
+                kevy_index::merge_group(&mut merged, &a.group(group));
+            }
+        }
+        if !found {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "no such aggregate index"));
+        }
+        Ok(merged)
+    }
+
+    /// v3.1: top groups merged + ranked across shards.
+    pub fn idx_groups(
+        &self,
+        name: &[u8],
+        by: kevy_index::AggBy,
+        limit: usize,
+    ) -> io::Result<Vec<(Vec<u8>, kevy_index::GroupStats)>> {
+        let limit = limit.clamp(1, 1000);
+        let mut merged: Vec<(Vec<u8>, kevy_index::GroupStats)> = Vec::new();
+        let mut found = false;
+        for shard in self.shards.iter() {
+            let mut g = lock_write(shard);
+            let inner = &mut *g;
+            sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
+            if let Some((_, a)) = inner.idx_segs.agg.iter().find(|(s, _)| s.name == name) {
+                found = true;
+                for (gk, st) in a.top_groups(kevy_index::AggBy::Count, usize::MAX) {
+                    match merged.iter_mut().find(|(k, _)| *k == gk) {
+                        Some((_, m)) => kevy_index::merge_group(m, &st),
+                        None => merged.push((gk, st)),
+                    }
+                }
+            }
+        }
+        if !found {
+            return Err(io::Error::new(io::ErrorKind::NotFound, "no such aggregate index"));
+        }
+        kevy_index::sort_groups(&mut merged, by);
+        merged.truncate(limit);
+        Ok(merged)
+    }
+
     /// v2.8 `KNN` — nearest neighbors merged ascending across shards.
     /// `ef` = query beam width (0 = engine default; recall knob).
     pub fn idx_knn(
@@ -351,7 +430,23 @@ pub(crate) fn sync_segs(
     let mut next: Vec<(IndexSpec, Segment)> = Vec::new();
     let mut next_text: Vec<(IndexSpec, kevy_text::TextSegment)> = Vec::new();
     let mut next_ann: Vec<(IndexSpec, kevy_vector::Hnsw)> = Vec::new();
+    let mut next_agg: Vec<(IndexSpec, kevy_index::AggSegment)> = Vec::new();
     for (spec, _) in cat.iter() {
+        if spec.kind == kevy_index::IndexKind::Agg {
+            match shard_segs.agg.iter().position(|(s, _)| s == spec) {
+                Some(i) => next_agg.push(shard_segs.agg.swap_remove(i)),
+                None => {
+                    let mut a = kevy_index::AggSegment::new();
+                    let mut pat = spec.prefix.clone();
+                    pat.push(b'*');
+                    for key in store.collect_keys(Some(&pat), None) {
+                        apply_agg_key(store, spec, &mut a, &key);
+                    }
+                    next_agg.push((spec.clone(), a));
+                }
+            }
+            continue;
+        }
         if spec.kind == kevy_index::IndexKind::Ann {
             match shard_segs.ann.iter().position(|(s, _)| s == spec) {
                 Some(i) => next_ann.push(shard_segs.ann.swap_remove(i)),
@@ -398,7 +493,36 @@ pub(crate) fn sync_segs(
     shard_segs.segs = next;
     shard_segs.text = next_text;
     shard_segs.ann = next_ann;
+    shard_segs.agg = next_agg;
     shard_segs.version = *ver;
+}
+
+fn apply_agg_key(
+    store: &mut kevy_store::Store,
+    spec: &IndexSpec,
+    a: &mut kevy_index::AggSegment,
+    key: &[u8],
+) {
+    if store.exists(&[key.to_vec()]) == 0 {
+        a.apply(key, None, false);
+        return;
+    }
+    let group_field = spec.group_by.as_deref().unwrap_or_default();
+    let group = match store.hget(key, group_field) {
+        Ok(Some(g)) => Some(g.to_vec()),
+        _ => None,
+    };
+    let val = match store.hget(key, &spec.field) {
+        Ok(Some(raw)) => {
+            let raw = raw.to_vec();
+            kevy_index::IndexValue::coerce(spec.ty, &raw)
+        }
+        _ => None,
+    };
+    match (group, val) {
+        (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
+        _ => a.apply(key, None, true),
+    }
 }
 
 fn apply_ann_key(
@@ -463,6 +587,9 @@ pub(crate) fn on_commit(
         for (spec, g) in &mut shard_segs.ann {
             *g = new_graph(spec);
         }
+        for (_, a) in &mut shard_segs.agg {
+            *a = kevy_index::AggSegment::new();
+        }
         return;
     }
     each_written_key(verb, parts, |key| {
@@ -479,6 +606,11 @@ pub(crate) fn on_commit(
         for (spec, g) in &mut shard_segs.ann {
             if key.starts_with(&spec.prefix) {
                 apply_ann_key(store, spec, g, key);
+            }
+        }
+        for (spec, a) in &mut shard_segs.agg {
+            if key.starts_with(&spec.prefix) {
+                apply_agg_key(store, spec, a, key);
             }
         }
     });
