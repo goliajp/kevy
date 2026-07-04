@@ -42,44 +42,74 @@ type ScoredList<'s> = (&'s Buckets, f64, f64);
 /// visits ~k·buckets postings instead of the whole list (the
 /// single-common-term shape measured 1.5ms at 66k postings under the
 /// tf-only stop; dl-ordering makes the within-bucket cut).
-/// One tf bucket's postings grouped by dl ascending: probes stay
-/// zero-alloc O(1) hash lookups (dl comes from the docs table), and
-/// ordered walks go dl-group by dl-group (few distinct dls per tf).
-type DlSet = std::collections::BTreeMap<u32, HashMap<Vec<u8>, ()>>;
+/// One dl group's postings: doc ids in a dense Vec (the ordered walk
+/// is a sequential 4B scan) + id→slot map for O(1) probe and
+/// swap-remove. Postings never store row keys — the classic inverted
+/// shape (ids resolve through the segment's id tables only for the
+/// final top-K).
+#[derive(Debug, Default)]
+struct Group {
+    ids: Vec<u32>,
+    pos: HashMap<u32, u32>,
+}
+
+impl Group {
+    fn insert(&mut self, id: u32) {
+        self.pos.insert(id, self.ids.len() as u32);
+        self.ids.push(id);
+    }
+
+    fn remove(&mut self, id: u32) -> bool {
+        let Some(i) = self.pos.remove(&id) else { return false };
+        let i = i as usize;
+        self.ids.swap_remove(i);
+        if let Some(&moved) = self.ids.get(i) {
+            self.pos.insert(moved, i as u32);
+        }
+        true
+    }
+
+    fn contains(&self, id: u32) -> bool {
+        self.pos.contains_key(&id)
+    }
+}
+
+/// One tf bucket's postings grouped by dl ascending.
+type DlGroups = std::collections::BTreeMap<u32, Group>;
 
 #[derive(Debug, Default)]
 pub struct Buckets {
-    /// (tf, (dl, key) ascending) — sorted tf-descending; ≤ max_tf
+    /// (tf, dl→ids ascending) — sorted tf-descending; ≤ max_tf
     /// entries (tf is small).
-    buckets: Vec<(u32, DlSet)>,
+    buckets: Vec<(u32, DlGroups)>,
     total: usize,
 }
 
 impl Buckets {
-    fn insert(&mut self, tf: u32, dl: u32, key: Vec<u8>) {
+    fn insert(&mut self, tf: u32, dl: u32, id: u32) {
         let pos = self.buckets.iter().position(|(t, _)| *t <= tf);
         let slot = match pos {
             Some(i) if self.buckets[i].0 == tf => &mut self.buckets[i].1,
             Some(i) => {
-                self.buckets.insert(i, (tf, DlSet::new()));
+                self.buckets.insert(i, (tf, DlGroups::new()));
                 &mut self.buckets[i].1
             }
             None => {
-                self.buckets.push((tf, DlSet::new()));
+                self.buckets.push((tf, DlGroups::new()));
                 &mut self.buckets.last_mut().expect("just pushed").1
             }
         };
-        slot.entry(dl).or_default().insert(key, ());
+        slot.entry(dl).or_default().insert(id);
         self.total += 1;
     }
 
-    fn remove(&mut self, tf: u32, dl: u32, key: &[u8]) {
+    fn remove(&mut self, tf: u32, dl: u32, id: u32) {
         if let Some(i) = self.buckets.iter().position(|(t, _)| *t == tf)
             && let Some(group) = self.buckets[i].1.get_mut(&dl)
-            && group.remove(key).is_some()
+            && group.remove(id)
         {
             self.total -= 1;
-            if group.is_empty() {
+            if group.ids.is_empty() {
                 self.buckets[i].1.remove(&dl);
             }
             if self.buckets[i].1.is_empty() {
@@ -101,12 +131,12 @@ impl Buckets {
         self.buckets.first().map_or(1, |(t, _)| *t)
     }
 
-    /// Membership probe: `dl` comes from the caller's docs table —
-    /// zero-alloc, O(log #dls) + one hash lookup per bucket.
-    fn get(&self, key: &[u8], dl: u32) -> Option<u32> {
+    /// Membership probe: `dl` comes from the segment's id_dl table —
+    /// zero-alloc, O(log #dls) + one hash hit per bucket.
+    fn get(&self, id: u32, dl: u32) -> Option<u32> {
         self.buckets
             .iter()
-            .find(|(_, m)| m.get(&dl).is_some_and(|g| g.contains_key(key)))
+            .find(|(_, m)| m.get(&dl).is_some_and(|g| g.contains(id)))
             .map(|(t, _)| *t)
     }
 }
@@ -121,7 +151,13 @@ impl Buckets {
 #[derive(Debug, Default)]
 pub struct TextSegment {
     postings: HashMap<Vec<u8>, Buckets>,
-    docs: HashMap<Vec<u8>, (u32, Vec<u8>)>,
+    /// key → (doc id, dl, original text).
+    docs: HashMap<Vec<u8>, (u32, u32, Vec<u8>)>,
+    /// id → key (None = freed slot, id on the free list).
+    id_key: Vec<Option<Vec<u8>>>,
+    /// id → dl (valid while id_key[id].is_some()).
+    id_dl: Vec<u32>,
+    free_ids: Vec<u32>,
     total_len: u64,
 }
 
@@ -133,18 +169,20 @@ impl TextSegment {
 
     /// (Re-)index one row's text (`None` = row removed / excluded).
     pub fn apply(&mut self, key: &[u8], text: Option<&[u8]>) {
-        if let Some((old_len, old_text)) = self.docs.remove(key) {
+        if let Some((old_id, old_len, old_text)) = self.docs.remove(key) {
             self.total_len -= u64::from(old_len);
             // Remove exactly this doc's tokens (re-derive tf from the
             // old text — O(doc), not O(index)).
             for (t, tf) in tf_of(&tokenize(&old_text)) {
                 if let Some(list) = self.postings.get_mut(&t) {
-                    list.remove(tf, old_len, key);
+                    list.remove(tf, old_len, old_id);
                     if list.is_empty() {
                         self.postings.remove(&t);
                     }
                 }
             }
+            self.id_key[old_id as usize] = None;
+            self.free_ids.push(old_id);
         }
         let Some(text) = text else { return };
         let toks = tokenize(text);
@@ -152,10 +190,22 @@ impl TextSegment {
             return;
         }
         let dl = toks.len() as u32;
-        self.docs.insert(key.to_vec(), (dl, text.to_vec()));
+        let id = match self.free_ids.pop() {
+            Some(id) => {
+                self.id_key[id as usize] = Some(key.to_vec());
+                self.id_dl[id as usize] = dl;
+                id
+            }
+            None => {
+                self.id_key.push(Some(key.to_vec()));
+                self.id_dl.push(dl);
+                (self.id_key.len() - 1) as u32
+            }
+        };
+        self.docs.insert(key.to_vec(), (id, dl, text.to_vec()));
         self.total_len += u64::from(dl);
         for (t, tf) in tf_of(&toks) {
-            self.postings.entry(t).or_default().insert(tf, dl, key.to_vec());
+            self.postings.entry(t).or_default().insert(tf, dl, id);
         }
     }
 
@@ -198,7 +248,7 @@ impl TextSegment {
             v.reverse();
             v
         };
-        let mut scores: HashMap<&[u8], f64> = HashMap::new();
+        let mut scores: HashMap<u32, f64> = HashMap::new();
         let mut kth_threshold = 0.0_f64;
         let mut walked = 0usize;
         for (i, (list, df, _ub)) in lists.iter().enumerate() {
@@ -223,12 +273,12 @@ impl TextSegment {
                     if bound + tail_ub[i + 1..].first().copied().unwrap_or(0.0)
                         < kth_of(&scores, limit)
                     {
-                        let keys: Vec<&[u8]> = scores.keys().copied().collect();
+                        let ids: Vec<u32> = scores.keys().copied().collect();
                         for (tf2, bucket2) in &list.buckets[bi..] {
-                            for key in &keys {
-                                let dl_u = self.docs.get(*key).map_or(1, |d| d.0);
-                                if bucket2.get(&dl_u).is_some_and(|g| g.contains_key(*key)) {
-                                    *scores.get_mut(key).expect("accumulated") += bm25_score(
+                            for &id in &ids {
+                                let dl_u = self.id_dl[id as usize];
+                                if bucket2.get(&dl_u).is_some_and(|g| g.contains(id)) {
+                                    *scores.get_mut(&id).expect("accumulated") += bm25_score(
                                         f64::from(*tf2),
                                         *df,
                                         n_docs,
@@ -258,8 +308,8 @@ impl TextSegment {
                     {
                         break;
                     }
-                    for key in group.keys() {
-                        *scores.entry(key.as_slice()).or_insert(0.0) += score;
+                    for &id in &group.ids {
+                        *scores.entry(id).or_insert(0.0) += score;
                     }
                 }
             }
@@ -272,12 +322,12 @@ impl TextSegment {
         // was the measured 30ms p95: a pruned 500k-posting head list
         // still cost a full scan).
         if walked < lists.len() {
-            let keys: Vec<&[u8]> = scores.keys().copied().collect();
+            let ids: Vec<u32> = scores.keys().copied().collect();
             for (list, df, _) in &lists[walked..] {
-                for key in &keys {
-                    let dl_u = self.docs.get(*key).map_or(1, |d| d.0);
-                    if let Some(tf) = list.get(key, dl_u) {
-                        *scores.get_mut(key).expect("accumulated") += bm25_score(
+                for &id in &ids {
+                    let dl_u = self.id_dl[id as usize];
+                    if let Some(tf) = list.get(id, dl_u) {
+                        *scores.get_mut(&id).expect("accumulated") += bm25_score(
                             f64::from(tf),
                             *df,
                             n_docs,
@@ -288,10 +338,14 @@ impl TextSegment {
                 }
             }
         }
-        // Bounded selection: only the winners get cloned.
+        // Bounded selection: only the winners get cloned. Ids resolve
+        // to keys here — the tiebreak (key ascending) is unchanged.
+        let key_of = |id: u32| -> &[u8] {
+            self.id_key[id as usize].as_deref().expect("live posting id")
+        };
         let mut top: Vec<(f64, &[u8])> = Vec::with_capacity(limit + 1);
-        for (k, score) in &scores {
-            let cand = (*score, *k);
+        for (id, score) in &scores {
+            let cand = (*score, key_of(*id));
             if top.len() < limit {
                 top.push(cand);
                 if top.len() == limit {
@@ -316,18 +370,20 @@ impl TextSegment {
     pub fn stats(&self) -> TextStats {
         let postings: u64 = self.postings.values().map(|l| l.len() as u64).sum();
         let token_bytes: u64 = self.postings.keys().map(|t| (t.len() + 48) as u64).sum();
+        // docs table + the id→key/id→dl tables (key stored twice).
         let doc_bytes: u64 = self
             .docs
             .iter()
-            .map(|(k, (_, text))| (k.len() + text.len() + 72) as u64)
+            .map(|(k, (_, _, text))| (2 * k.len() + text.len() + 110) as u64)
             .sum();
         TextStats {
             docs: self.docs.len() as u64,
             tokens: self.postings.len() as u64,
             postings,
-            // per-posting ≈ key copy + tf + bucket ≈ 64B; docs keep
-            // their original text (update path re-derives tokens).
-            approx_bytes: token_bytes + postings * 64 + doc_bytes,
+            // per-posting ≈ 4B ids-vec slot + ~24B id→slot map slot
+            // (doc-id postings, v3.5); docs keep their original text
+            // (update path re-derives tokens).
+            approx_bytes: token_bytes + postings * 28 + doc_bytes,
         }
     }
 
@@ -354,7 +410,7 @@ fn better(a: (f64, &[u8]), b: (f64, &[u8])) -> bool {
 
 /// The `limit`-th best score currently accumulated (the MaxScore
 /// entry floor). O(n) selection, called only between list walks.
-fn kth_of(scores: &HashMap<&[u8], f64>, limit: usize) -> f64 {
+fn kth_of(scores: &HashMap<u32, f64>, limit: usize) -> f64 {
     let mut v: Vec<f64> = scores.values().copied().collect();
     let idx = limit - 1;
     v.select_nth_unstable_by(idx, |a, b| b.total_cmp(a));
@@ -437,8 +493,9 @@ mod tests {
                 let df = list.len() as f64;
                 for (tf, bucket) in &list.buckets {
                     for (dl_u, group) in bucket.iter() {
-                        for k in group.keys() {
-                            *sc.entry(k.clone()).or_insert(0.0) +=
+                        for &id in &group.ids {
+                            let k = s.id_key[id as usize].clone().expect("live id");
+                            *sc.entry(k).or_insert(0.0) +=
                                 bm25_score(f64::from(*tf), df, n_docs, f64::from(*dl_u), avgdl);
                         }
                     }
