@@ -509,10 +509,6 @@ fn apply_agg_key(
     a: &mut kevy_index::AggSegment,
     key: &[u8],
 ) {
-    if store.exists(&[key.to_vec()]) == 0 {
-        a.apply(key, None, false);
-        return;
-    }
     let group_field = spec.group_by.as_deref().unwrap_or_default();
     let group = match store.hget(key, group_field) {
         Ok(Some(g)) => Some(g.to_vec()),
@@ -527,7 +523,7 @@ fn apply_agg_key(
     };
     match (group, val) {
         (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
-        _ => a.apply(key, None, true),
+        _ => a.apply(key, None, store.exists(&[key.to_vec()]) > 0),
     }
 }
 
