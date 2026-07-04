@@ -21,38 +21,38 @@ name = "kevy"
 path = "src/main.rs"
 
 [dependencies]
-kevy-sys = { path = "../kevy-sys", version = "2.0.0" }
-kevy-resp = { path = "../kevy-resp", version = "2.0.0" }
-kevy-store = { path = "../kevy-store", version = "2.0.0" }
-kevy-rt = { path = "../kevy-rt", version = "2.0.0" }
-kevy-config = { path = "../kevy-config", version = "2.0.0" }
-kevy-persist = { path = "../kevy-persist", version = "2.0.0" }
-kevy-geo = { path = "../kevy-geo", version = "2.0.0" }
-kevy-index = { path = "../kevy-index", version = "2.0.0" }
-kevy-text = { path = "../kevy-text", version = "2.0.0" }
-kevy-vector = { path = "../kevy-vector", version = "2.0.0" }
-kevy-hash = { path = "../kevy-hash", version = "2.0.0" }
+kevy-sys = { path = "../kevy-sys", version = "3.0.0" }
+kevy-resp = { path = "../kevy-resp", version = "3.0.0" }
+kevy-store = { path = "../kevy-store", version = "3.0.0" }
+kevy-rt = { path = "../kevy-rt", version = "3.0.0" }
+kevy-config = { path = "../kevy-config", version = "3.0.0" }
+kevy-persist = { path = "../kevy-persist", version = "3.0.0" }
+kevy-geo = { path = "../kevy-geo", version = "3.0.0" }
+kevy-index = { path = "../kevy-index", version = "3.0.0" }
+kevy-text = { path = "../kevy-text", version = "3.0.0" }
+kevy-vector = { path = "../kevy-vector", version = "3.0.0" }
+kevy-hash = { path = "../kevy-hash", version = "3.0.0" }
 # kevy-replicate: the server-as-replica runner (T1.29) needs
 # `ReplicaClient` / `ReplicaEvent` at runtime, not just for tests.
 # (Pre-T1.29 the dep was dev-only via `tests/replication.rs` decoding
 # wire frames; T1.29 promotes it to a normal dep.)
-kevy-replicate = { path = "../kevy-replicate", version = "2.0.0" }
+kevy-replicate = { path = "../kevy-replicate", version = "3.0.0" }
 # kevy-elect: v3-cluster Phase 1.5 quorum failover. Opt-in via
 # `[cluster] peers = "..."`; dormant when not configured, so the
 # v1.18-era deployments are unaffected.
-kevy-elect = { path = "../kevy-elect", version = "2.0.0" }
+kevy-elect = { path = "../kevy-elect", version = "3.0.0" }
 # kevy-scope: v3-cluster Phase 3 scoped multi-writer ownership.
 # Opt-in via `[cluster] scopes = "..."`; dormant otherwise.
-kevy-scope = { path = "../kevy-scope", version = "2.0.0" }
+kevy-scope = { path = "../kevy-scope", version = "3.0.0" }
 # v1.27 P7b: Lua scripting bridge — pulls the carved-exemption
 # kevy-lua + kevy-lua-host crates. See workspace Cargo.toml exemption
 # #2/#3: the only transitive third-party crate is `luna-core` (GOLIA
 # family, CI-gated 0-dep on luna's side).
-kevy-lua = { path = "../kevy-lua", version = "=2.1.0" }
-kevy-lua-host = { path = "../kevy-lua-host", version = "=2.1.0" }
+kevy-lua = { path = "../kevy-lua", version = "=3.0.0" }
+kevy-lua-host = { path = "../kevy-lua-host", version = "3.0.0" }
 
 [dev-dependencies]
-kevy-embedded = { path = "../kevy-embedded", version = "1.16.0" }
+kevy-embedded = { path = "../kevy-embedded", version = "3.0.0" }
 kevy-bench = { path = "../kevy-bench" }
 # kevy-client is the URL-facade client; only used by integration tests
 # that exercise BOTH server + client in one process (e.g. the RESP3
