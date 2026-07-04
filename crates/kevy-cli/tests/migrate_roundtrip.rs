@@ -18,12 +18,18 @@ impl Srv {
             .parent()
             .unwrap()
             .join("kevy");
+        assert!(
+            bin.exists(),
+            "kevy server binary missing at {bin:?} — run `cargo build -p kevy --bin kevy` first \
+             (cargo does not know this test depends on it; a STALE binary silently lacks new \
+             verbs like PREFIX.DIGEST)"
+        );
         let child = Command::new(&bin)
             .args(["--port", &port.to_string(), "--threads", "2", "--no-aof"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .expect("spawn kevy server (cargo build -p kevy --bin kevy first)");
+            .expect("spawn kevy server");
         for _ in 0..100 {
             if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
                 break;
