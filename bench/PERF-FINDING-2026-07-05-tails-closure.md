@@ -55,3 +55,15 @@ Re-baselining DOWN would violate the ratchet philosophy. Resolution
 options (box policy = owner's call): quiesce/evict co-tenants for
 gate windows, cpuset-fence them off cores 0-15's server half, or
 move gates to a clean box.
+
+### Addendum 2 — THP exonerated too
+
+`transparent_hugepage=[always]` was flipped to `madvise` for one
+gate run (restored after): the two SET angles failed with identical
+numbers. Full exoneration list now: this train's code (develop
+control), co-tenant CPU (idle at retry), AOF/disk (gates run
+--no-aof), THP, malloc arenas. The shift is durable and box-level.
+Resolution: ratchet floors STAY (no re-baselining down); v3.4/v3.5
+merge with this record; floors re-validate when the box is
+restored/replaced (owner's box-policy call still open).
+
