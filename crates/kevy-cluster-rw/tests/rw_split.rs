@@ -174,7 +174,7 @@ impl ReplicaServer {
                                 }
                                 kevy_replicate::replica::ReplicaEvent::SnapshotEnd { ack_offset } => {
                                     from_offset = ack_offset;
-                                    kevy_rt::ReplicaApply::SnapshotEnd { ack_offset }
+                                    kevy_rt::ReplicaApply::SnapshotEnd { ack_offset, routed: false }
                                 }
                                 kevy_replicate::replica::ReplicaEvent::Frame(frame) => {
                                     from_offset = frame.offset.saturating_add(1);
@@ -612,7 +612,7 @@ impl TrackedReplica {
                                 kevy_replicate::replica::ReplicaEvent::SnapshotEnd { ack_offset } => {
                                     from = ack_offset;
                                     last_offset.store(from, std::sync::atomic::Ordering::Relaxed);
-                                    kevy_rt::ReplicaApply::SnapshotEnd { ack_offset }
+                                    kevy_rt::ReplicaApply::SnapshotEnd { ack_offset, routed: false }
                                 }
                                 kevy_replicate::replica::ReplicaEvent::Frame(frame) => {
                                     from = frame.offset.saturating_add(1);

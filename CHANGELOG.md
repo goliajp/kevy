@@ -1,5 +1,22 @@
 # Changelog
 
+### v3.2 — embedded-as-primary replication
+
+- An embedded application can now be the PRIMARY with a kevy server
+  as replica: `[replication] single_source = true` puts the server in
+  single-stream mode (one runner, frames hash-routed to local shards,
+  snapshot payloads broadcast with per-shard slice loading via the
+  new kevy-persist `load_snapshot_filtered`). The embed writer source
+  ships full snapshots on fresh/too-old handshakes — the v1.21
+  anti-scope, closed (point-in-time freeze across every shard + the
+  as-of offset under one lock hold). The replica declares its own
+  indexes/views/aggregates over replicated data — a full query
+  surface for an in-process store. Replication and the CDC feed
+  coexist by design (docs/replication.md).
+- bench/repligate.sh: two-process gate — snapshot ship, quiesced
+  digest stability, restart re-sync, replica-local IDX over
+  replicated data.
+
 ### v3.1 — aggregate kind (write-time GROUP BY)
 
 - **`KIND agg GROUPBY <field>`**: fifth index kind — per-group

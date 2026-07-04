@@ -30,6 +30,16 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use kevy_replicate::handshake::{encode_ack, parse_replicate_from};
+use kevy_replicate::wire::{
+    SNAPSHOT_CHUNK_MAX, encode_snapshot_begin, encode_snapshot_chunk, encode_snapshot_end,
+};
+
+/// Provider that freezes a point-in-time snapshot of the WHOLE embed
+/// keyspace: returns `(payload, ack_offset)` where `ack_offset` is
+/// the source's `next_offset` at freeze time — live streaming resumes
+/// there (kevy-replicate snapshot.md semantics, matching the server
+/// primary's pump).
+pub(crate) type SnapshotProvider = Arc<dyn Fn() -> (Vec<u8>, u64) + Send + Sync>;
 use kevy_replicate::source::{FromOffset, ReplicationSource};
 use kevy_resp::Argv;
 
@@ -51,7 +61,11 @@ impl ReplicaSource {
     /// — replicas haven't connected yet. The caller stores the
     /// `ReplicaSource` in `DropGuard` so the threads are joined on
     /// last-clone drop.
-    pub(crate) fn spawn(listen_addr: &str, backlog_bytes: usize) -> io::Result<Self> {
+    pub(crate) fn spawn(
+        listen_addr: &str,
+        backlog_bytes: usize,
+        snapshot: SnapshotProvider,
+    ) -> io::Result<Self> {
         let listener = TcpListener::bind(listen_addr)?;
         listener.set_nonblocking(true)?;
         let bound_addr = listener.local_addr()?;
@@ -64,7 +78,7 @@ impl ReplicaSource {
         let conn_joins_c = Arc::clone(&conn_joins);
         let accept_join = thread::Builder::new()
             .name("kevy-embedded-writer-accept".into())
-            .spawn(move || run_accept_loop(listener, source_c, stop_c, conn_joins_c))
+            .spawn(move || run_accept_loop(listener, source_c, stop_c, conn_joins_c, snapshot))
             .expect("spawn writer-accept thread");
 
         Ok(Self {
@@ -155,15 +169,17 @@ fn run_accept_loop(
     source: Arc<Mutex<ReplicationSource>>,
     stop: Arc<AtomicBool>,
     conn_joins: Arc<Mutex<Vec<JoinHandle<()>>>>,
+    snapshot: SnapshotProvider,
 ) {
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _peer)) => {
                 let source_c = Arc::clone(&source);
                 let stop_c = Arc::clone(&stop);
+                let snapshot_c = Arc::clone(&snapshot);
                 let join = thread::Builder::new()
                     .name("kevy-embedded-writer-conn".into())
-                    .spawn(move || run_conn(stream, source_c, stop_c))
+                    .spawn(move || run_conn(stream, source_c, stop_c, snapshot_c))
                     .expect("spawn writer-conn thread");
                 conn_joins
                     .lock()
@@ -184,7 +200,12 @@ fn run_accept_loop(
     }
 }
 
-fn run_conn(mut stream: TcpStream, source: Arc<Mutex<ReplicationSource>>, stop: Arc<AtomicBool>) {
+fn run_conn(
+    mut stream: TcpStream,
+    source: Arc<Mutex<ReplicationSource>>,
+    stop: Arc<AtomicBool>,
+    snapshot: SnapshotProvider,
+) {
     if stream.set_read_timeout(Some(Duration::from_secs(2))).is_err() {
         return;
     }
@@ -192,17 +213,52 @@ fn run_conn(mut stream: TcpStream, source: Arc<Mutex<ReplicationSource>>, stop: 
         Some(off) => off,
         None => return,
     };
-    if stream.write_all(&encode_ack(from_offset)).is_err() {
-        return;
-    }
-    // Streaming loop. Lock the source briefly each round to clone
-    // any pending frame bytes, then release before writing to the
-    // socket. Sleep when caught up so we don't busy-spin.
-    let mut sent_offset = from_offset;
+    // The accept loop's listener is non-blocking and accepted sockets
+    // INHERIT that on some platforms (BSD/macOS semantics) — flip to
+    // blocking BEFORE any bulk write, or a snapshot ship dies with
+    // EWOULDBLOCK the moment the socket buffer fills (measured: EOF
+    // at ~319KB, one buffer's worth).
     if stream.set_nonblocking(false).is_err() {
         return;
     }
     let _ = stream.set_read_timeout(None);
+    // Snapshot path (closing the v1.21 anti-scope): a fresh replica
+    // (offset 0 against a non-empty history) or one that fell past
+    // the backlog gets the keyspace shipped, then live frames from
+    // the snapshot's as-of offset — same branch discipline as the
+    // server primary's pump (snapshot.md).
+    let needs_snapshot = {
+        let g = source.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let next = g.next_offset();
+        (from_offset == 0 && next > 0) || g.frames_from(from_offset).is_err()
+    };
+    let from_offset = if needs_snapshot {
+        let (payload, ack_offset) = snapshot();
+        if stream.write_all(&encode_ack(ack_offset)).is_err() {
+            return;
+        }
+        if stream.write_all(&encode_snapshot_begin()).is_err() {
+            return;
+        }
+        for chunk in payload.chunks(SNAPSHOT_CHUNK_MAX) {
+            if stream.write_all(&encode_snapshot_chunk(chunk)).is_err() {
+                return;
+            }
+        }
+        if stream.write_all(&encode_snapshot_end(ack_offset)).is_err() {
+            return;
+        }
+        ack_offset
+    } else {
+        if stream.write_all(&encode_ack(from_offset)).is_err() {
+            return;
+        }
+        from_offset
+    };
+    // Streaming loop. Lock the source briefly each round to clone
+    // any pending frame bytes, then release before writing to the
+    // socket. Sleep when caught up so we don't busy-spin.
+    let mut sent_offset = from_offset;
     while !stop.load(Ordering::Relaxed) {
         let next = next_frame_bytes(&source, sent_offset);
         match next {
@@ -271,3 +327,44 @@ fn read_handshake(stream: &mut TcpStream) -> Option<u64> {
         }
     }
 }
+
+/// Freeze every shard's COW view + the source offset as ONE point in
+/// time (all shard locks held across both — `commit_write` pushes
+/// into the backlog under a shard lock, so nothing lands between the
+/// offset read and the freeze), then serialize outside the locks.
+pub(crate) fn freeze_and_serialize(shards: &crate::store::Shards) -> (Vec<u8>, u64) {
+    use crate::store::lock_write;
+    let guards: Vec<_> = shards.iter().map(|s| lock_write(s)).collect();
+    let ack = guards
+        .first()
+        .and_then(|g| g.writer_source.as_ref())
+        .map(|src| {
+            src.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .next_offset()
+        })
+        .unwrap_or(0);
+    let views: Vec<kevy_store::SnapshotView> =
+        guards.iter().map(|g| g.store.collect_snapshot()).collect();
+    drop(guards);
+
+    struct Multi<'v>(&'v [kevy_store::SnapshotView]);
+    impl kevy_persist::SnapshotSource for Multi<'_> {
+        fn for_each_entry(&self, mut f: impl FnMut(&[u8], &kevy_store::Value, Option<u64>)) {
+            for v in self.0 {
+                kevy_persist::SnapshotSource::for_each_entry(v, &mut f);
+            }
+        }
+        fn for_each_hash_ttl(&self, mut f: impl FnMut(&[u8], &[u8], u64)) {
+            for v in self.0 {
+                kevy_persist::SnapshotSource::for_each_hash_ttl(v, &mut f);
+            }
+        }
+    }
+    let mut payload = Vec::new();
+    // In-memory serialize matches the server pump's T1.23 posture
+    // (streaming straight to the socket is a follow-up on both ends).
+    let _ = kevy_persist::write_snapshot_to(&Multi(&views), &mut payload);
+    (payload, ack)
+}
+

@@ -193,9 +193,18 @@ impl Store {
         #[cfg(not(target_arch = "wasm32"))]
         let replica_source = match config.embed_writer_listen_addr.as_ref() {
             Some(addr) => {
+                // Snapshot provider (v3.2): freeze every shard's COW
+                // view under the source lock (so ack_offset and the
+                // frozen keyspace are one point in time — writes
+                // between the two would replay twice otherwise), then
+                // serialize outside the locks via the persist writer.
+                let shards_for_snap: Shards = Arc::clone(&shards);
+                let snapshot: crate::replica_source::SnapshotProvider =
+                    Arc::new(move || crate::replica_source::freeze_and_serialize(&shards_for_snap));
                 let rs = crate::replica_source::ReplicaSource::spawn(
                     addr,
                     config.embed_writer_backlog_bytes,
+                    snapshot,
                 )?;
                 // Inject the shared source Arc into every shard's
                 // Inner so `commit_write` pushes mutations into the
