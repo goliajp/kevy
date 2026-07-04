@@ -161,6 +161,13 @@ impl AggSegment {
         all
     }
 
+    /// Every group, UNRANKED — the fan-out chunk shape (ranking
+    /// happens once, at the reduce, after cross-shard merge; sorting
+    /// per shard would be wasted work).
+    pub fn all_groups(&self) -> Vec<(Vec<u8>, GroupStats)> {
+        self.groups.keys().map(|k| (k.clone(), self.group(k))).collect()
+    }
+
     /// Membership probe (verify hook).
     pub fn contains(&self, key: &[u8]) -> bool {
         self.rows.contains_key(key)
