@@ -1,5 +1,38 @@
 # Changelog
 
+### v3.5 — FTS consolidation (doc-id inverted lists, impact-ordered both ways)
+
+- kevy-text postings rebuilt in the classic inverted shape: u32 doc
+  ids (keys live once, in the docs table), tf buckets descending,
+  sparse log2 dl bands ascending inside each bucket, one list-level
+  id→location map for O(1) probes and swap-removes, and hapax
+  (one-posting) lists inlined into the enum — zero heap for the Zipf
+  long tail. BM25 is monotone ↓dl, so single-term queries — the
+  MaxScore worst case — stop exactly at the first band whose lower
+  edge can't reach the kth floor (per-id scoring stays exact).
+- Measured at 200k Zipf docs: most-common term 8.7ms → 0.093ms
+  (93×), two common terms 12.6ms → 1.53ms (8.2×), common+rare
+  2.5ms → 0.68ms (3.7×). textgate at 1M docs: MATCH p95 22.6ms →
+  2.96ms, index RSS 2198MiB → 1129MiB (−49% vs the old shape).
+  Exactness preserved (equivalence suite green).
+
+### v3.4 — perf tails closure
+
+- Ledger v1.1: bare-face truth vs valkey 9.1 corrected to 1.6-3.3×
+  (8M-request cells; the 2M cells quantized low).
+- epoll reactor gains the stay-hot-while-inflight clause (uring had
+  it since v2.2) — no park+wake per cross-shard reply batch.
+- 286c4a2 "-4%" closed extinct (A/B: accounting instructions cost
+  <0.1% today); IDX.QUERY conn-tail closed (accept placement;
+  --accept-shards cures it totally).
+
+### v3.3 — baseline arena (the real gap table)
+
+- bench/PERF-LEDGER.md: kevy vs valkey 9.1 and vs redis-stack 7.4.7
+  (RediSearch) under a fair-fight protocol. Bare face: kevy sweeps
+  1.6-3.3×. Serving face: FTS tie+21% qps, AGG 110×, NUMERIC 2.3×,
+  ANN behind 3.8× — the v3.6 campaign target.
+
 ### v3.2 — embedded-as-primary replication
 
 - An embedded application can now be the PRIMARY with a kevy server
