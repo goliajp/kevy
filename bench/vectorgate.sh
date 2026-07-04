@@ -7,7 +7,8 @@
 #      computed client-side over a 20k-vector witness subset that the
 #      queries are drawn near — full-corpus brute force at 1M×128d is
 #      a gate-runtime problem, and near-witness queries make the true
-#      top-10 provably inside the witness set).
+#      top-10 provably inside the witness set — witness ball ±0.5 at
+#      center 3.0: worst witness distance ~4.6, nearest noise ~30+).
 #   3. Memory formula vs RSS growth within 0.5-1.5× (RFC D6).
 #
 # Usage: bash bench/vectorgate.sh <kevy-binary>
@@ -99,7 +100,7 @@ t0 = time.time()
 batch = []
 for i in range(N):
     if i < WITNESS:
-        v = [c + random.uniform(-0.05, 0.05) for c in CENTER]
+        v = [c + random.uniform(-0.5, 0.5) for c in CENTER]
         witness.append(v)
     else:
         v = rand_vec()
@@ -135,7 +136,7 @@ for _ in range(6):
     c = connect(); cb = [b""]
     lat = []
     for i in range(100):
-        q = rand_vec() if i % 2 else [x + random.uniform(-0.1, 0.1) for x in CENTER]
+        q = rand_vec() if i % 2 else [x + random.uniform(-0.5, 0.5) for x in CENTER]
         t = time.time()
         r = cmd(c, cb, "IDX.QUERY", "x_v", "KNN", blob(q), "LIMIT", "10")
         lat.append(time.time() - t)
@@ -153,7 +154,7 @@ def l2(a, b):
     return sum((x - y) * (x - y) for x, y in zip(a, b))
 hit = total = 0
 for _ in range(100):
-    q = [c0 + random.uniform(-0.05, 0.05) for c0 in CENTER]
+    q = [c0 + random.uniform(-0.5, 0.5) for c0 in CENTER]
     truth = sorted(range(WITNESS), key=lambda i: l2(witness[i], q))[:10]
     want = {f"x:{i}".encode() for i in truth}
     r = cmd(s, buf, "IDX.QUERY", "x_v", "KNN", blob(q), "LIMIT", "10")
