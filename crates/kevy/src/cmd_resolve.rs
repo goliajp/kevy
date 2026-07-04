@@ -123,6 +123,7 @@ fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
         b"VIEW.REBUILD" if args.len() == 2 => Route::Extension,
         b"VIEW.EXPLAIN" if args.len() == 2 => Route::Extension,
         b"PREFIX.STATS" if args.len() == 2 => Route::PrefixStats,
+        b"PREFIX.DIGEST" if args.len() == 2 => Route::Extension,
         b"FEED.READ" if args.len() >= 4 => Route::FeedRead,
         b"FEED.TAIL" if args.len() == 2 => Route::FeedTail,
         b"FEED.SHARDS" if args.len() == 1 => Route::FeedShards,
