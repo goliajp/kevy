@@ -317,11 +317,6 @@ fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
     // coerces per the declared type, the group key is raw bytes.
     if let Some(a) = &mut si.agg {
         let group_field = si.spec.group_by.as_deref().unwrap_or_default();
-        let gone = store.exists(&[key.to_vec()]) == 0;
-        if gone {
-            a.apply(key, None, false);
-            return;
-        }
         let group = match store.hget(key, group_field) {
             Ok(Some(g)) => Some(g.to_vec()),
             _ => None,
@@ -335,7 +330,11 @@ fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
         };
         match (group, val) {
             (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
-            _ => a.apply(key, None, true), // excluded, counted
+            // Slow path only: distinguish a DELETED row (plain
+            // retract) from an in-domain row missing/failing a field
+            // (excluded, counted). The happy path above never pays
+            // the exists() probe.
+            _ => a.apply(key, None, store.exists(&[key.to_vec()]) > 0),
         }
         return;
     }
