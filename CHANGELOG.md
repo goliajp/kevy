@@ -1,14 +1,20 @@
 # Changelog
 
-### v3.5 — FTS consolidation (impact-ordered postings, both ways)
+### v3.5 — FTS consolidation (doc-id inverted lists, impact-ordered both ways)
 
-- kevy-text postings are now dl-grouped inside each tf bucket
-  (BTreeMap<dl, HashMap<key>>): single-term queries — the MaxScore
-  worst case with no second list to prune against — stop exactly at
-  the first dl group that can't reach the kth floor. Measured 64×
-  on the most common term at 200k Zipf docs (6.3ms → 0.098ms);
-  two-term queries slightly ahead (probes stay zero-alloc hash
-  lookups). Exactness preserved (equivalence suite green).
+- kevy-text postings rebuilt in the classic inverted shape: u32 doc
+  ids (keys live once, in the docs table), tf buckets descending,
+  sparse log2 dl bands ascending inside each bucket, one list-level
+  id→location map for O(1) probes and swap-removes, and hapax
+  (one-posting) lists inlined into the enum — zero heap for the Zipf
+  long tail. BM25 is monotone ↓dl, so single-term queries — the
+  MaxScore worst case — stop exactly at the first band whose lower
+  edge can't reach the kth floor (per-id scoring stays exact).
+- Measured at 200k Zipf docs: most-common term 8.7ms → 0.093ms
+  (93×), two common terms 12.6ms → 1.53ms (8.2×), common+rare
+  2.5ms → 0.68ms (3.7×). textgate at 1M docs: MATCH p95 22.6ms →
+  2.96ms, index RSS 2198MiB → 1129MiB (−49% vs the old shape).
+  Exactness preserved (equivalence suite green).
 
 ### v3.4 — perf tails closure
 
