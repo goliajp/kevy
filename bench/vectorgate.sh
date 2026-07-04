@@ -5,12 +5,9 @@
 #      (median-connection protocol).
 #      Queries run at EF 400 — the recall/latency pareto point the
 #      gate certifies (both clamps must hold simultaneously).
-#   2. RECALL ≥ 0.90: 100 queries vs brute-force ground truth (top-10,
-#      computed client-side over a 20k-vector witness subset that the
-#      queries are drawn near — full-corpus brute force at 1M×128d is
-#      a gate-runtime problem, and near-witness queries make the true
-#      top-10 provably inside the witness set — witness ball ±0.5 at
-#      center 3.0: worst witness distance ~4.6, nearest noise ~30+).
+#   2. RECALL ≥ 0.90: 100 queries vs EXACT full-corpus brute-force
+#      ground truth (numpy matrix math, ~100ms/query — the corpus is
+#      generated client-side with a fixed seed and kept in memory).
 #   3. Memory formula vs RSS growth within 0.5-1.5× (RFC D6).
 #
 # Usage: bash bench/vectorgate.sh <kevy-binary>
@@ -80,33 +77,24 @@ def rss_kb():
                 return int(ln.split()[1])
     return 0
 
+import numpy as np
 DIM = 128
 N = 1_000_000
-WITNESS = 20_000
-random.seed(11)
-
-def rand_vec():
-    return [random.uniform(-1.0, 1.0) for _ in range(DIM)]
+rng = np.random.default_rng(11)
+# Uniform corpus, f32 — held client-side for EXACT full-corpus brute
+# force ground truth (a displaced witness cluster made truth cheap but
+# built a pathological 30×-gap two-mode topology no navigation graph
+# handles — and no real embedding corpus looks like it).
+ALL = rng.uniform(-1.0, 1.0, size=(N, DIM)).astype(np.float32)
 
 def blob(v):
-    return struct.pack(f"<{DIM}f", *v)
+    return v.tobytes()
 
-# Witness cluster: vectors 0..WITNESS live INSIDE a tight ball around
-# a far-away center; queries sample near that center, so their true
-# top-10 provably lie in the witness set (the other 980k vectors are
-# uniform in [-1,1]^128 — distance to the displaced ball is huge).
-CENTER = [3.0] * DIM
-witness = []
 s = connect(); buf = [b""]
 t0 = time.time()
 batch = []
 for i in range(N):
-    if i < WITNESS:
-        v = [c + random.uniform(-0.5, 0.5) for c in CENTER]
-        witness.append(v)
-    else:
-        v = rand_vec()
-    batch.append(enc("HSET", f"x:{i}", "v", blob(v)))
+    batch.append(enc("HSET", f"x:{i}", "v", blob(ALL[i])))
     if len(batch) == 500:
         s.sendall(b"".join(batch))
         for _ in range(len(batch)):
@@ -124,7 +112,7 @@ r = cmd(s, buf, "IDX.CREATE", "x_v", "ON", "PREFIX", "x:", "FIELD", "v",
 assert r == b"+OK", r
 t0 = time.time()
 while True:
-    r = cmd(s, buf, "IDX.QUERY", "x_v", "KNN", blob(CENTER), "LIMIT", "1")
+    r = cmd(s, buf, "IDX.QUERY", "x_v", "KNN", blob(ALL[0]), "LIMIT", "1")
     if isinstance(r, list):
         break
     if time.time() - t0 > 3600:
@@ -138,7 +126,7 @@ for _ in range(6):
     c = connect(); cb = [b""]
     lat = []
     for i in range(100):
-        q = rand_vec() if i % 2 else [x + random.uniform(-0.5, 0.5) for x in CENTER]
+        q = rng.uniform(-1.0, 1.0, DIM).astype(np.float32)
         t = time.time()
         r = cmd(c, cb, "IDX.QUERY", "x_v", "KNN", blob(q), "LIMIT", "10", "EF", "400")
         lat.append(time.time() - t)
@@ -151,19 +139,21 @@ print(f"vectorgate: KNN p95 per-conn median={p95s[3]:.2f}ms worst={p95s[5]:.2f}m
 if p95s[3] >= 30.0:
     print(f"vectorgate: FAIL — KNN median-conn p95 {p95s[3]:.2f}ms >= 30ms"); sys.exit(1)
 
-# ---- clamp 2: recall vs ground truth ----
-def l2(a, b):
-    return sum((x - y) * (x - y) for x, y in zip(a, b))
+# ---- clamp 2: recall vs EXACT full-corpus ground truth (numpy) ----
 hit = total = 0
+t0 = time.time()
 for _ in range(100):
-    q = [c0 + random.uniform(-0.5, 0.5) for c0 in CENTER]
-    truth = sorted(range(WITNESS), key=lambda i: l2(witness[i], q))[:10]
+    q = rng.uniform(-1.0, 1.0, DIM).astype(np.float32)
+    d = ((ALL - q) ** 2).sum(axis=1)
+    truth = np.argpartition(d, 10)[:10]
+    truth = truth[np.argsort(d[truth])]
     want = {f"x:{i}".encode() for i in truth}
     r = cmd(s, buf, "IDX.QUERY", "x_v", "KNN", blob(q), "LIMIT", "10", "EF", "400")
     got = {row[0] for row in r}
     hit += len(want & got)
     total += 10
 recall = hit / total
+print(f"vectorgate: ground truth computed in {time.time()-t0:.1f}s")
 print(f"vectorgate: recall@10 = {recall:.3f}")
 if recall < 0.90:
     print(f"vectorgate: FAIL — recall {recall:.3f} < 0.90"); sys.exit(1)

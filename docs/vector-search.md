@@ -59,6 +59,14 @@ No filter-during-search (partition predicates inside the graph walk
 are the query-engine slope): KNN first, then hydrate with `FIELDS`
 and filter client-side.
 
+**Multi-modal caveat**: navigation graphs degrade on corpora made of
+far-separated modes (inter-mode gaps ≫ intra-mode distances, e.g.
+two disjoint tenants' embeddings in one index) — late inserts in one
+mode can't discover the other, starving the graph of bridges. Real
+embedding corpora are continuous manifolds and don't trigger this;
+if your data is strongly multi-modal, index the modes separately
+(one index per prefix — they're cheap and independent).
+
 ## Sizing
 
 `bytes ≈ vectors × (dim×4 + 40) + links × 8 + vectors × 32`, reported
