@@ -382,6 +382,9 @@ fn reduce_ranked(argv: &[Vec<u8>], chunks: &[Vec<u8>], ascending: bool) -> Vec<u
     out
 }
 
+/// Pass-1/pass-2 row visitor for the agg reduce walk.
+type AggRowVisitor<'v> = &'v mut dyn FnMut(&[u8], u64, f64, &[u8]);
+
 /// v3.1 reduce: decode per-shard group partials, merge, rank, emit.
 /// GROUP → `[count, sum, min, max, avg]`; GROUPS → array of
 /// `[group, count, sum, min, max]` rows ranked by the BY metric.
@@ -417,53 +420,80 @@ fn reduce_agg(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
         }
     }
     let limit = limit.clamp(1, 1000);
-    // HashMap merge — the first cut used a linear find over the
-    // merged list and measured 1217ms at 8 shards × 10k groups
-    // (O(rows × groups) byte compares); hashing makes it O(rows).
+    // Two-pass exact merge (agggate history: linear-find merge was
+    // 1217ms, full-decode HashMap merge 14.3ms at 8 shards × 10k
+    // groups — the residue was 80k key allocations + 160k IndexValue
+    // decodes). Pass 1 merges count/sum with BORROWED-key lookups
+    // (a repeated group allocates once, not once per shard) and SKIPS
+    // the length-prefixed min/max block; pass 2 decodes min/max only
+    // for the groups that survive the ranking cut.
     let mut merged: std::collections::HashMap<Vec<u8>, kevy_index::GroupStats> =
         std::collections::HashMap::new();
-    for c in chunks {
-        let mut pos = 1usize;
-        let Some(n) = read_u32(c, &mut pos) else { continue };
-        for _ in 0..n {
-            let Some(g) = read_kbytes(c, &mut pos) else { break };
-            let Some(cb) = c.get(pos..pos + 8) else { break };
-            let count = u64::from_le_bytes(cb.try_into().expect("8"));
-            pos += 8;
-            let Some(sb) = c.get(pos..pos + 8) else { break };
-            let sum = f64::from_le_bytes(sb.try_into().expect("8"));
-            pos += 8;
-            let mut mm = [None, None];
-            let mut bad = false;
-            for slot in &mut mm {
-                match c.get(pos).copied() {
-                    Some(1) => {
-                        pos += 1;
-                        match crate::cmd_index_query::decode_value(c, &mut pos) {
-                            Some(v) => *slot = Some(v),
-                            None => bad = true,
-                        }
-                    }
-                    Some(0) => pos += 1,
-                    _ => bad = true,
-                }
-                if bad {
-                    break;
-                }
-            }
-            if bad {
-                break;
-            }
-            let part = kevy_index::GroupStats { count, sum, min: mm[0].clone(), max: mm[1].clone() };
-            match merged.get_mut(&g) {
-                Some(st) => kevy_index::merge_group(st, &part),
-                None => {
-                    merged.insert(g, part);
-                }
+    let walk = |on_row: AggRowVisitor<'_>| {
+        for c in chunks {
+            let mut pos = 1usize;
+            let Some(n) = read_u32(c, &mut pos) else { continue };
+            for _ in 0..n {
+                let Some(gl) = c.get(pos..pos + 4) else { break };
+                let gl = u32::from_le_bytes(gl.try_into().expect("4")) as usize;
+                pos += 4;
+                let Some(g) = c.get(pos..pos + gl) else { break };
+                pos += gl;
+                let Some(cb) = c.get(pos..pos + 8) else { break };
+                let count = u64::from_le_bytes(cb.try_into().expect("8"));
+                pos += 8;
+                let Some(sb) = c.get(pos..pos + 8) else { break };
+                let sum = f64::from_le_bytes(sb.try_into().expect("8"));
+                pos += 8;
+                let Some(ml) = c.get(pos..pos + 4) else { break };
+                let ml = u32::from_le_bytes(ml.try_into().expect("4")) as usize;
+                pos += 4;
+                let Some(mm) = c.get(pos..pos + ml) else { break };
+                pos += ml;
+                on_row(g, count, sum, mm);
             }
         }
-    }
+    };
+    walk(&mut |g, count, sum, _mm| {
+        match merged.get_mut(g) {
+            Some(st) => {
+                st.count += count;
+                st.sum += sum;
+            }
+            None => {
+                merged.insert(
+                    g.to_vec(),
+                    kevy_index::GroupStats { count, sum, min: None, max: None },
+                );
+            }
+        }
+    });
+    // decode min/max for the surviving groups only
+    let fill_mm = |want: &mut std::collections::HashMap<Vec<u8>, kevy_index::GroupStats>| {
+        walk(&mut |g, _count, _sum, mm| {
+            let Some(st) = want.get_mut(g) else { return };
+            let mut pos = 0usize;
+            let mut vals = [None, None];
+            for slot in &mut vals {
+                match mm.get(pos).copied() {
+                    Some(1) => {
+                        pos += 1;
+                        *slot = crate::cmd_index_query::decode_value(mm, &mut pos);
+                    }
+                    _ => pos += 1,
+                }
+            }
+            let part = kevy_index::GroupStats {
+                count: 0,
+                sum: 0.0,
+                min: vals[0].clone(),
+                max: vals[1].clone(),
+            };
+            kevy_index::merge_group(st, &part);
+        });
+    };
     if single {
+        fill_mm(&mut merged);
         let st = merged
             .into_values()
             .next()
@@ -483,9 +513,23 @@ fn reduce_agg(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
         }
         return out;
     }
+    // rank on count/sum (min/max metrics need pass 2 first — for BY
+    // min|max decode everything up front; count/sum stay two-pass)
+    if matches!(by, kevy_index::AggBy::Min | kevy_index::AggBy::Max) {
+        fill_mm(&mut merged);
+    }
     let mut ranked: Vec<(Vec<u8>, kevy_index::GroupStats)> = merged.into_iter().collect();
     kevy_index::sort_groups(&mut ranked, by);
     ranked.truncate(limit);
+    // pass 2 for the survivors (no-op if BY min|max already filled)
+    if !matches!(by, kevy_index::AggBy::Min | kevy_index::AggBy::Max) {
+        let mut want: std::collections::HashMap<Vec<u8>, kevy_index::GroupStats> =
+            ranked.drain(..).collect();
+        fill_mm(&mut want);
+        let mut back: Vec<(Vec<u8>, kevy_index::GroupStats)> = want.into_iter().collect();
+        kevy_index::sort_groups(&mut back, by);
+        ranked = back;
+    }
     encode_array_len(&mut out, ranked.len() as i64);
     for (g, st) in &ranked {
         encode_array_len(&mut out, 5);
