@@ -31,6 +31,22 @@ train, versions bump at ship time.
 - Batch-gated 200µs nap retained as the second ladder rung for the
   no-inflight idle shape (`NAP_BATCH_MIN` 4).
 
+### v2.11 — validation arc (P5, serving-scale evidence)
+
+- **servinggate**: one server carrying the full serving stack (1M
+  rows + 2 indexes + 1 materialized view) measured on the arc's
+  headline lines — hydrated row-list page p99 0.24ms (< 1ms line),
+  view page 0.15ms, write fan-out through 3 hooks 64µs (< 200µs).
+- **chaosfsck**: kill -9 mid-write under AOF → replay + backfill →
+  index/view answers identical to a fresh drop+recreate rebuild.
+- **scalesoak**: 30M strings + 1M indexed rows + 1M vectors (128d
+  ANN) + a materialized view on ONE server — mixed p99 rowlist
+  0.45ms / view 0.31ms / knn 7.5ms / get 0.083ms; worst PING stall
+  through BGREWRITEAOF at 32M keys: 13ms (vs the 2s envelope).
+- **bench/VALIDATION-LEDGER.md**: cross-train reconciliation — every
+  declared perf line, memory formula, durability contract and
+  documented approximation vs its measured value.
+
 ### v2.10 — RDS on-ramp (migration toolchain)
 
 - **kevy-cli grows the migration set**: `export` (RESP command stream
