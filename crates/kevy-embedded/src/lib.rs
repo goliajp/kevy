@@ -70,6 +70,8 @@ mod ops_blocking;
 mod ops_hash_ttl;
 mod ops_index;
 mod ops_view;
+#[cfg(not(target_arch = "wasm32"))]
+mod listener;
 mod ops_snapshot_view;
 mod ops_zset_algebra;
 mod ops_zset_flags;

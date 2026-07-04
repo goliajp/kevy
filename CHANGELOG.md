@@ -31,6 +31,21 @@ train, versions bump at ship time.
 - Batch-gated 200µs nap retained as the second ladder rung for the
   no-inflight idle shape (`NAP_BATCH_MIN` 4).
 
+### v2.9 — topology (P4, embedded RESP listener)
+
+- **`Config::with_resp_listener(addr)`**: an embedded store exposes
+  itself read-only to external RESP clients (redis-cli, ops tooling)
+  — 26-verb whitelist straight onto the Store API, everything else
+  `-ERR READONLY`. Zero tax off (no thread, no socket; gated), weak
+  handle (never keeps the store alive), one thread per connection.
+  FEED.READ/TAIL/SHARDS ride the listener — the transport groundwork
+  for embedded-as-primary replication (deferred by RFC fork
+  decision). Cross-process read-your-writes = feed cursor pattern
+  (documented, no blocking primitive).
+- bench/topogate.sh: true two-process gate — writer binary under
+  load, reader asserts live data + GET p99 < 1ms + READONLY + the
+  idle-listener zero-tax clamp. docs/embedded-listener.md.
+
 ### v2.8 — vector search (P2, ann kind)
 
 - **New stone crate `kevy-vector`**: HNSW with deterministic level
