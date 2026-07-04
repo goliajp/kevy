@@ -58,6 +58,9 @@ pub enum IndexKind {
     /// v2.8 ANN: the field holds an f32 LE vector indexed in an HNSW
     /// graph (kevy-vector); queried with `KNN`, distance-ranked.
     Ann,
+    /// v3.1 aggregate: per-group count/sum/min/max of the field,
+    /// grouped by `IndexSpec::group_by`; queried with `GROUP`/`GROUPS`.
+    Agg,
 }
 
 impl IndexKind {
@@ -68,6 +71,7 @@ impl IndexKind {
             IndexKind::Unique => "unique",
             IndexKind::Text => "text",
             IndexKind::Ann => "ann",
+            IndexKind::Agg => "agg",
         }
     }
 
@@ -81,6 +85,8 @@ impl IndexKind {
             Some(IndexKind::Text)
         } else if raw.eq_ignore_ascii_case(b"ann") {
             Some(IndexKind::Ann)
+        } else if raw.eq_ignore_ascii_case(b"agg") {
+            Some(IndexKind::Agg)
         } else {
             None
         }
@@ -115,6 +121,8 @@ pub struct IndexSpec {
     pub max_bytes: u64,
     /// v2.8: ANN parameters (`Some` iff kind == Ann).
     pub ann: Option<AnnSpec>,
+    /// v3.1: grouping field (`Some` iff kind == Agg).
+    pub group_by: Option<Vec<u8>>,
 }
 
 /// v2.8 — HNSW declaration (immutable once created; RFC D2).
@@ -228,8 +236,12 @@ impl Catalog {
                 s.kind.tag(),
                 s.max_bytes
             ));
+            // 7th column is kind-interpreted: ann params for Ann,
+            // escaped group field for Agg.
             if let Some(a) = &s.ann {
                 out.push_str(&format!("\t{},{},{},{}", a.dim, a.distance, a.m, a.ef));
+            } else if let Some(g) = &s.group_by {
+                out.push_str(&format!("\t{}", esc(g)));
             }
             out.push('\n');
         }
@@ -252,28 +264,39 @@ impl Catalog {
             if !(parts.len() == 6 || parts.len() == 7) {
                 return None;
             }
-            let ann = if parts.len() == 7 {
-                let nums: Vec<&str> = parts[6].split(',').collect();
-                if nums.len() != 4 {
-                    return None;
+            let kind = IndexKind::parse(parts[4].as_bytes())?;
+            let (ann, group_by) = if parts.len() == 7 {
+                match kind {
+                    IndexKind::Ann => {
+                        let nums: Vec<&str> = parts[6].split(',').collect();
+                        if nums.len() != 4 {
+                            return None;
+                        }
+                        (
+                            Some(AnnSpec {
+                                dim: nums[0].parse().ok()?,
+                                distance: nums[1].parse().ok()?,
+                                m: nums[2].parse().ok()?,
+                                ef: nums[3].parse().ok()?,
+                            }),
+                            None,
+                        )
+                    }
+                    IndexKind::Agg => (None, Some(unesc(parts[6])?)),
+                    _ => return None,
                 }
-                Some(AnnSpec {
-                    dim: nums[0].parse().ok()?,
-                    distance: nums[1].parse().ok()?,
-                    m: nums[2].parse().ok()?,
-                    ef: nums[3].parse().ok()?,
-                })
             } else {
-                None
+                (None, None)
             };
             let spec = IndexSpec {
                 name: unesc(parts[0])?,
                 prefix: unesc(parts[1])?,
                 field: unesc(parts[2])?,
                 ty: ValType::parse(parts[3].as_bytes())?,
-                kind: IndexKind::parse(parts[4].as_bytes())?,
-            max_bytes: parts[5].parse().ok()?,
+                kind,
+                max_bytes: parts[5].parse().ok()?,
                 ann,
+                group_by,
             };
             c.create(spec).ok()?;
         }
@@ -323,6 +346,7 @@ mod tests {
             kind: IndexKind::Range,
             ann: None,
             max_bytes: 0,
+            group_by: None,
         }
     }
 

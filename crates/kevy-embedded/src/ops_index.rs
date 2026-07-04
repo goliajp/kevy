@@ -85,6 +85,7 @@ impl Store {
             kind,
             max_bytes: 0,
             ann: None,
+            group_by: None,
         };
         self.register_spec(spec)
     }
@@ -136,6 +137,7 @@ impl Store {
                 ef: if params.ef == 0 { 200 } else { params.ef },
                 ..params
             }),
+            group_by: None,
         };
         self.register_spec(spec)
     }

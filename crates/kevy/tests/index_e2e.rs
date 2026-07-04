@@ -417,3 +417,60 @@ fn prefix_digest_server_matches_embedded() {
     assert_eq!(n, 5);
     assert!(s.contains(&format!("{d:016x}")), "server {s} vs embedded {d:016x}");
 }
+
+#[test]
+fn agg_kind_group_by_e2e() {
+    let srv = Server::start();
+    let mut c = srv.connect();
+    // orders: status group, amount value
+    for (i, (st, amt)) in [("paid", 100), ("paid", 250), ("open", 40), ("paid", 100),
+                            ("open", 999), ("void", 7)].iter().enumerate() {
+        cmd(&mut c, &[b"HSET", format!("ord:{i}").as_bytes(), b"status", st.as_bytes(),
+                       b"amount", amt.to_string().as_bytes()]);
+    }
+    let r = cmd(
+        &mut c,
+        &[b"IDX.CREATE", b"ord_amt", b"ON", b"PREFIX", b"ord:", b"FIELD", b"amount",
+          b"TYPE", b"i64", b"KIND", b"agg", b"GROUPBY", b"status"],
+    );
+    assert_eq!(r, b"+OK\r\n", "{:?}", String::from_utf8_lossy(&r));
+    // single group stats
+    let r = query_ready(&mut c, &[b"IDX.QUERY", b"ord_amt", b"GROUP", b"paid"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.starts_with("*5\r\n$1\r\n3\r\n$3\r\n450\r\n"), "count 3 sum 450: {s}");
+    assert!(s.contains("100") && s.contains("250") && s.contains("150"), "min/max/avg: {s}");
+    // unknown group = count 0, nils
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"ord_amt", b"GROUP", b"nope"]);
+    assert!(String::from_utf8_lossy(&r).starts_with("*5\r\n$1\r\n0\r\n"), "{:?}", String::from_utf8_lossy(&r));
+    // GROUPS ranked by sum: open (1039) > paid (450) > void (7)
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"ord_amt", b"GROUPS", b"BY", b"sum", b"LIMIT", b"10"]);
+    let s = String::from_utf8_lossy(&r);
+    let (po, pp, pv) = (s.find("open").unwrap(), s.find("paid").unwrap(), s.find("void").unwrap());
+    assert!(po < pp && pp < pv, "sum ranking: {s}");
+    // live maintenance: pay the open orders → open group drains
+    cmd(&mut c, &[b"HSET", b"ord:2", b"status", b"paid"]);
+    cmd(&mut c, &[b"HSET", b"ord:4", b"status", b"paid"]);
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"ord_amt", b"GROUP", b"open"]);
+    assert!(String::from_utf8_lossy(&r).starts_with("*5\r\n$1\r\n0\r\n"));
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"ord_amt", b"GROUP", b"paid"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.starts_with("*5\r\n$1\r\n5\r\n"), "5 paid rows now: {s}");
+    assert!(s.contains("999"), "new max from regrouped row: {s}");
+    // delete removes from its group; min recomputes exactly
+    cmd(&mut c, &[b"DEL", b"ord:2"]);
+    let r = cmd(&mut c, &[b"IDX.QUERY", b"ord_amt", b"GROUP", b"paid"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.starts_with("*5\r\n$1\r\n4\r\n"), "{s}");
+    // exclusion counted: a row missing the amount field
+    cmd(&mut c, &[b"HSET", b"ord:9", b"status", b"paid"]);
+    let r = cmd(&mut c, &[b"IDX.VERIFY", b"ord_amt"]);
+    let s = String::from_utf8_lossy(&r);
+    assert!(s.contains("coerce_failures\r\n$1\r\n1") || s.contains("$1\r\n1"), "excluded visible: {s}");
+    // bad CREATEs rejected
+    let r = cmd(&mut c, &[b"IDX.CREATE", b"bad1", b"ON", b"PREFIX", b"x:", b"FIELD", b"f",
+                           b"TYPE", b"i64", b"KIND", b"agg"]);
+    assert!(String::from_utf8_lossy(&r).contains("GROUPBY"), "{:?}", String::from_utf8_lossy(&r));
+    let r = cmd(&mut c, &[b"IDX.CREATE", b"bad2", b"ON", b"PREFIX", b"x:", b"FIELD", b"f",
+                           b"TYPE", b"str", b"KIND", b"agg", b"GROUPBY", b"g"]);
+    assert!(String::from_utf8_lossy(&r).contains("i64|f64"), "{:?}", String::from_utf8_lossy(&r));
+}
