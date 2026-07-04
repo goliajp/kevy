@@ -306,7 +306,11 @@ impl Hnsw {
                 cur = next;
             }
         }
-        let ef = k.max(64);
+        // Query beam: recall on dense/near-duplicate regions needs a
+        // beam well above k (measured: ef=64 gave 0.67 recall@10 on a
+        // tight 20k cluster; 4k/100 floor restores ≥0.9 with p95 still
+        // far under the gate line).
+        let ef = (k * 4).max(100);
         let found = self.search_layer_vec(cur, &q, 0, ef);
         found
             .into_iter()
