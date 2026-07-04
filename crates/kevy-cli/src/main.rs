@@ -54,6 +54,10 @@ fn main() -> ExitCode {
     if !args.is_empty() && args[0] == "restore" {
         return run_restore_cli(&args[1..]);
     }
+    // v2.10 — migration subcommands (TCP, host/port flags inline).
+    if !args.is_empty() && (args[0] == "export" || args[0] == "import") {
+        return run_migrate_cli(&args);
+    }
     // Strip subcommand arg if it was something other than a flag we
     // already handled, to preserve the existing redis-cli arg shape.
     let _ = &mut args;
@@ -298,3 +302,73 @@ fn parse_restore_args(args: &[String]) -> Result<(std::path::PathBuf, std::path:
         target_dir.ok_or_else(|| "--to missing".to_string())?,
     ))
 }
+
+/// `export [-h host] [-p port] [--prefix p] <out-file>` /
+/// `import [-h host] [-p port] [--resume] [--strict] <file>`.
+fn run_migrate_cli(args: &[String]) -> ExitCode {
+    let verb = args[0].as_str();
+    let (mut host, mut port) = (DEFAULT_HOST.to_string(), DEFAULT_PORT);
+    let mut prefix: Option<Vec<u8>> = None;
+    let (mut resume, mut strict) = (false, false);
+    let mut file: Option<String> = None;
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-h" if i + 1 < args.len() => {
+                host = args[i + 1].clone();
+                i += 2;
+            }
+            "-p" if i + 1 < args.len() => {
+                port = args[i + 1].parse().unwrap_or(DEFAULT_PORT);
+                i += 2;
+            }
+            "--prefix" if i + 1 < args.len() => {
+                prefix = Some(args[i + 1].clone().into_bytes());
+                i += 2;
+            }
+            "--resume" => {
+                resume = true;
+                i += 1;
+            }
+            "--strict" => {
+                strict = true;
+                i += 1;
+            }
+            other => {
+                file = Some(other.to_string());
+                i += 1;
+            }
+        }
+    }
+    let Some(file) = file else {
+        eprintln!("usage: kevy-cli {verb} [-h host] [-p port] [--prefix p | --resume --strict] <file>");
+        return ExitCode::FAILURE;
+    };
+    let mut client = match kevy_resp_client::RespClient::connect(&host, port) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("kevy-cli: connect {host}:{port}: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let res = if verb == "export" {
+        kevy_cli::migrate::run_export(&mut client, prefix.as_deref(), std::path::Path::new(&file))
+            .map(|n| println!("exported {n} keys -> {file}"))
+    } else {
+        kevy_cli::migrate::run_import(&mut client, std::path::Path::new(&file), resume, strict)
+            .map(|r| {
+                println!(
+                    "imported: {} ok, {} errors, offset {}",
+                    r.sent, r.errors, r.offset
+                )
+            })
+    };
+    match res {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("kevy-cli {verb}: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+

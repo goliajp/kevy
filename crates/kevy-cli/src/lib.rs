@@ -15,6 +15,10 @@ pub use kevy_resp::Reply;
 /// [`backup::pack`] and [`backup::unpack`].
 pub mod backup;
 
+/// **v2.10** — migration toolchain (`export` / `import`). See
+/// [`migrate::run_export`] and [`migrate::run_import`].
+pub mod migrate;
+
 /// Pretty-print a reply roughly the way `redis-cli` does. Arrays are
 /// numbered + indented; bulk strings are quoted; nil shows as `(nil)`.
 pub fn format_reply(reply: &Reply, indent: usize) -> String {
