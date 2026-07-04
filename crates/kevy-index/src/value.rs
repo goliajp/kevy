@@ -75,6 +75,16 @@ impl IndexValue {
         Self::coerce(ty, raw)
     }
 
+    /// Numeric view for aggregation (Str = 0.0; agg kinds only admit
+    /// numeric types at CREATE, so this arm is unreachable there).
+    pub fn as_f64(&self) -> f64 {
+        match self {
+            IndexValue::I64(v) => *v as f64,
+            IndexValue::F64(v) => *v,
+            IndexValue::Str(_) => 0.0,
+        }
+    }
+
     /// Approximate heap bytes (for the memory formula / IDX.LIST).
     pub fn approx_bytes(&self) -> usize {
         match self {
