@@ -1,5 +1,32 @@
 # Changelog
 
+### v3.5 — FTS consolidation (impact-ordered postings, both ways)
+
+- kevy-text postings are now dl-grouped inside each tf bucket
+  (BTreeMap<dl, HashMap<key>>): single-term queries — the MaxScore
+  worst case with no second list to prune against — stop exactly at
+  the first dl group that can't reach the kth floor. Measured 64×
+  on the most common term at 200k Zipf docs (6.3ms → 0.098ms);
+  two-term queries slightly ahead (probes stay zero-alloc hash
+  lookups). Exactness preserved (equivalence suite green).
+
+### v3.4 — perf tails closure
+
+- Ledger v1.1: bare-face truth vs valkey 9.1 corrected to 1.6-3.3×
+  (8M-request cells; the 2M cells quantized low).
+- epoll reactor gains the stay-hot-while-inflight clause (uring had
+  it since v2.2) — no park+wake per cross-shard reply batch.
+- 286c4a2 "-4%" closed extinct (A/B: accounting instructions cost
+  <0.1% today); IDX.QUERY conn-tail closed (accept placement;
+  --accept-shards cures it totally).
+
+### v3.3 — baseline arena (the real gap table)
+
+- bench/PERF-LEDGER.md: kevy vs valkey 9.1 and vs redis-stack 7.4.7
+  (RediSearch) under a fair-fight protocol. Bare face: kevy sweeps
+  1.6-3.3×. Serving face: FTS tie+21% qps, AGG 110×, NUMERIC 2.3×,
+  ANN behind 3.8× — the v3.6 campaign target.
+
 ### v3.2 — embedded-as-primary replication
 
 - An embedded application can now be the PRIMARY with a kevy server
