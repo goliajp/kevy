@@ -468,7 +468,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-client"
-version = "1.12.20"
+version = "1.13.0"
 dependencies = [
  "kevy-embedded",
  "kevy-hash",
@@ -478,7 +478,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-client-async"
-version = "1.0.21"
+version = "1.1.0"
 dependencies = [
  "async-std",
  "kevy-client",
