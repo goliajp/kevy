@@ -183,7 +183,9 @@ def declare_stack(sock, buf):
     while True:
         info = cmd(sock, buf, "FT.INFO", "ax")
         d = {info[i]: info[i + 1] for i in range(0, len(info) - 1, 2) if isinstance(info[i], bytes)}
-        if d.get(b"indexing", b"1") in (b"0", 0):
+        # ints come back as b":0" through this thin reader
+        v = d.get(b"indexing", b":1")
+        if isinstance(v, bytes) and v.lstrip(b":") == b"0":
             break
         if time.time() - t0 > 900:
             raise SystemExit("stack index build timeout")
