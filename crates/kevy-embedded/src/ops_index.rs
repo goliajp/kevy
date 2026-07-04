@@ -249,11 +249,13 @@ impl Store {
     }
 
     /// v2.8 `KNN` — nearest neighbors merged ascending across shards.
+    /// `ef` = query beam width (0 = engine default; recall knob).
     pub fn idx_knn(
         &self,
         name: &[u8],
         query: &[f32],
         k: usize,
+        ef: usize,
     ) -> io::Result<Vec<(Vec<u8>, f32)>> {
         let k = k.clamp(1, 1000);
         let mut all: Vec<(Vec<u8>, f32)> = Vec::new();
@@ -264,7 +266,7 @@ impl Store {
             sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
             if let Some((_, graph)) = inner.idx_segs.ann.iter().find(|(s, _)| s.name == name) {
                 found = true;
-                all.extend(graph.knn(query, k));
+                all.extend(graph.knn(query, k, ef));
             }
         }
         if !found {

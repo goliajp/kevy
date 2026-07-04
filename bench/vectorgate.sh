@@ -3,6 +3,8 @@
 #
 #   1. KNN LIMIT 10 p95 < 30ms @ 1M × 128d uniform random vectors
 #      (median-connection protocol).
+#      Queries run at EF 400 — the recall/latency pareto point the
+#      gate certifies (both clamps must hold simultaneously).
 #   2. RECALL ≥ 0.90: 100 queries vs brute-force ground truth (top-10,
 #      computed client-side over a 20k-vector witness subset that the
 #      queries are drawn near — full-corpus brute force at 1M×128d is
@@ -138,7 +140,7 @@ for _ in range(6):
     for i in range(100):
         q = rand_vec() if i % 2 else [x + random.uniform(-0.5, 0.5) for x in CENTER]
         t = time.time()
-        r = cmd(c, cb, "IDX.QUERY", "x_v", "KNN", blob(q), "LIMIT", "10")
+        r = cmd(c, cb, "IDX.QUERY", "x_v", "KNN", blob(q), "LIMIT", "10", "EF", "400")
         lat.append(time.time() - t)
         assert isinstance(r, list) and len(r) > 0, r
     lat.sort()
@@ -157,7 +159,7 @@ for _ in range(100):
     q = [c0 + random.uniform(-0.5, 0.5) for c0 in CENTER]
     truth = sorted(range(WITNESS), key=lambda i: l2(witness[i], q))[:10]
     want = {f"x:{i}".encode() for i in truth}
-    r = cmd(s, buf, "IDX.QUERY", "x_v", "KNN", blob(q), "LIMIT", "10")
+    r = cmd(s, buf, "IDX.QUERY", "x_v", "KNN", blob(q), "LIMIT", "10", "EF", "400")
     got = {row[0] for row in r}
     hit += len(want & got)
     total += 10
