@@ -182,10 +182,15 @@ def declare_stack(sock, buf):
     )
     while True:
         info = cmd(sock, buf, "FT.INFO", "ax")
-        d = {info[i]: info[i + 1] for i in range(0, len(info) - 1, 2) if isinstance(info[i], bytes)}
-        # ints come back as b":0" through this thin reader
+        # the thin reader keeps type bytes: keys are b"+indexing",
+        # ints are b":0" — normalize both
+        d = {
+            info[i].lstrip(b"+"): info[i + 1]
+            for i in range(0, len(info) - 1, 2)
+            if isinstance(info[i], bytes)
+        }
         v = d.get(b"indexing", b":1")
-        if isinstance(v, bytes) and v.lstrip(b":") == b"0":
+        if isinstance(v, bytes) and v.lstrip(b":+") == b"0":
             break
         if time.time() - t0 > 900:
             raise SystemExit("stack index build timeout")
