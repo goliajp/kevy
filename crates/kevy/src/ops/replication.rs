@@ -268,7 +268,7 @@ mod tests {
         // started a runner.
         crate::replica_state::stop_runners();
         let replicas: Vec<_> = (0..replica_count)
-            .map(|i| (Ipv4Addr::new(10, 0, 0, (i + 1) as u8), 6004, offset))
+            .map(|i| (Ipv4Addr::new(10, 0, 0, (i + 1) as u8), 6004, offset, Some(offset)))
             .collect();
         set_replication_view(offset, replicas);
         let mut a = Argv::default();

@@ -57,7 +57,6 @@ impl<C: Commands> Shard<C> {
                 ReplicaState::Streaming { .. } => {
                     self.fill_streaming_output(idx, next);
                     self.maybe_append_heartbeat(idx, next);
-                    self.drain_replica_acks(idx);
                 }
                 ReplicaState::SnapshotShipping { .. } => self.pump_snapshot_chunks(idx),
                 _ => {}
@@ -83,32 +82,13 @@ impl<C: Commands> Shard<C> {
         conn.last_ping = Some(std::time::Instant::now());
     }
 
-    /// v3.14 D2 — drain any `REPLCONF ACK <offset>` lines the replica
-    /// wrote back on this (non-blocking) connection and advance its
-    /// slot. The socket is already non-blocking; a clean WouldBlock
-    /// ends the drain. Read errors are left for the writer path to
-    /// surface (single close-decision point).
-    fn drain_replica_acks(&mut self, idx: usize) {
-        let mut chunk = [0u8; 512];
-        loop {
-            let n = match self.replicas[idx].sock.read(&mut chunk) {
-                Ok(0) => break, // peer half-closed; writer path will notice
-                Ok(n) => n,
-                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
-            };
-            self.replicas[idx].input.extend_from_slice(&chunk[..n]);
-            if n < chunk.len() {
-                break;
-            }
-        }
-        // Parse complete ACK lines off the input buffer. Tolerant
-        // reader: this direction should only ever carry ACK lines,
-        // but a stray line (handshake residue, future extensions)
-        // must not wedge the parse forever — skip to the next CRLF
-        // and keep going. Only a TRUNCATED tail stops the loop (wait
-        // for more bytes).
+    /// v3.14 D2 — parse complete `REPLCONF ACK <offset>` lines off a
+    /// streaming replica's input buffer and advance its slot. Called
+    /// from the readable-event handler (the connection's single
+    /// reader). Tolerant: an unknown line skips to the next CRLF so
+    /// residue can never wedge the channel; only a truncated tail
+    /// waits for more bytes.
+    pub(crate) fn parse_replica_acks(&mut self, idx: usize) {
         let mut consumed = 0usize;
         let mut latest: Option<u64> = None;
         loop {
@@ -122,10 +102,9 @@ impl<C: Commands> Shard<C> {
                     latest = Some(offset);
                 }
                 Ok(None) | Err(kevy_replicate::wire::WireError::BadEnvelope) => {
-                    // Not an ACK line — drop through the next CRLF.
                     match rest.windows(2).position(|w| w == b"\r\n") {
                         Some(p) => consumed += p + 2,
-                        None => break, // incomplete garbage; wait
+                        None => break,
                     }
                 }
                 Err(_) => break, // truncated — more bytes needed

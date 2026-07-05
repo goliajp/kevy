@@ -293,10 +293,15 @@ impl ReplicaClient {
     /// surface (T1.22) must use [`Self::next_event`] instead.
     /// Returns `None` on clean peer EOF (no buffered bytes left).
     pub fn next_frame(&mut self) -> Option<Result<DecodedFrame, ReplicaError>> {
-        match self.next_event()? {
-            Ok(ReplicaEvent::Frame(f)) => Some(Ok(f)),
-            Ok(_) => Some(Err(ReplicaError::SnapshotInProgress)),
-            Err(e) => Some(Err(e)),
+        loop {
+            match self.next_event()? {
+                Ok(ReplicaEvent::Frame(f)) => return Some(Ok(f)),
+                // v3.14 heartbeats are out-of-band — invisible to a
+                // frame-only consumer.
+                Ok(ReplicaEvent::Ping { .. }) => continue,
+                Ok(_) => return Some(Err(ReplicaError::SnapshotInProgress)),
+                Err(e) => return Some(Err(e)),
+            }
         }
     }
 
