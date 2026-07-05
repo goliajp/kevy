@@ -1,5 +1,23 @@
 # Changelog
 
+### v3.6 — ANN campaign (recall-aligned; 3 profile-driven attacks)
+
+- Phase A0 pareto alignment (FLAT-oracle ground truth) exposed the
+  v3.3 "3.8× behind" as mostly an EF-semantics artifact: kevy's EF
+  applies per shard (8× effective beam work at the same nominal
+  knob). At equal recall the true gap was 1.9× mid-band / parity at
+  recall 1.0.
+- Three attacks, each profile-verified first (§9 gate refuted the
+  fan-out-pipeline hypothesis — 63% was the beam kernel): an
+  epoch-stamped visited pool (SipHash gone), 8-lane distance kernels
+  (the scalar reduction chain now auto-vectorizes), and runtime
+  AVX2+FMA dispatch. Cumulative −40-43% across the EF sweep.
+- Final account vs RediSearch HNSW at 100k×128d: recall 1.000 —
+  kevy 0.481ms vs 0.791ms (**kevy 1.64× ahead**); recall 0.99 —
+  statistical tie; the sub-0.98-recall ultra-low-latency band stays
+  with the single-graph design (kevy's 8-shard fan-out floor,
+  documented as architectural).
+
 ### v3.5 — FTS consolidation (doc-id inverted lists, impact-ordered both ways)
 
 - kevy-text postings rebuilt in the classic inverted shape: u32 doc
