@@ -1,0 +1,25 @@
+[package]
+name = "kevy-mcp"
+description = "kevy official MCP server: stdio JSON-RPC bridge exposing kevy verbs as agent tools. Pure Rust."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["redis", "mcp", "agent", "kevy", "valkey"]
+categories = ["command-line-utilities", "database"]
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "kevy-mcp"
+path = "src/main.rs"
+
+[dependencies]
+kevy-resp-client = { path = "../kevy-resp-client", version = "3.8.0" }
+
+[dev-dependencies]
+kevy-resp = { path = "../kevy-resp", version = "3.8.0" }

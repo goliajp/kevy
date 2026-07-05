@@ -19,7 +19,7 @@ is GENERATED from the server's verb metadata table — do not edit by hand.
 - [Migration](docs/migration.md) · [Upgrading 2.x to 3.x](docs/UPGRADING.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (185 total)
+## Verbs (186 total)
 
 ### connection
 
@@ -236,6 +236,7 @@ is GENERATED from the server's verb metadata table — do not edit by hand.
 - `IDX.CREATE name ON PREFIX prefix FIELD field TYPE i64|f64|str|vector KIND range|unique|text|ann|agg [MAXMEM bytes] [DIM dim] [DISTANCE cosine|l2|ip] [M m] [EF ef] [GROUPBY field]` [write,extension] — Declare a secondary index over a key prefix (catalog mutation, sidecar-persisted).
 - `IDX.DROP name` [write,extension] — Drop a declared index (catalog mutation, sidecar-persisted).
 - `IDX.LIST` [readonly,extension] — List declared indexes with per-index build state and stats.
+- `IDX.EXPLAIN name RANGE min max|EQ value|MATCH text|KNN vector|GROUPS [args ...]` [readonly,extension] — The IDX.QUERY parse without the execution: kind, state, est_rows, and the plan line.
 - `IDX.QUERY name RANGE min max [LIMIT n] [CURSOR c] [FIELDS field ...] | name EQ value [LIMIT n] [CURSOR c] [FIELDS field ...] | name MATCH text [LIMIT n] [FIELDS field ...] | name KNN vector [LIMIT k] [EF ef] [FIELDS field ...] | name GROUP group | name GROUPS [BY count|sum|min|max] [LIMIT n] | COMPOSE AND|OR nameA RANGE min max|EQ value nameB RANGE min max|EQ value [LIMIT n] [CURSOR c] [FIELDS field ...]` [readonly,extension] — Query an index: range/equality, text MATCH, vector KNN, aggregation groups, or a two-index COMPOSE.
 - `IDX.REBUILD name` [write,extension] — Rebuild an ANN index (tombstone compaction).
 - `IDX.VERIFY name` [readonly,extension] — Verify an index and report entry/byte/drift statistics.
