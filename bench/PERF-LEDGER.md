@@ -53,9 +53,20 @@ kevy 的 EF 逐 shard 生效(cmd_index_query.rs:315,8 shard = 8×
 | ~0.99 | EF20 @ 0.491ms | EF100 @ 0.263ms | 1.87× |
 | 底档 | EF16 @ 0.445ms | EF20 @ 0.113ms | ~4× 地板 |
 
-剩余真 gap = **低延迟档 ~0.4ms 固定地板**(8-shard fan-out 分发/
-归并管线;EF16 纯图工作估 ~60µs)。v3.6 Phase A = perf-record
-验证 fan-out 管线占比(§9 gate)后再攻。
+**v3.6 campaign 终账(3 攻 3 中,profile 驱动,累计 -40~-43%)**:
+attack1 epoch 戳记访问池(SipHash 出局,-9~-17%)→ attack2 8 通道
+距离核(标量归约链→自动向量化,-26~-29%)→ attack3 AVX2+FMA
+运行时分发(-7~-11%)。§9 gate 立功:fan-out 管线假说被 profile
+翻盘(63% 在 beam search 内核,不在管线)。
+
+| recall | kevy(3 攻后) | stack | 判决 |
+|---|---|---|---|
+| 1.000 | EF50 @ **0.481ms** | EF400 @ 0.791ms | **kevy WIN 1.64×** |
+| 0.99 | EF20 @ 0.288ms | EF100 @ 0.263ms | 1.10× ≈ 平 |
+| <0.98 超低延迟带 | 不可达(EF≥16 × 8-shard 最小功)| 0.113ms | fan-out 架构地板(stateless-shard 不破,REFUSED) |
+
+kevy 可达的每个 recall 档均已 WIN 或平;唯一让出的是
+sub-0.98-recall 超低延迟带(应用侧极少:那档 recall 不足以 serving)。
 
 ## Gap 表 → train 修订(2026-07-05 评审,写回 ROADMAP)
 
