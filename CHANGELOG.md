@@ -1,5 +1,19 @@
 # Changelog
 
+### v3.13 — hybrid retrieval + the agent-memory cookbook
+
+- `IDX.QUERY HYBRID <text_idx> MATCH <q> <ann_idx> KNN <vec>` —
+  server-side reciprocal-rank fusion of BM25 and KNN (k=60 default,
+  RRFK knob; rank-only fusion needs no cross-metric normalization —
+  weighted-sum fusion REFUSED). Both legs run per shard at 4× depth;
+  hydration rides through; EXPLAIN and the generated docs know the
+  new shape.
+- Cookbook recipes 16-18: session context with TTL + feed audit,
+  episodic memory (time × semantic dual index), RAG chunks with
+  hybrid retrieval — all executable (smoke now covers 80 commands).
+- aigate phase 4 clamps the provable RRF property (double-hit keys
+  always make the fused top) plus the parameter matrix.
+
 ### v3.12 — kevy-mcp, the official MCP server
 
 - New crate `kevy-mcp` (pure std + kevy-resp-client): an MCP stdio
