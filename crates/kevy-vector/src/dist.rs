@@ -42,7 +42,7 @@ impl Distance {
         match self {
             // prepared cosine vectors are unit length → 1 - dot
             Distance::Cosine => 1.0 - dot(a, b),
-            Distance::L2 => a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum(),
+            Distance::L2 => l2(a, b),
             Distance::Ip => -dot(a, b),
         }
     }
@@ -60,9 +60,45 @@ impl Distance {
     }
 }
 
+// A single-accumulator float reduction is a loop-carried dependency
+// the compiler may NOT reassociate — it compiles to a SCALAR add
+// chain. Eight independent lanes let it auto-vectorize at whatever
+// SIMD width the target enables (perf-record put the distance kernel
+// inside the 65% beam-search dominator on the KNN shape).
 #[inline]
 fn dot(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
+    let mut acc = [0.0f32; 8];
+    let (ac, ar) = a.split_at(a.len() - a.len() % 8);
+    let (bc, br) = b.split_at(ac.len().min(b.len()));
+    for (ca, cb) in ac.chunks_exact(8).zip(bc.chunks_exact(8)) {
+        for i in 0..8 {
+            acc[i] += ca[i] * cb[i];
+        }
+    }
+    let mut s: f32 = acc.iter().sum();
+    for (x, y) in ar.iter().zip(br) {
+        s += x * y;
+    }
+    s
+}
+
+#[inline]
+fn l2(a: &[f32], b: &[f32]) -> f32 {
+    let mut acc = [0.0f32; 8];
+    let (ac, ar) = a.split_at(a.len() - a.len() % 8);
+    let (bc, br) = b.split_at(ac.len().min(b.len()));
+    for (ca, cb) in ac.chunks_exact(8).zip(bc.chunks_exact(8)) {
+        for i in 0..8 {
+            let d = ca[i] - cb[i];
+            acc[i] += d * d;
+        }
+    }
+    let mut s: f32 = acc.iter().sum();
+    for (x, y) in ar.iter().zip(br) {
+        let d = x - y;
+        s += d * d;
+    }
+    s
 }
 
 /// Decode a wire vector: raw f32 LE bytes (`len == dim*4`), or the
