@@ -265,7 +265,11 @@ fn info_replication(b: &mut String) {
             b.push_str(&format!("master_port:{port}\r\n"));
             b.push_str("master_link_status:up\r\n");
             b.push_str("master_sync_in_progress:0\r\n");
-            b.push_str("slave_read_only:0\r\n");
+            b.push_str(if crate::replica_state::read_only() {
+                "slave_read_only:1\r\n"
+            } else {
+                "slave_read_only:0\r\n"
+            });
             b.push_str("slave_repl_offset:0\r\n");
         }
         None => {

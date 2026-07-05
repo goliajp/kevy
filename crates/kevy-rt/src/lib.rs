@@ -267,6 +267,16 @@ pub trait Commands: Clone + Send + 'static {
 
     /// v2.5: origin-side reduce of an extension fan-out — merge every
     /// shard's chunk into the final RESP reply bytes.
+    /// v3.14 A0 — pre-dispatch write gate. `Some(err_bytes)` rejects
+    /// every data-write client command with that RESP error before any
+    /// routing (replication apply does NOT pass through here, so a
+    /// read-only replica keeps applying its feed). Admin verbs
+    /// (REPLICAOF / CONFIG) are not classified as writes and stay
+    /// available as the operator escape hatch.
+    fn write_denied(&self) -> Option<Vec<u8>> {
+        None
+    }
+
     fn extension_reduce_v3(
         &self,
         argv: &[Vec<u8>],
