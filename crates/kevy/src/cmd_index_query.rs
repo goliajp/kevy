@@ -25,6 +25,9 @@ pub(crate) fn extension_op(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     if verb.eq_ignore_ascii_case(b"IDX.LIST") {
         return op_list(store);
     }
+    if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"HYBRID")) {
+        return op_hybrid(store, argv);
+    }
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"COMPOSE")) {
         return op_compose(store, argv);
     }
@@ -389,6 +392,117 @@ impl KnnArgs {
 
 /// `IDX.QUERY name MATCH text [LIMIT n] [FIELDS f…]` (no cursor —
 /// BM25 deep pagination is an anti-pattern; LIMIT caps at 1000).
+/// `IDX.QUERY HYBRID <text_idx> MATCH <q> <ann_idx> KNN <vec>
+/// [LIMIT n] [RRFK k] [EF ef] [FIELDS f…]` — reciprocal-rank fusion
+/// of a BM25 list and a KNN list over the same prefix (v3.13).
+pub(crate) struct HybridArgs {
+    pub(crate) text_idx: Vec<u8>,
+    pub(crate) text: Vec<u8>,
+    pub(crate) ann_idx: Vec<u8>,
+    pub(crate) vec: Vec<u8>,
+    pub(crate) limit: usize,
+    pub(crate) rrf_k: f64,
+    pub(crate) ef: usize,
+    pub(crate) fields: Vec<Vec<u8>>,
+}
+
+impl HybridArgs {
+    pub(crate) fn parse(argv: &[Vec<u8>]) -> Option<HybridArgs> {
+        if !argv.get(1)?.eq_ignore_ascii_case(b"HYBRID")
+            || !argv.get(3)?.eq_ignore_ascii_case(b"MATCH")
+            || !argv.get(6)?.eq_ignore_ascii_case(b"KNN")
+        {
+            return None;
+        }
+        let mut a = HybridArgs {
+            text_idx: argv.get(2)?.clone(),
+            text: argv.get(4)?.clone(),
+            ann_idx: argv.get(5)?.clone(),
+            vec: argv.get(7)?.clone(),
+            limit: 10,
+            rrf_k: 60.0,
+            ef: 0,
+            fields: Vec::new(),
+        };
+        let mut i = 8;
+        while i < argv.len() {
+            let t = &argv[i];
+            if t.eq_ignore_ascii_case(b"LIMIT") {
+                a.limit = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
+                if !(1..=1000).contains(&a.limit) {
+                    return None;
+                }
+                i += 2;
+            } else if t.eq_ignore_ascii_case(b"RRFK") {
+                a.rrf_k = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
+                if !a.rrf_k.is_finite() || a.rrf_k <= 0.0 {
+                    return None;
+                }
+                i += 2;
+            } else if t.eq_ignore_ascii_case(b"EF") {
+                a.ef = std::str::from_utf8(argv.get(i + 1)?).ok()?.parse().ok()?;
+                if !(16..=4096).contains(&a.ef) {
+                    return None;
+                }
+                i += 2;
+            } else if t.eq_ignore_ascii_case(b"FIELDS") {
+                a.fields = argv[i + 1..].to_vec();
+                if a.fields.is_empty() {
+                    return None;
+                }
+                break;
+            } else {
+                return None;
+            }
+        }
+        Some(a)
+    }
+}
+
+/// Per-shard HYBRID: run BOTH sub-queries at 4×limit depth (rank
+/// fusion needs deeper lists than the final cut — same 4× posture as
+/// the agg TPUT phase-1), emit two ranked segments back to back.
+/// Chunk: `[ST_OK][match n][(key,f64,hydration)*][knn n][(…)*]`.
+fn op_hybrid(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+    let Some(q) = HybridArgs::parse(argv) else {
+        return vec![ST_BADARGS];
+    };
+    let depth = q.limit * 4;
+    let m = index_runtime::with_ready_text_segment(store, &q.text_idx, |ts| {
+        ts.matches(&q.text, depth)
+    });
+    let k = index_runtime::with_ready_ann(store, &q.ann_idx, |g| {
+        kevy_vector::parse_vector(&q.vec, g.dim()).map(|v| g.knn(&v, depth, q.ef))
+    });
+    let (m, k) = match (m, k) {
+        (Ok(m), Ok(Some(k))) => (m, k),
+        (_, Ok(None)) => return vec![ST_BADARGS],
+        (Err(e), _) | (_, Err(e)) if e.starts_with("INDEXBUILDING") => {
+            return vec![ST_BUILDING];
+        }
+        (Err(e), _) | (_, Err(e)) if e.starts_with("INDEXOVERBUDGET") => {
+            return vec![ST_OVERBUDGET];
+        }
+        _ => return vec![ST_NOINDEX],
+    };
+    let mut chunk = vec![ST_OK];
+    chunk.extend_from_slice(&(m.len() as u32).to_le_bytes());
+    for h in &m {
+        chunk.extend_from_slice(&(h.key.len() as u32).to_le_bytes());
+        chunk.extend_from_slice(&h.key);
+        chunk.extend_from_slice(&h.score.to_le_bytes());
+        encode_hydration(store, &mut chunk, &h.key, &q.fields);
+    }
+    chunk.extend_from_slice(&(k.len() as u32).to_le_bytes());
+    for (key, dist) in &k {
+        chunk.extend_from_slice(&(key.len() as u32).to_le_bytes());
+        chunk.extend_from_slice(key);
+        chunk.extend_from_slice(&f64::from(*dist).to_le_bytes());
+        encode_hydration(store, &mut chunk, key, &q.fields);
+    }
+    chunk
+}
+
 pub(crate) struct MatchArgs {
     pub(crate) name: Vec<u8>,
     pub(crate) text: Vec<u8>,
@@ -518,7 +632,11 @@ fn op_explain(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let shape = argv.get(2).map(Vec::as_slice).unwrap_or(b"");
     let mut qargv = argv.to_vec();
     qargv[0] = b"IDX.QUERY".to_vec();
-    let parsed = if shape.eq_ignore_ascii_case(b"MATCH") {
+    let parsed = if name.eq_ignore_ascii_case(b"HYBRID") {
+        // IDX.EXPLAIN HYBRID <text_idx> MATCH … — spec position 1 is
+        // the mode, not an index; dry-run the hybrid parse.
+        crate::cmd_index_query::HybridArgs::parse(&qargv).is_some()
+    } else if shape.eq_ignore_ascii_case(b"MATCH") {
         crate::cmd_index_query::MatchArgs::parse(&qargv).is_some()
     } else if shape.eq_ignore_ascii_case(b"KNN") {
         KnnArgs::parse(&qargv).is_some()

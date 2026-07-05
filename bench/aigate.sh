@@ -106,7 +106,52 @@ clamp("EXPLAIN pairs: kind/state/est_rows/plan",
       kv.get(b"kind") == b"range" and kv.get(b"state") == b"ready" and b"plan" in kv)
 clamp("est_rows within 10x of truth", 5 <= est <= 500, f"est={est}")
 
-# ---- clamp 4: RESP3 maps
+# ---- clamp 4: HYBRID fusion quality — RRF must not lose to either leg
+import struct, random
+random.seed(31)
+LAT, DIM = 8, 32
+W = [[random.gauss(0, 1) for _ in range(DIM)] for _ in range(LAT)]
+def mvec():
+    z = [random.uniform(-1, 1) for _ in range(LAT)]
+    return struct.pack(f"<{DIM}f", *[sum(z[l]*W[l][d] for l in range(LAT)) for d in range(DIM)])
+VOC = [f"h{r}" for r in range(500)]
+def word():
+    return VOC[min(int(500 ** random.random()) - 1, 499)]
+for i in range(2000):
+    cmd(s, buf, "HSET", f"hb:{i}", "body", " ".join(word() for _ in range(8)), "v", mvec())
+cmd(s, buf, "IDX.CREATE", "hb_t", "ON", "PREFIX", "hb:", "FIELD", "body", "TYPE", "str", "KIND", "text")
+cmd(s, buf, "IDX.CREATE", "hb_v", "ON", "PREFIX", "hb:", "FIELD", "v", "TYPE", "vector", "KIND", "ann", "DIM", str(DIM), "DISTANCE", "l2")
+t0 = time.time()
+while time.time() - t0 < 60:
+    r1 = cmd(s, buf, "IDX.QUERY", "hb_t", "MATCH", "h0", "LIMIT", "1")
+    r2 = cmd(s, buf, "IDX.QUERY", "hb_v", "KNN", mvec(), "LIMIT", "1")
+    if isinstance(r1, list) and isinstance(r2, list):
+        break
+    time.sleep(0.5)
+def keys_of(r):
+    return [x[0] for x in r if isinstance(x, list) and x]
+# RRF math guarantee (k=60): a DOUBLE-HIT key (top-10 in both legs)
+# scores at least 2/(60+10), while any single-hit key at best
+# 1/(60+1) — double hits ALWAYS outrank single hits. Clamp exactly
+# that provable property.
+ok_trials, bad = 0, ""
+for t in range(20):
+    qtext, qvec = word(), mvec()
+    m = keys_of(cmd(s, buf, "IDX.QUERY", "hb_t", "MATCH", qtext, "LIMIT", "10"))
+    k = keys_of(cmd(s, buf, "IDX.QUERY", "hb_v", "KNN", qvec, "LIMIT", "10"))
+    h = keys_of(cmd(s, buf, "IDX.QUERY", "HYBRID", "hb_t", "MATCH", qtext, "hb_v", "KNN", qvec, "LIMIT", "10"))
+    double = set(m) & set(k)
+    if len(double) <= 10 and not double.issubset(set(h)):
+        bad = f"trial {t}: double-hits {double - set(h)} missing from fusion"
+        break
+    ok_trials += 1
+clamp("double-hit keys always make the RRF top", ok_trials == 20, bad or "20/20")
+h2 = cmd(s, buf, "IDX.QUERY", "HYBRID", "hb_t", "MATCH", "h0", "hb_v", "KNN", mvec(), "LIMIT", "5", "RRFK", "10", "FIELDS", "body")
+clamp("HYBRID with RRFK + FIELDS hydrates", isinstance(h2, list) and len(h2) == 5 and len(h2[0]) == 4)
+e3 = cmd(s, buf, "IDX.QUERY", "HYBRID", "hb_t", "MATCH", "h0", "nope", "KNN", mvec())
+clamp("HYBRID missing ann index is self-explaining", e3.startswith(b"-ERR"), e3[:50].decode())
+
+# ---- clamp 5: RESP3 maps
 s3, buf3 = conn()
 h = cmd(s3, buf3, "HELLO", "3")
 clamp("HELLO 3 ack is a map with proto=3",
