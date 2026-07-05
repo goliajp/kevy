@@ -14,9 +14,6 @@ use crate::metric::KevyMetric;
 use crate::store::{Inner, Store, lock_write};
 
 impl Store {
-    /// `BGREWRITEAOF`: rebuild every shard's AOF from current state.
-    /// Synchronous. Returns the summed stats (`None` if persistence is off /
-    /// no shard rewrote).
     /// Durability barrier (v2.1): flush + `fdatasync` every shard's
     /// AOF now, regardless of the configured `appendfsync` policy. On
     /// `Ok(())`, every write acknowledged before this call is on
@@ -39,6 +36,10 @@ impl Store {
         Ok(())
     }
 
+    /// `BGREWRITEAOF`: rebuild every shard's AOF from current state.
+    /// Synchronous (despite the RESP name). Returns the summed stats
+    /// (`None` if persistence is off / no shard rewrote). Shards mid
+    /// rewrite are skipped. Emits [`KevyMetric::Rewrite`] per shard.
     pub fn rewrite_aof(&self) -> io::Result<Option<RewriteStats>> {
         let mut agg: Option<RewriteStats> = None;
         for shard in self.shards.iter() {
