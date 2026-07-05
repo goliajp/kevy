@@ -1,8 +1,9 @@
 # PERF-FINDING 2026-07-04 — IDX.QUERY per-connection ~2ms tail mode
 
-**Status**: characterized, mechanism narrowed, root cause OPEN
-(campaign-tail item). Gate protocol adapted (median connection);
-the RFC clamp (p99 < 2ms) is unchanged.
+**Status**: CLOSED 2026-07-05 (v3.4 tails). Root cause confirmed =
+accept placement (the SO_REUSEPORT-chosen owning shard conflicts
+with its extension fan-out role); the v1.30 `--accept-shards`
+config eliminates it entirely. See "Resolution" below.
 
 ## Symptom
 
@@ -47,3 +48,26 @@ core during a bad-conn run.
 `g:{i} ts=i`, build an i64 range index, then per fresh conn run 300×
 `IDX.QUERY g_ts RANGE lo lo+20000 LIMIT 100` and compare per-conn
 p99.
+
+## Resolution (2026-07-05, v3.4)
+
+Decisive experiment — same 1M-row workload, 8 fresh conns × 300
+queries, three accept configurations:
+
+    default        per-conn p99: 2.12 0.36 0.37 0.45 0.42 0.46 0.35 0.34
+    --accept-shards 1              0.41 0.36 0.35 0.33 0.31 0.32 0.32 0.38
+    --accept-shards 2              0.44 0.33 0.32 0.33 0.32 0.35 0.33 0.33
+
+The tail exists ONLY under all-shard accept and vanishes completely
+under a restricted accept set — confirming the placement hypothesis:
+with every shard accepting, SO_REUSEPORT can land a connection on a
+shard whose fan-out role (origin aggregation vs worker) or softirq
+core placement makes ~1% of its replies wait a CFS timeslice.
+
+**Operational answer**: serving-shape deployments should set
+`--accept-shards` (the v1.30 recommendation `ceil(conns/25)..
+ceil(conns/15)` already covers this). The gate keeps the
+median-connection protocol; the finer kernel-level attribution
+(softirq overlap vs origin dual-role) is not pursued further — the
+config-level cure is total.
+

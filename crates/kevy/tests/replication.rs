@@ -585,7 +585,7 @@ fn snapshot_ship_triggers_when_replica_falls_behind_backlog() {
     // T1.23: a replica that asks for `from_offset = 0` after the
     // primary's backlog has evicted offset 0 triggers a snapshot
     // ship. Verify the full sequence: SnapshotBegin → ≥ 1 Chunk →
-    // SnapshotEnd { ack_offset } → expected_offset advances to
+    // SnapshotEnd { ack_offset, routed: false } → expected_offset advances to
     // ack_offset (no gap when live frames resume).
 
     // Tiny buffer — each frame ~37 B, so 256 B holds ~7 frames. We
@@ -718,7 +718,7 @@ fn fresh_replica_join_snapshot_then_live_frames() {
 
     // T1.27: Phase 1.E e2e. A fresh replica joins a primary whose
     // backlog has already evicted offset 0 → it takes the snapshot
-    // path; after `SnapshotEnd { ack_offset }` the replica receives
+    // path; after `SnapshotEnd { ack_offset, routed: false }` the replica receives
     // post-snapshot live frames at offsets `ack_offset..` with no
     // gap. Proves the snapshot→live transition closes the full
     // primary→replica round-trip — both halves applied to a single
@@ -1044,7 +1044,7 @@ impl ReplicaServer {
                                 }
                                 kevy_replicate::replica::ReplicaEvent::SnapshotEnd { ack_offset } => {
                                     from_offset = ack_offset;
-                                    kevy_rt::ReplicaApply::SnapshotEnd { ack_offset }
+                                    kevy_rt::ReplicaApply::SnapshotEnd { ack_offset, routed: false }
                                 }
                                 kevy_replicate::replica::ReplicaEvent::Frame(frame) => {
                                     from_offset = frame.offset.saturating_add(1);

@@ -192,39 +192,63 @@ impl Hnsw {
     }
 
     fn search_layer_vec(&self, start: u32, tv: &[f32], layer: usize, ef: usize) -> Vec<(f32, u32)> {
-        let mut visited: HashMap<u32, ()> = HashMap::new();
-        let mut result: BinaryHeap<Far> = BinaryHeap::new(); // max-heap of best ef
-        let mut frontier: BinaryHeap<std::cmp::Reverse<Far>> = BinaryHeap::new();
-        let d0 = self.params.distance.eval(&self.nodes[start as usize].vec, tv);
-        visited.insert(start, ());
-        result.push(Far(d0, start));
-        frontier.push(std::cmp::Reverse(Far(d0, start)));
-        while let Some(std::cmp::Reverse(Far(d, node))) = frontier.pop() {
-            if result.len() >= ef
-                && let Some(worst) = result.peek()
-                && d > worst.0
-            {
-                break;
+        // The visited set is the beam search's hottest structure —
+        // perf-record put 63% of the EF16 KNN shape inside this fn,
+        // with the std HashMap's SipHash showing as a distinct cost.
+        // Classic hnswlib answer: an epoch-stamped visited pool —
+        // membership is ONE u32 array read, reset is `epoch += 1`,
+        // and the thread_local reuses the allocation across queries
+        // (thread-per-core: shards never share a search).
+        thread_local! {
+            static VISITED: std::cell::RefCell<(Vec<u32>, u32)> =
+                const { std::cell::RefCell::new((Vec::new(), 0)) };
+        }
+        VISITED.with(|cell| {
+            let (stamps, epoch) = &mut *cell.borrow_mut();
+            if stamps.len() < self.nodes.len() {
+                stamps.resize(self.nodes.len(), 0);
             }
-            if layer < self.nodes[node as usize].links.len() {
-                for &n in &self.nodes[node as usize].links[layer] {
-                    if visited.insert(n, ()).is_some() {
-                        continue;
-                    }
-                    let dn = self.params.distance.eval(&self.nodes[n as usize].vec, tv);
-                    if result.len() < ef || dn < result.peek().expect("nonempty").0 {
-                        result.push(Far(dn, n));
-                        if result.len() > ef {
-                            result.pop();
+            *epoch = epoch.wrapping_add(1);
+            if *epoch == 0 {
+                stamps.fill(0);
+                *epoch = 1;
+            }
+            let epoch = *epoch;
+            let mut result: BinaryHeap<Far> = BinaryHeap::with_capacity(ef + 1);
+            let mut frontier: BinaryHeap<std::cmp::Reverse<Far>> =
+                BinaryHeap::with_capacity(ef * 2);
+            let d0 = self.params.distance.eval(&self.nodes[start as usize].vec, tv);
+            stamps[start as usize] = epoch;
+            result.push(Far(d0, start));
+            frontier.push(std::cmp::Reverse(Far(d0, start)));
+            while let Some(std::cmp::Reverse(Far(d, node))) = frontier.pop() {
+                if result.len() >= ef
+                    && let Some(worst) = result.peek()
+                    && d > worst.0
+                {
+                    break;
+                }
+                if layer < self.nodes[node as usize].links.len() {
+                    for &n in &self.nodes[node as usize].links[layer] {
+                        if stamps[n as usize] == epoch {
+                            continue;
                         }
-                        frontier.push(std::cmp::Reverse(Far(dn, n)));
+                        stamps[n as usize] = epoch;
+                        let dn = self.params.distance.eval(&self.nodes[n as usize].vec, tv);
+                        if result.len() < ef || dn < result.peek().expect("nonempty").0 {
+                            result.push(Far(dn, n));
+                            if result.len() > ef {
+                                result.pop();
+                            }
+                            frontier.push(std::cmp::Reverse(Far(dn, n)));
+                        }
                     }
                 }
             }
-        }
-        let mut out: Vec<(f32, u32)> = result.into_iter().map(|Far(d, n)| (d, n)).collect();
-        out.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-        out
+            let mut out: Vec<(f32, u32)> = result.into_iter().map(|Far(d, n)| (d, n)).collect();
+            out.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+            out
+        })
     }
 
     /// Malkov Algorithm 4 (diversity heuristic): walk candidates by

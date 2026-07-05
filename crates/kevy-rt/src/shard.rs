@@ -556,7 +556,14 @@ impl<C: Commands> Shard<C> {
             // A non-empty backlog means a peer ring is full: keep spinning so we
             // re-attempt the flush (and keep draining inbound to unblock peers).
             let has_backlog = self.backlog.iter().any(|b| !b.is_empty());
-            idle_spins = if did_work || has_backlog {
+            // v3.4: stay-hot-while-inflight, epoll symmetry — the
+            // uring reactor gained this in the v2.2 campaign (commit
+            // 65b7515): with forwarded cross-shard requests
+            // outstanding, replies land within ~one RTT, so hold the
+            // spin rung instead of paying park+wake per reply batch.
+            // Bounded: inflight only drains (owner answers) or the
+            // conn dies.
+            idle_spins = if did_work || has_backlog || self.xshard_inflight > 0 {
                 0
             } else {
                 idle_spins.saturating_add(1)
