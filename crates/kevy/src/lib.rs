@@ -73,6 +73,8 @@ mod ops;
 mod replica_runner;
 mod replica_state;
 mod scope_integration;
+pub mod verb_meta;
+mod cmd_command;
 
 pub use config_global::init as config_init;
 pub use config_global::replace as config_replace;
@@ -339,3 +341,5 @@ pub fn handle_conn(conn: &Socket, store: &mut Store) -> io::Result<()> {
 mod tests;
 #[cfg(test)]
 mod tests_op_table;
+#[cfg(test)]
+mod tests_verb_meta;

@@ -175,7 +175,7 @@ fn dispatch_conn<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, out: &mut Vec<u8>) 
                 wrong_args(out, "echo");
             }
         }
-        b"COMMAND" => out.extend_from_slice(b"*0\r\n"),
+        b"COMMAND" => crate::cmd_command::cmd_command(args, out),
         b"HELLO" => cmd_hello(out),
         b"QUIT" => encode_simple_string(out, "OK"),
         // CONFIG moved to crate::ops::dispatch_ops (real GET reads Config;

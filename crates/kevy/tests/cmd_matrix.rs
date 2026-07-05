@@ -71,7 +71,13 @@ fn conn_and_introspection() {
     assert_starts(&run(&mut s, &[b"ECHO"]), b"-ERR", "ECHO/0");
 
     // COMMAND
-    assert_eq_reply(&run(&mut s, &[b"COMMAND"]), b"*0\r\n", "COMMAND");
+    // v3.10: COMMAND answers from the verb metadata table (185+ rows)
+    let cmd_reply = run(&mut s, &[b"COMMAND"]);
+    assert!(
+        cmd_reply.starts_with(b"*1") && cmd_reply.len() > 1000,
+        "COMMAND: expected the full metadata array, got {:?}…",
+        std::str::from_utf8(&cmd_reply[..40.min(cmd_reply.len())]).unwrap_or("<binary>")
+    );
     // QUIT
     assert_eq_reply(&run(&mut s, &[b"QUIT"]), b"+OK\r\n", "QUIT");
     // HELLO (multi-line map reply — just check it's nonempty)
