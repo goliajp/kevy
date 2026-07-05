@@ -45,6 +45,7 @@ impl Commands for KevyCommands {
             b"SDIFFSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SDiff),
             b"ZINTERCARD" if args.len() >= 3 => Route::ZInterCard,
             b"IDX.QUERY" if args.len() >= 4 => Route::Extension,
+            b"IDX.EXPLAIN" if args.len() >= 2 => Route::Extension,
             b"IDX.REBUILD" if args.len() == 2 => Route::Extension,
             b"IDX.COUNT" if args.len() >= 4 => Route::Extension,
             b"IDX.VERIFY" if args.len() == 2 => Route::Extension,
@@ -243,6 +244,19 @@ impl Commands for KevyCommands {
             return crate::cmd_view::extension_reduce(argv, chunks);
         }
         crate::cmd_index_reduce::extension_reduce(argv, chunks)
+    }
+
+    fn extension_reduce_v3(
+        &self,
+        argv: &[Vec<u8>],
+        chunks: Vec<Vec<u8>>,
+        proto: kevy_resp::RespVersion,
+    ) -> Vec<u8> {
+        let reply = self.extension_reduce(argv, chunks);
+        if proto == kevy_resp::RespVersion::V3 {
+            return crate::cmd_index_reduce::resp3_upgrade(argv, reply);
+        }
+        reply
     }
 
     fn on_shard_tick(&self, store: &mut Store) {

@@ -91,6 +91,20 @@ For as long as the AOF / snapshot replay takes (proportional to dataset size). `
 **A queued MULTI command returned `-EXECABORT` — were any writes applied?**
 No. `EXECABORT` means the transaction was rejected as a batch; nothing in the queued sequence was executed. Fix the offending command and reopen with `MULTI`.
 
+## Extension surfaces (IDX. / VIEW. / FEED.) — v3.10
+
+The extension verbs follow the same prefix contract. Every error is
+self-explaining: it names the verb and the object and points at the
+discovery surface (an agent that hits one can recover in-band).
+
+| Prefix | Emitted when | Recovery |
+|---|---|---|
+| `ERR <VERB> '<name>': bad arguments — run COMMAND DOCS <VERB> for the syntax` | argument parse failed on an IDX./VIEW. verb | `COMMAND DOCS <verb>` returns the full syntax string |
+| `ERR no such index '<name>' (IDX.LIST enumerates them)` | query names an index that doesn't exist | `IDX.LIST` / `VIEW.LIST` enumerate the catalog |
+| `INDEXBUILDING index '<name>' is still building (poll IDX.LIST until state=ready)` | query raced the post-create backfill | poll `IDX.LIST` `state`; see docs/migration.md |
+| `INDEXOVERBUDGET index '<name>' build exceeded MAXMEM (raise maxmemory or DROP the index)` | build hit the memory budget | raise `maxmemory` or `IDX.DROP` |
+| `FEEDRESYNC <gen> <tail>` | a FEED cursor is no longer servable (generation bump or past-backlog) | restart consumption from a fresh snapshot + the returned cursor; see docs/cdc.md |
+
 ## Updating this catalog
 
 If you add or modify a code path that emits a `-<PREFIX> ...` reply:

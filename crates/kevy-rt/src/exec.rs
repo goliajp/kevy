@@ -510,7 +510,11 @@ impl<C: Commands> Shard<C> {
                 Agg::RenameOrchestrator { .. } => self.finalize_rename_agg(conn_id, seq, agg),
                 Agg::ZStoreGather { .. } => self.finalize_zstore_agg(conn_id, seq, agg),
                 Agg::ExtensionGather { argv, chunks } => {
-                    let reply = self.commands.extension_reduce(&argv, chunks);
+                    let proto = self
+                        .conns
+                        .get(&conn_id)
+                        .map_or(kevy_resp::RespVersion::V2, |c| c.proto);
+                    let reply = self.commands.extension_reduce_v3(&argv, chunks, proto);
                     // v2.6: a reply starting with 0x00 is a CONTINUATION —
                     // the remainder encodes a second fan-out argv
                     // (length-prefixed items). RESP replies never start

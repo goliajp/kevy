@@ -1,5 +1,32 @@
 # Changelog
 
+### v3.10 — the machine-readable contract (AI operations face)
+
+- `COMMAND` is no longer a shell: COUNT / LIST / INFO / DOCS answer
+  from a single 185-verb metadata table (arity, flags, group,
+  summary, full syntax string — extension verbs included). Parity
+  tests hold the table, the OP_TABLE server subset, and the live
+  wire reply bidirectionally equal.
+- Extension errors are self-explaining: they name the verb and the
+  object and point at the in-band recovery surface (COMMAND DOCS /
+  IDX.LIST state). docs/error-replies.md gains the extension
+  contract table.
+- `IDX.EXPLAIN` — the exact IDX.QUERY parse, zero execution:
+  kind / state / est_rows (live per-shard counts) / plan line.
+- RESP3: extension replies learn the conn's proto; pair-array verbs
+  (IDX.EXPLAIN / VIEW.EXPLAIN) emit Maps on HELLO 3 connections.
+- bench/aigate.sh phase 1: a zero-knowledge agent's discovery,
+  error-recovery, plan-reading, and typed-reply paths, exercised
+  live.
+
+### v3.9-t1 — onramp drill
+
+- mailrs-shaped end-to-end migration rehearsal (bench/drill_mailrs.sh)
+  passes all seven steps; five UX gaps fixed in place (no-op resume
+  message, IDX.LIST readiness idiom, one-call diff, doc-size-scaled
+  backfill numbers, gzip pipe). docs/UPGRADING.md ships the 2.x→3.x
+  guide; kevy-cli 3.8.0 published to crates.io.
+
 ## v3.8.0 — the perf arc ships (2026-07-05)
 
 Every train since v3.0.0 in one release. The arc's charter: measure

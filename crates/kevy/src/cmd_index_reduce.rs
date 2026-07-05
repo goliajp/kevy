@@ -15,26 +15,90 @@ pub(crate) fn extension_reduce(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
     let mut out = Vec::new();
     // Status triage: any BADARGS / NOINDEX / BUILDING wins the reply.
+    // v3.10: errors are SELF-EXPLAINING — they name the verb and the
+    // index and point at the discovery surface, so an agent that hits
+    // one can recover without out-of-band knowledge.
+    let verb_s = String::from_utf8_lossy(verb);
+    let name_s = argv.get(1).map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     for c in &chunks {
         match c.first().copied() {
             Some(ST_BADARGS) | None => {
-                encode_error(&mut out, "ERR bad IDX arguments");
+                encode_error(
+                    &mut out,
+                    &format!("ERR {verb_s} '{name_s}': bad arguments — run COMMAND DOCS {verb_s} for the syntax"),
+                );
                 return out;
             }
             Some(ST_NOINDEX) => {
-                encode_error(&mut out, "ERR no such index");
+                encode_error(
+                    &mut out,
+                    &format!("ERR no such index '{name_s}' (IDX.LIST enumerates them)"),
+                );
                 return out;
             }
             Some(ST_BUILDING) => {
-                encode_error(&mut out, "INDEXBUILDING index is still building");
+                encode_error(
+                    &mut out,
+                    &format!("INDEXBUILDING index '{name_s}' is still building (poll IDX.LIST until state=ready)"),
+                );
                 return out;
             }
             Some(ST_OVERBUDGET) => {
-                encode_error(&mut out, "INDEXOVERBUDGET index build exceeded MAXMEM");
+                encode_error(
+                    &mut out,
+                    &format!("INDEXOVERBUDGET index '{name_s}' build exceeded MAXMEM (raise maxmemory or DROP the index)"),
+                );
                 return out;
             }
             _ => {}
         }
+    }
+    // v3.10: IDX.EXPLAIN — pair-array plan summary; per-shard chunks
+    // carry [ST_OK][building][entries u64][shape byte].
+    if verb.eq_ignore_ascii_case(b"IDX.EXPLAIN") {
+        let mut est_rows: u64 = 0;
+        let mut building = false;
+        let mut shape_b = b'?';
+        for c in &chunks {
+            if c.len() >= 11 {
+                building |= c[1] != 0;
+                est_rows += u64::from_le_bytes(c[2..10].try_into().expect("8 bytes"));
+                shape_b = c[10];
+            }
+        }
+        let kind = index_runtime::catalog()
+            .and_then(|cat| {
+                cat.iter()
+                    .map(|(s, _)| s)
+                    .find(|s| Some(s.name.as_slice()) == argv.get(1).map(Vec::as_slice))
+                    .map(|s| format!("{:?}", s.kind).to_ascii_lowercase())
+            })
+            .unwrap_or_else(|| "?".into());
+        let shape = match shape_b {
+            b'M' => "match",
+            b'K' => "knn",
+            b'G' => "groups",
+            b'R' => "range",
+            b'E' => "eq",
+            _ => "query",
+        };
+        let state = if building { "building" } else { "ready" };
+        let plan = format!(
+            "single-index scan: kind={kind} shape={shape}, {} shard(s) fan-out, merge at origin",
+            chunks.len()
+        );
+        encode_array_len(&mut out, 4);
+        for (k, v) in [
+            ("kind", kind.as_str()),
+            ("state", state),
+            ("est_rows", &est_rows.to_string()),
+            ("plan", &plan),
+        ] {
+            encode_array_len(&mut out, 2);
+            encode_bulk(&mut out, k.as_bytes());
+            encode_bulk(&mut out, v.as_bytes());
+        }
+        return out;
     }
     if verb.eq_ignore_ascii_case(b"IDX.COUNT") {
         let total: u64 = chunks
@@ -623,3 +687,57 @@ fn decode_agg_chunk(c: &[u8]) -> Vec<(Vec<u8>, kevy_index::GroupStats)> {
     }
     rows
 }
+
+/// v3.10 D5 — RESP3 upgrade for extension replies: pair-array shaped
+/// verbs (IDX.EXPLAIN) re-emit as a Map on a HELLO 3 conn. Purely a
+/// wire-shape transform of the already-reduced RESP2 bytes: `*N` of
+/// 2-arrays → `%N/2` of flat pairs. Verbs whose replies are NOT
+/// key/value pairs pass through untouched (spec-legal gradual
+/// migration, same posture as dispatch_resp3).
+pub(crate) fn resp3_upgrade(argv: &[Vec<u8>], reply: Vec<u8>) -> Vec<u8> {
+    let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
+    let mapify = verb.eq_ignore_ascii_case(b"IDX.EXPLAIN")
+        || verb.eq_ignore_ascii_case(b"VIEW.EXPLAIN");
+    if !mapify || !reply.starts_with(b"*") {
+        return reply;
+    }
+    // Parse `*N\r\n` then N × (`*2\r\n` pair); bail untouched on any
+    // shape surprise.
+    let Some(hdr_end) = reply.iter().position(|&b| b == b'\n') else { return reply };
+    let Ok(n) = std::str::from_utf8(&reply[1..hdr_end - 1])
+        .unwrap_or("x")
+        .parse::<usize>()
+    else {
+        return reply;
+    };
+    let body = &reply[hdr_end + 1..];
+    let mut out = Vec::with_capacity(reply.len());
+    out.extend_from_slice(format!("%{n}\r\n").as_bytes());
+    let mut rest = body;
+    for _ in 0..n {
+        if !rest.starts_with(b"*2\r\n") {
+            return reply; // not a pair array — leave the V2 wire alone
+        }
+        rest = &rest[4..];
+        // copy exactly two bulk items
+        for _ in 0..2 {
+            let Some(le) = rest.iter().position(|&b| b == b'\n') else { return reply };
+            if rest[0] != b'$' {
+                return reply;
+            }
+            let Ok(len) = std::str::from_utf8(&rest[1..le - 1]).unwrap_or("x").parse::<usize>()
+            else {
+                return reply;
+            };
+            let total = le + 1 + len + 2;
+            if rest.len() < total {
+                return reply;
+            }
+            out.extend_from_slice(&rest[..total]);
+            rest = &rest[total..];
+        }
+    }
+    out.extend_from_slice(rest);
+    out
+}
+
