@@ -1,5 +1,113 @@
 # Changelog
 
+## v3.8.0 — the perf arc ships (2026-07-05)
+
+Every train since v3.0.0 in one release. The arc's charter: measure
+the REAL gaps against living competitors (valkey 9.1, redis-stack
+7.4.7 / RediSearch), attack only what measurement confirms, and keep
+every win under a ratchet. The account (bench/PERF-LEDGER.md):
+
+- **Bare face vs valkey 9.1** — kevy sweeps all 7 command classes at
+  1.6-3.3× (GET 3.0×, SET 3.33×), fair-fight protocol, gaps far
+  beyond noise.
+- **Serving face vs redis-stack** — FTS: p95 tie with +21% qps and
+  the single-common-term shape 93× after v3.5 (6.3ms → 0.093ms with
+  −49% index RSS); AGG: 110× (write-time aggregates); NUMERIC:
+  2.3×; ANN: from nominally 3.8× BEHIND to **1.64× AHEAD at recall
+  1.000** after the v3.6 campaign (recall-aligned, profile-driven).
+- **Replication**: embedded-as-primary topology (v3.2) — a server
+  replica with the full query surface over an in-process store's
+  data.
+- Ledger disciplines now permanent: competitor versions recorded,
+  median-of-N + stdev, gap < noise band = NOISE, iso-recall
+  comparisons only.
+
+Trains: v3.1 aggregate kind · v3.2 embedded-as-primary · v3.3
+baseline arena · v3.4 tails closure · v3.5 FTS doc-id inverted
+lists · v3.6 ANN campaign · v3.8 this ledger close.
+
+### v3.6 — ANN campaign (recall-aligned; 3 profile-driven attacks)
+
+- Phase A0 pareto alignment (FLAT-oracle ground truth) exposed the
+  v3.3 "3.8× behind" as mostly an EF-semantics artifact: kevy's EF
+  applies per shard (8× effective beam work at the same nominal
+  knob). At equal recall the true gap was 1.9× mid-band / parity at
+  recall 1.0.
+- Three attacks, each profile-verified first (§9 gate refuted the
+  fan-out-pipeline hypothesis — 63% was the beam kernel): an
+  epoch-stamped visited pool (SipHash gone), 8-lane distance kernels
+  (the scalar reduction chain now auto-vectorizes), and runtime
+  AVX2+FMA dispatch. Cumulative −40-43% across the EF sweep.
+- Final account vs RediSearch HNSW at 100k×128d: recall 1.000 —
+  kevy 0.481ms vs 0.791ms (**kevy 1.64× ahead**); recall 0.99 —
+  statistical tie; the sub-0.98-recall ultra-low-latency band stays
+  with the single-graph design (kevy's 8-shard fan-out floor,
+  documented as architectural).
+
+### v3.5 — FTS consolidation (doc-id inverted lists, impact-ordered both ways)
+
+- kevy-text postings rebuilt in the classic inverted shape: u32 doc
+  ids (keys live once, in the docs table), tf buckets descending,
+  sparse log2 dl bands ascending inside each bucket, one list-level
+  id→location map for O(1) probes and swap-removes, and hapax
+  (one-posting) lists inlined into the enum — zero heap for the Zipf
+  long tail. BM25 is monotone ↓dl, so single-term queries — the
+  MaxScore worst case — stop exactly at the first band whose lower
+  edge can't reach the kth floor (per-id scoring stays exact).
+- Measured at 200k Zipf docs: most-common term 8.7ms → 0.093ms
+  (93×), two common terms 12.6ms → 1.53ms (8.2×), common+rare
+  2.5ms → 0.68ms (3.7×). textgate at 1M docs: MATCH p95 22.6ms →
+  2.96ms, index RSS 2198MiB → 1129MiB (−49% vs the old shape).
+  Exactness preserved (equivalence suite green).
+
+### v3.4 — perf tails closure
+
+- Ledger v1.1: bare-face truth vs valkey 9.1 corrected to 1.6-3.3×
+  (8M-request cells; the 2M cells quantized low).
+- epoll reactor gains the stay-hot-while-inflight clause (uring had
+  it since v2.2) — no park+wake per cross-shard reply batch.
+- 286c4a2 "-4%" closed extinct (A/B: accounting instructions cost
+  <0.1% today); IDX.QUERY conn-tail closed (accept placement;
+  --accept-shards cures it totally).
+
+### v3.3 — baseline arena (the real gap table)
+
+- bench/PERF-LEDGER.md: kevy vs valkey 9.1 and vs redis-stack 7.4.7
+  (RediSearch) under a fair-fight protocol. Bare face: kevy sweeps
+  1.6-3.3×. Serving face: FTS tie+21% qps, AGG 110×, NUMERIC 2.3×,
+  ANN behind 3.8× — the v3.6 campaign target.
+
+### v3.2 — embedded-as-primary replication
+
+- An embedded application can now be the PRIMARY with a kevy server
+  as replica: `[replication] single_source = true` puts the server in
+  single-stream mode (one runner, frames hash-routed to local shards,
+  snapshot payloads broadcast with per-shard slice loading via the
+  new kevy-persist `load_snapshot_filtered`). The embed writer source
+  ships full snapshots on fresh/too-old handshakes — the v1.21
+  anti-scope, closed (point-in-time freeze across every shard + the
+  as-of offset under one lock hold). The replica declares its own
+  indexes/views/aggregates over replicated data — a full query
+  surface for an in-process store. Replication and the CDC feed
+  coexist by design (docs/replication.md).
+- bench/repligate.sh: two-process gate — snapshot ship, quiesced
+  digest stability, restart re-sync, replica-local IDX over
+  replicated data.
+
+### v3.1 — aggregate kind (write-time GROUP BY)
+
+- **`KIND agg GROUPBY <field>`**: fifth index kind — per-group
+  count/sum/min/max (avg derived) maintained in the write path, the
+  declared-access-path answer to GROUP BY (Law 3 intact: zero
+  query-time row scanning). min/max exact under deletion via
+  per-group value multisets; exclusions counted; f64 sums.
+  `IDX.QUERY <name> GROUP <g>` and `GROUPS [BY count|sum|min|max]
+  [LIMIT ≤1000]` with exact cross-shard merge (shared
+  merge/sort code between shard and reduce — orderings cannot
+  drift). Embedded: idx_create_agg / idx_group / idx_groups.
+  bench/agggate.sh gates point query < 1ms @ 1M×10k groups, top-100
+  < 5ms, write tax < 10%, memory formula.
+
 ## v3.0.0 — kevy is a serving engine (2026-07-04)
 
 The v3 arc: eleven trains (v2.1 → v2.11), all five-axis gated

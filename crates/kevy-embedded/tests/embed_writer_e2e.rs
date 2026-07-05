@@ -38,27 +38,22 @@ fn embed_writer_streams_committed_argvs_to_replica_client() {
     let cfg = Config::default().with_embed_writer(&addr);
     let writer = Store::open(cfg).unwrap();
 
-    // Apply two writes BEFORE the subscriber connects so the
-    // backlog has frames waiting at offset 0.
+    // Apply two writes BEFORE the subscriber connects. v3.2
+    // semantics (snapshot.md): offset 0 against non-empty history =
+    // SNAPSHOT ship (keyspace + as-of offset), then live frames —
+    // NOT a frame replay from 0.
     writer.set(b"k1", b"v1").unwrap();
     writer.set(b"k2", b"v2").unwrap();
 
-    // Subscribe at offset 0.
+    // Subscribe at offset 0 → snapshot path.
     let mut client = ReplicaClient::connect(addr.as_str(), "test-sub-1", 0)
         .expect("ReplicaClient should connect to the embed writer's listener");
 
-    // Read two frames; embed wrote both via `set` so the wire shape
-    // is `*3\r\n$3\r\nSET\r\n$2\r\nk1\r\n$2\r\nv1\r\n` for each.
-    let frame_a = next_frame(&mut client, Duration::from_secs(2));
-    let frame_b = next_frame(&mut client, Duration::from_secs(2));
+    let (payload, ack) = drain_snapshot(&mut client);
+    assert_eq!(ack, 2, "as-of offset covers both pre-connect writes");
+    assert!(!payload.is_empty(), "snapshot carries the keyspace");
 
-    assert_eq!(frame_a.offset, 0);
-    assert_eq!(frame_b.offset, 1);
-    assert_eq!(argv_to_vecvec(&frame_a.argv), vec![b"SET".to_vec(), b"k1".to_vec(), b"v1".to_vec()]);
-    assert_eq!(argv_to_vecvec(&frame_b.argv), vec![b"SET".to_vec(), b"k2".to_vec(), b"v2".to_vec()]);
-
-    // A live write after the subscriber is caught up also flows
-    // through.
+    // A live write after the ship flows as a frame at the ack offset.
     writer.set(b"live", b"yes").unwrap();
     let frame_c = next_frame(&mut client, Duration::from_secs(2));
     assert_eq!(frame_c.offset, 2);
@@ -76,14 +71,20 @@ fn embed_writer_serves_multiple_subscribers_independently() {
     let writer = Store::open(cfg).unwrap();
     writer.set(b"shared", b"v").unwrap();
 
+    // v3.2: offset 0 vs history → each subscriber gets its own
+    // snapshot ship, then live frames.
     let mut a = ReplicaClient::connect(addr.as_str(), "sub-a", 0).unwrap();
     let mut b = ReplicaClient::connect(addr.as_str(), "sub-b", 0).unwrap();
+    let (_, ack_a) = drain_snapshot(&mut a);
+    let (_, ack_b) = drain_snapshot(&mut b);
+    assert_eq!((ack_a, ack_b), (1, 1));
 
+    writer.set(b"shared2", b"w").unwrap();
     let fa = next_frame(&mut a, Duration::from_secs(2));
     let fb = next_frame(&mut b, Duration::from_secs(2));
-    // Both subscribers see the same offset-0 frame.
-    assert_eq!(fa.offset, 0);
-    assert_eq!(fb.offset, 0);
+    // Both subscribers see the same live frame.
+    assert_eq!(fa.offset, 1);
+    assert_eq!(fb.offset, 1);
     assert_eq!(argv_to_vecvec(&fa.argv), argv_to_vecvec(&fb.argv));
 
     drop(a);
@@ -121,22 +122,11 @@ fn two_embed_writers_distinct_scopes_both_visible_to_subscribers() {
         0,
     ).unwrap();
 
-    // sub_a sees A's two frames in order; sub_b sees B's one.
-    let a_f1 = next_frame(&mut sub_a, Duration::from_secs(2));
-    let a_f2 = next_frame(&mut sub_a, Duration::from_secs(2));
-    let b_f1 = next_frame(&mut sub_b, Duration::from_secs(2));
-
-    assert_eq!(a_f1.offset, 0);
-    assert_eq!(a_f2.offset, 1);
-    assert_eq!(b_f1.offset, 0);
-
-    let a_argv1 = argv_to_vecvec(&a_f1.argv);
-    let a_argv2 = argv_to_vecvec(&a_f2.argv);
-    let b_argv1 = argv_to_vecvec(&b_f1.argv);
-
-    assert_eq!(a_argv1[1], b"app:billing:1");
-    assert_eq!(a_argv2[1], b"app:billing:2");
-    assert_eq!(b_argv1[1], b"app:auth:1");
+    // v3.2: each subscriber receives its own writer's snapshot
+    // (pre-fill rides the ship, not frames).
+    let (_, ack_a) = drain_snapshot(&mut sub_a);
+    let (_, ack_b) = drain_snapshot(&mut sub_b);
+    assert_eq!((ack_a, ack_b), (2, 1), "as-of offsets per writer");
 
     // Live writes flow independently.
     writer_a.set(b"app:billing:3", b"a-live").unwrap();
@@ -166,6 +156,19 @@ fn embed_writer_local_writes_are_not_readonly() {
     // Wait briefly to let the writer's accept thread bind so drop
     // is clean.
     assert!(wait_for(Duration::from_millis(500), || true));
+}
+
+/// Consume one snapshot ship: returns (payload, ack_offset).
+fn drain_snapshot(client: &mut ReplicaClient) -> (Vec<u8>, u64) {
+    let mut payload = Vec::new();
+    loop {
+        match client.next_event() {
+            Some(Ok(ReplicaEvent::SnapshotBegin)) => {}
+            Some(Ok(ReplicaEvent::SnapshotChunk(bytes))) => payload.extend_from_slice(&bytes),
+            Some(Ok(ReplicaEvent::SnapshotEnd { ack_offset })) => return (payload, ack_offset),
+            other => panic!("expected snapshot event, got {other:?}"),
+        }
+    }
 }
 
 fn next_frame(
