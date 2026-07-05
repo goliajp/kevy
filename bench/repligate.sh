@@ -26,6 +26,7 @@ DIR=$(mktemp -d /tmp/kevy-repligate-XXXXXX)
 # ---- primary first: seed + READY, keep writing ----
 $WRITER $SRCPORT 50000 > "$DIR/writer.log" 2>&1 &
 WPID=$!
+RPID=""
 trap 'kill $WPID $RPID 2>/dev/null; rm -rf "$DIR"' EXIT
 for _ in $(seq 100); do
     grep -q READY "$DIR/writer.log" 2>/dev/null && break
