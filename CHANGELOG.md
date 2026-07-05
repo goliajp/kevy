@@ -1,5 +1,20 @@
 # Changelog
 
+### v3.12 — kevy-mcp, the official MCP server
+
+- New crate `kevy-mcp` (pure std + kevy-resp-client): an MCP stdio
+  server that SELF-BOOTSTRAPS its verb whitelist from the live
+  server's COMMAND DOCS — zero compile-time coupling, always in sync
+  with whatever kevy it fronts. Five tools (discover / read / write /
+  explain / info); writes are opt-in (--allow-writes), blocking and
+  pubsub verbs are excluded from both whitelists (they would wedge
+  the single connection). Server -ERR text passes through verbatim
+  (isError tool results); protocol errors are JSON-RPC errors.
+- aigate phase 3: a full MCP session e2e (initialize, gated
+  tools/list, round-trip, write rejection, blocking exclusion).
+- VERB_META gains the IDX.EXPLAIN row the v3.10 parity net missed —
+  found BY the MCP bootstrap, which is the point of single-source.
+
 ### v3.11 — the machine-readable docs (AI development face)
 
 - llms.txt + docs/verb-reference.md GENERATED from the same verb
