@@ -196,14 +196,28 @@ fn drain_client(
     stop: &Arc<AtomicBool>,
 ) -> u64 {
     let mut from_offset = client.expected_offset();
+    let mut last_ack = std::time::Instant::now();
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
+            Some(Ok(ReplicaEvent::Ping { primary_offset })) => {
+                // v3.14 heartbeat: record the primary's position for
+                // lag/liveness (INFO replication) and answer with an
+                // ACK immediately — a heartbeat round trip even when
+                // no frames flow.
+                crate::replica_state::record_ping(primary_offset, from_offset);
+                let _ = client.send_ack(from_offset);
+                last_ack = std::time::Instant::now();
+            }
             Some(Ok(event)) => {
                 let apply = event_to_apply(event, &mut from_offset);
                 if sender.send(apply).is_err() {
                     // Receiver dropped — the shard / runtime is gone;
                     // the runner should also exit.
                     return from_offset;
+                }
+                if last_ack.elapsed() >= std::time::Duration::from_millis(100) {
+                    let _ = client.send_ack(from_offset);
+                    last_ack = std::time::Instant::now();
                 }
             }
             Some(Err(e)) => {
@@ -218,6 +232,10 @@ fn drain_client(
 
 fn event_to_apply(event: ReplicaEvent, from_offset: &mut u64) -> ReplicaApply {
     match event {
+        // Pings are consumed by the drain loops before reaching here;
+        // BY ARGUMENT unreachable, so fall back to a harmless no-op
+        // apply (SnapshotBegin resets nothing on its own).
+        ReplicaEvent::Ping { .. } => ReplicaApply::SnapshotBegin,
         ReplicaEvent::SnapshotBegin => ReplicaApply::SnapshotBegin,
         ReplicaEvent::SnapshotChunk(bytes) => ReplicaApply::SnapshotChunk(bytes),
         ReplicaEvent::SnapshotEnd { ack_offset } => {
@@ -254,6 +272,8 @@ fn route_event(
         Ok(())
     };
     match event {
+        // Consumed by drain_client_routed; by-argument unreachable.
+        ReplicaEvent::Ping { .. } => Ok(()),
         ReplicaEvent::SnapshotBegin => send_all(&|| ReplicaApply::SnapshotBegin),
         ReplicaEvent::SnapshotChunk(bytes) => {
             send_all(&|| ReplicaApply::SnapshotChunk(bytes.clone()))
@@ -290,11 +310,21 @@ fn drain_client_routed(
     stop: &Arc<AtomicBool>,
 ) -> u64 {
     let mut from_offset = client.expected_offset();
+    let mut last_ack = std::time::Instant::now();
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
+            Some(Ok(ReplicaEvent::Ping { primary_offset })) => {
+                crate::replica_state::record_ping(primary_offset, from_offset);
+                let _ = client.send_ack(from_offset);
+                last_ack = std::time::Instant::now();
+            }
             Some(Ok(event)) => {
                 if route_event(event, &mut from_offset, senders).is_err() {
                     return from_offset;
+                }
+                if last_ack.elapsed() >= std::time::Duration::from_millis(100) {
+                    let _ = client.send_ack(from_offset);
+                    last_ack = std::time::Instant::now();
                 }
             }
             Some(Err(e)) => {

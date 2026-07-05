@@ -248,6 +248,11 @@ fn drain_session(
     let mut snap: Option<Vec<u8>> = None;
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
+            // v3.14 heartbeat: ack immediately (keeps the primary's
+            // slot fresh); embedded lag view rides a later train.
+            Some(Ok(ReplicaEvent::Ping { primary_offset: _ })) => {
+                let _ = client.send_ack(client.expected_offset());
+            }
             Some(Ok(ReplicaEvent::Frame(frame))) => {
                 if snap.is_some() {
                     // ReplicaClient's state machine already rejects

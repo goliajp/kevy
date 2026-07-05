@@ -12,7 +12,8 @@ use crate::Commands;
 use crate::replication::ReplicaState;
 use crate::shard::Shard;
 use kevy_replicate::wire::{
-    SNAPSHOT_CHUNK_MAX, encode_snapshot_begin, encode_snapshot_chunk, encode_snapshot_end,
+    SNAPSHOT_CHUNK_MAX, decode_replconf_ack, encode_ping, encode_snapshot_begin,
+    encode_snapshot_chunk, encode_snapshot_end,
 };
 use std::io;
 
@@ -53,12 +54,78 @@ impl<C: Commands> Shard<C> {
         let next = src.next_offset();
         for idx in 0..self.replicas.len() {
             match self.replicas[idx].state {
-                ReplicaState::Streaming { .. } => self.fill_streaming_output(idx, next),
+                ReplicaState::Streaming { .. } => {
+                    self.fill_streaming_output(idx, next);
+                    self.maybe_append_heartbeat(idx, next);
+                    self.drain_replica_acks(idx);
+                }
                 ReplicaState::SnapshotShipping { .. } => self.pump_snapshot_chunks(idx),
                 _ => {}
             }
         }
         self.drain_streaming_outputs()
+    }
+
+    /// v3.14 D3 — append the in-stream heartbeat (`+PING <next>`) at a
+    /// 1s cadence so the replica can compute lag + link liveness. Out
+    /// of band: occupies no offset space, rides the same output
+    /// buffer as frames (ordering with frames is irrelevant — the
+    /// payload is the primary's position, not stream data).
+    fn maybe_append_heartbeat(&mut self, idx: usize, primary_next: u64) {
+        let conn = &mut self.replicas[idx];
+        let due = conn
+            .last_ping
+            .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1));
+        if !due {
+            return;
+        }
+        conn.output.extend_from_slice(&encode_ping(primary_next));
+        conn.last_ping = Some(std::time::Instant::now());
+    }
+
+    /// v3.14 D2 — drain any `REPLCONF ACK <offset>` lines the replica
+    /// wrote back on this (non-blocking) connection and advance its
+    /// slot. The socket is already non-blocking; a clean WouldBlock
+    /// ends the drain. Read errors are left for the writer path to
+    /// surface (single close-decision point).
+    fn drain_replica_acks(&mut self, idx: usize) {
+        let mut chunk = [0u8; 512];
+        loop {
+            let n = match self.replicas[idx].sock.read(&mut chunk) {
+                Ok(0) => break, // peer half-closed; writer path will notice
+                Ok(n) => n,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            };
+            self.replicas[idx].input.extend_from_slice(&chunk[..n]);
+            if n < chunk.len() {
+                break;
+            }
+        }
+        // Parse complete ACK lines off the input buffer.
+        let mut consumed = 0usize;
+        let mut latest: Option<u64> = None;
+        loop {
+            match decode_replconf_ack(&self.replicas[idx].input[consumed..]) {
+                Ok(Some((offset, used))) => {
+                    consumed += used;
+                    latest = Some(offset);
+                }
+                _ => break,
+            }
+        }
+        if consumed > 0 {
+            self.replicas[idx].input.drain(..consumed);
+        }
+        let Some(offset) = latest else { return };
+        if let ReplicaState::Streaming { replica_id, .. } = &self.replicas[idx].state {
+            let id = replica_id.clone();
+            let now_ns = std::time::Instant::now()
+                .duration_since(self.replication_epoch)
+                .as_nanos() as u64;
+            self.slots.insert_or_touch(&id, offset, now_ns);
+        }
     }
 
     /// Refill one replica's output buffer with backlog frames. Skips

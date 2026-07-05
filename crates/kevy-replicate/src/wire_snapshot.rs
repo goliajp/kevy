@@ -34,6 +34,12 @@ pub enum SnapshotMarker {
     /// `+SNAPSHOT_END <ack_offset>\r\n` — end of snapshot; the next
     /// live frame's offset will equal `ack_offset`.
     End(u64),
+    /// `+PING <next_offset>\r\n` — v3.14 in-stream heartbeat: the
+    /// primary's current `next_offset`, sent every ~1s so a replica
+    /// can compute its own lag (applied vs primary) and judge link
+    /// liveness without a request/response round trip. Out-of-band:
+    /// occupies no offset space.
+    Ping(u64),
 }
 
 /// Encode the snapshot-begin marker. Allocates the exact 11 bytes.
@@ -64,6 +70,51 @@ pub fn encode_snapshot_chunk(bytes: &[u8]) -> Vec<u8> {
     out.extend_from_slice(bytes);
     out.extend_from_slice(b"\r\n");
     out
+}
+
+/// Encode the in-stream heartbeat (v3.14): `+PING <next_offset>\r\n`.
+pub fn encode_ping(next_offset: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(24);
+    out.extend_from_slice(b"+PING ");
+    push_u64(&mut out, next_offset);
+    out.extend_from_slice(b"\r\n");
+    out
+}
+
+/// Encode the replica→primary acknowledgment line (v3.14):
+/// `REPLCONF ACK <offset>\r\n` — inline RESP, written back on the
+/// SAME replication connection (the pump drains it non-blocking).
+pub fn encode_replconf_ack(offset: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(32);
+    out.extend_from_slice(b"REPLCONF ACK ");
+    push_u64(&mut out, offset);
+    out.extend_from_slice(b"\r\n");
+    out
+}
+
+/// Parse one `REPLCONF ACK <offset>\r\n` line at the front of `buf`.
+/// `Ok(Some((offset, used)))` on a full line; `Ok(None)` if the buffer
+/// doesn't start with `R` (not an ACK); `Err(Truncated)` if incomplete.
+pub fn decode_replconf_ack(buf: &[u8]) -> Result<Option<(u64, usize)>, WireError> {
+    if buf.is_empty() {
+        return Err(WireError::Truncated);
+    }
+    if buf[0] != b'R' {
+        return Ok(None);
+    }
+    let Some(eol) = find_crlf(buf, 0) else {
+        return if buf.len() > SNAPSHOT_LINE_MAX {
+            Err(WireError::BadEnvelope)
+        } else {
+            Err(WireError::Truncated)
+        };
+    };
+    let line = &buf[..eol];
+    let Some(rest) = line.strip_prefix(b"REPLCONF ACK ") else {
+        return Err(WireError::BadEnvelope);
+    };
+    let offset = parse_decimal(rest).ok_or(WireError::BadEnvelope)?;
+    Ok(Some((offset, eol + 2)))
 }
 
 /// Encode the snapshot-end marker carrying the ack offset (the
@@ -112,6 +163,10 @@ pub fn decode_snapshot_marker(buf: &[u8]) -> Result<Option<(SnapshotMarker, usiz
     if let Some(rest) = line.strip_prefix(b"SNAPSHOT_END ") {
         let offset = parse_decimal(rest).ok_or(WireError::BadEnvelope)?;
         return Ok(Some((SnapshotMarker::End(offset), eol + 2)));
+    }
+    if let Some(rest) = line.strip_prefix(b"PING ") {
+        let offset = parse_decimal(rest).ok_or(WireError::BadEnvelope)?;
+        return Ok(Some((SnapshotMarker::Ping(offset), eol + 2)));
     }
     Err(WireError::BadEnvelope)
 }
