@@ -267,6 +267,16 @@ pub trait Commands: Clone + Send + 'static {
 
     /// v2.5: origin-side reduce of an extension fan-out — merge every
     /// shard's chunk into the final RESP reply bytes.
+    fn extension_reduce_v3(
+        &self,
+        argv: &[Vec<u8>],
+        chunks: Vec<Vec<u8>>,
+        _proto: kevy_resp::RespVersion,
+    ) -> Vec<u8> {
+        // Default: proto-blind reduce (RESP2 wire on both protos).
+        self.extension_reduce(argv, chunks)
+    }
+
     fn extension_reduce(&self, _argv: &[Vec<u8>], _chunks: Vec<Vec<u8>>) -> Vec<u8> {
         b"-ERR extension commands not supported\r\n".to_vec()
     }

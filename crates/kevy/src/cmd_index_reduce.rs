@@ -687,3 +687,57 @@ fn decode_agg_chunk(c: &[u8]) -> Vec<(Vec<u8>, kevy_index::GroupStats)> {
     }
     rows
 }
+
+/// v3.10 D5 — RESP3 upgrade for extension replies: pair-array shaped
+/// verbs (IDX.EXPLAIN) re-emit as a Map on a HELLO 3 conn. Purely a
+/// wire-shape transform of the already-reduced RESP2 bytes: `*N` of
+/// 2-arrays → `%N/2` of flat pairs. Verbs whose replies are NOT
+/// key/value pairs pass through untouched (spec-legal gradual
+/// migration, same posture as dispatch_resp3).
+pub(crate) fn resp3_upgrade(argv: &[Vec<u8>], reply: Vec<u8>) -> Vec<u8> {
+    let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
+    let mapify = verb.eq_ignore_ascii_case(b"IDX.EXPLAIN")
+        || verb.eq_ignore_ascii_case(b"VIEW.EXPLAIN");
+    if !mapify || !reply.starts_with(b"*") {
+        return reply;
+    }
+    // Parse `*N\r\n` then N × (`*2\r\n` pair); bail untouched on any
+    // shape surprise.
+    let Some(hdr_end) = reply.iter().position(|&b| b == b'\n') else { return reply };
+    let Ok(n) = std::str::from_utf8(&reply[1..hdr_end - 1])
+        .unwrap_or("x")
+        .parse::<usize>()
+    else {
+        return reply;
+    };
+    let body = &reply[hdr_end + 1..];
+    let mut out = Vec::with_capacity(reply.len());
+    out.extend_from_slice(format!("%{n}\r\n").as_bytes());
+    let mut rest = body;
+    for _ in 0..n {
+        if !rest.starts_with(b"*2\r\n") {
+            return reply; // not a pair array — leave the V2 wire alone
+        }
+        rest = &rest[4..];
+        // copy exactly two bulk items
+        for _ in 0..2 {
+            let Some(le) = rest.iter().position(|&b| b == b'\n') else { return reply };
+            if rest[0] != b'$' {
+                return reply;
+            }
+            let Ok(len) = std::str::from_utf8(&rest[1..le - 1]).unwrap_or("x").parse::<usize>()
+            else {
+                return reply;
+            };
+            let total = le + 1 + len + 2;
+            if rest.len() < total {
+                return reply;
+            }
+            out.extend_from_slice(&rest[..total]);
+            rest = &rest[total..];
+        }
+    }
+    out.extend_from_slice(rest);
+    out
+}
+
