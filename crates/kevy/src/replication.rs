@@ -54,10 +54,13 @@ pub(crate) fn apply<C: Commands>(
     let runtime = runtime.with_replica_inboxes(receivers);
 
     match cfg.replication.role {
-        ReplicationRole::Primary => runtime
-            .with_replication(true, cfg.replication.replication_buffer_size)
-            .with_replication_listener(replication_port_base(cfg))
-            .with_replication_reconnect_window(cfg.replication.reconnect_window_ms),
+        ReplicationRole::Primary => {
+            crate::replica_state::set_min_replicas(cfg.replication.min_replicas_to_write);
+            runtime
+                .with_replication(true, cfg.replication.replication_buffer_size)
+                .with_replication_listener(replication_port_base(cfg))
+                .with_replication_reconnect_window(cfg.replication.reconnect_window_ms)
+        }
         ReplicationRole::Replica => {
             crate::replica_state::set_single_source(cfg.replication.single_source);
             crate::replica_state::set_read_only(cfg.replication.replica_read_only);

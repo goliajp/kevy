@@ -143,13 +143,24 @@ impl<C: Commands> Shard<C> {
         // streaming hasn't started yet.
         let mut replicas = Vec::with_capacity(self.replicas.len());
         for c in &self.replicas {
-            let sent = match &c.state {
-                ReplicaState::AckSent { from_offset, .. } => *from_offset,
-                ReplicaState::Streaming { sent_offset, .. } => *sent_offset,
-                ReplicaState::SnapshotShipping { ack_offset, .. } => *ack_offset,
+            let (sent, id) = match &c.state {
+                ReplicaState::AckSent { from_offset, replica_id } => {
+                    (*from_offset, Some(replica_id.as_str()))
+                }
+                ReplicaState::Streaming { sent_offset, replica_id } => {
+                    (*sent_offset, Some(replica_id.as_str()))
+                }
+                ReplicaState::SnapshotShipping { ack_offset, replica_id, .. } => {
+                    (*ack_offset, Some(replica_id.as_str()))
+                }
                 _ => continue,
             };
-            replicas.push((c.peer.0, c.peer.1, sent));
+            // v3.14 D2: the replica's ACKED offset from the slot table
+            // (0 until its first REPLCONF ACK lands).
+            // None = never ACKed; Some(0) is a REAL ack from an empty
+            // replica's heartbeat round trip (min-replicas counts it).
+            let acked = id.and_then(|i| self.slots.get(i).map(|s| s.acked_offset));
+            replicas.push((c.peer.0, c.peer.1, sent, acked));
         }
         self.commands.on_replication_view(offset, replicas);
     }

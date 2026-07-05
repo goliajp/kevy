@@ -247,7 +247,7 @@ pub trait Commands: Clone + Send + 'static {
     fn on_replication_view(
         &self,
         _master_repl_offset: u64,
-        _replicas: Vec<(std::net::Ipv4Addr, u16, u64)>,
+        _replicas: Vec<(std::net::Ipv4Addr, u16, u64, Option<u64>)>,
     ) {}
 
     /// Periodic shard housekeeping (the equivalent of Redis's `serverCron`).
