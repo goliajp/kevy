@@ -171,6 +171,10 @@ corpora, recall-aligned ([`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)):
 A complete server is a 768 KB stripped binary that boots into under
 5 MB of RSS.
 
+**Upgrading from 2.x?** See [docs/UPGRADING.md](docs/UPGRADING.md) —
+binary swap for the server, dependency bump for embedded (the 1.x
+embedded line unified into 3.x); snapshots and AOF load as-is.
+
 ## Compatibility
 
 98 commands are reply-checked byte-for-byte against valkey 9.1,
