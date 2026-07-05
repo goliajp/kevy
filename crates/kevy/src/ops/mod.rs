@@ -263,14 +263,24 @@ fn info_replication(b: &mut String) {
             b.push_str("role:slave\r\n");
             b.push_str(&format!("master_host:{host}\r\n"));
             b.push_str(&format!("master_port:{port}\r\n"));
-            b.push_str("master_link_status:up\r\n");
+            // v3.14 D3/D4: heartbeat-derived truth — link status by
+            // ping freshness (<3s), applied offset and frame lag from
+            // the runner registry.
+            let (up, applied, lag, last_io) = crate::replica_state::replica_link_view();
+            b.push_str(if up {
+                "master_link_status:up\r\n"
+            } else {
+                "master_link_status:down\r\n"
+            });
+            b.push_str(&format!("master_last_io_seconds_ago:{last_io}\r\n"));
             b.push_str("master_sync_in_progress:0\r\n");
             b.push_str(if crate::replica_state::read_only() {
                 "slave_read_only:1\r\n"
             } else {
                 "slave_read_only:0\r\n"
             });
-            b.push_str("slave_repl_offset:0\r\n");
+            b.push_str(&format!("slave_repl_offset:{applied}\r\n"));
+            b.push_str(&format!("slave_lag_frames:{lag}\r\n"));
         }
         None => {
             b.push_str("role:master\r\n");

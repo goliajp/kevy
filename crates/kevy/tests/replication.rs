@@ -1059,6 +1059,7 @@ impl ReplicaServer {
                     match client.next_event() {
                         Some(Ok(ev)) => {
                             let apply = match ev {
+                        kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
                                 kevy_replicate::replica::ReplicaEvent::SnapshotBegin => {
                                     kevy_rt::ReplicaApply::SnapshotBegin
                                 }

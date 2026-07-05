@@ -149,6 +149,45 @@ pub(crate) fn read_only() -> bool {
     READ_ONLY.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// v3.14 D3 — replica-side heartbeat view, written by every runner on
+/// each `+PING`, read by INFO replication. Atomics (not a mutex): the
+/// runners tick at 1Hz × shards and INFO reads are rare, but the
+/// fields are independent gauges so torn reads across fields are
+/// harmless.
+static PRIMARY_OFFSET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static APPLIED_OFFSET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LAST_PING_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Runner-side: record one heartbeat observation. `primary_offset` is
+/// summed across runners in spirit — with the per-shard fleet each
+/// runner sees its own shard's stream, so we track the MAX per field
+/// (INFO reports link health + a representative lag, not a per-shard
+/// table; the primary side owns the authoritative per-replica table).
+pub(crate) fn record_ping(primary_offset: u64, applied: u64) {
+    PRIMARY_OFFSET.fetch_max(primary_offset, std::sync::atomic::Ordering::Relaxed);
+    APPLIED_OFFSET.fetch_max(applied, std::sync::atomic::Ordering::Relaxed);
+    LAST_PING_MS.store(epoch_ms(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// INFO replication: `(link_up, applied_offset, lag_frames, last_io_secs)`.
+/// Link is up when a heartbeat landed within the last 3s.
+pub(crate) fn replica_link_view() -> (bool, u64, u64, u64) {
+    let last = LAST_PING_MS.load(std::sync::atomic::Ordering::Relaxed);
+    let now = epoch_ms();
+    let age_ms = now.saturating_sub(last);
+    let up = last != 0 && age_ms < 3_000;
+    let primary = PRIMARY_OFFSET.load(std::sync::atomic::Ordering::Relaxed);
+    let applied = APPLIED_OFFSET.load(std::sync::atomic::Ordering::Relaxed);
+    (up, applied, primary.saturating_sub(applied), age_ms / 1000)
+}
+
 pub(crate) fn write_denied_reply() -> Option<Vec<u8>> {
     if IS_REPLICA.load(std::sync::atomic::Ordering::Relaxed)
         && READ_ONLY.load(std::sync::atomic::Ordering::Relaxed)

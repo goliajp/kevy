@@ -42,6 +42,9 @@ pub struct ReplicaConn {
     pub write_off: usize,
     /// Lifecycle state — drives the reactor's dispatch decisions.
     pub state: ReplicaState,
+    /// v3.14 D3 — when the last in-stream heartbeat was appended to
+    /// this conn's output (1s cadence, streaming conns only).
+    pub last_ping: Option<std::time::Instant>,
     /// Peer's `(IPv4, port)` captured at accept time (T1.28.5).
     /// `(0.0.0.0, 0)` for the fallback path (peer-vanished-pre-
     /// getpeername) and for synthetic conns built in unit tests.
@@ -155,6 +158,7 @@ impl ReplicaConn {
             output: Vec::with_capacity(64),
             write_off: 0,
             state: ReplicaState::HandshakePending,
+            last_ping: None,
             peer,
         }
     }
@@ -239,6 +243,7 @@ mod tests {
             output: Vec::new(),
             write_off: 0,
             state: ReplicaState::HandshakePending,
+            last_ping: None,
             peer: (std::net::Ipv4Addr::UNSPECIFIED, 0),
         }
     }

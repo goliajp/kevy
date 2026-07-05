@@ -65,6 +65,13 @@ pub struct DecodedFrame {
 pub enum ReplicaEvent {
     /// A live mutation frame.
     Frame(DecodedFrame),
+    /// v3.14 in-stream heartbeat: the primary's `next_offset` at send
+    /// time. Lets the replica compute lag (applied vs primary) and
+    /// judge link liveness. Occupies no offset space.
+    Ping {
+        /// Primary's `next_offset` when the heartbeat was emitted.
+        primary_offset: u64,
+    },
     /// Snapshot ship begin marker (`+SNAPSHOT\r\n`).
     SnapshotBegin,
     /// One snapshot chunk's payload bytes (RESP bulk string body).
@@ -263,6 +270,15 @@ impl ReplicaClient {
     /// closes the connection.
     pub fn socket_handle(&self) -> io::Result<TcpStream> {
         self.sock.try_clone()
+    }
+
+    /// v3.14 — write `REPLCONF ACK <offset>` back on the replication
+    /// connection. The primary's pump drains these non-blocking and
+    /// advances the replica's slot; call every ~100ms with the highest
+    /// received frame offset + 1 (i.e. the next offset you expect).
+    pub fn send_ack(&mut self, offset: u64) -> std::io::Result<()> {
+        use std::io::Write as _;
+        self.sock.write_all(&crate::wire::encode_replconf_ack(offset))
     }
 
     /// The offset the next frame should carry. Advances on every
