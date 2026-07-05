@@ -82,6 +82,8 @@ impl<'a> AtomicAllShards<'a> {
 
     // ---- hash ops --------------------------------------------------
 
+    /// `HSET key field value [field value ...]`. Returns count newly
+    /// added (existing fields are overwritten but not counted).
     pub fn hset(&mut self, key: &[u8], pairs: &[(&[u8], &[u8])]) -> io::Result<usize> {
         let i = self.idx(key);
         let owned: Vec<(Vec<u8>, Vec<u8>)> = pairs
@@ -103,6 +105,7 @@ impl<'a> AtomicAllShards<'a> {
         Ok(n)
     }
 
+    /// `HGET key field` — `None` when the key or field is absent.
     pub fn hget(&mut self, key: &[u8], field: &[u8]) -> io::Result<Option<Vec<u8>>> {
         let i = self.idx(key);
         Ok(self.guards[i]
@@ -112,6 +115,7 @@ impl<'a> AtomicAllShards<'a> {
             .map(<[u8]>::to_vec))
     }
 
+    /// `HINCRBY key field delta` — returns the field's new value.
     pub fn hincrby(&mut self, key: &[u8], field: &[u8], delta: i64) -> io::Result<i64> {
         let i = self.idx(key);
         let n = self.guards[i]
@@ -125,6 +129,8 @@ impl<'a> AtomicAllShards<'a> {
 
     // ---- zset ops --------------------------------------------------
 
+    /// `ZADD key score member [score member ...]`. Returns count newly
+    /// added (score updates of existing members are not counted).
     pub fn zadd(&mut self, key: &[u8], pairs: &[(f64, &[u8])]) -> io::Result<usize> {
         let i = self.idx(key);
         let owned: Vec<(f64, Vec<u8>)> =
@@ -148,6 +154,7 @@ impl<'a> AtomicAllShards<'a> {
         Ok(n)
     }
 
+    /// `ZINCRBY key delta member` — returns the member's new score.
     pub fn zincrby(&mut self, key: &[u8], delta: f64, member: &[u8]) -> io::Result<f64> {
         let i = self.idx(key);
         let n = self.guards[i]

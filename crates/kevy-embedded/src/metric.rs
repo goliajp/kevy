@@ -11,17 +11,25 @@ use std::sync::Arc;
 #[non_exhaustive]
 pub enum KevyMetric {
     /// AOF replay finished on startup. `bytes` is the AOF size replayed.
+    /// Fires once per `Store::open`, totals summed across all shards.
     Replay {
+        /// Commands replayed from the AOF(s).
         commands: u64,
+        /// Size in bytes of the AOF file(s) replayed (measured before replay).
         bytes: u64,
+        /// Wall-clock time of the whole startup replay, in milliseconds.
         elapsed_ms: u64,
     },
     /// An AOF rewrite (compaction) completed. `before_bytes - after_bytes` is
-    /// the space reclaimed.
+    /// the space reclaimed. Fires once per rewritten shard.
     Rewrite {
+        /// Keys written into the compacted AOF.
         keys: u64,
+        /// AOF size in bytes before the rewrite.
         before_bytes: u64,
+        /// AOF size in bytes after the rewrite (the compacted log).
         after_bytes: u64,
+        /// Wall-clock time of this shard's rewrite, in milliseconds.
         elapsed_ms: u64,
     },
 }

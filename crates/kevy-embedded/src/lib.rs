@@ -50,6 +50,7 @@
 //! - You need cross-process concurrency → kevy-embedded is single-process
 //!   (one mutex). Multi-process needs the network layer.
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 mod config;
 mod info;

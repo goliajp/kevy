@@ -11,12 +11,20 @@ kevy makes you state it — and pays you back with microsecond pages
 at serving time (`bench/VALIDATION-LEDGER.md` has the measured
 numbers).
 
+Every command block runs as-is against a fresh local kevy
+(`kevy --port 6004`; recipes 11–14 additionally want
+`[feed] enabled = true` in `kevy.toml` — see docs/cdc.md).
+`bench/cookbook_smoke.sh` executes every `kevy-cli` line below
+against a throwaway server, so the blocks stay honest.
+
 ## 1. Tables and rows
 
 A row is a hash under a typed prefix:
 
-```
-HSET user:42 name "ada" email "ada@example.com" age 36
+```console
+kevy-cli -p 6004 HSET user:42 name ada email ada@example.com age 36
+kevy-cli -p 6004 HGET user:42 name
+kevy-cli -p 6004 HGET user:42 phone    # NULL = absent field: already answers (nil)
 ```
 
 - Table → key prefix (`user:`). Column → hash field. Primary key →
@@ -30,26 +38,32 @@ HSET user:42 name "ada" email "ada@example.com" age 36
 
 ## 2. One-to-many, many-to-many
 
-```
-order:1001                      # the row
-user:42:orders     (SET)        # 1-N: member = order id
-order:1001:items   (LIST/SET)
-tag:urgent:orders  (SET)        # N-M: one set per side
-order:1001:tags    (SET)
+Link keys carry the relation, one set per side:
+
+```console
+kevy-cli -p 6004 HSET order:1001 user_id 42 total 1999 status shipped
+kevy-cli -p 6004 HSET order:1002 user_id 42 total 550 status pending
+kevy-cli -p 6004 SADD user:42:orders 1001 1002       # 1-N: member = order id
+kevy-cli -p 6004 RPUSH order:1001:items sku-7 sku-9
+kevy-cli -p 6004 SADD tag:urgent:orders 1001         # N-M: one set per side
+kevy-cli -p 6004 SADD order:1001:tags urgent
 ```
 
 Or skip the link keys entirely: put the foreign key in the row
-(`HSET order:1001 user_id 42`) and declare an index
-(`IDX.CREATE order_user ON PREFIX order: FIELD user_id TYPE i64 KIND
-range`) — `IDX.QUERY order_user EQ 42 FIELDS total status` is the
-`SELECT … WHERE user_id = 42` of this world, hydrated in one hop.
+(`user_id` above) and declare an index — `IDX.QUERY … EQ 42` is the
+`SELECT … WHERE user_id = 42` of this world, hydrated in one hop:
+
+```console
+kevy-cli -p 6004 IDX.CREATE order_user ON PREFIX order: FIELD user_id TYPE i64 KIND range
+kevy-cli -p 6004 IDX.QUERY order_user EQ 42 FIELDS total status
+```
 
 ## 3. Sequences
 
-```
-INCR seq:order                  # one id
-INCRBY seq:order 100            # block allocation: hand out 100 ids
-                                # from app memory, refill when dry
+```console
+kevy-cli -p 6004 INCR seq:order          # one id
+kevy-cli -p 6004 INCRBY seq:order 100    # block allocation: hand out 100 ids
+                                         # from app memory, refill when dry
 ```
 
 Block allocation is the high-throughput form; gaps on crash are the
@@ -57,15 +71,23 @@ same contract PostgreSQL sequences give you.
 
 ## 4. Optimistic locking (row versions)
 
-Server: WATCH/MULTI — the CAS loop:
+Server: WATCH/MULTI — the CAS loop. The transaction is
+connection-scoped, so it runs in one REPL session (here fed by a
+heredoc):
 
-```
+```bash
+kevy-cli -p 6004 HSET user:42 balance 100 version 7
+kevy-cli -p 6004 <<'TXN'
 WATCH user:42
-HGET user:42 version            # read, decide
+HGET user:42 version
 MULTI
 HSET user:42 balance 90 version 8
-EXEC                            # nil reply = somebody won the race; retry
+EXEC
+TXN
 ```
+
+`EXEC` answers nil when somebody else touched `user:42` after the
+`WATCH` — somebody won the race; re-read and retry.
 
 Embedded: run the read-decide-write inside one `atomic()` block —
 the shard lock makes the branch race-free without a retry loop.
@@ -77,7 +99,7 @@ is **reads inside the atomic block**: the app evaluates the
 invariant, the engine guarantees the decision and the write commit
 together.
 
-```
+```rust
 // embedded — debit that must not overdraw, plus an audit row:
 store.atomic(b"acct:7", |ctx| {
     let bal: i64 = parse(ctx.hget(b"acct:7", b"balance")?);
@@ -95,37 +117,54 @@ key prefix by design.
 
 ## 6. Idempotency keys
 
-```
-IDX.CREATE req_idem ON PREFIX req: FIELD idem_key TYPE str KIND unique
+```console
+kevy-cli -p 6004 HSET req:9001 idem_key pay-2026-07-04-a77 amount 1999
+kevy-cli -p 6004 IDX.CREATE req_idem ON PREFIX req: FIELD idem_key TYPE str KIND unique
+kevy-cli -p 6004 IDX.QUERY req_idem EQ pay-2026-07-04-a77   # duplicates are visible as multi-hit reads
+kevy-cli -p 6004 IDX.VERIFY req_idem                        # ...and counted here
+kevy-cli -p 6004 SET idem:pay-2026-07-04-a77 1 NX PX 86400000
 ```
 
-Write the row, then `IDX.QUERY req_idem EQ <key>` — duplicates are
-*visible* (the unique kind counts them in VERIFY rather than
-rejecting writes; declarative fence, not a write gate). For a hard
-gate use `SET idem:<key> 1 NX PX 86400000` before processing: NX is
-the atomic claim, the TTL is the retention window.
+Write the row, then query — duplicates are *visible* (the unique
+kind counts them in VERIFY rather than rejecting writes; declarative
+fence, not a write gate). For a hard gate use the `SET … NX PX` form
+before processing: NX is the atomic claim, the TTL is the retention
+window.
 
 ## 7. Soft delete
 
 Flag, don't remove:
 
-```
-HSET user:42 deleted 1
-IDX.CREATE user_live ON PREFIX user: FIELD deleted TYPE i64 KIND range
-IDX.QUERY user_live EQ 0 …      # live rows only
+```console
+kevy-cli -p 6004 HSET user:42 deleted 0 age 36
+kevy-cli -p 6004 HSET user:43 deleted 1 age 51
+kevy-cli -p 6004 IDX.CREATE user_live ON PREFIX user: FIELD deleted TYPE i64 KIND range
+kevy-cli -p 6004 IDX.QUERY user_live EQ 0 LIMIT 100    # live rows only
 ```
 
-Views compose it away permanently: `VIEW.CREATE live_users QUERY
-( AND user_live EQ 0 user_age RANGE 18 200 ) ORDER BY user_age` —
-callers never re-state the filter.
+Views compose it away permanently — callers never re-state the
+filter:
+
+```console
+kevy-cli -p 6004 IDX.CREATE user_age ON PREFIX user: FIELD age TYPE i64 KIND range
+kevy-cli -p 6004 VIEW.CREATE live_users QUERY '(' AND user_live EQ 0 user_age RANGE 18 200 ')' ORDER BY user_age
+kevy-cli -p 6004 VIEW.QUERY live_users LIMIT 10
+```
 
 ## 8. Composite ordering (ORDER BY a, b)
 
 Encode the composite into one indexed score field at write time:
 `score = a * 1_000_000 + b` for bounded integer `b`, or a
-zero-padded string field for lexicographic composites
-(`"2026-07-04|000042"` with `TYPE str KIND range`). One index, one
-ORDER BY; the write hook maintains it like any field.
+zero-padded string field for lexicographic composites — one index,
+one ORDER BY; the write hook maintains it like any field:
+
+```console
+kevy-cli -p 6004 HSET evt:1 ord '2026-07-04|000042'
+kevy-cli -p 6004 HSET evt:2 ord '2026-07-04|000007'
+kevy-cli -p 6004 HSET evt:3 ord '2026-07-05|000001'
+kevy-cli -p 6004 IDX.CREATE evt_ord ON PREFIX evt: FIELD ord TYPE str KIND range
+kevy-cli -p 6004 IDX.QUERY evt_ord RANGE '2026-07-04|000000' '2026-07-04|999999' LIMIT 100
+```
 
 ## 9. JSONB
 
@@ -133,9 +172,16 @@ Flatten to hash fields: `profile.city` → field `profile.city`. You
 keep per-field reads/writes, field TTLs (HEXPIRE), and indexability —
 everything JSONB gave you except JSON-path queries, which are
 **permanently out** (query-engine slope; see the REFUSED table in
-docs/designing-on-kevy.md). A deeply nested blob nobody indexes can
-stay one serialized field; the moment a path matters, promote it to
-a field.
+docs/designing-on-kevy.md).
+
+```console
+kevy-cli -p 6004 HSET user:7 profile.city tokyo profile.plan pro
+kevy-cli -p 6004 HGET user:7 profile.city
+kevy-cli -p 6004 HEXPIRE user:7 3600 FIELDS 1 profile.plan   # per-field TTL survives the flattening
+```
+
+A deeply nested blob nobody indexes can stay one serialized field;
+the moment a path matters, promote it to a field.
 
 ## 10. Cascade delete / foreign keys
 
@@ -143,11 +189,17 @@ Cascades are app patterns, never engine magic:
 
 - Synchronous, small blast radius: delete inside one atomic block
   (`ctx.del(row)`, `ctx.srem(parent_link, id)`).
-- Bulk / prefix-shaped: `kevy-cli delete-prefix --rate 5000 order:1001:` —
-  rate-limited, resumable.
+- Bulk / prefix-shaped: `delete-prefix` — rate-limited, resumable.
 - Asynchronous: a CDC consumer (`FEED.READ` with `PREFIX`) reacts to
   parent deletes and cleans children — the trigger replacement, after
   commit, decoupled, replayable.
+
+```console
+kevy-cli -p 6004 HSET order:1001 user_id 42
+kevy-cli -p 6004 RPUSH order:1001:items sku-7 sku-9
+kevy-cli -p 6004 SADD order:1001:tags urgent
+kevy-cli delete-prefix -p 6004 --rate 5000 order:1001:   # children gone, parent row stays
+```
 
 ## 11. The outbox you don't need
 
@@ -157,6 +209,14 @@ outbox**: every committed write is already a change frame at a
 `(generation, offset)` cursor, at-least-once, prefix-filterable
 (docs/cdc.md). Consume `FEED.READ`; don't build a second journal.
 
+```console
+# needs [feed] enabled = true in kevy.toml (docs/cdc.md)
+kevy-cli -p 6004 HSET order:9001 status paid
+kevy-cli -p 6004 FEED.SHARDS
+kevy-cli -p 6004 FEED.TAIL 0                             # a fresh consumer's starting cursor
+kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 10 PREFIX order:  # gen 1 = a fresh data dir's first generation
+```
+
 ## 12. Audit history
 
 CDC retention IS the audit log: frames carry the applied effect argv
@@ -164,6 +224,12 @@ in commit order. Size the feed backlog for the window you owe
 compliance, export to cold storage with a cursor consumer. For
 point-in-time reconstruction: restore snapshot + replay to the
 `(gen, offset)` recovery point (docs/persistence.md).
+
+```console
+kevy-cli -p 6004 HSET acct:7 balance 100
+kevy-cli -p 6004 HSET acct:7 balance 90
+kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX acct:   # who set what, in commit order
+```
 
 ## 13. The rollback window (reverse mirror)
 
@@ -173,19 +239,41 @@ then "repoint the app", not "reverse-migrate data". Decommission the
 mirror when confidence hardens; `kevy-cli diff` (per-prefix digests)
 is the confidence meter.
 
+```console
+kevy-cli -p 6004 HSET user:42 name ada
+kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 10 PREFIX user:   # the mirror consumer's read loop
+kevy-cli diff 127.0.0.1:6004 127.0.0.1:6004 user:        # digests match: safe form of the check
+kevy-cli diff old-rds-mirror.internal:6379 127.0.0.1:6004 user:   # needs-external
+```
+
 ## 14. Analytics export
 
 Serving and analytics don't share an engine. Export patterns:
 
-- `kevy-cli export --prefix order: orders.resp` — logical, resumable,
-  loadable anywhere RESP goes.
+- `export` — logical, resumable, loadable anywhere RESP goes.
 - CDC → warehouse: a cursor consumer streaming inserts to your OLAP
   store, exactly the CDC-to-Kafka shape.
 - Read-only listener (`docs/embedded-listener.md`) for ad-hoc pulls
   from embedded apps.
+
+```console
+kevy-cli -p 6004 HSET order:1001 user_id 42 total 1999
+kevy-cli export -p 6004 --prefix order: /tmp/orders.resp
+kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX order:   # the CDC-to-warehouse read loop
+```
 
 ## 15. Loading order (the deferred-index rule)
 
 Bulk load FIRST, declare indexes/views AFTER: backfill builds from
 existing rows at ~7s/million — orders of magnitude cheaper than
 paying the write hook per imported row (docs/migration.md).
+
+```console
+kevy-cli -p 6004 HSET item:1 price 10
+kevy-cli -p 6004 HSET item:2 price 25
+kevy-cli -p 6004 HSET item:3 price 7
+kevy-cli export -p 6004 --prefix item: /tmp/items.resp
+kevy-cli import -p 6004 /tmp/items.resp   # bulk load FIRST: no index write hook to pay
+kevy-cli -p 6004 IDX.CREATE item_price ON PREFIX item: FIELD price TYPE i64 KIND range   # declare AFTER: backfill
+kevy-cli -p 6004 IDX.QUERY item_price RANGE 0 100 LIMIT 10
+```

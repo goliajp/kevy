@@ -1,0 +1,265 @@
+# kevy
+
+> Pure-Rust, zero-dependency, Redis-compatible serving engine: the primary
+> store for applications (declared indexes, views, write-time aggregates,
+> CJK full-text search, vector KNN, CDC feeds, replication) speaking RESP.
+
+Machine notes: wire protocol is RESP2 (RESP3 via HELLO 3). Every verb below
+is discoverable live via `COMMAND DOCS <verb>`; errors are self-explaining
+and their prefixes are a stable contract (docs/error-replies.md). This file
+is GENERATED from the server's verb metadata table — do not edit by hand.
+
+## Docs
+
+- [Verb reference](docs/verb-reference.md): every verb, arity, flags, syntax
+- [Designing on kevy](docs/designing-on-kevy.md): the serving-engine model
+- [Cookbook](docs/cookbook.md): RDS-to-kevy modeling recipes
+- [Indexes](docs/indexes.md) · [Views](docs/views.md) · [Text search](docs/text-search.md) · [Vector search](docs/vector-search.md)
+- [CDC feeds](docs/cdc.md) · [Replication](docs/replication.md) · [Persistence](docs/persistence.md)
+- [Migration](docs/migration.md) · [Upgrading 2.x to 3.x](docs/UPGRADING.md)
+- [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
+
+## Verbs (185 total)
+
+### connection
+
+- `ECHO message` [readonly] — Return the given message.
+- `HELLO [protover]` [readonly] — Handshake: report server info and switch RESP protocol version (2 or 3).
+- `PING [message]` [readonly] — Ping the server; returns PONG or echoes the optional message.
+- `QUIT` [readonly] — Close the connection after replying OK.
+- `SELECT index` [readonly] — Select the logical database; kevy is single-DB and only accepts index 0.
+
+### server
+
+- `BGREWRITEAOF` [write,admin] — Start an append-only-file rewrite in the background.
+- `BGSAVE` [write,admin] — Start a snapshot save in the background.
+- `COMMAND [COUNT | LIST | INFO command [command ...] | DOCS [command [command ...]]]` [readonly] — Introspect the command table (COUNT, LIST, INFO, DOCS subcommands).
+- `CONFIG GET parameter | SET parameter value | REWRITE | RESETSTAT` [write,admin] — Read or change server configuration parameters.
+- `CLIENT ID | GETNAME | SETNAME name | LIST | KILL filter | INFO | NO-EVICT ON|OFF` [readonly,admin] — Connection introspection and control subcommands.
+- `CLUSTER INFO | NODES | SLOTS | SHARDS | KEYSLOT key | COUNTKEYSINSLOT slot` [readonly,admin] — Cluster topology introspection (virtual-node model over shards).
+- `DBSIZE` [readonly] — Return the number of keys across all shards.
+- `DEBUG SLEEP seconds | subcommand [args ...]` [readonly,admin] — Debug subcommands; SLEEP blocks the shard, other subcommands are tolerated as OK.
+- `FLUSHALL` [write] — Delete every key on every shard.
+- `FLUSHDB` [write] — Delete every key of the current database (kevy is single-DB: same as FLUSHALL).
+- `INFO [section]` [readonly] — Report server statistics and status sections as text.
+- `MEMORY USAGE key [SAMPLES count] | STATS | DOCTOR | PURGE | MALLOC-STATS` [readonly] — Memory introspection subcommands.
+- `SAVE` [write,admin] — Synchronously snapshot the dataset to disk.
+- `SHUTDOWN [NOSAVE|SAVE]` [write,admin] — Stop the server process (connection drops without a reply).
+- `SLOWLOG GET [count] | LEN | RESET | HELP` [readonly,admin] — Inspect or reset the slow-command log.
+
+### replication
+
+- `REPLICAOF host port | NO ONE` [write,admin] — Make this server a replica of another, or promote it with NO ONE.
+- `ROLE` [readonly] — Report the replication role and state of this server.
+- `SLAVEOF host port | NO ONE` [write,admin] — Legacy alias of REPLICAOF.
+- `WAIT numreplicas timeout` [readonly] — Wait for replica acknowledgement; kevy answers immediately with the acked replica count.
+
+### scan
+
+- `KEYS pattern` [readonly] — Return every key matching the glob pattern (cross-shard gather).
+- `RANDOMKEY` [readonly] — Return a random key from the keyspace.
+- `SCAN cursor [MATCH pattern] [COUNT count]` [readonly] — Incrementally iterate the keyspace (COUNT is accepted and ignored).
+
+### generic
+
+- `DEL key [key ...]` [write] — Delete one or more keys.
+- `EXISTS key [key ...]` [readonly] — Count how many of the given keys exist.
+- `EXPIRE key seconds` [write] — Set a key's TTL in seconds (non-positive TTL deletes the key).
+- `EXPIREAT key unix-time-seconds` [write] — Set a key's expiry as an absolute Unix timestamp in seconds.
+- `PERSIST key` [write] — Remove a key's TTL.
+- `PEXPIRE key milliseconds` [write] — Set a key's TTL in milliseconds.
+- `PEXPIREAT key unix-time-milliseconds` [write] — Set a key's expiry as an absolute Unix timestamp in milliseconds.
+- `PTTL key` [readonly] — Return a key's remaining TTL in milliseconds (-1 no TTL, -2 missing).
+- `RENAME key newkey` [write] — Rename a key, overwriting the destination (write routed at the runtime Op level).
+- `RENAMENX key newkey` [write] — Rename a key only if the destination does not exist (write routed at the runtime Op level).
+- `TTL key` [readonly] — Return a key's remaining TTL in seconds (-1 no TTL, -2 missing).
+- `TYPE key` [readonly] — Return the type of the value stored at key.
+- `UNLINK key [key ...]` [write] — Delete one or more keys (alias of DEL in kevy's shard model).
+
+### tx
+
+- `DISCARD` [readonly,transaction] — Abort the open MULTI transaction.
+- `EXEC` [readonly,transaction] — Execute every command queued since MULTI.
+- `MULTI` [readonly,transaction] — Start a transaction; subsequent commands are queued until EXEC.
+- `UNWATCH` [readonly,transaction] — Forget all watched keys.
+- `WATCH key [key ...]` [readonly,transaction] — Watch keys for optimistic locking of the next EXEC.
+
+### pubsub
+
+- `PSUBSCRIBE pattern [pattern ...]` [readonly,pubsub] — Subscribe to channels matching the given glob patterns.
+- `PUBLISH channel message` [readonly,pubsub] — Post a message to a channel; returns the receiver count.
+- `PUNSUBSCRIBE [pattern [pattern ...]]` [readonly,pubsub] — Unsubscribe from patterns (all patterns when none given).
+- `SUBSCRIBE channel [channel ...]` [readonly,pubsub] — Subscribe to the given channels.
+- `UNSUBSCRIBE [channel [channel ...]]` [readonly,pubsub] — Unsubscribe from channels (all channels when none given).
+
+### script
+
+- `EVAL script numkeys [key [key ...]] [arg [arg ...]]` [write] — Run a Lua script server-side; routed to KEYS[1]'s shard when numkeys >= 1.
+- `EVAL_RO script numkeys [key [key ...]] [arg [arg ...]]` [readonly] — Read-only EVAL: the script may not call write commands.
+- `EVALSHA sha1 numkeys [key [key ...]] [arg [arg ...]]` [write] — Run a cached Lua script by its SHA1 digest.
+- `EVALSHA_RO sha1 numkeys [key [key ...]] [arg [arg ...]]` [readonly] — Read-only EVALSHA.
+- `SCRIPT LOAD script | EXISTS sha1 [sha1 ...] | FLUSH [ASYNC|SYNC]` [readonly] — Manage the process-wide Lua script cache.
+
+### string
+
+- `APPEND key value` [write] — Append bytes to a string value; returns the new length.
+- `DECR key` [write] — Decrement the integer value of a key by one.
+- `DECRBY key decrement` [write] — Decrement the integer value of a key by the given amount.
+- `GET key` [readonly] — Return the string value of a key.
+- `GETDEL key` [write] — Return the string value of a key and delete it.
+- `GETSET key value` [write] — Set a key's string value and return its previous value.
+- `INCR key` [write] — Increment the integer value of a key by one.
+- `INCRBY key increment` [write] — Increment the integer value of a key by the given amount.
+- `INCRBYFLOAT key increment` [write] — Increment the float value of a key by the given amount.
+- `MGET key [key ...]` [readonly] — Return the values of multiple keys (cross-shard gather).
+- `MSET key value [key value ...]` [write] — Set multiple key/value pairs atomically per shard.
+- `PSETEX key milliseconds value` [write] — Set a key's value with a TTL in milliseconds.
+- `SET key value [EX seconds|PX milliseconds] [NX|XX]` [write] — Set a key's string value with optional TTL and existence conditions.
+- `SETEX key seconds value` [write] — Set a key's value with a TTL in seconds.
+- `SETNX key value` [write] — Set a key's value only if it does not exist.
+- `STRLEN key` [readonly] — Return the length of a key's string value.
+
+### hash
+
+- `HDEL key field [field ...]` [write] — Delete one or more hash fields.
+- `HEXISTS key field` [readonly] — Check whether a hash field exists.
+- `HEXPIRE key seconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field TTLs on a hash, in seconds.
+- `HGET key field` [readonly] — Return the value of a hash field.
+- `HGETALL key` [readonly] — Return all fields and values of a hash.
+- `HINCRBY key field increment` [write] — Increment the integer value of a hash field.
+- `HKEYS key` [readonly] — Return all field names of a hash.
+- `HLEN key` [readonly] — Return the number of fields in a hash.
+- `HMGET key field [field ...]` [readonly] — Return the values of multiple hash fields.
+- `HMSET key field value [field value ...]` [write] — Deprecated alias of HSET that replies OK.
+- `HPERSIST key FIELDS numfields field [field ...]` [write] — Remove per-field TTLs from a hash.
+- `HPEXPIRE key milliseconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field TTLs on a hash, in milliseconds.
+- `HPEXPIREAT key unix-time-milliseconds [NX|XX|GT|LT] FIELDS numfields field [field ...]` [write] — Set per-field expiries as absolute Unix-millisecond deadlines.
+- `HSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a hash's fields and values (single-batch cursor).
+- `HSET key field value [field value ...]` [write] — Set one or more hash fields; returns the number of new fields.
+- `HSETNX key field value` [write] — Set a hash field only if it does not exist.
+- `HTTL key FIELDS numfields field [field ...]` [readonly] — Return per-field remaining TTLs in milliseconds (-1 no TTL, -2 missing).
+- `HVALS key` [readonly] — Return all values of a hash.
+
+### list
+
+- `BLPOP key [key ...] timeout` [write,blocking] — Blocking left pop across one or more lists (effect logged as LPOP).
+- `BRPOP key [key ...] timeout` [write,blocking] — Blocking right pop across one or more lists (effect logged as RPOP).
+- `BRPOPLPUSH source destination timeout` [write,blocking] — Blocking RPOPLPUSH: pop the source tail and push it onto the destination head.
+- `LINDEX key index` [readonly] — Return the element at the given list index.
+- `LLEN key` [readonly] — Return the length of a list.
+- `LMOVE source destination LEFT|RIGHT LEFT|RIGHT` [write] — Atomically move an element between two lists.
+- `LPOP key [count]` [write] — Pop one or more elements from the head of a list.
+- `LPOS key element [RANK rank] [COUNT num-matches] [MAXLEN len]` [readonly] — Return the index of matching elements in a list.
+- `LPUSH key element [element ...]` [write] — Prepend one or more elements to a list.
+- `LRANGE key start stop` [readonly] — Return a range of list elements.
+- `LREM key count element` [write] — Remove elements equal to the given value from a list.
+- `LSET key index element` [write] — Set the list element at the given index.
+- `LTRIM key start stop` [write] — Trim a list to the given range.
+- `RPOP key [count]` [write] — Pop one or more elements from the tail of a list.
+- `RPOPLPUSH source destination` [write] — Pop the source tail and push it onto the destination head.
+- `RPUSH key element [element ...]` [write] — Append one or more elements to a list.
+
+### set
+
+- `SADD key member [member ...]` [write] — Add one or more members to a set.
+- `SCARD key` [readonly] — Return the number of members in a set.
+- `SDIFF key [key ...]` [readonly] — Return the difference of the given sets (cross-shard gather).
+- `SDIFFSTORE destination key [key ...]` [write] — Store the difference of the given sets into destination.
+- `SINTER key [key ...]` [readonly] — Return the intersection of the given sets (cross-shard gather).
+- `SINTERSTORE destination key [key ...]` [write] — Store the intersection of the given sets into destination.
+- `SISMEMBER key member` [readonly] — Check whether a value is a member of a set.
+- `SMEMBERS key` [readonly] — Return all members of a set.
+- `SPOP key [count]` [write] — Remove and return one or more random members of a set.
+- `SRANDMEMBER key [count]` [readonly] — Return one or more random members of a set without removing them.
+- `SREM key member [member ...]` [write] — Remove one or more members from a set.
+- `SSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a set's members (single-batch cursor).
+- `SUNION key [key ...]` [readonly] — Return the union of the given sets (cross-shard gather).
+- `SUNIONSTORE destination key [key ...]` [write] — Store the union of the given sets into destination.
+
+### zset
+
+- `BZPOPMIN key [key ...] timeout` [write,blocking] — Blocking pop of the lowest-scored member across one or more sorted sets.
+- `ZADD key [NX|XX] [GT|LT] [CH] [INCR] score member [score member ...]` [write] — Add members with scores to a sorted set, with conditional flags.
+- `ZCARD key` [readonly] — Return the number of members in a sorted set.
+- `ZCOUNT key min max` [readonly] — Count members with scores within the given bounds.
+- `ZDIFFSTORE destination numkeys key [key ...]` [write] — Store the difference of the given sorted sets into destination.
+- `ZINCRBY key increment member` [write] — Increment a member's score in a sorted set.
+- `ZINTERCARD numkeys key [key ...] [LIMIT limit]` [readonly] — Return the cardinality of the intersection of the given sorted sets.
+- `ZINTERSTORE destination numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX]` [write] — Store the intersection of the given sorted sets into destination.
+- `ZPOPMIN key [count]` [write] — Pop up to count members with the lowest scores.
+- `ZPOPMIN.BELOW key below [count]` [write,extension] — kevy extension: pop up to count lowest members with score strictly below the threshold (delayed-job primitive).
+- `ZRANGE key start stop [WITHSCORES]` [readonly] — Return members by rank range.
+- `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]` [readonly] — Return members with scores within the given bounds.
+- `ZRANK key member` [readonly] — Return a member's rank, ordered from the lowest score.
+- `ZREM key member [member ...]` [write] — Remove one or more members from a sorted set.
+- `ZREMRANGEBYRANK key start stop` [write] — Remove members within the given rank range.
+- `ZREMRANGEBYSCORE key min max` [write] — Remove members with scores within the given bounds.
+- `ZREVRANGEBYSCORE key max min [WITHSCORES] [LIMIT offset count]` [readonly] — Return members with scores within the given bounds, highest first.
+- `ZSCAN key cursor [MATCH pattern] [COUNT count]` [readonly] — Iterate a sorted set's members and scores (single-batch cursor).
+- `ZSCORE key member` [readonly] — Return a member's score.
+- `ZUNIONSTORE destination numkeys key [key ...] [WEIGHTS weight [weight ...]] [AGGREGATE SUM|MIN|MAX]` [write] — Store the union of the given sorted sets into destination.
+
+### stream
+
+- `XACK key group id [id ...]` [write] — Acknowledge pending entries for a consumer group.
+- `XADD key [NOMKSTREAM] [MAXLEN [=|~] threshold | MINID [=|~] id] id|* field value [field value ...]` [write] — Append an entry to a stream, with optional trim.
+- `XAUTOCLAIM key group consumer min-idle-time start [COUNT count] [JUSTID]` [write] — Scan and claim idle pending entries starting from a cursor.
+- `XCLAIM key group consumer min-idle-time id [id ...] [IDLE ms] [TIME unix-time-milliseconds] [RETRYCOUNT count] [FORCE] [JUSTID]` [write] — Claim specific idle pending entries for a consumer.
+- `XDEL key id [id ...]` [write] — Delete entries from a stream by ID.
+- `XGROUP CREATE key group id|$ [MKSTREAM] | DESTROY key group | SETID key group id|$ | CREATECONSUMER key group consumer | DELCONSUMER key group consumer` [write] — Manage stream consumer groups.
+- `XINFO STREAM key | GROUPS key | CONSUMERS key group | HELP` [readonly] — Introspect a stream, its groups, or its consumers.
+- `XLEN key` [readonly] — Return the number of entries in a stream.
+- `XPENDING key group [[IDLE min-idle-time] start end count [consumer]]` [readonly] — Inspect pending entries of a consumer group (summary or extended form).
+- `XRANGE key start end [COUNT count]` [readonly] — Return stream entries within an ID range.
+- `XREAD [COUNT count] [BLOCK milliseconds] STREAMS key [key ...] id [id ...]` [readonly,blocking] — Read new entries from one or more streams, optionally blocking.
+- `XREADGROUP GROUP group consumer [COUNT count] [BLOCK milliseconds] [NOACK] STREAMS key [key ...] id [id ...]` [write,blocking] — Read stream entries as a consumer-group member, optionally blocking.
+- `XREVRANGE key end start [COUNT count]` [readonly] — Return stream entries within an ID range, in reverse order.
+- `XSETID key last-id [ENTRIESADDED entries-added] [MAXDELETEDID max-deleted-id]` [write] — Overwrite a stream's last-generated ID and bookkeeping counters.
+- `XTRIM key MAXLEN|MINID [=|~] threshold` [write] — Trim a stream by length or minimum ID.
+
+### geo
+
+- `GEOADD key [NX|XX] [CH] longitude latitude member [longitude latitude member ...]` [write] — Add geospatial members (longitude/latitude) to a geo set.
+- `GEODIST key member1 member2 [m|km|mi|ft]` [readonly] — Return the distance between two geo members.
+- `GEOHASH key member [member ...]` [readonly] — Return the base32 geohash string of each member.
+- `GEOPOS key member [member ...]` [readonly] — Return the longitude/latitude of each member.
+- `GEORADIUS key longitude latitude radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key] [STOREDIST key]` [write] — Legacy radius search around a coordinate, with optional STORE writes.
+- `GEORADIUS_RO key longitude latitude radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC]` [readonly] — Read-only GEORADIUS (STORE options rejected).
+- `GEORADIUSBYMEMBER key member radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key] [STOREDIST key]` [write] — Legacy radius search around an existing member, with optional STORE writes.
+- `GEORADIUSBYMEMBER_RO key member radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC]` [readonly] — Read-only GEORADIUSBYMEMBER (STORE options rejected).
+- `GEOSEARCH key FROMMEMBER member|FROMLONLAT longitude latitude BYRADIUS radius m|km|mi|ft|BYBOX width height m|km|mi|ft [ASC|DESC] [COUNT count [ANY]] [WITHCOORD] [WITHDIST] [WITHHASH]` [readonly] — Search members within a radius or box from a member or coordinate.
+- `GEOSEARCHSTORE destination source FROMMEMBER member|FROMLONLAT longitude latitude BYRADIUS radius m|km|mi|ft|BYBOX width height m|km|mi|ft [ASC|DESC] [COUNT count [ANY]] [STOREDIST]` [write] — Run GEOSEARCH on source and store the hits into destination.
+
+### index
+
+- `IDX.COUNT name RANGE min max | EQ value` [readonly,extension] — Count index entries matching a range or equality predicate.
+- `IDX.CREATE name ON PREFIX prefix FIELD field TYPE i64|f64|str|vector KIND range|unique|text|ann|agg [MAXMEM bytes] [DIM dim] [DISTANCE cosine|l2|ip] [M m] [EF ef] [GROUPBY field]` [write,extension] — Declare a secondary index over a key prefix (catalog mutation, sidecar-persisted).
+- `IDX.DROP name` [write,extension] — Drop a declared index (catalog mutation, sidecar-persisted).
+- `IDX.LIST` [readonly,extension] — List declared indexes with per-index build state and stats.
+- `IDX.QUERY name RANGE min max [LIMIT n] [CURSOR c] [FIELDS field ...] | name EQ value [LIMIT n] [CURSOR c] [FIELDS field ...] | name MATCH text [LIMIT n] [FIELDS field ...] | name KNN vector [LIMIT k] [EF ef] [FIELDS field ...] | name GROUP group | name GROUPS [BY count|sum|min|max] [LIMIT n] | COMPOSE AND|OR nameA RANGE min max|EQ value nameB RANGE min max|EQ value [LIMIT n] [CURSOR c] [FIELDS field ...]` [readonly,extension] — Query an index: range/equality, text MATCH, vector KNN, aggregation groups, or a two-index COMPOSE.
+- `IDX.REBUILD name` [write,extension] — Rebuild an ANN index (tombstone compaction).
+- `IDX.VERIFY name` [readonly,extension] — Verify an index and report entry/byte/drift statistics.
+
+### view
+
+- `VIEW.CREATE name QUERY tree ORDER BY index [DESC] [MODE virtual|materialized] [TOPK k] [VIA template] (tree = '( AND|OR|DIFF sub sub )' | 'index RANGE min max' | 'index EQ value')` [write,extension] — Declare a composed view over indexes with an ORDER BY (catalog mutation, sidecar-persisted).
+- `VIEW.DROP name` [write,extension] — Drop a declared view (catalog mutation, sidecar-persisted).
+- `VIEW.EXPLAIN name` [readonly,extension] — Explain a view's composition tree with per-leaf cardinalities.
+- `VIEW.LIST` [readonly,extension] — List declared views with their mode and shape.
+- `VIEW.QUERY name [LIMIT n] [CURSOR c] [FIELDS field ...]` [readonly,extension] — Page through a view's ordered members, optionally hydrating fields via the VIA template.
+- `VIEW.REBUILD name` [write,extension] — Force a rebuild of a materialized view.
+- `VIEW.VERIFY name` [readonly,extension] — Verify a view and report member/byte statistics.
+
+### feed
+
+- `FEED.READ shard generation offset [COUNT n] [PREFIX prefix ...]` [readonly,extension] — Read change-feed frames from one shard past a generation/offset cursor.
+- `FEED.SHARDS` [readonly,extension] — Return the number of change-feed shards.
+- `FEED.TAIL shard` [readonly,extension] — Return a shard's current feed generation and next offset.
+
+### migration
+
+- `PREFIX.STATS prefix` [readonly,extension] — Report key-count and byte statistics for a key prefix.
+- `MOVE-SCOPE prefix FROM from-node-id TO to-node-id` [write,admin,extension] — Operator-issued: migrate every key under a prefix from one node to another (internal cluster op).
+- `MOVE-SCOPE-INGEST prefix bulk-payload` [write,admin,extension] — Target-side receiver of a MOVE-SCOPE bulk payload (internal cluster op).
+- `PREFIX.DIGEST prefix` [readonly,extension] — Order-insensitive checksum of a prefix's rows for migration verification.
+

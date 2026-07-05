@@ -1,5 +1,16 @@
 # Changelog
 
+### v3.11 — the machine-readable docs (AI development face)
+
+- llms.txt + docs/verb-reference.md GENERATED from the same verb
+  metadata table COMMAND DOCS answers from (gen_docs bin; --check is
+  a CI clamp — stale generated docs fail the build).
+- The cookbook's 15 recipes are executable: self-contained command
+  blocks, smoke-tested end to end in CI-shape
+  (bench/cookbook_smoke.sh, 58 commands).
+- kevy-embedded rustdoc at 100% (#![warn(missing_docs)] enforced;
+  28 items documented, two mislocated docs fixed).
+
 ### v3.10 — the machine-readable contract (AI operations face)
 
 - `COMMAND` is no longer a shell: COUNT / LIST / INFO / DOCS answer
