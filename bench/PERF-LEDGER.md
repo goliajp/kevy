@@ -42,9 +42,20 @@ kevy 四索引 vs RediSearch 单复合 FT 索引;200 查询 × median-of-5)
 
 构建时间:kevy 四索引 47.3s vs stack 单复合索引 82.4s(kevy WIN)。
 
-**ANN gap 注记**:kevy EF 400 vs stack EF_RUNTIME 400 —— recall 档位
-未对齐验证(两边同参数≠同 recall)。v3.6 Phase A 第一步 =
-recall-latency pareto 对齐后重量 gap,再 decomposition。
+**ANN gap 修正(v3.6 A0,2026-07-05 pareto 对齐,100k 向量 +
+FLAT 精确 oracle)**:名义 3.8× 大部分是 **EF 语义伪 gap** ——
+kevy 的 EF 逐 shard 生效(cmd_index_query.rs:315,8 shard = 8×
+等效 beam 工作),同名义 EF ≠ 同 recall。同 recall 档真账:
+
+| recall | kevy | stack | 真 gap |
+|---|---|---|---|
+| 1.000 | EF50 @ 0.837ms | EF400 @ 0.791ms | **1.06× ≈ 平手** |
+| ~0.99 | EF20 @ 0.491ms | EF100 @ 0.263ms | 1.87× |
+| 底档 | EF16 @ 0.445ms | EF20 @ 0.113ms | ~4× 地板 |
+
+剩余真 gap = **低延迟档 ~0.4ms 固定地板**(8-shard fan-out 分发/
+归并管线;EF16 纯图工作估 ~60µs)。v3.6 Phase A = perf-record
+验证 fan-out 管线占比(§9 gate)后再攻。
 
 ## Gap 表 → train 修订(2026-07-05 评审,写回 ROADMAP)
 
