@@ -1,5 +1,10 @@
 # PERF-LEDGER — kevy vs FOSS 真 gap 账本
 
+**状态:v3.8.0 定稿(2026-07-05)**。复测节奏:每个 release 前全矩阵
+重跑;对标物升级(valkey / redis-stack 新 GA)= gap 表重测。
+裸面 perfgate ratchet 的盒级环境阻塞档案见
+PERF-FINDING-2026-07-05-tails-closure.md(floor 不下调,盒恢复复验)。
+
 初版:2026-07-05(v3.3 基线 arena)。对标物版本入账;gap 规则:
 差值 ≤ max(两侧 stdev) = NOISE。协议:lx64,隔离(单服务器占同核),
 host loopback,client 绑异核,median-of-5 + sample stdev。

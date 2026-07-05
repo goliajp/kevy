@@ -146,12 +146,20 @@ let v = conn.get(b"k").await?;
 
 | Workload | kevy | valkey 9.1 | 比值 |
 |---|---:|---:|---:|
-| `SET -c 1` | 94.7 k/s | 62.2 k/s | **1.52×** |
-| `GET -c 1` | 97.3 k/s | 65.0 k/s | **1.50×** |
-| `SET -c 50 -P 16` | 2.59 M/s | 1.82 M/s | **1.42×** |
-| Pub/sub 扇出(50 个订阅者) | 23.1 M/s | 5.1 M/s | **4.52×** |
-| 嵌入式 `get`(命中) | 9.0 M/s | — | (无进程内 Redis) |
-| 嵌入式 `set`(覆写) | 7.0 M/s | — | (无进程内 Redis) |
+| `GET -c 50 -P 16` | 6.39 M/s | 2.13 M/s | **3.00×** |
+| `SET -c 50 -P 16` | 5.33 M/s | 1.60 M/s | **3.33×** |
+| Pub/sub 扇出(50 订阅) | 23.1 M/s | 5.1 M/s | **4.52×** |
+| 嵌入式 `get`(命中) | 9.0 M/s | — | (Redis 无进程内形态) |
+
+Serving 面对打 redis-stack 7.4.7(RediSearch),同种子同语料、
+recall 对齐([`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)):
+
+| 查询类 | kevy | RediSearch | 判定 |
+|---|---:|---:|---|
+| 全文检索(BM25 top-10) | 330 qps | 273 qps | **+21% qps**,p95 持平 |
+| ANN KNN @ recall 1.000 | 0.48 ms | 0.79 ms | **快 1.64×** |
+| GROUP BY top-100 | 1.9 ms | 202.9 ms | **110×**(写时聚合) |
+| 数值范围 + hydrate | 0.19 ms | 0.43 ms | **2.3×** |
 
 一个完整的服务器是一个 768 KB 的 stripped 二进制,启动后驻留内存
 不到 5 MB。
