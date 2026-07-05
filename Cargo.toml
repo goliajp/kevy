@@ -63,6 +63,7 @@ members = [
     "crates/kevy-lua",
     "crates/kevy-lua-host",
     "crates/kevy-chaos",
+    "crates/kevy-mcp",
 ]
 
 [workspace.package]
