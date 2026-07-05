@@ -160,12 +160,25 @@ impl<C: Commands> Shard<C> {
                 return;
             }
             Err(kevy_replicate::source::FromOffset::Future) => {
+                // v3.15 D4: a replica AHEAD of this primary is the
+                // rejoining old primary carrying a forked suffix
+                // (writes taken after the failover). The contract:
+                // the fork is DISCARDED — full snapshot resync, same
+                // ship pipeline as TooOld. (Pre-failover this was
+                // treated as corruption and closed; an epoch-fenced
+                // world makes the ahead-replica case a legal state.)
                 eprintln!(
-                    "kevy: replica fd {} sent_offset {} > primary next {}; \
-                     corrupt state, dropping link",
+                    "kevy: replica fd {} sent_offset {} > primary next {} — \
+                     forked history (old primary rejoin); shipping snapshot",
                     self.replicas[idx].fd, sent_offset, primary_next,
                 );
-                self.replicas[idx].close();
+                if let Err(e) = self.start_snapshot_ship(idx, primary_next) {
+                    eprintln!(
+                        "kevy: replica fd {} fork-resync ship failed: {e}; dropping link",
+                        self.replicas[idx].fd,
+                    );
+                    self.replicas[idx].close();
+                }
                 return;
             }
         };
