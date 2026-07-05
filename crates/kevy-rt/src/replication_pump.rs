@@ -103,16 +103,32 @@ impl<C: Commands> Shard<C> {
                 break;
             }
         }
-        // Parse complete ACK lines off the input buffer.
+        // Parse complete ACK lines off the input buffer. Tolerant
+        // reader: this direction should only ever carry ACK lines,
+        // but a stray line (handshake residue, future extensions)
+        // must not wedge the parse forever — skip to the next CRLF
+        // and keep going. Only a TRUNCATED tail stops the loop (wait
+        // for more bytes).
         let mut consumed = 0usize;
         let mut latest: Option<u64> = None;
         loop {
-            match decode_replconf_ack(&self.replicas[idx].input[consumed..]) {
+            let rest = &self.replicas[idx].input[consumed..];
+            if rest.is_empty() {
+                break;
+            }
+            match decode_replconf_ack(rest) {
                 Ok(Some((offset, used))) => {
                     consumed += used;
                     latest = Some(offset);
                 }
-                _ => break,
+                Ok(None) | Err(kevy_replicate::wire::WireError::BadEnvelope) => {
+                    // Not an ACK line — drop through the next CRLF.
+                    match rest.windows(2).position(|w| w == b"\r\n") {
+                        Some(p) => consumed += p + 2,
+                        None => break, // incomplete garbage; wait
+                    }
+                }
+                Err(_) => break, // truncated — more bytes needed
             }
         }
         if consumed > 0 {

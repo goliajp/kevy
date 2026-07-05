@@ -188,14 +188,25 @@ pub(crate) fn replica_link_view() -> (bool, u64, u64, u64) {
     (up, applied, primary.saturating_sub(applied), age_ms / 1000)
 }
 
+/// v3.14 D5 — `min-replicas-to-write` (0 = off).
+static MIN_REPLICAS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub(crate) fn set_min_replicas(n: u32) {
+    MIN_REPLICAS.store(n, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub(crate) fn write_denied_reply() -> Option<Vec<u8>> {
-    if IS_REPLICA.load(std::sync::atomic::Ordering::Relaxed)
-        && READ_ONLY.load(std::sync::atomic::Ordering::Relaxed)
-    {
-        Some(b"-READONLY You can't write against a read only replica.\r\n".to_vec())
-    } else {
-        None
+    if IS_REPLICA.load(std::sync::atomic::Ordering::Relaxed) {
+        if READ_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
+            return Some(b"-READONLY You can't write against a read only replica.\r\n".to_vec());
+        }
+        return None;
     }
+    let min = MIN_REPLICAS.load(std::sync::atomic::Ordering::Relaxed);
+    if min > 0 && crate::ops::replication::healthy_replica_count() < min as usize {
+        return Some(b"-NOREPLICAS Not enough good replicas to write.\r\n".to_vec());
+    }
+    None
 }
 
 /// Set at serve() from config.

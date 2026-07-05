@@ -285,6 +285,16 @@ fn info_replication(b: &mut String) {
         None => {
             b.push_str("role:master\r\n");
             b.push_str(&format!("connected_slaves:{connected}\r\n"));
+            // v3.14 D2: per-replica truth — sent (pumped), acked
+            // (REPLCONF ACK), lag in frames vs master_repl_offset.
+            for (i, (ip, port, sent, acked)) in view.replicas.iter().enumerate() {
+                let acked_v = acked.unwrap_or(0);
+                let lag = offset.saturating_sub(acked_v);
+                let state = if acked.is_some() { "online" } else { "syncing" };
+                b.push_str(&format!(
+                    "slave{i}:ip={ip},port={port},state={state},offset={acked_v},sent={sent},lag={lag}\r\n"
+                ));
+            }
             b.push_str("master_replid:0000000000000000000000000000000000000000\r\n");
             b.push_str(&format!("master_repl_offset:{offset}\r\n"));
         }

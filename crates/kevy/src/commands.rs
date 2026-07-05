@@ -186,7 +186,7 @@ impl Commands for KevyCommands {
     fn on_replication_view(
         &self,
         master_repl_offset: u64,
-        replicas: Vec<(std::net::Ipv4Addr, u16, u64)>,
+        replicas: Vec<(std::net::Ipv4Addr, u16, u64, Option<u64>)>,
     ) {
         // Same thread-local pattern as `on_persist_stats`: `ROLE` /
         // `INFO replication` read the answering shard's most-recent
