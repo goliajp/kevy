@@ -12,7 +12,7 @@ at serving time (`bench/VALIDATION-LEDGER.md` has the measured
 numbers).
 
 Every command block runs as-is against a fresh local kevy
-(`kevy --port 6004`; recipes 11–14 additionally want
+(`kevy --port 6004`; recipes 11–14 and 16 additionally want
 `[feed] enabled = true` in `kevy.toml` — see docs/cdc.md).
 `bench/cookbook_smoke.sh` executes every `kevy-cli` line below
 against a throwaway server, so the blocks stay honest.
@@ -277,3 +277,85 @@ kevy-cli import -p 6004 /tmp/items.resp   # bulk load FIRST: no index write hook
 kevy-cli -p 6004 IDX.CREATE item_price ON PREFIX item: FIELD price TYPE i64 KIND range   # declare AFTER: backfill
 kevy-cli -p 6004 IDX.QUERY item_price RANGE 0 100 LIMIT 10
 ```
+
+---
+
+The last three recipes swap the workload: not an RDS being replaced
+but an AI agent's memory stack. Nothing new is needed — session
+state, episodic memory and RAG retrieval are the same access-path
+patterns wearing different key prefixes.
+
+## 16. Session context with TTL
+
+An agent's working context is a row with a lease: the compacted
+conversation lives in a hash, `EXPIRE` is the idle-eviction policy
+(renewed every turn — a sliding window), and the feed is the audit
+trail you replay when someone asks what the agent knew at turn 7.
+
+```console
+# needs [feed] enabled = true in kevy.toml (docs/cdc.md)
+kevy-cli -p 6004 HSET session:a7 user 42 turns 6 messages 'wants refund for order 1001; tone calm' last_tool order_lookup
+kevy-cli -p 6004 EXPIRE session:a7 3600
+kevy-cli -p 6004 HSET session:a7 turns 7 messages 'refund approved; awaiting confirmation'
+kevy-cli -p 6004 EXPIRE session:a7 3600                       # renew the lease on every turn
+kevy-cli -p 6004 FEED.TAIL 0                                  # audit cursor: where the log ends now
+kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX session:    # gen 1 = a fresh data dir's first generation
+```
+
+The `messages` field holds whatever summary your compaction step
+produces; rewriting it is one `HSET`, and every revision is already
+a change frame in commit order — the "conversation history" table
+most agent frameworks bolt on is recipe 12's audit log for free.
+
+## 17. Episodic memory (time × semantic)
+
+Episodic memory answers two questions about the same rows: *what
+happened recently* (time) and *what resembles this* (meaning). One
+prefix, one index per question — `DIM 8` keeps the demo readable;
+real embeddings are 768+ dimensions shipped as f32-LE blobs, and the
+`csv:` debug form below is accepted everywhere a vector is (stored
+fields and query vectors go through the same parser —
+docs/vector-search.md).
+
+```console
+kevy-cli -p 6004 HSET mem:1 ts 1783200000 kind obs what 'user prefers dark roast' v csv:0.9,0.1,0,0,0,0,0,0
+kevy-cli -p 6004 HSET mem:2 ts 1783203600 kind obs what 'user asked about decaf' v csv:0.8,0.3,0.1,0,0,0,0,0
+kevy-cli -p 6004 HSET mem:3 ts 1783207200 kind reflection what 'coffee questions cluster in the morning' v csv:0,0.2,0.9,0.1,0,0,0,0
+kevy-cli -p 6004 IDX.CREATE mem_ts ON PREFIX mem: FIELD ts TYPE i64 KIND range
+kevy-cli -p 6004 IDX.CREATE mem_kind ON PREFIX mem: FIELD kind TYPE str KIND range
+kevy-cli -p 6004 IDX.CREATE mem_ann ON PREFIX mem: FIELD v TYPE vector KIND ann DIM 8
+kevy-cli -p 6004 IDX.QUERY mem_ts RANGE 1783203000 1783210000 LIMIT 10 FIELDS what      # recent memories
+kevy-cli -p 6004 IDX.QUERY mem_ann KNN csv:0.85,0.2,0,0,0,0,0,0 LIMIT 2 FIELDS what ts  # similar memories
+kevy-cli -p 6004 IDX.QUERY COMPOSE AND mem_ts RANGE 1783203000 1783210000 mem_kind EQ reflection LIMIT 10 FIELDS what
+```
+
+`COMPOSE AND` conjoins scalar legs (`RANGE`/`EQ`) — here "in this
+time window AND a reflection". For *similar within a window* there
+is deliberately no KNN leg (filtering inside the graph walk is the
+query-engine slope, REFUSED): run the KNN with headroom on `LIMIT`,
+hydrate `ts` via `FIELDS` as above, and drop out-of-window hits
+client-side.
+
+## 18. RAG chunks with hybrid retrieval
+
+Chunks are rows carrying both retrieval surfaces — the text and its
+embedding — so one write maintains both indexes:
+
+```console
+kevy-cli -p 6004 HSET chunk:1 doc kevy-guide seq 1 body 'rows are hashes under a typed key prefix' v csv:1,0,0,0,0,0,0,0
+kevy-cli -p 6004 HSET chunk:2 doc kevy-guide seq 2 body 'indexes are declared once and maintained by the write hook' v csv:0,1,0,0,0,0,0,0
+kevy-cli -p 6004 HSET chunk:3 doc kevy-guide seq 3 body 'the feed streams every committed write as a change frame' v csv:0,0,1,0,0,0,0,0
+kevy-cli -p 6004 IDX.CREATE chunk_text ON PREFIX chunk: FIELD body TYPE str KIND text
+kevy-cli -p 6004 IDX.CREATE chunk_ann ON PREFIX chunk: FIELD v TYPE vector KIND ann DIM 8
+kevy-cli -p 6004 IDX.QUERY HYBRID chunk_text MATCH 'typed key prefix' chunk_ann KNN csv:0.9,0.1,0.1,0,0,0,0,0 LIMIT 2 FIELDS body
+kevy-cli -p 6004 IDX.QUERY HYBRID chunk_text MATCH 'change frame' chunk_ann KNN csv:0,0.1,0.9,0,0,0,0,0 LIMIT 2 RRFK 20 FIELDS body
+```
+
+`HYBRID` runs both legs server-side and fuses by **reciprocal-rank
+fusion**: each key scores `Σ 1/(k + rank)` across the BM25 list and
+the KNN list — rank-only, so the two heterogeneous score scales
+never need normalizing, and a chunk near the top of *both* legs
+beats a chunk that tops only one. `RRFK` is the k (default 60):
+lower it when you trust each leg's top hits and want agreement there
+to dominate; raise it to flatten the fusion toward consensus deeper
+in both lists.
