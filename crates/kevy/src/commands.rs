@@ -246,6 +246,19 @@ impl Commands for KevyCommands {
         crate::cmd_index_reduce::extension_reduce(argv, chunks)
     }
 
+    fn extension_reduce_v3(
+        &self,
+        argv: &[Vec<u8>],
+        chunks: Vec<Vec<u8>>,
+        proto: kevy_resp::RespVersion,
+    ) -> Vec<u8> {
+        let reply = self.extension_reduce(argv, chunks);
+        if proto == kevy_resp::RespVersion::V3 {
+            return crate::cmd_index_reduce::resp3_upgrade(argv, reply);
+        }
+        reply
+    }
+
     fn on_shard_tick(&self, store: &mut Store) {
         crate::index_runtime::on_tick(store);
         crate::view_runtime::on_tick(store);
