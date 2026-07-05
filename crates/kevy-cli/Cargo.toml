@@ -1,6 +1,6 @@
 [package]
 name = "kevy-cli"
-description = "redis-cli-style REPL for kevy or any RESP server. Dev tool."
+description = "kevy operations CLI: redis-cli-style REPL plus the migration toolchain (import/export/verify/diff/inspect/digest)."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -8,9 +8,6 @@ license.workspace = true
 readme = "README.md"
 keywords = ["redis", "cli", "repl", "resp", "kevy"]
 categories = ["command-line-utilities", "database"]
-# Dev REPL — publish decision deferred to v1.x. Keep out of the RC publish
-# chain so it can be polished separately without blocking server crates.
-publish = false
 
 [lints]
 workspace = true
