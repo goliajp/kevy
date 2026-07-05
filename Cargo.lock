@@ -573,6 +573,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-mcp"
+version = "3.8.0"
+dependencies = [
+ "kevy-resp",
+ "kevy-resp-client",
+]
+
+[[package]]
 name = "kevy-persist"
 version = "3.8.0"
 dependencies = [

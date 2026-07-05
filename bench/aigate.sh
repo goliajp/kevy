@@ -117,8 +117,43 @@ time.sleep(0.3)
 first = s3.recv(1)
 clamp("EXPLAIN on RESP3 conn is a Map (%)", first == b"%")
 
-print("aigate: PASS" if not fails else f"aigate: FAIL — {fails}")
+print("aigate-wire: PASS" if not fails else f"aigate: FAIL — {fails}")
 sys.exit(1 if fails else 0)
 PY
 RC=$?
-exit $RC
+[ $RC = 0 ] || exit $RC
+
+# ---- phase 3: MCP session e2e (kevy-mcp binary next to the server binary)
+MCP=$(dirname "$KBIN")/kevy-mcp
+if [ ! -x "$MCP" ]; then
+    echo "aigate: FAIL — kevy-mcp binary missing next to $KBIN"
+    exit 1
+fi
+OUT=$(printf '%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+  '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"kevy_read","arguments":{"command":["PING"]}}}' \
+  '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"kevy_read","arguments":{"command":["SET","a","b"]}}}' \
+  '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"kevy_read","arguments":{"command":["BLPOP","x","1"]}}}' \
+  | "$MCP" --url redis://127.0.0.1:$PORT 2>/dev/null)
+echo "$OUT" > "$DIR/mcp.out"
+python3 - "$DIR/mcp.out" <<'PY2'
+import json, sys
+lines = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+by = {d.get("id"): d for d in lines}
+ok = True
+def clamp(name, cond):
+    global ok
+    print(f"aigate-mcp: {'ok' if cond else 'FAIL'} — {name}")
+    ok = ok and cond
+clamp("initialize returns 2024-11-05", by[1]["result"]["protocolVersion"] == "2024-11-05")
+tools = [t["name"] for t in by[2]["result"]["tools"]]
+clamp("tools/list has read+discover, no write by default",
+      "kevy_read" in tools and "kevy_discover" in tools and "kevy_write" not in tools)
+clamp("PING round-trips", "PONG" in json.dumps(by[3].get("result", {})))
+clamp("write verb rejected through kevy_read", "error" in by[4] and "write" in by[4]["error"]["message"])
+clamp("blocking verb excluded from whitelist", "error" in by[5])
+print("aigate: PASS" if ok else "aigate: FAIL — mcp phase")
+sys.exit(0 if ok else 1)
+PY2
+exit $?
