@@ -15,7 +15,7 @@ use kevy_resp::{Argv, ArgvView, ProtocolError, parse_command_into};
 // to keep this file under the 500-LOC project ceiling); re-export
 // here so the canonical import path stays `kevy_replicate::wire::*`.
 pub use crate::wire_snapshot::{
-    SNAPSHOT_CHUNK_MAX, SNAPSHOT_LINE_MAX, SnapshotMarker, decode_snapshot_chunk,
+    SNAPSHOT_CHUNK_MAX, SNAPSHOT_LINE_MAX, SnapshotMarker, decode_replconf_ack, decode_snapshot_chunk, encode_ping, encode_replconf_ack,
     decode_snapshot_marker, encode_snapshot_begin, encode_snapshot_chunk, encode_snapshot_end,
 };
 

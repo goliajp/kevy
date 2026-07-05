@@ -45,6 +45,11 @@ static REPLICA_UPSTREAM: Mutex<Option<(IpAddr, u16)>> = Mutex::new(None);
 /// `Runtime::with_replica_inboxes` and the senders stay here for
 /// runners to reach.
 pub(crate) fn install_senders(senders: Vec<ReplicaInboxSender>) {
+    // A new serve session starts as a primary until its own config /
+    // REPLICAOF says otherwise — same overwrite-on-serve convention
+    // as the senders themselves (keeps sequential in-process servers,
+    // e.g. the integration suite, from inheriting a stale role).
+    IS_REPLICA.store(false, std::sync::atomic::Ordering::Relaxed);
     let mut guard = REPLICA_SENDERS.lock().expect("REPLICA_SENDERS poisoned");
     *guard = senders;
 }
@@ -65,6 +70,7 @@ pub(crate) fn senders_clone() -> Vec<ReplicaInboxSender> {
 /// Called by `REPLICAOF NO ONE`, by retarget (before `start_runners`
 /// puts the new ones), and on process shutdown.
 pub(crate) fn stop_runners() {
+    IS_REPLICA.store(false, std::sync::atomic::Ordering::Relaxed);
     let mut guard = REPLICA_RUNNERS.lock().expect("REPLICA_RUNNERS poisoned");
     let runners = std::mem::take(&mut *guard);
     drop(guard); // release the lock before potentially-blocking joins
@@ -114,12 +120,94 @@ pub(crate) fn start_runners(upstream: (IpAddr, u16)) -> Result<(), &'static str>
     };
     *REPLICA_RUNNERS.lock().expect("REPLICA_RUNNERS poisoned") = new_runners;
     *REPLICA_UPSTREAM.lock().expect("REPLICA_UPSTREAM poisoned") = Some(upstream);
+    // AFTER the internal stop_runners above (which clears the flag) —
+    // the role flips to replica only once the new fleet is installed.
+    IS_REPLICA.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 
 /// v3.2 — process-wide single-source flag (config
 /// `--replica-single-source`; set once by `kevy::serve`).
 static SINGLE_SOURCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// v3.14 A0 — hot-path role flag: `true` while replica runners are
+/// active. Read every client write via `Commands::write_denied`, so
+/// it's an atomic, not the REPLICA_UPSTREAM mutex.
+static IS_REPLICA: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// `replica-read-only` config (default ON, Redis-compatible).
+static READ_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub(crate) fn is_replica() -> bool {
+    IS_REPLICA.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(crate) fn set_read_only(on: bool) {
+    READ_ONLY.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn read_only() -> bool {
+    READ_ONLY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// v3.14 D3 — replica-side heartbeat view, written by every runner on
+/// each `+PING`, read by INFO replication. Atomics (not a mutex): the
+/// runners tick at 1Hz × shards and INFO reads are rare, but the
+/// fields are independent gauges so torn reads across fields are
+/// harmless.
+static PRIMARY_OFFSET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static APPLIED_OFFSET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LAST_PING_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Runner-side: record one heartbeat observation. `primary_offset` is
+/// summed across runners in spirit — with the per-shard fleet each
+/// runner sees its own shard's stream, so we track the MAX per field
+/// (INFO reports link health + a representative lag, not a per-shard
+/// table; the primary side owns the authoritative per-replica table).
+pub(crate) fn record_ping(primary_offset: u64, applied: u64) {
+    PRIMARY_OFFSET.fetch_max(primary_offset, std::sync::atomic::Ordering::Relaxed);
+    APPLIED_OFFSET.fetch_max(applied, std::sync::atomic::Ordering::Relaxed);
+    LAST_PING_MS.store(epoch_ms(), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// INFO replication: `(link_up, applied_offset, lag_frames, last_io_secs)`.
+/// Link is up when a heartbeat landed within the last 3s.
+pub(crate) fn replica_link_view() -> (bool, u64, u64, u64) {
+    let last = LAST_PING_MS.load(std::sync::atomic::Ordering::Relaxed);
+    let now = epoch_ms();
+    let age_ms = now.saturating_sub(last);
+    let up = last != 0 && age_ms < 3_000;
+    let primary = PRIMARY_OFFSET.load(std::sync::atomic::Ordering::Relaxed);
+    let applied = APPLIED_OFFSET.load(std::sync::atomic::Ordering::Relaxed);
+    (up, applied, primary.saturating_sub(applied), age_ms / 1000)
+}
+
+/// v3.14 D5 — `min-replicas-to-write` (0 = off).
+static MIN_REPLICAS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+pub(crate) fn set_min_replicas(n: u32) {
+    MIN_REPLICAS.store(n, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn write_denied_reply() -> Option<Vec<u8>> {
+    if IS_REPLICA.load(std::sync::atomic::Ordering::Relaxed) {
+        if READ_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
+            return Some(b"-READONLY You can't write against a read only replica.\r\n".to_vec());
+        }
+        return None;
+    }
+    let min = MIN_REPLICAS.load(std::sync::atomic::Ordering::Relaxed);
+    if min > 0 && crate::ops::replication::healthy_replica_count() < min as usize {
+        return Some(b"-NOREPLICAS Not enough good replicas to write.\r\n".to_vec());
+    }
+    None
+}
 
 /// Set at serve() from config.
 pub(crate) fn set_single_source(on: bool) {

@@ -58,9 +58,9 @@ fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
         crate::replica_state::stop_runners();
         // T1.28.5: per-replica list — 3 fake replicas, offset=42.
         let replicas = vec![
-            (std::net::Ipv4Addr::new(10, 0, 0, 1), 6004, 42u64),
-            (std::net::Ipv4Addr::new(10, 0, 0, 2), 6004, 41u64),
-            (std::net::Ipv4Addr::new(10, 0, 0, 3), 6004, 40u64),
+            (std::net::Ipv4Addr::new(10, 0, 0, 1), 6004, 42u64, Some(42u64)),
+            (std::net::Ipv4Addr::new(10, 0, 0, 2), 6004, 41u64, Some(41u64)),
+            (std::net::Ipv4Addr::new(10, 0, 0, 3), 6004, 40u64, Some(40u64)),
         ];
         crate::ops::replication::set_replication_view(42, replicas);
         let out = run(b"INFO", &[b"replication"]);
