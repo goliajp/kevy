@@ -42,7 +42,7 @@ impl Distance {
         match self {
             // prepared cosine vectors are unit length → 1 - dot
             Distance::Cosine => 1.0 - dot(a, b),
-            Distance::L2 => a.iter().zip(b).map(|(x, y)| (x - y) * (x - y)).sum(),
+            Distance::L2 => l2(a, b),
             Distance::Ip => -dot(a, b),
         }
     }
@@ -60,9 +60,101 @@ impl Distance {
     }
 }
 
+// A single-accumulator float reduction is a loop-carried dependency
+// the compiler may NOT reassociate — it compiles to a SCALAR add
+// chain. Eight independent lanes let it auto-vectorize at whatever
+// SIMD width the target enables (perf-record put the distance kernel
+// inside the 65% beam-search dominator on the KNN shape).
+//
+// The portable baseline vectorizes at the DEFAULT target width
+// (SSE2 on x86_64) — still 48% of the KNN shape. On x86_64 a
+// runtime-dispatched AVX2+FMA clone of the SAME loops doubles the
+// lane width (the hnswlib/VecSim pattern): `#[target_feature]`
+// recompiles the body at the wider ISA, and the one-time
+// `is_x86_feature_detected!` gate makes the call sound.
+#[cfg(target_arch = "x86_64")]
+mod avx {
+    #[target_feature(enable = "avx2,fma")]
+    pub(super) unsafe fn dot(a: &[f32], b: &[f32]) -> f32 {
+        super::dot_lanes(a, b)
+    }
+
+    #[target_feature(enable = "avx2,fma")]
+    pub(super) unsafe fn l2(a: &[f32], b: &[f32]) -> f32 {
+        super::l2_lanes(a, b)
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn has_avx2() -> bool {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static STATE: AtomicU8 = AtomicU8::new(0);
+    match STATE.load(Ordering::Relaxed) {
+        0 => {
+            let yes = std::arch::is_x86_feature_detected!("avx2")
+                && std::arch::is_x86_feature_detected!("fma");
+            STATE.store(if yes { 2 } else { 1 }, Ordering::Relaxed);
+            yes
+        }
+        s => s == 2,
+    }
+}
+
 #[inline]
 fn dot(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| x * y).sum()
+    #[cfg(target_arch = "x86_64")]
+    if has_avx2() {
+        // SAFETY: gated on runtime AVX2+FMA detection.
+        return unsafe { avx::dot(a, b) };
+    }
+    dot_lanes(a, b)
+}
+
+#[inline]
+fn l2(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    if has_avx2() {
+        // SAFETY: gated on runtime AVX2+FMA detection.
+        return unsafe { avx::l2(a, b) };
+    }
+    l2_lanes(a, b)
+}
+
+#[inline(always)]
+fn dot_lanes(a: &[f32], b: &[f32]) -> f32 {
+    let mut acc = [0.0f32; 8];
+    let (ac, ar) = a.split_at(a.len() - a.len() % 8);
+    let (bc, br) = b.split_at(ac.len().min(b.len()));
+    for (ca, cb) in ac.chunks_exact(8).zip(bc.chunks_exact(8)) {
+        for i in 0..8 {
+            acc[i] += ca[i] * cb[i];
+        }
+    }
+    let mut s: f32 = acc.iter().sum();
+    for (x, y) in ar.iter().zip(br) {
+        s += x * y;
+    }
+    s
+}
+
+#[inline(always)]
+fn l2_lanes(a: &[f32], b: &[f32]) -> f32 {
+    let mut acc = [0.0f32; 8];
+    let (ac, ar) = a.split_at(a.len() - a.len() % 8);
+    let (bc, br) = b.split_at(ac.len().min(b.len()));
+    for (ca, cb) in ac.chunks_exact(8).zip(bc.chunks_exact(8)) {
+        for i in 0..8 {
+            let d = ca[i] - cb[i];
+            acc[i] += d * d;
+        }
+    }
+    let mut s: f32 = acc.iter().sum();
+    for (x, y) in ar.iter().zip(br) {
+        let d = x - y;
+        s += d * d;
+    }
+    s
 }
 
 /// Decode a wire vector: raw f32 LE bytes (`len == dim*4`), or the
