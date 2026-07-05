@@ -1,5 +1,31 @@
 # Changelog
 
+## v3.8.0 — the perf arc ships (2026-07-05)
+
+Every train since v3.0.0 in one release. The arc's charter: measure
+the REAL gaps against living competitors (valkey 9.1, redis-stack
+7.4.7 / RediSearch), attack only what measurement confirms, and keep
+every win under a ratchet. The account (bench/PERF-LEDGER.md):
+
+- **Bare face vs valkey 9.1** — kevy sweeps all 7 command classes at
+  1.6-3.3× (GET 3.0×, SET 3.33×), fair-fight protocol, gaps far
+  beyond noise.
+- **Serving face vs redis-stack** — FTS: p95 tie with +21% qps and
+  the single-common-term shape 93× after v3.5 (6.3ms → 0.093ms with
+  −49% index RSS); AGG: 110× (write-time aggregates); NUMERIC:
+  2.3×; ANN: from nominally 3.8× BEHIND to **1.64× AHEAD at recall
+  1.000** after the v3.6 campaign (recall-aligned, profile-driven).
+- **Replication**: embedded-as-primary topology (v3.2) — a server
+  replica with the full query surface over an in-process store's
+  data.
+- Ledger disciplines now permanent: competitor versions recorded,
+  median-of-N + stdev, gap < noise band = NOISE, iso-recall
+  comparisons only.
+
+Trains: v3.1 aggregate kind · v3.2 embedded-as-primary · v3.3
+baseline arena · v3.4 tails closure · v3.5 FTS doc-id inverted
+lists · v3.6 ANN campaign · v3.8 this ledger close.
+
 ### v3.6 — ANN campaign (recall-aligned; 3 profile-driven attacks)
 
 - Phase A0 pareto alignment (FLAT-oracle ground truth) exposed the

@@ -153,12 +153,20 @@ reproducible from a script in [`bench/`](bench/).
 
 | Workload | kevy | valkey 9.1 | Ratio |
 |---|---:|---:|---:|
-| `SET -c 1` | 94.7 k/s | 62.2 k/s | **1.52×** |
-| `GET -c 1` | 97.3 k/s | 65.0 k/s | **1.50×** |
-| `SET -c 50 -P 16` | 2.59 M/s | 1.82 M/s | **1.42×** |
+| `GET -c 50 -P 16` | 6.39 M/s | 2.13 M/s | **3.00×** |
+| `SET -c 50 -P 16` | 5.33 M/s | 1.60 M/s | **3.33×** |
 | Pub/sub fan-out (50 subs) | 23.1 M/s | 5.1 M/s | **4.52×** |
 | Embedded `get` (hit) | 9.0 M/s | — | (no in-process Redis) |
-| Embedded `set` (overwrite) | 7.0 M/s | — | (no in-process Redis) |
+
+And the serving face vs redis-stack 7.4.7 (RediSearch), same seeded
+corpora, recall-aligned ([`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)):
+
+| Query class | kevy | RediSearch | Verdict |
+|---|---:|---:|---|
+| Full-text (BM25 top-10) | 330 qps | 273 qps | **+21% qps**, p95 tie |
+| ANN KNN @ recall 1.000 | 0.48 ms | 0.79 ms | **1.64× ahead** |
+| GROUP BY top-100 | 1.9 ms | 202.9 ms | **110×** (write-time aggregates) |
+| Numeric range + hydrate | 0.19 ms | 0.43 ms | **2.3×** |
 
 A complete server is a 768 KB stripped binary that boots into under
 5 MB of RSS.
