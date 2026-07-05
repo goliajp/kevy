@@ -114,7 +114,6 @@ impl Store {
         Ok(())
     }
 
-    /// `IDX.DROP` equivalent; `false` if absent.
     /// v2.8: declare an ANN index (KIND ann, TYPE vector). `params.m`
     /// / `params.ef` of 0 select the defaults (16 / 200).
     pub fn idx_create_ann(
@@ -144,6 +143,8 @@ impl Store {
         self.register_spec(spec)
     }
 
+    /// `IDX.DROP` equivalent; `false` if absent. On a hit the catalog
+    /// sidecar is re-persisted so the drop survives restart.
     pub fn idx_drop(&self, name: &[u8]) -> bool {
         let hit = {
             let mut g = self

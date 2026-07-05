@@ -57,6 +57,8 @@ impl<'a> Pipeline<'a> {
 
     // ---- fluent enqueue --------------------------------------------
 
+    /// Queue `SET key value`. Nothing is applied (or AOF-logged)
+    /// until [`commit`](Self::commit) — true of every enqueue method.
     pub fn set(mut self, key: &[u8], value: &[u8]) -> Self {
         self.ops.push(PendingOp::Set {
             key: key.to_vec(),
@@ -65,6 +67,7 @@ impl<'a> Pipeline<'a> {
         self
     }
 
+    /// Queue `DEL key [key ...]`.
     pub fn del(mut self, keys: &[&[u8]]) -> Self {
         self.ops.push(PendingOp::Del {
             keys: keys.iter().map(|k| k.to_vec()).collect(),
@@ -72,16 +75,19 @@ impl<'a> Pipeline<'a> {
         self
     }
 
+    /// Queue `INCR key` (commit errors if the value is not an integer).
     pub fn incr(mut self, key: &[u8]) -> Self {
         self.ops.push(PendingOp::Incr { key: key.to_vec() });
         self
     }
 
+    /// Queue `INCRBY key delta`; negative `delta` does DECR-style work.
     pub fn incr_by(mut self, key: &[u8], delta: i64) -> Self {
         self.ops.push(PendingOp::IncrBy { key: key.to_vec(), delta });
         self
     }
 
+    /// Queue `HSET key field value [field value ...]`.
     pub fn hset(mut self, key: &[u8], pairs: &[(&[u8], &[u8])]) -> Self {
         self.ops.push(PendingOp::HSet {
             key: key.to_vec(),
@@ -90,6 +96,7 @@ impl<'a> Pipeline<'a> {
         self
     }
 
+    /// Queue `HDEL key field [field ...]`.
     pub fn hdel(mut self, key: &[u8], fields: &[&[u8]]) -> Self {
         self.ops.push(PendingOp::HDel {
             key: key.to_vec(),
@@ -98,6 +105,7 @@ impl<'a> Pipeline<'a> {
         self
     }
 
+    /// Queue `HINCRBY key field delta`.
     pub fn hincrby(mut self, key: &[u8], field: &[u8], delta: i64) -> Self {
         self.ops.push(PendingOp::HIncrBy {
             key: key.to_vec(),
@@ -107,6 +115,7 @@ impl<'a> Pipeline<'a> {
         self
     }
 
+    /// Queue `ZADD key score member [score member ...]`.
     pub fn zadd(mut self, key: &[u8], pairs: &[(f64, &[u8])]) -> Self {
         self.ops.push(PendingOp::ZAdd {
             key: key.to_vec(),
@@ -130,6 +139,7 @@ impl<'a> Pipeline<'a> {
         self
     }
 
+    /// Queue `ZREM key member [member ...]`.
     pub fn zrem(mut self, key: &[u8], members: &[&[u8]]) -> Self {
         self.ops.push(PendingOp::ZRem {
             key: key.to_vec(),
@@ -138,6 +148,7 @@ impl<'a> Pipeline<'a> {
         self
     }
 
+    /// Queue `ZINCRBY key delta member`.
     pub fn zincrby(mut self, key: &[u8], delta: f64, member: &[u8]) -> Self {
         self.ops.push(PendingOp::ZIncrBy {
             key: key.to_vec(),
@@ -147,6 +158,7 @@ impl<'a> Pipeline<'a> {
         self
     }
 
+    /// Queue `SADD key member [member ...]`.
     pub fn sadd(mut self, key: &[u8], members: &[&[u8]]) -> Self {
         self.ops.push(PendingOp::SAdd {
             key: key.to_vec(),
@@ -155,6 +167,7 @@ impl<'a> Pipeline<'a> {
         self
     }
 
+    /// Queue `SREM key member [member ...]`.
     pub fn srem(mut self, key: &[u8], members: &[&[u8]]) -> Self {
         self.ops.push(PendingOp::SRem {
             key: key.to_vec(),
@@ -163,6 +176,7 @@ impl<'a> Pipeline<'a> {
         self
     }
 
+    /// Queue `LPUSH key value [value ...]`.
     pub fn lpush(mut self, key: &[u8], values: &[&[u8]]) -> Self {
         self.ops.push(PendingOp::LPush {
             key: key.to_vec(),
@@ -171,6 +185,7 @@ impl<'a> Pipeline<'a> {
         self
     }
 
+    /// Queue `RPUSH key value [value ...]`.
     pub fn rpush(mut self, key: &[u8], values: &[&[u8]]) -> Self {
         self.ops.push(PendingOp::RPush {
             key: key.to_vec(),
