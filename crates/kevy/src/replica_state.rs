@@ -45,6 +45,11 @@ static REPLICA_UPSTREAM: Mutex<Option<(IpAddr, u16)>> = Mutex::new(None);
 /// `Runtime::with_replica_inboxes` and the senders stay here for
 /// runners to reach.
 pub(crate) fn install_senders(senders: Vec<ReplicaInboxSender>) {
+    // A new serve session starts as a primary until its own config /
+    // REPLICAOF says otherwise — same overwrite-on-serve convention
+    // as the senders themselves (keeps sequential in-process servers,
+    // e.g. the integration suite, from inheriting a stale role).
+    IS_REPLICA.store(false, std::sync::atomic::Ordering::Relaxed);
     let mut guard = REPLICA_SENDERS.lock().expect("REPLICA_SENDERS poisoned");
     *guard = senders;
 }
