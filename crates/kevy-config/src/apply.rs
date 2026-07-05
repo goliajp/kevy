@@ -243,6 +243,9 @@ impl Config {
                 self.replication.reconnect_window_ms = value_as_u32(&item)?;
             }
             "single_source" => self.replication.single_source = value_as_bool(&item)?,
+            "replica_read_only" => {
+                self.replication.replica_read_only = value_as_bool(&item)?;
+            }
             k => return Err(schema_err(&item, format!("unknown [replication] key: {k}"))),
         }
         Ok(())

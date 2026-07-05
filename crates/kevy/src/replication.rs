@@ -60,6 +60,7 @@ pub(crate) fn apply<C: Commands>(
             .with_replication_reconnect_window(cfg.replication.reconnect_window_ms),
         ReplicationRole::Replica => {
             crate::replica_state::set_single_source(cfg.replication.single_source);
+            crate::replica_state::set_read_only(cfg.replication.replica_read_only);
             spawn_initial_runners_from_config(cfg);
             runtime
         }

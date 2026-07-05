@@ -65,6 +65,7 @@ pub(crate) fn senders_clone() -> Vec<ReplicaInboxSender> {
 /// Called by `REPLICAOF NO ONE`, by retarget (before `start_runners`
 /// puts the new ones), and on process shutdown.
 pub(crate) fn stop_runners() {
+    IS_REPLICA.store(false, std::sync::atomic::Ordering::Relaxed);
     let mut guard = REPLICA_RUNNERS.lock().expect("REPLICA_RUNNERS poisoned");
     let runners = std::mem::take(&mut *guard);
     drop(guard); // release the lock before potentially-blocking joins
@@ -114,12 +115,44 @@ pub(crate) fn start_runners(upstream: (IpAddr, u16)) -> Result<(), &'static str>
     };
     *REPLICA_RUNNERS.lock().expect("REPLICA_RUNNERS poisoned") = new_runners;
     *REPLICA_UPSTREAM.lock().expect("REPLICA_UPSTREAM poisoned") = Some(upstream);
+    // AFTER the internal stop_runners above (which clears the flag) —
+    // the role flips to replica only once the new fleet is installed.
+    IS_REPLICA.store(true, std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 
 /// v3.2 — process-wide single-source flag (config
 /// `--replica-single-source`; set once by `kevy::serve`).
 static SINGLE_SOURCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// v3.14 A0 — hot-path role flag: `true` while replica runners are
+/// active. Read every client write via `Commands::write_denied`, so
+/// it's an atomic, not the REPLICA_UPSTREAM mutex.
+static IS_REPLICA: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// `replica-read-only` config (default ON, Redis-compatible).
+static READ_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub(crate) fn is_replica() -> bool {
+    IS_REPLICA.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(crate) fn set_read_only(on: bool) {
+    READ_ONLY.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn read_only() -> bool {
+    READ_ONLY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(crate) fn write_denied_reply() -> Option<Vec<u8>> {
+    if IS_REPLICA.load(std::sync::atomic::Ordering::Relaxed)
+        && READ_ONLY.load(std::sync::atomic::Ordering::Relaxed)
+    {
+        Some(b"-READONLY You can't write against a read only replica.\r\n".to_vec())
+    } else {
+        None
+    }
+}
 
 /// Set at serve() from config.
 pub(crate) fn set_single_source(on: bool) {

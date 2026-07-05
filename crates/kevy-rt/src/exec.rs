@@ -167,6 +167,15 @@ impl<C: Commands> Shard<C> {
             wake_idx,
             ..
         } = resolved;
+        // v3.14 A0: role-gated write rejection (read-only replica).
+        // `seq` is already assigned by handle_command — resolve it
+        // directly (immediate_reply would double-assign and wedge the
+        // emit order).
+        if is_write && let Some(err) = self.commands.write_denied() {
+            self.push_pending_slot(conn_id, 1, Agg::First(None), false);
+            self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(err)));
+            return;
+        }
         match route {
             Route::Subscribe => self.do_subscribe(conn_id, seq, args, true),
             Route::Unsubscribe => self.do_subscribe(conn_id, seq, args, false),
