@@ -104,17 +104,23 @@ impl<C: Commands> Shard<C> {
                         }
                     }
                     ReplicaState::Streaming { .. } => {
+                        // v3.14 D2: the replica→primary direction is
+                        // the ACK channel — this readable handler is
+                        // its SINGLE reader (v1.18 discarded these
+                        // bytes as unsolicited; a second reader in the
+                        // pump raced this one and lost most ACKs).
                         let conn = &mut self.replicas[idx];
                         if conn.input.len() + n > STREAMING_INPUT_DISCARD_CAP {
                             eprintln!(
                                 "kevy: streaming replica {} sent > {} B \
-                                 of unsolicited input; dropping link",
+                                 of unparseable input; dropping link",
                                 conn.fd, STREAMING_INPUT_DISCARD_CAP,
                             );
                             conn.close();
                             return Ok(());
                         }
-                        conn.input.clear();
+                        conn.input.extend_from_slice(&scratch[..n]);
+                        self.parse_replica_acks(idx);
                     }
                     ReplicaState::AckSent { .. }
                     | ReplicaState::SnapshotShipping { .. }

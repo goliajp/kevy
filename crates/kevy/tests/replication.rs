@@ -150,11 +150,34 @@ fn replicate_from(offset: &str, id: &str) -> Vec<u8> {
     v
 }
 
+/// v3.14: a quiet streaming conn now carries 1 Hz `+PING <n>` heartbeats,
+/// so "the ACK and then silence" became "the ACK and then pings" —
+/// assert the ACK prefix and that everything after is ping lines.
+fn assert_ack_then_pings(reply: &[u8], want_ack: &[u8]) {
+    assert!(
+        reply.starts_with(want_ack),
+        "reply must start with {:?}, got {:?}",
+        String::from_utf8_lossy(want_ack),
+        String::from_utf8_lossy(reply),
+    );
+    for line in reply[want_ack.len()..].split(|&b| b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        assert!(
+            line.is_empty() || line.starts_with(b"+PING "),
+            "unexpected non-ping bytes after ACK: {:?}",
+            String::from_utf8_lossy(line),
+        );
+    }
+}
+
 fn read_to_eof(s: &mut std::net::TcpStream) -> Vec<u8> {
+    // v3.14: 1 Hz heartbeats keep feeding the per-read timeout, so a
+    // quiet-socket read loop never starves — bound by WALL CLOCK too.
     let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+    let start = std::time::Instant::now();
     let mut out = Vec::new();
     let mut chunk = [0u8; 256];
-    loop {
+    while start.elapsed() < std::time::Duration::from_secs(3) {
         match s.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => out.extend_from_slice(&chunk[..n]),
@@ -183,11 +206,7 @@ fn replica_handshake_receives_ack_and_stays_connected() {
     let mut s = std::net::TcpStream::connect(("127.0.0.1", server.replication_base)).unwrap();
     s.write_all(&replicate_from("0", "replica-a")).unwrap();
     let reply = read_to_eof(&mut s);
-    assert_eq!(
-        reply, b"+ACK 0\r\n",
-        "got {:?}",
-        String::from_utf8_lossy(&reply),
-    );
+    assert_ack_then_pings(&reply, b"+ACK 0\r\n");
     server.shutdown();
 }
 
@@ -198,11 +217,7 @@ fn handshake_with_nonzero_offset_echoed_in_ack() {
     let mut s = std::net::TcpStream::connect(("127.0.0.1", server.replication_base)).unwrap();
     s.write_all(&replicate_from("12345", "node-7")).unwrap();
     let reply = read_to_eof(&mut s);
-    assert_eq!(
-        reply, b"+ACK 12345\r\n",
-        "got {:?}",
-        String::from_utf8_lossy(&reply),
-    );
+    assert_ack_then_pings(&reply, b"+ACK 12345\r\n");
     server.shutdown();
 }
 
@@ -345,8 +360,17 @@ fn streaming_replica_receives_set_command_as_wire_frame() {
             break;
         }
     }
+    // v3.14: strip any out-of-band +PING heartbeat lines before the frame.
+    let mut start = 0usize;
+    while buf.len() > start && buf[start] == b'+' {
+        match buf[start..].windows(2).position(|w| w == b"\r\n") {
+            Some(p) => start += p + 2,
+            None => break,
+        }
+    }
+    let buf = &buf[start..];
     let (offset, argv, used) =
-        kevy_replicate::wire::decode_frame(&buf).expect("decode frame");
+        kevy_replicate::wire::decode_frame(buf).expect("decode frame");
     assert_eq!(offset, 0);
     assert_eq!(argv.len(), 3);
     assert_eq!(argv.get(0), Some(&b"SET"[..]));
@@ -383,6 +407,13 @@ fn streaming_replica_receives_multiple_frames_in_order() {
     let mut cursor = 0usize;
     while frames.len() < 5 {
         if buf.len() - cursor > 0 {
+            // v3.14: skip out-of-band +PING heartbeat lines between frames.
+            if buf[cursor] == b'+'
+                && let Some(p) = buf[cursor..].windows(2).position(|w| w == b"\r\n")
+            {
+                cursor += p + 2;
+                continue;
+            }
             match kevy_replicate::wire::decode_frame(&buf[cursor..]) {
                 Ok((offset, argv, used)) => {
                     frames.push((offset, argv));
@@ -455,6 +486,14 @@ fn streaming_replica_receives_only_its_shards_writes() {
         let mut cursor = 0usize;
         let _ = r.set_read_timeout(Some(std::time::Duration::from_millis(500)));
         loop {
+            // v3.14: skip out-of-band +PING heartbeat lines between frames.
+            if buf.len() > cursor
+                && buf[cursor] == b'+'
+                && let Some(p) = buf[cursor..].windows(2).position(|w| w == b"\r\n")
+            {
+                cursor += p + 2;
+                continue;
+            }
             // Try to decode out of what's buffered.
             match kevy_replicate::wire::decode_frame(&buf[cursor..]) {
                 Ok((_, argv, used)) => {
@@ -625,10 +664,14 @@ fn snapshot_ship_triggers_when_replica_falls_behind_backlog() {
     )
     .expect("connect + handshake");
 
-    // First event must be SnapshotBegin (TooOld → snapshot ship).
-    match client.next_event().expect("event").expect("ok") {
-        ReplicaEvent::SnapshotBegin => {}
-        other => panic!("expected SnapshotBegin, got {other:?}"),
+    // First NON-PING event must be SnapshotBegin (TooOld → ship);
+    // heartbeats may interleave before the ship starts.
+    loop {
+        match client.next_event().expect("event").expect("ok") {
+            ReplicaEvent::SnapshotBegin => break,
+            kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
+            other => panic!("expected SnapshotBegin, got {other:?}"),
+        }
     }
 
     // Accumulate chunks until SnapshotEnd.
@@ -637,6 +680,7 @@ fn snapshot_ship_triggers_when_replica_falls_behind_backlog() {
         match client.next_event().expect("event").expect("ok") {
             ReplicaEvent::SnapshotChunk(bytes) => snapshot_bytes.extend(bytes),
             ReplicaEvent::SnapshotEnd { ack_offset } => break ack_offset,
+            kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
             other => panic!("expected SnapshotChunk or SnapshotEnd, got {other:?}"),
         }
     };
@@ -698,6 +742,7 @@ fn snapshot_ship_loaded_into_local_store_matches_primary() {
         match client.next_event().expect("event").expect("ok") {
             ReplicaEvent::SnapshotChunk(bytes) => snapshot_bytes.extend(bytes),
             ReplicaEvent::SnapshotEnd { ack_offset } => break ack_offset,
+            kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
             other => panic!("unexpected event: {other:?}"),
         }
     };
@@ -773,6 +818,7 @@ fn fresh_replica_join_snapshot_then_live_frames() {
         match client.next_event().expect("event").expect("ok") {
             ReplicaEvent::SnapshotChunk(bytes) => snapshot_bytes.extend(bytes),
             ReplicaEvent::SnapshotEnd { ack_offset } => break ack_offset,
+            kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
             other => panic!("expected SnapshotChunk or SnapshotEnd, got {other:?}"),
         }
     };
@@ -808,6 +854,7 @@ fn fresh_replica_join_snapshot_then_live_frames() {
                 );
                 let _ = kevy::dispatch(&mut local_store, &frame.argv);
             }
+            kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
             other => panic!("live frame {i}: expected Frame, got {other:?}"),
         }
     }
@@ -980,11 +1027,7 @@ fn multi_shard_listener_binds_per_shard_port() {
         let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
         s.write_all(&replicate_from("0", &format!("replica-{i}"))).unwrap();
         let reply = read_to_eof(&mut s);
-        assert_eq!(
-            reply, b"+ACK 0\r\n",
-            "shard {i} port {port}: got {:?}",
-            String::from_utf8_lossy(&reply),
-        );
+        assert_ack_then_pings(&reply, b"+ACK 0\r\n");
     }
     server.shutdown();
 }

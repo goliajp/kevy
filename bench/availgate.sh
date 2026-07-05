@@ -31,10 +31,21 @@ trap 'kill $PPID_ $RPID_ 2>/dev/null; rm -rf "$DIR"' EXIT
 fail() { echo "availgate: FAIL — $1"; exit 1; }
 note() { echo "availgate: ok — $1"; }
 
+wait_ports_free() {
+    # A just-killed server's sockets can linger a beat; binding into
+    # that window aborts the new process (fail-fast is the right
+    # PRODUCT behavior — the gate simply waits it out).
+    for _ in $(seq 50); do
+        lsof -nP -i :$PPORT -i :$RPORT -i :1$PPORT >/dev/null 2>&1 || return 0
+        sleep 0.2
+    done
+}
+
 start_primary() {
+    wait_ports_free
     printf '[replication]\nrole = "primary"\nmin_replicas_to_write = %s\n' "${1:-0}" > "$DIR/pri.toml"
     env KEVY_BIND=127.0.0.1 "$KBIN" --threads 4 --port $PPORT --dir "$DIR/p" --no-aof \
-        --config "$DIR/pri.toml" >/dev/null 2>&1 &
+        --config "$DIR/pri.toml" > "$DIR/pri.out" 2>&1 &
     PPID_=$!
     for _ in $(seq 100); do
         $CLI -p $PPORT PING >/dev/null 2>&1 && return
@@ -46,7 +57,7 @@ start_primary() {
 start_replica() {
     printf '[replication]\nrole = "replica"\nupstream = "127.0.0.1:%s"\n' "1$PPORT" > "$DIR/rep.toml"
     env KEVY_BIND=127.0.0.1 "$KBIN" --threads 4 --port $RPORT --dir "$DIR/r" --no-aof \
-        --config "$DIR/rep.toml" >/dev/null 2>&1 &
+        --config "$DIR/rep.toml" > "$DIR/rep.out" 2>&1 &
     RPID_=$!
     for _ in $(seq 100); do
         $CLI -p $RPORT PING >/dev/null 2>&1 && return
@@ -66,7 +77,14 @@ echo "$R" | grep -q "READONLY" || fail "replica accepted a client write: $R"
 for i in $(seq 1 200); do $CLI -p $PPORT SET "k$i" v >/dev/null; done
 sleep 2
 N=$($CLI -p $RPORT DBSIZE | grep -oE "[0-9]+")
-[ "${N:-0}" -ge 200 ] || fail "replica apply stalled (dbsize=$N)"
+if [ "${N:-0}" -lt 200 ]; then
+    echo "--- FORENSICS: replica INFO"; $CLI -p $RPORT INFO replication | head -12
+    echo "--- FORENSICS: primary INFO"; $CLI -p $PPORT INFO replication | head -12
+    echo "--- FORENSICS: replica log"; tail -5 "$DIR/rep.out" 2>/dev/null
+    echo "--- FORENSICS: primary log"; tail -8 "$DIR/pri.out" 2>/dev/null
+    echo "--- FORENSICS: port owners"; lsof -nP -i :7381 -i :17381 -i :17382 2>/dev/null | head -8
+    fail "replica apply stalled (dbsize=$N)"
+fi
 note "READONLY holds while apply advances (dbsize=$N)"
 
 # ---- clamp 2+3: lag converges + data-plane convergence
