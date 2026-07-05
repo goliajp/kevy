@@ -59,6 +59,43 @@ delete supports `--dry-run`.
 
 ## Loading into an indexed keyspace
 
+### Waiting for index readiness
+
+`IDX.CREATE` returns immediately and backfills in the background;
+queries answer `-ERR index building` until done. The standard wait is
+polling `IDX.LIST` — its `state` column flips from `building` to
+`ready`:
+
+```
+until kevy-cli -p 6004 IDX.LIST | grep -A1 my_index | grep -q ready; do sleep 1; done
+```
+
+Backfill speed scales with DOCUMENT SIZE for text indexes: ~7s per
+million small rows, but multi-KB bodies index at roughly 85s per
+million (measured: 200k mail-sized bodies in 17s).
+
+### Verifying a whole migration in one command
+
+`kevy-cli diff` compares any number of prefixes across two live
+servers in one call — prefer it over per-prefix digest pairs:
+
+```
+kevy-cli diff 127.0.0.1:6004 127.0.0.1:6005 msg: mbox: usr: tag: session:
+```
+
+### Large exports
+
+The dump is uncompressed RESP text (fast, greppable). For 10GB+
+keyspaces pipe through gzip — the format is stream-friendly:
+
+```
+kevy-cli export -p 6004 /dev/stdout | gzip > dump.kevy.gz
+gunzip -c dump.kevy.gz | kevy-cli import -p 6005 --strict /dev/stdin
+```
+
+(`--resume` needs a real file for its .progress sidecar — decompress
+to disk first if you want resumability.)
+
 Create indexes **after** the bulk load: the index engine's backfill
 builds from existing data at bulk speed (~7s per million rows
 measured), which beats paying per-write hook maintenance a million
