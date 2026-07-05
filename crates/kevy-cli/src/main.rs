@@ -362,10 +362,16 @@ fn run_migrate_cli(args: &[String]) -> ExitCode {
     } else {
         kevy_cli::migrate::run_import(&mut client, std::path::Path::new(&file), resume, strict)
             .map(|r| {
-                println!(
-                    "imported: {} ok, {} errors, offset {}",
-                    r.sent, r.errors, r.offset
-                )
+                if resume && r.sent == 0 && r.errors == 0 {
+                    // A no-op resume reads as a silent failure without
+                    // this — say plainly that the file was already in.
+                    println!("imported: already complete (offset {}), nothing to resume", r.offset)
+                } else {
+                    println!(
+                        "imported: {} ok, {} errors, offset {}",
+                        r.sent, r.errors, r.offset
+                    )
+                }
             })
     };
     match res {
