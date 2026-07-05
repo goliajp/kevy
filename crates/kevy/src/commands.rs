@@ -45,6 +45,7 @@ impl Commands for KevyCommands {
             b"SDIFFSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SDiff),
             b"ZINTERCARD" if args.len() >= 3 => Route::ZInterCard,
             b"IDX.QUERY" if args.len() >= 4 => Route::Extension,
+            b"IDX.EXPLAIN" if args.len() >= 2 => Route::Extension,
             b"IDX.REBUILD" if args.len() == 2 => Route::Extension,
             b"IDX.COUNT" if args.len() >= 4 => Route::Extension,
             b"IDX.VERIFY" if args.len() == 2 => Route::Extension,

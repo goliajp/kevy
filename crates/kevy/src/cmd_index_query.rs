@@ -28,6 +28,13 @@ pub(crate) fn extension_op(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"COMPOSE")) {
         return op_compose(store, argv);
     }
+    // v3.10: IDX.EXPLAIN <name> <shape…> — the exact IDX.QUERY parse,
+    // ZERO execution. Chunk: [ST_OK][building u8][entries u64 LE]
+    // [shape byte] — kind/plan text assemble on the origin from the
+    // catalog spec.
+    if verb.eq_ignore_ascii_case(b"IDX.EXPLAIN") {
+        return op_explain(store, argv);
+    }
     // v2.7: IDX.QUERY <name> MATCH <text> [LIMIT n] [FIELDS f…]
     if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"MATCH")) {
         return op_match(store, argv);
@@ -495,6 +502,57 @@ fn encode_hydration(store: &mut Store, chunk: &mut Vec<u8>, key: &[u8], fields: 
             }
             _ => chunk.extend_from_slice(&u32::MAX.to_le_bytes()),
         }
+    }
+}
+
+fn op_explain(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+    let Some(cat) = index_runtime::catalog() else {
+        return vec![ST_NOINDEX];
+    };
+    let name = argv.get(1).map(Vec::as_slice).unwrap_or(b"");
+    let Some(spec) = cat.iter().map(|(s, _)| s).find(|s| s.name.as_slice() == name) else {
+        return vec![ST_NOINDEX];
+    };
+    // Dry-run the same parses IDX.QUERY would run — arity/shape errors
+    // surface here without touching the segment.
+    let shape = argv.get(2).map(Vec::as_slice).unwrap_or(b"");
+    let mut qargv = argv.to_vec();
+    qargv[0] = b"IDX.QUERY".to_vec();
+    let parsed = if shape.eq_ignore_ascii_case(b"MATCH") {
+        crate::cmd_index_query::MatchArgs::parse(&qargv).is_some()
+    } else if shape.eq_ignore_ascii_case(b"KNN") {
+        KnnArgs::parse(&qargv).is_some()
+    } else if shape.eq_ignore_ascii_case(b"GROUP") || shape.eq_ignore_ascii_case(b"GROUPS") {
+        shape.eq_ignore_ascii_case(b"GROUP") || parse_groups_args(&qargv).is_some()
+    } else {
+        Query::parse(&qargv).is_some()
+    };
+    if !parsed {
+        return vec![ST_BADARGS];
+    }
+    let building = index_runtime::segment_building(store, &spec.name);
+    let entries = kind_entries(store, spec.kind, &spec.name);
+    let mut chunk = vec![ST_OK, u8::from(building)];
+    chunk.extend_from_slice(&entries.to_le_bytes());
+    chunk.push(shape.first().copied().unwrap_or(b'?').to_ascii_uppercase());
+    chunk
+}
+
+/// This shard's live row count for one index, by kind.
+fn kind_entries(store: &mut Store, kind: kevy_index::IndexKind, name: &[u8]) -> u64 {
+    match kind {
+        kevy_index::IndexKind::Agg => {
+            index_runtime::with_ready_agg(store, name, |a| a.stats().rows).unwrap_or_default()
+        }
+        kevy_index::IndexKind::Ann => {
+            index_runtime::with_ready_ann(store, name, |g| g.stats().vectors).unwrap_or_default()
+        }
+        kevy_index::IndexKind::Text => {
+            index_runtime::with_ready_text_segment(store, name, |t| t.stats().docs)
+                .unwrap_or_default()
+        }
+        _ => index_runtime::with_ready_segment(store, name, |_, s| s.stats().entries)
+            .unwrap_or_default(),
     }
 }
 

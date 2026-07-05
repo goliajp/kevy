@@ -53,6 +53,53 @@ pub(crate) fn extension_reduce(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8
             _ => {}
         }
     }
+    // v3.10: IDX.EXPLAIN — pair-array plan summary; per-shard chunks
+    // carry [ST_OK][building][entries u64][shape byte].
+    if verb.eq_ignore_ascii_case(b"IDX.EXPLAIN") {
+        let mut est_rows: u64 = 0;
+        let mut building = false;
+        let mut shape_b = b'?';
+        for c in &chunks {
+            if c.len() >= 11 {
+                building |= c[1] != 0;
+                est_rows += u64::from_le_bytes(c[2..10].try_into().expect("8 bytes"));
+                shape_b = c[10];
+            }
+        }
+        let kind = index_runtime::catalog()
+            .and_then(|cat| {
+                cat.iter()
+                    .map(|(s, _)| s)
+                    .find(|s| Some(s.name.as_slice()) == argv.get(1).map(Vec::as_slice))
+                    .map(|s| format!("{:?}", s.kind).to_ascii_lowercase())
+            })
+            .unwrap_or_else(|| "?".into());
+        let shape = match shape_b {
+            b'M' => "match",
+            b'K' => "knn",
+            b'G' => "groups",
+            b'R' => "range",
+            b'E' => "eq",
+            _ => "query",
+        };
+        let state = if building { "building" } else { "ready" };
+        let plan = format!(
+            "single-index scan: kind={kind} shape={shape}, {} shard(s) fan-out, merge at origin",
+            chunks.len()
+        );
+        encode_array_len(&mut out, 4);
+        for (k, v) in [
+            ("kind", kind.as_str()),
+            ("state", state),
+            ("est_rows", &est_rows.to_string()),
+            ("plan", &plan),
+        ] {
+            encode_array_len(&mut out, 2);
+            encode_bulk(&mut out, k.as_bytes());
+            encode_bulk(&mut out, v.as_bytes());
+        }
+        return out;
+    }
     if verb.eq_ignore_ascii_case(b"IDX.COUNT") {
         let total: u64 = chunks
             .iter()
