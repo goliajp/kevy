@@ -126,8 +126,8 @@ def ids_from_stack_reply(r):
 
 
 def ids_from_kevy_reply(r):
-    # IDX.QUERY KNN reply: flat array of keys (bulk strings).
-    return [x.decode() for x in r if isinstance(x, bytes)]
+    # IDX.QUERY KNN reply: nested [[key, distance], ...] pairs.
+    return [x[0].decode() for x in r if isinstance(x, list) and x]
 
 
 def main():
