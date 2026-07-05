@@ -498,14 +498,6 @@ impl<C: Commands> Shard<C> {
             if let Some(aof) = &mut self.aof {
                 let _ = aof.maybe_sync();
             }
-            // v3-cluster replication producer pump (per Issue Ledger I2 +
-            // T1.14): drain the per-shard backlog out to streaming
-            // replicas. E9: gate at the call site so the steady-state
-            // standalone shard pays one branch instead of a function-call
-            // frame on every reactor iter.
-            if self.replicate.is_some() || !self.replicas.is_empty() {
-                self.pump_replication()?;
-            }
             // Active TTL reaper / shard housekeeping. Skip the wall-clock
             // read on most iters: in busy-poll the tick fires at 10 Hz
             // with negligible overhead (counter saturates in ~us, then
@@ -553,6 +545,15 @@ impl<C: Commands> Shard<C> {
                 }
             }
 
+            // v3-cluster replication producer pump (Issue Ledger I2 +
+            // T1.14). OUTSIDE the did_work block since v3.14: the
+            // heartbeat (1s) and the ACK drain must run on idle iters
+            // too — a parked-and-woken shard with zero events still
+            // owes its replicas a pulse. Cost when replication is off
+            // stays one branch (E9 gating preserved).
+            if self.replicate.is_some() || !self.replicas.is_empty() {
+                self.pump_replication()?;
+            }
             // A non-empty backlog means a peer ring is full: keep spinning so we
             // re-attempt the flush (and keep draining inbound to unblock peers).
             let has_backlog = self.backlog.iter().any(|b| !b.is_empty());

@@ -186,7 +186,7 @@ impl Commands for KevyCommands {
     fn on_replication_view(
         &self,
         master_repl_offset: u64,
-        replicas: Vec<(std::net::Ipv4Addr, u16, u64)>,
+        replicas: Vec<(std::net::Ipv4Addr, u16, u64, Option<u64>)>,
     ) {
         // Same thread-local pattern as `on_persist_stats`: `ROLE` /
         // `INFO replication` read the answering shard's most-recent
@@ -246,6 +246,10 @@ impl Commands for KevyCommands {
         crate::cmd_index_reduce::extension_reduce(argv, chunks)
     }
 
+    fn write_denied(&self) -> Option<Vec<u8>> {
+        crate::replica_state::write_denied_reply()
+    }
+
     fn extension_reduce_v3(
         &self,
         argv: &[Vec<u8>],
@@ -267,12 +271,18 @@ impl Commands for KevyCommands {
         // CPU budget at the default 10 Hz cadence. Cheap when no TTL'd
         // keys exist (a single map-emptiness check + bucket walk).
         let cfg = config_global::get();
-        let samples = cfg.expiry.sample as usize;
-        store.tick_expire(samples, 16);
-        // v2.4: sweep due hash field TTLs. Deadlines live in the AOF
-        // (HPEXPIREAT frames), so replay purges identically — no
-        // logging needed here, same determinism argument as key TTLs.
-        let _ = store.tick_hash_ttl(64);
+        // v3.14 A0: a replica does NOT actively expire — the primary
+        // owns TTL truth and ships DEL/expiry effects through the
+        // replication feed (Redis semantics; diverging reapers would
+        // fork the keyspaces). Lazy-expiry reads stay local either way.
+        if !crate::replica_state::is_replica() {
+            let samples = cfg.expiry.sample as usize;
+            store.tick_expire(samples, 16);
+            // v2.4: sweep due hash field TTLs. Deadlines live in the AOF
+            // (HPEXPIREAT frames), so replay purges identically — no
+            // logging needed here, same determinism argument as key TTLs.
+            let _ = store.tick_hash_ttl(64);
+        }
         // Re-apply maxmemory + eviction policy in case `CONFIG SET` has
         // swapped the global since the previous tick. `store.set_max_memory`
         // is idempotent and cheap (compares + assigns two scalars + may

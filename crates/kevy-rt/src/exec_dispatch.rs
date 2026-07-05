@@ -71,6 +71,14 @@ impl<C: Commands> Shard<C> {
         block_hint: crate::BlockHint,
         meta: DispatchMeta,
     ) {
+        // v3.14 A0: role-gated write rejection covers the single-shard
+        // path too (start_command gates the fan-out routes; seq is
+        // already assigned here — slot+fold, not immediate_reply).
+        if meta.is_write && let Some(err) = self.commands.write_denied() {
+            self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
+            self.fold(conn_id, seq, crate::message::Part::Reply(crate::message::SmallReply::from_vec(err)));
+            return;
+        }
         // In-order local fast path: `seq == next_emit` and no prior cmd is
         // pending, so write straight to the conn's output and return.
         if shard == self.id

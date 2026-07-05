@@ -33,6 +33,18 @@ pub struct ReplicationSection {
     /// dropping it (and forcing a full snapshot on reconnect). Default
     /// `60_000` (60 s).
     pub reconnect_window_ms: u32,
+    /// v3.14 D5 — primary refuses writes when fewer than this many
+    /// replicas have a live ACK within `min_replicas_max_lag_ms`.
+    /// `0` (default) disables the check. A lag heuristic, not a
+    /// quorum guarantee — the quorum lease (v3.16) is the real
+    /// split-brain fence.
+    pub min_replicas_to_write: u32,
+    /// Freshness window for `min_replicas_to_write` (ms).
+    pub min_replicas_max_lag_ms: u32,
+    /// v3.14 — reject client writes while in the replica role
+    /// (`-READONLY`). Default `true`, Redis-compatible; the
+    /// replication apply path and admin verbs bypass the gate.
+    pub replica_read_only: bool,
     /// v3.2 — the upstream is a SINGLE stream on one port (an embedded
     /// writer's `embed_writer_listen_addr` source) rather than a
     /// per-shard port fleet: one routing runner fans frames into local
@@ -48,6 +60,9 @@ impl Default for ReplicationSection {
             listen_port_base: 0,
             replication_buffer_size: 256 * 1024 * 1024,
             reconnect_window_ms: 60_000,
+            min_replicas_to_write: 0,
+            min_replicas_max_lag_ms: 10_000,
+            replica_read_only: true,
             single_source: false,
         }
     }

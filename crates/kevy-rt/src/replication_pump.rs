@@ -12,7 +12,8 @@ use crate::Commands;
 use crate::replication::ReplicaState;
 use crate::shard::Shard;
 use kevy_replicate::wire::{
-    SNAPSHOT_CHUNK_MAX, encode_snapshot_begin, encode_snapshot_chunk, encode_snapshot_end,
+    SNAPSHOT_CHUNK_MAX, decode_replconf_ack, encode_ping, encode_snapshot_begin,
+    encode_snapshot_chunk, encode_snapshot_end,
 };
 use std::io;
 
@@ -53,12 +54,73 @@ impl<C: Commands> Shard<C> {
         let next = src.next_offset();
         for idx in 0..self.replicas.len() {
             match self.replicas[idx].state {
-                ReplicaState::Streaming { .. } => self.fill_streaming_output(idx, next),
+                ReplicaState::Streaming { .. } => {
+                    self.fill_streaming_output(idx, next);
+                    self.maybe_append_heartbeat(idx, next);
+                }
                 ReplicaState::SnapshotShipping { .. } => self.pump_snapshot_chunks(idx),
                 _ => {}
             }
         }
         self.drain_streaming_outputs()
+    }
+
+    /// v3.14 D3 — append the in-stream heartbeat (`+PING <next>`) at a
+    /// 1s cadence so the replica can compute lag + link liveness. Out
+    /// of band: occupies no offset space, rides the same output
+    /// buffer as frames (ordering with frames is irrelevant — the
+    /// payload is the primary's position, not stream data).
+    fn maybe_append_heartbeat(&mut self, idx: usize, primary_next: u64) {
+        let conn = &mut self.replicas[idx];
+        let due = conn
+            .last_ping
+            .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs(1));
+        if !due {
+            return;
+        }
+        conn.output.extend_from_slice(&encode_ping(primary_next));
+        conn.last_ping = Some(std::time::Instant::now());
+    }
+
+    /// v3.14 D2 — parse complete `REPLCONF ACK <offset>` lines off a
+    /// streaming replica's input buffer and advance its slot. Called
+    /// from the readable-event handler (the connection's single
+    /// reader). Tolerant: an unknown line skips to the next CRLF so
+    /// residue can never wedge the channel; only a truncated tail
+    /// waits for more bytes.
+    pub(crate) fn parse_replica_acks(&mut self, idx: usize) {
+        let mut consumed = 0usize;
+        let mut latest: Option<u64> = None;
+        loop {
+            let rest = &self.replicas[idx].input[consumed..];
+            if rest.is_empty() {
+                break;
+            }
+            match decode_replconf_ack(rest) {
+                Ok(Some((offset, used))) => {
+                    consumed += used;
+                    latest = Some(offset);
+                }
+                Ok(None) | Err(kevy_replicate::wire::WireError::BadEnvelope) => {
+                    match rest.windows(2).position(|w| w == b"\r\n") {
+                        Some(p) => consumed += p + 2,
+                        None => break,
+                    }
+                }
+                Err(_) => break, // truncated — more bytes needed
+            }
+        }
+        if consumed > 0 {
+            self.replicas[idx].input.drain(..consumed);
+        }
+        let Some(offset) = latest else { return };
+        if let ReplicaState::Streaming { replica_id, .. } = &self.replicas[idx].state {
+            let id = replica_id.clone();
+            let now_ns = std::time::Instant::now()
+                .duration_since(self.replication_epoch)
+                .as_nanos() as u64;
+            self.slots.insert_or_touch(&id, offset, now_ns);
+        }
     }
 
     /// Refill one replica's output buffer with backlog frames. Skips

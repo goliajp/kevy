@@ -6,7 +6,9 @@
 //! verify invariants on the recovered state.
 
 mod harness;
+mod proxy;
 mod writer_pool;
 
 pub use harness::{Harness, HarnessConfig, KillSignal, pick_free_port};
+pub use proxy::{ChaosProxy, Direction};
 pub use writer_pool::{AckEntry, AckLog, WriterPool, pipelined_verify_counts, verify_all_present};

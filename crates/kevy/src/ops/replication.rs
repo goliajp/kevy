@@ -37,7 +37,7 @@ pub(crate) struct ReplicationView {
     pub(crate) master_repl_offset: u64,
     /// Per-replica `(ipv4, port, sent_offset)` triple — populated
     /// by `kevy_rt::Shard::tick_replication_view` (T1.28.5).
-    pub(crate) replicas: Vec<(Ipv4Addr, u16, u64)>,
+    pub(crate) replicas: Vec<(Ipv4Addr, u16, u64, Option<u64>)>,
 }
 
 thread_local! {
@@ -51,7 +51,7 @@ thread_local! {
 /// Record the answering shard's replication view (see [`REPLICATION_VIEW`]).
 pub(crate) fn set_replication_view(
     master_repl_offset: u64,
-    replicas: Vec<(Ipv4Addr, u16, u64)>,
+    replicas: Vec<(Ipv4Addr, u16, u64, Option<u64>)>,
 ) {
     REPLICATION_VIEW.with(|c| {
         *c.borrow_mut() = ReplicationView {
@@ -63,6 +63,17 @@ pub(crate) fn set_replication_view(
 
 /// Read the answering shard's replication view. Returns a default
 /// (offset=0, no replicas) when replication is off on this shard.
+/// v3.14 D5 — replicas with a live connection AND at least one real
+/// ACK, per this shard's latest view tick. Freshness is proxied by
+/// connection liveness (a dead link leaves the view within a tick).
+pub(crate) fn healthy_replica_count() -> usize {
+    // Healthy = has ACKed at all (Some(0) is an empty replica's live
+    // heartbeat ACK — it counts, or min-replicas deadlocks a fresh
+    // pair: writes need a replica, the replica's first frame needs a
+    // write).
+    REPLICATION_VIEW.with(|v| v.borrow().replicas.iter().filter(|(_, _, _, a)| a.is_some()).count())
+}
+
 pub(crate) fn replication_view() -> ReplicationView {
     REPLICATION_VIEW.with(|c| c.borrow().clone())
 }
@@ -200,10 +211,12 @@ fn emit_master(out: &mut Vec<u8>) {
     // offset as **bulk strings** (not integers) — matches the shape
     // most clients (incl. redis-rs) parse against.
     encode_array_len(out, view.replicas.len() as i64);
-    for (ip, port, offset) in &view.replicas {
+    // v3.14 D2: ROLE reports the replica's ACKED offset when it has
+    // one (real acknowledgment), falling back to sent (pre-first-ACK).
+    for (ip, port, sent, acked) in &view.replicas {
         let ip_str = ip.to_string();
         let port_str = port.to_string();
-        let off_str = offset.to_string();
+        let off_str = acked.unwrap_or(*sent).to_string();
         encode_array_len(out, 3);
         encode_bulk(out, ip_str.as_bytes());
         encode_bulk(out, port_str.as_bytes());
@@ -255,7 +268,7 @@ mod tests {
         // started a runner.
         crate::replica_state::stop_runners();
         let replicas: Vec<_> = (0..replica_count)
-            .map(|i| (Ipv4Addr::new(10, 0, 0, (i + 1) as u8), 6004, offset))
+            .map(|i| (Ipv4Addr::new(10, 0, 0, (i + 1) as u8), 6004, offset, Some(offset)))
             .collect();
         set_replication_view(offset, replicas);
         let mut a = Argv::default();
