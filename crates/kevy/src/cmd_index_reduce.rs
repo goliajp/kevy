@@ -15,22 +15,39 @@ pub(crate) fn extension_reduce(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
     let mut out = Vec::new();
     // Status triage: any BADARGS / NOINDEX / BUILDING wins the reply.
+    // v3.10: errors are SELF-EXPLAINING — they name the verb and the
+    // index and point at the discovery surface, so an agent that hits
+    // one can recover without out-of-band knowledge.
+    let verb_s = String::from_utf8_lossy(verb);
+    let name_s = argv.get(1).map(|a| String::from_utf8_lossy(a).into_owned()).unwrap_or_default();
     for c in &chunks {
         match c.first().copied() {
             Some(ST_BADARGS) | None => {
-                encode_error(&mut out, "ERR bad IDX arguments");
+                encode_error(
+                    &mut out,
+                    &format!("ERR {verb_s} '{name_s}': bad arguments — run COMMAND DOCS {verb_s} for the syntax"),
+                );
                 return out;
             }
             Some(ST_NOINDEX) => {
-                encode_error(&mut out, "ERR no such index");
+                encode_error(
+                    &mut out,
+                    &format!("ERR no such index '{name_s}' (IDX.LIST enumerates them)"),
+                );
                 return out;
             }
             Some(ST_BUILDING) => {
-                encode_error(&mut out, "INDEXBUILDING index is still building");
+                encode_error(
+                    &mut out,
+                    &format!("INDEXBUILDING index '{name_s}' is still building (poll IDX.LIST until state=ready)"),
+                );
                 return out;
             }
             Some(ST_OVERBUDGET) => {
-                encode_error(&mut out, "INDEXOVERBUDGET index build exceeded MAXMEM");
+                encode_error(
+                    &mut out,
+                    &format!("INDEXOVERBUDGET index '{name_s}' build exceeded MAXMEM (raise maxmemory or DROP the index)"),
+                );
                 return out;
             }
             _ => {}
