@@ -431,6 +431,7 @@ dependencies = [
  "kevy-persist",
  "kevy-replicate",
  "kevy-resp",
+ "kevy-resp-client",
  "kevy-rt",
  "kevy-scope",
  "kevy-store",
