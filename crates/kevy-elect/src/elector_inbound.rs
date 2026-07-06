@@ -43,6 +43,13 @@ impl Elector {
             && (epoch > self.epoch
                 || (self.current_primary.is_none() && self.role == Role::Replica))
         {
+            // Persist BEFORE following the higher epoch (no vote is
+            // cast on this path, so voted_for = None). Only when the
+            // epoch actually moves — case (a) (same-epoch primary
+            // learning) changes no durable state.
+            if epoch > self.epoch {
+                self.persist.save(epoch, None);
+            }
             self.epoch = epoch;
             self.current_primary = Some(from.to_string());
             if self.role == Role::Primary && from != self.node_id {
@@ -81,7 +88,12 @@ impl Elector {
         if self.last_accept_epoch == Some(new_epoch) {
             return;
         }
-        // Accept.
+        // Accept. Raft persistence rule: the vote must be durable
+        // BEFORE the ACCEPT can leave this node — a crash after the
+        // reply but before the save would let the restarted node
+        // vote again in the same epoch for a different candidate
+        // (two "quorums" = split brain).
+        self.persist.save(new_epoch, Some(candidate_id.as_str()));
         self.last_accept_epoch = Some(new_epoch);
         self.epoch = new_epoch;
         out.push(Outbound {
@@ -120,7 +132,11 @@ impl Elector {
         if epoch < self.epoch {
             return;
         }
-        // Commit.
+        // Commit. Persist first: the commit consumes this epoch's
+        // vote slot (`last_accept_epoch`), and a restarted node must
+        // still refuse to vote in an epoch whose ANNOUNCE it already
+        // committed.
+        self.persist.save(epoch, Some(new_primary_id.as_str()));
         self.epoch = epoch;
         self.current_primary = Some(new_primary_id.clone());
         self.last_accept_epoch = Some(epoch);

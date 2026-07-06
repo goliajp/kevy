@@ -69,6 +69,7 @@ mod dispatch_resp3;
 mod dispatch_geo;
 mod dispatch_stream;
 mod elect_integration;
+mod elect_persist;
 mod ops;
 mod replica_runner;
 mod replica_state;

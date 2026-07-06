@@ -78,6 +78,10 @@ pub(crate) fn stop_runners() {
         r.shutdown();
     }
     *REPLICA_UPSTREAM.lock().expect("REPLICA_UPSTREAM poisoned") = None;
+    APPLIED_RUNNER_OFFSETS
+        .lock()
+        .expect("APPLIED_RUNNER_OFFSETS poisoned")
+        .clear();
 }
 
 /// Replace the active runner set with a fresh fleet pointing at
@@ -101,6 +105,13 @@ pub(crate) fn start_runners(upstream: (IpAddr, u16)) -> Result<(), &'static str>
     // completes within ~one event.
     stop_runners();
     let (host, port_base) = upstream;
+    // Size the per-runner applied-offset registry BEFORE spawning —
+    // a runner's first heartbeat may land before this function
+    // returns, and its slot must already exist.
+    let runner_count = if single_source() { 1 } else { senders.len() };
+    *APPLIED_RUNNER_OFFSETS
+        .lock()
+        .expect("APPLIED_RUNNER_OFFSETS poisoned") = vec![0; runner_count];
     let new_runners = if single_source() {
         // v3.2 embedded-as-primary: ONE upstream port, one stream —
         // a single routing runner fans into every shard inbox.
@@ -108,13 +119,14 @@ pub(crate) fn start_runners(upstream: (IpAddr, u16)) -> Result<(), &'static str>
             (host, port_base),
             "kevy-replica-single".to_string(),
             senders,
+            0,
         )]
     } else {
         let mut fleet = Vec::with_capacity(senders.len());
         for (shard_id, sender) in senders.into_iter().enumerate() {
             let port = port_base.saturating_add(u16::try_from(shard_id).unwrap_or(u16::MAX));
             let replica_id = format!("kevy-replica-{shard_id}");
-            fleet.push(ReplicaRunner::spawn((host, port), replica_id, sender));
+            fleet.push(ReplicaRunner::spawn((host, port), replica_id, sender, shard_id));
         }
         fleet
     };
@@ -158,6 +170,20 @@ static PRIMARY_OFFSET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU
 static APPLIED_OFFSET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static LAST_PING_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// v3.15 D1 — per-runner applied-offset registry, `runner_slot` →
+/// this runner's replication-stream position. Sized by
+/// [`start_runners`] (one slot per runner: `nshards` in the fleet
+/// model, 1 in single-source), cleared by [`stop_runners`].
+///
+/// Why a second registry next to [`APPLIED_OFFSET`]: that gauge is a
+/// `fetch_max` ACROSS runners — fine for INFO's "representative lag"
+/// but wrong for election candidate ordering, where the metric must
+/// be the SUM of stream positions (same shape as the primary side's
+/// per-shard `master_repl_offset` sum in `elect_integration`). Max
+/// would let a node with ONE advanced shard tie a node where every
+/// shard is caught up.
+static APPLIED_RUNNER_OFFSETS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+
 fn epoch_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -170,10 +196,43 @@ fn epoch_ms() -> u64 {
 /// runner sees its own shard's stream, so we track the MAX per field
 /// (INFO reports link health + a representative lag, not a per-shard
 /// table; the primary side owns the authoritative per-replica table).
-pub(crate) fn record_ping(primary_offset: u64, applied: u64) {
+///
+/// `runner_slot` additionally files `applied` into this runner's own
+/// [`APPLIED_RUNNER_OFFSETS`] slot — the exact (non-max) per-stream
+/// position the election-offset sum is built from. Plain store, not
+/// max: a resync-from-0 after a diverged rejoin genuinely rewinds
+/// the stream position and the election metric must tell the truth.
+pub(crate) fn record_ping(runner_slot: usize, primary_offset: u64, applied: u64) {
     PRIMARY_OFFSET.fetch_max(primary_offset, std::sync::atomic::Ordering::Relaxed);
     APPLIED_OFFSET.fetch_max(applied, std::sync::atomic::Ordering::Relaxed);
     LAST_PING_MS.store(epoch_ms(), std::sync::atomic::Ordering::Relaxed);
+    record_applied(runner_slot, applied);
+}
+
+/// Runner-side: refresh this runner's applied slot without a full
+/// heartbeat observation — called on the 100 ms periodic ACK in the
+/// frame-apply path, so the election offset stays fresh under write
+/// load (pings alone only tick at 1 Hz).
+pub(crate) fn record_applied(runner_slot: usize, applied: u64) {
+    let mut slots = APPLIED_RUNNER_OFFSETS
+        .lock()
+        .expect("APPLIED_RUNNER_OFFSETS poisoned");
+    if let Some(slot) = slots.get_mut(runner_slot) {
+        *slot = applied;
+    }
+}
+
+/// Sum of every runner's applied stream position — the replica-side
+/// election offset (v3.15 D1). Comparable with the primary side's
+/// per-shard `master_repl_offset` sum: both count "replication-stream
+/// position, totalled across streams", and on a fully-caught-up
+/// replica the two sums are equal. 0 when no runners are active.
+pub(crate) fn applied_offset_sum() -> u64 {
+    APPLIED_RUNNER_OFFSETS
+        .lock()
+        .expect("APPLIED_RUNNER_OFFSETS poisoned")
+        .iter()
+        .fold(0u64, |acc, v| acc.saturating_add(*v))
 }
 
 /// INFO replication: `(link_up, applied_offset, lag_frames, last_io_secs)`.
@@ -247,6 +306,29 @@ mod tests {
         install_senders(Vec::new());
         assert!(senders_clone().is_empty());
         assert!(current_upstream().is_none());
+    }
+
+    #[test]
+    fn applied_offset_sum_is_per_runner_sum_not_max() {
+        let _g = TEST_STATE_GUARD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        stop_runners();
+        assert_eq!(applied_offset_sum(), 0, "no runners → 0");
+        // Simulate a 3-runner fleet's registry (start_runners sizes
+        // this in production).
+        *APPLIED_RUNNER_OFFSETS.lock().unwrap() = vec![0; 3];
+        record_ping(0, 100, 40);
+        record_applied(1, 25);
+        record_applied(2, 35);
+        assert_eq!(applied_offset_sum(), 100, "sum across runners, not max");
+        // Plain store semantics: a resync rewind must show through.
+        record_applied(1, 5);
+        assert_eq!(applied_offset_sum(), 80);
+        // Out-of-range slot is ignored (registry resize race guard).
+        record_applied(9, 1_000);
+        assert_eq!(applied_offset_sum(), 80);
+        // stop_runners clears the registry.
+        stop_runners();
+        assert_eq!(applied_offset_sum(), 0);
     }
 
     #[test]
