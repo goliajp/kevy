@@ -41,6 +41,11 @@ pub struct ReplicationSection {
     pub min_replicas_to_write: u32,
     /// Freshness window for `min_replicas_to_write` (ms).
     pub min_replicas_max_lag_ms: u32,
+    /// v3.16 D3 — bounded staleness: a replica whose last primary
+    /// heartbeat is older than this refuses reads with `-STALE`
+    /// (client falls back to the primary). `0` = off (default:
+    /// reads always answer, whatever the lag).
+    pub replica_max_staleness_ms: u32,
     /// v3.14 — reject client writes while in the replica role
     /// (`-READONLY`). Default `true`, Redis-compatible; the
     /// replication apply path and admin verbs bypass the gate.
@@ -62,6 +67,7 @@ impl Default for ReplicationSection {
             reconnect_window_ms: 60_000,
             min_replicas_to_write: 0,
             min_replicas_max_lag_ms: 10_000,
+            replica_max_staleness_ms: 0,
             replica_read_only: true,
             single_source: false,
         }

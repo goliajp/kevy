@@ -250,6 +250,10 @@ impl Commands for KevyCommands {
         crate::replica_state::write_denied_reply()
     }
 
+    fn read_denied(&self) -> Option<Vec<u8>> {
+        crate::replica_state::read_denied_reply()
+    }
+
     fn extension_reduce_v3(
         &self,
         argv: &[Vec<u8>],

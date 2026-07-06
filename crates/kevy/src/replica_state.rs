@@ -279,11 +279,50 @@ pub(crate) fn set_quiesce(target: Option<String>) {
 /// taken to render the error text on the cold rejected path).
 static QUIESCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// v3.16 D4 — primary quorum lease fence. Returns whether the flag
+/// CHANGED (callers log transitions only).
+static QUORUM_FENCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn set_quorum_fence(on: bool) -> bool {
+    QUORUM_FENCED.swap(on, std::sync::atomic::Ordering::Relaxed) != on
+}
+
+/// v3.16 D3 — bounded staleness (0 = off). Set from config at boot;
+/// CONFIG SET updates it live (the operator escape hatch).
+static MAX_STALENESS_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn set_max_staleness_ms(v: u64) {
+    MAX_STALENESS_MS.store(v, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Refuse reads on a replica whose primary heartbeat is older than
+/// the staleness bound. Primaries and un-bounded replicas never
+/// refuse (the common case is two relaxed atomic loads).
+pub(crate) fn read_denied_reply() -> Option<Vec<u8>> {
+    let bound = MAX_STALENESS_MS.load(std::sync::atomic::Ordering::Relaxed);
+    if bound == 0 || !IS_REPLICA.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    let last = LAST_PING_MS.load(std::sync::atomic::Ordering::Relaxed);
+    if last != 0 && epoch_ms().saturating_sub(last) <= bound {
+        return None;
+    }
+    Some(
+        b"-STALE replica is stale; read the primary or raise replica_max_staleness_ms\r\n"
+            .to_vec(),
+    )
+}
+
 pub(crate) fn quiesce_active() -> bool {
     QUIESCED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 pub(crate) fn write_denied_reply() -> Option<Vec<u8>> {
+    if QUORUM_FENCED.load(std::sync::atomic::Ordering::Relaxed) {
+        return Some(
+            b"-NOREPLICAS primary lost quorum; writes fenced\r\n".to_vec(),
+        );
+    }
     if QUIESCED.load(std::sync::atomic::Ordering::Relaxed) {
         let g = QUIESCE_TO.lock().expect("QUIESCE_TO poisoned");
         if let Some(t) = g.as_ref() {

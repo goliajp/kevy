@@ -272,6 +272,21 @@ impl Elector {
         self.current_primary.as_deref()
     }
 
+    /// v3.16 D4 — quorum visibility for the primary lease: does this
+    /// node currently see a strict majority of the cluster (itself +
+    /// peers heard from within `down_after`)? A primary that answers
+    /// `false` here is on the minority side of a partition and must
+    /// fence writes — the lease window is exactly `down_after`.
+    pub fn has_quorum(&self, now: Instant) -> bool {
+        let reachable = self
+            .peer_views
+            .values()
+            .filter(|v| now.duration_since(v.last_seen) < self.config.down_after)
+            .count();
+        let cluster = self.peer_ids.len().max(1);
+        (reachable + 1) * 2 > cluster
+    }
+
     /// Drive the elector forward by `now`. Schedules outbound `HB`
     /// per peer, detects DOWN, transitions Candidate → Primary on
     /// quorum, and runs the candidate's election-timeout fallback.
