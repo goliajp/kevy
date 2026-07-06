@@ -43,7 +43,6 @@ Errors are part of kevy's user-facing contract. Adding, renaming, or repurposing
 | `-MISCONF BGSAVE failed: <io-error>` | Background snapshot writer failed. | Free disk space or repair the `data_dir` mount. Live data is unaffected. |
 | `-NOSCRIPT No matching script. Please use EVAL.` | `EVALSHA <sha>` requested a script not in the cache. | Call `EVAL` directly (kevy auto-caches) or `SCRIPT LOAD` first. |
 | `-BUSY Script is running.` | A long-running Lua script is blocking the shard. | `SCRIPT KILL` to interrupt (no-op if nothing is running). The `lua-time-limit` config caps runaway scripts. |
-| `-LOADING kevy is loading the dataset in memory` | Server is replaying AOF or loading snapshot at startup. | Wait and retry; `PING` is accepted during loading. |
 
 ### Prefixes kevy never emits
 
@@ -87,9 +86,6 @@ No. `CROSSSLOT` only fires for multi-key commands. If you see it on what looks l
 
 **I got `-OOM` — is my data corrupt?**
 No. `-OOM` is rejected at command-admission time; the write never landed. The keyspace is in exactly the state it was before the command. Free room (`DEL` / set an eviction policy / raise `maxmemory`) and retry.
-
-**`-LOADING` keeps coming back — how long should I wait?**
-For as long as the AOF / snapshot replay takes (proportional to dataset size). `PING` is accepted during loading, so health checks still work. If `-LOADING` persists indefinitely, inspect server logs — a partially corrupt AOF can stall replay.
 
 **A queued MULTI command returned `-EXECABORT` — were any writes applied?**
 No. `EXECABORT` means the transaction was rejected as a batch; nothing in the queued sequence was executed. Fix the offending command and reopen with `MULTI`.
