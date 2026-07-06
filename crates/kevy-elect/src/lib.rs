@@ -17,12 +17,13 @@
 pub mod elector;
 mod elector_inbound;
 pub mod message;
+pub mod persist;
 #[cfg(test)]
 pub mod sim;
 pub mod transport;
 pub mod wire;
 
-pub use transport::{ElectorSnapshot, PeerAddr, Transport};
+pub use transport::{ElectorSnapshot, PeerAddr, TopologyCallback, Transport};
 
 #[cfg(test)]
 #[path = "elector_tests.rs"]
@@ -30,4 +31,5 @@ mod elector_tests;
 
 pub use elector::{ElectConfig, ElectJitter, Elector, Outbound};
 pub use message::{Message, Role};
+pub use persist::{ElectorPersist, NoPersist};
 pub use wire::{DecodeError, decode, encode};

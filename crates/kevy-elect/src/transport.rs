@@ -68,6 +68,12 @@ struct Shared {
     out_queues: Mutex<std::collections::HashMap<String, std::collections::VecDeque<Message>>>,
 }
 
+/// v3.15 D2 — topology-change callback: `(new_local_role,
+/// Some(primary_id) when known)`. Address mapping is the CALLER's
+/// job (the static member table lives in the host's config —
+/// membership is static, roles are dynamic).
+pub type TopologyCallback = Box<dyn Fn(crate::message::Role, Option<String>) + Send>;
+
 const MAX_PENDING_PER_PEER: usize = 256;
 
 /// Per-peer addressing. Maps `node_id` → outbound dial address.
@@ -110,6 +116,23 @@ impl Transport {
         listen_addr: (std::net::IpAddr, u16),
         peers: Vec<PeerAddr>,
     ) -> std::io::Result<Self> {
+        Self::spawn_with_callback(elector, hb_interval, listen_addr, peers, Box::new(|_, _| {}))
+    }
+
+    /// v3.15 D2 — like [`Self::spawn`], with a topology-change
+    /// callback: fired from the orchestrator thread whenever
+    /// `(role, current_primary)` changes after a message or tick.
+    /// Arguments: the new local role, and `Some((primary_id,
+    /// primary_addr))` when a primary is known. The callback MUST be
+    /// quick and non-reentrant into the elector (it runs outside the
+    /// elector lock but on the tick thread).
+    pub fn spawn_with_callback(
+        elector: Elector,
+        hb_interval: Duration,
+        listen_addr: (std::net::IpAddr, u16),
+        peers: Vec<PeerAddr>,
+        on_change: TopologyCallback,
+    ) -> std::io::Result<Self> {
         let shared = Arc::new(Shared {
             elector: Mutex::new(elector),
             out_queues: Mutex::new(std::collections::HashMap::new()),
@@ -149,7 +172,7 @@ impl Transport {
             std::thread::Builder::new()
                 .name("kevy-elect-orchestrator".to_string())
                 .spawn(move || {
-                    orchestrator_loop(orch_shared, inbound_rx, hb_interval, orch_stop);
+                    orchestrator_loop(orch_shared, inbound_rx, hb_interval, orch_stop, on_change);
                 })?,
         );
 
@@ -387,7 +410,9 @@ fn orchestrator_loop(
     inbound_rx: Receiver<InboundEvent>,
     hb_interval: Duration,
     stop: Arc<AtomicBool>,
+    on_change: TopologyCallback,
 ) {
+    let mut last_view: Option<(crate::message::Role, Option<String>)> = None;
     // Tick at hb_interval — wait up to that long on the inbound
     // channel; either a message arrives + we process it, or the
     // timeout fires + we run tick.
@@ -411,6 +436,17 @@ fn orchestrator_loop(
                 outs.extend(e.tick(now));
             }
             Err(RecvTimeoutError::Disconnected) => return,
+        }
+        // v3.15 D2: detect (role, primary) transitions and notify.
+        {
+            let e = shared.elector.lock().expect("elector lock");
+            let view = (e.role(), e.current_primary().map(str::to_string));
+            drop(e);
+            let view_pair = (view.0, view.1.clone());
+            if last_view.as_ref() != Some(&view_pair) {
+                on_change(view.0, view.1);
+                last_view = Some(view_pair);
+            }
         }
         if !outs.is_empty() {
             let mut qs = shared.out_queues.lock().expect("out_queues lock");

@@ -176,6 +176,7 @@ fn dispatch_conn<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, out: &mut Vec<u8>) 
             }
         }
         b"COMMAND" => crate::cmd_command::cmd_command(args, out),
+        b"FAILOVER" => crate::cmd_failover::cmd_failover(args, out),
         b"HELLO" => cmd_hello(out),
         b"QUIT" => encode_simple_string(out, "OK"),
         // CONFIG moved to crate::ops::dispatch_ops (real GET reads Config;

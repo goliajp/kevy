@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::message::{Message, Role};
+use crate::persist::{ElectorPersist, NoPersist};
 
 /// Tunable timeouts. Defaults match the protocol spec — operators
 /// can override via the `[cluster]` config section once the
@@ -125,6 +126,12 @@ pub struct Elector {
     /// Deterministic backoff jitter — operators (and tests) inject
     /// it; the elector doesn't read the system random.
     pub(crate) jitter: ElectJitter,
+    /// Durable `(epoch, voted_for)` backend (v3.15 D1). Written
+    /// **before** any ACCEPT leaves the node and **before** any
+    /// epoch bump/follow takes effect — Raft's persistence rule.
+    /// Defaults to [`NoPersist`]; attach a real backend with
+    /// [`Elector::with_persist`].
+    pub(crate) persist: Box<dyn ElectorPersist + Send>,
 }
 
 /// Source of jitter for election backoff. Tests use a fixed value;
@@ -221,7 +228,26 @@ impl Elector {
             last_accept_epoch: None,
             my_advertised_addr: my_advertised_addr.into(),
             jitter,
+            persist: Box::new(NoPersist),
         }
+    }
+
+    /// Attach a persistence backend and restore its saved state
+    /// (v3.15 D1). Restores the persisted epoch (so a restarted node
+    /// never re-runs an election under an already-consumed epoch)
+    /// and, when a vote was cast, re-arms the one-vote-per-epoch
+    /// guard for that epoch. Call right after [`Elector::new`],
+    /// before the transport starts driving the elector.
+    pub fn with_persist(mut self, persist: Box<dyn ElectorPersist + Send>) -> Self {
+        let (epoch, voted_for) = persist.load();
+        if epoch > 0 {
+            self.epoch = self.epoch.max(epoch);
+            if voted_for.is_some() {
+                self.last_accept_epoch = Some(epoch);
+            }
+        }
+        self.persist = persist;
+        self
     }
 
     /// Update this node's `repl_offset` (called by the kevy-server
@@ -347,8 +373,14 @@ impl Elector {
         if !self.am_best_candidate(now) {
             return;
         }
-        // Start the candidacy.
-        self.epoch = self.epoch.saturating_add(1);
+        // Start the candidacy. Raft persistence rule: the bumped
+        // epoch + the implicit self-vote must be durable BEFORE the
+        // OFFER can leave this node — a crash right after the
+        // broadcast must not restart into an elector that reuses
+        // this epoch (or votes for someone else in it).
+        let new_epoch = self.epoch.saturating_add(1);
+        self.persist.save(new_epoch, Some(self.node_id.as_str()));
+        self.epoch = new_epoch;
         self.role = Role::Candidate;
         self.accept_votes.clear();
         // Implicit self-vote — record ourselves in the tally so

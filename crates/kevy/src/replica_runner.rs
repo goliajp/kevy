@@ -51,12 +51,16 @@ impl ReplicaRunner {
     /// Spawn the runner thread. Returns immediately — the thread
     /// connects asynchronously and reconnects on failure until
     /// [`Self::shutdown`] is called.
+    /// `runner_slot` indexes this runner's applied-offset slot in
+    /// `replica_state::APPLIED_RUNNER_OFFSETS` (= shard id in the
+    /// fleet model) — the election-offset sum reads it (v3.15 D1).
     pub(crate) fn spawn(
         upstream_addr: (std::net::IpAddr, u16),
         replica_id: String,
         sender: ReplicaInboxSender,
+        runner_slot: usize,
     ) -> Self {
-        Self::spawn_target(upstream_addr, replica_id, Target::PerShard(sender))
+        Self::spawn_target(upstream_addr, replica_id, Target::PerShard(sender), runner_slot)
     }
 
     /// v3.2 — single-source mode: ONE runner drains one upstream
@@ -66,14 +70,16 @@ impl ReplicaRunner {
         upstream_addr: (std::net::IpAddr, u16),
         replica_id: String,
         senders: Vec<ReplicaInboxSender>,
+        runner_slot: usize,
     ) -> Self {
-        Self::spawn_target(upstream_addr, replica_id, Target::Routed(senders))
+        Self::spawn_target(upstream_addr, replica_id, Target::Routed(senders), runner_slot)
     }
 
     fn spawn_target(
         upstream_addr: (std::net::IpAddr, u16),
         replica_id: String,
         target: Target,
+        runner_slot: usize,
     ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
@@ -82,7 +88,7 @@ impl ReplicaRunner {
         let handle = std::thread::Builder::new()
             .name(format!("kevy-replica-{replica_id}"))
             .spawn(move || {
-                run_loop(upstream_addr, replica_id, target, stop_thread, socket_thread);
+                run_loop(upstream_addr, replica_id, target, stop_thread, socket_thread, runner_slot);
             })
             .expect("spawn replica runner thread");
         Self {
@@ -149,6 +155,7 @@ fn run_loop(
     target: Target,
     stop: Arc<AtomicBool>,
     socket_slot: Arc<Mutex<Option<TcpStream>>>,
+    runner_slot: usize,
 ) {
     let mut from_offset: u64 = 0;
     while !stop.load(Ordering::Relaxed) {
@@ -162,8 +169,12 @@ fn run_loop(
                     *guard = Some(handle);
                 }
                 from_offset = match &target {
-                    Target::PerShard(sender) => drain_client(&mut client, sender, &stop),
-                    Target::Routed(senders) => drain_client_routed(&mut client, senders, &stop),
+                    Target::PerShard(sender) => {
+                        drain_client(&mut client, sender, &stop, runner_slot)
+                    }
+                    Target::Routed(senders) => {
+                        drain_client_routed(&mut client, senders, &stop, runner_slot)
+                    }
                 };
                 // Clear the slot — the socket the slot held now owns
                 // a half-closed fd (or is going to be shut down).
@@ -194,6 +205,7 @@ fn drain_client(
     client: &mut ReplicaClient,
     sender: &ReplicaInboxSender,
     stop: &Arc<AtomicBool>,
+    runner_slot: usize,
 ) -> u64 {
     let mut from_offset = client.expected_offset();
     let mut last_ack = std::time::Instant::now();
@@ -204,7 +216,7 @@ fn drain_client(
                 // lag/liveness (INFO replication) and answer with an
                 // ACK immediately — a heartbeat round trip even when
                 // no frames flow.
-                crate::replica_state::record_ping(primary_offset, from_offset);
+                crate::replica_state::record_ping(runner_slot, primary_offset, from_offset);
                 let _ = client.send_ack(from_offset);
                 last_ack = std::time::Instant::now();
             }
@@ -217,6 +229,7 @@ fn drain_client(
                 }
                 if last_ack.elapsed() >= std::time::Duration::from_millis(100) {
                     let _ = client.send_ack(from_offset);
+                    crate::replica_state::record_applied(runner_slot, from_offset);
                     last_ack = std::time::Instant::now();
                 }
             }
@@ -308,13 +321,14 @@ fn drain_client_routed(
     client: &mut ReplicaClient,
     senders: &[ReplicaInboxSender],
     stop: &Arc<AtomicBool>,
+    runner_slot: usize,
 ) -> u64 {
     let mut from_offset = client.expected_offset();
     let mut last_ack = std::time::Instant::now();
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
             Some(Ok(ReplicaEvent::Ping { primary_offset })) => {
-                crate::replica_state::record_ping(primary_offset, from_offset);
+                crate::replica_state::record_ping(runner_slot, primary_offset, from_offset);
                 let _ = client.send_ack(from_offset);
                 last_ack = std::time::Instant::now();
             }
@@ -324,6 +338,7 @@ fn drain_client_routed(
                 }
                 if last_ack.elapsed() >= std::time::Duration::from_millis(100) {
                     let _ = client.send_ack(from_offset);
+                    crate::replica_state::record_applied(runner_slot, from_offset);
                     last_ack = std::time::Instant::now();
                 }
             }

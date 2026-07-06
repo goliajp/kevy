@@ -95,27 +95,9 @@ pub(crate) fn maybe_start(cfg: &Config) {
         return;
     }
     let listen_port = resolved_elect_port_base(cfg);
-    let start_role = match cfg.replication.role {
-        ReplicationRole::Primary => Role::Primary,
-        _ => Role::Replica,
-    };
-    let peer_ids: Vec<String> = cfg
-        .cluster
-        .peers
-        .iter()
-        .map(|p| p.node_id.clone())
-        .collect();
-    let advertised_addr = format!("{}:{}", advertised_host(cfg), cfg.server.port);
     let elect_cfg = ElectConfig::default();
     let hb_interval = elect_cfg.hb_interval;
-    let elector = Elector::new(
-        cfg.cluster.node_id.clone(),
-        peer_ids,
-        advertised_addr,
-        start_role,
-        elect_cfg,
-        ElectJitter::System,
-    );
+    let (elector, start_role) = build_elector(cfg, elect_cfg);
     // Filter out self when building outbound `PeerAddr` list.
     let self_id = cfg.cluster.node_id.as_str();
     let peers: Vec<PeerAddr> = cfg
@@ -131,7 +113,45 @@ pub(crate) fn maybe_start(cfg: &Config) {
         cfg.server.bind[2],
         cfg.server.bind[3],
     )), listen_port);
-    match Transport::spawn(elector, hb_interval, listen, peers) {
+    // v3.15 D2 — the failover closing-of-the-loop: election outcomes
+    // drive the DATA plane. Runs on the elect orchestrator thread;
+    // both actions are quick (runner spawn/stop, no blocking I/O in
+    // the caller's path). Membership is the STATIC config table;
+    // only roles are dynamic.
+    let member_table: Vec<(String, String, u16)> = cfg
+        .cluster
+        .peers
+        .iter()
+        .map(|p| (p.node_id.clone(), p.host.clone(), p.client_port.unwrap_or(p.port)))
+        .collect();
+    let my_id = cfg.cluster.node_id.clone();
+    let on_change: kevy_elect::TopologyCallback = Box::new(move |role, primary| {
+        use kevy_elect::Role;
+        match (role, primary) {
+            (Role::Primary, _) => {
+                // We won (or started as primary): stop any replica
+                // runners — REPLICAOF NO ONE semantics.
+                crate::replica_state::stop_runners();
+                eprintln!("kevy: elect — this node is PRIMARY (writes open)");
+            }
+            (Role::Replica, Some(pid)) if pid != my_id => {
+                let Some((_, host, cport)) = member_table.iter().find(|(id, _, _)| *id == pid)
+                else {
+                    eprintln!("kevy: elect — primary '{pid}' not in the member table; not retargeting");
+                    return;
+                };
+                // Replication listens at client port + 10000 (the
+                // replication_port_base convention).
+                let upstream = format!("{host}:{}", cport + 10_000);
+                match crate::replication::retarget_upstream(&upstream) {
+                    Ok(()) => eprintln!("kevy: elect — following new primary '{pid}' at {upstream}"),
+                    Err(e) => eprintln!("kevy: elect — retarget to '{pid}' ({upstream}) failed: {e}"),
+                }
+            }
+            _ => {}
+        }
+    });
+    match Transport::spawn_with_callback(elector, hb_interval, listen, peers, on_change) {
         Ok(t) => {
             *slot().lock().expect("ELECT_TRANSPORT poisoned") = Some(t);
             eprintln!(
@@ -145,6 +165,53 @@ pub(crate) fn maybe_start(cfg: &Config) {
             eprintln!("kevy: kevy-elect transport failed to bind {listen_port}: {e}");
         }
     }
+}
+
+/// Build the `Elector` for this node from config: identity, peer
+/// set, advertised address — and the v3.15 D1 durability backend
+/// (`<data_dir>/elect.meta` via [`crate::elect_persist::
+/// FileElectorPersist`]), whose `load` restores the persisted
+/// `(epoch, votedFor)` so a restarted node never double-votes or
+/// reuses a consumed epoch.
+fn build_elector(cfg: &Config, elect_cfg: ElectConfig) -> (Elector, Role) {
+    let persist = crate::elect_persist::FileElectorPersist::new(&cfg.server.data_dir);
+    let mut start_role = match cfg.replication.role {
+        ReplicationRole::Primary => Role::Primary,
+        _ => Role::Replica,
+    };
+    // v3.15 restart-role clamp: a RESTARTED node in an elect quorum
+    // must not come back as a writable primary on config say-so —
+    // a failover may have happened while it was down, and a stale
+    // primary would fork history. A persisted epoch > 0 is the
+    // restart tell; start as a conservative read-only replica and
+    // let the election (win → the D2 callback opens writes) decide.
+    if matches!(start_role, Role::Primary)
+        && kevy_elect::ElectorPersist::load(&persist).0 > 0
+    {
+        eprintln!(
+            "kevy: elect — persisted epoch found; starting as replica until the quorum confirms (restart-role clamp)"
+        );
+        start_role = Role::Replica;
+        crate::replica_state::set_read_only(true);
+        crate::replica_state::force_replica_flag();
+    }
+    let peer_ids: Vec<String> = cfg
+        .cluster
+        .peers
+        .iter()
+        .map(|p| p.node_id.clone())
+        .collect();
+    let advertised_addr = format!("{}:{}", advertised_host(cfg), cfg.server.port);
+    let elector = Elector::new(
+        cfg.cluster.node_id.clone(),
+        peer_ids,
+        advertised_addr,
+        start_role,
+        elect_cfg,
+        ElectJitter::System,
+    )
+    .with_persist(Box::new(persist));
+    (elector, start_role)
 }
 
 /// Stop the `Transport` if one is running. Called from the
@@ -173,6 +240,14 @@ pub(crate) fn current_snapshot() -> Option<kevy_elect::ElectorSnapshot> {
 /// the doc on `SHARD_OFFSETS`). The Transport's `set_repl_offset`
 /// receives the aggregate, so HBs from a multi-shard node always
 /// carry a stable cluster-wide signal.
+///
+/// v3.15 D1 — role-aware source: while this node runs as a REPLICA
+/// the shard-local `master_repl_offset` does not measure how much of
+/// the upstream stream it has applied, so the aggregate switches to
+/// `replica_state::applied_offset_sum()` (per-runner applied stream
+/// positions, summed). Both roles thus report the same unit —
+/// "replication-stream position, totalled across streams" — which is
+/// what `am_best_candidate`'s highest-offset-wins ordering compares.
 pub(crate) fn set_view_offset(offset: u64) {
     // Determine which shard this thread represents — read from the
     // `ops::cluster::current_shard` thread-local the kevy server
@@ -190,7 +265,11 @@ pub(crate) fn set_view_offset(offset: u64) {
     {
         slot_ref.store(offset, Ordering::Relaxed);
     }
-    let agg = aggregate_offset();
+    let agg = if crate::replica_state::is_replica() {
+        crate::replica_state::applied_offset_sum()
+    } else {
+        aggregate_offset()
+    };
     if let Ok(guard) = slot().lock()
         && let Some(t) = guard.as_ref()
     {
