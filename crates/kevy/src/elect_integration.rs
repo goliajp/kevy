@@ -113,7 +113,45 @@ pub(crate) fn maybe_start(cfg: &Config) {
         cfg.server.bind[2],
         cfg.server.bind[3],
     )), listen_port);
-    match Transport::spawn(elector, hb_interval, listen, peers) {
+    // v3.15 D2 — the failover closing-of-the-loop: election outcomes
+    // drive the DATA plane. Runs on the elect orchestrator thread;
+    // both actions are quick (runner spawn/stop, no blocking I/O in
+    // the caller's path). Membership is the STATIC config table;
+    // only roles are dynamic.
+    let member_table: Vec<(String, String, u16)> = cfg
+        .cluster
+        .peers
+        .iter()
+        .map(|p| (p.node_id.clone(), p.host.clone(), p.client_port.unwrap_or(p.port)))
+        .collect();
+    let my_id = cfg.cluster.node_id.clone();
+    let on_change: kevy_elect::TopologyCallback = Box::new(move |role, primary| {
+        use kevy_elect::Role;
+        match (role, primary) {
+            (Role::Primary, _) => {
+                // We won (or started as primary): stop any replica
+                // runners — REPLICAOF NO ONE semantics.
+                crate::replica_state::stop_runners();
+                eprintln!("kevy: elect — this node is PRIMARY (writes open)");
+            }
+            (Role::Replica, Some(pid)) if pid != my_id => {
+                let Some((_, host, cport)) = member_table.iter().find(|(id, _, _)| *id == pid)
+                else {
+                    eprintln!("kevy: elect — primary '{pid}' not in the member table; not retargeting");
+                    return;
+                };
+                // Replication listens at client port + 10000 (the
+                // replication_port_base convention).
+                let upstream = format!("{host}:{}", cport + 10_000);
+                match crate::replication::retarget_upstream(&upstream) {
+                    Ok(()) => eprintln!("kevy: elect — following new primary '{pid}' at {upstream}"),
+                    Err(e) => eprintln!("kevy: elect — retarget to '{pid}' ({upstream}) failed: {e}"),
+                }
+            }
+            _ => {}
+        }
+    });
+    match Transport::spawn_with_callback(elector, hb_interval, listen, peers, on_change) {
         Ok(t) => {
             *slot().lock().expect("ELECT_TRANSPORT poisoned") = Some(t);
             eprintln!(
