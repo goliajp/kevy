@@ -65,7 +65,16 @@ pub(crate) fn apply<C: Commands>(
             crate::replica_state::set_single_source(cfg.replication.single_source);
             crate::replica_state::set_read_only(cfg.replication.replica_read_only);
             spawn_initial_runners_from_config(cfg);
+            // v3.15: topology symmetry — a replica keeps a full
+            // replication SOURCE + listener too, so promotion
+            // (FAILOVER / election win) can serve replicas at once.
+            // Apply-path frames don't re-enter the source
+            // (ReplicatedApplyGuard), so the standing cost is the
+            // idle backlog buffer.
             runtime
+                .with_replication(true, cfg.replication.replication_buffer_size)
+                .with_replication_listener(replication_port_base(cfg))
+                .with_replication_reconnect_window(cfg.replication.reconnect_window_ms)
         }
         ReplicationRole::Standalone => runtime,
     }
