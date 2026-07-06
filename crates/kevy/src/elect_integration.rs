@@ -125,8 +125,19 @@ pub(crate) fn maybe_start(cfg: &Config) {
         .map(|p| (p.node_id.clone(), p.host.clone(), p.client_port.unwrap_or(p.port)))
         .collect();
     let my_id = cfg.cluster.node_id.clone();
-    let on_change: kevy_elect::TopologyCallback = Box::new(move |role, primary| {
+    let on_change: kevy_elect::TopologyCallback = Box::new(move |role, primary, quorum| {
         use kevy_elect::Role;
+        // v3.16 D4 — primary quorum lease: a primary that cannot see
+        // a strict majority fences writes (the partition's minority
+        // side must not keep absorbing them). Replicas never fence
+        // here — they are already read-only.
+        let fence = matches!(role, Role::Primary) && !quorum;
+        if crate::replica_state::set_quorum_fence(fence) {
+            eprintln!(
+                "kevy: elect — quorum lease {}",
+                if fence { "LOST: writes fenced" } else { "restored: writes open" }
+            );
+        }
         match (role, primary) {
             (Role::Primary, _) => {
                 // We won (or started as primary): stop any replica

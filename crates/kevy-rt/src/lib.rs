@@ -277,6 +277,15 @@ pub trait Commands: Clone + Send + 'static {
         None
     }
 
+    /// v3.16 D3 — bounded staleness: called before READ verbs; return
+    /// `Some(error_bytes)` to refuse the read (a replica whose feed
+    /// is staler than the configured bound answers `-STALE` so the
+    /// client falls back to the primary). Default: reads always
+    /// allowed.
+    fn read_denied(&self) -> Option<Vec<u8>> {
+        None
+    }
+
     fn extension_reduce_v3(
         &self,
         argv: &[Vec<u8>],

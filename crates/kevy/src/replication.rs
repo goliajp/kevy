@@ -64,6 +64,9 @@ pub(crate) fn apply<C: Commands>(
         ReplicationRole::Replica => {
             crate::replica_state::set_single_source(cfg.replication.single_source);
             crate::replica_state::set_read_only(cfg.replication.replica_read_only);
+            crate::replica_state::set_max_staleness_ms(
+                u64::from(cfg.replication.replica_max_staleness_ms),
+            );
             spawn_initial_runners_from_config(cfg);
             // v3.15: topology symmetry — a replica keeps a full
             // replication SOURCE + listener too, so promotion
