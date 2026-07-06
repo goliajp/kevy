@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.17.2
+
+- docs: the RDS workloads matrix (docs/rds-workloads.md — the
+  authoritative SQL→kevy mapping), migration.md as a seven-stage
+  playbook, cookbook SQL-equivalent cross-index, the full
+  post-availability docs audit (replication/cluster/persistence/
+  tuning brought to v3.17 truth, dead links purged), the P6
+  availability plane in designing-on-kevy.md, and zh-CN/ja sync
+  (zh-CN gains availability + rds-workloads in full).
+
 ## 3.17.1
 
 - deps: luna-core 2.1.0 → 2.16.0 (bridge audit green: full kevy-lua
