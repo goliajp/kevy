@@ -254,7 +254,35 @@ pub(crate) fn set_min_replicas(n: u32) {
     MIN_REPLICAS.store(n, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// v3.15 D3 — planned-failover quiesce: while `Some(target)`, every
+/// client write answers `-QUIESCED migrating to <target>` (the
+/// cluster-rw client retries with backoff and follows). Cleared on
+/// completion or abort.
+static QUIESCE_TO: Mutex<Option<String>> = Mutex::new(None);
+
+pub(crate) fn set_quiesce(target: Option<String>) {
+    *QUIESCE_TO.lock().expect("QUIESCE_TO poisoned") = target;
+    QUIESCED.store(
+        QUIESCE_TO.lock().expect("QUIESCE_TO poisoned").is_some(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// Hot-path flag mirroring `QUIESCE_TO.is_some()` (the mutex is only
+/// taken to render the error text on the cold rejected path).
+static QUIESCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn quiesce_active() -> bool {
+    QUIESCED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub(crate) fn write_denied_reply() -> Option<Vec<u8>> {
+    if QUIESCED.load(std::sync::atomic::Ordering::Relaxed) {
+        let g = QUIESCE_TO.lock().expect("QUIESCE_TO poisoned");
+        if let Some(t) = g.as_ref() {
+            return Some(format!("-QUIESCED migrating to {t}\r\n").into_bytes());
+        }
+    }
     if IS_REPLICA.load(std::sync::atomic::Ordering::Relaxed) {
         if READ_ONLY.load(std::sync::atomic::Ordering::Relaxed) {
             return Some(b"-READONLY You can't write against a read only replica.\r\n".to_vec());

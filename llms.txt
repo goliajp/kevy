@@ -19,7 +19,7 @@ is GENERATED from the server's verb metadata table — do not edit by hand.
 - [Migration](docs/migration.md) · [Upgrading 2.x to 3.x](docs/UPGRADING.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
-## Verbs (186 total)
+## Verbs (187 total)
 
 ### connection
 
@@ -49,6 +49,7 @@ is GENERATED from the server's verb metadata table — do not edit by hand.
 
 ### replication
 
+- `FAILOVER host port [TIMEOUT ms] | ABORT` [write,admin] — Planned zero-loss handover: quiesce writes, wait for the target replica to drain, promote it, and follow it.
 - `REPLICAOF host port | NO ONE` [write,admin] — Make this server a replica of another, or promote it with NO ONE.
 - `ROLE` [readonly] — Report the replication role and state of this server.
 - `SLAVEOF host port | NO ONE` [write,admin] — Legacy alias of REPLICAOF.

@@ -21,8 +21,11 @@ KBIN=$(cd "$(dirname "$KBIN")" && pwd)/$(basename "$KBIN")
 cd "$(dirname "$0")/.."
 CLI=target/release/kevy-cli
 [ -x "$CLI" ] || CLI=target/debug/kevy-cli
+# Replication listens at port+10000 for NSHARDS consecutive ports —
+# keep client ports ≥ nshards apart or the two servers' replication
+# ranges collide (v3.15: replicas bind a listener too).
 PPORT=7381
-RPORT=7382
+RPORT=7391
 DIR=$(mktemp -d /tmp/kevy-availgate-XXXXXX)
 PPID_=""
 RPID_=""
@@ -36,7 +39,7 @@ wait_ports_free() {
     # that window aborts the new process (fail-fast is the right
     # PRODUCT behavior — the gate simply waits it out).
     for _ in $(seq 50); do
-        lsof -nP -i :$PPORT -i :$RPORT -i :1$PPORT >/dev/null 2>&1 || return 0
+        lsof -nP -i :$PPORT -i :$RPORT -i :1$PPORT -i :1$RPORT >/dev/null 2>&1 || return 0
         sleep 0.2
     done
 }
