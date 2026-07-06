@@ -174,10 +174,25 @@ pub(crate) fn maybe_start(cfg: &Config) {
 /// `(epoch, votedFor)` so a restarted node never double-votes or
 /// reuses a consumed epoch.
 fn build_elector(cfg: &Config, elect_cfg: ElectConfig) -> (Elector, Role) {
-    let start_role = match cfg.replication.role {
+    let persist = crate::elect_persist::FileElectorPersist::new(&cfg.server.data_dir);
+    let mut start_role = match cfg.replication.role {
         ReplicationRole::Primary => Role::Primary,
         _ => Role::Replica,
     };
+    // v3.15 restart-role clamp: a RESTARTED node in an elect quorum
+    // must not come back as a writable primary on config say-so —
+    // a failover may have happened while it was down, and a stale
+    // primary would fork history. A persisted epoch > 0 is the
+    // restart tell; start as a conservative read-only replica and
+    // let the election (win → the D2 callback opens writes) decide.
+    if matches!(start_role, Role::Primary) && persist.load().0 > 0 {
+        eprintln!(
+            "kevy: elect — persisted epoch found; starting as replica until the quorum confirms (restart-role clamp)"
+        );
+        start_role = Role::Replica;
+        crate::replica_state::set_read_only(true);
+        crate::replica_state::force_replica_flag();
+    }
     let peer_ids: Vec<String> = cfg
         .cluster
         .peers
@@ -185,7 +200,6 @@ fn build_elector(cfg: &Config, elect_cfg: ElectConfig) -> (Elector, Role) {
         .map(|p| p.node_id.clone())
         .collect();
     let advertised_addr = format!("{}:{}", advertised_host(cfg), cfg.server.port);
-    let persist = crate::elect_persist::FileElectorPersist::new(&cfg.server.data_dir);
     let elector = Elector::new(
         cfg.cluster.node_id.clone(),
         peer_ids,

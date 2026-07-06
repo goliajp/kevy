@@ -144,5 +144,101 @@ for _ in $(seq 40); do
 done
 [ $GOOD = 1 ] || fail "write never opened after replica ACKed"
 note "write opens once a replica ACKs"
+kill $RPID_ $PPID_ 2>/dev/null; wait 2>/dev/null
 
-echo "availgate: PASS"
+# ================= phase 2 (v3.15): crash failover, 3-node quorum ===
+# clamp 7: kill the primary → a replica wins the election and opens
+#          writes (MTTR bounded); the other replica retargets and
+#          converges on post-failover writes
+# clamp 8: restart the old primary → restart-role clamp holds it as
+#          a read-only replica; it converges (fork discarded)
+# (candidate ranking by offset is covered by kevy-elect unit tests;
+# a lag-injected 3-node ranking e2e joins the v3.16 matrix.)
+N1=7440; N2=7460; N3=7480
+E1=7540; E2=7560; E3=7580
+PIDS=()
+trap 'kill $PPID_ $RPID_ ${PIDS[@]:-} 2>/dev/null; rm -rf "$DIR"' EXIT
+
+node_cfg() { # id client_port elect_base role upstream_or_empty
+    printf '[replication]\nrole = "%s"\n' "$4"
+    [ -n "$5" ] && printf 'upstream = "127.0.0.1:%s"\n' "$5"
+    printf '[cluster]\nenabled = true\nnode_id = "%s"\nelect_port_base = %s\n' "$1" "$3"
+    printf 'peers = "n1@127.0.0.1:%s:%s,n2@127.0.0.1:%s:%s,n3@127.0.0.1:%s:%s"\n' \
+        "$E1" "$N1" "$E2" "$N2" "$E3" "$N3"
+}
+
+start_node() { # id client_port elect_base role upstream dirname
+    node_cfg "$1" "$2" "$3" "$4" "$5" > "$DIR/$1.toml"
+    env KEVY_BIND=127.0.0.1 "$KBIN" --threads 4 --port "$2" --dir "$DIR/$6" --no-aof \
+        --config "$DIR/$1.toml" > "$DIR/$1.out" 2>&1 &
+    PIDS+=($!)
+    for _ in $(seq 100); do
+        $CLI -p "$2" PING >/dev/null 2>&1 && return
+        sleep 0.2
+    done
+    fail "node $1 never came up"
+}
+
+role_of() { $CLI -p "$1" INFO replication 2>/dev/null | grep -oE "^role:[a-z]+" | cut -d: -f2; }
+
+mkdir -p "$DIR/n1" "$DIR/n2" "$DIR/n3"
+start_node n1 $N1 $E1 primary "" n1
+start_node n2 $N2 $E2 replica "1$N1" n2
+start_node n3 $N3 $E3 replica "1$N1" n3
+sleep 3
+for i in $(seq 1 200); do $CLI -p $N1 SET c$i v >/dev/null; done
+sleep 2
+
+# ---- clamp 7: crash failover
+P1=${PIDS[0]}
+kill -9 $P1 2>/dev/null; wait $P1 2>/dev/null
+NEWP=""
+for _ in $(seq 60); do   # MTTR window: 30s >> election timeout multiples
+    for p in $N2 $N3; do
+        [ "$(role_of $p)" = "master" ] && { NEWP=$p; break 2; }
+    done
+    sleep 0.5
+done
+[ -n "$NEWP" ] || {
+    echo "--- FORENSICS n2:"; tail -6 "$DIR/n2.out"; echo "--- n3:"; tail -6 "$DIR/n3.out"
+    fail "no replica won the election after primary crash"
+}
+OTHER=$N3; [ "$NEWP" = "$N3" ] && OTHER=$N2
+WOK=0
+for _ in $(seq 40); do
+    echo "$($CLI -p $NEWP SET postfail v1 2>&1)" | grep -q OK && { WOK=1; break; }
+    sleep 0.5
+done
+[ $WOK = 1 ] || fail "new primary $NEWP never opened writes"
+note "crash failover: $NEWP won and opened writes"
+CONV=0
+for _ in $(seq 40); do
+    echo "$($CLI -p $OTHER GET postfail 2>/dev/null)" | grep -q '"v1"' && { CONV=1; break; }
+    sleep 0.5
+done
+[ $CONV = 1 ] || {
+    echo "--- FORENSICS other($OTHER):"; $CLI -p $OTHER INFO replication | head -8
+    fail "surviving replica never converged on the new primary's write"
+}
+note "surviving replica retargeted + converged"
+
+# ---- clamp 8: old primary rejoins as a read-only replica
+start_node n1 $N1 $E1 primary "" n1
+R=$($CLI -p $N1 SET rejoinwrite v 2>&1)
+echo "$R" | grep -qE "READONLY|MISDIRECTED|NOREPLICAS" \
+    || fail "restarted old primary accepted a write before quorum confirm: $R"
+note "restart-role clamp holds writes"
+REJOIN=0
+for _ in $(seq 60); do
+    if [ "$(role_of $N1)" = "slave" ]; then
+        echo "$($CLI -p $N1 GET postfail 2>/dev/null)" | grep -q '"v1"' && { REJOIN=1; break; }
+    fi
+    sleep 0.5
+done
+[ $REJOIN = 1 ] || {
+    echo "--- FORENSICS n1:"; tail -8 "$DIR/n1.out"; $CLI -p $N1 INFO replication | head -6
+    fail "old primary never rejoined as a converged replica"
+}
+note "old primary rejoined as replica + converged (fork discarded)"
+
+echo "availgate: PASS (phase 1 + 2)"

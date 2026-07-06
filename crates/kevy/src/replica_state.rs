@@ -153,6 +153,13 @@ pub(crate) fn is_replica() -> bool {
     IS_REPLICA.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// v3.15 restart-role clamp: mark this node a replica WITHOUT any
+/// runners — a restarted quorum member holds writes until an
+/// election outcome flips the flag (win → stop_runners clears it).
+pub(crate) fn force_replica_flag() {
+    IS_REPLICA.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub(crate) fn set_read_only(on: bool) {
     READ_ONLY.store(on, std::sync::atomic::Ordering::Relaxed);
 }
