@@ -186,6 +186,14 @@ fn install_signal_handlers(_stop: Arc<AtomicBool>) {
 }
 
 pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_aof: bool) -> ! {
+    // The data dir is a PRECONDITION of everything below (AOF, index
+    // catalogs, elect.meta, replication state) — create it up front
+    // instead of failing later in whichever subsystem touches it
+    // first with a bare ENOENT.
+    if let Err(e) = std::fs::create_dir_all(&data_dir) {
+        eprintln!("kevy: cannot create data dir {}: {e}", data_dir.display());
+        std::process::exit(1);
+    }
     let cfg = config_global::get();
     let fsync = map_appendfsync(cfg.persistence.appendfsync);
     cmd_index::boot(&data_dir);

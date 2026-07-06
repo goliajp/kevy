@@ -185,7 +185,9 @@ fn build_elector(cfg: &Config, elect_cfg: ElectConfig) -> (Elector, Role) {
     // primary would fork history. A persisted epoch > 0 is the
     // restart tell; start as a conservative read-only replica and
     // let the election (win → the D2 callback opens writes) decide.
-    if matches!(start_role, Role::Primary) && persist.load().0 > 0 {
+    if matches!(start_role, Role::Primary)
+        && kevy_elect::ElectorPersist::load(&persist).0 > 0
+    {
         eprintln!(
             "kevy: elect — persisted epoch found; starting as replica until the quorum confirms (restart-role clamp)"
         );
