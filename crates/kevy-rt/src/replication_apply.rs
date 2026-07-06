@@ -46,8 +46,17 @@ impl<C: Commands> Shard<C> {
         for ev in inbox.inner.try_iter().take(MAX_PER_TICK) {
             events.push(ev);
         }
+        let applied_any = !events.is_empty();
         for ev in events {
             self.apply_replica_event(ev);
+        }
+        // v3.16 D2: the apply position moved — the REPL.WAIT wake
+        // point. Answering HERE (after the store mutation, on the
+        // reactor thread) is what makes `+OK` → GET read-your-writes:
+        // by the time the reply leaves, this shard has applied
+        // everything the token covers.
+        if applied_any {
+            self.check_repl_apply_waiters();
         }
     }
 
@@ -62,7 +71,7 @@ impl<C: Commands> Shard<C> {
             ReplicaApply::SnapshotChunk(bytes) => {
                 self.replica_snapshot_buf.extend_from_slice(&bytes);
             }
-            ReplicaApply::SnapshotEnd { ack_offset: _, routed } => {
+            ReplicaApply::SnapshotEnd { ack_offset, routed } => {
                 let buf = std::mem::take(&mut self.replica_snapshot_buf);
                 // v3.15 D4: a snapshot ship REPLACES local state, it
                 // does not merge into it. The load is per-record
@@ -89,9 +98,16 @@ impl<C: Commands> Shard<C> {
                         self.id,
                     );
                 }
+                // v3.16 D2: a snapshot load covers the stream up to
+                // its ack_offset — the apply position jumps there
+                // (plain store, not max: a fork-discard resync
+                // genuinely rewinds and the truth must show it).
+                self.replica_applied_next = ack_offset;
             }
-            ReplicaApply::Frame { offset: _, argv } => {
+            ReplicaApply::Frame { offset, argv } => {
                 self.apply_replica_frame(&argv);
+                // Applied — the next frame carries offset + 1.
+                self.replica_applied_next = offset.saturating_add(1);
             }
         }
     }

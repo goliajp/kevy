@@ -246,6 +246,9 @@ impl Config {
             "min_replicas_to_write" => {
                 self.replication.min_replicas_to_write = value_as_u32(&item)?;
             }
+            "replica_max_staleness_ms" => {
+                self.replication.replica_max_staleness_ms = value_as_u32(&item)?;
+            }
             "min_replicas_max_lag_ms" => {
                 self.replication.min_replicas_max_lag_ms = value_as_u32(&item)?;
             }

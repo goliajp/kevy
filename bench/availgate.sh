@@ -200,7 +200,9 @@ for _ in $(seq 60); do   # MTTR window: 30s >> election timeout multiples
     sleep 0.5
 done
 [ -n "$NEWP" ] || {
-    echo "--- FORENSICS n2:"; tail -6 "$DIR/n2.out"; echo "--- n3:"; tail -6 "$DIR/n3.out"
+    echo "--- FORENSICS n2 elect:"; grep elect "$DIR/n2.out" | tail -8
+    echo "--- n3 elect:"; grep elect "$DIR/n3.out" | tail -8
+    echo "--- n1 elect:"; grep elect "$DIR/n1.out" | tail -6
     fail "no replica won the election after primary crash"
 }
 OTHER=$N3; [ "$NEWP" = "$N3" ] && OTHER=$N2
@@ -241,4 +243,118 @@ done
 }
 note "old primary rejoined as replica + converged (fork discarded)"
 
-echo "availgate: PASS (phase 1 + 2)"
+# ============ phase 3 (v3.16): the consistency ladder ==============
+# clamp 9:  WAIT acked-replica truth (1 with a live replica; 0 after
+#           it dies)
+# clamp 10: read-your-writes — write, REPL.TOKEN, REPL.WAIT on the
+#           replica, then GET must see the value (20 rounds, zero
+#           misses); a future token answers -MISDIRECTED
+# clamp 11: bounded staleness — SIGSTOP the primary, reads go -STALE
+#           past the bound, recover on CONT
+# clamp 12: quorum lease — kill both replicas of a 3-node quorum,
+#           the primary fences writes; restart one, writes reopen
+for p in ${PIDS[@]:-}; do kill $p 2>/dev/null; done; wait 2>/dev/null
+rm -rf "$DIR/p" "$DIR/r"; mkdir -p "$DIR/p" "$DIR/r"
+printf '[replication]\nrole = "replica"\nupstream = "127.0.0.1:%s"\nreplica_max_staleness_ms = 2500\n' "1$PPORT" > "$DIR/rep3.toml"
+start_primary 0
+env KEVY_BIND=127.0.0.1 "$KBIN" --threads 4 --port $RPORT --dir "$DIR/r" --no-aof \
+    --config "$DIR/rep3.toml" > "$DIR/rep.out" 2>&1 &
+RPID_=$!
+for _ in $(seq 100); do $CLI -p $RPORT PING >/dev/null 2>&1 && break; sleep 0.2; done
+sleep 2
+
+# ---- clamp 9: WAIT
+$CLI -p $PPORT SET w1 v >/dev/null
+W=$($CLI -p $PPORT WAIT 1 3000 | grep -oE "[0-9]+")
+[ "${W:-0}" -ge 1 ] || fail "WAIT 1 with a live replica returned $W"
+kill $RPID_ 2>/dev/null; wait $RPID_ 2>/dev/null; sleep 1
+$CLI -p $PPORT SET w2 v >/dev/null
+W=$($CLI -p $PPORT WAIT 1 500 | grep -oE "[0-9]+")
+[ "${W:-1}" = "0" ] || fail "WAIT 1 after replica death returned $W"
+note "WAIT reports acked-replica truth (1 live, 0 dead)"
+
+# ---- clamp 10: read-your-writes token
+env KEVY_BIND=127.0.0.1 "$KBIN" --threads 4 --port $RPORT --dir "$DIR/r" --no-aof \
+    --config "$DIR/rep3.toml" > "$DIR/rep.out" 2>&1 &
+RPID_=$!
+for _ in $(seq 100); do $CLI -p $RPORT PING >/dev/null 2>&1 && break; sleep 0.2; done
+sleep 2
+MISS=0
+for i in $(seq 1 20); do
+    $CLI -p $PPORT SET ryw "r$i" >/dev/null
+    TOK=$($CLI -p $PPORT REPL.TOKEN | grep -oE "[0-9]+$" | tr '\n' ' ')
+    R=$($CLI -p $RPORT REPL.WAIT $TOK TIMEOUT 3000 2>&1)
+    echo "$R" | grep -q OK || { MISS=$((MISS+1)); continue; }
+    V=$($CLI -p $RPORT GET ryw)
+    echo "$V" | grep -q "r$i" || MISS=$((MISS+1))
+done
+[ $MISS = 0 ] || fail "read-your-writes missed $MISS/20 rounds"
+# future token: bump every offset by 100000 → must MISDIRECT, not hang
+FTOK=$($CLI -p $PPORT REPL.TOKEN | grep -oE "[0-9]+$" | awk 'NR%2==1{print} NR%2==0{print $1+100000}' | tr '\n' ' ')
+R=$($CLI -p $RPORT REPL.WAIT $FTOK TIMEOUT 600 2>&1)
+echo "$R" | grep -q "MISDIRECTED" || fail "future token did not MISDIRECT: $R"
+note "read-your-writes token holds (20/20) + future token MISDIRECTs"
+
+# ---- clamp 11: bounded staleness
+kill -STOP $PPID_; sleep 4
+R=$($CLI -p $RPORT GET ryw 2>&1)
+echo "$R" | grep -q "STALE" || { kill -CONT $PPID_; fail "stale replica still answered reads: $R"; }
+kill -CONT $PPID_; sleep 3
+R=$($CLI -p $RPORT GET ryw 2>&1)
+echo "$R" | grep -q "r20" || fail "reads did not recover after CONT: $R"
+note "bounded staleness: -STALE past bound, recovers on heal"
+
+# ---- clamp 12: quorum lease fence (3-node)
+kill $PPID_ $RPID_ 2>/dev/null; wait 2>/dev/null
+rm -rf "$DIR/n1" "$DIR/n2" "$DIR/n3"; mkdir -p "$DIR/n1" "$DIR/n2" "$DIR/n3"
+PIDS=()
+start_node n1 $N1 $E1 primary "" n1
+start_node n2 $N2 $E2 replica "1$N1" n2
+start_node n3 $N3 $E3 replica "1$N1" n3
+# election-only write authority: wait for a primary to emerge
+LEADER=""
+for _ in $(seq 60); do
+    for p in $N1 $N2 $N3; do
+        [ "$(role_of $p)" = "master" ] && { LEADER=$p; break 2; }
+    done
+    sleep 0.5
+done
+[ -n "$LEADER" ] || fail "no leader emerged in the 3-node quorum"
+for _ in $(seq 40); do
+    echo "$($CLI -p $LEADER SET q1 v 2>&1)" | grep -q OK && break
+    sleep 0.5
+done
+# kill the two non-leaders → leader loses quorum → writes fence
+for i in 0 1 2; do
+    port=$((N1 + i * 20))
+    # NB: no bare `wait` here — it would block on the still-live
+    # leader too.
+    [ "$port" != "$LEADER" ] && { kill ${PIDS[$i]} 2>/dev/null; wait ${PIDS[$i]} 2>/dev/null; }
+done
+FENCED=0
+for _ in $(seq 30); do   # lease window = down_after (5s) + margin
+    R=$($CLI -p $LEADER SET q2 v 2>&1)
+    echo "$R" | grep -q "NOREPLICAS" && { FENCED=1; break; }
+    sleep 0.5
+done
+[ $FENCED = 1 ] || fail "leader never fenced writes after losing quorum"
+note "quorum lease: minority-side primary fences writes"
+# restart one peer → quorum back → writes reopen
+for i in 0 1 2; do
+    port=$((N1 + i * 20))
+    if [ "$port" != "$LEADER" ]; then
+        id=n$((i + 1)); ebase=$((E1 + i * 20))
+        start_node $id $port $ebase replica "" $id
+        break
+    fi
+done
+REOPEN=0
+for _ in $(seq 40); do
+    R=$($CLI -p $LEADER SET q3 v 2>&1)
+    echo "$R" | grep -q OK && { REOPEN=1; break; }
+    sleep 0.5
+done
+[ $REOPEN = 1 ] || fail "writes never reopened after quorum healed"
+note "quorum lease: writes reopen on heal"
+
+echo "availgate: PASS (phase 1 + 2 + 3)"

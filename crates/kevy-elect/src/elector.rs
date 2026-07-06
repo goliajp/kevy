@@ -98,6 +98,9 @@ pub struct Elector {
     /// `None` until the first `ANNOUNCE` is seen (or the node was
     /// configured-primary at boot).
     pub(crate) current_primary: Option<String>,
+    /// First `tick` instant — anchors the cold-start (no known
+    /// primary) election grace window.
+    pub(crate) first_tick: Option<Instant>,
     /// This node's most recent `repl_offset` — set externally by the
     /// kevy-server adapter from the live replication source / runner.
     pub(crate) my_repl_offset: u64,
@@ -219,6 +222,7 @@ impl Elector {
             role: start_role,
             epoch: 1,
             current_primary: None,
+            first_tick: None,
             my_repl_offset: 0,
             last_hb_sent: HashMap::new(),
             peer_views: HashMap::new(),
@@ -272,6 +276,21 @@ impl Elector {
         self.current_primary.as_deref()
     }
 
+    /// v3.16 D4 — quorum visibility for the primary lease: does this
+    /// node currently see a strict majority of the cluster (itself +
+    /// peers heard from within `down_after`)? A primary that answers
+    /// `false` here is on the minority side of a partition and must
+    /// fence writes — the lease window is exactly `down_after`.
+    pub fn has_quorum(&self, now: Instant) -> bool {
+        let reachable = self
+            .peer_views
+            .values()
+            .filter(|v| now.duration_since(v.last_seen) < self.config.down_after)
+            .count();
+        let cluster = self.peer_ids.len().max(1);
+        (reachable + 1) * 2 > cluster
+    }
+
     /// Drive the elector forward by `now`. Schedules outbound `HB`
     /// per peer, detects DOWN, transitions Candidate → Primary on
     /// quorum, and runs the candidate's election-timeout fallback.
@@ -279,6 +298,9 @@ impl Elector {
     /// drain in one pass.
     pub fn tick(&mut self, now: Instant) -> Vec<Outbound> {
         let mut out = Vec::new();
+        if self.first_tick.is_none() {
+            self.first_tick = Some(now);
+        }
         self.emit_heartbeats(now, &mut out);
         self.maybe_start_election(now, &mut out);
         self.maybe_finish_candidacy(now, &mut out);
@@ -360,12 +382,25 @@ impl Elector {
         {
             return;
         }
-        // Primary must be DOWN by my view.
-        let Some(primary) = self.current_primary.clone() else {
-            return;
-        };
-        if !self.is_peer_down(&primary, now) {
-            return;
+        // Primary must be DOWN by my view. A cluster with NO known
+        // primary (cold start where every node defers to the
+        // election — the v3.16 role clamp makes this the normal
+        // boot) counts as down after one `down_after` grace window,
+        // giving a live primary's HB time to reach us first.
+        match self.current_primary.clone() {
+            Some(primary) => {
+                if !self.is_peer_down(&primary, now) {
+                    return;
+                }
+            }
+            None => {
+                let seen_enough = self
+                    .first_tick
+                    .is_some_and(|t| now.duration_since(t) >= self.config.down_after);
+                if !seen_enough {
+                    return;
+                }
+            }
         }
         // Candidate-selection: I must have the highest offset AND
         // lowest node-id among alive peers (the primary is dead +

@@ -68,11 +68,14 @@ struct Shared {
     out_queues: Mutex<std::collections::HashMap<String, std::collections::VecDeque<Message>>>,
 }
 
-/// v3.15 D2 — topology-change callback: `(new_local_role,
-/// Some(primary_id) when known)`. Address mapping is the CALLER's
-/// job (the static member table lives in the host's config —
-/// membership is static, roles are dynamic).
-pub type TopologyCallback = Box<dyn Fn(crate::message::Role, Option<String>) + Send>;
+/// v3.15 D2 / v3.16 D4 — topology-change callback:
+/// `(new_local_role, Some(primary_id) when known, has_quorum)`.
+/// Address mapping is the CALLER's job (the static member table
+/// lives in the host's config — membership is static, roles are
+/// dynamic). `has_quorum` drives the primary lease: a primary seeing
+/// `false` is on the minority side of a partition and must fence
+/// writes within the `down_after` window.
+pub type TopologyCallback = Box<dyn Fn(crate::message::Role, Option<String>, bool) + Send>;
 
 const MAX_PENDING_PER_PEER: usize = 256;
 
@@ -116,7 +119,7 @@ impl Transport {
         listen_addr: (std::net::IpAddr, u16),
         peers: Vec<PeerAddr>,
     ) -> std::io::Result<Self> {
-        Self::spawn_with_callback(elector, hb_interval, listen_addr, peers, Box::new(|_, _| {}))
+        Self::spawn_with_callback(elector, hb_interval, listen_addr, peers, Box::new(|_, _, _| {}))
     }
 
     /// v3.15 D2 — like [`Self::spawn`], with a topology-change
@@ -412,7 +415,7 @@ fn orchestrator_loop(
     stop: Arc<AtomicBool>,
     on_change: TopologyCallback,
 ) {
-    let mut last_view: Option<(crate::message::Role, Option<String>)> = None;
+    let mut last_view: Option<(crate::message::Role, Option<String>, bool)> = None;
     // Tick at hb_interval — wait up to that long on the inbound
     // channel; either a message arrives + we process it, or the
     // timeout fires + we run tick.
@@ -439,13 +442,14 @@ fn orchestrator_loop(
         }
         // v3.15 D2: detect (role, primary) transitions and notify.
         {
+            let now = Instant::now();
             let e = shared.elector.lock().expect("elector lock");
-            let view = (e.role(), e.current_primary().map(str::to_string));
+            let view = (e.role(), e.current_primary().map(str::to_string), e.has_quorum(now));
             drop(e);
-            let view_pair = (view.0, view.1.clone());
-            if last_view.as_ref() != Some(&view_pair) {
-                on_change(view.0, view.1);
-                last_view = Some(view_pair);
+            let view_key = (view.0, view.1.clone(), view.2);
+            if last_view.as_ref() != Some(&view_key) {
+                on_change(view.0, view.1, view.2);
+                last_view = Some(view_key);
             }
         }
         if !outs.is_empty() {

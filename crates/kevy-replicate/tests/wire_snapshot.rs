@@ -154,3 +154,36 @@ fn encoding_oversize_chunk_panics_in_debug() {
     let data = vec![0u8; SNAPSHOT_CHUNK_MAX + 1];
     let _ = encode_snapshot_chunk(&data);
 }
+
+// ── v3.16 D2: gen-carrying heartbeat ────────────────────────────────
+
+#[test]
+fn ping_marker_round_trips_generation_and_offset() {
+    use kevy_replicate::wire::encode_ping;
+    for (generation, next_offset) in [(1u64, 0u64), (1, 42), (7, u64::from(u32::MAX))] {
+        let bytes = encode_ping(generation, next_offset);
+        let (marker, used) = decode_snapshot_marker(&bytes).unwrap().unwrap();
+        assert_eq!(
+            marker,
+            SnapshotMarker::Ping { generation, next_offset },
+            "gen {generation} off {next_offset}"
+        );
+        assert_eq!(used, bytes.len());
+    }
+}
+
+#[test]
+fn ping_marker_legacy_one_number_form_decodes_with_generation_zero() {
+    // Pre-v3.16 primaries speak `+PING <next_offset>\r\n`; generation 0
+    // = "unknown" (real feed generations start at 1).
+    let (marker, used) = decode_snapshot_marker(b"+PING 42\r\n").unwrap().unwrap();
+    assert_eq!(marker, SnapshotMarker::Ping { generation: 0, next_offset: 42 });
+    assert_eq!(used, b"+PING 42\r\n".len());
+}
+
+#[test]
+fn ping_marker_rejects_non_numeric_fields() {
+    assert_eq!(decode_snapshot_marker(b"+PING x\r\n"), Err(WireError::BadEnvelope));
+    assert_eq!(decode_snapshot_marker(b"+PING 1 y\r\n"), Err(WireError::BadEnvelope));
+    assert_eq!(decode_snapshot_marker(b"+PING x 2\r\n"), Err(WireError::BadEnvelope));
+}

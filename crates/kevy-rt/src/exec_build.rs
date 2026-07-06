@@ -85,6 +85,19 @@ impl<C: Commands> Shard<C> {
                     .collect();
                 (targets, Agg::ExtensionGather { argv, chunks: Vec::new() })
             }
+            // v3.16 D2 REPL.TOKEN: every shard reports its live
+            // (generation, next_offset) pair; the origin lays them out
+            // as one flat integer array in shard order.
+            Route::ReplToken => (
+                (0..self.nshards).map(|s| (s, Op::ReplToken)).collect(),
+                Agg::ReplTokens { slots: vec![None; self.nshards] },
+            ),
+            // WAIT / REPL.WAIT are intercepted in `start_command`
+            // (deferred barriers with their own starters); reaching
+            // here is a routing bug — reply an error, don't crash.
+            Route::ReplWait { .. } | Route::ReplBarrier { .. } => {
+                gather_error("ERR internal: repl-wait route hit multi builder")
+            }
             Route::PrefixStats => {
                 let prefix = args.get(1).map(|p| p.to_vec()).unwrap_or_default();
                 let targets = (0..self.nshards)

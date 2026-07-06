@@ -57,6 +57,38 @@ impl<C: Commands> Shard<C> {
                 self.slowlog.buf.pop_front();
             }
         }
+        self.apply_promotion_epoch(live.promotion_epoch);
+    }
+
+    /// v3.16 D2 — promotion fences the old offset space: when the
+    /// command layer's promotion counter moved (this process went
+    /// replica → primary), bump this shard's feed generation (offsets
+    /// restart at 0, persisted via the feed-gen sidecar). Tokens
+    /// minted pre-failover then gen-mismatch on every replica instead
+    /// of falsely matching the new primary's unrelated offsets. The
+    /// FIRST observed value is recorded without acting — a counter
+    /// left over from an earlier in-process serve session must not
+    /// fire a spurious bump at boot.
+    fn apply_promotion_epoch(&mut self, epoch: u64) {
+        let Some(seen) = self.seen_promotion_epoch else {
+            self.seen_promotion_epoch = Some(epoch);
+            return;
+        };
+        if epoch <= seen {
+            return;
+        }
+        self.seen_promotion_epoch = Some(epoch);
+        if let Some(f) = self.replicate.as_mut() {
+            f.bump_generation();
+            let g = f.generation();
+            if let Err(e) = kevy_persist::feed_meta::write_feed_gen(&self.data_dir, self.id, g) {
+                eprintln!("kevy: shard {} promotion feed gen write failed: {e}", self.id);
+            }
+            eprintln!(
+                "kevy: shard {} promoted — replication feed generation bumped to {g}",
+                self.id,
+            );
+        }
     }
 
     /// Check whether the live AOF has grown enough to warrant an automatic
