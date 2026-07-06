@@ -23,7 +23,7 @@ pub mod sim;
 pub mod transport;
 pub mod wire;
 
-pub use transport::{ElectorSnapshot, PeerAddr, Transport};
+pub use transport::{ElectorSnapshot, PeerAddr, TopologyCallback, Transport};
 
 #[cfg(test)]
 #[path = "elector_tests.rs"]
