@@ -18,6 +18,8 @@ If you only want a quick "does it survive `kill -9`?" answer: yes, with at most 
 
 Every shard owns two files in the persistence directory: an append-only log of mutating commands (`aof-<id>.aof`) and an optional binary snapshot (`dump-<id>.rdb`). The AOF alone is a complete durable record; the snapshot exists only to bound replay time. On boot kevy loads the snapshot if present, then replays the AOF; on a successful snapshot the AOF is reset so the two files together cover the full history exactly once.
 
+The directory itself is created at boot if missing (v3.17); a path that cannot be created is one named startup error, not a bare ENOENT from whichever subsystem touches it first.
+
 ## Worked examples
 
 ### Server mode
@@ -229,6 +231,7 @@ store.evictions_total();        // total evicted by maxmemory
 | `dump-<id>.rdb.reshard` + `reshard.journal` | In-progress shard-layout migration. Rolled forward on next start; never delete the journal by hand. |
 | `*.premigration.<unix_ts>` | Pre-migration source backups, kept for rollback. |
 | `aof-<id>.aof.panic-quarantine.<unix_ts>` | Corrupt AOF tail set aside during recovery. Inspect by hand if you need to salvage anything; kevy will not re-apply it. |
+| `elect.meta` (+ transient `elect.meta.tmp`) | Election durability (v3.15): the elector's `(epoch, votedFor)` pair, persisted *before* any vote answer leaves the node so a crash-restart can never double-vote. Written tmp + fsync + rename — a crash mid-save leaves the old pair or the new pair, never a torn file. Only present with a `[cluster]` quorum configured. |
 
 ## Durability contract (v2.1)
 
@@ -302,3 +305,15 @@ than the window are gone — a snapshot older than the window's reach
 is a plain snapshot restore (state at S), not a PITR base. Take
 snapshots at least as often as the window turns over if you rely on
 exact-point recovery.
+
+## The snapshot on the replication wire (v3.15)
+
+The same snapshot format is what a primary in-line-ships to a replica
+that has fallen past the backlog window (see
+[replication.md](replication.md)). One semantic worth knowing: a
+shipped snapshot **replaces** the replica's local state, it does not
+merge — the replica flushes its keyspace before loading. That is
+deliberate: when a rejoining ex-primary carries a forked suffix
+(writes that were never replicated), the resync must genuinely
+discard the fork rather than leave it as residue under an upsert-only
+load.

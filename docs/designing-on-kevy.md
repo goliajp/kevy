@@ -13,8 +13,8 @@ through [the cookbook](cookbook.md) recipe by recipe.
 
 | Plane | What it carries | Where |
 |---|---|---|
-| **P0 — Operations** | Every op on every surface: server (RESP), embedded (in-process), Lua, atomic blocks, pipelines. One OP_TABLE, CI-enforced parity. | docs/op-table.md |
-| **P1 — Atomicity & durability** | Single-shard atomic blocks, deterministic-order all-shard blocks, appendfsync × atomic-commit matrix, per-block fsync barriers. | docs/atomicity.md, docs/persistence.md |
+| **P0 — Operations** | Every op on every surface: server (RESP), embedded (in-process), Lua, atomic blocks, pipelines. One OP_TABLE, CI-enforced parity. | docs/verb-reference.md |
+| **P1 — Atomicity & durability** | Single-shard atomic blocks, deterministic-order all-shard blocks, appendfsync × atomic-commit matrix, per-block fsync barriers. | docs/persistence.md |
 | **P2 — Indexes** | Declared secondary indexes, four kinds: `range`, `unique`, `text` (CJK bigram + BM25), `ann` (HNSW). Derived-by-construction (write-hook maintained, zero drift), one-hop hydration (`FIELDS`), backfill rebuild. | docs/indexes.md, docs/text-search.md, docs/vector-search.md |
 | **P3 — Views & algebra** | Named compositions over indexes (virtual / materialized top-K), zset/set algebra with full Redis semantics. | docs/views.md |
 | **P4 — Flow** | CDC feed with `(generation, offset)` cursors (the built-in outbox), blocking pops, hash-field TTLs, snapshot read views, the embedded read-only RESP listener. | docs/cdc.md, docs/embedded-listener.md |

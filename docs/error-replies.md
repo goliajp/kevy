@@ -35,7 +35,7 @@ Errors are part of kevy's user-facing contract. Adding, renaming, or repurposing
 | `-QUIESCED migrating to <host:port>` | The slot or scope is mid-migration and frozen on this node, or the node is mid-`FAILOVER` handover to `<host:port>`. | See [Cluster-routing replies](#cluster-routing-replies). |
 | `-OOM command not allowed when used memory > 'maxmemory'` | Write-class command with policy `noeviction` after the limit is exceeded. | Raise `maxmemory`, set an eviction policy (e.g. `allkeys-lru`), or `DEL` to free room. Existing data is intact. |
 | `-READONLY You can't write against a read only replica.` | Write command sent to a replica node. | Send to the primary, or use a routing client. |
-| `-NOREPLICAS Not enough good replicas to write.` | Primary with `min_replicas_to_write = N` sees fewer than N healthy replicas. | Back off and retry; restore the replicas (see [docs/availability.md](https://github.com/goliajp/kevy/blob/master/docs/availability.md)). |
+| `-NOREPLICAS Not enough good replicas to write.` | Primary with `min_replicas_to_write = N` sees fewer than N healthy replicas. | Back off and retry; restore the replicas (see [docs/availability.md](https://github.com/goliajp/kevy/blob/develop/docs/availability.md)). |
 | `-NOREPLICAS primary lost quorum; writes fenced` | An elect-quorum primary cannot reach a strict majority of its peers (partition minority side); writes self-fence for the lease window. | Back off and retry — the fence lifts when the partition heals, or the majority elects a new primary your routing client will find. |
 | `-STALE replica is stale; read the primary or raise replica_max_staleness_ms` | Read sent to a replica whose last primary heartbeat is older than its `replica_max_staleness_ms` bound. | Read the primary until the replica catches up, or raise/disable the bound. |
 | `-READONLY can't write against a read-only script` | Script was evaluated via `EVAL_RO` / `EVALSHA_RO` and attempted a write. | Use the writable `EVAL` / `EVALSHA` variant. |
@@ -74,7 +74,7 @@ These prefixes only appear when kevy is running in a routed mode (cluster or sco
 - **`-MISDIRECTED writer is <host:port>`** — Fires on a write that landed on a node that does not own the key's scope. Routing clients follow the redirect; manual clients should reconnect to `<host:port>`.
 - **`-QUIESCED migrating to <host:port>`** — Fires while a slot or scope is being migrated and is frozen on this node. The client should treat it like `MOVED` and retry against `<host:port>`. Once migration completes, that node will respond authoritatively.
 
-See the protocol notes in [docs/](https://github.com/goliajp/kevy/tree/master/docs) for the full routing model.
+See the protocol notes in [docs/](https://github.com/goliajp/kevy/tree/develop/docs) for the full routing model.
 
 ## FAQ
 
@@ -109,7 +109,7 @@ discovery surface (an agent that hits one can recover in-band).
 If you add or modify a code path that emits a `-<PREFIX> ...` reply:
 
 1. Update the row in [Core reference](#core-reference) (or add a new one).
-2. Extend the wire-level chaos test at [crates/kevy/tests/wire_torture_chaos.rs](https://github.com/goliajp/kevy/blob/master/crates/kevy/tests/wire_torture_chaos.rs) if a new prefix is introduced.
-3. Note the change in [CHANGELOG.md](https://github.com/goliajp/kevy/blob/master/CHANGELOG.md) for the release that ships it.
+2. Extend the wire-level chaos test at [crates/kevy/tests/wire_torture_chaos.rs](https://github.com/goliajp/kevy/blob/develop/crates/kevy/tests/wire_torture_chaos.rs) if a new prefix is introduced.
+3. Note the change in [CHANGELOG.md](https://github.com/goliajp/kevy/blob/develop/CHANGELOG.md) for the release that ships it.
 
 Errors are part of the client contract. Silent message changes can break ecosystem libraries that pattern-match on them.

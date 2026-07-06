@@ -36,11 +36,19 @@ kevy ships in three forms, all built from the same engine:
 v3 declares kevy a **serving engine**: the primary store for
 applications that would otherwise run an RDS with a cache in front.
 On top of full Redis parity you get declared secondary indexes
-(range / unique / CJK full-text / vector ANN) with one-hop hydration,
-composable views (virtual and materialized top-K), a CDC feed with
-exact recovery points (the built-in outbox), and a migration
-toolchain with checksummed verification — all derived-by-construction
-(maintained in the write path, never drifting, rebuilt from data).
+(range / unique / CJK full-text / vector ANN, with server-side hybrid
+BM25 + KNN fusion) with one-hop hydration, composable views (virtual
+and materialized top-K), a CDC feed with exact recovery points (the
+built-in outbox), and a migration toolchain with checksummed
+verification — all derived-by-construction (maintained in the write
+path, never drifting, rebuilt from data). The 3.x mainline adds the
+machine faces — a self-describing verb contract (`COMMAND DOCS`,
+generated references, an official MCP server in `kevy-mcp`) — and the
+availability arc: streaming replication with heartbeat/ACK lag truth,
+planned zero-loss handover (`FAILOVER`) plus quorum crash elections,
+and an opt-in consistency ladder (`WAIT`, read-your-writes tokens,
+bounded staleness, quorum-fenced writes) — see
+[docs/availability.md](docs/availability.md).
 Every headline number is gated and re-measured on every train:
 hydrated row-list pages p99 < 1ms, write fan-out p99 < 200µs, ANN
 recall ≥ 0.9 — see [the design map](docs/designing-on-kevy.md),
@@ -231,13 +239,15 @@ published so the workspace builds reproducibly, but end users typically
 reach for the surfaces above.
 
 **For AI agents & tools**: [`llms.txt`](llms.txt) (machine-first index) ·
-[verb reference](docs/verb-reference.md) (all 185 verbs, generated from the
+[verb reference](docs/verb-reference.md) (all 189 verbs, generated from the
 server's own metadata — the same rows `COMMAND DOCS` serves).
 
 ## Topic guides
 
 | Topic | Doc |
 |---|---|
+| RDS workload mapping (SQL → kevy) | [`docs/rds-workloads.md`](docs/rds-workloads.md) |
+| Migration playbook & toolchain | [`docs/migration.md`](docs/migration.md) |
 | Configuration tuning | [`docs/tuning.md`](docs/tuning.md) |
 | Persistence (AOF + RDB) | [`docs/persistence.md`](docs/persistence.md) |
 | Pub/Sub | [`docs/pubsub.md`](docs/pubsub.md) |
@@ -280,10 +290,12 @@ build for `wasm32-unknown-unknown` and `wasm32-wasip1`.
 
 ## Roadmap and stability
 
-The workspace is on the v2.x line. Persistence format, RESP wire
+The workspace is on the v3.x line. Persistence format, RESP wire
 protocol, public Rust API, CLI flags, env vars, TOML schema, and
-eviction semantics are add-only across each major line: a file written
-by v2.0 loads on every later v2.x build, and additive features land in
+eviction semantics are add-only across each major line — and the
+on-disk formats carry across majors: a snapshot or AOF written by
+v2.0 loads as-is on every 3.x build (see
+[docs/UPGRADING.md](docs/UPGRADING.md)). Additive features land in
 minor releases without breaking earlier code. The full stability
 contract is in
 [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md#v1x-stability-commitment).

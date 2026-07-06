@@ -8,14 +8,14 @@ that needs care (downgrading back to 2.x).
 
 ## TL;DR — versions at a glance
 
-| Component | 2.x era | 3.x | Action |
+| Component | 2.x era | 3.x (currently 3.17.1) | Action |
 |---|---|---|---|
-| `kevy` (server) | 2.0.x | 3.8.0 | swap the binary, restart on the same data dir |
-| `kevy-embedded` | **1.x** (1.4–1.16) | **3.8.0** | bump the dep — the 1.x line ended at v3.0.0 when the whole workspace unified on one version |
+| `kevy` (server) | 2.0.x | 3.17.x | swap the binary, restart on the same data dir |
+| `kevy-embedded` | **1.x** (1.4–1.16) | **3.17.x** | bump the dep — the 1.x line ended at v3.0.0 when the whole workspace unified on one version |
 | `kevy-client` | 1.12.x | 1.13.x | bump; API unchanged |
 | `kevy-client-async` | 1.0.x | 1.1.x | bump; API unchanged |
-| `kevy-cli` | unpublished | 3.8.0 | `cargo install kevy-cli` — now carries the whole migration toolchain |
-| Infra crates (`kevy-store`, `kevy-rt`, …) | 2.0.x | 3.8.0 | follow the workspace version |
+| `kevy-cli` | unpublished | 3.17.x | `cargo install kevy-cli` — now carries the whole migration toolchain |
+| Infra crates (`kevy-store`, `kevy-rt`, …) | 2.0.x | 3.17.x | follow the workspace version |
 
 The `kevy-embedded` jump from 1.x to 3.x is a **version-line
 unification, not an API rewrite**: the 1.16 surface is contained in
@@ -47,14 +47,17 @@ with defaults that reproduce 2.x behavior.
 
 1. Take a snapshot on the running 2.x server (`SAVE` or your normal
    backup), and keep a copy — see “Downgrading” below for why.
-2. Stop 2.x, start the 3.8.0 binary with the same flags and data dir.
+2. Stop 2.x, start the 3.x binary with the same flags and data dir.
 3. Verify: `DBSIZE` matches, and if you want cryptographic-grade
    assurance run `kevy-cli digest -p <port> <prefix>` before and
    after — equal digests mean an identical keyspace.
 
 Rolling a replica pair: upgrade the replica first, let it re-sync,
 then fail traffic over and upgrade the former primary. (2.x has no
-managed failover; this is the usual manual swap.)
+managed failover, so from 2.x this is the usual manual swap. Once
+you are on 3.15+, the fail-over step itself becomes one verb —
+`FAILOVER host port` — see
+[docs/availability.md](availability.md).)
 
 ### Embedded applications
 
@@ -73,16 +76,21 @@ managed failover; this is the usual manual swap.)
 ### Clients
 
 `kevy-client 1.13` / `kevy-client-async 1.1` are drop-in: the minor
-bump only re-pins internal crates to 3.8.0. Generic Redis client
-libraries are unaffected either way.
+bump only re-pins internal crates to the 3.x workspace. Generic Redis
+client libraries are unaffected either way.
 
 ## What 3.x adds (why you upgrade)
 
 Declared indexes with hydration (`IDX.*`), named views (`VIEW.*`),
 write-time aggregates (GROUP BY / distributed top-K), dictionary-free
-CJK full-text search with BM25, HNSW vector KNN, CDC feeds with the
-recovery-point contract (`FEED.*`), embedded-as-primary replication,
-and the migration toolchain (`kevy-cli import/export/--verify/diff/
+CJK full-text search with BM25, HNSW vector KNN (plus hybrid BM25+KNN
+fusion), CDC feeds with the recovery-point contract (`FEED.*`),
+embedded-as-primary replication, the machine-readable contract
+(`COMMAND DOCS`, generated references, the `kevy-mcp` MCP server),
+the availability arc (replication lag truth, `FAILOVER`, quorum crash
+elections, the `WAIT` / `REPL.TOKEN` / `REPL.WAIT` consistency
+ladder — [docs/availability.md](availability.md)), and the migration
+toolchain (`kevy-cli import/export/--verify/diff/
 inspect/digest`). Start at [docs/designing-on-kevy.md](designing-on-kevy.md)
 and [docs/cookbook.md](cookbook.md); performance receipts live in
 [bench/PERF-LEDGER.md](../bench/PERF-LEDGER.md).
@@ -113,3 +121,11 @@ path is the correct downgrade, not AOF replay.
   bare face 1.6–3.3×, ANN 1.64× ahead at recall 1.000, FTS single
   common term 93×; embedded-as-primary replication). No releases
   were cut between 3.0.0 and 3.8.0; 3.8.0 contains trains v3.1–v3.8.
+- **3.17.0** — the availability release: the AI-native serving faces
+  (machine-readable verb contract, generated docs, `kevy-mcp`, hybrid
+  retrieval) and the availability arc (replication heartbeat/ACK
+  truth, `FAILOVER` + quorum crash elections, the consistency
+  ladder, contract gates in CI). Contains trains v3.9–v3.17; no
+  releases were cut in between.
+- **3.17.1** — dependency bump of the `luna-core` Lua runtime
+  (2.1.0 → 2.16.0).
