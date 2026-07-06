@@ -19,8 +19,10 @@ cargo build --release -p kevy-embedded --example primary_writer 2>&1 | tail -1
 KEVY=target/release/kevy
 CLI=target/release/kevy-cli
 WRITER=target/release/examples/primary_writer
+# port+10000 replication ranges span nshards consecutive ports —
+# keep the two servers >= nshards apart (v3.15: replicas listen too).
 SRCPORT=7101
-REPPORT=7102
+REPPORT=7112
 DIR=$(mktemp -d /tmp/kevy-repligate-XXXXXX)
 
 # ---- primary first: seed + READY, keep writing ----

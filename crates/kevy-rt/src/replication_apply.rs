@@ -64,6 +64,13 @@ impl<C: Commands> Shard<C> {
             }
             ReplicaApply::SnapshotEnd { ack_offset: _, routed } => {
                 let buf = std::mem::take(&mut self.replica_snapshot_buf);
+                // v3.15 D4: a snapshot ship REPLACES local state, it
+                // does not merge into it. The load is per-record
+                // upsert, so any local residue not present upstream
+                // (a rejoining old primary's forked suffix, a stale
+                // pre-resync keyspace) must be dropped first —
+                // otherwise the fork survives the "discard".
+                self.store.flushall();
                 let res = if routed {
                     // v3.2 single-source: the payload is the whole
                     // upstream keyspace — keep only this shard's slice

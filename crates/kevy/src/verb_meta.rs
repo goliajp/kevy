@@ -82,6 +82,7 @@ pub const VERB_META: &[VerbMeta] = &[
     v("SHUTDOWN",    "server", -1, WAD, "Stop the server process (connection drops without a reply).", "1.0.0", "SHUTDOWN [NOSAVE|SAVE]"),
     v("SLOWLOG",     "server", -2, AD, "Inspect or reset the slow-command log.", "1.0.0", "SLOWLOG GET [count] | LEN | RESET | HELP"),
     // ---- replication ---------------------------------------------------
+    v("FAILOVER",    "replication", -3, WAD, "Planned zero-loss handover: quiesce writes, wait for the target replica to drain, promote it, and follow it.", "3.0.0", "FAILOVER host port [TIMEOUT ms] | ABORT"),
     v("REPLICAOF",   "replication", 3, WAD, "Make this server a replica of another, or promote it with NO ONE.", "1.0.0", "REPLICAOF host port | NO ONE"),
     v("ROLE",        "replication", 1, R,  "Report the replication role and state of this server.", "1.0.0", "ROLE"),
     v("SLAVEOF",     "replication", 3, WAD, "Legacy alias of REPLICAOF.", "1.0.0", "SLAVEOF host port | NO ONE"),
