@@ -1,0 +1,271 @@
+# kevy roadmap
+
+唯一的开放工作清单。**线性化的执行顺序** — 上面的先做，下面的后做。
+
+最后更新：2026-07-03(深夜;**user 新指令:中途不 release,v3 彻底做完后一次性 release**。v2.1.0 已发为最后的中途 release;此后每 train 收口 = 五轴 gate + merge develop,版本号/tag/publish 全部攒到 v3.0 终点一次性做)
+当前状态：**已发布基线 = v2.0.20**(workspace 全 2.0.20;kevy-embedded 1.15.0 独立 track)。develop == master,同步 origin,干净。
+v1.x → v2.0 的完整历史账目见 git log + `CHANGELOG.md` + `.claude/plans/2026-06-30-v2-roadmap.md`(已完成归档)。
+
+## 当前 arc — v3 serving engine
+
+- **设计文档**:`.claude/plans/2026-07-03-v3-serving-engine.md`(六能力平面 P0-P5 / D1-D6 承重决策 / §4b RDS on-ramp)
+- **边界 constitution**:`.claude/plans/2026-07-03-rds-refugee-services.md`(三定律 / 迁移旅程 Stage 0-5 服务表 / REFUSED 表)
+- **视图设计**:`.claude/plans/2026-07-03-views-design-exploration.md`(LOCKED 2026-07-03)
+- **最终计划(含 audit A1-A7)**:`~/.claude-profile-2/plans/staged-splashing-truffle.md`
+
+定位:应用放弃 RDS 后把主数据模型直接建在 kevy 上的 serving engine。Field feedback(mailrs 等)一律作为 RFC 输入,**不进入逐条回信循环**。
+
+## 运营铁律(违者返工)
+
+**feature 分支先行(2026-06-10 立)**:任何条目开工第一动作 = 建 feature 分支,然后才写第一行代码。develop 只允许 trivial CI/docs 一行改和 feature 的 merge。merge 用 `--no-ff`。autorun 授权只解除"逐步等批准",不解除 git-flow。
+
+**RFC gate(v3 arc)**:标【RFC】的 train,RFC 批准前不写实现代码(Phase A/B 分离)。
+
+**五轴收口(2026-07-03 立,ceiling-first)**:每 train finish 前五轴全绿,gate 红 = 不许 finish;基线只升不降(ratchet,同 perfgate 哲学):
+
+1. **perf** — `bench/perfgate.sh` 全绿(既有线 + 本 train 新增线);基线仅在有意改进落地后 `--update-baseline` 抬高,绝不为绿灯而改。
+2. **mem** — 本 train 每个新子系统:RFC 声明内存公式 → lx64 实测 bytes/entry 对公式(±20%)→ 超预算 = create/rebuild 清晰报错(资源自适应)。`bench/memgate.sh` 承载。
+3. **disk** — AOF / catalog / feed retention / index checkpoint 磁盘增长边界声明 + 30M-key 包络实测(rewrite 停顿、replay 吞吐同口径)。`bench/diskgate.sh` 承载。
+4. **doc** — 无 doc 不 finish:docs/*.md + README 三语(user-visible 时)+ CHANGELOG entry + RFC 归档标状态。
+5. **cov** — CI `cargo llvm-cov` job(外部 cargo 工具,零 Cargo.toml 依赖,不破 0-dep):新 crate(kevy-index/text/vector)行覆盖 ≥ 90%;workspace 总覆盖率 v2.1 记基线后只升不降。
+
+**用户授权(standing)**:上限性能优先,不考虑 ROI / win/risks,正统思路指导,自动决策技术问题,遇分叉按上限最高选项 + 禁野路子。资源自适应哲学:空间大释放性能、空间小不挂、大范围合理卡、超额清晰报错+警告+闸门。
+
+---
+
+## 线性 checklist(v2.1 → v3.0,从上往下,不跳序)
+
+> 每 train:开工第一动 = feature 分支;标【RFC】的 RFC 批准前零实现代码;finish 前五轴收口全绿。embedded surface 变化随 train 同步 bump kevy-embedded minor。
+
+### v2.1 — P0/P1 foundation ✅ SHIPPED 2026-07-03(v2.1.0 / embedded 1.16.0——最后的中途 release)
+- [x] 分支 `feature/v2-1-op-foundation`
+- [x] op 枚举 sweep:全 op × 6 surface(server dispatch / embedded Store / Pipeline / AtomicCtx / replay / rewrite_fmt)现状矩阵 → gap doc
+- [x] const OP_TABLE(名字 / 读写类 / key 位置 / surface eligibility / wake-blocked 类 / Lua 写类;纯数据,非 codegen,热路径零改动)
+- [x] 各 surface manifest + CI parity test(缺失 (op,surface) 对列名报红)
+- [x] cmd.rs 三分类清单 / cmd_block.rs 唤醒清单 / cmd_lua.rs 写清单 → 对表穷尽性测试
+- [x] AtomicCtx 补全(atomic + atomic_all_shards):del/hdel/zrem/sadd/srem/lpush/rpush + hgetall/hmget/hexists/zcard/exists + sweep 余量
+- [x] 条件写:ZaddFlags GT/LT/NX/XX/CH 全 surface;SET 命令 flags 面统一核查(setnx/hsetnx 已确认存在,audit A2)
+- [x] 原子性 charter doc(单 shard / all-shards 确定序锁语义(audit A4 有源码依据)、blessed serving 配置、ceiling)
+- [x] 耐久契约:appendfsync × atomic-commit 矩阵 doc + per-block fsync barrier opt-in
+- [x] covgate 建制:CI 加 `cargo llvm-cov` job + 记录 workspace 覆盖率基线(ratchet 起点;audit A6:现无 coverage job)
+- [x] memgate/diskgate 脚手架:`bench/memgate.sh` / `bench/diskgate.sh` 骨架 + 首批线
+- [x] 五轴收口 → release **v2.1.0**(embedded 1.16.0)
+
+### （新插入,进行中）task #9 收尾 + task #10 perf campaign
+
+- [x] v2.0.21 hotfix 对 SHIPPED;v2.1.0 SHIPPED(最后的中途 release)
+- [x] `feature/v2-1-1-uring-fallback` CI 全绿验收 → merged develop(CI 9/9,v2.0.17 以来首次)
+- [x] **task #10 perf campaign 闭环(2026-07-04)**:两台阶具名(286c4a2 v1.17 INFO 计数器 -4% 模态;4fa4631 nap 移除单 commit -20%)→ 三假说带遥测证伪 → **stay-hot-while-inflight** 修复 merge develop:legacy 双角恢复+超越(get +9% over 旧基线)、pinned 全保、-c1 反升 80k@15µs、perfgate 6/6 原基线真 PASS → 基线诚实重录(pinned +18% 与 legacy 恢复双向入账)。考古:`bench/PERF-FINDING-2026-07-03-…` + `PERF-DECOMP-2026-07-04-…` rounds 1-4。尾巴(低优先):286c4a2 微机制、epoll stay-hot 对称
+
+### v2.2 — P3 zset 代数(Redis parity)
+- [x] 分支 `feature/v2-2-zset-algebra`;store 纯代数(WEIGHTS/AGGREGATE 全 Redis 6.2 语义)
+- [x] set 代数 `*STORE` 形式补齐(SINTERSTORE/SUNIONSTORE/SDIFFSTORE)
+- [x] server 命令(gather+二跳 store 编排,rename-orchestrator 模式;CROSSSLOT numkeys-aware)+ embedded facades + OP_TABLE 7 行 + effect-AOF 豁免;zrange_by_score LIMIT embedded 变体(server 本有)
+- [ ] 五轴收口(mem✓ disk✓ doc✓ clippy✓;perfgate 含新 zalg 角 + CI cov 在飞)→ merge develop
+
+### v2.3 — P4 offset 脊柱(CDC + 恢复点)【RFC】
+- [ ] RFC:`(generation, offset)` 语义 / at-least-once / prefix filter / FEED.* server 面 / retention 默认+上限 / kevy-replicate backlog 复用
+- [ ] user 拍板 → 分支;embedded changes_since/changes_tail + server FEED.*
+- [ ] 世代号跨 rewrite + 超 backlog 干净 resync 错误
+- [ ] 恢复点契约("snapshot S + (gen,O) = exact restore point")+ restore drill doc + PITR 路径
+- [ ] info_prefix(embedded + server)
+- [ ] lx64 实测:30M keys rewrite 停顿 + replay 吞吐 → docs/persistence.md + metric sink(= diskgate 首批正式线)
+- [ ] 五轴收口(perf:feed lag p99 < 100ms 常驻线)→ merge develop
+
+### v2.4 — P4 flow round-out + 读视图
+- [ ] 分支;embedded blocking pop(timeout,park-wait 设计短文先行)
+- [ ] zpopmin_below(store + server + embedded)
+- [ ] hash-field TTL(HEXPIRE/HPEXPIRE/HTTL/HPERSIST):per-field deadline + reaper + AOF/snapshot + 全 TTL replay 矩阵(正确性敏感)
+- [ ] 公开 SnapshotView:一致性 point-in-time prefix 迭代(写不停,读冻结)
+- [ ] 五轴收口 → merge develop
+
+### v2.5 — P2 索引引擎核心 ⭐【RFC + design round】
+- [x] RFC(最大):catalog 持久化 / prefix hook 空 catalog 零税方案 / DSL 文法 + 标量 coercion(parse 失败=排除并入 verify 报告)/ Range+Unique 语义 / derived-by-construction(AOF 只记 primary write)/ rebuild-verify-fsck / 组合 + cursor 契约(SCAN 式保证,snapshot 指向 v2.4)/ IDX.* 命名空间 / 内部 keyspace 对 TYPE/SCAN/DBSIZE/KEYS 不可见 / per-index 内存预算公式
+- [x] mailrs design round(输入非工单)→ user 拍板
+- [x] 分支;新 crate kevy-index(stone):catalog + hook + DSL
+- [x] Range kind + Unique kind
+- [x] index_query + AND/OR 组合 + cursor 分页
+- [x] Hydration ⭐(IDX.QUERY ... FIELDS + embedded 等价:一跳解引用 + 声明字段投影)
+- [x] index_count(count-without-fetch)
+- [x] rebuild_index / verify_index → Report / index stats;index_query 进 SLOWLOG
+- [x] 五轴收口(perf 双闸:空 catalog 0% 回归 + index_query p99 < 2ms @ 1M rows + hydration 线;mem:index 公式实测;cov:kevy-index ≥ 90%)→ merge develop
+
+### v2.6 — P3 views(虚拟/物化视图)【RFC】
+- [x] RFC:ViewSpec(组合树 over 命名索引 / order_by / mode / hydrate)/ 三条结构规则(只存成员+序、组件显式命名+视图层零谓词、partition 为查询参数)/ VIEW.* 命名空间 / 可交换重排条款原文 / top-K underflow 从基索引局部重算 + K+Δ 缓冲 / Via 栅栏(≤2 跳、纯模板、目标无谓词、目标缺失=nil)
+- [x] user 拍板 → 分支;Virtual 模式(VIEW.QUERY / VIEW.EXPLAIN / view-tag SLOWLOG;统一查询入口:IDX.QUERY ⊂ ad-hoc ⊂ named view)
+- [x] Materialized 模式(And=写时成员检查 / Or=refcount / Diff=检查;增量维护)+ top-K 有界
+- [x] Via 多跳 hydration(SORT GET 先例)
+- [x] verify_view / rebuild_view / view stats
+- [x] 五轴收口(perf:VIEW.QUERY virtual p99 < 3ms @ 1M×2 组件;物化读 = 索引读同线;写路径税:3 基底 4 物化视图 < 15% vs 裸索引;mem:视图公式)→ merge develop
+
+### v2.7 — P2 text kind(CJK FTS)【RFC】
+- [x] RFC:Tokenizer trait / unicode 分段 + CJK bigram 无词典默认 / BM25 / prefix+field 查询 / 内存公式 / 重建边界
+- [x] user 拍板 → 分支;新 crate kevy-text(stone,feature-gated);挂 kevy-index;hydration 统一
+- [x] 五轴收口(perf:p95 < 20ms @ 1M docs;mem:公式实测;cov ≥ 90%)→ merge develop
+
+### v2.8 — P2 vector kind(ANN)【RFC】
+- [x] RFC:HNSW 参数 / partition filter / 内存公式(1M×1024d ≈ 4GB 包络)/ bounded rebuild 契约
+- [x] user 拍板 → 分支;新 crate kevy-vector(stone,feature-gated);挂 kevy-index;hydration 统一
+- [x] 五轴收口(perf:kNN p95 < 30ms @ 1M;disk:checkpoint/rebuild 时间对契约;cov ≥ 90%)→ merge develop
+
+### v2.9 — P4 拓扑【RFC】
+- [x] RFC:fork —— (a) embedded RESP listener(read-only v1)vs (b) embedded-as-primary 复制(骑 feed);工程 merit 定
+- [x] read-your-writes token:写返 (gen, offset) opt-in + 读路径 wait_for
+- [x] user 拍板 → 分支;impl 按 RFC;两进程同数据集 e2e
+- [x] 五轴收口 → merge develop
+
+### v2.10 — RDS on-ramp(迁移工具链)
+- [x] 分支;kevy-cli import(pipelined + 续传 + 原子批)+ --verify(行数 + per-prefix checksum)
+- [x] kevy-cli export(逻辑、prefix-scoped、line 格式、read-view 一致)
+- [x] deferred index build(load 挂起维护 → 末尾一次 rebuild)
+- [x] prefix bulk ops(copy/delete by prefix,限速 + 续传)
+- [x] prefix digest(DEBUG DIGEST genre)+ kevy-cli diff
+- [x] kevy-cli inspect(prefix browse / index inspect / IDX.EXPLAIN 诊断器)
+- [x] 五轴收口 → merge develop
+
+### v2.11 — P5 验证 arc(serving 尺度实证)
+- [x] 分支(test-only 也走);serving-shape perfgate 常驻套件汇总(row-list p99<1ms / 写扇出 p99<200µs / 各 train 闸线)
+- [x] 尺度 soak(lx64):30M keys / 1M index rows / 1M vectors + 物化视图混载;复核 v2.3 声明边界
+- [x] index-fsck + view-fsck chaos(写中 kill → verify → rebuild → 零差异)
+- [x] 五轴全量复核(mem/disk 实测 vs 全部已声明公式,一张对账表)
+- [x] 五轴收口 → merge develop
+
+### v3.0 — serving engine declared（一次性 release 点）
+- [x] RDS→kevy modeling cookbook(refugee doc §4 全清单:布局 / 序列 / 乐观锁 / CHECK 替代 / 幂等键 / 软删 / 复合排序 / NULL / JSONB 指南 / 级联 recipe / outbox 不需要 / 审计 via CDC / 反向镜像 / 分析导出)
+- [x] docs arc:"designing your app on kevy" + 六平面总览 + 三定律公开版
+- [x] README 三语 headline + serving charter 汇总(原子契约 / 恢复点契约 / 全 gate 线)
+- [x] CHANGELOG v3.0 总账;workspace → 3.0.0;GH Release manifesto;全 crate publish
+- [x] 五轴终审 → ship **v3.0.0**
+
+---
+
+## 谨慎评估后不合并(v3 范围外)
+
+**完整 REFUSED 表见 `.claude/plans/2026-07-03-rds-refugee-services.md` §5**(17 项,每项标注违反哪条定律 + 需求由什么覆盖)—— 今后同类 ask 直接引用,不逐案重议。其中两行经 views 设计探索 refine(见 views doc §5):查询语言 body / planner 展开 / 视图层谓词仍拒;命名组合 spec + 声明模式 = IN(genre 是索引,不是存储的查询)。views 侧另有 4 项永久拒绝 + 3 项 v3.x 推迟(views doc §4)。
+
+三定律速记:**Law 1** Redis 契约不可破(parity 用 Redis 名 + 精确语义;新 genre 走 `IDX.*`/`FEED.*`/`VIEW.*`/`FT.*`/`VEC.*`;索引/feed/视图内部对 Redis surface 不可见)。**Law 2** superset 五点判据(通用 over opaque bytes / 写时声明式 / 访问路径显式命名 / 派生态可重建可校验 / genre 先例)。**Law 3** RDS 事件视界(meaning 和 planning 永不进引擎)。
+
+## v∞(永久 OUT-of-scope,见 `.claude/scope-decisions.md`)
+
+- Sharded multi-master、cross-DC active-active / CRDTs、Raft、在线 resharding、gossip
+- **AUTH / TLS**(user 多次确认不做,不要再放回 backlog)
+- `no_std` MCU 端口
+- (v3 栅栏)SQL / joins / cost-based planner;写路径回调;AuthZ/租户语义;跨存储事务
+
+## 参考(按需 load)
+
+- `.claude/plans/2026-07-03-v3-serving-engine.md` — arc 设计(六平面 / D1-D6 / §4b)
+- `.claude/plans/2026-07-03-rds-refugee-services.md` — 三定律 + 服务目录 + REFUSED 表
+- `.claude/plans/2026-07-03-views-design-exploration.md` — 视图设计(LOCKED)
+- `.claude/plans/2026-07-03-serving-core-roadmap.md` — mailrs 12 项 vs 源码 audit 表(SUPERSEDED but §2 有效)
+- `.claude/CLAUDE.md` — 项目规则;`.claude/scope-decisions.md` — OUT-of-scope 历史
+- `GIT-FLOW.md` — feature/release/hotfix SOP;`bench/REPORT.md` — public benchmark narrative
+- `.claude/plans/2026-06-30-v2-roadmap.md` — 上一 arc(v1.36→v2.0)归档
+
+---
+
+# v3.x perf arc(用户拍板 2026-07-04:不开 v4,全部收在 3.x;**最终版本号目标 = v3.8.0**;主设计 = .claude/plans/2026-07-04-v4-perf-arc.md,编号按本表为准)
+
+北极星:对标并远超 valkey(裸面)+ Redis Stack(serving 面)。
+纪律:不许自家 baseline 当标尺;先测后攻(双 gate);对标物版本入账。
+
+### v3.3 — 基线 arena(measure-only)
+- [ ] 分支 `feature/v3-3-arena`;lx64 装 redis-stack 最新 GA(版本入账)
+- [ ] 矩阵定义:裸面 7 角 + serving 面 4 类(FTS/ANN/agg/numeric-range)× 语料规格(沿 gate 语料认识论:Zipf/流形)
+- [ ] median-of-5 + sample stdev 全跑(两端同协议同盒)
+- [ ] 产出 bench/PERF-LEDGER.md 初版真 gap 表 → 五轴(doc 轴)→ merge
+- [ ] **gap 表评审:据数据修订 v3.4-v3.7 train 内容**(写回本表)
+
+### v3.4 — tails 清偿 + 真上限复测(gap 表评审 2026-07-05:裸面全胜 1.67-2.5×,无 gap)
+- [ ] client-bound 上限复测(arena kevy 数字疑似 client 打满;加宽 client 定真值入 ledger)
+- [ ] 286c4a2 -4% micro-mechanism 根因收口
+- [ ] epoll stay-hot 对称性收口
+- [ ] IDX.QUERY conn-tail 根因收口
+
+### v3.5 — FTS 巩固(gap 表评审:p95 NOISE、qps +21% 已胜;自 ratchet 改进)
+- [ ] 单常见词 postings scan → impact-ordering(textgate 加线)
+
+### v3.6 — ANN 攻坚 ⭐(gap 表评审:**唯一真 gap,stack 3.8× 领先** —— 本 arc 主战场)
+- [ ] Phase A0:recall-latency pareto 对齐(两侧 EF 扫描同 recall 档比延迟)重量 gap
+- [ ] Phase A:decomposition vs RediSearch HNSW 实现(读源码,18+ stage)
+- [ ] Phase B:attack(worktree)→ vectorgate + arena 复测
+
+### v3.7 —(缩编:agg/query 全胜 110×/2.3×,并入 v3.8)
+
+### v3.8 — 终账(**最终版本 v3.8.0**)
+- [ ] PERF-LEDGER 定稿;新线全部进 perfgate ratchet;CHANGELOG 总账 → **v3.8.0 = roadmap 终版**;其后 D/A/B 方向另立新程
+
+---
+
+# 实证 arc(D→A 拍板 2026-07-05;主设计 = .claude/plans/2026-07-05-dogfood-arc.md)
+
+分工:mailrs 侧用户亲自做;kevy 侧支撑与响应。零 release 至 v3.9.0。
+
+### v3.9-t0 — release 完整性 + 升级文档(用户指令 2026-07-05)
+- [ ] crates.io publish 完整性核查(全 member 对账 + docs.rs)
+- [ ] docs/UPGRADING.md:2.x → 3.x 升级指南(breaking/新面/步骤)非常清晰
+### v3.9-t1 — onramp drill(迁移工具链全链自演练,产 UX 缺口清单)
+### v3.9-t2+ — mailrs 实证反馈 train(按需;真实语料反哺 gate)
+### v3.9-tF — 收口:cookbook 实证版 + v3.9.0(用户拍时机)
+
+---
+
+---
+
+# 3.x 总线(plan 批准 2026-07-05;主设计 = .claude/plans/2026-07-05-3x-mainline.md;**最终版本号目标 v3.17.0**)
+
+线性从上往下;零 release 至 v3.9.0,其后零 release 至 v3.17.0。mailrs 反馈 train 随到随插(优先级高于当前列)。单一事实源纪律:verb 元数据表 = COMMAND DOCS = llms.txt = MCP schema,CI 对账。
+
+### v3.9 — 实证 arc(mailrs 侧用户做)
+- [ ] t1 onramp drill:mailrs 形状(多前缀/大 value/TTL 混布/1M)全链 export→import --resume --strict→digest/diff→后建索引 backfill→copy/delete-prefix --rate;缺口清单,小缺口即修
+- [ ] t2+ mailrs 反馈 train(输入驱动;真实语料反哺 gate)
+- [ ] tF:cookbook 实证版 + arena 复测 + CHANGELOG → **v3.9.0**
+- [ ] 悬案:lx64 盒策略(用户拍)→ perfgate floor 复验;master CI 确认
+
+### v3.10 — AI 操作面·契约机读化【RFC】
+- [ ] verb 元数据表(名称/arity/flags/参数签名/摘要;含全部 IDX./VIEW./FEED.)+ COMMAND LIST/COUNT/DOCS 实装 + CI parity(dispatch ⊆ 表)
+- [ ] 扩展错误自解释化(ST_* → 具名 -ERR)+ error-replies.md 补扩展段
+- [ ] IDX.EXPLAIN(与 VIEW.EXPLAIN 同构结构化)
+- [ ] RESP3:HELLO 3 真值协商 + 扩展查询 map 化(RESP2 不变)
+- [ ] aigate 一期(DOCS 全覆盖对账/错误具名/EXPLAIN 结构)→ 五轴 merge
+
+### v3.11 — AI 开发面·文档机读化(轻列)
+- [ ] llms.txt + llms-full.txt(与元数据表同源生成)
+- [ ] docs/verb-reference.md 单页全 verb(三语)+ README 挂链
+- [ ] cookbook 可执行化(recipe 自包含块 + CI smoke job)
+- [ ] kevy-embedded rustdoc 83%→100% + missing_docs ratchet
+- [ ] aigate 二期(llms.txt ↔ COMMAND DOCS 一致性)→ merge
+
+### v3.12 — 官方 MCP server【RFC】
+- [ ] 新 crate kevy-mcp(stdio JSON-RPC,纯 std 自研;schema 由元数据表生成;只读默认/写 opt-in)
+- [ ] aigate 三期(MCP e2e:list_tools/call_tool 全矩阵/错误保真)→ 五轴 merge
+
+### v3.13 — AI 存储场景·hybrid 检索 + 场景包【RFC】
+- [ ] IDX.QUERY HYBRID(KNN×MATCH RRF 融合,server 端归并;对标 RediSearch/Qdrant fusion)
+- [ ] agent-memory 场景包(session-TTL/episodic 双索引/RAG chunk+hybrid recipe,全部可执行)
+- [ ] aigate 四期(融合质量 clamp ≥ 单路 recall + recipe smoke)+ perf ratchet(hybrid p95)→ 五轴 merge
+
+### v3.14 — 可用性 A0:复制地基 + 分区注入【RFC】
+- [x] replica READONLY gate(来源分流/默认 on/内生写策略)
+- [x] REPLCONF ACK wire(状态模型 = slot.rs acked_offset)+ 复制流心跳(replica 自感知 lag)
+- [x] replica 三态状态机(-LOADING 策略)+ INFO/ROLE 全做实 + min-replicas-to-write(辅助)
+- [x] kevy-chaos socket 代理注入(切断/延迟/半开/方向性非对称)+ SIGSTOP 独立轴
+- [x] availgate 一期 → 五轴 merge(2026-07-06;-LOADING 未做:无发射点,error-replies 已除行)
+
+### v3.15 — 可用性 A2:failover 闭环(计划内→崩溃式)【RFC,主战场】
+- [x] 阶段一 计划内 FAILOVER(quiesce(-QUIESCED 复用)→追平→epoch bump 交棒;零丢失 clamp)
+- [x] 阶段二 崩溃式:选举硬化(epoch/votedFor 先落盘再应答+崩溃重投用例;按 ack offset 择优)→ ANNOUNCE→数据面接线 → 重启角色解析 clamp(v3.16 收紧为 election-only write authority)→ fencing 落地形 = promotion→generation bump + Future→snapshot ship 分叉丢弃(握手 EPOCH 字段方案被此形替代)→ 降级旧主回 -READONLY(零新动词)
+- [x] availgate 二期(3 进程+分区 e2e:MTTR=选举超时 K 倍/分叉丢弃/WAIT-acked 零丢失/重启角色)→ 五轴 merge
+
+### v3.16 — 可用性 A1+A3:一致性等级 + quorum lease【RFC】
+- [x] read-your-writes token((gen,offset);cmd_block parked;超时 -MISDIRECTED)
+- [x] WAIT n timeout + bounded-staleness(-STALE;cluster-rw 读池剔除)
+- [x] primary quorum lease(主项;自我 fence;停写窗口计入丢失上界)
+- [x] availgate 三期(12 clamps:WAIT 真值/RYW 20 轮/-STALE/quorum fence+heal;注:时钟跳变格未做——elect 全用 Instant 单调钟,挂钟跳变不影响;WriterPool 核对由 clamp 内 SET/GET 断言代)→ 五轴 merge
+
+### v3.17 — 总终账(**最终版本 v3.17.0**)
+- [x] availgate+aigate+repligate 进 CI(contract-gates job+lx64 全量);SLO 表(逻辑不变量+分位数 ratchet)
+- [x] docs/availability.md;arena 复测见下 全矩阵复测 + PERF-LEDGER 更新
+- [x] CHANGELOG 总账;workspace → 3.17.0;ship(tag/GH/crates/smoke)= 3.x 总线终版
+
+REFUSED:可用性 8 条照旧 + AI 轴 3 条(无 HTTP/REST 面;无 server 端 embedding 生成;无 LangChain/LlamaIndex 官方包)——入 scope-decisions。

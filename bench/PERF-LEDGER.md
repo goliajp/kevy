@@ -82,3 +82,23 @@ sub-0.98-recall 超低延迟带(应用侧极少:那档 recall 不足以 serving)
 - **v3.6:ANN 攻坚 = 本 arc 主战场**(3.8× 真 gap;pareto 对齐 →
   Phase A decomposition vs RediSearch HNSW 实现 → Phase B)。
 - v3.7:agg/query 全胜 → 缩编并入 v3.8 终账(全部 arena 线 ratchet 化)。
+
+## v3.17.0 release arena — bare face 复测(2026-07-06,lx64,per-release 承诺)
+
+kevy 3.17.0 vs valkey 9.1.0,fair-fight 协议(-c 50 -P 16 -n 8M,
+server 0-7 / client 8-15,median-of-5)。可用性 arc 全落地
+(READONLY gate / ACK / 心跳 / failover / 一致性阶梯 / lease)后的
+裸面确认:**7/7 全胜,无一 NOISE 格**。
+
+| test | kevy | valkey | ratio |
+|---|---|---|---|
+| GET | 6,389,776 | 2,131,060 | **3.00×** |
+| SET | 6,389,776 | 1,598,082 | **4.00×** |
+| INCR | 5,326,232 | 2,131,628 | **2.50×** |
+| SADD | 5,326,232 | 2,131,628 | **2.50×** |
+| HSET | 3,998,001 | 1,776,199 | **2.25×** |
+| LPUSH | 3,196,164 | 1,776,199 | **1.80×** |
+| ZADD | 2,666,667 | 1,682,793 | **1.58×** |
+
+复制/心跳/gate 管线不吃裸面吞吐(v3.14-v3.16 增量 = 0 回归)。
+charter「对标并远超 valkey」在终版复核成立。
