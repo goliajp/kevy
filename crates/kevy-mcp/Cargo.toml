@@ -19,7 +19,7 @@ name = "kevy-mcp"
 path = "src/main.rs"
 
 [dependencies]
-kevy-resp-client = { path = "../kevy-resp-client", version = "3.17.1" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "3.17.2" }
 
 [dev-dependencies]
-kevy-resp = { path = "../kevy-resp", version = "3.17.1" }
+kevy-resp = { path = "../kevy-resp", version = "3.17.2" }
