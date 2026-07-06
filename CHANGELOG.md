@@ -1,5 +1,86 @@
 # Changelog
 
+## 3.17.0 — the availability release (v3.9 → v3.17 mainline)
+
+The 3.x mainline lands as one release: the AI-native serving faces
+(v3.10-v3.13) and the availability arc (v3.14-v3.16), closed out by
+the v3.17 finale (contract gates in CI, docs/availability.md, the
+full ledger below). Highlights per train follow.
+
+### v3.17 — the finale
+
+- CI gains the contract-gates job: availgate's 12 clamps (replication
+  truth, crash failover, the consistency ladder), aigate (discovery /
+  self-explaining errors / MCP session), repligate (snapshot ship,
+  live frames, restart resync) — real processes, release binaries,
+  every push.
+- docs/availability.md: topologies, the consistency ladder, failover
+  (planned + crash), the writer/reader error contract, operations.
+- The data dir is created at boot with a named error (was: a bare
+  ENOENT from whichever subsystem touched it first).
+
+### v3.16 — the consistency ladder + quorum lease
+
+- `WAIT numreplicas timeout` — all-shard barrier over per-replica
+  acked offsets, woken by real ACK arrivals. Documented plainly as
+  NOT durability (a replica ack is not an fsync).
+- `REPL.TOKEN` / `REPL.WAIT` — read-your-writes: per-shard
+  (generation, offset) tokens; the replica parks on its LOCAL APPLIED
+  position, so +OK means the very next read sees the write. Stale or
+  future tokens answer -MISDIRECTED with the writer's address;
+  promotions bump the feed generation so a pre-failover token can
+  never false-match the new primary's offset space. Heartbeats grow
+  to `+PING <gen> <next>` (the old format still decodes).
+- `replica_max_staleness_ms` — bounded staleness: reads on a replica
+  whose primary heartbeat is older than the bound answer -STALE.
+- Primary quorum lease — a primary that cannot see a strict majority
+  of the elect quorum fences writes (-NOREPLICAS) within one
+  down_after window and un-fences on heal: the fork-absorption window
+  is the lease window, not the partition duration.
+- Election-only write authority — in a quorum, the config role is an
+  initial preference; every node boots read-only and the election win
+  opens writes. The elector learned cold-start elections (no known
+  primary + one grace window = go).
+
+### v3.15 — the failover closed loop
+
+- `FAILOVER host port [TIMEOUT ms] | ABORT` — planned zero-loss
+  handover from existing verbs: quiesce (-QUIESCED), wait for the
+  target to drain, promote it (REPLICAOF NO ONE), follow it.
+  Asynchronous like Redis's, with timeout rollback.
+- Crash failover, end to end: epoch/votedFor persisted BEFORE any
+  vote answers (Raft's iron rule, four audited write points, file =
+  <dir>/elect.meta); candidates ranked by replication-stream truth;
+  the election outcome drives the data plane (win = writes open,
+  another's ANNOUNCE = retarget); a restarted quorum member holds
+  writes until elected.
+- Fork discard — a replica AHEAD of its primary (the old primary
+  rejoining with a forked suffix) gets a REPLACING snapshot resync
+  (flushall before load) instead of a corrupt-close.
+- Topology symmetry — replicas keep a full replication source +
+  listener, so a promoted node serves replicas immediately. Corollary
+  for co-hosted servers: client ports must sit ≥ nshards apart (the
+  replication range is port+10000 × nshards).
+- availgate phase 2: real 3-process crash-failover e2e.
+
+### v3.14 — availability A0: the replication foundation
+
+- Replica READONLY gate (writes answer -READONLY while the feed apply
+  keeps advancing); replicas stop active TTL reaping (the primary's
+  DEL frames are the truth).
+- REPLCONF ACK rides the replication connection back (single-reader
+  discipline: the readable-event handler parses ACKs; the pump never
+  reads) — per-replica acked offsets become slot truth.
+- 1 Hz in-stream heartbeats (`+PING <next>`, out-of-band, no offset
+  space) give replicas self-measured lag and link liveness.
+- INFO replication / ROLE report the real thing on both sides
+  (master_link_status by ping freshness, slaveN lines with acked
+  offsets and lag); min-replicas-to-write (-NOREPLICAS) with
+  Option-acked semantics (a live empty-replica heartbeat ACK counts).
+- kevy-chaos grows ChaosProxy: directional partition injection
+  (cut/heal/delay, A→B black hole while B→A flows).
+- availgate phase 1 (6 clamps) + the heartbeat-era test contracts.
+
 ### v3.13 — hybrid retrieval + the agent-memory cookbook
 
 - `IDX.QUERY HYBRID <text_idx> MATCH <q> <ann_idx> KNN <vec>` —
