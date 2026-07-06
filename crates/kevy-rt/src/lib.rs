@@ -84,6 +84,7 @@ mod exec_op;
 mod exec_pubsub;
 mod exec_pubsub_pattern;
 mod exec_rename;
+mod exec_replwait;
 mod exec_feed;
 mod exec_zalgebra;
 mod exec_slowlog;
@@ -548,4 +549,14 @@ pub struct LiveRuntimeConfig {
     /// `[slowlog].max_len` — ring cap per shard. Shrinking trims the
     /// oldest entries on the next tick application.
     pub slowlog_max_len: Option<u32>,
+    /// v3.16 D2 — monotonic promotion counter. The command layer bumps
+    /// it every time this process is PROMOTED (replica → primary:
+    /// `REPLICAOF NO ONE` on a following replica, or an election win).
+    /// Each shard tracks the last value it saw; an increase makes the
+    /// shard bump its feed generation (offsets restart at 0, persisted
+    /// via the feed-gen sidecar) — so a REPL.TOKEN minted before the
+    /// failover can never falsely satisfy a REPL.WAIT against the new
+    /// primary's unrelated offset space. Not an Option: `0` (the
+    /// default) means "never promoted" and embedders pay nothing.
+    pub promotion_epoch: u64,
 }

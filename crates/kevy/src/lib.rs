@@ -58,6 +58,7 @@ mod index_runtime;
 mod view_runtime;
 mod cmd_hello;
 mod cmd_lua;
+mod cmd_repl;
 mod cmd_resolve;
 mod commands;
 mod config_global;

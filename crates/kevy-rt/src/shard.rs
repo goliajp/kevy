@@ -206,6 +206,26 @@ pub(crate) struct Shard<C: Commands> {
     /// `SnapshotBegin`; consumed on `SnapshotEnd` (`load_snapshot_from`
     /// into `self.store`). Empty when no snapshot is in flight.
     pub(crate) replica_snapshot_buf: Vec<u8>,
+    /// v3.16 D2 — this shard's replication-apply position: the offset
+    /// the NEXT applied frame should carry (last applied + 1; a
+    /// snapshot load jumps it to the ship's `ack_offset`). Advanced on
+    /// the reactor thread in [`crate::replication_apply`], so a
+    /// `REPL.WAIT` answered against it is ordered BEFORE any
+    /// subsequent read on this shard — the read-your-writes truth
+    /// (the runner's ACK cursor counts frames merely *enqueued* into
+    /// the inbox and would race a following GET). 0 when this shard
+    /// never applied anything.
+    pub(crate) replica_applied_next: u64,
+    /// v3.16 — parked WAIT / REPL.WAIT participants on this shard
+    /// (see [`crate::exec_replwait`]). Empty in steady state; every
+    /// wake/tick hook short-circuits on `is_empty()`.
+    pub(crate) repl_waiters: Vec<crate::exec_replwait::ReplWaiter>,
+    /// v3.16 D2 — last [`LiveRuntimeConfig::promotion_epoch`] this
+    /// shard applied. `None` until the first tick: the first observed
+    /// value is RECORDED but not acted on, so a process-global counter
+    /// left over from an earlier serve session (in-process restarts,
+    /// test binaries) can't fire a spurious generation bump at boot.
+    pub(crate) seen_promotion_epoch: Option<u64>,
     /// `auto_aof_rewrite_percentage`: trigger BGREWRITEAOF when the live
     /// AOF is at least this percent larger than at the previous rewrite.
     /// `0` disables auto-rewrite.
@@ -516,6 +536,9 @@ impl<C: Commands> Shard<C> {
                     // park instead of the next user-level shard tick.
                     self.tick_blocked_timeouts();
                     self.tick_xshard_timeouts();
+                    // v3.16: WAIT / REPL.WAIT deadline sweep — same
+                    // cadence as the BLOCK timeout reactor above.
+                    self.tick_repl_waiters();
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
                         self.apply_live_runtime_config(&mut tick_interval);

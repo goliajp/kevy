@@ -126,9 +126,12 @@ pub(crate) fn retarget_upstream(upstream: &str) -> Result<(), &'static str> {
 }
 
 /// Public demote entry point used by `REPLICAOF NO ONE` (T1.30).
-/// Stops every active runner and clears the upstream slot.
+/// Stops every active runner and clears the upstream slot. v3.16 D2:
+/// when the node really was a replica this is a PROMOTION — the
+/// promotion counter bumps so every shard fences its offset space
+/// (feed generation bump; stale REPL.TOKENs then gen-mismatch).
 pub(crate) fn demote_to_standalone() {
-    replica_state::stop_runners();
+    replica_state::promote_stop_runners();
 }
 
 /// Parse `"host:port"`. Tolerates IPv6 brackets (`[::1]:7000`).

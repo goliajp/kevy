@@ -25,9 +25,13 @@ impl Commands for KevyCommands {
         match upper_verb(name, &mut buf) {
             b"HELLO" => Route::Hello,
             b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG"
-            | b"INFO" | b"CLUSTER" | b"DEBUG" | b"WAIT" | b"SHUTDOWN"
+            | b"INFO" | b"CLUSTER" | b"DEBUG" | b"SHUTDOWN"
             | b"CLIENT" | b"SELECT" | b"ROLE"
             | b"REPLICAOF" | b"SLAVEOF" => Route::Local,
+            // v3.16 — kept in sync with cmd_resolve::route_for_verb.
+            b"WAIT" => crate::cmd_repl::wait_route(args),
+            b"REPL.TOKEN" => crate::cmd_repl::token_route(args),
+            b"REPL.WAIT" => crate::cmd_repl::repl_wait_route(args),
             b"DBSIZE" => Route::Dbsize,
             b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
             b"SAVE" => Route::Save,
@@ -312,7 +316,13 @@ impl Commands for KevyCommands {
         // Once `config_init` has run, every field is wrapped in `Some` so
         // the shard re-applies CONFIG SET changes within one tick.
         if !config_global::is_initialised() {
-            return kevy_rt::LiveRuntimeConfig::default();
+            // v3.16: the promotion counter still flows — it doesn't
+            // clobber any builder choice, and an embedded promotion
+            // must fence feed generations too.
+            return kevy_rt::LiveRuntimeConfig {
+                promotion_epoch: crate::replica_state::promotion_epoch(),
+                ..kevy_rt::LiveRuntimeConfig::default()
+            };
         }
         let cfg = config_global::get();
         let hz = cfg.expiry.hz;
@@ -331,6 +341,7 @@ impl Commands for KevyCommands {
             )),
             slowlog_slower_than_micros: Some(cfg.slowlog.slower_than_micros),
             slowlog_max_len: Some(cfg.slowlog.max_len),
+            promotion_epoch: crate::replica_state::promotion_epoch(),
         }
     }
 

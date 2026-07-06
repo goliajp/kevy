@@ -82,6 +82,7 @@ pub(crate) fn stop_runners() {
         .lock()
         .expect("APPLIED_RUNNER_OFFSETS poisoned")
         .clear();
+    UPSTREAM_GENS.lock().expect("UPSTREAM_GENS poisoned").clear();
 }
 
 /// Replace the active runner set with a fresh fleet pointing at
@@ -112,6 +113,7 @@ pub(crate) fn start_runners(upstream: (IpAddr, u16)) -> Result<(), &'static str>
     *APPLIED_RUNNER_OFFSETS
         .lock()
         .expect("APPLIED_RUNNER_OFFSETS poisoned") = vec![0; runner_count];
+    *UPSTREAM_GENS.lock().expect("UPSTREAM_GENS poisoned") = vec![0; runner_count];
     let new_runners = if single_source() {
         // v3.2 embedded-as-primary: ONE upstream port, one stream —
         // a single routing runner fans into every shard inbox.
@@ -191,6 +193,55 @@ static LAST_PING_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 /// shard is caught up.
 static APPLIED_RUNNER_OFFSETS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
 
+/// v3.16 D2 — per-runner last-seen UPSTREAM feed generation, learned
+/// from the gen-carrying heartbeat (`+PING <gen> <next>`). Sized /
+/// cleared with [`APPLIED_RUNNER_OFFSETS`]. `0` = no heartbeat seen
+/// yet (real generations start at 1) — REPL.WAIT treats that as a gen
+/// mismatch, the conservative answer.
+static UPSTREAM_GENS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+
+/// Snapshot of every runner's last-seen upstream generation, in
+/// runner-slot (= shard, fleet model) order. Empty when no runners.
+pub(crate) fn upstream_gens() -> Vec<u64> {
+    UPSTREAM_GENS.lock().expect("UPSTREAM_GENS poisoned").clone()
+}
+
+/// Snapshot of every runner's applied stream position, in runner-slot
+/// order (the raw registry behind [`applied_offset_sum`]). REPL.TOKEN
+/// on a replica reports these — a "how far this replica is" token.
+pub(crate) fn applied_runner_offsets() -> Vec<u64> {
+    APPLIED_RUNNER_OFFSETS
+        .lock()
+        .expect("APPLIED_RUNNER_OFFSETS poisoned")
+        .clone()
+}
+
+/// v3.16 D2 — process-wide promotion counter. Bumped on every
+/// replica → primary transition ([`promote_stop_runners`]); each shard
+/// observes it through `Commands::live_runtime_config` and bumps its
+/// feed generation, fencing the pre-failover offset space against
+/// stale REPL.TOKENs. Never reset — shards latch the first value they
+/// see and only act on increases.
+static PROMOTION_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn promotion_epoch() -> u64 {
+    PROMOTION_EPOCH.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Stop runners as part of a PROMOTION (`REPLICAOF NO ONE` on a
+/// following replica, or an election win). When this node really was a
+/// replica, the promotion counter bumps so every shard fences its
+/// offset space (feed generation bump — see
+/// `kevy_rt::LiveRuntimeConfig::promotion_epoch`). A plain
+/// [`stop_runners`] (retarget teardown, shutdown) never bumps.
+pub(crate) fn promote_stop_runners() {
+    let was_replica = is_replica();
+    stop_runners();
+    if was_replica {
+        PROMOTION_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 fn epoch_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -209,11 +260,18 @@ fn epoch_ms() -> u64 {
 /// position the election-offset sum is built from. Plain store, not
 /// max: a resync-from-0 after a diverged rejoin genuinely rewinds
 /// the stream position and the election metric must tell the truth.
-pub(crate) fn record_ping(runner_slot: usize, primary_offset: u64, applied: u64) {
+///
+/// `generation` is the upstream's feed generation off the v3.16
+/// heartbeat — filed per runner slot for REPL.WAIT gen matching.
+pub(crate) fn record_ping(runner_slot: usize, generation: u64, primary_offset: u64, applied: u64) {
     PRIMARY_OFFSET.fetch_max(primary_offset, std::sync::atomic::Ordering::Relaxed);
     APPLIED_OFFSET.fetch_max(applied, std::sync::atomic::Ordering::Relaxed);
     LAST_PING_MS.store(epoch_ms(), std::sync::atomic::Ordering::Relaxed);
     record_applied(runner_slot, applied);
+    let mut gens = UPSTREAM_GENS.lock().expect("UPSTREAM_GENS poisoned");
+    if let Some(slot) = gens.get_mut(runner_slot) {
+        *slot = generation;
+    }
 }
 
 /// Runner-side: refresh this runner's applied slot without a full
@@ -390,7 +448,7 @@ mod tests {
         // Simulate a 3-runner fleet's registry (start_runners sizes
         // this in production).
         *APPLIED_RUNNER_OFFSETS.lock().unwrap() = vec![0; 3];
-        record_ping(0, 100, 40);
+        record_ping(0, 1, 100, 40);
         record_applied(1, 25);
         record_applied(2, 35);
         assert_eq!(applied_offset_sum(), 100, "sum across runners, not max");

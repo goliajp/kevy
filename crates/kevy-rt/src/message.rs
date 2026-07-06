@@ -143,6 +143,11 @@ pub(crate) enum Op {
     /// v2.5 extension fan-out: run `Commands::extension_op` on this
     /// shard with the original argv; reply is an opaque chunk.
     Extension { argv: Vec<Vec<u8>> },
+    /// v3.16 D2 `REPL.TOKEN` fan-out: read this shard's live
+    /// `(feed generation, next_offset)` pair. Reply [`Part::ReplToken`].
+    /// Live (not tick-stale): a token minted right after a write must
+    /// cover that write.
+    ReplToken,
     /// v2.3 `PREFIX.STATS <prefix>` — per-shard prefix walk, summed at
     /// the origin.
     PrefixStats(Vec<u8>),
@@ -264,6 +269,9 @@ pub(crate) enum Part {
     PrefixStats { keys: u64, expires: u64 },
     /// v2.5 extension fan-out per-shard chunk (opaque to the runtime).
     ExtensionChunk(Vec<u8>),
+    /// v3.16 D2 `REPL.TOKEN` per-shard answer: the answering shard's
+    /// id + its live `(feed generation, next_offset)` pair.
+    ReplToken { shard: u32, generation: u64, next_offset: u64 },
     Reply(SmallReply),
     Int(i64),
     Ok,
@@ -388,12 +396,56 @@ pub(crate) enum Inbound {
     /// origin → target: drop every waiter for `(origin, conn)` — sent on
     /// successful serve, timeout, or disconnect.
     BlockCancel { origin: usize, conn: u64 },
+
+    // ── v3.16 replication waiters (see [`crate::exec_replwait`]) ──
+    // WAIT / REPL.WAIT arm-and-defer messages ride their own Inbound
+    // lane rather than `Op`/`Response`: the reply may come seconds
+    // later (ACK arrival / apply progress / deadline), and it must NOT
+    // participate in `xshard_inflight` accounting — a parked waiter
+    // would otherwise pin the origin core in the busy-poll rung for
+    // the whole wait.
+    /// origin → target: v3.16 D1 `WAIT` — answer with the number of
+    /// replicas that acked this shard's `master_repl_offset` (frozen
+    /// at arm receipt), as soon as that count reaches `need` or
+    /// `deadline_ms` passes. Reply: [`Inbound::ReplDone`].
+    ReplWaitArm {
+        origin: usize,
+        conn: u64,
+        seq: u64,
+        need: u32,
+        deadline_ms: u64,
+    },
+    /// origin → target: v3.16 D2 `REPL.WAIT` — answer 1 once this
+    /// shard's replication-apply position reaches `min_offset`, or 0
+    /// when `deadline_ms` passes. Reply: [`Inbound::ReplDone`].
+    ReplApplyArm {
+        origin: usize,
+        conn: u64,
+        seq: u64,
+        min_offset: u64,
+        deadline_ms: u64,
+    },
+    /// target → origin: one shard's WAIT / REPL.WAIT answer, folded as
+    /// `Part::Int(n)` into the pending slot ([`Agg::MinInt`] /
+    /// [`Agg::ReplBarrier`]).
+    ReplDone { conn: u64, seq: u64, n: i64 },
 }
 
 /// Accumulator for a command's (possibly multi-shard) result.
 pub(crate) enum Agg {
     First(Option<SmallReply>),
     SumInt(i64),
+    /// v3.16 D1 `WAIT` accumulator: MIN over the per-shard acked-replica
+    /// counts (starts at `i64::MAX`; every shard folds one `Part::Int`).
+    MinInt(i64),
+    /// v3.16 D2 `REPL.WAIT` accumulator: every shard folds `Part::Int`
+    /// (1 = applied barrier met, 0 = deadline passed). All 1 → `+OK`;
+    /// any 0 → the pre-built `miss` reply bytes.
+    ReplBarrier { ok: bool, miss: Vec<u8> },
+    /// v3.16 D2 `REPL.TOKEN` accumulator: per-shard `(generation,
+    /// next_offset)` pairs dropped in by shard id, materialized as one
+    /// flat `[gen0, off0, gen1, off1, …]` integer array.
+    ReplTokens { slots: Vec<Option<(u64, u64)>> },
     AllOk,
     /// Gathered per-key payloads, reduced by `op` over `keys` (request order).
     Gather {

@@ -52,6 +52,28 @@ pub enum Route {
     /// v2.5 extension fan-out (IDX.* reads): every shard runs
     /// `Commands::extension_op`, the origin reduces.
     Extension,
+    /// v3.16 D1 `WAIT numreplicas timeout` — all-shard barrier: each
+    /// shard answers (possibly deferred until its replicas ACK or the
+    /// deadline) with how many of its replicas acked its
+    /// `master_repl_offset` at arm time; the origin replies the MIN.
+    /// `timeout_ms == 0` = the Redis "wait forever" form (the runtime
+    /// hard-caps it — see `exec_replwait::WAIT_HARD_CAP_MS`).
+    ReplWait { numreplicas: u32, timeout_ms: u64 },
+    /// v3.16 D2 `REPL.TOKEN` on a primary — gather every shard's
+    /// `(feed generation, next_offset)` pair into one flat array.
+    ReplToken,
+    /// v3.16 D2 `REPL.WAIT` on a replica — all-shard applied barrier:
+    /// shard `i` answers once its replication-apply position reaches
+    /// `offsets[i]` (or the deadline passes). All met → `+OK`; any
+    /// timeout → the pre-built `miss` reply (kevy sends
+    /// `-MISDIRECTED writer is <primary>`). The command layer builds
+    /// `miss` because the upstream address is its knowledge, not the
+    /// runtime's.
+    ReplBarrier {
+        offsets: Vec<u64>,
+        timeout_ms: u64,
+        miss: Vec<u8>,
+    },
     /// `KEYS pattern` — every shard returns its matching keys.
     Keys(Option<Vec<u8>>),
     /// `SCAN` (cursor-0 approximation) — like KEYS but replies `[cursor, keys]`.

@@ -175,6 +175,17 @@ impl<C: Commands> Shard<C> {
                 let chunk = self.commands.extension_op(&mut self.store, &argv);
                 Part::ExtensionChunk(chunk)
             }
+            // v3.16 D2 REPL.TOKEN: live (generation, next_offset) off
+            // this shard's feed. No feed installed (replication + CDC
+            // both off) → (0, 0): generation 0 is the "no stream"
+            // sentinel (real generations start at 1).
+            Op::ReplToken => {
+                let (generation, next_offset) = self
+                    .replicate
+                    .as_ref()
+                    .map_or((0, 0), |f| (f.generation(), f.source().next_offset()));
+                Part::ReplToken { shard: self.id as u32, generation, next_offset }
+            }
             Op::PrefixStats(prefix) => {
                 let (keys, expires) = self.store.prefix_stats(&prefix);
                 Part::PrefixStats { keys, expires }

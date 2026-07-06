@@ -29,14 +29,33 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
             encode_error(&mut out, "ERR internal error");
             SmallReply::from_vec(out)
         }
-        // `:N` is ≤ 22 bytes — inline, no alloc.
-        Agg::SumInt(n) => {
-            use std::io::Write as _;
-            let mut out = [0u8; 30];
-            let mut cur = std::io::Cursor::new(&mut out[..]);
-            let _ = write!(cur, ":{n}\r\n");
-            let len = cur.position() as u8;
-            SmallReply::Inline { len, buf: out }
+        // `:N` is ≤ 22 bytes — inline, no alloc. MinInt (v3.16 WAIT)
+        // shares the integer shape; a MIN that stayed at the i64::MAX
+        // sentinel means zero shards folded (can't happen — remaining
+        // == nshards ≥ 1), clamp to 0 defensively.
+        Agg::SumInt(n) => encode_inline_int(n),
+        Agg::MinInt(n) => encode_inline_int(if n == i64::MAX { 0 } else { n }),
+        // v3.16 D2 REPL.WAIT barrier: all shards met → +OK, else the
+        // command layer's pre-built miss reply (-MISDIRECTED …).
+        Agg::ReplBarrier { ok, miss } => {
+            if ok {
+                SmallReply::from_slice(b"+OK\r\n")
+            } else {
+                SmallReply::from_vec(miss)
+            }
+        }
+        // v3.16 D2 REPL.TOKEN: flat integer array [gen0, off0, gen1,
+        // off1, …] in shard order. A missing slot can't happen (the
+        // slot completes only after every shard folded); 0s defend.
+        Agg::ReplTokens { slots } => {
+            let mut out = Vec::with_capacity(16 + slots.len() * 26);
+            encode_array_len(&mut out, (slots.len() * 2) as i64);
+            for s in &slots {
+                let (generation, next_offset) = s.unwrap_or((0, 0));
+                encode_integer(&mut out, generation as i64);
+                encode_integer(&mut out, next_offset as i64);
+            }
+            SmallReply::from_vec(out)
         }
         Agg::AllOk => SmallReply::from_slice(b"+OK\r\n"),
         Agg::PrefixStats { keys, expires } => {
@@ -72,6 +91,16 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
             SmallReply::from_vec(out)
         }
     }
+}
+
+/// `:N\r\n` in a stack-inline [`SmallReply`] (≤ 22 bytes, no alloc).
+fn encode_inline_int(n: i64) -> SmallReply {
+    use std::io::Write as _;
+    let mut out = [0u8; 30];
+    let mut cur = std::io::Cursor::new(&mut out[..]);
+    let _ = write!(cur, ":{n}\r\n");
+    let len = cur.position() as u8;
+    SmallReply::Inline { len, buf: out }
 }
 
 /// Reduce keys collected from all shards into the final RESP reply.

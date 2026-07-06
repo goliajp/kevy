@@ -51,6 +51,7 @@ const WAD: &[&str] = &["write", "admin"]; // admin verbs with durable side effec
 const TX: &[&str] = &["readonly", "transaction"];
 const PS: &[&str] = &["readonly", "pubsub"];
 const RX: &[&str] = &["readonly", "extension"];
+const RBX: &[&str] = &["readonly", "blocking", "extension"];
 const WX: &[&str] = &["write", "extension"];
 const WAX: &[&str] = &["write", "admin", "extension"];
 
@@ -83,10 +84,12 @@ pub const VERB_META: &[VerbMeta] = &[
     v("SLOWLOG",     "server", -2, AD, "Inspect or reset the slow-command log.", "1.0.0", "SLOWLOG GET [count] | LEN | RESET | HELP"),
     // ---- replication ---------------------------------------------------
     v("FAILOVER",    "replication", -3, WAD, "Planned zero-loss handover: quiesce writes, wait for the target replica to drain, promote it, and follow it.", "3.0.0", "FAILOVER host port [TIMEOUT ms] | ABORT"),
+    v("REPL.TOKEN",  "replication", 1, RX, "kevy extension: mint a read-your-writes token — per-shard [generation, offset] pairs (a primary reports its live feed tail; a replica its applied positions).", "3.0.0", "REPL.TOKEN"),
+    v("REPL.WAIT",   "replication", -3, RBX, "kevy extension: on a replica, block until every shard has applied the given REPL.TOKEN (then reads are read-your-writes); +OK on success, -MISDIRECTED writer is <primary> on timeout or generation mismatch. Default TIMEOUT 1000 ms, hard cap 60 s. On a primary: immediate +OK.", "3.0.0", "REPL.WAIT gen offset [gen offset ...] [TIMEOUT milliseconds]"),
     v("REPLICAOF",   "replication", 3, WAD, "Make this server a replica of another, or promote it with NO ONE.", "1.0.0", "REPLICAOF host port | NO ONE"),
     v("ROLE",        "replication", 1, R,  "Report the replication role and state of this server.", "1.0.0", "ROLE"),
     v("SLAVEOF",     "replication", 3, WAD, "Legacy alias of REPLICAOF.", "1.0.0", "SLAVEOF host port | NO ONE"),
-    v("WAIT",        "replication", 3, R,  "Wait for replica acknowledgement; kevy answers immediately with the acked replica count.", "1.0.0", "WAIT numreplicas timeout"),
+    v("WAIT",        "replication", 3, RB, "Block until every shard's master_repl_offset is acknowledged by at least numreplicas replicas (or timeout ms pass); returns the minimum acked-replica count across shards. timeout 0 = wait forever, hard-capped at 60 s. NOTE: a replica ACK is not fsync durability.", "1.0.0", "WAIT numreplicas timeout"),
     // ---- scan (keyspace iteration) --------------------------------------
     v("KEYS",        "scan", 2,  R, "Return every key matching the glob pattern (cross-shard gather).", "1.0.0", "KEYS pattern"),
     v("RANDOMKEY",   "scan", 1,  R, "Return a random key from the keyspace.", "1.0.0", "RANDOMKEY"),

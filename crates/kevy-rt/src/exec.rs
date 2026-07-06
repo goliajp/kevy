@@ -197,6 +197,15 @@ impl<C: Commands> Shard<C> {
                 self.start_feed_route(conn_id, seq, args, &r, is_quit);
             }
             Route::Slowlog(sub) => self.start_slowlog(conn_id, seq, sub),
+            // v3.16 WAIT / REPL.WAIT — deferred all-shard barriers; own
+            // starters (not dispatch_targets) so a parked waiter never
+            // rides `xshard_inflight` (see [`crate::exec_replwait`]).
+            Route::ReplWait { numreplicas, timeout_ms } => {
+                self.start_repl_wait(conn_id, seq, numreplicas, timeout_ms);
+            }
+            Route::ReplBarrier { offsets, timeout_ms, miss } => {
+                self.start_repl_barrier(conn_id, seq, offsets, timeout_ms, miss);
+            }
             Route::Local => {
                 let meta = DispatchMeta { is_write, wake_idx, key_idx: None };
                 self.start_single(conn_id, seq, proto, args, self.id, is_quit, block_hint, meta);
@@ -440,6 +449,19 @@ impl<C: Commands> Shard<C> {
             match (&mut slot.agg, part) {
                 (Agg::First(dst), Part::Reply(b)) => *dst = Some(b),
                 (Agg::SumInt(acc), Part::Int(n)) => *acc += n,
+                // v3.16 D1 WAIT: reply = MIN over per-shard acked counts.
+                (Agg::MinInt(acc), Part::Int(n)) => *acc = (*acc).min(n),
+                // v3.16 D2 REPL.WAIT: every shard must report 1 (met).
+                (Agg::ReplBarrier { ok, .. }, Part::Int(n)) => *ok &= n > 0,
+                // v3.16 D2 REPL.TOKEN: pairs drop in by shard id.
+                (
+                    Agg::ReplTokens { slots },
+                    Part::ReplToken { shard, generation, next_offset },
+                ) => {
+                    if let Some(s) = slots.get_mut(shard as usize) {
+                        *s = Some((generation, next_offset));
+                    }
+                }
                 (Agg::AllOk, Part::Ok) => {}
                 (Agg::ExtensionGather { chunks, .. }, Part::ExtensionChunk(c)) => {
                     chunks.push(c);
