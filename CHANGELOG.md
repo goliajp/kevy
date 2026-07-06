@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.17.1
+
+- deps: luna-core 2.1.0 → 2.16.0 (bridge audit green: full kevy-lua
+  suite + kevy-side EVAL integration; the 0-dep exemption holds,
+  `cargo tree -p luna-core` = 1).
+
 ## 3.17.0 — the availability release (v3.9 → v3.17 mainline)
 
 The 3.x mainline lands as one release: the AI-native serving faces
