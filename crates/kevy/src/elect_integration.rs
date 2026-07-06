@@ -95,27 +95,9 @@ pub(crate) fn maybe_start(cfg: &Config) {
         return;
     }
     let listen_port = resolved_elect_port_base(cfg);
-    let start_role = match cfg.replication.role {
-        ReplicationRole::Primary => Role::Primary,
-        _ => Role::Replica,
-    };
-    let peer_ids: Vec<String> = cfg
-        .cluster
-        .peers
-        .iter()
-        .map(|p| p.node_id.clone())
-        .collect();
-    let advertised_addr = format!("{}:{}", advertised_host(cfg), cfg.server.port);
     let elect_cfg = ElectConfig::default();
     let hb_interval = elect_cfg.hb_interval;
-    let elector = Elector::new(
-        cfg.cluster.node_id.clone(),
-        peer_ids,
-        advertised_addr,
-        start_role,
-        elect_cfg,
-        ElectJitter::System,
-    );
+    let (elector, start_role) = build_elector(cfg, elect_cfg);
     // Filter out self when building outbound `PeerAddr` list.
     let self_id = cfg.cluster.node_id.as_str();
     let peers: Vec<PeerAddr> = cfg
@@ -147,6 +129,37 @@ pub(crate) fn maybe_start(cfg: &Config) {
     }
 }
 
+/// Build the `Elector` for this node from config: identity, peer
+/// set, advertised address — and the v3.15 D1 durability backend
+/// (`<data_dir>/elect.meta` via [`crate::elect_persist::
+/// FileElectorPersist`]), whose `load` restores the persisted
+/// `(epoch, votedFor)` so a restarted node never double-votes or
+/// reuses a consumed epoch.
+fn build_elector(cfg: &Config, elect_cfg: ElectConfig) -> (Elector, Role) {
+    let start_role = match cfg.replication.role {
+        ReplicationRole::Primary => Role::Primary,
+        _ => Role::Replica,
+    };
+    let peer_ids: Vec<String> = cfg
+        .cluster
+        .peers
+        .iter()
+        .map(|p| p.node_id.clone())
+        .collect();
+    let advertised_addr = format!("{}:{}", advertised_host(cfg), cfg.server.port);
+    let persist = crate::elect_persist::FileElectorPersist::new(&cfg.server.data_dir);
+    let elector = Elector::new(
+        cfg.cluster.node_id.clone(),
+        peer_ids,
+        advertised_addr,
+        start_role,
+        elect_cfg,
+        ElectJitter::System,
+    )
+    .with_persist(Box::new(persist));
+    (elector, start_role)
+}
+
 /// Stop the `Transport` if one is running. Called from the
 /// `kevy::serve` shutdown path; idempotent.
 pub(crate) fn shutdown() {
@@ -173,6 +186,14 @@ pub(crate) fn current_snapshot() -> Option<kevy_elect::ElectorSnapshot> {
 /// the doc on `SHARD_OFFSETS`). The Transport's `set_repl_offset`
 /// receives the aggregate, so HBs from a multi-shard node always
 /// carry a stable cluster-wide signal.
+///
+/// v3.15 D1 — role-aware source: while this node runs as a REPLICA
+/// the shard-local `master_repl_offset` does not measure how much of
+/// the upstream stream it has applied, so the aggregate switches to
+/// `replica_state::applied_offset_sum()` (per-runner applied stream
+/// positions, summed). Both roles thus report the same unit —
+/// "replication-stream position, totalled across streams" — which is
+/// what `am_best_candidate`'s highest-offset-wins ordering compares.
 pub(crate) fn set_view_offset(offset: u64) {
     // Determine which shard this thread represents — read from the
     // `ops::cluster::current_shard` thread-local the kevy server
@@ -190,7 +211,11 @@ pub(crate) fn set_view_offset(offset: u64) {
     {
         slot_ref.store(offset, Ordering::Relaxed);
     }
-    let agg = aggregate_offset();
+    let agg = if crate::replica_state::is_replica() {
+        crate::replica_state::applied_offset_sum()
+    } else {
+        aggregate_offset()
+    };
     if let Ok(guard) = slot().lock()
         && let Some(t) = guard.as_ref()
     {
