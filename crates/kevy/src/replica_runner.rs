@@ -211,12 +211,13 @@ fn drain_client(
     let mut last_ack = std::time::Instant::now();
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
-            Some(Ok(ReplicaEvent::Ping { primary_offset })) => {
+            Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
                 // v3.14 heartbeat: record the primary's position for
                 // lag/liveness (INFO replication) and answer with an
                 // ACK immediately — a heartbeat round trip even when
-                // no frames flow.
-                crate::replica_state::record_ping(runner_slot, primary_offset, from_offset);
+                // no frames flow. v3.16: the generation feeds the
+                // REPL.WAIT gen-match registry.
+                crate::replica_state::record_ping(runner_slot, generation, primary_offset, from_offset);
                 let _ = client.send_ack(from_offset);
                 last_ack = std::time::Instant::now();
             }
@@ -327,8 +328,8 @@ fn drain_client_routed(
     let mut last_ack = std::time::Instant::now();
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
-            Some(Ok(ReplicaEvent::Ping { primary_offset })) => {
-                crate::replica_state::record_ping(runner_slot, primary_offset, from_offset);
+            Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
+                crate::replica_state::record_ping(runner_slot, generation, primary_offset, from_offset);
                 let _ = client.send_ack(from_offset);
                 last_ack = std::time::Instant::now();
             }

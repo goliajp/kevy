@@ -116,6 +116,12 @@ fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
 
     #[test]
     fn wait_returns_zero_replicas() {
+        // v3.16: cmd_wait reads the process-global replica flag —
+        // serialise against sibling REPLICAOF / replica-flag tests.
+        let _g = crate::replica_state::TEST_STATE_GUARD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        crate::replica_state::stop_runners();
         let out = run(b"WAIT", &[b"3", b"1000"]);
         assert_eq!(out, b":0\r\n");
     }
@@ -124,5 +130,42 @@ fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
 fn wait_wrong_args_errors() {
     let out = run(b"WAIT", &[b"3"]);
     assert!(out.starts_with(b"-ERR"));
+}
+
+#[test]
+fn wait_non_integer_args_error() {
+    let _g = crate::replica_state::TEST_STATE_GUARD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    crate::replica_state::stop_runners();
+    let out = run(b"WAIT", &[b"x", b"1000"]);
+    assert!(out.starts_with(b"-ERR value is not an integer"));
+    let out = run(b"WAIT", &[b"1", b"-3"]);
+    assert!(out.starts_with(b"-ERR value is not an integer"));
+}
+
+#[test]
+fn repl_token_on_replica_flag_reports_runner_view() {
+    // Dispatch-level REPL.TOKEN (replica path): reads the per-runner
+    // gen/applied registries.
+    let _g = crate::replica_state::TEST_STATE_GUARD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    crate::replica_state::stop_runners();
+    crate::replica_state::force_replica_flag();
+    // No runners installed → zero streams → empty array.
+    let out = run(b"REPL.TOKEN", &[]);
+    assert_eq!(out, b"*0\r\n");
+    crate::replica_state::stop_runners();
+}
+
+#[test]
+fn repl_wait_on_primary_is_ok_and_bad_token_errors() {
+    let _g = crate::replica_state::TEST_STATE_GUARD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    crate::replica_state::stop_runners();
+    assert_eq!(run(b"REPL.WAIT", &[b"1", b"42"]), b"+OK\r\n");
+    assert!(run(b"REPL.WAIT", &[b"1"]).starts_with(b"-ERR REPL.WAIT"));
 }
 

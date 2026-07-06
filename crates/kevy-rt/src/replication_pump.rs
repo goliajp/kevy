@@ -45,18 +45,20 @@ impl<C: Commands> Shard<C> {
     ///    replica's pending output non-blocking; partial writes wait
     ///    on the next writability event.
     pub(crate) fn pump_replication(&mut self) -> io::Result<()> {
-        let Some(src) = self.replicate.as_ref().map(|f| f.source()) else {
+        let Some(feed) = self.replicate.as_ref() else {
             return Ok(());
         };
         if self.replicas.is_empty() {
             return Ok(());
         }
-        let next = src.next_offset();
+        // v3.16 D2: the heartbeat carries (generation, next_offset) —
+        // the replica's REPL.WAIT gen truth.
+        let (generation, next) = (feed.generation(), feed.source().next_offset());
         for idx in 0..self.replicas.len() {
             match self.replicas[idx].state {
                 ReplicaState::Streaming { .. } => {
                     self.fill_streaming_output(idx, next);
-                    self.maybe_append_heartbeat(idx, next);
+                    self.maybe_append_heartbeat(idx, generation, next);
                 }
                 ReplicaState::SnapshotShipping { .. } => self.pump_snapshot_chunks(idx),
                 _ => {}
@@ -65,12 +67,14 @@ impl<C: Commands> Shard<C> {
         self.drain_streaming_outputs()
     }
 
-    /// v3.14 D3 — append the in-stream heartbeat (`+PING <next>`) at a
-    /// 1s cadence so the replica can compute lag + link liveness. Out
-    /// of band: occupies no offset space, rides the same output
-    /// buffer as frames (ordering with frames is irrelevant — the
-    /// payload is the primary's position, not stream data).
-    fn maybe_append_heartbeat(&mut self, idx: usize, primary_next: u64) {
+    /// v3.14 D3 — append the in-stream heartbeat (`+PING <gen> <next>`)
+    /// at a 1s cadence so the replica can compute lag + link liveness
+    /// (and, since v3.16, track the primary's feed generation for
+    /// REPL.WAIT gen matching). Out of band: occupies no offset space,
+    /// rides the same output buffer as frames (ordering with frames is
+    /// irrelevant — the payload is the primary's position, not stream
+    /// data).
+    fn maybe_append_heartbeat(&mut self, idx: usize, generation: u64, primary_next: u64) {
         let conn = &mut self.replicas[idx];
         let due = conn
             .last_ping
@@ -78,7 +82,7 @@ impl<C: Commands> Shard<C> {
         if !due {
             return;
         }
-        conn.output.extend_from_slice(&encode_ping(primary_next));
+        conn.output.extend_from_slice(&encode_ping(generation, primary_next));
         conn.last_ping = Some(std::time::Instant::now());
     }
 
@@ -120,6 +124,10 @@ impl<C: Commands> Shard<C> {
                 .duration_since(self.replication_epoch)
                 .as_nanos() as u64;
             self.slots.insert_or_touch(&id, offset, now_ns);
+            // v3.16 D1: an advanced slot is the WAIT wake point — a
+            // parked WAIT whose need is now met answers here, on the
+            // very event that made it true.
+            self.check_repl_ack_waiters();
         }
     }
 

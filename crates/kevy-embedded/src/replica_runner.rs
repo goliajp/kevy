@@ -250,7 +250,7 @@ fn drain_session(
         match client.next_event() {
             // v3.14 heartbeat: ack immediately (keeps the primary's
             // slot fresh); embedded lag view rides a later train.
-            Some(Ok(ReplicaEvent::Ping { primary_offset: _ })) => {
+            Some(Ok(ReplicaEvent::Ping { .. })) => {
                 let _ = client.send_ack(client.expected_offset());
             }
             Some(Ok(ReplicaEvent::Frame(frame))) => {

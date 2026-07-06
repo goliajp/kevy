@@ -381,6 +381,9 @@ impl<C: Commands> Shard<C> {
                     // either reactor.
                     self.tick_blocked_timeouts();
                     self.tick_xshard_timeouts();
+                    // v3.16: WAIT / REPL.WAIT deadline sweep — same
+                    // cadence as the BLOCK timeout reactor above.
+                    self.tick_repl_waiters();
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
                         self.apply_live_runtime_config(&mut tick_interval);
