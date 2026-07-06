@@ -84,7 +84,7 @@ UDS vs TCP loopback on the same kevy binary:
 | Observability | `lsof` / `ss -xl` | `ss -tln`, `netstat`, `tcpdump` |
 | Client config | `unix:///path` or `-s /path` | `host:port` |
 
-The throughput gain is workload-shape dependent — small-payload low-connection cells gain the most (the loopback per-op tax dominated them); CPU-saturated cells gain less (the transport wasn't the floor). See [bench/REPORT.md](https://github.com/goliajp/kevy/blob/master/bench/REPORT.md) for measured numbers.
+The throughput gain is workload-shape dependent — small-payload low-connection cells gain the most (the loopback per-op tax dominated them); CPU-saturated cells gain less (the transport wasn't the floor). See [bench/REPORT.md](https://github.com/goliajp/kevy/blob/develop/bench/REPORT.md) for measured numbers.
 
 ## FAQ
 
@@ -102,7 +102,7 @@ Materially faster on every workload, because UDS skips the entire IP path: no ch
 
 ### Can my client library use UDS?
 
-Most do. `redis-cli` and `redis-benchmark` take `-s <path>`. ioredis, node-redis, redis-py, redis-rb, go-redis, lettuce, jedis, and the in-tree [kevy-client](https://github.com/goliajp/kevy/tree/master/crates/kevy-client) / [kevy-client-async](https://github.com/goliajp/kevy/tree/master/crates/kevy-client-async) all accept `unix:///path` URLs or an explicit socket-path option. Check your driver's connection-options docs for the exact key name.
+Most do. `redis-cli` and `redis-benchmark` take `-s <path>`. ioredis, node-redis, redis-py, redis-rb, go-redis, lettuce, jedis, and the in-tree [kevy-client](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client) / [kevy-client-async](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client-async) all accept `unix:///path` URLs or an explicit socket-path option. Check your driver's connection-options docs for the exact key name.
 
 ### Should I drop TCP entirely if all my clients are on the same host?
 

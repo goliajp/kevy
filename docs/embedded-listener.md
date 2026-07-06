@@ -46,15 +46,20 @@ serving path).
 at-least-once contract as the embedded `changes_since` API (a stale
 generation answers `Resync`; restart from `FEED.TAIL`).
 
-Cross-process read-your-writes is a cursor pattern, not a blocking
-primitive: the writing process notes `changes_tail()` after its
-write; the reading process first drains `FEED.READ` past that cursor,
-then reads. In-process reads are always read-your-writes (writes
-commit synchronously).
+Cross-process read-your-writes over the feed is a cursor pattern, not
+a blocking primitive: the writing process notes `changes_tail()`
+after its write; the reading process first drains `FEED.READ` past
+that cursor, then reads. In-process reads are always read-your-writes
+(writes commit synchronously). (Server-to-replica replication *does*
+have a blocking primitive — `REPL.TOKEN` / `REPL.WAIT`, see
+[availability.md](availability.md) — but that is the replication
+plane, not this feed listener.)
 
-This listener is also the transport groundwork for
-embedded-as-primary replication (a server-side apply loop over
-`FEED.READ` — future train).
+Embedded-as-primary replication has since shipped (v3.2) on an
+adjacent surface: `with_embed_writer` exposes a replication source,
+and a kevy server with `[replication] single_source = true` follows
+it as a replica — see the *Embedded-as-primary* section of
+[replication.md](replication.md).
 
 ## Gate
 

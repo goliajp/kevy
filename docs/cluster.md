@@ -4,9 +4,9 @@ kevy's cluster surface has two independent layers — **single-node multi-shard 
 
 ## The two layers at a glance
 
-**Single-node cluster mode.** One kevy process partitions its keyspace across N shards and exposes each shard as a virtual cluster node on a deterministic per-shard port. `CLUSTER SLOTS / SHARDS / NODES` report the real CRC16 partition; key-aware clients (`redis-cli -c`, `redis-benchmark --cluster`, stock cluster-aware libraries, and the bundled [`ClusterClient`](https://github.com/goliajp/kevy/blob/master/crates/kevy-client/examples/cluster.rs)) hash each key and connect straight to the owning shard. The win is mechanical — removing the server-side cross-shard hop translates directly into higher throughput and lower tail latency.
+**Single-node cluster mode.** One kevy process partitions its keyspace across N shards and exposes each shard as a virtual cluster node on a deterministic per-shard port. `CLUSTER SLOTS / SHARDS / NODES` report the real CRC16 partition; key-aware clients (`redis-cli -c`, `redis-benchmark --cluster`, stock cluster-aware libraries, and the bundled [`ClusterClient`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster.rs)) hash each key and connect straight to the owning shard. The win is mechanical — removing the server-side cross-shard hop translates directly into higher throughput and lower tail latency.
 
-**Multi-node cluster.** A kevy server can act as a **primary** streaming a write log to one or more **replicas** (either kevy servers or in-process [`kevy-embedded`](https://github.com/goliajp/kevy/tree/master/crates/kevy-embedded) stores). A primary can also delegate **scoped writes** by prefix: `[cluster] scopes` declares which node owns writes for `app:billing:*`, which owns `app:auth:*`, etc.; writes that land on the wrong node receive `-MISDIRECTED writer is <host:port>` so the client follows. [`kevy-elect`](https://github.com/goliajp/kevy/tree/master/crates/kevy-elect) provides a quorum heartbeat that flags a writer DOWN and promotes the declared fallback. Operator-issued `MOVE-SCOPE` migrates a prefix under a quiesce window.
+**Multi-node cluster.** A kevy server can act as a **primary** streaming a write log to one or more **replicas** (either kevy servers or in-process [`kevy-embedded`](https://github.com/goliajp/kevy/tree/develop/crates/kevy-embedded) stores). A primary can also delegate **scoped writes** by prefix: `[cluster] scopes` declares which node owns writes for `app:billing:*`, which owns `app:auth:*`, etc.; writes that land on the wrong node receive `-MISDIRECTED writer is <host:port>` so the client follows. [`kevy-elect`](https://github.com/goliajp/kevy/tree/develop/crates/kevy-elect) provides the quorum control plane: it flags a dead node DOWN, elects a replacement primary for the replication topology (v3.15), and promotes a scope's declared fallback. Operator-issued `MOVE-SCOPE` migrates a prefix under a quiesce window.
 
 ## When you need this
 
@@ -16,7 +16,7 @@ kevy's cluster surface has two independent layers — **single-node multi-shard 
 | Compatibility with stock Redis Cluster tooling on a single host | Single-node cluster mode |
 | Hot reads served from another machine or in-process | Multi-node: primary + replicas (or embed-as-replica) |
 | Multiple writers, partitioned by key prefix, on different hosts | Multi-node: scoped multi-writer |
-| Surviving a writer crash without a human in the loop | Multi-node: `kevy-elect` + scope fallback |
+| Surviving a writer crash without a human in the loop | Multi-node: `kevy-elect` quorum elections (primary) / scope fallback (scoped writers) |
 | One process, low load, ordinary clients | Neither — the default proxy port is enough |
 
 The two layers compose: a primary in cluster mode advertises N shards, each replica also runs N shards, and a routing client wires them together.
@@ -89,7 +89,7 @@ let removed = cc.del(&[b"a", b"b", b"c"])?;
 # Ok::<(), std::io::Error>(())
 ```
 
-A runnable seed example lives at [`crates/kevy-client/examples/cluster.rs`](https://github.com/goliajp/kevy/blob/master/crates/kevy-client/examples/cluster.rs); a benchmark at [`crates/kevy-client/examples/cluster_bench.rs`](https://github.com/goliajp/kevy/blob/master/crates/kevy-client/examples/cluster_bench.rs).
+A runnable seed example lives at [`crates/kevy-client/examples/cluster.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster.rs); a benchmark at [`crates/kevy-client/examples/cluster_bench.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster_bench.rs).
 
 ### How routing removes the cross-shard hop
 
@@ -137,14 +137,15 @@ let reply = cc.request_unkeyed(&[b"PING".to_vec()])?;
 
 ## Primary and replicas
 
-A kevy server can be a primary (default), a replica that mirrors a primary's write log, or both at once (cascade). The primary opens a dedicated replication listener; replicas connect, hand over their last-applied offset, and apply the streamed frames onto local shards.
+A kevy server can be a primary streaming its write log, or a replica that mirrors one (the default role is `standalone` — replication dormant). The primary binds a dedicated replication listener per shard; replicas connect, hand over their last-applied offset, and apply the streamed frames onto local shards. Chain replication (replica-of-replica) is not supported.
 
 ```toml
 # primary.toml
 port = 6004
 
 [replication]
-listen_port = 16004        # primary streams the log here
+role             = "primary"
+listen_port_base = 16004    # optional; defaults to port + 10000
 ```
 
 ```toml
@@ -152,17 +153,15 @@ listen_port = 16004        # primary streams the log here
 port = 6004
 
 [replication]
-upstream    = "primary.local:16004"
-replica_id  = "replica-eu-1"           # stable per replica; survives restarts
-# reconnect_min_ms = 100               # backoff envelope
-# reconnect_max_ms = 5000
+role     = "replica"
+upstream = "primary.local:16004"
 ```
 
-Full server-side semantics — backlog sizing, snapshot ingest, cascade — live in [`docs/replication.md`](https://github.com/goliajp/kevy/blob/master/docs/replication.md). The relevant fact for this document is that the same wire protocol carries cluster-mode replication: a primary running with `[cluster] enabled = true` streams N shards' worth of writes, and a replica running with the same shard count applies them shard-for-shard.
+Full server-side semantics — backlog sizing, snapshot ingest, heartbeats and ACKs — live in [`docs/replication.md`](https://github.com/goliajp/kevy/blob/develop/docs/replication.md); failover (planned `FAILOVER` and crash elections) and the consistency ladder are [`docs/availability.md`](https://github.com/goliajp/kevy/blob/develop/docs/availability.md). The relevant fact for this document is that the same wire protocol carries cluster-mode replication: a primary running with `[cluster] enabled = true` streams N shards' worth of writes, and a replica running with the same shard count applies them shard-for-shard.
 
 ## Embed as read-replica
 
-A [`kevy-embedded`](https://github.com/goliajp/kevy/tree/master/crates/kevy-embedded) store can subscribe to a primary directly and serve in-process reads with zero network hop. Writes are refused locally with `READONLY`.
+A [`kevy-embedded`](https://github.com/goliajp/kevy/tree/develop/crates/kevy-embedded) store can subscribe to a primary directly and serve in-process reads with zero network hop. Writes are refused locally with `READONLY`.
 
 ```rust
 use kevy_embedded::Store;
@@ -231,15 +230,19 @@ The embed exposes a replication listener on the address passed to `with_embed_wr
 
 ## `kevy-elect` quorum failover
 
-`kevy-elect` is a sidecar heartbeat that every cluster member runs. Each node ships an HB on the elect port (`elect_port_base + node_index`); each node maintains a sliding window of who has been alive recently. When a peer's last HB falls past `down_after` (default 5 s), it enters `down_peers`. A scope's declared fallback consults `down_peers` on every accepted write: if its writer is DOWN, the fallback treats itself as the active owner and accepts the write; the next write on every other node now MISDIRECTs to the fallback. When the original writer's HBs resume, it leaves `down_peers` and the fallback steps down implicitly on the next decision.
+`kevy-elect` is the in-process quorum control plane every cluster member runs when `[cluster] node_id` and `peers` are both set. Each node binds one TCP control listener at `elect_port_base` (default: client port + 200) and heartbeats every peer; a peer silent past `down_after` (5 s) is flagged DOWN. Membership is **static** (the operator-declared `peers` table); roles are **dynamic** — elections move the primary around inside that table. The election timings (`hb_interval` 200 ms, `down_after` 5 s, `election_timeout` 3 s) are fixed constants in this release, not config keys.
+
+It drives two failover surfaces:
+
+**Replication primary election (v3.15).** When the current primary is DOWN, an eligible replica — the one holding the highest applied replication offset among alive peers, lowest `node_id` breaking ties — starts a candidacy and needs quorum (`N/2 + 1`) ACCEPTs within `election_timeout`. Epoch and vote are persisted to `<data_dir>/elect.meta` *before* any answer leaves the node, so a crash-restart can never double-vote. The winner opens writes; losers retarget their replication upstream automatically. Three clamps back this up: a **cold start** with no known primary elects after one `down_after` grace window; a **restarted** quorum member holds writes until an election settles (config `role = "primary"` is only a preference); and a primary that cannot see a strict majority **fences its own writes** within one lease window (`-NOREPLICAS primary lost quorum; writes fenced`). The operational walkthrough is [`docs/availability.md`](https://github.com/goliajp/kevy/blob/develop/docs/availability.md).
+
+**Scope fallback.** A scope's declared fallback consults the DOWN set on every accepted write: if its writer is DOWN, the fallback treats itself as the active owner and accepts the write; the next write on every other node now MISDIRECTs to the fallback. When the original writer's HBs resume, it leaves the DOWN set and the fallback steps down implicitly on the next decision.
 
 | Knob | Meaning | Default |
 |------|---------|---------|
-| `node_id` | This node's stable identifier (`<scope_owner>` references match it) | required |
-| `peers` | `<node_id>@<host>:<port>` list of every cluster member | required |
-| `elect_port_base` | UDP port the local elect sidecar binds | `16100` |
-| `hb_interval_ms` | HB emit cadence | `500` |
-| `down_after_ms` | Time without HB before a peer is DOWN | `5000` |
+| `node_id` | This node's stable identifier (≤ 32 B ASCII; scope owners and elections reference it) | required |
+| `peers` | `<node_id>@<host>:<elect_port>:<client_port>` list of every cluster member | required |
+| `elect_port_base` | TCP port the election control plane binds (one listener per node) | `0` = client port + 200 |
 
 ### Manual rejoin recovery
 
@@ -284,31 +287,28 @@ Aborting mid-ship reverts to the source writer; no partial-apply state is left o
 | `[cluster] enabled` | `--cluster` | `KEVY_CLUSTER=1` | `false` | Expose each shard at a per-shard port. |
 | `[cluster] port_base` | `--cluster-port-base` | `KEVY_CLUSTER_PORT_BASE` | value of `port` | Shard `i` binds `port_base + 1 + i`. |
 
-## Replication (primary side)
+## Replication
 
-| TOML | CLI | Env | Default |
-|------|-----|-----|---------|
-| `[replication] listen_port` | `--replication-listener` | `KEVY_REPLICATION_LISTEN_PORT` | unset (off) |
+TOML-only — there are no replication CLI flags or env vars:
 
-## Replication (replica side)
+| TOML | Default | Meaning |
+|------|---------|---------|
+| `[replication] role` | `"standalone"` | `"primary"` streams to replicas; `"replica"` pulls from `upstream`; `"standalone"` = subsystem dormant. |
+| `[replication] listen_port_base` | `0` (= `port` + 10000) | Shard `i` binds replication at base + `i`; replicas bind it too (v3.15 promotion symmetry). |
+| `[replication] upstream` | unset | Replica-only: `host:port` of the primary's replication port base. |
 
-| TOML | CLI | Env | Default |
-|------|-----|-----|---------|
-| `[replication] upstream` | `--replicate-from` | `KEVY_REPLICATE_FROM` | unset |
-| `[replication] replica_id` | `--replica-id` | `KEVY_REPLICA_ID` | derived from hostname |
-| `[replication] reconnect_min_ms` | | | `100` |
-| `[replication] reconnect_max_ms` | | | `5000` |
+The full key list (backlog sizing, `replica_read_only`, `replica_max_staleness_ms`, `min_replicas_to_write`, `single_source`) is in [`docs/replication.md`](https://github.com/goliajp/kevy/blob/develop/docs/replication.md).
 
 ## Scoped multi-writer + elect
 
 | TOML | Meaning |
 |------|---------|
-| `[cluster] node_id` | This node's stable identifier. |
-| `[cluster] peers` | `<node_id>@<host>:<port>` list of every cluster member. |
+| `[cluster] node_id` | This node's stable identifier (≤ 32 B ASCII). |
+| `[cluster] peers` | `<node_id>@<host>:<elect_port>:<client_port>` list of every cluster member (legacy two-field form: both ports equal). |
 | `[cluster] scopes` | `prefix=writer[\|fallback]` entries, comma-separated. |
-| `[cluster] elect_port_base` | UDP port the local elect sidecar binds. |
-| `[cluster] hb_interval_ms` | HB emit cadence (default `500`). |
-| `[cluster] down_after_ms` | Time without HB before a peer is DOWN (default `5000`). |
+| `[cluster] elect_port_base` | TCP port the election control plane binds; `0` (default) = `port` + 200. |
+
+Election timings (heartbeat 200 ms, DOWN after 5 s, election timeout 3 s) are fixed constants, not config keys.
 
 ---
 
@@ -316,7 +316,7 @@ Aborting mid-ship reverts to the source writer; no partial-apply state is left o
 
 - **Single-node cluster mode is a single process.** It buys client-side key routing, not host-level fault tolerance. Add replicas for that.
 - **The proxy port stays available.** It will keep working for non-cluster clients and remains correct, just with the cross-shard hop.
-- **Topology is static.** `peers` and `scopes` are read from config at startup. A change is "push new config, restart". There is no gossip, by design.
+- **Membership is static; roles are dynamic.** `peers` and `scopes` are read from config at startup — a membership change is "push new config, restart", and there is no gossip, by design. Within that static table, elections move the primary role around at runtime (v3.15); failed nodes are never auto-replaced.
 - **`MOVE-SCOPE` quiesces writes for the prefix.** The window is bounded by slice-ship time, which is single-digit seconds for GB-class scopes over LAN. For prefixes much larger than that, schedule during a maintenance window.
 - **Embed as scoped writer is sized for service-shape workloads** (a billing service, an auth service), not multi-TB datasets.
 - **Manual rejoin recovery after fallback acceptance.** Copy the fallback's data dir into the writer's before re-enabling; no automatic consensus catch-up.
@@ -348,7 +348,7 @@ Yes. `CLUSTER SLOTS / SHARDS / NODES` advertise a real partition and `-MOVED` fi
 It succeeds. kevy executes cross-slot `MGET`, `MSET`, `SUNION`, transactions, and blocking fan-outs server-side rather than returning `-CROSSSLOT`. `{hashtag}` co-location is still useful for atomicity-sensitive cases but is no longer a correctness requirement.
 
 **How do I survive a writer crash without an operator?**
-Declare a fallback for the scope (`prefix=writer|fallback`) and run `kevy-elect` on every node. When the writer misses heartbeats past `down_after_ms`, the fallback starts accepting that prefix's writes; clients receive `-MISDIRECTED writer is <fallback>` and follow. When the original writer comes back, run the manual rejoin recovery.
+For the replication primary: configure the `[cluster]` block (`node_id`, `elect_port_base`, `peers`) on every node — a dead primary is detected after `down_after` (5 s) and the most-advanced replica is elected in its place; a rejoining ex-primary demotes and resyncs automatically (see [`docs/availability.md`](https://github.com/goliajp/kevy/blob/develop/docs/availability.md)). For a scoped writer: declare a fallback (`prefix=writer|fallback`) — when the writer misses heartbeats past `down_after`, the fallback starts accepting that prefix's writes, clients receive `-MISDIRECTED writer is <fallback>` and follow, and when the original writer comes back you run the manual rejoin recovery.
 
 **Why is gossip / Raft permanently out of scope?**
 The cost of a consensus log under every write would erase the throughput and tail-latency advantages that make kevy worth choosing. The static-config + quorum-heartbeat design gives you the failover branch without paying for state-machine replication on the hot path. If your workload genuinely needs a consensus-backed key-value store, kevy is the wrong tool.

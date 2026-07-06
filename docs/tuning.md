@@ -90,6 +90,29 @@ The server dual-binds: TCP stays available for remote clients, UDS handles local
 
 **Bind address warning.** kevy has no AUTH and no TLS today. Binding to a non-loopback address (`--bind 0.0.0.0` or any public interface) prints a startup warning, because anything on the network can then issue commands. Run kevy behind a private network boundary or behind a proxy that terminates auth.
 
+### Replication and availability
+
+Only relevant when running a primary/replica topology ([docs/replication.md](https://github.com/goliajp/kevy/blob/develop/docs/replication.md), [docs/availability.md](https://github.com/goliajp/kevy/blob/develop/docs/availability.md)).
+
+**Port layout.** Each node uses three planes, all derived from the client port by default:
+
+| Plane | Port | Notes |
+|-------|------|-------|
+| client RESP | `port` (e.g. 6004) | what clients and `peers` client-ports refer to |
+| replication | `listen_port_base + shard_i`; default base = `port` + 10000 | `nshards` consecutive ports; replicas bind this range too (v3.15) |
+| election | `elect_port_base`; default = `port` + 200 | one control-plane listener per node |
+
+Co-hosting several instances on one machine: keep client ports at least `nshards` apart, or the default replication ranges collide. `FAILOVER` and automatic retarget assume the `port + 10000` convention — leave `listen_port_base` at its default in failover-enabled deployments.
+
+**Consistency knobs.** Two `[replication]` keys trade availability for stronger guarantees (the full ladder is [docs/availability.md](https://github.com/goliajp/kevy/blob/develop/docs/availability.md)):
+
+| Knob | Default | What it does |
+|------|---------|--------------|
+| `replica_max_staleness_ms` | `0` (off) | a replica whose last primary heartbeat is older than the bound refuses reads with `-STALE`; heartbeats ride the stream at 1 Hz, so bounds below ~2 s trip on healthy links |
+| `min_replicas_to_write` | `0` (off) | the primary refuses writes with `-NOREPLICAS` when fewer than N replicas are healthy |
+
+Per-call barriers cost one blocked call instead of a standing config: `WAIT n timeout` on the primary, `REPL.TOKEN` + `REPL.WAIT` for read-your-writes on a replica. Both interpret `timeout 0` as "wait forever", hard-capped at 60 s.
+
 ### Linux kernel knobs
 
 Two host-level levers move the kernel floor that sits underneath kevy. Both are benchmark / single-tenant-only — read the trade-offs before applying.
@@ -141,6 +164,8 @@ For symbol-level attribution of `clear_bhb_loop` and other kernel-side cost, cap
 | `maxmemory` set | writes can fail (`noeviction`) or evict (`allkeys-*`) | bounded memory footprint |
 | `maxmemory-samples` raise | per-eviction CPU cost | better approximate-LRU/LFU victim choice |
 | Unix-domain socket | local-only; filesystem-permission security model | skips the TCP loopback stack |
+| `replica_max_staleness_ms` set | reads on a lagging replica fail (`-STALE`) until it catches up | bounded read staleness |
+| `min_replicas_to_write` set | write availability coupled to replica health (`-NOREPLICAS`) | no writing into the void |
 | `mitigations=off` | Spectre / Meltdown / MDS / etc. mitigations all off | reclaims the syscall-path tax |
 | `MADV_HUGEPAGE` on `.text` | none meaningful | smaller iTLB footprint on the dispatch loop |
 | `release-perf` build | larger binary (debug line tables) | `perf` resolves to symbols |

@@ -70,6 +70,7 @@ fn llms_txt() -> String {
          - [Verb reference](docs/verb-reference.md): every verb, arity, flags, syntax\n\
          - [Designing on kevy](docs/designing-on-kevy.md): the serving-engine model\n\
          - [Cookbook](docs/cookbook.md): RDS-to-kevy modeling recipes\n\
+         - [RDS workloads](docs/rds-workloads.md): SQL-to-kevy reference matrix (types, SELECT, JOIN, transactions, DDL)\n\
          - [Indexes](docs/indexes.md) · [Views](docs/views.md) · [Text search](docs/text-search.md) · [Vector search](docs/vector-search.md)\n\
          - [CDC feeds](docs/cdc.md) · [Replication](docs/replication.md) · [Availability & failover](docs/availability.md) · [Persistence](docs/persistence.md)\n\
          - [Migration](docs/migration.md) · [Upgrading 2.x to 3.x](docs/UPGRADING.md)\n\

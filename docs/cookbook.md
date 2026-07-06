@@ -19,6 +19,9 @@ against a throwaway server, so the blocks stay honest.
 
 ## 1. Tables and rows
 
+**SQL equivalent:** `CREATE TABLE` + `SELECT col FROM t WHERE id = ?`
+— [matrix: tables, rows, columns](rds-workloads.md#tables-rows-columns).
+
 A row is a hash under a typed prefix:
 
 ```console
@@ -37,6 +40,10 @@ kevy-cli -p 6004 HGET user:42 phone    # NULL = absent field: already answers (n
   failures are counted, never silently indexed.
 
 ## 2. One-to-many, many-to-many
+
+**SQL equivalent:** foreign-key columns + junction tables;
+`SELECT … FROM orders WHERE user_id = ?` —
+[matrix: JOIN](rds-workloads.md#join).
 
 Link keys carry the relation, one set per side:
 
@@ -60,6 +67,9 @@ kevy-cli -p 6004 IDX.QUERY order_user EQ 42 FIELDS total status
 
 ## 3. Sequences
 
+**SQL equivalent:** `AUTO_INCREMENT` / `CREATE SEQUENCE` + `nextval()`
+— [matrix: primary key, unique, auto_increment](rds-workloads.md#primary-key-unique-auto_increment).
+
 ```console
 kevy-cli -p 6004 INCR seq:order          # one id
 kevy-cli -p 6004 INCRBY seq:order 100    # block allocation: hand out 100 ids
@@ -70,6 +80,10 @@ Block allocation is the high-throughput form; gaps on crash are the
 same contract PostgreSQL sequences give you.
 
 ## 4. Optimistic locking (row versions)
+
+**SQL equivalent:** `UPDATE t SET …, version = v+1 WHERE id = ? AND
+version = v` (the version-column CAS) —
+[matrix: transactions](rds-workloads.md#transactions).
 
 Server: WATCH/MULTI — the CAS loop. The transaction is
 connection-scoped, so it runs in one REPL session (here fed by a
@@ -94,6 +108,9 @@ the shard lock makes the branch race-free without a retry loop.
 
 ## 5. CHECK constraints and multi-key invariants
 
+**SQL equivalent:** `CHECK (balance >= 0)` + a trigger-maintained
+audit row — [matrix: constraints and triggers](rds-workloads.md#constraints-and-triggers).
+
 The RDS runs `CHECK (balance >= 0)` in the engine. kevy's replacement
 is **reads inside the atomic block**: the app evaluates the
 invariant, the engine guarantees the decision and the write commit
@@ -117,6 +134,9 @@ key prefix by design.
 
 ## 6. Idempotency keys
 
+**SQL equivalent:** `UNIQUE INDEX` + `INSERT … ON CONFLICT DO NOTHING`
+— [matrix: primary key, unique, auto_increment](rds-workloads.md#primary-key-unique-auto_increment).
+
 ```console
 kevy-cli -p 6004 HSET req:9001 idem_key pay-2026-07-04-a77 amount 1999
 kevy-cli -p 6004 IDX.CREATE req_idem ON PREFIX req: FIELD idem_key TYPE str KIND unique
@@ -132,6 +152,9 @@ before processing: NX is the atomic claim, the TTL is the retention
 window.
 
 ## 7. Soft delete
+
+**SQL equivalent:** a `deleted` flag column + a partial index / view
+`WHERE deleted = 0` — [matrix: VIEW](rds-workloads.md#view).
 
 Flag, don't remove:
 
@@ -153,6 +176,9 @@ kevy-cli -p 6004 VIEW.QUERY live_users LIMIT 10
 
 ## 8. Composite ordering (ORDER BY a, b)
 
+**SQL equivalent:** `ORDER BY a, b` on a composite index —
+[matrix: ORDER BY / LIMIT / OFFSET](rds-workloads.md#order-by--limit--offset).
+
 Encode the composite into one indexed score field at write time:
 `score = a * 1_000_000 + b` for bounded integer `b`, or a
 zero-padded string field for lexicographic composites — one index,
@@ -167,6 +193,9 @@ kevy-cli -p 6004 IDX.QUERY evt_ord RANGE '2026-07-04|000000' '2026-07-04|999999'
 ```
 
 ## 9. JSONB
+
+**SQL equivalent:** a JSON/JSONB column with generated-column indexes
+— [matrix: type system](rds-workloads.md#type-system).
 
 Flatten to hash fields: `profile.city` → field `profile.city`. You
 keep per-field reads/writes, field TTLs (HEXPIRE), and indexability —
@@ -184,6 +213,9 @@ A deeply nested blob nobody indexes can stay one serialized field;
 the moment a path matters, promote it to a field.
 
 ## 10. Cascade delete / foreign keys
+
+**SQL equivalent:** `FOREIGN KEY … ON DELETE CASCADE` —
+[matrix: constraints and triggers](rds-workloads.md#constraints-and-triggers).
 
 Cascades are app patterns, never engine magic:
 
@@ -203,6 +235,9 @@ kevy-cli delete-prefix -p 6004 --rate 5000 order:1001:   # children gone, parent
 
 ## 11. The outbox you don't need
 
+**SQL equivalent:** the transactional-outbox table + relay worker —
+[matrix: CDC](rds-workloads.md#cdc).
+
 The transactional-outbox pattern exists because an RDS commit and a
 message-bus publish can't be atomic. In kevy **the feed is the
 outbox**: every committed write is already a change frame at a
@@ -219,6 +254,9 @@ kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 10 PREFIX order:  # gen 1 = a fresh data 
 
 ## 12. Audit history
 
+**SQL equivalent:** a trigger-maintained audit/history table (or
+binlog archaeology) — [matrix: CDC](rds-workloads.md#cdc).
+
 CDC retention IS the audit log: frames carry the applied effect argv
 in commit order. Size the feed backlog for the window you owe
 compliance, export to cold storage with a cursor consumer. For
@@ -232,6 +270,9 @@ kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX acct:   # who set what, in com
 ```
 
 ## 13. The rollback window (reverse mirror)
+
+**SQL equivalent:** reverse replication back to the old primary
+during a cutover — [migration playbook, phase 5](migration.md#phase-5--write-cutover--the-rollback-window).
 
 During cutover, run a CDC consumer that mirrors kevy writes BACK to
 the old RDS (`FEED.READ` → UPDATE statements). Your rollback plan is
@@ -248,6 +289,9 @@ kevy-cli diff old-rds-mirror.internal:6379 127.0.0.1:6004 user:   # needs-extern
 
 ## 14. Analytics export
 
+**SQL equivalent:** the ETL job / binlog tap feeding the warehouse —
+[matrix: CDC](rds-workloads.md#cdc).
+
 Serving and analytics don't share an engine. Export patterns:
 
 - `export` — logical, resumable, loadable anywhere RESP goes.
@@ -263,6 +307,9 @@ kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX order:   # the CDC-to-warehous
 ```
 
 ## 15. Loading order (the deferred-index rule)
+
+**SQL equivalent:** `LOAD DATA` first, `CREATE INDEX` after (the
+bulk-load discipline) — [matrix: secondary index DDL](rds-workloads.md#secondary-index-ddl).
 
 Bulk load FIRST, declare indexes/views AFTER: backfill builds from
 existing rows at ~7s/million — orders of magnitude cheaper than
@@ -287,6 +334,9 @@ patterns wearing different key prefixes.
 
 ## 16. Session context with TTL
 
+**SQL equivalent:** a sessions table + the expiry cron job —
+[matrix: operational deltas](rds-workloads.md#sizing-and-operational-deltas).
+
 An agent's working context is a row with a lease: the compacted
 conversation lives in a hash, `EXPIRE` is the idle-eviction policy
 (renewed every turn — a sliding window), and the feed is the audit
@@ -308,6 +358,9 @@ a change frame in commit order — the "conversation history" table
 most agent frameworks bolt on is recipe 12's audit log for free.
 
 ## 17. Episodic memory (time × semantic)
+
+**SQL equivalent:** `WHERE ts BETWEEN …` + pgvector
+`ORDER BY embedding <=> ? LIMIT k` — [matrix: SELECT](rds-workloads.md#select).
 
 Episodic memory answers two questions about the same rows: *what
 happened recently* (time) and *what resembles this* (meaning). One
@@ -338,6 +391,9 @@ client-side.
 
 ## 18. RAG chunks with hybrid retrieval
 
+**SQL equivalent:** tsvector full-text + pgvector KNN, fused
+app-side — [matrix: SELECT](rds-workloads.md#select).
+
 Chunks are rows carrying both retrieval surfaces — the text and its
 embedding — so one write maintains both indexes:
 
@@ -359,3 +415,32 @@ beats a chunk that tops only one. `RRFK` is the k (default 60):
 lower it when you trust each leg's top hits and want agreement there
 to dominate; raise it to flatten the fusion toward consensus deeper
 in both lists.
+
+---
+
+## Recipe index
+
+Recipe ↔ the SQL construct it replaces ↔ the
+[rds-workloads.md](rds-workloads.md) matrix row that states the
+semantics and limits.
+
+| # | Recipe | SQL construct | Matrix row |
+|---|---|---|---|
+| 1 | Tables and rows | `CREATE TABLE`, point `SELECT` | [tables, rows, columns](rds-workloads.md#tables-rows-columns) |
+| 2 | One-to-many, many-to-many | FK columns, junction tables, `WHERE fk = ?` | [JOIN](rds-workloads.md#join) |
+| 3 | Sequences | `AUTO_INCREMENT` / `nextval()` | [PK, UNIQUE, AUTO_INCREMENT](rds-workloads.md#primary-key-unique-auto_increment) |
+| 4 | Optimistic locking | version-column CAS `UPDATE` | [transactions](rds-workloads.md#transactions) |
+| 5 | CHECK constraints | `CHECK (…)` + audit trigger | [constraints and triggers](rds-workloads.md#constraints-and-triggers) |
+| 6 | Idempotency keys | `UNIQUE INDEX` + `ON CONFLICT DO NOTHING` | [PK, UNIQUE, AUTO_INCREMENT](rds-workloads.md#primary-key-unique-auto_increment) |
+| 7 | Soft delete | flag column + filtered view | [VIEW](rds-workloads.md#view) |
+| 8 | Composite ordering | `ORDER BY a, b` | [ORDER BY / LIMIT / OFFSET](rds-workloads.md#order-by--limit--offset) |
+| 9 | JSONB | JSON column + generated-column indexes | [type system](rds-workloads.md#type-system) |
+| 10 | Cascade delete / FKs | `ON DELETE CASCADE` | [constraints and triggers](rds-workloads.md#constraints-and-triggers) |
+| 11 | The outbox you don't need | transactional-outbox table | [CDC](rds-workloads.md#cdc) |
+| 12 | Audit history | audit table / binlog archaeology | [CDC](rds-workloads.md#cdc) |
+| 13 | The rollback window | reverse replication at cutover | [migration playbook](migration.md#phase-5--write-cutover--the-rollback-window) |
+| 14 | Analytics export | ETL / binlog tap to warehouse | [CDC](rds-workloads.md#cdc) |
+| 15 | Loading order | bulk `LOAD DATA`, index after | [secondary index DDL](rds-workloads.md#secondary-index-ddl) |
+| 16 | Session context with TTL | sessions table + expiry cron | [operational deltas](rds-workloads.md#sizing-and-operational-deltas) |
+| 17 | Episodic memory | time `BETWEEN` + pgvector KNN | [SELECT](rds-workloads.md#select) |
+| 18 | RAG hybrid retrieval | tsvector + pgvector, fused | [SELECT](rds-workloads.md#select) |
