@@ -721,9 +721,9 @@ dependencies = [
 
 [[package]]
 name = "luna-core"
-version = "2.1.0"
+version = "2.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6002a2a8bb8e91ac87b178d3c86f18c2e96cfdfcc9e00b1d6797ae9517a4e5d"
+checksum = "e384c06421111606291352e82b57006de828cd3c99e7b0fe42596c3cd21a1b75"
 
 [[package]]
 name = "matchers"
