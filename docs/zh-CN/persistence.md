@@ -18,6 +18,8 @@ kevy 如何在重启之间保留数据 —— AOF、快照、fsync 策略、重�
 
 每个 shard 在持久化目录下拥有两个文件:一份对所有改动命令的追加式日志(`aof-<id>.aof`),以及一份可选的二进制快照(`dump-<id>.rdb`)。仅靠 AOF 本身就构成完整的耐久记录;快照只是用来限定重放时间。启动时 kevy 先加载快照(如果存在)再回放 AOF;一次成功的快照之后 AOF 会被重置,因此两个文件合在一起恰好覆盖一次完整历史。
 
+目录本身在启动时若不存在会被创建(v3.17);无法创建的路径会作为一条有名有姓的启动错误报告,而不是由哪个先碰到它的子系统抛出一个裸的 ENOENT。
+
 ## 实际示例
 
 ### 服务器模式
@@ -229,3 +231,42 @@ store.evictions_total();        // 因 maxmemory 累计驱逐数
 | `dump-<id>.rdb.reshard` + `reshard.journal` | 进行中的 shard 布局迁移。下次启动会向前推进;绝不可手工删除 journal。 |
 | `*.premigration.<unix_ts>` | 迁移前的源文件备份,留待回滚。 |
 | `aof-<id>.aof.panic-quarantine.<unix_ts>` | 恢复期间被搁置的 AOF 损坏尾部。需要抢救任何内容时请手工检查;kevy 不会重新施加它。 |
+| `elect.meta`(+ 瞬时的 `elect.meta.tmp`)| 选举耐久性(v3.15):选举器的 `(epoch, votedFor)` 对,在任何投票应答离开节点*之前*就持久化,因此崩溃重启永远不会重复投票。写法是 tmp + fsync + rename —— 保存中途崩溃只会留下旧对或新对,绝不会留下撕裂的文件。仅在配置了 `[cluster]` 多数派时出现。 |
+
+## 耐久性契约(v2.1)
+
+按 `appendfsync` × 写入路径,列出"调用返回 OK"保证了什么。
+"durable" = 已落稳定存储(`fdatasync` 已完成);"windowed" = 还在 OS 页缓存里,只有*机器*(而不只是进程)在窗口内死掉才会丢失。
+
+| 写入路径 | `always` | `everysec` | `no` |
+|---|---|---|---|
+| 服务器命令回复 | 回复离开 shard 之前已 durable(按批次组提交)| windowed ≤ 1 s | 由 OS 决定节奏 |
+| 嵌入式门面操作(`set`、`zadd`、…)| 返回时已 durable | windowed ≤ 1 s | 由 OS 决定节奏 |
+| 嵌入式 `atomic` / `atomic_all_shards` 块 | 提交时已 durable(每个被触及的 shard 一次 fsync)| windowed ≤ 1 s | 由 OS 决定节奏 |
+| 嵌入式 `Pipeline::commit` | 返回时已 durable,fsync 按 shard 批量 | windowed ≤ 1 s | 由 OS 决定节奏 |
+| …以上任一 + **`Store::fsync_aof()`** | 无操作 | **在栅栏处 durable** | **在栅栏处 durable** |
+
+`Store::fsync_aof()` 是按写入粒度的耐久性逃生舱(Postgres 按事务 `synchronous_commit` 一类):部署跑在 `everysec` 上换吞吐,把栅栏放在少数几笔"一经确认就必须扛过机器崩溃"的写入之后。代价:每个脏 shard 一次 `fdatasync`。
+
+进程崩溃(SIGKILL)在 `always` 下永远不丢已确认写入,其余策略最多丢一个 fsync 窗口;AOF 尾巴在下次打开时回放,撕裂的末帧会被隔离(`panic-quarantine`),绝不静默施加。
+
+## 原子性章程(嵌入式 serving-store,v2.1)
+
+- **`Store::atomic(body)`** —— 单 shard 事务:在闭包期间持有该 shard 的写锁,闭包内的读能看到闭包自己的写,AOF 追加被推迟并在**提交时用一次 fsync**落地(`always` 下)。触及的每个键必须哈希到同一 shard —— 因此当你的写模式跨任意键时,serving-store 的推荐配置是 **1 shard**:保留完整原子性,不付跨 shard 协调成本。1-shard 配置的天花板是单核写吞吐;实测数字见 `bench/REPORT.md`。
+- **`Store::atomic_all_shards(body)`** —— 多 shard 事务:按 shard 索引顺序获取**所有** shard 的写锁(确定的顺序 = 无死锁),返回时按 shard 提交 AOF 批次。代价:闭包期间阻塞所有其他读者和写者 —— 用于跨 shard 不变量,不要当默认写路径。
+- **`Store::pipeline()`** —— **不是**原子的:每个操作各自加锁;其他写者会交错进来。它只做 fsync 批量(N 个操作 → ≤ shard 数次 fsync),仅此而已。
+- 两种原子形式都把条件操作(`ZADD GT`、`SPOP`)的**效果**记录为无条件动词,因此重放与副本施加在构造上就是确定的。
+
+## 恢复点(v2.3)
+
+启用变更 feed(`[feed] enabled = true`,见 [cdc.md](../cdc.md))后,每份快照都记录它被采集时的 feed 游标 —— 与快照数据本身在同一个禁追加窗口内冻结。由此得到恢复点契约:
+
+> **快照 S + 从 S 记录的游标开始的 feed 帧 = 之后任意游标处的精确状态。**
+
+`kevy_persist::read_snapshot_cursor(path)` 可以把游标读回来(v2.3 之前的快照返回 `None` —— 格式 v4 及更早不带游标,仍可完整加载)。这份契约的可执行形式是 `bench/restore-drill.sh`,作为一条 `diskgate` 项运行:写入 → SAVE → 再写入 → kill → 只用 dump 恢复 → 回放捕获的 feed 帧 → 逐键字节级校验。
+
+范围说明:feed 窗口是内存里的 backlog。比窗口更老的帧已经不在了 —— 一份老过窗口触及范围的快照就是一次普通快照恢复(S 时刻的状态),不是 PITR 基线。如果你依赖精确时点恢复,快照频率至少要跟上窗口的翻转。
+
+## 复制线协议上的快照(v3.15)
+
+同一份快照格式,就是主节点向掉出 backlog 窗口的副本就地内联推送的东西(见 [replication.md](replication.md))。一个值得知道的语义:被推送的快照会**替换**副本的本地状态,而不是合并 —— 副本在加载前会清空自己的键空间。这是有意为之:当一个重新加入的前主节点带着分叉后缀(从未复制出去的写入)时,重同步必须真正丢弃分叉,而不是在一次只做 upsert 的加载下把它留作残渣。

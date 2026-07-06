@@ -90,6 +90,29 @@ redis-cli -s /tmp/kevy.sock SET foo bar
 
 **bind アドレスの警告。** kevy には今日 AUTH も TLS もありません。非ループバックアドレス(`--bind 0.0.0.0` または任意の公開インタフェース)に bind すると起動警告が出ます。ネットワーク上の誰でもコマンドを発行できてしまうためです。kevy はプライベートネットワーク境界、または認証を終端させるプロキシの背後で動かしてください。
 
+### レプリケーションと可用性
+
+プライマリ/レプリカのトポロジで動かすときだけ関係します([docs/replication.md](replication.md)、[docs/availability.md](../availability.md))。
+
+**ポートレイアウト。** 各ノードは 3 つのプレーンを使い、デフォルトではすべてクライアントポートから導出されます:
+
+| プレーン | ポート | 備考 |
+|-------|------|-------|
+| クライアント RESP | `port`(例: 6004) | クライアントと `peers` の client-port が指すもの |
+| レプリケーション | `listen_port_base + shard_i`。デフォルト base = `port` + 10000 | `nshards` 個の連続ポート。レプリカもこのレンジを bind する(v3.15) |
+| 選挙 | `elect_port_base`。デフォルト = `port` + 200 | ノードごとに 1 本のコントロールプレーンリスナー |
+
+1 台のマシンに複数インスタンスを同居させる場合: クライアントポートを最低 `nshards` 離してください。さもないとデフォルトのレプリケーションレンジが衝突します。`FAILOVER` と自動再ターゲットは `port + 10000` の慣習を前提とします — フェイルオーバーを使うデプロイでは `listen_port_base` をデフォルトのままにしてください。
+
+**整合性ノブ。** 2 つの `[replication]` キーが、可用性とより強い保証を交換します(ラダー全体は [docs/availability.md](../availability.md)):
+
+| ノブ | デフォルト | 何をするか |
+|------|---------|--------------|
+| `replica_max_staleness_ms` | `0`(オフ) | 最後のプライマリハートビートが境界より古いレプリカは読み出しを `-STALE` で拒否。ハートビートは 1 Hz でストリームに乗るため、約 2 秒未満の境界は健全なリンクでも発火する |
+| `min_replicas_to_write` | `0`(オフ) | 健全なレプリカが N 未満のとき、プライマリは書き込みを `-NOREPLICAS` で拒否 |
+
+呼び出し単位のバリアは、常設 config の代わりにブロックする呼び出し 1 回のコストです: プライマリでの `WAIT n timeout`、レプリカでの read-your-writes には `REPL.TOKEN` + `REPL.WAIT`。どちらも `timeout 0` を「永遠に待つ」と解釈し、60 秒でハードキャップされます。
+
 ### Linux カーネルノブ
 
 ホストレベルのレバーが 2 つあり、kevy の下にあるカーネルフロアを動かします。両方ベンチ/単一テナント専用です — 適用前にトレードオフを読んでください。
@@ -141,6 +164,8 @@ addr2line -e ./target/release-perf/kevy -f -i 0x<addr>
 | `maxmemory` 設定 | 書き込みが失敗(`noeviction`)またはエビクト(`allkeys-*`)し得る | メモリフットプリント有界化 |
 | `maxmemory-samples` 上げる | エビクションごとの CPU コスト | 近似 LRU/LFU の犠牲者選択が改善 |
 | Unix-domain socket | ローカル限定。ファイルシステム権限のセキュリティモデル | TCP ループバックスタックをスキップ |
+| `replica_max_staleness_ms` 設定 | 遅れているレプリカでの読み出しは追いつくまで失敗(`-STALE`) | 読み出しステイルネスの有界化 |
+| `min_replicas_to_write` 設定 | 書き込み可用性がレプリカの健全性と結合(`-NOREPLICAS`) | 虚空への書き込みをしない |
 | `mitigations=off` | Spectre / Meltdown / MDS 等のミティゲーション全 off | syscall パス税を取り戻す |
 | `.text` への `MADV_HUGEPAGE` | 意味のあるコストなし | dispatch ループの iTLB フットプリント縮小 |
 | `release-perf` ビルド | バイナリが大きくなる(デバッグ行テーブル) | `perf` がシンボル解決 |

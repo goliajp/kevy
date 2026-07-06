@@ -84,7 +84,7 @@ UDS の信頼境界は**ファイルシステム**です — Unix ソケット�
 | 観測 | `lsof` / `ss -xl` | `ss -tln`、`netstat`、`tcpdump` |
 | クライアント設定 | `unix:///path` または `-s /path` | `host:port` |
 
-スループットの利得はワークロード形状依存です — 小ペイロード低コネクション数のセルが最も得をします(ループバックの op あたり税が支配的だった)。CPU 飽和セルの利得は小さくなります(トランスポートがフロアではなかった)。実測値は [bench/REPORT.md](https://github.com/goliajp/kevy/blob/master/bench/REPORT.md) を参照。
+スループットの利得はワークロード形状依存です — 小ペイロード低コネクション数のセルが最も得をします(ループバックの op あたり税が支配的だった)。CPU 飽和セルの利得は小さくなります(トランスポートがフロアではなかった)。実測値は [bench/REPORT.md](https://github.com/goliajp/kevy/blob/develop/bench/REPORT.md) を参照。
 
 ## FAQ
 
@@ -102,7 +102,7 @@ UDS の信頼境界は**ファイルシステム**です — Unix ソケット�
 
 ### 自分のクライアントライブラリは UDS を使えますか?
 
-多くが使えます。`redis-cli` と `redis-benchmark` は `-s <path>` を取ります。ioredis、node-redis、redis-py、redis-rb、go-redis、lettuce、jedis、およびリポジトリ内の [kevy-client](https://github.com/goliajp/kevy/tree/master/crates/kevy-client) / [kevy-client-async](https://github.com/goliajp/kevy/tree/master/crates/kevy-client-async) はすべて `unix:///path` URL または明示的なソケットパスオプションを受けます。正確なキー名はドライバの接続オプション docs で確認してください。
+多くが使えます。`redis-cli` と `redis-benchmark` は `-s <path>` を取ります。ioredis、node-redis、redis-py、redis-rb、go-redis、lettuce、jedis、およびリポジトリ内の [kevy-client](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client) / [kevy-client-async](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client-async) はすべて `unix:///path` URL または明示的なソケットパスオプションを受けます。正確なキー名はドライバの接続オプション docs で確認してください。
 
 ### 全クライアントが同一ホストにあるなら TCP を完全に外すべきですか?
 
