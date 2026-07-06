@@ -29,7 +29,7 @@ categories = ["database", "caching", "api-bindings"]
 workspace = true
 
 [dependencies]
-kevy-embedded = { path = "../kevy-embedded", version = "3.17.0" }
-kevy-resp = { path = "../kevy-resp", version = "3.17.0" }
-kevy-resp-client = { path = "../kevy-resp-client", version = "3.17.0" }
-kevy-hash = { path = "../kevy-hash", version = "3.17.0" }
+kevy-embedded = { path = "../kevy-embedded", version = "3.17.1" }
+kevy-resp = { path = "../kevy-resp", version = "3.17.1" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "3.17.1" }
+kevy-hash = { path = "../kevy-hash", version = "3.17.1" }

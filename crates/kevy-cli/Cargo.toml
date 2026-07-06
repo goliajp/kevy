@@ -21,5 +21,5 @@ name = "kevy-cli"
 path = "src/main.rs"
 
 [dependencies]
-kevy-resp = { path = "../kevy-resp", version = "3.17.0" }
-kevy-resp-client = { path = "../kevy-resp-client", version = "3.17.0" }
+kevy-resp = { path = "../kevy-resp", version = "3.17.1" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "3.17.1" }
