@@ -9,7 +9,7 @@ capability lives.
 If you're migrating from an RDS, read this page first, then work
 through [the cookbook](cookbook.md) recipe by recipe.
 
-## The six planes
+## The seven planes
 
 | Plane | What it carries | Where |
 |---|---|---|
@@ -19,6 +19,7 @@ through [the cookbook](cookbook.md) recipe by recipe.
 | **P3 — Views & algebra** | Named compositions over indexes (virtual / materialized top-K), zset/set algebra with full Redis semantics. | docs/views.md |
 | **P4 — Flow** | CDC feed with `(generation, offset)` cursors (the built-in outbox), blocking pops, hash-field TTLs, snapshot read views, the embedded read-only RESP listener. | docs/cdc.md, docs/embedded-listener.md |
 | **P5 — Evidence** | Every declared line measured and reconciled; crash-consistency chaos gates; 30M-key mixed-stack soak. | bench/VALIDATION-LEDGER.md |
+| **P6 — Availability** | Replication with acked-offset truth and heartbeats, planned handover (`FAILOVER`) and crash failover (quorum election, election-only write authority, fork discard), and the opt-in consistency ladder: `WAIT`, read-your-writes tokens (`REPL.TOKEN`/`REPL.WAIT`), bounded staleness (`-STALE`), quorum-lease write fencing. 12 executable clamps (availgate) run in CI. | docs/availability.md, docs/replication.md |
 
 ## The three laws
 
@@ -84,3 +85,5 @@ Numbers are ratchets — floors only rise. The standing lines
 3. Compose views for your hot lists ([views](views.md)).
 4. Wire your event consumers to the feed ([CDC](cdc.md)).
 5. Verify with digests, watch the gates.
+6. When one node stops being enough, add replicas and pick your rung
+   on the consistency ladder ([availability](availability.md)).

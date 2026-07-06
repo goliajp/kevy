@@ -4,9 +4,9 @@ kevy 的集群面有两个相互独立的层 —— **单节点多 shard 暴露*
 
 ## 两层概览
 
-**单节点集群模式。** 一个 kevy 进程把键空间分成 N 个 shard,并把每个 shard 作为一个虚拟集群节点暴露到一个确定的 per-shard 端口。`CLUSTER SLOTS / SHARDS / NODES` 报告真实的 CRC16 分区;键感知客户端(`redis-cli -c`、`redis-benchmark --cluster`、stock 集群感知库,以及内置的 [`ClusterClient`](https://github.com/goliajp/kevy/blob/master/crates/kevy-client/examples/cluster.rs))为每个键计算槽位,直接连到拥有它的 shard。收益是机械的 —— 去掉服务端跨 shard 跳转,直接转化成更高吞吐与更低尾延迟。
+**单节点集群模式。** 一个 kevy 进程把键空间分成 N 个 shard,并把每个 shard 作为一个虚拟集群节点暴露到一个确定的 per-shard 端口。`CLUSTER SLOTS / SHARDS / NODES` 报告真实的 CRC16 分区;键感知客户端(`redis-cli -c`、`redis-benchmark --cluster`、stock 集群感知库,以及内置的 [`ClusterClient`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster.rs))为每个键计算槽位,直接连到拥有它的 shard。收益是机械的 —— 去掉服务端跨 shard 跳转,直接转化成更高吞吐与更低尾延迟。
 
-**多节点集群。** 一台 kevy 服务器可以作为**主节点**把写入日志流式发到一个或多个**副本**(可以是 kevy 服务器,也可以是进程内的 [`kevy-embedded`](https://github.com/goliajp/kevy/tree/master/crates/kevy-embedded) store)。主节点也可以按前缀把**作用域写入**委派出去:`[cluster] scopes` 声明谁拥有 `app:billing:*` 的写、谁拥有 `app:auth:*` 的写等;打到错误节点上的写会得到 `-MISDIRECTED writer is <host:port>` 让客户端跟进。[`kevy-elect`](https://github.com/goliajp/kevy/tree/master/crates/kevy-elect) 提供多数派心跳,把写者标记为 DOWN 并提升声明的备用节点。运维侧的 `MOVE-SCOPE` 在有界静默窗口中迁移一个前缀。
+**多节点集群。** 一台 kevy 服务器可以作为**主节点**把写入日志流式发到一个或多个**副本**(可以是 kevy 服务器,也可以是进程内的 [`kevy-embedded`](https://github.com/goliajp/kevy/tree/develop/crates/kevy-embedded) store)。主节点也可以按前缀把**作用域写入**委派出去:`[cluster] scopes` 声明谁拥有 `app:billing:*` 的写、谁拥有 `app:auth:*` 的写等;打到错误节点上的写会得到 `-MISDIRECTED writer is <host:port>` 让客户端跟进。[`kevy-elect`](https://github.com/goliajp/kevy/tree/develop/crates/kevy-elect) 提供多数派控制面:它把死亡节点标记为 DOWN,为复制拓扑选出替补主节点(v3.15),并提升作用域声明的回退节点。运维侧的 `MOVE-SCOPE` 在有界静默窗口中迁移一个前缀。
 
 ## 何时需要
 
@@ -16,7 +16,7 @@ kevy 的集群面有两个相互独立的层 —— **单节点多 shard 暴露*
 | 同一台主机上要兼容 stock Redis Cluster 工具 | 单节点集群模式 |
 | 热读由另一台机器或进程内承担 | 多节点:主 + 副本(或以 embed 作副本) |
 | 多写者,按键前缀切分,部署在不同主机 | 多节点:作用域多写者 |
-| 在没有人工介入的情况下扛住写者崩溃 | 多节点:`kevy-elect` + 作用域回退 |
+| 在没有人工介入的情况下扛住写者崩溃 | 多节点:`kevy-elect` 多数派选举(主节点)/ 作用域回退(作用域写者) |
 | 单进程、低负载、普通客户端 | 都不用 —— 默认代理端口就够 |
 
 两层可组合:集群模式的主节点对外宣称 N 个 shard,每个副本也跑 N 个 shard,路由客户端把它们连起来。
@@ -89,7 +89,7 @@ let removed = cc.del(&[b"a", b"b", b"c"])?;
 # Ok::<(), std::io::Error>(())
 ```
 
-可运行的种子示例在 [`crates/kevy-client/examples/cluster.rs`](https://github.com/goliajp/kevy/blob/master/crates/kevy-client/examples/cluster.rs);基准在 [`crates/kevy-client/examples/cluster_bench.rs`](https://github.com/goliajp/kevy/blob/master/crates/kevy-client/examples/cluster_bench.rs)。
+可运行的种子示例在 [`crates/kevy-client/examples/cluster.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster.rs);基准在 [`crates/kevy-client/examples/cluster_bench.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster_bench.rs)。
 
 ### 路由如何去掉跨 shard 跳
 
@@ -137,14 +137,15 @@ let reply = cc.request_unkeyed(&[b"PING".to_vec()])?;
 
 ## 主节点与副本
 
-一台 kevy 服务器可以是主节点(默认)、镜像主节点写日志的副本,或者同时是两者(级联)。主节点开一个专用的复制监听;副本连上去,交出它最后施加的 offset,然后把流过来的帧施加到本地 shard 上。
+一台 kevy 服务器可以是流出自己写日志的主节点,也可以是镜像某个主节点的副本(默认角色是 `standalone` —— 复制休眠)。主节点为每个 shard 绑定一个专用的复制监听;副本连上去,交出它最后施加的 offset,然后把流过来的帧施加到本地 shard 上。链式复制(副本之副本)不支持。
 
 ```toml
 # primary.toml
 port = 6004
 
 [replication]
-listen_port = 16004        # 主节点在这里流出日志
+role             = "primary"
+listen_port_base = 16004    # 可选;默认 port + 10000
 ```
 
 ```toml
@@ -152,17 +153,15 @@ listen_port = 16004        # 主节点在这里流出日志
 port = 6004
 
 [replication]
-upstream    = "primary.local:16004"
-replica_id  = "replica-eu-1"           # 每个副本稳定;穿越重启
-# reconnect_min_ms = 100               # 退避包络
-# reconnect_max_ms = 5000
+role     = "replica"
+upstream = "primary.local:16004"
 ```
 
-完整的服务器侧语义 —— backlog 容量、快照吸收、级联 —— 都在 [`docs/replication.md`](replication.md) 里。对本文档相关的事实是:同一份线协议承载集群模式的复制 —— 跑着 `[cluster] enabled = true` 的主节点流出 N 个 shard 的写入,而跑着同样 shard 数的副本逐 shard 施加。
+完整的服务器侧语义 —— backlog 容量、快照吸收、心跳与 ACK —— 都在 [`docs/replication.md`](replication.md) 里;切主(计划内 `FAILOVER` 与崩溃选举)和一致性阶梯在 [`docs/availability.md`](availability.md)。对本文档相关的事实是:同一份线协议承载集群模式的复制 —— 跑着 `[cluster] enabled = true` 的主节点流出 N 个 shard 的写入,而跑着同样 shard 数的副本逐 shard 施加。
 
 ## 以 embed 作只读副本
 
-一个 [`kevy-embedded`](https://github.com/goliajp/kevy/tree/master/crates/kevy-embedded) store 可以直接订阅主节点,以零网络跳的方式在进程内服务读。本地写以 `READONLY` 拒绝。
+一个 [`kevy-embedded`](https://github.com/goliajp/kevy/tree/develop/crates/kevy-embedded) store 可以直接订阅主节点,以零网络跳的方式在进程内服务读。本地写以 `READONLY` 拒绝。
 
 ```rust
 use kevy_embedded::Store;
@@ -231,15 +230,19 @@ embed 在传给 `with_embed_writer` 的地址上开一个复制监听。其它�
 
 ## `kevy-elect` 多数派切换
 
-`kevy-elect` 是集群每个成员都跑的心跳侧车。每个节点在选举端口(`elect_port_base + node_index`)发心跳;每个节点维护一份滑动窗口记录谁最近还活着。当一个 peer 的最后心跳超过 `down_after`(默认 5 秒),它进入 `down_peers`。一个作用域声明的回退节点会在每次接受的写上检查 `down_peers`:如果它的写者是 DOWN,回退节点就把自己当作生效拥有者并接受写;之后其它节点上的写都会 MISDIRECT 到这个回退节点。当原写者的心跳恢复后,它离开 `down_peers`,在下一次决策时回退节点隐式让位。
+`kevy-elect` 是每个集群成员在同时设置了 `[cluster] node_id` 与 `peers` 时都会运行的进程内多数派控制面。每个节点在 `elect_port_base`(默认:客户端端口 + 200)绑定一个 TCP 控制监听,并向每个 peer 发心跳;一个 peer 静默超过 `down_after`(5 s)即被标 DOWN。成员关系是**静态的**(运维方声明的 `peers` 表);角色是**动态的** —— 选举在这张表内部移动主节点。选举时序(`hb_interval` 200 ms、`down_after` 5 s、`election_timeout` 3 s)在本版本中是固定常量,不是配置键。
+
+它驱动两个切换面:
+
+**复制主节点选举(v3.15)。** 当前主节点 DOWN 时,一个具备资格的副本 —— 在线 peer 中已施加复制 offset 最高者,`node_id` 最小者打破平局 —— 发起候选,并需要在 `election_timeout` 内拿到多数派(`N/2 + 1`)的 ACCEPT。纪元(epoch)与选票在任何应答离开节点*之前*就持久化到 `<data_dir>/elect.meta`,因此崩溃重启永远不会重复投票。胜者打开写入;败者自动把复制上游切过去。三道钳制为此兜底:**冷启动**且无已知主节点时,等一个 `down_after` 宽限窗后选举;**重启**的多数派成员在选举尘埃落定前扣住写入(配置 `role = "primary"` 只是偏好);看不到严格多数的主节点在一个租约窗口内**围栏自己的写入**(`-NOREPLICAS primary lost quorum; writes fenced`)。操作演练见 [`docs/availability.md`](availability.md)。
+
+**作用域回退。** 作用域声明的回退节点在每次接受的写上查询 DOWN 集合:如果它的写者是 DOWN,回退节点就把自己当作生效拥有者并接受写;之后其它节点上的写都会 MISDIRECT 到这个回退节点。当原写者的心跳恢复后,它离开 DOWN 集合,在下一次决策时回退节点隐式让位。
 
 | 旋钮 | 含义 | 默认值 |
 |------|------|--------|
-| `node_id` | 本节点稳定标识(`<scope_owner>` 引用与此匹配)| 必填 |
-| `peers` | 集群每个成员的 `<node_id>@<host>:<port>` 列表 | 必填 |
-| `elect_port_base` | 本地 elect 侧车绑定的 UDP 端口 | `16100` |
-| `hb_interval_ms` | 心跳发送节拍 | `500` |
-| `down_after_ms` | peer 在多少毫秒无心跳后被标 DOWN | `5000` |
+| `node_id` | 本节点稳定标识(≤ 32 B ASCII;作用域拥有者与选举都引用它)| 必填 |
+| `peers` | 集群每个成员的 `<node_id>@<host>:<elect_port>:<client_port>` 列表 | 必填 |
+| `elect_port_base` | 选举控制面绑定的 TCP 端口(每节点一个监听)| `0` = 客户端端口 + 200 |
 
 ### 手工 rejoin 恢复
 
@@ -284,31 +287,28 @@ MOVE-SCOPE <prefix> from <from-node-id> to <to-node-id>
 | `[cluster] enabled` | `--cluster` | `KEVY_CLUSTER=1` | `false` | 把每个 shard 暴露在 per-shard 端口。 |
 | `[cluster] port_base` | `--cluster-port-base` | `KEVY_CLUSTER_PORT_BASE` | `port` 的值 | shard `i` 绑定 `port_base + 1 + i`。 |
 
-## 复制(主侧)
+## 复制
 
-| TOML | CLI | Env | 默认 |
-|------|-----|-----|------|
-| `[replication] listen_port` | `--replication-listener` | `KEVY_REPLICATION_LISTEN_PORT` | 未设(关)|
+仅 TOML —— 复制没有 CLI flag 或环境变量:
 
-## 复制(副本侧)
+| TOML | 默认 | 含义 |
+|------|------|------|
+| `[replication] role` | `"standalone"` | `"primary"` 向副本流出;`"replica"` 从 `upstream` 拉取;`"standalone"` = 子系统休眠。 |
+| `[replication] listen_port_base` | `0`(= `port` + 10000)| shard `i` 在 base + `i` 上绑定复制端口;副本也绑定(v3.15 提升对称性)。 |
+| `[replication] upstream` | 未设置 | 仅副本:主节点复制端口基址的 `host:port`。 |
 
-| TOML | CLI | Env | 默认 |
-|------|-----|-----|------|
-| `[replication] upstream` | `--replicate-from` | `KEVY_REPLICATE_FROM` | 未设 |
-| `[replication] replica_id` | `--replica-id` | `KEVY_REPLICA_ID` | 从主机名派生 |
-| `[replication] reconnect_min_ms` | | | `100` |
-| `[replication] reconnect_max_ms` | | | `5000` |
+完整键列表(backlog 容量、`replica_read_only`、`replica_max_staleness_ms`、`min_replicas_to_write`、`single_source`)见 [`docs/replication.md`](replication.md)。
 
 ## 作用域多写者 + 选举
 
 | TOML | 含义 |
 |------|------|
-| `[cluster] node_id` | 本节点稳定标识。 |
-| `[cluster] peers` | 集群每个成员的 `<node_id>@<host>:<port>` 列表。 |
+| `[cluster] node_id` | 本节点稳定标识(≤ 32 B ASCII)。 |
+| `[cluster] peers` | 集群每个成员的 `<node_id>@<host>:<elect_port>:<client_port>` 列表(旧式两字段形式:两个端口相等)。 |
 | `[cluster] scopes` | `prefix=writer[\|fallback]` 条目,逗号分隔。 |
-| `[cluster] elect_port_base` | 本地 elect 侧车绑定的 UDP 端口。 |
-| `[cluster] hb_interval_ms` | 心跳发送节拍(默认 `500`)。 |
-| `[cluster] down_after_ms` | peer 在多少毫秒无心跳后被标 DOWN(默认 `5000`)。 |
+| `[cluster] elect_port_base` | 选举控制面绑定的 TCP 端口;`0`(默认)= `port` + 200。 |
+
+选举时序(心跳 200 ms、5 s 静默判 DOWN、选举超时 3 s)是固定常量,不是配置键。
 
 ---
 
@@ -316,7 +316,7 @@ MOVE-SCOPE <prefix> from <from-node-id> to <to-node-id>
 
 - **单节点集群模式还是单进程。** 它买到的是客户端侧键路由,而不是主机级容错。要容错请加副本。
 - **代理端口仍然可用。** 它对非集群客户端继续工作并保持正确,只是多了跨 shard 跳。
-- **拓扑是静态的。** `peers` 与 `scopes` 启动时从配置读取。变更靠"推新配置,重启"。设计上没有 gossip。
+- **成员关系是静态的;角色是动态的。** `peers` 与 `scopes` 启动时从配置读取 —— 成员变更靠"推新配置,重启",设计上没有 gossip。在这张静态表内部,选举在运行时移动主节点角色(v3.15);故障节点永远不会被自动顶替。
 - **`MOVE-SCOPE` 会静默化该前缀的写入。** 窗口受切片发送时间限制,GB 级作用域在 LAN 上是个位数秒。远大于此的前缀请安排在维护窗口。
 - **以 embed 作作用域写者面向服务形态负载**(账单服务、认证服务),不面向多 TB 数据集。
 - **回退接受写之后的手工 rejoin 恢复。** 在重新启用前把回退节点的数据目录拷给写者;没有自动共识追赶。
@@ -348,7 +348,7 @@ MOVE-SCOPE <prefix> from <from-node-id> to <to-node-id>
 成功。kevy 在服务端跨 slot 执行 `MGET`、`MSET`、`SUNION`、事务与阻塞扇出,而不是返回 `-CROSSSLOT`。`{hashtag}` 共位对于原子敏感场景仍然有用,但不再是正确性硬要求。
 
 **没有运维介入时如何扛过写者崩溃?**
-为作用域声明一个回退(`prefix=writer|fallback`)并在每个节点跑 `kevy-elect`。当写者心跳错过 `down_after_ms`,回退开始接受该前缀的写;客户端收到 `-MISDIRECTED writer is <fallback>` 后跟进。原写者回来后,执行手工 rejoin 恢复。
+对复制主节点:在每个节点上配好 `[cluster]` 块(`node_id`、`elect_port_base`、`peers`)—— 死亡的主节点在 `down_after`(5 s)后被检测到,最领先的副本被选来顶替;重新加入的前主节点会自动降级并重同步(见 [`docs/availability.md`](availability.md))。对作用域写者:声明一个回退(`prefix=writer|fallback`)—— 当写者心跳错过 `down_after`,回退开始接受该前缀的写,客户端收到 `-MISDIRECTED writer is <fallback>` 后跟进;原写者回来后,执行手工 rejoin 恢复。
 
 **为什么 gossip / Raft 永远不在范围内?**
 在每次写下塞共识日志的成本,会抹掉让 kevy 值得选用的吞吐与尾延迟优势。静态配置 + 多数派心跳的设计给你切换分支,而不必在热路径上付出状态机复制的代价。如果你的负载真的需要一个共识支撑的 KV,kevy 就是错的工具。

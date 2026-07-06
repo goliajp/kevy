@@ -84,7 +84,7 @@ UDS vs 同一 kevy 二进制的 TCP loopback:
 | 可观测 | `lsof` / `ss -xl` | `ss -tln`、`netstat`、`tcpdump` |
 | 客户端配置 | `unix:///path` 或 `-s /path` | `host:port` |
 
-吞吐收益取决于负载形态 —— 小载荷、低连接的格子收益最大(loopback 每操作税在它们上面占主导);CPU 饱和的格子收益较小(传输不是瓶颈)。实测数据见 [bench/REPORT.md](https://github.com/goliajp/kevy/blob/master/bench/REPORT.md)。
+吞吐收益取决于负载形态 —— 小载荷、低连接的格子收益最大(loopback 每操作税在它们上面占主导);CPU 饱和的格子收益较小(传输不是瓶颈)。实测数据见 [bench/REPORT.md](https://github.com/goliajp/kevy/blob/develop/bench/REPORT.md)。
 
 ## FAQ
 
@@ -102,7 +102,7 @@ UDS vs 同一 kevy 二进制的 TCP loopback:
 
 ### 我的客户端库能用 UDS 吗?
 
-大多数能。`redis-cli` 与 `redis-benchmark` 接受 `-s <path>`。ioredis、node-redis、redis-py、redis-rb、go-redis、lettuce、jedis,以及内置的 [kevy-client](https://github.com/goliajp/kevy/tree/master/crates/kevy-client) / [kevy-client-async](https://github.com/goliajp/kevy/tree/master/crates/kevy-client-async) 都接受 `unix:///path` URL 或一个明确的 socket-path 选项。具体键名请查你 driver 的连接选项文档。
+大多数能。`redis-cli` 与 `redis-benchmark` 接受 `-s <path>`。ioredis、node-redis、redis-py、redis-rb、go-redis、lettuce、jedis,以及内置的 [kevy-client](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client) / [kevy-client-async](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client-async) 都接受 `unix:///path` URL 或一个明确的 socket-path 选项。具体键名请查你 driver 的连接选项文档。
 
 ### 如果我所有客户端都在同主机,能不能完全丢掉 TCP?
 

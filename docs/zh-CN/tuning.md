@@ -90,6 +90,29 @@ redis-cli -s /tmp/kevy.sock SET foo bar
 
 **绑定地址警告。** kevy 目前没有 AUTH 也没有 TLS。绑到非 loopback 地址(`--bind 0.0.0.0` 或任何公网接口)会打印启动警告,因为网络上任何东西都能下命令。把 kevy 跑在私网边界之内,或在前面放一个做认证的代理。
 
+### 复制与可用性
+
+仅当运行主/副本拓扑时相关([docs/replication.md](replication.md)、[docs/availability.md](availability.md))。
+
+**端口布局。** 每个节点使用三个平面,默认都从客户端端口派生:
+
+| 平面 | 端口 | 备注 |
+|------|------|------|
+| 客户端 RESP | `port`(如 6004)| 客户端以及 `peers` 里的 client-port 指的就是它 |
+| 复制 | `listen_port_base + shard_i`;默认 base = `port` + 10000 | `nshards` 个连续端口;副本也绑定这一段(v3.15)|
+| 选举 | `elect_port_base`;默认 = `port` + 200 | 每节点一个控制面监听 |
+
+在一台机器上共同托管多个实例:客户端端口至少相隔 `nshards`,否则默认复制端口段会冲突。`FAILOVER` 与自动切换上游都假定 `port + 10000` 的约定 —— 启用切主的部署请把 `listen_port_base` 留在默认值。
+
+**一致性旋钮。** 两个 `[replication]` 键用可用性换更强保证(完整阶梯见 [docs/availability.md](availability.md)):
+
+| 旋钮 | 默认 | 作用 |
+|------|------|------|
+| `replica_max_staleness_ms` | `0`(关)| 副本最近一次主节点心跳早于该界限时,以 `-STALE` 拒绝读;心跳以 1 Hz 随流而行,所以低于约 2 s 的界限在健康链路上也会触发 |
+| `min_replicas_to_write` | `0`(关)| 健康副本少于 N 个时,主节点以 `-NOREPLICAS` 拒绝写 |
+
+按调用的栅栏只花一次阻塞调用,不需要常驻配置:主节点上的 `WAIT n timeout`,副本上读己之写的 `REPL.TOKEN` + `REPL.WAIT`。两者都把 `timeout 0` 解释为"永远等",硬上限 60 s。
+
 ### Linux 内核旋钮
 
 两个主机级杠杆能挪动 kevy 之下的内核底线。两者都只适合 benchmark / 单租户场景 —— 应用前先读取舍。
@@ -141,6 +164,8 @@ addr2line -e ./target/release-perf/kevy -f -i 0x<addr>
 | 设 `maxmemory` | 写入可能失败(`noeviction`)或触发驱逐(`allkeys-*`)| 内存占用有界 |
 | 提高 `maxmemory-samples` | 每次驱逐 CPU 上升 | 近似 LRU/LFU 选牺牲品更好 |
 | Unix-domain socket | 仅本地;文件系统权限的安全模型 | 跳过 TCP loopback 栈 |
+| 设 `replica_max_staleness_ms` | 落后副本上的读会失败(`-STALE`)直到它追上 | 读陈旧度有界 |
+| 设 `min_replicas_to_write` | 写可用性与副本健康耦合(`-NOREPLICAS`)| 不再向虚空写入 |
 | `mitigations=off` | Spectre / Meltdown / MDS / 等缓解全关 | 把 syscall 路径税收回来 |
 | 对 `.text` 上 `MADV_HUGEPAGE` | 无意义成本 | 分派循环 iTLB 占用更小 |
 | `release-perf` 构建 | 二进制更大(带调试行表)| `perf` 能解析到符号 |

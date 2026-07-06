@@ -4,9 +4,9 @@ kevy のクラスタ機能には独立した 2 つのレイヤがあります �
 
 ## 2 レイヤの一目見て
 
-**シングルノードクラスタモード。** 1 つの kevy プロセスがキー空間を N シャードに分割し、各シャードを決定論的なシャード別ポートで仮想クラスタノードとして公開します。`CLUSTER SLOTS / SHARDS / NODES` は本物の CRC16 パーティションを報告します。キーを意識するクライアント(`redis-cli -c`、`redis-benchmark --cluster`、市販のクラスタ対応ライブラリ、同梱の [`ClusterClient`](https://github.com/goliajp/kevy/blob/master/crates/kevy-client/examples/cluster.rs))は各キーをハッシュして所有シャードに直接接続します。利得は機械的です — サーバー側のクロスシャードホップが消えると、スループットとテール遅延に直接効きます。
+**シングルノードクラスタモード。** 1 つの kevy プロセスがキー空間を N シャードに分割し、各シャードを決定論的なシャード別ポートで仮想クラスタノードとして公開します。`CLUSTER SLOTS / SHARDS / NODES` は本物の CRC16 パーティションを報告します。キーを意識するクライアント(`redis-cli -c`、`redis-benchmark --cluster`、市販のクラスタ対応ライブラリ、同梱の [`ClusterClient`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster.rs))は各キーをハッシュして所有シャードに直接接続します。利得は機械的です — サーバー側のクロスシャードホップが消えると、スループットとテール遅延に直接効きます。
 
-**マルチノードクラスタ。** kevy サーバーは**プライマリ**として 1 つ以上の**レプリカ**(kevy サーバー、またはプロセス内の [`kevy-embedded`](https://github.com/goliajp/kevy/tree/master/crates/kevy-embedded) ストア)に書き込みログをストリーミングできます。プライマリは**スコープ付き書き込み**をプレフィックスごとに委譲もできます。`[cluster] scopes` が、`app:billing:*` の書き込みはどのノード、`app:auth:*` はどのノード、と宣言します。違うノードに着地した書き込みは `-MISDIRECTED writer is <host:port>` を受け取り、クライアントが追従します。[`kevy-elect`](https://github.com/goliajp/kevy/tree/master/crates/kevy-elect) はクォーラムハートビートを提供し、ライターを DOWN とフラグして宣言済みのフォールバックを昇格させます。オペレータ発行の `MOVE-SCOPE` は quiesce 窓のもとでプレフィックスを移行します。
+**マルチノードクラスタ。** kevy サーバーは**プライマリ**として 1 つ以上の**レプリカ**(kevy サーバー、またはプロセス内の [`kevy-embedded`](https://github.com/goliajp/kevy/tree/develop/crates/kevy-embedded) ストア)に書き込みログをストリーミングできます。プライマリは**スコープ付き書き込み**をプレフィックスごとに委譲もできます。`[cluster] scopes` が、`app:billing:*` の書き込みはどのノード、`app:auth:*` はどのノード、と宣言します。違うノードに着地した書き込みは `-MISDIRECTED writer is <host:port>` を受け取り、クライアントが追従します。[`kevy-elect`](https://github.com/goliajp/kevy/tree/develop/crates/kevy-elect) はクォーラムコントロールプレーンを提供します。死んだノードを DOWN とフラグし、レプリケーショントポロジのために交代プライマリを選出し(v3.15)、スコープの宣言済みフォールバックを昇格させます。オペレータ発行の `MOVE-SCOPE` は quiesce 窓のもとでプレフィックスを移行します。
 
 ## このドキュメントが必要になるとき
 
@@ -16,7 +16,7 @@ kevy のクラスタ機能には独立した 2 つのレイヤがあります �
 | 1 ホスト上で市販の Redis Cluster ツールと互換にしたい | シングルノードクラスタモード |
 | 別マシンまたはプロセス内から hot reads を返したい | マルチノード: プライマリ + レプリカ(またはレプリカとして組み込む) |
 | キープレフィックスでパーティション分けされた複数ライターを別ホストで | マルチノード: スコープ付きマルチライター |
-| 人を介さずにライタークラッシュを乗り切りたい | マルチノード: `kevy-elect` + スコープフォールバック |
+| 人を介さずにライタークラッシュを乗り切りたい | マルチノード: `kevy-elect` クォーラム選挙(プライマリ)/ スコープフォールバック(スコープライター) |
 | 1 プロセス、低負荷、普通のクライアント | どちらも不要 — デフォルトのプロキシポートで十分 |
 
 2 レイヤは合成可能です。クラスタモードのプライマリが N シャードを広告し、各レプリカも N シャードで動き、ルーティングクライアントが両者を繋ぎます。
@@ -89,7 +89,7 @@ let removed = cc.del(&[b"a", b"b", b"c"])?;
 # Ok::<(), std::io::Error>(())
 ```
 
-実行可能なシード例は [`crates/kevy-client/examples/cluster.rs`](https://github.com/goliajp/kevy/blob/master/crates/kevy-client/examples/cluster.rs)、ベンチマークは [`crates/kevy-client/examples/cluster_bench.rs`](https://github.com/goliajp/kevy/blob/master/crates/kevy-client/examples/cluster_bench.rs) にあります。
+実行可能なシード例は [`crates/kevy-client/examples/cluster.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster.rs)、ベンチマークは [`crates/kevy-client/examples/cluster_bench.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster_bench.rs) にあります。
 
 ### ルーティングがクロスシャードホップを消す仕組み
 
@@ -137,14 +137,15 @@ let reply = cc.request_unkeyed(&[b"PING".to_vec()])?;
 
 ## プライマリとレプリカ
 
-kevy サーバーはプライマリ(デフォルト)、プライマリの書き込みログをミラーするレプリカ、または両方を同時に(カスケード)動作できます。プライマリは専用のレプリケーションリスナーを開きます。レプリカは接続し、最後に適用したオフセットを渡し、ストリーミングされたフレームをローカルシャードに適用します。
+kevy サーバーは、自分の書き込みログをストリーミングするプライマリにも、それをミラーするレプリカにもなれます(デフォルトのロールは `standalone` — レプリケーション休眠)。プライマリはシャードごとに専用のレプリケーションリスナーを bind します。レプリカは接続し、最後に適用したオフセットを渡し、ストリーミングされたフレームをローカルシャードに適用します。チェーンレプリケーション(レプリカのレプリカ)はサポートされません。
 
 ```toml
 # primary.toml
 port = 6004
 
 [replication]
-listen_port = 16004        # プライマリはここでログをストリーミング
+role             = "primary"
+listen_port_base = 16004    # 任意。デフォルトは port + 10000
 ```
 
 ```toml
@@ -152,17 +153,15 @@ listen_port = 16004        # プライマリはここでログをストリーミ
 port = 6004
 
 [replication]
-upstream    = "primary.local:16004"
-replica_id  = "replica-eu-1"           # レプリカごとに安定。再起動を超えて維持。
-# reconnect_min_ms = 100               # バックオフ範囲
-# reconnect_max_ms = 5000
+role     = "replica"
+upstream = "primary.local:16004"
 ```
 
-完全なサーバー側セマンティクス — バックログサイジング、スナップショット取り込み、カスケード — は [`docs/replication.md`](replication.md) にあります。本書にとって重要な事実は、同じワイヤプロトコルがクラスタモードのレプリケーションも運ぶことです: `[cluster] enabled = true` で動くプライマリは N シャードぶんの書き込みをストリーミングし、同じシャード数で動くレプリカがシャード対シャードで適用します。
+完全なサーバー側セマンティクス — バックログサイジング、スナップショット取り込み、ハートビートと ACK — は [`docs/replication.md`](replication.md) に、フェイルオーバー(計画的な `FAILOVER` とクラッシュ選挙)と整合性ラダーは [`docs/availability.md`](../availability.md) にあります。本書にとって重要な事実は、同じワイヤプロトコルがクラスタモードのレプリケーションも運ぶことです: `[cluster] enabled = true` で動くプライマリは N シャードぶんの書き込みをストリーミングし、同じシャード数で動くレプリカがシャード対シャードで適用します。
 
 ## レプリカとして組み込む
 
-[`kevy-embedded`](https://github.com/goliajp/kevy/tree/master/crates/kevy-embedded) のストアはプライマリに直接 subscribe して、ネットワークホップなしでプロセス内 reads を返せます。書き込みは `READONLY` でローカル拒否されます。
+[`kevy-embedded`](https://github.com/goliajp/kevy/tree/develop/crates/kevy-embedded) のストアはプライマリに直接 subscribe して、ネットワークホップなしでプロセス内 reads を返せます。書き込みは `READONLY` でローカル拒否されます。
 
 ```rust
 use kevy_embedded::Store;
@@ -231,15 +230,19 @@ writer.set(b"app:billing:invoice:42", b"...")?;
 
 ## `kevy-elect` クォーラムフェイルオーバー
 
-`kevy-elect` はクラスタの全メンバーが走らせるサイドカーハートビートです。各ノードは elect ポート(`elect_port_base + node_index`)に HB を投げ、各ノードは最近誰が生きていたかのスライディングウィンドウを保持します。ピアの最後の HB が `down_after`(デフォルト 5 s)を過ぎると、そのピアは `down_peers` 入りします。スコープの宣言済みフォールバックは各受領書き込みで `down_peers` を参照します: ライターが DOWN なら、フォールバックは自分をアクティブ所有者として扱って書き込みを受領し、他のノードのその後の書き込みはフォールバックに MISDIRECT されます。元ライターの HB が戻ると `down_peers` を抜け、次回の判断で暗黙にフォールバックは退きます。
+`kevy-elect` は、`[cluster] node_id` と `peers` の両方が設定されたとき、クラスタの全メンバーが走らせるプロセス内クォーラムコントロールプレーンです。各ノードは `elect_port_base`(デフォルト: クライアントポート + 200)に 1 本の TCP コントロールリスナーを bind し、全ピアにハートビートします。`down_after`(5 s)を超えて沈黙したピアは DOWN とフラグされます。メンバーシップは**静的**(オペレータ宣言の `peers` テーブル)で、ロールは**動的**です — 選挙はそのテーブルの内側でプライマリを動かします。選挙タイミング(`hb_interval` 200 ms、`down_after` 5 s、`election_timeout` 3 s)は本リリースでは固定定数で、config キーではありません。
+
+これが 2 つのフェイルオーバー面を駆動します。
+
+**レプリケーションプライマリ選挙(v3.15)。** 現プライマリが DOWN のとき、資格のあるレプリカ — 生存ピアの中で適用済みレプリケーションオフセットが最大のもの、タイは最小の `node_id` が破る — が立候補し、`election_timeout` 以内にクォーラム(`N/2 + 1`)の ACCEPT を必要とします。エポックと投票は、どの応答もノードを出る*前に* `<data_dir>/elect.meta` へ永続化されるため、クラッシュ再起動しても二重投票はあり得ません。勝者は書き込みを開き、敗者は自動でレプリケーション upstream を再ターゲットします。3 つのクランプがこれを支えます: 既知のプライマリがない**コールドスタート**は `down_after` の猶予窓を 1 回待ってから選挙します。**再起動**したクォーラムメンバーは選挙が落ち着くまで書き込みを保留します(config の `role = "primary"` は希望にすぎません)。厳密な過半数が見えないプライマリは 1 リースウィンドウ以内に**自分の書き込みをフェンス**します(`-NOREPLICAS primary lost quorum; writes fenced`)。運用ウォークスルーは [`docs/availability.md`](../availability.md) です。
+
+**スコープフォールバック。** スコープの宣言済みフォールバックは各受領書き込みで DOWN 集合を参照します: ライターが DOWN なら、フォールバックは自分をアクティブ所有者として扱って書き込みを受領し、他のノードのその後の書き込みはフォールバックに MISDIRECT されます。元ライターの HB が戻ると DOWN 集合を抜け、次回の判断で暗黙にフォールバックは退きます。
 
 | ノブ | 意味 | デフォルト |
 |------|---------|---------|
-| `node_id` | このノードの安定識別子(`<scope_owner>` 参照とマッチ) | 必須 |
-| `peers` | 全クラスタメンバーの `<node_id>@<host>:<port>` リスト | 必須 |
-| `elect_port_base` | ローカル elect サイドカーが bind する UDP ポート | `16100` |
-| `hb_interval_ms` | HB 発行周期 | `500` |
-| `down_after_ms` | HB なしでピアが DOWN とされるまでの時間 | `5000` |
+| `node_id` | このノードの安定識別子(≤ 32 B ASCII。スコープ所有者と選挙が参照) | 必須 |
+| `peers` | 全クラスタメンバーの `<node_id>@<host>:<elect_port>:<client_port>` リスト | 必須 |
+| `elect_port_base` | 選挙コントロールプレーンが bind する TCP ポート(ノードごとに 1 リスナー) | `0` = クライアントポート + 200 |
 
 ### 手動 rejoin リカバリ
 
@@ -284,31 +287,28 @@ MOVE-SCOPE <prefix> from <from-node-id> to <to-node-id>
 | `[cluster] enabled` | `--cluster` | `KEVY_CLUSTER=1` | `false` | 各シャードをシャード別ポートで公開。 |
 | `[cluster] port_base` | `--cluster-port-base` | `KEVY_CLUSTER_PORT_BASE` | `port` の値 | シャード `i` は `port_base + 1 + i` を bind。 |
 
-## レプリケーション(プライマリ側)
+## レプリケーション
 
-| TOML | CLI | 環境変数 | デフォルト |
-|------|-----|-----|---------|
-| `[replication] listen_port` | `--replication-listener` | `KEVY_REPLICATION_LISTEN_PORT` | 未設定(off) |
+TOML のみ — レプリケーションの CLI フラグや環境変数はありません:
 
-## レプリケーション(レプリカ側)
+| TOML | デフォルト | 意味 |
+|------|---------|---------|
+| `[replication] role` | `"standalone"` | `"primary"` はレプリカへストリーミング。`"replica"` は `upstream` から引く。`"standalone"` = サブシステム休眠。 |
+| `[replication] listen_port_base` | `0`(= `port` + 10000) | シャード `i` は base + `i` でレプリケーションを bind。レプリカも bind する(v3.15 昇格対称性)。 |
+| `[replication] upstream` | 未設定 | レプリカ専用: プライマリのレプリケーションポートベースの `host:port`。 |
 
-| TOML | CLI | 環境変数 | デフォルト |
-|------|-----|-----|---------|
-| `[replication] upstream` | `--replicate-from` | `KEVY_REPLICATE_FROM` | 未設定 |
-| `[replication] replica_id` | `--replica-id` | `KEVY_REPLICA_ID` | ホスト名から派生 |
-| `[replication] reconnect_min_ms` | | | `100` |
-| `[replication] reconnect_max_ms` | | | `5000` |
+完全なキー一覧(バックログサイジング、`replica_read_only`、`replica_max_staleness_ms`、`min_replicas_to_write`、`single_source`)は [`docs/replication.md`](replication.md) にあります。
 
 ## スコープ付きマルチライター + elect
 
 | TOML | 意味 |
 |------|---------|
-| `[cluster] node_id` | このノードの安定識別子。 |
-| `[cluster] peers` | 全クラスタメンバーの `<node_id>@<host>:<port>` リスト。 |
+| `[cluster] node_id` | このノードの安定識別子(≤ 32 B ASCII)。 |
+| `[cluster] peers` | 全クラスタメンバーの `<node_id>@<host>:<elect_port>:<client_port>` リスト(レガシーの 2 フィールド形式: 両ポートが等しい)。 |
 | `[cluster] scopes` | `prefix=writer[\|fallback]` エントリ、カンマ区切り。 |
-| `[cluster] elect_port_base` | ローカル elect サイドカーが bind する UDP ポート。 |
-| `[cluster] hb_interval_ms` | HB 発行周期(デフォルト `500`)。 |
-| `[cluster] down_after_ms` | HB なしでピアが DOWN とされるまでの時間(デフォルト `5000`)。 |
+| `[cluster] elect_port_base` | 選挙コントロールプレーンが bind する TCP ポート。`0`(デフォルト)= `port` + 200。 |
+
+選挙タイミング(ハートビート 200 ms、5 秒沈黙で DOWN、選挙タイムアウト 3 秒)は固定定数で、config キーではありません。
 
 ---
 
@@ -316,7 +316,7 @@ MOVE-SCOPE <prefix> from <from-node-id> to <to-node-id>
 
 - **シングルノードクラスタモードは 1 プロセスです。** 買えるのはクライアント側のキー・ルーティングであり、ホストレベルの耐障害性ではありません。そちらが必要ならレプリカを足してください。
 - **プロキシポートは生き続けます。** クラスタを話さないクライアントは引き続き動作し、正しいまま — ただしクロスシャードホップ付きで。
-- **トポロジは静的です。** `peers` と `scopes` は起動時に config から読まれます。変更は「新 config を push して再起動」です。設計上、ゴシップはありません。
+- **メンバーシップは静的、ロールは動的です。** `peers` と `scopes` は起動時に config から読まれます — メンバーシップ変更は「新 config を push して再起動」で、設計上ゴシップはありません。その静的テーブルの内側で、選挙はランタイムにプライマリロールを動かします(v3.15)。故障ノードが自動で置き換えられることはありません。
 - **`MOVE-SCOPE` はプレフィックスの書き込みを quiesce します。** 窓はスライス送出時間で有界です。LAN 経由の GB クラスのスコープなら 1 桁秒です。それより遥かに大きいプレフィックスはメンテナンス窓に合わせて実施してください。
 - **スコープライターとしての組み込みはサービス形状のワークロード**(請求サービス、認証サービス)を想定し、マルチ TB のデータセットを想定していません。
 - **フォールバック受領後の手動 rejoin リカバリ。** 再有効化前にフォールバックのデータディレクトリをライターへコピー。自動コンセンサスキャッチアップはありません。
@@ -348,7 +348,7 @@ MOVE-SCOPE <prefix> from <from-node-id> to <to-node-id>
 成功します。kevy はクロススロットの `MGET`、`MSET`、`SUNION`、トランザクション、ブロッキングファンアウトを `-CROSSSLOT` を返さずサーバー側で実行します。アトミック性が重要なケースで `{hashtag}` の同居は依然有用ですが、もはや正しさのための要件ではありません。
 
 **オペレータなしでライタークラッシュを乗り切るには?**
-スコープにフォールバックを宣言(`prefix=writer|fallback`)し、全ノードで `kevy-elect` を走らせます。ライターが `down_after_ms` を超えてハートビートを欠くと、フォールバックがそのプレフィックスの書き込みを受け始めます。クライアントは `-MISDIRECTED writer is <fallback>` を受けて追従します。元ライターが復帰したら手動 rejoin リカバリを実行します。
+レプリケーションプライマリの場合: 全ノードに `[cluster]` ブロック(`node_id`、`elect_port_base`、`peers`)を構成します — 死んだプライマリは `down_after`(5 s)後に検出され、最も進んだレプリカがその座に選出されます。再合流した旧プライマリは自動で降格して再同期します([`docs/availability.md`](../availability.md) を参照)。スコープライターの場合: フォールバックを宣言(`prefix=writer|fallback`)します — ライターが `down_after` を超えてハートビートを欠くと、フォールバックがそのプレフィックスの書き込みを受け始め、クライアントは `-MISDIRECTED writer is <fallback>` を受けて追従し、元ライターが復帰したら手動 rejoin リカバリを実行します。
 
 **なぜゴシップ/Raft は恒久的にスコープ外なのですか?**
 全書き込みの下にコンセンサスログを置くコストは、kevy を選ぶ理由になっているスループットとテール遅延の優位を打ち消してしまいます。静的 config + クォーラムハートビート設計はホットパス上で状態機械レプリケーションを払わずにフェイルオーバー分岐を与えてくれます。本当にコンセンサスバックの key-value ストアが必要なワークロードなら、kevy は適さない道具です。
