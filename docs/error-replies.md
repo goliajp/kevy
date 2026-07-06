@@ -31,16 +31,18 @@ Errors are part of kevy's user-facing contract. Adding, renaming, or repurposing
 | `-EXECABORT Transaction discarded because of previous errors.` | A queued command had a syntax error during MULTI; EXEC refuses the batch. | Fix the offending queued command, then `MULTI` / queue / `EXEC` again. |
 | `-MOVED <slot> <host:port>` | Key's hash slot is not owned by this node. | See [Cluster-routing replies](#cluster-routing-replies). |
 | `-CROSSSLOT Keys in request don't hash to the same slot` | Multi-key command spans more than one hash slot. | See [Cluster-routing replies](#cluster-routing-replies). |
-| `-MISDIRECTED writer is <host:port>` | Write landed on a node that doesn't own this key's scope. | See [Cluster-routing replies](#cluster-routing-replies). |
-| `-QUIESCED migrating to <host:port>` | The slot or scope is mid-migration and frozen on this node. | See [Cluster-routing replies](#cluster-routing-replies). |
+| `-MISDIRECTED writer is <host:port>` | Write landed on a node that doesn't own this key's scope, or `REPL.WAIT` could not serve read-your-writes on this replica (timeout or generation mismatch). | See [Cluster-routing replies](#cluster-routing-replies); for `REPL.WAIT`, read the primary at `<host:port>`. |
+| `-QUIESCED migrating to <host:port>` | The slot or scope is mid-migration and frozen on this node, or the node is mid-`FAILOVER` handover to `<host:port>`. | See [Cluster-routing replies](#cluster-routing-replies). |
 | `-OOM command not allowed when used memory > 'maxmemory'` | Write-class command with policy `noeviction` after the limit is exceeded. | Raise `maxmemory`, set an eviction policy (e.g. `allkeys-lru`), or `DEL` to free room. Existing data is intact. |
 | `-READONLY You can't write against a read only replica.` | Write command sent to a replica node. | Send to the primary, or use a routing client. |
+| `-NOREPLICAS Not enough good replicas to write.` | Primary with `min_replicas_to_write = N` sees fewer than N healthy replicas. | Back off and retry; restore the replicas (see [docs/availability.md](https://github.com/goliajp/kevy/blob/master/docs/availability.md)). |
+| `-NOREPLICAS primary lost quorum; writes fenced` | An elect-quorum primary cannot reach a strict majority of its peers (partition minority side); writes self-fence for the lease window. | Back off and retry — the fence lifts when the partition heals, or the majority elects a new primary your routing client will find. |
+| `-STALE replica is stale; read the primary or raise replica_max_staleness_ms` | Read sent to a replica whose last primary heartbeat is older than its `replica_max_staleness_ms` bound. | Read the primary until the replica catches up, or raise/disable the bound. |
 | `-READONLY can't write against a read-only script` | Script was evaluated via `EVAL_RO` / `EVALSHA_RO` and attempted a write. | Use the writable `EVAL` / `EVALSHA` variant. |
 | `-MISCONF Errors writing to the AOF file: <io-error>` | AOF append failed (commonly `ENOSPC`). | Free disk space; in-memory state remains consistent; restart replays whatever reached disk. |
 | `-MISCONF BGSAVE failed: <io-error>` | Background snapshot writer failed. | Free disk space or repair the `data_dir` mount. Live data is unaffected. |
 | `-NOSCRIPT No matching script. Please use EVAL.` | `EVALSHA <sha>` requested a script not in the cache. | Call `EVAL` directly (kevy auto-caches) or `SCRIPT LOAD` first. |
 | `-BUSY Script is running.` | A long-running Lua script is blocking the shard. | `SCRIPT KILL` to interrupt (no-op if nothing is running). The `lua-time-limit` config caps runaway scripts. |
-| `-LOADING kevy is loading the dataset in memory` | Server is replaying AOF or loading snapshot at startup. | Wait and retry; `PING` is accepted during loading. |
 
 ### Prefixes kevy never emits
 
@@ -84,9 +86,6 @@ No. `CROSSSLOT` only fires for multi-key commands. If you see it on what looks l
 
 **I got `-OOM` — is my data corrupt?**
 No. `-OOM` is rejected at command-admission time; the write never landed. The keyspace is in exactly the state it was before the command. Free room (`DEL` / set an eviction policy / raise `maxmemory`) and retry.
-
-**`-LOADING` keeps coming back — how long should I wait?**
-For as long as the AOF / snapshot replay takes (proportional to dataset size). `PING` is accepted during loading, so health checks still work. If `-LOADING` persists indefinitely, inspect server logs — a partially corrupt AOF can stall replay.
 
 **A queued MULTI command returned `-EXECABORT` — were any writes applied?**
 No. `EXECABORT` means the transaction was rejected as a batch; nothing in the queued sequence was executed. Fix the offending command and reopen with `MULTI`.

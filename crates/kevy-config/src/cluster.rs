@@ -35,8 +35,8 @@ pub struct ClusterSection {
     /// are set, so existing configs need no edit.
     pub node_id: String,
     /// First election-control listener port; shard `i` binds at
-    /// `elect_port_base + i`. Default `0` → `port_base + 100` (or
-    /// `server.port + 101` when cluster mode is off).
+    /// `elect_port_base + i`. Default `0` → `server.port + 200`
+    /// (locked by the `resolved_elect_port_base` unit test).
     pub elect_port_base: u16,
     /// Operator-declared peer list for `kevy-elect`. Empty when
     /// failover is not configured. Each entry is one cluster node

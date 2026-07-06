@@ -149,9 +149,11 @@ When [`kevy-elect`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-ele
 | `node_id` | unset | Stable id of this node (≤ 32 B ASCII). Used as the tie-breaker in elections. |
 | `elect_port_base` | unset | Control-plane TCP port for heartbeats and ballots. Shard 0 binds on `elect_port_base + 0`. |
 | `peers` | empty | `id@host:port,…` for every node in the cluster including self. Empty means the elector is dormant. |
-| `hb_interval_ms` | `200` | Period between outbound heartbeats per peer. |
-| `down_after_ms` | `5000` | A peer is flagged DOWN after this many ms without a heartbeat. |
-| `election_timeout_ms` | `3000` | A candidate waits this long for quorum `ACCEPT`s. |
+
+Election timing is FIXED CONSTANTS, not config keys: heartbeats every
+200 ms, a peer is DOWN after 5 s of silence, a candidate waits 3 s
+for quorum ACCEPTs. (Earlier revisions of this page listed them as
+`[cluster]` keys — the config parser rejects those.)
 
 Quorum is `N/2 + 1`. N=2 needs both nodes alive (either down locks the survivor read-only); the linter warns and any deployment that needs failover should use N ≥ 3.
 
