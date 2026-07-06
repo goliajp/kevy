@@ -34,12 +34,23 @@ pub enum SnapshotMarker {
     /// `+SNAPSHOT_END <ack_offset>\r\n` — end of snapshot; the next
     /// live frame's offset will equal `ack_offset`.
     End(u64),
-    /// `+PING <next_offset>\r\n` — v3.14 in-stream heartbeat: the
-    /// primary's current `next_offset`, sent every ~1s so a replica
-    /// can compute its own lag (applied vs primary) and judge link
-    /// liveness without a request/response round trip. Out-of-band:
-    /// occupies no offset space.
-    Ping(u64),
+    /// `+PING <generation> <next_offset>\r\n` — v3.14 in-stream
+    /// heartbeat: the primary's current feed generation + `next_offset`,
+    /// sent every ~1s so a replica can compute its own lag (applied vs
+    /// primary) and judge link liveness without a request/response
+    /// round trip. Out-of-band: occupies no offset space.
+    ///
+    /// v3.16 D2 added the generation (REPL.TOKEN / REPL.WAIT compare
+    /// token generations against the replica's last-seen upstream
+    /// generation). A legacy one-number `+PING <next_offset>\r\n` line
+    /// still decodes — `generation` reads as `0`, the "unknown" value
+    /// no real feed ever serves (feed generations start at 1).
+    Ping {
+        /// Primary's feed generation at send time.
+        generation: u64,
+        /// Primary's `next_offset` when the heartbeat was emitted.
+        next_offset: u64,
+    },
 }
 
 /// Encode the snapshot-begin marker. Allocates the exact 11 bytes.
@@ -72,10 +83,13 @@ pub fn encode_snapshot_chunk(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Encode the in-stream heartbeat (v3.14): `+PING <next_offset>\r\n`.
-pub fn encode_ping(next_offset: u64) -> Vec<u8> {
-    let mut out = Vec::with_capacity(24);
+/// Encode the in-stream heartbeat (v3.14, gen-carrying since v3.16):
+/// `+PING <generation> <next_offset>\r\n`.
+pub fn encode_ping(generation: u64, next_offset: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(48);
     out.extend_from_slice(b"+PING ");
+    push_u64(&mut out, generation);
+    out.push(b' ');
     push_u64(&mut out, next_offset);
     out.extend_from_slice(b"\r\n");
     out
@@ -165,8 +179,23 @@ pub fn decode_snapshot_marker(buf: &[u8]) -> Result<Option<(SnapshotMarker, usiz
         return Ok(Some((SnapshotMarker::End(offset), eol + 2)));
     }
     if let Some(rest) = line.strip_prefix(b"PING ") {
-        let offset = parse_decimal(rest).ok_or(WireError::BadEnvelope)?;
-        return Ok(Some((SnapshotMarker::Ping(offset), eol + 2)));
+        // Two-number form (v3.16+): `<generation> <next_offset>`.
+        // One-number legacy form (v3.14): `<next_offset>` — decodes
+        // with generation 0 ("unknown"; real generations start at 1).
+        let marker = match rest.iter().position(|&b| b == b' ') {
+            Some(sp) => {
+                let generation =
+                    parse_decimal(&rest[..sp]).ok_or(WireError::BadEnvelope)?;
+                let next_offset =
+                    parse_decimal(&rest[sp + 1..]).ok_or(WireError::BadEnvelope)?;
+                SnapshotMarker::Ping { generation, next_offset }
+            }
+            None => SnapshotMarker::Ping {
+                generation: 0,
+                next_offset: parse_decimal(rest).ok_or(WireError::BadEnvelope)?,
+            },
+        };
+        return Ok(Some((marker, eol + 2)));
     }
     Err(WireError::BadEnvelope)
 }

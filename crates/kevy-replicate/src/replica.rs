@@ -69,6 +69,10 @@ pub enum ReplicaEvent {
     /// time. Lets the replica compute lag (applied vs primary) and
     /// judge link liveness. Occupies no offset space.
     Ping {
+        /// Primary's feed generation at send time (v3.16 — the
+        /// REPL.TOKEN / REPL.WAIT gen truth). `0` = the primary spoke
+        /// the pre-v3.16 one-number heartbeat ("unknown").
+        generation: u64,
         /// Primary's `next_offset` when the heartbeat was emitted.
         primary_offset: u64,
     },

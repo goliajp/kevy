@@ -200,7 +200,9 @@ for _ in $(seq 60); do   # MTTR window: 30s >> election timeout multiples
     sleep 0.5
 done
 [ -n "$NEWP" ] || {
-    echo "--- FORENSICS n2:"; tail -6 "$DIR/n2.out"; echo "--- n3:"; tail -6 "$DIR/n3.out"
+    echo "--- FORENSICS n2 elect:"; grep elect "$DIR/n2.out" | tail -8
+    echo "--- n3 elect:"; grep elect "$DIR/n3.out" | tail -8
+    echo "--- n1 elect:"; grep elect "$DIR/n1.out" | tail -6
     fail "no replica won the election after primary crash"
 }
 OTHER=$N3; [ "$NEWP" = "$N3" ] && OTHER=$N2

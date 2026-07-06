@@ -28,7 +28,7 @@ use std::time::SystemTime;
 
 use kevy_config::Config;
 use kevy_resp::{
-    ArgvView, RespVersion, encode_bulk, encode_error, encode_integer, encode_simple_string,
+    ArgvView, RespVersion, encode_bulk, encode_error, encode_simple_string,
     encode_verbatim,
 };
 use kevy_store::Store;
@@ -56,7 +56,9 @@ pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
             cluster::cmd_cluster(&cfg, store, args, out);
         }
         b"DEBUG" => cmd_debug(args, out),
-        b"WAIT" => cmd_wait(args, out),
+        b"WAIT" => crate::cmd_repl::cmd_wait(args, out),
+        b"REPL.TOKEN" => crate::cmd_repl::cmd_repl_token(args, out),
+        b"REPL.WAIT" => crate::cmd_repl::cmd_repl_wait(args, out),
         b"SHUTDOWN" => cmd_shutdown(args, out),
         b"CONFIG" => {
             let cfg = config_global::get();
@@ -358,17 +360,9 @@ fn cmd_debug<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     }
 }
 
-// ───────────── WAIT ─────────────
-
-fn cmd_wait<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
-    // WAIT numreplicas timeout — single-machine kevy has zero replicas,
-    // so the answer "how many replicas acked your writes" is always 0.
-    // Redis blocks until numreplicas or timeout; we return immediately.
-    if args.len() != 3 {
-        return wrong_args(out, "wait");
-    }
-    encode_integer(out, 0);
-}
+// WAIT lives in crate::cmd_repl since v3.16 (D1: real all-shard ack
+// barrier through the runtime; the dispatch fallback there handles
+// arity errors, the replica rejection, and runtime-less contexts).
 
 // ───────────── SHUTDOWN ─────────────
 

@@ -141,8 +141,10 @@ pub(crate) fn maybe_start(cfg: &Config) {
         match (role, primary) {
             (Role::Primary, _) => {
                 // We won (or started as primary): stop any replica
-                // runners — REPLICAOF NO ONE semantics.
-                crate::replica_state::stop_runners();
+                // runners — REPLICAOF NO ONE semantics. Promotion
+                // (we WERE a replica) additionally bumps the v3.16
+                // promotion counter → per-shard feed-gen fence.
+                crate::replica_state::promote_stop_runners();
                 eprintln!("kevy: elect — this node is PRIMARY (writes open)");
             }
             (Role::Replica, Some(pid)) if pid != my_id => {
@@ -190,17 +192,18 @@ fn build_elector(cfg: &Config, elect_cfg: ElectConfig) -> (Elector, Role) {
         ReplicationRole::Primary => Role::Primary,
         _ => Role::Replica,
     };
-    // v3.15 restart-role clamp: a RESTARTED node in an elect quorum
-    // must not come back as a writable primary on config say-so —
-    // a failover may have happened while it was down, and a stale
-    // primary would fork history. A persisted epoch > 0 is the
-    // restart tell; start as a conservative read-only replica and
-    // let the election (win → the D2 callback opens writes) decide.
-    if matches!(start_role, Role::Primary)
-        && kevy_elect::ElectorPersist::load(&persist).0 > 0
-    {
+    // v3.15/v3.16 role clamp: in an elect quorum, the config role is
+    // an initial PREFERENCE — write authority comes only from the
+    // election (win → the D2 callback opens writes). The original
+    // clamp keyed on a persisted epoch > 0, but a first-generation
+    // primary that dies BEFORE any election restarts with an empty
+    // elect.meta and would come back writable into a cluster that
+    // has since chosen someone else (fork). Cold-start cost of the
+    // unconditional clamp is one election round.
+    if matches!(start_role, Role::Primary) {
+        let epoch = kevy_elect::ElectorPersist::load(&persist).0;
         eprintln!(
-            "kevy: elect — persisted epoch found; starting as replica until the quorum confirms (restart-role clamp)"
+            "kevy: elect — quorum config: starting read-only until elected (persisted epoch {epoch})"
         );
         start_role = Role::Replica;
         crate::replica_state::set_read_only(true);

@@ -1401,3 +1401,275 @@ fn replicaof_command_dynamically_attaches_to_primary() {
     let _ = replica_handle.join();
     drop(replica_dir);
 }
+
+// ════════════════════════════════════════════════════════════════════
+// v3.16 D1+D2 — WAIT / REPL.TOKEN / REPL.WAIT
+// ════════════════════════════════════════════════════════════════════
+
+/// A replica Runtime attached to `primary` through the REAL runner
+/// fleet (`REPLICAOF` over the wire → `ReplicaRunner` → ACKs flow),
+/// so the primary's slot table sees genuine acked offsets — what WAIT
+/// counts and REPL.WAIT's gen registry learns from.
+struct AttachedReplica {
+    port: u16,
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+    _dir: tempdir::TempDir,
+}
+
+impl AttachedReplica {
+    fn start(primary_replication_port: u16) -> Self {
+        let (sender, receiver) = kevy_rt::replica_inbox_pair();
+        kevy::install_replica_senders_for_test(vec![sender]);
+        let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let port = free_port_block(1) + 1;
+        let dir = tempdir::TempDir::new("kevy-v316-replica");
+        let dir_path = dir.path().to_path_buf();
+        // SAFETY: see Server::start.
+        unsafe { std::env::set_var("KEVY_IO_URING", "0"); }
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_thread = stop.clone();
+        let handle = std::thread::spawn(move || {
+            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands)
+                .with_data_dir(dir_path)
+                .with_aof(false)
+                .with_replica_inboxes(vec![receiver]);
+            let _ = rt.run(stop_thread);
+        });
+        for _ in 0..400 {
+            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        drop(_gate);
+        // REPLICAOF over the wire — spawns the real runner fleet.
+        let mut admin = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        let port_str = primary_replication_port.to_string();
+        send_resp(&mut admin, &[b"REPLICAOF", b"127.0.0.1", port_str.as_bytes()]);
+        assert_eq!(read_line(&mut admin), b"+OK\r\n");
+        Self { port, stop, handle: Some(handle), _dir: dir }
+    }
+
+    fn shutdown(mut self) {
+        // REPLICAOF NO ONE over the wire — stops the runner fleet AND
+        // clears the process-global upstream/role state (a bare sender
+        // reinstall would leave runners + REPLICA_UPSTREAM behind and
+        // poison sibling ROLE tests).
+        if let Ok(mut admin) = std::net::TcpStream::connect(("127.0.0.1", self.port)) {
+            send_resp(&mut admin, &[b"REPLICAOF", b"NO", b"ONE"]);
+            let _ = read_line(&mut admin);
+        }
+        kevy::install_replica_senders_for_test(Vec::new());
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+/// Read one `:N\r\n` integer reply.
+fn read_int(s: &mut std::net::TcpStream) -> i64 {
+    let line = read_line(s);
+    assert!(line.starts_with(b":"), "expected integer, got {:?}", String::from_utf8_lossy(&line));
+    std::str::from_utf8(&line[1..line.len() - 2]).unwrap().parse().unwrap()
+}
+
+/// Read a flat `*N` array of `:int` elements.
+fn read_int_array(s: &mut std::net::TcpStream) -> Vec<i64> {
+    let header = read_line(s);
+    assert!(header.starts_with(b"*"), "expected array, got {:?}", String::from_utf8_lossy(&header));
+    let n: usize = std::str::from_utf8(&header[1..header.len() - 2]).unwrap().parse().unwrap();
+    (0..n).map(|_| read_int(s)).collect()
+}
+
+/// Poll the replica until it has learned the upstream generation off
+/// the 1 Hz heartbeat (REPL.TOKEN on a replica reports the per-runner
+/// view; gen 0 = not learned yet).
+fn wait_replica_gen_learned(replica_port: u16) -> u64 {
+    let mut c = std::net::TcpStream::connect(("127.0.0.1", replica_port)).unwrap();
+    for _ in 0..200 {
+        send_resp(&mut c, &[b"REPL.TOKEN"]);
+        let pairs = read_int_array(&mut c);
+        if pairs.len() == 2 && pairs[0] > 0 {
+            return pairs[0] as u64;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    panic!("replica never learned the upstream generation from the heartbeat");
+}
+
+/// Spawn a REAL kevy primary process (the debug binary cargo builds
+/// for this test crate). In-process primary+replica cannot coexist —
+/// the role flag is process-global (one kevy process = one role), so
+/// a same-process REPLICAOF would flip the "primary" runtime
+/// read-only too. The external process is the faithful topology.
+fn spawn_primary_process(replication_base: u16) -> (kevy_chaos::Harness, u16, std::path::PathBuf) {
+    let port = kevy_chaos::pick_free_port().expect("primary port");
+    let dir = std::env::temp_dir().join(format!("kevy-v316-primary-{port}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let cfg = kevy_chaos::HarnessConfig {
+        kevy_bin: std::path::PathBuf::from(env!("CARGO_BIN_EXE_kevy")),
+        threads: 1,
+        ..kevy_chaos::HarnessConfig::new(dir.clone(), port)
+            .with_fsync("everysec")
+            .with_extra_toml(format!(
+                "[replication]\nrole = \"primary\"\nlisten_port_base = {replication_base}\n"
+            ))
+    };
+    let primary = kevy_chaos::Harness::spawn(cfg).expect("spawn primary kevy");
+    (primary, port, dir)
+}
+
+#[test]
+fn wait_with_no_replica_times_out_to_zero_and_wait_zero_is_immediate() {
+    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // Defensive: clear any process-global replica state a paniced
+    // sibling left behind (the role flag gates WAIT's routing).
+    kevy::install_replica_senders_for_test(Vec::new());
+    let server = Server::start(1);
+    let mut c = std::net::TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    send_resp(&mut c, &[b"SET", b"w0", b"v"]);
+    assert_eq!(read_line(&mut c), b"+OK\r\n");
+    // numreplicas 1, timeout 200 ms, zero replicas → parks, then :0.
+    let t0 = std::time::Instant::now();
+    send_resp(&mut c, &[b"WAIT", b"1", b"200"]);
+    assert_eq!(read_int(&mut c), 0);
+    let elapsed = t0.elapsed();
+    assert!(
+        elapsed >= std::time::Duration::from_millis(150),
+        "WAIT 1 200 with no replica should park ~200ms, returned in {elapsed:?}"
+    );
+    // numreplicas 0 is satisfied by definition — immediate answer.
+    let t0 = std::time::Instant::now();
+    send_resp(&mut c, &[b"WAIT", b"0", b"5000"]);
+    assert_eq!(read_int(&mut c), 0);
+    assert!(t0.elapsed() < std::time::Duration::from_secs(1), "WAIT 0 must not park");
+    server.shutdown();
+}
+
+#[test]
+fn wait_one_with_live_replica_returns_at_least_one() {
+    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let replication_base = kevy_chaos::pick_free_port().expect("repl port");
+    let (primary, pport, pdir) = spawn_primary_process(replication_base);
+    let replica = AttachedReplica::start(replication_base);
+    let mut c = std::net::TcpStream::connect(("127.0.0.1", pport)).unwrap();
+    send_resp(&mut c, &[b"SET", b"w1", b"v"]);
+    assert_eq!(read_line(&mut c), b"+OK\r\n");
+    // The replica ACKs on the 100ms cadence + 1s heartbeat; a 5s
+    // budget is comfortable on a loaded CI box.
+    let _ = c.set_read_timeout(Some(std::time::Duration::from_secs(8)));
+    send_resp(&mut c, &[b"WAIT", b"1", b"5000"]);
+    let n = read_int(&mut c);
+    assert!(n >= 1, "expected at least 1 acked replica, got {n}");
+    replica.shutdown();
+    drop(primary);
+    let _ = std::fs::remove_dir_all(pdir);
+}
+
+#[test]
+fn repl_token_on_primary_reports_live_per_shard_pairs() {
+    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    kevy::install_replica_senders_for_test(Vec::new());
+    let server = Server::start(1);
+    let mut c = std::net::TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    send_resp(&mut c, &[b"REPL.TOKEN"]);
+    let before = read_int_array(&mut c);
+    assert_eq!(before.len(), 2, "1 shard → 1 (gen, offset) pair");
+    assert!(before[0] >= 1, "feed generation starts at ≥1, got {}", before[0]);
+    send_resp(&mut c, &[b"SET", b"tok", b"v"]);
+    assert_eq!(read_line(&mut c), b"+OK\r\n");
+    send_resp(&mut c, &[b"REPL.TOKEN"]);
+    let after = read_int_array(&mut c);
+    assert_eq!(after[0], before[0], "generation unchanged by a plain write");
+    assert!(
+        after[1] > before[1],
+        "next_offset must advance past the write: {} → {}",
+        before[1],
+        after[1]
+    );
+    server.shutdown();
+}
+
+#[test]
+fn repl_wait_read_your_writes_and_future_token_misdirects() {
+    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let replication_base = kevy_chaos::pick_free_port().expect("repl port");
+    let (primary, pport, pdir) = spawn_primary_process(replication_base);
+    let replica = AttachedReplica::start(replication_base);
+    let _gen = wait_replica_gen_learned(replica.port);
+
+    let mut w = std::net::TcpStream::connect(("127.0.0.1", pport)).unwrap();
+    let mut r = std::net::TcpStream::connect(("127.0.0.1", replica.port)).unwrap();
+
+    // Read-your-writes rounds: write → token → REPL.WAIT +OK → GET
+    // must see THE value written before the token, every round.
+    for round in 0..10 {
+        let val = format!("v{round}");
+        send_resp(&mut w, &[b"SET", b"ryw", val.as_bytes()]);
+        assert_eq!(read_line(&mut w), b"+OK\r\n");
+        send_resp(&mut w, &[b"REPL.TOKEN"]);
+        let tok = read_int_array(&mut w);
+        assert_eq!(tok.len(), 2);
+        let (g, off) = (tok[0].to_string(), tok[1].to_string());
+        let _ = r.set_read_timeout(Some(std::time::Duration::from_secs(8)));
+        send_resp(
+            &mut r,
+            &[b"REPL.WAIT", g.as_bytes(), off.as_bytes(), b"TIMEOUT", b"5000"],
+        );
+        let reply = read_line(&mut r);
+        assert_eq!(
+            reply,
+            b"+OK\r\n",
+            "round {round}: REPL.WAIT: {}",
+            String::from_utf8_lossy(&reply)
+        );
+        send_resp(&mut r, &[b"GET", b"ryw"]);
+        let header = read_line(&mut r);
+        assert_eq!(header, format!("${}\r\n", val.len()).as_bytes(), "round {round}");
+        let payload = read_line(&mut r);
+        assert_eq!(payload, format!("{val}\r\n").as_bytes(), "round {round}");
+    }
+
+    // A token from the future (offset the primary never reached):
+    // parks until TIMEOUT then -MISDIRECTED naming the upstream.
+    send_resp(&mut w, &[b"REPL.TOKEN"]);
+    let tok = read_int_array(&mut w);
+    let (g, off) = (tok[0].to_string(), (tok[1] + 1000).to_string());
+    let t0 = std::time::Instant::now();
+    send_resp(
+        &mut r,
+        &[b"REPL.WAIT", g.as_bytes(), off.as_bytes(), b"TIMEOUT", b"300"],
+    );
+    let reply = read_line(&mut r);
+    assert!(
+        reply.starts_with(b"-MISDIRECTED writer is "),
+        "future token must misdirect, got {}",
+        String::from_utf8_lossy(&reply)
+    );
+    assert!(
+        t0.elapsed() >= std::time::Duration::from_millis(250),
+        "future token should park ~TIMEOUT before misdirecting"
+    );
+
+    // A wrong-generation token misdirects IMMEDIATELY (no park).
+    let bad_gen = (tok[0] + 7).to_string();
+    let off_now = tok[1].to_string();
+    let t0 = std::time::Instant::now();
+    send_resp(
+        &mut r,
+        &[b"REPL.WAIT", bad_gen.as_bytes(), off_now.as_bytes(), b"TIMEOUT", b"5000"],
+    );
+    let reply = read_line(&mut r);
+    assert!(
+        reply.starts_with(b"-MISDIRECTED"),
+        "gen mismatch must misdirect, got {}",
+        String::from_utf8_lossy(&reply)
+    );
+    assert!(t0.elapsed() < std::time::Duration::from_secs(1), "gen mismatch must not park");
+
+    replica.shutdown();
+    drop(primary);
+    let _ = std::fs::remove_dir_all(pdir);
+}

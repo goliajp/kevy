@@ -82,9 +82,16 @@ fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
     match upper {
         b"HELLO" => Route::Hello,
         b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG" | b"INFO" | b"CLUSTER" | b"DEBUG"
-        | b"WAIT" | b"SHUTDOWN" | b"CLIENT" | b"SELECT" | b"BLPOP" | b"BRPOP" | b"BZPOPMIN" | b"BRPOPLPUSH" => {
+        | b"SHUTDOWN" | b"CLIENT" | b"SELECT" | b"BLPOP" | b"BRPOP" | b"BZPOPMIN" | b"BRPOPLPUSH" => {
             Route::Local
         }
+        // v3.16 D1+D2 — replication barriers. Well-formed happy paths
+        // route to the runtime's deferred waiters; every immediate
+        // answer (arity / role / gen mismatch) falls back to Local and
+        // the cmd_repl dispatch handlers emit the precise reply.
+        b"WAIT" => crate::cmd_repl::wait_route(args),
+        b"REPL.TOKEN" => crate::cmd_repl::token_route(args),
+        b"REPL.WAIT" => crate::cmd_repl::repl_wait_route(args),
         b"DBSIZE" => Route::Dbsize,
         b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
         b"SAVE" => Route::Save,

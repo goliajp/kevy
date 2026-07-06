@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering;
 use kevy_resp::parse_command_borrowed;
 
 use crate::Commands;
-use crate::message::Inbound;
+use crate::message::{Inbound, Part};
 use crate::shard::Shard;
 
 /// What [`Shard::dispatch_batch`] saw: how far the parse cursor got,
@@ -313,6 +313,26 @@ impl<C: Commands> Shard<C> {
                         }
                     }
                     Inbound::BlockCancel { origin, conn } => self.target_cancel(origin, conn),
+                    // ── v3.16 WAIT / REPL.WAIT barriers ──
+                    Inbound::ReplWaitArm { origin, conn, seq, need, deadline_ms } => {
+                        self.arm_repl_wait(origin, conn, seq, need, deadline_ms);
+                    }
+                    Inbound::ReplApplyArm { origin, conn, seq, min_offset, deadline_ms } => {
+                        self.arm_repl_apply(origin, conn, seq, min_offset, deadline_ms);
+                    }
+                    // A shard's (possibly deferred) barrier answer.
+                    // Mirrors `Inbound::Response` minus the
+                    // `xshard_inflight` bookkeeping — these were never
+                    // counted in-flight (a parked waiter must not pin
+                    // the origin in the busy-poll rung).
+                    Inbound::ReplDone { conn, seq, n } => {
+                        self.fold(conn, seq, Part::Int(n));
+                        if DIRECT_FLUSH {
+                            self.flush_conn(conn)?;
+                        } else {
+                            self.mark_pending_write_dirty(conn);
+                        }
+                    }
                 }
             }
         }
