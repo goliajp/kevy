@@ -96,6 +96,44 @@ jobs:
       - name: Clippy (workspace, all targets, all features)
         run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
 
+  # ───────────── contract gates: availability / AI / replication ─────────────
+  # The executable behavior contracts (v3.17): availgate's 12 clamps
+  # (replication truth, crash failover, the consistency ladder),
+  # aigate (discovery/self-explaining errors/MCP), repligate
+  # (snapshot ship + live frames + restart resync). Real processes,
+  # release binaries.
+  gates:
+    name: contract gates (availgate + aigate + repligate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-gates-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-gates-
+      - name: Build gate binaries (release)
+        run: |
+          cargo build --release -p kevy --bin kevy
+          cargo build --release -p kevy-mcp
+          cargo build --release -p kevy-cli
+          cargo build --release -p kevy-embedded --example primary_writer
+      - name: availgate (12 clamps, 3 phases)
+        run: bash bench/availgate.sh target/release/kevy
+      - name: aigate (wire + MCP)
+        run: bash bench/aigate.sh target/release/kevy
+      - name: repligate (ship + frames + restart)
+        run: bash bench/repligate.sh
+
   # ───────────── release-profile test (release/** + hotfix/** branches only) ─────────────
   # Catches release-only bugs (compiler eliminates branches, sub-microsecond
   # timings round to zero, etc.) before they reach the publish workflow.
