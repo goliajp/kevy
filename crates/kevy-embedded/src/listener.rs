@@ -12,6 +12,9 @@ use crate::store::WeakStore;
 
 mod verbs;
 
+/// crate-internal re-export for [`crate::Store::dispatch_readonly`].
+pub(crate) use verbs::dispatch as verbs_dispatch;
+
 /// Spawn the accept loop. Holds only a [`WeakStore`] — the listener
 /// never keeps the store alive; conns error out after the store
 /// drops.

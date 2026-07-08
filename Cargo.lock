@@ -463,6 +463,8 @@ dependencies = [
 name = "kevy-cli"
 version = "3.17.2"
 dependencies = [
+ "kevy-embedded",
+ "kevy-persist",
  "kevy-resp",
  "kevy-resp-client",
 ]
