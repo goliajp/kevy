@@ -1,30 +1,30 @@
 # 持久化
 
-kevy 如何在重启之间保留数据 —— AOF、快照、fsync 策略、重写/压实、崩溃恢复,以及让你随时观察这一切的内省接口。
+kevy 如何让数据扛过重启——AOF、快照、fsync 策略、重写/压实、崩溃恢复，以及让你把这一切随时看在眼里的内省接口。
 
 ## 何时需要这份文档
 
-下列情形应当查阅本页:
+遇到下面这些情况时来查这一页：
 
-- 为生产部署挑选耐久性策略(零丢失 vs 吞吐)。
-- 为写密集型负载估算磁盘占用与重放时长预算。
-- 调查磁盘上意外出现的产物 —— 隔离文件、过期的 `.rewrite` 临时文件、`.premigration.*` 备份。
-- 把 `kevy_embedded::Store` 嵌入宿主应用,并想知道进程崩溃后什么会留下、什么不会,以及如何在宿主进程内部观测它。
-- 某个键的 TTL 在重启之间表现异常。
+- 为生产部署挑选耐久性策略（零丢失还是吞吐优先）。
+- 为写密集负载估算磁盘占用和重放时间预算。
+- 排查磁盘上冒出来的意外产物——隔离文件、过期残留的 `.rewrite` 临时文件、`.premigration.*` 备份。
+- 把 `kevy_embedded::Store` 嵌进宿主应用，想弄清进程崩溃后什么能留下、什么留不下，以及在宿主内部怎么观测。
+- 有个键的 TTL 在重启前后行为怪异。
 
-如果你只想要一个"`kill -9` 之后还能不能扛?"的快速答案:能扛,在默认策略下最多丢失一秒钟的写入。
+如果只想要“`kill -9` 能不能扛住”的快速答案：能，默认策略下最多丢一秒的写入。
 
 ## 核心思路
 
-每个 shard 在持久化目录下拥有两个文件:一份对所有改动命令的追加式日志(`aof-<id>.aof`),以及一份可选的二进制快照(`dump-<id>.rdb`)。仅靠 AOF 本身就构成完整的耐久记录;快照只是用来限定重放时间。启动时 kevy 先加载快照(如果存在)再回放 AOF;一次成功的快照之后 AOF 会被重置,因此两个文件合在一起恰好覆盖一次完整历史。
+每个 shard 在持久化目录下各有两个文件：一份记录全部写命令的追加式日志（`aof-<id>.aof`），和一份可选的二进制快照（`dump-<id>.rdb`）。单凭 AOF 就是一份完整的耐久记录；快照的唯一作用是给重放时间设上限。启动时 kevy 先加载快照（如有），再回放 AOF；快照成功后 AOF 会重置，两个文件合起来恰好覆盖完整历史一次。
 
-目录本身在启动时若不存在会被创建(v3.17);无法创建的路径会作为一条有名有姓的启动错误报告,而不是由哪个先碰到它的子系统抛出一个裸的 ENOENT。
+启动时目录不存在就自动创建（v3.17）；路径创建失败会报成一条明确的启动错误，而不是让先碰到它的某个子系统抛一个裸 ENOENT。
 
-## 实际示例
+## 实战示例
 
 ### 服务器模式
 
-把下面的内容写到 `kevy.toml`,然后用 `kevy --config kevy.toml` 启动:
+把下面的内容写进 `kevy.toml`，然后用 `kevy --config kevy.toml` 启动：
 
 ```toml
 # kevy.toml
@@ -33,13 +33,13 @@ port        = 6379
 threads     = 4
 appendonly  = true
 
-# AOF 耐久性 —— 完整的旋钮表见下文。
+# AOF durability — see the knobs table below for the full set.
 appendfsync                 = "everysec"   # always | everysec | no
-auto_aof_rewrite_percentage = 100          # AOF 相对上次重写增长一倍时触发重写
-auto_aof_rewrite_min_size   = 67108864     # ...并且至少 64 MiB
+auto_aof_rewrite_percentage = 100          # rewrite when AOF doubles since last rewrite
+auto_aof_rewrite_min_size   = 67108864     # …and is at least 64 MiB
 ```
 
-用标准 Redis 风格命令操作 RESP 接口:
+通过 RESP 用标准的 Redis 风格命令操作：
 
 ```text
 $ redis-cli -p 6379 BGSAVE
@@ -55,18 +55,18 @@ aof_rewrite_in_progress:0
 aof_rewrites_total:3
 ```
 
-`CONFIG SET appendfsync always` 可在不重启的情况下实时调整策略。
+`CONFIG SET appendfsync always` 可以在线改策略，不用重启。
 
 ### 嵌入模式
 
-在 `Cargo.toml` 加入 crate:
+在 `Cargo.toml` 里加入 crate：
 
 ```toml
 [dependencies]
 kevy-embedded = "*"
 ```
 
-然后在 `main.rs`:
+然后在 `main.rs`：
 
 ```rust
 use std::time::Duration;
@@ -94,14 +94,14 @@ fn main() -> std::io::Result<()> {
     store.set("hello", b"world")?;
     store.pexpire("hello", Duration::from_secs(300))?;
 
-    // 时间点快照。文件落盘后才返回;每个 shard 的锁只在视图冻结
-    // 与最终 rename 时短暂持有。
+    // Point-in-time snapshot. Returns after the file is on disk; per-shard
+    // locks are held only for the view freeze and the final rename.
     store.save_snapshot()?;
 
-    // 按需 AOF 压实。锁的使用规则同 save_snapshot。
+    // On-demand AOF compaction. Same lock discipline as save_snapshot.
     let _stats = store.rewrite_aof()?;
 
-    // 实时内省。
+    // Live introspection.
     let info = store.info();
     println!("{} keys, {} bytes AOF", info.keys, info.aof_bytes);
 
@@ -109,164 +109,163 @@ fn main() -> std::io::Result<()> {
 }
 ```
 
-使用默认配置的全新嵌入式 store 只写 AOF —— 在 `save_snapshot` 运行之前不会出现快照文件。这是预期行为;光靠 AOF 就足以重建键空间。
+默认配置下，新建的嵌入式 store 只写 AOF—— `save_snapshot` 跑过之前不会出现快照文件。这是预期行为：单凭 AOF 已足够重建键空间。
 
 ## 配置旋钮
 
 ### 耐久性与 AOF 增长
 
-| 旋钮 | 服务器(TOML / `CONFIG SET`)| 嵌入(`Config::…`)| 默认值 | 备注 |
+| 旋钮 | 服务器（TOML / `CONFIG SET`）| 嵌入式（`Config::…`）| 默认值 | 备注 |
 |---|---|---|---|---|
-| AOF fsync 策略 | `appendfsync`(`always` / `everysec` / `no`)| `with_appendfsync(AppendFsync::…)` | `EverySec` | 服务器侧可实时调整。 |
-| AOF 是否启用 | `appendonly`(`true` / `false`)| 由 `with_persist(...)` 隐式开启 | `true`(服务器);嵌入式在未调用 `with_persist` 前关闭 | 关闭则跳过所有磁盘持久化。 |
-| 自动重写百分比 | `auto_aof_rewrite_percentage` | `with_auto_aof_rewrite(pct, min)` 的第一个参数 | `100` | `0` 关闭自动重写。 |
-| 自动重写最小尺寸 | `auto_aof_rewrite_min_size` | `with_auto_aof_rewrite(pct, min)` 的第二个参数 | `67108864`(64 MiB)| 两个阈值都满足才触发自动重写。 |
-| 持久化目录 | `dir` / 环境变量 `KEVY_DIR` | `with_persist(path)` | 服务器为 `./data`;嵌入式无默认 | 每个 kevy 实例一个目录。 |
-| reactor / reaper 节拍 | reactor tick,约 100 ms | 后台 reaper,或你自己调用 `Store::tick` | 约 100 ms | 驱动 `EverySec` flush、自动重写检测、TTL 清理。 |
+| AOF fsync 策略 | `appendfsync`（`always` / `everysec` / `no`）| `with_appendfsync(AppendFsync::…)` | `EverySec` | 服务器侧可在线调整。 |
+| AOF 开关 | `appendonly`（`true` / `false`）| 由 `with_persist(...)` 隐式开启 | `true`（服务器）；嵌入式在调用 `with_persist` 前关闭 | 关闭后跳过一切磁盘持久化。 |
+| 自动重写百分比 | `auto_aof_rewrite_percentage` | `with_auto_aof_rewrite(pct, min)` 的第一个参数 | `100` | 设为 `0` 关闭自动重写。 |
+| 自动重写最小体积 | `auto_aof_rewrite_min_size` | `with_auto_aof_rewrite(pct, min)` 的第二个参数 | `67108864`（64 MiB）| 两个阈值同时满足才触发自动重写。 |
+| 持久化目录 | `dir` / 环境变量 `KEVY_DIR` | `with_persist(path)` | 服务器 `./data`；嵌入式无 | 每个 kevy 实例一个目录。 |
+| reactor / reaper 节拍 | reactor tick，约 100 ms | 后台 reaper，或自行调用 `Store::tick` | 约 100 ms | 驱动 `EverySec` 刷盘、自动重写检查、TTL 清理。 |
 
 ### 触发面
 
-| 动作 | 服务器 | 嵌入 | 阻塞形态 |
+| 动作 | 服务器 | 嵌入式 | 阻塞形态 |
 |---|---|---|---|
-| 同步快照 | `SAVE` | `Store::save_snapshot()` | 文件落盘后才返回;锁仅在冻结 + rename 期间持有。 |
-| 后台快照 | `BGSAVE` | 在工作线程里调用 `save_snapshot` | 立刻返回;落盘完成后的一个 reactor tick 内提交。 |
-| AOF 重写 | `BGREWRITEAOF` | `Store::rewrite_aof()` | 原子 rename 完成后返回;序列化期间键空间仍在线。 |
-| 实时调整 fsync | `CONFIG SET appendfsync everysec` | 重建 `Config` | 无 |
+| 同步快照 | `SAVE` | `Store::save_snapshot()` | 文件落盘后返回；锁只在冻结 + rename 期间持有。 |
+| 后台快照 | `BGSAVE` | 在工作线程里调用 `save_snapshot` | 立即返回；磁盘写完后一个 reactor tick 内提交落地。 |
+| AOF 重写 | `BGREWRITEAOF` | `Store::rewrite_aof()` | 原子 rename 后返回；序列化期间键空间照常在线。 |
+| 在线调整 fsync | `CONFIG SET appendfsync everysec` | 重建 `Config` | 无 |
 
 ### fsync 策略语义
 
 | 策略 | 耐久性 | 代价 |
 |---|---|---|
-| `Always` | 零丢失 —— 每次写入回复前都 fsync | 吞吐约降 50% |
-| `EverySec`(默认)| 崩溃时最多丢失约 1 秒的写入 | 廉价 |
-| `No` | 交给 OS 页缓存刷写 | 最廉价 |
+| `Always` | 零丢失——每次写入先 fsync 再回复 | 吞吐约砍半 |
+| `EverySec`（默认）| 崩溃最多丢约 1 秒的写入 | 开销小 |
+| `No` | 交给 OS 页缓存刷盘 | 开销最小 |
 
 ## 取舍与限制
 
-**各策略的吞吐 vs 数据丢失。** `Always` 在每次回复前阻塞做 `fsync`,是唯一能在 `kill -9` 下保证零命令丢失的策略,在典型 NVMe 上把以 SET 为主的吞吐砍掉大约一半。`EverySec` 在后台每秒刷一次,崩溃时最多丢失这一秒窗口 —— 默认即此,因为它正好匹配 Redis 的取舍,丢失窗口通常可接受。`No` 让内核决定;吞吐最高,但崩溃可能丢掉所有还停留在页缓存里的写入,可能跨越数秒。
+**各策略的吞吐与数据丢失。**`Always` 让每条回复都等 `fsync` 完成，是唯一能在 `kill -9` 下做到零命令丢失的策略，代价是在典型 NVMe 上把 SET 密集的吞吐砍掉约一半。`EverySec` 由后台每秒刷一次盘，崩溃最多丢这一秒窗口内的写入——之所以选它当默认，正因为它与 Redis 的取舍一致，且丢失窗口通常可以接受。`No` 交给内核定夺：吞吐最高，但崩溃可能丢掉还留在页缓存里的一切，时间跨度可能达数秒。
 
-**AOF 重放成本 vs 快照加载成本。** 没有快照时,启动时间随 AOF 字节数线性增长:4 GiB 的 AOF 在本地 NVMe 上可在数秒内回放完毕,40 GiB 则需要一分钟以上。快照能为此设上限 —— 加载是一次流式读 + 一段较短的快照之后的 AOF 尾巴 —— 但要付出短暂的视图冻结代价(O(keys),每个键纳秒级,因为集合类型的值是引用计数共享的)以及对快照落盘期间首次发生改动的集合的一次性 copy。对于写密集型负载,优先靠自动重写把 AOF 控制在合理大小,而不是定期 `BGSAVE`:重写给你同样的启动时间上限,而且不需要管理第二个文件。
+**AOF 重放成本与快照加载成本。**没有快照时，启动耗时随 AOF 字节数线性增长：本地 NVMe 上，4 GiB 的 AOF 几秒钟回放完，40 GiB 就要一分钟以上。快照能封住这个上限——加载只是一次流式读，外加快照之后那一小段 AOF 尾巴——但代价是一次短暂的视图冻结（O(keys)，每键纳秒级，因为集合值靠引用计数共享），外加快照落盘期间首次改动的集合各拷贝一次。写密集负载下，更推荐靠自动重写压住 AOF 体积，而不是定期跑 `BGSAVE`：重写给出同样的启动时间上限，还省掉第二个文件的管理。
 
-**后台任务并发。** 每个 shard 同一时刻最多一个后台保存或重写。在同一任务进行中到达的重复请求会以一条日志记录被跳过,不会进入队列。
+**后台任务并发。**每个 shard 同一时刻最多跑一个后台保存或重写。任务进行中再来的重复请求会记一条日志然后跳过，绝不排队。
 
-**TTL 持久化。** TTL 被写成绝对的 Unix 毫秒截止时间(AOF 里是 `PEXPIREAT`,快照格式里是一个绝对字段),因此键在任意次数的重启之间保留它原本的过期时刻,进程停机的那段时间也会被正确扣除。把相对剩余时间记录到的旧 AOF 仍能加载(载入时视作相对时间);新写入永远是绝对的。`EXPIREAT` 和 `PEXPIREAT` 作为客户端命令对外开放。
+**TTL 持久化。**TTL 以绝对的 Unix 毫秒截止时间落盘（AOF 里写 `PEXPIREAT`，快照格式里是一个绝对时间字段），所以无论重启多少次，键都保持原来的过期时刻，进程停机的时长也能正确扣除。记录相对剩余时间的旧版 AOF 仍可加载（载入时按相对时间处理）；新写入一律是绝对时间。`EXPIREAT` 和 `PEXPIREAT` 都作为客户端命令开放。
 
-**shard 布局变更对崩溃幂等。** 改变 `--threads` / `shards` 会用 `.reshard` 临时名写出新快照,通过一份耐久的 `reshard.journal` 提交,并在下次启动时把中断的迁移向前推进完成。源文件作为 `.premigration.<unix_ts>` 备份保留;journal 是提交点,绝不可手工删除。
+**shard 布局变更崩溃幂等。**修改 `--threads` / `shards` 时，新快照先写到 `.reshard` 临时名下，经由一份耐久的 `reshard.journal` 提交；迁移若中断，下次启动会向前滚完。源文件保留为 `.premigration.<unix_ts>` 备份；journal 是提交点，绝不能手工删除。
 
-**哪些不持久化。** Pub/sub 频道、订阅以及尚未投递的消息只存在于内存里。`BLPOP` 这类阻塞命令的等待者以及阻塞 `XREAD` 是连接状态,不是数据。两者既不会写入 AOF 或快照,也不会被回放。
+**哪些东西不持久化。**Pub/sub 频道、订阅和未投递的消息只活在内存里。`BLPOP` 之类阻塞命令的等待者和阻塞式 `XREAD` 属于连接状态，不是数据。这两类都不写 AOF、不进快照，也不参与回放。
 
 ## FAQ
 
-### 我的 AOF 文件在不断增长 —— 如何压实?
+### AOF 文件一直在涨——怎么压实？
 
-在服务器上执行 `BGREWRITEAOF`,或在嵌入式模式下调用 `Store::rewrite_aof()`。重写会以重建当前键空间所需的最小命令集来重写日志 —— 每个键一条 `SET` / `HSET` 等,加上 TTL 键的 `PEXPIREAT` —— 然后原子地把新文件换入。一万次对 `hot` 的覆盖会压缩成一条 `SET hot <latest>`。
+在服务器上跑 `BGREWRITEAOF`，嵌入式模式下调用 `Store::rewrite_aof()`。重写把日志重建为能还原当前键空间的最小命令集——每个键一条 `SET` / `HSET` 等，带 TTL 的键再加一条 `PEXPIREAT`——然后原子地换入新文件。对 `hot` 的一万次覆盖会坍缩成一条 `SET hot <latest>`。
 
-对于无人值守运维,把自动重写保持默认值即可 —— 相对上次重写增长 100% 且至少 64 MiB —— reactor 会自己触发压实。设 `auto_aof_rewrite_percentage = 0` 可禁用,完全由人工驱动重写。
+无人值守的运维场景，自动重写保持默认即可——相对上次重写体积增长 100%，且不低于 64 MiB——reactor 会自行触发压实。设 `auto_aof_rewrite_percentage = 0` 则关闭自动重写，完全手动驱动。
 
-重写对键空间是非阻塞的:序列化和 `fsync` 期间读写仍在流动,重写过程中落地的任何写入会被 tee 到一个 diff 缓冲区,最终追加到压实后的镜像中。如果重写在中途崩溃,原 AOF 没被动过(替换是一次原子 `rename`),残留的 `aof-<id>.aof.rewrite` 临时文件可以安全删除。
+重写不阻塞键空间：序列化和 `fsync` 进行时读写照常流动，期间落地的写入会 tee 进一个 diff 缓冲区，最后追加到压实后的镜像上。重写中途崩溃不影响原 AOF（换入是一次原子 `rename`），残留的 `aof-<id>.aof.rewrite` 临时文件删掉即可。
 
-### 我能完全关闭持久化吗?
+### 能彻底关掉持久化吗？
 
-可以,两种方式:
+可以，两条路：
 
-- **服务器:** 在 `kevy.toml` 设 `appendonly = false`(或省略 `--dir`)。服务器作为纯内存缓存运行;不创建任何 `aof-*` 或 `dump-*` 文件。
-- **嵌入式:** 构造 `Config` 时不调用 `with_persist(...)`。`Store::open` 让整个键空间留在内存中;`save_snapshot` 和 `rewrite_aof` 在 API 层面成为无操作(或返回一个表明未配置持久化目录的错误)。
+- **服务器：**在 `kevy.toml` 里设 `appendonly = false`（或省略 `--dir`）。服务器就是一个纯内存缓存；不会创建任何 `aof-*` 或 `dump-*` 文件。
+- **嵌入式：**构造 `Config` 时不调用 `with_persist(...)`。`Store::open` 把整个键空间放在内存里；`save_snapshot` 和 `rewrite_aof` 在 API 层面变成无操作（或返回一个提示未配置持久化目录的错误）。
 
-如果你想要持久化但又希望在两次快照之间 AOF 完全不增长,这种组合不被支持 —— kevy 的耐久模型是 AOF-first,快照存在的目的是限定 AOF 重放,不是替代 AOF。
+如果想要持久化、又希望两次快照之间 AOF 完全不增长，这种组合不支持——kevy 的耐久模型是 AOF 优先，快照只为限定 AOF 重放，不是 AOF 的替代品。
 
-### 高写入负载下做一次快照的代价是多少?
+### 高写入负载下做一次快照要付出什么？
 
-阻塞的部分非常小。每个 shard 对键空间的冻结是 O(keys),而非 O(bytes),因为集合类型的值是引用计数的,与实时 store 共享;百万级键的 shard 冻结只需个位数毫秒。序列化本身是在键空间在线的情况下进行的 —— 写入并不会被暂停。
+阻塞部分很小。每个 shard 的键空间冻结是 O(keys) 而非 O(bytes)——集合值有引用计数，和在线 store 共享——百万键的 shard 冻结只要个位数毫秒。序列化本身在键空间在线时进行，写入不会暂停。
 
-你要付出的暂时代价是内存。在快照写出过程中发生过改动的任何集合(list / hash / set / sorted-set)都会被克隆一次,这样实时 store 才能继续推进而不打扰冻结视图。以 `SET` 普通字符串键为主的负载下,额外内存可以忽略;以对少量巨大集合做 `HSET` / `LPUSH` 为主的负载下,这些特定集合的常驻大小可能短暂翻倍。
+真正的临时开销在内存。快照写出期间发生改动的集合（list、hash、set、sorted-set）各克隆一次，好让在线 store 不打扰冻结视图、继续前进。负载以 `SET` 普通字符串键为主时，这点额外内存可以忽略；若集中用 `HSET` / `LPUSH` 打少数几个巨型集合，这些集合的常驻内存可能短暂翻倍。
 
-一次成功的快照也会重置 AOF —— 快照现在承载了原本日志里的全部内容,日志从冻结之后落地的写入重新起步。下次启动时加载快照 + 日志,不会重复施加历史。
+快照成功后还会重置 AOF——日志原先承载的内容如今全在快照里，日志只从冻结之后落地的写入重新记起。之后重启加载快照 + 日志，不会把历史应用两遍。
 
-### 下一次启动时如何对恢复进行排序?
+### 下次启动时按什么顺序恢复？
 
-对每个 shard,依序:
+每个 shard 依次执行：
 
-1. **加载快照。** 如果 `dump-<id>.rdb` 存在,流式载入键空间。已过期 TTL 在加载阶段被丢弃。
-2. **回放 AOF。** 从 `aof-<id>.aof` 头部开始,依次施加每一帧。
-3. **处理尾部。** 干净文件完整施加。截断的尾部(写到一半崩溃)丢弃残缺的尾帧,施加前缀。损坏的帧会被移到 `aof-<id>.aof.panic-quarantine.<unix_ts>` 一边,避免阻塞后续启动,然后施加前缀。隔离的尾部不会被重新施加;如果需要从中恢复任何内容请手工检查。
-4. **打印一条单行摘要**,包含挂钟耗时:
+1. **加载快照。**若 `dump-<id>.rdb` 存在，流式载入键空间。已过期的 TTL 在加载时直接丢弃。
+2. **回放 AOF。**从 `aof-<id>.aof` 开头逐帧应用。
+3. **处理尾部。**文件完好就全量应用。尾部截断（追加到一半崩溃）则丢掉残缺的末帧，应用前面的部分。遇到损坏帧，坏字节会挪到 `aof-<id>.aof.panic-quarantine.<unix_ts>`，不再阻碍后续启动，然后应用前缀。隔离出去的尾巴永远不会重新应用；想从里面抢救内容就手工检查。
+4. **打出一行摘要日志**，含挂钟耗时：
 
    ```text
    kevy: AOF /data/kevy/aof-0.aof replayed 145313 commands from 418261733 bytes in 247 ms (clean)
    ```
 
-5. **通过回放 `reshard.journal`** 把任何被打断的 shard 布局迁移向前推进。
+5. **回放 `reshard.journal`**，把中断的 shard 布局迁移向前滚完。
 
-关注重放耗时这一行,并依靠自动重写把它控制在范围内 —— 重放时间随未重写 AOF 大小线性增长。
+盯住这行重放耗时，用自动重写把它压在预算内——重放时间随未重写的 AOF 体积线性增长。
 
-### 在嵌入式宿主进程内部如何监控持久化?
+### 嵌入式宿主进程内部怎么监控持久化？
 
-两个接口面。
+两个入口。
 
-**轮询。** `store.info()` 返回 `KevyInfo` 结构,包含 `keys`、`used_memory`、`aof_bytes`、`expire_pending`、`evictions`、`expired_keys`。更细粒度的辅助方法覆盖同样的信息:
+**轮询。**`store.info()` 返回 `KevyInfo` 结构体，字段有 `keys`、`used_memory`、`aof_bytes`、`expire_pending`、`evictions`、`expired_keys`。同样的信息也有更细粒度的方法：
 
 ```rust
-store.dbsize();                 // 实时键数量
-store.ttl(key);                 // Option<Duration>(None = 无键 / 无 TTL)
-store.ttl_ms(key);              // Redis PTTL 语义:-2 无键、-1 无 TTL,否则为毫秒
-store.expire_pending_count();   // 带 TTL 的实时键数
-store.used_memory();            // 常驻字节估算
-store.expired_keys_total();     // 累计过期数(惰性 + reaper)
-store.evictions_total();        // 因 maxmemory 累计驱逐数
+store.dbsize();                 // live key count
+store.ttl(key);                 // Option<Duration> (None = no key / no TTL)
+store.ttl_ms(key);              // Redis PTTL semantics: -2 no key, -1 no TTL, else ms
+store.expire_pending_count();   // live keys carrying a TTL
+store.used_memory();            // resident-bytes estimate
+store.expired_keys_total();     // total expired (lazy + reaper)
+store.evictions_total();        // total evicted by maxmemory
 ```
 
-如果你期望存在 TTL 时 `expire_pending_count() == 0`,那就是 TTL 子系统没登记到你的键的经典征兆。
+期望有 TTL 却看到 `expire_pending_count() == 0`，是 TTL 子系统没登记上你那些键的经典信号。
 
-**推送。** 用 `Config::with_metric_sink(...)` 注册,即可在 AOF 重放(启动)与每次 AOF 重写(压实)时收到 `KevyMetric` 事件。sink 同步运行在事件发出的线程上(后台重写跑在 reaper 线程),保持回调短小。`KevyMetric` 是 `#[non_exhaustive]` —— 始终匹配一个 `_` 分支以保持向前兼容。
+**推送。**注册 `Config::with_metric_sink(...)`，AOF 重放（启动时）和每次 AOF 重写（压实）都会送来 `KevyMetric` 事件。sink 在发出事件的线程上同步执行（后台重写发自 reaper 线程），回调要快。`KevyMetric` 标了 `#[non_exhaustive]`——匹配时永远留一个 `_` 分支，保证向前兼容。
 
-### 持久化目录里每个文件是什么?
+### 持久化目录里每个文件都是什么？
 
 | 模式 | 含义 |
 |---|---|
-| `aof-<id>.aof` | shard `<id>` 的实时 AOF。 |
+| `aof-<id>.aof` | shard `<id>` 的在线 AOF。 |
 | `dump-<id>.rdb` | shard `<id>` 的二进制快照。 |
-| `shards.meta` | 已记录的 shard 数与路由方案。 |
-| `dump-<id>.rdb.tmp` | 进行中的快照写出。陈旧的可安全删除。 |
-| `aof-<id>.aof.rewrite` | 进行中的 AOF 重写/重置。陈旧的可安全删除。 |
-| `dump-<id>.rdb.reshard` + `reshard.journal` | 进行中的 shard 布局迁移。下次启动会向前推进;绝不可手工删除 journal。 |
-| `*.premigration.<unix_ts>` | 迁移前的源文件备份,留待回滚。 |
-| `aof-<id>.aof.panic-quarantine.<unix_ts>` | 恢复期间被搁置的 AOF 损坏尾部。需要抢救任何内容时请手工检查;kevy 不会重新施加它。 |
-| `elect.meta`(+ 瞬时的 `elect.meta.tmp`)| 选举耐久性(v3.15):选举器的 `(epoch, votedFor)` 对,在任何投票应答离开节点*之前*就持久化,因此崩溃重启永远不会重复投票。写法是 tmp + fsync + rename —— 保存中途崩溃只会留下旧对或新对,绝不会留下撕裂的文件。仅在配置了 `[cluster]` 多数派时出现。 |
+| `shards.meta` | 记录的 shard 数量与路由方案。 |
+| `dump-<id>.rdb.tmp` | 写出中的快照。确认陈旧后可安全删除。 |
+| `aof-<id>.aof.rewrite` | 进行中的 AOF 重写/重置。确认陈旧后可安全删除。 |
+| `dump-<id>.rdb.reshard` + `reshard.journal` | 进行中的 shard 布局迁移。下次启动向前滚完；journal 绝不能手工删除。 |
+| `*.premigration.<unix_ts>` | 迁移前的源文件备份，留作回滚。 |
+| `aof-<id>.aof.panic-quarantine.<unix_ts>` | 恢复时隔离出来的损坏 AOF 尾部。想抢救内容就手工检查；kevy 不会重新应用它。 |
+| `elect.meta`（+ 瞬态的 `elect.meta.tmp`）| 选举耐久性（v3.15）：选举器的 `(epoch, votedFor)` 二元组，在任何投票应答离开节点*之前*先持久化，崩溃重启因此绝不会重复投票。写法是 tmp + fsync + rename——保存中途崩溃只会留下旧值或新值，绝无撕裂的文件。仅在配置了 `[cluster]` 多数派时出现。 |
 
-## 耐久性契约(v2.1)
+## 耐久性契约（v2.1）
 
-按 `appendfsync` × 写入路径,列出"调用返回 OK"保证了什么。
-"durable" = 已落稳定存储(`fdatasync` 已完成);"windowed" = 还在 OS 页缓存里,只有*机器*(而不只是进程)在窗口内死掉才会丢失。
+按 `appendfsync` × 写入路径，说明“调用返回 OK”各自保证了什么。“durable”= 已落到稳定存储（`fdatasync` 已完成）；“windowed”= 还在 OS 页缓存里，只有*机器*（而不只是进程）在窗口内死掉才会丢。
 
 | 写入路径 | `always` | `everysec` | `no` |
 |---|---|---|---|
-| 服务器命令回复 | 回复离开 shard 之前已 durable(按批次组提交)| windowed ≤ 1 s | 由 OS 决定节奏 |
-| 嵌入式门面操作(`set`、`zadd`、…)| 返回时已 durable | windowed ≤ 1 s | 由 OS 决定节奏 |
-| 嵌入式 `atomic` / `atomic_all_shards` 块 | 提交时已 durable(每个被触及的 shard 一次 fsync)| windowed ≤ 1 s | 由 OS 决定节奏 |
-| 嵌入式 `Pipeline::commit` | 返回时已 durable,fsync 按 shard 批量 | windowed ≤ 1 s | 由 OS 决定节奏 |
-| …以上任一 + **`Store::fsync_aof()`** | 无操作 | **在栅栏处 durable** | **在栅栏处 durable** |
+| 服务器命令回复 | 回复离开 shard 前已 durable（按批次组提交）| windowed ≤ 1 s | 由 OS 定节奏 |
+| 嵌入式门面操作（`set`、`zadd`、…）| 返回即 durable | windowed ≤ 1 s | 由 OS 定节奏 |
+| 嵌入式 `atomic` / `atomic_all_shards` 块 | 提交即 durable（每个触及的 shard 一次 fsync）| windowed ≤ 1 s | 由 OS 定节奏 |
+| 嵌入式 `Pipeline::commit` | 返回即 durable，fsync 按 shard 合批 | windowed ≤ 1 s | 由 OS 定节奏 |
+| …以上任一 + **`Store::fsync_aof()`** | 无操作 | **屏障处即 durable** | **屏障处即 durable** |
 
-`Store::fsync_aof()` 是按写入粒度的耐久性逃生舱(Postgres 按事务 `synchronous_commit` 一类):部署跑在 `everysec` 上换吞吐,把栅栏放在少数几笔"一经确认就必须扛过机器崩溃"的写入之后。代价:每个脏 shard 一次 `fdatasync`。
+`Store::fsync_aof()` 是逐写入粒度的耐久性逃生口（Postgres 按事务 `synchronous_commit` 那一路）：部署跑 `everysec` 换吞吐，再把屏障放在少数几笔“一经确认就必须扛住机器崩溃”的写入之后。代价：每个脏 shard 一次 `fdatasync`。
 
-进程崩溃(SIGKILL)在 `always` 下永远不丢已确认写入,其余策略最多丢一个 fsync 窗口;AOF 尾巴在下次打开时回放,撕裂的末帧会被隔离(`panic-quarantine`),绝不静默施加。
+进程崩溃（SIGKILL）在 `always` 下绝不丢已确认的写入，其他策略最多丢一个 fsync 窗口；AOF 尾巴在下次打开时回放，撕裂的末帧会隔离（`panic-quarantine`），绝不静默应用。
 
-## 原子性章程(嵌入式 serving-store,v2.1)
+## 原子性章程（嵌入式 serving-store，v2.1）
 
-- **`Store::atomic(body)`** —— 单 shard 事务:在闭包期间持有该 shard 的写锁,闭包内的读能看到闭包自己的写,AOF 追加被推迟并在**提交时用一次 fsync**落地(`always` 下)。触及的每个键必须哈希到同一 shard —— 因此当你的写模式跨任意键时,serving-store 的推荐配置是 **1 shard**:保留完整原子性,不付跨 shard 协调成本。1-shard 配置的天花板是单核写吞吐;实测数字见 `bench/REPORT.md`。
-- **`Store::atomic_all_shards(body)`** —— 多 shard 事务:按 shard 索引顺序获取**所有** shard 的写锁(确定的顺序 = 无死锁),返回时按 shard 提交 AOF 批次。代价:闭包期间阻塞所有其他读者和写者 —— 用于跨 shard 不变量,不要当默认写路径。
-- **`Store::pipeline()`** —— **不是**原子的:每个操作各自加锁;其他写者会交错进来。它只做 fsync 批量(N 个操作 → ≤ shard 数次 fsync),仅此而已。
-- 两种原子形式都把条件操作(`ZADD GT`、`SPOP`)的**效果**记录为无条件动词,因此重放与副本施加在构造上就是确定的。
+- **`Store::atomic(body)`**——单 shard 事务：闭包期间持有该 shard 的写锁，闭包内的读能看到自己刚写的内容，AOF 追加先攒着、**提交时一次 fsync** 落盘（`always` 下）。事务触及的所有键必须哈希到同一个 shard——所以写模式跨任意键时，serving-store 的钦定配置就是 **1 shard**：原子性完整保留，又不付跨 shard 协调的成本。1 shard 配置的天花板是单核写吞吐；实测数字见 `bench/REPORT.md`。
+- **`Store::atomic_all_shards(body)`**——多 shard 事务：按 shard 索引顺序拿下**所有** shard 的写锁（顺序确定 = 不会死锁），返回时按 shard 提交 AOF 批次。代价：闭包期间阻塞其他所有读写——用于维护跨 shard 不变量，别当默认写路径。
+- **`Store::pipeline()`**——**不**原子：每个操作各自拿锁，其他写者会穿插进来。它只负责合批 fsync（N 个操作 → 至多 shard 数次 fsync），仅此而已。
+- 两种原子形式都把条件操作（`ZADD GT`、`SPOP`）的**效果**记成无条件 verb，重放和副本应用因此在构造上就是确定性的。
 
-## 恢复点(v2.3)
+## 恢复点（v2.3）
 
-启用变更 feed(`[feed] enabled = true`,见 [cdc.md](../cdc.md))后,每份快照都记录它被采集时的 feed 游标 —— 与快照数据本身在同一个禁追加窗口内冻结。由此得到恢复点契约:
+启用变更 feed（`[feed] enabled = true`，见 [cdc.md](../cdc.md)）后，每份快照都记下采集那一刻的 feed 游标——与快照数据本身在同一个禁追加窗口里冻结。由此得到恢复点契约：
 
-> **快照 S + 从 S 记录的游标开始的 feed 帧 = 之后任意游标处的精确状态。**
+> **快照 S + 从 S 所记游标起的 feed 帧 = 之后任意游标处的精确状态。**
 
-`kevy_persist::read_snapshot_cursor(path)` 可以把游标读回来(v2.3 之前的快照返回 `None` —— 格式 v4 及更早不带游标,仍可完整加载)。这份契约的可执行形式是 `bench/restore-drill.sh`,作为一条 `diskgate` 项运行:写入 → SAVE → 再写入 → kill → 只用 dump 恢复 → 回放捕获的 feed 帧 → 逐键字节级校验。
+`kevy_persist::read_snapshot_cursor(path)` 能把游标读回来（v2.3 之前的快照返回 `None`——格式 v4 及更早不携带游标，但仍可完整加载）。这份契约的可执行形式是 `bench/restore-drill.sh`，作为一条 `diskgate` 项运行：写入 → SAVE → 再写入 → kill → 只用 dump 恢复 → 回放捕获的 feed 帧 → 逐键逐字节校验。
 
-范围说明:feed 窗口是内存里的 backlog。比窗口更老的帧已经不在了 —— 一份老过窗口触及范围的快照就是一次普通快照恢复(S 时刻的状态),不是 PITR 基线。如果你依赖精确时点恢复,快照频率至少要跟上窗口的翻转。
+范围说明：feed 窗口就是内存中的 backlog。老过窗口的帧已经不在了——快照若老过窗口所及，就只是一次普通的快照恢复（S 时刻的状态），当不了 PITR 基点。依赖精确时间点恢复的话，打快照的频率至少要跟上窗口的翻转速度。
 
-## 复制线协议上的快照(v3.15)
+## 复制链路上的快照（v3.15）
 
-同一份快照格式,就是主节点向掉出 backlog 窗口的副本就地内联推送的东西(见 [replication.md](replication.md))。一个值得知道的语义:被推送的快照会**替换**副本的本地状态,而不是合并 —— 副本在加载前会清空自己的键空间。这是有意为之:当一个重新加入的前主节点带着分叉后缀(从未复制出去的写入)时,重同步必须真正丢弃分叉,而不是在一次只做 upsert 的加载下把它留作残渣。
+副本掉出 backlog 窗口时，主节点内联推送给它的就是同一种快照格式（见 [replication.md](replication.md)）。有一个语义值得记住：推送过来的快照会**替换**副本的本地状态，而不是合并——副本加载前先清空自己的键空间。这是刻意设计：重新加入的前主节点若带着分叉后缀（从未复制出去的写入），重同步就必须真正丢掉这条分叉，而不是在只做 upsert 的加载下把它留成残渣。

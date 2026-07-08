@@ -1,16 +1,16 @@
 # 异步客户端
 
-`kevy-client-async` 是阻塞版 [`kevy-client`](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client) 的异步镜像 —— 同样的接口面、同样的 URL 门面,每个调用上加 `.await`。
+`kevy-client-async` 是阻塞版 [`kevy-client`](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client) 的异步镜像——接口面和 URL 门面完全相同，只是每个调用都带 `.await`。
 
-## 何时需要
+## 什么时候需要它
 
-当你的应用已经跑在 `tokio`、`smol` 或 `async-std` 运行时上、且你想要端到端的 `await` 流时,选异步客户端:不必经线程池跳、不必 `spawn_blocking` 包裹、不必每连接一线程。如果你的代码路径是普通线程上的请求-响应,阻塞客户端更简单也延迟更低 —— 同步代码不必为"我同步"付异步税。
+如果应用本身已经跑在 `tokio`、`smol` 或 `async-std` 运行时上，想要端到端的 `await` 流，就选异步客户端：不用跳阻塞线程池、不用包一层 `spawn_blocking`、也不用每个连接开一个线程。反过来，如果代码路径就是普通线程上的请求-响应，阻塞客户端更简单、延迟也更低——同步代码没有理由白付一份异步税。
 
 ## 核心思路
 
-通过 Cargo feature(`tokio`、`smol` 或 `async-std`)恰好挑一个运行时;crate 编译下来就是那个运行时的 `TcpStream` 适配器,别的都没。公开接口面与阻塞客户端 1:1 镜像 —— `AsyncConnection::open(url).await?`、`conn.set(k, v).await?`、`conn.get(k).await?` —— 因此从阻塞迁移就是 `Connection` → `AsyncConnection` 加每个调用一个 `.await`。一个 pipeline 构建器在延迟要紧时把 N 条命令塌成一次 TCP 往返。
+通过 Cargo feature（`tokio`、`smol` 或 `async-std`）选定一个且只能选定一个运行时；整个 crate 编译出来就只有那个运行时的 `TcpStream` 适配器，再无其他。公开接口与阻塞客户端 1:1 对应——`AsyncConnection::open(url).await?`、`conn.set(k, v).await?`、`conn.get(k).await?`——所以从阻塞版迁移过来，只需把 `Connection` 换成 `AsyncConnection`，再给每个调用加一个 `.await`。延迟敏感时还有 pipeline 构建器，可以把 N 条命令合并成一次 TCP 往返。
 
-## 实际示例
+## 实例
 
 ### Tokio
 
@@ -35,7 +35,7 @@ async fn main() -> std::io::Result<()> {
 
 ### Smol
 
-代码不变,只换运行时 feature。
+代码不变，只换运行时 feature。
 
 ```toml
 [dependencies]
@@ -59,7 +59,7 @@ fn main() -> std::io::Result<()> {
 
 ### Pipeline 构建器
 
-整批一次往返。回复按队列顺序返回;每条命令失败以 `Reply::Error(_)` 形式落在 `Vec` 里,而不是把整批撕掉。
+整批命令只走一次往返。回复按入队顺序返回；单条命令失败会以 `Reply::Error(_)` 的形式留在 `Vec` 里，不会连累整批。
 
 ```rust
 use kevy_client_async::AsyncConnection;
@@ -72,12 +72,12 @@ let replies = conn
     .incr(b"hits")
     .run(&mut conn)
     .await?;
-// replies.len() == 3; 每条入队命令一个 Reply,按顺序。
+// replies.len() == 3; one Reply per queued command, in order.
 ```
 
 ## 运行时 feature
 
-下列特性必须恰好启用一个。零个、或两个及以上,都是编译期错误 —— 没有隐式默认。
+下列 feature 必须启用且只能启用一个：一个都不开，或者同时开两个以上，都是编译错误——没有隐式默认值。
 
 | feature      | 传输适配器                          | 拉入的运行时 crate |
 |--------------|-------------------------------------|--------------------|
@@ -85,47 +85,47 @@ let replies = conn
 | `smol`       | `smol::net::TcpStream`              | `smol`             |
 | `async-std`  | `async_std::net::TcpStream`         | `async-std`        |
 
-每个运行时 crate 都以 `default-features = false` 加适配器所需的最小 surface 拉入。这是 kevy 工作区里仅有的 crates.io 依赖 —— 对"纯 Rust、零依赖"原则的一个有意保留的例外,因为 Rust 异步生态没有一个仅依赖 std 的可行底座。
+每个运行时 crate 都以 `default-features = false` 引入，只带适配器需要的最小 surface。它们是 kevy 工作区里仅有的 crates.io 依赖——“纯 Rust、零依赖”原则下特批的唯一例外，因为 Rust 异步生态没有只靠 std 就能用的底座。
 
 ## URL 后端
 
-`AsyncConnection::open` 接受与阻塞客户端相同的 URL 门面。TCP 形态的 scheme 走运行时的异步 socket;进程内 scheme 被拒(对它们而言阻塞客户端严格更快 —— 经执行器路由没意义)。
+`AsyncConnection::open` 接受与阻塞客户端相同的 URL 门面。TCP 形态的 scheme 走运行时的异步 socket；进程内 scheme 则直接拒绝（对它们来说阻塞客户端严格更快，绕道执行器没有意义）。
 
 | scheme       | 目标                                   | 异步客户端支持 |
 |--------------|----------------------------------------|----------------|
 | `tcp://`     | kevy 或 Redis 兼容服务器               | 是             |
-| `kevy://`    | kevy 服务器(`tcp://` 别名)            | 是             |
+| `kevy://`    | kevy 服务器（`tcp://` 的别名）         | 是             |
 | `redis://`   | Redis 或 Redis 兼容服务器              | 是             |
-| `mem://`     | 进程内嵌入式 store                     | 否 —— 用阻塞客户端 |
-| `file:///`   | 磁盘上的嵌入式 store                   | 否 —— 用阻塞客户端 |
+| `mem://`     | 进程内嵌入式 store                     | 否——用阻塞客户端 |
+| `file:///`   | 磁盘上的嵌入式 store                   | 否——用阻塞客户端 |
 
-对 `AsyncConnection::open` 用 `mem://` 或 `file:///` 会返回 `ErrorKind::Unsupported`。
+对 `AsyncConnection::open` 传 `mem://` 或 `file:///` 会返回 `ErrorKind::Unsupported`。
 
 ## 取舍
 
-阻塞客户端是默认,而且因为下列原因一直是默认:
+阻塞客户端是默认选择，而且会一直是默认，原因有三：
 
-- **同步代码路径**:如果你还没有运行时,别为了客户端立一个。`kevy-client` 是纯 Rust、零依赖,而且不为每条命令付执行器调度开销。
-- **嵌入式后端**:`mem://` 与 `file:///` 是同步的进程内 store。阻塞客户端直接对它们说话;异步客户端做不到。
-- **单发命令**:在标准多线程执行器上每命令一次 `.await` 相比直接 syscall 是可量的开销。异步的收益出现在并发(跨任务多个 in-flight 命令)或批量(pipeline 塌往返)上。
+- **同步代码路径**：如果手上还没有运行时，不必为了客户端专门架一个。`kevy-client` 纯 Rust、零依赖，每条命令也不用付执行器的调度开销。
+- **嵌入式后端**：`mem://` 和 `file:///` 是同步的进程内 store。阻塞客户端直接跟它们对话；异步客户端做不到。
+- **单发命令**：在普通多线程执行器上，每条命令一次 `.await`，相比直接 syscall 的开销是可以测出来的。异步的收益出现在并发（多个任务各有 in-flight 命令）或批量（pipeline 合并往返）场景。
 
-应用本身已是异步时用 async。一批独立命令、往返是瓶颈时用 pipeline 构建器。其它情形继续阻塞。
+应用本身已是异步时，用异步客户端；有一批相互独立的命令、往返延迟是瓶颈时，用 pipeline 构建器；其余情况留在阻塞客户端。
 
 ## FAQ
 
-**为什么必须恰好选一个运行时?**
-crate 编译单个 `TcpStream` 适配器。一个二进制里两个适配器要么意味着每次 IO 走运行时无关的间接(开销),要么意味着没人能维护的巨型 cfg 矩阵。零适配器又会让公开类型没有实现。编译期对 feature 数的检查让配置错误响亮且早发。
+**为什么必须选定且只能选定一个运行时？**
+这个 crate 只编译一个 `TcpStream` 适配器。一个二进制里塞两个适配器，要么每次 IO 都走一层运行时无关的间接调用（开销），要么维护一个没人维护得动的巨型 cfg 矩阵；零适配器则公开类型没有实现。对 feature 数量做编译期检查，能让配置错误在编译期就大声报出来。
 
-**我能在一个进程里混用同步和异步 kevy 客户端吗?**
-能。`kevy-client`(阻塞)与 `kevy-client-async` 是独立 crate,自由共存 —— 比如同一个二进制里用阻塞对接嵌入式 `file:///` store,用异步对接网络上的 shard。它们不共享连接。
+**同步和异步 kevy 客户端能在一个进程里混用吗？**
+能。`kevy-client`（阻塞）和 `kevy-client-async` 是相互独立的 crate，可以随意共存——比如同一个二进制里，用阻塞客户端对接嵌入式 `file:///` store，用异步客户端对接网络上的 shard。两者不共享连接。
 
-**pub/sub 怎么办?**
-`AsyncSubscriber` 镜像阻塞的 `Subscriber`。已订阅的 RESP 连接不能发普通命令,所以它是与 `AsyncConnection` 独立的类型。每消息超时使用你运行时自己的原语(`tokio::time::timeout`、`async_io::Timer` 等),而不是 socket 级读超时。
+**pub/sub 怎么办？**
+`AsyncSubscriber` 对应阻塞版的 `Subscriber`。已订阅的 RESP 连接不能再发普通命令，所以它是独立于 `AsyncConnection` 的类型。逐消息超时用你所在运行时自己的原语（`tokio::time::timeout`、`async_io::Timer` 等），而不是 socket 级读超时。
 
-**pipeline 构建器会强制发送侧缓冲吗?**
-会 —— 这就是重点。`pipeline().…run(&mut conn).await` 把整批序列化成一次写,并按序列读 N 个回复。如果你要每条命令的反压,直接调 `set` / `get`,不要构 pipeline。
+**pipeline 构建器会在发送侧强制缓冲吗？**
+会——这正是它存在的意义。`pipeline().…run(&mut conn).await` 把整批命令序列化成一次写入，再按顺序读回 N 条回复。如果需要逐条命令的反压，就直接调 `set` / `get`，不要走 pipeline。
 
 ## 仓库内示例
 
-- [`tokio_hello`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client-async/examples/tokio_hello.rs) —— open、ping、set/get、del。
-- [`pipeline`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client-async/examples/pipeline.rs) —— 混合批一次往返。
+- [`tokio_hello`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client-async/examples/tokio_hello.rs)——open、ping、set/get、del。
+- [`pipeline`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client-async/examples/pipeline.rs)——混合批次一次往返。

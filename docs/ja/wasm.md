@@ -1,17 +1,17 @@
-# WebAssembly 上の kevy
+# WebAssembly上のkevy
 
-`kevy-embedded` とその依存閉包は WebAssembly にコンパイルされるので、同じプロセス内 KV エンジンがブラウザ、エッジランタイム、WASI ホストの中で動きます。
+`kevy-embedded`とその依存クロージャはWebAssemblyにコンパイルできるため、同じプロセス内KVエンジンがブラウザ、エッジランタイム、WASIホストの中でそのまま動きます。
 
 ## このドキュメントが必要になるとき
 
-- **ブラウザ KV** — Web アプリ内の高速インメモリ key/value キャッシュ。サーバーで使うのと同じ API 面で。
-- **Cloudflare Workers**(および類似のエッジランタイム) — プラットフォーム提供の永続ストアの前に置く、isolate 内のホットキャッシュ。
-- **組み込み WASM キャッシュ** — 大きなホスト(ゲームエンジン、スクリプティングホスト、サーバーレスコンテナ)内のサンドボックス済みプラグインで、ネットワークスタックを引かずに Redis 形状のストアを使いたい。
-- **サーバー側 WASI プラグイン** — `wasmtime` / `wasmer` 下の長寿命 `wasm32-wasip1` モジュールで、ホストファイルシステムへの永続化が必要。
+- **ブラウザKV** — Webアプリ内の高速なインメモリkey/valueキャッシュを、サーバーで使うのと同じAPI面で使いたいとき。
+- **Cloudflare Workers**（および類似のエッジランタイム） — プラットフォーム提供の永続ストアの手前に置く、isolate内ホットキャッシュ。
+- **組み込みWASMキャッシュ** — 大きなホスト（ゲームエンジン、スクリプティングホスト、サーバーレスコンテナ）内のサンドボックス化プラグインで、ネットワークスタックを引き込まずにRedis型のストアを使いたいとき。
+- **サーバー側WASIプラグイン** — `wasmtime`/`wasmer`配下の長寿命な`wasm32-wasip1`モジュールで、ホストファイルシステムへの永続化が必要なとき。
 
 ## 中心となる考え方
 
-同じエンジンから 2 つのものを抜きます: OS クロックと OS スレッドです。`kevy-embedded` は `kevy-store`、`kevy-persist`、`kevy-hash`、`kevy-bytes`、`kevy-map`、`kevy-resp` を引き、これらすべては `wasm32-unknown-unknown` と `wasm32-wasip1` でビルドできます。ネットワーク reactor クレート(`kevy-rt`、`kevy-sys`、`kevy-uring`)は意図的にその閉包に含めないので、WASM ビルドはクリーンです。エンジンが通常 TTL リーパースレッドを spawn する代わりに、ホストのイベントループから呼ぶ `Store::tick()` を公開し、スレッドなしのブラウザターゲットではホストが供給するクロックを読みます。データ構造、コマンド、永続化フォーマットは変わりません。
+同じエンジンから2つのものを取り除いただけです。OSクロックとOSスレッドです。`kevy-embedded`は`kevy-store`、`kevy-persist`、`kevy-hash`、`kevy-bytes`、`kevy-map`、`kevy-resp`を引き込み、これらはすべて`wasm32-unknown-unknown`と`wasm32-wasip1`でビルドできます。ネットワークreactor系クレート（`kevy-rt`、`kevy-sys`、`kevy-uring`）は意図的にこのクロージャに含めていないため、WASMビルドはクリーンに通ります。通常ならTTLリーパースレッドをspawnするところで、代わりにホストのイベントループから呼ぶ`Store::tick()`を公開し、スレッドのないブラウザターゲットではホストが供給するクロックを読みます。データ構造、コマンド、永続化フォーマットは一切変わりません。
 
 ## 動かしてみる例
 
@@ -40,42 +40,42 @@ loop {
 }
 ```
 
-ホスト側の糊は小さくて済みます: ブラウザ用に JS の `setInterval(() => { mod.tick(now()); }, 100)`、WASI 下なら通常の `std::thread::sleep` ループです。それ以外 — `set`、`get`、`del`、ハッシュ、リスト、ソート済みセット、スクリプティング、AOF — は Linux で出荷するのと同じコードパスです。
+ホスト側の糊は小さくて済みます。ブラウザならJSの`setInterval(() => { mod.tick(now()); }, 100)`、WASI配下なら普通の`std::thread::sleep`ループです。それ以外の部分（`set`、`get`、`del`、ハッシュ、リスト、ソート済みセット、スクリプティング、AOF）は、Linuxで出荷するのと同じコードパスです。
 
 ## ビルドマトリクス
 
-| ターゲット | Cargo コマンド | 注意 |
+| ターゲット | Cargoコマンド | 注意 |
 |---|---|---|
-| `wasm32-unknown-unknown`(ブラウザ) | `cargo build --target wasm32-unknown-unknown -p kevy-embedded` | スレッドなし。`Instant` / `SystemTime` なし — ホストが [`set_clock_ns`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-store/src/lib.rs) と [`set_wall_clock_ms`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-store/src/lib.rs) でクロックを供給。永続化はインメモリディレクトリ。 |
-| `wasm32-unknown-unknown`(Cloudflare Workers) | `cargo build --target wasm32-unknown-unknown -p kevy-embedded` | 同じモジュール。クロックソースとして Workers ランタイムの `Date.now()` を使う。耐久性のある永続化は JS 側で Workers KV バインディングを通す。 |
-| `wasm32-wasip1`(サーバー側 WASI) | `cargo build --target wasm32-wasip1 -p kevy-embedded` | スレッドはやはりなしだが、`Instant` と `SystemTime` が動くのでホストクロックの供給は不要。`std::fs` は preopen ディレクトリ(`wasmtime --dir=/data`)に対して動く。 |
-| ネイティブ(`x86_64-*`、`aarch64-*`) | `cargo build -p kevy-embedded` | 参考: デフォルトでバックグラウンドリーパースレッドを spawn。手動で駆動する必要なし。 |
+| `wasm32-unknown-unknown`（ブラウザ） | `cargo build --target wasm32-unknown-unknown -p kevy-embedded` | スレッドなし。`Instant`/`SystemTime`もなし。ホストが[`set_clock_ns`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-store/src/lib.rs)と[`set_wall_clock_ms`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-store/src/lib.rs)でクロックを供給する。永続化はインメモリディレクトリ。 |
+| `wasm32-unknown-unknown`（Cloudflare Workers） | `cargo build --target wasm32-unknown-unknown -p kevy-embedded` | 同じモジュール。クロックソースにはWorkersランタイムの`Date.now()`を使う。耐久性のある永続化はJS側のWorkers KVバインディングを通す。 |
+| `wasm32-wasip1`（サーバー側WASI） | `cargo build --target wasm32-wasip1 -p kevy-embedded` | スレッドはやはりないが、`Instant`と`SystemTime`が動くのでホストからクロックを供給する必要はない。`std::fs`はpreopenディレクトリ（`wasmtime --dir=/data`）に対して動く。 |
+| ネイティブ（`x86_64-*`、`aarch64-*`） | `cargo build -p kevy-embedded` | 参考：デフォルトでバックグラウンドリーパースレッドをspawnするため、手動で駆動するものはない。 |
 
-依存閉包は [`crates/kevy-embedded/Cargo.toml`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded/Cargo.toml)、再 export は [`crates/kevy-embedded/src/lib.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded/src/lib.rs) を参照。
+依存クロージャは[`crates/kevy-embedded/Cargo.toml`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded/Cargo.toml)を、再エクスポートは[`crates/kevy-embedded/src/lib.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-embedded/src/lib.rs)を参照してください。
 
 ## ネイティブとの違い
 
 | 関心事 | ネイティブ | WASM |
 |---|---|---|
-| TTL リーパー | バックグラウンドスレッド、自動 spawn | 手動: `Config::with_ttl_reaper_manual()` + ホストが `Store::tick()` を呼ぶ |
-| クロック | OS `Instant` / `SystemTime` | `wasm32-wasip1`: OS。`wasm32-unknown-unknown`: ホストが `set_clock_ns` / `set_wall_clock_ms` で供給 |
-| ネットワークサーバー | `kevy-rt` + `kevy-sys` + `kevy-uring` が TCP で listen | これらのクレートは WASM ビルド閉包に含まれない。`Store` で直接組み込む |
-| 永続化 | `with_persist` に渡したディレクトリへ AOF | `wasm32-wasip1`: 同じ、preopen ホスト dir に対して。`wasm32-unknown-unknown`: インメモリディレクトリのみ(耐久性が欲しければホスト側から書き出しをミラー) |
-| 非同期ランタイム | ユーザーコードの Tokio / std スレッド | ホストが与えるもの(JS イベントループ、Workers fetch ハンドラ、WASI シングルスレッドループ) |
+| TTLリーパー | バックグラウンドスレッドを自動spawn | 手動：`Config::with_ttl_reaper_manual()` + ホストが`Store::tick()`を呼ぶ |
+| クロック | OSの`Instant`/`SystemTime` | `wasm32-wasip1`:OSから。`wasm32-unknown-unknown`:ホストが`set_clock_ns`/`set_wall_clock_ms`で供給 |
+| ネットワークサーバー | `kevy-rt` + `kevy-sys` + `kevy-uring`がTCPでlisten | これらのクレートはWASMビルドクロージャに含まれない。`Store`で直接組み込む |
+| 永続化 | `with_persist`に渡したディレクトリへAOF | `wasm32-wasip1`:同じ（preopenしたホストディレクトリに対して）。`wasm32-unknown-unknown`:インメモリディレクトリのみ（耐久性が欲しければホスト側へ書き込みをミラー） |
+| 非同期ランタイム | ユーザーコードのTokio / stdスレッド | ホストが与えるもの（JSイベントループ、Workersのfetchハンドラ、WASIのシングルスレッドループ） |
 
 ## トレードオフ
 
-- **TTL 精度はループ周期に追従。** 500 ms TTL のキーはデッドライン後の次の `tick()` でだけ expire します。100 ms ループが典型で、それより詰めても大丈夫、キャッシュ用途なら緩くても大丈夫です。エンジンはホストが与えるよりよくはできません。
-- **非同期ランタイムは同梱しません。** kevy-embedded は `tokio` も `wasm-bindgen-futures` も引きません。ループはホストが所有し、ライブラリはマイクロ秒で終わる同期メソッドを公開します。
-- **バックグラウンド作業がないので意外なことも隠れたコストもありませんが**、`tick()` を忘れると expire 済みキーが生き続けてメモリが膨らみます。他の定期作業を仕込む場所と同じところに呼び出しを組み込んでください。
-- **`wasm32-unknown-unknown` の耐久性は自動ではありません。** ファイルシステムなしでは純粋なインメモリキャッシュとして走るか、ホスト側シンク(Workers KV、IndexedDB 等)へ書き出しをミラーします。
+- **TTLの精度はループ周期に追従します。** 500msのTTLを持つキーは、デッドライン後の最初の`tick()`ではじめてexpireします。100msのループが典型で、それより短くしても構いませんし、キャッシュ用途なら長めでも問題ありません。ただしエンジンは、ホストが与える周期以上の精度は出せません。
+- **非同期ランタイムは同梱しません。** kevy-embeddedは`tokio`も`wasm-bindgen-futures`も引き込みません。ループはホストが所有し、ライブラリはマイクロ秒で終わる同期メソッドを公開します。
+- **バックグラウンド作業がないので、不意打ちも隠れたコストもありません。** ただし`tick()`を呼び忘れると期限切れキーが生き続け、メモリが膨らみます。ほかの定期作業を仕込んでいるのと同じ場所に呼び出しを組み込んでください。
+- **`wasm32-unknown-unknown`の耐久性は自動では得られません。** ファイルシステムがない以上、純粋なインメモリキャッシュとして走らせるか、ホスト側のシンク（Workers KV、IndexedDBなど）へ書き込みをミラーするかのどちらかです。
 
 ## FAQ
 
-**ブラウザで動きますか?** はい。`wasm32-unknown-unknown` 向けにビルドし、`wasm-bindgen` 等で結果の `.wasm` を出荷し、`Config::default().with_ttl_reaper_manual()` で開き、各 `tick()` の前に `Date.now()` からクロックを供給します。完全なコマンド面 — 文字列、ハッシュ、リスト、セット、ソート済みセット、pub/sub、スクリプティング — がプロセス内で動きます。
+**ブラウザで動きますか？** はい。`wasm32-unknown-unknown`向けにビルドし、生成された`.wasm`を`wasm-bindgen`などのバインディングとともに出荷し、`Config::default().with_ttl_reaper_manual()`で開き、各`tick()`の前に`Date.now()`からクロックを供給します。コマンド面は完全に（文字列、ハッシュ、リスト、セット、ソート済みセット、pub/sub、スクリプティングまで）プロセス内で動きます。
 
-**Cloudflare Workers — 最小セットアップは?** `kevy-embedded` を `wasm32-unknown-unknown` 向けにコンパイルし、isolate ごとに `Store` を 1 つインスタンス化し、`tick()` を遅延(TTL 敏感な read の直前)またはスケジュールハンドラから呼びます。クロックソースは Workers ランタイムの `Date.now()`。isolate 再起動をまたぐ耐久性は、JS ハンドラから Workers KV または D1 に書き出しをミラーしてください。エンジン自身はインメモリのままです。
+**Cloudflare Workersでの最小セットアップは？** `kevy-embedded`を`wasm32-unknown-unknown`向けにコンパイルし、isolateごとに`Store`を1つインスタンス化し、`tick()`を遅延実行（TTLに敏感なreadの直前）またはスケジュールハンドラから呼びます。クロックソースはWorkersランタイムの`Date.now()`です。isolateの再起動をまたぐ耐久性が必要なら、JSハンドラからWorkers KVかD1へ書き込みをミラーしてください。エンジン自身はインメモリのままです。
 
-**どう永続化しますか?** `wasm32-wasip1` では `Config::with_persist("/data")` を呼び、`wasmtime --dir=/data`(またはランタイムの相当)でモジュールを起動します。AOF は preopen ディレクトリへ書かれ、次回 open でリプレイされます。`wasm32-unknown-unknown` ではファイルシステムがないので、永続化はホスト介在 — 典型的にはプラットフォーム提供の耐久ストアに書き出しをミラー — が必要です。
+**どうやって永続化しますか？** `wasm32-wasip1`では`Config::with_persist("/data")`を呼び、`wasmtime --dir=/data`（または使っているランタイムの相当機能）でモジュールを起動します。AOFはpreopenディレクトリに書かれ、次回のopenでリプレイされます。`wasm32-unknown-unknown`にはファイルシステムがないため、永続化はホスト介在にせざるを得ません。典型的には、プラットフォームが提供する耐久ストアへ書き込みをミラーします。
 
-**スレッドは — Atomics 有効の WASM は?** デフォルトの WASM ビルドはシングルスレッドで、出荷中のすべてのブラウザ風ターゲットに一致します。ホストランタイムが共有メモリスレッド(`wasm32-unknown-unknown` の `--target-feature=+atomics,+bulk-memory` + スレッドプール)を公開しているなら、`Store` の使用は依然安全ですが、バックグラウンドリーパーモードは依然 off — 手動 `tick()` モデルがサポートされたパスで、あなたのコードのスレッドは `Store` を共有して並行で呼べます。
+**スレッドは？ Atomics有効のWASMは？** デフォルトのWASMビルドはシングルスレッドで、現在出荷されているすべてのブラウザ系ターゲットと一致します。ホストランタイムが共有メモリスレッド（`wasm32-unknown-unknown`に`--target-feature=+atomics,+bulk-memory`とスレッドプール）を公開している場合でも`Store`は安全に使えますが、バックグラウンドリーパーモードはオフのままです。サポートされるのは手動`tick()`モデルで、あなたのコードのスレッドは`Store`を共有して並行に呼び出せます。
