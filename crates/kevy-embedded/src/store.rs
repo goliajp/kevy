@@ -195,6 +195,7 @@ impl Store {
     /// as raw RESP bytes; write verbs answer `-ERR` like the listener
     /// does. This is the programmatic face of the listener — tooling
     /// (e.g. `kevy-cli --embed`) inspects a store without a socket.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn dispatch_readonly(&self, argv: &[Vec<u8>], out: &mut Vec<u8>) {
         crate::listener::verbs_dispatch(self, argv, out);
     }
