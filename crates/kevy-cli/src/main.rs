@@ -25,6 +25,11 @@ use std::process::ExitCode;
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 6379;
 
+mod args;
+mod embed;
+
+use args::{Config, print_help};
+
 fn main() -> ExitCode {
     // --help / --version short-circuit BEFORE we touch TCP, so the binary
     // works in healthchecks / image-smoke / `--help` exploration without a
@@ -53,6 +58,16 @@ fn main() -> ExitCode {
     }
     if !args.is_empty() && args[0] == "restore" {
         return run_restore_cli(&args[1..]);
+    }
+    // v3.17.3 — `--embed <dir>`: read-only point-in-time view of an
+    // embedded store's data directory. No server, no downtime.
+    if !args.is_empty() && args[0] == "--embed" {
+        let Some(dir) = args.get(1).cloned() else {
+            eprintln!("kevy-cli: --embed needs a data directory (kevy-cli --embed /data/kevy)");
+            return ExitCode::FAILURE;
+        };
+        let cmd: Vec<Vec<u8>> = args[2..].iter().map(|s| s.clone().into_bytes()).collect();
+        return embed::run_embed_cli(&dir, &cmd);
     }
     // v2.10 — migration subcommands (TCP, host/port flags inline).
     if !args.is_empty() && (args[0] == "export" || args[0] == "import") {
@@ -85,73 +100,8 @@ fn main() -> ExitCode {
     }
 }
 
-fn print_help() {
-    let v = env!("CARGO_PKG_VERSION");
-    println!(
-        "\
-kevy-cli {v} — redis-cli-style REPL for kevy or any RESP server.
 
-USAGE:
-    kevy-cli [-h <host>] [-p <port>] [command [args ...]]
 
-OPTIONS:
-    -h <host>           Server hostname (default: 127.0.0.1)
-    -p <port>           Server port (default: 6379)
-    --help              Show this help and exit
-    -V, --version       Print version and exit
-
-With a trailing command, runs once and exits non-zero on a RESP error.
-Without a command, opens an interactive REPL (Ctrl-D / `quit` / `exit` to leave).
-
-EXAMPLES:
-    kevy-cli                            # REPL against 127.0.0.1:6379
-    kevy-cli -p 6004                    # REPL against kevy default port
-    kevy-cli -h prod.internal ping      # one-shot PING
-    kevy-cli -p 6004 set greet hello    # one-shot SET, exits 0
-
-Docs: https://github.com/goliajp/kevy"
-    );
-}
-
-/// Parsed command-line configuration.
-struct Config {
-    host: String,
-    port: u16,
-    command: Vec<Vec<u8>>,
-}
-
-impl Config {
-    fn from_args(args: impl Iterator<Item = String>) -> Config {
-        let mut host = DEFAULT_HOST.to_string();
-        let mut port = DEFAULT_PORT;
-        let mut command = Vec::new();
-        let mut args = args.peekable();
-        // Leading -h/-p flags, then everything else is the command.
-        while let Some(arg) = args.peek() {
-            match arg.as_str() {
-                "-h" => {
-                    args.next();
-                    if let Some(h) = args.next() {
-                        host = h;
-                    }
-                }
-                "-p" => {
-                    args.next();
-                    if let Some(p) = args.next().and_then(|s| s.parse().ok()) {
-                        port = p;
-                    }
-                }
-                _ => break,
-            }
-        }
-        command.extend(args.map(String::into_bytes));
-        Config {
-            host,
-            port,
-            command,
-        }
-    }
-}
 
 /// Run a single command, print its reply, exit non-zero on a RESP error.
 fn run_once(conn: &mut RespClient, command: &[Vec<u8>]) -> ExitCode {
