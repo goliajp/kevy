@@ -186,6 +186,20 @@ impl Store {
     ///   named primary and applies them to this store; local writes are
     ///   rejected with `READONLY` (see [`Self::open_replica`]).
     pub fn open(config: Config) -> io::Result<Self> {
+        Self::open_inner(config)
+    }
+
+    /// Answer one RESP request against this store using the SAME
+    /// read-only verb whitelist the embedded RESP listener serves
+    /// (`Config::with_resp_listener`). The reply is appended to `out`
+    /// as raw RESP bytes; write verbs answer `-ERR` like the listener
+    /// does. This is the programmatic face of the listener — tooling
+    /// (e.g. `kevy-cli --embed`) inspects a store without a socket.
+    pub fn dispatch_readonly(&self, argv: &[Vec<u8>], out: &mut Vec<u8>) {
+        crate::listener::verbs_dispatch(self, argv, out);
+    }
+
+    fn open_inner(config: Config) -> io::Result<Self> {
         let shards: Shards = Arc::new(build_shards(&config)?);
         let (reaper_stop, reaper_join) = crate::reaper::spawn_reaper(&config, &shards)?;
         #[cfg(not(target_arch = "wasm32"))]
