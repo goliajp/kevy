@@ -55,6 +55,24 @@ client 1.13.
   filter, and pipeline in-order + in-slot errors. Embedded parity
   covered by per-module unit tests (54 total).
 
+## 3.17.3
+
+The mailrs adoption-feedback train (industrial first-user ground
+truth, 2026-07-08). Ships alongside kevy-client 1.14.0 (its own
+section above):
+
+- kevy-cli `--embed <dir>` — a read-only point-in-time view of an
+  embedded store's data directory: dump/aof/shards.meta are COPIED
+  to a scratch dir and replayed, so the owning process keeps running
+  untouched; REPL and one-shot both work, write verbs answer the
+  listener's -ERR READONLY, shard count is inferred from shards.meta
+  or the file layout. Backed by the new public
+  `Store::dispatch_readonly` on kevy-embedded (non-wasm targets) —
+  the programmatic face of the embedded RESP listener's whitelist.
+- kevy-cli names unknown leading options itself (exit 2) instead of
+  forwarding them as commands and echoing the server's misleading
+  'unknown command' (negative-number arguments unaffected).
+
 ## 3.17.2
 
 - docs: the RDS workloads matrix (docs/rds-workloads.md — the
