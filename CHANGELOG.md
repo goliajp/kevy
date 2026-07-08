@@ -1,5 +1,60 @@
 # Changelog
 
+## [kevy-client v1.14.0] — 2026-07-08
+
+Independent `kevy-client` minor (workspace stays at 3.17.2): **wrap
+parity with the kevy 3.17 server op surface** — the mailrs P0: four of
+its network subsystems could not reach 3.17 capabilities through
+client 1.13.
+
+### Added
+
+- **Blocking pops** — `blpop` / `brpop` / `bzpopmin(keys,
+  timeout: Option<Duration>)`. Both backends really block (embedded
+  condvar park / server-side BLOCK reactor); `None` waits forever,
+  `Some(Duration::ZERO)` is rejected as ambiguous (wire `0` means
+  forever). The remote socket has no read timeout, so a blocking pop
+  never races a client-side read deadline. Replaces sleep-polling
+  loops downstream.
+- **Hash field-TTL** — `hexpire` / `hpexpire` (`Duration` +
+  `HExpireCond` NX/XX/GT/LT, re-exported), `hpersist`, `httl`.
+  Per-field `HExpireCode` / ms arrays in request order.
+- **Zset algebra** — `zinterstore` / `zunionstore` plus `_with`
+  variants exposing the full server option face (`WEIGHTS`,
+  `AGGREGATE SUM|MIN|MAX` via re-exported `ZAggregate`), and
+  `zintercard` with optional `LIMIT`.
+- **Declarative indexes** (remote-only) — two-layered wrap:
+  typed shortcuts `idx_create_range`, `idx_query_range` / `idx_query_eq`
+  (cursor-paged `IdxPage`), `idx_query_match` / `idx_query_knn`
+  (ranked `(key, score)`), `idx_drop`, `idx_list` (`IdxInfo` with
+  state/entries/bytes); plus `idx_create_raw` / `idx_query_raw` argv
+  passthroughs so COMPOSE / HYBRID / GROUPS / ANN options stay
+  reachable without chasing the verb grammar. Embedded answers
+  `Unsupported` (the wire face coerces bounds through the server-side
+  catalog; embedded users call `Store`'s typed `idx_*` directly).
+- **Change feed / CDC** — `feed_shards` / `feed_tail` /
+  `feed_read(shard, generation, offset, count, prefixes)` returning
+  `FeedBatch` / `FeedFrame` (offset-tagged argv frames). The network
+  face of embedded `changes_since`; both backends surface the same
+  `FEEDRESYNC <gen> <tail>` error text for cursor rebuilds.
+- **Pipelining** (remote-only) — `pipeline(|p| p.cmd(&[…]) …)`:
+  one write, N in-order raw `Reply`s, non-atomic (per-command errors
+  come back in-slot). Complements the existing MULTI/EXEC + WATCH
+  face, which was audited complete for the atomic path.
+- **Wrap coverage matrix** — README gains the op-family × wrap-status
+  table (wrapped / partial / raw-only / n/a) against server 3.17, and
+  `Reply`, `HExpireCode`, `HExpireCond`, `ZAggregate` are re-exported
+  so downstream code needs no direct kevy-resp / kevy-embedded dep.
+
+### Tests
+
+- `tests/wrap_parity.rs`: every new wrap against a real in-process
+  8-shard kevy-rt reactor (full kevy command set, feed enabled) — 8
+  tests including blocking pop immediate-hit / real-timeout /
+  cross-connection wake, IDX cursor pagination, FEED cursor + prefix
+  filter, and pipeline in-order + in-slot errors. Embedded parity
+  covered by per-module unit tests (54 total).
+
 ## 3.17.2
 
 - docs: the RDS workloads matrix (docs/rds-workloads.md — the

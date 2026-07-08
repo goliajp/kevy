@@ -30,6 +30,16 @@
 //! other when both opens use the same URL. The trait-vs-enum design
 //! decision is enum for now (closed two-backend universe); see ROADMAP
 //! for the trait extension path.
+//!
+//! v1.14.0 closes the wrap-parity gap against the kevy 3.17 server op
+//! surface: blocking pops (`blpop`/`brpop`/`bzpopmin`), hash field-TTL
+//! (`hexpire`/`hpexpire`/`hpersist`/`httl`), zset algebra
+//! (`zinterstore`/`zunionstore`/`zintercard` + WEIGHTS/AGGREGATE),
+//! declarative indexes (`idx_*`), the CDC change feed (`feed_*`), and
+//! non-atomic [`Connection::pipeline`] batching. The full
+//! **op-family × wrap-status matrix** lives in this crate's README —
+//! anything listed there as raw-only is still reachable through
+//! [`Connection::pipeline`] / [`Transaction::queue`] argv passthrough.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -38,24 +48,38 @@ use std::io;
 use std::time::Duration;
 
 use kevy_embedded::Store;
-use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
 
+mod blocking;
 mod cluster;
 mod cluster_coll;
 mod collections;
+mod feed;
+mod hash_ttl;
+mod index;
+mod pipeline;
 mod reply;
 mod scan;
 mod subscribe;
 mod subscribe_io;
 mod transaction;
 mod url;
+mod zalgebra;
 
+pub use blocking::ZPopHit;
 pub use cluster::ClusterClient;
+pub use feed::{FeedBatch, FeedFrame};
+pub use index::{IdxInfo, IdxPage, IdxRow, IdxType};
+pub use pipeline::PipelineBuf;
 pub use subscribe::{PubsubEvent, Subscriber, SubscriberEvents, SubscriberMessages};
 pub use transaction::{Transaction, TransactionReplies};
 
-pub(crate) use reply::{array_to_bulks, store_err, string, unexpected, vec2, vec3};
+/// Re-exports so downstream code can name the argument/reply types of
+/// the v1.14.0 wraps without adding kevy-embedded / kevy-resp deps.
+pub use kevy_embedded::{HExpireCode, HExpireCond, ZAggregate};
+pub use kevy_resp::Reply;
+
+pub(crate) use reply::{array_to_bulks, num_f64, num_u64, store_err, string, unexpected, vec2, vec3};
 pub(crate) use url::{Target, parse_url, resolve_store};
 
 /// One open connection to a kevy backend, opaque about whether the backend
@@ -82,6 +106,22 @@ impl Connection {
         match parsed {
             Target::Remote(remote_url) => Ok(Self::Remote(RespClient::from_url(&remote_url)?)),
             embed => Ok(Self::Embedded(Box::new(resolve_store(&embed)?))),
+        }
+    }
+
+    /// Remote-only feature gate: hand back the RESP client, or explain
+    /// why the embedded backend can't serve `feature` (`Unsupported`,
+    /// pointing at the `Connection::Embedded` escape hatch).
+    pub(crate) fn remote(&mut self, feature: &str) -> io::Result<&mut RespClient> {
+        match self {
+            Self::Embedded(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "{feature} is remote-only; on the embedded backend match \
+                     Connection::Embedded and use kevy_embedded::Store's typed API"
+                ),
+            )),
+            Self::Remote(c) => Ok(c),
         }
     }
 
@@ -387,76 +427,5 @@ impl Connection {
 
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Smoke against the embedded backend: every generic + string method
-    /// delegating to `Store`. Per-collection coverage (hash/list/set/zset)
-    /// lives in `collections::tests`.
-    #[test]
-    fn embedded_mem_full_crud_round_trip() {
-        let mut c = Connection::open("mem://").unwrap();
-        c.ping().unwrap();
-
-        c.set(b"k", b"v").unwrap();
-        assert_eq!(c.get(b"k").unwrap(), Some(b"v".to_vec()));
-
-        assert_eq!(c.del(&[&b"k"[..], &b"missing"[..]]).unwrap(), 1);
-        assert_eq!(c.get(b"k").unwrap(), None);
-
-        c.set(b"a", b"1").unwrap();
-        c.set(b"b", b"2").unwrap();
-        assert_eq!(c.exists(&[&b"a"[..], &b"b"[..], &b"none"[..]]).unwrap(), 2);
-
-        assert_eq!(c.incr(b"counter").unwrap(), 1);
-        assert_eq!(c.incr_by(b"counter", 9).unwrap(), 10);
-
-        c.set(b"timed", b"x").unwrap();
-        assert!(c.expire(b"timed", Duration::from_mins(1)).unwrap());
-        let ttl = c.ttl_ms(b"timed").unwrap();
-        assert!((0..=60_000).contains(&ttl), "ttl_ms = {ttl}");
-        assert!(c.persist(b"timed").unwrap());
-        assert_eq!(c.ttl_ms(b"timed").unwrap(), -1);
-
-        assert_eq!(c.type_of(b"none").unwrap(), "none");
-        assert_eq!(c.type_of(b"timed").unwrap(), "string");
-
-        assert!(c.dbsize().unwrap() >= 3);
-        c.flushall().unwrap();
-        assert_eq!(c.dbsize().unwrap(), 0);
-
-        c.set_with_ttl(b"timed2", b"x", Duration::from_mins(1))
-            .unwrap();
-        let ttl = c.ttl_ms(b"timed2").unwrap();
-        assert!((0..=60_000).contains(&ttl));
-    }
-
-    #[test]
-    fn anonymous_mem_publish_returns_zero() {
-        // No bus, no subscribers — by design.
-        let mut c = Connection::open("mem://").unwrap();
-        assert_eq!(c.publish(b"chan", b"hi").unwrap(), 0);
-    }
-
-    #[test]
-    fn embedded_mget_mset() {
-        let mut c = Connection::open("mem://").unwrap();
-        c.mset(&[
-            (b"a".as_ref(), b"1".as_ref()),
-            (b"b".as_ref(), b"2".as_ref()),
-        ])
-        .unwrap();
-        let got = c.mget(&[&b"a"[..], &b"b"[..], &b"missing"[..]]).unwrap();
-        assert_eq!(
-            got,
-            vec![Some(b"1".to_vec()), Some(b"2".to_vec()), None]
-        );
-    }
-
-    #[test]
-    fn embedded_multi_rejected_unsupported() {
-        let mut c = Connection::open("mem://").unwrap();
-        let err = c.multi().unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;
