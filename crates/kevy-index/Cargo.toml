@@ -3,6 +3,7 @@ name = "kevy-index"
 description = "Declarative secondary indexes over prefix domains: range/unique kinds, derived-by-construction, cursor pagination."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

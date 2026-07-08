@@ -3,6 +3,7 @@ name = "kevy-lua"
 description = "Lua scripting bridge for kevy — wraps the luna-core interpreter into the Redis EVAL/EVALSHA/SCRIPT command surface with default Lua 5.1 + per-script `#!lua version=N` dialect opt-in (5.1-5.5)."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

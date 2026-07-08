@@ -3,6 +3,7 @@ name = "kevy-mcp"
 description = "kevy official MCP server: stdio JSON-RPC bridge exposing kevy verbs as agent tools. Pure Rust."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

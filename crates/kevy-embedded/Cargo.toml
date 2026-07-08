@@ -8,6 +8,7 @@ description = "Embedded mode for kevy — in-process Redis-compatible KV without
 # 1.4.2 chain and an internal split of `pubsub.rs` (no API change).
 version = "3.17.3"
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

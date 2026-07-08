@@ -3,6 +3,7 @@ name = "kevy-lua-host"
 description = "kevy-side glue between the kevy-lua bridge and the kevy server's command dispatch path. Owns the per-shard Lua Bridge plus the scoped raw-pointer indirection that lets the bridge's dispatch closure reach `&mut T` shard state without crates.io thread-local helpers."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
