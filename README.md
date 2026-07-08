@@ -162,7 +162,7 @@ reproducible from a script in [`bench/`](bench/).
 | Workload | kevy | valkey 9.1 | Ratio |
 |---|---:|---:|---:|
 | `GET -c 50 -P 16` | 6.39 M/s | 2.13 M/s | **3.00×** |
-| `SET -c 50 -P 16` | 5.33 M/s | 1.60 M/s | **3.33×** |
+| `SET -c 50 -P 16` | 6.39 M/s | 1.60 M/s | **4.00×** |
 | Pub/sub fan-out (50 subs) | 23.1 M/s | 5.1 M/s | **4.52×** |
 | Embedded `get` (hit) | 9.0 M/s | — | (no in-process Redis) |
 
