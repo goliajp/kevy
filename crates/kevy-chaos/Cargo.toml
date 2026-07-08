@@ -3,6 +3,7 @@ name = "kevy-chaos"
 description = "Chaos test harness for kevy — spawns kevy as a child, drives concurrent writes, simulates crashes, verifies invariants. Test-only; not for production server inclusion."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 # Test-only crate. Not published to crates.io.

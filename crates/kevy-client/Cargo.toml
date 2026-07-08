@@ -19,6 +19,7 @@ description = "Unified client for kevy — switch between in-process embedded an
 # non-atomic pipeline batching (see README's op-family matrix).
 version = "1.14.0"
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
