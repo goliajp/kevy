@@ -52,3 +52,17 @@ pub(crate) fn array_to_bulks(items: Vec<Reply>) -> io::Result<Vec<Vec<u8>>> {
 pub(crate) fn store_err(e: kevy_embedded::StoreError) -> io::Error {
     io::Error::other(format!("kevy-store: {e:?}"))
 }
+
+/// Parse a wire numeric bulk (score / distance) as `f64`.
+pub(crate) fn num_f64(b: &[u8]) -> io::Result<f64> {
+    let s = std::str::from_utf8(b).map_err(|_| io::Error::other("non-utf8 number reply"))?;
+    s.parse()
+        .map_err(|_| io::Error::other(format!("bad float reply: {s}")))
+}
+
+/// Parse a wire numeric bulk (counter / byte size) as `u64`.
+pub(crate) fn num_u64(b: &[u8]) -> io::Result<u64> {
+    let s = std::str::from_utf8(b).map_err(|_| io::Error::other("non-utf8 number reply"))?;
+    s.parse()
+        .map_err(|_| io::Error::other(format!("bad integer reply: {s}")))
+}

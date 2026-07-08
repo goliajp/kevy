@@ -16,8 +16,8 @@ categories = ["data-structures"]
 workspace = true
 
 [dependencies]
-kevy-hash     = { path = "../kevy-hash",     version = "3.17.2" }
-kevy-madvise  = { path = "../kevy-madvise",  version = "3.17.2" }
+kevy-hash     = { path = "../kevy-hash",     version = "3.17.3" }
+kevy-madvise  = { path = "../kevy-madvise",  version = "3.17.3" }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }
