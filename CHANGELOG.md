@@ -55,6 +55,26 @@ client 1.13.
   filter, and pipeline in-order + in-slot errors. Embedded parity
   covered by per-module unit tests (54 total).
 
+## 3.17.4
+
+The polish wave — docs and toolchain truth:
+
+- rust-version = "1.96.1" made REAL: the workspace field now has all
+  32 crates inheriting it (it was dead letter — zero crates carried
+  rust-version.workspace = true).
+- README.zh-CN.md / README.ja.md rewritten in full against the
+  current English README (18 sections aligned): the availability
+  arc, RDS matrix, 189 verbs and MCP finally reach both languages;
+  native prose, full-width punctuation, Rust 1.96.1.
+- docs/zh-CN (10 pages) rewritten as native Chinese (~2,300
+  punctuation conversions, translationese purged); docs/ja (8
+  pages) polished to natural です・ます with full-width kutōten.
+- README benchmark SET row synced to the v3.17.0 release arena
+  (6.39 M/s, 4.00x vs valkey 9.1).
+- .claude hygiene discipline (runtime residue + release gating)
+  recorded as hard rules; 16 committed AOF residue files purged and
+  the repo root now ignores runtime data files.
+
 ## 3.17.3
 
 The mailrs adoption-feedback train (industrial first-user ground
