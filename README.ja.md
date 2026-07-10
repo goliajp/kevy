@@ -293,7 +293,7 @@ cargo build --workspace --release
 cargo test  --workspace
 ```
 
-stable Rust 1.96.1、Rust 2024 editionです。Linux（`x86_64`、`aarch64`）と
+stable Rust 1.97.0、Rust 2024 editionです。Linux（`x86_64`、`aarch64`）と
 macOSでビルドできます。`kevy-embedded`とその依存クロージャは
 `wasm32-unknown-unknown`および`wasm32-wasip1`向けにもビルドできます。
 
