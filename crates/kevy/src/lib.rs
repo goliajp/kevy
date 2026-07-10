@@ -73,7 +73,6 @@ mod dispatch_stream;
 mod elect_persist;
 mod ops;
 mod replica_runner;
-mod replica_state;
 mod state;
 pub mod verb_meta;
 mod cmd_command;
@@ -82,16 +81,6 @@ mod cmd_failover;
 pub use kevy_rt::Argv;
 pub use kevy_store::Store as KeyspaceStore;
 pub use state::{KevyCommands, RuntimeState};
-
-/// Test-only hook to install per-shard replica inbox senders into the
-/// process-global slot (`replica_state::install_senders`). Production
-/// code calls the equivalent path via `kevy::serve`'s startup; tests
-/// that build a [`kevy_rt::Runtime`] directly need this to wire
-/// `REPLICAOF` against their own receivers.
-#[doc(hidden)]
-pub fn install_replica_senders_for_test(senders: Vec<kevy_rt::ReplicaInboxSender>) {
-    replica_state::install_senders(senders);
-}
 
 /// What to do with a connection after draining its buffered commands.
 pub enum AfterDrain {
@@ -172,7 +161,7 @@ pub fn serve(cfg: Arc<kevy_config::Config>) -> ! {
     // Spawn the kevy-elect control plane when the operator configured
     // `[cluster] peers = "..."` + `node_id`. Opt-in; empty peers
     // leaves the subsystem dormant.
-    state.election.maybe_start(&cfg);
+    state.election.maybe_start(&cfg, &state.replication);
     let stop = Arc::new(AtomicBool::new(false));
     // v1.39 — install SIGTERM + SIGINT handlers that flip `stop`,
     // triggering the runtime's existing drain path (fsync AOF, close
@@ -181,13 +170,12 @@ pub fn serve(cfg: Arc<kevy_config::Config>) -> ! {
     install_signal_handlers(Arc::clone(&stop));
     // v1.41 — Prometheus /metrics endpoint. No-op when port = 0.
     metrics_http::spawn_if_enabled(&state);
-    // Replica runners (if any) live in process-global state in
-    // `replica_state` — they are started by `replication::apply` for
-    // the startup `role = "replica"` path and by `REPLICAOF` at
-    // runtime (T1.29.5). On exit the runners are dropped via their
-    // process-global slot; the `Drop` impl signals stop + joins each
-    // runner thread, so the process exits cleanly with no orphan TCP
-    // fds.
+    // Replica runners (if any) live in `state.replication` — they
+    // are started by `replication::apply` for the startup
+    // `role = "replica"` path and by `REPLICAOF` at runtime
+    // (T1.29.5). On exit the runners are dropped with the state; the
+    // `Drop` impl signals stop + joins each runner thread, so the
+    // process exits cleanly with no orphan TCP fds.
     let run_result = runtime.run(stop);
     // Stop kevy-elect after the runtime exits so the control plane
     // doesn't outlive the data plane.
@@ -261,7 +249,7 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
         && !path.is_empty() {
             runtime = runtime.with_unix_socket(PathBuf::from(path));
         }
-    replication::apply(runtime, cfg, nshards)
+    replication::apply(runtime, cfg, &state)
 }
 
 /// Resolved first cluster port: `[cluster].port_base`, or `server.port + 1`

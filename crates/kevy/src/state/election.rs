@@ -14,8 +14,8 @@
 //! [`RuntimeState`]: crate::RuntimeState
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, RwLock};
 
 use kevy_config::{Config, PeerEntry, ReplicationRole};
 use kevy_elect::{
@@ -23,6 +23,8 @@ use kevy_elect::{
     elector::{ElectConfig, ElectJitter, Elector},
     message::Role,
 };
+
+use super::ReplicationState;
 
 pub(crate) struct ElectionState {
     /// Live Transport handle. `None` when the operator has not
@@ -54,14 +56,14 @@ impl ElectionState {
     /// startup error — kevy-elect's failure mode is "no automatic
     /// failover available"; the data plane keeps working with the
     /// manual `REPLICAOF` semantics.
-    pub(crate) fn maybe_start(&self, cfg: &Config) {
+    pub(crate) fn maybe_start(&self, cfg: &Config, replication: &Arc<ReplicationState>) {
         if !is_configured(cfg) {
             return;
         }
         let listen_port = resolved_elect_port_base(cfg);
         let elect_cfg = ElectConfig::default();
         let hb_interval = elect_cfg.hb_interval;
-        let (elector, start_role) = build_elector(cfg, elect_cfg);
+        let (elector, start_role) = build_elector(cfg, elect_cfg, replication);
         // Filter out self when building outbound `PeerAddr` list.
         let self_id = cfg.cluster.node_id.as_str();
         let peers: Vec<PeerAddr> = cfg
@@ -80,7 +82,7 @@ impl ElectionState {
             )),
             listen_port,
         );
-        let on_change = make_topology_callback(cfg);
+        let on_change = make_topology_callback(cfg, Arc::clone(replication));
         match Transport::spawn_with_callback(elector, hb_interval, listen, peers, on_change) {
             Ok(t) => {
                 *self.transport.write().expect("elect transport poisoned") = Some(t);
@@ -129,16 +131,21 @@ impl ElectionState {
     /// Role-aware source: while this node runs as a REPLICA the
     /// shard-local `master_repl_offset` does not measure how much of
     /// the upstream stream it has applied, so the aggregate switches to
-    /// `replica_state::applied_offset_sum()` (per-runner applied stream
+    /// `replication.applied_offset_sum()` (per-runner applied stream
     /// positions, summed). Both roles thus report the same unit —
     /// "replication-stream position, totalled across streams" — which is
     /// what `am_best_candidate`'s highest-offset-wins ordering compares.
-    pub(crate) fn set_view_offset(&self, shard_id: usize, offset: u64) {
+    pub(crate) fn set_view_offset(
+        &self,
+        replication: &ReplicationState,
+        shard_id: usize,
+        offset: u64,
+    ) {
         if let Some(slot) = self.shard_offsets.get(shard_id) {
             slot.store(offset, Ordering::Relaxed);
         }
-        let agg = if crate::replica_state::is_replica() {
-            crate::replica_state::applied_offset_sum()
+        let agg = if replication.is_replica() {
+            replication.applied_offset_sum()
         } else {
             self.aggregate_offset()
         };
@@ -168,8 +175,12 @@ fn is_configured(cfg: &Config) -> bool {
 /// plane. The returned callback runs on the elect orchestrator thread;
 /// both actions are quick (runner spawn/stop, no blocking I/O in the
 /// caller's path). Membership is the STATIC config table; only roles
-/// are dynamic.
-fn make_topology_callback(cfg: &Config) -> kevy_elect::TopologyCallback {
+/// are dynamic. The callback captures the narrow
+/// `Arc<ReplicationState>` slice — never the whole `RuntimeState`.
+fn make_topology_callback(
+    cfg: &Config,
+    replication: Arc<ReplicationState>,
+) -> kevy_elect::TopologyCallback {
     let member_table: Vec<(String, String, u16)> = cfg
         .cluster
         .peers
@@ -184,7 +195,7 @@ fn make_topology_callback(cfg: &Config) -> kevy_elect::TopologyCallback {
         // not keep absorbing them). Replicas never fence here — they
         // are already read-only.
         let fence = matches!(role, Role::Primary) && !quorum;
-        if crate::replica_state::set_quorum_fence(fence) {
+        if replication.set_quorum_fence(fence) {
             eprintln!(
                 "kevy: elect — quorum lease {}",
                 if fence { "LOST: writes fenced" } else { "restored: writes open" }
@@ -196,11 +207,11 @@ fn make_topology_callback(cfg: &Config) -> kevy_elect::TopologyCallback {
                 // runners — REPLICAOF NO ONE semantics. Promotion
                 // (we WERE a replica) additionally bumps the
                 // promotion counter → per-shard feed-gen fence.
-                crate::replica_state::promote_stop_runners();
+                replication.promote_stop_runners();
                 eprintln!("kevy: elect — this node is PRIMARY (writes open)");
             }
             (Role::Replica, Some(pid)) if pid != my_id => {
-                follow_new_primary(&member_table, &pid);
+                follow_new_primary(&replication, &member_table, &pid);
             }
             _ => {}
         }
@@ -211,13 +222,17 @@ fn make_topology_callback(cfg: &Config) -> kevy_elect::TopologyCallback {
 /// primary, resolving its replication address from the static
 /// member table (client port + 10000, the replication-base
 /// convention).
-fn follow_new_primary(member_table: &[(String, String, u16)], pid: &str) {
+fn follow_new_primary(
+    replication: &ReplicationState,
+    member_table: &[(String, String, u16)],
+    pid: &str,
+) {
     let Some((_, host, cport)) = member_table.iter().find(|(id, _, _)| id == pid) else {
         eprintln!("kevy: elect — primary '{pid}' not in the member table; not retargeting");
         return;
     };
     let upstream = format!("{host}:{}", cport + 10_000);
-    match crate::replication::retarget_upstream(&upstream) {
+    match crate::replication::retarget_upstream(replication, &upstream) {
         Ok(()) => eprintln!("kevy: elect — following new primary '{pid}' at {upstream}"),
         Err(e) => eprintln!("kevy: elect — retarget to '{pid}' ({upstream}) failed: {e}"),
     }
@@ -229,7 +244,11 @@ fn follow_new_primary(member_table: &[(String, String, u16)], pid: &str) {
 /// FileElectorPersist`]), whose `load` restores the persisted
 /// `(epoch, votedFor)` so a restarted node never double-votes or
 /// reuses a consumed epoch.
-fn build_elector(cfg: &Config, elect_cfg: ElectConfig) -> (Elector, Role) {
+fn build_elector(
+    cfg: &Config,
+    elect_cfg: ElectConfig,
+    replication: &ReplicationState,
+) -> (Elector, Role) {
     let persist = crate::elect_persist::FileElectorPersist::new(&cfg.server.data_dir);
     let mut start_role = match cfg.replication.role {
         ReplicationRole::Primary => Role::Primary,
@@ -249,8 +268,8 @@ fn build_elector(cfg: &Config, elect_cfg: ElectConfig) -> (Elector, Role) {
             "kevy: elect — quorum config: starting read-only until elected (persisted epoch {epoch})"
         );
         start_role = Role::Replica;
-        crate::replica_state::set_read_only(true);
-        crate::replica_state::force_replica_flag();
+        replication.set_read_only(true);
+        replication.force_replica_flag();
     }
     let peer_ids: Vec<String> = cfg
         .cluster
@@ -352,9 +371,10 @@ mod tests {
         // A runtime built with more shards than the state was sized
         // for must not panic; the extra shard's offset is dropped.
         let e = ElectionState::new(2);
-        e.set_view_offset(7, 100);
+        let r = ReplicationState::new(2, false);
+        e.set_view_offset(&r, 7, 100);
         assert_eq!(e.aggregate_offset(), 0);
-        e.set_view_offset(1, 40);
+        e.set_view_offset(&r, 1, 40);
         assert_eq!(e.aggregate_offset(), 40);
     }
 }
