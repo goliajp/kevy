@@ -15,7 +15,8 @@
 //! template re-emit if re-parsing fails (e.g. the file was hand-mutated
 //! after kevy loaded it).
 
-use crate::schema::{Config, ConfigError, LogOutput};
+use crate::emit::{CanonicalPair, canonical_pairs};
+use crate::schema::{Config, ConfigError};
 
 /// Line-by-line view of an original `kevy.toml` source preserving every
 /// byte the user wrote. Built by [`Document::parse`]; consumed by
@@ -52,7 +53,7 @@ impl Document {
         for (idx, raw_with_nl) in src.split_inclusive('\n').enumerate() {
             let line_no = idx + 1;
             let raw = raw_with_nl.strip_suffix('\n').unwrap_or(raw_with_nl);
-            let kind = classify_line(raw, &current, line_no)?;
+            let kind = classify_line(raw, current.as_ref(), line_no)?;
             if let LineKind::Section(name) = &kind {
                 current = Some(name.clone());
             }
@@ -208,135 +209,15 @@ fn emit_line(
     }
 }
 
-// ───────────── canonical schema → TOML pairs ─────────────
-
-struct CanonicalPair {
-    section: &'static str,
-    key: &'static str,
-    value: String,
-}
-
-fn canonical_pairs(cfg: &Config) -> Vec<CanonicalPair> {
-    let mut v = Vec::with_capacity(22);
-    push_server(&mut v, cfg);
-    push_persistence(&mut v, cfg);
-    push_memory(&mut v, cfg);
-    push_expiry(&mut v, cfg);
-    push_log(&mut v, cfg);
-    push_notification(&mut v, cfg);
-    push_advanced(&mut v, cfg);
-    push_slowlog(&mut v, cfg);
-    v
-}
-
-fn push_server(v: &mut Vec<CanonicalPair>, cfg: &Config) {
-    let [a, b, c, d] = cfg.server.bind;
-    push(v, "server", "bind", format!("\"{a}.{b}.{c}.{d}\""));
-    push(v, "server", "port", cfg.server.port.to_string());
-    push(v, "server", "threads", cfg.server.threads.to_string());
-    if let Some(n) = cfg.server.accept_shards {
-        push(v, "server", "accept_shards", n.to_string());
-    }
-    push(
-        v,
-        "server",
-        "data_dir",
-        toml_string(&cfg.server.data_dir.display().to_string()),
-    );
-}
-
-fn push_persistence(v: &mut Vec<CanonicalPair>, cfg: &Config) {
-    let p = &cfg.persistence;
-    push(v, "persistence", "aof", p.aof.to_string());
-    push(v, "persistence", "appendfsync", toml_string(p.appendfsync.as_str()));
-    push(
-        v,
-        "persistence",
-        "auto_aof_rewrite_percentage",
-        p.auto_aof_rewrite_percentage.to_string(),
-    );
-    push(
-        v,
-        "persistence",
-        "auto_aof_rewrite_min_size",
-        p.auto_aof_rewrite_min_size.to_string(),
-    );
-}
-
-fn push_memory(v: &mut Vec<CanonicalPair>, cfg: &Config) {
-    push(v, "memory", "maxmemory", cfg.memory.maxmemory.to_string());
-    push(
-        v,
-        "memory",
-        "maxmemory_policy",
-        toml_string(cfg.memory.maxmemory_policy.as_str()),
-    );
-}
-
-fn push_expiry(v: &mut Vec<CanonicalPair>, cfg: &Config) {
-    push(v, "expiry", "hz", cfg.expiry.hz.to_string());
-    push(v, "expiry", "sample", cfg.expiry.sample.to_string());
-}
-
-fn push_log(v: &mut Vec<CanonicalPair>, cfg: &Config) {
-    push(v, "log", "level", toml_string(cfg.log.level.as_str()));
-    push(v, "log", "output", toml_string(&log_output_str(&cfg.log.output)));
-}
-
-fn push_notification(v: &mut Vec<CanonicalPair>, cfg: &Config) {
-    push(
-        v,
-        "notification",
-        "notify_keyspace_events",
-        toml_string(&cfg.notification.notify_keyspace_events),
-    );
-}
-
-fn push_advanced(v: &mut Vec<CanonicalPair>, cfg: &Config) {
-    let a = &cfg.advanced;
-    push(v, "advanced", "spin_limit", a.spin_limit.to_string());
-    push(v, "advanced", "park_timeout_ms", a.park_timeout_ms.to_string());
-    push(v, "advanced", "tick_check_every", a.tick_check_every.to_string());
-    push(v, "advanced", "ring_capacity", a.ring_capacity.to_string());
-}
-
-fn push_slowlog(v: &mut Vec<CanonicalPair>, cfg: &Config) {
-    push(
-        v,
-        "slowlog",
-        "slower_than_micros",
-        cfg.slowlog.slower_than_micros.to_string(),
-    );
-    push(v, "slowlog", "max_len", cfg.slowlog.max_len.to_string());
-}
-
-fn push(v: &mut Vec<CanonicalPair>, section: &'static str, key: &'static str, value: String) {
-    v.push(CanonicalPair { section, key, value });
-}
-
-fn log_output_str(o: &LogOutput) -> String {
-    o.as_str().into_owned()
-}
-
-fn toml_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            other => out.push(other),
-        }
-    }
-    out.push('"');
-    out
-}
+// Canonical schema → TOML pairs live in [`crate::emit`], shared with
+// the fixed template so the two serializers can't drift (fuzz finding
+// 2026-07-10: six sections existed only in neither list).
 
 // ───────────── line classification ─────────────
 
 fn classify_line(
     raw: &str,
-    section_ctx: &Option<String>,
+    section_ctx: Option<&String>,
     line_no: usize,
 ) -> Result<LineKind, ConfigError> {
     let bytes = raw.as_bytes();
@@ -372,7 +253,7 @@ fn parse_section_line(bytes: &[u8], i: usize, line_no: usize) -> Result<LineKind
 fn parse_pair_line(
     bytes: &[u8],
     key_start: usize,
-    section_ctx: &Option<String>,
+    section_ctx: Option<&String>,
     line_no: usize,
 ) -> Result<LineKind, ConfigError> {
     let mut j = key_start;
@@ -395,7 +276,7 @@ fn parse_pair_line(
     let value_end = scan_value_end(bytes, j, line_no)?;
     check_trailing_or_comment(&bytes[value_end..], line_no, value_end + 1)?;
     Ok(LineKind::Pair {
-        section: section_ctx.clone(),
+        section: section_ctx.cloned(),
         key,
         value_start,
         value_end,

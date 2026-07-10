@@ -39,7 +39,7 @@ impl ReplicaClient {
                     return None;
                 }
                 Ok(n) => self.buf.extend_from_slice(&chunk[..n]),
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) => return Some(Err(ReplicaError::Io(e))),
             }
         }

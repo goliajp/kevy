@@ -42,6 +42,8 @@ impl<C: Commands> Shard<C> {
     }
 
     /// Execute one op against this shard's store, logging mutations to the AOF.
+    // LOC-WAIVER: data-driven Op dispatch table — one arm per Op
+    // variant (the cross-shard request-side execution dispatcher).
     pub(crate) fn exec_op(&mut self, op: Op) -> Part {
         match op {
             Op::Del(keys) => {

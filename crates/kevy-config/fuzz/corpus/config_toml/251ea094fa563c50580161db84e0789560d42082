@@ -1,0 +1,10 @@
+
+
+[memory]
+maxmemory         = "255mb"
+maxmemory_policy  = "allkeys-lru"
+
+maxmemory    ="00mb"
+cy= "llkeÿÿÿÿÿÿÿÿÿÿÿ¿ÿÿÿÿÿÿÿlru"
+
+hz    = 2

@@ -17,6 +17,7 @@ use crate::{
 };
 
 impl Commands for KevyCommands {
+    // LOC-WAIVER: data-driven verb → Route match table — one arm per verb.
     fn route<A: ArgvView + ?Sized>(&self, args: &A) -> Route {
         let Some(name) = args.first() else {
             return Route::Local;

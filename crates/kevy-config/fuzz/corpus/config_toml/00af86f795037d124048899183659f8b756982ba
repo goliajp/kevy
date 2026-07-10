@@ -1,0 +1,7 @@
+[persistence]
+aof = true
+appendfsync  = "everysec"
+auto_aof_rewrite_percentage  = 100
+auto_aof_rewrite_min_size  = "64mb"
+[memory]
+maxmemory =128

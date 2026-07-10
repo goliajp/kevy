@@ -136,6 +136,8 @@ impl<C: Commands> Shard<C> {
     /// has too much pending output (backpressure). Closes the conn on
     /// `TooOld` (need snapshot ship — T1.22+) or `Future` (corrupt
     /// state from a bad peer).
+    // LOC-WAIVER: per-iter replication pump body (backpressure gate +
+    // backlog window walk + resync arms) — one protocol state machine.
     fn fill_streaming_output(&mut self, idx: usize, primary_next: u64) {
         let ReplicaState::Streaming { sent_offset, .. } = self.replicas[idx].state else {
             return;
@@ -314,6 +316,8 @@ impl<C: Commands> Shard<C> {
     /// `try_recv` returns `Empty`; the pump no-ops this iteration
     /// and retries next tick. If the worker thread died without
     /// sending (`Disconnected`), the conn is closed.
+    // LOC-WAIVER: snapshot-ship chunk state machine (worker recv /
+    // chunk emit / end-marker transition) — one indivisible unit.
     fn pump_snapshot_chunks(&mut self, idx: usize) {
         let pending = self.replicas[idx].output.len() - self.replicas[idx].write_off;
         if pending >= STREAMING_OUTPUT_CAP / 2 {

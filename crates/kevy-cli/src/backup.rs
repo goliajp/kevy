@@ -57,30 +57,7 @@ pub fn pack(data_dir: &Path, out_path: &Path) -> io::Result<u64> {
         w.write_all(&(name_bytes.len() as u16).to_be_bytes())?;
         w.write_all(name_bytes)?;
         w.write_all(&body_len.to_be_bytes())?;
-        let mut f = BufReader::new(File::open(&path)?);
-        let mut buf = vec![0u8; 64 * 1024];
-        let mut copied = 0u64;
-        while copied < body_len {
-            let want = std::cmp::min((body_len - copied) as usize, buf.len());
-            let n = f.read(&mut buf[..want])?;
-            if n == 0 {
-                // File shrunk between metadata-stat and content-read
-                // (live backup race; AOF rewrite can shrink the file).
-                // Pad with zeros to honor the body_len we committed.
-                // Restore replay handles trailing zeros as torn-frame
-                // tail truncation (existing kevy-persist::replay logic).
-                let mut remaining = body_len - copied;
-                let zeros = [0u8; 64 * 1024];
-                while remaining > 0 {
-                    let chunk = std::cmp::min(remaining as usize, zeros.len());
-                    w.write_all(&zeros[..chunk])?;
-                    remaining -= chunk as u64;
-                }
-                break;
-            }
-            w.write_all(&buf[..n])?;
-            copied += n as u64;
-        }
+        copy_file_body(&mut w, &path, body_len)?;
         total_bytes += body_len;
         file_count += 1;
     }
@@ -92,6 +69,35 @@ pub fn pack(data_dir: &Path, out_path: &Path) -> io::Result<u64> {
         out_path.display()
     );
     Ok(total_bytes)
+}
+
+/// Stream exactly `body_len` bytes of `path` into `w`.
+fn copy_file_body(w: &mut impl Write, path: &Path, body_len: u64) -> io::Result<()> {
+    let mut f = BufReader::new(File::open(path)?);
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut copied = 0u64;
+    while copied < body_len {
+        let want = std::cmp::min((body_len - copied) as usize, buf.len());
+        let n = f.read(&mut buf[..want])?;
+        if n == 0 {
+            // File shrunk between metadata-stat and content-read
+            // (live backup race; AOF rewrite can shrink the file).
+            // Pad with zeros to honor the body_len we committed.
+            // Restore replay handles trailing zeros as torn-frame
+            // tail truncation (existing kevy-persist::replay logic).
+            let mut remaining = body_len - copied;
+            let zeros = [0u8; 64 * 1024];
+            while remaining > 0 {
+                let chunk = std::cmp::min(remaining as usize, zeros.len());
+                w.write_all(&zeros[..chunk])?;
+                remaining -= chunk as u64;
+            }
+            break;
+        }
+        w.write_all(&buf[..n])?;
+        copied += n as u64;
+    }
+    Ok(())
 }
 
 /// Unpack the container at `in_path` into `target_dir` (created if
@@ -121,44 +127,13 @@ pub fn unpack(in_path: &Path, target_dir: &Path) -> io::Result<u64> {
     }
     let mut file_count = 0u64;
     let mut total = 0u64;
-    loop {
-        let mut name_len_buf = [0u8; 2];
-        r.read_exact(&mut name_len_buf)?;
-        let name_len = u16::from_be_bytes(name_len_buf);
-        if name_len == 0 {
-            break; // EOF marker
-        }
-        let mut name_bytes = vec![0u8; name_len as usize];
-        r.read_exact(&mut name_bytes)?;
-        let name = std::str::from_utf8(&name_bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        // Reject path components that try to escape (e.g., "../etc/passwd").
-        if name.contains("..") || name.starts_with('/') {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("backup entry name {name:?} contains path traversal"),
-            ));
-        }
+    // Loop ends at the EOF marker (read_entry_name -> None).
+    while let Some(name) = read_entry_name(&mut r)? {
         let mut body_len_buf = [0u8; 8];
         r.read_exact(&mut body_len_buf)?;
         let body_len = u64::from_be_bytes(body_len_buf);
-        let out_path = target_dir.join(name);
-        let mut out = BufWriter::new(File::create(&out_path)?);
-        let mut remaining = body_len;
-        let mut buf = vec![0u8; 64 * 1024];
-        while remaining > 0 {
-            let want = std::cmp::min(remaining as usize, buf.len());
-            let n = r.read(&mut buf[..want])?;
-            if n == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    format!("backup truncated mid-file {name:?}"),
-                ));
-            }
-            out.write_all(&buf[..n])?;
-            remaining -= n as u64;
-        }
-        out.flush()?;
+        let out_path = target_dir.join(&name);
+        copy_entry_body(&mut r, &out_path, &name, body_len)?;
         file_count += 1;
         total += body_len;
     }
@@ -167,6 +142,54 @@ pub fn unpack(in_path: &Path, target_dir: &Path) -> io::Result<u64> {
         target_dir.display()
     );
     Ok(total)
+}
+
+/// Read one entry's name header. `None` = the EOF marker (name_len 0).
+fn read_entry_name(r: &mut impl Read) -> io::Result<Option<String>> {
+    let mut name_len_buf = [0u8; 2];
+    r.read_exact(&mut name_len_buf)?;
+    let name_len = u16::from_be_bytes(name_len_buf);
+    if name_len == 0 {
+        return Ok(None);
+    }
+    let mut name_bytes = vec![0u8; name_len as usize];
+    r.read_exact(&mut name_bytes)?;
+    let name = std::str::from_utf8(&name_bytes)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    // Reject path components that try to escape (e.g., "../etc/passwd").
+    if name.contains("..") || name.starts_with('/') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("backup entry name {name:?} contains path traversal"),
+        ));
+    }
+    Ok(Some(name.to_owned()))
+}
+
+/// Stream exactly `body_len` bytes from `r` into a fresh file at
+/// `out_path`. `name` only feeds the truncation error message.
+fn copy_entry_body(
+    r: &mut impl Read,
+    out_path: &Path,
+    name: &str,
+    body_len: u64,
+) -> io::Result<()> {
+    let mut out = BufWriter::new(File::create(out_path)?);
+    let mut remaining = body_len;
+    let mut buf = vec![0u8; 64 * 1024];
+    while remaining > 0 {
+        let want = std::cmp::min(remaining as usize, buf.len());
+        let n = r.read(&mut buf[..want])?;
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                format!("backup truncated mid-file {name:?}"),
+            ));
+        }
+        out.write_all(&buf[..n])?;
+        remaining -= n as u64;
+    }
+    out.flush()
 }
 
 /// Wrapper around `pack` that accepts string paths for the CLI layer.

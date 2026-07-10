@@ -121,6 +121,9 @@ fn l2(a: &[f32], b: &[f32]) -> f32 {
     l2_lanes(a, b)
 }
 
+// inline(always): innermost distance kernel on the HNSW search hot path;
+// the call sites are tiny wrappers whose whole point is this loop.
+#[allow(clippy::inline_always)]
 #[inline(always)]
 fn dot_lanes(a: &[f32], b: &[f32]) -> f32 {
     let mut acc = [0.0f32; 8];
@@ -138,6 +141,8 @@ fn dot_lanes(a: &[f32], b: &[f32]) -> f32 {
     s
 }
 
+// inline(always): same hot-path rationale as `dot_lanes`.
+#[allow(clippy::inline_always)]
 #[inline(always)]
 fn l2_lanes(a: &[f32], b: &[f32]) -> f32 {
     let mut acc = [0.0f32; 8];
@@ -174,7 +179,7 @@ pub fn parse_vector(raw: &[u8], dim: usize) -> Option<Vec<f32>> {
     }
     let mut out = Vec::with_capacity(dim);
     for chunk in raw.chunks_exact(4) {
-        let x = f32::from_le_bytes(chunk.try_into().expect("4 bytes"));
+        let x = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
         if !x.is_finite() {
             return None;
         }

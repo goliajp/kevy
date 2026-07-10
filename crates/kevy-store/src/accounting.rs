@@ -165,10 +165,7 @@ impl Store {
         // through `is_expired` (which itself short-circuits on None)
         // unconditionally. Saves ~5 ns / hot lookup across every
         // collection / string read path.
-        let needs_check = match self.map.get(key) {
-            None => return None,
-            Some(e) => e.expire_at_ns.is_some(),
-        };
+        let needs_check = self.map.get(key)?.expire_at_ns.is_some();
         if needs_check {
             let (uc, cn) = (self.cached_clock, self.cached_ns);
             let expired = self.map.get(key).is_some_and(|e| e.is_expired(uc, cn));
@@ -195,10 +192,7 @@ impl Store {
     /// place, preserving any TTL on it.
     pub(crate) fn live_entry_mut(&mut self, key: &[u8]) -> Option<&mut Entry> {
         // G-A4 (v1.25): see `live_entry` doc — TTL-free fast path.
-        let needs_check = match self.map.get(key) {
-            None => return None,
-            Some(e) => e.expire_at_ns.is_some(),
-        };
+        let needs_check = self.map.get(key)?.expire_at_ns.is_some();
         if needs_check {
             let (uc, cn) = (self.cached_clock, self.cached_ns);
             let expired = self.map.get(key).is_some_and(|e| e.is_expired(uc, cn));

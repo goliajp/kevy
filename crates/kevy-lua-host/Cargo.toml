@@ -23,4 +23,4 @@ workspace = true
 #     | grep -v "(/Users/doracawl/workspace/goliajp/kevy/" | wc -l
 # must equal 1 (luna-core).
 [dependencies]
-kevy-lua = { path = "../kevy-lua", version = "=3.17.4" }
+kevy-lua = { path = "../kevy-lua", version = "=3.18.0" }

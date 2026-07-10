@@ -5,6 +5,7 @@
 use super::*;
 use crate::tests::temp_file;
 use std::fs::OpenOptions;
+use std::io::Write;
 
 fn cmd(parts: &[&[u8]]) -> Argv {
     Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>())

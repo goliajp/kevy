@@ -212,6 +212,9 @@ fn score_to_bits(score: f64) -> u64 {
 ///
 /// Returns a single all-key range `(0, 2⁵² − 1)` when the radius is
 /// large enough to span the globe or the centre is invalid.
+// similar_names (ilat/ilon, dlat/dlon): the lat/lon pairing is the geo
+// domain's standard vocabulary; renaming would hurt, not help.
+#[allow(clippy::similar_names)]
 pub fn neighbor_score_ranges(lon: f64, lat: f64, radius_m: f64) -> Vec<(f64, f64)> {
     if !lon.is_finite() || !lat.is_finite() || radius_m <= 0.0 {
         return vec![(0.0, (1u64 << 52) as f64 - 1.0)];

@@ -9,7 +9,7 @@
 //! process-global [`Config`].
 
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -43,50 +43,57 @@ fn run_listener(port: u16, cfg: Arc<Config>) {
     eprintln!("kevy: metrics endpoint listening on http://{addr}/metrics");
     let start = Instant::now();
     loop {
-        let (mut conn, _peer) = match listener.accept() {
+        let (conn, _peer) = match listener.accept() {
             Ok(t) => t,
             Err(_) => continue,
         };
-        let _ = conn.set_read_timeout(Some(std::time::Duration::from_secs(2)));
-        let _ = conn.set_write_timeout(Some(std::time::Duration::from_secs(2)));
-        // Minimal HTTP/1.1 request parse: read up to the request-line
-        // + drain to end-of-headers (\r\n\r\n).
-        let mut buf = [0u8; 1024];
-        let n = match conn.read(&mut buf) {
-            Ok(n) => n,
-            Err(_) => continue,
-        };
-        let raw = &buf[..n];
-        // We only care about the verb + path; any GET /metrics passes.
-        let is_metrics = raw.starts_with(b"GET /metrics");
-        let body = if is_metrics {
-            render_metrics(&cfg, start.elapsed().as_secs())
-        } else {
-            String::new()
-        };
-        let resp = if is_metrics {
-            format!(
-                "HTTP/1.1 200 OK\r\n\
-                 Content-Type: text/plain; version=0.0.4\r\n\
-                 Content-Length: {}\r\n\
-                 Connection: close\r\n\
-                 \r\n{}",
-                body.len(),
-                body,
-            )
-        } else {
-            "HTTP/1.1 404 Not Found\r\n\
-             Content-Length: 0\r\n\
-             Connection: close\r\n\
-             \r\n"
-                .to_string()
-        };
-        let _ = conn.write_all(resp.as_bytes());
+        handle_scrape_conn(conn, &cfg, start);
     }
+}
+
+/// Serve one scrape connection: read the request, answer `GET
+/// /metrics` with the exposition body, anything else with a 404.
+fn handle_scrape_conn(mut conn: TcpStream, cfg: &Arc<Config>, start: Instant) {
+    let _ = conn.set_read_timeout(Some(std::time::Duration::from_secs(2)));
+    let _ = conn.set_write_timeout(Some(std::time::Duration::from_secs(2)));
+    // Minimal HTTP/1.1 request parse: read up to the request-line
+    // + drain to end-of-headers (\r\n\r\n).
+    let mut buf = [0u8; 1024];
+    let n = match conn.read(&mut buf) {
+        Ok(n) => n,
+        Err(_) => return,
+    };
+    let raw = &buf[..n];
+    // We only care about the verb + path; any GET /metrics passes.
+    let is_metrics = raw.starts_with(b"GET /metrics");
+    let body = if is_metrics {
+        render_metrics(cfg, start.elapsed().as_secs())
+    } else {
+        String::new()
+    };
+    let resp = if is_metrics {
+        format!(
+            "HTTP/1.1 200 OK\r\n\
+             Content-Type: text/plain; version=0.0.4\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\
+             \r\n{}",
+            body.len(),
+            body,
+        )
+    } else {
+        "HTTP/1.1 404 Not Found\r\n\
+         Content-Length: 0\r\n\
+         Connection: close\r\n\
+         \r\n"
+            .to_string()
+    };
+    let _ = conn.write_all(resp.as_bytes());
 }
 
 /// Produce the Prometheus exposition body. Reads totals from the
 /// process-global stats; uses `cfg` for static values like max_clients.
+// LOC-WAIVER: flat metric-emission table — one help/type/value triplet per gauge.
 fn render_metrics(cfg: &Arc<Config>, uptime_seconds: u64) -> String {
     let mut out = String::with_capacity(4 * 1024);
     let totals = stats::aggregate();

@@ -1,0 +1,8 @@
+#cn
+[server]
+bind= "0.0.0.1"
+port = 6004
+threaentage  = 10
+
+r= 004
+m= 252

@@ -4,7 +4,6 @@ use kevy_resp::{
     ArgvView, RespVersion, encode_array_len, encode_bulk, encode_double, encode_error,
     encode_integer,
 };
-use kevy_rt::NotifyClass;
 use kevy_store::{ScoreBound, Store, StoreError};
 
 /// Uppercase a command verb into the caller's stack buffer — no per-command heap
@@ -57,184 +56,10 @@ pub(crate) const WRONGTYPE: &str =
 pub(crate) const OOM_ERR: &str =
     "OOM command not allowed when used memory > 'maxmemory'.";
 
-/// Verb-level "is this a write" classification. Mirrors the `is_write` arm in
-/// [`crate::KevyCommands::resolve`] so the local dispatch fast path and the
-/// runtime see the same set; both must include every command that can grow
-/// `used_memory`, so eviction gates them all. Kept in a single place to avoid
-/// drift.
-pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
-    matches!(
-        cmd,
-        b"SET"
-            | b"SETNX"
-            | b"SETEX"
-            | b"PSETEX"
-            | b"GETSET"
-            | b"GETDEL"
-            | b"INCRBYFLOAT"
-            | b"DEL"
-            | b"UNLINK"
-            | b"INCR"
-            | b"DECR"
-            | b"INCRBY"
-            | b"DECRBY"
-            | b"APPEND"
-            | b"EXPIRE"
-            | b"PEXPIRE"
-            | b"EXPIREAT"
-            | b"PEXPIREAT"
-            | b"HEXPIRE"
-            | b"HPEXPIRE"
-            | b"HPEXPIREAT"
-            | b"HPERSIST"
-            | b"PERSIST"
-            | b"FLUSHDB"
-            | b"FLUSHALL"
-            | b"HSET"
-            | b"HSETNX"
-            | b"HMSET"
-            | b"HDEL"
-            | b"HINCRBY"
-            | b"LPUSH"
-            | b"RPUSH"
-            | b"LPOP"
-            | b"RPOP"
-            | b"LSET"
-            | b"LREM"
-            | b"LTRIM"
-            | b"RPOPLPUSH"
-            | b"BRPOPLPUSH"
-            | b"LMOVE"
-            | b"SADD"
-            | b"SREM"
-            | b"SPOP"
-            | b"ZADD"
-            | b"ZREM"
-            | b"ZINCRBY"
-            | b"ZPOPMIN"
-            | b"ZPOPMIN.BELOW"
-            | b"BZPOPMIN"
-            | b"ZREMRANGEBYRANK"
-            | b"ZREMRANGEBYSCORE"
-            | b"ZINTERSTORE"
-            | b"ZUNIONSTORE"
-            | b"ZDIFFSTORE"
-            | b"SINTERSTORE"
-            | b"SUNIONSTORE"
-            | b"SDIFFSTORE"
-            | b"GEOADD"
-            | b"GEOSEARCHSTORE"
-            | b"GEORADIUS"
-            | b"GEORADIUSBYMEMBER"
-            | b"XADD"
-            | b"XDEL"
-            | b"XTRIM"
-            | b"XSETID"
-            | b"XGROUP"
-            | b"XREADGROUP"
-            | b"XACK"
-            | b"XCLAIM"
-            | b"XAUTOCLAIM"
-            | b"MSET"
-            // v1.27.3: EVAL/EVALSHA writes so Lua wake-bridge drains.
-            | b"EVAL" | b"EVALSHA"
-    )
-}
-
-/// Classify an uppercased verb into a keyspace-notification class. Returns
-/// `None` for read-only / non-notifying commands so the runtime can
-/// short-circuit; otherwise a [`NotifyClass`] the caller matches against
-/// `NotificationFlags` to decide whether to actually publish.
-///
-/// Event name = lowercased verb (matches the Redis events.c naming
-/// convention — what redis-cli's `PSUBSCRIBE __keyevent@0__:*` reports).
-/// Multi-key cmds (DEL multi / MSET / FLUSHDB) get their own per-Op
-/// hooks (`maybe_notify_del` / `maybe_notify_mset` / `maybe_notify_flush`
-/// in `kevy-rt::exec_notify`); this table covers single-key dispatch only.
-pub(crate) fn notify_class_for_verb(cmd: &[u8]) -> Option<NotifyClass> {
-    Some(match cmd {
-        // String — Redis class `$`.
-        b"SET" | b"SETNX" | b"SETEX" | b"PSETEX" | b"GETSET" | b"GETDEL"
-        | b"APPEND" | b"INCR" | b"DECR" | b"INCRBY" | b"DECRBY" | b"INCRBYFLOAT" => {
-            NotifyClass::String
-        }
-        // Hash — class `h`.
-        b"HSET" | b"HSETNX" | b"HMSET" | b"HDEL" | b"HINCRBY" | b"HEXPIRE"
-        | b"HPEXPIRE" | b"HPEXPIREAT" | b"HPERSIST" => NotifyClass::Hash,
-        // List — class `l`.
-        b"LPUSH" | b"RPUSH" | b"LPOP" | b"RPOP" | b"LSET" | b"LREM" | b"LTRIM"
-        | b"RPOPLPUSH" | b"LMOVE" => NotifyClass::List,
-        // Set — class `s` (SINTERSTORE/SUNIONSTORE/SDIFFSTORE not yet impl'd).
-        b"SADD" | b"SREM" | b"SPOP" | b"SINTERSTORE" | b"SUNIONSTORE"
-        | b"SDIFFSTORE" => NotifyClass::Set,
-        // Sorted set — class `z`. GEOADD writes a ZSet under the hood,
-        // so it fires `zadd` notifications too (matches Redis).
-        b"ZADD" | b"ZREM" | b"ZINCRBY" | b"ZPOPMIN" | b"ZPOPMIN.BELOW" | b"ZREMRANGEBYRANK"
-        | b"ZREMRANGEBYSCORE" | b"ZINTERSTORE" | b"ZUNIONSTORE" | b"ZDIFFSTORE"
-        | b"GEOADD" => NotifyClass::Zset,
-        // Stream — class `t`. XADD/XDEL/XTRIM/XGROUP/XACK/XCLAIM/
-        // XREADGROUP all fire their lowercased verb name.
-        b"XADD" | b"XDEL" | b"XTRIM" | b"XSETID" | b"XGROUP" | b"XACK" | b"XCLAIM"
-        | b"XAUTOCLAIM" | b"XREADGROUP" => NotifyClass::Stream,
-        // Generic — class `g`. (DEL single-key falls here; multi-key DEL
-        // is routed through Op::Del + maybe_notify_del directly.)
-        b"DEL" | b"UNLINK" | b"EXPIRE" | b"PEXPIRE" | b"PERSIST" => NotifyClass::Generic,
-        // Reads, admin, pub/sub etc. — no notification.
-        _ => return None,
-    })
-}
-
-/// Subset of [`is_write_verb`] that can *grow* memory. `DEL` / `HDEL` / `LPOP`
-/// / `LREM` / `LTRIM` / `SREM` / `ZREM` / `EXPIRE` / `PERSIST` are writes but
-/// only ever shrink (or hold steady), so they never need the OOM precheck —
-/// and `FLUSH*` actively rescues us from OOM. Keeping them out of the precheck
-/// list lets a NoEviction-configured shard always accept shrinkers, matching
-/// Redis exactly.
-pub(crate) fn is_growing_write_verb(cmd: &[u8]) -> bool {
-    matches!(
-        cmd,
-        b"SET"
-            | b"SETNX"
-            | b"SETEX"
-            | b"PSETEX"
-            | b"GETSET"
-            | b"INCRBYFLOAT"
-            | b"INCR"
-            | b"DECR"
-            | b"INCRBY"
-            | b"DECRBY"
-            | b"APPEND"
-            | b"HSET"
-            | b"HSETNX"
-            | b"HMSET"
-            | b"HINCRBY"
-            | b"LPUSH"
-            | b"RPUSH"
-            | b"RPOPLPUSH"
-            | b"BRPOPLPUSH"
-            | b"LMOVE"
-            | b"LSET"
-            | b"SADD"
-            | b"ZADD"
-            | b"ZINCRBY"
-            | b"ZINTERSTORE"
-            | b"ZUNIONSTORE"
-            | b"ZDIFFSTORE"
-            | b"SINTERSTORE"
-            | b"SUNIONSTORE"
-            | b"SDIFFSTORE"
-            | b"GEOADD"
-            | b"GEOSEARCHSTORE"
-            | b"GEORADIUS"
-            | b"GEORADIUSBYMEMBER"
-            | b"XADD"
-            | b"XGROUP"
-            | b"XREADGROUP"
-            | b"XCLAIM"
-            | b"XAUTOCLAIM"
-            | b"MSET"
-    )
-}
+/// Verb classification tables (`is_write_verb` / `notify_class_for_verb` /
+/// `is_growing_write_verb`) live in [`crate::cmd_class`]; re-exported here
+/// so dispatchers keep their `cmd::*` paths.
+pub(crate) use crate::cmd_class::{is_growing_write_verb, is_write_verb, notify_class_for_verb};
 
 /// Encode a `StoreError` as its RESP error reply.
 pub(crate) fn store_err(out: &mut Vec<u8>, e: StoreError) {
@@ -321,41 +146,9 @@ pub(crate) fn cmd_zrangebyscore<A: ArgvView + ?Sized>(
     let (Some(min), Some(max)) = (parse_score_bound(&args[2]), parse_score_bound(&args[3])) else {
         return encode_error(out, "ERR min or max is not a float");
     };
-    // Parse optional modifiers — `WITHSCORES` and `LIMIT offset count`
-    // can appear in either order, no more than once each.
-    let mut withscores = false;
-    let mut limit: Option<(i64, i64)> = None;
-    let mut i = 4;
-    while i < args.len() {
-        let tok = &args[i];
-        if tok.eq_ignore_ascii_case(b"WITHSCORES") {
-            if withscores {
-                return encode_error(out, "ERR syntax error");
-            }
-            withscores = true;
-            i += 1;
-        } else if tok.eq_ignore_ascii_case(b"LIMIT") {
-            if limit.is_some() || i + 2 >= args.len() {
-                return encode_error(out, "ERR syntax error");
-            }
-            let Some(off) = std::str::from_utf8(&args[i + 1])
-                .ok()
-                .and_then(|s| s.parse::<i64>().ok())
-            else {
-                return encode_error(out, ERR_NOT_INT);
-            };
-            let Some(cnt) = std::str::from_utf8(&args[i + 2])
-                .ok()
-                .and_then(|s| s.parse::<i64>().ok())
-            else {
-                return encode_error(out, ERR_NOT_INT);
-            };
-            limit = Some((off, cnt));
-            i += 3;
-        } else {
-            return encode_error(out, "ERR syntax error");
-        }
-    }
+    let Some((withscores, limit)) = parse_zrbs_modifiers(args, out) else {
+        return; // error already encoded
+    };
     let res = store.zrange_by_score(&args[1], min, max);
     match res {
         Err(e) => store_err(out, e),
@@ -375,6 +168,54 @@ pub(crate) fn cmd_zrangebyscore<A: ArgvView + ?Sized>(
             emit_zrange(Ok(items), withscores, proto, out);
         }
     }
+}
+
+/// Parse the optional `ZRANGEBYSCORE` modifiers — `WITHSCORES` and
+/// `LIMIT offset count` can appear in either order, no more than once
+/// each. `None` = a syntax error was already encoded into `out`.
+fn parse_zrbs_modifiers<A: ArgvView + ?Sized>(
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Option<(bool, Option<(i64, i64)>)> {
+    let mut withscores = false;
+    let mut limit: Option<(i64, i64)> = None;
+    let mut i = 4;
+    while i < args.len() {
+        let tok = &args[i];
+        if tok.eq_ignore_ascii_case(b"WITHSCORES") {
+            if withscores {
+                encode_error(out, "ERR syntax error");
+                return None;
+            }
+            withscores = true;
+            i += 1;
+        } else if tok.eq_ignore_ascii_case(b"LIMIT") {
+            if limit.is_some() || i + 2 >= args.len() {
+                encode_error(out, "ERR syntax error");
+                return None;
+            }
+            let Some(off) = std::str::from_utf8(&args[i + 1])
+                .ok()
+                .and_then(|s| s.parse::<i64>().ok())
+            else {
+                encode_error(out, ERR_NOT_INT);
+                return None;
+            };
+            let Some(cnt) = std::str::from_utf8(&args[i + 2])
+                .ok()
+                .and_then(|s| s.parse::<i64>().ok())
+            else {
+                encode_error(out, ERR_NOT_INT);
+                return None;
+            };
+            limit = Some((off, cnt));
+            i += 3;
+        } else {
+            encode_error(out, "ERR syntax error");
+            return None;
+        }
+    }
+    Some((withscores, limit))
 }
 
 /// Encode a `(member, score)` list per `withscores` + `proto`:

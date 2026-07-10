@@ -1,0 +1,117 @@
+# kevy confiice   = 20
+
+[log]
+level    = "info"
+output   ="so"
+output   ="stdertderrşÿÿÿÿÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrştrşÿÿÿÿÿÿÿ"# kevy confrştrşÿÿÿÿÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stdÿÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrştderrşÿÿÿÿÿÿÿ"
+
+[advanced]
+spin_limit = 129
+
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrştdÿÿÿÿ"
+
+[advanced]
+spin_limit             = 128
+
+[log]
+level    = "info"
+output   ="sÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrştrşÿÿÿÿÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrştdÿÿÿÿ"
+
+output   ="stderrştdÿÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="sÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrştrşÿÿÿÿstderrştderrşÿÿÿÿÿÿÿ"
+
+[advanced]
+spin_limit = 129
+
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrştdÿÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="sÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrştrşÿÿÿÿÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrştdÿÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrştderrşÿÿÿÿÿÿÿ"
+
+[advanced]
+spin_limit = 129

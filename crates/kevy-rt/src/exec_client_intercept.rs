@@ -37,51 +37,67 @@ impl<C: Commands> Shard<C> {
         let sub_upper = sub.to_ascii_uppercase();
         match sub_upper.as_slice() {
             b"SETNAME" => {
-                if args.len() != 3 {
-                    self.immediate_reply(
-                        conn_id,
-                        b"-ERR wrong number of arguments for 'client|setname'\r\n".to_vec(),
-                    );
-                    return true;
-                }
-                let name = args.get(2).unwrap_or(&[]);
-                // Redis disallows whitespace + control bytes in the
-                // name (the LIST output would be ambiguous otherwise).
-                if name.iter().any(|b| b.is_ascii_whitespace() || *b < 0x20) {
-                    self.immediate_reply(
-                        conn_id,
-                        b"-ERR Client names cannot contain spaces, newlines or special characters.\r\n".to_vec(),
-                    );
-                    return true;
-                }
-                if let Some(c) = self.conns.get_mut(&conn_id) {
-                    c.client_name.clear();
-                    c.client_name.extend_from_slice(name);
-                }
-                self.immediate_reply(conn_id, b"+OK\r\n".to_vec());
+                self.client_setname(conn_id, args);
                 true
             }
             b"GETNAME" => {
-                if args.len() != 2 {
-                    self.immediate_reply(
-                        conn_id,
-                        b"-ERR wrong number of arguments for 'client|getname'\r\n".to_vec(),
-                    );
-                    return true;
-                }
-                if let Some(c) = self.conns.get(&conn_id) {
-                    let name = c.client_name.clone();
-                    let mut out = Vec::with_capacity(8 + name.len());
-                    out.extend_from_slice(format!("${}\r\n", name.len()).as_bytes());
-                    out.extend_from_slice(&name);
-                    out.extend_from_slice(b"\r\n");
-                    self.immediate_reply(conn_id, out);
-                } else {
-                    self.immediate_reply(conn_id, b"$0\r\n\r\n".to_vec());
-                }
+                self.client_getname(conn_id, args);
                 true
             }
             _ => false,
+        }
+    }
+
+    /// `CLIENT SETNAME <name>` arm — extracted verbatim from
+    /// [`Self::try_intercept_client`] (single call site, `inline(always)`)
+    /// purely for the 50-LOC fn rule.
+    #[inline(always)]
+    fn client_setname<A: ArgvView + ?Sized>(&mut self, conn_id: u64, args: &A) {
+        if args.len() != 3 {
+            self.immediate_reply(
+                conn_id,
+                b"-ERR wrong number of arguments for 'client|setname'\r\n".to_vec(),
+            );
+            return;
+        }
+        let name = args.get(2).unwrap_or(&[]);
+        // Redis disallows whitespace + control bytes in the
+        // name (the LIST output would be ambiguous otherwise).
+        if name.iter().any(|b| b.is_ascii_whitespace() || *b < 0x20) {
+            self.immediate_reply(
+                conn_id,
+                b"-ERR Client names cannot contain spaces, newlines or special characters.\r\n".to_vec(),
+            );
+            return;
+        }
+        if let Some(c) = self.conns.get_mut(&conn_id) {
+            c.client_name.clear();
+            c.client_name.extend_from_slice(name);
+        }
+        self.immediate_reply(conn_id, b"+OK\r\n".to_vec());
+    }
+
+    /// `CLIENT GETNAME` arm — extracted verbatim from
+    /// [`Self::try_intercept_client`] (single call site, `inline(always)`)
+    /// purely for the 50-LOC fn rule.
+    #[inline(always)]
+    fn client_getname<A: ArgvView + ?Sized>(&mut self, conn_id: u64, args: &A) {
+        if args.len() != 2 {
+            self.immediate_reply(
+                conn_id,
+                b"-ERR wrong number of arguments for 'client|getname'\r\n".to_vec(),
+            );
+            return;
+        }
+        if let Some(c) = self.conns.get(&conn_id) {
+            let name = c.client_name.clone();
+            let mut out = Vec::with_capacity(8 + name.len());
+            out.extend_from_slice(format!("${}\r\n", name.len()).as_bytes());
+            out.extend_from_slice(&name);
+            out.extend_from_slice(b"\r\n");
+            self.immediate_reply(conn_id, out);
+        } else {
+            self.immediate_reply(conn_id, b"$0\r\n\r\n".to_vec());
         }
     }
 }

@@ -97,7 +97,9 @@ impl IoUringSqe {
 #[repr(C)]
 #[derive(Default)]
 pub struct KernelTimespec {
+    /// Whole seconds of the (relative) timeout.
     pub tv_sec: i64,
+    /// Sub-second remainder in nanoseconds (`0..1_000_000_000`).
     pub tv_nsec: i64,
 }
 

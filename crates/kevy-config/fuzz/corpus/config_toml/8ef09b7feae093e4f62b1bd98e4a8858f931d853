@@ -1,0 +1,3 @@
+[persistence]
+aof = true
+auto_aof_rewrite_min_size =true

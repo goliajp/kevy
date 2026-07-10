@@ -50,34 +50,7 @@ pub(crate) fn sample_round(store: &mut Store, samples: usize, now: u64) -> (u32,
         .clock_counter
         .wrapping_mul(0x9E37_79B9_7F4A_7C15) as usize)
         % cap;
-    let mut victims: Vec<Vec<u8>> = Vec::with_capacity(samples);
-    let mut sampled = 0u32;
-    // Single-pass walk from `start`, bounded in *visited entries*, not just
-    // in TTL-bearing samples: without the bound, a keyspace with few (or
-    // zero) TTL'd keys made every round walk to the end of the table
-    // looking for them — measured at 6 % of server CPU on a 300k-key
-    // TTL-free shard (the pinned 8sh profile, 2026-06-10), for a reaper
-    // with nothing to reap. With it, a TTL-free round costs O(samples)
-    // buckets; sparse-TTL keyspaces sample fewer keys per round and rely
-    // on the rotating random start (plus lazy expiry) for coverage —
-    // the same time-boxing trade Redis's activeExpireCycle makes.
-    let visit_cap = samples.saturating_mul(8);
-    let mut visited = 0usize;
-    {
-        for (k, e) in store.map.iter_from_bucket(start) {
-            visited += 1;
-            if sampled as usize >= samples || visited > visit_cap {
-                break;
-            }
-            let Some(deadline_ns) = e.expire_at_ns else {
-                continue;
-            };
-            sampled += 1;
-            if deadline_ns.get() <= now {
-                victims.push(k.to_vec());
-            }
-        }
-    }
+    let (sampled, victims) = collect_victims(store, samples, now, start);
     let expired = victims.len() as u32;
     for k in &victims {
         store.remove_entry(k);
@@ -90,8 +63,46 @@ pub(crate) fn sample_round(store: &mut Store, samples: usize, now: u64) -> (u32,
             .expired_keys_total
             .saturating_add(u64::from(expired));
     }
-    let _ = sampled; // silence unused warning if all returned early
     (sampled, expired)
+}
+
+/// The sampling walk of [`sample_round`]: visit up to `8 * samples` buckets
+/// from `start`, sample up to `samples` TTL-bearing keys, and return
+/// `(sampled, past-deadline victim keys)`.
+///
+/// Single-pass walk from `start`, bounded in *visited entries*, not just
+/// in TTL-bearing samples: without the bound, a keyspace with few (or
+/// zero) TTL'd keys made every round walk to the end of the table
+/// looking for them — measured at 6 % of server CPU on a 300k-key
+/// TTL-free shard (the pinned 8sh profile, 2026-06-10), for a reaper
+/// with nothing to reap. With it, a TTL-free round costs O(samples)
+/// buckets; sparse-TTL keyspaces sample fewer keys per round and rely
+/// on the rotating random start (plus lazy expiry) for coverage —
+/// the same time-boxing trade Redis's activeExpireCycle makes.
+fn collect_victims(
+    store: &Store,
+    samples: usize,
+    now: u64,
+    start: usize,
+) -> (u32, Vec<Vec<u8>>) {
+    let mut victims: Vec<Vec<u8>> = Vec::with_capacity(samples);
+    let mut sampled = 0u32;
+    let visit_cap = samples.saturating_mul(8);
+    let mut visited = 0usize;
+    for (k, e) in store.map.iter_from_bucket(start) {
+        visited += 1;
+        if sampled as usize >= samples || visited > visit_cap {
+            break;
+        }
+        let Some(deadline_ns) = e.expire_at_ns else {
+            continue;
+        };
+        sampled += 1;
+        if deadline_ns.get() <= now {
+            victims.push(k.to_vec());
+        }
+    }
+    (sampled, victims)
 }
 
 impl Store {
@@ -128,6 +139,13 @@ impl Store {
         {
             return ExpireStats::default();
         }
+        self.run_expire_rounds(samples_per_round, max_rounds)
+    }
+
+    /// The round loop of [`Self::tick_expire`]: run [`sample_round`] up to
+    /// `max_rounds` times, stopping early on the 25 % continuation gate or
+    /// after 3 consecutive zero-sample rounds.
+    fn run_expire_rounds(&mut self, samples_per_round: usize, max_rounds: u32) -> ExpireStats {
         let now = now_ns();
         let mut total_sampled = 0u32;
         let mut total_expired = 0u32;

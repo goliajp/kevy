@@ -23,6 +23,8 @@ pub struct Poller {
 }
 
 impl Poller {
+    /// Creates a fresh kqueue instance (closed on drop). Errors surface the
+    /// raw OS error from `kqueue(2)`.
     pub fn new() -> io::Result<Self> {
         let kq = unsafe { ffi::kqueue() };
         if kq < 0 {

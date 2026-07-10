@@ -45,34 +45,7 @@ impl<C: Commands> Shard<C> {
             return;
         }
         let dst_shard = self.shard_of(&dst);
-        let op = match combine {
-            ZCombine::ZInter | ZCombine::ZUnion | ZCombine::ZDiff => {
-                let pairs = match combine {
-                    ZCombine::ZInter => {
-                        kevy_store::zinter(&zset_inputs, weights.as_deref(), aggregate)
-                    }
-                    ZCombine::ZUnion => {
-                        kevy_store::zunion(&zset_inputs, weights.as_deref(), aggregate)
-                    }
-                    _ => kevy_store::zdiff(&zset_inputs),
-                };
-                Op::ZStoreResult { dst, pairs }
-            }
-            ZCombine::SInter | ZCombine::SUnion | ZCombine::SDiff => {
-                // Set forms ride the Members gather: inputs carry score
-                // 1.0 placeholders only when sources were sets; strip.
-                let sets: Vec<Vec<Vec<u8>>> = zset_inputs
-                    .into_iter()
-                    .map(|inp| inp.into_iter().map(|(m, _)| m).collect())
-                    .collect();
-                let members = match combine {
-                    ZCombine::SInter => crate::reduce::set_intersect(&sets),
-                    ZCombine::SUnion => crate::reduce::set_union(&sets),
-                    _ => crate::reduce::set_diff(&sets),
-                };
-                Op::SetStoreResult { dst, members }
-            }
-        };
+        let op = build_store_op(combine, zset_inputs, weights, aggregate, dst);
         // Re-arm the slot for step 2: one Int part sums into the reply.
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let idx = (seq - c.next_emit) as usize;
@@ -150,4 +123,45 @@ fn collect_scored(
         }
     }
     (inputs, false)
+}
+
+/// Combine the gathered inputs per `combine` and build the step-2 store
+/// Op. Extracted verbatim from [`Shard::finalize_zstore_agg`] (single
+/// call site, `inline(always)`) purely for the 50-LOC fn rule.
+#[inline(always)]
+fn build_store_op(
+    combine: ZCombine,
+    zset_inputs: Vec<Vec<(Vec<u8>, f64)>>,
+    weights: Option<Vec<f64>>,
+    aggregate: kevy_store::ZAggregate,
+    dst: Vec<u8>,
+) -> Op {
+    match combine {
+        ZCombine::ZInter | ZCombine::ZUnion | ZCombine::ZDiff => {
+            let pairs = match combine {
+                ZCombine::ZInter => {
+                    kevy_store::zinter(&zset_inputs, weights.as_deref(), aggregate)
+                }
+                ZCombine::ZUnion => {
+                    kevy_store::zunion(&zset_inputs, weights.as_deref(), aggregate)
+                }
+                _ => kevy_store::zdiff(&zset_inputs),
+            };
+            Op::ZStoreResult { dst, pairs }
+        }
+        ZCombine::SInter | ZCombine::SUnion | ZCombine::SDiff => {
+            // Set forms ride the Members gather: inputs carry score
+            // 1.0 placeholders only when sources were sets; strip.
+            let sets: Vec<Vec<Vec<u8>>> = zset_inputs
+                .into_iter()
+                .map(|inp| inp.into_iter().map(|(m, _)| m).collect())
+                .collect();
+            let members = match combine {
+                ZCombine::SInter => crate::reduce::set_intersect(&sets),
+                ZCombine::SUnion => crate::reduce::set_union(&sets),
+                _ => crate::reduce::set_diff(&sets),
+            };
+            Op::SetStoreResult { dst, members }
+        }
+    }
 }

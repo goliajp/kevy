@@ -1,0 +1,3 @@
+[server]
+threads = 5
+data_dir = "/ppxxxxxx"

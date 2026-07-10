@@ -1,0 +1,8 @@
+# kevy"
+
+[persistence]
+aof              = true
+appendfsync     = "everysÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿýallkeyÛ-lr"
+
+[expiry]
+hz = 128

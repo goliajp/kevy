@@ -25,7 +25,7 @@ jobs:
     name: covgate (line-coverage ratchet)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install Rust (stable)
         run: |
           rustup toolchain install stable --no-self-update
@@ -34,7 +34,7 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Cache cargo registry + build artifacts
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -64,7 +64,7 @@ jobs:
             os: macos-14   # M-series GitHub-hosted runner
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Rust (stable)
         run: |
@@ -74,13 +74,13 @@ jobs:
           rustup component add clippy
 
       - name: Cache cargo registry + build artifacts
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-${{ matrix.target }}-
 
@@ -92,6 +92,9 @@ jobs:
       - name: generated docs parity (llms.txt / verb-reference == VERB_META)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo run -p kevy --bin gen_docs -- . --check
+      - name: locgate (files ≤500 LOC, fns ≤50 or waivered)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: bash bench/locgate.sh
 
       - name: Clippy (workspace, all targets, all features)
         run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
@@ -106,19 +109,19 @@ jobs:
     name: contract gates (availgate + aigate + repligate)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install Rust (stable)
         run: |
           rustup toolchain install stable --no-self-update
           rustup default stable
       - name: Cache cargo registry + build artifacts
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-gates-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-gates-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-gates-
       - name: Build gate binaries (release)
@@ -145,7 +148,7 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/hotfix/')
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Rust (stable)
         run: |
@@ -153,13 +156,13 @@ jobs:
           rustup default stable
 
       - name: Cache cargo registry + build artifacts
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-release-profile-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-release-profile-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-release-profile-
 
@@ -178,7 +181,7 @@ jobs:
           - wasm32-wasip1
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Rust + wasm target
         run: |
@@ -187,13 +190,13 @@ jobs:
           rustup target add ${{ matrix.target }}
 
       - name: Cache cargo
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-${{ matrix.target }}-
 
@@ -207,12 +210,13 @@ jobs:
           cargo check --target ${{ matrix.target }} -p kevy-resp
           cargo check --target ${{ matrix.target }} -p kevy-embedded
 
-  # ───────────── miri on the hashmap (catches UB in unsafe slot mgmt) ─────────────
+  # ───────────── miri on the unsafe stones (catches UB in slot mgmt, ─────────────
+  # ───────────── SPSC ring atomics, and the zset encoding face)      ─────────────
   miri:
-    name: miri (kevy-map + kevy-bytes)
+    name: miri (kevy-map + kevy-bytes + kevy-ring + kevy-store zset)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install nightly + miri
         run: |
@@ -220,13 +224,13 @@ jobs:
           rustup override set nightly
 
       - name: Cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: miri-${{ hashFiles('**/Cargo.lock') }}
+          key: miri-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             miri-
 
@@ -240,6 +244,24 @@ jobs:
           MIRIFLAGS: "-Zmiri-disable-isolation"
         run: cargo miri test -p kevy-bytes --lib
 
+      # v3.18 T5b: the two-thread stress tests run with cfg(miri)-reduced N
+      # (2k iterations instead of 200k/1M) — miri's race detector needs the
+      # full/empty boundary crossings, not the iteration count.
+      - name: cargo miri test -p kevy-ring
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation"
+        run: cargo miri test -p kevy-ring --lib
+
+      # v3.18 T5b: zset subset only (the RFC's named surface — encoding
+      # roundtrip, skiplist/listpack switch, score ordering; ~2 s native).
+      # Time-box note: the full kevy-store lib suite is NOT miri-runnable —
+      # large-N tests (tests_snapshot / tests_memory pause + accounting
+      # sweeps) run for hours under miri's ~1000x interpretation overhead.
+      - name: cargo miri test -p kevy-store (zset subset)
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation"
+        run: cargo miri test -p kevy-store --lib zset
+
   # ───────────── compat smoke vs valkey 9.1 ─────────────
   compat:
     name: bench/run.sh (Docker, 5-min smoke)
@@ -247,7 +269,7 @@ jobs:
     # Don't block the main matrix on bench — it's a flake-prone Docker harness.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Build kevy release image + run vs valkey 9.1
         env:
           N: "50000"   # smaller than the perf-box cohort — this is a smoke
@@ -266,6 +288,6 @@ jobs:
     # an environmental perf artifact. The script exits non-zero if kevy
     # diverges from valkey on any check.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: 3-way differential vs valkey 9.1 + redis 7.4
         run: bash bench/compat3.sh

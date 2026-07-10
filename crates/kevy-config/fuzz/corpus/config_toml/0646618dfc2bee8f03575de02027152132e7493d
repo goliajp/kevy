@@ -1,0 +1,12 @@
+#
+[server]
+band = "3"
+C = "lr"
+h=05
+ qm= 1
+vl = "i"
+u= ""
+s  =0
+t=6
+cs =00
+a=7

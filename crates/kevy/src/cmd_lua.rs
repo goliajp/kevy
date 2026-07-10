@@ -58,69 +58,83 @@ fn script_cache() -> &'static Mutex<HashMap<[u8; 20], Vec<u8>>> {
 /// argv through `kevy::dispatch::dispatch_into` against the host
 /// `&mut Store`.
 fn make_lua_host() -> LuaHost<Store> {
-    let mut host = LuaHost::<Store>::new(|store, argv, read_only| {
-        // P7c: read-only enforcement. EVAL_RO / EVALSHA_RO set
-        // read_only=true; reject writes per Redis semantics.
-        if read_only
-            && let Some(cmd) = argv.first() {
-                let upper: Vec<u8> = cmd.iter().map(|b| b.to_ascii_uppercase()).collect();
-                if crate::cmd::is_write_verb(&upper) {
-                    return b"-READONLY can't write against a read-only script\r\n".to_vec();
-                }
+    let mut host =
+        LuaHost::<Store>::new(lua_redis_call);
+    apply_lua_config(&mut host);
+    host
+}
+
+/// The `redis.call` dispatch closure body: enforcement checks, then
+/// route the inner argv through `crate::dispatch::dispatch_into`.
+fn lua_redis_call(store: &mut Store, argv: &[&[u8]], read_only: bool) -> Vec<u8> {
+    // P7c: read-only enforcement. EVAL_RO / EVALSHA_RO set
+    // read_only=true; reject writes per Redis semantics.
+    if read_only
+        && let Some(cmd) = argv.first() {
+            let upper: Vec<u8> = cmd.iter().map(|b| b.to_ascii_uppercase()).collect();
+            if crate::cmd::is_write_verb(&upper) {
+                return b"-READONLY can't write against a read-only script\r\n".to_vec();
             }
-        // v1.27.4: cross-shard inner-call enforcement. Under
-        // `--threads > 1`, EVAL runs on KEYS[1]'s shard (v1.27.1
-        // routing fix); the inner `redis.call` hits this same
-        // shard's Store. Calling on a key that lives on a different
-        // shard silently mis-routes — matches Redis Cluster's
-        // intended-disallowed behaviour. Return CROSSSLOT loudly
-        // instead of corrupting state. Same rule Redis Cluster
-        // applies via slot validation at EVAL dispatch.
-        let cfg = crate::config_global::get();
-        let nshards = cfg.server.threads;
-        if nshards > 1
-            && let Some(target_key) = argv.get(1)
+        }
+    // v1.27.4: cross-shard inner-call enforcement. Under
+    // `--threads > 1`, EVAL runs on KEYS[1]'s shard (v1.27.1
+    // routing fix); the inner `redis.call` hits this same
+    // shard's Store. Calling on a key that lives on a different
+    // shard silently mis-routes — matches Redis Cluster's
+    // intended-disallowed behaviour. Return CROSSSLOT loudly
+    // instead of corrupting state. Same rule Redis Cluster
+    // applies via slot validation at EVAL dispatch.
+    let cfg = crate::config_global::get();
+    let nshards = cfg.server.threads;
+    if nshards > 1
+        && let Some(target_key) = argv.get(1)
+    {
+        let target_shard =
+            kevy_rt::shard_of_key(target_key, nshards, cfg.cluster.enabled);
+        let my_shard = crate::ops::cluster::current_shard_for_lua();
+        if target_shard != my_shard {
+            return b"-CROSSSLOT Lua redis.call target key is on a different shard than the EVAL. Use {hashtag} to colocate keys, or run kevy --threads 1.\r\n".to_vec();
+        }
+    }
+    let mut a = Argv::default();
+    for slice in argv {
+        a.push(slice);
+    }
+    let mut out = Vec::new();
+    crate::dispatch::dispatch_into(store, &a, &mut out);
+    bridge_lua_wake_keys(argv, &out);
+    out
+}
+
+/// v1.27.3: bridge inner-EVAL writes to the runtime's BLOCK
+/// wake hook. `dispatch_into` hits the Store directly and
+/// bypasses `post_write_housekeeping` where wake_key normally
+/// fires. Push the affected key to a thread-local buffer so
+/// the runtime drains + wakes after the outer EVAL returns
+/// (see kevy_rt::lua_wake_bridge). Cheap: one match + push.
+fn bridge_lua_wake_keys(argv: &[&[u8]], out: &[u8]) {
+    if !out.is_empty()
+        && out[0] != b'-'
+        && let Some(verb) = argv.first()
+    {
+        let mut buf = [0u8; 32];
+        let upper = crate::cmd::upper_verb(verb, &mut buf);
+        // Single source: the wake set lives in cmd_block (grounded
+        // against the OP_TABLE); this used to be a hand-copied list.
+        if crate::cmd_block::wake_idx_for_verb(upper).is_some()
+            && let Some(key) = argv.get(1)
         {
-            let target_shard =
-                kevy_rt::shard_of_key(target_key, nshards, cfg.cluster.enabled);
-            let my_shard = crate::ops::cluster::current_shard_for_lua();
-            if target_shard != my_shard {
-                return b"-CROSSSLOT Lua redis.call target key is on a different shard than the EVAL. Use {hashtag} to colocate keys, or run kevy --threads 1.\r\n".to_vec();
-            }
+            kevy_rt::push_lua_wake_key(key);
         }
-        let mut a = Argv::default();
-        for slice in argv {
-            a.push(slice);
-        }
-        let mut out = Vec::new();
-        crate::dispatch::dispatch_into(store, &a, &mut out);
-        // v1.27.3: bridge inner-EVAL writes to the runtime's BLOCK
-        // wake hook. `dispatch_into` hits the Store directly and
-        // bypasses `post_write_housekeeping` where wake_key normally
-        // fires. Push the affected key to a thread-local buffer so
-        // the runtime drains + wakes after the outer EVAL returns
-        // (see kevy_rt::lua_wake_bridge). Cheap: one match + push.
-        if !out.is_empty()
-            && out[0] != b'-'
-            && let Some(verb) = argv.first()
-        {
-            let mut buf = [0u8; 32];
-            let upper = crate::cmd::upper_verb(verb, &mut buf);
-            // Single source: the wake set lives in cmd_block (grounded
-            // against the OP_TABLE); this used to be a hand-copied list.
-            if crate::cmd_block::wake_idx_for_verb(upper).is_some()
-                && let Some(key) = argv.get(1)
-            {
-                kevy_rt::push_lua_wake_key(key);
-            }
-        }
-        out
-    });
-    // v1.27 P7e: read `[lua] time_limit_ms` + `[lua] allow_dialects`
-    // from the process-wide config at first-EVAL time. Operators who
-    // hot-reload `[lua]` settings after the first EVAL need to also
-    // SCRIPT FLUSH (drops the per-dialect Vm pool) or restart the
-    // server — v1.28 backlog if there's real demand.
+    }
+}
+
+/// v1.27 P7e: read `[lua] time_limit_ms` + `[lua] allow_dialects`
+/// from the process-wide config at first-EVAL time. Operators who
+/// hot-reload `[lua]` settings after the first EVAL need to also
+/// SCRIPT FLUSH (drops the per-dialect Vm pool) or restart the
+/// server — v1.28 backlog if there's real demand.
+fn apply_lua_config(host: &mut LuaHost<Store>) {
     let cfg = crate::config_global::get();
     // Translate ms → instruction budget. Rough conservative
     // calibration: 40 000 instr/ms on M-series hardware (the same
@@ -149,7 +163,6 @@ fn make_lua_host() -> LuaHost<Store> {
             host.set_allowed_dialects(&versions);
         }
     }
-    host
 }
 
 /// Run `f` with the per-shard `LuaHost`. Returns `None` if the host
@@ -217,31 +230,9 @@ fn cmd_eval<A: ArgvView + ?Sized>(
         return;
     }
     let script: &[u8] = args.get(1).unwrap_or(b"");
-    let numkeys: usize = match parse_uint(args.get(2).unwrap_or(b"")) {
-        Some(n) => n,
-        None => {
-            encode_error(out, "ERR value is not an integer or out of range");
-            return;
-        }
+    let Some((keys, argv)) = parse_eval_keys_argv(args, out) else {
+        return;
     };
-    let total_after_numkeys = args.len().saturating_sub(3);
-    if numkeys > total_after_numkeys {
-        encode_error(
-            out,
-            "ERR Number of keys can't be greater than number of args",
-        );
-        return;
-    }
-    let keys: Vec<&[u8]> = (0..numkeys)
-        .map(|i| args.get(3 + i).unwrap_or(b""))
-        .collect();
-    let argv: Vec<&[u8]> = ((3 + numkeys)..args.len())
-        .map(|i| args.get(i).unwrap_or(b""))
-        .collect();
-    if let Some(crossslot) = cross_slot_check(&keys) {
-        out.extend_from_slice(&crossslot);
-        return;
-    }
     // v1.27.1: also push the script into the process-global SCRIPT
     // cache so a subsequent EVALSHA from any shard finds it (matches
     // Redis's auto-cache-on-EVAL semantics).
@@ -282,31 +273,9 @@ fn cmd_evalsha<A: ArgvView + ?Sized>(
             return;
         }
     };
-    let numkeys: usize = match parse_uint(args.get(2).unwrap_or(b"")) {
-        Some(n) => n,
-        None => {
-            encode_error(out, "ERR value is not an integer or out of range");
-            return;
-        }
+    let Some((keys, argv)) = parse_eval_keys_argv(args, out) else {
+        return;
     };
-    let total_after_numkeys = args.len().saturating_sub(3);
-    if numkeys > total_after_numkeys {
-        encode_error(
-            out,
-            "ERR Number of keys can't be greater than number of args",
-        );
-        return;
-    }
-    let keys: Vec<&[u8]> = (0..numkeys)
-        .map(|i| args.get(3 + i).unwrap_or(b""))
-        .collect();
-    let argv: Vec<&[u8]> = ((3 + numkeys)..args.len())
-        .map(|i| args.get(i).unwrap_or(b""))
-        .collect();
-    if let Some(crossslot) = cross_slot_check(&keys) {
-        out.extend_from_slice(&crossslot);
-        return;
-    }
     // v1.27.1: lookup the script source from the process-global
     // cache (any shard's SCRIPT LOAD / EVAL filled it). Bypass
     // `LuaHost::evalsha` whose per-Bridge cache only sees the local
@@ -413,6 +382,44 @@ fn script_flush<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
 // ─────────────────────────────────────────────────────────────────────
 // helpers
 // ─────────────────────────────────────────────────────────────────────
+
+/// Shared EVAL / EVALSHA prelude: parse `numkeys`, collect the
+/// `KEYS` / `ARGV` slices, and run the cluster cross-slot check.
+/// KEYS / ARGV borrowed slices for one EVAL invocation.
+type KeysArgv<'a> = (Vec<&'a [u8]>, Vec<&'a [u8]>);
+
+/// `None` = an error reply was already appended to `out`.
+fn parse_eval_keys_argv<'a, A: ArgvView + ?Sized>(
+    args: &'a A,
+    out: &mut Vec<u8>,
+) -> Option<KeysArgv<'a>> {
+    let numkeys: usize = match parse_uint(args.get(2).unwrap_or(b"")) {
+        Some(n) => n,
+        None => {
+            encode_error(out, "ERR value is not an integer or out of range");
+            return None;
+        }
+    };
+    let total_after_numkeys = args.len().saturating_sub(3);
+    if numkeys > total_after_numkeys {
+        encode_error(
+            out,
+            "ERR Number of keys can't be greater than number of args",
+        );
+        return None;
+    }
+    let keys: Vec<&[u8]> = (0..numkeys)
+        .map(|i| args.get(3 + i).unwrap_or(b""))
+        .collect();
+    let argv: Vec<&[u8]> = ((3 + numkeys)..args.len())
+        .map(|i| args.get(i).unwrap_or(b""))
+        .collect();
+    if let Some(crossslot) = cross_slot_check(&keys) {
+        out.extend_from_slice(&crossslot);
+        return None;
+    }
+    Some((keys, argv))
+}
 
 fn parse_uint(bytes: &[u8]) -> Option<usize> {
     let s = std::str::from_utf8(bytes).ok()?;

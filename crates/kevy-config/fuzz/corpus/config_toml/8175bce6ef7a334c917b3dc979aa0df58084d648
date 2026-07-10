@@ -1,0 +1,35 @@
+ # kevy config seed
+[server]
+bind     = "127.0.0.1"
+port   = 6004
+threads  = 4
+data_dir = "/b64mb"
+
+[memory]
+maxmemory        = "511mb"
+maxmemory_policy  = "allkeys-lru"
+
+[expiry]
+hz       = 20
+sample   = 20
+
+[log]
+level    = "info"
+output   ="stderu"
+
+[advanced]
+[slowlog]
+[memory]
+maxmemory         = "511mb"
+maxmemory_policy  = "allkeys-lru"
+
+[expiry]
+hz    = 20
+sample= 20
+
+[log]
+level    = "info"
+output   ="stderu"
+
+[advanced]
+spin_limit       = 1

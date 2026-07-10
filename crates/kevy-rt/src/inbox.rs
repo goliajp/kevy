@@ -67,25 +67,8 @@ impl<C: Commands> Shard<C> {
     /// shard / MULTI queue / AOF call `args.to_argv()` at the handoff
     /// juncture; only those paths still materialise an owned `Argv`.
     pub(crate) fn conn_readable(&mut self, conn_id: u64) -> io::Result<()> {
-        {
-            let Some(conn) = self.conns.get_mut(&conn_id) else {
-                return Ok(());
-            };
-            loop {
-                match conn.sock.read(&mut self.read_buf) {
-                    Ok(0) => {
-                        conn.closing = true;
-                        break;
-                    }
-                    Ok(n) => conn.input.extend_from_slice(&self.read_buf[..n]),
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
-                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {} // retry the read
-                    Err(_) => {
-                        conn.closing = true;
-                        break;
-                    }
-                }
-            }
+        if !self.read_socket_into_input(conn_id) {
+            return Ok(());
         }
 
         // Swap conn.input onto the stack so parse_command_borrowed can lend
@@ -116,6 +99,34 @@ impl<C: Commands> Shard<C> {
             self.protocol_error(conn_id);
         }
         self.flush_conn(conn_id)
+    }
+
+    /// Drain the readable socket into `conn.input` (until WouldBlock / EOF /
+    /// error; EOF and errors flag the conn closing). Returns `false` when
+    /// the conn no longer exists. Extracted verbatim from
+    /// [`Self::conn_readable`] (single call site, `inline(always)`) purely
+    /// for the 50-LOC fn rule — codegen is the manual-inline equivalent.
+    #[inline(always)]
+    fn read_socket_into_input(&mut self, conn_id: u64) -> bool {
+        let Some(conn) = self.conns.get_mut(&conn_id) else {
+            return false;
+        };
+        loop {
+            match conn.sock.read(&mut self.read_buf) {
+                Ok(0) => {
+                    conn.closing = true;
+                    break;
+                }
+                Ok(n) => conn.input.extend_from_slice(&self.read_buf[..n]),
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {} // retry the read
+                Err(_) => {
+                    conn.closing = true;
+                    break;
+                }
+            }
+        }
+        true
     }
 
     /// Open the AOF group-commit window (no-op unless AOF is on + policy is
@@ -180,6 +191,8 @@ impl<C: Commands> Shard<C> {
     /// the only fallible step — the AOF group sync — downgrades to a
     /// logged error, so no `Err` is ever built).
     #[inline(never)]
+    // LOC-WAIVER: data-driven Inbound message dispatch table — one arm
+    // per cross-core message variant, inside the peer-ring bit-walk.
     pub(crate) fn drain_inbound_core_slow<const DIRECT_FLUSH: bool>(
         &mut self,
     ) -> io::Result<usize> {

@@ -1187,9 +1187,10 @@ fn server_as_replica_applies_upstream_writes() {
     // Poll the replica until all 5 keys are visible (or timeout).
     // Retry connect — on heavily-loaded lx64 CI the runtime may
     // bind the port (which start's poll saw) but the accept loop
-    // needs an extra moment before serving on it. 20ms × 500 = 10s
-    // hard cap.
-    let mut reader = (0..500)
+    // needs an extra moment before serving on it. llvm-cov
+    // instrumentation (covgate) slows boot severely — 20ms × 1500
+    // = 30s hard cap.
+    let mut reader = (0..1500)
         .find_map(|_| {
             std::net::TcpStream::connect(("127.0.0.1", replica.port))
                 .ok()
@@ -1198,7 +1199,7 @@ fn server_as_replica_applies_upstream_writes() {
                     None
                 })
         })
-        .expect("replica accept loop never became ready within 10s");
+        .expect("replica accept loop never became ready within 30s");
     let mut all_seen = false;
     for _ in 0..200 {
         let mut got_all = true;

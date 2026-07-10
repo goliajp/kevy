@@ -102,3 +102,13 @@ server 0-7 / client 8-15,median-of-5)。可用性 arc 全落地
 
 复制/心跳/gate 管线不吃裸面吞吐(v3.14-v3.16 增量 = 0 回归)。
 charter「对标并远超 valkey」在终版复核成立。
+
+## v3.18.0 release arena — bare face 复测(2026-07-10,lx64)
+
+结构 arc(LOC 还债 + 热路径批 D + fuzz/polish)后的裸面确认:
+**7/7 全胜 valkey 9.1**(GET 6.39M = 3.00×,SET 6.38M = 3.99×,
+INCR 3.00×,SADD 2.50×,HSET 2.25×,ZADD 1.73×,LPUSH 1.64×)。
+GET/SET 与 v3.17.0 基线持平(批 D perfgate ×3 median 已单独验证
+热路径拆分零回归)。注:LPUSH 2.91M 较 v3.17.0 的 3.20M 低 9%
+(超该格 stdev 4.1%,共享盒单轮;vs valkey 仍 1.64× 领先),
+下一 release 复测观察——不构成 ship 阻塞,构成观察项。

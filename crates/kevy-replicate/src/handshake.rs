@@ -65,6 +65,9 @@ impl std::error::Error for HandshakeError {}
 /// Parse a `REPLICATE FROM <offset> ID <id>` command from an
 /// already-decoded [`Argv`] (the caller has run the bytes through
 /// `kevy_resp::parse_command_into` first).
+// missing_panics_doc: the unwraps are guarded by the `len() != 5` arity check
+// above them — unreachable, not a caller-facing panic condition.
+#[allow(clippy::missing_panics_doc)]
 pub fn parse_replicate_from(argv: &Argv) -> Result<HandshakeReq, HandshakeError> {
     if argv.len() != 5 {
         return Err(HandshakeError::WrongArity(argv.len()));

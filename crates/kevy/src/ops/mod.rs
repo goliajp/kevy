@@ -97,6 +97,19 @@ pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
     // active reaper disabled), then sum every shard's slot.
     stats::publish_gauges(store);
     let totals = stats::aggregate();
+    let body = build_info_body(cfg, want, &totals);
+    // RESP3: Verbatim text frame (`=N\r\ntxt:<body>\r\n`) so the
+    // client can render it as plain text (e.g. redis-cli prints it
+    // unchanged). RESP2 stays as a length-prefixed bulk.
+    match proto {
+        RespVersion::V2 => encode_bulk(out, body.as_bytes()),
+        RespVersion::V3 => encode_verbatim(out, *b"txt", body.as_bytes()),
+    }
+}
+
+/// Assemble the INFO body — every requested section in the
+/// canonical valkey order.
+fn build_info_body(cfg: &Config, want: Option<&[u8]>, totals: &stats::Totals) -> String {
     let mut body = String::new();
     if want_section(want, "server") {
         info_server(cfg, &mut body);
@@ -105,13 +118,13 @@ pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
         info_clients(cfg, &mut body);
     }
     if want_section(want, "memory") {
-        info_memory(cfg, &totals, &mut body);
+        info_memory(cfg, totals, &mut body);
     }
     if want_section(want, "persistence") {
         info_persistence(cfg, &mut body);
     }
     if want_section(want, "stats") {
-        info_stats(&totals, &mut body);
+        info_stats(totals, &mut body);
     }
     if want_section(want, "replication") {
         info_replication(&mut body);
@@ -120,15 +133,9 @@ pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
         info_cluster(cfg, &mut body);
     }
     if want_section(want, "keyspace") {
-        info_keyspace(&totals, &mut body);
+        info_keyspace(totals, &mut body);
     }
-    // RESP3: Verbatim text frame (`=N\r\ntxt:<body>\r\n`) so the
-    // client can render it as plain text (e.g. redis-cli prints it
-    // unchanged). RESP2 stays as a length-prefixed bulk.
-    match proto {
-        RespVersion::V2 => encode_bulk(out, body.as_bytes()),
-        RespVersion::V3 => encode_verbatim(out, *b"txt", body.as_bytes()),
-    }
+    body
 }
 
 fn want_section(want: Option<&[u8]>, name: &str) -> bool {
@@ -261,47 +268,58 @@ fn info_replication(b: &mut String) {
     let offset = view.master_repl_offset;
     let connected = view.replicas.len();
     match upstream {
-        Some((host, port)) => {
-            b.push_str("role:slave\r\n");
-            b.push_str(&format!("master_host:{host}\r\n"));
-            b.push_str(&format!("master_port:{port}\r\n"));
-            // v3.14 D3/D4: heartbeat-derived truth — link status by
-            // ping freshness (<3s), applied offset and frame lag from
-            // the runner registry.
-            let (up, applied, lag, last_io) = crate::replica_state::replica_link_view();
-            b.push_str(if up {
-                "master_link_status:up\r\n"
-            } else {
-                "master_link_status:down\r\n"
-            });
-            b.push_str(&format!("master_last_io_seconds_ago:{last_io}\r\n"));
-            b.push_str("master_sync_in_progress:0\r\n");
-            b.push_str(if crate::replica_state::read_only() {
-                "slave_read_only:1\r\n"
-            } else {
-                "slave_read_only:0\r\n"
-            });
-            b.push_str(&format!("slave_repl_offset:{applied}\r\n"));
-            b.push_str(&format!("slave_lag_frames:{lag}\r\n"));
-        }
-        None => {
-            b.push_str("role:master\r\n");
-            b.push_str(&format!("connected_slaves:{connected}\r\n"));
-            // v3.14 D2: per-replica truth — sent (pumped), acked
-            // (REPLCONF ACK), lag in frames vs master_repl_offset.
-            for (i, (ip, port, sent, acked)) in view.replicas.iter().enumerate() {
-                let acked_v = acked.unwrap_or(0);
-                let lag = offset.saturating_sub(acked_v);
-                let state = if acked.is_some() { "online" } else { "syncing" };
-                b.push_str(&format!(
-                    "slave{i}:ip={ip},port={port},state={state},offset={acked_v},sent={sent},lag={lag}\r\n"
-                ));
-            }
-            b.push_str("master_replid:0000000000000000000000000000000000000000\r\n");
-            b.push_str(&format!("master_repl_offset:{offset}\r\n"));
-        }
+        Some((host, port)) => info_repl_replica(b, host, port),
+        None => info_repl_master(b, &view, offset, connected),
     }
     b.push_str("\r\n");
+}
+
+/// The replica-side (`role:slave`) half of `INFO replication`.
+fn info_repl_replica(b: &mut String, host: std::net::IpAddr, port: u16) {
+    b.push_str("role:slave\r\n");
+    b.push_str(&format!("master_host:{host}\r\n"));
+    b.push_str(&format!("master_port:{port}\r\n"));
+    // v3.14 D3/D4: heartbeat-derived truth — link status by
+    // ping freshness (<3s), applied offset and frame lag from
+    // the runner registry.
+    let (up, applied, lag, last_io) = crate::replica_state::replica_link_view();
+    b.push_str(if up {
+        "master_link_status:up\r\n"
+    } else {
+        "master_link_status:down\r\n"
+    });
+    b.push_str(&format!("master_last_io_seconds_ago:{last_io}\r\n"));
+    b.push_str("master_sync_in_progress:0\r\n");
+    b.push_str(if crate::replica_state::read_only() {
+        "slave_read_only:1\r\n"
+    } else {
+        "slave_read_only:0\r\n"
+    });
+    b.push_str(&format!("slave_repl_offset:{applied}\r\n"));
+    b.push_str(&format!("slave_lag_frames:{lag}\r\n"));
+}
+
+/// The primary-side (`role:master`) half of `INFO replication`.
+fn info_repl_master(
+    b: &mut String,
+    view: &replication::ReplicationView,
+    offset: u64,
+    connected: usize,
+) {
+    b.push_str("role:master\r\n");
+    b.push_str(&format!("connected_slaves:{connected}\r\n"));
+    // v3.14 D2: per-replica truth — sent (pumped), acked
+    // (REPLCONF ACK), lag in frames vs master_repl_offset.
+    for (i, (ip, port, sent, acked)) in view.replicas.iter().enumerate() {
+        let acked_v = acked.unwrap_or(0);
+        let lag = offset.saturating_sub(acked_v);
+        let state = if acked.is_some() { "online" } else { "syncing" };
+        b.push_str(&format!(
+            "slave{i}:ip={ip},port={port},state={state},offset={acked_v},sent={sent},lag={lag}\r\n"
+        ));
+    }
+    b.push_str("master_replid:0000000000000000000000000000000000000000\r\n");
+    b.push_str(&format!("master_repl_offset:{offset}\r\n"));
 }
 
 fn info_cluster(cfg: &Config, b: &mut String) {

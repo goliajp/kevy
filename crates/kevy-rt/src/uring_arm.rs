@@ -41,6 +41,10 @@ impl<C: Commands> Shard<C> {
     /// hottest block of `run_uring` self time on the 8-shard profile. `conns`
     /// and `io` are disjoint borrows (`io` lives on `run_uring`'s stack), so
     /// `iter_mut` needs no snapshot — nothing here inserts or removes.
+    // Hot per-iter arm loop — prefetch-pipelined per-conn SQE state
+    // machine (write/writev chunking + big-arg cancel/read + multishot
+    // re-arm); the hottest block of run_uring self-time.
+    // LOC-WAIVER: hot per-iter arm loop; splitting risks codegen change.
     pub(crate) fn uring_arm_conns(
         &mut self,
         ring: &mut IoUring,

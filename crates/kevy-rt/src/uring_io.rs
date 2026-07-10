@@ -83,6 +83,9 @@ impl<C: Commands> Shard<C> {
     ///   buffer with N ≥ slab size, reserve N+32 bytes up front so the
     ///   subsequent multishot recv chunks of the same big SET body land
     ///   without the 0→16→32→48→64K realloc storm on a cold connection.
+    // LOC-WAIVER: hot recv-completion state machine (big-arg cancel /
+    // CRLF skip / bigbulk routing / slab dispatch) — per-op critical
+    // path, splitting risks codegen change.
     pub(crate) fn uring_on_recv(
         &mut self,
         cid: u64,
@@ -241,6 +244,8 @@ impl<C: Commands> Shard<C> {
     /// `conn.input` realloc storm AND the final `Arc::from(slice)`
     /// 64K memcpy on big SETs.
     #[inline]
+    // LOC-WAIVER: hot parse-from-slab dispatch fork (A1 fast path vs
+    // append-then-parse) — per-op critical path.
     pub(crate) fn uring_recv_dispatch(
         &mut self,
         cid: u64,
@@ -331,6 +336,8 @@ impl<C: Commands> Shard<C> {
     }
 
     /// A write completed: advance progress; resubmit the remainder next loop.
+    // LOC-WAIVER: hot write-completion state machine (chunked-writev
+    // prefix drop / short-write linearize) — per-op critical path.
     pub(crate) fn uring_on_write(
         &mut self,
         cid: u64,

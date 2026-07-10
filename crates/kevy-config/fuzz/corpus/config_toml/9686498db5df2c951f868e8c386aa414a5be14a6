@@ -1,0 +1,8 @@
+#eed0
+[server]
+bind     = "127.0.0.1"
+port     = 004
+threads  = 4
+data_dir = "/ÿÿ2"
+port     =6004
+reads  =818

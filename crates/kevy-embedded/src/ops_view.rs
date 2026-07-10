@@ -52,24 +52,7 @@ impl Store {
         desc: bool,
         mode: ViewMode,
     ) -> io::Result<()> {
-        // Referenced indexes must exist.
-        let mut names: Vec<Vec<u8>> = vec![order_by.to_vec()];
-        tree.each_leaf(&mut |l| names.push(l.index.clone()));
-        {
-            let g = self
-                .indexes
-                .catalog
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            for n in &names {
-                if g.1.get(n).is_none() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        "view references unknown index",
-                    ));
-                }
-            }
-        }
+        self.check_view_refs(&tree, order_by)?;
         let spec = ViewSpec {
             name: name.to_vec(),
             tree,
@@ -95,6 +78,27 @@ impl Store {
             let inner = &mut *g;
             crate::ops_index::sync_segs(&self.indexes, &mut inner.idx_segs, &mut inner.store);
             sync_views(&self.views, &mut inner.view_segs, &inner.idx_segs);
+        }
+        Ok(())
+    }
+
+    /// Every index a view references (its leaves + ORDER BY) must
+    /// already be declared.
+    fn check_view_refs(&self, tree: &Tree, order_by: &[u8]) -> io::Result<()> {
+        let mut names: Vec<Vec<u8>> = vec![order_by.to_vec()];
+        tree.each_leaf(&mut |l| names.push(l.index.clone()));
+        let g = self
+            .indexes
+            .catalog
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for n in &names {
+            if g.1.get(n).is_none() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "view references unknown index",
+                ));
+            }
         }
         Ok(())
     }
@@ -147,25 +151,7 @@ impl Store {
             }
             match &vs.mat {
                 Some(m) => all.extend(m.page(after, limit, vs.spec.desc)),
-                None => {
-                    // Order-driven streaming (same clamp rationale as
-                    // the server pager).
-                    let r = resolver(&inner.idx_segs);
-                    if let Some(order_seg) = r(&vs.spec.order_by) {
-                        let cursor = after
-                            .map(|(v, k)| kevy_index::Cursor { value: v.clone(), key: k.clone() });
-                        let mut got = 0usize;
-                        for (v, k) in order_seg.scan(cursor.as_ref(), vs.spec.desc) {
-                            if key_in_tree(&vs.spec.tree, k, &&r) {
-                                all.push((v.clone(), k.to_vec()));
-                                got += 1;
-                                if got == limit {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
+                None => stream_virtual(&vs.spec, &inner.idx_segs, after, limit, &mut all),
             }
         }
         if !found {
@@ -238,6 +224,32 @@ fn eval_shard(spec: &ViewSpec, segs: &ShardSegs) -> Vec<(IndexValue, Vec<u8>)> {
         .into_iter()
         .filter_map(|k| r(&spec.order_by).and_then(|s| s.verify_entry(&k)).map(|v| (v.clone(), k)))
         .collect()
+}
+
+/// Virtual-mode page: order-driven streaming over the ORDER BY index,
+/// probing the tree per key (same clamp rationale as the server
+/// pager).
+fn stream_virtual(
+    spec: &ViewSpec,
+    segs: &ShardSegs,
+    after: Option<&(IndexValue, Vec<u8>)>,
+    limit: usize,
+    all: &mut Vec<(IndexValue, Vec<u8>)>,
+) {
+    let r = resolver(segs);
+    if let Some(order_seg) = r(&spec.order_by) {
+        let cursor = after.map(|(v, k)| kevy_index::Cursor { value: v.clone(), key: k.clone() });
+        let mut got = 0usize;
+        for (v, k) in order_seg.scan(cursor.as_ref(), spec.desc) {
+            if key_in_tree(&spec.tree, k, &&r) {
+                all.push((v.clone(), k.to_vec()));
+                got += 1;
+                if got == limit {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 fn rebuild(vs: &mut ViewState, segs: &ShardSegs) {

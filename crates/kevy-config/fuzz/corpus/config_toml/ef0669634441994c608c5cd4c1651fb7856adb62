@@ -1,0 +1,9 @@
+#
+
+[memory]
+maxmemory   = "512m"#]
+maxmemory      = "51m"#]
+maxmemory  = "52m"
+
+[m_mory]
+maxor =   6

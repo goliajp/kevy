@@ -1,0 +1,5 @@
+#vyn
+[memory]
+maxmemory_policy  ="allkeys-lru"
+maxmemory_policy = "ÿu"
+[p]

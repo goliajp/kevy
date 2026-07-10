@@ -60,27 +60,7 @@ impl Connection {
                     args.push(b"COUNT".to_vec());
                     args.push(n.to_string().into_bytes());
                 }
-                match c.request(&args)? {
-                    Reply::Array(items) if items.len() == 2 => {
-                        let mut it = items.into_iter();
-                        let cursor_bulk = it.next().unwrap();
-                        let keys_arr = it.next().unwrap();
-                        let next_cursor = match cursor_bulk {
-                            Reply::Bulk(b) => std::str::from_utf8(&b)
-                                .map_err(|_| io::Error::other("non-utf8 SCAN cursor"))?
-                                .parse()
-                                .map_err(|_| io::Error::other("bad SCAN cursor"))?,
-                            other => return Err(unexpected(other)),
-                        };
-                        let keys = match keys_arr {
-                            Reply::Array(items) => array_to_bulks(items)?,
-                            other => return Err(unexpected(other)),
-                        };
-                        Ok((next_cursor, keys))
-                    }
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
-                    other => Err(unexpected(other)),
-                }
+                parse_scan_reply(c.request(&args)?)
             }
         }
     }
@@ -101,6 +81,32 @@ impl Connection {
                 other => Err(unexpected(other)),
             },
         }
+    }
+}
+
+/// Unwrap the remote `SCAN` reply — a two-element array of
+/// `[next-cursor bulk, keys array]` — into `(next_cursor, keys)`.
+fn parse_scan_reply(reply: Reply) -> io::Result<(u64, Vec<Vec<u8>>)> {
+    match reply {
+        Reply::Array(items) if items.len() == 2 => {
+            let mut it = items.into_iter();
+            let cursor_bulk = it.next().unwrap();
+            let keys_arr = it.next().unwrap();
+            let next_cursor = match cursor_bulk {
+                Reply::Bulk(b) => std::str::from_utf8(&b)
+                    .map_err(|_| io::Error::other("non-utf8 SCAN cursor"))?
+                    .parse()
+                    .map_err(|_| io::Error::other("bad SCAN cursor"))?,
+                other => return Err(unexpected(other)),
+            };
+            let keys = match keys_arr {
+                Reply::Array(items) => array_to_bulks(items)?,
+                other => return Err(unexpected(other)),
+            };
+            Ok((next_cursor, keys))
+        }
+        Reply::Error(e) => Err(io::Error::other(string(e))),
+        other => Err(unexpected(other)),
     }
 }
 

@@ -1,0 +1,9 @@
+#  seed
+[server]
+bind     = "122.0.0.1"
+port = 6004
+threads  =4
+data_dir = "/vib/ëevy"
+
+[persistence]
+auto_aof_rewrite_percentage  = 127

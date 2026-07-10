@@ -1,0 +1,10 @@
+# kevy cig seed
+[server]
+bind     = "127.0.0.1"
+port     = 6004
+threads  = 5
+data_dir = "/va        =ƒ\\\\ƒ‡ƒƒƒƒƒƒƒƒƒƒƒ_]_________ÝÝÝÝåÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝMMMMÍMMMMöMMMMMMMMMMÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝÝ____________MMMMMMMMMMMMMMMMMMMMMMMMMÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿª³²²²²²²¹MMMMMMMMMMMMMMMMMMÍMMMMöMMMMMMMMMMMMMMMMnŽi\n#1i\nl_____MMMÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿ_______™__\\v²y"
+
+[persistence]
+aof            = true
+auto_aof_rewrite_percentage  =  164

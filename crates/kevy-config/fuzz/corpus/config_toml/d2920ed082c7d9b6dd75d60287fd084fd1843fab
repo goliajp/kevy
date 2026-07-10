@@ -1,0 +1,9 @@
+# 
+[expiry]
+hz = 0
+[log]
+
+output   ="„šrr"
+
+[advanced]
+spin_limit    = 7

@@ -314,25 +314,7 @@ impl Subscriber {
                     match kevy_resp::parse_reply(buf) {
                         Ok(Some((reply, used))) => {
                             buf.drain(..used);
-                            // Reply::Map / Reply::Array both acceptable
-                            // (a server that rejected V3 would emit an
-                            // Error reply — fall through to the error
-                            // branch below).
-                            return match reply {
-                                Reply::Map(_) | Reply::Array(_) => {
-                                    Ok(PubsubEvent::Subscribe {
-                                        channel: b"HELLO".to_vec(),
-                                        count: 3,
-                                    })
-                                }
-                                Reply::Error(e) => Err(io::Error::other(
-                                    String::from_utf8_lossy(&e).into_owned(),
-                                )),
-                                other => Err(invalid(format!(
-                                    "unexpected HELLO 3 reply shape: {}",
-                                    shape(&other)
-                                ))),
-                            };
+                            return classify_hello3_reply(reply);
                         }
                         Ok(None) => {}
                         Err(_) => {
@@ -423,6 +405,25 @@ impl Iterator for SubscriberMessages<'_> {
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => None,
             other => Some(other),
         }
+    }
+}
+
+/// Classify the drained `HELLO 3` ack. Reply::Map / Reply::Array are
+/// both acceptable (a server that rejected V3 would emit an Error
+/// reply — surfaced via the error branch below).
+fn classify_hello3_reply(reply: Reply) -> io::Result<PubsubEvent> {
+    match reply {
+        Reply::Map(_) | Reply::Array(_) => Ok(PubsubEvent::Subscribe {
+            channel: b"HELLO".to_vec(),
+            count: 3,
+        }),
+        Reply::Error(e) => Err(io::Error::other(
+            String::from_utf8_lossy(&e).into_owned(),
+        )),
+        other => Err(invalid(format!(
+            "unexpected HELLO 3 reply shape: {}",
+            shape(&other)
+        ))),
     }
 }
 

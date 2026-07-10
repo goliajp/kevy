@@ -199,76 +199,67 @@ fn parse_resp_value(vm: &mut Vm, bytes: &[u8], pos: &mut usize) -> Result<Value,
         }
         b':' => {
             // Integer.
-            let line = read_line(bytes, pos)?;
-            let n = std::str::from_utf8(&line)
-                .map_err(|_| {
-                    LuaError(Value::Str(
-                        vm.heap.intern(b"redis.call: invalid integer reply"),
-                    ))
-                })?
-                .parse::<i64>()
-                .map_err(|_| {
-                    LuaError(Value::Str(
-                        vm.heap.intern(b"redis.call: invalid integer reply"),
-                    ))
-                })?;
-            Ok(Value::Int(n))
+            parse_int_line(vm, bytes, pos, b"redis.call: invalid integer reply")
+                .map(Value::Int)
         }
-        b'$' => {
-            // Bulk string `$N\r\nbytes\r\n` or nil bulk `$-1\r\n`.
-            let len_line = read_line(bytes, pos)?;
-            let n: i64 = std::str::from_utf8(&len_line)
-                .map_err(|_| {
-                    LuaError(Value::Str(vm.heap.intern(b"redis.call: invalid bulk length")))
-                })?
-                .parse()
-                .map_err(|_| {
-                    LuaError(Value::Str(vm.heap.intern(b"redis.call: invalid bulk length")))
-                })?;
-            if n < 0 {
-                return Ok(Value::Bool(false));
-            }
-            let len = n as usize;
-            if *pos + len + 2 > bytes.len() {
-                return Err(LuaError(Value::Str(
-                    vm.heap.intern(b"redis.call: truncated bulk reply"),
-                )));
-            }
-            let payload = &bytes[*pos..*pos + len];
-            let v = Value::Str(vm.heap.intern(payload));
-            *pos += len + 2; // skip payload + \r\n
-            Ok(v)
-        }
-        b'*' => {
-            // Array.
-            let len_line = read_line(bytes, pos)?;
-            let n: i64 = std::str::from_utf8(&len_line)
-                .map_err(|_| {
-                    LuaError(Value::Str(vm.heap.intern(b"redis.call: invalid array length")))
-                })?
-                .parse()
-                .map_err(|_| {
-                    LuaError(Value::Str(vm.heap.intern(b"redis.call: invalid array length")))
-                })?;
-            if n < 0 {
-                return Ok(Value::Bool(false));
-            }
-            let count = n as usize;
-            let mut entries: Vec<(i64, Value)> = Vec::with_capacity(count);
-            for i in 0..count {
-                let v = parse_resp_value(vm, bytes, pos)?;
-                entries.push(((i + 1) as i64, v));
-            }
-            let mut b = vm.new_table();
-            for (k, v) in entries {
-                b = b.with(k, v);
-            }
-            Ok(Value::Table(b.build()))
-        }
+        b'$' => parse_bulk(vm, bytes, pos),
+        b'*' => parse_array(vm, bytes, pos),
         _ => Err(LuaError(Value::Str(
             vm.heap.intern(b"redis.call: unknown RESP type tag"),
         ))),
     }
+}
+
+/// Read one CRLF line and parse it as a decimal integer; `msg` is the
+/// error payload for a malformed line.
+fn parse_int_line(
+    vm: &mut Vm,
+    bytes: &[u8],
+    pos: &mut usize,
+    msg: &'static [u8],
+) -> Result<i64, LuaError> {
+    let line = read_line(bytes, pos)?;
+    std::str::from_utf8(&line)
+        .ok()
+        .and_then(|s| s.parse::<i64>().ok())
+        .ok_or_else(|| LuaError(Value::Str(vm.heap.intern(msg))))
+}
+
+/// Bulk string `$N\r\nbytes\r\n` or nil bulk `$-1\r\n` (→ `false`).
+fn parse_bulk(vm: &mut Vm, bytes: &[u8], pos: &mut usize) -> Result<Value, LuaError> {
+    let n = parse_int_line(vm, bytes, pos, b"redis.call: invalid bulk length")?;
+    if n < 0 {
+        return Ok(Value::Bool(false));
+    }
+    let len = n as usize;
+    if *pos + len + 2 > bytes.len() {
+        return Err(LuaError(Value::Str(
+            vm.heap.intern(b"redis.call: truncated bulk reply"),
+        )));
+    }
+    let payload = &bytes[*pos..*pos + len];
+    let v = Value::Str(vm.heap.intern(payload));
+    *pos += len + 2; // skip payload + \r\n
+    Ok(v)
+}
+
+/// Array `*N\r\n…` → 1-based Lua table; nil array (→ `false`).
+fn parse_array(vm: &mut Vm, bytes: &[u8], pos: &mut usize) -> Result<Value, LuaError> {
+    let n = parse_int_line(vm, bytes, pos, b"redis.call: invalid array length")?;
+    if n < 0 {
+        return Ok(Value::Bool(false));
+    }
+    let count = n as usize;
+    let mut entries: Vec<(i64, Value)> = Vec::with_capacity(count);
+    for i in 0..count {
+        let v = parse_resp_value(vm, bytes, pos)?;
+        entries.push(((i + 1) as i64, v));
+    }
+    let mut b = vm.new_table();
+    for (k, v) in entries {
+        b = b.with(k, v);
+    }
+    Ok(Value::Table(b.build()))
 }
 
 /// Read until `\r\n`, advancing `pos` past the CRLF. Returns the

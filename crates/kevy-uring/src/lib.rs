@@ -28,6 +28,7 @@
 //! drop.
 
 #![cfg(target_os = "linux")]
+#![warn(missing_docs)]
 
 mod completion;
 mod ffi;

@@ -35,16 +35,18 @@ pub(crate) struct Spanned {
     pub(crate) col: usize,
 }
 
-/// Tokenize the full input into a vec of spanned tokens. Comments and
-/// inline whitespace are dropped; newlines are kept (one per source line
-/// after a `# comment` is stripped).
-pub(crate) fn tokenize(src: &str) -> Result<Vec<Spanned>, ConfigError> {
+/// Tokenize the full input into a vec of spanned tokens plus the
+/// 1-based `(line, col)` position of end-of-input (where the lexer
+/// stopped — the anchor for "unexpected end of input" diagnostics).
+/// Comments and inline whitespace are dropped; newlines are kept (one
+/// per source line after a `# comment` is stripped).
+pub(crate) fn tokenize(src: &str) -> Result<(Vec<Spanned>, (usize, usize)), ConfigError> {
     let mut out = Vec::new();
     let mut lexer = Lexer::new(src);
     while let Some(spanned) = lexer.next_token()? {
         out.push(spanned);
     }
-    Ok(out)
+    Ok((out, (lexer.line, lexer.col)))
 }
 
 struct Lexer<'a> {
@@ -249,6 +251,7 @@ mod tests {
     fn toks(src: &str) -> Vec<Token> {
         tokenize(src)
             .unwrap()
+            .0
             .into_iter()
             .map(|s| s.tok)
             .collect()
@@ -341,11 +344,12 @@ mod tests {
 
     #[test]
     fn line_col_tracking() {
-        let spans = tokenize("a = 1\n[s]").unwrap();
+        let (spans, eof_pos) = tokenize("a = 1\n[s]").unwrap();
         // Line 1: a, =, 1, newline. Line 2: [, s, ].
         assert_eq!(spans[0].line, 1);
         assert_eq!(spans[0].col, 1);
         assert_eq!(spans[4].line, 2); // `[`
         assert_eq!(spans[4].col, 1);
+        assert_eq!(eof_pos, (2, 4), "end-of-input just past `]`");
     }
 }

@@ -181,31 +181,7 @@ fn encode_table(
     depth: u32,
 ) -> Result<(), String> {
     let t_ref = &*t;
-    let len = t_ref.len();
-    // Array-shape detection: len() gives N if 1..=N are all non-nil.
-    // Confirm every key 1..=len is present (len() returns N even if
-    // there are extra non-integer keys). We treat a table as an array
-    // iff (a) len > 0 and (b) iterating from key 1..=N yields all
-    // non-nil values AND (c) total entry count == N (no extra keys).
-    let mut total_entries = 0usize;
-    let mut k = Value::Nil;
-    while let Some((nk, _)) = t_ref.next(k).map_err(|e| format!("table iter: {e:?}"))? {
-        total_entries += 1;
-        k = nk;
-    }
-    let n = len as usize;
-    let mut is_array = false;
-    if n > 0 && n == total_entries {
-        // Verify keys 1..=n are present.
-        let mut ok = true;
-        for i in 1..=n {
-            if matches!(t_ref.get(Value::Int(i as i64)), Value::Nil) {
-                ok = false;
-                break;
-            }
-        }
-        is_array = ok;
-    }
+    let (n, total_entries, is_array) = table_shape(t_ref)?;
     if is_array {
         // Array header
         if n <= 15 {
@@ -243,10 +219,43 @@ fn encode_table(
     Ok(())
 }
 
+/// Array-shape detection: `len()` gives N if 1..=N are all non-nil.
+/// Confirm every key 1..=len is present (`len()` returns N even if
+/// there are extra non-integer keys). We treat a table as an array
+/// iff (a) len > 0 and (b) iterating from key 1..=N yields all
+/// non-nil values AND (c) total entry count == N (no extra keys).
+/// Returns `(len, total_entries, is_array)`.
+fn table_shape(t_ref: &Table) -> Result<(usize, usize, bool), String> {
+    let len = t_ref.len();
+    let mut total_entries = 0usize;
+    let mut k = Value::Nil;
+    while let Some((nk, _)) = t_ref.next(k).map_err(|e| format!("table iter: {e:?}"))? {
+        total_entries += 1;
+        k = nk;
+    }
+    let n = len as usize;
+    let mut is_array = false;
+    if n > 0 && n == total_entries {
+        // Verify keys 1..=n are present.
+        let mut ok = true;
+        for i in 1..=n {
+            if matches!(t_ref.get(Value::Int(i as i64)), Value::Nil) {
+                ok = false;
+                break;
+            }
+        }
+        is_array = ok;
+    }
+    Ok((n, total_entries, is_array))
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // Decoder
 // ─────────────────────────────────────────────────────────────────────
 
+// fn-length exemption: pure data-driven msgpack tag match table — one
+// flat arm per wire tag, only a length read + decode_* delegate each.
+// LOC-WAIVER: data-driven msgpack tag dispatch table — one arm per tag range.
 fn decode_value(
     vm: &mut Vm,
     bytes: &[u8],

@@ -1,0 +1,19 @@
+# kÿÿÿÿ
+
+[expiry]
+hz   = 10
+sample   = 20
+# 
+hz   = 10
+sample  = 65
+sample   = 20
+
+[log]
+
+[advanced]
+spin_limit = 100
+park_timeout_ms  = 2
+tick_check_every =24
+
+[slowlog]
+max_len    =28

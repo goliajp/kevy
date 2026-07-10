@@ -126,25 +126,39 @@ impl Store {
         };
         let want_reverse = rank < 0;
         let scan_limit = if maxlen == 0 { n } else { maxlen.min(n) };
-        let mut out = Vec::new();
-        let mut skipped = 0usize;
-        let iter: Box<dyn Iterator<Item = (usize, &Vec<u8>)>> = if want_reverse {
-            Box::new(entries.iter().enumerate().rev())
-        } else {
-            Box::new(entries.iter().enumerate())
-        };
-        for (idx, v) in iter.take(scan_limit) {
-            if v.as_slice() == element {
-                if skipped < skip {
-                    skipped += 1;
-                    continue;
-                }
-                out.push(idx as i64);
-                if out.len() >= cap {
-                    break;
-                }
+        Ok(lpos_scan(&entries, element, skip, cap, want_reverse, scan_limit))
+    }
+}
+
+/// The scan loop of [`Store::lpos`]: walk `entries` (reversed for a
+/// negative rank), skip the first `skip` matches, collect up to `cap`
+/// matched indices, stop after `scan_limit` scanned elements.
+fn lpos_scan(
+    entries: &[Vec<u8>],
+    element: &[u8],
+    skip: usize,
+    cap: usize,
+    want_reverse: bool,
+    scan_limit: usize,
+) -> Vec<i64> {
+    let mut out = Vec::new();
+    let mut skipped = 0usize;
+    let iter: Box<dyn Iterator<Item = (usize, &Vec<u8>)>> = if want_reverse {
+        Box::new(entries.iter().enumerate().rev())
+    } else {
+        Box::new(entries.iter().enumerate())
+    };
+    for (idx, v) in iter.take(scan_limit) {
+        if v.as_slice() == element {
+            if skipped < skip {
+                skipped += 1;
+                continue;
+            }
+            out.push(idx as i64);
+            if out.len() >= cap {
+                break;
             }
         }
-        Ok(out)
     }
+    out
 }

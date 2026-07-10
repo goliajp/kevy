@@ -6,8 +6,8 @@
 //! the shard(s) that own its keys, executing one op against the local store,
 //! and folding sub-results into each connection's seq-ordered ring.
 
+use crate::exec_fold::relative_ttl_write;
 use crate::message::{Agg, DispatchMeta, Inbound, Op, Part, PendingSlot, SmallReply};
-use crate::reduce::{drain_front, materialize};
 use crate::shard::Shard;
 use crate::{Commands, ResolvedCmd, Route, TxnKind};
 use kevy_resp::{Argv, ArgvView, RespVersion, encode_array_len};
@@ -43,9 +43,23 @@ impl<C: Commands> Shard<C> {
             self.start_command(conn_id, seq, proto, args, resolved, cluster_conn);
             return;
         }
-        // Transaction-state arms (rare next to the dispatch path above);
-        // each re-probes internally / via immediate_reply.
-        match (in_multi, &resolved.txn_kind) {
+        self.handle_txn_state(conn_id, in_multi, &resolved.txn_kind, args);
+    }
+
+    /// Transaction-state arms of [`Self::handle_command`] (rare next to
+    /// the dispatch path there); each re-probes internally / via
+    /// immediate_reply. Extracted verbatim (single call site,
+    /// `inline(always)`) purely for the 50-LOC fn rule — codegen is the
+    /// manual-inline equivalent.
+    #[inline(always)]
+    fn handle_txn_state<A: ArgvView + ?Sized>(
+        &mut self,
+        conn_id: u64,
+        in_multi: bool,
+        txn_kind: &TxnKind,
+        args: &A,
+    ) {
+        match (in_multi, txn_kind) {
             (false, TxnKind::Multi) => {
                 if let Some(c) = self.conns.get_mut(&conn_id) {
                     c.multi = Some(Vec::new());
@@ -147,6 +161,8 @@ impl<C: Commands> Shard<C> {
     /// cycle: pending-slot bookkeeping, local exec, and cross-shard
     /// forwarding. `seq` and `proto` arrive from the caller's single
     /// pre-dispatch conns probe (see [`Self::handle_command`]).
+    // LOC-WAIVER: data-driven route dispatch table — one arm per Route
+    // variant, each a one-line handoff to that route's starter.
     fn start_command<A: ArgvView + ?Sized>(
         &mut self,
         conn_id: u64,
@@ -424,221 +440,8 @@ impl<C: Commands> Shard<C> {
         self.log(&c);
     }
 
-    /// Fold a sub-result into its slot; emit completed replies in seq order.
-    /// The `WatchCollect` / `ExecPrep` accumulators don't materialise to RESP
-    /// bytes — they hand off to [`crate::exec_watch`] for the conn-state
-    /// mutation + downstream dispatch they require.
-    pub(crate) fn fold(&mut self, conn_id: u64, seq: u64, part: Part) {
-        let watch_agg: Option<Agg> = {
-            let Some(conn) = self.conns.get_mut(&conn_id) else {
-                return;
-            };
-            if seq < conn.next_emit {
-                return; // already emitted (defensive — shouldn't happen)
-            }
-            let idx = (seq - conn.next_emit) as usize;
-            let Some(slot) = conn.pending.get_mut(idx) else {
-                return;
-            };
-            // (Agg::AllOk, Part::Ok) `{}` body matches the catch-all `_ => {}`
-            // body but documents the *expected* aggregator/part pairing — the
-            // wildcard arm is the fallback for impossible combinations after
-            // the dispatcher arms. match_same_arms would collapse the two and
-            // hide the contract; keep them separate.
-            #[allow(clippy::match_same_arms)]
-            match (&mut slot.agg, part) {
-                (Agg::First(dst), Part::Reply(b)) => *dst = Some(b),
-                (Agg::SumInt(acc), Part::Int(n)) => *acc += n,
-                // v3.16 D1 WAIT: reply = MIN over per-shard acked counts.
-                (Agg::MinInt(acc), Part::Int(n)) => *acc = (*acc).min(n),
-                // v3.16 D2 REPL.WAIT: every shard must report 1 (met).
-                (Agg::ReplBarrier { ok, .. }, Part::Int(n)) => *ok &= n > 0,
-                // v3.16 D2 REPL.TOKEN: pairs drop in by shard id.
-                (
-                    Agg::ReplTokens { slots },
-                    Part::ReplToken { shard, generation, next_offset },
-                ) => {
-                    if let Some(s) = slots.get_mut(shard as usize) {
-                        *s = Some((generation, next_offset));
-                    }
-                }
-                (Agg::AllOk, Part::Ok) => {}
-                (Agg::ExtensionGather { chunks, .. }, Part::ExtensionChunk(c)) => {
-                    chunks.push(c);
-                }
-                (Agg::Gather { got, .. }, Part::Gathered(items))
-                | (Agg::ZStoreGather { got, .. }, Part::Gathered(items)) => {
-                    for (k, g) in items {
-                        got.insert(k, g);
-                    }
-                }
-                (Agg::Keys { acc, .. }, Part::Keys(ks)) => acc.extend(ks),
-                (
-                    Agg::PrefixStats { keys, expires },
-                    Part::PrefixStats { keys: k, expires: e },
-                ) => {
-                    *keys += k;
-                    *expires += e;
-                }
-                (Agg::SlowlogGet { entries, .. }, Part::SlowlogEntries(es)) => {
-                    entries.extend(es);
-                }
-                (Agg::WatchCollect { pairs }, Part::WatchVersions(items)) => {
-                    pairs.extend(items);
-                }
-                // Cross-shard XREAD gather: drop each stream's element into
-                // its request-order slot.
-                (Agg::XReadGather { slots }, Part::XReadElement { index, element }) => {
-                    if let Some(slot) = slots.get_mut(index as usize) {
-                        *slot = element;
-                    }
-                }
-                (Agg::ExecPrep { dirty, .. }, Part::Int(n)) => *dirty |= n != 0,
-                // Cross-shard RENAME orchestrator: buffer the step-1
-                // result in the agg so finalize can ship step 2.
-                (
-                    Agg::RenameOrchestrator { taken, .. },
-                    Part::RenameTaken { value, ttl_ms },
-                ) => *taken = Some((value, ttl_ms)),
-                // Step 2's put result: `refused = None` → stored; `Some`
-                // → NX-blocked, and the handed-back value lands in `taken`
-                // so finalize can restore src before the `:0` reply.
-                (
-                    Agg::RenameOrchestrator { put_stored, taken, .. },
-                    Part::RenamePutDone { refused },
-                ) => {
-                    *put_stored = Some(refused.is_none());
-                    if refused.is_some() {
-                        *taken = refused;
-                    }
-                }
-                // The terminal step-1 miss (RenameNoSuchSrc) leaves
-                // `taken == None`; finalize reads that as "missing src".
-                _ => {}
-            }
-            slot.remaining -= 1;
-            if slot.remaining == 0 {
-                let proto = slot.proto;
-                let agg = std::mem::replace(&mut slot.agg, Agg::AllOk);
-                if matches!(
-                    agg,
-                    Agg::WatchCollect { .. }
-                        | Agg::ExecPrep { .. }
-                        | Agg::RenameOrchestrator { .. }
-                        | Agg::ZStoreGather { .. }
-                        | Agg::ExtensionGather { .. }
-                ) {
-                    Some(agg)
-                } else {
-                    slot.done = Some(materialize(agg, proto));
-                    drain_front(conn);
-                    None
-                }
-            } else {
-                None
-            }
-        };
-        if let Some(agg) = watch_agg {
-            match agg {
-                Agg::WatchCollect { .. } | Agg::ExecPrep { .. } => {
-                    self.finalize_watch_agg(conn_id, seq, agg);
-                }
-                Agg::RenameOrchestrator { .. } => self.finalize_rename_agg(conn_id, seq, agg),
-                Agg::ZStoreGather { .. } => self.finalize_zstore_agg(conn_id, seq, agg),
-                Agg::ExtensionGather { argv, chunks } => {
-                    let proto = self
-                        .conns
-                        .get(&conn_id)
-                        .map_or(kevy_resp::RespVersion::V2, |c| c.proto);
-                    let reply = self.commands.extension_reduce_v3(&argv, chunks, proto);
-                    // v2.6: a reply starting with 0x00 is a CONTINUATION —
-                    // the remainder encodes a second fan-out argv
-                    // (length-prefixed items). RESP replies never start
-                    // with NUL, so the convention is unambiguous. Phase
-                    // state rides inside the continuation argv itself
-                    // (stateless two-phase, no new agg variant).
-                    if reply.first() == Some(&0) {
-                        if let Some(argv2) = decode_continuation(&reply[1..]) {
-                            self.start_extension_phase(conn_id, seq, argv2);
-                        } else {
-                            self.fill_extension_slot(
-                                conn_id,
-                                seq,
-                                b"-ERR internal: bad extension continuation\r\n".to_vec(),
-                            );
-                        }
-                    } else {
-                        self.fill_extension_slot(conn_id, seq, reply);
-                    }
-                }
-                // The match above is exhaustive over what fold ever puts
-                // into `watch_agg` (only the orchestrator aggs). Anything
-                // else is a bug; ignore so a stray slot doesn't crash
-                // the reactor.
-                _ => {}
-            }
-        }
-    }
-
-    pub(crate) fn protocol_error(&mut self, conn_id: u64) {
-        let seq = match self.conns.get_mut(&conn_id) {
-            Some(c) => {
-                let s = c.next_seq;
-                c.next_seq += 1;
-                c.closing = true;
-                let proto = c.proto;
-                c.pending.push_back(PendingSlot {
-                    remaining: 1,
-                    agg: Agg::First(None),
-                    done: None,
-                    proto,
-                });
-                s
-            }
-            None => return,
-        };
-        self.fold(
-            conn_id,
-            seq,
-            Part::Reply(SmallReply::from_slice(b"-ERR Protocol error\r\n")),
-        );
-    }
-}
-
-/// Does `args` set a TTL via a *relative* duration (vs absolute `*AT`)? Such
-/// writes need an absolute `PEXPIREAT` follow-up in the AOF — see
-/// [`Shard::log_write`]. `SET … EXAT|PXAT` aren't parsed by the server's SET,
-/// so only `EX`/`PX` count here.
-fn relative_ttl_write<A: ArgvView + ?Sized>(args: &A) -> bool {
-    if args.len() < 3 {
-        return false;
-    }
-    let verb = &args[0];
-    if verb.eq_ignore_ascii_case(b"EXPIRE")
-        || verb.eq_ignore_ascii_case(b"PEXPIRE")
-        || verb.eq_ignore_ascii_case(b"SETEX")
-        || verb.eq_ignore_ascii_case(b"PSETEX")
-    {
-        return true;
-    }
-    if verb.eq_ignore_ascii_case(b"SET") {
-        return (3..args.len())
-            .any(|i| args[i].eq_ignore_ascii_case(b"EX") || args[i].eq_ignore_ascii_case(b"PX"));
-    }
-    false
-}
-
-/// Decode a continuation payload: `[n: u32 LE][(len: u32 LE, bytes)*]`.
-fn decode_continuation(b: &[u8]) -> Option<Vec<Vec<u8>>> {
-    let mut pos = 0usize;
-    let n = u32::from_le_bytes(b.get(pos..pos + 4)?.try_into().ok()?) as usize;
-    pos += 4;
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
-        let len = u32::from_le_bytes(b.get(pos..pos + 4)?.try_into().ok()?) as usize;
-        pos += 4;
-        out.push(b.get(pos..pos + len)?.to_vec());
-        pos += len;
-    }
-    Some(out)
+    // `fold` (the seq-ordered result reducer) + `protocol_error` and the
+    // `relative_ttl_write` / `decode_continuation` free fns live in
+    // [`crate::exec_fold`] — same `impl<C: Commands> Shard<C>`, split out
+    // so this file stays under the 500-LOC house rule.
 }

@@ -107,6 +107,7 @@ pub(crate) fn frame_to_event(frame: PubsubFrame) -> PubsubEvent {
 /// RESP2 pub/sub frames arrive as `*N` arrays; RESP3 servers wrap the
 /// same shape in a `>N` push frame so the client can demux out-of-band
 /// deliveries from regular command replies. Both forms are accepted.
+// LOC-WAIVER: data-driven pubsub-kind match table — one flat frame-destructure arm per kind.
 pub(crate) fn classify(reply: Reply) -> io::Result<PubsubEvent> {
     let items = match reply {
         Reply::Array(v) | Reply::Push(v) => v,

@@ -1,0 +1,8 @@
+# kevy cig seed
+[server]
+data_dir = "/vaMMMMMMMMMMMMnéi\n#1i\nl______________________iô__\\v¥y"
+
+[persistence]
+aof    = true
+appendfsync                  = "everysec"
+auto_aof_rewrite_percentage  =  129

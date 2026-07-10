@@ -13,11 +13,14 @@
 //! No I/O, no threads, no runtime types — everything here is
 //! deterministic and unit-testable in isolation.
 
+#![warn(missing_docs)]
+
 mod agg;
 mod catalog;
 mod segment;
 mod value;
 mod view;
+mod view_sidecar;
 
 pub use agg::{AggBy, AggSegment, AggStats, GroupStats, merge_group, sort_groups};
 pub use catalog::{AnnSpec, Catalog, IndexKind, IndexSpec, IndexState, ValType};

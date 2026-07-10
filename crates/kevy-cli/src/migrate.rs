@@ -93,77 +93,81 @@ pub(crate) fn rebuild_frames(
             encode_command_borrowed(&mut frame, &[b"SET", dst, &v]);
         }
         b"hash" => {
-            let Reply::Array(flat) = client.request_borrowed(&[b"HGETALL", key])? else {
+            let Some(items) = fetch_bulks(client, &[b"HGETALL", key])? else {
                 return Ok(None);
             };
-            if flat.is_empty() {
-                return Ok(None);
-            }
-            let mut argv: Vec<&[u8]> = vec![b"HSET", dst];
-            let items: Vec<Vec<u8>> = flat
-                .into_iter()
-                .filter_map(|r| if let Reply::Bulk(b) = r { Some(b) } else { None })
-                .collect();
-            argv.extend(items.iter().map(Vec::as_slice));
-            encode_command_borrowed(&mut frame, &argv);
+            encode_multi(&mut frame, b"HSET", dst, &items);
         }
         b"list" => {
-            let Reply::Array(items) = client.request_borrowed(&[b"LRANGE", key, b"0", b"-1"])?
-            else {
+            let Some(vals) = fetch_bulks(client, &[b"LRANGE", key, b"0", b"-1"])? else {
                 return Ok(None);
             };
-            if items.is_empty() {
-                return Ok(None);
-            }
-            let vals: Vec<Vec<u8>> = items
-                .into_iter()
-                .filter_map(|r| if let Reply::Bulk(b) = r { Some(b) } else { None })
-                .collect();
-            let mut argv: Vec<&[u8]> = vec![b"RPUSH", dst];
-            argv.extend(vals.iter().map(Vec::as_slice));
-            encode_command_borrowed(&mut frame, &argv);
+            encode_multi(&mut frame, b"RPUSH", dst, &vals);
         }
         b"set" => {
-            let Reply::Array(items) = client.request_borrowed(&[b"SMEMBERS", key])? else {
+            let Some(ms) = fetch_bulks(client, &[b"SMEMBERS", key])? else {
                 return Ok(None);
             };
-            if items.is_empty() {
-                return Ok(None);
-            }
-            let ms: Vec<Vec<u8>> = items
-                .into_iter()
-                .filter_map(|r| if let Reply::Bulk(b) = r { Some(b) } else { None })
-                .collect();
-            let mut argv: Vec<&[u8]> = vec![b"SADD", dst];
-            argv.extend(ms.iter().map(Vec::as_slice));
-            encode_command_borrowed(&mut frame, &argv);
+            encode_multi(&mut frame, b"SADD", dst, &ms);
         }
         b"zset" => {
-            let Reply::Array(items) =
-                client.request_borrowed(&[b"ZRANGE", key, b"0", b"-1", b"WITHSCORES"])?
-            else {
+            let zrange: &[&[u8]] = &[b"ZRANGE", key, b"0", b"-1", b"WITHSCORES"];
+            let Some(flat) = fetch_bulks(client, zrange)? else {
                 return Ok(None);
             };
-            if items.is_empty() {
-                return Ok(None);
-            }
-            let flat: Vec<Vec<u8>> = items
-                .into_iter()
-                .filter_map(|r| if let Reply::Bulk(b) = r { Some(b) } else { None })
-                .collect();
-            // ZADD wants score member; ZRANGE gives member score
-            let mut argv: Vec<&[u8]> = vec![b"ZADD", dst];
-            for pair in flat.chunks(2) {
-                if pair.len() == 2 {
-                    argv.push(&pair[1]);
-                    argv.push(&pair[0]);
-                }
-            }
-            encode_command_borrowed(&mut frame, &argv);
+            encode_zadd(&mut frame, dst, &flat);
         }
         _ => return Ok(None), // streams etc. — out of the rebuild set
     }
-    // TTL rides as an absolute PEXPIREAT follow-up
+    append_ttl_frame(client, key, dst, &mut frame)?;
+    Ok(Some(frame))
+}
+
+/// Issue `cmd` and unwrap its Array reply into bulk payloads.
+/// `None` when the reply isn't an array or the array is empty (the key
+/// vanished / changed type between TYPE and read).
+fn fetch_bulks(client: &mut RespClient, cmd: &[&[u8]]) -> io::Result<Option<Vec<Vec<u8>>>> {
+    let Reply::Array(items) = client.request_borrowed(cmd)? else {
+        return Ok(None);
+    };
+    if items.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(
+        items
+            .into_iter()
+            .filter_map(|r| if let Reply::Bulk(b) = r { Some(b) } else { None })
+            .collect(),
+    ))
+}
+
+/// Encode `<verb> <dst> <vals…>` onto `frame` (HSET / RPUSH / SADD).
+fn encode_multi(frame: &mut Vec<u8>, verb: &[u8], dst: &[u8], vals: &[Vec<u8>]) {
+    let mut argv: Vec<&[u8]> = vec![verb, dst];
+    argv.extend(vals.iter().map(Vec::as_slice));
+    encode_command_borrowed(frame, &argv);
+}
+
+/// Encode `ZADD <dst> score member …` onto `frame`.
+/// ZADD wants score member; ZRANGE gives member score.
+fn encode_zadd(frame: &mut Vec<u8>, dst: &[u8], flat: &[Vec<u8>]) {
+    let mut argv: Vec<&[u8]> = vec![b"ZADD", dst];
+    for pair in flat.chunks(2) {
+        if pair.len() == 2 {
+            argv.push(&pair[1]);
+            argv.push(&pair[0]);
+        }
+    }
+    encode_command_borrowed(frame, &argv);
+}
+
+/// TTL rides as an absolute PEXPIREAT follow-up.
+fn append_ttl_frame(
+    client: &mut RespClient,
+    key: &[u8],
+    dst: &[u8],
+    frame: &mut Vec<u8>,
+) -> io::Result<()> {
     if let Reply::Int(ms) = client.request_borrowed(&[b"PTTL", key])?
         && ms > 0
     {
@@ -172,11 +176,11 @@ pub(crate) fn rebuild_frames(
             .map_err(io::Error::other)?
             .as_millis() as i64;
         encode_command_borrowed(
-            &mut frame,
+            frame,
             &[b"PEXPIREAT", dst, (now + ms).to_string().as_bytes()],
         );
     }
-    Ok(Some(frame))
+    Ok(())
 }
 
 /// Import stats.

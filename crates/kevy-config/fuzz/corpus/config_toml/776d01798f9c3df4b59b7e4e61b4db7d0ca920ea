@@ -1,0 +1,6 @@
+#ke"
+
+[memory]
+maxmemory  = "512mb"
+maxmemory_policy  = ""
+ou   =28

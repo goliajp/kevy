@@ -1,0 +1,7 @@
+#e
+[server]
+
+data_dir =""
+#e
+data_dir = ""
+port=2

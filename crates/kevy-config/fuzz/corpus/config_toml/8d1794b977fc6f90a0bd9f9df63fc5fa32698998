@@ -1,0 +1,6 @@
+# ke
+[persistence]
+auto_aof_rewrite_min_size    = "6mb"
+
+[memory]
+maxmemory    =  "5ÿÿÿx14B"

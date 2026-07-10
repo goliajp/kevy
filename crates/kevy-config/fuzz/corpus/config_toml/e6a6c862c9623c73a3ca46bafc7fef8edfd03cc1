@@ -1,0 +1,12 @@
+#evy cßsed
+[server]
+bind     = "7.0.0.0"
+port= 04
+threads  = 7
+#= "7.0.0.0"
+port     = 04
+threads  = 4
+
+port    = 04
+trehads  = 4
+#ta_ "/vaia

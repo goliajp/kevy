@@ -1,0 +1,4 @@
+
+[memory]
+maxmemory="512mb"
+laxeommry_policy=8

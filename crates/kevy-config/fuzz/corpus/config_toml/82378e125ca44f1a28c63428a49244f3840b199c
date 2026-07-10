@@ -1,0 +1,7 @@
+
+[advanced]
+spin_limit  =0
+park_timeout_ms  =1
+tick_check_every = 9
+ring_capacity =4
+_ = 28
