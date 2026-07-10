@@ -43,6 +43,7 @@
 //! assert!(matches!(routing, kevy_scope::Routing::Misdirected { .. }));
 //! ```
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 mod migration;
 mod ownership;

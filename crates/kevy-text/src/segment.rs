@@ -94,17 +94,14 @@ impl TextSegment {
             return;
         }
         let dl = toks.len() as u32;
-        let id = match self.free_ids.pop() {
-            Some(id) => {
-                self.id_key[id as usize] = Some(key.to_vec());
-                self.id_dl[id as usize] = dl;
-                id
-            }
-            None => {
-                self.id_key.push(Some(key.to_vec()));
-                self.id_dl.push(dl);
-                (self.id_key.len() - 1) as u32
-            }
+        let id = if let Some(id) = self.free_ids.pop() {
+            self.id_key[id as usize] = Some(key.to_vec());
+            self.id_dl[id as usize] = dl;
+            id
+        } else {
+            self.id_key.push(Some(key.to_vec()));
+            self.id_dl.push(dl);
+            (self.id_key.len() - 1) as u32
         };
         self.docs.insert(key.to_vec(), (id, dl, text.to_vec()));
         self.total_len += u64::from(dl);
@@ -370,6 +367,9 @@ fn tf_of(toks: &[Vec<u8>]) -> HashMap<Vec<u8>, u32> {
 
 /// Strict "ranks ahead of" for (score, key) — higher score first,
 /// key ascending as the tiebreak.
+// float_cmp: exact equality is the tiebreak trigger — an epsilon here would
+// make ranking non-deterministic for genuinely equal BM25 scores.
+#[allow(clippy::float_cmp)]
 fn better(a: (f64, &[u8]), b: (f64, &[u8])) -> bool {
     a.0 > b.0 || (a.0 == b.0 && a.1 < b.1)
 }

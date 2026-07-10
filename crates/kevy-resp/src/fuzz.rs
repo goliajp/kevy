@@ -202,6 +202,11 @@ impl Summary {
     /// Strict assertion helper: every call must have produced one of
     /// the three valid outcomes within the per-call timeout, and the
     /// total must match the campaign size.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the campaign was not clean: the seed count differs
+    /// from `expected_total`, or any call timed out.
     pub fn assert_clean(&self, expected_total: u64) {
         assert_eq!(self.total, expected_total, "fuzz campaign skipped seeds");
         assert!(

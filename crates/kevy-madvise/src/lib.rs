@@ -17,6 +17,7 @@
 //! the kernel returns `EINVAL` — making it safe to expose as a plain `fn`.
 
 #![forbid(unsafe_op_in_unsafe_fn)]
+#![warn(missing_docs)]
 
 #[cfg(target_os = "linux")]
 mod ffi {

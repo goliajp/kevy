@@ -20,6 +20,9 @@ use crate::transport::{
 };
 use crate::wire::{DecodeError, decode, encode};
 
+// needless_pass_by_value: thread entry point — it owns its channel/flag for
+// the thread's whole lifetime; references cannot cross `thread::spawn`.
+#[allow(clippy::needless_pass_by_value)]
 pub(crate) fn accept_loop(listener: TcpListener, tx: Sender<InboundEvent>, stop: Arc<AtomicBool>) {
     // Non-blocking + short sleep so the loop can observe `stop`
     // between accepts. Blocking `accept` would need a Shutdown-on-
@@ -52,6 +55,8 @@ pub(crate) fn accept_loop(listener: TcpListener, tx: Sender<InboundEvent>, stop:
     }
 }
 
+// needless_pass_by_value: thread entry point (see `accept_loop`).
+#[allow(clippy::needless_pass_by_value)]
 fn inbound_read_loop(
     mut stream: TcpStream,
     peer_addr: String,
@@ -85,8 +90,7 @@ fn inbound_read_loop(
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut =>
             {
-                // Read timeout — loop to re-check `stop`.
-                continue;
+                // Read timeout — fall through to re-check `stop`.
             }
             Err(_) => {
                 let _ = tx.send(InboundEvent::InboundConnFailed(peer_addr.clone()));
@@ -129,6 +133,8 @@ fn message_sender(msg: &Message) -> String {
     }
 }
 
+// needless_pass_by_value: thread entry point (see `accept_loop`).
+#[allow(clippy::needless_pass_by_value)]
 pub(crate) fn outbound_loop(peer: PeerAddr, shared: Arc<Shared>, stop: Arc<AtomicBool>) {
     let mut stream: Option<TcpStream> = None;
     while !stop.load(Ordering::Relaxed) {
@@ -142,7 +148,7 @@ pub(crate) fn outbound_loop(peer: PeerAddr, shared: Arc<Shared>, stop: Arc<Atomi
         // Drain this peer's outbound queue.
         let next_msg = {
             let mut qs = shared.out_queues.lock().expect("out_queues lock");
-            qs.get_mut(&peer.node_id).and_then(|q| q.pop_front())
+            qs.get_mut(&peer.node_id).and_then(std::collections::VecDeque::pop_front)
         };
         let Some(msg) = next_msg else {
             std::thread::sleep(Duration::from_millis(1));
@@ -167,17 +173,16 @@ fn dial(peer: &PeerAddr) -> Option<TcpStream> {
     let target = (peer.host.as_str(), peer.port);
     let addr_iter = target.to_socket_addrs().ok()?;
     for sa in addr_iter {
-        match TcpStream::connect_timeout(&sa, Duration::from_millis(500)) {
-            Ok(s) => {
-                let _ = s.set_nodelay(true);
-                return Some(s);
-            }
-            Err(_) => continue,
+        if let Ok(s) = TcpStream::connect_timeout(&sa, Duration::from_millis(500)) {
+            let _ = s.set_nodelay(true);
+            return Some(s);
         }
     }
     None
 }
 
+// needless_pass_by_value: thread entry point (see `accept_loop`).
+#[allow(clippy::needless_pass_by_value)]
 pub(crate) fn orchestrator_loop(
     shared: Arc<Shared>,
     inbound_rx: Receiver<InboundEvent>,

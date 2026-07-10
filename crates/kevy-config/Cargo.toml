@@ -14,3 +14,6 @@ keywords = ["toml", "config", "kevy", "redis", "kv"]
 categories = ["config", "parsing", "database-implementations"]
 
 [dependencies]
+
+[lints]
+workspace = true

@@ -210,9 +210,10 @@ jobs:
           cargo check --target ${{ matrix.target }} -p kevy-resp
           cargo check --target ${{ matrix.target }} -p kevy-embedded
 
-  # ───────────── miri on the hashmap (catches UB in unsafe slot mgmt) ─────────────
+  # ───────────── miri on the unsafe stones (catches UB in slot mgmt, ─────────────
+  # ───────────── SPSC ring atomics, and the zset encoding face)      ─────────────
   miri:
-    name: miri (kevy-map + kevy-bytes)
+    name: miri (kevy-map + kevy-bytes + kevy-ring + kevy-store zset)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -242,6 +243,24 @@ jobs:
         env:
           MIRIFLAGS: "-Zmiri-disable-isolation"
         run: cargo miri test -p kevy-bytes --lib
+
+      # v3.18 T5b: the two-thread stress tests run with cfg(miri)-reduced N
+      # (2k iterations instead of 200k/1M) — miri's race detector needs the
+      # full/empty boundary crossings, not the iteration count.
+      - name: cargo miri test -p kevy-ring
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation"
+        run: cargo miri test -p kevy-ring --lib
+
+      # v3.18 T5b: zset subset only (the RFC's named surface — encoding
+      # roundtrip, skiplist/listpack switch, score ordering; ~2 s native).
+      # Time-box note: the full kevy-store lib suite is NOT miri-runnable —
+      # large-N tests (tests_snapshot / tests_memory pause + accounting
+      # sweeps) run for hours under miri's ~1000x interpretation overhead.
+      - name: cargo miri test -p kevy-store (zset subset)
+        env:
+          MIRIFLAGS: "-Zmiri-disable-isolation"
+        run: cargo miri test -p kevy-store --lib zset
 
   # ───────────── compat smoke vs valkey 9.1 ─────────────
   compat:

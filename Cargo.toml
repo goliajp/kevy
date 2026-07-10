@@ -87,7 +87,27 @@ homepage = "https://github.com/goliajp/kevy"
 warnings = "deny"
 
 [workspace.lints.clippy]
-all = { level = "deny" }
+all = { level = "deny", priority = -1 }
+# v3.18 T5d pedantic sweep: every stone crate was run with `-W clippy::pedantic`
+# and each finding was either fixed or `#[allow]`ed in place with a reason. The
+# lints below fired in bulk (~330 sites) for patterns that are deliberate across
+# the codebase, so they are allowed here once instead of per-site:
+#   - must_use_candidate: blanket #[must_use] on every getter adds API noise
+#     without a concrete misuse it would catch.
+#   - doc_markdown: prose style (backticks on identifiers); not enforced.
+#   - missing_errors_doc: error semantics are documented in prose in each fn's
+#     doc body, not as mandatory `# Errors` headings.
+#   - cast_*: the stone crates cast at bit level by design (geohash packing,
+#     CRC tables, u32 doc/node ids bounded by construction, OS ABI fields,
+#     BM25/HNSW f64 math); sites were reviewed in the sweep, none truncate
+#     outside their documented domain.
+must_use_candidate = "allow"
+doc_markdown = "allow"
+missing_errors_doc = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_possible_wrap = "allow"
 
 [profile.release]
 opt-level = 3

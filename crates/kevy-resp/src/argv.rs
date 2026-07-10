@@ -79,6 +79,9 @@ impl Argv {
     }
 
     /// Iterate the arguments as byte slices.
+    // missing_panics_doc: the expect is bounded by the `0..len` loop range —
+    // unreachable, not a caller-facing panic condition.
+    #[allow(clippy::missing_panics_doc)]
     pub fn iter(&self) -> impl Iterator<Item = &[u8]> {
         (0..self.len()).map(move |i| self.get(i).expect("in range"))
     }

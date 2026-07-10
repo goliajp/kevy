@@ -9,6 +9,7 @@
 //! [audit]/[feed] were missing, plus `server.max_clients`). The
 //! whole-config round-trip tests below lock the coverage.
 
+use crate::cluster::{PeerEntry, ScopeEntry};
 use crate::schema::{Config, LogOutput};
 
 /// The sections emitted from [`canonical_pairs`] rather than the
@@ -184,6 +185,9 @@ pub(crate) fn canonical_pairs(cfg: &Config) -> Vec<CanonicalPair> {
     v
 }
 
+// many_single_char_names: a/b/c/d are the four IPv4 octets — positional names
+// are clearer than invented words here (`v` is the shared push_* out-param).
+#[allow(clippy::many_single_char_names)]
 fn push_server(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     let [a, b, c, d] = cfg.server.bind;
     push(v, "server", "bind", format!("\"{a}.{b}.{c}.{d}\""));
@@ -267,14 +271,14 @@ fn push_slowlog(v: &mut Vec<CanonicalPair>, cfg: &Config) {
 }
 
 fn push_cluster(v: &mut Vec<CanonicalPair>, cfg: &Config) {
-    let c = &cfg.cluster;
-    push(v, "cluster", "enabled", c.enabled.to_string());
-    push(v, "cluster", "port_base", c.port_base.to_string());
-    push(v, "cluster", "node_id", toml_string(&c.node_id));
-    push(v, "cluster", "elect_port_base", c.elect_port_base.to_string());
-    let peers: Vec<String> = c.peers.iter().map(|p| p.to_token()).collect();
+    let cl = &cfg.cluster;
+    push(v, "cluster", "enabled", cl.enabled.to_string());
+    push(v, "cluster", "port_base", cl.port_base.to_string());
+    push(v, "cluster", "node_id", toml_string(&cl.node_id));
+    push(v, "cluster", "elect_port_base", cl.elect_port_base.to_string());
+    let peers: Vec<String> = cl.peers.iter().map(PeerEntry::to_token).collect();
     push(v, "cluster", "peers", toml_string(&peers.join(",")));
-    let scopes: Vec<String> = c.scopes.iter().map(|s| s.to_token()).collect();
+    let scopes: Vec<String> = cl.scopes.iter().map(ScopeEntry::to_token).collect();
     push(v, "cluster", "scopes", toml_string(&scopes.join(",")));
 }
 

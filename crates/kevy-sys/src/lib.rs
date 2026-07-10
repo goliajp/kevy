@@ -56,6 +56,8 @@
 //! # }
 //! ```
 
+#![warn(missing_docs)]
+
 pub(crate) mod addr;
 pub(crate) mod ffi;
 mod signal;
@@ -80,8 +82,11 @@ pub use waker::{Waker, waker};
 /// A readiness notification for one file descriptor.
 #[derive(Debug, Clone, Copy)]
 pub struct Event {
+    /// The file descriptor the event fired on.
     pub fd: i32,
+    /// A `read`/`accept` on `fd` would not block.
     pub readable: bool,
+    /// A `write` on `fd` would not block.
     pub writable: bool,
     /// Peer hang-up / error — the connection should be closed.
     pub hup: bool,

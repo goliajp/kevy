@@ -3,6 +3,8 @@
 //! per-shard inverted segments maintained synchronously with writes,
 //! BM25 ranking with shard-local statistics.
 
+#![warn(missing_docs)]
+
 mod bm25;
 mod buckets;
 mod segment;

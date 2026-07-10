@@ -2,6 +2,8 @@
 //! cosine / L2 / inner-product distances, tombstone deletes filtered
 //! at search time, bounded full rebuild.
 
+#![warn(missing_docs)]
+
 mod dist;
 mod hnsw;
 

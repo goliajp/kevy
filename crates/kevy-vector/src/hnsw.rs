@@ -100,7 +100,7 @@ impl Hnsw {
             by_vec: HashMap::new(),
             entry: None,
             live: 0,
-            seed: 0x9E3779B97F4A7C15,
+            seed: 0x9E37_79B9_7F4A_7C15,
         }
     }
 
@@ -156,10 +156,10 @@ impl Hnsw {
 
     fn rand_level(&mut self) -> usize {
         // splitmix64 → uniform in (0,1) → geometric with 1/ln(M)
-        self.seed = self.seed.wrapping_add(0x9E3779B97F4A7C15);
+        self.seed = self.seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.seed;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^= z >> 31;
         let u = (z >> 11) as f64 / (1u64 << 53) as f64;
         let ml = 1.0 / (self.params.m as f64).ln();

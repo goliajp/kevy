@@ -27,10 +27,12 @@ pub fn read_snapshot_cursor(path: &Path) -> io::Result<Option<(u64, u64)>> {
     if version < VERSION_FEED_CURSOR {
         return Ok(None);
     }
-    let mut cur = [0u8; 16];
-    r.read_exact(&mut cur)?;
-    let generation = u64::from_le_bytes(cur[..8].try_into().expect("8 bytes"));
-    let offset = u64::from_le_bytes(cur[8..].try_into().expect("8 bytes"));
+    let mut gen_bytes = [0u8; 8];
+    let mut off_bytes = [0u8; 8];
+    r.read_exact(&mut gen_bytes)?;
+    r.read_exact(&mut off_bytes)?;
+    let generation = u64::from_le_bytes(gen_bytes);
+    let offset = u64::from_le_bytes(off_bytes);
     Ok(Some((generation, offset)))
 }
 

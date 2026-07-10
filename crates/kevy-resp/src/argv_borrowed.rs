@@ -76,6 +76,9 @@ impl<'a> ArgvBorrowed<'a> {
     }
 
     /// Iterate the arguments as byte slices into the original input.
+    // missing_panics_doc: the expect is bounded by the `0..len` loop range —
+    // unreachable, not a caller-facing panic condition.
+    #[allow(clippy::missing_panics_doc)]
     pub fn iter(&self) -> impl Iterator<Item = &[u8]> {
         (0..self.len()).map(move |i| self.get(i).expect("in range"))
     }
@@ -83,6 +86,9 @@ impl<'a> ArgvBorrowed<'a> {
     /// Materialise an owned [`Argv`] — copies arg bytes into a fresh buffer.
     /// Used at any handoff juncture (cross-shard dispatch, MULTI queue, AOF
     /// logging) that needs to outlive the original input buffer.
+    // missing_panics_doc: both expects are bounded by `0..ranges.len()` —
+    // unreachable, not a caller-facing panic condition.
+    #[allow(clippy::missing_panics_doc)]
     pub fn into_owned(self) -> Argv {
         let mut total: usize = 0;
         for i in 0..self.ranges.len() {

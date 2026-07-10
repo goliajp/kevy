@@ -36,6 +36,9 @@ pub(crate) const O_NONBLOCK: c_int = 0x0004;
 
 // ---- sockaddr_in -----------------------------------------------------------
 
+// struct_field_names: the `sin_` prefix mirrors the C ABI struct verbatim —
+// dropping it would obscure the 1:1 layout correspondence.
+#[allow(clippy::struct_field_names)]
 #[cfg(target_os = "linux")]
 #[repr(C)]
 pub(crate) struct SockaddrIn {
@@ -85,6 +88,9 @@ impl SockaddrIn {
 // ---- sockaddr_un (AF_UNIX) -------------------------------------------------
 
 /// Unix-domain `sockaddr_un`. sun_path is 108 bytes on Linux + macOS BSD.
+// struct_field_names: the `sun_` prefix mirrors the C ABI struct verbatim —
+// dropping it would obscure the 1:1 layout correspondence.
+#[allow(clippy::struct_field_names)]
 #[repr(C)]
 pub(crate) struct SockaddrUn {
     #[cfg(target_os = "linux")]

@@ -53,7 +53,7 @@ impl Document {
         for (idx, raw_with_nl) in src.split_inclusive('\n').enumerate() {
             let line_no = idx + 1;
             let raw = raw_with_nl.strip_suffix('\n').unwrap_or(raw_with_nl);
-            let kind = classify_line(raw, &current, line_no)?;
+            let kind = classify_line(raw, current.as_ref(), line_no)?;
             if let LineKind::Section(name) = &kind {
                 current = Some(name.clone());
             }
@@ -217,7 +217,7 @@ fn emit_line(
 
 fn classify_line(
     raw: &str,
-    section_ctx: &Option<String>,
+    section_ctx: Option<&String>,
     line_no: usize,
 ) -> Result<LineKind, ConfigError> {
     let bytes = raw.as_bytes();
@@ -253,7 +253,7 @@ fn parse_section_line(bytes: &[u8], i: usize, line_no: usize) -> Result<LineKind
 fn parse_pair_line(
     bytes: &[u8],
     key_start: usize,
-    section_ctx: &Option<String>,
+    section_ctx: Option<&String>,
     line_no: usize,
 ) -> Result<LineKind, ConfigError> {
     let mut j = key_start;
@@ -276,7 +276,7 @@ fn parse_pair_line(
     let value_end = scan_value_end(bytes, j, line_no)?;
     check_trailing_or_comment(&bytes[value_end..], line_no, value_end + 1)?;
     Ok(LineKind::Pair {
-        section: section_ctx.clone(),
+        section: section_ctx.cloned(),
         key,
         value_start,
         value_end,
