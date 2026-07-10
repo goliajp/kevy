@@ -25,7 +25,7 @@ jobs:
     name: covgate (line-coverage ratchet)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install Rust (stable)
         run: |
           rustup toolchain install stable --no-self-update
@@ -34,7 +34,7 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Cache cargo registry + build artifacts
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -64,7 +64,7 @@ jobs:
             os: macos-14   # M-series GitHub-hosted runner
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Rust (stable)
         run: |
@@ -74,7 +74,7 @@ jobs:
           rustup component add clippy
 
       - name: Cache cargo registry + build artifacts
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -106,13 +106,13 @@ jobs:
     name: contract gates (availgate + aigate + repligate)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install Rust (stable)
         run: |
           rustup toolchain install stable --no-self-update
           rustup default stable
       - name: Cache cargo registry + build artifacts
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -145,7 +145,7 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/heads/hotfix/')
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Rust (stable)
         run: |
@@ -153,7 +153,7 @@ jobs:
           rustup default stable
 
       - name: Cache cargo registry + build artifacts
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -178,7 +178,7 @@ jobs:
           - wasm32-wasip1
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Rust + wasm target
         run: |
@@ -187,7 +187,7 @@ jobs:
           rustup target add ${{ matrix.target }}
 
       - name: Cache cargo
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -212,7 +212,7 @@ jobs:
     name: miri (kevy-map + kevy-bytes)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install nightly + miri
         run: |
@@ -220,7 +220,7 @@ jobs:
           rustup override set nightly
 
       - name: Cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -247,7 +247,7 @@ jobs:
     # Don't block the main matrix on bench — it's a flake-prone Docker harness.
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Build kevy release image + run vs valkey 9.1
         env:
           N: "50000"   # smaller than the perf-box cohort — this is a smoke
@@ -266,6 +266,6 @@ jobs:
     # an environmental perf artifact. The script exits non-zero if kevy
     # diverges from valkey on any check.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: 3-way differential vs valkey 9.1 + redis 7.4
         run: bash bench/compat3.sh
