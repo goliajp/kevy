@@ -23,19 +23,15 @@
 //!    (select_diverse / shrink dropped a bridge) — a genuine finding,
 //!    not noise, because the beam covers the whole component.
 //!
-//! KNOWN FINDING (2026-07-10, fuzz-found within ~3 min, minimized to a
-//! 22-byte input = a 22-point corpus with only 10 distinct vectors):
-//! duplicate-heavy corpora disconnect the graph — recall@10 came back
-//! 0.8 with the exhaustive beam, i.e. 2 living points at or under the
-//! true 10th-nearest distance were unreachable from the entry
-//! component. Mechanism: for a candidate `c` identical to an already
-//! kept neighbor `s`, `select_diverse`'s keep test `d(node,c) <
-//! d(s,c) = 0` is always false, and `shrink()`'s re-prune can drop a
-//! duplicate cluster's only bridge. Duplicate vectors under different
-//! keys are legal in production (same embedding, two docs), so this is
-//! a real search-miss. Reported upstream, not fixed here; the recall
-//! floor below is asserted only for all-distinct corpora so the target
-//! keeps enforcing connectivity on the general shape.
+//! FIXED FINDING (2026-07-10, fuzz-found within ~3 min): duplicate-
+//! heavy corpora used to disconnect the graph — recall@10 came back
+//! 0.8 with the exhaustive beam. Mechanism: for a candidate `c`
+//! identical to an already kept neighbor `s`, `select_diverse`'s old
+//! keep test `d(node,c) < d(s,c) = 0` was always false, so inserts
+//! and `shrink()` re-prunes could drop a duplicate cluster's only
+//! bridge. Fixed upstream (tie-distance candidates are kept, matching
+//! hnswlib's Algorithm-4 heuristic); the recall floor below now runs
+//! for EVERY corpus, duplicates included.
 
 #![no_main]
 
@@ -159,17 +155,8 @@ fuzz_target!(|data: &[u8]| {
         }
     }
     let recall = hits as f64 / got.len() as f64;
-    // KNOWN FINDING (see header): duplicate points can disconnect the
-    // graph, so the recall floor is only enforced on all-distinct
-    // corpora until the upstream fix lands.
-    let all_distinct = {
-        let mut seen: std::collections::BTreeSet<Vec<u32>> = std::collections::BTreeSet::new();
-        points.values().all(|v| seen.insert(v.iter().map(|x| x.to_bits()).collect()))
-    };
-    if all_distinct {
-        assert!(
-            recall >= 0.9,
-            "recall@10 {recall} < 0.9 with an exhaustive beam — graph disconnected?"
-        );
-    }
+    assert!(
+        recall >= 0.9,
+        "recall@10 {recall} < 0.9 with an exhaustive beam — graph disconnected?"
+    );
 });

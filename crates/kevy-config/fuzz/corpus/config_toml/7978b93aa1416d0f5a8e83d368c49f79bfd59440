@@ -1,0 +1,8 @@
+# 
+[log]
+[advanced]
+spin_limit = 2
+[lo]
+
+[advanced]
+spin_limit  =4

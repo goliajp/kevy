@@ -26,6 +26,7 @@
 
 mod apply;
 mod cluster;
+mod emit;
 mod enums;
 mod error;
 mod lex;
@@ -146,117 +147,10 @@ impl Config {
         Ok(())
     }
 
-    /// Render the current config as a standard-template TOML file —
-    /// every field, in stable section/key order, with no comments. Used
-    /// by `CONFIG REWRITE`; the loss of any inline comments the user
-    /// had in their hand-edited file is the documented v1.0 trade-off
-    /// (v1.x will preserve them).
-    ///
-    /// Round-trips: feeding the output back through [`Self::from_toml_str`]
-    /// reconstructs an equivalent `Config` (modulo `source_path`).
-    pub fn to_toml_string(&self) -> String {
-        let mut out = String::new();
-        self.write_toml_storage_sections(&mut out);
-        self.write_toml_tuning_sections(&mut out);
-        out
-    }
-
-    /// `[server]` / `[persistence]` / `[memory]` — the storage-shaped half
-    /// of [`Self::to_toml_string`].
-    fn write_toml_storage_sections(&self, out: &mut String) {
-        use std::fmt::Write;
-        let [a, b, c, d] = self.server.bind;
-        let _ = writeln!(out, "[server]");
-        let _ = writeln!(out, "bind     = \"{a}.{b}.{c}.{d}\"");
-        let _ = writeln!(out, "port     = {}", self.server.port);
-        let _ = writeln!(out, "threads  = {}", self.server.threads);
-        let _ = writeln!(
-            out,
-            "data_dir = \"{}\"",
-            escape_toml_basic_string(&self.server.data_dir.display().to_string()),
-        );
-        let _ = writeln!(out);
-        let _ = writeln!(out, "[persistence]");
-        let _ = writeln!(out, "aof                          = {}", self.persistence.aof);
-        let _ = writeln!(
-            out,
-            "appendfsync                  = \"{}\"",
-            self.persistence.appendfsync.as_str(),
-        );
-        let _ = writeln!(
-            out,
-            "auto_aof_rewrite_percentage  = {}",
-            self.persistence.auto_aof_rewrite_percentage,
-        );
-        let _ = writeln!(
-            out,
-            "auto_aof_rewrite_min_size    = {}",
-            self.persistence.auto_aof_rewrite_min_size,
-        );
-        let _ = writeln!(out);
-        let _ = writeln!(out, "[memory]");
-        let _ = writeln!(out, "maxmemory         = {}", self.memory.maxmemory);
-        let _ = writeln!(
-            out,
-            "maxmemory_policy  = \"{}\"",
-            self.memory.maxmemory_policy.as_str(),
-        );
-    }
-
-    /// `[expiry]` / `[log]` / `[notification]` / `[advanced]` / `[slowlog]`
-    /// — the runtime-tuning half of [`Self::to_toml_string`].
-    fn write_toml_tuning_sections(&self, out: &mut String) {
-        use std::fmt::Write;
-        let _ = writeln!(out);
-        let _ = writeln!(out, "[expiry]");
-        let _ = writeln!(out, "hz       = {}", self.expiry.hz);
-        let _ = writeln!(out, "sample   = {}", self.expiry.sample);
-        let _ = writeln!(out);
-        let _ = writeln!(out, "[log]");
-        let _ = writeln!(out, "level    = \"{}\"", self.log.level.as_str());
-        let _ = writeln!(
-            out,
-            "output   = \"{}\"",
-            escape_toml_basic_string(&self.log.output.as_str()),
-        );
-        let _ = writeln!(out);
-        let _ = writeln!(out, "[notification]");
-        let _ = writeln!(
-            out,
-            "notify_keyspace_events = \"{}\"",
-            escape_toml_basic_string(&self.notification.notify_keyspace_events),
-        );
-        let _ = writeln!(out);
-        let _ = writeln!(out, "[advanced]");
-        let _ = writeln!(out, "spin_limit       = {}", self.advanced.spin_limit);
-        let _ = writeln!(out, "park_timeout_ms  = {}", self.advanced.park_timeout_ms);
-        let _ = writeln!(out, "tick_check_every = {}", self.advanced.tick_check_every);
-        let _ = writeln!(out, "ring_capacity    = {}", self.advanced.ring_capacity);
-        let _ = writeln!(out);
-        let _ = writeln!(out, "[slowlog]");
-        let _ = writeln!(
-            out,
-            "slower_than_micros = {}",
-            self.slowlog.slower_than_micros,
-        );
-        let _ = writeln!(out, "max_len            = {}", self.slowlog.max_len);
-    }
-}
-
-/// Escape a string for use inside a TOML basic (double-quoted) string.
-/// `\` and `"` need backslash escape; other ASCII passes through. The
-/// values we emit (paths, enum names) never contain control characters,
-/// so this is sufficient for our serialiser.
-fn escape_toml_basic_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            other => out.push(other),
-        }
-    }
-    out
+    // NOTE: `to_toml_string` (the CONFIG REWRITE template) lives in
+    // [`crate::emit`] together with the canonical pair list the
+    // preserving path shares — both serializers in one file so a new
+    // schema section can't be added to one and missed by the other.
 }
 
 /// Optional CLI overrides applied via [`Config::merge_cli`].

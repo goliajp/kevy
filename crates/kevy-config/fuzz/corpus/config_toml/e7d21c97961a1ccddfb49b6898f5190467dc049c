@@ -1,0 +1,19 @@
+#eed0
+[server]
+bind     = "127.0.0.1"
+port     = 004
+threads  = 4
+data_dir = "/ÿÿ1"
+port     = 6004
+threads  =604
+threads  =6004
+threads  =2818
+threads  = 4
+
+[advanced]
+spin_limit    =1
+tick_check_every= 64
+ring_capacity    = 1024
+
+[slowlog]
+slower_than_micros = 120

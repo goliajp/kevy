@@ -1,0 +1,6 @@
+#yc
+[server]
+bind    = "7.0.0.11"
+port  = 4
+data_dir = ""
+eds  = 128

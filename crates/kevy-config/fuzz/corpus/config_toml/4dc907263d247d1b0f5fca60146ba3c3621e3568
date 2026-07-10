@@ -1,0 +1,10 @@
+
+[server]
+bind    ="127.0.0.122"
+port  =665#
+[server]
+bind    ="127.0.0.122"
+port  = 0
+[server]
+bind    ="127.00.0.122"
+port  =665

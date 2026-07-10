@@ -1,0 +1,11 @@
+#/ig seed
+[server]
+bind     = "127.0.0.1"
+port     =6004
+threads  = 5
+data_dir = "/va      sƒƒƒƒƒƒƒƒƒƒƒ__\n#1_____]_____™__\\v²y"
+
+[persistence]
+aof            = true
+appendfsync                  = "everysec"
+auto_aof_rewrite_percentage  =  128

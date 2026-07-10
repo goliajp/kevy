@@ -1,0 +1,8 @@
+
+
+[memory]
+maxmemory         = "255mb"
+maxmemory    ="00mb"
+cy= "llku"
+
+hz    = 2

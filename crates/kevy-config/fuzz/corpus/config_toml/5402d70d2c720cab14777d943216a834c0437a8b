@@ -1,0 +1,17 @@
+#
+#
+
+[memory]
+maxmemory   = "560m"#]
+maxmemory   = "04m"
+maxmemory   = "559m"#`
+maxmemory  = "04m"
+[memory]
+maxmemory   = "560m"#]
+maxmemory   = "04m"
+
+[memory]#
+
+[memory]
+maxmemory   = "559m"#`
+maxmemory  = "04m"

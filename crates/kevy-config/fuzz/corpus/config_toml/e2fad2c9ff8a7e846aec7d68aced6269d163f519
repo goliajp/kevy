@@ -1,0 +1,19 @@
+# keig = 2
+[log]
+
+output   =""
+
+[expiry]
+hz       = 1
+[log]
+level    = "info"
+output=""
+
+[expiry]
+hz       = 0
+[log]
+level    = "info"
+output   ="stdurr"
+
+[adva]
+spin_= 10

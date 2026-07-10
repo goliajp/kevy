@@ -1,0 +1,4 @@
+#]
+
+[slowlog]
+slower_then_micrso=8

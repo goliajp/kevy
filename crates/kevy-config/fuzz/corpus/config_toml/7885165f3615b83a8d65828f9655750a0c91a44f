@@ -1,0 +1,9 @@
+ 
+[server]
+bind  = "127.0.0.1"
+port =60
+threads = 4
+data_dir= "/var2"
+port= 60
+threads= 4
+data_dir = "/¶ïÿÿÿÿ"

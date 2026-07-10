@@ -69,6 +69,18 @@ pub struct ScopeEntry {
 }
 
 impl ScopeEntry {
+    /// Render back to the `prefix=writer[|fallback]` token shape —
+    /// exact inverse of [`Self::parse_one`] for entries it produced.
+    /// The prefix is parsed from TOML text, so it is UTF-8 whenever
+    /// this is used on a config round-trip (`CONFIG REWRITE`).
+    pub fn to_token(&self) -> String {
+        let prefix = String::from_utf8_lossy(&self.prefix);
+        match &self.fallback {
+            Some(fb) => format!("{prefix}={}|{fb}", self.writer),
+            None => format!("{prefix}={}", self.writer),
+        }
+    }
+
     /// Parse one `prefix=writer[|fallback]` token. The first `=`
     /// splits prefix from owner spec; the writer may carry an
     /// optional `|fallback` suffix. Returns `None` on any shape
@@ -149,6 +161,15 @@ pub struct PeerEntry {
 }
 
 impl PeerEntry {
+    /// Render back to the `id@host:port[:client_port]` token shape —
+    /// exact inverse of [`Self::parse_one`] for entries it produced.
+    pub fn to_token(&self) -> String {
+        match self.client_port {
+            Some(cp) => format!("{}@{}:{}:{cp}", self.node_id, self.host, self.port),
+            None => format!("{}@{}:{}", self.node_id, self.host, self.port),
+        }
+    }
+
     /// Parse one peer token. Accepts two shapes:
     /// - **Legacy**: `id@host:port` (v1.x — `port` = elect port).
     /// - **v1.55+**: `id@host:elect_port:client_port` (sets
@@ -290,6 +311,15 @@ mod peer_entry_tests {
         assert_eq!(PeerEntry::parse_list("").unwrap(), Vec::<PeerEntry>::new());
         assert_eq!(PeerEntry::parse_list("  ").unwrap(), Vec::<PeerEntry>::new());
     }
+
+    #[test]
+    fn to_token_round_trips() {
+        for tok in ["node-1@10.0.0.1:6004", "node-1@10.0.0.1:6011:6004", "p@db-east.local:6105"] {
+            let p = PeerEntry::parse_one(tok).unwrap();
+            assert_eq!(p.to_token(), tok);
+            assert_eq!(PeerEntry::parse_one(&p.to_token()), Some(p));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -354,6 +384,15 @@ mod scope_entry_tests {
     fn parse_list_first_bad_token_errs() {
         let err = ScopeEntry::parse_list("p1=w1,no-eq,p3=w3").unwrap_err();
         assert_eq!(err, "no-eq");
+    }
+
+    #[test]
+    fn to_token_round_trips() {
+        for tok in ["app:billing:=embed-billing-1", "app:billing:=embed-1|fb-server-eu"] {
+            let s = ScopeEntry::parse_one(tok).unwrap();
+            assert_eq!(s.to_token(), tok);
+            assert_eq!(ScopeEntry::parse_one(&s.to_token()), Some(s));
+        }
     }
 }
 

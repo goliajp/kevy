@@ -1,0 +1,26 @@
+ # kevy gonfiglru"
+
+[expiry]
+hz       = 20
+sample   = 20
+
+[log]
+level    = "info"
+output   ="stderu"
+
+[advanced]
+[slowlog]
+[memory]
+maxmemory         = "511mb"
+maxmemory_policy  = "allkeys-lru"
+
+[expiry]
+hz    = 20
+sample= 20
+
+[log]
+level    = "info"
+output   ="stderu"
+
+[advanced]
+spin_limit       = 1

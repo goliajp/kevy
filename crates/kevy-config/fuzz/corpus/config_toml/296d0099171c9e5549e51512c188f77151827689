@@ -1,0 +1,10 @@
+# 
+[log]
+level= "info"
+output=""
+[advanced]
+spin_limit = 12
+[log]
+
+[advanced]
+spin_limit  =9

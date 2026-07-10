@@ -1,0 +1,27 @@
+# kei]
+
+[log]
+level    = "info"
+
+
+level    = "info"
+output   =""
+
+[expiry]
+hz       = 1
+[log]
+level    = "info"
+output   =""
+output   ="stdrr"
+
+level    = "info"
+output   =""
+
+[expiry]
+hz       = 1
+[log]
+level    = "info"
+output   ="stdurr"
+
+[advad]
+spin_= 10

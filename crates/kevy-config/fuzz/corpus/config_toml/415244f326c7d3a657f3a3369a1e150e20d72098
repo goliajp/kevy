@@ -1,0 +1,8 @@
+#rutof_rewrite_mi
+
+[memory]
+maxmemory         = "511mb"
+maxmemory_policy  = "allkeys-lFu"
+
+[expiry]
+hz        = 128

@@ -1,0 +1,4 @@
+#]‹–ck_check_every = 09
+
+[slowlog]
+slower_then_micros=0
