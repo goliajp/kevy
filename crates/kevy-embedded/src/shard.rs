@@ -97,8 +97,28 @@ pub(crate) fn build_shards(config: &Config) -> io::Result<Vec<Arc<RwLock<Inner>>
     // Complete (or safely discard) a reshard a crash interrupted, before
     // reading the layout — same roll-forward the server runtime does.
     recover_journal(&dir, &EmbLayout(config))?;
+    load_or_reshard(&dir, config, n, &mut stores)?;
 
-    let meta_path = layout::shards_meta_path(&dir);
+    // Open each shard's live AOF for append (if persistence is on).
+    let aofs: Vec<Option<Aof>> = if config.aof {
+        (0..n)
+            .map(|i| Aof::open(&aof_path(&dir, config, i, n), config.appendfsync).map(Some))
+            .collect::<io::Result<_>>()?
+    } else {
+        (0..n).map(|_| None).collect()
+    };
+    Ok(into_inners(stores, aofs))
+}
+
+/// Read the shard layout meta and either load in place (same layout)
+/// or re-shard (losslessly) into the configured `n`.
+fn load_or_reshard(
+    dir: &Path,
+    config: &Config,
+    n: usize,
+    stores: &mut [Keyspace],
+) -> io::Result<()> {
+    let meta_path = layout::shards_meta_path(dir);
     let prev = read_shards_meta(&meta_path);
     // Under the default filenames the n==1 layout coincides with shard 0's,
     // so the dir is server-readable; custom names opt out of that interop
@@ -113,35 +133,26 @@ pub(crate) fn build_shards(config: &Config) -> io::Result<Vec<Arc<RwLock<Inner>>
         // No meta + n==1: the single-file layout — unless the files say
         // multi-shard (a meta-less pre-1.5 server dir). Loading only
         // shard 0 of those silently dropped (k-1)/k of the keyspace.
-        None => n == 1 && infer_files_n(&dir) <= 1,
+        None => n == 1 && infer_files_n(dir) <= 1,
     };
 
     if same_layout {
-        load_in_place(&dir, config, n, &mut stores)?;
+        load_in_place(dir, config, n, stores)?;
         if n > 1 || sharded_names {
             write_shards_meta(&meta_path, ShardsMeta { n, routing: Routing::KevyHash })?;
         }
     } else {
         let src_n = prev.map(|m| m.n).or_else(|| {
-            let k = infer_files_n(&dir);
+            let k = infer_files_n(dir);
             (k > 1).then_some(k)
         });
         // The commit also records the new layout — including n == 1: a
         // stale meta from a larger prior n would otherwise trigger a second
         // re-shard next open, whose sources were already renamed to
         // `.premigration` (the shrink-to-one open would come up empty).
-        reshard(&dir, config, n, src_n, &mut stores)?;
+        reshard(dir, config, n, src_n, stores)?;
     }
-
-    // Open each shard's live AOF for append (if persistence is on).
-    let aofs: Vec<Option<Aof>> = if config.aof {
-        (0..n)
-            .map(|i| Aof::open(&aof_path(&dir, config, i, n), config.appendfsync).map(Some))
-            .collect::<io::Result<_>>()?
-    } else {
-        (0..n).map(|_| None).collect()
-    };
-    Ok(into_inners(stores, aofs))
+    Ok(())
 }
 
 /// Same-layout load: each shard reads its own snapshot + AOF directly.

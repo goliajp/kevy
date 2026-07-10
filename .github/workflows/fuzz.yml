@@ -19,6 +19,12 @@ on:
       - 'crates/kevy-bytes/**'
       - 'crates/kevy-persist/**'
       - 'crates/kevy-hash/**'
+      - 'crates/kevy-map/**'
+      - 'crates/kevy-ring/**'
+      - 'crates/kevy-config/**'
+      - 'crates/kevy-text/**'
+      - 'crates/kevy-store/**'
+      - 'crates/kevy-vector/**'
       - '.github/workflows/fuzz.yml'
   pull_request:
     paths:
@@ -26,6 +32,12 @@ on:
       - 'crates/kevy-bytes/**'
       - 'crates/kevy-persist/**'
       - 'crates/kevy-hash/**'
+      - 'crates/kevy-map/**'
+      - 'crates/kevy-ring/**'
+      - 'crates/kevy-config/**'
+      - 'crates/kevy-text/**'
+      - 'crates/kevy-store/**'
+      - 'crates/kevy-vector/**'
   schedule:
     # Daily at 08:00 UTC. Catches drift on develop even without a code push.
     - cron: '0 8 * * *'
@@ -51,6 +63,12 @@ jobs:
           - { crate: kevy-persist, target: replay_aof }
           - { crate: kevy-persist, target: shards_meta }
           - { crate: kevy-hash,    target: key_hash_slot }
+          - { crate: kevy-map,     target: map_ops }
+          - { crate: kevy-ring,    target: ring_spsc }
+          - { crate: kevy-config,  target: config_toml }
+          - { crate: kevy-text,    target: text_index }
+          - { crate: kevy-store,   target: store_zset }
+          - { crate: kevy-vector,  target: hnsw_ops }
     env:
       # Honour workflow_dispatch input; default to 300 s (5 min) per target.
       FUZZ_SECONDS: ${{ github.event.inputs.duration_seconds || '300' }}

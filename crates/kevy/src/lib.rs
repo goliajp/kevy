@@ -42,6 +42,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 mod cmd;
+mod cmd_class;
 mod cmd_zadd;
 mod cmd_block;
 mod metrics_http;
@@ -52,6 +53,7 @@ mod cmd_hash_ttl;
 mod cmd_index;
 mod cmd_digest;
 mod cmd_view;
+mod cmd_view_reduce;
 mod cmd_index_query;
 mod cmd_index_reduce;
 mod index_runtime;

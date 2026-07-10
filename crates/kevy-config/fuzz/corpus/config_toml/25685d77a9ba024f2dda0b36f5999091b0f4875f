@@ -1,0 +1,4 @@
+# 
+[persistence]
+appendfsync           = ""
+out= 255

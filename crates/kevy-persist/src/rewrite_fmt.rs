@@ -106,125 +106,73 @@ fn write_value_as_commands<W: Write>(
     ttl_ms: Option<u64>,
 ) -> io::Result<()> {
     match value {
-        Value::Str(s) => {
-            let argv = Argv::from(vec![b"SET".to_vec(), key.to_vec(), s.to_vec()]);
-            write_multibulk(w, &argv)?;
-        }
-        // L2: persist Int as the canonical ASCII bytes; the replay path's
-        // SET will auto-detect it back to Int via parse_canonical_i64.
-        Value::Int(n) => {
-            let argv = Argv::from(vec![b"SET".to_vec(), key.to_vec(), n.to_string().into_bytes()]);
-            write_multibulk(w, &argv)?;
-        }
-        // L1: Arc-bulk serialises via the same SET argv path; replay's
-        // SET routing picks ArcBulk again for > BULK_THRESHOLD bytes.
-        Value::ArcBulk(a) => {
-            let argv = Argv::from(vec![b"SET".to_vec(), key.to_vec(), a.as_ref().to_vec()]);
-            write_multibulk(w, &argv)?;
-        }
+        Value::Str(s) => write_verb_items(w, b"SET", key, 1, [s.to_vec()])?,
+        // L2: persist Int as the canonical ASCII bytes; replay's SET
+        // auto-detects it back to Int via parse_canonical_i64.
+        Value::Int(n) => write_verb_items(w, b"SET", key, 1, [n.to_string().into_bytes()])?,
+        // L1: Arc-bulk serialises via the same SET argv path; replay picks
+        // ArcBulk again for > BULK_THRESHOLD bytes.
+        Value::ArcBulk(a) => write_verb_items(w, b"SET", key, 1, [a.as_ref().to_vec()])?,
         Value::Hash(h) => {
-            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + h.len() * 2);
-            argv.push(b"HSET".to_vec());
-            argv.push(key.to_vec());
-            for (f, v) in h.iter() {
-                argv.push(f.to_vec());
-                argv.push(v.clone());
-            }
-            write_multibulk(w, &Argv::from(argv))?;
+            let fv = h.iter().flat_map(|(f, v)| [f.to_vec(), v.clone()]);
+            write_verb_items(w, b"HSET", key, h.len() * 2, fv)?
         }
-        // A.8: inline hash rewrites to the same HSET command form as the
-        // heap-backed `Value::Hash`. Replay routes the pairs back through
-        // the encoding switch so small hashes land inline again.
+        // A.8: inline hash / list / zset rewrite to the same HSET / RPUSH
+        // / ZADD forms as their heap-backed twins; replay re-runs the
+        // encoding switch so small values land inline again.
         Value::SmallHashInline(h) => {
-            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + h.len() * 2);
-            argv.push(b"HSET".to_vec());
-            argv.push(key.to_vec());
-            for (f, v) in h.iter() {
-                argv.push(f.to_vec());
-                argv.push(v.to_vec());
-            }
-            write_multibulk(w, &Argv::from(argv))?;
+            let fv = h.iter().flat_map(|(f, v)| [f.to_vec(), v.to_vec()]);
+            write_verb_items(w, b"HSET", key, h.len() * 2, fv)?
         }
-        Value::List(l) => {
-            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + l.len());
-            argv.push(b"RPUSH".to_vec());
-            argv.push(key.to_vec());
-            for v in l.iter() {
-                argv.push(v.clone());
-            }
-            write_multibulk(w, &Argv::from(argv))?;
-        }
-        // A.8: inline list rewrites to the same RPUSH command form as
-        // the heap-backed `Value::List`.
+        Value::List(l) => write_verb_items(w, b"RPUSH", key, l.len(), l.iter().cloned())?,
         Value::SmallListInline(l) => {
-            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + l.len());
-            argv.push(b"RPUSH".to_vec());
-            argv.push(key.to_vec());
-            for v in l.iter() {
-                argv.push(v.to_vec());
-            }
-            write_multibulk(w, &Argv::from(argv))?;
+            write_verb_items(w, b"RPUSH", key, l.len(), l.iter().map(|v| v.to_vec()))?
         }
+        // A.7 O5: inline-encoded set rewrites to the same SADD command form
+        // as the heap-backed `Value::Set`; replaying through the live SADD
+        // handler re-runs the encoding switch (small → inline, big → KevySet).
         Value::Set(s) => {
-            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + s.len());
-            argv.push(b"SADD".to_vec());
-            argv.push(key.to_vec());
-            for m in s.iter() {
-                argv.push(m.to_vec());
-            }
-            write_multibulk(w, &Argv::from(argv))?;
+            write_verb_items(w, b"SADD", key, s.len(), s.iter().map(|m| m.to_vec()))?
         }
-        // A.7 O5: inline-encoded set rewrites to the same SADD command
-        // form as the heap-backed `Value::Set`. Replay through the live
-        // SADD handler routes the members back through the encoding
-        // switch — small sets land in `SmallSetInline` again, oversized
-        // ones promote to `KevySet` naturally.
         Value::SmallSetInline(s) => {
-            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + s.len());
-            argv.push(b"SADD".to_vec());
-            argv.push(key.to_vec());
-            for m in s.iter() {
-                argv.push(m.to_vec());
-            }
-            write_multibulk(w, &Argv::from(argv))?;
+            write_verb_items(w, b"SADD", key, s.len(), s.iter().map(|m| m.to_vec()))?
         }
         Value::ZSet(z) => {
-            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + z.ordered().count() * 2);
-            argv.push(b"ZADD".to_vec());
-            argv.push(key.to_vec());
-            for (m, sc) in z.ordered() {
-                argv.push(fmt_zset_score(sc));
-                argv.push(m.to_vec());
-            }
-            write_multibulk(w, &Argv::from(argv))?;
+            let ms = z.ordered().flat_map(|(m, sc)| [fmt_zset_score(sc), m.to_vec()]);
+            write_verb_items(w, b"ZADD", key, z.ordered().count() * 2, ms)?
         }
-        // A.8: inline zset rewrites to the same ZADD command form as
-        // the heap-backed `Value::ZSet`.
         Value::SmallZSetInline(z) => {
-            let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + z.len() * 2);
-            argv.push(b"ZADD".to_vec());
-            argv.push(key.to_vec());
-            for (m, sc) in z.iter() {
-                argv.push(fmt_zset_score(sc));
-                argv.push(m.to_vec());
-            }
-            write_multibulk(w, &Argv::from(argv))?;
+            let ms = z.iter().flat_map(|(m, sc)| [fmt_zset_score(sc), m.to_vec()]);
+            write_verb_items(w, b"ZADD", key, z.len() * 2, ms)?
         }
         Value::Stream(s) => write_stream_as_commands(w, key, s)?,
     }
-    if let Some(ms) = ttl_ms {
-        // `ms` is remaining; emit an absolute `PEXPIREAT` deadline so a replay
-        // of this rewritten AOF reconstructs the original instant instead of
-        // re-anchoring to replay-time (INC-2026-06-09).
-        let deadline = kevy_store::now_unix_ms().saturating_add(ms);
-        let argv = Argv::from(vec![
-            b"PEXPIREAT".to_vec(),
-            key.to_vec(),
-            deadline.to_string().into_bytes(),
-        ]);
-        write_multibulk(w, &argv)?;
-    }
-    Ok(())
+    write_pexpireat(w, key, ttl_ms)
+}
+
+/// `ms` is remaining; emit an absolute `PEXPIREAT` deadline so a replay
+/// of the rewritten AOF reconstructs the original instant instead of
+/// re-anchoring to replay-time (INC-2026-06-09).
+fn write_pexpireat<W: Write>(w: &mut W, key: &[u8], ttl_ms: Option<u64>) -> io::Result<()> {
+    let Some(ms) = ttl_ms else { return Ok(()) };
+    let deadline = kevy_store::now_unix_ms().saturating_add(ms);
+    write_verb_items(w, b"PEXPIREAT", key, 1, [deadline.to_string().into_bytes()])
+}
+
+/// One `[verb, key, items…]` multi-bulk frame — the shared body of every
+/// per-type arm above. `expected` pre-sizes the argv (2 + item count).
+fn write_verb_items<W: Write>(
+    w: &mut W,
+    verb: &[u8],
+    key: &[u8],
+    expected: usize,
+    items: impl IntoIterator<Item = Vec<u8>>,
+) -> io::Result<()> {
+    let mut argv: Vec<Vec<u8>> = Vec::with_capacity(2 + expected);
+    argv.push(verb.to_vec());
+    argv.push(key.to_vec());
+    argv.extend(items);
+    write_multibulk(w, &Argv::from(argv))
 }
 
 /// Render one stream as commands: one XADD per entry (slow on huge

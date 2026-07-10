@@ -1,0 +1,4 @@
+#Sv
+[server]
+bind ="2.14.1.01"
+port = 065

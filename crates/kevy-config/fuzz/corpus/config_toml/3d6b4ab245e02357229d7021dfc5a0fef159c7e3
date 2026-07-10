@@ -1,0 +1,7 @@
+
+
+[memory]
+maxmemory    = "793mb"
+maxmemory_policy  = "allkeys-lFu"
+
+it          = 128

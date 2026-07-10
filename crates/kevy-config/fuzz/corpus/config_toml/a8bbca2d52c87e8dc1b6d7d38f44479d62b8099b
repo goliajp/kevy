@@ -1,0 +1,6 @@
+[server]
+bind ="5.0.4.1"
+port=4
+threads= 5
+data_dir= "7"
+m=8

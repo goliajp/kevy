@@ -1,0 +1,8 @@
+#]
+[advanced]
+spin_limit     = 10
+park_timeout_ms  = 1
+tick_check_every = 09
+
+[slowlog]
+slower_then_micros=0

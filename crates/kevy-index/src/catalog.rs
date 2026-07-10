@@ -260,48 +260,53 @@ impl Catalog {
             if line.is_empty() {
                 continue;
             }
-            let parts: Vec<&str> = line.split('\t').collect();
-            if !(parts.len() == 6 || parts.len() == 7) {
-                return None;
-            }
-            let kind = IndexKind::parse(parts[4].as_bytes())?;
-            let (ann, group_by) = if parts.len() == 7 {
-                match kind {
-                    IndexKind::Ann => {
-                        let nums: Vec<&str> = parts[6].split(',').collect();
-                        if nums.len() != 4 {
-                            return None;
-                        }
-                        (
-                            Some(AnnSpec {
-                                dim: nums[0].parse().ok()?,
-                                distance: nums[1].parse().ok()?,
-                                m: nums[2].parse().ok()?,
-                                ef: nums[3].parse().ok()?,
-                            }),
-                            None,
-                        )
-                    }
-                    IndexKind::Agg => (None, Some(unesc(parts[6])?)),
-                    _ => return None,
-                }
-            } else {
-                (None, None)
-            };
-            let spec = IndexSpec {
-                name: unesc(parts[0])?,
-                prefix: unesc(parts[1])?,
-                field: unesc(parts[2])?,
-                ty: ValType::parse(parts[3].as_bytes())?,
-                kind,
-                max_bytes: parts[5].parse().ok()?,
-                ann,
-                group_by,
-            };
-            c.create(spec).ok()?;
+            c.create(spec_from_line(line)?).ok()?;
         }
         Some(c)
     }
+}
+
+/// Parse one sidecar line back into an [`IndexSpec`] — the inverse of
+/// one `to_sidecar` line. `None` on malformed input.
+fn spec_from_line(line: &str) -> Option<IndexSpec> {
+    let parts: Vec<&str> = line.split('\t').collect();
+    if !(parts.len() == 6 || parts.len() == 7) {
+        return None;
+    }
+    let kind = IndexKind::parse(parts[4].as_bytes())?;
+    let (ann, group_by) = if parts.len() == 7 {
+        match kind {
+            IndexKind::Ann => {
+                let nums: Vec<&str> = parts[6].split(',').collect();
+                if nums.len() != 4 {
+                    return None;
+                }
+                (
+                    Some(AnnSpec {
+                        dim: nums[0].parse().ok()?,
+                        distance: nums[1].parse().ok()?,
+                        m: nums[2].parse().ok()?,
+                        ef: nums[3].parse().ok()?,
+                    }),
+                    None,
+                )
+            }
+            IndexKind::Agg => (None, Some(unesc(parts[6])?)),
+            _ => return None,
+        }
+    } else {
+        (None, None)
+    };
+    Some(IndexSpec {
+        name: unesc(parts[0])?,
+        prefix: unesc(parts[1])?,
+        field: unesc(parts[2])?,
+        ty: ValType::parse(parts[3].as_bytes())?,
+        kind,
+        max_bytes: parts[5].parse().ok()?,
+        ann,
+        group_by,
+    })
 }
 
 fn esc(b: &[u8]) -> String {

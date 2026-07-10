@@ -1,0 +1,52 @@
+# iice   = 20
+
+[log]
+level    = "info"
+output   ="so"
+output  = "info"
+output   ="stderrştrşÿÿÿÿÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrştdÿÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="sÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrştrşÿÿÿÿÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrştdÿÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrştderrşÿÿÿÿÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderu"
+
+[advanced]
+spin_limit      = 128

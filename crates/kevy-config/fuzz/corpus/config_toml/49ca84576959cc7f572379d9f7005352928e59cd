@@ -1,0 +1,9 @@
+# kevy conf"
+
+[persistence]
+aof                          = true
+appendfsync                  = "everysec"
+auto_aof_rewrite_percentage  = 200
+auto_aof_rewrite_min_size    = "64tb"
+
+#of_rewr

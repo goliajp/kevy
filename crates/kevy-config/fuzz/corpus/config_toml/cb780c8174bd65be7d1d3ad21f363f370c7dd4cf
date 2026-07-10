@@ -1,0 +1,25 @@
+# 0
+
+[log]
+level   = "info"
+output="stderr"
+
+[advanced]
+spin_limit     = 12
+
+# 0
+
+[log]
+level   = "info"
+output="stderr"
+
+[advanced]
+spin_limit     = 129
+
+[log]
+level    ="info"
+output="stderr"
+output="stderr"
+
+[advanced]
+spi         = 129

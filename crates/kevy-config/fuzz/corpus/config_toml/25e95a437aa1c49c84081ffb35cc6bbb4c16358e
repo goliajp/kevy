@@ -1,0 +1,12 @@
+# 
+[log]
+level= "info"
+output="stderr"
+[advanced]
+spin_limit = 12
+[log]
+level  ="info"
+output="ÿ"
+
+[advanced]
+spin_limit  =9

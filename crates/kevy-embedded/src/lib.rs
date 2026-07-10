@@ -70,6 +70,7 @@ mod ops_feed;
 mod ops_blocking;
 mod ops_hash_ttl;
 mod ops_index;
+mod ops_index_sync;
 mod ops_view;
 #[cfg(not(target_arch = "wasm32"))]
 mod listener;
@@ -95,6 +96,7 @@ mod replica_runner;
 #[cfg(not(target_arch = "wasm32"))]
 mod replica_source;
 mod store;
+mod store_inner;
 mod store_persist;
 
 pub use config::{AppendFsync, Config, EvictionPolicy, TtlReaperMode};
