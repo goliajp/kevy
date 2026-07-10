@@ -80,7 +80,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-${{ matrix.target }}-
 
@@ -118,7 +118,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-gates-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-gates-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-gates-
       - name: Build gate binaries (release)
@@ -159,7 +159,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-release-profile-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-release-profile-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-release-profile-
 
@@ -193,7 +193,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: cargo-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             cargo-${{ matrix.target }}-
 
@@ -226,7 +226,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: miri-${{ hashFiles('**/Cargo.lock') }}
+          key: miri-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             miri-
 
