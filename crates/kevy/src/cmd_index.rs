@@ -67,6 +67,55 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) 
             "ERR usage: IDX.CREATE name ON PREFIX p FIELD f TYPE i64|f64|str|vector KIND range|unique|text|ann [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]",
         );
     }
+    let Ok(opts) = parse_create_opts(args, out) else {
+        return;
+    };
+    let Some(ty) = ValType::parse(&args[8]) else {
+        return encode_error(out, "ERR TYPE must be i64|f64|str|vector");
+    };
+    let Some(kind) = IndexKind::parse(&args[10]) else {
+        return encode_error(out, "ERR KIND must be range|unique|text|ann");
+    };
+    if args[4].is_empty() {
+        return encode_error(out, "ERR PREFIX must be non-empty");
+    }
+    let Ok(ann) = validate_kind_combo(kind, ty, &opts, out) else {
+        return;
+    };
+    let spec = IndexSpec {
+        name: args[1].to_vec(),
+        prefix: args[4].to_vec(),
+        field: args[6].to_vec(),
+        ty,
+        kind,
+        max_bytes: opts.max_bytes,
+        ann,
+        group_by: opts.group_by,
+        };
+    let mut cat = index_runtime::catalog().map(|c| (*c).clone()).unwrap_or_default();
+    match cat.create(spec) {
+        Ok(()) => {
+            persist_sidecar(&cat);
+            index_runtime::install_catalog(cat);
+            out.extend_from_slice(b"+OK\r\n");
+        }
+        Err(e) => encode_error(out, e),
+    }
+}
+
+/// Optional IDX.CREATE tail (`[MAXMEM b] [DIM d] …`) parsed out.
+struct CreateOpts {
+    max_bytes: u64,
+    dim: u32,
+    m: u16,
+    ef: u16,
+    distance: u8,
+    group_by: Option<Vec<u8>>,
+}
+
+/// Parse the optional key/value pairs from argv idx 11 on.
+/// `Err(())` = an error reply was already encoded into `out`.
+fn parse_create_opts<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) -> Result<CreateOpts, ()> {
     let mut max_bytes = 0u64;
     let (mut dim, mut m, mut ef) = (0u32, 16u16, 200u16);
     let mut distance = 0u8;
@@ -77,90 +126,77 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) 
         let parsed: Option<u64> = std::str::from_utf8(val).ok().and_then(|s| s.parse().ok());
         if opt.eq_ignore_ascii_case(b"MAXMEM") {
             let Some(v) = parsed else {
-                return encode_error(out, "ERR MAXMEM must be an integer byte count");
+                encode_error(out, "ERR MAXMEM must be an integer byte count");
+                return Err(());
             };
             max_bytes = v;
         } else if opt.eq_ignore_ascii_case(b"DIM") {
             match parsed {
                 Some(v) if (1..=65_536).contains(&v) => dim = v as u32,
-                _ => return encode_error(out, "ERR DIM must be 1-65536"),
+                _ => { encode_error(out, "ERR DIM must be 1-65536"); return Err(()) },
             }
         } else if opt.eq_ignore_ascii_case(b"M") {
             match parsed {
                 Some(v) if (4..=64).contains(&v) => m = v as u16,
-                _ => return encode_error(out, "ERR M must be 4-64"),
+                _ => { encode_error(out, "ERR M must be 4-64"); return Err(()) },
             }
         } else if opt.eq_ignore_ascii_case(b"EF") {
             match parsed {
                 Some(v) if (16..=1024).contains(&v) => ef = v as u16,
-                _ => return encode_error(out, "ERR EF must be 16-1024"),
+                _ => { encode_error(out, "ERR EF must be 16-1024"); return Err(()) },
             }
         } else if opt.eq_ignore_ascii_case(b"GROUPBY") {
             if val.is_empty() {
-                return encode_error(out, "ERR GROUPBY requires a field");
+                { encode_error(out, "ERR GROUPBY requires a field"); return Err(()) };
             }
             group_by = Some(val.to_vec());
         } else if opt.eq_ignore_ascii_case(b"DISTANCE") {
             match kevy_vector::Distance::parse(val) {
                 Some(d) => distance = d as u8,
-                None => return encode_error(out, "ERR DISTANCE must be cosine|l2|ip"),
+                None => { encode_error(out, "ERR DISTANCE must be cosine|l2|ip"); return Err(()) },
             }
         } else {
-            return encode_error(out, "ERR syntax error");
+            { encode_error(out, "ERR syntax error"); return Err(()) };
         }
         i += 2;
     }
-    let Some(ty) = ValType::parse(&args[8]) else {
-        return encode_error(out, "ERR TYPE must be i64|f64|str|vector");
-    };
-    let Some(kind) = IndexKind::parse(&args[10]) else {
-        return encode_error(out, "ERR KIND must be range|unique|text|ann");
-    };
-    if args[4].is_empty() {
-        return encode_error(out, "ERR PREFIX must be non-empty");
-    }
+    Ok(CreateOpts { max_bytes, dim, m, ef, distance, group_by })
+}
+
+/// KIND × TYPE (× GROUPBY) compatibility checks; builds the `AnnSpec`
+/// for `KIND ann`. `Err(())` = an error reply was already encoded.
+fn validate_kind_combo(
+    kind: IndexKind,
+    ty: ValType,
+    opts: &CreateOpts,
+    out: &mut Vec<u8>,
+) -> Result<Option<kevy_index::AnnSpec>, ()> {
     let ann = match (kind, ty) {
-        (IndexKind::Ann, ValType::Vector) if dim > 0 => {
-            Some(kevy_index::AnnSpec { dim, distance, m, ef })
-        }
+        (IndexKind::Ann, ValType::Vector) if opts.dim > 0 => Some(kevy_index::AnnSpec {
+            dim: opts.dim,
+            distance: opts.distance,
+            m: opts.m,
+            ef: opts.ef,
+        }),
         (IndexKind::Ann, _) => {
-            return encode_error(out, "ERR KIND ann requires TYPE vector and DIM");
+            { encode_error(out, "ERR KIND ann requires TYPE vector and DIM"); return Err(()) };
         }
         (_, ValType::Vector) => {
-            return encode_error(out, "ERR TYPE vector requires KIND ann");
+            { encode_error(out, "ERR TYPE vector requires KIND ann"); return Err(()) };
         }
         _ => None,
     };
-    match (kind, &group_by, ty) {
+    match (kind, &opts.group_by, ty) {
         (IndexKind::Agg, None, _) => {
-            return encode_error(out, "ERR KIND agg requires GROUPBY <field>");
+            { encode_error(out, "ERR KIND agg requires GROUPBY <field>"); Err(()) }
         }
         (IndexKind::Agg, Some(_), ValType::Str | ValType::Vector) => {
-            return encode_error(out, "ERR KIND agg requires TYPE i64|f64");
+            { encode_error(out, "ERR KIND agg requires TYPE i64|f64"); Err(()) }
         }
         (k, Some(_), _) if k != IndexKind::Agg => {
-            return encode_error(out, "ERR GROUPBY requires KIND agg");
+            { encode_error(out, "ERR GROUPBY requires KIND agg"); Err(()) }
         }
-        _ => {}
-    }
-    let spec = IndexSpec {
-        name: args[1].to_vec(),
-        prefix: args[4].to_vec(),
-        field: args[6].to_vec(),
-        ty,
-        kind,
-        max_bytes,
-        ann,
-        group_by,
-        };
-    let mut cat = index_runtime::catalog().map(|c| (*c).clone()).unwrap_or_default();
-    match cat.create(spec) {
-        Ok(()) => {
-            persist_sidecar(&cat);
-            index_runtime::install_catalog(cat);
-            out.extend_from_slice(b"+OK\r\n");
-        }
-        Err(e) => encode_error(out, e),
+        _ => Ok(ann),
     }
 }
 

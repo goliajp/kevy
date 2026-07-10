@@ -57,17 +57,7 @@ fn reduce_query(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
     };
     let spec = view_runtime::catalog().and_then(|c| c.get(&q.name).cloned());
     let desc = spec.as_ref().is_some_and(|s| s.desc);
-    let mut all: Vec<(IndexValue, Vec<u8>)> = Vec::new();
-    for c in &chunks {
-        let mut pos = 1usize;
-        let Some(n) = crate::cmd_index_reduce::read_u32_at(c, &mut pos) else { continue };
-        for _ in 0..n {
-            let Some(key) = crate::cmd_index_reduce::read_kbytes_at(c, &mut pos) else { break };
-            let Some(v) = crate::cmd_index_query::decode_value(c, &mut pos) else { break };
-            pos += 1; // per-shard hydration count is always 0 here
-            all.push((v, key));
-        }
-    }
+    let mut all = collect_chunk_rows(&chunks);
     all.sort();
     if desc {
         all.reverse();
@@ -98,6 +88,22 @@ fn reduce_query(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
         encode_bulk(&mut out, &crate::cmd_index_reduce::value_repr_pub(v));
     }
     out
+}
+
+/// Decode every shard chunk's `(value, key)` rows into one flat list.
+fn collect_chunk_rows(chunks: &[Vec<u8>]) -> Vec<(IndexValue, Vec<u8>)> {
+    let mut all: Vec<(IndexValue, Vec<u8>)> = Vec::new();
+    for c in chunks {
+        let mut pos = 1usize;
+        let Some(n) = crate::cmd_index_reduce::read_u32_at(c, &mut pos) else { continue };
+        for _ in 0..n {
+            let Some(key) = crate::cmd_index_reduce::read_kbytes_at(c, &mut pos) else { break };
+            let Some(v) = crate::cmd_index_query::decode_value(c, &mut pos) else { break };
+            pos += 1; // per-shard hydration count is always 0 here
+            all.push((v, key));
+        }
+    }
+    all
 }
 
 /// Build the stateless VIEW.HYDRATE continuation (kevy-rt convention:

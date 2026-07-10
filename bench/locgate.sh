@@ -30,6 +30,9 @@ for f in files:
 
 # ---- rule 2: fn ≤ 50 LOC or waivered
 WAIVER = re.compile(r'(?:^|\s)(?:LOC-WAIVER|loc-waiver)\b.*:', re.I)
+# Brace-literal chars (`'{'` / `b'}'`) would corrupt the depth count —
+# blank them before counting.
+BRACE_LIT = re.compile(r"'[{}]'")
 for f in files:
     if exempt_file(f):
         continue
@@ -44,8 +47,26 @@ for f in files:
             for j in range(max(0, lineno - 3), lineno)
         )
         depth = 0; opened = False; body = 0
+        decl = False; pdepth = 0
         for i in range(lineno, min(lineno + 460, len(lines))):
-            l = lines[i]
+            l = BRACE_LIT.sub("''", lines[i])
+            if not opened:
+                # Signature scan: a top-level `;` before any `{` means a
+                # bodyless declaration (`unsafe extern "C"` item) — skip.
+                # `;` inside () / [] (array types like `[u8; 4]`) doesn't
+                # terminate the signature.
+                for ch in l:
+                    if ch in '([':
+                        pdepth += 1
+                    elif ch in ')]':
+                        pdepth -= 1
+                    elif ch == '{':
+                        break
+                    elif ch == ';' and pdepth <= 0:
+                        decl = True
+                        break
+                if decl:
+                    break
             depth += l.count('{') - l.count('}')
             if '{' in l:
                 opened = True

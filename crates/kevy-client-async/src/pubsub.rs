@@ -64,6 +64,7 @@ pub enum PubsubEvent {
 
 /// Turn a RESP reply into a [`PubsubEvent`]. Handles both RESP2
 /// (`*N\r\n…` arrays) and RESP3 (`>N\r\n…` push frames).
+// LOC-WAIVER: data-driven pubsub-kind match table — one flat frame-destructure arm per kind.
 pub(crate) fn classify(reply: Reply) -> io::Result<PubsubEvent> {
     let items = match reply {
         Reply::Array(v) | Reply::Push(v) => v,

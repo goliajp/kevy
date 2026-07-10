@@ -42,6 +42,7 @@ pub fn dispatch_into_resp3<A: ArgvView + ?Sized>(store: &mut Store, args: &A, ou
 /// existing V2 chain — it doesn't touch the V2 hot path's instruction
 /// stream when `proto_v3 == false` (the cmovne is predicted on every
 /// pre-HELLO-3 conn).
+// LOC-WAIVER: per-op dispatch hot body — tier-1 GET/SET fast path + handler chain stay fused.
 fn dispatch_with_proto<A: ArgvView + ?Sized>(
     store: &mut Store,
     args: &A,
@@ -226,6 +227,7 @@ fn cmd_select<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
 }
 
 /// String commands.
+// LOC-WAIVER: data-driven verb dispatch table — one arm per string verb.
 fn dispatch_string<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,
@@ -313,6 +315,7 @@ fn dispatch_string<A: ArgvView + ?Sized>(
 }
 
 /// Set commands (single-key; multi-key SINTER/SUNION/SDIFF are runtime gathers).
+// LOC-WAIVER: data-driven verb dispatch table — one arm per set verb.
 fn dispatch_set<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,
@@ -373,6 +376,7 @@ fn dispatch_set<A: ArgvView + ?Sized>(
 }
 
 /// Type-agnostic key commands.
+// LOC-WAIVER: data-driven verb dispatch table — one arm per generic verb.
 fn dispatch_generic<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,

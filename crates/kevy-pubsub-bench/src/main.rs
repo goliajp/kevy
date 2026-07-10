@@ -88,11 +88,71 @@ fn read_line(s: &mut impl Read) -> std::io::Result<String> {
     Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
-fn main() {
-    // BATCH (used in the publisher loop): pipeline depth per publish-and-drain
-    // round; tuned to fit a few socket buffers without filling them.
-    const BATCH: usize = 1024;
+/// One subscriber thread: SUBSCRIBE, signal `ready`, drain exactly
+/// `target_bytes` of message frames, then signal `done`.
+fn subscriber_loop(addr: &str, ready: &AtomicUsize, done: &AtomicUsize, target_bytes: usize) {
+    let mut s = TcpStream::connect(addr).expect("subscriber connect");
+    s.set_nodelay(true).ok();
+    s.write_all(&resp(&[b"SUBSCRIBE", CHANNEL.as_bytes()]))
+        .unwrap();
+    read_reply(&mut s).unwrap(); // subscribe confirmation
+    ready.fetch_add(1, Ordering::SeqCst);
+    // Drain exactly `target_bytes` of message frames.
+    let mut buf = vec![0u8; 256 * 1024];
+    let mut got = 0usize;
+    while got < target_bytes {
+        match s.read(&mut buf) {
+            Ok(n) if n > 0 => got += n,
+            _ => break, // Ok(0) eof or Err(_) socket error — same handling
+        }
+    }
+    done.fetch_add(1, Ordering::SeqCst);
+}
 
+/// Spawn `subs` subscriber threads against `addr`. Returns the join
+/// handles plus the shared `ready` / `done` counters.
+fn spawn_subscribers(
+    addr: &str,
+    subs: usize,
+    target_bytes: usize,
+) -> (Vec<std::thread::JoinHandle<()>>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    let ready = Arc::new(AtomicUsize::new(0));
+    let done = Arc::new(AtomicUsize::new(0));
+    let mut subscribers = Vec::with_capacity(subs);
+    for _ in 0..subs {
+        let addr = addr.to_string();
+        let ready = Arc::clone(&ready);
+        let done = Arc::clone(&done);
+        subscribers.push(std::thread::spawn(move || {
+            subscriber_loop(&addr, &ready, &done, target_bytes);
+        }));
+    }
+    (subscribers, ready, done)
+}
+
+/// Flood `msgs` PUBLISH frames down `p`, pipelining in batches so the
+/// publisher's reply backlog can't fill the socket and deadlock the
+/// write side.
+fn publish_all(p: &mut TcpStream, pub_frame: &[u8], msgs: usize) {
+    // BATCH: pipeline depth per publish-and-drain round; tuned to fit a
+    // few socket buffers without filling them.
+    const BATCH: usize = 1024;
+    let mut sent = 0usize;
+    while sent < msgs {
+        let n = BATCH.min(msgs - sent);
+        let mut req = Vec::with_capacity(n * pub_frame.len());
+        for _ in 0..n {
+            req.extend_from_slice(pub_frame);
+        }
+        p.write_all(&req).unwrap();
+        for _ in 0..n {
+            read_reply(p).unwrap(); // :<subscriber count>
+        }
+        sent += n;
+    }
+}
+
+fn main() {
     let host = arg("--host", "127.0.0.1");
     let port: u16 = arg("--port", "6379").parse().unwrap();
     let subs: usize = arg("--subs", "50").parse().unwrap();
@@ -106,33 +166,7 @@ fn main() {
     let msg_frame = resp(&[b"message", CHANNEL.as_bytes(), &payload]).len();
     let target_bytes = msgs * msg_frame;
 
-    let ready = Arc::new(AtomicUsize::new(0));
-    let done = Arc::new(AtomicUsize::new(0));
-
-    let mut subscribers = Vec::with_capacity(subs);
-    for _ in 0..subs {
-        let addr = addr.clone();
-        let ready = ready.clone();
-        let done = done.clone();
-        subscribers.push(std::thread::spawn(move || {
-            let mut s = TcpStream::connect(&addr).expect("subscriber connect");
-            s.set_nodelay(true).ok();
-            s.write_all(&resp(&[b"SUBSCRIBE", CHANNEL.as_bytes()]))
-                .unwrap();
-            read_reply(&mut s).unwrap(); // subscribe confirmation
-            ready.fetch_add(1, Ordering::SeqCst);
-            // Drain exactly `target_bytes` of message frames.
-            let mut buf = vec![0u8; 256 * 1024];
-            let mut got = 0usize;
-            while got < target_bytes {
-                match s.read(&mut buf) {
-                    Ok(n) if n > 0 => got += n,
-                    _ => break, // Ok(0) eof or Err(_) socket error — same handling
-                }
-            }
-            done.fetch_add(1, Ordering::SeqCst);
-        }));
-    }
+    let (subscribers, ready, done) = spawn_subscribers(&addr, subs, target_bytes);
 
     // Wait until every subscriber is subscribed before publishing.
     while ready.load(Ordering::SeqCst) < subs {
@@ -144,21 +178,7 @@ fn main() {
     let pub_frame = resp(&[b"PUBLISH", CHANNEL.as_bytes(), &payload]);
 
     let start = Instant::now();
-    // Pipeline in batches so the publisher's reply backlog can't fill the socket
-    // and deadlock the write side. `BATCH` is declared at the top of `main()`.
-    let mut sent = 0usize;
-    while sent < msgs {
-        let n = BATCH.min(msgs - sent);
-        let mut req = Vec::with_capacity(n * pub_frame.len());
-        for _ in 0..n {
-            req.extend_from_slice(&pub_frame);
-        }
-        p.write_all(&req).unwrap();
-        for _ in 0..n {
-            read_reply(&mut p).unwrap(); // :<subscriber count>
-        }
-        sent += n;
-    }
+    publish_all(&mut p, &pub_frame, msgs);
     // Wait for all subscribers to receive everything.
     while done.load(Ordering::SeqCst) < subs {
         std::thread::yield_now();

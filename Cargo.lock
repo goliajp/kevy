@@ -443,6 +443,14 @@ dependencies = [
 [[package]]
 name = "kevy-bench"
 version = "3.17.4"
+dependencies = [
+ "kevy-config",
+ "kevy-map",
+ "kevy-ring",
+ "kevy-store",
+ "kevy-text",
+ "kevy-vector",
+]
 
 [[package]]
 name = "kevy-bytes"

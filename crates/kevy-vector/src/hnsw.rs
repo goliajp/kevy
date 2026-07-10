@@ -236,6 +236,7 @@ impl Hnsw {
         self.search_layer_vec(start, tv, layer, ef)
     }
 
+    // LOC-WAIVER: per-query beam-search hot body (63% of EF16 KNN self-time; see comment below).
     fn search_layer_vec(&self, start: u32, tv: &[f32], layer: usize, ef: usize) -> Vec<(f32, u32)> {
         // The visited set is the beam search's hottest structure —
         // perf-record put 63% of the EF16 KNN shape inside this fn,

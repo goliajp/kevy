@@ -40,48 +40,11 @@ pub(crate) fn cmd_move_scope<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
 ) {
-    if args.len() != 6 {
-        return encode_error(
-            out,
-            "ERR wrong number of arguments — MOVE-SCOPE <prefix> FROM <from-id> TO <to-id>",
-        );
-    }
-    let Some(prefix) = args.get(1) else { return wrong_syntax(out) };
-    let from_kw = args.get(2).unwrap_or_default();
-    let from_id = args.get(3).unwrap_or_default();
-    let to_kw = args.get(4).unwrap_or_default();
-    let to_id = args.get(5).unwrap_or_default();
-    if !from_kw.eq_ignore_ascii_case(b"FROM") || !to_kw.eq_ignore_ascii_case(b"TO") {
-        return wrong_syntax(out);
-    }
-    let Ok(from_id) = std::str::from_utf8(from_id) else { return wrong_syntax(out) };
-    let Ok(to_id) = std::str::from_utf8(to_id) else { return wrong_syntax(out) };
-    let prefix_owned = prefix.to_vec();
-
-    // Self must be the source. Local writes flow only through this
-    // node's keyspace; a misdirected MOVE-SCOPE would silently lose
-    // half the data.
-    match scope_integration::self_node_id() {
-        Some(me) if me == from_id => {}
-        Some(me) => {
-            return encode_error(
-                out,
-                &format!("ERR MOVE-SCOPE: from-id {from_id:?} is not this node ({me:?})"),
-            );
-        }
-        None => {
-            return encode_error(
-                out,
-                "ERR MOVE-SCOPE: [cluster] node_id is not configured on this node",
-            );
-        }
-    }
-
-    let Some(target_addr) = scope_integration::peer_addr(to_id) else {
-        return encode_error(
-            out,
-            &format!("ERR MOVE-SCOPE: target node {to_id:?} not in [cluster] peers"),
-        );
+    let Some((prefix_owned, from_id, to_id)) = parse_move_scope_args(args, out) else {
+        return;
+    };
+    let Some(target_addr) = validate_move_scope_route(&from_id, &to_id, out) else {
+        return;
     };
 
     // Start the migration locally. From this instant, dispatch
@@ -107,6 +70,77 @@ pub(crate) fn cmd_move_scope<A: ArgvView + ?Sized>(
             encode_error(out, &format!("ERR MOVE-SCOPE ship failed: {e}"));
         }
     }
+}
+
+/// Parse `MOVE-SCOPE <prefix> FROM <from-id> TO <to-id>`: arity,
+/// keyword, and UTF-8 checks. On failure the error reply has been
+/// written to `out` and `None` is returned.
+fn parse_move_scope_args<A: ArgvView + ?Sized>(
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Option<(Vec<u8>, String, String)> {
+    if args.len() != 6 {
+        encode_error(
+            out,
+            "ERR wrong number of arguments — MOVE-SCOPE <prefix> FROM <from-id> TO <to-id>",
+        );
+        return None;
+    }
+    let Some(prefix) = args.get(1) else {
+        wrong_syntax(out);
+        return None;
+    };
+    let from_kw = args.get(2).unwrap_or_default();
+    let from_id = args.get(3).unwrap_or_default();
+    let to_kw = args.get(4).unwrap_or_default();
+    let to_id = args.get(5).unwrap_or_default();
+    if !from_kw.eq_ignore_ascii_case(b"FROM") || !to_kw.eq_ignore_ascii_case(b"TO") {
+        wrong_syntax(out);
+        return None;
+    }
+    let Ok(from_id) = std::str::from_utf8(from_id) else {
+        wrong_syntax(out);
+        return None;
+    };
+    let Ok(to_id) = std::str::from_utf8(to_id) else {
+        wrong_syntax(out);
+        return None;
+    };
+    Some((prefix.to_vec(), from_id.to_string(), to_id.to_string()))
+}
+
+/// Validate the migration route: self must be `<from-id>` and
+/// `<to-id>` must resolve in the peer table. Returns the target's
+/// `host:port`; on failure the error reply has been written to `out`.
+fn validate_move_scope_route(from_id: &str, to_id: &str, out: &mut Vec<u8>) -> Option<String> {
+    // Self must be the source. Local writes flow only through this
+    // node's keyspace; a misdirected MOVE-SCOPE would silently lose
+    // half the data.
+    match scope_integration::self_node_id() {
+        Some(me) if me == from_id => {}
+        Some(me) => {
+            encode_error(
+                out,
+                &format!("ERR MOVE-SCOPE: from-id {from_id:?} is not this node ({me:?})"),
+            );
+            return None;
+        }
+        None => {
+            encode_error(
+                out,
+                "ERR MOVE-SCOPE: [cluster] node_id is not configured on this node",
+            );
+            return None;
+        }
+    }
+    let Some(target_addr) = scope_integration::peer_addr(to_id) else {
+        encode_error(
+            out,
+            &format!("ERR MOVE-SCOPE: target node {to_id:?} not in [cluster] peers"),
+        );
+        return None;
+    };
+    Some(target_addr)
 }
 
 fn wrong_syntax(out: &mut Vec<u8>) {

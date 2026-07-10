@@ -125,6 +125,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         }
     }
 
+    // LOC-WAIVER: per-op probe hot body — deliberate fast/slow loop pair (tombstone-free vs tracking).
     fn probe_with_key(&self, hash: u64, key: &K) -> ProbeOutcome {
         if self.cap == 0 {
             return ProbeOutcome::NotFound {
