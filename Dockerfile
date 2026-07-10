@@ -1,7 +1,7 @@
 # Official kevy server image — pure-Rust, zero-dep, Redis-compatible KV.
 #
 # Build context = repo root. Two stages:
-#   1. build  — rust:1.95-slim-bookworm, cargo build --release --bin kevy
+#   1. build  — rust:1.97-slim-bookworm, cargo build --release --bin kevy
 #   2. runtime — debian:bookworm-slim, just the binary
 #
 # Default: bind 0.0.0.0:6379 (Redis-default port — drop-in for clients), AOF
@@ -18,7 +18,7 @@
 #   docker run --rm -p 6379:6379 \
 #     --security-opt seccomp=unconfined ghcr.io/goliajp/kevy
 
-FROM rust:1.95-slim-bookworm AS build
+FROM rust:1.97-slim-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
