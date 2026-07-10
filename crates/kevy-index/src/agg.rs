@@ -124,6 +124,27 @@ impl AggSegment {
             *old_val = val.clone();
             return;
         }
+        self.retract_row(key);
+        match entry {
+            Some((group, val)) => {
+                let g = self.groups.entry(group.clone()).or_insert(Group {
+                    count: 0,
+                    sum: 0.0,
+                    values: BTreeMap::new(),
+                });
+                g.count += 1;
+                g.sum += val.as_f64();
+                *g.values.entry(val.clone()).or_insert(0) += 1;
+                self.rows.insert(key.to_vec(), (group, val));
+            }
+            None if excluded_row => self.excluded += 1,
+            None => {}
+        }
+    }
+
+    /// Retract one row's current contribution (no-op for an unknown
+    /// key); drops the group when its last row leaves.
+    fn retract_row(&mut self, key: &[u8]) {
         if let Some((old_group, old_val)) = self.rows.remove(key) {
             let empty = {
                 let g = self.groups.get_mut(&old_group).expect("group of live row");
@@ -140,21 +161,6 @@ impl AggSegment {
             if empty {
                 self.groups.remove(&old_group);
             }
-        }
-        match entry {
-            Some((group, val)) => {
-                let g = self.groups.entry(group.clone()).or_insert(Group {
-                    count: 0,
-                    sum: 0.0,
-                    values: BTreeMap::new(),
-                });
-                g.count += 1;
-                g.sum += val.as_f64();
-                *g.values.entry(val.clone()).or_insert(0) += 1;
-                self.rows.insert(key.to_vec(), (group, val));
-            }
-            None if excluded_row => self.excluded += 1,
-            None => {}
         }
     }
 

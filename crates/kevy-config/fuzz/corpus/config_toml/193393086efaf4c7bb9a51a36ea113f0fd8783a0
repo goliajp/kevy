@@ -1,0 +1,6 @@
+#
+[memory]
+maxmemory_policy  = "allkeys-lru"
+[expiry]
+hz = 10
+st  =8

@@ -4,7 +4,7 @@
 //! (fixed 2026-07-03 — they carried pre-L2 `Str`-only arms and replied
 //! WRONGTYPE where Redis succeeds; guard: `tests_string_encoding.rs`).
 
-use crate::string::pick_value_for_set_owned;
+use crate::string_set::pick_value_for_set_owned;
 use crate::util::{fmt_num, format_i64_into, itoa_i64_stack, parse_f64};
 use crate::value::{SmallBytes, Value};
 use crate::{Entry, Store, StoreError};
@@ -117,29 +117,19 @@ impl Store {
     pub fn incr_by_float(&mut self, key: &[u8], delta: f64) -> Result<Vec<u8>, StoreError> {
         let outcome = if let Some(e) = self.live_entry_mut(key) { match &mut e.value {
             Value::Str(v) => {
-                let next = parse_f64(v.as_slice()).ok_or(StoreError::NotFloat)? + delta;
-                if !next.is_finite() {
-                    return Err(StoreError::NotFloat);
-                }
-                let bytes = fmt_num(next);
+                let cur = parse_f64(v.as_slice()).ok_or(StoreError::NotFloat)?;
+                let bytes = float_incr_bytes(cur, delta)?;
                 *v = SmallBytes::from_slice(&bytes);
                 FloatOutcome::Reweigh(bytes)
             }
             Value::Int(n) => {
-                let next = *n as f64 + delta;
-                if !next.is_finite() {
-                    return Err(StoreError::NotFloat);
-                }
-                let bytes = fmt_num(next);
+                let bytes = float_incr_bytes(*n as f64, delta)?;
                 e.value = Value::Str(SmallBytes::from_slice(&bytes));
                 FloatOutcome::Reweigh(bytes)
             }
             Value::ArcBulk(a) => {
-                let next = parse_f64(a.as_ref()).ok_or(StoreError::NotFloat)? + delta;
-                if !next.is_finite() {
-                    return Err(StoreError::NotFloat);
-                }
-                let bytes = fmt_num(next);
+                let cur = parse_f64(a.as_ref()).ok_or(StoreError::NotFloat)?;
+                let bytes = float_incr_bytes(cur, delta)?;
                 e.value = Value::Str(SmallBytes::from_slice(&bytes));
                 FloatOutcome::Reweigh(bytes)
             }
@@ -175,4 +165,15 @@ enum AppendOutcome {
 enum FloatOutcome {
     Reweigh(Vec<u8>),
     Insert(Vec<u8>),
+}
+
+/// Shared tail of the three INCRBYFLOAT arms: add `delta`, reject a
+/// non-finite result (Redis `NaN`/`inf` guard), format Redis-style.
+#[inline]
+fn float_incr_bytes(cur: f64, delta: f64) -> Result<Vec<u8>, StoreError> {
+    let next = cur + delta;
+    if !next.is_finite() {
+        return Err(StoreError::NotFloat);
+    }
+    Ok(fmt_num(next))
 }

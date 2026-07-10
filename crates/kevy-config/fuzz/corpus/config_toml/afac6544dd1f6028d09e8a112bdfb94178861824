@@ -1,0 +1,7 @@
+
+[log]
+level= "info"
+output="stderu"
+
+[advanced]
+spin_limit=2

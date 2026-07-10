@@ -206,54 +206,12 @@ fn run_conn(
     stop: Arc<AtomicBool>,
     snapshot: SnapshotProvider,
 ) {
-    if stream.set_read_timeout(Some(Duration::from_secs(2))).is_err() {
+    let Some(from_offset) = handshake_and_prepare(&mut stream) else {
         return;
-    }
-    let from_offset = match read_handshake(&mut stream) {
-        Some(off) => off,
-        None => return,
     };
-    // The accept loop's listener is non-blocking and accepted sockets
-    // INHERIT that on some platforms (BSD/macOS semantics) — flip to
-    // blocking BEFORE any bulk write, or a snapshot ship dies with
-    // EWOULDBLOCK the moment the socket buffer fills (measured: EOF
-    // at ~319KB, one buffer's worth).
-    if stream.set_nonblocking(false).is_err() {
+    let Some(from_offset) = ship_snapshot_if_needed(&mut stream, &source, &snapshot, from_offset)
+    else {
         return;
-    }
-    let _ = stream.set_read_timeout(None);
-    // Snapshot path (closing the v1.21 anti-scope): a fresh replica
-    // (offset 0 against a non-empty history) or one that fell past
-    // the backlog gets the keyspace shipped, then live frames from
-    // the snapshot's as-of offset — same branch discipline as the
-    // server primary's pump (snapshot.md).
-    let needs_snapshot = {
-        let g = source.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let next = g.next_offset();
-        (from_offset == 0 && next > 0) || g.frames_from(from_offset).is_err()
-    };
-    let from_offset = if needs_snapshot {
-        let (payload, ack_offset) = snapshot();
-        if stream.write_all(&encode_ack(ack_offset)).is_err() {
-            return;
-        }
-        if stream.write_all(&encode_snapshot_begin()).is_err() {
-            return;
-        }
-        for chunk in payload.chunks(SNAPSHOT_CHUNK_MAX) {
-            if stream.write_all(&encode_snapshot_chunk(chunk)).is_err() {
-                return;
-            }
-        }
-        if stream.write_all(&encode_snapshot_end(ack_offset)).is_err() {
-            return;
-        }
-        ack_offset
-    } else {
-        if stream.write_all(&encode_ack(from_offset)).is_err() {
-            return;
-        }
-        from_offset
     };
     // Streaming loop. Lock the source briefly each round to clone
     // any pending frame bytes, then release before writing to the
@@ -281,6 +239,65 @@ fn run_conn(
             }
         }
     }
+}
+
+/// Read the replica's handshake, then flip the socket to blocking:
+/// the accept loop's listener is non-blocking and accepted sockets
+/// INHERIT that on some platforms (BSD/macOS semantics) — flip to
+/// blocking BEFORE any bulk write, or a snapshot ship dies with
+/// EWOULDBLOCK the moment the socket buffer fills (measured: EOF at
+/// ~319KB, one buffer's worth). Returns the requested offset.
+fn handshake_and_prepare(stream: &mut TcpStream) -> Option<u64> {
+    if stream.set_read_timeout(Some(Duration::from_secs(2))).is_err() {
+        return None;
+    }
+    let from_offset = read_handshake(stream)?;
+    if stream.set_nonblocking(false).is_err() {
+        return None;
+    }
+    let _ = stream.set_read_timeout(None);
+    Some(from_offset)
+}
+
+/// Snapshot path (closing the v1.21 anti-scope): a fresh replica
+/// (offset 0 against a non-empty history) or one that fell past the
+/// backlog gets the keyspace shipped, then live frames from the
+/// snapshot's as-of offset — same branch discipline as the server
+/// primary's pump (snapshot.md). Returns the live-stream starting
+/// offset; `None` = socket error (caller drops the connection).
+fn ship_snapshot_if_needed(
+    stream: &mut TcpStream,
+    source: &Arc<Mutex<ReplicationSource>>,
+    snapshot: &SnapshotProvider,
+    from_offset: u64,
+) -> Option<u64> {
+    let needs_snapshot = {
+        let g = source.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let next = g.next_offset();
+        (from_offset == 0 && next > 0) || g.frames_from(from_offset).is_err()
+    };
+    if !needs_snapshot {
+        if stream.write_all(&encode_ack(from_offset)).is_err() {
+            return None;
+        }
+        return Some(from_offset);
+    }
+    let (payload, ack_offset) = snapshot();
+    if stream.write_all(&encode_ack(ack_offset)).is_err() {
+        return None;
+    }
+    if stream.write_all(&encode_snapshot_begin()).is_err() {
+        return None;
+    }
+    for chunk in payload.chunks(SNAPSHOT_CHUNK_MAX) {
+        if stream.write_all(&encode_snapshot_chunk(chunk)).is_err() {
+            return None;
+        }
+    }
+    if stream.write_all(&encode_snapshot_end(ack_offset)).is_err() {
+        return None;
+    }
+    Some(ack_offset)
 }
 
 enum FrameStep {

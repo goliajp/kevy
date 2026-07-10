@@ -1,0 +1,22 @@
+# 0
+[log]
+level    = "info"
+output   ="so"
+output   ="strÿÿ"
+
+[advanced]
+spin_limit         = 129
+
+[log]
+level   = "info"
+output   ="ÿÿ"
+
+[advanced]
+spin_limit         = 129
+
+[log]
+level = "info"
+output   ="std"
+
+[advanced]
+spin_limit           = 064

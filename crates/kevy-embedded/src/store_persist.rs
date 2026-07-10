@@ -43,56 +43,64 @@ impl Store {
     pub fn rewrite_aof(&self) -> io::Result<Option<RewriteStats>> {
         let mut agg: Option<RewriteStats> = None;
         for shard in self.shards.iter() {
-            let start = Instant::now();
-            // Phase 1 (locked): freeze the COW view + start the tee —
-            // O(n)-shallow, no serialization under the lock.
-            let (view, tmp, before_bytes) = {
-                let mut g = lock_write(shard);
-                let Inner { store, aof, .. } = &mut *g;
-                let Some(aof) = aof else { continue };
-                if aof.is_rewriting() {
-                    continue;
-                }
-                let before = aof.size_bytes();
-                let view = store.collect_snapshot();
-                (view, aof.begin_view_rewrite()?, before)
-            };
-            // Phase 2 (unlocked): serialize + fsync the compacted log.
-            let keys = match kevy_persist::dump_aof(&tmp, &view) {
-                Ok((keys, _)) => keys,
-                Err(e) => {
-                    let mut g = lock_write(shard);
-                    if let Some(aof) = &mut g.aof {
-                        aof.abort_concurrent_rewrite();
-                    }
-                    let _ = std::fs::remove_file(&tmp);
-                    return Err(e);
-                }
-            };
-            // Phase 3 (locked): append the tee'd diff and swap.
-            let mut g = lock_write(shard);
-            let Some(aof) = &mut g.aof else { continue };
-            let stats = match aof.finish_concurrent_rewrite(&tmp, keys) {
-                Ok(s) => s,
-                Err(e) => {
-                    aof.abort_concurrent_rewrite();
-                    let _ = std::fs::remove_file(&tmp);
-                    return Err(e);
-                }
-            };
-            if let Some(sink) = &self.config.metric_sink {
-                sink.emit(KevyMetric::Rewrite {
-                    keys: stats.keys,
-                    before_bytes,
-                    after_bytes: stats.bytes,
-                    elapsed_ms: start.elapsed().as_millis() as u64,
-                });
+            if let Some(stats) = self.rewrite_one_shard(shard)? {
+                let acc = agg.get_or_insert(RewriteStats { keys: 0, bytes: 0 });
+                acc.keys += stats.keys;
+                acc.bytes += stats.bytes;
             }
-            let acc = agg.get_or_insert(RewriteStats { keys: 0, bytes: 0 });
-            acc.keys += stats.keys;
-            acc.bytes += stats.bytes;
         }
         Ok(agg)
+    }
+
+    /// One shard's synchronous three-phase rewrite. `Ok(None)` =
+    /// skipped (persistence off / already mid-rewrite).
+    fn rewrite_one_shard(&self, shard: &RwLock<Inner>) -> io::Result<Option<RewriteStats>> {
+        let start = Instant::now();
+        // Phase 1 (locked): freeze the COW view + start the tee —
+        // O(n)-shallow, no serialization under the lock.
+        let (view, tmp, before_bytes) = {
+            let mut g = lock_write(shard);
+            let Inner { store, aof, .. } = &mut *g;
+            let Some(aof) = aof else { return Ok(None) };
+            if aof.is_rewriting() {
+                return Ok(None);
+            }
+            let before = aof.size_bytes();
+            let view = store.collect_snapshot();
+            (view, aof.begin_view_rewrite()?, before)
+        };
+        // Phase 2 (unlocked): serialize + fsync the compacted log.
+        let keys = match kevy_persist::dump_aof(&tmp, &view) {
+            Ok((keys, _)) => keys,
+            Err(e) => {
+                let mut g = lock_write(shard);
+                if let Some(aof) = &mut g.aof {
+                    aof.abort_concurrent_rewrite();
+                }
+                let _ = std::fs::remove_file(&tmp);
+                return Err(e);
+            }
+        };
+        // Phase 3 (locked): append the tee'd diff and swap.
+        let mut g = lock_write(shard);
+        let Some(aof) = &mut g.aof else { return Ok(None) };
+        let stats = match aof.finish_concurrent_rewrite(&tmp, keys) {
+            Ok(s) => s,
+            Err(e) => {
+                aof.abort_concurrent_rewrite();
+                let _ = std::fs::remove_file(&tmp);
+                return Err(e);
+            }
+        };
+        if let Some(sink) = &self.config.metric_sink {
+            sink.emit(KevyMetric::Rewrite {
+                keys: stats.keys,
+                before_bytes,
+                after_bytes: stats.bytes,
+                elapsed_ms: start.elapsed().as_millis() as u64,
+            });
+        }
+        Ok(Some(stats))
     }
 
     /// Snapshot every shard to its `dump-{i}.rdb` (single shard: the configured

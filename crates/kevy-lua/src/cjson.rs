@@ -180,29 +180,35 @@ fn encode_table(vm: &Vm, t: Gc<Table>, out: &mut String, depth: u32) -> Result<(
         }
         out.push(']');
     } else {
-        out.push('{');
-        let mut first = true;
-        let mut k = Value::Nil;
-        while let Some((nk, v)) = t_ref.next(k).map_err(|e| format!("table iter: {e:?}"))? {
-            if !first {
-                out.push(',');
-            }
-            first = false;
-            // Object keys must be strings in JSON. Coerce non-string
-            // keys to their Lua-string repr (numbers → text).
-            match nk {
-                Value::Str(s) => encode_string(s.as_bytes(), out),
-                Value::Int(i) => encode_string(i.to_string().as_bytes(), out),
-                Value::Float(f) => encode_string(format!("{f}").as_bytes(), out),
-                Value::Bool(b) => encode_string(if b { b"true" } else { b"false" }, out),
-                _ => return Err("unsupported JSON object key type".into()),
-            }
-            out.push(':');
-            encode_value(vm, &v, out, depth)?;
-            k = nk;
-        }
-        out.push('}');
+        encode_object(vm, t_ref, out, depth)?;
     }
+    Ok(())
+}
+
+/// Encode a non-array table as a JSON object.
+fn encode_object(vm: &Vm, t_ref: &Table, out: &mut String, depth: u32) -> Result<(), String> {
+    out.push('{');
+    let mut first = true;
+    let mut k = Value::Nil;
+    while let Some((nk, v)) = t_ref.next(k).map_err(|e| format!("table iter: {e:?}"))? {
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        // Object keys must be strings in JSON. Coerce non-string
+        // keys to their Lua-string repr (numbers → text).
+        match nk {
+            Value::Str(s) => encode_string(s.as_bytes(), out),
+            Value::Int(i) => encode_string(i.to_string().as_bytes(), out),
+            Value::Float(f) => encode_string(format!("{f}").as_bytes(), out),
+            Value::Bool(b) => encode_string(if b { b"true" } else { b"false" }, out),
+            _ => return Err("unsupported JSON object key type".into()),
+        }
+        out.push(':');
+        encode_value(vm, &v, out, depth)?;
+        k = nk;
+    }
+    out.push('}');
     Ok(())
 }
 
@@ -289,41 +295,7 @@ impl<'a> Parser<'a> {
                         b'n' => buf.push(b'\n'),
                         b'r' => buf.push(b'\r'),
                         b't' => buf.push(b'\t'),
-                        b'u' => {
-                            let mut hex = [0u8; 4];
-                            for h in &mut hex {
-                                *h = self.bump().ok_or("bad \\u")?;
-                            }
-                            let s = std::str::from_utf8(&hex).map_err(|_| "bad \\u")?;
-                            let cp = u32::from_str_radix(s, 16).map_err(|_| "bad \\u")?;
-                            // Surrogate pair handling
-                            if (0xD800..=0xDBFF).contains(&cp) {
-                                // High surrogate — expect low pair next.
-                                self.expect(b'\\')?;
-                                self.expect(b'u')?;
-                                let mut hex2 = [0u8; 4];
-                                for h in &mut hex2 {
-                                    *h = self.bump().ok_or("bad \\u")?;
-                                }
-                                let s2 = std::str::from_utf8(&hex2).map_err(|_| "bad \\u")?;
-                                let cp2 = u32::from_str_radix(s2, 16).map_err(|_| "bad \\u")?;
-                                if !(0xDC00..=0xDFFF).contains(&cp2) {
-                                    return Err("bad surrogate pair".into());
-                                }
-                                let full = 0x10000 + ((cp - 0xD800) << 10) + (cp2 - 0xDC00);
-                                if let Some(c) = char::from_u32(full) {
-                                    let mut tmp = [0u8; 4];
-                                    let s = c.encode_utf8(&mut tmp);
-                                    buf.extend_from_slice(s.as_bytes());
-                                }
-                            } else if let Some(c) = char::from_u32(cp) {
-                                let mut tmp = [0u8; 4];
-                                let s = c.encode_utf8(&mut tmp);
-                                buf.extend_from_slice(s.as_bytes());
-                            } else {
-                                return Err("bad codepoint".into());
-                            }
-                        }
+                        b'u' => self.parse_unicode_escape(&mut buf)?,
                         other => return Err(format!("bad escape \\{}", other as char)),
                     }
                 }
@@ -332,6 +304,43 @@ impl<'a> Parser<'a> {
         }
         let s = vm.heap.intern(&buf);
         Ok(Value::Str(s))
+    }
+    /// Four hex digits after `\u`.
+    fn read_hex4(&mut self) -> Result<u32, String> {
+        let mut hex = [0u8; 4];
+        for h in &mut hex {
+            *h = self.bump().ok_or("bad \\u")?;
+        }
+        let s = std::str::from_utf8(&hex).map_err(|_| "bad \\u")?;
+        u32::from_str_radix(s, 16).map_err(|_| String::from("bad \\u"))
+    }
+    /// `\uXXXX` escape body (with surrogate-pair handling) → UTF-8
+    /// bytes appended to `buf`.
+    fn parse_unicode_escape(&mut self, buf: &mut Vec<u8>) -> Result<(), String> {
+        let cp = self.read_hex4()?;
+        // Surrogate pair handling
+        if (0xD800..=0xDBFF).contains(&cp) {
+            // High surrogate — expect low pair next.
+            self.expect(b'\\')?;
+            self.expect(b'u')?;
+            let cp2 = self.read_hex4()?;
+            if !(0xDC00..=0xDFFF).contains(&cp2) {
+                return Err("bad surrogate pair".into());
+            }
+            let full = 0x10000 + ((cp - 0xD800) << 10) + (cp2 - 0xDC00);
+            if let Some(c) = char::from_u32(full) {
+                let mut tmp = [0u8; 4];
+                let s = c.encode_utf8(&mut tmp);
+                buf.extend_from_slice(s.as_bytes());
+            }
+        } else if let Some(c) = char::from_u32(cp) {
+            let mut tmp = [0u8; 4];
+            let s = c.encode_utf8(&mut tmp);
+            buf.extend_from_slice(s.as_bytes());
+        } else {
+            return Err("bad codepoint".into());
+        }
+        Ok(())
     }
     fn parse_number(&mut self) -> Result<Value, String> {
         let start = self.cur;

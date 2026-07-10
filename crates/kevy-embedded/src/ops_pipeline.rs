@@ -206,6 +206,8 @@ impl<'a> Pipeline<'a> {
         Ok(())
     }
 
+    // fn-length exemption: pure data-driven op match table — one flat
+    // arm per PendingOp variant, only arg plumbing + one store call.
     fn apply_one(&self, op: PendingOp) -> io::Result<()> {
         match op {
             PendingOp::Set { key, value } => {

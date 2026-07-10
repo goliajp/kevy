@@ -125,37 +125,37 @@ impl crate::Store {
     }
 
     fn row_digest_embedded(&self, key: &[u8]) -> u64 {
-        const FNV_OFFSET: u64 = 0xCBF2_9CE4_8422_2325;
-        const FNV_PRIME: u64 = 0x0000_0100_0000_01B3;
-        fn fnv(h: &mut u64, bytes: &[u8]) {
-            for &b in bytes {
-                *h ^= u64::from(b);
-                *h = h.wrapping_mul(FNV_PRIME);
-            }
-        }
         let mut h = FNV_OFFSET;
         fnv(&mut h, key);
         let ty = self.type_of(key);
         fnv(&mut h, ty.as_bytes());
+        self.digest_row_body(key, ty, &mut h);
+        h
+    }
+
+    /// Fold one row's canonicalized value into the FNV state, per type
+    /// (hash fields and set members sort first; zset folds score bits
+    /// then member, rank order).
+    fn digest_row_body(&self, key: &[u8], ty: &str, h: &mut u64) {
         match ty {
             "string" => {
                 if let Ok(Some(v)) = self.get(key) {
-                    fnv(&mut h, &v);
+                    fnv(h, &v);
                 }
             }
             "hash" => {
                 if let Ok(mut pairs) = self.hgetall(key) {
                     pairs.sort();
                     for (f, v) in pairs {
-                        fnv(&mut h, &f);
-                        fnv(&mut h, &v);
+                        fnv(h, &f);
+                        fnv(h, &v);
                     }
                 }
             }
             "list" => {
                 if let Ok(items) = self.lrange(key, 0, -1) {
                     for i in items {
-                        fnv(&mut h, &i);
+                        fnv(h, &i);
                     }
                 }
             }
@@ -163,21 +163,29 @@ impl crate::Store {
                 if let Ok(mut ms) = self.smembers(key) {
                     ms.sort();
                     for m in ms {
-                        fnv(&mut h, &m);
+                        fnv(h, &m);
                     }
                 }
             }
             "zset" => {
                 if let Ok(items) = self.zrange(key, 0, -1) {
                     for (member, score) in items {
-                        fnv(&mut h, &score.to_bits().to_le_bytes());
-                        fnv(&mut h, &member);
+                        fnv(h, &score.to_bits().to_le_bytes());
+                        fnv(h, &member);
                     }
                 }
             }
             _ => {}
         }
-        h
     }
 }
 
+const FNV_OFFSET: u64 = 0xCBF2_9CE4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01B3;
+
+fn fnv(h: &mut u64, bytes: &[u8]) {
+    for &b in bytes {
+        *h ^= u64::from(b);
+        *h = h.wrapping_mul(FNV_PRIME);
+    }
+}

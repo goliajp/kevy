@@ -26,6 +26,7 @@
 
 mod apply;
 mod cluster;
+mod enums;
 mod error;
 mod lex;
 mod parse;
@@ -154,8 +155,16 @@ impl Config {
     /// Round-trips: feeding the output back through [`Self::from_toml_str`]
     /// reconstructs an equivalent `Config` (modulo `source_path`).
     pub fn to_toml_string(&self) -> String {
-        use std::fmt::Write;
         let mut out = String::new();
+        self.write_toml_storage_sections(&mut out);
+        self.write_toml_tuning_sections(&mut out);
+        out
+    }
+
+    /// `[server]` / `[persistence]` / `[memory]` — the storage-shaped half
+    /// of [`Self::to_toml_string`].
+    fn write_toml_storage_sections(&self, out: &mut String) {
+        use std::fmt::Write;
         let [a, b, c, d] = self.server.bind;
         let _ = writeln!(out, "[server]");
         let _ = writeln!(out, "bind     = \"{a}.{b}.{c}.{d}\"");
@@ -192,6 +201,12 @@ impl Config {
             "maxmemory_policy  = \"{}\"",
             self.memory.maxmemory_policy.as_str(),
         );
+    }
+
+    /// `[expiry]` / `[log]` / `[notification]` / `[advanced]` / `[slowlog]`
+    /// — the runtime-tuning half of [`Self::to_toml_string`].
+    fn write_toml_tuning_sections(&self, out: &mut String) {
+        use std::fmt::Write;
         let _ = writeln!(out);
         let _ = writeln!(out, "[expiry]");
         let _ = writeln!(out, "hz       = {}", self.expiry.hz);
@@ -225,7 +240,6 @@ impl Config {
             self.slowlog.slower_than_micros,
         );
         let _ = writeln!(out, "max_len            = {}", self.slowlog.max_len);
-        out
     }
 }
 

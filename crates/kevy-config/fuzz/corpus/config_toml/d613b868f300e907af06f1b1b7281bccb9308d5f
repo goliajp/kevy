@@ -1,0 +1,2 @@
+[persistence]
+auto_aof_rewrite_min_size =""

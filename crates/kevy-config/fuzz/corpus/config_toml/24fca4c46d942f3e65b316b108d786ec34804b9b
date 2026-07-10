@@ -1,0 +1,5 @@
+#
+[advanced]
+spin_limit  = 00
+park_timeout_ms= 1
+tick_check_every =-8

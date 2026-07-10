@@ -4,6 +4,7 @@
 //! BM25 ranking with shard-local statistics.
 
 mod bm25;
+mod buckets;
 mod segment;
 mod token;
 

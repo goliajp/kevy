@@ -232,19 +232,21 @@ fn run_loop(
     }
 }
 
+/// Pump one connected session's events until stop / disconnect.
+///
+/// `snap` is the snapshot ingest accumulator: `None` outside a
+/// snapshot; `Some(buf)` while between `+SNAPSHOT` and `+SNAPSHOT_END`.
+/// Snapshot ship is rare (only when the primary's backlog has rolled
+/// past the replica's `from_offset`), so we don't try to stream the
+/// chunks into the store as they arrive — collect into memory then
+/// `load_snapshot_from` once at the end. v1.20 MVP sizes
+/// (mailrs-class) make this trivially affordable.
 fn drain_session(
     shards: &Shards,
     client: &mut ReplicaClient,
     stop: &Arc<AtomicBool>,
     applied_offset: &Arc<AtomicU64>,
 ) {
-    // Snapshot ingest accumulator. `None` outside a snapshot;
-    // `Some(buf)` while between `+SNAPSHOT` and `+SNAPSHOT_END`.
-    // Snapshot ship is rare (only when the primary's backlog has
-    // rolled past the replica's `from_offset`), so we don't try to
-    // stream the chunks into the store as they arrive — collect into
-    // memory then `load_snapshot_from` once at the end. v1.20 MVP
-    // sizes (mailrs-class) make this trivially affordable.
     let mut snap: Option<Vec<u8>> = None;
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
@@ -265,35 +267,49 @@ fn drain_session(
                 apply_frame(shards, &frame.argv);
                 applied_offset.store(client.expected_offset(), Ordering::Relaxed);
             }
-            Some(Ok(ReplicaEvent::SnapshotBegin)) => {
-                // Snapshot is the new ground truth — flush stale local
-                // state so it doesn't double-apply alongside the
-                // snapshot's keyspace.
-                for shard in shards.iter() {
-                    let mut g = lock_write(shard);
-                    g.store.flushall();
-                }
-                snap = Some(Vec::new());
-            }
+            Some(Ok(ReplicaEvent::SnapshotBegin)) => snap = Some(begin_snapshot(shards)),
             Some(Ok(ReplicaEvent::SnapshotChunk(bytes))) => {
                 if let Some(buf) = snap.as_mut() {
                     buf.extend_from_slice(&bytes);
                 }
             }
             Some(Ok(ReplicaEvent::SnapshotEnd { ack_offset })) => {
-                if let Some(buf) = snap.take() {
-                    if !load_snapshot_into_shard0(shards, &buf) {
-                        // Decode error — drop the link; reconnect
-                        // either lands in the backlog or triggers
-                        // another snapshot ship.
-                        break;
-                    }
-                    applied_offset.store(ack_offset, Ordering::Relaxed);
+                if let Some(buf) = snap.take()
+                    && !finish_snapshot(shards, &buf, ack_offset, applied_offset)
+                {
+                    break;
                 }
             }
             Some(Err(_)) | None => break,
         }
     }
+}
+
+/// SnapshotBegin: the snapshot is the new ground truth — flush stale
+/// local state so it doesn't double-apply alongside the snapshot's
+/// keyspace. Returns the fresh ingest accumulator.
+fn begin_snapshot(shards: &Shards) -> Vec<u8> {
+    for shard in shards.iter() {
+        let mut g = lock_write(shard);
+        g.store.flushall();
+    }
+    Vec::new()
+}
+
+/// SnapshotEnd: decode the accumulated image into shard 0 and publish
+/// the ack offset. `false` = decode error — drop the link; reconnect
+/// either lands in the backlog or triggers another snapshot ship.
+fn finish_snapshot(
+    shards: &Shards,
+    buf: &[u8],
+    ack_offset: u64,
+    applied_offset: &Arc<AtomicU64>,
+) -> bool {
+    if !load_snapshot_into_shard0(shards, buf) {
+        return false;
+    }
+    applied_offset.store(ack_offset, Ordering::Relaxed);
+    true
 }
 
 fn apply_frame(shards: &Shards, argv: &Argv) {
