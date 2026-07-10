@@ -1,7 +1,7 @@
 //! T3.18 e2e: a write to the "wrong" embed/server returns
 //! `-MISDIRECTED writer is <host:port>` over real RESP. Covers the
-//! routing wire path through `kevy::dispatch` — the cement check
-//! in `dispatch_with_proto` + `scope_integration::route_write` +
+//! routing wire path through `KevyCommands::dispatch` — the cement
+//! check in `dispatch_with_proto` + `RuntimeState::route_write` +
 //! `encode_misdirected`.
 //!
 //! Single-Runtime test: this node is configured with scopes that
@@ -38,13 +38,14 @@ fn write_to_non_writer_node_returns_misdirected() {
     )
     .unwrap();
     cfg.cluster.scopes = kevy_config::ScopeEntry::parse_list("app:=B").unwrap();
-    kevy::config_init(Arc::new(cfg.clone()));
-    kevy::install_scope_integration_for_test(&cfg).expect("install scope_integration");
+    let kevy = kevy::KevyCommands::with_state(Arc::new(
+        kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), 1).unwrap(),
+    ));
 
     let mut store = Store::new();
     // Write to a key under the `app:` prefix — should be redirected
     // because self_node_id (A) is not the declared writer (B).
-    let reply = kevy::dispatch(&mut store, &argv(&[b"SET", b"app:foo", b"v"]));
+    let reply = kevy.dispatch(&mut store, &argv(&[b"SET", b"app:foo", b"v"]));
     let s = String::from_utf8_lossy(&reply);
     assert!(
         s.starts_with("-MISDIRECTED"),
@@ -62,7 +63,7 @@ fn write_to_non_writer_node_returns_misdirected() {
     );
 
     // A key OUTSIDE the scope behaves normally (no MISDIRECTED).
-    let reply = kevy::dispatch(&mut store, &argv(&[b"SET", b"other:k", b"v"]));
+    let reply = kevy.dispatch(&mut store, &argv(&[b"SET", b"other:k", b"v"]));
     let s = String::from_utf8_lossy(&reply);
     assert!(s.starts_with('+') || s.starts_with(':'), "{s:?}");
     assert_eq!(
@@ -87,11 +88,12 @@ fn read_to_non_writer_node_is_not_misdirected() {
     )
     .unwrap();
     cfg.cluster.scopes = kevy_config::ScopeEntry::parse_list("app:=B").unwrap();
-    kevy::config_init(Arc::new(cfg.clone()));
-    kevy::install_scope_integration_for_test(&cfg).expect("install scope_integration");
+    let kevy = kevy::KevyCommands::with_state(Arc::new(
+        kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), 1).unwrap(),
+    ));
 
     let mut store = Store::new();
-    let reply = kevy::dispatch(&mut store, &argv(&[b"GET", b"app:nonexistent"]));
+    let reply = kevy.dispatch(&mut store, &argv(&[b"GET", b"app:nonexistent"]));
     let s = String::from_utf8_lossy(&reply);
     assert!(
         !s.starts_with("-MISDIRECTED"),

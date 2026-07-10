@@ -1,5 +1,5 @@
 //! Matrix-style coverage test for every Redis verb kevy handles in
-//! [`kevy::dispatch`]. Each verb is exercised on at least one of:
+//! [`kevy::KevyCommands::dispatch`]. Each verb is exercised on at least one of:
 //!   * a happy path,
 //!   * an arity error (`wrong number of arguments`),
 //!   * a wrong-type error (where the verb is type-checked),
@@ -7,17 +7,27 @@
 //!
 //! The aim is to push `crates/kevy/src/cmd.rs` and `crates/kevy/src/dispatch.rs`
 //! over the 80% line-coverage bar. The test calls
-//! [`kevy::dispatch`] in-process against a single `KeyspaceStore` — no sockets,
+//! [`kevy::KevyCommands::dispatch`] in-process against a single `KeyspaceStore` — no sockets,
 //! no runtime — so it's order-independent within each #[test] but lets us
 //! sequence happy → error in one body.
 //!
 //! Reproducer: `cargo test -p kevy --test cmd_matrix`.
 
-use kevy::{Argv, KeyspaceStore, dispatch};
+use kevy::{Argv, KeyspaceStore};
 
 /// Build an `Argv` from `&[&[u8]]` argv pieces.
 fn argv(parts: &[&[u8]]) -> Argv {
     Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>())
+}
+
+/// In-process dispatcher: one KevyCommands per test thread, so
+/// per-state caches (e.g. the SCRIPT cache) persist across calls
+/// within a test.
+fn dispatch<A: kevy_rt::ArgvView + ?Sized>(store: &mut KeyspaceStore, args: &A) -> Vec<u8> {
+    thread_local! {
+        static KEVY: kevy::KevyCommands = kevy::KevyCommands::new();
+    }
+    KEVY.with(|k| k.dispatch(store, args))
 }
 
 /// Convenience: run one command against `store` and return the reply bytes.

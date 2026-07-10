@@ -24,15 +24,16 @@
 //! routing produces a byte-equivalent local store.
 //!
 //! The canonical in-process recipe — drop into a fresh
-//! `kevy::KeyspaceStore` and call `kevy::dispatch`:
+//! `kevy::KeyspaceStore` and dispatch through `kevy::KevyCommands`:
 //!
 //! ```ignore
 //! use kevy_replicate::replica::ReplicaClient;
 //! let mut client = ReplicaClient::connect(("primary:16004"), "replica-a", 0)?;
+//! let kevy = kevy::KevyCommands::new();
 //! let mut store = kevy::KeyspaceStore::new();
 //! for result in &mut client {
 //!     let frame = result?;
-//!     kevy::dispatch(&mut store, &frame.argv);
+//!     kevy.dispatch(&mut store, &frame.argv);
 //! }
 //! # Ok::<_, kevy_replicate::replica::ReplicaError>(())
 //! ```

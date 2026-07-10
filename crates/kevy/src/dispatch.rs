@@ -7,23 +7,29 @@
 //! helpers in [`crate::cmd`].
 
 use crate::cmd::{upper_verb, wrong_args, store_err, OOM_ERR, cmd_set, is_growing_write_verb, cmd_hello, emit_int_result, cmd_incr, cmd_incr_by, cmd_setex, arg_f64, rest_borrowed, emit_bulk_array, cmd_spop_rand, cmd_expire, cmd_expireat, cmd_ttl};
+use crate::state::Ctx;
 use kevy_resp::{
     ArgvView, encode_bulk, encode_error, encode_integer, encode_null_bulk, encode_simple_string,
 };
 use kevy_store::Store;
 
 /// Map one command to its RESP reply bytes.
-pub fn dispatch<A: ArgvView + ?Sized>(store: &mut Store, args: &A) -> Vec<u8> {
+pub(crate) fn dispatch<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, store: &mut Store, args: &A) -> Vec<u8> {
     let mut out = Vec::new();
-    dispatch_into(store, args, &mut out);
+    dispatch_into(ctx, store, args, &mut out);
     out
 }
 
 /// Execute `args` against `store`, appending the RESP reply to `out`. Lets a hot
 /// caller (the in-order local fast path) write the reply straight into the
 /// connection's output buffer — no per-command reply `Vec` alloc, no copy.
-pub fn dispatch_into<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    dispatch_with_proto(store, args, out, false);
+pub(crate) fn dispatch_into<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) {
+    dispatch_with_proto(ctx, store, args, out, false);
 }
 
 /// RESP3 variant — same OOM bracketing + same V2 body for unmigrated
@@ -32,8 +38,13 @@ pub fn dispatch_into<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mu
 /// RESP3-shape override before the V2 fallback runs. Pure additive:
 /// every V2 reply that hasn't been migrated yet still goes out
 /// byte-for-byte identical.
-pub fn dispatch_into_resp3<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
-    dispatch_with_proto(store, args, out, true);
+pub(crate) fn dispatch_into_resp3<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
+    store: &mut Store,
+    args: &A,
+    out: &mut Vec<u8>,
+) {
+    dispatch_with_proto(ctx, store, args, out, true);
 }
 
 /// Shared body: parse verb, OOM-precheck, try the (V3-or-V2) override
@@ -44,6 +55,7 @@ pub fn dispatch_into_resp3<A: ArgvView + ?Sized>(store: &mut Store, args: &A, ou
 /// pre-HELLO-3 conn).
 // LOC-WAIVER: per-op dispatch hot body — tier-1 GET/SET fast path + handler chain stay fused.
 fn dispatch_with_proto<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
@@ -61,20 +73,20 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
     // v3-cluster Phase 3 / v1.21 scope routing. **Above** the GET/SET
     // fast path because SET must respect scope ownership too (the
     // fast path otherwise would silently apply locally). `is_active`
-    // is one Relaxed atomic load + branch — predicted away when no
+    // is one immutable-field load + branch — predicted away when no
     // scopes are declared (the v1.20-and-earlier hot path eats one
     // mispredict-resistant load on every command, which is below
     // measurable noise per `bench/perfgate.sh`).
-    if crate::cmd::is_write_verb(cmd) && crate::scope_integration::is_active()
+    if crate::cmd::is_write_verb(cmd) && ctx.state.scope.is_active()
         && let Some(key) = args.get(1)
-        && let Some(redirect) = crate::scope_integration::route_write(key)
+        && let Some(redirect) = ctx.state.route_write(key, ctx.shard)
     {
         match redirect {
-            crate::scope_integration::WriteRedirect::Misdirected(addr) => {
-                crate::scope_integration::encode_misdirected(out, &addr);
+            crate::state::WriteRedirect::Misdirected(addr) => {
+                crate::state::encode_misdirected(out, &addr);
             }
-            crate::scope_integration::WriteRedirect::Quiesced { to_addr } => {
-                crate::scope_integration::encode_quiesced(out, &to_addr);
+            crate::state::WriteRedirect::Quiesced { to_addr } => {
+                crate::state::encode_quiesced(out, &to_addr);
             }
         }
         return;
@@ -125,9 +137,9 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         return;
     }
     let handled = (proto_v3
-        && crate::dispatch_resp3::try_resp3_overrides(cmd, store, args, out))
-        || dispatch_conn(cmd, args, out)
-        || crate::ops::dispatch_ops(cmd, store, args, out)
+        && crate::dispatch_resp3::try_resp3_overrides(ctx, cmd, store, args, out))
+        || dispatch_conn(ctx, cmd, args, out)
+        || crate::ops::dispatch_ops(ctx, cmd, store, args, out)
         || dispatch_string(cmd, store, args, out)
         || crate::dispatch_collections::dispatch_hash(cmd, store, args, out)
         || crate::dispatch_collections::dispatch_list(cmd, store, args, out)
@@ -136,7 +148,7 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         || crate::dispatch_geo::dispatch_geo(cmd, store, args, out)
         || crate::dispatch_stream::dispatch_stream(cmd, store, args, out)
         // v1.27 P7b: EVAL / EVALSHA / EVAL_RO / EVALSHA_RO / SCRIPT.
-        || crate::cmd_lua::dispatch_lua(cmd, store, args, out)
+        || crate::cmd_lua::dispatch_lua(ctx, cmd, store, args, out)
         || dispatch_generic(cmd, store, args, out)
         || dispatch_multikey_stub(cmd, out);
     if !handled {
@@ -157,18 +169,25 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
 // 500-LOC house rule. Same dispatch fan-out, same call shape; the
 // V3 arm in `dispatch_with_proto` calls into the sibling module.
 
-/// Connection / introspection commands (no keyspace access).
-fn dispatch_conn<A: ArgvView + ?Sized>(cmd: &[u8], args: &A, out: &mut Vec<u8>) -> bool {
+/// Connection / introspection commands (no keyspace access). Takes
+/// `ctx` for the catalog-mutation verbs (IDX.* / VIEW.*), whose
+/// sidecar persistence roots at `state.sidecar_dir()`.
+fn dispatch_conn<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
+    cmd: &[u8],
+    args: &A,
+    out: &mut Vec<u8>,
+) -> bool {
     match cmd {
         b"PING" => match args.len() {
             1 => encode_simple_string(out, "PONG"),
             2 => encode_bulk(out, &args[1]),
             _ => wrong_args(out, "ping"),
         },
-        b"IDX.CREATE" => crate::cmd_index::cmd_idx_create(args, out),
-        b"VIEW.CREATE" => crate::cmd_view::cmd_view_create(args, out, crate::cmd_index::sidecar_dir()),
-        b"VIEW.DROP" => crate::cmd_view::cmd_view_drop(args, out, crate::cmd_index::sidecar_dir()),
-        b"IDX.DROP" => crate::cmd_index::cmd_idx_drop(args, out),
+        b"IDX.CREATE" => crate::cmd_index::cmd_idx_create(args, out, ctx.state.sidecar_dir()),
+        b"VIEW.CREATE" => crate::cmd_view::cmd_view_create(args, out, ctx.state.sidecar_dir()),
+        b"VIEW.DROP" => crate::cmd_view::cmd_view_drop(args, out, ctx.state.sidecar_dir()),
+        b"IDX.DROP" => crate::cmd_index::cmd_idx_drop(args, out, ctx.state.sidecar_dir()),
         b"ECHO" => {
             if args.len() == 2 {
                 encode_bulk(out, &args[1]);

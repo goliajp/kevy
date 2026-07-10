@@ -7,6 +7,16 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+/// In-process dispatcher: one KevyCommands per test thread, so
+/// per-state caches (e.g. the SCRIPT cache) persist across calls
+/// within a test.
+fn dispatch<A: kevy_rt::ArgvView + ?Sized>(store: &mut kevy_store::Store, args: &A) -> Vec<u8> {
+    thread_local! {
+        static KEVY: kevy::KevyCommands = kevy::KevyCommands::new();
+    }
+    KEVY.with(|k| k.dispatch(store, args))
+}
+
 static START_GATE: Mutex<()> = Mutex::new(());
 
 /// Probe-bind `n` consecutive free ports starting at some random base
@@ -94,7 +104,7 @@ impl Server {
                 [127, 0, 0, 1],
                 port,
                 nshards,
-                kevy::KevyCommands,
+                kevy::KevyCommands::sharded(nshards),
             )
             .with_data_dir(dir_path)
             .with_aof(false)
@@ -251,7 +261,7 @@ fn replication_disabled_means_no_listener_on_replication_port() {
         std::env::set_var("KEVY_IO_URING", "0");
     }
     let handle = std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::new([127, 0, 0, 1], base, 1, kevy::KevyCommands)
+        let rt = kevy_rt::Runtime::new([127, 0, 0, 1], base, 1, kevy::KevyCommands::sharded(1))
             .with_data_dir(dir_path)
             .with_aof(false);
         // No .with_replication / .with_replication_listener calls.
@@ -606,7 +616,7 @@ fn start_small_buffer_primary(buffer_size: u64) -> Server {
         std::env::set_var("KEVY_IO_URING", "0");
     }
     let handle = std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands)
+        let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands::sharded(1))
             .with_data_dir(dir_path)
             .with_aof(false)
             .with_replication(true, buffer_size)
@@ -762,7 +772,7 @@ fn snapshot_ship_loaded_into_local_store_matches_primary() {
     // T1.19's in-process apply recipe used).
     for (k, v) in &pairs {
         let argv = kevy::Argv::from(vec![b"GET".to_vec(), k.as_bytes().to_vec()]);
-        let reply = kevy::dispatch(&mut local_store, &argv);
+        let reply = dispatch(&mut local_store, &argv);
         let expected = format!("${}\r\n{}\r\n", v.len(), v);
         assert_eq!(
             reply, expected.as_bytes(),
@@ -852,7 +862,7 @@ fn fresh_replica_join_snapshot_then_live_frames() {
                     frame.offset, expected_offset,
                     "live frame {i}: offset mismatch (post-snapshot gap)",
                 );
-                let _ = kevy::dispatch(&mut local_store, &frame.argv);
+                let _ = dispatch(&mut local_store, &frame.argv);
             }
             kevy_replicate::replica::ReplicaEvent::Ping { .. } => continue,
             other => panic!("live frame {i}: expected Frame, got {other:?}"),
@@ -863,7 +873,7 @@ fn fresh_replica_join_snapshot_then_live_frames() {
     // GETs byte-equivalent on the local store. That's the contract.
     for (k, v) in pre.iter().chain(post.iter()) {
         let argv = kevy::Argv::from(vec![b"GET".to_vec(), k.as_bytes().to_vec()]);
-        let reply = kevy::dispatch(&mut local_store, &argv);
+        let reply = dispatch(&mut local_store, &argv);
         let expected = format!("${}\r\n{}\r\n", v.len(), v);
         assert_eq!(
             reply, expected.as_bytes(),
@@ -912,7 +922,7 @@ fn replica_apply_dispatch_mirrors_primary_store() {
     for expected in 0..pairs.len() as u64 {
         let frame = client.next().expect("frame").expect("decode ok");
         assert_eq!(frame.offset, expected);
-        let _reply = kevy::dispatch(&mut local_store, &frame.argv);
+        let _reply = dispatch(&mut local_store, &frame.argv);
     }
 
     // For every key written to primary, GET on the local replica
@@ -920,7 +930,7 @@ fn replica_apply_dispatch_mirrors_primary_store() {
     // applied(primary) == applied(replica).
     for (k, v) in pairs {
         let argv = kevy::Argv::from(vec![b"GET".to_vec(), k.to_vec()]);
-        let reply = kevy::dispatch(&mut local_store, &argv);
+        let reply = dispatch(&mut local_store, &argv);
         let expected = format!("${}\r\n{}\r\n", v.len(), String::from_utf8_lossy(v));
         assert_eq!(
             reply, expected.as_bytes(),
@@ -1068,7 +1078,7 @@ impl ReplicaServer {
                 [127, 0, 0, 1],
                 port,
                 1,
-                kevy::KevyCommands,
+                kevy::KevyCommands::sharded(1),
             )
             .with_data_dir(dir_path)
             .with_aof(false)
@@ -1295,7 +1305,7 @@ fn replicaof_command_dynamically_attaches_to_primary() {
             [127, 0, 0, 1],
             replica_port,
             1,
-            kevy::KevyCommands,
+            kevy::KevyCommands::sharded(1),
         )
         .with_data_dir(replica_dir_path)
         .with_aof(false)
@@ -1431,7 +1441,7 @@ impl AttachedReplica {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands)
+            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands::sharded(1))
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replica_inboxes(vec![receiver]);

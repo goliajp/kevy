@@ -21,52 +21,42 @@
 //! ever needs it.
 
 use crate::cmd::wrong_args;
+use crate::state::{Ctx, RuntimeState, ShardCtx};
 use kevy_lua_host::LuaHost;
 use kevy_resp::{Argv, ArgvView, encode_error};
 use kevy_store::Store;
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Arc;
 
 thread_local! {
     /// Per-shard (= per-thread, kevy is thread-per-core) Lua host.
     /// Lazily constructed on first EVAL. Lives until the thread
-    /// exits.
+    /// exits. The host's dispatch closure captures the constructing
+    /// `Arc<RuntimeState>` — one state per reactor thread by
+    /// construction; W4 moves the host into `ShardCtx` proper.
     static LUA_HOST: RefCell<Option<LuaHost<Store>>> = const { RefCell::new(None) };
 }
 
-/// v1.27.1 fix for multi-shard EVAL routing: process-global script
-/// cache shared across all shards, replacing v1.27.0's per-Bridge
-/// cache. SCRIPT LOAD writes here; EVALSHA reads here and forwards
-/// the source to `LuaHost::eval` so the per-shard VM pool still runs
-/// the script (thread-locality preserved). SCRIPT EXISTS / FLUSH
-/// also hit the global.
-///
-/// The previous v1.27.0 design kept the cache inside `Bridge`, which
-/// was per-shard via `thread_local LUA_HOST`. That meant `SCRIPT LOAD`
-/// arriving on shard X only filled X's cache, and `EVALSHA` arriving
-/// on shard Y missed and returned `-NOSCRIPT`. Now the cache is
-/// process-wide; routing the EVAL itself to KEYS[1]'s shard is done
-/// at `Commands::route` time (see [`crate::commands`]).
-static SCRIPT_CACHE: OnceLock<Mutex<HashMap<[u8; 20], Vec<u8>>>> = OnceLock::new();
-
-fn script_cache() -> &'static Mutex<HashMap<[u8; 20], Vec<u8>>> {
-    SCRIPT_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
 /// Build a `LuaHost<Store>` whose dispatch closure routes redis.call
-/// argv through `kevy::dispatch::dispatch_into` against the host
+/// argv through `crate::dispatch::dispatch_into` against the host
 /// `&mut Store`.
-fn make_lua_host() -> LuaHost<Store> {
-    let mut host =
-        LuaHost::<Store>::new(lua_redis_call);
-    apply_lua_config(&mut host);
+fn make_lua_host(state: Arc<RuntimeState>) -> LuaHost<Store> {
+    let cfg = state.config();
+    let mut host = LuaHost::<Store>::new(move |store, argv, read_only| {
+        lua_redis_call(&state, store, argv, read_only)
+    });
+    apply_lua_config(&mut host, &cfg);
     host
 }
 
 /// The `redis.call` dispatch closure body: enforcement checks, then
 /// route the inner argv through `crate::dispatch::dispatch_into`.
-fn lua_redis_call(store: &mut Store, argv: &[&[u8]], read_only: bool) -> Vec<u8> {
+fn lua_redis_call(
+    state: &Arc<RuntimeState>,
+    store: &mut Store,
+    argv: &[&[u8]],
+    read_only: bool,
+) -> Vec<u8> {
     // P7c: read-only enforcement. EVAL_RO / EVALSHA_RO set
     // read_only=true; reject writes per Redis semantics.
     if read_only
@@ -84,7 +74,7 @@ fn lua_redis_call(store: &mut Store, argv: &[&[u8]], read_only: bool) -> Vec<u8>
     // intended-disallowed behaviour. Return CROSSSLOT loudly
     // instead of corrupting state. Same rule Redis Cluster
     // applies via slot validation at EVAL dispatch.
-    let cfg = crate::config_global::get();
+    let cfg = state.config();
     let nshards = cfg.server.threads;
     if nshards > 1
         && let Some(target_key) = argv.get(1)
@@ -101,7 +91,12 @@ fn lua_redis_call(store: &mut Store, argv: &[&[u8]], read_only: bool) -> Vec<u8>
         a.push(slice);
     }
     let mut out = Vec::new();
-    crate::dispatch::dispatch_into(store, &a, &mut out);
+    // Inner calls dispatch with a fresh shard zone: the only shard-
+    // private state a redis.call-able verb can touch is the MOVE-
+    // SCOPE-INGEST prefix, and ingest bulks never contain EVAL.
+    let shard = ShardCtx::default();
+    let ctx = Ctx { state, shard: &shard };
+    crate::dispatch::dispatch_into(&ctx, store, &a, &mut out);
     bridge_lua_wake_keys(argv, &out);
     out
 }
@@ -130,12 +125,11 @@ fn bridge_lua_wake_keys(argv: &[&[u8]], out: &[u8]) {
 }
 
 /// v1.27 P7e: read `[lua] time_limit_ms` + `[lua] allow_dialects`
-/// from the process-wide config at first-EVAL time. Operators who
+/// from the live config at first-EVAL time. Operators who
 /// hot-reload `[lua]` settings after the first EVAL need to also
 /// SCRIPT FLUSH (drops the per-dialect Vm pool) or restart the
 /// server — v1.28 backlog if there's real demand.
-fn apply_lua_config(host: &mut LuaHost<Store>) {
-    let cfg = crate::config_global::get();
+fn apply_lua_config(host: &mut LuaHost<Store>, cfg: &kevy_config::Config) {
     // Translate ms → instruction budget. Rough conservative
     // calibration: 40 000 instr/ms on M-series hardware (the same
     // ratio implied by the original 200 M / 5000 ms default).
@@ -167,9 +161,11 @@ fn apply_lua_config(host: &mut LuaHost<Store>) {
 
 /// Run `f` with the per-shard `LuaHost`. Returns `None` if the host
 /// is already borrowed (re-entrant EVAL).
-fn with_host<R>(f: impl FnOnce(&mut LuaHost<Store>) -> R) -> Option<R> {
+fn with_host<R>(ctx: &Ctx<'_>, f: impl FnOnce(&mut LuaHost<Store>) -> R) -> Option<R> {
     LUA_HOST.with(|h| match h.try_borrow_mut() {
-        Ok(mut g) => Some(f(g.get_or_insert_with(make_lua_host))),
+        Ok(mut g) => Some(f(
+            g.get_or_insert_with(|| make_lua_host(Arc::clone(ctx.state)))
+        )),
         Err(_) => None,
     })
 }
@@ -185,6 +181,7 @@ fn emit_reentry_err(out: &mut Vec<u8>) {
 /// the command was recognised (handler ran, reply appended to
 /// `out`).
 pub(crate) fn dispatch_lua<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
     cmd: &[u8],
     store: &mut Store,
     args: &A,
@@ -192,23 +189,23 @@ pub(crate) fn dispatch_lua<A: ArgvView + ?Sized>(
 ) -> bool {
     match cmd {
         b"EVAL" => {
-            cmd_eval(store, args, out, /* read_only */ false);
+            cmd_eval(ctx, store, args, out, /* read_only */ false);
             true
         }
         b"EVAL_RO" => {
-            cmd_eval(store, args, out, /* read_only */ true);
+            cmd_eval(ctx, store, args, out, /* read_only */ true);
             true
         }
         b"EVALSHA" => {
-            cmd_evalsha(store, args, out, /* read_only */ false);
+            cmd_evalsha(ctx, store, args, out, /* read_only */ false);
             true
         }
         b"EVALSHA_RO" => {
-            cmd_evalsha(store, args, out, /* read_only */ true);
+            cmd_evalsha(ctx, store, args, out, /* read_only */ true);
             true
         }
         b"SCRIPT" => {
-            cmd_script(args, out);
+            cmd_script(ctx, args, out);
             true
         }
         _ => false,
@@ -220,6 +217,7 @@ pub(crate) fn dispatch_lua<A: ArgvView + ?Sized>(
 // ─────────────────────────────────────────────────────────────────────
 
 fn cmd_eval<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
@@ -230,15 +228,15 @@ fn cmd_eval<A: ArgvView + ?Sized>(
         return;
     }
     let script: &[u8] = args.get(1).unwrap_or(b"");
-    let Some((keys, argv)) = parse_eval_keys_argv(args, out) else {
+    let Some((keys, argv)) = parse_eval_keys_argv(ctx, args, out) else {
         return;
     };
-    // v1.27.1: also push the script into the process-global SCRIPT
-    // cache so a subsequent EVALSHA from any shard finds it (matches
-    // Redis's auto-cache-on-EVAL semantics).
+    // v1.27.1: also push the script into the shared SCRIPT cache so a
+    // subsequent EVALSHA from any shard finds it (matches Redis's
+    // auto-cache-on-EVAL semantics).
     let sha = kevy_lua::sha1::sha1(script);
-    script_cache().lock().unwrap().insert(sha, script.to_vec());
-    let reply = with_host(|h| {
+    ctx.state.catalogs.scripts.lock().unwrap().insert(sha, script.to_vec());
+    let reply = with_host(ctx, |h| {
         if read_only {
             h.eval_ro(store, script, &keys, &argv)
         } else {
@@ -256,6 +254,7 @@ fn cmd_eval<A: ArgvView + ?Sized>(
 // ─────────────────────────────────────────────────────────────────────
 
 fn cmd_evalsha<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
@@ -273,21 +272,21 @@ fn cmd_evalsha<A: ArgvView + ?Sized>(
             return;
         }
     };
-    let Some((keys, argv)) = parse_eval_keys_argv(args, out) else {
+    let Some((keys, argv)) = parse_eval_keys_argv(ctx, args, out) else {
         return;
     };
-    // v1.27.1: lookup the script source from the process-global
-    // cache (any shard's SCRIPT LOAD / EVAL filled it). Bypass
+    // v1.27.1: lookup the script source from the shared cache (any
+    // shard's SCRIPT LOAD / EVAL filled it). Bypass
     // `LuaHost::evalsha` whose per-Bridge cache only sees the local
     // shard's history.
-    let source = match script_cache().lock().unwrap().get(&sha).cloned() {
+    let source = match ctx.state.catalogs.scripts.lock().unwrap().get(&sha).cloned() {
         Some(s) => s,
         None => {
             encode_error(out, "NOSCRIPT No matching script. Please use EVAL.");
             return;
         }
     };
-    let reply = with_host(|h| {
+    let reply = with_host(ctx, |h| {
         if read_only {
             h.eval_ro(store, &source, &keys, &argv)
         } else {
@@ -304,7 +303,7 @@ fn cmd_evalsha<A: ArgvView + ?Sized>(
 // SCRIPT subcommands
 // ─────────────────────────────────────────────────────────────────────
 
-fn cmd_script<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+fn cmd_script<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     if args.len() < 2 {
         wrong_args(out, "script");
         return;
@@ -315,14 +314,14 @@ fn cmd_script<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
         .iter()
         .map(|b| b.to_ascii_uppercase())
         .collect();
-    // v1.27.1: SCRIPT LOAD / EXISTS / FLUSH operate on the
-    // process-global cache; no per-shard LuaHost touched, so no
-    // re-entrancy guard needed and no shard-local state to worry
-    // about under multi-shard configs.
+    // v1.27.1: SCRIPT LOAD / EXISTS / FLUSH operate on the shared
+    // cache; no per-shard LuaHost touched, so no re-entrancy guard
+    // needed and no shard-local state to worry about under
+    // multi-shard configs.
     match sub_upper.as_slice() {
-        b"LOAD" => script_load(args, out),
-        b"EXISTS" => script_exists(args, out),
-        b"FLUSH" => script_flush(args, out),
+        b"LOAD" => script_load(ctx, args, out),
+        b"EXISTS" => script_exists(ctx, args, out),
+        b"FLUSH" => script_flush(ctx, args, out),
         _ => encode_error(
             out,
             "ERR SCRIPT subcommand must be one of LOAD, EXISTS, FLUSH",
@@ -330,14 +329,14 @@ fn cmd_script<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     }
 }
 
-fn script_load<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+fn script_load<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     if args.len() != 3 {
         wrong_args(out, "script|load");
         return;
     }
     let source = args.get(2).unwrap_or(b"");
     let sha = kevy_lua::sha1::sha1(source);
-    script_cache().lock().unwrap().insert(sha, source.to_vec());
+    ctx.state.catalogs.scripts.lock().unwrap().insert(sha, source.to_vec());
     let hex = kevy_lua::sha1::hex(&sha);
     out.push(b'$');
     out.extend_from_slice(b"40\r\n");
@@ -345,12 +344,12 @@ fn script_load<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     out.extend_from_slice(b"\r\n");
 }
 
-fn script_exists<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+fn script_exists<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     if args.len() < 3 {
         wrong_args(out, "script|exists");
         return;
     }
-    let cache = script_cache().lock().unwrap();
+    let cache = ctx.state.catalogs.scripts.lock().unwrap();
     let count = args.len() - 2;
     out.extend_from_slice(format!("*{count}\r\n").as_bytes());
     for i in 2..args.len() {
@@ -360,7 +359,7 @@ fn script_exists<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     }
 }
 
-fn script_flush<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+fn script_flush<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     // Accept both `SCRIPT FLUSH` and `SCRIPT FLUSH SYNC|ASYNC`. The
     // mode tag is parsed/validated but currently both run
     // synchronously (in-memory cache clear is instant; v1.28 may
@@ -375,7 +374,7 @@ fn script_flush<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
         wrong_args(out, "script|flush");
         return;
     }
-    script_cache().lock().unwrap().clear();
+    ctx.state.catalogs.scripts.lock().unwrap().clear();
     out.extend_from_slice(b"+OK\r\n");
 }
 
@@ -390,6 +389,7 @@ type KeysArgv<'a> = (Vec<&'a [u8]>, Vec<&'a [u8]>);
 
 /// `None` = an error reply was already appended to `out`.
 fn parse_eval_keys_argv<'a, A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
     args: &'a A,
     out: &mut Vec<u8>,
 ) -> Option<KeysArgv<'a>> {
@@ -414,7 +414,7 @@ fn parse_eval_keys_argv<'a, A: ArgvView + ?Sized>(
     let argv: Vec<&[u8]> = ((3 + numkeys)..args.len())
         .map(|i| args.get(i).unwrap_or(b""))
         .collect();
-    if let Some(crossslot) = cross_slot_check(&keys) {
+    if let Some(crossslot) = cross_slot_check(ctx, &keys) {
         out.extend_from_slice(&crossslot);
         return None;
     }
@@ -438,11 +438,11 @@ fn parse_uint(bytes: &[u8]) -> Option<usize> {
 ///
 /// Single-shard mode (the v1.x default) skips the check entirely so
 /// non-cluster operators keep their existing behaviour.
-fn cross_slot_check(keys: &[&[u8]]) -> Option<Vec<u8>> {
+fn cross_slot_check(ctx: &Ctx<'_>, keys: &[&[u8]]) -> Option<Vec<u8>> {
     if keys.len() < 2 {
         return None;
     }
-    let cfg = crate::config_global::get();
+    let cfg = ctx.state.config();
     if !cfg.cluster.enabled {
         return None;
     }

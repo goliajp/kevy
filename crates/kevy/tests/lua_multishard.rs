@@ -65,12 +65,19 @@ impl Server {
         cfg.server.threads = nshards;
         // Cluster disabled — this test exercises the single-port
         // multi-shard mode, the default for `kevy --threads N`.
-        kevy::config_init(Arc::new(cfg));
+        let state = Arc::new(
+            kevy::RuntimeState::new(Arc::new(cfg), std::path::PathBuf::new(), nshards).unwrap(),
+        );
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, nshards, kevy::KevyCommands)
+            let rt = kevy_rt::Runtime::new(
+                [127, 0, 0, 1],
+                port,
+                nshards,
+                kevy::KevyCommands::with_state(state),
+            )
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });
@@ -249,7 +256,7 @@ fn route_eval_to_key1_shard() {
     a.push(b"return 1");
     a.push(b"1");
     a.push(b"mykey");
-    let r = kevy::KevyCommands.route(&a);
+    let r = kevy::KevyCommands::new().route(&a);
     let s = format!("{r:?}");
     assert!(s.contains("Single(3)"), "EVAL with numkeys=1 must Route::Single(3) (KEYS[1] at args[3]), got: {s}");
 }
@@ -262,7 +269,7 @@ fn route_eval_numkeys0_local() {
     a.push(b"EVAL");
     a.push(b"return 1");
     a.push(b"0");
-    let r = kevy::KevyCommands.route(&a);
+    let r = kevy::KevyCommands::new().route(&a);
     let s = format!("{r:?}");
     assert!(s.contains("Local"), "EVAL with numkeys=0 must Route::Local, got: {s}");
 }
@@ -275,7 +282,7 @@ fn route_script_local() {
     a.push(b"SCRIPT");
     a.push(b"LOAD");
     a.push(b"return 1");
-    let r = kevy::KevyCommands.route(&a);
+    let r = kevy::KevyCommands::new().route(&a);
     let s = format!("{r:?}");
     assert!(s.contains("Local"), "SCRIPT must Route::Local (global cache), got: {s}");
 }

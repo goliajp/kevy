@@ -6,7 +6,7 @@
 //!
 //! `cargo run -p kevy --example bench_cmd --release`
 
-use kevy::{KeyspaceStore as Store, dispatch};
+use kevy::{KevyCommands, KeyspaceStore as Store};
 use kevy_bench::{bench, black_box, report};
 use kevy_resp::parse_command;
 
@@ -18,12 +18,13 @@ fn argv_of(bytes: &[u8]) -> kevy::Argv {
 }
 
 fn main() {
+    let kevy = KevyCommands::new();
     let mut store = Store::new();
-    let _ = dispatch(
+    let _ = kevy.dispatch(
         &mut store,
         &argv_of(b"*3\r\n$3\r\nSET\r\n$5\r\nkey42\r\n$16\r\nvalue-payload-16\r\n"),
     );
-    let _ = dispatch(&mut store, &argv_of(b"*3\r\n$3\r\nSET\r\n$3\r\nctr\r\n$1\r\n0\r\n"));
+    let _ = kevy.dispatch(&mut store, &argv_of(b"*3\r\n$3\r\nSET\r\n$3\r\nctr\r\n$1\r\n0\r\n"));
 
     let get = b"*2\r\n$3\r\nGET\r\n$5\r\nkey42\r\n".to_vec();
     let set = b"*3\r\n$3\r\nSET\r\n$5\r\nkey42\r\n$16\r\nvalue-payload-16\r\n".to_vec();
@@ -44,13 +45,13 @@ fn main() {
 
     println!("\n== dispatch only (pre-parsed argv; allocates the reply Vec) ==");
     report("dispatch GET (hit)", bench(SAMPLES, INNER, || {
-        black_box(dispatch(black_box(&mut store), black_box(&ga)));
+        black_box(kevy.dispatch(black_box(&mut store), black_box(&ga)));
     }));
     report("dispatch SET", bench(SAMPLES, INNER, || {
-        black_box(dispatch(black_box(&mut store), black_box(&sa)));
+        black_box(kevy.dispatch(black_box(&mut store), black_box(&sa)));
     }));
     report("dispatch INCR", bench(SAMPLES, INNER, || {
-        black_box(dispatch(black_box(&mut store), black_box(&ia)));
+        black_box(kevy.dispatch(black_box(&mut store), black_box(&ia)));
     }));
 
     println!("\n== combined parse + dispatch (full per-command CPU) ==");
@@ -58,14 +59,14 @@ fn main() {
         "GET parse+dispatch",
         bench(SAMPLES, INNER, || {
             let a = argv_of(black_box(&get));
-            black_box(dispatch(black_box(&mut store), &a));
+            black_box(kevy.dispatch(black_box(&mut store), &a));
         }),
     );
     report(
         "SET parse+dispatch",
         bench(SAMPLES, INNER, || {
             let a = argv_of(black_box(&set));
-            black_box(dispatch(black_box(&mut store), &a));
+            black_box(kevy.dispatch(black_box(&mut store), &a));
         }),
     );
 }

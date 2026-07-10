@@ -5,33 +5,34 @@
 //! polling, low-rate). Emits `text/plain; version=0.0.4` Prometheus
 //! exposition format on `GET /metrics`. Anything else returns 404.
 //!
-//! Metric source: reads the live [`crate::stats::Totals`] + the
-//! process-global [`Config`].
+//! Metric source: the shared [`RuntimeState`] — live config values
+//! plus the aggregated per-shard stats. The thread holds only a
+//! `Weak<RuntimeState>` and exits when the state is gone, so a
+//! finished `serve` never leaves an immortal scraper thread pinning
+//! the whole state alive.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::Instant;
 
-use kevy_config::Config;
+use crate::state::RuntimeState;
 
-use crate::ops::stats;
-
-/// Spawn the metrics HTTP listener if `cfg.metrics.listen_port > 0`.
+/// Spawn the metrics HTTP listener if `metrics.listen_port > 0`.
 /// Returns immediately; the listener runs on a daemon thread.
-pub fn spawn_if_enabled(cfg: &Arc<Config>) {
-    let port = cfg.metrics.listen_port;
+pub fn spawn_if_enabled(state: &Arc<RuntimeState>) {
+    let port = state.config().metrics.listen_port;
     if port == 0 {
         return;
     }
-    let cfg_clone: Arc<Config> = Arc::clone(cfg);
+    let weak = Arc::downgrade(state);
     std::thread::Builder::new()
         .name("kevy-metrics".into())
-        .spawn(move || run_listener(port, cfg_clone))
+        .spawn(move || run_listener(port, weak))
         .expect("spawn kevy-metrics thread");
 }
 
-fn run_listener(port: u16, cfg: Arc<Config>) {
+fn run_listener(port: u16, state: Weak<RuntimeState>) {
     let addr = format!("127.0.0.1:{port}");
     let listener = match TcpListener::bind(&addr) {
         Ok(l) => l,
@@ -47,13 +48,16 @@ fn run_listener(port: u16, cfg: Arc<Config>) {
             Ok(t) => t,
             Err(_) => continue,
         };
-        handle_scrape_conn(conn, &cfg, start);
+        // The runtime state owns this thread's reason to exist; once
+        // it is dropped the scrape data is gone, so stop serving.
+        let Some(state) = state.upgrade() else { return };
+        handle_scrape_conn(conn, &state, start);
     }
 }
 
 /// Serve one scrape connection: read the request, answer `GET
 /// /metrics` with the exposition body, anything else with a 404.
-fn handle_scrape_conn(mut conn: TcpStream, cfg: &Arc<Config>, start: Instant) {
+fn handle_scrape_conn(mut conn: TcpStream, state: &RuntimeState, start: Instant) {
     let _ = conn.set_read_timeout(Some(std::time::Duration::from_secs(2)));
     let _ = conn.set_write_timeout(Some(std::time::Duration::from_secs(2)));
     // Minimal HTTP/1.1 request parse: read up to the request-line
@@ -67,7 +71,7 @@ fn handle_scrape_conn(mut conn: TcpStream, cfg: &Arc<Config>, start: Instant) {
     // We only care about the verb + path; any GET /metrics passes.
     let is_metrics = raw.starts_with(b"GET /metrics");
     let body = if is_metrics {
-        render_metrics(cfg, start.elapsed().as_secs())
+        render_metrics(state, start.elapsed().as_secs())
     } else {
         String::new()
     };
@@ -91,12 +95,13 @@ fn handle_scrape_conn(mut conn: TcpStream, cfg: &Arc<Config>, start: Instant) {
     let _ = conn.write_all(resp.as_bytes());
 }
 
-/// Produce the Prometheus exposition body. Reads totals from the
-/// process-global stats; uses `cfg` for static values like max_clients.
+/// Produce the Prometheus exposition body: aggregated shard stats plus
+/// live config values like max_clients.
 // LOC-WAIVER: flat metric-emission table — one help/type/value triplet per gauge.
-fn render_metrics(cfg: &Arc<Config>, uptime_seconds: u64) -> String {
+fn render_metrics(state: &RuntimeState, uptime_seconds: u64) -> String {
     let mut out = String::with_capacity(4 * 1024);
-    let totals = stats::aggregate();
+    let cfg = state.config();
+    let totals = state.obs.aggregate();
 
     // Uptime
     push_help(&mut out, "kevy_uptime_seconds", "Seconds since kevy started");

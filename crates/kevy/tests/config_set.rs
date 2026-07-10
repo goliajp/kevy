@@ -2,39 +2,18 @@
 //!
 //! Unit tests in `crates/kevy/src/ops/config.rs::tests::apply_hot_set_*`
 //! cover validation and per-field parsing. This file covers the live
-//! flow: SET → `config_global::replace` → per-shard tick re-application
-//! → externally observable change (CONFIG GET reflects the new value,
-//! REWRITE writes a round-trippable TOML file).
+//! flow: SET → `RuntimeState::config_replace` → per-shard tick
+//! re-application → externally observable change (CONFIG GET reflects
+//! the new value, REWRITE writes a round-trippable TOML file).
 //!
-//! Each test installs a fresh `Config` into `config_global` (via
-//! `kevy::config_init`, which is idempotent — first test wins, the
-//! rest snapshot-and-restore around their own SET calls so the suite
-//! is order-independent).
+//! Each test builds a fresh `RuntimeState` from its own seed `Config`,
+//! so the suite is order-independent by construction.
 
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use kevy_config::{Config, EvictionPolicy};
-
-/// `config_global` is a process-wide singleton; tests in this file
-/// each mutate + reset it, so they must NOT interleave. Each test
-/// holds this mutex for its entire body. (`cargo test` runs tests
-/// within a binary in parallel by default; this serialises them.)
-fn serial_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// Install (idempotent) + reset `config_global` to a fresh `Config`.
-/// Every test calls this under the serial lock so the global starts
-/// in a known state regardless of test order.
-fn install_fresh_config(seed: Config) {
-    kevy::config_init(Arc::new(Config::default()));
-    kevy::config_replace(Arc::new(seed)).expect("config_replace after init");
-}
 
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
@@ -94,12 +73,26 @@ fn read_config_get_value(s: &mut std::net::TcpStream, expected_key: &str) -> Opt
 /// helper in `persistence.rs` — duplicated here so this test file
 /// doesn't depend on test-mod re-exports (which `cargo test` doesn't
 /// share across integration-test binaries).
-fn with_runtime(port: u16, dir: &std::path::Path, nshards: usize, body: impl FnOnce(u16)) {
+fn with_runtime(
+    port: u16,
+    dir: &std::path::Path,
+    nshards: usize,
+    seed: Config,
+    body: impl FnOnce(u16),
+) {
+    let state = Arc::new(
+        kevy::RuntimeState::new(Arc::new(seed), std::path::PathBuf::new(), nshards).unwrap(),
+    );
     let stop = Arc::new(AtomicBool::new(false));
     let stop_t = stop.clone();
     let dir = dir.to_path_buf();
     let handle = std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, nshards, kevy::KevyCommands)
+        let rt = kevy_rt::Runtime::new(
+            [127, 0, 0, 1],
+            port,
+            nshards,
+            kevy::KevyCommands::with_state(state),
+        )
             .with_data_dir(dir);
         rt.run(stop_t).unwrap();
     });
@@ -119,8 +112,6 @@ fn with_runtime(port: u16, dir: &std::path::Path, nshards: usize, body: impl FnO
 
 #[test]
 fn config_set_maxmemory_takes_effect_globally() {
-    let _guard = serial_lock();
-    install_fresh_config(Config::default());
 
     let dir = std::env::temp_dir().join(format!(
         "kevy-cfgset-{}",
@@ -132,7 +123,7 @@ fn config_set_maxmemory_takes_effect_globally() {
     std::fs::create_dir_all(&dir).unwrap();
     let port = free_port();
 
-    with_runtime(port, &dir, 1, |p| {
+    with_runtime(port, &dir, 1, Config::default(), |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
 
         // Baseline: maxmemory starts at 0.
@@ -144,7 +135,7 @@ fn config_set_maxmemory_takes_effect_globally() {
         read_reply(&mut c, b"+OK\r\n");
 
         // GET reflects the new value immediately (handler reads the
-        // post-swap config_global).
+        // post-swap shared config).
         c.write_all(&req(&[b"CONFIG", b"GET", b"maxmemory"])).unwrap();
         let v = read_config_get_value(&mut c, "maxmemory")
             .expect("maxmemory after SET should be present");
@@ -166,15 +157,11 @@ fn config_set_maxmemory_takes_effect_globally() {
         // call. Verified separately via `apply_hot_set_*` unit tests.)
     });
 
-    // Reset to default so later tests start clean.
-    kevy::config_replace(Arc::new(Config::default())).expect("replace");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn config_set_appendfsync_round_trips_through_get() {
-    let _guard = serial_lock();
-    install_fresh_config(Config::default());
     let dir = std::env::temp_dir().join(format!(
         "kevy-cfgset-fsync-{}",
         std::time::SystemTime::now()
@@ -185,7 +172,7 @@ fn config_set_appendfsync_round_trips_through_get() {
     std::fs::create_dir_all(&dir).unwrap();
     let port = free_port();
 
-    with_runtime(port, &dir, 1, |p| {
+    with_runtime(port, &dir, 1, Config::default(), |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
         c.write_all(&req(&[b"CONFIG", b"GET", b"appendfsync"])).unwrap();
         assert_eq!(
@@ -203,14 +190,11 @@ fn config_set_appendfsync_round_trips_through_get() {
         );
     });
 
-    let _ = kevy::config_replace(Arc::new(Config::default()));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn config_set_read_only_bind_returns_restart_required_error() {
-    let _guard = serial_lock();
-    install_fresh_config(Config::default());
     let dir = std::env::temp_dir().join(format!(
         "kevy-cfgset-ro-{}",
         std::time::SystemTime::now()
@@ -221,7 +205,7 @@ fn config_set_read_only_bind_returns_restart_required_error() {
     std::fs::create_dir_all(&dir).unwrap();
     let port = free_port();
 
-    with_runtime(port, &dir, 1, |p| {
+    with_runtime(port, &dir, 1, Config::default(), |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
         c.write_all(&req(&[b"CONFIG", b"SET", b"bind", b"0.0.0.0"])).unwrap();
         let mut buf = [0u8; 256];
@@ -239,7 +223,6 @@ fn config_set_read_only_bind_returns_restart_required_error() {
 
 #[test]
 fn config_rewrite_writes_round_trippable_file_from_source_path() {
-    let _guard = serial_lock();
     let dir = std::env::temp_dir().join(format!(
         "kevy-cfgrewrite-{}",
         std::time::SystemTime::now()
@@ -257,13 +240,9 @@ fn config_rewrite_writes_round_trippable_file_from_source_path() {
     seed.source_path = Some(toml_path.clone());
     std::fs::write(&toml_path, seed.to_toml_string()).unwrap();
 
-    // Install fresh + then replace with the source-path seed — this
-    // gives REWRITE a path to write back to.
-    install_fresh_config(seed.clone());
-
     let port = free_port();
 
-    with_runtime(port, &dir, 1, |p| {
+    with_runtime(port, &dir, 1, seed, |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
         // First mutate via CONFIG SET so the in-memory config diverges
         // from the on-disk file — that's the case REWRITE has to
@@ -293,16 +272,13 @@ fn config_rewrite_writes_round_trippable_file_from_source_path() {
     assert_eq!(reparsed.memory.maxmemory, 1024 * 1024 * 1024);
     assert_eq!(reparsed.memory.maxmemory_policy, EvictionPolicy::VolatileTtl);
 
-    let _ = kevy::config_replace(Arc::new(Config::default()));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn config_rewrite_without_source_path_returns_error() {
-    let _guard = serial_lock();
     // Default config has no source_path. Reply must be the canonical
     // "running without a config file" -ERR.
-    install_fresh_config(Config::default());
     let dir = std::env::temp_dir().join(format!(
         "kevy-cfgrewrite-nosrc-{}",
         std::time::SystemTime::now()
@@ -313,7 +289,7 @@ fn config_rewrite_without_source_path_returns_error() {
     std::fs::create_dir_all(&dir).unwrap();
     let port = free_port();
 
-    with_runtime(port, &dir, 1, |p| {
+    with_runtime(port, &dir, 1, Config::default(), |p| {
         let mut c = std::net::TcpStream::connect(("127.0.0.1", p)).unwrap();
         c.write_all(&req(&[b"CONFIG", b"REWRITE"])).unwrap();
         let mut buf = [0u8; 256];

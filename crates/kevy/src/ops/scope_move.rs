@@ -21,8 +21,8 @@
 //!    the source resume.
 //!
 //! Target side handler bypasses scope routing during the ingest
-//! window via a thread-local guard, then dispatches each embedded
-//! command normally through `kevy::dispatch_into`.
+//! window via the shard's ingest guard, then dispatches each embedded
+//! command normally through `crate::dispatch::dispatch_into`.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -31,11 +31,12 @@ use std::time::Duration;
 use kevy_resp::{ArgvView, encode_error, parse_command};
 use kevy_store::Store;
 
-use crate::scope_integration;
+use crate::state::Ctx;
 
 /// `MOVE-SCOPE <prefix> FROM <from-id> TO <to-id>` — operator-issued
 /// scope migration.
 pub(crate) fn cmd_move_scope<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
@@ -43,14 +44,14 @@ pub(crate) fn cmd_move_scope<A: ArgvView + ?Sized>(
     let Some((prefix_owned, from_id, to_id)) = parse_move_scope_args(args, out) else {
         return;
     };
-    let Some(target_addr) = validate_move_scope_route(&from_id, &to_id, out) else {
+    let Some(target_addr) = validate_move_scope_route(ctx, &from_id, &to_id, out) else {
         return;
     };
 
     // Start the migration locally. From this instant, dispatch
     // routes writes for this prefix to `-QUIESCED migrating to
     // <to_addr>` (T3.14).
-    if let Err(e) = scope_integration::migration_start(
+    if let Err(e) = ctx.state.scope.migration_start(
         prefix_owned.clone(),
         from_id.to_string(),
         to_id.to_string(),
@@ -61,12 +62,12 @@ pub(crate) fn cmd_move_scope<A: ArgvView + ?Sized>(
     // Ship.
     match ship_prefix_to_target(store, &prefix_owned, &target_addr) {
         Ok(count) => {
-            scope_integration::migration_commit(&prefix_owned);
+            ctx.state.scope.migration_commit(&prefix_owned);
             let reply = format!("+OK {count}\r\n");
             out.extend_from_slice(reply.as_bytes());
         }
         Err(e) => {
-            scope_integration::migration_abort(&prefix_owned);
+            ctx.state.scope.migration_abort(&prefix_owned);
             encode_error(out, &format!("ERR MOVE-SCOPE ship failed: {e}"));
         }
     }
@@ -112,11 +113,16 @@ fn parse_move_scope_args<A: ArgvView + ?Sized>(
 /// Validate the migration route: self must be `<from-id>` and
 /// `<to-id>` must resolve in the peer table. Returns the target's
 /// `host:port`; on failure the error reply has been written to `out`.
-fn validate_move_scope_route(from_id: &str, to_id: &str, out: &mut Vec<u8>) -> Option<String> {
+fn validate_move_scope_route(
+    ctx: &Ctx<'_>,
+    from_id: &str,
+    to_id: &str,
+    out: &mut Vec<u8>,
+) -> Option<String> {
     // Self must be the source. Local writes flow only through this
     // node's keyspace; a misdirected MOVE-SCOPE would silently lose
     // half the data.
-    match scope_integration::self_node_id() {
+    match ctx.state.scope.self_node_id() {
         Some(me) if me == from_id => {}
         Some(me) => {
             encode_error(
@@ -133,7 +139,7 @@ fn validate_move_scope_route(from_id: &str, to_id: &str, out: &mut Vec<u8>) -> O
             return None;
         }
     }
-    let Some(target_addr) = scope_integration::peer_addr(to_id) else {
+    let Some(target_addr) = ctx.state.scope.peer_addr(to_id) else {
         encode_error(
             out,
             &format!("ERR MOVE-SCOPE: target node {to_id:?} not in [cluster] peers"),
@@ -199,6 +205,7 @@ fn ship_prefix_to_target(
 /// Parses concatenated RESP commands out of `<bulk>` and dispatches
 /// each one with scope routing bypassed for `<prefix>`.
 pub(crate) fn cmd_move_scope_ingest<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
@@ -216,7 +223,7 @@ pub(crate) fn cmd_move_scope_ingest<A: ArgvView + ?Sized>(
         return encode_error(out, "ERR MOVE-SCOPE-INGEST: missing bulk");
     };
 
-    let _guard = scope_integration::IngestGuard::enter(prefix.to_vec());
+    let _guard = ctx.shard.ingest_guard(prefix.to_vec());
     let mut buf = bulk.to_vec();
     let mut applied = 0usize;
     let mut scratch = Vec::with_capacity(256);
@@ -224,7 +231,7 @@ pub(crate) fn cmd_move_scope_ingest<A: ArgvView + ?Sized>(
         match parse_command(&buf) {
             Ok(Some((argv, consumed))) => {
                 scratch.clear();
-                crate::dispatch::dispatch_into(store, &argv, &mut scratch);
+                crate::dispatch::dispatch_into(ctx, store, &argv, &mut scratch);
                 buf.drain(..consumed);
                 applied += 1;
             }
@@ -423,7 +430,8 @@ mod tests {
         append_resp_argv(&mut bulk, &[b"SET", b"app:b", b"2"]);
         let args = argv(&[b"MOVE-SCOPE-INGEST", b"app:", &bulk]);
         let mut out = Vec::new();
-        cmd_move_scope_ingest(&mut store, &args, &mut out);
+        let c = crate::KevyCommands::new();
+        cmd_move_scope_ingest(&c.ctx(), &mut store, &args, &mut out);
         assert_eq!(out, b"+OK 2\r\n", "wire reply shape");
         // Store now carries both keys.
         assert_eq!(
@@ -441,7 +449,8 @@ mod tests {
         let mut store = fresh_store();
         let args = argv(&[b"MOVE-SCOPE-INGEST", b"only-one"]);
         let mut out = Vec::new();
-        cmd_move_scope_ingest(&mut store, &args, &mut out);
+        let c = crate::KevyCommands::new();
+        cmd_move_scope_ingest(&c.ctx(), &mut store, &args, &mut out);
         assert!(out.starts_with(b"-ERR"), "got {:?}", String::from_utf8_lossy(&out));
     }
 
@@ -451,19 +460,21 @@ mod tests {
         // Missing FROM keyword.
         let args = argv(&[b"MOVE-SCOPE", b"p:", b"NOT-FROM", b"A", b"TO", b"B"]);
         let mut out = Vec::new();
-        cmd_move_scope(&mut store, &args, &mut out);
+        let c = crate::KevyCommands::new();
+        cmd_move_scope(&c.ctx(), &mut store, &args, &mut out);
         assert!(out.starts_with(b"-ERR"));
     }
 
     #[test]
     fn move_scope_rejects_when_self_node_id_not_configured() {
         let mut store = fresh_store();
-        // scope_integration::self_node_id() returns None by default in
-        // this test binary (install_self_id is never called). The
-        // handler should refuse cleanly rather than panic.
+        // A default state has no `[cluster] node_id`, so
+        // `scope.self_node_id()` is `None`. The handler should refuse
+        // cleanly rather than panic.
         let args = argv(&[b"MOVE-SCOPE", b"p:", b"FROM", b"A", b"TO", b"B"]);
         let mut out = Vec::new();
-        cmd_move_scope(&mut store, &args, &mut out);
+        let c = crate::KevyCommands::new();
+        cmd_move_scope(&c.ctx(), &mut store, &args, &mut out);
         assert!(out.starts_with(b"-ERR"));
         let s = String::from_utf8_lossy(&out);
         assert!(s.contains("node_id is not configured") || s.contains("from-id"), "{s}");
