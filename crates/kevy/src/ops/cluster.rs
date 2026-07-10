@@ -21,6 +21,7 @@ use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_integer, encode_
 use kevy_store::Store;
 
 use super::wrong_args;
+use crate::state::Ctx;
 
 thread_local! {
     /// This reactor thread's shard id (thread-per-core: thread == shard).
@@ -66,11 +67,12 @@ fn advertised_ip(cfg: &Config) -> String {
 
 // LOC-WAIVER: data-driven subcommand dispatch table — one reply-emitter arm per subcommand.
 pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
-    cfg: &Config,
+    ctx: &Ctx<'_>,
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
 ) {
+    let cfg = &ctx.state.config();
     let sub = match args.get(1) {
         Some(s) => s.to_ascii_uppercase(),
         None => return wrong_args(out, "cluster"),
@@ -103,18 +105,15 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
             );
             encode_bulk(out, body.as_bytes());
         }
-        b"NODES" if enabled => encode_bulk(out, nodes_text(cfg, n).as_bytes()),
+        b"NODES" if enabled => {
+            encode_bulk(out, nodes_text(cfg, n, live_role(ctx)).as_bytes());
+        }
         b"NODES" => {
             // Standalone stub. T1.33: the flag reflects live state
-            // (`replica_state::current_upstream` is `Some` for a
-            // replica) — clients that discover topology via NODES
-            // can therefore classify the node correctly without a
-            // separate ROLE roundtrip.
-            let role = if crate::replica_state::current_upstream().is_some() {
-                "slave"
-            } else {
-                "master"
-            };
+            // (the upstream slot is `Some` for a replica) — clients
+            // that discover topology via NODES can therefore classify
+            // the node correctly without a separate ROLE roundtrip.
+            let role = live_role(ctx);
             let body = format!(
                 "0000000000000000000000000000000000000000 :0@0 myself,{role} - 0 0 0 connected 0-16383\r\n",
             );
@@ -164,19 +163,21 @@ fn for_each_node(cfg: &Config, n: usize, mut f: impl FnMut(usize, &str, i64, u16
     }
 }
 
-/// `CLUSTER NODES` text: one line per virtual node. The answering shard is
-/// flagged `myself`. No cluster bus — `@cport` mirrors the data port.
-fn nodes_text(cfg: &Config, n: usize) -> String {
-    let me = current_shard();
-    // T1.33: the answering node's role from live replication state
-    // — the OTHER shards within this same process share the same
-    // role (they're sibling shards in one process), so we apply
-    // `role` to every entry.
-    let role = if crate::replica_state::current_upstream().is_some() {
+/// The answering node's role from live replication state — the OTHER
+/// shards within this same process share the same role (they're
+/// sibling shards in one process), so callers apply it to every entry.
+fn live_role(ctx: &Ctx<'_>) -> &'static str {
+    if ctx.state.replication.current_upstream().is_some() {
         "slave"
     } else {
         "master"
-    };
+    }
+}
+
+/// `CLUSTER NODES` text: one line per virtual node. The answering shard is
+/// flagged `myself`. No cluster bus — `@cport` mirrors the data port.
+fn nodes_text(cfg: &Config, n: usize, role: &str) -> String {
+    let me = current_shard();
     let mut body = String::new();
     for_each_node(cfg, n, |i, ip, port, start, end| {
         let flags = if i == me {

@@ -13,10 +13,14 @@ use kevy_rt::{ResolvedCmd, Route, TxnKind, parse_slowlog_sub};
 
 use crate::cmd::{self, scan_pattern, upper_verb};
 use crate::cmd_block;
+use crate::state::ReplicationState;
 
 /// One-pass verb resolution for [`crate::KevyCommands`]. Single `match upper`
 /// fans out into the per-attribute fields the runtime then consumes.
-pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(args: &A) -> ResolvedCmd {
+pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(
+    repl: &ReplicationState,
+    args: &A,
+) -> ResolvedCmd {
     let Some(name) = args.first() else {
         return ResolvedCmd {
             txn_kind: TxnKind::Other,
@@ -49,7 +53,7 @@ pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(args: &A) -> ResolvedCmd {
         _ => {}
     }
 
-    resolve_general(upper, args)
+    resolve_general(repl, upper, args)
 }
 
 /// The general (non-GET/SET) resolution tail: one lookup per
@@ -58,7 +62,11 @@ pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(args: &A) -> ResolvedCmd {
 /// pre-split fused body (this is still the per-op path for every
 /// verb outside the tier-1 pair).
 #[inline(always)]
-fn resolve_general<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> ResolvedCmd {
+fn resolve_general<A: ArgvView + ?Sized>(
+    repl: &ReplicationState,
+    upper: &[u8],
+    args: &A,
+) -> ResolvedCmd {
     let txn_kind = match upper {
         b"MULTI" => TxnKind::Multi,
         b"EXEC" => TxnKind::Exec,
@@ -69,7 +77,7 @@ fn resolve_general<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> ResolvedCmd 
 
     let is_quit = upper == b"QUIT";
     let is_write = cmd::is_write_verb(upper);
-    let route = route_for_verb(upper, args);
+    let route = route_for_verb(repl, upper, args);
     let block_hint = cmd_block::block_hint_for_verb(upper, args);
     let wake_idx = cmd_block::wake_idx_for_verb(upper);
 
@@ -89,7 +97,11 @@ fn resolve_general<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> ResolvedCmd 
 /// upper` plus the small extractor calls (KEYS pattern, SCAN cursor,
 /// XREAD STREAMS key, SLOWLOG sub-command).
 // LOC-WAIVER: data-driven verb → Route match table — one arm per verb.
-fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
+fn route_for_verb<A: ArgvView + ?Sized>(
+    repl: &ReplicationState,
+    upper: &[u8],
+    args: &A,
+) -> Route {
     match upper {
         b"HELLO" => Route::Hello,
         b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG" | b"INFO" | b"CLUSTER" | b"DEBUG"
@@ -100,9 +112,9 @@ fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
         // route to the runtime's deferred waiters; every immediate
         // answer (arity / role / gen mismatch) falls back to Local and
         // the cmd_repl dispatch handlers emit the precise reply.
-        b"WAIT" => crate::cmd_repl::wait_route(args),
-        b"REPL.TOKEN" => crate::cmd_repl::token_route(args),
-        b"REPL.WAIT" => crate::cmd_repl::repl_wait_route(args),
+        b"WAIT" => crate::cmd_repl::wait_route(repl, args),
+        b"REPL.TOKEN" => crate::cmd_repl::token_route(repl, args),
+        b"REPL.WAIT" => crate::cmd_repl::repl_wait_route(repl, args),
         b"DBSIZE" => Route::Dbsize,
         b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
         b"SAVE" => Route::Save,

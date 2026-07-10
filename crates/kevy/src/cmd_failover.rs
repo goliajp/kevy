@@ -17,12 +17,16 @@
 //! (default 10s) rolls back to normal primary duty.
 
 use std::io::Write as _;
+use std::sync::Arc;
 
 use kevy_resp::{ArgvView, encode_error, encode_simple_string};
 
-pub(crate) fn cmd_failover<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+use crate::state::{Ctx, ReplicationState};
+
+pub(crate) fn cmd_failover<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
+    let repl = &ctx.state.replication;
     if args.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"ABORT")) {
-        crate::replica_state::set_quiesce(None);
+        repl.set_quiesce(None);
         encode_simple_string(out, "OK");
         return;
     }
@@ -46,32 +50,35 @@ pub(crate) fn cmd_failover<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
         .and_then(|v| std::str::from_utf8(v).ok())
         .and_then(|v| v.parse().ok())
         .unwrap_or(10_000);
-    if crate::replica_state::is_replica() {
+    if repl.is_replica() {
         encode_error(out, "ERR FAILOVER: this node is a replica — run it on the primary");
         return;
     }
     let target = format!("{host}:{port}");
-    crate::replica_state::set_quiesce(Some(target.clone()));
+    repl.set_quiesce(Some(target.clone()));
     let host = host.to_string();
+    // The handover thread captures the narrow Arc<ReplicationState>
+    // slice, never the whole RuntimeState.
+    let repl = Arc::clone(repl);
     std::thread::Builder::new()
         .name("kevy-failover".into())
-        .spawn(move || run_handover(host, port, timeout_ms))
+        .spawn(move || run_handover(&repl, host, port, timeout_ms))
         .ok();
     encode_simple_string(out, "OK");
 }
 
-fn run_handover(host: String, port: u16, timeout_ms: u64) {
+fn run_handover(repl: &ReplicationState, host: String, port: u16, timeout_ms: u64) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     let target = format!("{host}:{port}");
     // Phase 1: wait for the target to drain (lag 0, link up).
     loop {
-        if !crate::replica_state::quiesce_active() {
+        if !repl.quiesce_active() {
             eprintln!("kevy: FAILOVER to {target} aborted");
             return;
         }
         if std::time::Instant::now() > deadline {
             eprintln!("kevy: FAILOVER to {target} timed out waiting for drain; resuming primary duty");
-            crate::replica_state::set_quiesce(None);
+            repl.set_quiesce(None);
             return;
         }
         match target_drained(&host, port) {
@@ -86,19 +93,19 @@ fn run_handover(host: String, port: u16, timeout_ms: u64) {
     // Phase 2: promote the target, then follow it.
     if let Err(e) = send_verb(&host, port, &[b"REPLICAOF", b"NO", b"ONE"]) {
         eprintln!("kevy: FAILOVER promote of {target} failed ({e}); resuming primary duty");
-        crate::replica_state::set_quiesce(None);
+        repl.set_quiesce(None);
         return;
     }
     let upstream = format!("{host}:{}", port + 10_000);
-    match crate::replication::retarget_upstream(&upstream) {
+    match crate::replication::retarget_upstream(repl, &upstream) {
         Ok(()) => {
-            crate::replica_state::set_quiesce(None);
+            repl.set_quiesce(None);
             eprintln!("kevy: FAILOVER complete — now replicating from {target}");
         }
         Err(e) => {
             // The target IS promoted; staying quiesced would strand
             // writes with a dangling pointer. Surface loudly.
-            crate::replica_state::set_quiesce(None);
+            repl.set_quiesce(None);
             eprintln!(
                 "kevy: FAILOVER promoted {target} but local retarget failed ({e}) — \
                  run REPLICAOF {host} {port} manually"

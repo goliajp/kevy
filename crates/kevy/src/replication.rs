@@ -5,9 +5,9 @@
 use std::net::{IpAddr, Ipv4Addr};
 
 use kevy_config::{Config, ReplicationRole};
-use kevy_rt::{Commands, Runtime, replica_inbox_pair};
+use kevy_rt::{Commands, Runtime};
 
-use crate::replica_state;
+use crate::state::{ReplicationState, RuntimeState};
 
 /// Resolved replication listener base port: `[replication].listen_port_base`,
 /// or `server.port + 10000` when left at the `0` default. Shard `i`
@@ -23,51 +23,44 @@ pub(crate) fn replication_port_base(cfg: &Config) -> u16 {
 
 /// Apply the `[replication]` section to a [`Runtime`] under construction.
 ///
-/// **Always** installs per-shard replica inboxes — even when
-/// `role = standalone` or `primary` — so that a runtime-issued
-/// `REPLICAOF host port` (T1.29.5) can spawn runners that push into
-/// the inboxes without changing the already-running shards. The
-/// senders go into [`crate::replica_state::install_senders`]; the
-/// receivers flow to `Runtime::with_replica_inboxes`. Standalone
-/// shards do one extra `Option::is_some` check per tick (empty
-/// channel, immediate return) — measurable at 0 ns vs. the existing
-/// `tick_persist` cost.
+/// **Always** wires the per-shard replica inboxes (allocated by
+/// `state.replication`) — even when `role = standalone` or `primary`
+/// — so that a runtime-issued `REPLICAOF host port` (T1.29.5) can
+/// spawn runners that push into the inboxes without changing the
+/// already-running shards. Standalone shards do one extra
+/// `Option::is_some` check per tick (empty channel, immediate
+/// return) — measurable at 0 ns vs. the existing `tick_persist`
+/// cost.
 ///
 /// `role = primary` additionally wires the downstream backlog +
 /// listener. `role = replica` with a valid `upstream` additionally
 /// spawns the initial runner fleet via
-/// [`crate::replica_state::start_runners`].
+/// [`ReplicationState::start_runners`].
 pub(crate) fn apply<C: Commands>(
     runtime: Runtime<C>,
     cfg: &Config,
-    nshards: usize,
+    state: &RuntimeState,
 ) -> Runtime<C> {
-    // Per-shard inbox pairs — always allocated.
-    let mut senders = Vec::with_capacity(nshards);
-    let mut receivers = Vec::with_capacity(nshards);
-    for _ in 0..nshards {
-        let (tx, rx) = replica_inbox_pair();
-        senders.push(tx);
-        receivers.push(rx);
-    }
-    replica_state::install_senders(senders);
+    let repl = &state.replication;
+    let receivers = state
+        .take_replica_inboxes()
+        .expect("replica inboxes are taken once, by this wiring");
     let runtime = runtime.with_replica_inboxes(receivers);
 
     match cfg.replication.role {
         ReplicationRole::Primary => {
-            crate::replica_state::set_min_replicas(cfg.replication.min_replicas_to_write);
+            repl.set_min_replicas(cfg.replication.min_replicas_to_write);
             runtime
                 .with_replication(true, cfg.replication.replication_buffer_size)
                 .with_replication_listener(replication_port_base(cfg))
                 .with_replication_reconnect_window(cfg.replication.reconnect_window_ms)
         }
         ReplicationRole::Replica => {
-            crate::replica_state::set_single_source(cfg.replication.single_source);
-            crate::replica_state::set_read_only(cfg.replication.replica_read_only);
-            crate::replica_state::set_max_staleness_ms(
+            repl.set_read_only(cfg.replication.replica_read_only);
+            repl.set_max_staleness_ms(
                 u64::from(cfg.replication.replica_max_staleness_ms),
             );
-            spawn_initial_runners_from_config(cfg);
+            spawn_initial_runners_from_config(repl, cfg);
             // v3.15: topology symmetry — a replica keeps a full
             // replication SOURCE + listener too, so promotion
             // (FAILOVER / election win) can serve replicas at once.
@@ -88,7 +81,7 @@ pub(crate) fn apply<C: Commands>(
 /// unresolvable upstream) logs a `kevy:` warning and leaves the
 /// runtime in standalone-effective mode — admins can fix the config
 /// + REPLICAOF without restart once T1.29.5 ships.
-fn spawn_initial_runners_from_config(cfg: &Config) {
+fn spawn_initial_runners_from_config(repl: &ReplicationState, cfg: &Config) {
     let Some(upstream) = cfg.replication.upstream.as_deref() else {
         eprintln!(
             "kevy: [replication] role = \"replica\" but upstream is unset; \
@@ -110,7 +103,7 @@ fn spawn_initial_runners_from_config(cfg: &Config) {
         );
         return;
     };
-    if let Err(e) = replica_state::start_runners((host, port_base)) {
+    if let Err(e) = repl.start_runners((host, port_base)) {
         eprintln!("kevy: start_runners failed: {e}");
     }
 }
@@ -119,10 +112,13 @@ fn spawn_initial_runners_from_config(cfg: &Config) {
 /// Parses + resolves + starts the new fleet (stopping any prior).
 /// Returns `Err(static reason)` on parse / resolve failure so the
 /// command can map it to a `-ERR` reply.
-pub(crate) fn retarget_upstream(upstream: &str) -> Result<(), &'static str> {
+pub(crate) fn retarget_upstream(
+    repl: &ReplicationState,
+    upstream: &str,
+) -> Result<(), &'static str> {
     let (host_str, port_base) = parse_upstream(upstream).ok_or("upstream not host:port")?;
     let host = resolve_host(&host_str).ok_or("upstream host not resolvable")?;
-    replica_state::start_runners((host, port_base))
+    repl.start_runners((host, port_base))
 }
 
 /// Public demote entry point used by `REPLICAOF NO ONE` (T1.30).
@@ -130,8 +126,8 @@ pub(crate) fn retarget_upstream(upstream: &str) -> Result<(), &'static str> {
 /// when the node really was a replica this is a PROMOTION — the
 /// promotion counter bumps so every shard fences its offset space
 /// (feed generation bump; stale REPL.TOKENs then gen-mismatch).
-pub(crate) fn demote_to_standalone() {
-    replica_state::promote_stop_runners();
+pub(crate) fn demote_to_standalone(repl: &ReplicationState) {
+    repl.promote_stop_runners();
 }
 
 /// Parse `"host:port"`. Tolerates IPv6 brackets (`[::1]:7000`).

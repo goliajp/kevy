@@ -117,9 +117,9 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut 
             }
         }
     }
-    // Live state from `replica_state` wins over the static config —
-    // dynamic REPLICAOF retarget at runtime is the source of truth.
-    if let Some((host, port)) = crate::replica_state::current_upstream() {
+    // Live replication state wins over the static config — dynamic
+    // REPLICAOF retarget at runtime is the source of truth.
+    if let Some((host, port)) = ctx.state.replication.current_upstream() {
         let host_str = host.to_string();
         return emit_replica_addr(&host_str, port, out);
     }
@@ -164,12 +164,12 @@ fn current_primary_host_port_from_config(ctx: &Ctx<'_>) -> (String, u16) {
 ///
 /// Replies `+OK` on success, `-ERR <reason>` on parse / resolve
 /// failure (host empty, port out of range, host not resolvable, or
-/// — for an embedded process — `kevy::serve` never installed the
-/// per-shard senders).
+/// — for an embedded process — the replica inboxes were never wired
+/// into a runtime).
 ///
-/// Side effects are global (process-level): every connected client
-/// sees the same effect — there is no per-connection retarget.
-pub(crate) fn cmd_replicaof<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+/// Side effects are server-wide: every connected client sees the
+/// same effect — there is no per-connection retarget.
+pub(crate) fn cmd_replicaof<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     if args.len() != 3 {
         return wrong_args(out, "replicaof");
     }
@@ -177,7 +177,7 @@ pub(crate) fn cmd_replicaof<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     let arg2 = &args[2];
     // REPLICAOF NO ONE — demote.
     if arg1.eq_ignore_ascii_case(b"NO") && arg2.eq_ignore_ascii_case(b"ONE") {
-        crate::replication::demote_to_standalone();
+        crate::replication::demote_to_standalone(&ctx.state.replication);
         encode_simple_string(out, "OK");
         return;
     }
@@ -195,7 +195,7 @@ pub(crate) fn cmd_replicaof<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
         return encode_error(out, "ERR Invalid master host");
     }
     let upstream = format!("{host_str}:{port}");
-    if let Err(reason) = crate::replication::retarget_upstream(&upstream) {
+    if let Err(reason) = crate::replication::retarget_upstream(&ctx.state.replication, &upstream) {
         return encode_error(out, &format!("ERR {reason}"));
     }
     encode_simple_string(out, "OK");
@@ -257,16 +257,7 @@ mod tests {
     use super::*;
     use kevy_resp::Argv;
 
-    // Serialise the unit tests that touch process-global replica
-    // state — see [`crate::replica_state::TEST_STATE_GUARD`] for the
-    // mutex.
-
     fn run(offset: u64, replica_count: usize) -> Vec<u8> {
-        let _g = crate::replica_state::TEST_STATE_GUARD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Ensure ROLE's `current_upstream` path returns `None` for
-        // this test — defensive against sibling tests that may have
-        // started a runner.
-        crate::replica_state::stop_runners();
         let replicas: Vec<_> = (0..replica_count)
             .map(|i| (Ipv4Addr::new(10, 0, 0, (i + 1) as u8), 6004, offset, Some(offset)))
             .collect();
@@ -341,35 +332,32 @@ mod tests {
         assert_eq!(parse_upstream(Some("[::1]:7000")), ("[::1]", 7000));
     }
 
-    fn replicaof(args: &[&[u8]]) -> Vec<u8> {
-        let _g = crate::replica_state::TEST_STATE_GUARD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        crate::replica_state::stop_runners();
+    fn replicaof_on(c: &crate::KevyCommands, args: &[&[u8]]) -> Vec<u8> {
         let mut a = Argv::default();
         a.push(b"REPLICAOF");
         for arg in args {
             a.push(arg);
         }
         let mut out = Vec::new();
-        cmd_replicaof(&a, &mut out);
-        // Defensive cleanup: any runner the command spawned should
-        // not outlive this test — it would race ROLE tests below.
-        crate::replica_state::stop_runners();
+        cmd_replicaof(&c.ctx(), &a, &mut out);
         out
+    }
+
+    fn replicaof(args: &[&[u8]]) -> Vec<u8> {
+        replicaof_on(&crate::KevyCommands::new(), args)
     }
 
     #[test]
     fn replicaof_host_port_returns_ok() {
-        // Install N=1 sender so the retarget can spawn a runner; the
-        // runner will fail to connect to localhost:6379 (nothing
-        // listening) but the command returns +OK as soon as the
-        // runner is spawned. `replicaof()` calls `stop_runners`
-        // around the invocation so the runner is gone by the time
-        // the next test runs.
-        let _g = crate::replica_state::TEST_STATE_GUARD.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let (tx, _rx) = kevy_rt::replica_inbox_pair();
-        crate::replica_state::install_senders(vec![tx]);
-        drop(_g); // release the guard so `replicaof()` can re-acquire
-        assert_eq!(replicaof(&[b"127.0.0.1", b"6379"]), b"+OK\r\n");
+        // Wire the state's inbox receivers (kept alive for the test)
+        // so the retarget can spawn a runner; the runner will fail to
+        // connect to localhost:6379 (nothing listening) but the
+        // command returns +OK as soon as the runner is spawned.
+        let c = crate::KevyCommands::new();
+        let _receivers = c.state().take_replica_inboxes().expect("first take");
+        assert_eq!(replicaof_on(&c, &[b"127.0.0.1", b"6379"]), b"+OK\r\n");
+        // Stop the runner before the receivers drop.
+        c.state().replication.stop_runners();
     }
 
     #[test]

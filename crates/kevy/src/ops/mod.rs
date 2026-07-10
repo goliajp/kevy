@@ -49,19 +49,16 @@ pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
 ) -> bool {
     match cmd {
         b"INFO" => cmd_info(ctx, store, args, out, RespVersion::V2),
-        b"CLUSTER" => {
-            let cfg = ctx.state.config();
-            cluster::cmd_cluster(&cfg, store, args, out);
-        }
+        b"CLUSTER" => cluster::cmd_cluster(ctx, store, args, out),
         b"DEBUG" => cmd_debug(ctx, args, out),
-        b"WAIT" => crate::cmd_repl::cmd_wait(args, out),
-        b"REPL.TOKEN" => crate::cmd_repl::cmd_repl_token(args, out),
-        b"REPL.WAIT" => crate::cmd_repl::cmd_repl_wait(args, out),
+        b"WAIT" => crate::cmd_repl::cmd_wait(&ctx.state.replication, args, out),
+        b"REPL.TOKEN" => crate::cmd_repl::cmd_repl_token(&ctx.state.replication, args, out),
+        b"REPL.WAIT" => crate::cmd_repl::cmd_repl_wait(&ctx.state.replication, args, out),
         b"SHUTDOWN" => cmd_shutdown(args, out),
         b"CONFIG" => config::cmd_config(ctx, args, out, RespVersion::V2),
         b"CLIENT" => client::cmd_client(args, out, RespVersion::V2),
         b"ROLE" => replication::cmd_role(ctx, args, out),
-        b"REPLICAOF" | b"SLAVEOF" => replication::cmd_replicaof(args, out),
+        b"REPLICAOF" | b"SLAVEOF" => replication::cmd_replicaof(ctx, args, out),
         b"MOVE-SCOPE" => scope_move::cmd_move_scope(ctx, store, args, out),
         b"MOVE-SCOPE-INGEST" => scope_move::cmd_move_scope_ingest(ctx, store, args, out),
         b"MEMORY" => {
@@ -128,7 +125,7 @@ fn build_info_body(
         info_stats(ctx, totals, &mut body);
     }
     if want_section(want, "replication") {
-        info_replication(&mut body);
+        info_replication(ctx, &mut body);
     }
     if want_section(want, "cluster") {
         info_cluster(cfg, &mut body);
@@ -252,7 +249,7 @@ fn info_stats(ctx: &Ctx<'_>, totals: &crate::state::Totals, b: &mut String) {
     b.push_str("\r\n");
 }
 
-fn info_replication(b: &mut String) {
+fn info_replication(ctx: &Ctx<'_>, b: &mut String) {
     // T1.31: live `INFO replication` — reads `current_upstream()` to
     // decide the section shape, then drains the per-tick view
     // (`replication_view()`) for offset + connected-replicas count.
@@ -264,26 +261,26 @@ fn info_replication(b: &mut String) {
     //   - the per-replica list is omitted (peer-addr capture is
     //     T1.28.5 — see plan).
     b.push_str("# Replication\r\n");
-    let upstream = crate::replica_state::current_upstream();
+    let upstream = ctx.state.replication.current_upstream();
     let view = replication::replication_view();
     let offset = view.master_repl_offset;
     let connected = view.replicas.len();
     match upstream {
-        Some((host, port)) => info_repl_replica(b, host, port),
+        Some((host, port)) => info_repl_replica(ctx, b, host, port),
         None => info_repl_master(b, &view, offset, connected),
     }
     b.push_str("\r\n");
 }
 
 /// The replica-side (`role:slave`) half of `INFO replication`.
-fn info_repl_replica(b: &mut String, host: std::net::IpAddr, port: u16) {
+fn info_repl_replica(ctx: &Ctx<'_>, b: &mut String, host: std::net::IpAddr, port: u16) {
     b.push_str("role:slave\r\n");
     b.push_str(&format!("master_host:{host}\r\n"));
     b.push_str(&format!("master_port:{port}\r\n"));
     // v3.14 D3/D4: heartbeat-derived truth — link status by
     // ping freshness (<3s), applied offset and frame lag from
     // the runner registry.
-    let (up, applied, lag, last_io) = crate::replica_state::replica_link_view();
+    let (up, applied, lag, last_io) = ctx.state.replication.replica_link_view();
     b.push_str(if up {
         "master_link_status:up\r\n"
     } else {
@@ -291,7 +288,7 @@ fn info_repl_replica(b: &mut String, host: std::net::IpAddr, port: u16) {
     });
     b.push_str(&format!("master_last_io_seconds_ago:{last_io}\r\n"));
     b.push_str("master_sync_in_progress:0\r\n");
-    b.push_str(if crate::replica_state::read_only() {
+    b.push_str(if ctx.state.replication.read_only() {
         "slave_read_only:1\r\n"
     } else {
         "slave_read_only:0\r\n"

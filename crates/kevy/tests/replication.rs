@@ -198,16 +198,8 @@ fn read_to_eof(s: &mut std::net::TcpStream) -> Vec<u8> {
 }
 
 
-/// v3.14: the whole suite serializes on this lock — every test here
-/// shares the process-level replica_state statics (senders, role
-/// flag), which model kevy's real single-role-per-process semantics.
-/// Parallel tests would cross-contaminate roles (a replica test's
-/// READONLY gate rejecting a primary test's writes).
-static ROLE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
 #[test]
 fn replica_handshake_receives_ack_and_stays_connected() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Post-T1.14: after `+ACK` the conn transitions to Streaming
     // (was Closed before). With no source mutations, the replica
     // just sees the +ACK and a quiet socket — `read_to_eof` returns
@@ -222,7 +214,6 @@ fn replica_handshake_receives_ack_and_stays_connected() {
 
 #[test]
 fn handshake_with_nonzero_offset_echoed_in_ack() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let server = Server::start(1);
     let mut s = std::net::TcpStream::connect(("127.0.0.1", server.replication_base)).unwrap();
     s.write_all(&replicate_from("12345", "node-7")).unwrap();
@@ -233,7 +224,6 @@ fn handshake_with_nonzero_offset_echoed_in_ack() {
 
 #[test]
 fn malformed_handshake_closes_connection_no_ack() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let server = Server::start(1);
     let mut s = std::net::TcpStream::connect(("127.0.0.1", server.replication_base)).unwrap();
     // Send PING instead of REPLICATE FROM ... — the handshake rejects
@@ -246,7 +236,6 @@ fn malformed_handshake_closes_connection_no_ack() {
 
 #[test]
 fn replication_disabled_means_no_listener_on_replication_port() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Spin up a server WITHOUT replication and confirm the would-be
     // replication port is NOT bound. This guards against a wiring
     // mistake that always binds the listener regardless of config.
@@ -334,7 +323,6 @@ fn read_line(s: &mut std::net::TcpStream) -> Vec<u8> {
 
 #[test]
 fn streaming_replica_receives_set_command_as_wire_frame() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Single-shard server so every SET lands on the only backlog.
     let server = Server::start(1);
 
@@ -393,7 +381,6 @@ fn streaming_replica_receives_set_command_as_wire_frame() {
 
 #[test]
 fn streaming_replica_receives_multiple_frames_in_order() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let server = Server::start(1);
     let mut replica = std::net::TcpStream::connect((
         "127.0.0.1",
@@ -459,7 +446,6 @@ fn streaming_replica_receives_multiple_frames_in_order() {
 
 #[test]
 fn streaming_replica_receives_only_its_shards_writes() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // 2-shard server. SETs are key-routed: "alpha" and "beta" likely
     // land on different shards (kevy_hash). A replica on shard 0
     // should only see writes whose key routes to shard 0; same for
@@ -543,7 +529,6 @@ fn streaming_replica_receives_only_its_shards_writes() {
 
 #[test]
 fn replica_client_handshake_and_receive_set_frame() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // The "real" replica path: kevy_replicate::replica::ReplicaClient
     // does the handshake + frame decoding for the caller. Mirror the
     // ad-hoc SET test, but via the published replica API instead of
@@ -580,7 +565,6 @@ fn replica_client_handshake_and_receive_set_frame() {
 
 #[test]
 fn replica_client_handshake_failure_on_closed_port() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // No server running on this port — connect should fail.
     // Use a port we just released (probe-and-drop) so it's almost
     // certainly unbound, with a short timeout so the test is quick.
@@ -646,7 +630,6 @@ fn start_small_buffer_primary(buffer_size: u64) -> Server {
 
 #[test]
 fn snapshot_ship_triggers_when_replica_falls_behind_backlog() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     use kevy_replicate::replica::{ReplicaClient, ReplicaEvent};
 
     // T1.23: a replica that asks for `from_offset = 0` after the
@@ -713,7 +696,6 @@ fn snapshot_ship_triggers_when_replica_falls_behind_backlog() {
 
 #[test]
 fn snapshot_ship_loaded_into_local_store_matches_primary() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     use kevy_replicate::replica::{ReplicaClient, ReplicaEvent};
 
     // T1.24: full primary→replica round-trip via snapshot ship.
@@ -788,7 +770,6 @@ fn snapshot_ship_loaded_into_local_store_matches_primary() {
 
 #[test]
 fn fresh_replica_join_snapshot_then_live_frames() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     use kevy_replicate::replica::{ReplicaClient, ReplicaEvent};
 
     // T1.27: Phase 1.E e2e. A fresh replica joins a primary whose
@@ -889,7 +870,6 @@ fn fresh_replica_join_snapshot_then_live_frames() {
 
 #[test]
 fn replica_apply_dispatch_mirrors_primary_store() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // T1.19: prove the apply path. After streaming N writes from
     // primary to a local in-process KeyspaceStore via kevy::dispatch,
     // GET on the local store returns byte-equivalent values to GET
@@ -947,7 +927,6 @@ fn replica_apply_dispatch_mirrors_primary_store() {
 
 #[test]
 fn role_reports_master_offset_advancing_with_writes() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // T1.28: `ROLE` on a primary returns `["master", <offset>, []]`
     // where <offset> tracks the shard's replication source. After
     // N writes the offset published per tick (~100 ms) should reflect
@@ -1028,7 +1007,6 @@ fn parse_role_master_offset(reply: &[u8]) -> Option<u64> {
 
 #[test]
 fn multi_shard_listener_binds_per_shard_port() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // With nshards=3 each shard binds replication_base + i. Connect to
     // each independently and run a handshake; all should ACK.
     let server = Server::start(3);
@@ -1168,7 +1146,6 @@ impl ReplicaServer {
 
 #[test]
 fn server_as_replica_applies_upstream_writes() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Primary on its own Runtime + replica on a second Runtime in the
     // same process. Runner thread bridges them. Primary's writes
     // (a few SETs that fit in the default backlog) should land in the
@@ -1266,13 +1243,11 @@ fn server_as_replica_applies_upstream_writes() {
 /// host port` command, starts mirroring an upstream primary's keyspace,
 /// then takes `REPLICAOF NO ONE` and demotes back to standalone.
 ///
-/// To install the per-shard senders that `cmd_replicaof` reaches into
-/// (`crate::replica_state`), the test calls the public hook
-/// `kevy::install_replica_senders_for_test` (exposed only under
-/// `#[cfg(test)]` so the production surface stays minimal).
+/// The per-shard inbox pair lives in the replica's own
+/// `RuntimeState`; the test wires the receivers into its hand-built
+/// runtime via `take_replica_inboxes`, exactly like `kevy::serve`.
 #[test]
 fn replicaof_command_dynamically_attaches_to_primary() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // Primary on its own Runtime — same setup as the original e2e.
     let primary = Server::start(1);
     let mut writer = std::net::TcpStream::connect(("127.0.0.1", primary.port)).unwrap();
@@ -1286,12 +1261,14 @@ fn replicaof_command_dynamically_attaches_to_primary() {
         assert_eq!(read_line(&mut writer), b"+OK\r\n");
     }
 
-    // Replica Runtime — has an inbox installed at startup (via
-    // `with_replica_inboxes`) but NO initial runner. The sender for
-    // that inbox is installed in the process-global slot so the
-    // `cmd_replicaof` handler can find it.
-    let (sender, receiver) = kevy_rt::replica_inbox_pair();
-    kevy::install_replica_senders_for_test(vec![sender]);
+    // Replica Runtime — its KevyCommands state allocates the inbox
+    // pair; taking the receivers here wires them into the runtime so
+    // the `cmd_replicaof` handler can spawn runners against them.
+    let replica_commands = kevy::KevyCommands::sharded(1);
+    let receivers = replica_commands
+        .state()
+        .take_replica_inboxes()
+        .expect("fresh state");
 
     let replica_port = free_port_block(1) + 1;
     let replica_dir = tempdir::TempDir::new("kevy-dynamic-replica");
@@ -1305,11 +1282,11 @@ fn replicaof_command_dynamically_attaches_to_primary() {
             [127, 0, 0, 1],
             replica_port,
             1,
-            kevy::KevyCommands::sharded(1),
+            replica_commands,
         )
         .with_data_dir(replica_dir_path)
         .with_aof(false)
-        .with_replica_inboxes(vec![receiver]);
+        .with_replica_inboxes(receivers);
         let _ = rt.run(replica_stop_thread);
     });
     for _ in 0..400 {
@@ -1404,10 +1381,8 @@ fn replicaof_command_dynamically_attaches_to_primary() {
     drop(admin);
     drop(writer);
     primary.shutdown();
-    // Replica side: the runner (if NO ONE didn't already stop it) is
-    // also blocked-on-socket; stop_runners flushes it. Process-global
-    // state cleared via NO ONE above already.
-    kevy::install_replica_senders_for_test(Vec::new());
+    // Replica side: NO ONE above already stopped the runner fleet;
+    // the runtime's own state drops with it.
     replica_stop.store(true, std::sync::atomic::Ordering::Relaxed);
     let _ = replica_handle.join();
     drop(replica_dir);
@@ -1430,8 +1405,8 @@ struct AttachedReplica {
 
 impl AttachedReplica {
     fn start(primary_replication_port: u16) -> Self {
-        let (sender, receiver) = kevy_rt::replica_inbox_pair();
-        kevy::install_replica_senders_for_test(vec![sender]);
+        let commands = kevy::KevyCommands::sharded(1);
+        let receivers = commands.state().take_replica_inboxes().expect("fresh state");
         let _gate = START_GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let port = free_port_block(1) + 1;
         let dir = tempdir::TempDir::new("kevy-v316-replica");
@@ -1441,10 +1416,10 @@ impl AttachedReplica {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands::sharded(1))
+            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, commands)
                 .with_data_dir(dir_path)
                 .with_aof(false)
-                .with_replica_inboxes(vec![receiver]);
+                .with_replica_inboxes(receivers);
             let _ = rt.run(stop_thread);
         });
         for _ in 0..400 {
@@ -1463,15 +1438,12 @@ impl AttachedReplica {
     }
 
     fn shutdown(mut self) {
-        // REPLICAOF NO ONE over the wire — stops the runner fleet AND
-        // clears the process-global upstream/role state (a bare sender
-        // reinstall would leave runners + REPLICA_UPSTREAM behind and
-        // poison sibling ROLE tests).
+        // REPLICAOF NO ONE over the wire — stops the runner fleet so
+        // no runner blocks on its upstream socket across the join.
         if let Ok(mut admin) = std::net::TcpStream::connect(("127.0.0.1", self.port)) {
             send_resp(&mut admin, &[b"REPLICAOF", b"NO", b"ONE"]);
             let _ = read_line(&mut admin);
         }
-        kevy::install_replica_senders_for_test(Vec::new());
         self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
         if let Some(h) = self.handle.take() {
             let _ = h.join();
@@ -1511,10 +1483,8 @@ fn wait_replica_gen_learned(replica_port: u16) -> u64 {
 }
 
 /// Spawn a REAL kevy primary process (the debug binary cargo builds
-/// for this test crate). In-process primary+replica cannot coexist —
-/// the role flag is process-global (one kevy process = one role), so
-/// a same-process REPLICAOF would flip the "primary" runtime
-/// read-only too. The external process is the faithful topology.
+/// for this test crate) — the faithful topology for primary+replica
+/// pairs (one server per process, each with its own state).
 fn spawn_primary_process(replication_base: u16) -> (kevy_chaos::Harness, u16, std::path::PathBuf) {
     let port = kevy_chaos::pick_free_port().expect("primary port");
     let dir = std::env::temp_dir().join(format!("kevy-v316-primary-{port}"));
@@ -1534,10 +1504,6 @@ fn spawn_primary_process(replication_base: u16) -> (kevy_chaos::Harness, u16, st
 
 #[test]
 fn wait_with_no_replica_times_out_to_zero_and_wait_zero_is_immediate() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    // Defensive: clear any process-global replica state a paniced
-    // sibling left behind (the role flag gates WAIT's routing).
-    kevy::install_replica_senders_for_test(Vec::new());
     let server = Server::start(1);
     let mut c = std::net::TcpStream::connect(("127.0.0.1", server.port)).unwrap();
     send_resp(&mut c, &[b"SET", b"w0", b"v"]);
@@ -1561,7 +1527,6 @@ fn wait_with_no_replica_times_out_to_zero_and_wait_zero_is_immediate() {
 
 #[test]
 fn wait_one_with_live_replica_returns_at_least_one() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let replication_base = kevy_chaos::pick_free_port().expect("repl port");
     let (primary, pport, pdir) = spawn_primary_process(replication_base);
     let replica = AttachedReplica::start(replication_base);
@@ -1581,8 +1546,6 @@ fn wait_one_with_live_replica_returns_at_least_one() {
 
 #[test]
 fn repl_token_on_primary_reports_live_per_shard_pairs() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    kevy::install_replica_senders_for_test(Vec::new());
     let server = Server::start(1);
     let mut c = std::net::TcpStream::connect(("127.0.0.1", server.port)).unwrap();
     send_resp(&mut c, &[b"REPL.TOKEN"]);
@@ -1605,7 +1568,6 @@ fn repl_token_on_primary_reports_live_per_shard_pairs() {
 
 #[test]
 fn repl_wait_read_your_writes_and_future_token_misdirects() {
-    let _role = ROLE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let replication_base = kevy_chaos::pick_free_port().expect("repl port");
     let (primary, pport, pdir) = spawn_primary_process(replication_base);
     let replica = AttachedReplica::start(replication_base);

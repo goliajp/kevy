@@ -16,11 +16,15 @@
 mod catalogs;
 mod election;
 mod obs;
+mod progress;
+mod replication;
 mod scope;
 
 pub(crate) use catalogs::CatalogState;
 pub(crate) use election::ElectionState;
 pub(crate) use obs::{ObsState, ShardStats, Totals};
+pub(crate) use progress::ReplicaProgress;
+pub(crate) use replication::ReplicationState;
 pub(crate) use scope::{ScopeState, WriteRedirect, encode_misdirected, encode_quiesced};
 
 use std::cell::{Cell, RefCell};
@@ -59,6 +63,11 @@ pub struct RuntimeState {
     pub(crate) scope: ScopeState,
     pub(crate) catalogs: CatalogState,
     pub(crate) obs: ObsState,
+    /// Replication plane: inbox senders, runner fleet, upstream slot
+    /// and the availability flags. `Arc` so narrow long-lived captures
+    /// (the elect topology callback, the FAILOVER handover thread)
+    /// can hold this slice without holding the whole state.
+    pub(crate) replication: Arc<ReplicationState>,
 }
 
 impl RuntimeState {
@@ -88,6 +97,10 @@ impl RuntimeState {
             election: ElectionState::new(nshards),
             catalogs: CatalogState::new(),
             obs: ObsState::new(&cfg.audit.log_path, nshards),
+            replication: Arc::new(ReplicationState::new(
+                nshards,
+                cfg.replication.single_source,
+            )),
             config: RwLock::new(cfg),
             config_explicit: AtomicBool::new(false),
             data_dir,
@@ -126,6 +139,17 @@ impl RuntimeState {
 
     pub(crate) fn nshards(&self) -> usize {
         self.nshards
+    }
+
+    /// Take the per-shard replica inbox receivers created with this
+    /// state (once — later calls return `None`). Hand them to
+    /// [`kevy_rt::Runtime::with_replica_inboxes`] so `REPLICAOF` can
+    /// spawn runner threads that push into the running shards;
+    /// `kevy::serve` does this wiring itself. On a state whose
+    /// receivers were never taken, `REPLICAOF` refuses with an error
+    /// instead of feeding a channel nothing drains.
+    pub fn take_replica_inboxes(&self) -> Option<Vec<kevy_rt::ReplicaInboxReceiver>> {
+        self.replication.take_inboxes()
     }
 }
 

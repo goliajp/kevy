@@ -30,9 +30,9 @@ impl Commands for KevyCommands {
             | b"CLIENT" | b"SELECT" | b"ROLE"
             | b"REPLICAOF" | b"SLAVEOF" => Route::Local,
             // v3.16 — kept in sync with cmd_resolve::route_for_verb.
-            b"WAIT" => crate::cmd_repl::wait_route(args),
-            b"REPL.TOKEN" => crate::cmd_repl::token_route(args),
-            b"REPL.WAIT" => crate::cmd_repl::repl_wait_route(args),
+            b"WAIT" => crate::cmd_repl::wait_route(&self.state().replication, args),
+            b"REPL.TOKEN" => crate::cmd_repl::token_route(&self.state().replication, args),
+            b"REPL.WAIT" => crate::cmd_repl::repl_wait_route(&self.state().replication, args),
             b"DBSIZE" => Route::Dbsize,
             b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
             b"SAVE" => Route::Save,
@@ -204,9 +204,11 @@ impl Commands for KevyCommands {
         // v3-cluster Phase 1.5: feed the offset into kevy-elect so
         // the next heartbeat carries the up-to-date `repl_offset`.
         // No-op when the elector isn't running.
-        self.state()
-            .election
-            .set_view_offset(self.shard_ctx().shard_id(), master_repl_offset);
+        self.state().election.set_view_offset(
+            &self.state().replication,
+            self.shard_ctx().shard_id(),
+            master_repl_offset,
+        );
     }
 
     fn on_command(&self) {
@@ -257,11 +259,11 @@ impl Commands for KevyCommands {
     }
 
     fn write_denied(&self) -> Option<Vec<u8>> {
-        crate::replica_state::write_denied_reply()
+        self.state().replication.write_denied_reply()
     }
 
     fn read_denied(&self) -> Option<Vec<u8>> {
-        crate::replica_state::read_denied_reply()
+        self.state().replication.read_denied_reply()
     }
 
     fn extension_reduce_v3(
@@ -289,7 +291,7 @@ impl Commands for KevyCommands {
         // owns TTL truth and ships DEL/expiry effects through the
         // replication feed (Redis semantics; diverging reapers would
         // fork the keyspaces). Lazy-expiry reads stay local either way.
-        if !crate::replica_state::is_replica() {
+        if !self.state().replication.is_replica() {
             let samples = cfg.expiry.sample as usize;
             store.tick_expire(samples, 16);
             // v2.4: sweep due hash field TTLs. Deadlines live in the AOF
@@ -326,7 +328,7 @@ impl Commands for KevyCommands {
             // clobber any builder choice, and an embedded promotion
             // must fence feed generations too.
             return kevy_rt::LiveRuntimeConfig {
-                promotion_epoch: crate::replica_state::promotion_epoch(),
+                promotion_epoch: self.state().replication.promotion_epoch(),
                 ..kevy_rt::LiveRuntimeConfig::default()
             };
         }
@@ -347,7 +349,7 @@ impl Commands for KevyCommands {
             )),
             slowlog_slower_than_micros: Some(cfg.slowlog.slower_than_micros),
             slowlog_max_len: Some(cfg.slowlog.max_len),
-            promotion_epoch: crate::replica_state::promotion_epoch(),
+            promotion_epoch: self.state().replication.promotion_epoch(),
         }
     }
 
@@ -434,6 +436,6 @@ impl Commands for KevyCommands {
     /// the verb. This is `kevy-rt`'s primary hot-path optimization: every
     /// match arm uses the same `upper` buffer. Body in `cmd_resolve`.
     fn resolve<A: ArgvView + ?Sized>(&self, args: &A) -> ResolvedCmd {
-        cmd_resolve::kevy_resolve(args)
+        cmd_resolve::kevy_resolve(&self.state().replication, args)
     }
 }

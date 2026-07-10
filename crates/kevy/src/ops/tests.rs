@@ -21,14 +21,6 @@ fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
 
     #[test]
     fn info_returns_bulk_with_sections() {
-        // Same global-state serialisation as `info_replication_master_default_shape`
-        // — INFO's replication section now reads live `current_upstream`,
-        // so a sibling REPLICAOF lib test mid-flight would make this
-        // race.
-        let _g = crate::replica_state::TEST_STATE_GUARD
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        crate::replica_state::stop_runners();
         let out = run(b"INFO", &[]);
         let s = String::from_utf8(out).unwrap();
         assert!(s.starts_with('$'), "INFO must reply as bulk string");
@@ -50,13 +42,6 @@ fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
     fn info_replication_master_default_shape() {
         // Default standalone — `current_upstream()` is None → master
         // shape with offset/connected from the per-shard view.
-        // Serialise via the same global guard the ROLE tests use so
-        // a concurrent REPLICAOF test doesn't flip the upstream slot
-        // mid-read.
-        let _g = crate::replica_state::TEST_STATE_GUARD
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        crate::replica_state::stop_runners();
         // T1.28.5: per-replica list — 3 fake replicas, offset=42.
         let replicas = vec![
             (std::net::Ipv4Addr::new(10, 0, 0, 1), 6004, 42u64, Some(42u64)),
@@ -87,13 +72,6 @@ fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
 
     #[test]
     fn cluster_nodes_single_self_entry() {
-        // T1.33 made CLUSTER NODES read live `current_upstream`, so
-        // a sibling REPLICAOF lib test mid-flight would flip the
-        // role flag to `myself,slave` and fail the master assert.
-        let _g = crate::replica_state::TEST_STATE_GUARD
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        crate::replica_state::stop_runners();
         let out = run(b"CLUSTER", &[b"NODES"]);
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("myself,master"));
@@ -117,12 +95,6 @@ fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
 
     #[test]
     fn wait_returns_zero_replicas() {
-        // v3.16: cmd_wait reads the process-global replica flag —
-        // serialise against sibling REPLICAOF / replica-flag tests.
-        let _g = crate::replica_state::TEST_STATE_GUARD
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        crate::replica_state::stop_runners();
         let out = run(b"WAIT", &[b"3", b"1000"]);
         assert_eq!(out, b":0\r\n");
     }
@@ -135,10 +107,6 @@ fn wait_wrong_args_errors() {
 
 #[test]
 fn wait_non_integer_args_error() {
-    let _g = crate::replica_state::TEST_STATE_GUARD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    crate::replica_state::stop_runners();
     let out = run(b"WAIT", &[b"x", b"1000"]);
     assert!(out.starts_with(b"-ERR value is not an integer"));
     let out = run(b"WAIT", &[b"1", b"-3"]);
@@ -149,23 +117,19 @@ fn wait_non_integer_args_error() {
 fn repl_token_on_replica_flag_reports_runner_view() {
     // Dispatch-level REPL.TOKEN (replica path): reads the per-runner
     // gen/applied registries.
-    let _g = crate::replica_state::TEST_STATE_GUARD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    crate::replica_state::stop_runners();
-    crate::replica_state::force_replica_flag();
+    let mut a = Argv::default();
+    a.push(b"REPL.TOKEN");
+    let mut out = Vec::new();
+    let mut store = Store::new();
+    let c = crate::KevyCommands::new();
+    c.state().replication.force_replica_flag();
     // No runners installed → zero streams → empty array.
-    let out = run(b"REPL.TOKEN", &[]);
+    assert!(dispatch_ops(&c.ctx(), b"REPL.TOKEN", &mut store, &a, &mut out));
     assert_eq!(out, b"*0\r\n");
-    crate::replica_state::stop_runners();
 }
 
 #[test]
 fn repl_wait_on_primary_is_ok_and_bad_token_errors() {
-    let _g = crate::replica_state::TEST_STATE_GUARD
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    crate::replica_state::stop_runners();
     assert_eq!(run(b"REPL.WAIT", &[b"1", b"42"]), b"+OK\r\n");
     assert!(run(b"REPL.WAIT", &[b"1"]).starts_with(b"-ERR REPL.WAIT"));
 }
