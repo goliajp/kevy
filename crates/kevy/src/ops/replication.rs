@@ -27,7 +27,7 @@ use std::net::Ipv4Addr;
 use kevy_config::ReplicationRole;
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer, encode_simple_string};
 
-use crate::config_global;
+use crate::state::Ctx;
 
 use super::wrong_args;
 
@@ -92,7 +92,7 @@ pub(crate) fn replication_view() -> ReplicationView {
 /// Live state wins over startup config: a server that started as
 /// `standalone` but ran `REPLICAOF` later reports `slave` until
 /// `REPLICAOF NO ONE`.
-pub(crate) fn cmd_role<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+pub(crate) fn cmd_role<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     if args.len() != 1 {
         return wrong_args(out, "role");
     }
@@ -100,7 +100,7 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     // dynamic REPLICAOF and static config when the operator
     // configured `[cluster] peers = "..."`. Otherwise fall through
     // to the v1.18 logic (REPLICAOF state → static config).
-    if let Some(snap) = crate::elect_integration::current_snapshot() {
+    if let Some(snap) = ctx.state.election.current_snapshot() {
         use kevy_elect::message::Role as ElectRole;
         match snap.role {
             ElectRole::Primary => return emit_master(out),
@@ -110,7 +110,7 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
                 // the kevy compat port in `ANNOUNCE`, so the
                 // primary id resolves to a parseable addr.
                 let (host, port) = match snap.current_primary.as_deref() {
-                    Some(_addr_or_id) => current_primary_host_port_from_config(),
+                    Some(_addr_or_id) => current_primary_host_port_from_config(ctx),
                     None => ("".to_string(), 0),
                 };
                 return emit_replica_addr(&host, port, out);
@@ -123,7 +123,7 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
         let host_str = host.to_string();
         return emit_replica_addr(&host_str, port, out);
     }
-    let cfg = config_global::get();
+    let cfg = ctx.state.config();
     match cfg.replication.role {
         ReplicationRole::Standalone | ReplicationRole::Primary => emit_master(out),
         ReplicationRole::Replica => emit_replica(cfg.replication.upstream.as_deref(), out),
@@ -136,15 +136,15 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
 /// reply. Falls back to `("", 0)` when the elector's
 /// `current_primary` doesn't match any peer in the config (the
 /// peer list and ANNOUNCE addr should agree, but defensive).
-fn current_primary_host_port_from_config() -> (String, u16) {
-    let snap = match crate::elect_integration::current_snapshot() {
+fn current_primary_host_port_from_config(ctx: &Ctx<'_>) -> (String, u16) {
+    let snap = match ctx.state.election.current_snapshot() {
         Some(s) => s,
         None => return (String::new(), 0),
     };
     let Some(pid) = snap.current_primary else {
         return (String::new(), 0);
     };
-    let cfg = config_global::get();
+    let cfg = ctx.state.config();
     for p in &cfg.cluster.peers {
         if p.node_id == pid {
             return (p.host.clone(), p.port);
@@ -274,7 +274,8 @@ mod tests {
         let mut a = Argv::default();
         a.push(b"ROLE");
         let mut out = Vec::new();
-        cmd_role(&a, &mut out);
+        let c = crate::KevyCommands::new();
+        cmd_role(&c.ctx(), &a, &mut out);
         out
     }
 
@@ -315,7 +316,8 @@ mod tests {
         a.push(b"ROLE");
         a.push(b"extra");
         let mut out = Vec::new();
-        cmd_role(&a, &mut out);
+        let c = crate::KevyCommands::new();
+        cmd_role(&c.ctx(), &a, &mut out);
         assert!(out.starts_with(b"-ERR"));
     }
 

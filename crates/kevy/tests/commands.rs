@@ -12,7 +12,7 @@ fn exchange(steps: &[(&[u8], &[u8])]) {
     let server = std::thread::spawn(move || {
         let conn = listener.accept().unwrap();
         let mut store = kevy::KeyspaceStore::new();
-        kevy::handle_conn(&conn, &mut store).unwrap();
+        kevy::handle_conn(&kevy::KevyCommands::new(), &conn, &mut store).unwrap();
     });
 
     let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();

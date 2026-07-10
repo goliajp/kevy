@@ -7,8 +7,9 @@
 //!   `V1.0-BOUNDARY.md`. Hot-settable knobs (`maxmemory`,
 //!   `maxmemory-policy`, `appendfsync`, `auto-aof-rewrite-*`, `hz`,
 //!   `maxmemory-samples`, `loglevel`, `logfile`-stdout/stderr) build
-//!   a fresh `Arc<Config>` and atomically swap [`crate::config_global`].
-//!   Per-shard re-application happens lazily on the next tick via
+//!   a fresh `Arc<Config>` and atomically swap the live config via
+//!   `RuntimeState::config_replace`. Per-shard re-application happens
+//!   lazily on the next tick via
 //!   `kevy_rt::Commands::live_runtime_config` (~100 ms upper bound on
 //!   propagation; well under Redis's "best-effort" semantics).
 //! - Non-hot-settable fields (`bind`, `port`, `threads`, `dir`,
@@ -27,12 +28,12 @@ use kevy_resp::{
     encode_simple_string,
 };
 
-use crate::config_global;
+use crate::state::Ctx;
 
 use super::{appendfsync_str, eviction_str, log_level_str, wrong_args};
 
 pub(crate) fn cmd_config<A: ArgvView + ?Sized>(
-    cfg: &Config,
+    ctx: &Ctx<'_>,
     args: &A,
     out: &mut Vec<u8>,
     proto: RespVersion,
@@ -42,9 +43,9 @@ pub(crate) fn cmd_config<A: ArgvView + ?Sized>(
         None => return wrong_args(out, "config"),
     };
     match sub.as_slice() {
-        b"GET" => cmd_config_get(cfg, args, out, proto),
-        b"SET" => cmd_config_set(args, out),
-        b"REWRITE" => cmd_config_rewrite(out),
+        b"GET" => cmd_config_get(&ctx.state.config(), args, out, proto),
+        b"SET" => cmd_config_set(ctx, args, out),
+        b"REWRITE" => cmd_config_rewrite(ctx, out),
         b"RESETSTAT" => encode_simple_string(out, "OK"),
         _ => encode_error(
             out,
@@ -89,7 +90,7 @@ fn cmd_config_get<A: ArgvView + ?Sized>(
     }
 }
 
-fn cmd_config_set<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+fn cmd_config_set<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     if args.len() != 4 {
         return wrong_args(out, "config|set");
     }
@@ -97,19 +98,19 @@ fn cmd_config_set<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     let value = &args[3];
     // v1.42 — record the CONFIG SET event to the audit log (if enabled).
     let v_slice: &[u8] = value;
-    crate::audit_log::record(&[
+    ctx.state.obs.audit_record(&[
         &b"CONFIG"[..],
         &b"SET"[..],
         &key[..],
         v_slice,
     ]);
-    let live = config_global::get();
+    let live = ctx.state.config();
     let mut new_cfg = (*live).clone();
     match apply_hot_set(&mut new_cfg, &key, value) {
-        Ok(()) => match config_global::replace(Arc::new(new_cfg)) {
-            Ok(()) => encode_simple_string(out, "OK"),
-            Err(e) => encode_error(out, &format!("ERR {e}")),
-        },
+        Ok(()) => {
+            ctx.state.config_replace(Arc::new(new_cfg));
+            encode_simple_string(out, "OK");
+        }
         Err(SetError::ReadOnly(k)) => encode_error(
             out,
             &format!("ERR config setting '{k}' can't be changed at runtime, restart required"),
@@ -125,10 +126,10 @@ fn cmd_config_set<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     }
 }
 
-fn cmd_config_rewrite(out: &mut Vec<u8>) {
+fn cmd_config_rewrite(ctx: &Ctx<'_>, out: &mut Vec<u8>) {
     // v1.42 — audit the admin event.
-    crate::audit_log::record(&[&b"CONFIG"[..], &b"REWRITE"[..]]);
-    let cfg = config_global::get();
+    ctx.state.obs.audit_record(&[&b"CONFIG"[..], &b"REWRITE"[..]]);
+    let cfg = ctx.state.config();
     let Some(path) = cfg.source_path.clone() else {
         return encode_error(
             out,

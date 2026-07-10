@@ -33,44 +33,39 @@ use kevy_resp::{
 };
 use kevy_store::Store;
 
-use crate::config_global;
+use crate::state::Ctx;
 
 /// Operational-command dispatcher. Returns `true` if the verb was
-/// recognised (and a reply has been written to `out`). `config_global::get`
-/// is paid only inside the arms that actually need it — GET / SET and the
-/// other string / collection verbs flow past via the early `_ => false`
-/// without touching the global config Arc clone.
+/// recognised (and a reply has been written to `out`). The config
+/// snapshot is paid only inside the arms that actually need it —
+/// GET / SET and the other string / collection verbs flow past via
+/// the early `_ => false` without touching the config lock.
 pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
+    ctx: &Ctx<'_>,
     cmd: &[u8],
     store: &mut Store,
     args: &A,
     out: &mut Vec<u8>,
 ) -> bool {
     match cmd {
-        b"INFO" => {
-            let cfg = config_global::get();
-            cmd_info(&cfg, store, args, out, RespVersion::V2);
-        }
+        b"INFO" => cmd_info(ctx, store, args, out, RespVersion::V2),
         b"CLUSTER" => {
-            let cfg = config_global::get();
+            let cfg = ctx.state.config();
             cluster::cmd_cluster(&cfg, store, args, out);
         }
-        b"DEBUG" => cmd_debug(args, out),
+        b"DEBUG" => cmd_debug(ctx, args, out),
         b"WAIT" => crate::cmd_repl::cmd_wait(args, out),
         b"REPL.TOKEN" => crate::cmd_repl::cmd_repl_token(args, out),
         b"REPL.WAIT" => crate::cmd_repl::cmd_repl_wait(args, out),
         b"SHUTDOWN" => cmd_shutdown(args, out),
-        b"CONFIG" => {
-            let cfg = config_global::get();
-            config::cmd_config(&cfg, args, out, RespVersion::V2);
-        }
+        b"CONFIG" => config::cmd_config(ctx, args, out, RespVersion::V2),
         b"CLIENT" => client::cmd_client(args, out, RespVersion::V2),
-        b"ROLE" => replication::cmd_role(args, out),
+        b"ROLE" => replication::cmd_role(ctx, args, out),
         b"REPLICAOF" | b"SLAVEOF" => replication::cmd_replicaof(args, out),
-        b"MOVE-SCOPE" => scope_move::cmd_move_scope(store, args, out),
-        b"MOVE-SCOPE-INGEST" => scope_move::cmd_move_scope_ingest(store, args, out),
+        b"MOVE-SCOPE" => scope_move::cmd_move_scope(ctx, store, args, out),
+        b"MOVE-SCOPE-INGEST" => scope_move::cmd_move_scope_ingest(ctx, store, args, out),
         b"MEMORY" => {
-            let cfg = config_global::get();
+            let cfg = ctx.state.config();
             memory::cmd_memory(&cfg, store, args, out);
         }
         _ => return false,
@@ -81,12 +76,13 @@ pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
 // ───────────── INFO ─────────────
 
 pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
-    cfg: &Config,
+    ctx: &Ctx<'_>,
     store: &Store,
     args: &A,
     out: &mut Vec<u8>,
     proto: RespVersion,
 ) {
+    let cfg = ctx.state.config();
     // INFO [section]; we always emit the requested section (or all when
     // none / "default" / "all" / "everything" is requested).
     let section = args.get(1).map(<[u8]>::to_ascii_lowercase);
@@ -96,8 +92,8 @@ pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
     // it already holds (so the answering shard is never stale, even with the
     // active reaper disabled), then sum every shard's slot.
     stats::publish_gauges(store);
-    let totals = stats::aggregate();
-    let body = build_info_body(cfg, want, &totals);
+    let totals = ctx.state.obs.aggregate();
+    let body = build_info_body(ctx, &cfg, want, &totals);
     // RESP3: Verbatim text frame (`=N\r\ntxt:<body>\r\n`) so the
     // client can render it as plain text (e.g. redis-cli prints it
     // unchanged). RESP2 stays as a length-prefixed bulk.
@@ -109,7 +105,12 @@ pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
 
 /// Assemble the INFO body — every requested section in the
 /// canonical valkey order.
-fn build_info_body(cfg: &Config, want: Option<&[u8]>, totals: &stats::Totals) -> String {
+fn build_info_body(
+    ctx: &Ctx<'_>,
+    cfg: &Config,
+    want: Option<&[u8]>,
+    totals: &crate::state::Totals,
+) -> String {
     let mut body = String::new();
     if want_section(want, "server") {
         info_server(cfg, &mut body);
@@ -124,7 +125,7 @@ fn build_info_body(cfg: &Config, want: Option<&[u8]>, totals: &stats::Totals) ->
         info_persistence(cfg, &mut body);
     }
     if want_section(want, "stats") {
-        info_stats(totals, &mut body);
+        info_stats(ctx, totals, &mut body);
     }
     if want_section(want, "replication") {
         info_replication(&mut body);
@@ -167,7 +168,7 @@ fn info_clients(cfg: &Config, b: &mut String) {
     b.push_str("\r\n");
 }
 
-fn info_memory(cfg: &Config, totals: &stats::Totals, b: &mut String) {
+fn info_memory(cfg: &Config, totals: &crate::state::Totals, b: &mut String) {
     let used = totals.used_memory;
     let peak = totals.used_memory_peak;
     b.push_str("# Memory\r\n");
@@ -233,7 +234,7 @@ fn info_persistence(cfg: &Config, b: &mut String) {
     b.push_str("\r\n");
 }
 
-fn info_stats(totals: &stats::Totals, b: &mut String) {
+fn info_stats(ctx: &Ctx<'_>, totals: &crate::state::Totals, b: &mut String) {
     b.push_str("# Stats\r\n");
     b.push_str(&format!(
         "total_connections_received:{}\r\n",
@@ -245,7 +246,7 @@ fn info_stats(totals: &stats::Totals, b: &mut String) {
     ));
     b.push_str(&format!(
         "instantaneous_ops_per_sec:{}\r\n",
-        stats::instantaneous_ops_per_sec(totals.commands_processed)
+        ctx.state.obs.instantaneous_ops_per_sec(totals.commands_processed)
     ));
     b.push_str(&format!("expired_keys:{}\r\n", totals.expired_keys));
     b.push_str("\r\n");
@@ -332,7 +333,7 @@ fn info_cluster(cfg: &Config, b: &mut String) {
     b.push_str("\r\n");
 }
 
-fn info_keyspace(totals: &stats::Totals, b: &mut String) {
+fn info_keyspace(totals: &crate::state::Totals, b: &mut String) {
     b.push_str("# Keyspace\r\n");
     // Redis omits the `dbN:` line entirely for an empty keyspace. `avg_ttl` is
     // a Redis estimate we don't track; report 0 (its "unknown" value).
@@ -347,7 +348,7 @@ fn info_keyspace(totals: &stats::Totals, b: &mut String) {
 
 // ───────────── DEBUG ─────────────
 
-fn cmd_debug<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+fn cmd_debug<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     let sub = match args.get(1) {
         Some(s) => s.to_ascii_uppercase(),
         None => return wrong_args(out, "debug"),
@@ -358,7 +359,7 @@ fn cmd_debug<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     for i in 1..args.len() {
         event.push(&args[i]);
     }
-    crate::audit_log::record(&event);
+    ctx.state.obs.audit_record(&event);
     match sub.as_slice() {
         b"SLEEP" => {
             let secs: f64 = args

@@ -12,8 +12,8 @@ use kevy_store::Store;
 
 use crate::cmd::{self, scan_pattern, upper_verb};
 use crate::{
-    Argv, KevyCommands, cmd_block, cmd_block_serve, cmd_hello, cmd_resolve, config_global,
-    dispatch, map_appendfsync, map_eviction_policy, ops,
+    Argv, KevyCommands, cmd_block, cmd_block_serve, cmd_hello, cmd_resolve, dispatch,
+    map_appendfsync, map_eviction_policy, ops,
 };
 
 impl Commands for KevyCommands {
@@ -132,16 +132,16 @@ impl Commands for KevyCommands {
     }
 
     fn dispatch<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8> {
-        dispatch::dispatch(store, args)
+        dispatch::dispatch(&self.ctx(), store, args)
     }
 
     fn dispatch_into<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A, out: &mut Vec<u8>) {
-        dispatch::dispatch_into(store, args, out);
+        dispatch::dispatch_into(&self.ctx(), store, args, out);
     }
 
     fn dispatch_resp3<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8> {
         let mut out = Vec::with_capacity(64);
-        dispatch::dispatch_into_resp3(store, args, &mut out);
+        dispatch::dispatch_into_resp3(&self.ctx(), store, args, &mut out);
         out
     }
 
@@ -151,7 +151,7 @@ impl Commands for KevyCommands {
         args: &A,
         out: &mut Vec<u8>,
     ) {
-        dispatch::dispatch_into_resp3(store, args, out);
+        dispatch::dispatch_into_resp3(&self.ctx(), store, args, out);
     }
 
     fn is_quit<A: ArgvView + ?Sized>(&self, args: &A) -> bool {
@@ -160,11 +160,11 @@ impl Commands for KevyCommands {
     }
 
     fn on_shard_init(&self, store: &mut Store) {
-        // Snapshot the process-wide config and apply its `[memory]` section
-        // to this shard. Reading `config_global::get()` returns
-        // `Config::default()` (maxmemory=0) when running outside `serve` —
-        // e.g. tests / embedded — so the call is harmlessly a no-op there.
-        let cfg = config_global::get();
+        // Snapshot the shared config and apply its `[memory]` section to
+        // this shard. Outside `serve` (tests / embedded) the state holds
+        // `Config::default()` (maxmemory=0), so the call is harmlessly a
+        // no-op there.
+        let cfg = self.state().config();
         store.set_max_memory(
             cfg.memory.maxmemory,
             map_eviction_policy(cfg.memory.maxmemory_policy),
@@ -172,13 +172,16 @@ impl Commands for KevyCommands {
     }
 
     fn on_shard_start(&self, shard: usize) {
-        // Thread-per-core: the reactor thread *is* the shard, so a
-        // thread-local carries per-shard identity into dispatch handlers
-        // (CLUSTER MYID / the `myself` flag in CLUSTER NODES).
+        // Thread-per-core: the reactor thread *is* the shard. The shard id
+        // lands both in this clone's ShardCtx (per-shard state proper) and
+        // in the legacy thread-local that dispatch handlers still read
+        // (CLUSTER MYID / the `myself` flag in CLUSTER NODES) until the W4
+        // thread-local migration.
+        self.shard_ctx().set_shard_id(shard);
         ops::cluster::set_current_shard(shard);
         // Cache this shard's INFO-stats slot for lock-free publish + counter
         // bumps (see `ops::stats`).
-        ops::stats::register_shard(shard);
+        ops::stats::register_shard(shard, self.state().obs.slot(shard));
     }
 
     fn on_persist_stats(&self, in_flight: bool, aof_rewrites_total: u64) {
@@ -201,7 +204,9 @@ impl Commands for KevyCommands {
         // v3-cluster Phase 1.5: feed the offset into kevy-elect so
         // the next heartbeat carries the up-to-date `repl_offset`.
         // No-op when the elector isn't running.
-        crate::elect_integration::set_view_offset(master_repl_offset);
+        self.state()
+            .election
+            .set_view_offset(self.shard_ctx().shard_id(), master_repl_offset);
     }
 
     fn on_command(&self) {
@@ -216,7 +221,7 @@ impl Commands for KevyCommands {
         // hz=0 disables the active reaper (lazy expiry still runs); else
         // every `1000/hz` ms — capped at 10 s so a misconfig can't park the
         // reactor's tick check loop forever.
-        let cfg = config_global::get();
+        let cfg = self.state().config();
         let hz = cfg.expiry.hz;
         if hz == 0 {
             0
@@ -279,7 +284,7 @@ impl Commands for KevyCommands {
         // batch size; up to 16 rounds per tick is well below Redis's 25 %
         // CPU budget at the default 10 Hz cadence. Cheap when no TTL'd
         // keys exist (a single map-emptiness check + bucket walk).
-        let cfg = config_global::get();
+        let cfg = self.state().config();
         // v3.14 A0: a replica does NOT actively expire — the primary
         // owns TTL truth and ships DEL/expiry effects through the
         // replication feed (Redis semantics; diverging reapers would
@@ -305,18 +310,18 @@ impl Commands for KevyCommands {
         // `INFO`, answered on any one shard, can sum the process-wide view.
         ops::stats::publish_gauges(store);
         // The lead shard advances the process-wide ops-per-sec sampler.
-        ops::stats::sample_ops_if_lead();
+        ops::stats::sample_ops_if_lead(&self.state().obs);
     }
 
     fn live_runtime_config(&self) -> kevy_rt::LiveRuntimeConfig {
-        // Per-tick (every 100 ms by default) re-read of the process-wide
-        // config. When the embedder hasn't called `config_init` (tests,
-        // hand-rolled `Runtime`s in examples), return all-None so the
-        // builder's explicit `with_appendfsync` / `with_auto_aof_rewrite`
-        // choices aren't silently clobbered by `Config::default()` values.
-        // Once `config_init` has run, every field is wrapped in `Some` so
-        // the shard re-applies CONFIG SET changes within one tick.
-        if !config_global::is_initialised() {
+        // Per-tick (every 100 ms by default) re-read of the shared config.
+        // When no explicit config was ever installed (tests, hand-rolled
+        // `Runtime`s in examples), return all-None so the builder's
+        // explicit `with_appendfsync` / `with_auto_aof_rewrite` choices
+        // aren't silently clobbered by `Config::default()` values. Once an
+        // explicit config exists, every field is wrapped in `Some` so the
+        // shard re-applies CONFIG SET changes within one tick.
+        if !self.state().config_is_explicit() {
             // v3.16: the promotion counter still flows — it doesn't
             // clobber any builder choice, and an embedded promotion
             // must fence feed generations too.
@@ -325,7 +330,7 @@ impl Commands for KevyCommands {
                 ..kevy_rt::LiveRuntimeConfig::default()
             };
         }
-        let cfg = config_global::get();
+        let cfg = self.state().config();
         let hz = cfg.expiry.hz;
         let tick_ms = if hz == 0 {
             Some(0)
@@ -415,7 +420,7 @@ impl Commands for KevyCommands {
         serve_argv: &A,
         kind: BlockKind,
     ) -> bool {
-        cmd_block_serve::block_ready(store, serve_argv, kind)
+        cmd_block_serve::block_ready(&self.ctx(), store, serve_argv, kind)
     }
 
     fn wake_idx<A: ArgvView + ?Sized>(&self, args: &A) -> Option<u8> {

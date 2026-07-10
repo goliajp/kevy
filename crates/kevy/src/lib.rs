@@ -20,16 +20,17 @@
 //! Run commands against an in-process keyspace (no sockets):
 //!
 //! ```
-//! use kevy::{Argv, KeyspaceStore, dispatch};
+//! use kevy::{Argv, KevyCommands, KeyspaceStore};
 //!
+//! let kevy = KevyCommands::new();
 //! let mut store = KeyspaceStore::new();
 //! let cmd = |parts: &[&[u8]]| Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
-//! assert_eq!(dispatch(&mut store, &cmd(&[b"SET", b"k", b"v"])), b"+OK\r\n");
-//! assert_eq!(dispatch(&mut store, &cmd(&[b"GET", b"k"])), b"$1\r\nv\r\n");
-//! assert_eq!(dispatch(&mut store, &cmd(&[b"INCR", b"n"])), b":1\r\n");
+//! assert_eq!(kevy.dispatch(&mut store, &cmd(&[b"SET", b"k", b"v"])), b"+OK\r\n");
+//! assert_eq!(kevy.dispatch(&mut store, &cmd(&[b"GET", b"k"])), b"$1\r\nv\r\n");
+//! assert_eq!(kevy.dispatch(&mut store, &cmd(&[b"INCR", b"n"])), b":1\r\n");
 //! ```
 //!
-//! To run the full server: [`serve`]`(ip, port, nshards, dir, aof)`.
+//! To run the full server: [`serve`]`(config)`.
 #![forbid(unsafe_code)]
 
 use kevy_resp::{encode_error, parse_command};
@@ -46,7 +47,6 @@ mod cmd_class;
 mod cmd_zadd;
 mod cmd_block;
 mod metrics_http;
-pub(crate) mod audit_log;
 mod cmd_block_serve;
 mod cmd_data;
 mod cmd_hash_ttl;
@@ -63,7 +63,6 @@ mod cmd_lua;
 mod cmd_repl;
 mod cmd_resolve;
 mod commands;
-mod config_global;
 mod replication;
 mod dispatch;
 mod dispatch_collections;
@@ -71,21 +70,18 @@ mod dispatch_collections_v127;
 mod dispatch_resp3;
 mod dispatch_geo;
 mod dispatch_stream;
-mod elect_integration;
 mod elect_persist;
 mod ops;
 mod replica_runner;
 mod replica_state;
-mod scope_integration;
+mod state;
 pub mod verb_meta;
 mod cmd_command;
 mod cmd_failover;
 
-pub use config_global::init as config_init;
-pub use config_global::replace as config_replace;
-pub use dispatch::dispatch;
 pub use kevy_rt::Argv;
 pub use kevy_store::Store as KeyspaceStore;
+pub use state::{KevyCommands, RuntimeState};
 
 /// Test-only hook to install per-shard replica inbox senders into the
 /// process-global slot (`replica_state::install_senders`). Production
@@ -97,29 +93,11 @@ pub fn install_replica_senders_for_test(senders: Vec<kevy_rt::ReplicaInboxSender
     replica_state::install_senders(senders);
 }
 
-/// Test-only hook to install the scope_integration globals
-/// without bringing up a full `kevy::serve`. Integration tests in
-/// `tests/scope_*.rs` use this to verify routing on a single
-/// Runtime. Calls into `scope_integration::install` and
-/// `install_self_id`; idempotent because both are OnceLocks.
-/// Returns the install_err if `[cluster] scopes` is malformed.
-#[doc(hidden)]
-pub fn install_scope_integration_for_test(cfg: &kevy_config::Config) -> Result<(), String> {
-    scope_integration::install(cfg)?;
-    scope_integration::install_self_id(cfg);
-    Ok(())
-}
-
 /// What to do with a connection after draining its buffered commands.
 pub enum AfterDrain {
     KeepOpen,
     Close,
 }
-
-/// kevy's command set, plugged into the `kevy-rt` runtime. Stateless — the
-/// keyspace lives in each shard's `Store`, so this is a zero-sized clone target.
-#[derive(Clone, Copy, Default)]
-pub struct KevyCommands;
 
 
 /// Translate a `kevy_config::EvictionPolicy` (the user-facing TOML enum) into
@@ -141,12 +119,6 @@ pub(crate) fn map_eviction_policy(p: kevy_config::EvictionPolicy) -> kevy_store:
     }
 }
 
-/// Run the thread-per-core server forever: `nshards` shards on `ip:port`,
-/// snapshotting to / restoring from `data_dir`, with the AOF on/off.
-///
-/// Reads `cfg.persistence.appendfsync` from the process-wide config (set by
-/// `config_init`) to pick the AOF fsync policy. Defaults to `EverySec`
-/// when no config is installed (matches the Wave 1 behaviour).
 /// **v1.39** — signal flag flipped by the SIGTERM / SIGINT handler.
 /// Async-signal-safe; AtomicBool::store is signal-safe per the C
 /// memory model.
@@ -188,20 +160,19 @@ fn install_signal_handlers(_stop: Arc<AtomicBool>) {
     // No-op on non-Unix; production deployments are Unix anyway.
 }
 
-pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_aof: bool) -> ! {
-    // The data dir is a PRECONDITION of everything below (AOF, index
-    // catalogs, elect.meta, replication state) — create it up front
-    // instead of failing later in whichever subsystem touches it
-    // first with a bare ENOENT.
-    if let Err(e) = std::fs::create_dir_all(&data_dir) {
-        eprintln!("kevy: cannot create data dir {}: {e}", data_dir.display());
-        std::process::exit(1);
-    }
-    let cfg = config_global::get();
-    cmd_index::boot(&data_dir);
-    cmd_view::boot(&data_dir);
-    let runtime = build_runtime(&cfg, ip, port, nshards, data_dir, enable_aof);
-    install_integrations(&cfg, nshards);
+/// Run the thread-per-core server forever, entirely shaped by `cfg`:
+/// `cfg.server.threads` shards on `cfg.server.bind:cfg.server.port`,
+/// snapshotting to / restoring from `cfg.server.data_dir`, AOF per
+/// `cfg.persistence.aof`. `threads = 0` (the auto sentinel) runs one
+/// shard; the CLI resolves auto to `available_parallelism()` before
+/// calling in.
+pub fn serve(cfg: Arc<kevy_config::Config>) -> ! {
+    let state = boot_state(&cfg);
+    let runtime = build_runtime(&cfg, KevyCommands::with_state(Arc::clone(&state)));
+    // Spawn the kevy-elect control plane when the operator configured
+    // `[cluster] peers = "..."` + `node_id`. Opt-in; empty peers
+    // leaves the subsystem dormant.
+    state.election.maybe_start(&cfg);
     let stop = Arc::new(AtomicBool::new(false));
     // v1.39 — install SIGTERM + SIGINT handlers that flip `stop`,
     // triggering the runtime's existing drain path (fsync AOF, close
@@ -209,9 +180,7 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
     // that bridges the signal-safe static into the per-run `Arc`.
     install_signal_handlers(Arc::clone(&stop));
     // v1.41 — Prometheus /metrics endpoint. No-op when port = 0.
-    metrics_http::spawn_if_enabled(&config_global::get());
-    // v1.42 — audit log init. No-op when log_path is empty.
-    audit_log::init(&config_global::get().audit.log_path);
+    metrics_http::spawn_if_enabled(&state);
     // Replica runners (if any) live in process-global state in
     // `replica_state` — they are started by `replication::apply` for
     // the startup `role = "replica"` path and by `REPLICAOF` at
@@ -222,7 +191,7 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
     let run_result = runtime.run(stop);
     // Stop kevy-elect after the runtime exits so the control plane
     // doesn't outlive the data plane.
-    elect_integration::shutdown();
+    state.election.shutdown();
     if let Err(e) = run_result {
         eprintln!("kevy: runtime error: {e}");
         std::process::exit(1);
@@ -230,22 +199,43 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
     std::process::exit(0);
 }
 
+/// Build the [`RuntimeState`] for one server boot: create the data
+/// dir (a precondition of AOF, index catalogs, elect.meta and
+/// replication state — fail here with a named error, not later with
+/// a bare ENOENT), validate `[cluster] scopes`, and load the index /
+/// view sidecars.
+fn boot_state(cfg: &Arc<kevy_config::Config>) -> Arc<RuntimeState> {
+    let data_dir = cfg.server.data_dir.clone();
+    let nshards = cfg.server.threads.max(1);
+    if let Err(e) = std::fs::create_dir_all(&data_dir) {
+        eprintln!("kevy: cannot create data dir {}: {e}", data_dir.display());
+        std::process::exit(1);
+    }
+    let state = match RuntimeState::new(Arc::clone(cfg), data_dir, nshards) {
+        Ok(s) => Arc::new(s),
+        Err(msg) => {
+            eprintln!("kevy: bad [cluster] scopes config: {msg}");
+            std::process::exit(1);
+        }
+    };
+    if let Some(dir) = state.sidecar_dir() {
+        cmd_index::boot(dir);
+        cmd_view::boot(dir);
+    }
+    state
+}
+
 /// Assemble the configured [`Runtime`]: the builder chain plus the
 /// cluster / feed / UDS opt-in branches and the replication wiring.
-fn build_runtime(
-    cfg: &kevy_config::Config,
-    ip: [u8; 4],
-    port: u16,
-    nshards: usize,
-    data_dir: PathBuf,
-    enable_aof: bool,
-) -> Runtime<KevyCommands> {
+fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<KevyCommands> {
+    let state = Arc::clone(commands.state());
+    let nshards = state.nshards();
     let fsync = map_appendfsync(cfg.persistence.appendfsync);
-    let mut runtime = Runtime::new(ip, port, nshards, KevyCommands)
-        .with_data_dir(data_dir)
+    let mut runtime = Runtime::new(cfg.server.bind, cfg.server.port, nshards, commands)
+        .with_data_dir(cfg.server.data_dir.clone())
         .with_accept_shards(cfg.server.accept_shards)
         .with_max_clients(cfg.server.max_clients)
-        .with_aof(enable_aof)
+        .with_aof(cfg.persistence.aof)
         .with_appendfsync(fsync)
         .with_auto_aof_rewrite(
             cfg.persistence.auto_aof_rewrite_percentage,
@@ -272,26 +262,6 @@ fn build_runtime(
             runtime = runtime.with_unix_socket(PathBuf::from(path));
         }
     replication::apply(runtime, cfg, nshards)
-}
-
-/// Wire the control-plane integrations before the runtime runs.
-fn install_integrations(cfg: &kevy_config::Config, nshards: usize) {
-    // Spawn the kevy-elect control plane when the operator
-    // configured `[cluster] peers = "..."` + `node_id`. Opt-in;
-    // empty peers leaves the subsystem dormant.
-    // Allocate per-shard offset slots first (always, even when
-    // elect is dormant — cost is `nshards` AtomicU64 / process,
-    // negligible).
-    elect_integration::install_shard_offsets(nshards);
-    elect_integration::maybe_start(cfg);
-    // Scope-routing setup. Idempotent; a bad scope config fails
-    // the boot loudly here rather than at the first wrong-shard
-    // write.
-    if let Err(msg) = scope_integration::install(cfg) {
-        eprintln!("kevy: bad [cluster] scopes config: {msg}");
-        std::process::exit(1);
-    }
-    scope_integration::install_self_id(cfg);
 }
 
 /// Resolved first cluster port: `[cluster].port_base`, or `server.port + 1`
@@ -321,11 +291,16 @@ pub(crate) fn map_appendfsync(p: kevy_config::AppendFsync) -> kevy_persist::Fsyn
 /// Parse and dispatch every complete command in `input`, appending replies to
 /// `output`. Consumes parsed bytes; leaves a trailing partial frame. Returns
 /// `Close` after a `QUIT` or a protocol error (whose reply is already appended).
-pub fn drain_commands(store: &mut Store, input: &mut Vec<u8>, output: &mut Vec<u8>) -> AfterDrain {
+pub fn drain_commands(
+    kevy: &KevyCommands,
+    store: &mut Store,
+    input: &mut Vec<u8>,
+    output: &mut Vec<u8>,
+) -> AfterDrain {
     loop {
         match parse_command(input) {
             Ok(Some((args, consumed))) => {
-                let reply = dispatch(store, &args);
+                let reply = kevy.dispatch(store, &args);
                 output.extend_from_slice(&reply);
                 input.drain(..consumed);
                 if args
@@ -346,13 +321,13 @@ pub fn drain_commands(store: &mut Store, input: &mut Vec<u8>, output: &mut Vec<u
 
 /// Blocking single-connection handler. Shares command logic with the reactor;
 /// retained for tests and simple uses.
-pub fn handle_conn(conn: &Socket, store: &mut Store) -> io::Result<()> {
+pub fn handle_conn(kevy: &KevyCommands, conn: &Socket, store: &mut Store) -> io::Result<()> {
     let mut input: Vec<u8> = Vec::with_capacity(4096);
     let mut output: Vec<u8> = Vec::new();
     let mut chunk = [0u8; 4096];
 
     loop {
-        let after = drain_commands(store, &mut input, &mut output);
+        let after = drain_commands(kevy, store, &mut input, &mut output);
         if !output.is_empty() {
             conn.write_all(&output)?;
             output.clear();

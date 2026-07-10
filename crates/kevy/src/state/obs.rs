@@ -1,0 +1,218 @@
+//! Observability slots owned by [`RuntimeState`]: per-shard stats,
+//! the ops-per-sec sampler ring, and the audit-log handle.
+//!
+//! [`RuntimeState`]: crate::RuntimeState
+
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::{Arc, Mutex};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+/// One shard's observability slot. All atomics are `Relaxed`: these are
+/// statistics, never used to establish happens-before.
+#[derive(Default)]
+pub(crate) struct ShardStats {
+    pub used_memory: AtomicU64,
+    pub used_memory_peak: AtomicU64,
+    pub keys: AtomicU64,
+    pub expires: AtomicU64,
+    pub expired_keys: AtomicU64,
+    pub evicted_keys: AtomicU64,
+    pub commands_processed: AtomicU64,
+    pub connections_received: AtomicU64,
+}
+
+/// Process-wide totals, summed across every shard slot.
+#[derive(Default)]
+pub(crate) struct Totals {
+    pub used_memory: u64,
+    pub used_memory_peak: u64,
+    pub keys: u64,
+    pub expires: u64,
+    pub expired_keys: u64,
+    pub evicted_keys: u64,
+    pub commands_processed: u64,
+    pub connections_received: u64,
+}
+
+/// Retained ops-per-sec samples — 16 × 100 ms default tick ≈ a 1.6 s window.
+const OPS_WINDOW: usize = 16;
+
+pub(crate) struct ObsState {
+    /// Append-only ADMIN-command audit log. `None` = OFF (`[audit]
+    /// log_path` empty, or the file failed to open at boot).
+    audit: Option<Mutex<File>>,
+    /// One slot per shard, preallocated at construction so the hot
+    /// path never takes a registry lock. Gauges are overwritten per
+    /// tick; counters are published from the shard thread-locals.
+    shard_stats: Box<[Arc<ShardStats>]>,
+    /// `(elapsed_ms_since_start, total_commands_processed)` samples,
+    /// pushed by the lead shard once per tick.
+    ops_ring: Mutex<Vec<(u128, u64)>>,
+    /// Anchor for the monotonic millisecond clock the sampler uses.
+    start: Instant,
+}
+
+impl ObsState {
+    pub(crate) fn new(audit_log_path: &Path, nshards: usize) -> Self {
+        Self {
+            audit: open_audit_log(audit_log_path),
+            shard_stats: (0..nshards.max(1))
+                .map(|_| Arc::new(ShardStats::default()))
+                .collect(),
+            ops_ring: Mutex::new(Vec::new()),
+            start: Instant::now(),
+        }
+    }
+
+    /// Shard `shard`'s stats slot, for the thread-local cache set up by
+    /// `Commands::on_shard_start`. `None` when the runtime was built
+    /// with more shards than this state was sized for.
+    pub(crate) fn slot(&self, shard: usize) -> Option<Arc<ShardStats>> {
+        self.shard_stats.get(shard).cloned()
+    }
+
+    /// Sum every shard's slot for the process-wide `INFO` view.
+    pub(crate) fn aggregate(&self) -> Totals {
+        let mut t = Totals::default();
+        for s in &self.shard_stats {
+            t.used_memory += s.used_memory.load(Relaxed);
+            t.used_memory_peak += s.used_memory_peak.load(Relaxed);
+            t.keys += s.keys.load(Relaxed);
+            t.expires += s.expires.load(Relaxed);
+            t.expired_keys += s.expired_keys.load(Relaxed);
+            t.evicted_keys += s.evicted_keys.load(Relaxed);
+            t.commands_processed += s.commands_processed.load(Relaxed);
+            t.connections_received += s.connections_received.load(Relaxed);
+        }
+        t
+    }
+
+    /// Push one ops-per-sec sample. Called once per tick by the lead
+    /// shard (see `ops::stats::sample_ops_if_lead`).
+    pub(crate) fn push_ops_sample(&self, total_commands: u64) {
+        let mut ring = self.ops_ring.lock().expect("ops_ring poisoned");
+        ring.push((self.elapsed_ms(), total_commands));
+        if ring.len() > OPS_WINDOW {
+            let drop = ring.len() - OPS_WINDOW;
+            ring.drain(0..drop);
+        }
+    }
+
+    /// Average commands/sec over the retained sample window. `current`
+    /// is the live process-wide command total (so the most recent
+    /// traffic counts even between samples). Returns 0 until two
+    /// samples span a non-zero interval.
+    pub(crate) fn instantaneous_ops_per_sec(&self, current: u64) -> u64 {
+        let ring = self.ops_ring.lock().expect("ops_ring poisoned");
+        let Some(&(oldest_ms, oldest_cmds)) = ring.first() else {
+            return 0;
+        };
+        let dt_ms = self.elapsed_ms().saturating_sub(oldest_ms);
+        if dt_ms == 0 {
+            return 0;
+        }
+        let dc = current.saturating_sub(oldest_cmds);
+        ((u128::from(dc) * 1000) / dt_ms) as u64
+    }
+
+    fn elapsed_ms(&self) -> u128 {
+        self.start.elapsed().as_millis()
+    }
+
+    /// Log one ADMIN command event. `args` includes the verb. Best-effort
+    /// write — audit write failures never abort the calling command path.
+    /// Format: `<unix_micros>\t<command>\t<arg1>\t...\n`, one line per
+    /// event, args truncated at 256 bytes and tab/newline-sanitised.
+    pub(crate) fn audit_record(&self, args: &[&[u8]]) {
+        let Some(mu) = &self.audit else { return };
+        let mut line = String::with_capacity(128);
+        let micros = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_micros())
+            .unwrap_or(0);
+        line.push_str(&micros.to_string());
+        for arg in args {
+            line.push('\t');
+            let s = String::from_utf8_lossy(&arg[..arg.len().min(256)]);
+            for c in s.chars() {
+                match c {
+                    '\t' | '\n' | '\r' => line.push(' '),
+                    _ => line.push(c),
+                }
+            }
+            if arg.len() > 256 {
+                line.push('…');
+            }
+        }
+        line.push('\n');
+        if let Ok(mut f) = mu.lock() {
+            let _ = f.write_all(line.as_bytes());
+            let _ = f.flush();
+        }
+    }
+}
+
+/// Open the audit log in append-only mode (`O_APPEND`; process death
+/// never corrupts). Empty path = audit OFF; an open failure is loud on
+/// stderr but non-fatal (the server still boots, audit stays OFF).
+fn open_audit_log(path: &Path) -> Option<Mutex<File>> {
+    if path.as_os_str().is_empty() {
+        return None;
+    }
+    match OpenOptions::new().create(true).append(true).open(path) {
+        Ok(f) => Some(Mutex::new(f)),
+        Err(e) => {
+            eprintln!("kevy: audit log {} could not open: {e}", path.display());
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn audit_off_when_path_empty() {
+        let obs = ObsState::new(Path::new(""), 1);
+        // Must be a silent no-op.
+        obs.audit_record(&[b"CONFIG", b"SET", b"maxmemory", b"1g"]);
+        assert!(obs.audit.is_none());
+    }
+
+    #[test]
+    fn audit_records_one_sanitised_line() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path: PathBuf = std::env::temp_dir().join(format!("kevy-audit-{nanos}"));
+        let obs = ObsState::new(&path, 1);
+        obs.audit_record(&[b"DEBUG", b"tab\there"]);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(text.lines().count(), 1);
+        assert!(text.contains("DEBUG\ttab here"), "got: {text:?}");
+    }
+
+    #[test]
+    fn aggregate_sums_across_slots() {
+        let obs = ObsState::new(Path::new(""), 3);
+        obs.shard_stats[0].keys.store(2, Relaxed);
+        obs.shard_stats[2].keys.store(5, Relaxed);
+        assert_eq!(obs.aggregate().keys, 7);
+    }
+
+    #[test]
+    fn ops_ring_caps_at_window() {
+        let obs = ObsState::new(Path::new(""), 1);
+        for i in 0..(OPS_WINDOW as u64 + 10) {
+            obs.push_ops_sample(i);
+        }
+        assert_eq!(obs.ops_ring.lock().unwrap().len(), OPS_WINDOW);
+    }
+}

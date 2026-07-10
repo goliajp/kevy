@@ -39,16 +39,6 @@ fn current_shard() -> usize {
     if s == usize::MAX { 0 } else { s }
 }
 
-/// Pub(crate) wrapper for [`current_shard`] — same logic, exposed
-/// so `elect_integration` can route `on_replication_view` calls
-/// to the correct per-shard offset slot. (Distinct name to make
-/// the intent clear at call sites — every shard's
-/// `Commands::on_replication_view` runs on its own reactor thread,
-/// and this thread-local is how that thread identifies itself.)
-pub(crate) fn current_shard_for_elect() -> usize {
-    current_shard()
-}
-
 /// v1.27.4: same thread-local exposed for `cmd_lua`. The Lua
 /// dispatch closure consults this to validate that every inner
 /// `redis.call` target key lives on the same shard as the EVAL

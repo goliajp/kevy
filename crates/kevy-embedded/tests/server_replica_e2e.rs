@@ -97,7 +97,7 @@ impl Server {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = stop.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands)
+            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands::sharded(1))
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replication(true, 1024 * 1024)

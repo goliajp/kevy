@@ -167,6 +167,7 @@ fn id_for_key<A: ArgvView + ?Sized>(args: &A, keys_start: usize, key: &[u8]) -> 
 /// - `XREAD` → re-run the (read-only) replay and check it produced output.
 /// - `XREADGROUP` → the group has entries past its last-delivered id.
 pub(crate) fn block_ready<A: ArgvView + ?Sized>(
+    ctx: &crate::state::Ctx<'_>,
     store: &mut Store,
     serve_argv: &A,
     kind: BlockKind,
@@ -182,7 +183,7 @@ pub(crate) fn block_ready<A: ArgvView + ?Sized>(
             // XREAD is read-only, so dispatching the replay is itself a
             // safe peek: non-empty output ⇒ data is available.
             let mut tmp = Vec::new();
-            crate::dispatch::dispatch_into(store, serve_argv, &mut tmp);
+            crate::dispatch::dispatch_into(ctx, store, serve_argv, &mut tmp);
             !tmp.is_empty()
         }
         BlockKind::XReadGroupBlock => xreadgroup_ready(store, serve_argv),

@@ -13,20 +13,18 @@
 //! resumes exclusively past it. `"0"` = start / exhausted (SCAN
 //! convention).
 
-use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::path::Path;
 
 use kevy_index::{Catalog, IndexKind, IndexSpec, ValType};
 use kevy_resp::{ArgvView, encode_error, encode_integer};
 use crate::index_runtime;
 
-/// Data dir for the catalog sidecar (set once by `serve`).
-static SIDECAR_DIR: OnceLock<PathBuf> = OnceLock::new();
 const SIDECAR: &str = "index-catalog.meta";
 
-/// Install the sidecar dir + load a persisted catalog at boot.
-pub(crate) fn boot(data_dir: &std::path::Path) {
-    let _ = SIDECAR_DIR.set(data_dir.to_path_buf());
+/// Load a persisted catalog at boot. The sidecar dir itself lives in
+/// [`crate::RuntimeState`] (`sidecar_dir()`); `serve` calls this with
+/// it once before the reactor starts.
+pub(crate) fn boot(data_dir: &Path) {
     if let Ok(text) = std::fs::read_to_string(data_dir.join(SIDECAR))
         && let Some(cat) = Catalog::from_sidecar(&text)
         && !cat.is_empty()
@@ -35,17 +33,11 @@ pub(crate) fn boot(data_dir: &std::path::Path) {
     }
 }
 
-/// v2.6: the view catalog persists next to the index catalog.
-pub(crate) fn sidecar_dir() -> Option<&'static std::path::Path> {
-    SIDECAR_DIR.get().map(PathBuf::as_path)
-}
-
-fn persist_sidecar(cat: &Catalog) {
-    if let Some(dir) = SIDECAR_DIR.get() {
-        let tmp = dir.join("index-catalog.meta.tmp");
-        if std::fs::write(&tmp, cat.to_sidecar()).is_ok() {
-            let _ = std::fs::rename(&tmp, dir.join(SIDECAR));
-        }
+fn persist_sidecar(dir: Option<&Path>, cat: &Catalog) {
+    let Some(dir) = dir else { return };
+    let tmp = dir.join("index-catalog.meta.tmp");
+    if std::fs::write(&tmp, cat.to_sidecar()).is_ok() {
+        let _ = std::fs::rename(&tmp, dir.join(SIDECAR));
     }
 }
 
@@ -53,7 +45,13 @@ fn persist_sidecar(cat: &Catalog) {
 
 /// `IDX.CREATE <name> ON PREFIX <p> FIELD <f> TYPE <t> KIND <k>
 /// [MAXMEM b] [DIM d] [DISTANCE cosine|l2|ip] [M m] [EF ef]`.
-pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+const CREATE_USAGE: &str = "ERR usage: IDX.CREATE name ON PREFIX p FIELD f TYPE i64|f64|str|vector KIND range|unique|text|ann [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]";
+
+pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
+    args: &A,
+    out: &mut Vec<u8>,
+    data_dir: Option<&Path>,
+) {
     if args.len() < 11
         || args.len() % 2 != 1
         || !args[2].eq_ignore_ascii_case(b"ON")
@@ -62,23 +60,14 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) 
         || !args[7].eq_ignore_ascii_case(b"TYPE")
         || !args[9].eq_ignore_ascii_case(b"KIND")
     {
-        return encode_error(
-            out,
-            "ERR usage: IDX.CREATE name ON PREFIX p FIELD f TYPE i64|f64|str|vector KIND range|unique|text|ann [MAXMEM b] [DIM d] [DISTANCE c] [M m] [EF e]",
-        );
+        return encode_error(out, CREATE_USAGE);
     }
     let Ok(opts) = parse_create_opts(args, out) else {
         return;
     };
-    let Some(ty) = ValType::parse(&args[8]) else {
-        return encode_error(out, "ERR TYPE must be i64|f64|str|vector");
+    let Ok((ty, kind)) = parse_type_kind(args, out) else {
+        return;
     };
-    let Some(kind) = IndexKind::parse(&args[10]) else {
-        return encode_error(out, "ERR KIND must be range|unique|text|ann");
-    };
-    if args[4].is_empty() {
-        return encode_error(out, "ERR PREFIX must be non-empty");
-    }
     let Ok(ann) = validate_kind_combo(kind, ty, &opts, out) else {
         return;
     };
@@ -91,16 +80,37 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) 
         max_bytes: opts.max_bytes,
         ann,
         group_by: opts.group_by,
-        };
+    };
     let mut cat = index_runtime::catalog().map(|c| (*c).clone()).unwrap_or_default();
     match cat.create(spec) {
         Ok(()) => {
-            persist_sidecar(&cat);
+            persist_sidecar(data_dir, &cat);
             index_runtime::install_catalog(cat);
             out.extend_from_slice(b"+OK\r\n");
         }
         Err(e) => encode_error(out, e),
     }
+}
+
+/// TYPE / KIND / PREFIX validation for IDX.CREATE; an error reply is
+/// already written on `Err`.
+fn parse_type_kind<A: ArgvView + ?Sized>(
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Result<(ValType, IndexKind), ()> {
+    let Some(ty) = ValType::parse(&args[8]) else {
+        encode_error(out, "ERR TYPE must be i64|f64|str|vector");
+        return Err(());
+    };
+    let Some(kind) = IndexKind::parse(&args[10]) else {
+        encode_error(out, "ERR KIND must be range|unique|text|ann");
+        return Err(());
+    };
+    if args[4].is_empty() {
+        encode_error(out, "ERR PREFIX must be non-empty");
+        return Err(());
+    }
+    Ok((ty, kind))
 }
 
 /// Optional IDX.CREATE tail (`[MAXMEM b] [DIM d] …`) parsed out.
@@ -201,14 +211,18 @@ fn validate_kind_combo(
 }
 
 /// `IDX.DROP <name>`.
-pub(crate) fn cmd_idx_drop<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+pub(crate) fn cmd_idx_drop<A: ArgvView + ?Sized>(
+    args: &A,
+    out: &mut Vec<u8>,
+    data_dir: Option<&Path>,
+) {
     if args.len() != 2 {
         return encode_error(out, "ERR usage: IDX.DROP name");
     }
     let mut cat = index_runtime::catalog().map(|c| (*c).clone()).unwrap_or_default();
     let hit = cat.drop_index(&args[1]);
     if hit {
-        persist_sidecar(&cat);
+        persist_sidecar(data_dir, &cat);
         index_runtime::install_catalog(cat);
     }
     encode_integer(out, i64::from(hit));

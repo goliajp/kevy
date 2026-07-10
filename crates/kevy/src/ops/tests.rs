@@ -13,7 +13,8 @@ fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
         }
         let mut out = Vec::new();
         let mut store = Store::new();
-        let handled = dispatch_ops(verb, &mut store, &a, &mut out);
+        let c = crate::KevyCommands::new();
+        let handled = dispatch_ops(&c.ctx(), verb, &mut store, &a, &mut out);
         assert!(handled, "verb {:?} not handled", String::from_utf8_lossy(verb));
         out
     }

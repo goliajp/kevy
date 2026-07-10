@@ -12,7 +12,7 @@ use std::time::Duration;
 
 /// Tiny dispatch helper for AOF-rewrite roundtrip tests: turn the
 /// canonical mutating verbs the rewriter emits back into Store mutations.
-/// Mirrors a subset of `kevy::dispatch` — enough for the verbs
+/// Mirrors a subset of kevy's dispatch — enough for the verbs
 /// `dump_store_to_aof` actually emits.
 pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
     let verb = args[0].to_ascii_uppercase();
