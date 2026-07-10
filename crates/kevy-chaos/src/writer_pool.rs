@@ -130,9 +130,19 @@ pub fn pipelined_verify_counts(
     port: u16,
     acks: &[AckEntry],
 ) -> (usize, usize, Vec<String>) {
+    let buf = match pipeline_get_replies(port, acks) {
+        Ok(buf) => buf,
+        Err(e) => return (0, acks.len(), vec![e]),
+    };
+    tally_replies(acks, &buf)
+}
+
+/// Send one pipelined GET per ACK entry and drain the whole reply
+/// stream into a single buffer. Errors carry a human description.
+fn pipeline_get_replies(port: u16, acks: &[AckEntry]) -> Result<Vec<u8>, String> {
     let mut s = match TcpStream::connect(format!("127.0.0.1:{port}")) {
         Ok(s) => s,
-        Err(e) => return (0, acks.len(), vec![format!("connect: {e}")]),
+        Err(e) => return Err(format!("connect: {e}")),
     };
     let _ = s.set_read_timeout(Some(Duration::from_secs(30)));
     let _ = s.set_write_timeout(Some(Duration::from_secs(30)));
@@ -152,8 +162,8 @@ pub fn pipelined_verify_counts(
     });
     let mut s = match send_handle.join() {
         Ok(Ok(s)) => s,
-        Ok(Err(e)) => return (0, acks.len(), vec![e]),
-        Err(_) => return (0, acks.len(), vec!["sender thread panicked".into()]),
+        Ok(Err(e)) => return Err(e),
+        Err(_) => return Err("sender thread panicked".into()),
     };
     let mut buf = Vec::with_capacity(8 * 1024 * 1024);
     let mut tmp = vec![0u8; 64 * 1024];
@@ -164,13 +174,18 @@ pub fn pipelined_verify_counts(
             Err(_) => break,
         }
     }
-    // Parse replies in order matching the ACK log.
+    Ok(buf)
+}
+
+/// Parse replies in order matching the ACK log. Returns
+/// `(present, lost, corrupted_descriptions)`.
+fn tally_replies(acks: &[AckEntry], buf: &[u8]) -> (usize, usize, Vec<String>) {
     let mut present = 0usize;
     let mut lost = 0usize;
     let mut corrupted = Vec::new();
     let mut pos = 0usize;
     for ack in acks {
-        match parse_one_reply(&buf, pos) {
+        match parse_one_reply(buf, pos) {
             Some((Some(val), next)) => {
                 if val == ack.value {
                     present += 1;

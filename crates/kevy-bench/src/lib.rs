@@ -54,6 +54,10 @@ pub struct Stats {
     pub p95_ns: u64,
     /// Mean across all samples.
     pub mean_ns: u64,
+    /// Sample standard deviation across samples (Bessel-corrected; 0 when
+    /// `samples == 1`). Reported alongside the median in baseline tables so
+    /// a future delta can be judged against the run-to-run noise band.
+    pub stdev_ns: u64,
 }
 
 /// Run `op` and return per-operation timing stats.
@@ -82,13 +86,28 @@ pub fn bench<F: FnMut()>(samples: usize, inner: usize, mut op: F) -> Stats {
     per_op.sort_unstable();
 
     let sum: u64 = per_op.iter().sum();
+    let mean = sum / samples as u64;
+    let stdev_ns = if samples > 1 {
+        let var: f64 = per_op
+            .iter()
+            .map(|&x| {
+                let d = x as f64 - mean as f64;
+                d * d
+            })
+            .sum::<f64>()
+            / (samples - 1) as f64;
+        var.sqrt() as u64
+    } else {
+        0
+    };
     Stats {
         samples,
         inner,
         min_ns: per_op[0],
         median_ns: per_op[samples / 2],
         p95_ns: per_op[((samples * 95) / 100).min(samples - 1)],
-        mean_ns: sum / samples as u64,
+        mean_ns: mean,
+        stdev_ns,
     }
 }
 
@@ -164,6 +183,7 @@ mod tests {
             median_ns: 10,
             p95_ns: 10,
             mean_ns: 10,
+            stdev_ns: 0,
         };
         let slow = Stats {
             median_ns: 40,

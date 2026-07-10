@@ -357,6 +357,7 @@ impl IoUring {
     /// on completions (`wait_nr == 0`), we publish the tail and return
     /// **without any syscall** — the kernel thread will reap submissions on
     /// its next poll spin.
+    // LOC-WAIVER: per-iter busy-poll submit hot body; bulk of the length is E14/A11 history comments.
     pub fn submit_and_wait(&mut self, wait_nr: u32) -> io::Result<u32> {
         // SAFETY: `sq_ktail` is the kernel-published tail ptr.
         let prev = unsafe { (*self.sq_ktail).load(Ordering::Relaxed) };

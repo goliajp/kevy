@@ -129,6 +129,41 @@ impl Harness {
         // `--no-aof` but not `--appendfsync`; the env-var path is the
         // documented override per kevy-config).
         let cfg_path = self.config.data_dir.join("kevy.toml");
+        std::fs::write(&cfg_path, self.build_child_toml())?;
+        // Route kevy's stderr to a file under the data dir so test
+        // diagnostics (AOF replay summary, etc.) survive the test.
+        let stderr_path = self.config.data_dir.join("kevy.stderr.log");
+        let stderr_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&stderr_path)?;
+        let mut cmd = Command::new(&self.config.kevy_bin);
+        cmd.arg("--config")
+            .arg(&cfg_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(stderr_file));
+        // v1.38 — apply RLIMIT_NOFILE / RLIMIT_FSIZE on Unix via
+        // pre_exec. Run BEFORE exec so kevy starts with the cap.
+        #[cfg(unix)]
+        {
+            let nofile = self.config.rlimit_nofile;
+            let fsize = self.config.rlimit_fsize;
+            use std::os::unix::process::CommandExt as _;
+            // SAFETY: pre_exec runs in the forked child between fork and
+            // exec; only async-signal-safe + simple syscalls. We do
+            // setrlimit(2) calls — safe + signal-safe. No allocator.
+            unsafe {
+                cmd.pre_exec(move || apply_rlimits(nofile, fsize));
+            }
+        }
+        let child = cmd.spawn()?;
+        self.child = Some(child);
+        self.wait_ready()
+    }
+
+    /// Render the spawned kevy's `kevy.toml` from this config.
+    fn build_child_toml(&self) -> String {
         let mut toml = format!(
             "[server]\nport = {}\nthreads = {}\ndata_dir = \"{}\"\n",
             self.config.port,
@@ -161,37 +196,7 @@ impl Harness {
                 toml.push('\n');
             }
         }
-        std::fs::write(&cfg_path, toml)?;
-        // Route kevy's stderr to a file under the data dir so test
-        // diagnostics (AOF replay summary, etc.) survive the test.
-        let stderr_path = self.config.data_dir.join("kevy.stderr.log");
-        let stderr_file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&stderr_path)?;
-        let mut cmd = Command::new(&self.config.kevy_bin);
-        cmd.arg("--config")
-            .arg(&cfg_path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::from(stderr_file));
-        // v1.38 — apply RLIMIT_NOFILE / RLIMIT_FSIZE on Unix via
-        // pre_exec. Run BEFORE exec so kevy starts with the cap.
-        #[cfg(unix)]
-        {
-            let nofile = self.config.rlimit_nofile;
-            let fsize = self.config.rlimit_fsize;
-            use std::os::unix::process::CommandExt as _;
-            // SAFETY: pre_exec runs in the forked child between fork and
-            // exec; only async-signal-safe + simple syscalls. We do
-            // setrlimit(2) calls — safe + signal-safe. No allocator.
-            unsafe {
-                cmd.pre_exec(move || apply_rlimits(nofile, fsize));
-            }
-        }
-        let child = cmd.spawn()?;
-        self.child = Some(child);
-        self.wait_ready()
+        toml
     }
 
     fn wait_ready(&self) -> io::Result<()> {

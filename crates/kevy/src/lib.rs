@@ -198,56 +198,10 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
         std::process::exit(1);
     }
     let cfg = config_global::get();
-    let fsync = map_appendfsync(cfg.persistence.appendfsync);
     cmd_index::boot(&data_dir);
     cmd_view::boot(&data_dir);
-    let mut runtime = Runtime::new(ip, port, nshards, KevyCommands)
-        .with_data_dir(data_dir)
-        .with_accept_shards(cfg.server.accept_shards)
-        .with_max_clients(cfg.server.max_clients)
-        .with_aof(enable_aof)
-        .with_appendfsync(fsync)
-        .with_auto_aof_rewrite(
-            cfg.persistence.auto_aof_rewrite_percentage,
-            cfg.persistence.auto_aof_rewrite_min_size,
-        )
-        .with_advanced(
-            cfg.advanced.spin_limit,
-            cfg.advanced.park_timeout_ms,
-            cfg.advanced.tick_check_every,
-            cfg.advanced.ring_capacity,
-        )
-        .with_slowlog(cfg.slowlog.slower_than_micros, cfg.slowlog.max_len);
-    if cfg.cluster.enabled {
-        runtime = runtime.with_cluster(cluster_port_base(&cfg));
-    }
-    if cfg.feed.enabled {
-        runtime = runtime.with_feed(true, cfg.feed.feed_buffer_size);
-    }
-    // v1.25 UDS: opt-in via `KEVY_UNIX_SOCKET=/path/to/sock` env var. Lets
-    // local clients (and benches) skip TCP loopback overhead — fair
-    // comparison against valkey/redis's `unixsocket` config.
-    if let Ok(path) = std::env::var("KEVY_UNIX_SOCKET")
-        && !path.is_empty() {
-            runtime = runtime.with_unix_socket(PathBuf::from(path));
-        }
-    let runtime = replication::apply(runtime, &cfg, nshards);
-    // Spawn the kevy-elect control plane when the operator
-    // configured `[cluster] peers = "..."` + `node_id`. Opt-in;
-    // empty peers leaves the subsystem dormant.
-    // Allocate per-shard offset slots first (always, even when
-    // elect is dormant — cost is `nshards` AtomicU64 / process,
-    // negligible).
-    elect_integration::install_shard_offsets(nshards);
-    elect_integration::maybe_start(&cfg);
-    // Scope-routing setup. Idempotent; a bad scope config fails
-    // the boot loudly here rather than at the first wrong-shard
-    // write.
-    if let Err(msg) = scope_integration::install(&cfg) {
-        eprintln!("kevy: bad [cluster] scopes config: {msg}");
-        std::process::exit(1);
-    }
-    scope_integration::install_self_id(&cfg);
+    let runtime = build_runtime(&cfg, ip, port, nshards, data_dir, enable_aof);
+    install_integrations(&cfg, nshards);
     let stop = Arc::new(AtomicBool::new(false));
     // v1.39 — install SIGTERM + SIGINT handlers that flip `stop`,
     // triggering the runtime's existing drain path (fsync AOF, close
@@ -274,6 +228,70 @@ pub fn serve(ip: [u8; 4], port: u16, nshards: usize, data_dir: PathBuf, enable_a
         std::process::exit(1);
     }
     std::process::exit(0);
+}
+
+/// Assemble the configured [`Runtime`]: the builder chain plus the
+/// cluster / feed / UDS opt-in branches and the replication wiring.
+fn build_runtime(
+    cfg: &kevy_config::Config,
+    ip: [u8; 4],
+    port: u16,
+    nshards: usize,
+    data_dir: PathBuf,
+    enable_aof: bool,
+) -> Runtime<KevyCommands> {
+    let fsync = map_appendfsync(cfg.persistence.appendfsync);
+    let mut runtime = Runtime::new(ip, port, nshards, KevyCommands)
+        .with_data_dir(data_dir)
+        .with_accept_shards(cfg.server.accept_shards)
+        .with_max_clients(cfg.server.max_clients)
+        .with_aof(enable_aof)
+        .with_appendfsync(fsync)
+        .with_auto_aof_rewrite(
+            cfg.persistence.auto_aof_rewrite_percentage,
+            cfg.persistence.auto_aof_rewrite_min_size,
+        )
+        .with_advanced(
+            cfg.advanced.spin_limit,
+            cfg.advanced.park_timeout_ms,
+            cfg.advanced.tick_check_every,
+            cfg.advanced.ring_capacity,
+        )
+        .with_slowlog(cfg.slowlog.slower_than_micros, cfg.slowlog.max_len);
+    if cfg.cluster.enabled {
+        runtime = runtime.with_cluster(cluster_port_base(cfg));
+    }
+    if cfg.feed.enabled {
+        runtime = runtime.with_feed(true, cfg.feed.feed_buffer_size);
+    }
+    // v1.25 UDS: opt-in via `KEVY_UNIX_SOCKET=/path/to/sock` env var. Lets
+    // local clients (and benches) skip TCP loopback overhead — fair
+    // comparison against valkey/redis's `unixsocket` config.
+    if let Ok(path) = std::env::var("KEVY_UNIX_SOCKET")
+        && !path.is_empty() {
+            runtime = runtime.with_unix_socket(PathBuf::from(path));
+        }
+    replication::apply(runtime, cfg, nshards)
+}
+
+/// Wire the control-plane integrations before the runtime runs.
+fn install_integrations(cfg: &kevy_config::Config, nshards: usize) {
+    // Spawn the kevy-elect control plane when the operator
+    // configured `[cluster] peers = "..."` + `node_id`. Opt-in;
+    // empty peers leaves the subsystem dormant.
+    // Allocate per-shard offset slots first (always, even when
+    // elect is dormant — cost is `nshards` AtomicU64 / process,
+    // negligible).
+    elect_integration::install_shard_offsets(nshards);
+    elect_integration::maybe_start(cfg);
+    // Scope-routing setup. Idempotent; a bad scope config fails
+    // the boot loudly here rather than at the first wrong-shard
+    // write.
+    if let Err(msg) = scope_integration::install(cfg) {
+        eprintln!("kevy: bad [cluster] scopes config: {msg}");
+        std::process::exit(1);
+    }
+    scope_integration::install_self_id(cfg);
 }
 
 /// Resolved first cluster port: `[cluster].port_base`, or `server.port + 1`

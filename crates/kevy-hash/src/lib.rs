@@ -81,6 +81,7 @@ fn mix(state: u64, word: u64) -> u64 {
 /// rustc-hash design assumes its consumer mixes again; we don't, so we
 /// avalanche ourselves — same property as the legacy [`FxHasher`] path).
 #[inline]
+// LOC-WAIVER: per-op hash hot body — the short/bulk paths stay fused in one frame for codegen.
 fn hash_bytes_pipelined(bytes: &[u8]) -> u64 {
     // Constants — digits of pi (matches rustc-hash 2.x for cross-bench
     // sanity; the actual choice doesn't matter beyond "non-zero, not

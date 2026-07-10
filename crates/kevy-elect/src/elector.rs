@@ -371,16 +371,19 @@ impl Elector {
         }
     }
 
-    fn maybe_start_election(&mut self, now: Instant, out: &mut Vec<Outbound>) {
+    /// Preconditions for starting a candidacy: replica role, out of
+    /// backoff, primary DOWN by my view, and this node winning the
+    /// candidate-selection ordering.
+    fn election_preconditions_met(&self, now: Instant) -> bool {
         // Only replicas start elections.
         if self.role != Role::Replica {
-            return;
+            return false;
         }
         // In backoff after a failed candidacy.
         if let Some(b) = self.backoff_until
             && now < b
         {
-            return;
+            return false;
         }
         // Primary must be DOWN by my view. A cluster with NO known
         // primary (cold start where every node defers to the
@@ -390,7 +393,7 @@ impl Elector {
         match self.current_primary.clone() {
             Some(primary) => {
                 if !self.is_peer_down(&primary, now) {
-                    return;
+                    return false;
                 }
             }
             None => {
@@ -398,14 +401,18 @@ impl Elector {
                     .first_tick
                     .is_some_and(|t| now.duration_since(t) >= self.config.down_after);
                 if !seen_enough {
-                    return;
+                    return false;
                 }
             }
         }
         // Candidate-selection: I must have the highest offset AND
         // lowest node-id among alive peers (the primary is dead +
         // not in the tie-break set).
-        if !self.am_best_candidate(now) {
+        self.am_best_candidate(now)
+    }
+
+    fn maybe_start_election(&mut self, now: Instant, out: &mut Vec<Outbound>) {
+        if !self.election_preconditions_met(now) {
             return;
         }
         // Start the candidacy. Raft persistence rule: the bumped

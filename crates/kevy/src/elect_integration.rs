@@ -113,11 +113,29 @@ pub(crate) fn maybe_start(cfg: &Config) {
         cfg.server.bind[2],
         cfg.server.bind[3],
     )), listen_port);
-    // v3.15 D2 — the failover closing-of-the-loop: election outcomes
-    // drive the DATA plane. Runs on the elect orchestrator thread;
-    // both actions are quick (runner spawn/stop, no blocking I/O in
-    // the caller's path). Membership is the STATIC config table;
-    // only roles are dynamic.
+    let on_change = make_topology_callback(cfg);
+    match Transport::spawn_with_callback(elector, hb_interval, listen, peers, on_change) {
+        Ok(t) => {
+            *slot().lock().expect("ELECT_TRANSPORT poisoned") = Some(t);
+            eprintln!(
+                "kevy: kevy-elect transport up on {}:{} ({} peers, role={})",
+                cfg.server.bind[0], listen_port,
+                cfg.cluster.peers.len().saturating_sub(1),
+                if matches!(start_role, Role::Primary) { "primary" } else { "replica" },
+            );
+        }
+        Err(e) => {
+            eprintln!("kevy: kevy-elect transport failed to bind {listen_port}: {e}");
+        }
+    }
+}
+
+/// v3.15 D2 — the failover closing-of-the-loop: election outcomes
+/// drive the DATA plane. The returned callback runs on the elect
+/// orchestrator thread; both actions are quick (runner spawn/stop,
+/// no blocking I/O in the caller's path). Membership is the STATIC
+/// config table; only roles are dynamic.
+fn make_topology_callback(cfg: &Config) -> kevy_elect::TopologyCallback {
     let member_table: Vec<(String, String, u16)> = cfg
         .cluster
         .peers
@@ -125,7 +143,7 @@ pub(crate) fn maybe_start(cfg: &Config) {
         .map(|p| (p.node_id.clone(), p.host.clone(), p.client_port.unwrap_or(p.port)))
         .collect();
     let my_id = cfg.cluster.node_id.clone();
-    let on_change: kevy_elect::TopologyCallback = Box::new(move |role, primary, quorum| {
+    Box::new(move |role, primary, quorum| {
         use kevy_elect::Role;
         // v3.16 D4 — primary quorum lease: a primary that cannot see
         // a strict majority fences writes (the partition's minority
@@ -163,21 +181,7 @@ pub(crate) fn maybe_start(cfg: &Config) {
             }
             _ => {}
         }
-    });
-    match Transport::spawn_with_callback(elector, hb_interval, listen, peers, on_change) {
-        Ok(t) => {
-            *slot().lock().expect("ELECT_TRANSPORT poisoned") = Some(t);
-            eprintln!(
-                "kevy: kevy-elect transport up on {}:{} ({} peers, role={})",
-                cfg.server.bind[0], listen_port,
-                cfg.cluster.peers.len().saturating_sub(1),
-                if matches!(start_role, Role::Primary) { "primary" } else { "replica" },
-            );
-        }
-        Err(e) => {
-            eprintln!("kevy: kevy-elect transport failed to bind {listen_port}: {e}");
-        }
-    }
+    })
 }
 
 /// Build the `Elector` for this node from config: identity, peer

@@ -25,6 +25,7 @@ use std::time::Duration;
 /// guard). The v2.1 OP_TABLE makes this cross-check structural.
 // fn-length exemption: pure data-driven verb match table — one flat
 // arm per replayed verb, no control flow beyond per-arm arg plumbing.
+// LOC-WAIVER: data-driven AOF verb replay table — one store-call arm per verb.
 pub(crate) fn apply(store: &mut Store, args: &Argv) {
     let Some(name) = args.first() else { return };
     let verb = ascii_upper(name);

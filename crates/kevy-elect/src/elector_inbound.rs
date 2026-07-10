@@ -43,23 +43,29 @@ impl Elector {
             && (epoch > self.epoch
                 || (self.current_primary.is_none() && self.role == Role::Replica))
         {
-            // Persist BEFORE following the higher epoch (no vote is
-            // cast on this path, so voted_for = None). Only when the
-            // epoch actually moves — case (a) (same-epoch primary
-            // learning) changes no durable state.
-            if epoch > self.epoch {
-                self.persist.save(epoch, None);
-            }
-            self.epoch = epoch;
-            self.current_primary = Some(from.to_string());
-            if self.role == Role::Primary && from != self.node_id {
-                self.role = Role::Replica;
-            } else if self.role == Role::Candidate {
-                // Lost the election we were running.
-                self.role = Role::Replica;
-                self.offer_at = None;
-                self.accept_votes.clear();
-            }
+            self.follow_primary_hb(from, epoch);
+        }
+    }
+
+    /// Learn / demote / retarget on a primary-claiming `HB` — the
+    /// body of `on_hb`'s cases (a) and (b).
+    fn follow_primary_hb(&mut self, from: &str, epoch: u64) {
+        // Persist BEFORE following the higher epoch (no vote is
+        // cast on this path, so voted_for = None). Only when the
+        // epoch actually moves — case (a) (same-epoch primary
+        // learning) changes no durable state.
+        if epoch > self.epoch {
+            self.persist.save(epoch, None);
+        }
+        self.epoch = epoch;
+        self.current_primary = Some(from.to_string());
+        if self.role == Role::Primary && from != self.node_id {
+            self.role = Role::Replica;
+        } else if self.role == Role::Candidate {
+            // Lost the election we were running.
+            self.role = Role::Replica;
+            self.offer_at = None;
+            self.accept_votes.clear();
         }
     }
 

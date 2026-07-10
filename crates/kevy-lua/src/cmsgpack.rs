@@ -255,6 +255,7 @@ fn table_shape(t_ref: &Table) -> Result<(usize, usize, bool), String> {
 
 // fn-length exemption: pure data-driven msgpack tag match table — one
 // flat arm per wire tag, only a length read + decode_* delegate each.
+// LOC-WAIVER: data-driven msgpack tag dispatch table — one arm per tag range.
 fn decode_value(
     vm: &mut Vm,
     bytes: &[u8],

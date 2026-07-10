@@ -10,6 +10,7 @@ use kevy_rt::NotifyClass;
 /// `used_memory`, so eviction gates them all. Kept in a single place to avoid
 /// drift.
 // >50-LOC exemption: pure data-driven verb match table (no control flow).
+// LOC-WAIVER: data-driven verb list (one matches! arm per write verb).
 pub(crate) fn is_write_verb(cmd: &[u8]) -> bool {
     matches!(
         cmd,

@@ -36,35 +36,7 @@ pub(crate) fn cmd_command<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
                 }
             }
         }
-        Some(s) if s.eq_ignore_ascii_case(b"DOCS") => {
-            let named: Vec<&VerbMeta> = if args.len() > 2 {
-                (2..args.len())
-                    .filter_map(|i| args.get(i).and_then(lookup))
-                    .collect()
-            } else {
-                VERB_META.iter().collect()
-            };
-            // Redis 7 DOCS shape: flat [name, fieldmap] pairs.
-            encode_array_len(out, (named.len() * 2) as i64);
-            for m in named {
-                encode_bulk(out, m.name.as_bytes());
-                encode_array_len(out, 10i64);
-                for (k, v) in [
-                    ("summary", m.summary),
-                    ("since", m.since),
-                    ("group", m.group),
-                    ("syntax", m.syntax),
-                ] {
-                    encode_bulk(out, k.as_bytes());
-                    encode_bulk(out, v.as_bytes());
-                }
-                encode_bulk(out, b"flags");
-                encode_array_len(out, m.flags.len() as i64);
-                for f in m.flags {
-                    encode_bulk(out, f.as_bytes());
-                }
-            }
-        }
+        Some(s) if s.eq_ignore_ascii_case(b"DOCS") => cmd_command_docs(args, out),
         Some(other) => {
             encode_error(
                 out,
@@ -73,6 +45,37 @@ pub(crate) fn cmd_command<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
                     String::from_utf8_lossy(other)
                 ),
             );
+        }
+    }
+}
+
+/// `COMMAND DOCS [name…]` body: no names = every verb.
+fn cmd_command_docs<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
+    let named: Vec<&VerbMeta> = if args.len() > 2 {
+        (2..args.len())
+            .filter_map(|i| args.get(i).and_then(lookup))
+            .collect()
+    } else {
+        VERB_META.iter().collect()
+    };
+    // Redis 7 DOCS shape: flat [name, fieldmap] pairs.
+    encode_array_len(out, (named.len() * 2) as i64);
+    for m in named {
+        encode_bulk(out, m.name.as_bytes());
+        encode_array_len(out, 10i64);
+        for (k, v) in [
+            ("summary", m.summary),
+            ("since", m.since),
+            ("group", m.group),
+            ("syntax", m.syntax),
+        ] {
+            encode_bulk(out, k.as_bytes());
+            encode_bulk(out, v.as_bytes());
+        }
+        encode_bulk(out, b"flags");
+        encode_array_len(out, m.flags.len() as i64);
+        for f in m.flags {
+            encode_bulk(out, f.as_bytes());
         }
     }
 }

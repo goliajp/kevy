@@ -22,6 +22,7 @@ use kevy_store::Store;
 
 /// Hash commands.
 // >50-LOC exemption: pure data-driven verb dispatch table (one match, arms delegate).
+// LOC-WAIVER: data-driven verb dispatch table — one arm per hash verb.
 pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,
@@ -156,6 +157,7 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
 
 /// List commands.
 // >50-LOC exemption: pure data-driven verb dispatch table (one match, arms delegate).
+// LOC-WAIVER: data-driven verb dispatch table — one arm per list verb.
 pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,
@@ -332,6 +334,7 @@ fn cmd_lmove<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8
 
 /// Sorted-set commands.
 // >50-LOC exemption: pure data-driven verb dispatch table (one match, arms delegate).
+// LOC-WAIVER: data-driven verb dispatch table — one arm per zset verb.
 pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,
