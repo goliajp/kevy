@@ -284,7 +284,7 @@ cargo build --workspace --release
 cargo test  --workspace
 ```
 
-Stable Rust 1.96.1, Rust 2024 edition. Builds on Linux (`x86_64`,
+Stable Rust 1.97.0, Rust 2024 edition. Builds on Linux (`x86_64`,
 `aarch64`) and macOS. `kevy-embedded` and its dependency closure also
 build for `wasm32-unknown-unknown` and `wasm32-wasip1`.
 

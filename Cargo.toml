@@ -69,7 +69,7 @@ members = [
 [workspace.package]
 version = "3.17.4"
 edition = "2024"
-rust-version = "1.96.1"
+rust-version = "1.97.0"
 authors = ["GOLIA K.K."]
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/goliajp/kevy"

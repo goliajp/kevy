@@ -8,7 +8,7 @@
 
 - **纯 Rust + 0 依赖**:`Cargo.toml` 里**不得有任何 crates.io 第三方依赖**,只允许 `std` + 自己的 `kevy-*` crate。
 - **不许为算法/数据结构 FFI 找 C**:hashmap、分配、hash、协议解析、reactor 逻辑等全部纯 Rust 自研;**唯一允许的 libc 是完全无法避免的 OS 边界**(socket / poller / mmap / time),且只集中在 `kevy-sys` 里用 `unsafe extern "C"` 手写绑定(不引 `libc` crate)。详见 memory `feedback-pure-rust-no-c-principle`。
-- **工具链**:Rust 2024 edition,rust-version 1.96.1。**author = GOLIA K.K.**(workspace 继承)。
+- **工具链**:Rust 2024 edition,rust-version 1.97.0。**author = GOLIA K.K.**(workspace 继承)。
 - **crate 命名**:一律 `kevy-` 前缀,每个尽量做成可复用的 infra lib。
 - **性能目标**:对标并远超 valkey 9.1。基准方法见 `bench/REPORT.md`。
 
