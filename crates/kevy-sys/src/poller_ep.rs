@@ -19,11 +19,14 @@ mod ep {
     pub const EPOLLRDHUP: u32 = 0x2000;
 }
 
+/// Edge/level-readiness poller. macOS: kqueue. Linux: epoll. Same API on both.
 pub struct Poller {
     epfd: c_int,
 }
 
 impl Poller {
+    /// Creates a fresh epoll instance (`EPOLL_CLOEXEC`, closed on drop).
+    /// Errors surface the raw OS error from `epoll_create1(2)`.
     pub fn new() -> io::Result<Self> {
         let epfd = unsafe { ffi::epoll_create1(ep::EPOLL_CLOEXEC) };
         if epfd < 0 {
@@ -48,21 +51,24 @@ impl Poller {
             events: Self::mask(read, write),
             data: fd as u64,
         };
-        let r = unsafe { ffi::epoll_ctl(self.epfd, op, fd, &mut ev) };
+        let r = unsafe { ffi::epoll_ctl(self.epfd, op, fd, &raw mut ev) };
         if r < 0 {
             return Err(io::Error::last_os_error());
         }
         Ok(())
     }
 
+    /// Register `fd`, enabling the read/write filters per the interest flags.
     pub fn add(&self, fd: i32, read: bool, write: bool) -> io::Result<()> {
         self.ctl(ep::EPOLL_CTL_ADD, fd, read, write)
     }
 
+    /// Change the read/write interest of an already-registered `fd`.
     pub fn modify(&self, fd: i32, read: bool, write: bool) -> io::Result<()> {
         self.ctl(ep::EPOLL_CTL_MOD, fd, read, write)
     }
 
+    /// Deregister `fd` from the epoll set.
     pub fn delete(&self, fd: i32) -> io::Result<()> {
         let r = unsafe { ffi::epoll_ctl(self.epfd, ep::EPOLL_CTL_DEL, fd, ptr::null_mut()) };
         if r < 0 {
@@ -71,6 +77,7 @@ impl Poller {
         Ok(())
     }
 
+    /// Wait for readiness, filling `out`. `timeout_ms == None` blocks forever.
     pub fn wait(&self, out: &mut Vec<Event>, timeout_ms: Option<i32>) -> io::Result<usize> {
         out.clear();
         let mut raw: Vec<ffi::EpollEvent> = Vec::with_capacity(WAIT_CAPACITY);

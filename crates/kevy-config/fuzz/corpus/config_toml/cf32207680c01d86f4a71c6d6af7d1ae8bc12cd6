@@ -1,0 +1,24 @@
+# k config seedn_shze    = "64"
+
+[memory]
+maxmemory    = "2mb"
+maxmemory_policy  = "allkeys-lru"
+
+[expiry]
+hz       = 10
+sample   = 20#o"
+
+[memory]
+maxmemory         = "2mb"
+maxmemory_policy  = "allkeys-lru"
+
+[expiry]
+hz       = 20
+sample   = 20#?f_rewrite_min_
+[memory]
+maxmemory         = "51mb"
+maxm  = "64mb"
+
+[memory]
+maxmemory         = "511mb"
+maxm  = 129

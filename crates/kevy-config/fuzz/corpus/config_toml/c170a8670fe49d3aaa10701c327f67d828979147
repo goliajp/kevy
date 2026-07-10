@@ -1,0 +1,30 @@
+# kevy confiice   = 20
+
+[log]
+level    = "info"
+output   ="so"
+output   ="stdertderrşÿÿÿÿÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrştrşÿÿÿÿÿÿÿ"
+
+[advanced]
+spin_limit           = 129
+
+[log]
+level    = "info"
+output   ="stderrştdÿÿÿÿ"
+
+[advanced]
+spin_limit             = 129
+
+[log]
+level    = "info"
+output   ="stderrşÿÿÿÿÿÿÿ"
+
+[advanced]
+spin_limit          = 129

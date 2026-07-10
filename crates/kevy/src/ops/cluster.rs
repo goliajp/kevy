@@ -74,6 +74,7 @@ fn advertised_ip(cfg: &Config) -> String {
     }
 }
 
+// LOC-WAIVER: data-driven subcommand dispatch table — one reply-emitter arm per subcommand.
 pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
     cfg: &Config,
     store: &mut Store,

@@ -137,7 +137,7 @@ impl IoUring {
             sq_mmap_len: sq_len,
             cq_mmap,
             cq_mmap_len: cq_len,
-            sqes: sqes_map as *mut IoUringSqe,
+            sqes: sqes_map.cast::<IoUringSqe>(),
             sqes_len,
             sq_entries: p.sq_entries,
             sq_mask: sq.mask,
@@ -242,8 +242,8 @@ impl IoUring {
             let fd = unsafe {
                 ffi::syscall(
                     SYS_IO_URING_SETUP,
-                    entries as c_long,
-                    &mut p as *mut IoUringParams,
+                    c_long::from(entries),
+                    &raw mut p,
                 )
             };
             if fd >= 0 {
@@ -357,6 +357,7 @@ impl IoUring {
     /// on completions (`wait_nr == 0`), we publish the tail and return
     /// **without any syscall** — the kernel thread will reap submissions on
     /// its next poll spin.
+    // LOC-WAIVER: per-iter busy-poll submit hot body; bulk of the length is E14/A11 history comments.
     pub fn submit_and_wait(&mut self, wait_nr: u32) -> io::Result<u32> {
         // SAFETY: `sq_ktail` is the kernel-published tail ptr.
         let prev = unsafe { (*self.sq_ktail).load(Ordering::Relaxed) };
@@ -413,8 +414,8 @@ impl IoUring {
         // pass the registered index instead of the raw fd. The kernel skips
         // its per-syscall fget/fput on the ring.
         let (syscall_fd, extra_flags) = match self.enter_ring {
-            Some((idx, flag)) => (idx as c_long, flag),
-            None => (self.ring_fd as c_long, 0),
+            Some((idx, flag)) => (c_long::from(idx), flag),
+            None => (c_long::from(self.ring_fd), 0),
         };
         enter_flags |= extra_flags;
         // SAFETY: kernel-validated args; no Rust memory is read/written.
@@ -422,9 +423,9 @@ impl IoUring {
             ffi::syscall(
                 SYS_IO_URING_ENTER,
                 syscall_fd,
-                to_submit as c_long,
-                wait_nr as c_long,
-                enter_flags as c_long,
+                c_long::from(to_submit),
+                c_long::from(wait_nr),
+                c_long::from(enter_flags),
                 ptr::null::<c_void>(),
                 0usize,
             )
@@ -463,7 +464,7 @@ impl Drop for IoUring {
     fn drop(&mut self) {
         // SAFETY: each pointer is the matching `mmap` return; fd is ours.
         unsafe {
-            ffi::munmap(self.sqes as *mut c_void, self.sqes_len);
+            ffi::munmap(self.sqes.cast::<c_void>(), self.sqes_len);
             ffi::munmap(self.cq_mmap, self.cq_mmap_len);
             ffi::munmap(self.sq_mmap, self.sq_mmap_len);
             ffi::close(self.ring_fd);

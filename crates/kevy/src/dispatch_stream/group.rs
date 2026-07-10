@@ -136,7 +136,7 @@ pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
 ) {
-    let parsed = match parse_xreadgroup_argv(args) {
+    let mut parsed = match parse_xreadgroup_argv(args) {
         Ok(p) => p,
         Err(msg) => return encode_error(out, msg),
     };
@@ -148,41 +148,10 @@ pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(
     // before parking.
     let any_new_stream = parsed.streams.iter().any(|(_, id)| id == b">");
     let blocking = parsed.block_ms.is_some() && any_new_stream;
-    for (key, last_seen_arg) in parsed.streams {
-        let last_seen = if last_seen_arg == b">" {
-            ReadGroupId::New
-        } else {
-            match parse_explicit_id(&last_seen_arg, /*end=*/ false) {
-                Ok(id) => ReadGroupId::ReplayAfter(id),
-                Err(_) => {
-                    return encode_error(
-                        out,
-                        "ERR Invalid stream ID specified as stream command argument",
-                    );
-                }
-            }
-        };
-        let entries = match store.xreadgroup(
-            &key,
-            &parsed.group,
-            &parsed.consumer,
-            last_seen,
-            parsed.count,
-            parsed.noack,
-            now_unix_ms(),
-        ) {
-            Ok(es) => es,
-            Err(kevy_store::StoreError::NoSuchKey) => {
-                return encode_error(
-                    out,
-                    &format!(
-                        "NOGROUP No such key '{}' or consumer group '{}' in XREADGROUP with GROUP option",
-                        String::from_utf8_lossy(&key),
-                        String::from_utf8_lossy(&parsed.group),
-                    ),
-                );
-            }
-            Err(e) => return store_err(out, e),
+    let streams = std::mem::take(&mut parsed.streams);
+    for (key, last_seen_arg) in streams {
+        let Ok(entries) = xreadgroup_one_stream(store, &parsed, &key, &last_seen_arg, out) else {
+            return;
         };
         if !entries.is_empty() {
             reply.push((key, entries));
@@ -203,6 +172,58 @@ pub(super) fn cmd_xreadgroup<A: ArgvView + ?Sized>(
         encode_array_len(out, 2);
         encode_bulk(out, key);
         emit_entries(out, entries);
+    }
+}
+
+/// One stream leg of XREADGROUP: parse the last-seen argument, read
+/// via `Store::xreadgroup`, and emit the invalid-ID / NOGROUP / store
+/// error replies. `Err(())` = an error was already written to `out`.
+fn xreadgroup_one_stream(
+    store: &mut Store,
+    parsed: &XReadGroupParsed,
+    key: &[u8],
+    last_seen_arg: &[u8],
+    out: &mut Vec<u8>,
+) -> Result<kevy_store::EntryBatch, ()> {
+    let last_seen = if last_seen_arg == b">" {
+        ReadGroupId::New
+    } else {
+        match parse_explicit_id(last_seen_arg, /*end=*/ false) {
+            Ok(id) => ReadGroupId::ReplayAfter(id),
+            Err(_) => {
+                encode_error(
+                    out,
+                    "ERR Invalid stream ID specified as stream command argument",
+                );
+                return Err(());
+            }
+        }
+    };
+    match store.xreadgroup(
+        key,
+        &parsed.group,
+        &parsed.consumer,
+        last_seen,
+        parsed.count,
+        parsed.noack,
+        now_unix_ms(),
+    ) {
+        Ok(es) => Ok(es),
+        Err(kevy_store::StoreError::NoSuchKey) => {
+            encode_error(
+                out,
+                &format!(
+                    "NOGROUP No such key '{}' or consumer group '{}' in XREADGROUP with GROUP option",
+                    String::from_utf8_lossy(key),
+                    String::from_utf8_lossy(&parsed.group),
+                ),
+            );
+            Err(())
+        }
+        Err(e) => {
+            store_err(out, e);
+            Err(())
+        }
     }
 }
 

@@ -1,0 +1,27 @@
+# kevy config seed
+[server]
+bind     = "127.0.0.1"
+port     = 6004
+threads  = 4
+data_dir = "/va’/lib/kevy"
+
+[persistence]
+aof                          = true
+appendfsync                = "everysec"
+auto_aof_rewrite_percentage  = 100
+auto_aof_rewrite_min_size    = "64mb"
+
+[memory]
+maxmemory         = "511mb"
+maxmemory_policy  = "allkeys-lru"
+
+[expiry]
+hz       = 20
+sample   = 20
+
+[log]
+level    = "info"
+output   ="stdermu"
+
+[advanced]
+spin_limit   = 128

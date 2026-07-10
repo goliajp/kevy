@@ -39,7 +39,12 @@ pub struct VectorStats {
 }
 
 struct Node {
-    key: Vec<u8>,
+    /// Every LIVING key whose vector is exactly this one (duplicate
+    /// vectors under different keys collapse onto ONE graph node —
+    /// fuzz finding 2026-07-10: one-node-per-key duplicate clusters
+    /// larger than the link cap disconnect from the graph because
+    /// every co-located edge ties in the diversity prune).
+    keys: Vec<Vec<u8>>,
     vec: Vec<f32>,
     /// links[layer] = neighbor node ids.
     links: Vec<Vec<u32>>,
@@ -52,10 +57,21 @@ pub struct Hnsw {
     dim: usize,
     nodes: Vec<Node>,
     by_key: HashMap<Vec<u8>, u32>,
+    /// Prepared-vector bits → living node holding that exact vector
+    /// (the duplicate-collapse index; bitwise equality, so -0.0/0.0
+    /// stay distinct nodes — harmless, the tie-keeping prune covers
+    /// sub-cap co-located pairs).
+    by_vec: HashMap<Vec<u32>, u32>,
     entry: Option<u32>,
+    /// Living KEYS (≥ living nodes when duplicates are collapsed).
     live: u64,
     /// Deterministic level generator (splitmix — no wall clock).
     seed: u64,
+}
+
+/// Bitwise identity of a prepared vector (`by_vec` map key).
+fn vec_bits(v: &[f32]) -> Vec<u32> {
+    v.iter().map(|x| x.to_bits()).collect()
 }
 
 /// Max-heap entry by distance (candidate pruning pops farthest).
@@ -76,7 +92,16 @@ impl Ord for Far {
 impl Hnsw {
     /// Empty graph for `dim`-dimensional vectors.
     pub fn new(dim: usize, params: HnswParams) -> Self {
-        Self { params, dim, nodes: Vec::new(), by_key: HashMap::new(), entry: None, live: 0, seed: 0x9E3779B97F4A7C15 }
+        Self {
+            params,
+            dim,
+            nodes: Vec::new(),
+            by_key: HashMap::new(),
+            by_vec: HashMap::new(),
+            entry: None,
+            live: 0,
+            seed: 0x9E37_79B9_7F4A_7C15,
+        }
     }
 
     /// Declared dimensionality.
@@ -85,17 +110,19 @@ impl Hnsw {
     }
 
     /// Insert or replace `key`'s vector (`None` = remove). Replace =
-    /// tombstone old + insert new (RFC D5).
+    /// detach old key (tombstone the node once keyless) + insert new
+    /// (RFC D5). Keys sharing one exact vector share one graph node.
     pub fn apply(&mut self, key: &[u8], vector: Option<Vec<f32>>) {
-        if let Some(&id) = self.by_key.get(key) {
+        if let Some(id) = self.by_key.remove(key) {
             let node = &mut self.nodes[id as usize];
-            if !node.dead {
+            node.keys.retain(|k| k != key);
+            self.live -= 1;
+            if node.keys.is_empty() {
                 node.dead = true;
-                self.live -= 1;
-            }
-            self.by_key.remove(key);
-            if self.entry == Some(id) {
-                self.entry = self.pick_entry();
+                self.by_vec.remove(&vec_bits(&node.vec));
+                if self.entry == Some(id) {
+                    self.entry = self.pick_entry();
+                }
             }
         }
         let Some(mut v) = vector else { return };
@@ -103,7 +130,19 @@ impl Hnsw {
             return;
         }
         self.params.distance.prepare(&mut v);
-        self.insert_prepared(key.to_vec(), v);
+        self.add_key(key.to_vec(), v);
+    }
+
+    /// Attach a (key, PREPARED vector) pair: onto the living node
+    /// already holding that exact vector, or as a fresh graph node.
+    fn add_key(&mut self, key: Vec<u8>, v: Vec<f32>) {
+        if let Some(&id) = self.by_vec.get(&vec_bits(&v)) {
+            self.nodes[id as usize].keys.push(key.clone());
+            self.by_key.insert(key, id);
+            self.live += 1;
+            return;
+        }
+        self.insert_prepared(key, v);
     }
 
     fn pick_entry(&self) -> Option<u32> {
@@ -117,10 +156,10 @@ impl Hnsw {
 
     fn rand_level(&mut self) -> usize {
         // splitmix64 → uniform in (0,1) → geometric with 1/ln(M)
-        self.seed = self.seed.wrapping_add(0x9E3779B97F4A7C15);
+        self.seed = self.seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
         let mut z = self.seed;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
         z ^= z >> 31;
         let u = (z >> 11) as f64 / (1u64 << 53) as f64;
         let ml = 1.0 / (self.params.m as f64).ln();
@@ -130,7 +169,13 @@ impl Hnsw {
     fn insert_prepared(&mut self, key: Vec<u8>, v: Vec<f32>) {
         let level = self.rand_level();
         let id = self.nodes.len() as u32;
-        self.nodes.push(Node { key: key.clone(), vec: v, links: vec![Vec::new(); level + 1], dead: false });
+        self.by_vec.insert(vec_bits(&v), id);
+        self.nodes.push(Node {
+            keys: vec![key.clone()],
+            vec: v,
+            links: vec![Vec::new(); level + 1],
+            dead: false,
+        });
         self.by_key.insert(key, id);
         self.live += 1;
         let Some(mut cur) = self.entry else {
@@ -146,7 +191,7 @@ impl Hnsw {
         for layer in (0..=level.min(top.max(0) as usize)).rev() {
             let found = self.search_layer(cur, id, layer, self.params.ef_construction, true);
             let cap = if layer == 0 { self.params.m * 2 } else { self.params.m };
-            let chosen = self.select_diverse(&found, cap);
+            let chosen = self.select_diverse(&found, cap, &self.nodes[id as usize].vec);
             for &n in &chosen {
                 self.nodes[id as usize].links[layer].push(n);
                 self.nodes[n as usize].links[layer].push(id);
@@ -191,6 +236,7 @@ impl Hnsw {
         self.search_layer_vec(start, tv, layer, ef)
     }
 
+    // LOC-WAIVER: per-query beam-search hot body (63% of EF16 KNN self-time; see comment below).
     fn search_layer_vec(&self, start: u32, tv: &[f32], layer: usize, ef: usize) -> Vec<(f32, u32)> {
         // The visited set is the beam search's hottest structure —
         // perf-record put 63% of the EF16 KNN shape inside this fn,
@@ -252,32 +298,59 @@ impl Hnsw {
     }
 
     /// Malkov Algorithm 4 (diversity heuristic): walk candidates by
-    /// ascending distance; keep one only if it's closer to the node
-    /// than to every already-kept neighbor. This preserves BRIDGE
+    /// ascending distance; keep one unless an already-kept neighbor is
+    /// STRICTLY closer to it than the node is. This preserves BRIDGE
     /// links to otherwise-isolated regions (an outlier's closest
     /// in-graph node keeps its back-edge — plain closest-K pruning
     /// disconnects it).
-    fn select_diverse(&self, sorted: &[(f32, u32)], cap: usize) -> Vec<u32> {
+    ///
+    /// Duplicate handling (fuzz finding 2026-07-10, recall@10 = 0.8
+    /// under an exhaustive beam — duplicate vectors under different
+    /// keys are legal in production):
+    ///
+    /// * ties are kept (`<=`, matching hnswlib): with a strict `<`,
+    ///   any candidate tying a kept neighbor — always the case once a
+    ///   kept neighbor duplicates the node — lost, degenerating the
+    ///   prune to closest-K, which drops bridges;
+    /// * candidates co-located WITH the node collapse to ONE
+    ///   representative edge (they tie everything, so without the cap
+    ///   a duplicate cluster larger than `cap` fills every slot and
+    ///   the cluster's bridges to the rest of the graph are all
+    ///   pruned — the cluster becomes an island); the backfill also
+    ///   prefers non-co-located candidates for the same reason.
+    fn select_diverse(&self, sorted: &[(f32, u32)], cap: usize, node_vec: &[f32]) -> Vec<u32> {
+        // Co-location = vector equality, NOT distance 0 (ip distance
+        // of co-located vectors is -|v|², and 0 for orthogonal ones).
+        let co = |c: u32| self.nodes[c as usize].vec == node_vec;
         let mut kept: Vec<u32> = Vec::with_capacity(cap);
+        let mut have_twin = false;
         for &(d, c) in sorted {
             if kept.len() == cap {
                 break;
             }
+            if co(c) {
+                if !have_twin {
+                    have_twin = true;
+                    kept.push(c);
+                }
+                continue;
+            }
             let cv = &self.nodes[c as usize].vec;
             let diverse = kept.iter().all(|&s| {
-                d < self.params.distance.eval(&self.nodes[s as usize].vec, cv)
+                d <= self.params.distance.eval(&self.nodes[s as usize].vec, cv)
             });
             if diverse {
                 kept.push(c);
             }
         }
-        // backfill with the nearest skipped candidates if under cap
-        if kept.len() < cap {
+        // Backfill with the nearest skipped candidates if under cap —
+        // non-co-located first (bridges), co-located twins last.
+        for pass in [false, true] {
             for &(_, c) in sorted {
                 if kept.len() == cap {
-                    break;
+                    return kept;
                 }
-                if !kept.contains(&c) {
+                if (pass || !co(c)) && !kept.contains(&c) {
                     kept.push(c);
                 }
             }
@@ -296,7 +369,7 @@ impl Hnsw {
             .collect();
         scored.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
         scored.dedup_by_key(|e| e.1);
-        let kept = self.select_diverse(&scored, cap);
+        let kept = self.select_diverse(&scored, cap, &self.nodes[node as usize].vec);
         self.nodes[node as usize].links[layer] = kept;
     }
 
@@ -337,12 +410,26 @@ impl Hnsw {
         // default floor suits easy corpora, hard ones pass EF.
         let ef = if ef == 0 { (k * 4).max(100) } else { ef.max(k) };
         let found = self.search_layer_vec(cur, &q, 0, ef);
-        found
-            .into_iter()
-            .filter(|&(_, n)| !self.nodes[n as usize].dead)
-            .take(k)
-            .map(|(d, n)| (self.nodes[n as usize].key.clone(), d))
-            .collect()
+        self.expand_living(found, k)
+    }
+
+    /// Expand collapsed duplicates: one graph node answers for every
+    /// living key sharing its vector (all at the node's distance).
+    fn expand_living(&self, found: Vec<(f32, u32)>, k: usize) -> Vec<(Vec<u8>, f32)> {
+        let mut out: Vec<(Vec<u8>, f32)> = Vec::with_capacity(k);
+        for (d, n) in found {
+            let node = &self.nodes[n as usize];
+            if node.dead {
+                continue;
+            }
+            for key in &node.keys {
+                if out.len() == k {
+                    return out;
+                }
+                out.push((key.clone(), d));
+            }
+        }
+        out
     }
 
     /// Membership (living only).
@@ -353,7 +440,7 @@ impl Hnsw {
     /// Counters (RFC D6).
     pub fn stats(&self) -> VectorStats {
         let links: u64 = self.nodes.iter().map(|n| n.links.iter().map(Vec::len).sum::<usize>() as u64).sum();
-        let tombstones = self.nodes.len() as u64 - self.live;
+        let tombstones = self.nodes.iter().filter(|n| n.dead).count() as u64;
         let bytes_vec = (self.dim * 4) as u64;
         let approx_bytes: u64 = self.nodes.len() as u64 * (bytes_vec + 40)
             + links * 8
@@ -367,14 +454,17 @@ impl Hnsw {
         }
     }
 
-    /// Bounded rebuild: re-insert every living vector into a fresh
-    /// graph (drops tombstones and their edges) — RFC D5.
+    /// Bounded rebuild: re-insert every living (key, vector) pair into
+    /// a fresh graph (drops tombstones and their edges) — RFC D5.
+    /// Vectors are already prepared; `add_key` re-collapses duplicates.
     pub fn rebuild(&mut self) {
         let mut fresh = Hnsw::new(self.dim, self.params);
         fresh.seed = self.seed;
         for node in &self.nodes {
             if !node.dead {
-                fresh.insert_prepared(node.key.clone(), node.vec.clone());
+                for key in &node.keys {
+                    fresh.add_key(key.clone(), node.vec.clone());
+                }
             }
         }
         *self = fresh;
@@ -382,118 +472,5 @@ impl Hnsw {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn grid(n: usize) -> Hnsw {
-        // 2-d grid points — L2 neighbors are unambiguous
-        let mut h = Hnsw::new(2, HnswParams { distance: Distance::L2, ..Default::default() });
-        for i in 0..n {
-            let (x, y) = ((i % 32) as f32, (i / 32) as f32);
-            h.apply(format!("p{i:04}").as_bytes(), Some(vec![x, y]));
-        }
-        h
-    }
-
-    #[test]
-    fn knn_exact_on_grid() {
-        let h = grid(1024);
-        // nearest to (5.1, 7.05) is p(7*32+5)=p0229, then p0197/p0230…
-        let hits = h.knn(&[5.1, 7.05], 3, 0);
-        assert_eq!(hits[0].0, b"p0229".to_vec(), "{hits:?}");
-        assert_eq!(hits.len(), 3);
-        assert!(hits[0].1 <= hits[1].1);
-    }
-
-    #[test]
-    fn tombstone_and_replace() {
-        let mut h = grid(256);
-        h.apply(b"p0000", None);
-        assert!(!h.contains(b"p0000"));
-        let hits = h.knn(&[0.0, 0.0], 1, 0);
-        assert_ne!(hits[0].0, b"p0000".to_vec(), "dead filtered");
-        // replace moves the point
-        h.apply(b"p0001", Some(vec![100.0, 100.0]));
-        let hits = h.knn(&[100.0, 100.0], 1, 0);
-        assert_eq!(hits[0].0, b"p0001".to_vec());
-        let st = h.stats();
-        assert_eq!(st.vectors, 255);
-        assert_eq!(st.tombstones, 2, "one delete + one replace");
-    }
-
-    #[test]
-    fn recall_on_random_vectors() {
-        // deterministic pseudo-random 64-d vectors; HNSW top-10 vs
-        // brute force ground truth, recall must be ≥ 0.9
-        let mut seed = 42u64;
-        let mut rnd = move || {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-            ((seed >> 11) as f64 / (1u64 << 53) as f64) as f32 - 0.5
-        };
-        let mut h = Hnsw::new(64, HnswParams::default());
-        let mut all: Vec<(Vec<u8>, Vec<f32>)> = Vec::new();
-        for i in 0..2000 {
-            let v: Vec<f32> = (0..64).map(|_| rnd()).collect();
-            let key = format!("v{i:04}").into_bytes();
-            h.apply(&key, Some(v.clone()));
-            all.push((key, v));
-        }
-        let mut hit = 0usize;
-        let mut total = 0usize;
-        for qi in 0..20 {
-            let q: Vec<f32> = (0..64).map(|_| rnd()).collect();
-            let got: Vec<Vec<u8>> = h.knn(&q, 10, 0).into_iter().map(|(k, _)| k).collect();
-            // brute force with the same metric incl. normalization
-            let mut qq = q.clone();
-            Distance::Cosine.prepare(&mut qq);
-            let mut truth: Vec<(f32, &[u8])> = all
-                .iter()
-                .map(|(k, v)| {
-                    let mut vv = v.clone();
-                    Distance::Cosine.prepare(&mut vv);
-                    (Distance::Cosine.eval(&vv, &qq), k.as_slice())
-                })
-                .collect();
-            truth.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let want: Vec<&[u8]> = truth[..10].iter().map(|(_, k)| *k).collect();
-            for w in &want {
-                total += 1;
-                if got.iter().any(|g| g == w) {
-                    hit += 1;
-                }
-            }
-            let _ = qi;
-        }
-        let recall = hit as f64 / total as f64;
-        assert!(recall >= 0.9, "recall {recall}");
-    }
-
-    #[test]
-    fn rebuild_drops_tombstones_preserves_answers() {
-        let mut h = grid(512);
-        for i in 0..200 {
-            h.apply(format!("p{i:04}").as_bytes(), None);
-        }
-        assert!(h.stats().rebuild_recommended);
-        let before = h.knn(&[20.0, 10.0], 5, 0);
-        h.rebuild();
-        let st = h.stats();
-        assert_eq!(st.tombstones, 0);
-        assert_eq!(st.vectors, 312);
-        let after = h.knn(&[20.0, 10.0], 5, 0);
-        assert_eq!(
-            before.iter().map(|(k, _)| k).collect::<Vec<_>>(),
-            after.iter().map(|(k, _)| k).collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn empty_and_dim_mismatch() {
-        let h = Hnsw::new(4, HnswParams::default());
-        assert!(h.knn(&[1.0, 2.0, 3.0, 4.0], 5, 0).is_empty());
-        let mut h = grid(16);
-        h.apply(b"bad", Some(vec![1.0, 2.0, 3.0])); // wrong dim ignored
-        assert!(!h.contains(b"bad"));
-        assert!(h.knn(&[1.0], 5, 0).is_empty(), "query dim mismatch");
-    }
-}
+#[path = "hnsw_tests.rs"]
+mod tests;

@@ -21,6 +21,8 @@ const WRONGTYPE: &str = "WRONGTYPE Operation against a key holding the wrong kin
 /// algebra arms of `finalize_gather` — SINTER/SUNION/SDIFF go from
 /// `*N` Array to `~N` Set under RESP3). Every other arm is the same
 /// bytes on both protos.
+// LOC-WAIVER: data-driven aggregation-materialize match table — one
+// arm per Agg variant mapping to its RESP byte shape.
 pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
     match agg {
         Agg::First(Some(b)) => b,
@@ -205,20 +207,7 @@ fn finalize_set_algebra(
     let mut out = Vec::new();
     // v2.2: ZINTERCARD rides the Scored gather; reduce to `:count`.
     if let MultiOp::ZInterCard(limit) = op {
-        let mut inputs: Vec<Vec<(Vec<u8>, f64)>> = Vec::with_capacity(keys.len());
-        for k in keys {
-            match got.get(k) {
-                Some(Gathered::Scored(p)) => inputs.push(p.clone()),
-                Some(Gathered::WrongType) => {
-                    encode_error(&mut out, WRONGTYPE);
-                    return out;
-                }
-                _ => inputs.push(Vec::new()),
-            }
-        }
-        let n = kevy_store::zintercard(&inputs, limit) as i64;
-        encode_integer(&mut out, n);
-        return out;
+        return finalize_zintercard(limit, keys, got);
     }
     let mut sets: Vec<Vec<Vec<u8>>> = Vec::with_capacity(keys.len());
     for k in keys {
@@ -248,6 +237,32 @@ fn finalize_set_algebra(
     for m in &result {
         encode_bulk(&mut out, m);
     }
+    out
+}
+
+/// The `ZINTERCARD` arm of [`finalize_set_algebra`] — reduce the Scored
+/// gather to `:count`. Extracted verbatim (single call site,
+/// `inline(always)`) purely for the 50-LOC fn rule.
+#[inline(always)]
+fn finalize_zintercard(
+    limit: usize,
+    keys: &[Vec<u8>],
+    got: &HashMap<Vec<u8>, Gathered>,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut inputs: Vec<Vec<(Vec<u8>, f64)>> = Vec::with_capacity(keys.len());
+    for k in keys {
+        match got.get(k) {
+            Some(Gathered::Scored(p)) => inputs.push(p.clone()),
+            Some(Gathered::WrongType) => {
+                encode_error(&mut out, WRONGTYPE);
+                return out;
+            }
+            _ => inputs.push(Vec::new()),
+        }
+    }
+    let n = kevy_store::zintercard(&inputs, limit) as i64;
+    encode_integer(&mut out, n);
     out
 }
 

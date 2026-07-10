@@ -21,6 +21,7 @@ pub mod persist;
 #[cfg(test)]
 pub mod sim;
 pub mod transport;
+mod transport_loops;
 pub mod wire;
 
 pub use transport::{ElectorSnapshot, PeerAddr, TopologyCallback, Transport};

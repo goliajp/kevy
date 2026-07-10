@@ -280,30 +280,7 @@ impl StreamData {
                 Ok(super::clone_entries(take))
             }
             ReadGroupId::ReplayAfter(after) => {
-                let mut hit: Vec<(StreamId, Vec<(SmallBytes, SmallBytes)>)> = Vec::new();
-                let consumer_match = consumer_smb.clone();
-                for (id, pel_entry) in g.pel.range(after.next()..=StreamId::MAX) {
-                    if pel_entry.consumer != consumer_match {
-                        continue;
-                    }
-                    if let Some(fv) = self.entries.get(id) {
-                        hit.push((*id, fv.clone()));
-                    }
-                    if let Some(n) = count
-                        && hit.len() >= n
-                    {
-                        break;
-                    }
-                }
-                Ok(hit
-                    .into_iter()
-                    .map(|(id, fv)| {
-                        (
-                            id,
-                            fv.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
-                        )
-                    })
-                    .collect())
+                Ok(replay_pel_entries(g, &self.entries, &consumer_smb, after, count))
             }
         }
     }
@@ -397,6 +374,40 @@ pub enum ReadGroupId {
 
 /// Idempotent insert: ensure the named consumer exists in this group's
 /// roster so subsequent `pel_count`/`last_seen_ms` updates have a slot.
+/// The `XREADGROUP … <id>` replay arm: PEL entries owned by `consumer`
+/// with id strictly after `after`, joined against the live entry map
+/// (XDEL'd tombstones are skipped), capped at `count`.
+fn replay_pel_entries(
+    g: &ConsumerGroup,
+    entries: &std::collections::BTreeMap<StreamId, Vec<(SmallBytes, SmallBytes)>>,
+    consumer: &SmallBytes,
+    after: StreamId,
+    count: Option<usize>,
+) -> EntryBatch {
+    let mut hit: Vec<(StreamId, Vec<(SmallBytes, SmallBytes)>)> = Vec::new();
+    for (id, pel_entry) in g.pel.range(after.next()..=StreamId::MAX) {
+        if pel_entry.consumer != *consumer {
+            continue;
+        }
+        if let Some(fv) = entries.get(id) {
+            hit.push((*id, fv.clone()));
+        }
+        if let Some(n) = count
+            && hit.len() >= n
+        {
+            break;
+        }
+    }
+    hit.into_iter()
+        .map(|(id, fv)| {
+            (
+                id,
+                fv.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
+            )
+        })
+        .collect()
+}
+
 pub(super) fn ensure_consumer(g: &mut ConsumerGroup, name: &SmallBytes, now_ms: u64) {
     if g.consumers.get(name.as_slice()).is_none() {
         g.consumers.insert(

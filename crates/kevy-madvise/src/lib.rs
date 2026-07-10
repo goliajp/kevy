@@ -17,6 +17,7 @@
 //! the kernel returns `EINVAL` — making it safe to expose as a plain `fn`.
 
 #![forbid(unsafe_op_in_unsafe_fn)]
+#![warn(missing_docs)]
 
 #[cfg(target_os = "linux")]
 mod ffi {
@@ -125,65 +126,81 @@ pub fn mmap_anon_aligned_2mb(len: usize) -> Option<core::ptr::NonNull<u8>> {
     }
     #[cfg(target_os = "linux")]
     {
-        use core::ffi::c_void;
-        // Linux mmap flags (asm-generic/mman.h + sys/mman.h):
-        const PROT_READ: i32 = 0x1;
-        const PROT_WRITE: i32 = 0x2;
-        const MAP_PRIVATE: i32 = 0x2;
-        const MAP_ANONYMOUS: i32 = 0x20;
-        const MAP_FAILED: *mut c_void = !0usize as *mut c_void;
-        let rounded = (len + HUGE_PAGE - 1) & !(HUGE_PAGE - 1);
-        // Over-allocate by one HP so we can trim down to a 2 MiB-aligned
-        // start — mmap returns page-aligned (4 KiB), not HP-aligned.
-        let total = rounded.checked_add(HUGE_PAGE)?;
-        // SAFETY: mmap is the canonical anonymous map; no Rust memory is
-        // read or written. NULL addr lets the kernel pick.
-        let raw = unsafe {
-            ffi::mmap(
-                core::ptr::null_mut(),
-                total,
-                PROT_READ | PROT_WRITE,
-                MAP_PRIVATE | MAP_ANONYMOUS,
-                -1,
-                0,
-            )
-        };
-        if raw == MAP_FAILED {
-            return None;
-        }
-        let raw_addr = raw as usize;
-        let aligned_start = (raw_addr + HUGE_PAGE - 1) & !(HUGE_PAGE - 1);
-        let prefix = aligned_start - raw_addr;
-        let suffix = total - prefix - rounded;
-        // Trim the unaligned prefix.
-        if prefix > 0 {
-            // SAFETY: prefix bytes at `raw` are exactly what we just mapped.
-            unsafe {
-                ffi::munmap(raw, prefix);
-            }
-        }
-        // Trim the trailing slack past the aligned region.
-        if suffix > 0 {
-            // SAFETY: `aligned_start + rounded` is inside the mapping.
-            unsafe {
-                ffi::munmap((aligned_start + rounded) as *mut c_void, suffix);
-            }
-        }
-        // Best-effort huge-page hint. EINVAL on unsupported kernels =
-        // benign — the mapping still works at 4 KiB pages.
-        const MADV_HUGEPAGE: i32 = 14;
-        // SAFETY: `aligned_start..aligned_start+rounded` is fully mapped,
-        // HP-aligned, HP-multiple. madvise reads no Rust memory.
-        unsafe {
-            let _ = ffi::madvise(aligned_start as *mut c_void, rounded, MADV_HUGEPAGE);
-        }
-        core::ptr::NonNull::new(aligned_start as *mut u8)
+        mmap_anon_aligned_2mb_linux(len)
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = len;
         None
     }
+}
+
+/// Linux body of [`mmap_anon_aligned_2mb`].
+#[cfg(target_os = "linux")]
+fn mmap_anon_aligned_2mb_linux(len: usize) -> Option<core::ptr::NonNull<u8>> {
+    use core::ffi::c_void;
+    // Linux mmap flags (asm-generic/mman.h + sys/mman.h):
+    const PROT_READ: i32 = 0x1;
+    const PROT_WRITE: i32 = 0x2;
+    const MAP_PRIVATE: i32 = 0x2;
+    const MAP_ANONYMOUS: i32 = 0x20;
+    const MAP_FAILED: *mut c_void = !0usize as *mut c_void;
+    let rounded = (len + HUGE_PAGE - 1) & !(HUGE_PAGE - 1);
+    // Over-allocate by one HP so we can trim down to a 2 MiB-aligned
+    // start — mmap returns page-aligned (4 KiB), not HP-aligned.
+    let total = rounded.checked_add(HUGE_PAGE)?;
+    // SAFETY: mmap is the canonical anonymous map; no Rust memory is
+    // read or written. NULL addr lets the kernel pick.
+    let raw = unsafe {
+        ffi::mmap(
+            core::ptr::null_mut(),
+            total,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+    };
+    if raw == MAP_FAILED {
+        return None;
+    }
+    let aligned_start = trim_to_aligned(raw, total, rounded);
+    // Best-effort huge-page hint. EINVAL on unsupported kernels =
+    // benign — the mapping still works at 4 KiB pages.
+    const MADV_HUGEPAGE: i32 = 14;
+    // SAFETY: `aligned_start..aligned_start+rounded` is fully mapped,
+    // HP-aligned, HP-multiple. madvise reads no Rust memory.
+    unsafe {
+        let _ = ffi::madvise(aligned_start as *mut c_void, rounded, MADV_HUGEPAGE);
+    }
+    core::ptr::NonNull::new(aligned_start as *mut u8)
+}
+
+/// Trim the raw `total`-byte mapping at `raw` down to the 2 MiB-aligned
+/// `rounded`-byte region, munmapping the unaligned prefix and the
+/// trailing slack. Returns the aligned start address.
+#[cfg(target_os = "linux")]
+fn trim_to_aligned(raw: *mut core::ffi::c_void, total: usize, rounded: usize) -> usize {
+    use core::ffi::c_void;
+    let raw_addr = raw as usize;
+    let aligned_start = (raw_addr + HUGE_PAGE - 1) & !(HUGE_PAGE - 1);
+    let prefix = aligned_start - raw_addr;
+    let suffix = total - prefix - rounded;
+    // Trim the unaligned prefix.
+    if prefix > 0 {
+        // SAFETY: prefix bytes at `raw` are exactly what we just mapped.
+        unsafe {
+            ffi::munmap(raw, prefix);
+        }
+    }
+    // Trim the trailing slack past the aligned region.
+    if suffix > 0 {
+        // SAFETY: `aligned_start + rounded` is inside the mapping.
+        unsafe {
+            ffi::munmap((aligned_start + rounded) as *mut c_void, suffix);
+        }
+    }
+    aligned_start
 }
 
 /// Release a buffer previously returned by [`mmap_anon_aligned_2mb`].

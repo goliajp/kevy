@@ -55,6 +55,38 @@ client 1.13.
   filter, and pipeline in-order + in-slot errors. Embedded parity
   covered by per-module unit tests (54 total).
 
+## 3.18.0 — the structure release
+
+The whole 3.x-sprint structural debt, cleared in one arc — plus the
+verification depth the high-blast-radius stones always deserved:
+
+- LOC debt to ZERO: 21 files >500 LOC split by responsibility (pure
+  moves, zero pub-API change), 139 over-limit functions split or
+  waivered (annotated dispatch tables and busy-poll bodies only).
+  bench/locgate.sh enforces the 500/50 rules in CI from now on.
+- The kevy-rt hot paths (batch D) were split under a strict
+  zero-cost discipline — module moves and single-call-site
+  inline(always) helpers only, the io_uring critical path untouched
+  — and accepted against a 3-run median perfgate on the bench box:
+  zero regression.
+- Six stones that had no fuzzing got it: map (BTreeMap oracle),
+  ring (two-thread value conservation), config (trust-boundary
+  parser), text, store zset, vector (HNSW invariants + recall
+  oracle). Day-one harvest, all fixed: a text limit=0 panic, config
+  EOF errors at 0:0, config REWRITE silently dropping six sections
+  (both hand-kept serializers now share one canonical source), and
+  HNSW losing connectivity on duplicate vectors (duplicates now
+  fold onto one graph node).
+- miri now also covers kevy-ring and kevy-store's zset suite in CI;
+  all 18 stone crates enforce #![warn(missing_docs)]; a ~380-item
+  clippy pedantic sweep (90 real fixes, everything else waivered
+  with written reasons); microbench baselines for the six stones in
+  bench/STONE-BENCH.md.
+- Toolchain: Rust 1.97.0 (rust-version now actually inherited by
+  all 32 crates), every GitHub Action on its current major, Docker
+  base image current.
+- Release arena: 7/7 wins vs valkey 9.1 (GET 3.0x, SET 4.0x).
+
 ## 3.17.4
 
 The polish wave — docs and toolchain truth:

@@ -49,7 +49,7 @@ impl ProvidedBufRing {
         if let Err(e) = Self::register_with_kernel(ring_fd, ring, entries, bgid) {
             // Unmap on failure so we don't leak the page.
             // SAFETY: `ring`/`ring_len` are the pair `mmap` just returned to us.
-            unsafe { ffi::munmap(ring as *mut c_void, ring_len) };
+            unsafe { ffi::munmap(ring.cast::<c_void>(), ring_len) };
             return Err(e);
         }
         let mut pbr = ProvidedBufRing {
@@ -87,14 +87,14 @@ impl ProvidedBufRing {
         if ring as isize == -1 {
             return Err(io::Error::last_os_error());
         }
-        Ok((ring as *mut u8, ring_len))
+        Ok((ring.cast::<u8>(), ring_len))
     }
 
     /// Tell the kernel about a newly allocated buf ring under `bgid`.
     fn register_with_kernel(ring_fd: c_int, ring: *mut u8, entries: u16, bgid: u16) -> io::Result<()> {
         let reg = IoUringBufReg {
             ring_addr: ring as u64,
-            ring_entries: entries as u32,
+            ring_entries: u32::from(entries),
             bgid,
             pad: 0,
             resv: [0; 3],
@@ -103,9 +103,9 @@ impl ProvidedBufRing {
         let ret = unsafe {
             ffi::syscall(
                 SYS_IO_URING_REGISTER,
-                ring_fd as c_long,
-                IORING_REGISTER_PBUF_RING as c_long,
-                &reg as *const IoUringBufReg as c_long,
+                c_long::from(ring_fd),
+                c_long::from(IORING_REGISTER_PBUF_RING),
+                &raw const reg as c_long,
                 1 as c_long,
             )
         };
@@ -136,14 +136,17 @@ impl ProvidedBufRing {
         let addr = unsafe { self.slab.as_ptr().add(bid as usize * self.buf_size as usize) } as u64;
         // SAFETY: `base` is an in-bounds 16-byte slot; fields are unaligned-safe.
         unsafe {
-            ptr::write_unaligned(base as *mut u64, addr);
-            ptr::write_unaligned(base.add(8) as *mut u32, self.buf_size);
-            ptr::write_unaligned(base.add(12) as *mut u16, bid);
+            ptr::write_unaligned(base.cast::<u64>(), addr);
+            ptr::write_unaligned(base.add(8).cast::<u32>(), self.buf_size);
+            ptr::write_unaligned(base.add(12).cast::<u16>(), bid);
         }
         self.tail = self.tail.wrapping_add(1);
     }
 
     /// Publish the staged buffers to the kernel (store-release on the ring tail).
+    // cast_ptr_alignment: offset 14 in a page-aligned mapping is 2-byte
+    // aligned, which is all `AtomicU16` requires (see SAFETY note below).
+    #[allow(clippy::cast_ptr_alignment)]
     pub(crate) fn commit(&self) {
         // SAFETY: `ring + IO_URING_BUF_TAIL_OFF` is a 2-byte slot inside the
         // mapping (offset 14 of slot 0 — see IO_URING_BUF_TAIL_OFF doc).
@@ -174,12 +177,12 @@ impl Drop for ProvidedBufRing {
         unsafe {
             ffi::syscall(
                 SYS_IO_URING_REGISTER,
-                self.ring_fd as c_long,
-                IORING_UNREGISTER_PBUF_RING as c_long,
-                &reg as *const IoUringBufReg as c_long,
+                c_long::from(self.ring_fd),
+                c_long::from(IORING_UNREGISTER_PBUF_RING),
+                &raw const reg as c_long,
                 1 as c_long,
             );
-            ffi::munmap(self.ring as *mut c_void, self.ring_len);
+            ffi::munmap(self.ring.cast::<c_void>(), self.ring_len);
         }
     }
 }

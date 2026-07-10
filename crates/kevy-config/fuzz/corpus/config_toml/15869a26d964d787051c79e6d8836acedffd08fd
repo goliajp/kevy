@@ -1,0 +1,11 @@
+# ke(vig seed
+[server]
+bind     = "127.0.0.1"
+port     = 6004
+threads  = 5
+data_dir = "/va        =ƒ\\\\1ƒƒƒƒƒƒƒƒƒƒƒƒ____________^__________MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMnŽi\n#1i\nl________________________]___________MMMMMMMMMMM¶MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMnŽi\n#1i\nl_____________________À__]_________________g  ££‰M‰"
+
+[persistence]
+aof            = true
+appendfsync                  = "everysec"
+auto_aof_rewrite_percentage  =  128

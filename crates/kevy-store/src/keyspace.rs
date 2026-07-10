@@ -361,41 +361,27 @@ impl Store {
             // L2: snapshot/replication load keeps the encoding — store as
             // Int directly to preserve the in-memory shape (and avoid the
             // SET-detect parse on the load path).
-            Value::Int(n) => {
-                self.insert_entry(
-                    crate::value::SmallBytes::from_slice(&k),
-                    crate::Entry::new(Value::Int(*n), ttl_ms.map(|ms| crate::deadline_at(crate::now_ns(), std::time::Duration::from_millis(ms)))),
-                );
-            }
+            Value::Int(n) => self.insert_loaded(k, Value::Int(*n), ttl_ms),
             // L1: preserve the Arc-backed encoding on snapshot/replication
             // load. Arc::clone is cheap; avoids re-copying the bytes.
-            Value::ArcBulk(a) => {
-                self.insert_entry(
-                    crate::value::SmallBytes::from_slice(&k),
-                    crate::Entry::new(Value::ArcBulk(a.clone()), ttl_ms.map(|ms| crate::deadline_at(crate::now_ns(), std::time::Duration::from_millis(ms)))),
-                );
+            Value::ArcBulk(a) => self.insert_loaded(k, Value::ArcBulk(a.clone()), ttl_ms),
+            Value::Hash(h) => {
+                self.load_hash(k, h.iter().map(|(f, v)| (f.to_vec(), v.clone())).collect(), ttl_ms)
             }
-            Value::Hash(h) => self.load_hash(
-                k,
-                h.iter().map(|(f, v)| (f.to_vec(), v.clone())).collect(),
-                ttl_ms,
-            ),
             // A.8: same shape as A.7 — re-materialise to the heap-backed
             // variant on snapshot/replication load. First mutation that
             // targets the key will go through the encoding-switch path
             // and (if size still fits) re-promote to the inline variant.
-            Value::SmallHashInline(h) => self.load_hash(
-                k,
-                h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(),
-                ttl_ms,
-            ),
+            Value::SmallHashInline(h) => {
+                self.load_hash(k, h.iter().map(|(f, v)| (f.to_vec(), v.to_vec())).collect(), ttl_ms)
+            }
             Value::List(l) => self.load_list(k, l.iter().cloned().collect(), ttl_ms),
-            Value::SmallListInline(l) => self.load_list(
-                k,
-                l.iter().map(<[u8]>::to_vec).collect(),
-                ttl_ms,
-            ),
-            Value::Set(s) => self.load_set(k, s.iter().map(kevy_bytes::SmallBytes::to_vec).collect(), ttl_ms),
+            Value::SmallListInline(l) => {
+                self.load_list(k, l.iter().map(<[u8]>::to_vec).collect(), ttl_ms)
+            }
+            Value::Set(s) => {
+                self.load_set(k, s.iter().map(kevy_bytes::SmallBytes::to_vec).collect(), ttl_ms)
+            }
             // A.7 O5: snapshot/replication load — re-materialise the
             // inline-encoded set as a `Value::Set`-backed `KevySet`. We
             // don't preserve the SmallSetInline encoding on reload
@@ -404,45 +390,43 @@ impl Store {
             // wire format already uses the OP_SET length-prefixed
             // payload — losing the inline encoding bit costs nothing
             // beyond one re-promotion on the first mutation.
-            Value::SmallSetInline(s) => self.load_set(
-                k,
-                s.iter_slices().map(<[u8]>::to_vec).collect(),
-                ttl_ms,
-            ),
-            Value::ZSet(z) => self.load_zset(
-                k,
-                z.ordered().map(|(m, sc)| (m.to_vec(), sc)).collect(),
-                ttl_ms,
-            ),
-            Value::SmallZSetInline(z) => self.load_zset(
-                k,
-                z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect(),
-                ttl_ms,
-            ),
-            Value::Stream(st) => {
-                let entries: Vec<crate::stream::LoadedStreamEntry> = st
-                    .iter_entries()
-                    .map(|(id, fv)| {
-                        let fvv = fv
-                            .iter()
-                            .map(|(f, v)| (f.as_slice().to_vec(), v.as_slice().to_vec()))
-                            .collect();
-                        (id.ms, id.seq, fvv)
-                    })
-                    .collect();
-                let last = st.last_id();
-                let mxd = st.max_deleted_id();
-                self.load_stream(
-                    k,
-                    entries,
-                    (last.ms, last.seq),
-                    (mxd.ms, mxd.seq),
-                    st.entries_added(),
-                    st.export_groups(),
-                    ttl_ms,
-                );
+            Value::SmallSetInline(s) => {
+                self.load_set(k, s.iter_slices().map(<[u8]>::to_vec).collect(), ttl_ms)
             }
+            Value::ZSet(z) => {
+                self.load_zset(k, z.ordered().map(|(m, sc)| (m.to_vec(), sc)).collect(), ttl_ms)
+            }
+            Value::SmallZSetInline(z) => {
+                self.load_zset(k, z.iter().map(|(m, sc)| (m.to_vec(), sc)).collect(), ttl_ms)
+            }
+            Value::Stream(st) => self.load_stream_value(k, st, ttl_ms),
         }
+    }
+
+    /// [`Self::load_value`]'s stream arm: decode the live `StreamData`
+    /// into the primitive tuples [`Self::load_stream`] takes.
+    fn load_stream_value(&mut self, k: Vec<u8>, st: &crate::StreamData, ttl_ms: Option<u64>) {
+        let entries: Vec<crate::stream::LoadedStreamEntry> = st
+            .iter_entries()
+            .map(|(id, fv)| {
+                let fvv = fv
+                    .iter()
+                    .map(|(f, v)| (f.as_slice().to_vec(), v.as_slice().to_vec()))
+                    .collect();
+                (id.ms, id.seq, fvv)
+            })
+            .collect();
+        let last = st.last_id();
+        let mxd = st.max_deleted_id();
+        self.load_stream(
+            k,
+            entries,
+            (last.ms, last.seq),
+            (mxd.ms, mxd.seq),
+            st.entries_added(),
+            st.export_groups(),
+            ttl_ms,
+        );
     }
 
     /// Snapshot-load a stream: every entry plus the per-stream scalar

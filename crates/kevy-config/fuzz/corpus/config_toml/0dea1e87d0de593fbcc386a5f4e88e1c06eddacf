@@ -1,0 +1,15 @@
+# 0
+
+[log]
+level    = "info"
+output   ="stdÿÿÿÿ"
+
+[advanced]
+spin_limit   = 129
+
+[log]
+level  = "info"
+output   ="derrþÿÿÿÿÿÿÿ"
+
+[advanced]
+spin_limit          = 128

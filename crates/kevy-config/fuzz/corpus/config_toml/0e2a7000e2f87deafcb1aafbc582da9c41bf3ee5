@@ -1,0 +1,6 @@
+# kevy conf"
+
+[persistence]
+auto_aof_rewrite_min_size    = "64tb"
+
+#of_rewr

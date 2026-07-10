@@ -302,7 +302,7 @@ impl ReplicaClient {
                 Ok(ReplicaEvent::Frame(f)) => return Some(Ok(f)),
                 // v3.14 heartbeats are out-of-band — invisible to a
                 // frame-only consumer.
-                Ok(ReplicaEvent::Ping { .. }) => continue,
+                Ok(ReplicaEvent::Ping { .. }) => {}
                 Ok(_) => return Some(Err(ReplicaError::SnapshotInProgress)),
                 Err(e) => return Some(Err(e)),
             }
@@ -371,7 +371,7 @@ fn read_ack(sock: &mut TcpStream) -> Result<u64, ReplicaError> {
                     return Err(ReplicaError::AckMalformed);
                 }
             }
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
             Err(e) => return Err(ReplicaError::Io(e)),
         }
     }

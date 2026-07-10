@@ -1,0 +1,40 @@
+# keÿÿ"
+
+[advanced]
+spin_limit        = 1000
+park_timeout_ms = 1
+tick_check_every = 63
+ring_capacity    = 1024
+
+[slowlog]
+slower_than_micros =000
+max_len  = 20
+
+[log]
+level    = "info"
+output   ="srþÿÿ¶¶¶ÿ"
+
+[advanced]
+spin_limit       =000
+park_timeout_ms     = 1000
+park_timeout_ms  = 1
+tick_check_every = 64
+ring_capacity    = 1024
+
+[slowlog]
+slower_than_micros = 20000
+max_len        = 20
+
+[log]
+level    = "info"
+output   ="stÿÿ"
+
+[advanced]
+spin_limit        = 1000
+park_timeout_ms  = 1
+tick_check_every = 64
+ring_capacity    = 2048
+
+[slowlog]
+slower_than_micros =000
+max_len      = 128

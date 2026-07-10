@@ -1,0 +1,11 @@
+# ke(vy cig seed
+[server]
+bind     = "127.0.0.1"
+port     = 6004
+threads  = 5
+data_dir = "/va        =ƒ\\\\1ƒƒƒƒƒƒƒƒƒƒƒƒ____________^__________MMMMMMM_MMMMMMMMMMMMMMMMMMMMMMMMMnŽi\n#1i\nl________________________]___________MMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMMnŽi\n#1i\nl_	_____________TTT__________]_________________™__\\v²y"
+
+[persistence]
+aof            = true
+appendfsync                  = "everysec"
+auto_aof_rewrite_percentage  =  256

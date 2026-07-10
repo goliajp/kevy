@@ -49,6 +49,16 @@ pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(args: &A) -> ResolvedCmd {
         _ => {}
     }
 
+    resolve_general(upper, args)
+}
+
+/// The general (non-GET/SET) resolution tail: one lookup per
+/// [`ResolvedCmd`] field. Single call site in [`kevy_resolve`];
+/// `inline(always)` keeps the split codegen-identical to the
+/// pre-split fused body (this is still the per-op path for every
+/// verb outside the tier-1 pair).
+#[inline(always)]
+fn resolve_general<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> ResolvedCmd {
     let txn_kind = match upper {
         b"MULTI" => TxnKind::Multi,
         b"EXEC" => TxnKind::Exec,
@@ -78,6 +88,7 @@ pub(crate) fn kevy_resolve<A: ArgvView + ?Sized>(args: &A) -> ResolvedCmd {
 /// / pub/sub / transactional control. Pure data; the cost is one `match
 /// upper` plus the small extractor calls (KEYS pattern, SCAN cursor,
 /// XREAD STREAMS key, SLOWLOG sub-command).
+// LOC-WAIVER: data-driven verb → Route match table — one arm per verb.
 fn route_for_verb<A: ArgvView + ?Sized>(upper: &[u8], args: &A) -> Route {
     match upper {
         b"HELLO" => Route::Hello,

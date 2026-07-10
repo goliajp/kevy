@@ -119,6 +119,9 @@ impl<C: Commands> Shard<C> {
     /// bookkeeping. This used to be four probes split across a
     /// `dispatch_inline` helper.
     #[inline]
+    // LOC-WAIVER: hot in-shard dispatch fast path (single-probe inline
+    // GET + dispatch-into-output); splitting risks codegen change on
+    // the per-op critical path (perf-vs-foss discipline).
     pub(crate) fn try_inline_local<A: ArgvView + ?Sized>(
         &mut self,
         conn_id: u64,
@@ -299,6 +302,8 @@ impl<C: Commands> Shard<C> {
     /// forwarded paths): WATCH version bump, AOF append, keyspace notify,
     /// and BLOCK reactor wake on the written key. Each step is a no-op
     /// when its feature is unused on this shard.
+    // LOC-WAIVER: hot per-write path with hand-placed #[cold] hints;
+    // each step is feature-gated to a branch — splitting risks codegen.
     pub(crate) fn post_write_housekeeping<A: ArgvView + ?Sized>(
         &mut self,
         args: &A,

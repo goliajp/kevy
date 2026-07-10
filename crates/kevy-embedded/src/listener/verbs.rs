@@ -34,6 +34,9 @@ fn parse_i64(b: &[u8]) -> Option<i64> {
 }
 
 /// Dispatch one whitelisted request (RFC D3 set).
+// fn-length exemption: pure data-driven verb match table — one flat
+// arm per whitelisted verb; multi-step verbs live in cmd_* helpers.
+// LOC-WAIVER: data-driven verb dispatch table — one reply-emitter arm per verb.
 pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
     let up = verb.to_ascii_uppercase();

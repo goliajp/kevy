@@ -2,6 +2,7 @@
 //! compiled prefix matcher the write-path hook consults.
 
 use crate::value::IndexValue;
+use std::fmt::Write as _;
 
 /// Declared scalar type of an index (`TYPE i64|f64|str`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -227,7 +228,8 @@ impl Catalog {
     pub fn to_sidecar(&self) -> String {
         let mut out = String::from("kevy-index-catalog v1\n");
         for (s, _) in &self.specs {
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "{}\t{}\t{}\t{}\t{}\t{}",
                 esc(&s.name),
                 esc(&s.prefix),
@@ -235,13 +237,13 @@ impl Catalog {
                 s.ty.tag(),
                 s.kind.tag(),
                 s.max_bytes
-            ));
+            );
             // 7th column is kind-interpreted: ann params for Ann,
             // escaped group field for Agg.
             if let Some(a) = &s.ann {
-                out.push_str(&format!("\t{},{},{},{}", a.dim, a.distance, a.m, a.ef));
+                let _ = write!(out, "\t{},{},{},{}", a.dim, a.distance, a.m, a.ef);
             } else if let Some(g) = &s.group_by {
-                out.push_str(&format!("\t{}", esc(g)));
+                let _ = write!(out, "\t{}", esc(g));
             }
             out.push('\n');
         }
@@ -260,55 +262,60 @@ impl Catalog {
             if line.is_empty() {
                 continue;
             }
-            let parts: Vec<&str> = line.split('\t').collect();
-            if !(parts.len() == 6 || parts.len() == 7) {
-                return None;
-            }
-            let kind = IndexKind::parse(parts[4].as_bytes())?;
-            let (ann, group_by) = if parts.len() == 7 {
-                match kind {
-                    IndexKind::Ann => {
-                        let nums: Vec<&str> = parts[6].split(',').collect();
-                        if nums.len() != 4 {
-                            return None;
-                        }
-                        (
-                            Some(AnnSpec {
-                                dim: nums[0].parse().ok()?,
-                                distance: nums[1].parse().ok()?,
-                                m: nums[2].parse().ok()?,
-                                ef: nums[3].parse().ok()?,
-                            }),
-                            None,
-                        )
-                    }
-                    IndexKind::Agg => (None, Some(unesc(parts[6])?)),
-                    _ => return None,
-                }
-            } else {
-                (None, None)
-            };
-            let spec = IndexSpec {
-                name: unesc(parts[0])?,
-                prefix: unesc(parts[1])?,
-                field: unesc(parts[2])?,
-                ty: ValType::parse(parts[3].as_bytes())?,
-                kind,
-                max_bytes: parts[5].parse().ok()?,
-                ann,
-                group_by,
-            };
-            c.create(spec).ok()?;
+            c.create(spec_from_line(line)?).ok()?;
         }
         Some(c)
     }
+}
+
+/// Parse one sidecar line back into an [`IndexSpec`] — the inverse of
+/// one `to_sidecar` line. `None` on malformed input.
+fn spec_from_line(line: &str) -> Option<IndexSpec> {
+    let parts: Vec<&str> = line.split('\t').collect();
+    if !(parts.len() == 6 || parts.len() == 7) {
+        return None;
+    }
+    let kind = IndexKind::parse(parts[4].as_bytes())?;
+    let (ann, group_by) = if parts.len() == 7 {
+        match kind {
+            IndexKind::Ann => {
+                let nums: Vec<&str> = parts[6].split(',').collect();
+                if nums.len() != 4 {
+                    return None;
+                }
+                (
+                    Some(AnnSpec {
+                        dim: nums[0].parse().ok()?,
+                        distance: nums[1].parse().ok()?,
+                        m: nums[2].parse().ok()?,
+                        ef: nums[3].parse().ok()?,
+                    }),
+                    None,
+                )
+            }
+            IndexKind::Agg => (None, Some(unesc(parts[6])?)),
+            _ => return None,
+        }
+    } else {
+        (None, None)
+    };
+    Some(IndexSpec {
+        name: unesc(parts[0])?,
+        prefix: unesc(parts[1])?,
+        field: unesc(parts[2])?,
+        ty: ValType::parse(parts[3].as_bytes())?,
+        kind,
+        max_bytes: parts[5].parse().ok()?,
+        ann,
+        group_by,
+    })
 }
 
 fn esc(b: &[u8]) -> String {
     let mut out = String::with_capacity(b.len());
     for &c in b {
         if c == b'\t' || c == b'\n' || c == b'%' || !(32..127).contains(&c) {
-            out.push_str(&format!("%{c:02X}"));
+            let _ = write!(out, "%{c:02X}");
         } else {
             out.push(c as char);
         }

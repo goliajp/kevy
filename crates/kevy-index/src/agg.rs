@@ -100,6 +100,9 @@ impl AggSegment {
     /// participates; `None` = removed or excluded. `excluded_row`
     /// marks the None case as a coercion/missing-field exclusion
     /// (counted) rather than a plain delete.
+    // missing_panics_doc: the only panic is the "group of live row" expect —
+    // an internal rows↔groups invariant, never reachable from caller input.
+    #[allow(clippy::missing_panics_doc)]
     pub fn apply(&mut self, key: &[u8], entry: Option<(Vec<u8>, IndexValue)>, excluded_row: bool) {
         // Fast path: same-group value update (the dominant serving
         // write shape — measured 16.8% write tax on a Zipf corpus
@@ -124,6 +127,27 @@ impl AggSegment {
             *old_val = val.clone();
             return;
         }
+        self.retract_row(key);
+        match entry {
+            Some((group, val)) => {
+                let g = self.groups.entry(group.clone()).or_insert(Group {
+                    count: 0,
+                    sum: 0.0,
+                    values: BTreeMap::new(),
+                });
+                g.count += 1;
+                g.sum += val.as_f64();
+                *g.values.entry(val.clone()).or_insert(0) += 1;
+                self.rows.insert(key.to_vec(), (group, val));
+            }
+            None if excluded_row => self.excluded += 1,
+            None => {}
+        }
+    }
+
+    /// Retract one row's current contribution (no-op for an unknown
+    /// key); drops the group when its last row leaves.
+    fn retract_row(&mut self, key: &[u8]) {
         if let Some((old_group, old_val)) = self.rows.remove(key) {
             let empty = {
                 let g = self.groups.get_mut(&old_group).expect("group of live row");
@@ -140,21 +164,6 @@ impl AggSegment {
             if empty {
                 self.groups.remove(&old_group);
             }
-        }
-        match entry {
-            Some((group, val)) => {
-                let g = self.groups.entry(group.clone()).or_insert(Group {
-                    count: 0,
-                    sum: 0.0,
-                    values: BTreeMap::new(),
-                });
-                g.count += 1;
-                g.sum += val.as_f64();
-                *g.values.entry(val.clone()).or_insert(0) += 1;
-                self.rows.insert(key.to_vec(), (group, val));
-            }
-            None if excluded_row => self.excluded += 1,
-            None => {}
         }
     }
 
@@ -186,6 +195,9 @@ impl AggSegment {
                 AggBy::Min => g.values.keys().next().map_or(f64::NEG_INFINITY, |v| -v.as_f64()),
             }
         };
+        // float_cmp: exact equality is the tiebreak trigger — an epsilon would
+        // make the top-K selection non-deterministic for equal scores.
+        #[allow(clippy::float_cmp)]
         let better = |a: (f64, &[u8]), b: (f64, &[u8])| a.0 > b.0 || (a.0 == b.0 && a.1 < b.1);
         let mut top: Vec<(f64, &Vec<u8>)> = Vec::with_capacity(limit.min(1024) + 1);
         for (k, g) in &self.groups {

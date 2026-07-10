@@ -1,0 +1,5 @@
+
+[memory]
+maxmemory = "512m"
+maxmemory= "51b"
+m=0

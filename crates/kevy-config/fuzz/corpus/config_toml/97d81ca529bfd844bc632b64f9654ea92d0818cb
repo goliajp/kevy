@@ -1,0 +1,5 @@
+[server]
+threads  = 4
+data_dir = "/\\\\\\\\ÿ\\\\\\\\\\"
+[slowlog]
+slower_than_micros  = 1

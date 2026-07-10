@@ -1,0 +1,12 @@
+
+
+[expiry]
+hz  = 10
+sample = 0
+
+[log]
+
+output ="stÿÿ"
+
+[advanced]
+spin_limit  = 127

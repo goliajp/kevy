@@ -77,7 +77,7 @@ impl PartialEq for WireError {
 /// builds emit a frame the peer will reject with `BadOffset`.
 pub fn encode_frame<A: ArgvView + ?Sized>(offset: u64, argv: &A) -> Vec<u8> {
     debug_assert!(
-        offset <= i64::MAX as u64,
+        i64::try_from(offset).is_ok(),
         "replication offset {offset} exceeds i64::MAX — wire envelope cannot encode",
     );
     // Pre-size: outer header (~5) + offset line (≤22) + inner array

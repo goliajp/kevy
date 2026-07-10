@@ -14,7 +14,7 @@ use crate::size::parse_size;
 
 impl Config {
     /// Apply a single parsed item (one `(section, key, value)` triple).
-    pub(crate) fn apply_item(&mut self, item: Item) -> Result<(), ConfigError> {
+    pub(crate) fn apply_item(&mut self, item: &Item) -> Result<(), ConfigError> {
         let section = item.section.as_deref().unwrap_or("");
         match section {
             "server" => self.apply_server(item),
@@ -31,153 +31,153 @@ impl Config {
             "lua" => self.apply_lua(item),
             "metrics" => self.apply_metrics(item),
             "audit" => self.apply_audit(item),
-            other => Err(schema_err(&item, format!("unknown section [{other}]"))),
+            other => Err(schema_err(item, format!("unknown section [{other}]"))),
         }
     }
 
-    fn apply_metrics(&mut self, item: Item) -> Result<(), ConfigError> {
+    fn apply_metrics(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
-            "listen_port" => self.metrics.listen_port = value_as_u16(&item)?,
-            k => return Err(schema_err(&item, format!("unknown [metrics] key: {k}"))),
+            "listen_port" => self.metrics.listen_port = value_as_u16(item)?,
+            k => return Err(schema_err(item, format!("unknown [metrics] key: {k}"))),
         }
         Ok(())
     }
 
-    fn apply_audit(&mut self, item: Item) -> Result<(), ConfigError> {
+    fn apply_audit(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
-            "log_path" => self.audit.log_path = PathBuf::from(value_as_string(&item)?),
-            k => return Err(schema_err(&item, format!("unknown [audit] key: {k}"))),
+            "log_path" => self.audit.log_path = PathBuf::from(value_as_string(item)?),
+            k => return Err(schema_err(item, format!("unknown [audit] key: {k}"))),
         }
         Ok(())
     }
 
-    fn apply_server(&mut self, item: Item) -> Result<(), ConfigError> {
+    fn apply_server(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
             "bind" => {
-                self.server.bind = parse_ipv4(&value_as_string(&item)?).ok_or_else(|| {
-                    schema_err(&item, "bind must be a dotted-quad IPv4 string")
+                self.server.bind = parse_ipv4(&value_as_string(item)?).ok_or_else(|| {
+                    schema_err(item, "bind must be a dotted-quad IPv4 string")
                 })?;
             }
-            "port" => self.server.port = value_as_u16(&item)?,
-            "threads" => self.server.threads = value_as_usize(&item)?,
-            "accept_shards" => self.server.accept_shards = Some(value_as_usize(&item)?),
-            "max_clients" => self.server.max_clients = value_as_usize(&item)?,
-            "data_dir" => self.server.data_dir = PathBuf::from(value_as_string(&item)?),
-            k => return Err(schema_err(&item, format!("unknown [server] key: {k}"))),
+            "port" => self.server.port = value_as_u16(item)?,
+            "threads" => self.server.threads = value_as_usize(item)?,
+            "accept_shards" => self.server.accept_shards = Some(value_as_usize(item)?),
+            "max_clients" => self.server.max_clients = value_as_usize(item)?,
+            "data_dir" => self.server.data_dir = PathBuf::from(value_as_string(item)?),
+            k => return Err(schema_err(item, format!("unknown [server] key: {k}"))),
         }
         Ok(())
     }
 
-    fn apply_persistence(&mut self, item: Item) -> Result<(), ConfigError> {
+    fn apply_persistence(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
-            "aof" => self.persistence.aof = value_as_bool(&item)?,
+            "aof" => self.persistence.aof = value_as_bool(item)?,
             "appendfsync" => {
-                self.persistence.appendfsync = parse_appendfsync(&value_as_string(&item)?)
+                self.persistence.appendfsync = parse_appendfsync(&value_as_string(item)?)
                     .ok_or_else(|| {
                         schema_err(
-                            &item,
+                            item,
                             "appendfsync must be 'always' | 'everysec' | 'no'",
                         )
                     })?;
             }
             "auto_aof_rewrite_percentage" => {
-                self.persistence.auto_aof_rewrite_percentage = value_as_u32(&item)?;
+                self.persistence.auto_aof_rewrite_percentage = value_as_u32(item)?;
             }
             "auto_aof_rewrite_min_size" => {
-                self.persistence.auto_aof_rewrite_min_size = value_as_size(&item)?;
+                self.persistence.auto_aof_rewrite_min_size = value_as_size(item)?;
             }
-            k => return Err(schema_err(&item, format!("unknown [persistence] key: {k}"))),
+            k => return Err(schema_err(item, format!("unknown [persistence] key: {k}"))),
         }
         Ok(())
     }
 
-    fn apply_memory(&mut self, item: Item) -> Result<(), ConfigError> {
+    fn apply_memory(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
-            "maxmemory" => self.memory.maxmemory = value_as_size(&item)?,
+            "maxmemory" => self.memory.maxmemory = value_as_size(item)?,
             "maxmemory_policy" => {
-                self.memory.maxmemory_policy = parse_eviction(&value_as_string(&item)?)
+                self.memory.maxmemory_policy = parse_eviction(&value_as_string(item)?)
                     .ok_or_else(|| {
                         schema_err(
-                            &item,
+                            item,
                             "maxmemory_policy must be one of: noeviction, allkeys-lru, \
                              allkeys-lfu, allkeys-random, volatile-lru, volatile-lfu, \
                              volatile-random, volatile-ttl",
                         )
                     })?;
             }
-            k => return Err(schema_err(&item, format!("unknown [memory] key: {k}"))),
+            k => return Err(schema_err(item, format!("unknown [memory] key: {k}"))),
         }
         Ok(())
     }
 
-    fn apply_expiry(&mut self, item: Item) -> Result<(), ConfigError> {
+    fn apply_expiry(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
-            "hz" => self.expiry.hz = value_as_u32(&item)?,
-            "sample" => self.expiry.sample = value_as_u32(&item)?,
-            k => return Err(schema_err(&item, format!("unknown [expiry] key: {k}"))),
+            "hz" => self.expiry.hz = value_as_u32(item)?,
+            "sample" => self.expiry.sample = value_as_u32(item)?,
+            k => return Err(schema_err(item, format!("unknown [expiry] key: {k}"))),
         }
         Ok(())
     }
 
-    fn apply_log(&mut self, item: Item) -> Result<(), ConfigError> {
+    fn apply_log(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
             "level" => {
-                self.log.level = parse_log_level(&value_as_string(&item)?).ok_or_else(|| {
+                self.log.level = parse_log_level(&value_as_string(item)?).ok_or_else(|| {
                     schema_err(
-                        &item,
+                        item,
                         "log.level must be 'trace' | 'debug' | 'info' | 'warn' | 'error'",
                     )
                 })?;
             }
-            "output" => self.log.output = parse_log_output(&value_as_string(&item)?),
-            k => return Err(schema_err(&item, format!("unknown [log] key: {k}"))),
+            "output" => self.log.output = parse_log_output(&value_as_string(item)?),
+            k => return Err(schema_err(item, format!("unknown [log] key: {k}"))),
         }
         Ok(())
     }
 
-    fn apply_notification(&mut self, item: Item) -> Result<(), ConfigError> {
+    fn apply_notification(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
             "notify_keyspace_events" => {
-                self.notification.notify_keyspace_events = value_as_string(&item)?;
+                self.notification.notify_keyspace_events = value_as_string(item)?;
             }
-            k => return Err(schema_err(&item, format!("unknown [notification] key: {k}"))),
+            k => return Err(schema_err(item, format!("unknown [notification] key: {k}"))),
         }
         Ok(())
     }
 
-    fn apply_advanced(&mut self, item: Item) -> Result<(), ConfigError> {
+    fn apply_advanced(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
-            "spin_limit" => self.advanced.spin_limit = value_as_u32(&item)?,
-            "park_timeout_ms" => self.advanced.park_timeout_ms = value_as_u32(&item)?,
-            "tick_check_every" => self.advanced.tick_check_every = value_as_u32(&item)?,
-            "ring_capacity" => self.advanced.ring_capacity = value_as_usize(&item)?,
-            k => return Err(schema_err(&item, format!("unknown [advanced] key: {k}"))),
+            "spin_limit" => self.advanced.spin_limit = value_as_u32(item)?,
+            "park_timeout_ms" => self.advanced.park_timeout_ms = value_as_u32(item)?,
+            "tick_check_every" => self.advanced.tick_check_every = value_as_u32(item)?,
+            "ring_capacity" => self.advanced.ring_capacity = value_as_usize(item)?,
+            k => return Err(schema_err(item, format!("unknown [advanced] key: {k}"))),
         }
         Ok(())
     }
 
-    fn apply_slowlog(&mut self, item: Item) -> Result<(), ConfigError> {
+    fn apply_slowlog(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
-            "slower_than_micros" => self.slowlog.slower_than_micros = value_as_i64(&item)?,
-            "max_len" => self.slowlog.max_len = value_as_u32(&item)?,
-            k => return Err(schema_err(&item, format!("unknown [slowlog] key: {k}"))),
+            "slower_than_micros" => self.slowlog.slower_than_micros = value_as_i64(item)?,
+            "max_len" => self.slowlog.max_len = value_as_u32(item)?,
+            k => return Err(schema_err(item, format!("unknown [slowlog] key: {k}"))),
         }
         Ok(())
     }
 
-    fn apply_lua(&mut self, item: Item) -> Result<(), ConfigError> {
+    fn apply_lua(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
             "time_limit_ms" => {
-                let n = value_as_i64(&item)?;
+                let n = value_as_i64(item)?;
                 if n < 0 {
-                    return Err(schema_err(&item, "time_limit_ms must be >= 0"));
+                    return Err(schema_err(item, "time_limit_ms must be >= 0"));
                 }
                 self.lua.time_limit_ms = n as u64;
             }
             "allow_dialects" => {
                 // Comma-separated dialect list, same shape as cluster
                 // `peers` / `scopes`. Empty string = all allowed.
-                let s = value_as_string(&item)?;
+                let s = value_as_string(item)?;
                 self.lua.allow_dialects = s
                     .split(',')
                     .map(str::trim)
@@ -185,77 +185,77 @@ impl Config {
                     .map(String::from)
                     .collect();
             }
-            k => return Err(schema_err(&item, format!("unknown [lua] key: {k}"))),
+            k => return Err(schema_err(item, format!("unknown [lua] key: {k}"))),
         }
         Ok(())
     }
 
-    fn apply_cluster(&mut self, item: Item) -> Result<(), ConfigError> {
+    fn apply_cluster(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
-            "enabled" => self.cluster.enabled = value_as_bool(&item)?,
-            "port_base" => self.cluster.port_base = value_as_u16(&item)?,
-            "node_id" => self.cluster.node_id = value_as_string(&item)?,
-            "elect_port_base" => self.cluster.elect_port_base = value_as_u16(&item)?,
+            "enabled" => self.cluster.enabled = value_as_bool(item)?,
+            "port_base" => self.cluster.port_base = value_as_u16(item)?,
+            "node_id" => self.cluster.node_id = value_as_string(item)?,
+            "elect_port_base" => self.cluster.elect_port_base = value_as_u16(item)?,
             "peers" => {
-                let raw = value_as_string(&item)?;
+                let raw = value_as_string(item)?;
                 self.cluster.peers = crate::cluster::PeerEntry::parse_list(&raw)
-                    .map_err(|tok| schema_err(&item, format!("bad peer token: {tok:?}")))?;
+                    .map_err(|tok| schema_err(item, format!("bad peer token: {tok:?}")))?;
             }
             "scopes" => {
-                let raw = value_as_string(&item)?;
+                let raw = value_as_string(item)?;
                 self.cluster.scopes = crate::cluster::ScopeEntry::parse_list(&raw)
-                    .map_err(|tok| schema_err(&item, format!("bad scope token: {tok:?}")))?;
+                    .map_err(|tok| schema_err(item, format!("bad scope token: {tok:?}")))?;
             }
-            k => return Err(schema_err(&item, format!("unknown [cluster] key: {k}"))),
+            k => return Err(schema_err(item, format!("unknown [cluster] key: {k}"))),
         }
         Ok(())
     }
 
-    fn apply_feed(&mut self, item: Item) -> Result<(), ConfigError> {
+    fn apply_feed(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
-            "enabled" => self.feed.enabled = value_as_bool(&item)?,
+            "enabled" => self.feed.enabled = value_as_bool(item)?,
             "feed_buffer_size" => {
-                let v = value_as_size(&item)?;
+                let v = value_as_size(item)?;
                 if v > 1024 * 1024 * 1024 {
-                    return Err(schema_err(&item, "feed_buffer_size caps at 1gb per shard"));
+                    return Err(schema_err(item, "feed_buffer_size caps at 1gb per shard"));
                 }
                 self.feed.feed_buffer_size = v;
             }
-            k => return Err(schema_err(&item, format!("unknown [feed] key: {k}"))),
+            k => return Err(schema_err(item, format!("unknown [feed] key: {k}"))),
         }
         Ok(())
     }
 
-    fn apply_replication(&mut self, item: Item) -> Result<(), ConfigError> {
+    fn apply_replication(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
             "role" => {
-                self.replication.role = ReplicationRole::parse(&value_as_string(&item)?)
+                self.replication.role = ReplicationRole::parse(&value_as_string(item)?)
                     .ok_or_else(|| {
-                        schema_err(&item, "role must be 'standalone' | 'primary' | 'replica'")
+                        schema_err(item, "role must be 'standalone' | 'primary' | 'replica'")
                     })?;
             }
-            "upstream" => self.replication.upstream = Some(value_as_string(&item)?),
-            "listen_port_base" => self.replication.listen_port_base = value_as_u16(&item)?,
+            "upstream" => self.replication.upstream = Some(value_as_string(item)?),
+            "listen_port_base" => self.replication.listen_port_base = value_as_u16(item)?,
             "replication_buffer_size" => {
-                self.replication.replication_buffer_size = value_as_size(&item)?;
+                self.replication.replication_buffer_size = value_as_size(item)?;
             }
             "reconnect_window_ms" => {
-                self.replication.reconnect_window_ms = value_as_u32(&item)?;
+                self.replication.reconnect_window_ms = value_as_u32(item)?;
             }
-            "single_source" => self.replication.single_source = value_as_bool(&item)?,
+            "single_source" => self.replication.single_source = value_as_bool(item)?,
             "min_replicas_to_write" => {
-                self.replication.min_replicas_to_write = value_as_u32(&item)?;
+                self.replication.min_replicas_to_write = value_as_u32(item)?;
             }
             "replica_max_staleness_ms" => {
-                self.replication.replica_max_staleness_ms = value_as_u32(&item)?;
+                self.replication.replica_max_staleness_ms = value_as_u32(item)?;
             }
             "min_replicas_max_lag_ms" => {
-                self.replication.min_replicas_max_lag_ms = value_as_u32(&item)?;
+                self.replication.min_replicas_max_lag_ms = value_as_u32(item)?;
             }
             "replica_read_only" => {
-                self.replication.replica_read_only = value_as_bool(&item)?;
+                self.replication.replica_read_only = value_as_bool(item)?;
             }
-            k => return Err(schema_err(&item, format!("unknown [replication] key: {k}"))),
+            k => return Err(schema_err(item, format!("unknown [replication] key: {k}"))),
         }
         Ok(())
     }

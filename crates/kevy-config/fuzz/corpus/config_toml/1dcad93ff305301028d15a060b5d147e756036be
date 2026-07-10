@@ -1,0 +1,5 @@
+
+
+[memory]
+maxmemory_policy= "allkeys-lru"
+maxmemory_policy="’ùÿÿÿÿÿÿÿ;u"

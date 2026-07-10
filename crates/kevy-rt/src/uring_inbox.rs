@@ -41,6 +41,9 @@ impl<C: Commands> Shard<C> {
     /// single scan is to keep io.closing + conn.closing in sync (which
     /// requires plumbing the io map down into the dispatch QUIT path).
     /// Left for a future iteration that's willing to take that plumb.
+    // LOC-WAIVER: K5 ready-set reap state machine (classify / requeue /
+    // shared teardown) — io_uring-only path, unverifiable on darwin;
+    // waived rather than split without a runnable test surface.
     pub(crate) fn uring_reap_closed(&mut self, io: &mut KevyMap<u64, UringConn>) {
         // K5 (v1.25 A.4 redo): drain the closing ready-set instead of
         // walking the whole io map. perf-record-dwarf at c=10 000 -P 1

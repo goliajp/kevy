@@ -1,0 +1,13 @@
+#seed
+[server]
+bind   = "27.0.0.1"
+port     = 604
+data_dir = "/varÿÿÿ"
+
+[server]
+bind   = "27.0.0.1"
+
+[advanced]
+spin_limit      =  12
+[advanced]
+spin_limit      =  128

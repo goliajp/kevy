@@ -14,4 +14,4 @@ workspace = true
 
 # 0-dep: std-only + path-deps on kevy-* crates.
 [dependencies]
-kevy-resp-client = { path = "../kevy-resp-client", version = "3.17.4" }
+kevy-resp-client = { path = "../kevy-resp-client", version = "3.18.0" }

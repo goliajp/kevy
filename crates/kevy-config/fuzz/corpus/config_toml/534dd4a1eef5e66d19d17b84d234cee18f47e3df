@@ -1,0 +1,5 @@
+# kvy "
+[memory]
+maxmemory     = 728
+
+maxmemory  = 3

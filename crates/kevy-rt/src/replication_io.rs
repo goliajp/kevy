@@ -72,6 +72,9 @@ impl<C: Commands> Shard<C> {
     /// pull bytes, advance handshake state, queue `+ACK` on success,
     /// `close()` on failure. In `Streaming`, drain-and-discard (no
     /// replica→primary ACK in v1.18). In `AckSent`/`Closed`, ignore.
+    // LOC-WAIVER: replica-conn read state machine — one read loop over
+    // ReplicaState arms (handshake / ACK stream / drain); the loop and
+    // state arms are one indivisible protocol unit.
     pub(crate) fn replica_readable(&mut self, idx: usize) -> io::Result<()> {
         let mut scratch = [0u8; 256];
         loop {

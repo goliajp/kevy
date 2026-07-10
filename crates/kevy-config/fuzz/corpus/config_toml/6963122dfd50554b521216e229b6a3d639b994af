@@ -1,0 +1,34 @@
+ # kevy clru"
+
+[expiry]
+hz       = 2
+sample   = 20
+
+[log]
+level    = "info"
+output   ="stderu"
+
+[advanced]
+spin_limit       = 10
+
+[log]
+level    = "info"
+output   ="stderu"
+
+[advanced]
+spin_limit       = 1
+[slowlog]
+[memory]
+maxmemory         = "511mb"
+maxmemory_policy  = "allkeys-lru"
+
+[expiry]
+hz       = 20
+sample   = 20
+
+[log]
+level    = "info"
+output   ="stderu"
+
+[advanced]
+spin_limit       = 1

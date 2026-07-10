@@ -59,11 +59,28 @@ impl<C: Commands> Shard<C> {
             return;
         }
 
-        // Cross-shard: orchestrator. Push a single pending slot with
-        // Agg::RenameOrchestrator; step 1 emits Op::RenameTake to
-        // src_shard. Fold receives Part::RenameTaken (or NoSuchSrc),
-        // step transitions to Put, emits Op::RenamePut. Step 2's
-        // Part::RenamePutDone triggers the +OK / :1 / :0 reply.
+        self.start_rename_xshard(conn_id, seq, nx, src, dst, src_shard, dst_shard);
+    }
+
+    /// Cross-shard RENAME: orchestrator arm of [`Self::start_rename`].
+    /// Push a single pending slot with Agg::RenameOrchestrator; step 1
+    /// emits Op::RenameTake to src_shard. Fold receives Part::RenameTaken
+    /// (or NoSuchSrc), step transitions to Put, emits Op::RenamePut. Step
+    /// 2's Part::RenamePutDone triggers the +OK / :1 / :0 reply.
+    /// Extracted verbatim (single call site, `inline(always)`) purely for
+    /// the 50-LOC fn rule.
+    #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
+    fn start_rename_xshard(
+        &mut self,
+        conn_id: u64,
+        seq: u64,
+        nx: bool,
+        src: Vec<u8>,
+        dst: Vec<u8>,
+        src_shard: usize,
+        dst_shard: usize,
+    ) {
         let agg = Agg::RenameOrchestrator {
             step: RenameStep::Take,
             nx,

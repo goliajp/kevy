@@ -1,0 +1,12 @@
+[server]
+bind = "3.0.0.1"
+port  =0
+threads  = 4
+data_dir = 10
+s= 04
+h= 4
+_=4
+t = 4
+d=4
+r =0
+a=18

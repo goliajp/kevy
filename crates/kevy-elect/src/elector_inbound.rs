@@ -43,23 +43,29 @@ impl Elector {
             && (epoch > self.epoch
                 || (self.current_primary.is_none() && self.role == Role::Replica))
         {
-            // Persist BEFORE following the higher epoch (no vote is
-            // cast on this path, so voted_for = None). Only when the
-            // epoch actually moves — case (a) (same-epoch primary
-            // learning) changes no durable state.
-            if epoch > self.epoch {
-                self.persist.save(epoch, None);
-            }
-            self.epoch = epoch;
-            self.current_primary = Some(from.to_string());
-            if self.role == Role::Primary && from != self.node_id {
-                self.role = Role::Replica;
-            } else if self.role == Role::Candidate {
-                // Lost the election we were running.
-                self.role = Role::Replica;
-                self.offer_at = None;
-                self.accept_votes.clear();
-            }
+            self.follow_primary_hb(from, epoch);
+        }
+    }
+
+    /// Learn / demote / retarget on a primary-claiming `HB` — the
+    /// body of `on_hb`'s cases (a) and (b).
+    fn follow_primary_hb(&mut self, from: &str, epoch: u64) {
+        // Persist BEFORE following the higher epoch (no vote is
+        // cast on this path, so voted_for = None). Only when the
+        // epoch actually moves — case (a) (same-epoch primary
+        // learning) changes no durable state.
+        if epoch > self.epoch {
+            self.persist.save(epoch, None);
+        }
+        self.epoch = epoch;
+        self.current_primary = Some(from.to_string());
+        if self.role == Role::Primary && from != self.node_id {
+            self.role = Role::Replica;
+        } else if self.role == Role::Candidate {
+            // Lost the election we were running.
+            self.role = Role::Replica;
+            self.offer_at = None;
+            self.accept_votes.clear();
         }
     }
 
@@ -109,7 +115,7 @@ impl Elector {
         if self.role != Role::Candidate || self.epoch != epoch {
             return;
         }
-        self.accept_votes.insert(accepter_id, ());
+        self.accept_votes.insert(accepter_id);
         // Don't broadcast ANNOUNCE here — `tick` checks the tally
         // and emits ANNOUNCE on the next call. (Lets a single test
         // tick capture all-in-one: trigger ACCEPTs by calling
@@ -121,12 +127,12 @@ impl Elector {
     pub(crate) fn on_announce(
         &mut self,
         epoch: u64,
-        new_primary_id: String,
+        new_primary_id: &str,
         _new_primary_addr: String,
         _out: &mut Vec<Outbound>,
     ) {
         // Stale ANNOUNCE.
-        if epoch <= self.epoch && self.current_primary.as_deref() == Some(new_primary_id.as_str()) {
+        if epoch <= self.epoch && self.current_primary.as_deref() == Some(new_primary_id) {
             return;
         }
         if epoch < self.epoch {
@@ -136,13 +142,13 @@ impl Elector {
         // vote slot (`last_accept_epoch`), and a restarted node must
         // still refuse to vote in an epoch whose ANNOUNCE it already
         // committed.
-        self.persist.save(epoch, Some(new_primary_id.as_str()));
+        self.persist.save(epoch, Some(new_primary_id));
         self.epoch = epoch;
-        self.current_primary = Some(new_primary_id.clone());
+        self.current_primary = Some(new_primary_id.to_string());
         self.last_accept_epoch = Some(epoch);
         self.accept_votes.clear();
         self.offer_at = None;
-        if new_primary_id == self.node_id {
+        if new_primary_id == self.node_id.as_str() {
             self.role = Role::Primary;
         } else {
             // Old-primary rejoin / sibling-replica acknowledgement:

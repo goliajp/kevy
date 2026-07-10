@@ -1,0 +1,6 @@
+#
+[memory]
+maxmemory_policy  = "allkeys-lru"
+[expRiry]
+h= 10
+st  =6

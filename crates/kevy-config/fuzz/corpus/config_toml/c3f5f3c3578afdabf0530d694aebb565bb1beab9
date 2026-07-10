@@ -1,0 +1,7 @@
+#eks
+[memory]
+maxmemory    = "2m"
+
+[memory]
+maxmemory         = "2mb"
+maxme  = 129

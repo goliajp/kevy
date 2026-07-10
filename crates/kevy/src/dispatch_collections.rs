@@ -21,6 +21,8 @@ use kevy_resp::{
 use kevy_store::Store;
 
 /// Hash commands.
+// >50-LOC exemption: pure data-driven verb dispatch table (one match, arms delegate).
+// LOC-WAIVER: data-driven verb dispatch table — one arm per hash verb.
 pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,
@@ -154,6 +156,8 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
 }
 
 /// List commands.
+// >50-LOC exemption: pure data-driven verb dispatch table (one match, arms delegate).
+// LOC-WAIVER: data-driven verb dispatch table — one arm per list verb.
 pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,
@@ -264,57 +268,8 @@ pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
                 }
             }
         }
-        // v1.27.7 BRPOPLPUSH source destination timeout — blocking
-        // form of RPOPLPUSH. Tries the eager pop first; on empty
-        // source, leaves `out` untouched so the dispatcher parks the
-        // conn via the BlockHint registered for this verb.
-        b"BRPOPLPUSH" => {
-            if args.len() != 4 {
-                wrong_args(out, "brpoplpush");
-            } else if std::str::from_utf8(&args[3])
-                .ok()
-                .and_then(|s| s.parse::<f64>().ok())
-                .filter(|f| f.is_finite() && *f >= 0.0)
-                .is_none()
-            {
-                encode_error(out, "ERR timeout is not a float or out of range");
-            } else {
-                match store.rpoplpush(&args[1], &args[2]) {
-                    Ok(Some(v)) => encode_bulk(out, &v),
-                    // Empty src → leave out empty so runtime parks.
-                    Ok(None) => {}
-                    Err(e) => store_err(out, e),
-                }
-            }
-        }
-        b"LMOVE" => {
-            if args.len() != 5 {
-                wrong_args(out, "lmove");
-            } else {
-                let from = if args[3].eq_ignore_ascii_case(b"LEFT") {
-                    Some(true)
-                } else if args[3].eq_ignore_ascii_case(b"RIGHT") {
-                    Some(false)
-                } else {
-                    None
-                };
-                let to = if args[4].eq_ignore_ascii_case(b"LEFT") {
-                    Some(true)
-                } else if args[4].eq_ignore_ascii_case(b"RIGHT") {
-                    Some(false)
-                } else {
-                    None
-                };
-                match (from, to) {
-                    (Some(f), Some(t)) => match store.lmove(&args[1], &args[2], f, t) {
-                        Ok(Some(v)) => encode_bulk(out, &v),
-                        Ok(None) => encode_null_bulk(out),
-                        Err(e) => store_err(out, e),
-                    },
-                    _ => encode_error(out, "ERR syntax error"),
-                }
-            }
-        }
+        b"BRPOPLPUSH" => cmd_brpoplpush(store, args, out),
+        b"LMOVE" => cmd_lmove(store, args, out),
         // v1.27.3: `LPOS key element [RANK n] [COUNT n] [MAXLEN n]`.
         // BullMQ probes pending jobs by id via LPOS.
         b"LPOS" => cmd_lpos(store, args, out),
@@ -323,7 +278,63 @@ pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
     true
 }
 
+/// v1.27.7 `BRPOPLPUSH source destination timeout` — blocking form of
+/// RPOPLPUSH. Tries the eager pop first; on empty source, leaves `out`
+/// untouched so the dispatcher parks the conn via the BlockHint
+/// registered for this verb.
+fn cmd_brpoplpush<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+    if args.len() != 4 {
+        wrong_args(out, "brpoplpush");
+    } else if std::str::from_utf8(&args[3])
+        .ok()
+        .and_then(|s| s.parse::<f64>().ok())
+        .filter(|f| f.is_finite() && *f >= 0.0)
+        .is_none()
+    {
+        encode_error(out, "ERR timeout is not a float or out of range");
+    } else {
+        match store.rpoplpush(&args[1], &args[2]) {
+            Ok(Some(v)) => encode_bulk(out, &v),
+            // Empty src → leave out empty so runtime parks.
+            Ok(None) => {}
+            Err(e) => store_err(out, e),
+        }
+    }
+}
+
+/// `LMOVE source destination LEFT|RIGHT LEFT|RIGHT`.
+fn cmd_lmove<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+    if args.len() != 5 {
+        wrong_args(out, "lmove");
+    } else {
+        let from = if args[3].eq_ignore_ascii_case(b"LEFT") {
+            Some(true)
+        } else if args[3].eq_ignore_ascii_case(b"RIGHT") {
+            Some(false)
+        } else {
+            None
+        };
+        let to = if args[4].eq_ignore_ascii_case(b"LEFT") {
+            Some(true)
+        } else if args[4].eq_ignore_ascii_case(b"RIGHT") {
+            Some(false)
+        } else {
+            None
+        };
+        match (from, to) {
+            (Some(f), Some(t)) => match store.lmove(&args[1], &args[2], f, t) {
+                Ok(Some(v)) => encode_bulk(out, &v),
+                Ok(None) => encode_null_bulk(out),
+                Err(e) => store_err(out, e),
+            },
+            _ => encode_error(out, "ERR syntax error"),
+        }
+    }
+}
+
 /// Sorted-set commands.
+// >50-LOC exemption: pure data-driven verb dispatch table (one match, arms delegate).
+// LOC-WAIVER: data-driven verb dispatch table — one arm per zset verb.
 pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,

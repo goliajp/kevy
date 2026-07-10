@@ -164,27 +164,7 @@ impl<C: Commands> Shard<C> {
             // recorded positions. Drains output_arcs; safe to repeat
             // (idempotent — output_arcs is cleared at the end). Common
             // case: no arc-bulks pending → single is_empty check, no copy.
-            if !conn.output_arcs.is_empty() {
-                let arcs = std::mem::take(&mut conn.output_arcs);
-                let mut total = conn.output.len();
-                for (_, arc) in &arcs {
-                    total += arc.len();
-                }
-                let mut linear: Vec<u8> = Vec::with_capacity(total);
-                let mut prev = 0usize;
-                for (pos, arc) in &arcs {
-                    let pos = *pos;
-                    if pos > prev {
-                        linear.extend_from_slice(&conn.output[prev..pos]);
-                    }
-                    linear.extend_from_slice(arc.as_ref());
-                    prev = pos;
-                }
-                if prev < conn.output.len() {
-                    linear.extend_from_slice(&conn.output[prev..]);
-                }
-                conn.output = linear;
-            }
+            splice_output_arcs(conn);
             while conn.write_pos < conn.output.len() {
                 match conn.sock.write(&conn.output[conn.write_pos..]) {
                     Ok(0) => break,
@@ -224,4 +204,35 @@ impl<C: Commands> Shard<C> {
         }
         Ok(())
     }
+}
+
+/// Materialise a conn's pending arc-bulk bodies into `conn.output` at
+/// their recorded positions (the epoll write loop below has no iovec
+/// path). Extracted verbatim from [`Shard::flush_conn`] (single call
+/// site, `inline(always)`) purely for the 50-LOC fn rule — codegen is
+/// the manual-inline equivalent.
+#[inline(always)]
+fn splice_output_arcs(conn: &mut crate::conn::Conn) {
+    if conn.output_arcs.is_empty() {
+        return;
+    }
+    let arcs = std::mem::take(&mut conn.output_arcs);
+    let mut total = conn.output.len();
+    for (_, arc) in &arcs {
+        total += arc.len();
+    }
+    let mut linear: Vec<u8> = Vec::with_capacity(total);
+    let mut prev = 0usize;
+    for (pos, arc) in &arcs {
+        let pos = *pos;
+        if pos > prev {
+            linear.extend_from_slice(&conn.output[prev..pos]);
+        }
+        linear.extend_from_slice(arc.as_ref());
+        prev = pos;
+    }
+    if prev < conn.output.len() {
+        linear.extend_from_slice(&conn.output[prev..]);
+    }
+    conn.output = linear;
 }

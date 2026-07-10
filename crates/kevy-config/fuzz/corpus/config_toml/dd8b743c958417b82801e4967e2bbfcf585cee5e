@@ -1,0 +1,5 @@
+[memory]
+maxmemory = "512m"
+maxmemory_policy  ="allkeys-lru"
+[log]
+level = "info"

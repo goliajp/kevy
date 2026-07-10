@@ -405,6 +405,40 @@ impl SmallBytes {
 // here because the same-variant fast paths reach into `self.inline` /
 // `self.heap` directly.
 
+impl SmallBytes {
+    /// Both sides inline: compare tag-lengths, then the inline bytes.
+    /// Single call site in [`PartialEq::eq`]; `inline(always)` keeps the
+    /// split codegen-identical to the pre-split fused body.
+    #[allow(clippy::inline_always)] // see doc above: codegen parity with the pre-split body
+    #[inline(always)]
+    fn eq_inline_inline(&self, other: &Self, self_tag: u8, other_tag: u8) -> bool {
+        let len = self_tag as usize;
+        if len != other_tag as usize {
+            return false;
+        }
+        // SAFETY: both in inline variant; first `len` bytes valid.
+        let a = unsafe { slice::from_raw_parts(self.inline.data.as_ptr(), len) };
+        let b = unsafe { slice::from_raw_parts(other.inline.data.as_ptr(), len) };
+        a == b
+    }
+
+    /// Both sides heap: compare stored lengths, then the heap bytes.
+    /// Single call site in [`PartialEq::eq`]; `inline(always)` as above.
+    #[allow(clippy::inline_always)] // see doc above: codegen parity with the pre-split body
+    #[inline(always)]
+    fn eq_heap_heap(&self, other: &Self) -> bool {
+        // SAFETY: both in heap variant.
+        let (a_len, b_len) = unsafe { (self.heap.length(), other.heap.length()) };
+        if a_len != b_len {
+            return false;
+        }
+        // SAFETY: heap pointers + len are valid.
+        let a = unsafe { slice::from_raw_parts(self.heap.ptr.as_ptr(), a_len) };
+        let b = unsafe { slice::from_raw_parts(other.heap.ptr.as_ptr(), b_len) };
+        a == b
+    }
+}
+
 impl PartialEq for SmallBytes {
     /// Specialised over the slice form (`as_slice == as_slice`) by branching
     /// on variant **once** and reading the relevant length / pointer pair
@@ -421,36 +455,8 @@ impl PartialEq for SmallBytes {
         let self_inline = self_tag <= INLINE_LEN_MAX;
         let other_inline = other_tag <= INLINE_LEN_MAX;
         match (self_inline, other_inline) {
-            (true, true) => {
-                let len = self_tag as usize;
-                if len != other_tag as usize {
-                    return false;
-                }
-                // SAFETY: both in inline variant; first `len` bytes valid.
-                let a = unsafe {
-                    slice::from_raw_parts(self.inline.data.as_ptr(), len)
-                };
-                let b = unsafe {
-                    slice::from_raw_parts(other.inline.data.as_ptr(), len)
-                };
-                a == b
-            }
-            (false, false) => {
-                // SAFETY: both in heap variant.
-                let (a_len, b_len) =
-                    unsafe { (self.heap.length(), other.heap.length()) };
-                if a_len != b_len {
-                    return false;
-                }
-                // SAFETY: heap pointers + len are valid.
-                let a = unsafe {
-                    slice::from_raw_parts(self.heap.ptr.as_ptr(), a_len)
-                };
-                let b = unsafe {
-                    slice::from_raw_parts(other.heap.ptr.as_ptr(), b_len)
-                };
-                a == b
-            }
+            (true, true) => self.eq_inline_inline(other, self_tag, other_tag),
+            (false, false) => self.eq_heap_heap(other),
             // Mixed inline/heap: this IS reachable in normal operation.
             // It happens whenever HashMap (or any `==` consumer) compares
             // an inline-length value (len ≤ 22) against a heap-length

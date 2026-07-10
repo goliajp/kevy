@@ -24,6 +24,7 @@ use kevy_store::{Store, StoreError};
 /// Double / Verbatim / …). All other commands keep their V2 wire on
 /// RESP3 conns until they get an override — spec-legal gradual
 /// migration.
+// LOC-WAIVER: data-driven RESP3-override verb table — one arm per shape-changing verb.
 pub(crate) fn try_resp3_overrides<A: ArgvView + ?Sized>(
     cmd: &[u8],
     store: &mut Store,

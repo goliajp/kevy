@@ -65,7 +65,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 .checked_mul(2)
                 .expect("kevy-map: capacity doubling overflow")
         };
-        let mut new_map = Self::alloc_table(new_cap);
+        let mut new_table = Self::alloc_table(new_cap);
         // Move every live entry over. After ptr::read'ing a slot we mark its
         // metadata DELETED, so any subsequent Drop (incl. panic unwind) won't
         // double-free; the old allocation will free with all-DELETED metadata.
@@ -73,7 +73,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         // Only iterate the real slot range `[0, cap)`; the trailing mirror
         // bytes are bookkeeping for SIMD-load wraparound, not real slots.
         // Direct metadata writes are safe here because the old `self` table
-        // is going away (we swap with new_map then drop), so a stale mirror
+        // is going away (we swap with new_table then drop), so a stale mirror
         // doesn't matter.
         let old_cap = self.cap;
         for i in 0..old_cap {
@@ -85,14 +85,14 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
                 let (k, v) = unsafe { ptr::read(self.slots_ptr.as_ptr().add(i) as *const (K, V)) };
                 unsafe { *self.metadata_ptr.as_ptr().add(i) = DELETED };
                 let hash = k.kevy_hash();
-                new_map.insert_known_unique(hash, k, v);
+                new_table.insert_known_unique(hash, k, v);
             }
         }
-        // All occupied entries are now in new_map; the old self has no live slots.
+        // All occupied entries are now in new_table; the old self has no live slots.
         self.occupied = 0;
         self.deleted = 0;
-        std::mem::swap(self, &mut new_map);
-        // new_map (now the old self) drops; metadata is all DELETED (or EMPTY
+        std::mem::swap(self, &mut new_table);
+        // new_table (now the old self) drops; metadata is all DELETED (or EMPTY
         // for previously-empty slots) ⇒ Drop walks but touches no slots.
     }
 
@@ -125,6 +125,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         }
     }
 
+    // LOC-WAIVER: per-op probe hot body — deliberate fast/slow loop pair (tombstone-free vs tracking).
     fn probe_with_key(&self, hash: u64, key: &K) -> ProbeOutcome {
         if self.cap == 0 {
             return ProbeOutcome::NotFound {

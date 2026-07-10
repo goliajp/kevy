@@ -1,0 +1,21 @@
+# kevyÂÂÂÂÂÂÂÂÂÂÂÂÂ"
+
+[memory]
+maxmemory    = "2mb"
+maxmemory_policy  = "allkeys-lru"
+
+[expiry]
+hz       = 10
+sample   = 20#of_rewrite_mite_min_s= "64mb"
+
+[memory]
+maxmemory         = "2mb"
+maxmemory_policy  = "allkeys-lru"
+
+[expiry]
+hz       = 20
+sample   = 20#?f_rewrite_min_
+[memory]
+maxmemory         = "5ÿ1mb"
+maxm  = "64mb"
+maxm  = 129

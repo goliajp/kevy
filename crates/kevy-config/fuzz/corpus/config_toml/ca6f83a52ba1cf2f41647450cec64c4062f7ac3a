@@ -1,0 +1,8 @@
+# "
+
+[persistence]
+aof     = true
+appendfsync     = "everysÿÿ#ÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿý@llkeyÛ-lr"
+
+[expi]
+h= 129

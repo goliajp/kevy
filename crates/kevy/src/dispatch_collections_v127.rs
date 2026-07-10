@@ -21,55 +21,9 @@ pub(crate) fn cmd_lpos<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &
     if args.len() < 3 {
         return wrong_args(out, "lpos");
     }
-    let mut rank: i64 = 1;
-    let mut count: Option<i64> = None;
-    let mut maxlen: usize = 0;
-    let mut i = 3;
-    while i < args.len() {
-        let tok = &args[i];
-        if tok.eq_ignore_ascii_case(b"RANK") {
-            if i + 1 >= args.len() {
-                return encode_error(out, "ERR syntax error");
-            }
-            let Some(r) = arg_i64(&args[i + 1]) else {
-                return encode_error(out, ERR_NOT_INT);
-            };
-            if r == 0 {
-                return encode_error(
-                    out,
-                    "ERR RANK can't be zero: use 1 to start from the first match going forward, or -1 from the last match going backward.",
-                );
-            }
-            rank = r;
-            i += 2;
-        } else if tok.eq_ignore_ascii_case(b"COUNT") {
-            if i + 1 >= args.len() {
-                return encode_error(out, "ERR syntax error");
-            }
-            let Some(c) = arg_i64(&args[i + 1]) else {
-                return encode_error(out, ERR_NOT_INT);
-            };
-            if c < 0 {
-                return encode_error(out, "ERR COUNT can't be negative");
-            }
-            count = Some(c);
-            i += 2;
-        } else if tok.eq_ignore_ascii_case(b"MAXLEN") {
-            if i + 1 >= args.len() {
-                return encode_error(out, "ERR syntax error");
-            }
-            let Some(m) = arg_i64(&args[i + 1]) else {
-                return encode_error(out, ERR_NOT_INT);
-            };
-            if m < 0 {
-                return encode_error(out, "ERR MAXLEN can't be negative");
-            }
-            maxlen = m as usize;
-            i += 2;
-        } else {
-            return encode_error(out, "ERR syntax error");
-        }
-    }
+    let Some((rank, count, maxlen)) = parse_lpos_opts(args, out) else {
+        return;
+    };
     match store.lpos(&args[1], &args[2], rank, count, maxlen) {
         Err(e) => store_err(out, e),
         Ok(hits) => match count {
@@ -88,6 +42,68 @@ pub(crate) fn cmd_lpos<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &
             }
         },
     }
+}
+
+/// Parse the LPOS `[RANK n] [COUNT n] [MAXLEN n]` modifier tail.
+/// Returns `(rank, count, maxlen)`; `None` = an error reply was
+/// already encoded into `out`.
+fn parse_lpos_opts<A: ArgvView + ?Sized>(
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Option<(i64, Option<i64>, usize)> {
+    let mut rank: i64 = 1;
+    let mut count: Option<i64> = None;
+    let mut maxlen: usize = 0;
+    let mut i = 3;
+    while i < args.len() {
+        let tok = &args[i];
+        if tok.eq_ignore_ascii_case(b"RANK") {
+            let r = lpos_opt_value(args, i, out)?;
+            if r == 0 {
+                encode_error(
+                    out,
+                    "ERR RANK can't be zero: use 1 to start from the first match going forward, or -1 from the last match going backward.",
+                );
+                return None;
+            }
+            rank = r;
+            i += 2;
+        } else if tok.eq_ignore_ascii_case(b"COUNT") {
+            let c = lpos_opt_value(args, i, out)?;
+            if c < 0 {
+                encode_error(out, "ERR COUNT can't be negative");
+                return None;
+            }
+            count = Some(c);
+            i += 2;
+        } else if tok.eq_ignore_ascii_case(b"MAXLEN") {
+            let m = lpos_opt_value(args, i, out)?;
+            if m < 0 {
+                encode_error(out, "ERR MAXLEN can't be negative");
+                return None;
+            }
+            maxlen = m as usize;
+            i += 2;
+        } else {
+            encode_error(out, "ERR syntax error");
+            return None;
+        }
+    }
+    Some((rank, count, maxlen))
+}
+
+/// Fetch + integer-parse the value following the LPOS modifier at
+/// `i`, emitting the syntax / not-an-integer errors on failure.
+fn lpos_opt_value<A: ArgvView + ?Sized>(args: &A, i: usize, out: &mut Vec<u8>) -> Option<i64> {
+    if i + 1 >= args.len() {
+        encode_error(out, "ERR syntax error");
+        return None;
+    }
+    let Some(v) = arg_i64(&args[i + 1]) else {
+        encode_error(out, ERR_NOT_INT);
+        return None;
+    };
+    Some(v)
 }
 
 /// `BZPOPMIN key [key ...] timeout` — blocking `ZPOPMIN` across a set of
@@ -225,33 +241,9 @@ pub(crate) fn cmd_zrevrangebyscore<A: ArgvView + ?Sized>(
     let (Some(max), Some(min)) = (parse_score_bound(&args[2]), parse_score_bound(&args[3])) else {
         return encode_error(out, "ERR min or max is not a float");
     };
-    let mut withscores = false;
-    let mut limit: Option<(i64, i64)> = None;
-    let mut i = 4;
-    while i < args.len() {
-        let tok = &args[i];
-        if tok.eq_ignore_ascii_case(b"WITHSCORES") {
-            if withscores {
-                return encode_error(out, "ERR syntax error");
-            }
-            withscores = true;
-            i += 1;
-        } else if tok.eq_ignore_ascii_case(b"LIMIT") {
-            if limit.is_some() || i + 2 >= args.len() {
-                return encode_error(out, "ERR syntax error");
-            }
-            let Some(off) = arg_i64(&args[i + 1]) else {
-                return encode_error(out, ERR_NOT_INT);
-            };
-            let Some(cnt) = arg_i64(&args[i + 2]) else {
-                return encode_error(out, ERR_NOT_INT);
-            };
-            limit = Some((off, cnt));
-            i += 3;
-        } else {
-            return encode_error(out, "ERR syntax error");
-        }
-    }
+    let Some((withscores, limit)) = parse_zrevrange_opts(args, out) else {
+        return;
+    };
     let res = store.zrev_range_by_score(&args[1], min, max);
     match res {
         Err(e) => store_err(out, e),
@@ -270,6 +262,48 @@ pub(crate) fn cmd_zrevrangebyscore<A: ArgvView + ?Sized>(
             emit_zrange(Ok(items), withscores, proto, out);
         }
     }
+}
+
+/// Parse the ZREVRANGEBYSCORE `[WITHSCORES] [LIMIT offset count]`
+/// modifier tail. `None` = an error reply was already encoded into
+/// `out`.
+fn parse_zrevrange_opts<A: ArgvView + ?Sized>(
+    args: &A,
+    out: &mut Vec<u8>,
+) -> Option<(bool, Option<(i64, i64)>)> {
+    let mut withscores = false;
+    let mut limit: Option<(i64, i64)> = None;
+    let mut i = 4;
+    while i < args.len() {
+        let tok = &args[i];
+        if tok.eq_ignore_ascii_case(b"WITHSCORES") {
+            if withscores {
+                encode_error(out, "ERR syntax error");
+                return None;
+            }
+            withscores = true;
+            i += 1;
+        } else if tok.eq_ignore_ascii_case(b"LIMIT") {
+            if limit.is_some() || i + 2 >= args.len() {
+                encode_error(out, "ERR syntax error");
+                return None;
+            }
+            let Some(off) = arg_i64(&args[i + 1]) else {
+                encode_error(out, ERR_NOT_INT);
+                return None;
+            };
+            let Some(cnt) = arg_i64(&args[i + 2]) else {
+                encode_error(out, ERR_NOT_INT);
+                return None;
+            };
+            limit = Some((off, cnt));
+            i += 3;
+        } else {
+            encode_error(out, "ERR syntax error");
+            return None;
+        }
+    }
+    Some((withscores, limit))
 }
 
 // ─────────────────────────────────────────────────────────────────────

@@ -1,0 +1,4 @@
+#]–
+
+[slowlog]
+slower_then_micros=0

@@ -1,0 +1,14 @@
+#o_"y"
+
+[persistence]
+aof  =true
+appendfsync  = "everysec"
+auto_aof_rewrite_min_size   = "51mb"
+
+[persistence]
+
+auto_aof_rewrite_min_size    = "4mb"
+
+[memory]
+maxmemory    = "8m0000]]"
+bma=8
