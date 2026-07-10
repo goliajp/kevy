@@ -100,6 +100,9 @@ impl AggSegment {
     /// participates; `None` = removed or excluded. `excluded_row`
     /// marks the None case as a coercion/missing-field exclusion
     /// (counted) rather than a plain delete.
+    // missing_panics_doc: the only panic is the "group of live row" expect —
+    // an internal rows↔groups invariant, never reachable from caller input.
+    #[allow(clippy::missing_panics_doc)]
     pub fn apply(&mut self, key: &[u8], entry: Option<(Vec<u8>, IndexValue)>, excluded_row: bool) {
         // Fast path: same-group value update (the dominant serving
         // write shape — measured 16.8% write tax on a Zipf corpus
@@ -192,6 +195,9 @@ impl AggSegment {
                 AggBy::Min => g.values.keys().next().map_or(f64::NEG_INFINITY, |v| -v.as_f64()),
             }
         };
+        // float_cmp: exact equality is the tiebreak trigger — an epsilon would
+        // make the top-K selection non-deterministic for equal scores.
+        #[allow(clippy::float_cmp)]
         let better = |a: (f64, &[u8]), b: (f64, &[u8])| a.0 > b.0 || (a.0 == b.0 && a.1 < b.1);
         let mut top: Vec<(f64, &Vec<u8>)> = Vec::with_capacity(limit.min(1024) + 1);
         for (k, g) in &self.groups {

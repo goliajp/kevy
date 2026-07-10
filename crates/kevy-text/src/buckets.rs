@@ -18,7 +18,7 @@ pub(crate) struct Loc {
 /// capped at 15). The band's LOWER edge is the conservative dl for
 /// bound tests: real scores inside the band can only be lower.
 fn band_of(dl: u32) -> u8 {
-    (31 - dl.max(1).leading_zeros()).min(15) as u8
+    dl.max(1).ilog2().min(15) as u8
 }
 
 pub(crate) const BAND_MIN_DL: [u32; 16] = [

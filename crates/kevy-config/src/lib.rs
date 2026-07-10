@@ -90,7 +90,7 @@ impl Config {
         let mut cfg = Self::default();
         let items = parse::parse(text)?;
         for item in items {
-            cfg.apply_item(item)?;
+            cfg.apply_item(&item)?;
         }
         if let Some(p) = source_path {
             cfg.source_path = Some(p.to_path_buf());

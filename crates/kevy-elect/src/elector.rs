@@ -18,6 +18,7 @@
 //! spec this struct implements.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use crate::message::{Message, Role};
@@ -50,10 +51,10 @@ impl Default for ElectConfig {
     fn default() -> Self {
         Self {
             hb_interval: Duration::from_millis(200),
-            down_after: Duration::from_millis(5_000),
-            election_timeout: Duration::from_millis(3_000),
-            election_backoff: Duration::from_millis(1_000),
-            election_backoff_jitter: Duration::from_millis(4_000),
+            down_after: Duration::from_secs(5),
+            election_timeout: Duration::from_secs(3),
+            election_backoff: Duration::from_secs(1),
+            election_backoff_jitter: Duration::from_secs(4),
         }
     }
 }
@@ -65,6 +66,9 @@ impl Default for ElectConfig {
 /// detector) and `last_repl_offset` (candidate selection).
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
+// struct_field_names: the shared `last_` prefix is the point — every field is
+// the latest observation of that quantity from the peer's most recent HB.
+#[allow(clippy::struct_field_names)]
 pub(crate) struct PeerView {
     /// Most recent `HB` reception time.
     pub(crate) last_seen: Instant,
@@ -111,7 +115,7 @@ pub struct Elector {
     pub(crate) peer_views: HashMap<String, PeerView>,
     /// While `Candidate`: ACCEPT vote tally for the current epoch.
     /// Cleared on transition out of Candidate.
-    pub(crate) accept_votes: HashMap<String, ()>,
+    pub(crate) accept_votes: HashSet<String>,
     /// While `Candidate`: when the OFFER was broadcast (election
     /// times out at `offer_at + election_timeout`).
     pub(crate) offer_at: Option<Instant>,
@@ -160,9 +164,9 @@ impl ElectJitter {
                 // `[0, max.as_nanos())`. Coarse but adequate — the
                 // jitter only needs to break ties between dueling
                 // candidates, not be cryptographically random.
-                let mut h: u64 = 1469598103934665603;
+                let mut h: u64 = 1_469_598_103_934_665_603;
                 for b in node_id.as_bytes() {
-                    h = h.wrapping_mul(1099511628211) ^ u64::from(*b);
+                    h = h.wrapping_mul(1_099_511_628_211) ^ u64::from(*b);
                 }
                 // Pull a u64 worth of bits out of `now`'s elapsed-
                 // since-arbitrary-anchor representation. Using the
@@ -226,7 +230,7 @@ impl Elector {
             my_repl_offset: 0,
             last_hb_sent: HashMap::new(),
             peer_views: HashMap::new(),
-            accept_votes: HashMap::new(),
+            accept_votes: HashSet::new(),
             offer_at: None,
             backoff_until: None,
             last_accept_epoch: None,
@@ -242,6 +246,7 @@ impl Elector {
     /// and, when a vote was cast, re-arms the one-vote-per-epoch
     /// guard for that epoch. Call right after [`Elector::new`],
     /// before the transport starts driving the elector.
+    #[must_use]
     pub fn with_persist(mut self, persist: Box<dyn ElectorPersist + Send>) -> Self {
         let (epoch, voted_for) = persist.load();
         if epoch > 0 {
@@ -338,7 +343,7 @@ impl Elector {
                 epoch,
                 new_primary_id,
                 new_primary_addr,
-            } => self.on_announce(epoch, new_primary_id, new_primary_addr, &mut out),
+            } => self.on_announce(epoch, &new_primary_id, new_primary_addr, &mut out),
         }
         out
     }
@@ -390,19 +395,16 @@ impl Elector {
         // election — the v3.16 role clamp makes this the normal
         // boot) counts as down after one `down_after` grace window,
         // giving a live primary's HB time to reach us first.
-        match self.current_primary.clone() {
-            Some(primary) => {
-                if !self.is_peer_down(&primary, now) {
-                    return false;
-                }
+        if let Some(primary) = self.current_primary.clone() {
+            if !self.is_peer_down(&primary, now) {
+                return false;
             }
-            None => {
-                let seen_enough = self
-                    .first_tick
-                    .is_some_and(|t| now.duration_since(t) >= self.config.down_after);
-                if !seen_enough {
-                    return false;
-                }
+        } else {
+            let seen_enough = self
+                .first_tick
+                .is_some_and(|t| now.duration_since(t) >= self.config.down_after);
+            if !seen_enough {
+                return false;
             }
         }
         // Candidate-selection: I must have the highest offset AND
@@ -428,7 +430,7 @@ impl Elector {
         // Implicit self-vote — record ourselves in the tally so
         // single-peer-needed (N=1, degenerate) and quorum=2/N=2
         // both work.
-        self.accept_votes.insert(self.node_id.clone(), ());
+        self.accept_votes.insert(self.node_id.clone());
         self.offer_at = Some(now);
         out.push(Outbound {
             to: Outbound::BROADCAST.to_string(),

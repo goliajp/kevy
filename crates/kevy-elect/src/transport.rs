@@ -129,6 +129,9 @@ impl Transport {
     /// primary_addr))` when a primary is known. The callback MUST be
     /// quick and non-reentrant into the elector (it runs outside the
     /// elector lock but on the tick thread).
+    // needless_pass_by_value: `peers` is handed to the spawned outbound loops
+    // one entry at a time; by-value keeps the pub API an ownership handoff.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn spawn_with_callback(
         elector: Elector,
         hb_interval: Duration,
@@ -169,6 +172,9 @@ impl Transport {
 
     /// Read-side snapshot of the elector for `ROLE` / `INFO
     /// replication`. Locks the elector mutex briefly; cheap.
+    // missing_panics_doc: lock().expect — poisoning means another thread
+    // already panicked mid-election; propagating is the only sane behaviour.
+    #[allow(clippy::missing_panics_doc)]
     pub fn state_snapshot(&self) -> ElectorSnapshot {
         let e = self.state_view.elector.lock().expect("elector lock");
         let now = std::time::Instant::now();
@@ -192,6 +198,8 @@ impl Transport {
     }
 
     /// Feed this node's replication offset into the elector.
+    // missing_panics_doc: same poisoned-lock rationale as `state_snapshot`.
+    #[allow(clippy::missing_panics_doc)]
     pub fn set_repl_offset(&self, offset: u64) {
         self.shared
             .elector

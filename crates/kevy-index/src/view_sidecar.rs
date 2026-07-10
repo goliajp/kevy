@@ -3,6 +3,7 @@
 //! project ceiling; behaviour unchanged).
 
 use crate::value::IndexValue;
+use std::fmt::Write as _;
 use crate::view::{Leaf, Tree, ViewMode, ViewSpec};
 
 /// The view registry (mirrors [`crate::Catalog`]): named specs +
@@ -92,7 +93,7 @@ fn esc(b: &[u8]) -> String {
     let mut out = String::with_capacity(b.len());
     for &c in b {
         if c == b' ' || c == b'\t' || c == b'\n' || c == b'%' || c == b'(' || c == b')' || !(33..127).contains(&c) {
-            out.push_str(&format!("%{c:02X}"));
+            let _ = write!(out, "%{c:02X}");
         } else {
             out.push(c as char);
         }
@@ -140,7 +141,7 @@ fn val_de(s: &str) -> Option<IndexValue> {
 fn tree_ser(t: &Tree, out: &mut String) {
     match t {
         Tree::Leaf(l) => {
-            out.push_str(&format!("(L {} {} {})", esc(&l.index), val_ser(&l.min), val_ser(&l.max)));
+            let _ = write!(out, "(L {} {} {})", esc(&l.index), val_ser(&l.min), val_ser(&l.max));
         }
         Tree::And(a, b) | Tree::Or(a, b) | Tree::Diff(a, b) => {
             let op = match t {
@@ -148,7 +149,7 @@ fn tree_ser(t: &Tree, out: &mut String) {
                 Tree::Or(..) => "O",
                 _ => "D",
             };
-            out.push_str(&format!("({op} "));
+            let _ = write!(out, "({op} ");
             tree_ser(a, out);
             out.push(' ');
             tree_ser(b, out);
@@ -189,7 +190,7 @@ impl ViewSpec {
             ViewMode::Virtual => ("v", 0),
             ViewMode::Materialized { top_k } => ("m", top_k),
         };
-        let via = self.via.as_deref().map(esc).unwrap_or_else(|| "-".into());
+        let via = self.via.as_deref().map_or_else(|| "-".into(), esc);
         let mut tree = String::new();
         tree_ser(&self.tree, &mut tree);
         format!(

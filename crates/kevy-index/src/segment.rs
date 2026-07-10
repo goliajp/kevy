@@ -1,5 +1,5 @@
 //! [`Segment`] — one shard's slice of one index (index-follows-key,
-//! RFC D3). Range = `BTreeMap<(value, key), ()>`; Unique = the same
+//! RFC D3). Range = `BTreeSet<(value, key)>`; Unique = the same
 //! tree (point lookups are a 1-value range) plus a duplicate counter
 //! for the declarative fence.
 //!
@@ -7,6 +7,7 @@
 //! `apply` can remove a row's OLD entry without re-reading history.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::ops::Bound;
 
@@ -41,7 +42,7 @@ const ENTRY_OVERHEAD: usize = 48;
 /// One shard's slice of one index.
 #[derive(Debug, Default)]
 pub struct Segment {
-    tree: BTreeMap<(IndexValue, Vec<u8>), ()>,
+    tree: BTreeSet<(IndexValue, Vec<u8>)>,
     back: HashMap<Vec<u8>, IndexValue>,
     value_counts: BTreeMap<IndexValue, u32>,
     stats: SegmentStats,
@@ -73,7 +74,7 @@ impl Segment {
                     (v.approx_bytes() + key.len() + ENTRY_OVERHEAD) as u64;
                 self.inc_count(&v);
                 self.back.insert(key.to_vec(), v.clone());
-                self.tree.insert((v, key.to_vec()), ());
+                self.tree.insert((v, key.to_vec()));
             }
             None => {
                 self.stats.coerce_failures += 1;
@@ -133,7 +134,7 @@ impl Segment {
         // key would MISS max-valued keys sorting above it.
         let mut out = Vec::with_capacity(limit.min(64));
         let mut iter = self.tree.range((lower, Bound::Unbounded));
-        for ((v, k), ()) in iter.by_ref() {
+        for (v, k) in iter.by_ref() {
             if v > max {
                 break;
             }
@@ -156,9 +157,9 @@ impl Segment {
         let lower = Bound::Included((value.clone(), Vec::new()));
         self.tree
             .range((lower, Bound::Unbounded))
-            .take_while(|((v, _), ())| v == value)
+            .take_while(|(v, _)| v == value)
             .take(limit)
-            .map(|((_, k), ())| k.clone())
+            .map(|(_, k)| k.clone())
             .collect()
     }
 
@@ -167,7 +168,7 @@ impl Segment {
         let lower = Bound::Included((min.clone(), Vec::new()));
         self.tree
             .range((lower, Bound::Unbounded))
-            .take_while(|((v, _), ())| v <= max)
+            .take_while(|(v, _)| v <= max)
             .count() as u64
     }
 
@@ -188,15 +189,15 @@ impl Segment {
         desc: bool,
     ) -> Box<dyn Iterator<Item = (&'s IndexValue, &'s [u8])> + 's> {
         match (after, desc) {
-            (None, false) => Box::new(self.tree.keys().map(|(v, k)| (v, k.as_slice()))),
-            (None, true) => Box::new(self.tree.keys().rev().map(|(v, k)| (v, k.as_slice()))),
+            (None, false) => Box::new(self.tree.iter().map(|(v, k)| (v, k.as_slice()))),
+            (None, true) => Box::new(self.tree.iter().rev().map(|(v, k)| (v, k.as_slice()))),
             (Some(c), false) => Box::new(
                 self.tree
                     .range((
                         Bound::Excluded((c.value.clone(), c.key.clone())),
                         Bound::Unbounded,
                     ))
-                    .map(|((v, k), ())| (v, k.as_slice())),
+                    .map(|(v, k)| (v, k.as_slice())),
             ),
             (Some(c), true) => Box::new(
                 self.tree
@@ -205,7 +206,7 @@ impl Segment {
                         Bound::Excluded((c.value.clone(), c.key.clone())),
                     ))
                     .rev()
-                    .map(|((v, k), ())| (v, k.as_slice())),
+                    .map(|(v, k)| (v, k.as_slice())),
             ),
         }
     }

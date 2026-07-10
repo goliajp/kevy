@@ -35,6 +35,7 @@
 //! # }
 //! ```
 #![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
 mod aof;
 pub mod feed_meta;

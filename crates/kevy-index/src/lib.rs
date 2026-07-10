@@ -13,6 +13,8 @@
 //! No I/O, no threads, no runtime types — everything here is
 //! deterministic and unit-testable in isolation.
 
+#![warn(missing_docs)]
+
 mod agg;
 mod catalog;
 mod segment;

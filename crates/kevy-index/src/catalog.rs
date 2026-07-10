@@ -2,6 +2,7 @@
 //! compiled prefix matcher the write-path hook consults.
 
 use crate::value::IndexValue;
+use std::fmt::Write as _;
 
 /// Declared scalar type of an index (`TYPE i64|f64|str`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -227,7 +228,8 @@ impl Catalog {
     pub fn to_sidecar(&self) -> String {
         let mut out = String::from("kevy-index-catalog v1\n");
         for (s, _) in &self.specs {
-            out.push_str(&format!(
+            let _ = write!(
+                out,
                 "{}\t{}\t{}\t{}\t{}\t{}",
                 esc(&s.name),
                 esc(&s.prefix),
@@ -235,13 +237,13 @@ impl Catalog {
                 s.ty.tag(),
                 s.kind.tag(),
                 s.max_bytes
-            ));
+            );
             // 7th column is kind-interpreted: ann params for Ann,
             // escaped group field for Agg.
             if let Some(a) = &s.ann {
-                out.push_str(&format!("\t{},{},{},{}", a.dim, a.distance, a.m, a.ef));
+                let _ = write!(out, "\t{},{},{},{}", a.dim, a.distance, a.m, a.ef);
             } else if let Some(g) = &s.group_by {
-                out.push_str(&format!("\t{}", esc(g)));
+                let _ = write!(out, "\t{}", esc(g));
             }
             out.push('\n');
         }
@@ -313,7 +315,7 @@ fn esc(b: &[u8]) -> String {
     let mut out = String::with_capacity(b.len());
     for &c in b {
         if c == b'\t' || c == b'\n' || c == b'%' || !(32..127).contains(&c) {
-            out.push_str(&format!("%{c:02X}"));
+            let _ = write!(out, "%{c:02X}");
         } else {
             out.push(c as char);
         }

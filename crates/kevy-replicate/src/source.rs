@@ -59,6 +59,11 @@ impl ReplicationSource {
     /// be > 0; the source guarantees at most one over-budget frame at
     /// a time (the most recently pushed) so a single huge command does
     /// not silently disappear before its replicas even see it.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max_bytes == 0` — a zero budget could never hold
+    /// even one frame, so it is a caller bug, not a runtime state.
     pub fn new(max_bytes: usize) -> Self {
         assert!(max_bytes > 0, "ReplicationSource max_bytes must be > 0");
         Self {
@@ -72,6 +77,11 @@ impl ReplicationSource {
     /// Resume offset assignment at `next` (boot continuity from the
     /// feed sidecar). Only meaningful on an empty, freshly created
     /// source — asserts the backlog has no frames.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the backlog already holds frames: renumbering live
+    /// frames would corrupt every replica's ack bookkeeping.
     pub fn set_next_offset(&mut self, next: u64) {
         assert!(self.buf.is_empty(), "set_next_offset on non-empty backlog");
         self.next_offset = next;
@@ -122,6 +132,9 @@ impl ReplicationSource {
     /// than `max_bytes` on its own — losing the most recent applied
     /// write before any replica has had a chance to ack it would be
     /// a worse failure than briefly running over budget).
+    // missing_panics_doc: the eviction loop's expect pops a front the loop
+    // guard just observed — unreachable, not a caller-facing panic condition.
+    #[allow(clippy::missing_panics_doc)]
     pub fn push_mutation<A: ArgvView + ?Sized>(&mut self, argv: &A) -> u64 {
         let offset = self.next_offset;
         let bytes = encode_frame(offset, argv);
@@ -152,6 +165,9 @@ impl ReplicationSource {
     /// No-op when `watermark <= oldest_offset()` (nothing to drop)
     /// or when the buffer is empty. Updates the internal byte
     /// accounting to stay consistent with the live buffer length.
+    // missing_panics_doc: same front-of-loop expect rationale as
+    // `push_mutation` — unreachable by the `while let` guard.
+    #[allow(clippy::missing_panics_doc)]
     pub fn drop_up_to(&mut self, watermark: u64) {
         while let Some(front) = self.buf.front() {
             if front.offset >= watermark {

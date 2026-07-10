@@ -210,6 +210,9 @@ pub struct NotificationSection {
 /// runtime caches this struct per-shard (hot-reload via the existing
 /// `LiveRuntimeConfig` tick path) so the per-write-command check
 /// reduces to four bool reads on the hot path.
+// struct_excessive_bools: each field mirrors one independent letter of the
+// redis notify-keyspace-events flag string; they are flags, not a state machine.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct NotificationFlags {
     /// `K` — publish on `__keyspace@<db>__:<key>` channel.

@@ -390,7 +390,10 @@ mod tests {
     fn spsc_stress_across_threads() {
         // Producer and consumer on separate threads; a small ring forces many
         // full/empty transitions. Every item must arrive exactly once, in order.
-        const N: u64 = 1_000_000;
+        // Miri interprets ~1000x slower than native; 2k iterations still cross
+        // the full/empty boundary dozens of times, which is what the race
+        // detector needs — large N only adds wall-clock, not coverage.
+        const N: u64 = if cfg!(miri) { 2_000 } else { 1_000_000 };
         let (mut tx, mut rx) = ring::<u64>(64);
         let producer = std::thread::spawn(move || {
             for i in 0..N {
@@ -417,7 +420,8 @@ mod tests {
     fn stress_with_intermittent_consumer() {
         // Consumer occasionally stalls so the ring fills and the producer must
         // back off — exercises the full path under real contention.
-        const N: u64 = 200_000;
+        // Small N under miri for the same reason as `spsc_stress_across_threads`.
+        const N: u64 = if cfg!(miri) { 2_000 } else { 200_000 };
         let (mut tx, mut rx) = ring::<u64>(16);
         let done = Arc::new(AtomicBool::new(false));
         let done_p = done.clone();

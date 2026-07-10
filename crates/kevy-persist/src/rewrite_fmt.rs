@@ -115,35 +115,35 @@ fn write_value_as_commands<W: Write>(
         Value::ArcBulk(a) => write_verb_items(w, b"SET", key, 1, [a.as_ref().to_vec()])?,
         Value::Hash(h) => {
             let fv = h.iter().flat_map(|(f, v)| [f.to_vec(), v.clone()]);
-            write_verb_items(w, b"HSET", key, h.len() * 2, fv)?
+            write_verb_items(w, b"HSET", key, h.len() * 2, fv)?;
         }
         // A.8: inline hash / list / zset rewrite to the same HSET / RPUSH
         // / ZADD forms as their heap-backed twins; replay re-runs the
         // encoding switch so small values land inline again.
         Value::SmallHashInline(h) => {
             let fv = h.iter().flat_map(|(f, v)| [f.to_vec(), v.to_vec()]);
-            write_verb_items(w, b"HSET", key, h.len() * 2, fv)?
+            write_verb_items(w, b"HSET", key, h.len() * 2, fv)?;
         }
         Value::List(l) => write_verb_items(w, b"RPUSH", key, l.len(), l.iter().cloned())?,
         Value::SmallListInline(l) => {
-            write_verb_items(w, b"RPUSH", key, l.len(), l.iter().map(|v| v.to_vec()))?
+            write_verb_items(w, b"RPUSH", key, l.len(), l.iter().map(<[u8]>::to_vec))?;
         }
         // A.7 O5: inline-encoded set rewrites to the same SADD command form
         // as the heap-backed `Value::Set`; replaying through the live SADD
         // handler re-runs the encoding switch (small → inline, big → KevySet).
         Value::Set(s) => {
-            write_verb_items(w, b"SADD", key, s.len(), s.iter().map(|m| m.to_vec()))?
+            write_verb_items(w, b"SADD", key, s.len(), s.iter().map(kevy_store::SmallBytes::to_vec))?;
         }
         Value::SmallSetInline(s) => {
-            write_verb_items(w, b"SADD", key, s.len(), s.iter().map(|m| m.to_vec()))?
+            write_verb_items(w, b"SADD", key, s.len(), s.iter().map(<[u8]>::to_vec))?;
         }
         Value::ZSet(z) => {
             let ms = z.ordered().flat_map(|(m, sc)| [fmt_zset_score(sc), m.to_vec()]);
-            write_verb_items(w, b"ZADD", key, z.ordered().count() * 2, ms)?
+            write_verb_items(w, b"ZADD", key, z.ordered().count() * 2, ms)?;
         }
         Value::SmallZSetInline(z) => {
             let ms = z.iter().flat_map(|(m, sc)| [fmt_zset_score(sc), m.to_vec()]);
-            write_verb_items(w, b"ZADD", key, z.len() * 2, ms)?
+            write_verb_items(w, b"ZADD", key, z.len() * 2, ms)?;
         }
         Value::Stream(s) => write_stream_as_commands(w, key, s)?,
     }

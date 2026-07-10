@@ -409,6 +409,7 @@ impl SmallBytes {
     /// Both sides inline: compare tag-lengths, then the inline bytes.
     /// Single call site in [`PartialEq::eq`]; `inline(always)` keeps the
     /// split codegen-identical to the pre-split fused body.
+    #[allow(clippy::inline_always)] // see doc above: codegen parity with the pre-split body
     #[inline(always)]
     fn eq_inline_inline(&self, other: &Self, self_tag: u8, other_tag: u8) -> bool {
         let len = self_tag as usize;
@@ -423,6 +424,7 @@ impl SmallBytes {
 
     /// Both sides heap: compare stored lengths, then the heap bytes.
     /// Single call site in [`PartialEq::eq`]; `inline(always)` as above.
+    #[allow(clippy::inline_always)] // see doc above: codegen parity with the pre-split body
     #[inline(always)]
     fn eq_heap_heap(&self, other: &Self) -> bool {
         // SAFETY: both in heap variant.

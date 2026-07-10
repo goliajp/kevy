@@ -51,15 +51,15 @@ impl IoUring {
         let mut upd = IoUringRsrcUpdate {
             offset: u32::MAX,
             resv: 0,
-            data: self.ring_fd as u32 as u64,
+            data: u64::from(self.ring_fd as u32),
         };
         // SAFETY: `upd` lives through the syscall; ring_fd is valid.
         let ret = unsafe {
             ffi::syscall(
                 SYS_IO_URING_REGISTER,
-                self.ring_fd as c_long,
-                IORING_REGISTER_RING_FDS as c_long,
-                &mut upd as *mut _ as c_long,
+                c_long::from(self.ring_fd),
+                c_long::from(IORING_REGISTER_RING_FDS),
+                &raw mut upd as c_long,
                 1 as c_long,
             )
         };
@@ -93,9 +93,9 @@ impl IoUring {
         let ret = unsafe {
             ffi::syscall(
                 SYS_IO_URING_REGISTER,
-                self.ring_fd as c_long,
-                IORING_REGISTER_FILES2 as c_long,
-                &reg as *const _ as c_long,
+                c_long::from(self.ring_fd),
+                c_long::from(IORING_REGISTER_FILES2),
+                &raw const reg as c_long,
                 core::mem::size_of::<IoUringRsrcRegister>() as c_long,
             )
         };
@@ -114,16 +114,16 @@ impl IoUring {
         let upd = IoUringFilesUpdate {
             offset: index,
             resv: 0,
-            fds: (&fd_val as *const i32) as u64,
+            fds: (&raw const fd_val) as u64,
         };
         // SAFETY: `upd` and `fd_val` both live through the syscall; ring_fd
         // came from io_uring_setup.
         let ret = unsafe {
             ffi::syscall(
                 SYS_IO_URING_REGISTER,
-                self.ring_fd as c_long,
-                IORING_REGISTER_FILES_UPDATE as c_long,
-                &upd as *const _ as c_long,
+                c_long::from(self.ring_fd),
+                c_long::from(IORING_REGISTER_FILES_UPDATE),
+                &raw const upd as c_long,
                 1 as c_long,
             )
         };
