@@ -1,0 +1,10 @@
+#Å
+
+[memory]
+[log]
+level   = "info"
+output   =""
+
+[advanced]
+spii_limit    = 200
+m = 1

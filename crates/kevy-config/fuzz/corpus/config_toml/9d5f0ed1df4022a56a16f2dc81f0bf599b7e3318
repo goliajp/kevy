@@ -1,0 +1,10 @@
+# 
+[log]
+level= "info"
+output=""
+[server]
+
+data_dir = ""
+# ke
+data_dir = ""
+port  =2

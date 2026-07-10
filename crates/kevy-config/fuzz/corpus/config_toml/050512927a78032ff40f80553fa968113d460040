@@ -1,0 +1,6 @@
+#
+
+[memory]
+maxmemory   = "512m"#]
+maxmemory      = "51m"#]
+maxmemory  = "52m"

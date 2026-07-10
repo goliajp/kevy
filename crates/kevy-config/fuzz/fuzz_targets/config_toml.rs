@@ -9,33 +9,27 @@
 //!     exercises replacement-char handling in the lexer)
 //!   * every parse/schema error carries a 1-based position (line ≥ 1,
 //!     and col ≥ 1 for `Parse`) — the RFC's errors-carry-line-numbers
-//!     contract — except the known-broken EOF class (FINDING #1)
+//!     contract
 //!   * `from_toml_str` never returns `IoOpen` (it does no file I/O)
 //!   * accepted inputs round-trip: `to_toml_string()` output must reparse
 //!     successfully; for ASCII output (FINDING #3) it must re-serialize
-//!     to the identical string (fixpoint), and whole-Config equality
-//!     holds when the unserialized sections are default (FINDING #2)
+//!     to the identical string (fixpoint) AND whole-Config equality holds
 //!   * `parse_size` (the other text-facing entry: size literals from TOML
 //!     and `CONFIG SET`) never panics on arbitrary text
 //!
-//! KNOWN FINDING #1 (2026-07-10, fuzz-found, minimized to the 1-byte
-//! input `e`): every "unexpected end of input" error reports
-//! `line: 0, col: 0` — the parser's EOF path loses the position of the
-//! last token (`"e"` → "line 0 col 0: unexpected end of input: expected
-//! '='", `"[serve"` → same for ']', `"e="` → same for a value). All
-//! non-EOF errors carry correct 1-based positions. Reported upstream,
-//! not fixed here; the position assertion is scoped to non-EOF errors
-//! so this target still enforces the contract everywhere else.
+//! FIXED FINDING #1 (2026-07-10, fuzz-found, minimized to the 1-byte
+//! input `e`): every "unexpected end of input" error used to report
+//! `line: 0, col: 0`. The parser now anchors EOF errors at the lexer's
+//! end-of-input position, so the position assertion below covers the
+//! EOF class too.
 //!
-//! KNOWN FINDING #2 (2026-07-10, found while writing this target,
-//! verified: `[cluster] enabled = true` parses, serializes to nothing,
-//! reparses as enabled = false): `to_toml_string` emits
-//! [server]/[persistence]/[memory]/[expiry]/[log]/[notification]/
-//! [advanced]/[slowlog] but NOT [cluster]/[replication]/[lua]/
-//! [metrics]/[audit]/[feed], so a `CONFIG REWRITE` on a file using any
-//! of those six sections silently drops them — despite the fn's doc
-//! comment promising "every field". Whole-Config round-trip equality is
-//! therefore only asserted when those six sections are at defaults.
+//! FIXED FINDING #2 (2026-07-10, found while writing this target):
+//! `to_toml_string` emitted only 8 of the 14 schema sections —
+//! [cluster]/[replication]/[lua]/[metrics]/[audit]/[feed] (and
+//! `server.max_clients`) were silently dropped by `CONFIG REWRITE`.
+//! Both serializers now share one canonical pair list; whole-Config
+//! round-trip equality is asserted unconditionally (for ASCII output,
+//! see FINDING #3).
 //!
 //! KNOWN FINDING #3 (2026-07-10, fuzz-found at exec ~139K, verified
 //! with the 1-line repro `data_dir = "/é"` → parses as `"/Ã©"`): the
@@ -93,29 +87,16 @@ fuzz_target!(|data: &[u8]| {
                     ser,
                     "serialize -> parse -> serialize is not a fixpoint"
                 );
-                let dflt = Config::default();
-                let uncovered_sections_default = cfg.cluster == dflt.cluster
-                    && cfg.replication == dflt.replication
-                    && cfg.lua == dflt.lua
-                    && cfg.metrics == dflt.metrics
-                    && cfg.audit == dflt.audit
-                    && cfg.feed == dflt.feed;
-                if uncovered_sections_default {
-                    // Both sides parsed with source_path = None, so plain
-                    // equality is the round-trip semantic check.
-                    assert_eq!(re, cfg, "round-trip changed config semantics");
-                }
+                // Both sides parsed with source_path = None, so plain
+                // equality is the round-trip semantic check.
+                assert_eq!(re, cfg, "round-trip changed config semantics");
             }
         }
         Err(ConfigError::Parse { line, col, msg }) => {
-            // KNOWN FINDING #1: the EOF error path reports 0:0 — see the
-            // header comment. Position is asserted for every other path.
-            if !msg.starts_with("unexpected end of input") {
-                assert!(
-                    line >= 1 && col >= 1,
-                    "parse error missing position: {line}:{col} ({msg})"
-                );
-            }
+            assert!(
+                line >= 1 && col >= 1,
+                "parse error missing position: {line}:{col} ({msg})"
+            );
         }
         Err(ConfigError::Schema { line, .. }) => {
             assert!(line >= 1, "schema error missing line: {line}");

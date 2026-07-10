@@ -1,0 +1,31 @@
+#"
+
+[persistence]
+aof          = true
+appendfsync         = "everysec"
+auto_aof_rewrite_percentage  = 0
+auto_aof_rewrite_min_size    = "64mb"
+
+[memory]
+maxmemory       = "256mb"
+maxmemory_policy  = "allkeys-lru"
+
+[expiry]
+hz     = 20
+
+[log]
+level    = "info"
+output   ="s”Îevy"
+
+[persistence]
+aof             = true
+appendfsync     = "everysec"
+auto_aof_rewrite_percentage  = 050
+auto_aof_rewrite_min_size    = "64mb"
+
+[memory]
+maxmemory         = "511mb"
+maxmemory_policy  = "allkeys-lru"
+
+[expiry]
+hz      = 129

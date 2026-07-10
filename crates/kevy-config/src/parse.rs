@@ -34,12 +34,13 @@ pub(crate) struct Item {
 
 /// Parse a complete TOML source string into a flat list of items.
 pub(crate) fn parse(src: &str) -> Result<Vec<Item>, ConfigError> {
-    let tokens = tokenize(src)?;
+    let (tokens, eof_pos) = tokenize(src)?;
     let mut p = Parser {
         tokens,
         pos: 0,
         current_section: None,
         items: Vec::new(),
+        eof_pos,
     };
     p.parse_all()?;
     Ok(p.items)
@@ -50,6 +51,9 @@ struct Parser {
     pos: usize,
     current_section: Option<String>,
     items: Vec<Item>,
+    /// 1-based `(line, col)` of end-of-input, from the lexer — the
+    /// position reported by "unexpected end of input" errors.
+    eof_pos: (usize, usize),
 }
 
 impl Parser {
@@ -79,7 +83,7 @@ impl Parser {
                 ..
             }) => n.clone(),
             Some(s) => return Err(unexpected(s, "expected section name".into())),
-            None => return Err(eof("expected section name")),
+            None => return Err(self.eof("expected section name")),
         };
         self.pos += 1;
         match self.tokens.get(self.pos) {
@@ -88,7 +92,7 @@ impl Parser {
                 ..
             }) => self.pos += 1,
             Some(s) => return Err(unexpected(s, "expected ']'".into())),
-            None => return Err(eof("expected ']'")),
+            None => return Err(self.eof("expected ']'")),
         }
         self.expect_eol("after section header")?;
         self.current_section = Some(name);
@@ -113,13 +117,13 @@ impl Parser {
                 ..
             }) => self.pos += 1,
             Some(s) => return Err(unexpected(s, "expected '='".into())),
-            None => return Err(eof("expected '='")),
+            None => return Err(self.eof("expected '='")),
         }
         let value_span = self
             .tokens
             .get(self.pos)
             .cloned()
-            .ok_or_else(|| eof("expected value"))?;
+            .ok_or_else(|| self.eof("expected value"))?;
         let value = match value_span.tok {
             Token::Str(s) => Value::Str(s),
             Token::Int(n) => Value::Int(n),
@@ -158,6 +162,16 @@ impl Parser {
             Some(s) => Err(unexpected(s, format!("expected newline {ctx}"))),
         }
     }
+
+    /// "Unexpected end of input" anchored at the end-of-input position
+    /// (fuzz finding 2026-07-10: this class used to report 0:0).
+    fn eof(&self, msg: &str) -> ConfigError {
+        ConfigError::Parse {
+            line: self.eof_pos.0,
+            col: self.eof_pos.1,
+            msg: format!("unexpected end of input: {msg}"),
+        }
+    }
 }
 
 fn unexpected(s: &Spanned, msg: String) -> ConfigError {
@@ -165,14 +179,6 @@ fn unexpected(s: &Spanned, msg: String) -> ConfigError {
         line: s.line,
         col: s.col,
         msg,
-    }
-}
-
-fn eof(msg: &str) -> ConfigError {
-    ConfigError::Parse {
-        line: 0,
-        col: 0,
-        msg: format!("unexpected end of input: {msg}"),
     }
 }
 
@@ -247,6 +253,32 @@ mod tests {
     #[test]
     fn missing_rbracket_errors() {
         assert!(matches!(parse("[s\n").unwrap_err(), ConfigError::Parse { .. }));
+    }
+
+    #[test]
+    fn eof_errors_carry_end_position() {
+        // Fuzz finding (2026-07-10): every "unexpected end of input"
+        // error used to report line 0, col 0. Contract: EOF errors
+        // point at the end of the input (1-based, just past the last
+        // token).
+        for (src, line, col) in [
+            ("e", 1, 2),          // expected '='
+            ("[serve", 1, 7),     // expected ']'
+            ("e =", 1, 4),        // expected value
+            ("[", 1, 2),          // expected section name
+            ("a = 1\nb =", 2, 4), // expected value, line 2
+        ] {
+            match parse(src).unwrap_err() {
+                ConfigError::Parse { line: l, col: c, msg } => {
+                    assert!(
+                        msg.starts_with("unexpected end of input"),
+                        "{src:?}: wrong error class: {msg}"
+                    );
+                    assert_eq!((l, c), (line, col), "{src:?}: {msg}");
+                }
+                other => panic!("{src:?}: expected Parse, got {other}"),
+            }
+        }
     }
 
     #[test]

@@ -1,0 +1,8 @@
+# kevyseed
+[server]
+data_dir = "/vaMMMMMMMMMMMMnéi\n#_________iô__\\v¥y"
+
+[persistence]
+aof    = true
+appendfsync                  = "everysec"
+auto_aof_rewrite_percentage  =  129

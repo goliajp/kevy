@@ -140,3 +140,16 @@ fn limit_and_empty_query() {
     assert!(s.matches(b"", 10).is_empty());
     assert!(s.matches(b"!!!", 10).is_empty());
 }
+
+#[test]
+fn limit_zero_is_empty() {
+    // Fuzz finding (2026-07-10): limit = 0 used to underflow in
+    // `kth_of` (`limit - 1`) whenever the query hit a posting list.
+    // Contract now: top-0 of anything is the empty ranking (same
+    // convention as kevy-vector's `knn` with k = 0).
+    let s = seg();
+    assert!(s.matches(b"rust", 0).is_empty());
+    assert!(s.matches(b"rust search engine", 0).is_empty());
+    assert!(s.matches(b"", 0).is_empty());
+    assert!(TextSegment::new().matches(b"rust", 0).is_empty());
+}

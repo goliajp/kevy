@@ -20,11 +20,11 @@
 //!     (score-tolerant check: its worst score must not be materially below
 //!     the naive k-th score)
 //!
-//! KNOWN FINDING (not asserted here so the sustained run stays green;
-//! reported to the caller instead): `matches(query, 0)` panics with a
-//! usize underflow in `kth_of` (`limit - 1`) whenever the query hits any
-//! posting list — the pub API accepts `limit: usize` but limit=0 is not
-//! handled. This target therefore only issues queries with limit ≥ 1.
+//! FIXED FINDING (2026-07-10): `matches(query, 0)` used to panic with
+//! a usize underflow in `kth_of` (`limit - 1`) whenever the query hit
+//! any posting list. Contract now: limit = 0 returns the empty ranking
+//! (same convention as kevy-vector's `knn` with k = 0) — asserted
+//! below on every input.
 
 #![no_main]
 
@@ -158,6 +158,9 @@ fuzz_target!(|data: &[u8]| {
     }
     // Ranking contract: score descending, key ascending on ties.
     naive.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    // limit = 0 is total and empty (used to underflow in kth_of).
+    assert!(seg.matches(&query, 0).is_empty(), "matches(_, 0) must be empty");
 
     // ---- Full-width query: exact set + scores + ordering ----
     let hits = seg.matches(&query, live.len() + 1);

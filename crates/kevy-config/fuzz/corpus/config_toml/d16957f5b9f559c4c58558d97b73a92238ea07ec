@@ -1,0 +1,6 @@
+#
+[server]
+data_dir= "/Ulr"
+
+[expiry]
+hz =77

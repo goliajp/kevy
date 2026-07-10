@@ -1,0 +1,23 @@
+# kevy conn_size    = "64
+[memory]
+maxmemory         = "512mb"
+maxmemory_policy  = "allkeys-lru"
+
+[expiry]
+hz       = 10
+[persistence]
+aof                          = true
+appendfsync               = "everysec"
+auto_aof_rewrite_percentage  = 101
+auto_aof_rewrite_min_size    = "64tb"
+
+[memory]
+maxmemory         = "512mb"
+maxmemory_policy  = "allkeys-lru"
+
+[expiry]
+hz       = 10
+sample   = 20#of_rewrite_min_size  
+
+[memory]
+maxmemory  = 129

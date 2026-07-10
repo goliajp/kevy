@@ -1,0 +1,4 @@
+#yc
+[server]
+data_dir = ""
+eds  = 12

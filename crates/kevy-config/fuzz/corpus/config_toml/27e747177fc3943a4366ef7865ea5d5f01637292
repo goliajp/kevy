@@ -1,0 +1,6 @@
+
+
+[memory]
+maxmemory_policy= "allkeys-lFu"
+
+i         = 18

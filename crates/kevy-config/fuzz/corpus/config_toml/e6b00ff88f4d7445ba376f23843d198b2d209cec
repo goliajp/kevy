@@ -1,0 +1,11 @@
+# kevy cig seed
+[server]
+bind     = "127.0.0.1"
+port     = 6004
+threads  = 4
+data_dir = "/va        =ƒ\\\\ƒ‡w|ƒƒƒƒƒƒƒƒƒ_______________________MMMMMMMMMMMMMMMMMMMMMMMMMÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿÿªÿÿMMMMMMMMMMMMMMM#2i\nl_____MMMÿÿÿÿÿÿÿ_________\\v²y"
+
+[persistence]
+aof            = true
+appendfsync                  = "everysec"
+auto_aof_rewrite_percentage  =  129

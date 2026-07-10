@@ -130,6 +130,12 @@ impl TextSegment {
     /// per accumulated doc instead of walked. Selection is a bounded
     /// heap over borrowed keys (no per-candidate allocation).
     pub fn matches(&self, query: &[u8], limit: usize) -> Vec<TextMatch> {
+        // Top-0 of anything is empty (same convention as kevy-vector's
+        // `knn` with k = 0). Also keeps the MaxScore floor well-defined:
+        // `kth_of` indexes `limit - 1`.
+        if limit == 0 {
+            return Vec::new();
+        }
         let mut q_tokens = tokenize(query);
         q_tokens.sort();
         q_tokens.dedup();

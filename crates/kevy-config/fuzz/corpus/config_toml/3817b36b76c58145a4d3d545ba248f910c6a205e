@@ -1,0 +1,5 @@
+#
+[memory]
+maxmemory        = "512kb"
+maxmemory         = "512kb"
+emor    =8
