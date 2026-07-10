@@ -22,6 +22,8 @@ impl<C: Commands> Shard<C> {
     /// list so the conn gets a nil/0 reply rather than crashing the
     /// reactor for every other in-flight command on the shard. The
     /// connection sees an observably-wrong reply; nothing else dies.
+    // LOC-WAIVER: data-driven route dispatch table — one arm per
+    // multi-target Route variant mapping to (targets, Agg).
     pub(crate) fn build_multi_targets<A: ArgvView + ?Sized>(
         &self,
         args: &A,
@@ -355,6 +357,20 @@ fn parse_zsetstore_args<A: ArgvView + ?Sized>(
         return Err("ERR Number of keys can't be greater than number of args");
     }
     let keys: Vec<Vec<u8>> = (3..3 + numkeys).map(|i| args[i].to_vec()).collect();
+    let (weights, aggregate) = parse_zstore_tail(args, diff_form, numkeys)?;
+    Ok((dst, keys, weights, aggregate))
+}
+
+/// The optional `[WEIGHTS w…] [AGGREGATE SUM|MIN|MAX]` tail of the
+/// zset-store arg forms. Extracted verbatim from
+/// [`parse_zsetstore_args`] (single call site, `inline(always)`) purely
+/// for the 50-LOC fn rule.
+#[inline(always)]
+fn parse_zstore_tail<A: ArgvView + ?Sized>(
+    args: &A,
+    diff_form: bool,
+    numkeys: usize,
+) -> Result<(Option<Vec<f64>>, kevy_store::ZAggregate), &'static str> {
     let mut weights = None;
     let mut aggregate = kevy_store::ZAggregate::Sum;
     let mut i = 3 + numkeys;
@@ -390,7 +406,7 @@ fn parse_zsetstore_args<A: ArgvView + ?Sized>(
             return Err("ERR syntax error");
         }
     }
-    Ok((dst, keys, weights, aggregate))
+    Ok((weights, aggregate))
 }
 
 /// `S*STORE dst key [key …]`.

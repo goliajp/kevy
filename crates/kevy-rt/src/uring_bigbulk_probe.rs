@@ -220,6 +220,8 @@ fn step_bulk(buf: &[u8], i: usize) -> BulkStep {
 /// BIG_ARG_PROMOTE_THRESHOLD`. A frame where the incomplete bulk is
 /// NOT the last bulk (e.g. `SET k <BIG> EX 10` with the big value at
 /// position 3 of 5) returns `NotApplicable` — v1.25.x follow-up.
+// LOC-WAIVER: RESP frame-probe parser state machine on the hot recv
+// tail — header walk with per-bulk step arms, one indivisible unit.
 pub(crate) fn probe_generic_bigbulk(buf: &[u8]) -> BigArgGenericProbe {
     if buf.first() != Some(&b'*') {
         return BigArgGenericProbe::NotApplicable;
