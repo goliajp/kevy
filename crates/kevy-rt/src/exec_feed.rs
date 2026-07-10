@@ -217,11 +217,19 @@ impl<C: Commands> Shard<C> {
                 body.extend_from_slice(b"\r\n");
             }
         }
-        let mut out = Vec::with_capacity(body.len() + 48);
-        out.extend_from_slice(format!("*3\r\n:{generation}\r\n:{next}\r\n*{kept}\r\n").as_bytes());
-        out.extend_from_slice(&body);
-        Part::Reply(SmallReply::from_vec(out))
+        feed_read_reply(generation, next, kept, &body)
     }
+}
+
+/// Assemble the `FEED.READ` reply envelope (`*3 :gen :next *kept …`).
+/// Extracted verbatim from [`Shard::exec_feed_read`] (single call site,
+/// `inline(always)`) purely for the 50-LOC fn rule.
+#[inline(always)]
+fn feed_read_reply(generation: u64, next: u64, kept: usize, body: &[u8]) -> Part {
+    let mut out = Vec::with_capacity(body.len() + 48);
+    out.extend_from_slice(format!("*3\r\n:{generation}\r\n:{next}\r\n*{kept}\r\n").as_bytes());
+    out.extend_from_slice(body);
+    Part::Reply(SmallReply::from_vec(out))
 }
 
 fn feed_disabled() -> Vec<u8> {

@@ -50,52 +50,15 @@ const NAP_US: u64 = 200;
 /// Sequential -c1 traffic drains 1 message per request and must never
 /// nap (that was the 15× -c1 bug the batch gate exists to prevent).
 const NAP_BATCH_MIN: usize = 4;
-/// `-ENOBUFS`: the buf ring was momentarily empty; just re-arm (don't close).
-pub(crate) const ENOBUFS: i32 = 105;
-
-/// **A.4 (v1.25)**: maximum iovec entries packed into one `writev` SQE.
-/// Linux caps `writev(2)` (and `IORING_OP_WRITEV`) at `IOV_MAX = 1024`
-/// vectors; over the cap the kernel returns `-EINVAL`. The chunked-
-/// writev state machine on `UringConn` (`arcs_in_flight` +
-/// `write_byte_cap` + `write_inflight_bytes`) submits one chunk per
-/// arm_conns iter and drops the processed prefix in the CQE handler,
-/// so a 50-sub × 1024-publish pub/sub burst lands in ~2 SQEs per conn
-/// (TCP-ordered, never violating IOV_MAX) instead of forcing the
-/// in-shard memcpy fallback after the prior 256-arc cap.
-pub(crate) const MAX_IOVECS_PER_WRITEV: usize = 1024;
-
-
-// `user_data` layout: top 4 bits = op, low 60 bits = conn id.
-// v1.29 B2-alt widened OP_SHIFT from 61 to 60 to add two new op tags
-// (`OP_BIG_CANCEL` + `OP_BIG_READ`) for the bigval-SET kernel-direct
-// recv state machine. The 60-bit conn id space (~1.15 × 10^18) stays
-// orders of magnitude beyond any realistic next_conn_id growth rate.
-const OP_SHIFT: u32 = 60;
-pub(crate) const OP_RECV: u64 = 1 << OP_SHIFT;
-pub(crate) const OP_WRITE: u64 = 2 << OP_SHIFT;
-const OP_ACCEPT: u64 = 3 << OP_SHIFT;
-/// The shard's waker pipe became readable (a peer woke a parked shard).
-pub(crate) const OP_WAKER: u64 = 4 << OP_SHIFT;
-/// The bounded-park timeout fired (see [`ParkState`]).
-pub(crate) const OP_TIMEOUT: u64 = 5 << OP_SHIFT;
-/// Accept on the per-shard cluster listener (conns marked for `-MOVED`).
-const OP_ACCEPT_CL: u64 = 6 << OP_SHIFT;
-/// v1.25 UDS: accept on the (shard-0-only) Unix-domain listener.
-const OP_ACCEPT_UN: u64 = 7 << OP_SHIFT;
-/// **v1.29 B2-alt**: the cancel SQE issued to abort a multishot recv
-/// before switching the conn to single-shot `prep_read` for big-arg
-/// ingest. The CQE for THIS SQE reports `res = 0` on successful match
-/// or `-ENOENT` if the target multishot already terminated. The target
-/// multishot's terminal `-ECANCELED` CQE arrives under the existing
-/// `OP_RECV` tag (handled in `uring_on_recv`).
-pub(crate) const OP_BIG_CANCEL: u64 = 8 << OP_SHIFT;
-/// **v1.29 B2-alt**: the single-shot `prep_read` SQE that draws body
-/// bytes directly from the kernel into the destination `Vec<u8>` (no
-/// userspace memcpy through the provided-buffer slab). Re-submitted
-/// until the entire body is received; the multishot is re-armed on
-/// completion to accept any pipelined commands after the big body.
-pub(crate) const OP_BIG_READ: u64 = 9 << OP_SHIFT;
-const CONN_MASK: u64 = (1 << OP_SHIFT) - 1;
+// The `user_data` op-tag layout (`OP_*` / `CONN_MASK`), the writev
+// iovec cap, and the special-cased errnos live in [`crate::uring_ops`]
+// — split out so this file stays under the 500-LOC house rule.
+// Re-exported so the sibling uring modules keep their
+// `crate::uring_reactor::…` paths.
+pub(crate) use crate::uring_ops::{
+    CONN_MASK, ENOBUFS, MAX_IOVECS_PER_WRITEV, OP_ACCEPT, OP_ACCEPT_CL, OP_ACCEPT_UN,
+    OP_BIG_CANCEL, OP_BIG_READ, OP_RECV, OP_TIMEOUT, OP_WAKER, OP_WRITE,
+};
 
 
 impl<C: Commands> Shard<C> {
@@ -103,6 +66,11 @@ impl<C: Commands> Shard<C> {
     /// drives socket I/O through io_uring instead of the readiness poller.
     /// The ring pair comes from [`build_uring`] at the spawn site (see the
     /// fallback rationale there).
+    // Busy-poll reactor main loop — per-iter overhead is the proven
+    // perf-sensitive surface here (perf-vs-foss §8 v1.30: per-iter
+    // amortization moves throughput where per-op µs shaving does not);
+    // stage extraction risks codegen change for zero readability win.
+    // LOC-WAIVER: busy-poll reactor main loop (per-iter perf-sensitive).
     pub(crate) fn run_uring(
         mut self,
         ring_pair: (IoUring, kevy_uring::ProvidedBufRing),
@@ -520,20 +488,11 @@ impl<C: Commands> Shard<C> {
         Ok(())
     }
 
-    // `uring_arm_conns` lives in [`crate::uring_arm`] (v1.25 A.9: this
-    // file was 592 LOC pre-K4, over the 500-LOC house rule, and the K4
-    // ready-set rewrite needed a clean home). `uring_on_recv` /
-    // `uring_mark_closing` / `uring_on_write` live in
-    // [`crate::uring_io`]; `uring_drain_inbound` + `uring_reap_closed`
-    // live in [`crate::uring_inbox`]; the bounded park lives in
-    // [`crate::uring_park`]. All on the same `impl<C: Commands> Shard<C>`
-    // and only ever called from `run_uring` above.
-    #[doc(hidden)]
-    #[allow(dead_code)]
-    fn _uring_module_map() {}
-
-    // `uring_on_recv` / `uring_mark_closing` / `uring_on_write` live in
-    // [`crate::uring_io`]; `uring_drain_inbound` + `uring_reap_closed`
-    // live in [`crate::uring_inbox`]. Same `impl<C: Commands> Shard<C>`,
-    // split out so this file stays under the 500-LOC house rule.
+    // Module map (all on the same `impl<C: Commands> Shard<C>`, only
+    // ever called from `run_uring` above; split per the 500-LOC house
+    // rule): `uring_arm_conns` → [`crate::uring_arm`]; `uring_on_recv` /
+    // `uring_mark_closing` / `uring_on_write` → [`crate::uring_io`];
+    // `uring_drain_inbound` + `uring_reap_closed` → [`crate::uring_inbox`];
+    // the bounded park → [`crate::uring_park`]; the shared op-tag
+    // constants → [`crate::uring_ops`].
 }

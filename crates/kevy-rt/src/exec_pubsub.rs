@@ -125,13 +125,20 @@ impl<C: Commands> Shard<C> {
             encode_bulk(&mut out, ch);
             encode_integer(&mut out, c.sub.len() as i64);
         }
-        // H1.B: mirror real (sub/unsub) transitions into the per-channel
-        // local subscriber index. Done here (not in
-        // `apply_sub_to_registry`) because the registry is the cross-
-        // shard count/bits view, while `subs_by_channel` is this shard's
-        // local conn-id list keyed by channel — used by `deliver_publish`
-        // to skip the global conns iter.
-        for ch in &changed {
+        self.mirror_subs_by_channel(conn_id, &changed, subscribe);
+        Some((out, changed))
+    }
+
+    /// H1.B: mirror real (sub/unsub) transitions into the per-channel
+    /// local subscriber index. Done here (not in `apply_sub_to_registry`)
+    /// because the registry is the cross-shard count/bits view, while
+    /// `subs_by_channel` is this shard's local conn-id list keyed by
+    /// channel — used by `deliver_publish` to skip the global conns iter.
+    /// Extracted verbatim from [`Self::apply_sub_to_conn`] (single call
+    /// site, `inline(always)`) purely for the 50-LOC fn rule.
+    #[inline(always)]
+    fn mirror_subs_by_channel(&mut self, conn_id: u64, changed: &[Vec<u8>], subscribe: bool) {
+        for ch in changed {
             if subscribe {
                 let ids = self.subs_by_channel.entry(ch.clone()).or_default();
                 if !ids.contains(&conn_id) {
@@ -144,7 +151,6 @@ impl<C: Commands> Shard<C> {
                 }
             }
         }
-        Some((out, changed))
     }
 
     /// Reflect a real (sub/unsub) transition into the cross-shard
@@ -182,6 +188,8 @@ impl<C: Commands> Shard<C> {
     /// shards that hold a subscriber (in parallel; no replies fold back).
     /// Replaces the old all-shards SumInt fan-out, which cost ~2N cross-core
     /// ops per publish (N sends + N replies).
+    // LOC-WAIVER: hot PUBLISH fan-out path (H1.A single-shard inline +
+    // per-target batch); splitting risks codegen on the pubsub angle.
     pub(crate) fn do_publish<A: ArgvView + ?Sized>(
         &mut self,
         conn_id: u64,

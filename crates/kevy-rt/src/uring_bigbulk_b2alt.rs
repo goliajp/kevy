@@ -39,6 +39,8 @@ impl<C: Commands> Shard<C> {
     /// bytes). If body still incomplete, mark the conn for another
     /// `prep_read` on the next arm pass; if complete, dispatch + mark
     /// for multishot re-arm.
+    // LOC-WAIVER: kernel-direct big-arg read completion state machine
+    // (B2-alt) — body fill / CRLF account / dispatch+re-arm, one unit.
     pub(crate) fn uring_on_big_arg_read(
         &mut self,
         cid: u64,

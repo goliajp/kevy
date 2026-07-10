@@ -63,6 +63,8 @@ impl<C: Commands> Shard<C> {
     /// (capacity pre-sized to the entire expected frame length).
     /// Subsequent multishot CQEs feed directly into the same Vec via
     /// [`Self::uring_bigbulk_feed`].
+    // LOC-WAIVER: bigbulk promote state machine (bare-SET kernel-direct
+    // vs Frame arm) — hot recv-tail path, one indivisible decision.
     pub(crate) fn try_promote_bigbulk(
         &mut self,
         cid: u64,
@@ -168,6 +170,8 @@ impl<C: Commands> Shard<C> {
     /// — incoming bytes come via single-shot `prep_read` CQEs through
     /// [`Self::uring_on_big_arg_read`] instead. BareSetReading never
     /// receives multishot CQEs (multishot is cancelled by then).
+    // LOC-WAIVER: bigbulk slab-feed state machine — one arm per
+    // BigArgState variant on the hot big-SET ingest path.
     pub(crate) fn uring_bigbulk_feed(
         &mut self,
         cid: u64,
