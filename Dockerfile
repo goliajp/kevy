@@ -22,7 +22,7 @@ FROM rust:1.97-slim-bookworm AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-# Use the image's bundled toolchain (1.95) — we deliberately don't copy
+# Use the image's bundled toolchain (1.97) — we deliberately don't copy
 # rust-toolchain.toml so the build skips a redundant `rustup` download.
 # Builds BOTH the server (`kevy`) and the client CLI (`kevy-cli`) —
 # the latter ships in the runtime image so Docker / k8s healthchecks

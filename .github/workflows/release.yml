@@ -57,7 +57,7 @@ jobs:
   #
   # Rate limit: crates.io throttles NEW-crate publishes (burst-5 then
   # 1/~10 min), but version BUMPS on existing crates are not throttled —
-  # all 16 crates are already on crates.io, so a tag-driven mass-republish
+  # all 30 crates are already on crates.io, so a tag-driven mass-republish
   # runs back-to-back with no sleeps.
   publish:
     name: cargo publish to crates.io
@@ -124,7 +124,7 @@ jobs:
           # cargo retry attempt counts against the burst window too.
           #
           # New ceiling: 35s sleep after every successful publish, so a
-          # 22-crate chain takes ~13 min wall-clock but stays well under
+          # 30-crate chain takes ~18 min wall-clock but stays well under
           # any per-10-min limit. On 429, sleep 300s × up to 5 retries
           # (max 25 min wait per crate) — enough to outwait even a fully
           # depleted window.
