@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kevy live demo — the engine in your browser</title>
+<meta name="description" content="A browser REPL over the kevy WebAssembly engine: real commands, OPFS persistence that survives reloads, and pub/sub across tabs. No backend.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23132242'/%3E%3Ctext x='6' y='24' font-family='monospace' font-size='20' fill='%23d97706'%3Ek%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <div class="wordmark"><a href="../">kevy<span class="cursor-block"></span></a></div>
+    <nav class="top">
+      <a href="../">home</a>
+      <a href="https://github.com/goliajp/kevy/tree/develop/docs">docs</a>
+      <a href="https://github.com/goliajp/kevy">github</a>
+    </nav>
+    <div class="lang" aria-label="Language">
+      <a href="../">EN</a><span class="sep">·</span><a href="../ja/" lang="ja">日本語</a><span class="sep">·</span><a href="../zh-CN/" lang="zh-CN">简体中文</a>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<section class="sheet">
+  <div class="wrap">
+    <div class="strip">Live demo · WebAssembly</div>
+    <h1>kevy, running in this tab.</h1>
+    <p class="lead">This page loads the real kevy engine as a wasm module
+    and opens it with persistence on. Everything below runs locally —
+    there is no backend. Type <code>help</code> for the command list.</p>
+
+    <div class="repl">
+      <div class="bar">
+        <span class="dot" id="dot"></span>
+        <span class="stat" id="stat">loading kevy.wasm …</span>
+      </div>
+      <pre id="log" aria-live="polite"></pre>
+      <form id="f" autocomplete="off">
+        <span class="ps1">kevy&gt;</span>
+        <input id="cmd" type="text" spellcheck="false" autocapitalize="none"
+               aria-label="Command input" placeholder="help">
+      </form>
+    </div>
+
+    <div class="guides">
+      <div class="guide">
+        <h3>Persistence you can refresh</h3>
+        <ol>
+          <li><code>set greeting hello</code></li>
+          <li>Reload this page (writes stream to OPFS as a kevy
+              append-only log; IndexedDB where OPFS is unavailable).</li>
+          <li><code>get greeting</code> — still there.</li>
+        </ol>
+        <p>The stored bytes are a standard kevy AOF: the same log replays
+        in a native kevy server unchanged.</p>
+      </div>
+      <div class="guide">
+        <h3>Pub/sub across two tabs</h3>
+        <ol>
+          <li>Open this page in a second tab.</li>
+          <li>Tab A: <code>subscribe news</code></li>
+          <li>Tab B: <code>publish news hello-from-B</code></li>
+          <li>Tab A prints the message — delivered over
+              BroadcastChannel, at-most-once, no backlog.</li>
+        </ol>
+      </div>
+      <div class="guide">
+        <h3>TTLs, counters, scans</h3>
+        <p><code>set session abc ttl 5000</code> then watch
+        <code>pttl session</code> count down and the key expire.
+        <code>incr visits</code> · <code>keys *</code> ·
+        <code>dbsize</code> · <code>flushall</code>.</p>
+      </div>
+      <div class="guide">
+        <h3>What this is</h3>
+        <p>The <a href="https://www.npmjs.com/package/@goliajp/kevy">@goliajp/kevy</a>
+        npm package: a ~420&nbsp;KB <code>wasm32-unknown-unknown</code>
+        module behind a hand-written ES-module loader. Zero dependencies,
+        no binding generator. Measured against browser storage in
+        <a href="https://github.com/goliajp/kevy/blob/develop/bench/WASM-BENCH.md">bench/WASM-BENCH.md</a>:
+        durable writes at 593k–848k ops/s vs 46k for raw IndexedDB.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>© GOLIA K.K. · Apache-2.0 OR MIT</span>
+    <div class="lang">
+      <a href="../">EN</a><span class="sep">·</span><a href="../ja/" lang="ja">日本語</a><span class="sep">·</span><a href="../zh-CN/" lang="zh-CN">简体中文</a>
+    </div>
+  </div>
+</footer>
+
+<script type="module" src="repl.js"></script>
+</body>
+</html>
