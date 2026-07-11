@@ -63,7 +63,7 @@ pub use reply_encode_resp3::{
     encode_null, encode_push_header, encode_set_header, encode_verbatim,
 };
 pub use reply_parse::{Reply, parse_reply};
-pub use request::{parse_command, parse_command_into};
+pub use request::{MAX_BULK_LEN, MAX_MULTIBULK_LEN, parse_command, parse_command_into};
 pub use request_borrowed::parse_command_borrowed;
 
 /// Which version of RESP a connection is speaking. Negotiated via the
