@@ -40,6 +40,7 @@ pub(crate) struct ViewState {
 /// One page of view members plus the resume cursor.
 pub type ViewPage = (Vec<(Vec<u8>, IndexValue)>, Option<(IndexValue, Vec<u8>)>);
 
+#[cfg(feature = "persist")]
 const SIDECAR: &str = "view-catalog.meta";
 
 impl Store {
@@ -181,6 +182,7 @@ impl Store {
         Ok(self.view_query(name, None, 100_000)?.0.len() as u64)
     }
 
+    #[cfg(feature = "persist")]
     fn persist_view_sidecar(&self) {
         let Some(dir) = &self.config.data_dir else { return };
         let g = self
@@ -194,7 +196,16 @@ impl Store {
         }
     }
 
+    /// Without `persist` there is no data dir — no sidecar to write
+    /// or load; both halves are no-ops.
+    #[cfg(not(feature = "persist"))]
+    fn persist_view_sidecar(&self) {}
+
+    #[cfg(not(feature = "persist"))]
+    pub(crate) fn view_boot(&self) {}
+
     /// Boot half — load the persisted view catalog.
+    #[cfg(feature = "persist")]
     pub(crate) fn view_boot(&self) {
         let Some(dir) = &self.config.data_dir else { return };
         if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))

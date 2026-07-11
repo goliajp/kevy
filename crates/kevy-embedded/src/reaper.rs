@@ -6,11 +6,15 @@ use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock, RwLockWriteGuard};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "persist")]
+use std::time::Instant;
 
+#[cfg(feature = "persist")]
 use kevy_persist::Aof;
 
 use crate::config::{Config, TtlReaperMode};
+#[cfg(feature = "persist")]
 use crate::metric::{KevyMetric, MetricSink};
 use crate::store::{Inner, Shards};
 
@@ -31,13 +35,19 @@ pub(crate) fn spawn_reaper(
             let interval = config.reaper_interval;
             let samples = config.reaper_samples;
             let rounds = config.reaper_max_rounds;
+            #[cfg(feature = "persist")]
             let rw_pct = config.auto_aof_rewrite_pct;
+            #[cfg(feature = "persist")]
             let rw_min = config.auto_aof_rewrite_min_size;
+            #[cfg(feature = "persist")]
             let sink = config.metric_sink.clone();
             let handle = std::thread::Builder::new()
                 .name(String::from("kevy-embedded-reaper"))
                 .spawn(move || {
+                    #[cfg(feature = "persist")]
                     reaper_loop(shards_t, stop_t, interval, samples, rounds, rw_pct, rw_min, sink);
+                    #[cfg(not(feature = "persist"))]
+                    reaper_loop(shards_t, stop_t, interval, samples, rounds);
                 })?;
             Ok((Some(stop), Some(handle)))
         }
@@ -51,9 +61,9 @@ fn reaper_loop(
     interval: Duration,
     samples: usize,
     rounds: u32,
-    rewrite_pct: u32,
-    rewrite_min_size: u64,
-    sink: Option<MetricSink>,
+    #[cfg(feature = "persist")] rewrite_pct: u32,
+    #[cfg(feature = "persist")] rewrite_min_size: u64,
+    #[cfg(feature = "persist")] sink: Option<MetricSink>,
 ) {
     while !stop.load(Ordering::Relaxed) {
         std::thread::sleep(interval);
@@ -66,11 +76,13 @@ fn reaper_loop(
                 let _ = g.store.tick_expire(samples, rounds);
                 let _ = g.store.tick_hash_ttl(64);
                 // EverySec AOF fsync window check — runs from the same tick.
+                #[cfg(feature = "persist")]
                 if let Some(aof) = &mut g.aof {
                     let _ = aof.maybe_sync();
                 }
             }
             // Non-blocking: holds the lock only for begin/finish, not the spill.
+            #[cfg(feature = "persist")]
             concurrent_auto_rewrite(shard, rewrite_pct, rewrite_min_size, sink.as_ref());
         }
     }
@@ -79,6 +91,7 @@ fn reaper_loop(
 /// Has the AOF grown `pct` percent past its size at the last rewrite and is it
 /// at least `min_size` bytes? (Redis's `auto-aof-rewrite-percentage` /
 /// `-min-size`.) `pct == 0` always returns false (auto-rewrite disabled).
+#[cfg(feature = "persist")]
 fn rewrite_threshold_met(aof: &Aof, pct: u32, min_size: u64) -> bool {
     if pct == 0 || aof.is_rewriting() {
         return false;
@@ -105,6 +118,7 @@ fn rewrite_threshold_met(aof: &Aof, pct: u32, min_size: u64) -> bool {
 ///
 /// On any failure the in-flight rewrite is aborted (live AOF untouched, no
 /// data at risk) and the temp file removed.
+#[cfg(feature = "persist")]
 pub(crate) fn concurrent_auto_rewrite(
     inner: &Arc<RwLock<Inner>>,
     pct: u32,
@@ -154,6 +168,7 @@ pub(crate) fn concurrent_auto_rewrite(
 /// past the no-op early-out — never on the common idle tick (and
 /// `wasm32-unknown-unknown` has no `Instant`, so reading it up front traps).
 /// `None` = below threshold or begin failed (already logged).
+#[cfg(feature = "persist")]
 #[allow(clippy::type_complexity)] // inline tuple keeps the phase-1 outputs colocated
 fn begin_rewrite(
     inner: &Arc<RwLock<Inner>>,

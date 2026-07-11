@@ -97,7 +97,7 @@ impl Store {
                 return;
             }
         };
-        let batch = std::mem::take(&mut self.pending_drops);
+        let batch = core::mem::take(&mut self.pending_drops);
         if let Err(_send_err) = tx.send(batch) {
             // Bio thread is gone (shutdown). The SendError carries
             // the Vec, which drops here — every Box<Value> runs its

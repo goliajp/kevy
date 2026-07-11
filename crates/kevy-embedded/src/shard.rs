@@ -12,12 +12,16 @@
 //! so neither side needs inference.
 
 use std::io;
+#[cfg(feature = "persist")]
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+#[cfg(feature = "persist")]
 use std::time::Instant;
 
 use kevy_hash::KevyHash;
+#[cfg(feature = "persist")]
 use kevy_persist::reshard::{ShardLayout, commit_reshard, merge_sources, recover_journal};
+#[cfg(feature = "persist")]
 use kevy_persist::{
     Aof, Routing, ShardsMeta, layout, layout::infer_files_n, load_snapshot, read_shards_meta,
     replay_aof, write_shards_meta,
@@ -25,6 +29,7 @@ use kevy_persist::{
 use kevy_store::Store as Keyspace;
 
 use crate::config::{Config, TtlReaperMode};
+#[cfg(feature = "persist")]
 use crate::metric::KevyMetric;
 use crate::store::Inner;
 
@@ -47,8 +52,10 @@ pub(crate) fn shard_idx(key: &[u8], n: usize) -> usize {
 /// standard per-shard names (`dump-{i}.rdb` / `aof-{i}.aof`). `n == 1`
 /// coincides with shard 0's names, which are also the legacy single-file
 /// names — old single-file dirs load without migration.
+#[cfg(feature = "persist")]
 struct EmbLayout;
 
+#[cfg(feature = "persist")]
 impl ShardLayout for EmbLayout {
     fn snapshot_path(&self, dir: &Path, i: usize, _n: usize) -> PathBuf {
         layout::snapshot_path(dir, i)
@@ -70,8 +77,25 @@ fn fresh_keyspace(config: &Config) -> Keyspace {
 /// shards get an idle bus that is never touched.
 pub(crate) fn build_shards(config: &Config) -> io::Result<Vec<Arc<RwLock<Inner>>>> {
     let n = config.shards.max(1);
+    #[allow(unused_mut)] // mut is the persist path's (load/reshard) need
     let mut stores: Vec<Keyspace> = (0..n).map(|_| fresh_keyspace(config)).collect();
 
+    // Without the `persist` feature the build is always pure in-memory.
+    #[cfg(not(feature = "persist"))]
+    return Ok(into_inners_mem(stores));
+
+    #[cfg(feature = "persist")]
+    build_shards_persist(config, n, stores)
+}
+
+/// Persistence bring-up half of [`build_shards`]: load / migrate the
+/// on-disk layout, then open each shard's live AOF.
+#[cfg(feature = "persist")]
+fn build_shards_persist(
+    config: &Config,
+    n: usize,
+    mut stores: Vec<Keyspace>,
+) -> io::Result<Vec<Arc<RwLock<Inner>>>> {
     let Some(dir) = config.data_dir.clone() else {
         // Pure in-memory: no persistence, no AOF.
         return Ok(into_inners(stores, (0..n).map(|_| None).collect()));
@@ -95,6 +119,7 @@ pub(crate) fn build_shards(config: &Config) -> io::Result<Vec<Arc<RwLock<Inner>>
 
 /// Read the shard layout meta and either load in place (same layout)
 /// or re-shard (losslessly) into the configured `n`.
+#[cfg(feature = "persist")]
 fn load_or_reshard(
     dir: &Path,
     config: &Config,
@@ -131,6 +156,7 @@ fn load_or_reshard(
 }
 
 /// Same-layout load: each shard reads its own snapshot + AOF directly.
+#[cfg(feature = "persist")]
 fn load_in_place(dir: &Path, config: &Config, _n: usize, stores: &mut [Keyspace]) -> io::Result<()> {
     let mut total_cmds = 0u64;
     let mut total_bytes = 0u64;
@@ -161,6 +187,7 @@ fn load_in_place(dir: &Path, config: &Config, _n: usize, stores: &mut [Keyspace]
 /// A crash at any point either leaves the old layout intact or is rolled
 /// forward by `build_shards`' recovery on the next open. Each shard's fresh
 /// AOF opens after this returns; the snapshot is the full migrated state.
+#[cfg(feature = "persist")]
 fn reshard(
     dir: &Path,
     config: &Config,
@@ -196,6 +223,7 @@ fn reshard(
     Ok(())
 }
 
+#[cfg(feature = "persist")]
 fn emit_replay(config: &Config, commands: u64, bytes: u64, start: Instant) {
     if let Some(sink) = &config.metric_sink {
         sink.emit(KevyMetric::Replay {
@@ -206,10 +234,20 @@ fn emit_replay(config: &Config, commands: u64, bytes: u64, start: Instant) {
     }
 }
 
+#[cfg(feature = "persist")]
 fn into_inners(stores: Vec<Keyspace>, aofs: Vec<Option<Aof>>) -> Vec<Arc<RwLock<Inner>>> {
     stores
         .into_iter()
         .zip(aofs)
         .map(|(store, aof)| Arc::new(RwLock::new(Inner::new(store, aof))))
+        .collect()
+}
+
+/// In-memory-only `Inner` build (the whole story without `persist`).
+#[cfg(not(feature = "persist"))]
+fn into_inners_mem(stores: Vec<Keyspace>) -> Vec<Arc<RwLock<Inner>>> {
+    stores
+        .into_iter()
+        .map(|store| Arc::new(RwLock::new(Inner::new(store))))
         .collect()
 }

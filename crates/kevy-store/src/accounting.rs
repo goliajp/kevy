@@ -16,6 +16,10 @@ impl Store {
     /// the live value and key, then updates `used_memory` for either the
     /// new-key (charges [`ENTRY_OVERHEAD`]) or overwrite (weight swap) case.
     pub(crate) fn insert_entry(&mut self, key: SmallBytes, mut entry: Entry) -> Option<Entry> {
+        // New-key event capture: the owned key copy is only paid when
+        // the capture flag is on (server with `n` notifications).
+        let new_key_copy = (self.notify_capture & crate::notify::CAPTURE_NEW != 0)
+            .then(|| key.to_vec());
         // A wholesale value replacement (type change / RESTORE)
         // discards any per-field hash TTLs; a fresh create is a no-op.
         self.clear_hash_key_ttls(key.as_slice());
@@ -41,6 +45,11 @@ impl Store {
         let old_has_ttl = prev.as_ref().is_some_and(|o| o.expire_at_ns.is_some());
         self.adjust_expires(i64::from(new_has_ttl) - i64::from(old_has_ttl));
         self.update_peak();
+        if prev.is_none()
+            && let Some(k) = new_key_copy
+        {
+            self.notify_events.push((crate::notify::KeyspaceEvent::New, k));
+        }
         prev
     }
 
@@ -141,6 +150,7 @@ impl Store {
     /// monotonic ns since epoch (from [`crate::now_ns`]).
     pub(crate) fn reap(&mut self, key: &[u8], now: u64) -> bool {
         if self.expired(key, now) {
+            self.note_expired(key);
             self.remove_entry(key);
             self.expired_keys_total = self.expired_keys_total.saturating_add(1);
             false
@@ -170,6 +180,7 @@ impl Store {
             let (uc, cn) = (self.cached_clock, self.cached_ns);
             let expired = self.map.get(key).is_some_and(|e| e.is_expired(uc, cn));
             if expired {
+                self.note_expired(key);
                 self.remove_entry(key);
                 self.expired_keys_total = self.expired_keys_total.saturating_add(1);
                 return None;
@@ -197,6 +208,7 @@ impl Store {
             let (uc, cn) = (self.cached_clock, self.cached_ns);
             let expired = self.map.get(key).is_some_and(|e| e.is_expired(uc, cn));
             if expired {
+                self.note_expired(key);
                 self.remove_entry(key);
                 self.expired_keys_total = self.expired_keys_total.saturating_add(1);
                 return None;

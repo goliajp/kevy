@@ -189,6 +189,9 @@ pub fn serve(cfg: Arc<kevy_config::Config>) -> ! {
     // listeners, exit 0). std-only: raw `signal(2)` + a poller thread
     // that bridges the signal-safe static into the per-run `Arc`.
     install_signal_handlers(Arc::clone(&stop));
+    // The SHUTDOWN command trips the same flag (plus an optional
+    // final-snapshot request for `SHUTDOWN SAVE`).
+    state.register_stop_flag(Arc::clone(&stop));
     // Prometheus /metrics endpoint. No-op when port = 0.
     metrics_http::spawn_if_enabled(&state);
     // Replica runners (if any) live in `state.replication` — they

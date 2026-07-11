@@ -25,7 +25,9 @@
 //! Unlike sets, lists allow duplicates and preserve order. LPUSH
 //! prepends (entries are shifted right to make room); RPUSH appends.
 
-use std::collections::VecDeque;
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
+use alloc::collections::VecDeque;
 
 /// Inline packed list storage. 24 bytes total.
 #[derive(Clone)]
@@ -147,7 +149,7 @@ mod tests {
 
     #[test]
     fn size_is_24_bytes() {
-        assert_eq!(std::mem::size_of::<SmallListData>(), 24);
+        assert_eq!(core::mem::size_of::<SmallListData>(), 24);
     }
 
     #[test]

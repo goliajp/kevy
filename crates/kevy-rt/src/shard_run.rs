@@ -231,8 +231,10 @@ impl<C: Commands> Shard<C> {
                     self.tick_repl_waiters();
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
+                        self.drain_store_notify();
                         self.apply_live_runtime_config(&mut tick_interval);
                         self.tick_persist();
+                        self.tick_conn_gauge();
                         // Replication slot expiry:
                         // drop slots whose reconnect window has passed.
                         // No-op short-circuits when replication is off or
@@ -283,14 +285,13 @@ impl<C: Commands> Shard<C> {
                 idle_spins.saturating_add(1)
             };
         }
-        // Drain any in-flight bg persist job
-        // before exit so a `Op::Save` that returned `+OK` to a client
-        // still lands its `dump-{i}.rdb` rename + AOF reset (the
-        // commit phase otherwise runs on the next tick, which won't
-        // happen after `stop=true`). See
-        // [`Self::drain_persist_on_shutdown`].
-        self.drain_persist_on_shutdown();
-        self.write_feed_shutdown_marker();
+        // Exit sequence: an optional `SHUTDOWN SAVE` snapshot, then
+        // drain any in-flight bg persist job so a `Op::Save` that
+        // returned `+OK` to a client still lands its `dump-{i}.rdb`
+        // rename + AOF reset (the commit phase otherwise runs on the
+        // next tick, which won't happen after `stop=true`), then the
+        // final AOF fsync + feed marker. See [`Self::shutdown_drain`].
+        self.shutdown_drain();
         Ok(())
     }
 

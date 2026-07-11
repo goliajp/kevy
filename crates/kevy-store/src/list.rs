@@ -1,10 +1,12 @@
 //! `Store` list commands.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::small_list::{self, PushResult, SmallListData};
 use crate::util::{norm_index, range_bounds};
 use crate::value::{ListData, SmallBytes, Value, list_item_weight};
 use crate::{Entry, Store, StoreError};
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 impl Store {
     // ---- lists ---------------------------------------------------------
@@ -165,7 +167,7 @@ impl Store {
             );
             0
         } else {
-            let mut d = std::collections::VecDeque::with_capacity(1);
+            let mut d = alloc::collections::VecDeque::with_capacity(1);
             d.push_back(v.to_vec());
             self.insert_entry(
                 SmallBytes::from_slice(key),

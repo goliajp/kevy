@@ -18,6 +18,7 @@
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 #[cfg(target_os = "linux")]
 mod ffi {

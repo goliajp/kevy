@@ -3,6 +3,8 @@
 //! Split out of `zset.rs` to keep it under the 500-LOC house cap; the
 //! write-path core (`ZADD` / `ZREM` / `ZINCRBY`) stays there.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::util::range_bounds;
 use crate::value::{ScoreBound, Value};
 use crate::{Store, StoreError};

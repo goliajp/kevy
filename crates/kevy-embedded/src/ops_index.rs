@@ -43,13 +43,16 @@ pub(crate) struct ShardSegs {
     pub(crate) segs: Vec<(IndexSpec, Segment)>,
     /// Inverted segments for KIND text specs (parallel list —
     /// a spec appears in exactly one of the lists).
+    #[cfg(feature = "text")]
     pub(crate) text: Vec<(IndexSpec, kevy_text::TextSegment)>,
     /// HNSW graphs for KIND ann specs.
+    #[cfg(feature = "vector")]
     pub(crate) ann: Vec<(IndexSpec, kevy_vector::Hnsw)>,
     /// Aggregate segments for KIND agg specs.
     pub(crate) agg: Vec<(IndexSpec, kevy_index::AggSegment)>,
 }
 
+#[cfg(feature = "persist")]
 const SIDECAR: &str = "index-catalog.meta";
 
 impl Store {
@@ -65,6 +68,14 @@ impl Store {
     ) -> KevyResult<()> {
         if prefix.is_empty() {
             return Err(KevyError::InvalidInput("empty prefix".into()));
+        }
+        #[cfg(not(feature = "text"))]
+        if kind == IndexKind::Text {
+            return Err(KevyError::Unsupported("text indexes need the `text` feature".into()));
+        }
+        #[cfg(not(feature = "vector"))]
+        if kind == IndexKind::Ann {
+            return Err(KevyError::Unsupported("vector indexes need the `vector` feature".into()));
         }
         let spec = IndexSpec {
             name: name.to_vec(),
@@ -103,6 +114,7 @@ impl Store {
 
     /// Declare an ANN index (KIND ann, TYPE vector). `params.m`
     /// / `params.ef` of 0 select the defaults (16 / 200).
+    #[cfg(feature = "vector")]
     pub fn idx_create_ann(
         &self,
         name: &[u8],
@@ -214,6 +226,7 @@ impl Store {
 
     /// `MATCH` — BM25-ranked hits merged across shards
     /// (shard-local statistics; see docs/text-search.md).
+    #[cfg(feature = "text")]
     pub fn idx_match(
         &self,
         name: &[u8],
@@ -325,6 +338,7 @@ impl Store {
 
     /// `KNN` — nearest neighbors merged ascending across shards.
     /// `ef` = query beam width (0 = engine default; recall knob).
+    #[cfg(feature = "vector")]
     pub fn idx_knn(
         &self,
         name: &[u8],
@@ -352,6 +366,14 @@ impl Store {
         Ok(all)
     }
 
+    /// Without `persist` there is no data dir — the catalog lives only
+    /// in memory, so the sidecar halves are no-ops.
+    #[cfg(not(feature = "persist"))]
+    fn persist_index_sidecar(&self) {}
+
+    #[cfg(not(feature = "persist"))]
+    pub(crate) fn idx_boot(&self) {}
+
     fn for_each_segment(
         &self,
         name: &[u8],
@@ -374,6 +396,7 @@ impl Store {
         }
     }
 
+    #[cfg(feature = "persist")]
     fn persist_index_sidecar(&self) {
         let Some(dir) = &self.config.data_dir else { return };
         let g = self
@@ -389,6 +412,7 @@ impl Store {
 
     /// Boot half — load a persisted catalog (indexes rebuild lazily on
     /// first touch via `sync_segs`).
+    #[cfg(feature = "persist")]
     pub(crate) fn idx_boot(&self) {
         let Some(dir) = &self.config.data_dir else { return };
         if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))

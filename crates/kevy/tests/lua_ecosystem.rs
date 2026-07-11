@@ -234,12 +234,7 @@ fn atomic_incr_or_init_with_ttl_sets_expire() {
     assert!(ttl > 0 && ttl <= 60, "got ttl: {ttl}");
 }
 
-// NOTE: kept `#[ignore]`d from when `ZREMRANGEBYSCORE` was not yet
-// implemented; the command exists in dispatch now, so this test is a
-// candidate for un-ignoring. The script itself parses fine — the
-// original gap was the zset surface, not the kevy-lua bridge.
 #[test]
-#[ignore]
 fn sliding_window_rate_limiter_first_request_allowed() {
     // Sliding-window log limiter — uses ZREMRANGEBYSCORE / ZCARD /
     // ZADD / PEXPIRE. Returns 1 on allow, 0 on reject.
@@ -275,7 +270,6 @@ return 0\n";
 }
 
 #[test]
-#[ignore]
 fn sliding_window_rate_limiter_over_limit_rejected() {
     const SCRIPT: &[u8] = b"\
 local key = KEYS[1]\n\

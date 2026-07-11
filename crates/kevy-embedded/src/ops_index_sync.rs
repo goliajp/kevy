@@ -7,6 +7,7 @@ use kevy_index::{IndexKind, IndexSpec, IndexValue, Segment};
 
 use crate::ops_index::{IndexReg, ShardSegs};
 
+#[cfg(feature = "vector")]
 pub(crate) fn new_graph(spec: &IndexSpec) -> kevy_vector::Hnsw {
     let a = spec.ann.as_ref().expect("ann spec");
     kevy_vector::Hnsw::new(
@@ -39,8 +40,21 @@ pub(crate) fn sync_segs(
     if shard_segs.version == *ver {
         return;
     }
+    rebuild_seg_lists(cat, *ver, shard_segs, store);
+}
+
+/// The out-of-date half of `sync_segs`: rebuild every per-kind segment
+/// list against the catalog (existing segments move, new specs backfill).
+fn rebuild_seg_lists(
+    cat: &kevy_index::Catalog,
+    ver: u64,
+    shard_segs: &mut ShardSegs,
+    store: &mut kevy_store::Store,
+) {
     let mut next: Vec<(IndexSpec, Segment)> = Vec::new();
+    #[cfg(feature = "text")]
     let mut next_text: Vec<(IndexSpec, kevy_text::TextSegment)> = Vec::new();
+    #[cfg(feature = "vector")]
     let mut next_ann: Vec<(IndexSpec, kevy_vector::Hnsw)> = Vec::new();
     let mut next_agg: Vec<(IndexSpec, kevy_index::AggSegment)> = Vec::new();
     for (spec, _) in cat.iter() {
@@ -48,18 +62,33 @@ pub(crate) fn sync_segs(
         match spec.kind {
             IndexKind::Agg => next_agg
                 .push(take_or_backfill(&mut segs.agg, spec, st, kevy_index::AggSegment::new, apply_agg_key)),
+            #[cfg(feature = "vector")]
             IndexKind::Ann => next_ann
                 .push(take_or_backfill(&mut segs.ann, spec, st, || new_graph(spec), apply_ann_key)),
+            // Engine compiled out (idx_create rejects the kind; a
+            // sidecar-loaded spec gets no segment, so queries answer
+            // NotFound instead of silently mis-indexing).
+            #[cfg(not(feature = "vector"))]
+            IndexKind::Ann => {}
+            #[cfg(feature = "text")]
             IndexKind::Text => next_text
                 .push(take_or_backfill(&mut segs.text, spec, st, kevy_text::TextSegment::new, apply_text_key)),
+            #[cfg(not(feature = "text"))]
+            IndexKind::Text => {}
             _ => next.push(take_or_backfill(&mut segs.segs, spec, st, Segment::new, apply_key)),
         }
     }
     shard_segs.segs = next;
-    shard_segs.text = next_text;
-    shard_segs.ann = next_ann;
+    #[cfg(feature = "text")]
+    {
+        shard_segs.text = next_text;
+    }
+    #[cfg(feature = "vector")]
+    {
+        shard_segs.ann = next_ann;
+    }
     shard_segs.agg = next_agg;
-    shard_segs.version = *ver;
+    shard_segs.version = ver;
 }
 
 /// Keep `spec`'s existing segment from `have` (position move), or
@@ -108,6 +137,7 @@ fn apply_agg_key(
     }
 }
 
+#[cfg(feature = "vector")]
 fn apply_ann_key(
     store: &mut kevy_store::Store,
     spec: &IndexSpec,
@@ -124,6 +154,7 @@ fn apply_ann_key(
     g.apply(key, v);
 }
 
+#[cfg(feature = "text")]
 fn apply_text_key(
     store: &mut kevy_store::Store,
     spec: &IndexSpec,
@@ -170,11 +201,13 @@ pub(crate) fn on_commit(
                 apply_key(store, spec, seg, key);
             }
         }
+        #[cfg(feature = "text")]
         for (spec, ts) in &mut shard_segs.text {
             if key.starts_with(&spec.prefix) {
                 apply_text_key(store, spec, ts, key);
             }
         }
+        #[cfg(feature = "vector")]
         for (spec, g) in &mut shard_segs.ann {
             if key.starts_with(&spec.prefix) {
                 apply_ann_key(store, spec, g, key);
@@ -193,9 +226,11 @@ fn reset_all_segs(shard_segs: &mut ShardSegs) {
     for (_, seg) in &mut shard_segs.segs {
         *seg = Segment::new();
     }
+    #[cfg(feature = "text")]
     for (_, ts) in &mut shard_segs.text {
         *ts = kevy_text::TextSegment::new();
     }
+    #[cfg(feature = "vector")]
     for (spec, g) in &mut shard_segs.ann {
         *g = new_graph(spec);
     }

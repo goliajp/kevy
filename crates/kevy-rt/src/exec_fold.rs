@@ -53,6 +53,10 @@ impl<C: Commands> Shard<C> {
                 (Agg::ExtensionGather { chunks, .. }, Part::ExtensionChunk(c)) => {
                     chunks.push(c);
                 }
+                (Agg::ClientList { text }, Part::ExtensionChunk(c)) => {
+                    text.extend_from_slice(&c);
+                }
+                (Agg::ClientKill { killed, .. }, Part::Int(n)) => *killed += n,
                 (Agg::Gather { got, .. }, Part::Gathered(items))
                 | (Agg::ZStoreGather { got, .. }, Part::Gathered(items)) => {
                     for (k, g) in items {

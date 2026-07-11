@@ -23,7 +23,7 @@ mod shard;
 
 pub(crate) use catalogs::CatalogState;
 pub(crate) use election::ElectionState;
-pub(crate) use obs::{ObsState, Totals};
+pub(crate) use obs::{ObsState, ReplShardView, Totals};
 pub(crate) use progress::ReplicaProgress;
 pub(crate) use replication::ReplicationState;
 pub(crate) use scope::{ScopeState, WriteRedirect, encode_misdirected, encode_quiesced};
@@ -33,7 +33,7 @@ pub(crate) use shard::{
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use kevy_config::Config;
 
@@ -78,6 +78,14 @@ pub struct RuntimeState {
     /// shard tags its cached gate bits with the value it read — see
     /// [`ShardCtx::gate_bits`].
     control_epoch: Arc<AtomicU64>,
+    /// The runtime stop flag, registered by [`crate::serve`] so the
+    /// `SHUTDOWN` command can trip the same graceful drain the signal
+    /// handlers use. `None` in embedded / test dispatch contexts.
+    shutdown_stop: Mutex<Option<Arc<AtomicBool>>>,
+    /// Whether the pending shutdown should run one final snapshot per
+    /// shard before exit (`SHUTDOWN SAVE`). Read by each shard as it
+    /// leaves its reactor loop.
+    shutdown_save: AtomicBool,
 }
 
 impl RuntimeState {
@@ -105,6 +113,7 @@ impl RuntimeState {
         let replication = Arc::new(ReplicationState::new(
             nshards,
             cfg.replication.single_source,
+            cfg.server.port,
         ));
         Ok(Self {
             scope: ScopeState::from_config(&cfg)?,
@@ -117,7 +126,36 @@ impl RuntimeState {
             config_explicit: AtomicBool::new(false),
             data_dir,
             nshards,
+            shutdown_stop: Mutex::new(None),
+            shutdown_save: AtomicBool::new(false),
         })
+    }
+
+    /// Register the runtime stop flag so the `SHUTDOWN` command can
+    /// trip it. Called once by [`crate::serve`] before entering the
+    /// reactors.
+    pub fn register_stop_flag(&self, stop: Arc<AtomicBool>) {
+        *self.shutdown_stop.lock().expect("shutdown_stop poisoned") = Some(stop);
+    }
+
+    /// `SHUTDOWN` command entry: record whether a final snapshot was
+    /// requested, then trip the registered stop flag. Returns `false`
+    /// when no flag is registered (no runtime to drain — the caller
+    /// falls back to an immediate process exit).
+    pub(crate) fn request_shutdown(&self, save: bool) -> bool {
+        self.shutdown_save.store(save, Ordering::Release);
+        match &*self.shutdown_stop.lock().expect("shutdown_stop poisoned") {
+            Some(stop) => {
+                stop.store(true, Ordering::Release);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Whether the pending shutdown asked for a final snapshot.
+    pub(crate) fn shutdown_save_requested(&self) -> bool {
+        self.shutdown_save.load(Ordering::Acquire)
     }
 
     /// Snapshot the current config.

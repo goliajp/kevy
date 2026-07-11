@@ -123,6 +123,17 @@ strip = true
 inherits = "release"
 opt-level = "s"
 
+# IoT profile: smallest-binary settings for the embedded /
+# edge builds bench/iotgate.sh budgets. opt-level "z" trades speed for
+# size; fat LTO + 1 cgu let the linker drop every unused subsystem;
+# strip removes symbols. Invoke with `cargo build --profile iot`.
+[profile.iot]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+
 # Perf-profile profile: same codegen as `release` (LTO + 1 cgu + abort) plus
 # line-table debug info and forced frame pointers so `perf record` /
 # flamegraph can resolve every symbol back to a Rust function + line.

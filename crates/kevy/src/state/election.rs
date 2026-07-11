@@ -371,7 +371,7 @@ mod tests {
         // A runtime built with more shards than the state was sized
         // for must not panic; the extra shard's offset is dropped.
         let e = ElectionState::new(2);
-        let r = ReplicationState::new(2, false);
+        let r = ReplicationState::new(2, false, 0);
         e.set_view_offset(&r, 7, 100);
         assert_eq!(e.aggregate_offset(), 0);
         e.set_view_offset(&r, 1, 40);

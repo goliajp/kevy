@@ -9,11 +9,11 @@ use std::time::Duration;
 
 use kevy_store::{HExpireCode, HExpireCond, now_unix_ms};
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 use crate::replica_glue::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(not(all(feature = "replicate", not(target_arch = "wasm32"))))]
 fn ensure_writable(_s: &Store) -> KevyResult<()> {
     Ok(())
 }

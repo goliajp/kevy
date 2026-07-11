@@ -7,9 +7,11 @@
 //! Split out from `string.rs` to keep that file under the 500-LOC
 //! house rule.
 
-use std::borrow::Cow;
-use std::num::NonZeroU64;
-use std::sync::Arc;
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
+use alloc::borrow::Cow;
+use core::num::NonZeroU64;
+use alloc::sync::Arc;
 
 use crate::value::{SmallBytes, Value};
 use crate::{Entry, Store, StoreError};

@@ -49,11 +49,27 @@
 //!   [`serve`](https://docs.rs/kevy/latest/kevy/fn.serve.html) instead.
 //! - You need cross-process concurrency → kevy-embedded is single-process
 //!   (one mutex). Multi-process needs the network layer.
+//!
+//! # Cargo features
+//!
+//! `default` is the full surface. For constrained targets (IoT / edge)
+//! cut it down with `default-features = false, features = [...]`:
+//!
+//! | feature | adds |
+//! |---------|------|
+//! | `core` | in-memory KV + TTL + pub/sub + pipeline/atomic (the minimal base) |
+//! | `persist` | snapshot + AOF durability (`with_persist`, replay on open) |
+//! | `index` | secondary indexes + views |
+//! | `text` | full-text index segments (implies `index`) |
+//! | `vector` | HNSW vector index segments (implies `index`) |
+//! | `replicate` | embed-as-replica / embed-as-writer + CDC feed (implies `persist`) |
+//! | `listener` | the read-only RESP listener |
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
 mod config;
 mod info;
+#[cfg(feature = "persist")]
 mod metric;
 mod ops;
 mod ops_atomic;
@@ -65,14 +81,17 @@ mod ops_more;
 mod ops_p2;
 mod ops_p3;
 mod ops_pipeline;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 mod ops_feed;
 mod ops_blocking;
 mod ops_hash_ttl;
+#[cfg(feature = "index")]
 mod ops_index;
+#[cfg(feature = "index")]
 mod ops_index_sync;
+#[cfg(feature = "index")]
 mod ops_view;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "listener", not(target_arch = "wasm32")))]
 mod listener;
 mod ops_snapshot_view;
 mod ops_zset_algebra;
@@ -88,31 +107,41 @@ mod pubsub;
 mod reaper;
 mod shard;
 mod pubsub_bus;
+#[cfg(feature = "persist")]
 mod replay;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 mod replica_glue;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 mod replica_runner;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 mod replica_source;
 mod store;
 mod store_inner;
+#[cfg(feature = "persist")]
 mod store_persist;
 
-pub use config::{AppendFsync, Config, EvictionPolicy, TtlReaperMode};
+pub use config::{Config, EvictionPolicy, TtlReaperMode};
+#[cfg(feature = "persist")]
+pub use config::AppendFsync;
 pub use info::KevyInfo;
+#[cfg(feature = "persist")]
 pub use metric::KevyMetric;
+#[cfg(feature = "persist")]
 pub use kevy_persist::RewriteStats;
 pub use kevy_store::{
     ExpireStats, HExpireCode, HExpireCond, KevyError, KevyResult, ScoreBound, StoreError,
     ZAggregate, ZaddFlags, ZaddReport,
 };
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 pub use ops_feed::{Change, ChangeBatch, FeedError, PrefixInfo};
 pub use ops_snapshot_view::{Snapshot, SnapshotEntry};
+#[cfg(feature = "index")]
 pub use ops_index::IndexPage;
+#[cfg(feature = "index")]
 pub use ops_view::ViewPage;
+#[cfg(feature = "index")]
 pub use kevy_index::{AggBy, AnnSpec, GroupStats, Leaf as ViewLeaf, Tree as ViewTree, ViewMode};
+#[cfg(feature = "index")]
 pub use kevy_index::{Cursor as IndexCursor, IndexKind, IndexValue, SegmentStats as IndexStats, ValType as IndexValType};
 pub use pubsub::{PubsubFrame, Subscription};
 pub use store::{Store, WeakStore};

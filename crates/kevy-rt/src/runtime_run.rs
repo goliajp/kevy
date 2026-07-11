@@ -273,7 +273,12 @@ impl<C: Commands> Runtime<C> {
                 arm_pending: Vec::new(),
                 closing_uring_conns: Vec::new(),
                 fd_to_conn: KevyMap::new(),
-                next_conn_id: 1,
+                // Conn ids stride by shard count from a per-shard
+                // start, so every id is unique across the whole
+                // instance (CLIENT ID / CLIENT KILL ID contract) and
+                // still allocation-free per accept.
+                next_conn_id: id as u64 + 1,
+                conn_id_step: n as u64,
                 events: Vec::with_capacity(1024),
                 read_buf: vec![0u8; 64 * 1024],
                 pending_wakes: 0,

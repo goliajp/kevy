@@ -72,6 +72,7 @@ mod block_xshard;
 mod blocked;
 mod lua_wake_bridge;
 mod cache_padded;
+mod client_ops;
 mod cluster;
 mod conn;
 mod exec;
@@ -147,10 +148,12 @@ pub use kevy_store::Store;
 pub use replica_inbox::{ReplicaApply, ReplicaInboxReceiver, ReplicaInboxSender, replica_inbox_pair};
 pub use replication_gate::ReplicatedApplyGuard;
 pub use route::{Route, XGroupCtx};
+pub use client_ops::ClientKillFilter;
 pub use message::{KeyShape, MultiOp, ZCombine};
 pub use runtime::Runtime;
 pub use types::{
-    ExtensionReduced, LiveRuntimeConfig, NotifyClass, ReplicaAck, ResolvedCmd, TxnKind,
+    ExtensionReduced, LiveRuntimeConfig, NotifyClass, ReplicaAck, ReplicaViewRow, ResolvedCmd,
+    TxnKind,
 };
 
 /// Command-set semantics injected into the runtime. Cloned to every core, so it
@@ -235,31 +238,43 @@ pub trait Commands: Clone + Send + 'static {
     /// Default: no-op.
     fn on_persist_stats(&self, _in_flight: bool, _aof_rewrites_total: u64) {}
 
+    /// Per-tick live-connection gauge: how many client conns this
+    /// shard currently holds (cluster-bus links excluded). Command
+    /// layers publish it to their cross-shard stats slots so `INFO`
+    /// `connected_clients` sums a real instance-wide value. Default:
+    /// no-op.
+    fn on_conn_gauge(&self, _live: u64) {}
+
     /// Per-tick replication-view publication: the answering shard's
     /// current `master_repl_offset` (== `ReplicationSource::next_offset()`)
-    /// plus a `(ipv4, port, sent_offset, ack)` entry for every
-    /// handshake-complete replica (in `AckSent`, `Streaming`, or
-    /// `SnapshotShipping`); `ack` is `None` until the replica's first
-    /// `REPLCONF ACK`. `connected_slaves` for `INFO` / `ROLE` is
-    /// derived as `replicas.len()`.
+    /// plus a [`ReplicaViewRow`] for every handshake-complete replica
+    /// conn (in `AckSent`, `Streaming`, or `SnapshotShipping`); the
+    /// row's `ack` is `None` until the replica's first `REPLCONF ACK`.
     /// Only called when this shard has a `ReplicationSource`
     /// installed (i.e. `Runtime::with_replication(true, ...)` was
     /// requested); standalone setups pay nothing. Command layers
     /// that serve `ROLE` / `INFO replication` stash the values in a
     /// thread-local (thread-per-core: the answering thread *is* the
-    /// shard, same pattern as [`Self::on_persist_stats`]). Default
-    /// no-op.
-    fn on_replication_view(
-        &self,
-        _master_repl_offset: u64,
-        _replicas: Vec<(std::net::Ipv4Addr, u16, u64, Option<ReplicaAck>)>,
-    ) {}
+    /// shard, same pattern as [`Self::on_persist_stats`]) and may
+    /// additionally publish them to a shared slot for cross-shard
+    /// aggregation. Default no-op.
+    fn on_replication_view(&self, _master_repl_offset: u64, _replicas: Vec<ReplicaViewRow>) {}
 
     /// Periodic shard housekeeping (the equivalent of Redis's `serverCron`).
     /// kevy uses this to run [`Store::tick_expire`] at the configured
     /// `[expiry].hz`. Default no-op so non-kevy embedders / runtimes can
     /// ignore it.
     fn on_shard_tick(&self, _store: &mut Store) {}
+
+    /// Polled once per shard as it leaves the reactor loop: `true` when
+    /// the operator requested a final snapshot before exit (`SHUTDOWN
+    /// SAVE`). The shard then runs one background save and drains it
+    /// before the process exits. Default `false` — plain stops (SIGTERM,
+    /// bare SHUTDOWN) drain in-flight persistence but don't force a new
+    /// snapshot.
+    fn shutdown_save_requested(&self) -> bool {
+        false
+    }
 
     /// Per-shard half of an extension fan-out command (IDX.* /
     /// future VIEW.* / FT.*): compute this shard's raw chunk for
@@ -281,12 +296,13 @@ pub trait Commands: Clone + Send + 'static {
         None
     }
 
-    /// Bounded staleness: called before READ verbs; return
-    /// `Some(error_bytes)` to refuse the read (a replica whose feed
-    /// is staler than the configured bound answers `-STALE` so the
-    /// client falls back to the primary). Default: reads always
-    /// allowed.
-    fn read_denied(&self) -> Option<Vec<u8>> {
+    /// Read-availability gate: called before READ verbs; return
+    /// `Some(error_bytes)` to refuse the read (a replica whose feed is
+    /// staler than the configured bound answers `-STALE`; one mid-way
+    /// through a full-resync snapshot load answers `-LOADING`).
+    /// `args` lets implementations exempt health-check verbs (PING)
+    /// from the refusal. Default: reads always allowed.
+    fn read_denied<A: ArgvView + ?Sized>(&self, _args: &A) -> Option<Vec<u8>> {
         None
     }
 

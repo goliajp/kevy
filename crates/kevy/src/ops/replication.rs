@@ -1,19 +1,19 @@
 //! `ROLE` — operational surface for the primary/replica topology.
 //!
-//! The per-tick `master_repl_offset` + `connected_replicas` count is
-//! stashed in the shard zone ([`crate::state::ShardCtx`], a
-//! [`ReplicationView`]) by `KevyCommands::on_replication_view` (driven
-//! from `kevy_rt::Shard::tick_replication_view`). `ROLE` reads that
-//! view + `config.replication.role` and emits the Redis-shaped reply.
+//! Each shard's per-tick `master_repl_offset` + per-conn replica rows
+//! land in two places via `KevyCommands::on_replication_view` (driven
+//! from `kevy_rt::Shard::tick_replication_view`): the shard zone
+//! ([`crate::state::ShardCtx`], a [`ReplicationView`], serving
+//! per-shard consumers like the min-replicas gate) and a shared
+//! per-shard slot in [`crate::state::ObsState`]. `ROLE` and `INFO
+//! replication` fold every slot into the instance-wide answer
+//! ([`aggregate_replication`]): offsets sum across shards, and the
+//! per-stream rows of one replica process (grouped by the
+//! `<process>#<stream>` id shape) merge into a single entry.
 //!
-//! Current simplifications:
-//! - Replica-side status is always `"connect"` (Redis's "configured,
-//!   not yet connecting" state) — a richer live status would need
-//!   runner→view feedback threaded into the reply.
-//! - The view reflects the *answering shard*. Multi-shard aggregation
-//!   (sum offsets across all shards) is a follow-up — for now, ROLE
-//!   reports per-shard, which is correct for a sharded primary
-//!   (each shard streams its own keyspace slice independently).
+//! Replica-side status is live: `sync` during a full-resync snapshot
+//! ship, `connected` on a fresh upstream heartbeat, `connect`
+//! otherwise; the reported offset is the instance-wide applied sum.
 
 use std::net::Ipv4Addr;
 
@@ -30,22 +30,91 @@ use super::wrong_args;
 /// `ReplicationSource` installed.
 #[derive(Clone, Default)]
 pub(crate) struct ReplicationView {
-    pub(crate) master_repl_offset: u64,
-    /// Per-replica `(ipv4, port, sent_offset, ack)` — populated by
+    /// Per-replica `(id, ipv4, port, sent_offset, ack)` — populated by
     /// `kevy_rt::Shard::tick_replication_view`. `ack` carries the
-    /// acked offset plus the ACK's age for the min-replicas lag gate.
-    pub(crate) replicas: Vec<(Ipv4Addr, u16, u64, Option<kevy_rt::ReplicaAck>)>,
+    /// acked offset plus the ACK's age for the min-replicas lag gate
+    /// (the shard-zone copy's only consumer — instance-wide reporting
+    /// reads the [`crate::state::ObsState`] slots instead).
+    pub(crate) replicas: Vec<kevy_rt::ReplicaViewRow>,
+}
+
+/// One replica process folded across every per-shard stream: the rows
+/// sharing an id prefix (`<process>#<stream>`) sum their offsets, and
+/// the aggregate only counts as acked when every stream has a real ACK.
+pub(crate) struct AggReplica {
+    pub(crate) ip: Ipv4Addr,
+    /// The client port the replica advertised in its id — a truthful
+    /// "where to reach it", unlike the per-conn ephemeral source port.
+    /// Falls back to the first conn's peer port for foreign id shapes.
+    pub(crate) port: u16,
+    pub(crate) sent: u64,
+    pub(crate) acked: Option<u64>,
+}
+
+/// Fold every shard's replication view into the instance-wide answer:
+/// `(master_repl_offset_sum, one AggReplica per replica process)`.
+/// Offsets sum across shards — the same convention as the election
+/// offset sum, and equal to a caught-up replica's own applied sum.
+pub(crate) fn aggregate_replication(
+    views: &[crate::state::ReplShardView],
+) -> (u64, Vec<AggReplica>) {
+    let offset_sum = views.iter().fold(0u64, |a, v| a.saturating_add(v.offset));
+    let mut keys: Vec<String> = Vec::new();
+    let mut reps: Vec<(AggReplica, bool)> = Vec::new();
+    for view in views {
+        for (id, ip, peer_port, sent, ack) in &view.replicas {
+            let process = id.split('#').next().unwrap_or(id);
+            let slot = match keys.iter().position(|k| k == process) {
+                Some(i) => i,
+                None => {
+                    keys.push(process.to_string());
+                    reps.push((
+                        AggReplica {
+                            ip: *ip,
+                            port: advertised_port(process).unwrap_or(*peer_port),
+                            sent: 0,
+                            acked: Some(0),
+                        },
+                        true,
+                    ));
+                    reps.len() - 1
+                }
+            };
+            let (agg, all_acked) = &mut reps[slot];
+            agg.sent = agg.sent.saturating_add(*sent);
+            match ack {
+                Some(a) if *all_acked => {
+                    agg.acked = agg.acked.map(|v| v.saturating_add(a.acked_offset));
+                }
+                _ => {
+                    *all_acked = false;
+                    agg.acked = None;
+                }
+            }
+        }
+    }
+    (offset_sum, reps.into_iter().map(|(agg, _)| agg).collect())
+}
+
+/// Extract the advertised client port from a kevy replica-id process
+/// prefix (`kevy-replica-<port>`).
+fn advertised_port(process: &str) -> Option<u16> {
+    process.rsplit('-').next()?.parse().ok()
 }
 
 /// `ROLE` — see <https://redis.io/commands/role/>. Mapping:
 ///
 /// - master (standalone / primary, OR replica with no active runner) →
-///   `["master", <offset>, [(ip, port, offset)…]]` (offset is this
-///   shard's `next_offset` at the most recent tick).
+///   `["master", <offset>, [(ip, port, offset)…]]` — instance-wide:
+///   the offset sums every shard's stream position and the list holds
+///   one entry per replica process (port = its advertised client
+///   port, offset = its summed acked position).
 /// - replica (any time a runner is live — set by `REPLICAOF host port`
 ///   or by startup `role = "replica"`) → `["slave", <host>, <port>,
-///   "connect", 0]` (host/port from the live upstream slot; status is
-///   `"connect"` — a richer status would require runner→view feedback).
+///   <state>, <offset>]` — host/port from the live upstream slot,
+///   state from the live link (`sync` during a full-resync ship /
+///   `connected` on a fresh heartbeat / `connect` otherwise), offset
+///   = the instance-wide applied sum.
 ///
 /// Live state wins over startup config: a server that started as
 /// `standalone` but ran `REPLICAOF` later reports `slave` until
@@ -71,7 +140,7 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut 
                     Some(_addr_or_id) => current_primary_host_port_from_config(ctx),
                     None => ("".to_string(), 0),
                 };
-                return emit_replica_addr(&host, port, out);
+                return emit_replica_addr(ctx, &host, port, out);
             }
         }
     }
@@ -79,12 +148,12 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut 
     // REPLICAOF retarget at runtime is the source of truth.
     if let Some((host, port)) = ctx.state.replication.current_upstream() {
         let host_str = host.to_string();
-        return emit_replica_addr(&host_str, port, out);
+        return emit_replica_addr(ctx, &host_str, port, out);
     }
     let cfg = ctx.state.config();
     match cfg.replication.role {
         ReplicationRole::Standalone | ReplicationRole::Primary => emit_master(ctx, out),
-        ReplicationRole::Replica => emit_replica(cfg.replication.upstream.as_deref(), out),
+        ReplicationRole::Replica => emit_replica(ctx, cfg.replication.upstream.as_deref(), out),
     }
 }
 
@@ -160,21 +229,24 @@ pub(crate) fn cmd_replicaof<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: 
 }
 
 fn emit_master(ctx: &Ctx<'_>, out: &mut Vec<u8>) {
-    let view = ctx.shard.replication_view();
+    // Instance-wide truth: fold every shard's view (offset sum, one
+    // entry per replica process).
+    let views = ctx.state.obs.repl_views();
+    let (offset, replicas) = aggregate_replication(&views);
     encode_array_len(out, 3);
     encode_bulk(out, b"master");
-    encode_integer(out, view.master_repl_offset as i64);
+    encode_integer(out, offset as i64);
     // The inner per-replica list carries
-    // `(ip, port, sent_offset)` triples. Redis encodes the port +
+    // `(ip, port, offset)` triples. Redis encodes the port +
     // offset as **bulk strings** (not integers) — matches the shape
     // most clients (incl. redis-rs) parse against.
-    encode_array_len(out, view.replicas.len() as i64);
-    // ROLE reports the replica's ACKED offset when it has
+    encode_array_len(out, replicas.len() as i64);
+    // ROLE reports the replica's ACKED offset when every stream has
     // one (real acknowledgment), falling back to sent (pre-first-ACK).
-    for (ip, port, sent, acked) in &view.replicas {
-        let ip_str = ip.to_string();
-        let port_str = port.to_string();
-        let off_str = acked.map_or(*sent, |a| a.acked_offset).to_string();
+    for agg in &replicas {
+        let ip_str = agg.ip.to_string();
+        let port_str = agg.port.to_string();
+        let off_str = agg.acked.unwrap_or(agg.sent).to_string();
         encode_array_len(out, 3);
         encode_bulk(out, ip_str.as_bytes());
         encode_bulk(out, port_str.as_bytes());
@@ -182,18 +254,32 @@ fn emit_master(ctx: &Ctx<'_>, out: &mut Vec<u8>) {
     }
 }
 
-fn emit_replica(upstream: Option<&str>, out: &mut Vec<u8>) {
+fn emit_replica(ctx: &Ctx<'_>, upstream: Option<&str>, out: &mut Vec<u8>) {
     let (host, port) = parse_upstream(upstream);
-    emit_replica_addr(host, port, out);
+    emit_replica_addr(ctx, host, port, out);
 }
 
-fn emit_replica_addr(host: &str, port: u16, out: &mut Vec<u8>) {
+fn emit_replica_addr(ctx: &Ctx<'_>, host: &str, port: u16, out: &mut Vec<u8>) {
+    // Live link truth: `sync` while a full-resync snapshot ship is in
+    // flight, `connected` on a fresh heartbeat, `connect` otherwise —
+    // the same sources INFO replication reports. The offset is the
+    // instance-wide applied sum (comparable with the primary's
+    // per-shard offset sum).
+    let repl = &ctx.state.replication;
+    let state: &[u8] = if repl.loading() {
+        b"sync"
+    } else if repl.replica_link_view().0 {
+        b"connected"
+    } else {
+        b"connect"
+    };
+    let offset = repl.applied_offset_sum();
     encode_array_len(out, 5);
     encode_bulk(out, b"slave");
     encode_bulk(out, host.as_bytes());
     encode_integer(out, i64::from(port));
-    encode_bulk(out, b"connect");
-    encode_integer(out, 0);
+    encode_bulk(out, state);
+    encode_integer(out, offset as i64);
 }
 
 /// Parse `"host:port"` into `(host, port)`. Tolerates missing port
@@ -216,26 +302,77 @@ mod tests {
     use kevy_resp::Argv;
 
     fn run(offset: u64, replica_count: usize) -> Vec<u8> {
+        // Distinct process prefixes (one advertised port per replica)
+        // so aggregation keeps them as separate entries.
         let replicas: Vec<_> = (0..replica_count)
             .map(|i| {
                 (
+                    format!("kevy-replica-{}#0", 6004 + i),
                     Ipv4Addr::new(10, 0, 0, (i + 1) as u8),
-                    6004,
+                    50_000 + i as u16,
                     offset,
                     Some(kevy_rt::ReplicaAck { acked_offset: offset, ack_age_ms: 0 }),
                 )
             })
             .collect();
         let c = crate::KevyCommands::new();
-        c.shard_ctx().set_replication_view(ReplicationView {
-            master_repl_offset: offset,
-            replicas,
-        });
+        c.state()
+            .obs
+            .publish_repl_view(0, crate::state::ReplShardView { offset, replicas });
         let mut a = Argv::default();
         a.push(b"ROLE");
         let mut out = Vec::new();
         cmd_role(&c.ctx(), &a, &mut out);
         out
+    }
+
+    #[test]
+    fn aggregate_folds_one_process_across_shards() {
+        let ip = Ipv4Addr::new(10, 0, 0, 9);
+        let ack = |off| Some(kevy_rt::ReplicaAck { acked_offset: off, ack_age_ms: 0 });
+        let row = |shard: usize, acked| {
+            (format!("kevy-replica-7391#{shard}"), ip, 40_000 + shard as u16, 10u64, acked)
+        };
+        let views = vec![
+            crate::state::ReplShardView { offset: 100, replicas: vec![row(0, ack(10))] },
+            crate::state::ReplShardView { offset: 40, replicas: vec![row(1, ack(7))] },
+        ];
+        let (offset, reps) = aggregate_replication(&views);
+        assert_eq!(offset, 140, "offsets sum across shards");
+        assert_eq!(reps.len(), 1, "one entry per replica process");
+        assert_eq!(reps[0].port, 7391, "advertised client port, not the peer port");
+        assert_eq!(reps[0].acked, Some(17), "acked sums across streams");
+        assert_eq!(reps[0].sent, 20);
+    }
+
+    #[test]
+    fn aggregate_reports_syncing_when_any_stream_lacks_an_ack() {
+        let ip = Ipv4Addr::new(10, 0, 0, 9);
+        let ack = Some(kevy_rt::ReplicaAck { acked_offset: 5, ack_age_ms: 0 });
+        let views = vec![
+            crate::state::ReplShardView {
+                offset: 10,
+                replicas: vec![("kevy-replica-7391#0".into(), ip, 1, 5, ack)],
+            },
+            crate::state::ReplShardView {
+                offset: 10,
+                replicas: vec![("kevy-replica-7391#1".into(), ip, 2, 5, None)],
+            },
+        ];
+        let (_, reps) = aggregate_replication(&views);
+        assert_eq!(reps.len(), 1);
+        assert_eq!(reps[0].acked, None, "one un-ACKed stream marks the process syncing");
+    }
+
+    #[test]
+    fn aggregate_falls_back_to_peer_port_for_foreign_ids() {
+        let ip = Ipv4Addr::new(10, 0, 0, 9);
+        let views = vec![crate::state::ReplShardView {
+            offset: 1,
+            replicas: vec![("some-other-agent".into(), ip, 41_234, 1, None)],
+        }];
+        let (_, reps) = aggregate_replication(&views);
+        assert_eq!(reps[0].port, 41_234, "unparseable id shape falls back to the peer port");
     }
 
     #[test]

@@ -7,6 +7,8 @@
 //! later runtime concern; the dispatch layer routes by source key and
 //! these helpers operate on whatever the local `Store` holds for `dst`.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::value::Value;
 use crate::{Store, StoreError};
 

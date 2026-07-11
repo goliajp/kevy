@@ -116,8 +116,12 @@ fn route_for_verb<A: ArgvView + ?Sized>(
 ) -> Route {
     match upper {
         b"HELLO" => Route::Hello,
+        // CLIENT: LIST / KILL fan out (the conn tables are per-shard);
+        // the rest answers locally or via the reactor intercept
+        // (SETNAME / GETNAME / ID / INFO).
+        b"CLIENT" => client_route(args),
         b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG" | b"INFO" | b"CLUSTER" | b"DEBUG"
-        | b"SHUTDOWN" | b"CLIENT" | b"SELECT" | b"BLPOP" | b"BRPOP" | b"BZPOPMIN" | b"BRPOPLPUSH"
+        | b"SHUTDOWN" | b"SELECT" | b"BLPOP" | b"BRPOP" | b"BZPOPMIN" | b"BRPOPLPUSH"
         // Replication admin: answered from the conn's own shard —
         // args[1] is a host (REPLICAOF/SLAVEOF) or absent (ROLE),
         // never a key to route by.
@@ -239,5 +243,19 @@ fn route_for_verb<A: ArgvView + ?Sized>(
                 Route::Local
             }
         }
+    }
+}
+
+/// CLIENT subcommand routing. `LIST` (bare form) and a well-formed
+/// `KILL` fan out to every shard — the conn tables are per-shard.
+/// Everything else stays local: SETNAME / GETNAME / ID / INFO are
+/// intercepted at the reactor, and malformed KILL / filtered LIST
+/// shapes fall through to the dispatch handler's error replies.
+fn client_route<A: ArgvView + ?Sized>(args: &A) -> Route {
+    let Some(sub) = args.get(1) else { return Route::Local };
+    match sub.to_ascii_uppercase().as_slice() {
+        b"LIST" if args.len() == 2 => Route::ClientList,
+        b"KILL" if kevy_rt::ClientKillFilter::parse(args).is_some() => Route::ClientKill,
+        _ => Route::Local,
     }
 }

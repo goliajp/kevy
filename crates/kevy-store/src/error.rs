@@ -7,12 +7,15 @@
 //! type here adds no dependency edge anywhere; the protocol crate
 //! (`kevy-resp`) hosting it would require a protocol → store edge.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::StoreError;
-use std::fmt;
+use core::fmt;
+#[cfg(feature = "std")]
 use std::io;
 
 /// Unified result alias over [`KevyError`].
-pub type KevyResult<T> = std::result::Result<T, KevyError>;
+pub type KevyResult<T> = core::result::Result<T, KevyError>;
 
 /// The error type of the embeddable stack: `kevy_embedded::Store` and
 /// `kevy_client::Connection` surfaces return `Result<_, KevyError>`.
@@ -27,6 +30,7 @@ pub enum KevyError {
     /// overflow, out-of-memory, …).
     Store(StoreError),
     /// Operating-system / transport failure (file, socket, AOF).
+    #[cfg(feature = "std")]
     Io(io::Error),
     /// RESP-level failure on a client link: a server error reply
     /// (`-ERR …` text preserved verbatim) or a malformed / unexpected
@@ -51,6 +55,7 @@ impl fmt::Display for KevyError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Store(e) => write!(f, "store error: {e:?}"),
+            #[cfg(feature = "std")]
             Self::Io(e) => write!(f, "io error: {e}"),
             Self::Protocol(msg) => write!(f, "protocol error: {msg}"),
             Self::ReadOnly => {
@@ -65,9 +70,10 @@ impl fmt::Display for KevyError {
     }
 }
 
-impl std::error::Error for KevyError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for KevyError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
+            #[cfg(feature = "std")]
             Self::Io(e) => Some(e),
             _ => None,
         }
@@ -80,6 +86,7 @@ impl From<StoreError> for KevyError {
     }
 }
 
+#[cfg(feature = "std")]
 impl From<io::Error> for KevyError {
     fn from(e: io::Error) -> Self {
         Self::Io(e)

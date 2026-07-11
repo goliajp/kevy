@@ -32,13 +32,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-// SQPOLL is NOT wired into the shard reactor — it would spawn one kernel
+// SQPOLL is OFF by default in the shard reactor — it spawns one kernel
 // poll thread per shard, each spinning at ~100% on the same core set as
-// the shard threads, halving effective CPU. See the SQPOLL entry in the
-// PERF-ATTACK-LOG note in bench/
-// for the 2-15× regression measurement and the architectural
-// reasoning. The wire-level support stays in `kevy_uring::IoUring::new_sqpoll`
-// for callers with single-threaded reactors and spare cores.
+// the shard threads, halving effective CPU (see the SQPOLL entries in
+// bench/PERF-ATTACK-LOG for the measured regressions). The
+// `KEVY_SQPOLL=1` env switch (see `uring_setup::build_uring`) opts in
+// for A/B measurement on layouts with spare cores; the wire-level
+// support lives in `kevy_uring::IoUring::new_sqpoll`.
 /// Busy-poll iterations after the last work before yielding the core (mirrors
 /// the epoll reactor's `SPIN_LIMIT`). Keeps -c1 latency low without spinning a
 /// quiet shard at 100% forever.
@@ -258,7 +258,7 @@ impl<C: Commands> Shard<C> {
                                 let _ = sock.set_nodelay();
                             }
                             let ncid = self.next_conn_id;
-                            self.next_conn_id += 1;
+                            self.next_conn_id += self.conn_id_step;
                             let mut conn = Conn::new(sock);
                             conn.cluster = cluster;
                             self.conns.insert(ncid, conn);
@@ -355,8 +355,10 @@ impl<C: Commands> Shard<C> {
                     self.tick_repl_waiters();
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
+                        self.drain_store_notify();
                         self.apply_live_runtime_config(&mut tick_interval);
                         self.tick_persist();
+                        self.tick_conn_gauge();
                         // Replication housekeeping:
                         // the io_uring path can't watch the replication
                         // listener / replica fds via epoll, so poll them
@@ -480,11 +482,11 @@ impl<C: Commands> Shard<C> {
                 }
             }
         }
-        // Drain bg persist completions before
-        // exit so a `+OK` SAVE reply isn't followed by a torn snapshot
-        // (see [`Shard::drain_persist_on_shutdown`]).
-        self.drain_persist_on_shutdown();
-        self.write_feed_shutdown_marker();
+        // Exit sequence: optional `SHUTDOWN SAVE` snapshot, drain bg
+        // persist completions (so a `+OK` SAVE reply isn't followed by
+        // a torn snapshot), final AOF fsync, feed marker — see
+        // [`Shard::shutdown_drain`].
+        self.shutdown_drain();
         Ok(())
     }
 

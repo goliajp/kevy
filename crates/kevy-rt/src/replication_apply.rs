@@ -103,6 +103,8 @@ impl<C: Commands> Shard<C> {
                 // (plain store, not max: a fork-discard resync
                 // genuinely rewinds and the truth must show it).
                 self.replica_applied_next = ack_offset;
+                // A bulk load is not keyspace traffic — drop captured events.
+                let _ = self.store.take_notify_events();
             }
             ReplicaApply::Frame { offset, argv } => {
                 self.apply_replica_frame(&argv);

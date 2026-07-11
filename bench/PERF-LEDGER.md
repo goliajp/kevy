@@ -103,6 +103,56 @@ server 0-7 / client 8-15,median-of-5)。可用性 arc 全落地
 复制/心跳/gate 管线不吃裸面吞吐(v3.14-v3.16 增量 = 0 回归)。
 charter「对标并远超 valkey」在终版复核成立。
 
+## v4 T4 K-401 — LPUSH 观察项收口(2026-07-11,lx64,feature/v4 @ f7585650)
+
+v3.18.0 复测记的观察项(LPUSH 2.91M vs v3.17.0 的 3.20M,-9%)按
+arena 同协议 ×3 轮独立 fresh instance(每轮 median-of-5)收口:
+
+| round | LPUSH median | stdev |
+|---|---|---|
+| 1 | 2,905,921 | ±159k |
+| 2 | **3,196,164** | ±159k |
+| 3 | 2,906,977 | ±159k |
+
+**判定:非回归,instance 级双峰,观察项关闭。** 同一 binary 三轮
+fresh instance 在 2.91M / 3.20M 两个模式间跳——round 2 逐位复现
+v3.17.0 的 3.20M,round 1/3 复现 v3.18.0 的 2.91M。两个"版本值"
+都是同一 instance 分布的两个峰(page placement / IRQ luck;
+legacy8sh SET 双峰同款,见 PERF-FINDING-2026-07-03-legacy8sh-set-
+bimodal.md)。v3.17→v3.18 的 -9% 是单轮 arena 各采到一个峰的读数
+差,不是代码回归。vs valkey 1.64-1.80× 领先不变。
+
+后续盯法:LPUSH(连同 INCR/SADD/HSET/ZADD)自本轮起进 perfgate
+legacy_8sh_* ratchet(K-402)——观察项从人工复测改为每 gate 自动化,
+floor = 基线 ×0.92 吸收双峰带宽。
+
+## v4 T4 K-402 — perfgate 扩到 12 角 + baseline 重录;**gate 抓到 v4 SET 写路径真回归**(2026-07-11,lx64)
+
+perfgate 新增 legacy 拓扑 5 角(INCR/SADD/HSET/LPUSH/ZADD,
+redis-benchmark stock -t,同 get/set N=30M ×3 instances);
+legacy_8sh 双角重录。f7585650 全量 measure 中三条 SET 角远低
+baseline → 按 Pre-Phase-A gate 做同盒同小时 A/B(vs v3.18.0 tag
++ 中点 8910ba84),**证实 feature/v4 SET 写路径真回归,GET 三角
+零回归**:
+
+| SET 角 | v3.18.0 | 8910ba84(pre-K-110) | f7585650 | 累计 Δ |
+|---|---|---|---|---|
+| legacy_8sh_set | 9.21M | 8.56M(-7.1%) | 7.49M(再 -12.5%) | **-18.7%** |
+| pinned_cluster_set | 22.52M | — | 20.82M | **-7.5%** |
+| pinned_compat_set | 17.00M | — | 16.05M | **-5.6%** |
+
+两段回归:T1a 实例化/K-108 段 + K-110 内核判决段。arena -P16 口径
+不显(SET 6.39M 持平 v3.18)——深管线(P256)才暴露的 per-op 成本。
+细账 + baseline 处理纪律见
+PERF-FINDING-2026-07-11-v4-set-write-path-regression.md。
+
+baseline 合成(不为绿灯改账):legacy_8sh_set 重录为 v3.18.0 同小时
+真值 9,210,970(消陈旧双峰误报,保留回归红灯);legacy_8sh_get
+10,877,494(逐位同旧);5 新角以 f7585650 实测入 ratchet 起点;
+pinned 4 角 + zalg 保留 2026-07-03 记录不动。**feature/v4 上 gate
+= 9 绿 / 3 红(三条 SET 角)——红灯即 finding,修复(decomp →
+attack)待用户拍板排程。**
+
 ## v3.18.0 release arena — bare face 复测(2026-07-10,lx64)
 
 结构 arc(LOC 还债 + 热路径批 D + fuzz/polish)后的裸面确认:

@@ -22,6 +22,9 @@ pub(crate) struct ShardStats {
     pub evicted_keys: AtomicU64,
     pub commands_processed: AtomicU64,
     pub connections_received: AtomicU64,
+    /// Live client conns on this shard right now (gauge, published per
+    /// tick from the reactor's conn table; cluster-bus links excluded).
+    pub clients_connected: AtomicU64,
 }
 
 /// Process-wide totals, summed across every shard slot.
@@ -35,6 +38,7 @@ pub(crate) struct Totals {
     pub evicted_keys: u64,
     pub commands_processed: u64,
     pub connections_received: u64,
+    pub clients_connected: u64,
 }
 
 /// Retained ops-per-sec samples — 16 × 100 ms default tick ≈ a 1.6 s window.
@@ -51,8 +55,21 @@ pub(crate) struct ObsState {
     /// `(elapsed_ms_since_start, total_commands_processed)` samples,
     /// pushed by the lead shard once per tick.
     ops_ring: Mutex<Vec<(u128, u64)>>,
+    /// One replication-view slot per shard, overwritten each tick by
+    /// `Commands::on_replication_view`. INFO replication / ROLE answer
+    /// on one shard but must report the whole instance — they fold
+    /// every slot (offset sum + per-replica row union).
+    repl_views: Box<[Mutex<ReplShardView>]>,
     /// Anchor for the monotonic millisecond clock the sampler uses.
     start: Instant,
+}
+
+/// One shard's per-tick replication view: its `master_repl_offset`
+/// plus a row per handshake-complete replica conn.
+#[derive(Clone, Default)]
+pub(crate) struct ReplShardView {
+    pub(crate) offset: u64,
+    pub(crate) replicas: Vec<kevy_rt::ReplicaViewRow>,
 }
 
 impl ObsState {
@@ -63,8 +80,27 @@ impl ObsState {
                 .map(|_| Arc::new(ShardStats::default()))
                 .collect(),
             ops_ring: Mutex::new(Vec::new()),
+            repl_views: (0..nshards.max(1))
+                .map(|_| Mutex::new(ReplShardView::default()))
+                .collect(),
             start: Instant::now(),
         }
+    }
+
+    /// Overwrite shard `shard`'s replication-view slot (per-tick
+    /// publication; an out-of-range shard is ignored).
+    pub(crate) fn publish_repl_view(&self, shard: usize, view: ReplShardView) {
+        if let Some(slot) = self.repl_views.get(shard) {
+            *slot.lock().expect("repl_views poisoned") = view;
+        }
+    }
+
+    /// Snapshot every shard's replication view for aggregation.
+    pub(crate) fn repl_views(&self) -> Vec<ReplShardView> {
+        self.repl_views
+            .iter()
+            .map(|s| s.lock().expect("repl_views poisoned").clone())
+            .collect()
     }
 
     /// Shard `shard`'s stats slot, for the thread-local cache set up by
@@ -86,6 +122,7 @@ impl ObsState {
             t.evicted_keys += s.evicted_keys.load(Relaxed);
             t.commands_processed += s.commands_processed.load(Relaxed);
             t.connections_received += s.connections_received.load(Relaxed);
+            t.clients_connected += s.clients_connected.load(Relaxed);
         }
         t
     }

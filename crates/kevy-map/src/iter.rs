@@ -1,7 +1,7 @@
 //! Borrowing iterators over a [`KevyMap`] — `(&K, &V)`, `&K`-only, and
 //! `&V`-only flavours.
 
-use std::mem::MaybeUninit;
+use core::mem::MaybeUninit;
 
 use crate::map::KevyMap;
 

@@ -2,8 +2,8 @@
 //! runner threads write into. Split out of the replication-state
 //! module to keep both files under the 500-LOC house rule.
 
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Replica-side heartbeat view, written by every runner on
 /// each `+PING`, read by INFO replication / the election offset sum.
@@ -16,6 +16,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 /// [`ReplicationState`] and the state graph acyclic.
 #[derive(Default)]
 pub(crate) struct ReplicaProgress {
+    /// Full-resync window count: one per runner currently between
+    /// `SnapshotBegin` and `SnapshotEnd` (runners also decrement on
+    /// link drop, so a mid-ship disconnect never strands the replica
+    /// refusing reads). While non-zero, client reads answer
+    /// `-LOADING` — the dataset is about to be replaced wholesale, so
+    /// serving the pre-resync keyspace would serve a timeline the
+    /// primary has already diverged from.
+    loading: AtomicUsize,
+    /// The instance's gate-invalidation counter, shared in by
+    /// [`super::ReplicationState`] at construction (runner threads
+    /// capture only this progress slice, yet a loading flip must
+    /// invalidate every shard's cached gate bits).
+    control_epoch: Arc<AtomicU64>,
     /// Primary-position gauge — `fetch_max` ACROSS runners: fine for
     /// INFO's "representative lag", wrong for election ordering
     /// (that's what [`Self::runner_offsets`] is for).
@@ -44,6 +57,35 @@ pub(crate) struct ReplicaProgress {
 }
 
 impl ReplicaProgress {
+    /// Build a progress slice wired to the instance's shared
+    /// gate-invalidation counter.
+    pub(super) fn with_epoch(control_epoch: Arc<AtomicU64>) -> Self {
+        Self { control_epoch, ..Self::default() }
+    }
+
+    /// Runner-side: one runner entered its snapshot-ship window. The
+    /// 0 → 1 edge publishes a gate invalidation so every shard
+    /// rebuilds its cached gate bits and starts refusing reads.
+    pub(crate) fn begin_loading(&self) {
+        if self.loading.fetch_add(1, Ordering::AcqRel) == 0 {
+            self.control_epoch.fetch_add(1, Ordering::Release);
+        }
+    }
+
+    /// Runner-side: one runner left its snapshot-ship window
+    /// (`SnapshotEnd` forwarded, or the link dropped mid-ship). The
+    /// 1 → 0 edge re-opens reads.
+    pub(crate) fn end_loading(&self) {
+        if self.loading.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.control_epoch.fetch_add(1, Ordering::Release);
+        }
+    }
+
+    /// Whether any runner's full-resync snapshot ship is in flight.
+    pub(crate) fn loading(&self) -> bool {
+        self.loading.load(Ordering::Acquire) > 0
+    }
+
     /// Runner-side: record one heartbeat observation. Gauges take the
     /// MAX per field across runners; `runner_slot` additionally files
     /// `applied` into this runner's own registry slot — the exact

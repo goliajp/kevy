@@ -10,8 +10,10 @@
 //! 2. Flips the local migration state to MIGRATING; subsequent
 //!    writes for the prefix return `-QUIESCED migrating to
 //!    <to-host:port>` (wired through scope routing in dispatch).
-//! 3. Serializes the prefix's keyspace slice (5 data types: string
-//!    / hash / list / set / zset; TTLs as absolute `PEXPIREAT`).
+//! 3. Serializes the prefix's keyspace slice (all 6 data types:
+//!    string / hash / list / set / zset / stream — streams carry
+//!    entries, scalar state, consumer groups, and live PEL rows;
+//!    TTLs as absolute `PEXPIREAT`).
 //! 4. Connects to the target's data port and sends one
 //!    `MOVE-SCOPE-INGEST <prefix> <bulk>` command.
 //! 5. On `+OK`, commits the migration locally; future writes for
@@ -252,7 +254,7 @@ pub(crate) fn cmd_move_scope_ingest<A: ArgvView + ?Sized>(
 /// Walk `store`, collect every key matching `prefix`, reconstruct
 /// each as one (or two — for TTL'd keys) RESP frame. Returns the
 /// concatenated wire bytes + the frame count.
-fn serialize_prefix(store: &mut Store, prefix: &[u8]) -> (Vec<u8>, usize) {
+pub(super) fn serialize_prefix(store: &mut Store, prefix: &[u8]) -> (Vec<u8>, usize) {
     let mut bulk = Vec::new();
     let mut count = 0usize;
     let keys = store.collect_keys(None, None);
@@ -272,7 +274,8 @@ fn serialize_prefix(store: &mut Store, prefix: &[u8]) -> (Vec<u8>, usize) {
             "list" => emit_list(store, &key, &mut bulk, &mut count),
             "set" => emit_set(store, &key, &mut bulk, &mut count),
             "zset" => emit_zset(store, &key, &mut bulk, &mut count),
-            _ => continue, // stream / none — streams are not migrated (TODO)
+            "stream" => super::scope_move_stream::emit_stream(store, &key, &mut bulk, &mut count),
+            _ => continue, // none — key raced away between collect and here
         }
         if let Some(ms) = abs_expire {
             let ms_str = ms.to_string();

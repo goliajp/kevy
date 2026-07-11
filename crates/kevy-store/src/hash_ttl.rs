@@ -21,6 +21,8 @@
 //!   [`Store::clear_hash_field_ttls`]; whole-key removal drops the
 //!   sidecar entry in `remove_entry`.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::{SmallBytes, Store, StoreError, Value, now_unix_ms};
 
 /// Per-field reply codes for `HEXPIRE`-family calls (Redis 7.4):
@@ -100,9 +102,7 @@ impl Store {
                 codes.push(2);
                 continue;
             }
-            self.hfttl
-                .entry(SmallBytes::from_slice(key))
-                .or_default()
+            hfttl_slot(&mut self.hfttl, key)
                 .insert(SmallBytes::from_slice(f), deadline_ms);
             codes.push(1);
         }
@@ -252,9 +252,7 @@ impl Store {
     /// Snapshot loader hook: restore one field TTL (deadlines already
     /// absolute unix-ms; past deadlines simply purge on first access).
     pub fn load_hash_field_ttl(&mut self, key: &[u8], field: &[u8], deadline_ms: u64) {
-        self.hfttl
-            .entry(SmallBytes::from_slice(key))
-            .or_default()
+        hfttl_slot(&mut self.hfttl, key)
             .insert(SmallBytes::from_slice(field), deadline_ms);
     }
 
@@ -270,6 +268,27 @@ impl Store {
 
 fn kevy_map_is_empty(m: &crate::KevyMap<SmallBytes, u64>) -> bool {
     m.iter().next().is_none()
+}
+
+
+/// `entry().or_default()` over both side-map backends — `KevyMap` (the
+/// `no_std` arm) has no entry API, so that arm inserts-if-absent and
+/// re-probes.
+fn hfttl_slot<'a>(
+    hfttl: &'a mut crate::SideMap<SmallBytes, kevy_map::KevyMap<SmallBytes, u64>>,
+    key: &[u8],
+) -> &'a mut kevy_map::KevyMap<SmallBytes, u64> {
+    #[cfg(feature = "std")]
+    {
+        hfttl.entry(SmallBytes::from_slice(key)).or_default()
+    }
+    #[cfg(not(feature = "std"))]
+    {
+        if hfttl.get(key).is_none() {
+            hfttl.insert(SmallBytes::from_slice(key), kevy_map::KevyMap::default());
+        }
+        hfttl.get_mut(key).expect("inserted above")
+    }
 }
 
 #[cfg(test)]
@@ -333,7 +352,7 @@ mod tests {
         // near-future deadline → lazily gone after it passes
         let soon = now_unix_ms() + 30;
         s.hexpire_at(b"h", &[b"b"], soon, HExpireCond::Always).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(core::time::Duration::from_millis(50));
         assert!(!s.hexists(b"h", b"b").unwrap(), "lazy purge on access");
         // hash is now empty → hlen 0, sidecar pruned
         assert_eq!(s.hlen(b"h").unwrap(), 0);
@@ -349,7 +368,7 @@ mod tests {
         // overwrite a → its TTL is discarded (Redis 7.4)
         s.hset(b"h", &[(b"a".as_slice(), b"new".as_slice())]).unwrap();
         assert_eq!(s.httl(b"h", &[b"a"]).unwrap(), vec![-1]);
-        std::thread::sleep(std::time::Duration::from_millis(40));
+        std::thread::sleep(core::time::Duration::from_millis(40));
         // reaper sweeps b, reports the removal for effect logging
         let swept = s.tick_hash_ttl(100);
         assert_eq!(swept, vec![(b"h".to_vec(), vec![b"b".to_vec()])]);

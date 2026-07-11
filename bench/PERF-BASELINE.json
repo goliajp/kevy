@@ -1,5 +1,5 @@
 {
-  "recorded": "2026-07-03T16:59:21Z",
+  "recorded": "2026-07-11T05:55:00Z",
   "bin": "kevy",
   "tolerance": 0.92,
   "metrics": {
@@ -8,7 +8,12 @@
     "pinned_compat_get": 19392766,
     "pinned_compat_set": 17521321,
     "legacy_8sh_get": 10877494,
-    "legacy_8sh_set": 9973447,
+    "legacy_8sh_set": 9210970,
+    "legacy_8sh_incr": 6686238,
+    "legacy_8sh_sadd": 5990441,
+    "legacy_8sh_hset": 4986724,
+    "legacy_8sh_lpush": 3866992,
+    "legacy_8sh_zadd": 3624955,
     "zalg_zinterstore": 2846
   }
 }

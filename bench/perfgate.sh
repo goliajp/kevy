@@ -14,6 +14,9 @@
 #     client-bound (~6.6M) and skews keys across nodes when -t lists several
 #     tests; short N under-amortises ramp by ~30%. Never measure with those.
 #   * legacy 8sh fixed-key angle — historical comparability (REPORT.md).
+#     Since v4 T4 the same topology also gates the five arena cells
+#     (INCR/SADD/HSET/LPUSH/ZADD) so the observation items ratchet
+#     automatically instead of living as per-release ledger footnotes.
 #   * preflight refuses to run on a dirty box (leftover kevy/redis-benchmark
 #     processes, or load >= 1.0): a polluted run costs hours of false
 #     debugging, a refused run costs one retry.
@@ -41,6 +44,14 @@ TAGS=(t3 t43 t2 t42 t1 t41 t0 t40)
 
 refuse() { echo "perfgate: REFUSED — $1" >&2; exit 2; }
 fail()   { echo "perfgate: FAIL — $1" >&2; exit 1; }
+
+# Every gated metric, in report order. The single source of truth for
+# the measure loop, --update-baseline, and the gate comparison — three
+# hand-copied lists drifted once already.
+METRICS="pinned_cluster_get pinned_cluster_set pinned_compat_get pinned_compat_set \
+legacy_8sh_get legacy_8sh_set \
+legacy_8sh_incr legacy_8sh_sadd legacy_8sh_hset legacy_8sh_lpush legacy_8sh_zadd \
+zalg_zinterstore"
 
 # ---------- preflight: never measure on a dirty box ----------
 command -v redis-benchmark >/dev/null || refuse "redis-benchmark not installed"
@@ -151,6 +162,16 @@ for inst in $(seq 1 "$INSTANCES"); do
   taskset -c 8-15 redis-benchmark -p 7001 -t set -n 300000 -P 64 -q >/dev/null 2>&1
   sample legacy_8sh_get 'run_legacy get'
   sample legacy_8sh_set 'run_legacy set'
+  # v4 T4 (K-402): the five arena observation angles, gated. Same legacy
+  # topology and N as get/set — redis-benchmark's stock -t workloads
+  # (INCR counter, SADD/HSET/ZADD single-key collections, LPUSH single
+  # list; LPUSH/ZADD are the historically noisiest arena cells, which is
+  # exactly why they ratchet here instead of living as ledger footnotes).
+  sample legacy_8sh_incr  'run_legacy incr'
+  sample legacy_8sh_sadd  'run_legacy sadd'
+  sample legacy_8sh_hset  'run_legacy hset'
+  sample legacy_8sh_lpush 'run_legacy lpush'
+  sample legacy_8sh_zadd  'run_legacy zadd'
   # zalgebra angle: two 1k-member source zsets, then pipelined ZINTERSTORE.
   for i in $(seq 0 9); do
     args=""
@@ -161,8 +182,7 @@ for inst in $(seq 1 "$INSTANCES"); do
   sample zalg_zinterstore 'run_zalg'
   server_stop
 done
-for m in pinned_cluster_get pinned_cluster_set pinned_compat_get pinned_compat_set \
-         legacy_8sh_get legacy_8sh_set zalg_zinterstore; do
+for m in $METRICS; do
   # shellcheck disable=SC2086 — word-splitting the collected samples is the point
   MED[$m]=$(median_of ${SAMPLES[$m]})
   echo "  $m: instances [${SAMPLES[$m]%% }] -> median ${MED[$m]}"
@@ -177,8 +197,7 @@ if [ "$MODE" = "--update-baseline" ]; then
     echo "  \"tolerance\": 0.92,"
     echo "  \"metrics\": {"
     first=1
-    for k in pinned_cluster_get pinned_cluster_set pinned_compat_get \
-             pinned_compat_set legacy_8sh_get legacy_8sh_set zalg_zinterstore; do
+    for k in $METRICS; do
       [ $first -eq 0 ] && echo ","
       printf '    "%s": %s' "$k" "${MED[$k]}"
       first=0
@@ -195,8 +214,7 @@ fi
 TOL=$(python3 -c "import json;print(json.load(open('$BASELINE'))['tolerance'])")
 STATUS=0
 echo "perfgate: gate vs $(basename "$BASELINE") (floor = baseline x $TOL)"
-for k in pinned_cluster_get pinned_cluster_set pinned_compat_get \
-         pinned_compat_set legacy_8sh_get legacy_8sh_set zalg_zinterstore; do
+for k in $METRICS; do
   # A metric measured but absent from the baseline is NEW this train:
   # report it, skip the floor (it enters the ratchet at the next
   # --update-baseline), never silently pass a real regression.

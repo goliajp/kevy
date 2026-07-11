@@ -46,6 +46,13 @@ pub enum Route {
     FeedShards,
     /// `PREFIX.STATS <prefix>` — all-shard fanout, summed.
     PrefixStats,
+    /// `CLIENT LIST` — all-shard fanout; each shard renders its conn
+    /// table rows, the origin concatenates into one bulk reply.
+    ClientList,
+    /// `CLIENT KILL …` — all-shard fanout; each shard closes its
+    /// matching conns, the origin sums (or maps the legacy positional
+    /// form to `+OK` / `-ERR`).
+    ClientKill,
     /// Extension fan-out (IDX.* reads): every shard runs
     /// `Commands::extension_op`, the origin reduces.
     Extension,

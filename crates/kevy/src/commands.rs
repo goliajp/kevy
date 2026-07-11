@@ -72,19 +72,22 @@ impl Commands for KevyCommands {
         self.shard_ctx().set_persist_stats(in_flight, aof_rewrites_total);
     }
 
-    fn on_replication_view(
-        &self,
-        master_repl_offset: u64,
-        replicas: Vec<(std::net::Ipv4Addr, u16, u64, Option<kevy_rt::ReplicaAck>)>,
-    ) {
-        // `ROLE` / `INFO replication` read the answering shard's
-        // most-recent view, including the per-replica list —
-        // `connected_slaves` is derived from `replicas.len()` at read
-        // time.
-        self.shard_ctx().set_replication_view(ops::replication::ReplicationView {
-            master_repl_offset,
-            replicas,
-        });
+    fn on_replication_view(&self, master_repl_offset: u64, replicas: Vec<kevy_rt::ReplicaViewRow>) {
+        // Publish to the shared per-shard slot FIRST — `ROLE` / `INFO
+        // replication` answer on one shard but fold every shard's slot
+        // into an instance-wide view (offset sum + per-replica union).
+        self.state().obs.publish_repl_view(
+            self.shard_ctx().shard_id(),
+            crate::state::ReplShardView {
+                offset: master_repl_offset,
+                replicas: replicas.clone(),
+            },
+        );
+        // The shard zone keeps its own copy for per-shard consumers
+        // (the min-replicas health gate reads the answering shard's
+        // rows — write gating is per shard-stream by design).
+        self.shard_ctx()
+            .set_replication_view(ops::replication::ReplicationView { replicas });
         // v3-cluster Phase 1.5: feed the offset into kevy-elect so
         // the next heartbeat carries the up-to-date `repl_offset`.
         // No-op when the elector isn't running.
@@ -177,11 +180,23 @@ impl Commands for KevyCommands {
         })
     }
 
-    fn read_denied(&self) -> Option<Vec<u8>> {
-        // READ_GATED = bounded-staleness replica. The deadline itself
-        // is a time condition, so the slow path re-loads the live
-        // heartbeat on every gated read.
+    fn read_denied<A: ArgvView + ?Sized>(&self, args: &A) -> Option<Vec<u8>> {
+        // READ_GATED = bounded-staleness replica or a replica inside a
+        // full-resync snapshot load. The staleness deadline is a time
+        // condition and the loading flag flips mid-window, so the slow
+        // path re-loads the live values on every gated read.
         if self.gate_bits() & crate::state::READ_GATED == 0 {
+            return None;
+        }
+        // PING / INFO / HELLO stay answerable while gated — health
+        // checks and monitoring must keep working during a snapshot
+        // load (and a stale replica still proves liveness). Matches
+        // the verbs Redis exempts from -LOADING.
+        if args.get(0).is_some_and(|v| {
+            v.eq_ignore_ascii_case(b"PING")
+                || v.eq_ignore_ascii_case(b"INFO")
+                || v.eq_ignore_ascii_case(b"HELLO")
+        }) {
             return None;
         }
         self.state().replication.read_denied_reply()
@@ -228,6 +243,17 @@ impl Commands for KevyCommands {
         ops::stats::sample_ops_if_lead(self.shard_ctx(), &self.state().obs);
     }
 
+    fn shutdown_save_requested(&self) -> bool {
+        self.state().shutdown_save_requested()
+    }
+
+    fn on_conn_gauge(&self, live: u64) {
+        self.shard_ctx().with_stats_slot(|s| {
+            s.clients_connected
+                .store(live, std::sync::atomic::Ordering::Relaxed);
+        });
+    }
+
     fn live_runtime_config(&self) -> kevy_rt::LiveRuntimeConfig {
         // Per-tick (every 100 ms by default) re-read of the shared config.
         // When no explicit config was ever installed (tests, hand-rolled
@@ -257,9 +283,16 @@ impl Commands for KevyCommands {
             auto_aof_rewrite_pct: Some(cfg.persistence.auto_aof_rewrite_percentage),
             auto_aof_rewrite_min_size: Some(cfg.persistence.auto_aof_rewrite_min_size),
             tick_interval_ms: tick_ms,
-            notify_flags: Some(kevy_config::parse_notification_flags(
-                &cfg.notification.notify_keyspace_events,
-            )),
+            // A flag string with an unknown char can't be installed —
+            // config admission validates it — so the fallback default
+            // (notifications OFF) is unreachable in practice and safe
+            // if a foreign path ever slips one through.
+            notify_flags: Some(
+                kevy_config::parse_notification_flags(
+                    &cfg.notification.notify_keyspace_events,
+                )
+                .unwrap_or_default(),
+            ),
             slowlog_slower_than_micros: Some(cfg.slowlog.slower_than_micros),
             slowlog_max_len: Some(cfg.slowlog.max_len),
             promotion_epoch: self.state().replication.promotion_epoch(),

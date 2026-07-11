@@ -325,6 +325,7 @@ Election timings (heartbeat 200 ms, DOWN after 5 s, election timeout 3 s) are fi
 
 # Out of scope by design
 
+- Mutating `CLUSTER` subcommands (`RESET`, `SETSLOT`, `FORGET`, `MEET`, …) are accepted as no-op `+OK`: kevy has no dynamic membership to mutate (membership is "push new config, restart"), and defensively-probing clients should proceed rather than error. The read-only subcommands always report the true static topology.
 - AUTH and TLS — handled by the deployment edge (sidecar, mesh, LB), not by kevy.
 - Multi-DC active-active and CRDTs.
 - Raft, Paxos, or any consensus log under the keyspace.

@@ -84,6 +84,11 @@ pub(crate) struct ReplicationState {
     promotion_epoch: AtomicU64,
     /// The narrow heartbeat/offset slice runner threads write into.
     progress: Arc<ReplicaProgress>,
+    /// This server's advertised client port, baked into the runner
+    /// replica-ids (`kevy-replica-<port>#<stream>`) so a primary can
+    /// tell its replicas apart and report where to reach them. Set
+    /// once at state construction from the config.
+    self_port: AtomicU32,
     /// The instance-wide gate invalidation counter, shared
     /// with [`RuntimeState`](crate::RuntimeState) (`Arc` because the
     /// election callback and the FAILOVER thread hold only this
@@ -97,7 +102,7 @@ pub(crate) struct ReplicationState {
 impl ReplicationState {
     /// Build the state for an `nshards`-shard runtime, allocating the
     /// per-shard inbox pairs.
-    pub(crate) fn new(nshards: usize, single_source: bool) -> Self {
+    pub(crate) fn new(nshards: usize, single_source: bool, self_port: u16) -> Self {
         let mut senders = Vec::with_capacity(nshards);
         let mut receivers = Vec::with_capacity(nshards);
         for _ in 0..nshards {
@@ -105,6 +110,7 @@ impl ReplicationState {
             senders.push(tx);
             receivers.push(rx);
         }
+        let control_epoch = Arc::new(AtomicU64::new(0));
         Self {
             senders,
             inboxes: Mutex::new(Some(receivers)),
@@ -118,8 +124,9 @@ impl ReplicationState {
             quorum_fenced: AtomicBool::new(false),
             max_staleness_ms: AtomicU64::new(0),
             promotion_epoch: AtomicU64::new(0),
-            progress: Arc::new(ReplicaProgress::default()),
-            control_epoch: Arc::new(AtomicU64::new(0)),
+            progress: Arc::new(ReplicaProgress::with_epoch(Arc::clone(&control_epoch))),
+            self_port: AtomicU32::new(u32::from(self_port)),
+            control_epoch,
         }
     }
 
@@ -187,10 +194,13 @@ impl ReplicationState {
         // returns, and its slot must already exist.
         let runner_count = if self.single_source { 1 } else { self.senders.len() };
         self.progress.size_runner_slots(runner_count);
+        // Id `kevy-replica-<client_port>#<stream>`: the port prefix keeps
+        // replicas in distinct ack slots + names one INFO entry per process.
+        let self_port = self.self_port.load(Ordering::Relaxed);
         let new_runners = if self.single_source {
             vec![ReplicaRunner::spawn_routed(
                 (host, port_base),
-                "kevy-replica-single".to_string(),
+                format!("kevy-replica-{self_port}#s"),
                 self.senders.clone(),
                 0,
                 Arc::clone(&self.progress),
@@ -199,7 +209,7 @@ impl ReplicationState {
             let mut fleet = Vec::with_capacity(self.senders.len());
             for (shard_id, sender) in self.senders.iter().enumerate() {
                 let port = port_base.saturating_add(u16::try_from(shard_id).unwrap_or(u16::MAX));
-                let replica_id = format!("kevy-replica-{shard_id}");
+                let replica_id = format!("kevy-replica-{self_port}#{shard_id}");
                 fleet.push(ReplicaRunner::spawn(
                     (host, port),
                     replica_id,
@@ -299,9 +309,13 @@ impl ReplicationState {
 
     /// Cold-path gate input: could a client read be denied?
     /// Staleness is a time condition — the bit only says "bounded
-    /// replica"; the slow path loads the live heartbeat.
+    /// replica"; the slow path loads the live heartbeat. A raised
+    /// loading flag (full-resync snapshot ship in flight) gates reads
+    /// regardless of the staleness knob; its flip bumps the control
+    /// epoch, so the cached bit tracks it.
     pub(crate) fn read_possibly_gated(&self) -> bool {
-        self.max_staleness_ms.load(Ordering::Relaxed) > 0 && self.is_replica()
+        self.is_replica()
+            && (self.max_staleness_ms.load(Ordering::Relaxed) > 0 || self.progress.loading())
     }
 
     pub(crate) fn promotion_epoch(&self) -> u64 {
@@ -345,12 +359,27 @@ impl ReplicationState {
         self.progress.link_view()
     }
 
-    /// Refuse reads on a replica whose primary heartbeat is older than
-    /// the staleness bound. Primaries and un-bounded replicas never
-    /// refuse (the common case is two relaxed atomic loads).
+    /// Whether a full-resync snapshot ship is in flight (the INFO
+    /// `loading` gauge; reads answer `-LOADING` while true).
+    pub(crate) fn loading(&self) -> bool {
+        self.progress.loading()
+    }
+
+    /// Refuse reads on a replica mid-way through a full-resync
+    /// snapshot load (`-LOADING`, strongest — the visible keyspace is
+    /// about to be replaced wholesale) or one whose primary heartbeat
+    /// is older than the staleness bound (`-STALE`). Primaries and
+    /// un-bounded replicas outside a resync never refuse (the common
+    /// case is two relaxed atomic loads).
     pub(crate) fn read_denied_reply(&self) -> Option<Vec<u8>> {
+        if !self.is_replica() {
+            return None;
+        }
+        if self.progress.loading() {
+            return Some(b"-LOADING kevy is loading the dataset in memory\r\n".to_vec());
+        }
         let bound = self.max_staleness_ms.load(Ordering::Relaxed);
-        if bound == 0 || !self.is_replica() {
+        if bound == 0 {
             return None;
         }
         let last = self.progress.last_ping_ms();

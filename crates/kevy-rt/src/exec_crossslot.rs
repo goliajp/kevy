@@ -15,6 +15,15 @@ impl<C: Commands> Shard<C> {
     /// mode AND the conn is cluster AND its keys span slots, push a
     /// `-CROSSSLOT` reply; else fall through to the standard `start_multi`
     /// fan-out path.
+    ///
+    /// `inline(never)`: this is `start_command`'s cold catch-all arm.
+    /// Left to the cost model, fat LTO fuses this whole multi-key
+    /// orchestrator into the per-op hot `start_command` body (+41%
+    /// code size measured), degrading its register
+    /// allocation and I-cache locality — measured +1.9% instructions
+    /// per op on the legacy_8sh SET workload. Pinning it out restores
+    /// the compact hot-path codegen; multi-key commands pay one call.
+    #[inline(never)]
     pub(crate) fn start_multi_or_crossslot<A: ArgvView + ?Sized>(
         &mut self,
         conn_id: u64,

@@ -8,8 +8,11 @@
 //! type carries a `groups` slot reserved for sprint B; this file only
 //! implements the entry-side ops.
 
-use std::collections::BTreeMap;
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
+use alloc::collections::BTreeMap;
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown"))))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use kevy_map::KevyMap;
@@ -71,7 +74,7 @@ pub fn parse_xadd_id(s: &[u8]) -> Result<XAddIdSpec, StreamIdError> {
     if s == b"*" {
         return Ok(XAddIdSpec::AutoAll);
     }
-    let txt = std::str::from_utf8(s).map_err(|_| StreamIdError::Invalid)?;
+    let txt = core::str::from_utf8(s).map_err(|_| StreamIdError::Invalid)?;
     match txt.split_once('-') {
         None => {
             let ms = txt.parse::<u64>().map_err(|_| StreamIdError::Invalid)?;
@@ -111,7 +114,7 @@ pub fn parse_range_end(s: &[u8]) -> Result<StreamId, StreamIdError> {
 /// (`0`, `0-0`, `5-2`). `$` is handled by the caller (it means "the
 /// stream's current `last_id`", which only Store can resolve).
 pub fn parse_explicit_id(s: &[u8], end: bool) -> Result<StreamId, StreamIdError> {
-    let txt = std::str::from_utf8(s).map_err(|_| StreamIdError::Invalid)?;
+    let txt = core::str::from_utf8(s).map_err(|_| StreamIdError::Invalid)?;
     let (ms_s, seq_s) = match txt.split_once('-') {
         Some(p) => p,
         None => (txt, if end { "" } else { "0" }),
@@ -204,7 +207,7 @@ impl StreamData {
 
     /// Lookup one group by name (for `XINFO CONSUMERS`).
     pub fn group(&self, name: &[u8]) -> Option<&group::ConsumerGroup> {
-        self.groups.get(name).map(std::convert::AsRef::as_ref)
+        self.groups.get(name).map(core::convert::AsRef::as_ref)
     }
 
     /// Group count — `XINFO STREAM`'s `groups` field.
@@ -416,14 +419,14 @@ pub type LoadedStreamEntry = (u64, u64, Vec<(Vec<u8>, Vec<u8>)>);
 /// back to 0 on a pre-UNIX-EPOCH clock — impossible on supported platforms);
 /// on `wasm32-unknown-unknown`, where `SystemTime::now()` traps, reads the
 /// host-fed wall clock (see `crate::set_wall_clock_ms`, wasm-only).
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+#[cfg(not(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown"))))]
 pub fn now_unix_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as u64)
 }
 
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
 pub fn now_unix_ms() -> u64 {
     crate::clock::wall_now_unix_ms()
 }

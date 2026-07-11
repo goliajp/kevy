@@ -292,7 +292,7 @@ mod tests {
     }
 
     fn primary() -> ReplicationState {
-        ReplicationState::new(1, false)
+        ReplicationState::new(1, false, 0)
     }
 
     #[test]

@@ -2,8 +2,8 @@
 //! single-trust-domain assumptions; exposes the underlying map's bucket-addr
 //! API via [`KevySet::as_map`].
 
-use std::borrow::Borrow;
-use std::fmt;
+use core::borrow::Borrow;
+use core::fmt;
 
 use kevy_hash::KevyHash;
 

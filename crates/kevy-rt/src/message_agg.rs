@@ -35,6 +35,13 @@ pub(crate) enum Agg {
     },
     /// PREFIX.STATS accumulator (summed across shards).
     PrefixStats { keys: u64, expires: u64 },
+    /// CLIENT LIST accumulator: per-shard row chunks concatenated into
+    /// one bulk (RESP2) / verbatim `txt` (RESP3) reply.
+    ClientList { text: Vec<u8> },
+    /// CLIENT KILL accumulator: killed-count sum. `oldform` selects the
+    /// legacy positional form's `+OK` / `-ERR no such client` reply
+    /// over the filtered form's `:n`.
+    ClientKill { killed: i64, oldform: bool },
     /// Extension fan-out accumulator; reduced by
     /// `Commands::extension_reduce` when the last chunk lands.
     ExtensionGather { argv: Vec<Vec<u8>>, chunks: Vec<Vec<u8>> },

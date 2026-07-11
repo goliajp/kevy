@@ -107,6 +107,22 @@ impl<C: Commands> Shard<C> {
             Route::ReplWait { .. } | Route::ReplBarrier { .. } => {
                 gather_error("ERR internal: repl-wait route hit multi builder")
             }
+            Route::ClientList => (
+                (0..self.nshards).map(|s| (s, Op::ClientList)).collect(),
+                Agg::ClientList { text: Vec::new() },
+            ),
+            Route::ClientKill => match crate::client_ops::ClientKillFilter::parse(args) {
+                Some((filter, oldform)) => (
+                    (0..self.nshards)
+                        .map(|s| (s, Op::ClientKill(filter.clone())))
+                        .collect(),
+                    Agg::ClientKill { killed: 0, oldform },
+                ),
+                // The command layer validates before routing here; an
+                // embedder routing unvalidated argv still gets a clean
+                // error instead of a wedged slot.
+                None => gather_error("ERR syntax error"),
+            },
             Route::PrefixStats => {
                 let prefix = args.get(1).map(|p| p.to_vec()).unwrap_or_default();
                 let targets = (0..self.nshards)

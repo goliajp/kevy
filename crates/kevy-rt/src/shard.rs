@@ -116,7 +116,12 @@ pub(crate) struct Shard<C: Commands> {
     #[allow(dead_code)] // io_uring path only
     pub(crate) closing_uring_conns: Vec<u64>,
     pub(crate) fd_to_conn: KevyMap<i32, u64>,
+    /// Next conn id to assign. Starts at `shard_id + 1` and strides by
+    /// [`Self::conn_id_step`], so ids are unique across every shard of
+    /// the instance (the CLIENT ID / CLIENT KILL ID contract).
     pub(crate) next_conn_id: u64,
+    /// Conn-id stride == the instance's shard count.
+    pub(crate) conn_id_step: u64,
     pub(crate) events: Vec<Event>,
     pub(crate) read_buf: Vec<u8>,
     /// Bitmap of targets that received a message this iteration but

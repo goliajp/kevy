@@ -192,7 +192,7 @@ impl<C: Commands> Shard<C> {
             self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(err)));
             return;
         }
-        if !is_write && let Some(err) = self.commands.read_denied() {
+        if !is_write && let Some(err) = self.commands.read_denied(args) {
             self.push_pending_slot(conn_id, 1, Agg::First(None), false);
             self.fold(conn_id, seq, Part::Reply(SmallReply::from_vec(err)));
             return;

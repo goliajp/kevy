@@ -13,6 +13,8 @@
 #      offset == master_repl_offset when quiesced
 #   6. min-replicas-to-write: primary with min=1 and no replica
 #      refuses writes (-NOREPLICAS); write opens when replica ACKs
+# Phase 2 adds crash-failover clamps 7-8, phase 3 the consistency
+# ladder (9-12), phase 4 the -LOADING full-resync clamp (13).
 #
 # Usage: bash bench/availgate.sh <kevy-binary>
 set -u
@@ -102,7 +104,10 @@ echo "$V" | grep -q '"v"' || fail "data plane not converged (k200=$V)"
 note "lag 0 + data plane converged"
 
 # ---- clamp 5: primary-side slave0 truth — acked catches up to sent
-# within a bounded window (ACKs ride 1s heartbeats when idle).
+# within a bounded window (ACKs ride 1s heartbeats when idle). The
+# line is instance-wide: one entry per replica process, offsets summed
+# across every shard stream, port = the replica's advertised client
+# port (not a per-conn ephemeral source port).
 S0OK=0
 for _ in $(seq 20); do
     S0=$($CLI -p $PPORT INFO replication | grep "^slave0:" || true)
@@ -112,7 +117,16 @@ for _ in $(seq 20); do
     sleep 0.5
 done
 [ $S0OK = 1 ] || fail "slave0 never converged: $S0"
-note "slave0 acked truth ($S0)"
+echo "$S0" | grep -q "port=$RPORT" || fail "slave0 port is not the advertised client port: $S0"
+$CLI -p $PPORT INFO replication | grep -q "^connected_slaves:1" \
+    || fail "connected_slaves != 1 with one replica process"
+ROLEP=$($CLI -p $PPORT ROLE)
+echo "$ROLEP" | grep -q "master" || fail "primary ROLE not master: $ROLEP"
+echo "$ROLEP" | grep -q "$RPORT" || fail "primary ROLE lacks the replica's advertised port: $ROLEP"
+ROLER=$($CLI -p $RPORT ROLE)
+echo "$ROLER" | grep -q "slave" || fail "replica ROLE not slave: $ROLER"
+echo "$ROLER" | grep -qE "connected" || fail "replica ROLE link state not live: $ROLER"
+note "slave0 acked truth, advertised port + ROLE truth both sides ($S0)"
 
 # ---- clamp 4: link truth on kill + restart
 kill -9 $PPID_ 2>/dev/null; wait $PPID_ 2>/dev/null
@@ -357,4 +371,122 @@ done
 [ $REOPEN = 1 ] || fail "writes never reopened after quorum healed"
 note "quorum lease: writes reopen on heal"
 
-echo "availgate: PASS (phase 1 + 2 + 3)"
+# ============ phase 4: -LOADING during full-resync ship ==============
+# clamp 13: a replica that reconnects outside the primary's backlog
+#           receives a full snapshot ship; reads answered inside that
+#           window return -LOADING while PING stays +PONG and INFO
+#           reports loading:1. Window technique: a tiny primary
+#           backlog (64kb) + an 80MB keyspace makes the ship
+#           unavoidable and wide; the probe SIGSTOPs the primary the
+#           moment it observes the first -LOADING, freezing the
+#           window open for the deterministic asserts, then CONTs and
+#           checks recovery.
+for p in ${PIDS[@]:-}; do kill $p 2>/dev/null; done
+kill $PPID_ $RPID_ 2>/dev/null; wait 2>/dev/null
+rm -rf "$DIR/p" "$DIR/r"; mkdir -p "$DIR/p" "$DIR/r"
+wait_ports_free
+printf '[replication]\nrole = "primary"\nreplication_buffer_size = 65536\n' > "$DIR/pri4.toml"
+env KEVY_BIND=127.0.0.1 "$KBIN" --threads 4 --port $PPORT --dir "$DIR/p" --no-aof \
+    --config "$DIR/pri4.toml" > "$DIR/pri.out" 2>&1 &
+PPID_=$!
+for _ in $(seq 100); do $CLI -p $PPORT PING >/dev/null 2>&1 && break; sleep 0.2; done
+printf '[replication]\nrole = "replica"\nupstream = "127.0.0.1:%s"\n' "1$PPORT" > "$DIR/rep4.toml"
+env KEVY_BIND=127.0.0.1 "$KBIN" --threads 4 --port $RPORT --dir "$DIR/r" --no-aof \
+    --config "$DIR/rep4.toml" > "$DIR/rep.out" 2>&1 &
+RPID_=$!
+for _ in $(seq 100); do $CLI -p $RPORT PING >/dev/null 2>&1 && break; sleep 0.2; done
+sleep 2
+# Cut the replica, roll the primary far past its 64kb backlog, restart.
+kill $RPID_ 2>/dev/null; wait $RPID_ 2>/dev/null
+python3 - "$PPORT" <<'PYEOF'
+import socket, sys
+port = int(sys.argv[1])
+s = socket.create_connection(("127.0.0.1", port)); s.settimeout(30)
+val = b"x" * 1024
+def enc(*parts):
+    buf = b"*%d\r\n" % len(parts)
+    for p in parts:
+        buf += b"$%d\r\n%s\r\n" % (len(p), p)
+    return buf
+batch = b""
+outstanding = 0
+def drain(n):
+    got = 0
+    buf = b""
+    while got < n:
+        buf += s.recv(1 << 20)
+        got = buf.count(b"+OK\r\n")
+for i in range(80_000):
+    batch += enc(b"SET", b"big:%d" % i, val)
+    outstanding += 1
+    if outstanding == 500:
+        s.sendall(batch); drain(outstanding)
+        batch = b""; outstanding = 0
+if outstanding:
+    s.sendall(batch); drain(outstanding)
+print("availgate: seeded 80k x 1KB past the 64kb backlog", flush=True)
+PYEOF
+env KEVY_BIND=127.0.0.1 "$KBIN" --threads 4 --port $RPORT --dir "$DIR/r" --no-aof \
+    --config "$DIR/rep4.toml" > "$DIR/rep.out" 2>&1 &
+RPID_=$!
+python3 - "$RPORT" "$PPID_" <<'PYEOF' || fail "-LOADING clamp"
+import os, signal, socket, sys, time
+rport, ppid = int(sys.argv[1]), int(sys.argv[2])
+def enc(*parts):
+    buf = b"*%d\r\n" % len(parts)
+    for p in parts:
+        buf += b"$%d\r\n%s\r\n" % (len(p), p)
+    return buf
+def one(sock, *parts):
+    sock.sendall(enc(*parts))
+    time.sleep(0.002)
+    return sock.recv(1 << 16)
+deadline = time.time() + 30
+saw_loading = False
+while time.time() < deadline and not saw_loading:
+    try:
+        s = socket.create_connection(("127.0.0.1", rport), timeout=2)
+        s.settimeout(2)
+    except OSError:
+        time.sleep(0.05)
+        continue
+    try:
+        while time.time() < deadline:
+            r = one(s, b"GET", b"big:0")
+            if r.startswith(b"-LOADING"):
+                saw_loading = True
+                break
+            time.sleep(0.001)
+    except OSError:
+        continue
+assert saw_loading, "never observed -LOADING during the snapshot ship"
+# Freeze the window open: primary paused mid-ship, replica keeps the
+# loading flag until SnapshotEnd arrives.
+os.kill(ppid, signal.SIGSTOP)
+try:
+    r = one(s, b"GET", b"big:0")
+    assert r.startswith(b"-LOADING"), f"window not stable: {r!r}"
+    r = one(s, b"PING")
+    assert r == b"+PONG\r\n", f"PING gated during loading: {r!r}"
+    r = one(s, b"INFO", b"persistence")
+    assert b"loading:1" in r, f"INFO loading gauge not raised: {r[:120]!r}"
+finally:
+    os.kill(ppid, signal.SIGCONT)
+print("availgate: ok — -LOADING held, PING exempt, INFO loading:1", flush=True)
+deadline = time.time() + 60
+while time.time() < deadline:
+    try:
+        r = one(s, b"GET", b"big:0")
+    except OSError:
+        s = socket.create_connection(("127.0.0.1", rport), timeout=2)
+        s.settimeout(2)
+        continue
+    if r.startswith(b"$1024"):
+        print("availgate: ok — reads recovered after the ship completed", flush=True)
+        sys.exit(0)
+    time.sleep(0.1)
+raise SystemExit("reads never recovered after SIGCONT")
+PYEOF
+note "-LOADING contract holds across the full-resync window"
+
+echo "availgate: PASS (phase 1 + 2 + 3 + 4)"

@@ -43,8 +43,40 @@ impl<C: Commands> Shard<C> {
                 self.client_getname(conn_id, args);
                 true
             }
+            b"ID" if args.len() == 2 => {
+                // Conn ids stride by shard count from a per-shard
+                // start — unique across the instance, so the value is
+                // a valid CLIENT KILL ID target.
+                self.immediate_reply(conn_id, format!(":{conn_id}\r\n").into_bytes());
+                true
+            }
+            b"INFO" if args.len() == 2 => {
+                self.client_info(conn_id);
+                true
+            }
             _ => false,
         }
+    }
+
+    /// `CLIENT INFO` arm — this connection's own row, rendered by the
+    /// same renderer CLIENT LIST uses (bulk under RESP2, verbatim
+    /// `txt` under RESP3). Split out per the 50-LOC fn rule.
+    #[inline(always)]
+    fn client_info(&mut self, conn_id: u64) {
+        let Some(conn) = self.conns.get(&conn_id) else { return };
+        let mut row = Vec::with_capacity(224);
+        crate::client_ops::client_row(conn_id, conn, &mut row);
+        // The row renderer terminates lines for LIST concatenation;
+        // INFO is a single row without the trailing newline.
+        if row.last() == Some(&b'\n') {
+            row.pop();
+        }
+        let mut out = Vec::with_capacity(row.len() + 24);
+        match conn.proto {
+            kevy_resp::RespVersion::V2 => kevy_resp::encode_bulk(&mut out, &row),
+            kevy_resp::RespVersion::V3 => kevy_resp::encode_verbatim(&mut out, *b"txt", &row),
+        }
+        self.immediate_reply(conn_id, out);
     }
 
     /// `CLIENT SETNAME <name>` arm — extracted verbatim from

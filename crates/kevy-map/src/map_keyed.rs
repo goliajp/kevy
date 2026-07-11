@@ -5,8 +5,8 @@
 //! stays in `map.rs`; everything that needs `K: KevyHash + Eq` or
 //! `K: Borrow<Q>, Q: KevyHash + Eq` lives here.
 
-use std::borrow::Borrow;
-use std::ptr;
+use core::borrow::Borrow;
+use core::ptr;
 
 use kevy_hash::KevyHash;
 
@@ -91,7 +91,7 @@ impl<K: KevyHash + Eq, V> KevyMap<K, V> {
         // All occupied entries are now in new_table; the old self has no live slots.
         self.occupied = 0;
         self.deleted = 0;
-        std::mem::swap(self, &mut new_table);
+        core::mem::swap(self, &mut new_table);
         // new_table (now the old self) drops; metadata is all DELETED (or EMPTY
         // for previously-empty slots) ⇒ Drop walks but touches no slots.
     }

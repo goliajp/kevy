@@ -196,6 +196,8 @@ impl<C: Commands> Shard<C> {
                 let (keys, expires) = self.store.prefix_stats(&prefix);
                 Part::PrefixStats { keys, expires }
             }
+            Op::ClientList => self.exec_client_list(),
+            Op::ClientKill(filter) => self.exec_client_kill(&filter),
             Op::CollectKeys(pat, limit) => {
                 Part::Keys(self.store.collect_keys(pat.as_deref(), limit))
             }

@@ -158,6 +158,12 @@ pub(crate) enum Op {
     /// `PREFIX.STATS <prefix>` — per-shard prefix walk, summed at
     /// the origin.
     PrefixStats(Vec<u8>),
+    /// `CLIENT LIST` — render this shard's conn-table rows; reply is
+    /// an opaque text chunk ([`Part::ExtensionChunk`]).
+    ClientList,
+    /// `CLIENT KILL` — close this shard's conns matching the selector;
+    /// reply is the matched count ([`Part::Int`]).
+    ClientKill(crate::client_ops::ClientKillFilter),
     /// Collect this shard's keys (optional glob + limit) — KEYS/SCAN/RANDOMKEY.
     CollectKeys(Option<Vec<u8>>, Option<usize>),
     /// `WATCH key [key ...]` — register each key in this shard's

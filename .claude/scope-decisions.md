@@ -174,3 +174,15 @@ this single-machine layer, not in place of it. See
   都 shard-owned)维持原表述。重开条件:workload 真变(真 spread +
   高读写比 + owner 饱和),且判据改整机 A/B。原型证据 =
   crates/kevy-bench/examples/seqlock_probe/(入树)。
+
+## v4 T3 追加(2026-07-11)
+
+- **SQPOLL 默认接入 = REFUSED(实测判决)**:K-307 spike,lx64
+  A/B(c50/c100 × GET/SET,median-of-5,同 pin 布局)全四格大负:
+  GET c50 -86% / SET c50 -83% / GET c100 -64% / SET c100 -64%
+  (base ~2.1-2.2M rps → sqpoll 0.3-0.8M)。机理:每 shard 一个
+  iou-sqp 内核轮询线程继承 cpumask,与 shard busy-poll 抢同一核集,
+  有效 CPU 减半。判决线是 +3%,差距不可辩。`KEVY_SQPOLL=1` env
+  开关保留(默认 OFF,measurement-only),重开条件 = 布局假设变化
+  (空闲核部署 / new_sqpoll CPU pin / 内核演进)。证据 =
+  bench/PERF-FINDING-2026-07-11-sqpoll-refused.md。

@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn size_is_24_bytes() {
-        assert_eq!(std::mem::size_of::<SmallHashData>(), 24);
+        assert_eq!(core::mem::size_of::<SmallHashData>(), 24);
     }
 
     #[test]

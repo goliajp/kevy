@@ -1,5 +1,7 @@
 //! Small pure helpers shared across the store modules.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 pub(crate) fn norm_index(idx: i64, len: usize) -> Option<usize> {
     let len = len as i64;
     let i = if idx < 0 { idx + len } else { idx };
@@ -28,7 +30,7 @@ pub(crate) fn range_bounds(start: i64, stop: i64, len: usize) -> Option<(usize, 
 
 /// Strict base-10 `i64` parse over raw bytes (allows a leading `+`/`-`).
 pub(crate) fn parse_i64(b: &[u8]) -> Option<i64> {
-    std::str::from_utf8(b).ok()?.parse::<i64>().ok()
+    core::str::from_utf8(b).ok()?.parse::<i64>().ok()
 }
 
 /// L2: try to parse `b` as a CANONICAL `i64` ASCII representation — the same
@@ -50,7 +52,7 @@ pub(crate) fn parse_canonical_i64(b: &[u8]) -> Option<i64> {
     if !first.is_ascii_digit() && first != b'-' {
         return None;
     }
-    let n = std::str::from_utf8(b).ok()?.parse::<i64>().ok()?;
+    let n = core::str::from_utf8(b).ok()?.parse::<i64>().ok()?;
     let mut buf = itoa_i64_stack();
     let s = format_i64_into(n, &mut buf);
     if s == b { Some(n) } else { None }
@@ -118,7 +120,7 @@ pub(crate) fn bulk_header_into(out: &mut Vec<u8>, len: usize) {
 
 /// Parse a finite f64 from raw bytes (rejects NaN/inf for value storage).
 pub(crate) fn parse_f64(b: &[u8]) -> Option<f64> {
-    let f: f64 = std::str::from_utf8(b).ok()?.trim().parse().ok()?;
+    let f: f64 = core::str::from_utf8(b).ok()?.trim().parse().ok()?;
     f.is_finite().then_some(f)
 }
 
@@ -215,8 +217,15 @@ fn match_class(p: &[u8], ch: u8) -> (bool, &[u8]) {
 pub(crate) fn fmt_num(v: f64) -> Vec<u8> {
     // Bit-exact compare is the contract: "the f64 carries no fractional bits".
     // An epsilon would mis-classify 1.0 + 1e-18 as integer-valued.
+    #[cfg(feature = "std")]
     #[allow(clippy::float_cmp)]
     let is_integer_valued = v == v.trunc();
+    // core has no float trunc; the i64 round-trip is exact for every |v|
+    // < 1e17 the integer arm accepts, and values beyond that range (where
+    // the round-trip saturates) route to the same `format!` arm anyway.
+    #[cfg(not(feature = "std"))]
+    #[allow(clippy::float_cmp)]
+    let is_integer_valued = v == ((v as i64) as f64);
     if is_integer_valued && v.abs() < 1e17 {
         (v as i64).to_string().into_bytes()
     } else {
