@@ -2,7 +2,9 @@
 //! per-shard locks (for cross-thread access), optional AOF auto-logging, an
 //! optional background TTL reaper, and an in-process pub/sub bus.
 
-use crate::{KevyError, KevyResult};
+use crate::KevyResult;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::KevyError;
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use kevy_persist::Argv;
