@@ -1,0 +1,74 @@
+# commentgate-terms.txt — the internal-vocabulary table.
+#
+# Consumed by bench/commentgate.sh (the gate) and by the T2 comment
+# sweep (the cleanup crew reads the same table, so the gate and the
+# sweep can never disagree about what counts as "internal").
+#
+# Format — one directive per line, `#` starts a comment:
+#   deny:<python-regex>    flagged wherever it matches comment text
+#   allow:<python-regex>   blanked out of the comment text BEFORE the
+#                          deny patterns run (surgical false-positive
+#                          suppression; keep each one justified below)
+#
+# Scope: the gate extracts comment text only (`//`, `///`, `//!`,
+# including trailing comments after code) from non-test src files.
+# String literals are stripped first, so semver in a runtime string
+# (`"kevy v3.18.0"` in an INFO reply) is never scanned.
+
+# ── G1: version markers ─────────────────────────────────────────────
+# `v1.25` / `v3.16.2` — release archaeology. What version introduced a
+# line belongs to git log / CHANGELOG, not to the code. A comment that
+# needs a version number to make sense is describing history, not the
+# code in front of the reader.
+deny:\bv[0-9]+\.[0-9]+(\.[0-9]+)?\b
+
+# ── G2: internal codenames ──────────────────────────────────────────
+# Sibling-project names, box names, private-plan shorthand. Readers of
+# the published crates have no way to resolve these.
+#   `luna-core` stays allowed: it is the actual crates.io dependency
+#   name of the Lua interpreter (kevy-lua/Cargo.toml), so API-level
+#   comments may name it. Bare `luna` (the project codename) is denied
+#   — the blanking of `luna-core` happens first, so only bare uses hit.
+allow:\bluna-core\b
+deny:\bmailrs\b
+deny:\bluna\b
+deny:\blx64\b
+deny:perfgate 悬案
+
+# ── G3: batch / work-item codes ─────────────────────────────────────
+# T1 / W5 / K4 / K-103 / T1.5.6-style plan coordinates. Meaningless
+# outside the private plans directory. The letter set is limited to
+# T/W/K (the code shapes actually used by the plans) to keep the
+# false-positive surface small — hex literals, register names, and
+# type parameters use other letters or appear in code, not comments.
+#   Calibrated allowance:
+#   - `T0` — two legitimate technical notations collide with the shape:
+#     kevy-hash/src/crc16.rs documents the slice-by-8 recurrence
+#     `T_{n+1}[x] = … ^ T0[…]` where `T0` is the actual table
+#     identifier in the code, and kevy-persist/src/aof.rs uses `T0` as
+#     time-zero notation ("a snapshot taken at T0"). No plan batch is
+#     numbered T0, so a global allowance is safe.
+allow:\bT0\b
+deny:\b[TWK]-?[0-9]+[a-z]?\b
+
+# ── G4: RFC / plan / date references ────────────────────────────────
+# Internal design docs (.claude/plans/*.md) are not visible to crate
+# readers; a comment citing them is a dangling pointer. Real IETF RFCs
+# ("RFC 3174") stay legal: the deny shapes below only match the
+# internal citation styles (dated RFC ids, letter-designator sections
+# like "RFC D4" / "RFC Q4", the "RFC LOCKED" stamp, plan paths, and
+# bare ISO dates — a date in a comment is a diary entry, not a
+# description of the code).
+deny:\bRFC 20[0-9]{2}-
+deny:\bRFC [A-Z]{1,2}[0-9]+\b
+deny:\bRFC LOCKED\b
+deny:plans/20
+deny:\b20[0-9]{2}-[0-9]{2}-[0-9]{2}\b
+
+# ── G5: development narrative (Chinese markers) ─────────────────────
+# Comments are English by project convention; any Chinese narrative
+# marker ("feedback", "previous version", "lesson") is imported session
+# prose, never a semantic description.
+deny:反馈
+deny:上一版
+deny:教训
