@@ -126,14 +126,14 @@ impl ZSetData {
 #[derive(Clone)]
 pub enum Value {
     Str(SmallBytes),
-    /// L2 (2026-06-21, lessons from valkey OBJ_ENCODING_INT): when a SET
+    /// Following valkey's OBJ_ENCODING_INT: when a SET
     /// stores a clean canonical i64 ASCII string (parses round-trip), we
     /// keep the integer **as i64** rather than as 22 B of inline bytes.
     /// Wins on INCR (in-place `+= delta`, no parse / no format / no
     /// SmallBytes wrap) and on memory (8 B vs 24 B). GET formats it via
     /// a per-`Store` scratch buffer.
     Int(i64),
-    /// L1 (2026-06-21) / v1.29 Option A (2026-06-29): values larger
+    /// Values larger
     /// than [`BULK_THRESHOLD`] bytes get stored behind an
     /// `Arc<Box<[u8]>>` instead of a heap-backed `SmallBytes`. The Arc
     /// lets the io_uring reactor's reply path borrow the bytes across
@@ -153,10 +153,9 @@ pub enum Value {
     /// (the boxed slice's allocation stays put — only the 32-byte
     /// `ArcInner` is freshly malloced). Per-GET cost: one extra
     /// pointer dereference (`&**arc` to get `&[u8]`), measured to be
-    /// negligible vs the per-SET memcpy savings. See
-    /// `bench/PERF-FINDING-2026-06-29-arc-from-box-memcpys.md` for
-    /// the empirical perf-record evidence of the original
-    /// `Arc<[u8]>` mandatory copy.
+    /// negligible vs the per-SET memcpy savings. The `Arc<[u8]>`
+    /// mandatory copy was confirmed with perf-record before switching
+    /// to `Arc<Box<[u8]>>`.
     ///
     /// Small values stay on `Str(SmallBytes)` because the inline
     /// cache-line storage beats an Arc indirection for the common case.
@@ -166,7 +165,7 @@ pub enum Value {
     Set(Arc<SetData>),
     ZSet(Arc<ZSetData>),
     Stream(Arc<crate::stream::StreamData>),
-    /// v1.25 A.7 O5 (valkey-orthodox encoding switch): tiny sets (1-N
+    /// Valkey-orthodox encoding switch: tiny sets (1-N
     /// short members) live inline in 24 bytes instead of behind
     /// `Arc<SetData>` — matches valkey's `OBJ_ENCODING_LISTPACK` for
     /// sets, which is what `redis-benchmark -t sadd` default `-r 0`
@@ -175,15 +174,15 @@ pub enum Value {
     /// returns `NoRoom`) the set is promoted to `Value::Set(Arc<SetData>)`
     /// — the Swiss-table path that wins for larger cardinalities.
     SmallSetInline(crate::small_set::SmallSetData),
-    /// v1.25 A.8 (extension of A.7 to hashes): tiny hashes
+    /// Tiny hashes
     /// (1-2 short field-value pairs) live inline in 24 bytes; promoted
     /// to `Value::Hash(Arc<HashData>)` on overflow. Mirrors valkey's
     /// `OBJ_ENCODING_LISTPACK` for hashes.
     SmallHashInline(crate::small_hash::SmallHashData),
-    /// v1.25 A.8: tiny lists inline encoding; promoted to
+    /// Tiny lists inline encoding; promoted to
     /// `Value::List(Arc<ListData>)` on overflow.
     SmallListInline(crate::small_list::SmallListData),
-    /// v1.25 A.8: tiny sorted sets inline encoding; promoted to
+    /// Tiny sorted sets inline encoding; promoted to
     /// `Value::ZSet(Arc<ZSetData>)` on overflow.
     SmallZSetInline(crate::small_zset::SmallZSetData),
 }
@@ -202,49 +201,47 @@ const _: () = {
 
 /// Heap-size threshold above which an overwritten `Value` is sent to the
 /// runtime's bio thread for off-reactor drop instead of being freed inline
-/// (v1.25 A.3 lazy-drop).
+/// (lazy-drop).
 ///
-/// **Calibrated 2026-06-22 from the bench-with-256-B-floor R3 ★ finding**:
-/// dropping the threshold to 256 B regressed Axis I c=50 -d 10240 SET
+/// **Why not lower**: a 256 B threshold regressed c=50 -d 10240 SET
 /// p999 from 0.487 → 1.583 ms (worse by 3.25×). The cause: `std::sync::mpsc::Sender::send`
 /// is a few hundred ns of atomic + Box clone, which EXCEEDS the inline
-/// `Box::<[u8]>::drop` cost when jemalloc serves the free from a hot
-/// large-class slab (~ 1-3 µs for 10 KB; the bench's steady state).
+/// `Box::<[u8]>::drop` cost when the allocator serves the free from a
+/// hot large-class slab (~ 1-3 µs for 10 KB; the bench's steady state).
 /// Off-loading only wins when the inline drop's tail risk (cold-slab
 /// `munmap`/`madvise` consolidation stall, observed at 50-150 µs and
 /// occasionally millisecond-range) exceeds the per-send channel cost
 /// PLUS the cross-thread cache-line bouncing.
 ///
-/// v1.25 A.2 (batch-send follow-up to A.3): with per-shard batch
-/// accumulation flushing at the end of every reactor iteration, the
-/// per-mpsc-send cost is amortised across N drops. That makes the
-/// channel hop profitable at smaller sizes than A.3's lone-send model
-/// could justify (A.3 had to lift to 16 KB because per-`mpsc::send`
-/// cost was a few hundred ns — at 256 B the inline drop was cheaper).
+/// With per-shard batch accumulation flushing at the end of every
+/// reactor iteration, the per-mpsc-send cost is amortised across N
+/// drops. That makes the channel hop profitable at smaller sizes than
+/// a lone-send model could justify (lone-send had to lift the
+/// threshold to 16 KB because per-`mpsc::send` cost was a few hundred
+/// ns — at 256 B the inline drop was cheaper).
 ///
-/// **R3 ★ — sweet-spot threshold surprise**: the agent brief and A.3
-/// commit body both gestured at dropping the threshold to 256 B – 1 KB
-/// once batching amortises the send. Sweep on lx64 across
-/// {512, 1024, 4096, 16384} × c=50 SET -d {1K, 4K, 10K, 64K}
+/// **Sweet-spot surprise**: intuition suggested dropping the threshold
+/// to 256 B – 1 KB once batching amortises the send. A sweep across
+/// thresholds {512, 1024, 4096, 16384} × c=50 SET -d {1K, 4K, 10K, 64K}
 /// disproved that floor: at ≤ 1 KB threshold, p999 / max on small
 /// values (-d 1024, -d 4096) was variance-bounded equal or
-/// occasionally WORSE than the A.3 16 KB threshold, while the larger
+/// occasionally WORSE than a 16 KB threshold, while the larger
 /// sizes (10 KB / 64 KB) won either way. Cause: the Vec::push +
 /// occasional `MAX_PENDING_DROPS` force-flush stall costs more for
-/// small Arcs (jemalloc small-class free is sub-µs even at tail)
+/// small Arcs (allocator small-class free is sub-µs even at tail)
 /// than the inline drop it avoids.
 ///
 /// Picked **4 KB** as the lowest threshold where the bio-off-reactor
 /// win consistently dominates the batch-buffer overhead on tail
-/// metrics. The biggest A.2 wins (vs A.3 16 KB) land on `-d 64K`
-/// SET p50 (-44 %) and `-d 10K` SET max (-35 %), where each iter's
-/// batch already contains several heavy values per shard.
+/// metrics. The biggest batching wins (vs lone-send at 16 KB) land on
+/// `-d 64K` SET p50 (-44 %) and `-d 10K` SET max (-35 %), where each
+/// iter's batch already contains several heavy values per shard.
 pub const HEAP_HEAVY_BYTES: usize = 4 * 1024;
 
 /// Sender half of the runtime's bio-drop channel. Wired from
 /// `kevy-rt`'s `bio.rs` via [`crate::Store::set_bio_drop_sender`]; the
 /// concrete payload is `Vec<Value>` — a **batch** of values
-/// produced by one shard since its last flush (A.2 batch-send model).
+/// produced by one shard since its last flush.
 /// The bio thread (`kevy-rt::bio::spawn`) iterates the batch and
 /// drops each item. One mpsc message per shard-flush amortises the
 /// channel cost (atomic + cross-thread cacheline traffic) across
@@ -321,7 +318,7 @@ impl Value {
             | Value::SmallHashInline(_)
             | Value::SmallListInline(_)
             | Value::SmallZSetInline(_) => false,
-            // The Axis I culprit. v1.25 A.3 lazy-drop's primary case.
+            // Lazy-drop's primary case: the large-value SET tail culprit.
             Value::ArcBulk(a) => a.len() >= HEAP_HEAVY_BYTES,
             // Collection drops walk every element + the bucket array;
             // worst-case microseconds on a multi-KB hash/zset. Send to

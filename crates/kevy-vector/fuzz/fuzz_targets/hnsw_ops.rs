@@ -23,7 +23,7 @@
 //!    (select_diverse / shrink dropped a bridge) — a genuine finding,
 //!    not noise, because the beam covers the whole component.
 //!
-//! FIXED FINDING (2026-07-10, fuzz-found within ~3 min): duplicate-
+//! FIXED FINDING (fuzz-found within minutes): duplicate-
 //! heavy corpora used to disconnect the graph — recall@10 came back
 //! 0.8 with the exhaustive beam. Mechanism: for a candidate `c`
 //! identical to an already kept neighbor `s`, `select_diverse`'s old

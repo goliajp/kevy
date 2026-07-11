@@ -5,8 +5,8 @@
 //!
 //! BOTH serializers must cover EVERY schema section — a section missing
 //! here silently drops the user's settings on the next `CONFIG REWRITE`
-//! (fuzz finding 2026-07-10: [cluster]/[replication]/[lua]/[metrics]/
-//! [audit]/[feed] were missing, plus `server.max_clients`). The
+//! (a fuzz run once found [cluster]/[replication]/[lua]/[metrics]/
+//! [audit]/[feed] missing, plus `server.max_clients`). The
 //! whole-config round-trip tests below lock the coverage.
 
 use crate::cluster::{PeerEntry, ScopeEntry};
@@ -21,9 +21,9 @@ const SERVICE_SECTIONS: [&str; 6] =
 impl Config {
     /// Render the current config as a standard-template TOML file —
     /// every field, in stable section/key order, with no comments. Used
-    /// by `CONFIG REWRITE`; the loss of any inline comments the user
-    /// had in their hand-edited file is the documented v1.0 trade-off
-    /// (v1.x will preserve them).
+    /// by `CONFIG REWRITE` when the comment-preserving splice in
+    /// [`crate::preserve`] has no original file to work from; only
+    /// then are the user's inline comments lost.
     ///
     /// Round-trips: feeding the output back through [`Self::from_toml_str`]
     /// reconstructs an equivalent `Config` (modulo `source_path`).

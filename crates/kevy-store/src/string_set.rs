@@ -1,8 +1,8 @@
 //! `Store` SET-family write path: encoding pick (`Int` / `ArcBulk` /
-//! inline `Str`), NX/XX guards, the F1 single-probe `maxmemory == 0`
-//! fast path, and the v1.25 A.3 bio-drop hand-off of displaced values.
+//! inline `Str`), NX/XX guards, the single-probe `maxmemory == 0`
+//! fast path, and the bio-drop hand-off of displaced values.
 //! Split out of `string.rs` (GET family + INCR) to keep both under the
-//! 500-LOC house cap; verbatim from before the move.
+//! 500-LOC house cap.
 
 use crate::value::{BULK_THRESHOLD, SmallBytes, Value};
 use crate::{Entry, Store, deadline_at, now_ns};
@@ -34,7 +34,7 @@ pub(crate) fn pick_value_for_set_owned(bytes: Vec<u8>) -> Value {
         return Value::Int(n);
     }
     if bytes.len() > BULK_THRESHOLD {
-        // v1.29 Option A — `Arc::new(box)` is zero-copy when `len ==
+        // `Arc::new(box)` is zero-copy when `len ==
         // capacity` (shrink-to-fit no-ops). See `Value::ArcBulk` doc.
         return Value::ArcBulk(Arc::new(bytes.into_boxed_slice()));
     }
@@ -83,9 +83,9 @@ impl Store {
         nx: bool,
         xx: bool,
     ) -> bool {
-        // F1 (v1.25): single-probe overwrite-SET fast path for default
+        // Single-probe overwrite-SET fast path for default
         // `maxmemory == 0` (the bench and production-common case). Goes
-        // through `kevy_map::RawEntryMut` (B.1, commit 1a9f9af) so the
+        // through `kevy_map::RawEntryMut` so the
         // Occupied arm mutates the entry in place and returns owned
         // (delta, ttl_delta) — no escaping reference, no second probe.
         // Overwrite path drops from 2 probes (live_entry_mut: get+get_mut)
@@ -150,7 +150,7 @@ impl Store {
     }
 
     /// Single-probe overwrite-SET via `kevy_map::RawEntryMut` for the
-    /// `maxmemory == 0` fast path (F1, v1.25). Skips the `live_entry_mut`
+    /// `maxmemory == 0` fast path. Skips the `live_entry_mut`
     /// 2-probe shape: Occupied arm mutates in place + returns owned
     /// (delta, ttl_delta); Expired arm removes via raw-entry handle + falls
     /// through to insert; Vacant arm goes to insert.
@@ -237,9 +237,10 @@ impl Store {
                     if nx {
                         return SetOutcome::Refused { drop_first: None };
                     }
-                    // v1.25 A.3: take the old Value before overwriting
+                    // Take the old Value before overwriting
                     // so phase 2 can hand it to the bio thread instead
-                    // of dropping inline (the Axis I tail amplifier).
+                    // of dropping inline (a large-value latency-tail
+                    // amplifier).
                     let (delta, ttl_delta, old) = overwrite_in_place(
                         occ.get_mut(),
                         value_slot.take().unwrap(),
@@ -288,10 +289,10 @@ enum SetOutcome {
 /// `(weight_delta, ttl_delta, displaced_old_value)`. Shared by the
 /// eviction-path SET ([`Store::set_value`]) and the `maxmemory == 0`
 /// single-probe SET ([`Store::set_probe_no_evict`]) — the displaced
-/// `Value` is returned (v1.25 A.3) so the caller can hand it to the
+/// `Value` is returned so the caller can hand it to the
 /// bio thread AFTER the keyspace borrow is released rather than
 /// dropping inline (the Drop of a `Value::ArcBulk` over the heap-heavy
-/// threshold is the Axis I tail amplifier).
+/// threshold amplifies the large-value SET latency tail).
 #[inline]
 fn overwrite_in_place(
     e: &mut Entry,

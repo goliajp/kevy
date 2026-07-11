@@ -47,7 +47,7 @@ fn snapshot_round_trip() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// INC-2026-06-09 regression: a snapshot stores the **absolute** deadline, so
+/// TTL re-anchoring regression: a snapshot stores the **absolute** deadline, so
 /// time elapsed between save and load is subtracted from the restored TTL.
 /// The pre-fix v2 format stored remaining-ms and re-anchored on load, so the
 /// TTL would read back ~unchanged regardless of the gap.
@@ -207,7 +207,7 @@ fn all_types_snapshot_round_trip() {
     let _ = std::fs::remove_file(&path);
 }
 
-// ───────────── stream consumer groups (snapshot v4, 2026-06-11) ─────────────
+// ───────────── stream consumer groups (snapshot v4) ─────────────
 
 use kevy_store::{GroupCreateMode, ReadGroupId, StreamId, XAddIdSpec};
 

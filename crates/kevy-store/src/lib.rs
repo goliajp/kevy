@@ -33,7 +33,7 @@
 //! s.set(b"greeting", b"hello".to_vec(), None, false, false);
 //! assert_eq!(s.get(b"greeting").unwrap(), Some(Cow::Borrowed(&b"hello"[..])));
 //!
-//! s.hset(b"user:1", &[(b"name".to_vec(), b"alice".to_vec())]).unwrap();
+//! s.hset(b"user:1", &[(b"name".as_slice(), b"alice".as_slice())]).unwrap();
 //! assert_eq!(s.hget(b"user:1", b"name").unwrap(), Some(&b"alice"[..]));
 //!
 //! // A string command on a hash key is a type error, as in Redis.
@@ -122,7 +122,7 @@ pub use clock::set_wall_clock_ms;
 #[derive(Default)]
 pub struct Store {
     pub(crate) map: KevyMap<SmallBytes, Entry>,
-    /// v2.4 per-field hash TTLs: key → (field → absolute unix-ms
+    /// Per-field hash TTLs: key → (field → absolute unix-ms
     /// deadline). Holds ONLY keys with live field TTLs — one
     /// `is_empty()` branch per hash access when the feature is unused.
     pub(crate) hfttl: std::collections::HashMap<SmallBytes, KevyMap<SmallBytes, u64>>,
@@ -182,7 +182,7 @@ pub struct Store {
     /// the entry is `Vec<u8>` + `u64` (~ 30 B + key length) and only
     /// touched on writes / WATCH calls.
     pub(crate) watch_versions: std::collections::HashMap<Vec<u8>, u64>,
-    /// Optional handle to the runtime's bio thread (v1.25 A.3). Set by
+    /// Optional handle to the runtime's bio thread. Set by
     /// `kevy-rt::Runtime::run` via [`Self::set_bio_drop_sender`] before
     /// the shard reactor loop starts. `None` = inline drop (bare-Store
     /// embedders, snapshots-loader programs, the test harness — anything
@@ -190,7 +190,7 @@ pub struct Store {
     /// one `Option::as_ref` branch; the steady-state inline-drop path
     /// pays nothing beyond that branch.
     pub(crate) bio_drop_sender: Option<value::BioDropSender>,
-    /// v1.25 A.2 batch-send buffer. Heavy `Value`s displaced by SET
+    /// Batch-send buffer. Heavy `Value`s displaced by SET
     /// overwrites accumulate here instead of paying one mpsc send per
     /// drop; flushed in one `mpsc::Sender::send` at the end of every
     /// reactor iteration (via [`Self::flush_pending_drops`], invoked

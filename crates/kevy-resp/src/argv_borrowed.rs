@@ -19,12 +19,12 @@ use crate::inline_ranges::InlineRanges;
 /// path. Calls that need to outlive the buffer (cross-shard, MULTI queue, AOF)
 /// use [`into_owned`](Self::into_owned) to convert to `Argv`.
 ///
-/// A5 (2026-06-20): the range table is a `(u32, u32) × 4` inline + heap-spill
+/// The range table is a `(u32, u32) × 4` inline + heap-spill
 /// `InlineRanges`. Commands with ≤4 args (PING/GET/SET/INCR/MGET ≤4 keys —
-/// the vast majority of the -c1 hot mix) pay zero `malloc`/`free` for the
-/// ranges. H1 (`perf c2c`) confirmed libc cfree on the per-request `Vec`
-/// allocation showed up in cross-thread contention; the inline tier removes
-/// that source.
+/// the vast majority of the single-connection hot mix) pay zero
+/// `malloc`/`free` for the ranges. `perf c2c` profiling confirmed libc
+/// cfree on the per-request `Vec` allocation showed up in cross-thread
+/// contention; the inline tier removes that source.
 #[derive(Clone, Debug)]
 pub struct ArgvBorrowed<'a> {
     input: &'a [u8],

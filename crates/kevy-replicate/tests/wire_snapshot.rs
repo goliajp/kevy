@@ -1,4 +1,4 @@
-//! Snapshot wire-format tests (T1.22). Lives as an integration test
+//! Snapshot wire-format tests. Lives as an integration test
 //! so the snapshot encoder/decoder coverage doesn't push
 //! `src/wire.rs` past the 500-LOC project ceiling. Only exercises
 //! the public `wire` API.
@@ -155,7 +155,7 @@ fn encoding_oversize_chunk_panics_in_debug() {
     let _ = encode_snapshot_chunk(&data);
 }
 
-// ── v3.16 D2: gen-carrying heartbeat ────────────────────────────────
+// ── gen-carrying heartbeat ──────────────────────────────────────────
 
 #[test]
 fn ping_marker_round_trips_generation_and_offset() {
@@ -174,7 +174,7 @@ fn ping_marker_round_trips_generation_and_offset() {
 
 #[test]
 fn ping_marker_legacy_one_number_form_decodes_with_generation_zero() {
-    // Pre-v3.16 primaries speak `+PING <next_offset>\r\n`; generation 0
+    // Legacy primaries speak `+PING <next_offset>\r\n`; generation 0
     // = "unknown" (real feed generations start at 1).
     let (marker, used) = decode_snapshot_marker(b"+PING 42\r\n").unwrap().unwrap();
     assert_eq!(marker, SnapshotMarker::Ping { generation: 0, next_offset: 42 });

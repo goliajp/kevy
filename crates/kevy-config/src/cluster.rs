@@ -131,18 +131,18 @@ impl ScopeEntry {
 }
 
 /// One peer in the `kevy-elect` quorum, parsed from the TOML
-/// shape `peers = "id@host:port,id@host:port,..."` (per
-/// T1.5.4.5 decision (b) — a parser-extension-free representation
-/// that works with kevy-config's flat KV-only TOML).
+/// shape `peers = "id@host:port,id@host:port,..."` — a
+/// parser-extension-free representation
+/// that works with kevy-config's flat KV-only TOML.
 ///
-/// **v1.55** extends the syntax with an optional second port for
+/// The extended syntax adds an optional second port for the
 /// **client-facing** address (used by `-MISDIRECTED writer is`
 /// replies): `id@host:elect_port:client_port`. When the extended
 /// form is used, kevy-elect still binds the elect_port, while
 /// kevy-scope's MISDIRECTED encoder reports `host:client_port` to
 /// the client so the client can actually reconnect to the writer.
 /// Without the extended form, MISDIRECTED reports `host:elect_port`
-/// (the v1.45 documented behaviour, retained for compat).
+/// (documented legacy behaviour, retained for compat).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PeerEntry {
     /// Peer's stable node id.
@@ -152,7 +152,7 @@ pub struct PeerEntry {
     /// Peer's election-control port (= peer's
     /// `cluster.elect_port_base + 0`, the shard 0 listener).
     pub port: u16,
-    /// **v1.55** — Peer's client-facing TCP port (the port other
+    /// Peer's client-facing TCP port (the port other
     /// kevy nodes / `redis-cli` connect to for normal operations).
     /// `None` = unset (legacy syntax `id@host:port`); MISDIRECTED
     /// replies fall back to `port` in that case. Set via extended
@@ -171,8 +171,8 @@ impl PeerEntry {
     }
 
     /// Parse one peer token. Accepts two shapes:
-    /// - **Legacy**: `id@host:port` (v1.x — `port` = elect port).
-    /// - **v1.55+**: `id@host:elect_port:client_port` (sets
+    /// - **Legacy**: `id@host:port` (`port` = elect port).
+    /// - **Extended**: `id@host:elect_port:client_port` (sets
     ///   `client_port` so MISDIRECTED reports a port the client
     ///   can actually connect to).
     ///
@@ -251,10 +251,10 @@ mod peer_entry_tests {
     }
 
     #[test]
-    fn parse_one_v1_55_extended_form_sets_client_port() {
-        // v1.55: `id@host:elect_port:client_port` syntax — addresses
-        // v1.45.x finding (MISDIRECTED reply uses elect_port instead
-        // of main client port).
+    fn parse_one_extended_form_sets_client_port() {
+        // `id@host:elect_port:client_port` syntax — added after
+        // finding MISDIRECTED replies used the elect_port instead
+        // of the main client port.
         let p = PeerEntry::parse_one("node-1@10.0.0.1:6011:6004").unwrap();
         assert_eq!(p.node_id, "node-1");
         assert_eq!(p.host, "10.0.0.1");

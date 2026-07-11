@@ -1,8 +1,8 @@
 //! Read-modify-write string ops split out of `string.rs` (500-LOC
 //! rule): `APPEND` / `GETSET` / `GETDEL` / `INCRBYFLOAT`. All four are
 //! encoding-aware across `Value::Str` / `Value::Int` / `Value::ArcBulk`
-//! (fixed 2026-07-03 — they carried pre-L2 `Str`-only arms and replied
-//! WRONGTYPE where Redis succeeds; guard: `tests_string_encoding.rs`).
+//! — earlier `Str`-only arms replied WRONGTYPE where Redis succeeds;
+//! guard: `tests_string_encoding.rs`.
 
 use crate::string_set::pick_value_for_set_owned;
 use crate::util::{fmt_num, format_i64_into, itoa_i64_stack, parse_f64};

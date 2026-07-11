@@ -19,7 +19,7 @@ use crate::{SmallBytes, Store, now_ns, remaining_ms};
 /// A frozen, `Send` view of one store's live entries at a single instant.
 pub struct SnapshotView {
     entries: Vec<(SmallBytes, Value, Option<u64>)>,
-    /// v2.4: hash field TTLs frozen with the view.
+    /// Hash field TTLs frozen with the view.
     hfttl: Vec<(SmallBytes, SmallBytes, u64)>,
 }
 
@@ -38,7 +38,7 @@ impl SnapshotView {
         }
     }
 
-    /// v2.4: visit the frozen hash field TTLs.
+    /// Visit the frozen hash field TTLs.
     pub fn each_hash_ttl<F: FnMut(&[u8], &[u8], u64)>(&self, mut f: F) {
         for (k, field, d) in &self.hfttl {
             f(k.as_slice(), field.as_slice(), *d);

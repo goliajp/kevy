@@ -231,8 +231,8 @@ fn forward_hop_only(n: u64) -> f64 {
 fn forward_chain(n: u64, batch_size: usize) -> f64 {
     let ks = build_perf_keyspace(1);
     let names: Vec<Vec<u8>> = (0..NKEYS).map(key_name).collect();
-    let (mut req_tx, mut req_rx) = kevy_ring::ring::<Box<Vec<FwdReq>>>(256);
-    let (mut resp_tx, mut resp_rx) = kevy_ring::ring::<Box<Vec<Resp>>>(256);
+    let (mut req_tx, mut req_rx) = kevy_ring::ring::<Vec<FwdReq>>(256);
+    let (mut resp_tx, mut resp_rx) = kevy_ring::ring::<Vec<Resp>>(256);
     let dirty = AtomicU64::new(0);
     let stop = AtomicBool::new(false);
 
@@ -262,7 +262,7 @@ fn forward_chain(n: u64, batch_size: usize) -> f64 {
                             r.bytes[..out.len()].copy_from_slice(&out);
                             resps.push(r);
                         }
-                        let mut b = Box::new(resps);
+                        let mut b = resps;
                         while let Err(back) = resp_tx.push(b) {
                             b = back;
                             std::hint::spin_loop();
@@ -327,12 +327,11 @@ fn forward_chain(n: u64, batch_size: usize) -> f64 {
 
 fn flush_batch(
     batch: &mut Vec<FwdReq>,
-    tx: &mut kevy_ring::Producer<Box<Vec<FwdReq>>>,
+    tx: &mut kevy_ring::Producer<Vec<FwdReq>>,
     dirty: &AtomicU64,
     batch_size: usize,
 ) {
-    let b = std::mem::replace(batch, Vec::with_capacity(batch_size));
-    let mut b = Box::new(b);
+    let mut b = std::mem::replace(batch, Vec::with_capacity(batch_size));
     while let Err(back) = tx.push(b) {
         b = back;
         std::hint::spin_loop();

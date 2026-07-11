@@ -210,8 +210,8 @@ fn emit_line(
 }
 
 // Canonical schema → TOML pairs live in [`crate::emit`], shared with
-// the fixed template so the two serializers can't drift (fuzz finding
-// 2026-07-10: six sections existed only in neither list).
+// the fixed template so the two serializers can't drift (a fuzz run
+// once found six sections existing in neither list).
 
 // ───────────── line classification ─────────────
 

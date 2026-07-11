@@ -1,4 +1,4 @@
-//! kevy-vector — ANN core (RFC 2026-07-04, LOCKED): HNSW graph with
+//! kevy-vector — ANN core: HNSW graph with
 //! cosine / L2 / inner-product distances, tombstone deletes filtered
 //! at search time, bounded full rebuild.
 

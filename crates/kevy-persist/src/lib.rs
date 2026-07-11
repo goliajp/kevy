@@ -74,8 +74,8 @@ pub trait SnapshotSource {
     /// Visit every live entry as `(key, &value, remaining_ttl_ms)`.
     fn for_each_entry(&self, f: impl FnMut(&[u8], &Value, Option<u64>));
 
-    /// v2.4: visit every live hash field TTL as `(key, field,
-    /// absolute_unix_ms)`. Default = none (sources predating the
+    /// Visit every live hash field TTL as `(key, field,
+    /// absolute_unix_ms)`. Default = none (sources without the
     /// feature).
     fn for_each_hash_ttl(&self, _f: impl FnMut(&[u8], &[u8], u64)) {}
 }

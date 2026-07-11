@@ -74,7 +74,7 @@ pub(crate) fn sample_round(store: &mut Store, samples: usize, now: u64) -> (u32,
 /// in TTL-bearing samples: without the bound, a keyspace with few (or
 /// zero) TTL'd keys made every round walk to the end of the table
 /// looking for them — measured at 6 % of server CPU on a 300k-key
-/// TTL-free shard (the pinned 8sh profile, 2026-06-10), for a reaper
+/// TTL-free shard under a pinned 8-shard profile, for a reaper
 /// with nothing to reap. With it, a TTL-free round costs O(samples)
 /// buckets; sparse-TTL keyspaces sample fewer keys per round and rely
 /// on the rotating random start (plus lazy expiry) for coverage —
@@ -121,7 +121,7 @@ impl Store {
         // Refresh the coarse cached clock every tick (the read path's lazy
         // expiry compares against it) — even when there's nothing to reap.
         self.refresh_clock();
-        // A13 (2026-06-20): skip the sampling loop entirely when no key
+        // Skip the sampling loop entirely when no key
         // carries a TTL. `expires` is the O(1)-maintained count of
         // TTL-bearing keys (incremented/decremented in `adjust_expires`).
         // The standard redis-benchmark workload sets no TTLs, so

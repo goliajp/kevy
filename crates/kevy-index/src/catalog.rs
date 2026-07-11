@@ -7,7 +7,7 @@ use std::fmt::Write as _;
 /// Declared scalar type of an index (`TYPE i64|f64|str`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValType {
-    /// v2.8: f32 LE vector blob (ANN kinds parse the field
+    /// f32 LE vector blob (ANN kinds parse the field
     /// themselves — never coerced through IndexValue).
     Vector,
     /// Signed 64-bit integer.
@@ -50,16 +50,16 @@ impl ValType {
 pub enum IndexKind {
     /// Ordered scan over `(value, key)` pairs.
     Range,
-    /// Point lookup by value; duplicates recorded (declarative fence —
-    /// RFC D3: uniqueness is verified, not write-enforced).
+    /// Point lookup by value; duplicates recorded (declarative fence:
+    /// uniqueness is verified, not write-enforced).
     Unique,
-    /// v2.7 full-text: the field tokenizes into an inverted segment
+    /// Full-text: the field tokenizes into an inverted segment
     /// (kevy-text); queried with `MATCH`, BM25-ranked.
     Text,
-    /// v2.8 ANN: the field holds an f32 LE vector indexed in an HNSW
+    /// ANN: the field holds an f32 LE vector indexed in an HNSW
     /// graph (kevy-vector); queried with `KNN`, distance-ranked.
     Ann,
-    /// v3.1 aggregate: per-group count/sum/min/max of the field,
+    /// Aggregate: per-group count/sum/min/max of the field,
     /// grouped by `IndexSpec::group_by`; queried with `GROUP`/`GROUPS`.
     Agg,
 }
@@ -94,14 +94,14 @@ impl IndexKind {
     }
 }
 
-/// Lifecycle state (RFC D5).
+/// Lifecycle state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IndexState {
     /// Backfill in progress; queries answer `-INDEXBUILDING`.
     Building,
     /// Serving.
     Ready,
-    /// Build aborted over budget (RFC D7); queries answer an error.
+    /// Build aborted over budget; queries answer an error.
     FailedOverBudget,
 }
 
@@ -120,13 +120,13 @@ pub struct IndexSpec {
     pub kind: IndexKind,
     /// Optional per-index byte budget (`MAXMEM`); 0 = unlimited.
     pub max_bytes: u64,
-    /// v2.8: ANN parameters (`Some` iff kind == Ann).
+    /// ANN parameters (`Some` iff kind == Ann).
     pub ann: Option<AnnSpec>,
-    /// v3.1: grouping field (`Some` iff kind == Agg).
+    /// Grouping field (`Some` iff kind == Agg).
     pub group_by: Option<Vec<u8>>,
 }
 
-/// v2.8 — HNSW declaration (immutable once created; RFC D2).
+/// HNSW declaration (immutable once created).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnnSpec {
     /// Vector dimensionality (field bytes must be dim×4 f32 LE).
@@ -139,7 +139,7 @@ pub struct AnnSpec {
     pub ef: u16,
 }
 
-/// Hard cap on declared indexes (RFC D1).
+/// Hard cap on declared indexes.
 pub const MAX_INDEXES: usize = 64;
 
 /// The registry. The runtime holds one per process behind an RCU-style
@@ -251,7 +251,7 @@ impl Catalog {
     }
 
     /// Parse the sidecar text form; all indexes load as `Building`
-    /// (boot rebuild, RFC D5). `None` on malformed input.
+    /// (boot rebuild). `None` on malformed input.
     pub fn from_sidecar(text: &str) -> Option<Catalog> {
         let mut lines = text.lines();
         if lines.next()? != "kevy-index-catalog v1" {

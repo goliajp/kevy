@@ -1,8 +1,6 @@
-//! v1.25 A.2/A.3 bio-drop batching: heavy `Value`s displaced by SET
+//! Bio-drop batching: heavy `Value`s displaced by SET
 //! overwrites are shipped to the runtime's bio thread in per-iteration
-//! batches instead of dropping inline on the reactor. Split out of
-//! `lib.rs` to keep it under the 500-LOC house cap; verbatim from
-//! before the move.
+//! batches instead of dropping inline on the reactor.
 
 use crate::value::{self, Value};
 use crate::Store;
@@ -19,15 +17,15 @@ use crate::Store;
 pub(crate) const MAX_PENDING_DROPS: usize = 64;
 
 impl Store {
-    /// Install the runtime's bio-drop channel (v1.25 A.3 + A.2). Called
+    /// Install the runtime's bio-drop channel. Called
     /// once from `kevy-rt::Runtime::run` per shard before the reactor
     /// loop starts. After install, [`Self::maybe_offload_drop`] (invoked
     /// from the SET overwrite fast path) accumulates oversize `Value`s
     /// into a per-shard batch; the reactor calls
     /// [`Self::flush_pending_drops`] at the end of every iter to ship
-    /// the batch in one mpsc send. Bounded the Axis I 10 KB SET p999/max
-    /// blow-up that synchronous `Box::<[u8]>::drop` of a jemalloc
-    /// large-class slot caused (see `kevy_rt::bio`).
+    /// the batch in one mpsc send. Bounds the 10 KB-SET p999/max
+    /// latency blow-up that synchronous `Box::<[u8]>::drop` of an
+    /// allocator large-class slot causes (see `kevy_rt::bio`).
     #[inline]
     pub fn set_bio_drop_sender(&mut self, sender: value::BioDropSender) {
         self.bio_drop_sender = Some(sender);
@@ -41,7 +39,7 @@ impl Store {
     /// steady state of typical bench shapes the inline-drop path is
     /// preserved unchanged.
     ///
-    /// **v1.25 A.2 batch model**: per-send mpsc cost (atomic +
+    /// **Batch model**: per-send mpsc cost (atomic +
     /// cross-thread cacheline) is amortised across the batch by
     /// [`Self::flush_pending_drops`], which the reactor calls once per
     /// iter. Force-flushes here when the buffer hits
@@ -50,8 +48,7 @@ impl Store {
     pub(crate) fn maybe_offload_drop(&mut self, old: Value) {
         if self.bio_drop_sender.is_none() {
             // No channel (bare Store / embedded reaper / tests): the
-            // Value falls out of scope and drops inline. Same
-            // behaviour as v1.24.
+            // Value falls out of scope and drops inline.
             drop(old);
             return;
         }

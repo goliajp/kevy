@@ -56,7 +56,7 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
             store.expire(&args[1], Duration::from_millis(ms));
         }
         b"PEXPIREAT" => {
-            // The rewrite now emits absolute deadlines (INC-2026-06-09 fix).
+            // The rewrite emits absolute deadlines (never relative).
             let deadline: u64 = std::str::from_utf8(&args[2]).unwrap().parse().unwrap();
             store.expire_at_unix_ms(&args[1], deadline);
         }
@@ -220,7 +220,7 @@ fn rewrite_replaces_old_log_atomically() {
 fn append_bumps_size_estimate() {
     let path = temp_aof("size-est");
     let mut aof = Aof::open(&path, Fsync::No).unwrap();
-    // Fresh AOF carries the 9-byte AOF_MAGIC header (v1.2.0+).
+    // Fresh AOF carries the 9-byte AOF_MAGIC header.
     let base = aof.size_bytes();
     aof.append(&Argv::from(vec![b"SET".to_vec(), b"k".to_vec(), b"v".to_vec()]))
         .unwrap();
@@ -298,7 +298,7 @@ fn argv(parts: &[&[u8]]) -> Argv {
     Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>())
 }
 
-// ───────────── stream consumer groups in the rewrite (2026-06-11) ─────────────
+// ───────────── stream consumer groups in the rewrite ─────────────
 
 /// The four stream shapes the rewrite must reconstruct: a live group with
 /// a tombstoned PEL row, a deleted-tail stream (scalars only), a
@@ -347,7 +347,8 @@ fn rewrite_reconstructs_stream_groups() {
     let mut dst = Store::new();
     replay_aof(&path, |args| apply_for_test(&mut dst, &args)).unwrap();
 
-    // st — full group fidelity minus the tombstone (RFC 2026-06-11).
+    // st — full group fidelity minus the tombstone (XCLAIM cannot
+    // recreate a PEL row for a deleted entry; documented trade-off).
     let v = dst.stream_view(b"st").unwrap().unwrap();
     assert_eq!(
         (v.length(), v.last_id(), v.entries_added(), v.max_deleted_id()),

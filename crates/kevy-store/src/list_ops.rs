@@ -1,8 +1,8 @@
-//! `Store` list ops introduced in v1.27.3 for BullMQ end-to-end:
+//! `Store` list ops needed for BullMQ end-to-end:
 //! `RPOPLPUSH`, `LMOVE`, `LPOS`. Kept in a sibling module to keep
 //! `list.rs` under the 500-LOC house rule.
 //!
-//! All three are local-shard-only for v1.27.3 — the cross-shard
+//! All three are local-shard-only — the cross-shard
 //! Take→Put orchestrator (mirroring `RENAME`'s `exec_rename`) is a
 //! later runtime concern; the dispatch layer routes by source key and
 //! these helpers operate on whatever the local `Store` holds for `dst`.

@@ -48,7 +48,7 @@ pub struct IoUring {
     /// resolves the ring via the registered-rings table, skipping
     /// `fget`/`fput` per syscall. `None` = raw `ring_fd` path.
     pub(crate) enter_ring: Option<(u32, u32)>,
-    /// E14: iterations since the last `io_uring_enter` syscall. The reactor
+    /// Iterations since the last `io_uring_enter` syscall. The reactor
     /// calls `submit_and_wait(0)` every iter; if neither new SQEs were
     /// queued nor `wait_nr > 0`, the syscall does no useful work (just
     /// runs task_work for COOP_TASKRUN). Tracking this lets us skip the
@@ -58,12 +58,13 @@ pub struct IoUring {
     iters_since_enter: u32,
 }
 
-/// E14: maximum empty reactor iterations between forced `io_uring_enter`
-/// syscalls. Tuned so that completion delivery (task_work flush under
-/// COOP_TASKRUN) is bounded to ~16 microseconds even on a quiet shard
-/// (~1 M iters/s observed at -c1). The H4 diagnostic measured 10.7 M
-/// enter/s = ~12 wasted enters per actual op; capping at 16 cuts this to
-/// roughly 1 enter per op while preserving completion latency.
+/// Maximum empty reactor iterations between forced `io_uring_enter`
+/// syscalls, bounding the completion-delivery delay (task_work flush
+/// under COOP_TASKRUN) to ~2 microseconds even on a quiet shard
+/// (~1 M iters/s observed with one idle conn). Tuned across 2/4/16:
+/// higher values save more syscalls but bleed a few % throughput on
+/// the RTT-bound single-connection path (task_work delay shows up as
+/// added reply latency), so the smallest effective value wins.
 const ENTER_SKIP_THRESHOLD: u32 = 2;
 
 // SAFETY: `IoUring` owns its fd and mappings exclusively; moving the whole
@@ -110,9 +111,8 @@ impl IoUring {
     /// **Not suitable for kevy's per-shard reactor.** Each ring spawns
     /// one kernel poll thread; in kevy's shared-nothing layout N shards
     /// would spawn N poll threads, each contending for the same cores
-    /// as the shard threads (measured 2–15× throughput regression on
-    /// the lx64 reference box, 10 shards on 16 cores — see
-    /// `bench/PERF-ATTACK-LOG-2026-06-20.md` attack D5). Reserved for
+    /// as the shard threads (measured 2–15× throughput regression with
+    /// 10 shards on a 16-core box). Reserved for
     /// callers with a single-threaded reactor and an unallocated core
     /// budget for the kernel poll thread.
     pub fn new_sqpoll(entries: u32, idle_ms: u32, cpu: Option<u32>) -> io::Result<IoUring> {
@@ -198,7 +198,7 @@ impl IoUring {
     ///
     /// For the non-SQPOLL path (the default kevy reactor) tries
     /// `IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN` first
-    /// (Linux 6.0+, +3–5% measured on the lx64 reference) and falls back
+    /// (Linux 6.0+, +3–5% measured) and falls back
     /// to a plain setup if the kernel rejects them (EINVAL). The fallback
     /// keeps Linux 5.13+ supported with no hard version check.
     ///
@@ -206,8 +206,8 @@ impl IoUring {
     /// changes the CQ ring semantics so completions only land after
     /// `io_uring_enter` is called. kevy's reactor busy-polls the CQ ring
     /// directly without entering the kernel on the steady state, so
-    /// DEFER_TASKRUN starves completions (measured 65–73% regression in
-    /// the E2 isolation, see `bench/PERF-ATTACK-LOG-2026-06-20.md`).
+    /// DEFER_TASKRUN starves completions (measured 65–73% regression
+    /// when isolated).
     fn setup_ring(
         entries: u32,
         sqpoll: Option<(u32, Option<u32>)>,
@@ -357,7 +357,7 @@ impl IoUring {
     /// on completions (`wait_nr == 0`), we publish the tail and return
     /// **without any syscall** — the kernel thread will reap submissions on
     /// its next poll spin.
-    // LOC-WAIVER: per-iter busy-poll submit hot body; bulk of the length is E14/A11 history comments.
+    // LOC-WAIVER: per-iter busy-poll submit hot body; bulk of the length is enter-skip contract comments.
     pub fn submit_and_wait(&mut self, wait_nr: u32) -> io::Result<u32> {
         // SAFETY: `sq_ktail` is the kernel-published tail ptr.
         let prev = unsafe { (*self.sq_ktail).load(Ordering::Relaxed) };
@@ -365,28 +365,26 @@ impl IoUring {
         // SAFETY: publishing our local tail to the kernel-shared atomic.
         unsafe { (*self.sq_ktail).store(self.sq_tail, Ordering::Release) };
 
-        // **E14 (replaces dropped E3).** H4 diagnostic showed 10.7 M
-        // io_uring_enter/s aggregate = ~12 wasted enters per actual op
-        // on the steady -c1 hot path. E3's naive "skip when to_submit==0
-        // && wait_nr==0" regressed because COOP_TASKRUN delays
-        // completion task_work until the next enter. E14 keeps a
-        // periodic forced enter: skip up to ENTER_SKIP_THRESHOLD empty
-        // iters in a row, then enter once to flush task_work. The skip
-        // path is gated on the non-SQPOLL case (SQPOLL has its own skip
-        // below) and on wait_nr == 0 (the caller doesn't need a
-        // completion to arrive).
+        // Threshold-based enter skip. A syscall-tracepoint diagnostic
+        // showed ~12 wasted io_uring_enter calls per actual op on the
+        // steady single-connection hot path. Skipping unconditionally
+        // when to_submit==0 && wait_nr==0 regresses: COOP_TASKRUN
+        // delays completion task_work until the next enter, so
+        // never-entering stalls completions. Instead we skip up to
+        // ENTER_SKIP_THRESHOLD empty iters in a row, then enter once
+        // to flush task_work. The skip path is gated on the non-SQPOLL
+        // case (SQPOLL has its own skip below) and on wait_nr == 0
+        // (the caller doesn't need a completion to arrive).
         //
-        // **A11 attempted (2026-06-20), REVERTED.** Tried adding
-        // `IORING_SETUP_TASKRUN_FLAG` (Linux 6.0+) so the kernel sets
-        // `IORING_SQ_TASKRUN` in sq_flags when task_work is pending,
-        // skipping the syscall whenever the bit was clear. On the lx64
-        // reference box this regressed -c1 GET by ~30% with multi-second
-        // 3.6k-rps stalls mid-test; the bit's set/clear timing under
-        // COOP_TASKRUN didn't match the busy-poll loop closely enough
-        // to remain race-free, and adding the E14 counter as a safety
-        // net on top still left a window where CQEs piled up between
-        // bit-clear observations. See bench/PERF-ATTACK-LOG-2026-06-20.md
-        // for the data.
+        // A `IORING_SETUP_TASKRUN_FLAG` variant (Linux 6.0+: the kernel
+        // sets `IORING_SQ_TASKRUN` in sq_flags when task_work is
+        // pending, letting userland skip the syscall whenever the bit
+        // is clear) was tried and REVERTED: it regressed GET by ~30%
+        // with multi-second stalls mid-test — the bit's set/clear
+        // timing under COOP_TASKRUN doesn't match the busy-poll loop
+        // closely enough to remain race-free, and even with this
+        // counter as a safety net on top, a window remained where CQEs
+        // piled up between bit-clear observations.
         if to_submit == 0 && wait_nr == 0 && self.sq_flags.is_none() {
             self.iters_since_enter = self.iters_since_enter.saturating_add(1);
             if self.iters_since_enter < ENTER_SKIP_THRESHOLD {
@@ -433,7 +431,7 @@ impl IoUring {
         if ret < 0 {
             return Err(io::Error::last_os_error());
         }
-        // E14: real enter happened — counter resets.
+        // Real enter happened — the skip counter resets.
         self.iters_since_enter = 0;
         Ok(ret as u32)
     }

@@ -30,7 +30,7 @@ pub(crate) const BAND_MIN_DL: [u32; 16] = [
 /// the segment's id_dl table (bands only set the CUT granularity).
 type Bands = Vec<(u8, Vec<u32>)>;
 
-/// One token's postings, IMPACT-BUCKETED two ways (v3.5): keys
+/// One token's postings, IMPACT-BUCKETED two ways: keys
 /// grouped by tf (buckets tf-DESCENDING), and WITHIN a bucket ordered
 /// by dl ascending. BM25 is monotone ↑tf / ↓dl, so a single-list walk
 /// goes bucket-by-bucket high-tf-first and INSIDE each bucket stops

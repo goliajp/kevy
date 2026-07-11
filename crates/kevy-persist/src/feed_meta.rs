@@ -1,4 +1,4 @@
-//! v2.3 CDC feed sidecars — the on-disk half of the `(generation,
+//! CDC feed sidecars — the on-disk half of the `(generation,
 //! offset)` cursor contract.
 //!
 //! Two files per shard, with different write disciplines:

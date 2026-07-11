@@ -1,6 +1,6 @@
 //! kevy-elect — quorum-based primary failover for kevy.
 //!
-//! The v3-cluster Phase 1.5 layer on top of the v1.18 manual
+//! A layer on top of the manual
 //! `REPLICAOF` primitive. Detects a primary's death by quorum
 //! heartbeat, runs an offset-ordered election among the live
 //! replicas, promotes the winner via `REPLICAOF NO ONE`, and
@@ -8,9 +8,9 @@
 //! operator-declared peer list (no gossip discovery — the peer set
 //! is static for the lifetime of a cluster generation).
 //!
-//! T1.5.3 protocol spec lives in `docs/protocol.md`; T1.5.4 message
-//! types in [`mod@message`]. T1.5.6+ (heartbeat loop, DOWN detector,
-//! election machinery) land on top of those.
+//! The protocol spec lives in `docs/protocol.md`; message
+//! types in [`mod@message`]. The heartbeat loop, DOWN detector, and
+//! election machinery build on top of those.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 

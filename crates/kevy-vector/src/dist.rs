@@ -1,4 +1,4 @@
-//! Distance metrics + the wire vector format (RFC D1/D3).
+//! Distance metrics + the wire vector format.
 
 /// Distance metric. Scores are "smaller = closer" for every variant
 /// (cosine → `1 - cos`, ip → `-dot`), so one ascending merge works.

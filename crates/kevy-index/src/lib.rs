@@ -1,5 +1,4 @@
-//! kevy-index — declarative secondary indexes over prefix domains
-//! (RFC 2026-07-04, LOCKED).
+//! kevy-index — declarative secondary indexes over prefix domains.
 //!
 //! Pure logic crate: [`Catalog`] holds the index declarations and a
 //! compiled prefix matcher; [`Segment`] holds one shard's slice of one

@@ -165,8 +165,7 @@ fn parse_array_reply(buf: &[u8], push: bool) -> Result<Option<(Reply, usize)>, P
     // capacity overflow. Each item costs ≥ 1 byte (a CRLF for Nil/Int/Simple),
     // so a real array of N items needs ≥ N bytes left. Push will grow the vec
     // amortized if the genuine count is higher but bytes are present. Found by
-    // cargo-fuzz against crash-4c4ee6777903d009f93289eb428b3b371d027137
-    // (2026-05-26).
+    // cargo-fuzz (crash-4c4ee6777903d009f93289eb428b3b371d027137).
     let cap = (count as usize).min(buf.len().saturating_sub(pos));
     let mut items = Vec::with_capacity(cap);
     for _ in 0..count {

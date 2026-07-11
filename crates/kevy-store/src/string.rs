@@ -14,7 +14,7 @@ pub enum GetReply<'a> {
     /// Inline-encoded value — caller memcpys the bytes into its output Vec
     /// (small replies; encoding cost is tiny vs the RTT floor).
     Bytes(Cow<'a, [u8]>),
-    /// L1 (2026-06-21): Arc-backed bulk. The reactor's reply path pushes
+    /// Arc-backed bulk. The reactor's reply path pushes
     /// the Arc into the conn's `output_arcs` so the next `writev` iovec
     /// list points DIRECTLY at the value bytes — skipping the per-GET
     /// memcpy that valkey's `tryAvoidBulkStrCopyToReply` likewise avoids.
@@ -23,7 +23,7 @@ pub enum GetReply<'a> {
 
 impl Store {
     // ---- strings -------------------------------------------------------
-    /// L1 (2026-06-21): GET variant that exposes the underlying encoding
+    /// GET variant that exposes the underlying encoding
     /// so the reactor's reply path can choose zero-copy
     /// (`Value::ArcBulk` → push the Arc to the conn's `output_arcs` for a
     /// writev iovec) vs memcpy (`Value::Str` / `Value::Int` → encode bytes
@@ -45,7 +45,7 @@ impl Store {
         }
     }
 
-    /// A.6 (v1.25): fused GET-into-output. Skips the [`GetReply`] enum tag
+    /// Fused GET-into-output. Skips the [`GetReply`] enum tag
     /// round-trip + caller match arm by writing the RESP frame directly into
     /// `output` (header + bytes + CRLF for Str/Int) or pushing the Arc into
     /// `output_arcs` at the right offset (ArcBulk zero-copy via writev).
@@ -90,8 +90,8 @@ impl Store {
     }
 
     /// `GET` — returns a `Cow<[u8]>` so `Value::Int` callers can format the
-    /// integer to ASCII without storing it. L2 (2026-06-21): `Value::Str`
-    /// returns `Cow::Borrowed` (zero copy, same as before); `Value::Int`
+    /// integer to ASCII without storing it. `Value::Str`
+    /// returns `Cow::Borrowed` (zero copy); `Value::Int`
     /// formats to a small owned `Vec<u8>` (up to 20 bytes for `i64::MIN`).
     pub fn get(&mut self, key: &[u8]) -> Result<Option<Cow<'_, [u8]>>, StoreError> {
         match self.live_entry(key) {
@@ -144,9 +144,9 @@ impl Store {
 
     /// `INCRBY` family; preserves any TTL.
     ///
-    /// L2 (2026-06-21, lessons from valkey OBJ_ENCODING_INT): the hot path
+    /// Following valkey's OBJ_ENCODING_INT approach: the hot path
     /// matches `Value::Int(n)` and does the increment in place — no parse,
-    /// no format, no allocation. The legacy `Value::Str` arm parses,
+    /// no format, no allocation. The `Value::Str` arm parses,
     /// increments, and **promotes** to `Value::Int(next)` so subsequent
     /// INCRs land on the fast path. Insert-new path also lands as `Int`.
     pub fn incr_by(&mut self, key: &[u8], delta: i64) -> Result<i64, StoreError> {

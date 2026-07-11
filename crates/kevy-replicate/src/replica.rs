@@ -3,8 +3,7 @@
 //!
 //! The client is **synchronous + blocking** by design: it slots into a
 //! dedicated thread on the replica node alongside (but separate from)
-//! the regular kevy reactor. An async surface is a Phase 4 deliverable
-//! (`kevy-client-async`, the only crate carved out of the 0-dep rule).
+//! the regular kevy reactor.
 //!
 //! Hot loop usage:
 //!
@@ -15,7 +14,7 @@
 //!     .expect("connect ok");
 //! while let Some(result) = client.next() {
 //!     let frame = result.expect("decode ok");
-//!     // apply frame.argv at frame.offset — caller's responsibility (T1.19)
+//!     // apply frame.argv at frame.offset — caller's responsibility
 //!     drop(frame);
 //! }
 //! ```
@@ -27,9 +26,8 @@
 //! - [`ReplicaError::Truncated`] — peer EOF mid-frame; treat as a
 //!   disconnect, reconnect later.
 //! - [`ReplicaError::OffsetGap { expected, got }`] — frames arrived
-//!   out of order or with a skip; per plan T1.20 the caller should
-//!   trigger a full snapshot resync. v1.18.0 surfaces the gap; the
-//!   snapshot ship machinery itself lands at T1.22.
+//!   out of order or with a skip; the caller should trigger a full
+//!   snapshot resync.
 //! - [`ReplicaError::Frame`] — wire-level decode error; same
 //!   action as Truncated (drop + reconnect).
 
@@ -65,13 +63,13 @@ pub struct DecodedFrame {
 pub enum ReplicaEvent {
     /// A live mutation frame.
     Frame(DecodedFrame),
-    /// v3.14 in-stream heartbeat: the primary's `next_offset` at send
+    /// In-stream heartbeat: the primary's `next_offset` at send
     /// time. Lets the replica compute lag (applied vs primary) and
     /// judge link liveness. Occupies no offset space.
     Ping {
-        /// Primary's feed generation at send time (v3.16 — the
+        /// Primary's feed generation at send time (the
         /// REPL.TOKEN / REPL.WAIT gen truth). `0` = the primary spoke
-        /// the pre-v3.16 one-number heartbeat ("unknown").
+        /// the legacy one-number heartbeat ("unknown").
         generation: u64,
         /// Primary's `next_offset` when the heartbeat was emitted.
         primary_offset: u64,
@@ -105,7 +103,7 @@ pub enum ReplicaError {
     /// malformed, etc.).
     Frame(WireError),
     /// Frame arrived with an offset other than the expected next.
-    /// Caller should trigger a full snapshot resync (T1.22).
+    /// Caller should trigger a full snapshot resync.
     OffsetGap {
         /// The offset the client expected next (= `last_seen + 1`).
         expected: u64,
@@ -113,8 +111,8 @@ pub enum ReplicaError {
         got: u64,
     },
     /// While streaming a snapshot, the primary sent bytes that were
-    /// neither a snapshot chunk nor `+SNAPSHOT_END`. v1.18.0 forbids
-    /// interleaving live frames inside a snapshot (see `docs/snapshot.md`).
+    /// neither a snapshot chunk nor `+SNAPSHOT_END`. Interleaving live
+    /// frames inside a snapshot is forbidden (see `docs/snapshot.md`).
     UnexpectedInSnapshot,
     /// `next_frame` was called but the next event is a snapshot
     /// marker / chunk. Callers that want the snapshot-aware surface
@@ -176,7 +174,7 @@ pub struct ReplicaClient {
     /// frame work avoids repeated `Vec::drain` shifts.
     pub(crate) cursor: usize,
     /// Offset the primary advertised at handshake (`+ACK <N>` value).
-    /// Currently informational; T1.20 / T1.22 use it for gap-detection
+    /// Informational; useful for gap-detection
     /// decisions (re-handshake vs full sync).
     pub(crate) primary_offset_at_handshake: u64,
     /// The next offset we expect from the stream. Initially the
@@ -185,8 +183,8 @@ pub struct ReplicaClient {
     /// `true` while we're between `+SNAPSHOT` and `+SNAPSHOT_END`.
     /// In this state, only chunk + end-marker bytes are valid; a
     /// `*2\r\n` (live frame envelope) returns
-    /// [`ReplicaError::UnexpectedInSnapshot`] per the v1.18 spec
-    /// (`docs/snapshot.md` — interleaving is a T1.25 extension).
+    /// [`ReplicaError::UnexpectedInSnapshot`] — interleaving live
+    /// frames inside a snapshot is forbidden (`docs/snapshot.md`).
     pub(crate) in_snapshot: bool,
 }
 
@@ -257,7 +255,7 @@ impl ReplicaClient {
     }
 
     /// Offset the primary reported at handshake (`+ACK <N>` value).
-    /// Informational — exposed so callers can log + future T1.22
+    /// Informational — exposed so callers can log, and so
     /// snapshot-ship logic can compare against the local applied
     /// offset to decide resume vs full-sync.
     pub fn primary_offset_at_handshake(&self) -> u64 {
@@ -267,7 +265,7 @@ impl ReplicaClient {
     /// Return a `try_clone`'d handle on the underlying socket. The
     /// clone shares the same kernel file description, so calling
     /// `shutdown(Shutdown::Both)` on it unblocks any in-flight
-    /// blocking read on the original (and vice versa). T1.29.5 uses
+    /// blocking read on the original (and vice versa). The server uses
     /// this to interrupt a runner thread parked in `next_event` when
     /// `REPLICAOF` retargets or `REPLICAOF NO ONE` demotes — without
     /// this handle, the runner stays blocked until the upstream peer
@@ -276,7 +274,7 @@ impl ReplicaClient {
         self.sock.try_clone()
     }
 
-    /// v3.14 — write `REPLCONF ACK <offset>` back on the replication
+    /// Write `REPLCONF ACK <offset>` back on the replication
     /// connection. The primary's pump drains these non-blocking and
     /// advances the replica's slot; call every ~100ms with the highest
     /// received frame offset + 1 (i.e. the next offset you expect).
@@ -294,13 +292,13 @@ impl ReplicaClient {
     /// Pull the next frame from the stream. Frame-only convenience —
     /// returns [`ReplicaError::SnapshotInProgress`] if the primary is
     /// sending a snapshot. Callers that need the snapshot-aware
-    /// surface (T1.22) must use [`Self::next_event`] instead.
+    /// surface must use [`Self::next_event`] instead.
     /// Returns `None` on clean peer EOF (no buffered bytes left).
     pub fn next_frame(&mut self) -> Option<Result<DecodedFrame, ReplicaError>> {
         loop {
             match self.next_event()? {
                 Ok(ReplicaEvent::Frame(f)) => return Some(Ok(f)),
-                // v3.14 heartbeats are out-of-band — invisible to a
+                // Heartbeats are out-of-band — invisible to a
                 // frame-only consumer.
                 Ok(ReplicaEvent::Ping { .. }) => {}
                 Ok(_) => return Some(Err(ReplicaError::SnapshotInProgress)),

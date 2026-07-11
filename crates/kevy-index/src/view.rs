@@ -1,5 +1,4 @@
-//! v2.6 — views: named composition trees over declared indexes
-//! (RFC 2026-07-04, LOCKED).
+//! Views: named composition trees over declared indexes.
 //!
 //! Pure logic: [`ViewSpec`] (the declaration), [`eval_tree`] (the
 //! virtual-mode evaluator over segment closures), and

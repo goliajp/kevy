@@ -1,4 +1,4 @@
-//! v2.4 — per-field hash TTLs (`HEXPIRE` / `HPEXPIRE` / `HPEXPIREAT` /
+//! Per-field hash TTLs (`HEXPIRE` / `HPEXPIRE` / `HPEXPIREAT` /
 //! `HTTL` / `HPERSIST`, Redis 7.4 semantics).
 //!
 //! Storage: a store-level sidecar `hfttl: key → (field → absolute

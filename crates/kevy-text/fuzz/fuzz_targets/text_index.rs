@@ -20,7 +20,7 @@
 //!     (score-tolerant check: its worst score must not be materially below
 //!     the naive k-th score)
 //!
-//! FIXED FINDING (2026-07-10): `matches(query, 0)` used to panic with
+//! FIXED FINDING: `matches(query, 0)` used to panic with
 //! a usize underflow in `kth_of` (`limit - 1`) whenever the query hit
 //! any posting list. Contract now: limit = 0 returns the empty ranking
 //! (same convention as kevy-vector's `knn` with k = 0) — asserted

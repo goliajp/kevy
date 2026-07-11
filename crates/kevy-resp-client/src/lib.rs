@@ -51,9 +51,9 @@ pub struct RespClient {
     /// Reused per-request encode buffer. Zero-allocation for steady-state
     /// command traffic — the buffer grows once during the first SET, then
     /// the same allocation backs every subsequent encode (truncated to 0
-    /// at the top of each `request*` call). Added 2026-06-20 (perf-D4)
-    /// after profiling showed Rust-client `Vec<Vec<u8>>` argv + per-call
-    /// `Vec<u8>::new()` was a measurable per-op tax even at -c1.
+    /// at the top of each `request*` call). Added after profiling showed
+    /// Rust-client `Vec<Vec<u8>>` argv + per-call `Vec<u8>::new()` was a
+    /// measurable per-op tax even on a single connection.
     write_buf: Vec<u8>,
 }
 
@@ -95,7 +95,7 @@ impl RespClient {
         self.read_one_reply()
     }
 
-    /// v2.10 — pipelined batch: send every pre-encoded command in
+    /// Pipelined batch: send every pre-encoded command in
     /// `raw` as one write, then read exactly `n` replies. The caller
     /// encodes with [`encode_command`]/[`encode_command_borrowed`]
     /// into one buffer (migration import path: 512-deep batches).

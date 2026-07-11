@@ -201,9 +201,9 @@ pub(crate) fn parse_bulk_len(
 
 /// Find the index of `\r\n` at or after `start`, returning the index of `\r`.
 ///
-/// A6 + A7 (2026-06-20): delegates to `kevy_bytes::find_crlf`, which picks
+/// Delegates to `kevy_bytes::find_crlf`, which picks
 /// AVX2 (x86_64 runtime-detected) / NEON (aarch64 baseline) / u64 SWAR
-/// fallback. The previous in-crate SWAR loop is now the fallback tier
+/// fallback. An earlier in-crate SWAR loop is now the fallback tier
 /// of that dispatch. Pulling the SIMD path into kevy-bytes keeps this
 /// crate under #![forbid(unsafe_code)] — kevy-bytes already wraps
 /// SmallBytes' unsafe union work so it's the right home for arch

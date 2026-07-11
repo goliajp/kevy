@@ -64,7 +64,7 @@ pub fn encode_command(out: &mut Vec<u8>, args: &[Vec<u8>]) {
 /// like argv (`&[Vec<u8>]`, `&[&[u8]]`, `&[[u8; N]]`, …). Lets a Rust
 /// caller pass a stack-allocated `[&[u8]; N]` and skip the per-call
 /// `Vec<Vec<u8>>` argv allocation — measured win on the
-/// `kevy-client::Connection` -c1 path (2026-06-20 perf-D4).
+/// `kevy-client::Connection` single-connection path.
 pub fn encode_command_borrowed<A: AsRef<[u8]>>(out: &mut Vec<u8>, args: &[A]) {
     encode_array_len(out, args.len() as i64);
     for a in args {
