@@ -113,6 +113,13 @@ pub(crate) fn map_eviction_policy(p: kevy_config::EvictionPolicy) -> kevy_store:
 /// memory model.
 #[cfg(unix)]
 static SIGNAL_RECEIVED: AtomicBool = AtomicBool::new(false);
+/// Every live server's stop flag. Signal disposition is a PROCESS
+/// property (the handler must be async-signal-safe, so it can only
+/// flip the static above); this registry fans the process-level
+/// signal out to every runtime instance, and registration resets a
+/// leftover signal from a previous run so a second serve() in the
+/// same process doesn't exit on arrival.
+static STOP_FLAGS: std::sync::Mutex<Vec<std::sync::Weak<AtomicBool>>> = std::sync::Mutex::new(Vec::new());
 
 /// **v1.39** — installed on first call to [`serve`]. Catches SIGTERM
 /// (graceful shutdown) and SIGINT (Ctrl-C). Both flip the per-run
@@ -132,16 +139,30 @@ fn install_signal_handlers(stop: Arc<AtomicBool>) {
     // writes. One bad write does not bring down the whole server.
     extern "C" fn xfsz_noop(_: std::ffi::c_int) {}
     kevy_sys::install_signal_handler(kevy_sys::SIGXFSZ, xfsz_noop);
-    // Polling-bridge thread: signal handlers can't easily touch the
-    // per-run Arc, so we poll the static AtomicBool every 100 ms and
-    // mirror it into `stop`. Daemon thread; exits when the process does.
-    std::thread::spawn(move || loop {
-        if SIGNAL_RECEIVED.load(std::sync::atomic::Ordering::SeqCst) {
-            stop.store(true, std::sync::atomic::Ordering::SeqCst);
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    });
+    // Register this run's stop flag and clear any signal left over
+    // from an earlier run in this process. One polling bridge thread
+    // fans the flag out to every registered runtime (SIGTERM means
+    // "the whole process stops" — broadcast is the right semantic);
+    // handlers themselves stay async-signal-safe.
+    let mut flags = STOP_FLAGS.lock().expect("STOP_FLAGS poisoned");
+    let first = flags.is_empty();
+    SIGNAL_RECEIVED.store(false, std::sync::atomic::Ordering::SeqCst);
+    flags.push(Arc::downgrade(&stop));
+    drop(flags);
+    if first {
+        std::thread::spawn(|| loop {
+            if SIGNAL_RECEIVED.load(std::sync::atomic::Ordering::SeqCst) {
+                let flags = STOP_FLAGS.lock().expect("STOP_FLAGS poisoned");
+                for f in flags.iter() {
+                    if let Some(stop) = f.upgrade() {
+                        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        });
+    }
 }
 
 #[cfg(not(unix))]
