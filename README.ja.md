@@ -26,15 +26,18 @@ kevyは同一のエンジンから三つの形態で提供されます。
   コマンドについてvalkey 9.1と返答をバイト単位で照合しています。
 - **組み込みライブラリ** — `kevy-embedded`はネットワークのない同じ
   エンジンです。Rustバイナリに組み込んで`Store`を直接呼び出せます。
-  純粋なRust、依存ゼロで、`wasm32`向けにもビルドできます。
+  純粋なRust、依存ゼロ。素の`core` KVからインデックス／レプリケー
+  ションのフルサーフェスまでfeatureで段階化されており、両極端にも
+  届きます——ブラウザ（npmの[`@goliajp/kevy`](docs/ja/wasm.md)）と
+  655 KBのIoTビルド（[docs/iot.md](docs/iot.md)）です。
 - **クライアント** — `kevy-client`（ブロッキング）と`kevy-client-async`
   （ランタイムごとにfeature flag一つ：tokio / smol / async-std）が
   あります。どちらもURLを受け取るため、同一のコードでTCPサーバー
   （`kevy://host:port`）にもプロセス内バス（`mem://name`）にも接続できます。
 
-## kevy v3 — サービングエンジン
+## kevy 4 — サービングエンジン、ここで確定
 
-v3でkevyは**serving engine**であることを宣言しました。従来なら
+3.xでkevyは**serving engine**であることを宣言しました。従来なら
 「RDS+前段キャッシュ」で構成していたアプリケーションの、プライマリ
 ストアになるものです。完全なRedis互換に加えて、宣言型セカンダリ
 インデックス（range / unique / CJK全文検索 / ベクトルANN。サーバー
@@ -52,6 +55,12 @@ verbコントラクト（`COMMAND DOCS`、自動生成リファレンス、`kevy
 トークン、上限付きステイルネス、クォーラムでフェンスされた書き込み）
 です。詳細は[docs/availability.md](docs/availability.md)を参照して
 ください。
+4.0はこれらを確定させます。公開Rust APIは一度だけ整備され——エラー
+型の統一（`KevyError`）、builderの統一、書き込み面の借用スライス化
+（[docs/UPGRADING.md](docs/UPGRADING.md)）——以後は追加のみで凍結。
+ランタイムはインスタンススコープになり、一つのプロセスで独立した
+複数のkevyを走らせられます。そして同じエンジンがブラウザにも
+エッジデバイスにも届きます（下の二つのセクション）。
 主要な数値はすべてゲートされ、毎トレインで再計測されます。hydrated
 行リストページのp99 < 1ms、書き込みファンアウトのp99 < 200µs、
 ANN recall ≥ 0.9 — [設計マップ](docs/designing-on-kevy.md)、
@@ -117,7 +126,7 @@ use kevy_embedded::{Config, Store};
 let store = Store::open(Config::default().without_aof())?;
 store.set(b"key", b"value")?;
 assert_eq!(store.get(b"key")?, Some(b"value".to_vec()));
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 `Store`は`Clone`であり、すべてのメソッドが`&self`を取るため、クローンを
@@ -129,11 +138,11 @@ assert_eq!(store.get(b"key")?, Some(b"value".to_vec()));
 ```rust
 use kevy_client::Connection;
 
-let mut conn = Connection::open("tcp://127.0.0.1:6379")?;
+let mut conn = Connection::connect("tcp://127.0.0.1:6379")?;
 conn.set(b"k", b"v")?;
 let v = conn.get(b"k")?;
 assert_eq!(v.as_deref(), Some(&b"v"[..]));
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 同じURLの表面に`mem://app`を渡せばプロセス内のバックエンドに接続できる
@@ -146,7 +155,7 @@ assert_eq!(v.as_deref(), Some(&b"v"[..]));
 use kevy_client_async::AsyncConnection;
 
 # async fn run() -> std::io::Result<()> {
-let mut conn = AsyncConnection::open("tcp://127.0.0.1:6379").await?;
+let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6379").await?;
 conn.set(b"k", b"v").await?;
 let v = conn.get(b"k").await?;
 # Ok(())
@@ -156,6 +165,59 @@ let v = conn.get(b"k").await?;
 `tokio`、`smol`、`async-std`のうちちょうど一つをCargo featureとして
 選んでください。ゼロ個または二つ以上を選ぶとクレートはコンパイルを
 拒否します。
+
+## ブラウザで
+
+kevyはブラウザの中で本物のストアとして動きます。npmパッケージ
+[`@goliajp/kevy`](https://www.npmjs.com/package/@goliajp/kevy)は、
+`wasm32-unknown-unknown`向けにコンパイルしたエンジンを手書きの
+ESモジュールローダーに包んで出荷します——wasm-bindgenなし、境界の
+両側とも依存ゼロ。六ファイル、パックで約165 KBです。
+
+```sh
+npm install @goliajp/kevy
+```
+
+```js
+import { open } from "@goliajp/kevy";
+
+const db = await open({ persist: { name: "app" } });
+db.set("session", "abc123", { ttlMs: 60_000 });
+db.subscribe("events", (payload) => { /* どのタブからでも発火 */ });
+```
+
+- **永続化**：書き込みはkevyのappend-onlyログとしてOPFSに流れます
+  （IndexedDBフォールバック）。ネイティブkevyとバイト互換なので、
+  ブラウザで書いたログはサーバーでそのままreplayできます。
+- **タブ間pub/sub**：BroadcastChannelブリッジ経由。サーバーと同じ
+  at-most-once契約です。
+- **ストアとして速いべきところで速い**：ポイント読み取りは
+  IndexedDBの77–86×、ポイント書き込みは166–189×、永続書き込みは
+  そのレートの12.6–17.4×です
+  （[`bench/WASM-BENCH.md`](bench/WASM-BENCH.md)）。
+
+ローダーAPIとABI契約は[docs/ja/wasm.md](docs/ja/wasm.md)を、
+[kevy.golia.jp/demo](https://kevy.golia.jp/demo/)ではこの全部が
+ライブで動きます——永続化とタブ間pub/sub付きのブラウザREPL、
+バックエンドなしです。
+
+## エッジデバイスで（IoT）
+
+同じ組み込みライブラリは下方向にもスケールします。`kevy-embedded`は
+featureで段階化されており（`core` / `persist` / `index` / `text` /
+`vector` / `replicate` / `listener`。デフォルトは全部入り）、`core`
+段は**655 KB**のバイナリ（予算 ≤ 700 KB）にコンパイルされ、空の
+ストアを2 MB未満のRSSで開きます——どちらのラインも
+[`bench/iotgate.sh`](bench/iotgate.sh)がラチェットとして強制します。
+
+- `aarch64`と`armv7`の静的muslクロスビルドはCIでゲートされています。
+- さらにLinuxの外へ：五つの基盤クレート（`kevy-store`、`kevy-hash`、
+  `kevy-bytes`、`kevy-map`、`kevy-madvise`）は`no_std` + `alloc`で
+  ビルドでき、Cortex-Mターゲット（`thumbv7em-none-eabihf`）で
+  実証済みです。
+
+ティア表、予算、センサーキャッシュの例は[docs/iot.md](docs/iot.md)を
+参照してください。
 
 ## パフォーマンス
 
@@ -172,6 +234,17 @@ loopback、精密モードでCI95 < 1%）。詳細な手法、全ワークロー
 | Pub/subファンアウト（50 subs） | 23.1 M/s | 5.1 M/s | **4.52×** |
 | 組み込み`get`（ヒット） | 9.0 M/s | — | （in-processのRedisは無い） |
 
+同じ`GET -c 50 -P 16`の面を、同一マシン上で四つのエンジンと対戦
+——kevyは6.39 M/sでそれぞれに対して（median-of-5。手法と
+エンジンごとのサイクル記録は
+[`bench/PERF-VERDICT-V4-T9.md`](bench/PERF-VERDICT-V4-T9.md)）：
+
+| エンジン | kevyのリード |
+|---|---:|
+| valkey 9.1 | **3.00×** |
+| redis 8 | **1.60×** |
+| dragonfly | **3.60×** |
+
 サービング面はredis-stack 7.4.7（RediSearch）と同一シード・
 同一コーパスでrecallを揃えて比較（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：
 
@@ -185,10 +258,12 @@ loopback、精密モードでCI95 < 1%）。詳細な手法、全ワークロー
 完全なサーバーはストリップ後768 KBのバイナリで、5 MB未満のRSSで
 起動します。
 
-**2.xからのアップグレードは？** [docs/UPGRADING.md](docs/UPGRADING.md)を
-参照してください。サーバーはバイナリの差し替え、組み込みは依存関係の
-バージョンアップで済みます（1.xの組み込みラインは3.xに統合されました）。
-スナップショットとAOFはそのまま読み込めます。
+**アップグレードは？** [docs/UPGRADING.md](docs/UPGRADING.md)が
+両方のホップを一か所でカバーします——3.x → 4.0（ワイヤとディスクは
+そのまま。Rust APIは一度だけ変わり、リネームごとに対照表と規則が
+あります）と2.x → 3.x（バイナリ差し替え + 依存バージョンアップ）
+です。アップグレード方向では、スナップショットとAOFはメジャーを
+またいでそのまま読み込めます。
 
 ## 互換性
 
@@ -237,6 +312,7 @@ kevyに対してエンドツーエンドで検証済みのクライアントラ�
 | [`kevy-madvise`](crates/kevy-madvise) | Linux `MADV_HUGEPAGE`ラッパー。他環境ではno-op |
 | [`kevy-uring`](crates/kevy-uring) | 純粋Rustのio_uringバインディング。liburingにリンクしない |
 | [`kevy-geo`](crates/kevy-geo) | 地理空間コマンドプリミティブ |
+| [`kevy-wasm`](crates/kevy-wasm) | ブラウザビルド。手書きC ABI + `@goliajp/kevy`ローダー |
 | [`kevy-lua`](crates/kevy-lua) | Luaスクリプトブリッジ（[luna](https://github.com/goliajp/luna)ランタイムによる） |
 
 残りのクレート（`kevy-store`、`kevy-rt`、`kevy-persist`、`kevy-sys`、
@@ -265,7 +341,8 @@ kevyに対してエンドツーエンドで検証済みのクライアントラ�
 | Luaスクリプト | [`docs/lua.md`](docs/lua.md) |
 | Unixドメインソケット | [`docs/ja/uds.md`](docs/ja/uds.md) |
 | 非同期クライアント | [`docs/ja/async.md`](docs/ja/async.md) |
-| WebAssemblyビルド | [`docs/ja/wasm.md`](docs/ja/wasm.md) |
+| ブラウザ / WASM | [`docs/ja/wasm.md`](docs/ja/wasm.md) |
+| IoTとfeatureティア | [`docs/iot.md`](docs/iot.md) |
 | accept-shardサイジング | [`docs/accept-shards.md`](docs/accept-shards.md) |
 | エラー応答リファレンス | [`docs/error-replies.md`](docs/error-replies.md) |
 
@@ -299,12 +376,12 @@ macOSでビルドできます。`kevy-embedded`とその依存クロージャは
 
 ## ロードマップと安定性
 
-ワークスペースはv3.xラインに乗っています。永続化フォーマット、RESP
+ワークスペースはv4.xラインに乗っています。永続化フォーマット、RESP
 ワイヤプロトコル、公開Rust API、CLIフラグ、環境変数、TOMLスキーマ、
 エビクションセマンティクスは各メジャーラインを通じて追加のみです。
 さらにオンディスクフォーマットはメジャーをまたいで引き継がれます。
-v2.0で書かれたスナップショットやAOFは、すべての3.xビルドでそのまま
-読み込めます（[docs/UPGRADING.md](docs/UPGRADING.md)を参照）。追加
+v2.0で書かれたスナップショットやAOFは、すべての3.x・4.xビルドで
+そのまま読み込めます（[docs/UPGRADING.md](docs/UPGRADING.md)を参照）。追加
 機能は既存コードを壊すことなくマイナーリリースで導入されます。完全な
 安定性契約は
 [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md#v1x-stability-commitment)

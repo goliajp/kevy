@@ -55,8 +55,8 @@ range|unique [MAXMEM <bytes>]`
 ## Uniqueness is a fence, not a lock
 
 A `unique` index **does not block writes** — enforcing global
-uniqueness at write time would serialize cross-shard writes (see the
-design RFC). Instead: duplicates are counted (`duplicates` in
+uniqueness at write time would serialize cross-shard writes. Instead:
+duplicates are counted (`duplicates` in
 VERIFY/LIST) and visible as multi-hit `EQ` reads. If you need hard
 uniqueness, pin the domain to one shard with a `{hashtag}` prefix in
 cluster mode, or check-then-write under `MULTI`/`WATCH`.

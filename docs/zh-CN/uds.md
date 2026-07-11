@@ -40,12 +40,7 @@ redis-cli -p 6379 GET foo
 # "bar"
 ```
 
-在 Rust 里，内置客户端接受 `unix://` URL：
-
-```rust
-let mut conn = kevy_client::Connection::connect("unix:///tmp/kevy.sock")?;
-conn.set(b"k", b"v")?;
-```
+内置的 Rust 客户端（`kevy-client` / `kevy-client-async`）讲 `tcp://` / `kevy://` / `redis://` 加上进程内的 `mem://`、`file:///` 两种 scheme——它们不接受 `unix://` URL。在 Rust 里，同宿主客户端要么走 TCP loopback 连接，要么当它与服务端同在一个*进程*里时，用 embedded 后端（`file:///` / `mem://`）彻底跳过 socket——那比 UDS 所能达到的还要快。UDS 服务的是其他语言或生态 driver 的跨进程同宿主客户端。
 
 ## 权限与安全
 
@@ -102,7 +97,7 @@ UDS 的信任边界是**文件系统**——Unix socket 上没有 RESP 层的 AU
 
 ### 我的客户端库支持 UDS 吗？
 
-大多数都支持。`redis-cli` 和 `redis-benchmark` 接受 `-s <path>`。ioredis、node-redis、redis-py、redis-rb、go-redis、lettuce、jedis，以及内置的 [kevy-client](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client) / [kevy-client-async](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client-async)，都接受 `unix:///path` URL 或显式的 socket-path 选项。具体键名查你所用 driver 的连接选项文档。
+生态 driver 大多支持。`redis-cli` 和 `redis-benchmark` 接受 `-s <path>`。ioredis、node-redis、redis-py、redis-rb、go-redis、lettuce、jedis 都接受 `unix:///path` URL 或显式的 socket-path 选项——具体键名查你所用 driver 的连接选项文档。内置的 [kevy-client](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client) / [kevy-client-async](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client-async) **不**讲 UDS：同进程的 Rust 客户端用 embedded 的 `file:///` / `mem://` 后端胜过任何 socket，跨进程则走 TCP。
 
 ### 客户端全在同一台主机上，能不能干脆不要 TCP？
 

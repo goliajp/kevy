@@ -91,8 +91,8 @@ fn main() -> kevy_embedded::KevyResult<()> {
 
     let store = Store::open(cfg)?;
 
-    store.set("hello", b"world")?;
-    store.pexpire("hello", Duration::from_secs(300))?;
+    store.set(b"hello", b"world")?;
+    store.expire(b"hello", Duration::from_secs(300))?;
 
     // Point-in-time snapshot. Returns after the file is on disk; per-shard
     // locks are held only for the view freeze and the final rename.
@@ -132,6 +132,7 @@ A fresh embedded store with the default config writes only the AOF — no snapsh
 | Background snapshot | `BGSAVE` | call `save_snapshot` from a worker thread | Returns immediately; commit lands within one reactor tick of the disk write finishing. |
 | AOF rewrite | `BGREWRITEAOF` | `Store::rewrite_aof()` | Returns after the atomic rename; serialization runs with the keyspace live. |
 | Live-tune fsync | `CONFIG SET appendfsync everysec` | rebuild `Config` | n/a |
+| Graceful shutdown | `SHUTDOWN [SAVE\|NOSAVE]` (or SIGTERM) | drop the last `Store` clone | Drains every shard: in-flight persist jobs land, the AOF tail is force-fsynced, then the process exits. `SAVE` additionally takes one final snapshot per shard. No reply is sent — the client observes the connection closing (Redis behavior). |
 
 ### fsync policy semantics
 
@@ -258,6 +259,11 @@ Process crash (SIGKILL) never loses acknowledged writes under `always`
 and loses at most the fsync window otherwise; the AOF tail is
 replayed on the next open, and a torn final frame is quarantined
 (`panic-quarantine`), never silently applied.
+
+An **orderly stop** (`SHUTDOWN` or SIGTERM) loses nothing under any
+policy: the drain force-fsyncs the AOF tail before exit, so the
+`everysec` window that a crash can lose does not apply to a clean
+shutdown.
 
 ## Atomicity charter (embedded serving-store, v2.1)
 

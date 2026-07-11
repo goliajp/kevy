@@ -1,6 +1,6 @@
 # Designing your application on kevy
 
-kevy v3 is a **serving engine**: the primary data store for
+kevy is a **serving engine**: the primary data store for
 applications that would otherwise put their operational model on a
 relational database and cache in front of it. This page is the map —
 what the engine gives you, the laws that bound it, and where each
@@ -68,7 +68,7 @@ is the wrong shape:
 Numbers are ratchets — floors only rise. The standing lines
 (measured values in `bench/VALIDATION-LEDGER.md`):
 
-- Redis-parity throughput: 7-angle perfgate, floor = baseline×0.92.
+- Redis-parity throughput: 12-angle perfgate, floor = baseline×0.92.
 - Hydrated row-list page p99 < 1ms; view page < 1ms; write fan-out
   through index+view hooks p99 < 200µs — on one server carrying the
   full stack.

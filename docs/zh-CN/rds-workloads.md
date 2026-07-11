@@ -1,6 +1,6 @@
 # 在 kevy 上跑 RDS 负载
 
-你在 MySQL 或 PostgreSQL 上跑着一套业务负载，正考虑把它——整体或部分——搬到 kevy 上。本页是**参考矩阵**：逐一列出 SQL 层面的每种构造、kevy 里承载它的机制、精确到 verb，以及语义差异。凡是 kevy 拒绝的构造，都直说拒绝，并附上已覆盖的替代方案。配套的 [cookbook](../cookbook.md) 把这些行变成可运行的配方；[designing-on-kevy](../designing-on-kevy.md) 是引擎本身的一页地图。
+你在 MySQL 或 PostgreSQL 上跑着一套业务负载，正考虑把它——整体或部分——搬到 kevy 上。本页是**参考矩阵**：逐一列出 SQL 层面的每种构造、kevy 里承载它的机制、精确到 verb，以及语义差异。凡是 kevy 拒绝的构造，都直说拒绝，并附上已覆盖的替代方案。配套的 [cookbook](cookbook.md) 把这些行变成可运行的配方；[designing-on-kevy](../designing-on-kevy.md) 是引擎本身的一页地图。
 
 ## 分工
 
@@ -178,7 +178,7 @@ kevy 的事务故事就是 Redis 的（Law 1），对到 SQL 上是这样：
 | `DROP INDEX` | `IDX.DROP idx` |
 | `\d` / information_schema | `IDX.LIST` / `VIEW.LIST`（state、entries、bytes）|
 
-- **在线构建**：`IDX.CREATE` 立即返回，在后台回填（每百万小行约 7 s；多 KB 的文本体约 85 s/M）。就绪之前查询回答 `-INDEXBUILDING`——轮询 `IDX.LIST` 等 `state=ready`（[migration](../migration.md)）。数据可用性从不等索引构建。
+- **在线构建**：`IDX.CREATE` 立即返回，在后台回填（每百万小行约 7 s；多 KB 的文本体约 85 s/M）。就绪之前查询回答 `-INDEXBUILDING`——轮询 `IDX.LIST` 等 `state=ready`（[migration](migration.md)）。数据可用性从不等索引构建。
 - 索引内容是**派生状态**：从不进快照、从不记 AOF，重启后在后台重建。目录（声明本身）持久化在数据目录的 sidecar 里。
 - 最多 64 个索引；`MAXMEM` 以声明方式给构建设上限（`-INDEXOVERBUDGET`），而不是任其无界增长。
 - **批量导入法则**：先导入，后声明索引——按批量速度回填，胜过每条导入行都付一次写钩子的钱（cookbook 配方 15）。
@@ -213,7 +213,7 @@ PITR 的范围说明：feed 窗口是内存里的 backlog（`feed_buffer_size`�
 | 没有 standby 就拒绝写 | 第 4 级：`min_replicas_to_write`（`-NOREPLICAS`）|
 | 围栏/脑裂守卫 | 第 5 级：多数派租约——被分区的主节点给自己的写上围栏 |
 
-切主：计划内交接走 `FAILOVER` verb（静默 → 追平 → 提升——零丢失）；崩溃切主由 3 节点 elect 多数派完成（MTTR ≈ 5–8 s，offset 最优的候选人当选，所以 `WAIT` 确认过的写能幸存）。前主节点重新加入时，未复制出去的尾巴**一律丢弃**（分叉后缀按定义从未获得确认）——数据丢失的形状与 MySQL 半同步丢掉未送出的 binlog 相同，只是这里写成了明文。每个降级状态都是一个有名字的错误（`-READONLY`、`-STALE`、`-NOREPLICAS`、`-QUIESCED`、`-MISDIRECTED`），路由客户端能据此自愈（[error-replies](../error-replies.md)）。
+切主：计划内交接走 `FAILOVER` verb（静默 → 追平 → 提升——零丢失）；崩溃切主由 3 节点 elect 多数派完成（MTTR ≈ 5–8 s，offset 最优的候选人当选，所以 `WAIT` 确认过的写能幸存）。前主节点重新加入时，未复制出去的尾巴**一律丢弃**（分叉后缀按定义从未获得确认）——数据丢失的形状与 MySQL 半同步丢掉未送出的 binlog 相同，只是这里写成了明文。每个降级状态都是一个有名字的错误（`-READONLY`、`-STALE`、`-NOREPLICAS`、`-QUIESCED`、`-MISDIRECTED`），路由客户端能据此自愈（[error-replies](error-replies.md)）。
 
 ## CDC
 
@@ -260,10 +260,10 @@ feed 就是 kevy 的“binlog 即 API”——Debezium 从 RDS 里抽取的那�
 
 各子系统公式（每条都在 CI 里对实测 RSS 设了 gate）：范围索引 ≈ `rows × (value_width + avg_key_len + 48)`；文本与 ANN 公式见 [text-search](../text-search.md) / [vector-search](../vector-search.md)（1M × 1024 维向量 ≈ 4.1 GiB）；agg ≈ 由分组数主导（[indexes](../indexes.md)）；视图成员 ≈ `order_value_width + key_len + 48`（[views](../views.md)）。设好 `maxmemory` + 一个驱逐策略，或者接受 `-OOM` 拒绝（拒绝发生在写入准入时——已有数据绝不腐蚀）。
 
-**服务余量。**v3.17.0 发布竞技场（kevy vs valkey 9.1，公平对打协议，5 次取中位——`bench/PERF-LEDGER.md`）：GET 3.00×、SET 4.00×、INCR/SADD 2.50×、HSET 2.25×、LPUSH 1.80×、ZADD 1.58×——完整的复制/心跳 pipeline 落地后 7/7 全胜。对上磁盘优先的 RDS 做点查，差距还要更大；那里诚实的比较是“kevy 同时替掉缓存层和业务查询”，不是逐查询的 benchmark。
+**服务余量。**v3.18.0 发布竞技场（kevy vs valkey 9.1，公平对打协议，5 次取中位——`bench/PERF-LEDGER.md`）：GET 3.00×、SET 3.99×、INCR 3.00×、SADD 2.50×、HSET 2.25×、ZADD 1.73×、LPUSH 1.64×——完整的复制/心跳 pipeline 落地后 7/7 全胜。对上磁盘优先的 RDS 做点查，差距还要更大；那里诚实的比较是“kevy 同时替掉缓存层和业务查询”，不是逐查询的 benchmark。
 
-**与 RDS 的运维差异**，简述：单一键空间（没有 schema/database——前缀就是命名空间）；TTL 是一等公民（`EXPIRE`、按字段的 `HEXPIRE`——定时删数据的 cron 任务就此消失）；`FLUSHALL` 只有一条命令之遥（用边界把它保护起来）；派生状态（索引、视图、feed）重启后靠重建而不是加载（每百万行几秒——把它算进重启时间预算）；错误面是契约的一部分——客户端应匹配错误前缀，而不是解析消息文本（[error-replies](../error-replies.md)）。
+**与 RDS 的运维差异**，简述：单一键空间（没有 schema/database——前缀就是命名空间）；TTL 是一等公民（`EXPIRE`、按字段的 `HEXPIRE`——定时删数据的 cron 任务就此消失）；`FLUSHALL` 只有一条命令之遥（用边界把它保护起来）；派生状态（索引、视图、feed）重启后靠重建而不是加载（每百万行几秒——把它算进重启时间预算）；错误面是契约的一部分——客户端应匹配错误前缀，而不是解析消息文本（[error-replies](error-replies.md)）。
 
 ## 本页 vs cookbook
 
-本页是**参考矩阵**——SQL 构造进，kevy 形态出，差异写明。[cookbook](../cookbook.md) 是**配方书**——18 个可运行的模式（每个命令块都过 CI 冒烟），每个都标注它替代的 SQL 构造，并交叉链接回上面的矩阵行。真要迁移？分阶段的 playbook 在 [migration](../migration.md)。
+本页是**参考矩阵**——SQL 构造进，kevy 形态出，差异写明。[cookbook](cookbook.md) 是**配方书**——20 个可运行的模式（每个命令块都过 CI 冒烟），每个都标注它替代的 SQL 构造，并交叉链接回上面的矩阵行。真要迁移？分阶段的 playbook 在 [migration](migration.md)。

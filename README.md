@@ -25,15 +25,18 @@ kevy ships in three forms, all built from the same engine:
   reply-checked byte-for-byte against valkey 9.1 for 98 commands.
 - **Embedded library** — `kevy-embedded` is the same engine without the
   network. Drop it into a Rust binary and call `Store` directly. Pure
-  Rust, zero dependencies, builds for `wasm32`.
+  Rust, zero dependencies, feature-tiered from a bare `core` KV up to
+  the full index/replication surface — and it reaches both extremes:
+  the browser ([`@goliajp/kevy`](docs/wasm.md) on npm) and 655 KB IoT
+  builds ([docs/iot.md](docs/iot.md)).
 - **Clients** — `kevy-client` (blocking) and `kevy-client-async` (one
   feature flag per runtime: tokio / smol / async-std). Both accept a
   URL so the same code targets a TCP server (`kevy://host:port`) or an
   in-process bus (`mem://name`).
 
-## kevy v3 — a serving engine
+## kevy 4 — a serving engine, set in stone
 
-v3 declares kevy a **serving engine**: the primary store for
+3.x declared kevy a **serving engine**: the primary store for
 applications that would otherwise run an RDS with a cache in front.
 On top of full Redis parity you get declared secondary indexes
 (range / unique / CJK full-text / vector ANN, with server-side hybrid
@@ -49,6 +52,12 @@ planned zero-loss handover (`FAILOVER`) plus quorum crash elections,
 and an opt-in consistency ladder (`WAIT`, read-your-writes tokens,
 bounded staleness, quorum-fenced writes) — see
 [docs/availability.md](docs/availability.md).
+4.0 sets it in stone: the public Rust API was consolidated once —
+one error type (`KevyError`), one builder, borrowed write faces
+([docs/UPGRADING.md](docs/UPGRADING.md)) — and is frozen add-only;
+the runtime is instance-scoped, so one process can run several
+independent kevys; and the same engine now ships to the browser and
+to the edge (the two sections below).
 Every headline number is gated and re-measured on every train:
 hydrated row-list pages p99 < 1ms, write fan-out p99 < 200µs, ANN
 recall ≥ 0.9 — see [the design map](docs/designing-on-kevy.md),
@@ -112,7 +121,7 @@ use kevy_embedded::{Config, Store};
 let store = Store::open(Config::default().without_aof())?;
 store.set(b"key", b"value")?;
 assert_eq!(store.get(b"key")?, Some(b"value".to_vec()));
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 `Store` is `Clone` and every method takes `&self`, so a clone can move
@@ -128,7 +137,7 @@ let mut conn = Connection::connect("tcp://127.0.0.1:6379")?;
 conn.set(b"k", b"v")?;
 let v = conn.get(b"k")?;
 assert_eq!(v.as_deref(), Some(&b"v"[..]));
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 The same URL surface accepts `mem://app` for an in-process backend, so
@@ -151,6 +160,58 @@ let v = conn.get(b"k").await?;
 Pick exactly one of `tokio`, `smol`, or `async-std` as a Cargo feature;
 the crate refuses to compile on zero or more than one.
 
+## In the browser
+
+kevy runs in the browser as a real store: the npm package
+[`@goliajp/kevy`](https://www.npmjs.com/package/@goliajp/kevy) ships
+the engine compiled to `wasm32-unknown-unknown` behind a hand-written
+ES-module loader — no wasm-bindgen, zero dependencies on either side
+of the boundary; six files, ~165 KB packed.
+
+```sh
+npm install @goliajp/kevy
+```
+
+```js
+import { open } from "@goliajp/kevy";
+
+const db = await open({ persist: { name: "app" } });
+db.set("session", "abc123", { ttlMs: 60_000 });
+db.subscribe("events", (payload) => { /* fires from any tab */ });
+```
+
+- **Durable**: writes stream to OPFS (IndexedDB fallback) as a kevy
+  append-only log, byte-compatible with native kevy — a log written
+  in the browser replays on a server.
+- **Cross-tab pub/sub** over a BroadcastChannel bridge, with the same
+  at-most-once contract as the server.
+- **Fast where a store needs to be**: 77–86× IndexedDB on point reads,
+  166–189× on point writes, and 12.6–17.4× its durable-write rate
+  ([`bench/WASM-BENCH.md`](bench/WASM-BENCH.md)).
+
+[docs/wasm.md](docs/wasm.md) has the loader API and the ABI contract;
+[kevy.golia.jp/demo](https://kevy.golia.jp/demo/) is the whole thing
+live — a browser REPL with persistence and cross-tab pub/sub, no
+backend.
+
+## On the edge (IoT)
+
+The same embedded library scales down. `kevy-embedded` is
+feature-tiered (`core` / `persist` / `index` / `text` / `vector` /
+`replicate` / `listener`; the default is everything), and the `core`
+tier compiles to a **655 KB** binary (budget ≤ 700 KB) that opens an
+empty store in under 2 MB of RSS — both lines enforced as a ratchet
+by [`bench/iotgate.sh`](bench/iotgate.sh).
+
+- Static musl cross-builds for `aarch64` and `armv7` are gated in CI.
+- Below Linux entirely: five foundation crates (`kevy-store`,
+  `kevy-hash`, `kevy-bytes`, `kevy-map`, `kevy-madvise`) build
+  `no_std` + `alloc`, proven on a Cortex-M target
+  (`thumbv7em-none-eabihf`).
+
+See [docs/iot.md](docs/iot.md) for the tier table, the budgets, and a
+sensor-cache example.
+
 ## Performance
 
 A representative slice from the bare-metal benchmark suite (16-core
@@ -166,6 +227,17 @@ reproducible from a script in [`bench/`](bench/).
 | Pub/sub fan-out (50 subs) | 23.1 M/s | 5.1 M/s | **4.52×** |
 | Embedded `get` (hit) | 9.0 M/s | — | (no in-process Redis) |
 
+The same `GET -c 50 -P 16` face, four engines on one box — kevy at
+6.39 M/s against each (median-of-5; method and per-engine cycle
+accounting in
+[`bench/PERF-VERDICT-V4-T9.md`](bench/PERF-VERDICT-V4-T9.md)):
+
+| Engine | kevy's lead |
+|---|---:|
+| valkey 9.1 | **3.00×** |
+| redis 8 | **1.60×** |
+| dragonfly | **3.60×** |
+
 And the serving face vs redis-stack 7.4.7 (RediSearch), same seeded
 corpora, recall-aligned ([`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)):
 
@@ -179,9 +251,11 @@ corpora, recall-aligned ([`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)):
 A complete server is a 768 KB stripped binary that boots into under
 5 MB of RSS.
 
-**Upgrading from 2.x?** See [docs/UPGRADING.md](docs/UPGRADING.md) —
-binary swap for the server, dependency bump for embedded (the 1.x
-embedded line unified into 3.x); snapshots and AOF load as-is.
+**Upgrading?** [docs/UPGRADING.md](docs/UPGRADING.md) covers both
+hops in one place — 3.x → 4.0 (wire and disk carry over; the Rust
+API changed once, with a table and a rule for every rename) and
+2.x → 3.x (binary swap + dependency bump). Snapshots and AOF load
+as-is across majors in the upgrade direction.
 
 ## Compatibility
 
@@ -229,6 +303,7 @@ All run unmodified against a default `kevy --port 6379` instance.
 | [`kevy-madvise`](crates/kevy-madvise) | Linux `MADV_HUGEPAGE` wrapper; no-op elsewhere |
 | [`kevy-uring`](crates/kevy-uring) | Pure-Rust io_uring bindings — no liburing linked |
 | [`kevy-geo`](crates/kevy-geo) | Geospatial command primitives |
+| [`kevy-wasm`](crates/kevy-wasm) | The browser build: hand-written C ABI + the `@goliajp/kevy` loader |
 | [`kevy-lua`](crates/kevy-lua) | Lua scripting bridge (backed by the [luna](https://github.com/goliajp/luna) runtime) |
 
 The remaining crates (`kevy-store`, `kevy-rt`, `kevy-persist`,
@@ -256,7 +331,8 @@ server's own metadata — the same rows `COMMAND DOCS` serves).
 | Lua scripting | [`docs/lua.md`](docs/lua.md) |
 | Unix-domain socket | [`docs/uds.md`](docs/uds.md) |
 | Async client | [`docs/async.md`](docs/async.md) |
-| WebAssembly build | [`docs/wasm.md`](docs/wasm.md) |
+| Browser / WASM | [`docs/wasm.md`](docs/wasm.md) |
+| IoT & feature tiers | [`docs/iot.md`](docs/iot.md) |
 | Accept-shard sizing | [`docs/accept-shards.md`](docs/accept-shards.md) |
 | Error reply reference | [`docs/error-replies.md`](docs/error-replies.md) |
 
@@ -290,11 +366,11 @@ build for `wasm32-unknown-unknown` and `wasm32-wasip1`.
 
 ## Roadmap and stability
 
-The workspace is on the v3.x line. Persistence format, RESP wire
+The workspace is on the v4.x line. Persistence format, RESP wire
 protocol, public Rust API, CLI flags, env vars, TOML schema, and
 eviction semantics are add-only across each major line — and the
 on-disk formats carry across majors: a snapshot or AOF written by
-v2.0 loads as-is on every 3.x build (see
+v2.0 loads as-is on every 3.x and 4.x build (see
 [docs/UPGRADING.md](docs/UPGRADING.md)). Additive features land in
 minor releases without breaking earlier code. The full stability
 contract is in

@@ -24,16 +24,18 @@ kevy 以三种形态交付，全部构建自同一个引擎：
 - **服务器**——兼容 Redis 线协议的守护进程。讲 RESP2，98 条命令的
   回复逐字节对照 valkey 9.1 校验。
 - **嵌入式库**——`kevy-embedded` 是去掉网络层的同一个引擎。把它放进
-  Rust 二进制里，直接调用 `Store`。纯 Rust、零依赖，可构建到
-  `wasm32`。
+  Rust 二进制里，直接调用 `Store`。纯 Rust、零依赖，feature 分档从
+  裸 `core` KV 一路到完整的索引/复制面——并且两个极端都够得着：
+  浏览器（npm 上的 [`@goliajp/kevy`](docs/zh-CN/wasm.md)）和 655 KB
+  的 IoT 构建（[docs/iot.md](docs/iot.md)）。
 - **客户端**——`kevy-client`（阻塞式）与 `kevy-client-async`（每种
   运行时一个 feature flag：tokio / smol / async-std）。两者都接受
   一个 URL，所以同一段代码既能对接 TCP 服务器（`kevy://host:port`），
   也能对接进程内总线（`mem://name`）。
 
-## kevy v3——serving engine（服务引擎）
+## kevy 4——serving engine（服务引擎），一次定型
 
-v3 宣告 kevy 成为 **serving engine**：让原本要跑"RDS + 前置缓存"的
+3.x 宣告 kevy 成为 **serving engine**：让原本要跑"RDS + 前置缓存"的
 应用把 kevy 当作主存储。在完整 Redis 兼容之上，你会得到：声明式二级
 索引（range / unique / CJK 全文 / 向量 ANN，含服务端混合 BM25 + KNN
 融合）加一跳 hydration、可组合视图（虚拟与物化 top-K）、带精确恢复点
@@ -45,6 +47,11 @@ derived-by-construction（在写路径里同步维护、永不漂移、可从数
 加多数派崩溃选举，以及按需启用的一致性阶梯（`WAIT`、读己之写
 token、有界陈旧读、多数派围栏写入）——见
 [docs/zh-CN/availability.md](docs/zh-CN/availability.md)。
+4.0 把这一切一次定型：公开 Rust API 做了一次性整备——统一错误类型
+（`KevyError`）、统一 builder、借用化写面
+（[docs/UPGRADING.md](docs/UPGRADING.md)）——此后冻结、只增不减；
+运行时按实例作用域化，一个进程可以跑多个互不干扰的 kevy；同一个
+引擎现在还能进浏览器、上边缘设备（见下面两节）。
 每个 headline 指标都有门禁，并在每列 train 上复测：hydrated
 行列表页 p99 < 1ms、写扇出 p99 < 200µs、ANN recall ≥ 0.9——见
 [设计地图](docs/designing-on-kevy.md)、[cookbook](docs/cookbook.md)
@@ -106,7 +113,7 @@ use kevy_embedded::{Config, Store};
 let store = Store::open(Config::default().without_aof())?;
 store.set(b"key", b"value")?;
 assert_eq!(store.get(b"key")?, Some(b"value".to_vec()));
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 `Store` 实现了 `Clone`，所有方法都接收 `&self`，所以克隆可以在线程
@@ -118,11 +125,11 @@ assert_eq!(store.get(b"key")?, Some(b"value".to_vec()));
 ```rust
 use kevy_client::Connection;
 
-let mut conn = Connection::open("tcp://127.0.0.1:6379")?;
+let mut conn = Connection::connect("tcp://127.0.0.1:6379")?;
 conn.set(b"k", b"v")?;
 let v = conn.get(b"k")?;
 assert_eq!(v.as_deref(), Some(&b"v"[..]));
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 同一套 URL 表面也接受 `mem://app` 作为进程内后端，所以同一套代码
@@ -134,7 +141,7 @@ assert_eq!(v.as_deref(), Some(&b"v"[..]));
 use kevy_client_async::AsyncConnection;
 
 # async fn run() -> std::io::Result<()> {
-let mut conn = AsyncConnection::open("tcp://127.0.0.1:6379").await?;
+let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6379").await?;
 conn.set(b"k", b"v").await?;
 let v = conn.get(b"k").await?;
 # Ok(())
@@ -143,6 +150,54 @@ let v = conn.get(b"k").await?;
 
 从 `tokio`、`smol`、`async-std` 中**恰好**选一个作为 Cargo feature；
 零个或多个 feature 都会让 crate 拒绝编译。
+
+## 在浏览器里
+
+kevy 在浏览器里是一个真正的存储：npm 包
+[`@goliajp/kevy`](https://www.npmjs.com/package/@goliajp/kevy) 把
+编译到 `wasm32-unknown-unknown` 的引擎装进一个手写的 ES module
+loader——没有 wasm-bindgen，边界两侧都是零依赖；六个文件，打包约
+165 KB。
+
+```sh
+npm install @goliajp/kevy
+```
+
+```js
+import { open } from "@goliajp/kevy";
+
+const db = await open({ persist: { name: "app" } });
+db.set("session", "abc123", { ttlMs: 60_000 });
+db.subscribe("events", (payload) => { /* 任何 tab 里都会触发 */ });
+```
+
+- **可持久**：写入以 kevy append-only log 的形式流入 OPFS
+  （IndexedDB 兜底），与原生 kevy 字节同格——浏览器里写出的日志
+  可以在服务器上原样 replay。
+- **跨 tab pub/sub**：走 BroadcastChannel 桥，与服务器同样的
+  at-most-once 契约。
+- **在存储该快的地方快**：点读是 IndexedDB 的 77–86×，点写
+  166–189×，持久写吞吐是其 12.6–17.4×
+  （[`bench/WASM-BENCH.md`](bench/WASM-BENCH.md)）。
+
+loader API 与 ABI 契约见 [docs/zh-CN/wasm.md](docs/zh-CN/wasm.md)；
+[kevy.golia.jp/demo](https://kevy.golia.jp/demo/) 是这一切的在线
+版本——一个带持久化和跨 tab pub/sub 的浏览器 REPL，没有任何后端。
+
+## 在边缘设备上（IoT）
+
+同一个嵌入式库也能向下伸缩。`kevy-embedded` 按 feature 分档
+（`core` / `persist` / `index` / `text` / `vector` / `replicate` /
+`listener`；默认全开），其中 `core` 档编译出 **655 KB** 的二进制
+（预算 ≤ 700 KB），空 store 打开后 RSS 不到 2 MB——两条线都由
+[`bench/iotgate.sh`](bench/iotgate.sh) 作为 ratchet 强制执行。
+
+- `aarch64` 与 `armv7` 的静态 musl 交叉构建在 CI 里有门禁。
+- 再往下到 Linux 之外：五个基础 crate（`kevy-store`、`kevy-hash`、
+  `kevy-bytes`、`kevy-map`、`kevy-madvise`）支持 `no_std` +
+  `alloc`，在 Cortex-M 目标（`thumbv7em-none-eabihf`）上验证过。
+
+档位表、预算与传感器缓存示例见 [docs/iot.md](docs/iot.md)。
 
 ## 性能
 
@@ -158,6 +213,16 @@ let v = conn.get(b"k").await?;
 | Pub/sub 扇出（50 订阅） | 23.1 M/s | 5.1 M/s | **4.52×** |
 | 嵌入式 `get`（命中） | 9.0 M/s | — | （Redis 无进程内形态） |
 
+同一个 `GET -c 50 -P 16` 面，同一台机器上对打四个引擎——kevy
+以 6.39 M/s 分别对阵（median-of-5；方法与逐引擎的 cycle 记账见
+[`bench/PERF-VERDICT-V4-T9.md`](bench/PERF-VERDICT-V4-T9.md)）：
+
+| 引擎 | kevy 领先 |
+|---|---:|
+| valkey 9.1 | **3.00×** |
+| redis 8 | **1.60×** |
+| dragonfly | **3.60×** |
+
 Serving 面对打 redis-stack 7.4.7（RediSearch），同种子同语料、
 recall 对齐（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：
 
@@ -171,9 +236,10 @@ recall 对齐（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：
 一个完整的服务器是一个 768 KB 的 stripped 二进制，启动后驻留内存
 不到 5 MB。
 
-**从 2.x 升级？** 见 [docs/UPGRADING.md](docs/UPGRADING.md)——
-服务器直接换二进制，嵌入式升一个依赖版本（1.x embedded 线已并入
-3.x）；快照和 AOF 原样加载。
+**要升级？** [docs/UPGRADING.md](docs/UPGRADING.md) 一处讲清两跳
+——3.x → 4.0（wire 与磁盘原样延续；Rust API 做了一次性变更，每个
+改名都有对照表和一条规则）以及 2.x → 3.x（换二进制 + 升依赖）。
+沿升级方向，快照和 AOF 跨 major 原样加载。
 
 ## 兼容性
 
@@ -220,6 +286,7 @@ recall 对齐（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：
 | [`kevy-madvise`](crates/kevy-madvise) | Linux `MADV_HUGEPAGE` 封装；其他平台是 no-op |
 | [`kevy-uring`](crates/kevy-uring) | 纯 Rust io_uring 绑定——不链接 liburing |
 | [`kevy-geo`](crates/kevy-geo) | 地理空间命令原语 |
+| [`kevy-wasm`](crates/kevy-wasm) | 浏览器构建：手写 C ABI + `@goliajp/kevy` loader |
 | [`kevy-lua`](crates/kevy-lua) | Lua 脚本桥接（基于 [luna](https://github.com/goliajp/luna) 运行时） |
 
 其余 crate（`kevy-store`、`kevy-rt`、`kevy-persist`、`kevy-sys`、
@@ -246,7 +313,8 @@ recall 对齐（[`bench/PERF-LEDGER.md`](bench/PERF-LEDGER.md)）：
 | Lua 脚本 | [`docs/lua.md`](docs/lua.md) |
 | Unix 域套接字 | [`docs/zh-CN/uds.md`](docs/zh-CN/uds.md) |
 | 异步客户端 | [`docs/zh-CN/async.md`](docs/zh-CN/async.md) |
-| WebAssembly 构建 | [`docs/zh-CN/wasm.md`](docs/zh-CN/wasm.md) |
+| 浏览器 / WASM | [`docs/zh-CN/wasm.md`](docs/zh-CN/wasm.md) |
+| IoT 与 feature 档位 | [`docs/iot.md`](docs/iot.md) |
 | Accept-shard 容量规划 | [`docs/accept-shards.md`](docs/accept-shards.md) |
 | 错误回复参考 | [`docs/error-replies.md`](docs/error-replies.md) |
 
@@ -279,10 +347,10 @@ Stable Rust 1.97.0，Rust 2024 edition。在 Linux（`x86_64`、`aarch64`）
 
 ## 路线图与稳定性
 
-workspace 当前处在 v3.x 线上。持久化格式、RESP 线协议、公开的
+workspace 当前处在 v4.x 线上。持久化格式、RESP 线协议、公开的
 Rust API、CLI 参数、环境变量、TOML schema 以及驱逐语义在每条主线内
 **只增不减**——而且磁盘格式跨 major 延续：v2.0 写出的快照或 AOF
-在每一个 3.x 构建上都能原样加载（见
+在每一个 3.x 和 4.x 构建上都能原样加载（见
 [docs/UPGRADING.md](docs/UPGRADING.md)）。新增功能在 minor 发布里
 落地，不破坏既有代码。完整的稳定性契约见
 [`MIGRATION-FROM-VALKEY.md`](MIGRATION-FROM-VALKEY.md#v1x-stability-commitment)。

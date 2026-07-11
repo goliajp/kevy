@@ -17,7 +17,8 @@ is GENERATED from the server's verb metadata table — do not edit by hand.
 - [RDS workloads](docs/rds-workloads.md): SQL-to-kevy reference matrix (types, SELECT, JOIN, transactions, DDL)
 - [Indexes](docs/indexes.md) · [Views](docs/views.md) · [Text search](docs/text-search.md) · [Vector search](docs/vector-search.md)
 - [CDC feeds](docs/cdc.md) · [Replication](docs/replication.md) · [Availability & failover](docs/availability.md) · [Persistence](docs/persistence.md)
-- [Migration](docs/migration.md) · [Upgrading 2.x to 3.x](docs/UPGRADING.md)
+- [Migration](docs/migration.md) · [Upgrading between majors](docs/UPGRADING.md)
+- [WASM / browser](docs/wasm.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
 ## Verbs (189 total)

@@ -149,7 +149,7 @@ match sub.recv()? {
     }
     other => panic!("unexpected frame: {other:?}"),
 }
-# Ok::<(), kevy_client::KevyError>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 `Store::clone` is cheap (it's an `Arc` bump), so the common shape is
@@ -192,6 +192,57 @@ matching pattern subscription receives **two** copies — one
 "same `Subscription` listed twice in the same channel index"
 duplicate, not channel-vs-pattern overlap.
 
+## Keyspace notifications
+
+kevy can announce keyspace changes over pub/sub, Redis-style: a write
+to `user:42` fires `__keyspace@0__:user:42` (payload = the event
+name, e.g. `set`) and/or `__keyevent@0__:set` (payload = the key).
+kevy serves DB 0 only, so the channel names always carry `@0`.
+
+Off by default — with the flag string empty, every write pays one
+atomic load and skips. Enable it in the config file:
+
+```toml
+[notification]
+notify_keyspace_events = "KEA"   # everything, both channels
+```
+
+The flag string follows the Redis convention — channels first, then
+event classes:
+
+| flag | meaning |
+|---|---|
+| `K` | publish on the `__keyspace@0__:<key>` channel |
+| `E` | publish on the `__keyevent@0__:<event>` channel |
+| `g` | generic commands — `DEL`, `EXPIRE`, `PERSIST`, `RENAME`, … |
+| `$` | string commands — `SET`, `INCR`, `APPEND`, `MSET`, … |
+| `l` | list commands |
+| `s` | set commands |
+| `h` | hash commands |
+| `z` | sorted-set commands |
+| `t` | stream commands — `XADD`, `XTRIM`, `XGROUP`, … |
+| `x` | `expired` events — a TTL'd key removed (lazily on access or by the reaper) |
+| `e` | `evicted` events — a key removed by `maxmemory` pressure |
+| `n` | `new` events — a key added to the keyspace |
+| `A` | alias for `g$lshztxe` (every class except `n`, matching Redis) |
+
+At least one of `K`/`E` plus at least one event class must be set for
+anything to fire. An unknown character in the string is a **config
+error at startup** — a typo'd flag string refuses admission instead
+of silently dropping events. Subscribe with an ordinary pattern
+subscription:
+
+```sh
+redis-cli -p 6379 PSUBSCRIBE '__keyevent@0__:*'
+```
+
+Notification delivery rides the same at-most-once pub/sub bus as
+everything else on this page: no subscriber at publish time means the
+event is gone. Consumers that must not miss changes belong on the CDC
+feed ([`docs/cdc.md`](https://github.com/goliajp/kevy/blob/develop/docs/cdc.md)),
+which is cursored and replayable — keyspace notifications are the
+"wake up" signal, not the ledger.
+
 ## URL backend table
 
 | URL                                | Backing store              | Shared across opens?                              | Cross-process visible? |
@@ -205,7 +256,7 @@ duplicate, not channel-vs-pattern overlap.
 
 Anonymous `mem://` cannot receive published messages — nothing else
 can reach the same backing `Store`, so `Subscriber::connect_channels` rejects
-it with `ErrorKind::Unsupported`. Use `mem://<some-name>` whenever
+it with `KevyError::Unsupported`. Use `mem://<some-name>` whenever
 you intend to publish.
 
 `rediss://`, `kevys://`, and `redis://user:pass@…` are rejected for
