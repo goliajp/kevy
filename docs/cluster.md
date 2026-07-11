@@ -97,7 +97,7 @@ A runnable seed example lives at [`crates/kevy-client/examples/cluster.rs`](http
 2. **Route.** Every single-key command computes `key_hash_slot(key)` (CRC16-XMODEM over the `{hashtag}` if present, else the whole key) and sends straight to that slot's owner connection.
 3. **Fan-out where needed.** `dbsize`, `flushall`, and other whole-cluster commands are handled server-side; the client issues one call.
 
-On a 16-core lx64 box with GET at concurrency 64, removing the cross-shard hop lifts measured throughput from 333 k ops/s to 533 k ops/s (1.6×) and drops p99 from 3858 µs to 260 µs (~15× lower tail). Reproduce with `cargo run -p kevy-client --release --example cluster_bench`.
+On a 16-core Linux box with GET at concurrency 64, removing the cross-shard hop lifts measured throughput from 333 k ops/s to 533 k ops/s (1.6×) and drops p99 from 3858 µs to 260 µs (~15× lower tail). Reproduce with `cargo run -p kevy-client --release --example cluster_bench`.
 
 > The hop's cost only shows up under load on a clean machine. On a small co-located cloud VM the difference is buried in scheduling noise.
 
@@ -170,8 +170,8 @@ use kevy_embedded::Store;
 let replica = Store::open_replica("primary.local:16004")?;
 
 let v = replica.get(b"hello")?;
-assert!(replica.set(b"k", b"v").is_err());      // READONLY
-# Ok::<(), kevy_client::KevyError>(())
+assert!(replica.set(b"k", b"v").is_err());      // KevyError::ReadOnly
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 For tuning:
@@ -185,7 +185,7 @@ let cfg = Config::default()
     .with_replica_id("backup-svc-region-a")
     .with_replica_reconnect(Duration::from_millis(50), Duration::from_secs(10));
 let replica = Store::open(cfg)?;
-# Ok::<(), kevy_client::KevyError>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 The handshake sends `REPLICATE FROM <last-applied-offset> ID <replica_id>`; the primary acks the offset and streams frames. The runner thread is joined when the last `Store` clone drops, so the primary observes a clean FIN and frees the slot. `PUBLISH` is allowed locally on the embed (pub/sub is process-local), but the keyspace itself remains read-only.
@@ -223,7 +223,7 @@ let writer = Store::open(
 // Local writes feed the embed's replication source backlog;
 // readers connect to 0.0.0.0:6105 via kevy_replicate::ReplicaClient.
 writer.set(b"app:billing:invoice:42", b"...")?;
-# Ok::<(), kevy_client::KevyError>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 The embed exposes a replication listener on the address passed to `with_embed_writer`. Other nodes pull the log from there exactly as they would from a server primary.
@@ -261,7 +261,7 @@ MOVE-SCOPE <prefix> from <from-node-id> to <to-node-id>
 Step by step:
 
 1. The current writer flips local state for `<prefix>` to MIGRATING. Subsequent writes to keys under the prefix return `-QUIESCED migrating to <to-host:port>`. Clients back off briefly and retry.
-2. The writer serialises the prefix's keyspace slice and ships it via `MOVE-SCOPE-INGEST <prefix> <bulk>` to the target's data port.
+2. The writer serialises the prefix's keyspace slice and ships it via `MOVE-SCOPE-INGEST <prefix> <bulk>` to the target's data port. Every value type moves with full fidelity — including streams, which carry their entries, `last_id` bookkeeping, consumer groups, consumers, and live pending (PEL) rows across the move (only tombstone PEL rows for already-deleted entries are dropped; no RESP verb can recreate those).
 3. On `+OK` from the target, the writer commits the migration locally. Future writes for the prefix on the source now return `-MISDIRECTED writer is <to-host:port>`.
 4. Other cluster members continue routing per their static `scopes` config until the operator pushes new config and restarts.
 

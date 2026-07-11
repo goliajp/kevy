@@ -423,10 +423,11 @@ agg ≈ groups-dominated ([indexes](indexes.md)); view members ≈
 `maxmemory` + an eviction policy or accept `-OOM` refusals (writes are
 rejected at admission — existing data is never corrupted).
 
-**Serving headroom.** The v3.17.0 release arena (kevy vs valkey 9.1,
+**Serving headroom.** The v3.18.0 release arena (kevy vs valkey 9.1,
 fair-fight protocol, median-of-5 — `bench/PERF-LEDGER.md`): GET 3.00×,
-SET 4.00×, INCR/SADD 2.50×, HSET 2.25×, LPUSH 1.80×, ZADD 1.58× —
-7/7 wins with the full replication/heartbeat pipeline landed. Against
+SET 3.99×, INCR 3.00×, SADD 2.50×, HSET 2.25×, ZADD 1.73×,
+LPUSH 1.64× — 7/7 wins with the full replication/heartbeat pipeline
+landed. Against
 a disk-first RDS on point reads the gap is larger still; the honest
 comparison there is "kevy replaces the cache tier AND the operational
 queries", not a per-query benchmark.
@@ -444,7 +445,7 @@ prefixes, not parse messages ([error-replies](error-replies.md)).
 
 This page is the **reference matrix** — SQL construct in, kevy shape
 out, deltas stated. The [cookbook](cookbook.md) is the **recipe book**
-— 18 runnable patterns (every command block CI-smoked), each tagged
+— 20 runnable patterns (every command block CI-smoked), each tagged
 with the SQL construct it replaces and cross-linked back to the matrix
 rows above. Migrating for real? The phased playbook is in
 [migration](migration.md).

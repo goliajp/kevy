@@ -91,8 +91,8 @@ fn main() -> kevy_embedded::KevyResult<()> {
 
     let store = Store::open(cfg)?;
 
-    store.set("hello", b"world")?;
-    store.pexpire("hello", Duration::from_secs(300))?;
+    store.set(b"hello", b"world")?;
+    store.expire(b"hello", Duration::from_secs(300))?;
 
     // ある時点のスナップショット。ファイルがディスクに書き出された後に戻る。
     // シャードごとのロックはビューの freeze と最後の rename のあいだだけ保持される。
@@ -132,6 +132,7 @@ fn main() -> kevy_embedded::KevyResult<()> {
 | バックグラウンドスナップショット | `BGSAVE` | ワーカースレッドから`save_snapshot`を呼ぶ | 即座に戻る。コミットはディスク書き出し完了から1 reactor tick以内に確定。 |
 | AOFリライト | `BGREWRITEAOF` | `Store::rewrite_aof()` | アトミックなrenameの後に戻る。シリアライズはキー空間がライブのまま走る。 |
 | fsyncのライブ変更 | `CONFIG SET appendfsync everysec` | `Config`を再構築 | n/a |
+| 正常終了 | `SHUTDOWN [SAVE\|NOSAVE]`（またはSIGTERM） | 最後の`Store`クローンをdrop | 全シャードをドレインする。実行中のpersistジョブが着地し、AOF末尾が強制fsyncされ、その後プロセスが終了する。`SAVE`はさらにシャードごとに最後のスナップショットを1つ取る。リプライは送られない——クライアントは接続が閉じるのを観測する（Redisの振る舞い）。 |
 
 ### fsyncポリシーの意味
 
@@ -249,6 +250,8 @@ TTLがあるはずなのに`expire_pending_count() == 0`が返るなら、それ
 `Store::fsync_aof()`は書き込み単位の耐久性エスケープハッチです（Postgresのトランザクション単位`synchronous_commit`の系統）。デプロイはスループットのために`everysec`で走らせ、確認された瞬間からマシンクラッシュを生き延びなければならない少数の書き込みの後ろにだけバリアを置く、という使い方をします。コストはダーティなシャードごとに1回の`fdatasync`です。
 
 プロセスクラッシュ（SIGKILL）では、`always`の下では確認済みの書き込みを決して失わず、それ以外では最大でfsyncウィンドウ分を失います。AOF末尾は次のオープンでリプレイされ、破れた最終フレームは隔離されます（`panic-quarantine`）。黙って適用されることはありません。
+
+**秩序ある停止**（`SHUTDOWN`またはSIGTERM）は、どのポリシーの下でも何も失いません。ドレインが終了前にAOF末尾を強制fsyncするので、クラッシュなら失い得る`everysec`のウィンドウは、クリーンなシャットダウンには当てはまりません。
 
 ## アトミック性憲章（組み込みserving-store、v2.1）
 

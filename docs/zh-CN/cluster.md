@@ -97,7 +97,7 @@ let removed = cc.del(&[b"a", b"b", b"c"])?;
 2. **路由。**每条单键命令计算 `key_hash_slot(key)`（存在 `{hashtag}` 时对其做 CRC16-XMODEM，否则对整个键），直接发到该 slot 持有者的连接上。
 3. **必要时扇出。**`dbsize`、`flushall` 等全集群命令由服务端处理；客户端只发一次调用。
 
-在 16 核 lx64 机器上以并发 64 跑 GET，省掉跨 shard 一跳后，实测吞吐从 333 k ops/s 升到 533 k ops/s（1.6×），p99 从 3858 µs 降到 260 µs（尾延迟约低 15 倍）。复现命令：`cargo run -p kevy-client --release --example cluster_bench`。
+在 16 核 Linux 机器上以并发 64 跑 GET，省掉跨 shard 一跳后，实测吞吐从 333 k ops/s 升到 533 k ops/s（1.6×），p99 从 3858 µs 降到 260 µs（尾延迟约低 15 倍）。复现命令：`cargo run -p kevy-client --release --example cluster_bench`。
 
 > 这一跳的开销只有在干净机器上压足负载才看得见。在同宿主的小型云 VM 上，差距会被调度噪声淹没。
 
@@ -170,8 +170,8 @@ use kevy_embedded::Store;
 let replica = Store::open_replica("primary.local:16004")?;
 
 let v = replica.get(b"hello")?;
-assert!(replica.set(b"k", b"v").is_err());      // READONLY
-# Ok::<(), kevy_client::KevyError>(())
+assert!(replica.set(b"k", b"v").is_err());      // KevyError::ReadOnly
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 需要调参时：
@@ -185,7 +185,7 @@ let cfg = Config::default()
     .with_replica_id("backup-svc-region-a")
     .with_replica_reconnect(Duration::from_millis(50), Duration::from_secs(10));
 let replica = Store::open(cfg)?;
-# Ok::<(), kevy_client::KevyError>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 握手时发送 `REPLICATE FROM <last-applied-offset> ID <replica_id>`；主节点确认该 offset 后开始流式发送帧。最后一个 `Store` 克隆 drop 时会 join runner 线程，主节点因此能观察到干净的 FIN 并释放连接槽位。embed 本地允许 `PUBLISH`（pub/sub 是进程内局部的），但键空间本身保持只读。
@@ -223,7 +223,7 @@ let writer = Store::open(
 // Local writes feed the embed's replication source backlog;
 // readers connect to 0.0.0.0:6105 via kevy_replicate::ReplicaClient.
 writer.set(b"app:billing:invoice:42", b"...")?;
-# Ok::<(), kevy_client::KevyError>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 embed 会在传给 `with_embed_writer` 的地址上开一个复制监听。其他节点从这里拉日志，和从服务器主节点拉完全一样。
@@ -261,7 +261,7 @@ MOVE-SCOPE <prefix> from <from-node-id> to <to-node-id>
 流程如下：
 
 1. 当前写者把 `<prefix>` 的本地状态翻成 MIGRATING。此后落在该前缀下的写返回 `-QUIESCED migrating to <to-host:port>`；客户端短暂退避后重试。
-2. 写者把该前缀的键空间切片序列化，经 `MOVE-SCOPE-INGEST <prefix> <bulk>` 发到目标节点的数据端口。
+2. 写者把该前缀的键空间切片序列化，经 `MOVE-SCOPE-INGEST <prefix> <bulk>` 发到目标节点的数据端口。每种值类型都全保真迁移——包括 stream：条目、`last_id` 记账、消费者组、消费者、以及在途 pending（PEL）行都随迁（只有指向已删除条目的 tombstone PEL 行会被丢弃；没有任何 RESP verb 能重建它们）。
 3. 目标回 `+OK` 后，写者在本地提交这次迁移。源节点上此后对该前缀的写返回 `-MISDIRECTED writer is <to-host:port>`。
 4. 集群其他成员继续按各自的静态 `scopes` 配置路由，直到运维推送新配置并重启它们。
 

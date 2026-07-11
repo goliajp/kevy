@@ -90,6 +90,8 @@ redis-cli -s /tmp/kevy.sock SET foo bar
 
 **绑定地址警告。** kevy 目前既没有 AUTH 也没有 TLS。绑定到非 loopback 地址（`--bind 0.0.0.0` 或任何公网接口）会在启动时打印警告，因为此时网络上的任何一方都能直接下发命令。请把 kevy 放在私有网络边界之内，或者放在负责认证的代理后面。
 
+**连接内省。**`INFO clients` 报告跨全部 shard 求和的实时 `connected_clients` 仪表。`CLIENT LIST` / `CLIENT INFO` 为每条真实客户端连接渲染一行 Redis 7.x 形状的记录——对端地址、全局唯一 `id`、`name`、订阅计数、MULTI 队列深度、输入/输出缓冲大小（`cmd=NULL`：不跟踪最近命令名）。`CLIENT SETNAME` 给连接打标签供 LIST 查看；`CLIENT KILL ID <id> | ADDR <ip:port> | LADDR <ip:port>`（或旧式位置参数 `CLIENT KILL <ip:port>`）关闭所有匹配的连接，包括停在阻塞命令里的连接。拆连接前会等受害者的待发输出排空，所以杀掉自己的连接依然能收到自己那条回复。
+
 ### 复制与可用性
 
 只在跑主节点/副本拓扑时才需要关心（[docs/replication.md](replication.md)、[docs/availability.md](availability.md)）。

@@ -123,7 +123,7 @@ redis-cli -p 6004 INFO replication          # on the replica
 # slave_lag_frames:0
 ```
 
-两侧报告的都是心跳/ACK 的真值（v3.14）：主节点上，`slave0` 行的 `state` 在副本发出第一个 `REPLCONF ACK` 时由 `syncing` 翻为 `online`，`offset` 是它的 **acked** 位置，`lag` 以帧计；副本上，只要 3 秒内有心跳落地，`master_link_status` 就是 `up`，`slave_lag_frames:0` 表示已追平。逐字段语义见 [`docs/availability.md`](availability.md) 的“可观测性”一节。
+两侧报告的都是心跳/ACK 的真值（v3.14）：主节点上，`slave0` 行的 `state` 在每条 shard 流都收到真实 `REPLCONF ACK` 后由 `syncing` 翻为 `online`，`offset` 是它的 **acked** 位置，`lag` 以帧计；副本上，只要 3 秒内有心跳落地，`master_link_status` 就是 `up`，`slave_lag_frames:0` 表示已追平。`ROLE` 与 `INFO replication` 跨 shard 聚合：offset 是各 shard 流之和，且无论 shard 数多少，每个副本进程恰好对应一条 `slaveN` 记录。逐字段语义见 [`docs/availability.md`](availability.md) 的“可观测性”一节。
 
 回复中，`REPLICAOF` 设置的实时运行状态永远优先于静态配置——配置了 elect 多数派时，实时选举角色又优先于两者。
 
@@ -162,7 +162,7 @@ Embed 连到同一个 `listen_port_base` 对应的 shard，帧到即应用，读
 | `replica_read_only` | `true` | 副本上以 `-READONLY` 拒绝客户端写；复制 apply 路径和管理类 verb 不受此闸门约束。 |
 | `replica_max_staleness_ms` | `0`（关） | 有界陈旧：副本上一次收到主节点心跳的时间超过界限时，以 `-STALE` 拒绝读。对应 [`docs/availability.md`](availability.md) 一致性阶梯第 3 级。 |
 | `min_replicas_to_write` | `0`（关） | 健康副本（有活跃连接且已 ACK）不足 N 个时，主节点以 `-NOREPLICAS` 拒绝写。阶梯第 4 级。 |
-| `min_replicas_max_lag_ms` | `10000` | 为 `min_replicas_to_write` 预留的新鲜度窗口。 |
+| `min_replicas_max_lag_ms` | `10000` | `min_replicas_to_write` 的新鲜度窗口：副本只有在最近一次 ACK 比这个界限新时才算健康——连接还挂着但已停摆的副本会从计数里老化出去。 |
 | `single_source` | `false` | 上游是单端口上的一条流（embedded writer），不走 per-shard 端口群——见下文“以 embedded 作主节点”。 |
 
 因为两种角色都会绑定复制端口段，同一台机器上共同托管多个实例时，客户端端口之间至少要间隔 `nshards`——否则它们默认的复制端口段（客户端端口 + 10000 … + 10000 + nshards − 1）会撞在一起。
@@ -199,7 +199,7 @@ peer 请写成扩展的三字段语法：选举流量走 elect 端口，切换�
 |---|---|
 | 写入耐久性 | 帧落进本地 store 和 backlog 环之后主节点就 ack。副本随后追赶；`WAIT n timeout` 阻塞到至少 n 个副本确认（副本 ack 不是 fsync——见 availability.md）。 |
 | 读一致性 | 副本可能滞后。通过 `kevy-cluster-rw` 发 `request_read(…, consistent = true)` 把读强制走主节点，或用 `REPL.TOKEN` + `REPL.WAIT` 在副本上实现读己之写。 |
-| 副本掉队 | 重连请求的 offset 已从环里老化时，主节点就地内联推送一份该 shard 的快照，再从快照末端 offset 衔接实时帧——没有空洞，无需人工介入。 |
+| 副本掉队 | 重连请求的 offset 已从环里老化时，主节点就地内联推送一份该 shard 的快照，再从快照末端 offset 衔接实时帧——没有空洞，无需人工介入。快照替换副本键空间期间，副本上的客户端读回答 `-LOADING`（`PING` / `INFO` / `HELLO` 照常应答，健康检查不受影响）。 |
 | backlog 容量估算 | `replication_buffer_size ≈ peak_writes_per_sec × avg_argv_bytes × reconnect_window_seconds`。偏大无害；偏小会退化成快照发送。 |
 | 切主后什么会变 | 写入改发新主节点——配了 `kevy-elect` 就自动，否则手工。已有的 `kevy-cluster-rw` 客户端得知新主后自动改道；切换空档内正在进行的写会显式失败。 |
 | 切主后什么不会变 | 跨数据中心流量、gossip 发现的 peer、在线 reshard、AUTH/TLS——kevy 一概不提供。仅限单数据中心。 |
@@ -223,7 +223,7 @@ peer 请写成扩展的三字段语法：选举流量走 elect 端口，切换�
 能——加副本的主要目的就是这个。用 [`kevy-cluster-rw::ReadWriteClient`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-cluster-rw)，它把写发到主节点，读在你传入的副本种子间轮询。哪次读必须看到最新写入，就用同一个客户端的 consistent-read 路径，把那次读强制走主节点。
 
 **有个副本落后太多——怎么恢复？**
-什么都不用做。主节点发现副本请求的 offset 不在 backlog 环里，返回 `TooOld`，然后通过同一条 RESP 连接就地内联推送一份该 shard 键空间的快照，再从快照末端 offset 衔接实时帧。副本换入快照、应用实时尾巴，就追平了。要是宁可从零重建：停掉副本，删数据目录，重启——runner 会以 `from_offset = 0` 重连，对整个键空间做一次快照发送。
+什么都不用做。主节点发现副本请求的 offset 不在 backlog 环里，返回 `TooOld`，然后通过同一条 RESP 连接就地内联推送一份该 shard 键空间的快照，再从快照末端 offset 衔接实时帧。副本换入快照、应用实时尾巴，就追平了。快照传送窗口内，副本以 `-LOADING` 拒绝客户端读（可见键空间即将被整体替换）；`PING`、`INFO`、`HELLO` 豁免，且 `INFO replication` 报告 `loading:1`，监控可以盯着窗口收拢。要是宁可从零重建：停掉副本，删数据目录，重启——runner 会以 `from_offset = 0` 重连，对整个键空间做一次快照发送。
 
 ## 参见
 

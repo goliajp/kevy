@@ -90,6 +90,8 @@ redis-cli -s /tmp/kevy.sock SET foo bar
 
 **bindアドレスの警告。** 現時点のkevyにはAUTHもTLSもありません。非ループバックアドレス（`--bind 0.0.0.0`や公開インタフェース）にbindすると起動時に警告が出ます。ネットワーク上の誰でもコマンドを発行できてしまうためです。kevyはプライベートネットワーク境界の内側か、認証を終端するプロキシの背後で動かしてください。
 
+**コネクションのイントロスペクション。** `INFO clients`は全シャードを合算したライブの`connected_clients`ゲージを報告します。`CLIENT LIST`／`CLIENT INFO`は、実在するクライアント接続ごとにRedis 7.x形の行を1つ描画します——ピアアドレス、グローバルに一意な`id`、`name`、購読数、MULTIキュー深さ、入出力バッファサイズ（`cmd=NULL`：最後のコマンド名は追跡しません）。`CLIENT SETNAME`はLIST用に接続へラベルを付けます。`CLIENT KILL ID <id> | ADDR <ip:port> | LADDR <ip:port>`（またはレガシーな位置引数形`CLIENT KILL <ip:port>`）は、ブロッキングコマンドで待機中のものも含め、一致するすべての接続を閉じます。teardownは犠牲となる接続の保留出力がはけるのを待つので、自分自身をkillした接続も自分のリプライは受け取れます。
+
 ### レプリケーションと可用性
 
 プライマリ/レプリカのトポロジで動かすときだけ関係します（[docs/replication.md](replication.md)、[docs/availability.md](../availability.md)）。

@@ -1,6 +1,6 @@
 # 可用性
 
-本文讲 kevy 3.x 部署如何在节点故障中保持可读可写：有哪些拓扑，从“最快、异步”一路到“多数派围栏”的一致性阶梯，计划内与崩溃两种切主，以及客户端在每一步看到的精确错误契约。
+本文讲 kevy 部署如何在节点故障中保持可读可写：有哪些拓扑，从“最快、异步”一路到“多数派围栏”的一致性阶梯，计划内与崩溃两种切主，以及客户端在每一步看到的精确错误契约。
 
 本文以 [`docs/replication.md`](replication.md)（流机制）为基础——如果你还没拉起过一对主节点/副本，请先读那篇。如果你只跑一个 kevy 节点，那么本文只有阶梯的第一级和你有关。
 
@@ -52,7 +52,7 @@ peer 请写成扩展语法 `id@host:elect_port:client_port`：选举流量走 el
 | 1 | `REPL.TOKEN` + `REPL.WAIT` | 在选定副本上读己之写 | 副本上一次阻塞调用 |
 | 2 | `WAIT n timeout` | 写入已在主节点上**且**得到 ≥ n 个副本确认 | 主节点上一次阻塞调用 |
 | 3 | `replica_max_staleness_ms` | 副本绝不提供超过界限的陈旧读（`-STALE`） | 滞后尖峰期间读切到主节点 |
-| 4 | `min_replicas_to_write` | 活副本不足 n 个时主节点拒写（`-NOREPLICAS`） | 写可用性与副本健康绑定 |
+| 4 | `min_replicas_to_write` | 新鲜副本不足 n 个时主节点拒写（`-NOREPLICAS`） | 写可用性与副本健康绑定 |
 | 5 | 多数派租约（elect 下自动） | 被分区的主节点围栏自己的写入（`-NOREPLICAS`） | 分区期间写暂停一个租约窗口 |
 
 ### 读己之写：`REPL.TOKEN` / `REPL.WAIT`
@@ -94,7 +94,7 @@ replica_max_staleness_ms = 2500     # 0 = off (default)
 min_replicas_to_write = 1           # 0 = off (default)
 ```
 
-这是仿照 Redis 的启发式规则：健康副本（有活跃复制连接且已 ACK）不足 N 个时，主节点以 `-NOREPLICAS Not enough good replicas to write.` 拒绝写入。它堵住了“主节点对着虚空写”的窗口，但**不是**脑裂保证——分区两侧可以各自看到自己那边的副本。
+这是仿照 Redis 的启发式规则：健康副本不足 N 个时，主节点以 `-NOREPLICAS Not enough good replicas to write.` 拒绝写入。健康的定义是：有活跃复制连接、已 ACK，**且**最近一次 ACK 比 `min_replicas_max_lag_ms`（默认 10 000 ms）新——停止 ACK 的停摆副本即使 TCP 连接还挂着，也会从计数里老化出去。这堵住了“主节点对着虚空写”的窗口，但**不是**脑裂保证——分区两侧可以各自看到自己那边的副本。
 
 真正的围栏是**多数派租约**，在 elect 多数派中自动生效：主节点的选举心跳在租约窗口（= `down_after`，5 s）内够不到严格多数的 peer 时，就以 `-NOREPLICAS primary lost quorum; writes fenced` 围栏自己的写入，分区愈合后自动解除。配合 `WAIT` 或 token，“少数派一侧悄悄吸收写入”的窗口被压缩到最多一个租约窗口，而且窗口内的每笔写都**响亮地**失败，不会静默分叉。
 
@@ -135,7 +135,7 @@ FAILOVER ABORT
 
 ## 写方与读方的错误契约
 
-完整目录见 [`docs/error-replies.md`](../error-replies.md)；这张表是其中的可用性切片——拓扑生命周期的每个时点客户端会看到什么、该怎么做。`kevy-cluster-rw::ReadWriteClient` 已经实现了全部这些行为（写发主节点、读在副本间轮询、跟随 `MISDIRECTED`/`QUIESCED` 重定向、一致读路径强制走主节点）。
+完整目录见 [`docs/error-replies.md`](error-replies.md)；这张表是其中的可用性切片——拓扑生命周期的每个时点客户端会看到什么、该怎么做。`kevy-cluster-rw::ReadWriteClient` 已经实现了全部这些行为（写发主节点、读在副本间轮询、跟随 `MISDIRECTED`/`QUIESCED` 重定向、一致读路径强制走主节点）。
 
 | 回复 | 你在跟谁说话 | 何时 | 客户端动作 |
 |---|---|---|---|
@@ -145,6 +145,7 @@ FAILOVER ABORT
 | `-NOREPLICAS Not enough good replicas to write.` | 设置了 `min_replicas_to_write` 的主节点 | 健康副本不足 N | 退避重试；并通知负责副本的运维 |
 | `-NOREPLICAS primary lost quorum; writes fenced` | 分区少数派一侧的多数派主节点 | 多数派租约丢失 | 退避重试——要么分区愈合，要么多数派选出新主节点，路由客户端会找到它 |
 | `-STALE replica is stale; read the primary or raise replica_max_staleness_ms` | 设置了陈旧界限的副本 | 主节点心跳超过界限 | 副本追上之前先读主节点 |
+| `-LOADING kevy is loading the dataset in memory` | full-resync 进行中的副本 | 快照传送正在整体替换副本的键空间 | 等待重试——窗口以传送时长为界；`PING` / `INFO` / `HELLO` 照常应答，健康检查不受影响 |
 
 两条经验法则：上面每一条都是**按设计可重试的**（服务端什么都没有应用），每一条都点名了路由客户端自愈所需的拓扑真相——没有一条需要人工介入。
 
@@ -174,7 +175,7 @@ FAILOVER ABORT
 | `replica_read_only` | `true` | 副本上拒绝客户端写（`-READONLY`）；逃生口是 `CONFIG SET` |
 | `replica_max_staleness_ms` | `0`（关） | 阶梯第 3 级：超过界限的读回 `-STALE` |
 | `min_replicas_to_write` | `0`（关） | 阶梯第 4 级：健康副本不足 N 时回 `-NOREPLICAS` |
-| `min_replicas_max_lag_ms` | `10000` | 为第 4 级预留的新鲜度窗口；当前的健康检查只计入有活跃连接且已 ACK 的副本 |
+| `min_replicas_max_lag_ms` | `10000` | 第 4 级的新鲜度窗口：副本只有在最近一次 ACK 比这个界限新时才算健康——停摆副本不再满足 `min_replicas_to_write` |
 | `single_source` | `false` | 单流上游（embedded writer），不走 per-shard 端口群 |
 
 `[cluster]` 选举键（见 [`crates/kevy-config/src/cluster.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-config/src/cluster.rs)）：`node_id`（≤ 32 B ASCII，全局唯一）、`elect_port_base`、`peers`（`id@host:elect_port[:client_port],...`）。`node_id` 和 `peers` 缺一个，选举器就保持休眠。
@@ -196,23 +197,23 @@ FAILOVER ABORT
 
 | 字段 | 真相来源 |
 |---|---|
-| `role:master`、`master_repl_offset` | 应答本连接的那个 shard 的流尾部 |
-| `connected_slaves` | 活跃副本连接数 |
-| `slaveN:ip=…,port=…,state=…,offset=…,sent=…,lag=…` | 逐副本：`state` 在它 ACK 过后为 `online`（之前是 `syncing`），`offset` 是它的**已确认**位置，`lag` 以帧计 |
+| `role:master`、`master_repl_offset` | **全部 shard 求和**后的流尾部（与选举 offset 最优排序用同一约定） |
+| `connected_slaves` | 有活跃连接的**不同副本进程**数（一个副本的各 shard 流折叠为一条记录） |
+| `slaveN:ip=…,port=…,state=…,offset=…,sent=…,lag=…` | 逐副本进程，以对端地址标识：`state` 在**每条** shard 流都 ACK 过后为 `online`（任何一条没 ACK 都是 `syncing`），`offset` 是跨 shard 求和的已确认位置，`lag` 以帧计 |
 
-一个注意点：INFO 里的 offset 是应答这条连接的那个 shard 的采样值——跨进程真正可比的，是副本自己的 `slave_lag_frames` 仪表和数据本身，而不是“主节点 INFO offset == 副本 INFO offset”。
+跨进程真正可比的，是副本自己的 `slave_lag_frames` 仪表和数据本身——两个不同进程的 INFO 输出之间做 offset 算术，只在同一个 generation 内才有意义。
 
 `ROLE` 以 Redis 的数组形状给出同样的真相（`master` + offset + 逐副本 `[ip, port, acked-offset]`，或 `slave` + 上游）；配置了 elect 多数派时，实时选举角色优先于 `REPLICAOF` 状态和配置两者。实践中主要盯滞后：在副本上轮询 `slave_lag_frames`（持续非零、超过你的陈旧度预算就告警）；在主节点上用 `WAIT 1 <小超时>` 当廉价的端到端探针，回答“至少有一个副本跟得上吗”。
 
 ### Gate
 
-本文承诺的一切都可执行验证：[`bench/availgate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/availgate.sh) 对真实进程跑 12 道钳制——阶段 1（应用期间的 READONLY、offset/滞后真值、链路断/通检测、逐副本 ack 真值、min-replicas），阶段 2（3 节点崩溃切主含 MTTR 上界、重启角色钳制 + 丢弃分叉的重新加入），阶段 3（WAIT 真值、20/20 轮读己之写 + 未来 token 的 MISDIRECT、SIGSTOP 主节点下的 `-STALE`、多数派租约的围栏与解除）。哪天本文的断言和 gate 冲突了，以 gate 为准——请给文档提 bug。
+本文承诺的一切都可执行验证：[`bench/availgate.sh`](https://github.com/goliajp/kevy/blob/develop/bench/availgate.sh) 对真实进程跑 13 道钳制——阶段 1（应用期间的 READONLY、offset/滞后真值、链路断/通检测、逐副本 ack 真值、min-replicas），阶段 2（3 节点崩溃切主含 MTTR 上界、重启角色钳制 + 丢弃分叉的重新加入），阶段 3（WAIT 真值、20/20 轮读己之写 + 未来 token 的 MISDIRECT、SIGSTOP 主节点下的 `-STALE`、多数派租约的围栏与解除），阶段 4（横跨一整个 full-resync 传送窗口的 `-LOADING` 契约，`PING` 豁免）。哪天本文的断言和 gate 冲突了，以 gate 为准——请给文档提 bug。
 
 ## 参见
 
 - [`docs/replication.md`](replication.md)——流机制、快照发送、以 embed 作副本、backlog 容量估算。
 - [`docs/cdc.md`](../cdc.md)——`REPL.TOKEN` 共用的 `(generation, offset)` 游标模型。
-- [`docs/error-replies.md`](../error-replies.md)——完整错误目录。
+- [`docs/error-replies.md`](error-replies.md)——完整错误目录。
 - [`docs/persistence.md`](persistence.md)——故事里耐久性的那一半（`WAIT` 不是）。
 - [`crates/kevy-elect/docs/protocol.md`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-elect/docs/protocol.md)——选举线协议。
 - [`crates/kevy-cluster-rw`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-cluster-rw)——实现整套错误契约的客户端。

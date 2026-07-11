@@ -124,7 +124,7 @@ match sub.recv()? {
     }
     other => panic!("unexpected frame: {other:?}"),
 }
-# Ok::<(), kevy_client::KevyError>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 `Store::clone` 很便宜（只是 `Arc` 引用计数加一），所以常见写法是给每个线程发一份 `store.clone()`，需要时各自 `publish` 或 `subscribe`。订阅者 drop 时会原子地注销；消费者线程即使 panic，也不会在索引里留下僵尸条目。
@@ -157,6 +157,43 @@ match sub.recv()? {
 
 同一个订阅者如果既订阅了某频道，**又**订阅了能匹配该频道的模式，就会收到**两份**消息——一份 `Message`，一份 `Pmessage`。发布时的去重只压掉“同一个 `Subscription` 在同一频道索引里出现两次”这种重复，不会去掉频道订阅与模式订阅的重叠。
 
+## Keyspace 通知
+
+kevy 能以 Redis 风格把键空间变更广播到 pub/sub 上：对 `user:42` 的一次写入会触发 `__keyspace@0__:user:42`（载荷 = 事件名，如 `set`）和/或 `__keyevent@0__:set`（载荷 = key）。kevy 只服务 DB 0，所以频道名永远带 `@0`。
+
+默认关闭——flag 串为空时，每笔写只付一次原子读然后跳过。在配置文件里开启：
+
+```toml
+[notification]
+notify_keyspace_events = "KEA"   # 全部事件,双频道
+```
+
+flag 串遵循 Redis 约定——先频道、后事件类：
+
+| flag | 含义 |
+|---|---|
+| `K` | 在 `__keyspace@0__:<key>` 频道发布 |
+| `E` | 在 `__keyevent@0__:<event>` 频道发布 |
+| `g` | 通用命令——`DEL`、`EXPIRE`、`PERSIST`、`RENAME`…… |
+| `$` | 字符串命令——`SET`、`INCR`、`APPEND`、`MSET`…… |
+| `l` | 列表命令 |
+| `s` | 集合命令 |
+| `h` | 哈希命令 |
+| `z` | 有序集合命令 |
+| `t` | stream 命令——`XADD`、`XTRIM`、`XGROUP`…… |
+| `x` | `expired` 事件——带 TTL 的 key 被移除（访问时惰性移除或由清扫器移除） |
+| `e` | `evicted` 事件——key 被 `maxmemory` 压力逐出 |
+| `n` | `new` 事件——键空间新增了一个 key |
+| `A` | `g$lshztxe` 的别名（除 `n` 外的全部事件类，与 Redis 一致） |
+
+`K`/`E` 至少设一个、事件类至少设一个，才会有任何事件触发。串里出现未知字符是**启动期配置错误**——打错的 flag 串会被拒绝准入，而不是静默丢事件。用普通模式订阅即可接收：
+
+```sh
+redis-cli -p 6379 PSUBSCRIBE '__keyevent@0__:*'
+```
+
+通知投递与本页其他一切共用同一条 at-most-once pub/sub 总线：发布瞬间没有订阅者，事件就没了。绝不能漏变更的消费者应该上 CDC feed（[`docs/cdc.md`](../cdc.md)）——它有游标、可重放；keyspace 通知是「叫醒」信号，不是账本。
+
 ## URL 后端表
 
 | URL                                | 后端 store                 | 多次 open 是否共享？                              | 是否跨进程可见？ |
@@ -168,7 +205,7 @@ match sub.recv()? {
 | `redis://host[:port][/db]`         | TCP——`kevy://` 的别名      | 同上                                              | **是**          |
 | `tcp://host[:port]`                | TCP——原始连接，不带前置 `SELECT` | 同上                                        | **是**          |
 
-匿名 `mem://` 收不到发布的消息——别的代码根本够不到同一个底层 `Store`，所以 `Subscriber::connect_channels` 会以 `ErrorKind::Unsupported` 拒绝它。只要打算发布，就用 `mem://<some-name>`。
+匿名 `mem://` 收不到发布的消息——别的代码根本够不到同一个底层 `Store`，所以 `Subscriber::connect_channels` 会以 `KevyError::Unsupported` 拒绝它。只要打算发布，就用 `mem://<some-name>`。
 
 `rediss://`、`kevys://` 和 `redis://user:pass@…` 被拒绝也是同一个原因：kevy 不带 TLS，也不带 `AUTH`。需要这两样时，在网络边界用 stunnel 加 IP allowlist 把 socket 挡在前面。
 

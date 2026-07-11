@@ -97,7 +97,7 @@ let removed = cc.del(&[b"a", b"b", b"c"])?;
 2. **ルーティング。** すべてのシングルキー・コマンドは`key_hash_slot(key)`（`{hashtag}`があればその部分の、なければキー全体のCRC16-XMODEM）を計算し、そのスロット所有者へのコネクションに直接送ります。
 3. **必要なところだけファンアウト。** `dbsize`や`flushall`などクラスタ全体のコマンドはサーバー側で処理されます。クライアントは1回呼ぶだけです。
 
-16コアのlx64マシン上、並行数64のGETでクロスシャードホップを消したところ、実測スループットは333k ops/sから533k ops/s（1.6倍）に上がり、p99は3858µsから260µs（約15分の1のテール）に下がりました。`cargo run -p kevy-client --release --example cluster_bench`で再現できます。
+16コアのLinuxマシン上、並行数64のGETでクロスシャードホップを消したところ、実測スループットは333k ops/sから533k ops/s（1.6倍）に上がり、p99は3858µsから260µs（約15分の1のテール）に下がりました。`cargo run -p kevy-client --release --example cluster_bench`で再現できます。
 
 > ホップのコストが見えるのは、クリーンなマシンに負荷を掛けたときだけです。小さな同居型クラウドVMでは、差はスケジューリングノイズに埋もれて見えません。
 
@@ -170,8 +170,8 @@ use kevy_embedded::Store;
 let replica = Store::open_replica("primary.local:16004")?;
 
 let v = replica.get(b"hello")?;
-assert!(replica.set(b"k", b"v").is_err());      // READONLY
-# Ok::<(), kevy_client::KevyError>(())
+assert!(replica.set(b"k", b"v").is_err());      // KevyError::ReadOnly
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 チューニングする場合：
@@ -185,7 +185,7 @@ let cfg = Config::default()
     .with_replica_id("backup-svc-region-a")
     .with_replica_reconnect(Duration::from_millis(50), Duration::from_secs(10));
 let replica = Store::open(cfg)?;
-# Ok::<(), kevy_client::KevyError>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 ハンドシェイクは`REPLICATE FROM <last-applied-offset> ID <replica_id>`を送ります。プライマリはオフセットをackし、フレームをストリーミングします。最後の`Store`クローンがdropされるとランナースレッドはjoinされ、プライマリはクリーンなFINを観測してスロットを解放します。組み込み側での`PUBLISH`はローカルに許可されます（pub/subはプロセスローカルです）が、キー空間自体は読み取り専用のままです。
@@ -223,7 +223,7 @@ let writer = Store::open(
 // ローカル書き込みは組み込みのレプリケーションソースのバックログに流れる;
 // リーダーは kevy_replicate::ReplicaClient で 0.0.0.0:6105 に接続する。
 writer.set(b"app:billing:invoice:42", b"...")?;
-# Ok::<(), kevy_client::KevyError>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 組み込み側は、`with_embed_writer`に渡したアドレスでレプリケーションリスナーを公開します。ほかのノードは、サーバープライマリから引くのとまったく同じ方法でそこからログを引きます。
@@ -261,7 +261,7 @@ MOVE-SCOPE <prefix> from <from-node-id> to <to-node-id>
 手順は次のとおりです：
 
 1. 現ライターは`<prefix>`のローカル状態をMIGRATINGに切り替えます。以降、そのプレフィックス配下のキーへの書き込みは`-QUIESCED migrating to <to-host:port>`を返します。クライアントは少し待って再試行します。
-2. ライターはプレフィックスのキー空間スライスをシリアライズし、`MOVE-SCOPE-INGEST <prefix> <bulk>`でターゲットのデータポートへ送ります。
+2. ライターはプレフィックスのキー空間スライスをシリアライズし、`MOVE-SCOPE-INGEST <prefix> <bulk>`でターゲットのデータポートへ送ります。あらゆる値型が完全な忠実度で移動します——ストリームも含めてです。エントリ、`last_id`の帳簿、コンシューマグループ、コンシューマ、生きているpending（PEL）行が移動をまたいで運ばれます（削除済みエントリのtombstone PEL行だけは落とされます。あれを再現できるRESP verbは存在しないからです）。
 3. ターゲットから`+OK`を受け取ると、ライターは移行をローカルにコミットします。以降、ソース側でのそのプレフィックスへの書き込みは`-MISDIRECTED writer is <to-host:port>`を返します。
 4. ほかのクラスタメンバーは、オペレータが新しいconfigをpushして再起動するまで、静的な`scopes`どおりにルーティングを続けます。
 

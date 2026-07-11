@@ -40,12 +40,14 @@ redis-cli -p 6379 GET foo
 # "bar"
 ```
 
-From Rust, the in-tree client accepts `unix://` URLs:
-
-```rust
-let mut conn = kevy_client::Connection::connect("unix:///tmp/kevy.sock")?;
-conn.set(b"k", b"v")?;
-```
+The in-tree Rust clients (`kevy-client` / `kevy-client-async`) speak
+`tcp://` / `kevy://` / `redis://` plus the in-process `mem://` and
+`file:///` schemes — they do not take a `unix://` URL. From Rust, a
+same-host client either connects over TCP loopback or, when it lives
+in the same *process*, skips sockets entirely with the embedded
+backend (`file:///` / `mem://`), which is faster than UDS could be.
+UDS is for out-of-process, same-host clients in other languages or
+ecosystem drivers.
 
 ## Permissions and security
 
@@ -102,7 +104,7 @@ Materially faster on every workload, because UDS skips the entire IP path: no ch
 
 ### Can my client library use UDS?
 
-Most do. `redis-cli` and `redis-benchmark` take `-s <path>`. ioredis, node-redis, redis-py, redis-rb, go-redis, lettuce, jedis, and the in-tree [kevy-client](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client) / [kevy-client-async](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client-async) all accept `unix:///path` URLs or an explicit socket-path option. Check your driver's connection-options docs for the exact key name.
+Most ecosystem drivers do. `redis-cli` and `redis-benchmark` take `-s <path>`. ioredis, node-redis, redis-py, redis-rb, go-redis, lettuce, and jedis all accept `unix:///path` URLs or an explicit socket-path option — check your driver's connection-options docs for the exact key name. The in-tree [kevy-client](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client) / [kevy-client-async](https://github.com/goliajp/kevy/tree/develop/crates/kevy-client-async) do **not** speak UDS: for a Rust client in the same process the embedded `file:///` / `mem://` backends beat any socket, and across processes they use TCP.
 
 ### Should I drop TCP entirely if all my clients are on the same host?
 

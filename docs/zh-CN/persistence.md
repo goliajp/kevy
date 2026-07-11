@@ -91,8 +91,8 @@ fn main() -> kevy_embedded::KevyResult<()> {
 
     let store = Store::open(cfg)?;
 
-    store.set("hello", b"world")?;
-    store.pexpire("hello", Duration::from_secs(300))?;
+    store.set(b"hello", b"world")?;
+    store.expire(b"hello", Duration::from_secs(300))?;
 
     // Point-in-time snapshot. Returns after the file is on disk; per-shard
     // locks are held only for the view freeze and the final rename.
@@ -132,6 +132,7 @@ fn main() -> kevy_embedded::KevyResult<()> {
 | 后台快照 | `BGSAVE` | 在工作线程里调用 `save_snapshot` | 立即返回；磁盘写完后一个 reactor tick 内提交落地。 |
 | AOF 重写 | `BGREWRITEAOF` | `Store::rewrite_aof()` | 原子 rename 后返回；序列化期间键空间照常在线。 |
 | 在线调整 fsync | `CONFIG SET appendfsync everysec` | 重建 `Config` | 无 |
+| 有序停机 | `SHUTDOWN [SAVE\|NOSAVE]`（或 SIGTERM） | drop 最后一个 `Store` clone | 逐 shard 排空：在途持久化任务落地、AOF 尾巴强制 fsync，然后进程退出。`SAVE` 额外为每个 shard 拍一张最终快照。不发送回复——客户端观察到连接关闭（Redis 行为）。 |
 
 ### fsync 策略语义
 
@@ -248,6 +249,8 @@ store.evictions_total();        // total evicted by maxmemory
 `Store::fsync_aof()` 是逐写入粒度的耐久性逃生口（Postgres 按事务 `synchronous_commit` 那一路）：部署跑 `everysec` 换吞吐，再把屏障放在少数几笔“一经确认就必须扛住机器崩溃”的写入之后。代价：每个脏 shard 一次 `fdatasync`。
 
 进程崩溃（SIGKILL）在 `always` 下绝不丢已确认的写入，其他策略最多丢一个 fsync 窗口；AOF 尾巴在下次打开时回放，撕裂的末帧会隔离（`panic-quarantine`），绝不静默应用。
+
+**有序停机**（`SHUTDOWN` 或 SIGTERM）在任何策略下都零丢失：排空过程会在退出前强制 fsync AOF 尾巴，所以崩溃可能丢掉的 `everysec` 窗口对干净停机不适用。
 
 ## 原子性章程（嵌入式 serving-store，v2.1）
 

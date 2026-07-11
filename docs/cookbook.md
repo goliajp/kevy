@@ -12,7 +12,7 @@ at serving time (`bench/VALIDATION-LEDGER.md` has the measured
 numbers).
 
 Every command block runs as-is against a fresh local kevy
-(`kevy --port 6004`; recipes 11–14 and 16 additionally want
+(`kevy --port 6004`; recipes 11–14, 16 and 20 additionally want
 `[feed] enabled = true` in `kevy.toml` — see docs/cdc.md).
 `bench/cookbook_smoke.sh` executes every `kevy-cli` line below
 against a throwaway server, so the blocks stay honest.
@@ -418,6 +418,88 @@ in both lists.
 
 ---
 
+The last two recipes leave the rack entirely: a kevy on an edge node
+— the same server binary, or `kevy-embedded` compiled down to its
+`core` tier at 655 KB ([docs/iot.md](iot.md)) — speaks the same
+verbs, so the patterns transfer verbatim from datacenter to sensor
+gateway.
+
+## 19. Sensor cache (latest value + liveness lease)
+
+**SQL equivalent:** the `readings_latest` upsert table plus the
+staleness cron —
+[matrix: operational deltas](rds-workloads.md#sizing-and-operational-deltas).
+
+The current value of every sensor is a row; the TTL is the liveness
+contract. A sensor that stops reporting expires out of the cache —
+**absence IS the offline signal**, no reaper job to write:
+
+```console
+kevy-cli -p 6004 HSET sensor:t1 val 21.5 unit C ts 1783200000
+kevy-cli -p 6004 EXPIRE sensor:t1 90
+kevy-cli -p 6004 HSET sensor:t1 val 21.7 unit C ts 1783200030
+kevy-cli -p 6004 EXPIRE sensor:t1 90      # every report renews the lease
+kevy-cli -p 6004 EXISTS sensor:t1         # 1 = reporting, 0 = gone dark
+```
+
+Size the lease to your alarm tolerance (here 90 s = three missed
+30-second reports). To *react* to a sensor going dark instead of
+polling, enable keyspace notifications with the `x` (expired) class
+and subscribe to the expiry events — the push form of the same
+contract (docs/pubsub.md).
+
+The recent window is a stream with a hard cap — `MAXLEN ~` keeps the
+node's memory bounded no matter how long it runs, which on a
+months-uptime edge box is the invariant that matters:
+
+```console
+kevy-cli -p 6004 XADD sensor:t1:log MAXLEN '~' 1000 '*' val 21.5
+kevy-cli -p 6004 XADD sensor:t1:log MAXLEN '~' 1000 '*' val 21.7
+kevy-cli -p 6004 XLEN sensor:t1:log
+kevy-cli -p 6004 XRANGE sensor:t1:log - + COUNT 10
+```
+
+Embedded form: same verbs through the typed API inside your gateway
+process — `store.hset(…)` / `store.expire(…)` / `store.xadd(…)` —
+with no socket at all; the `core` feature tier carries everything
+this recipe uses (docs/iot.md).
+
+## 20. Edge aggregation (write-time GROUP BY + uplink)
+
+**SQL equivalent:** `SELECT zone, COUNT(*), SUM(w) … GROUP BY zone`
+re-run per dashboard refresh —
+[matrix: GROUP BY and aggregates](rds-workloads.md#group-by-and-aggregates).
+
+An edge node summarizes locally and ships summaries — raw readings
+are too many to uplink. Declare the aggregate once; it is maintained
+in the write path, so the "aggregation job" simply stops existing:
+
+```console
+kevy-cli -p 6004 HSET reading:1 zone floor1 w 120
+kevy-cli -p 6004 HSET reading:2 zone floor1 w 180
+kevy-cli -p 6004 HSET reading:3 zone floor2 w 95
+kevy-cli -p 6004 IDX.CREATE zone_w ON PREFIX reading: FIELD w TYPE i64 KIND agg GROUPBY zone
+kevy-cli -p 6004 IDX.QUERY zone_w GROUP floor1            # [count, sum, min, max, avg]
+kevy-cli -p 6004 IDX.QUERY zone_w GROUPS BY sum LIMIT 10  # zones ranked by load
+```
+
+The uplink is recipe 11's outbox wearing overalls: the feed already
+journals every committed write, so the cloud-sync consumer is a
+cursor loop, resumable across links that drop for hours —
+at-least-once, in commit order, prefix-filtered to just what the
+cloud needs:
+
+```console
+# needs [feed] enabled = true in kevy.toml (docs/cdc.md)
+kevy-cli -p 6004 FEED.TAIL 0
+kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX reading:   # the uplink loop
+```
+
+Pair it with recipe 19's `MAXLEN` cap and TTLs: raw readings stay
+bounded on the node, the aggregate rows stay tiny, and the feed
+cursor survives reboots — the whole edge story with zero moving
+parts beyond kevy itself.
+
 ## Recipe index
 
 Recipe ↔ the SQL construct it replaces ↔ the
@@ -444,3 +526,5 @@ semantics and limits.
 | 16 | Session context with TTL | sessions table + expiry cron | [operational deltas](rds-workloads.md#sizing-and-operational-deltas) |
 | 17 | Episodic memory | time `BETWEEN` + pgvector KNN | [SELECT](rds-workloads.md#select) |
 | 18 | RAG hybrid retrieval | tsvector + pgvector, fused | [SELECT](rds-workloads.md#select) |
+| 19 | Sensor cache | upsert table + staleness cron | [operational deltas](rds-workloads.md#sizing-and-operational-deltas) |
+| 20 | Edge aggregation | `GROUP BY` per refresh + ETL uplink | [GROUP BY and aggregates](rds-workloads.md#group-by-and-aggregates) |
