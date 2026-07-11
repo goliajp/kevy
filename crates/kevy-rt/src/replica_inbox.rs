@@ -21,9 +21,35 @@
 //! channel never blocks the runner thread, so a stuck shard never
 //! stalls the runner's TCP read (it just buffers).
 
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, SendError, Sender, channel};
 
 use crate::Argv;
+
+/// Opaque completion token riding on [`ReplicaApply::SnapshotEnd`].
+/// The shard drops it only AFTER the snapshot swap has landed in its
+/// `Store`, so the embedder can hang side effects (e.g. lowering a
+/// `-LOADING` read gate) on the token's `Drop` and know they fire
+/// once the new keyspace — not the one about to be replaced — is
+/// what readers will see. Clones share one inner value: in broadcast
+/// (single-source) mode every shard holds a clone and the `Drop`
+/// fires when the LAST shard finishes its load.
+#[derive(Clone)]
+pub struct SnapshotGate(#[allow(dead_code)] Arc<dyn std::any::Any + Send + Sync>);
+
+impl SnapshotGate {
+    /// Wrap the embedder's drop-hook value.
+    #[must_use]
+    pub fn new(inner: Arc<dyn std::any::Any + Send + Sync>) -> Self {
+        Self(inner)
+    }
+}
+
+impl std::fmt::Debug for SnapshotGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SnapshotGate")
+    }
+}
 
 /// One event delivered from a replica runner to its target shard.
 /// Mirrors `kevy_replicate::replica::ReplicaEvent` except `Frame`
@@ -43,7 +69,10 @@ pub enum ReplicaApply {
     /// `routed = true` (single-source mode) means the payload is
     /// the WHOLE upstream keyspace broadcast to every shard — each
     /// shard loads only its own hash slice.
-    SnapshotEnd { ack_offset: u64, routed: bool },
+    /// `gate`: dropped by the shard after the load lands (see
+    /// [`SnapshotGate`]); `None` when the runner has nothing to hang
+    /// on the completion.
+    SnapshotEnd { ack_offset: u64, routed: bool, gate: Option<SnapshotGate> },
     /// One live mutation frame to be applied via `kevy::dispatch`
     /// (inside a [`crate::ReplicatedApplyGuard`] scope so the apply
     /// doesn't re-push into this shard's downstream

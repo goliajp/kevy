@@ -163,6 +163,28 @@ this single-machine layer, not in place of it. See
 - server 端 embedding 生成 —— 模型推理不进 kevy;向量由应用侧生产。
 - LangChain / LlamaIndex 官方集成包 —— 社区面,等 demand 信号再议。
 
+## v4 T7 追加 — no_std stone 能力 vs 整机 MCU 端口(2026-07-12)
+
+T7b no_std spike(判决书 `.claude/notes/k101-nostd-verdict-2026-07-11.md`)按
+蓝图要求对上面 2026-05-27 的 "Bare-metal MCU (`no_std`) port — OUT" 旧决做证据
+重审。**结论:旧决维持 OUT,但需精确区分两件事**:
+
+- **stone core 已 no_std-capable = DONE(不是重开 MCU 决)**:五个石头 crate
+  (`kevy-store`/`kevy-hash`/`kevy-bytes`/`kevy-map`/`kevy-madvise`)已
+  `#![cfg_attr(not(feature="std"), no_std)]` + `alloc`,thumbv7em-none-eabihf
+  check 在 CI;无 64-bit 原子的 ISA 走 `external-clock` feature 的 AtomicU32×2
+  seqlock 时钟。这是**把石头层做成可被 no_std 宿主复用的库**,不是"kevy 整机跑
+  在 MCU 上"。A1b F1/F2/F3 又补实了裸 core 构建契约(见审计台账)。
+
+- **整机 MCU 产品端口 = 仍 OUT(旧决全部理由不变)**:kevy-rt 的 thread-per-core
+  reactor、format! 代码体量、单任务重写、栈审计等在上面 2026-05-27 条目列的阻塞
+  全部成立。石头 no_std 化不触碰这些——它只让下游 no_std 项目能 `kevy-store =
+  { default-features = false, features = ["alloc","external-clock"] }`,不等于
+  kevy server 能在 MCU 上 serve。
+
+因此蓝图 REFUSED 页脚里 "no_std" 一词的口径已在本条澄清:被 REFUSED 的是
+**整机 MCU 端口**,不是**石头层 no_std 能力**(后者是 v4 T7 交付项)。
+
 ## v4 T9 追加(2026-07-12)
 
 - **L1 shared-read keyspace(seqlock 读道)= REFUSED**:原型 gate 三判据

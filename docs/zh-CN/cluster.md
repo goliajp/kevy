@@ -285,7 +285,7 @@ MOVE-SCOPE <prefix> from <from-node-id> to <to-node-id>
 | TOML | CLI | Env | 默认 | 含义 |
 |------|-----|-----|------|------|
 | `[cluster] enabled` | `--cluster` | `KEVY_CLUSTER=1` | `false` | 把每个 shard 暴露在各自的端口上。 |
-| `[cluster] port_base` | `--cluster-port-base` | `KEVY_CLUSTER_PORT_BASE` | `port` 的值 | shard `i` 绑定 `port_base + 1 + i`。 |
+| `[cluster] port_base` | — | — | `port` 的值 | shard `i` 绑定 `port_base + 1 + i`。仅 TOML。 |
 
 ## 复制
 

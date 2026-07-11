@@ -63,6 +63,7 @@ impl<C: Commands> Shard<C> {
             (false, TxnKind::Multi) => {
                 if let Some(c) = self.conns.get_mut(&conn_id) {
                     c.multi = Some(Vec::new());
+                    c.multi_dirty = false;
                 }
                 self.immediate_reply(conn_id, b"+OK\r\n".to_vec());
             }
@@ -80,6 +81,7 @@ impl<C: Commands> Shard<C> {
                 // (Redis semantics — see https://redis.io/commands/discard).
                 if let Some(c) = self.conns.get_mut(&conn_id) {
                     c.multi = None;
+                    c.multi_dirty = false;
                     c.watched.clear();
                 }
                 self.immediate_reply(conn_id, b"+OK\r\n".to_vec());
@@ -89,15 +91,28 @@ impl<C: Commands> Shard<C> {
                 conn_id,
                 b"-ERR WATCH inside MULTI is not allowed\r\n".to_vec(),
             ),
-            (true, TxnKind::Other) => {
-                if let Some(q) = self.conns.get_mut(&conn_id).and_then(|c| c.multi.as_mut()) {
-                    q.push(args.to_argv());
-                }
-                self.immediate_reply(conn_id, b"+QUEUED\r\n".to_vec());
-            }
+            (true, TxnKind::Other) => self.queue_in_multi(conn_id, args),
             // (false, Other | Watch) dispatched on the early path above.
             (false, TxnKind::Other | TxnKind::Watch) => {}
         }
+    }
+
+    /// Queue one command inside an open `MULTI`. Redis validates the
+    /// verb + arity at queue time: an unknown verb or too-few args is
+    /// answered with the error (not `+QUEUED`) and poisons the
+    /// transaction so `EXEC` returns `-EXECABORT`.
+    fn queue_in_multi<A: ArgvView + ?Sized>(&mut self, conn_id: u64, args: &A) {
+        if let Some(err) = self.commands.queue_error(args) {
+            if let Some(c) = self.conns.get_mut(&conn_id) {
+                c.multi_dirty = true;
+            }
+            self.immediate_reply(conn_id, err);
+            return;
+        }
+        if let Some(q) = self.conns.get_mut(&conn_id).and_then(|c| c.multi.as_mut()) {
+            q.push(args.to_argv());
+        }
+        self.immediate_reply(conn_id, b"+QUEUED\r\n".to_vec());
     }
 
     /// Push a slot that resolves immediately to `bytes` (preserves seq order).
@@ -127,6 +142,21 @@ impl<C: Commands> Shard<C> {
     /// If the conn has any `WATCH`-ed keys, delegate to the pre-check fan-out
     /// path in [`crate::exec_watch`] (aborts if any watched key is dirty).
     fn exec_transaction(&mut self, conn_id: u64) {
+        // A command failed to queue (unknown verb / bad arity): abort
+        // the whole transaction, running nothing (Redis EXECABORT).
+        let dirty = self.conns.get(&conn_id).is_some_and(|c| c.multi_dirty);
+        if dirty {
+            if let Some(c) = self.conns.get_mut(&conn_id) {
+                c.multi = None;
+                c.multi_dirty = false;
+                c.watched.clear();
+            }
+            self.immediate_reply(
+                conn_id,
+                b"-EXECABORT Transaction discarded because of previous errors.\r\n".to_vec(),
+            );
+            return;
+        }
         let (queued, watched) = match self.conns.get_mut(&conn_id) {
             Some(c) => (
                 c.multi.take().unwrap_or_default(),

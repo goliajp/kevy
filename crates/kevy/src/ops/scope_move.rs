@@ -152,6 +152,17 @@ fn validate_move_scope_route(
         );
         return None;
     };
+    // The dispatch write-quiesce gate only consults the migration
+    // table when an ownership table exists (`is_active`); without
+    // declared scopes a move ships while local writes keep landing.
+    if !ctx.state.scope.is_active() {
+        encode_error(
+            out,
+            "ERR MOVE-SCOPE: no [cluster] scopes declared on this node — \
+             writes would not quiesce during the move",
+        );
+        return None;
+    }
     Some(target_addr)
 }
 

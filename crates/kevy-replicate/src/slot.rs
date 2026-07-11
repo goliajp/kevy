@@ -57,6 +57,26 @@ impl SlotTable {
         self.slots.iter().find(|s| s.id == id)
     }
 
+    /// Refresh a slot's `last_seen_ns` WITHOUT advancing its acked
+    /// offset — the disconnect-time variant of
+    /// [`Self::insert_or_touch`]. A closing conn knows what it SENT,
+    /// not what the peer acked; recording sent-as-acked would let
+    /// `WAIT` / min-replicas count bytes the replica never confirmed
+    /// and let the backlog trim frames the peer may still need. A
+    /// previously unseen id is inserted at `acked_offset = 0`
+    /// (never acked — the truthful floor).
+    pub fn touch_or_insert_unacked(&mut self, id: &str, now_ns: u64) {
+        if let Some(s) = self.slots.iter_mut().find(|s| s.id == id) {
+            s.last_seen_ns = now_ns;
+            return;
+        }
+        self.slots.push(ReplicaSlot {
+            id: id.to_string(),
+            last_seen_ns: now_ns,
+            acked_offset: 0,
+        });
+    }
+
     /// Iterate over all slots.
     pub fn iter(&self) -> impl Iterator<Item = &ReplicaSlot> {
         self.slots.iter()
@@ -225,6 +245,20 @@ mod tests {
         t.insert_or_touch("b", 3, 100);
         t.insert_or_touch("c", 12, 100);
         assert_eq!(t.min_acked_offset(), Some(3));
+    }
+
+    #[test]
+    fn touch_or_insert_unacked_never_advances_acked() {
+        let mut t = SlotTable::new();
+        t.insert_or_touch("a", 7, 100);
+        // Disconnect-time touch: last_seen refreshes, acked stays.
+        t.touch_or_insert_unacked("a", 200);
+        let s = t.get("a").unwrap();
+        assert_eq!(s.last_seen_ns, 200);
+        assert_eq!(s.acked_offset, 7, "close must not write sent-as-acked");
+        // Unknown id inserts at the truthful floor: never acked.
+        t.touch_or_insert_unacked("b", 300);
+        assert_eq!(t.get("b").unwrap().acked_offset, 0);
     }
 
     #[test]

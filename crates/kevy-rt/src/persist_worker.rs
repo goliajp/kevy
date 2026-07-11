@@ -283,6 +283,13 @@ impl<C: Commands> Shard<C> {
     /// the clean-shutdown feed marker.
     pub(crate) fn shutdown_drain(&mut self) {
         if self.commands.shutdown_save_requested() {
+            // A BGSAVE / AOF rewrite may already be in flight — land
+            // it first, then take the final snapshot. Calling
+            // `start_bg_save` while the worker is busy would skip the
+            // save with only a stderr line, and the in-flight job's
+            // frozen view misses every write since its collect —
+            // silent data loss for `appendonly no` deployments.
+            self.drain_persist_on_shutdown();
             self.start_bg_save();
         }
         self.drain_persist_on_shutdown();

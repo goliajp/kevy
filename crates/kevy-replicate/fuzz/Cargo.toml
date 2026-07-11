@@ -1,5 +1,5 @@
 [package]
-name = "kevy-persist-fuzz"
+name = "kevy-replicate-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2024"
@@ -16,29 +16,12 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 
-[dependencies.kevy-persist]
+[dependencies.kevy-replicate]
 path = ".."
 
-[dependencies.kevy-store]
-path = "../../kevy-store"
-
 [[bin]]
-name = "replay_aof"
-path = "fuzz_targets/replay_aof.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "snapshot_load"
-path = "fuzz_targets/snapshot_load.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
-name = "shards_meta"
-path = "fuzz_targets/shards_meta.rs"
+name = "replica_wire"
+path = "fuzz_targets/replica_wire.rs"
 test = false
 doc = false
 bench = false

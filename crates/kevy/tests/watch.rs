@@ -206,6 +206,64 @@ fn watch_inside_multi_is_an_error() {
 }
 
 #[test]
+fn unknown_command_in_multi_aborts_exec() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+
+    c.write_all(&req(&[b"MULTI"])).unwrap();
+    read_reply(&mut c, b"+OK\r\n");
+    // A valid command queues.
+    c.write_all(&req(&[b"SET", b"k", b"v"])).unwrap();
+    read_reply(&mut c, b"+QUEUED\r\n");
+    // An unknown verb is answered with the error, NOT +QUEUED, and
+    // poisons the transaction.
+    c.write_all(&req(&[b"FROBNICATE", b"x"])).unwrap();
+    let mut buf = [0u8; 96];
+    let n = c.read(&mut buf).unwrap();
+    assert!(
+        buf[..n].starts_with(b"-ERR unknown command"),
+        "got {:?}",
+        String::from_utf8_lossy(&buf[..n])
+    );
+    // EXEC now aborts and runs nothing.
+    c.write_all(&req(&[b"EXEC"])).unwrap();
+    let n = c.read(&mut buf).unwrap();
+    assert!(
+        buf[..n].starts_with(b"-EXECABORT"),
+        "got {:?}",
+        String::from_utf8_lossy(&buf[..n])
+    );
+    // The valid SET must NOT have run — the key stays absent.
+    c.write_all(&req(&[b"GET", b"k"])).unwrap();
+    read_reply(&mut c, b"$-1\r\n");
+}
+
+#[test]
+fn too_few_args_in_multi_aborts_exec() {
+    let srv = Server::start(1);
+    let mut c = srv.connect();
+
+    c.write_all(&req(&[b"MULTI"])).unwrap();
+    read_reply(&mut c, b"+OK\r\n");
+    // GET with no key — below its minimum arity.
+    c.write_all(&req(&[b"GET"])).unwrap();
+    let mut buf = [0u8; 96];
+    let n = c.read(&mut buf).unwrap();
+    assert!(
+        buf[..n].starts_with(b"-ERR wrong number of arguments"),
+        "got {:?}",
+        String::from_utf8_lossy(&buf[..n])
+    );
+    c.write_all(&req(&[b"EXEC"])).unwrap();
+    let n = c.read(&mut buf).unwrap();
+    assert!(
+        buf[..n].starts_with(b"-EXECABORT"),
+        "got {:?}",
+        String::from_utf8_lossy(&buf[..n])
+    );
+}
+
+#[test]
 fn discard_clears_watched_set() {
     let srv = Server::start(1);
     let mut c = srv.connect();

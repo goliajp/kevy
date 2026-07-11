@@ -214,9 +214,10 @@ Only relevant if you `impl kevy_rt::Commands` yourself:
   `Route::Keyspace(KeyShape, Option<Vec<u8>>)`. `MultiOp` and
   `KeyShape` are newly public.
 - `Commands::on_replication_view` replicas entry is now
-  `(Ipv4Addr, u16, u64, Option<ReplicaAck>)` —
-  `ReplicaAck { acked_offset, ack_age_ms }` replaces the bare acked
-  offset; destructure it.
+  `(String, Ipv4Addr, u16, u64, Option<ReplicaAck>)` — a leading
+  replica-id `String`, then the peer `(Ipv4Addr, u16)`, the sent
+  offset, and `ReplicaAck { acked_offset, ack_age_ms }` (which
+  replaces the bare acked offset); destructure it.
 
 ## Behavior changes (no code change, ops-visible)
 

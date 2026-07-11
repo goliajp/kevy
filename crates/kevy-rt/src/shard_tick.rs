@@ -145,6 +145,40 @@ impl<C: Commands> Shard<C> {
         self.commands.on_conn_gauge(live);
     }
 
+    /// Disconnect any conn whose pending reply buffer has grown past
+    /// [`crate::CLIENT_OUTPUT_HARD_LIMIT`] — a client that stopped
+    /// reading (or a slow pub/sub subscriber) would otherwise let the
+    /// per-conn `output` grow without bound and OOM the shard. The cap
+    /// is on ACCUMULATED unflushed bytes, so a legitimate large reply
+    /// (which drains progressively) never trips it; only a reader that
+    /// isn't draining does. Async sweep (per-tick), matching Redis's
+    /// out-of-band `client-output-buffer-limit` enforcement rather
+    /// than a hot-path check. Epoll backend; the io_uring twin is
+    /// [`Self::uring_enforce_output_limit`].
+    pub(crate) fn enforce_output_limit(&mut self) {
+        let mut over: Vec<u64> = Vec::new();
+        for (id, c) in self.conns.iter() {
+            if c.closing {
+                continue;
+            }
+            let arc_bytes: usize = c.output_arcs.iter().map(|(_, a)| a.len()).sum();
+            if c.output.len().saturating_add(arc_bytes) > crate::CLIENT_OUTPUT_HARD_LIMIT {
+                over.push(*id);
+            }
+        }
+        for id in over {
+            eprintln!(
+                "kevy: shard {} closing conn {id}: output buffer exceeded {} bytes",
+                self.id,
+                crate::CLIENT_OUTPUT_HARD_LIMIT,
+            );
+            if let Some(c) = self.conns.get_mut(&id) {
+                c.closing = true;
+            }
+            self.dirty.push(id);
+        }
+    }
+
     /// Publish this shard's replication view (master offset + connected
     /// replicas count) to the embedder. No-op when replication is off
     /// (the standalone fast path: one Option-discriminant check + an

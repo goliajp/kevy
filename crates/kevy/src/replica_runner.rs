@@ -25,7 +25,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use kevy_replicate::replica::{ReplicaClient, ReplicaEvent};
-use kevy_rt::{ReplicaApply, ReplicaInboxSender};
+use kevy_rt::{ReplicaApply, ReplicaInboxSender, SnapshotGate};
 
 use crate::state::ReplicaProgress;
 
@@ -209,38 +209,51 @@ fn set_socket_slot(slot: &Mutex<Option<TcpStream>>, value: Option<TcpStream>) {
 
 /// Tracks this runner's snapshot-ship window against the shared
 /// [`ReplicaProgress`] loading count: raised at `SnapshotBegin`,
-/// lowered at `SnapshotEnd` — and by `Drop` on every early exit from
-/// the drain loop (link drop, shard gone, stop), so a mid-ship
-/// disconnect never strands the replica refusing reads.
-struct LoadingGuard<'a> {
-    progress: &'a ReplicaProgress,
-    raised: bool,
+/// lowered when the shard-side APPLY of `SnapshotEnd` completes —
+/// not when this runner merely reads the event off the wire. The
+/// lowering rides as a [`SnapshotGate`] on the apply event; the
+/// shard drops it only after the snapshot swap lands, so the
+/// `-LOADING` gate never reopens reads on the pre-resync keyspace
+/// still queued in the inbox. Early exits from the drain loop (link
+/// drop, shard gone, stop) drop the held token instead, so a
+/// mid-ship disconnect never strands the replica refusing reads.
+struct LoadingToken {
+    progress: Arc<ReplicaProgress>,
 }
 
-impl<'a> LoadingGuard<'a> {
-    fn new(progress: &'a ReplicaProgress) -> Self {
-        Self { progress, raised: false }
-    }
-
-    fn observe(&mut self, event: &ReplicaEvent) {
-        match event {
-            ReplicaEvent::SnapshotBegin if !self.raised => {
-                self.raised = true;
-                self.progress.begin_loading();
-            }
-            ReplicaEvent::SnapshotEnd { .. } if self.raised => {
-                self.raised = false;
-                self.progress.end_loading();
-            }
-            _ => {}
-        }
-    }
-}
-
-impl Drop for LoadingGuard<'_> {
+impl Drop for LoadingToken {
     fn drop(&mut self) {
-        if self.raised {
-            self.progress.end_loading();
+        self.progress.end_loading();
+    }
+}
+
+struct LoadingGuard {
+    progress: Arc<ReplicaProgress>,
+    token: Option<Arc<LoadingToken>>,
+}
+
+impl LoadingGuard {
+    fn new(progress: Arc<ReplicaProgress>) -> Self {
+        Self { progress, token: None }
+    }
+
+    /// Observe one wire event. For `SnapshotEnd` this hands back the
+    /// gate to attach to the apply event(s) — in broadcast mode every
+    /// shard gets a clone and the lowering fires when the LAST shard
+    /// finishes its load.
+    fn observe(&mut self, event: &ReplicaEvent) -> Option<SnapshotGate> {
+        match event {
+            ReplicaEvent::SnapshotBegin if self.token.is_none() => {
+                self.progress.begin_loading();
+                self.token = Some(Arc::new(LoadingToken {
+                    progress: Arc::clone(&self.progress),
+                }));
+                None
+            }
+            ReplicaEvent::SnapshotEnd { .. } => {
+                self.token.take().map(|t| SnapshotGate::new(t))
+            }
+            _ => None,
         }
     }
 }
@@ -252,11 +265,11 @@ fn drain_client(
     sender: &ReplicaInboxSender,
     stop: &Arc<AtomicBool>,
     runner_slot: usize,
-    progress: &ReplicaProgress,
+    progress: &Arc<ReplicaProgress>,
 ) -> u64 {
     let mut from_offset = client.expected_offset();
     let mut last_ack = std::time::Instant::now();
-    let mut loading = LoadingGuard::new(progress);
+    let mut loading = LoadingGuard::new(Arc::clone(progress));
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
             Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
@@ -270,8 +283,11 @@ fn drain_client(
                 last_ack = std::time::Instant::now();
             }
             Some(Ok(event)) => {
-                loading.observe(&event);
-                let apply = event_to_apply(event, &mut from_offset);
+                let gate = loading.observe(&event);
+                let mut apply = event_to_apply(event, &mut from_offset);
+                if let ReplicaApply::SnapshotEnd { gate: g, .. } = &mut apply {
+                    *g = gate;
+                }
                 if sender.send(apply).is_err() {
                     // Receiver dropped — the shard / runtime is gone;
                     // the runner should also exit.
@@ -303,7 +319,9 @@ fn event_to_apply(event: ReplicaEvent, from_offset: &mut u64) -> ReplicaApply {
         ReplicaEvent::SnapshotChunk(bytes) => ReplicaApply::SnapshotChunk(bytes),
         ReplicaEvent::SnapshotEnd { ack_offset } => {
             *from_offset = ack_offset;
-            ReplicaApply::SnapshotEnd { ack_offset, routed: false }
+            // The caller attaches the loading gate — this fn is a
+            // pure wire→apply shape map.
+            ReplicaApply::SnapshotEnd { ack_offset, routed: false, gate: None }
         }
         ReplicaEvent::Frame(frame) => {
             *from_offset = frame.offset.saturating_add(1);
@@ -326,6 +344,7 @@ fn route_event(
     event: ReplicaEvent,
     from_offset: &mut u64,
     senders: &[ReplicaInboxSender],
+    gate: Option<SnapshotGate>,
 ) -> Result<(), ()> {
     let n = senders.len();
     let send_all = |apply: &dyn Fn() -> ReplicaApply| -> Result<(), ()> {
@@ -343,7 +362,13 @@ fn route_event(
         }
         ReplicaEvent::SnapshotEnd { ack_offset } => {
             *from_offset = ack_offset;
-            send_all(&|| ReplicaApply::SnapshotEnd { ack_offset, routed: true })
+            // Every shard gets a CLONE of the gate: the loading
+            // lowering fires when the last shard's load lands.
+            send_all(&|| ReplicaApply::SnapshotEnd {
+                ack_offset,
+                routed: true,
+                gate: gate.clone(),
+            })
         }
         ReplicaEvent::Frame(frame) => {
             *from_offset = frame.offset.saturating_add(1);
@@ -372,11 +397,11 @@ fn drain_client_routed(
     senders: &[ReplicaInboxSender],
     stop: &Arc<AtomicBool>,
     runner_slot: usize,
-    progress: &ReplicaProgress,
+    progress: &Arc<ReplicaProgress>,
 ) -> u64 {
     let mut from_offset = client.expected_offset();
     let mut last_ack = std::time::Instant::now();
-    let mut loading = LoadingGuard::new(progress);
+    let mut loading = LoadingGuard::new(Arc::clone(progress));
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
             Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
@@ -385,8 +410,8 @@ fn drain_client_routed(
                 last_ack = std::time::Instant::now();
             }
             Some(Ok(event)) => {
-                loading.observe(&event);
-                if route_event(event, &mut from_offset, senders).is_err() {
+                let gate = loading.observe(&event);
+                if route_event(event, &mut from_offset, senders, gate).is_err() {
                     return from_offset;
                 }
                 if last_ack.elapsed() >= std::time::Duration::from_millis(100) {
@@ -408,6 +433,36 @@ fn drain_client_routed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn loading_lowers_only_when_the_apply_gate_drops() {
+        let progress = Arc::new(ReplicaProgress::default());
+        let mut guard = LoadingGuard::new(Arc::clone(&progress));
+        assert!(guard.observe(&ReplicaEvent::SnapshotBegin).is_none());
+        assert!(progress.loading(), "SnapshotBegin raises the gate");
+        let gate = guard
+            .observe(&ReplicaEvent::SnapshotEnd { ack_offset: 9 })
+            .expect("SnapshotEnd must hand back the gate");
+        // The runner has read SnapshotEnd off the wire, but no shard
+        // has applied it yet — reads must stay gated (the pre-resync
+        // keyspace is still what the store holds).
+        assert!(progress.loading(), "wire-read alone must not lower");
+        let second_shard = gate.clone(); // broadcast mode copy
+        drop(gate);
+        assert!(progress.loading(), "one shard's copy still alive");
+        drop(second_shard);
+        assert!(!progress.loading(), "last apply lowers the gate");
+    }
+
+    #[test]
+    fn early_exit_drop_lowers_loading() {
+        let progress = Arc::new(ReplicaProgress::default());
+        let mut guard = LoadingGuard::new(Arc::clone(&progress));
+        let _ = guard.observe(&ReplicaEvent::SnapshotBegin);
+        assert!(progress.loading());
+        drop(guard); // link drop / stop mid-ship
+        assert!(!progress.loading(), "mid-ship exit never strands -LOADING");
+    }
 
     #[test]
     fn event_to_apply_snapshot_begin_passthrough() {

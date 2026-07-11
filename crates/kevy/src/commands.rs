@@ -190,12 +190,18 @@ impl Commands for KevyCommands {
         }
         // PING / INFO / HELLO stay answerable while gated — health
         // checks and monitoring must keep working during a snapshot
-        // load (and a stale replica still proves liveness). Matches
-        // the verbs Redis exempts from -LOADING.
+        // load (and a stale replica still proves liveness). CLIENT /
+        // CONFIG / SHUTDOWN stay answerable too: an operator must be
+        // able to inspect connections, kill a misbehaving one, or
+        // stop the node while a load is in flight. Matches the verbs
+        // Redis flags loading-exempt.
         if args.get(0).is_some_and(|v| {
             v.eq_ignore_ascii_case(b"PING")
                 || v.eq_ignore_ascii_case(b"INFO")
                 || v.eq_ignore_ascii_case(b"HELLO")
+                || v.eq_ignore_ascii_case(b"CLIENT")
+                || v.eq_ignore_ascii_case(b"CONFIG")
+                || v.eq_ignore_ascii_case(b"SHUTDOWN")
         }) {
             return None;
         }
@@ -333,6 +339,40 @@ impl Commands for KevyCommands {
             b"WATCH" => TxnKind::Watch,
             _ => TxnKind::Other,
         }
+    }
+
+    /// Queue-time validation for `MULTI`: reject a command that can
+    /// never queue so `EXEC` aborts with `-EXECABORT` (Redis
+    /// `CLIENT_DIRTY_EXEC`). Two unambiguous cases:
+    ///   * unknown verb — no [`crate::verb_meta`] row;
+    ///   * too few args — below the verb's minimum arity (Redis
+    ///     convention: positive `n` needs exactly `n` argv elements
+    ///     verb-included, negative `n` needs at least `|n|`; either way
+    ///     the minimum is `|n|`, and no handler accepts fewer).
+    ///
+    /// The "too many args for an exact-arity verb" case is deliberately
+    /// NOT rejected here: `VERB_META.arity` is parity-checked for
+    /// coverage, not verified exact against every handler's real argv
+    /// acceptance, so an over-strict exact check could abort a
+    /// variadic command that would in fact execute. Those still surface
+    /// their own arity error at `EXEC` time — an error inside the
+    /// transaction, not a false abort of it.
+    fn queue_error<A: ArgvView + ?Sized>(&self, args: &A) -> Option<Vec<u8>> {
+        let name = args.first()?;
+        let mut buf = [0u8; 32];
+        let upper = upper_verb(name, &mut buf);
+        let shown = String::from_utf8_lossy(name);
+        let known = std::str::from_utf8(upper)
+            .ok()
+            .and_then(crate::verb_meta::verb_meta);
+        let Some(meta) = known else {
+            return Some(format!("-ERR unknown command '{shown}'\r\n").into_bytes());
+        };
+        let min_args = i64::from(meta.arity.unsigned_abs());
+        (( args.len() as i64) < min_args).then(|| {
+            format!("-ERR wrong number of arguments for '{}' command\r\n", meta.name.to_lowercase())
+                .into_bytes()
+        })
     }
 
     /// Freeze `$` IDs in an `XREAD BLOCK` argv at park time. Default

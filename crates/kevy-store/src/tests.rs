@@ -314,6 +314,31 @@ fn glob_matching() {
     assert!(glob_match(b"key:[^0-9]", b"key:a"));
     assert!(glob_match(b"a\\*b", b"a*b"));
     assert!(!glob_match(b"a\\*b", b"axb"));
+    // Multi-star patterns (the two-pointer backtrack path).
+    assert!(glob_match(b"*a*b*", b"xxaxxbxx"));
+    assert!(!glob_match(b"*a*b*c", b"xxaxxbxx"));
+    assert!(glob_match(b"a*b*c", b"abc"));
+    assert!(glob_match(b"a**b", b"axxb")); // collapsed run
+    assert!(glob_match(b"*", b""));
+    assert!(!glob_match(b"a*", b""));
+    assert!(glob_match(b"*[0-9]*end", b"x5xend"));
+}
+
+// The old recursive matcher was exponential for literal-separated `*`s;
+// a ~50-byte pattern against a non-matching string would hang a core.
+// The two-pointer form returns quickly. A wall-clock bound would be
+// flaky under load, so assert the far stronger property: it terminates
+// at all (a hang would fail the test binary via the harness timeout).
+#[test]
+fn glob_no_catastrophic_backtracking() {
+    // `*a*a*a…*a!` — the classic exponential shape.
+    let mut pat = Vec::new();
+    for _ in 0..25 {
+        pat.extend_from_slice(b"*a");
+    }
+    pat.push(b'!');
+    let s = vec![b'a'; 64]; // no '!' → forces the full search, must not hang
+    assert!(!glob_match(&pat, &s));
 }
 
 #[test]

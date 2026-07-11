@@ -1,4 +1,5 @@
 use super::*;
+use crate::snapshot_fmt::VERSION;
 use std::time::Duration;
 use std::borrow::Cow;
 
@@ -304,6 +305,41 @@ fn v3_snapshot_without_groups_still_loads() {
     assert_eq!(view.last_id(), StreamId { ms: 1, seq: 1 });
     assert_eq!(view.group_count(), 0);
     let _ = std::fs::remove_file(&path);
+}
+
+// A corrupt/hostile snapshot declaring a huge element count with no
+// bytes behind it must fail with a plain `io::Error` (truncated
+// stream) — NOT drive a multi-gigabyte `with_capacity` / `vec![0;n]`
+// that aborts the process. This is the malicious-primary path
+// (`replication_apply` feeds primary bytes straight into the loader).
+#[test]
+fn forged_count_fails_cleanly_not_alloc_abort() {
+    // OP_SET (a set) declaring ~4.29 billion members, then EOF.
+    let mut b: Vec<u8> = Vec::new();
+    b.extend_from_slice(b"KEVYSNAP");
+    b.push(VERSION);
+    b.push(4); // OP_SET
+    b.push(0); // no TTL
+    b.extend_from_slice(&2u32.to_le_bytes()); // key len
+    b.extend_from_slice(b"sk");
+    b.extend_from_slice(&u32::MAX.to_le_bytes()); // member count: forged
+    // ...no members follow. The loader must hit end-of-stream, not OOM.
+    let mut dst = Store::new();
+    let err = load_snapshot_from(&mut dst, std::io::Cursor::new(b)).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+
+    // Same for a forged single bulk length.
+    let mut b2: Vec<u8> = Vec::new();
+    b2.extend_from_slice(b"KEVYSNAP");
+    b2.push(VERSION);
+    b2.push(1); // OP_STRING
+    b2.push(0); // no TTL
+    b2.extend_from_slice(&2u32.to_le_bytes());
+    b2.extend_from_slice(b"sk");
+    b2.extend_from_slice(&u32::MAX.to_le_bytes()); // value len: forged
+    let mut dst2 = Store::new();
+    let err2 = load_snapshot_from(&mut dst2, std::io::Cursor::new(b2)).unwrap_err();
+    assert_eq!(err2.kind(), std::io::ErrorKind::UnexpectedEof);
 }
 
 // ─────────────── SnapshotView serialization (COW E-3) ───────────────

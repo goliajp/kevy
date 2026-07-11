@@ -124,6 +124,14 @@ impl<C: Commands> Shard<C> {
             }
             self.dirty.push(*id);
             self.closing_uring_conns.push(*id);
+            // Eagerly cancel the victim's block waiters (parked
+            // BLPOP/XREAD + cross-shard arbiter registrations), same
+            // as the QUIT/EOF path. The io_uring reap runs on a 1/16
+            // iteration throttle — without this a killed-but-unreaped
+            // conn's waiter stayed live and could consume a push
+            // (e.g. an LPUSH element) meant for a live client.
+            self.blocked.drop_for_conn(*id);
+            self.cancel_xshard_on_close(*id);
         }
         Part::Int(victims.len() as i64)
     }

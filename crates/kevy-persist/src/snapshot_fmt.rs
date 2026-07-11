@@ -73,10 +73,37 @@ pub(crate) fn write_bytes<W: Write>(w: &mut W, b: &[u8]) -> io::Result<()> {
     w.write_all(b)
 }
 
+/// Cap on how much a single untrusted length/count field may cause
+/// the loader to reserve BEFORE the bytes behind it actually arrive.
+/// A corrupt or hostile snapshot can declare up to `u32::MAX` for any
+/// length; reserving that eagerly (`vec![0; len]` / `with_capacity`)
+/// is a remote alloc-abort. We reserve at most this and grow as real
+/// bytes land, so a lie costs one step, not gigabytes. Applies to
+/// both byte lengths and element counts (see [`capped_capacity`]).
+pub(crate) const SNAP_RESERVE_CAP: usize = 64 * 1024;
+
+/// Initial reservation for an untrusted element count — clamped so a
+/// forged count can't drive an unbounded `with_capacity`. The vec
+/// still grows to the true count as elements are pushed; each push is
+/// preceded by a read that fails cleanly (`io::Error`) once the
+/// stream is exhausted, so a lie is caught within one step.
+pub(crate) fn capped_capacity(n: usize) -> usize {
+    n.min(SNAP_RESERVE_CAP)
+}
+
 pub(crate) fn read_bytes<R: Read>(r: &mut R) -> io::Result<Vec<u8>> {
     let len = read_u32(r)? as usize;
-    let mut buf = vec![0u8; len];
-    r.read_exact(&mut buf)?;
+    // Grow in bounded steps instead of `vec![0u8; len]`: a declared
+    // 4 GiB length with an empty stream fails at `read_exact` after
+    // at most one step's growth, not after a 4 GiB zeroed alloc.
+    let mut buf = Vec::with_capacity(capped_capacity(len));
+    let mut done = 0;
+    while done < len {
+        let step = (len - done).min(SNAP_RESERVE_CAP);
+        buf.resize(done + step, 0);
+        r.read_exact(&mut buf[done..])?;
+        done += step;
+    }
     Ok(buf)
 }
 

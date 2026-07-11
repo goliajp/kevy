@@ -175,9 +175,12 @@ impl<C: Commands> Shard<C> {
     }
 
     /// Remove every replica in [`ReplicaState::Closed`]. Conns whose
-    /// `Closed.replica_id` is `Some` are recorded into
-    /// [`Shard::slots`] before dropping so a reconnect
-    /// within the window stays correlatable.
+    /// `Closed.replica_id` is `Some` get their slot's `last_seen_ns`
+    /// touched before dropping so a reconnect within the window stays
+    /// correlatable — WITHOUT advancing `acked_offset` (the conn
+    /// knows what it sent, not what the peer confirmed; a sent-as-
+    /// acked write here would let `WAIT` count unconfirmed bytes
+    /// through the reconnect window).
     pub(crate) fn reap_closed_replicas(&mut self) {
         // Fast path: no Closed conns. Avoids the Instant::now() cost
         // on every reactor iteration.
@@ -190,9 +193,9 @@ impl<C: Commands> Shard<C> {
         let mut i = self.replicas.len();
         while i > 0 {
             i -= 1;
-            if let ReplicaState::Closed { replica_id, sent_offset } = &self.replicas[i].state {
+            if let ReplicaState::Closed { replica_id } = &self.replicas[i].state {
                 if let Some(id) = replica_id.as_ref() {
-                    self.slots.insert_or_touch(id, *sent_offset, now_ns);
+                    self.slots.touch_or_insert_unacked(id, now_ns);
                 }
                 let conn = self.replicas.swap_remove(i);
                 let _ = self.poller.delete(conn.fd);
