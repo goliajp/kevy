@@ -14,24 +14,23 @@
 //! convention).
 
 use std::path::Path;
-use std::sync::atomic::AtomicU64;
 
 use kevy_index::{Catalog, IndexKind, IndexSpec, ValType};
 use kevy_resp::{ArgvView, encode_error, encode_integer};
-use crate::index_runtime;
-use crate::state::Ctx;
+use crate::state::{Ctx, RuntimeState};
 
 const SIDECAR: &str = "index-catalog.meta";
 
-/// Load a persisted catalog at boot. The sidecar dir itself lives in
-/// [`crate::RuntimeState`] (`sidecar_dir()`); `serve` calls this with
-/// it (plus the state's control epoch) once before the reactor starts.
-pub(crate) fn boot(control_epoch: &AtomicU64, data_dir: &Path) {
-    if let Ok(text) = std::fs::read_to_string(data_dir.join(SIDECAR))
+/// Load a persisted catalog at boot; `serve` calls this once before
+/// the reactor starts. A state without a sidecar dir (embedded /
+/// test) boots empty.
+pub(crate) fn boot(state: &RuntimeState) {
+    let Some(dir) = state.sidecar_dir() else { return };
+    if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))
         && let Some(cat) = Catalog::from_sidecar(&text)
         && !cat.is_empty()
     {
-        index_runtime::install_catalog(control_epoch, cat);
+        state.install_index_catalog(cat);
     }
 }
 
@@ -83,11 +82,11 @@ pub(crate) fn cmd_idx_create<A: ArgvView + ?Sized>(
         ann,
         group_by: opts.group_by,
     };
-    let mut cat = index_runtime::catalog().map(|c| (*c).clone()).unwrap_or_default();
+    let mut cat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
     match cat.create(spec) {
         Ok(()) => {
             persist_sidecar(ctx.state.sidecar_dir(), &cat);
-            index_runtime::install_catalog(ctx.state.control_epoch(), cat);
+            ctx.state.install_index_catalog(cat);
             out.extend_from_slice(b"+OK\r\n");
         }
         Err(e) => encode_error(out, e),
@@ -221,11 +220,11 @@ pub(crate) fn cmd_idx_drop<A: ArgvView + ?Sized>(
     if args.len() != 2 {
         return encode_error(out, "ERR usage: IDX.DROP name");
     }
-    let mut cat = index_runtime::catalog().map(|c| (*c).clone()).unwrap_or_default();
+    let mut cat = ctx.state.catalogs.index().map(|c| (*c).clone()).unwrap_or_default();
     let hit = cat.drop_index(&args[1]);
     if hit {
         persist_sidecar(ctx.state.sidecar_dir(), &cat);
-        index_runtime::install_catalog(ctx.state.control_epoch(), cat);
+        ctx.state.install_index_catalog(cat);
     }
     encode_integer(out, i64::from(hit));
 }

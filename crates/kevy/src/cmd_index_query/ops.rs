@@ -8,15 +8,15 @@ use super::args::{ComposeQuery, HybridArgs, KnnArgs, MatchArgs, Shape};
 use super::wire::{encode_agg_chunk, encode_hydration};
 use super::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
 use crate::index_runtime;
-use crate::state::ShardCtx;
+use crate::state::Ctx;
 
 /// v2.7 text MATCH per-shard: BM25-ranked hits + owning-shard
 /// hydration. Chunk: `[ST_OK][n][(klen,key,score f64,fcount,fields)*]`.
-pub(super) fn op_match(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(q) = MatchArgs::parse(argv) else {
         return vec![ST_BADARGS];
     };
-    let res = index_runtime::with_ready_text_segment(shard, store, &q.name, |ts| {
+    let res = index_runtime::with_ready_text_segment(ctx, store, &q.name, |ts| {
         ts.matches(&q.text, q.limit)
     });
     match res {
@@ -41,10 +41,10 @@ pub(super) fn op_match(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) ->
 /// `[ST_OK][n][(glen,group,count u64,sum f64,minflag+min,maxflag+max)*]`
 /// — GROUP sends the one requested group; GROUPS sends every local
 /// group (the reduce needs full partials to merge exactly).
-pub(super) fn op_agg(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn op_agg(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let single = argv[2].eq_ignore_ascii_case(b"GROUP");
     if single {
-        let res = index_runtime::with_ready_agg(shard, store, &argv[1], |a| {
+        let res = index_runtime::with_ready_agg(ctx, store, &argv[1], |a| {
             argv.get(3).map(|g| vec![(g.clone(), a.group(g))])
         });
         return match res {
@@ -68,7 +68,7 @@ pub(super) fn op_agg(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> V
         .iter()
         .find_map(|a| std::str::from_utf8(a).ok()?.strip_prefix("DEPTH=")?.parse().ok())
         .unwrap_or(1);
-    let res = index_runtime::with_ready_agg(shard, store, &argv[1], |a| {
+    let res = index_runtime::with_ready_agg(ctx, store, &argv[1], |a| {
         if depth == 0 {
             // fallback sentinel: full local materialization (uniform
             // near-tie data is unprunable — see reduce_agg)
@@ -93,8 +93,8 @@ pub(super) fn op_agg(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> V
 
 /// v3.1 phase 2 (internal): `AGG.FETCH <name> <g…>` — exact partials
 /// for the candidate groups that survived phase-1 ranking.
-pub(super) fn op_agg_fetch(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-    let res = index_runtime::with_ready_agg(shard, store, &argv[1], |a| {
+pub(super) fn op_agg_fetch(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+    let res = index_runtime::with_ready_agg(ctx, store, &argv[1], |a| {
         argv[2..].iter().map(|g| (g.clone(), a.group(g))).collect::<Vec<_>>()
     });
     match res {
@@ -105,11 +105,11 @@ pub(super) fn op_agg_fetch(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]
 }
 
 /// v2.8: `IDX.REBUILD <name>` (ANN tombstone compaction).
-pub(super) fn op_rebuild(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn op_rebuild(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(name) = argv.get(1) else {
         return vec![ST_BADARGS];
     };
-    match index_runtime::with_ready_ann(shard, store, name, |g| g.rebuild()) {
+    match index_runtime::with_ready_ann(ctx, store, name, |g| g.rebuild()) {
         Ok(()) => vec![ST_OK],
         Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(_) => vec![ST_NOINDEX],
@@ -119,11 +119,11 @@ pub(super) fn op_rebuild(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) 
 /// v2.8 KNN per-shard: distance-ranked hits + hydration. Chunk:
 /// `[ST_OK][n][(klen,key,dist f64,fcount,fields)*]` — same layout as
 /// MATCH chunks, so the reduce shares the decoder.
-pub(super) fn op_knn(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn op_knn(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(q) = KnnArgs::parse(argv) else {
         return vec![ST_BADARGS];
     };
-    let res = index_runtime::with_ready_ann(shard, store, &q.name, |g| {
+    let res = index_runtime::with_ready_ann(ctx, store, &q.name, |g| {
         kevy_vector::parse_vector(&q.vec, g.dim()).map(|v| g.knn(&v, q.limit, q.ef))
     });
     match res {
@@ -149,15 +149,15 @@ pub(super) fn op_knn(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> V
 /// fusion needs deeper lists than the final cut — same 4× posture as
 /// the agg TPUT phase-1), emit two ranked segments back to back.
 /// Chunk: `[ST_OK][match n][(key,f64,hydration)*][knn n][(…)*]`.
-pub(super) fn op_hybrid(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn op_hybrid(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(q) = HybridArgs::parse(argv) else {
         return vec![ST_BADARGS];
     };
     let depth = q.limit * 4;
-    let m = index_runtime::with_ready_text_segment(shard, store, &q.text_idx, |ts| {
+    let m = index_runtime::with_ready_text_segment(ctx, store, &q.text_idx, |ts| {
         ts.matches(&q.text, depth)
     });
-    let k = index_runtime::with_ready_ann(shard, store, &q.ann_idx, |g| {
+    let k = index_runtime::with_ready_ann(ctx, store, &q.ann_idx, |g| {
         kevy_vector::parse_vector(&q.vec, g.dim()).map(|v| g.knn(&v, depth, q.ef))
     });
     let (m, k) = match (m, k) {
@@ -192,12 +192,12 @@ pub(super) fn op_hybrid(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -
 /// Per-shard COMPOSE: both sub-queries run against THIS shard's
 /// segments (a key lives on exactly one shard, so per-shard set
 /// algebra composes globally). Key-ordered; cursor = key point.
-pub(super) fn op_compose(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn op_compose(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(cq) = ComposeQuery::parse(argv) else {
         return vec![ST_BADARGS];
     };
     let res = index_runtime::with_two_ready_segments(
-        shard,
+        ctx,
         store,
         &cq.a.name,
         &cq.b.name,

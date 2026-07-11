@@ -235,11 +235,11 @@ impl Commands for KevyCommands {
         // loads the runtimes used to pay.
         let bits = self.gate_bits();
         if bits & crate::state::IDX_NONEMPTY != 0 {
-            crate::index_runtime::on_write(self.shard_ctx(), store, key);
+            crate::index_runtime::on_write(&self.ctx(), store, key);
         }
         if bits & crate::state::VIEW_NONEMPTY != 0 {
             // Views probe the segments the line above just refreshed.
-            crate::view_runtime::on_write(self.shard_ctx(), store, key);
+            crate::view_runtime::on_write(&self.ctx(), store, key);
         }
     }
 
@@ -248,19 +248,20 @@ impl Commands for KevyCommands {
             return crate::cmd_digest::extension_op(store, argv);
         }
         if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
-            return crate::cmd_view::extension_op(self.shard_ctx(), store, argv);
+            return crate::cmd_view::extension_op(&self.ctx(), store, argv);
         }
-        crate::cmd_index_query::extension_op(self.shard_ctx(), store, argv)
+        crate::cmd_index_query::extension_op(&self.ctx(), store, argv)
     }
 
     fn extension_reduce(&self, argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
         if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"PREFIX.DIGEST")) {
             return crate::cmd_digest::extension_reduce(chunks);
         }
+        let catalogs = &self.state().catalogs;
         if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
-            return crate::cmd_view::extension_reduce(argv, chunks);
+            return crate::cmd_view::extension_reduce(catalogs, argv, chunks);
         }
-        crate::cmd_index_reduce::extension_reduce(argv, chunks)
+        crate::cmd_index_reduce::extension_reduce(catalogs, argv, chunks)
     }
 
     fn write_denied(&self) -> Option<Vec<u8>> {
@@ -302,10 +303,10 @@ impl Commands for KevyCommands {
     fn on_shard_tick(&self, store: &mut Store) {
         let bits = self.gate_bits();
         if bits & crate::state::IDX_NONEMPTY != 0 {
-            crate::index_runtime::on_tick(self.shard_ctx(), store);
+            crate::index_runtime::on_tick(&self.ctx(), store);
         }
         if bits & crate::state::VIEW_NONEMPTY != 0 {
-            crate::view_runtime::on_tick(self.shard_ctx(), store);
+            crate::view_runtime::on_tick(&self.ctx(), store);
         }
         // Run Redis's `activeExpireCycle` per shard. `sample` controls the
         // batch size; up to 16 rounds per tick is well below Redis's 25 %

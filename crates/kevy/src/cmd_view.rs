@@ -7,26 +7,26 @@
 //! `<index> EQ <v>`.
 
 use std::path::Path;
-use std::sync::atomic::AtomicU64;
 
-use kevy_index::{IndexValue, Leaf, Tree, ViewCatalog, ViewMode, ViewSpec};
+use kevy_index::{Catalog, IndexValue, Leaf, Tree, ViewCatalog, ViewMode, ViewSpec};
 use kevy_resp::{ArgvView, encode_error, encode_integer};
 use kevy_store::Store;
 
 use crate::cmd_index_query::{ST_BUILDING, ST_NOINDEX, ST_OK, encode_value};
-use crate::state::{Ctx, ShardCtx};
-use crate::{index_runtime, view_runtime};
+use crate::state::{Ctx, RuntimeState};
+use crate::view_runtime;
 
 const SIDECAR: &str = "view-catalog.meta";
 
-/// Boot: load the persisted view catalog (data dir already known to
-/// `cmd_index::boot`, which runs first and stores it).
-pub(crate) fn boot(control_epoch: &AtomicU64, data_dir: &Path) {
-    if let Ok(text) = std::fs::read_to_string(data_dir.join(SIDECAR))
+/// Boot: load the persisted view catalog (runs after
+/// `cmd_index::boot` — view leaves reference index specs).
+pub(crate) fn boot(state: &RuntimeState) {
+    let Some(dir) = state.sidecar_dir() else { return };
+    if let Ok(text) = std::fs::read_to_string(dir.join(SIDECAR))
         && let Some(cat) = ViewCatalog::from_sidecar(&text)
         && !cat.is_empty()
     {
-        view_runtime::install_catalog(control_epoch, cat);
+        state.install_view_catalog(cat);
     }
 }
 
@@ -39,15 +39,21 @@ fn persist_sidecar(dir: Option<&Path>, cat: &ViewCatalog) {
 }
 
 /// Parse one tree node starting at `i`; returns `(tree, next_i)`.
-fn parse_tree<A: ArgvView + ?Sized>(args: &A, i: usize, depth: usize) -> Result<(Tree, usize), &'static str> {
+/// `icat` is the index-catalog snapshot leaf lookups resolve against.
+fn parse_tree<A: ArgvView + ?Sized>(
+    icat: Option<&Catalog>,
+    args: &A,
+    i: usize,
+    depth: usize,
+) -> Result<(Tree, usize), &'static str> {
     if depth > kevy_index::MAX_TREE_DEPTH {
         return Err("ERR view tree deeper than 3");
     }
     let tok = args.get(i).ok_or("ERR truncated view tree")?;
     if tok == b"(" {
         let op = args.get(i + 1).ok_or("ERR truncated view tree")?;
-        let (a, ni) = parse_tree(args, i + 2, depth + 1)?;
-        let (b, ni) = parse_tree(args, ni, depth + 1)?;
+        let (a, ni) = parse_tree(icat, args, i + 2, depth + 1)?;
+        let (b, ni) = parse_tree(icat, args, ni, depth + 1)?;
         if args.get(ni).map(|t| t as &[u8]) != Some(b")") {
             return Err("ERR expected ) in view tree");
         }
@@ -65,7 +71,7 @@ fn parse_tree<A: ArgvView + ?Sized>(args: &A, i: usize, depth: usize) -> Result<
         // leaf: <index> RANGE min max | <index> EQ v — bounds coerced
         // per the index's declared type.
         let index = tok.to_vec();
-        let spec_ty = index_runtime::catalog()
+        let spec_ty = icat
             .and_then(|c| c.get(&index).map(|(s, _)| s.ty))
             .ok_or("ERR view leaf references unknown index")?;
         let shape = args.get(i + 1).ok_or("ERR truncated view leaf")?;
@@ -91,7 +97,8 @@ pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out
     if args.len() < 8 || !args[2].eq_ignore_ascii_case(b"QUERY") {
         return encode_error(out, "ERR usage: VIEW.CREATE name QUERY <tree> ORDER BY idx [DESC] [MODE v|m] [TOPK k] [VIA tpl]");
     }
-    let (tree, mut i) = match parse_tree(args, 3, 1) {
+    let icat = ctx.state.catalogs.index();
+    let (tree, mut i) = match parse_tree(icat.as_deref(), args, 3, 1) {
         Ok(t) => t,
         Err(e) => return encode_error(out, e),
     };
@@ -103,7 +110,7 @@ pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out
     let Some(order_by) = args.get(i + 2).map(|t| t.to_vec()) else {
         return encode_error(out, "ERR ORDER BY <index> is required");
     };
-    if index_runtime::catalog().and_then(|c| c.get(&order_by).map(|_| ())).is_none() {
+    if icat.as_deref().and_then(|c| c.get(&order_by).map(|_| ())).is_none() {
         return encode_error(out, "ERR ORDER BY references unknown index");
     }
     i += 3;
@@ -117,11 +124,11 @@ pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out
         return encode_error(out, "ERR TOPK requires MODE materialized");
     }
     let spec = ViewSpec { name: args[1].to_vec(), tree, order_by, desc, mode, via };
-    let mut cat = view_runtime::catalog().map(|c| (*c).clone()).unwrap_or_default();
+    let mut cat = ctx.state.catalogs.view().map(|c| (*c).clone()).unwrap_or_default();
     match cat.create(spec) {
         Ok(()) => {
             persist_sidecar(ctx.state.sidecar_dir(), &cat);
-            view_runtime::install_catalog(ctx.state.control_epoch(), cat);
+            ctx.state.install_view_catalog(cat);
             out.extend_from_slice(b"+OK\r\n");
         }
         Err(e) => encode_error(out, e),
@@ -183,11 +190,11 @@ pub(crate) fn cmd_view_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: 
     if args.len() != 2 {
         return encode_error(out, "ERR usage: VIEW.DROP name");
     }
-    let mut cat = view_runtime::catalog().map(|c| (*c).clone()).unwrap_or_default();
+    let mut cat = ctx.state.catalogs.view().map(|c| (*c).clone()).unwrap_or_default();
     let hit = cat.drop_view(&args[1]);
     if hit {
         persist_sidecar(ctx.state.sidecar_dir(), &cat);
-        view_runtime::install_catalog(ctx.state.control_epoch(), cat);
+        ctx.state.install_view_catalog(cat);
     }
     encode_integer(out, i64::from(hit));
 }
@@ -196,26 +203,26 @@ pub(crate) fn cmd_view_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: 
 
 /// Per-shard half for VIEW.QUERY / VIEW.LIST / VIEW.VERIFY /
 /// VIEW.REBUILD / VIEW.EXPLAIN.
-pub(crate) fn extension_op(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
     if verb.eq_ignore_ascii_case(b"VIEW.QUERY") {
-        return op_query(shard, store, argv);
+        return op_query(ctx, store, argv);
     }
     if verb.eq_ignore_ascii_case(b"VIEW.LIST") {
-        return vec![ST_OK]; // catalog is global — the reduce renders it
+        return vec![ST_OK]; // catalog is shared — the reduce renders it
     }
     if verb.eq_ignore_ascii_case(b"VIEW.VERIFY") {
-        return op_stats(shard, store, argv, verb);
+        return op_stats(ctx, store, argv, verb);
     }
     if verb.eq_ignore_ascii_case(b"VIEW.REBUILD") {
         if let Some(name) = argv.get(1) {
-            view_runtime::schedule_rebuild(shard, name);
-            view_runtime::on_tick(shard, store); // run it now on this shard
+            view_runtime::schedule_rebuild(ctx.shard, name);
+            view_runtime::on_tick(ctx, store); // run it now on this shard
         }
         return vec![ST_OK];
     }
     if verb.eq_ignore_ascii_case(b"VIEW.EXPLAIN") {
-        return op_explain(shard, store, argv);
+        return op_explain(ctx, store, argv);
     }
     if verb.eq_ignore_ascii_case(b"VIEW.HYDRATE") {
         return op_hydrate(store, argv);
@@ -266,11 +273,11 @@ fn op_hydrate(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     chunk
 }
 
-fn op_query(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+fn op_query(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(q) = QueryArgs::parse(argv) else {
         return vec![crate::cmd_index_query::ST_BADARGS];
     };
-    match view_runtime::shard_page(shard, store, &q.name, q.after.as_ref(), q.limit) {
+    match view_runtime::shard_page(ctx, store, &q.name, q.after.as_ref(), q.limit) {
         Ok(rows) => {
             let mut chunk = vec![ST_OK];
             chunk.extend_from_slice(&(rows.len() as u32).to_le_bytes());
@@ -287,11 +294,11 @@ fn op_query(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     }
 }
 
-fn op_stats(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>], _verb: &[u8]) -> Vec<u8> {
+fn op_stats(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>], _verb: &[u8]) -> Vec<u8> {
     let Some(name) = argv.get(1) else {
         return vec![crate::cmd_index_query::ST_BADARGS];
     };
-    match view_runtime::shard_stats(shard, store, name) {
+    match view_runtime::shard_stats(ctx, store, name) {
         Ok((members, bytes, excluded, building)) => {
             let mut chunk = vec![ST_OK];
             chunk.push(u8::from(building));
@@ -304,15 +311,15 @@ fn op_stats(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>], _verb: &[u8])
     }
 }
 
-fn op_explain(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+fn op_explain(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(name) = argv.get(1) else {
         return vec![crate::cmd_index_query::ST_BADARGS];
     };
-    let Some(spec) = view_runtime::catalog().and_then(|c| c.get(name).cloned()) else {
+    let Some(spec) = ctx.state.catalogs.view().and_then(|c| c.get(name).cloned()) else {
         return vec![ST_NOINDEX];
     };
     // Per-leaf local cardinalities.
-    let counts = index_runtime::with_segment_resolver(shard, store, |seg| {
+    let counts = crate::index_runtime::with_segment_resolver(ctx, store, |seg| {
         let mut counts = Vec::new();
         spec.tree.each_leaf(&mut |l| {
             let n = seg(&l.index).map_or(0, |s| s.count(&l.min, &l.max));

@@ -1,12 +1,13 @@
 //! v2.5 — the index engine's runtime half (RFC LOCKED 2026-07-04).
 //!
-//! Topology: one process-global [`Catalog`] behind an RwLock +
-//! generation counter; each shard keeps its [`ShardIndexes`] (its
-//! slice of every index — index-follows-key) in `ShardCtx.indexes`,
-//! refreshed lazily when the generation moves. The write path enters
-//! through [`on_write`] (wired to `Commands::on_write`), which the
-//! caller gates on the `IDX_NONEMPTY` gate bit (K-103 W5) — the RFC
-//! D2 zero-tax posture: an empty catalog costs one cached-bit branch.
+//! Topology: one process-wide [`Catalog`] behind an RwLock +
+//! generation counter, both owned by `RuntimeState.catalogs`
+//! (K-103/K-105); each shard keeps its [`ShardIndexes`] (its slice of
+//! every index — index-follows-key) in `ShardCtx.indexes`, refreshed
+//! lazily when the generation moves. The write path enters through
+//! [`on_write`] (wired to `Commands::on_write`), which the caller
+//! gates on the `IDX_NONEMPTY` gate bit (K-103 W5) — the RFC D2
+//! zero-tax posture: an empty catalog costs one cached-bit branch.
 //!
 //! Backfill (RFC D5, tick-incremental variant): `IDX.CREATE` snapshots
 //! the domain's key list per shard; `on_shard_tick` indexes a bounded
@@ -15,16 +16,10 @@
 //! win: the backfill only fills keys the segment doesn't hold yet, so
 //! a newer hook-applied value is never clobbered by a stale scan.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
-
-use kevy_index::{Catalog, IndexSpec, IndexValue, Segment};
+use kevy_index::{IndexSpec, IndexValue, Segment};
 use kevy_store::Store;
 
-use crate::state::ShardCtx;
-
-static CATALOG_GEN: AtomicU64 = AtomicU64::new(0);
-static CATALOG: RwLock<Option<Arc<Catalog>>> = RwLock::new(None);
+use crate::state::{CatalogState, Ctx};
 
 /// Per-shard build progress for one index.
 enum BuildState {
@@ -58,44 +53,13 @@ pub(crate) struct ShardIndexes {
     idx: Vec<ShardIndex>,
 }
 
-/// Snapshot the current catalog (None = empty).
-pub(crate) fn catalog() -> Option<Arc<Catalog>> {
-    CATALOG
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
-}
-
-/// Is at least one index declared? Cold-path input to the per-shard
-/// `IDX_NONEMPTY` gate bit — the hot path reads the cached bit, never
-/// this lock.
-pub(crate) fn catalog_nonempty() -> bool {
-    CATALOG
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .as_ref()
-        .is_some_and(|c| !c.is_empty())
-}
-
-/// Swap in a new catalog version (IDX.CREATE / IDX.DROP). Bumps the
-/// generation (shards refresh their segment lists lazily), then the
-/// control epoch (writer protocol step ② — every shard's gate bits
-/// re-derive `IDX_NONEMPTY` on their next command).
-pub(crate) fn install_catalog(control_epoch: &AtomicU64, c: Catalog) {
-    *CATALOG
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(c));
-    CATALOG_GEN.fetch_add(1, Ordering::Release);
-    control_epoch.fetch_add(1, Ordering::Release);
-}
-
 /// The write-path hook body (`Commands::on_write`). The caller gates
 /// on `IDX_NONEMPTY`, so entering here means at least one index is
 /// declared.
 #[inline]
-pub(crate) fn on_write(shard: &ShardCtx, store: &mut Store, key: &[u8]) {
-    let mut st = shard.indexes.borrow_mut();
-    refresh(&mut st, store);
+pub(crate) fn on_write(ctx: &Ctx<'_>, store: &mut Store, key: &[u8]) {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
     for si in &mut st.idx {
         if key.starts_with(&si.spec.prefix) {
             apply_row(store, si, key);
@@ -105,9 +69,9 @@ pub(crate) fn on_write(shard: &ShardCtx, store: &mut Store, key: &[u8]) {
 
 /// Tick hook: advance backfills a bounded batch per tick. Gated like
 /// [`on_write`].
-pub(crate) fn on_tick(shard: &ShardCtx, store: &mut Store) {
-    let mut st = shard.indexes.borrow_mut();
-    refresh(&mut st, store);
+pub(crate) fn on_tick(ctx: &Ctx<'_>, store: &mut Store) {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
     for si in &mut st.idx {
         advance_backfill(store, si, 2048);
     }
@@ -117,13 +81,13 @@ pub(crate) fn on_tick(shard: &ShardCtx, store: &mut Store) {
 /// `None` = index unknown here (a stale shard list is refreshed
 /// first) or still backfilling. Wired to IDX.QUERY fan-out in step 2b.
 pub(crate) fn with_ready_segment<R>(
-    shard: &ShardCtx,
+    ctx: &Ctx<'_>,
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&IndexSpec, &Segment) -> R,
 ) -> Result<R, &'static str> {
-    let mut st = shard.indexes.borrow_mut();
-    refresh(&mut st, store);
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
     let si = st
         .idx
         .iter()
@@ -138,13 +102,13 @@ pub(crate) fn with_ready_segment<R>(
 
 /// v3.1: run `f` against a READY aggregate segment.
 pub(crate) fn with_ready_agg<R>(
-    shard: &ShardCtx,
+    ctx: &Ctx<'_>,
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&kevy_index::AggSegment) -> R,
 ) -> Result<R, &'static str> {
-    let mut st = shard.indexes.borrow_mut();
-    refresh(&mut st, store);
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
     let si = st
         .idx
         .iter()
@@ -160,13 +124,13 @@ pub(crate) fn with_ready_agg<R>(
 
 /// v2.8: run `f` against a READY ANN graph (mutable for REBUILD).
 pub(crate) fn with_ready_ann<R>(
-    shard: &ShardCtx,
+    ctx: &Ctx<'_>,
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&mut kevy_vector::Hnsw) -> R,
 ) -> Result<R, &'static str> {
-    let mut st = shard.indexes.borrow_mut();
-    refresh(&mut st, store);
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
     let si = st
         .idx
         .iter_mut()
@@ -182,13 +146,13 @@ pub(crate) fn with_ready_ann<R>(
 
 /// v2.7: run `f` against a READY text segment.
 pub(crate) fn with_ready_text_segment<R>(
-    shard: &ShardCtx,
+    ctx: &Ctx<'_>,
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&kevy_text::TextSegment) -> R,
 ) -> Result<R, &'static str> {
-    let mut st = shard.indexes.borrow_mut();
-    refresh(&mut st, store);
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
     let si = st
         .idx
         .iter()
@@ -206,12 +170,12 @@ pub(crate) fn with_ready_text_segment<R>(
 /// segments (views probe several indexes per call). Building/failed
 /// segments resolve to None.
 pub(crate) fn with_segment_resolver<R>(
-    shard: &ShardCtx,
+    ctx: &Ctx<'_>,
     store: &mut Store,
     f: impl for<'s> FnOnce(&'s dyn Fn(&[u8]) -> Option<&'s Segment>) -> R,
 ) -> R {
-    let mut st = shard.indexes.borrow_mut();
-    refresh(&mut st, store);
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
     let idx = &st.idx;
     let resolver = |name: &[u8]| -> Option<&Segment> {
         idx.iter()
@@ -224,14 +188,14 @@ pub(crate) fn with_segment_resolver<R>(
 /// Two-segment variant for COMPOSE — one RefCell borrow (nesting
 /// [`with_ready_segment`] would double-borrow the shard's index list).
 pub(crate) fn with_two_ready_segments<R>(
-    shard: &ShardCtx,
+    ctx: &Ctx<'_>,
     store: &mut Store,
     a: &[u8],
     b: &[u8],
     f: impl FnOnce(&IndexSpec, &Segment, &IndexSpec, &Segment) -> R,
 ) -> Result<R, &'static str> {
-    let mut st = shard.indexes.borrow_mut();
-    refresh(&mut st, store);
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
     let ia = st.idx.iter().position(|si| si.spec.name == a).ok_or("ERR no such index")?;
     let ib = st.idx.iter().position(|si| si.spec.name == b).ok_or("ERR no such index")?;
     for i in [ia, ib] {
@@ -244,24 +208,24 @@ pub(crate) fn with_two_ready_segments<R>(
 }
 
 /// Whether this shard's slice of `name` is still backfilling.
-pub(crate) fn segment_building(shard: &ShardCtx, store: &mut Store, name: &[u8]) -> bool {
-    let mut st = shard.indexes.borrow_mut();
-    refresh(&mut st, store);
+pub(crate) fn segment_building(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> bool {
+    let mut st = ctx.shard.indexes.borrow_mut();
+    refresh(&ctx.state.catalogs, &mut st, store);
     st.idx
         .iter()
         .find(|si| si.spec.name == name)
         .is_some_and(|si| matches!(si.build, BuildState::Backfilling { .. }))
 }
 
-/// Reconcile this shard's segment list with the global catalog:
+/// Reconcile this shard's segment list with the shared catalog:
 /// keep segments whose spec is unchanged, start backfills for new
 /// ones, drop removed ones.
-fn refresh(st: &mut ShardIndexes, store: &mut Store) {
-    let generation = CATALOG_GEN.load(Ordering::Acquire);
+fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
+    let generation = catalogs.index_gen();
     if st.generation == generation {
         return;
     }
-    let cat = catalog();
+    let cat = catalogs.index();
     let mut next: Vec<ShardIndex> = Vec::new();
     if let Some(cat) = cat {
         for (spec, _state) in cat.iter() {

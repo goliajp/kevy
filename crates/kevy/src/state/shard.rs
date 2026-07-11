@@ -34,10 +34,10 @@ pub(crate) const WRITE_GATED: u32 = 1 << 0;
 pub(crate) const READ_GATED: u32 = 1 << 1;
 /// `[cluster] scopes` declared — writes must consult `route_write`.
 pub(crate) const SCOPE_ACTIVE: u32 = 1 << 2;
-/// The process-global index catalog is nonempty — writes feed
+/// The shared index catalog is nonempty — writes feed
 /// `index_runtime::on_write`.
 pub(crate) const IDX_NONEMPTY: u32 = 1 << 3;
-/// The process-global view catalog is nonempty — writes feed
+/// The shared view catalog is nonempty — writes feed
 /// `view_runtime::on_write`.
 pub(crate) const VIEW_NONEMPTY: u32 = 1 << 4;
 
@@ -69,10 +69,10 @@ fn rebuild_gate(state: &RuntimeState) -> u32 {
     if state.scope.is_active() {
         bits |= SCOPE_ACTIVE;
     }
-    if crate::index_runtime::catalog_nonempty() {
+    if state.catalogs.index_nonempty() {
         bits |= IDX_NONEMPTY;
     }
-    if crate::view_runtime::catalog_nonempty() {
+    if state.catalogs.view_nonempty() {
         bits |= VIEW_NONEMPTY;
     }
     bits
@@ -111,7 +111,7 @@ pub(crate) struct ShardCtx {
     /// when this shard has no `ReplicationSource` installed.
     replication_view: RefCell<ReplicationView>,
     /// This shard's slice of every declared index (index-follows-key),
-    /// refreshed lazily against the global catalog generation.
+    /// refreshed lazily against the shared catalog generation.
     pub(crate) indexes: RefCell<crate::index_runtime::ShardIndexes>,
     /// This shard's view states — same lifecycle as `indexes`.
     ///

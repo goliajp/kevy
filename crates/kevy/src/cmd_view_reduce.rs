@@ -6,10 +6,14 @@ use kevy_resp::{encode_array_len, encode_bulk, encode_error};
 
 use crate::cmd_index_query::{ST_BUILDING, ST_NOINDEX};
 use crate::cmd_view::QueryArgs;
-use crate::view_runtime;
+use crate::state::CatalogState;
 
 /// Origin reduce for VIEW.* verbs.
-pub(crate) fn extension_reduce(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
+pub(crate) fn extension_reduce(
+    catalogs: &CatalogState,
+    argv: &[Vec<u8>],
+    chunks: Vec<Vec<u8>>,
+) -> Vec<u8> {
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
     let mut out = Vec::new();
     for c in &chunks {
@@ -41,21 +45,21 @@ pub(crate) fn extension_reduce(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8
         return reduce_hydrate(argv, &chunks);
     }
     if verb.eq_ignore_ascii_case(b"VIEW.LIST") || verb.eq_ignore_ascii_case(b"VIEW.VERIFY") {
-        return reduce_stats(argv, &chunks);
+        return reduce_stats(catalogs, argv, &chunks);
     }
     if verb.eq_ignore_ascii_case(b"VIEW.EXPLAIN") {
-        return reduce_explain(argv, &chunks);
+        return reduce_explain(catalogs, argv, &chunks);
     }
-    reduce_query(argv, chunks)
+    reduce_query(catalogs, argv, chunks)
 }
 
-fn reduce_query(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
+fn reduce_query(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
     let mut out = Vec::new();
     let Some(q) = QueryArgs::parse(argv) else {
         encode_error(&mut out, "ERR bad VIEW arguments");
         return out;
     };
-    let spec = view_runtime::catalog().and_then(|c| c.get(&q.name).cloned());
+    let spec = catalogs.view().and_then(|c| c.get(&q.name).cloned());
     let desc = spec.as_ref().is_some_and(|s| s.desc);
     let mut all = collect_chunk_rows(&chunks);
     all.sort();
@@ -157,7 +161,7 @@ fn expand_via(tpl: &[u8], key: &[u8]) -> Vec<u8> {
     out.into_bytes()
 }
 
-fn reduce_stats(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
+fn reduce_stats(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
     let (mut members, mut bytes, mut excluded, mut building) = (0u64, 0u64, 0u64, false);
     for c in chunks {
@@ -176,7 +180,7 @@ fn reduce_stats(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     }
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
     if verb.eq_ignore_ascii_case(b"VIEW.LIST") {
-        return render_view_list();
+        return render_view_list(catalogs);
     }
     encode_array_len(&mut out, 8);
     encode_bulk(&mut out, b"members");
@@ -194,9 +198,9 @@ fn reduce_stats(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
 /// LIST takes no name: emit catalog + the queried view's stats
 /// aggregated per-view is a second fanout — v1 reports specs +
 /// this fanout's per-view stats only when a name is passed.
-fn render_view_list() -> Vec<u8> {
+fn render_view_list(catalogs: &CatalogState) -> Vec<u8> {
     let mut out = Vec::new();
-    let cat = view_runtime::catalog();
+    let cat = catalogs.view();
     let n = cat.as_ref().map_or(0, |c| c.len());
     encode_array_len(&mut out, n as i64);
     if let Some(cat) = cat {
@@ -218,11 +222,11 @@ fn render_view_list() -> Vec<u8> {
     out
 }
 
-fn reduce_explain(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
+fn reduce_explain(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
     let Some(spec) = argv
         .get(1)
-        .and_then(|n| view_runtime::catalog().and_then(|c| c.get(n).cloned()))
+        .and_then(|n| catalogs.view().and_then(|c| c.get(n).cloned()))
     else {
         encode_error(&mut out, "ERR no such view");
         return out;
