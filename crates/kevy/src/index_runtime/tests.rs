@@ -1,5 +1,8 @@
+use std::sync::atomic::Ordering;
+
 use super::*;
-use kevy_index::{IndexKind, ValType};
+use crate::RuntimeState;
+use kevy_index::{Catalog, IndexKind, ValType};
 
 fn spec(name: &str) -> IndexSpec {
     IndexSpec {
@@ -14,37 +17,42 @@ fn spec(name: &str) -> IndexSpec {
     }
 }
 
-fn install_one(epoch: &AtomicU64, name: &str) {
+fn install_one(state: &RuntimeState, name: &str) {
     let mut c = Catalog::new();
     c.create(spec(name)).unwrap();
-    install_catalog(epoch, c);
+    state.install_index_catalog(c);
 }
 
 #[test]
 fn hook_backfill_and_query_lifecycle() {
-    let epoch = AtomicU64::new(0);
-    let shard = ShardCtx::default();
+    let cmds = crate::KevyCommands::new();
+    let ctx = cmds.ctx();
     let mut store = Store::new();
     // Pre-existing rows (to be backfilled).
     store.hset(b"user:1", &[(b"age".to_vec(), b"30".to_vec())]).unwrap();
     store.hset(b"user:2", &[(b"age".to_vec(), b"25".to_vec())]).unwrap();
     store.hset(b"user:bad", &[(b"age".to_vec(), b"x".to_vec())]).unwrap();
-    install_one(&epoch, "t_age");
-    assert_eq!(epoch.load(Ordering::Acquire), 1, "install bumps the control epoch");
-    assert!(catalog_nonempty());
+    let epoch0 = ctx.state.control_epoch().load(Ordering::Acquire);
+    install_one(ctx.state, "t_age");
+    assert_eq!(
+        ctx.state.control_epoch().load(Ordering::Acquire),
+        epoch0 + 1,
+        "install bumps the control epoch"
+    );
+    assert!(ctx.state.catalogs.index_nonempty());
 
     // Live write during Building: hook double-writes.
-    on_write(&shard, &mut store, b"user:3");
-    assert!(segment_building(&shard, &mut store, b"t_age"));
-    assert!(with_ready_segment(&shard, &mut store, b"t_age", |_, _| ()).is_err());
+    on_write(&ctx, &mut store, b"user:3");
+    assert!(segment_building(&ctx, &mut store, b"t_age"));
+    assert!(with_ready_segment(&ctx, &mut store, b"t_age", |_, _| ()).is_err());
 
     // user:3 has no hash yet — create it and write again (HSET path).
     store.hset(b"user:3", &[(b"age".to_vec(), b"40".to_vec())]).unwrap();
-    on_write(&shard, &mut store, b"user:3");
+    on_write(&ctx, &mut store, b"user:3");
 
     // Tick drains the backfill.
-    on_tick(&shard, &mut store);
-    let (hits, stats) = with_ready_segment(&shard, &mut store, b"t_age", |spec, seg| {
+    on_tick(&ctx, &mut store);
+    let (hits, stats) = with_ready_segment(&ctx, &mut store, b"t_age", |spec, seg| {
         let min = IndexValue::parse_literal(spec.ty, b"0").unwrap();
         let max = IndexValue::parse_literal(spec.ty, b"100").unwrap();
         (seg.range(&min, &max, None, 10).0, seg.stats())
@@ -56,10 +64,10 @@ fn hook_backfill_and_query_lifecycle() {
 
     // Update moves the row; delete removes it.
     store.hset(b"user:1", &[(b"age".to_vec(), b"99".to_vec())]).unwrap();
-    on_write(&shard, &mut store, b"user:1");
+    on_write(&ctx, &mut store, b"user:1");
     store.del(&[b"user:2".to_vec()]);
-    on_write(&shard, &mut store, b"user:2");
-    let hits = with_ready_segment(&shard, &mut store, b"t_age", |spec, seg| {
+    on_write(&ctx, &mut store, b"user:2");
+    let hits = with_ready_segment(&ctx, &mut store, b"t_age", |spec, seg| {
         let min = IndexValue::parse_literal(spec.ty, b"0").unwrap();
         let max = IndexValue::parse_literal(spec.ty, b"100").unwrap();
         seg.range(&min, &max, None, 10).0
@@ -69,6 +77,6 @@ fn hook_backfill_and_query_lifecycle() {
     assert_eq!(hits.last().unwrap().0, b"user:1".to_vec());
     assert_eq!(hits.last().unwrap().1, IndexValue::I64(99));
 
-    install_catalog(&epoch, Catalog::new()); // cleanup for other tests
-    assert!(!catalog_nonempty());
+    ctx.state.install_index_catalog(Catalog::new());
+    assert!(!ctx.state.catalogs.index_nonempty());
 }

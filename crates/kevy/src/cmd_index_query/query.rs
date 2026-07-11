@@ -8,7 +8,7 @@ use super::args::{KnnArgs, Query, Shape, parse_groups_args};
 use super::wire::{encode_hydration, encode_value};
 use super::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
 use crate::index_runtime;
-use crate::state::ShardCtx;
+use crate::state::Ctx;
 
 enum HitsOrChunk {
     Hits(Vec<(Vec<u8>, IndexValue)>),
@@ -18,28 +18,28 @@ enum HitsOrChunk {
 /// The scalar tail of the IDX.* fan-out: parse the query grammar,
 /// answer kind-specific VERIFY stats, else run the range/eq/verify
 /// shape against this shard's segment.
-pub(super) fn op_query(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>], verb: &[u8]) -> Vec<u8> {
+pub(super) fn op_query(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>], verb: &[u8]) -> Vec<u8> {
     let Some(q) = Query::parse(argv) else {
         return vec![ST_BADARGS];
     };
     if matches!(q.shape, Shape::Verify)
-        && let Some(chunk) = verify_kind_stats(shard, store, &q.name)
+        && let Some(chunk) = verify_kind_stats(ctx, store, &q.name)
     {
         return chunk;
     }
-    run_scalar_query(shard, store, &q, verb)
+    run_scalar_query(ctx, store, &q, verb)
 }
 
 /// Aggregate / ANN / text indexes answer VERIFY with their own stats
 /// (`None` = scalar kind, fall through to the segment path).
-fn verify_kind_stats(shard: &ShardCtx, store: &mut Store, name: &[u8]) -> Option<Vec<u8>> {
-    let kind = index_runtime::catalog().and_then(|c| c.get(name).map(|(s, _)| s.kind))?;
+fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Vec<u8>> {
+    let kind = ctx.state.catalogs.index().and_then(|c| c.get(name).map(|(s, _)| s.kind))?;
     let res = match kind {
-        kevy_index::IndexKind::Agg => index_runtime::with_ready_agg(shard, store, name, |a| {
+        kevy_index::IndexKind::Agg => index_runtime::with_ready_agg(ctx, store, name, |a| {
             let st = a.stats();
             [st.rows, st.approx_bytes, st.excluded, st.groups]
         }),
-        kevy_index::IndexKind::Ann => index_runtime::with_ready_ann(shard, store, name, |g| {
+        kevy_index::IndexKind::Ann => index_runtime::with_ready_ann(ctx, store, name, |g| {
             let st = g.stats();
             [
                 st.vectors,
@@ -49,7 +49,7 @@ fn verify_kind_stats(shard: &ShardCtx, store: &mut Store, name: &[u8]) -> Option
             ]
         }),
         kevy_index::IndexKind::Text => {
-            index_runtime::with_ready_text_segment(shard, store, name, |ts| {
+            index_runtime::with_ready_text_segment(ctx, store, name, |ts| {
                 let st = ts.stats();
                 [st.docs, st.approx_bytes, st.postings, st.tokens]
             })
@@ -70,8 +70,8 @@ fn verify_kind_stats(shard: &ShardCtx, store: &mut Store, name: &[u8]) -> Option
 }
 
 /// Range / Eq / scalar-Verify against this shard's segment.
-fn run_scalar_query(shard: &ShardCtx, store: &mut Store, q: &Query, verb: &[u8]) -> Vec<u8> {
-    let res = index_runtime::with_ready_segment(shard, store, &q.name, |spec, seg| match q.shape {
+fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) -> Vec<u8> {
+    let res = index_runtime::with_ready_segment(ctx, store, &q.name, |spec, seg| match q.shape {
         Shape::Range { .. } | Shape::Eq { .. } => {
             let Some((min, max)) = q.bounds(spec.ty) else {
                 return HitsOrChunk::Chunk(vec![ST_BADARGS]);
@@ -133,8 +133,8 @@ fn encode_hits_chunk(
 /// ZERO execution. Chunk: [ST_OK][building u8][entries u64 LE]
 /// [shape byte] — kind/plan text assemble on the origin from the
 /// catalog spec.
-pub(super) fn op_explain(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
-    let Some(cat) = index_runtime::catalog() else {
+pub(super) fn op_explain(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+    let Some(cat) = ctx.state.catalogs.index() else {
         return vec![ST_NOINDEX];
     };
     let name = argv.get(1).map(Vec::as_slice).unwrap_or(b"");
@@ -162,8 +162,8 @@ pub(super) fn op_explain(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) 
     if !parsed {
         return vec![ST_BADARGS];
     }
-    let building = index_runtime::segment_building(shard, store, &spec.name);
-    let entries = kind_entries(shard, store, spec.kind, &spec.name);
+    let building = index_runtime::segment_building(ctx, store, &spec.name);
+    let entries = kind_entries(ctx, store, spec.kind, &spec.name);
     let mut chunk = vec![ST_OK, u8::from(building)];
     chunk.extend_from_slice(&entries.to_le_bytes());
     chunk.push(shape.first().copied().unwrap_or(b'?').to_ascii_uppercase());
@@ -171,53 +171,53 @@ pub(super) fn op_explain(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) 
 }
 
 /// This shard's live row count for one index, by kind.
-fn kind_entries(shard: &ShardCtx, store: &mut Store, kind: kevy_index::IndexKind, name: &[u8]) -> u64 {
+fn kind_entries(ctx: &Ctx<'_>, store: &mut Store, kind: kevy_index::IndexKind, name: &[u8]) -> u64 {
     match kind {
         kevy_index::IndexKind::Agg => {
-            index_runtime::with_ready_agg(shard, store, name, |a| a.stats().rows).unwrap_or_default()
+            index_runtime::with_ready_agg(ctx, store, name, |a| a.stats().rows).unwrap_or_default()
         }
         kevy_index::IndexKind::Ann => {
-            index_runtime::with_ready_ann(shard, store, name, |g| g.stats().vectors).unwrap_or_default()
+            index_runtime::with_ready_ann(ctx, store, name, |g| g.stats().vectors).unwrap_or_default()
         }
         kevy_index::IndexKind::Text => {
-            index_runtime::with_ready_text_segment(shard, store, name, |t| t.stats().docs)
+            index_runtime::with_ready_text_segment(ctx, store, name, |t| t.stats().docs)
                 .unwrap_or_default()
         }
-        _ => index_runtime::with_ready_segment(shard, store, name, |_, s| s.stats().entries)
+        _ => index_runtime::with_ready_segment(ctx, store, name, |_, s| s.stats().entries)
             .unwrap_or_default(),
     }
 }
 
-pub(super) fn op_list(shard: &ShardCtx, store: &mut Store) -> Vec<u8> {
+pub(super) fn op_list(ctx: &Ctx<'_>, store: &mut Store) -> Vec<u8> {
     // Chunk: per declared index, this shard's (entries, bytes,
     // coerce_failures, duplicates, building-flag).
-    let Some(cat) = index_runtime::catalog() else {
+    let Some(cat) = ctx.state.catalogs.index() else {
         return vec![ST_OK];
     };
     let mut chunk = vec![ST_OK];
     for (spec, _) in cat.iter() {
-        let building = index_runtime::segment_building(shard, store, &spec.name);
+        let building = index_runtime::segment_building(ctx, store, &spec.name);
         // (entries, bytes, coerce_failures/postings, duplicates/tokens)
         let quad = if spec.kind == kevy_index::IndexKind::Agg {
-            index_runtime::with_ready_agg(shard, store, &spec.name, |a| {
+            index_runtime::with_ready_agg(ctx, store, &spec.name, |a| {
                 let st = a.stats();
                 (st.rows, st.approx_bytes, st.excluded, st.groups)
             })
             .unwrap_or_default()
         } else if spec.kind == kevy_index::IndexKind::Ann {
-            index_runtime::with_ready_ann(shard, store, &spec.name, |g| {
+            index_runtime::with_ready_ann(ctx, store, &spec.name, |g| {
                 let st = g.stats();
                 (st.vectors, st.approx_bytes, st.tombstones, st.links)
             })
             .unwrap_or_default()
         } else if spec.kind == kevy_index::IndexKind::Text {
-            index_runtime::with_ready_text_segment(shard, store, &spec.name, |ts| {
+            index_runtime::with_ready_text_segment(ctx, store, &spec.name, |ts| {
                 let st = ts.stats();
                 (st.docs, st.approx_bytes, st.postings, st.tokens)
             })
             .unwrap_or_default()
         } else {
-            index_runtime::with_ready_segment(shard, store, &spec.name, |_, seg| {
+            index_runtime::with_ready_segment(ctx, store, &spec.name, |_, seg| {
                 let st = seg.stats();
                 (st.entries, st.approx_bytes, st.coerce_failures, st.duplicates)
             })

@@ -16,25 +16,19 @@ pub(crate) use chunk::{
 use kevy_resp::encode_error;
 
 use crate::cmd_index_query::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OVERBUDGET};
+use crate::state::CatalogState;
 
 /// Origin half: merge chunks → RESP.
-pub(crate) fn extension_reduce(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
-    let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
+pub(crate) fn extension_reduce(
+    catalogs: &CatalogState,
+    argv: &[Vec<u8>],
+    chunks: Vec<Vec<u8>>,
+) -> Vec<u8> {
     if let Some(err) = triage_status(argv, &chunks) {
         return err;
     }
-    // v3.10: IDX.EXPLAIN — pair-array plan summary.
-    if verb.eq_ignore_ascii_case(b"IDX.EXPLAIN") {
-        return query::reduce_explain(argv, &chunks);
-    }
-    if verb.eq_ignore_ascii_case(b"IDX.COUNT") {
-        return query::reduce_count(&chunks);
-    }
-    if verb.eq_ignore_ascii_case(b"IDX.LIST") {
-        return query::reduce_list(&chunks);
-    }
-    if verb.eq_ignore_ascii_case(b"IDX.VERIFY") {
-        return query::reduce_verify(&chunks);
+    if let Some(reply) = reduce_admin(catalogs, argv, &chunks) {
+        return reply;
     }
     // v3.1 GROUP/GROUPS: TPUT-style exact top-K (see reduce_agg).
     if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"AGG.FETCH")) {
@@ -65,6 +59,30 @@ pub(crate) fn extension_reduce(argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8
     }
     // IDX.QUERY: k-way merge by (value, key), global LIMIT + cursor.
     query::reduce_query(argv, &chunks)
+}
+
+/// The admin verbs (EXPLAIN / COUNT / LIST / VERIFY); `None` = a
+/// query-shaped verb, handled by the caller's shape dispatch.
+fn reduce_admin(
+    catalogs: &CatalogState,
+    argv: &[Vec<u8>],
+    chunks: &[Vec<u8>],
+) -> Option<Vec<u8>> {
+    let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
+    // v3.10: IDX.EXPLAIN — pair-array plan summary.
+    if verb.eq_ignore_ascii_case(b"IDX.EXPLAIN") {
+        return Some(query::reduce_explain(catalogs, argv, chunks));
+    }
+    if verb.eq_ignore_ascii_case(b"IDX.COUNT") {
+        return Some(query::reduce_count(chunks));
+    }
+    if verb.eq_ignore_ascii_case(b"IDX.LIST") {
+        return Some(query::reduce_list(catalogs, chunks));
+    }
+    if verb.eq_ignore_ascii_case(b"IDX.VERIFY") {
+        return Some(query::reduce_verify(chunks));
+    }
+    None
 }
 
 /// Status triage: any BADARGS / NOINDEX / BUILDING wins the reply.

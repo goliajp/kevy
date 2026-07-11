@@ -7,23 +7,19 @@ use kevy_resp::{encode_array_len, encode_bulk, encode_error, encode_integer};
 
 use super::chunk::{emit_row, encode_cursor, read_hydration, read_kbytes, read_u32, value_repr};
 use crate::cmd_index_query::{ComposeQuery, Hydrated, Query, decode_value, hex};
-use crate::index_runtime;
+use crate::state::CatalogState;
 
 /// v3.10: IDX.EXPLAIN — pair-array plan summary; per-shard chunks
 /// carry [ST_OK][building][entries u64][shape byte].
-pub(super) fn reduce_explain(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn reduce_explain(
+    catalogs: &CatalogState,
+    argv: &[Vec<u8>],
+    chunks: &[Vec<u8>],
+) -> Vec<u8> {
     let mut out = Vec::new();
-    let mut est_rows: u64 = 0;
-    let mut building = false;
-    let mut shape_b = b'?';
-    for c in chunks {
-        if c.len() >= 11 {
-            building |= c[1] != 0;
-            est_rows += u64::from_le_bytes(c[2..10].try_into().expect("8 bytes"));
-            shape_b = c[10];
-        }
-    }
-    let kind = index_runtime::catalog()
+    let (est_rows, building, shape_b) = fold_explain_chunks(chunks);
+    let kind = catalogs
+        .index()
         .and_then(|cat| {
             cat.iter()
                 .map(|(s, _)| s)
@@ -56,6 +52,21 @@ pub(super) fn reduce_explain(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
         encode_bulk(&mut out, v.as_bytes());
     }
     out
+}
+
+/// Sum the per-shard EXPLAIN chunks: `(est_rows, building, shape byte)`.
+fn fold_explain_chunks(chunks: &[Vec<u8>]) -> (u64, bool, u8) {
+    let mut est_rows: u64 = 0;
+    let mut building = false;
+    let mut shape_b = b'?';
+    for c in chunks {
+        if c.len() >= 11 {
+            building |= c[1] != 0;
+            est_rows += u64::from_le_bytes(c[2..10].try_into().expect("8 bytes"));
+            shape_b = c[10];
+        }
+    }
+    (est_rows, building, shape_b)
 }
 
 pub(super) fn reduce_count(chunks: &[Vec<u8>]) -> Vec<u8> {
@@ -165,9 +176,9 @@ pub(super) fn reduce_query(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
-pub(super) fn reduce_list(chunks: &[Vec<u8>]) -> Vec<u8> {
+pub(super) fn reduce_list(catalogs: &CatalogState, chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
-    let Some(cat) = index_runtime::catalog() else {
+    let Some(cat) = catalogs.index() else {
         encode_array_len(&mut out, 0);
         return out;
     };

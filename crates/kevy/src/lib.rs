@@ -227,10 +227,8 @@ fn boot_state(cfg: &Arc<kevy_config::Config>) -> Arc<RuntimeState> {
             std::process::exit(1);
         }
     };
-    if let Some(dir) = state.sidecar_dir() {
-        cmd_index::boot(state.control_epoch(), dir);
-        cmd_view::boot(state.control_epoch(), dir);
-    }
+    cmd_index::boot(&state);
+    cmd_view::boot(&state);
     state
 }
 
