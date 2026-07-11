@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kevy — 純Rust・依存ゼロ・Redis互換のサービングエンジン</title>
+<meta name="description" content="kevy は純 Rust・依存ゼロ・Redis 互換のキーバリューストア兼サービングエンジン。同一エンジンをサーバー、組み込みライブラリ、WebAssembly モジュールとして使えます。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23132242'/%3E%3Ctext x='6' y='24' font-family='monospace' font-size='20' fill='%23d97706'%3Ek%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <div class="wordmark"><a href="./">kevy<span class="cursor-block"></span></a></div>
+    <nav class="top">
+      <a href="../demo/">ライブデモ</a>
+      <a href="https://github.com/goliajp/kevy/tree/develop/docs">ドキュメント</a>
+      <a href="https://github.com/goliajp/kevy">github</a>
+    </nav>
+    <div class="lang" aria-label="言語">
+      <a href="../" lang="en">EN</a><span class="sep">·</span><strong>日本語</strong><span class="sep">·</span><a href="../zh-CN/" lang="zh-CN">简体中文</a>
+    </div>
+  </div>
+</header>
+
+<main>
+
+<section class="sheet">
+  <div class="wrap hero">
+    <div>
+      <h1>純 Rust・依存ゼロ・Redis 互換のサービングエンジン。</h1>
+      <p class="lead">ひとつのエンジンに三つの形態 — スタンドアロンの
+      サーバー、プロセス内 Rust ライブラリ、そしてブラウザで動く
+      WebAssembly モジュール。どの形態も RESP2 を話すため、
+      <code>redis-cli</code> も既存の Redis クライアントライブラリも
+      そのまま使えます。</p>
+      <div class="install">
+        <div class="cap">インストール</div>
+        <pre><span class="c"># サーバー</span>
+cargo install kevy
+<span class="c"># コンテナ</span>
+docker run --rm -p 6379:6379 goliakk/kevy:latest
+<span class="c"># ブラウザ</span>
+npm i @goliajp/kevy</pre>
+      </div>
+    </div>
+    <div class="term" aria-hidden="true">
+      <div class="bar"><i></i><i></i><i class="a"></i></div>
+      <pre><span class="tline t1"><span class="p">$</span> cargo install kevy</span><span class="tline t2"><span class="p">$</span> kevy --port 6379 &amp;</span><span class="tline t3"><span class="p">$</span> redis-cli -p 6379 SET hello world</span><span class="tline t4"><span class="out">OK</span></span><span class="tline t5"><span class="p">$</span> redis-cli -p 6379 GET hello</span><span class="tline t6"><span class="out">"world"</span></span><span><span class="p">$</span> <span class="caret"></span></span></pre>
+    </div>
+  </div>
+</section>
+
+<section class="sheet">
+  <div class="wrap">
+    <div class="strip">計測 · 四者アリーナ</div>
+    <h2>主張ではなく、計測。</h2>
+    <div class="mult">
+      <div><b>1.60&times;</b><span>redis 8 (GET)</span></div>
+      <div><b>3.00&times;</b><span>valkey 9.1 (GET)</span></div>
+      <div><b>3.60&times;</b><span>dragonfly (GET)</span></div>
+    </div>
+    <div class="tablewrap">
+      <table class="arena">
+        <thead>
+          <tr><th>server</th><th>構成</th><th>GET ops/s</th><th>SET ops/s</th><th>相対値 (GET)</th></tr>
+        </thead>
+        <tbody>
+          <tr class="kevy">
+            <td>kevy 3.18.0</td>
+            <td class="num">--threads 8, io_uring</td>
+            <td class="num">6,389,776 <span class="sd">±2.8k</span></td>
+            <td class="num">6,384,676 <span class="sd">±582k</span></td>
+            <td><span class="gauge"><i style="width:100%"></i></span></td>
+          </tr>
+          <tr>
+            <td>redis 8 (8.4.x)</td>
+            <td class="num">--io-threads 8</td>
+            <td class="num">3,996,004 <span class="sd">±198k</span></td>
+            <td class="num">2,460,024 <span class="sd">±112k</span></td>
+            <td><span class="gauge"><i style="width:62.5%"></i></span></td>
+          </tr>
+          <tr>
+            <td>valkey 9.1</td>
+            <td class="num">--io-threads 8</td>
+            <td class="num">2,132,196 <span class="sd">±68k</span></td>
+            <td class="num">1,598,402 <span class="sd">±0.1k</span></td>
+            <td><span class="gauge"><i style="width:33.4%"></i></span></td>
+          </tr>
+          <tr>
+            <td>dragonfly (2025-06)</td>
+            <td class="num">--proactor_threads=8</td>
+            <td class="num">1,776,199 <span class="sd">±42k</span></td>
+            <td class="num">1,453,224 <span class="sd">±28k</span></td>
+            <td><span class="gauge"><i style="width:27.8%"></i></span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">プロトコル: <code>redis-benchmark -c 50 -P 16 -n 8M -t get,set</code>、
+    5 回実行の中央値 ± 標本標準偏差。同一マシン(i7-10700K、8C16T、Linux 6.12)で
+    フェアファイト: サーバーをコア 0–7、ベンチマーククライアントをコア 8–15 に固定。
+    全サーバーを同じクライアント・同じプロトコル・同じマシンで計測。
+    再現は <a href="https://github.com/goliajp/kevy/blob/develop/bench/arena.sh">bench/arena.sh</a>、
+    詳細な分解は
+    <a href="https://github.com/goliajp/kevy/blob/develop/bench/PERF-DECOMP-V4-T9.md">bench/PERF-DECOMP-V4-T9.md</a>。</p>
+  </div>
+</section>
+
+<section class="sheet">
+  <div class="wrap">
+    <div class="strip">機能 · ひとつのエンジン</div>
+    <h2>足元は Redis パリティ、その上にサービングエンジン。</h2>
+    <div class="matrix">
+      <div><b>Redis 互換 KV</b><span>RESP2 ワイヤプロトコル。98 コマンドの応答を valkey 9.1 とバイト単位で照合。文字列・ハッシュ・リスト・セット・ソート済みセット・TTL。</span></div>
+      <div><b>宣言的インデックス</b><span>範囲 / ユニークのセカンダリインデックスを書き込みパスで維持 — ドリフトせず、データから再構築可能。ワンホップのハイドレーション付き(<code>IDX.*</code>)。</span></div>
+      <div><b>CJK 全文検索</b><span>辞書不要の CJK バイグラム分割 + BM25 ランキングを、インデックスの一種として — 同じクエリ面、同じハイドレーション。</span></div>
+      <div><b>ベクトル検索</b><span>HNSW ANN インデックスに加え、サーバーサイドのハイブリッド検索: BM25 &times; KNN 融合を 1 クエリで。</span></div>
+      <div><b>CDC フィード</b><span><code>(generation, offset)</code> 位置と厳密な復旧点を持つ変更ストリーム — ビルトインの outbox。</span></div>
+      <div><b>レプリケーションとフェイルオーバー</b><span>ハートビート / ACK による遅延の実測値付きストリーミングレプリケーション、計画的ゼロロス引き継ぎ(<code>FAILOVER</code>)、クォーラムによるクラッシュ選出。</span></div>
+      <div><b>一貫性の階段</b><span>リクエスト単位のオプトイン: <code>WAIT</code>、read-your-writes トークン、bounded staleness、クォーラムフェンス付き書き込み。</span></div>
+      <div><b>MCP サーバー</b><span>公式 <code>kevy-mcp</code>: AI エージェント向け stdio JSON-RPC。スキーマは <code>COMMAND DOCS</code> と同じ動詞コントラクトから生成。</span></div>
+      <div><b>WebAssembly</b><span>ブラウザで動くエンジン(<code>@goliajp/kevy</code>): OPFS / IndexedDB 永続化、タブ間 pub/sub、依存ゼロ。</span></div>
+      <div><b>組み込みと IoT</b><span>feature ゲートで <code>kevy-embedded</code> を最小の KV+TTL コアまで削減。musl / ARM クロスビルドとサイズ / RSS 予算ゲートを CI に常設。</span></div>
+    </div>
+  </div>
+</section>
+
+<section class="sheet">
+  <div class="wrap">
+    <div class="strip">ライブデモ · WebAssembly</div>
+    <h2>いま、このブラウザで kevy を動かす。</h2>
+    <p class="lead">デモは実物のエンジンを約 420&nbsp;KB の wasm
+    モジュールとして読み込みます。ブラウザ API 上のコマンドライン
+    REPL、リロード後も残る OPFS 永続化(IndexedDB フォールバック)、
+    タブをまたぐ pub/sub。バックエンドはなく、データはこのマシンから
+    出ません。</p>
+    <p><a class="btn amber" href="../demo/">ライブデモを開く →</a></p>
+  </div>
+</section>
+
+<section class="sheet">
+  <div class="wrap">
+    <div class="strip">配布</div>
+    <div class="chips">
+      <a class="chip" href="https://github.com/goliajp/kevy/tree/develop/docs"><b>docs</b><span>ガイドとリファレンス</span></a>
+      <a class="chip" href="https://github.com/goliajp/kevy"><b>github</b><span>goliajp/kevy</span></a>
+      <a class="chip" href="https://crates.io/crates/kevy"><b>crates.io</b><span>kevy</span></a>
+      <a class="chip" href="https://www.npmjs.com/package/@goliajp/kevy"><b>npm</b><span>@goliajp/kevy</span></a>
+      <a class="chip" href="https://hub.docker.com/r/goliakk/kevy"><b>docker</b><span>goliakk/kevy</span></a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <span>© GOLIA K.K. · Apache-2.0 OR MIT</span>
+    <div class="lang">
+      <a href="../" lang="en">EN</a><span class="sep">·</span><strong>日本語</strong><span class="sep">·</span><a href="../zh-CN/" lang="zh-CN">简体中文</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
