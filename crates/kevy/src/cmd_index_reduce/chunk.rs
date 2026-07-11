@@ -99,7 +99,7 @@ pub(super) fn encode_cursor(v: &IndexValue, k: &[u8]) -> Vec<u8> {
 /// wire-shape transform of the already-reduced RESP2 bytes: `*N` of
 /// 2-arrays → `%N/2` of flat pairs. Verbs whose replies are NOT
 /// key/value pairs pass through untouched (spec-legal gradual
-/// migration, same posture as dispatch_resp3).
+/// migration, same posture as `dispatch_resp3.rs`'s overrides).
 pub(crate) fn resp3_upgrade(argv: &[Vec<u8>], reply: Vec<u8>) -> Vec<u8> {
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
     let mapify = verb.eq_ignore_ascii_case(b"IDX.EXPLAIN")

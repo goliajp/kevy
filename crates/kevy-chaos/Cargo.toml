@@ -12,6 +12,5 @@ publish = false
 [lints]
 workspace = true
 
-# 0-dep: std-only + path-deps on kevy-* crates.
+# 0-dep: std-only.
 [dependencies]
-kevy-resp-client = { path = "../kevy-resp-client", version = "3.18.0" }

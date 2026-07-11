@@ -137,25 +137,16 @@ impl<C: Commands> Shard<C> {
                         .conns
                         .get(&conn_id)
                         .map_or(kevy_resp::RespVersion::V2, |c| c.proto);
-                    let reply = self.commands.extension_reduce_v3(&argv, chunks, proto);
-                    // v2.6: a reply starting with 0x00 is a CONTINUATION —
-                    // the remainder encodes a second fan-out argv
-                    // (length-prefixed items). RESP replies never start
-                    // with NUL, so the convention is unambiguous. Phase
-                    // state rides inside the continuation argv itself
-                    // (stateless two-phase, no new agg variant).
-                    if reply.first() == Some(&0) {
-                        if let Some(argv2) = decode_continuation(&reply[1..]) {
-                            self.start_extension_phase(conn_id, seq, argv2);
-                        } else {
-                            self.fill_extension_slot(
-                                conn_id,
-                                seq,
-                                b"-ERR internal: bad extension continuation\r\n".to_vec(),
-                            );
+                    match self.commands.extension_reduce(&argv, chunks, proto) {
+                        crate::ExtensionReduced::Reply(reply) => {
+                            self.fill_extension_slot(conn_id, seq, reply);
                         }
-                    } else {
-                        self.fill_extension_slot(conn_id, seq, reply);
+                        // Phase state rides inside the follow-up argv
+                        // itself (stateless two-phase, no new agg
+                        // variant).
+                        crate::ExtensionReduced::Continue(argv2) => {
+                            self.start_extension_phase(conn_id, seq, argv2);
+                        }
                     }
                 }
                 // The match above is exhaustive over what fold ever puts
@@ -213,19 +204,4 @@ pub(crate) fn relative_ttl_write<A: ArgvView + ?Sized>(args: &A) -> bool {
             .any(|i| args[i].eq_ignore_ascii_case(b"EX") || args[i].eq_ignore_ascii_case(b"PX"));
     }
     false
-}
-
-/// Decode a continuation payload: `[n: u32 LE][(len: u32 LE, bytes)*]`.
-fn decode_continuation(b: &[u8]) -> Option<Vec<Vec<u8>>> {
-    let mut pos = 0usize;
-    let n = u32::from_le_bytes(b.get(pos..pos + 4)?.try_into().ok()?) as usize;
-    pos += 4;
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
-        let len = u32::from_le_bytes(b.get(pos..pos + 4)?.try_into().ok()?) as usize;
-        pos += 4;
-        out.push(b.get(pos..pos + len)?.to_vec());
-        pos += len;
-    }
-    Some(out)
 }

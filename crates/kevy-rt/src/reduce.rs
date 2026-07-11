@@ -68,8 +68,8 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
             );
             SmallReply::from_vec(out)
         }
-        Agg::Gather { op, keys, got } => {
-            SmallReply::from_vec(finalize_gather(op, keys, got, proto))
+        Agg::Gather { op, limit, keys, got } => {
+            SmallReply::from_vec(finalize_gather(op, limit, keys, got, proto))
         }
         Agg::XReadGather { slots } => SmallReply::from_vec(finalize_xread_gather(slots)),
         Agg::Keys { shape, acc } => SmallReply::from_vec(finalize_keys(shape, acc)),
@@ -176,12 +176,14 @@ fn finalize_xread_gather(slots: Vec<Option<Vec<u8>>>) -> Vec<u8> {
 /// significant, can't be a Set).
 fn finalize_gather(
     op: MultiOp,
+    limit: usize,
     keys: Vec<Vec<u8>>,
     got: HashMap<Vec<u8>, Gathered>,
     proto: RespVersion,
 ) -> Vec<u8> {
     match op {
         MultiOp::Mget => finalize_mget(&keys, &got),
+        MultiOp::ZInterCard => finalize_zintercard(limit, &keys, &got),
         _ => finalize_set_algebra(op, &keys, &got, proto),
     }
 }
@@ -205,10 +207,6 @@ fn finalize_set_algebra(
     proto: RespVersion,
 ) -> Vec<u8> {
     let mut out = Vec::new();
-    // v2.2: ZINTERCARD rides the Scored gather; reduce to `:count`.
-    if let MultiOp::ZInterCard(limit) = op {
-        return finalize_zintercard(limit, keys, got);
-    }
     let mut sets: Vec<Vec<Vec<u8>>> = Vec::with_capacity(keys.len());
     for k in keys {
         match got.get(k) {
@@ -224,11 +222,11 @@ fn finalize_set_algebra(
         MultiOp::SInter => set_intersect(&sets),
         MultiOp::SUnion => set_union(&sets),
         MultiOp::SDiff => set_diff(&sets),
-        // The outer match already routed Mget; reaching this arm would
-        // mean a future refactor's wildcard caught Mget here. Replying
-        // empty is observably wrong but doesn't crash the shard;
-        // `unreachable!()` would crash-loop the whole reactor.
-        MultiOp::Mget | MultiOp::ZInterCard(_) => Vec::new(),
+        // The outer match already routed Mget and ZInterCard; reaching
+        // this arm would mean a future refactor's wildcard caught them
+        // here. Replying empty is observably wrong but doesn't crash
+        // the shard; `unreachable!()` would crash-loop the whole reactor.
+        MultiOp::Mget | MultiOp::ZInterCard => Vec::new(),
     };
     match proto {
         RespVersion::V2 => encode_array_len(&mut out, result.len() as i64),

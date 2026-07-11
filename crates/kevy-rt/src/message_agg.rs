@@ -27,6 +27,9 @@ pub(crate) enum Agg {
     /// Gathered per-key payloads, reduced by `op` over `keys` (request order).
     Gather {
         op: MultiOp,
+        /// `ZINTERCARD`'s `LIMIT` cap (0 = unlimited); unused by the
+        /// other reduce shapes.
+        limit: usize,
         keys: Vec<Vec<u8>>,
         got: HashMap<Vec<u8>, Gathered>,
     },

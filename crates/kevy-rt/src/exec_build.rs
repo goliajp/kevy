@@ -77,10 +77,16 @@ impl<C: Commands> Shard<C> {
                 Agg::AllOk,
             ),
             Route::MSet => self.build_mset_targets(args),
-            Route::MGet => self.build_gather(args, GatherKind::Str, MultiOp::Mget),
-            Route::SInter => self.build_gather(args, GatherKind::Set, MultiOp::SInter),
+            Route::Gather(op) => match op {
+                MultiOp::Mget => self.build_gather(args, GatherKind::Str, op),
+                MultiOp::SInter | MultiOp::SUnion | MultiOp::SDiff => {
+                    self.build_gather(args, GatherKind::Set, op)
+                }
+                // ZINTERCARD is a numkeys-form argv — its own parser
+                // extracts the keys and the LIMIT cap.
+                MultiOp::ZInterCard => self.build_zintercard(args),
+            },
             Route::ZAlgebraStore(combine) => self.build_zalgebra_store(args, combine),
-            Route::ZInterCard => self.build_zintercard(args),
             Route::Extension => {
                 let argv: Vec<Vec<u8>> = (0..args.len()).map(|i| args[i].to_vec()).collect();
                 let targets = (0..self.nshards)
@@ -114,11 +120,11 @@ impl<C: Commands> Shard<C> {
             Route::FeedRead | Route::FeedTail | Route::FeedShards => {
                 gather_error("ERR internal: feed route hit multi builder")
             }
-            Route::SUnion => self.build_gather(args, GatherKind::Set, MultiOp::SUnion),
-            Route::SDiff => self.build_gather(args, GatherKind::Set, MultiOp::SDiff),
-            Route::Keys(pat) => self.fanout_keys(pat, None, KeyShape::Keys),
-            Route::Scan(pat) => self.fanout_keys(pat, None, KeyShape::Scan),
-            Route::RandomKey => self.fanout_keys(None, Some(1), KeyShape::Random),
+            Route::Keyspace(shape, pat) => {
+                // RANDOMKEY needs one key per shard; KEYS/SCAN collect all.
+                let limit = matches!(shape, KeyShape::Random).then_some(1);
+                self.fanout_keys(pat, limit, shape)
+            }
             Route::XReadGather { streams, count, group } => {
                 self.build_xread_targets(streams, count, group)
             }
@@ -215,6 +221,7 @@ impl<C: Commands> Shard<C> {
             targets,
             Agg::Gather {
                 op,
+                limit: 0,
                 keys,
                 got: HashMap::new(),
             },
@@ -280,7 +287,8 @@ impl<C: Commands> Shard<C> {
         (
             targets,
             Agg::Gather {
-                op: MultiOp::ZInterCard(limit),
+                op: MultiOp::ZInterCard,
+                limit,
                 keys,
                 got: HashMap::new(),
             },

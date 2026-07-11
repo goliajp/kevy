@@ -73,6 +73,20 @@ impl NotifyClass {
     }
 }
 
+/// Outcome of an extension fan-out reduce ([`Commands::extension_reduce`]).
+///
+/// [`Commands::extension_reduce`]: crate::Commands::extension_reduce
+#[derive(Debug, PartialEq, Eq)]
+pub enum ExtensionReduced {
+    /// The final RESP reply bytes for the client.
+    Reply(Vec<u8>),
+    /// Not final yet: fan `argv` out to every shard as a follow-up
+    /// extension phase and reduce again when its chunks land. Phase
+    /// state rides inside the argv itself, so the runtime holds no
+    /// per-phase bookkeeping.
+    Continue(Vec<Vec<u8>>),
+}
+
 /// Transaction-control classification for a command.
 pub enum TxnKind {
     Multi,

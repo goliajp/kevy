@@ -9,7 +9,7 @@
 //! one place makes that contract obvious.
 
 use kevy_resp::ArgvView;
-use kevy_rt::{ResolvedCmd, Route, TxnKind, parse_slowlog_sub};
+use kevy_rt::{KeyShape, MultiOp, ResolvedCmd, Route, TxnKind, parse_slowlog_sub};
 
 use crate::cmd::{self, scan_pattern, upper_verb};
 use crate::cmd_block;
@@ -91,6 +91,18 @@ fn resolve_general<A: ArgvView + ?Sized>(
     }
 }
 
+/// [`crate::KevyCommands::route`]'s body — the same verb table
+/// [`kevy_resolve`] consults, entered from a raw argv. The single
+/// routing table lives in [`route_for_verb`]; a parity test over the
+/// whole verb registry holds `route()` == `resolve().route`.
+pub(crate) fn route<A: ArgvView + ?Sized>(repl: &ReplicationState, args: &A) -> Route {
+    let Some(name) = args.first() else {
+        return Route::Local;
+    };
+    let mut buf = [0u8; 32];
+    route_for_verb(repl, upper_verb(name, &mut buf), args)
+}
+
 /// Map an uppercased verb + its argv to the routing decision the
 /// runtime uses to pick local-fast-path / single-shard / multi-target
 /// / pub/sub / transactional control. Pure data; the cost is one `match
@@ -105,7 +117,11 @@ fn route_for_verb<A: ArgvView + ?Sized>(
     match upper {
         b"HELLO" => Route::Hello,
         b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG" | b"INFO" | b"CLUSTER" | b"DEBUG"
-        | b"SHUTDOWN" | b"CLIENT" | b"SELECT" | b"BLPOP" | b"BRPOP" | b"BZPOPMIN" | b"BRPOPLPUSH" => {
+        | b"SHUTDOWN" | b"CLIENT" | b"SELECT" | b"BLPOP" | b"BRPOP" | b"BZPOPMIN" | b"BRPOPLPUSH"
+        // Replication admin: answered from the conn's own shard —
+        // args[1] is a host (REPLICAOF/SLAVEOF) or absent (ROLE),
+        // never a key to route by.
+        | b"ROLE" | b"REPLICAOF" | b"SLAVEOF" => {
             Route::Local
         }
         // v3.16 D1+D2 — replication barriers. Well-formed happy paths
@@ -121,13 +137,13 @@ fn route_for_verb<A: ArgvView + ?Sized>(
         b"BGSAVE" => Route::BgSave,
         b"BGREWRITEAOF" => Route::RewriteAof,
         b"MSET" if args.len() >= 3 && !args.len().is_multiple_of(2) => Route::MSet,
-        b"MGET" if args.len() >= 2 => Route::MGet,
-        b"SINTER" if args.len() >= 2 => Route::SInter,
-        b"SUNION" if args.len() >= 2 => Route::SUnion,
-        b"SDIFF" if args.len() >= 2 => Route::SDiff,
-        b"KEYS" if args.len() == 2 => Route::Keys(Some(args[1].to_vec())),
-        b"SCAN" if args.len() >= 2 => Route::Scan(scan_pattern(args)),
-        b"RANDOMKEY" if args.len() == 1 => Route::RandomKey,
+        b"MGET" if args.len() >= 2 => Route::Gather(MultiOp::Mget),
+        b"SINTER" if args.len() >= 2 => Route::Gather(MultiOp::SInter),
+        b"SUNION" if args.len() >= 2 => Route::Gather(MultiOp::SUnion),
+        b"SDIFF" if args.len() >= 2 => Route::Gather(MultiOp::SDiff),
+        b"KEYS" if args.len() == 2 => Route::Keyspace(KeyShape::Keys, Some(args[1].to_vec())),
+        b"SCAN" if args.len() >= 2 => Route::Keyspace(KeyShape::Scan, scan_pattern(args)),
+        b"RANDOMKEY" if args.len() == 1 => Route::Keyspace(KeyShape::Random, None),
         b"SUBSCRIBE" if args.len() >= 2 => Route::Subscribe,
         b"UNSUBSCRIBE" => Route::Unsubscribe,
         b"PSUBSCRIBE" if args.len() >= 2 => Route::Psubscribe,
@@ -141,7 +157,7 @@ fn route_for_verb<A: ArgvView + ?Sized>(
         b"SINTERSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SInter),
         b"SUNIONSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SUnion),
         b"SDIFFSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SDiff),
-        b"ZINTERCARD" if args.len() >= 3 => Route::ZInterCard,
+        b"ZINTERCARD" if args.len() >= 3 => Route::Gather(MultiOp::ZInterCard),
         b"IDX.QUERY" if args.len() >= 4 => Route::Extension,
         b"IDX.EXPLAIN" if args.len() >= 2 => Route::Extension,
         b"IDX.REBUILD" if args.len() == 2 => Route::Extension,

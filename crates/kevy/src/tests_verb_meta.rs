@@ -83,3 +83,25 @@ fn internal_continuations_stay_undocumented() {
         );
     }
 }
+
+/// The standalone `route()` face and the hot-path `resolve().route`
+/// must answer identically for every registered verb. Swept across
+/// argc 1..=8 because most routing arms key off `args.len()` guards.
+#[test]
+fn route_matches_resolve_route_for_every_verb() {
+    use kevy_rt::Commands;
+    let c = crate::KevyCommands::new();
+    for m in VERB_META {
+        for argc in 1..=8usize {
+            let mut parts: Vec<Vec<u8>> = vec![m.name.as_bytes().to_vec()];
+            parts.resize(argc, b"1".to_vec());
+            let a = kevy_rt::Argv::from(parts);
+            assert_eq!(
+                c.route(&a),
+                c.resolve(&a).route,
+                "{} argc={argc}: route() and resolve().route disagree",
+                m.name
+            );
+        }
+    }
+}

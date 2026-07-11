@@ -1,5 +1,5 @@
 use super::*;
-use kevy_rt::{Commands, Route, TxnKind};
+use kevy_rt::{Commands, KeyShape, MultiOp, Route, TxnKind};
 
 /// Dispatch a command (given as argv pieces) against `store`, returning RESP.
 fn d(store: &mut Store, parts: &[&[u8]]) -> Vec<u8> {
@@ -203,7 +203,10 @@ fn route_keyspace_verbs() {
     assert!(matches!(c.route(&argv(&[b"SAVE"])), Route::Save));
     assert!(matches!(c.route(&argv(&[b"BGSAVE"])), Route::BgSave));
     assert!(matches!(c.route(&argv(&[b"BGREWRITEAOF"])), Route::RewriteAof));
-    assert!(matches!(c.route(&argv(&[b"RANDOMKEY"])), Route::RandomKey));
+    assert!(matches!(
+        c.route(&argv(&[b"RANDOMKEY"])),
+        Route::Keyspace(KeyShape::Random, None)
+    ));
 }
 
 #[test]
@@ -216,22 +219,28 @@ fn route_multikey_and_pubsub_verbs() {
     ));
     assert!(matches!(
         c.route(&argv(&[b"MGET", b"k1", b"k2"])),
-        Route::MGet
+        Route::Gather(MultiOp::Mget)
     ));
     assert!(matches!(
         c.route(&argv(&[b"SINTER", b"s1", b"s2"])),
-        Route::SInter
+        Route::Gather(MultiOp::SInter)
     ));
     assert!(matches!(
         c.route(&argv(&[b"SUNION", b"s1", b"s2"])),
-        Route::SUnion
+        Route::Gather(MultiOp::SUnion)
     ));
     assert!(matches!(
         c.route(&argv(&[b"SDIFF", b"s1", b"s2"])),
-        Route::SDiff
+        Route::Gather(MultiOp::SDiff)
     ));
-    assert!(matches!(c.route(&argv(&[b"KEYS", b"*"])), Route::Keys(_)));
-    assert!(matches!(c.route(&argv(&[b"SCAN", b"0"])), Route::Scan(_)));
+    assert!(matches!(
+        c.route(&argv(&[b"KEYS", b"*"])),
+        Route::Keyspace(KeyShape::Keys, Some(_))
+    ));
+    assert!(matches!(
+        c.route(&argv(&[b"SCAN", b"0"])),
+        Route::Keyspace(KeyShape::Scan, _)
+    ));
     assert!(matches!(
         c.route(&argv(&[b"SUBSCRIBE", b"chan"])),
         Route::Subscribe
@@ -330,15 +339,15 @@ fn resolve_unifies_route_and_txn_kind() {
         (vec![b"SUBSCRIBE".as_ref(), b"c".as_ref()], Route::Subscribe),
         (vec![b"UNSUBSCRIBE".as_ref()], Route::Unsubscribe),
         (vec![b"PUBLISH".as_ref(), b"c".as_ref(), b"m".as_ref()], Route::Publish),
-        (vec![b"RANDOMKEY".as_ref()], Route::RandomKey),
+        (vec![b"RANDOMKEY".as_ref()], Route::Keyspace(KeyShape::Random, None)),
         (vec![b"DEL".as_ref(), b"a".as_ref(), b"b".as_ref()], Route::DelKeys),
         (vec![b"EXISTS".as_ref(), b"a".as_ref(), b"b".as_ref()], Route::ExistsKeys),
     ] {
         let argv = argv(&parts);
         let resolved = c.resolve(&argv);
         let routed = c.route(&argv);
-        // Compare by discriminant (Route doesn't impl Debug; payload-bearing
-        // arms like Keys / Scan / Single carry data so we only check kind).
+        // Compare by discriminant (payload-bearing arms like Keyspace /
+        // Single carry data so we only check the variant kind here).
         let want_d = std::mem::discriminant(&want);
         assert_eq!(
             std::mem::discriminant(&resolved.route),
