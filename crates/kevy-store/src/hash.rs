@@ -98,7 +98,7 @@ impl Store {
         pairs: &[(&[u8], &[u8])],
     ) -> Result<usize, StoreError> {
         self.purge_hash_ttl(key);
-        // v2.4: overwriting a field discards its TTL (Redis 7.4).
+        // Overwriting a field discards its TTL (Redis 7.4).
         if !self.hfttl.is_empty() {
             let fs: Vec<&[u8]> = pairs.iter().map(|(f, _)| *f).collect();
             self.clear_hash_field_ttls(key, &fs);

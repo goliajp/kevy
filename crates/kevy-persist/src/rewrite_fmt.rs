@@ -4,8 +4,9 @@
 //!
 //! Split out of `lib.rs` (the binary-snapshot format) to keep both files under
 //! the 500-LOC house cap. TTL is emitted as an absolute `PEXPIREAT` deadline
-//! so a replay reconstructs the original instant (INC-2026-06-09) rather than
-//! re-anchoring to replay-time.
+//! so a replay reconstructs the original instant rather than
+//! re-anchoring to replay-time (re-anchoring silently extends every
+//! TTL by the key's age — a production incident class).
 
 use crate::SNAPSHOT_BUF_CAP;
 use kevy_resp::{Argv, ArgvView};
@@ -44,7 +45,7 @@ pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<(u
     if let Some(e) = err {
         return Err(e);
     }
-    // v2.4: hash field TTLs re-emitted as absolute HPEXPIREAT frames
+    // Hash field TTLs re-emitted as absolute HPEXPIREAT frames
     // (after the HSETs that recreate their fields).
     let mut ferr: Option<io::Error> = None;
     src.for_each_hash_ttl(|key, field, deadline_ms| {
@@ -152,7 +153,7 @@ fn write_value_as_commands<W: Write>(
 
 /// `ms` is remaining; emit an absolute `PEXPIREAT` deadline so a replay
 /// of the rewritten AOF reconstructs the original instant instead of
-/// re-anchoring to replay-time (INC-2026-06-09).
+/// re-anchoring to replay-time (which would silently extend the TTL).
 fn write_pexpireat<W: Write>(w: &mut W, key: &[u8], ttl_ms: Option<u64>) -> io::Result<()> {
     let Some(ms) = ttl_ms else { return Ok(()) };
     let deadline = kevy_store::now_unix_ms().saturating_add(ms);
@@ -229,7 +230,8 @@ fn write_stream_as_commands<W: Write>(w: &mut W, key: &[u8], s: &StreamData) -> 
 /// per live PEL row — full delivery_time/count fidelity, the same technique
 /// Redis's own AOF rewrite uses. Tombstone PEL rows (entry XDEL'd while
 /// pending) are skipped: XCLAIM purges rather than re-creates those, so
-/// only the snapshot path preserves them (RFC 2026-06-11 trade-off).
+/// only the snapshot path preserves them (accepted trade-off — no RESP
+/// verb can recreate a PEL row for a deleted entry).
 fn write_stream_group_commands<W: Write>(
     w: &mut W,
     key: &[u8],
@@ -324,7 +326,7 @@ pub(crate) fn write_multibulk<W: Write, A: ArgvView + ?Sized>(
     Ok(())
 }
 
-/// Parity manifest (v2.1): every verb the AOF rewrite emits.
+/// Parity manifest: every verb the AOF rewrite emits.
 /// Cross-checked against `kevy_resp::ops_table` below.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const REWRITE_EMIT_VERBS: &[&str] = &[

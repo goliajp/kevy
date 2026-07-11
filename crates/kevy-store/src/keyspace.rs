@@ -274,11 +274,8 @@ impl Store {
         self.insert_loaded(key, Value::Set(Arc::new(set_data)), ttl_ms);
     }
 
-    /// Collect live keys (optionally matching a glob `pattern`, up to `limit`).
-    /// Used by KEYS/SCAN/RANDOMKEY. Treats expired keys as absent (no removal).
-    /// v2.3 `info_prefix` walk: count live keys under a byte prefix and
-    /// how many of them carry a TTL. O(keyspace) — a stats/ops call,
-    /// not a hot-path primitive.
+    /// Count live keys under a byte prefix and how many of them carry
+    /// a TTL. O(keyspace) — a stats/ops call, not a hot-path primitive.
     pub fn prefix_stats(&self, prefix: &[u8]) -> (u64, u64) {
         let now = now_ns();
         let mut keys = 0u64;
@@ -295,6 +292,8 @@ impl Store {
         (keys, expires)
     }
 
+    /// Collect live keys (optionally matching a glob `pattern`, up to `limit`).
+    /// Used by KEYS/SCAN/RANDOMKEY. Treats expired keys as absent (no removal).
     pub fn collect_keys(&self, pattern: Option<&[u8]>, limit: Option<usize>) -> Vec<Vec<u8>> {
         let now = now_ns();
         let mut out = Vec::new();

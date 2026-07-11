@@ -1,6 +1,6 @@
 //! `SmallHashData` — inline-listpack encoding for tiny hashes.
 //!
-//! Companion to [`crate::small_set::SmallSetData`] (v1.25 A.7 pilot).
+//! Companion to [`crate::small_set::SmallSetData`].
 //! Mirrors valkey's `OBJ_ENCODING_LISTPACK` for hashes (`t_hash.c::
 //! hashTypeTryConversion`). For the `redis-benchmark -t hset` default
 //! shape (single field `field:__rand_int__` ~24 B + literal value

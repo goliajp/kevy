@@ -13,7 +13,7 @@ use std::fs::File;
 use std::io::{self, BufReader, Read};
 use std::path::Path;
 
-/// Read the v2.3 recovery-point cursor from a snapshot's header:
+/// Read the recovery-point cursor from a snapshot's header:
 /// `Some((generation, offset))` for format v5+, `None` for older
 /// (cursor-less) snapshots. Does not load entries.
 pub fn read_snapshot_cursor(path: &Path) -> io::Result<Option<(u64, u64)>> {
@@ -53,7 +53,7 @@ pub fn load_snapshot_from<R: Read>(store: &mut Store, r: R) -> io::Result<()> {
     load_snapshot_filtered(store, r, |_| true)
 }
 
-/// v3.2 — [`load_snapshot_from`] with a key predicate: only records
+/// [`load_snapshot_from`] with a key predicate: only records
 /// whose key satisfies `keep` are loaded (skipped records are still
 /// parsed to stay in frame). The single-source replica path broadcasts
 /// one snapshot payload to every shard and each loads its own hash
@@ -77,7 +77,7 @@ pub fn load_snapshot_filtered<R: Read>(
         if op == OP_EOF {
             return Ok(());
         }
-        // v2.4 field-TTL records: no ttl/value framing of their own.
+        // Field-TTL records: no ttl/value framing of their own.
         if op == OP_HFTTL {
             load_hfttl_record(store, &mut r, &keep)?;
             continue;

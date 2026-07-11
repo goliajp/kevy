@@ -1,7 +1,7 @@
 //! [`TextSegment`] — one shard's inverted slice of one text index
 //! (index-follows-key, same discipline as kevy-index's `Segment`).
 //! Maintained synchronously with writes; queried with BM25 ranking
-//! over shard-local statistics (RFC D2: per-shard df/avgdl — global
+//! over shard-local statistics (per-shard df/avgdl — global
 //! statistics would need cross-shard write coordination).
 //!
 //! The impact-bucketed posting-list structure lives in
@@ -31,7 +31,8 @@ pub struct TextStats {
     pub tokens: u64,
     /// Total postings.
     pub postings: u64,
-    /// Approximate heap bytes (RFC D4 formula's measured side).
+    /// Approximate heap bytes (the measured side of the documented
+    /// memory formula).
     pub approx_bytes: u64,
 }
 
@@ -226,7 +227,7 @@ impl TextSegment {
 
     /// Walk one tf bucket's bands (dl ascending), scoring every id.
     ///
-    /// v3.5 single-list within-bucket cut: bands are dl-ASCENDING and
+    /// Single-list within-bucket cut: bands are dl-ASCENDING and
     /// BM25 falls as dl rises, so the band's LOWER dl edge bounds
     /// every score inside it from above. On a one-list query — each
     /// doc appears exactly ONCE in the whole list, no later
@@ -343,7 +344,7 @@ impl TextSegment {
             tokens: self.postings.len() as u64,
             postings,
             // per-Many-posting ≈ 4B band-vec slot + ~26B list-index
-            // entry (doc-id postings + log2 dl bands, v3.5); hapax
+            // entry (doc-id postings + log2 dl bands); hapax
             // lists are inline. Docs keep their original text
             // (update path re-derives tokens).
             approx_bytes: token_bytes + many_postings * 30 + doc_bytes,

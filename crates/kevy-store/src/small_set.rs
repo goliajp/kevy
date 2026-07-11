@@ -1,6 +1,6 @@
 //! `SmallSetData` — valkey-style inline-listpack encoding for tiny sets.
 //!
-//! v1.25 A.7 O5: mirror valkey's `OBJ_ENCODING_LISTPACK` for sets of size
+//! Mirrors valkey's `OBJ_ENCODING_LISTPACK` for sets of size
 //! 1–N (`t_set.c::setTypeMaybeConvert`). valkey starts a fresh set as a
 //! 1-entry listpack inside one cache line; once cardinality grows past
 //! `set-max-listpack-entries` (128 default) OR a single member exceeds the

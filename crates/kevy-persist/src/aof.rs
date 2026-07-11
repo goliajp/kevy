@@ -14,10 +14,10 @@ use crate::{
 };
 
 /// 9-byte file-format header written at the start of every kevy-managed
-/// AOF as of v1.2.0. `replay_aof` strips it before parsing RESP, so
+/// AOF. `replay_aof` strips it before parsing RESP, so
 /// non-kevy bytes accidentally written into the AOF path (e.g. a deploy
 /// pipeline redirecting shell stderr into the file) get the same loud
-/// rejection as any other corrupt frame. Pre-1.2 AOFs (no magic) still
+/// rejection as any other corrupt frame. Legacy AOFs (no magic) still
 /// replay — the parser only consumes the magic if it sees it.
 pub(crate) const AOF_MAGIC: &[u8; 9] = b"KEVYAOF1\n";
 
@@ -203,7 +203,7 @@ impl Aof {
         Ok(())
     }
 
-    /// Durability barrier (v2.1): flush + `fdatasync` NOW, regardless
+    /// Durability barrier: flush + `fdatasync` NOW, regardless
     /// of the fsync policy. On return, every append made so far is on
     /// stable storage. Lets an `EverySec` deployment make individual
     /// critical writes durable-on-ack (Postgres
@@ -272,11 +272,12 @@ impl Aof {
     /// BGREWRITEAOF: rebuild a compact AOF from `store`'s current state and
     /// atomically swap it in.
     ///
-    /// **v1.0 is synchronous** — the calling shard blocks for the rewrite's
+    /// **Synchronous** — the calling shard blocks for the rewrite's
     /// duration. Each shard owns its own AOF, so the shards' rewrites
     /// proceed independently; per-shard blocking matches Redis's `BGSAVE`
     /// cost in a typical single-key-per-shard workload. Concurrent
-    /// (rewrite-during-writes) incrementalisation is a v1.x perf item.
+    /// (rewrite-during-writes) incrementalisation is deliberately not
+    /// attempted here.
     ///
     /// Writes to a `<path>.rewrite` temp file with fsync, then `rename(2)`s
     /// it over the live AOF. The append handle is reopened against the new

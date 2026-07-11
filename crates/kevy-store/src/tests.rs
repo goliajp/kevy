@@ -380,7 +380,7 @@ fn bump_all_watched_invalidates_every_tracked_entry() {
     assert_eq!(s.key_version(b"untouched"), 0);
 }
 
-// ───────────── stream groups across load_value / XSETID (2026-06-11) ─────────────
+// ───────────── stream groups across load_value / XSETID ─────────────
 
 /// Build the canonical grouped-stream fixture: entries 1-1/2-1/3-1, group
 /// `g`, consumer `c1` holding 1-1+2-1 (delivered at t=1000), `c2` holding

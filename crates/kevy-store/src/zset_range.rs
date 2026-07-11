@@ -144,7 +144,7 @@ impl Store {
         Ok(to_pop)
     }
 
-    /// v2.4 `zpopmin_below` — pop up to `count` lowest-scored members
+    /// `zpopmin_below` — pop up to `count` lowest-scored members
     /// whose score is `< below` (strictly). The delayed-job primitive:
     /// "pop everything that is due" in one atomic call (score = due
     /// time, `below` = now). Absent key = empty; wrong type errors.

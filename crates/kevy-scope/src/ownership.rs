@@ -1,7 +1,7 @@
 //! `OwnershipTable` — the immutable startup-built lookup structure.
 //! Scopes are sorted by prefix length descending so the first match
-//! IS the longest-prefix match (T3.7). Overlap is rejected at
-//! construction time (T3.6).
+//! IS the longest-prefix match. Overlap is rejected at
+//! construction time.
 
 use crate::{Routing, Scope};
 
@@ -66,7 +66,7 @@ pub struct OwnershipTable {
 
 impl OwnershipTable {
     /// Validate + sort the scope list. Rejects duplicate prefixes and
-    /// strict overlap (T3.6 linter). `O(n²)` over the scope list,
+    /// strict overlap. `O(n²)` over the scope list,
     /// which is tiny (~ N scopes per cluster); no need for a trie at
     /// startup time.
     pub fn new(mut scopes: Vec<Scope>) -> Result<Self, OwnershipError> {
@@ -111,7 +111,7 @@ impl OwnershipTable {
         &self.scopes
     }
 
-    /// T3.13 linter: scopes that declared no fallback. The server
+    /// Boot-time lint: scopes that declared no fallback. The server
     /// emits a `WARN` log per entry at boot so operators are aware
     /// that this scope has zero availability if its writer dies —
     /// not an error (the operator may have explicitly chosen

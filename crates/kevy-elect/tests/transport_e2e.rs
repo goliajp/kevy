@@ -1,4 +1,4 @@
-//! T1.5.6 TCP transport — real-socket e2e on loopback. Spins up 3
+//! TCP transport — real-socket e2e on loopback. Spins up 3
 //! `Transport` instances, lets them heartbeat each other, kills the
 //! primary, and verifies a replica promotes within the spec'd
 //! window.

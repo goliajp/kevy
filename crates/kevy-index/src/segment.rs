@@ -1,5 +1,5 @@
-//! [`Segment`] — one shard's slice of one index (index-follows-key,
-//! RFC D3). Range = `BTreeSet<(value, key)>`; Unique = the same
+//! [`Segment`] — one shard's slice of one index (index-follows-key).
+//! Range = `BTreeSet<(value, key)>`; Unique = the same
 //! tree (point lookups are a 1-value range) plus a duplicate counter
 //! for the declarative fence.
 //!
@@ -28,7 +28,8 @@ pub struct Cursor {
 pub struct SegmentStats {
     /// Live entries.
     pub entries: u64,
-    /// Approximate heap bytes (RFC D7 formula's measured side).
+    /// Approximate heap bytes (the measured side of the documented
+    /// memory formula).
     pub approx_bytes: u64,
     /// Rows excluded because the field failed coercion / was missing.
     pub coerce_failures: u64,
@@ -36,7 +37,7 @@ pub struct SegmentStats {
     pub duplicates: u64,
 }
 
-/// Per-entry structural overhead in the memory formula (RFC D7).
+/// Per-entry structural overhead in the memory formula.
 const ENTRY_OVERHEAD: usize = 48;
 
 /// One shard's slice of one index.

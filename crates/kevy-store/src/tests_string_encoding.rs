@@ -1,9 +1,9 @@
 //! String ops × value encodings (`Value::Str` / `Value::Int` /
 //! `Value::ArcBulk`): every string op must accept all three.
 //!
-//! Guards the compat divergence found 2026-07-03 (compat3 CI):
-//! `SET x 5` stores `Value::Int` (L2 encoding, 2026-06-21), but
-//! GETDEL / GETSET / INCRBYFLOAT / APPEND still had pre-L2
+//! Guards a compat divergence found in CI:
+//! `SET x 5` stores `Value::Int` (integer encoding), but
+//! GETDEL / GETSET / INCRBYFLOAT / APPEND still had
 //! `Value::Str`-only arms and replied WRONGTYPE where Redis/valkey
 //! succeed.
 

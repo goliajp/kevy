@@ -63,7 +63,7 @@ const fn next_table(prev: &[u16; 256]) -> [u16; 256] {
 /// the last two are data-only — 4 lookups + 3 XORs per 4 bytes instead of
 /// the byte-wise loop's 4 dependent shift/lookup chains. Routing hashes
 /// every key in cluster mode; the byte-wise walk profiled at 3.7 % of
-/// server CPU on the pinned 8sh angle (2026-06-10).
+/// server CPU under a pinned 8-shard benchmark load.
 #[inline]
 pub fn crc16(bytes: &[u8]) -> u16 {
     let mut crc: u16 = 0;

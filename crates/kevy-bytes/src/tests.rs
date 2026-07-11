@@ -422,7 +422,7 @@ fn heap_payload_does_allocate() {
     );
 }
 
-/// REAL prod incident (mailrs 2026-06-03): two legitimately-constructed
+/// REAL production incident: two legitimately-constructed
 /// `SmallBytes` values — one inline (≤22 B) and one heap (>22 B) — get
 /// compared by HashMap on a hash-collision. They have different
 /// lengths, so they land in different union arms. Pre-fix: the
@@ -473,7 +473,7 @@ fn partial_eq_mixed_arm_does_not_panic() {
     unsafe { ManuallyDrop::drop(&mut storage); }
 }
 
-/// The actual mailrs prod crash shape, reproduced without unsafe:
+/// The actual production crash shape, reproduced without unsafe:
 /// a legitimately-inline short value compared against a
 /// legitimately-heap long value. Different lengths, both correctly
 /// constructed, but they take different union arms. Pre-fix this
@@ -481,7 +481,7 @@ fn partial_eq_mixed_arm_does_not_panic() {
 ///
 /// Naturally produced by HashMap probing on hash-collision between
 /// keys of different sizes — `_health_probe` (13 B inline) vs a
-/// longer cement key (>22 B heap) in mailrs's case.
+/// longer application key (>22 B heap) in the incident's case.
 #[test]
 fn partial_eq_unequal_length_across_inline_heap_is_false() {
     let short_inline = SmallBytes::from_slice(b"_health_probe"); // 13 B

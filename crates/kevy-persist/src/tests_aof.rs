@@ -98,8 +98,8 @@ fn replay_missing_file_is_ok() {
     assert_eq!(n, 0);
 }
 
-/// The mailrs prod incident shape: SSH stderr ("Warning: Permanently
-/// added 't02.golia.jp' …") got redirected into the AOF by a deploy
+/// A production incident shape: SSH stderr ("Warning: Permanently
+/// added …") got redirected into the AOF by a deploy
 /// pipeline. RESP has an *inline* form (space-tokenized for raw-typed
 /// PING / DEBUG), so the junk does parse into commands — but kevy
 /// must NOT panic, and the dispatcher above will reject the bogus
@@ -130,7 +130,7 @@ fn replay_aof_with_ssh_stderr_head_does_not_panic() {
 /// hex preview" branch of replay_aof. The clean prefix replays;
 /// the corrupt frame + everything after is dropped; the function
 /// still returns Ok.
-/// New AOFs created by `Aof::open` carry the v1.2.0 `KEVYAOF1\n`
+/// New AOFs created by `Aof::open` carry the `KEVYAOF1\n`
 /// magic header. `replay_aof` strips it before parsing RESP.
 #[test]
 fn fresh_aof_has_magic_header_and_replays_cleanly() {
@@ -219,7 +219,7 @@ pub(crate) fn temp_aof(name: &str) -> std::path::PathBuf {
     p
 }
 
-// ---- v2.3: snapshot feed-cursor header ------------------------------------
+// ---- snapshot feed-cursor header -------------------------------------------
 
 #[test]
 fn snapshot_cursor_roundtrip_and_legacy_none() {

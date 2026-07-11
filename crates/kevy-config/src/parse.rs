@@ -164,7 +164,7 @@ impl Parser {
     }
 
     /// "Unexpected end of input" anchored at the end-of-input position
-    /// (fuzz finding 2026-07-10: this class used to report 0:0).
+    /// (fuzz-found: this class used to report 0:0).
     fn eof(&self, msg: &str) -> ConfigError {
         ConfigError::Parse {
             line: self.eof_pos.0,
@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn eof_errors_carry_end_position() {
-        // Fuzz finding (2026-07-10): every "unexpected end of input"
+        // Fuzz finding: every "unexpected end of input"
         // error used to report line 0, col 0. Contract: EOF errors
         // point at the end of the input (1-based, just past the last
         // token).

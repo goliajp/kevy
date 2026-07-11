@@ -1,12 +1,12 @@
 //! `kevy-elect` core state machine — pure logic, no I/O. The TCP
-//! transport (T1.5.6 network half) drives this struct by feeding it
+//! transport drives this struct by feeding it
 //! ticks and inbound messages and consuming the returned outbound
 //! messages.
 //!
 //! Pulling the algorithm out of the network layer means we can test
 //! every quorum / split-brain / dueling / rejoin scenario in 100% in-
 //! memory unit tests, deterministic + microsecond fast. The integration
-//! tests (T1.5.12-17) layer real sockets on top once the algorithm is
+//! tests layer real sockets on top once the algorithm is
 //! validated.
 //!
 //! Naming: peers reference each other by `node_id: String` (the
@@ -133,7 +133,7 @@ pub struct Elector {
     /// Deterministic backoff jitter — operators (and tests) inject
     /// it; the elector doesn't read the system random.
     pub(crate) jitter: ElectJitter,
-    /// Durable `(epoch, voted_for)` backend (v3.15 D1). Written
+    /// Durable `(epoch, voted_for)` backend. Written
     /// **before** any ACCEPT leaves the node and **before** any
     /// epoch bump/follow takes effect — Raft's persistence rule.
     /// Defaults to [`NoPersist`]; attach a real backend with
@@ -184,7 +184,7 @@ impl ElectJitter {
 }
 
 /// One message + recipient that the elector wants to send. The
-/// transport layer (T1.5.6 network half) drains
+/// transport layer drains
 /// `Transport` each loop iteration and writes to the
 /// per-peer TCP connections.
 #[derive(Debug, Clone)]
@@ -240,8 +240,8 @@ impl Elector {
         }
     }
 
-    /// Attach a persistence backend and restore its saved state
-    /// (v3.15 D1). Restores the persisted epoch (so a restarted node
+    /// Attach a persistence backend and restore its saved state.
+    /// Restores the persisted epoch (so a restarted node
     /// never re-runs an election under an already-consumed epoch)
     /// and, when a vote was cast, re-arms the one-vote-per-epoch
     /// guard for that epoch. Call right after [`Elector::new`],
@@ -281,7 +281,7 @@ impl Elector {
         self.current_primary.as_deref()
     }
 
-    /// v3.16 D4 — quorum visibility for the primary lease: does this
+    /// Quorum visibility for the primary lease: does this
     /// node currently see a strict majority of the cluster (itself +
     /// peers heard from within `down_after`)? A primary that answers
     /// `false` here is on the minority side of a partition and must
@@ -392,7 +392,7 @@ impl Elector {
         }
         // Primary must be DOWN by my view. A cluster with NO known
         // primary (cold start where every node defers to the
-        // election — the v3.16 role clamp makes this the normal
+        // election — the role clamp makes this the normal
         // boot) counts as down after one `down_after` grace window,
         // giving a live primary's HB time to reach us first.
         if let Some(primary) = self.current_primary.clone() {

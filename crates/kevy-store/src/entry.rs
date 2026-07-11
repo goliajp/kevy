@@ -10,8 +10,8 @@ use std::num::NonZeroU64;
 /// at 4 GiB per entry. Real-world Redis values are well below this; the
 /// ceiling only matters when a single hash / list / zset exceeds 4 GiB,
 /// in which case `MEMORY USAGE` and the maxmemory accounting under-
-/// report that one entry by the overflow amount. Acceptable v1.0 tradeoff
-/// — keeps `Entry` at 48 bytes (vs 56 if we kept `u64`).
+/// report that one entry by the overflow amount. Accepted tradeoff
+/// — keeps `Entry` at 48 bytes (vs 56 with a `u64`).
 pub(crate) const WEIGHT_MAX: u32 = u32::MAX;
 
 /// Per-key entry — packed to 48 bytes (vs 64 in the original

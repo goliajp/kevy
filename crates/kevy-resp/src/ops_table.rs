@@ -1,5 +1,5 @@
-//! OP_TABLE — the single source of truth for kevy's command surface
-//! (v2.1 D1: registry over drip-feed).
+//! OP_TABLE — the single source of truth for kevy's command surface:
+//! one registry, not per-surface drip-feed.
 //!
 //! Pure `const` data, **not** codegen: every dispatch match and facade
 //! method stays hand-written. Each crate exports a manifest of the op
@@ -10,10 +10,10 @@
 //! `notify_class_for_verb` / wake list / Lua wake list) are grounded
 //! by runtime tests iterating these rows.
 //!
-//! Empirical justification: the 2026-07-03 op-surface sweep found 10
-//! facade verbs missing from embedded replay = silent data loss on
-//! reopen (shipped 1.7.0–1.15.0, fixed in v2.0.21). This table makes
-//! that drift class a CI failure.
+//! Empirical justification: an op-surface audit once found 10 facade
+//! verbs missing from embedded replay — silent data loss on reopen
+//! that shipped across many releases before being caught. This table
+//! makes that drift class a CI failure.
 
 /// Surface bits: where an op is implemented **today**. Absence of a
 /// bit is ground truth, not aspiration — should-exist-but-doesn't
@@ -136,7 +136,7 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("HMSET",        WR, GROW, Some(N::Hash),   None,    SERVER),
     op("HSCAN",        RD, NG,   None,            None,    SERVER | ESTORE),
     op("HSET",         WR, GROW, Some(N::Hash),   None,    SERVER | ESTORE | PIPE | ATOMIC | REPLAY | REWRITE),
-    // v2.4 hash field TTLs (Redis 7.4). Relative forms are
+    // Hash field TTLs (Redis 7.4). Relative forms are
     // effect-logged as the absolute HPEXPIREAT (exemption below);
     // HPEXPIREAT is the canonical replay/rewrite carrier.
     op("HEXPIRE",      WR, NG,   Some(N::Hash),   None,    SERVER | ESTORE),
@@ -188,10 +188,10 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("ZCARD",        RD, NG,   None,            None,    SERVER | ESTORE | ATOMIC),
     op("ZCOUNT",       RD, NG,   None,            None,    SERVER | ESTORE),
     op("ZINCRBY",      WR, GROW, Some(N::Zset),   Some(1), SERVER | ESTORE | PIPE | ATOMIC | REPLAY),
-    // v2.2 algebra: effect-logged as DEL+ZADD/SADD, so no REPLAY arm
-    // of their own is needed (the effect verbs replay).
+    // Set/zset algebra stores: effect-logged as DEL+ZADD/SADD, so no
+    // REPLAY arm of their own is needed (the effect verbs replay).
     op("ZINTERSTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
-    // v2.4 delayed-job primitive; embedded logs the ZREM effect.
+    // Delayed-job primitive; embedded logs the ZREM effect.
     op("ZPOPMIN.BELOW", WR, NG,  Some(N::Zset),   None,    SERVER | ESTORE),
     op("ZUNIONSTORE",  WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
     op("ZDIFFSTORE",   WR, GROW, Some(N::Zset),   None,    SERVER | ESTORE),
@@ -235,12 +235,12 @@ pub const OP_TABLE: &[OpSpec] = &[
     // ---- keyspace -------------------------------------------------------
     op("COPY",         WR, GROW, None,            None,    ESTORE),
     op("DBSIZE",       RD, NG,   None,            None,    SERVER | ESTORE),
-    // v2.3 CDC surface: FEED.* / PREFIX.STATS are new-genre namespaced
-    // commands (three-laws); embedded parity = changes_since /
-    // changes_tail / feed_shards / info_prefix.
-    // v2.5 index engine (IDX.* namespace). CREATE/DROP mutate the
+    // CDC surface: FEED.* / PREFIX.STATS are namespaced commands;
+    // embedded parity = changes_since / changes_tail / feed_shards /
+    // info_prefix.
+    // Index engine (IDX.* namespace). CREATE/DROP mutate the
     // catalog (sidecar-persisted, not data writes — no AOF/replay);
-    // reads ride the extension fan-out. ESTORE arrives in v2.5 step 3.
+    // reads ride the extension fan-out.
     // NB: catalog mutations are deliberately NOT data writes — the
     // `write` column tracks the AOF/propagation path, and the catalog
     // persists via its own sidecar (indexes are derived state).
@@ -249,10 +249,9 @@ pub const OP_TABLE: &[OpSpec] = &[
     op("IDX.LIST",     RD, NG,   None,            None,    SERVER | ESTORE),
     op("IDX.QUERY",    RD, NG,   None,            None,    SERVER | ESTORE),
     op("IDX.COUNT",    RD, NG,   None,            None,    SERVER | ESTORE),
-    // IDX.VERIFY: server-only for now (embedded exposes idx_stats;
-    // the drift audit arrives with the五轴 verify hardening).
+    // IDX.VERIFY: server-only (embedded exposes idx_stats instead).
     op("IDX.VERIFY",   RD, NG,   None,            None,    SERVER),
-    // v2.6 views (VIEW.* namespace; catalog ops are sidecar-persisted,
+    // Views (VIEW.* namespace; catalog ops are sidecar-persisted,
     // not data writes — same reasoning as IDX.*). VERIFY/REBUILD/
     // EXPLAIN are server-only (embedded rebuilds inline and exposes
     // view_count instead).
@@ -298,7 +297,8 @@ pub const OP_TABLE: &[OpSpec] = &[
 /// A confirmed should-exist-but-doesn't hole: `(op, surface, reason)`.
 /// Parity tests assert this ledger is EXACT — closing a gap without
 /// removing its entry is a CI failure, so the ledger can only shrink
-/// truthfully. Sources: the 2026-07-03 gap matrix (F2 / F3).
+/// truthfully. Categories: F2 = replica-apply holes (replay verbs
+/// missing), F3 = RESP-dispatch holes (facade exists, wire doesn't).
 pub const KNOWN_GAPS: &[(&str, u16, &str)] = &[
     // F3 — exists in kevy-store + embedded but not on the server wire.
     ("SETBIT",   surface::SERVER, "F3: bitmap family unwired on RESP dispatch"),
@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn every_logged_verb_is_replayable() {
-        // The v2.0.21 invariant: an op present on any embedded write
+        // The no-silent-data-loss invariant: an op present on any embedded write
         // surface (facade/pipe/atomic) that is a write MUST have a
         // replay arm — unless it is explicitly ledgered.
         for o in OP_TABLE {
@@ -415,7 +415,7 @@ mod tests {
             let logs_as_other_verb = matches!(
                 o.name,
                 "MSET" | "SETNX" | "GETEX" | "BITOP" | "COPY" | "UNLINK" | "TOUCH"
-                    // v2.2 algebra: effect-logged as DEL + plain ZADD/SADD.
+                    // Algebra stores: effect-logged as DEL + plain ZADD/SADD.
                     | "ZINTERSTORE" | "ZUNIONSTORE" | "ZDIFFSTORE"
                     | "ZPOPMIN.BELOW"
                     | "HEXPIRE" | "HPEXPIRE"
@@ -424,7 +424,7 @@ mod tests {
             assert!(
                 replayable || ledgered || logs_as_other_verb,
                 "{}: embedded write surface without a replay arm and not ledgered — \
-                 this is the v2.0.21 data-loss class",
+                 this is the silent-data-loss-on-reopen class",
                 o.name
             );
         }

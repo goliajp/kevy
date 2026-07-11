@@ -16,7 +16,7 @@ impl Store {
     /// the live value and key, then updates `used_memory` for either the
     /// new-key (charges [`ENTRY_OVERHEAD`]) or overwrite (weight swap) case.
     pub(crate) fn insert_entry(&mut self, key: SmallBytes, mut entry: Entry) -> Option<Entry> {
-        // v2.4: a wholesale value replacement (type change / RESTORE)
+        // A wholesale value replacement (type change / RESTORE)
         // discards any per-field hash TTLs; a fresh create is a no-op.
         self.clear_hash_key_ttls(key.as_slice());
         entry.set_weight(key.heap_bytes() as u64 + entry.value.weight());
@@ -159,9 +159,9 @@ impl Store {
     /// `get` = 2). The two-phase shape (decide, then mutate/fetch) keeps the
     /// borrow checker happy without an owning key clone.
     pub(crate) fn live_entry(&mut self, key: &[u8]) -> Option<&Entry> {
-        // G-A4 (v1.25): TTL-free fast path. Read cached clock fields
+        // TTL-free fast path. Read cached clock fields
         // ONLY when the entry actually carries a TTL — most keys don't,
-        // and the prior implementation paid two field reads + a pass
+        // and a prior implementation paid two field reads + a pass
         // through `is_expired` (which itself short-circuits on None)
         // unconditionally. Saves ~5 ns / hot lookup across every
         // collection / string read path.
@@ -191,7 +191,7 @@ impl Store {
     /// Read-modify commands (INCR/APPEND/…) get the entry once and mutate in
     /// place, preserving any TTL on it.
     pub(crate) fn live_entry_mut(&mut self, key: &[u8]) -> Option<&mut Entry> {
-        // G-A4 (v1.25): see `live_entry` doc — TTL-free fast path.
+        // See `live_entry` doc — TTL-free fast path.
         let needs_check = self.map.get(key)?.expire_at_ns.is_some();
         if needs_check {
             let (uc, cn) = (self.cached_clock, self.cached_ns);

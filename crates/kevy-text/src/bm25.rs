@@ -1,5 +1,5 @@
 //! BM25 term scoring (Robertson/Spärck Jones idf variant), shard-local
-//! statistics (RFC D2).
+//! statistics.
 
 /// Term-frequency saturation.
 pub const BM25_K1: f64 = 1.2;

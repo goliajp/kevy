@@ -54,7 +54,7 @@ fn pattern_byte(seed: u64, j: usize) -> u8 {
 /// SmallBytes / Arc<Box<[u8]>>), class 3 is `Value::Int`.
 pub fn make_value(seed: u64, class: usize, expire_at_ns: u64) -> Value {
     match class {
-        0 | 1 | 2 => {
+        0..=2 => {
             let payload = build_payload(seed, CLASS_LENS[class], expire_at_ns);
             if CLASS_LENS[class] > kevy_store::BULK_THRESHOLD {
                 Value::ArcBulk(Arc::new(payload.into_boxed_slice()))

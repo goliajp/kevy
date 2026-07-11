@@ -7,23 +7,23 @@ use std::io::{self, Read, Write};
 
 /// File magic + format version. Bump `VERSION` on any layout change.
 ///
-/// v2 stored each entry's TTL as **remaining millis** (relative), so a load
-/// re-anchored the deadline to load-time — a restart reset every key to a
-/// fresh full TTL (INC-2026-06-09). v3 stores the **absolute** Unix-ms
+/// Format v2 stored each entry's TTL as **remaining millis** (relative), so a
+/// load re-anchored the deadline to load-time — a restart reset every key to a
+/// fresh full TTL (a production incident class). v3 stores the **absolute** Unix-ms
 /// deadline, so a load reconstructs the original instant. v4 appends a
 /// consumer-group section to each `OP_STREAM` payload (groups + consumers
 /// plus PEL) — before that, SAVE/reshard silently dropped group state. The
 /// loader still accepts v2 (relative TTL) and v3 (no group section).
 pub(crate) const MAGIC: &[u8; 8] = b"KEVYSNAP";
 pub(crate) const VERSION: u8 = 4;
-/// v2.3: version 5 carries a 16-byte feed cursor (`gen u64 LE` +
+/// Format version 5 carries a 16-byte feed cursor (`gen u64 LE` +
 /// `offset u64 LE`) right after the version byte — the snapshot half
 /// of the recovery-point contract (docs/cdc.md): snapshot S + feed
 /// frames from S's cursor = exact restore. Writers emit v5 only when
 /// a cursor is supplied; cursor-less writes stay at v4 so every
 /// existing path is byte-identical.
 pub(crate) const VERSION_FEED_CURSOR: u8 = 5;
-/// v2.4: version 6 additionally carries `OP_HFTTL` hash field-TTL
+/// Format version 6 additionally carries `OP_HFTTL` hash field-TTL
 /// records after the entry stream. Written only when field TTLs
 /// exist; the header still carries the (possibly zero) feed cursor.
 pub(crate) const VERSION_HASH_TTL: u8 = 6;
@@ -39,7 +39,7 @@ pub(crate) const OP_LIST: u8 = 3;
 pub(crate) const OP_SET: u8 = 4;
 pub(crate) const OP_ZSET: u8 = 5;
 pub(crate) const OP_STREAM: u8 = 6;
-/// v2.4 hash field TTL record: `[key][field][deadline_ms: u64 LE]`.
+/// Hash field TTL record: `[key][field][deadline_ms: u64 LE]`.
 /// Appears only in format v6+ snapshots, after the entry stream's
 /// records (before OP_EOF).
 pub(crate) const OP_HFTTL: u8 = 7;

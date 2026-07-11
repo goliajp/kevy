@@ -1,4 +1,4 @@
-//! Script-aware, dictionary-free tokenization (RFC D1).
+//! Script-aware, dictionary-free tokenization.
 //!
 //! - Latin/ASCII alphanumeric runs → lowercased word tokens (length
 //!   ≥ 2; single characters are noise).
@@ -7,7 +7,7 @@
 //!   texts remain findable.
 //! - Tokens never cross a script boundary.
 
-/// Pluggable tokenizer (v2.7 ships only [`tokenize`], the default).
+/// Pluggable tokenizer ([`tokenize`] is the only shipped impl).
 pub trait Tokenizer {
     /// Produce tokens for `text` (UTF-8; invalid bytes are skipped).
     fn tokens(&self, text: &[u8]) -> Vec<Vec<u8>>;

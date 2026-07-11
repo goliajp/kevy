@@ -42,7 +42,7 @@ pub(crate) fn parse_canonical_i64(b: &[u8]) -> Option<i64> {
     if b.is_empty() || b.len() > 20 {
         return None;
     }
-    // F2' (v1.25): single-byte guard — canonical i64 starts with '-' or an
+    // Single-byte guard — canonical i64 starts with '-' or an
     // ASCII digit. `redis-benchmark` defaults to 3-byte random alphanumeric
     // values ("xxx"), which paid the full UTF-8 → parse → itoa round-trip
     // only to reject at the round-trip compare. Reject up-front in ~1 ns.
@@ -92,7 +92,7 @@ pub(crate) fn itoa_i64_stack() -> [u8; 20] {
     [0u8; 20]
 }
 
-/// A.6 (v1.25): emit `$<len>\r\n` into `out` for a RESP bulk header. Inlined
+/// Emit `$<len>\r\n` into `out` for a RESP bulk header. Inlined
 /// at the GET fast path's `get_into_output` callsite to skip the GetReply
 /// enum tag round-trip + caller match arm. Mirror of kevy-rt's local helper.
 #[inline]

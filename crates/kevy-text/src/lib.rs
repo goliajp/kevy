@@ -1,5 +1,5 @@
-//! kevy-text — dictionary-free full-text core (RFC 2026-07-04,
-//! LOCKED): script-aware tokenization (Latin words + CJK bigrams),
+//! kevy-text — dictionary-free full-text core:
+//! script-aware tokenization (Latin words + CJK bigrams),
 //! per-shard inverted segments maintained synchronously with writes,
 //! BM25 ranking with shard-local statistics.
 

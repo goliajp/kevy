@@ -11,7 +11,7 @@
 //!   <to-host:port>` (no quiesce — the migration is done; the
 //!   client should follow). The MIGRATED table is per-node local
 //!   state; other nodes pick up the new writer via static config
-//!   restart (v1.21 MVP — no gossip, per the anti-scope).
+//!   restart (no gossip, per the anti-scope).
 //!
 //! This module is pure data + a single `Mutex` under the hood.
 //! Server cement layer plugs the start / commit / abort transitions
@@ -64,7 +64,7 @@ impl std::fmt::Display for MigrationError {
 impl std::error::Error for MigrationError {}
 
 impl MigrationTable {
-    /// Empty table — the v1.21 default (no migrations in flight).
+    /// Empty table (no migrations in flight).
     #[must_use]
     pub fn new() -> Self {
         Self::default()

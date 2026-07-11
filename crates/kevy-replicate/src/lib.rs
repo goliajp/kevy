@@ -1,20 +1,20 @@
 //! kevy-replicate — primary-to-replica streaming replication.
 //!
-//! Phase 1 of the v3-cluster series: one primary streams every applied
+//! One primary streams every applied
 //! mutation to N read replicas over a long-lived TCP connection, using a
 //! RESP3-extended frame format with an offset envelope. New replicas join
 //! via an inline snapshot ship, then catch up from the live frame stream.
 //!
 //! - [`wire`] — RESP-based frame format (see `docs/wire.md`).
+//! - `wire_snapshot` (internal) — snapshot-ship framing for the joining
+//!   replica.
 //! - [`source`] — primary-side bounded backlog indexed by offset.
 //! - [`handshake`] — `REPLICATE FROM <offset> ID <id>` parse + `+ACK` format.
 //! - [`slot`] — per-replica state + reconnect-window expiry.
 //! - [`replica`] — replica-side blocking TCP client (handshake +
-//!   frame-decoding iterator). Snapshot-ship modules land in
-//!   subsequent tasks of plan
-//!   `.claude/plans/2026-06-18-v3-cluster-plan.md`.
+//!   frame-decoding iterator).
 //!
-//! # Applying replicated frames (T1.19)
+//! # Applying replicated frames
 //!
 //! `ReplicaClient` yields decoded `(offset, Argv)` tuples; *applying*
 //! them to a local store is the caller's responsibility — the right
@@ -42,12 +42,11 @@
 //! test in `crates/kevy/tests/replication.rs` for the pattern under
 //! the full primary+replica end-to-end harness.
 //!
-//! Full **server-as-replica** mode (the kevy binary auto-spawns a
-//! per-shard `ReplicaClient` when `[replication] role = "replica"`,
-//! routing frames into the reactor via the cross-shard ring with
-//! re-replication suppression) is Phase 1.F work (T1.28-30). v1.18.0
-//! supports the in-process recipe above for any user that wants to
-//! drive replication themselves.
+//! The kevy binary also ships full **server-as-replica** mode (it
+//! auto-spawns a `ReplicaClient` when `[replication] role = "replica"`,
+//! routing frames into the reactor with re-replication suppression);
+//! the in-process recipe above is for any user that wants to drive
+//! replication themselves.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 

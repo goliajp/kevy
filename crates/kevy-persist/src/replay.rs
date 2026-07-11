@@ -12,10 +12,11 @@ use kevy_resp::Argv;
 ///
 /// Always emits a one-line summary to stderr when the file has any bytes,
 /// so operators can immediately see how many commands were replayed and
-/// how many bytes were dropped (truncated tail or parse error). This
-/// caught the mailrs incident only *after* a 70-day silent failure window
-/// — making the summary always-on is cheap (one line per restart) and
-/// turns silent-empty-store from a multi-hour outage into a one-line log
+/// how many bytes were dropped (truncated tail or parse error). A
+/// production incident once went unnoticed through a 70-day silent
+/// failure window because this summary was opt-in — making it
+/// always-on is cheap (one line per restart) and turns
+/// silent-empty-store from a multi-hour outage into a one-line log
 /// hit.
 ///
 /// Three outcomes:

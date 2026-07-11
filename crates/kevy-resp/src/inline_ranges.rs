@@ -1,9 +1,10 @@
-//! A5: 0-dep small-vector for ArgvBorrowed's `(start, end)` range table.
+//! 0-dep small-vector for ArgvBorrowed's `(start, end)` range table.
 //!
-//! Most commands have ≤4 args (PING, GET k, SET k v, MGET k1 k2 k3, …). The
-//! prior `Vec<(u32, u32)>` heap-allocated once per parsed command — at ~76 k
-//! req/s on the lx64 -c1 hot path that's a steady malloc/free per request that
-//! H1 (`perf c2c`) confirmed shows up as cross-thread libc cfree contention.
+//! Most commands have ≤4 args (PING, GET k, SET k v, MGET k1 k2 k3, …). A
+//! plain `Vec<(u32, u32)>` heap-allocates once per parsed command — at ~76 k
+//! req/s on a single-connection hot path that's a steady malloc/free per
+//! request that `perf c2c` confirmed shows up as cross-thread libc cfree
+//! contention.
 //! Storing the first 4 ranges inline (one cache line: 4 × 8 = 32 bytes plus a
 //! `usize` len) drops the per-command alloc to zero for the common shape and
 //! spills to a `Vec` only when argc > 4.
