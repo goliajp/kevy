@@ -11,6 +11,8 @@
 //! pay nothing.
 
 use crate::Store;
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 
 /// One captured store-origin event kind. The serving layer maps these
 /// to the Redis event names (`new` / `expired` / `evicted`).
@@ -46,7 +48,7 @@ impl Store {
 
     /// Take every captured event, in capture order.
     pub fn take_notify_events(&mut self) -> Vec<(KeyspaceEvent, Vec<u8>)> {
-        std::mem::take(&mut self.notify_events)
+        core::mem::take(&mut self.notify_events)
     }
 
     #[inline]

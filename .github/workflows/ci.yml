@@ -353,17 +353,18 @@ jobs:
         run: |
           rustup toolchain install nightly --no-self-update
           rustup default nightly
-      - name: Install cargo-fuzz
-        uses: taiki-e/install-action@cargo-fuzz
-      - name: Cache cargo registry + fuzz build
+      - name: Cache cargo registry + cargo-fuzz + fuzz build
         uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
+            ~/.cargo/bin/cargo-fuzz
             crates/${{ matrix.crate }}/fuzz/target
           key: fuzz-${{ matrix.crate }}-${{ matrix.target }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
             fuzz-${{ matrix.crate }}-${{ matrix.target }}-
+      - name: Install cargo-fuzz (cached binary short-circuits)
+        run: command -v cargo-fuzz || cargo install cargo-fuzz --locked
       - name: fuzz 60s (${{ matrix.target }})
         working-directory: crates/${{ matrix.crate }}
         run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=60
