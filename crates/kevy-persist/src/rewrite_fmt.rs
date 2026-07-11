@@ -78,10 +78,12 @@ pub fn dump_aof<S: crate::SnapshotSource>(path: &Path, src: &S) -> io::Result<(u
 
 /// Serialize `src`'s state into an in-memory AOF image (magic + the same
 /// RESP command stream [`dump_aof`] writes). Returns the bytes and the key
-/// count. Used by the non-blocking rewrite: the caller produces this buffer
-/// under the store lock, then spills it to disk *off* the lock. `Vec<u8>`
-/// is an infallible `Write`, so no error path exists.
-pub(crate) fn dump_store_to_buf<S: crate::SnapshotSource>(src: &S) -> (Vec<u8>, u64) {
+/// count. Used by the non-blocking rewrite (the caller produces this buffer
+/// under the store lock, then spills it to disk *off* the lock) and by
+/// host-mediated persistence (targets without a filesystem hand the image
+/// to the host to store). `Vec<u8>` is an infallible `Write`, so no error
+/// path exists.
+pub fn dump_store_to_buf<S: crate::SnapshotSource>(src: &S) -> (Vec<u8>, u64) {
     let mut buf = Vec::with_capacity(crate::SNAPSHOT_BUF_CAP);
     buf.extend_from_slice(crate::aof::AOF_MAGIC);
     let mut keys = 0u64;
@@ -323,7 +325,13 @@ fn decimal_digits(mut x: u64) -> u32 {
     d
 }
 
-pub(crate) fn write_multibulk<W: Write, A: ArgvView + ?Sized>(
+/// Encode one command as a RESP multi-bulk frame (`*<n>\r\n` then
+/// `$<len>\r\n<bytes>\r\n` per argument) — the exact byte shape
+/// [`Aof::append`](crate::Aof::append) writes and
+/// [`replay_aof`](crate::replay_aof) parses back. Public so external AOF
+/// producers (host-mediated persistence pumps) emit frames byte-compatible
+/// with kevy-written logs.
+pub fn write_multibulk<W: Write, A: ArgvView + ?Sized>(
     w: &mut W,
     args: &A,
 ) -> io::Result<()> {

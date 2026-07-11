@@ -1,0 +1,5 @@
+# The wasm binary is a build artifact, copied in before `npm publish`:
+#   cargo build -p kevy-wasm --target wasm32-unknown-unknown --release
+#   cp ../../../target/wasm32-unknown-unknown/release/kevy_wasm.wasm kevy.wasm
+kevy.wasm
+*.tgz

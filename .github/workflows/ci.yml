@@ -217,6 +217,7 @@ jobs:
           cargo check --target ${{ matrix.target }} -p kevy-persist
           cargo check --target ${{ matrix.target }} -p kevy-resp
           cargo check --target ${{ matrix.target }} -p kevy-embedded
+          cargo check --target ${{ matrix.target }} -p kevy-wasm
 
   # ───────────── iot: musl cross targets + no_std core + feature archetypes ─────────────
   # The embedded IoT cut. Three-target check matrix (Tier A

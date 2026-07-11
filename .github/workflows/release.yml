@@ -88,7 +88,7 @@ jobs:
             kevy-persist \
             kevy-replicate \
             kevy-elect \
-            kevy-rt kevy-embedded \
+            kevy-rt kevy-embedded kevy-wasm \
             kevy-lua kevy-lua-host \
             kevy kevy-client \
             kevy-cli kevy-mcp \
@@ -173,7 +173,7 @@ jobs:
             kevy-persist \
             kevy-replicate \
             kevy-elect \
-            kevy-rt kevy-embedded \
+            kevy-rt kevy-embedded kevy-wasm \
             kevy-lua kevy-lua-host \
             kevy kevy-client \
             kevy-cli kevy-mcp \
@@ -181,6 +181,39 @@ jobs:
             publish_or_skip "$c"
           done
           echo "all publishable crates handled"
+
+  # ───────────── npm: @goliajp/kevy (wasm + loader) ─────────────
+  npm:
+    name: npm publish @goliajp/kevy
+    runs-on: ubuntu-latest
+    needs: publish
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+          rustup target add wasm32-unknown-unknown
+      - name: Build the wasm artifact
+        run: |
+          cargo build -p kevy-wasm --target wasm32-unknown-unknown --release
+          cp target/wasm32-unknown-unknown/release/kevy_wasm.wasm crates/kevy-wasm/pkg/kevy.wasm
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+      - name: Publish (idempotent skip)
+        working-directory: crates/kevy-wasm/pkg
+        run: |
+          V=$(node -p "require('./package.json').version")
+          if npm view @goliajp/kevy@"$V" version >/dev/null 2>&1; then
+            echo "@goliajp/kevy@$V already published — skipping"
+          else
+            npm publish --access public
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   # ───────────── build the kevy server binary for every supported target ─────────────
   # All targets build NATIVELY on their respective GitHub-hosted runner — each

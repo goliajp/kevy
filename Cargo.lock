@@ -679,6 +679,16 @@ name = "kevy-vector"
 version = "3.18.0"
 
 [[package]]
+name = "kevy-wasm"
+version = "3.18.0"
+dependencies = [
+ "kevy-embedded",
+ "kevy-persist",
+ "kevy-resp",
+ "kevy-store",
+]
+
+[[package]]
 name = "kv-log-macro"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
