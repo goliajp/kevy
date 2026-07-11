@@ -1,4 +1,4 @@
-//! v2.6 — embedded views (server parity minus VIA/FIELDS hydration:
+//! Embedded views (server parity minus VIA/FIELDS hydration:
 //! in-process callers dereference and read fields directly).
 //!
 //! Mirrors the embedded index architecture: per-shard view states in

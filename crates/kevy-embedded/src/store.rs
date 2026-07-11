@@ -23,7 +23,7 @@ pub(crate) type Shards = Arc<Vec<Arc<RwLock<Inner>>>>;
 
 /// The embedded keyspace.
 ///
-/// **`Store` is `Clone`** (since v1.1.0). A clone is a cheap `Arc` bump:
+/// **`Store` is `Clone`**. A clone is a cheap `Arc` bump:
 /// every clone reaches the same underlying shards + AOF + reaper + pub/sub
 /// bus. The reaper thread is joined and each shard's AOF is flushed exactly
 /// once, when the **last** clone is dropped.
@@ -31,7 +31,7 @@ pub(crate) type Shards = Arc<Vec<Arc<RwLock<Inner>>>>;
 /// ```
 /// use kevy_embedded::{Config, Store};
 ///
-/// # fn main() -> std::KevyResult<()> {
+/// # fn main() -> kevy_embedded::KevyResult<()> {
 /// let s = Store::open(Config::default().with_ttl_reaper_manual())?;
 /// let s2 = s.clone();
 /// std::thread::spawn(move || {
@@ -52,16 +52,16 @@ pub struct Store {
     /// LAST `Store` clone (or `Subscription`) holding a strong ref drops.
     pub(crate) guard: Arc<DropGuard>,
     pub(crate) config: Config,
-    /// v2.3 CDC feed handle (read API side); shards carry clones for
+    /// CDC feed handle (read API side); shards carry clones for
     /// the write side. `None` = feed off (or wasm).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) feed: Option<std::sync::Arc<Mutex<kevy_replicate::feed::FeedSource>>>,
-    /// v2.4 blocking-pop wake channel (always present; writers pay one
+    /// Blocking-pop wake channel (always present; writers pay one
     /// Relaxed load while nobody blocks).
     pub(crate) blocker: Arc<crate::ops_blocking::Blocker>,
-    /// v2.5 index registry (catalog + version).
+    /// Index registry (catalog + version).
     pub(crate) indexes: Arc<crate::ops_index::IndexReg>,
-    /// v2.6 view registry.
+    /// View registry.
     pub(crate) views: Arc<crate::ops_view::ViewReg>,
 }
 
@@ -368,7 +368,7 @@ impl Store {
 
 pub(crate) use crate::store_glue::{commit_write, lock_read, lock_write, store_err};
 
-/// Spawn the embed-as-writer replication source (v3.2) when
+/// Spawn the embed-as-writer replication source when
 /// `Config::embed_writer_listen_addr` is set, wiring the shared source
 /// into every shard's `Inner` so `commit_write` pushes mutations into
 /// the backlog inline (done once at open under the shard's write lock;

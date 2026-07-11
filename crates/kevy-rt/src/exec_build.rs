@@ -94,7 +94,7 @@ impl<C: Commands> Shard<C> {
                     .collect();
                 (targets, Agg::ExtensionGather { argv, chunks: Vec::new() })
             }
-            // v3.16 D2 REPL.TOKEN: every shard reports its live
+            // REPL.TOKEN: every shard reports its live
             // (generation, next_offset) pair; the origin lays them out
             // as one flat integer array in shard order.
             Route::ReplToken => (
@@ -228,7 +228,7 @@ impl<C: Commands> Shard<C> {
         )
     }
 
-    /// v2.2: `Z*STORE dst numkeys key… [WEIGHTS…] [AGGREGATE …]` and
+    /// `Z*STORE dst numkeys key… [WEIGHTS…] [AGGREGATE …]` and
     /// the set forms `S*STORE dst key…`. Parse errors resolve through
     /// an empty target list + a pre-baked error reply (`start_multi`
     /// folds an ignored `Int(0)` into `Agg::First`).
@@ -270,7 +270,7 @@ impl<C: Commands> Shard<C> {
         )
     }
 
-    /// v2.2: `ZINTERCARD numkeys key… [LIMIT n]`.
+    /// `ZINTERCARD numkeys key… [LIMIT n]`.
     fn build_zintercard<A: ArgvView + ?Sized>(&self, args: &A) -> (Vec<(usize, Op)>, Agg) {
         let (keys, limit) = match parse_zintercard_args(args) {
             Ok(t) => t,

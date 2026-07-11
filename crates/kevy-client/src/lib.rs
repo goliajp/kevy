@@ -21,18 +21,18 @@
 //! - `tcp://host[:port]`            — TCP RESP, raw (no SELECT round-trip)
 //!
 //! Auth (`redis://user:pass@…`) and TLS (`rediss://`) are rejected up front
-//! — kevy ships without either. v1.1.0 added the full string/hash/list/set/
-//! zset + one-shot `PUBLISH` surface. v1.2.0 added the pub/sub *consumer*
-//! side as a separate [`Subscriber`] type — a subscribed connection cannot
-//! send normal commands, so it needs its own socket and lives outside the
-//! `Connection` enum. v1.3.0 routes `mem://<name>` / `file:///path` through
-//! a process-local registry so the publisher and consumer can find each
+//! — kevy ships without either. The crate covers the full string/hash/list/
+//! set/zset + one-shot `PUBLISH` surface. The pub/sub *consumer* side is a
+//! separate [`Subscriber`] type — a subscribed connection cannot send
+//! normal commands, so it needs its own socket and lives outside the
+//! `Connection` enum. `mem://<name>` / `file:///path` route through a
+//! process-local registry so the publisher and consumer can find each
 //! other when both opens use the same URL. The trait-vs-enum design
 //! decision is enum for now (closed two-backend universe); see ROADMAP
 //! for the trait extension path.
 //!
-//! v1.14.0 closes the wrap-parity gap against the kevy 3.17 server op
-//! surface: blocking pops (`blpop`/`brpop`/`bzpopmin`), hash field-TTL
+//! Beyond that base the wrap surface tracks the full server op surface:
+//! blocking pops (`blpop`/`brpop`/`bzpopmin`), hash field-TTL
 //! (`hexpire`/`hpexpire`/`hpersist`/`httl`), zset algebra
 //! (`zinterstore`/`zunionstore`/`zintercard` + WEIGHTS/AGGREGATE),
 //! declarative indexes (`idx_*`), the CDC change feed (`feed_*`), and
@@ -85,7 +85,7 @@ pub(crate) use url::{Target, parse_url, resolve_store};
 /// is in-process or over TCP.
 pub enum Connection {
     /// In-process [`kevy_embedded::Store`]. Boxed because `Store` is
-    /// sizeable (carries its `Config`, including v1.20 replica
+    /// sizeable (carries its `Config`, including the replica
     /// upstream/backoff fields) and dwarfs the `RespClient` variant.
     Embedded(Box<Store>),
     /// TCP [`kevy_resp_client::RespClient`].
@@ -389,7 +389,7 @@ impl Connection {
     /// `PUBLISH channel message`. Returns the count of subscribers
     /// that received the message.
     ///
-    /// As of v1.3.0, the embedded backend has a real in-process pub/sub
+    /// The embedded backend has a real in-process pub/sub
     /// bus: when a [`Subscriber`] is open against the same `mem://<name>`
     /// or `file:///path` URL, this delivers there and returns the actual
     /// receiver count. Anonymous `mem://` keeps the old "no subscribers,

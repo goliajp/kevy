@@ -9,7 +9,7 @@ use super::chunk::{emit_row, encode_cursor, read_hydration, read_kbytes, read_u3
 use crate::cmd_index_query::{ComposeQuery, Hydrated, Query, decode_value, hex};
 use crate::state::CatalogState;
 
-/// v3.10: IDX.EXPLAIN — pair-array plan summary; per-shard chunks
+/// IDX.EXPLAIN — pair-array plan summary; per-shard chunks
 /// carry [ST_OK][building][entries u64][shape byte].
 pub(super) fn reduce_explain(
     catalogs: &CatalogState,
@@ -80,7 +80,7 @@ pub(super) fn reduce_count(chunks: &[Vec<u8>]) -> Vec<u8> {
     out
 }
 
-/// v2.8 REBUILD: all shards OK → +OK.
+/// REBUILD: all shards OK → +OK.
 pub(super) fn reduce_rebuild(chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
     for c in chunks {

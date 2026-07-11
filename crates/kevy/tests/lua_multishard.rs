@@ -1,21 +1,22 @@
-//! v1.27.1 — multi-shard EVAL/EVALSHA/SCRIPT verification.
+//! Multi-shard EVAL/EVALSHA/SCRIPT verification.
 //!
-//! v1.27.0 had two routing bugs surfaced by real client testing:
+//! An earlier implementation had two routing bugs surfaced by real
+//! client testing:
 //!   1. EVAL ran on the connection's shard, so a SET on shard X
 //!      followed by an EVAL doing `redis.call('GET', KEYS[1])` on
 //!      shard Y missed.
 //!   2. SCRIPT cache was per-Bridge (per-shard); SCRIPT LOAD on
 //!      shard X plus EVALSHA on shard Y returned -NOSCRIPT.
 //!
-//! v1.27.1 fixes both:
-//!   - `KevyCommands::route` now classifies EVAL/EVALSHA with
+//! The current design fixes both:
+//!   - `KevyCommands::route` classifies EVAL/EVALSHA with
 //!     `numkeys ≥ 1` as `Route::Single(3)`, so the runtime sends
 //!     the command to KEYS[1]'s shard.
-//!   - SCRIPT cache moved to a process-global `Mutex<HashMap>` in
+//!   - The SCRIPT cache is a process-global `Mutex<HashMap>` in
 //!     `cmd_lua.rs`, shared by all shards.
 //!
 //! This test boots a real 4-shard kevy server in-process and runs
-//! the same canonical Lua patterns that broke v1.27.0 against it.
+//! the same canonical Lua patterns that surfaced the bugs.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -24,7 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 /// All tests in this file share the process-global SCRIPT cache
-/// (the v1.27.1 design — that's exactly why a SCRIPT LOAD on one
+/// (by design — that's exactly why a SCRIPT LOAD on one
 /// shard reaches an EVALSHA on another). A `SCRIPT FLUSH` from one
 /// test would therefore wipe scripts another test just loaded.
 /// Serialize via this gate.
@@ -149,7 +150,7 @@ fn eval_writes_visible_across_shards() {
     let _g = gate();
     // 4 shards. Two keys chosen to hash to *different* shards via
     // the default `hash(key) % nshards` routing (no `{tag}`), so a
-    // v1.27.0-style bug would surface: SET key1 on shard A; EVAL
+    // conn-shard-routing bug would surface: SET key1 on shard A; EVAL
     // doing GET key1 ran on whatever shard the connection landed
     // on, missing the value most of the time.
     let s = Server::start(4);
@@ -186,7 +187,7 @@ fn redlock_canonical_works_across_shards() {
         let key = format!("lock:order:{i}");
         let token = format!("tok-{i}");
         // Acquire by SET, then unlock by EVAL — this is the
-        // canonical Redlock pattern. Under v1.27.0 multi-shard, the
+        // canonical Redlock pattern. With conn-shard routing, the
         // unlock EVAL would land on the wrong shard and return 0
         // ("not my lock"), leaving the lock leaked.
         assert_eq!(
@@ -209,8 +210,8 @@ fn script_load_then_evalsha_across_shards() {
     assert!(r_load.starts_with(b"$40\r\n"), "LOAD got {:?}", String::from_utf8_lossy(&r_load));
     let sha = r_load[5..45].to_vec();
     // EVALSHA the same SHA1 with 30 different keys hashing across
-    // all 4 shards. Under v1.27.0, anything not on the original
-    // load-shard would NOSCRIPT.
+    // all 4 shards. With a per-shard cache, anything not on the
+    // original load-shard would NOSCRIPT.
     for i in 0..30 {
         let key = format!("k-{i}");
         let r = s.req(&[b"EVALSHA", &sha, b"1", key.as_bytes()]);

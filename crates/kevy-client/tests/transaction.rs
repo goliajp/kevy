@@ -88,7 +88,7 @@ fn multi_drop_sends_implicit_discard() {
     }
 }
 
-// ─── v1.5.0: typed builders + WATCH ───────────────────────────────────────
+// ─── typed builders + WATCH ────────────────────────────────────────────────
 
 #[test]
 fn typed_builders_chain_and_exec() {
@@ -157,7 +157,7 @@ fn unwatch_sends_off_the_wire() {
     conn.unwatch().unwrap();
 }
 
-// ─── v1.7.0: typed exec cursor (TransactionReplies) ───────────────────────
+// ─── typed exec cursor (TransactionReplies) ────────────────────────────────
 
 #[test]
 fn exec_typed_reads_mixed_replies_in_order() {

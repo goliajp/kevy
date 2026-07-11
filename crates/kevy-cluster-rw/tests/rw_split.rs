@@ -1,4 +1,4 @@
-//! T1.32-37 integration: a `ReadWriteClient` against a real primary +
+//! Integration: a `ReadWriteClient` against a real primary +
 //! replica kevy Runtime pair. Verifies the read/write classification
 //! actually splits traffic — writes land at the primary, reads round-
 //! robin across replicas.
@@ -219,8 +219,7 @@ impl ReplicaServer {
 
 // Note: `kevy_replicate` is unused at the kevy-cluster-rw crate's
 // regular dep level, but the integration tests need it. Bring it in
-// via the kevy dev-dep edge (kevy → kevy_replicate is now a regular
-// dep since T1.29).
+// via the kevy dev-dep edge (kevy → kevy_replicate is a regular dep).
 
 #[test]
 fn write_lands_on_primary_read_round_robins_to_replica() {
@@ -341,7 +340,7 @@ fn _trait_use_anchor(s: &mut std::net::TcpStream) {
     let _ = s.write_all(&buf);
 }
 
-/// T1.38: 1 primary + 2 replicas, write every redis-type kevy
+/// 1 primary + 2 replicas, write every redis-type kevy
 /// supports, then read each key from each replica via separate
 /// ReadWriteClient instances. Content must match on both.
 ///
@@ -476,7 +475,7 @@ fn types_matrix_one_primary_two_replicas() {
     r2.shutdown();
 }
 
-/// T1.39: a fresh-written key is visible via READCONSISTENT (forced
+/// A fresh-written key is visible via READCONSISTENT (forced
 /// primary route) immediately, regardless of replica lag.
 #[test]
 fn readconsistent_sees_fresh_write_before_replica_lag() {
@@ -508,7 +507,7 @@ fn readconsistent_sees_fresh_write_before_replica_lag() {
     replica.shutdown();
 }
 
-// ────────── T1.40 / T1.41 reconnect helpers ──────────
+// ────────── reconnect-window helpers ──────────
 
 /// Test-only runner that exposes its own stop signal + tracks how
 /// many SnapshotBegin events it has seen. Lets the reconnect-window
@@ -521,7 +520,7 @@ struct TrackedReplica {
     /// Cloned upstream socket — Mutex<Option<TcpStream>> so the
     /// stop path can `shutdown(Shutdown::Both)` it, unblocking the
     /// runner thread's `next_event` blocking read. Same trick the
-    /// production `ReplicaRunner` uses (T1.29.5).
+    /// production `ReplicaRunner` uses.
     runner_socket: Arc<Mutex<Option<std::net::TcpStream>>>,
     upstream: (String, u16),
     sender: kevy_rt::ReplicaInboxSender,
@@ -664,7 +663,7 @@ impl TrackedReplica {
     }
 }
 
-/// T1.40: replica disconnects, primary takes more writes (still
+/// Replica disconnects, primary takes more writes (still
 /// within backlog), replica reconnects — should resume via backlog
 /// **without a snapshot ship**.
 #[test]
@@ -722,7 +721,7 @@ fn reconnect_within_backlog_resumes_no_snapshot() {
     replica.shutdown();
 }
 
-/// T1.41: replica disconnects, primary writes enough to evict the
+/// Replica disconnects, primary writes enough to evict the
 /// disconnected offset from the backlog, replica reconnects — must
 /// take the snapshot ship path.
 #[test]

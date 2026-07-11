@@ -6,8 +6,8 @@ use std::io;
 
 use kevy_uring::IoUring;
 
-/// SQ/CQ depth per-shard. Paired with `PBUF_ENTRIES` — v1.25 G1/K2 bumped
-/// both to fix the c=10 000 cliff (deco-axis-k-c10000).
+/// SQ/CQ depth per-shard. Paired with `PBUF_ENTRIES` — both were bumped
+/// to fix the c=10 000 cliff (deco-axis-k-c10000).
 pub(crate) const URING_ENTRIES: u32 = 2048;
 // The nap rung was removed (see the idle-ladder comment in `run_uring`).
 // URING_NAP_LIMIT / URING_NAP_MICROS / `uring_nap` are gone; spin →
@@ -36,7 +36,7 @@ pub(crate) fn io_uring_available() -> bool {
 
 /// Build the per-shard ring pair (SQ/CQ ring + provided-buffer ring).
 ///
-/// v2.1.1: split out of [`Shard::run_uring`] so the spawn site can
+/// Split out of [`Shard::run_uring`] so the spawn site can
 /// attempt it BEFORE committing the shard to the io_uring path — a
 /// per-shard setup failure (ENOMEM under memory pressure with many
 /// shards, rlimit exhaustion) in auto mode then falls back to the

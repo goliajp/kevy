@@ -1,7 +1,7 @@
-//! **v1.25 B.4 + A.2 / B.5** — BigBulk frame-stitch ingest path for the
+//! BigBulk frame-stitch ingest path for the
 //! io_uring reactor.
 //!
-//! The Phase A decompositions
+//! The decompositions
 //! ([`.claude/notes/v125-deco-axis-i-c50-10kb.md`] +
 //! [`.claude/notes/v125-deco-axis-b-64kb.md`]) identified the conn.input
 //! realloc storm on multi-CQE big values as a key amplifier on Axis B
@@ -21,7 +21,7 @@
 //! APPEND / GETSET / MSET) unchanged — same routing, same AOF, same
 //! reply emission.
 //!
-//! **2026-06-22 (v1.25 B.5)**: the originally-shipped B.4 bare-SET
+//! History that shapes this design: the originally-shipped bare-SET
 //! fast path that adopted the body Vec into the value `Arc<[u8]>`
 //! zero-copy was RETIRED. That path bypassed cross-shard routing
 //! (`self.store.set` writes directly to the connection's owning shard
@@ -31,7 +31,7 @@
 //! `STRLEN` returned 0 after `SET`. The frame-stitch path goes through
 //! `dispatch_batch` → `handle_command` → `start_command` which honours
 //! the cluster routing layer, preserving correctness. The Arc adoption
-//! micro-win it gave up (~0.5–1 µs per 64 KiB SET) is a v1.25.x lever
+//! micro-win it gave up (~0.5–1 µs per 64 KiB SET) is a lever
 //! to revisit once the underlying routing is plumbed for owned-Vec
 //! cross-shard hand-off.
 //!
@@ -41,7 +41,7 @@
 //! - `APPEND key <BIG>` / `GETSET key <BIG>`
 //! - `MSET k1 v1 … kn <BIG>` (last value big)
 //!
-//! Out of scope (v1.25.x follow-up): `SET k <BIG> EX 10` (big value at
+//! Out of scope (possible follow-up): `SET k <BIG> EX 10` (big value at
 //! position #3 of 5, not last); `MSET k1 <BIG> k2 v2` (big value not
 //! last). These keep the borrowed-slice path — correct but no realloc
 //! savings.
@@ -55,7 +55,7 @@ use crate::uring_conn::{BigArgState, UringConn};
 use kevy_map::KevyMap;
 
 impl<C: Commands> Shard<C> {
-    /// **v1.25 B.4 + A.2 / B.5** — try to promote the conn into BigBulk-recv
+    /// Try to promote the conn into BigBulk-recv
     /// mode based on `tail`'s contents. Returns `true` iff `tail`'s head
     /// matched the generic last-bulk-big shape (`*<argc> <supported-verb>
     /// … $N`) with `N ≥ BIG_ARG_PROMOTE_THRESHOLD`. On match, the full
@@ -90,11 +90,11 @@ impl<C: Commands> Shard<C> {
             // already caps body size; add a small slack for headers.
             return false;
         }
-        // v1.29 B2-alt — bare-SET local-shard fast path: kernel writes
+        // Bare-SET local-shard fast path: kernel writes
         // the value body directly into an owned Vec via single-shot
         // `prep_read` (no userspace memcpy through the slab). Gated on
-        // shard-affinity at promote time so the v1.25 B.4 cross-shard
-        // data-loss bug never re-emerges.
+        // shard-affinity at promote time so the earlier cross-shard
+        // data-loss bug (see module docs) never re-emerges.
         if let Some((k_start, k_end)) = bare_set_key_range {
             let key = tail[k_start..k_end].to_vec();
             if self.shard_of(&key) == self.id {
@@ -135,7 +135,7 @@ impl<C: Commands> Shard<C> {
                 return true;
             }
             // Cross-shard bare-SET: fall through to Frame path (no
-            // regression vs v1.28).
+            // regression vs the pre-fast-path behaviour).
         }
         // Frame path — every non-bare-SET promote + cross-shard bare-SET.
         self.install_frame_state(cid, total, bytes_present, tail, io)
@@ -163,7 +163,7 @@ impl<C: Commands> Shard<C> {
         true
     }
 
-    /// **v1.25 B.5 / v1.29 B2-alt** — append multishot-recv slab bytes
+    /// Append multishot-recv slab bytes
     /// into the conn's in-progress big-arg dest Vec (`frame` for the
     /// Frame variant, `body` for the BareSetCancelling variant). After
     /// the cancel takes effect — both flags set in `BareSetCancelling`
@@ -202,7 +202,7 @@ impl<C: Commands> Shard<C> {
                 ..
             } => {
                 // Phase 1 — fill body up to body_len (preserves the
-                // `cap == body_len` invariant the C3 zero-copy
+                // `cap == body_len` invariant the zero-copy
                 // adoption requires).
                 let take_body = (*body_len - body.len()).min(slab.len());
                 if take_body > 0 {
@@ -244,7 +244,7 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    // v1.29 B2-alt cancel/single-shot/re-arm handlers + bareset
+    // The bare-SET cancel/single-shot/re-arm handlers + bareset
     // dispatch live in `crate::uring_bigbulk_b2alt` so this file stays
     // under the 500-LOC house rule. Same `impl<C: Commands> Shard<C>`.
 
@@ -276,7 +276,7 @@ impl<C: Commands> Shard<C> {
         }
     }
 
-    /// **v1.25 B.5** — finalise a FrameStitch: re-dispatch the
+    /// Finalise a FrameStitch: re-dispatch the
     /// assembled RESP frame through the normal parser. Re-uses every
     /// command handler unchanged (SET / SETEX / PSETEX / APPEND /
     /// GETSET / MSET), including the cross-shard routing layer that

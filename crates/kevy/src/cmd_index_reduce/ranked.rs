@@ -1,4 +1,4 @@
-//! Ranked-list reduces: MATCH / KNN merge and the v3.13 HYBRID
+//! Ranked-list reduces: MATCH / KNN merge and the HYBRID
 //! reciprocal-rank fusion.
 
 use kevy_resp::{encode_array_len, encode_bulk, encode_error};
@@ -60,7 +60,7 @@ fn ranked_args(argv: &[Vec<u8>], ascending: bool) -> Option<(usize, Vec<Vec<u8>>
     }
 }
 
-/// v3.13 — decode one ranked segment `[n][(key, f64, hydration)*]`.
+/// Decode one ranked segment `[n][(key, f64, hydration)*]`.
 fn read_ranked_segment(
     c: &[u8],
     pos: &mut usize,
@@ -78,7 +78,7 @@ fn read_ranked_segment(
     out
 }
 
-/// v3.13 — RRF fusion at the origin: globally rank the merged BM25
+/// RRF fusion at the origin: globally rank the merged BM25
 /// list (score desc) and the merged KNN list (distance asc), then
 /// score(d) = Σ 1/(rrf_k + rank_i(d)) and keep the top `limit`.
 /// Rank-only fusion needs no score normalization across the two

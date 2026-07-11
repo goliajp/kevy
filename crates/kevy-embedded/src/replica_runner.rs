@@ -14,7 +14,7 @@
 //! double-apply (the next handshake resumes from the last applied
 //! offset, and on a gap the primary ships a snapshot).
 //!
-//! v1.20 scope: single-URL upstream = single primary shard. Multi-shard
+//! Scope: single-URL upstream = single primary shard. Multi-shard
 //! mirroring (N URLs, one runner per shard) is a follow-up.
 
 use std::net::{Shutdown, TcpStream};
@@ -54,8 +54,8 @@ pub(crate) struct ReplicaRunner {
     join: Mutex<Option<JoinHandle<()>>>,
     /// Last applied frame offset + 1 (== expected next offset). Read
     /// by `INFO replication` / `kevy_metric::ReplicationLag` follow-ups.
-    /// Allow-dead-code until T2.8 e2e wires the reader through the
-    /// public `Store` API.
+    /// Allow-dead-code until an e2e consumer wires the reader through
+    /// the public `Store` API.
     #[allow(dead_code)]
     pub(crate) applied_offset: Arc<AtomicU64>,
     /// `true` while the runner is connected + post-handshake. Drops to
@@ -239,8 +239,8 @@ fn run_loop(
 /// Snapshot ship is rare (only when the primary's backlog has rolled
 /// past the replica's `from_offset`), so we don't try to stream the
 /// chunks into the store as they arrive — collect into memory then
-/// `load_snapshot_from` once at the end. v1.20 MVP sizes
-/// (mailrs-class) make this trivially affordable.
+/// `load_snapshot_from` once at the end. Typical embed-replica
+/// keyspace sizes make this trivially affordable.
 fn drain_session(
     shards: &Shards,
     client: &mut ReplicaClient,
@@ -250,7 +250,7 @@ fn drain_session(
     let mut snap: Option<Vec<u8>> = None;
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
-            // v3.14 heartbeat: ack immediately (keeps the primary's
+            // Heartbeat: ack immediately (keeps the primary's
             // slot fresh); embedded lag view rides a later train.
             Some(Ok(ReplicaEvent::Ping { .. })) => {
                 let _ = client.send_ack(client.expected_offset());
@@ -323,7 +323,7 @@ fn apply_frame(shards: &Shards, argv: &Argv) {
     // `Store::open_replica`.
 }
 
-/// Decode an accumulated snapshot payload into shard 0. v1.20 MVP:
+/// Decode an accumulated snapshot payload into shard 0:
 /// single-URL upstream = single primary shard mirror, so the snapshot
 /// always loads into shard 0; the multi-shard upstream surface is a
 /// follow-up and will route each upstream shard's snapshot to its

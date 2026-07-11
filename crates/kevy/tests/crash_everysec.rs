@@ -59,7 +59,7 @@ fn crash_everysec_no_corruption_bounded_loss() {
     let acks: Vec<AckEntry> = log.lock().unwrap().clone();
     eprintln!("crash_everysec: {} total ACKs", acks.len());
 
-    // v1.31.x diagnostic: dump AOF file sizes immediately post-kill.
+    // Diagnostic: dump AOF file sizes immediately post-kill.
     // If sizes are tiny vs expected (~40 B × ACKs / threads), the bug
     // is in the write→AOF-BufWriter path (writes not even reaching the
     // kernel page cache). If sizes are roughly correct, the bug is in
@@ -94,7 +94,7 @@ fn crash_everysec_no_corruption_bounded_loss() {
         corrupted.len()
     );
 
-    // STRICT contract for v1.31.0: no-corruption (every present read
+    // STRICT contract: no-corruption (every present read
     // returns the ACK'd value, never a wrong one).
     assert!(
         corrupted.is_empty(),
@@ -103,12 +103,12 @@ fn crash_everysec_no_corruption_bounded_loss() {
         corrupted.join("\n")
     );
 
-    // OBSERVATIONAL metric for v1.31.0 (NOT strict assert): the
+    // OBSERVATIONAL metric (NOT strict assert): the
     // everysec lost-fraction at high write rate is reported but not
     // failure-bound. Empirically (5 s pre-kill, 4 writers, ~117k
     // SET/s, kevy --threads 2) the lost fraction lands at ~86 %, far
-    // above the naive "≤ 1 s window" expectation. Two hypotheses
-    // pending v1.31.x investigation:
+    // above the naive "≤ 1 s window" expectation. Two hypotheses,
+    // neither yet confirmed:
     //
     //   (1) everysec fsync deferral under sustained write load —
     //       background fsync may drift past 1 s when the bio thread

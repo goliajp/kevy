@@ -1,4 +1,4 @@
-//! v1.27 P7d — EVAL / EVALSHA cross-slot enforcement when cluster
+//! EVAL / EVALSHA cross-slot enforcement when cluster
 //! mode is enabled.
 //!
 //! Each test builds its own cluster-enabled `RuntimeState`, so the

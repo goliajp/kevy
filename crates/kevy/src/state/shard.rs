@@ -1,4 +1,4 @@
-//! Per-shard private zone (K-103 W4) + the gate-bit cache (W5).
+//! Per-shard private zone + the gate-bit cache.
 //!
 //! [`ShardCtx`] lives inside [`KevyCommands`](crate::KevyCommands);
 //! the manual `Clone` impl gives every clone a **fresh** `ShardCtx`,
@@ -18,7 +18,7 @@ use super::RuntimeState;
 use super::obs::ShardStats;
 use crate::ops::replication::ReplicationView;
 
-// ───────────── gate bits (K-103 W5) ─────────────
+// ───────────── gate bits ─────────────
 //
 // One `control_epoch` Acquire load per use answers "did any cold-side
 // authority change?"; on a hit the cached bits below stand in for the
@@ -115,12 +115,12 @@ pub(crate) struct ShardCtx {
     pub(crate) indexes: RefCell<crate::index_runtime::ShardIndexes>,
     /// This shard's view states — same lifecycle as `indexes`.
     ///
-    /// (The per-shard `LuaHost` is NOT here: it is `!Send` — luna's
+    /// (The per-shard `LuaHost` is NOT here: it is `!Send` — luna-core's
     /// `Vm` holds `Rc`s — and `kevy_rt::Commands` requires `Send`, so
     /// it parks in `kevy_lua_host::with_thread_host`'s thread slot,
     /// the steel-side twin of this zone.)
     pub(crate) views: RefCell<crate::view_runtime::ShardViews>,
-    /// W5 gate cache — see the bit constants above.
+    /// Gate cache — see the bit constants above.
     gate: Cell<GateCache>,
 }
 
@@ -221,7 +221,7 @@ impl ShardCtx {
             .count()
     }
 
-    /// The W5 read protocol: one `control_epoch` Acquire load; on an
+    /// The gate read protocol: one `control_epoch` Acquire load; on an
     /// epoch hit the cached bits answer, otherwise the cold rebuild
     /// runs. The epoch is read BEFORE the rebuild — a writer racing
     /// past between the two leaves at most one command on bits that

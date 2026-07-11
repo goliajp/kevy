@@ -1,7 +1,7 @@
 //! Bridge from Lua's `redis.call` writes to the runtime's blocked-
 //! waiter wake hook.
 //!
-//! ## The problem (v1.27.3 root cause)
+//! ## The problem
 //!
 //! When a Lua script calls `redis.call('XADD', ...)`, the kevy-side
 //! dispatch closure in `kevy::cmd_lua` routes the call through
@@ -10,7 +10,7 @@
 //! `commit_write` path which is where [`Shard::wake_key`] fires for
 //! parked `BLPOP` / `BRPOP` / `XREAD BLOCK` / `BZPOPMIN` waiters.
 //!
-//! Net effect under v1.27.3-dev: BullMQ Worker's `BZPOPMIN` on the
+//! Net effect without the bridge: BullMQ Worker's `BZPOPMIN` on the
 //! marker key, and `QueueEvents`' `XREAD BLOCK` on the events stream,
 //! both fail to wake when an EVAL script writes the trigger value.
 //! Jobs still complete (visible in `getJobCounts`) but the wake-driven

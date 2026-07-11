@@ -1,4 +1,4 @@
-//! T3.18 e2e: a write to the "wrong" embed/server returns
+//! E2e: a write to the "wrong" embed/server returns
 //! `-MISDIRECTED writer is <host:port>` over real RESP. Covers the
 //! routing wire path through `KevyCommands::dispatch` — the cement
 //! check in `dispatch_with_proto` + `RuntimeState::route_write` +
@@ -78,7 +78,7 @@ fn read_to_non_writer_node_is_not_misdirected() {
     // writes only. A reader node should be able to serve reads
     // even when it doesn't own the scope (the writer-replication
     // path eventually makes the data appear here via embed-as-
-    // read-replica / server replication — orthogonal to T3.x).
+    // read-replica / server replication — orthogonal to scope routing).
     // This test only verifies the dispatch DOESN'T MISDIRECT on
     // reads.
     let mut cfg = Config::default();

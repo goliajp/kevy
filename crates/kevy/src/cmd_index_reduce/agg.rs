@@ -1,4 +1,4 @@
-//! v3.1 GROUP/GROUPS reduce — distributed EXACT top-K over group
+//! GROUP/GROUPS reduce — distributed EXACT top-K over group
 //! aggregates (TPUT-style) plus the AGG.FETCH phase-2 merge.
 
 use kevy_resp::{encode_array_len, encode_bulk, encode_error};
@@ -6,7 +6,7 @@ use kevy_rt::ExtensionReduced;
 
 use super::chunk::{read_kbytes, read_u32, value_repr};
 
-/// v3.1 reduce — distributed EXACT top-K over group aggregates
+/// Reduce — distributed EXACT top-K over group aggregates
 /// (TPUT-style). Phase 1 chunks carry each shard's local top-(4·limit)
 /// by the ranking metric plus an `exhausted` flag; if the unseen mass
 /// (Σ τ over non-exhausted shards) could displace the k-th candidate,

@@ -412,7 +412,7 @@ fn xadd_on_wrong_type_errors() {
     assert!(r.starts_with(b"-WRONGTYPE"), "got: {:?}", String::from_utf8_lossy(&r));
 }
 
-// ───────────── XSETID (2026-06-11) ─────────────
+// ───────────── XSETID ─────────────
 
 #[test]
 fn xsetid_bumps_clock_and_rejects_rollback() {

@@ -1,5 +1,5 @@
 //! In-process throughput micro-bench for `kevy_embedded::Store` — the path an
-//! embed consumer (e.g. mailrs) actually pays per op: the embedded mutex + the
+//! embed consumer actually pays per op: the embedded mutex + the
 //! keyspace op + (optionally) an AOF append. No socket, no reactor, no network
 //! round-trip — so absolute numbers are much higher than the TCP server bench;
 //! they measure the in-process data path, not the wire.
@@ -80,7 +80,7 @@ fn main() {
     // single-op path) — fsync-rate-bound, so run far fewer ops to stay bounded.
     bench("aof-always", &s3, (n / 20).max(50_000), &keys);
 
-    // TTL'd-key GET: the mailrs path (every cache key has a TTL). With the
+    // TTL'd-key GET: the cache-consumer path (every cache key has a TTL). With the
     // background reaper the cached clock is trusted (no per-get Instant::now);
     // manual mode reads a fresh clock per get — the gap is the cached-clock win.
     bench_ttl_get("ttl GET (cached clk)", false, n, &keys); // background reaper
@@ -91,7 +91,7 @@ fn main() {
     let _ = std::fs::remove_dir_all(&dir3);
 }
 
-/// GET throughput over keys that all carry a (long) TTL — the mailrs cache
+/// GET throughput over keys that all carry a (long) TTL — the typical cache
 /// shape. `manual_reaper` toggles whether the store trusts the cached clock
 /// (background) or reads a fresh clock per get (manual).
 fn bench_ttl_get(label: &str, manual_reaper: bool, n: usize, keys: &[Vec<u8>]) {

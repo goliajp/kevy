@@ -1,4 +1,4 @@
-//! v2.4 — embedded blocking pops (`blpop` / `brpop` / `bzpopmin`).
+//! Embedded blocking pops (`blpop` / `brpop` / `bzpopmin`).
 //!
 //! Design (the park-wait note, per ROADMAP):
 //! - One process-wide [`Blocker`] per store: a wake **generation**

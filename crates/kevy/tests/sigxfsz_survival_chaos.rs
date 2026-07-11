@@ -1,11 +1,11 @@
-//! v1.58 — verify v1.38.x finding fix: kevy survives `SIGXFSZ`
+//! kevy survives `SIGXFSZ`
 //! (write exceeds `RLIMIT_FSIZE`) without being kernel-killed.
 //!
-//! Before v1.58: kevy had no SIGXFSZ handler. Default action is
-//! `Core` (kernel terminates + dumps core). One disk-full event
-//! killed the whole server.
+//! Without a SIGXFSZ handler the default action is
+//! `Core` (kernel terminates + dumps core) — one disk-full event
+//! killed the whole server, which is the finding this test covers.
 //!
-//! v1.58: kevy installs a no-op `SIGXFSZ` handler. The signal is
+//! kevy installs a no-op `SIGXFSZ` handler. The signal is
 //! absorbed, the failing write returns `EFBIG` to the AOF writer
 //! (which logs + ignores via `eprintln!` per `exec.rs:319`), and
 //! kevy keeps serving.
@@ -19,7 +19,7 @@
 //! Strict asserts:
 //! - Spawn kevy.
 //! - Send `SIGXFSZ` (signal 25) to its PID via `kill -25 <pid>`.
-//!   Pre-v1.58 this would kernel-kill the process.
+//!   Without the handler this would kernel-kill the process.
 //! - kevy answers PING after the signal (proves it survived).
 //!
 //! Gated `#[ignore]`. Run with:
@@ -72,7 +72,7 @@ fn sigxfsz_does_not_kill_kevy() {
         .expect("kill");
     assert!(status.success(), "kill -25 {pid} failed");
 
-    // Give kevy a moment to either die (pre-v1.58) or absorb (v1.58).
+    // Give kevy a moment to either die (no handler) or absorb (handler).
     std::thread::sleep(Duration::from_millis(200));
 
     // PHASE 3: post-signal PING — kevy MUST still answer.

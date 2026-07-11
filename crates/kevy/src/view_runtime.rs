@@ -1,10 +1,10 @@
-//! v2.6 — the view engine's runtime half (mirrors
+//! The view engine's runtime half (mirrors
 //! [`crate::index_runtime`]): a process-wide [`kevy_index::ViewCatalog`]
-//! behind RwLock + generation, both owned by `RuntimeState.catalogs`
-//! (K-103/K-105); per-shard view states in `ShardCtx.views`, and the
+//! behind RwLock + generation, both owned by `RuntimeState.catalogs`;
+//! per-shard view states in `ShardCtx.views`, and the
 //! write-hook maintenance that runs AFTER index maintenance (so the
 //! membership probes see fresh segments). Callers gate both hooks on
-//! the `VIEW_NONEMPTY` gate bit (K-103 W5).
+//! the `VIEW_NONEMPTY` gate bit.
 
 use kevy_resp::CmdError;
 use kevy_index::{IndexValue, MaterializedSet, ViewMode, ViewSpec, eval_tree, key_in_tree};
@@ -20,7 +20,7 @@ struct ViewState {
     needs_rebuild: bool,
 }
 
-/// One shard's view states. Owned by `crate::state::ShardCtx` (W4).
+/// One shard's view states. Owned by `crate::state::ShardCtx`.
 #[derive(Default)]
 pub(crate) struct ShardViews {
     generation: u64,

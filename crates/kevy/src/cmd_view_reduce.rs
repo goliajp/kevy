@@ -1,4 +1,4 @@
-//! v2.6 — VIEW.* origin-side reduce: merge per-shard chunks into RESP
+//! VIEW.* origin-side reduce: merge per-shard chunks into RESP
 //! (split from [`crate::cmd_view`] under the 500-LOC house rule).
 
 use kevy_index::{IndexValue, Tree, ViewMode};

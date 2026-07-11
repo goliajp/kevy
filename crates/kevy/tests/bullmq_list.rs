@@ -1,4 +1,4 @@
-//! v1.27.3: list ops needed by BullMQ — RPOPLPUSH, LMOVE, LPOS.
+//! List ops needed by BullMQ — RPOPLPUSH, LMOVE, LPOS.
 
 use kevy_resp::Argv;
 use kevy_store::Store;

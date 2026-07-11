@@ -1,4 +1,4 @@
-//! v1.27.3: sorted-set ops needed by BullMQ — ZPOPMIN,
+//! Sorted-set ops needed by BullMQ — ZPOPMIN,
 //! ZREMRANGEBYRANK, ZREMRANGEBYSCORE, ZREVRANGEBYSCORE.
 
 use kevy_resp::Argv;
@@ -258,7 +258,7 @@ fn zrevrangebyscore_bad_bound_errors() {
     assert!(r.starts_with(b"-ERR min or max"));
 }
 
-// ---- v2.4: ZPOPMIN.BELOW (delayed-job pop) --------------------------------
+// ---- ZPOPMIN.BELOW (delayed-job pop) ---------------------------------------
 
 #[test]
 fn zpopmin_below_pops_only_due() {

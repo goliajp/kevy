@@ -1,5 +1,5 @@
-//! Pipeline-first sugar — RFC Q4 part b. Where async actually pays
-//! off: one TCP round-trip per batch instead of per command.
+//! Pipeline-first sugar — where async actually pays off: one TCP
+//! round-trip per batch instead of per command.
 //!
 //! ```ignore
 //! let replies = conn.pipeline()
@@ -14,7 +14,7 @@
 //! and then drains N replies in declaration order via the same codec
 //! the rest of the crate uses.
 //!
-//! # Partial-failure semantics (T4.17)
+//! # Partial-failure semantics
 //!
 //! `run()` returns `Result<Vec<Reply>, io::Error>`. The outer `Err` is
 //! reserved for connection-level failures (transport error, malformed
@@ -30,7 +30,7 @@
 //! }
 //! ```
 //!
-//! # Degrade path (T4.18)
+//! # Degrade path
 //!
 //! [`Pipeline::into_cmds`] hands back the raw argv vectors so callers
 //! can feed them into a blocking client one at a time. Same builder,

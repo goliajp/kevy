@@ -1,4 +1,4 @@
-//! Pipelined batches (v1.14.0): queue N commands client-side, send
+//! Pipelined batches: queue N commands client-side, send
 //! them as one write, read N replies in order.
 //!
 //! Unlike [`Connection::multi`](crate::Connection::multi) this is

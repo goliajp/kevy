@@ -1,4 +1,4 @@
-//! v2.2 zset/set algebra `*STORE` family — end-to-end against a real
+//! Zset/set algebra `*STORE` family — end-to-end against a real
 //! 8-shard reactor, so source keys and `dst` land on different shards
 //! and the gather → combine → store two-hop orchestrator
 //! (`kevy_rt::exec_zalgebra`) actually crosses cores. Single-store

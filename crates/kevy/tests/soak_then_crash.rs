@@ -1,4 +1,4 @@
-//! Sustained-load soak chaos test — v1.34 step 4 of 5.
+//! Sustained-load soak chaos test.
 //!
 //! Drives concurrent writes for `SOAK_SECONDS` (default 30, opt-in
 //! `SOAK_SECONDS=3600` for real industrial-grade 1 h validation),

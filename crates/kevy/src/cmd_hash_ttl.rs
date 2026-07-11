@@ -1,11 +1,11 @@
-//! v2.4 — hash field-TTL commands (Redis 7.4):
+//! Hash field-TTL commands (Redis 7.4):
 //! `HEXPIRE` / `HPEXPIRE` / `HPEXPIREAT` / `HTTL` / `HPERSIST`, all
 //! `key <arg> [NX|XX|GT|LT] FIELDS <numfields> field [field ...]`
 //! shaped (HTTL/HPERSIST take no condition/ttl). Replies are per-field
 //! integer arrays in request order.
 //!
 //! AOF: the relative forms get an absolute `HPEXPIREAT` follow-up
-//! frame (same INC-2026-06-09 discipline as `EXPIRE` → `PEXPIREAT`) —
+//! frame (same replay-determinism discipline as `EXPIRE` → `PEXPIREAT`) —
 //! see `Shard::log_write`'s hash extension in kevy-rt.
 
 use kevy_resp::CmdError;

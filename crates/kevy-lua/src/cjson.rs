@@ -1,5 +1,5 @@
 //! `cjson` Lua stdlib — Redis-compatible JSON encoder/decoder
-//! implemented in pure Rust. v1.27.3 BullMQ unblock (BullMQ scripts
+//! implemented in pure Rust. Unblocks BullMQ (whose scripts
 //! co-bundle cmsgpack and cjson usage).
 //!
 //! ## Surface
@@ -212,7 +212,7 @@ fn encode_object(vm: &Vm, t_ref: &Table, out: &mut String, depth: u32) -> Result
     Ok(())
 }
 
-// v1.27.3 ships without cjson.null sentinel detection — Lua nil ↔
+// No cjson.null sentinel detection — Lua nil ↔
 // JSON null is enough for BullMQ / Sidekiq Pro / most ecosystem
 // scripts. Full sentinel preservation (so {a=cjson.null} round-trips
 // as {"a":null} instead of `{}`) lands when a real need surfaces.
@@ -393,8 +393,8 @@ impl<'a> Parser<'a> {
         if self.peek() == Some(b']') {
             self.cur += 1;
             // Empty array still gets a table; encoder treats `{}` as
-            // object, so an empty Lua table from `[]` would round-trip
-            // as `{}`. Not perfectly preservable in v1.27.3 — same
+            // object, so an empty Lua table from `[]` round-trips
+            // as `{}`. Not perfectly preservable — same
             // limitation as Redis cjson without extra hints.
             let t = vm.new_table().build();
             return Ok(Value::Table(t));
@@ -463,7 +463,7 @@ pub(crate) fn install_cjson(vm: &mut Vm) {
     // end up with `obj.field = nil` which Lua removes from the
     // table, so encoding `obj` gives `{}` instead of `{"field":null}`.
     // Matches the lossy behaviour of every Lua-without-sentinel
-    // setup. Full sentinel detection is a v1.27.4+ patch.
+    // setup. Full sentinel detection is a future patch.
     let t = vm.table_of([
         ("encode", enc_fn),
         ("decode", dec_fn),

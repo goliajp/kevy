@@ -78,7 +78,7 @@ pub enum MultiOp {
 }
 
 /// Which algebra combination a `*STORE` orchestrator runs after its
-/// gather completes (v2.2). Public: [`crate::Route::ZAlgebraStore`]
+/// gather completes. Public: [`crate::Route::ZAlgebraStore`]
 /// carries it, and embedders' `route()` implementations construct it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZCombine {
@@ -132,30 +132,30 @@ pub(crate) enum Op {
     MSet(KvPairs),
     /// Fetch per-key payloads (MGET / set algebra).
     Gather(GatherKind, Vec<Vec<u8>>),
-    /// v2.2 step-2 of the zset-algebra orchestrator: materialize the
+    /// Step-2 of the zset-algebra orchestrator: materialize the
     /// combined result at `dst` on its owning shard (overwrite; empty
     /// deletes). Replies `Part::Int(cardinality)`.
     ZStoreResult { dst: Vec<u8>, pairs: Vec<(Vec<u8>, f64)> },
     /// Set-form step-2 (`SINTERSTORE` family).
     SetStoreResult { dst: Vec<u8>, members: Vec<Vec<u8>> },
-    /// v2.3 FEED.READ executed on the target shard.
+    /// FEED.READ executed on the target shard.
     FeedRead {
         cursor_gen: u64,
         offset: u64,
         count: usize,
         prefixes: Vec<Vec<u8>>,
     },
-    /// v2.3 FEED.TAIL executed on the target shard.
+    /// FEED.TAIL executed on the target shard.
     FeedTail,
-    /// v2.5 extension fan-out: run `Commands::extension_op` on this
+    /// Extension fan-out: run `Commands::extension_op` on this
     /// shard with the original argv; reply is an opaque chunk.
     Extension { argv: Vec<Vec<u8>> },
-    /// v3.16 D2 `REPL.TOKEN` fan-out: read this shard's live
+    /// `REPL.TOKEN` fan-out: read this shard's live
     /// `(feed generation, next_offset)` pair. Reply [`Part::ReplToken`].
     /// Live (not tick-stale): a token minted right after a write must
     /// cover that write.
     ReplToken,
-    /// v2.3 `PREFIX.STATS <prefix>` — per-shard prefix walk, summed at
+    /// `PREFIX.STATS <prefix>` — per-shard prefix walk, summed at
     /// the origin.
     PrefixStats(Vec<u8>),
     /// Collect this shard's keys (optional glob + limit) — KEYS/SCAN/RANDOMKEY.
@@ -274,11 +274,11 @@ impl SmallReply {
 
 /// A partial result shipped back to the originating shard.
 pub(crate) enum Part {
-    /// v2.3 PREFIX.STATS per-shard result.
+    /// PREFIX.STATS per-shard result.
     PrefixStats { keys: u64, expires: u64 },
-    /// v2.5 extension fan-out per-shard chunk (opaque to the runtime).
+    /// Extension fan-out per-shard chunk (opaque to the runtime).
     ExtensionChunk(Vec<u8>),
-    /// v3.16 D2 `REPL.TOKEN` per-shard answer: the answering shard's
+    /// `REPL.TOKEN` per-shard answer: the answering shard's
     /// id + its live `(feed generation, next_offset)` pair.
     ReplToken { shard: u32, generation: u64, next_offset: u64 },
     Reply(SmallReply),
@@ -406,14 +406,14 @@ pub(crate) enum Inbound {
     /// successful serve, timeout, or disconnect.
     BlockCancel { origin: usize, conn: u64 },
 
-    // ── v3.16 replication waiters (see [`crate::exec_replwait`]) ──
+    // ── Replication waiters (see [`crate::exec_replwait`]) ──
     // WAIT / REPL.WAIT arm-and-defer messages ride their own Inbound
     // lane rather than `Op`/`Response`: the reply may come seconds
     // later (ACK arrival / apply progress / deadline), and it must NOT
     // participate in `xshard_inflight` accounting — a parked waiter
     // would otherwise pin the origin core in the busy-poll rung for
     // the whole wait.
-    /// origin → target: v3.16 D1 `WAIT` — answer with the number of
+    /// origin → target: `WAIT` — answer with the number of
     /// replicas that acked this shard's `master_repl_offset` (frozen
     /// at arm receipt), as soon as that count reaches `need` or
     /// `deadline_ms` passes. Reply: [`Inbound::ReplDone`].
@@ -424,7 +424,7 @@ pub(crate) enum Inbound {
         need: u32,
         deadline_ms: u64,
     },
-    /// origin → target: v3.16 D2 `REPL.WAIT` — answer 1 once this
+    /// origin → target: `REPL.WAIT` — answer 1 once this
     /// shard's replication-apply position reaches `min_offset`, or 0
     /// when `deadline_ms` passes. Reply: [`Inbound::ReplDone`].
     ReplApplyArm {

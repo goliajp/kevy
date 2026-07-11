@@ -1,5 +1,5 @@
 //! `cmsgpack` Lua stdlib — Redis-compatible MessagePack encoder/decoder
-//! implemented in pure Rust. v1.27.3 BullMQ unblock.
+//! implemented in pure Rust. Unblocks BullMQ scripts.
 //!
 //! ## Surface
 //!
@@ -27,7 +27,7 @@
 //! - Pure Rust, 0 third-party deps. Hand-written encoder + decoder
 //!   per the [msgpack spec](https://github.com/msgpack/msgpack/blob/master/spec.md).
 //! - No allocation beyond the output `Vec<u8>` and any tables the
-//!   decoder constructs in the luna heap.
+//!   decoder constructs in the interpreter heap.
 //! - Limits: max nesting depth 32 (mirrors the kevy-side recursion
 //!   guard already in place for `redis.call` arrays). Beyond it,
 //!   encoder errors out — matches Redis 7's behaviour.
@@ -37,7 +37,7 @@ use luna_core::runtime::table::Table;
 use luna_core::runtime::value::Value;
 use luna_core::vm::error::LuaError;
 use luna_core::vm::exec::Vm;
-// `Value` is itself IntoValue (luna v1.1) so we don't need to import
+// `Value` is itself IntoValue in luna-core, so we don't need to import
 // the trait — TableBuilder::with accepts Values directly.
 
 /// Max recursion depth — matches Redis 7's `cmsgpack` default.

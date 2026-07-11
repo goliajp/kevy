@@ -1,15 +1,15 @@
-//! v2.5 — the index engine's runtime half (RFC LOCKED 2026-07-04).
+//! The index engine's runtime half.
 //!
 //! Topology: one process-wide [`Catalog`] behind an RwLock +
-//! generation counter, both owned by `RuntimeState.catalogs`
-//! (K-103/K-105); each shard keeps its [`ShardIndexes`] (its slice of
+//! generation counter, both owned by `RuntimeState.catalogs`;
+//! each shard keeps its [`ShardIndexes`] (its slice of
 //! every index — index-follows-key) in `ShardCtx.indexes`, refreshed
 //! lazily when the generation moves. The write path enters through
 //! [`on_write`] (wired to `Commands::on_write`), which the caller
-//! gates on the `IDX_NONEMPTY` gate bit (K-103 W5) — the RFC D2
+//! gates on the `IDX_NONEMPTY` gate bit — the
 //! zero-tax posture: an empty catalog costs one cached-bit branch.
 //!
-//! Backfill (RFC D5, tick-incremental variant): `IDX.CREATE` snapshots
+//! Backfill (tick-incremental variant): `IDX.CREATE` snapshots
 //! the domain's key list per shard; `on_shard_tick` indexes a bounded
 //! batch per tick until exhausted (non-blocking, no extra threads,
 //! shard-affine). Live writes during the build hit the hook first and
@@ -28,7 +28,7 @@ enum BuildState {
     Backfilling { keys: Vec<Vec<u8>>, pos: usize },
     /// Serving.
     Ready,
-    /// Build crossed the spec's MAXMEM budget (RFC D7): declarative
+    /// Build crossed the spec's MAXMEM budget: declarative
     /// failure, queries answer an error, no OOM.
     FailedOverBudget,
 }
@@ -36,17 +36,17 @@ enum BuildState {
 struct ShardIndex {
     spec: IndexSpec,
     seg: Segment,
-    /// v2.7: populated instead of `seg` for KIND text.
+    /// Populated instead of `seg` for KIND text.
     text: Option<kevy_text::TextSegment>,
-    /// v2.8: populated instead of `seg` for KIND ann.
+    /// Populated instead of `seg` for KIND ann.
     ann: Option<kevy_vector::Hnsw>,
-    /// v3.1: populated instead of `seg` for KIND agg.
+    /// Populated instead of `seg` for KIND agg.
     agg: Option<kevy_index::AggSegment>,
     build: BuildState,
 }
 
 /// One shard's slice of every declared index. Owned by
-/// `crate::state::ShardCtx` (W4); every entry point below borrows it
+/// `crate::state::ShardCtx`; every entry point below borrows it
 /// from the caller's shard zone.
 #[derive(Default)]
 pub(crate) struct ShardIndexes {
@@ -101,7 +101,7 @@ pub(crate) fn with_ready_segment<R>(
     }
 }
 
-/// v3.1: run `f` against a READY aggregate segment.
+/// Run `f` against a READY aggregate segment.
 pub(crate) fn with_ready_agg<R>(
     ctx: &Ctx<'_>,
     store: &mut Store,
@@ -123,7 +123,7 @@ pub(crate) fn with_ready_agg<R>(
     }
 }
 
-/// v2.8: run `f` against a READY ANN graph (mutable for REBUILD).
+/// Run `f` against a READY ANN graph (mutable for REBUILD).
 pub(crate) fn with_ready_ann<R>(
     ctx: &Ctx<'_>,
     store: &mut Store,
@@ -145,7 +145,7 @@ pub(crate) fn with_ready_ann<R>(
     }
 }
 
-/// v2.7: run `f` against a READY text segment.
+/// Run `f` against a READY text segment.
 pub(crate) fn with_ready_text_segment<R>(
     ctx: &Ctx<'_>,
     store: &mut Store,
@@ -167,7 +167,7 @@ pub(crate) fn with_ready_text_segment<R>(
     }
 }
 
-/// v2.6: run `f` with a name→segment resolver over this shard's READY
+/// Run `f` with a name→segment resolver over this shard's READY
 /// segments (views probe several indexes per call). Building/failed
 /// segments resolve to None.
 pub(crate) fn with_segment_resolver<R>(
@@ -272,13 +272,13 @@ fn refresh(catalogs: &CatalogState, st: &mut ShardIndexes, store: &mut Store) {
 /// Index one row: read the field from the hash at `key`, coerce,
 /// apply. A missing key / non-hash / missing field clears the row.
 fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
-    // v3.1 agg kind: both fields must resolve — the aggregated value
+    // Agg kind: both fields must resolve — the aggregated value
     // coerces per the declared type, the group key is raw bytes.
     if let Some(a) = &mut si.agg {
         apply_row_agg(store, &si.spec, a, key);
         return;
     }
-    // v2.8 ann kind: field bytes parse as an f32 vector (wrong shape
+    // Ann kind: field bytes parse as an f32 vector (wrong shape
     // = excluded, same discipline as scalar coerce failure).
     if let Some(g) = &mut si.ann {
         let v = match store.hget(key, &si.spec.field) {
@@ -291,7 +291,7 @@ fn apply_row(store: &mut Store, si: &mut ShardIndex, key: &[u8]) {
         g.apply(key, v);
         return;
     }
-    // v2.7 text kind: raw field bytes tokenize into the inverted
+    // Text kind: raw field bytes tokenize into the inverted
     // segment (no scalar coercion).
     if let Some(ts) = &mut si.text {
         match store.hget(key, &si.spec.field) {
@@ -391,7 +391,7 @@ fn advance_backfill(store: &mut Store, si: &mut ShardIndex, batch: usize) {
             apply_row_backfill(store, si, key);
         }
     }
-    // RFC D7: a MAXMEM budget is enforced at build time —
+    // A MAXMEM budget is enforced at build time —
     // declarative failure instead of OOM.
     if si.spec.max_bytes > 0 && si.seg.stats().approx_bytes > si.spec.max_bytes {
         si.seg = Segment::new();

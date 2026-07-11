@@ -30,7 +30,7 @@ impl<C: Commands> Shard<C> {
     }
 
     // Busy-poll reactor main loop — per-iter overhead is the proven
-    // perf-sensitive surface here (perf-vs-foss §8 v1.30: per-iter
+    // perf-sensitive surface here (measured: per-iter
     // amortization moves throughput where per-op µs shaving does not);
     // stage extraction risks codegen change for zero readability win.
     // LOC-WAIVER: busy-poll reactor main loop (per-iter perf-sensitive).
@@ -58,7 +58,7 @@ impl<C: Commands> Shard<C> {
             })?;
         }
 
-        // v1.30 — off-accept-set shards have no listener (None); skip register.
+        // Off-accept-set shards have no listener (None); skip register.
         let listener_fd = if let Some(l) = &self.listener {
             l.set_nonblocking()?;
             self.poller.add(l.raw(), true, false)?;
@@ -164,10 +164,10 @@ impl<C: Commands> Shard<C> {
                         // so try the drain unconditionally before
                         // requesting write-readiness. If it short-writes,
                         // `replica_writable` is a no-op until the poller
-                        // signals writability (T1.14 wires the
-                        // write-readiness re-arm; v1.18.0 ships with the
-                        // assumption that `+ACK` drains in one syscall —
-                        // which it does on every OS we test).
+                        // signals writability (the write-readiness
+                        // re-arm covers the short-write case; in
+                        // practice `+ACK` drains in one syscall on
+                        // every OS we test).
                         self.replica_writable(idx)?;
                     }
                 }
@@ -197,7 +197,7 @@ impl<C: Commands> Shard<C> {
             self.flush_dirty()?;
             // One wakeup per touched (and parked) target this iteration.
             self.flush_wakes();
-            // v1.25 A.2: ship the per-shard bio-drop batch to the bio
+            // Ship the per-shard bio-drop batch to the bio
             // thread BEFORE the AOF fsync window. Same rationale as the
             // io_uring path: don't let a pending fsync stall pin the
             // batch in RSS, and bound the per-iter drop latency
@@ -226,29 +226,29 @@ impl<C: Commands> Shard<C> {
                     // park instead of the next user-level shard tick.
                     self.tick_blocked_timeouts();
                     self.tick_xshard_timeouts();
-                    // v3.16: WAIT / REPL.WAIT deadline sweep — same
+                    // WAIT / REPL.WAIT deadline sweep — same
                     // cadence as the BLOCK timeout reactor above.
                     self.tick_repl_waiters();
                     if now.duration_since(last_tick) >= iv {
                         self.commands.on_shard_tick(&mut self.store);
                         self.apply_live_runtime_config(&mut tick_interval);
                         self.tick_persist();
-                        // v3-cluster replication slot expiry (T1.15):
+                        // Replication slot expiry:
                         // drop slots whose reconnect window has passed.
                         // No-op short-circuits when replication is off or
                         // no slot has been recorded yet.
                         self.tick_replication_slots(now);
-                        // v3-cluster ROLE / INFO replication (T1.28):
+                        // ROLE / INFO replication:
                         // publish master_repl_offset + connected_replicas
                         // count to the embedder. No-op when replication
                         // is off.
                         self.tick_replication_view();
-                        // v3-cluster backlog watermark (T1.22.5): drop
+                        // Backlog watermark: drop
                         // frames every consumer has moved past so the
                         // backlog reclaims space proactively. No-op
                         // when replication is off / no consumers yet.
                         self.tick_replication_watermark();
-                        // v3-cluster server-as-replica (T1.29): drain
+                        // Server-as-replica: drain
                         // events from the replica runner thread and
                         // apply them. No-op (one Option check) when
                         // this shard isn't a replica.
@@ -258,8 +258,8 @@ impl<C: Commands> Shard<C> {
                 }
             }
 
-            // v3-cluster replication producer pump (Issue Ledger I2 +
-            // T1.14). OUTSIDE the did_work block since v3.14: the
+            // Replication producer pump.
+            // OUTSIDE the did_work block: the
             // heartbeat (1s) and the ACK drain must run on idle iters
             // too — a parked-and-woken shard with zero events still
             // owes its replicas a pulse. Cost when replication is off
@@ -270,9 +270,9 @@ impl<C: Commands> Shard<C> {
             // A non-empty backlog means a peer ring is full: keep spinning so we
             // re-attempt the flush (and keep draining inbound to unblock peers).
             let has_backlog = self.backlog.iter().any(|b| !b.is_empty());
-            // v3.4: stay-hot-while-inflight, epoll symmetry — the
-            // uring reactor gained this in the v2.2 campaign (commit
-            // 65b7515): with forwarded cross-shard requests
+            // Stay-hot-while-inflight, epoll symmetry — the
+            // uring reactor gained this
+            // first: with forwarded cross-shard requests
             // outstanding, replies land within ~one RTT, so hold the
             // spin rung instead of paying park+wake per reply batch.
             // Bounded: inflight only drains (owner answers) or the
@@ -283,7 +283,7 @@ impl<C: Commands> Shard<C> {
                 idle_spins.saturating_add(1)
             };
         }
-        // v1.25.x SAVE migration: drain any in-flight bg persist job
+        // Drain any in-flight bg persist job
         // before exit so a `Op::Save` that returned `+OK` to a client
         // still lands its `dump-{i}.rdb` rename + AOF reset (the
         // commit phase otherwise runs on the next tick, which won't

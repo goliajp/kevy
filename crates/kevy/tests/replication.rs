@@ -1,7 +1,7 @@
-//! v3-cluster Phase 1.C: replication listener accepts replica
-//! handshake and replies `+ACK <offset>` over a real socket. Streaming
-//! of live frames + acked offset tracking is a follow-up task (T1.14);
-//! this test pins down the listener bind + handshake reply contract.
+//! Replication integration tests over real sockets: the listener
+//! accepts a replica handshake and replies `+ACK <offset>`, streams
+//! live frames with acked-offset tracking, ships snapshots, and
+//! honors dynamic `REPLICAOF` — plus the WAIT / REPL.* barrier verbs.
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -92,9 +92,8 @@ impl Server {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
 
-        // Force the epoll/kqueue reactor — replication listener on
-        // io_uring is gated off in v1.18.0 (see Issue Ledger I2 in the
-        // v3-cluster plan + the `Runtime::run` startup check).
+        // Force the epoll/kqueue reactor — the replication listener is
+        // gated off on io_uring (see the `Runtime::run` startup check).
         // SAFETY: integration test owns its own process state; setting
         // an env var here is safe since no other thread reads
         // KEVY_IO_URING in parallel.
@@ -158,8 +157,8 @@ fn replicate_from(offset: &str, id: &str) -> Vec<u8> {
     v
 }
 
-/// v3.14: a quiet streaming conn now carries 1 Hz `+PING <n>` heartbeats,
-/// so "the ACK and then silence" became "the ACK and then pings" —
+/// A quiet streaming conn carries 1 Hz `+PING <n>` heartbeats,
+/// so the reply shape is "the ACK and then pings" —
 /// assert the ACK prefix and that everything after is ping lines.
 fn assert_ack_then_pings(reply: &[u8], want_ack: &[u8]) {
     assert!(
@@ -179,7 +178,7 @@ fn assert_ack_then_pings(reply: &[u8], want_ack: &[u8]) {
 }
 
 fn read_to_eof(s: &mut std::net::TcpStream) -> Vec<u8> {
-    // v3.14: 1 Hz heartbeats keep feeding the per-read timeout, so a
+    // The 1 Hz heartbeats keep feeding the per-read timeout, so a
     // quiet-socket read loop never starves — bound by WALL CLOCK too.
     let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(2)));
     let start = std::time::Instant::now();
@@ -198,8 +197,8 @@ fn read_to_eof(s: &mut std::net::TcpStream) -> Vec<u8> {
 
 #[test]
 fn replica_handshake_receives_ack_and_stays_connected() {
-    // Post-T1.14: after `+ACK` the conn transitions to Streaming
-    // (was Closed before). With no source mutations, the replica
+    // After `+ACK` the conn transitions to Streaming.
+    // With no source mutations, the replica
     // just sees the +ACK and a quiet socket — `read_to_eof` returns
     // when its 2 s timeout elapses, NOT when the server closes.
     let server = Server::start(1);
@@ -356,7 +355,7 @@ fn streaming_replica_receives_set_command_as_wire_frame() {
             break;
         }
     }
-    // v3.14: strip any out-of-band +PING heartbeat lines before the frame.
+    // Strip any out-of-band +PING heartbeat lines before the frame.
     let mut start = 0usize;
     while buf.len() > start && buf[start] == b'+' {
         match buf[start..].windows(2).position(|w| w == b"\r\n") {
@@ -402,7 +401,7 @@ fn streaming_replica_receives_multiple_frames_in_order() {
     let mut cursor = 0usize;
     while frames.len() < 5 {
         if buf.len() - cursor > 0 {
-            // v3.14: skip out-of-band +PING heartbeat lines between frames.
+            // Skip out-of-band +PING heartbeat lines between frames.
             if buf[cursor] == b'+'
                 && let Some(p) = buf[cursor..].windows(2).position(|w| w == b"\r\n")
             {
@@ -480,7 +479,7 @@ fn streaming_replica_receives_only_its_shards_writes() {
         let mut cursor = 0usize;
         let _ = r.set_read_timeout(Some(std::time::Duration::from_millis(500)));
         loop {
-            // v3.14: skip out-of-band +PING heartbeat lines between frames.
+            // Skip out-of-band +PING heartbeat lines between frames.
             if buf.len() > cursor
                 && buf[cursor] == b'+'
                 && let Some(p) = buf[cursor..].windows(2).position(|w| w == b"\r\n")
@@ -630,7 +629,7 @@ fn start_small_buffer_primary(buffer_size: u64) -> Server {
 fn snapshot_ship_triggers_when_replica_falls_behind_backlog() {
     use kevy_replicate::replica::{ReplicaClient, ReplicaEvent};
 
-    // T1.23: a replica that asks for `from_offset = 0` after the
+    // A replica that asks for `from_offset = 0` after the
     // primary's backlog has evicted offset 0 triggers a snapshot
     // ship. Verify the full sequence: SnapshotBegin → ≥ 1 Chunk →
     // SnapshotEnd { ack_offset, routed: false } → expected_offset advances to
@@ -684,7 +683,8 @@ fn snapshot_ship_triggers_when_replica_falls_behind_backlog() {
     assert_eq!(client.expected_offset(), 30);
 
     // Snapshot bytes start with kevy_persist's RDB MAGIC (`KEVYSNAP`).
-    // Just check the prefix — a full load_snapshot round-trip is T1.24.
+    // Just check the prefix — the full load_snapshot round-trip is
+    // covered by `snapshot_ship_loaded_into_local_store_matches_primary`.
     assert!(snapshot_bytes.len() > 8, "snapshot too small");
     assert_eq!(&snapshot_bytes[..8], b"KEVYSNAP", "snapshot magic");
 
@@ -696,7 +696,7 @@ fn snapshot_ship_triggers_when_replica_falls_behind_backlog() {
 fn snapshot_ship_loaded_into_local_store_matches_primary() {
     use kevy_replicate::replica::{ReplicaClient, ReplicaEvent};
 
-    // T1.24: full primary→replica round-trip via snapshot ship.
+    // Full primary→replica round-trip via snapshot ship.
     // Primary writes N keys, backlog evicts so replica falls behind,
     // primary ships a snapshot, replica loads it into a fresh local
     // store via kevy_persist::load_snapshot_from, and GET on the
@@ -738,8 +738,8 @@ fn snapshot_ship_loaded_into_local_store_matches_primary() {
     };
     assert_eq!(ack_offset, pairs.len() as u64);
 
-    // Load the streamed snapshot into a fresh local Store via the new
-    // `load_snapshot_from` API (T1.24). The Store is the primitive
+    // Load the streamed snapshot into a fresh local Store via the
+    // `load_snapshot_from` API. The Store is the primitive
     // single-shard kevy_store::Store; for multi-shard replicas the
     // caller routes by hash before load. Single-shard is enough here
     // to prove the contract.
@@ -748,8 +748,8 @@ fn snapshot_ship_loaded_into_local_store_matches_primary() {
         .expect("load_snapshot_from");
 
     // GET each primary-written key against the loaded local store
-    // and verify byte-equivalence. Uses kevy::dispatch (same path
-    // T1.19's in-process apply recipe used).
+    // and verify byte-equivalence. Uses kevy::dispatch (the same
+    // in-process apply path the streaming tests use).
     for (k, v) in &pairs {
         let argv = kevy::Argv::from(vec![b"GET".to_vec(), k.as_bytes().to_vec()]);
         let reply = dispatch(&mut local_store, &argv);
@@ -770,7 +770,7 @@ fn snapshot_ship_loaded_into_local_store_matches_primary() {
 fn fresh_replica_join_snapshot_then_live_frames() {
     use kevy_replicate::replica::{ReplicaClient, ReplicaEvent};
 
-    // T1.27: Phase 1.E e2e. A fresh replica joins a primary whose
+    // E2e: a fresh replica joins a primary whose
     // backlog has already evicted offset 0 → it takes the snapshot
     // path; after `SnapshotEnd { ack_offset, routed: false }` the replica receives
     // post-snapshot live frames at offsets `ack_offset..` with no
@@ -868,7 +868,7 @@ fn fresh_replica_join_snapshot_then_live_frames() {
 
 #[test]
 fn replica_apply_dispatch_mirrors_primary_store() {
-    // T1.19: prove the apply path. After streaming N writes from
+    // Prove the apply path. After streaming N writes from
     // primary to a local in-process KeyspaceStore via kevy::dispatch,
     // GET on the local store returns byte-equivalent values to GET
     // on the primary. That's the full replication contract for the
@@ -925,7 +925,7 @@ fn replica_apply_dispatch_mirrors_primary_store() {
 
 #[test]
 fn role_reports_master_offset_advancing_with_writes() {
-    // T1.28: `ROLE` on a primary returns `["master", <offset>, []]`
+    // `ROLE` on a primary returns `["master", <offset>, []]`
     // where <offset> tracks the shard's replication source. After
     // N writes the offset published per tick (~100 ms) should reflect
     // the writes — verify via the wire-level ROLE reply.
@@ -1018,7 +1018,7 @@ fn multi_shard_listener_binds_per_shard_port() {
     server.shutdown();
 }
 
-/// T1.29(b)+(c)+(d) end-to-end: a SECOND kevy_rt::Runtime spun up as
+/// End-to-end: a SECOND kevy_rt::Runtime spun up as
 /// a replica (via `with_replica_inboxes`) receives frames from the
 /// primary via a manually-spawned runner thread and ends up with a
 /// byte-equivalent keyspace. Validates the full pipe — replica
@@ -1165,7 +1165,7 @@ fn server_as_replica_applies_upstream_writes() {
     let replica = ReplicaServer::start(primary.replication_base);
 
     // Poll the replica until all 5 keys are visible (or timeout).
-    // Retry connect — on heavily-loaded lx64 CI the runtime may
+    // Retry connect — on a heavily-loaded CI runner the runtime may
     // bind the port (which start's poll saw) but the accept loop
     // needs an extra moment before serving on it. llvm-cov
     // instrumentation (covgate) slows boot severely — 20ms × 1500
@@ -1231,7 +1231,7 @@ fn server_as_replica_applies_upstream_writes() {
     replica.shutdown();
 }
 
-/// T1.29.5 / T1.30 dynamic REPLICAOF e2e — a server brought up as
+/// Dynamic REPLICAOF e2e — a server brought up as
 /// standalone (no `[replication]` config) takes a runtime `REPLICAOF
 /// host port` command, starts mirroring an upstream primary's keyspace,
 /// then takes `REPLICAOF NO ONE` and demotes back to standalone.
@@ -1377,7 +1377,7 @@ fn replicaof_command_dynamically_attaches_to_primary() {
 }
 
 // ════════════════════════════════════════════════════════════════════
-// v3.16 D1+D2 — WAIT / REPL.TOKEN / REPL.WAIT
+// WAIT / REPL.TOKEN / REPL.WAIT
 // ════════════════════════════════════════════════════════════════════
 
 /// A replica Runtime attached to `primary` through the REAL runner

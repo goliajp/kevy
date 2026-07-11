@@ -19,7 +19,7 @@ use kevy_uring::{Completion, ProvidedBufRing};
 /// Threshold above which the tail `$<N>\r\n` header in a freshly-received
 /// chunk triggers an explicit `Vec::reserve` on the conn-input buffer. Set
 /// to the multishot recv slab size so big-arg ingress avoids the 0→16→32→
-/// 48→64K realloc storm on cold conns (Axis B / v1.25 deco B-A3).
+/// 48→64K realloc storm on cold conns (identified by decomposition).
 const BIG_ARG_RESERVE_THRESHOLD: usize = 16 * 1024;
 
 /// Scan the tail of `buf` for a `$<digits>\r\n` bulk header and, if found
@@ -73,13 +73,13 @@ impl<C: Commands> Shard<C> {
     /// a prior partial frame is already buffered, recycle the slab, and
     /// re-arm if the SQE ended.
     ///
-    /// **v1.25 deco G2 (Axis I + B)** restructures this path:
-    /// - **A1 (parse-from-slab)** when `conn.input` is empty, the parser
+    /// Two decomposition-driven restructurings shape this path:
+    /// - **parse-from-slab** when `conn.input` is empty, the parser
     ///   borrows directly from `pbuf.bytes(bid, n)` and only the unparsed
     ///   suffix (rare — only on a partial trailing frame) is copied into
     ///   `conn.input`. Eliminates the always-on pbuf→input memcpy on the
     ///   single-chunk hot path (10 K SET / GET arrive in one chunk).
-    /// - **B-A3 (pre-grow)** when a `$<N>\r\n` bulk header tails the
+    /// - **pre-grow** when a `$<N>\r\n` bulk header tails the
     ///   buffer with N ≥ slab size, reserve N+32 bytes up front so the
     ///   subsequent multishot recv chunks of the same big SET body land
     ///   without the 0→16→32→48→64K realloc storm on a cold connection.
@@ -93,7 +93,7 @@ impl<C: Commands> Shard<C> {
         io: &mut KevyMap<u64, UringConn>,
         pbuf: &mut ProvidedBufRing,
     ) {
-        // v1.29 B2-alt: -ECANCELED (-125) on a multishot recv is ALWAYS
+        // -ECANCELED (-125) on a multishot recv is ALWAYS
         // the big-arg cancel cycle's terminal CQE (kevy doesn't issue
         // recv cancels anywhere else). Route to the state-machine
         // handler regardless of whether `pending_big_arg` is still set
@@ -127,7 +127,7 @@ impl<C: Commands> Shard<C> {
                 uc.recv_armed = false;
             }
             if !suppress_rearm {
-                // K4: needs an arm visit to re-prep the recv SQE.
+                // Needs an arm visit to re-prep the recv SQE.
                 self.mark_arm_pending(cid, io);
             }
         }
@@ -143,7 +143,7 @@ impl<C: Commands> Shard<C> {
             return; // no buffer (shouldn't happen for a successful recv)
         };
         let n = c.res as usize;
-        // **v1.29 B2-alt** — if this conn is waiting for the trailing
+        // If this conn is waiting for the trailing
         // CRLF of a kernel-direct prep_read'd big-arg body, slice it
         // off the slab head before the regular dispatch sees it.
         let n = if let Some(uc) = io.get_mut(&cid)
@@ -177,7 +177,7 @@ impl<C: Commands> Shard<C> {
         };
         // Recompute slab offset for the BigBulk routing below.
         let slab_offset = c.res as usize - n;
-        // **v1.25 B.4 + A.2** BigBulk routing: if this conn has a SET
+        // BigBulk routing: if this conn has a SET
         // value body in flight, feed slab bytes straight into the owned
         // dest Vec — ONE memcpy per chunk (slab → dest), same byte cost
         // as the prior slab→input path but the dest Vec is pre-sized
@@ -191,7 +191,7 @@ impl<C: Commands> Shard<C> {
             self.uring_bigbulk_feed(cid, io, slab_bytes);
             pbuf.recycle(bid);
             self.aof_end_group_logged();
-            // K4: feed may have completed the body and pushed +OK to
+            // The feed may have completed the body and pushed +OK to
             // conn.output; queue the conn so the next arm visit
             // submits a write SQE.
             self.mark_arm_pending(cid, io);
@@ -224,7 +224,7 @@ impl<C: Commands> Shard<C> {
             self.protocol_error(cid);
             self.uring_mark_closing(cid, io);
         }
-        // K4: dispatch may have appended reply bytes to `conn.output` and/or
+        // Dispatch may have appended reply bytes to `conn.output` and/or
         // arc references to `conn.output_arcs` — queue the conn so the
         // next arm visit submits the write SQE. Cheap (one map probe +
         // a dedup flag) and unconditional: under bench-shape -P1 every
@@ -237,14 +237,14 @@ impl<C: Commands> Shard<C> {
     /// the combined buffer. AOF group-commit + slab recycle bookkeeping
     /// stays in [`Self::uring_on_recv`] (the caller).
     ///
-    /// **v1.25 B.4 + A.2** — after the regular dispatch, the leftover
+    /// After the regular dispatch, the leftover
     /// (unparsed) tail is checked for a `SET key $<N>` BigBulk shape; if
     /// matched, the conn flips into BigBulk-recv mode (subsequent CQE
     /// bytes go straight into an owned dest Vec). This avoids both the
     /// `conn.input` realloc storm AND the final `Arc::from(slice)`
     /// 64K memcpy on big SETs.
     #[inline]
-    // LOC-WAIVER: hot parse-from-slab dispatch fork (A1 fast path vs
+    // LOC-WAIVER: hot parse-from-slab dispatch fork (slab fast path vs
     // append-then-parse) — per-op critical path.
     pub(crate) fn uring_recv_dispatch(
         &mut self,
@@ -255,7 +255,7 @@ impl<C: Commands> Shard<C> {
     ) -> crate::inbox::BatchOutcome {
         
         if input_buf.is_empty() {
-            // A1 fast path: parse straight from the slab. The kernel's
+            // Fast path: parse straight from the slab. The kernel's
             // provided-buffer slice lives until `pbuf.recycle(bid)`, which
             // the caller defers until after dispatch_batch returns. Any
             // bytes dispatch stores (e.g. `Arc::from(&[u8])` for SET) get
@@ -264,7 +264,7 @@ impl<C: Commands> Shard<C> {
             // `input_buf` for the next CQE.
             let o = self.dispatch_batch(cid, slab);
             if !o.conn_gone && o.consumed < slab.len() {
-                // **v1.25 B.4 + A.2** — before staging the tail into
+                // Before staging the tail into
                 // `input_buf` (where it would otherwise drive the
                 // realloc storm for any subsequent body CQEs), probe
                 // for the SET BigBulk shape. On a hit, promote: the
@@ -322,11 +322,11 @@ impl<C: Commands> Shard<C> {
         if let Some(uc) = io.get_mut(&cid) {
             uc.closing = true;
         }
-        // K4: closing conns stay in the arm queue until reap picks
+        // Closing conns stay in the arm queue until reap picks
         // them up — gives the arm loop a chance to drain any
         // outstanding write_buf before close_conn drops the fd.
         self.mark_arm_pending(cid, io);
-        // K5 (v1.25 A.4 redo): push to closing ready-set so
+        // Push to closing ready-set so
         // `uring_reap_closed` iterates O(closing) instead of O(N=conns).
         // Duplicates are harmless — the reap-side filter short-circuits
         // when self.conns.get(cid) returns None (already reaped).
@@ -352,9 +352,9 @@ impl<C: Commands> Shard<C> {
             self.uring_mark_closing(cid, io);
             return;
         }
-        // L1 (2026-06-21) + A.4 (v1.25): the writev path mixes write_buf
-        // bytes with arc-bulk borrowed bytes via the iovec list. A4
-        // chunked writev: the SQE may cover only the leading
+        // The writev path mixes write_buf
+        // bytes with arc-bulk borrowed bytes via the iovec list.
+        // Chunked writev: the SQE may cover only the leading
         // `arcs_in_flight` arcs + write_buf up through `write_byte_cap`;
         // remaining arcs / write_buf tail stay queued for the next
         // arm_conns iter. On a full completion we drop the processed

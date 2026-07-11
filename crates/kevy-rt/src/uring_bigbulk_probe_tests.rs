@@ -176,9 +176,9 @@ fn generic_probe_rejects_small_append() {
 
 #[test]
 fn generic_probe_matches_bare_set() {
-    // **v1.25 B.5** (post-2026-06-22): plain `SET k <BIG>` (no
+    // Plain `SET k <BIG>` (no
     // options, big value as last bulk) IS accepted by the generic
-    // probe. The original B.4 bare-SET fast path was retired
+    // probe. The original bare-SET fast path was retired
     // because its zero-copy Arc adoption bypassed cross-shard
     // routing — the FrameStitch redispatch through `dispatch_batch`
     // is the correctness-preserving path.
@@ -201,7 +201,7 @@ fn generic_probe_rejects_get_command() {
 #[test]
 fn generic_probe_rejects_set_with_options_big_value_not_last() {
     // *5 SET k <BIG> EX 10 — big value is bulk #3 of 5, not last.
-    // v1.25.x follow-up. Must bail here.
+    // Out of the probe's scope (possible follow-up). Must bail here.
     let mut f = Vec::new();
     f.extend_from_slice(b"*5\r\n$3\r\nSET\r\n$1\r\nk\r\n$8192\r\n");
     // Fill the value body so it's "complete" at this point in the

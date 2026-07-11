@@ -5,7 +5,7 @@
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// v3.14 D3 — replica-side heartbeat view, written by every runner on
+/// Replica-side heartbeat view, written by every runner on
 /// each `+PING`, read by INFO replication / the election offset sum.
 /// The gauge fields are independent atomics — torn reads across
 /// fields are harmless (runners tick at 1 Hz × shards, INFO reads are
@@ -24,7 +24,7 @@ pub(crate) struct ReplicaProgress {
     /// [`Self::primary_offset`].
     applied_offset: AtomicU64,
     last_ping_ms: AtomicU64,
-    /// v3.15 D1 — per-runner applied-offset registry, `runner_slot` →
+    /// Per-runner applied-offset registry, `runner_slot` →
     /// this runner's replication-stream position. Sized by
     /// `start_runners` (one slot per runner: `nshards` in the fleet
     /// model, 1 in single-source), cleared by `stop_runners`.
@@ -35,7 +35,7 @@ pub(crate) struct ReplicaProgress {
     /// let a node with ONE advanced shard tie a node where every
     /// shard is caught up.
     runner_offsets: Mutex<Box<[AtomicU64]>>,
-    /// v3.16 D2 — per-runner last-seen UPSTREAM feed generation,
+    /// Per-runner last-seen UPSTREAM feed generation,
     /// learned from the gen-carrying heartbeat (`+PING <gen> <next>`).
     /// Sized / cleared with [`Self::runner_offsets`]. `0` = no
     /// heartbeat seen yet (real generations start at 1) — REPL.WAIT
@@ -49,7 +49,7 @@ impl ReplicaProgress {
     /// `applied` into this runner's own registry slot — the exact
     /// (non-max) per-stream position the election-offset sum is built
     /// from. `generation` is the upstream's feed generation off the
-    /// v3.16 heartbeat, filed per runner slot for REPL.WAIT gen
+    /// gen-carrying heartbeat, filed per runner slot for REPL.WAIT gen
     /// matching.
     pub(crate) fn record_ping(
         &self,

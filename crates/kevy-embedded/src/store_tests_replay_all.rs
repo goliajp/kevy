@@ -2,7 +2,7 @@
 //! AOF must survive a drop + reopen. Guards against the verb-coverage
 //! drift class where an op's `commit_write` verb is missing from
 //! `replay.rs` and the entry is silently skipped on load (data loss —
-//! found 2026-07-03, verbs shipped 1.7.0–1.15.0).
+//! several long-shipped verbs were once found missing this way).
 
 use super::tests::tmp_dir;
 use crate::Store;
@@ -180,7 +180,7 @@ fn spop_replay_removes_exactly_the_popped_members() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// v2.1 durability barrier: everysec store + `fsync_aof()` → writes
+/// Durability barrier: everysec store + `fsync_aof()` → writes
 /// are on disk at the barrier (verified via reopen; the crash-window
 /// semantics are the documented contract, exercised by chaos suites).
 #[test]

@@ -34,8 +34,8 @@ fn main() -> ExitCode {
     // --help / --version short-circuit BEFORE we touch TCP, so the binary
     // works in healthchecks / image-smoke / `--help` exploration without a
     // running server. `-h` keeps its redis-cli meaning (host); only the long
-    // `--help` and `-V` / `--version` short-circuit. Mirrors the kevy server
-    // pattern shipped in v1.0.4.
+    // `--help` and `-V` / `--version` short-circuit. Mirrors the kevy
+    // server binary's pattern.
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--help" => {
@@ -76,7 +76,7 @@ fn main() -> ExitCode {
 /// Route the non-REPL subcommands. `Some(code)` = handled, exit with it;
 /// `None` = no subcommand matched, continue down the redis-cli path.
 fn route_subcommand(args: &[String]) -> Option<ExitCode> {
-    // v1.40 — `backup` / `restore` subcommands. Routed BEFORE the RESP
+    // `backup` / `restore` subcommands. Routed BEFORE the RESP
     // client setup because they're file-only operations (no TCP).
     if !args.is_empty() && args[0] == "backup" {
         return Some(run_backup_cli(&args[1..]));
@@ -84,7 +84,7 @@ fn route_subcommand(args: &[String]) -> Option<ExitCode> {
     if !args.is_empty() && args[0] == "restore" {
         return Some(run_restore_cli(&args[1..]));
     }
-    // v3.17.3 — `--embed <dir>`: read-only point-in-time view of an
+    // `--embed <dir>`: read-only point-in-time view of an
     // embedded store's data directory. No server, no downtime.
     if !args.is_empty() && args[0] == "--embed" {
         let Some(dir) = args.get(1).cloned() else {
@@ -94,7 +94,7 @@ fn route_subcommand(args: &[String]) -> Option<ExitCode> {
         let cmd: Vec<Vec<u8>> = args[2..].iter().map(|s| s.clone().into_bytes()).collect();
         return Some(embed::run_embed_cli(&dir, &cmd));
     }
-    // v2.10 — migration subcommands (TCP, host/port flags inline).
+    // Migration subcommands (TCP, host/port flags inline).
     if !args.is_empty() && (args[0] == "export" || args[0] == "import") {
         return Some(run_migrate_cli(args));
     }
@@ -167,7 +167,7 @@ fn split_args(line: &str) -> Vec<Vec<u8>> {
         .collect()
 }
 
-// ───────────── v1.40 backup / restore ─────────────
+// ───────────── backup / restore ─────────────
 
 fn run_backup_cli(args: &[String]) -> ExitCode {
     let (data_dir, out_path) = match parse_backup_args(args) {
@@ -413,7 +413,7 @@ fn run_diff_cli(pos: &[String]) -> ExitCode {
     }
 }
 
-/// v2.10 bulk/diagnostic subcommands. Shapes:
+/// Bulk/diagnostic subcommands. Shapes:
 /// `copy-prefix [-h host -p port] [--rate N] <src-prefix> <dst-prefix>`
 /// `delete-prefix [-h host -p port] [--rate N] [--dry-run] <prefix>`
 /// `digest [-h host -p port] <prefix>`

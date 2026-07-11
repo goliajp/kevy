@@ -133,7 +133,7 @@ impl AtomicCtx<'_> {
 
     // ---- helpers ----------------------------------------------------
 
-    // ---- keyspace ops (v2.1 — Pipeline write parity) ---------------
+    // ---- keyspace ops (Pipeline write parity) ----------------------
 
     /// `DEL key [key ...]` — every key must hash to this shard.
     pub fn del(&mut self, keys: &[&[u8]]) -> usize {
@@ -263,7 +263,7 @@ impl AtomicCtx<'_> {
         self.inner.store.zcard(key).map_err(store_err)
     }
 
-    /// Flags-aware `ZADD` (v2.1). AOF logs the applied pairs as plain
+    /// Flags-aware `ZADD`. AOF logs the applied pairs as plain
     /// `ZADD` — the effect, never the condition (deterministic replay).
     pub fn zadd_flags(
         &mut self,
@@ -329,7 +329,7 @@ impl Store {
     }
 }
 
-/// Parity manifest (v2.1): command names `AtomicCtx` implements.
+/// Parity manifest: command names `AtomicCtx` implements.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const ATOMIC_OPS: &[&str] = &[
     "SET", "GET", "INCR", "INCRBY", "HSET", "HGET", "HINCRBY", "ZADD",

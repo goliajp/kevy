@@ -45,7 +45,7 @@ fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
     fn info_replication_master_default_shape() {
         // Default standalone — `current_upstream()` is None → master
         // shape with offset/connected from the per-shard view.
-        // T1.28.5: per-replica list — 3 fake replicas, offset=42.
+        // Per-replica list — 3 fake replicas, offset=42.
         let replicas = vec![
             (std::net::Ipv4Addr::new(10, 0, 0, 1), 6004, 42u64, Some(kevy_rt::ReplicaAck { acked_offset: 42, ack_age_ms: 0 })),
             (std::net::Ipv4Addr::new(10, 0, 0, 2), 6004, 41u64, Some(kevy_rt::ReplicaAck { acked_offset: 41, ack_age_ms: 0 })),

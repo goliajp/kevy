@@ -164,9 +164,9 @@ fn pipeline_zincrby_then_zrem() {
     assert_eq!(s.zscore(b"z", b"b").unwrap(), None);
 }
 
-// ---- v2.1: AtomicCtx completeness (Pipeline write parity + reads) --------
+// ---- AtomicCtx completeness (Pipeline write parity + reads) --------------
 
-/// The mailrs mark_seen / move_category shapes: hash write + zrem of
+/// A real embed consumer's mark-seen / move-category shapes: hash write + zrem of
 /// index zsets + reads for branch decisions, all inside ONE block.
 #[test]
 fn atomic_full_surface_write_and_read() {
@@ -245,7 +245,7 @@ fn atomic_all_shards_full_surface() {
 }
 
 /// Every new atomic write must survive a reopen (replay-arm guard —
-/// the v2.0.21 lesson applied to the new surface).
+/// a facade verb without a replay arm is silent data loss on reopen).
 #[test]
 fn atomic_new_writes_survive_reopen() {
     use crate::config::AppendFsync;
@@ -289,7 +289,7 @@ fn atomic_new_writes_survive_reopen() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- v2.1: ZADD flags across embedded surfaces ---------------------------
+// ---- ZADD flags across embedded surfaces ---------------------------------
 
 #[test]
 fn zadd_flags_facade_pipeline_atomic_and_reopen() {

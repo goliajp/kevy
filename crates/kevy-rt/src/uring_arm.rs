@@ -13,7 +13,7 @@ use kevy_map::KevyMap;
 use kevy_uring::IoUring;
 
 impl<C: Commands> Shard<C> {
-    /// **K4 (v1.25 A.9)**: schedule `cid` for the next `arm_conns` visit.
+    /// Schedule `cid` for the next `arm_conns` visit.
     /// Idempotent — `UringConn::arm_queued` dedupes pushes so a conn
     /// touched by recv + write + drain in the same iter only lands on
     /// the queue once. Safe to call when the conn was just dropped
@@ -51,8 +51,8 @@ impl<C: Commands> Shard<C> {
         io: &mut KevyMap<u64, UringConn>,
         bgid: u16,
     ) {
-        // A3 (2026-06-20): prefetch UringConn ahead of the loop body.
-        // H7 diagnostic showed L1D-miss stalls = 24.6% of total backend
+        // Prefetch UringConn ahead of the loop body.
+        // A perf diagnostic showed L1D-miss stalls = 24.6% of total backend
         // stalls at -c1; scatter from conn-map and io-map accesses are
         // candidates. The conns map's slot for the upcoming conn is
         // already L1-hot at the call site, but its corresponding
@@ -65,7 +65,7 @@ impl<C: Commands> Shard<C> {
         // (next conn doesn't exist). At higher conn counts the
         // hide-fill benefit grows with iteration depth.
         //
-        // **K4 (v1.25 A.9, 2026-06-22)**: iterate the dirty-set queue
+        // Iterate the dirty-set queue
         // `arm_pending` instead of the dense `active_uring_conns: Vec`.
         // The arm-loop's prior shape walked O(N) conns per iter (e.g.
         // 10k entries at c=10k), bailing on the ~99 % idle ones in
@@ -169,7 +169,7 @@ impl<C: Commands> Shard<C> {
                 std::mem::swap(&mut uc.write_arcs, &mut conn.output_arcs);
                 uc.write_off = 0;
             }
-            // L1 (2026-06-21): if the write carries arc-bulk fragments, use
+            // If the write carries arc-bulk fragments, use
             // `prep_writev` with an iovec list — header bytes from write_buf
             // and value bytes from the pinned Arc<[u8]> sources fuse into ONE
             // syscall and avoid the per-GET memcpy of the value into
@@ -198,7 +198,7 @@ impl<C: Commands> Shard<C> {
                     // from write_off to honour any prior partial-write
                     // resume.
                     //
-                    // **A.4 (v1.25)**: cap iovec count at
+                    // Cap iovec count at
                     // [`MAX_IOVECS_PER_WRITEV`] (Linux `IOV_MAX = 1024`).
                     // A pipelined pub/sub burst (1024 publishes × 50
                     // subs) puts >2000 iovecs onto a single conn; we
@@ -265,7 +265,7 @@ impl<C: Commands> Shard<C> {
                     uc.write_inflight = true;
                 }
             }
-            // v1.29 B2-alt — three SQE submissions for the big-arg
+            // Three SQE submissions for the big-arg
             // cancel / single-shot read / re-arm cycle. Each gated on a
             // per-conn flag set by the state machine.
             if uc.big_arg_cancel_pending {
@@ -331,8 +331,8 @@ impl<C: Commands> Shard<C> {
                 }
             }
             // Re-arm multishot recv:
-            //  (a) v1.25 default — when nothing else is gating it.
-            //  (b) v1.29 B2-alt — after big-arg completion, when
+            //  (a) default — when nothing else is gating it.
+            //  (b) big-arg path — after big-arg completion, when
             //      `big_arg_rearm_recv` is set.
             // Both paths converge on the same `prep_recv_multishot` call.
             let want_multishot = !uc.recv_armed
@@ -346,7 +346,7 @@ impl<C: Commands> Shard<C> {
                 uc.recv_armed = true;
                 uc.big_arg_rearm_recv = false;
             }
-            // K4: re-queue if more work remains. A chunked writev
+            // Re-queue if more work remains. A chunked writev
             // capped the SQE before all arcs/tail bytes were covered;
             // the on_write completion handler will not have anything
             // to do until the next arm_conns iter submits the next

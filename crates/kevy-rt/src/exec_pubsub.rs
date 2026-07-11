@@ -13,7 +13,7 @@ use kevy_resp::{
 };
 use std::sync::Arc;
 
-/// **H2.A (v1.25)**: minimum message body size to take the
+/// Minimum message body size to take the
 /// `Arc<[u8]>` + splice path. Below this we keep the in-place
 /// `Vec::extend_from_slice` because:
 ///   - 50 × 30 B memcpy ≈ 1500 B, costs ~50 ns total (cache-hot)
@@ -26,16 +26,16 @@ use std::sync::Arc;
 /// (`networking.c::tryAvoidBulkStrCopyToReply`).
 const PUBSUB_BODY_ARC_THRESHOLD: usize = 256;
 
-/// **H2.A correctness cap (v1.25)** / **A.4 lifted (v1.25)**:
+/// Correctness cap (later lifted by chunked writev):
 /// maximum `output_arcs` entries we allow per connection before
 /// falling back to memcpy on subsequent publishes (until the current
 /// arcs drain).
 ///
-/// Until A.4, this had to stay ≤ 511 because one `writev(2)` /
+/// Before chunked writev, this had to stay ≤ 511 because one `writev(2)` /
 /// `IORING_OP_WRITEV` SQE is capped at Linux `IOV_MAX = 1024`
 /// vectors, and the splice produces up to `2 × arcs + 1` iovecs.
 /// 256 arcs ⇒ ≤ 513 iovecs, well under the kernel cap. With
-/// A.4's chunked writev (see `uring_reactor::MAX_IOVECS_PER_WRITEV`
+/// chunked writev (see `uring_reactor::MAX_IOVECS_PER_WRITEV`
 /// and `UringConn::arcs_in_flight`), the reactor now submits one
 /// writev chunk per arm_conns iter and the per-conn arc accumulator
 /// can grow past IOV_MAX without truncation — the bottleneck moved
@@ -224,7 +224,7 @@ impl<C: Commands> Shard<C> {
         self.fold(conn_id, seq, Part::Reply(crate::message::SmallReply::from_vec(reply)));
 
         if bits != 0 {
-            // H1.A (v1.25): when nshards==1 (every `--threads 1` deployment),
+            // When nshards==1 (every `--threads 1` deployment),
             // the cross-shard fan-out path is dead code — skip the
             // Arc::new + 2 × to_vec allocation and deliver inline from the
             // borrowed argv slices. Saves ~0.18 µs/publish at subs=10 (per
@@ -333,7 +333,7 @@ impl<C: Commands> Shard<C> {
             .unwrap_or_default();
         // One alloc + one memcpy of `msg` (4 KB at the 50/4K endpoint)
         // into a refcounted boxed slice that all subscribers share.
-        // v1.29 Option A — `Arc<Box<[u8]>>` instead of `Arc<[u8]>` so
+        // `Arc<Box<[u8]>>` instead of `Arc<[u8]>` so
         // the writev iovec path keeps a stable byte pointer (see
         // `kevy_store::Value::ArcBulk` doc for rationale). One memcpy
         // per publish vs one per subscriber on the fallback path.

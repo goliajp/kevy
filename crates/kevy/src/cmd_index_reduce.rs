@@ -1,6 +1,6 @@
-//! v2.5 — IDX.* origin-side reduce: merge per-shard chunks into RESP
-//! (split from [`crate::cmd_index_query`] under the 500-LOC rule;
-//! v3.18 re-split into submodules — [`chunk`] readers/wire helpers,
+//! IDX.* origin-side reduce: merge per-shard chunks into RESP
+//! (split from [`crate::cmd_index_query`] under the 500-LOC rule
+//! into submodules — [`chunk`] readers/wire helpers,
 //! [`query`] scalar/admin reduces, [`agg`] TPUT top-K, [`ranked`]
 //! MATCH/KNN/HYBRID).
 
@@ -71,7 +71,7 @@ fn reduce_admin(
     chunks: &[Vec<u8>],
 ) -> Option<Vec<u8>> {
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
-    // v3.10: IDX.EXPLAIN — pair-array plan summary.
+    // IDX.EXPLAIN — pair-array plan summary.
     if verb.eq_ignore_ascii_case(b"IDX.EXPLAIN") {
         return Some(query::reduce_explain(catalogs, argv, chunks));
     }
@@ -88,7 +88,7 @@ fn reduce_admin(
 }
 
 /// Status triage: any BADARGS / NOINDEX / BUILDING wins the reply.
-/// v3.10: errors are SELF-EXPLAINING — they name the verb and the
+/// Errors are SELF-EXPLAINING — they name the verb and the
 /// index and point at the discovery surface, so an agent that hits
 /// one can recover without out-of-band knowledge.
 fn triage_status(argv: &[Vec<u8>], chunks: &[Vec<u8>]) -> Option<Vec<u8>> {

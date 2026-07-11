@@ -16,7 +16,7 @@
 //! `Closed { replica_id, sent_offset }` (peer EOF / cap exceeded /
 //! `TooOld`). The reactor reaps Closed conns once per iter; at reap
 //! time, conns whose `replica_id` is `Some` are recorded into
-//! [`Shard::slots`] (per T1.15) so a reconnect within
+//! [`Shard::slots`] so a reconnect within
 //! `reconnect_window_ms` is correlatable.
 
 use kevy_replicate::handshake::{HandshakeError, encode_ack, parse_replicate_from};
@@ -35,17 +35,17 @@ pub struct ReplicaConn {
     /// Input buffer — bytes pulled off the socket waiting to parse.
     pub input: Vec<u8>,
     /// Output buffer — bytes queued for write_all (handshake `+ACK`
-    /// in this batch; streamed frames in T1.14).
+    /// and streamed frames).
     pub output: Vec<u8>,
     /// Cursor into `output`; the next `Socket::write` writes from
     /// `output[write_off..]` and advances on partial sends.
     pub write_off: usize,
     /// Lifecycle state — drives the reactor's dispatch decisions.
     pub state: ReplicaState,
-    /// v3.14 D3 — when the last in-stream heartbeat was appended to
+    /// When the last in-stream heartbeat was appended to
     /// this conn's output (1s cadence, streaming conns only).
     pub last_ping: Option<std::time::Instant>,
-    /// Peer's `(IPv4, port)` captured at accept time (T1.28.5).
+    /// Peer's `(IPv4, port)` captured at accept time.
     /// `(0.0.0.0, 0)` for the fallback path (peer-vanished-pre-
     /// getpeername) and for synthetic conns built in unit tests.
     /// Used by `tick_replication_view` to enrich the per-shard view
@@ -57,7 +57,7 @@ pub struct ReplicaConn {
 /// transition diagram.
 ///
 /// `Debug` only — `SnapshotShipping` carries a `mpsc::Receiver`
-/// (T1.23.5 background-serializer handle) which has no
+/// (background-serializer handle) which has no
 /// `PartialEq`, so the previous `Eq`/`PartialEq` derives are gone.
 /// Tests compare via `matches!` instead.
 #[derive(Debug)]
@@ -79,12 +79,12 @@ pub enum ReplicaState {
         /// Replica id (kept for observability / future INFO reporting).
         replica_id: String,
         /// Next offset to send. After encoding a frame at offset K,
-        /// advances to K + 1. In v1.18.0 this also serves as the
-        /// assumed-acked offset (no replica→primary ACK channel yet;
-        /// see module docs + T1.15 wiring + Phase 1.5 kevy-elect).
+        /// advances to K + 1. Tracks bytes SENT, not acked — the
+        /// replica's real acked offset lives in [`crate::shard::Shard::slots`],
+        /// fed by `parse_replica_acks` (`REPLCONF ACK` lines).
         sent_offset: u64,
     },
-    /// Snapshot ship in progress (T1.23). At trigger time the
+    /// Snapshot ship in progress. At trigger time the
     /// reactor freezes a COW [`kevy_store::SnapshotView`] (O(n)
     /// shallow clone — ns/entry) and hands it to a worker thread
     /// that serializes via `kevy_persist::write_snapshot_to`. The
@@ -109,25 +109,25 @@ pub enum ReplicaState {
         serializing: Option<std::sync::mpsc::Receiver<Vec<u8>>>,
         /// Serialized RDB bytes once the worker delivers them.
         /// Empty + `serializing.is_some()` ⇒ still waiting on the
-        /// background serializer (T1.23.5).
+        /// background serializer.
         snapshot_buf: Vec<u8>,
         /// Cursor into `snapshot_buf` — bytes [0..snapshot_off) have
         /// been chunked into `output` already.
         snapshot_off: usize,
     },
     /// Terminal: handshake failed, output cap exceeded, peer EOF, or
-    /// the source can't serve `sent_offset` (TooOld → would need a
-    /// snapshot ship, which arrives at T1.22+). Reactor reaps on
+    /// the source can't serve `sent_offset` (TooOld → needs a
+    /// snapshot ship). Reactor reaps on
     /// next dispatch — at reap time, any conn that had reached
     /// AckSent/Streaming gets recorded in [`crate::shard::Shard::slots`]
-    /// (per T1.15) so a reconnect within `reconnect_window_ms` can be
+    /// so a reconnect within `reconnect_window_ms` can be
     /// observed/correlated. `replica_id = None` means the conn closed
     /// before handshake completed (nothing to record).
     Closed {
         /// Handshake's replica id, if the conn ever reached AckSent.
         replica_id: Option<String>,
-        /// Highest sent offset (== assumed-acked in v1.18 — no real
-        /// replica ACK channel yet, see Phase 1.5 kevy-elect). `0`
+        /// Highest sent offset at the moment of close (sent, not
+        /// acked — the acked truth lives in the slot table). `0`
         /// when the conn closed before reaching Streaming.
         sent_offset: u64,
     },
@@ -146,7 +146,7 @@ impl ReplicaConn {
 
     /// Wrap a freshly-accepted socket together with its peer
     /// `(IPv4, port)` (captured by `Socket::peer_addr` at accept
-    /// time; T1.28.5). Used by the replication listener so
+    /// time). Used by the replication listener so
     /// `tick_replication_view` can ship the per-replica address
     /// list to the command layer.
     pub fn with_peer(sock: Socket, peer: (std::net::Ipv4Addr, u16)) -> Self {
@@ -167,7 +167,7 @@ impl ReplicaConn {
     /// replica id + sent offset the conn had at the moment of close.
     /// Idempotent. The reactor's reap step reads these fields to
     /// record the slot in [`crate::shard::Shard::slots`] before
-    /// dropping the conn (T1.15).
+    /// dropping the conn.
     pub fn close(&mut self) {
         let (id, off) = match &self.state {
             ReplicaState::HandshakePending => (None, 0),

@@ -15,7 +15,7 @@ use crate::metric::KevyMetric;
 use crate::store::{Inner, Store, lock_write};
 
 impl Store {
-    /// Durability barrier (v2.1): flush + `fdatasync` every shard's
+    /// Durability barrier: flush + `fdatasync` every shard's
     /// AOF now, regardless of the configured `appendfsync` policy. On
     /// `Ok(())`, every write acknowledged before this call is on
     /// stable storage. The `EverySec` serving-store idiom:

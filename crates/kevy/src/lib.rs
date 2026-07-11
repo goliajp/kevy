@@ -108,7 +108,7 @@ pub(crate) fn map_eviction_policy(p: kevy_config::EvictionPolicy) -> kevy_store:
     }
 }
 
-/// **v1.39** — signal flag flipped by the SIGTERM / SIGINT handler.
+/// Signal flag flipped by the SIGTERM / SIGINT handler.
 /// Async-signal-safe; AtomicBool::store is signal-safe per the C
 /// memory model.
 #[cfg(unix)]
@@ -121,7 +121,7 @@ static SIGNAL_RECEIVED: AtomicBool = AtomicBool::new(false);
 /// same process doesn't exit on arrival.
 static STOP_FLAGS: std::sync::Mutex<Vec<std::sync::Weak<AtomicBool>>> = std::sync::Mutex::new(Vec::new());
 
-/// **v1.39** — installed on first call to [`serve`]. Catches SIGTERM
+/// Installed on first call to [`serve`]. Catches SIGTERM
 /// (graceful shutdown) and SIGINT (Ctrl-C). Both flip the per-run
 /// `stop` flag via a polling bridge thread.
 #[cfg(unix)]
@@ -131,7 +131,7 @@ fn install_signal_handlers(stop: Arc<AtomicBool>) {
     }
     kevy_sys::install_signal_handler(kevy_sys::SIGTERM, handler);
     kevy_sys::install_signal_handler(kevy_sys::SIGINT, handler);
-    // v1.58 (closes v1.38.x finding): SIGXFSZ is raised when a write
+    // SIGXFSZ is raised when a write
     // would exceed RLIMIT_FSIZE. Default action is `Core` (kernel
     // dump). Installing a no-op handler absorbs the signal — the
     // failing write returns EFBIG to the AOF writer (logged and
@@ -184,17 +184,17 @@ pub fn serve(cfg: Arc<kevy_config::Config>) -> ! {
     // leaves the subsystem dormant.
     state.election.maybe_start(&cfg, &state.replication);
     let stop = Arc::new(AtomicBool::new(false));
-    // v1.39 — install SIGTERM + SIGINT handlers that flip `stop`,
+    // Install SIGTERM + SIGINT handlers that flip `stop`,
     // triggering the runtime's existing drain path (fsync AOF, close
     // listeners, exit 0). std-only: raw `signal(2)` + a poller thread
     // that bridges the signal-safe static into the per-run `Arc`.
     install_signal_handlers(Arc::clone(&stop));
-    // v1.41 — Prometheus /metrics endpoint. No-op when port = 0.
+    // Prometheus /metrics endpoint. No-op when port = 0.
     metrics_http::spawn_if_enabled(&state);
     // Replica runners (if any) live in `state.replication` — they
     // are started by `replication::apply` for the startup
-    // `role = "replica"` path and by `REPLICAOF` at runtime
-    // (T1.29.5). On exit the runners are dropped with the state; the
+    // `role = "replica"` path and by `REPLICAOF` at runtime.
+    // On exit the runners are dropped with the state; the
     // `Drop` impl signals stop + joins each runner thread, so the
     // process exits cleanly with no orphan TCP fds.
     let run_result = runtime.run(stop);
@@ -263,7 +263,7 @@ fn build_runtime(cfg: &kevy_config::Config, commands: KevyCommands) -> Runtime<K
     if cfg.feed.enabled {
         runtime = runtime.with_feed(true, cfg.feed.feed_buffer_size);
     }
-    // v1.25 UDS: opt-in via `KEVY_UNIX_SOCKET=/path/to/sock` env var. Lets
+    // UDS: opt-in via `KEVY_UNIX_SOCKET=/path/to/sock` env var. Lets
     // local clients (and benches) skip TCP loopback overhead — fair
     // comparison against valkey/redis's `unixsocket` config.
     if let Ok(path) = std::env::var("KEVY_UNIX_SOCKET")

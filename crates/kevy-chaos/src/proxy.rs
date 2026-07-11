@@ -1,5 +1,5 @@
 //! `ChaosProxy` — a pure-std TCP forwarder for injecting network partitions
-//! between kevy nodes (v3.14 D6).
+//! between kevy nodes.
 //!
 //! Sits between two nodes (`listen A' -> connect A`) so a test can cut,
 //! half-open, or delay the link without touching either process:

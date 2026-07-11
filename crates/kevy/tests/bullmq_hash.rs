@@ -1,4 +1,4 @@
-//! v1.27.3: HMSET dispatch. Deprecated `HMSET` alias of HSET that
+//! HMSET dispatch. Deprecated `HMSET` alias of HSET that
 //! still ships in BullMQ scripts — verify it stores the pairs and
 //! replies `+OK\r\n` (vs HSET's integer added-count).
 
@@ -71,7 +71,7 @@ fn hmset_on_wrong_type_errors() {
     );
 }
 
-// ---- v2.4: hash field TTLs --------------------------------------------------
+// ---- hash field TTLs --------------------------------------------------------
 
 #[test]
 fn hexpire_httl_hpersist_dispatch() {

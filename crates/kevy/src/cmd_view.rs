@@ -1,4 +1,4 @@
-//! v2.6 — VIEW.* command surface. CREATE/DROP are Local catalog
+//! VIEW.* command surface. CREATE/DROP are Local catalog
 //! mutations (sidecar-persisted, like IDX.*); QUERY/LIST/VERIFY/
 //! REBUILD/EXPLAIN ride the extension fan-out.
 //!

@@ -155,7 +155,7 @@ fn renamenx_succeeds_when_dst_absent() {
     assert_eq!(s.get(b"dst").unwrap(), Some(b"val".to_vec()));
 }
 
-// ---- v2.2: zset algebra facades ------------------------------------------
+// ---- zset algebra facades ------------------------------------------------
 
 #[test]
 fn zset_algebra_store_forms_and_reopen() {
@@ -216,7 +216,7 @@ fn zset_algebra_store_forms_and_reopen() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- v2.3: CDC feed (changes_since / changes_tail) ------------------------
+// ---- CDC feed (changes_since / changes_tail) ------------------------------
 
 #[test]
 fn feed_consume_loop_and_prefix() {
@@ -316,7 +316,7 @@ fn info_prefix_counts() {
     assert_eq!(s.info_prefix(b"none:").keys, 0);
 }
 
-// ---- v2.4: zpopmin_below ---------------------------------------------------
+// ---- zpopmin_below ---------------------------------------------------------
 
 #[test]
 fn zpopmin_below_pops_due_jobs_and_replays() {
@@ -347,7 +347,7 @@ fn zpopmin_below_pops_due_jobs_and_replays() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- v2.4: blocking pops ---------------------------------------------------
+// ---- blocking pops ---------------------------------------------------------
 
 #[test]
 fn blpop_wakes_on_push_and_times_out() {
@@ -392,7 +392,7 @@ fn bzpopmin_and_brpop_block_variants() {
     assert_eq!(got, Some((b"br".to_vec(), b"b".to_vec()))); // tail end
 }
 
-// ---- v2.4: public snapshot view --------------------------------------------
+// ---- public snapshot view --------------------------------------------------
 
 #[test]
 fn snapshot_view_is_point_in_time_and_prefix_scoped() {
@@ -429,7 +429,7 @@ fn snapshot_view_is_point_in_time_and_prefix_scoped() {
     assert_eq!(string_count, 10);
 }
 
-// ---- v2.4: hash field TTLs (embedded matrix) --------------------------------
+// ---- hash field TTLs (embedded matrix) --------------------------------------
 
 #[test]
 fn hash_field_ttl_full_matrix_with_reopen() {
@@ -483,7 +483,7 @@ fn hash_field_ttl_full_matrix_with_reopen() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- v2.5: embedded secondary indexes ---------------------------------------
+// ---- embedded secondary indexes ----------------------------------------------
 
 #[test]
 fn idx_create_query_maintain_reopen() {
@@ -562,7 +562,7 @@ fn idx_create_query_maintain_reopen() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ---- v2.6: embedded views ---------------------------------------------------
+// ---- embedded views ----------------------------------------------------------
 
 #[test]
 fn view_create_query_maintain_reopen() {

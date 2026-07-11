@@ -1,4 +1,4 @@
-//! v2.5 — IDX.* command surface (RFC LOCKED).
+//! IDX.* command surface.
 //!
 //! Catalog mutations (`IDX.CREATE` / `IDX.DROP`) are Local dispatch
 //! handlers (the catalog is process-global; any shard serves them and

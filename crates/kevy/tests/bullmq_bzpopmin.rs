@@ -1,5 +1,5 @@
 //! `BZPOPMIN key [key ...] timeout` — blocking ZPOPMIN, the last
-//! wire-level blocker for BullMQ worker dequeue. v1.27.3-dev.
+//! wire-level blocker for BullMQ worker dequeue.
 //!
 //! Coverage:
 //! - eager pop with the lowest-scored member (single-key)

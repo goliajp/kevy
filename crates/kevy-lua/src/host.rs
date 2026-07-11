@@ -37,10 +37,10 @@ pub(crate) fn bind_keys_argv(vm: &mut Vm, keys: &[&[u8]], args: &[&[u8]]) {
 /// re-installing is a noop because Lua's `redis = {...}` just
 /// rebinds the global.
 pub(crate) fn install_redis_table(vm: &mut Vm) {
-    // luna v1.1 B3: `vm.table_of` chains a fixed-size set of
+    // luna-core's `vm.table_of` chains a fixed-size set of
     // (key, value) pairs into a freshly-allocated table. K=&str,
-    // V=Value both impl IntoValue (luna v1.1 B4).
-    // P3b: redis.call / redis.pcall now dispatch through the host
+    // V=Value both impl IntoValue.
+    // redis.call / redis.pcall dispatch through the host
     // callback installed in the per-Vm userdata (see crate::dispatch).
     let call_fn = vm.native(crate::dispatch::redis_call);
     let pcall_fn = vm.native(crate::dispatch::redis_pcall);
@@ -71,7 +71,7 @@ fn build_byte_array(vm: &mut Vm, items: &[&[u8]]) -> luna_core::runtime::heap::G
     }
     // table_of needs a const-size array but we have a runtime length —
     // fall back to new_table + with(). Pre-sized via with_capacity on
-    // the builder (luna v1.1 B3).
+    // the builder.
     let mut b = vm.new_table();
     for (k, v) in entries {
         b = b.with(k, v);

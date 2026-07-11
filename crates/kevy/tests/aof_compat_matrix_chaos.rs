@@ -1,12 +1,12 @@
-//! v1.47 — AOF compat matrix chaos test (Phase C step 5).
+//! AOF compat matrix chaos test.
 //!
 //! Production rolling upgrades require that an AOF written by an older
 //! kevy version replays cleanly under a newer one. kevy's AOF format
 //! is canonical RESP — every command serialized as a RESP array — so
 //! the compat surface IS the set of commands kevy ships. This test
 //! pre-writes a hand-crafted RESP AOF (no kevy version dependency)
-//! containing a mix of v1.0-vintage commands + a torn final command,
-//! then spawns v1.46 to replay it.
+//! containing a mix of original-core commands + a torn final command,
+//! then spawns the current kevy binary to replay it.
 //!
 //! Strict asserts:
 //! - All 100 complete SET-records replay (string + INCR + EXPIRE +
@@ -50,7 +50,7 @@ fn aof_compat_matrix_replays_v1_vintage_aof() {
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).expect("mkdir");
 
-    // PHASE 1: hand-write a RESP AOF covering the v1.0-vintage command
+    // PHASE 1: hand-write a RESP AOF covering the original-core command
     // matrix. With `--threads 1` kevy uses shard 0 only, so all keys
     // land in `aof-0.aof`.
     let mut aof = Vec::with_capacity(8 * 1024);

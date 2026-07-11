@@ -1,15 +1,18 @@
-//! `CLIENT *` subcommands. v1.0 ships canonical stub replies that
+//! `CLIENT *` subcommands: canonical stub replies that
 //! every Redis client library accepts at handshake / housekeeping
 //! time, without needing per-connection state plumbed through the
 //! reactor → dispatch boundary.
 //!
-//! Real per-connection tracking (CLIENT LIST showing N connections,
-//! CLIENT KILL actually closing them, CLIENT SETNAME persisting the
-//! name on the conn) needs a `&mut Conn` argument added to the
-//! `kevy_rt::Commands::dispatch_into` trait signature — a bigger
-//! change deferred to v1.x. For dev/docker-compose/embedded/cache
-//! scenarios these stubs cover the 95% case where a client calls
-//! CLIENT once at handshake and never inspects.
+//! `CLIENT SETNAME` / `CLIENT GETNAME` DO have real per-connection
+//! state: the reactor intercepts them before dispatch (see
+//! `kevy_rt`'s client intercept, which owns `&mut Conn`); the
+//! handlers here are the conn-less fallback. Fuller tracking
+//! (CLIENT LIST showing N connections, CLIENT KILL actually closing
+//! them) would need a `&mut Conn` argument added to the
+//! `kevy_rt::Commands::dispatch_into` trait signature. For
+//! dev/docker-compose/embedded/cache scenarios these stubs cover the
+//! 95% case where a client calls CLIENT once at handshake and never
+//! inspects.
 
 use kevy_resp::{
     ArgvView, RespVersion, encode_bulk, encode_error, encode_integer, encode_simple_string,
@@ -31,7 +34,7 @@ pub(crate) fn cmd_client<A: ArgvView + ?Sized>(
     match sub.as_slice() {
         // ID: 1 unique-but-stable for the lifetime of the process. Clients
         // that need uniqueness across reconnects don't get it; we don't
-        // track per-conn ids in v1.0.
+        // track per-conn ids.
         b"ID" => encode_integer(out, 1),
         // GETNAME: empty bulk (no name set — we don't track per-conn names).
         b"GETNAME" => encode_bulk(out, &[]),
@@ -48,8 +51,8 @@ pub(crate) fn cmd_client<A: ArgvView + ?Sized>(
         // LIST: single canonical entry representing this connection.
         // Field set documented at https://redis.io/commands/client-list/.
         // Most fields are zero / placeholder; clients that PARSE this
-        // field-by-field (e.g. for monitoring) will need real per-conn
-        // state in v1.x.
+        // field-by-field (e.g. for monitoring) would need real per-conn
+        // state plumbed through dispatch.
         b"LIST" => {
             let body = "id=1 addr=127.0.0.1:0 laddr=127.0.0.1:0 fd=0 name= \
                         age=0 idle=0 flags=N db=0 sub=0 psub=0 ssub=0 \
@@ -68,7 +71,8 @@ pub(crate) fn cmd_client<A: ArgvView + ?Sized>(
                         multi=-1 cmd=client|info user=default resp=2";
             emit_client_text(out, body.as_bytes(), proto);
         }
-        // NO-EVICT: accept; v1.0 has no eviction so this is trivially honored.
+        // NO-EVICT: accept; kevy has no client eviction
+        // (maxmemory-clients), so this is trivially honored.
         b"NO-EVICT" => encode_simple_string(out, "OK"),
         // PAUSE / UNPAUSE / REPLY / TRACKING / TRACKINGINFO etc. —
         // tolerant OK so clients that probe defensively don't error out.

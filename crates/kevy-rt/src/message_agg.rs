@@ -12,14 +12,14 @@ use std::collections::HashMap;
 pub(crate) enum Agg {
     First(Option<SmallReply>),
     SumInt(i64),
-    /// v3.16 D1 `WAIT` accumulator: MIN over the per-shard acked-replica
+    /// `WAIT` accumulator: MIN over the per-shard acked-replica
     /// counts (starts at `i64::MAX`; every shard folds one `Part::Int`).
     MinInt(i64),
-    /// v3.16 D2 `REPL.WAIT` accumulator: every shard folds `Part::Int`
+    /// `REPL.WAIT` accumulator: every shard folds `Part::Int`
     /// (1 = applied barrier met, 0 = deadline passed). All 1 → `+OK`;
     /// any 0 → the pre-built `miss` reply bytes.
     ReplBarrier { ok: bool, miss: Vec<u8> },
-    /// v3.16 D2 `REPL.TOKEN` accumulator: per-shard `(generation,
+    /// `REPL.TOKEN` accumulator: per-shard `(generation,
     /// next_offset)` pairs dropped in by shard id, materialized as one
     /// flat `[gen0, off0, gen1, off1, …]` integer array.
     ReplTokens { slots: Vec<Option<(u64, u64)>> },
@@ -33,12 +33,12 @@ pub(crate) enum Agg {
         keys: Vec<Vec<u8>>,
         got: HashMap<Vec<u8>, Gathered>,
     },
-    /// v2.3 PREFIX.STATS accumulator (summed across shards).
+    /// PREFIX.STATS accumulator (summed across shards).
     PrefixStats { keys: u64, expires: u64 },
-    /// v2.5 extension fan-out accumulator; reduced by
+    /// Extension fan-out accumulator; reduced by
     /// `Commands::extension_reduce` when the last chunk lands.
     ExtensionGather { argv: Vec<Vec<u8>>, chunks: Vec<Vec<u8>> },
-    /// v2.2 zset-algebra `*STORE` orchestrator, step 1: gather scored
+    /// zset-algebra `*STORE` orchestrator, step 1: gather scored
     /// (or set) members per source key; on completion the origin
     /// computes the combination and ships `Op::ZStoreResult` /
     /// `Op::SetStoreResult` to `dst`'s shard (step 2 folds through a

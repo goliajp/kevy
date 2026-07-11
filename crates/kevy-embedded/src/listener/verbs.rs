@@ -1,4 +1,4 @@
-//! The read-only whitelist (RFC D3) — each verb maps onto the
+//! The read-only whitelist — each verb maps onto the
 //! existing embedded Store API (which does its own shard locking and
 //! cross-shard merging).
 
@@ -33,7 +33,7 @@ fn parse_i64(b: &[u8]) -> Option<i64> {
     std::str::from_utf8(b).ok()?.trim().parse().ok()
 }
 
-/// Dispatch one whitelisted request (RFC D3 set).
+/// Dispatch one whitelisted request.
 // fn-length exemption: pure data-driven verb match table — one flat
 // arm per whitelisted verb; multi-step verbs live in cmd_* helpers.
 // LOC-WAIVER: data-driven verb dispatch table — one reply-emitter arm per verb.

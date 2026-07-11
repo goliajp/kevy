@@ -1,4 +1,4 @@
-//! T4.23 benchmark — async (tokio) vs blocking on the same workload.
+//! Benchmark — async (tokio) vs blocking on the same workload.
 //!
 //! `#[ignore]` so it doesn't run in `cargo test`. Invoke explicitly:
 //!
@@ -13,7 +13,7 @@
 //! cargo run -p kevy --bin kevy -- --port 6004
 //! ```
 //!
-//! Pass-criterion from RFC F5 / plan T4.23:
+//! Pass-criterion:
 //! - single-conn async ≥ 80 % blocking throughput
 //! - high-concurrency async ≥ blocking throughput
 //!

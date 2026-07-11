@@ -1,5 +1,5 @@
 //! Declarative secondary indexes: `IDX.CREATE` / `IDX.QUERY` /
-//! `IDX.DROP` / `IDX.LIST` (v1.14.0).
+//! `IDX.DROP` / `IDX.LIST`.
 //!
 //! **Remote-only.** The embedded backend answers `Unsupported`: the
 //! wire face coerces query bounds through the index's declared value

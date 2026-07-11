@@ -1,4 +1,4 @@
-//! v3.11 — generate `llms.txt` and `docs/verb-reference.md` from
+//! Generate `llms.txt` and `docs/verb-reference.md` from
 //! [`kevy::verb_meta::VERB_META`], the same table COMMAND DOCS and
 //! the MCP schema answer from. One source of truth, three faces.
 //!

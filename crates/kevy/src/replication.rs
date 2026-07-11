@@ -26,7 +26,7 @@ pub(crate) fn replication_port_base(cfg: &Config) -> u16 {
 ///
 /// **Always** wires the per-shard replica inboxes (allocated by
 /// `state.replication`) — even when `role = standalone` or `primary`
-/// — so that a runtime-issued `REPLICAOF host port` (T1.29.5) can
+/// — so that a runtime-issued `REPLICAOF host port` can
 /// spawn runners that push into the inboxes without changing the
 /// already-running shards. Standalone shards do one extra
 /// `Option::is_some` check per tick (empty channel, immediate
@@ -62,7 +62,7 @@ pub(crate) fn apply<C: Commands>(
                 u64::from(cfg.replication.replica_max_staleness_ms),
             );
             spawn_initial_runners_from_config(repl, cfg);
-            // v3.15: topology symmetry — a replica keeps a full
+            // Topology symmetry — a replica keeps a full
             // replication SOURCE + listener too, so promotion
             // (FAILOVER / election win) can serve replicas at once.
             // Apply-path frames don't re-enter the source
@@ -81,7 +81,7 @@ pub(crate) fn apply<C: Commands>(
 /// "replica"` startup path. Misconfig (unset / unparseable /
 /// unresolvable upstream) logs a `kevy:` warning and leaves the
 /// runtime in standalone-effective mode — admins can fix the config
-/// + REPLICAOF without restart once T1.29.5 ships.
+/// or issue `REPLICAOF host port` without a restart.
 fn spawn_initial_runners_from_config(repl: &ReplicationState, cfg: &Config) {
     let Some(upstream) = cfg.replication.upstream.as_deref() else {
         eprintln!(
@@ -109,7 +109,7 @@ fn spawn_initial_runners_from_config(repl: &ReplicationState, cfg: &Config) {
     }
 }
 
-/// Public retarget entry point used by `REPLICAOF host port` (T1.29.5).
+/// Public retarget entry point used by `REPLICAOF host port`.
 /// Parses + resolves + starts the new fleet (stopping any prior).
 /// Returns `Err(static reason)` on parse / resolve failure so the
 /// command can map it to a `-ERR` reply.
@@ -122,9 +122,9 @@ pub(crate) fn retarget_upstream(
     repl.start_runners((host, port_base))
 }
 
-/// Public demote entry point used by `REPLICAOF NO ONE` (T1.30).
-/// Stops every active runner and clears the upstream slot. v3.16 D2:
-/// when the node really was a replica this is a PROMOTION — the
+/// Public demote entry point used by `REPLICAOF NO ONE`.
+/// Stops every active runner and clears the upstream slot.
+/// When the node really was a replica this is a PROMOTION — the
 /// promotion counter bumps so every shard fences its offset space
 /// (feed generation bump; stale REPL.TOKENs then gen-mismatch).
 pub(crate) fn demote_to_standalone(repl: &ReplicationState) {
@@ -143,7 +143,7 @@ pub(crate) fn parse_upstream(s: &str) -> Option<(String, u16)> {
 }
 
 /// Resolve a host string to one `IpAddr`. Accepts dotted IPv4
-/// literals (the v1.18 minimum); DNS / IPv6 are best-effort via the
+/// literals (the guaranteed minimum); DNS / IPv6 are best-effort via the
 /// std `to_socket_addrs` path. The rarely-used IPv6 bracketed form
 /// arrives stripped of brackets here (caller strips `[…]`).
 pub(crate) fn resolve_host(host: &str) -> Option<IpAddr> {

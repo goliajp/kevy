@@ -1,5 +1,5 @@
 //! End-to-end EVAL / EVALSHA / SCRIPT through the kevy command
-//! dispatch path. Verifies v1.27 P7b — `cmd_lua` is wired into
+//! dispatch path. Verifies `cmd_lua` is wired into
 //! `dispatch.rs` and the `LuaHost` correctly routes redis.call
 //! through `kevy::dispatch_into` against the real `Store`.
 
@@ -27,12 +27,12 @@ fn argv(parts: &[&[u8]]) -> Argv {
     a
 }
 
-/// v1.27.1 moved the SCRIPT cache from per-Bridge to a process-
-/// global Mutex<HashMap>. That makes a `SCRIPT FLUSH` from one test
+/// The SCRIPT cache is a process-global Mutex<HashMap> (not
+/// per-Bridge). That makes a `SCRIPT FLUSH` from one test
 /// wipe scripts loaded by every other test in this binary.
 /// Serialize the SCRIPT-cache-touching tests so they don't race —
 /// silent on light schedulers (local Mac dev) but reliably observed
-/// on the heavily-parallel lx64 CI runner.
+/// on a heavily-parallel CI runner.
 fn script_cache_gate() -> std::sync::MutexGuard<'static, ()> {
     static G: OnceLock<Mutex<()>> = OnceLock::new();
     G.get_or_init(|| Mutex::new(()))

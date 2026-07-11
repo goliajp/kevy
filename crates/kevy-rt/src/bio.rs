@@ -1,10 +1,10 @@
 //! Background-I/O thread — the orthodox valkey `bio.c` model in pure Rust.
 //!
-//! **Why this exists** (v1.25 A.3, B2 architecture per
+//! **Why this exists** (architecture decision recorded in
 //! `bench/V125-DECISIONS-PENDING.md`):
 //!
-//! Axis I 10 KB SET tail max sat at 130-160 ms in v1.25, isolated by
-//! Phase A decomposition (`v125-deco-axis-i-c50-10kb.md` S09/S16) to the
+//! The 10 KB SET tail max sat at 130-160 ms, isolated by
+//! decomposition (`v125-deco-axis-i-c50-10kb.md` S09/S16) to the
 //! synchronous `Drop` of overwritten `Value::ArcBulk(Arc<[u8]>)` — when the
 //! Arc refcount hits zero, `Box::<[u8]>::drop` of a 10 KB jemalloc large-class
 //! slot can stall on `madvise`/`munmap` for tens to hundreds of microseconds
@@ -12,9 +12,9 @@
 //! identically via `lazyfree.c` — the dict overwrite enqueues the old
 //! `robj` to a bio thread instead of `free()`-ing inline.
 //!
-//! G6 A2 (v1.25 Phase B, reverted in `bench/V125-AXIS-I-LATENCY.md`) tried
+//! An earlier attempt (reverted; see `bench/V125-AXIS-I-LATENCY.md`) tried
 //! deferring drops to a per-shard `pending_drops: Vec<Value>` drained after
-//! `flush_conn`. R3 ★ finding: that's WORSE (p999 +144 µs / 1 spike 64 ms),
+//! `flush_conn`. Measured finding: that's WORSE (p999 +144 µs / 1 spike 64 ms),
 //! because single-threaded deferred bunching converts the steady-state inline
 //! drop into a periodic batched-drop stall *bigger* than the inlines it
 //! replaced. The lesson is the same one valkey's lazyfree authors learned:
@@ -49,7 +49,7 @@
 //!   kernel before the process state is torn down).
 //!
 //! **Channel shape extension**: today the channel carries
-//! `Vec<Box<kevy_store::Value>>` (v1.25 A.2 batch model — one mpsc
+//! `Vec<Box<kevy_store::Value>>` (batch-send model — one mpsc
 //! send per shard-flush, amortising the per-send atomic + cross-
 //! thread cacheline cost across N drops). The follow-up uses are
 //! wired by promoting this to a `BioWork` enum here; the per-shard
@@ -80,7 +80,7 @@ use std::thread;
 ///
 /// **Channel shape**: the sender carries `Vec<Value>` — a batch
 /// of heavy values produced by one shard since its last flush
-/// (v1.25 A.2 batch-send model). The reactor calls
+/// (batch-send model). The reactor calls
 /// `Store::flush_pending_drops` at the end of every iter to push the
 /// batch; the bio thread iterates the Vec and drops each `Box<Value>`.
 /// Future extensions — `BGSAVE`/`BGREWRITEAOF` migration off

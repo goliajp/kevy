@@ -1,7 +1,7 @@
-//! v2.5 — IDX.* read surface: the extension fan-out halves
+//! IDX.* read surface: the extension fan-out halves
 //! (per-shard op + origin reduce) and the query grammar. Split from
-//! [`crate::cmd_index`] under the 500-LOC house rule; v3.18 re-split
-//! into submodules ([`args`] grammar, [`ops`] ranked/agg/compose ops,
+//! [`crate::cmd_index`] under the 500-LOC house rule into submodules
+//! ([`args`] grammar, [`ops`] ranked/agg/compose ops,
 //! [`query`] scalar query + admin, [`wire`] chunk/cursor encoding).
 
 mod args;
@@ -40,29 +40,29 @@ pub(crate) fn extension_op(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"COMPOSE")) {
         return ops::op_compose(ctx, store, argv);
     }
-    // v3.10: IDX.EXPLAIN <name> <shape…> — the exact IDX.QUERY parse,
+    // IDX.EXPLAIN <name> <shape…> — the exact IDX.QUERY parse,
     // ZERO execution.
     if verb.eq_ignore_ascii_case(b"IDX.EXPLAIN") {
         return query::op_explain(ctx, store, argv);
     }
-    // v2.7: IDX.QUERY <name> MATCH <text> [LIMIT n] [FIELDS f…]
+    // IDX.QUERY <name> MATCH <text> [LIMIT n] [FIELDS f…]
     if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"MATCH")) {
         return ops::op_match(ctx, store, argv);
     }
-    // v2.8: IDX.QUERY <name> KNN <vec> [LIMIT k] [FIELDS f…]
+    // IDX.QUERY <name> KNN <vec> [LIMIT k] [FIELDS f…]
     if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"KNN")) {
         return ops::op_knn(ctx, store, argv);
     }
-    // v3.1: IDX.QUERY <name> GROUP <g> | GROUPS [BY m] [LIMIT n]
+    // IDX.QUERY <name> GROUP <g> | GROUPS [BY m] [LIMIT n]
     if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"GROUP") || a.eq_ignore_ascii_case(b"GROUPS")) {
         return ops::op_agg(ctx, store, argv);
     }
-    // v3.1 phase 2 (internal): AGG.FETCH <name> <g…> — exact partials
+    // Phase 2 of GROUPS (internal): AGG.FETCH <name> <g…> — exact partials
     // for the candidate groups that survived phase-1 ranking.
     if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"AGG.FETCH")) {
         return ops::op_agg_fetch(ctx, store, argv);
     }
-    // v2.8: IDX.REBUILD <name> (ANN tombstone compaction)
+    // IDX.REBUILD <name> (ANN tombstone compaction)
     if argv
         .first()
         .is_some_and(|v| v.eq_ignore_ascii_case(b"IDX.REBUILD"))

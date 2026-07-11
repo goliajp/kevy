@@ -1,4 +1,4 @@
-//! **v2.10** — prefix bulk ops + diagnostics (RFC D4/D5):
+//! Prefix bulk ops + diagnostics:
 //! `copy-prefix` / `delete-prefix` (token-bucket rate limit,
 //! `--dry-run`), `digest`, `diff`, `inspect`.
 

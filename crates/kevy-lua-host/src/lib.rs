@@ -3,7 +3,7 @@
 //!
 //! `kevy-lua`'s dispatch closure type is
 //! `Fn(&[&[u8]], bool) -> Vec<u8> + 'static`. The `'static` bound is
-//! mandatory — luna stores the closure as Vm userdata (`Any + 'static`).
+//! mandatory — luna-core stores the closure as Vm userdata (`Any + 'static`).
 //! That makes it impossible to capture `&mut T` directly. This crate
 //! offers a tiny `LuaHost<T>` wrapper that re-introduces the borrow via
 //! a scoped thread-local pointer set inside `LuaHost::eval` and cleared
@@ -30,8 +30,8 @@
 //!   gives correct isolation without any synchronisation overhead.
 //!
 //! The unsafe footprint is **one** `unsafe { &mut *p }` inside
-//! `with_current` plus the `Cell::set(ptr)` ergonomics. Audited per
-//! every kevy v1.27+ commit touching this file.
+//! `with_current` plus the `Cell::set(ptr)` ergonomics. Audit it on
+//! every commit touching this file.
 
 #![doc(html_no_source)]
 
@@ -82,7 +82,7 @@ thread_local! {
 
 /// Run `f` against this thread's lazily-built [`LuaHost<T>`].
 ///
-/// A `LuaHost` is `!Send` — luna's `Vm` holds `Rc`s and raw GC
+/// A `LuaHost` is `!Send` — luna-core's `Vm` holds `Rc`s and raw GC
 /// pointers — so a thread-per-core server cannot park it inside its
 /// `Send` per-shard command value. This slot keeps one host per shard
 /// *thread* instead: identical isolation (thread == shard), owned by
@@ -394,7 +394,7 @@ mod p7e_tests {
             &[],
             &[],
         );
-        // Budget exceeded → luna surfaces an error → bridge wraps in
+        // Budget exceeded → the interpreter surfaces an error → bridge wraps in
         // -ERR. Don't be picky about the exact wording — just confirm
         // it's an error, not an integer result.
         assert!(

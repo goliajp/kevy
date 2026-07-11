@@ -1,12 +1,12 @@
 //! `EVAL` / `EVALSHA` / `EVAL_RO` / `EVALSHA_RO` / `SCRIPT` command
-//! handlers. v1.27 P7b — wires kevy-lua-host's `LuaHost<Store>` into
+//! handlers — wires kevy-lua-host's `LuaHost<Store>` into
 //! the kevy dispatch table.
 //!
 //! ## Per-shard `LuaHost`
 //!
 //! `LuaHost<Store>` is created lazily on the first EVAL hitting a
 //! given shard and reused thereafter. It cannot live in the shard
-//! zone (`ShardCtx`): a `LuaHost` is `!Send` (luna's `Vm` holds `Rc`s
+//! zone (`ShardCtx`): a `LuaHost` is `!Send` (luna-core's `Vm` holds `Rc`s
 //! and raw GC pointers) while `kevy_rt::Commands` requires `Send`, so
 //! the host parks in [`kevy_lua_host::with_thread_host`]'s per-thread
 //! slot — thread == shard under thread-per-core, same isolation. The
@@ -18,10 +18,9 @@
 //! Nested EVAL (a Lua script calls `redis.call('EVAL', ...)` which
 //! routes back through `dispatch_lua`) finds the thread slot already
 //! borrowed and surfaces as
-//! `-ERR EVAL inside EVAL is not supported in v1.27`. Real Redis
+//! an `-ERR EVAL inside EVAL is not supported…` error. Real Redis
 //! doesn't permit nested EVAL either (the inner call gets a similar
-//! error). Lifting this is on the v1.28+ backlog if a real workload
-//! ever needs it.
+//! error).
 
 use crate::cmd::wrong_args;
 use crate::state::{Ctx, RuntimeState, ShardCtx};
@@ -69,9 +68,9 @@ fn lua_redis_call(
     if let Some(err) = read_only_violation(argv, read_only) {
         return err;
     }
-    // v1.27.4: cross-shard inner-call enforcement. Under
-    // `--threads > 1`, EVAL runs on KEYS[1]'s shard (v1.27.1
-    // routing fix); the inner `redis.call` hits this same
+    // Cross-shard inner-call enforcement. Under
+    // `--threads > 1`, EVAL routes to KEYS[1]'s shard;
+    // the inner `redis.call` hits this same
     // shard's Store. Calling on a key that lives on a different
     // shard silently mis-routes — matches Redis Cluster's
     // intended-disallowed behaviour. Return CROSSSLOT loudly
@@ -107,7 +106,7 @@ fn lua_redis_call(
     out
 }
 
-/// v1.27.3: bridge inner-EVAL writes to the runtime's BLOCK
+/// Bridge inner-EVAL writes to the runtime's BLOCK
 /// wake hook. `dispatch_into` hits the Store directly and
 /// bypasses `post_write_housekeeping` where wake_key normally
 /// fires. Push the affected key to a thread-local buffer so
@@ -130,11 +129,11 @@ fn bridge_lua_wake_keys(argv: &[&[u8]], out: &[u8]) {
     }
 }
 
-/// v1.27 P7e: read `[lua] time_limit_ms` + `[lua] allow_dialects`
+/// Read `[lua] time_limit_ms` + `[lua] allow_dialects`
 /// from the live config at first-EVAL time. Operators who
 /// hot-reload `[lua]` settings after the first EVAL need to also
 /// SCRIPT FLUSH (drops the per-dialect Vm pool) or restart the
-/// server — v1.28 backlog if there's real demand.
+/// server.
 fn apply_lua_config(host: &mut LuaHost<Store>, cfg: &kevy_config::Config) {
     // Translate ms → instruction budget. Rough conservative
     // calibration: 40 000 instr/ms on M-series hardware (the same
@@ -236,7 +235,7 @@ fn cmd_eval<A: ArgvView + ?Sized>(
     let Some((keys, argv)) = parse_eval_keys_argv(ctx, args, out) else {
         return;
     };
-    // v1.27.1: also push the script into the shared SCRIPT cache so a
+    // Also push the script into the shared SCRIPT cache so a
     // subsequent EVALSHA from any shard finds it (matches Redis's
     // auto-cache-on-EVAL semantics).
     let sha = kevy_lua::sha1::sha1(script);
@@ -280,7 +279,7 @@ fn cmd_evalsha<A: ArgvView + ?Sized>(
     let Some((keys, argv)) = parse_eval_keys_argv(ctx, args, out) else {
         return;
     };
-    // v1.27.1: lookup the script source from the shared cache (any
+    // Lookup the script source from the shared cache (any
     // shard's SCRIPT LOAD / EVAL filled it). Bypass
     // `LuaHost::evalsha` whose per-Bridge cache only sees the local
     // shard's history.
@@ -319,7 +318,7 @@ fn cmd_script<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) 
         .iter()
         .map(|b| b.to_ascii_uppercase())
         .collect();
-    // v1.27.1: SCRIPT LOAD / EXISTS / FLUSH operate on the shared
+    // SCRIPT LOAD / EXISTS / FLUSH operate on the shared
     // cache; no per-shard LuaHost touched, so no re-entrancy guard
     // needed and no shard-local state to worry about under
     // multi-shard configs.
@@ -367,8 +366,8 @@ fn script_exists<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8
 fn script_flush<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     // Accept both `SCRIPT FLUSH` and `SCRIPT FLUSH SYNC|ASYNC`. The
     // mode tag is parsed/validated but currently both run
-    // synchronously (in-memory cache clear is instant; v1.28 may
-    // differentiate when real async cleanup arrives).
+    // synchronously (an in-memory cache clear is instant, so there is
+    // nothing to defer).
     if args.len() == 3 {
         let mode = args.get(2).unwrap_or(b"");
         if !mode.eq_ignore_ascii_case(b"SYNC") && !mode.eq_ignore_ascii_case(b"ASYNC") {
@@ -432,7 +431,7 @@ fn parse_uint(bytes: &[u8]) -> Option<usize> {
     if n < 0 { None } else { Some(n as usize) }
 }
 
-/// v1.27 P7d: cluster-mode cross-slot check.
+/// Cluster-mode cross-slot check.
 ///
 /// When `[cluster] enabled = true`, every key in a single EVAL /
 /// EVALSHA must hash to the same CRC16 slot — same constraint kevy
@@ -441,7 +440,7 @@ fn parse_uint(bytes: &[u8]) -> Option<usize> {
 /// `None` when the check passes (single-key, empty-keys, or cluster
 /// mode off).
 ///
-/// Single-shard mode (the v1.x default) skips the check entirely so
+/// Single-shard mode (the default) skips the check entirely so
 /// non-cluster operators keep their existing behaviour.
 fn cross_slot_check(ctx: &Ctx<'_>, keys: &[&[u8]]) -> Option<Vec<u8>> {
     if keys.len() < 2 {

@@ -19,10 +19,10 @@ use std::time::Duration;
 /// LPUSH, LPOP, RPOP, HDEL, SREM, ZREM, LSET, LREM, LTRIM, SPOP) that
 /// the server's `KevyCommands::is_write` set logs as-is.
 ///
-/// Invariant (v1.15.1): every verb any `kevy-embedded` facade method
+/// Invariant: every verb any `kevy-embedded` facade method
 /// passes to `commit_write` MUST have an arm here — a missing arm is
 /// silent data loss on reopen (`store_tests_replay_all.rs` is the
-/// guard). The v2.1 OP_TABLE makes this cross-check structural.
+/// guard). The OP_TABLE makes this cross-check structural.
 // fn-length exemption: pure data-driven verb match table — one flat
 // arm per replayed verb, no control flow beyond per-arm arg plumbing.
 // LOC-WAIVER: data-driven AOF verb replay table — one store-call arm per verb.
@@ -94,7 +94,7 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
         }
         b"FLUSHDB" | b"FLUSHALL" => store.flushall(),
         b"HSET" => apply_hset(store, args),
-        // v2.4 hash field TTLs: HPEXPIREAT is the canonical logged
+        // Hash field TTLs: HPEXPIREAT is the canonical logged
         // form; HPERSIST logs itself.
         b"HPEXPIREAT" => apply_hpexpireat(store, args),
         b"HPERSIST" => apply_hpersist(store, args),
@@ -232,7 +232,7 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
 
 fn apply_set(store: &mut Store, args: &Argv) {
     if let (Some(k), Some(v)) = (args.get(1), args.get(2)) {
-        // v1.0 AOF dump emits plain SET key value (no NX/EX/PX trailing);
+        // The AOF dump emits plain SET key value (no NX/EX/PX trailing);
         // server append also logs the raw arg list. Either way, the keyspace
         // semantics are "overwrite with no TTL" — which is what we replay.
         store.set(k, v.to_vec(), None, false, false);
@@ -268,7 +268,7 @@ fn apply_expireat(store: &mut Store, args: &Argv, unit_ms: u64) {
 }
 
 
-/// `HPEXPIREAT key unix-ms FIELDS n f…` (v2.4 canonical field-TTL frame).
+/// `HPEXPIREAT key unix-ms FIELDS n f…` (the canonical field-TTL frame).
 fn apply_hpexpireat(store: &mut kevy_store::Store, args: &Argv) {
     if args.len() < 6 {
         return;
@@ -346,7 +346,7 @@ fn parse_zadd_flags(args: &Argv) -> (kevy_store::ZaddFlags, bool, usize) {
 
 fn apply_zadd(store: &mut Store, args: &Argv) {
     let Some(k) = args.get(1) else { return };
-    // v2.1: a primary's frame stream may carry the Redis 6.2 flag
+    // A primary's frame stream may carry the Redis 6.2 flag
     // tokens (`ZADD key [NX|XX] [GT|LT] [CH] score member …`). Apply
     // them — misparsing a flag as a score would shift every following
     // pair. (Embedded's own AOF never contains flags: the facades log
@@ -407,8 +407,8 @@ fn parse_f64(b: &[u8]) -> Option<f64> {
 #[path = "replay_tests.rs"]
 mod tests;
 
-/// Parity manifest (v2.1): every verb `apply` has an arm for. The
-/// v2.0.21 invariant lives in the ops_table cross-check: any verb an
+/// Parity manifest: every verb `apply` has an arm for. The
+/// invariant lives in the ops_table cross-check: any verb an
 /// embedded facade logs MUST appear here.
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const REPLAY_VERBS: &[&str] = &[

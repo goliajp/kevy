@@ -1,4 +1,4 @@
-//! v3.10 — `COMMAND` and its subcommands, answered from
+//! `COMMAND` and its subcommands, answered from
 //! [`crate::verb_meta::VERB_META`] (the single source of truth shared
 //! with llms.txt and the MCP schema). An agent that can reach the
 //! server can enumerate every verb, its arity, flags, and full syntax

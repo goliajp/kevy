@@ -1,4 +1,4 @@
-//! v2.10 — `PREFIX.DIGEST <prefix>`: order-insensitive checksum of a
+//! `PREFIX.DIGEST <prefix>`: order-insensitive checksum of a
 //! prefix's rows for migration verification (kevy-cli digest / diff).
 //! Rides the extension fan-out; per-shard XOR of per-row FNV-1a
 //! digests over canonical value bytes, reduce XORs shards.

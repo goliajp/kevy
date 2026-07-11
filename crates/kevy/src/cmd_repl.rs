@@ -1,15 +1,15 @@
-//! v3.16 D1+D2 — the consistency-ladder verbs:
+//! The consistency-ladder verbs:
 //!
-//! - `WAIT numreplicas timeout` (D1, Redis-compatible): block until
+//! - `WAIT numreplicas timeout` (Redis-compatible): block until
 //!   every shard's `master_repl_offset` is acked by ≥ numreplicas
 //!   replicas (all-shard barrier — a kevy write may land on any
 //!   shard), reply the MIN achieved count. `timeout 0` is Redis's
 //!   "wait forever" — kevy hard-caps it at 60 s (documented).
-//! - `REPL.TOKEN` (D2, extension): mint a read-your-writes token —
+//! - `REPL.TOKEN` (extension): mint a read-your-writes token —
 //!   on a primary, every shard's live `(feed generation, next_offset)`
 //!   pair; on a replica, its per-runner `(upstream generation,
 //!   applied offset)` view.
-//! - `REPL.WAIT g0 off0 [g1 off1 …] [TIMEOUT ms]` (D2, extension):
+//! - `REPL.WAIT g0 off0 [g1 off1 …] [TIMEOUT ms]` (extension):
 //!   on a replica, block until every shard has APPLIED the token
 //!   (reply `+OK` — a subsequent read is read-your-writes); on
 //!   timeout or generation mismatch reply

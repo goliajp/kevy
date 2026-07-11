@@ -60,7 +60,7 @@ impl<C: Commands> Shard<C> {
         self.apply_promotion_epoch(live.promotion_epoch);
     }
 
-    /// v3.16 D2 — promotion fences the old offset space: when the
+    /// Promotion fences the old offset space: when the
     /// command layer's promotion counter moved (this process went
     /// replica → primary), bump this shard's feed generation (offsets
     /// restart at 0, persisted via the feed-gen sidecar). Tokens
@@ -135,7 +135,7 @@ impl<C: Commands> Shard<C> {
     /// [`Self::tick_persist`]; the command layer that serves `ROLE` /
     /// `INFO replication` reads from the thread-local the embedder
     /// stashes in [`crate::Commands::on_replication_view`].
-    /// T1.22.5: compute the per-shard backlog retention watermark
+    /// Watermark: compute the per-shard backlog retention watermark
     /// — `min(live sent_offsets, slot.min_acked_offset)` — and tell
     /// the source to drop frames every consumer has moved past.
     /// No-op when no consumer position exists yet (cold startup,
@@ -169,7 +169,7 @@ impl<C: Commands> Shard<C> {
         let offset = src.next_offset();
         // Collect per-replica `(ipv4, port, sent_offset)` from every
         // handshake-complete replica conn. `peer` was captured at
-        // accept time (T1.28.5); `sent_offset` is the live value
+        // accept time; `sent_offset` is the live value
         // from the state machine. For `SnapshotShipping`, report
         // `ack_offset` (the snapshot's frozen-at offset) since
         // streaming hasn't started yet.
@@ -190,7 +190,7 @@ impl<C: Commands> Shard<C> {
                 }
                 _ => continue,
             };
-            // v3.14 D2: the replica's ACKED offset from the slot table
+            // The replica's ACKED offset from the slot table
             // (0 until its first REPLCONF ACK lands).
             // None = never ACKed; Some(0) is a REAL ack from an empty
             // replica's heartbeat round trip (min-replicas counts it).

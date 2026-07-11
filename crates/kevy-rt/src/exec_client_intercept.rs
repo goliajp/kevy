@@ -1,5 +1,4 @@
-//! v2.0.16 — `CLIENT SETNAME` / `CLIENT GETNAME` interception
-//! (closes v1.52.x finding).
+//! `CLIENT SETNAME` / `CLIENT GETNAME` interception.
 //!
 //! These two subcommands need per-connection state which the
 //! stateless `cmd_client` dispatch in `kevy` can't access. We

@@ -1,4 +1,4 @@
-//! VERB_META ↔ dispatch parity (v3.10 aigate, CI face).
+//! VERB_META ↔ dispatch parity (CI face).
 //!
 //! The doc table and the real command surface must stay bidirectionally
 //! equal: a verb reachable in dispatch without a doc row (or a doc row

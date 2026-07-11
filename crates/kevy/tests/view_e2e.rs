@@ -1,4 +1,4 @@
-//! v2.6 VIEW.* — end-to-end against a real 8-shard reactor.
+//! VIEW.* — end-to-end against a real 8-shard reactor.
 
 use std::io::{Read, Write};
 use std::sync::atomic::AtomicBool;

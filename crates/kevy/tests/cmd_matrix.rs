@@ -81,7 +81,7 @@ fn conn_and_introspection() {
     assert_starts(&run(&mut s, &[b"ECHO"]), b"-ERR", "ECHO/0");
 
     // COMMAND
-    // v3.10: COMMAND answers from the verb metadata table (185+ rows)
+    // COMMAND answers from the verb metadata table (185+ rows)
     let cmd_reply = run(&mut s, &[b"COMMAND"]);
     assert!(
         cmd_reply.starts_with(b"*1") && cmd_reply.len() > 1000,
@@ -93,10 +93,9 @@ fn conn_and_introspection() {
     // HELLO (multi-line map reply — just check it's nonempty)
     assert!(!run(&mut s, &[b"HELLO"]).is_empty(), "HELLO");
 
-    // CONFIG GET / SET: Wave 1 replaced the prior tolerant stubs with the
-    // real Config-backed handler. GET against an unknown key still returns
-    // an empty array; SET is read-only in v1.0 (errors with a v1.x Wave 2
-    // pointer).
+    // CONFIG GET / SET: the real Config-backed handler. GET against an
+    // unknown key returns an empty array; SET against an unknown key
+    // answers -ERR (only hot-settable keys are accepted).
     assert_eq_reply(
         &run(&mut s, &[b"CONFIG", b"GET", b"nonexistent-setting"]),
         b"*0\r\n",

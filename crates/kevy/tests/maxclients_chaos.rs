@@ -1,4 +1,4 @@
-//! v1.37 maxclients enforcement chaos test.
+//! Maxclients enforcement chaos test.
 //!
 //! Spawn kevy with `max_clients = N`, open 2 × N TCP connections.
 //! Strict asserts:

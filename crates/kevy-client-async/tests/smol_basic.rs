@@ -1,4 +1,4 @@
-//! Integration test (T4.21): wire round-trip under the `smol` runtime
+//! Integration test: wire round-trip under the `smol` runtime
 //! feature. Same scenarios as `tokio_basic.rs` adapted for smol's
 //! `block_on` + `spawn`. Only compiled when `smol` is enabled.
 

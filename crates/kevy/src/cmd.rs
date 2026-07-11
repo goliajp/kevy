@@ -96,8 +96,9 @@ pub(crate) fn emit_bulk_array(res: Result<Vec<Vec<u8>>, StoreError>, out: &mut V
     }
 }
 
-/// `HSET key field value [field value ...]`. G4 (v1.25): borrowed-pair path —
-/// the per-field+value `Vec<u8>` allocs the pair list used to do are gone.
+/// `HSET key field value [field value ...]`. Borrowed-pair path: the pair
+/// list holds `&[u8]` slices into argv, avoiding a `Vec<u8>` alloc per
+/// field+value.
 pub(crate) fn cmd_hset<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     if args.len() < 4 || !args.len().is_multiple_of(2) {
         return wrong_args(out, "hset");
@@ -131,7 +132,7 @@ pub(crate) fn cmd_zrange<A: ArgvView + ?Sized>(
 
 /// `ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]`.
 ///
-/// v1.27.3: BullMQ uses `LIMIT 0 1` inside its `moveToActive` /
+/// BullMQ uses `LIMIT 0 1` inside its `moveToActive` /
 /// `addJob` scripts; the modifier may appear in either order
 /// relative to `WITHSCORES`. We accept either order to match Redis.
 pub(crate) fn cmd_zrangebyscore<A: ArgvView + ?Sized>(
@@ -307,7 +308,7 @@ pub(crate) fn fmt_score(s: f64) -> Vec<u8> {
 }
 
 
-/// G4 (v1.25): borrowed `args[from..]` as `Vec<&[u8]>` — zero per-member heap
+/// Borrowed `args[from..]` as `Vec<&[u8]>` — zero per-member heap
 /// alloc. Mirrors valkey's `c->argv[j]`-without-copy hand-off (`t_set.c:611`
 /// `setTypeAdd(set, objectGetVal(c->argv[j]))`). Paired with the Store
 /// `*_borrowed` family that takes `&[&[u8]]`; the Store then materialises

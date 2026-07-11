@@ -54,7 +54,7 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
     let enabled = cfg.cluster.enabled;
     match sub.as_slice() {
         b"INFO" => {
-            // v1.57 (closes v1.44.x finding): `cluster_known_nodes` is
+            // `cluster_known_nodes` is
             // peer count (self + every entry in `[cluster] peers`),
             // not shard count. `cluster_size` stays = shard count
             // (Redis semantics: number of masters serving slots).
@@ -85,7 +85,7 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
             );
         }
         b"NODES" => {
-            // Standalone stub. T1.33: the flag reflects live state
+            // Standalone stub. The role flag reflects live state
             // (the upstream slot is `Some` for a replica) — clients
             // that discover topology via NODES can therefore classify
             // the node correctly without a separate ROLE roundtrip.

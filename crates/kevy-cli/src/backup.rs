@@ -1,4 +1,4 @@
-//! v1.40 — `kevy-cli backup` / `kevy-cli restore` subcommands.
+//! `kevy-cli backup` / `kevy-cli restore` subcommands.
 //!
 //! Backups bundle a kevy `data_dir` (snapshot + AOF) into a single
 //! `.kevybkp` file using a tiny custom container format (std-only,

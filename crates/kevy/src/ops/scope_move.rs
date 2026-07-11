@@ -1,7 +1,7 @@
 //! `MOVE-SCOPE` + `MOVE-SCOPE-INGEST` — scope migration operator
 //! commands.
 //!
-//! Q3=(a) quiesce-window mechanism per the RFC `## Q3 resolution`.
+//! Quiesce-window mechanism.
 //! Operator runs `MOVE-SCOPE <prefix> FROM <from-id> TO <to-id>`
 //! against the source writer. The writer:
 //!
@@ -9,7 +9,7 @@
 //!    `host:port` in the peer table.
 //! 2. Flips the local migration state to MIGRATING; subsequent
 //!    writes for the prefix return `-QUIESCED migrating to
-//!    <to-host:port>` (wired by T3.14 routing).
+//!    <to-host:port>` (wired through scope routing in dispatch).
 //! 3. Serializes the prefix's keyspace slice (5 data types: string
 //!    / hash / list / set / zset; TTLs as absolute `PEXPIREAT`).
 //! 4. Connects to the target's data port and sends one
@@ -50,8 +50,8 @@ pub(crate) fn cmd_move_scope<A: ArgvView + ?Sized>(
 
     // Start the migration locally. From this instant, dispatch
     // routes writes for this prefix to `-QUIESCED migrating to
-    // <to_addr>` (T3.14). Each migration transition is a cold gate
-    // writer (W5): bump the control epoch after the table change.
+    // <to_addr>`. Each migration transition is a cold gate
+    // writer: bump the control epoch after the table change.
     if let Err(e) = ctx.state.scope.migration_start(
         prefix_owned.clone(),
         from_id.to_string(),
@@ -272,7 +272,7 @@ fn serialize_prefix(store: &mut Store, prefix: &[u8]) -> (Vec<u8>, usize) {
             "list" => emit_list(store, &key, &mut bulk, &mut count),
             "set" => emit_set(store, &key, &mut bulk, &mut count),
             "zset" => emit_zset(store, &key, &mut bulk, &mut count),
-            _ => continue, // stream / none — v1.21 skips streams (TODO)
+            _ => continue, // stream / none — streams are not migrated (TODO)
         }
         if let Some(ms) = abs_expire {
             let ms_str = ms.to_string();

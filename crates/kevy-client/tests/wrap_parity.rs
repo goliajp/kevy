@@ -1,4 +1,4 @@
-//! v1.14.0 wrap-parity — every new wrap against a real kevy server:
+//! Wrap-parity — every wrap exercised against a real kevy server:
 //! an in-process 8-shard kevy-rt reactor running the full kevy command
 //! set (the same harness as crates/kevy/tests/*), with the change feed
 //! and a persistent data dir enabled so FEED.* and IDX.* are live.

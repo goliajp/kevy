@@ -1,9 +1,8 @@
-//! v1.27 P8 — the 5 canonical real-world Redis-Lua scripts from the
-//! ecosystem-survey corpus (`/tmp/lua-ecosystem-survey/`) run
+//! The 5 canonical real-world Redis-Lua scripts from the
+//! ecosystem-survey corpus run
 //! end-to-end through the kevy server's EVAL command.
 //!
-//! These are the same scripts the v1.27 verification report used
-//! (LUNA-FEEDBACK-REPORT.md §3). Running them here closes the loop:
+//! Running them here closes the loop:
 //! every Redis-Lua dependency in the BullMQ / Redlock / rate-limiter
 //! ecosystem that ships canonical scripts should now Just Work
 //! against a kevy server.
@@ -235,10 +234,10 @@ fn atomic_incr_or_init_with_ttl_sets_expire() {
     assert!(ttl > 0 && ttl <= 60, "got ttl: {ttl}");
 }
 
-// NOTE: sliding-window log limiter needs `ZREMRANGEBYSCORE` which
-// kevy doesn't implement yet (v1.27 backlog). The script itself
-// parses fine and would run if the command were there. Ignored
-// until the zset surface catches up — not a kevy-lua bridge gap.
+// NOTE: kept `#[ignore]`d from when `ZREMRANGEBYSCORE` was not yet
+// implemented; the command exists in dispatch now, so this test is a
+// candidate for un-ignoring. The script itself parses fine — the
+// original gap was the zset surface, not the kevy-lua bridge.
 #[test]
 #[ignore]
 fn sliding_window_rate_limiter_first_request_allowed() {

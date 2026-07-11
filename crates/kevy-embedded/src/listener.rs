@@ -1,4 +1,4 @@
-//! v2.9 — optional READ-ONLY RESP listener (RFC D2/D3): expose a
+//! Optional READ-ONLY RESP listener: expose a
 //! live embedded store to external RESP clients (redis-cli, ops
 //! tooling) over a whitelist of read ops. One thread per connection
 //! (ops-tooling cardinality); zero tax when not enabled — no thread,

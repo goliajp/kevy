@@ -1,6 +1,6 @@
 //! `kevy-embedded` as a read-replica of a `kevy` server.
 //!
-//! This is the Phase 2 (v1.20+) "embed ↔ server" topology in its
+//! This is the "embed ↔ server" topology in its
 //! simplest shape: an application embeds the read-side keyspace in-
 //! process while keeping the source-of-truth on a kevy server, and
 //! reads pay zero network round-trip.

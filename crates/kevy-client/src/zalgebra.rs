@@ -1,5 +1,4 @@
-//! Sorted-set algebra: `ZINTERSTORE` / `ZUNIONSTORE` / `ZINTERCARD`
-//! (v1.14.0).
+//! Sorted-set algebra: `ZINTERSTORE` / `ZUNIONSTORE` / `ZINTERCARD`.
 //!
 //! The store forms take the full server option face — `WEIGHTS` and
 //! `AGGREGATE SUM|MIN|MAX` ([`ZAggregate`], re-exported from

@@ -1,4 +1,4 @@
-//! v1.40 backup / restore chaos test.
+//! Backup / restore chaos test.
 //!
 //! Spawn kevy, drive concurrent writes, take a backup mid-stream
 //! (after a BGSAVE to make the snapshot fresh), restore to a fresh

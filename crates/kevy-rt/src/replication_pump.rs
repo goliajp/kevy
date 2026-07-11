@@ -26,10 +26,10 @@ const PUMP_BYTE_BUDGET_PER_ITER: usize = 256 * 1024;
 
 /// Hard cap on a streaming replica's outbound buffer (bytes appended
 /// but not yet written to the socket). Reached when the replica's TCP
-/// receive window is full + the primary keeps pushing. v1.18.0 policy
+/// receive window is full + the primary keeps pushing. Policy
 /// on hitting the cap: close the link. A reconnect (within the
-/// reconnect window — T1.15 wiring) resumes from the source backlog
-/// or full-snapshots (T1.22+). The alternatives (block, retry, or
+/// reconnect window) resumes from the source backlog
+/// or full-snapshots. The alternatives (block, retry, or
 /// silently drop frames) all corrupt the "every committed write
 /// reaches every replica" invariant; closing surfaces the problem.
 const STREAMING_OUTPUT_CAP: usize = 4 * 1024 * 1024;
@@ -51,7 +51,7 @@ impl<C: Commands> Shard<C> {
         if self.replicas.is_empty() {
             return Ok(());
         }
-        // v3.16 D2: the heartbeat carries (generation, next_offset) —
+        // The heartbeat carries (generation, next_offset) —
         // the replica's REPL.WAIT gen truth.
         let (generation, next) = (feed.generation(), feed.source().next_offset());
         for idx in 0..self.replicas.len() {
@@ -67,9 +67,9 @@ impl<C: Commands> Shard<C> {
         self.drain_streaming_outputs()
     }
 
-    /// v3.14 D3 — append the in-stream heartbeat (`+PING <gen> <next>`)
+    /// Append the in-stream heartbeat (`+PING <gen> <next>`)
     /// at a 1s cadence so the replica can compute lag + link liveness
-    /// (and, since v3.16, track the primary's feed generation for
+    /// (and track the primary's feed generation for
     /// REPL.WAIT gen matching). Out of band: occupies no offset space,
     /// rides the same output buffer as frames (ordering with frames is
     /// irrelevant — the payload is the primary's position, not stream
@@ -86,7 +86,7 @@ impl<C: Commands> Shard<C> {
         conn.last_ping = Some(std::time::Instant::now());
     }
 
-    /// v3.14 D2 — parse complete `REPLCONF ACK <offset>` lines off a
+    /// Parse complete `REPLCONF ACK <offset>` lines off a
     /// streaming replica's input buffer and advance its slot. Called
     /// from the readable-event handler (the connection's single
     /// reader). Tolerant: an unknown line skips to the next CRLF so
@@ -124,7 +124,7 @@ impl<C: Commands> Shard<C> {
                 .duration_since(self.replication_epoch)
                 .as_nanos() as u64;
             self.slots.insert_or_touch(&id, offset, now_ns);
-            // v3.16 D1: an advanced slot is the WAIT wake point — a
+            // An advanced slot is the WAIT wake point — a
             // parked WAIT whose need is now met answers here, on the
             // very event that made it true.
             self.check_repl_ack_waiters();
@@ -134,7 +134,7 @@ impl<C: Commands> Shard<C> {
     /// Refill one replica's output buffer with backlog frames. Skips
     /// when the conn is not in Streaming, is already caught up, or
     /// has too much pending output (backpressure). Closes the conn on
-    /// `TooOld` (need snapshot ship — T1.22+) or `Future` (corrupt
+    /// `TooOld` (needs a snapshot ship) or `Future` (corrupt
     /// state from a bad peer).
     // LOC-WAIVER: per-iter replication pump body (backpressure gate +
     // backlog window walk + resync arms) — one protocol state machine.
@@ -156,7 +156,7 @@ impl<C: Commands> Shard<C> {
             Ok(it) => it,
             Err(kevy_replicate::source::FromOffset::TooOld) => {
                 // Replica fell behind the backlog window. Trigger a
-                // snapshot ship (T1.23): serialize the local store
+                // snapshot ship: serialize the local store
                 // in-memory now, transition the conn to
                 // SnapshotShipping, the next pump iteration chunks
                 // it out via pump_snapshot_chunks.
@@ -170,7 +170,7 @@ impl<C: Commands> Shard<C> {
                 return;
             }
             Err(kevy_replicate::source::FromOffset::Future) => {
-                // v3.15 D4: a replica AHEAD of this primary is the
+                // A replica AHEAD of this primary is the
                 // rejoining old primary carrying a forked suffix
                 // (writes taken after the failover). The contract:
                 // the fork is DISCARDED — full snapshot resync, same
@@ -250,7 +250,7 @@ impl<C: Commands> Shard<C> {
         Ok(())
     }
 
-    /// Trigger a snapshot ship (T1.23) for the replica at `idx`:
+    /// Trigger a snapshot ship for the replica at `idx`:
     /// in-memory-serialize the local store via `kevy_persist::
     /// write_snapshot_to`, push `+SNAPSHOT\r\n` to the conn's
     /// output, and transition state to SnapshotShipping. The next
@@ -262,7 +262,7 @@ impl<C: Commands> Shard<C> {
     /// when the snapshot ship completes, and becomes the replica's
     /// new `sent_offset` for live streaming after.
     ///
-    /// T1.23.5: freeze a COW [`kevy_store::SnapshotView`] on the
+    /// Off-thread serialization: freeze a COW [`kevy_store::SnapshotView`] on the
     /// reactor thread (O(n) shallow clone — ns/entry, much cheaper
     /// than full serialization), hand it to a background worker
     /// that runs `kevy_persist::write_snapshot_to` at leisure, and
@@ -312,7 +312,7 @@ impl<C: Commands> Shard<C> {
     /// (backpressure — drain_streaming_outputs will write what's
     /// queued; next pump retries).
     ///
-    /// T1.23.5: if the background serializer hasn't delivered yet,
+    /// If the background serializer hasn't delivered yet,
     /// `try_recv` returns `Empty`; the pump no-ops this iteration
     /// and retries next tick. If the worker thread died without
     /// sending (`Disconnected`), the conn is closed.

@@ -1,5 +1,5 @@
-//! T4.25 — pipeline example: queue a batch of mixed commands and run
-//! them in a single TCP round-trip.
+//! Pipeline example: queue a batch of mixed commands and run them in
+//! a single TCP round-trip.
 //!
 //! ```text
 //! cargo run -p kevy-client-async --example pipeline --features tokio

@@ -8,7 +8,7 @@
 //! because changing `ring_capacity` mid-flight would require re-
 //! allocating every SPSC ring + repatching every peer's outbox; the
 //! other three could in principle be live but are scoped together
-//! for v1.4 simplicity.
+//! for simplicity.
 
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,8 +45,8 @@ fn read_reply(s: &mut std::net::TcpStream, expected: &[u8]) {
 
 #[test]
 fn advanced_defaults_match_pre_v14_constants() {
-    // The v1.4 knob defaults must match the constants kevy shipped
-    // pre-v1.4 — otherwise the existing bench / sharded numbers would
+    // The knob defaults must match the original hardcoded constants —
+    // otherwise the existing bench / sharded numbers would
     // shift just by parsing an empty `[advanced]` section.
     let adv = kevy_config::AdvancedSection::default();
     assert_eq!(adv.spin_limit, 256, "SPIN_LIMIT default");

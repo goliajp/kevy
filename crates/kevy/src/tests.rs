@@ -78,7 +78,8 @@ fn unknown_and_config_and_type() {
     let s_reply = std::str::from_utf8(&reply).unwrap();
     assert!(s_reply.starts_with("*2\r\n"), "got {s_reply:?}");
     assert!(s_reply.contains("maxmemory"));
-    // CONFIG SET is read-only in v1.0; Wave 2 wires up actual mutability.
+    // CONFIG SET rejects unknown parameters with -ERR (the hot-settable
+    // matrix only accepts known keys).
     assert!(d(&mut s, &[b"CONFIG", b"SET", b"x", b"y"]).starts_with(b"-ERR"));
     assert_eq!(d(&mut s, &[b"TYPE", b"missing"]), b"+none\r\n");
     d(&mut s, &[b"SET", b"k", b"v"]);
@@ -186,8 +187,8 @@ fn route_local_verbs() {
             "{v}"
         );
     }
-    // HELLO is now Route::Hello (its own conn-level handler — v1.4.0
-    // gained HELLO 3 + per-conn RespVersion negotiation).
+    // HELLO is Route::Hello (its own conn-level handler:
+    // HELLO 3 + per-conn RespVersion negotiation).
     assert!(matches!(c.route(&argv(&[b"HELLO"])), Route::Hello));
     assert!(matches!(c.route(&argv(&[b"HELLO", b"3"])), Route::Hello));
     // Empty args is also Route::Local (server-side error reply).

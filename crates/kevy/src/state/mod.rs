@@ -1,4 +1,4 @@
-//! Process-level runtime state (K-103).
+//! Process-level runtime state.
 //!
 //! [`RuntimeState`] is the single owner of every cross-shard piece of
 //! server state that used to live in process-wide statics: the live
@@ -71,7 +71,7 @@ pub struct RuntimeState {
     /// (the elect topology callback, the FAILOVER handover thread)
     /// can hold this slice without holding the whole state.
     pub(crate) replication: Arc<ReplicationState>,
-    /// K-103 W5 — the gate invalidation counter. One allocation shared
+    /// The gate invalidation counter. One allocation shared
     /// with `replication` (whose setters are most of the writers, and
     /// whose narrow captures must be able to bump it); catalog and
     /// scope writers bump through [`Self::bump_control_epoch`]. Every
@@ -164,7 +164,7 @@ impl RuntimeState {
         self.replication.take_inboxes()
     }
 
-    /// The W5 gate invalidation counter (readers Acquire-load it once
+    /// The gate invalidation counter (readers Acquire-load it once
     /// per gate consultation).
     pub(crate) fn control_epoch(&self) -> &AtomicU64 {
         &self.control_epoch
@@ -276,7 +276,7 @@ impl KevyCommands {
         &self.shard
     }
 
-    /// This shard's gate bits (W5) — see [`ShardCtx::gate_bits`].
+    /// This shard's gate bits — see [`ShardCtx::gate_bits`].
     #[inline]
     pub(crate) fn gate_bits(&self) -> u32 {
         self.shard.gate_bits(&self.state)
