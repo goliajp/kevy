@@ -64,11 +64,11 @@ pub(crate) struct ReplicationState {
     /// v3.15 D3 — planned-failover quiesce: while `Some(target)`,
     /// every client write answers `-QUIESCED migrating to <target>`
     /// (the cluster-rw client retries with backoff and follows).
-    /// Cleared on completion or abort.
+    /// Cleared on completion or abort. The hot path never takes this
+    /// mutex — the per-shard gate bits (K-103 W5) answer "possibly
+    /// quiesced"; only the already-gated slow path locks it to render
+    /// the error text.
     quiesce_to: Mutex<Option<String>>,
-    /// Hot-path flag mirroring `quiesce_to.is_some()` (the mutex is
-    /// only taken to render the error text on the cold rejected path).
-    quiesced: AtomicBool,
     /// v3.16 D4 — primary quorum lease fence.
     quorum_fenced: AtomicBool,
     /// v3.16 D3 — bounded staleness (0 = off). Set from config at
@@ -83,6 +83,14 @@ pub(crate) struct ReplicationState {
     promotion_epoch: AtomicU64,
     /// The narrow heartbeat/offset slice runner threads write into.
     progress: Arc<ReplicaProgress>,
+    /// K-103 W5 — the instance-wide gate invalidation counter, shared
+    /// with [`RuntimeState`](crate::RuntimeState) (`Arc` because the
+    /// election callback and the FAILOVER thread hold only this
+    /// narrow slice, yet their role flips must invalidate every
+    /// shard's cached gate bits). Every setter that changes a
+    /// write/read-gating authority field bumps it (two-step writer
+    /// protocol: write the field, then `fetch_add(1, Release)`).
+    control_epoch: Arc<AtomicU64>,
 }
 
 impl ReplicationState {
@@ -106,12 +114,27 @@ impl ReplicationState {
             read_only: AtomicBool::new(true),
             min_replicas: AtomicU32::new(0),
             quiesce_to: Mutex::new(None),
-            quiesced: AtomicBool::new(false),
             quorum_fenced: AtomicBool::new(false),
             max_staleness_ms: AtomicU64::new(0),
             promotion_epoch: AtomicU64::new(0),
             progress: Arc::new(ReplicaProgress::default()),
+            control_epoch: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// The shared gate-invalidation counter (see the field doc).
+    /// `RuntimeState::build` stores a clone so catalog/scope writers
+    /// can bump the same counter.
+    pub(crate) fn control_epoch_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.control_epoch)
+    }
+
+    /// Step ② of the writer protocol: publish a gate-authority change.
+    /// The preceding field write may stay `Relaxed` — an Acquire load
+    /// of the bumped counter synchronizes-with this `Release`
+    /// `fetch_add`, so the observer's rebuild sees the new field.
+    fn bump_epoch(&self) {
+        self.control_epoch.fetch_add(1, Ordering::Release);
     }
 
     /// Hand out the per-shard inbox receivers (once). See
@@ -126,6 +149,7 @@ impl ReplicationState {
     /// [`Self::start_runners`] puts the new ones), and on shutdown.
     pub(crate) fn stop_runners(&self) {
         self.is_replica.store(false, Ordering::Relaxed);
+        self.bump_epoch();
         let mut guard = self.runners.lock().expect("runners poisoned");
         let runners = std::mem::take(&mut *guard);
         drop(guard); // release the lock before potentially-blocking joins
@@ -191,6 +215,7 @@ impl ReplicationState {
         // flag) — the role flips to replica only once the new fleet
         // is installed.
         self.is_replica.store(true, Ordering::Relaxed);
+        self.bump_epoch();
         Ok(())
     }
 
@@ -217,10 +242,12 @@ impl ReplicationState {
     /// election outcome flips the flag (win → stop_runners clears it).
     pub(crate) fn force_replica_flag(&self) {
         self.is_replica.store(true, Ordering::Relaxed);
+        self.bump_epoch();
     }
 
     pub(crate) fn set_read_only(&self, on: bool) {
         self.read_only.store(on, Ordering::Relaxed);
+        self.bump_epoch();
     }
 
     pub(crate) fn read_only(&self) -> bool {
@@ -229,26 +256,51 @@ impl ReplicationState {
 
     pub(crate) fn set_min_replicas(&self, n: u32) {
         self.min_replicas.store(n, Ordering::Relaxed);
+        self.bump_epoch();
     }
 
     pub(crate) fn set_max_staleness_ms(&self, v: u64) {
         self.max_staleness_ms.store(v, Ordering::Relaxed);
+        self.bump_epoch();
     }
 
     pub(crate) fn set_quiesce(&self, target: Option<String>) {
-        let active = target.is_some();
         *self.quiesce_to.lock().expect("quiesce_to poisoned") = target;
-        self.quiesced.store(active, Ordering::Relaxed);
+        self.bump_epoch();
     }
 
     pub(crate) fn quiesce_active(&self) -> bool {
-        self.quiesced.load(Ordering::Relaxed)
+        self.quiesce_to.lock().expect("quiesce_to poisoned").is_some()
     }
 
     /// v3.16 D4 — flip the quorum lease fence. Returns whether the
     /// flag CHANGED (callers log transitions only).
     pub(crate) fn set_quorum_fence(&self, on: bool) -> bool {
-        self.quorum_fenced.swap(on, Ordering::Relaxed) != on
+        let changed = self.quorum_fenced.swap(on, Ordering::Relaxed) != on;
+        if changed {
+            self.bump_epoch();
+        }
+        changed
+    }
+
+    /// Cold-path gate input (K-103 W5): could a client write be denied
+    /// right now? Mirrors [`Self::write_denied_reply`]'s deny set —
+    /// `false` here means the slow path would certainly answer `None`.
+    /// `min_replicas > 0` on a primary always reports `true`: the
+    /// healthy-replica count is view-derived and changes without an
+    /// epoch bump, so it must be re-judged per write.
+    pub(crate) fn write_possibly_gated(&self) -> bool {
+        self.quorum_fenced.load(Ordering::Relaxed)
+            || self.quiesce_active()
+            || (self.is_replica() && self.read_only())
+            || (!self.is_replica() && self.min_replicas.load(Ordering::Relaxed) > 0)
+    }
+
+    /// Cold-path gate input (K-103 W5): could a client read be denied?
+    /// Staleness is a time condition — the bit only says "bounded
+    /// replica"; the slow path loads the live heartbeat.
+    pub(crate) fn read_possibly_gated(&self) -> bool {
+        self.max_staleness_ms.load(Ordering::Relaxed) > 0 && self.is_replica()
     }
 
     pub(crate) fn promotion_epoch(&self) -> u64 {
@@ -312,16 +364,22 @@ impl ReplicationState {
 
     /// The write-availability gate, in fence-strength order: quorum
     /// fence → quiesce → replica read-only → min-replicas. `None` =
-    /// the write may proceed.
-    pub(crate) fn write_denied_reply(&self) -> Option<Vec<u8>> {
+    /// the write may proceed. Slow path only (K-103 W5): callers reach
+    /// here after the per-shard `WRITE_GATED` bit fired, so taking the
+    /// quiesce mutex to render the error text is off the common path.
+    /// `healthy_replicas` supplies the answering shard's view-derived
+    /// replica count (the view lives in `ShardCtx`, which this
+    /// runtime-wide state deliberately doesn't know about); it is only
+    /// invoked on the primary min-replicas branch.
+    pub(crate) fn write_denied_reply(
+        &self,
+        healthy_replicas: impl FnOnce() -> usize,
+    ) -> Option<Vec<u8>> {
         if self.quorum_fenced.load(Ordering::Relaxed) {
             return Some(b"-NOREPLICAS primary lost quorum; writes fenced\r\n".to_vec());
         }
-        if self.quiesced.load(Ordering::Relaxed) {
-            let g = self.quiesce_to.lock().expect("quiesce_to poisoned");
-            if let Some(t) = g.as_ref() {
-                return Some(format!("-QUIESCED migrating to {t}\r\n").into_bytes());
-            }
+        if let Some(t) = self.quiesce_to.lock().expect("quiesce_to poisoned").as_ref() {
+            return Some(format!("-QUIESCED migrating to {t}\r\n").into_bytes());
         }
         if self.is_replica() {
             if self.read_only() {
@@ -332,7 +390,7 @@ impl ReplicationState {
             return None;
         }
         let min = self.min_replicas.load(Ordering::Relaxed);
-        if min > 0 && crate::ops::replication::healthy_replica_count() < min as usize {
+        if min > 0 && healthy_replicas() < min as usize {
             return Some(b"-NOREPLICAS Not enough good replicas to write.\r\n".to_vec());
         }
         None
@@ -340,77 +398,5 @@ impl ReplicationState {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn fresh_state_defaults() {
-        let r = ReplicationState::new(1, false);
-        assert!(!r.is_replica());
-        assert!(r.read_only());
-        assert!(r.current_upstream().is_none());
-        assert_eq!(r.applied_offset_sum(), 0);
-        assert!(r.write_denied_reply().is_none());
-        assert!(r.read_denied_reply().is_none());
-    }
-
-    #[test]
-    fn applied_offset_sum_is_per_runner_sum_not_max() {
-        let r = ReplicationState::new(3, false);
-        assert_eq!(r.applied_offset_sum(), 0, "no runners → 0");
-        // Simulate a 3-runner fleet's registry (start_runners sizes
-        // this in production).
-        r.progress.size_runner_slots(3);
-        r.progress.record_ping(0, 1, 100, 40);
-        r.progress.record_applied(1, 25);
-        r.progress.record_applied(2, 35);
-        assert_eq!(r.applied_offset_sum(), 100, "sum across runners, not max");
-        // Plain store semantics: a resync rewind must show through.
-        r.progress.record_applied(1, 5);
-        assert_eq!(r.applied_offset_sum(), 80);
-        // Out-of-range slot is ignored (registry resize race guard).
-        r.progress.record_applied(9, 1_000);
-        assert_eq!(r.applied_offset_sum(), 80);
-        // stop_runners clears the registry.
-        r.stop_runners();
-        assert_eq!(r.applied_offset_sum(), 0);
-    }
-
-    #[test]
-    fn start_runners_before_runtime_wiring_errors() {
-        let r = ReplicationState::new(1, false);
-        let result = r.start_runners((IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 6400));
-        assert!(result.is_err(), "inboxes never taken → no runtime drains them");
-        assert!(!r.is_replica());
-    }
-
-    #[test]
-    fn promote_bumps_epoch_only_from_replica() {
-        let r = ReplicationState::new(1, false);
-        r.promote_stop_runners();
-        assert_eq!(r.promotion_epoch(), 0, "primary → primary is not a promotion");
-        r.force_replica_flag();
-        r.promote_stop_runners();
-        assert_eq!(r.promotion_epoch(), 1);
-        assert!(!r.is_replica());
-    }
-
-    #[test]
-    fn write_denied_orders_fences() {
-        let r = ReplicationState::new(1, false);
-        r.set_quiesce(Some("10.0.0.9:7000".into()));
-        let reply = r.write_denied_reply().expect("quiesced");
-        assert!(reply.starts_with(b"-QUIESCED"), "{}", String::from_utf8_lossy(&reply));
-        assert!(r.set_quorum_fence(true), "flag changed");
-        let reply = r.write_denied_reply().expect("fenced");
-        assert!(reply.starts_with(b"-NOREPLICAS"), "fence outranks quiesce");
-        assert!(!r.set_quorum_fence(true), "unchanged flag reports false");
-        r.set_quorum_fence(false);
-        r.set_quiesce(None);
-        r.force_replica_flag();
-        let reply = r.write_denied_reply().expect("read-only replica");
-        assert!(reply.starts_with(b"-READONLY"));
-        r.set_read_only(false);
-        assert!(r.write_denied_reply().is_none(), "writable replica");
-    }
-}
+#[path = "replication_tests.rs"]
+mod tests;

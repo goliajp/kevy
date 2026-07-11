@@ -5,16 +5,19 @@
 //! ## Per-shard `LuaHost`
 //!
 //! `LuaHost<Store>` is created lazily on the first EVAL hitting a
-//! given thread and reused thereafter (one per shard, since kevy is
-//! thread-per-core). The host is held in a `thread_local!
-//! RefCell<Option<LuaHost<Store>>>` — `Option` so we can lazy-init,
-//! `RefCell` so we can `borrow_mut` for the eval duration.
+//! given shard and reused thereafter. It cannot live in the shard
+//! zone (`ShardCtx`): a `LuaHost` is `!Send` (luna's `Vm` holds `Rc`s
+//! and raw GC pointers) while `kevy_rt::Commands` requires `Send`, so
+//! the host parks in [`kevy_lua_host::with_thread_host`]'s per-thread
+//! slot — thread == shard under thread-per-core, same isolation. The
+//! dispatch closure captures `Arc<RuntimeState>` + the owning shard's
+//! id at build time.
 //!
 //! ## Re-entrancy: EVAL inside EVAL → `-ERR`
 //!
 //! Nested EVAL (a Lua script calls `redis.call('EVAL', ...)` which
-//! routes back through `dispatch_lua`) hits a `try_borrow_mut`
-//! failure on the per-shard host and surfaces as
+//! routes back through `dispatch_lua`) finds the thread slot already
+//! borrowed and surfaces as
 //! `-ERR EVAL inside EVAL is not supported in v1.27`. Real Redis
 //! doesn't permit nested EVAL either (the inner call gets a similar
 //! error). Lifting this is on the v1.28+ backlog if a real workload
@@ -25,25 +28,16 @@ use crate::state::{Ctx, RuntimeState, ShardCtx};
 use kevy_lua_host::LuaHost;
 use kevy_resp::{Argv, ArgvView, encode_error};
 use kevy_store::Store;
-use std::cell::RefCell;
 use std::sync::Arc;
-
-thread_local! {
-    /// Per-shard (= per-thread, kevy is thread-per-core) Lua host.
-    /// Lazily constructed on first EVAL. Lives until the thread
-    /// exits. The host's dispatch closure captures the constructing
-    /// `Arc<RuntimeState>` — one state per reactor thread by
-    /// construction; W4 moves the host into `ShardCtx` proper.
-    static LUA_HOST: RefCell<Option<LuaHost<Store>>> = const { RefCell::new(None) };
-}
 
 /// Build a `LuaHost<Store>` whose dispatch closure routes redis.call
 /// argv through `crate::dispatch::dispatch_into` against the host
-/// `&mut Store`.
-fn make_lua_host(state: Arc<RuntimeState>) -> LuaHost<Store> {
+/// `&mut Store`. `my_shard` is the owning shard's id, captured for
+/// the cross-shard target check (the closure outlives any one `Ctx`).
+fn make_lua_host(state: Arc<RuntimeState>, my_shard: usize) -> LuaHost<Store> {
     let cfg = state.config();
     let mut host = LuaHost::<Store>::new(move |store, argv, read_only| {
-        lua_redis_call(&state, store, argv, read_only)
+        lua_redis_call(&state, my_shard, store, argv, read_only)
     });
     apply_lua_config(&mut host, &cfg);
     host
@@ -51,21 +45,30 @@ fn make_lua_host(state: Arc<RuntimeState>) -> LuaHost<Store> {
 
 /// The `redis.call` dispatch closure body: enforcement checks, then
 /// route the inner argv through `crate::dispatch::dispatch_into`.
+/// EVAL_RO / EVALSHA_RO write rejection: a read-only script calling
+/// a write verb answers -READONLY (Redis semantics).
+fn read_only_violation(argv: &[&[u8]], read_only: bool) -> Option<Vec<u8>> {
+    if !read_only {
+        return None;
+    }
+    let cmd = argv.first()?;
+    let mut buf = [0u8; 32];
+    if crate::cmd::is_write_verb(crate::cmd::upper_verb(cmd, &mut buf)) {
+        return Some(b"-READONLY can't write against a read-only script\r\n".to_vec());
+    }
+    None
+}
+
 fn lua_redis_call(
     state: &Arc<RuntimeState>,
+    my_shard: usize,
     store: &mut Store,
     argv: &[&[u8]],
     read_only: bool,
 ) -> Vec<u8> {
-    // P7c: read-only enforcement. EVAL_RO / EVALSHA_RO set
-    // read_only=true; reject writes per Redis semantics.
-    if read_only
-        && let Some(cmd) = argv.first() {
-            let upper: Vec<u8> = cmd.iter().map(|b| b.to_ascii_uppercase()).collect();
-            if crate::cmd::is_write_verb(&upper) {
-                return b"-READONLY can't write against a read-only script\r\n".to_vec();
-            }
-        }
+    if let Some(err) = read_only_violation(argv, read_only) {
+        return err;
+    }
     // v1.27.4: cross-shard inner-call enforcement. Under
     // `--threads > 1`, EVAL runs on KEYS[1]'s shard (v1.27.1
     // routing fix); the inner `redis.call` hits this same
@@ -81,7 +84,6 @@ fn lua_redis_call(
     {
         let target_shard =
             kevy_rt::shard_of_key(target_key, nshards, cfg.cluster.enabled);
-        let my_shard = crate::ops::cluster::current_shard_for_lua();
         if target_shard != my_shard {
             return b"-CROSSSLOT Lua redis.call target key is on a different shard than the EVAL. Use {hashtag} to colocate keys, or run kevy --threads 1.\r\n".to_vec();
         }
@@ -91,10 +93,14 @@ fn lua_redis_call(
         a.push(slice);
     }
     let mut out = Vec::new();
-    // Inner calls dispatch with a fresh shard zone: the only shard-
+    // Inner calls dispatch with a fresh shard zone (the outer zone's
+    // Lua host is borrowed for the eval duration): the only shard-
     // private state a redis.call-able verb can touch is the MOVE-
-    // SCOPE-INGEST prefix, and ingest bulks never contain EVAL.
+    // SCOPE-INGEST prefix, and ingest bulks never contain EVAL. The
+    // shard id carries over so shard-identity readers (CLUSTER MYID)
+    // answer as the real shard.
     let shard = ShardCtx::default();
+    shard.set_shard_id(my_shard);
     let ctx = Ctx { state, shard: &shard };
     crate::dispatch::dispatch_into(&ctx, store, &a, &mut out);
     bridge_lua_wake_keys(argv, &out);
@@ -159,15 +165,14 @@ fn apply_lua_config(host: &mut LuaHost<Store>, cfg: &kevy_config::Config) {
     }
 }
 
-/// Run `f` with the per-shard `LuaHost`. Returns `None` if the host
-/// is already borrowed (re-entrant EVAL).
+/// Run `f` with the per-shard `LuaHost` (parked in the kevy-lua-host
+/// thread slot — see the module doc). Returns `None` if the host is
+/// already borrowed (re-entrant EVAL).
 fn with_host<R>(ctx: &Ctx<'_>, f: impl FnOnce(&mut LuaHost<Store>) -> R) -> Option<R> {
-    LUA_HOST.with(|h| match h.try_borrow_mut() {
-        Ok(mut g) => Some(f(
-            g.get_or_insert_with(|| make_lua_host(Arc::clone(ctx.state)))
-        )),
-        Err(_) => None,
-    })
+    kevy_lua_host::with_thread_host(
+        || make_lua_host(Arc::clone(ctx.state), ctx.shard.shard_id()),
+        f,
+    )
 }
 
 fn emit_reentry_err(out: &mut Vec<u8>) {

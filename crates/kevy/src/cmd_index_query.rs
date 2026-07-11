@@ -14,6 +14,8 @@ pub(crate) use wire::{decode_value, decode_view_cursor, encode_value, hex};
 
 use kevy_store::Store;
 
+use crate::state::ShardCtx;
+
 /// One hit's hydrated field values (None = field absent).
 pub(crate) type Hydrated = Vec<Option<Vec<u8>>>;
 
@@ -27,45 +29,45 @@ pub(crate) const ST_OVERBUDGET: u8 = 4;
 
 /// Per-shard half: parse the IDX.* argv, run against this shard's
 /// segment, emit a status-tagged chunk.
-pub(crate) fn extension_op(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(crate) fn extension_op(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
     if verb.eq_ignore_ascii_case(b"IDX.LIST") {
-        return query::op_list(store);
+        return query::op_list(shard, store);
     }
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"HYBRID")) {
-        return ops::op_hybrid(store, argv);
+        return ops::op_hybrid(shard, store, argv);
     }
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"COMPOSE")) {
-        return ops::op_compose(store, argv);
+        return ops::op_compose(shard, store, argv);
     }
     // v3.10: IDX.EXPLAIN <name> <shape…> — the exact IDX.QUERY parse,
     // ZERO execution.
     if verb.eq_ignore_ascii_case(b"IDX.EXPLAIN") {
-        return query::op_explain(store, argv);
+        return query::op_explain(shard, store, argv);
     }
     // v2.7: IDX.QUERY <name> MATCH <text> [LIMIT n] [FIELDS f…]
     if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"MATCH")) {
-        return ops::op_match(store, argv);
+        return ops::op_match(shard, store, argv);
     }
     // v2.8: IDX.QUERY <name> KNN <vec> [LIMIT k] [FIELDS f…]
     if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"KNN")) {
-        return ops::op_knn(store, argv);
+        return ops::op_knn(shard, store, argv);
     }
     // v3.1: IDX.QUERY <name> GROUP <g> | GROUPS [BY m] [LIMIT n]
     if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"GROUP") || a.eq_ignore_ascii_case(b"GROUPS")) {
-        return ops::op_agg(store, argv);
+        return ops::op_agg(shard, store, argv);
     }
     // v3.1 phase 2 (internal): AGG.FETCH <name> <g…> — exact partials
     // for the candidate groups that survived phase-1 ranking.
     if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"AGG.FETCH")) {
-        return ops::op_agg_fetch(store, argv);
+        return ops::op_agg_fetch(shard, store, argv);
     }
     // v2.8: IDX.REBUILD <name> (ANN tombstone compaction)
     if argv
         .first()
         .is_some_and(|v| v.eq_ignore_ascii_case(b"IDX.REBUILD"))
     {
-        return ops::op_rebuild(store, argv);
+        return ops::op_rebuild(shard, store, argv);
     }
-    query::op_query(store, argv, verb)
+    query::op_query(shard, store, argv, verb)
 }

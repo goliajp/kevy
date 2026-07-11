@@ -19,21 +19,24 @@ fn dispatch<A: kevy_rt::ArgvView + ?Sized>(store: &mut kevy_store::Store, args: 
 
 static START_GATE: Mutex<()> = Mutex::new(());
 
-/// Probe-bind `n` consecutive free ports starting at some random base
-/// (compat port + n cluster ports + n replication ports). Same pattern
-/// as the cluster-test free_port_block, generalised for any width.
+/// Hand out a process-unique block of `width + 1` consecutive ports.
+/// An atomic bump makes blocks disjoint across the (now lock-free
+/// parallel) tests in this binary — the probe-bind only guards
+/// against ports held by OTHER processes; the old probe-then-drop
+/// scheme had a TOCTOU window that parallel tests could race into.
 fn free_port_block(width: usize) -> u16 {
+    use std::sync::atomic::{AtomicU16, Ordering};
+    static NEXT_BASE: AtomicU16 = AtomicU16::new(21_000);
     'retry: loop {
-        let anchor = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let base = anchor.local_addr().unwrap().port();
-        if base.checked_add(width as u16).is_none() {
+        let span = width as u16 + 1;
+        let base = NEXT_BASE.fetch_add(span, Ordering::Relaxed);
+        if base.checked_add(span).is_none() {
+            NEXT_BASE.store(21_000, Ordering::Relaxed);
             continue;
         }
-        let mut probes = Vec::with_capacity(width);
-        for i in 1..=width as u16 {
-            match std::net::TcpListener::bind(("127.0.0.1", base + i)) {
-                Ok(l) => probes.push(l),
-                Err(_) => continue 'retry,
+        for i in 0..=width as u16 {
+            if std::net::TcpListener::bind(("127.0.0.1", base + i)).is_err() {
+                continue 'retry;
             }
         }
         return base;

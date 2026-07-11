@@ -6,6 +6,10 @@ use kevy_resp::Argv;
 use kevy_store::Store;
 
 fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
+        run_on(&crate::KevyCommands::new(), verb, rest)
+    }
+
+    fn run_on(c: &crate::KevyCommands, verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
         let mut a = Argv::default();
         a.push(verb);
         for r in rest {
@@ -13,7 +17,6 @@ fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
         }
         let mut out = Vec::new();
         let mut store = Store::new();
-        let c = crate::KevyCommands::new();
         let handled = dispatch_ops(&c.ctx(), verb, &mut store, &a, &mut out);
         assert!(handled, "verb {:?} not handled", String::from_utf8_lossy(verb));
         out
@@ -48,8 +51,13 @@ fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
             (std::net::Ipv4Addr::new(10, 0, 0, 2), 6004, 41u64, Some(41u64)),
             (std::net::Ipv4Addr::new(10, 0, 0, 3), 6004, 40u64, Some(40u64)),
         ];
-        crate::ops::replication::set_replication_view(42, replicas);
-        let out = run(b"INFO", &[b"replication"]);
+        let c = crate::KevyCommands::new();
+        c.shard_ctx()
+            .set_replication_view(crate::ops::replication::ReplicationView {
+                master_repl_offset: 42,
+                replicas,
+            });
+        let out = run_on(&c, b"INFO", &[b"replication"]);
         let s = String::from_utf8(out).unwrap();
         assert!(s.contains("role:master"), "got: {s}");
         assert!(s.contains("connected_slaves:3"), "got: {s}");
@@ -58,8 +66,8 @@ fn run(verb: &[u8], rest: &[&[u8]]) -> Vec<u8> {
         // No replica-only fields.
         assert!(!s.contains("master_host"), "got: {s}");
         assert!(!s.contains("master_link_status"), "got: {s}");
-        // Cleanup so sibling tests start clean.
-        crate::ops::replication::set_replication_view(0, Vec::new());
+        // No cleanup needed: the view lives in this test's own
+        // KevyCommands shard zone, not in any shared static.
     }
 
     #[test]

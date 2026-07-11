@@ -73,6 +73,44 @@ fn set_current<T>(ctx: &mut T) -> ResetCurrent {
     ResetCurrent { prev }
 }
 
+thread_local! {
+    /// Per-thread parked host for [`with_thread_host`], type-erased so
+    /// one slot serves any `T`.
+    static THREAD_HOST: std::cell::RefCell<Option<Box<dyn std::any::Any>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `f` against this thread's lazily-built [`LuaHost<T>`].
+///
+/// A `LuaHost` is `!Send` — luna's `Vm` holds `Rc`s and raw GC
+/// pointers — so a thread-per-core server cannot park it inside its
+/// `Send` per-shard command value. This slot keeps one host per shard
+/// *thread* instead: identical isolation (thread == shard), owned by
+/// the crate that knows why the type can't travel.
+///
+/// `build` runs once, on the first call on this thread. Returns
+/// `None` when the slot is already borrowed — a re-entrant eval on
+/// the same thread; callers surface their nested-eval error. A parked
+/// host of a *different* `T` (mixed test harnesses; production uses
+/// one `T` per process) is dropped and rebuilt.
+pub fn with_thread_host<T: 'static, R>(
+    build: impl FnOnce() -> LuaHost<T>,
+    f: impl FnOnce(&mut LuaHost<T>) -> R,
+) -> Option<R> {
+    THREAD_HOST.with(|slot| {
+        let mut g = slot.try_borrow_mut().ok()?;
+        if !g.as_ref().is_some_and(|b| b.is::<LuaHost<T>>()) {
+            *g = Some(Box::new(build()));
+        }
+        let host = g
+            .as_mut()
+            .expect("slot filled above")
+            .downcast_mut::<LuaHost<T>>()
+            .expect("type matched or rebuilt above");
+        Some(f(host))
+    })
+}
+
 /// Run `f` with a mutable borrow of the currently-set host context.
 /// Returns `None` if `LuaHost::eval` isn't on the stack.
 ///

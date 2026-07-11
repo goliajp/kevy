@@ -19,17 +19,20 @@ mod obs;
 mod progress;
 mod replication;
 mod scope;
+mod shard;
 
 pub(crate) use catalogs::CatalogState;
 pub(crate) use election::ElectionState;
-pub(crate) use obs::{ObsState, ShardStats, Totals};
+pub(crate) use obs::{ObsState, Totals};
 pub(crate) use progress::ReplicaProgress;
 pub(crate) use replication::ReplicationState;
 pub(crate) use scope::{ScopeState, WriteRedirect, encode_misdirected, encode_quiesced};
+pub(crate) use shard::{
+    IDX_NONEMPTY, READ_GATED, SCOPE_ACTIVE, ShardCtx, VIEW_NONEMPTY, WRITE_GATED,
+};
 
-use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use kevy_config::Config;
@@ -68,6 +71,13 @@ pub struct RuntimeState {
     /// (the elect topology callback, the FAILOVER handover thread)
     /// can hold this slice without holding the whole state.
     pub(crate) replication: Arc<ReplicationState>,
+    /// K-103 W5 — the gate invalidation counter. One allocation shared
+    /// with `replication` (whose setters are most of the writers, and
+    /// whose narrow captures must be able to bump it); catalog and
+    /// scope writers bump through [`Self::bump_control_epoch`]. Every
+    /// shard tags its cached gate bits with the value it read — see
+    /// [`ShardCtx::gate_bits`].
+    control_epoch: Arc<AtomicU64>,
 }
 
 impl RuntimeState {
@@ -92,15 +102,17 @@ impl RuntimeState {
     }
 
     fn build(cfg: Arc<Config>, data_dir: PathBuf, nshards: usize) -> Result<Self, String> {
+        let replication = Arc::new(ReplicationState::new(
+            nshards,
+            cfg.replication.single_source,
+        ));
         Ok(Self {
             scope: ScopeState::from_config(&cfg)?,
             election: ElectionState::new(nshards),
             catalogs: CatalogState::new(),
             obs: ObsState::new(&cfg.audit.log_path, nshards),
-            replication: Arc::new(ReplicationState::new(
-                nshards,
-                cfg.replication.single_source,
-            )),
+            control_epoch: replication.control_epoch_handle(),
+            replication,
             config: RwLock::new(cfg),
             config_explicit: AtomicBool::new(false),
             data_dir,
@@ -151,63 +163,18 @@ impl RuntimeState {
     pub fn take_replica_inboxes(&self) -> Option<Vec<kevy_rt::ReplicaInboxReceiver>> {
         self.replication.take_inboxes()
     }
-}
 
-/// Per-shard private zone. Lives inside [`KevyCommands`]; the manual
-/// `Clone` impl gives every clone a **fresh** `ShardCtx`, so nothing
-/// here ever leaks across shards. Interior mutability is `Cell` /
-/// `RefCell` — a shard is single-threaded by construction
-/// (thread-per-core), so no atomics are needed.
-#[derive(Default)]
-pub(crate) struct ShardCtx {
-    /// This shard's id, written by `Commands::on_shard_start`. `None`
-    /// outside a reactor thread (embedded / tests / the runtime main
-    /// thread) — readers fall back to shard 0, the same convention the
-    /// pre-4.0 thread-locals used.
-    shard_id: Cell<Option<usize>>,
-    /// Set for the duration of a `MOVE-SCOPE-INGEST` dispatch.
-    /// `RuntimeState::route_write` checks this FIRST and treats a
-    /// matching key as locally writable — the target node accepts the
-    /// source's reconstruction commands without bouncing them back via
-    /// `-MISDIRECTED`.
-    ingesting_prefix: RefCell<Option<Vec<u8>>>,
-}
-
-impl ShardCtx {
-    pub(crate) fn set_shard_id(&self, shard: usize) {
-        self.shard_id.set(Some(shard));
+    /// The W5 gate invalidation counter (readers Acquire-load it once
+    /// per gate consultation).
+    pub(crate) fn control_epoch(&self) -> &AtomicU64 {
+        &self.control_epoch
     }
 
-    /// This shard's id, defaulting to 0 outside a reactor thread.
-    pub(crate) fn shard_id(&self) -> usize {
-        self.shard_id.get().unwrap_or(0)
-    }
-
-    /// RAII guard for the MOVE-SCOPE-INGEST window. Cleared on drop;
-    /// nested guards aren't expected (a recursion into another
-    /// MOVE-SCOPE-INGEST inside one would be a bug — the inner ingest
-    /// silently inherits the outer's prefix until both drop).
-    pub(crate) fn ingest_guard(&self, prefix: Vec<u8>) -> IngestGuard<'_> {
-        *self.ingesting_prefix.borrow_mut() = Some(prefix);
-        IngestGuard { shard: self }
-    }
-
-    pub(crate) fn ingesting_matches(&self, key: &[u8]) -> bool {
-        self.ingesting_prefix
-            .borrow()
-            .as_ref()
-            .is_some_and(|p| key.starts_with(p))
-    }
-}
-
-/// See [`ShardCtx::ingest_guard`].
-pub(crate) struct IngestGuard<'a> {
-    shard: &'a ShardCtx,
-}
-
-impl Drop for IngestGuard<'_> {
-    fn drop(&mut self) {
-        *self.shard.ingesting_prefix.borrow_mut() = None;
+    /// Writer protocol step ② for non-replication cold writers
+    /// (IDX/VIEW catalog installs, MOVE-SCOPE migration transitions):
+    /// publish an authority change to every shard's gate cache.
+    pub(crate) fn bump_control_epoch(&self) {
+        self.control_epoch.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -309,6 +276,12 @@ impl KevyCommands {
         &self.shard
     }
 
+    /// This shard's gate bits (W5) — see [`ShardCtx::gate_bits`].
+    #[inline]
+    pub(crate) fn gate_bits(&self) -> u32 {
+        self.shard.gate_bits(&self.state)
+    }
+
     pub(crate) fn ctx(&self) -> Ctx<'_> {
         Ctx {
             state: &self.state,
@@ -356,17 +329,6 @@ mod tests {
         c.state.config_replace(Arc::new(cfg));
         assert!(c.state.config_is_explicit());
         assert_eq!(c.state.config().memory.maxmemory, 12345);
-    }
-
-    #[test]
-    fn ingest_guard_sets_and_clears_prefix() {
-        let shard = ShardCtx::default();
-        {
-            let _g = shard.ingest_guard(b"app:".to_vec());
-            assert!(shard.ingesting_matches(b"app:k1"));
-            assert!(!shard.ingesting_matches(b"other:k"));
-        }
-        assert!(!shard.ingesting_matches(b"app:k1"));
     }
 
     #[test]
