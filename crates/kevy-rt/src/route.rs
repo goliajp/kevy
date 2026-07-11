@@ -5,7 +5,7 @@
 use crate::exec_slowlog::SlowlogSub;
 
 /// How a command maps onto shards.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Route {
     /// Keyless; execute on the connection's own shard (e.g. PING).
     Local,
@@ -30,17 +30,13 @@ pub enum Route {
     RewriteAof,
     /// `MSET` — `args[1..]` are key/value pairs, routed per key's shard.
     MSet,
-    /// `MGET` — `args[1..]` are keys; values gathered in request order.
-    MGet,
-    /// `SINTER` / `SUNION` / `SDIFF` — `args[1..]` are set keys.
-    SInter,
-    SUnion,
-    SDiff,
+    /// Cross-shard multi-key gather (`MGET` / `SINTER` / `SUNION` /
+    /// `SDIFF` / `ZINTERCARD`): each key's payload is fetched on its
+    /// owning shard and the origin reduces them per [`crate::MultiOp`].
+    Gather(crate::MultiOp),
     /// v2.2 zset/set algebra `*STORE` family: gather sources, combine
     /// per [`crate::message::ZCombine`], materialize at `args[1]`.
     ZAlgebraStore(crate::ZCombine),
-    /// `ZINTERCARD numkeys key… [LIMIT n]` — read-only gathered count.
-    ZInterCard,
     /// v2.3 `FEED.READ <shard> <gen> <offset> …` — shard-index routed.
     FeedRead,
     /// v2.3 `FEED.TAIL <shard>`.
@@ -74,12 +70,11 @@ pub enum Route {
         timeout_ms: u64,
         miss: Vec<u8>,
     },
-    /// `KEYS pattern` — every shard returns its matching keys.
-    Keys(Option<Vec<u8>>),
-    /// `SCAN` (cursor-0 approximation) — like KEYS but replies `[cursor, keys]`.
-    Scan(Option<Vec<u8>>),
-    /// `RANDOMKEY` — one arbitrary key across all shards.
-    RandomKey,
+    /// Keyspace collection (`KEYS` / `SCAN` / `RANDOMKEY`) — every
+    /// shard contributes its matching keys, shaped at the origin per
+    /// [`crate::KeyShape`]. The second field is the glob pattern
+    /// (`None` = every key; `RANDOMKEY` carries none).
+    Keyspace(crate::KeyShape, Option<Vec<u8>>),
     /// `SUBSCRIBE` / `UNSUBSCRIBE` — connection-level (modifies this conn).
     Subscribe,
     Unsubscribe,
@@ -139,7 +134,7 @@ pub enum Route {
 
 /// The `GROUP <name> <consumer>` (+ `NOACK`) context an `XREADGROUP`
 /// gather carries to each per-stream sub-query.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct XGroupCtx {
     /// Consumer-group name.
     pub group: Vec<u8>,

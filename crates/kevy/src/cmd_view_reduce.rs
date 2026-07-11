@@ -3,6 +3,7 @@
 
 use kevy_index::{IndexValue, Tree, ViewMode};
 use kevy_resp::{encode_array_len, encode_bulk, encode_error};
+use kevy_rt::ExtensionReduced;
 
 use crate::cmd_index_query::{ST_BUILDING, ST_NOINDEX};
 use crate::cmd_view::QueryArgs;
@@ -13,51 +14,55 @@ pub(crate) fn extension_reduce(
     catalogs: &CatalogState,
     argv: &[Vec<u8>],
     chunks: Vec<Vec<u8>>,
-) -> Vec<u8> {
+) -> ExtensionReduced {
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
     let mut out = Vec::new();
     for c in &chunks {
         match c.first().copied() {
             Some(x) if x == crate::cmd_index_query::ST_BADARGS => {
                 encode_error(&mut out, "ERR bad VIEW arguments");
-                return out;
+                return ExtensionReduced::Reply(out);
             }
             Some(x) if x == ST_NOINDEX => {
                 encode_error(&mut out, "ERR no such view");
-                return out;
+                return ExtensionReduced::Reply(out);
             }
             Some(x) if x == ST_BUILDING => {
                 encode_error(&mut out, "INDEXBUILDING view's base index is still building");
-                return out;
+                return ExtensionReduced::Reply(out);
             }
             None => {
                 encode_error(&mut out, "ERR bad VIEW arguments");
-                return out;
+                return ExtensionReduced::Reply(out);
             }
             _ => {}
         }
     }
     if verb.eq_ignore_ascii_case(b"VIEW.REBUILD") {
         out.extend_from_slice(b"+OK\r\n");
-        return out;
+        return ExtensionReduced::Reply(out);
     }
     if verb.eq_ignore_ascii_case(b"VIEW.HYDRATE") {
-        return reduce_hydrate(argv, &chunks);
+        return ExtensionReduced::Reply(reduce_hydrate(argv, &chunks));
     }
     if verb.eq_ignore_ascii_case(b"VIEW.LIST") || verb.eq_ignore_ascii_case(b"VIEW.VERIFY") {
-        return reduce_stats(catalogs, argv, &chunks);
+        return ExtensionReduced::Reply(reduce_stats(catalogs, argv, &chunks));
     }
     if verb.eq_ignore_ascii_case(b"VIEW.EXPLAIN") {
-        return reduce_explain(catalogs, argv, &chunks);
+        return ExtensionReduced::Reply(reduce_explain(catalogs, argv, &chunks));
     }
     reduce_query(catalogs, argv, chunks)
 }
 
-fn reduce_query(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
+fn reduce_query(
+    catalogs: &CatalogState,
+    argv: &[Vec<u8>],
+    chunks: Vec<Vec<u8>>,
+) -> ExtensionReduced {
     let mut out = Vec::new();
     let Some(q) = QueryArgs::parse(argv) else {
         encode_error(&mut out, "ERR bad VIEW arguments");
-        return out;
+        return ExtensionReduced::Reply(out);
     };
     let spec = catalogs.view().and_then(|c| c.get(&q.name).cloned());
     let desc = spec.as_ref().is_some_and(|s| s.desc);
@@ -80,7 +85,7 @@ fn reduce_query(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: Vec<Vec<u8>>)
     if !q.fields.is_empty() {
         let Some(via) = spec.as_ref().and_then(|s| s.via.clone()) else {
             encode_error(&mut out, "ERR FIELDS requires the view to declare VIA");
-            return out;
+            return ExtensionReduced::Reply(out);
         };
         return hydrate_continuation(&q.fields, &via, &next, &all);
     }
@@ -91,7 +96,7 @@ fn reduce_query(catalogs: &CatalogState, argv: &[Vec<u8>], chunks: Vec<Vec<u8>>)
         encode_bulk(&mut out, k);
         encode_bulk(&mut out, &crate::cmd_index_reduce::value_repr_pub(v));
     }
-    out
+    ExtensionReduced::Reply(out)
 }
 
 /// Decode every shard chunk's `(value, key)` rows into one flat list.
@@ -110,14 +115,15 @@ fn collect_chunk_rows(chunks: &[Vec<u8>]) -> Vec<(IndexValue, Vec<u8>)> {
     all
 }
 
-/// Build the stateless VIEW.HYDRATE continuation (kevy-rt convention:
-/// a reduce reply starting with NUL re-fans the embedded argv).
+/// Build the stateless VIEW.HYDRATE follow-up fan-out: the argv
+/// carries the full phase-1 result, so the second phase needs no
+/// server-side state.
 fn hydrate_continuation(
     fields: &[Vec<u8>],
     via: &[u8],
     next: &[u8],
     all: &[(IndexValue, Vec<u8>)],
-) -> Vec<u8> {
+) -> ExtensionReduced {
     let mut argv2: Vec<Vec<u8>> = vec![b"VIEW.HYDRATE".to_vec(), next.to_vec()];
     argv2.push((fields.len() as u32).to_le_bytes().to_vec());
     argv2.extend(fields.iter().cloned());
@@ -126,13 +132,7 @@ fn hydrate_continuation(
         argv2.push(crate::cmd_index_reduce::value_repr_pub(v));
         argv2.push(expand_via(via, k));
     }
-    let mut cont = vec![0u8];
-    cont.extend_from_slice(&(argv2.len() as u32).to_le_bytes());
-    for item in &argv2 {
-        cont.extend_from_slice(&(item.len() as u32).to_le_bytes());
-        cont.extend_from_slice(item);
-    }
-    cont
+    ExtensionReduced::Continue(argv2)
 }
 
 /// Expand a VIA template: `{key}` = the member key, `{key.N}` = the

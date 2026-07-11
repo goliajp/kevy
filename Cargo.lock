@@ -463,9 +463,6 @@ dependencies = [
 [[package]]
 name = "kevy-chaos"
 version = "3.18.0"
-dependencies = [
- "kevy-resp-client",
-]
 
 [[package]]
 name = "kevy-cli"
@@ -560,8 +557,6 @@ name = "kevy-lua"
 version = "3.18.0"
 dependencies = [
  "kevy-bench",
- "kevy-bytes",
- "kevy-resp",
  "luna-core",
 ]
 

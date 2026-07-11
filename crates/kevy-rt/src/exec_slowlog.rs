@@ -173,7 +173,7 @@ impl<C: Commands> Shard<C> {
 
 /// Parsed `SLOWLOG <sub> [args]` decision — picked at routing time so
 /// the runtime knows whether to fan out or short-circuit.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlowlogSub {
     /// `SLOWLOG GET [count]`. `None` = use Redis default of 10. `Some(n)`
     /// where `n < 0` means "all entries".

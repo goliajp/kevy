@@ -5,130 +5,23 @@
 //! lives here.
 
 use kevy_rt::{
-    ArgvView, BlockKind, Commands, NotifyClass, ResolvedCmd, RespVersion, Route, TxnKind,
-    parse_slowlog_sub,
+    ArgvView, BlockKind, Commands, ExtensionReduced, NotifyClass, ResolvedCmd, RespVersion, Route,
+    TxnKind,
 };
 use kevy_store::Store;
 
-use crate::cmd::{self, scan_pattern, upper_verb};
+use crate::cmd::{self, upper_verb};
 use crate::{
     Argv, KevyCommands, cmd_block, cmd_block_serve, cmd_hello, cmd_resolve, dispatch,
     map_appendfsync, map_eviction_policy, ops,
 };
 
 impl Commands for KevyCommands {
-    // LOC-WAIVER: data-driven verb → Route match table — one arm per verb.
     fn route<A: ArgvView + ?Sized>(&self, args: &A) -> Route {
-        let Some(name) = args.first() else {
-            return Route::Local;
-        };
-        let mut buf = [0u8; 32];
-        match upper_verb(name, &mut buf) {
-            b"HELLO" => Route::Hello,
-            b"PING" | b"ECHO" | b"QUIT" | b"COMMAND" | b"CONFIG"
-            | b"INFO" | b"CLUSTER" | b"DEBUG" | b"SHUTDOWN"
-            | b"CLIENT" | b"SELECT" | b"ROLE"
-            | b"REPLICAOF" | b"SLAVEOF" => Route::Local,
-            // v3.16 — kept in sync with cmd_resolve::route_for_verb.
-            b"WAIT" => crate::cmd_repl::wait_route(&self.state().replication, args),
-            b"REPL.TOKEN" => crate::cmd_repl::token_route(&self.state().replication, args),
-            b"REPL.WAIT" => crate::cmd_repl::repl_wait_route(&self.state().replication, args),
-            b"DBSIZE" => Route::Dbsize,
-            b"FLUSHDB" | b"FLUSHALL" => Route::Flush,
-            b"SAVE" => Route::Save,
-            b"BGSAVE" => Route::BgSave,
-            b"BGREWRITEAOF" => Route::RewriteAof,
-            // Cross-shard multi-key (malformed arity falls back to Local so the
-            // dispatch stub returns the arity error).
-            b"MSET" if args.len() >= 3 && !args.len().is_multiple_of(2) => Route::MSet,
-            b"MGET" if args.len() >= 2 => Route::MGet,
-            b"ZINTERSTORE" if args.len() >= 4 => Route::ZAlgebraStore(kevy_rt::ZCombine::ZInter),
-            b"ZUNIONSTORE" if args.len() >= 4 => Route::ZAlgebraStore(kevy_rt::ZCombine::ZUnion),
-            b"ZDIFFSTORE" if args.len() >= 4 => Route::ZAlgebraStore(kevy_rt::ZCombine::ZDiff),
-            b"SINTERSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SInter),
-            b"SUNIONSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SUnion),
-            b"SDIFFSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SDiff),
-            b"ZINTERCARD" if args.len() >= 3 => Route::ZInterCard,
-            b"IDX.QUERY" if args.len() >= 4 => Route::Extension,
-            b"IDX.EXPLAIN" if args.len() >= 2 => Route::Extension,
-            b"IDX.REBUILD" if args.len() == 2 => Route::Extension,
-            b"IDX.COUNT" if args.len() >= 4 => Route::Extension,
-            b"IDX.VERIFY" if args.len() == 2 => Route::Extension,
-            b"IDX.LIST" if args.len() == 1 => Route::Extension,
-            b"VIEW.QUERY" if args.len() >= 2 => Route::Extension,
-            b"VIEW.LIST" if args.len() == 1 => Route::Extension,
-            b"VIEW.VERIFY" if args.len() == 2 => Route::Extension,
-            b"VIEW.REBUILD" if args.len() == 2 => Route::Extension,
-            b"VIEW.EXPLAIN" if args.len() == 2 => Route::Extension,
-            b"PREFIX.STATS" if args.len() == 2 => Route::PrefixStats,
-            b"PREFIX.DIGEST" if args.len() == 2 => Route::Extension,
-            b"FEED.READ" if args.len() >= 4 => Route::FeedRead,
-            b"FEED.TAIL" if args.len() == 2 => Route::FeedTail,
-            b"FEED.SHARDS" if args.len() == 1 => Route::FeedShards,
-            b"SINTER" if args.len() >= 2 => Route::SInter,
-            b"SUNION" if args.len() >= 2 => Route::SUnion,
-            b"SDIFF" if args.len() >= 2 => Route::SDiff,
-            b"KEYS" if args.len() == 2 => Route::Keys(Some(args[1].to_vec())),
-            b"SCAN" if args.len() >= 2 => Route::Scan(scan_pattern(args)),
-            b"RANDOMKEY" if args.len() == 1 => Route::RandomKey,
-            b"SUBSCRIBE" if args.len() >= 2 => Route::Subscribe,
-            b"UNSUBSCRIBE" => Route::Unsubscribe, // no args = unsubscribe all
-            b"PSUBSCRIBE" if args.len() >= 2 => Route::Psubscribe,
-            b"PUNSUBSCRIBE" => Route::Punsubscribe, // no args = punsubscribe all
-            b"PUBLISH" if args.len() == 3 => Route::Publish,
-            b"WATCH" if args.len() >= 2 => Route::Watch,
-            b"UNWATCH" => Route::Unwatch,
-            b"RENAME" => Route::Rename { nx: false },
-            b"RENAMENX" => Route::Rename { nx: true },
-            // v1.27.1: keep in sync with cmd_resolve::route_for_verb —
-            // the runtime hot path goes through `resolve()` →
-            // `route_for_verb`, but tests + future direct callers of
-            // `route()` need the same answer.
-            b"EVAL" | b"EVALSHA" | b"EVAL_RO" | b"EVALSHA_RO" => {
-                if args.len() >= 4 {
-                    let nk = std::str::from_utf8(&args[2])
-                        .ok()
-                        .and_then(|s| s.parse::<i64>().ok())
-                        .unwrap_or(0);
-                    if nk >= 1 && (args.len() as i64) >= 3 + nk {
-                        Route::Single(3)
-                    } else {
-                        Route::Local
-                    }
-                } else {
-                    Route::Local
-                }
-            }
-            b"SCRIPT" => Route::Local,
-            b"XREAD" => cmd_block::xread_route(args),
-            b"XREADGROUP" => cmd_block::xreadgroup_route(args),
-            // XGROUP / XINFO key is at args[2] (after the subcommand).
-            b"XGROUP" | b"XINFO" if args.len() >= 3 => Route::Single(2),
-            b"SLOWLOG" => Route::Slowlog(parse_slowlog_sub(args)),
-            // DEL/EXISTS are single-key (fast path) unless given multiple keys.
-            b"DEL" | b"UNLINK" => {
-                if args.len() == 2 {
-                    Route::Single(1)
-                } else {
-                    Route::DelKeys
-                }
-            }
-            b"EXISTS" => {
-                if args.len() == 2 {
-                    Route::Single(1)
-                } else {
-                    Route::ExistsKeys
-                }
-            }
-            // All remaining commands act on a single key at args[1].
-            _ => {
-                if args.len() >= 2 {
-                    Route::Single(1)
-                } else {
-                    Route::Local // malformed; dispatch will return the error
-                }
-            }
-        }
+        // One routing table for the whole crate: `cmd_resolve` owns it
+        // (the hot path reads it through `resolve()`); this standalone
+        // accessor delegates so the two faces can never drift.
+        cmd_resolve::route(&self.state().replication, args)
     }
 
     fn dispatch<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8> {
@@ -137,12 +30,6 @@ impl Commands for KevyCommands {
 
     fn dispatch_into<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A, out: &mut Vec<u8>) {
         dispatch::dispatch_into(&self.ctx(), store, args, out);
-    }
-
-    fn dispatch_resp3<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8> {
-        let mut out = Vec::with_capacity(64);
-        dispatch::dispatch_into_resp3(&self.ctx(), store, args, &mut out);
-        out
     }
 
     fn dispatch_into_resp3<A: ArgvView + ?Sized>(
@@ -253,15 +140,27 @@ impl Commands for KevyCommands {
         crate::cmd_index_query::extension_op(&self.ctx(), store, argv)
     }
 
-    fn extension_reduce(&self, argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
-        if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"PREFIX.DIGEST")) {
-            return crate::cmd_digest::extension_reduce(chunks);
-        }
+    fn extension_reduce(
+        &self,
+        argv: &[Vec<u8>],
+        chunks: Vec<Vec<u8>>,
+        proto: kevy_resp::RespVersion,
+    ) -> ExtensionReduced {
         let catalogs = &self.state().catalogs;
-        if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
-            return crate::cmd_view::extension_reduce(catalogs, argv, chunks);
+        let reduced = if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"PREFIX.DIGEST")) {
+            ExtensionReduced::Reply(crate::cmd_digest::extension_reduce(chunks))
+        } else if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW."))
+        {
+            crate::cmd_view::extension_reduce(catalogs, argv, chunks)
+        } else {
+            crate::cmd_index_reduce::extension_reduce(catalogs, argv, chunks)
+        };
+        match reduced {
+            ExtensionReduced::Reply(reply) if proto == kevy_resp::RespVersion::V3 => {
+                ExtensionReduced::Reply(crate::cmd_index_reduce::resp3_upgrade(argv, reply))
+            }
+            other => other,
         }
-        crate::cmd_index_reduce::extension_reduce(catalogs, argv, chunks)
     }
 
     fn write_denied(&self) -> Option<Vec<u8>> {
@@ -286,19 +185,6 @@ impl Commands for KevyCommands {
             return None;
         }
         self.state().replication.read_denied_reply()
-    }
-
-    fn extension_reduce_v3(
-        &self,
-        argv: &[Vec<u8>],
-        chunks: Vec<Vec<u8>>,
-        proto: kevy_resp::RespVersion,
-    ) -> Vec<u8> {
-        let reply = self.extension_reduce(argv, chunks);
-        if proto == kevy_resp::RespVersion::V3 {
-            return crate::cmd_index_reduce::resp3_upgrade(argv, reply);
-        }
-        reply
     }
 
     fn on_shard_tick(&self, store: &mut Store) {
@@ -450,12 +336,6 @@ impl Commands for KevyCommands {
         kind: BlockKind,
     ) -> bool {
         cmd_block_serve::block_ready(&self.ctx(), store, serve_argv, kind)
-    }
-
-    fn wake_idx<A: ArgvView + ?Sized>(&self, args: &A) -> Option<u8> {
-        let name = args.first()?;
-        let mut buf = [0u8; 32];
-        cmd_block::wake_idx_for_verb(upper_verb(name, &mut buf))
     }
 
     /// One-pass verb resolution — the reactor calls this once per cmd and

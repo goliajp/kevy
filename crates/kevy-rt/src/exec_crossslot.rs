@@ -46,13 +46,7 @@ impl<C: Commands> Shard<C> {
 pub(crate) fn is_crossslot_checked(route: &Route) -> bool {
     matches!(
         route,
-        Route::MGet
-            | Route::MSet
-            | Route::SInter
-            | Route::SUnion
-            | Route::SDiff
-            | Route::ZAlgebraStore(_)
-            | Route::ZInterCard
+        Route::Gather(_) | Route::MSet | Route::ZAlgebraStore(_)
     )
 }
 
@@ -78,7 +72,7 @@ pub(crate) fn keys_span_slots<A: ArgvView + ?Sized>(route: &Route, args: &A) -> 
             }
             return slots.windows(2).any(|w| w[0] != w[1]);
         }
-        Route::ZInterCard => {
+        Route::Gather(crate::MultiOp::ZInterCard) => {
             let Some(n) = parse_numkeys(args, 1) else { return false };
             let mut slots = Vec::new();
             for i in 2..(2 + n).min(args.len()) {

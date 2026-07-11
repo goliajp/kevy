@@ -147,9 +147,11 @@ pub use kevy_store::Store;
 pub use replica_inbox::{ReplicaApply, ReplicaInboxReceiver, ReplicaInboxSender, replica_inbox_pair};
 pub use replication_gate::ReplicatedApplyGuard;
 pub use route::{Route, XGroupCtx};
-pub use message::ZCombine;
+pub use message::{KeyShape, MultiOp, ZCombine};
 pub use runtime::Runtime;
-pub use types::{LiveRuntimeConfig, NotifyClass, ReplicaAck, ResolvedCmd, TxnKind};
+pub use types::{
+    ExtensionReduced, LiveRuntimeConfig, NotifyClass, ReplicaAck, ResolvedCmd, TxnKind,
+};
 
 /// Command-set semantics injected into the runtime. Cloned to every core, so it
 /// must be cheap/stateless to clone.
@@ -158,13 +160,6 @@ pub trait Commands: Clone + Send + 'static {
     fn route<A: ArgvView + ?Sized>(&self, args: &A) -> Route;
     /// Execute a full command against one shard's store, returning RESP bytes.
     fn dispatch<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8>;
-    /// RESP3 variant of [`Self::dispatch`] — called when the connection
-    /// has negotiated `HELLO 3`. Default: delegate to the RESP2 path
-    /// (the cross-shard forward carries a per-cmd `RespVersion`
-    /// so a V2 client and a V3 client can share the owning shard).
-    fn dispatch_resp3<A: ArgvView + ?Sized>(&self, store: &mut Store, args: &A) -> Vec<u8> {
-        self.dispatch(store, args)
-    }
     /// Execute a command, appending the RESP reply to `out`. The in-order local
     /// fast path uses this to write straight into the connection's output buffer
     /// (no per-command reply `Vec`). Default: delegate to [`dispatch`](Self::dispatch).
@@ -275,19 +270,18 @@ pub trait Commands: Clone + Send + 'static {
         Vec::new()
     }
 
-    /// v2.5: origin-side reduce of an extension fan-out — merge every
-    /// shard's chunk into the final RESP reply bytes.
-    /// v3.14 A0 — pre-dispatch write gate. `Some(err_bytes)` rejects
-    /// every data-write client command with that RESP error before any
+    /// Pre-dispatch write gate. `Some(err_bytes)` rejects every
+    /// data-write client command with that RESP error before any
     /// routing (replication apply does NOT pass through here, so a
     /// read-only replica keeps applying its feed). Admin verbs
     /// (REPLICAOF / CONFIG) are not classified as writes and stay
-    /// available as the operator escape hatch.
+    /// available as the operator escape hatch. Default: writes always
+    /// allowed.
     fn write_denied(&self) -> Option<Vec<u8>> {
         None
     }
 
-    /// v3.16 D3 — bounded staleness: called before READ verbs; return
+    /// Bounded staleness: called before READ verbs; return
     /// `Some(error_bytes)` to refuse the read (a replica whose feed
     /// is staler than the configured bound answers `-STALE` so the
     /// client falls back to the primary). Default: reads always
@@ -296,18 +290,19 @@ pub trait Commands: Clone + Send + 'static {
         None
     }
 
-    fn extension_reduce_v3(
+    /// Origin-side reduce of an extension fan-out — merge every
+    /// shard's chunk (produced by [`Self::extension_op`]) into either
+    /// the final RESP reply or a follow-up fan-out argv (see
+    /// [`ExtensionReduced`]). `proto` is the requesting connection's
+    /// negotiated RESP version so proto-aware reduces can shape the
+    /// reply (Map vs pair-array).
+    fn extension_reduce(
         &self,
-        argv: &[Vec<u8>],
-        chunks: Vec<Vec<u8>>,
+        _argv: &[Vec<u8>],
+        _chunks: Vec<Vec<u8>>,
         _proto: kevy_resp::RespVersion,
-    ) -> Vec<u8> {
-        // Default: proto-blind reduce (RESP2 wire on both protos).
-        self.extension_reduce(argv, chunks)
-    }
-
-    fn extension_reduce(&self, _argv: &[Vec<u8>], _chunks: Vec<Vec<u8>>) -> Vec<u8> {
-        b"-ERR extension commands not supported\r\n".to_vec()
+    ) -> ExtensionReduced {
+        ExtensionReduced::Reply(b"-ERR extension commands not supported\r\n".to_vec())
     }
 
     /// v2.5: called after every applied write with the written key
@@ -343,18 +338,6 @@ pub trait Commands: Clone + Send + 'static {
     /// the impl's read of its own config source.
     fn live_runtime_config(&self) -> LiveRuntimeConfig {
         LiveRuntimeConfig::default()
-    }
-
-    /// Index into `args` of the key whose write may wake a blocked waiter
-    /// (`LPUSH` / `RPUSH` feed `BLPOP` / `BRPOP`; `XADD` feeds the stream
-    /// blocks). `Some(1)` for those verbs, `None` for everything else. The
-    /// in-shard fast path reads this off [`ResolvedCmd::wake_idx`]; the
-    /// cross-shard write path (`exec_op`, where a forwarded write
-    /// lands on the key's owning shard) re-derives it via this method since
-    /// the forwarded envelope doesn't carry the resolved hint. Default
-    /// `None` so non-blocking embedders pay nothing.
-    fn wake_idx<A: ArgvView + ?Sized>(&self, _args: &A) -> Option<u8> {
-        None
     }
 
     /// Classify a command for blocking semantics. `BlockHint::None`

@@ -14,51 +14,53 @@ pub(crate) use chunk::{
 };
 
 use kevy_resp::encode_error;
+use kevy_rt::ExtensionReduced;
 
 use crate::cmd_index_query::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OVERBUDGET};
 use crate::state::CatalogState;
 
-/// Origin half: merge chunks → RESP.
+/// Origin half: merge chunks → RESP (or a follow-up fan-out — the
+/// GROUPS top-K and its AGG.FETCH phase are the two-phase shapes).
 pub(crate) fn extension_reduce(
     catalogs: &CatalogState,
     argv: &[Vec<u8>],
     chunks: Vec<Vec<u8>>,
-) -> Vec<u8> {
+) -> ExtensionReduced {
     if let Some(err) = triage_status(argv, &chunks) {
-        return err;
+        return ExtensionReduced::Reply(err);
     }
     if let Some(reply) = reduce_admin(catalogs, argv, &chunks) {
-        return reply;
+        return ExtensionReduced::Reply(reply);
     }
-    // v3.1 GROUP/GROUPS: TPUT-style exact top-K (see reduce_agg).
+    // GROUP/GROUPS: TPUT-style exact top-K (see reduce_agg).
     if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"AGG.FETCH")) {
-        return agg::reduce_agg_fetch(argv, &chunks);
+        return ExtensionReduced::Reply(agg::reduce_agg_fetch(argv, &chunks));
     }
     if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"GROUP") || a.eq_ignore_ascii_case(b"GROUPS")) {
         return agg::reduce_agg(argv, &chunks);
     }
-    // v2.8 KNN: merge distance-ranked chunks ascending.
+    // KNN: merge distance-ranked chunks ascending.
     if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"KNN")) {
-        return ranked::reduce_ranked(argv, &chunks, true);
+        return ExtensionReduced::Reply(ranked::reduce_ranked(argv, &chunks, true));
     }
-    // v2.8 REBUILD: all shards OK → +OK.
+    // REBUILD: all shards OK → +OK.
     if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"IDX.REBUILD")) {
-        return query::reduce_rebuild(&chunks);
+        return ExtensionReduced::Reply(query::reduce_rebuild(&chunks));
     }
-    // v3.13 HYBRID: reciprocal-rank fusion of the two ranked segments.
+    // HYBRID: reciprocal-rank fusion of the two ranked segments.
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"HYBRID")) {
-        return ranked::reduce_hybrid(argv, &chunks);
+        return ExtensionReduced::Reply(ranked::reduce_hybrid(argv, &chunks));
     }
-    // v2.7 MATCH: same chunk layout as KNN, sorted score-descending.
+    // MATCH: same chunk layout as KNN, sorted score-descending.
     if argv.get(2).is_some_and(|a| a.eq_ignore_ascii_case(b"MATCH")) {
-        return ranked::reduce_ranked(argv, &chunks, false);
+        return ExtensionReduced::Reply(ranked::reduce_ranked(argv, &chunks, false));
     }
     // IDX.QUERY COMPOSE: merge key-ordered chunks.
     if argv.get(1).is_some_and(|a| a.eq_ignore_ascii_case(b"COMPOSE")) {
-        return query::reduce_compose(argv, &chunks);
+        return ExtensionReduced::Reply(query::reduce_compose(argv, &chunks));
     }
     // IDX.QUERY: k-way merge by (value, key), global LIMIT + cursor.
-    query::reduce_query(argv, &chunks)
+    ExtensionReduced::Reply(query::reduce_query(argv, &chunks))
 }
 
 /// The admin verbs (EXPLAIN / COUNT / LIST / VERIFY); `None` = a

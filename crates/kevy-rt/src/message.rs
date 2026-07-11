@@ -58,16 +58,23 @@ pub(crate) enum Gathered {
     WrongType,
 }
 
-/// The multi-key reductions computed on the originating shard.
-#[derive(Clone, Copy)]
-pub(crate) enum MultiOp {
+/// The multi-key gather reductions computed on the originating shard.
+/// Public: [`crate::Route::Gather`] carries it, and embedders' `route()`
+/// implementations construct it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MultiOp {
+    /// `MGET` — values gathered in request order.
     Mget,
+    /// `SINTER`.
     SInter,
+    /// `SUNION`.
     SUnion,
+    /// `SDIFF`.
     SDiff,
-    /// `ZINTERCARD numkeys key… [LIMIT n]` — reduce replies `:count`
-    /// (0 = unlimited).
-    ZInterCard(usize),
+    /// `ZINTERCARD numkeys key… [LIMIT n]` — read-only gathered count.
+    /// The `LIMIT` cap is parsed from the argv by the gather builder
+    /// (it sits after the keys), not carried here.
+    ZInterCard,
 }
 
 /// Which algebra combination a `*STORE` orchestrator runs after its
@@ -213,9 +220,11 @@ pub(crate) enum Op {
     XReadOne { index: u32, argv: Argv, write: bool },
 }
 
-/// How a KEYS-family reply is shaped.
-#[derive(Clone, Copy)]
-pub(crate) enum KeyShape {
+/// How a keyspace-collection reply is shaped. Public:
+/// [`crate::Route::Keyspace`] carries it, and embedders' `route()`
+/// implementations construct it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyShape {
     /// `KEYS` — a flat array of keys.
     Keys,
     /// `SCAN` — `[cursor, [keys]]` (cursor always "0").
