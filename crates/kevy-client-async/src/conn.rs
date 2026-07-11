@@ -50,12 +50,12 @@ pub struct AsyncConnection {
 }
 
 impl AsyncConnection {
-    /// Open a connection from a URL. Accepts `kevy://`, `redis://`,
+    /// Connect from a URL. Accepts `kevy://`, `redis://`,
     /// `tcp://` — see [`crate::url::parse_url`] for the full grammar.
     ///
     /// If the URL carries a `/N` db index (only `kevy://` and `redis://`),
     /// an initial `SELECT N` round-trip runs before returning.
-    pub async fn open(url: &str) -> io::Result<Self> {
+    pub async fn connect(url: &str) -> io::Result<Self> {
         let parsed = parse_url(url)?;
         let transport = connect_default(&parsed.host, parsed.port).await?;
         let mut codec = AsyncRespCodec::new(transport);

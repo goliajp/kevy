@@ -4,16 +4,16 @@
 //! [`RespClient::request`] writes one command and blocks until exactly one
 //! reply is parsed. Works against any RESP2 server — kevy, valkey, redis.
 //!
-//! [`RespClient::from_url`] is the URL-string entry point and accepts
+//! [`RespClient::connect_url`] is the URL-string entry point and accepts
 //! `kevy://` (kevy-native alias), `redis://` (standard), and `tcp://`
 //! (plain host:port — no leading SELECT round-trip):
 //!
 //! ```no_run
 //! # use kevy_resp_client::RespClient;
-//! let _ = RespClient::from_url("kevy://localhost:6379")?;     // alias of redis://
-//! let _ = RespClient::from_url("kevy://localhost:6379/0")?;   // also issues SELECT 0
-//! let _ = RespClient::from_url("redis://10.0.0.5:6379")?;
-//! let _ = RespClient::from_url("tcp://kevy.internal:6379")?;
+//! let _ = RespClient::connect_url("kevy://localhost:6379")?;   // alias of redis://
+//! let _ = RespClient::connect_url("kevy://localhost:6379/0")?; // also issues SELECT 0
+//! let _ = RespClient::connect_url("redis://10.0.0.5:6379")?;
+//! let _ = RespClient::connect_url("tcp://kevy.internal:6379")?;
 //! # Ok::<(), std::io::Error>(())
 //! ```
 //!
@@ -149,9 +149,9 @@ impl RespClient {
     ///
     /// If a `/db` path segment is present, an explicit `SELECT <db>` is
     /// issued before returning the client. For non-zero indices kevy will
-    /// reply with its "only supports DB 0" error and `from_url` propagates
-    /// that as [`io::ErrorKind::Other`].
-    pub fn from_url(url: &str) -> io::Result<Self> {
+    /// reply with its "only supports DB 0" error and `connect_url`
+    /// propagates that as [`io::ErrorKind::Other`].
+    pub fn connect_url(url: &str) -> io::Result<Self> {
         let parsed = parse_url(url)?;
         let mut client = Self::connect(&parsed.host, parsed.port)?;
         if let Some(db) = parsed.db {

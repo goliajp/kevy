@@ -408,7 +408,7 @@ mod tests {
     fn serialize_prefix_emits_hset_for_hash_in_order() {
         let mut store = fresh_store();
         store
-            .hset(b"app:h", &[(b"f1".to_vec(), b"v1".to_vec()), (b"f2".to_vec(), b"v2".to_vec())])
+            .hset(b"app:h", &[(b"f1".as_slice(), b"v1".as_slice()), (b"f2".as_slice(), b"v2".as_slice())])
             .unwrap();
         let (bulk, count) = serialize_prefix(&mut store, b"app:");
         assert_eq!(count, 1);

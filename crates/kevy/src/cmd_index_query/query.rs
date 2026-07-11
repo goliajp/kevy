@@ -64,7 +64,7 @@ fn verify_kind_stats(ctx: &Ctx<'_>, store: &mut Store, name: &[u8]) -> Option<Ve
             }
             chunk
         }
-        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(_) => vec![ST_NOINDEX],
     })
 }
@@ -105,8 +105,8 @@ fn run_scalar_query(ctx: &Ctx<'_>, store: &mut Store, q: &Query, verb: &[u8]) ->
     match res {
         Ok(HitsOrChunk::Chunk(chunk)) => chunk,
         Ok(HitsOrChunk::Hits(hits)) => encode_hits_chunk(store, &hits, &q.fields),
-        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
-        Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
 }

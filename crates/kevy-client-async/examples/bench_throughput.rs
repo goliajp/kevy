@@ -30,7 +30,7 @@ async fn main() {
     let url = url();
     println!("Target: {url} | N={N} | PIPE={PIPE} | warmup={WARMUP}");
 
-    let mut c = AsyncConnection::open(&url).await.expect("kevy reachable");
+    let mut c = AsyncConnection::connect(&url).await.expect("kevy reachable");
     for i in 0..WARMUP {
         let k = format!("bench:warm:{i}");
         c.set(k.as_bytes(), b"v").await.unwrap();
@@ -73,7 +73,7 @@ async fn main() {
     // blocking sequential — spawn_blocking out of the async task
     let blocking_url = url.clone();
     tokio::task::spawn_blocking(move || {
-        let mut bc = kevy_client::Connection::open(&blocking_url).expect("kevy reachable");
+        let mut bc = kevy_client::Connection::connect(&blocking_url).expect("kevy reachable");
         for i in 0..WARMUP {
             let k = format!("bench:warm:{i}");
             bc.set(k.as_bytes(), b"v").unwrap();

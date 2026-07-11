@@ -1,3 +1,4 @@
+use crate::KevyError;
 use super::*;
 use crate::{Config, Store};
 
@@ -159,7 +160,7 @@ fn recv_timeout_returns_timeout_when_empty() {
     let err = sub
         .recv_timeout(Duration::from_millis(50))
         .unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    assert!(matches!(err, KevyError::TimedOut));
 }
 
 #[test]

@@ -46,6 +46,8 @@ mod bio_drop;
 mod bitmap;
 mod clock;
 mod entry;
+mod error;
+pub use error::{KevyError, KevyResult};
 pub mod evict;
 pub mod expire;
 pub use expire::ExpireStats;

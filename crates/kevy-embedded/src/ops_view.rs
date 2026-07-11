@@ -7,6 +7,7 @@
 //! synchronous builds, typed API (`Tree` passed directly — no text
 //! grammar in-process).
 
+use crate::{KevyError, KevyResult};
 use std::io;
 use std::sync::RwLock;
 
@@ -51,7 +52,7 @@ impl Store {
         order_by: &[u8],
         desc: bool,
         mode: ViewMode,
-    ) -> io::Result<()> {
+    ) -> KevyResult<()> {
         self.check_view_refs(&tree, order_by)?;
         let spec = ViewSpec {
             name: name.to_vec(),
@@ -84,7 +85,7 @@ impl Store {
 
     /// Every index a view references (its leaves + ORDER BY) must
     /// already be declared.
-    fn check_view_refs(&self, tree: &Tree, order_by: &[u8]) -> io::Result<()> {
+    fn check_view_refs(&self, tree: &Tree, order_by: &[u8]) -> KevyResult<()> {
         let mut names: Vec<Vec<u8>> = vec![order_by.to_vec()];
         tree.each_leaf(&mut |l| names.push(l.index.clone()));
         let g = self
@@ -94,10 +95,7 @@ impl Store {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         for n in &names {
             if g.1.get(n).is_none() {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "view references unknown index",
-                ));
+                return Err(KevyError::InvalidInput("view references unknown index".into()));
             }
         }
         Ok(())
@@ -131,7 +129,7 @@ impl Store {
         name: &[u8],
         after: Option<&(IndexValue, Vec<u8>)>,
         limit: usize,
-    ) -> io::Result<ViewPage> {
+    ) -> KevyResult<ViewPage> {
         let limit = limit.clamp(1, 100_000);
         let mut desc = false;
         let mut all: Vec<(IndexValue, Vec<u8>)> = Vec::new();
@@ -155,7 +153,7 @@ impl Store {
             }
         }
         if !found {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "no such view"));
+            return Err(KevyError::NotFound("no such view".into()));
         }
         all.sort();
         if desc {
@@ -179,7 +177,7 @@ impl Store {
     }
 
     /// Summed member count across shards.
-    pub fn view_count(&self, name: &[u8]) -> io::Result<u64> {
+    pub fn view_count(&self, name: &[u8]) -> KevyResult<u64> {
         Ok(self.view_query(name, None, 100_000)?.0.len() as u64)
     }
 

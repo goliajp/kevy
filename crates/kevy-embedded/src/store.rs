@@ -2,7 +2,7 @@
 //! per-shard locks (for cross-thread access), optional AOF auto-logging, an
 //! optional background TTL reaper, and an in-process pub/sub bus.
 
-use std::io;
+use crate::{KevyError, KevyResult};
 use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use kevy_persist::Argv;
@@ -29,7 +29,7 @@ pub(crate) type Shards = Arc<Vec<Arc<RwLock<Inner>>>>;
 /// ```
 /// use kevy_embedded::{Config, Store};
 ///
-/// # fn main() -> std::io::Result<()> {
+/// # fn main() -> std::KevyResult<()> {
 /// let s = Store::open(Config::default().with_ttl_reaper_manual())?;
 /// let s2 = s.clone();
 /// std::thread::spawn(move || {
@@ -75,7 +75,7 @@ impl Store {
     ///   background thread that streams replication frames from the
     ///   named primary and applies them to this store; local writes are
     ///   rejected with `READONLY` (see [`Self::open_replica`]).
-    pub fn open(config: Config) -> io::Result<Self> {
+    pub fn open(config: Config) -> KevyResult<Self> {
         Self::open_inner(config)
     }
 
@@ -90,7 +90,7 @@ impl Store {
         crate::listener::verbs_dispatch(self, argv, out);
     }
 
-    fn open_inner(config: Config) -> io::Result<Self> {
+    fn open_inner(config: Config) -> KevyResult<Self> {
         let shards: Shards = Arc::new(build_shards(&config)?);
         let (reaper_stop, reaper_join) = crate::reaper::spawn_reaper(&config, &shards)?;
         #[cfg(not(target_arch = "wasm32"))]
@@ -164,7 +164,7 @@ impl Store {
     /// [`Config::with_replica_upstream`] + the related setters
     /// instead.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn open_replica(upstream: impl Into<String>) -> io::Result<Self> {
+    pub fn open_replica(upstream: impl Into<String>) -> KevyResult<Self> {
         let cfg = Config::default()
             .without_aof()
             .with_replica_id(crate::replica_glue::fresh_replica_id())
@@ -191,18 +191,12 @@ impl Store {
     /// `kevy-embedded` itself stays elect-protocol-agnostic; the
     /// integration glue lives in the application.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn set_replica_upstream(&self, new_upstream: impl Into<String>) -> io::Result<()> {
+    pub fn set_replica_upstream(&self, new_upstream: impl Into<String>) -> KevyResult<()> {
         if !self.is_replica() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "set_replica_upstream called on a non-replica store",
-            ));
+            return Err(KevyError::InvalidInput("set_replica_upstream called on a non-replica store".into()));
         }
         let Some(runner) = self.guard.replica_runner.as_ref() else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "replica runner is not active (open was racy?)",
-            ));
+            return Err(KevyError::InvalidInput("replica runner is not active (open was racy?)".into()));
         };
         runner.set_upstream(new_upstream.into());
         Ok(())
@@ -275,7 +269,7 @@ impl Store {
 
     /// Append a raw RESP-frame argument list to the shard owning its key's
     /// AOF. No-op when persistence is disabled.
-    pub fn log(&self, parts: &[&[u8]]) -> io::Result<()> {
+    pub fn log(&self, parts: &[&[u8]]) -> KevyResult<()> {
         let mut g = match parts.get(1) {
             Some(key) => self.wshard(key),
             None => self.lock(),
@@ -358,10 +352,10 @@ impl Store {
     }
 
     /// Run a fallible `f` over every shard (mutating, e.g. FLUSHALL).
-    pub(crate) fn try_for_each_shard<F: FnMut(&mut Inner) -> io::Result<()>>(
+    pub(crate) fn try_for_each_shard<F: FnMut(&mut Inner) -> KevyResult<()>>(
         &self,
         mut f: F,
-    ) -> io::Result<()> {
+    ) -> KevyResult<()> {
         for s in self.shards.iter() {
             f(&mut lock_write(s))?;
         }
@@ -386,7 +380,7 @@ pub(crate) use crate::store_glue::{commit_write, lock_read, lock_write, store_er
 fn spawn_writer_source(
     config: &Config,
     shards: &Shards,
-) -> io::Result<Option<crate::replica_source::ReplicaSource>> {
+) -> KevyResult<Option<crate::replica_source::ReplicaSource>> {
     let Some(addr) = config.embed_writer_listen_addr.as_ref() else {
         return Ok(None);
     };

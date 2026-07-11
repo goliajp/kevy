@@ -15,7 +15,7 @@ use kevy_embedded::{Config, Store};
 let store = Store::open(Config::default().without_aof())?;
 store.set(b"greeting", b"hello")?;
 assert_eq!(store.get(b"greeting")?, Some(b"hello".to_vec()));
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 ## Install
@@ -64,7 +64,7 @@ assert_eq!(store.get(b"counter")?, Some(b"42".to_vec()));
 store.append(b"log", b"hello")?;
 store.append(b"log", b" world")?;
 assert_eq!(store.strlen(b"log")?, 11);
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 Atomic single-call helpers: `getset`, `getdel`, `setnx`, `setrange`,
@@ -89,7 +89,7 @@ let some = store.hmget(b"user:1", &[&b"name"[..], &b"age"[..]])?;
 
 store.hincrby(b"user:1", b"age", 1)?;
 store.hsetnx(b"user:1", b"created_at", b"2026-01-01")?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 ### Lists
@@ -107,7 +107,7 @@ assert_eq!(head, vec![b"a".to_vec()]);
 
 let window: Vec<Vec<u8>> = store.lrange(b"queue", 0, -1)?;
 assert_eq!(window, vec![b"b".to_vec(), b"c".to_vec()]);
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 Plus `lindex`, `linsert`, `lrem`, `lset`, `ltrim`, and the blocking
@@ -128,7 +128,7 @@ store.sadd(b"a", &[&b"x"[..], &b"y"[..]])?;
 store.sadd(b"b", &[&b"y"[..], &b"z"[..]])?;
 let inter = store.sinter(&[&b"a"[..], &b"b"[..]])?;
 assert_eq!(inter, vec![b"y".to_vec()]);
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 ### Sorted sets
@@ -149,7 +149,7 @@ let top: Vec<(Vec<u8>, f64)> = store.zrevrange(b"leaderboard", 0, 9)?;
 assert_eq!(top[0].0, b"bob");
 
 store.zincrby(b"leaderboard", 50.0, b"alice")?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 Range queries: `zrange`, `zrevrange`, `zrange_by_score`,
@@ -171,7 +171,7 @@ store.setbit(b"a", 0, 1)?;
 store.setbit(b"a", 7, 1)?;
 store.setbit(b"b", 0, 1)?;
 store.bitop("and", b"dest", &[&b"a"[..], &b"b"[..]])?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 Plus `bitpos`, `getrange`, and `setrange` for byte-aligned slice work.
@@ -194,7 +194,7 @@ let ttl_s = store.ttl_secs(b"session");         // -1 no TTL, -2 absent
 
 // Atomic get + (re)set TTL in one call.
 let val = store.getex(b"session", Duration::from_secs(60))?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 ### In-process pub/sub
@@ -215,7 +215,7 @@ match sub.recv()? {
     }
     _ => unreachable!(),
 }
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 Channel and pattern (`PSUBSCRIBE`-style glob) subscriptions are both
@@ -236,7 +236,7 @@ let user_keys: Vec<Vec<u8>> = store
     .keys_iter(Some(b"user:*"))
     .collect();
 assert_eq!(user_keys.len(), 1_000);
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 The `keys_iter`, `hash_iter`, and `zset_iter` wrappers turn the raw
@@ -269,7 +269,7 @@ let result = store.atomic(b"{user:42}:counter", |s| {
     Ok(n)
 })?;
 assert_eq!(result, 1);
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 ### `atomic_all_shards` — multi-shard atomic closure
@@ -286,7 +286,7 @@ store.atomic_all_shards(|s| {
                               b"new")])?;
     Ok(())
 })?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 Acquires every shard lock in deterministic order, so it is heavier than
@@ -306,7 +306,7 @@ for i in 0..1000 {
 }
 let replies = p.execute()?;        // one fsync, 1000 entries
 assert_eq!(replies.len(), 1000);
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 Each command commits independently, so a single command failing does
@@ -327,7 +327,7 @@ let store = Store::open(
         .with_persist("./mydata")
         .with_appendfsync(AppendFsync::EverySec)
 )?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 | `AppendFsync` | Max data loss on crash | Throughput vs `EverySec` |
@@ -353,7 +353,7 @@ let store = Store::open(
         .with_max_memory(64 * 1024 * 1024)         // 64 MB
         .with_eviction(EvictionPolicy::AllKeysLru)
 )?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 All eight Redis policies are supported: `NoEviction` (default),
@@ -381,7 +381,7 @@ let s2 = store.clone();
 std::thread::spawn(move || {
     s2.set(b"from-thread", b"works").unwrap();
 });
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 For multi-core scale where a single mutex would dominate, use the
@@ -401,7 +401,7 @@ use kevy_embedded::{Config, Store};
 
 let store = Store::open(Config::default().with_persist("./data"))?;
 store.set(b"k", b"v")?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 ### Embed as a read replica
@@ -418,7 +418,7 @@ let store = Store::open_replica("primary.internal:16004")?;
 let v: Option<Vec<u8>> = store.get(b"hot-key")?;
 assert!(store.is_replica());
 // store.set(b"k", b"v")  →  Err(READONLY)
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 Use the tunable form when you need a stable replica id (so the primary
@@ -436,7 +436,7 @@ let store = Store::open(
         .with_replica_reconnect(Duration::from_millis(50),
                                 Duration::from_secs(5))
 )?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 ### Embed as a scoped writer
@@ -458,9 +458,9 @@ use kevy_client::Connection;
 
 let url = std::env::var("KEVY_URL")
     .unwrap_or_else(|_| "mem://app".into());
-let mut conn = Connection::open(&url)?;
+let mut conn = Connection::connect(&url)?;
 conn.set(b"k", b"v")?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 A single Rust binary can run as a server, as a pure embedded library,
@@ -488,7 +488,7 @@ For very long-running embedded use:
 store.tick();                  // active TTL reaper
 store.save_snapshot()?;        // RDB-style dump for restart speed
 store.rewrite_aof()?;          // compact AOF, drop redundant writes
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_embedded::KevyError>(())
 ```
 
 When running under `Config::with_ttl_reaper_manual()` (WASM, single-

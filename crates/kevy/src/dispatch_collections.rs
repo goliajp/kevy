@@ -49,7 +49,7 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
                     .step_by(2)
                     .map(|i| (&args[i], &args[i + 1]))
                     .collect();
-                match store.hset_borrowed(&args[1], &pairs) {
+                match store.hset(&args[1], &pairs) {
                     Ok(_) => encode_simple_string(out, "OK"),
                     Err(e) => store_err(out, e),
                 }
@@ -82,7 +82,7 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
             } else {
                 emit_int_result(
                     store
-                        .hdel_borrowed(&args[1], &rest_borrowed(args, 2))
+                        .hdel(&args[1], &rest_borrowed(args, 2))
                         .map(|n| n as i64),
                     out,
                 );
@@ -136,7 +136,7 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
             if args.len() < 3 {
                 wrong_args(out, "hmget");
             } else {
-                match store.hmget_borrowed(&args[1], &rest_borrowed(args, 2)) {
+                match store.hmget(&args[1], &rest_borrowed(args, 2)) {
                     Ok(vals) => {
                         encode_array_len(out, vals.len() as i64);
                         for v in &vals {
@@ -171,7 +171,7 @@ pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
             } else {
                 emit_int_result(
                     store
-                        .lpush_borrowed(&args[1], &rest_borrowed(args, 2))
+                        .lpush(&args[1], &rest_borrowed(args, 2))
                         .map(|n| n as i64),
                     out,
                 );
@@ -183,7 +183,7 @@ pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
             } else {
                 emit_int_result(
                     store
-                        .rpush_borrowed(&args[1], &rest_borrowed(args, 2))
+                        .rpush(&args[1], &rest_borrowed(args, 2))
                         .map(|n| n as i64),
                     out,
                 );
@@ -367,7 +367,7 @@ pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
             } else {
                 emit_int_result(
                     store
-                        .zrem_borrowed(&args[1], &rest_borrowed(args, 2))
+                        .zrem(&args[1], &rest_borrowed(args, 2))
                         .map(|n| n as i64),
                     out,
                 );

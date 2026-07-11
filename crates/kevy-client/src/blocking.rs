@@ -13,7 +13,7 @@
 //! `0`) occupies the connection indefinitely; don't share that
 //! connection with latency-sensitive traffic.
 
-use std::io;
+use crate::{KevyError, KevyResult};
 use std::time::Duration;
 
 use kevy_resp::Reply;
@@ -36,7 +36,7 @@ impl Connection {
         &mut self,
         keys: &[&[u8]],
         timeout: Option<Duration>,
-    ) -> io::Result<Option<(Vec<u8>, Vec<u8>)>> {
+    ) -> KevyResult<Option<(Vec<u8>, Vec<u8>)>> {
         check_blocking_args(keys, timeout)?;
         match self {
             Self::Embedded(s) => s.blpop(keys, timeout),
@@ -50,7 +50,7 @@ impl Connection {
         &mut self,
         keys: &[&[u8]],
         timeout: Option<Duration>,
-    ) -> io::Result<Option<(Vec<u8>, Vec<u8>)>> {
+    ) -> KevyResult<Option<(Vec<u8>, Vec<u8>)>> {
         check_blocking_args(keys, timeout)?;
         match self {
             Self::Embedded(s) => s.brpop(keys, timeout),
@@ -67,7 +67,7 @@ impl Connection {
         &mut self,
         keys: &[&[u8]],
         timeout: Option<Duration>,
-    ) -> io::Result<Option<ZPopHit>> {
+    ) -> KevyResult<Option<ZPopHit>> {
         check_blocking_args(keys, timeout)?;
         match self {
             Self::Embedded(s) => s.bzpopmin(keys, timeout),
@@ -79,18 +79,12 @@ impl Connection {
 /// Shared contract gate: at least one key, and no zero `Some` timeout
 /// (wire `0` means forever — a zero duration would silently invert
 /// into an infinite wait on the remote backend).
-fn check_blocking_args(keys: &[&[u8]], timeout: Option<Duration>) -> io::Result<()> {
+fn check_blocking_args(keys: &[&[u8]], timeout: Option<Duration>) -> KevyResult<()> {
     if keys.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "blocking pop needs at least one key",
-        ));
+        return Err(KevyError::InvalidInput("blocking pop needs at least one key".into()));
     }
     if timeout == Some(Duration::ZERO) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "timeout Some(0) is ambiguous (wire 0 = wait forever); use None to wait forever",
-        ));
+        return Err(KevyError::InvalidInput("timeout Some(0) is ambiguous (wire 0 = wait forever); use None to wait forever".into()));
     }
     Ok(())
 }
@@ -103,7 +97,7 @@ fn blocking_request(
     verb: &[u8],
     keys: &[&[u8]],
     timeout: Option<Duration>,
-) -> io::Result<Reply> {
+) -> KevyResult<Reply> {
     let mut args = Vec::with_capacity(keys.len() + 2);
     args.push(verb.to_vec());
     args.extend(keys.iter().map(|k| k.to_vec()));
@@ -111,11 +105,11 @@ fn blocking_request(
         None => b"0".to_vec(),
         Some(d) => format!("{}", d.as_secs_f64()).into_bytes(),
     });
-    c.request(&args)
+    Ok(c.request(&args)?)
 }
 
 /// `*2 [key, value]` → `Some`; nil array (RESP2 timeout shape) → `None`.
-fn pop_kv(reply: Reply) -> io::Result<Option<(Vec<u8>, Vec<u8>)>> {
+fn pop_kv(reply: Reply) -> KevyResult<Option<(Vec<u8>, Vec<u8>)>> {
     match reply {
         Reply::Array(items) if items.len() == 2 => {
             let mut it = items.into_iter();
@@ -125,13 +119,13 @@ fn pop_kv(reply: Reply) -> io::Result<Option<(Vec<u8>, Vec<u8>)>> {
             }
         }
         Reply::Nil | Reply::Null => Ok(None),
-        Reply::Error(e) => Err(io::Error::other(string(e))),
+        Reply::Error(e) => Err(KevyError::Protocol(string(e))),
         other => Err(unexpected(other)),
     }
 }
 
 /// `*3 [key, member, score]` → `Some`; nil array → `None`.
-fn pop_kv_score(reply: Reply) -> io::Result<Option<ZPopHit>> {
+fn pop_kv_score(reply: Reply) -> KevyResult<Option<ZPopHit>> {
     match reply {
         Reply::Array(items) if items.len() == 3 => {
             let mut it = items.into_iter();
@@ -143,7 +137,7 @@ fn pop_kv_score(reply: Reply) -> io::Result<Option<ZPopHit>> {
             }
         }
         Reply::Nil | Reply::Null => Ok(None),
-        Reply::Error(e) => Err(io::Error::other(string(e))),
+        Reply::Error(e) => Err(KevyError::Protocol(string(e))),
         other => Err(unexpected(other)),
     }
 }
@@ -154,7 +148,7 @@ mod tests {
 
     #[test]
     fn embedded_blpop_immediate_hit() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         c.rpush(b"q", &[&b"a"[..], &b"b"[..]]).unwrap();
         let hit = c.blpop(&[&b"q"[..]], Some(Duration::from_secs(1))).unwrap();
         assert_eq!(hit, Some((b"q".to_vec(), b"a".to_vec())));
@@ -164,7 +158,7 @@ mod tests {
 
     #[test]
     fn embedded_blpop_timeout_returns_none() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         let hit = c
             .blpop(&[&b"empty"[..]], Some(Duration::from_millis(30)))
             .unwrap();
@@ -173,7 +167,7 @@ mod tests {
 
     #[test]
     fn embedded_bzpopmin_pops_lowest_score() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         c.zadd(b"z", &[(2.0, b"hi".as_ref()), (1.0, b"lo".as_ref())])
             .unwrap();
         let hit = c
@@ -188,10 +182,10 @@ mod tests {
 
     #[test]
     fn zero_some_timeout_and_empty_keys_rejected() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         let err = c.blpop(&[&b"q"[..]], Some(Duration::ZERO)).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(matches!(err, KevyError::InvalidInput(_)));
         let err = c.blpop(&[], Some(Duration::from_secs(1))).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(matches!(err, KevyError::InvalidInput(_)));
     }
 }

@@ -31,8 +31,8 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
             }
             chunk
         }
-        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
-        Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
 }
@@ -50,8 +50,8 @@ pub(super) fn op_agg(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<
         return match res {
             Ok(None) => vec![ST_BADARGS],
             Ok(Some(rows)) => encode_agg_chunk(&rows),
-            Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
-            Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+            Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+            Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
             Err(_) => vec![ST_NOINDEX],
         };
     }
@@ -85,8 +85,8 @@ pub(super) fn op_agg(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<
             chunk.push(u8::from(exhausted));
             chunk
         }
-        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
-        Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
 }
@@ -99,7 +99,7 @@ pub(super) fn op_agg_fetch(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
     });
     match res {
         Ok(rows) => encode_agg_chunk(&rows),
-        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(_) => vec![ST_NOINDEX],
     }
 }
@@ -111,7 +111,7 @@ pub(super) fn op_rebuild(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
     };
     match index_runtime::with_ready_ann(ctx, store, name, |g| g.rebuild()) {
         Ok(()) => vec![ST_OK],
-        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(_) => vec![ST_NOINDEX],
     }
 }
@@ -139,8 +139,8 @@ pub(super) fn op_knn(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<
             }
             chunk
         }
-        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
-        Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
 }
@@ -163,10 +163,10 @@ pub(super) fn op_hybrid(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> V
     let (m, k) = match (m, k) {
         (Ok(m), Ok(Some(k))) => (m, k),
         (_, Ok(None)) => return vec![ST_BADARGS],
-        (Err(e), _) | (_, Err(e)) if e.starts_with("INDEXBUILDING") => {
+        (Err(e), _) | (_, Err(e)) if e.as_wire().starts_with("INDEXBUILDING") => {
             return vec![ST_BUILDING];
         }
-        (Err(e), _) | (_, Err(e)) if e.starts_with("INDEXOVERBUDGET") => {
+        (Err(e), _) | (_, Err(e)) if e.as_wire().starts_with("INDEXOVERBUDGET") => {
             return vec![ST_OVERBUDGET];
         }
         _ => return vec![ST_NOINDEX],
@@ -215,8 +215,8 @@ pub(super) fn op_compose(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
             chunk
         }
         Ok(None) => vec![ST_BADARGS],
-        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
-        Err(e) if e.starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXOVERBUDGET") => vec![ST_OVERBUDGET],
         Err(_) => vec![ST_NOINDEX],
     }
 }

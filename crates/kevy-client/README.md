@@ -13,10 +13,10 @@ URL string.
 ```rust
 use kevy_client::Connection;
 
-let mut conn = Connection::open("tcp://127.0.0.1:6379")?;
+let mut conn = Connection::connect("tcp://127.0.0.1:6379")?;
 conn.set(b"hello", b"world")?;
 assert_eq!(conn.get(b"hello")?, Some(b"world".to_vec()));
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 ## Install
@@ -47,7 +47,7 @@ sidecar and an authentication proxy if you need them.
 ```rust
 use kevy_client::Connection;
 
-fn cache_smoke(c: &mut Connection) -> std::io::Result<()> {
+fn cache_smoke(c: &mut Connection) -> kevy_client::KevyResult<()> {
     c.set(b"hot", b"cached")?;
     assert_eq!(c.get(b"hot")?, Some(b"cached".to_vec()));
     Ok(())
@@ -55,8 +55,8 @@ fn cache_smoke(c: &mut Connection) -> std::io::Result<()> {
 
 let url = std::env::var("KEVY_URL")
     .unwrap_or_else(|_| "mem://app".into());
-cache_smoke(&mut Connection::open(&url)?)?;
-# Ok::<(), std::io::Error>(())
+cache_smoke(&mut Connection::connect(&url)?)?;
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 Set `KEVY_URL=mem://app` for dev, `KEVY_URL=kevy://prod:6379` for
@@ -67,8 +67,8 @@ production. No code change.
 ```rust
 use kevy_client::Connection;
 
-# fn run() -> std::io::Result<()> {
-let mut conn = Connection::open("tcp://127.0.0.1:6379")?;
+# fn run() -> kevy_client::KevyResult<()> {
+let mut conn = Connection::connect("tcp://127.0.0.1:6379")?;
 
 let mut txn = conn.multi()?;
 txn.set(b"a", b"1")?
@@ -88,8 +88,8 @@ For optimistic concurrency, watch a key before the transaction:
 ```rust
 use kevy_client::Connection;
 
-# fn run() -> std::io::Result<()> {
-let mut conn = Connection::open("tcp://127.0.0.1:6379")?;
+# fn run() -> kevy_client::KevyResult<()> {
+let mut conn = Connection::connect("tcp://127.0.0.1:6379")?;
 
 conn.watch(&[&b"counter"[..]])?;
 let mut txn = conn.multi()?;
@@ -111,12 +111,12 @@ Transactions on the in-process backends return `ErrorKind::Unsupported`
 ```rust
 use kevy_client::{Connection, Subscriber, PubsubEvent};
 
-# fn run() -> std::io::Result<()> {
+# fn run() -> kevy_client::KevyResult<()> {
 let url = std::env::var("KEVY_URL")
     .unwrap_or_else(|_| "mem://news".into());
 
-let mut sub = Subscriber::open(&url, &[&b"updates"[..]])?;
-let mut pubconn = Connection::open(&url)?;
+let mut sub = Subscriber::connect_channels(&url, &[&b"updates"[..]])?;
+let mut pubconn = Connection::connect(&url)?;
 
 let _ack = sub.recv()?;                       // drain the SUBSCRIBE ack
 pubconn.publish(b"updates", b"hello")?;
@@ -140,7 +140,7 @@ directly. Both iterators terminate on `UnexpectedEof`; transient
 errors surface as `Some(Err(_))` so callers decide whether to keep
 going.
 
-Anonymous `mem://` (no name) is rejected by `Subscriber::open` —
+Anonymous `mem://` (no name) is rejected by `Subscriber::connect_channels` —
 no other producer can reach it. Use `mem://<some-name>` for a shared
 bus.
 
@@ -157,7 +157,7 @@ let mut cc = ClusterClient::connect("127.0.0.1", 6380)?;  // any shard port as s
 cc.set(b"user:42", b"alice")?;                             // routed by CRC16
 let v = cc.get(b"user:42")?;
 let removed = cc.del(&[&b"a"[..], &b"b"[..], &b"c"[..]])?; // multi-key may span shards
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 Full cluster-mode guide: [`docs/cluster.md`](https://github.com/goliajp/kevy/blob/develop/docs/cluster.md).
@@ -167,7 +167,7 @@ Full cluster-mode guide: [`docs/cluster.md`](https://github.com/goliajp/kevy/blo
 ```rust
 use kevy_client::Connection;
 
-# fn handle(conn: &mut Connection) -> std::io::Result<()> {
+# fn handle(conn: &mut Connection) -> kevy_client::KevyResult<()> {
 match conn {
     Connection::Embedded(s) => {
         // call any kevy_embedded::Store method

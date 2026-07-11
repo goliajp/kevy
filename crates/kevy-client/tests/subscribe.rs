@@ -4,6 +4,7 @@
 //! Same pattern as crates/kevy-resp-client/tests/roundtrip.rs — keeps the
 //! test self-contained (no real kevy server thread needed).
 
+use kevy_client::KevyError;
 use kevy_client::{PubsubEvent, Subscriber};
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -46,7 +47,7 @@ fn open_subscribes_and_receives_subscribe_ack() {
         SUBSCRIBE_CHAN_REQ_LEN,
         b"*3\r\n$9\r\nsubscribe\r\n$4\r\nchan\r\n:1\r\n",
     );
-    let mut sub = Subscriber::open(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
     let ev = sub.recv().unwrap();
     assert_eq!(
         ev,
@@ -65,7 +66,7 @@ fn message_frame_classified_with_payload() {
         b"*3\r\n$9\r\nsubscribe\r\n$4\r\nnews\r\n:1\r\n\
           *3\r\n$7\r\nmessage\r\n$4\r\nnews\r\n$5\r\nhello\r\n",
     );
-    let mut sub = Subscriber::open(&format!("kevy://127.0.0.1:{port}"), &[b"news"]).unwrap();
+    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"news"]).unwrap();
     // Drain the ack.
     let _ = sub.recv().unwrap();
     let ev = sub.recv().unwrap();
@@ -113,7 +114,7 @@ fn unsubscribe_with_nil_channel_classified_as_none() {
         // channel slot. Issued after we send UNSUBSCRIBE without args.
         b"*3\r\n$11\r\nunsubscribe\r\n$-1\r\n:0\r\n",
     );
-    let mut sub = Subscriber::open(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
     // After SUBSCRIBE chan, we ignore the (not-sent here) ack and
     // immediately ask the mock for its canned UNSUBSCRIBE-nil reply.
     let ev = sub.recv().unwrap();
@@ -140,17 +141,17 @@ fn server_close_yields_unexpected_eof() {
         drop(sock);
     });
     started_rx.recv().unwrap();
-    let mut sub = Subscriber::open(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
     let err = sub.recv().unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+    assert!(matches!(err, KevyError::Closed));
 }
 
 #[test]
 fn malformed_frame_yields_invalid_data() {
     let port = mock_server(SUBSCRIBE_CHAN_REQ_LEN, b"!totally-bogus\r\n");
-    let mut sub = Subscriber::open(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
     let err = sub.recv().unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(matches!(err, KevyError::Protocol(_)));
 }
 
 #[test]
@@ -161,9 +162,9 @@ fn unknown_pubsub_kind_yields_invalid_data() {
         SUBSCRIBE_CHAN_REQ_LEN,
         b"*3\r\n$5\r\nbogus\r\n$1\r\nx\r\n:0\r\n",
     );
-    let mut sub = Subscriber::open(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
     let err = sub.recv().unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(matches!(err, KevyError::Protocol(_)));
 }
 
 #[test]
@@ -183,11 +184,14 @@ fn read_timeout_blocks_recv() {
         thread::sleep(Duration::from_millis(500));
     });
     started_rx.recv().unwrap();
-    let mut sub = Subscriber::open(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
+    let mut sub = Subscriber::connect_channels(&format!("kevy://127.0.0.1:{port}"), &[b"chan"]).unwrap();
     sub.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
     let err = sub.recv().unwrap_err();
     // Different platforms surface read-timeout as WouldBlock vs TimedOut.
-    let k = err.kind();
+    let KevyError::Io(ref io_err) = err else {
+        panic!("expected KevyError::Io, got {err:?}");
+    };
+    let k = io_err.kind();
     assert!(
         matches!(
             k,

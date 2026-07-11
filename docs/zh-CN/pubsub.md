@@ -70,14 +70,14 @@ $ redis-cli -p 6379 PUBLISH news "hello"
 ```rust
 use kevy_client::{Connection, Subscriber, PubsubEvent};
 
-fn run(url: &str) -> std::io::Result<()> {
+fn run(url: &str) -> kevy_client::KevyResult<()> {
     // Open a subscriber against `news`. The first frame the bus
     // hands back is the subscribe ack; drain it before asserting
     // on bodies.
-    let mut sub = Subscriber::open(url, &[b"news"])?;
+    let mut sub = Subscriber::connect_channels(url, &[b"news"])?;
     let _ack = sub.recv()?;
 
-    let mut conn = Connection::open(url)?;
+    let mut conn = Connection::connect(url)?;
     let received = conn.publish(b"news", b"hello")?;
     assert_eq!(received, 1);
 
@@ -95,7 +95,7 @@ fn run(url: &str) -> std::io::Result<()> {
 run("mem://app")?;
 // Prod: real TCP server.
 run("kevy://prod-cache:6379")?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 跨线程用法就是同一份代码：在不同线程里对同一个 URL 各开一个 `Subscriber` 和一个 `Connection`——`mem://<name>` 注册表会把同一条底层总线交给两端，生产者线程调 `Connection::publish`，消费者线程阻塞在 `sub.recv()` 上。
@@ -124,7 +124,7 @@ match sub.recv()? {
     }
     other => panic!("unexpected frame: {other:?}"),
 }
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 `Store::clone` 很便宜（只是 `Arc` 引用计数加一），所以常见写法是给每个线程发一份 `store.clone()`，需要时各自 `publish` 或 `subscribe`。订阅者 drop 时会原子地注销；消费者线程即使 panic，也不会在索引里留下僵尸条目。
@@ -140,7 +140,7 @@ let mut sub = Subscriber::connect("mem://signals")?;
 sub.psubscribe(&[b"news.*"])?;
 let _ack = sub.recv()?;            // PubsubEvent::Psubscribe
 
-let mut conn = Connection::open("mem://signals")?;
+let mut conn = Connection::connect("mem://signals")?;
 conn.publish(b"news.tech", b"breaking")?; // matches
 conn.publish(b"weather",   b"sunny")?;    // does NOT match
 
@@ -152,7 +152,7 @@ match sub.recv()? {
     }
     other => panic!("unexpected frame: {other:?}"),
 }
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 同一个订阅者如果既订阅了某频道，**又**订阅了能匹配该频道的模式，就会收到**两份**消息——一份 `Message`，一份 `Pmessage`。发布时的去重只压掉“同一个 `Subscription` 在同一频道索引里出现两次”这种重复，不会去掉频道订阅与模式订阅的重叠。
@@ -168,7 +168,7 @@ match sub.recv()? {
 | `redis://host[:port][/db]`         | TCP——`kevy://` 的别名      | 同上                                              | **是**          |
 | `tcp://host[:port]`                | TCP——原始连接，不带前置 `SELECT` | 同上                                        | **是**          |
 
-匿名 `mem://` 收不到发布的消息——别的代码根本够不到同一个底层 `Store`，所以 `Subscriber::open` 会以 `ErrorKind::Unsupported` 拒绝它。只要打算发布，就用 `mem://<some-name>`。
+匿名 `mem://` 收不到发布的消息——别的代码根本够不到同一个底层 `Store`，所以 `Subscriber::connect_channels` 会以 `ErrorKind::Unsupported` 拒绝它。只要打算发布，就用 `mem://<some-name>`。
 
 `rediss://`、`kevys://` 和 `redis://user:pass@…` 被拒绝也是同一个原因：kevy 不带 TLS，也不带 `AUTH`。需要这两样时，在网络边界用 stunnel 加 IP allowlist 把 socket 挡在前面。
 
@@ -219,4 +219,4 @@ $ redis-cli -p 6379 PUBSUB NUMPAT
 
 **为什么我的测试总是先收到 subscribe ack，才收到消息？** 总线是有序的，而每次 `SUBSCRIBE` / `PSUBSCRIBE` 都会先入队一帧 ack，该频道的第一帧消息体在它之后才会到。先用一次 `sub.recv()?` 把 ack 取掉，再对载荷做断言——这和 redis-cli 的线上行为一致。
 
-**pub/sub 需要集群路由吗？** 不需要。pub/sub 的扇出在进程层面完成，不走 slot 路由：向任意 shard 端口发布，同一进程内所有 shard 端口上的订阅者都能收到。随便挑一个 shard 端口做普通的 `Connection::open("kevy://host:port")` 就行。*键空间*命令用的 slot 路由见 [`docs/cluster.md`](cluster.md)。
+**pub/sub 需要集群路由吗？** 不需要。pub/sub 的扇出在进程层面完成，不走 slot 路由：向任意 shard 端口发布，同一进程内所有 shard 端口上的订阅者都能收到。随便挑一个 shard 端口做普通的 `Connection::connect("kevy://host:port")` 就行。*键空间*命令用的 slot 路由见 [`docs/cluster.md`](cluster.md)。

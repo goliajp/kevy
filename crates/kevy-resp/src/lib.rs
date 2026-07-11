@@ -53,7 +53,7 @@ pub use argv::{Argv, Command};
 pub use argv_borrowed::ArgvBorrowed;
 pub use argv_pool::ArgvPool;
 pub use argv_view::{ArgvIter, ArgvView};
-pub use error::ProtocolError;
+pub use error::{CmdError, ProtocolError};
 pub use reply_encode::{
     encode_array_len, encode_bulk, encode_command, encode_command_borrowed, encode_error,
     encode_integer, encode_null_bulk, encode_simple_string,

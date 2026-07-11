@@ -34,7 +34,7 @@ fn spawn_server(port: u16, dir: std::path::PathBuf) -> Arc<AtomicBool> {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_t = Arc::clone(&stop);
     std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 2, kevy::KevyCommands::sharded(2))
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(2)).bind([127, 0, 0, 1], port).shards(2)
             .with_data_dir(dir)
             .with_aof(false);
         let _ = rt.run(stop_t);

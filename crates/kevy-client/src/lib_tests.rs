@@ -1,3 +1,4 @@
+use crate::KevyError;
 use super::*;
 
 /// Smoke against the embedded backend: every generic + string method
@@ -5,7 +6,7 @@ use super::*;
 /// lives in `collections::tests`.
 #[test]
 fn embedded_mem_full_crud_round_trip() {
-    let mut c = Connection::open("mem://").unwrap();
+    let mut c = Connection::connect("mem://").unwrap();
     c.ping().unwrap();
 
     c.set(b"k", b"v").unwrap();
@@ -44,13 +45,13 @@ fn embedded_mem_full_crud_round_trip() {
 #[test]
 fn anonymous_mem_publish_returns_zero() {
     // No bus, no subscribers — by design.
-    let mut c = Connection::open("mem://").unwrap();
+    let mut c = Connection::connect("mem://").unwrap();
     assert_eq!(c.publish(b"chan", b"hi").unwrap(), 0);
 }
 
 #[test]
 fn embedded_mget_mset() {
-    let mut c = Connection::open("mem://").unwrap();
+    let mut c = Connection::connect("mem://").unwrap();
     c.mset(&[
         (b"a".as_ref(), b"1".as_ref()),
         (b"b".as_ref(), b"2".as_ref()),
@@ -65,7 +66,7 @@ fn embedded_mget_mset() {
 
 #[test]
 fn embedded_multi_rejected_unsupported() {
-    let mut c = Connection::open("mem://").unwrap();
+    let mut c = Connection::connect("mem://").unwrap();
     let err = c.multi().unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+    assert!(matches!(err, KevyError::Unsupported(_)));
 }

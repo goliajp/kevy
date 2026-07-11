@@ -42,7 +42,7 @@ fn ping_round_trip() {
             .await
             .unwrap();
         let url = format!("tcp://127.0.0.1:{port}");
-        let mut conn = AsyncConnection::open(&url).await.unwrap();
+        let mut conn = AsyncConnection::connect(&url).await.unwrap();
         conn.ping().await.unwrap();
     });
 }
@@ -63,7 +63,7 @@ fn set_then_get() {
         .await
         .unwrap();
         let url = format!("tcp://127.0.0.1:{port}");
-        let mut conn = AsyncConnection::open(&url).await.unwrap();
+        let mut conn = AsyncConnection::connect(&url).await.unwrap();
         conn.set(b"k", b"v").await.unwrap();
         let v = conn.get(b"k").await.unwrap();
         assert_eq!(v.as_deref(), Some(&b"v"[..]));
@@ -83,7 +83,7 @@ fn pipeline_one_round_trip() {
         .await
         .unwrap();
         let url = format!("tcp://127.0.0.1:{port}");
-        let mut conn = AsyncConnection::open(&url).await.unwrap();
+        let mut conn = AsyncConnection::connect(&url).await.unwrap();
         let replies = conn
             .pipeline()
             .set(b"k", b"v")

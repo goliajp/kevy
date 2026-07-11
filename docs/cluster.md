@@ -86,7 +86,7 @@ let n = cc.incr(b"counter")?;
 
 // Multi-key DEL/EXISTS — routed per key and summed.
 let removed = cc.del(&[b"a", b"b", b"c"])?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 A runnable seed example lives at [`crates/kevy-client/examples/cluster.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster.rs); a benchmark at [`crates/kevy-client/examples/cluster_bench.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster_bench.rs).
@@ -126,7 +126,7 @@ Unlike Redis Cluster, kevy does **not** return `-CROSSSLOT` when a multi-key com
 let reply = cc.request_keyed(b"mykey", &[b"STRLEN".to_vec(), b"mykey".to_vec()])?;
 // Keyless commands go to any shard.
 let reply = cc.request_unkeyed(&[b"PING".to_vec()])?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 `ClusterClient` wraps the common verbs across strings, hashes, lists, sets, sorted sets, pub/sub, and the multi-key `DEL` / `EXISTS`. Pub/sub is process-global: a `Subscriber` on any port sees every published message regardless of which shard accepted the `PUBLISH`.
@@ -171,7 +171,7 @@ let replica = Store::open_replica("primary.local:16004")?;
 
 let v = replica.get(b"hello")?;
 assert!(replica.set(b"k", b"v").is_err());      // READONLY
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 For tuning:
@@ -185,7 +185,7 @@ let cfg = Config::default()
     .with_replica_id("backup-svc-region-a")
     .with_replica_reconnect(Duration::from_millis(50), Duration::from_secs(10));
 let replica = Store::open(cfg)?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 The handshake sends `REPLICATE FROM <last-applied-offset> ID <replica_id>`; the primary acks the offset and streams frames. The runner thread is joined when the last `Store` clone drops, so the primary observes a clean FIN and frees the slot. `PUBLISH` is allowed locally on the embed (pub/sub is process-local), but the keyspace itself remains read-only.
@@ -223,7 +223,7 @@ let writer = Store::open(
 // Local writes feed the embed's replication source backlog;
 // readers connect to 0.0.0.0:6105 via kevy_replicate::ReplicaClient.
 writer.set(b"app:billing:invoice:42", b"...")?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 The embed exposes a replication listener on the address passed to `with_embed_writer`. Other nodes pull the log from there exactly as they would from a server primary.

@@ -141,3 +141,19 @@ pub struct LiveRuntimeConfig {
     /// default) means "never promoted" and embedders pay nothing.
     pub promotion_epoch: u64,
 }
+
+/// A replica's acknowledged state, published per shard tick via
+/// [`Commands::on_replication_view`]: the offset from its latest
+/// `REPLCONF ACK` plus that ACK's age at publication time. `None` in
+/// the view tuple means the replica has never ACKed.
+///
+/// [`Commands::on_replication_view`]: crate::Commands::on_replication_view
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplicaAck {
+    /// Offset from the latest `REPLCONF ACK` (`0` is a real heartbeat
+    /// ACK from an empty replica, not a placeholder).
+    pub acked_offset: u64,
+    /// Milliseconds since that ACK was received, measured when the
+    /// view was published. Feeds the `min_replicas_max_lag_ms` gate.
+    pub ack_age_ms: u64,
+}

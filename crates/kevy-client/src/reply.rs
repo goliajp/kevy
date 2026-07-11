@@ -2,8 +2,7 @@
 //! `collections.rs` + `subscribe.rs`. Split out of `lib.rs` for file-size
 //! hygiene; nothing here is part of the public surface.
 
-use std::io;
-
+use kevy_embedded::KevyError;
 use kevy_resp::Reply;
 
 pub(crate) fn vec2(verb: &[u8], a: &[u8]) -> Vec<Vec<u8>> {
@@ -18,7 +17,7 @@ pub(crate) fn string(b: Vec<u8>) -> String {
     String::from_utf8_lossy(&b).into_owned()
 }
 
-pub(crate) fn unexpected(r: Reply) -> io::Error {
+pub(crate) fn unexpected(r: Reply) -> KevyError {
     let kind = match r {
         Reply::Simple(_) => "simple-string",
         Reply::Error(_) => "error",
@@ -35,10 +34,10 @@ pub(crate) fn unexpected(r: Reply) -> io::Error {
         Reply::Push(_) => "push",
         Reply::BlobError(_) => "blob-error",
     };
-    io::Error::other(format!("unexpected RESP reply variant: {kind}"))
+    KevyError::Protocol(format!("unexpected RESP reply variant: {kind}"))
 }
 
-pub(crate) fn array_to_bulks(items: Vec<Reply>) -> io::Result<Vec<Vec<u8>>> {
+pub(crate) fn array_to_bulks(items: Vec<Reply>) -> Result<Vec<Vec<u8>>, KevyError> {
     items
         .into_iter()
         .map(|r| match r {
@@ -49,20 +48,22 @@ pub(crate) fn array_to_bulks(items: Vec<Reply>) -> io::Result<Vec<Vec<u8>>> {
         .collect()
 }
 
-pub(crate) fn store_err(e: kevy_embedded::StoreError) -> io::Error {
-    io::Error::other(format!("kevy-store: {e:?}"))
+pub(crate) fn store_err(e: kevy_embedded::StoreError) -> KevyError {
+    KevyError::Store(e)
 }
 
 /// Parse a wire numeric bulk (score / distance) as `f64`.
-pub(crate) fn num_f64(b: &[u8]) -> io::Result<f64> {
-    let s = std::str::from_utf8(b).map_err(|_| io::Error::other("non-utf8 number reply"))?;
+pub(crate) fn num_f64(b: &[u8]) -> Result<f64, KevyError> {
+    let s = std::str::from_utf8(b)
+        .map_err(|_| KevyError::Protocol("non-utf8 number reply".into()))?;
     s.parse()
-        .map_err(|_| io::Error::other(format!("bad float reply: {s}")))
+        .map_err(|_| KevyError::Protocol(format!("bad float reply: {s}")))
 }
 
 /// Parse a wire numeric bulk (counter / byte size) as `u64`.
-pub(crate) fn num_u64(b: &[u8]) -> io::Result<u64> {
-    let s = std::str::from_utf8(b).map_err(|_| io::Error::other("non-utf8 number reply"))?;
+pub(crate) fn num_u64(b: &[u8]) -> Result<u64, KevyError> {
+    let s = std::str::from_utf8(b)
+        .map_err(|_| KevyError::Protocol("non-utf8 number reply".into()))?;
     s.parse()
-        .map_err(|_| io::Error::other(format!("bad integer reply: {s}")))
+        .map_err(|_| KevyError::Protocol(format!("bad integer reply: {s}")))
 }

@@ -140,7 +140,7 @@ impl Store {
             return Ok(to_pop);
         }
         let borrowed: Vec<&[u8]> = to_pop.iter().map(|(m, _)| m.as_slice()).collect();
-        self.zrem_borrowed(key, &borrowed)?;
+        self.zrem(key, &borrowed)?;
         Ok(to_pop)
     }
 
@@ -189,7 +189,7 @@ impl Store {
             return Ok(to_pop);
         }
         let borrowed: Vec<&[u8]> = to_pop.iter().map(|(m, _)| m.as_slice()).collect();
-        self.zrem_borrowed(key, &borrowed)?;
+        self.zrem(key, &borrowed)?;
         Ok(to_pop)
     }
 
@@ -235,7 +235,7 @@ impl Store {
             return Ok(0);
         }
         let borrowed: Vec<&[u8]> = to_remove.iter().map(Vec::as_slice).collect();
-        self.zrem_borrowed(key, &borrowed)
+        self.zrem(key, &borrowed)
     }
 
     /// `ZREMRANGEBYSCORE key min max` — remove every member whose score
@@ -257,7 +257,7 @@ impl Store {
             return Ok(0);
         }
         let borrowed: Vec<&[u8]> = hits.iter().map(|(m, _)| m.as_slice()).collect();
-        self.zrem_borrowed(key, &borrowed)
+        self.zrem(key, &borrowed)
     }
 
     /// `ZREVRANGEBYSCORE` — `zrange_by_score` reversed. Bounds are

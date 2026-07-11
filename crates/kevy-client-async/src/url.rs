@@ -1,6 +1,6 @@
 //! URL parsing for the async client.
 //!
-//! Mirrors the schemes accepted by [`kevy_resp_client::RespClient::from_url`]
+//! Mirrors the schemes accepted by [`kevy_resp_client::RespClient::connect_url`]
 //! — `kevy://`, `redis://`, `tcp://`. The non-TCP `kevy-client` schemes
 //! (`mem://`, `file://`) are NOT supported: those backends are in-process
 //! embedded and have no async story (the embedded path is synchronous by

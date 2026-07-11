@@ -4,11 +4,12 @@
 //! Pure stateless functions: framing a command onto a `TcpStream`,
 //! pulling the next pub/sub frame, and shaping a [`Reply`] (RESP2
 //! `*N` array or RESP3 `>N` push) back into the user-facing
-//! [`PubsubEvent`] variant. All io errors and protocol-shape mismatches
-//! surface as `io::Error` with an `InvalidData` / `UnexpectedEof` kind
-//! so callers can pattern-match without a custom error enum.
+//! [`PubsubEvent`] variant. IO failures surface as [`KevyError::Io`];
+//! protocol-shape mismatches as [`KevyError::Protocol`]; a server-side
+//! close as [`KevyError::Closed`].
 
-use std::io::{self, Read, Write};
+use crate::{KevyError, KevyResult};
+use std::io::{Read, Write};
 use std::net::TcpStream;
 
 use kevy_embedded::PubsubFrame;
@@ -24,24 +25,24 @@ pub(crate) fn send_to(
     stream: &mut TcpStream,
     verb: &[u8],
     args: &[&[u8]],
-) -> io::Result<()> {
+) -> KevyResult<()> {
     let mut argv = Vec::with_capacity(args.len() + 1);
     argv.push(verb.to_vec());
     argv.extend(args.iter().map(|a| a.to_vec()));
     let mut frame = Vec::new();
     encode_command(&mut frame, &argv);
-    stream.write_all(&frame)
+    Ok(stream.write_all(&frame)?)
 }
 
 /// Pull the next pub/sub frame from `stream`, parsing into a
 /// [`PubsubEvent`]. Loops over read+parse until one complete reply is
-/// in `buf`; a malformed frame returns `InvalidData`, a 0-length read
-/// returns `UnexpectedEof`. Trailing partial frames stay in `buf` for
-/// the next call.
+/// in `buf`; a malformed frame returns [`KevyError::Protocol`], a
+/// 0-length read returns [`KevyError::Closed`]. Trailing partial
+/// frames stay in `buf` for the next call.
 pub(crate) fn recv_remote(
     stream: &mut TcpStream,
     buf: &mut Vec<u8>,
-) -> io::Result<PubsubEvent> {
+) -> KevyResult<PubsubEvent> {
     let mut chunk = [0u8; 8192];
     loop {
         match parse_reply(buf) {
@@ -51,18 +52,12 @@ pub(crate) fn recv_remote(
             }
             Ok(None) => {}
             Err(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "malformed reply",
-                ));
+                return Err(KevyError::Protocol("malformed reply".into()));
             }
         }
         let n = stream.read(&mut chunk)?;
         if n == 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "server closed connection",
-            ));
+            return Err(KevyError::Closed);
         }
         buf.extend_from_slice(&chunk[..n]);
     }
@@ -108,7 +103,7 @@ pub(crate) fn frame_to_event(frame: PubsubFrame) -> PubsubEvent {
 /// same shape in a `>N` push frame so the client can demux out-of-band
 /// deliveries from regular command replies. Both forms are accepted.
 // LOC-WAIVER: data-driven pubsub-kind match table — one flat frame-destructure arm per kind.
-pub(crate) fn classify(reply: Reply) -> io::Result<PubsubEvent> {
+pub(crate) fn classify(reply: Reply) -> KevyResult<PubsubEvent> {
     let items = match reply {
         Reply::Array(v) | Reply::Push(v) => v,
         other => return Err(invalid(format!("expected array frame, got {}", shape(&other)))),
@@ -168,19 +163,19 @@ pub(crate) fn classify(reply: Reply) -> io::Result<PubsubEvent> {
     }
 }
 
-fn into_array3(items: Vec<Reply>) -> io::Result<[Reply; 3]> {
+fn into_array3(items: Vec<Reply>) -> KevyResult<[Reply; 3]> {
     items
         .try_into()
         .map_err(|v: Vec<Reply>| invalid(format!("expected 3-element pubsub frame, got {}", v.len())))
 }
 
-fn into_array4(items: Vec<Reply>) -> io::Result<[Reply; 4]> {
+fn into_array4(items: Vec<Reply>) -> KevyResult<[Reply; 4]> {
     items
         .try_into()
         .map_err(|v: Vec<Reply>| invalid(format!("expected 4-element pubsub frame, got {}", v.len())))
 }
 
-fn take_bulk(r: Reply, field: &str) -> io::Result<Vec<u8>> {
+fn take_bulk(r: Reply, field: &str) -> KevyResult<Vec<u8>> {
     match r {
         Reply::Bulk(b) => Ok(b),
         other => Err(invalid(format!(
@@ -190,7 +185,7 @@ fn take_bulk(r: Reply, field: &str) -> io::Result<Vec<u8>> {
     }
 }
 
-fn take_bulk_or_nil(r: Reply, field: &str) -> io::Result<Option<Vec<u8>>> {
+fn take_bulk_or_nil(r: Reply, field: &str) -> KevyResult<Option<Vec<u8>>> {
     match r {
         Reply::Bulk(b) => Ok(Some(b)),
         Reply::Nil => Ok(None),
@@ -201,7 +196,7 @@ fn take_bulk_or_nil(r: Reply, field: &str) -> io::Result<Option<Vec<u8>>> {
     }
 }
 
-fn take_int(r: Reply, field: &str) -> io::Result<i64> {
+fn take_int(r: Reply, field: &str) -> KevyResult<i64> {
     match r {
         Reply::Int(n) => Ok(n),
         other => Err(invalid(format!(
@@ -230,6 +225,6 @@ pub(crate) fn shape(r: &Reply) -> &'static str {
     }
 }
 
-pub(crate) fn invalid(msg: impl Into<String>) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, msg.into())
+pub(crate) fn invalid(msg: impl Into<String>) -> KevyError {
+    KevyError::Protocol(msg.into())
 }

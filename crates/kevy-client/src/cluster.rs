@@ -10,7 +10,7 @@
 //! binds a deterministic listener and answers a wrong-shard key with `-MOVED`
 //! rather than forwarding. Correct routing here means `-MOVED` never fires.
 
-use std::io;
+use crate::{KevyError, KevyResult};
 use std::time::Duration;
 
 use kevy_hash::key_hash_slot;
@@ -45,7 +45,7 @@ struct SlotRange {
 impl ClusterClient {
     /// Connect via a seed node, discover the topology (`CLUSTER SLOTS`), and
     /// open one connection per shard.
-    pub fn connect(host: &str, port: u16) -> io::Result<Self> {
+    pub fn connect(host: &str, port: u16) -> KevyResult<Self> {
         let mut seed = RespClient::connect(host, port)?;
         let reply = seed.request(&[b"CLUSTER".to_vec(), b"SLOTS".to_vec()])?;
         let ranges = parse_cluster_slots(reply)?;
@@ -53,7 +53,7 @@ impl ClusterClient {
         let shards = nodes
             .iter()
             .map(|(h, p)| RespClient::connect(h, *p))
-            .collect::<io::Result<Vec<_>>>()?;
+            .collect::<std::io::Result<Vec<_>>>()?;
         Ok(Self { shards, slot_to_shard })
     }
 
@@ -72,15 +72,15 @@ impl ClusterClient {
     }
 
     /// Route a single-key command (`args`) to the shard owning `key`.
-    pub fn request_keyed(&mut self, key: &[u8], args: &[Vec<u8>]) -> io::Result<Reply> {
+    pub fn request_keyed(&mut self, key: &[u8], args: &[Vec<u8>]) -> KevyResult<Reply> {
         let i = self.shard_for(key);
-        self.shards[i].request(args)
+        Ok(self.shards[i].request(args)?)
     }
 
     /// A keyless command (PING / etc.) — answered identically by any shard, so
     /// send it to the first.
-    pub fn request_unkeyed(&mut self, args: &[Vec<u8>]) -> io::Result<Reply> {
-        self.shards[0].request(args)
+    pub fn request_unkeyed(&mut self, args: &[Vec<u8>]) -> KevyResult<Reply> {
+        Ok(self.shards[0].request(args)?)
     }
 
     /// Number of distinct shard nodes.
@@ -98,10 +98,10 @@ impl ClusterClient {
 
 impl ClusterClient {
     /// `PING` — answered by any shard.
-    pub fn ping(&mut self) -> io::Result<()> {
+    pub fn ping(&mut self) -> KevyResult<()> {
         match self.request_unkeyed(&[b"PING".to_vec()])? {
             Reply::Simple(s) if s == b"PONG" || s == b"OK" => Ok(()),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
@@ -109,25 +109,25 @@ impl ClusterClient {
     /// `PUBLISH channel message` — returns the number of subscribers reached.
     /// kevy's pub/sub is process-global (delivered to subscribers on every
     /// core), so a cluster PUBLISH goes to any one shard.
-    pub fn publish(&mut self, channel: &[u8], message: &[u8]) -> io::Result<usize> {
+    pub fn publish(&mut self, channel: &[u8], message: &[u8]) -> KevyResult<usize> {
         match self.request_unkeyed(&vec3(b"PUBLISH", channel, message))? {
             Reply::Int(n) if n >= 0 => Ok(n as usize),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
 
     /// `SET key value`.
-    pub fn set(&mut self, key: &[u8], value: &[u8]) -> io::Result<()> {
+    pub fn set(&mut self, key: &[u8], value: &[u8]) -> KevyResult<()> {
         match self.request_keyed(key, &vec3(b"SET", key, value))? {
             Reply::Simple(s) if s == b"OK" => Ok(()),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
 
     /// `SET key value PX ttl_ms` — value with an expiry.
-    pub fn set_with_ttl(&mut self, key: &[u8], value: &[u8], ttl: Duration) -> io::Result<()> {
+    pub fn set_with_ttl(&mut self, key: &[u8], value: &[u8], ttl: Duration) -> KevyResult<()> {
         let ms = ttl.as_millis().min(i64::MAX as u128) as i64;
         let args = vec![
             b"SET".to_vec(),
@@ -138,79 +138,79 @@ impl ClusterClient {
         ];
         match self.request_keyed(key, &args)? {
             Reply::Simple(s) if s == b"OK" => Ok(()),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
 
     /// `GET key`. `None` if absent or expired.
-    pub fn get(&mut self, key: &[u8]) -> io::Result<Option<Vec<u8>>> {
+    pub fn get(&mut self, key: &[u8]) -> KevyResult<Option<Vec<u8>>> {
         match self.request_keyed(key, &vec2(b"GET", key))? {
             Reply::Bulk(v) => Ok(Some(v)),
             Reply::Nil => Ok(None),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
 
     /// `INCR key`. Returns the post-increment value.
-    pub fn incr(&mut self, key: &[u8]) -> io::Result<i64> {
+    pub fn incr(&mut self, key: &[u8]) -> KevyResult<i64> {
         match self.request_keyed(key, &vec2(b"INCR", key))? {
             Reply::Int(n) => Ok(n),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
 
     /// `INCRBY key delta`.
-    pub fn incr_by(&mut self, key: &[u8], delta: i64) -> io::Result<i64> {
+    pub fn incr_by(&mut self, key: &[u8], delta: i64) -> KevyResult<i64> {
         let args = vec![b"INCRBY".to_vec(), key.to_vec(), delta.to_string().into_bytes()];
         match self.request_keyed(key, &args)? {
             Reply::Int(n) => Ok(n),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
 
     /// `PEXPIRE key ttl_ms`. Whether the key existed and got a TTL.
-    pub fn expire(&mut self, key: &[u8], ttl: Duration) -> io::Result<bool> {
+    pub fn expire(&mut self, key: &[u8], ttl: Duration) -> KevyResult<bool> {
         let ms = ttl.as_millis().min(i64::MAX as u128) as i64;
         let args = vec![b"PEXPIRE".to_vec(), key.to_vec(), ms.to_string().into_bytes()];
         match self.request_keyed(key, &args)? {
             Reply::Int(1) => Ok(true),
             Reply::Int(0) => Ok(false),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
 
     /// `PERSIST key`. Whether a TTL was removed.
-    pub fn persist(&mut self, key: &[u8]) -> io::Result<bool> {
+    pub fn persist(&mut self, key: &[u8]) -> KevyResult<bool> {
         match self.request_keyed(key, &vec2(b"PERSIST", key))? {
             Reply::Int(1) => Ok(true),
             Reply::Int(0) => Ok(false),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
 
     /// `PTTL key`. ms remaining, -2 no key, -1 no TTL.
-    pub fn ttl_ms(&mut self, key: &[u8]) -> io::Result<i64> {
+    pub fn ttl_ms(&mut self, key: &[u8]) -> KevyResult<i64> {
         match self.request_keyed(key, &vec2(b"PTTL", key))? {
             Reply::Int(n) => Ok(n),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
 
     /// `DEL key [key ...]` — routed per key (each to its owner) and summed, so
     /// keys spanning shards work without a same-slot constraint.
-    pub fn del(&mut self, keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn del(&mut self, keys: &[&[u8]]) -> KevyResult<usize> {
         let mut removed = 0;
         for k in keys {
             match self.request_keyed(k, &vec2(b"DEL", k))? {
                 Reply::Int(n) if n >= 0 => removed += n as usize,
-                Reply::Error(e) => return Err(io::Error::other(string(e))),
+                Reply::Error(e) => return Err(KevyError::Protocol(string(e))),
                 other => return Err(unexpected(other)),
             }
         }
@@ -219,12 +219,12 @@ impl ClusterClient {
 
     /// `EXISTS key [key ...]` — routed per key and summed (a repeated key
     /// counts each time, matching Redis).
-    pub fn exists(&mut self, keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn exists(&mut self, keys: &[&[u8]]) -> KevyResult<usize> {
         let mut count = 0;
         for k in keys {
             match self.request_keyed(k, &vec2(b"EXISTS", k))? {
                 Reply::Int(n) if n >= 0 => count += n as usize,
-                Reply::Error(e) => return Err(io::Error::other(string(e))),
+                Reply::Error(e) => return Err(KevyError::Protocol(string(e))),
                 other => return Err(unexpected(other)),
             }
         }
@@ -234,20 +234,20 @@ impl ClusterClient {
     /// `DBSIZE` — the cluster-wide total. kevy answers DBSIZE by fanning out
     /// across shards internally (`Route::Dbsize`), so a single shard already
     /// reports the whole-cluster count; no client-side summing.
-    pub fn dbsize(&mut self) -> io::Result<usize> {
+    pub fn dbsize(&mut self) -> KevyResult<usize> {
         match self.request_unkeyed(&[b"DBSIZE".to_vec()])? {
             Reply::Int(n) if n >= 0 => Ok(n as usize),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
 
     /// `FLUSHALL` — clears every shard. kevy fans FLUSHALL out internally
     /// (`Route::Flush`), so one call wipes the whole cluster.
-    pub fn flushall(&mut self) -> io::Result<()> {
+    pub fn flushall(&mut self) -> KevyResult<()> {
         match self.request_unkeyed(&[b"FLUSHALL".to_vec()])? {
             Reply::Simple(s) if s == b"OK" => Ok(()),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
@@ -257,12 +257,9 @@ impl ClusterClient {
 /// ranges. Distinct nodes are kept in first-advertised order; a slot left
 /// uncovered (a gap a healthy cluster never has) defaults to shard 0. Pure —
 /// no I/O — so the routing is unit-testable without a live server.
-fn build_topology(ranges: &[SlotRange]) -> io::Result<Topology> {
+fn build_topology(ranges: &[SlotRange]) -> KevyResult<Topology> {
     if ranges.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "CLUSTER SLOTS returned no ranges",
-        ));
+        return Err(KevyError::Protocol("CLUSTER SLOTS returned no ranges".into()));
     }
     let mut nodes: Vec<(String, u16)> = Vec::new();
     let mut slot_to_shard = vec![0u16; NUM_SLOTS];
@@ -279,9 +276,9 @@ fn build_topology(ranges: &[SlotRange]) -> io::Result<Topology> {
 }
 
 /// Parse a `CLUSTER SLOTS` reply: `[[start, end, [host, port, id, []], …], …]`.
-fn parse_cluster_slots(reply: Reply) -> io::Result<Vec<SlotRange>> {
-    fn bad() -> io::Error {
-        io::Error::new(io::ErrorKind::InvalidData, "malformed CLUSTER SLOTS reply")
+fn parse_cluster_slots(reply: Reply) -> KevyResult<Vec<SlotRange>> {
+    fn bad() -> KevyError {
+        KevyError::Protocol("malformed CLUSTER SLOTS reply".into())
     }
     let Reply::Array(rows) = reply else {
         return Err(bad());

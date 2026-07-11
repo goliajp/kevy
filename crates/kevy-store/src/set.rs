@@ -39,24 +39,16 @@ impl Store {
         }
     }
 
-    /// `SADD` — returns the count of newly-added members.
-    pub fn sadd(&mut self, key: &[u8], members: &[Vec<u8>]) -> Result<usize, StoreError> {
-        let slices: Vec<&[u8]> = members.iter().map(Vec::as_slice).collect();
-        self.sadd_borrowed(key, &slices)
-    }
-
-    /// G4 (v1.25): borrowed-slice SADD — kills the per-member `Vec<u8>` alloc
-    /// the dispatch layer used to do via `rest(args, 2)`. Behaviour identical
-    /// to [`Self::sadd`]; mirrors valkey's `setTypeAdd(set, objectGetVal(
-    /// c->argv[j]))` zero-copy hand-off (`t_set.c:611`).
+    /// `SADD` — returns the count of newly-added members. Borrowed argv:
+    /// no per-member allocation on the insert path.
     ///
-    /// A.7 O5: takes the encoding-switch path. New key starts as
+    /// Takes the encoding-switch path: a new key starts as
     /// `SmallSetInline` if the first member fits; subsequent inserts
     /// stay inline until `SmallSetData::try_add` returns `NoRoom`, at
     /// which point the set is promoted in-place to
     /// `Value::Set(Arc<KevySet>)` and the spilling member is re-inserted
     /// in the heap-backed variant.
-    pub fn sadd_borrowed(
+    pub fn sadd(
         &mut self,
         key: &[u8],
         members: &[&[u8]],
@@ -86,7 +78,7 @@ impl Store {
     }
 
     /// Insert one member; encapsulates the encoding-switch decision so
-    /// `sadd_borrowed` can stay short. The split keeps each function
+    /// `sadd` can stay short. The split keeps each function
     /// under the 50-LOC house rule.
     fn sadd_one(&mut self, key: &[u8], m: &[u8]) -> Result<SaddOutcome, StoreError> {
         // Missing key — pick the encoding by member size.
@@ -160,13 +152,7 @@ impl Store {
     }
 
     /// `SREM` — returns the count removed (deleting an emptied key).
-    pub fn srem(&mut self, key: &[u8], members: &[Vec<u8>]) -> Result<usize, StoreError> {
-        let slices: Vec<&[u8]> = members.iter().map(Vec::as_slice).collect();
-        self.srem_borrowed(key, &slices)
-    }
-
-    /// G4 (v1.25): borrowed-slice SREM — see [`Self::sadd_borrowed`].
-    pub fn srem_borrowed(
+    pub fn srem(
         &mut self,
         key: &[u8],
         members: &[&[u8]],
@@ -304,7 +290,7 @@ impl Store {
 }
 
 /// Per-member result for the inner [`Store::sadd_one`] step. Lets
-/// `sadd_borrowed` route the weight delta correctly: inline adds carry
+/// `sadd` route the weight delta correctly: inline adds carry
 /// zero heap (no delta), heap adds carry the per-member byte budget,
 /// already-present means no count + no delta.
 enum SaddOutcome {

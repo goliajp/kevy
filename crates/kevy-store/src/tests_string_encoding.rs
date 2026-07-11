@@ -85,7 +85,7 @@ fn append_accepts_int_encoding() {
 #[test]
 fn wrongtype_still_rejected_for_real_collections() {
     let mut s = Store::new();
-    s.rpush(b"l", &[b"a".to_vec()]).unwrap();
+    s.rpush(b"l", &[b"a".as_slice()]).unwrap();
     assert!(s.getdel(b"l").is_err(), "GETDEL on a list must stay WRONGTYPE");
     assert!(s.getset(b"l", b"v".to_vec()).is_err());
     assert!(s.incr_by_float(b"l", 1.0).is_err());

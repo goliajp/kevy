@@ -19,6 +19,7 @@
 //! [`RuntimeState`]: crate::RuntimeState
 //! [`RuntimeState::take_replica_inboxes`]: crate::RuntimeState::take_replica_inboxes
 
+use kevy_resp::CmdError;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -171,9 +172,9 @@ impl ReplicationState {
     /// `Runtime::with_replica_inboxes`) — every other failure mode is
     /// the runner thread's reconnect loop handling transient upstream
     /// unreachability.
-    pub(crate) fn start_runners(&self, upstream: (IpAddr, u16)) -> Result<(), &'static str> {
+    pub(crate) fn start_runners(&self, upstream: (IpAddr, u16)) -> Result<(), CmdError> {
         if self.inboxes.lock().expect("inboxes poisoned").is_some() {
-            return Err("replica inboxes not wired into a runtime (kevy::serve required)");
+            return Err(CmdError::Wire("replica inboxes not wired into a runtime (kevy::serve required)"));
         }
         // Stop any prior fleet before installing the new one. The old
         // runners' threads block on `next_event` reads; shutdown()

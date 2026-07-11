@@ -4,7 +4,7 @@
 //! frame regardless of which facade set them (relative forms convert
 //! before logging — replay can't re-anchor); `hpersist` logs itself.
 
-use std::io;
+use crate::KevyResult;
 use std::time::Duration;
 
 use kevy_store::{HExpireCode, HExpireCond, now_unix_ms};
@@ -14,7 +14,7 @@ use crate::replica_glue::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
 
 #[cfg(target_arch = "wasm32")]
-fn ensure_writable(_s: &Store) -> io::Result<()> {
+fn ensure_writable(_s: &Store) -> KevyResult<()> {
     Ok(())
 }
 
@@ -27,7 +27,7 @@ impl Store {
         fields: &[&[u8]],
         ttl: Duration,
         cond: HExpireCond,
-    ) -> io::Result<Vec<HExpireCode>> {
+    ) -> KevyResult<Vec<HExpireCode>> {
         let deadline = now_unix_ms().saturating_add(ttl.as_millis() as u64);
         self.hpexpire_at(key, fields, deadline, cond)
     }
@@ -40,7 +40,7 @@ impl Store {
         fields: &[&[u8]],
         deadline_ms: u64,
         cond: HExpireCond,
-    ) -> io::Result<Vec<HExpireCode>> {
+    ) -> KevyResult<Vec<HExpireCode>> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let codes = g.store.hexpire_at(key, fields, deadline_ms, cond).map_err(store_err)?;
@@ -61,14 +61,14 @@ impl Store {
     }
 
     /// `HTTL` — remaining ms per field (`-2` missing, `-1` no TTL).
-    pub fn httl(&self, key: &[u8], fields: &[&[u8]]) -> io::Result<Vec<i64>> {
+    pub fn httl(&self, key: &[u8], fields: &[&[u8]]) -> KevyResult<Vec<i64>> {
         let mut g = self.wshard(key);
         g.store.httl(key, fields).map_err(store_err)
     }
 
     /// `HPERSIST` — clear per-field TTLs (`-2` missing, `-1` had no
     /// TTL, `1` cleared).
-    pub fn hpersist(&self, key: &[u8], fields: &[&[u8]]) -> io::Result<Vec<HExpireCode>> {
+    pub fn hpersist(&self, key: &[u8], fields: &[&[u8]]) -> KevyResult<Vec<HExpireCode>> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let codes = g.store.hpersist(key, fields).map_err(store_err)?;

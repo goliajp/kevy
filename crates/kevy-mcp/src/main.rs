@@ -73,7 +73,7 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: &Cli) -> io::Result<()> {
-    let mut client = RespClient::from_url(&cli.url)?;
+    let mut client = RespClient::connect_url(&cli.url)?;
     let docs = client.request(&[b"COMMAND".to_vec(), b"DOCS".to_vec()])?;
     let catalog = Catalog::from_docs_reply(&docs).map_err(io::Error::other)?;
     // stderr is the MCP-sanctioned log channel; stdout carries only frames.

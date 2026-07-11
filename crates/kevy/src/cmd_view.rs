@@ -6,6 +6,7 @@
 //! `( AND|OR|DIFF <sub> <sub> )` | `<index> RANGE <min> <max>` |
 //! `<index> EQ <v>`.
 
+use kevy_resp::CmdError;
 use std::path::Path;
 
 use kevy_index::{Catalog, IndexValue, Leaf, Tree, ViewCatalog, ViewMode, ViewSpec};
@@ -45,9 +46,9 @@ fn parse_tree<A: ArgvView + ?Sized>(
     args: &A,
     i: usize,
     depth: usize,
-) -> Result<(Tree, usize), &'static str> {
+) -> Result<(Tree, usize), CmdError> {
     if depth > kevy_index::MAX_TREE_DEPTH {
-        return Err("ERR view tree deeper than 3");
+        return Err(CmdError::Wire("ERR view tree deeper than 3"));
     }
     let tok = args.get(i).ok_or("ERR truncated view tree")?;
     if tok == b"(" {
@@ -55,7 +56,7 @@ fn parse_tree<A: ArgvView + ?Sized>(
         let (a, ni) = parse_tree(icat, args, i + 2, depth + 1)?;
         let (b, ni) = parse_tree(icat, args, ni, depth + 1)?;
         if args.get(ni).map(|t| t as &[u8]) != Some(b")") {
-            return Err("ERR expected ) in view tree");
+            return Err(CmdError::Wire("ERR expected ) in view tree"));
         }
         let tree = if op.eq_ignore_ascii_case(b"AND") {
             Tree::And(Box::new(a), Box::new(b))
@@ -64,7 +65,7 @@ fn parse_tree<A: ArgvView + ?Sized>(
         } else if op.eq_ignore_ascii_case(b"DIFF") {
             Tree::Diff(Box::new(a), Box::new(b))
         } else {
-            return Err("ERR view tree op must be AND|OR|DIFF");
+            return Err(CmdError::Wire("ERR view tree op must be AND|OR|DIFF"));
         };
         Ok((tree, ni + 1))
     } else {
@@ -86,7 +87,7 @@ fn parse_tree<A: ArgvView + ?Sized>(
                 .ok_or("ERR leaf value does not coerce to the index type")?;
             Ok((Tree::Leaf(Leaf { index, min: v.clone(), max: v }), i + 3))
         } else {
-            Err("ERR view leaf shape must be RANGE|EQ")
+            Err(CmdError::Wire("ERR view leaf shape must be RANGE|EQ"))
         }
     }
 }
@@ -100,7 +101,7 @@ pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out
     let icat = ctx.state.catalogs.index();
     let (tree, mut i) = match parse_tree(icat.as_deref(), args, 3, 1) {
         Ok(t) => t,
-        Err(e) => return encode_error(out, e),
+        Err(e) => return encode_error(out, e.as_wire()),
     };
     if !(args.get(i).is_some_and(|t| t.eq_ignore_ascii_case(b"ORDER"))
         && args.get(i + 1).is_some_and(|t| t.eq_ignore_ascii_case(b"BY")))
@@ -116,7 +117,7 @@ pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out
     i += 3;
     let (desc, mut mode, top_k, via) = match parse_create_opts(args, i) {
         Ok(opts) => opts,
-        Err(e) => return encode_error(out, e),
+        Err(e) => return encode_error(out, e.as_wire()),
     };
     if let ViewMode::Materialized { .. } = mode {
         mode = ViewMode::Materialized { top_k };
@@ -143,7 +144,7 @@ type CreateOpts = (bool, ViewMode, u32, Option<Vec<u8>>);
 fn parse_create_opts<A: ArgvView + ?Sized>(
     args: &A,
     mut i: usize,
-) -> Result<CreateOpts, &'static str> {
+) -> Result<CreateOpts, CmdError> {
     let mut desc = false;
     let mut mode = ViewMode::Virtual;
     let mut top_k = 0u32;
@@ -156,30 +157,30 @@ fn parse_create_opts<A: ArgvView + ?Sized>(
         } else if t.eq_ignore_ascii_case(b"MODE") {
             let m = match args.get(i + 1) {
                 Some(m) => m,
-                None => return Err("ERR MODE requires virtual|materialized"),
+                None => return Err(CmdError::Wire("ERR MODE requires virtual|materialized")),
             };
             mode = if m.eq_ignore_ascii_case(b"virtual") {
                 ViewMode::Virtual
             } else if m.eq_ignore_ascii_case(b"materialized") {
                 ViewMode::Materialized { top_k: 0 }
             } else {
-                return Err("ERR MODE must be virtual|materialized");
+                return Err(CmdError::Wire("ERR MODE must be virtual|materialized"));
             };
             i += 2;
         } else if t.eq_ignore_ascii_case(b"TOPK") {
             top_k = match args.get(i + 1).and_then(|v| std::str::from_utf8(v).ok()).and_then(|s| s.parse().ok()) {
                 Some(k) => k,
-                None => return Err("ERR TOPK must be an integer"),
+                None => return Err(CmdError::Wire("ERR TOPK must be an integer")),
             };
             i += 2;
         } else if t.eq_ignore_ascii_case(b"VIA") {
             via = args.get(i + 1).map(|v| v.to_vec());
             if via.is_none() {
-                return Err("ERR VIA requires a template");
+                return Err(CmdError::Wire("ERR VIA requires a template"));
             }
             i += 2;
         } else {
-            return Err("ERR syntax error");
+            return Err(CmdError::Wire("ERR syntax error"));
         }
     }
     Ok((desc, mode, top_k, via))
@@ -252,7 +253,7 @@ fn op_hydrate(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let mut hits = 0u32;
     for (row_idx, row) in rows.chunks(3).enumerate() {
         let [_member, _order, target] = row else { break };
-        if store.exists(&[target.to_vec()]) == 0 {
+        if store.exists(&[target.as_slice()]) == 0 {
             continue;
         }
         hits += 1;
@@ -289,7 +290,7 @@ fn op_query(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
             }
             chunk
         }
-        Err(e) if e.starts_with("INDEXBUILDING") => vec![ST_BUILDING],
+        Err(e) if e.as_wire().starts_with("INDEXBUILDING") => vec![ST_BUILDING],
         Err(_) => vec![ST_NOINDEX],
     }
 }

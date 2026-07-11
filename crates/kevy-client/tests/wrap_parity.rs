@@ -3,7 +3,6 @@
 //! set (the same harness as crates/kevy/tests/*), with the change feed
 //! and a persistent data dir enabled so FEED.* and IDX.* are live.
 
-use std::io;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -41,7 +40,7 @@ impl Server {
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, NSHARDS, kevy::KevyCommands::sharded(NSHARDS))
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(NSHARDS)).bind([127, 0, 0, 1], port).shards(NSHARDS)
                 .with_data_dir(dir_thread)
                 .with_feed(true, 0);
             rt.run(stop_thread).unwrap();
@@ -56,7 +55,7 @@ impl Server {
     }
 
     fn conn(&self) -> Connection {
-        Connection::open(&format!("kevy://127.0.0.1:{}", self.port)).unwrap()
+        Connection::connect(&format!("kevy://127.0.0.1:{}", self.port)).unwrap()
     }
 }
 
@@ -195,7 +194,7 @@ fn zset_algebra_store_and_card() {
 
 /// Poll a closure until the index build finishes (ticks run ~10 Hz;
 /// queries answer `INDEXBUILDING …` while backfilling).
-fn idx_ready<T>(mut f: impl FnMut() -> io::Result<T>) -> T {
+fn idx_ready<T>(mut f: impl FnMut() -> kevy_client::KevyResult<T>) -> T {
     for _ in 0..100 {
         match f() {
             Ok(v) => return v,

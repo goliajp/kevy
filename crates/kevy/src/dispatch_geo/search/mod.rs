@@ -37,7 +37,7 @@ pub(super) fn cmd_geosearch<A: ArgvView + ?Sized>(
     }
     let opts = match parse_opts(args) {
         Ok(o) => o,
-        Err(msg) => return encode_error(out, msg),
+        Err(msg) => return encode_error(out, msg.as_wire()),
     };
     let key = args[1].to_vec();
     let hits = match run_search(store, &key, &opts) {
@@ -274,7 +274,7 @@ pub(super) fn cmd_geosearchstore<A: ArgvView + ?Sized>(
     }
     let opts = match parse_opts_at(args, 3) {
         Ok(o) => o,
-        Err(msg) => return encode_error(out, msg),
+        Err(msg) => return encode_error(out, msg.as_wire()),
     };
     let dst = args[1].to_vec();
     let src = args[2].to_vec();
@@ -301,15 +301,15 @@ fn write_hits_to_zset(
     hits: &[Hit],
     storedist: bool,
 ) -> Result<usize, kevy_store::StoreError> {
-    store.del(&[dst.to_vec()]);
+    store.del(&[dst]);
     if hits.is_empty() {
         return Ok(0);
     }
-    let pairs: Vec<(f64, Vec<u8>)> = hits
+    let pairs: Vec<(f64, &[u8])> = hits
         .iter()
         .map(|h| {
             let score = if storedist { h.dist_m } else { h.score };
-            (score, h.member.clone())
+            (score, h.member.as_slice())
         })
         .collect();
     store.zadd(dst, &pairs)?;

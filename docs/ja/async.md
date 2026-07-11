@@ -8,7 +8,7 @@
 
 ## 中心となる考え方
 
-Cargoフィーチャでランタイム（`tokio`、`smol`、`async-std`）をちょうど1つ選びます。クレートはそのランタイムの`TcpStream`アダプタだけにコンパイルされ、ほかは一切含まれません。公開APIはブロッキングクライアントを1:1でミラーしているため（`AsyncConnection::open(url).await?`、`conn.set(k, v).await?`、`conn.get(k).await?`）、ブロッキングからの移植は`Connection`を`AsyncConnection`に替えて各呼び出しに`.await`を付けるだけで済みます。レイテンシが問題になる場面では、pipelineビルダーがNコマンドを1回のTCP往復にまとめます。
+Cargoフィーチャでランタイム（`tokio`、`smol`、`async-std`）をちょうど1つ選びます。クレートはそのランタイムの`TcpStream`アダプタだけにコンパイルされ、ほかは一切含まれません。公開APIはブロッキングクライアントを1:1でミラーしているため（`AsyncConnection::connect(url).await?`、`conn.set(k, v).await?`、`conn.get(k).await?`）、ブロッキングからの移植は`Connection`を`AsyncConnection`に替えて各呼び出しに`.await`を付けるだけで済みます。レイテンシが問題になる場面では、pipelineビルダーがNコマンドを1回のTCP往復にまとめます。
 
 ## 動かしてみる例
 
@@ -25,7 +25,7 @@ use kevy_client_async::AsyncConnection;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
+    let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6004").await?;
     conn.set(b"k", b"v").await?;
     let v = conn.get(b"k").await?;
     assert_eq!(v.as_deref(), Some(&b"v"[..]));
@@ -48,7 +48,7 @@ use kevy_client_async::AsyncConnection;
 
 fn main() -> std::io::Result<()> {
     smol::block_on(async {
-        let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
+        let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6004").await?;
         conn.set(b"k", b"v").await?;
         let v = conn.get(b"k").await?;
         assert_eq!(v.as_deref(), Some(&b"v"[..]));
@@ -64,7 +64,7 @@ fn main() -> std::io::Result<()> {
 ```rust
 use kevy_client_async::AsyncConnection;
 
-let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
+let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6004").await?;
 let replies = conn
     .pipeline()
     .set(b"a", b"1")
@@ -89,7 +89,7 @@ let replies = conn
 
 ## URLバックエンド
 
-`AsyncConnection::open`はブロッキングクライアントと同じURLファサードを受け取ります。TCP系のスキームはランタイムの非同期ソケットを通り、プロセス内スキームは拒否されます（プロセス内アクセスはブロッキングクライアントのほうが厳密に速く、エグゼキュータを経由させる意味がないためです）。
+`AsyncConnection::connect`はブロッキングクライアントと同じURLファサードを受け取ります。TCP系のスキームはランタイムの非同期ソケットを通り、プロセス内スキームは拒否されます（プロセス内アクセスはブロッキングクライアントのほうが厳密に速く、エグゼキュータを経由させる意味がないためです）。
 
 | スキーム     | 接続先                              | 非同期クライアントの対応 |
 |--------------|---------------------------------|---------------------------|
@@ -99,7 +99,7 @@ let replies = conn
 | `mem://`     | プロセス内組み込みストア       | 非対応（ブロッキング版を使用）  |
 | `file:///`   | オンディスク組み込みストア          | 非対応（ブロッキング版を使用）  |
 
-`mem://`や`file:///`のURLを`AsyncConnection::open`で開くと`ErrorKind::Unsupported`が返ります。
+`mem://`や`file:///`のURLを`AsyncConnection::connect`で開くと`ErrorKind::Unsupported`が返ります。
 
 ## トレードオフ
 

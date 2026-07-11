@@ -161,12 +161,11 @@ impl Store {
     /// the destination rather than storing an empty zset). Returns
     /// the stored cardinality.
     pub fn zstore_result(&mut self, dst: &[u8], pairs: &[(Vec<u8>, f64)]) -> usize {
-        let keys = [dst.to_vec()];
-        self.del(&keys);
+        self.del(&[dst]);
         if pairs.is_empty() {
             return 0;
         }
-        let scored: Vec<(f64, Vec<u8>)> = pairs.iter().map(|(m, s)| (*s, m.clone())).collect();
+        let scored: Vec<(f64, &[u8])> = pairs.iter().map(|(m, s)| (*s, m.as_slice())).collect();
         let _ = self.zadd(dst, &scored);
         pairs.len()
     }
@@ -221,8 +220,8 @@ mod tests {
     #[test]
     fn store_materialization_and_source_extraction() {
         let mut s = Store::new();
-        s.zadd(b"z", &[(1.0, b"a".to_vec()), (2.0, b"b".to_vec())]).unwrap();
-        s.sadd(b"s", &[b"a".to_vec(), b"c".to_vec()]).unwrap();
+        s.zadd(b"z", &[(1.0, b"a".as_slice()), (2.0, b"b".as_slice())]).unwrap();
+        s.sadd(b"s", &[b"a".as_slice(), b"c".as_slice()]).unwrap();
         let mut zm = s.zset_or_set_members(b"z").unwrap();
         zm.sort_by(|x, y| x.0.cmp(&y.0));
         assert_eq!(zm, zs(&[("a", 1.0), ("b", 2.0)]));
@@ -239,6 +238,6 @@ mod tests {
         assert_eq!(s.zscore(b"dst", b"m").unwrap(), Some(7.0));
         assert_eq!(s.zstore_result(b"dst", &[]), 0);
         assert_eq!(s.zcard(b"dst").unwrap(), 0);
-        assert_eq!(s.exists(&[b"dst".to_vec()]), 0);
+        assert_eq!(s.exists(&[b"dst".as_slice()]), 0);
     }
 }

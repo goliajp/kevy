@@ -1,3 +1,4 @@
+use crate::KevyError;
 use super::*;
 
 // ----- URL routing -----
@@ -5,7 +6,7 @@ use super::*;
 #[test]
 fn anonymous_mem_rejected_for_subscriber() {
     let err = Subscriber::connect("mem://").unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+    assert!(matches!(err, KevyError::Unsupported(_)));
 }
 
 #[test]
@@ -17,8 +18,8 @@ fn named_mem_resolves_to_embedded() {
 
 #[test]
 fn open_with_empty_channels_rejected() {
-    let err = Subscriber::open("kevy://127.0.0.1:1", &[]).unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    let err = Subscriber::connect_channels("kevy://127.0.0.1:1", &[]).unwrap_err();
+    assert!(matches!(err, KevyError::InvalidInput(_)));
 }
 
 // ----- classify (RESP wire path) -----
@@ -96,7 +97,7 @@ fn classify_rejects_unknown_kind() {
         Reply::Bulk(b"x".to_vec()),
         Reply::Int(0),
     ]);
-    assert_eq!(classify(r).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    assert!(matches!(classify(r).unwrap_err(), KevyError::Protocol(_)));
 }
 
 #[test]
@@ -105,7 +106,7 @@ fn classify_rejects_wrong_arity() {
         Reply::Bulk(b"subscribe".to_vec()),
         Reply::Bulk(b"x".to_vec()),
     ]);
-    assert_eq!(classify(r).unwrap_err().kind(), io::ErrorKind::InvalidData);
+    assert!(matches!(classify(r).unwrap_err(), KevyError::Protocol(_)));
 }
 
 // ----- remote_host_port -----
@@ -126,10 +127,7 @@ fn remote_host_port_explicit() {
 
 #[test]
 fn remote_host_port_userinfo_rejected() {
-    assert_eq!(
-        remote_host_port("kevy://u:p@h:6379").unwrap_err().kind(),
-        io::ErrorKind::Unsupported
-    );
+    assert!(matches!(remote_host_port("kevy://u:p@h:6379").unwrap_err(), KevyError::Unsupported(_)));
 }
 
 // ----- embedded end-to-end -----
@@ -139,8 +137,8 @@ fn embed_subscribe_then_publish_via_same_url_delivers() {
     use crate::Connection;
     // Both opened with the SAME URL → registry returns the same Store
     // → the publish reaches the subscriber.
-    let mut sub = Subscriber::open("mem://embed-e2e-1", &[b"chan"]).unwrap();
-    let mut pubconn = Connection::open("mem://embed-e2e-1").unwrap();
+    let mut sub = Subscriber::connect_channels("mem://embed-e2e-1", &[b"chan"]).unwrap();
+    let mut pubconn = Connection::connect("mem://embed-e2e-1").unwrap();
     // Drain the SUBSCRIBE ack first.
     let ack = sub.recv().unwrap();
     assert!(matches!(ack, PubsubEvent::Subscribe { .. }));
@@ -159,14 +157,14 @@ fn embed_subscribe_then_publish_via_same_url_delivers() {
 #[test]
 fn embed_different_url_names_are_isolated() {
     use crate::Connection;
-    let mut sub = Subscriber::open("mem://embed-iso-A", &[b"chan"]).unwrap();
-    let mut pubconn = Connection::open("mem://embed-iso-B").unwrap();
+    let mut sub = Subscriber::connect_channels("mem://embed-iso-A", &[b"chan"]).unwrap();
+    let mut pubconn = Connection::connect("mem://embed-iso-B").unwrap();
     // Drain ack.
     let _ack = sub.recv().unwrap();
     assert_eq!(pubconn.publish(b"chan", b"hi").unwrap(), 0);
     sub.set_read_timeout(Some(Duration::from_millis(50))).unwrap();
     let err = sub.recv().unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+    assert!(matches!(err, KevyError::TimedOut));
 }
 
 #[test]

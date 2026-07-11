@@ -10,7 +10,7 @@
 //! opened with `Config::with_feed`; without it, calls answer
 //! `Unsupported`.
 
-use std::io;
+use crate::{KevyError, KevyResult};
 
 use kevy_embedded::FeedError;
 use kevy_resp::Reply;
@@ -41,12 +41,12 @@ pub struct FeedBatch {
 
 impl Connection {
     /// `FEED.SHARDS` — number of change-feed shards (embedded: always 1).
-    pub fn feed_shards(&mut self) -> io::Result<usize> {
+    pub fn feed_shards(&mut self) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => Ok(s.feed_shards()),
             Self::Remote(c) => match c.request_borrowed(&[b"FEED.SHARDS"])? {
                 Reply::Int(n) if n >= 0 => Ok(n as usize),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
@@ -55,7 +55,7 @@ impl Connection {
     /// `FEED.TAIL shard` — the shard's current `(generation,
     /// next_offset)` cursor: where a consumer starting fresh (or
     /// resuming after a rebuild) begins.
-    pub fn feed_tail(&mut self, shard: usize) -> io::Result<(u64, u64)> {
+    pub fn feed_tail(&mut self, shard: usize) -> KevyResult<(u64, u64)> {
         match self {
             Self::Embedded(s) => {
                 check_embedded_shard(shard)?;
@@ -71,7 +71,7 @@ impl Connection {
                             (a, _) => Err(unexpected(a)),
                         }
                     }
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
                 }
             }
@@ -90,7 +90,7 @@ impl Connection {
         offset: u64,
         count: Option<usize>,
         prefixes: &[&[u8]],
-    ) -> io::Result<FeedBatch> {
+    ) -> KevyResult<FeedBatch> {
         match self {
             Self::Embedded(s) => {
                 check_embedded_shard(shard)?;
@@ -115,28 +115,22 @@ impl Connection {
 }
 
 /// Embedded feed is single-shard; any other index is a caller bug.
-fn check_embedded_shard(shard: usize) -> io::Result<()> {
+fn check_embedded_shard(shard: usize) -> KevyResult<()> {
     if shard != 0 {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "embedded feed is single-shard: shard must be 0",
-        ));
+        return Err(KevyError::InvalidInput("embedded feed is single-shard: shard must be 0".into()));
     }
     Ok(())
 }
 
 /// Map [`FeedError`] onto the same error text the wire produces, so
 /// resync handling code is backend-agnostic.
-fn feed_err(e: FeedError) -> io::Error {
+fn feed_err(e: FeedError) -> KevyError {
     match e {
         FeedError::Resync { generation, tail } => {
-            io::Error::other(format!("FEEDRESYNC {generation} {tail}"))
+            KevyError::Protocol(format!("FEEDRESYNC {generation} {tail}"))
         }
-        FeedError::Future => io::Error::other("ERR feed cursor ahead of stream"),
-        FeedError::Disabled => io::Error::new(
-            io::ErrorKind::Unsupported,
-            "feed disabled: open the embedded store with Config::with_feed",
-        ),
+        FeedError::Future => KevyError::Protocol("ERR feed cursor ahead of stream".into()),
+        FeedError::Disabled => KevyError::Unsupported("feed disabled: open the embedded store with Config::with_feed".into()),
     }
 }
 
@@ -147,7 +141,7 @@ fn feed_read_request(
     offset: u64,
     count: Option<usize>,
     prefixes: &[&[u8]],
-) -> io::Result<Reply> {
+) -> KevyResult<Reply> {
     let mut args: Vec<Vec<u8>> = vec![
         b"FEED.READ".to_vec(),
         shard.to_string().into_bytes(),
@@ -162,42 +156,42 @@ fn feed_read_request(
         args.push(b"PREFIX".to_vec());
         args.push(p.to_vec());
     }
-    c.request(&args)
+    Ok(c.request(&args)?)
 }
 
 /// `*3 [:generation, :next_offset, *N frames]`, each frame
 /// `*2 [:offset, *M argv]`.
-fn parse_batch(reply: Reply) -> io::Result<FeedBatch> {
+fn parse_batch(reply: Reply) -> KevyResult<FeedBatch> {
     let Reply::Array(items) = reply else {
         return match reply {
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         };
     };
     if items.len() != 3 {
-        return Err(io::Error::other("FEED.READ: expected [gen, next, frames]"));
+        return Err(KevyError::Protocol("FEED.READ: expected [gen, next, frames]".into()));
     }
     let mut it = items.into_iter();
     let (Reply::Int(g), Reply::Int(next)) = (it.next().unwrap(), it.next().unwrap()) else {
-        return Err(io::Error::other("FEED.READ: non-integer cursor"));
+        return Err(KevyError::Protocol("FEED.READ: non-integer cursor".into()));
     };
     let Reply::Array(raw_frames) = it.next().unwrap() else {
-        return Err(io::Error::other("FEED.READ: frames not an array"));
+        return Err(KevyError::Protocol("FEED.READ: frames not an array".into()));
     };
     let frames = raw_frames
         .into_iter()
         .map(parse_frame)
-        .collect::<io::Result<_>>()?;
+        .collect::<KevyResult<_>>()?;
     Ok(FeedBatch { generation: g as u64, next_offset: next as u64, frames })
 }
 
-fn parse_frame(frame: Reply) -> io::Result<FeedFrame> {
+fn parse_frame(frame: Reply) -> KevyResult<FeedFrame> {
     let Reply::Array(cells) = frame else {
-        return Err(io::Error::other("FEED.READ: frame not an array"));
+        return Err(KevyError::Protocol("FEED.READ: frame not an array".into()));
     };
     let mut it = cells.into_iter();
     let (Some(Reply::Int(off)), Some(Reply::Array(argv_raw))) = (it.next(), it.next()) else {
-        return Err(io::Error::other("FEED.READ: frame shape != [offset, argv]"));
+        return Err(KevyError::Protocol("FEED.READ: frame shape != [offset, argv]".into()));
     };
     let argv = argv_raw
         .into_iter()
@@ -205,7 +199,7 @@ fn parse_frame(frame: Reply) -> io::Result<FeedFrame> {
             Reply::Bulk(b) | Reply::Simple(b) => Ok(b),
             other => Err(unexpected(other)),
         })
-        .collect::<io::Result<_>>()?;
+        .collect::<KevyResult<_>>()?;
     Ok(FeedFrame { offset: off as u64, argv })
 }
 
@@ -216,19 +210,19 @@ mod tests {
     #[test]
     fn embedded_without_feed_config_is_unsupported() {
         // mem:// opens the store without Config::with_feed.
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         assert_eq!(c.feed_shards().unwrap(), 1);
         let err = c.feed_tail(0).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+        assert!(matches!(err, KevyError::Unsupported(_)));
         let err = c.feed_read(0, 1, 0, None, &[]).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+        assert!(matches!(err, KevyError::Unsupported(_)));
     }
 
     #[test]
     fn embedded_nonzero_shard_rejected() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         let err = c.feed_tail(1).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(matches!(err, KevyError::InvalidInput(_)));
     }
 
     #[test]

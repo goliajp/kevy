@@ -47,7 +47,8 @@ impl<C: Commands> Shard<C> {
     pub(crate) fn exec_op(&mut self, op: Op) -> Part {
         match op {
             Op::Del(keys) => {
-                let n = self.store.del(&keys);
+                let key_refs: Vec<&[u8]> = keys.iter().map(Vec::as_slice).collect();
+                let n = self.store.del(&key_refs);
                 if n > 0 {
                     for k in &keys {
                         self.store.bump_if_watched(k);
@@ -62,7 +63,10 @@ impl<C: Commands> Shard<C> {
                 }
                 Part::Int(n as i64)
             }
-            Op::Exists(keys) => Part::Int(self.store.exists(&keys) as i64),
+            Op::Exists(keys) => {
+                let key_refs: Vec<&[u8]> = keys.iter().map(Vec::as_slice).collect();
+                Part::Int(self.store.exists(&key_refs) as i64)
+            }
             Op::Dbsize => Part::Int(self.store.dbsize() as i64),
             Op::Flush => {
                 self.store.flushall();
@@ -146,12 +150,12 @@ impl<C: Commands> Shard<C> {
                 Part::Int(n as i64)
             }
             Op::SetStoreResult { dst, members } => {
-                let del = [dst.clone()];
-                self.store.del(&del);
+                self.store.del(&[dst.as_slice()]);
                 let n = if members.is_empty() {
                     0
                 } else {
-                    self.store.sadd(&dst, &members).unwrap_or(0)
+                    let member_refs: Vec<&[u8]> = members.iter().map(Vec::as_slice).collect();
+                    self.store.sadd(&dst, &member_refs).unwrap_or(0)
                 };
                 self.store.bump_if_watched(&dst);
                 let mut c = Argv::with_capacity(2, 0);

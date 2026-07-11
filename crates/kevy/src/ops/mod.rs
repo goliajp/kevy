@@ -297,7 +297,7 @@ fn info_repl_master(
     // v3.14 D2: per-replica truth — sent (pumped), acked
     // (REPLCONF ACK), lag in frames vs master_repl_offset.
     for (i, (ip, port, sent, acked)) in view.replicas.iter().enumerate() {
-        let acked_v = acked.unwrap_or(0);
+        let acked_v = acked.map_or(0, |a| a.acked_offset);
         let lag = offset.saturating_sub(acked_v);
         let state = if acked.is_some() { "online" } else { "syncing" };
         b.push_str(&format!(

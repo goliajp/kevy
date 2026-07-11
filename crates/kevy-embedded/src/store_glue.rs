@@ -1,7 +1,7 @@
 //! Shard-lock + AOF-commit glue split from `store.rs` (500-LOC rule).
 //! Import paths stay stable via the re-export in `store.rs`.
 
-use std::io;
+use crate::KevyResult;
 use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use kevy_persist::{Aof, Argv};
@@ -20,7 +20,7 @@ pub(crate) fn lock_read(shard: &RwLock<Inner>) -> RwLockReadGuard<'_, Inner> {
     shard.read().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn log_argv(aof: &mut Option<Aof>, parts: &[&[u8]]) -> io::Result<()> {
+fn log_argv(aof: &mut Option<Aof>, parts: &[&[u8]]) -> KevyResult<()> {
     if let Some(aof) = aof {
         let argv = Argv::from(parts.iter().map(|p| p.to_vec()).collect::<Vec<_>>());
         aof.append(&argv)?;
@@ -31,7 +31,7 @@ fn log_argv(aof: &mut Option<Aof>, parts: &[&[u8]]) -> io::Result<()> {
 /// Complete a write on one shard: AOF-log the canonical RESP command,
 /// publish to the embed-as-writer replication source (if configured),
 /// then run that shard's post-write eviction sweep.
-pub(crate) fn commit_write(inner: &mut Inner, parts: &[&[u8]]) -> io::Result<()> {
+pub(crate) fn commit_write(inner: &mut Inner, parts: &[&[u8]]) -> KevyResult<()> {
     log_argv(&mut inner.aof, parts)?;
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(src) = &inner.writer_source {
@@ -56,6 +56,6 @@ pub(crate) fn commit_write(inner: &mut Inner, parts: &[&[u8]]) -> io::Result<()>
     Ok(())
 }
 
-pub(crate) fn store_err(e: StoreError) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, format!("kevy-store: {e:?}"))
+pub(crate) fn store_err(e: StoreError) -> kevy_store::KevyError {
+    kevy_store::KevyError::Store(e)
 }

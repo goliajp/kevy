@@ -21,32 +21,32 @@ pub(crate) fn apply_for_test(store: &mut Store, args: &Argv) {
             store.set(&args[1], args[2].to_vec(), None, false, false);
         }
         b"DEL" => {
-            let keys: Vec<Vec<u8>> = args.iter().skip(1).map(<[u8]>::to_vec).collect();
+            let keys: Vec<&[u8]> = args.iter().skip(1).collect();
             store.del(&keys);
         }
         b"HSET" => {
-            let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+            let mut pairs: Vec<(&[u8], &[u8])> = Vec::new();
             let mut i = 2;
             while i + 1 < args.len() {
-                pairs.push((args[i].to_vec(), args[i + 1].to_vec()));
+                pairs.push((&args[i], &args[i + 1]));
                 i += 2;
             }
             store.hset(&args[1], &pairs).unwrap();
         }
         b"RPUSH" => {
-            let items: Vec<Vec<u8>> = args.iter().skip(2).map(<[u8]>::to_vec).collect();
+            let items: Vec<&[u8]> = args.iter().skip(2).collect();
             store.rpush(&args[1], &items).unwrap();
         }
         b"SADD" => {
-            let members: Vec<Vec<u8>> = args.iter().skip(2).map(<[u8]>::to_vec).collect();
+            let members: Vec<&[u8]> = args.iter().skip(2).collect();
             store.sadd(&args[1], &members).unwrap();
         }
         b"ZADD" => {
-            let mut pairs: Vec<(f64, Vec<u8>)> = Vec::new();
+            let mut pairs: Vec<(f64, &[u8])> = Vec::new();
             let mut i = 2;
             while i + 1 < args.len() {
                 let score: f64 = std::str::from_utf8(&args[i]).unwrap().parse().unwrap();
-                pairs.push((score, args[i + 1].to_vec()));
+                pairs.push((score, &args[i + 1]));
                 i += 2;
             }
             store.zadd(&args[1], &pairs).unwrap();
@@ -139,12 +139,12 @@ fn rewrite_reconstructs_full_keyspace() {
     let mut src = Store::new();
     src.set(b"str", b"hello".to_vec(), None, false, false);
     src.set(b"binary", vec![0u8, 1, 2, 255], None, false, false);
-    src.hset(b"hash", &[(b"f1".to_vec(), b"v1".to_vec()), (b"f2".to_vec(), b"v2".to_vec())])
+    src.hset(b"hash", &[(b"f1".as_slice(), b"v1".as_slice()), (b"f2".as_slice(), b"v2".as_slice())])
         .unwrap();
-    src.rpush(b"list", &[b"i1".to_vec(), b"i2".to_vec(), b"i3".to_vec()])
+    src.rpush(b"list", &[b"i1".as_slice(), b"i2".as_slice(), b"i3".as_slice()])
         .unwrap();
-    src.sadd(b"set", &[b"m1".to_vec(), b"m2".to_vec()]).unwrap();
-    src.zadd(b"zset", &[(1.5, b"a".to_vec()), (2.5, b"b".to_vec())])
+    src.sadd(b"set", &[b"m1".as_slice(), b"m2".as_slice()]).unwrap();
+    src.zadd(b"zset", &[(1.5, b"a".as_slice()), (2.5, b"b".as_slice())])
         .unwrap();
     src.set(
         b"ttl",

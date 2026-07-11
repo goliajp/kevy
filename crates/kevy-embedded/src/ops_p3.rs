@@ -7,8 +7,8 @@
 //! `kevy_store::Store` — over N small sets that is faster than
 //! serialising N RESP arrays.
 
+use crate::KevyResult;
 use std::collections::BTreeSet;
-use std::io;
 use std::time::Duration;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -16,7 +16,7 @@ use crate::replica_glue::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
 
 #[cfg(target_arch = "wasm32")]
-fn ensure_writable(_s: &Store) -> io::Result<()> { Ok(()) }
+fn ensure_writable(_s: &Store) -> KevyResult<()> { Ok(()) }
 
 impl Store {
     // ---- multi-key string ops ---------------------------------------
@@ -25,7 +25,7 @@ impl Store {
     /// per-key. Each pair is logged independently to its shard's
     /// AOF (no cross-shard atomic guarantee — a crash mid-call may
     /// leave a prefix applied; matches Redis Cluster semantics).
-    pub fn mset(&self, pairs: &[(&[u8], &[u8])]) -> io::Result<()> {
+    pub fn mset(&self, pairs: &[(&[u8], &[u8])]) -> KevyResult<()> {
         ensure_writable(self)?;
         for (k, v) in pairs {
             let mut g = self.wshard(k);
@@ -37,7 +37,7 @@ impl Store {
 
     /// `MGET key [key ...]` — return `Some(value)` per requested key
     /// that's present, `None` per absent / wrong-type.
-    pub fn mget(&self, keys: &[&[u8]]) -> io::Result<Vec<Option<Vec<u8>>>> {
+    pub fn mget(&self, keys: &[&[u8]]) -> KevyResult<Vec<Option<Vec<u8>>>> {
         let mut out = Vec::with_capacity(keys.len());
         for k in keys {
             out.push(
@@ -68,7 +68,7 @@ impl Store {
     /// `GETEX key TTL` — get the value and update the TTL atomically
     /// (single lock cycle on the owning shard). Returns the value;
     /// `None` when absent. AOF-logged as `PEXPIRE`.
-    pub fn getex(&self, key: &[u8], ttl: Duration) -> io::Result<Option<Vec<u8>>> {
+    pub fn getex(&self, key: &[u8], ttl: Duration) -> KevyResult<Option<Vec<u8>>> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let val = g.store.get(key).map_err(store_err)?.as_deref().map(<[u8]>::to_vec);
@@ -86,7 +86,7 @@ impl Store {
     /// `SINTER key [key ...]` — set intersection. Reads each key's
     /// members, computes the intersection in BTreeSet order
     /// (sorted, no duplicates).
-    pub fn sinter(&self, keys: &[&[u8]]) -> io::Result<Vec<Vec<u8>>> {
+    pub fn sinter(&self, keys: &[&[u8]]) -> KevyResult<Vec<Vec<u8>>> {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -106,7 +106,7 @@ impl Store {
     }
 
     /// `SUNION key [key ...]` — set union over N sets.
-    pub fn sunion(&self, keys: &[&[u8]]) -> io::Result<Vec<Vec<u8>>> {
+    pub fn sunion(&self, keys: &[&[u8]]) -> KevyResult<Vec<Vec<u8>>> {
         let mut acc: BTreeSet<Vec<u8>> = BTreeSet::new();
         for k in keys {
             for m in self.smembers(k)? {
@@ -118,7 +118,7 @@ impl Store {
 
     /// `SDIFF key [key ...]` — `keys[0]` minus the union of every
     /// subsequent set.
-    pub fn sdiff(&self, keys: &[&[u8]]) -> io::Result<Vec<Vec<u8>>> {
+    pub fn sdiff(&self, keys: &[&[u8]]) -> KevyResult<Vec<Vec<u8>>> {
         if keys.is_empty() {
             return Ok(Vec::new());
         }
@@ -138,7 +138,7 @@ impl Store {
     /// `EXPIREAT key unix_secs` — schedule expiry for the given
     /// absolute UNIX wall-clock time. Returns `true` when the key
     /// existed and the deadline was set; `false` when absent.
-    pub fn expireat(&self, key: &[u8], unix_secs: u64) -> io::Result<bool> {
+    pub fn expireat(&self, key: &[u8], unix_secs: u64) -> KevyResult<bool> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let unix_ms = unix_secs.saturating_mul(1000);
@@ -152,7 +152,7 @@ impl Store {
 
     /// `PEXPIREAT key unix_ms` — same as `expireat` but in
     /// milliseconds.
-    pub fn pexpireat(&self, key: &[u8], unix_ms: u64) -> io::Result<bool> {
+    pub fn pexpireat(&self, key: &[u8], unix_ms: u64) -> KevyResult<bool> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let ok = g.store.expire_at_unix_ms(key, unix_ms);
@@ -166,7 +166,7 @@ impl Store {
     /// `PEXPIRE key ms` — relative TTL in milliseconds. (`expire`
     /// takes `Duration`; this is the integer-ms variant matching
     /// the Redis wire command.)
-    pub fn pexpire(&self, key: &[u8], ms: u64) -> io::Result<bool> {
+    pub fn pexpire(&self, key: &[u8], ms: u64) -> KevyResult<bool> {
         self.expire(key, Duration::from_millis(ms))
     }
 
@@ -180,7 +180,7 @@ impl Store {
         key: &[u8],
         field: &[u8],
         delta: f64,
-    ) -> io::Result<f64> {
+    ) -> KevyResult<f64> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let new_val = g
@@ -208,7 +208,7 @@ impl Store {
         before: bool,
         pivot: &[u8],
         value: &[u8],
-    ) -> io::Result<i64> {
+    ) -> KevyResult<i64> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let new_len = g

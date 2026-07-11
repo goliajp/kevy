@@ -19,7 +19,7 @@ preserved (RESP is pipelined).
   any particular protocol. `Store` is re-exported for convenience.
 - `#![forbid(unsafe_code)]`.
 
-Implement `Commands`, then `Runtime::new(ip, port, nshards, cmds).run(stop)`.
+Implement `Commands`, then `Runtime::builder(cmds).bind(ip, port).shards(n).run(stop)`.
 See the crate docs for a complete example.
 
 ## License

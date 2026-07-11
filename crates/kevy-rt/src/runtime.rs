@@ -102,12 +102,16 @@ pub struct Runtime<C: Commands> {
 }
 
 impl<C: Commands> Runtime<C> {
+    /// Start configuring a runtime for `commands`. `Runtime` is its own
+    /// builder: chain [`Self::bind`] / [`Self::shards`] / the `with_*`
+    /// setters, then call `run`. Defaults: bind `127.0.0.1:6004`, one
+    /// shard, AOF on (`EverySec`), data dir `"."`.
     #[must_use]
-    pub fn new(ip: [u8; 4], port: u16, nshards: usize, commands: C) -> Self {
+    pub fn builder(commands: C) -> Self {
         Runtime {
-            ip,
-            port,
-            nshards: nshards.max(1),
+            ip: [127, 0, 0, 1],
+            port: 6004,
+            nshards: 1,
             commands,
             data_dir: PathBuf::from("."),
             enable_aof: true,
@@ -134,6 +138,21 @@ impl<C: Commands> Runtime<C> {
         }
     }
 
+    /// Listen address for the client TCP listener (every shard binds it
+    /// via SO_REUSEPORT). Default `127.0.0.1:6004`.
+    #[must_use]
+    pub fn bind(mut self, ip: [u8; 4], port: u16) -> Self {
+        self.ip = ip;
+        self.port = port;
+        self
+    }
+
+    /// Shard (reactor thread) count. Clamped to at least 1. Default 1.
+    #[must_use]
+    pub fn shards(mut self, n: usize) -> Self {
+        self.nshards = n.max(1);
+        self
+    }
 
     /// Spawn one thread per shard and run until `stop` is set.
     /// v1.25 UDS: also bind a Unix-domain stream listener at `path`. Lets

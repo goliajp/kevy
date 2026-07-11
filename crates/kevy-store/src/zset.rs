@@ -66,8 +66,10 @@ impl Store {
         }
     }
 
-    /// G4 (v1.25): borrowed-pair `ZADD`. A.8: encoding-switch.
-    pub fn zadd_borrowed(
+    /// `ZADD` — returns the count of newly-added members. Borrowed
+    /// argv: no per-member allocation; routes through the
+    /// encoding-switch path.
+    pub fn zadd(
         &mut self,
         key: &[u8],
         pairs: &[(f64, &[u8])],
@@ -92,13 +94,6 @@ impl Store {
         Ok(added)
     }
 
-    /// `ZADD` — returns the count of newly-added members.
-    pub fn zadd(&mut self, key: &[u8], pairs: &[(f64, Vec<u8>)]) -> Result<usize, StoreError> {
-        let borrowed: Vec<(f64, &[u8])> =
-            pairs.iter().map(|(s, m)| (*s, m.as_slice())).collect();
-        self.zadd_borrowed(key, &borrowed)
-    }
-
     pub fn zscore(&mut self, key: &[u8], member: &[u8]) -> Result<Option<f64>, StoreError> {
         match self.live_entry(key) {
             None => Ok(None),
@@ -121,13 +116,8 @@ impl Store {
         }
     }
 
-    pub fn zrem(&mut self, key: &[u8], members: &[Vec<u8>]) -> Result<usize, StoreError> {
-        let borrowed: Vec<&[u8]> = members.iter().map(Vec::as_slice).collect();
-        self.zrem_borrowed(key, &borrowed)
-    }
-
-    /// G4 (v1.25): borrowed-slice `ZREM`. A.8: encoding-aware.
-    pub fn zrem_borrowed(
+    /// `ZREM` — returns the count of members removed.
+    pub fn zrem(
         &mut self,
         key: &[u8],
         members: &[&[u8]],

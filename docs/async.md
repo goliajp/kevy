@@ -8,7 +8,7 @@ Reach for the async client when your app already runs on a `tokio`, `smol`, or `
 
 ## Core idea
 
-Pick exactly one runtime via a Cargo feature (`tokio`, `smol`, or `async-std`); the crate compiles down to that runtime's `TcpStream` adapter and nothing else. The public surface mirrors the blocking client 1:1 — `AsyncConnection::open(url).await?`, `conn.set(k, v).await?`, `conn.get(k).await?` — so porting from blocking is `Connection` → `AsyncConnection` plus an `.await` per call. A pipeline builder collapses N commands into one TCP round-trip when latency matters.
+Pick exactly one runtime via a Cargo feature (`tokio`, `smol`, or `async-std`); the crate compiles down to that runtime's `TcpStream` adapter and nothing else. The public surface mirrors the blocking client 1:1 — `AsyncConnection::connect(url).await?`, `conn.set(k, v).await?`, `conn.get(k).await?` — so porting from blocking is `Connection` → `AsyncConnection` plus an `.await` per call. A pipeline builder collapses N commands into one TCP round-trip when latency matters.
 
 ## Worked examples
 
@@ -25,7 +25,7 @@ use kevy_client_async::AsyncConnection;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
+    let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6004").await?;
     conn.set(b"k", b"v").await?;
     let v = conn.get(b"k").await?;
     assert_eq!(v.as_deref(), Some(&b"v"[..]));
@@ -48,7 +48,7 @@ use kevy_client_async::AsyncConnection;
 
 fn main() -> std::io::Result<()> {
     smol::block_on(async {
-        let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
+        let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6004").await?;
         conn.set(b"k", b"v").await?;
         let v = conn.get(b"k").await?;
         assert_eq!(v.as_deref(), Some(&b"v"[..]));
@@ -64,7 +64,7 @@ One round-trip for the whole batch. Replies come back in queue order; per-comman
 ```rust
 use kevy_client_async::AsyncConnection;
 
-let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
+let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6004").await?;
 let replies = conn
     .pipeline()
     .set(b"a", b"1")
@@ -89,7 +89,7 @@ Each runtime crate is pulled with `default-features = false` plus the minimum su
 
 ## URL backends
 
-`AsyncConnection::open` takes the same URL facade as the blocking client. The TCP-shaped schemes go over the runtime's async socket; the in-process schemes are rejected (the blocking client is strictly faster for them — no point routing through an executor).
+`AsyncConnection::connect` takes the same URL facade as the blocking client. The TCP-shaped schemes go over the runtime's async socket; the in-process schemes are rejected (the blocking client is strictly faster for them — no point routing through an executor).
 
 | scheme       | target                          | supported by async client |
 |--------------|---------------------------------|---------------------------|
@@ -99,7 +99,7 @@ Each runtime crate is pulled with `default-features = false` plus the minimum su
 | `mem://`     | in-process embedded store       | no — use blocking client  |
 | `file:///`   | on-disk embedded store          | no — use blocking client  |
 
-Opening a `mem://` or `file:///` URL with `AsyncConnection::open` returns `ErrorKind::Unsupported`.
+Opening a `mem://` or `file:///` URL with `AsyncConnection::connect` returns `ErrorKind::Unsupported`.
 
 ## Trade-offs
 

@@ -103,12 +103,7 @@ impl Server {
         }
 
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new(
-                [127, 0, 0, 1],
-                port,
-                nshards,
-                kevy::KevyCommands::sharded(nshards),
-            )
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(nshards)).bind([127, 0, 0, 1], port).shards(nshards)
             .with_data_dir(dir_path)
             .with_aof(false)
             .with_replication(true, 1024 * 1024)
@@ -253,7 +248,7 @@ fn replication_disabled_means_no_listener_on_replication_port() {
         std::env::set_var("KEVY_IO_URING", "0");
     }
     let handle = std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::new([127, 0, 0, 1], base, 1, kevy::KevyCommands::sharded(1))
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], base).shards(1)
             .with_data_dir(dir_path)
             .with_aof(false);
         // No .with_replication / .with_replication_listener calls.
@@ -603,7 +598,7 @@ fn start_small_buffer_primary(buffer_size: u64) -> Server {
         std::env::set_var("KEVY_IO_URING", "0");
     }
     let handle = std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands::sharded(1))
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
             .with_data_dir(dir_path)
             .with_aof(false)
             .with_replication(true, buffer_size)
@@ -1055,12 +1050,7 @@ impl ReplicaServer {
         let stop_runtime = Arc::new(AtomicBool::new(false));
         let stop_runtime_thread = stop_runtime.clone();
         let rt_handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new(
-                [127, 0, 0, 1],
-                port,
-                1,
-                kevy::KevyCommands::sharded(1),
-            )
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
             .with_data_dir(dir_path)
             .with_aof(false)
             .with_replica_inboxes(vec![receiver]);
@@ -1281,12 +1271,7 @@ fn replicaof_command_dynamically_attaches_to_primary() {
     let replica_stop = Arc::new(AtomicBool::new(false));
     let replica_stop_thread = replica_stop.clone();
     let replica_handle = std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::new(
-            [127, 0, 0, 1],
-            replica_port,
-            1,
-            replica_commands,
-        )
+        let rt = kevy_rt::Runtime::builder(replica_commands).bind([127, 0, 0, 1], replica_port).shards(1)
         .with_data_dir(replica_dir_path)
         .with_aof(false)
         .with_replica_inboxes(receivers);
@@ -1419,7 +1404,7 @@ impl AttachedReplica {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, commands)
+            let rt = kevy_rt::Runtime::builder(commands).bind([127, 0, 0, 1], port).shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replica_inboxes(receivers);

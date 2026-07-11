@@ -29,9 +29,9 @@ fn hook_backfill_and_query_lifecycle() {
     let ctx = cmds.ctx();
     let mut store = Store::new();
     // Pre-existing rows (to be backfilled).
-    store.hset(b"user:1", &[(b"age".to_vec(), b"30".to_vec())]).unwrap();
-    store.hset(b"user:2", &[(b"age".to_vec(), b"25".to_vec())]).unwrap();
-    store.hset(b"user:bad", &[(b"age".to_vec(), b"x".to_vec())]).unwrap();
+    store.hset(b"user:1", &[(b"age".as_slice(), b"30".as_slice())]).unwrap();
+    store.hset(b"user:2", &[(b"age".as_slice(), b"25".as_slice())]).unwrap();
+    store.hset(b"user:bad", &[(b"age".as_slice(), b"x".as_slice())]).unwrap();
     let epoch0 = ctx.state.control_epoch().load(Ordering::Acquire);
     install_one(ctx.state, "t_age");
     assert_eq!(
@@ -47,7 +47,7 @@ fn hook_backfill_and_query_lifecycle() {
     assert!(with_ready_segment(&ctx, &mut store, b"t_age", |_, _| ()).is_err());
 
     // user:3 has no hash yet — create it and write again (HSET path).
-    store.hset(b"user:3", &[(b"age".to_vec(), b"40".to_vec())]).unwrap();
+    store.hset(b"user:3", &[(b"age".as_slice(), b"40".as_slice())]).unwrap();
     on_write(&ctx, &mut store, b"user:3");
 
     // Tick drains the backfill.
@@ -63,9 +63,9 @@ fn hook_backfill_and_query_lifecycle() {
     assert_eq!(stats.coerce_failures, 1, "user:bad excluded");
 
     // Update moves the row; delete removes it.
-    store.hset(b"user:1", &[(b"age".to_vec(), b"99".to_vec())]).unwrap();
+    store.hset(b"user:1", &[(b"age".as_slice(), b"99".as_slice())]).unwrap();
     on_write(&ctx, &mut store, b"user:1");
-    store.del(&[b"user:2".to_vec()]);
+    store.del(&[b"user:2".as_slice()]);
     on_write(&ctx, &mut store, b"user:2");
     let hits = with_ready_segment(&ctx, &mut store, b"t_age", |spec, seg| {
         let min = IndexValue::parse_literal(spec.ty, b"0").unwrap();

@@ -2,6 +2,7 @@
 //! `kevy-rt`'s `Runtime` builder. Split out of `lib.rs` to keep that
 //! file under the 500-LOC house rule.
 
+use kevy_resp::CmdError;
 use std::net::{IpAddr, Ipv4Addr};
 
 use kevy_config::{Config, ReplicationRole};
@@ -115,7 +116,7 @@ fn spawn_initial_runners_from_config(repl: &ReplicationState, cfg: &Config) {
 pub(crate) fn retarget_upstream(
     repl: &ReplicationState,
     upstream: &str,
-) -> Result<(), &'static str> {
+) -> Result<(), CmdError> {
     let (host_str, port_base) = parse_upstream(upstream).ok_or("upstream not host:port")?;
     let host = resolve_host(&host_str).ok_or("upstream host not resolvable")?;
     repl.start_runners((host, port_base))

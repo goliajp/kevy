@@ -8,6 +8,7 @@
 //! frame (same INC-2026-06-09 discipline as `EXPIRE` → `PEXPIREAT`) —
 //! see `Shard::log_write`'s hash extension in kevy-rt.
 
+use kevy_resp::CmdError;
 use kevy_resp::{ArgvView, encode_array_len, encode_error, encode_integer};
 use kevy_store::{HExpireCond, Store, now_unix_ms};
 
@@ -18,7 +19,7 @@ use crate::cmd::{ERR_NOT_INT, arg_i64, store_err, wrong_args};
 fn parse_cond_fields<A: ArgvView + ?Sized>(
     args: &A,
     mut i: usize,
-) -> Result<(HExpireCond, Vec<usize>), &'static str> {
+) -> Result<(HExpireCond, Vec<usize>), CmdError> {
     let mut cond = HExpireCond::Always;
     if i < args.len() {
         let a = &args[i];
@@ -39,7 +40,7 @@ fn parse_cond_fields<A: ArgvView + ?Sized>(
         }
     }
     if i >= args.len() || !args[i].eq_ignore_ascii_case(b"FIELDS") {
-        return Err("ERR Mandatory keyword FIELDS is missing or not at the right position");
+        return Err(CmdError::Wire("ERR Mandatory keyword FIELDS is missing or not at the right position"));
     }
     i += 1;
     let n: usize = args
@@ -50,7 +51,7 @@ fn parse_cond_fields<A: ArgvView + ?Sized>(
         .ok_or("ERR Parameter `numFields` should be greater than 0")?;
     i += 1;
     if args.len() != i + n {
-        return Err("ERR Parameter `numFields` is more than number of arguments");
+        return Err(CmdError::Wire("ERR Parameter `numFields` is more than number of arguments"));
     }
     Ok((cond, (i..i + n).collect()))
 }
@@ -79,7 +80,7 @@ fn hexpire_generic<A: ArgvView + ?Sized>(
     };
     let (cond, idx) = match parse_cond_fields(args, 3) {
         Ok(t) => t,
-        Err(e) => return encode_error(out, e),
+        Err(e) => return encode_error(out, e.as_wire()),
     };
     let fields: Vec<&[u8]> = idx.iter().map(|&i| &args[i] as &[u8]).collect();
     let deadline = to_abs_ms(raw);
@@ -117,7 +118,7 @@ pub(crate) fn cmd_httl<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &
     }
     let (_, idx) = match parse_cond_fields(args, 2) {
         Ok(t) => t,
-        Err(e) => return encode_error(out, e),
+        Err(e) => return encode_error(out, e.as_wire()),
     };
     let fields: Vec<&[u8]> = idx.iter().map(|&i| &args[i] as &[u8]).collect();
     match store.httl(&args[1], &fields) {
@@ -138,7 +139,7 @@ pub(crate) fn cmd_hpersist<A: ArgvView + ?Sized>(store: &mut Store, args: &A, ou
     }
     let (_, idx) = match parse_cond_fields(args, 2) {
         Ok(t) => t,
-        Err(e) => return encode_error(out, e),
+        Err(e) => return encode_error(out, e.as_wire()),
     };
     let fields: Vec<&[u8]> = idx.iter().map(|&i| &args[i] as &[u8]).collect();
     match store.hpersist(&args[1], &fields) {

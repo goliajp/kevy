@@ -5,10 +5,10 @@
 //! use kevy_client::Connection;
 //!
 //! // Same business code regardless of backend:
-//! let mut conn = Connection::open(std::env::var("MY_KEVY_URL").unwrap().as_str())?;
+//! let mut conn = Connection::connect(std::env::var("MY_KEVY_URL").unwrap().as_str())?;
 //! conn.set(b"hello", b"world")?;
 //! assert_eq!(conn.get(b"hello")?, Some(b"world".to_vec()));
-//! # Ok::<(), std::io::Error>(())
+//! # Ok::<(), kevy_client::KevyError>(())
 //! ```
 //!
 //! URL schemes:
@@ -44,7 +44,6 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-use std::io;
 use std::time::Duration;
 
 use kevy_embedded::Store;
@@ -74,9 +73,9 @@ pub use pipeline::PipelineBuf;
 pub use subscribe::{PubsubEvent, Subscriber, SubscriberEvents, SubscriberMessages};
 pub use transaction::{Transaction, TransactionReplies};
 
-/// Re-exports so downstream code can name the argument/reply types of
-/// the v1.14.0 wraps without adding kevy-embedded / kevy-resp deps.
-pub use kevy_embedded::{HExpireCode, HExpireCond, ZAggregate};
+/// Re-exports so downstream code can name the argument/reply/error types
+/// of the wraps without adding kevy-embedded / kevy-resp deps.
+pub use kevy_embedded::{HExpireCode, HExpireCond, KevyError, KevyResult, StoreError, ZAggregate};
 pub use kevy_resp::Reply;
 
 pub(crate) use reply::{array_to_bulks, num_f64, num_u64, store_err, string, unexpected, vec2, vec3};
@@ -94,17 +93,17 @@ pub enum Connection {
 }
 
 impl Connection {
-    /// Open a backend chosen by URL scheme.
+    /// Connect to a backend chosen by URL scheme.
     ///
-    /// See the crate-level docs for the supported URL forms. From v1.3.0,
-    /// two `Connection::open` calls with the same `mem://<name>` or
+    /// See the crate-level docs for the supported URL forms. Two
+    /// `Connection::connect` calls with the same `mem://<name>` or
     /// `file:///path` URL share the same backing `Store` — and the same
-    /// pub/sub bus, so `Connection::publish` reaches a `Subscriber::open`
-    /// opened with the same URL.
-    pub fn open(url: &str) -> io::Result<Self> {
+    /// pub/sub bus, so `Connection::publish` reaches a
+    /// `Subscriber::connect_channels` opened with the same URL.
+    pub fn connect(url: &str) -> KevyResult<Self> {
         let parsed = parse_url(url)?;
         match parsed {
-            Target::Remote(remote_url) => Ok(Self::Remote(RespClient::from_url(&remote_url)?)),
+            Target::Remote(remote_url) => Ok(Self::Remote(RespClient::connect_url(&remote_url)?)),
             embed => Ok(Self::Embedded(Box::new(resolve_store(&embed)?))),
         }
     }
@@ -112,52 +111,49 @@ impl Connection {
     /// Remote-only feature gate: hand back the RESP client, or explain
     /// why the embedded backend can't serve `feature` (`Unsupported`,
     /// pointing at the `Connection::Embedded` escape hatch).
-    pub(crate) fn remote(&mut self, feature: &str) -> io::Result<&mut RespClient> {
+    pub(crate) fn remote(&mut self, feature: &str) -> KevyResult<&mut RespClient> {
         match self {
-            Self::Embedded(_) => Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                format!(
-                    "{feature} is remote-only; on the embedded backend match \
-                     Connection::Embedded and use kevy_embedded::Store's typed API"
-                ),
-            )),
+            Self::Embedded(_) => Err(KevyError::Unsupported(format!(
+                "{feature} is remote-only; on the embedded backend match \
+                 Connection::Embedded and use kevy_embedded::Store's typed API"
+            ))),
             Self::Remote(c) => Ok(c),
         }
     }
 
     /// `PING`. Returns `()` on `+PONG`, propagates any IO or RESP error.
     /// The first thing every healthcheck calls.
-    pub fn ping(&mut self) -> io::Result<()> {
+    pub fn ping(&mut self) -> KevyResult<()> {
         match self {
             Self::Embedded(_) => Ok(()),
             Self::Remote(c) => match c.request_borrowed(&[b"PING"])? {
                 Reply::Simple(s) if s == b"PONG" => Ok(()),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
     }
 
     /// `SET key value`. Unconditional set (no NX/XX). Returns `()` on success.
-    pub fn set(&mut self, key: &[u8], value: &[u8]) -> io::Result<()> {
+    pub fn set(&mut self, key: &[u8], value: &[u8]) -> KevyResult<()> {
         match self {
             Self::Embedded(s) => s.set(key, value).map(|_| ()),
             Self::Remote(c) => match c.request_borrowed(&[b"SET", key, value])? {
                 Reply::Simple(s) if s == b"OK" => Ok(()),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
     }
 
     /// `GET key`. `None` if absent or expired.
-    pub fn get(&mut self, key: &[u8]) -> io::Result<Option<Vec<u8>>> {
+    pub fn get(&mut self, key: &[u8]) -> KevyResult<Option<Vec<u8>>> {
         match self {
             Self::Embedded(s) => s.get(key),
             Self::Remote(c) => match c.request_borrowed(&[b"GET", key])? {
                 Reply::Bulk(v) => Ok(Some(v)),
                 Reply::Nil => Ok(None),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
@@ -165,7 +161,7 @@ impl Connection {
 
     /// `DEL key [key ...]`. Returns the count of keys that were actually
     /// removed (existing + dropped). Missing keys don't contribute.
-    pub fn del(&mut self, keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn del(&mut self, keys: &[&[u8]]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.del(keys),
             Self::Remote(c) => {
@@ -174,7 +170,7 @@ impl Connection {
                 args.extend(keys.iter().map(|k| k.to_vec()));
                 match c.request(&args)? {
                     Reply::Int(n) if n >= 0 => Ok(n as usize),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
                 }
             }
@@ -183,7 +179,7 @@ impl Connection {
 
     /// `EXISTS key [key ...]`. Count of keys present (a single key can
     /// contribute >1 if passed multiple times, matching Redis semantics).
-    pub fn exists(&mut self, keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn exists(&mut self, keys: &[&[u8]]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => s.exists(keys),
             Self::Remote(c) => {
@@ -192,7 +188,7 @@ impl Connection {
                 args.extend(keys.iter().map(|k| k.to_vec()));
                 match c.request(&args)? {
                     Reply::Int(n) if n >= 0 => Ok(n as usize),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
                 }
             }
@@ -201,19 +197,19 @@ impl Connection {
 
     /// `INCR key`. Returns the post-increment value. Errors on non-integer
     /// stored value.
-    pub fn incr(&mut self, key: &[u8]) -> io::Result<i64> {
+    pub fn incr(&mut self, key: &[u8]) -> KevyResult<i64> {
         match self {
             Self::Embedded(s) => s.incr(key),
             Self::Remote(c) => match c.request_borrowed(&[b"INCR", key])? {
                 Reply::Int(n) => Ok(n),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
     }
 
     /// `INCRBY key delta`. Negative delta is `DECRBY`. Returns post-value.
-    pub fn incr_by(&mut self, key: &[u8], delta: i64) -> io::Result<i64> {
+    pub fn incr_by(&mut self, key: &[u8], delta: i64) -> KevyResult<i64> {
         match self {
             Self::Embedded(s) => s.incr_by(key, delta),
             Self::Remote(c) => {
@@ -224,7 +220,7 @@ impl Connection {
                 ];
                 match c.request(&args)? {
                     Reply::Int(n) => Ok(n),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
                 }
             }
@@ -232,7 +228,7 @@ impl Connection {
     }
 
     /// `PEXPIRE key ttl_ms`. Returns whether the key existed and got a TTL.
-    pub fn expire(&mut self, key: &[u8], ttl: Duration) -> io::Result<bool> {
+    pub fn expire(&mut self, key: &[u8], ttl: Duration) -> KevyResult<bool> {
         match self {
             Self::Embedded(s) => s.expire(key, ttl),
             Self::Remote(c) => {
@@ -241,7 +237,7 @@ impl Connection {
                 match c.request(&args)? {
                     Reply::Int(1) => Ok(true),
                     Reply::Int(0) => Ok(false),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
                 }
             }
@@ -249,25 +245,25 @@ impl Connection {
     }
 
     /// `PERSIST key`. Returns whether a TTL was actually removed.
-    pub fn persist(&mut self, key: &[u8]) -> io::Result<bool> {
+    pub fn persist(&mut self, key: &[u8]) -> KevyResult<bool> {
         match self {
             Self::Embedded(s) => s.persist(key),
             Self::Remote(c) => match c.request_borrowed(&[b"PERSIST", key])? {
                 Reply::Int(1) => Ok(true),
                 Reply::Int(0) => Ok(false),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
     }
 
     /// `PTTL key`. Returns ms remaining, -2 if no key, -1 if key has no TTL.
-    pub fn ttl_ms(&mut self, key: &[u8]) -> io::Result<i64> {
+    pub fn ttl_ms(&mut self, key: &[u8]) -> KevyResult<i64> {
         match self {
             Self::Embedded(s) => Ok(s.ttl_ms(key)),
             Self::Remote(c) => match c.request_borrowed(&[b"PTTL", key])? {
                 Reply::Int(n) => Ok(n),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
@@ -276,24 +272,24 @@ impl Connection {
     /// `TYPE key`. Returns the value's type as a Redis-style string (e.g.
     /// `"string"`, `"hash"`, `"list"`, `"set"`, `"zset"`, or `"none"` if
     /// the key doesn't exist).
-    pub fn type_of(&mut self, key: &[u8]) -> io::Result<String> {
+    pub fn type_of(&mut self, key: &[u8]) -> KevyResult<String> {
         match self {
             Self::Embedded(s) => Ok(s.type_of(key).to_string()),
             Self::Remote(c) => match c.request_borrowed(&[b"TYPE", key])? {
                 Reply::Simple(s) => Ok(string(s)),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
     }
 
     /// `DBSIZE`. Total live keys at the time of the call.
-    pub fn dbsize(&mut self) -> io::Result<usize> {
+    pub fn dbsize(&mut self) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => Ok(s.dbsize()),
             Self::Remote(c) => match c.request_borrowed(&[b"DBSIZE"])? {
                 Reply::Int(n) if n >= 0 => Ok(n as usize),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
@@ -305,31 +301,21 @@ impl Connection {
     /// Named `flushall` — **not** `flush` — to avoid colliding with
     /// `Write::flush`'s "sync buffered writes to disk" meaning; this WIPES the
     /// store rather than persisting it.
-    pub fn flushall(&mut self) -> io::Result<()> {
+    pub fn flushall(&mut self) -> KevyResult<()> {
         match self {
             Self::Embedded(s) => s.flushall(),
             Self::Remote(c) => match c.request_borrowed(&[b"FLUSHALL"])? {
                 Reply::Simple(s) if s == b"OK" => Ok(()),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
     }
 
-    /// Deprecated alias for [`Self::flushall`]. The old name read like
-    /// `Write::flush` (sync-to-disk) but actually WIPES the store.
-    #[deprecated(
-        since = "1.8.0",
-        note = "renamed to `flushall`: `flush` collides with Write::flush (sync-to-disk); this WIPES the store"
-    )]
-    pub fn flush(&mut self) -> io::Result<()> {
-        self.flushall()
-    }
-
     /// `SET key value PX ttl_ms`. Convenience for the common
     /// "cache with expiry" pattern; equivalent to `set` + `expire` but
     /// atomic.
-    pub fn set_with_ttl(&mut self, key: &[u8], value: &[u8], ttl: Duration) -> io::Result<()> {
+    pub fn set_with_ttl(&mut self, key: &[u8], value: &[u8], ttl: Duration) -> KevyResult<()> {
         match self {
             Self::Embedded(s) => s.set_with_ttl(key, value, ttl).map(|_| ()),
             Self::Remote(c) => {
@@ -343,7 +329,7 @@ impl Connection {
                 ];
                 match c.request(&args)? {
                     Reply::Simple(s) if s == b"OK" => Ok(()),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
                 }
             }
@@ -352,7 +338,7 @@ impl Connection {
 
     /// `MGET key [key ...]` — one reply per key, `None` for missing /
     /// wrong-type. Returns in the same order as `keys`.
-    pub fn mget(&mut self, keys: &[&[u8]]) -> io::Result<Vec<Option<Vec<u8>>>> {
+    pub fn mget(&mut self, keys: &[&[u8]]) -> KevyResult<Vec<Option<Vec<u8>>>> {
         match self {
             Self::Embedded(s) => keys.iter().map(|k| s.get(k)).collect(),
             Self::Remote(c) => {
@@ -368,7 +354,7 @@ impl Connection {
                             other => Err(unexpected(other)),
                         })
                         .collect(),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
                 }
             }
@@ -376,7 +362,7 @@ impl Connection {
     }
 
     /// `MSET key value [key value ...]` — set every pair atomically.
-    pub fn mset(&mut self, pairs: &[(&[u8], &[u8])]) -> io::Result<()> {
+    pub fn mset(&mut self, pairs: &[(&[u8], &[u8])]) -> KevyResult<()> {
         match self {
             Self::Embedded(s) => {
                 for (k, v) in pairs {
@@ -393,7 +379,7 @@ impl Connection {
                 }
                 match c.request(&args)? {
                     Reply::Simple(s) if s == b"OK" => Ok(()),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
                 }
             }
@@ -413,12 +399,12 @@ impl Connection {
     /// backend a subscribed TCP connection cannot send normal commands
     /// per the RESP spec; the embedded backend has no such restriction
     /// but `Subscriber` is still a distinct type for API symmetry.
-    pub fn publish(&mut self, channel: &[u8], message: &[u8]) -> io::Result<usize> {
+    pub fn publish(&mut self, channel: &[u8], message: &[u8]) -> KevyResult<usize> {
         match self {
             Self::Embedded(s) => Ok(s.publish(channel, message)),
             Self::Remote(c) => match c.request_borrowed(&[b"PUBLISH", channel, message])? {
                 Reply::Int(n) if n >= 0 => Ok(n as usize),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }

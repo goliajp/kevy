@@ -16,7 +16,7 @@
 //! GROUPS, ANN create options, …) without this crate chasing the verb
 //! grammar release-by-release.
 
-use std::io;
+use crate::{KevyError, KevyResult};
 
 use kevy_resp::Reply;
 
@@ -92,7 +92,7 @@ impl Connection {
         prefix: &[u8],
         field: &[u8],
         ty: IdxType,
-    ) -> io::Result<()> {
+    ) -> KevyResult<()> {
         let args: &[&[u8]] = &[
             name, b"ON", b"PREFIX", prefix, b"FIELD", field, b"TYPE", ty.tag(), b"KIND",
             b"range",
@@ -103,29 +103,29 @@ impl Connection {
     /// `IDX.CREATE <args…>` — raw passthrough; `args` is everything
     /// after the verb (see docs/verb-reference.md for the full
     /// grammar: MAXMEM, DIM/DISTANCE/M/EF for ANN, GROUPBY for agg…).
-    pub fn idx_create_raw(&mut self, args: &[&[u8]]) -> io::Result<()> {
+    pub fn idx_create_raw(&mut self, args: &[&[u8]]) -> KevyResult<()> {
         match self.remote("IDX.CREATE")?.request(&raw_argv(b"IDX.CREATE", args))? {
             Reply::Simple(s) if s == b"OK" => Ok(()),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
 
     /// `IDX.DROP name` — returns whether the index existed.
-    pub fn idx_drop(&mut self, name: &[u8]) -> io::Result<bool> {
+    pub fn idx_drop(&mut self, name: &[u8]) -> KevyResult<bool> {
         match self.remote("IDX.DROP")?.request_borrowed(&[b"IDX.DROP", name])? {
             Reply::Int(1) => Ok(true),
             Reply::Int(0) => Ok(false),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
 
     /// `IDX.LIST` — declared indexes with build state and stats.
-    pub fn idx_list(&mut self) -> io::Result<Vec<IdxInfo>> {
+    pub fn idx_list(&mut self) -> KevyResult<Vec<IdxInfo>> {
         match self.remote("IDX.LIST")?.request_borrowed(&[b"IDX.LIST"])? {
             Reply::Array(items) => items.into_iter().map(parse_info).collect(),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
@@ -141,7 +141,7 @@ impl Connection {
         max: &[u8],
         limit: usize,
         cursor: Option<&[u8]>,
-    ) -> io::Result<IdxPage> {
+    ) -> KevyResult<IdxPage> {
         let lim = limit.to_string();
         let mut args: Vec<&[u8]> = vec![name, b"RANGE", min, max, b"LIMIT", lim.as_bytes()];
         if let Some(c) = cursor {
@@ -152,7 +152,7 @@ impl Connection {
     }
 
     /// `IDX.QUERY name EQ value [LIMIT n]` — point-lookup page.
-    pub fn idx_query_eq(&mut self, name: &[u8], value: &[u8], limit: usize) -> io::Result<IdxPage> {
+    pub fn idx_query_eq(&mut self, name: &[u8], value: &[u8], limit: usize) -> KevyResult<IdxPage> {
         let lim = limit.to_string();
         parse_page(self.idx_query_raw(&[name, b"EQ", value, b"LIMIT", lim.as_bytes()])?)
     }
@@ -164,7 +164,7 @@ impl Connection {
         name: &[u8],
         text: &[u8],
         limit: usize,
-    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+    ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         let lim = limit.to_string();
         parse_ranked(self.idx_query_raw(&[name, b"MATCH", text, b"LIMIT", lim.as_bytes()])?)
     }
@@ -178,7 +178,7 @@ impl Connection {
         name: &[u8],
         vector: &[f32],
         k: usize,
-    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+    ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         let blob: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
         let lim = k.to_string();
         parse_ranked(self.idx_query_raw(&[name, b"KNN", &blob, b"LIMIT", lim.as_bytes()])?)
@@ -188,9 +188,9 @@ impl Connection {
     /// [`Reply`]; `args` is everything after the verb. The escape
     /// hatch for COMPOSE / HYBRID / GROUPS / FIELDS hydration and any
     /// future query shape.
-    pub fn idx_query_raw(&mut self, args: &[&[u8]]) -> io::Result<Reply> {
+    pub fn idx_query_raw(&mut self, args: &[&[u8]]) -> KevyResult<Reply> {
         match self.remote("IDX.QUERY")?.request(&raw_argv(b"IDX.QUERY", args))? {
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Ok(other),
         }
     }
@@ -204,12 +204,12 @@ fn raw_argv(verb: &[u8], args: &[&[u8]]) -> Vec<Vec<u8>> {
 }
 
 /// `*2 [cursor, *2N [key, value]…]` → [`IdxPage`]. Cursor `0` = done.
-fn parse_page(reply: Reply) -> io::Result<IdxPage> {
+fn parse_page(reply: Reply) -> KevyResult<IdxPage> {
     let Reply::Array(items) = reply else {
         return Err(unexpected(reply));
     };
     if items.len() != 2 {
-        return Err(io::Error::other("IDX.QUERY page: expected [cursor, rows]"));
+        return Err(KevyError::Protocol("IDX.QUERY page: expected [cursor, rows]".into()));
     }
     let mut it = items.into_iter();
     let cursor = match it.next().unwrap() {
@@ -218,13 +218,13 @@ fn parse_page(reply: Reply) -> io::Result<IdxPage> {
         other => return Err(unexpected(other)),
     };
     let Reply::Array(flat) = it.next().unwrap() else {
-        return Err(io::Error::other("IDX.QUERY page: rows not an array"));
+        return Err(KevyError::Protocol("IDX.QUERY page: rows not an array".into()));
     };
     let mut rows = Vec::with_capacity(flat.len() / 2);
     let mut flat = flat.into_iter();
     while let Some(k) = flat.next() {
         let (Reply::Bulk(key), Some(Reply::Bulk(value))) = (k, flat.next()) else {
-            return Err(io::Error::other("IDX.QUERY page: odd or non-bulk row pair"));
+            return Err(KevyError::Protocol("IDX.QUERY page: odd or non-bulk row pair".into()));
         };
         rows.push(IdxRow { key, value });
     }
@@ -233,7 +233,7 @@ fn parse_page(reply: Reply) -> io::Result<IdxPage> {
 
 /// MATCH/KNN shape: `*N` rows of `*(2+2F) [key, score, fields…]` →
 /// `(key, score)` (shortcuts request no FIELDS, so F = 0).
-fn parse_ranked(reply: Reply) -> io::Result<Vec<(Vec<u8>, f64)>> {
+fn parse_ranked(reply: Reply) -> KevyResult<Vec<(Vec<u8>, f64)>> {
     let Reply::Array(items) = reply else {
         return Err(unexpected(reply));
     };
@@ -248,7 +248,7 @@ fn parse_ranked(reply: Reply) -> io::Result<Vec<(Vec<u8>, f64)>> {
                 (Some(Reply::Bulk(key)), Some(Reply::Bulk(score))) => {
                     Ok((key, num_f64(&score)?))
                 }
-                _ => Err(io::Error::other("IDX.QUERY ranked row: expected [key, score]")),
+                _ => Err(KevyError::Protocol("IDX.QUERY ranked row: expected [key, score]".into())),
             }
         })
         .collect()
@@ -256,7 +256,7 @@ fn parse_ranked(reply: Reply) -> io::Result<Vec<(Vec<u8>, f64)>> {
 
 /// One `IDX.LIST` entry: a flat label/value bulk array
 /// (`name … prefix … kind … state … entries … bytes …`).
-fn parse_info(entry: Reply) -> io::Result<IdxInfo> {
+fn parse_info(entry: Reply) -> KevyResult<IdxInfo> {
     let Reply::Array(cells) = entry else {
         return Err(unexpected(entry));
     };
@@ -289,13 +289,13 @@ mod tests {
 
     #[test]
     fn embedded_idx_is_unsupported() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         let err = c.idx_list().unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+        assert!(matches!(err, KevyError::Unsupported(_)));
         let err = c
             .idx_create_range(b"i", b"user:", b"age", IdxType::I64)
             .unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+        assert!(matches!(err, KevyError::Unsupported(_)));
     }
 
     #[test]

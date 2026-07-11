@@ -72,7 +72,7 @@ Then in `main.rs`:
 use std::time::Duration;
 use kevy_embedded::{AppendFsync, Config, KevyMetric, Store};
 
-fn main() -> std::io::Result<()> {
+fn main() -> kevy_embedded::KevyResult<()> {
     let cfg = Config::default()
         .with_persist("/var/lib/myapp/kevy")
         .with_appendfsync(AppendFsync::EverySec)

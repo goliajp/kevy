@@ -8,7 +8,7 @@ and the same URL backends are accepted.
 use kevy_client_async::AsyncConnection;
 
 # async fn run() -> std::io::Result<()> {
-let mut conn = AsyncConnection::open("tcp://127.0.0.1:6379").await?;
+let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6379").await?;
 conn.set(b"k", b"v").await?;
 let v = conn.get(b"k").await?;
 # Ok(())
@@ -36,7 +36,7 @@ Collapse N commands into one TCP round-trip:
 use kevy_client_async::AsyncConnection;
 
 # async fn run() -> std::io::Result<()> {
-let mut conn = AsyncConnection::open("tcp://127.0.0.1:6379").await?;
+let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6379").await?;
 let replies = conn.pipeline()
     .set(b"a", b"1")
     .get(b"a")

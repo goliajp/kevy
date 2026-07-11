@@ -87,12 +87,7 @@ fn with_runtime(
     let stop_t = stop.clone();
     let dir = dir.to_path_buf();
     let handle = std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::new(
-            [127, 0, 0, 1],
-            port,
-            nshards,
-            kevy::KevyCommands::with_state(state),
-        )
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state)).bind([127, 0, 0, 1], port).shards(nshards)
             .with_data_dir(dir);
         rt.run(stop_t).unwrap();
     });

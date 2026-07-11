@@ -20,7 +20,7 @@
 //! write locks; the lock queue arbitrates. No FIFO ticket order is
 //! promised (same as the server's cross-shard arbiter).
 
-use std::io;
+use crate::KevyResult;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -109,7 +109,7 @@ impl Store {
         &self,
         keys: &[&[u8]],
         timeout: Option<Duration>,
-    ) -> io::Result<Option<(Vec<u8>, Vec<u8>)>> {
+    ) -> KevyResult<Option<(Vec<u8>, Vec<u8>)>> {
         self.block_on(keys, timeout, |s, k| {
             Ok(s.lpop(k, 1)?.into_iter().next().map(|v| (k.to_vec(), v)))
         })
@@ -120,7 +120,7 @@ impl Store {
         &self,
         keys: &[&[u8]],
         timeout: Option<Duration>,
-    ) -> io::Result<Option<(Vec<u8>, Vec<u8>)>> {
+    ) -> KevyResult<Option<(Vec<u8>, Vec<u8>)>> {
         self.block_on(keys, timeout, |s, k| {
             Ok(s.rpop(k, 1)?.into_iter().next().map(|v| (k.to_vec(), v)))
         })
@@ -132,7 +132,7 @@ impl Store {
         &self,
         keys: &[&[u8]],
         timeout: Option<Duration>,
-    ) -> io::Result<Option<ZPopHit>> {
+    ) -> KevyResult<Option<ZPopHit>> {
         self.block_on(keys, timeout, |s, k| {
             Ok(s
                 .zpopmin(k, 1)?
@@ -148,8 +148,8 @@ impl Store {
         &self,
         keys: &[&[u8]],
         timeout: Option<Duration>,
-        try_pop: impl Fn(&Self, &[u8]) -> io::Result<Option<T>>,
-    ) -> io::Result<Option<T>> {
+        try_pop: impl Fn(&Self, &[u8]) -> KevyResult<Option<T>>,
+    ) -> KevyResult<Option<T>> {
         let deadline = timeout.map(|t| Instant::now() + t);
         loop {
             let seen = self.blocker.generation();

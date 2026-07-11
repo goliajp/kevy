@@ -17,21 +17,8 @@ use crate::{
 impl Store {
     // ---- generic key ops (type-agnostic) -------------------------------
 
-    pub fn del(&mut self, keys: &[Vec<u8>]) -> usize {
-        let now = now_ns();
-        let mut removed = 0;
-        for k in keys {
-            if self.reap(k, now) && self.remove_entry(k.as_slice()).is_some() {
-                removed += 1;
-            }
-        }
-        removed
-    }
-
-    /// G4 (v1.25): borrowed-slice `DEL` — kills the per-key `Vec<u8>` alloc
-    /// the dispatch layer used to do via `rest(args, 1)`. Behaviour identical
-    /// to [`Self::del`].
-    pub fn del_borrowed(&mut self, keys: &[&[u8]]) -> usize {
+    /// `DEL` — returns the count of keys actually removed.
+    pub fn del(&mut self, keys: &[&[u8]]) -> usize {
         let now = now_ns();
         let mut removed = 0;
         for k in keys {
@@ -42,12 +29,8 @@ impl Store {
         removed
     }
 
-    pub fn exists(&mut self, keys: &[Vec<u8>]) -> usize {
-        keys.iter().filter(|k| self.live_entry(k).is_some()).count()
-    }
-
-    /// G4 (v1.25): borrowed-slice `EXISTS` — see [`Self::del_borrowed`].
-    pub fn exists_borrowed(&mut self, keys: &[&[u8]]) -> usize {
+    /// `EXISTS` — count of live keys (duplicates count per occurrence).
+    pub fn exists(&mut self, keys: &[&[u8]]) -> usize {
         keys.iter().filter(|k| self.live_entry(k).is_some()).count()
     }
 
@@ -231,16 +214,6 @@ impl Store {
         self.used_memory = 0;
         self.expires = 0;
         // peak is lifetime-cumulative; intentionally not reset.
-    }
-
-    /// Deprecated alias for [`Self::flushall`]. The old name read like
-    /// `Write::flush` (sync-to-disk) but actually WIPES the keyspace.
-    #[deprecated(
-        since = "1.17.0",
-        note = "renamed to `flushall`: `flush` collides with Write::flush (sync-to-disk); this WIPES the keyspace"
-    )]
-    pub fn flush(&mut self) {
-        self.flushall();
     }
 
     /// Count live (non-expired) keys that carry a TTL — the size of the

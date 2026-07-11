@@ -124,7 +124,7 @@ between threads freely. For a file-backed store use
 ```rust
 use kevy_client::Connection;
 
-let mut conn = Connection::open("tcp://127.0.0.1:6379")?;
+let mut conn = Connection::connect("tcp://127.0.0.1:6379")?;
 conn.set(b"k", b"v")?;
 let v = conn.get(b"k")?;
 assert_eq!(v.as_deref(), Some(&b"v"[..]));
@@ -141,7 +141,7 @@ networked server in production.
 use kevy_client_async::AsyncConnection;
 
 # async fn run() -> std::io::Result<()> {
-let mut conn = AsyncConnection::open("tcp://127.0.0.1:6379").await?;
+let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6379").await?;
 conn.set(b"k", b"v").await?;
 let v = conn.get(b"k").await?;
 # Ok(())
