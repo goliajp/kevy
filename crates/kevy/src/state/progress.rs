@@ -16,10 +16,11 @@ use std::sync::{Arc, Mutex};
 /// [`ReplicationState`] and the state graph acyclic.
 #[derive(Default)]
 pub(crate) struct ReplicaProgress {
-    /// Full-resync window count: one per runner currently between
-    /// `SnapshotBegin` and `SnapshotEnd` (runners also decrement on
-    /// link drop, so a mid-ship disconnect never strands the replica
-    /// refusing reads). While non-zero, client reads answer
+    /// Full-resync window count: raised per runner at `SnapshotBegin`,
+    /// lowered when the shard-side APPLY of `SnapshotEnd` lands (the
+    /// runner hands a drop-token to the apply event; runners also
+    /// lower on link drop, so a mid-ship disconnect never strands the
+    /// replica refusing reads). While non-zero, client reads answer
     /// `-LOADING` — the dataset is about to be replaced wholesale, so
     /// serving the pre-resync keyspace would serve a timeline the
     /// primary has already diverged from.
@@ -72,9 +73,9 @@ impl ReplicaProgress {
         }
     }
 
-    /// Runner-side: one runner left its snapshot-ship window
-    /// (`SnapshotEnd` forwarded, or the link dropped mid-ship). The
-    /// 1 → 0 edge re-opens reads.
+    /// One runner left its snapshot-ship window (`SnapshotEnd`
+    /// APPLIED by the last shard, or the link dropped mid-ship).
+    /// The 1 → 0 edge re-opens reads.
     pub(crate) fn end_loading(&self) {
         if self.loading.fetch_sub(1, Ordering::AcqRel) == 1 {
             self.control_epoch.fetch_add(1, Ordering::Release);

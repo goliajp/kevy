@@ -56,22 +56,22 @@ dependencies = [
 
 [[package]]
 name = "kevy-bytes"
-version = "1.2.0"
+version = "3.18.0"
 dependencies = [
  "kevy-hash",
 ]
 
 [[package]]
 name = "kevy-hash"
-version = "1.2.0"
+version = "3.18.0"
 
 [[package]]
 name = "kevy-madvise"
-version = "1.2.0"
+version = "3.18.0"
 
 [[package]]
 name = "kevy-map"
-version = "1.2.0"
+version = "3.18.0"
 dependencies = [
  "kevy-hash",
  "kevy-madvise",
@@ -79,7 +79,7 @@ dependencies = [
 
 [[package]]
 name = "kevy-persist"
-version = "1.2.0"
+version = "3.18.0"
 dependencies = [
  "kevy-resp",
  "kevy-store",
@@ -90,16 +90,20 @@ name = "kevy-persist-fuzz"
 version = "0.0.0"
 dependencies = [
  "kevy-persist",
+ "kevy-store",
  "libfuzzer-sys",
 ]
 
 [[package]]
 name = "kevy-resp"
-version = "1.2.0"
+version = "3.18.0"
+dependencies = [
+ "kevy-bytes",
+]
 
 [[package]]
 name = "kevy-store"
-version = "1.2.0"
+version = "3.18.0"
 dependencies = [
  "kevy-bytes",
  "kevy-hash",

@@ -285,7 +285,7 @@ Aborting mid-ship reverts to the source writer; no partial-apply state is left o
 | TOML | CLI | Env | Default | Meaning |
 |------|-----|-----|---------|---------|
 | `[cluster] enabled` | `--cluster` | `KEVY_CLUSTER=1` | `false` | Expose each shard at a per-shard port. |
-| `[cluster] port_base` | `--cluster-port-base` | `KEVY_CLUSTER_PORT_BASE` | value of `port` | Shard `i` binds `port_base + 1 + i`. |
+| `[cluster] port_base` | — | — | value of `port` | Shard `i` binds `port_base + 1 + i`. TOML-only. |
 
 ## Replication
 

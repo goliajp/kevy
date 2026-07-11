@@ -183,6 +183,13 @@ impl<C: Commands> Shard<C> {
                 }
             }
 
+            // The closing ready-set is an io_uring-reap accelerator;
+            // this backend closes via the dirty-flush path instead,
+            // so the QUIT / CLIENT KILL dispatch sites' pushes would
+            // otherwise accumulate forever (8 bytes per closed conn,
+            // unbounded on a long-running server).
+            self.closing_uring_conns.clear();
+
             // Messages from other cores (forwarded requests + replies to ours).
             if self.drain_inbound()? {
                 did_work = true;
@@ -235,6 +242,7 @@ impl<C: Commands> Shard<C> {
                         self.apply_live_runtime_config(&mut tick_interval);
                         self.tick_persist();
                         self.tick_conn_gauge();
+                        self.enforce_output_limit();
                         // Replication slot expiry:
                         // drop slots whose reconnect window has passed.
                         // No-op short-circuits when replication is off or

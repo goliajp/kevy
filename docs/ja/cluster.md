@@ -285,7 +285,7 @@ MOVE-SCOPE <prefix> from <from-node-id> to <to-node-id>
 | TOML | CLI | 環境変数 | デフォルト | 意味 |
 |------|-----|-----|---------|---------|
 | `[cluster] enabled` | `--cluster` | `KEVY_CLUSTER=1` | `false` | 各シャードをシャード別ポートで公開する。 |
-| `[cluster] port_base` | `--cluster-port-base` | `KEVY_CLUSTER_PORT_BASE` | `port`の値 | シャード`i`は`port_base + 1 + i`をbindする。 |
+| `[cluster] port_base` | — | — | `port`の値 | シャード`i`は`port_base + 1 + i`をbindする。TOMLのみ。 |
 
 ## レプリケーション
 

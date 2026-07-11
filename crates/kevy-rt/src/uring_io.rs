@@ -57,6 +57,13 @@ fn preallocate_for_big_arg_tail(buf: &mut Vec<u8>) {
     if bulk_len < BIG_ARG_RESERVE_THRESHOLD {
         return;
     }
+    // A body larger than the protocol's bulk cap will be rejected by
+    // the parser (`kevy_resp::MAX_BULK_LEN`), so don't pre-grow for
+    // it — an unclamped reserve here is a remote multi-terabyte alloc
+    // from a single forged `$<huge>\r\n` header.
+    if bulk_len > kevy_resp::MAX_BULK_LEN {
+        return;
+    }
     // Reserve room for the body bytes plus the trailing `\r\n` (+ a small
     // pad for the next command's header in pipelined traffic).
     let need = bulk_len + 32;
@@ -333,6 +340,31 @@ impl<C: Commands> Shard<C> {
         self.closing_uring_conns.push(cid);
         self.blocked.drop_for_conn(cid);
         self.cancel_xshard_on_close(cid);
+    }
+
+    /// io_uring twin of [`Self::enforce_output_limit`]: disconnect any
+    /// conn whose pending `write_buf` (+ zero-copy arc bodies) has
+    /// grown past [`crate::CLIENT_OUTPUT_HARD_LIMIT`], so a non-draining
+    /// reader can't OOM the shard. Per-tick async sweep.
+    pub(crate) fn uring_enforce_output_limit(&mut self, io: &mut KevyMap<u64, UringConn>) {
+        let mut over: Vec<u64> = Vec::new();
+        for (id, uc) in io.iter() {
+            if uc.closing {
+                continue;
+            }
+            let arc_bytes: usize = uc.write_arcs.iter().map(|(_, a)| a.len()).sum();
+            if uc.write_buf.len().saturating_add(arc_bytes) > crate::CLIENT_OUTPUT_HARD_LIMIT {
+                over.push(*id);
+            }
+        }
+        for id in over {
+            eprintln!(
+                "kevy: shard {} closing conn {id}: output buffer exceeded {} bytes",
+                self.id,
+                crate::CLIENT_OUTPUT_HARD_LIMIT,
+            );
+            self.uring_mark_closing(id, io);
+        }
     }
 
     /// A write completed: advance progress; resubmit the remainder next loop.

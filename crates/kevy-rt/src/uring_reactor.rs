@@ -359,14 +359,14 @@ impl<C: Commands> Shard<C> {
                         self.apply_live_runtime_config(&mut tick_interval);
                         self.tick_persist();
                         self.tick_conn_gauge();
-                        // Replication housekeeping:
-                        // the io_uring path can't watch the replication
-                        // listener / replica fds via epoll, so poll them
-                        // here once per tick (10 Hz). New replica accepts
-                        // see ≤ 100 ms wait; replica handshake bytes ditto.
-                        // The streaming pump path stays per-iter via
-                        // `pump_replication` (below) — that's where the
-                        // throughput-sensitive write side lives.
+                        self.uring_enforce_output_limit(&mut io);
+                        // Replication housekeeping: the io_uring path
+                        // can't watch the replication listener / replica
+                        // fds via epoll, so poll them here once per tick
+                        // (10 Hz). New replica accepts see ≤ 100 ms wait;
+                        // replica handshake bytes ditto. The streaming
+                        // pump stays per-iter via `pump_replication`
+                        // (below) — the throughput-sensitive write side.
                         if let Err(e) = self.accept_ready_replication() {
                             eprintln!("kevy: shard {} accept_ready_replication: {e}", self.id);
                         }

@@ -136,6 +136,16 @@ mod uring_reactor;
 #[cfg(target_os = "linux")]
 mod uring_setup;
 
+/// Hard cap on a single connection's accumulated unflushed reply
+/// bytes. A client that stops reading (or a slow pub/sub subscriber)
+/// lets its per-conn output buffer grow without bound; past this it is
+/// disconnected so it can't OOM the shard. Deliberately generous
+/// (512 MiB, one max bulk's order of magnitude): a legitimate large
+/// reply drains progressively and never accumulates near it — only a
+/// non-draining reader does. Enforced out-of-band per tick by
+/// `Shard::enforce_output_limit` / `uring_enforce_output_limit`.
+pub(crate) const CLIENT_OUTPUT_HARD_LIMIT: usize = 512 * 1024 * 1024;
+
 pub use blocked::{BlockHint, BlockKind};
 pub use lua_wake_bridge::push_lua_wake_key;
 pub use reduce::shard_of as shard_of_key;
@@ -145,7 +155,9 @@ pub use kevy_config::NotificationFlags;
 pub use kevy_persist::Fsync;
 pub use kevy_resp::{Argv, ArgvBorrowed, ArgvView, RespVersion};
 pub use kevy_store::Store;
-pub use replica_inbox::{ReplicaApply, ReplicaInboxReceiver, ReplicaInboxSender, replica_inbox_pair};
+pub use replica_inbox::{
+    ReplicaApply, ReplicaInboxReceiver, ReplicaInboxSender, SnapshotGate, replica_inbox_pair,
+};
 pub use replication_gate::ReplicatedApplyGuard;
 pub use route::{Route, XGroupCtx};
 pub use client_ops::ClientKillFilter;
@@ -428,6 +440,17 @@ pub trait Commands: Clone + Send + 'static {
         _kind: BlockKind,
     ) -> bool {
         false
+    }
+
+    /// Validate a command being queued inside `MULTI`. Returns an error
+    /// reply (already RESP-encoded, e.g. `-ERR unknown command …`) when
+    /// the command cannot be queued — an unknown verb or an arity
+    /// mismatch — in which case the caller answers with it instead of
+    /// `+QUEUED` and marks the transaction dirty so `EXEC` aborts with
+    /// `-EXECABORT`. `None` means "queue it". Default `None` keeps
+    /// embedders that don't model a verb table permissive.
+    fn queue_error<A: ArgvView + ?Sized>(&self, _args: &A) -> Option<Vec<u8>> {
+        None
     }
 
     /// Resolve all verb-dependent attributes in **one** verb-table lookup.

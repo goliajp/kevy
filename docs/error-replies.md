@@ -28,7 +28,7 @@ Errors are part of kevy's user-facing contract. Adding, renaming, or repurposing
 | `-ERR CONFIG SET failed for '<key>': <reason>` | Unknown CONFIG field or value out of range. | `CONFIG GET *` to see supported fields and current values. |
 | `-ERR CONFIG REWRITE could not write <path>: <io-error>` | Config TOML path is missing or not writable. | Check `--config` path and filesystem permissions. |
 | `-WRONGTYPE Operation against a key holding the wrong kind of value` | Command run against an existing key of a different Redis type. | See [Wrong-type rules](#wrong-type-rules). |
-| `-EXECABORT Transaction discarded because of previous errors.` | A queued command had a syntax error during MULTI; EXEC refuses the batch. | Fix the offending queued command, then `MULTI` / queue / `EXEC` again. |
+| `-EXECABORT Transaction discarded because of previous errors.` | A command queued during MULTI was an unknown verb or had too few arguments; EXEC refuses the batch and runs nothing. | Fix the offending queued command, then `MULTI` / queue / `EXEC` again. |
 | `-MOVED <slot> <host:port>` | Key's hash slot is not owned by this node. | See [Cluster-routing replies](#cluster-routing-replies). |
 | `-CROSSSLOT Keys in request don't hash to the same slot` | Multi-key command spans more than one hash slot. | See [Cluster-routing replies](#cluster-routing-replies). |
 | `-MISDIRECTED writer is <host:port>` | Write landed on a node that doesn't own this key's scope, or `REPL.WAIT` could not serve read-your-writes on this replica (timeout or generation mismatch). | See [Cluster-routing replies](#cluster-routing-replies); for `REPL.WAIT`, read the primary at `<host:port>`. |
@@ -39,10 +39,7 @@ Errors are part of kevy's user-facing contract. Adding, renaming, or repurposing
 | `-NOREPLICAS primary lost quorum; writes fenced` | An elect-quorum primary cannot reach a strict majority of its peers (partition minority side); writes self-fence for the lease window. | Back off and retry — the fence lifts when the partition heals, or the majority elects a new primary your routing client will find. |
 | `-STALE replica is stale; read the primary or raise replica_max_staleness_ms` | Read sent to a replica whose last primary heartbeat is older than its `replica_max_staleness_ms` bound. | Read the primary until the replica catches up, or raise/disable the bound. |
 | `-READONLY can't write against a read-only script` | Script was evaluated via `EVAL_RO` / `EVALSHA_RO` and attempted a write. | Use the writable `EVAL` / `EVALSHA` variant. |
-| `-MISCONF Errors writing to the AOF file: <io-error>` | AOF append failed (commonly `ENOSPC`). | Free disk space; in-memory state remains consistent; restart replays whatever reached disk. |
-| `-MISCONF BGSAVE failed: <io-error>` | Background snapshot writer failed. | Free disk space or repair the `data_dir` mount. Live data is unaffected. |
 | `-NOSCRIPT No matching script. Please use EVAL.` | `EVALSHA <sha>` requested a script not in the cache. | Call `EVAL` directly (kevy auto-caches) or `SCRIPT LOAD` first. |
-| `-BUSY Script is running.` | A long-running Lua script is blocking the shard. | `SCRIPT KILL` to interrupt (no-op if nothing is running). The `lua-time-limit` config caps runaway scripts. |
 | `-LOADING kevy is loading the dataset in memory` | Read sent to a replica while it is receiving a full-resync snapshot from its primary. | Wait and retry (the window is bounded by the snapshot ship); `PING`, `INFO`, and `HELLO` are answered during loading, so health checks and monitoring keep working. |
 | `-ERR No such client address in the list` | Legacy-form `CLIENT KILL <addr:port>` matched no connection. | List live connections with `CLIENT LIST` and re-issue with an existing `addr`; the filtered form (`CLIENT KILL ID\|ADDR\|LADDR …`) returns a count of 0 instead of erroring. |
 
@@ -53,6 +50,8 @@ By design, kevy does not authenticate or authorize at the protocol layer; these 
 - `-NOAUTH` — no `AUTH` command surface.
 - `-WRONGPASS` — no password check.
 - `-NOPERM` — no ACL system.
+- `-MISCONF` — a persistence failure (AOF append or background save) is logged to stderr and the node keeps serving from its consistent in-memory state; kevy does not turn a durability error into a client-visible reply. On restart it replays whatever reached disk.
+- `-BUSY` — kevy has no interactive `SCRIPT KILL`. A script is instead bounded by an instruction budget (`[lua] time_limit_ms`, `0` = unlimited); an over-budget script is aborted in place and its `EVAL` returns an ordinary `-ERR` Lua error, so a runaway script never wedges the shard for another client to interrupt.
 
 If your client expects these to be possible, treat them as unreachable on kevy. Access control is delegated to the deployment perimeter (kevy binds `127.0.0.1` by default).
 

@@ -129,57 +129,64 @@ pub fn glob_match(pat: &[u8], s: &[u8]) -> bool {
     glob(pat, s)
 }
 
-fn glob(mut p: &[u8], mut s: &[u8]) -> bool {
-    while let Some(&c) = p.first() {
-        match c {
-            b'*' => return glob_star(p, s),
-            b'?' => {
-                if s.is_empty() {
-                    return false;
-                }
-                s = &s[1..];
-                p = &p[1..];
+/// Iterative two-pointer glob with a single backtrack anchor for `*`.
+/// O(n·m) worst case — the earlier recursive `(0..=s.len()).any(glob(tail,
+/// …))` form was exponential for patterns with several literal-separated
+/// `*`s (e.g. `*a*a*a…*!`), a remote ReDoS on any `MATCH`-taking verb
+/// (`SCAN`/`KEYS`/`PSUBSCRIBE`/`CONFIG GET`). This algorithm records the
+/// position just past the last `*` plus the string index to resume from,
+/// and on a mismatch lets that `*` swallow one more character.
+fn glob(p: &[u8], s: &[u8]) -> bool {
+    let (mut pi, mut si) = (0usize, 0usize);
+    let mut star_pi: Option<usize> = None;
+    let mut star_si = 0usize;
+    while si < s.len() {
+        if pi < p.len() && p[pi] == b'*' {
+            // Collapse a run of `*`, anchor here, consume no string yet.
+            while pi < p.len() && p[pi] == b'*' {
+                pi += 1;
             }
-            b'[' => {
-                let Some(ch) = s.first().copied() else {
-                    return false;
-                };
-                let (matched, rest) = match_class(&p[1..], ch);
-                if !matched {
-                    return false;
-                }
-                p = rest;
-                s = &s[1..];
-            }
-            b'\\' if p.len() >= 2 => {
-                if s.first() != Some(&p[1]) {
-                    return false;
-                }
-                s = &s[1..];
-                p = &p[2..];
-            }
-            _ => {
-                if s.first() != Some(&c) {
-                    return false;
-                }
-                s = &s[1..];
-                p = &p[1..];
-            }
+            star_pi = Some(pi);
+            star_si = si;
+            continue;
         }
+        if pi < p.len()
+            && let Some(width) = match_token(&p[pi..], s[si])
+        {
+            pi += width;
+            si += 1;
+            continue;
+        }
+        // Mismatch: backtrack to the last `*`, letting it eat one more
+        // char; with no `*` seen, the strings can't match.
+        let Some(anchor) = star_pi else {
+            return false;
+        };
+        pi = anchor;
+        star_si += 1;
+        si = star_si;
     }
-    s.is_empty()
+    // The remaining pattern must be all `*` to match the empty suffix.
+    while pi < p.len() && p[pi] == b'*' {
+        pi += 1;
+    }
+    pi == p.len()
 }
 
-/// Handles the `*` arm of `glob`: collapse a run of `*`s, then try every tail.
-fn glob_star(mut p: &[u8], s: &[u8]) -> bool {
-    while p.get(1) == Some(&b'*') {
-        p = &p[1..];
+/// Match one non-`*` pattern token at `p[0..]` against `ch`; returns the
+/// token's byte width on a match. Mirrors the per-arm semantics of the
+/// old recursive matcher (`?` any / `[...]` class / `\x` escaped literal /
+/// plain literal).
+fn match_token(p: &[u8], ch: u8) -> Option<usize> {
+    match p[0] {
+        b'?' => Some(1),
+        b'[' => {
+            let (matched, rest) = match_class(&p[1..], ch);
+            matched.then(|| p.len() - rest.len())
+        }
+        b'\\' if p.len() >= 2 => (p[1] == ch).then_some(2),
+        c => (c == ch).then_some(1),
     }
-    if p.len() == 1 {
-        return true; // trailing '*' matches the rest
-    }
-    let tail = &p[1..];
-    (0..=s.len()).any(|i| glob(tail, &s[i..]))
 }
 
 /// Match one char against a `[...]` class; return `(matched, pattern_after_class)`.

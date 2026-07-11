@@ -28,7 +28,7 @@ kevy 的错误以 RESP simple-error 字符串传输：`-<PREFIX> <message>\r\n`�
 | `-ERR CONFIG SET failed for '<key>': <reason>` | CONFIG 字段未知或取值越界。 | `CONFIG GET *` 查看支持的字段与当前值。 |
 | `-ERR CONFIG REWRITE could not write <path>: <io-error>` | 配置 TOML 路径缺失或不可写。 | 检查 `--config` 路径与文件系统权限。 |
 | `-WRONGTYPE Operation against a key holding the wrong kind of value` | 命令作用在已存在但类型不同的 key 上。 | 见 [Wrong-type 规则](#wrong-type-规则)。 |
-| `-EXECABORT Transaction discarded because of previous errors.` | MULTI 期间某条排队命令有语法错误，EXEC 拒绝整批。 | 修正出错的排队命令，重新 `MULTI` / 排队 / `EXEC`。 |
+| `-EXECABORT Transaction discarded because of previous errors.` | MULTI 期间某条排队命令是未知动词或参数过少，EXEC 拒绝整批、什么都不执行。 | 修正出错的排队命令，重新 `MULTI` / 排队 / `EXEC`。 |
 | `-MOVED <slot> <host:port>` | key 的哈希槽不属于本节点。 | 见[集群路由回复](#集群路由回复)。 |
 | `-CROSSSLOT Keys in request don't hash to the same slot` | 多 key 命令跨了多个哈希槽。 | 见[集群路由回复](#集群路由回复)。 |
 | `-MISDIRECTED writer is <host:port>` | 写入落在了不拥有该 key scope 的节点上，或 `REPL.WAIT` 在此副本上无法提供读己之写（超时或 generation 不匹配）。 | 见[集群路由回复](#集群路由回复)；对 `REPL.WAIT`，去 `<host:port>` 读主节点。 |
@@ -39,10 +39,7 @@ kevy 的错误以 RESP simple-error 字符串传输：`-<PREFIX> <message>\r\n`�
 | `-NOREPLICAS primary lost quorum; writes fenced` | elect 多数派主节点联系不上严格多数的同僚（分区少数侧）；写入在租约窗口内自我围栏。 | 退避重试——分区愈合后围栏解除，或多数派选出新主节点、路由客户端会找到它。 |
 | `-STALE replica is stale; read the primary or raise replica_max_staleness_ms` | 读请求发给了上一次主节点心跳早于其 `replica_max_staleness_ms` 界限的副本。 | 在副本追平前读主节点，或调高/关闭该界限。 |
 | `-READONLY can't write against a read-only script` | 通过 `EVAL_RO` / `EVALSHA_RO` 求值的脚本尝试写入。 | 改用可写的 `EVAL` / `EVALSHA` 变体。 |
-| `-MISCONF Errors writing to the AOF file: <io-error>` | AOF 追加失败（常见于 `ENOSPC`）。 | 释放磁盘空间；内存状态保持一致；重启会重放已落盘的部分。 |
-| `-MISCONF BGSAVE failed: <io-error>` | 后台快照写入失败。 | 释放磁盘空间或修复 `data_dir` 挂载。在线数据不受影响。 |
 | `-NOSCRIPT No matching script. Please use EVAL.` | `EVALSHA <sha>` 请求的脚本不在缓存中。 | 直接调 `EVAL`（kevy 自动缓存）或先 `SCRIPT LOAD`。 |
-| `-BUSY Script is running.` | 一个长时间运行的 Lua 脚本正阻塞该 shard。 | 用 `SCRIPT KILL` 打断（无脚本运行时是 no-op）。`lua-time-limit` 配置封顶失控脚本。 |
 | `-LOADING kevy is loading the dataset in memory` | 副本正在从主节点接收 full-resync 快照期间收到读请求。 | 等待重试（窗口以快照传送时长为界）；loading 期间 `PING`、`INFO`、`HELLO` 照常应答，健康检查与监控不中断。 |
 | `-ERR No such client address in the list` | 旧式 `CLIENT KILL <addr:port>` 没有匹配到任何连接。 | 用 `CLIENT LIST` 列出在线连接后按现存 `addr` 重发；过滤式形态（`CLIENT KILL ID\|ADDR\|LADDR …`）返回计数 0 而不报错。 |
 
@@ -53,6 +50,8 @@ kevy 有意不在协议层做认证与授权；下面这些 Redis 兼容前缀�
 - `-NOAUTH`——没有 `AUTH` 命令面。
 - `-WRONGPASS`——没有密码检查。
 - `-NOPERM`——没有 ACL 系统。
+- `-MISCONF`——持久化失败（AOF 追加或后台保存）会记到 stderr，节点继续用一致的内存状态服务；kevy 不把耐久性错误变成客户端可见的应答。重启时重放已落盘的部分。
+- `-BUSY`——kevy 没有交互式 `SCRIPT KILL`。脚本改由指令预算封顶（`[lua] time_limit_ms`，`0` = 不限）；超预算的脚本就地中断，其 `EVAL` 返回普通的 `-ERR` Lua 错误，失控脚本不会卡住 shard 等别的客户端来打断。
 
 如果你的客户端认为这些前缀可能出现，在 kevy 上请按不可达处理。访问控制交给部署边界（kevy 默认绑定 `127.0.0.1`）。
 

@@ -19,9 +19,19 @@ libfuzzer-sys = "0.4"
 [dependencies.kevy-persist]
 path = ".."
 
+[dependencies.kevy-store]
+path = "../../kevy-store"
+
 [[bin]]
 name = "replay_aof"
 path = "fuzz_targets/replay_aof.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "snapshot_load"
+path = "fuzz_targets/snapshot_load.rs"
 test = false
 doc = false
 bench = false

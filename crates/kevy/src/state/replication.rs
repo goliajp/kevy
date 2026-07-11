@@ -47,6 +47,16 @@ pub(crate) struct ReplicationState {
     /// active (each connecting to one upstream shard port); empty
     /// otherwise. `REPLICAOF` retarget is "stop_runners + start_runners".
     runners: Mutex<Vec<ReplicaRunner>>,
+    /// Serializes whole fleet transitions (stop / start / promote).
+    /// The `runners` mutex protects the Vec, but a transition is a
+    /// multi-step sequence (flag flip, joins, slot resize, spawn,
+    /// upstream label) — two concurrent REPLICAOF / elect callbacks
+    /// interleaving those steps could leave the `upstream` label
+    /// pointing away from the actual fleet, or double-bump the
+    /// promotion epoch. Held across each transition; never taken by
+    /// runner threads (they capture only `progress`), so joining
+    /// under it cannot deadlock.
+    retarget: Mutex<()>,
     /// Current upstream `(host, port_base)` — `None` when not running
     /// as a replica. `ROLE` / `INFO replication` report it.
     upstream: Mutex<Option<(IpAddr, u16)>>,
@@ -72,8 +82,10 @@ pub(crate) struct ReplicationState {
     quiesce_to: Mutex<Option<String>>,
     /// Primary quorum lease fence.
     quorum_fenced: AtomicBool,
-    /// Bounded staleness (0 = off). Set from config at
-    /// boot; CONFIG SET updates it live (the operator escape hatch).
+    /// Bounded staleness (0 = off). Set from config at boot;
+    /// replication keys are deliberately absent from the CONFIG SET
+    /// hot-set matrix, so this never changes at runtime (an atomic
+    /// only because the gate-bits rebuild reads it cross-thread).
     max_staleness_ms: AtomicU64,
     /// Promotion counter. Bumped on every replica → primary
     /// transition ([`Self::promote_stop_runners`]); each shard observes
@@ -115,6 +127,7 @@ impl ReplicationState {
             senders,
             inboxes: Mutex::new(Some(receivers)),
             runners: Mutex::new(Vec::new()),
+            retarget: Mutex::new(()),
             upstream: Mutex::new(None),
             single_source,
             is_replica: AtomicBool::new(false),
@@ -155,7 +168,19 @@ impl ReplicationState {
     /// returns, [`Self::is_replica`] is `false` and the upstream slot
     /// is `None`. Called by `REPLICAOF NO ONE`, by retarget (before
     /// [`Self::start_runners`] puts the new ones), and on shutdown.
+    /// Production transitions reach the stop sequence through
+    /// [`Self::start_runners`] (retarget) or
+    /// [`Self::promote_stop_runners`] (promotion / shutdown); this
+    /// bare wrapper exists for the state tests that exercise the
+    /// teardown in isolation.
+    #[cfg(test)]
     pub(crate) fn stop_runners(&self) {
+        let _transition = self.retarget.lock().expect("retarget poisoned");
+        self.stop_runners_inner();
+    }
+
+    /// Transition body — caller holds the `retarget` lock.
+    fn stop_runners_inner(&self) {
         self.is_replica.store(false, Ordering::Relaxed);
         self.bump_epoch();
         let mut guard = self.runners.lock().expect("runners poisoned");
@@ -183,44 +208,19 @@ impl ReplicationState {
         if self.inboxes.lock().expect("inboxes poisoned").is_some() {
             return Err(CmdError::Wire("replica inboxes not wired into a runtime (kevy::serve required)"));
         }
+        let _transition = self.retarget.lock().expect("retarget poisoned");
         // Stop any prior fleet before installing the new one. The old
         // runners' threads block on `next_event` reads; shutdown()
         // shuts down their sockets so the reads unblock and join
         // completes within ~one event.
-        self.stop_runners();
+        self.stop_runners_inner();
         let (host, port_base) = upstream;
         // Size the per-runner applied-offset registry BEFORE spawning —
         // a runner's first heartbeat may land before this function
         // returns, and its slot must already exist.
         let runner_count = if self.single_source { 1 } else { self.senders.len() };
         self.progress.size_runner_slots(runner_count);
-        // Id `kevy-replica-<client_port>#<stream>`: the port prefix keeps
-        // replicas in distinct ack slots + names one INFO entry per process.
-        let self_port = self.self_port.load(Ordering::Relaxed);
-        let new_runners = if self.single_source {
-            vec![ReplicaRunner::spawn_routed(
-                (host, port_base),
-                format!("kevy-replica-{self_port}#s"),
-                self.senders.clone(),
-                0,
-                Arc::clone(&self.progress),
-            )]
-        } else {
-            let mut fleet = Vec::with_capacity(self.senders.len());
-            for (shard_id, sender) in self.senders.iter().enumerate() {
-                let port = port_base.saturating_add(u16::try_from(shard_id).unwrap_or(u16::MAX));
-                let replica_id = format!("kevy-replica-{self_port}#{shard_id}");
-                fleet.push(ReplicaRunner::spawn(
-                    (host, port),
-                    replica_id,
-                    sender.clone(),
-                    shard_id,
-                    Arc::clone(&self.progress),
-                ));
-            }
-            fleet
-        };
-        *self.runners.lock().expect("runners poisoned") = new_runners;
+        *self.runners.lock().expect("runners poisoned") = self.spawn_fleet(host, port_base);
         *self.upstream.lock().expect("upstream poisoned") = Some(upstream);
         // AFTER the internal stop_runners above (which clears the
         // flag) — the role flips to replica only once the new fleet
@@ -230,6 +230,36 @@ impl ReplicationState {
         Ok(())
     }
 
+    /// Spawn the runner fleet for `(host, port_base)`. Id
+    /// `kevy-replica-<client_port>#<stream>`: the port prefix keeps
+    /// replicas in distinct ack slots + names one INFO entry per
+    /// process. Single-source spawns one routing runner; the fleet
+    /// model spawns one runner per shard at `port_base + shard_id`.
+    fn spawn_fleet(&self, host: IpAddr, port_base: u16) -> Vec<ReplicaRunner> {
+        let self_port = self.self_port.load(Ordering::Relaxed);
+        if self.single_source {
+            return vec![ReplicaRunner::spawn_routed(
+                (host, port_base),
+                format!("kevy-replica-{self_port}#s"),
+                self.senders.clone(),
+                0,
+                Arc::clone(&self.progress),
+            )];
+        }
+        let mut fleet = Vec::with_capacity(self.senders.len());
+        for (shard_id, sender) in self.senders.iter().enumerate() {
+            let port = port_base.saturating_add(u16::try_from(shard_id).unwrap_or(u16::MAX));
+            fleet.push(ReplicaRunner::spawn(
+                (host, port),
+                format!("kevy-replica-{self_port}#{shard_id}"),
+                sender.clone(),
+                shard_id,
+                Arc::clone(&self.progress),
+            ));
+        }
+        fleet
+    }
+
     /// Stop runners as part of a PROMOTION (`REPLICAOF NO ONE` on a
     /// following replica, or an election win). When this node really
     /// was a replica, the promotion counter bumps so every shard
@@ -237,8 +267,13 @@ impl ReplicationState {
     /// `kevy_rt::LiveRuntimeConfig::promotion_epoch`). A plain
     /// [`Self::stop_runners`] (retarget teardown, shutdown) never bumps.
     pub(crate) fn promote_stop_runners(&self) {
+        // Under the transition lock the was-replica check and the
+        // epoch bump are one atomic step — two racing promotions
+        // (elect callback + concurrent REPLICAOF NO ONE) can no
+        // longer both observe `true` and double-bump.
+        let _transition = self.retarget.lock().expect("retarget poisoned");
         let was_replica = self.is_replica();
-        self.stop_runners();
+        self.stop_runners_inner();
         if was_replica {
             self.promotion_epoch.fetch_add(1, Ordering::Relaxed);
         }

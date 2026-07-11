@@ -13,7 +13,7 @@
 //! Lifecycle: `HandshakePending` → `AckSent` (after parse + `+ACK`
 //! queued) → `Streaming { sent_offset }` (after `+ACK` drains —
 //! per-iter pump in [`crate::replication_pump`] fills more frames) →
-//! `Closed { replica_id, sent_offset }` (peer EOF / cap exceeded /
+//! `Closed { replica_id }` (peer EOF / cap exceeded /
 //! `TooOld`). The reactor reaps Closed conns once per iter; at reap
 //! time, conns whose `replica_id` is `Some` are recorded into
 //! [`Shard::slots`] so a reconnect within
@@ -119,17 +119,16 @@ pub enum ReplicaState {
     /// the source can't serve `sent_offset` (TooOld → needs a
     /// snapshot ship). Reactor reaps on
     /// next dispatch — at reap time, any conn that had reached
-    /// AckSent/Streaming gets recorded in [`crate::shard::Shard::slots`]
-    /// so a reconnect within `reconnect_window_ms` can be
-    /// observed/correlated. `replica_id = None` means the conn closed
-    /// before handshake completed (nothing to record).
+    /// AckSent/Streaming gets its slot's `last_seen_ns` touched in
+    /// [`crate::shard::Shard::slots`] so a reconnect within
+    /// `reconnect_window_ms` stays correlatable (only the id is
+    /// needed: the conn knows what it SENT, but the slot records what
+    /// the peer ACKED, and those must never be conflated).
+    /// `replica_id = None` means the conn closed before handshake
+    /// completed (nothing to record).
     Closed {
         /// Handshake's replica id, if the conn ever reached AckSent.
         replica_id: Option<String>,
-        /// Highest sent offset at the moment of close (sent, not
-        /// acked — the acked truth lives in the slot table). `0`
-        /// when the conn closed before reaching Streaming.
-        sent_offset: u64,
     },
 }
 
@@ -164,32 +163,20 @@ impl ReplicaConn {
     }
 
     /// Transition to [`ReplicaState::Closed`] while preserving the
-    /// replica id + sent offset the conn had at the moment of close.
-    /// Idempotent. The reactor's reap step reads these fields to
-    /// record the slot in [`crate::shard::Shard::slots`] before
-    /// dropping the conn.
+    /// replica id the conn had at the moment of close. Idempotent.
+    /// The reactor's reap step reads the id to touch the slot in
+    /// [`crate::shard::Shard::slots`] before dropping the conn.
     pub fn close(&mut self) {
-        let (id, off) = match &self.state {
-            ReplicaState::HandshakePending => (None, 0),
-            ReplicaState::AckSent { replica_id, from_offset } => {
-                (Some(replica_id.clone()), *from_offset)
-            }
-            ReplicaState::Streaming { replica_id, sent_offset } => {
-                (Some(replica_id.clone()), *sent_offset)
-            }
-            ReplicaState::SnapshotShipping { replica_id, ack_offset, .. } => {
-                // Snapshot was in flight; on reconnect within the
-                // window the replica should retry — record the slot
-                // at the snapshot's ack_offset so future `INFO
-                // replication` / observability can see where we were.
-                (Some(replica_id.clone()), *ack_offset)
+        let id = match &self.state {
+            ReplicaState::HandshakePending => None,
+            ReplicaState::AckSent { replica_id, .. }
+            | ReplicaState::Streaming { replica_id, .. }
+            | ReplicaState::SnapshotShipping { replica_id, .. } => {
+                Some(replica_id.clone())
             }
             ReplicaState::Closed { .. } => return,
         };
-        self.state = ReplicaState::Closed {
-            replica_id: id,
-            sent_offset: off,
-        };
+        self.state = ReplicaState::Closed { replica_id: id };
     }
 }
 
@@ -264,9 +251,8 @@ mod tests {
         let mut conn = fake_conn();
         conn.close();
         match conn.state {
-            ReplicaState::Closed { replica_id, sent_offset } => {
+            ReplicaState::Closed { replica_id } => {
                 assert_eq!(replica_id, None);
-                assert_eq!(sent_offset, 0);
             }
             other => panic!("expected Closed, got {other:?}"),
         }
@@ -279,9 +265,8 @@ mod tests {
         advance_handshake(&mut conn).expect("handshake ok");
         conn.close();
         match conn.state {
-            ReplicaState::Closed { replica_id, sent_offset } => {
+            ReplicaState::Closed { replica_id } => {
                 assert_eq!(replica_id.as_deref(), Some("replica-x"));
-                assert_eq!(sent_offset, 17);
             }
             other => panic!("expected Closed, got {other:?}"),
         }
@@ -296,9 +281,8 @@ mod tests {
         };
         conn.close();
         match conn.state {
-            ReplicaState::Closed { replica_id, sent_offset } => {
+            ReplicaState::Closed { replica_id } => {
                 assert_eq!(replica_id.as_deref(), Some("replica-z"));
-                assert_eq!(sent_offset, 99);
             }
             other => panic!("expected Closed, got {other:?}"),
         }

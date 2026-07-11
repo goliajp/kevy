@@ -71,40 +71,14 @@ impl<C: Commands> Shard<C> {
             ReplicaApply::SnapshotChunk(bytes) => {
                 self.replica_snapshot_buf.extend_from_slice(&bytes);
             }
-            ReplicaApply::SnapshotEnd { ack_offset, routed } => {
-                let buf = std::mem::take(&mut self.replica_snapshot_buf);
-                // A snapshot ship REPLACES local state, it
-                // does not merge into it. The load is per-record
-                // upsert, so any local residue not present upstream
-                // (a rejoining old primary's forked suffix, a stale
-                // pre-resync keyspace) must be dropped first —
-                // otherwise the fork survives the "discard".
-                self.store.flushall();
-                let res = if routed {
-                    // Single-source mode: the payload is the whole
-                    // upstream keyspace — keep only this shard's slice
-                    let (id, n) = (self.id, self.nshards);
-                    kevy_persist::load_snapshot_filtered(
-                        &mut self.store,
-                        Cursor::new(buf.as_slice()),
-                        |key| (kevy_hash::key_hash_slot(key) as usize) % n == id,
-                    )
-                } else {
-                    kevy_persist::load_snapshot_from(&mut self.store, Cursor::new(buf.as_slice()))
-                };
-                if let Err(e) = res {
-                    eprintln!(
-                        "kevy: shard {} replica snapshot load failed: {e}",
-                        self.id,
-                    );
-                }
-                // A snapshot load covers the stream up to
-                // its ack_offset — the apply position jumps there
-                // (plain store, not max: a fork-discard resync
-                // genuinely rewinds and the truth must show it).
-                self.replica_applied_next = ack_offset;
-                // A bulk load is not keyspace traffic — drop captured events.
-                let _ = self.store.take_notify_events();
+            ReplicaApply::SnapshotEnd { ack_offset, routed, gate } => {
+                self.apply_snapshot_end(ack_offset, routed);
+                // Only now — with the swapped-in keyspace being what
+                // readers will see — may the completion token fire
+                // (it lowers the embedder's `-LOADING` gate). Dropping
+                // it any earlier reopens reads on the pre-resync state
+                // still sitting in this inbox's queue.
+                drop(gate);
             }
             ReplicaApply::Frame { offset, argv } => {
                 self.apply_replica_frame(&argv);
@@ -112,6 +86,42 @@ impl<C: Commands> Shard<C> {
                 self.replica_applied_next = offset.saturating_add(1);
             }
         }
+    }
+
+    /// Replace the local keyspace with a shipped snapshot and jump the
+    /// apply position to its `ack_offset`. Split out of
+    /// [`Self::apply_replica_event`] to keep that dispatcher under the
+    /// house fn-length rule.
+    fn apply_snapshot_end(&mut self, ack_offset: u64, routed: bool) {
+        let buf = std::mem::take(&mut self.replica_snapshot_buf);
+        // A snapshot ship REPLACES local state, it does not merge into
+        // it. The load is per-record upsert, so any local residue not
+        // present upstream (a rejoining old primary's forked suffix, a
+        // stale pre-resync keyspace) must be dropped first — otherwise
+        // the fork survives the "discard".
+        self.store.flushall();
+        let res = if routed {
+            // Single-source mode: the payload is the whole upstream
+            // keyspace — keep only this shard's slice.
+            let (id, n) = (self.id, self.nshards);
+            kevy_persist::load_snapshot_filtered(
+                &mut self.store,
+                Cursor::new(buf.as_slice()),
+                |key| (kevy_hash::key_hash_slot(key) as usize) % n == id,
+            )
+        } else {
+            kevy_persist::load_snapshot_from(&mut self.store, Cursor::new(buf.as_slice()))
+        };
+        if let Err(e) = res {
+            eprintln!("kevy: shard {} replica snapshot load failed: {e}", self.id);
+        }
+        // A snapshot load covers the stream up to its ack_offset — the
+        // apply position jumps there (plain store, not max: a
+        // fork-discard resync genuinely rewinds and the truth must
+        // show it).
+        self.replica_applied_next = ack_offset;
+        // A bulk load is not keyspace traffic — drop captured events.
+        let _ = self.store.take_notify_events();
     }
 
     /// Dispatch one replicated mutation frame against the local

@@ -26,8 +26,15 @@
 #    `luna-core` as exemption #2 (via path-dep on kevy-lua). Same
 #    verification: `cargo tree -p kevy-lua-host` must show luna-core
 #    as the only third-party crate.
+# 4. `crates/kevy-ring` + `crates/kevy-rt` may depend on `loom` under
+#    `[target.'cfg(loom)'.dependencies]` — a concurrency-model checker
+#    pulled in ONLY under `RUSTFLAGS="--cfg loom"` for the loom test
+#    suites. A normal build / test / publish never sees it (same
+#    posture as the `fuzz/` dirs' libfuzzer-sys). Verify it stays out
+#    of the default graph: `cargo tree -p kevy-rt | grep loom` is empty
+#    without the cfg.
 #
-# Both exemptions are per-crate. The default server, blocking-client,
+# These exemptions are per-crate. The default server, blocking-client,
 # embedded, and persistence stacks remain 0 third-party deps.
 [workspace]
 resolver = "3"

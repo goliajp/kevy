@@ -6,7 +6,7 @@
 use crate::snapshot_fmt::{
     MAGIC, OP_EOF, OP_HASH, OP_HFTTL, OP_LIST, OP_SET, OP_STR, OP_STREAM, OP_ZSET,
     VERSION, VERSION_ABSOLUTE_TTL, VERSION_FEED_CURSOR, VERSION_HASH_TTL, VERSION_RELATIVE_TTL,
-    read_bytes, read_ttl, read_u8, read_u32, read_u64,
+    capped_capacity, read_bytes, read_ttl, read_u8, read_u32, read_u64,
 };
 use kevy_store::Store;
 use std::fs::File;
@@ -205,7 +205,7 @@ fn load_stream_record<R: Read>(
     let mxd_seq = read_u64(r)?;
     let entries_added = read_u64(r)?;
     let n = read_u32(r)? as usize;
-    let mut entries = Vec::with_capacity(n);
+    let mut entries = Vec::with_capacity(capped_capacity(n));
     for _ in 0..n {
         let ms = read_u64(r)?;
         let seq = read_u64(r)?;
@@ -234,7 +234,7 @@ fn load_stream_record<R: Read>(
 /// `[len: u32 LE][bulk]*` — list items / set members.
 fn read_bulk_vec<R: Read>(r: &mut R) -> io::Result<Vec<Vec<u8>>> {
     let n = read_u32(r)? as usize;
-    let mut items = Vec::with_capacity(n);
+    let mut items = Vec::with_capacity(capped_capacity(n));
     for _ in 0..n {
         items.push(read_bytes(r)?);
     }
@@ -244,7 +244,7 @@ fn read_bulk_vec<R: Read>(r: &mut R) -> io::Result<Vec<Vec<u8>>> {
 /// `[len: u32 LE][bulk, bulk]*` — hash fields / stream entry field-values.
 fn read_pair_vec<R: Read>(r: &mut R) -> io::Result<Vec<(Vec<u8>, Vec<u8>)>> {
     let n = read_u32(r)? as usize;
-    let mut pairs = Vec::with_capacity(n);
+    let mut pairs = Vec::with_capacity(capped_capacity(n));
     for _ in 0..n {
         let f = read_bytes(r)?;
         let v = read_bytes(r)?;
@@ -256,7 +256,7 @@ fn read_pair_vec<R: Read>(r: &mut R) -> io::Result<Vec<(Vec<u8>, Vec<u8>)>> {
 /// `[len: u32 LE][bulk, f64-bits u64 LE]*` — zset (member, score) pairs.
 fn read_zset_pairs<R: Read>(r: &mut R) -> io::Result<Vec<(Vec<u8>, f64)>> {
     let n = read_u32(r)? as usize;
-    let mut pairs = Vec::with_capacity(n);
+    let mut pairs = Vec::with_capacity(capped_capacity(n));
     for _ in 0..n {
         let m = read_bytes(r)?;
         let score = f64::from_bits(read_u64(r)?);
@@ -268,18 +268,18 @@ fn read_zset_pairs<R: Read>(r: &mut R) -> io::Result<Vec<(Vec<u8>, f64)>> {
 /// Loader-side twin of [`crate::snapshot_write::write_stream_groups`].
 fn read_stream_groups<R: Read>(r: &mut R) -> io::Result<Vec<kevy_store::LoadedGroup>> {
     let n = read_u32(r)? as usize;
-    let mut groups = Vec::with_capacity(n);
+    let mut groups = Vec::with_capacity(capped_capacity(n));
     for _ in 0..n {
         let name = read_bytes(r)?;
         let last_delivered = (read_u64(r)?, read_u64(r)?);
         let nc = read_u32(r)? as usize;
-        let mut consumers = Vec::with_capacity(nc);
+        let mut consumers = Vec::with_capacity(capped_capacity(nc));
         for _ in 0..nc {
             let cname = read_bytes(r)?;
             consumers.push((cname, read_u64(r)?));
         }
         let np = read_u32(r)? as usize;
-        let mut pel = Vec::with_capacity(np);
+        let mut pel = Vec::with_capacity(capped_capacity(np));
         for _ in 0..np {
             let ms = read_u64(r)?;
             let seq = read_u64(r)?;

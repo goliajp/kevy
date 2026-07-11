@@ -105,6 +105,11 @@ pub(crate) struct Conn {
     /// Queued commands inside a MULTI…EXEC transaction (`None` = not in
     /// MULTI).
     pub(crate) multi: Option<Vec<Argv>>,
+    /// Set when a command queued during MULTI failed to queue (unknown
+    /// verb / wrong arity). `EXEC` then answers `-EXECABORT` and runs
+    /// nothing, matching Redis's `CLIENT_DIRTY_EXEC`. Reset on
+    /// MULTI / DISCARD / EXEC.
+    pub(crate) multi_dirty: bool,
     /// `WATCH`-ed keys + the version each had on its owning shard at
     /// `WATCH` time. `EXEC` fans these out via `Op::CheckWatch`; if any
     /// shard reports a mismatch, the transaction aborts (nil multi-bulk).
@@ -145,6 +150,7 @@ impl Conn {
             sub: HashSet::new(),
             psub: HashSet::new(),
             multi: None,
+            multi_dirty: false,
             watched: Vec::new(),
             client_name: Vec::new(),
             proto: RespVersion::default(),
