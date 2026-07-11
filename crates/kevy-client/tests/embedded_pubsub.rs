@@ -1,6 +1,7 @@
-//! Integration tests for the embedded pub/sub bus (v1.3.0).
+//! Integration tests for the embedded pub/sub bus.
 //!
-//! These exercise the mailrs-style pattern: one URL string, used by both
+//! These exercise the pattern a downstream embedding application
+//! relies on: one URL string, used by both
 //! `Connection::connect` (publisher) and `Subscriber::connect_channels` (consumer),
 //! transparently switches between in-process embed (`mem://name`) and
 //! TCP server (`kevy://host:port`) without any scheme-branching at the
@@ -12,11 +13,11 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
-/// The canonical mailrs pattern: open one URL → subscribe in thread A,
+/// The canonical embedding pattern: open one URL → subscribe in thread A,
 /// publish in thread B, recv the message in A.
 #[test]
-fn mailrs_pattern_cross_thread_publish_recv() {
-    const URL: &str = "mem://mailrs-cross-thread";
+fn cross_thread_publish_recv() {
+    const URL: &str = "mem://cross-thread";
     let mut sub = Subscriber::connect_channels(URL, &[b"mail.event"]).unwrap();
 
     // Drain the SUBSCRIBE ack synchronously before letting the publisher
@@ -134,7 +135,7 @@ fn named_bus_recycles_after_all_handles_drop() {
     assert_eq!(conn2.get(b"hot").unwrap(), None);
 }
 
-/// mailrs feedback #4: `recv_message` swallows the SUBSCRIBE ack and
+/// Downstream-requested convenience: `recv_message` swallows the SUBSCRIBE ack and
 /// returns the next real message directly, sparing callers the
 /// `loop { match recv() { _ => continue, Message => break } }` boilerplate.
 #[test]

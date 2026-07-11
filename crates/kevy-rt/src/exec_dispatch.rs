@@ -45,7 +45,7 @@ fn eq_ascii_get(name: &[u8]) -> bool {
         && (name[2] == b'T' || name[2] == b't')
 }
 
-// A.6 (v1.25): `bulk_header_into` + `format_usize_into` deleted — fused
+// `bulk_header_into` + `format_usize_into` deleted — fused
 // into `kevy_store::Store::get_into_output` so the GET inline fast path
 // emits the RESP frame directly from the store with no caller match arm
 // + no GetReply enum tag round-trip.
@@ -71,7 +71,7 @@ impl<C: Commands> Shard<C> {
         block_hint: crate::BlockHint,
         meta: DispatchMeta,
     ) {
-        // v3.14 A0: role-gated write rejection covers the single-shard
+        // Role-gated write rejection covers the single-shard
         // path too (start_command gates the fan-out routes; seq is
         // already assigned here — slot+fold, not immediate_reply).
         if meta.is_write && let Some(err) = self.commands.write_denied() {
@@ -133,7 +133,7 @@ impl<C: Commands> Shard<C> {
     ) -> bool {
         // Field-only read, before the conn borrow.
         let t0 = self.slowlog_t0();
-        // L1 (2026-06-21): GET handled in ONE keyspace lookup here, with
+        // GET handled in ONE keyspace lookup here, with
         // zero-copy for ArcBulk (push the Arc to conn.output_arcs so the
         // reactor's writev sends value bytes direct from keyspace) and
         // the normal memcpy for Str/Int. Replaces the dispatch_proto →
@@ -144,10 +144,10 @@ impl<C: Commands> Shard<C> {
             && let Some(name) = args.first()
             && eq_ascii_get(name)
         {
-            // A.6 (v1.25): fused get → output. Skip the GetReply enum tag +
+            // Fused get → output. Skip the GetReply enum tag +
             // caller-side match arm by having store write the frame into
-            // conn.output / conn.output_arcs directly. ~5-8 ns/GET saved
-            // per Phase A deco D-A2.
+            // conn.output / conn.output_arcs directly. Measured ~5-8 ns/GET
+            // saved in decomposition.
             //
             // Conn lookup happens FIRST so we can pre-check `conn.pending`
             // (and bail without touching the store on out-of-order conns).
@@ -175,7 +175,7 @@ impl<C: Commands> Shard<C> {
             conn.next_emit += 1;
             if is_quit {
                 conn.closing = true;
-                // K5 (v1.25 A.4 redo): push to closing ready-set so
+                // Push to closing ready-set so
                 // `uring_reap_closed` finds this conn in O(closing)
                 // instead of an O(N=conns) scan. Duplicates harmless.
                 self.closing_uring_conns.push(conn_id);
@@ -205,7 +205,7 @@ impl<C: Commands> Shard<C> {
         conn.next_emit += 1;
         if is_quit {
             conn.closing = true;
-            // K5 (v1.25 A.4 redo): see comment above.
+            // See the closing ready-set comment above.
             self.closing_uring_conns.push(conn_id);
         }
         self.slowlog_maybe(t0, args);
@@ -319,7 +319,7 @@ impl<C: Commands> Shard<C> {
             && (idx as usize) < args.len()
         {
             self.store.bump_if_watched(&args[idx as usize]);
-            // v2.5: synchronous index maintenance (default no-op; the
+            // Synchronous index maintenance (default no-op; the
             // kevy impl gates on a process-wide catalog-empty atomic).
             let key = args[idx as usize].to_vec();
             self.commands.on_write(&mut self.store, &key);
@@ -342,7 +342,7 @@ impl<C: Commands> Shard<C> {
         //
         // The `is_applying_replicated` check suppresses the push when
         // this dispatch is itself applying a frame pulled from an
-        // upstream primary (T1.29 server-as-replica path). Defends
+        // upstream primary (server-as-replica path). Defends
         // against chain replication / infinite re-emit in the brief
         // window during `REPLICAOF NO ONE` promotion when both an
         // upstream link and a downstream source can coexist. The
@@ -361,7 +361,7 @@ impl<C: Commands> Shard<C> {
         {
             self.wake_key(&key);
         }
-        // v1.27.3: drain the Lua wake bridge. `redis.call` inside an
+        // Drain the Lua wake bridge. `redis.call` inside an
         // EVAL script pushes affected write keys to a thread-local
         // buffer (see `crate::lua_wake_bridge`); this is the runtime's
         // catch-point. The drain is cheap on non-Lua dispatches —

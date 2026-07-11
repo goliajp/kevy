@@ -238,16 +238,14 @@ fn info_stats(ctx: &Ctx<'_>, totals: &crate::state::Totals, b: &mut String) {
 }
 
 fn info_replication(ctx: &Ctx<'_>, b: &mut String) {
-    // T1.31: live `INFO replication` — reads `current_upstream()` to
+    // Live `INFO replication` — reads `current_upstream()` to
     // decide the section shape, then drains the shard zone's per-tick
     // view for offset + connected-replicas count.
-    // The fields mirror Redis 7.x; the v1.18 simplifications are:
-    //   - master_replid is a single zeros-string (no failover ID
-    //     bookkeeping yet — kevy-elect (Phase 1.5) introduces real IDs)
-    //   - master_link_status is fixed to "up" when an upstream is
-    //     installed (no runner→view feedback yet — T1.31.x follow-up)
-    //   - the per-replica list is omitted (peer-addr capture is
-    //     T1.28.5 — see plan).
+    // The fields mirror Redis 7.x, with one simplification:
+    // master_replid is a single zeros-string (no failover ID
+    // bookkeeping — kevy-elect keeps its own epoch instead).
+    // Link status is heartbeat-derived and the per-replica list is
+    // live (see the two halves below).
     b.push_str("# Replication\r\n");
     let upstream = ctx.state.replication.current_upstream();
     let view = ctx.shard.replication_view();
@@ -265,7 +263,7 @@ fn info_repl_replica(ctx: &Ctx<'_>, b: &mut String, host: std::net::IpAddr, port
     b.push_str("role:slave\r\n");
     b.push_str(&format!("master_host:{host}\r\n"));
     b.push_str(&format!("master_port:{port}\r\n"));
-    // v3.14 D3/D4: heartbeat-derived truth — link status by
+    // Heartbeat-derived truth — link status by
     // ping freshness (<3s), applied offset and frame lag from
     // the runner registry.
     let (up, applied, lag, last_io) = ctx.state.replication.replica_link_view();
@@ -294,7 +292,7 @@ fn info_repl_master(
 ) {
     b.push_str("role:master\r\n");
     b.push_str(&format!("connected_slaves:{connected}\r\n"));
-    // v3.14 D2: per-replica truth — sent (pumped), acked
+    // Per-replica truth — sent (pumped), acked
     // (REPLCONF ACK), lag in frames vs master_repl_offset.
     for (i, (ip, port, sent, acked)) in view.replicas.iter().enumerate() {
         let acked_v = acked.map_or(0, |a| a.acked_offset);
@@ -338,7 +336,7 @@ fn cmd_debug<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
         Some(s) => s.to_ascii_uppercase(),
         None => return wrong_args(out, "debug"),
     };
-    // v1.42 — audit every DEBUG call (admin command).
+    // Audit every DEBUG call (admin command).
     let mut event: Vec<&[u8]> = Vec::with_capacity(args.len());
     event.push(b"DEBUG");
     for i in 1..args.len() {
@@ -364,7 +362,7 @@ fn cmd_debug<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     }
 }
 
-// WAIT lives in crate::cmd_repl since v3.16 (D1: real all-shard ack
+// WAIT lives in crate::cmd_repl (real all-shard ack
 // barrier through the runtime; the dispatch fallback there handles
 // arity errors, the replica rejection, and runtime-less contexts).
 
@@ -372,10 +370,10 @@ fn cmd_debug<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
 
 fn cmd_shutdown<A: ArgvView + ?Sized>(args: &A, _out: &mut Vec<u8>) {
     // SHUTDOWN [NOSAVE | SAVE] — Redis exits without sending a reply
-    // (client sees connection drop). v1.0 stub: parse the subcommand
-    // for forward compatibility, then exit(0). Wave 2 will add the
-    // AOF-flush-on-exit graceful path; for now we rely on appendfsync
-    // = always or everysec to have flushed recent writes.
+    // (client sees connection drop). We parse the subcommand for
+    // forward compatibility, then exit(0) immediately: recent writes
+    // are only as durable as appendfsync = always or everysec has
+    // already made them (the SIGTERM handler is the graceful drain).
     let mode = args.get(1).map(<[u8]>::to_ascii_uppercase);
     let _ = mode; // accepted for parity; behavior identical for now
     std::process::exit(0);

@@ -129,7 +129,7 @@ fn encode_hits_chunk(
     chunk
 }
 
-/// v3.10: IDX.EXPLAIN <name> <shape…> — the exact IDX.QUERY parse,
+/// IDX.EXPLAIN <name> <shape…> — the exact IDX.QUERY parse,
 /// ZERO execution. Chunk: [ST_OK][building u8][entries u64 LE]
 /// [shape byte] — kind/plan text assemble on the origin from the
 /// catalog spec.

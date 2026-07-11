@@ -14,7 +14,7 @@ impl<C: Commands> Shard<C> {
     /// A spinning peer needs no syscall — it will see the message on its next
     /// poll(0). This is what removes the per-message wakeup under load.
     ///
-    /// **E16 (2026-06-20)** fast-path split: post-v1.24-chain perf
+    /// Fast-path split: a perf
     /// diagnostic showed flush_wakes at 0.88 % self per reactor iter
     /// even with the existing bitmap short-circuit — almost all from
     /// the fn-call overhead, since at -c1 with no cross-shard traffic
@@ -22,7 +22,7 @@ impl<C: Commands> Shard<C> {
     /// into the reactor loop; the cold wake body is outlined as
     /// `flush_wakes_slow` with `#[inline(never)]` so its bulk + the
     /// SeqCst fence + the parked-load chain stay off the hot iTLB
-    /// pages. Same shape as E15's drain_inbound split.
+    /// pages. Same shape as the drain_inbound split.
     #[inline]
     pub(crate) fn flush_wakes(&mut self) {
         if self.pending_wakes == 0 {
@@ -102,7 +102,7 @@ impl<C: Commands> Shard<C> {
     /// Re-push each per-target backlog into its ring (filled when a ring was full
     /// last iteration). Stops at the first target whose ring is still full.
     ///
-    /// **E16 (2026-06-20)** fast-path split: same shape as flush_wakes —
+    /// Fast-path split: same shape as flush_wakes —
     /// 0.76 % self per reactor iter at -c1 was almost all fn-call cost.
     /// Tiny `#[inline]` wrapper inlines into the loop; cold body is
     /// outlined as `flush_backlog_slow` with `#[inline(never)]`.
@@ -145,16 +145,16 @@ impl<C: Commands> Shard<C> {
     /// WouldBlock, drop the conn once closing + fully drained, and keep the
     /// poller's write-interest in sync with whether output remains.
     ///
-    /// **Bug fix (v1.25 G2)**: the GET inline fast path
+    /// **Bug fix**: the GET inline fast path
     /// (`exec_dispatch::try_inline_local`) pushes `Value::ArcBulk` bodies
     /// into `conn.output_arcs` instead of memcpying them into
     /// `conn.output` — the io_uring reactor's `prep_writev` builds an
     /// iovec list spanning both, but this epoll path used to ignore
     /// `output_arcs` entirely (writing only the header + CRLF, dropping
-    /// the value body silently). lx64 bench runs io_uring and never hit
-    /// this, but a macOS / older-kernel epoll fallback would have served
-    /// truncated GET replies for any value > `BULK_THRESHOLD`. We now
-    /// materialise the iovec content into `output` before the write loop.
+    /// the value body silently). The bench box runs io_uring and never
+    /// hit this, but a macOS / older-kernel epoll fallback would have
+    /// served truncated GET replies for any value > `BULK_THRESHOLD`. We
+    /// now materialise the iovec content into `output` before the write loop.
     pub(crate) fn flush_conn(&mut self, conn_id: u64) -> io::Result<()> {
         let (close, want_write, fd) = {
             let Some(conn) = self.conns.get_mut(&conn_id) else {

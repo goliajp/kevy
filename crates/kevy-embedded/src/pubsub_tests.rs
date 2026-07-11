@@ -166,10 +166,9 @@ fn recv_timeout_returns_timeout_when_empty() {
 #[test]
 fn subscription_is_send_and_sync() {
     // Static-assert via trait bounds: this won't compile if Subscription
-    // stops being Send + Sync. Closes the gap mailrs hit on first prod
-    // adoption (`Arc<Subscription>` failed because the `mpsc::Receiver`
-    // field was !Sync). See type-level doc for the trade-off + memory
-    // entry feedback-mailrs-prod-vet-lessons.
+    // stops being Send + Sync. Closes a gap an embed consumer hit in
+    // production (`Arc<Subscription>` failed because the `mpsc::Receiver`
+    // field was !Sync). See type-level doc for the trade-off.
     fn require_send_sync<T: Send + Sync>() {}
     require_send_sync::<Subscription>();
 }

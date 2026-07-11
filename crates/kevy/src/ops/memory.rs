@@ -25,10 +25,10 @@ pub(crate) fn cmd_memory<A: ArgvView + ?Sized>(
         b"USAGE" => cmd_memory_usage(store, args, out),
         b"STATS" => cmd_memory_stats(cfg, store, out),
         b"DOCTOR" => {
-            // Redis returns a free-form diagnostic string. v1.0 ships a
+            // Redis returns a free-form diagnostic string. kevy answers a
             // canonical "no issues" body so clients that auto-call DOCTOR on
-            // INFO don't think the server is buggy. Wave 2/3 may surface real
-            // findings (fragmentation, high evict rate, etc.).
+            // INFO don't think the server is buggy; no real findings
+            // (fragmentation, high evict rate, etc.) are surfaced.
             encode_bulk(out, b"Sam, I detected a few issues in this Kevy instance memory implants:\r\n\r\n * No issues detected. Memory looks fine.\r\n");
         }
         b"PURGE" => {

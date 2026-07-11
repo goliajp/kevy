@@ -1,10 +1,10 @@
-//! v2.0.16 — `CLIENT SETNAME` / `CLIENT GETNAME` per-conn persistence
-//! (closes v1.52.x finding).
+//! `CLIENT SETNAME` / `CLIENT GETNAME` per-conn persistence —
+//! added after finding that the stub discarded names round-trip.
 //!
 //! Validates the reactor-level intercept in
 //! `crates/kevy-rt/src/exec_client_intercept.rs`:
 //! - `SETNAME` persists the name on the conn;
-//! - `GETNAME` returns the persisted name (not the v1.x stub `$0`);
+//! - `GETNAME` returns the persisted name (not the conn-less stub's `$0`);
 //! - Per-connection isolation (one conn's name doesn't leak to another);
 //! - Invalid names (whitespace / control chars) rejected with -ERR;
 //! - Empty `SETNAME` is allowed (clears the name);

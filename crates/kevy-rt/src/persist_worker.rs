@@ -34,7 +34,7 @@ pub(crate) enum PersistJob {
         view: SnapshotView,
         snap_path: PathBuf,
         aof_reset: Option<PathBuf>,
-        /// v2.3: feed cursor at view-freeze — written into the
+        /// Feed cursor at view-freeze — written into the
         /// snapshot header (recovery-point contract).
         cursor: Option<(u64, u64)>,
     },
@@ -184,7 +184,7 @@ impl<C: Commands> Shard<C> {
             },
             None => None,
         };
-        // v2.3 recovery point: the feed cursor at view-freeze time —
+        // Recovery point: the feed cursor at view-freeze time —
         // frozen in the same no-append window as the view itself, so
         // "snapshot + frames from cursor" is exact.
         let cursor = self.replicate.as_ref().map(|f| f.tail());
@@ -258,7 +258,7 @@ impl<C: Commands> Shard<C> {
     /// A `stop=true` between the `start_bg_save` and that tick
     /// would leave the snapshot orphan + the client's `+OK`
     /// dishonored. This drain closes the window.
-    /// v2.3 clean-shutdown half of the feed cursor contract: persist
+    /// Clean-shutdown half of the feed cursor contract: persist
     /// the `(generation, next_offset)` continuity marker. Only written
     /// here — an unclean stop leaves no marker and the next boot bumps
     /// the generation (see `kevy_persist::feed_meta`).
@@ -349,7 +349,7 @@ impl<C: Commands> Shard<C> {
     }
 }
 
-/// [`kevy_persist::write_snapshot_tmp`] with the v2.3 cursor header —
+/// [`kevy_persist::write_snapshot_tmp`] with the feed-cursor header —
 /// same durable-tmp discipline (fsync before the caller's rename).
 fn write_snapshot_tmp_with_cursor(
     view: &SnapshotView,

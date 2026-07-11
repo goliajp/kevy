@@ -1,4 +1,4 @@
-//! ESTORE parity manifest (v2.1): command names the embedded `Store`
+//! ESTORE parity manifest: command names the embedded `Store`
 //! facade implements, scoped to ops present in
 //! `kevy_resp::ops_table::OP_TABLE` (conn/pubsub/admin surfaces like
 //! `publish` / `info` / `ping_ns` are out of the table's scope).

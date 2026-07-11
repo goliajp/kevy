@@ -1,5 +1,5 @@
-//! v2.3 FEED.* — end-to-end against a real 8-shard reactor with
-//! `feed_enabled`. Covers the cursor contract (RFC 2026-07-04):
+//! FEED.* — end-to-end against a real 8-shard reactor with
+//! `feed_enabled`. Covers the cursor contract:
 //! tail/read round-trip, prefix filter (fail-open on multi-key),
 //! FLUSHALL generation bump, clean-restart continuity, and
 //! unclean-restart bump.

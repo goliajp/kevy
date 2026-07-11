@@ -259,7 +259,7 @@ impl KnnArgs {
 /// BM25 deep pagination is an anti-pattern; LIMIT caps at 1000).
 /// `IDX.QUERY HYBRID <text_idx> MATCH <q> <ann_idx> KNN <vec>
 /// [LIMIT n] [RRFK k] [EF ef] [FIELDS f…]` — reciprocal-rank fusion
-/// of a BM25 list and a KNN list over the same prefix (v3.13).
+/// of a BM25 list and a KNN list over the same prefix.
 pub(crate) struct HybridArgs {
     pub(crate) text_idx: Vec<u8>,
     pub(crate) text: Vec<u8>,

@@ -16,7 +16,7 @@
 //! No buffered allocations beyond what blocking does (one growable
 //! `buf` for partial replies + one boxed chunk for reads). Pipelining
 //! reuses this same codec — `run_pipeline` writes N commands in one
-//! batch and reads N replies in sequence (T4.16).
+//! batch and reads N replies in sequence.
 
 use std::io;
 
@@ -68,7 +68,7 @@ impl<T: AsyncTransport> AsyncRespCodec<T> {
     }
 
     /// Drain one parsed reply from the read buffer, reading more bytes
-    /// from the transport as needed. Pipelining (T4.16) calls this N
+    /// from the transport as needed. The pipeline runner calls this N
     /// times after a single batched write.
     pub async fn read_reply(&mut self) -> io::Result<Reply> {
         // Destructure so the loop can borrow `transport` and `chunk`

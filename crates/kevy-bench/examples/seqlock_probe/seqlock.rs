@@ -1,7 +1,7 @@
 //! Seqlock-protected shared-read cell over the real `kevy_store::Value` +
 //! an EBR-lite deferred-reclamation scheme.
 //!
-//! v4 T9b / K-903 L1 pre-work gate PROTOTYPE — not production code. Scope
+//! Pre-work gate PROTOTYPE — not production code. Scope
 //! deliberately mirrors the shared-read keyspace design under judgement:
 //!
 //! - **Writes stay shard-owned**: exactly ONE writer thread per entry set
@@ -34,7 +34,8 @@ pub const VAL_WORDS: usize = 4;
 const _: () = assert!(std::mem::size_of::<Value>() == 8 * VAL_WORDS);
 
 /// Sequence word + expire word + 4 value words = 48 B. Aligned to 128 B
-/// (Apple M-series line pair / lx64 spatial prefetcher pair) so disjoint
+/// (Apple M-series line pair / the x86 bench box's adjacent-line spatial
+/// prefetcher pair) so disjoint
 /// entries never share a line — this IS the "per-entry version word"
 /// design under test (vs one shared table version; see perfsim cell F).
 #[repr(C, align(128))]

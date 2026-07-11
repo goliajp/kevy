@@ -1,5 +1,5 @@
 //! Change-feed (CDC): `FEED.SHARDS` / `FEED.TAIL` / `FEED.READ`
-//! (v1.14.0) — the network face of kevy-embedded's `changes_since`.
+//! — the network face of kevy-embedded's `changes_since`.
 //!
 //! Both backends serve the same cursor contract: read from
 //! `(generation, offset)`, get frames plus the next cursor; an

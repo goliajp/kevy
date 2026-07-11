@@ -24,7 +24,7 @@ impl<C: Commands> Shard<C> {
             };
             match accepted {
                 Ok(sock) => {
-                    // v1.37 — refuse client conns past max_clients_per_shard
+                    // Refuse client conns past max_clients_per_shard
                     // (cluster-bus links exempt; they're infra, not user-counted).
                     if !cluster
                         && self.max_clients_per_shard > 0

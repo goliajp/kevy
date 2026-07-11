@@ -1,4 +1,4 @@
-//! v2.5 IDX.* — end-to-end against a real 8-shard reactor: rows land
+//! IDX.* — end-to-end against a real 8-shard reactor: rows land
 //! on different shards, so IDX.QUERY exercises the extension fan-out
 //! merge, the global (value,key) cursor, and the tick-driven backfill.
 

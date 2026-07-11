@@ -7,15 +7,9 @@
 //! view + `config.replication.role` and emits the Redis-shaped reply.
 //!
 //! Current simplifications:
-//! - Per-replica IP / port / offset entries in the master reply are
-//!   intentionally empty. Capturing replica peer addresses needs a
-//!   `getpeername` FFI binding in `kevy-sys` + threading it through
-//!   `accept_ready_replication`; tracked as a follow-up alongside
-//!   T1.31 (`INFO replication` enrichment).
 //! - Replica-side status is always `"connect"` (Redis's "configured,
-//!   not yet connecting" state) — the v1.18 replica role is config-
-//!   declared but the active upstream link only lands at T1.29 /
-//!   T1.30 (`REPLICAOF`).
+//!   not yet connecting" state) — a richer live status would need
+//!   runner→view feedback threaded into the reply.
 //! - The view reflects the *answering shard*. Multi-shard aggregation
 //!   (sum offsets across all shards) is a follow-up — for now, ROLE
 //!   reports per-shard, which is correct for a sharded primary
@@ -43,16 +37,15 @@ pub(crate) struct ReplicationView {
     pub(crate) replicas: Vec<(Ipv4Addr, u16, u64, Option<kevy_rt::ReplicaAck>)>,
 }
 
-/// `ROLE` — see <https://redis.io/commands/role/>. v1.18 mapping:
+/// `ROLE` — see <https://redis.io/commands/role/>. Mapping:
 ///
 /// - master (standalone / primary, OR replica with no active runner) →
-///   `["master", <offset>, []]` (per-replica array intentionally empty;
-///   offset is this shard's `next_offset` at the most recent tick).
+///   `["master", <offset>, [(ip, port, offset)…]]` (offset is this
+///   shard's `next_offset` at the most recent tick).
 /// - replica (any time a runner is live — set by `REPLICAOF host port`
 ///   or by startup `role = "replica"`) → `["slave", <host>, <port>,
 ///   "connect", 0]` (host/port from the live upstream slot; status is
-///   `"connect"` — a richer status would require runner→view feedback
-///   tracked as a T1.31 follow-up).
+///   `"connect"` — a richer status would require runner→view feedback).
 ///
 /// Live state wins over startup config: a server that started as
 /// `standalone` but ran `REPLICAOF` later reports `slave` until
@@ -61,18 +54,18 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut 
     if args.len() != 1 {
         return wrong_args(out, "role");
     }
-    // v3-cluster Phase 1.5: kevy-elect's live view wins over both
+    // kevy-elect's live view wins over both
     // dynamic REPLICAOF and static config when the operator
     // configured `[cluster] peers = "..."`. Otherwise fall through
-    // to the v1.18 logic (REPLICAOF state → static config).
+    // to the REPLICAOF-state → static-config precedence below.
     if let Some(snap) = ctx.state.election.current_snapshot() {
         use kevy_elect::message::Role as ElectRole;
         match snap.role {
             ElectRole::Primary => return emit_master(ctx, out),
             ElectRole::Replica | ElectRole::Candidate => {
                 // Use the elector's current_primary as the upstream
-                // address-string; v1.19 advertises `host:port` of
-                // the kevy compat port in `ANNOUNCE`, so the
+                // address-string; `ANNOUNCE` advertises `host:port`
+                // of the kevy compat port, so the
                 // primary id resolves to a parseable addr.
                 let (host, port) = match snap.current_primary.as_deref() {
                     Some(_addr_or_id) => current_primary_host_port_from_config(ctx),
@@ -118,7 +111,7 @@ fn current_primary_host_port_from_config(ctx: &Ctx<'_>) -> (String, u16) {
     (String::new(), 0)
 }
 
-/// `REPLICAOF host port` / `REPLICAOF NO ONE` (T1.29.5 / T1.30).
+/// `REPLICAOF host port` / `REPLICAOF NO ONE`.
 ///
 /// Parses + validates argv, then:
 /// - `NO ONE` → [`crate::replication::demote_to_standalone`] (stops
@@ -171,12 +164,12 @@ fn emit_master(ctx: &Ctx<'_>, out: &mut Vec<u8>) {
     encode_array_len(out, 3);
     encode_bulk(out, b"master");
     encode_integer(out, view.master_repl_offset as i64);
-    // T1.28.5: inner per-replica list now populated with
+    // The inner per-replica list carries
     // `(ip, port, sent_offset)` triples. Redis encodes the port +
     // offset as **bulk strings** (not integers) — matches the shape
     // most clients (incl. redis-rs) parse against.
     encode_array_len(out, view.replicas.len() as i64);
-    // v3.14 D2: ROLE reports the replica's ACKED offset when it has
+    // ROLE reports the replica's ACKED offset when it has
     // one (real acknowledgment), falling back to sent (pre-first-ACK).
     for (ip, port, sent, acked) in &view.replicas {
         let ip_str = ip.to_string();
@@ -262,7 +255,7 @@ mod tests {
 
     #[test]
     fn role_master_emits_per_replica_array() {
-        // T1.28.5: with 2 replicas in the view, ROLE emits the
+        // With 2 replicas in the view, ROLE emits the
         // inner array with `(ip, port, offset)` triples — each as
         // bulk strings (Redis convention).
         let out = run(12345, 2);

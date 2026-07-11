@@ -31,13 +31,13 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
             encode_error(&mut out, "ERR internal error");
             SmallReply::from_vec(out)
         }
-        // `:N` is ≤ 22 bytes — inline, no alloc. MinInt (v3.16 WAIT)
+        // `:N` is ≤ 22 bytes — inline, no alloc. MinInt (WAIT)
         // shares the integer shape; a MIN that stayed at the i64::MAX
         // sentinel means zero shards folded (can't happen — remaining
         // == nshards ≥ 1), clamp to 0 defensively.
         Agg::SumInt(n) => encode_inline_int(n),
         Agg::MinInt(n) => encode_inline_int(if n == i64::MAX { 0 } else { n }),
-        // v3.16 D2 REPL.WAIT barrier: all shards met → +OK, else the
+        // REPL.WAIT barrier: all shards met → +OK, else the
         // command layer's pre-built miss reply (-MISDIRECTED …).
         Agg::ReplBarrier { ok, miss } => {
             if ok {
@@ -46,7 +46,7 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
                 SmallReply::from_vec(miss)
             }
         }
-        // v3.16 D2 REPL.TOKEN: flat integer array [gen0, off0, gen1,
+        // REPL.TOKEN: flat integer array [gen0, off0, gen1,
         // off1, …] in shard order. A missing slot can't happen (the
         // slot completes only after every shard folded); 0s defend.
         Agg::ReplTokens { slots } => {
@@ -149,7 +149,7 @@ fn finalize_keys(shape: KeyShape, acc: Vec<Vec<u8>>) -> Vec<u8> {
 /// and reclaimable via XAUTOCLAIM — the same place they'd be after a client
 /// crash mid-read. Pre-validating across shards would cost an extra
 /// round-trip on every multi-stream XREADGROUP; the error path is rare and
-/// recoverable, so the trade-off stands (RFC 2026-06-11).
+/// recoverable, so the trade-off stands.
 fn finalize_xread_gather(slots: Vec<Option<Vec<u8>>>) -> Vec<u8> {
     for slot in slots.iter().flatten() {
         if slot.first() == Some(&b'-') {
@@ -281,7 +281,7 @@ pub(crate) fn pubsub_message(channel: &[u8], msg: &[u8], proto: RespVersion) -> 
     out
 }
 
-/// **H2.A (v1.25)**: pubsub `message` frame WITHOUT the body payload —
+/// Pubsub `message` frame WITHOUT the body payload —
 /// emits everything up to (but not including) the message bytes and the
 /// trailing CRLF. The caller writes `<header><body><\r\n>` where the
 /// `<body>` is splice-inserted via `Conn::output_arcs` (zero memcpy of
@@ -412,11 +412,11 @@ pub fn shard_of(key: &[u8], n: usize, slots: bool) -> usize {
     if slots {
         return slot_to_shard(kevy_hash::key_hash_slot(key), n);
     }
-    // v1.27.4: respect `{hashtag}` even in non-cluster mode so EVAL
+    // Respect `{hashtag}` even in non-cluster mode so EVAL
     // scripts can colocate keys via the standard `{tag}:k1` /
     // `{tag}:k2` pattern (matches Redis Cluster semantics). Keys
     // WITHOUT `{...}` hash whole-key — byte-identical to the
-    // pre-v1.27.4 routing, so no migration for existing keyspaces.
+    // pre-hashtag routing, so no migration for existing keyspaces.
     let hash_input = hashtag(key).unwrap_or(key);
     let h = hash_input.kevy_hash();
     if n.is_power_of_two() {

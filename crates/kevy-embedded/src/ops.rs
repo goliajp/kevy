@@ -5,9 +5,9 @@
 //! and `pubsub::PubsubBus` (the in-process bus); they hold the embedded
 //! mutex for the duration of the underlying call, then drop it. AOF
 //! logging + post-write eviction sweep run via `commit_write` from
-//! `store.rs`. Behaviour and ABI are unchanged from the v1.1.0 single-file
-//! layout — this module only exists to keep `store.rs` under the 500-LOC
-//! cap.
+//! `store.rs`. Behaviour and ABI are unchanged from the original
+//! single-file layout — this module only exists to keep `store.rs` under
+//! the 500-LOC cap.
 
 use crate::KevyResult;
 use std::time::Duration;
@@ -44,7 +44,8 @@ impl Store {
     /// **absolute** `PEXPIREAT` deadline (not the relative `ttl`) so the key
     /// expires at the same wall-clock instant after a restart — a relative
     /// `PEXPIRE` would be re-anchored to replay-time, resetting the TTL to a
-    /// fresh full duration on every restart (INC-2026-06-09).
+    /// fresh full duration on every restart (seen as a production
+    /// incident: cache keys never expired across restarts).
     pub fn set_with_ttl(&self, key: &[u8], value: &[u8], ttl: Duration) -> KevyResult<bool> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
@@ -169,7 +170,7 @@ impl Store {
             inner.store.flushall();
             commit_write(inner, &[b"FLUSHALL"])
         });
-        // v2.3 feed contract: FLUSHALL breaks stream continuity.
+        // CDC feed contract: FLUSHALL breaks stream continuity.
         #[cfg(not(target_arch = "wasm32"))]
         self.feed_bump_on_flush();
         r

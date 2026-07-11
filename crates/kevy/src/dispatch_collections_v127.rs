@@ -1,4 +1,4 @@
-//! v1.27.3 BullMQ-enabling helpers — `LPOS`, `ZPOPMIN`,
+//! BullMQ-enabling helpers — `LPOS`, `ZPOPMIN`,
 //! `ZREVRANGEBYSCORE`. Their argv parsers are too verbose to inline in
 //! the per-type `match` tables in [`crate::dispatch_collections`], so
 //! the table rows delegate to the `cmd_*` functions defined here.
@@ -186,7 +186,7 @@ pub(crate) fn cmd_zpopmin<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out
     }
 }
 
-/// v2.4 `ZPOPMIN.BELOW key below [count]` — pop up to `count`
+/// `ZPOPMIN.BELOW key below [count]` — pop up to `count`
 /// (default one) lowest members with score strictly `< below`. The
 /// delayed-job primitive: score = due time, `below` = now → "pop
 /// what's due" atomically. Reply mirrors `ZPOPMIN`.
@@ -307,7 +307,7 @@ fn parse_zrevrange_opts<A: ArgvView + ?Sized>(
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// v1.27.5 ecosystem-unblock additions: SSCAN / HSCAN / ZSCAN
+// Ecosystem-unblock additions: SSCAN / HSCAN / ZSCAN
 // ─────────────────────────────────────────────────────────────────────
 //
 // Cursor-based iterators for Set / Hash / Sorted-Set. Sidekiq's

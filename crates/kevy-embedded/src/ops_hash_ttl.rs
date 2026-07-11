@@ -1,4 +1,4 @@
-//! v2.4 — embedded hash field-TTL facades (Redis 7.4 family).
+//! Embedded hash field-TTL facades (Redis 7.4 family).
 //!
 //! AOF: deadline writes log the canonical absolute `HPEXPIREAT`
 //! frame regardless of which facade set them (relative forms convert

@@ -50,32 +50,32 @@ pub(crate) struct ReplicationState {
     /// Current upstream `(host, port_base)` — `None` when not running
     /// as a replica. `ROLE` / `INFO replication` report it.
     upstream: Mutex<Option<(IpAddr, u16)>>,
-    /// v3.2 single-source mode (config `--replica-single-source`):
+    /// Single-source mode (config `--replica-single-source`):
     /// ONE upstream port, one stream, a single routing runner fanning
     /// into every shard inbox.
     single_source: bool,
-    /// v3.14 A0 — hot-path role flag: `true` while replica runners are
+    /// Hot-path role flag: `true` while replica runners are
     /// active. Read every client write via `Commands::write_denied`,
     /// so it's an atomic, not the upstream mutex.
     is_replica: AtomicBool,
     /// `replica-read-only` config (default ON, Redis-compatible).
     read_only: AtomicBool,
-    /// v3.14 D5 — `min-replicas-to-write` (0 = off).
+    /// `min-replicas-to-write` (0 = off).
     min_replicas: AtomicU32,
-    /// v3.15 D3 — planned-failover quiesce: while `Some(target)`,
+    /// Planned-failover quiesce: while `Some(target)`,
     /// every client write answers `-QUIESCED migrating to <target>`
     /// (the cluster-rw client retries with backoff and follows).
     /// Cleared on completion or abort. The hot path never takes this
-    /// mutex — the per-shard gate bits (K-103 W5) answer "possibly
+    /// mutex — the per-shard gate bits answer "possibly
     /// quiesced"; only the already-gated slow path locks it to render
     /// the error text.
     quiesce_to: Mutex<Option<String>>,
-    /// v3.16 D4 — primary quorum lease fence.
+    /// Primary quorum lease fence.
     quorum_fenced: AtomicBool,
-    /// v3.16 D3 — bounded staleness (0 = off). Set from config at
+    /// Bounded staleness (0 = off). Set from config at
     /// boot; CONFIG SET updates it live (the operator escape hatch).
     max_staleness_ms: AtomicU64,
-    /// v3.16 D2 — promotion counter. Bumped on every replica → primary
+    /// Promotion counter. Bumped on every replica → primary
     /// transition ([`Self::promote_stop_runners`]); each shard observes
     /// it through `Commands::live_runtime_config` and bumps its feed
     /// generation, fencing the pre-failover offset space against stale
@@ -84,7 +84,7 @@ pub(crate) struct ReplicationState {
     promotion_epoch: AtomicU64,
     /// The narrow heartbeat/offset slice runner threads write into.
     progress: Arc<ReplicaProgress>,
-    /// K-103 W5 — the instance-wide gate invalidation counter, shared
+    /// The instance-wide gate invalidation counter, shared
     /// with [`RuntimeState`](crate::RuntimeState) (`Arc` because the
     /// election callback and the FAILOVER thread hold only this
     /// narrow slice, yet their role flips must invalidate every
@@ -238,7 +238,7 @@ impl ReplicationState {
         self.is_replica.load(Ordering::Relaxed)
     }
 
-    /// v3.15 restart-role clamp: mark this node a replica WITHOUT any
+    /// Restart-role clamp: mark this node a replica WITHOUT any
     /// runners — a restarted quorum member holds writes until an
     /// election outcome flips the flag (win → stop_runners clears it).
     pub(crate) fn force_replica_flag(&self) {
@@ -274,7 +274,7 @@ impl ReplicationState {
         self.quiesce_to.lock().expect("quiesce_to poisoned").is_some()
     }
 
-    /// v3.16 D4 — flip the quorum lease fence. Returns whether the
+    /// Flip the quorum lease fence. Returns whether the
     /// flag CHANGED (callers log transitions only).
     pub(crate) fn set_quorum_fence(&self, on: bool) -> bool {
         let changed = self.quorum_fenced.swap(on, Ordering::Relaxed) != on;
@@ -284,7 +284,7 @@ impl ReplicationState {
         changed
     }
 
-    /// Cold-path gate input (K-103 W5): could a client write be denied
+    /// Cold-path gate input: could a client write be denied
     /// right now? Mirrors [`Self::write_denied_reply`]'s deny set —
     /// `false` here means the slow path would certainly answer `None`.
     /// `min_replicas > 0` on a primary always reports `true`: the
@@ -297,7 +297,7 @@ impl ReplicationState {
             || (!self.is_replica() && self.min_replicas.load(Ordering::Relaxed) > 0)
     }
 
-    /// Cold-path gate input (K-103 W5): could a client read be denied?
+    /// Cold-path gate input: could a client read be denied?
     /// Staleness is a time condition — the bit only says "bounded
     /// replica"; the slow path loads the live heartbeat.
     pub(crate) fn read_possibly_gated(&self) -> bool {
@@ -329,7 +329,7 @@ impl ReplicationState {
     }
 
     /// Sum of every runner's applied stream position — the
-    /// replica-side election offset (v3.15 D1). Comparable with the
+    /// replica-side election offset. Comparable with the
     /// primary side's per-shard `master_repl_offset` sum: both count
     /// "replication-stream position, totalled across streams", and on
     /// a fully-caught-up replica the two sums are equal. 0 when no
@@ -365,7 +365,7 @@ impl ReplicationState {
 
     /// The write-availability gate, in fence-strength order: quorum
     /// fence → quiesce → replica read-only → min-replicas. `None` =
-    /// the write may proceed. Slow path only (K-103 W5): callers reach
+    /// the write may proceed. Slow path only: callers reach
     /// here after the per-shard `WRITE_GATED` bit fired, so taking the
     /// quiesce mutex to render the error text is off the common path.
     /// `healthy_replicas` supplies the answering shard's view-derived

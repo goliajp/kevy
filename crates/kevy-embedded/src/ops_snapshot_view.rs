@@ -1,4 +1,4 @@
-//! v2.4 — public point-in-time snapshot view.
+//! Public point-in-time snapshot view.
 //!
 //! [`Store::snapshot`] freezes a consistent COW view of the WHOLE
 //! keyspace: all shard write locks are taken in shard order (the same

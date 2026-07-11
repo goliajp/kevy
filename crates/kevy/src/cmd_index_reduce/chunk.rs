@@ -67,12 +67,12 @@ pub(super) fn value_repr(v: &IndexValue) -> Vec<u8> {
     }
 }
 
-/// v2.6: view reduce reuses the (value,key) cursor encoding.
+/// The view reduce reuses the (value,key) cursor encoding.
 pub(crate) fn encode_view_cursor_bytes(v: &IndexValue, k: &[u8]) -> Vec<u8> {
     encode_cursor(v, k)
 }
 
-/// v2.6: shared chunk readers + value repr for the view reduce.
+/// Shared chunk readers + value repr for the view reduce.
 pub(crate) fn read_u32_at(c: &[u8], pos: &mut usize) -> Option<u32> {
     read_u32(c, pos)
 }
@@ -94,7 +94,7 @@ pub(super) fn encode_cursor(v: &IndexValue, k: &[u8]) -> Vec<u8> {
     hex(&payload)
 }
 
-/// v3.10 D5 — RESP3 upgrade for extension replies: pair-array shaped
+/// RESP3 upgrade for extension replies: pair-array shaped
 /// verbs (IDX.EXPLAIN) re-emit as a Map on a HELLO 3 conn. Purely a
 /// wire-shape transform of the already-reduced RESP2 bytes: `*N` of
 /// 2-arrays → `%N/2` of flat pairs. Verbs whose replies are NOT

@@ -66,8 +66,8 @@ impl Store {
         }
         // The dst SET is AOF-logged above under dst's shard lock; the
         // TTL re-attach goes through the `pexpireat` facade which logs
-        // its own PEXPIREAT. (v1.15.1: before this, the dst value was
-        // written to memory only and vanished on reopen.)
+        // its own PEXPIREAT. (An earlier regression wrote the dst value
+        // to memory only, so it vanished on reopen.)
         Ok(true)
     }
 
@@ -110,7 +110,7 @@ impl Store {
 }
 
 impl crate::Store {
-    /// v2.10 — order-insensitive prefix checksum for migration
+    /// Order-insensitive prefix checksum for migration
     /// verification: `(row_count, xor_of_row_digests)`. Matches the
     /// server's `PREFIX.DIGEST` bit for bit (same canonicalization).
     pub fn prefix_digest(&self, prefix: &[u8]) -> (u64, u64) {

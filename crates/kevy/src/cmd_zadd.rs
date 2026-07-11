@@ -41,7 +41,7 @@ fn parse_zadd_flags<A: ArgvView + ?Sized>(
 }
 
 /// `ZADD key [NX|XX] [GT|LT] [CH] [INCR] score member [score member ...]`.
-/// G4 (v1.25): borrowed-pair path; the no-flags form stays on the
+/// Borrowed-pair path; the no-flags form stays on the
 /// original `zadd` fast path untouched.
 pub(crate) fn cmd_zadd<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
     let (flags, incr, first) = match parse_zadd_flags(args) {

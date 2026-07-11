@@ -1,11 +1,9 @@
-//! T3.19 e2e: `MOVE-SCOPE` command round-trips against a mock
+//! E2e: `MOVE-SCOPE` command round-trips against a mock
 //! target. Validates the full wire path (TCP connect → ship request
 //! → bulk parse → embedded command apply on target → `+OK <count>`
 //! reply → source `migration_commit`) without requiring two real
-//! `kevy_rt::Runtime` peers in the same test binary.
-//!
-//! Two-peer e2e with real Runtimes lands as T3.16-T3.18 (the
-//! cluster-port flake-prone multi-server harness needs more work to
+//! `kevy_rt::Runtime` peers in the same test binary (the
+//! cluster-port flake-prone multi-server harness can't yet
 //! cleanly host two configs in one binary).
 
 #![cfg(not(target_arch = "wasm32"))]

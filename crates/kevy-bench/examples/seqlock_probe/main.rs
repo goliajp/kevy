@@ -1,9 +1,10 @@
-//! seqlock_probe — v4 T9b / K-903 L1 pre-work gate prototype.
+//! seqlock_probe — pre-work gate prototype for the shared-read keyspace
+//! design.
 //!
-//! Question under judgement: can GET's cross-shard forwarding (decomp
-//! PERF-DECOMP-V4-T9 §6 L1: 12% direct + up to +65% cycles in spread) be
-//! removed by a seqlock-protected shared-read keyspace — any shard reads
-//! any key directly, writes stay shard-owned?
+//! Question under judgement: can GET's cross-shard forwarding (measured
+//! by the GET-pipeline decomposition at 12% direct + up to +65% cycles
+//! in spread) be removed by a seqlock-protected shared-read keyspace —
+//! any shard reads any key directly, writes stay shard-owned?
 //!
 //! Gate criteria (fixed before implementation):
 //!   G1  torn reads = 0 over ≥1M mixed-class reads under write pressure

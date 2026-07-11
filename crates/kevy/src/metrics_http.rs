@@ -1,4 +1,4 @@
-//! v1.41 — Prometheus `/metrics` HTTP exposition endpoint.
+//! Prometheus `/metrics` HTTP exposition endpoint.
 //!
 //! Std-only tiny HTTP/1.1 server (0-dep, no `hyper`). One background
 //! thread per `serve()` call; accepts conns serially (scrapers are

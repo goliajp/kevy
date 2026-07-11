@@ -26,7 +26,8 @@ pub enum Route {
     /// background; the command returns once the views are frozen.
     BgSave,
     /// `BGREWRITEAOF` — rebuild every shard's AOF from in-memory state.
-    /// Synchronous in v1.0 (each shard blocks for its own rewrite duration).
+    /// Each shard freezes a COW view and hands the dump to its persist
+    /// worker, so the reply returns before the rewrite is durable.
     RewriteAof,
     /// `MSET` — `args[1..]` are key/value pairs, routed per key's shard.
     MSet,
@@ -34,31 +35,31 @@ pub enum Route {
     /// `SDIFF` / `ZINTERCARD`): each key's payload is fetched on its
     /// owning shard and the origin reduces them per [`crate::MultiOp`].
     Gather(crate::MultiOp),
-    /// v2.2 zset/set algebra `*STORE` family: gather sources, combine
+    /// zset/set algebra `*STORE` family: gather sources, combine
     /// per [`crate::message::ZCombine`], materialize at `args[1]`.
     ZAlgebraStore(crate::ZCombine),
-    /// v2.3 `FEED.READ <shard> <gen> <offset> …` — shard-index routed.
+    /// `FEED.READ <shard> <gen> <offset> …` — shard-index routed.
     FeedRead,
-    /// v2.3 `FEED.TAIL <shard>`.
+    /// `FEED.TAIL <shard>`.
     FeedTail,
-    /// v2.3 `FEED.SHARDS` — answered locally.
+    /// `FEED.SHARDS` — answered locally.
     FeedShards,
-    /// v2.3 `PREFIX.STATS <prefix>` — all-shard fanout, summed.
+    /// `PREFIX.STATS <prefix>` — all-shard fanout, summed.
     PrefixStats,
-    /// v2.5 extension fan-out (IDX.* reads): every shard runs
+    /// Extension fan-out (IDX.* reads): every shard runs
     /// `Commands::extension_op`, the origin reduces.
     Extension,
-    /// v3.16 D1 `WAIT numreplicas timeout` — all-shard barrier: each
+    /// `WAIT numreplicas timeout` — all-shard barrier: each
     /// shard answers (possibly deferred until its replicas ACK or the
     /// deadline) with how many of its replicas acked its
     /// `master_repl_offset` at arm time; the origin replies the MIN.
     /// `timeout_ms == 0` = the Redis "wait forever" form (the runtime
     /// hard-caps it — see `exec_replwait::WAIT_HARD_CAP_MS`).
     ReplWait { numreplicas: u32, timeout_ms: u64 },
-    /// v3.16 D2 `REPL.TOKEN` on a primary — gather every shard's
+    /// `REPL.TOKEN` on a primary — gather every shard's
     /// `(feed generation, next_offset)` pair into one flat array.
     ReplToken,
-    /// v3.16 D2 `REPL.WAIT` on a replica — all-shard applied barrier:
+    /// `REPL.WAIT` on a replica — all-shard applied barrier:
     /// shard `i` answers once its replication-apply position reaches
     /// `offsets[i]` (or the deadline passes). All met → `+OK`; any
     /// timeout → the pre-built `miss` reply (kevy sends

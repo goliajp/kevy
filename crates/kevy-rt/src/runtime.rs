@@ -34,10 +34,11 @@ pub struct Runtime<C: Commands> {
     /// for the per-shard counter; the [`Shard`] field carries it
     /// forward into the loop.
     pub(crate) spin_limit: u32,
-    /// **v1.30** — `Some(N)` = only shards `0..N` arm accept SQE. `None`
-    /// = every shard accepts (v1.29 byte-identical).
+    /// `Some(N)` = only shards `0..N` arm accept SQE. `None`
+    /// = every shard accepts (the default; byte-identical to the
+    /// pre-flag behaviour).
     pub(crate) accept_shards: Option<usize>,
-    /// **v1.37** — total cap on active client conns. `0` = unlimited.
+    /// Total cap on active client conns. `0` = unlimited.
     pub(crate) max_clients: usize,
     /// Reactor blocking-wait timeout in ms when parked.
     pub(crate) park_timeout_ms: u32,
@@ -56,13 +57,13 @@ pub struct Runtime<C: Commands> {
     /// → contiguous ranges) + one deterministic extra listener per shard at
     /// `cluster_port_base + id`. `None` = off (default, zero change).
     pub(crate) cluster_port_base: Option<u16>,
-    /// v3-cluster replication: when `true`, each shard runs a
+    /// Replication: when `true`, each shard runs a
     /// `ReplicationSource` with `replication_buffer_size` byte budget;
-    /// every applied mutation is pushed to the backlog. The TCP
-    /// listener + streaming loop arrive in subsequent tasks (T1.12+);
-    /// this batch only wires the producer side. Default `false`.
+    /// every applied mutation is pushed to the backlog. This wires
+    /// only the producer side — the TCP listener + streaming loop are
+    /// gated separately by `replication_port_base`. Default `false`.
     pub(crate) enable_replication: bool,
-    /// v2.3: FEED.* consumer surface. When set, every shard keeps a
+    /// FEED.* consumer surface. When set, every shard keeps a
     /// backlog (even with no replicas) and persists the (generation,
     /// offset) cursor via the feed sidecars.
     pub(crate) feed_enabled: bool,
@@ -81,7 +82,7 @@ pub struct Runtime<C: Commands> {
     /// without a network surface, backlog accumulates and evicts —
     /// useful for benchmarks). Default `None`.
     pub(crate) replication_port_base: Option<u16>,
-    /// Per-shard SlotTable reconnect-window in ms (T1.15). After a
+    /// Per-shard SlotTable reconnect-window in ms. After a
     /// streaming replica disconnects, its `(replica_id, sent_offset)`
     /// is recorded in the shard's `slots` map; slots past this age
     /// are reaped on the next shard tick. Default `60_000` (60 s)
@@ -93,7 +94,7 @@ pub struct Runtime<C: Commands> {
     /// receiver flows from this Vec to the matching `Shard.replica_inbox`.
     /// Empty when no replica mode is configured.
     pub(crate) replica_inboxes: Vec<Option<crate::replica_inbox::ReplicaInboxReceiver>>,
-    /// v1.25 UDS: when `Some(path)`, ALSO bind a Unix-domain stream
+    /// UDS: when `Some(path)`, ALSO bind a Unix-domain stream
     /// listener at `path` on shard 0 (single global socket, like valkey's
     /// `unixsocket` config). Lets benches/local clients skip TCP loopback
     /// overhead. TCP listener stays bound regardless.
@@ -155,7 +156,7 @@ impl<C: Commands> Runtime<C> {
     }
 
     /// Spawn one thread per shard and run until `stop` is set.
-    /// v1.25 UDS: also bind a Unix-domain stream listener at `path`. Lets
+    /// UDS: also bind a Unix-domain stream listener at `path`. Lets
     /// local clients (and benchmarks) skip the TCP loopback round-trip.
     /// Bound on shard 0 only (no SO_REUSEPORT for AF_UNIX, single global
     /// socket like valkey's `unixsocket` config). TCP listener stays

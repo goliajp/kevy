@@ -76,17 +76,17 @@ pub(crate) struct Inner {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) writer_source:
         Option<std::sync::Arc<Mutex<kevy_replicate::source::ReplicationSource>>>,
-    /// v2.3 CDC feed (one stream per store); every shard holds a clone
+    /// CDC feed (one stream per store); every shard holds a clone
     /// so `commit_write` pushes effects inline. `None` = feed off.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) feed: Option<std::sync::Arc<Mutex<kevy_replicate::feed::FeedSource>>>,
-    /// v2.4 blocking-pop wake channel clone (see `Store::blocker`).
+    /// Blocking-pop wake channel clone (see `Store::blocker`).
     pub(crate) blocker: Option<Arc<crate::ops_blocking::Blocker>>,
-    /// v2.5: this shard's index segments + the store-level registry
+    /// This shard's index segments + the store-level registry
     /// handle (for the commit_write hook).
     pub(crate) idx_segs: crate::ops_index::ShardSegs,
     pub(crate) idx_reg: Option<Arc<crate::ops_index::IndexReg>>,
-    /// v2.6: this shard's view states + registry handle.
+    /// This shard's view states + registry handle.
     pub(crate) view_segs: crate::ops_view::ShardViews,
     pub(crate) view_reg: Option<Arc<crate::ops_view::ViewReg>>,
 }
@@ -123,7 +123,7 @@ pub(crate) struct DropGuard {
     /// clone goes away.
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) replica_runner: Option<crate::replica_runner::ReplicaRunner>,
-    /// v2.3: feed close-marker inputs — the feed handle + data dir,
+    /// Feed close-marker inputs — the feed handle + data dir,
     /// present iff feed enabled AND persistent. Written after the AOF
     /// flush so the marker's cursor describes durable state.
     #[cfg(not(target_arch = "wasm32"))]
@@ -173,7 +173,7 @@ impl Drop for DropGuard {
                 let _ = aof.maybe_sync();
             }
         }
-        // v2.3: with the AOF durable, record the feed continuity
+        // With the AOF durable, record the feed continuity
         // marker — the cursor now exactly describes on-disk state.
         #[cfg(not(target_arch = "wasm32"))]
         if let Some((feed, dir)) = &self.feed_close {

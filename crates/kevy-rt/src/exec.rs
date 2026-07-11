@@ -15,8 +15,8 @@ use kevy_resp::{Argv, ArgvView, RespVersion, encode_array_len};
 impl<C: Commands> Shard<C> {
     /// Apply transaction state (queue inside MULTI), else dispatch the command.
     pub(crate) fn handle_command<A: ArgvView + ?Sized>(&mut self, conn_id: u64, args: &A) {
-        // v2.0.16: CLIENT SETNAME / CLIENT GETNAME intercept (closes
-        // v1.52.x finding). These need per-conn state which the
+        // CLIENT SETNAME / CLIENT GETNAME intercept.
+        // These need per-conn state which the
         // stateless `cmd_client` dispatch can't access; handle in-line
         // here where we already own `&mut Conn` via `self.conns`. All
         // other CLIENT subcommands fall through to the standard
@@ -183,7 +183,7 @@ impl<C: Commands> Shard<C> {
             wake_idx,
             ..
         } = resolved;
-        // v3.14 A0: role-gated write rejection (read-only replica).
+        // Role-gated write rejection (read-only replica).
         // `seq` is already assigned by handle_command — resolve it
         // directly (immediate_reply would double-assign and wedge the
         // emit order).
@@ -207,13 +207,13 @@ impl<C: Commands> Shard<C> {
             Route::Unwatch => self.do_unwatch(conn_id, seq),
             Route::Hello => self.do_hello(conn_id, seq, args),
             Route::Rename { nx } => self.start_rename(conn_id, seq, args, nx),
-            // v2.3 FEED.* — parse + shard-index dispatch live in
+            // FEED.* — parse + shard-index dispatch live in
             // [`crate::exec_feed`] (500-LOC house rule).
             r @ (Route::FeedShards | Route::FeedTail | Route::FeedRead) => {
                 self.start_feed_route(conn_id, seq, args, &r, is_quit);
             }
             Route::Slowlog(sub) => self.start_slowlog(conn_id, seq, sub),
-            // v3.16 WAIT / REPL.WAIT — deferred all-shard barriers; own
+            // WAIT / REPL.WAIT — deferred all-shard barriers; own
             // starters (not dispatch_targets) so a parked waiter never
             // rides `xshard_inflight` (see [`crate::exec_replwait`]).
             Route::ReplWait { numreplicas, timeout_ms } => {
@@ -249,7 +249,7 @@ impl<C: Commands> Shard<C> {
                 let meta = DispatchMeta { is_write, wake_idx, key_idx: Some(idx as u8) };
                 self.start_single(conn_id, seq, proto, args, shard, is_quit, block_hint, meta);
             }
-            // v1.56: cluster conns get `-CROSSSLOT` on cross-slot multi-key
+            // Cluster conns get `-CROSSSLOT` on cross-slot multi-key
             // (MGET/MSET/SINTER/SUNION/SDIFF); else fan-out as before.
             other => self.start_multi_or_crossslot(
                 conn_id, seq, args, other, is_quit, cluster_conn,
@@ -260,7 +260,7 @@ impl<C: Commands> Shard<C> {
     // `start_single` + `try_inline_local` (and their helpers `park_blocked`
     // / `post_write_housekeeping`) live in [`crate::exec_dispatch`] —
     // same `impl<C: Commands> Shard<C>`, split out so this file stays
-    // under the 500-LOC house rule. v1.56 CROSSSLOT helpers live in
+    // under the 500-LOC house rule. CROSSSLOT helpers live in
     // [`crate::exec_crossslot`] for the same reason.
 
     /// Multi-target / aggregating command (DEL, MGET, DBSIZE, fan-outs, …).
@@ -333,8 +333,8 @@ impl<C: Commands> Shard<C> {
 
     /// Flush each shard's accumulated single-key dispatch batch as one
     /// cross-core `RequestBatch`. Call once per reactor loop. The bitmap
-    /// short-circuit (D3 2026-06-20) early-returns when no shard has
-    /// pending requests. E17 tried splitting the slow body into a
+    /// short-circuit early-returns when no shard has
+    /// pending requests. An earlier attempt tried splitting the slow body into a
     /// `#[inline(never)]` helper and reverted — body is small enough
     /// that LLVM inlines it cleanly; forcing the outline added a fn
     /// call on the cross-shard hot path with no upside.
@@ -379,13 +379,13 @@ impl<C: Commands> Shard<C> {
     /// it is a *relative*-TTL write (`EXPIRE`/`PEXPIRE`/`SETEX`/`PSETEX`/
     /// `SET … EX|PX`) it appends an absolute `PEXPIREAT key <unix_ms>` derived
     /// from the key's post-exec deadline. AOF replay re-anchors a relative TTL
-    /// to restart-time — resetting every key to a fresh full TTL
-    /// (INC-2026-06-09) — so the absolute follow-up overwrites that with the
+    /// to restart-time — resetting every key to a fresh full TTL (a
+    /// production incident root cause) — so the absolute follow-up overwrites that with the
     /// original wall-clock deadline. Already-absolute writes (`EXPIREAT`/
     /// `PEXPIREAT`) replay correctly and need no follow-up.
     pub(crate) fn log_write<A: ArgvView + ?Sized>(&mut self, args: &A) {
         self.log(args);
-        // v2.4: hash field-TTL relative forms get the same absolute
+        // Hash field-TTL relative forms get the same absolute
         // follow-up discipline — `HPEXPIREAT key <abs> FIELDS …`
         // re-anchors the replay-time deadline to the original wall
         // clock. HPEXPIREAT itself is already absolute.
@@ -413,7 +413,7 @@ impl<C: Commands> Shard<C> {
         self.log(&c);
     }
 
-    /// v2.4 log_write helper: rewrite a relative `HEXPIRE`/`HPEXPIRE`
+    /// log_write helper: rewrite a relative `HEXPIRE`/`HPEXPIRE`
     /// frame's deadline as absolute unix-ms and append the canonical
     /// `HPEXPIREAT` follow-up (fields tail copied verbatim).
     fn log_hash_ttl_followup<A: ArgvView + ?Sized>(&mut self, args: &A) {

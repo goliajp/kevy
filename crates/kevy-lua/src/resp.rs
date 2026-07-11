@@ -7,7 +7,7 @@
 //! command surface settles. The encoded bytes are wire-equivalent
 //! either way.
 //!
-//! This module is **pure** — encoders only, no luna types. The
+//! This module is **pure** — encoders only, no interpreter types. The
 //! Lua-aware marshaling (table → array, `{ok=}` / `{err=}`
 //! recognition) lives in the parent module's `marshal` function
 //! which composes these encoders.

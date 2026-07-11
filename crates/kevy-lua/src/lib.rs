@@ -1,11 +1,11 @@
 //! kevy-lua — Redis EVAL / EVALSHA / SCRIPT surface backed by luna-core.
 //!
-//! kevy's v1.27 script-host layer. Thin "cement" crate (per the
+//! kevy's script-host layer. Thin "cement" crate (per the
 //! stone-cement-stone model) — it carries no algorithmic content, only
 //! the bridge between kevy-rt's command dispatch path, kevy-resp's
 //! wire codec, and luna-core's sandboxed `Vm`.
 //!
-//! Design lock-in (see `.claude/rfcs/2026-06-23-v1.27-luna-bridge.md`):
+//! Design lock-in:
 //!
 //! - **Default Lua 5.1** — preserves the Redis Lua ecosystem (BullMQ,
 //!   Redlock, rate limiters, anything copied from Redis docs).
@@ -19,13 +19,11 @@
 //! - **Atomic execution** — entering EVAL pauses other dispatch on
 //!   that shard until the script returns. Matches Redis semantics.
 //!
-//! # Phase status — P1
-//!
-//! - `Bridge` holds a per-dialect Vm pool (lazy-spawned).
-//! - `eval()` runs the script under the default 5.1 sandbox and
-//!   marshals the first returned `Value` into a RESP reply.
-//! - Shebang parsing, SHA1 cache, EVALSHA, SCRIPT LOAD/EXISTS/FLUSH,
-//!   and `redis.call` host plumbing land in P2-P5 per the RFC.
+//! `Bridge` holds a per-dialect Vm pool (lazy-spawned); `eval()` runs
+//! the script under the sandbox and marshals the first returned
+//! `Value` into a RESP reply. Shebang parsing, SHA1 cache, EVALSHA,
+//! SCRIPT LOAD/EXISTS/FLUSH, and the `redis.call` host plumbing all
+//! live here.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -56,11 +54,11 @@ pub use luna_core::version::LuaVersion;
 pub(crate) use dispatch::{DispatchHandle, DispatchSlot, DISPATCH_KEY};
 
 /// Lua 5.1 / 5.2 / 5.3 / 5.4 / MacroLua / 5.5 — six fixed slots.
-/// luna v1.3 inserted `MacroLua` between `Lua54` and `Lua55` (it's a
-/// 5.4-superset compile-time-macro dialect). luna's v2.0 major bump
-/// retired the "variants appended only" promise; we explicitly map
-/// every variant to a stable slot via [`dialect_slot`] now so future
-/// luna inserts don't silently re-index the VM pool.
+/// `MacroLua` sits between `Lua54` and `Lua55` (it's a 5.4-superset
+/// compile-time-macro dialect). luna-core does not promise
+/// append-only variant ordering, so we explicitly map every variant
+/// to a stable slot via [`dialect_slot`] — an upstream variant
+/// insert can't silently re-index the VM pool.
 const N_DIALECTS: usize = 6;
 
 /// 200 M ≈ 5 s on modern hardware; matches Redis's default
@@ -87,8 +85,8 @@ pub type Reply = Vec<u8>;
 pub enum FlushMode {
     /// Synchronous — drop the cache before returning.
     Sync,
-    /// Asynchronous — schedule the cache drop. v1.27 implements
-    /// both modes as Sync; we keep the tag for future
+    /// Asynchronous — schedule the cache drop. Currently both
+    /// modes run as Sync; we keep the tag for future
     /// differentiation (and Redis-compat replies).
     Async,
 }
@@ -101,17 +99,16 @@ pub type ScriptSha1 = [u8; 20];
 
 /// kevy-lua per-shard bridge. One `Bridge` lives in each shard's
 /// runtime; it owns the per-dialect VM pool, the SHA1 cache, and
-/// (P3+) the kevy-side dispatch callback that `redis.call` invokes.
+/// the kevy-side dispatch callback that `redis.call` invokes.
 ///
 /// The bridge is intentionally NOT `Send` / `Sync` — same constraint
-/// as luna's `Vm`, which is `!Send + !Sync` by design. kevy's
+/// as luna-core's `Vm`, which is `!Send + !Sync` by design. kevy's
 /// thread-per-core model means every shard owns its bridge
 /// exclusively.
 pub struct Bridge {
     /// Lazily-spawned VM per dialect. First EVAL hitting a dialect
     /// creates the VM; reused for every subsequent script on that
-    /// dialect. Five fixed slots indexed by [`dialect_slot`] (luna
-    /// `LuaVersion` is a 0-4 discriminant in version order).
+    /// dialect. Six fixed slots indexed by [`dialect_slot`].
     vms: [Option<Vm>; N_DIALECTS],
     /// Host dispatch closure invoked by `redis.call` / `redis.pcall`.
     /// `Rc` so cheaply cloned into per-Vm userdata at construction
@@ -124,8 +121,8 @@ pub struct Bridge {
     /// walk the pool. Shared with each `DispatchSlot`.
     read_only: Rc<Cell<bool>>,
     /// Per-Vm instruction budget applied at construction time
-    /// (`Vm::sandbox(...).with_instr_budget(N)`). Default 200 M,
-    /// matches the v1.27 P1-P6 hard-coded behaviour. The kevy
+    /// (`Vm::sandbox(...).with_instr_budget(N)`). Default 200 M
+    /// (the original hard-coded value). The kevy
     /// operator wires `[lua] time_limit_ms` through here via
     /// [`Bridge::set_instr_budget`].
     ///
@@ -361,11 +358,11 @@ impl Bridge {
             }
             let mut vm = builder.build();
             host::install_redis_table(&mut vm);
-            // v1.27.3: BullMQ + Sidekiq Pro require `cmsgpack` global.
+            // BullMQ + Sidekiq Pro require the `cmsgpack` global.
             cmsgpack::install_cmsgpack(&mut vm);
             cjson::install_cjson(&mut vm);
-            // Install the dispatch handle as a luna userdata global
-            // (luna v1.1 B8). `redis.call` retrieves it via
+            // Install the dispatch handle as a userdata global.
+            // `redis.call` retrieves it via
             // `vm.userdata_borrow::<DispatchSlot>(DISPATCH_KEY)`. We
             // clone the Rc so each Vm holds an independent handle
             // pointing at the shared closure.
@@ -391,7 +388,7 @@ impl Default for Bridge {
 }
 
 fn format_lua_error(e: &luna_core::vm::error::LuaError) -> String {
-    // luna v1.1 B6: `impl Display for LuaError` — embedders no longer
+    // luna-core impls `Display for LuaError` — embedders don't
     // need to case-split on the inner Value type.
     format!("{e}")
 }

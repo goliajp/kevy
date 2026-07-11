@@ -1,5 +1,5 @@
 //! `MULTI` / `EXEC` / `DISCARD` — Redis transactions, with optional
-//! `WATCH`-driven optimistic concurrency (v1.5.0).
+//! `WATCH`-driven optimistic concurrency.
 //!
 //! Wire flow (Remote): client sends `MULTI` → server `+OK`; client sends
 //! each queued command → server `+QUEUED`; client sends `EXEC` → server
@@ -30,9 +30,9 @@
 //! # Ok::<(), kevy_client::KevyError>(())
 //! ```
 //!
-//! Each queued command's reply is the raw [`kevy_resp::Reply`] — callers
-//! parse the typed payload themselves. The reply-side decode (e.g.
-//! `let n: i64 = replies[0].as_int()?`) is a v1.6.0 candidate.
+//! [`Transaction::exec`] returns the raw [`kevy_resp::Reply`] per queued
+//! command; [`Transaction::exec_typed`] returns a [`TransactionReplies`]
+//! cursor with typed extractors (`next_int`, `next_bulk`, …) instead.
 
 use crate::{KevyError, KevyResult};
 
@@ -136,7 +136,7 @@ impl Transaction<'_> {
     ///
     /// When a `WATCH` violation aborts the transaction the server
     /// returns Nil; this method collapses that into an empty `Vec`
-    /// for backward compatibility with v1.4.x. For new code, prefer
+    /// (legacy behaviour, retained for compat). For new code, prefer
     /// [`exec_watched`](Self::exec_watched), which distinguishes
     /// "aborted by WATCH" (returns `None`) from "successful empty
     /// transaction" (returns `Some(vec![])`).
@@ -208,9 +208,9 @@ impl Transaction<'_> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Typed builders (v1.5.0). Each mirrors the same-named Connection method's
+// Typed builders. Each mirrors the same-named Connection method's
 // argument shape; on EXEC the matching index in the returned Vec carries
-// the typed payload (raw `Reply` — typed decode is a v1.6.0 candidate).
+// the raw `Reply` (use `exec_typed` for cursor-based typed decode).
 //
 // All builders return `&mut Self` so they can chain:
 //     txn.set(k, v)?.incr(c)?.del(&[k2])?;
@@ -320,7 +320,7 @@ impl Drop for Transaction<'_> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Typed EXEC reply cursor (v1.7.0). Sits between the existing raw
+// Typed EXEC reply cursor. Sits between the existing raw
 // `Vec<Reply>` API and the maximalist typestate-tuple alternative —
 // callers consume queued replies in order via per-typed extractors:
 //

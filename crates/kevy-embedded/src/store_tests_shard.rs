@@ -136,7 +136,7 @@ fn collect_keys_spans_all_shards() {
     assert_eq!(s.shard_count(), 8);
 }
 
-// ──────────────── dir interop with the server (2026-06-11) ────────────────
+// ──────────────── dir interop with the server ─────────────────────────────
 
 /// A meta-less multi-shard dir (e.g. written by a pre-meta server) used to
 /// be mistaken for the single-file layout: an n==1 open silently loaded
@@ -181,7 +181,7 @@ fn single_shard_default_names_record_meta() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// ─────────────── reshard crash-idempotency (2026-06-11) ───────────────
+// ─────────────── reshard crash-idempotency ────────────────────────────
 
 /// Crash right after a reshard's commit point (journal + `.reshard` temps
 /// on disk, sources untouched): the next open must roll the migration

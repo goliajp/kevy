@@ -1,4 +1,4 @@
-//! v3.17.3 — `kevy-cli --embed <dir>`: open an embedded store's data
+//! `kevy-cli --embed <dir>`: open an embedded store's data
 //! directory READ-ONLY and answer the same CLI syntax, no server and
 //! no downtime for the process that owns the directory.
 //!

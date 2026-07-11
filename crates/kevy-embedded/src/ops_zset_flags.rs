@@ -7,7 +7,7 @@
 //! conditional verb replayed against divergent state (a replica
 //! applying frames onto snapshot-loaded state) could veto differently
 //! and diverge; the absolute form is deterministic. Same lesson as
-//! v2.0.21's SPOP→SREM propagation fix.
+//! the SPOP→SREM propagation fix (log the effect, not the verb).
 
 use crate::{KevyError, KevyResult};
 

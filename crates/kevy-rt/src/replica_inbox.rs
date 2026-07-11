@@ -9,14 +9,14 @@
 //! The kevy server (the embedder) creates one [`ReplicaInbox`] pair
 //! per shard before `Runtime::run`, hands the receivers to the
 //! runtime via `with_replica_inboxes`, and keeps the senders to wire
-//! into the runner threads. v1.18 spawns one runner per shard
+//! into the runner threads. One runner is spawned per shard
 //! (matching the primary's per-shard listener layout), so the
 //! channels are 1:1.
 //!
-//! v1.18 cap: events are unbounded. Each [`ReplicaApply::Frame`]
+//! Known cap: events are unbounded. Each [`ReplicaApply::Frame`]
 //! carries an owned [`Argv`] (snapshot path is `Vec<u8>` chunks); for
 //! a slow shard this can grow. Backpressure / capping is tracked as a
-//! follow-up — the v1.18 model assumes the shard's apply rate matches
+//! follow-up — the current model assumes the shard's apply rate matches
 //! the upstream emit rate (single-machine cluster). The unbounded
 //! channel never blocks the runner thread, so a stuck shard never
 //! stalls the runner's TCP read (it just buffers).
@@ -40,7 +40,7 @@ pub enum ReplicaApply {
     /// Upstream finished the snapshot. The shard hands its buffered
     /// bytes to `kevy_persist::load_snapshot_from` (replacing the
     /// `Store` contents) and resumes at `ack_offset` for live frames.
-    /// `routed = true` (v3.2 single-source mode) means the payload is
+    /// `routed = true` (single-source mode) means the payload is
     /// the WHOLE upstream keyspace broadcast to every shard — each
     /// shard loads only its own hash slice.
     SnapshotEnd { ack_offset: u64, routed: bool },

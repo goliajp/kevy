@@ -63,7 +63,7 @@ impl Config {
                     // An unrecognized leading flag would otherwise be
                     // sent to the server as a COMMAND — whose 'unknown
                     // command' reply points users at the wrong layer
-                    // (mailrs feedback 2026-07-08). Fail HERE, by name.
+                    // (reported by a downstream user). Fail HERE, by name.
                     eprintln!(
                         "kevy-cli: unknown option '{other}' (options go before the command; see kevy-cli --help)"
                     );

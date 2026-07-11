@@ -8,8 +8,8 @@ use std::sync::Arc;
 
 /// Per-connection state owned by its origin shard.
 ///
-/// A4 (2026-06-20): `#[repr(C)]` + hot-first field order. The H7 +
-/// post-v1.24 diagnostics both showed L1D-miss in the busy-poll
+/// `#[repr(C)]` + hot-first field order. Two independent perf
+/// diagnostics both showed L1D-miss in the busy-poll
 /// reactor body. Per-request work touches `sock` (raw fd for write
 /// SQE), `input`/`output` (recv → parse → reply), `pending` (push +
 /// pop + front), `write_pos`, `next_seq`, `next_emit`, plus the five
@@ -49,7 +49,7 @@ pub(crate) struct Conn {
     pub(crate) sock: Socket,
     pub(crate) input: Vec<u8>,
     pub(crate) output: Vec<u8>,
-    /// L1 (2026-06-21): Arc-backed value bytes scheduled to be `writev`-sent
+    /// Arc-backed value bytes scheduled to be `writev`-sent
     /// alongside `output`. Each `(pos, arc)` means "insert `arc.as_ref()`
     /// after byte `pos` in `output` when building the iovec list for the
     /// reactor's writev SQE". Sorted by `pos`; pushed by `encode_bulk_arc`
@@ -82,7 +82,7 @@ pub(crate) struct Conn {
     /// SO_REUSEPORT compat port). Cluster conns get `-MOVED` for
     /// wrong-shard single-key commands instead of transparent forwarding.
     pub(crate) cluster: bool,
-    /// **H1.C (v1.25)**: dedup flag for `Shard::dirty`. PUBLISH fan-out at
+    /// Dedup flag for `Shard::dirty`. PUBLISH fan-out at
     /// N subscribers × M pipelined publishes used to push `N×M` ids onto
     /// the dirty list, then `flush_dirty` paid `N×M` `HashMap::get_mut`
     /// probes to no-op the redundant entries (output drained on the
@@ -109,11 +109,11 @@ pub(crate) struct Conn {
     /// `WATCH` time. `EXEC` fans these out via `Op::CheckWatch`; if any
     /// shard reports a mismatch, the transaction aborts (nil multi-bulk).
     pub(crate) watched: Vec<(Vec<u8>, u64)>,
-    /// **v2.0.16** — `CLIENT SETNAME` persisted value. Set by
+    /// `CLIENT SETNAME` persisted value. Set by
     /// `handle_command`'s CLIENT-intercept arm; read by the same
     /// arm on `CLIENT GETNAME`. Empty by default (matches Redis).
     /// Lives in the cold section since CLIENT SETNAME is a
-    /// once-per-connection housekeeping op. Closes v1.52.x finding.
+    /// once-per-connection housekeeping op.
     pub(crate) client_name: Vec<u8>,
 }
 

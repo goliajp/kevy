@@ -7,13 +7,13 @@
 //! `REPLICATE FROM` handshake and then streams frames from the
 //! source until the peer drops.
 //!
-//! v1.21 MVP scope:
-//! - **No snapshot ship from embed yet.** A replica reconnecting at
-//!   an offset older than the backlog's oldest gets `TooOld` →
-//!   connection closed; the embed's own snapshot serializer landing
-//!   here is a follow-up. For now operators size the backlog large
-//!   enough to cover plausible reconnect windows (or accept a
-//!   re-handshake from offset 0 by the consumer).
+//! Scope:
+//! - **Snapshot ship at handshake only.** A fresh replica (offset 0
+//!   against non-empty history) or one whose offset fell past the
+//!   backlog gets a full keyspace snapshot at handshake, then live
+//!   frames from the snapshot's as-of offset. If a live stream falls
+//!   past the backlog mid-stream, the link is closed so the replica
+//!   reconnects and takes the snapshot path.
 //! - **One-shard model.** Embed writes to a single source; the
 //!   per-shard split that the server uses is intentionally not
 //!   replicated here — an embed-as-writer for a scope is a single-
@@ -230,10 +230,10 @@ fn run_conn(
                 thread::sleep(Duration::from_millis(20));
             }
             FrameStep::TooOld | FrameStep::PeerAhead => {
-                // No snapshot ship from embed yet (v1.21 anti-scope);
-                // close the link so the replica reconnects from 0
-                // and rebuilds from the backlog (or the operator
-                // sized it bigger).
+                // No mid-stream snapshot ship; close the link so the
+                // replica reconnects — the handshake path ships a
+                // snapshot when the requested offset has fallen past
+                // the backlog.
                 let _ = stream.shutdown(Shutdown::Both);
                 break;
             }
@@ -259,7 +259,7 @@ fn handshake_and_prepare(stream: &mut TcpStream) -> Option<u64> {
     Some(from_offset)
 }
 
-/// Snapshot path (closing the v1.21 anti-scope): a fresh replica
+/// Snapshot path: a fresh replica
 /// (offset 0 against a non-empty history) or one that fell past the
 /// backlog gets the keyspace shipped, then live frames from the
 /// snapshot's as-of offset — same branch discipline as the server
@@ -379,8 +379,9 @@ pub(crate) fn freeze_and_serialize(shards: &crate::store::Shards) -> (Vec<u8>, u
         }
     }
     let mut payload = Vec::new();
-    // In-memory serialize matches the server pump's T1.23 posture
-    // (streaming straight to the socket is a follow-up on both ends).
+    // Serialize the whole snapshot into memory first, matching the
+    // server pump's posture (streaming straight to the socket is a
+    // follow-up on both ends).
     let _ = kevy_persist::write_snapshot_to(&Multi(&views), &mut payload);
     (payload, ack)
 }

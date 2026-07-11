@@ -78,7 +78,7 @@ impl Commands for KevyCommands {
         replicas: Vec<(std::net::Ipv4Addr, u16, u64, Option<kevy_rt::ReplicaAck>)>,
     ) {
         // `ROLE` / `INFO replication` read the answering shard's
-        // most-recent view. T1.28.5 added the per-replica list —
+        // most-recent view, including the per-replica list —
         // `connected_slaves` is derived from `replicas.len()` at read
         // time.
         self.shard_ctx().set_replication_view(ops::replication::ReplicationView {
@@ -117,7 +117,7 @@ impl Commands for KevyCommands {
     }
 
     fn on_write(&self, store: &mut Store, key: &[u8]) {
-        // W5 zero-tax gate: with no index/view declared, a write costs
+        // Zero-tax gate: with no index/view declared, a write costs
         // one cached-bit branch here instead of the two global flag
         // loads the runtimes used to pay.
         let bits = self.gate_bits();
@@ -164,7 +164,7 @@ impl Commands for KevyCommands {
     }
 
     fn write_denied(&self) -> Option<Vec<u8>> {
-        // W5 two-tier verdict: the cached bit answers "certainly
+        // Two-tier verdict: the cached bit answers "certainly
         // allowed" with a single epoch load; only a raised gate walks
         // the precise fence-ordering judge (which may lock the quiesce
         // slot / count replicas to render the exact error).
@@ -200,14 +200,14 @@ impl Commands for KevyCommands {
         // CPU budget at the default 10 Hz cadence. Cheap when no TTL'd
         // keys exist (a single map-emptiness check + bucket walk).
         let cfg = self.state().config();
-        // v3.14 A0: a replica does NOT actively expire — the primary
+        // A replica does NOT actively expire — the primary
         // owns TTL truth and ships DEL/expiry effects through the
         // replication feed (Redis semantics; diverging reapers would
         // fork the keyspaces). Lazy-expiry reads stay local either way.
         if !self.state().replication.is_replica() {
             let samples = cfg.expiry.sample as usize;
             store.tick_expire(samples, 16);
-            // v2.4: sweep due hash field TTLs. Deadlines live in the AOF
+            // Sweep due hash field TTLs. Deadlines live in the AOF
             // (HPEXPIREAT frames), so replay purges identically — no
             // logging needed here, same determinism argument as key TTLs.
             let _ = store.tick_hash_ttl(64);
@@ -237,7 +237,7 @@ impl Commands for KevyCommands {
         // explicit config exists, every field is wrapped in `Some` so the
         // shard re-applies CONFIG SET changes within one tick.
         if !self.state().config_is_explicit() {
-            // v3.16: the promotion counter still flows — it doesn't
+            // The promotion counter still flows — it doesn't
             // clobber any builder choice, and an embedded promotion
             // must fence feed generations too.
             return kevy_rt::LiveRuntimeConfig {

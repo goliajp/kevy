@@ -1,4 +1,4 @@
-//! v1.48 — multi-tenant E2E chaos (Phase D step 1).
+//! Multi-tenant E2E chaos.
 //!
 //! Production kevy deployments often serve N independent workloads on
 //! the same instance — message queues, session stores, cache layers —

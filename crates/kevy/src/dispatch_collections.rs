@@ -31,13 +31,13 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
 ) -> bool {
     match cmd {
         b"HSET" => cmd_hset(store, args, out),
-        // v2.4 hash field TTLs (Redis 7.4 family).
+        // Hash field TTLs (Redis 7.4 family).
         b"HEXPIRE" => crate::cmd_hash_ttl::cmd_hexpire(store, args, out),
         b"HPEXPIRE" => crate::cmd_hash_ttl::cmd_hpexpire(store, args, out),
         b"HPEXPIREAT" => crate::cmd_hash_ttl::cmd_hpexpireat(store, args, out),
         b"HTTL" => crate::cmd_hash_ttl::cmd_httl(store, args, out),
         b"HPERSIST" => crate::cmd_hash_ttl::cmd_hpersist(store, args, out),
-        // v1.27.3: deprecated `HMSET` alias — same wire shape as
+        // Deprecated `HMSET` alias — same wire shape as
         // HSET (`HMSET key field value [field value ...]`), but
         // returns `+OK` instead of the integer added-count. BullMQ
         // ships scripts that still use it.
@@ -255,7 +255,7 @@ pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
                 encode_error(out, ERR_NOT_INT);
             }
         }
-        // v1.27.3: BullMQ uses RPOPLPUSH / LMOVE to shuffle jobs
+        // BullMQ uses RPOPLPUSH / LMOVE to shuffle jobs
         // between `wait` and `active` lists. Same-shard only.
         b"RPOPLPUSH" => {
             if args.len() != 3 {
@@ -270,7 +270,7 @@ pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
         }
         b"BRPOPLPUSH" => cmd_brpoplpush(store, args, out),
         b"LMOVE" => cmd_lmove(store, args, out),
-        // v1.27.3: `LPOS key element [RANK n] [COUNT n] [MAXLEN n]`.
+        // `LPOS key element [RANK n] [COUNT n] [MAXLEN n]`.
         // BullMQ probes pending jobs by id via LPOS.
         b"LPOS" => cmd_lpos(store, args, out),
         _ => return false,
@@ -278,7 +278,7 @@ pub(crate) fn dispatch_list<A: ArgvView + ?Sized>(
     true
 }
 
-/// v1.27.7 `BRPOPLPUSH source destination timeout` — blocking form of
+/// `BRPOPLPUSH source destination timeout` — blocking form of
 /// RPOPLPUSH. Tries the eager pop first; on empty source, leaves `out`
 /// untouched so the dispatcher parks the conn via the BlockHint
 /// registered for this verb.
@@ -409,16 +409,16 @@ pub(crate) fn dispatch_zset<A: ArgvView + ?Sized>(
                 encode_error(out, "ERR min or max is not a float");
             }
         }
-        // v1.27.3: BullMQ scripts pop the lowest-scored delayed job
+        // BullMQ scripts pop the lowest-scored delayed job
         // with ZPOPMIN, and trim completed/failed job sets via the
         // ZREMRANGEBY* family.
         b"ZPOPMIN" => cmd_zpopmin(store, args, out),
-        // v2.4 delayed-job primitive (kevy extension, dot-namespaced).
+        // Delayed-job primitive (kevy extension, dot-namespaced).
         b"ZPOPMIN.BELOW" => cmd_zpopmin_below(store, args, out),
         b"SSCAN" => cmd_sscan(store, args, out),
         b"HSCAN" => cmd_hscan(store, args, out),
         b"ZSCAN" => cmd_zscan(store, args, out),
-        // v1.27.3: BullMQ workers dequeue jobs by blocking on the
+        // BullMQ workers dequeue jobs by blocking on the
         // `wait` zset via BZPOPMIN (lowest-scored = oldest priority).
         b"BZPOPMIN" => cmd_bzpopmin(store, args, out),
         b"ZREMRANGEBYRANK" => {

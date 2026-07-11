@@ -10,7 +10,7 @@ use super::{ST_BADARGS, ST_BUILDING, ST_NOINDEX, ST_OK, ST_OVERBUDGET};
 use crate::index_runtime;
 use crate::state::Ctx;
 
-/// v2.7 text MATCH per-shard: BM25-ranked hits + owning-shard
+/// Text MATCH per-shard: BM25-ranked hits + owning-shard
 /// hydration. Chunk: `[ST_OK][n][(klen,key,score f64,fcount,fields)*]`.
 pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(q) = MatchArgs::parse(argv) else {
@@ -37,7 +37,7 @@ pub(super) fn op_match(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Ve
     }
 }
 
-/// v3.1 agg per-shard. Chunk (both shapes):
+/// Agg per-shard. Chunk (both shapes):
 /// `[ST_OK][n][(glen,group,count u64,sum f64,minflag+min,maxflag+max)*]`
 /// — GROUP sends the one requested group; GROUPS sends every local
 /// group (the reduce needs full partials to merge exactly).
@@ -91,7 +91,7 @@ pub(super) fn op_agg(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<
     }
 }
 
-/// v3.1 phase 2 (internal): `AGG.FETCH <name> <g…>` — exact partials
+/// Phase 2 of GROUPS (internal): `AGG.FETCH <name> <g…>` — exact partials
 /// for the candidate groups that survived phase-1 ranking.
 pub(super) fn op_agg_fetch(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let res = index_runtime::with_ready_agg(ctx, store, &argv[1], |a| {
@@ -104,7 +104,7 @@ pub(super) fn op_agg_fetch(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -
     }
 }
 
-/// v2.8: `IDX.REBUILD <name>` (ANN tombstone compaction).
+/// `IDX.REBUILD <name>` (ANN tombstone compaction).
 pub(super) fn op_rebuild(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(name) = argv.get(1) else {
         return vec![ST_BADARGS];
@@ -116,7 +116,7 @@ pub(super) fn op_rebuild(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
     }
 }
 
-/// v2.8 KNN per-shard: distance-ranked hits + hydration. Chunk:
+/// KNN per-shard: distance-ranked hits + hydration. Chunk:
 /// `[ST_OK][n][(klen,key,dist f64,fcount,fields)*]` — same layout as
 /// MATCH chunks, so the reduce shares the decoder.
 pub(super) fn op_knn(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {

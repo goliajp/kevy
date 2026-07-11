@@ -1,4 +1,4 @@
-//! v3.16 replication barriers — the deferred all-shard waiters behind
+//! Replication barriers — the deferred all-shard waiters behind
 //! `WAIT numreplicas timeout` (D1) and `REPL.WAIT token… [TIMEOUT ms]`
 //! (D2).
 //!
@@ -16,7 +16,7 @@
 //! Wake truth:
 //! - D1 counts a replica as "acked" when a LIVE replication conn's
 //!   slot has `acked_offset ≥` the shard's `master_repl_offset` frozen
-//!   at arm receipt (`SlotTable` is the v3.14 ack truth; liveness
+//!   at arm receipt (`SlotTable` is the ack source of truth; liveness
 //!   filters out a recently-dead replica's residual slot).
 //! - D2 compares the shard's own replication-apply position
 //!   (`Shard::replica_applied_next`, advanced on the reactor thread as

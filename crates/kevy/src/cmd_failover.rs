@@ -1,4 +1,4 @@
-//! v3.15 D3 — `FAILOVER <host> <port> [TIMEOUT ms]`: the planned,
+//! `FAILOVER <host> <port> [TIMEOUT ms]`: the planned,
 //! zero-loss primary handover, built ENTIRELY from existing verbs:
 //!
 //!   1. quiesce writes here (`-QUIESCED migrating to <target>` — the

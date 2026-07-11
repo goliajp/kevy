@@ -1,5 +1,5 @@
 //! Verb catalog bootstrapped from the live server's `COMMAND DOCS` reply
-//! (the v3.10 single-source-of-truth verb table). kevy-mcp hardcodes no
+//! (the server's single-source-of-truth verb table). kevy-mcp hardcodes no
 //! verb list — whatever server it connects to defines the tool surface,
 //! so the read/write whitelists can never drift from the engine.
 //!
@@ -198,8 +198,7 @@ fn text(r: &Reply) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// Recorded 2026-07-05 from a live kevy (branch feature/v3-12-mcp,
-    /// `target/release/kevy --port 7351`) answering
+    /// Recorded from a live kevy server answering
     /// `COMMAND DOCS GET SET IDX.CREATE` — raw wire bytes, unedited.
     const DOCS_SAMPLE: &[u8] = b"*6\r\n$3\r\nGET\r\n*10\r\n$7\r\nsummary\r\n$33\r\nReturn the string \
         value of a key.\r\n$5\r\nsince\r\n$5\r\n1.0.0\r\n$5\r\ngroup\r\n$6\r\

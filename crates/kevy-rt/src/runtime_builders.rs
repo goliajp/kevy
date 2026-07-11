@@ -16,10 +16,11 @@ impl<C: Commands> Runtime<C> {
     /// budget. Every applied mutation is pushed to the backlog for
     /// connected replicas to consume. `enabled = false` (default) is
     /// zero hot-path cost — each write checks `Option::is_some()` and
-    /// skips. The replication TCP listener / streaming loop arrive in
-    /// subsequent v3-cluster tasks (T1.12+); enabling without those
-    /// landed means the backlog fills and frames are dropped per the
-    /// source's eviction policy, but writes proceed normally.
+    /// skips. The replication TCP listener / streaming loop are gated
+    /// separately by [`Self::with_replication_listener`]; enabling the
+    /// producer without a listener means the backlog fills and frames
+    /// are dropped per the source's eviction policy, but writes
+    /// proceed normally.
     #[must_use]
     pub fn with_replication(mut self, enabled: bool, buffer_size: u64) -> Self {
         self.enable_replication = enabled;
@@ -29,7 +30,7 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
-    /// v2.3: enable the FEED.* consumer surface. Keeps a per-shard
+    /// Enable the FEED.* consumer surface. Keeps a per-shard
     /// backlog (even with no replicas) and persists the (generation,
     /// offset) cursor via the feed sidecars. `buffer_size` = 0 keeps
     /// the default (64 MB/shard); effective budget is
@@ -68,14 +69,14 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
-    /// Install per-shard replica inboxes (T1.29). The embedder pre-
+    /// Install per-shard replica inboxes. The embedder pre-
     /// constructs `nshards` inbox pairs via
     /// [`crate::replica_inbox_pair`], keeps the senders to hand to
     /// the per-shard replica runner threads, and passes the receivers
     /// here. The order of `receivers` is shard-major: index `i` ↔
     /// shard `i`. Length must equal `nshards`. When this builder
-    /// isn't called, no shard has an inbox (the standalone /
-    /// primary-only behaviour pre-T1.29).
+    /// isn't called, no shard has an inbox (standalone /
+    /// primary-only behaviour).
     #[must_use]
     pub fn with_replica_inboxes(
         mut self,
@@ -111,7 +112,7 @@ impl<C: Commands> Runtime<C> {
     }
 
     /// Reactor tuning knobs (`[advanced]` config section). Defaults
-    /// match the pre-v1.4 hardcoded constants. `ring_capacity` is
+    /// match the original hardcoded constants. `ring_capacity` is
     /// applied at SPSC ring construction (startup only); the other
     /// three are read at each iteration of the reactor loop, so
     /// values applied here take effect from the next shard.run() call.
@@ -137,15 +138,16 @@ impl<C: Commands> Runtime<C> {
         self
     }
 
-    /// **v1.30** — Only shards `0..N` arm accept SQE; rest stay compute-only.
-    /// `None` = every shard accepts (v1.29 byte-identical, the default).
+    /// Only shards `0..N` arm accept SQE; rest stay compute-only.
+    /// `None` = every shard accepts (the default; byte-identical to
+    /// the pre-flag behaviour).
     #[must_use]
     pub fn with_accept_shards(mut self, n: Option<usize>) -> Self {
         self.accept_shards = n;
         self
     }
 
-    /// **v1.37** — total cap on active client connections. `0` = unlimited.
+    /// Total cap on active client connections. `0` = unlimited.
     /// Default `10_000`. Per-shard slice is `ceil(N / nshards)`.
     #[must_use]
     pub fn with_max_clients(mut self, n: usize) -> Self {

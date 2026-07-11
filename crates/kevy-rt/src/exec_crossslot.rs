@@ -1,4 +1,4 @@
-//! v1.56 — cluster-mode CROSSSLOT check helpers for multi-key commands.
+//! Cluster-mode CROSSSLOT check helpers for multi-key commands.
 //!
 //! Lives outside `exec.rs` to keep that file under the 500-LOC house
 //! rule. Used only by `Shard::start_command` when `cluster_conn` is
@@ -11,7 +11,7 @@ use crate::shard::Shard;
 use crate::{Commands, Route};
 
 impl<C: Commands> Shard<C> {
-    /// v1.56: if the route is a multi-key route checked under cluster
+    /// If the route is a multi-key route checked under cluster
     /// mode AND the conn is cluster AND its keys span slots, push a
     /// `-CROSSSLOT` reply; else fall through to the standard `start_multi`
     /// fan-out path.

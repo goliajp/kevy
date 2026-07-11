@@ -1,4 +1,4 @@
-//! v0.2 detection: the core string/key command surface over real RESP, against
+//! Detection suite: the core string/key command surface over real RESP, against
 //! a live keyspace shared across the commands of one connection.
 
 use std::io::{Read, Write};

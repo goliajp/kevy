@@ -1,4 +1,4 @@
-//! v1.46 — network-partition chaos test (client-side).
+//! Network-partition chaos test (client-side).
 //!
 //! Production networks see TCP resets, half-closed conns, mid-protocol
 //! disconnects, and bursts of slowloris-style abandoned connections.

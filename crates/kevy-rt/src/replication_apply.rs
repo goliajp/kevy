@@ -1,4 +1,4 @@
-//! Replica-side apply path (T1.29(c) + (b)) — the [`Shard`] half of
+//! Replica-side apply path — the [`Shard`] half of
 //! the cross-thread bridge from the replica runner to the local
 //! `Store`. The runner thread runs blocking
 //! `kevy_replicate::replica::ReplicaClient::next_event` reads and
@@ -50,7 +50,7 @@ impl<C: Commands> Shard<C> {
         for ev in events {
             self.apply_replica_event(ev);
         }
-        // v3.16 D2: the apply position moved — the REPL.WAIT wake
+        // The apply position moved — the REPL.WAIT wake
         // point. Answering HERE (after the store mutation, on the
         // reactor thread) is what makes `+OK` → GET read-your-writes:
         // by the time the reply leaves, this shard has applied
@@ -73,7 +73,7 @@ impl<C: Commands> Shard<C> {
             }
             ReplicaApply::SnapshotEnd { ack_offset, routed } => {
                 let buf = std::mem::take(&mut self.replica_snapshot_buf);
-                // v3.15 D4: a snapshot ship REPLACES local state, it
+                // A snapshot ship REPLACES local state, it
                 // does not merge into it. The load is per-record
                 // upsert, so any local residue not present upstream
                 // (a rejoining old primary's forked suffix, a stale
@@ -81,7 +81,7 @@ impl<C: Commands> Shard<C> {
                 // otherwise the fork survives the "discard".
                 self.store.flushall();
                 let res = if routed {
-                    // v3.2 single-source: the payload is the whole
+                    // Single-source mode: the payload is the whole
                     // upstream keyspace — keep only this shard's slice
                     let (id, n) = (self.id, self.nshards);
                     kevy_persist::load_snapshot_filtered(
@@ -98,7 +98,7 @@ impl<C: Commands> Shard<C> {
                         self.id,
                     );
                 }
-                // v3.16 D2: a snapshot load covers the stream up to
+                // A snapshot load covers the stream up to
                 // its ack_offset — the apply position jumps there
                 // (plain store, not max: a fork-discard resync
                 // genuinely rewinds and the truth must show it).

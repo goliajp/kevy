@@ -124,7 +124,7 @@ impl<'a> Pipeline<'a> {
         self
     }
 
-    /// Flags-aware `ZADD` (v2.1) — e.g. the `GT` monotonic-heal form.
+    /// Flags-aware `ZADD` — e.g. the `GT` monotonic-heal form.
     pub fn zadd_flags(
         mut self,
         key: &[u8],
@@ -282,7 +282,7 @@ impl Store {
     }
 }
 
-/// Parity manifest (v2.1): command names `Pipeline` implements.
+/// Parity manifest: command names `Pipeline` implements.
 /// Cross-checked against `kevy_resp::ops_table` in
 /// `store_tests_op_table.rs` — update BOTH when adding an op.
 #[cfg_attr(not(test), allow(dead_code))]

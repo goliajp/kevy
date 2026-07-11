@@ -48,7 +48,7 @@ impl WriterPool {
             // Ignore join errors — a writer panicking is itself a
             // signal the test wants to see, surfaced via the AckLog
             // (a final ACK count below expectation indicates abnormal
-            // exit). For v1.31 we keep this simple.
+            // exit).
             let _ = h.join();
         }
         self.log
@@ -101,8 +101,8 @@ fn build_set_frame(key: &[u8], value: &[u8]) -> Vec<u8> {
 /// Verify that every entry in `acks` is readable from kevy at `port`,
 /// using a SINGLE pipelined TCP connection (one large batched
 /// write, single drain read, parse replies in order). This avoids the
-/// ephemeral-port exhaustion that ruined the v1.31.0 / v1.31.1 first
-/// pass when each GET opened a fresh TCP conn (Mac's ~16 k ephemeral
+/// ephemeral-port exhaustion that ruined an earlier run of this suite,
+/// where each GET opened a fresh TCP conn (Mac's ~16 k ephemeral
 /// ports × 60 s TIME_WAIT capped sustainable rate at ~267 conns/s; the
 /// chaos test verifies hundreds of thousands of ACKs per run).
 ///

@@ -1,4 +1,4 @@
-//! Six-stone microbench baseline runner (v3.18 T5c).
+//! Six-stone microbench baseline runner.
 //!
 //! Exercises the public API of the six high-blast-radius stone crates
 //! (kevy-map / kevy-ring / kevy-config / kevy-text / kevy-store /

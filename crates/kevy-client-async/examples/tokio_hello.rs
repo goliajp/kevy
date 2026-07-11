@@ -1,4 +1,4 @@
-//! T4.24 — minimal tokio-runtime example: open a connection, PING,
+//! Minimal tokio-runtime example: open a connection, PING,
 //! SET/GET round-trip.
 //!
 //! Run against a local kevy server:

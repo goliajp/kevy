@@ -4,7 +4,7 @@
 //!
 //! Lives in its own module so `lib.rs` stays focused on the `Connection`
 //! enum + open + the generic + string ops. Behaviour and API are
-//! unchanged from the single-file layout in v1.2.0 / v1.3.0.
+//! unchanged from the original single-file layout.
 
 use crate::{KevyError, KevyResult};
 

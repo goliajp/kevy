@@ -56,8 +56,8 @@ fn die<E: std::fmt::Display, T>(e: E) -> T {
     std::process::exit(1);
 }
 
-/// v1.30 — `--accept-shards` runtime validation. `None` (default) = every
-/// shard arms accept (v1.29 behavior). `Some(N)` requires `1 <= N <= threads`.
+/// `--accept-shards` runtime validation. `None` (default) = every
+/// shard arms accept. `Some(N)` requires `1 <= N <= threads`.
 fn validate_accept_shards(cfg: &Config, threads: usize) {
     let Some(n) = cfg.server.accept_shards else { return };
     if n == 0 || n > threads {
@@ -207,11 +207,11 @@ fn is_loopback(bind: [u8; 4]) -> bool {
     bind[0] == 127
 }
 
-/// Valkey/Redis "protected-mode" style advisory. kevy has no auth yet
-/// (deferred to v0.3+); the only safe deployment for a non-loopback bind
-/// is a trust-bounded network (docker-compose internal, kubernetes pod
-/// network, VPC private subnet). For public exposure, front with
-/// stunnel/nginx + IP allowlist until AUTH lands.
+/// Valkey/Redis "protected-mode" style advisory. kevy has no auth
+/// (a deliberate non-goal); the only safe deployment for a non-loopback
+/// bind is a trust-bounded network (docker-compose internal, kubernetes
+/// pod network, VPC private subnet). For public exposure, front with
+/// stunnel/nginx + IP allowlist.
 fn warn_unprotected_bind(bind: [u8; 4]) {
     let [a, b, c, d] = bind;
     eprintln!("kevy WARN: bind={a}.{b}.{c}.{d} is not loopback and kevy has no AUTH/TLS yet.");

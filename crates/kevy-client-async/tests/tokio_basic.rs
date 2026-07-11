@@ -1,4 +1,4 @@
-//! Integration test (T4.20): end-to-end wire round-trip for the tokio
+//! Integration test: end-to-end wire round-trip for the tokio
 //! runtime feature. Spawns a minimum RESP "server" inside the test
 //! process, runs the async client against it, and checks both sides
 //! of the byte stream.

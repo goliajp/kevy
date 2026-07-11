@@ -1,5 +1,5 @@
 //! Hash field-TTL: `HEXPIRE` / `HPEXPIRE` / `HPERSIST` / `HTTL`
-//! (v1.14.0, server v2.4 / Redis 7.4 shape).
+//! (Redis 7.4 command shape).
 //!
 //! Per-field replies come back in request order. The `HEXPIRE` /
 //! `HPEXPIRE` result codes ([`HExpireCode`], re-exported from

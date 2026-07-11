@@ -1,4 +1,4 @@
-//! v1.38 disk-full chaos test (Unix only).
+//! Disk-full chaos test (Unix only).
 //!
 //! Spawn kevy with `RLIMIT_FSIZE = small`. AOF growth past the
 //! cap triggers SIGXFSZ + ENOSPC-equivalent errors. kevy must:

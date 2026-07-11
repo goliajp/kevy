@@ -144,7 +144,7 @@ pub struct LiveRuntimeConfig {
     /// `[slowlog].max_len` — ring cap per shard. Shrinking trims the
     /// oldest entries on the next tick application.
     pub slowlog_max_len: Option<u32>,
-    /// v3.16 D2 — monotonic promotion counter. The command layer bumps
+    /// Monotonic promotion counter. The command layer bumps
     /// it every time this process is PROMOTED (replica → primary:
     /// `REPLICAOF NO ONE` on a following replica, or an election win).
     /// Each shard tracks the last value it saw; an increase makes the

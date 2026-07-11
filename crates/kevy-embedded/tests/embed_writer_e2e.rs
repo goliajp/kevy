@@ -1,4 +1,4 @@
-//! Phase 3 / T3.10 e2e: an embed-as-writer's replication source
+//! E2e: an embed-as-writer's replication source
 //! listener serves real `kevy_replicate::ReplicaClient` subscribers,
 //! and every commit on the embed shows up on the wire in offset
 //! order.
@@ -38,7 +38,7 @@ fn embed_writer_streams_committed_argvs_to_replica_client() {
     let cfg = Config::default().with_embed_writer(&addr);
     let writer = Store::open(cfg).unwrap();
 
-    // Apply two writes BEFORE the subscriber connects. v3.2
+    // Apply two writes BEFORE the subscriber connects. Snapshot
     // semantics (snapshot.md): offset 0 against non-empty history =
     // SNAPSHOT ship (keyspace + as-of offset), then live frames —
     // NOT a frame replay from 0.
@@ -71,7 +71,7 @@ fn embed_writer_serves_multiple_subscribers_independently() {
     let writer = Store::open(cfg).unwrap();
     writer.set(b"shared", b"v").unwrap();
 
-    // v3.2: offset 0 vs history → each subscriber gets its own
+    // Offset 0 vs history → each subscriber gets its own
     // snapshot ship, then live frames.
     let mut a = ReplicaClient::connect(addr.as_str(), "sub-a", 0).unwrap();
     let mut b = ReplicaClient::connect(addr.as_str(), "sub-b", 0).unwrap();
@@ -94,7 +94,7 @@ fn embed_writer_serves_multiple_subscribers_independently() {
 
 #[test]
 fn two_embed_writers_distinct_scopes_both_visible_to_subscribers() {
-    // T3.16 e2e — two embed-as-writer stores own disjoint key
+    // E2e — two embed-as-writer stores own disjoint key
     // prefixes; two subscribers (one per writer) each see their
     // own writer's keyspace. Validates that two replication
     // source listeners in one process don't interfere with each
@@ -122,7 +122,7 @@ fn two_embed_writers_distinct_scopes_both_visible_to_subscribers() {
         0,
     ).unwrap();
 
-    // v3.2: each subscriber receives its own writer's snapshot
+    // Each subscriber receives its own writer's snapshot
     // (pre-fill rides the ship, not frames).
     let (_, ack_a) = drain_snapshot(&mut sub_a);
     let (_, ack_b) = drain_snapshot(&mut sub_b);

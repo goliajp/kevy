@@ -24,7 +24,7 @@ pub enum TtlReaperMode {
 /// [`Config::default`].
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// v2.9: optional READ-ONLY RESP listener address (ops tooling —
+    /// Optional READ-ONLY RESP listener address (ops tooling —
     /// redis-cli against a live embedded store). `None` (default) =
     /// no listener thread, no socket, zero tax.
     pub resp_listener: Option<std::net::SocketAddr>,
@@ -97,16 +97,16 @@ pub struct Config {
     /// both); the builder does not reject the combo so tests can
     /// exercise the guard rails.
     pub embed_writer_listen_addr: Option<String>,
-    /// v2.3 CDC feed (changes_since / changes_tail). Default off.
+    /// CDC feed (changes_since / changes_tail). Default off.
     pub feed_enabled: bool,
     /// Feed backlog byte budget. Default 64 MB, capped at 1 GB.
     pub feed_buffer_size: u64,
     /// Backlog byte budget for the embed-as-writer source. Default
-    /// `1 MiB` (matches the v1.18 server replication default).
+    /// `1 MiB` (matches the server replication default).
     /// Set higher when consumers may disconnect for longer than
-    /// the backlog can buffer (otherwise reconnects hit `TooOld`
-    /// and v1.21 closes the link — snapshot-ship from embed is a
-    /// follow-up).
+    /// the backlog can buffer (otherwise a reconnect falls past the
+    /// backlog and is re-seeded with a full snapshot ship instead of
+    /// an incremental stream).
     pub embed_writer_backlog_bytes: usize,
 }
 
@@ -140,7 +140,7 @@ impl Default for Config {
 }
 
 impl Config {
-    /// v2.9: enable the read-only RESP listener on `addr`
+    /// Enable the read-only RESP listener on `addr`
     /// (e.g. `"127.0.0.1:6009".parse().unwrap()`).
     #[must_use]
     pub fn with_resp_listener(mut self, addr: std::net::SocketAddr) -> Self {
@@ -274,7 +274,7 @@ impl Config {
         self
     }
 
-    /// v2.3: enable the CDC feed (`changes_since` / `changes_tail`).
+    /// Enable the CDC feed (`changes_since` / `changes_tail`).
     /// `buffer_size` = 0 keeps the 64 MB default; values cap at 1 GB.
     #[must_use]
     pub fn with_feed(mut self, buffer_size: u64) -> Self {

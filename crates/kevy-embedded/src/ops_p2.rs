@@ -147,7 +147,7 @@ impl Store {
     }
 
     /// `ZRANGEBYSCORE key min max LIMIT offset count` — score-range
-    /// read with pagination (v2.2; closes the embedded LIMIT gap —
+    /// read with pagination (closes the embedded LIMIT gap —
     /// the server parser always had it).
     pub fn zrange_by_score_limit(
         &self,
@@ -176,7 +176,7 @@ impl Store {
         Ok(all.into_iter().skip(offset).take(count).collect())
     }
 
-    /// v2.4 `zpopmin_below` — pop up to `count` lowest members with
+    /// `zpopmin_below` — pop up to `count` lowest members with
     /// score strictly `< below` (delayed-job "pop what's due").
     /// AOF logs the effect (`ZREM` of the popped members).
     pub fn zpopmin_below(

@@ -256,7 +256,7 @@ fn cluster_slots_topology_is_exact_and_covering() {
     read_reply(&mut c, want.as_bytes());
 
     // INFO reports cluster_enabled:1. cluster_known_nodes reflects
-    // peer count (v1.57+): without a `peers = ...` config, it's 1
+    // peer count: without a `peers = ...` config, it's 1
     // (this node only). `cluster_size` retains shard count = 4.
     c.write_all(&req(&[b"CLUSTER", b"INFO"])).unwrap();
     let mut buf = [0u8; 512];

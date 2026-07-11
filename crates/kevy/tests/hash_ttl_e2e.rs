@@ -1,4 +1,4 @@
-//! v2.4 hash field TTLs — real-server e2e: the relative `HEXPIRE`
+//! Hash field TTLs — real-server e2e: the relative `HEXPIRE`
 //! must survive an AOF replay WITHOUT re-anchoring (the
 //! `HPEXPIREAT` follow-up frame `Shard::log_write` appends), and the
 //! reaper must sweep due fields.

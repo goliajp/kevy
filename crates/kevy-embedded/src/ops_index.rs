@@ -1,4 +1,4 @@
-//! v2.5 — embedded secondary-index API (RFC LOCKED; server parity
+//! Embedded secondary-index API (server parity
 //! minus FIELDS hydration, which exists to save wire round-trips the
 //! embedded caller doesn't have — read fields with `hget` directly).
 //!
@@ -41,12 +41,12 @@ pub(crate) struct IndexReg {
 pub(crate) struct ShardSegs {
     pub(crate) version: u64,
     pub(crate) segs: Vec<(IndexSpec, Segment)>,
-    /// v2.7: inverted segments for KIND text specs (parallel list —
+    /// Inverted segments for KIND text specs (parallel list —
     /// a spec appears in exactly one of the lists).
     pub(crate) text: Vec<(IndexSpec, kevy_text::TextSegment)>,
-    /// v2.8: HNSW graphs for KIND ann specs.
+    /// HNSW graphs for KIND ann specs.
     pub(crate) ann: Vec<(IndexSpec, kevy_vector::Hnsw)>,
-    /// v3.1: aggregate segments for KIND agg specs.
+    /// Aggregate segments for KIND agg specs.
     pub(crate) agg: Vec<(IndexSpec, kevy_index::AggSegment)>,
 }
 
@@ -101,7 +101,7 @@ impl Store {
         Ok(())
     }
 
-    /// v2.8: declare an ANN index (KIND ann, TYPE vector). `params.m`
+    /// Declare an ANN index (KIND ann, TYPE vector). `params.m`
     /// / `params.ef` of 0 select the defaults (16 / 200).
     pub fn idx_create_ann(
         &self,
@@ -212,7 +212,7 @@ impl Store {
             .collect()
     }
 
-    /// v2.7 `MATCH` — BM25-ranked hits merged across shards
+    /// `MATCH` — BM25-ranked hits merged across shards
     /// (shard-local statistics; see docs/text-search.md).
     pub fn idx_match(
         &self,
@@ -240,7 +240,7 @@ impl Store {
         Ok(all.into_iter().map(|m| (m.key, m.score)).collect())
     }
 
-    /// v3.1: declare an aggregate index (KIND agg — write-time GROUP
+    /// Declare an aggregate index (KIND agg — write-time GROUP
     /// BY). `ty` must be numeric.
     pub fn idx_create_agg(
         &self,
@@ -266,7 +266,7 @@ impl Store {
         self.register_spec(spec)
     }
 
-    /// v3.1: one group's merged stats across shards.
+    /// One group's merged stats across shards.
     pub fn idx_group(&self, name: &[u8], group: &[u8]) -> KevyResult<kevy_index::GroupStats> {
         let mut merged = kevy_index::GroupStats { count: 0, sum: 0.0, min: None, max: None };
         let mut found = false;
@@ -285,7 +285,7 @@ impl Store {
         Ok(merged)
     }
 
-    /// v3.1: top groups merged + ranked across shards.
+    /// Top groups merged + ranked across shards.
     pub fn idx_groups(
         &self,
         name: &[u8],
@@ -323,7 +323,7 @@ impl Store {
         Ok(ranked)
     }
 
-    /// v2.8 `KNN` — nearest neighbors merged ascending across shards.
+    /// `KNN` — nearest neighbors merged ascending across shards.
     /// `ef` = query beam width (0 = engine default; recall knob).
     pub fn idx_knn(
         &self,

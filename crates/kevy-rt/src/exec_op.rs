@@ -72,7 +72,7 @@ impl<C: Commands> Shard<C> {
                 self.store.flushall();
                 // Every WATCH against this shard is now invalidated.
                 self.store.bump_all_watched();
-                // v2.3 feed contract: FLUSHALL breaks stream continuity
+                // Feed contract: FLUSHALL breaks stream continuity
                 // — bump the generation (offsets restart at 0) and
                 // persist the high-water before serving under it.
                 if let Some(f) = self.replicate.as_mut() {
@@ -181,7 +181,7 @@ impl<C: Commands> Shard<C> {
                 let chunk = self.commands.extension_op(&mut self.store, &argv);
                 Part::ExtensionChunk(chunk)
             }
-            // v3.16 D2 REPL.TOKEN: live (generation, next_offset) off
+            // REPL.TOKEN: live (generation, next_offset) off
             // this shard's feed. No feed installed (replication + CDC
             // both off) → (0, 0): generation 0 is the "no stream"
             // sentinel (real generations start at 1).
@@ -298,12 +298,12 @@ impl<C: Commands> Shard<C> {
                 Part::WatchVersions(out)
             }
             Op::Save => {
-                // v1.25.x A.3 follow-up: `SAVE` was previously a synchronous
+                // `SAVE` was previously a synchronous
                 // `save_snapshot(&self.store, &path)` on the shard thread,
                 // holding the reactor for the entire RDB serialize + disk
                 // write — the last shard-blocker on the persistence path
-                // (BGSAVE/BGREWRITEAOF/auto-rewrite migrated to the per-shard
-                // `PersistWorker` in `8cc2bcf` 2026-06-11). It now delegates
+                // (BGSAVE/BGREWRITEAOF/auto-rewrite already run on the
+                // per-shard `PersistWorker`). It now delegates
                 // to [`Self::start_bg_save`]: freeze a COW [`SnapshotView`]
                 // on this thread (O(n) shallow — 8 ns/entry, see
                 // `kevy_store::Store::collect_snapshot`), hand off the

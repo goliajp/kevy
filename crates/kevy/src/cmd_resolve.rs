@@ -124,7 +124,7 @@ fn route_for_verb<A: ArgvView + ?Sized>(
         | b"ROLE" | b"REPLICAOF" | b"SLAVEOF" => {
             Route::Local
         }
-        // v3.16 D1+D2 — replication barriers. Well-formed happy paths
+        // Replication barriers. Well-formed happy paths
         // route to the runtime's deferred waiters; every immediate
         // answer (arity / role / gen mismatch) falls back to Local and
         // the cmd_repl dispatch handlers emit the precise reply.
@@ -181,7 +181,7 @@ fn route_for_verb<A: ArgvView + ?Sized>(
         // cross-shard arbiter fans watch registrations out to each key's
         // owning shard, see kevy_rt::block_xshard. Routing by key would
         // strand the waiter on a shard that doesn't own the connection.)
-        // v1.27.1: EVAL/EVALSHA route by KEYS[1] (at argv[3]) when
+        // EVAL/EVALSHA route by KEYS[1] (at argv[3]) when
         // numkeys ≥ 1, so a multi-shard server lands the script on
         // the shard that owns the keys it'll touch. With numkeys=0
         // the script doesn't touch any specific shard's keyspace, so

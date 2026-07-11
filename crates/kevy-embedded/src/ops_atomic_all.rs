@@ -160,13 +160,13 @@ impl<'a> AtomicAllShards<'a> {
         Ok(n)
     }
 
-    /// `ZSCORE key member` (v2.1: parity with [`super::ops_atomic::AtomicCtx`]).
+    /// `ZSCORE key member` (parity with [`super::ops_atomic::AtomicCtx`]).
     pub fn zscore(&mut self, key: &[u8], member: &[u8]) -> KevyResult<Option<f64>> {
         let i = self.idx(key);
         self.guards[i].store.zscore(key, member).map_err(store_err)
     }
 
-    // ---- keyspace ops (v2.1 — Pipeline write parity) ---------------
+    // ---- keyspace ops (Pipeline write parity) ----------------------
 
     /// `DEL key [key ...]` — keys may span shards; each key's delete
     /// is applied and AOF-logged on its own shard.
@@ -310,7 +310,7 @@ impl<'a> AtomicAllShards<'a> {
         self.guards[i].store.zcard(key).map_err(store_err)
     }
 
-    /// Flags-aware `ZADD` (v2.1). AOF logs the applied pairs as plain
+    /// Flags-aware `ZADD`. AOF logs the applied pairs as plain
     /// `ZADD` — the effect, never the condition (deterministic replay).
     pub fn zadd_flags(
         &mut self,
@@ -379,7 +379,7 @@ impl Store {
     }
 }
 
-/// Parity manifest (v2.1): command names `AtomicAllShards` implements.
+/// Parity manifest: command names `AtomicAllShards` implements.
 /// MUST stay identical to `ops_atomic::ATOMIC_OPS` (the two ctxs
 /// drifted before — zscore was missing here).
 #[cfg_attr(not(test), allow(dead_code))]

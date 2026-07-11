@@ -1,4 +1,4 @@
-//! v2.10 — export → import round-trip against two real servers.
+//! Export → import round-trip against two real servers.
 
 use std::process::{Child, Command};
 

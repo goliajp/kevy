@@ -70,11 +70,11 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
     // the unknown-command error below (which reports the original `name`).
     let mut buf = [0u8; 32];
     let cmd = upper_verb(name, &mut buf);
-    // v3-cluster Phase 3 / v1.21 scope routing. **Above** the GET/SET
+    // Scope routing. **Above** the GET/SET
     // fast path because SET must respect scope ownership too (the
     // fast path otherwise would silently apply locally). The
-    // SCOPE_ACTIVE gate bit (W5) is one cached-epoch check + branch —
-    // predicted away when no scopes are declared (the v1.20-and-earlier
+    // SCOPE_ACTIVE gate bit is one cached-epoch check + branch —
+    // predicted away when no scopes are declared (the scope-free
     // hot path eats one mispredict-resistant load on every command,
     // which is below measurable noise per `bench/perfgate.sh`).
     if crate::cmd::is_write_verb(cmd)
@@ -111,11 +111,10 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
             return;
         }
         b"SET" => {
-            // F3 (v1.25): hoist the maxmemory gate out of the precheck/evict
+            // Hoist the maxmemory gate out of the precheck/evict
             // function calls so the default `maxmemory=0` case is a single
             // not-taken branch right here, skipping two `#[inline]` function
-            // invocations + their internal branches. Per
-            // .claude/notes/v125-deco-axis-c-churn.md F3.
+            // invocations + their internal branches.
             if store.maxmemory() > 0 {
                 if store.precheck_for_write().is_err() {
                     encode_error(out, OOM_ERR);
@@ -131,7 +130,7 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         _ => {}
     }
     // OOM precheck for memory-growing writes only. Gated on `maxmemory > 0`
-    // so the default unlimited case skips both calls (F3 v1.25).
+    // so the default unlimited case skips both calls.
     let is_grow = is_growing_write_verb(cmd);
     if store.maxmemory() > 0 && is_grow && store.precheck_for_write().is_err() {
         encode_error(out, OOM_ERR);
@@ -148,7 +147,7 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
         || crate::dispatch_collections::dispatch_zset(cmd, store, args, out)
         || crate::dispatch_geo::dispatch_geo(cmd, store, args, out)
         || crate::dispatch_stream::dispatch_stream(cmd, store, args, out)
-        // v1.27 P7b: EVAL / EVALSHA / EVAL_RO / EVALSHA_RO / SCRIPT.
+        // EVAL / EVALSHA / EVAL_RO / EVALSHA_RO / SCRIPT.
         || crate::cmd_lua::dispatch_lua(ctx, cmd, store, args, out)
         || dispatch_generic(cmd, store, args, out)
         || dispatch_multikey_stub(cmd, out);
@@ -215,9 +214,8 @@ fn dispatch_conn<A: ArgvView + ?Sized>(
 /// `SELECT 0` (the Redis default) with `+OK` and reject any other index
 /// with the byte-identical Redis error.
 ///
-/// This is the v1.0.2 minimal: real multi-DB support (SELECT N + `MOVE` +
-/// `SWAPDB` + `databases` config + per-shard `Vec<Store>`) is on the
-/// v1.1.0 backlog.
+/// Real multi-DB support (SELECT N + `MOVE` + `SWAPDB` + `databases`
+/// config + per-shard `Vec<Store>`) is intentionally not implemented.
 fn cmd_select<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>) {
     if args.len() != 2 {
         wrong_args(out, "select");

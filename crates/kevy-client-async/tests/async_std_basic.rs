@@ -1,4 +1,4 @@
-//! Integration test (T4.22): wire round-trip under the `async-std`
+//! Integration test: wire round-trip under the `async-std`
 //! runtime feature. Same scenarios as `tokio_basic.rs` adapted for
 //! async-std's `block_on` + `task::spawn`. Only compiled when
 //! `async-std` is enabled.

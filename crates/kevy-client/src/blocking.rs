@@ -1,9 +1,9 @@
-//! Blocking pops: `BLPOP` / `BRPOP` / `BZPOPMIN` (v1.14.0).
+//! Blocking pops: `BLPOP` / `BRPOP` / `BZPOPMIN`.
 //!
 //! Both backends block for real. The embedded store parks the calling
-//! thread on the store's process-wide condvar (kevy-embedded v2.4
+//! thread on the store's process-wide condvar (kevy-embedded's
 //! blocking ops); the remote backend sends the verb and the *server*
-//! parks the connection until data or timeout (kevy v2.4 BLOCK
+//! parks the connection until data or timeout (the server's BLOCK
 //! reactor).
 //!
 //! Read-timeout note (remote): [`kevy_resp_client::RespClient`] sets

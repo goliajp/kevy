@@ -41,8 +41,8 @@ pub(crate) fn kevy_hello_reply<A: ArgvView + ?Sized>(
 }
 
 /// Emit the HELLO ack body shaped per `proto`. RESP2: flat
-/// `*14\r\n...` array-of-pairs (kept identical to the pre-v1.4 wire
-/// for backward-compat). RESP3: `%7\r\n...` Map with the same 7 fields.
+/// `*14\r\n...` array-of-pairs (kept identical to the original flat
+/// wire for backward-compat). RESP3: `%7\r\n...` Map with the same 7 fields.
 fn encode_hello_reply(out: &mut Vec<u8>, proto: RespVersion) {
     let proto_int = match proto {
         RespVersion::V2 => 2,

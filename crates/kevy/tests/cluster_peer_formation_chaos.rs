@@ -1,4 +1,4 @@
-//! v1.44 — kevy-elect peer-formation chaos test.
+//! kevy-elect peer-formation chaos test.
 //!
 //! Spawn 3 kevy processes with `[cluster] enabled = true` + each
 //! having a unique `node_id` and the same `peers` list. Verify each
@@ -89,14 +89,14 @@ fn cluster_peer_formation_survives_node_death() {
         eprintln!("cluster_peer: node{i} reports cluster_known_nodes={known}");
         max_known = max_known.max(known);
     }
-    // OBSERVATIONAL — kevy-elect peer discovery handshake currently
-    // surfaces as `cluster_known_nodes=0` under this chaos setup
-    // (kevy-elect bootstrap timing or test peers config — v1.44.x
-    // investigation). The STRICT invariant is that no node panics;
+    // OBSERVATIONAL — kevy-elect peer discovery handshake can
+    // surface as `cluster_known_nodes=0` under this chaos setup
+    // (kevy-elect bootstrap timing or test peers config).
+    // The STRICT invariant is that no node panics;
     // peer-count is reported but not failure-bound.
     eprintln!(
         "cluster_peer: max cluster_known_nodes observed = {max_known} \
-         (observational; ≥2 expected per design, v1.44.x candidate if 0)"
+         (observational; ≥2 expected per design)"
     );
 
     // Phase 2: SIGKILL node 0. Surviving nodes 1 + 2 should stay up

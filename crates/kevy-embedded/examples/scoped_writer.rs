@@ -1,6 +1,6 @@
 //! `kevy-embedded` as a Phase 3 scope writer.
 //!
-//! Shows the embed-as-writer pattern from v1.21: an application
+//! Shows the embed-as-writer pattern: an application
 //! embeds the source-of-truth store for a key prefix, exposes a
 //! replication source listener for cluster readers, and writes
 //! locally with zero network round-trip on the write path.

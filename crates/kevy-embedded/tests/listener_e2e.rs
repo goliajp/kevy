@@ -1,4 +1,4 @@
-//! v2.9 — the read-only RESP listener against a live embedded store.
+//! The read-only RESP listener against a live embedded store.
 
 use std::io::{Read, Write};
 

@@ -5,7 +5,7 @@
 //! pub/sub work end-to-end: the publisher's `Connection` and the
 //! consumer's `Subscriber`, opened with the same URL, find the same bus.
 //! Anonymous `mem://` (no name) skips the registry and stays per-call
-//! isolated, preserving the v1.0/v1.1/v1.2 behaviour.
+//! isolated, preserving the original documented behaviour.
 
 use std::collections::HashMap;
 use std::path::PathBuf;

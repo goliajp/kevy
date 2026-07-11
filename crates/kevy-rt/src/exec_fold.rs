@@ -36,11 +36,11 @@ impl<C: Commands> Shard<C> {
             match (&mut slot.agg, part) {
                 (Agg::First(dst), Part::Reply(b)) => *dst = Some(b),
                 (Agg::SumInt(acc), Part::Int(n)) => *acc += n,
-                // v3.16 D1 WAIT: reply = MIN over per-shard acked counts.
+                // WAIT: reply = MIN over per-shard acked counts.
                 (Agg::MinInt(acc), Part::Int(n)) => *acc = (*acc).min(n),
-                // v3.16 D2 REPL.WAIT: every shard must report 1 (met).
+                // REPL.WAIT: every shard must report 1 (met).
                 (Agg::ReplBarrier { ok, .. }, Part::Int(n)) => *ok &= n > 0,
-                // v3.16 D2 REPL.TOKEN: pairs drop in by shard id.
+                // REPL.TOKEN: pairs drop in by shard id.
                 (
                     Agg::ReplTokens { slots },
                     Part::ReplToken { shard, generation, next_offset },

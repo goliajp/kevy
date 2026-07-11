@@ -1,4 +1,4 @@
-//! v2.3 — FEED.* consumer surface (RFC 2026-07-04, LOCKED).
+//! FEED.* consumer surface.
 //!
 //! - `FEED.SHARDS` → `:nshards` (answered locally — every shard knows).
 //! - `FEED.TAIL <shard>` → `*2 [:generation, :next_offset]`, executed

@@ -1,6 +1,6 @@
 //! Verb documentation metadata — the single source of truth for
-//! COMMAND DOCS (v3.10), llms.txt (v3.11), and the MCP schema
-//! (v3.12). Parity tests in tests_verb_meta.rs hold this table and
+//! COMMAND DOCS, llms.txt, and the MCP schema.
+//! Parity tests in tests_verb_meta.rs hold this table and
 //! the dispatch surface bidirectionally equal.
 //!
 //! Flag discipline: `write` / `readonly` mirror

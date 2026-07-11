@@ -16,8 +16,9 @@
 //!   `appendonly`, `logfile`-with-path) return Redis's canonical
 //!   `ERR ... can't be changed at runtime` form.
 //! - REWRITE re-emits the live config via `Config::to_toml_string`
-//!   and rename-overwrites the source file atomically. Per the v1.0
-//!   matrix, inline comments are NOT preserved; the reply notes this.
+//!   and rename-overwrites the source file atomically. Per the
+//!   hot-settable matrix, inline comments are NOT preserved; the
+//!   reply notes this.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -96,7 +97,7 @@ fn cmd_config_set<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u
     }
     let key = args[2].to_ascii_lowercase();
     let value = &args[3];
-    // v1.42 — record the CONFIG SET event to the audit log (if enabled).
+    // Record the CONFIG SET event to the audit log (if enabled).
     let v_slice: &[u8] = value;
     ctx.state.obs.audit_record(&[
         &b"CONFIG"[..],
@@ -127,7 +128,7 @@ fn cmd_config_set<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u
 }
 
 fn cmd_config_rewrite(ctx: &Ctx<'_>, out: &mut Vec<u8>) {
-    // v1.42 — audit the admin event.
+    // Audit the admin event.
     ctx.state.obs.audit_record(&[&b"CONFIG"[..], &b"REWRITE"[..]]);
     let cfg = ctx.state.config();
     let Some(path) = cfg.source_path.clone() else {
@@ -206,7 +207,7 @@ fn atomic_write(path: &PathBuf, bytes: &[u8]) -> std::io::Result<()> {
 
 #[derive(Debug)]
 enum SetError {
-    /// Field exists but the v1.0 hot-settable matrix marks it as
+    /// Field exists but the hot-settable matrix marks it as
     /// requiring a restart (bind, port, threads, dir, appendonly,
     /// logfile-with-path).
     ReadOnly(String),
@@ -316,9 +317,9 @@ fn set_log(cfg: &mut Config, key: &str, value: &str) -> Result<(), SetError> {
         }
         "logfile" => {
             // Redis names this `logfile`; kevy's TOML calls it `log.output`.
-            // Per the v1.0 hot-settable matrix, only stdout / stderr are
+            // Per the hot-settable matrix, only stdout / stderr are
             // hot-settable. Any file path requires opening a handle the
-            // shards can write to — punted to the v1.x log-layer rewrite.
+            // shards can write to, which needs a restart.
             match LogOutput::parse(value) {
                 LogOutput::Stdout => cfg.log.output = LogOutput::Stdout,
                 LogOutput::Stderr => cfg.log.output = LogOutput::Stderr,

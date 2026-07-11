@@ -1,4 +1,4 @@
-//! End-to-end v0.1 detection: a client speaking real RESP over a TCP socket
+//! End-to-end detection: a client speaking real RESP over a TCP socket
 //! gets correct PING/ECHO replies through our own socket layer. Hermetic — no
 //! external redis-cli required.
 

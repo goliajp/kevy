@@ -1,7 +1,7 @@
 //! Crash safety test — primary dies under load; verify replica caught
 //! up close to the ACK'd write set.
 //!
-//! v1.33 chaos test. Spawns a primary kevy + a replica kevy, drives
+//! Spawns a primary kevy + a replica kevy, drives
 //! concurrent writes against the primary, abruptly SIGKILLs the
 //! primary mid-flight, then queries the REPLICA and counts how many
 //! of the primary-ACK'd writes made it. The lost-fraction here is

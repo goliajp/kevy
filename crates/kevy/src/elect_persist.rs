@@ -1,5 +1,5 @@
 //! File-backed [`ElectorPersist`] — the kevy-server side of the
-//! v3.15 D1 election-hardening contract. Stores the elector's
+//! election-hardening contract. Stores the elector's
 //! `(epoch, votedFor)` pair in `<data_dir>/elect.meta`:
 //!
 //! ```text

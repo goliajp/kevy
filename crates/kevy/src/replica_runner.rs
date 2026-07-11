@@ -2,11 +2,11 @@
 //! TCP link to an upstream primary's per-shard replication port and
 //! drives a `kevy_replicate::replica::ReplicaClient`. Each event the
 //! client surfaces is forwarded into the matching shard's
-//! `ReplicaInboxSender` (T1.29(c)), where the reactor thread picks
+//! `ReplicaInboxSender`, where the reactor thread picks
 //! it up at the next tick and applies it under
 //! `ReplicatedApplyGuard`.
 //!
-//! v1.18 model: one runner per local shard, one upstream port per
+//! Fleet model: one runner per local shard, one upstream port per
 //! upstream shard. Multi-shard kevy means the embedder spawns
 //! `nshards` runners; runner `i` connects to
 //! `(upstream_host, upstream_port_base + i)`.
@@ -36,7 +36,7 @@ const RECONNECT_BACKOFF: Duration = Duration::from_millis(250);
 
 /// Handle for a per-shard runner thread. The kevy server keeps a
 /// `Vec<ReplicaRunner>` in its `ReplicationState` so `REPLICAOF`
-/// (T1.29.5) can stop + replace runners at runtime and so the
+/// can stop + replace runners at runtime and so the
 /// process exits cleanly via `Drop`.
 pub(crate) struct ReplicaRunner {
     handle: Option<JoinHandle<()>>,
@@ -55,7 +55,7 @@ impl ReplicaRunner {
     /// [`Self::shutdown`] is called.
     /// `runner_slot` indexes this runner's applied-offset slot in
     /// `progress` (= shard id in the fleet model) — the
-    /// election-offset sum reads it (v3.15 D1). `progress` is the
+    /// election-offset sum reads it. `progress` is the
     /// ONLY state slice the runner thread captures.
     pub(crate) fn spawn(
         upstream_addr: (std::net::IpAddr, u16),
@@ -67,7 +67,7 @@ impl ReplicaRunner {
         Self::spawn_target(upstream_addr, replica_id, Target::PerShard(sender), runner_slot, progress)
     }
 
-    /// v3.2 — single-source mode: ONE runner drains one upstream
+    /// Single-source mode: ONE runner drains one upstream
     /// stream and fans events into EVERY shard's inbox (see
     /// [`route_event`]).
     pub(crate) fn spawn_routed(
@@ -109,8 +109,7 @@ impl ReplicaRunner {
     /// to break any in-flight blocking `next_event` read. Returns
     /// once the thread joins (within one `RECONNECT_BACKOFF` window
     /// in the worst case — the runner is reconnecting and not in a
-    /// blocking read). Called by REPLICAOF retarget / NO ONE
-    /// (T1.29.5 / T1.30).
+    /// blocking read). Called by REPLICAOF retarget / NO ONE.
     #[allow(dead_code)] // wired from REPLICAOF — kept on the API surface
     pub(crate) fn shutdown(mut self) {
         self.signal_stop();
@@ -149,9 +148,9 @@ impl Drop for ReplicaRunner {
 /// unblocking any in-flight blocking read.
 /// Where a runner delivers events.
 enum Target {
-    /// v1.18 fleet model: this runner feeds exactly one shard.
+    /// Fleet model: this runner feeds exactly one shard.
     PerShard(ReplicaInboxSender),
-    /// v3.2 single-source model: one runner feeds every shard.
+    /// Single-source model: one runner feeds every shard.
     Routed(Vec<ReplicaInboxSender>),
 }
 
@@ -222,10 +221,10 @@ fn drain_client(
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
             Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
-                // v3.14 heartbeat: record the primary's position for
+                // Heartbeat: record the primary's position for
                 // lag/liveness (INFO replication) and answer with an
                 // ACK immediately — a heartbeat round trip even when
-                // no frames flow. v3.16: the generation feeds the
+                // no frames flow. The generation feeds the
                 // REPL.WAIT gen-match registry.
                 progress.record_ping(runner_slot, generation, primary_offset, from_offset);
                 let _ = client.send_ack(from_offset);
@@ -276,7 +275,7 @@ fn event_to_apply(event: ReplicaEvent, from_offset: &mut u64) -> ReplicaApply {
     }
 }
 
-// ---------- v3.2 single-source (embedded-as-primary) mode ----------
+// ---------- single-source (embedded-as-primary) mode ----------
 
 /// Route one event fan into N shard inboxes: snapshot control/chunks
 /// BROADCAST (each shard loads its own hash slice — SnapshotEnd
@@ -326,7 +325,7 @@ fn route_event(
     }
 }
 
-/// v3.2: drain loop for single-source mode (one upstream conn, all
+/// Drain loop for single-source mode (one upstream conn, all
 /// shard inboxes).
 fn drain_client_routed(
     client: &mut ReplicaClient,
