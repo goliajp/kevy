@@ -12,7 +12,7 @@
 //! open starts a fresh generation-1 stream, which is exactly what the
 //! (empty) restored state implies.
 
-use std::io;
+use crate::KevyResult;
 use std::sync::{Arc, Mutex};
 
 use kevy_replicate::feed::{FeedRead, FeedSource};
@@ -195,7 +195,7 @@ impl Store {
     /// sidecar decision table when persistent, else a fresh gen-1.
     pub(crate) fn feed_open(
         config: &crate::config::Config,
-    ) -> io::Result<Option<Arc<Mutex<FeedSource>>>> {
+    ) -> KevyResult<Option<Arc<Mutex<FeedSource>>>> {
         if !config.feed_enabled {
             return Ok(None);
         }

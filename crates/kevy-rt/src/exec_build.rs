@@ -4,6 +4,7 @@
 //! Split out of `exec.rs` so that file stays under the 500-LOC house rule.
 //! Everything here is still on the same `impl<C: Commands> Shard<C>`.
 
+use kevy_resp::CmdError;
 use crate::Commands;
 use crate::Route;
 use crate::message::{Agg, GatherKind, KeyShape, KvPairs, MultiOp, Op};
@@ -238,7 +239,7 @@ impl<C: Commands> Shard<C> {
         };
         let (dst, keys, weights, aggregate) = match parsed {
             Ok(t) => t,
-            Err(msg) => return gather_error(msg),
+            Err(msg) => return gather_error(msg.as_wire()),
         };
         let mut by_shard: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
         for k in &keys {
@@ -266,7 +267,7 @@ impl<C: Commands> Shard<C> {
     fn build_zintercard<A: ArgvView + ?Sized>(&self, args: &A) -> (Vec<(usize, Op)>, Agg) {
         let (keys, limit) = match parse_zintercard_args(args) {
             Ok(t) => t,
-            Err(msg) => return gather_error(msg),
+            Err(msg) => return gather_error(msg.as_wire()),
         };
         let mut by_shard: HashMap<usize, Vec<Vec<u8>>> = HashMap::new();
         for k in &keys {
@@ -343,9 +344,9 @@ type ZStoreParsed = (Vec<u8>, Vec<Vec<u8>>, Option<Vec<f64>>, kevy_store::ZAggre
 fn parse_zsetstore_args<A: ArgvView + ?Sized>(
     args: &A,
     diff_form: bool,
-) -> Result<ZStoreParsed, &'static str> {
+) -> Result<ZStoreParsed, CmdError> {
     if args.len() < 4 {
-        return Err("ERR wrong number of arguments");
+        return Err(CmdError::Wire("ERR wrong number of arguments"));
     }
     let dst = args[1].to_vec();
     let numkeys: usize = std::str::from_utf8(&args[2])
@@ -354,7 +355,7 @@ fn parse_zsetstore_args<A: ArgvView + ?Sized>(
         .filter(|&n| n > 0)
         .ok_or("ERR numkeys should be greater than 0")?;
     if args.len() < 3 + numkeys {
-        return Err("ERR Number of keys can't be greater than number of args");
+        return Err(CmdError::Wire("ERR Number of keys can't be greater than number of args"));
     }
     let keys: Vec<Vec<u8>> = (3..3 + numkeys).map(|i| args[i].to_vec()).collect();
     let (weights, aggregate) = parse_zstore_tail(args, diff_form, numkeys)?;
@@ -370,7 +371,7 @@ fn parse_zstore_tail<A: ArgvView + ?Sized>(
     args: &A,
     diff_form: bool,
     numkeys: usize,
-) -> Result<(Option<Vec<f64>>, kevy_store::ZAggregate), &'static str> {
+) -> Result<(Option<Vec<f64>>, kevy_store::ZAggregate), CmdError> {
     let mut weights = None;
     let mut aggregate = kevy_store::ZAggregate::Sum;
     let mut i = 3 + numkeys;
@@ -378,7 +379,7 @@ fn parse_zstore_tail<A: ArgvView + ?Sized>(
         let a = &args[i];
         if !diff_form && a.eq_ignore_ascii_case(b"WEIGHTS") {
             if args.len() < i + 1 + numkeys {
-                return Err("ERR syntax error");
+                return Err(CmdError::Wire("ERR syntax error"));
             }
             let mut w = Vec::with_capacity(numkeys);
             for j in 0..numkeys {
@@ -399,20 +400,20 @@ fn parse_zstore_tail<A: ArgvView + ?Sized>(
             } else if m.eq_ignore_ascii_case(b"MAX") {
                 kevy_store::ZAggregate::Max
             } else {
-                return Err("ERR syntax error");
+                return Err(CmdError::Wire("ERR syntax error"));
             };
             i += 2;
         } else {
-            return Err("ERR syntax error");
+            return Err(CmdError::Wire("ERR syntax error"));
         }
     }
     Ok((weights, aggregate))
 }
 
 /// `S*STORE dst key [key …]`.
-fn parse_setstore_args<A: ArgvView + ?Sized>(args: &A) -> Result<ZStoreParsed, &'static str> {
+fn parse_setstore_args<A: ArgvView + ?Sized>(args: &A) -> Result<ZStoreParsed, CmdError> {
     if args.len() < 3 {
-        return Err("ERR wrong number of arguments");
+        return Err(CmdError::Wire("ERR wrong number of arguments"));
     }
     let dst = args[1].to_vec();
     let keys: Vec<Vec<u8>> = (2..args.len()).map(|i| args[i].to_vec()).collect();
@@ -422,9 +423,9 @@ fn parse_setstore_args<A: ArgvView + ?Sized>(args: &A) -> Result<ZStoreParsed, &
 /// `ZINTERCARD numkeys key… [LIMIT n]`.
 fn parse_zintercard_args<A: ArgvView + ?Sized>(
     args: &A,
-) -> Result<(Vec<Vec<u8>>, usize), &'static str> {
+) -> Result<(Vec<Vec<u8>>, usize), CmdError> {
     if args.len() < 3 {
-        return Err("ERR wrong number of arguments");
+        return Err(CmdError::Wire("ERR wrong number of arguments"));
     }
     let numkeys: usize = std::str::from_utf8(&args[1])
         .ok()
@@ -432,7 +433,7 @@ fn parse_zintercard_args<A: ArgvView + ?Sized>(
         .filter(|&n| n > 0)
         .ok_or("ERR numkeys should be greater than 0")?;
     if args.len() < 2 + numkeys {
-        return Err("ERR Number of keys can't be greater than number of args");
+        return Err(CmdError::Wire("ERR Number of keys can't be greater than number of args"));
     }
     let keys: Vec<Vec<u8>> = (2..2 + numkeys).map(|i| args[i].to_vec()).collect();
     let mut limit = 0usize;
@@ -446,7 +447,7 @@ fn parse_zintercard_args<A: ArgvView + ?Sized>(
                 .ok_or("ERR LIMIT can't be negative")?;
             i += 2;
         } else {
-            return Err("ERR syntax error");
+            return Err(CmdError::Wire("ERR syntax error"));
         }
     }
     Ok((keys, limit))

@@ -106,7 +106,7 @@ pub(crate) fn cmd_hset<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &
         .step_by(2)
         .map(|i| (&args[i], &args[i + 1]))
         .collect();
-    emit_int_result(store.hset_borrowed(&args[1], &pairs).map(|n| n as i64), out);
+    emit_int_result(store.hset(&args[1], &pairs).map(|n| n as i64), out);
 }
 
 /// `ZRANGE key start stop [WITHSCORES]` — by rank.

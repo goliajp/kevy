@@ -43,7 +43,7 @@ redis-cli -p 6379 GET foo
 From Rust, the in-tree client accepts `unix://` URLs:
 
 ```rust
-let mut conn = kevy_client::Connection::open("unix:///tmp/kevy.sock")?;
+let mut conn = kevy_client::Connection::connect("unix:///tmp/kevy.sock")?;
 conn.set(b"k", b"v")?;
 ```
 

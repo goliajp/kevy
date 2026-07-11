@@ -86,7 +86,7 @@ let n = cc.incr(b"counter")?;
 
 // マルチキーの DEL/EXISTS — キーごとにルーティングして合算。
 let removed = cc.del(&[b"a", b"b", b"c"])?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 実行可能なシード例は[`crates/kevy-client/examples/cluster.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster.rs)に、ベンチマークは[`crates/kevy-client/examples/cluster_bench.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster_bench.rs)にあります。
@@ -126,7 +126,7 @@ Redis Clusterと違い、kevyはシングルノードクラスタでマルチキ
 let reply = cc.request_keyed(b"mykey", &[b"STRLEN".to_vec(), b"mykey".to_vec()])?;
 // キーなしコマンドは任意のシャードへ。
 let reply = cc.request_unkeyed(&[b"PING".to_vec()])?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 `ClusterClient`は、文字列、ハッシュ、リスト、セット、ソート済みセット、pub/sub、マルチキーの`DEL`/`EXISTS`の共通verbをラップします。pub/subはプロセス全体に届きます。どのポートの`Subscriber`も、どのシャードが`PUBLISH`を受けたかに関係なく、発行されたすべてのメッセージを見ます。
@@ -171,7 +171,7 @@ let replica = Store::open_replica("primary.local:16004")?;
 
 let v = replica.get(b"hello")?;
 assert!(replica.set(b"k", b"v").is_err());      // READONLY
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 チューニングする場合：
@@ -185,7 +185,7 @@ let cfg = Config::default()
     .with_replica_id("backup-svc-region-a")
     .with_replica_reconnect(Duration::from_millis(50), Duration::from_secs(10));
 let replica = Store::open(cfg)?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 ハンドシェイクは`REPLICATE FROM <last-applied-offset> ID <replica_id>`を送ります。プライマリはオフセットをackし、フレームをストリーミングします。最後の`Store`クローンがdropされるとランナースレッドはjoinされ、プライマリはクリーンなFINを観測してスロットを解放します。組み込み側での`PUBLISH`はローカルに許可されます（pub/subはプロセスローカルです）が、キー空間自体は読み取り専用のままです。
@@ -223,7 +223,7 @@ let writer = Store::open(
 // ローカル書き込みは組み込みのレプリケーションソースのバックログに流れる;
 // リーダーは kevy_replicate::ReplicaClient で 0.0.0.0:6105 に接続する。
 writer.set(b"app:billing:invoice:42", b"...")?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 組み込み側は、`with_embed_writer`に渡したアドレスでレプリケーションリスナーを公開します。ほかのノードは、サーバープライマリから引くのとまったく同じ方法でそこからログを引きます。

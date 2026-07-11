@@ -349,7 +349,7 @@ fn dispatch_set<A: ArgvView + ?Sized>(
             } else {
                 emit_int_result(
                     store
-                        .sadd_borrowed(&args[1], &rest_borrowed(args, 2))
+                        .sadd(&args[1], &rest_borrowed(args, 2))
                         .map(|n| n as i64),
                     out,
                 );
@@ -361,7 +361,7 @@ fn dispatch_set<A: ArgvView + ?Sized>(
             } else {
                 emit_int_result(
                     store
-                        .srem_borrowed(&args[1], &rest_borrowed(args, 2))
+                        .srem(&args[1], &rest_borrowed(args, 2))
                         .map(|n| n as i64),
                     out,
                 );
@@ -414,14 +414,14 @@ fn dispatch_generic<A: ArgvView + ?Sized>(
             if args.len() < 2 {
                 wrong_args(out, verb);
             } else {
-                encode_integer(out, store.del_borrowed(&rest_borrowed(args, 1)) as i64);
+                encode_integer(out, store.del(&rest_borrowed(args, 1)) as i64);
             }
         }
         b"EXISTS" => {
             if args.len() < 2 {
                 wrong_args(out, "exists");
             } else {
-                encode_integer(out, store.exists_borrowed(&rest_borrowed(args, 1)) as i64);
+                encode_integer(out, store.exists(&rest_borrowed(args, 1)) as i64);
             }
         }
         b"EXPIRE" => cmd_expire(store, args, 1000, "expire", out),

@@ -16,7 +16,7 @@ use crate::store::{Shards, Store, lock_write};
 /// Weak handle to a `Store` — does not keep the underlying keyspace alive.
 ///
 /// Used by the URL-keyed registry in `kevy-client` so that multiple
-/// `Connection::open("mem://name")` calls share the same backing store
+/// `Connection::connect("mem://name")` calls share the same backing store
 /// without leaking it when all strong handles go away.
 #[derive(Clone)]
 pub struct WeakStore {

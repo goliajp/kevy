@@ -3,6 +3,7 @@
 //! to restore `last_id` / `entries_added` / `max_deleted_id` exactly when
 //! a bare XADD replay wouldn't (deleted tail, deleted-only stream).
 
+use kevy_resp::CmdError;
 use kevy_resp::{ArgvView, encode_error, encode_simple_string};
 use kevy_store::{Store, StreamId, parse_explicit_id};
 
@@ -14,7 +15,7 @@ pub(super) fn cmd_xsetid<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out:
     }
     let last_id = match parse_id(&args[2]) {
         Ok(id) => id,
-        Err(msg) => return encode_error(out, msg),
+        Err(msg) => return encode_error(out, msg.as_wire()),
     };
     let mut entries_added: Option<u64> = None;
     let mut max_deleted_id: Option<StreamId> = None;
@@ -34,7 +35,7 @@ pub(super) fn cmd_xsetid<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out:
             b"MAXDELETEDID" => {
                 max_deleted_id = match parse_id(&args[i + 1]) {
                     Ok(id) => Some(id),
-                    Err(msg) => return encode_error(out, msg),
+                    Err(msg) => return encode_error(out, msg.as_wire()),
                 };
             }
             _ => return encode_error(out, "ERR syntax error"),
@@ -55,7 +56,7 @@ pub(super) fn cmd_xsetid<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out:
     }
 }
 
-fn parse_id(s: &[u8]) -> Result<StreamId, &'static str> {
+fn parse_id(s: &[u8]) -> Result<StreamId, CmdError> {
     parse_explicit_id(s, /*end=*/ false)
-        .map_err(|_| "ERR Invalid stream ID specified as stream command argument")
+        .map_err(|_| CmdError::Wire("ERR Invalid stream ID specified as stream command argument"))
 }

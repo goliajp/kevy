@@ -15,6 +15,7 @@
 //! are not. Filtering never moves the cursor differently: `next` is
 //! the offset after the last *scanned* frame, matched or not.
 
+use kevy_resp::CmdError;
 use kevy_replicate::feed::FeedRead;
 use kevy_resp::ArgvView;
 
@@ -37,20 +38,20 @@ pub(crate) struct FeedReadArgs {
 }
 
 /// Parse `FEED.TAIL <shard>`'s shard index.
-pub(crate) fn parse_shard_arg<A: ArgvView + ?Sized>(args: &A) -> Result<usize, &'static str> {
+pub(crate) fn parse_shard_arg<A: ArgvView + ?Sized>(args: &A) -> Result<usize, CmdError> {
     if args.len() != 2 {
-        return Err("ERR wrong number of arguments for 'feed.tail'");
+        return Err(CmdError::Wire("ERR wrong number of arguments for 'feed.tail'"));
     }
     std::str::from_utf8(&args[1])
         .ok()
         .and_then(|s| s.parse().ok())
-        .ok_or("ERR invalid shard")
+        .ok_or(CmdError::Wire("ERR invalid shard"))
 }
 
 /// Parse `FEED.READ <shard> <gen> <offset> [COUNT n] [PREFIX p ...]`.
-pub(crate) fn parse_feed_read<A: ArgvView + ?Sized>(args: &A) -> Result<FeedReadArgs, &'static str> {
+pub(crate) fn parse_feed_read<A: ArgvView + ?Sized>(args: &A) -> Result<FeedReadArgs, CmdError> {
     if args.len() < 4 {
-        return Err("ERR wrong number of arguments for 'feed.read'");
+        return Err(CmdError::Wire("ERR wrong number of arguments for 'feed.read'"));
     }
     let int = |i: usize| -> Option<u64> {
         std::str::from_utf8(&args[i]).ok().and_then(|s| s.parse().ok())
@@ -71,7 +72,7 @@ pub(crate) fn parse_feed_read<A: ArgvView + ?Sized>(args: &A) -> Result<FeedRead
             prefixes.push(p.to_vec());
             i += 2;
         } else {
-            return Err("ERR syntax error");
+            return Err(CmdError::Wire("ERR syntax error"));
         }
     }
     Ok(FeedReadArgs {
@@ -107,7 +108,7 @@ impl<C: Commands> Shard<C> {
             }
             crate::Route::FeedTail => match parse_shard_arg(args) {
                 Ok(sh) => self.start_feed_op(conn_id, seq, sh, Op::FeedTail, is_quit),
-                Err(msg) => self.reply_feed_error(conn_id, seq, msg, is_quit),
+                Err(msg) => self.reply_feed_error(conn_id, seq, msg.as_wire(), is_quit),
             },
             crate::Route::FeedRead => match parse_feed_read(args) {
                 Ok(p) => {
@@ -119,7 +120,7 @@ impl<C: Commands> Shard<C> {
                     };
                     self.start_feed_op(conn_id, seq, p.shard, op, is_quit);
                 }
-                Err(msg) => self.reply_feed_error(conn_id, seq, msg, is_quit),
+                Err(msg) => self.reply_feed_error(conn_id, seq, msg.as_wire(), is_quit),
             },
             _ => {}
         }

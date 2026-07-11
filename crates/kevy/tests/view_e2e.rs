@@ -94,7 +94,7 @@ impl Server {
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 8, kevy::KevyCommands::sharded(8))
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(8)).bind([127, 0, 0, 1], port).shards(8)
                 .with_data_dir(dir_thread);
             rt.run(stop_thread).unwrap();
         });

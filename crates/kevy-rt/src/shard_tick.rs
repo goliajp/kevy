@@ -173,6 +173,9 @@ impl<C: Commands> Shard<C> {
         // from the state machine. For `SnapshotShipping`, report
         // `ack_offset` (the snapshot's frozen-at offset) since
         // streaming hasn't started yet.
+        let now_ns = std::time::Instant::now()
+            .duration_since(self.replication_epoch)
+            .as_nanos() as u64;
         let mut replicas = Vec::with_capacity(self.replicas.len());
         for c in &self.replicas {
             let (sent, id) = match &c.state {
@@ -191,7 +194,14 @@ impl<C: Commands> Shard<C> {
             // (0 until its first REPLCONF ACK lands).
             // None = never ACKed; Some(0) is a REAL ack from an empty
             // replica's heartbeat round trip (min-replicas counts it).
-            let acked = id.and_then(|i| self.slots.get(i).map(|s| s.acked_offset));
+            // The ACK age (vs the same epoch clock the slot was
+            // touched with) feeds the min_replicas_max_lag_ms gate.
+            let acked = id.and_then(|i| {
+                self.slots.get(i).map(|s| crate::ReplicaAck {
+                    acked_offset: s.acked_offset,
+                    ack_age_ms: now_ns.saturating_sub(s.last_seen_ns) / 1_000_000,
+                })
+            });
             replicas.push((c.peer.0, c.peer.1, sent, acked));
         }
         self.commands.on_replication_view(offset, replicas);

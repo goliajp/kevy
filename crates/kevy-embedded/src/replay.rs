@@ -32,7 +32,7 @@ pub(crate) fn apply(store: &mut Store, args: &Argv) {
     match verb.as_slice() {
         b"SET" => apply_set(store, args),
         b"DEL" => {
-            let keys: Vec<Vec<u8>> = args.iter().skip(1).map(<[u8]>::to_vec).collect();
+            let keys: Vec<&[u8]> = args.iter().skip(1).collect();
             store.del(&keys);
         }
         b"INCR" => {
@@ -291,10 +291,10 @@ fn apply_hpersist(store: &mut kevy_store::Store, args: &Argv) {
 
 fn apply_hset(store: &mut Store, args: &Argv) {
     let Some(k) = args.get(1) else { return };
-    let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    let mut pairs: Vec<(&[u8], &[u8])> = Vec::new();
     let mut i = 2;
     while i + 1 < args.len() {
-        pairs.push((args[i].to_vec(), args[i + 1].to_vec()));
+        pairs.push((&args[i], &args[i + 1]));
         i += 2;
     }
     if !pairs.is_empty() {
@@ -352,10 +352,10 @@ fn apply_zadd(store: &mut Store, args: &Argv) {
     // pair. (Embedded's own AOF never contains flags: the facades log
     // the applied effect as plain ZADD.)
     let (flags, incr, mut i) = parse_zadd_flags(args);
-    let mut pairs: Vec<(f64, Vec<u8>)> = Vec::new();
+    let mut pairs: Vec<(f64, &[u8])> = Vec::new();
     while i + 1 < args.len() {
         if let Some(score) = parse_f64(&args[i]) {
-            pairs.push((score, args[i + 1].to_vec()));
+            pairs.push((score, &args[i + 1]));
         }
         i += 2;
     }
@@ -366,24 +366,22 @@ fn apply_zadd(store: &mut Store, args: &Argv) {
         // `ZADD … INCR delta member` is an increment, NOT an absolute
         // score — applying it as one would silently diverge.
         if pairs.len() == 1 {
-            let _ = store.zadd_incr(k, pairs[0].0, &pairs[0].1, flags);
+            let _ = store.zadd_incr(k, pairs[0].0, pairs[0].1, flags);
         }
     } else if flags == kevy_store::ZaddFlags::default() {
         let _ = store.zadd(k, &pairs);
     } else {
-        let borrowed: Vec<(f64, &[u8])> =
-            pairs.iter().map(|(s, m)| (*s, m.as_slice())).collect();
-        let _ = store.zadd_flags_borrowed(k, &borrowed, flags);
+        let _ = store.zadd_flags(k, &pairs, flags);
     }
 }
 
 /// Common shape: `VERB key item1 item2 ...` → call `f(store, key, &items)`.
 fn apply_pairs_strip<F>(store: &mut Store, args: &Argv, f: F)
 where
-    F: FnOnce(&mut Store, &[u8], &[Vec<u8>]),
+    F: FnOnce(&mut Store, &[u8], &[&[u8]]),
 {
     let Some(k) = args.get(1) else { return };
-    let rest: Vec<Vec<u8>> = args.iter().skip(2).map(<[u8]>::to_vec).collect();
+    let rest: Vec<&[u8]> = args.iter().skip(2).collect();
     if !rest.is_empty() {
         f(store, k, &rest);
     }

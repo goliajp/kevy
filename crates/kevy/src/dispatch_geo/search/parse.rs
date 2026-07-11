@@ -3,6 +3,7 @@
 //! owns the search core + reply emission + STORE write path) stays
 //! under the project's 500-LOC limit.
 
+use kevy_resp::CmdError;
 use kevy_resp::ArgvView;
 
 use crate::cmd::arg_f64;
@@ -10,7 +11,7 @@ use crate::cmd::arg_f64;
 use super::super::parse_unit;
 use super::{Anchor, LegacyRadiusParsed, Opts, Shape, Sort};
 
-pub(in crate::dispatch_geo) fn parse_opts<A: ArgvView + ?Sized>(args: &A) -> Result<Opts, &'static str> {
+pub(in crate::dispatch_geo) fn parse_opts<A: ArgvView + ?Sized>(args: &A) -> Result<Opts, CmdError> {
     parse_opts_at(args, 2)
 }
 
@@ -19,7 +20,7 @@ pub(in crate::dispatch_geo) fn parse_opts<A: ArgvView + ?Sized>(args: &A) -> Res
 pub(in crate::dispatch_geo) fn parse_opts_at<A: ArgvView + ?Sized>(
     args: &A,
     start: usize,
-) -> Result<Opts, &'static str> {
+) -> Result<Opts, CmdError> {
     let mut state = OptsBuilder::default();
     let mut i = start;
     while i < args.len() {
@@ -38,7 +39,7 @@ pub(in crate::dispatch_geo) fn parse_legacy_radius<A: ArgvView + ?Sized>(
     anchor: Anchor,
     radius_m: f64,
     unit: f64,
-) -> Result<LegacyRadiusParsed, &'static str> {
+) -> Result<LegacyRadiusParsed, CmdError> {
     let mut s = OptsBuilder {
         from: Some(anchor),
         shape: Some((Shape::Radius { r_m: radius_m }, unit)),
@@ -66,7 +67,7 @@ pub(in crate::dispatch_geo) fn parse_legacy_radius<A: ArgvView + ?Sized>(
     }
     if store_dst.is_some() && (s.with_coord || s.with_dist || s.with_hash) {
         return Err(
-            "ERR STORE option in GEORADIUS is not compatible with WITHCOORD, WITHDIST and WITHHASH options",
+            CmdError::Wire("ERR STORE option in GEORADIUS is not compatible with WITHCOORD, WITHDIST and WITHHASH options"),
         );
     }
     let opts = s.finish()?;
@@ -87,7 +88,7 @@ pub(super) struct OptsBuilder {
 }
 
 impl OptsBuilder {
-    fn finish(self) -> Result<Opts, &'static str> {
+    fn finish(self) -> Result<Opts, CmdError> {
         let from = self
             .from
             .ok_or("ERR syntax error: missing FROMMEMBER / FROMLONLAT")?;
@@ -114,7 +115,7 @@ fn parse_one_opt<A: ArgvView + ?Sized>(
     tok: &[u8],
     i: usize,
     s: &mut OptsBuilder,
-) -> Result<usize, &'static str> {
+) -> Result<usize, CmdError> {
     match tok {
         b"FROMMEMBER" | b"FROMLONLAT" => parse_from(args, tok, i, &mut s.from),
         b"BYRADIUS" | b"BYBOX" => parse_shape(args, tok, i, &mut s.shape),
@@ -125,7 +126,7 @@ fn parse_one_opt<A: ArgvView + ?Sized>(
         b"WITHDIST" => { s.with_dist = true; Ok(1) }
         b"WITHHASH" => { s.with_hash = true; Ok(1) }
         b"STOREDIST" => { s.storedist = true; Ok(1) }
-        _ => Err("ERR syntax error"),
+        _ => Err(CmdError::Wire("ERR syntax error")),
     }
 }
 
@@ -134,7 +135,7 @@ fn parse_from<A: ArgvView + ?Sized>(
     tok: &[u8],
     i: usize,
     from: &mut Option<Anchor>,
-) -> Result<usize, &'static str> {
+) -> Result<usize, CmdError> {
     if tok == b"FROMMEMBER" {
         let m = args.get(i + 1).ok_or("ERR syntax error")?;
         *from = Some(Anchor::Member(m.to_vec()));
@@ -153,7 +154,7 @@ fn parse_shape<A: ArgvView + ?Sized>(
     tok: &[u8],
     i: usize,
     shape: &mut Option<(Shape, f64)>,
-) -> Result<usize, &'static str> {
+) -> Result<usize, CmdError> {
     if tok == b"BYRADIUS" {
         let r = arg_f64(args.get(i + 1).ok_or("ERR syntax error")?)
             .ok_or("ERR value is not a valid float")?;
@@ -177,13 +178,13 @@ fn parse_count<A: ArgvView + ?Sized>(
     i: usize,
     count: &mut Option<usize>,
     any: &mut bool,
-) -> Result<usize, &'static str> {
+) -> Result<usize, CmdError> {
     let n: i64 = std::str::from_utf8(args.get(i + 1).ok_or("ERR syntax error")?)
         .ok()
         .and_then(|s| s.parse().ok())
         .ok_or("ERR value is not an integer or out of range")?;
     if n <= 0 {
-        return Err("ERR COUNT can't be negative");
+        return Err(CmdError::Wire("ERR COUNT can't be negative"));
     }
     *count = Some(n as usize);
     if let Some(next) = args.get(i + 2)

@@ -66,7 +66,7 @@ fn finish_radius<A: ArgvView + ?Sized>(
     };
     let parsed = match search::parse_legacy_radius(args, radius_idx + 2, anchor, radius * unit, unit) {
         Ok(p) => p,
-        Err(msg) => return encode_error(out, msg),
+        Err(msg) => return encode_error(out, msg.as_wire()),
     };
     if read_only && parsed.store_dst.is_some() {
         return encode_error(out, "ERR can't store result in the _RO variant");

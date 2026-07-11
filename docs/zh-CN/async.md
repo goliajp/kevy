@@ -8,7 +8,7 @@
 
 ## 核心思路
 
-通过 Cargo feature（`tokio`、`smol` 或 `async-std`）选定一个且只能选定一个运行时；整个 crate 编译出来就只有那个运行时的 `TcpStream` 适配器，再无其他。公开接口与阻塞客户端 1:1 对应——`AsyncConnection::open(url).await?`、`conn.set(k, v).await?`、`conn.get(k).await?`——所以从阻塞版迁移过来，只需把 `Connection` 换成 `AsyncConnection`，再给每个调用加一个 `.await`。延迟敏感时还有 pipeline 构建器，可以把 N 条命令合并成一次 TCP 往返。
+通过 Cargo feature（`tokio`、`smol` 或 `async-std`）选定一个且只能选定一个运行时；整个 crate 编译出来就只有那个运行时的 `TcpStream` 适配器，再无其他。公开接口与阻塞客户端 1:1 对应——`AsyncConnection::connect(url).await?`、`conn.set(k, v).await?`、`conn.get(k).await?`——所以从阻塞版迁移过来，只需把 `Connection` 换成 `AsyncConnection`，再给每个调用加一个 `.await`。延迟敏感时还有 pipeline 构建器，可以把 N 条命令合并成一次 TCP 往返。
 
 ## 实例
 
@@ -25,7 +25,7 @@ use kevy_client_async::AsyncConnection;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
+    let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6004").await?;
     conn.set(b"k", b"v").await?;
     let v = conn.get(b"k").await?;
     assert_eq!(v.as_deref(), Some(&b"v"[..]));
@@ -48,7 +48,7 @@ use kevy_client_async::AsyncConnection;
 
 fn main() -> std::io::Result<()> {
     smol::block_on(async {
-        let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
+        let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6004").await?;
         conn.set(b"k", b"v").await?;
         let v = conn.get(b"k").await?;
         assert_eq!(v.as_deref(), Some(&b"v"[..]));
@@ -64,7 +64,7 @@ fn main() -> std::io::Result<()> {
 ```rust
 use kevy_client_async::AsyncConnection;
 
-let mut conn = AsyncConnection::open("tcp://127.0.0.1:6004").await?;
+let mut conn = AsyncConnection::connect("tcp://127.0.0.1:6004").await?;
 let replies = conn
     .pipeline()
     .set(b"a", b"1")
@@ -89,7 +89,7 @@ let replies = conn
 
 ## URL 后端
 
-`AsyncConnection::open` 接受与阻塞客户端相同的 URL 门面。TCP 形态的 scheme 走运行时的异步 socket；进程内 scheme 则直接拒绝（对它们来说阻塞客户端严格更快，绕道执行器没有意义）。
+`AsyncConnection::connect` 接受与阻塞客户端相同的 URL 门面。TCP 形态的 scheme 走运行时的异步 socket；进程内 scheme 则直接拒绝（对它们来说阻塞客户端严格更快，绕道执行器没有意义）。
 
 | scheme       | 目标                                   | 异步客户端支持 |
 |--------------|----------------------------------------|----------------|
@@ -99,7 +99,7 @@ let replies = conn
 | `mem://`     | 进程内嵌入式 store                     | 否——用阻塞客户端 |
 | `file:///`   | 磁盘上的嵌入式 store                   | 否——用阻塞客户端 |
 
-对 `AsyncConnection::open` 传 `mem://` 或 `file:///` 会返回 `ErrorKind::Unsupported`。
+对 `AsyncConnection::connect` 传 `mem://` 或 `file:///` 会返回 `ErrorKind::Unsupported`。
 
 ## 取舍
 

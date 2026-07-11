@@ -86,7 +86,7 @@ let n = cc.incr(b"counter")?;
 
 // Multi-key DEL/EXISTS — routed per key and summed.
 let removed = cc.del(&[b"a", b"b", b"c"])?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 可直接运行的种子示例在 [`crates/kevy-client/examples/cluster.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster.rs)；配套基准在 [`crates/kevy-client/examples/cluster_bench.rs`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-client/examples/cluster_bench.rs)。
@@ -126,7 +126,7 @@ let removed = cc.del(&[b"a", b"b", b"c"])?;
 let reply = cc.request_keyed(b"mykey", &[b"STRLEN".to_vec(), b"mykey".to_vec()])?;
 // Keyless commands go to any shard.
 let reply = cc.request_unkeyed(&[b"PING".to_vec()])?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 `ClusterClient` 封装了字符串、哈希、列表、集合、有序集合、pub/sub 的常用 verb，外加多键 `DEL` / `EXISTS`。pub/sub 是进程级全局的：任一端口上的 `Subscriber` 都能看到全部已发布消息，与哪个 shard 接下 `PUBLISH` 无关。
@@ -171,7 +171,7 @@ let replica = Store::open_replica("primary.local:16004")?;
 
 let v = replica.get(b"hello")?;
 assert!(replica.set(b"k", b"v").is_err());      // READONLY
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 需要调参时：
@@ -185,7 +185,7 @@ let cfg = Config::default()
     .with_replica_id("backup-svc-region-a")
     .with_replica_reconnect(Duration::from_millis(50), Duration::from_secs(10));
 let replica = Store::open(cfg)?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 握手时发送 `REPLICATE FROM <last-applied-offset> ID <replica_id>`；主节点确认该 offset 后开始流式发送帧。最后一个 `Store` 克隆 drop 时会 join runner 线程，主节点因此能观察到干净的 FIN 并释放连接槽位。embed 本地允许 `PUBLISH`（pub/sub 是进程内局部的），但键空间本身保持只读。
@@ -223,7 +223,7 @@ let writer = Store::open(
 // Local writes feed the embed's replication source backlog;
 // readers connect to 0.0.0.0:6105 via kevy_replicate::ReplicaClient.
 writer.set(b"app:billing:invoice:42", b"...")?;
-# Ok::<(), std::io::Error>(())
+# Ok::<(), kevy_client::KevyError>(())
 ```
 
 embed 会在传给 `with_embed_writer` 的地址上开一个复制监听。其他节点从这里拉日志，和从服务器主节点拉完全一样。

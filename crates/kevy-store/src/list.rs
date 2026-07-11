@@ -81,19 +81,7 @@ impl Store {
     }
 
     /// `LPUSH` — prepend each value in turn; returns the new length.
-    pub fn lpush(&mut self, key: &[u8], values: &[Vec<u8>]) -> Result<usize, StoreError> {
-        let borrowed: Vec<&[u8]> = values.iter().map(Vec::as_slice).collect();
-        self.lpush_borrowed(key, &borrowed)
-    }
-
-    /// `RPUSH` — append each value; returns the new length.
-    pub fn rpush(&mut self, key: &[u8], values: &[Vec<u8>]) -> Result<usize, StoreError> {
-        let borrowed: Vec<&[u8]> = values.iter().map(Vec::as_slice).collect();
-        self.rpush_borrowed(key, &borrowed)
-    }
-
-    /// G4 (v1.25): borrowed-slice `LPUSH`. A.8: encoding-switch.
-    pub fn lpush_borrowed(
+    pub fn lpush(
         &mut self,
         key: &[u8],
         values: &[&[u8]],
@@ -109,8 +97,8 @@ impl Store {
         Ok(self.list_len(key))
     }
 
-    /// G4 (v1.25): borrowed-slice `RPUSH`. A.8: encoding-switch.
-    pub fn rpush_borrowed(
+    /// `RPUSH` — append each value; returns the new length.
+    pub fn rpush(
         &mut self,
         key: &[u8],
         values: &[&[u8]],

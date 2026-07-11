@@ -284,11 +284,11 @@ pub(crate) fn cmd_expire<A: ArgvView + ?Sized>(
     let Some(n) = arg_i64(&args[2]) else {
         return encode_error(out, ERR_NOT_INT);
     };
-    if store.exists(&[args[1].to_vec()]) == 0 {
+    if store.exists(&[&args[1]]) == 0 {
         return encode_integer(out, 0);
     }
     if n <= 0 {
-        store.del(&[args[1].to_vec()]);
+        store.del(&[&args[1]]);
         return encode_integer(out, 1);
     }
     let ms = n.saturating_mul(unit_ms) as u64;
@@ -316,7 +316,7 @@ pub(crate) fn cmd_expireat<A: ArgvView + ?Sized>(
     let Some(n) = arg_i64(&args[2]) else {
         return encode_error(out, ERR_NOT_INT);
     };
-    if store.exists(&[args[1].to_vec()]) == 0 {
+    if store.exists(&[&args[1]]) == 0 {
         return encode_integer(out, 0);
     }
     let deadline_ms = n.saturating_mul(unit_ms).max(0) as u64;

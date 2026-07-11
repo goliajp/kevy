@@ -33,7 +33,7 @@ fn free_port() -> u16 {
 
 fn boot(port: u16, dir: std::path::PathBuf, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
-        let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 4, kevy::KevyCommands::sharded(4))
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(4)).bind([127, 0, 0, 1], port).shards(4)
             .with_data_dir(dir)
             .with_aof(true);
         rt.run(stop).unwrap();

@@ -11,7 +11,7 @@
 //! closure returns. Use it only when the closure genuinely needs
 //! more than one shard and atomicity across them is required.
 
-use std::io;
+use crate::{KevyError, KevyResult};
 use std::sync::RwLockWriteGuard;
 
 use crate::shard::shard_idx;
@@ -21,7 +21,7 @@ use crate::store::{Inner, Store, commit_write, store_err};
 use crate::replica_glue::ensure_writable;
 
 #[cfg(target_arch = "wasm32")]
-fn ensure_writable(_s: &Store) -> io::Result<()> { Ok(()) }
+fn ensure_writable(_s: &Store) -> KevyResult<()> { Ok(()) }
 
 /// Context handed to the `atomic_all_shards` closure body. Methods
 /// route to the right shard by hashing the key.
@@ -54,7 +54,7 @@ impl<'a> AtomicAllShards<'a> {
     }
 
     /// `GET key`.
-    pub fn get(&mut self, key: &[u8]) -> io::Result<Option<Vec<u8>>> {
+    pub fn get(&mut self, key: &[u8]) -> KevyResult<Option<Vec<u8>>> {
         let i = self.idx(key);
         self.guards[i]
             .store
@@ -64,7 +64,7 @@ impl<'a> AtomicAllShards<'a> {
     }
 
     /// `INCR key`.
-    pub fn incr(&mut self, key: &[u8]) -> io::Result<i64> {
+    pub fn incr(&mut self, key: &[u8]) -> KevyResult<i64> {
         let i = self.idx(key);
         let n = self.guards[i].store.incr_by(key, 1).map_err(store_err)?;
         self.log_arg(i, &[b"INCR", key]);
@@ -72,7 +72,7 @@ impl<'a> AtomicAllShards<'a> {
     }
 
     /// `INCRBY key delta`.
-    pub fn incr_by(&mut self, key: &[u8], delta: i64) -> io::Result<i64> {
+    pub fn incr_by(&mut self, key: &[u8], delta: i64) -> KevyResult<i64> {
         let i = self.idx(key);
         let n = self.guards[i].store.incr_by(key, delta).map_err(store_err)?;
         let s = format!("{delta}");
@@ -84,15 +84,11 @@ impl<'a> AtomicAllShards<'a> {
 
     /// `HSET key field value [field value ...]`. Returns count newly
     /// added (existing fields are overwritten but not counted).
-    pub fn hset(&mut self, key: &[u8], pairs: &[(&[u8], &[u8])]) -> io::Result<usize> {
+    pub fn hset(&mut self, key: &[u8], pairs: &[(&[u8], &[u8])]) -> KevyResult<usize> {
         let i = self.idx(key);
-        let owned: Vec<(Vec<u8>, Vec<u8>)> = pairs
-            .iter()
-            .map(|(f, v)| (f.to_vec(), v.to_vec()))
-            .collect();
         let n = self.guards[i]
             .store
-            .hset(key, &owned)
+            .hset(key, pairs)
             .map_err(store_err)?;
         let mut parts: Vec<&[u8]> = Vec::with_capacity(2 + pairs.len() * 2);
         parts.push(b"HSET");
@@ -106,7 +102,7 @@ impl<'a> AtomicAllShards<'a> {
     }
 
     /// `HGET key field` — `None` when the key or field is absent.
-    pub fn hget(&mut self, key: &[u8], field: &[u8]) -> io::Result<Option<Vec<u8>>> {
+    pub fn hget(&mut self, key: &[u8], field: &[u8]) -> KevyResult<Option<Vec<u8>>> {
         let i = self.idx(key);
         Ok(self.guards[i]
             .store
@@ -116,7 +112,7 @@ impl<'a> AtomicAllShards<'a> {
     }
 
     /// `HINCRBY key field delta` — returns the field's new value.
-    pub fn hincrby(&mut self, key: &[u8], field: &[u8], delta: i64) -> io::Result<i64> {
+    pub fn hincrby(&mut self, key: &[u8], field: &[u8], delta: i64) -> KevyResult<i64> {
         let i = self.idx(key);
         let n = self.guards[i]
             .store
@@ -131,13 +127,11 @@ impl<'a> AtomicAllShards<'a> {
 
     /// `ZADD key score member [score member ...]`. Returns count newly
     /// added (score updates of existing members are not counted).
-    pub fn zadd(&mut self, key: &[u8], pairs: &[(f64, &[u8])]) -> io::Result<usize> {
+    pub fn zadd(&mut self, key: &[u8], pairs: &[(f64, &[u8])]) -> KevyResult<usize> {
         let i = self.idx(key);
-        let owned: Vec<(f64, Vec<u8>)> =
-            pairs.iter().map(|(s, m)| (*s, m.to_vec())).collect();
         let n = self.guards[i]
             .store
-            .zadd(key, &owned)
+            .zadd(key, pairs)
             .map_err(store_err)?;
         let score_strs: Vec<Vec<u8>> = pairs
             .iter()
@@ -155,7 +149,7 @@ impl<'a> AtomicAllShards<'a> {
     }
 
     /// `ZINCRBY key delta member` — returns the member's new score.
-    pub fn zincrby(&mut self, key: &[u8], delta: f64, member: &[u8]) -> io::Result<f64> {
+    pub fn zincrby(&mut self, key: &[u8], delta: f64, member: &[u8]) -> KevyResult<f64> {
         let i = self.idx(key);
         let n = self.guards[i]
             .store
@@ -167,7 +161,7 @@ impl<'a> AtomicAllShards<'a> {
     }
 
     /// `ZSCORE key member` (v2.1: parity with [`super::ops_atomic::AtomicCtx`]).
-    pub fn zscore(&mut self, key: &[u8], member: &[u8]) -> io::Result<Option<f64>> {
+    pub fn zscore(&mut self, key: &[u8], member: &[u8]) -> KevyResult<Option<f64>> {
         let i = self.idx(key);
         self.guards[i].store.zscore(key, member).map_err(store_err)
     }
@@ -180,7 +174,7 @@ impl<'a> AtomicAllShards<'a> {
         let mut n = 0;
         for k in keys {
             let i = self.idx(k);
-            if self.guards[i].store.del_borrowed(&[k]) > 0 {
+            if self.guards[i].store.del(&[k]) > 0 {
                 n += 1;
                 self.log_arg(i, &[b"DEL", k]);
             }
@@ -201,10 +195,9 @@ impl<'a> AtomicAllShards<'a> {
     // ---- hash ops --------------------------------------------------
 
     /// `HDEL key field [field ...]`.
-    pub fn hdel(&mut self, key: &[u8], fields: &[&[u8]]) -> io::Result<usize> {
+    pub fn hdel(&mut self, key: &[u8], fields: &[&[u8]]) -> KevyResult<usize> {
         let i = self.idx(key);
-        let owned: Vec<Vec<u8>> = fields.iter().map(|f| f.to_vec()).collect();
-        let removed = self.guards[i].store.hdel(key, &owned).map_err(store_err)?;
+        let removed = self.guards[i].store.hdel(key, fields).map_err(store_err)?;
         if removed > 0 {
             let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + fields.len());
             argv.push(b"HDEL");
@@ -216,7 +209,7 @@ impl<'a> AtomicAllShards<'a> {
     }
 
     /// `HGETALL key` — `(field, value)` pairs.
-    pub fn hgetall(&mut self, key: &[u8]) -> io::Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    pub fn hgetall(&mut self, key: &[u8]) -> KevyResult<Vec<(Vec<u8>, Vec<u8>)>> {
         let i = self.idx(key);
         let flat = self.guards[i].store.hgetall(key).map_err(store_err)?;
         let mut out = Vec::with_capacity(flat.len() / 2);
@@ -228,13 +221,13 @@ impl<'a> AtomicAllShards<'a> {
     }
 
     /// `HMGET key field [field ...]` — `None` per absent field.
-    pub fn hmget(&mut self, key: &[u8], fields: &[&[u8]]) -> io::Result<Vec<Option<Vec<u8>>>> {
+    pub fn hmget(&mut self, key: &[u8], fields: &[&[u8]]) -> KevyResult<Vec<Option<Vec<u8>>>> {
         let i = self.idx(key);
-        self.guards[i].store.hmget_borrowed(key, fields).map_err(store_err)
+        self.guards[i].store.hmget(key, fields).map_err(store_err)
     }
 
     /// `HEXISTS key field`.
-    pub fn hexists(&mut self, key: &[u8], field: &[u8]) -> io::Result<bool> {
+    pub fn hexists(&mut self, key: &[u8], field: &[u8]) -> KevyResult<bool> {
         let i = self.idx(key);
         self.guards[i].store.hexists(key, field).map_err(store_err)
     }
@@ -242,10 +235,9 @@ impl<'a> AtomicAllShards<'a> {
     // ---- set ops ---------------------------------------------------
 
     /// `SADD key member [member ...]`.
-    pub fn sadd(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+    pub fn sadd(&mut self, key: &[u8], members: &[&[u8]]) -> KevyResult<usize> {
         let i = self.idx(key);
-        let owned: Vec<Vec<u8>> = members.iter().map(|m| m.to_vec()).collect();
-        let added = self.guards[i].store.sadd(key, &owned).map_err(store_err)?;
+        let added = self.guards[i].store.sadd(key, members).map_err(store_err)?;
         if added > 0 {
             let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + members.len());
             argv.push(b"SADD");
@@ -257,10 +249,9 @@ impl<'a> AtomicAllShards<'a> {
     }
 
     /// `SREM key member [member ...]`.
-    pub fn srem(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+    pub fn srem(&mut self, key: &[u8], members: &[&[u8]]) -> KevyResult<usize> {
         let i = self.idx(key);
-        let owned: Vec<Vec<u8>> = members.iter().map(|m| m.to_vec()).collect();
-        let removed = self.guards[i].store.srem(key, &owned).map_err(store_err)?;
+        let removed = self.guards[i].store.srem(key, members).map_err(store_err)?;
         if removed > 0 {
             let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + members.len());
             argv.push(b"SREM");
@@ -274,10 +265,9 @@ impl<'a> AtomicAllShards<'a> {
     // ---- list ops --------------------------------------------------
 
     /// `LPUSH key value [value ...]` — returns the new list length.
-    pub fn lpush(&mut self, key: &[u8], values: &[&[u8]]) -> io::Result<usize> {
+    pub fn lpush(&mut self, key: &[u8], values: &[&[u8]]) -> KevyResult<usize> {
         let i = self.idx(key);
-        let owned: Vec<Vec<u8>> = values.iter().map(|v| v.to_vec()).collect();
-        let len = self.guards[i].store.lpush(key, &owned).map_err(store_err)?;
+        let len = self.guards[i].store.lpush(key, values).map_err(store_err)?;
         let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + values.len());
         argv.push(b"LPUSH");
         argv.push(key);
@@ -287,10 +277,9 @@ impl<'a> AtomicAllShards<'a> {
     }
 
     /// `RPUSH key value [value ...]` — returns the new list length.
-    pub fn rpush(&mut self, key: &[u8], values: &[&[u8]]) -> io::Result<usize> {
+    pub fn rpush(&mut self, key: &[u8], values: &[&[u8]]) -> KevyResult<usize> {
         let i = self.idx(key);
-        let owned: Vec<Vec<u8>> = values.iter().map(|v| v.to_vec()).collect();
-        let len = self.guards[i].store.rpush(key, &owned).map_err(store_err)?;
+        let len = self.guards[i].store.rpush(key, values).map_err(store_err)?;
         let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + values.len());
         argv.push(b"RPUSH");
         argv.push(key);
@@ -302,10 +291,9 @@ impl<'a> AtomicAllShards<'a> {
     // ---- zset ops --------------------------------------------------
 
     /// `ZREM key member [member ...]`.
-    pub fn zrem(&mut self, key: &[u8], members: &[&[u8]]) -> io::Result<usize> {
+    pub fn zrem(&mut self, key: &[u8], members: &[&[u8]]) -> KevyResult<usize> {
         let i = self.idx(key);
-        let owned: Vec<Vec<u8>> = members.iter().map(|m| m.to_vec()).collect();
-        let removed = self.guards[i].store.zrem(key, &owned).map_err(store_err)?;
+        let removed = self.guards[i].store.zrem(key, members).map_err(store_err)?;
         if removed > 0 {
             let mut argv: Vec<&[u8]> = Vec::with_capacity(2 + members.len());
             argv.push(b"ZREM");
@@ -317,7 +305,7 @@ impl<'a> AtomicAllShards<'a> {
     }
 
     /// `ZCARD key` — member count; 0 when absent.
-    pub fn zcard(&mut self, key: &[u8]) -> io::Result<usize> {
+    pub fn zcard(&mut self, key: &[u8]) -> KevyResult<usize> {
         let i = self.idx(key);
         self.guards[i].store.zcard(key).map_err(store_err)
     }
@@ -329,14 +317,14 @@ impl<'a> AtomicAllShards<'a> {
         key: &[u8],
         pairs: &[(f64, &[u8])],
         flags: kevy_store::ZaddFlags,
-    ) -> io::Result<kevy_store::ZaddReport> {
+    ) -> KevyResult<kevy_store::ZaddReport> {
         if !flags.valid() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid ZADD flag combo"));
+            return Err(KevyError::InvalidInput("invalid ZADD flag combo".into()));
         }
         let i = self.idx(key);
         let rep = self.guards[i]
             .store
-            .zadd_flags_borrowed(key, pairs, flags)
+            .zadd_flags(key, pairs, flags)
             .map_err(store_err)?;
         if !rep.applied.is_empty() {
             let score_strs: Vec<Vec<u8>> = rep
@@ -368,8 +356,8 @@ impl Store {
     /// required; otherwise prefer the single-shard `atomic`.
     pub fn atomic_all_shards<R>(
         &self,
-        body: impl FnOnce(&mut AtomicAllShards<'_>) -> io::Result<R>,
-    ) -> io::Result<R> {
+        body: impl FnOnce(&mut AtomicAllShards<'_>) -> KevyResult<R>,
+    ) -> KevyResult<R> {
         ensure_writable(self)?;
         // Take every shard's write lock in shard-index order
         // (deterministic order avoids deadlock).

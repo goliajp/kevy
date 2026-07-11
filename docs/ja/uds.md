@@ -43,7 +43,7 @@ redis-cli -p 6379 GET foo
 Rustからは、リポジトリ内クライアントが`unix://`のURLを受け付けます：
 
 ```rust
-let mut conn = kevy_client::Connection::open("unix:///tmp/kevy.sock")?;
+let mut conn = kevy_client::Connection::connect("unix:///tmp/kevy.sock")?;
 conn.set(b"k", b"v")?;
 ```
 

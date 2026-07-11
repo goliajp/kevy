@@ -9,7 +9,7 @@
 //! and diverge; the absolute form is deterministic. Same lesson as
 //! v2.0.21's SPOP→SREM propagation fix.
 
-use std::io;
+use crate::{KevyError, KevyResult};
 
 use kevy_store::{ZaddFlags, ZaddReport};
 
@@ -18,18 +18,15 @@ use crate::replica_glue::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
 
 #[cfg(target_arch = "wasm32")]
-fn ensure_writable(_s: &Store) -> io::Result<()> {
+fn ensure_writable(_s: &Store) -> KevyResult<()> {
     Ok(())
 }
 
-fn reject_invalid(flags: ZaddFlags) -> io::Result<()> {
+fn reject_invalid(flags: ZaddFlags) -> KevyResult<()> {
     if flags.valid() {
         Ok(())
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "GT, LT, and/or NX options at the same time are not compatible",
-        ))
+        Err(KevyError::InvalidInput("GT, LT, and/or NX options at the same time are not compatible".into()))
     }
 }
 
@@ -43,13 +40,13 @@ impl Store {
         key: &[u8],
         pairs: &[(f64, &[u8])],
         flags: ZaddFlags,
-    ) -> io::Result<ZaddReport> {
+    ) -> KevyResult<ZaddReport> {
         reject_invalid(flags)?;
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let rep = g
             .store
-            .zadd_flags_borrowed(key, pairs, flags)
+            .zadd_flags(key, pairs, flags)
             .map_err(store_err)?;
         if !rep.applied.is_empty() {
             let score_strs: Vec<Vec<u8>> = rep
@@ -77,7 +74,7 @@ impl Store {
         delta: f64,
         member: &[u8],
         flags: ZaddFlags,
-    ) -> io::Result<Option<f64>> {
+    ) -> KevyResult<Option<f64>> {
         reject_invalid(flags)?;
         ensure_writable(self)?;
         let mut g = self.wshard(key);

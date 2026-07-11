@@ -4,26 +4,26 @@
 //! Strings act as bit arrays addressed MSB-first within each byte,
 //! matching Redis semantics.
 
-use std::io;
+use crate::{KevyError, KevyResult};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::replica_glue::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
 
 #[cfg(target_arch = "wasm32")]
-fn ensure_writable(_s: &Store) -> io::Result<()> { Ok(()) }
+fn ensure_writable(_s: &Store) -> KevyResult<()> { Ok(()) }
 
 impl Store {
     /// `GETBIT key offset` — return the bit at `offset` (MSB-first).
     /// `0` for missing key or past-end.
-    pub fn getbit(&self, key: &[u8], offset: u64) -> io::Result<u8> {
+    pub fn getbit(&self, key: &[u8], offset: u64) -> KevyResult<u8> {
         self.wshard(key).store.getbit(key, offset).map_err(store_err)
     }
 
     /// `SETBIT key offset value` — set the bit at `offset` to
     /// `value` (0 or 1). Extends the underlying string with zero
     /// padding as needed. Returns the PREVIOUS bit value.
-    pub fn setbit(&self, key: &[u8], offset: u64, value: u8) -> io::Result<u8> {
+    pub fn setbit(&self, key: &[u8], offset: u64, value: u8) -> KevyResult<u8> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let prev = g.store.setbit(key, offset, value).map_err(store_err)?;
@@ -36,7 +36,7 @@ impl Store {
     /// `BITCOUNT key [start end]` — count set bits over the
     /// optional byte-offset range (inclusive, negatives-from-tail
     /// like Redis). `None` for `range` = whole string.
-    pub fn bitcount(&self, key: &[u8], range: Option<(i64, i64)>) -> io::Result<u64> {
+    pub fn bitcount(&self, key: &[u8], range: Option<(i64, i64)>) -> KevyResult<u64> {
         self.wshard(key).store.bitcount(key, range).map_err(store_err)
     }
 
@@ -48,7 +48,7 @@ impl Store {
         key: &[u8],
         bit: u8,
         range: Option<(i64, i64)>,
-    ) -> io::Result<Option<u64>> {
+    ) -> KevyResult<Option<u64>> {
         self.wshard(key)
             .store
             .bitpos(key, bit, range)
@@ -57,7 +57,7 @@ impl Store {
 
     /// `GETRANGE key start end` — substring with Redis negative
     /// indexing; `[start, end]` inclusive.
-    pub fn getrange(&self, key: &[u8], start: i64, end: i64) -> io::Result<Vec<u8>> {
+    pub fn getrange(&self, key: &[u8], start: i64, end: i64) -> KevyResult<Vec<u8>> {
         self.wshard(key)
             .store
             .getrange(key, start, end)
@@ -72,7 +72,7 @@ impl Store {
         key: &[u8],
         offset: u64,
         value: &[u8],
-    ) -> io::Result<usize> {
+    ) -> KevyResult<usize> {
         ensure_writable(self)?;
         let mut g = self.wshard(key);
         let new_len = g
@@ -94,13 +94,13 @@ impl Store {
         op: BitOp,
         dst: &[u8],
         srcs: &[&[u8]],
-    ) -> io::Result<usize> {
+    ) -> KevyResult<usize> {
         ensure_writable(self)?;
         if srcs.is_empty() {
             return Ok(0);
         }
         if matches!(op, BitOp::Not) && srcs.len() != 1 {
-            return Err(io::Error::other("BITOP NOT takes exactly one source key"));
+            return Err(KevyError::InvalidInput("BITOP NOT takes exactly one source key".into()));
         }
         // Read each source (own each as Vec<u8>) — set-algebra style.
         let mut srcs_bytes: Vec<Vec<u8>> = Vec::with_capacity(srcs.len());

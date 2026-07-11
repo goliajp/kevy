@@ -1,6 +1,7 @@
 //! Mock-RESP round-trip for `Transaction` — drives the MULTI / QUEUED /
 //! EXEC / DISCARD wire shapes against a tiny scripted server.
 
+use kevy_client::KevyError;
 use kevy_client::Connection;
 use kevy_resp::Reply;
 use std::io::{Read, Write};
@@ -49,7 +50,7 @@ fn multi_queue_exec_returns_array() {
         (23, b"+QUEUED\r\n"),
         (13, b"*2\r\n+OK\r\n:2\r\n"),
     ]);
-    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     let mut txn = conn.multi().unwrap();
     txn.queue(&[b"SET", b"a", b"1"]).unwrap();
     txn.queue(&[b"INCR", b"a"]).unwrap();
@@ -66,7 +67,7 @@ fn multi_discard_clears_queue() {
         (29, b"+QUEUED\r\n"), // SET a 1
         (8, b"+OK\r\n"),     // DISCARD
     ]);
-    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     let mut txn = conn.multi().unwrap();
     txn.queue(&[b"SET", b"a", b"1"]).unwrap();
     txn.discard().unwrap();
@@ -79,7 +80,7 @@ fn multi_drop_sends_implicit_discard() {
         (29, b"+QUEUED\r\n"), // SET a 1
         (8, b"+OK\r\n"),     // DISCARD via Drop
     ]);
-    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     {
         let mut txn = conn.multi().unwrap();
         txn.queue(&[b"SET", b"a", b"1"]).unwrap();
@@ -100,7 +101,7 @@ fn typed_builders_chain_and_exec() {
         (22, b"+QUEUED\r\n"),
         (13, b"*3\r\n+OK\r\n:5\r\n:1\r\n"),
     ]);
-    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     let mut txn = conn.multi().unwrap();
     txn.set(b"a", b"1")
         .unwrap()
@@ -124,7 +125,7 @@ fn watch_then_multi_exec_success() {
         (23, b"+QUEUED\r\n"), // INCR x
         (13, b"*1\r\n:7\r\n"), // EXEC
     ]);
-    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     conn.watch(&[b"x"]).unwrap();
     let mut txn = conn.multi().unwrap();
     txn.incr(b"x").unwrap();
@@ -142,7 +143,7 @@ fn watch_then_exec_aborted_returns_none() {
         (23, b"+QUEUED\r\n"),
         (13, b"$-1\r\n"), // RESP2 null bulk — Reply::Nil
     ]);
-    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     conn.watch(&[b"x"]).unwrap();
     let mut txn = conn.multi().unwrap();
     txn.incr(b"x").unwrap();
@@ -152,7 +153,7 @@ fn watch_then_exec_aborted_returns_none() {
 #[test]
 fn unwatch_sends_off_the_wire() {
     let port = mock_server(vec![(13, b"+OK\r\n")]); // UNWATCH
-    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     conn.unwatch().unwrap();
 }
 
@@ -172,7 +173,7 @@ fn exec_typed_reads_mixed_replies_in_order() {
             b"*4\r\n+OK\r\n:5\r\n$1\r\n1\r\n*2\r\n$-1\r\n$1\r\n5\r\n",
         ), // EXEC
     ]);
-    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     let mut txn = conn.multi().unwrap();
     txn.set(b"a", b"1")
         .unwrap()
@@ -201,13 +202,13 @@ fn exec_typed_type_mismatch_surfaces_invalid_data() {
         (23, b"+QUEUED\r\n"),   // INCR c
         (13, b"*1\r\n:5\r\n"),  // EXEC
     ]);
-    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     let mut txn = conn.multi().unwrap();
     txn.incr(b"c").unwrap();
     let mut r = txn.exec_typed().unwrap();
     // Ask for a Bulk when the next reply is actually Int → InvalidData.
     let err = r.next_bulk().unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(matches!(err, KevyError::Protocol(_)));
     assert!(
         err.to_string().contains("expected Bulk"),
         "msg = {err}"
@@ -222,12 +223,12 @@ fn exec_typed_aborted_by_watch_errors() {
         (23, b"+QUEUED\r\n"), // INCR x
         (13, b"$-1\r\n"),     // EXEC → Nil (aborted)
     ]);
-    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     conn.watch(&[b"x"]).unwrap();
     let mut txn = conn.multi().unwrap();
     txn.incr(b"x").unwrap();
     let err = txn.exec_typed().unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    assert!(matches!(err, KevyError::Protocol(_)));
     assert!(err.to_string().contains("WATCH"), "msg = {err}");
 }
 
@@ -239,7 +240,7 @@ fn exec_watched_typed_returns_none_on_abort() {
         (23, b"+QUEUED\r\n"),
         (13, b"$-1\r\n"),
     ]);
-    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     conn.watch(&[b"x"]).unwrap();
     let mut txn = conn.multi().unwrap();
     txn.incr(b"x").unwrap();
@@ -254,7 +255,7 @@ fn expect_empty_errors_when_replies_left_unconsumed() {
         (23, b"+QUEUED\r\n"),
         (13, b"*2\r\n:1\r\n:2\r\n"),
     ]);
-    let mut conn = Connection::open(&format!("kevy://127.0.0.1:{port}")).unwrap();
+    let mut conn = Connection::connect(&format!("kevy://127.0.0.1:{port}")).unwrap();
     let mut txn = conn.multi().unwrap();
     txn.incr(b"a").unwrap().incr(b"b").unwrap();
     let mut r = txn.exec_typed().unwrap();
@@ -268,9 +269,9 @@ fn watch_on_embedded_returns_unsupported() {
     // Embedded backend has no MULTI dispatcher; WATCH is a no-op there
     // and must surface as Unsupported so callers don't silently miss
     // the optimistic-concurrency guarantee.
-    let mut conn = Connection::open("mem://watch-embed-probe").unwrap();
+    let mut conn = Connection::connect("mem://watch-embed-probe").unwrap();
     let err = conn.watch(&[b"x"]).unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+    assert!(matches!(err, KevyError::Unsupported(_)));
     let err = conn.unwatch().unwrap_err();
-    assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
+    assert!(matches!(err, KevyError::Unsupported(_)));
 }

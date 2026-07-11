@@ -188,7 +188,7 @@ impl Commands for KevyCommands {
     fn on_replication_view(
         &self,
         master_repl_offset: u64,
-        replicas: Vec<(std::net::Ipv4Addr, u16, u64, Option<u64>)>,
+        replicas: Vec<(std::net::Ipv4Addr, u16, u64, Option<kevy_rt::ReplicaAck>)>,
     ) {
         // `ROLE` / `INFO replication` read the answering shard's
         // most-recent view. T1.28.5 added the per-replica list —
@@ -272,9 +272,10 @@ impl Commands for KevyCommands {
         if self.gate_bits() & crate::state::WRITE_GATED == 0 {
             return None;
         }
-        self.state()
-            .replication
-            .write_denied_reply(|| self.shard_ctx().healthy_replica_count())
+        self.state().replication.write_denied_reply(|| {
+            let max_lag_ms = self.state().config().replication.min_replicas_max_lag_ms;
+            self.shard_ctx().healthy_replica_count(max_lag_ms)
+        })
     }
 
     fn read_denied(&self) -> Option<Vec<u8>> {

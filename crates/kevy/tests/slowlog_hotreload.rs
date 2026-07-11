@@ -83,12 +83,7 @@ fn hot_reload_takes_effect_within_one_tick() {
         // live_runtime_config tick path overrides it on the first tick
         // with whatever the shared state currently holds — we set it to
         // -1 above, so the runtime ends up OFF.
-        let rt = kevy_rt::Runtime::new(
-            [127, 0, 0, 1],
-            port,
-            1,
-            kevy::KevyCommands::with_state(state_thread),
-        )
+        let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state_thread)).bind([127, 0, 0, 1], port).shards(1)
             .with_data_dir(dir_thread)
             .with_aof(false);
         rt.run(stop_thread).unwrap();

@@ -35,7 +35,7 @@ fn atomic_multi_op_commits_together() {
         tx.set(b"b", b"2");
         tx.hset(b"h", &[(b"f", b"v")])?;
         tx.zadd(b"z", &[(1.0, b"m")])?;
-        Ok::<(), std::io::Error>(())
+        Ok::<(), crate::KevyError>(())
     }).unwrap();
     assert_eq!(s.get(b"a").unwrap(), Some(b"1".to_vec()));
     assert_eq!(s.get(b"b").unwrap(), Some(b"2".to_vec()));

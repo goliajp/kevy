@@ -4,7 +4,7 @@
 
 use kevy_embedded::{Config, Store};
 
-fn main() -> std::io::Result<()> {
+fn main() -> kevy_embedded::KevyResult<()> {
     let s = Store::open(Config::default())?;
     s.set(b"greeting", b"hello, kevy")?;
     let v = s.get(b"greeting")?;

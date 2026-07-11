@@ -100,7 +100,7 @@ fn manual_tick_runs_active_reaper() {
 fn with_escape_hatch_works() {
     let s = Store::open(Config::default().with_ttl_reaper_manual()).unwrap();
     let zsize = s.with(|store| {
-        let _ = store.zadd(b"z", &[(1.0, b"a".to_vec()), (2.0, b"b".to_vec())]);
+        let _ = store.zadd(b"z", &[(1.0, b"a".as_slice()), (2.0, b"b".as_slice())]);
         store.zcard(b"z").unwrap()
     });
     assert_eq!(zsize, 2);

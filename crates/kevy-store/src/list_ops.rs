@@ -37,9 +37,9 @@ impl Store {
         let Some(v) = popped.pop() else {
             return Ok(None);
         };
-        // Push to the head of dst. `lpush_borrowed` returns the new
+        // Push to the head of dst. `lpush` returns the new
         // length; we want the popped value back to the caller.
-        self.lpush_borrowed(dst, &[v.as_slice()])?;
+        self.lpush(dst, &[v.as_slice()])?;
         Ok(Some(v))
     }
 
@@ -69,9 +69,9 @@ impl Store {
             return Ok(None);
         };
         if to_left {
-            self.lpush_borrowed(dst, &[v.as_slice()])?;
+            self.lpush(dst, &[v.as_slice()])?;
         } else {
-            self.rpush_borrowed(dst, &[v.as_slice()])?;
+            self.rpush(dst, &[v.as_slice()])?;
         }
         Ok(Some(v))
     }

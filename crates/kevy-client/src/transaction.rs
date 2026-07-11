@@ -18,7 +18,7 @@
 //! ```no_run
 //! use kevy_client::Connection;
 //!
-//! let mut conn = Connection::open("kevy://localhost:6379")?;
+//! let mut conn = Connection::connect("kevy://localhost:6379")?;
 //! conn.watch(&[b"counter"])?;
 //! let mut txn = conn.multi()?;
 //! txn.incr(b"counter")?
@@ -27,14 +27,14 @@
 //!     Some(replies) => assert_eq!(replies.len(), 2),
 //!     None => { /* watched key changed — retry */ }
 //! }
-//! # Ok::<(), std::io::Error>(())
+//! # Ok::<(), kevy_client::KevyError>(())
 //! ```
 //!
 //! Each queued command's reply is the raw [`kevy_resp::Reply`] — callers
 //! parse the typed payload themselves. The reply-side decode (e.g.
 //! `let n: i64 = replies[0].as_int()?`) is a v1.6.0 candidate.
 
-use std::io;
+use crate::{KevyError, KevyResult};
 
 use kevy_resp::Reply;
 use kevy_resp_client::RespClient;
@@ -64,19 +64,16 @@ impl std::fmt::Debug for Transaction<'_> {
 impl Connection {
     /// Start a `MULTI` block. Embedded backend returns
     /// [`io::ErrorKind::Unsupported`].
-    pub fn multi(&mut self) -> io::Result<Transaction<'_>> {
+    pub fn multi(&mut self) -> KevyResult<Transaction<'_>> {
         match self {
-            Self::Embedded(_) => Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "MULTI/EXEC is not implemented for the embedded backend; \
-                 call Connection methods directly (each is atomic on its own lock)",
-            )),
+            Self::Embedded(_) => Err(KevyError::Unsupported("MULTI/EXEC is not implemented for the embedded backend; \
+                 call Connection methods directly (each is atomic on its own lock)".into())),
             Self::Remote(client) => match client.request(&[b"MULTI".to_vec()])? {
                 Reply::Simple(s) if s == b"OK" => Ok(Transaction {
                     client,
                     live: true,
                 }),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
@@ -90,25 +87,19 @@ impl Connection {
     /// Per RESP spec, WATCH must be sent **before** MULTI. Repeated
     /// `watch` calls accumulate — the abort triggers on any of the
     /// watched keys changing.
-    pub fn watch(&mut self, keys: &[&[u8]]) -> io::Result<()> {
+    pub fn watch(&mut self, keys: &[&[u8]]) -> KevyResult<()> {
         if keys.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "WATCH needs at least one key",
-            ));
+            return Err(KevyError::InvalidInput("WATCH needs at least one key".into()));
         }
         match self {
-            Self::Embedded(_) => Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "WATCH is a transaction primitive; embedded backend has no MULTI",
-            )),
+            Self::Embedded(_) => Err(KevyError::Unsupported("WATCH is a transaction primitive; embedded backend has no MULTI".into())),
             Self::Remote(c) => {
                 let mut args = Vec::with_capacity(keys.len() + 1);
                 args.push(b"WATCH".to_vec());
                 args.extend(keys.iter().map(|k| k.to_vec()));
                 match c.request(&args)? {
                     Reply::Simple(s) if s == b"OK" => Ok(()),
-                    Reply::Error(e) => Err(io::Error::other(string(e))),
+                    Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                     other => Err(unexpected(other)),
                 }
             }
@@ -117,15 +108,12 @@ impl Connection {
 
     /// `UNWATCH` — drop every WATCH set on this connection without
     /// running a transaction. Remote-only.
-    pub fn unwatch(&mut self) -> io::Result<()> {
+    pub fn unwatch(&mut self) -> KevyResult<()> {
         match self {
-            Self::Embedded(_) => Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "UNWATCH is a transaction primitive; embedded backend has no MULTI",
-            )),
+            Self::Embedded(_) => Err(KevyError::Unsupported("UNWATCH is a transaction primitive; embedded backend has no MULTI".into())),
             Self::Remote(c) => match c.request(&[b"UNWATCH".to_vec()])? {
                 Reply::Simple(s) if s == b"OK" => Ok(()),
-                Reply::Error(e) => Err(io::Error::other(string(e))),
+                Reply::Error(e) => Err(KevyError::Protocol(string(e))),
                 other => Err(unexpected(other)),
             },
         }
@@ -135,12 +123,9 @@ impl Connection {
 impl Transaction<'_> {
     /// Queue one command — verb + args as raw byte slices. The server
     /// replies `+QUEUED` synchronously; errors propagate as `io::Error`.
-    pub fn queue(&mut self, parts: &[&[u8]]) -> io::Result<()> {
+    pub fn queue(&mut self, parts: &[&[u8]]) -> KevyResult<()> {
         if parts.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Transaction::queue needs at least a verb",
-            ));
+            return Err(KevyError::InvalidInput("Transaction::queue needs at least a verb".into()));
         }
         let argv: Vec<Vec<u8>> = parts.iter().map(|p| p.to_vec()).collect();
         self.queue_argv(argv)
@@ -155,12 +140,12 @@ impl Transaction<'_> {
     /// [`exec_watched`](Self::exec_watched), which distinguishes
     /// "aborted by WATCH" (returns `None`) from "successful empty
     /// transaction" (returns `Some(vec![])`).
-    pub fn exec(mut self) -> io::Result<Vec<Reply>> {
+    pub fn exec(mut self) -> KevyResult<Vec<Reply>> {
         self.live = false;
         match self.client.request(&[b"EXEC".to_vec()])? {
             Reply::Array(items) => Ok(items),
             Reply::Nil => Ok(Vec::new()),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
@@ -169,12 +154,12 @@ impl Transaction<'_> {
     /// violation aborts the transaction (RESP Nil reply to EXEC).
     /// Use this when you've called [`Connection::watch`] and need to
     /// distinguish an abort from a successfully-empty queue.
-    pub fn exec_watched(mut self) -> io::Result<Option<Vec<Reply>>> {
+    pub fn exec_watched(mut self) -> KevyResult<Option<Vec<Reply>>> {
         self.live = false;
         match self.client.request(&[b"EXEC".to_vec()])? {
             Reply::Array(items) => Ok(Some(items)),
             Reply::Nil => Ok(None),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
@@ -189,37 +174,34 @@ impl Transaction<'_> {
     /// Consumes the handle. The cursor remembers how many replies are
     /// left ([`TransactionReplies::remaining`]) so callers can sanity-
     /// check arity at the end of the read sequence.
-    pub fn exec_typed(mut self) -> io::Result<TransactionReplies> {
+    pub fn exec_typed(mut self) -> KevyResult<TransactionReplies> {
         self.live = false;
         match self.client.request(&[b"EXEC".to_vec()])? {
             Reply::Array(items) => Ok(TransactionReplies::new(items)),
-            Reply::Nil => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "transaction aborted by WATCH",
-            )),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Nil => Err(KevyError::Protocol("transaction aborted by WATCH".into())),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
 
     /// Like [`exec_watched`](Self::exec_watched) but returns a typed
     /// [`TransactionReplies`] cursor on commit; `None` on WATCH abort.
-    pub fn exec_watched_typed(mut self) -> io::Result<Option<TransactionReplies>> {
+    pub fn exec_watched_typed(mut self) -> KevyResult<Option<TransactionReplies>> {
         self.live = false;
         match self.client.request(&[b"EXEC".to_vec()])? {
             Reply::Array(items) => Ok(Some(TransactionReplies::new(items))),
             Reply::Nil => Ok(None),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
 
     /// `DISCARD` — abandon the queued commands. Consumes the handle.
-    pub fn discard(mut self) -> io::Result<()> {
+    pub fn discard(mut self) -> KevyResult<()> {
         self.live = false;
         match self.client.request(&[b"DISCARD".to_vec()])? {
             Reply::Simple(s) if s == b"OK" => Ok(()),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
@@ -236,24 +218,21 @@ impl Transaction<'_> {
 
 impl Transaction<'_> {
     /// Queue `SET key value`.
-    pub fn set(&mut self, key: &[u8], value: &[u8]) -> io::Result<&mut Self> {
+    pub fn set(&mut self, key: &[u8], value: &[u8]) -> KevyResult<&mut Self> {
         self.queue_argv(vec3(b"SET", key, value))?;
         Ok(self)
     }
 
     /// Queue `GET key`.
-    pub fn get(&mut self, key: &[u8]) -> io::Result<&mut Self> {
+    pub fn get(&mut self, key: &[u8]) -> KevyResult<&mut Self> {
         self.queue_argv(vec2(b"GET", key))?;
         Ok(self)
     }
 
     /// Queue `DEL key [key ...]`.
-    pub fn del(&mut self, keys: &[&[u8]]) -> io::Result<&mut Self> {
+    pub fn del(&mut self, keys: &[&[u8]]) -> KevyResult<&mut Self> {
         if keys.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Transaction::del needs at least one key",
-            ));
+            return Err(KevyError::InvalidInput("Transaction::del needs at least one key".into()));
         }
         let mut args = Vec::with_capacity(keys.len() + 1);
         args.push(b"DEL".to_vec());
@@ -263,12 +242,9 @@ impl Transaction<'_> {
     }
 
     /// Queue `EXISTS key [key ...]`.
-    pub fn exists(&mut self, keys: &[&[u8]]) -> io::Result<&mut Self> {
+    pub fn exists(&mut self, keys: &[&[u8]]) -> KevyResult<&mut Self> {
         if keys.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Transaction::exists needs at least one key",
-            ));
+            return Err(KevyError::InvalidInput("Transaction::exists needs at least one key".into()));
         }
         let mut args = Vec::with_capacity(keys.len() + 1);
         args.push(b"EXISTS".to_vec());
@@ -278,13 +254,13 @@ impl Transaction<'_> {
     }
 
     /// Queue `INCR key`.
-    pub fn incr(&mut self, key: &[u8]) -> io::Result<&mut Self> {
+    pub fn incr(&mut self, key: &[u8]) -> KevyResult<&mut Self> {
         self.queue_argv(vec2(b"INCR", key))?;
         Ok(self)
     }
 
     /// Queue `INCRBY key delta`.
-    pub fn incr_by(&mut self, key: &[u8], delta: i64) -> io::Result<&mut Self> {
+    pub fn incr_by(&mut self, key: &[u8], delta: i64) -> KevyResult<&mut Self> {
         let args = vec![
             b"INCRBY".to_vec(),
             key.to_vec(),
@@ -295,12 +271,9 @@ impl Transaction<'_> {
     }
 
     /// Queue `MGET key [key ...]`.
-    pub fn mget(&mut self, keys: &[&[u8]]) -> io::Result<&mut Self> {
+    pub fn mget(&mut self, keys: &[&[u8]]) -> KevyResult<&mut Self> {
         if keys.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Transaction::mget needs at least one key",
-            ));
+            return Err(KevyError::InvalidInput("Transaction::mget needs at least one key".into()));
         }
         let mut args = Vec::with_capacity(keys.len() + 1);
         args.push(b"MGET".to_vec());
@@ -310,12 +283,9 @@ impl Transaction<'_> {
     }
 
     /// Queue `MSET key value [key value ...]`.
-    pub fn mset(&mut self, pairs: &[(&[u8], &[u8])]) -> io::Result<&mut Self> {
+    pub fn mset(&mut self, pairs: &[(&[u8], &[u8])]) -> KevyResult<&mut Self> {
         if pairs.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "Transaction::mset needs at least one (key, value) pair",
-            ));
+            return Err(KevyError::InvalidInput("Transaction::mset needs at least one (key, value) pair".into()));
         }
         let mut args = Vec::with_capacity(pairs.len() * 2 + 1);
         args.push(b"MSET".to_vec());
@@ -329,10 +299,10 @@ impl Transaction<'_> {
 
     /// Send one already-materialised argv and parse the `+QUEUED` ack.
     /// Shared back-end for `queue` + every typed builder.
-    fn queue_argv(&mut self, argv: Vec<Vec<u8>>) -> io::Result<()> {
+    fn queue_argv(&mut self, argv: Vec<Vec<u8>>) -> KevyResult<()> {
         match self.client.request(&argv)? {
             Reply::Simple(s) if s == b"QUEUED" => Ok(()),
-            Reply::Error(e) => Err(io::Error::other(string(e))),
+            Reply::Error(e) => Err(KevyError::Protocol(string(e))),
             other => Err(unexpected(other)),
         }
     }
@@ -390,28 +360,25 @@ impl TransactionReplies {
 
     /// Error out if the cursor still has replies — useful at the end of
     /// a typed read sequence to assert the queued-command count matched.
-    pub fn expect_empty(&mut self) -> io::Result<()> {
+    pub fn expect_empty(&mut self) -> KevyResult<()> {
         let left = self.remaining();
         if left == 0 {
             Ok(())
         } else {
-            Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("transaction reply cursor has {left} un-consumed replies"),
-            ))
+            Err(KevyError::Protocol(format!("transaction reply cursor has {left} un-consumed replies")))
         }
     }
 
     /// Pop the next reply as a raw [`Reply`]. Escape hatch for verbs
     /// the typed extractors don't cover.
-    pub fn raw(&mut self) -> io::Result<Reply> {
+    pub fn raw(&mut self) -> KevyResult<Reply> {
         self.iter
             .next()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "exhausted"))
+            .ok_or_else(|| KevyError::Protocol("exhausted".into()))
     }
 
     /// Expect `Reply::Simple(b"OK")` — `SET` / `MSET` ack.
-    pub fn next_ok(&mut self) -> io::Result<()> {
+    pub fn next_ok(&mut self) -> KevyResult<()> {
         match self.raw()? {
             Reply::Simple(s) if s == b"OK" => Ok(()),
             other => Err(mismatch("Simple(OK)", &other)),
@@ -420,7 +387,7 @@ impl TransactionReplies {
 
     /// Expect `Reply::Simple(b"OK")` OR `Reply::Nil` — `SET key v NX/XX`
     /// returns Nil when the condition is not met.
-    pub fn next_ok_or_nil(&mut self) -> io::Result<bool> {
+    pub fn next_ok_or_nil(&mut self) -> KevyResult<bool> {
         match self.raw()? {
             Reply::Simple(s) if s == b"OK" => Ok(true),
             Reply::Nil => Ok(false),
@@ -429,7 +396,7 @@ impl TransactionReplies {
     }
 
     /// Expect `Reply::Int` — `INCR` / `DEL` / `EXISTS` / `INCRBY`.
-    pub fn next_int(&mut self) -> io::Result<i64> {
+    pub fn next_int(&mut self) -> KevyResult<i64> {
         match self.raw()? {
             Reply::Int(n) => Ok(n),
             other => Err(mismatch("Int", &other)),
@@ -437,7 +404,7 @@ impl TransactionReplies {
     }
 
     /// Expect `Reply::Bulk` (or `Nil` → `None`) — `GET`.
-    pub fn next_bulk(&mut self) -> io::Result<Option<Vec<u8>>> {
+    pub fn next_bulk(&mut self) -> KevyResult<Option<Vec<u8>>> {
         match self.raw()? {
             Reply::Bulk(b) => Ok(Some(b)),
             Reply::Nil => Ok(None),
@@ -447,7 +414,7 @@ impl TransactionReplies {
 
     /// Expect `Reply::Array` of `Bulk`/`Nil` entries — `MGET`. Returns
     /// `Vec<Option<Vec<u8>>>` in request order.
-    pub fn next_array_of_bulks(&mut self) -> io::Result<Vec<Option<Vec<u8>>>> {
+    pub fn next_array_of_bulks(&mut self) -> KevyResult<Vec<Option<Vec<u8>>>> {
         let items = match self.raw()? {
             Reply::Array(v) => v,
             Reply::Nil => return Ok(Vec::new()),
@@ -465,7 +432,7 @@ impl TransactionReplies {
 
     /// Expect `Reply::Simple` (any payload) — for verbs whose ack isn't
     /// `OK` (e.g. `PING` → `+PONG`).
-    pub fn next_simple(&mut self) -> io::Result<Vec<u8>> {
+    pub fn next_simple(&mut self) -> KevyResult<Vec<u8>> {
         match self.raw()? {
             Reply::Simple(s) => Ok(s),
             other => Err(mismatch("Simple", &other)),
@@ -473,9 +440,6 @@ impl TransactionReplies {
     }
 }
 
-fn mismatch(want: &str, got: &Reply) -> io::Error {
-    io::Error::new(
-        io::ErrorKind::InvalidData,
-        format!("transaction reply mismatch: expected {want}, got {got:?}"),
-    )
+fn mismatch(want: &str, got: &Reply) -> KevyError {
+    KevyError::Protocol(format!("transaction reply mismatch: expected {want}, got {got:?}"))
 }

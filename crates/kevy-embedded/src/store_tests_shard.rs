@@ -181,38 +181,6 @@ fn single_shard_default_names_record_meta() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Custom filenames opt out of dir interop: the files keep their names and
-/// no shards.meta is written (a meta would point a server at files that
-/// don't exist).
-#[test]
-fn custom_filenames_stay_metaless() {
-    let dir = tmp_dir("custom-names");
-    {
-        let s = Store::open(
-            Config::default()
-                .with_persist(&dir)
-                .with_aof_filename("my.aof")
-                .with_snapshot_filename("my.rdb")
-                .with_ttl_reaper_manual(),
-        )
-        .unwrap();
-        s.set(b"k", b"v").unwrap();
-    }
-    assert!(dir.join("my.aof").exists());
-    assert!(!dir.join("shards.meta").exists());
-    // Reopen with the same custom names: data intact.
-    let s2 = Store::open(
-        Config::default()
-            .with_persist(&dir)
-            .with_aof_filename("my.aof")
-            .with_snapshot_filename("my.rdb")
-            .with_ttl_reaper_manual(),
-    )
-    .unwrap();
-    assert_eq!(s2.get(b"k").unwrap(), Some(b"v".to_vec()));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 // ─────────────── reshard crash-idempotency (2026-06-11) ───────────────
 
 /// Crash right after a reshard's commit point (journal + `.reshard` temps

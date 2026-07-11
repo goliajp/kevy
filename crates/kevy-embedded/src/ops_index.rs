@@ -15,6 +15,7 @@
 //! no race window per shard). No `Building` state embedded — create
 //! returns when the index serves.
 
+use crate::{KevyError, KevyResult};
 use std::io;
 use std::sync::RwLock;
 
@@ -61,9 +62,9 @@ impl Store {
         field: &[u8],
         ty: ValType,
         kind: IndexKind,
-    ) -> io::Result<()> {
+    ) -> KevyResult<()> {
         if prefix.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "empty prefix"));
+            return Err(KevyError::InvalidInput("empty prefix".into()));
         }
         let spec = IndexSpec {
             name: name.to_vec(),
@@ -78,7 +79,7 @@ impl Store {
         self.register_spec(spec)
     }
 
-    fn register_spec(&self, spec: IndexSpec) -> io::Result<()> {
+    fn register_spec(&self, spec: IndexSpec) -> KevyResult<()> {
         {
             let mut g = self
                 .indexes
@@ -108,9 +109,9 @@ impl Store {
         prefix: &[u8],
         field: &[u8],
         params: kevy_index::AnnSpec,
-    ) -> io::Result<()> {
+    ) -> KevyResult<()> {
         if params.dim == 0 || params.distance > 2 {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "bad ann parameters"));
+            return Err(KevyError::InvalidInput("bad ann parameters".into()));
         }
         let spec = IndexSpec {
             name: name.to_vec(),
@@ -161,7 +162,7 @@ impl Store {
         max: &IndexValue,
         cursor: Option<&Cursor>,
         limit: usize,
-    ) -> io::Result<IndexPage> {
+    ) -> KevyResult<IndexPage> {
         let limit = limit.clamp(1, 100_000);
         let mut all: Vec<(IndexValue, Vec<u8>)> = Vec::new();
         self.for_each_segment(name, |seg| {
@@ -179,7 +180,7 @@ impl Store {
     }
 
     /// Count without materializing keys.
-    pub fn idx_count(&self, name: &[u8], min: &IndexValue, max: &IndexValue) -> io::Result<u64> {
+    pub fn idx_count(&self, name: &[u8], min: &IndexValue, max: &IndexValue) -> KevyResult<u64> {
         let mut total = 0u64;
         self.for_each_segment(name, |seg| total += seg.count(min, max))?;
         Ok(total)
@@ -187,7 +188,7 @@ impl Store {
 
     /// Summed segment stats (entries / bytes / coerce failures /
     /// unique-fence duplicates).
-    pub fn idx_stats(&self, name: &[u8]) -> io::Result<SegmentStats> {
+    pub fn idx_stats(&self, name: &[u8]) -> KevyResult<SegmentStats> {
         let mut sum = SegmentStats::default();
         self.for_each_segment(name, |seg| {
             let s = seg.stats();
@@ -218,7 +219,7 @@ impl Store {
         name: &[u8],
         query: &[u8],
         limit: usize,
-    ) -> io::Result<Vec<(Vec<u8>, f64)>> {
+    ) -> KevyResult<Vec<(Vec<u8>, f64)>> {
         let limit = limit.clamp(1, 1000);
         let mut all: Vec<kevy_text::TextMatch> = Vec::new();
         let mut found = false;
@@ -232,7 +233,7 @@ impl Store {
             }
         }
         if !found {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "no such text index"));
+            return Err(KevyError::NotFound("no such text index".into()));
         }
         all.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.key.cmp(&b.key)));
         all.truncate(limit);
@@ -248,9 +249,9 @@ impl Store {
         field: &[u8],
         ty: ValType,
         group_by: &[u8],
-    ) -> io::Result<()> {
+    ) -> KevyResult<()> {
         if !matches!(ty, ValType::I64 | ValType::F64) || group_by.is_empty() {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "agg requires numeric type + group field"));
+            return Err(KevyError::InvalidInput("agg requires numeric type + group field".into()));
         }
         let spec = IndexSpec {
             name: name.to_vec(),
@@ -266,7 +267,7 @@ impl Store {
     }
 
     /// v3.1: one group's merged stats across shards.
-    pub fn idx_group(&self, name: &[u8], group: &[u8]) -> io::Result<kevy_index::GroupStats> {
+    pub fn idx_group(&self, name: &[u8], group: &[u8]) -> KevyResult<kevy_index::GroupStats> {
         let mut merged = kevy_index::GroupStats { count: 0, sum: 0.0, min: None, max: None };
         let mut found = false;
         for shard in self.shards.iter() {
@@ -279,7 +280,7 @@ impl Store {
             }
         }
         if !found {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "no such aggregate index"));
+            return Err(KevyError::NotFound("no such aggregate index".into()));
         }
         Ok(merged)
     }
@@ -290,7 +291,7 @@ impl Store {
         name: &[u8],
         by: kevy_index::AggBy,
         limit: usize,
-    ) -> io::Result<Vec<(Vec<u8>, kevy_index::GroupStats)>> {
+    ) -> KevyResult<Vec<(Vec<u8>, kevy_index::GroupStats)>> {
         let limit = limit.clamp(1, 1000);
         // HashMap merge (same O(rows×groups) trap the server reduce
         // had — hashing keeps it linear).
@@ -314,7 +315,7 @@ impl Store {
             }
         }
         if !found {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "no such aggregate index"));
+            return Err(KevyError::NotFound("no such aggregate index".into()));
         }
         let mut ranked: Vec<(Vec<u8>, kevy_index::GroupStats)> = merged.into_iter().collect();
         kevy_index::sort_groups(&mut ranked, by);
@@ -330,7 +331,7 @@ impl Store {
         query: &[f32],
         k: usize,
         ef: usize,
-    ) -> io::Result<Vec<(Vec<u8>, f32)>> {
+    ) -> KevyResult<Vec<(Vec<u8>, f32)>> {
         let k = k.clamp(1, 1000);
         let mut all: Vec<(Vec<u8>, f32)> = Vec::new();
         let mut found = false;
@@ -344,7 +345,7 @@ impl Store {
             }
         }
         if !found {
-            return Err(io::Error::new(io::ErrorKind::NotFound, "no such vector index"));
+            return Err(KevyError::NotFound("no such vector index".into()));
         }
         all.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         all.truncate(k);
@@ -355,7 +356,7 @@ impl Store {
         &self,
         name: &[u8],
         mut f: impl FnMut(&Segment),
-    ) -> io::Result<()> {
+    ) -> KevyResult<()> {
         let mut found = false;
         for shard in self.shards.iter() {
             let mut g = lock_write(shard);
@@ -369,7 +370,7 @@ impl Store {
         if found {
             Ok(())
         } else {
-            Err(io::Error::new(io::ErrorKind::NotFound, "no such index"))
+            Err(KevyError::NotFound("no such index".into()))
         }
     }
 

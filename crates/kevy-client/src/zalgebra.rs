@@ -6,7 +6,7 @@
 //! kevy-embedded) — via the `_with` variants; the plain forms are the
 //! common unweighted-SUM shorthand.
 
-use std::io;
+use crate::{KevyError, KevyResult};
 
 use kevy_embedded::ZAggregate;
 use kevy_resp::Reply;
@@ -18,7 +18,7 @@ impl Connection {
     /// `ZINTERSTORE dest numkeys key…` — store the intersection of the
     /// given sorted sets into `dest` (unweighted, `AGGREGATE SUM`).
     /// Returns the destination's cardinality.
-    pub fn zinterstore(&mut self, dest: &[u8], keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn zinterstore(&mut self, dest: &[u8], keys: &[&[u8]]) -> KevyResult<usize> {
         self.zinterstore_with(dest, keys, None, ZAggregate::Sum)
     }
 
@@ -31,7 +31,7 @@ impl Connection {
         keys: &[&[u8]],
         weights: Option<&[f64]>,
         aggregate: ZAggregate,
-    ) -> io::Result<usize> {
+    ) -> KevyResult<usize> {
         check_keys(keys)?;
         match self {
             Self::Embedded(s) => s.zinterstore(dest, keys, weights, aggregate),
@@ -42,7 +42,7 @@ impl Connection {
     /// `ZUNIONSTORE dest numkeys key…` — store the union of the given
     /// sorted sets into `dest` (unweighted, `AGGREGATE SUM`). Returns
     /// the destination's cardinality.
-    pub fn zunionstore(&mut self, dest: &[u8], keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn zunionstore(&mut self, dest: &[u8], keys: &[&[u8]]) -> KevyResult<usize> {
         self.zunionstore_with(dest, keys, None, ZAggregate::Sum)
     }
 
@@ -54,7 +54,7 @@ impl Connection {
         keys: &[&[u8]],
         weights: Option<&[f64]>,
         aggregate: ZAggregate,
-    ) -> io::Result<usize> {
+    ) -> KevyResult<usize> {
         check_keys(keys)?;
         match self {
             Self::Embedded(s) => s.zunionstore(dest, keys, weights, aggregate),
@@ -65,7 +65,7 @@ impl Connection {
     /// `ZINTERCARD numkeys key… [LIMIT n]` — cardinality of the
     /// intersection without materialising it. `limit = None` counts
     /// everything; `Some(n)` short-circuits at `n`.
-    pub fn zintercard(&mut self, keys: &[&[u8]], limit: Option<usize>) -> io::Result<usize> {
+    pub fn zintercard(&mut self, keys: &[&[u8]], limit: Option<usize>) -> KevyResult<usize> {
         check_keys(keys)?;
         match self {
             Self::Embedded(s) => s.zintercard(keys, limit.unwrap_or(0)),
@@ -85,12 +85,9 @@ impl Connection {
 }
 
 /// The verbs require `numkeys ≥ 1` — surface that before the wire.
-fn check_keys(keys: &[&[u8]]) -> io::Result<()> {
+fn check_keys(keys: &[&[u8]]) -> KevyResult<()> {
     if keys.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "zset algebra needs at least one source key",
-        ));
+        return Err(KevyError::InvalidInput("zset algebra needs at least one source key".into()));
     }
     Ok(())
 }
@@ -114,7 +111,7 @@ fn zstore_request(
     keys: &[&[u8]],
     weights: Option<&[f64]>,
     aggregate: ZAggregate,
-) -> io::Result<usize> {
+) -> KevyResult<usize> {
     let mut args = Vec::with_capacity(keys.len() * 2 + 6);
     args.push(verb.to_vec());
     args.push(dest.to_vec());
@@ -131,10 +128,10 @@ fn zstore_request(
     int_reply(c.request(&args)?)
 }
 
-fn int_reply(reply: Reply) -> io::Result<usize> {
+fn int_reply(reply: Reply) -> KevyResult<usize> {
     match reply {
         Reply::Int(n) if n >= 0 => Ok(n as usize),
-        Reply::Error(e) => Err(io::Error::other(string(e))),
+        Reply::Error(e) => Err(KevyError::Protocol(string(e))),
         other => Err(unexpected(other)),
     }
 }
@@ -152,7 +149,7 @@ mod tests {
 
     #[test]
     fn embedded_zinterstore_and_zunionstore() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         seed(&mut c);
         assert_eq!(c.zinterstore(b"zi", &[&b"za"[..], &b"zb"[..]]).unwrap(), 1);
         assert_eq!(c.zscore(b"zi", b"y").unwrap(), Some(12.0)); // SUM
@@ -161,7 +158,7 @@ mod tests {
 
     #[test]
     fn embedded_zstore_with_weights_and_aggregate() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         seed(&mut c);
         let n = c
             .zunionstore_with(
@@ -178,7 +175,7 @@ mod tests {
 
     #[test]
     fn embedded_zintercard_with_and_without_limit() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         c.zadd(b"za", &[(1.0, b"a".as_ref()), (2.0, b"b".as_ref()), (3.0, b"c".as_ref())])
             .unwrap();
         c.zadd(b"zb", &[(1.0, b"a".as_ref()), (2.0, b"b".as_ref()), (9.0, b"q".as_ref())])
@@ -189,8 +186,8 @@ mod tests {
 
     #[test]
     fn empty_keys_rejected() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         let err = c.zintercard(&[], None).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(matches!(err, KevyError::InvalidInput(_)));
     }
 }

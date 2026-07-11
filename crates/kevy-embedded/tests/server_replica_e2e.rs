@@ -97,7 +97,7 @@ impl Server {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_t = stop.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands::sharded(1))
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replication(true, 1024 * 1024)
@@ -346,7 +346,7 @@ fn set_replica_upstream_on_non_replica_returns_error() {
     let err = s
         .set_replica_upstream("127.0.0.1:1")
         .expect_err("should error on a non-replica");
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(matches!(err, kevy_embedded::KevyError::InvalidInput(_)));
 }
 
 #[test]

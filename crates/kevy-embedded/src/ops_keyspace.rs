@@ -11,14 +11,14 @@
 //! - `touch` counts existing keys and reads bump LRU/LFU bookkeeping
 //!   as a side effect.
 
-use std::io;
+use crate::KevyResult;
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::replica_glue::ensure_writable;
 use crate::store::{Store, commit_write};
 
 #[cfg(target_arch = "wasm32")]
-fn ensure_writable(_s: &Store) -> io::Result<()> { Ok(()) }
+fn ensure_writable(_s: &Store) -> KevyResult<()> { Ok(()) }
 
 impl Store {
     /// `COPY src dst [REPLACE]` — copy `src`'s value (and TTL if any)
@@ -28,7 +28,7 @@ impl Store {
     /// - `false` if `src` doesn't exist.
     /// - `false` if `dst` exists and `replace = false`.
     /// - Preserves source TTL on the destination via `pexpireat`.
-    pub fn copy(&self, src: &[u8], dst: &[u8], replace: bool) -> io::Result<bool> {
+    pub fn copy(&self, src: &[u8], dst: &[u8], replace: bool) -> KevyResult<bool> {
         ensure_writable(self)?;
         // Read source under its own shard lock.
         let src_val = match self.get(src)? {
@@ -97,14 +97,14 @@ impl Store {
     /// this is the async (non-blocking) variant; kevy is in-process
     /// so the sync `del` IS the unblocking semantic. Returns count
     /// actually removed.
-    pub fn unlink(&self, keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn unlink(&self, keys: &[&[u8]]) -> KevyResult<usize> {
         self.del(keys)
     }
 
     /// `TOUCH key [key ...]` — count keys that exist. Side effect:
     /// the existence check refreshes LRU/LFU bookkeeping on the
     /// touched shards, matching Redis semantics.
-    pub fn touch(&self, keys: &[&[u8]]) -> io::Result<usize> {
+    pub fn touch(&self, keys: &[&[u8]]) -> KevyResult<usize> {
         self.exists(keys)
     }
 }

@@ -6,6 +6,7 @@
 //! membership probes see fresh segments). Callers gate both hooks on
 //! the `VIEW_NONEMPTY` gate bit (K-103 W5).
 
+use kevy_resp::CmdError;
 use kevy_index::{IndexValue, MaterializedSet, ViewMode, ViewSpec, eval_tree, key_in_tree};
 use kevy_store::Store;
 
@@ -85,7 +86,7 @@ pub(crate) fn shard_page(
     name: &[u8],
     after: Option<&(IndexValue, Vec<u8>)>,
     limit: usize,
-) -> Result<Vec<(IndexValue, Vec<u8>)>, &'static str> {
+) -> Result<Vec<(IndexValue, Vec<u8>)>, CmdError> {
     let mut st = ctx.shard.views.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st);
     let vs = st
@@ -94,7 +95,7 @@ pub(crate) fn shard_page(
         .find(|v| v.spec.name == name)
         .ok_or("ERR no such view")?;
     if referenced_index_building(ctx, store, &vs.spec) {
-        return Err("INDEXBUILDING view's base index is still building");
+        return Err(CmdError::Wire("INDEXBUILDING view's base index is still building"));
     }
     if vs.needs_rebuild {
         rebuild_local(ctx, store, vs);
@@ -120,7 +121,7 @@ pub(crate) fn shard_stats(
     ctx: &Ctx<'_>,
     store: &mut Store,
     name: &[u8],
-) -> Result<(u64, u64, u64, bool), &'static str> {
+) -> Result<(u64, u64, u64, bool), CmdError> {
     let mut st = ctx.shard.views.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st);
     let vs = st

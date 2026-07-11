@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn embedded_hash_methods() {
-    let mut c = Connection::open("mem://").unwrap();
+    let mut c = Connection::connect("mem://").unwrap();
     let pairs: &[(&[u8], &[u8])] = &[
         (b"name".as_ref(), b"alice".as_ref()),
         (b"age".as_ref(), b"30".as_ref()),
@@ -31,7 +31,7 @@ fn embedded_hash_methods() {
 
 #[test]
 fn embedded_list_methods() {
-    let mut c = Connection::open("mem://").unwrap();
+    let mut c = Connection::connect("mem://").unwrap();
     assert_eq!(c.rpush(b"q", &[&b"a"[..], &b"b"[..], &b"c"[..]]).unwrap(), 3);
     assert_eq!(c.lpush(b"q", &[&b"z"[..]]).unwrap(), 4);
     assert_eq!(c.llen(b"q").unwrap(), 4);
@@ -48,7 +48,7 @@ fn embedded_list_methods() {
 
 #[test]
 fn embedded_set_methods() {
-    let mut c = Connection::open("mem://").unwrap();
+    let mut c = Connection::connect("mem://").unwrap();
     assert_eq!(
         c.sadd(b"s", &[&b"a"[..], &b"b"[..], &b"a"[..]]).unwrap(),
         2
@@ -67,7 +67,7 @@ fn embedded_set_methods() {
 
 #[test]
 fn embedded_zset_methods() {
-    let mut c = Connection::open("mem://").unwrap();
+    let mut c = Connection::connect("mem://").unwrap();
     let pairs: &[(f64, &[u8])] = &[
         (100.0, b"alice".as_ref()),
         (200.0, b"bob".as_ref()),
@@ -90,7 +90,7 @@ fn embedded_zset_methods() {
 
 #[test]
 fn embedded_set_combine_ops() {
-    let mut c = Connection::open("mem://").unwrap();
+    let mut c = Connection::connect("mem://").unwrap();
     c.sadd(b"a", &[&b"x"[..], &b"y"[..], &b"z"[..]]).unwrap();
     c.sadd(b"b", &[&b"y"[..], &b"z"[..], &b"w"[..]]).unwrap();
 

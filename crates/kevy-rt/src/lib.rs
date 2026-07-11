@@ -56,7 +56,7 @@
 //! }
 //!
 //! // One shard per core, listening on 127.0.0.1:6379, until `stop` is set.
-//! let rt = Runtime::new([127, 0, 0, 1], 6379, 4, MyCommands);
+//! let rt = Runtime::builder(MyCommands).bind([127, 0, 0, 1], 6379).shards(4);
 //! rt.run(Arc::new(AtomicBool::new(false))).unwrap();
 //! ```
 // Almost entirely safe: the only `unsafe` is in `uring_reactor` (Linux io_uring),
@@ -149,7 +149,7 @@ pub use replication_gate::ReplicatedApplyGuard;
 pub use route::{Route, XGroupCtx};
 pub use message::ZCombine;
 pub use runtime::Runtime;
-pub use types::{LiveRuntimeConfig, NotifyClass, ResolvedCmd, TxnKind};
+pub use types::{LiveRuntimeConfig, NotifyClass, ReplicaAck, ResolvedCmd, TxnKind};
 
 /// Command-set semantics injected into the runtime. Cloned to every core, so it
 /// must be cheap/stateless to clone.
@@ -242,10 +242,11 @@ pub trait Commands: Clone + Send + 'static {
 
     /// Per-tick replication-view publication: the answering shard's
     /// current `master_repl_offset` (== `ReplicationSource::next_offset()`)
-    /// plus the per-replica `(ipv4, port, sent_offset)` triple for
-    /// every handshake-complete replica (in `AckSent`, `Streaming`,
-    /// or `SnapshotShipping`). `connected_slaves` for `INFO` /
-    /// `ROLE` is derived as `replicas.len()`.
+    /// plus a `(ipv4, port, sent_offset, ack)` entry for every
+    /// handshake-complete replica (in `AckSent`, `Streaming`, or
+    /// `SnapshotShipping`); `ack` is `None` until the replica's first
+    /// `REPLCONF ACK`. `connected_slaves` for `INFO` / `ROLE` is
+    /// derived as `replicas.len()`.
     /// Only called when this shard has a `ReplicationSource`
     /// installed (i.e. `Runtime::with_replication(true, ...)` was
     /// requested); standalone setups pay nothing. Command layers
@@ -256,7 +257,7 @@ pub trait Commands: Clone + Send + 'static {
     fn on_replication_view(
         &self,
         _master_repl_offset: u64,
-        _replicas: Vec<(std::net::Ipv4Addr, u16, u64, Option<u64>)>,
+        _replicas: Vec<(std::net::Ipv4Addr, u16, u64, Option<ReplicaAck>)>,
     ) {}
 
     /// Periodic shard housekeeping (the equivalent of Redis's `serverCron`).

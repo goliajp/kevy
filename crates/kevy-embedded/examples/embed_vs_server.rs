@@ -114,7 +114,7 @@ fn embed_row(n: usize) -> Row {
 }
 
 fn server_row(label: &'static str, url: &str, n: usize) -> Row {
-    let mut conn = match Connection::open(url) {
+    let mut conn = match Connection::connect(url) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("  [{label}] open {url} failed: {e}");

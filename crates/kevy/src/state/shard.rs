@@ -205,16 +205,19 @@ impl ShardCtx {
         self.replication_view.borrow().clone()
     }
 
-    /// v3.14 D5 — replicas with a live connection AND at least one
-    /// real ACK, per this shard's latest view tick (`Some(0)` counts:
-    /// an empty replica's heartbeat ACK, or min-replicas deadlocks a
-    /// fresh pair). Feeds the min-replicas write gate.
-    pub(crate) fn healthy_replica_count(&self) -> usize {
+    /// Replicas with a live connection AND at least one real ACK whose
+    /// age is within `max_lag_ms`, per this shard's latest view tick
+    /// (an acked offset of 0 counts: it is an empty replica's heartbeat
+    /// ACK, and min-replicas would deadlock a fresh pair otherwise).
+    /// Feeds the min-replicas write gate (`min_replicas_max_lag_ms`).
+    pub(crate) fn healthy_replica_count(&self, max_lag_ms: u32) -> usize {
         self.replication_view
             .borrow()
             .replicas
             .iter()
-            .filter(|(_, _, _, acked)| acked.is_some())
+            .filter(|(_, _, _, acked)| {
+                acked.is_some_and(|a| a.ack_age_ms <= u64::from(max_lag_ms))
+            })
             .count()
     }
 
@@ -293,10 +296,25 @@ mod tests {
     fn healthy_replica_count_requires_an_ack() {
         let shard = ShardCtx::default();
         let ip = std::net::Ipv4Addr::LOCALHOST;
+        let ack = |off| Some(kevy_rt::ReplicaAck { acked_offset: off, ack_age_ms: 0 });
         shard.set_replication_view(ReplicationView {
             master_repl_offset: 10,
-            replicas: vec![(ip, 1, 5, Some(5)), (ip, 2, 5, None), (ip, 3, 5, Some(0))],
+            replicas: vec![(ip, 1, 5, ack(5)), (ip, 2, 5, None), (ip, 3, 5, ack(0))],
         });
-        assert_eq!(shard.healthy_replica_count(), 2);
+        assert_eq!(shard.healthy_replica_count(10_000), 2);
+    }
+
+    #[test]
+    fn healthy_replica_count_excludes_acks_past_the_lag_window() {
+        let shard = ShardCtx::default();
+        let ip = std::net::Ipv4Addr::LOCALHOST;
+        let ack = |age_ms| Some(kevy_rt::ReplicaAck { acked_offset: 5, ack_age_ms: age_ms });
+        shard.set_replication_view(ReplicationView {
+            master_repl_offset: 10,
+            // One fresh ACK, one exactly at the window edge (counts),
+            // one past it (a stalled replica must not satisfy the gate).
+            replicas: vec![(ip, 1, 5, ack(0)), (ip, 2, 5, ack(10_000)), (ip, 3, 5, ack(10_001))],
+        });
+        assert_eq!(shard.healthy_replica_count(10_000), 2);
     }
 }

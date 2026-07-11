@@ -16,9 +16,9 @@ use kevy_resp::Reply;
 use std::env;
 
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> kevy_client::KevyResult<()> {
     let url = env::var("KEVY_URL").unwrap_or_else(|_| "tcp://127.0.0.1:6004".into());
-    let mut conn = AsyncConnection::open(&url).await?;
+    let mut conn = AsyncConnection::connect(&url).await?;
 
     // Mixed batch: writes + reads + counter + cleanup.
     let replies = conn

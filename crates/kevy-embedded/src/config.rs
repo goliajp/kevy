@@ -39,15 +39,6 @@ pub struct Config {
     pub aof: bool,
     /// AOF fsync policy. Default `EverySec` (matches Redis: ≤ 1 s loss).
     pub appendfsync: AppendFsync,
-    /// Snapshot file name inside `data_dir` (single-shard only; `n > 1`
-    /// always uses `dump-{i}.rdb`). Default `"dump-0.rdb"`. A custom name
-    /// opts the dir out of server interop: no `shards.meta` is recorded,
-    /// and a `kevy` server opening the same dir won't find the files.
-    pub snapshot_filename: String,
-    /// AOF file name inside `data_dir` (single-shard only; `n > 1` always
-    /// uses `aof-{i}.aof`). Default `"aof-0.aof"`. Same interop opt-out as
-    /// [`Self::snapshot_filename`].
-    pub aof_filename: String,
     /// TTL reaper mode. Default `Background`.
     pub ttl_reaper: TtlReaperMode,
     /// Reaper tick interval. Default 100 ms (10 Hz).
@@ -128,8 +119,6 @@ impl Default for Config {
             data_dir: None,
             aof: true,
             appendfsync: AppendFsync::EverySec,
-            snapshot_filename: String::from("dump-0.rdb"),
-            aof_filename: String::from("aof-0.aof"),
             ttl_reaper: TtlReaperMode::Background,
             reaper_interval: Duration::from_millis(100),
             reaper_samples: 20,
@@ -310,19 +299,6 @@ impl Config {
         self
     }
 
-    /// Override the snapshot file name inside `data_dir`.
-    #[must_use]
-    pub fn with_snapshot_filename(mut self, name: impl Into<String>) -> Self {
-        self.snapshot_filename = name.into();
-        self
-    }
-
-    /// Override the AOF file name inside `data_dir`.
-    #[must_use]
-    pub fn with_aof_filename(mut self, name: impl Into<String>) -> Self {
-        self.aof_filename = name.into();
-        self
-    }
 }
 
 #[cfg(test)]

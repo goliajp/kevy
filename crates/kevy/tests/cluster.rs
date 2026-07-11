@@ -126,12 +126,7 @@ impl Server {
         let stop_thread = stop.clone();
         let dir_thread = dir.clone();
         let handle = std::thread::spawn(move || {
-            let mut rt = kevy_rt::Runtime::new(
-                [127, 0, 0, 1],
-                port,
-                nshards,
-                kevy::KevyCommands::with_state(state),
-            )
+            let mut rt = kevy_rt::Runtime::builder(kevy::KevyCommands::with_state(state)).bind([127, 0, 0, 1], port).shards(nshards)
                 .with_data_dir(dir_thread);
             if cluster {
                 rt = rt.with_cluster(cluster_base);

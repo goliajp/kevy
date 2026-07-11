@@ -7,11 +7,9 @@
 //! `aof-{i}.aof` + a `shards.meta` recording the count; the first open at
 //! `n > 1` re-shards a legacy single AOF into per-shard files.
 //!
-//! Dir interop with the `kevy` server: under the default filenames a
-//! single-shard dir is byte-identical to the server's 1-thread layout, and
-//! `n == 1` records `shards.meta` too so neither side needs inference.
-//! Custom `with_aof_filename` / `with_snapshot_filename` names opt out of
-//! that interop (the dir stays meta-less — a server can't find the files).
+//! Dir interop with the `kevy` server: a single-shard dir is byte-identical
+//! to the server's 1-thread layout, and `n == 1` records `shards.meta` too
+//! so neither side needs inference.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -45,33 +43,18 @@ pub(crate) fn shard_idx(key: &[u8], n: usize) -> usize {
     }
 }
 
-fn aof_path(dir: &Path, config: &Config, i: usize, n: usize) -> PathBuf {
-    if n == 1 {
-        dir.join(&config.aof_filename) // back-compat: the original single file
-    } else {
-        layout::aof_path(dir, i)
-    }
-}
+/// The embedded store's file layout for [`kevy_persist::reshard`]: the
+/// standard per-shard names (`dump-{i}.rdb` / `aof-{i}.aof`). `n == 1`
+/// coincides with shard 0's names, which are also the legacy single-file
+/// names — old single-file dirs load without migration.
+struct EmbLayout;
 
-fn snapshot_path(dir: &Path, config: &Config, i: usize, n: usize) -> PathBuf {
-    if n == 1 {
-        dir.join(&config.snapshot_filename)
-    } else {
+impl ShardLayout for EmbLayout {
+    fn snapshot_path(&self, dir: &Path, i: usize, _n: usize) -> PathBuf {
         layout::snapshot_path(dir, i)
     }
-}
-
-/// The embedded store's file layout for [`kevy_persist::reshard`]: the
-/// standard per-shard names, except `n == 1` keeps the configured
-/// single-file names (the `with_*_filename` back-compat knobs).
-struct EmbLayout<'a>(&'a Config);
-
-impl ShardLayout for EmbLayout<'_> {
-    fn snapshot_path(&self, dir: &Path, i: usize, n: usize) -> PathBuf {
-        snapshot_path(dir, self.0, i, n)
-    }
-    fn aof_path(&self, dir: &Path, i: usize, n: usize) -> PathBuf {
-        aof_path(dir, self.0, i, n)
+    fn aof_path(&self, dir: &Path, i: usize, _n: usize) -> PathBuf {
+        layout::aof_path(dir, i)
     }
 }
 
@@ -96,13 +79,13 @@ pub(crate) fn build_shards(config: &Config) -> io::Result<Vec<Arc<RwLock<Inner>>
     std::fs::create_dir_all(&dir)?;
     // Complete (or safely discard) a reshard a crash interrupted, before
     // reading the layout — same roll-forward the server runtime does.
-    recover_journal(&dir, &EmbLayout(config))?;
+    recover_journal(&dir, &EmbLayout)?;
     load_or_reshard(&dir, config, n, &mut stores)?;
 
     // Open each shard's live AOF for append (if persistence is on).
     let aofs: Vec<Option<Aof>> = if config.aof {
         (0..n)
-            .map(|i| Aof::open(&aof_path(&dir, config, i, n), config.appendfsync).map(Some))
+            .map(|i| Aof::open(&layout::aof_path(&dir, i), config.appendfsync).map(Some))
             .collect::<io::Result<_>>()?
     } else {
         (0..n).map(|_| None).collect()
@@ -120,12 +103,6 @@ fn load_or_reshard(
 ) -> io::Result<()> {
     let meta_path = layout::shards_meta_path(dir);
     let prev = read_shards_meta(&meta_path);
-    // Under the default filenames the n==1 layout coincides with shard 0's,
-    // so the dir is server-readable; custom names opt out of that interop
-    // and stay meta-less (a meta would point the server at files that
-    // don't exist).
-    let sharded_names = config.snapshot_filename == layout::snapshot_file(0)
-        && config.aof_filename == layout::aof_file(0);
     // The embedded store always routes by KevyHash; a dir written by a
     // slots-routing server re-shards (losslessly) on first embedded open.
     let same_layout = match prev {
@@ -138,9 +115,7 @@ fn load_or_reshard(
 
     if same_layout {
         load_in_place(dir, config, n, stores)?;
-        if n > 1 || sharded_names {
-            write_shards_meta(&meta_path, ShardsMeta { n, routing: Routing::KevyHash })?;
-        }
+        write_shards_meta(&meta_path, ShardsMeta { n, routing: Routing::KevyHash })?;
     } else {
         let src_n = prev.map(|m| m.n).or_else(|| {
             let k = infer_files_n(dir);
@@ -156,16 +131,16 @@ fn load_or_reshard(
 }
 
 /// Same-layout load: each shard reads its own snapshot + AOF directly.
-fn load_in_place(dir: &Path, config: &Config, n: usize, stores: &mut [Keyspace]) -> io::Result<()> {
+fn load_in_place(dir: &Path, config: &Config, _n: usize, stores: &mut [Keyspace]) -> io::Result<()> {
     let mut total_cmds = 0u64;
     let mut total_bytes = 0u64;
     let start = Instant::now();
     for (i, store) in stores.iter_mut().enumerate() {
-        let snap = snapshot_path(dir, config, i, n);
+        let snap = layout::snapshot_path(dir, i);
         if snap.exists() {
             load_snapshot(store, &snap)?;
         }
-        let aof = aof_path(dir, config, i, n);
+        let aof = layout::aof_path(dir, i);
         if aof.exists() {
             total_bytes += std::fs::metadata(&aof).map_or(0, |m| m.len());
             replay_aof(&aof, |args| {
@@ -193,7 +168,7 @@ fn reshard(
     prev_n: Option<usize>,
     stores: &mut [Keyspace],
 ) -> io::Result<()> {
-    let lay = EmbLayout(config);
+    let lay = EmbLayout;
     let mut temp = fresh_keyspace(config);
     let mut total_cmds = 0u64;
     let start = Instant::now();

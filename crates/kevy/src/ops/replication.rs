@@ -37,9 +37,10 @@ use super::wrong_args;
 #[derive(Clone, Default)]
 pub(crate) struct ReplicationView {
     pub(crate) master_repl_offset: u64,
-    /// Per-replica `(ipv4, port, sent_offset, acked_offset)` — populated
-    /// by `kevy_rt::Shard::tick_replication_view` (T1.28.5).
-    pub(crate) replicas: Vec<(Ipv4Addr, u16, u64, Option<u64>)>,
+    /// Per-replica `(ipv4, port, sent_offset, ack)` — populated by
+    /// `kevy_rt::Shard::tick_replication_view`. `ack` carries the
+    /// acked offset plus the ACK's age for the min-replicas lag gate.
+    pub(crate) replicas: Vec<(Ipv4Addr, u16, u64, Option<kevy_rt::ReplicaAck>)>,
 }
 
 /// `ROLE` — see <https://redis.io/commands/role/>. v1.18 mapping:
@@ -180,7 +181,7 @@ fn emit_master(ctx: &Ctx<'_>, out: &mut Vec<u8>) {
     for (ip, port, sent, acked) in &view.replicas {
         let ip_str = ip.to_string();
         let port_str = port.to_string();
-        let off_str = acked.unwrap_or(*sent).to_string();
+        let off_str = acked.map_or(*sent, |a| a.acked_offset).to_string();
         encode_array_len(out, 3);
         encode_bulk(out, ip_str.as_bytes());
         encode_bulk(out, port_str.as_bytes());
@@ -223,7 +224,14 @@ mod tests {
 
     fn run(offset: u64, replica_count: usize) -> Vec<u8> {
         let replicas: Vec<_> = (0..replica_count)
-            .map(|i| (Ipv4Addr::new(10, 0, 0, (i + 1) as u8), 6004, offset, Some(offset)))
+            .map(|i| {
+                (
+                    Ipv4Addr::new(10, 0, 0, (i + 1) as u8),
+                    6004,
+                    offset,
+                    Some(kevy_rt::ReplicaAck { acked_offset: offset, ack_age_ms: 0 }),
+                )
+            })
             .collect();
         let c = crate::KevyCommands::new();
         c.shard_ctx().set_replication_view(ReplicationView {

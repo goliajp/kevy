@@ -14,7 +14,7 @@
 //! ```
 //! use kevy_embedded::{Store, Config};
 //!
-//! # fn main() -> std::io::Result<()> {
+//! # fn main() -> kevy_embedded::KevyResult<()> {
 //! let s = Store::open(Config::default())?;
 //! s.set(b"greeting", b"hello")?;
 //! assert_eq!(s.get(b"greeting")?, Some(b"hello".to_vec()));
@@ -31,7 +31,7 @@
 //! ```no_run
 //! use kevy_embedded::{Store, Config};
 //!
-//! # fn main() -> std::io::Result<()> {
+//! # fn main() -> kevy_embedded::KevyResult<()> {
 //! let s = Store::open(Config::default().with_persist("./data"))?;
 //! s.set(b"counter", b"42")?;
 //! drop(s); // flushes AOF on drop
@@ -103,7 +103,10 @@ pub use config::{AppendFsync, Config, EvictionPolicy, TtlReaperMode};
 pub use info::KevyInfo;
 pub use metric::KevyMetric;
 pub use kevy_persist::RewriteStats;
-pub use kevy_store::{ExpireStats, HExpireCode, HExpireCond, ScoreBound, StoreError, ZAggregate, ZaddFlags, ZaddReport};
+pub use kevy_store::{
+    ExpireStats, HExpireCode, HExpireCond, KevyError, KevyResult, ScoreBound, StoreError,
+    ZAggregate, ZaddFlags, ZaddReport,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use ops_feed::{Change, ChangeBatch, FeedError, PrefixInfo};
 pub use ops_snapshot_view::{Snapshot, SnapshotEntry};

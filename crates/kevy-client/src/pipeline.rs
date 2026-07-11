@@ -11,15 +11,15 @@
 //! ```no_run
 //! use kevy_client::Connection;
 //!
-//! let mut conn = Connection::open("kevy://localhost:6379")?;
+//! let mut conn = Connection::connect("kevy://localhost:6379")?;
 //! let replies = conn.pipeline(|p| {
 //!     p.cmd(&[b"SET", b"a", b"1"]).cmd(&[b"INCR", b"n"]).cmd(&[b"GET", b"a"]);
 //! })?;
 //! assert_eq!(replies.len(), 3);
-//! # Ok::<(), std::io::Error>(())
+//! # Ok::<(), kevy_client::KevyError>(())
 //! ```
 
-use std::io;
+use crate::{KevyError, KevyResult};
 
 use kevy_resp::{Reply, encode_command_borrowed};
 
@@ -76,20 +76,17 @@ impl Connection {
     pub fn pipeline(
         &mut self,
         build: impl FnOnce(&mut PipelineBuf),
-    ) -> io::Result<Vec<Reply>> {
+    ) -> KevyResult<Vec<Reply>> {
         let client = self.remote("pipeline")?;
         let mut p = PipelineBuf::default();
         build(&mut p);
         if p.poisoned {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "pipeline: a queued command had an empty argv",
-            ));
+            return Err(KevyError::InvalidInput("pipeline: a queued command had an empty argv".into()));
         }
         if p.count == 0 {
             return Ok(Vec::new());
         }
-        client.pipeline_raw(&p.buf, p.count)
+        Ok(client.pipeline_raw(&p.buf, p.count)?)
     }
 }
 
@@ -99,11 +96,11 @@ mod tests {
 
     #[test]
     fn embedded_pipeline_unsupported() {
-        let mut c = Connection::open("mem://").unwrap();
+        let mut c = Connection::connect("mem://").unwrap();
         let err = c.pipeline(|p| {
             p.cmd(&[b"PING"]);
         });
-        assert_eq!(err.unwrap_err().kind(), io::ErrorKind::Unsupported);
+        assert!(matches!(err.unwrap_err(), KevyError::Unsupported(_)));
     }
 
     #[test]

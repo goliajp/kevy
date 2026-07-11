@@ -16,6 +16,7 @@
 //! win: the backfill only fills keys the segment doesn't hold yet, so
 //! a newer hook-applied value is never clobbered by a stale scan.
 
+use kevy_resp::CmdError;
 use kevy_index::{IndexSpec, IndexValue, Segment};
 use kevy_store::Store;
 
@@ -85,7 +86,7 @@ pub(crate) fn with_ready_segment<R>(
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&IndexSpec, &Segment) -> R,
-) -> Result<R, &'static str> {
+) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
     let si = st
@@ -95,8 +96,8 @@ pub(crate) fn with_ready_segment<R>(
         .ok_or("ERR no such index")?;
     match si.build {
         BuildState::Ready => Ok(f(&si.spec, &si.seg)),
-        BuildState::Backfilling { .. } => Err("INDEXBUILDING index is still building"),
-        BuildState::FailedOverBudget => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
+        BuildState::Backfilling { .. } => Err(CmdError::Wire("INDEXBUILDING index is still building")),
+        BuildState::FailedOverBudget => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
     }
 }
 
@@ -106,7 +107,7 @@ pub(crate) fn with_ready_agg<R>(
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&kevy_index::AggSegment) -> R,
-) -> Result<R, &'static str> {
+) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
     let si = st
@@ -116,9 +117,9 @@ pub(crate) fn with_ready_agg<R>(
         .ok_or("ERR no such index")?;
     match (&si.build, &si.agg) {
         (BuildState::Ready, Some(a)) => Ok(f(a)),
-        (BuildState::Backfilling { .. }, _) => Err("INDEXBUILDING index is still building"),
-        (BuildState::FailedOverBudget, _) => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
-        (_, None) => Err("ERR not an aggregate index"),
+        (BuildState::Backfilling { .. }, _) => Err(CmdError::Wire("INDEXBUILDING index is still building")),
+        (BuildState::FailedOverBudget, _) => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
+        (_, None) => Err(CmdError::Wire("ERR not an aggregate index")),
     }
 }
 
@@ -128,7 +129,7 @@ pub(crate) fn with_ready_ann<R>(
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&mut kevy_vector::Hnsw) -> R,
-) -> Result<R, &'static str> {
+) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
     let si = st
@@ -138,9 +139,9 @@ pub(crate) fn with_ready_ann<R>(
         .ok_or("ERR no such index")?;
     match (&si.build, &mut si.ann) {
         (BuildState::Ready, Some(g)) => Ok(f(g)),
-        (BuildState::Backfilling { .. }, _) => Err("INDEXBUILDING index is still building"),
-        (BuildState::FailedOverBudget, _) => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
-        (_, None) => Err("ERR not a vector index"),
+        (BuildState::Backfilling { .. }, _) => Err(CmdError::Wire("INDEXBUILDING index is still building")),
+        (BuildState::FailedOverBudget, _) => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
+        (_, None) => Err(CmdError::Wire("ERR not a vector index")),
     }
 }
 
@@ -150,7 +151,7 @@ pub(crate) fn with_ready_text_segment<R>(
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&kevy_text::TextSegment) -> R,
-) -> Result<R, &'static str> {
+) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
     let si = st
@@ -160,9 +161,9 @@ pub(crate) fn with_ready_text_segment<R>(
         .ok_or("ERR no such index")?;
     match (&si.build, &si.text) {
         (BuildState::Ready, Some(ts)) => Ok(f(ts)),
-        (BuildState::Backfilling { .. }, _) => Err("INDEXBUILDING index is still building"),
-        (BuildState::FailedOverBudget, _) => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
-        (_, None) => Err("ERR not a text index"),
+        (BuildState::Backfilling { .. }, _) => Err(CmdError::Wire("INDEXBUILDING index is still building")),
+        (BuildState::FailedOverBudget, _) => Err(CmdError::Wire("INDEXOVERBUDGET index build exceeded MAXMEM")),
+        (_, None) => Err(CmdError::Wire("ERR not a text index")),
     }
 }
 
@@ -193,14 +194,14 @@ pub(crate) fn with_two_ready_segments<R>(
     a: &[u8],
     b: &[u8],
     f: impl FnOnce(&IndexSpec, &Segment, &IndexSpec, &Segment) -> R,
-) -> Result<R, &'static str> {
+) -> Result<R, CmdError> {
     let mut st = ctx.shard.indexes.borrow_mut();
     refresh(&ctx.state.catalogs, &mut st, store);
     let ia = st.idx.iter().position(|si| si.spec.name == a).ok_or("ERR no such index")?;
     let ib = st.idx.iter().position(|si| si.spec.name == b).ok_or("ERR no such index")?;
     for i in [ia, ib] {
         if matches!(st.idx[i].build, BuildState::Backfilling { .. }) {
-            return Err("INDEXBUILDING index is still building");
+            return Err(CmdError::Wire("INDEXBUILDING index is still building"));
         }
     }
     let (sa, sb) = (&st.idx[ia], &st.idx[ib]);
@@ -336,7 +337,7 @@ fn apply_row_agg(
         // retract) from an in-domain row missing/failing a field
         // (excluded, counted). The happy path above never pays
         // the exists() probe.
-        _ => a.apply(key, None, store.exists(&[key.to_vec()]) > 0),
+        _ => a.apply(key, None, store.exists(&[key]) > 0),
     }
 }
 
@@ -359,7 +360,7 @@ fn row_value(store: &mut Store, spec: &IndexSpec, key: &[u8]) -> RowValue {
         // field; only the latter is a row excluded by coercion — a
         // missing key is simply not a row.
         Ok(None) => {
-            if store.exists(&[key.to_vec()]) == 0 {
+            if store.exists(&[key]) == 0 {
                 RowValue::Gone
             } else {
                 RowValue::CoerceFailed

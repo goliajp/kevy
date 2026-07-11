@@ -96,8 +96,7 @@ impl Store {
                 if let Some(m) = self.hfttl.get_mut(key) {
                     m.remove(*f);
                 }
-                let owned = [f.to_vec()];
-                self.hdel(key, &owned)?;
+                self.hdel(key, &[f])?;
                 codes.push(2);
                 continue;
             }
@@ -177,7 +176,8 @@ impl Store {
             }
         }
         self.prune_hfttl_key(key);
-        let _ = self.hdel(key, &due);
+        let due_refs: Vec<&[u8]> = due.iter().map(Vec::as_slice).collect();
+        let _ = self.hdel(key, &due_refs);
     }
 
     /// Overwrite hook — `HSET`/`HINCRBY*` on a field discards its TTL.
@@ -242,7 +242,8 @@ impl Store {
                 }
             }
             self.prune_hfttl_key(&k);
-            let _ = self.hdel(&k, &due);
+            let due_refs: Vec<&[u8]> = due.iter().map(Vec::as_slice).collect();
+            let _ = self.hdel(&k, &due_refs);
             out.push((k, due));
         }
         out
@@ -278,7 +279,7 @@ mod tests {
     fn h(s: &mut Store) {
         s.hset(
             b"h",
-            &[(b"a".to_vec(), b"1".to_vec()), (b"b".to_vec(), b"2".to_vec())],
+            &[(b"a".as_slice(), b"1".as_slice()), (b"b".as_slice(), b"2".as_slice())],
         )
         .unwrap();
     }
@@ -346,7 +347,7 @@ mod tests {
         let soon = now_unix_ms() + 20;
         s.hexpire_at(b"h", &[b"a", b"b"], soon, HExpireCond::Always).unwrap();
         // overwrite a → its TTL is discarded (Redis 7.4)
-        s.hset(b"h", &[(b"a".to_vec(), b"new".to_vec())]).unwrap();
+        s.hset(b"h", &[(b"a".as_slice(), b"new".as_slice())]).unwrap();
         assert_eq!(s.httl(b"h", &[b"a"]).unwrap(), vec![-1]);
         std::thread::sleep(std::time::Duration::from_millis(40));
         // reaper sweeps b, reports the removal for effect logging
@@ -356,7 +357,7 @@ mod tests {
         // whole-key delete drops the sidecar
         let far = now_unix_ms() + 100_000;
         s.hexpire_at(b"h", &[b"a"], far, HExpireCond::Always).unwrap();
-        s.del(&[b"h".to_vec()]);
+        s.del(&[b"h".as_slice()]);
         assert!(s.hfttl.is_empty());
     }
 }

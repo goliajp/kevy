@@ -104,7 +104,7 @@ fn apply_agg_key(
     };
     match (group, val) {
         (Some(g), Some(v)) => a.apply(key, Some((g, v)), false),
-        _ => a.apply(key, None, store.exists(&[key.to_vec()]) > 0),
+        _ => a.apply(key, None, store.exists(&[key]) > 0),
     }
 }
 
@@ -245,7 +245,7 @@ fn apply_key(store: &mut kevy_store::Store, spec: &IndexSpec, seg: &mut Segment,
             }
         }
         Ok(None) => {
-            if store.exists(&[key.to_vec()]) == 0 {
+            if store.exists(&[key]) == 0 {
                 seg.remove(key);
             } else {
                 seg.apply(key, None);

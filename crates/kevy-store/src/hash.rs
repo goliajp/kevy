@@ -90,10 +90,9 @@ impl Store {
         }
     }
 
-    /// G4 (v1.25): borrowed-pair `HSET` — kills the per-field+value
-    /// `Vec<u8>` allocs the dispatch layer used to do before calling
-    /// [`Self::hset`]. A.8: routes through the encoding-switch path.
-    pub fn hset_borrowed(
+    /// `HSET` — returns the count of newly-added fields. Borrowed argv:
+    /// no per-field allocation; routes through the encoding-switch path.
+    pub fn hset(
         &mut self,
         key: &[u8],
         pairs: &[(&[u8], &[u8])],
@@ -128,18 +127,6 @@ impl Store {
         }
         self.account_delta(key, delta);
         Ok(added)
-    }
-
-    /// `HSET` — returns the count of newly-added fields.
-    pub fn hset(&mut self, key: &[u8], pairs: &[(Vec<u8>, Vec<u8>)]) -> Result<usize, StoreError> {
-        self.purge_hash_ttl(key);
-        if !self.hfttl.is_empty() {
-            let fs: Vec<&[u8]> = pairs.iter().map(|(f, _)| f.as_slice()).collect();
-            self.clear_hash_field_ttls(key, &fs);
-        }
-        let borrowed: Vec<(&[u8], &[u8])> =
-            pairs.iter().map(|(f, v)| (f.as_slice(), v.as_slice())).collect();
-        self.hset_borrowed(key, &borrowed)
     }
 
     /// `HSETNX` — set only if the field is absent; returns whether it was set.
@@ -203,18 +190,8 @@ impl Store {
         }
     }
 
+    /// `HMGET` — one `Option` per requested field, in input order.
     pub fn hmget(
-        &mut self,
-        key: &[u8],
-        fields: &[Vec<u8>],
-    ) -> Result<Vec<Option<Vec<u8>>>, StoreError> {
-        self.purge_hash_ttl(key);
-        let borrowed: Vec<&[u8]> = fields.iter().map(Vec::as_slice).collect();
-        self.hmget_borrowed(key, &borrowed)
-    }
-
-    /// G4 (v1.25): borrowed-slice `HMGET`.
-    pub fn hmget_borrowed(
         &mut self,
         key: &[u8],
         fields: &[&[u8]],
@@ -274,14 +251,7 @@ impl Store {
     }
 
     /// `HDEL` — returns count removed; deletes the key if hash becomes empty.
-    pub fn hdel(&mut self, key: &[u8], fields: &[Vec<u8>]) -> Result<usize, StoreError> {
-        self.purge_hash_ttl(key);
-        let borrowed: Vec<&[u8]> = fields.iter().map(Vec::as_slice).collect();
-        self.hdel_borrowed(key, &borrowed)
-    }
-
-    /// G4 (v1.25): borrowed-slice `HDEL`. A.8: encoding-aware.
-    pub fn hdel_borrowed(
+    pub fn hdel(
         &mut self,
         key: &[u8],
         fields: &[&[u8]],

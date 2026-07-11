@@ -61,12 +61,12 @@ impl AsyncSubscriber {
         })
     }
 
-    /// Open and subscribe to one or more channels in one step.
-    pub async fn open(url: &str, channels: &[&[u8]]) -> io::Result<Self> {
+    /// Connect and subscribe to one or more channels in one step.
+    pub async fn connect_channels(url: &str, channels: &[&[u8]]) -> io::Result<Self> {
         if channels.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "AsyncSubscriber::open needs ≥ 1 channel — use connect() for empty start",
+                "AsyncSubscriber::connect_channels needs ≥ 1 channel — use connect() for empty start",
             ));
         }
         let mut s = Self::connect(url).await?;

@@ -76,7 +76,7 @@ impl PrimaryServer {
             std::env::set_var("KEVY_IO_URING", "0");
         }
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands::sharded(1))
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replication(true, 1024 * 1024)
@@ -135,7 +135,7 @@ impl ReplicaServer {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_thread = stop.clone();
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands::sharded(1))
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replica_inboxes(vec![receiver]);
@@ -544,7 +544,7 @@ impl TrackedReplica {
         let rt_stop = Arc::new(AtomicBool::new(false));
         let rt_stop_thread = rt_stop.clone();
         let rt_handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], rt_port, 1, kevy::KevyCommands::sharded(1))
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], rt_port).shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replica_inboxes(vec![receiver]);
@@ -739,7 +739,7 @@ fn reconnect_outside_backlog_triggers_snapshot() {
         let stop_thread = stop.clone();
         unsafe { std::env::set_var("KEVY_IO_URING", "0"); }
         let handle = std::thread::spawn(move || {
-            let rt = kevy_rt::Runtime::new([127, 0, 0, 1], port, 1, kevy::KevyCommands::sharded(1))
+            let rt = kevy_rt::Runtime::builder(kevy::KevyCommands::sharded(1)).bind([127, 0, 0, 1], port).shards(1)
                 .with_data_dir(dir_path)
                 .with_aof(false)
                 .with_replication(true, 256) // 256-byte backlog: a few SETs evict the head
