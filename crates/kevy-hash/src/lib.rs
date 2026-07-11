@@ -237,6 +237,7 @@ impl KevyHash for [u8] {
     }
 }
 
+#[cfg(feature = "alloc")]
 impl KevyHash for Vec<u8> {
     #[inline]
     fn kevy_hash(&self) -> u64 {
