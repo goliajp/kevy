@@ -40,9 +40,42 @@
 //! assert_eq!(s.get(b"user:1"), Err(kevy_store::StoreError::WrongType));
 //! ```
 #![forbid(unsafe_code)]
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
+
+/// The alloc-crate slice of the std prelude, for `no_std` builds — glob-
+/// imported per file so the std build stays byte-for-byte untouched.
+#[cfg(not(feature = "std"))]
+pub(crate) mod nostd_prelude {
+    pub(crate) use alloc::boxed::Box;
+    pub(crate) use alloc::format;
+    pub(crate) use alloc::string::{String, ToString};
+    pub(crate) use alloc::vec::Vec;
+}
+#[cfg(not(feature = "std"))]
+use nostd_prelude::*;
+
+/// The two side maps (`hfttl`, `watch_versions`) ride std's table on std
+/// and the self-hosted `KevyMap` without it.
+#[cfg(feature = "std")]
+pub(crate) type SideMap<K, V> = std::collections::HashMap<K, V>;
+#[cfg(not(feature = "std"))]
+pub(crate) type SideMap<K, V> = kevy_map::KevyMap<K, V>;
 
 mod accounting;
+#[cfg(feature = "std")]
 mod bio_drop;
+
+/// Without `std` there is no bio thread (`bio_drop` module is compiled
+/// out) — displaced heavy values drop inline on the caller.
+#[cfg(not(feature = "std"))]
+impl Store {
+    #[inline]
+    pub(crate) fn maybe_offload_drop(&mut self, old: Value) {
+        drop(old);
+    }
+}
 mod bitmap;
 mod clock;
 mod entry;
@@ -57,6 +90,8 @@ mod hash_ttl;
 pub use hash_ttl::{HExpireCode, HExpireCond};
 mod keyspace;
 mod list;
+mod notify;
+pub use notify::KeyspaceEvent;
 mod list_ops;
 mod set;
 mod small_set;
@@ -102,12 +137,12 @@ use kevy_map::KevyMap;
 /// epoch, e.g. `Date.now() * 1e6`) before TTL-sensitive ops and once per
 /// reaper tick. No-op concept on native targets, where the OS clock is the
 /// source — hence wasm-only.
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
 pub use clock::set_clock_ns;
 /// Feed kevy's wall clock (Unix-epoch millis, e.g. `Date.now()`) on
 /// `wasm32-unknown-unknown`, where `SystemTime::now()` traps. Used by `XADD`
 /// auto-IDs and `EXPIREAT`/`PEXPIREAT`.
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+#[cfg(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
 pub use clock::set_wall_clock_ms;
 
 
@@ -125,7 +160,7 @@ pub struct Store {
     /// Per-field hash TTLs: key → (field → absolute unix-ms
     /// deadline). Holds ONLY keys with live field TTLs — one
     /// `is_empty()` branch per hash access when the feature is unused.
-    pub(crate) hfttl: std::collections::HashMap<SmallBytes, KevyMap<SmallBytes, u64>>,
+    pub(crate) hfttl: SideMap<SmallBytes, KevyMap<SmallBytes, u64>>,
     /// Coarse cached monotonic clock (ns since [`epoch`]), refreshed by the
     /// reactor loop / reaper tick via [`Self::refresh_clock`]. Lazy expiry on
     /// the read path (`live_entry`) compares deadlines against this instead of
@@ -162,6 +197,13 @@ pub struct Store {
     /// [`Self::tick_expire`]). Surfaced via `INFO keyspace` / `MEMORY STATS`
     /// once those fields land.
     pub(crate) expired_keys_total: u64,
+    /// Which store-origin keyspace events to capture (see
+    /// [`crate::notify`]). All-off default = every hook is one byte
+    /// test.
+    pub(crate) notify_capture: u8,
+    /// Captured events awaiting the serving layer's drain
+    /// ([`Self::take_notify_events`]), in capture order.
+    pub(crate) notify_events: Vec<(notify::KeyspaceEvent, Vec<u8>)>,
     /// Count of live keys carrying a TTL — the size of Redis's "expire set"
     /// (`INFO keyspace`'s `expires=`). Maintained in O(1) at every TTL
     /// transition (`insert_entry` / `remove_entry` deltas + the in-place
@@ -181,7 +223,7 @@ pub struct Store {
     /// workloads this can become a memory item; v1.x acceptable since
     /// the entry is `Vec<u8>` + `u64` (~ 30 B + key length) and only
     /// touched on writes / WATCH calls.
-    pub(crate) watch_versions: std::collections::HashMap<Vec<u8>, u64>,
+    pub(crate) watch_versions: SideMap<Vec<u8>, u64>,
     /// Optional handle to the runtime's bio thread. Set by
     /// `kevy-rt::Runtime::run` via [`Self::set_bio_drop_sender`] before
     /// the shard reactor loop starts. `None` = inline drop (bare-Store
@@ -189,6 +231,7 @@ pub struct Store {
     /// without a kevy-rt runtime around it). Reads on the hot path are
     /// one `Option::as_ref` branch; the steady-state inline-drop path
     /// pays nothing beyond that branch.
+    #[cfg(feature = "std")]
     pub(crate) bio_drop_sender: Option<value::BioDropSender>,
     /// Batch-send buffer. Heavy `Value`s displaced by SET
     /// overwrites accumulate here instead of paying one mpsc send per
@@ -213,6 +256,7 @@ pub struct Store {
     /// pathological "thousand SETs in one iter never flush" cases
     /// (would otherwise hold thousands of Box<Value>s in RAM until
     /// the iter ends).
+    #[cfg(feature = "std")]
     pub(crate) pending_drops: Vec<Value>,
 }
 
@@ -309,10 +353,21 @@ impl Store {
     /// write after a `WATCH` bumps to 1, which is what makes the "dirty"
     /// comparison work (stored 0 ≠ current 1 ⇒ abort EXEC).
     pub fn record_watch(&mut self, key: &[u8]) -> u64 {
-        *self
-            .watch_versions
-            .entry(key.to_vec())
-            .or_insert(0)
+        #[cfg(feature = "std")]
+        {
+            *self
+                .watch_versions
+                .entry(key.to_vec())
+                .or_insert(0)
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            // KevyMap has no entry API — insert-if-absent, then read.
+            if self.watch_versions.get(key).is_none() {
+                self.watch_versions.insert(key.to_vec(), 0);
+            }
+            self.watch_versions.get(key).copied().unwrap_or(0)
+        }
     }
 
     /// Read-only version lookup used by `EXEC`'s pre-execution check.
@@ -342,7 +397,12 @@ impl Store {
     /// / `FLUSHALL` execution paths — every WATCH against this shard
     /// must invalidate so a pending `EXEC` aborts.
     pub fn bump_all_watched(&mut self) {
+        #[cfg(feature = "std")]
         for v in self.watch_versions.values_mut() {
+            *v = v.wrapping_add(1);
+        }
+        #[cfg(not(feature = "std"))]
+        for (_, v) in self.watch_versions.iter_mut() {
             *v = v.wrapping_add(1);
         }
     }

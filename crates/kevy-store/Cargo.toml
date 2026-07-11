@@ -10,13 +10,26 @@ readme = "README.md"
 keywords = ["redis", "keyspace", "kv", "database", "ttl"]
 categories = ["database-implementations", "data-structures", "caching"]
 
+# Dual-state build: `std` (default) is byte-for-byte the crate as before.
+# `--no-default-features --features alloc,external-clock` is the `no_std`
+# core form: the OS clock arms are replaced by the host-fed atomic
+# clock (same contract the wasm arm pioneered) and the bio-drop channel
+# (an std mpsc) compiles away.
+[features]
+default = ["std"]
+std = ["alloc", "kevy-hash/std", "kevy-bytes/std", "kevy-map/std"]
+alloc = ["kevy-hash/alloc", "kevy-bytes/alloc", "kevy-map/alloc"]
+# Feed the clocks from the embedding host (`set_clock_ns` /
+# `set_wall_clock_ms`) instead of the OS — mandatory without `std`.
+external-clock = []
+
 [lints]
 workspace = true
 
 [dependencies]
-kevy-hash = { path = "../kevy-hash", version = "3.18.0" }
-kevy-bytes = { path = "../kevy-bytes", version = "3.18.0" }
-kevy-map = { path = "../kevy-map", version = "3.18.0" }
+kevy-hash = { path = "../kevy-hash", version = "3.18.0", default-features = false }
+kevy-bytes = { path = "../kevy-bytes", version = "3.18.0", default-features = false }
+kevy-map = { path = "../kevy-map", version = "3.18.0", default-features = false }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }

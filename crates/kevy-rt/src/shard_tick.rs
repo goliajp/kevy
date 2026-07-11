@@ -46,6 +46,15 @@ impl<C: Commands> Shard<C> {
         }
         if let Some(flags) = live.notify_flags {
             self.notify_flags = flags;
+            // Mirror the store-origin event classes into the store's
+            // capture mask (all-off keeps every store hook at a single
+            // byte test). Channel gating still happens at publish time.
+            let on = !flags.is_empty();
+            self.store.set_notify_capture(
+                on && flags.new_key,
+                on && flags.expired,
+                on && flags.evicted,
+            );
         }
         if let Some(t) = live.slowlog_slower_than_micros {
             self.slowlog.slower_than_micros = t;
@@ -128,6 +137,14 @@ impl<C: Commands> Shard<C> {
         self.commands.on_persist_stats(in_flight, rewrites);
     }
 
+    /// Publish this shard's live client-conn count (cluster-bus links
+    /// excluded) — the `INFO connected_clients` truth source. Same
+    /// per-tick cadence as [`Self::tick_persist`].
+    pub(crate) fn tick_conn_gauge(&mut self) {
+        let live = self.conns.iter().filter(|(_, c)| !c.cluster).count() as u64;
+        self.commands.on_conn_gauge(live);
+    }
+
     /// Publish this shard's replication view (master offset + connected
     /// replicas count) to the embedder. No-op when replication is off
     /// (the standalone fast path: one Option-discriminant check + an
@@ -180,13 +197,13 @@ impl<C: Commands> Shard<C> {
         for c in &self.replicas {
             let (sent, id) = match &c.state {
                 ReplicaState::AckSent { from_offset, replica_id } => {
-                    (*from_offset, Some(replica_id.as_str()))
+                    (*from_offset, replica_id.as_str())
                 }
                 ReplicaState::Streaming { sent_offset, replica_id } => {
-                    (*sent_offset, Some(replica_id.as_str()))
+                    (*sent_offset, replica_id.as_str())
                 }
                 ReplicaState::SnapshotShipping { ack_offset, replica_id, .. } => {
-                    (*ack_offset, Some(replica_id.as_str()))
+                    (*ack_offset, replica_id.as_str())
                 }
                 _ => continue,
             };
@@ -196,13 +213,11 @@ impl<C: Commands> Shard<C> {
             // replica's heartbeat round trip (min-replicas counts it).
             // The ACK age (vs the same epoch clock the slot was
             // touched with) feeds the min_replicas_max_lag_ms gate.
-            let acked = id.and_then(|i| {
-                self.slots.get(i).map(|s| crate::ReplicaAck {
-                    acked_offset: s.acked_offset,
-                    ack_age_ms: now_ns.saturating_sub(s.last_seen_ns) / 1_000_000,
-                })
+            let acked = self.slots.get(id).map(|s| crate::ReplicaAck {
+                acked_offset: s.acked_offset,
+                ack_age_ms: now_ns.saturating_sub(s.last_seen_ns) / 1_000_000,
             });
-            replicas.push((c.peer.0, c.peer.1, sent, acked));
+            replicas.push((id.to_string(), c.peer.0, c.peer.1, sent, acked));
         }
         self.commands.on_replication_view(offset, replicas);
     }

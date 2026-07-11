@@ -79,7 +79,7 @@ impl<C: Commands> Shard<C> {
             self.fold(conn_id, seq, crate::message::Part::Reply(crate::message::SmallReply::from_vec(err)));
             return;
         }
-        if !meta.is_write && let Some(err) = self.commands.read_denied() {
+        if !meta.is_write && let Some(err) = self.commands.read_denied(args) {
             self.push_pending_slot(conn_id, 1, Agg::First(None), is_quit);
             self.fold(conn_id, seq, crate::message::Part::Reply(crate::message::SmallReply::from_vec(err)));
             return;

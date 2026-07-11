@@ -79,6 +79,9 @@ impl<C: Commands> Shard<C> {
         if self.notify_flags.is_empty() {
             return;
         }
+        // Store-origin events first: a `new` fired by this command
+        // precedes the command's own class event on the wire.
+        self.drain_store_notify();
         let Some(class) = self.commands.notify_class(args) else { return };
         if !class.enabled_in(&self.notify_flags) {
             return;
@@ -94,7 +97,11 @@ impl<C: Commands> Shard<C> {
 
     /// Multi-key `DEL` — fire `del` per key.
     pub(crate) fn maybe_notify_del(&mut self, keys: &[Vec<u8>]) {
-        if self.notify_flags.is_empty() || !self.notify_flags.generic {
+        if self.notify_flags.is_empty() {
+            return;
+        }
+        self.drain_store_notify();
+        if !self.notify_flags.generic {
             return;
         }
         for k in keys {
@@ -104,11 +111,35 @@ impl<C: Commands> Shard<C> {
 
     /// Multi-key `MSET` — fire `set` per key (matches Redis events.c).
     pub(crate) fn maybe_notify_mset(&mut self, pairs: &[(Vec<u8>, Vec<u8>)]) {
-        if self.notify_flags.is_empty() || !self.notify_flags.string {
+        if self.notify_flags.is_empty() {
+            return;
+        }
+        self.drain_store_notify();
+        if !self.notify_flags.string {
             return;
         }
         for (k, _) in pairs {
             self.notify_keyspace_event(b"set", k);
+        }
+    }
+
+    /// Publish the store-origin events captured since the last drain
+    /// (`new` / `expired` / `evicted`). The capture mask mirrors the
+    /// live flags, so everything in the buffer is publishable as-is.
+    /// Called on write paths (so a `new` precedes its command's class
+    /// event) and on the shard tick (reaper batches + read-path lazy
+    /// expiry); the steady-state cost is one length check.
+    pub(crate) fn drain_store_notify(&mut self) {
+        if !self.store.has_notify_events() {
+            return;
+        }
+        for (kind, key) in self.store.take_notify_events() {
+            let event: &[u8] = match kind {
+                kevy_store::KeyspaceEvent::New => b"new",
+                kevy_store::KeyspaceEvent::Expired => b"expired",
+                kevy_store::KeyspaceEvent::Evicted => b"evicted",
+            };
+            self.notify_keyspace_event(event, &key);
         }
     }
 

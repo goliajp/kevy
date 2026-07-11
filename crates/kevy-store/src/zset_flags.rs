@@ -2,6 +2,8 @@
 //! `CH` / `INCR`. Split from `zset.rs` (500-LOC rule). The no-flags
 //! hot path stays `zadd` / `zadd` — nothing here taxes it.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::{Store, StoreError};
 
 /// Parsed `ZADD` condition flags. `CH` only changes the *reply*

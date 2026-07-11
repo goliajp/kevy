@@ -32,6 +32,10 @@ workspace = true
 # version is what crates.io uses to resolve.
 kevy-resp = { path = "../kevy-resp", version = "3.18.0" }
 kevy-hash = { path = "../kevy-hash", version = "3.18.0" }
+# URL parsing + the pubsub frame vocabulary live in kevy-resp-client
+# (the canonical client-shared pieces); only those pure modules are
+# used — the blocking TCP client itself is not touched here.
+kevy-resp-client = { path = "../kevy-resp-client", version = "3.18.0" }
 
 # Phase 4 tasks T4.5/T4.6/T4.7 add the runtime deps with their inline
 # `# EXEMPTION — see feedback-pure-rust-no-c-principle.md` comments.

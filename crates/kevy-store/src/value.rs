@@ -1,10 +1,12 @@
 //! Value types — one backing structure per Redis type.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 pub use kevy_bytes::SmallBytes;
 use kevy_map::{KevyMap, KevySet};
-use std::cmp::Ordering;
-use std::collections::{BTreeSet, VecDeque};
-use std::sync::Arc;
+use core::cmp::Ordering;
+use alloc::collections::{BTreeSet, VecDeque};
+use alloc::sync::Arc;
 
 /// Backing structure for a Hash value — [`KevyMap`] keyed by [`SmallBytes`]
 /// (22 B inline / heap-else). Field names ≤22B (the vast majority — `name`,
@@ -196,7 +198,7 @@ pub const BULK_THRESHOLD: usize = 64;
 
 const _: () = {
     // Don't let future variants undo box-collection's Entry-48B win.
-    assert!(std::mem::size_of::<Value>() <= 32);
+    assert!(core::mem::size_of::<Value>() <= 32);
 };
 
 /// Heap-size threshold above which an overwritten `Value` is sent to the
@@ -246,6 +248,7 @@ pub const HEAP_HEAVY_BYTES: usize = 4 * 1024;
 /// drops each item. One mpsc message per shard-flush amortises the
 /// channel cost (atomic + cross-thread cacheline traffic) across
 /// however many values landed in the batch.
+#[cfg(feature = "std")]
 pub type BioDropSender = std::sync::mpsc::Sender<Vec<Value>>;
 
 impl Value {
@@ -331,14 +334,14 @@ impl Value {
             // thread to only do a refcount-decrement, which is wasted
             // cross-thread traffic. A unique Arc IS the case where
             // drop is expensive (it really frees the inner payload).
-            Value::Hash(a) => std::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
-            Value::List(a) => std::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
-            Value::Set(a) => std::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
+            Value::Hash(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
+            Value::List(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
+            Value::Set(a) => alloc::sync::Arc::strong_count(a) == 1 && !a.is_empty(),
             Value::ZSet(a) => {
-                std::sync::Arc::strong_count(a) == 1 && !a.by_member.is_empty()
+                alloc::sync::Arc::strong_count(a) == 1 && !a.by_member.is_empty()
             }
             Value::Stream(a) => {
-                std::sync::Arc::strong_count(a) == 1 && a.length() > 0
+                alloc::sync::Arc::strong_count(a) == 1 && a.length() > 0
             }
         }
     }

@@ -276,6 +276,22 @@ impl<C: Commands> Shard<C> {
         }
     }
 
+    /// Shard exit sequence, shared by both reactors: honor a pending
+    /// `SHUTDOWN SAVE` request with one final background save, land any
+    /// in-flight persist job, force-fsync the AOF tail (an EverySec
+    /// window may still hold unsynced appends at loop exit), and write
+    /// the clean-shutdown feed marker.
+    pub(crate) fn shutdown_drain(&mut self) {
+        if self.commands.shutdown_save_requested() {
+            self.start_bg_save();
+        }
+        self.drain_persist_on_shutdown();
+        if let Some(aof) = &mut self.aof {
+            let _ = aof.sync_now();
+        }
+        self.write_feed_shutdown_marker();
+    }
+
     pub(crate) fn drain_persist_on_shutdown(&mut self) {
         // The persist worker only handles one job at a time, but a
         // completion could still be sitting in the done channel

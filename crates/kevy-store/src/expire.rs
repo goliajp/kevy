@@ -11,6 +11,8 @@
 //! embedded users without a runtime call it themselves from whatever event
 //! loop they have (mandatory for WASM, which has no threads).
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::{Store, now_ns};
 
 /// What [`Store::tick_expire`] saw and did. Surfaced for tests, INFO
@@ -53,6 +55,7 @@ pub(crate) fn sample_round(store: &mut Store, samples: usize, now: u64) -> (u32,
     let (sampled, victims) = collect_victims(store, samples, now, start);
     let expired = victims.len() as u32;
     for k in &victims {
+        store.note_expired(k);
         store.remove_entry(k);
     }
     // Active-expire-driven removals are still expirations from the shard's
@@ -194,7 +197,7 @@ impl Store {
 mod tests {
     use super::*;
     use crate::value::SmallBytes;
-    use std::time::Duration;
+    use core::time::Duration;
 
     #[test]
     fn tick_expire_drops_past_deadline() {

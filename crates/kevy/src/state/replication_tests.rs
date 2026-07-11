@@ -4,7 +4,7 @@
 
     #[test]
     fn fresh_state_defaults() {
-        let r = ReplicationState::new(1, false);
+        let r = ReplicationState::new(1, false, 0);
         assert!(!r.is_replica());
         assert!(r.read_only());
         assert!(r.current_upstream().is_none());
@@ -17,7 +17,7 @@
 
     #[test]
     fn applied_offset_sum_is_per_runner_sum_not_max() {
-        let r = ReplicationState::new(3, false);
+        let r = ReplicationState::new(3, false, 0);
         assert_eq!(r.applied_offset_sum(), 0, "no runners → 0");
         // Simulate a 3-runner fleet's registry (start_runners sizes
         // this in production).
@@ -39,7 +39,7 @@
 
     #[test]
     fn start_runners_before_runtime_wiring_errors() {
-        let r = ReplicationState::new(1, false);
+        let r = ReplicationState::new(1, false, 0);
         let result = r.start_runners((IpAddr::V4(std::net::Ipv4Addr::LOCALHOST), 6400));
         assert!(result.is_err(), "inboxes never taken → no runtime drains them");
         assert!(!r.is_replica());
@@ -47,7 +47,7 @@
 
     #[test]
     fn promote_bumps_epoch_only_from_replica() {
-        let r = ReplicationState::new(1, false);
+        let r = ReplicationState::new(1, false, 0);
         r.promote_stop_runners();
         assert_eq!(r.promotion_epoch(), 0, "primary → primary is not a promotion");
         r.force_replica_flag();
@@ -58,7 +58,7 @@
 
     #[test]
     fn write_denied_orders_fences() {
-        let r = ReplicationState::new(1, false);
+        let r = ReplicationState::new(1, false, 0);
         r.set_quiesce(Some("10.0.0.9:7000".into()));
         assert!(r.write_possibly_gated(), "quiesce raises the gate bit");
         let reply = r.write_denied_reply(|| 0).expect("quiesced");
@@ -79,7 +79,7 @@
 
     #[test]
     fn every_gate_writer_bumps_the_control_epoch() {
-        let r = ReplicationState::new(1, false);
+        let r = ReplicationState::new(1, false, 0);
         let epoch = r.control_epoch_handle();
         let mut last = epoch.load(Ordering::Acquire);
         let assert_bumped = |last: &mut u64, what: &str| {
@@ -107,7 +107,7 @@
 
     #[test]
     fn min_replicas_on_primary_keeps_write_gate_raised() {
-        let r = ReplicationState::new(1, false);
+        let r = ReplicationState::new(1, false, 0);
         r.set_min_replicas(1);
         assert!(r.write_possibly_gated(), "count is dynamic → always re-judge");
         let denied = r.write_denied_reply(|| 0).expect("no healthy replicas");

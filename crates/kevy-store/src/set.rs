@@ -1,9 +1,11 @@
 //! `Store` set commands.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::small_set::{AddResult, SmallSetData, promote};
 use crate::value::{SetData, SmallBytes, Value, set_member_weight};
 use crate::{Entry, Store, StoreError};
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 impl Store {
     // ---- sets ----------------------------------------------------------

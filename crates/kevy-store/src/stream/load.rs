@@ -3,7 +3,9 @@
 //! redistribution) needs to carry group/PEL state across a dump/load
 //! boundary. Split from `stream/mod.rs` to stay under the 500-LOC cap.
 
-use std::collections::BTreeMap;
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
+use alloc::collections::BTreeMap;
 
 use kevy_map::KevyMap;
 

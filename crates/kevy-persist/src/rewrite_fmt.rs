@@ -146,7 +146,7 @@ fn write_value_as_commands<W: Write>(
             let ms = z.iter().flat_map(|(m, sc)| [fmt_zset_score(sc), m.to_vec()]);
             write_verb_items(w, b"ZADD", key, z.len() * 2, ms)?;
         }
-        Value::Stream(s) => write_stream_as_commands(w, key, s)?,
+        Value::Stream(s) => _ = write_stream_as_commands(w, key, s)?,
     }
     write_pexpireat(w, key, ttl_ms)
 }
@@ -181,7 +181,10 @@ fn write_verb_items<W: Write>(
 /// feature), then `XSETID` whenever a bare replay of those XADDs would
 /// not reproduce the scalar state (deleted tail, deleted-only stream,
 /// non-zero `entries_added` drift), then the consumer-group section.
-fn write_stream_as_commands<W: Write>(w: &mut W, key: &[u8], s: &StreamData) -> io::Result<()> {
+/// Returns the number of command frames written so callers that ship
+/// rebuild frames elsewhere (scope migration) can report a frame count.
+pub fn write_stream_as_commands<W: Write>(w: &mut W, key: &[u8], s: &StreamData) -> io::Result<usize> {
+    let mut frames = 0usize;
     for (id, fv) in s.iter_entries() {
         let mut argv: Vec<Vec<u8>> = Vec::with_capacity(3 + fv.len() * 2);
         argv.push(b"XADD".to_vec());
@@ -192,6 +195,7 @@ fn write_stream_as_commands<W: Write>(w: &mut W, key: &[u8], s: &StreamData) -> 
             argv.push(v.to_vec());
         }
         write_multibulk(w, &Argv::from(argv))?;
+        frames += 1;
     }
     let (len, last, mxd, added) =
         (s.length(), s.last_id(), s.max_deleted_id(), s.entries_added());
@@ -204,6 +208,7 @@ fn write_stream_as_commands<W: Write>(w: &mut W, key: &[u8], s: &StreamData) -> 
             last.encode(), b"x".to_vec(), b"x".to_vec(),
         ];
         write_multibulk(w, &Argv::from(argv))?;
+        frames += 1;
     }
     // What replaying the commands emitted so far yields. The only no-key
     // case left is the virgin empty stream (groups-only) — its scalars
@@ -220,8 +225,10 @@ fn write_stream_as_commands<W: Write>(w: &mut W, key: &[u8], s: &StreamData) -> 
             b"MAXDELETEDID".to_vec(), mxd.encode(),
         ];
         write_multibulk(w, &Argv::from(argv))?;
+        frames += 1;
     }
-    write_stream_group_commands(w, key, s)
+    frames += write_stream_group_commands(w, key, s)?;
+    Ok(frames)
 }
 
 /// Consumer-group section of a stream rewrite: `XGROUP CREATE … MKSTREAM`
@@ -236,7 +243,8 @@ fn write_stream_group_commands<W: Write>(
     w: &mut W,
     key: &[u8],
     s: &StreamData,
-) -> io::Result<()> {
+) -> io::Result<usize> {
+    let mut frames = 0usize;
     for g in s.export_groups() {
         let last_delivered =
             StreamId { ms: g.last_delivered.0, seq: g.last_delivered.1 };
@@ -245,12 +253,14 @@ fn write_stream_group_commands<W: Write>(
             last_delivered.encode(), b"MKSTREAM".to_vec(),
         ];
         write_multibulk(w, &Argv::from(argv))?;
+        frames += 1;
         for (consumer, _last_seen_ms) in &g.consumers {
             let argv = vec![
                 b"XGROUP".to_vec(), b"CREATECONSUMER".to_vec(), key.to_vec(),
                 g.name.clone(), consumer.clone(),
             ];
             write_multibulk(w, &Argv::from(argv))?;
+            frames += 1;
         }
         for (ms, seq, consumer, delivery_time_ms, delivery_count) in &g.pel {
             let id = StreamId { ms: *ms, seq: *seq };
@@ -265,9 +275,10 @@ fn write_stream_group_commands<W: Write>(
                 b"FORCE".to_vec(), b"JUSTID".to_vec(),
             ];
             write_multibulk(w, &Argv::from(argv))?;
+            frames += 1;
         }
     }
-    Ok(())
+    Ok(frames)
 }
 
 /// Format a sorted-set score the way Redis does (no trailing `.0` for

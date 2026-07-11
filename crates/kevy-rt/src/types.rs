@@ -171,3 +171,10 @@ pub struct ReplicaAck {
     /// view was published. Feeds the `min_replicas_max_lag_ms` gate.
     pub ack_age_ms: u64,
 }
+
+/// One replica conn's row in the per-tick replication view:
+/// `(replica_id, peer_ipv4, peer_port, sent_offset, ack)`. The id is
+/// the identity string the replica presented at handshake — command
+/// layers group per-shard rows by it to render one aggregate entry
+/// per replica process.
+pub type ReplicaViewRow = (String, std::net::Ipv4Addr, u16, u64, Option<ReplicaAck>);

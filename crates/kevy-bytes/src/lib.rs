@@ -26,6 +26,9 @@
 //! variants and keep `Entry` at 48 B.
 
 #![warn(missing_docs)]
+#![cfg_attr(not(feature = "std"), no_std)]
+
+extern crate alloc;
 
 #[cfg(target_endian = "big")]
 compile_error!("kevy-bytes requires little-endian: heap-tag byte overlaps inline length byte");
@@ -35,10 +38,11 @@ mod traits;
 
 pub use find_crlf::find_crlf;
 
-use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
-use std::mem::{self, ManuallyDrop};
-use std::ptr::NonNull;
-use std::slice;
+use alloc::alloc::{Layout, alloc, dealloc, handle_alloc_error};
+use alloc::vec::Vec;
+use core::mem::{self, ManuallyDrop};
+use core::ptr::NonNull;
+use core::slice;
 
 pub(crate) const INLINE_CAP: usize = 23;
 pub(crate) const INLINE_LEN_MAX: u8 = (INLINE_CAP - 1) as u8;
@@ -192,7 +196,7 @@ impl SmallBytes {
             let mut data = [0u8; INLINE_CAP];
             // SAFETY: bytes.len() ≤ 22 ≤ data.len(); non-overlapping regions.
             unsafe {
-                std::ptr::copy_nonoverlapping(bytes.as_ptr(), data.as_mut_ptr(), bytes.len());
+                core::ptr::copy_nonoverlapping(bytes.as_ptr(), data.as_mut_ptr(), bytes.len());
             }
             Self {
                 inline: Inline {
@@ -240,7 +244,7 @@ impl SmallBytes {
         // SAFETY: alloc returned a writable region of `len` bytes; source is a
         // disjoint slice.
         unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.as_ptr(), len);
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.as_ptr(), len);
         }
         Self {
             heap: Heap::new(ptr, len, len),
@@ -392,7 +396,7 @@ impl SmallBytes {
         };
         // SAFETY: src has `len` valid bytes; dst is freshly-allocated for `len`
         // bytes; regions are disjoint.
-        unsafe { std::ptr::copy_nonoverlapping(src_ptr, ptr.as_ptr(), len) };
+        unsafe { core::ptr::copy_nonoverlapping(src_ptr, ptr.as_ptr(), len) };
         Self {
             heap: Heap::new(ptr, len, len),
         }

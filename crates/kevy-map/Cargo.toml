@@ -13,12 +13,20 @@ readme = "README.md"
 keywords = ["hashmap", "hashtable", "open-addressing", "swiss", "prefetch"]
 categories = ["data-structures"]
 
+# `std` (default) keeps the crate exactly as before; `alloc` alone gives
+# the full Swiss-table surface under `no_std` (the table is raw-alloc
+# based; the huge-page hint no-ops away on OS-less targets).
+[features]
+default = ["std"]
+std = ["alloc", "kevy-hash/std", "kevy-madvise/std"]
+alloc = ["kevy-hash/alloc", "kevy-madvise/alloc"]
+
 [lints]
 workspace = true
 
 [dependencies]
-kevy-hash     = { path = "../kevy-hash",     version = "3.18.0" }
-kevy-madvise  = { path = "../kevy-madvise",  version = "3.18.0" }
+kevy-hash     = { path = "../kevy-hash",     version = "3.18.0", default-features = false }
+kevy-madvise  = { path = "../kevy-madvise",  version = "3.18.0", default-features = false }
 
 [dev-dependencies]
 kevy-bench = { path = "../kevy-bench" }

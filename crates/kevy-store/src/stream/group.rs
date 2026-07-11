@@ -4,7 +4,9 @@
 //! types + the in-stream operations; the `Store`-side wrappers live in
 //! `stream/store.rs` next to the rest of the public API.
 
-use std::collections::BTreeMap;
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
+use alloc::collections::BTreeMap;
 
 use kevy_map::KevyMap;
 
@@ -379,7 +381,7 @@ pub enum ReadGroupId {
 /// (XDEL'd tombstones are skipped), capped at `count`.
 fn replay_pel_entries(
     g: &ConsumerGroup,
-    entries: &std::collections::BTreeMap<StreamId, Vec<(SmallBytes, SmallBytes)>>,
+    entries: &alloc::collections::BTreeMap<StreamId, Vec<(SmallBytes, SmallBytes)>>,
     consumer: &SmallBytes,
     after: StreamId,
     count: Option<usize>,

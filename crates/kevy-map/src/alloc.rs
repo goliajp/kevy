@@ -8,7 +8,7 @@ use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ptr;
 use core::ptr::NonNull;
-use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
+use alloc_crate::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 
 use crate::map::{EMPTY, GROUP_WIDTH, KevyMap, MIN_CAP, table_layout};
 
@@ -95,7 +95,7 @@ impl<K, V> Drop for KevyMap<K, V> {
         if self.cap == 0 {
             return;
         }
-        if std::mem::needs_drop::<(K, V)>() {
+        if core::mem::needs_drop::<(K, V)>() {
             for i in 0..self.cap {
                 // SAFETY: i < cap ⇒ in-bounds.
                 let meta = unsafe { *self.metadata_ptr.as_ptr().add(i) };

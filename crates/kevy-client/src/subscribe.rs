@@ -63,62 +63,9 @@ enum Inner {
     },
 }
 
-/// One pubsub frame received from the bus or the wire.
-///
-/// `Unsubscribe` / `Punsubscribe`'s `channel` / `pattern` is `None` when
-/// the server is acknowledging "unsubscribed from everything" with a nil
-/// bulk — matching the Redis wire shape.
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PubsubEvent {
-    /// `SUBSCRIBE` ack — one per channel the client subscribed to.
-    Subscribe {
-        /// Channel that was just subscribed.
-        channel: Vec<u8>,
-        /// Total number of channels + patterns the connection is now subscribed to.
-        count: i64,
-    },
-    /// `PSUBSCRIBE` ack — one per pattern.
-    Psubscribe {
-        /// Pattern that was just subscribed.
-        pattern: Vec<u8>,
-        /// Total number of channels + patterns the connection is now subscribed to.
-        count: i64,
-    },
-    /// `UNSUBSCRIBE` ack — `channel: None` when the server is reporting
-    /// "no channels were subscribed" (the spec's nil bulk).
-    Unsubscribe {
-        /// Channel that was just unsubscribed (`None` for "all" / "none").
-        channel: Option<Vec<u8>>,
-        /// Total number of channels + patterns still subscribed.
-        count: i64,
-    },
-    /// `PUNSUBSCRIBE` ack — pattern `None` when the server is reporting
-    /// "no patterns were subscribed".
-    Punsubscribe {
-        /// Pattern that was just unsubscribed (`None` for "all" / "none").
-        pattern: Option<Vec<u8>>,
-        /// Total number of channels + patterns still subscribed.
-        count: i64,
-    },
-    /// Plain `PUBLISH` delivery on a subscribed channel.
-    Message {
-        /// Channel the publish was made to.
-        channel: Vec<u8>,
-        /// Raw payload bytes (no encoding assumed).
-        payload: Vec<u8>,
-    },
-    /// Pattern-match delivery: a `PUBLISH` to a channel that matched one
-    /// of this connection's patterns.
-    Pmessage {
-        /// Pattern the channel matched.
-        pattern: Vec<u8>,
-        /// Channel the publish was made to.
-        channel: Vec<u8>,
-        /// Raw payload bytes.
-        payload: Vec<u8>,
-    },
-}
+// The pubsub frame vocabulary is canonical in `kevy_resp_client`,
+// shared with the async client — one enum, no per-crate mirrors.
+pub use kevy_resp_client::PubsubEvent;
 
 impl Subscriber {
     /// Open a fresh connection without subscribing to anything yet. Call
@@ -260,11 +207,10 @@ impl Subscriber {
                 PubsubEvent::Pmessage { channel, payload, .. } => {
                     return Ok((channel, payload));
                 }
-                // Ack frames — keep waiting for the next real message.
-                PubsubEvent::Subscribe { .. }
-                | PubsubEvent::Psubscribe { .. }
-                | PubsubEvent::Unsubscribe { .. }
-                | PubsubEvent::Punsubscribe { .. } => {}
+                // Ack frames (and any frame kind a future protocol
+                // adds — the enum is non-exhaustive) — keep waiting
+                // for the next real message.
+                _ => {}
             }
         }
     }

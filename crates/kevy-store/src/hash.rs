@@ -1,5 +1,7 @@
 //! `Store` hash commands.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::small_hash::{self, AddResult as HAddResult, SmallHashData};
 use crate::util::{parse_f64, parse_i64};
 use crate::value::{HashData, SmallBytes, Value, hash_field_weight};
@@ -7,7 +9,7 @@ use crate::value::{HashData, SmallBytes, Value, hash_field_weight};
 type FieldValuePairs = Vec<(Vec<u8>, Vec<u8>)>;
 
 use crate::{Entry, Store, StoreError, now_ns};
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 impl Store {
     // ---- hashes --------------------------------------------------------

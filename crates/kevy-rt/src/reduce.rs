@@ -60,6 +60,28 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
             SmallReply::from_vec(out)
         }
         Agg::AllOk => SmallReply::from_slice(b"+OK\r\n"),
+        Agg::ClientList { text } => {
+            let mut out = Vec::with_capacity(text.len() + 24);
+            match proto {
+                RespVersion::V2 => encode_bulk(&mut out, &text),
+                RespVersion::V3 => kevy_resp::encode_verbatim(&mut out, *b"txt", &text),
+            }
+            SmallReply::from_vec(out)
+        }
+        Agg::ClientKill { killed, oldform } => {
+            if !oldform {
+                return encode_inline_int(killed);
+            }
+            // Legacy `CLIENT KILL addr:port` replies +OK on a hit and
+            // an error when nothing matched (Redis contract).
+            if killed > 0 {
+                SmallReply::from_slice(b"+OK\r\n")
+            } else {
+                let mut out = Vec::new();
+                encode_error(&mut out, "ERR No such client address in the list");
+                SmallReply::from_vec(out)
+            }
+        }
         Agg::PrefixStats { keys, expires } => {
             let mut out = Vec::with_capacity(48);
             out.extend_from_slice(

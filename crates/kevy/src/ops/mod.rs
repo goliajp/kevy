@@ -22,6 +22,7 @@ pub(crate) mod config;
 mod memory;
 pub(crate) mod replication;
 pub(crate) mod scope_move;
+mod scope_move_stream;
 pub(crate) mod stats;
 
 use std::time::SystemTime;
@@ -54,7 +55,7 @@ pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
         b"WAIT" => crate::cmd_repl::cmd_wait(&ctx.state.replication, args, out),
         b"REPL.TOKEN" => crate::cmd_repl::cmd_repl_token(&ctx.state.replication, args, out),
         b"REPL.WAIT" => crate::cmd_repl::cmd_repl_wait(&ctx.state.replication, args, out),
-        b"SHUTDOWN" => cmd_shutdown(args, out),
+        b"SHUTDOWN" => cmd_shutdown(ctx, args, out),
         b"CONFIG" => config::cmd_config(ctx, args, out, RespVersion::V2),
         b"CLIENT" => client::cmd_client(args, out, RespVersion::V2),
         b"ROLE" => replication::cmd_role(ctx, args, out),
@@ -113,7 +114,7 @@ fn build_info_body(
         info_server(cfg, &mut body);
     }
     if want_section(want, "clients") {
-        info_clients(cfg, &mut body);
+        info_clients(cfg, totals, &mut body);
     }
     if want_section(want, "memory") {
         info_memory(cfg, totals, &mut body);
@@ -158,9 +159,14 @@ fn info_server(cfg: &Config, b: &mut String) {
     b.push_str("\r\n");
 }
 
-fn info_clients(cfg: &Config, b: &mut String) {
+fn info_clients(cfg: &Config, totals: &crate::state::Totals, b: &mut String) {
     b.push_str("# Clients\r\n");
-    b.push_str("connected_clients:1\r\n"); // TODO: real count when conn-info plumbed
+    // Live client conns summed over every shard's per-tick gauge
+    // (stale by at most one tick interval).
+    b.push_str(&format!(
+        "connected_clients:{}\r\n",
+        totals.clients_connected
+    ));
     b.push_str(&format!("maxclients:{}\r\n", cfg.server.max_clients));
     b.push_str("\r\n");
 }
@@ -198,7 +204,13 @@ fn info_persistence(ctx: &Ctx<'_>, cfg: &Config, b: &mut String) {
     // zone. Stale by at most one tick interval.
     let (in_flight, rewrites) = ctx.shard.persist_stats();
     b.push_str("# Persistence\r\n");
-    b.push_str("loading:0\r\n");
+    // `loading` = a full-resync snapshot ship is being received (the
+    // window where reads answer -LOADING). Startup AOF replay never
+    // shows here — it completes before the listener accepts.
+    b.push_str(&format!(
+        "loading:{}\r\n",
+        i32::from(ctx.state.replication.loading())
+    ));
     b.push_str(&format!(
         "aof_enabled:{}\r\n",
         i32::from(cfg.persistence.aof)
@@ -238,22 +250,18 @@ fn info_stats(ctx: &Ctx<'_>, totals: &crate::state::Totals, b: &mut String) {
 }
 
 fn info_replication(ctx: &Ctx<'_>, b: &mut String) {
-    // Live `INFO replication` — reads `current_upstream()` to
-    // decide the section shape, then drains the shard zone's per-tick
-    // view for offset + connected-replicas count.
-    // The fields mirror Redis 7.x, with one simplification:
-    // master_replid is a single zeros-string (no failover ID
-    // bookkeeping — kevy-elect keeps its own epoch instead).
-    // Link status is heartbeat-derived and the per-replica list is
-    // live (see the two halves below).
+    // Live `INFO replication` — reads `current_upstream()` to decide
+    // the section shape. The primary half folds every shard's view
+    // slot into the instance-wide answer (offset sum, one slaveN line
+    // per replica process). The fields mirror Redis 7.x, with one
+    // simplification: master_replid is a single zeros-string (no
+    // failover ID bookkeeping — kevy-elect keeps its own epoch
+    // instead). Link status is heartbeat-derived and the per-replica
+    // list is live (see the two halves below).
     b.push_str("# Replication\r\n");
-    let upstream = ctx.state.replication.current_upstream();
-    let view = ctx.shard.replication_view();
-    let offset = view.master_repl_offset;
-    let connected = view.replicas.len();
-    match upstream {
+    match ctx.state.replication.current_upstream() {
         Some((host, port)) => info_repl_replica(ctx, b, host, port),
-        None => info_repl_master(b, &view, offset, connected),
+        None => info_repl_master(ctx, b),
     }
     b.push_str("\r\n");
 }
@@ -283,23 +291,24 @@ fn info_repl_replica(ctx: &Ctx<'_>, b: &mut String, host: std::net::IpAddr, port
     b.push_str(&format!("slave_lag_frames:{lag}\r\n"));
 }
 
-/// The primary-side (`role:master`) half of `INFO replication`.
-fn info_repl_master(
-    b: &mut String,
-    view: &replication::ReplicationView,
-    offset: u64,
-    connected: usize,
-) {
+/// The primary-side (`role:master`) half of `INFO replication` —
+/// instance-wide: every shard's view slot folded into one offset sum
+/// and one `slaveN` line per replica process.
+fn info_repl_master(ctx: &Ctx<'_>, b: &mut String) {
+    let views = ctx.state.obs.repl_views();
+    let (offset, replicas) = replication::aggregate_replication(&views);
     b.push_str("role:master\r\n");
-    b.push_str(&format!("connected_slaves:{connected}\r\n"));
-    // Per-replica truth — sent (pumped), acked
-    // (REPLCONF ACK), lag in frames vs master_repl_offset.
-    for (i, (ip, port, sent, acked)) in view.replicas.iter().enumerate() {
-        let acked_v = acked.map_or(0, |a| a.acked_offset);
+    b.push_str(&format!("connected_slaves:{}\r\n", replicas.len()));
+    // Per-replica truth — port is the replica's advertised client
+    // port; sent (pumped) / offset (acked) / lag sum its per-shard
+    // streams; a replica missing an ACK on ANY stream is `syncing`.
+    for (i, agg) in replicas.iter().enumerate() {
+        let acked_v = agg.acked.unwrap_or(0);
         let lag = offset.saturating_sub(acked_v);
-        let state = if acked.is_some() { "online" } else { "syncing" };
+        let state = if agg.acked.is_some() { "online" } else { "syncing" };
         b.push_str(&format!(
-            "slave{i}:ip={ip},port={port},state={state},offset={acked_v},sent={sent},lag={lag}\r\n"
+            "slave{i}:ip={},port={},state={state},offset={acked_v},sent={},lag={lag}\r\n",
+            agg.ip, agg.port, agg.sent,
         ));
     }
     b.push_str("master_replid:0000000000000000000000000000000000000000\r\n");
@@ -368,15 +377,30 @@ fn cmd_debug<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
 
 // ───────────── SHUTDOWN ─────────────
 
-fn cmd_shutdown<A: ArgvView + ?Sized>(args: &A, _out: &mut Vec<u8>) {
-    // SHUTDOWN [NOSAVE | SAVE] — Redis exits without sending a reply
-    // (client sees connection drop). We parse the subcommand for
-    // forward compatibility, then exit(0) immediately: recent writes
-    // are only as durable as appendfsync = always or everysec has
-    // already made them (the SIGTERM handler is the graceful drain).
-    let mode = args.get(1).map(<[u8]>::to_ascii_uppercase);
-    let _ = mode; // accepted for parity; behavior identical for now
-    std::process::exit(0);
+fn cmd_shutdown<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
+    // SHUTDOWN [NOSAVE | SAVE] — a successful shutdown never sends a
+    // reply: the client observes the connection closing as the process
+    // drains and exits (Redis behavior). The command trips the same
+    // stop flag the SIGTERM handler uses, so every shard leaves its
+    // reactor loop and runs the full drain: land in-flight persist
+    // jobs, force-fsync the AOF tail, write the feed marker. `SAVE`
+    // additionally requests one final snapshot per shard before the
+    // drain; `NOSAVE` (and the bare form) skip the snapshot but keep
+    // the AOF durable.
+    if args.len() > 2 {
+        return encode_error(out, "ERR syntax error");
+    }
+    let save = match args.get(1).map(<[u8]>::to_ascii_uppercase).as_deref() {
+        None => false,
+        Some(b"NOSAVE") => false,
+        Some(b"SAVE") => true,
+        Some(_) => return encode_error(out, "ERR syntax error"),
+    };
+    if !ctx.state.request_shutdown(save) {
+        // No registered runtime stop flag (embedded / bare-dispatch
+        // contexts): keep the immediate-exit contract.
+        std::process::exit(0);
+    }
 }
 
 // ───────────── value → string converters (shared with config submodule) ─────────────

@@ -13,6 +13,8 @@
 //! a "true" global LRU/LFU pick at the price of mild approximation — the
 //! exact same trade-off Redis ships with.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::{Entry, EvictionPolicy, Store, now_ns, remaining_ms};
 
 /// `maxmemory-samples` Redis default. Each `evict_one` picks the worst out
@@ -128,6 +130,7 @@ fn evict_one(store: &mut Store) -> bool {
         return false;
     };
     if store.remove_entry(&victim).is_some() {
+        store.note_evicted(&victim);
         store.evictions_total += 1;
         true
     } else {

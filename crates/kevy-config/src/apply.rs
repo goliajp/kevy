@@ -138,7 +138,14 @@ impl Config {
     fn apply_notification(&mut self, item: &Item) -> Result<(), ConfigError> {
         match item.key.as_str() {
             "notify_keyspace_events" => {
-                self.notification.notify_keyspace_events = value_as_string(item)?;
+                let s = value_as_string(item)?;
+                if let Err(c) = crate::parse_notification_flags(&s) {
+                    return Err(schema_err(
+                        item,
+                        format!("unknown notify_keyspace_events flag char {c:?}"),
+                    ));
+                }
+                self.notification.notify_keyspace_events = s;
             }
             k => return Err(schema_err(item, format!("unknown [notification] key: {k}"))),
         }

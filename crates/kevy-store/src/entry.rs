@@ -4,7 +4,7 @@
 
 use crate::clock::{now_ns, pack_deadline};
 use crate::value::Value;
-use std::num::NonZeroU64;
+use core::num::NonZeroU64;
 
 /// Per-entry weight ceiling — the field is `u32` so accounting saturates
 /// at 4 GiB per entry. Real-world Redis values are well below this; the
@@ -121,5 +121,5 @@ impl Entry {
 // = 48 bytes. Any padding regression (e.g. someone re-adding a 4-byte field
 // without packing) is caught at compile time.
 const _: () = {
-    assert!(std::mem::size_of::<Entry>() == 48);
+    assert!(core::mem::size_of::<Entry>() == 48);
 };

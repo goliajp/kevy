@@ -13,6 +13,8 @@
 //! is a consistent instant: an entry that expires *after* the collect still
 //! appears with the remaining TTL it had at that instant.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::value::Value;
 use crate::{SmallBytes, Store, now_ns, remaining_ms};
 

@@ -19,6 +19,11 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
+#![cfg_attr(not(feature = "std"), no_std)]
+
+// Renamed: this crate has its own `alloc` module (the raw-table
+// allocation plumbing), so the alloc *crate* gets an alias.
+extern crate alloc as alloc_crate;
 
 mod alloc;
 mod clone;

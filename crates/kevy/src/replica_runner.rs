@@ -207,6 +207,44 @@ fn set_socket_slot(slot: &Mutex<Option<TcpStream>>, value: Option<TcpStream>) {
     }
 }
 
+/// Tracks this runner's snapshot-ship window against the shared
+/// [`ReplicaProgress`] loading count: raised at `SnapshotBegin`,
+/// lowered at `SnapshotEnd` — and by `Drop` on every early exit from
+/// the drain loop (link drop, shard gone, stop), so a mid-ship
+/// disconnect never strands the replica refusing reads.
+struct LoadingGuard<'a> {
+    progress: &'a ReplicaProgress,
+    raised: bool,
+}
+
+impl<'a> LoadingGuard<'a> {
+    fn new(progress: &'a ReplicaProgress) -> Self {
+        Self { progress, raised: false }
+    }
+
+    fn observe(&mut self, event: &ReplicaEvent) {
+        match event {
+            ReplicaEvent::SnapshotBegin if !self.raised => {
+                self.raised = true;
+                self.progress.begin_loading();
+            }
+            ReplicaEvent::SnapshotEnd { .. } if self.raised => {
+                self.raised = false;
+                self.progress.end_loading();
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Drop for LoadingGuard<'_> {
+    fn drop(&mut self) {
+        if self.raised {
+            self.progress.end_loading();
+        }
+    }
+}
+
 /// Drain `next_event` until the peer EOFs / errors. Returns the
 /// `from_offset` to resume from on the next reconnect.
 fn drain_client(
@@ -218,6 +256,7 @@ fn drain_client(
 ) -> u64 {
     let mut from_offset = client.expected_offset();
     let mut last_ack = std::time::Instant::now();
+    let mut loading = LoadingGuard::new(progress);
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
             Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
@@ -231,6 +270,7 @@ fn drain_client(
                 last_ack = std::time::Instant::now();
             }
             Some(Ok(event)) => {
+                loading.observe(&event);
                 let apply = event_to_apply(event, &mut from_offset);
                 if sender.send(apply).is_err() {
                     // Receiver dropped — the shard / runtime is gone;
@@ -336,6 +376,7 @@ fn drain_client_routed(
 ) -> u64 {
     let mut from_offset = client.expected_offset();
     let mut last_ack = std::time::Instant::now();
+    let mut loading = LoadingGuard::new(progress);
     while !stop.load(Ordering::Relaxed) {
         match client.next_event() {
             Some(Ok(ReplicaEvent::Ping { generation, primary_offset })) => {
@@ -344,6 +385,7 @@ fn drain_client_routed(
                 last_ack = std::time::Instant::now();
             }
             Some(Ok(event)) => {
+                loading.observe(&event);
                 if route_event(event, &mut from_offset, senders).is_err() {
                     return from_offset;
                 }

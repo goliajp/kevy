@@ -2,10 +2,12 @@
 //! `ZSCORE` / `ZCARD` / `ZRANK`). The range / pop / range-removal family
 //! lives in `zset_range.rs` (500-LOC house cap).
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::small_zset::{self, AddResult as ZAddResult, SmallZSetData};
 use crate::value::{ZSetData, SmallBytes, Value, zset_member_weight};
 use crate::{Entry, Store, StoreError};
-use std::sync::Arc;
+use alloc::sync::Arc;
 
 impl Store {
     // ---- sorted sets ---------------------------------------------------

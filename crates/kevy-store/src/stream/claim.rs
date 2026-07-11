@@ -2,6 +2,8 @@
 //! both files stay under the project's ≤500-LOC rule. Owns the
 //! `AutoclaimResult` return type alongside the methods that produce it.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use super::group::{ConsumerGroup, ensure_consumer};
 use super::{EntryBatch, PelEntry, StreamData, StreamId, XClaimOpts};
 use crate::value::SmallBytes;
@@ -113,7 +115,7 @@ impl StreamData {
 /// `claim` is called over a slice of IDs).
 fn claim_one(
     g: &mut ConsumerGroup,
-    entries: &std::collections::BTreeMap<StreamId, Vec<(SmallBytes, SmallBytes)>>,
+    entries: &alloc::collections::BTreeMap<StreamId, Vec<(SmallBytes, SmallBytes)>>,
     id: StreamId,
     new_owner: &SmallBytes,
     opts: &XClaimOpts,

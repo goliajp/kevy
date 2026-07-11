@@ -20,11 +20,11 @@ use kevy_store::{ZAggregate, zdiff, zinter, zintercard, zunion};
 /// One source key's scored members (sets contribute score 1.0).
 type ScoredInput = Vec<(Vec<u8>, f64)>;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 use crate::replica_glue::ensure_writable;
 use crate::store::{Store, commit_write, store_err};
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(not(all(feature = "replicate", not(target_arch = "wasm32"))))]
 fn ensure_writable(_s: &Store) -> KevyResult<()> {
     Ok(())
 }

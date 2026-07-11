@@ -53,7 +53,7 @@ pub use aof::{Aof, Fsync, RewritePlan, RewriteStats, write_aof_base};
 pub use replay::replay_aof;
 pub use shards_meta::{Routing, ShardsMeta, read_shards_meta, write_shards_meta};
 pub use kevy_resp::{Argv, ArgvView};
-pub use rewrite_fmt::dump_aof;
+pub use rewrite_fmt::{dump_aof, write_stream_as_commands};
 pub use snapshot_read::{
     load_snapshot, load_snapshot_filtered, load_snapshot_from, read_snapshot_cursor,
 };

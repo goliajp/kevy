@@ -4,6 +4,8 @@
 //! — earlier `Str`-only arms replied WRONGTYPE where Redis succeeds;
 //! guard: `tests_string_encoding.rs`.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::string_set::pick_value_for_set_owned;
 use crate::util::{fmt_num, format_i64_into, itoa_i64_stack, parse_f64};
 use crate::value::{SmallBytes, Value};
@@ -15,7 +17,7 @@ impl Store {
             Some(e) => match &mut e.value {
                 Value::Str(v) => {
                     // SmallBytes is immutable; pop out, grow via Vec, re-wrap.
-                    let mut owned = std::mem::take(v).into_vec();
+                    let mut owned = core::mem::take(v).into_vec();
                     owned.extend_from_slice(data);
                     let new_len = owned.len();
                     *v = SmallBytes::from_vec(owned);

@@ -9,6 +9,16 @@
 //!
 //! Single-machine scope: no failover, no MIGRATE/ASK, no gossip — the
 //! topology is static and fully derived from the config.
+//!
+//! Stub semantics (by design, not an unfinished surface): in
+//! standalone mode the read-only subcommands report the honest
+//! single-node facts (`cluster_enabled:0`, one node owning all 16384
+//! slots, empty SLOTS/SHARDS); mutating subcommands (RESET / SETSLOT
+//! / FORGET / MEET …) answer `+OK` without effect, because there is
+//! no dynamic membership to mutate — kevy's multi-node story is the
+//! replication + scope planes, and membership changes are "push new
+//! config, restart". Clients that probe CLUSTER defensively at
+//! connect time therefore proceed instead of erroring out.
 
 // CLUSTER NODES emits a multi-line description; the `push_str(&format!(...))`
 // shape stays legible vs `write!` boilerplate, and it's not on a hot path.
@@ -123,6 +133,11 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
             });
             encode_integer(out, count);
         }
+        // Mutating / gossip subcommands (RESET, SETSLOT, FORGET, MEET,
+        // FAILOVER …): tolerated as no-op `+OK` — see the module doc's
+        // stub-semantics declaration. There is no dynamic membership
+        // to mutate; erroring here would break clients that probe
+        // CLUSTER defensively at connect time.
         _ => encode_simple_string(out, "OK"),
     }
 }

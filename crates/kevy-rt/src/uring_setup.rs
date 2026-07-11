@@ -43,8 +43,23 @@ pub(crate) fn io_uring_available() -> bool {
 /// epoll reactor for that shard instead of killing its thread. The
 /// global [`io_uring_available`] probe only proves ONE ring can be
 /// built; N shards need N rings.
+///
+/// `KEVY_SQPOLL=1` opts the ring into kernel-side SQ polling
+/// (`IORING_SETUP_SQPOLL`, idle 1000 ms). Measurement-only switch:
+/// SQPOLL spawns one kernel poll thread per shard competing for the
+/// same core set as the shard threads, so it loses badly on a fully
+/// subscribed box — it exists so the A/B stays reproducible whenever
+/// the tradeoff is re-judged (spare-core layouts, kernel changes).
 pub(crate) fn build_uring() -> io::Result<(IoUring, kevy_uring::ProvidedBufRing)> {
-    let ring = IoUring::new(URING_ENTRIES)?;
+    let sqpoll = matches!(
+        std::env::var("KEVY_SQPOLL").ok().as_deref(),
+        Some(v) if !v.is_empty() && v != "0" && v != "off" && v != "no" && v != "false"
+    );
+    let ring = if sqpoll {
+        IoUring::new_sqpoll(URING_ENTRIES, 1000, None)?
+    } else {
+        IoUring::new(URING_ENTRIES)?
+    };
     let pbuf = ring.register_buf_ring(PBUF_ENTRIES, PBUF_SIZE, PBUF_GROUP)?;
     Ok((ring, pbuf))
 }

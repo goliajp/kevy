@@ -43,6 +43,7 @@ Errors are part of kevy's user-facing contract. Adding, renaming, or repurposing
 | `-MISCONF BGSAVE failed: <io-error>` | Background snapshot writer failed. | Free disk space or repair the `data_dir` mount. Live data is unaffected. |
 | `-NOSCRIPT No matching script. Please use EVAL.` | `EVALSHA <sha>` requested a script not in the cache. | Call `EVAL` directly (kevy auto-caches) or `SCRIPT LOAD` first. |
 | `-BUSY Script is running.` | A long-running Lua script is blocking the shard. | `SCRIPT KILL` to interrupt (no-op if nothing is running). The `lua-time-limit` config caps runaway scripts. |
+| `-LOADING kevy is loading the dataset in memory` | Read sent to a replica while it is receiving a full-resync snapshot from its primary. | Wait and retry (the window is bounded by the snapshot ship); `PING` is answered during loading, so health checks keep working. |
 
 ### Prefixes kevy never emits
 
@@ -86,6 +87,9 @@ No. `CROSSSLOT` only fires for multi-key commands. If you see it on what looks l
 
 **I got `-OOM` — is my data corrupt?**
 No. `-OOM` is rejected at command-admission time; the write never landed. The keyspace is in exactly the state it was before the command. Free room (`DEL` / set an eviction policy / raise `maxmemory`) and retry.
+
+**`-LOADING` keeps coming back — how long should I wait?**
+For as long as the full-resync snapshot ship takes (proportional to dataset size and link speed). `PING` is answered during loading, so health checks still work. A replica only enters this state when it reconnects too far behind the primary's backlog; if `-LOADING` recurs constantly, raise `[replication] replication_buffer_size` or investigate the link.
 
 **A queued MULTI command returned `-EXECABORT` — were any writes applied?**
 No. `EXECABORT` means the transaction was rejected as a batch; nothing in the queued sequence was executed. Fix the offending command and reopen with `MULTI`.

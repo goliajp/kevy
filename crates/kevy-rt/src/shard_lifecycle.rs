@@ -38,7 +38,7 @@ impl<C: Commands> Shard<C> {
                     let _ = sock.set_nodelay();
                     let fd = sock.raw();
                     let id = self.next_conn_id;
-                    self.next_conn_id += 1;
+                    self.next_conn_id += self.conn_id_step;
                     self.poller.add(fd, true, false)?;
                     self.fd_to_conn.insert(fd, id);
                     let mut conn = Conn::new(sock);

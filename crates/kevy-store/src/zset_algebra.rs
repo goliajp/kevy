@@ -9,7 +9,21 @@
 //! the embedded facade (reads under shard locks) and the server's
 //! cross-shard gather reducer.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::{Store, StoreError};
+
+/// Scratch tables for the set-algebra passes: std's hash tables on
+/// `std`, alloc's B-trees without it (`no_std` correctness form —
+/// these are per-call temporaries, not hot state).
+#[cfg(feature = "std")]
+type ScratchMap<K, V> = std::collections::HashMap<K, V>;
+#[cfg(feature = "std")]
+type ScratchSet<T> = std::collections::HashSet<T>;
+#[cfg(not(feature = "std"))]
+type ScratchMap<K, V> = alloc::collections::BTreeMap<K, V>;
+#[cfg(not(feature = "std"))]
+type ScratchSet<T> = alloc::collections::BTreeSet<T>;
 
 /// `AGGREGATE` mode for inter/union (Redis 6.2; default `Sum`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,7 +56,7 @@ pub fn zunion(
     mode: ZAggregate,
 ) -> Vec<(Vec<u8>, f64)> {
     let mut acc: Vec<(Vec<u8>, f64)> = Vec::new();
-    let mut idx: std::collections::HashMap<Vec<u8>, usize> = std::collections::HashMap::new();
+    let mut idx: ScratchMap<Vec<u8>, usize> = ScratchMap::new();
     for (i, input) in inputs.iter().enumerate() {
         let w = weight_of(weights, i);
         for (m, s) in input {
@@ -69,7 +83,7 @@ pub fn zinter(
         return Vec::new();
     };
     // Membership maps for the non-first inputs.
-    let maps: Vec<std::collections::HashMap<&[u8], f64>> = rest
+    let maps: Vec<ScratchMap<&[u8], f64>> = rest
         .iter()
         .map(|inp| inp.iter().map(|(m, s)| (m.as_slice(), *s)).collect())
         .collect();
@@ -95,7 +109,7 @@ pub fn zdiff(inputs: &[Vec<(Vec<u8>, f64)>]) -> Vec<(Vec<u8>, f64)> {
     let Some((first, rest)) = inputs.split_first() else {
         return Vec::new();
     };
-    let excluded: std::collections::HashSet<&[u8]> = rest
+    let excluded: ScratchSet<&[u8]> = rest
         .iter()
         .flat_map(|inp| inp.iter().map(|(m, _)| m.as_slice()))
         .collect();
@@ -112,7 +126,7 @@ pub fn zintercard(inputs: &[Vec<(Vec<u8>, f64)>], limit: usize) -> usize {
     let Some((first, rest)) = inputs.split_first() else {
         return 0;
     };
-    let maps: Vec<std::collections::HashSet<&[u8]>> = rest
+    let maps: Vec<ScratchSet<&[u8]>> = rest
         .iter()
         .map(|inp| inp.iter().map(|(m, _)| m.as_slice()).collect())
         .collect();

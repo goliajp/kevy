@@ -248,6 +248,26 @@ impl Harness {
         Ok(())
     }
 
+    /// Wait for kevy to exit on its own (e.g. after a `SHUTDOWN`
+    /// command) up to `timeout`. Returns `Some(exit_code)` once the
+    /// process is gone, `None` on timeout (the child stays owned so a
+    /// follow-up `kill` can reap it). A signal-terminated child
+    /// reports code `-1`.
+    pub fn wait_exit(&mut self, timeout: std::time::Duration) -> io::Result<Option<i32>> {
+        let Some(child) = self.child.as_mut() else { return Ok(Some(0)) };
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Some(status) = child.try_wait()? {
+                self.child = None;
+                return Ok(Some(status.code().unwrap_or(-1)));
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(None);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
     /// Restart kevy on the same data dir.
     pub fn restart(&mut self) -> io::Result<()> {
         if self.child.is_some() {

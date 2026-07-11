@@ -148,7 +148,9 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
             Err(e) => err(out, &format!("WRONGTYPE {e}")),
         },
         b"ZRANGE" if argv.len() >= 4 => cmd_zrange(s, argv, out),
+        #[cfg(feature = "replicate")]
         b"FEED.SHARDS" if argv.len() == 1 => int(out, s.feed_shards() as i64),
+        #[cfg(feature = "replicate")]
         b"FEED.TAIL" if argv.len() == 1 => match s.changes_tail() {
             Ok((g, o)) => {
                 arr(out, 2);
@@ -157,6 +159,7 @@ pub(crate) fn dispatch(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
             }
             Err(e) => err(out, &format!("ERR feed: {e:?}")),
         },
+        #[cfg(feature = "replicate")]
         b"FEED.READ" if argv.len() >= 4 => cmd_feed_read(s, argv, out),
         b"INFO" => {
             let body = format!(
@@ -220,6 +223,7 @@ fn cmd_zrange(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     }
 }
 
+#[cfg(feature = "replicate")]
 fn cmd_feed_read(s: &Store, argv: &[Vec<u8>], out: &mut Vec<u8>) {
     let (Some(g), Some(o), Some(limit)) = (
         parse_i64(&argv[1]),

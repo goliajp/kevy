@@ -5,8 +5,10 @@
 //!
 //! Split out of [`crate`] for file-size hygiene.
 
-use std::sync::Arc;
-use std::time::Duration;
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
+use alloc::sync::Arc;
+use core::time::Duration;
 
 use crate::value::{HashData, SetData, Value, ZSetData};
 use crate::{

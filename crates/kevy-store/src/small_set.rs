@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn size_is_24_bytes() {
         // Mirrors SmallBytes' 24 B body so size_of::<Value>() <= 32 holds.
-        assert_eq!(std::mem::size_of::<SmallSetData>(), 24);
+        assert_eq!(core::mem::size_of::<SmallSetData>(), 24);
     }
 
     #[test]

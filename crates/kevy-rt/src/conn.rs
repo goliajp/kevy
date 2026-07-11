@@ -115,12 +115,24 @@ pub(crate) struct Conn {
     /// Lives in the cold section since CLIENT SETNAME is a
     /// once-per-connection housekeeping op.
     pub(crate) client_name: Vec<u8>,
+    /// Peer address captured once at accept time (the CLIENT LIST /
+    /// CLIENT INFO `addr` field). `(0.0.0.0, 0)` for AF_UNIX conns,
+    /// whose peers have no inet address.
+    pub(crate) peer: (std::net::Ipv4Addr, u16),
+    /// Accept timestamp — the CLIENT LIST / CLIENT INFO `age` field.
+    pub(crate) created: std::time::Instant,
 }
 
 impl Conn {
     pub(crate) fn new(sock: Socket) -> Self {
+        // Peer capture: one getpeername at accept time. AF_UNIX (and
+        // any non-inet socket) has no inet peer — record the
+        // unspecified address, which CLIENT LIST renders as 0.0.0.0:0.
+        let peer = sock.peer_addr().unwrap_or((std::net::Ipv4Addr::UNSPECIFIED, 0));
         Conn {
             sock,
+            peer,
+            created: std::time::Instant::now(),
             input: Vec::new(),
             output: Vec::new(),
             output_arcs: Vec::new(),

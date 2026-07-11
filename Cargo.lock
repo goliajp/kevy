@@ -494,6 +494,7 @@ dependencies = [
  "kevy-client",
  "kevy-hash",
  "kevy-resp",
+ "kevy-resp-client",
  "smol",
  "tokio",
 ]

@@ -13,6 +13,15 @@ readme = "README.md"
 keywords = ["hash", "hasher", "fxhash", "fmix", "hashmap"]
 categories = ["algorithms", "data-structures"]
 
+# `std` (default) keeps the `FxHashMap` / `FxHashSet` aliases over
+# `std::collections`; without it the crate is `no_std` (the hashers and
+# the KevyHash trait are pure `core` — no_std callers pair them with
+# `kevy-map` instead of std's tables).
+[features]
+default = ["std"]
+std = ["alloc"]
+alloc = []
+
 [lints]
 workspace = true
 

@@ -1,11 +1,13 @@
 //! `Store` string read commands (GET family) + INCRBY. The SET-family
 //! write path lives in `string_set.rs` (500-LOC house cap).
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::util::{format_i64_into, itoa_i64_stack, parse_i64};
 use crate::value::{SmallBytes, Value};
 use crate::{Entry, Store, StoreError};
-use std::borrow::Cow;
-use std::sync::Arc;
+use alloc::borrow::Cow;
+use alloc::sync::Arc;
 
 /// L1 return shape for [`Store::get_for_reply`] — lets the reactor's reply
 /// path choose between memcpy (`Bytes`) and writev zero-copy (`ArcBulk`)

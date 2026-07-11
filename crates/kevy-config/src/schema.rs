@@ -192,9 +192,11 @@ impl Default for AdvancedSection {
 /// `[notification]` section. `notify_keyspace_events` is a string of
 /// flag chars (Redis convention): `K` keyspace channel, `E` keyevent
 /// channel, `g` generic cmds, `$` string cmds, `l` list, `s` set, `h`
-/// hash, `z` zset, `A` alias for `g$lshz` (every event class except
-/// the not-yet-implemented `x`/`e`/`t`/`n`). Default empty = OFF
-/// (Redis default — zero hot-path cost).
+/// hash, `z` zset, `t` stream, `x` expired events, `e` evicted
+/// events, `n` new-key events, `A` alias for `g$lshztxe` (every
+/// event class except `n`, matching Redis's `A`). Default empty =
+/// OFF (Redis default — zero hot-path cost). Any other character is
+/// a config error.
 ///
 /// Example: `notify_keyspace_events = "KEA"` enables every event
 /// class on BOTH channels. `"K$"` enables only string events on the
@@ -233,6 +235,15 @@ pub struct NotificationFlags {
     pub zset: bool,
     /// `t` — XADD / XDEL / XTRIM / XGROUP / XACK / XCLAIM / XREADGROUP …
     pub stream: bool,
+    /// `x` — `expired` events, fired when a TTL'd key is removed
+    /// (lazily on access or by the active reaper).
+    pub expired: bool,
+    /// `e` — `evicted` events, fired when maxmemory pressure removes
+    /// a key.
+    pub evicted: bool,
+    /// `n` — `new` events, fired when a key is added to the keyspace.
+    /// Not part of the `A` alias (Redis convention).
+    pub new_key: bool,
 }
 
 impl NotificationFlags {
@@ -247,7 +258,10 @@ impl NotificationFlags {
                 || self.set
                 || self.hash
                 || self.zset
-                || self.stream)
+                || self.stream
+                || self.expired
+                || self.evicted
+                || self.new_key)
     }
 }
 
@@ -310,10 +324,11 @@ impl Default for SlowlogSection {
 }
 
 /// Parse a Redis-style `notify_keyspace_events` flag string into
-/// [`NotificationFlags`]. Unknown chars are ignored (forward-compat
-/// for `x`/`e`/`t`/`n` not yet implemented — see the section docs).
-/// The `A` alias enables every event-class flag except channels.
-pub fn parse_notification_flags(s: &str) -> NotificationFlags {
+/// [`NotificationFlags`]. The `A` alias enables every event-class
+/// flag except channels and `n` (Redis convention). An unknown char
+/// is an error carrying the offending character — a typo'd flag
+/// string must fail config admission, not silently drop events.
+pub fn parse_notification_flags(s: &str) -> Result<NotificationFlags, char> {
     let mut f = NotificationFlags::default();
     for c in s.chars() {
         match c {
@@ -326,9 +341,12 @@ pub fn parse_notification_flags(s: &str) -> NotificationFlags {
             'h' => f.hash = true,
             'z' => f.zset = true,
             't' => f.stream = true,
+            'x' => f.expired = true,
+            'e' => f.evicted = true,
+            'n' => f.new_key = true,
             'A' => {
-                // Alias for "g$lshzxetd" — every implemented event class.
-                // Per Redis spec `A` includes the stream `t` class.
+                // Alias for "g$lshztxe" — every event class except
+                // `n`, per the Redis contract for `A`.
                 f.generic = true;
                 f.string = true;
                 f.list = true;
@@ -336,11 +354,13 @@ pub fn parse_notification_flags(s: &str) -> NotificationFlags {
                 f.hash = true;
                 f.zset = true;
                 f.stream = true;
+                f.expired = true;
+                f.evicted = true;
             }
-            _ => {} // forward-compat: silently ignore unknown chars
+            other => return Err(other),
         }
     }
-    f
+    Ok(f)
 }
 /// the TOML file + env + CLI.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

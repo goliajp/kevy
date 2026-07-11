@@ -4,11 +4,13 @@
 //! Split out of `string.rs` (GET family + INCR) to keep both under the
 //! 500-LOC house cap.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::value::{BULK_THRESHOLD, SmallBytes, Value};
 use crate::{Entry, Store, deadline_at, now_ns};
 use crate::util::parse_canonical_i64;
-use std::sync::Arc;
-use std::time::Duration;
+use alloc::sync::Arc;
+use core::time::Duration;
 
 
 /// L2 + L1: pick the optimal encoding for `bytes` at SET time:
@@ -301,7 +303,7 @@ fn overwrite_in_place(
     key_heap: u64,
 ) -> (i64, i64, Value) {
     let had_ttl = e.expire_at_ns.is_some();
-    let old = std::mem::replace(&mut e.value, new_value);
+    let old = core::mem::replace(&mut e.value, new_value);
     e.expire_at_ns = expire_at.and_then(crate::pack_deadline);
     let new_w = key_heap + e.value.weight();
     let delta = new_w as i64 - e.weight() as i64;
