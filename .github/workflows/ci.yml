@@ -364,10 +364,10 @@ jobs:
           restore-keys: |
             fuzz-${{ matrix.crate }}-${{ matrix.target }}-
       - name: Install cargo-fuzz (cached binary short-circuits)
-        run: command -v cargo-fuzz || cargo install cargo-fuzz --locked
+        run: command -v cargo-fuzz || cargo +nightly install cargo-fuzz --locked
       - name: fuzz 60s (${{ matrix.target }})
         working-directory: crates/${{ matrix.crate }}
-        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=60
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=60
 
   # ───────────── compat smoke vs valkey 9.1 ─────────────
   compat:
