@@ -19,7 +19,11 @@ use crate::{
 /// pipeline redirecting shell stderr into the file) get the same loud
 /// rejection as any other corrupt frame. Legacy AOFs (no magic) still
 /// replay — the parser only consumes the magic if it sees it.
-pub(crate) const AOF_MAGIC: &[u8; 9] = b"KEVYAOF1\n";
+///
+/// Public so host-mediated AOF sinks (a browser pump appending kevy
+/// frames to its own storage, for example) can stamp files that stay
+/// byte-compatible with kevy-written logs.
+pub const AOF_MAGIC: &[u8; 9] = b"KEVYAOF1\n";
 
 /// When to fsync the AOF to disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

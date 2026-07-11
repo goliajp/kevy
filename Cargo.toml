@@ -64,6 +64,7 @@ members = [
     "crates/kevy-lua-host",
     "crates/kevy-chaos",
     "crates/kevy-mcp",
+    "crates/kevy-wasm",
 ]
 
 [workspace.package]

@@ -49,18 +49,18 @@ mod snapshot_payload;
 mod snapshot_read;
 mod snapshot_write;
 
-pub use aof::{Aof, Fsync, RewritePlan, RewriteStats, write_aof_base};
+pub use aof::{AOF_MAGIC, Aof, Fsync, RewritePlan, RewriteStats, write_aof_base};
 pub use replay::replay_aof;
 pub use shards_meta::{Routing, ShardsMeta, read_shards_meta, write_shards_meta};
 pub use kevy_resp::{Argv, ArgvView};
-pub use rewrite_fmt::{dump_aof, write_stream_as_commands};
+pub use rewrite_fmt::{dump_aof, dump_store_to_buf, write_multibulk, write_stream_as_commands};
 pub use snapshot_read::{
     load_snapshot, load_snapshot_filtered, load_snapshot_from, read_snapshot_cursor,
 };
 pub use snapshot_write::{
     save_snapshot, write_snapshot_tmp, write_snapshot_to, write_snapshot_to_with_cursor,
 };
-pub(crate) use rewrite_fmt::{dump_store_to_buf, estimate_multibulk_bytes, write_multibulk};
+pub(crate) use rewrite_fmt::estimate_multibulk_bytes;
 pub(crate) use snapshot_fmt::{SNAPSHOT_BUF_CAP, write_bytes};
 pub(crate) use snapshot_write::write_stream_groups;
 use kevy_store::Store;

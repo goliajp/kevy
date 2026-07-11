@@ -9,7 +9,7 @@ use std::io;
 use std::sync::RwLock;
 use std::time::Instant;
 
-use kevy_persist::RewriteStats;
+use kevy_persist::{Argv, RewriteStats};
 
 use crate::metric::KevyMetric;
 use crate::store::{Inner, Store, lock_write};
@@ -102,6 +102,55 @@ impl Store {
             });
         }
         Ok(Some(stats))
+    }
+
+    /// Apply one AOF-format command frame directly to the keyspace — the
+    /// programmatic face of AOF replay, for hosts that store the log
+    /// themselves (targets without a filesystem, where the embedding
+    /// host reads the log back and feeds it in frame by frame on open).
+    ///
+    /// Speaks the same verb set `Store::open` replays from an on-disk
+    /// AOF; unknown verbs are skipped (forward compatibility with logs
+    /// written by a newer kevy). Keyed verbs route to the owning shard;
+    /// `FLUSHALL`/`FLUSHDB` reach every shard. The frame is **not**
+    /// re-appended to any AOF — this is the read-back half of the pump,
+    /// so re-logging would double-apply on the next replay.
+    pub fn apply_frame(&self, args: &Argv) {
+        let Some(verb) = args.first() else { return };
+        if verb.eq_ignore_ascii_case(b"FLUSHALL") || verb.eq_ignore_ascii_case(b"FLUSHDB") {
+            for shard in self.shards.iter() {
+                crate::replay::apply(&mut lock_write(shard).store, args);
+            }
+            return;
+        }
+        if let Some(key) = args.get(1) {
+            crate::replay::apply(&mut self.wshard(key).store, args);
+        }
+    }
+
+    /// Serialize the whole keyspace into an in-memory compacted AOF image
+    /// (magic header + one command stream per key — the same bytes an
+    /// AOF rewrite puts on disk). The write half of host-mediated
+    /// persistence: hosts without a filesystem hand this buffer to their
+    /// own storage, replacing the accumulated append log, and feed it
+    /// back through [`Self::apply_frame`] on the next open.
+    ///
+    /// Each shard is frozen copy-on-write and serialized off-lock, so
+    /// concurrent readers and writers on other shards are not blocked
+    /// for the duration of the dump.
+    pub fn dump_aof_buf(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (i, shard) in self.shards.iter().enumerate() {
+            let view = lock_write(shard).store.collect_snapshot();
+            let (buf, _keys) = kevy_persist::dump_store_to_buf(&view);
+            if i == 0 {
+                out = buf;
+            } else {
+                // One magic header per image, not per shard.
+                out.extend_from_slice(&buf[kevy_persist::AOF_MAGIC.len()..]);
+            }
+        }
+        out
     }
 
     /// Snapshot every shard to its `dump-{i}.rdb`, atomically. `Ok(false)`
