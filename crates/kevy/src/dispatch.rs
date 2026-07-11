@@ -72,12 +72,13 @@ fn dispatch_with_proto<A: ArgvView + ?Sized>(
     let cmd = upper_verb(name, &mut buf);
     // v3-cluster Phase 3 / v1.21 scope routing. **Above** the GET/SET
     // fast path because SET must respect scope ownership too (the
-    // fast path otherwise would silently apply locally). `is_active`
-    // is one immutable-field load + branch — predicted away when no
-    // scopes are declared (the v1.20-and-earlier hot path eats one
-    // mispredict-resistant load on every command, which is below
-    // measurable noise per `bench/perfgate.sh`).
-    if crate::cmd::is_write_verb(cmd) && ctx.state.scope.is_active()
+    // fast path otherwise would silently apply locally). The
+    // SCOPE_ACTIVE gate bit (W5) is one cached-epoch check + branch —
+    // predicted away when no scopes are declared (the v1.20-and-earlier
+    // hot path eats one mispredict-resistant load on every command,
+    // which is below measurable noise per `bench/perfgate.sh`).
+    if crate::cmd::is_write_verb(cmd)
+        && ctx.shard.gate_bits(ctx.state) & crate::state::SCOPE_ACTIVE != 0
         && let Some(key) = args.get(1)
         && let Some(redirect) = ctx.state.route_write(key, ctx.shard)
     {
@@ -184,10 +185,10 @@ fn dispatch_conn<A: ArgvView + ?Sized>(
             2 => encode_bulk(out, &args[1]),
             _ => wrong_args(out, "ping"),
         },
-        b"IDX.CREATE" => crate::cmd_index::cmd_idx_create(args, out, ctx.state.sidecar_dir()),
-        b"VIEW.CREATE" => crate::cmd_view::cmd_view_create(args, out, ctx.state.sidecar_dir()),
-        b"VIEW.DROP" => crate::cmd_view::cmd_view_drop(args, out, ctx.state.sidecar_dir()),
-        b"IDX.DROP" => crate::cmd_index::cmd_idx_drop(args, out, ctx.state.sidecar_dir()),
+        b"IDX.CREATE" => crate::cmd_index::cmd_idx_create(ctx, args, out),
+        b"VIEW.CREATE" => crate::cmd_view::cmd_view_create(ctx, args, out),
+        b"VIEW.DROP" => crate::cmd_view::cmd_view_drop(ctx, args, out),
+        b"IDX.DROP" => crate::cmd_index::cmd_idx_drop(ctx, args, out),
         b"ECHO" => {
             if args.len() == 2 {
                 encode_bulk(out, &args[1]);

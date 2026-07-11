@@ -173,22 +173,16 @@ impl Commands for KevyCommands {
 
     fn on_shard_start(&self, shard: usize) {
         // Thread-per-core: the reactor thread *is* the shard. The shard id
-        // lands both in this clone's ShardCtx (per-shard state proper) and
-        // in the legacy thread-local that dispatch handlers still read
-        // (CLUSTER MYID / the `myself` flag in CLUSTER NODES) until the W4
-        // thread-local migration.
+        // and this shard's INFO-stats slot (lock-free publish + counter
+        // bumps, see `ops::stats`) land in this clone's ShardCtx.
         self.shard_ctx().set_shard_id(shard);
-        ops::cluster::set_current_shard(shard);
-        // Cache this shard's INFO-stats slot for lock-free publish + counter
-        // bumps (see `ops::stats`).
-        ops::stats::register_shard(shard, self.state().obs.slot(shard));
+        self.shard_ctx().set_stats_slot(self.state().obs.slot(shard));
     }
 
     fn on_persist_stats(&self, in_flight: bool, aof_rewrites_total: u64) {
-        // Same thread-local pattern as `on_shard_start`: `INFO persistence`
-        // answers with the answering shard's view (the COUNTKEYSINSLOT
-        // precedent), refreshed by the reactor tick.
-        ops::set_persist_stats(in_flight, aof_rewrites_total);
+        // `INFO persistence` answers with the answering shard's view
+        // (the COUNTKEYSINSLOT precedent), refreshed by the reactor tick.
+        self.shard_ctx().set_persist_stats(in_flight, aof_rewrites_total);
     }
 
     fn on_replication_view(
@@ -196,11 +190,14 @@ impl Commands for KevyCommands {
         master_repl_offset: u64,
         replicas: Vec<(std::net::Ipv4Addr, u16, u64, Option<u64>)>,
     ) {
-        // Same thread-local pattern as `on_persist_stats`: `ROLE` /
-        // `INFO replication` read the answering shard's most-recent
-        // view. T1.28.5 added the per-replica list — `connected_slaves`
-        // is derived from `replicas.len()` at read time.
-        ops::replication::set_replication_view(master_repl_offset, replicas);
+        // `ROLE` / `INFO replication` read the answering shard's
+        // most-recent view. T1.28.5 added the per-replica list —
+        // `connected_slaves` is derived from `replicas.len()` at read
+        // time.
+        self.shard_ctx().set_replication_view(ops::replication::ReplicationView {
+            master_repl_offset,
+            replicas,
+        });
         // v3-cluster Phase 1.5: feed the offset into kevy-elect so
         // the next heartbeat carries the up-to-date `repl_offset`.
         // No-op when the elector isn't running.
@@ -212,11 +209,11 @@ impl Commands for KevyCommands {
     }
 
     fn on_command(&self) {
-        ops::stats::add_command();
+        self.shard_ctx().add_command();
     }
 
     fn on_connection(&self) {
-        ops::stats::add_connection();
+        self.shard_ctx().add_connection();
     }
 
     fn shard_tick_interval_ms(&self) -> u64 {
@@ -233,9 +230,17 @@ impl Commands for KevyCommands {
     }
 
     fn on_write(&self, store: &mut Store, key: &[u8]) {
-        crate::index_runtime::on_write(store, key);
-        // Views probe the segments the line above just refreshed.
-        crate::view_runtime::on_write(store, key);
+        // W5 zero-tax gate: with no index/view declared, a write costs
+        // one cached-bit branch here instead of the two global flag
+        // loads the runtimes used to pay.
+        let bits = self.gate_bits();
+        if bits & crate::state::IDX_NONEMPTY != 0 {
+            crate::index_runtime::on_write(self.shard_ctx(), store, key);
+        }
+        if bits & crate::state::VIEW_NONEMPTY != 0 {
+            // Views probe the segments the line above just refreshed.
+            crate::view_runtime::on_write(self.shard_ctx(), store, key);
+        }
     }
 
     fn extension_op(&self, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
@@ -243,9 +248,9 @@ impl Commands for KevyCommands {
             return crate::cmd_digest::extension_op(store, argv);
         }
         if argv.first().is_some_and(|v| v.len() > 5 && v[..5].eq_ignore_ascii_case(b"VIEW.")) {
-            return crate::cmd_view::extension_op(store, argv);
+            return crate::cmd_view::extension_op(self.shard_ctx(), store, argv);
         }
-        crate::cmd_index_query::extension_op(store, argv)
+        crate::cmd_index_query::extension_op(self.shard_ctx(), store, argv)
     }
 
     fn extension_reduce(&self, argv: &[Vec<u8>], chunks: Vec<Vec<u8>>) -> Vec<u8> {
@@ -259,10 +264,25 @@ impl Commands for KevyCommands {
     }
 
     fn write_denied(&self) -> Option<Vec<u8>> {
-        self.state().replication.write_denied_reply()
+        // W5 two-tier verdict: the cached bit answers "certainly
+        // allowed" with a single epoch load; only a raised gate walks
+        // the precise fence-ordering judge (which may lock the quiesce
+        // slot / count replicas to render the exact error).
+        if self.gate_bits() & crate::state::WRITE_GATED == 0 {
+            return None;
+        }
+        self.state()
+            .replication
+            .write_denied_reply(|| self.shard_ctx().healthy_replica_count())
     }
 
     fn read_denied(&self) -> Option<Vec<u8>> {
+        // READ_GATED = bounded-staleness replica. The deadline itself
+        // is a time condition, so the slow path re-loads the live
+        // heartbeat on every gated read.
+        if self.gate_bits() & crate::state::READ_GATED == 0 {
+            return None;
+        }
         self.state().replication.read_denied_reply()
     }
 
@@ -280,8 +300,13 @@ impl Commands for KevyCommands {
     }
 
     fn on_shard_tick(&self, store: &mut Store) {
-        crate::index_runtime::on_tick(store);
-        crate::view_runtime::on_tick(store);
+        let bits = self.gate_bits();
+        if bits & crate::state::IDX_NONEMPTY != 0 {
+            crate::index_runtime::on_tick(self.shard_ctx(), store);
+        }
+        if bits & crate::state::VIEW_NONEMPTY != 0 {
+            crate::view_runtime::on_tick(self.shard_ctx(), store);
+        }
         // Run Redis's `activeExpireCycle` per shard. `sample` controls the
         // batch size; up to 16 rounds per tick is well below Redis's 25 %
         // CPU budget at the default 10 Hz cadence. Cheap when no TTL'd
@@ -310,9 +335,9 @@ impl Commands for KevyCommands {
         );
         // Publish this shard's gauges (used_memory, key/expire counts, …) so
         // `INFO`, answered on any one shard, can sum the process-wide view.
-        ops::stats::publish_gauges(store);
+        ops::stats::publish_gauges(self.shard_ctx(), store);
         // The lead shard advances the process-wide ops-per-sec sampler.
-        ops::stats::sample_ops_if_lead(&self.state().obs);
+        ops::stats::sample_ops_if_lead(self.shard_ctx(), &self.state().obs);
     }
 
     fn live_runtime_config(&self) -> kevy_rt::LiveRuntimeConfig {

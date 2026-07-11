@@ -1,10 +1,10 @@
 //! `ROLE` — operational surface for the primary/replica topology.
 //!
 //! The per-tick `master_repl_offset` + `connected_replicas` count is
-//! stashed in [`REPLICATION_VIEW`] by `KevyCommands::on_replication_view`
-//! (driven from `kevy_rt::Shard::tick_replication_view`). `ROLE` reads
-//! that thread-local + `config.replication.role` and emits the
-//! Redis-shaped reply.
+//! stashed in the shard zone ([`crate::state::ShardCtx`], a
+//! [`ReplicationView`]) by `KevyCommands::on_replication_view` (driven
+//! from `kevy_rt::Shard::tick_replication_view`). `ROLE` reads that
+//! view + `config.replication.role` and emits the Redis-shaped reply.
 //!
 //! Current simplifications:
 //! - Per-replica IP / port / offset entries in the master reply are
@@ -21,7 +21,6 @@
 //!   reports per-shard, which is correct for a sharded primary
 //!   (each shard streams its own keyspace slice independently).
 
-use std::cell::RefCell;
 use std::net::Ipv4Addr;
 
 use kevy_config::ReplicationRole;
@@ -31,51 +30,16 @@ use crate::state::Ctx;
 
 use super::wrong_args;
 
-/// Live replication view stashed by `KevyCommands::on_replication_view`.
+/// Live replication view stashed in the shard zone by
+/// `KevyCommands::on_replication_view`. Stale by at most one tick
+/// interval (default 100 ms); all-default when this shard has no
+/// `ReplicationSource` installed.
 #[derive(Clone, Default)]
 pub(crate) struct ReplicationView {
     pub(crate) master_repl_offset: u64,
-    /// Per-replica `(ipv4, port, sent_offset)` triple — populated
+    /// Per-replica `(ipv4, port, sent_offset, acked_offset)` — populated
     /// by `kevy_rt::Shard::tick_replication_view` (T1.28.5).
     pub(crate) replicas: Vec<(Ipv4Addr, u16, u64, Option<u64>)>,
-}
-
-thread_local! {
-    /// Per-tick replication view. Stale by at most one tick interval
-    /// (default 100 ms). Empty (all-default) when this shard has no
-    /// `ReplicationSource` installed (publisher early returns; cell
-    /// keeps the construction default).
-    static REPLICATION_VIEW: RefCell<ReplicationView> = RefCell::new(ReplicationView::default());
-}
-
-/// Record the answering shard's replication view (see [`REPLICATION_VIEW`]).
-pub(crate) fn set_replication_view(
-    master_repl_offset: u64,
-    replicas: Vec<(Ipv4Addr, u16, u64, Option<u64>)>,
-) {
-    REPLICATION_VIEW.with(|c| {
-        *c.borrow_mut() = ReplicationView {
-            master_repl_offset,
-            replicas,
-        };
-    });
-}
-
-/// Read the answering shard's replication view. Returns a default
-/// (offset=0, no replicas) when replication is off on this shard.
-/// v3.14 D5 — replicas with a live connection AND at least one real
-/// ACK, per this shard's latest view tick. Freshness is proxied by
-/// connection liveness (a dead link leaves the view within a tick).
-pub(crate) fn healthy_replica_count() -> usize {
-    // Healthy = has ACKed at all (Some(0) is an empty replica's live
-    // heartbeat ACK — it counts, or min-replicas deadlocks a fresh
-    // pair: writes need a replica, the replica's first frame needs a
-    // write).
-    REPLICATION_VIEW.with(|v| v.borrow().replicas.iter().filter(|(_, _, _, a)| a.is_some()).count())
-}
-
-pub(crate) fn replication_view() -> ReplicationView {
-    REPLICATION_VIEW.with(|c| c.borrow().clone())
 }
 
 /// `ROLE` — see <https://redis.io/commands/role/>. v1.18 mapping:
@@ -103,7 +67,7 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut 
     if let Some(snap) = ctx.state.election.current_snapshot() {
         use kevy_elect::message::Role as ElectRole;
         match snap.role {
-            ElectRole::Primary => return emit_master(out),
+            ElectRole::Primary => return emit_master(ctx, out),
             ElectRole::Replica | ElectRole::Candidate => {
                 // Use the elector's current_primary as the upstream
                 // address-string; v1.19 advertises `host:port` of
@@ -125,7 +89,7 @@ pub(crate) fn cmd_role<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut 
     }
     let cfg = ctx.state.config();
     match cfg.replication.role {
-        ReplicationRole::Standalone | ReplicationRole::Primary => emit_master(out),
+        ReplicationRole::Standalone | ReplicationRole::Primary => emit_master(ctx, out),
         ReplicationRole::Replica => emit_replica(cfg.replication.upstream.as_deref(), out),
     }
 }
@@ -201,8 +165,8 @@ pub(crate) fn cmd_replicaof<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: 
     encode_simple_string(out, "OK");
 }
 
-fn emit_master(out: &mut Vec<u8>) {
-    let view = replication_view();
+fn emit_master(ctx: &Ctx<'_>, out: &mut Vec<u8>) {
+    let view = ctx.shard.replication_view();
     encode_array_len(out, 3);
     encode_bulk(out, b"master");
     encode_integer(out, view.master_repl_offset as i64);
@@ -261,11 +225,14 @@ mod tests {
         let replicas: Vec<_> = (0..replica_count)
             .map(|i| (Ipv4Addr::new(10, 0, 0, (i + 1) as u8), 6004, offset, Some(offset)))
             .collect();
-        set_replication_view(offset, replicas);
+        let c = crate::KevyCommands::new();
+        c.shard_ctx().set_replication_view(ReplicationView {
+            master_repl_offset: offset,
+            replicas,
+        });
         let mut a = Argv::default();
         a.push(b"ROLE");
         let mut out = Vec::new();
-        let c = crate::KevyCommands::new();
         cmd_role(&c.ctx(), &a, &mut out);
         out
     }

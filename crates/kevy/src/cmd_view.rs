@@ -7,24 +7,26 @@
 //! `<index> EQ <v>`.
 
 use std::path::Path;
+use std::sync::atomic::AtomicU64;
 
 use kevy_index::{IndexValue, Leaf, Tree, ViewCatalog, ViewMode, ViewSpec};
 use kevy_resp::{ArgvView, encode_error, encode_integer};
 use kevy_store::Store;
 
 use crate::cmd_index_query::{ST_BUILDING, ST_NOINDEX, ST_OK, encode_value};
+use crate::state::{Ctx, ShardCtx};
 use crate::{index_runtime, view_runtime};
 
 const SIDECAR: &str = "view-catalog.meta";
 
 /// Boot: load the persisted view catalog (data dir already known to
 /// `cmd_index::boot`, which runs first and stores it).
-pub(crate) fn boot(data_dir: &Path) {
+pub(crate) fn boot(control_epoch: &AtomicU64, data_dir: &Path) {
     if let Ok(text) = std::fs::read_to_string(data_dir.join(SIDECAR))
         && let Some(cat) = ViewCatalog::from_sidecar(&text)
         && !cat.is_empty()
     {
-        view_runtime::install_catalog(cat);
+        view_runtime::install_catalog(control_epoch, cat);
     }
 }
 
@@ -85,7 +87,7 @@ fn parse_tree<A: ArgvView + ?Sized>(args: &A, i: usize, depth: usize) -> Result<
 
 /// `VIEW.CREATE <name> QUERY <tree…> ORDER BY <index> [DESC]
 /// [MODE virtual|materialized] [TOPK k] [VIA tpl]`.
-pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>, data_dir: Option<&Path>) {
+pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     if args.len() < 8 || !args[2].eq_ignore_ascii_case(b"QUERY") {
         return encode_error(out, "ERR usage: VIEW.CREATE name QUERY <tree> ORDER BY idx [DESC] [MODE v|m] [TOPK k] [VIA tpl]");
     }
@@ -118,8 +120,8 @@ pub(crate) fn cmd_view_create<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>,
     let mut cat = view_runtime::catalog().map(|c| (*c).clone()).unwrap_or_default();
     match cat.create(spec) {
         Ok(()) => {
-            persist_sidecar(data_dir, &cat);
-            view_runtime::install_catalog(cat);
+            persist_sidecar(ctx.state.sidecar_dir(), &cat);
+            view_runtime::install_catalog(ctx.state.control_epoch(), cat);
             out.extend_from_slice(b"+OK\r\n");
         }
         Err(e) => encode_error(out, e),
@@ -177,15 +179,15 @@ fn parse_create_opts<A: ArgvView + ?Sized>(
 }
 
 /// `VIEW.DROP <name>`.
-pub(crate) fn cmd_view_drop<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>, data_dir: Option<&Path>) {
+pub(crate) fn cmd_view_drop<A: ArgvView + ?Sized>(ctx: &Ctx<'_>, args: &A, out: &mut Vec<u8>) {
     if args.len() != 2 {
         return encode_error(out, "ERR usage: VIEW.DROP name");
     }
     let mut cat = view_runtime::catalog().map(|c| (*c).clone()).unwrap_or_default();
     let hit = cat.drop_view(&args[1]);
     if hit {
-        persist_sidecar(data_dir, &cat);
-        view_runtime::install_catalog(cat);
+        persist_sidecar(ctx.state.sidecar_dir(), &cat);
+        view_runtime::install_catalog(ctx.state.control_epoch(), cat);
     }
     encode_integer(out, i64::from(hit));
 }
@@ -194,26 +196,26 @@ pub(crate) fn cmd_view_drop<A: ArgvView + ?Sized>(args: &A, out: &mut Vec<u8>, d
 
 /// Per-shard half for VIEW.QUERY / VIEW.LIST / VIEW.VERIFY /
 /// VIEW.REBUILD / VIEW.EXPLAIN.
-pub(crate) fn extension_op(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+pub(crate) fn extension_op(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let verb = argv.first().map(Vec::as_slice).unwrap_or(b"");
     if verb.eq_ignore_ascii_case(b"VIEW.QUERY") {
-        return op_query(store, argv);
+        return op_query(shard, store, argv);
     }
     if verb.eq_ignore_ascii_case(b"VIEW.LIST") {
         return vec![ST_OK]; // catalog is global — the reduce renders it
     }
     if verb.eq_ignore_ascii_case(b"VIEW.VERIFY") {
-        return op_stats(store, argv, verb);
+        return op_stats(shard, store, argv, verb);
     }
     if verb.eq_ignore_ascii_case(b"VIEW.REBUILD") {
         if let Some(name) = argv.get(1) {
-            view_runtime::schedule_rebuild(name);
-            view_runtime::on_tick(store); // run it now on this shard
+            view_runtime::schedule_rebuild(shard, name);
+            view_runtime::on_tick(shard, store); // run it now on this shard
         }
         return vec![ST_OK];
     }
     if verb.eq_ignore_ascii_case(b"VIEW.EXPLAIN") {
-        return op_explain(store, argv);
+        return op_explain(shard, store, argv);
     }
     if verb.eq_ignore_ascii_case(b"VIEW.HYDRATE") {
         return op_hydrate(store, argv);
@@ -264,11 +266,11 @@ fn op_hydrate(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     chunk
 }
 
-fn op_query(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+fn op_query(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(q) = QueryArgs::parse(argv) else {
         return vec![crate::cmd_index_query::ST_BADARGS];
     };
-    match view_runtime::shard_page(store, &q.name, q.after.as_ref(), q.limit) {
+    match view_runtime::shard_page(shard, store, &q.name, q.after.as_ref(), q.limit) {
         Ok(rows) => {
             let mut chunk = vec![ST_OK];
             chunk.extend_from_slice(&(rows.len() as u32).to_le_bytes());
@@ -285,11 +287,11 @@ fn op_query(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     }
 }
 
-fn op_stats(store: &mut Store, argv: &[Vec<u8>], _verb: &[u8]) -> Vec<u8> {
+fn op_stats(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>], _verb: &[u8]) -> Vec<u8> {
     let Some(name) = argv.get(1) else {
         return vec![crate::cmd_index_query::ST_BADARGS];
     };
-    match view_runtime::shard_stats(store, name) {
+    match view_runtime::shard_stats(shard, store, name) {
         Ok((members, bytes, excluded, building)) => {
             let mut chunk = vec![ST_OK];
             chunk.push(u8::from(building));
@@ -302,7 +304,7 @@ fn op_stats(store: &mut Store, argv: &[Vec<u8>], _verb: &[u8]) -> Vec<u8> {
     }
 }
 
-fn op_explain(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
+fn op_explain(shard: &ShardCtx, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
     let Some(name) = argv.get(1) else {
         return vec![crate::cmd_index_query::ST_BADARGS];
     };
@@ -310,7 +312,7 @@ fn op_explain(store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
         return vec![ST_NOINDEX];
     };
     // Per-leaf local cardinalities.
-    let counts = index_runtime::with_segment_resolver(store, |seg| {
+    let counts = index_runtime::with_segment_resolver(shard, store, |seg| {
         let mut counts = Vec::new();
         spec.tree.each_leaf(&mut |l| {
             let n = seg(&l.index).map_or(0, |s| s.count(&l.min, &l.max));

@@ -1,12 +1,12 @@
 //! v2.5 — the index engine's runtime half (RFC LOCKED 2026-07-04).
 //!
 //! Topology: one process-global [`Catalog`] behind an RwLock +
-//! generation counter; each shard thread keeps a thread-local
-//! [`ShardIndexes`] (its slice of every index — index-follows-key)
+//! generation counter; each shard keeps its [`ShardIndexes`] (its
+//! slice of every index — index-follows-key) in `ShardCtx.indexes`,
 //! refreshed lazily when the generation moves. The write path enters
-//! through [`on_write`] (wired to `Commands::on_write`), whose first
-//! instruction is a process-wide `NONEMPTY` Relaxed load — the RFC D2
-//! zero-tax gate: an empty catalog costs one untaken branch.
+//! through [`on_write`] (wired to `Commands::on_write`), which the
+//! caller gates on the `IDX_NONEMPTY` gate bit (K-103 W5) — the RFC
+//! D2 zero-tax posture: an empty catalog costs one cached-bit branch.
 //!
 //! Backfill (RFC D5, tick-incremental variant): `IDX.CREATE` snapshots
 //! the domain's key list per shard; `on_shard_tick` indexes a bounded
@@ -15,14 +15,14 @@
 //! win: the backfill only fills keys the segment doesn't hold yet, so
 //! a newer hook-applied value is never clobbered by a stale scan.
 
-use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 use kevy_index::{Catalog, IndexSpec, IndexValue, Segment};
 use kevy_store::Store;
 
-static NONEMPTY: AtomicBool = AtomicBool::new(false);
+use crate::state::ShardCtx;
+
 static CATALOG_GEN: AtomicU64 = AtomicU64::new(0);
 static CATALOG: RwLock<Option<Arc<Catalog>>> = RwLock::new(None);
 
@@ -49,14 +49,13 @@ struct ShardIndex {
     build: BuildState,
 }
 
+/// One shard's slice of every declared index. Owned by
+/// `crate::state::ShardCtx` (W4); every entry point below borrows it
+/// from the caller's shard zone.
 #[derive(Default)]
-struct ShardIndexes {
+pub(crate) struct ShardIndexes {
     generation: u64,
     idx: Vec<ShardIndex>,
-}
-
-thread_local! {
-    static SHARD_INDEXES: RefCell<ShardIndexes> = RefCell::new(ShardIndexes::default());
 }
 
 /// Snapshot the current catalog (None = empty).
@@ -67,199 +66,194 @@ pub(crate) fn catalog() -> Option<Arc<Catalog>> {
         .clone()
 }
 
+/// Is at least one index declared? Cold-path input to the per-shard
+/// `IDX_NONEMPTY` gate bit — the hot path reads the cached bit, never
+/// this lock.
+pub(crate) fn catalog_nonempty() -> bool {
+    CATALOG
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_ref()
+        .is_some_and(|c| !c.is_empty())
+}
+
 /// Swap in a new catalog version (IDX.CREATE / IDX.DROP). Bumps the
-/// generation; shards refresh lazily.
-pub(crate) fn install_catalog(c: Catalog) {
-    let nonempty = !c.is_empty();
+/// generation (shards refresh their segment lists lazily), then the
+/// control epoch (writer protocol step ② — every shard's gate bits
+/// re-derive `IDX_NONEMPTY` on their next command).
+pub(crate) fn install_catalog(control_epoch: &AtomicU64, c: Catalog) {
     *CATALOG
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(c));
-    NONEMPTY.store(nonempty, Ordering::Release);
     CATALOG_GEN.fetch_add(1, Ordering::Release);
+    control_epoch.fetch_add(1, Ordering::Release);
 }
 
-/// The write-path hook body (`Commands::on_write`).
+/// The write-path hook body (`Commands::on_write`). The caller gates
+/// on `IDX_NONEMPTY`, so entering here means at least one index is
+/// declared.
 #[inline]
-pub(crate) fn on_write(store: &mut Store, key: &[u8]) {
-    if !NONEMPTY.load(Ordering::Relaxed) {
-        return;
-    }
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        for si in &mut st.idx {
-            if key.starts_with(&si.spec.prefix) {
-                apply_row(store, si, key);
-            }
+pub(crate) fn on_write(shard: &ShardCtx, store: &mut Store, key: &[u8]) {
+    let mut st = shard.indexes.borrow_mut();
+    refresh(&mut st, store);
+    for si in &mut st.idx {
+        if key.starts_with(&si.spec.prefix) {
+            apply_row(store, si, key);
         }
-    });
+    }
 }
 
-/// Tick hook: advance backfills a bounded batch per tick.
-pub(crate) fn on_tick(store: &mut Store) {
-    if !NONEMPTY.load(Ordering::Relaxed) {
-        return;
+/// Tick hook: advance backfills a bounded batch per tick. Gated like
+/// [`on_write`].
+pub(crate) fn on_tick(shard: &ShardCtx, store: &mut Store) {
+    let mut st = shard.indexes.borrow_mut();
+    refresh(&mut st, store);
+    for si in &mut st.idx {
+        advance_backfill(store, si, 2048);
     }
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        for si in &mut st.idx {
-            advance_backfill(store, si, 2048);
-        }
-    });
 }
 
 /// Query entry: run `f` against this shard's segment for `name`.
-/// `None` = index unknown here (stale TL is refreshed first) or still
-/// backfilling. Wired to IDX.QUERY fan-out in step 2b.
+/// `None` = index unknown here (a stale shard list is refreshed
+/// first) or still backfilling. Wired to IDX.QUERY fan-out in step 2b.
 pub(crate) fn with_ready_segment<R>(
+    shard: &ShardCtx,
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&IndexSpec, &Segment) -> R,
 ) -> Result<R, &'static str> {
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        let si = st
-            .idx
-            .iter()
-            .find(|si| si.spec.name == name)
-            .ok_or("ERR no such index")?;
-        match si.build {
-            BuildState::Ready => Ok(f(&si.spec, &si.seg)),
-            BuildState::Backfilling { .. } => Err("INDEXBUILDING index is still building"),
-            BuildState::FailedOverBudget => {
-                Err("INDEXOVERBUDGET index build exceeded MAXMEM")
-            }
-        }
-    })
+    let mut st = shard.indexes.borrow_mut();
+    refresh(&mut st, store);
+    let si = st
+        .idx
+        .iter()
+        .find(|si| si.spec.name == name)
+        .ok_or("ERR no such index")?;
+    match si.build {
+        BuildState::Ready => Ok(f(&si.spec, &si.seg)),
+        BuildState::Backfilling { .. } => Err("INDEXBUILDING index is still building"),
+        BuildState::FailedOverBudget => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
+    }
 }
 
 /// v3.1: run `f` against a READY aggregate segment.
 pub(crate) fn with_ready_agg<R>(
+    shard: &ShardCtx,
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&kevy_index::AggSegment) -> R,
 ) -> Result<R, &'static str> {
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        let si = st
-            .idx
-            .iter()
-            .find(|si| si.spec.name == name)
-            .ok_or("ERR no such index")?;
-        match (&si.build, &si.agg) {
-            (BuildState::Ready, Some(a)) => Ok(f(a)),
-            (BuildState::Backfilling { .. }, _) => Err("INDEXBUILDING index is still building"),
-            (BuildState::FailedOverBudget, _) => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
-            (_, None) => Err("ERR not an aggregate index"),
-        }
-    })
+    let mut st = shard.indexes.borrow_mut();
+    refresh(&mut st, store);
+    let si = st
+        .idx
+        .iter()
+        .find(|si| si.spec.name == name)
+        .ok_or("ERR no such index")?;
+    match (&si.build, &si.agg) {
+        (BuildState::Ready, Some(a)) => Ok(f(a)),
+        (BuildState::Backfilling { .. }, _) => Err("INDEXBUILDING index is still building"),
+        (BuildState::FailedOverBudget, _) => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
+        (_, None) => Err("ERR not an aggregate index"),
+    }
 }
 
 /// v2.8: run `f` against a READY ANN graph (mutable for REBUILD).
 pub(crate) fn with_ready_ann<R>(
+    shard: &ShardCtx,
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&mut kevy_vector::Hnsw) -> R,
 ) -> Result<R, &'static str> {
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        let si = st
-            .idx
-            .iter_mut()
-            .find(|si| si.spec.name == name)
-            .ok_or("ERR no such index")?;
-        match (&si.build, &mut si.ann) {
-            (BuildState::Ready, Some(g)) => Ok(f(g)),
-            (BuildState::Backfilling { .. }, _) => Err("INDEXBUILDING index is still building"),
-            (BuildState::FailedOverBudget, _) => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
-            (_, None) => Err("ERR not a vector index"),
-        }
-    })
+    let mut st = shard.indexes.borrow_mut();
+    refresh(&mut st, store);
+    let si = st
+        .idx
+        .iter_mut()
+        .find(|si| si.spec.name == name)
+        .ok_or("ERR no such index")?;
+    match (&si.build, &mut si.ann) {
+        (BuildState::Ready, Some(g)) => Ok(f(g)),
+        (BuildState::Backfilling { .. }, _) => Err("INDEXBUILDING index is still building"),
+        (BuildState::FailedOverBudget, _) => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
+        (_, None) => Err("ERR not a vector index"),
+    }
 }
 
 /// v2.7: run `f` against a READY text segment.
 pub(crate) fn with_ready_text_segment<R>(
+    shard: &ShardCtx,
     store: &mut Store,
     name: &[u8],
     f: impl FnOnce(&kevy_text::TextSegment) -> R,
 ) -> Result<R, &'static str> {
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        let si = st
-            .idx
-            .iter()
-            .find(|si| si.spec.name == name)
-            .ok_or("ERR no such index")?;
-        match (&si.build, &si.text) {
-            (BuildState::Ready, Some(ts)) => Ok(f(ts)),
-            (BuildState::Backfilling { .. }, _) => Err("INDEXBUILDING index is still building"),
-            (BuildState::FailedOverBudget, _) => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
-            (_, None) => Err("ERR not a text index"),
-        }
-    })
+    let mut st = shard.indexes.borrow_mut();
+    refresh(&mut st, store);
+    let si = st
+        .idx
+        .iter()
+        .find(|si| si.spec.name == name)
+        .ok_or("ERR no such index")?;
+    match (&si.build, &si.text) {
+        (BuildState::Ready, Some(ts)) => Ok(f(ts)),
+        (BuildState::Backfilling { .. }, _) => Err("INDEXBUILDING index is still building"),
+        (BuildState::FailedOverBudget, _) => Err("INDEXOVERBUDGET index build exceeded MAXMEM"),
+        (_, None) => Err("ERR not a text index"),
+    }
 }
 
 /// v2.6: run `f` with a name→segment resolver over this shard's READY
 /// segments (views probe several indexes per call). Building/failed
 /// segments resolve to None.
 pub(crate) fn with_segment_resolver<R>(
+    shard: &ShardCtx,
     store: &mut Store,
     f: impl for<'s> FnOnce(&'s dyn Fn(&[u8]) -> Option<&'s Segment>) -> R,
 ) -> R {
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        let idx = &st.idx;
-        let resolver = |name: &[u8]| -> Option<&Segment> {
-            idx.iter()
-                .find(|si| si.spec.name == name && matches!(si.build, BuildState::Ready))
-                .map(|si| &si.seg)
-        };
-        f(&resolver)
-    })
+    let mut st = shard.indexes.borrow_mut();
+    refresh(&mut st, store);
+    let idx = &st.idx;
+    let resolver = |name: &[u8]| -> Option<&Segment> {
+        idx.iter()
+            .find(|si| si.spec.name == name && matches!(si.build, BuildState::Ready))
+            .map(|si| &si.seg)
+    };
+    f(&resolver)
 }
 
 /// Two-segment variant for COMPOSE — one RefCell borrow (nesting
-/// [`with_ready_segment`] would double-borrow the thread-local).
+/// [`with_ready_segment`] would double-borrow the shard's index list).
 pub(crate) fn with_two_ready_segments<R>(
+    shard: &ShardCtx,
     store: &mut Store,
     a: &[u8],
     b: &[u8],
     f: impl FnOnce(&IndexSpec, &Segment, &IndexSpec, &Segment) -> R,
 ) -> Result<R, &'static str> {
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        let ia = st.idx.iter().position(|si| si.spec.name == a).ok_or("ERR no such index")?;
-        let ib = st.idx.iter().position(|si| si.spec.name == b).ok_or("ERR no such index")?;
-        for i in [ia, ib] {
-            if matches!(st.idx[i].build, BuildState::Backfilling { .. }) {
-                return Err("INDEXBUILDING index is still building");
-            }
+    let mut st = shard.indexes.borrow_mut();
+    refresh(&mut st, store);
+    let ia = st.idx.iter().position(|si| si.spec.name == a).ok_or("ERR no such index")?;
+    let ib = st.idx.iter().position(|si| si.spec.name == b).ok_or("ERR no such index")?;
+    for i in [ia, ib] {
+        if matches!(st.idx[i].build, BuildState::Backfilling { .. }) {
+            return Err("INDEXBUILDING index is still building");
         }
-        let (sa, sb) = (&st.idx[ia], &st.idx[ib]);
-        Ok(f(&sa.spec, &sa.seg, &sb.spec, &sb.seg))
-    })
+    }
+    let (sa, sb) = (&st.idx[ia], &st.idx[ib]);
+    Ok(f(&sa.spec, &sa.seg, &sb.spec, &sb.seg))
 }
 
 /// Whether this shard's slice of `name` is still backfilling.
-pub(crate) fn segment_building(store: &mut Store, name: &[u8]) -> bool {
-    SHARD_INDEXES.with(|tl| {
-        let mut st = tl.borrow_mut();
-        refresh(&mut st, store);
-        st.idx
-            .iter()
-            .find(|si| si.spec.name == name)
-            .is_some_and(|si| matches!(si.build, BuildState::Backfilling { .. }))
-    })
+pub(crate) fn segment_building(shard: &ShardCtx, store: &mut Store, name: &[u8]) -> bool {
+    let mut st = shard.indexes.borrow_mut();
+    refresh(&mut st, store);
+    st.idx
+        .iter()
+        .find(|si| si.spec.name == name)
+        .is_some_and(|si| matches!(si.build, BuildState::Backfilling { .. }))
 }
 
-/// Reconcile the thread-local segment list with the global catalog:
+/// Reconcile this shard's segment list with the global catalog:
 /// keep segments whose spec is unchanged, start backfills for new
 /// ones, drop removed ones.
 fn refresh(st: &mut ShardIndexes, store: &mut Store) {

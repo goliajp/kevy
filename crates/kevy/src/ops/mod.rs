@@ -88,7 +88,7 @@ pub(crate) fn cmd_info<A: ArgvView + ?Sized>(
     // reports the whole process. Freshen this shard's slot from the live store
     // it already holds (so the answering shard is never stale, even with the
     // active reaper disabled), then sum every shard's slot.
-    stats::publish_gauges(store);
+    stats::publish_gauges(ctx.shard, store);
     let totals = ctx.state.obs.aggregate();
     let body = build_info_body(ctx, &cfg, want, &totals);
     // RESP3: Verbatim text frame (`=N\r\ntxt:<body>\r\n`) so the
@@ -119,7 +119,7 @@ fn build_info_body(
         info_memory(cfg, totals, &mut body);
     }
     if want_section(want, "persistence") {
-        info_persistence(cfg, &mut body);
+        info_persistence(ctx, cfg, &mut body);
     }
     if want_section(want, "stats") {
         info_stats(ctx, totals, &mut body);
@@ -192,23 +192,11 @@ fn info_memory(cfg: &Config, totals: &crate::state::Totals, b: &mut String) {
     b.push_str("\r\n");
 }
 
-thread_local! {
-    /// The answering shard's background-persistence view, refreshed by the
-    /// reactor tick via `Commands::on_persist_stats` (thread-per-core:
-    /// thread == shard, the `cluster::CURRENT_SHARD` pattern). Stale by at
-    /// most one tick interval. `(in_flight, aof_rewrites_total)`.
-    static PERSIST_STATS: std::cell::Cell<(bool, u64)> =
-        const { std::cell::Cell::new((false, 0)) };
-}
-
-/// Record the reactor's persistence stats for `INFO persistence` (see
-/// [`PERSIST_STATS`]).
-pub(crate) fn set_persist_stats(in_flight: bool, aof_rewrites_total: u64) {
-    PERSIST_STATS.with(|c| c.set((in_flight, aof_rewrites_total)));
-}
-
-fn info_persistence(cfg: &Config, b: &mut String) {
-    let (in_flight, rewrites) = PERSIST_STATS.with(std::cell::Cell::get);
+fn info_persistence(ctx: &Ctx<'_>, cfg: &Config, b: &mut String) {
+    // The answering shard's background-persistence view, refreshed by
+    // the reactor tick via `Commands::on_persist_stats` into the shard
+    // zone. Stale by at most one tick interval.
+    let (in_flight, rewrites) = ctx.shard.persist_stats();
     b.push_str("# Persistence\r\n");
     b.push_str("loading:0\r\n");
     b.push_str(&format!(
@@ -251,8 +239,8 @@ fn info_stats(ctx: &Ctx<'_>, totals: &crate::state::Totals, b: &mut String) {
 
 fn info_replication(ctx: &Ctx<'_>, b: &mut String) {
     // T1.31: live `INFO replication` — reads `current_upstream()` to
-    // decide the section shape, then drains the per-tick view
-    // (`replication_view()`) for offset + connected-replicas count.
+    // decide the section shape, then drains the shard zone's per-tick
+    // view for offset + connected-replicas count.
     // The fields mirror Redis 7.x; the v1.18 simplifications are:
     //   - master_replid is a single zeros-string (no failover ID
     //     bookkeeping yet — kevy-elect (Phase 1.5) introduces real IDs)
@@ -262,7 +250,7 @@ fn info_replication(ctx: &Ctx<'_>, b: &mut String) {
     //     T1.28.5 — see plan).
     b.push_str("# Replication\r\n");
     let upstream = ctx.state.replication.current_upstream();
-    let view = replication::replication_view();
+    let view = ctx.shard.replication_view();
     let offset = view.master_repl_offset;
     let connected = view.replicas.len();
     match upstream {

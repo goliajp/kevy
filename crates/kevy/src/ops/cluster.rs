@@ -14,39 +14,12 @@
 // shape stays legible vs `write!` boilerplate, and it's not on a hot path.
 #![allow(clippy::format_push_string)]
 
-use std::cell::Cell;
-
 use kevy_config::Config;
 use kevy_resp::{ArgvView, encode_array_len, encode_bulk, encode_integer, encode_simple_string};
 use kevy_store::Store;
 
 use super::wrong_args;
 use crate::state::Ctx;
-
-thread_local! {
-    /// This reactor thread's shard id (thread-per-core: thread == shard).
-    /// Set by `KevyCommands::on_shard_start`; the `usize::MAX` sentinel
-    /// (never a real shard) marks non-reactor contexts (tests, embedded).
-    static CURRENT_SHARD: Cell<usize> = const { Cell::new(usize::MAX) };
-}
-
-/// Record the current thread's shard id (see [`CURRENT_SHARD`]).
-pub(crate) fn set_current_shard(shard: usize) {
-    CURRENT_SHARD.with(|c| c.set(shard));
-}
-
-fn current_shard() -> usize {
-    let s = CURRENT_SHARD.with(std::cell::Cell::get);
-    if s == usize::MAX { 0 } else { s }
-}
-
-/// v1.27.4: same thread-local exposed for `cmd_lua`. The Lua
-/// dispatch closure consults this to validate that every inner
-/// `redis.call` target key lives on the same shard as the EVAL
-/// itself — matches Redis Cluster CROSSSLOT semantics for scripts.
-pub(crate) fn current_shard_for_lua() -> usize {
-    current_shard()
-}
 
 /// Deterministic 40-hex node id for shard `i` (stable across restarts;
 /// `i + 1` so no id collides with the all-zero "unknown node" sentinel).
@@ -106,7 +79,10 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
             encode_bulk(out, body.as_bytes());
         }
         b"NODES" if enabled => {
-            encode_bulk(out, nodes_text(cfg, n, live_role(ctx)).as_bytes());
+            encode_bulk(
+                out,
+                nodes_text(cfg, n, live_role(ctx), ctx.shard.shard_id()).as_bytes(),
+            );
         }
         b"NODES" => {
             // Standalone stub. T1.33: the flag reflects live state
@@ -122,7 +98,7 @@ pub(crate) fn cmd_cluster<A: ArgvView + ?Sized>(
         b"SLOTS" if enabled => encode_slots(cfg, n, out),
         b"SHARDS" if enabled => encode_shards(cfg, n, out),
         b"SLOTS" | b"SHARDS" => encode_array_len(out, 0),
-        b"MYID" if enabled => encode_bulk(out, node_id(current_shard()).as_bytes()),
+        b"MYID" if enabled => encode_bulk(out, node_id(ctx.shard.shard_id()).as_bytes()),
         b"MYID" => encode_bulk(out, b"0000000000000000000000000000000000000000"),
         b"KEYSLOT" => match args.get(2) {
             Some(key) => encode_integer(out, i64::from(kevy_hash::key_hash_slot(key))),
@@ -174,10 +150,10 @@ fn live_role(ctx: &Ctx<'_>) -> &'static str {
     }
 }
 
-/// `CLUSTER NODES` text: one line per virtual node. The answering shard is
-/// flagged `myself`. No cluster bus — `@cport` mirrors the data port.
-fn nodes_text(cfg: &Config, n: usize, role: &str) -> String {
-    let me = current_shard();
+/// `CLUSTER NODES` text: one line per virtual node. The answering
+/// shard (`me`) is flagged `myself`. No cluster bus — `@cport` mirrors
+/// the data port.
+fn nodes_text(cfg: &Config, n: usize, role: &str, me: usize) -> String {
     let mut body = String::new();
     for_each_node(cfg, n, |i, ip, port, start, end| {
         let flags = if i == me {

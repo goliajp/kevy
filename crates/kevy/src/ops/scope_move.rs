@@ -50,7 +50,8 @@ pub(crate) fn cmd_move_scope<A: ArgvView + ?Sized>(
 
     // Start the migration locally. From this instant, dispatch
     // routes writes for this prefix to `-QUIESCED migrating to
-    // <to_addr>` (T3.14).
+    // <to_addr>` (T3.14). Each migration transition is a cold gate
+    // writer (W5): bump the control epoch after the table change.
     if let Err(e) = ctx.state.scope.migration_start(
         prefix_owned.clone(),
         from_id.to_string(),
@@ -58,16 +59,19 @@ pub(crate) fn cmd_move_scope<A: ArgvView + ?Sized>(
     ) {
         return encode_error(out, &format!("ERR MOVE-SCOPE: {e}"));
     }
+    ctx.state.bump_control_epoch();
 
     // Ship.
     match ship_prefix_to_target(store, &prefix_owned, &target_addr) {
         Ok(count) => {
             ctx.state.scope.migration_commit(&prefix_owned);
+            ctx.state.bump_control_epoch();
             let reply = format!("+OK {count}\r\n");
             out.extend_from_slice(reply.as_bytes());
         }
         Err(e) => {
             ctx.state.scope.migration_abort(&prefix_owned);
+            ctx.state.bump_control_epoch();
             encode_error(out, &format!("ERR MOVE-SCOPE ship failed: {e}"));
         }
     }
