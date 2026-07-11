@@ -61,8 +61,8 @@ mod source {
     }
 }
 
-#[cfg(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
-mod hostfed {
+#[cfg(any(test, feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
+pub(crate) mod hostfed {
     //! One host-fed 64-bit cell, atomic on every target. Where the ISA
     //! has 64-bit atomics this is a plain `AtomicU64`; on 32-bit-only
     //! MCUs (ARMv7E-M etc.) it degrades to a single-writer seqlock over
@@ -70,14 +70,14 @@ mod hostfed {
     //! context, so the reader's retry loop settles immediately.
     #[cfg(target_has_atomic = "64")]
     use core::sync::atomic::AtomicU64;
-    use core::sync::atomic::Ordering;
-    #[cfg(not(target_has_atomic = "64"))]
-    use core::sync::atomic::AtomicU32;
+    use core::sync::atomic::{AtomicU32, Ordering};
 
     #[cfg(target_has_atomic = "64")]
+    #[cfg_attr(test, allow(dead_code))]
     pub(super) struct Cell(AtomicU64);
 
     #[cfg(target_has_atomic = "64")]
+    #[cfg_attr(test, allow(dead_code))]
     impl Cell {
         pub(super) const fn new() -> Self {
             Cell(AtomicU64::new(0))
@@ -93,19 +93,26 @@ mod hostfed {
     }
 
     #[cfg(not(target_has_atomic = "64"))]
-    pub(super) struct Cell {
+    pub(super) type Cell = SeqCell;
+
+    /// Single-writer seqlock over two `AtomicU32` halves — the Cell
+    /// form for ISAs without 64-bit atomics. Compiled on every target
+    /// so the host test suite can exercise the retry protocol; only
+    /// the `Cell` alias is gated.
+    #[allow(dead_code)]
+    pub(crate) struct SeqCell {
         seq: AtomicU32,
         hi: AtomicU32,
         lo: AtomicU32,
     }
 
-    #[cfg(not(target_has_atomic = "64"))]
-    impl Cell {
-        pub(super) const fn new() -> Self {
-            Cell { seq: AtomicU32::new(0), hi: AtomicU32::new(0), lo: AtomicU32::new(0) }
+    #[allow(dead_code)]
+    impl SeqCell {
+        pub(crate) const fn new() -> Self {
+            SeqCell { seq: AtomicU32::new(0), hi: AtomicU32::new(0), lo: AtomicU32::new(0) }
         }
         #[inline]
-        pub(super) fn load(&self) -> u64 {
+        pub(crate) fn load(&self) -> u64 {
             loop {
                 let s1 = self.seq.load(Ordering::Acquire);
                 let hi = self.hi.load(Ordering::Acquire);
@@ -117,7 +124,7 @@ mod hostfed {
             }
         }
         #[inline]
-        pub(super) fn store(&self, v: u64) {
+        pub(crate) fn store(&self, v: u64) {
             let s = self.seq.load(Ordering::Relaxed);
             self.seq.store(s.wrapping_add(1), Ordering::Release); // odd: write in flight
             self.hi.store((v >> 32) as u32, Ordering::Release);
@@ -177,3 +184,54 @@ pub use source::set_clock_ns;
 pub(crate) use wall::now_unix_ms as wall_now_unix_ms;
 #[cfg(any(feature = "external-clock", all(target_arch = "wasm32", target_os = "unknown")))]
 pub use wall::set_wall_clock_ms;
+
+#[cfg(test)]
+mod seqlock_tests {
+    /// The 32-bit fallback cell must never surface a torn value: a
+    /// reader may only ever observe a (hi, lo) pair that some single
+    /// write published together. One writer cycles through values
+    /// whose halves are correlated (hi == !lo), readers assert the
+    /// invariant on every load.
+    #[test]
+    fn hostfed_cell_never_tears_under_a_writer() {
+        use super::hostfed::SeqCell as Cell;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let cell = Arc::new(Cell::new());
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let (cell, stop) = (Arc::clone(&cell), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                let mut i: u32 = 1;
+                while !stop.load(Ordering::Relaxed) {
+                    let v = (u64::from(i) << 32) | u64::from(!i);
+                    cell.store(v);
+                    i = i.wrapping_add(1);
+                }
+            })
+        };
+        let readers: Vec<_> = (0..3)
+            .map(|_| {
+                let (cell, stop) = (Arc::clone(&cell), Arc::clone(&stop));
+                std::thread::spawn(move || {
+                    let mut seen = 0u64;
+                    while !stop.load(Ordering::Relaxed) {
+                        let v = cell.load();
+                        if v != 0 {
+                            let (hi, lo) = ((v >> 32) as u32, v as u32);
+                            assert_eq!(hi, !lo, "torn read: {v:#x}");
+                            seen += 1;
+                        }
+                    }
+                    seen
+                })
+            })
+            .collect();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        stop.store(true, Ordering::Relaxed);
+        writer.join().unwrap();
+        let total: u64 = readers.into_iter().map(|r| r.join().unwrap()).sum();
+        assert!(total > 10_000, "readers barely ran ({total} loads)");
+    }
+}

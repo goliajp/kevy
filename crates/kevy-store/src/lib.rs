@@ -42,6 +42,12 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(feature = "std"), no_std)]
 
+#[cfg(all(not(feature = "std"), not(feature = "external-clock")))]
+compile_error!(
+    "kevy-store without `std` needs the `external-clock` feature: the TTL \
+     clock must be host-fed when std::time is unavailable"
+);
+
 extern crate alloc;
 
 /// The alloc-crate slice of the std prelude, for `no_std` builds — glob-
