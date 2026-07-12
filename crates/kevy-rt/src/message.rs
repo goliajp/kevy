@@ -151,8 +151,18 @@ pub(crate) enum Op {
     /// v2.3 `PREFIX.STATS <prefix>` — per-shard prefix walk, summed at
     /// the origin.
     PrefixStats(Vec<u8>),
-    /// Collect this shard's keys (optional glob + limit) — KEYS/SCAN/RANDOMKEY.
+    /// Collect this shard's keys (optional glob + limit) — KEYS/RANDOMKEY.
     CollectKeys(Option<Vec<u8>>, Option<usize>),
+    /// One `SCAN` page on this shard: walk ~`count` buckets from the
+    /// in-shard `cursor` (reverse-binary, rehash-tolerant — see
+    /// [`kevy_store::Store::scan_page`]), applying the MATCH glob and
+    /// TYPE filter. Reply: [`Part::ScanPage`].
+    ScanStep {
+        cursor: u64,
+        count: usize,
+        pattern: Option<Vec<u8>>,
+        type_filter: Option<Vec<u8>>,
+    },
     /// `WATCH key [key ...]` — register each key in this shard's
     /// version tracker and report its current version back. The origin
     /// shard collates the (key, version) pairs into the conn's
@@ -213,13 +223,12 @@ pub(crate) enum Op {
     XReadOne { index: u32, argv: Argv, write: bool },
 }
 
-/// How a KEYS-family reply is shaped.
+/// How a KEYS-family reply is shaped. (`SCAN` no longer rides here —
+/// it has its own single-shard paging aggregator, [`Agg::ScanPage`].)
 #[derive(Clone, Copy)]
 pub(crate) enum KeyShape {
     /// `KEYS` — a flat array of keys.
     Keys,
-    /// `SCAN` — `[cursor, [keys]]` (cursor always "0").
-    Scan,
     /// `RANDOMKEY` — one key as a bulk string, or nil.
     Random,
 }
@@ -277,8 +286,17 @@ pub(crate) enum Part {
     Ok,
     /// Per-key gathered payloads.
     Gathered(Vec<(Vec<u8>, Gathered)>),
-    /// A shard's collected keys (KEYS/SCAN/RANDOMKEY).
+    /// A shard's collected keys (KEYS/RANDOMKEY).
     Keys(Vec<Vec<u8>>),
+    /// One shard's `SCAN` page ([`Op::ScanStep`] reply): the next
+    /// in-shard cursor (0 = this shard is exhausted), the keys that
+    /// passed the filters, and how many buckets the walk visited (the
+    /// origin debits its COUNT work budget with it).
+    ScanPage {
+        next: u64,
+        keys: Vec<Vec<u8>>,
+        visited: usize,
+    },
     /// `WATCH` partial reply: each key this shard owns paired with its
     /// current version, in request order. The origin shard collates
     /// these into the conn's watched set.

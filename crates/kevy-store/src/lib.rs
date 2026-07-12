@@ -55,6 +55,7 @@ mod hash_ttl;
 pub use hash_ttl::{HExpireCode, HExpireCond};
 mod keyspace;
 mod list;
+mod scan;
 mod list_ops;
 mod set;
 mod small_set;

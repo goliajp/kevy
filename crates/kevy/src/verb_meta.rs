@@ -93,7 +93,7 @@ pub const VERB_META: &[VerbMeta] = &[
     // ---- scan (keyspace iteration) --------------------------------------
     v("KEYS",        "scan", 2,  R, "Return every key matching the glob pattern (cross-shard gather).", "1.0.0", "KEYS pattern"),
     v("RANDOMKEY",   "scan", 1,  R, "Return a random key from the keyspace.", "1.0.0", "RANDOMKEY"),
-    v("SCAN",        "scan", -2, R, "Incrementally iterate the keyspace (COUNT is accepted and ignored).", "1.0.0", "SCAN cursor [MATCH pattern] [COUNT count]"),
+    v("SCAN",        "scan", -2, R, "Incrementally iterate the keyspace: O(COUNT) buckets per call, amortised O(N) for a full sweep, rehash-tolerant; cursors encode (shard, position) so they are only valid on the server that issued them.", "1.0.0", "SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]"),
     // ---- generic (type-agnostic key ops) --------------------------------
     v("DEL",         "generic", -2, W, "Delete one or more keys.", "1.0.0", "DEL key [key ...]"),
     v("EXISTS",      "generic", -2, R, "Count how many of the given keys exist.", "1.0.0", "EXISTS key [key ...]"),

@@ -27,6 +27,7 @@ mod iter;
 mod map;
 mod map_keyed;
 mod raw_entry;
+mod scan;
 mod set;
 
 pub use kevy_hash::KevyHash;

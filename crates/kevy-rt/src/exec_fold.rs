@@ -60,6 +60,18 @@ impl<C: Commands> Shard<C> {
                     }
                 }
                 (Agg::Keys { acc, .. }, Part::Keys(ks)) => acc.extend(ks),
+                // SCAN page: bank the keys, remember the shard's next
+                // cursor, debit the COUNT work budget; the decision
+                // (reply vs chain into the next shard) happens in
+                // `finalize_scan_agg` once the slot completes.
+                (
+                    Agg::ScanPage { keys, next, budget, .. },
+                    Part::ScanPage { next: n, keys: ks, visited },
+                ) => {
+                    keys.extend(ks);
+                    *next = n;
+                    *budget = budget.saturating_sub(visited);
+                }
                 (
                     Agg::PrefixStats { keys, expires },
                     Part::PrefixStats { keys: k, expires: e },
@@ -114,6 +126,7 @@ impl<C: Commands> Shard<C> {
                         | Agg::RenameOrchestrator { .. }
                         | Agg::ZStoreGather { .. }
                         | Agg::ExtensionGather { .. }
+                        | Agg::ScanPage { .. }
                 ) {
                     Some(agg)
                 } else {
@@ -132,6 +145,7 @@ impl<C: Commands> Shard<C> {
                 }
                 Agg::RenameOrchestrator { .. } => self.finalize_rename_agg(conn_id, seq, agg),
                 Agg::ZStoreGather { .. } => self.finalize_zstore_agg(conn_id, seq, agg),
+                Agg::ScanPage { .. } => self.finalize_scan_agg(conn_id, seq, agg),
                 Agg::ExtensionGather { argv, chunks } => {
                     let proto = self
                         .conns

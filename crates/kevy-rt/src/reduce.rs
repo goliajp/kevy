@@ -87,7 +87,8 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
         | Agg::ExecPrep { .. }
         | Agg::RenameOrchestrator { .. }
         | Agg::ZStoreGather { .. }
-        | Agg::ExtensionGather { .. } => {
+        | Agg::ExtensionGather { .. }
+        | Agg::ScanPage { .. } => {
             let mut out = Vec::new();
             encode_error(&mut out, "ERR internal: orchestrator agg hit materialize");
             SmallReply::from_vec(out)
@@ -110,15 +111,6 @@ fn finalize_keys(shape: KeyShape, acc: Vec<Vec<u8>>) -> Vec<u8> {
     let mut out = Vec::new();
     match shape {
         KeyShape::Keys => {
-            encode_array_len(&mut out, acc.len() as i64);
-            for k in &acc {
-                encode_bulk(&mut out, k);
-            }
-        }
-        KeyShape::Scan => {
-            // [cursor, [keys]] — cursor "0" (non-incremental: one full pass).
-            encode_array_len(&mut out, 2);
-            encode_bulk(&mut out, b"0");
             encode_array_len(&mut out, acc.len() as i64);
             for k in &acc {
                 encode_bulk(&mut out, k);
