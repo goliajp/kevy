@@ -40,3 +40,4 @@ vendor/bundle/
 .bundle/
 view-catalog.meta
 index-catalog.meta
+bench/iot-consumer/target/

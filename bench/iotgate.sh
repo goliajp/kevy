@@ -1,74 +1,62 @@
 #!/usr/bin/env bash
 # iotgate — IoT resource budgets for the kevy-embedded `core` archetype
-# (Linux-class IoT: Pi Zero / OpenWrt / industrial ARM).
+# (Linux-class IoT: Pi Zero 2 / OpenWrt / industrial ARM).
+#
+# WHAT IS MEASURED, AND WHY IT CHANGED (2026-07-12)
+#
+# This gate used to size a workspace `--example`. That was the wrong
+# artifact: building an example pulls the crate's dev-dependencies, and
+# kevy-embedded dev-depends on the `kevy` server crate, which drags the
+# whole server stack into the compile. The example measured ~655 KB
+# while a REAL consumer — a standalone crate whose only dependency is
+# kevy-embedded — gets ~411 KB on the same profile. The gate was
+# reporting a number 60% larger than anything a user would ship.
+#
+# It now sizes `bench/iot-consumer`, a fixture deliberately kept OUTSIDE
+# the workspace with no dev-dependencies. That IS the consumer shape.
 #
 # Budgets (ratchet — raising one needs a written verdict):
-#   1. size (host framing, DARWIN-ONLY gate): the `core`-archetype
-#      example binary, `--profile iot` (opt-level z + fat LTO +
-#      strip), host target — aarch64 Mach-O, the dev-loop
-#      number (655 KB)                                       ≤ 700 KB
-#   2. size (musl framing):   the same example as a static-musl
-#      binary — the form that actually ships to an IoT root fs;
-#      includes all of libc, so it sits ~300 KB above the host
-#      framing (first Linux measurement: 940-963 KB)         ≤ 1024 KB
-#   3. RSS: empty-store resident set right after open, measured
-#      on the STATIC-MUSL binary (first measurement: 736 KB) ≤ 2048 KB
+#   1. size (host framing, DARWIN-ONLY gate): the consumer built for the
+#      host — aarch64 Mach-O, the dev-loop number        ≤ 550 KB
+#   2. size (musl framing): the static-musl consumer, the form that
+#      ships to a device (x86_64 measured 454 KB)        ≤ 600 KB
+#   3. RSS: empty-store resident set right after open, measured on the
+#      static-musl binary (aarch64 measured 336 KB)      ≤ 2048 KB
 #
-# Framing verdict (2026-07-12): the host-binary SIZE is framing-
-# dependent — an aarch64 Mach-O (darwin, 655 KB) and an x86_64 glibc
-# ELF (Linux, 815 KB) differ by ~160 KB of libc/loader framing for
-# byte-identical Rust. So budget 1 GATES only on darwin, where it's
-# the sole size signal and the framing is stable; on Linux the host
-# number is printed but not gated (its budget is unreachable under
-# ELF framing). Budgets 2+3 are the enforced Linux face — measured on
-# x86_64-unknown-linux-musl (the real IoT delivery form, natively
-# runnable on any Linux box). A glibc host binary's RSS (~2.8 MB
-# empty-store) is dominated by dynamic-loader + glibc malloc-arena
-# overhead that never ships to the device, so RSS is asserted only on
-# the musl artifact. The size story is split into budgets 1+2 rather
-# than pretending one number covers both framings.
+# Framing note: binary size is framing-dependent — an aarch64 Mach-O and
+# an x86_64 glibc ELF differ by ~160 KB of libc/loader framing for
+# byte-identical Rust. So budget 1 gates only on darwin, where it is the
+# sole size signal and the framing is stable; budgets 2+3 are the
+# enforced Linux face, measured on the real delivery artifact.
 #
-# On non-Linux hosts budgets 2+3 are a loud SKIP (run this gate on a
-# Linux box for the full verdict). The cross targets (aarch64/armv7
-# musl + thumbv7em no_std) stay compile-gated in CI's iot job.
-#
-# qemu-user note: CI does NOT run the full test suite under qemu
-# (runner qemu install cost; the check matrix already gates the compile
-# face). The manual lx64 item is:
-#   CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUNNER=qemu-aarch64 \
-#     cargo test -p kevy-embedded --target aarch64-unknown-linux-musl
+# Cross targets (aarch64 / armv7 / ARMv6 musl, thumbv7em no_std) stay
+# compile-gated in CI's iot job.
 set -u
 cd "$(dirname "$0")/.."
 
-BUDGET_BIN_KB=700
-BUDGET_MUSL_BIN_KB=1024
+FIXTURE="bench/iot-consumer"
+BIN_NAME="kevy-iot-consumer"
+
+BUDGET_HOST_KB=550
+BUDGET_MUSL_KB=600
 BUDGET_RSS_KB=2048
 
-echo "== iotgate: build core-archetype example (--profile iot) =="
-cargo build --quiet --profile iot -p kevy-embedded --example iot_core \
-  --no-default-features --features core || { echo "iotgate FAIL: build"; exit 1; }
-
-BIN="target/iot/examples/iot_core"
-[ -f "$BIN" ] || { echo "iotgate FAIL: $BIN missing"; exit 1; }
-
-SIZE_KB=$(( $(wc -c < "$BIN") / 1024 ))
 FAIL=0
 IS_LINUX=$([ "$(uname -s)" = "Linux" ] && echo 1 || echo 0)
-# The host binary's size is framing-dependent: an aarch64 Mach-O
-# (darwin, ~655 KB) and an x86_64 glibc ELF (Linux, ~815 KB) differ by
-# ~160 KB of libc/loader framing for byte-identical Rust. So the
-# host-size budget only GATES on darwin — where it's the only size
-# signal (no in-tree musl cross-runner) and the framing is stable.
-# On Linux the static-musl artifact below is the real IoT delivery
-# form and carries the enforced size budget; the host number is
-# printed for continuity but not gated (its budget is unreachable
-# under ELF framing and would false-fail).
+
+echo "== iotgate: build the core-tier CONSUMER (standalone, no dev-deps) =="
+( cd "$FIXTURE" && cargo build --quiet --release --no-default-features --features core ) \
+  || { echo "iotgate FAIL: host build"; exit 1; }
+HBIN="$FIXTURE/target/release/$BIN_NAME"
+[ -f "$HBIN" ] || { echo "iotgate FAIL: $HBIN missing"; exit 1; }
+HOST_KB=$(( $(wc -c < "$HBIN") / 1024 ))
+
 if [ "$IS_LINUX" = "1" ]; then
-  echo "core example binary (host, informational): ${SIZE_KB} KB"
+  echo "core consumer (host, informational): ${HOST_KB} KB"
 else
-  echo "core example binary (host): ${SIZE_KB} KB (budget ${BUDGET_BIN_KB} KB)"
-  if [ "$SIZE_KB" -gt "$BUDGET_BIN_KB" ]; then
-    echo "iotgate FAIL: host binary ${SIZE_KB} KB > ${BUDGET_BIN_KB} KB"
+  echo "core consumer (host): ${HOST_KB} KB (budget ${BUDGET_HOST_KB} KB)"
+  if [ "$HOST_KB" -gt "$BUDGET_HOST_KB" ]; then
+    echo "iotgate FAIL: host binary ${HOST_KB} KB > ${BUDGET_HOST_KB} KB"
     FAIL=1
   fi
 fi
@@ -76,20 +64,20 @@ fi
 if [ "$IS_LINUX" = "1" ]; then
   MUSL_TARGET="x86_64-unknown-linux-musl"
   if ! rustup target list --installed | grep -q "^${MUSL_TARGET}$"; then
-    echo "iotgate FAIL: ${MUSL_TARGET} not installed" \
-         "(rustup target add ${MUSL_TARGET})"
+    echo "iotgate FAIL: ${MUSL_TARGET} not installed (rustup target add ${MUSL_TARGET})"
     FAIL=1
   else
-    echo "== iotgate: build static-musl artifact =="
-    if cargo build --quiet --profile iot -p kevy-embedded --example iot_core \
-         --no-default-features --features core --target "$MUSL_TARGET"; then
-      MBIN="target/${MUSL_TARGET}/iot/examples/iot_core"
-      MSIZE_KB=$(( $(wc -c < "$MBIN") / 1024 ))
-      echo "core example binary (musl): ${MSIZE_KB} KB (budget ${BUDGET_MUSL_BIN_KB} KB)"
-      if [ "$MSIZE_KB" -gt "$BUDGET_MUSL_BIN_KB" ]; then
-        echo "iotgate FAIL: musl binary ${MSIZE_KB} KB > ${BUDGET_MUSL_BIN_KB} KB"
+    echo "== iotgate: build the static-musl consumer (the shipped form) =="
+    if ( cd "$FIXTURE" && cargo build --quiet --release \
+           --no-default-features --features core --target "$MUSL_TARGET" ); then
+      MBIN="$FIXTURE/target/${MUSL_TARGET}/release/$BIN_NAME"
+      MUSL_KB=$(( $(wc -c < "$MBIN") / 1024 ))
+      echo "core consumer (musl): ${MUSL_KB} KB (budget ${BUDGET_MUSL_KB} KB)"
+      if [ "$MUSL_KB" -gt "$BUDGET_MUSL_KB" ]; then
+        echo "iotgate FAIL: musl binary ${MUSL_KB} KB > ${BUDGET_MUSL_KB} KB"
         FAIL=1
       fi
+
       echo "== iotgate: empty-store RSS (musl artifact) =="
       RSS_KB=$("$MBIN" | sed -n 's/^rss_kb=//p' | head -1)
       if [ -z "${RSS_KB}" ]; then
