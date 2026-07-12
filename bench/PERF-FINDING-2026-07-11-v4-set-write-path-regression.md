@@ -1,5 +1,47 @@
 # PERF-FINDING 2026-07-11 — feature/v4 SET write-path regression, caught by the K-402 gate re-record
 
+> ## ⚠️ RETRACTED — 2026-07-12. There is no regression.
+>
+> Everything below is preserved as written, because the way it went wrong is
+> the useful part. The verdict is withdrawn on two independent grounds:
+>
+> **1. The ruler was quantized.** The `legacy_8sh_*` angles pass `--threads`
+> to redis-benchmark, whose only exit under `--threads` is its own 250 ms
+> `showThroughput` timer (`redis-benchmark.c:52`, `:1653`). `totlatency` is
+> therefore rounded UP to a multiple of 250 ms and the reported throughput is
+> quantized to `N/(k·250ms)` — **7% buckets at this angle**. Convert the
+> numbers in the table below: 9.21M → 3.2560 s, 8.56M → 3.5070 s, 7.49M →
+> 4.0060 s. Every "disjoint distribution" in this document is a pair of
+> adjacent buckets. So is the "8.55M attractor" the caveat below worries
+> about — the doc looked straight at the grid and theorised about the system.
+>
+> **2. The A/B order was fixed.** Every round ran v3.18.0's three instances
+> first and feature/v4's second. The box slows monotonically across a long
+> run, so whichever binary goes first is systematically favoured. That alone
+> is enough to manufacture the separation, and it explains the pinned angles
+> too — those do NOT use `--threads` and carry no quantization.
+>
+> **Re-measured 2026-07-12, order-balanced, ruler fixed** (throughput read
+> from the server's own command counter over a timed window):
+>
+> | angle | v3.18.0 | feature/v4 | Δ |
+> |---|---:|---:|---:|
+> | legacy_8sh_set (steady-state) | 5,989,391 | 5,975,577 | **−0.23%** |
+> | legacy_8sh_get (steady-state) | 7,411,561 | 7,483,891 | **+0.98%** |
+> | legacy_8sh_set (n≈44 instances, quantized ruler, medians) | 8,556,796 | 8,554,357 | **−0.03%** |
+> | pinned_cluster_set (no `--threads`, order-balanced) | 22,238,775 | 22,016,850 | **−1.0%** |
+>
+> All within sample variance (3.5–5.6%). The claimed −18.7% / −7.5% / −5.6%
+> do not exist. The two-step bisect below (T1a/K-108 then K-110) was fitting a
+> mechanism to an artefact — and note that the source-level search for that
+> mechanism found nothing: `Agg`, `PendingSlot`, `Route`, `Op` and `Inbound`
+> are byte-identical across the two commits, and `Store::set` still takes an
+> owned `Vec<u8>`.
+>
+> Full account: `bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`.
+> Rules added: R12 (a clean A/B needs the right control AND a balanced order),
+> R13 (readings on evenly-spaced levels → suspect the ruler first).
+
 **Context**: v4 T4 K-402 (re-record the stale legacy_8sh baseline pair +
 add the five arena angles to the perfgate ratchet). The full 12-angle
 measure on `feature/v4` @ `f7585650` surfaced three SET angles far under

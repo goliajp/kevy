@@ -1,5 +1,35 @@
 # PERF-LEDGER — kevy vs FOSS 真 gap 账本
 
+> ## ⚠️ 全表精度警告(2026-07-12)
+>
+> **本文件里所有用 `redis-benchmark --threads` 测出来的数字,都被量化到
+> 250ms 的格子上,并且被系统性低报。** 机制:`--threads` 下 redis-benchmark
+> 的唯一出口是它自己 250ms 的 `showThroughput` 定时器
+> (`redis-benchmark.c:52 SHOW_THROUGHPUT_INTERVAL`、`:1653 aeStop`;不加
+> `--threads` 时是 `:425` 在 `clientDone` 里立即停),于是 `totlatency`
+> (`:970/:973`)被**向上取整**到 250ms 的整数倍。
+>
+> 自己验:把任一 arena 读数换算成耗时(`N / rps`,N=8M):
+> GET 6,389,776 → **1.2520 s**;SET 5,326,232 → **1.5020 s**;
+> HSET 3,998,001 → **2.0010 s**;LPUSH 3,196,164 → **2.5030 s**;
+> ZADD 2,666,667 → **3.0000 s**;valkey GET 2,131,628 → **3.7530 s**;
+> valkey SET 1,598,082 → **5.0060 s**。**每一个都是 250ms 的整数倍。**
+> 这就是为什么 GET 和 SET 读数逐位相同、INCR 和 SADD 读数逐位相同 ——
+> 它们落在同一个格子里,不是巧合,也不是抄错。
+>
+> arena 口径(elapsed ≈ 1.25 s)**一格 = 20%**;perfgate legacy 口径
+> (≈ 3.5 s)**一格 = 7%**。
+>
+> **仍然成立的**:每个结论的**方向**。kevy 和 valkey 在每个面上都隔着三到五
+> 个格子,250ms 的取整填不平 3× 的差距。**死掉的是精度** —— "3.00×"、
+> "±2.8k"、"−18.7%" 这些小数点没有意义。
+>
+> `bench/perfgate.sh` 与 `bench/arena.sh` 已改为**从服务端自己的命令计数器
+> 上、在稳态窗口里读吞吐**(两个引擎的 `INFO total_commands_processed` 同义,
+> 竞品对比依然成立)。**下面的表在用新测法重跑之前,只应被当作"方向正确、
+> 精度不可信"来读。** 详见
+> `PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`。
+
 **状态:v3.8.0 定稿(2026-07-05)**。复测节奏:每个 release 前全矩阵
 重跑;对标物升级(valkey / redis-stack 新 GA)= gap 表重测。
 裸面 perfgate ratchet 的盒级环境阻塞档案见
@@ -114,7 +144,10 @@ arena 同协议 ×3 轮独立 fresh instance(每轮 median-of-5)收口:
 | 2 | **3,196,164** | ±159k |
 | 3 | 2,906,977 | ±159k |
 
-**判定:非回归,instance 级双峰,观察项关闭。** 同一 binary 三轮
+**判定:非回归,观察项关闭。**(⚠️ 2026-07-12 更正:结论对,**理由错**。
+所谓"instance 级双峰"是 redis-benchmark 的 250ms 计时量化 —— 2.91M→2.7530s、
+3.20M→2.5030s,相邻两格。不是 page placement,不是 IRQ 运气。见
+`PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`。) 同一 binary 三轮
 fresh instance 在 2.91M / 3.20M 两个模式间跳——round 2 逐位复现
 v3.17.0 的 3.20M,round 1/3 复现 v3.18.0 的 2.91M。两个"版本值"
 都是同一 instance 分布的两个峰(page placement / IRQ luck;
@@ -126,7 +159,21 @@ bimodal.md)。v3.17→v3.18 的 -9% 是单轮 arena 各采到一个峰的读数
 legacy_8sh_* ratchet(K-402)——观察项从人工复测改为每 gate 自动化,
 floor = 基线 ×0.92 吸收双峰带宽。
 
-## v4 T4 K-402 — perfgate 扩到 12 角 + baseline 重录;**gate 抓到 v4 SET 写路径真回归**(2026-07-11,lx64)
+## v4 T4 K-402 — ⚠️ **已撤回(2026-07-12):不存在回归,是尺子** (原标题:gate 抓到 v4 SET 写路径真回归)
+
+> **撤回理由**:①`legacy_8sh_*` 角用 `--threads`,而 redis-benchmark 在
+> `--threads` 下的唯一出口是它自己 250ms 的 `showThroughput` 定时器
+> (`redis-benchmark.c:52`/`:1653`),elapsed 被向上取整到 250ms 的整数倍 →
+> 吞吐被**量化成 7% 的格子**。把下表的数换算回耗时:9.21M→3.2560s、
+> 8.56M→3.5070s、7.49M→4.0060s —— 所谓"分布零重叠"就是相邻的两个格子。
+> ②A/B 的顺序是固定的(v3.18.0 的三个 instance **先跑完**再跑 v4),
+> 而盒子在长跑中单调下漂 → 先跑的系统性偏高。这一条同时解释了 pinned 角
+> (它们**不用** `--threads`,不受量化影响)。
+>
+> **2026-07-12 顺序平衡 + 修好尺子后复测**:legacy SET **−0.23%**、
+> legacy GET **+0.98%**、pinned_cluster_set **−1.0%**,全部落在样本方差
+> (3.5–5.6%)之内。**没有回归。** 下面的两段 bisect 是在给一个假象拟合机制。
+> 详见 `PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`。
 
 perfgate 新增 legacy 拓扑 5 角(INCR/SADD/HSET/LPUSH/ZADD,
 redis-benchmark stock -t,同 get/set N=30M ×3 instances);
