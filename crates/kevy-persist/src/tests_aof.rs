@@ -223,8 +223,7 @@ pub(crate) fn temp_aof(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn snapshot_cursor_roundtrip_and_legacy_none() {
-    let dir = std::env::temp_dir().join(format!("kevy-snapcur-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = kevy_tmpdir::unique_dir("aof");
     let mut store = kevy_store::Store::new();
     store.set(b"k", b"v".to_vec(), None, false, false);
 

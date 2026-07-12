@@ -57,6 +57,26 @@ impl<K> KevySet<K> {
 
     /// Borrow the underlying map (gives access to the bucket-addr / prefetch
     /// API).
+    /// An iterator that begins at slot `start` and wraps once around the whole
+    /// table. Take the first element for an arbitrary member in O(1) expected
+    /// time — the pattern SPOP and SRANDMEMBER need, and the one Redis's
+    /// `dictGetRandomKey` uses.
+    ///
+    /// Not perfectly uniform: a member sitting after a long run of empty slots
+    /// is likelier to be picked than one in a dense cluster. Redis has the same
+    /// bias for the same reason, and the contract is "arbitrary", not "uniform".
+    /// What it is NOT is the identical member every single time, which is what
+    /// `iter().next()` gives you.
+    pub fn iter_from_slot(&self, start: usize) -> impl Iterator<Item = &K> {
+        let cap = self.0.capacity();
+        let start = if cap == 0 { 0 } else { start % cap };
+        self.0
+            .iter_from_bucket(start)
+            .chain(self.0.iter().take(start))
+            .map(|(k, ())| k)
+    }
+
+    /// The backing map, for callers that want its bucket addresses (prefetch).
     pub fn as_map(&self) -> &KevyMap<K, ()> {
         &self.0
     }

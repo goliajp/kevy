@@ -204,6 +204,33 @@ impl Store {
         self.map.len()
     }
 
+    /// One arbitrary live key, drawn by probing a random slot and walking
+    /// forward (wrapping once) to the first occupied, unexpired one.
+    ///
+    /// This used to be `collect_keys(None, Some(1))` — the first key in
+    /// hash-bucket order, i.e. the same key every call until it was deleted.
+    /// O(1) expected, same slight run-length bias as Redis's
+    /// `dictGetRandomKey`, and the contract is "arbitrary", not "uniform".
+    pub fn random_key(&mut self) -> Option<Vec<u8>> {
+        let now = now_ns();
+        let start = self.rng.next_u64() as usize;
+        let cap = self.map.capacity();
+        let start = if cap == 0 { 0 } else { start % cap };
+        self.map
+            .iter_from_bucket(start)
+            .chain(self.map.iter().take(start))
+            .find(|(_, e)| !e.is_expired_at(now))
+            .map(|(k, _)| k.to_vec())
+    }
+
+    /// One raw draw from the store's random stream, for callers that need
+    /// randomness OUTSIDE the store — the RANDOMKEY reducer's weighted
+    /// reservoir runs on the origin shard, which must not have to invent its
+    /// own entropy source to pick between candidates.
+    pub fn rand_draw(&mut self) -> u64 {
+        self.rng.next_u64()
+    }
+
     /// Wipe every key in this shard's keyspace (the `FLUSHALL`/`FLUSHDB`
     /// primitive). Resets `used_memory`; `used_memory_peak` is
     /// lifetime-cumulative and intentionally not reset.

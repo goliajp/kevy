@@ -181,17 +181,28 @@ mod tests {
         }
     }
 
-    /// The facts most likely to be "corrected" back toward Redis's numbers by
-    /// someone who did not read our code. They are not typos.
+    /// The table has to tell the truth in BOTH directions: a deviation that
+    /// still exists must stay documented, and one that has been fixed must not
+    /// keep wearing the warning. SPOP and SRANDMEMBER used to sit in the first
+    /// list — until it turned out "documented" had become a substitute for
+    /// "fixed". Writing a bug down is not fixing it.
     #[test]
     fn the_costs_that_differ_from_redis_stay_differing() {
         let zrank = verb_meta("ZRANK").expect("ZRANK");
         assert!(zrank.complexity.contains("O(N)"), "ZRANK is O(N) here: no rank-augmented structure");
         let scan = verb_meta("SCAN").expect("SCAN");
         assert!(scan.compat.contains("not a cursor iterator"), "SCAN sweeps the whole keyspace");
-        let randomkey = verb_meta("RANDOMKEY").expect("RANDOMKEY");
-        assert!(randomkey.compat.contains("NOT random"));
-        let spop = verb_meta("SPOP").expect("SPOP");
-        assert!(spop.compat.contains("NOT random"));
+    }
+
+    /// The deviations we FIXED must not creep back into the table as folklore.
+    #[test]
+    fn the_fixed_deviations_stay_fixed() {
+        for name in ["SPOP", "SRANDMEMBER", "RANDOMKEY"] {
+            let m = verb_meta(name).expect(name);
+            assert_eq!(
+                m.compat, "full",
+                "{name} is genuinely random now; the old NOT-random note must not come back"
+            );
+        }
     }
 }

@@ -437,6 +437,7 @@ dependencies = [
  "kevy-store",
  "kevy-sys",
  "kevy-text",
+ "kevy-tmpdir",
  "kevy-vector",
 ]
 
@@ -472,6 +473,7 @@ dependencies = [
  "kevy-persist",
  "kevy-resp",
  "kevy-resp-client",
+ "kevy-tmpdir",
 ]
 
 [[package]]
@@ -595,6 +597,7 @@ version = "3.18.0"
 dependencies = [
  "kevy-resp",
  "kevy-store",
+ "kevy-tmpdir",
 ]
 
 [[package]]
@@ -671,8 +674,15 @@ name = "kevy-text"
 version = "3.18.0"
 
 [[package]]
+name = "kevy-tmpdir"
+version = "3.18.0"
+
+[[package]]
 name = "kevy-uring"
 version = "3.18.0"
+dependencies = [
+ "kevy-tmpdir",
+]
 
 [[package]]
 name = "kevy-vector"

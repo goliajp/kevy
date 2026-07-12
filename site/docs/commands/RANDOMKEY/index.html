@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RANDOMKEY — kevy command reference</title>
-<meta name="description" content="RANDOMKEY — Return a random key from the keyspace. O(1) expected">
+<meta name="description" content="RANDOMKEY — Return a random key from the keyspace. O(1) expected — each shard probes a random slot, and the origin folds the candidates through a reservoir weighted by shard key counts, so every key is equally likely">
 <link rel="stylesheet" href="../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../assets/docs.css">
 <script>
@@ -57,15 +57,15 @@
 
     <section>
       <h2>Complexity</h2>
-      <p class="cx-body"><code>O(1) expected</code></p>
+      <p class="cx-body"><code>O(1) expected — each shard probes a random slot, and the origin folds the candidates through a reservoir weighted by shard key counts, so every key is equally likely</code></p>
       <p class="engine-note">Complexity and compatibility are read out of kevy's implementation, not copied from Redis's reference. Several genuinely differ.</p>
     </section>
 
     <section>
       <h2>Redis compatibility</h2>
-      <div class="call loss">
-        <span class="h">Differs</span>
-        <p>the result is NOT random — each shard returns the first live key in hash-bucket order and the reducer takes the first shard's, so a fixed keyspace returns the same key every time; do not use it for sampling</p>
+      <div class="call note">
+        <span class="h">Compatible</span>
+        <p>Behaves as Redis does.</p>
       </div>
     </section>
 

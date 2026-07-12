@@ -106,13 +106,7 @@ mod tests {
     use super::*;
 
     fn tmp() -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "kevy-feedmeta-{}-{:?}",
-            std::process::id(),
-            std::time::Instant::now()
-        ));
-        fs::create_dir_all(&d).unwrap();
-        d
+        kevy_tmpdir::unique_dir("feedmeta")
     }
 
     #[test]

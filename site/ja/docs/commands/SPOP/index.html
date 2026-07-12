@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SPOP — kevy コマンドリファレンス</title>
-<meta name="description" content="SPOP — セットからメンバーを一つ以上ランダムに取り出し、削除する。 O(count)(期待値)。ただし N 個のメンバーを N 回の呼び出しで空にすると、バケット走査が毎回先頭からやり直しになるため、全体では O(N^2) になる。">
+<meta name="description" content="SPOP — 集合からランダムに一つ以上のメンバーを取り除いて返す。 O(count) 期待値 —— 各メンバーはランダムなスロットから探索し、最初に見つかったものを取る。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -44,7 +44,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>集合</span> <span>/</span> <b>SPOP</b></nav>
 
     <h1 class="cmd">SPOP</h1>
-    <p class="lede">セットからメンバーを一つ以上ランダムに取り出し、削除する。</p>
+    <p class="lede">集合からランダムに一つ以上のメンバーを取り除いて返す。</p>
 
     <pre class="syntax"><code>SPOP key [count]</code></pre>
 
@@ -57,15 +57,15 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(count)(期待値)。ただし N 個のメンバーを N 回の呼び出しで空にすると、バケット走査が毎回先頭からやり直しになるため、全体では O(N^2) になる。</code></p>
+      <p class="cx-body"><code>O(count) 期待値 —— 各メンバーはランダムなスロットから探索し、最初に見つかったものを取る。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
     <section>
       <h2>Redis との互換性</h2>
-      <div class="call loss">
-        <span class="h">差異あり</span>
-        <p>差異あり。返るメンバーはランダムではない。SPOP は hash バケット順で先頭にあるメンバーから返し、seed も固定の定数である。したがって同じセットに対する SPOP の繰り返しは完全に決定的になる。</p>
+      <div class="call note">
+        <span class="h">互換</span>
+        <p>互換</p>
       </div>
     </section>
 

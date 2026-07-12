@@ -71,6 +71,13 @@ pub(crate) enum Agg {
         shape: KeyShape,
         acc: Vec<Vec<u8>>,
     },
+    /// RANDOMKEY's weighted reservoir. Each shard's candidate replaces the held
+    /// one with probability `live / seen`, so a key's overall chance is exactly
+    /// `1 / total_keys` regardless of which shard holds it.
+    RandomKey {
+        key: Option<Vec<u8>>,
+        seen: u64,
+    },
     /// `WATCH` fan-out accumulator: each owning shard returns its
     /// `(key, version)` pairs via [`Part::WatchVersions`]; the origin
     /// shard appends them all and, when the last fan-out reply arrives,

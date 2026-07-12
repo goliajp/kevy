@@ -55,12 +55,12 @@ IDX.QUERY  idx:city EQ osaka
 
 # vectors, in the same engine, over the same keys
 IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann DIM 768 DISTANCE cosine
-IDX.QUERY  idx:sem KNN &quot;&lt;vector&gt;&quot; LIMIT 10</code></pre></li><li><h3>監査できるバイナリが、ひとつ</h3><p>サードパーティ依存はゼロ。crate は 33 個、作者は 1 人、サプライチェーンは半日で読み切れます。規制のあるビルド、vendoring するビルド、顧客のマシンに配るものにとって、これは些細な利点ではありません。</p></li></ol>
+IDX.QUERY  idx:sem KNN &quot;&lt;vector&gt;&quot; LIMIT 10</code></pre></li><li><h3>すでに使っている操作が、そのまま速くなる</h3><p>同じマシンで Redis 8 に対して、GET は 1.4 倍、SET は 2.7 倍、INCR は 1.8 倍です。ただし、当てにする前に表の全体を読んでください——LPUSH と ZADD は 12% と 10% しか上回っておらず、リストやソート済みセットがホットパスなら、これは移る理由になりません。</p></li></ol>
 </section>
 <section class="band">
   <div class="call loss">
     <span class="h">Redis を離れることで失うもの</span>
-    <p><b>クラスタはありません。</b>レプリカはコピーであって、シャードではありません。<b>AUTH も TLS もありません。</b>そして<b>いくつかのコマンドは挙動が違います</b>——<code>SCAN</code> はカーソルによる反復ではなく(1 回の呼び出しですべてを返し、カーソルは 0 になります)、<code>ZRANK</code> は O(N)、<code>SPOP</code> と <code>SRANDMEMBER</code> はランダムではなく、シャードをまたぐ <code>RENAME</code> は原子的ではありません。どれもバグではなく、すべてコマンドごとに文書化してあります。移ると決めたあとではなく、決める前に読んでください——<a href="../../ja/docs/commands/">各コマンドの本当のコストと、本当の差異</a>。</p>
+    <p><b>クラスタはありません。</b>レプリカはコピーであって、シャードではありません。<b>AUTH も TLS もありません。</b>そして<b>いくつかのコマンドは挙動が違います</b>——<code>SCAN</code> はカーソルによる反復ではなく(1 回の呼び出しですべてを返し、カーソルは 0 になります)、<code>ZRANK</code> は O(N) で、シャードをまたぐ <code>RENAME</code> は原子的ではありません。どれもバグではなく、すべてコマンドごとに文書化してあります。移ると決めたあとではなく、決める前に読んでください——<a href="../../ja/docs/commands/">各コマンドの本当のコストと、本当の差異</a>。</p>
   </div>
 </section>
 <section class="band">
@@ -85,7 +85,7 @@ kevy-cli import -p 6380 --resume dump.resp</code></pre></figure>
 </section>
 <section class="band prose"><h2>リレーショナルデータベースから移る</h2><p><b>データベースを移してはいけません。</b>移すのは、そもそもデータベースの問題ではなかった部分です。</p><p>セッション。レート制限。フィーチャーフラグ。ジョブキュー。すべてのリクエストが読み、誰も結合しないホットな行。たいていのアプリケーションでこれらは Postgres の中にあり、叩かれ続けているのもそこです。リレーショナルデータベースがそれらを苦手だからではありません。それらが、そもそも問い合わせではなかったからです。ただの参照です。キーは、もう分かっています。</p><p><b>Postgres には、他に並ぶもののない仕事を残してください</b>——結合、アドホックなクエリ、分析、無関係な行にまたがる本物の分離レベルを伴うトランザクション。kevy は配信の経路を引き受け、データベースに夜を返します。</p><p><b>そして、問い合わせの一部も移せます。</b>セカンダリインデックスとマテリアライズドビューがあれば、絞り込んだ一覧や集計は、クエリになる必要がありません。書き込みの側が、答えを用意しておきます。ほとんどのアプリケーションが ORM に実際に求めているのは、その部分です。</p></section>
 <section class="band">
-  <div class="sec-h"><h2>どの部分を移すべきか</h2><p class="sec-lede">ワークロードごとに、正直に書きます。最後の 3 行は、よく間違われるところです。</p></div>
+  <div class="sec-h"><h2>どの部分を移すべきか</h2><p class="sec-lede">ワークロードごとに。赤い 3 行が、よく間違われるところです。</p></div>
   <div class="tbl"><table><thead><tr><th>ワークロード</th><th>移すべきか</th><th>理由</th></tr></thead><tbody><tr><td>セッション、トークン</td><td class="win">はい</td><td class="num">TTL つきの、キーによる参照です。データベースは仕事としてではなく、厚意でやってくれていました。</td></tr><tr><td>レート制限、カウンタ</td><td class="win">はい</td><td class="num">期限つきの INCR は原子的で O(1) です。SQL では、最もホットな行に対する行ロックになります。</td></tr><tr><td>ジョブキュー</td><td class="win">はい</td><td class="num">リストとストリーム。コンシューマグループと、メッセージごとの確認応答があります。キュー用のテーブルは、手数の増えたロックの慣習にすぎません。</td></tr><tr><td>フィーチャーフラグ、設定</td><td class="win">はい</td><td class="num">絶えず読まれ、めったに書かれず、結合されることはありません。</td></tr><tr><td>絞り込んだ一覧(状態や所有者で)</td><td class="win">多くの場合</td><td class="num">セカンダリインデックスが、クエリプランナなしで答えます。<a href="../../ja/use/app-store/">読みを捌く</a>を参照してください。</td></tr><tr><td>集計(件数や合計)</td><td class="win">多くの場合</td><td class="num">マテリアライズドビューが書き込みの側で最新に保つので、読むたびに計算し直す必要がありません。</td></tr><tr><td>複数テーブルにまたがる結合</td><td class="loss">移すな</td><td class="num">kevy に結合はなく、今後も持ちません。それは Postgres の仕事です。</td></tr><tr><td>分析、アドホックなクエリ</td><td class="loss">移すな</td><td class="num">クエリプランナもオプティマイザもありません。試さないでください。</td></tr><tr><td>無関係な行にまたがるトランザクション</td><td class="loss">移すな</td><td class="num">MULTI はシャード単位であって、全体ではありません。キースペース全体で直列化可能な分離が要るなら、必要なのはデータベースです。</td></tr></tbody></table></div>
   <p class="tbl-note">赤い 3 行は、やることリストではありません。拒否です——kevy は結合もオプティマイザも持ちません。どちらも中途半端にやるくらいなら、やらないほうがましだからです。<a href="../../ja/docs/rds-workloads/">リレーショナルなワークロードのすべてと、ここでの実際のコスト</a>を書いてあります。正直な答えが「Postgres に置いたままにしてください」になるものも含めて。</p>
 </section>

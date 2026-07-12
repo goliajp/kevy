@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RANDOMKEY — kevy 命令参考</title>
-<meta name="description" content="RANDOMKEY — 从键空间里返回一个随机 key。 期望 O(1)。">
+<meta name="description" content="RANDOMKEY — 从键空间随机返回一个键。 O(1) 期望 —— 每个 shard 探一个随机槽位、原点按各 shard 的键数做加权水库抽样、所以每个键的概率严格相等。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -44,7 +44,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>键空间扫描</span> <span>/</span> <b>RANDOMKEY</b></nav>
 
     <h1 class="cmd">RANDOMKEY</h1>
-    <p class="lede">从键空间里返回一个随机 key。</p>
+    <p class="lede">从键空间随机返回一个键。</p>
 
     <pre class="syntax"><code>RANDOMKEY</code></pre>
 
@@ -57,15 +57,15 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>期望 O(1)。</code></p>
+      <p class="cx-body"><code>O(1) 期望 —— 每个 shard 探一个随机槽位、原点按各 shard 的键数做加权水库抽样、所以每个键的概率严格相等。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的，不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误，但不是。</p>
     </section>
 
     <section>
       <h2>与 Redis 的兼容性</h2>
-      <div class="call loss">
-        <span class="h">有差异</span>
-        <p>有差异：结果并不随机 —— 每个 shard 按 hash 桶顺序返回自己遇到的第一个存活 key，归约时又只取第一个 shard 的结果。所以只要键空间不变，每次拿到的都是同一个 key。不要拿它做抽样。</p>
+      <div class="call note">
+        <span class="h">兼容</span>
+        <p>兼容</p>
       </div>
     </section>
 

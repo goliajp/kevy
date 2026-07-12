@@ -17,3 +17,6 @@ categories = ["os::linux-apis", "asynchronous", "network-programming", "external
 workspace = true
 
 [dependencies]
+
+[dev-dependencies]
+kevy-tmpdir = { path = "../kevy-tmpdir", version = "3.18.0" }
