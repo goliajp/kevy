@@ -281,3 +281,16 @@ distributions disjoint"、2026-07-03"8.55M attractor")+ 一个 ship blocker +
 
 **See also**: R7(variance band 是工程问题不是物理问题 —— 本条是它最贵的一个实例)、
 R12(A/B 的对照组与顺序)、R3(decomposition 是发现不是确认)。
+
+**R13 附则 —— workaround 必须落到 gate 里,否则等于不存在**:
+
+2026-07-12 的翻案里最贵的一条:`bench/kevy_ab.sh` 第 4 行**早就写着**
+"the final 'requests per second' line is **quantized under `--threads` and
+unreliable**" —— 有人发现了,在一个一次性 A/B 脚本里绕开了,**然后就停在那里**。
+没进 `perfgate.sh`,没进 `arena.sh`,没进 `loopback_c50.sh`,没进 ledger。
+于是门禁又读了几周被量化的读数,发布的表一直印着桶,三轮调查追着一个
+**仓库里已经点过名**的鬼。
+
+**规则**:任何"某个测量姿势不可信"的发现,**当轮必须落进所有产出该类数字的
+gate / 脚本 / 文档**,不允许只留在一个一次性脚本的注释里。
+一次性脚本里的 workaround = 下一个人付全价。
