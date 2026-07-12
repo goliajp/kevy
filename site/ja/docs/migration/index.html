@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>移行——プレイブックとツールチェーン — kevy</title>
+<meta name="description" content="2部構成です。プレイブック：稼働中のRDSワークロードを、検証クランプとロールバックポイントを備えたフェーズ単位でkevyへ移す方法。ツールチェーン（kevy-cli）：データをkevyへ、kevyから、そしてkevyサーバー間で動かし——移動が忠実だったことを証明するコマンド群。モデリングの疑問（「うちのJOINは何になるの？」）はrds-workload">
+<link rel="stylesheet" href="../../../assets/kevy.css">
+<link rel="stylesheet" href="../../../assets/docs.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../ja/docs/" aria-current="page">ドキュメント</a>
+      <a href="../../../ja/docs/commands/">コマンド</a>
+      <a href="../../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../../ja/play/">Playground</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language"><a href="../../../docs/migration/">EN</a><a href="../../../zh/docs/migration/">中文</a><a href="../../../ja/docs/migration/" aria-current="page">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell">
+  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/migration/" aria-current="page">移行——プレイブックとツールチェーン</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">184 コマンド全て</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>移行——プレイブックとツールチェーン</h1></div>
+<p>2部構成です。<b>プレイブック</b>：稼働中のRDSワークロードを、検証クランプとロールバックポイントを備えたフェーズ単位でkevyへ移す方法。<b>ツールチェーン</b>（<code>kevy-cli</code>）：データをkevyへ、kevyから、そしてkevyサーバー間で動かし——移動が忠実だったことを証明するコマンド群。モデリングの疑問（「うちの<code>JOIN</code>は何になるの？」）は<a href="../../../docs/rds-workloads/">rds-workloads.md</a>へ、実行可能なパターンは<a href="../cookbook/">クックブック</a>へ。</p>
+<h2 id="フェーズ制プレイブック">フェーズ制プレイブック</h2>
+<p>7つのフェーズがあります。要になる性質は、<b>書き込みカットオーバーまでのすべてのフェーズで、真実の源は依然としてRDSであり、ロールバックは「アプリの向き先を戻す」ことである</b>——決して「データを逆移行する」ではない、という点です。フェーズを飛ばさないでください。各フェーズの検証クランプこそが、次のフェーズを退屈なものにしてくれます。</p>
+<h3 id="フェーズ0棚卸し">フェーズ0——棚卸し</h3>
+<p>すべてのテーブルと、ワークロードが実際に実行するすべてのクエリ形を列挙します（真実はORMのクエリログや<code>pg_stat_statements</code>であって、スキーマではありません）。各項目を<a href="../../../docs/rds-workloads/">rds-workloadsマトリクス</a>に照らして分類します。大半の行は機械的に対応づきます。拒否された構文（ホットパスのN-way join、<code>HAVING</code>、深い<code>OFFSET</code>ページネーション、アドホックなレポーティングSQL）に当たるものにフラグを立ててください。</p>
+<ul><li><b>アクション：</b>書き出したアクセスパス表。クエリ→マトリクス行→kevyの形（インデックス／ビュー／集計／verb）。</li><li><b>クランプ：</b>すべてのホットパスクエリが、<b>データを動かす前に</b>対応する形を持っていること。拒否された構文は、カットオーバー時ではなく今、アプリ側の再設計判断を下します。アドホック分析はkevyに乗せず、ウェアハウスへのエクスポート（クックブックのレシピ14）を計画してください。</li><li><b>ロールバック：</b>まだ何も動いていません。</li></ul>
+<h3 id="フェーズ1スキーマ対応づけ">フェーズ1——スキーマ対応づけ</h3>
+<p>棚卸しを宣言スクリプトへ変換します。プレフィックス、フィールドレイアウト、型、そしてすべての<code>IDX.CREATE</code>／<code>VIEW.CREATE</code>行です。マトリクスの型規則——DECIMALは最小単位の整数へ、DATETIMEはエポックi64へ、NULLはフィールド不在へ——を今適用してください。これらはバックフィル後に安くはやり直せない、書き込みフォーマットの決定だからです。</p>
+<ul><li><b>アクション：</b>宣言スクリプト。DDL履歴の隣でリポジトリにチェックインします。</li><li><b>クランプ：</b>代表的な数百行を入れた使い捨てkevyに対してスクリプトを実行し、<code>IDX.VERIFY</code>が<code>coerce_failures = 0</code>と想定どおりの<code>duplicates</code>を示すこと。<code>VIEW.VERIFY</code>に順序除外がないこと。ページングクエリがSQLの返したものと同じものを返すこと。</li><li><b>ロールバック：</b>まだ何も動いていません。</li></ul>
+<h3 id="フェーズ2変更キャプチャ二重書き込みウィンドウが開く">フェーズ2——変更キャプチャ（二重書き込みウィンドウが開く）</h3>
+<p>バックフィルのスナップショットより<b>前に</b>RDSへの書き込みのキャプチャを始めます。何も隙間に落ちないようにするためです。ルートは2つあります。</p>
+<ul><li><b>アプリ二重書き込み</b>——アプリはRDS（依然として真実）へ書き、各書き込みをkevyへミラーします。シンプルで新規インフラ不要。ただしミラーは書き込みパスに相乗りします（失敗カウンタ付きのfire-and-forgetにしてください——落ちたミラー書き込みは再バックフィルで修復するものであって、RDSのコミットをブロックして守るものではありません）。</li><li><b>CDCプル</b>——binlog／論理レプリケーションのコンシューマ（Debeziumか自作）が行イベントをkevy書き込みへ変換します。アプリから疎結合、行ごとに順序保証、binlog位置からリプレイ可能。対価はコネクタのインフラです。すべての書き手に触れられないとき、書き手が多いときは、こちらを選んでください。</li></ul>
+<p>どちらのルートでも、kevyへの書き込みは<b>冪等な再構築形</b>（フル行の<code>HSET</code>、コレクションは<code>DEL</code>＋再追加）でなければなりません。そうしておけばバックフィルとの重なりは無害です。</p>
+<ul><li><b>クランプ：</b>キャプチャパスの鮮度ラグ計測（イベントのタイムスタンプ→kevy適用）と、プレフィックスごとの行数ドリフト検査（<code>PREFIX.STATS</code>対<code>SELECT COUNT(*)</code>）が定数へ収束すること。</li><li><b>ロールバック：</b>キャプチャを止めるだけ。RDSは何も気づいていません。</li></ul>
+<h3 id="フェーズ3バックフィル">フェーズ3——バックフィル</h3>
+<p>既知のキャプチャ位置でRDSのスナップショットを取り、RESPコマンドファイルへエクスポートして、バルクロードします。</p>
+<figure class="code"><pre><code># generate rebuild frames from your RDS export (one HSET per row):
+#   HSET user:42 name ada email ada@example.com …
+kevy-cli import -p 6004 --strict rows.resp        # ≥200k cmd/s</code></pre></figure>
+<p><b>インポートが先、インデックス宣言は後</b>（インデックス後回しの規則）。バックフィルは既存の行から各インデックスをバルク速度で構築します——インポートする行ごとに書き込みフックのコストを払うより桁違いに安上がりです。その後フェーズ1の宣言スクリプトを実行し、<code>IDX.LIST</code>が<code>state=ready</code>を報告するまで待ちます（詳細は<a href="#インデックス済みキー空間へのロード">インデックス済みキー空間へのロード</a>）。</p>
+<ul><li><b>クランプ：</b><code>PREFIX.STATS</code>のカウントがテーブルごとに<code>SELECT COUNT(*)</code>と一致すること。<code>IDX.VERIFY</code>の型強制／重複カウントが想定どおりのゼロであること。サンプリングによるダイジェスト検査——数百行をRDSから再計算し、<code>HGETALL</code>とバイト比較——が通ること。中間kevyを経由する場合は<code>kevy-cli diff</code>がそのホップを証明します。</li><li><b>ロールバック：</b><code>kevy-cli delete-prefix</code>（または<code>FLUSHALL</code>）してやり直し。真実はまだRDSです。</li></ul>
+<h3 id="フェーズ4読み取りカットオーバーエンドポイント単位のカナリア">フェーズ4——読み取りカットオーバー（エンドポイント単位のカナリア）</h3>
+<p>読み取りはビッグバンではなくエンドポイント単位で切り替えます。各エンドポイントに必要な一貫性の段を選びます（<a href="../../../docs/availability/">availability.md</a>）。閲覧／一覧系のエンドポイントは段0（非同期レプリカ読み取り）に乗せ、「今書いたものを見せて」のフローは<code>REPL.TOKEN</code>／<code>REPL.WAIT</code>（段1）を使うかプライマリを読みます。単一ノードのkevyなら考えるべき梯子はありません——すべての読み取りがプライマリです。</p>
+<ul><li><b>アクション：</b>まずシャドーリード（RDSから応答しつつkevyも読んで、比較して不一致を数える）、その後トラフィック比率を移します。</li><li><b>クランプ：</b>フルの交通サイクル（24時間以上）にわたって不一致カウンタがゼロ。サービングレイテンシがSLOの内側。</li><li><b>ロールバック：</b>読み取りの向き先をRDSへ戻す——即時、データは無傷です。</li></ul>
+<h3 id="フェーズ5書き込みカットオーバーロールバックウィンドウ">フェーズ5——書き込みカットオーバー＋ロールバックウィンドウ</h3>
+<p>書き手をkevyへ切り替え、<b>同じデプロイで</b>逆方向ミラーを開始します。kevyのフィードをSQLとしてRDSへ流し戻すCDCコンシューマです（<code>FEED.READ</code>→<code>UPDATE</code>/<code>INSERT</code>、クックブックのレシピ13）。RDSはこれで、kevyを数秒遅れで追いかけるウォームスタンバイになります。ロールバック計画は「アプリの向き先を戻す」であって、「逆移行」ではありません。</p>
+<p>切り替えの前に、シーケンスキーをRDSの最高水位より<b>上に</b>シードしてください（新しいキーに<code>INCRBY seq:order &lt;rds_max_id&gt;</code>）——古典的なauto-increment衝突が、フェーズ5のいちばん鋭い刃です。</p>
+<ul><li><b>クランプ：</b>kevyとミラー先RDSの間での<code>kevy-cli diff</code>式サンプリング（プレフィックスをダイジェストし、行サンプルを比較）。それに、すでにアラートを張っているビジネスメトリクス。</li><li><b>ロールバック：</b>ミラーウィンドウの内側であれば、アプリの向き先をRDSへ戻します（計測済みのミラーラグは受け入れます）。ミラーコンシューマは<code>-FEEDRESYNC</code>（kevyのクラッシュ再起動はフィード世代を進めます）を処理できなければなりません。影響を受けたプレフィックスをRDSへ再構築してから再開します——at-least-once＋冪等SQLがこれを安全にします。</li></ul>
+<h3 id="フェーズ6退役">フェーズ6——退役</h3>
+<p>確信が固まったら（数週間のクリーンなdiffと、一度は実施したフェイルオーバー訓練）、逆方向ミラーを止め、アーカイブ用に最後のRDSダンプを取り、運用の物語を完全にkevyへ移します。スナップショット＋AOF（＋フィードカーソルのリカバリポイント）は<a href="../persistence/">persistence.md</a>、レプリカ／フェイルオーバー態勢は<a href="../../../docs/availability/">availability.md</a>の通りです。</p>
+<ul><li><b>クランプ：</b>kevy自身の成果物（スナップショット＋フィードリプレイ）からのリストア訓練を、RDSを止める<b>前に</b>行うこと——後ではいけません。</li></ul>
+<h2 id="よくある落とし穴">よくある落とし穴</h2>
+<ul><li><b>2つの書き込みパスを通るDECIMAL。</b>二重書き込みパスが<code>"10.00"</code>を格納し、バックフィルが<code>"1000"</code>（最小単位）を格納すると、すべてのダイジェスト検査が失敗し——もっと悪いことに——読み取り同士が食い違います。フェーズ1でフォーマットを固定し、両方のパスに1つのシリアライザを共有させてください。</li><li><b>auto-increment衝突。</b><code>seq:*</code>キーをRDSの最大idより上にシードし忘れると、既存のidを配ってしまいます。フェーズ5でシードし、書き込みを開く前に<code>GET seq:order</code>1回で確認します。</li><li><b>ホットキー。</b>kevyのキーはちょうど1つのシャードに住みます。全リクエストが触っていたRDSの行は、単一シャードの直列化ポイントになります。ホットなカウンタは分割し（ユーザー単位キー、ブロック割り当てシーケンス）、読み取り側の合算は<code>KIND agg</code>にやらせてください。</li><li><b>大きな値。</b>数百KB級の行は動きはしますが、あらゆるホップ（エクスポートフレーム、レプリケーション、フィードフレーム）を重くし、サービングコストをネットワークパスへ移します。ホットな行はリーンに保ち、コールドなブロブはポインタフィールド付きでオブジェクトストレージへ、めったに読まないカラムは兄弟キーへ分割します。</li><li><b>TTLの意味論。</b>非正のTTLを渡した<code>EXPIRE</code>はキーを即座に削除します（Redisの契約）。エクスポートされたTTLは絶対時刻の<code>PEXPIREAT</code>期限として運ばれるので、移行が遅くても寿命は延びません。ダイジェストはTTLを無視します（値のみ）——TTLの正しさは<code>diff</code>ではなく<code>PTTL</code>のサンプリングで検査します。</li><li><b><code>KEYS</code>/<code>SCAN</code>の癖。</b><code>SELECT COUNT(*)</code>をやっていた運用ワンライナーは<code>PREFIX.STATS</code>か<code>IDX.COUNT</code>を使うべきです——<code>KEYS pattern</code>は全キー空間のギャザー、<code>SCAN MATCH</code>は全域のインクリメンタルウォークであり、どちらもサービングパスではありません（大きなキー空間では、運用パスですらほぼありません）。</li><li><b>インデックス構築と読み取りのレース。</b>宣言直後、クエリは<code>-INDEXBUILDING</code>を返します。カットオーバーウィンドウ内のクライアントにはポーリング＆リトライのループ（下記）が必要です。さもなければ、まだ誰も見ていないフェーズ3で宣言してください。</li></ul>
+<hr>
+<h1 id="ツールチェーンkevy-cli">ツールチェーン（<code>kevy-cli</code>）</h1>
+<figure class="code"><pre><code>kevy-cli export  -p 6379 --prefix user: dump.resp
+kevy-cli import  -p 6004 --strict dump.resp        # ≥200k cmd/s
+kevy-cli import  -p 6004 --resume dump.resp        # after interruption
+kevy-cli digest  -p 6004 user:
+kevy-cli diff    hostA:6379 hostB:6004 user: order:
+kevy-cli copy-prefix   -p 6004 --rate 5000 user: staging:user:
+kevy-cli delete-prefix -p 6004 --rate 5000 --dry-run tmp:
+kevy-cli inspect -p 6004 user:</code></pre></figure>
+<h2 id="ワイヤフォーマット">ワイヤフォーマット</h2>
+<p><code>export</code>は再構築フレームのプレーンな<b>RESPコマンドストリーム</b>を書き出します——<code>DEL</code>＋<code>SET</code>/<code>HSET</code>/<code>RPUSH</code>/<code>SADD</code>/<code>ZADD</code>、TTLには絶対時刻の<code>PEXPIREAT</code>です。このためファイルは<code>redis-cli --pipe</code>と双方向に互換です。kevyのエクスポートはRedisに食わせられますし、どんなRESPコマンドファイルも<code>kevy-cli import</code>に食わせられます——RDSのダンプから自作したもの（プレイブックのフェーズ3）を含めて。</p>
+<p>キーごとに先頭へ置かれる<code>DEL</code>が、リプレイを<b>ゼロからの再構築</b>にします——あらゆる型に対して本物の冪等です（RPUSHのような追記verbは、そうしないと再インポートでリスト内容が倍になります）。</p>
+<h2 id="一貫性と再開可能性">一貫性と再開可能性</h2>
+<ul><li>エクスポートはSCANウォーク下でのキー単位のポイントインタイムです（SCANクラスの保証。エクスポート中に書かれたキーはどちらの状態でも現れ得て、消えたキーはスキップされます）。グローバルスナップショットはありません——設計上の選択です。</li><li>インポートはバッチごとに512コマンドをパイプラインし、バッチごとにバイトオフセットを<code>&lt;file&gt;.progress</code>へfsyncします。<code>--resume</code>はそこから再開します。フレームは再構築形なので、重なりは無害です。<code>--strict</code>は最初のサーバーエラーで中止します。指定がなければエラーは数えられて報告されます。</li><li>インポート中の<code>kill -9</code>はゲートで検証済みのシナリオです。再開は同じ<code>PREFIX.DIGEST</code>へ収束します。</li></ul>
+<h2 id="検証">検証</h2>
+<p><code>PREFIX.DIGEST &lt;prefix&gt;</code>（サーバーおよび組み込みの<code>prefix_digest</code>）は<code>[count, hex64]</code>を返します。正準化した行バイトに対する順序非依存のチェックサムです（ハッシュフィールドとセットメンバーはソート、zsetはスコアビット→メンバー順、リストは並び順のまま——リストの順序は同一性そのものです）。シャード数にも挿入順にも影響されないので、トポロジをまたいだ比較ができます。<code>kevy-cli diff A:port B:port prefix…</code>は不一致が1つでもあれば非ゼロで終了します。</p>
+<p>TTLはダイジェストに参加しません（減衰するため）。値は参加します。</p>
+<h2 id="バルク操作">バルク操作</h2>
+<p><code>copy-prefix</code>は読み取り＋再構築フレームで各行を新しいプレフィックスの下へキー替えします（サーバーには意図的にCOPY verbがありません。TTLは絶対時刻の期限として運ばれます）。<code>delete-prefix</code>はSCAN＋UNLINKです。どちらも<code>--rate N</code>（トークンバケット、最初のopから厳密なペーシング）を取り、deleteは<code>--dry-run</code>をサポートします。</p>
+<h2 id="インデックス済みキー空間へのロード">インデックス済みキー空間へのロード</h2>
+<h3 id="インデックスのready待ち">インデックスのready待ち</h3>
+<p><code>IDX.CREATE</code>は即座に戻り、バックグラウンドでバックフィルします。完了までクエリは<code>-INDEXBUILDING</code>を返します。標準の待ち方は<code>IDX.LIST</code>のポーリングです——<code>state</code>カラムが<code>building</code>から<code>ready</code>へ切り替わります。</p>
+<figure class="code"><pre><code>until kevy-cli -p 6004 IDX.LIST | grep -A1 my_index | grep -q ready; do sleep 1; done</code></pre></figure>
+<p>テキストインデックスのバックフィル速度はドキュメントサイズに比例します。小さな行なら100万行あたり約7秒ですが、数KBの本文はおよそ100万件あたり85秒でインデックスされます（実測：メールサイズの本文20万件を17秒）。</p>
+<h3 id="移行全体を1コマンドで検証する">移行全体を1コマンドで検証する</h3>
+<p><code>kevy-cli diff</code>は、2つの稼働中サーバー間で任意個のプレフィックスを1回の呼び出しで比較します——プレフィックスごとのダイジェスト対よりこちらを使ってください。</p>
+<figure class="code"><pre><code>kevy-cli diff 127.0.0.1:6004 127.0.0.1:6005 msg: mbox: usr: tag: session:</code></pre></figure>
+<h3 id="大きなエクスポート">大きなエクスポート</h3>
+<p>ダンプは非圧縮のRESPテキストです（高速で、grep可能）。10GB超のキー空間ではgzipをパイプしてください——フォーマットはストリームフレンドリーです。</p>
+<figure class="code"><pre><code>kevy-cli export -p 6004 /dev/stdout | gzip &gt; dump.kevy.gz
+gunzip -c dump.kevy.gz | kevy-cli import -p 6005 --strict /dev/stdin</code></pre></figure>
+<p>（<code>--resume</code> は <code>.progress</code> サイドカーのために実ファイルが必要です——再開可能性が欲しければ、先にディスクへ展開してください。）</p>
+<p>インデックスの作成はバルクロードの<b>後</b>に。インデックスエンジンのバックフィルは既存データからバルク速度で構築し（実測で100万行あたり約7秒）、書き込みフックの維持コストを100万回払うのに勝ります。スイッチではなく、操作の順序の問題です。</p>
+<figure class="code"><pre><code>kevy-cli import -p 6004 dump.resp
+kevy-cli -p 6004 IDX.CREATE users ON PREFIX user: FIELD age TYPE i64 KIND range</code></pre></figure>
+<p>ゲート：<code>bench/onrampgate.sh</code>（100万行ラウンドトリップ、インポート200k cmd/s以上、kill -9からの再開収束、レート精度±20%）。</p></main>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#フェーズ制プレイブック">フェーズ制プレイブック</a></li><li class="l3"><a href="#フェーズ0棚卸し">フェーズ0——棚卸し</a></li><li class="l3"><a href="#フェーズ1スキーマ対応づけ">フェーズ1——スキーマ対応づけ</a></li><li class="l3"><a href="#フェーズ2変更キャプチャ二重書き込みウィンドウが開く">フェーズ2——変更キャプチャ（二重書き込みウィンドウが開く）</a></li><li class="l3"><a href="#フェーズ3バックフィル">フェーズ3——バックフィル</a></li><li class="l3"><a href="#フェーズ4読み取りカットオーバーエンドポイント単位のカナリア">フェーズ4——読み取りカットオーバー（エンドポイント単位のカナリア）</a></li><li class="l3"><a href="#フェーズ5書き込みカットオーバーロールバックウィンドウ">フェーズ5——書き込みカットオーバー＋ロールバックウィンドウ</a></li><li class="l3"><a href="#フェーズ6退役">フェーズ6——退役</a></li><li class="l2"><a href="#よくある落とし穴">よくある落とし穴</a></li><li class="l2"><a href="#ワイヤフォーマット">ワイヤフォーマット</a></li><li class="l2"><a href="#一貫性と再開可能性">一貫性と再開可能性</a></li><li class="l2"><a href="#検証">検証</a></li><li class="l2"><a href="#バルク操作">バルク操作</a></li><li class="l2"><a href="#インデックス済みキー空間へのロード">インデックス済みキー空間へのロード</a></li><li class="l3"><a href="#インデックスのready待ち">インデックスのready待ち</a></li><li class="l3"><a href="#移行全体を1コマンドで検証する">移行全体を1コマンドで検証する</a></li><li class="l3"><a href="#大きなエクスポート">大きなエクスポート</a></li></ul></aside>
+</div>
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

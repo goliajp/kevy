@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>--accept-shards N — fold sparse connections onto a subset of shards — kevy</title>
+<meta name="description" content="--accept-shards N tells kevy to bind its listeners and arm accept only on shards 0..N, leaving the rest as compute-only workers that still serve cross-shard reads and writes.">
+<link rel="stylesheet" href="../../assets/kevy.css">
+<link rel="stylesheet" href="../../assets/docs.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../docs/" aria-current="page">Docs</a>
+      <a href="../../docs/commands/">Commands</a>
+      <a href="../../benchmarks/">Benchmarks</a>
+      <a href="../../play/">Playground</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language"><a href="../../docs/accept-shards/" aria-current="page">EN</a><a href="../../zh/docs/" class="untranslated" title="not translated yet">中文</a><a href="../../ja/docs/" class="untranslated" title="not translated yet">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell">
+  <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/" aria-current="page">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1><code>--accept-shards N</code> — fold sparse connections onto a subset of shards</h1></div>
+<p><code>--accept-shards N</code> tells kevy to bind its listeners and arm <code>accept</code> only on shards <code>0..N</code>, leaving the rest as compute-only workers that still serve cross-shard reads and writes.</p>
+<h2 id="when-you-need-this">When you need this</h2>
+<p>Each kevy shard runs its own reactor with a busy-poll body. That body amortizes its per-iteration overhead (waker drain, inbox check, accept arm) only when each iteration sees enough productive events. If <code>concurrent_conns / threads</code> drops below roughly one, every shard spends most of its iterations idle, and aggregate throughput falls below what a 1- or 2-thread server would achieve on the same machine.</p>
+<p>Reach for <code>--accept-shards N</code> when:</p>
+<ul><li>The client count is small and known (typical app servers, replication followers, internal services).</li><li>You still want <code>--threads</code> to match the core count for keyspace parallelism on cross-shard hops.</li><li>Benchmarks show that adding shards makes throughput worse, not better.</li></ul>
+<p>Leave it unset when the conn count is high (≥ 1 conn per shard on average), unpredictable, or driven by a thundering-herd client pool — the default of "every shard accepts" is the right answer there.</p>
+<h2 id="core-idea">Core idea</h2>
+<p>A static accept-set is declared at boot. Shards inside the set bind the listener fd and arm an <code>accept</code> SQE; shards outside the set do neither, so the kernel's <code>SO_REUSEPORT</code> group never routes a SYN to them. Off-accept-set shards still own their keyspace slice and still drain the cross-shard inbox, so writes that hash to their slice are dispatched to them, executed, and the reply travels back through the owning conn's shard. The stateless-shard model is intact — every shard runs the same code path; some just happen to own zero connections.</p>
+<figure class="code"><pre><code>                      clients (SO_REUSEPORT group)
+                                 |
+                  +--------------+--------------+
+                  |              |              |
+              shard 0        shard 1        shard 2          &lt;-- accept-set (--accept-shards 3)
+              listen + accept + own conns + own keyspace slice
+                  |              |              |
+                  +------ cross-shard dispatch -------+
+                  |       |       |       |       |       |
+              shard 3  shard 4  shard 5  shard 6  shard 7  shard 8  shard 9   &lt;-- compute-only
+              no listener, no accept; execute dispatched cmds, own keyspace slice</code></pre></figure>
+<h2 id="worked-example">Worked example</h2>
+<p>Ten threads, three accept shards, listening on the standard Redis port:</p>
+<figure class="code"><pre><code class="lang-sh">kevy --threads 10 --accept-shards 3 --port 6379</code></pre></figure>
+<p>Equivalent environment-variable form:</p>
+<figure class="code"><pre><code class="lang-sh">KEVY_THREADS=10 KEVY_ACCEPT_SHARDS=3 kevy --port 6379</code></pre></figure>
+<p>Equivalent TOML (<code>kevy.toml</code>):</p>
+<figure class="code"><pre><code class="lang-toml">[server]
+threads = 10
+accept_shards = 3
+port = 6379</code></pre></figure>
+<p>Precedence is CLI &gt; env &gt; TOML &gt; default. <code>accept_shards</code> must satisfy <code>1 &lt;= accept_shards &lt;= threads</code>; anything outside that range fails fast at startup with exit code 2. The default is unset, which means every shard accepts and the binary behaves byte-identically to a build without the flag.</p>
+<h2 id="sizing-heuristic">Sizing heuristic</h2>
+<p>Rule of thumb: <code>accept_shards ≈ ceil(conns / 20)</code>. The empirical sweet spot is the plateau where each accept shard owns roughly 15–25 connections — dense enough for the busy-poll body to amortize, sparse enough to keep cross-shard dispatch from saturating the inbox channel.</p>
+<div class="tbl"><table><thead><tr><th style="text-align:right">concurrent conns</th><th style="text-align:right">threads</th><th style="text-align:right">recommended <code>--accept-shards</code></th><th style="text-align:right">conns / accept shard</th></tr></thead><tbody><tr><td style="text-align:right">10</td><td style="text-align:right">10</td><td style="text-align:right">1</td><td style="text-align:right">10</td></tr><tr><td style="text-align:right">20</td><td style="text-align:right">10</td><td style="text-align:right">1</td><td style="text-align:right">20</td></tr><tr><td style="text-align:right">50</td><td style="text-align:right">10</td><td style="text-align:right">2 or 3</td><td style="text-align:right">25 or 17</td></tr><tr><td style="text-align:right">100</td><td style="text-align:right">10</td><td style="text-align:right">5</td><td style="text-align:right">20</td></tr><tr><td style="text-align:right">200</td><td style="text-align:right">10</td><td style="text-align:right">10 (default, unset)</td><td style="text-align:right">20</td></tr><tr><td style="text-align:right">50</td><td style="text-align:right">16</td><td style="text-align:right">2 or 3</td><td style="text-align:right">25 or 17</td></tr><tr><td style="text-align:right">100</td><td style="text-align:right">16</td><td style="text-align:right">5 or 6</td><td style="text-align:right">20 or 17</td></tr><tr><td style="text-align:right">500</td><td style="text-align:right">16</td><td style="text-align:right">16 (default, unset)</td><td style="text-align:right">31</td></tr></tbody></table></div>
+<p>For the canonical <code>--threads 10 -c 50 -d 65536 SET</code> workload, <code>--accept-shards 3</code> lifts throughput +10.6% over the default by collapsing 50 conns from ~5/shard onto ~17/shard. The same plateau holds at <code>--accept-shards 2</code> (25 conns/shard).</p>
+<h2 id="trade-offs">Trade-offs</h2>
+<div class="tbl"><table><thead><tr><th>dimension</th><th>accept-set shard</th><th>compute-only shard</th></tr></thead><tbody><tr><td>busy-poll amortization</td><td>high (own conn fan-in drives per-iter work)</td><td>depends on cross-shard inbox rate</td></tr><tr><td>per-conn read / write cost</td><td>local, no hop</td><td>n/a (no owned conns)</td></tr><tr><td>cross-shard dispatch cost</td><td>one channel send per hop</td><td>one channel recv + execute + reply send</td></tr><tr><td>keyspace ownership</td><td>own slice</td><td>own slice</td></tr><tr><td>CPU floor at idle</td><td>accept-armed, blocks in <code>io_uring_enter</code></td><td>spins to <code>URING_SPIN_LIMIT</code> then blocks</td></tr><tr><td>effect on tail latency</td><td>accept SQE adds work to hot loop</td><td>cleaner hot loop; cross-shard hop adds one channel</td></tr></tbody></table></div>
+<p>Concretely, the smaller <code>N</code> you pick, the more each conn benefits from a hot accept-set shard, but the higher the fraction of writes that take a cross-shard hop (<code>(threads - N) / threads</code> of all keys). The plateau at conns/shard ≈ 15–25 is where the busy-poll win pays for the extra hops; well below it the dispatch cost dominates, well above it you're back to the unset default.</p>
+<h2 id="faq">FAQ</h2>
+<p><b>Should I always set <code>--accept-shards</code>?</b> No. If <code>concurrent_conns / threads &gt;= 1</code> on average, the default (every shard accepts) is already optimal — the busy-poll body amortizes without help. <code>--accept-shards</code> is for the sparse-conn regime where adding shards hurts throughput.</p>
+<p><b>How do I pick <code>N</code> for my workload?</b> Start from the rule of thumb <code>ceil(conns / 20)</code>. Sweep <code>N</code> in a perfgate across <code>{ceil(conns/25), ceil(conns/20), ceil(conns/15)}</code> and pick the one that maximises throughput at your target tail-latency budget. Anywhere on the 15–25 conns/shard plateau is a safe production setting.</p>
+<p><b>Does it break replication, AOF, or persistence?</b> No. Off-accept-set shards run the same reactor loop, the same TTL reaper, the same AOF writer, and the same replication ticks as accept-set shards. The only thing they skip is binding the listener and arming <code>accept</code>. Replication followers and snapshot/AOF restore behave identically regardless of <code>N</code>.</p>
+<p><b>How do off-accept-set shards still serve writes?</b> They own their slice of the keyspace. When a client connection on an accept-set shard issues a write whose key hashes to a compute-only shard, the accept-set shard pushes an <code>Inbound::RequestBatch</code> onto the owning shard's inbox; the owning shard executes the command against its own keyspace slice and sends the reply back through the originating shard's reply channel. From the client's perspective the hop is invisible — it sees one reply on one connection, in order.</p>
+<p><b>What if I get the number wrong?</b> The cost of a too-small <code>N</code> is a saturated cross-shard inbox and worse tail latency; the cost of a too-large <code>N</code> is the original sparse-conn inversion. Both are recoverable by restart with a new value — there's no on-disk state tied to the choice.</p></main>
+  <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#when-you-need-this">When you need this</a></li><li class="l2"><a href="#core-idea">Core idea</a></li><li class="l2"><a href="#worked-example">Worked example</a></li><li class="l2"><a href="#sizing-heuristic">Sizing heuristic</a></li><li class="l2"><a href="#trade-offs">Trade-offs</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></aside>
+</div>
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

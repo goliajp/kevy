@@ -55,14 +55,14 @@ dependencies:0</code></pre>""",
                     "title": "A drop-in Redis replacement",
                     "body": "One shard per core, io_uring on Linux, SO_REUSEPORT. Your existing client does not know it changed.",
                     "go": "Run a server",
-                    "href": "docs/server/",
+                    "href": "docs/tuning/",
                 },
                 {
                     "kicker": "Embedded",
                     "title": "A store inside your binary",
                     "body": "No socket, no process, no serialisation. Call it like a HashMap that happens to be durable.",
                     "go": "Embed it",
-                    "href": "docs/embedded/",
+                    "href": "docs/embedded-listener/",
                 },
                 {
                     "kicker": "Browser",
@@ -76,14 +76,14 @@ dependencies:0</code></pre>""",
                     "title": "Cold-start in a worker",
                     "body": "No runtime to warm up, no connection to open. The store is in the isolate with your code.",
                     "go": "Deploy to an edge",
-                    "href": "docs/edge/",
+                    "href": "docs/wasm/",
                 },
                 {
                     "kicker": "Bare metal",
                     "title": "No allocator, no OS",
                     "body": "kevy-store is no_std. It runs on a Cortex-M with a fixed arena and no heap — CI proves it every push.",
                     "go": "See the MCU probe",
-                    "href": "docs/embedded/",
+                    "href": "docs/iot/",
                 },
                 {
                     "kicker": "Agents",
@@ -150,7 +150,7 @@ dependencies:0</code></pre>""",
             "body": (
                 "It is not a cluster. There is no gossip, no slot migration, no "
                 "sentinel — replication and failover exist, sharding across machines "
-                "does not, and it is <a href=\"docs/scope/\">refused on purpose</a>. "
+                "does not, and it is <a href=\"docs/cluster/\">refused on purpose</a>. "
                 "There is no AUTH and no TLS: put it behind something that does those "
                 "properly. Several commands deviate from Redis, some of them "
                 "surprisingly — <code>SCAN</code> is not a cursor iterator, "

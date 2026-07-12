@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lua scripting — kevy</title>
+<meta name="description" content="Server-side Lua scripting in kevy: how to run atomic scripts with EVAL / EVALSHA, what bindings exist, and how to opt into Lua dialects newer than 5.1.">
+<link rel="stylesheet" href="../../assets/kevy.css">
+<link rel="stylesheet" href="../../assets/docs.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../docs/" aria-current="page">Docs</a>
+      <a href="../../docs/commands/">Commands</a>
+      <a href="../../benchmarks/">Benchmarks</a>
+      <a href="../../play/">Playground</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language"><a href="../../docs/lua/" aria-current="page">EN</a><a href="../../zh/docs/" class="untranslated" title="not translated yet">中文</a><a href="../../ja/docs/" class="untranslated" title="not translated yet">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell">
+  <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/" aria-current="page">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>Lua scripting</h1></div>
+<p>Server-side Lua scripting in kevy: how to run atomic scripts with <code>EVAL</code> / <code>EVALSHA</code>, what bindings exist, and how to opt into Lua dialects newer than 5.1.</p>
+<h2 id="when-you-need-this">When you need this</h2>
+<p>Reach for Lua scripting when you want to:</p>
+<ul><li>Execute a small multi-command sequence atomically against one key (check-then-set, conditional counters, distributed locks).</li><li>Push read-modify-write logic that a single command can't express into the server, eliminating round trips.</li><li>Run a script published by an ecosystem library (BullMQ, Sidekiq, Bee Queue, Redlock, sliding-window rate limiters) unchanged.</li></ul>
+<p>For ordinary single-command access or for transactions across many keys with explicit optimistic locking, use plain commands or <code>MULTI</code> / <code>EXEC</code> instead.</p>
+<h2 id="core-idea">Core idea</h2>
+<p><code>EVAL</code> ships a Lua source string to the server, compiles it, and runs it on the shard that owns <code>KEYS[1]</code>. While the script runs, no other command on that shard interleaves with it — the whole script is one atomic unit. Inside the script, <code>redis.call("CMD", ...)</code> dispatches back through the normal command path, <code>KEYS</code> and <code>ARGV</code> give 1-indexed binary-safe access to the inputs, and the script's return value is marshaled to RESP. Loaded scripts are cached by SHA1, so <code>SCRIPT LOAD</code> + <code>EVALSHA</code> lets clients send the hash instead of the body on every call. The Lua runtime is <a href="https://github.com/goliajp/luna">luna</a>, a pure-Rust 5.1 – 5.5 interpreter. Default dialect is Lua 5.1 (matching what every Redis-ecosystem script expects); a one-line shebang opts a single script into 5.2, 5.3, 5.4, or 5.5.</p>
+<h2 id="worked-example-capped-counter">Worked example: capped counter</h2>
+<p>The script bumps a counter by 1, but only if the new value would stay at or below a cap. Returns the new value, or <code>nil</code> if the cap would be exceeded.</p>
+<figure class="code"><pre><code class="lang-lua">-- KEYS[1] = counter key
+-- ARGV[1] = cap (integer)
+local cur = tonumber(redis.call("GET", KEYS[1]) or "0")
+local cap = tonumber(ARGV[1])
+if cur + 1 &gt; cap then
+  return nil
+end
+return redis.call("INCR", KEYS[1])</code></pre></figure>
+<h3 id="inline-via-eval">Inline via <code>EVAL</code></h3>
+<figure class="code"><pre><code class="lang-sh">redis-cli -p 6004 EVAL \
+  "local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
+   local cap = tonumber(ARGV[1])
+   if cur + 1 &gt; cap then return nil end
+   return redis.call('INCR', KEYS[1])" \
+  1 quota:user:42 5
+# (integer) 1
+# … four more calls …
+# (integer) 5
+# next call:
+# (nil)</code></pre></figure>
+<h3 id="cached-via-script-load-evalsha">Cached via <code>SCRIPT LOAD</code> + <code>EVALSHA</code></h3>
+<figure class="code"><pre><code class="lang-sh">SHA=$(redis-cli -p 6004 SCRIPT LOAD \
+  "local cur = tonumber(redis.call('GET', KEYS[1]) or '0')
+   local cap = tonumber(ARGV[1])
+   if cur + 1 &gt; cap then return nil end
+   return redis.call('INCR', KEYS[1])")
+echo "$SHA"
+# e.g. 7c3e0a9b1d4f...
+
+redis-cli -p 6004 EVALSHA "$SHA" 1 quota:user:42 5
+# (integer) 1
+
+redis-cli -p 6004 SCRIPT EXISTS "$SHA"
+# 1) (integer) 1</code></pre></figure>
+<p>If a client sends <code>EVALSHA</code> for a hash the server has never seen (cold start, <code>SCRIPT FLUSH</code>), kevy returns <code>-NOSCRIPT</code> and the client should fall back to <code>EVAL</code>. The script body cached by SHA1 includes any shebang line, so a 5.1 and a 5.4 copy of the same source are distinct cache entries.</p>
+<h3 id="lua-54-dialect-via-shebang">Lua 5.4 dialect via shebang</h3>
+<figure class="code"><pre><code class="lang-lua">#!lua version=5.4
+-- ARGV[1] = max retries before giving up
+local tries = tonumber(ARGV[1])
+local i = 0
+::again::
+i = i + 1
+local ok = redis.call("SET", KEYS[1], "owned", "NX", "PX", 3000)
+if type(ok) == "table" and ok.ok == "OK" then
+  return i
+end
+if i &lt; tries then goto again end
+return redis.error_reply("LOCK_FAILED")</code></pre></figure>
+<p><code>goto</code> / labels and integer-typed arithmetic are 5.3+ features; the shebang routes this one script to the 5.4 VM pool while other scripts keep running on 5.1.</p>
+<h2 id="bindings">Bindings</h2>
+<div class="tbl"><table><thead><tr><th>Symbol</th><th>Behaviour</th></tr></thead><tbody><tr><td><code>redis.call(cmd, ...)</code></td><td>Dispatch a kevy command. RESP errors raise a Lua error and abort the script unless caught with <code>pcall</code>.</td></tr><tr><td><code>redis.pcall(cmd, ...)</code></td><td>Same dispatch, but RESP errors return as <code>{err = "msg"}</code> instead of raising.</td></tr><tr><td><code>redis.error_reply(msg)</code></td><td>Build <code>{err = msg}</code>; when returned from the script it marshals to <code>-msg\r\n</code>.</td></tr><tr><td><code>redis.status_reply(msg)</code></td><td>Build <code>{ok = msg}</code>; marshals to <code>+msg\r\n</code> (simple string).</td></tr><tr><td><code>redis.sha1hex(s)</code></td><td>40-char lowercase hex SHA-1 of the input bytes.</td></tr><tr><td><code>redis.replicate_commands()</code></td><td>No-op. Every script already replicates atomically as a unit.</td></tr><tr><td><code>KEYS</code></td><td>1-indexed table of <code>numkeys</code> byte strings declared in the <code>EVAL</code> call. Binary-safe.</td></tr><tr><td><code>ARGV</code></td><td>1-indexed table of the remaining arguments. Binary-safe.</td></tr><tr><td><code>cjson.encode(v)</code> / <code>cjson.decode(s)</code></td><td>Pure-Rust JSON codec. Same surface as the Redis <code>cjson</code> library.</td></tr><tr><td><code>cmsgpack.pack(v)</code> / <code>cmsgpack.unpack(s)</code></td><td>Pure-Rust MessagePack codec. Same surface as the Redis <code>cmsgpack</code> library.</td></tr></tbody></table></div>
+<p>Lua return values marshal to RESP using the standard Redis rules: <code>nil</code> and <code>false</code> become nil-bulk, <code>true</code> becomes <code>:1</code>, integers and lossless-integer floats become integer replies, other floats and strings become bulk strings, <code>{ok=...}</code> becomes a simple string, <code>{err=...}</code> becomes an error reply, and a plain array becomes a multi-bulk reply (with the first-nil truncation rule).</p>
+<h2 id="dialect-selection">Dialect selection</h2>
+<div class="tbl"><table><thead><tr><th>First line of script</th><th>Dialect used</th></tr></thead><tbody><tr><td>(no shebang)</td><td>Lua 5.1 (default; what BullMQ, Sidekiq, Redlock, and most published Redis-Lua snippets assume)</td></tr><tr><td><code>#!lua version=5.1</code> (or <code>51</code>)</td><td>Lua 5.1, explicit</td></tr><tr><td><code>#!lua version=5.2</code> (or <code>52</code>)</td><td>Lua 5.2 — <code>goto</code>, <code>_ENV</code>, ephemeron tables</td></tr><tr><td><code>#!lua version=5.3</code> (or <code>53</code>)</td><td>Lua 5.3 — integer subtype, bitwise operators, <code>//</code>, <code>string.pack</code> / <code>string.unpack</code></td></tr><tr><td><code>#!lua version=5.4</code> (or <code>54</code>)</td><td>Lua 5.4 — to-be-closed variables, integer <code>for</code> semantics, new bitwise corners</td></tr><tr><td><code>#!lua version=5.5</code> (or <code>55</code>)</td><td>Lua 5.5 — latest published dialect</td></tr><tr><td><code>#!lua version=&lt;other&gt;</code></td><td><code>-ERR unknown lua version: &lt;X&gt;</code></td></tr></tbody></table></div>
+<p>Redis 7.0 Functions metadata (<code>flags=</code>, <code>name=</code>) on the shebang line is parsed and ignored, so scripts written for the Functions surface load cleanly under <code>EVAL</code>.</p>
+<p>Deployments that want pure Redis-ecosystem compatibility can pin the accepted dialects in config: <code>[lua] allow_dialects = ["5.1"]</code> rejects any script whose shebang asks for a newer VM. The default (empty list) accepts all five.</p>
+<h2 id="trade-offs-and-limits">Trade-offs and limits</h2>
+<ul><li><b>No filesystem, network, or OS access.</b> <code>io</code>, <code>os</code>, <code>package</code>, <code>debug</code>, and <code>coroutine</code> are not loaded. Scripts cannot open files, make sockets, spawn processes, or read environment variables.</li><li><b>No bytecode loading.</b> <code>load(bytecode)</code> and <code>string.dump</code> are blocked. Only Lua source can enter the VM, which closes the bytecode-verifier escape route that has historically broken Lua sandboxes.</li><li><b>Whitelisted standard library.</b> <code>base</code>, <code>math</code>, <code>string</code>, <code>table</code>, <code>cjson</code>, and <code>cmsgpack</code> are available. Other standard modules are absent.</li><li><b>Per-script time budget.</b> Each <code>EVAL</code> runs under an instruction budget derived from <code>[lua] time_limit_ms</code> (default 5000 ms ≈ 200 M instructions — the same ceiling as Redis's default <code>lua-time-limit</code>; <code>0</code> disables the cap). Exceeding it returns a catchable Lua error and aborts the script.</li><li><b>Per-script memory budget.</b> Each script runs in a fresh interpreter state seeded from a per-dialect VM pool; tables and strings created during the call are reclaimed when it returns. There is no shared mutable Lua state between calls — use kevy keys to persist anything.</li><li><b>No nested <code>EVAL</code>.</b> A script calling <code>redis.call("EVAL", ...)</code> returns an error, matching Redis behaviour.</li><li><b>One shard per script.</b> All <code>KEYS</code> must hash to the same slot. Scripts that touch multiple keys across shards get <code>-CROSSSLOT</code> at dispatch.</li><li><b>JIT off by design.</b> The interpreter is used directly; the Cranelift JIT in luna is not linked into the kevy server, keeping the dependency surface minimal and avoiding JIT-time pauses.</li></ul>
+<h2 id="faq">FAQ</h2>
+<p><b>Will my existing Redis Lua script run unmodified?</b> If it targets Lua 5.1 (the Redis default) and only uses <code>redis.call</code> / <code>redis.pcall</code> / <code>redis.error_reply</code> / <code>redis.status_reply</code> / <code>KEYS</code> / <code>ARGV</code> / <code>cjson</code> / <code>cmsgpack</code>, yes. If it relies on the debug library, the OS library, or loading precompiled bytecode, no — those are sandboxed out.</p>
+<p><b>How do I run a script across keys on different shards?</b> You can't — atomicity is the whole point. Split the work into per-shard scripts and coordinate at the client, or design the key layout so the relevant keys share a hash tag (<code>{user:42}:quota</code> and <code>{user:42}:counter</code> route to the same shard).</p>
+<p><b><code>EVALSHA</code> returns <code>-NOSCRIPT</code>. What do I do?</b> Re-send the same body via <code>EVAL</code>. The server caches it again and answers the call. Most client libraries handle this fallback automatically. <code>SCRIPT FLUSH</code> and process restarts both reset the cache.</p>
+<p><b>Can a script call <code>BLPOP</code> or other blocking commands?</b> No. Blocking commands inside <code>EVAL</code> would defeat the atomicity contract — the shard would either freeze waiting for itself or have to interleave other work. Blocking commands return an error when dispatched from a script.</p>
+<p><b>Why Lua 5.1 by default when newer versions exist?</b> Every script published in the Redis ecosystem assumes 5.1. Defaulting to 5.1 means those scripts copy-paste in without surprises around integer subtypes, bitwise operators, or <code>goto</code>. Opting individual scripts into a newer dialect via the shebang is a one-line change when you actively want the newer features.</p></main>
+  <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#when-you-need-this">When you need this</a></li><li class="l2"><a href="#core-idea">Core idea</a></li><li class="l2"><a href="#worked-example-capped-counter">Worked example: capped counter</a></li><li class="l3"><a href="#inline-via-eval">Inline via EVAL</a></li><li class="l3"><a href="#cached-via-script-load-evalsha">Cached via SCRIPT LOAD + EVALSHA</a></li><li class="l3"><a href="#lua-54-dialect-via-shebang">Lua 5.4 dialect via shebang</a></li><li class="l2"><a href="#bindings">Bindings</a></li><li class="l2"><a href="#dialect-selection">Dialect selection</a></li><li class="l2"><a href="#trade-offs-and-limits">Trade-offs and limits</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></aside>
+</div>
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>
