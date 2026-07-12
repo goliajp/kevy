@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CLIENT — kevy 命令参考</title>
-<meta name="description" content="CLIENT — Connection introspection and control subcommands. ID / GETNAME / SETNAME / INFO: O(1). LIST: O(S) fan-out + O(C) rows. KILL: O(S) + O(C) scan">
+<meta name="description" content="CLIENT — 连接的查看与控制子命令。 ID / GETNAME / SETNAME / INFO：O(1)。LIST：O(S) 扇出，外加 O(C) 行。KILL：O(S) 扇出，外加 O(C) 扫描。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>服务器</span> <span>/</span> <b>CLIENT</b></nav>
 
     <h1 class="cmd">CLIENT</h1>
-    <p class="lede">Connection introspection and control subcommands.</p>
+    <p class="lede">连接的查看与控制子命令。</p>
 
     <pre class="syntax"><code>CLIENT ID | GETNAME | SETNAME name | LIST | KILL filter | INFO | NO-EVICT ON|OFF</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>ID / GETNAME / SETNAME / INFO: O(1). LIST: O(S) fan-out + O(C) rows. KILL: O(S) + O(C) scan</code></p>
+      <p class="cx-body"><code>ID / GETNAME / SETNAME / INFO：O(1)。LIST：O(S) 扇出，外加 O(C) 行。KILL：O(S) 扇出，外加 O(C) 扫描。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: ID / GETNAME / SETNAME / INFO / LIST (bare) / KILL (ID, ADDR) / NO-EVICT only; CLIENT LIST with a filter is a syntax error and every other subcommand (PAUSE, REPLY, TRACKING, UNBLOCK, NO-TOUCH) is unknown</p>
+        <p>有差异：只有 ID / GETNAME / SETNAME / INFO、裸形式的 LIST、按 ID 或 ADDR 的 KILL 以及 NO-EVICT；CLIENT LIST 带过滤器属于语法错误，其余子命令（PAUSE、REPLY、TRACKING、UNBLOCK、NO-TOUCH）一律按未知命令处理。</p>
       </div>
     </section>
 

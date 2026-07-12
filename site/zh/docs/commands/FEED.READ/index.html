@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FEED.READ — kevy 命令参考</title>
-<meta name="description" content="FEED.READ — Read change-feed frames from one shard past a generation/offset cursor. A single shard (the shard is an argument, not a fan-out). O(log B) to locate the start offset in the backlog plus O(count * frame size) to decode and re-encode. COUNT defaults to 256 and is hard-capped at 4096">
+<meta name="description" content="FEED.READ — 从某个 shard 读取变更 feed 的帧，起点是给定的 generation / offset 游标。 只涉及单个 shard(shard 是参数，不是扇出)。在 backlog 里定位起始 offset 是 O(log B)，解码再重新编码是 O(count * 帧大小)。COUNT 默认 256，硬上限 4096。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>变更流</span> <span>/</span> <b>FEED.READ</b></nav>
 
     <h1 class="cmd">FEED.READ</h1>
-    <p class="lede">Read change-feed frames from one shard past a generation/offset cursor.</p>
+    <p class="lede">从某个 shard 读取变更 feed 的帧，起点是给定的 generation / offset 游标。</p>
 
     <pre class="syntax"><code>FEED.READ shard generation offset [COUNT n] [PREFIX prefix ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>A single shard (the shard is an argument, not a fan-out). O(log B) to locate the start offset in the backlog plus O(count * frame size) to decode and re-encode. COUNT defaults to 256 and is hard-capped at 4096</code></p>
+      <p class="cx-body"><code>只涉及单个 shard(shard 是参数，不是扇出)。在 backlog 里定位起始 offset 是 O(log B)，解码再重新编码是 O(count * 帧大小)。COUNT 默认 256，硬上限 4096。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call warn">
         <span class="h">kevy 独有</span>
-        <p>kevy-only: no clean Redis analogue. Keyspace notifications are fire-and-forget with no cursor and no replay; Redis Streams have cursors but are a stream you must dual-write to, not a feed over your existing keyspace; the replication backlog is what this is built on, but Redis exposes it only to replicas. kevy is deliberately not a broker: no consumer groups, no server-side positions, no global cross-shard order</p>
+        <p>kevy 独有：Redis 没有干净的对应物。键空间通知是发完即忘的，既没有游标也无法重放；Redis Stream 有游标，但它是一条你必须双写的流，而不是覆盖既有键空间的 feed；复制 backlog 才是这套东西的底座，但 Redis 只把它暴露给副本。kevy 刻意不做 broker：没有消费者组，没有服务端保存的位置，也没有跨 shard 的全局顺序。</p>
       </div>
     </section>
 

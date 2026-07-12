@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EVALSHA — kevy 命令参考</title>
-<meta name="description" content="EVALSHA — Run a cached Lua script by its SHA1 digest. O(1) cache lookup, then identical to EVAL">
+<meta name="description" content="EVALSHA — 按 SHA1 摘要执行已缓存的 Lua 脚本。 缓存查找 O(1)，之后与 EVAL 完全相同。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>脚本</span> <span>/</span> <b>EVALSHA</b></nav>
 
     <h1 class="cmd">EVALSHA</h1>
-    <p class="lede">Run a cached Lua script by its SHA1 digest.</p>
+    <p class="lede">按 SHA1 摘要执行已缓存的 Lua 脚本。</p>
 
     <pre class="syntax"><code>EVALSHA sha1 numkeys [key [key ...]] [arg [arg ...]]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(1) cache lookup, then identical to EVAL</code></p>
+      <p class="cx-body"><code>缓存查找 O(1)，之后与 EVAL 完全相同。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: same instruction-budget model as EVAL (no -BUSY, no SCRIPT KILL); the cache is process-wide and EVAL populates it</p>
+        <p>有差异：与 EVAL 同样的指令预算模型（没有 -BUSY，没有 SCRIPT KILL）；缓存是进程级的，而且 EVAL 会往里填。</p>
       </div>
     </section>
 

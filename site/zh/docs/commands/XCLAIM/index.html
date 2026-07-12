@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XCLAIM — kevy 命令参考</title>
-<meta name="description" content="XCLAIM — Claim specific idle pending entries for a consumer. O(A * (log P + log N))">
+<meta name="description" content="XCLAIM — 认领指定的空闲待处理条目。 O(A * (log P + log N))。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>流</span> <span>/</span> <b>XCLAIM</b></nav>
 
     <h1 class="cmd">XCLAIM</h1>
-    <p class="lede">Claim specific idle pending entries for a consumer.</p>
+    <p class="lede">认领指定的空闲待处理条目。</p>
 
     <pre class="syntax"><code>XCLAIM key group consumer min-idle-time id [id ...] [IDLE ms] [TIME unix-time-milliseconds] [RETRYCOUNT count] [FORCE] [JUSTID]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(A * (log P + log N))</code></p>
+      <p class="cx-body"><code>O(A * (log P + log N))。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: IDLE / TIME / RETRYCOUNT / FORCE / JUSTID are parsed but LASTID is not, and a missing key or group returns 'no such key' instead of NOGROUP</p>
+        <p>有差异：IDLE / TIME / RETRYCOUNT / FORCE / JUSTID 会被解析，LASTID 不会；key 或消费者组不存在时返回「no such key」而不是 NOGROUP。</p>
       </div>
     </section>
 

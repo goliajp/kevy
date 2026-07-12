@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XINFO — kevy コマンドリファレンス</title>
-<meta name="description" content="XINFO — Introspect a stream, its groups, or its consumers. STREAM: O(1). GROUPS: O(G*N) — 'lag' is a linear walk of every entry, once per group. CONSUMERS: O(C)">
+<meta name="description" content="XINFO — ストリーム本体、そのグループ、そのコンシューマーの内部状態を参照する。 STREAM は O(1)。GROUPS は O(G*N) —— lag はグループごとに全エントリを線形に歩いて求める。CONSUMERS は O(C)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ストリーム</span> <span>/</span> <b>XINFO</b></nav>
 
     <h1 class="cmd">XINFO</h1>
-    <p class="lede">Introspect a stream, its groups, or its consumers.</p>
+    <p class="lede">ストリーム本体、そのグループ、そのコンシューマーの内部状態を参照する。</p>
 
     <pre class="syntax"><code>XINFO STREAM key | GROUPS key | CONSUMERS key group | HELP</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>STREAM: O(1). GROUPS: O(G*N) — 'lag' is a linear walk of every entry, once per group. CONSUMERS: O(C)</code></p>
+      <p class="cx-body"><code>STREAM は O(1)。GROUPS は O(G*N) —— lag はグループごとに全エントリを線形に歩いて求める。CONSUMERS は O(C)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: STREAM / GROUPS / CONSUMERS / HELP only — XINFO STREAM FULL is absent; radix-tree-keys and nodes are synthetic (we have no radix tree), entries-read is approximated, and CONSUMERS omits 'inactive'</p>
+        <p>差異あり。STREAM / GROUPS / CONSUMERS / HELP のみで、XINFO STREAM FULL は存在しない。kevy に radix tree はないため radix-tree-keys と radix-tree-nodes は合成値であり、entries-read は近似値、CONSUMERS は inactive を返さない。</p>
       </div>
     </section>
 

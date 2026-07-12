@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BGSAVE — kevy コマンドリファレンス</title>
-<meta name="description" content="BGSAVE — Start a snapshot save in the background. O(S) fan-out; O(N/S) copy-on-write freeze per shard on the reactor, then serialise off-thread">
+<meta name="description" content="BGSAVE — スナップショットの保存をバックグラウンドで開始する。 fan-out は O(S)。shard ごとに reactor 上で O(N/S) の copy-on-write 凍結を行い、シリアライズはスレッド外で走る。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>サーバー</span> <span>/</span> <b>BGSAVE</b></nav>
 
     <h1 class="cmd">BGSAVE</h1>
-    <p class="lede">Start a snapshot save in the background.</p>
+    <p class="lede">スナップショットの保存をバックグラウンドで開始する。</p>
 
     <pre class="syntax"><code>BGSAVE</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(S) fan-out; O(N/S) copy-on-write freeze per shard on the reactor, then serialise off-thread</code></p>
+      <p class="cx-body"><code>fan-out は O(S)。shard ごとに reactor 上で O(N/S) の copy-on-write 凍結を行い、シリアライズはスレッド外で走る。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: replies +OK rather than Redis's status line, and writes one dump per shard</p>
+        <p>差異あり。Redis のステータス行ではなく +OK を返す。dump は shard ごとに 1 本ずつ書き出す。</p>
       </div>
     </section>
 

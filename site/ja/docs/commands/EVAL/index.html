@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EVAL — kevy コマンドリファレンス</title>
-<meta name="description" content="EVAL — Run a Lua script server-side; routed to KEYS[1]'s shard when numkeys &gt;= 1. O(compile + the script's own work). The whole script is one atomic unit on KEYS[1]'s shard and blocks that shard for its duration. The runaway guard is an INSTRUCTION budget (lua time_limit_ms x 40000 instructions), not a wall clock">
+<meta name="description" content="EVAL — Lua スクリプトをサーバ側で実行する。numkeys が 1 以上なら KEYS[1] の shard へルーティングされる。 コンパイルのコストと、スクリプト自身の処理量。スクリプト全体が KEYS[1] の shard 上での 1 つの原子的な単位であり、その間その shard をブロックする。暴走を止めるのは命令数の予算(lua time_limit_ms × 40000 命令)であって、実時間ではない。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>スクリプト</span> <span>/</span> <b>EVAL</b></nav>
 
     <h1 class="cmd">EVAL</h1>
-    <p class="lede">Run a Lua script server-side; routed to KEYS[1]'s shard when numkeys &gt;= 1.</p>
+    <p class="lede">Lua スクリプトをサーバ側で実行する。numkeys が 1 以上なら KEYS[1] の shard へルーティングされる。</p>
 
     <pre class="syntax"><code>EVAL script numkeys [key [key ...]] [arg [arg ...]]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(compile + the script's own work). The whole script is one atomic unit on KEYS[1]'s shard and blocks that shard for its duration. The runaway guard is an INSTRUCTION budget (lua time_limit_ms x 40000 instructions), not a wall clock</code></p>
+      <p class="cx-body"><code>コンパイルのコストと、スクリプト自身の処理量。スクリプト全体が KEYS[1] の shard 上での 1 つの原子的な単位であり、その間その shard をブロックする。暴走を止めるのは命令数の予算(lua time_limit_ms × 40000 命令)であって、実時間ではない。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: there is no -BUSY state and no SCRIPT KILL — an over-budget script is aborted in place and answered with an ordinary error; nested EVAL is rejected, a redis.call touching another shard's key returns CROSSSLOT, and EVAL auto-caches its source by SHA1 so EVALSHA works without SCRIPT LOAD</p>
+        <p>差異あり。-BUSY 状態も SCRIPT KILL も存在しない —— 予算を超えたスクリプトはその場で中断され、通常のエラーとして返る。EVAL の入れ子は拒否する。redis.call が別の shard の key に触れると CROSSSLOT を返す。EVAL はソースを SHA1 で自動キャッシュするため、SCRIPT LOAD なしで EVALSHA が使える。</p>
       </div>
     </section>
 

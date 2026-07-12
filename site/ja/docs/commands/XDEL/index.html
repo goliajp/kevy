@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XDEL — kevy コマンドリファレンス</title>
-<meta name="description" content="XDEL — Delete entries from a stream by ID. O(D log N + N*F) for D ids — NOT O(1): the trailing weight recompute is linear in the whole stream">
+<meta name="description" content="XDEL — ストリームから id を指定してエントリを削除する。 id が D 個で O(D log N + N*F)。O(1) ではない —— 末尾 weight の再計算がストリーム全体に対して線形に走る。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ストリーム</span> <span>/</span> <b>XDEL</b></nav>
 
     <h1 class="cmd">XDEL</h1>
-    <p class="lede">Delete entries from a stream by ID.</p>
+    <p class="lede">ストリームから id を指定してエントリを削除する。</p>
 
     <pre class="syntax"><code>XDEL key id [id ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(D log N + N*F) for D ids — NOT O(1): the trailing weight recompute is linear in the whole stream</code></p>
+      <p class="cx-body"><code>id が D 個で O(D log N + N*F)。O(1) ではない —— 末尾 weight の再計算がストリーム全体に対して線形に走る。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call note">
         <span class="h">互換</span>
-        <p>full</p>
+        <p>互換</p>
       </div>
     </section>
 

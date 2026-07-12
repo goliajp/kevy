@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PREFIX.DIGEST — kevy コマンドリファレンス</title>
-<meta name="description" content="PREFIX.DIGEST — Order-insensitive checksum of a prefix's rows for migration verification. O(keys on the shard) to walk plus O(sum of row sizes) to digest, on every shard. Per-row digests XOR together, so the result is order-insensitive and safe across shard counts">
+<meta name="description" content="PREFIX.DIGEST — prefix 配下の行に対する順序非依存のチェックサム。移行時の検証に使う。 全 shard で、走査に O(keys on the shard)、ダイジェスト計算に O(sum of row sizes)。行ごとのダイジェストを XOR で畳み込むため、結果は順序に依存せず、shard 数が変わっても安全に比較できる。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>マイグレーション</span> <span>/</span> <b>PREFIX.DIGEST</b></nav>
 
     <h1 class="cmd">PREFIX.DIGEST</h1>
-    <p class="lede">Order-insensitive checksum of a prefix's rows for migration verification.</p>
+    <p class="lede">prefix 配下の行に対する順序非依存のチェックサム。移行時の検証に使う。</p>
 
     <pre class="syntax"><code>PREFIX.DIGEST prefix</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(keys on the shard) to walk plus O(sum of row sizes) to digest, on every shard. Per-row digests XOR together, so the result is order-insensitive and safe across shard counts</code></p>
+      <p class="cx-body"><code>全 shard で、走査に O(keys on the shard)、ダイジェスト計算に O(sum of row sizes)。行ごとのダイジェストを XOR で畳み込むため、結果は順序に依存せず、shard 数が変わっても安全に比較できる。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call warn">
         <span class="h">kevy 固有</span>
-        <p>kevy-only: nearest is DEBUG DIGEST — comparable in kind (Redis also XORs per-key digests), but Redis's is whole-DB and lives behind DEBUG, while ours is per-prefix (the unit a migration actually cares about) and is a supported verb</p>
+        <p>kevy 固有。最も近いのは DEBUG DIGEST —— 種類としては同等であり(Redis も key ごとのダイジェストを XOR する)、違いは対象と位置づけにある。Redis のものは DB 全体を対象とし DEBUG の裏に置かれているが、kevy のものは prefix 単位(移行が実際に気にする単位)であり、正式にサポートされた verb である。</p>
       </div>
     </section>
 

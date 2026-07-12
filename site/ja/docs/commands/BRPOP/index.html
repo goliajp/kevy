@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BRPOP — kevy コマンドリファレンス</title>
-<meta name="description" content="BRPOP — Blocking right pop across one or more lists (effect logged as RPOP). O(1) to serve; FIFO park">
+<meta name="description" content="BRPOP — 一つ以上のリストに対する、右端からのブロッキング pop(効果は RPOP として記録される)。 応答自体は O(1)。park は FIFO。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>リスト</span> <span>/</span> <b>BRPOP</b></nav>
 
     <h1 class="cmd">BRPOP</h1>
-    <p class="lede">Blocking right pop across one or more lists (effect logged as RPOP).</p>
+    <p class="lede">一つ以上のリストに対する、右端からのブロッキング pop(効果は RPOP として記録される)。</p>
 
     <pre class="syntax"><code>BRPOP key [key ...] timeout</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(1) to serve; FIFO park</code></p>
+      <p class="cx-body"><code>応答自体は O(1)。park は FIFO。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: same multi-key priority deviation as BLPOP</p>
+        <p>差異あり。複数キー形式における優先順位のずれは BLPOP と同じ。</p>
       </div>
     </section>
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VIEW.REBUILD — kevy コマンドリファレンス</title>
-<meta name="description" content="VIEW.REBUILD — Force a rebuild of a materialized view. Materialized only. A full eval_tree over the whole tree plus an O(M log M) sort and re-insert, on every shard, now (not deferred to a tick)">
+<meta name="description" content="VIEW.REBUILD — materialized view の再構築を強制する。 materialized 専用。ツリー全体に対する eval_tree の全実行に加え、O(M log M) のソートと再挿入を、全 shard で即座に行う(tick を待たない)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ビュー</span> <span>/</span> <b>VIEW.REBUILD</b></nav>
 
     <h1 class="cmd">VIEW.REBUILD</h1>
-    <p class="lede">Force a rebuild of a materialized view.</p>
+    <p class="lede">materialized view の再構築を強制する。</p>
 
     <pre class="syntax"><code>VIEW.REBUILD name</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>Materialized only. A full eval_tree over the whole tree plus an O(M log M) sort and re-insert, on every shard, now (not deferred to a tick)</code></p>
+      <p class="cx-body"><code>materialized 専用。ツリー全体に対する eval_tree の全実行に加え、O(M log M) のソートと再挿入を、全 shard で即座に行う(tick を待たない)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call warn">
         <span class="h">kevy 固有</span>
-        <p>kevy-only</p>
+        <p>kevy 固有。</p>
       </div>
     </section>
 

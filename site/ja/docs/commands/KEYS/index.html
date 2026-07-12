@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KEYS — kevy コマンドリファレンス</title>
-<meta name="description" content="KEYS — Return every key matching the glob pattern (cross-shard gather). O(N) keys in the whole keyspace — every shard walks its entire map, plus an O(P*K) glob match per key">
+<meta name="description" content="KEYS — glob パターンに一致する全てのキーを返す(shard をまたいで収集する)。 O(N) —— N はキースペース全体のキー数。全ての shard がそれぞれのマップを最後まで走査し、さらにキーごとに O(P*K) の glob 照合が掛かる。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>キースペース走査</span> <span>/</span> <b>KEYS</b></nav>
 
     <h1 class="cmd">KEYS</h1>
-    <p class="lede">Return every key matching the glob pattern (cross-shard gather).</p>
+    <p class="lede">glob パターンに一致する全てのキーを返す(shard をまたいで収集する)。</p>
 
     <pre class="syntax"><code>KEYS pattern</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(N) keys in the whole keyspace — every shard walks its entire map, plus an O(P*K) glob match per key</code></p>
+      <p class="cx-body"><code>O(N) —— N はキースペース全体のキー数。全ての shard がそれぞれのマップを最後まで走査し、さらにキーごとに O(P*K) の glob 照合が掛かる。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call note">
         <span class="h">互換</span>
-        <p>full</p>
+        <p>互換</p>
       </div>
     </section>
 

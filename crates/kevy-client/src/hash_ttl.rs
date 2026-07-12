@@ -74,14 +74,29 @@ impl Connection {
         }
     }
 
-    /// `HTTL key FIELDS n field…` — remaining TTL per field in
-    /// **milliseconds** (`-2` key/field missing, `-1` no TTL).
+    /// `HTTL key FIELDS n field…` — remaining TTL per field in **seconds**
+    /// (`-2` key/field missing, `-1` no TTL).
+    ///
+    /// Before 4.0 this returned milliseconds, which no caller reading the name
+    /// would have expected. [`Self::hpttl`] is the millisecond form.
     pub fn httl(&mut self, key: &[u8], fields: &[&[u8]]) -> KevyResult<Vec<i64>> {
         check_fields(fields)?;
         match self {
             Self::Embedded(s) => s.httl(key, fields),
             Self::Remote(c) => {
                 hash_ttl_request(c, b"HTTL", key, None, HExpireCond::Always, fields)
+            }
+        }
+    }
+
+    /// `HPTTL key FIELDS n field…` — remaining TTL per field in
+    /// **milliseconds** (`-2` key/field missing, `-1` no TTL).
+    pub fn hpttl(&mut self, key: &[u8], fields: &[&[u8]]) -> KevyResult<Vec<i64>> {
+        check_fields(fields)?;
+        match self {
+            Self::Embedded(s) => s.hpttl(key, fields),
+            Self::Remote(c) => {
+                hash_ttl_request(c, b"HPTTL", key, None, HExpireCond::Always, fields)
             }
         }
     }

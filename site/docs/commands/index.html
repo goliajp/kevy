@@ -40,7 +40,7 @@
 <main id="main" class="page">
   <div class="band">
     <p class="eyebrow">Commands</p>
-    <h1>183 commands</h1>
+    <h1>184 commands</h1>
     <p class="lede">Every verb the server will answer, straight from its own registry — the same table <code>COMMAND DOCS</code> reads. Two columns you will not find in Redis's reference: what the command <b>costs in this engine</b>, and <b>how it differs from Redis</b>.</p>
 
     <div class="filters">
@@ -126,10 +126,11 @@
 <tr data-name="hpersist" data-group="hash" data-compat="differs"><td class="k"><a href="HPERSIST/">HPERSIST</a></td><td class="g">Hash</td><td class="cx mono">O(F) fields</td><td><span class="badge differs">Differs</span></td><td class="sum">Remove per-field TTLs from a hash.</td></tr>
 <tr data-name="hpexpire" data-group="hash" data-compat="differs"><td class="k"><a href="HPEXPIRE/">HPEXPIRE</a></td><td class="g">Hash</td><td class="cx mono">O(F) fields</td><td><span class="badge differs">Differs</span></td><td class="sum">Set per-field TTLs on a hash, in milliseconds.</td></tr>
 <tr data-name="hpexpireat" data-group="hash" data-compat="differs"><td class="k"><a href="HPEXPIREAT/">HPEXPIREAT</a></td><td class="g">Hash</td><td class="cx mono">O(F) fields</td><td><span class="badge differs">Differs</span></td><td class="sum">Set per-field expiries as absolute Unix-millisecond deadlines.</td></tr>
+<tr data-name="hpttl" data-group="hash" data-compat="differs"><td class="k"><a href="HPTTL/">HPTTL</a></td><td class="g">Hash</td><td class="cx mono">O(F) fields</td><td><span class="badge differs">Differs</span></td><td class="sum">Return per-field remaining TTLs in milliseconds (-1 no TTL, -2 missing).</td></tr>
 <tr data-name="hscan" data-group="hash" data-compat="differs"><td class="k"><a href="HSCAN/">HSCAN</a></td><td class="g">Hash</td><td class="cx mono">O(N)</td><td><span class="badge differs">Differs</span></td><td class="sum">Iterate a hash's fields and values (single-batch cursor).</td></tr>
 <tr data-name="hset" data-group="hash" data-compat="full"><td class="k"><a href="HSET/">HSET</a></td><td class="g">Hash</td><td class="cx mono">O(M) pairs</td><td><span class="badge full">Compatible</span></td><td class="sum">Set one or more hash fields; returns the number of new fields.</td></tr>
 <tr data-name="hsetnx" data-group="hash" data-compat="full"><td class="k"><a href="HSETNX/">HSETNX</a></td><td class="g">Hash</td><td class="cx mono">O(1)</td><td><span class="badge full">Compatible</span></td><td class="sum">Set a hash field only if it does not exist.</td></tr>
-<tr data-name="httl" data-group="hash" data-compat="differs"><td class="k"><a href="HTTL/">HTTL</a></td><td class="g">Hash</td><td class="cx mono">O(F) fields</td><td><span class="badge differs">Differs</span></td><td class="sum">Return per-field remaining TTLs in milliseconds (-1 no TTL, -2 missing).</td></tr>
+<tr data-name="httl" data-group="hash" data-compat="differs"><td class="k"><a href="HTTL/">HTTL</a></td><td class="g">Hash</td><td class="cx mono">O(F) fields</td><td><span class="badge differs">Differs</span></td><td class="sum">Return per-field remaining TTLs in seconds (-1 no TTL, -2 missing).</td></tr>
 <tr data-name="hvals" data-group="hash" data-compat="full"><td class="k"><a href="HVALS/">HVALS</a></td><td class="g">Hash</td><td class="cx mono">O(N) fields</td><td><span class="badge full">Compatible</span></td><td class="sum">Return all values of a hash.</td></tr>
 <tr data-name="sadd" data-group="set" data-compat="full"><td class="k"><a href="SADD/">SADD</a></td><td class="g">Set</td><td class="cx mono">O(M) members</td><td><span class="badge full">Compatible</span></td><td class="sum">Add one or more members to a set.</td></tr>
 <tr data-name="scard" data-group="set" data-compat="full"><td class="k"><a href="SCARD/">SCARD</a></td><td class="g">Set</td><td class="cx mono">O(1)</td><td><span class="badge full">Compatible</span></td><td class="sum">Return the number of members in a set.</td></tr>

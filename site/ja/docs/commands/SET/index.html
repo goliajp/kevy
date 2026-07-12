@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SET — kevy コマンドリファレンス</title>
-<meta name="description" content="SET — Set a key's string value with optional TTL and existence conditions. O(1)">
+<meta name="description" content="SET — キーに文字列値を設定する。TTL と存在条件を任意で指定できる。 O(1)">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>文字列</span> <span>/</span> <b>SET</b></nav>
 
     <h1 class="cmd">SET</h1>
-    <p class="lede">Set a key's string value with optional TTL and existence conditions.</p>
+    <p class="lede">キーに文字列値を設定する。TTL と存在条件を任意で指定できる。</p>
 
     <pre class="syntax"><code>SET key value [EX seconds|PX milliseconds] [NX|XX]</code></pre>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: only NX / XX / EX / PX are parsed — KEEPTTL, EXAT, PXAT, GET and the IFEQ family are a syntax error; a repeated expire option is silently accepted last-one-wins instead of erroring</p>
+        <p>差異あり。解析するのは NX / XX / EX / PX のみ。KEEPTTL、EXAT、PXAT、GET および IFEQ 系は構文エラーになる。失効オプションを重複指定した場合はエラーにせず、最後の指定を黙って採用する。</p>
       </div>
     </section>
 

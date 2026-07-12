@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LPOS — kevy 命令参考</title>
-<meta name="description" content="LPOS — Return the index of matching elements in a list. O(N) always — the whole list is copied before RANK / COUNT / MAXLEN are applied, so MAXLEN bounds the comparisons but not the copy">
+<meta name="description" content="LPOS — 返回 list 中匹配元素的下标。 恒为 O(N) —— 整个 list 会先被完整拷贝一份，之后才轮到 RANK / COUNT / MAXLEN 生效。所以 MAXLEN 限制的是比较次数，拷贝量它管不着。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>列表</span> <span>/</span> <b>LPOS</b></nav>
 
     <h1 class="cmd">LPOS</h1>
-    <p class="lede">Return the index of matching elements in a list.</p>
+    <p class="lede">返回 list 中匹配元素的下标。</p>
 
     <pre class="syntax"><code>LPOS key element [RANK rank] [COUNT num-matches] [MAXLEN len]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(N) always — the whole list is copied before RANK / COUNT / MAXLEN are applied, so MAXLEN bounds the comparisons but not the copy</code></p>
+      <p class="cx-body"><code>恒为 O(N) —— 整个 list 会先被完整拷贝一份，之后才轮到 RANK / COUNT / MAXLEN 生效。所以 MAXLEN 限制的是比较次数，拷贝量它管不着。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call note">
         <span class="h">兼容</span>
-        <p>full</p>
+        <p>兼容</p>
       </div>
     </section>
 

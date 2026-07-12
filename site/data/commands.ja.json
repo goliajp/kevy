@@ -1,0 +1,922 @@
+{
+ "APPEND": {
+  "compat": "互換",
+  "complexity": "値が 64 B 以下の間は償却 O(1)。それを超えると呼び出しごとに O(N) になる(追加のたびに Arc のペイロードをコピーして箱に詰め直すため)。したがって APPEND を繰り返して大きな文字列を組み立てると、全体では O(N^2) になる。",
+  "summary": "文字列値の末尾にバイト列を追加し、追加後の長さを返す。"
+ },
+ "BGREWRITEAOF": {
+  "compat": "差異あり。Redis のステータス行ではなく +OK を返す。AOF は shard ごとに 1 本ずつ書き出す。AOF が無効な場合でも +OK を返す。",
+  "complexity": "fan-out は O(S)。各 shard が copy-on-write のビューを凍結し、シリアライズと fsync を自身のワーカーへ引き渡す。",
+  "summary": "append-only file の再書き出しをバックグラウンドで開始する。"
+ },
+ "BGSAVE": {
+  "compat": "差異あり。Redis のステータス行ではなく +OK を返す。dump は shard ごとに 1 本ずつ書き出す。",
+  "complexity": "fan-out は O(S)。shard ごとに reactor 上で O(N/S) の copy-on-write 凍結を行い、シリアライズはスレッド外で走る。",
+  "summary": "スナップショットの保存をバックグラウンドで開始する。"
+ },
+ "BLPOP": {
+  "compat": "差異あり。shard が複数あるサーバーでは、複数キー形式が Redis の左から右へのキー優先順位に従わない。接続が属する shard 上のキーが、他 shard のキーより先に処理される。",
+  "complexity": "応答自体は O(1)。park も O(1) で、待機者はキーごとに FIFO で起こされる。",
+  "summary": "一つ以上のリストに対する、左端からのブロッキング pop(効果は LPOP として記録される)。"
+ },
+ "BRPOP": {
+  "compat": "差異あり。複数キー形式における優先順位のずれは BLPOP と同じ。",
+  "complexity": "応答自体は O(1)。park は FIFO。",
+  "summary": "一つ以上のリストに対する、右端からのブロッキング pop(効果は RPOP として記録される)。"
+ },
+ "BRPOPLPUSH": {
+  "compat": "差異あり。shard をまたぐ移動はアトミックではない。要素は source の shard で pop され、destination の shard で push されるため、その二段の間はどちらのリストにも存在しない。Redis と同じアトミックな経路を通したい場合は {hashtag} で二つのキーを同一 shard に寄せること。",
+  "complexity": "応答自体は O(1)。",
+  "summary": "ブロッキング版の RPOPLPUSH。source の末尾を pop し、destination の先頭に push する。"
+ },
+ "BZPOPMIN": {
+  "compat": "互換",
+  "complexity": "pop 一回につき O(log N)。park は O(1)。",
+  "summary": "一つ以上のソート済みセットから、スコアが最小のメンバーをブロッキングで pop する。"
+ },
+ "CLIENT": {
+  "compat": "差異あり。ID / GETNAME / SETNAME / INFO / LIST(引数なし)/ KILL(ID、ADDR)/ NO-EVICT のみ。フィルタ付きの CLIENT LIST は構文エラーであり、PAUSE、REPLY、TRACKING、UNBLOCK、NO-TOUCH を含むその他のサブコマンドはすべて未知のコマンドとして扱う。",
+  "complexity": "ID / GETNAME / SETNAME / INFO は O(1)。LIST は O(S) の fan-out と O(C) 行の生成。KILL は O(S) と O(C) の走査。",
+  "summary": "コネクションの参照と制御を行うサブコマンド群。"
+ },
+ "CLUSTER": {
+  "compat": "差異あり。設定から導出した読み取り専用の仮想ノードトポロジであり(shard 1 つにつき仮想 master 1 つ)、gossip はない。MEET / FORGET / SETSLOT は効果を持たず OK を返すだけの no-op であり、MIGRATE / ASK もフェイルオーバーも存在しない。COUNTKEYSINSLOT は応答した shard の key しか数えない。",
+  "complexity": "INFO / NODES / SLOTS / SHARDS / MYID は O(S)。KEYSLOT は O(len(key))。COUNTKEYSINSLOT は O(N/S)。",
+  "summary": "クラスタトポロジの参照(shard 上に構成した仮想ノードモデル)。"
+ },
+ "COMMAND": {
+  "compat": "差異あり。COUNT / LIST / INFO / DOCS のみで、GETKEYS と GETKEYSANDFLAGS は存在しない。info 行の first / last / step は固定値であり、ACL カテゴリ、tips、key-specs は空のまま返す。",
+  "complexity": "引数なし / LIST / DOCS は verb 数 V に対して O(V)。COUNT は O(1)。INFO / DOCS に名前を k 個渡すと O(k*V) —— 引き当ては線形走査である。",
+  "summary": "コマンドテーブルを参照する(COUNT / LIST / INFO / DOCS)。"
+ },
+ "CONFIG": {
+  "compat": "差異あり。Redis と同名のパラメータを 16 個持つ。稼働中に変更できるのは maxmemory、maxmemory-policy、appendfsync、auto-rewrite の 2 つ、hz、maxmemory-samples、loglevel、logfile のみで、bind、port、io-threads、dir、appendonly は実行時にエラーとなる。RESETSTAT は何もしない。",
+  "complexity": "GET は O(patterns * 16)。SET は O(1) と設定スワップ 1 回で、各 shard は次の tick でそれを拾う。REWRITE は設定ファイルのサイズに比例する。",
+  "summary": "サーバ設定パラメータを読み書きする。"
+ },
+ "DBSIZE": {
+  "compat": "互換",
+  "complexity": "O(S) —— shard ごとに 1 通のメッセージを送り、各 shard は map の長さから O(1) で答える。O(N) ではない。",
+  "summary": "全 shard を合計した key 数を返す。"
+ },
+ "DEBUG": {
+  "compat": "差異あり。効果を持つのは SLEEP だけであり、しかも止まるのはサーバ全体ではなく shard 1 つである。他のサブコマンドはすべて受理され、何もせずに OK を返す。",
+  "complexity": "SLEEP は、応答した shard の reactor スレッドを指定時間だけ停める(他の shard は動き続ける)。それ以外はすべて O(1)。",
+  "summary": "デバッグ用サブコマンド。SLEEP は shard をブロックし、それ以外のサブコマンドは OK として受け流す。"
+ },
+ "DECR": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "キーの整数値を 1 減らす。"
+ },
+ "DECRBY": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "キーの整数値を指定した分だけ減らす。"
+ },
+ "DEL": {
+  "compat": "差異あり。複数キー形式は shard 単位に分割して実行し、結果を合算するだけでバリアを張らない。したがって shard をまたぐアトミック性は無い。単一キー形式はアトミック。",
+  "complexity": "O(N) —— キー数 N。さらに要素数 M のコレクションを保持するキーごとに O(M)(解放時にコンテナを走査するため)。",
+  "summary": "一つ以上のキーを削除する。"
+ },
+ "DISCARD": {
+  "compat": "互換",
+  "complexity": "O(1) —— キュー済みのコマンドと WATCH 集合を捨てる。",
+  "summary": "開いている MULTI トランザクションを破棄する。"
+ },
+ "ECHO": {
+  "compat": "互換",
+  "complexity": "O(1)。",
+  "summary": "与えられたメッセージをそのまま返す。"
+ },
+ "EVAL": {
+  "compat": "差異あり。-BUSY 状態も SCRIPT KILL も存在しない —— 予算を超えたスクリプトはその場で中断され、通常のエラーとして返る。EVAL の入れ子は拒否する。redis.call が別の shard の key に触れると CROSSSLOT を返す。EVAL はソースを SHA1 で自動キャッシュするため、SCRIPT LOAD なしで EVALSHA が使える。",
+  "complexity": "コンパイルのコストと、スクリプト自身の処理量。スクリプト全体が KEYS[1] の shard 上での 1 つの原子的な単位であり、その間その shard をブロックする。暴走を止めるのは命令数の予算(lua time_limit_ms × 40000 命令)であって、実時間ではない。",
+  "summary": "Lua スクリプトをサーバ側で実行する。numkeys が 1 以上なら KEYS[1] の shard へルーティングされる。"
+ },
+ "EVALSHA": {
+  "compat": "差異あり。EVAL と同じ命令数予算モデルである(-BUSY なし、SCRIPT KILL なし)。キャッシュはプロセス全体で共有され、EVAL の実行によっても登録される。",
+  "complexity": "キャッシュの引き当てが O(1)、以降は EVAL と同じ。",
+  "summary": "SHA1 ダイジェストを指定して、キャッシュ済み Lua スクリプトを実行する。"
+ },
+ "EXEC": {
+  "compat": "差異あり。複数の shard にまたがる MULTI バッチは shard 単位で原子的であって、全体として隔離されるわけではない(shard 横断のスナップショットは存在しない)。キュー時のエラーは EXECABORT でバッチ全体を中止するが、EXEC 中の実行時エラーは他のコマンドの適用結果を残す —— この点は Redis と同じ。",
+  "complexity": "キュー済みコマンドのコストの総和。WATCH した key が W 個ある場合、事前チェックの O(W) が 1 回加わり、O(min(W,S)) 通のメッセージに束ねられる。",
+  "summary": "MULTI 以降にキューされたコマンドをすべて実行する。"
+ },
+ "EXISTS": {
+  "compat": "差異あり。複数キー形式は shard ごとに収集するため、返る個数は shard をまたいだ一時点のスナップショットではない。",
+  "complexity": "O(N) —— キー数 N。各キーは O(1) の探索一回で済む。",
+  "summary": "指定したキーのうち存在するものの個数を返す。"
+ },
+ "EXPIRE": {
+  "compat": "差異あり。NX / XX / GT / LT の条件フラグは解析しない。arity が 3 に固定されているため、EXPIRE key seconds NX は arity エラーになる。",
+  "complexity": "O(1)",
+  "summary": "キーの TTL を秒単位で設定する(TTL が 0 以下ならキーを削除する)。"
+ },
+ "EXPIREAT": {
+  "compat": "差異あり。NX / XX / GT / LT の条件フラグは解析しない。arity は 3 に固定。",
+  "complexity": "O(1)",
+  "summary": "キーの失効時刻を Unix 時刻(秒)の絶対値で設定する。"
+ },
+ "FAILOVER": {
+  "compat": "差異あり。Redis の構文は FAILOVER [TO host port [FORCE]] [ABORT] [TIMEOUT ms] で対象は省略可能だが、kevy の構文は FAILOVER host port [TIMEOUT ms] | ABORT であり、対象は必須の位置引数である。ここで渡す port は対象のクライアントポート。",
+  "complexity": "コマンド自体は O(1) —— ハンドオーバーはバックグラウンドで走り、対象が追いつくまでポーリングする。",
+  "summary": "計画的な無損失ハンドオーバー。書き込みを止め、対象レプリカが追いつくのを待ち、それを昇格させ、自身はそのレプリカに追従する。"
+ },
+ "FEED.READ": {
+  "compat": "kevy 固有。Redis にきれいに対応するものはない。keyspace notification は撃ちっぱなしで、カーソルも再生もない。Redis Streams はカーソルを持つが、それは既存の keyspace に対するフィードではなく、二重書き込みが必要な別のストリームである。レプリケーションの backlog はこの機能の土台そのものだが、Redis はそれを replica にしか見せない。kevy は意図的にブローカーではない —— コンシューマーグループも、サーバ側の位置管理も、shard 横断の全順序も持たない。",
+  "complexity": "対象は単一の shard である(shard は引数であって、fan-out ではない)。backlog 内で開始 offset を引き当てるのに O(log B)、加えてデコードと再エンコードに O(count * frame size)。COUNT の既定は 256、上限は 4096。",
+  "summary": "1 つの shard から、generation / offset のカーソル以降の変更フィードフレームを読む。"
+ },
+ "FEED.SHARDS": {
+  "compat": "kevy 固有。Redis には、列挙すべき shard 分割型の変更フィードそのものが存在しない。",
+  "complexity": "O(1)。ローカルで応答する。",
+  "summary": "変更フィードの shard 数を返す。"
+ },
+ "FEED.TAIL": {
+  "compat": "kevy 固有。最も近いのは INFO replication の master_repl_offset だが、それは shard ごとの再開可能な CDC カーソルではない。",
+  "complexity": "単一の shard 上で O(1)。",
+  "summary": "指定した shard の、現在の feed generation と次の offset を返す。"
+ },
+ "FLUSHALL": {
+  "compat": "差異あり。ASYNC / SYNC は受理した上で無視する(flush は shard 単位で常に同期実行)。CDC の feed generation を進めるため、稼働中の FEED カーソルは resync エラーを受け取る。",
+  "complexity": "fan-out は O(S)。shard ごとに O(N/S) のクリアに加えて、WATCH の無効化と feed generation の更新を行う。",
+  "summary": "全 shard の全 key を削除する。"
+ },
+ "FLUSHDB": {
+  "compat": "差異あり。kevy は単一 DB のため、FLUSHDB は FLUSHALL の別名である。ASYNC / SYNC は無視する。",
+  "complexity": "O(N + S) —— FLUSHALL と同一。",
+  "summary": "現在のデータベースの全 key を削除する。kevy は単一 DB のため FLUSHALL と同じ。"
+ },
+ "GEOADD": {
+  "compat": "互換",
+  "complexity": "O(M log N)。CH を指定すると O(M^2) の項が加わる。",
+  "summary": "geo set に経度・緯度つきのメンバーを追加する。"
+ },
+ "GEODIST": {
+  "compat": "互換",
+  "complexity": "O(1)。",
+  "summary": "2 つのメンバー間の距離を返す。"
+ },
+ "GEOHASH": {
+  "compat": "互換",
+  "complexity": "O(M)。",
+  "summary": "各メンバーの base32 geohash 文字列を返す。"
+ },
+ "GEOPOS": {
+  "compat": "互換",
+  "complexity": "O(M)。",
+  "summary": "各メンバーの経度・緯度を返す。"
+ },
+ "GEORADIUS": {
+  "compat": "差異あり。書き込み先は自身の shard 上で更新されるため、shard をまたぐ STORE は検索と原子的にならない。",
+  "complexity": "1 回の呼び出しで O(N)。STORE / STOREDIST を指定すると、書き込みに O(K log K)、書き込み先のクリアに O(D) が加わる。",
+  "summary": "座標を中心とする旧来形式の半径検索。STORE による書き出しにも対応する。"
+ },
+ "GEORADIUSBYMEMBER": {
+  "compat": "差異あり。書き込み先は自身の shard 上で更新されるため、shard をまたぐ STORE は検索と原子的にならない。",
+  "complexity": "1 回の呼び出しで O(N)。中心メンバーの引き当ては O(1)。",
+  "summary": "既存メンバーを中心とする旧来形式の半径検索。STORE による書き出しにも対応する。"
+ },
+ "GEOSEARCH": {
+  "compat": "差異あり。読み取り専用形式では STOREDIST を受理した上で無視する。COUNT 0 はエラー。",
+  "complexity": "1 回の呼び出しで O(N) —— 最大 9 つの近傍レンジを、それぞれ zset の全走査で取得する。geohash ブロックが削るのは距離計算であって、走査そのものではない。",
+  "summary": "メンバーまたは座標を起点として、半径または矩形の範囲でメンバーを検索する。"
+ },
+ "GEOSEARCHSTORE": {
+  "compat": "差異あり。STOREDIST はクエリが指定した単位で距離を格納する(Redis も同じ)。書き込み先は自身の shard 上で更新されるため、source と destination は別のコアに載り得るし、書き込みは読み取りと原子的にならない。",
+  "complexity": "検索に O(N)、書き込み先を自身の shard 上で書き直すのに O(D + K log K)。",
+  "summary": "source に対して GEOSEARCH を実行し、その結果を destination に書き出す。"
+ },
+ "GET": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "キーの文字列値を返す。"
+ },
+ "GETDEL": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "キーの文字列値を返し、そのキーを削除する。"
+ },
+ "GETSET": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "キーに文字列値を設定し、設定前の値を返す。"
+ },
+ "HDEL": {
+  "compat": "互換",
+  "complexity": "O(M) —— フィールド数 M。",
+  "summary": "ハッシュのフィールドを一つ以上削除する。"
+ },
+ "HELLO": {
+  "compat": "差異あり。解釈するのは HELLO [2|3] のみ。AUTH と SETNAME の後続引数は解析した上で捨てる —— kevy に AUTH はなく、この形式ではコネクション名も設定されない。",
+  "complexity": "O(1)。",
+  "summary": "ハンドシェイク。サーバ情報を返し、RESP のプロトコルバージョン(2 または 3)を切り替える。"
+ },
+ "HEXISTS": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "ハッシュにそのフィールドが存在するかを調べる。"
+ },
+ "HEXPIRE": {
+  "compat": "差異あり。FIELDS の解析エラー文言が Redis の「Mandatory argument FIELDS」ではなく「Mandatory keyword FIELDS is missing」になる。",
+  "complexity": "O(F) —— FIELDS 句に並べたフィールド数 F。",
+  "summary": "ハッシュのフィールド単位の TTL を秒で設定する。"
+ },
+ "HGET": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "ハッシュのフィールドの値を返す。"
+ },
+ "HGETALL": {
+  "compat": "互換",
+  "complexity": "O(N) —— フィールド数 N。フィールド名と値を全てコピーして返す。",
+  "summary": "ハッシュの全フィールドと値を返す。"
+ },
+ "HINCRBY": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "ハッシュのフィールドの整数値を増やす。"
+ },
+ "HKEYS": {
+  "compat": "互換",
+  "complexity": "O(N) —— フィールド数 N。",
+  "summary": "ハッシュの全フィールド名を返す。"
+ },
+ "HLEN": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "ハッシュのフィールド数を返す。"
+ },
+ "HMGET": {
+  "compat": "互換",
+  "complexity": "O(M) —— 要求したフィールド数 M。",
+  "summary": "ハッシュの複数フィールドの値を返す。"
+ },
+ "HMSET": {
+  "compat": "互換",
+  "complexity": "O(M) —— 組数 M。",
+  "summary": "HSET の非推奨の別名。OK を返す。"
+ },
+ "HPERSIST": {
+  "compat": "差異あり。FIELDS の手前に紛れ込んだ NX|XX|GT|LT トークンを黙って受理する(HEXPIRE と解析器を共有しているため)。Redis はこれを拒否する。",
+  "complexity": "O(F) —— フィールド数 F。",
+  "summary": "ハッシュのフィールド単位の TTL を解除する。"
+ },
+ "HPEXPIRE": {
+  "compat": "差異あり。FIELDS のエラー文言が Redis と異なる点は HEXPIRE と同じ。",
+  "complexity": "O(F) —— フィールド数 F。",
+  "summary": "ハッシュのフィールド単位の TTL をミリ秒で設定する。"
+ },
+ "HPEXPIREAT": {
+  "compat": "差異あり。FIELDS のエラー文言が Redis と異なる点は HEXPIRE と同じ。",
+  "complexity": "O(F) —— フィールド数 F。",
+  "summary": "ハッシュのフィールド単位の失効時刻を、Unix 時刻(ミリ秒)の絶対値で設定する。"
+ },
+ "HPTTL": {
+  "compat": "差異あり。FIELDS の手前に余分な NX|XX|GT|LT トークンが混ざっていても kevy は黙って受理する。Redis はこれを拒否する。",
+  "complexity": "O(F) —— FIELDS 句に並べたフィールド数。",
+  "summary": "フィールドごとの残り TTL をミリ秒で返す(-1 は TTL 無し、-2 はフィールドが存在しない)。"
+ },
+ "HSCAN": {
+  "compat": "差異あり。カーソル反復子ではない。カーソルは常に 0 で、ハッシュ全体が一度の応答で返る。NOVALUES は解析せず、COUNT は検証だけして無視する。",
+  "complexity": "O(N) —— ハッシュ全体をコピーし、一度の応答でまとめて返す。",
+  "summary": "ハッシュのフィールドと値を反復する(単一バッチのカーソル)。"
+ },
+ "HSET": {
+  "compat": "互換",
+  "complexity": "O(M) —— 組数 M。",
+  "summary": "ハッシュのフィールドを一つ以上設定し、新規に作られたフィールドの数を返す。"
+ },
+ "HSETNX": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "ハッシュのフィールドが存在しない場合に限り設定する。"
+ },
+ "HTTL": {
+  "compat": "差異あり。FIELDS の手前に余分な NX|XX|GT|LT トークンが混ざっていても kevy は黙って受理する。Redis はこれを拒否する。",
+  "complexity": "O(F) —— FIELDS 句に並べたフィールド数。",
+  "summary": "フィールドごとの残り TTL を秒で返す(-1 は TTL 無し、-2 はフィールドが存在しない)。"
+ },
+ "HVALS": {
+  "compat": "互換",
+  "complexity": "O(N) —— フィールド数 N。",
+  "summary": "ハッシュの全ての値を返す。"
+ },
+ "IDX.COUNT": {
+  "compat": "kevy 固有。最も近いのは FT.SEARCH の LIMIT 0 0。",
+  "complexity": "shard あたり O(log N + matched) —— O(1) のカウンタでもなければ、B-tree の rank クエリでもない。一致した範囲を実際に数え上げる。",
+  "summary": "範囲述語または等値述語に一致するインデックスエントリの件数を数える。"
+ },
+ "IDX.CREATE": {
+  "compat": "kevy 固有。最も近いのは RediSearch の FT.CREATE —— prefix に対する宣言的なインデックスという点では比較できるが、RediSearch は独自のインデックスサーバを持つ別モジュールである。kevy のカタログはプロセス内にあり、インデックスは書き込みフックの中で維持される。",
+  "complexity": "呼び出し自体は O(1)。ビルドは非同期である —— 各 shard が対象 key のスナップショットを取り(その shard 上の key 数に比例)、1 tick あたり 2048 行ずつ backfill する。1 行あたりのビルドコストは、range / unique が O(log N)、text が O(tokens)、vector が O(ef_construction * M * dim)。",
+  "summary": "key の prefix に対する二次インデックスを宣言する(カタログの変更であり、サイドカーへ永続化される)。"
+ },
+ "IDX.DROP": {
+  "compat": "kevy 固有。最も近いのは FT.DROPINDEX。",
+  "complexity": "O(catalog size)。",
+  "summary": "宣言済みのインデックスを削除する(カタログの変更であり、サイドカーへ永続化される)。"
+ },
+ "IDX.EXPLAIN": {
+  "compat": "kevy 固有。最も近いのは FT.EXPLAIN で、あちらは解析済みのクエリツリーを返す。kevy が返すのは kind、ビルド状態、推定行数、そして 1 行のプランである。",
+  "complexity": "プラン自体は解析のみで済むが、est_rows の算出には IDX.LIST と同じ実統計の走査コストがかかる。",
+  "summary": "IDX.QUERY の解析だけを行い、実行はしない。kind、state、est_rows、そしてプラン 1 行を返す。"
+ },
+ "IDX.LIST": {
+  "compat": "kevy 固有。最も近いのは FT._LIST と FT.INFO を合わせたもの。",
+  "complexity": "O(1) ではない —— shard ごと、インデックスごとに実際の統計を計算する。range / unique は O(1)、text は O(distinct tokens + docs)、vector は O(nodes + links)、agg は O(groups + rows)。",
+  "summary": "宣言済みのインデックスを、ビルド状態と統計とともに列挙する。"
+ },
+ "IDX.QUERY": {
+  "compat": "kevy 固有。最も近いのは RediSearch の FT.SEARCH —— 2 つの軸では本当に比較できる(kevy の text インデックスは転置セグメント上の BM25、vector インデックスは HNSW であり、RediSearch も両方を提供する)。相違点は次のとおり。別モジュールもインデックスサーバも持たない。BM25 の統計は全体ではなく shard ごとである。クエリ面は DSL ではなく固定の文法であり、フィールドブースト、フレーズ検索、近接検索、ステミング、集約パイプラインはいずれも存在しない。",
+  "complexity": "インデックスの kind による。range は O(log N + limit)。unique は O(log N + hits)。全文検索は posting list の長さの総和で、MaxScore による枝刈りが入る。vector ANN は距離計算が O(dim * (M log N + ef * M)) 回(HNSW)。agg GROUPS は 1 ~ 3 ラウンドの fan-out を伴う上限つきの top-K。HYBRID は両方のサブクエリを 4 倍の深さで走らせ、origin で RRF により融合する。COMPOSE は limit で抑えられない —— 結果は key 順であるのに対しセグメントは値順であるため、両方の葉を全件 materialise する。",
+  "summary": "インデックスに問い合わせる。範囲 / 等値、text MATCH、vector KNN、集約グループ、2 つのインデックスの COMPOSE のいずれか。"
+ },
+ "IDX.REBUILD": {
+  "compat": "kevy 固有。Redis に対応するものはない —— RediSearch は HNSW の削除を内部で処理し、rebuild に相当する verb を公開していない。",
+  "complexity": "vector インデックス専用(tombstone の圧縮)。全 shard で同期的に走り、距離計算は O(V_live * ef_construction * M * dim) 回 —— 拡張コマンド群の中で最も高価な verb である。",
+  "summary": "ANN インデックスを再構築する(tombstone の圧縮)。"
+ },
+ "IDX.VERIFY": {
+  "compat": "kevy 固有。Redis に対応するものはない —— RediSearch のインデックスは非同期に維持され、整合性を検証する verb を持たない。",
+  "complexity": "shard あたり O(N) —— 保持しているすべてのエントリを元の行と突き合わせて読み直し、再度 coerce する。それこそがこの verb の目的であり、インデックスの drift を単なる主張ではなく反証可能な事実にする。",
+  "summary": "インデックスを検証し、entries / bytes / coerce_failures / duplicates / drift / checked を報告する。"
+ },
+ "INCR": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "キーの整数値を 1 増やす。"
+ },
+ "INCRBY": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "キーの整数値を指定した分だけ増やす。"
+ },
+ "INCRBYFLOAT": {
+  "compat": "差異あり。演算は f64 で行い、応答には long double の累算器ではなく Rust の最短往復表現による浮動小数点出力を用いる。そのため末尾の桁が Redis と食い違うことがある。",
+  "complexity": "O(1)",
+  "summary": "キーの浮動小数点値を指定した分だけ増やす。"
+ },
+ "INFO": {
+  "compat": "差異あり。セクションは 8 つのみ(server、clients、memory、persistence、stats、replication、cluster、keyspace)で、commandstats / latencystats / errorstats / cpu は存在しない。クライアント側の判定のために redis_version 7.4.0 を返し、別途 kevy_version 行を持つ。値は最大 1 tick 分だけ古いことがある。",
+  "complexity": "keyspace に対しては O(1) —— 走査は一切しない。shard ごとのゲージを合算するのに O(S)。",
+  "summary": "サーバの統計と状態を、セクション単位のテキストで返す。"
+ },
+ "KEYS": {
+  "compat": "互換",
+  "complexity": "O(N) —— N はキースペース全体のキー数。全ての shard がそれぞれのマップを最後まで走査し、さらにキーごとに O(P*K) の glob 照合が掛かる。",
+  "summary": "glob パターンに一致する全てのキーを返す(shard をまたいで収集する)。"
+ },
+ "LINDEX": {
+  "compat": "互換",
+  "complexity": "O(1) —— リストの実体は VecDeque であり、添字はそのままオフセットになる(Redis の quicklist は O(N))。",
+  "summary": "指定した位置のリスト要素を返す。"
+ },
+ "LLEN": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "リストの長さを返す。"
+ },
+ "LMOVE": {
+  "compat": "差異あり。shard をまたぐ移動はアトミックではない —— BRPOPLPUSH を参照。",
+  "complexity": "O(1)",
+  "summary": "二つのリストの間で要素をアトミックに移動する。"
+ },
+ "LPOP": {
+  "compat": "差異あり。既存のキーに対する LPOP key 0 は、Redis が空の配列を返すのに対し nil 配列を返す。",
+  "complexity": "O(C) —— pop した要素数 C。",
+  "summary": "リストの先頭から要素を一つ以上 pop する。"
+ },
+ "LPOS": {
+  "compat": "互換",
+  "complexity": "常に O(N) —— RANK / COUNT / MAXLEN を適用する前にリスト全体をコピーする。したがって MAXLEN が抑えるのは比較回数だけであり、コピー量は抑えない。",
+  "summary": "リスト内で一致する要素の位置を返す。"
+ },
+ "LPUSH": {
+  "compat": "互換",
+  "complexity": "O(M) —— 値の個数 M。一件あたりは償却 O(1)。",
+  "summary": "リストの先頭に要素を一つ以上追加する。"
+ },
+ "LRANGE": {
+  "compat": "互換",
+  "complexity": "O(M) —— 返す要素数 M。開始オフセットまでの読み飛ばしは O(1) で済む(Redis は O(S+M))。",
+  "summary": "リストの指定範囲の要素を返す。"
+ },
+ "LREM": {
+  "compat": "互換",
+  "complexity": "最悪 O(N*R) —— 走査自体は O(N) だが、一件削除するたびに deque の最大半分を詰め直す(Redis は O(N+R))。",
+  "summary": "リストから指定した値に等しい要素を削除する。"
+ },
+ "LSET": {
+  "compat": "互換",
+  "complexity": "O(1) —— 添字への直接書き込み(Redis は中間位置の場合 O(N))。",
+  "summary": "指定した位置のリスト要素を設定する。"
+ },
+ "LTRIM": {
+  "compat": "互換",
+  "complexity": "O(R) —— 削除した要素数 R。",
+  "summary": "リストを指定した範囲に切り詰める。"
+ },
+ "MEMORY": {
+  "compat": "差異あり。USAGE の SAMPLES は解析した上で無視する(kevy の集計は厳密なため)。PURGE は no-op である(system allocator でありアリーナを持たない)。DOCTOR と MALLOC-STATS は定型文字列を返す。STATS は 8 フィールドに絞った集合。",
+  "complexity": "USAGE は O(1) —— 集計はサンプリングではなく厳密である。STATS はインスタンス全体のゲージから O(1)。",
+  "summary": "メモリ状態を参照するサブコマンド群。"
+ },
+ "MGET": {
+  "compat": "差異あり。キーは shard ごとにまとめられ、shard ごとに独立して探索される。したがって応答は shard をまたいだ一時点のスナップショットではない。",
+  "complexity": "O(N) —— キー数 N。各キーは所有 shard 上で O(1) の探索一回で済む。",
+  "summary": "複数キーの値を返す(shard をまたいで収集する)。"
+ },
+ "MSET": {
+  "compat": "差異あり。アトミックなのは shard 単位のみ。組はキーによって分割され、shard ごとに順次適用される。shard をまたぐバリアが無いため、一部の組だけが書き込まれた状態を読み手が観測しうる。Redis の MSET は全体としてアトミックである。",
+  "complexity": "O(N) —— 組数 N。各組は O(1) の SET 一回。",
+  "summary": "複数のキーと値の組を設定する。アトミック性は shard 単位。"
+ },
+ "MULTI": {
+  "compat": "互換",
+  "complexity": "O(1)。",
+  "summary": "トランザクションを開始する。以降のコマンドは EXEC まで積まれる。"
+ },
+ "PERSIST": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "キーの TTL を解除する。"
+ },
+ "PEXPIRE": {
+  "compat": "差異あり。NX / XX / GT / LT の条件フラグは解析しない。arity は 3 に固定。",
+  "complexity": "O(1)",
+  "summary": "キーの TTL をミリ秒単位で設定する。"
+ },
+ "PEXPIREAT": {
+  "compat": "差異あり。NX / XX / GT / LT の条件フラグは解析しない。arity は 3 に固定。",
+  "complexity": "O(1)",
+  "summary": "キーの失効時刻を Unix 時刻(ミリ秒)の絶対値で設定する。"
+ },
+ "PING": {
+  "compat": "差異あり。kevy に RESP2 の subscriber モードはないため、subscribe 中の PING が配列形式に切り替わることはなく、subscribe 済みのコネクション上でも pubsub 以外のコマンドを発行できる。",
+  "complexity": "O(1)。",
+  "summary": "サーバへの疎通確認。PONG、または与えられたメッセージを返す。"
+ },
+ "PREFIX.DIGEST": {
+  "compat": "kevy 固有。最も近いのは DEBUG DIGEST —— 種類としては同等であり(Redis も key ごとのダイジェストを XOR する)、違いは対象と位置づけにある。Redis のものは DB 全体を対象とし DEBUG の裏に置かれているが、kevy のものは prefix 単位(移行が実際に気にする単位)であり、正式にサポートされた verb である。",
+  "complexity": "全 shard で、走査に O(keys on the shard)、ダイジェスト計算に O(sum of row sizes)。行ごとのダイジェストを XOR で畳み込むため、結果は順序に依存せず、shard 数が変わっても安全に比較できる。",
+  "summary": "prefix 配下の行に対する順序非依存のチェックサム。移行時の検証に使う。"
+ },
+ "PREFIX.STATS": {
+  "compat": "kevy 固有。最も近いのは INFO keyspace の db0:keys=N,expires=M —— カウンタが 2 つという点は同じだが、あちらは DB 全体をカウンタから O(1) で返すのに対し、kevy のものは prefix 単位であり、したがって keyspace のサイズに比例する。",
+  "complexity": "全 shard で keyspace を全走査するため、shard あたり O(keys on the shard)。prefix ごとの集計は事前計算できない。",
+  "summary": "key の prefix に対する key 数とバイト数の統計を返す。"
+ },
+ "PSETEX": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "ミリ秒単位の TTL を付けてキーに値を設定する。"
+ },
+ "PSUBSCRIBE": {
+  "compat": "互換",
+  "complexity": "O(p * P) —— パターン 1 つにつき、共有パターンレジストリの線形走査が 1 回かかる。",
+  "summary": "glob パターンに一致するチャネルを購読する。"
+ },
+ "PTTL": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "キーの残り TTL をミリ秒で返す(TTL 無しは -1、キーが存在しない場合は -2)。"
+ },
+ "PUBLISH": {
+  "compat": "互換",
+  "complexity": "チャネルの引き当てが O(1)、加えて O(P) —— 登録済みパターンを線形に歩き、1 件も一致しない場合でも glob マッチを毎回行う。配送の fan-out は、購読者を持つ shard にだけ及ぶ。",
+  "summary": "チャネルへメッセージを送り、受信者数を返す。"
+ },
+ "PUNSUBSCRIBE": {
+  "compat": "互換",
+  "complexity": "O(p * P)。",
+  "summary": "パターンの購読を解除する(引数がなければ全パターン)。"
+ },
+ "QUIT": {
+  "compat": "互換",
+  "complexity": "O(1)。",
+  "summary": "OK を返してからコネクションを閉じる。"
+ },
+ "RANDOMKEY": {
+  "compat": "差異あり。返るキーはランダムではない。各 shard は hash バケット順で最初に見つかった生存キーを返し、reducer は先頭 shard の分をそのまま採用する。したがってキースペースが変わらない限り毎回同じキーが返る。サンプリング用途には使えない。",
+  "complexity": "O(1)(期待値)",
+  "summary": "キースペースからキーを一つ返す。"
+ },
+ "RENAME": {
+  "compat": "差異あり。shard をまたぐ RENAME は Take のあとに Put を行う非アトミックな二段操作であり、その間にどちらのキーも見えない窓が生じる。アトミックな経路を通したい場合は {hashtag} で二つのキーを同一 shard に寄せること。",
+  "complexity": "文字列値なら O(1)。要素数 M のコレクションなら O(M) —— エントリの重みを値の走査によって求め直すため。",
+  "summary": "キーの名前を変更する。変更先が存在すれば上書きする(書き込みは runtime の Op 層でルーティングされる)。"
+ },
+ "RENAMENX": {
+  "compat": "差異あり。shard をまたぐ RENAMENX は Take、Put、拒否時の復元という非アトミックな手順を踏むため、元のキーがキースペースから消えている窓が生じる。",
+  "complexity": "文字列値なら O(1)。要素数 M のコレクションなら O(M)。",
+  "summary": "変更先が存在しない場合に限りキーの名前を変更する(書き込みは runtime の Op 層でルーティングされる)。"
+ },
+ "REPL.TOKEN": {
+  "compat": "kevy 固有。read-your-writes トークンそのもの。Redis で最も近い概念は master_repl_offset だが、それは shard ごとの再開可能なカーソルではない。",
+  "complexity": "O(S) —— shard ごとに (generation, offset) の組を 1 つ返す。",
+  "summary": "kevy 拡張。read-your-writes トークンを発行する —— shard ごとの [generation, offset] の組であり、primary は自身の feed 末尾を、replica は適用済みの位置を返す。"
+ },
+ "REPL.WAIT": {
+  "compat": "kevy 固有。(generation, offset) のトークンが適用されるまで待つ。フェイルオーバーをまたいでも read-your-writes が成り立つのは、この待機があるためである。",
+  "complexity": "O(S) —— keyspace 操作ではなくバリアである。実時間のコストはレプリケーション遅延そのものであり、TIMEOUT(既定 1 秒、上限 60 秒)で頭打ちになる。",
+  "summary": "kevy 拡張。replica 上では、与えられた REPL.TOKEN を全 shard が適用し終えるまでブロックする(以降の読み取りは read-your-writes になる)。成功で +OK、タイムアウトまたは generation 不一致では -MISDIRECTED writer is <primary> を返す。TIMEOUT の既定は 1000 ms、上限は 60 s。primary 上では即座に +OK。"
+ },
+ "REPLICAOF": {
+  "compat": "差異あり。port 引数は primary のクライアントポートではなく、replication ポートのベース値である(既定のベース値はクライアントポート + 10000)。チェイン構成のレプリケーションは拒否する。",
+  "complexity": "コマンド自体は O(1)。その後に走るフルリシンクは、バックグラウンドで O(N)。",
+  "summary": "このサーバを別のサーバのレプリカにする。NO ONE で昇格させる。"
+ },
+ "ROLE": {
+  "compat": "互換",
+  "complexity": "replica では O(1)、primary では O(R)。",
+  "summary": "このサーバのレプリケーション役割と状態を返す。"
+ },
+ "RPOP": {
+  "compat": "差異あり。既存のキーに対する RPOP key 0 は、Redis が空の配列を返すのに対し nil 配列を返す。",
+  "complexity": "O(C) —— pop した要素数 C。",
+  "summary": "リストの末尾から要素を一つ以上 pop する。"
+ },
+ "RPOPLPUSH": {
+  "compat": "差異あり。shard をまたぐ移動はアトミックではない —— BRPOPLPUSH を参照。",
+  "complexity": "O(1)",
+  "summary": "source の末尾を pop し、destination の先頭に push する。"
+ },
+ "RPUSH": {
+  "compat": "互換",
+  "complexity": "O(M) —— 値の個数 M。一件あたりは償却 O(1)。",
+  "summary": "リストの末尾に要素を一つ以上追加する。"
+ },
+ "SADD": {
+  "compat": "互換",
+  "complexity": "O(M) —— メンバー数 M。",
+  "summary": "セットにメンバーを一つ以上追加する。"
+ },
+ "SAVE": {
+  "compat": "差異あり。SAVE はもはや永続化完了までの同期実行ではない —— copy-on-write のビューを凍結した時点で即座に OK を返す。したがって「SAVE が返ったのだから dump をコピーしてよい」という前提はもう成り立たない。",
+  "complexity": "fan-out は O(S)。shard ごとに O(N/S) の copy-on-write 凍結を行う。",
+  "summary": "データセットをディスクへ同期的にスナップショットする。"
+ },
+ "SCAN": {
+  "compat": "差異あり。SCAN はカーソル反復子ではない。呼び出しのたびに全 shard のキースペース全体を走査し、カーソル 0 と全ての一致キーを一度の応答でまとめて返すため、通常の SCAN ループは一往復で終了する。COUNT と TYPE は受理された上で無視され、有効なのは MATCH だけ。Redis が保証する増分性・処理量の上限・rehash 耐性はここには存在しない。",
+  "complexity": "O(N) —— 呼び出しのたびにキースペース全体の N キーを走査する。増分的な巡回は行わない。",
+  "summary": "キースペースを一掃し、一致したキーを一度に全て返す。カーソル反復子ではない(COUNT と TYPE は受理された上で無視され、カーソルは常に 0)。"
+ },
+ "SCARD": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "セットのメンバー数を返す。"
+ },
+ "SCRIPT": {
+  "compat": "差異あり。LOAD / EXISTS / FLUSH のみ。SCRIPT KILL は設計上存在しない —— 予算を超えたスクリプトは自ら中断するため、割り込むべき -BUSY 状態がそもそも存在しない。",
+  "complexity": "LOAD は O(len(script))。EXISTS は O(k)。FLUSH はキャッシュ済みスクリプト数に比例する。",
+  "summary": "プロセス全体で共有する Lua スクリプトキャッシュを管理する。"
+ },
+ "SDIFF": {
+  "compat": "互換",
+  "complexity": "O(元セットの濃度の総和)",
+  "summary": "指定したセットの差集合を返す(shard をまたいで収集する)。"
+ },
+ "SDIFFSTORE": {
+  "compat": "互換",
+  "complexity": "O(元セットの濃度の総和) に加え、destination をその所有 shard へ書き込む O(結果の要素数)。",
+  "summary": "指定したセットの差集合を destination に格納する。"
+ },
+ "SELECT": {
+  "compat": "差異あり。kevy は単一 DB —— SELECT 0 は OK を返し、それ以外の index はエラーになる。",
+  "complexity": "O(1)。",
+  "summary": "論理データベースを選択する。kevy は単一 DB であり、index 0 だけを受理する。"
+ },
+ "SET": {
+  "compat": "差異あり。解析するのは NX / XX / EX / PX のみ。KEEPTTL、EXAT、PXAT、GET および IFEQ 系は構文エラーになる。失効オプションを重複指定した場合はエラーにせず、最後の指定を黙って採用する。",
+  "complexity": "O(1)",
+  "summary": "キーに文字列値を設定する。TTL と存在条件を任意で指定できる。"
+ },
+ "SETEX": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "秒単位の TTL を付けてキーに値を設定する。"
+ },
+ "SETNX": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "キーが存在しない場合に限り値を設定する。"
+ },
+ "SHUTDOWN": {
+  "compat": "差異あり。解析するのは SHUTDOWN [NOSAVE|SAVE] のみ。NOW、FORCE、ABORT は構文エラーとなる。",
+  "complexity": "停止フラグを立てるまでが O(1)。その後に続く drain は O(N)。",
+  "summary": "サーバプロセスを停止する(応答を返さないままコネクションが切れる)。"
+ },
+ "SINTER": {
+  "compat": "互換",
+  "complexity": "O(元セットの濃度の総和) —— 小さいセットから先に処理する最適化は一切行わない。したがって SINTER huge tiny は O(huge) 掛かる。Redis なら O(tiny * k) で済むところである。",
+  "summary": "指定したセットの積集合を返す(shard をまたいで収集する)。"
+ },
+ "SINTERSTORE": {
+  "compat": "互換",
+  "complexity": "O(元セットの濃度の総和) に加え O(結果の要素数)。小さいセットから先に処理しない点は SINTER と同じ。",
+  "summary": "指定したセットの積集合を destination に格納する。"
+ },
+ "SISMEMBER": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "値がセットのメンバーかどうかを調べる。"
+ },
+ "SLAVEOF": {
+  "compat": "差異あり。REPLICAOF の非推奨エイリアスであり、replication ポートのベース値を引数に取る点も同じである。",
+  "complexity": "O(1) と、バックグラウンドのリシンク。",
+  "summary": "REPLICAOF の旧名エイリアス。"
+ },
+ "SLOWLOG": {
+  "compat": "差異あり。ログは shard ごとに持ち、GET はそれをタイムスタンプ順にマージして返すため、id は全体として単調にならない。各エントリの client-addr と client-name は常に空文字列である。",
+  "complexity": "GET は O(S) の fan-out に加えて、マージが O(L log L)。LEN は O(S)。RESET は O(S)。",
+  "summary": "スローコマンドログの参照とリセット。"
+ },
+ "SMEMBERS": {
+  "compat": "互換",
+  "complexity": "O(N) —— メンバー数 N。",
+  "summary": "セットの全メンバーを返す。"
+ },
+ "SPOP": {
+  "compat": "差異あり。返るメンバーはランダムではない。SPOP は hash バケット順で先頭にあるメンバーから返し、seed も固定の定数である。したがって同じセットに対する SPOP の繰り返しは完全に決定的になる。",
+  "complexity": "O(count)(期待値)。ただし N 個のメンバーを N 回の呼び出しで空にすると、バケット走査が毎回先頭からやり直しになるため、全体では O(N^2) になる。",
+  "summary": "セットからメンバーを一つ以上ランダムに取り出し、削除する。"
+ },
+ "SRANDMEMBER": {
+  "compat": "差異あり。ランダムではない。あるセットに対しては、毎回同じ先頭バケットのメンバーが返る。また負の count は拒否され、Redis のように重複を許して |count| 個返すことはしない。",
+  "complexity": "O(count)(期待値)",
+  "summary": "セットのメンバーを、削除せずに一つ以上返す。"
+ },
+ "SREM": {
+  "compat": "互換",
+  "complexity": "O(M) —— メンバー数 M。",
+  "summary": "セットからメンバーを一つ以上削除する。"
+ },
+ "SSCAN": {
+  "compat": "差異あり。カーソル反復子ではない。カーソルは常に 0 で、セット全体が一度の応答で返る。COUNT は検証だけして無視する。",
+  "complexity": "O(N) —— セット全体をコピーし、一度の応答でまとめて返す。",
+  "summary": "セットのメンバーを反復する(単一バッチのカーソル)。"
+ },
+ "STRLEN": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "キーの文字列値の長さを返す。"
+ },
+ "SUBSCRIBE": {
+  "compat": "差異あり。kevy に RESP2 の subscriber モードはない —— SUBSCRIBE 後もそのコネクションから任意のコマンドを発行できる。Redis では pubsub 系の verb と PING / QUIT / RESET に制限される。",
+  "complexity": "チャネル c 個に対して O(c)。他の shard へ fan-out することはない。",
+  "summary": "指定したチャネルを購読する。"
+ },
+ "SUNION": {
+  "compat": "互換",
+  "complexity": "O(元セットの濃度の総和)",
+  "summary": "指定したセットの和集合を返す(shard をまたいで収集する)。"
+ },
+ "SUNIONSTORE": {
+  "compat": "互換",
+  "complexity": "O(元セットの濃度の総和) に加え O(結果の要素数)。",
+  "summary": "指定したセットの和集合を destination に格納する。"
+ },
+ "TTL": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "キーの残り TTL を秒で返す(TTL 無しは -1、キーが存在しない場合は -2)。"
+ },
+ "TYPE": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "キーに格納された値の型を返す。"
+ },
+ "UNLINK": {
+  "compat": "差異あり。UNLINK は DEL の別名にすぎない。値の解放は所有 shard の reactor スレッド上でその場で行われ、背景スレッドには回らないため、レイテンシ上の利点は無い。",
+  "complexity": "O(N) —— キー数 N。さらにコレクション型のキーごとに O(M)。DEL と全く同じ。",
+  "summary": "一つ以上のキーを削除する(kevy の shard モデルでは DEL の別名)。"
+ },
+ "UNSUBSCRIBE": {
+  "compat": "互換",
+  "complexity": "チャネル c 個に対して O(c)。",
+  "summary": "チャネルの購読を解除する(引数がなければ全チャネル)。"
+ },
+ "UNWATCH": {
+  "compat": "互換",
+  "complexity": "O(1)。",
+  "summary": "WATCH した key をすべて忘れる。"
+ },
+ "VIEW.CREATE": {
+  "compat": "kevy 固有。Redis に対応するものはない。view は保存済みクエリでも join でもなく、宣言済みインデックス上の名前つき合成ツリーであり、保持するのはメンバーシップと順序だけで、フィールド値は一切保持しない。",
+  "complexity": "呼び出し自体は O(tree size)。materialized view は次の tick で遅延ビルドされる(eval_tree の全実行と O(M log M) のソート)。virtual view は何もビルドしない。",
+  "summary": "複数のインデックスを合成した view を、ORDER BY つきで宣言する(カタログの変更であり、サイドカーへ永続化される)。"
+ },
+ "VIEW.DROP": {
+  "compat": "kevy 固有。",
+  "complexity": "O(catalog size)。",
+  "summary": "宣言済みの view を削除する(カタログの変更であり、サイドカーへ永続化される)。"
+ },
+ "VIEW.EXPLAIN": {
+  "compat": "kevy 固有。最も近いのは FT.EXPLAIN だが、あちらが返すのはクエリツリーであって、葉ごとのカーディナリティではない。",
+  "complexity": "葉ごとの (log N + matched) の総和。各葉のカーディナリティは実際に数えた値であるため、広い葉に対する EXPLAIN は、その葉を数えるのと同じだけのコストがかかる。",
+  "summary": "view の合成ツリーを、葉ごとのカーディナリティつきで説明する。"
+ },
+ "VIEW.LIST": {
+  "compat": "kevy 固有。",
+  "complexity": "origin 側で O(views) —— カタログはプロセス全体で共有される。",
+  "summary": "宣言済みの view を、モードと形状とともに列挙する。"
+ },
+ "VIEW.QUERY": {
+  "compat": "kevy 固有。Redis に対応するものはない。設計上存在しないもの：join、view 層での述語、view 自身からの射影、HAVING、集約。",
+  "complexity": "virtual は O(log N_order + candidates * leaves) —— ORDER インデックスをストリームしながら候補ごとにメンバーシップを判定し、limit に達したところで止める。したがってメンバー集合を materialise することはない。materialized は O(log M + limit)。FIELDS を VIA つきで指定すると、行を hydrate するために 2 回目の fan-out が走る。",
+  "summary": "view の順序づけられたメンバーをページングして取得する。VIA テンプレート経由でフィールドを hydrate することもできる。"
+ },
+ "VIEW.REBUILD": {
+  "compat": "kevy 固有。",
+  "complexity": "materialized 専用。ツリー全体に対する eval_tree の全実行に加え、O(M log M) のソートと再挿入を、全 shard で即座に行う(tick を待たない)。",
+  "summary": "materialized view の再構築を強制する。"
+ },
+ "VIEW.VERIFY": {
+  "compat": "kevy 固有。",
+  "complexity": "materialized は O(M)。virtual は、葉ごとの (log N + leaf range) の総和に O(M) を加えたもの —— カーディナリティを報告するためだけに完全な再評価を行う。virtual view が materialized より高くつく、唯一の場面である。",
+  "summary": "view を検証し、メンバー数とバイト数の統計を報告する。"
+ },
+ "WAIT": {
+  "compat": "差異あり。全 shard に対するバリアであり、shard 横断の最小値を返す(Redis では待つべき offset が 1 つしかない)。timeout 0 は無期限ではなく 60 秒で頭打ちになる。ACK はフレームが replica の適用パイプラインへ届いたことを意味するだけで、fsync による永続化ではない。",
+  "complexity": "O(S) —— 全 shard に対するバリアであり、返すのは shard 横断での ack 済み replica 数の最小値である。実時間のコストはレプリケーションの往復そのもの。",
+  "summary": "全 shard の master_repl_offset が numreplicas 台以上の replica に ack されるまで(または timeout ミリ秒が経過するまで)ブロックし、shard 横断での ack 済み replica 数の最小値を返す。timeout 0 は無期限待ちだが、上限は 60 s。注意：replica の ACK は fsync による永続化を意味しない。"
+ },
+ "WATCH": {
+  "compat": "互換",
+  "complexity": "key W 個に対して O(W)。shard をまたぐメッセージは O(min(W,S)) 通にまとめられる。",
+  "summary": "次の EXEC のために、key を楽観ロックの対象として監視する。"
+ },
+ "XACK": {
+  "compat": "互換",
+  "complexity": "O(A log P)。",
+  "summary": "コンシューマーグループの pending エントリを確認済みにする。"
+ },
+ "XADD": {
+  "compat": "差異あり。近似トリムの「~」はワイヤ互換のために受理するが、動作は常に厳密トリムである。LIMIT 句は解析しない。",
+  "complexity": "挿入は O(log N)。MAXLEN / MINID 句が実際にエントリを退避したときは、トリムが weight の全再計算を誘発するため O(N*F)。",
+  "summary": "ストリームにエントリを追記する。トリム指定を同時に行える。"
+ },
+ "XAUTOCLAIM": {
+  "compat": "差異あり。PEL の走査が末尾まで到達したときの next-cursor は 0-0 ではなく last-claimed+1 になる。0-0 が返るまでループするクライアントは、1 往復余計に必要となる。",
+  "complexity": "O(log P + K + COUNT log N)。idle フィルタは取得より前に走るため、新しいエントリばかりの PEL は全体を走査することになる。",
+  "summary": "カーソル位置から、idle 状態の pending エントリを走査して claim する。"
+ },
+ "XCLAIM": {
+  "compat": "差異あり。IDLE / TIME / RETRYCOUNT / FORCE / JUSTID は解析するが、LASTID は解析しない。key または group が存在しない場合は NOGROUP ではなく「no such key」を返す。",
+  "complexity": "O(A * (log P + log N))。",
+  "summary": "指定した id の idle な pending エントリを、コンシューマーへ claim する。"
+ },
+ "XDEL": {
+  "compat": "互換",
+  "complexity": "id が D 個で O(D log N + N*F)。O(1) ではない —— 末尾 weight の再計算がストリーム全体に対して線形に走る。",
+  "summary": "ストリームから id を指定してエントリを削除する。"
+ },
+ "XGROUP": {
+  "compat": "差異あり。CREATE / SETID / DESTROY / CREATECONSUMER / DELCONSUMER / MKSTREAM を提供する。ただし key が存在しないとき、CREATE 以外のサブコマンドは Redis のエラーではなく 0 または NOGROUP を返す。XGROUP HELP は存在しない。",
+  "complexity": "CREATE / DESTROY は O(1) に加えて O(N*F) の再 weight。SETID / CREATECONSUMER は O(1)。DELCONSUMER は O(P)。",
+  "summary": "ストリームのコンシューマーグループを管理する。"
+ },
+ "XINFO": {
+  "compat": "差異あり。STREAM / GROUPS / CONSUMERS / HELP のみで、XINFO STREAM FULL は存在しない。kevy に radix tree はないため radix-tree-keys と radix-tree-nodes は合成値であり、entries-read は近似値、CONSUMERS は inactive を返さない。",
+  "complexity": "STREAM は O(1)。GROUPS は O(G*N) —— lag はグループごとに全エントリを線形に歩いて求める。CONSUMERS は O(C)。",
+  "summary": "ストリーム本体、そのグループ、そのコンシューマーの内部状態を参照する。"
+ },
+ "XLEN": {
+  "compat": "互換",
+  "complexity": "O(1)。",
+  "summary": "ストリームのエントリ数を返す。"
+ },
+ "XPENDING": {
+  "compat": "互換",
+  "complexity": "サマリ形式は O(P*C) —— コンシューマーごとの集計は PEL の各行に対する線形探索になる。拡張形式は O(log P + K)。",
+  "summary": "コンシューマーグループの pending エントリを、サマリ形式または拡張形式で参照する。"
+ },
+ "XRANGE": {
+  "compat": "互換",
+  "complexity": "O(log N + M) —— B-tree の範囲降下であり、COUNT は遅延して適用される。",
+  "summary": "ID 範囲に含まれるストリームのエントリを返す。"
+ },
+ "XREAD": {
+  "compat": "差異あり。last-id を表す「+」形式は解析しない。受理するのは明示 ID と「$」のみ。",
+  "complexity": "ストリーム S 本に対して O(S * (log N + M))。「$」は O(1)、park も O(1)。",
+  "summary": "1 本以上のストリームから新規エントリを読む。ブロックも指定できる。"
+ },
+ "XREADGROUP": {
+  "compat": "差異あり。COUNT は解析するが、「>」形式の走査量は制限しない。",
+  "complexity": "「>」形式は O(log N + U + M) —— COUNT は走査量を制限しない。未配信の末尾全体をまず materialise し、その後で COUNT が切り詰める。再生形式は O(log P + K)。",
+  "summary": "コンシューマーグループの一員としてストリームを読む。ブロックも指定できる。"
+ },
+ "XREVRANGE": {
+  "compat": "互換",
+  "complexity": "O(log N + M)。",
+  "summary": "ID 範囲に含まれるストリームのエントリを逆順で返す。"
+ },
+ "XSETID": {
+  "compat": "互換",
+  "complexity": "O(log N)。",
+  "summary": "ストリームの最終生成 ID と付随カウンタを上書きする。"
+ },
+ "XTRIM": {
+  "compat": "差異あり。「~」は受理するが、トリムは常に厳密に行う。LIMIT は解析しない。threshold の後ろに続く余分なトークンは、エラーにせず黙って無視する。",
+  "complexity": "退避されるエントリが R 件で O(R log N + N*F)。",
+  "summary": "長さまたは最小 ID を基準にストリームをトリムする。"
+ },
+ "ZADD": {
+  "compat": "互換",
+  "complexity": "O(M log N) —— メンバーごとに O(1) の hash 挿入と O(log N) の木への挿入が掛かる。",
+  "summary": "ソート済みセットにスコア付きでメンバーを追加する。条件フラグを指定できる。"
+ },
+ "ZCARD": {
+  "compat": "互換",
+  "complexity": "O(1)",
+  "summary": "ソート済みセットのメンバー数を返す。"
+ },
+ "ZCOUNT": {
+  "compat": "互換",
+  "complexity": "O(N) —— 全件を走査して絞り込む。範囲シークではない。Redis の O(log N) はここには当てはまらない。",
+  "summary": "指定した範囲のスコアを持つメンバーの個数を返す。"
+ },
+ "ZDIFFSTORE": {
+  "compat": "互換",
+  "complexity": "O(元セットの濃度の総和 + R log R) —— 元セットはそれぞれの所有 shard 上で丸ごと取り出される。",
+  "summary": "指定したソート済みセットの差集合を destination に格納する。"
+ },
+ "ZINCRBY": {
+  "compat": "互換",
+  "complexity": "O(log N)",
+  "summary": "ソート済みセット内のメンバーのスコアを増やす。"
+ },
+ "ZINTERCARD": {
+  "compat": "互換",
+  "complexity": "O(元セットの濃度の総和) —— LIMIT は収集を打ち切らない。効くのは結合の段階だけである。",
+  "summary": "指定したソート済みセットの積集合の要素数を返す。"
+ },
+ "ZINTERSTORE": {
+  "compat": "互換",
+  "complexity": "O(元セットの濃度の総和 + R log R)",
+  "summary": "指定したソート済みセットの積集合を destination に格納する。"
+ },
+ "ZPOPMIN": {
+  "compat": "互換",
+  "complexity": "O(M log N)",
+  "summary": "スコアが低いメンバーを、最大 count 個 pop する。"
+ },
+ "ZPOPMIN.BELOW": {
+  "compat": "kevy 固有。遅延ジョブ用のプリミティブ(スコア = 実行予定時刻)。Redis に対応するコマンドは無い。",
+  "complexity": "O(M log N) —— take_while は閾値以上のスコアに当たった時点で止まるため、期限の来た先頭部分より先へは進まない。",
+  "summary": "kevy 拡張。スコアが閾値より厳密に小さいメンバーを、低い方から最大 count 個 pop する(遅延ジョブ用のプリミティブ)。"
+ },
+ "ZRANGE": {
+  "compat": "差異あり。受理するのは旧来の key start stop [WITHSCORES] 形式のみ。Redis 6.2 の BYSCORE / BYLEX / REV / LIMIT 引数は構文エラーになる。",
+  "complexity": "O(start + M) —— 木の反復子は一ノードずつ進む。順位で飛び越えるためのインデックスは存在しない。",
+  "summary": "順位の範囲を指定してメンバーを返す。"
+ },
+ "ZRANGEBYSCORE": {
+  "compat": "互換",
+  "complexity": "O(N + M) —— 全件を走査して絞り込む。LIMIT は一致集合を全て実体化したあとに適用されるため、処理量そのものは減らない。",
+  "summary": "指定した範囲のスコアを持つメンバーを返す。"
+ },
+ "ZRANK": {
+  "compat": "差異あり。Redis 7.2 の WITHSCORE オプションは非対応。",
+  "complexity": "O(N) —— 位置を線形に走査する。O(log N) ではない。kevy のソート済みセットには順位を補強する構造が無いため、スキップリストのような順位インデックスは存在しない。",
+  "summary": "メンバーの順位をスコアの低い順で返す。"
+ },
+ "ZREM": {
+  "compat": "互換",
+  "complexity": "O(M log N)",
+  "summary": "ソート済みセットからメンバーを一つ以上削除する。"
+ },
+ "ZREMRANGEBYRANK": {
+  "compat": "互換",
+  "complexity": "O(start + M log N)",
+  "summary": "指定した順位の範囲にあるメンバーを削除する。"
+ },
+ "ZREMRANGEBYSCORE": {
+  "compat": "互換",
+  "complexity": "O(N + M log N) —— 全件を走査して対象を洗い出したあと、M 件を削除する。",
+  "summary": "指定した範囲のスコアを持つメンバーを削除する。"
+ },
+ "ZREVRANGEBYSCORE": {
+  "compat": "互換",
+  "complexity": "O(N + M) —— 前方向に全件を走査して絞り込み、その結果を反転する。",
+  "summary": "指定した範囲のスコアを持つメンバーを、スコアの高い順に返す。"
+ },
+ "ZSCAN": {
+  "compat": "差異あり。カーソル反復子ではない。呼び出しのたびにカーソル 0 とセット全体が返り、COUNT は解析されたあと無視される。",
+  "complexity": "O(N) —— セット全体を実体化する。",
+  "summary": "ソート済みセットのメンバーとスコアを反復する(単一バッチのカーソル)。"
+ },
+ "ZSCORE": {
+  "compat": "互換",
+  "complexity": "O(1) —— hash の探索一回。",
+  "summary": "メンバーのスコアを返す。"
+ },
+ "ZUNIONSTORE": {
+  "compat": "互換",
+  "complexity": "O(元セットの濃度の総和 + R log R)",
+  "summary": "指定したソート済みセットの和集合を destination に格納する。"
+ }
+}

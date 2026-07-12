@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XADD — kevy コマンドリファレンス</title>
-<meta name="description" content="XADD — Append an entry to a stream, with optional trim. O(log N) to insert; O(N*F) whenever a MAXLEN / MINID clause actually evicts, because the trim triggers a full weight recompute">
+<meta name="description" content="XADD — ストリームにエントリを追記する。トリム指定を同時に行える。 挿入は O(log N)。MAXLEN / MINID 句が実際にエントリを退避したときは、トリムが weight の全再計算を誘発するため O(N*F)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ストリーム</span> <span>/</span> <b>XADD</b></nav>
 
     <h1 class="cmd">XADD</h1>
-    <p class="lede">Append an entry to a stream, with optional trim.</p>
+    <p class="lede">ストリームにエントリを追記する。トリム指定を同時に行える。</p>
 
     <pre class="syntax"><code>XADD key [NOMKSTREAM] [MAXLEN [=|~] threshold | MINID [=|~] id] id|* field value [field value ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(log N) to insert; O(N*F) whenever a MAXLEN / MINID clause actually evicts, because the trim triggers a full weight recompute</code></p>
+      <p class="cx-body"><code>挿入は O(log N)。MAXLEN / MINID 句が実際にエントリを退避したときは、トリムが weight の全再計算を誘発するため O(N*F)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: the approximate-trim '~' is accepted for wire compatibility but always trims exactly, and the LIMIT clause is not parsed</p>
+        <p>差異あり。近似トリムの「~」はワイヤ互換のために受理するが、動作は常に厳密トリムである。LIMIT 句は解析しない。</p>
       </div>
     </section>
 

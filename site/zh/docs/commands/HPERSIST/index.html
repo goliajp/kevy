@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HPERSIST — kevy 命令参考</title>
-<meta name="description" content="HPERSIST — Remove per-field TTLs from a hash. O(F) fields">
+<meta name="description" content="HPERSIST — 移除 hash 上 field 级别的 TTL。 O(F)，F 为 field 个数。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>哈希</span> <span>/</span> <b>HPERSIST</b></nav>
 
     <h1 class="cmd">HPERSIST</h1>
-    <p class="lede">Remove per-field TTLs from a hash.</p>
+    <p class="lede">移除 hash 上 field 级别的 TTL。</p>
 
     <pre class="syntax"><code>HPERSIST key FIELDS numfields field [field ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(F) fields</code></p>
+      <p class="cx-body"><code>O(F)，F 为 field 个数。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,13 +63,13 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: silently accepts a stray NX|XX|GT|LT token before FIELDS (it shares HEXPIRE's parser) where Redis rejects it</p>
+        <p>有差异：FIELDS 之前若多写了一个 NX|XX|GT|LT token，kevy 会静默接受（它与 HEXPIRE 共用同一个解析器），Redis 则会拒绝。</p>
       </div>
     </section>
 
     <section class="siblings">
       <h2>另见</h2>
-      <p class="sees"><a href="../HDEL/">HDEL</a><a href="../HEXISTS/">HEXISTS</a><a href="../HEXPIRE/">HEXPIRE</a><a href="../HGET/">HGET</a><a href="../HGETALL/">HGETALL</a><a href="../HINCRBY/">HINCRBY</a><a href="../HKEYS/">HKEYS</a><a href="../HLEN/">HLEN</a><a href="../HMGET/">HMGET</a><a href="../HMSET/">HMSET</a><a href="../HPEXPIRE/">HPEXPIRE</a><a href="../HPEXPIREAT/">HPEXPIREAT</a><a href="../HSCAN/">HSCAN</a><a href="../HSET/">HSET</a><a href="../HSETNX/">HSETNX</a><a href="../HTTL/">HTTL</a><a href="../HVALS/">HVALS</a></p>
+      <p class="sees"><a href="../HDEL/">HDEL</a><a href="../HEXISTS/">HEXISTS</a><a href="../HEXPIRE/">HEXPIRE</a><a href="../HGET/">HGET</a><a href="../HGETALL/">HGETALL</a><a href="../HINCRBY/">HINCRBY</a><a href="../HKEYS/">HKEYS</a><a href="../HLEN/">HLEN</a><a href="../HMGET/">HMGET</a><a href="../HMSET/">HMSET</a><a href="../HPEXPIRE/">HPEXPIRE</a><a href="../HPEXPIREAT/">HPEXPIREAT</a><a href="../HPTTL/">HPTTL</a><a href="../HSCAN/">HSCAN</a><a href="../HSET/">HSET</a><a href="../HSETNX/">HSETNX</a><a href="../HTTL/">HTTL</a><a href="../HVALS/">HVALS</a></p>
     </section>
 
     <p class="back"><a href="../">← 返回全部命令</a></p>

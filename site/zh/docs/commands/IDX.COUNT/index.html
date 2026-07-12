@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>IDX.COUNT — kevy 命令参考</title>
-<meta name="description" content="IDX.COUNT — Count index entries matching a range or equality predicate. O(log N + matched) per shard — NOT an O(1) counter and not a B-tree rank query; it counts the matched range">
+<meta name="description" content="IDX.COUNT — 统计匹配区间谓词或等值谓词的索引条目数。 每个 shard 上 O(log N + matched) —— 它不是 O(1) 的计数器，也不是 B-tree 的 rank 查询，而是把命中的那段区间数了一遍。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>索引</span> <span>/</span> <b>IDX.COUNT</b></nav>
 
     <h1 class="cmd">IDX.COUNT</h1>
-    <p class="lede">Count index entries matching a range or equality predicate.</p>
+    <p class="lede">统计匹配区间谓词或等值谓词的索引条目数。</p>
 
     <pre class="syntax"><code>IDX.COUNT name RANGE min max | EQ value</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(log N + matched) per shard — NOT an O(1) counter and not a B-tree rank query; it counts the matched range</code></p>
+      <p class="cx-body"><code>每个 shard 上 O(log N + matched) —— 它不是 O(1) 的计数器，也不是 B-tree 的 rank 查询，而是把命中的那段区间数了一遍。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call warn">
         <span class="h">kevy 独有</span>
-        <p>kevy-only: nearest is FT.SEARCH with LIMIT 0 0</p>
+        <p>kevy 独有：最接近的是 FT.SEARCH 配 LIMIT 0 0。</p>
       </div>
     </section>
 

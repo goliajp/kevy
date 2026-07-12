@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GEOSEARCH — kevy 命令参考</title>
-<meta name="description" content="GEOSEARCH — Search members within a radius or box from a member or coordinate. O(N) per call — up to nine neighbour ranges, each fetched with a full zset scan; the geohash block prunes distance maths, not iteration">
+<meta name="description" content="GEOSEARCH — 从某个成员或某个坐标出发，按半径或矩形范围搜索成员。 每次调用 O(N) —— 最多九个相邻区块，每个都靠一次全量 zset 扫描取出；geohash 分块省掉的是距离计算，不是迭代。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>地理空间</span> <span>/</span> <b>GEOSEARCH</b></nav>
 
     <h1 class="cmd">GEOSEARCH</h1>
-    <p class="lede">Search members within a radius or box from a member or coordinate.</p>
+    <p class="lede">从某个成员或某个坐标出发，按半径或矩形范围搜索成员。</p>
 
     <pre class="syntax"><code>GEOSEARCH key FROMMEMBER member|FROMLONLAT longitude latitude BYRADIUS radius m|km|mi|ft|BYBOX width height m|km|mi|ft [ASC|DESC] [COUNT count [ANY]] [WITHCOORD] [WITHDIST] [WITHHASH]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(N) per call — up to nine neighbour ranges, each fetched with a full zset scan; the geohash block prunes distance maths, not iteration</code></p>
+      <p class="cx-body"><code>每次调用 O(N) —— 最多九个相邻区块，每个都靠一次全量 zset 扫描取出；geohash 分块省掉的是距离计算，不是迭代。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: STOREDIST is accepted and ignored on the read-only form; COUNT 0 is an error</p>
+        <p>有差异：只读形式下 STOREDIST 会被接受并忽略；COUNT 0 是错误。</p>
       </div>
     </section>
 

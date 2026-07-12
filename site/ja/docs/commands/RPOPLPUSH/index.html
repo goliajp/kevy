@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RPOPLPUSH — kevy コマンドリファレンス</title>
-<meta name="description" content="RPOPLPUSH — Pop the source tail and push it onto the destination head. O(1)">
+<meta name="description" content="RPOPLPUSH — source の末尾を pop し、destination の先頭に push する。 O(1)">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>リスト</span> <span>/</span> <b>RPOPLPUSH</b></nav>
 
     <h1 class="cmd">RPOPLPUSH</h1>
-    <p class="lede">Pop the source tail and push it onto the destination head.</p>
+    <p class="lede">source の末尾を pop し、destination の先頭に push する。</p>
 
     <pre class="syntax"><code>RPOPLPUSH source destination</code></pre>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: a cross-shard move is not atomic — see BRPOPLPUSH</p>
+        <p>差異あり。shard をまたぐ移動はアトミックではない —— BRPOPLPUSH を参照。</p>
       </div>
     </section>
 

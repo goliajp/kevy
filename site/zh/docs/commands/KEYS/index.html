@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>KEYS — kevy 命令参考</title>
-<meta name="description" content="KEYS — Return every key matching the glob pattern (cross-shard gather). O(N) keys in the whole keyspace — every shard walks its entire map, plus an O(P*K) glob match per key">
+<meta name="description" content="KEYS — 返回键空间里所有匹配该 glob 模式的 key（跨 shard 汇聚）。 O(N)，N 为整个键空间的 key 数 —— 每个 shard 都要遍历自己的整张表，再对每个 key 做一次 O(P*K) 的 glob 匹配。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>键空间扫描</span> <span>/</span> <b>KEYS</b></nav>
 
     <h1 class="cmd">KEYS</h1>
-    <p class="lede">Return every key matching the glob pattern (cross-shard gather).</p>
+    <p class="lede">返回键空间里所有匹配该 glob 模式的 key（跨 shard 汇聚）。</p>
 
     <pre class="syntax"><code>KEYS pattern</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(N) keys in the whole keyspace — every shard walks its entire map, plus an O(P*K) glob match per key</code></p>
+      <p class="cx-body"><code>O(N)，N 为整个键空间的 key 数 —— 每个 shard 都要遍历自己的整张表，再对每个 key 做一次 O(P*K) 的 glob 匹配。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call note">
         <span class="h">兼容</span>
-        <p>full</p>
+        <p>兼容</p>
       </div>
     </section>
 

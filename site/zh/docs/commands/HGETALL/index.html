@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HGETALL — kevy 命令参考</title>
-<meta name="description" content="HGETALL — Return all fields and values of a hash. O(N) fields, with a full copy of every name and value">
+<meta name="description" content="HGETALL — 返回 hash 的全部 field 与值。 O(N)，N 为 field 个数，每个 field 名和值都会被完整拷贝一份。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>哈希</span> <span>/</span> <b>HGETALL</b></nav>
 
     <h1 class="cmd">HGETALL</h1>
-    <p class="lede">Return all fields and values of a hash.</p>
+    <p class="lede">返回 hash 的全部 field 与值。</p>
 
     <pre class="syntax"><code>HGETALL key</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(N) fields, with a full copy of every name and value</code></p>
+      <p class="cx-body"><code>O(N)，N 为 field 个数，每个 field 名和值都会被完整拷贝一份。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,13 +63,13 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call note">
         <span class="h">兼容</span>
-        <p>full</p>
+        <p>兼容</p>
       </div>
     </section>
 
     <section class="siblings">
       <h2>另见</h2>
-      <p class="sees"><a href="../HDEL/">HDEL</a><a href="../HEXISTS/">HEXISTS</a><a href="../HEXPIRE/">HEXPIRE</a><a href="../HGET/">HGET</a><a href="../HINCRBY/">HINCRBY</a><a href="../HKEYS/">HKEYS</a><a href="../HLEN/">HLEN</a><a href="../HMGET/">HMGET</a><a href="../HMSET/">HMSET</a><a href="../HPERSIST/">HPERSIST</a><a href="../HPEXPIRE/">HPEXPIRE</a><a href="../HPEXPIREAT/">HPEXPIREAT</a><a href="../HSCAN/">HSCAN</a><a href="../HSET/">HSET</a><a href="../HSETNX/">HSETNX</a><a href="../HTTL/">HTTL</a><a href="../HVALS/">HVALS</a></p>
+      <p class="sees"><a href="../HDEL/">HDEL</a><a href="../HEXISTS/">HEXISTS</a><a href="../HEXPIRE/">HEXPIRE</a><a href="../HGET/">HGET</a><a href="../HINCRBY/">HINCRBY</a><a href="../HKEYS/">HKEYS</a><a href="../HLEN/">HLEN</a><a href="../HMGET/">HMGET</a><a href="../HMSET/">HMSET</a><a href="../HPERSIST/">HPERSIST</a><a href="../HPEXPIRE/">HPEXPIRE</a><a href="../HPEXPIREAT/">HPEXPIREAT</a><a href="../HPTTL/">HPTTL</a><a href="../HSCAN/">HSCAN</a><a href="../HSET/">HSET</a><a href="../HSETNX/">HSETNX</a><a href="../HTTL/">HTTL</a><a href="../HVALS/">HVALS</a></p>
     </section>
 
     <p class="back"><a href="../">← 返回全部命令</a></p>

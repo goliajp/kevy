@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EXPIREAT — kevy 命令参考</title>
-<meta name="description" content="EXPIREAT — Set a key's expiry as an absolute Unix timestamp in seconds. O(1)">
+<meta name="description" content="EXPIREAT — 把 key 的过期时刻设为一个绝对 Unix 时间戳，单位为秒。 O(1)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>通用键操作</span> <span>/</span> <b>EXPIREAT</b></nav>
 
     <h1 class="cmd">EXPIREAT</h1>
-    <p class="lede">Set a key's expiry as an absolute Unix timestamp in seconds.</p>
+    <p class="lede">把 key 的过期时刻设为一个绝对 Unix 时间戳，单位为秒。</p>
 
     <pre class="syntax"><code>EXPIREAT key unix-time-seconds</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(1)</code></p>
+      <p class="cx-body"><code>O(1)。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3</p>
+        <p>有差异：不解析 NX / XX / GT / LT 条件标志 —— arity 固定为 3。</p>
       </div>
     </section>
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GEOADD — kevy コマンドリファレンス</title>
-<meta name="description" content="GEOADD — Add geospatial members (longitude/latitude) to a geo set. O(M log N); CH adds an O(M^2) term">
+<meta name="description" content="GEOADD — geo set に経度・緯度つきのメンバーを追加する。 O(M log N)。CH を指定すると O(M^2) の項が加わる。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>地理空間</span> <span>/</span> <b>GEOADD</b></nav>
 
     <h1 class="cmd">GEOADD</h1>
-    <p class="lede">Add geospatial members (longitude/latitude) to a geo set.</p>
+    <p class="lede">geo set に経度・緯度つきのメンバーを追加する。</p>
 
     <pre class="syntax"><code>GEOADD key [NX|XX] [CH] longitude latitude member [longitude latitude member ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(M log N); CH adds an O(M^2) term</code></p>
+      <p class="cx-body"><code>O(M log N)。CH を指定すると O(M^2) の項が加わる。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call note">
         <span class="h">互換</span>
-        <p>full</p>
+        <p>互換</p>
       </div>
     </section>
 

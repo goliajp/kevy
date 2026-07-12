@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DBSIZE — kevy 命令参考</title>
-<meta name="description" content="DBSIZE — Return the number of keys across all shards. O(S) — one message per shard, each answering O(1) from its map length; NOT O(N)">
+<meta name="description" content="DBSIZE — 返回所有 shard 上的 key 总数。 O(S) —— 每个 shard 一条消息，各自从 map 长度 O(1) 应答；不是 O(N)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>服务器</span> <span>/</span> <b>DBSIZE</b></nav>
 
     <h1 class="cmd">DBSIZE</h1>
-    <p class="lede">Return the number of keys across all shards.</p>
+    <p class="lede">返回所有 shard 上的 key 总数。</p>
 
     <pre class="syntax"><code>DBSIZE</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(S) — one message per shard, each answering O(1) from its map length; NOT O(N)</code></p>
+      <p class="cx-body"><code>O(S) —— 每个 shard 一条消息，各自从 map 长度 O(1) 应答；不是 O(N)。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call note">
         <span class="h">兼容</span>
-        <p>full</p>
+        <p>兼容。</p>
       </div>
     </section>
 

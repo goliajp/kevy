@@ -1,0 +1,922 @@
+{
+ "APPEND": {
+  "compat": "兼容",
+  "complexity": "值不超过 64 B 时是均摊 O(1)；一旦超过这个阈值，每次调用都是 O(N) —— Arc 里的负载会被整块拷出来重新装箱。所以靠反复 APPEND 拼一个大字符串，总代价是 O(N^2)。",
+  "summary": "在字符串值尾部追加字节，返回追加后的新长度。"
+ },
+ "BGREWRITEAOF": {
+  "compat": "有差异：返回 +OK 而不是 Redis 的状态行；每个 shard 各重写一份 AOF；即使 AOF 未启用也照样返回 +OK。",
+  "complexity": "O(S) 扇出；每个 shard 冻结一份写时复制视图，再把序列化与 fsync 交给自己的 worker。",
+  "summary": "在后台开始一次 append-only 文件重写。"
+ },
+ "BGSAVE": {
+  "compat": "有差异：返回 +OK 而不是 Redis 的状态行；每个 shard 各写一份 dump。",
+  "complexity": "O(S) 扇出；每个 shard 在 reactor 上做 O(N/S) 的写时复制冻结，随后在别的线程上完成序列化。",
+  "summary": "在后台开始一次快照保存。"
+ },
+ "BLPOP": {
+  "compat": "有差异：多 shard 部署下，多 key 形式不遵守 Redis 的从左到右 key 优先级 —— 落在连接自身 shard 上的 key 会先于远端 key 被服务。",
+  "complexity": "服务一次是 O(1)；阻塞挂起本身是 O(1)，同一个 key 上的等待者按 FIFO 唤醒。",
+  "summary": "在一个或多个 list 上做阻塞式左弹出（effect 按 LPOP 记录）。"
+ },
+ "BRPOP": {
+  "compat": "有差异：多 key 优先级上的偏差与 BLPOP 相同。",
+  "complexity": "服务一次是 O(1)；阻塞挂起按 FIFO 排队。",
+  "summary": "在一个或多个 list 上做阻塞式右弹出（effect 按 RPOP 记录）。"
+ },
+ "BRPOPLPUSH": {
+  "compat": "有差异：跨 shard 的搬运不是原子的 —— 元素先在 source 所属 shard 上弹出，再到 destination 所属 shard 上压入，这两步之间它哪个 list 里都不在。用 {hashtag} 把两个 key 放到同一个 shard，才能走到 Redis 那样的原子路径。",
+  "complexity": "服务一次是 O(1)。",
+  "summary": "阻塞版的 RPOPLPUSH：弹出 source 的尾元素，压入 destination 的头部。"
+ },
+ "BZPOPMIN": {
+  "compat": "兼容",
+  "complexity": "每次弹出 O(log N)；阻塞挂起本身是 O(1)。",
+  "summary": "在一个或多个 zset 上做阻塞式弹出，取分值最低的成员。"
+ },
+ "CLIENT": {
+  "compat": "有差异：只有 ID / GETNAME / SETNAME / INFO、裸形式的 LIST、按 ID 或 ADDR 的 KILL 以及 NO-EVICT；CLIENT LIST 带过滤器属于语法错误，其余子命令（PAUSE、REPLY、TRACKING、UNBLOCK、NO-TOUCH）一律按未知命令处理。",
+  "complexity": "ID / GETNAME / SETNAME / INFO：O(1)。LIST：O(S) 扇出，外加 O(C) 行。KILL：O(S) 扇出，外加 O(C) 扫描。",
+  "summary": "连接的查看与控制子命令。"
+ },
+ "CLUSTER": {
+  "compat": "有差异：这是一份从配置推导出来的只读虚拟拓扑（每个 shard 一个虚拟 master）—— 没有 gossip，MEET / FORGET / SETSLOT 不产生任何效果（只是返回 OK 的空操作），没有 MIGRATE / ASK，也没有故障转移；COUNTKEYSINSLOT 只统计应答它的那个 shard 上的 key。",
+  "complexity": "INFO / NODES / SLOTS / SHARDS / MYID：O(S)。KEYSLOT：O(len(key))。COUNTKEYSINSLOT：O(N/S)。",
+  "summary": "集群拓扑查看（架在 shard 之上的虚拟节点模型）。"
+ },
+ "COMMAND": {
+  "compat": "有差异：只有 COUNT / LIST / INFO / DOCS，没有 GETKEYS 和 GETKEYSANDFLAGS；info 行里的 first / last / step 是写死的，ACL 分类、tips 和 key-specs 一律留空。",
+  "complexity": "裸命令 / LIST / DOCS：O(V) 个命令。COUNT：O(1)。带 k 个名字的 INFO / DOCS：O(k*V) —— 查找是线性扫描。",
+  "summary": "查看命令表（COUNT、LIST、INFO、DOCS 子命令）。"
+ },
+ "CONFIG": {
+  "compat": "有差异：提供 16 个与 Redis 同名的参数；其中只有 maxmemory、maxmemory-policy、appendfsync、自动重写的那一对、hz、maxmemory-samples、loglevel 和 logfile 能热改 —— bind、port、io-threads、dir 和 appendonly 在运行时改会报错；RESETSTAT 是空操作。",
+  "complexity": "GET：O(patterns * 16)。SET：O(1)，外加一次配置交换，各 shard 在下一次 tick 时取走。REWRITE：O(配置文件大小)。",
+  "summary": "读取或修改服务器的配置参数。"
+ },
+ "DBSIZE": {
+  "compat": "兼容。",
+  "complexity": "O(S) —— 每个 shard 一条消息，各自从 map 长度 O(1) 应答；不是 O(N)。",
+  "summary": "返回所有 shard 上的 key 总数。"
+ },
+ "DEBUG": {
+  "compat": "有差异：只有 SLEEP 真正有效果，而且它阻塞的是一个 shard，不是整个服务器；其余子命令一律接受并返回 OK，但什么都不做。",
+  "complexity": "SLEEP：把应答的那个 shard 的 reactor 线程停住指定时长（其余 shard 照常服务）。其它子命令：O(1)。",
+  "summary": "调试子命令；SLEEP 会阻塞一个 shard，其余子命令一律容忍并返回 OK。"
+ },
+ "DECR": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "把 key 的整数值减 1。"
+ },
+ "DECRBY": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "把 key 的整数值减去指定的量。"
+ },
+ "DEL": {
+  "compat": "有差异：多 key 形式按 shard 拆开执行再把结果相加，中间没有屏障，所以跨 shard 不是原子的；单 key 形式则是原子的。",
+  "complexity": "O(N) 个 key；某个 key 若存的是含 M 个元素的容器，还要为它多付 O(M) —— 析构时要走一遍容器。",
+  "summary": "删除一个或多个 key。"
+ },
+ "DISCARD": {
+  "compat": "兼容。",
+  "complexity": "O(1) —— 丢掉排队的命令和 WATCH 集合。",
+  "summary": "放弃已经开启的 MULTI 事务。"
+ },
+ "ECHO": {
+  "compat": "兼容。",
+  "complexity": "O(1)。",
+  "summary": "原样返回给定的消息。"
+ },
+ "EVAL": {
+  "compat": "有差异：没有 -BUSY 状态，也没有 SCRIPT KILL —— 超预算的脚本就地中止，并以一个普通错误应答；嵌套 EVAL 会被拒绝；redis.call 碰到别的 shard 上的 key 会返回 CROSSSLOT；EVAL 会按 SHA1 自动缓存源码，所以不做 SCRIPT LOAD 也能直接 EVALSHA。",
+  "complexity": "O(编译 + 脚本自身的开销)。整段脚本在 KEYS[1] 所在的 shard 上作为一个原子单元执行，执行期间独占那个 shard。失控保护用的是指令预算（lua time_limit_ms x 40000 条指令），不是墙钟时间。",
+  "summary": "在服务端执行一段 Lua 脚本；当 numkeys >= 1 时，路由到 KEYS[1] 所在的 shard。"
+ },
+ "EVALSHA": {
+  "compat": "有差异：与 EVAL 同样的指令预算模型（没有 -BUSY，没有 SCRIPT KILL）；缓存是进程级的，而且 EVAL 会往里填。",
+  "complexity": "缓存查找 O(1)，之后与 EVAL 完全相同。",
+  "summary": "按 SHA1 摘要执行已缓存的 Lua 脚本。"
+ },
+ "EXEC": {
+  "compat": "有差异：跨多个 shard 的 MULTI 批次只做到按 shard 原子，不是全局隔离（没有跨 shard 的快照）；排队阶段的错误会让整批以 EXECABORT 失败，但 EXEC 执行期间的运行时错误不会撤销其余已生效的命令 —— 这一点与 Redis 一致。",
+  "complexity": "O(排队命令各自代价之和)；若 WATCH 了 W 个 key，还要多一次 O(W) 的预检，扇出成 O(min(W,S)) 条消息。",
+  "summary": "执行自 MULTI 以来排队的全部命令。"
+ },
+ "EXISTS": {
+  "compat": "有差异：多 key 形式按 shard 分头汇聚，所以这个计数不是一份跨 shard 的时间点快照。",
+  "complexity": "O(N) 个 key，每个做一次 O(1) 探测。",
+  "summary": "统计给定的这些 key 里有多少个存在。"
+ },
+ "EXPIRE": {
+  "compat": "有差异：不解析 NX / XX / GT / LT 条件标志 —— arity 固定为 3，所以 EXPIRE key seconds NX 会被判为参数个数错误。",
+  "complexity": "O(1)。",
+  "summary": "设定 key 的 TTL，单位为秒（TTL 为非正数时直接删除该 key）。"
+ },
+ "EXPIREAT": {
+  "compat": "有差异：不解析 NX / XX / GT / LT 条件标志 —— arity 固定为 3。",
+  "complexity": "O(1)。",
+  "summary": "把 key 的过期时刻设为一个绝对 Unix 时间戳，单位为秒。"
+ },
+ "FAILOVER": {
+  "compat": "有差异：Redis 的语法是 FAILOVER [TO host port [FORCE]] [ABORT] [TIMEOUT ms]，目标可选；kevy 的是 FAILOVER host port [TIMEOUT ms] | ABORT —— 目标是必填的位置参数，而且这里给的 port 是目标的客户端端口。",
+  "complexity": "命令本身 O(1) —— 切换在后台进行，不断轮询目标直到它追平为止。",
+  "summary": "有计划的零丢失切换：停写、等目标副本追平、把它提升为主、然后本机改为跟随它。"
+ },
+ "FEED.READ": {
+  "compat": "kevy 独有：Redis 没有干净的对应物。键空间通知是发完即忘的，既没有游标也无法重放；Redis Stream 有游标，但它是一条你必须双写的流，而不是覆盖既有键空间的 feed；复制 backlog 才是这套东西的底座，但 Redis 只把它暴露给副本。kevy 刻意不做 broker：没有消费者组，没有服务端保存的位置，也没有跨 shard 的全局顺序。",
+  "complexity": "只涉及单个 shard(shard 是参数，不是扇出)。在 backlog 里定位起始 offset 是 O(log B)，解码再重新编码是 O(count * 帧大小)。COUNT 默认 256，硬上限 4096。",
+  "summary": "从某个 shard 读取变更 feed 的帧，起点是给定的 generation / offset 游标。"
+ },
+ "FEED.SHARDS": {
+  "compat": "kevy 独有：Redis 没有按 shard 分区的变更 feed 可供枚举。",
+  "complexity": "O(1)，本地应答。",
+  "summary": "返回变更 feed 的 shard 数量。"
+ },
+ "FEED.TAIL": {
+  "compat": "kevy 独有：最接近的是 INFO replication 里的 master_repl_offset，但它不是可续读的按 shard CDC 游标。",
+  "complexity": "单个 shard 上 O(1)。",
+  "summary": "返回某个 shard 当前的 feed generation 与下一个 offset。"
+ },
+ "FLUSHALL": {
+  "compat": "有差异：ASYNC / SYNC 会被接受并忽略（每个 shard 的清空始终是同步的）；它会递增 CDC feed 的 generation，因此在线的 FEED 游标会收到需要重新同步的错误。",
+  "complexity": "O(S) 扇出；每个 shard 做 O(N/S) 的清空，外加 WATCH 失效与一次 feed 代际递增。",
+  "summary": "删除每个 shard 上的每一个 key。"
+ },
+ "FLUSHDB": {
+  "compat": "有差异：kevy 是单库，所以 FLUSHDB 就是 FLUSHALL 的别名；ASYNC / SYNC 一律忽略。",
+  "complexity": "O(N + S) —— 与 FLUSHALL 完全一致。",
+  "summary": "删除当前数据库的每一个 key(kevy 是单库：等同于 FLUSHALL)。"
+ },
+ "GEOADD": {
+  "compat": "兼容。",
+  "complexity": "O(M log N)；带 CH 时再加一项 O(M^2)。",
+  "summary": "向 geo 集合添加成员（经度 / 纬度）。"
+ },
+ "GEODIST": {
+  "compat": "兼容。",
+  "complexity": "O(1)。",
+  "summary": "返回两个 geo 成员之间的距离。"
+ },
+ "GEOHASH": {
+  "compat": "兼容。",
+  "complexity": "O(M)。",
+  "summary": "返回每个成员的 base32 geohash 字符串。"
+ },
+ "GEOPOS": {
+  "compat": "兼容。",
+  "complexity": "O(M)。",
+  "summary": "返回每个成员的经纬度。"
+ },
+ "GEORADIUS": {
+  "compat": "有差异：目标 key 写在它自己的 shard 上，所以跨 shard 的 STORE 与这次搜索之间不是原子的。",
+  "complexity": "每次调用 O(N)；带 STORE / STOREDIST 时再加 O(K log K) 的写入，以及 O(D) 的目标清空。",
+  "summary": "以坐标为圆心的旧式半径搜索，可选把结果写入目标 key。"
+ },
+ "GEORADIUSBYMEMBER": {
+  "compat": "有差异：目标 key 写在它自己的 shard 上，所以跨 shard 的 STORE 与这次搜索之间不是原子的。",
+  "complexity": "每次调用 O(N)；锚点成员的查找是 O(1)。",
+  "summary": "以已有成员为圆心的旧式半径搜索，可选把结果写入目标 key。"
+ },
+ "GEOSEARCH": {
+  "compat": "有差异：只读形式下 STOREDIST 会被接受并忽略；COUNT 0 是错误。",
+  "complexity": "每次调用 O(N) —— 最多九个相邻区块，每个都靠一次全量 zset 扫描取出；geohash 分块省掉的是距离计算，不是迭代。",
+  "summary": "从某个成员或某个坐标出发，按半径或矩形范围搜索成员。"
+ },
+ "GEOSEARCHSTORE": {
+  "compat": "有差异：STOREDIST 按查询所用的单位存距离（Redis 也是如此）；destination 写在它自己的 shard 上，因此 source 与 destination 可能落在不同的核心上，这次写入与那次读取之间不是原子的。",
+  "complexity": "搜索 O(N)，外加在 destination 所属 shard 上重写它的 O(D + K log K)。",
+  "summary": "在 source 上执行 GEOSEARCH，并把命中结果写入 destination。"
+ },
+ "GET": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "返回 key 的字符串值。"
+ },
+ "GETDEL": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "返回 key 的字符串值，同时把这个 key 删掉。"
+ },
+ "GETSET": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "写入新的字符串值，并返回改写前的旧值。"
+ },
+ "HDEL": {
+  "compat": "兼容",
+  "complexity": "O(M)，M 为 field 个数。",
+  "summary": "删除 hash 中的一个或多个 field。"
+ },
+ "HELLO": {
+  "compat": "有差异：只有 HELLO [2|3] 真正生效 —— 后面的 AUTH 与 SETNAME 尾巴会被解析掉然后丢弃，因为 kevy 没有 AUTH，而且这种写法也不会设置连接名。",
+  "complexity": "O(1)。",
+  "summary": "握手：返回服务器信息，并切换 RESP 协议版本（2 或 3）。"
+ },
+ "HEXISTS": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "判断 hash 中某个 field 是否存在。"
+ },
+ "HEXPIRE": {
+  "compat": "有差异：FIELDS 缺失时，kevy 的报错文案是 'Mandatory keyword FIELDS is missing'，Redis 说的是 'Mandatory argument FIELDS'。",
+  "complexity": "O(F)，F 为 FIELDS 子句里列出的 field 个数。",
+  "summary": "给 hash 的若干 field 分别设定 TTL，单位为秒。"
+ },
+ "HGET": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "返回 hash 中某个 field 的值。"
+ },
+ "HGETALL": {
+  "compat": "兼容",
+  "complexity": "O(N)，N 为 field 个数，每个 field 名和值都会被完整拷贝一份。",
+  "summary": "返回 hash 的全部 field 与值。"
+ },
+ "HINCRBY": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "把 hash 中某个 field 的整数值加上指定的量。"
+ },
+ "HKEYS": {
+  "compat": "兼容",
+  "complexity": "O(N)，N 为 field 个数。",
+  "summary": "返回 hash 的全部 field 名。"
+ },
+ "HLEN": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "返回 hash 的 field 数量。"
+ },
+ "HMGET": {
+  "compat": "兼容",
+  "complexity": "O(M)，M 为请求的 field 个数。",
+  "summary": "批量返回 hash 中多个 field 的值。"
+ },
+ "HMSET": {
+  "compat": "兼容",
+  "complexity": "O(M)，M 为 field 与值的组数。",
+  "summary": "HSET 的废弃别名，回复 OK。"
+ },
+ "HPERSIST": {
+  "compat": "有差异：FIELDS 之前若多写了一个 NX|XX|GT|LT token，kevy 会静默接受（它与 HEXPIRE 共用同一个解析器），Redis 则会拒绝。",
+  "complexity": "O(F)，F 为 field 个数。",
+  "summary": "移除 hash 上 field 级别的 TTL。"
+ },
+ "HPEXPIRE": {
+  "compat": "有差异：FIELDS 的报错文案与 HEXPIRE 有同样的偏差。",
+  "complexity": "O(F)，F 为 field 个数。",
+  "summary": "给 hash 的若干 field 分别设定 TTL，单位为毫秒。"
+ },
+ "HPEXPIREAT": {
+  "compat": "有差异：FIELDS 的报错文案与 HEXPIRE 有同样的偏差。",
+  "complexity": "O(F)，F 为 field 个数。",
+  "summary": "把 hash 中若干 field 的过期时刻设为绝对 Unix 毫秒时间戳。"
+ },
+ "HPTTL": {
+  "compat": "有差异：FIELDS 之前若混入一个多余的 NX|XX|GT|LT token、kevy 会静默接受、Redis 则会报错。",
+  "complexity": "O(F) —— FIELDS 子句里列出的字段数。",
+  "summary": "按字段返回剩余 TTL、单位为毫秒(-1 表示无 TTL、-2 表示字段不存在)。"
+ },
+ "HSCAN": {
+  "compat": "有差异：它不是游标迭代器 —— 游标恒为 0，整个 hash 在一次回复里全部返回。NOVALUES 不解析，COUNT 校验过后直接忽略。",
+  "complexity": "O(N) —— 整个 hash 会被拷贝出来，一次性返回。",
+  "summary": "遍历 hash 的 field 与值（单批次游标）。"
+ },
+ "HSET": {
+  "compat": "兼容",
+  "complexity": "O(M)，M 为 field 与值的组数。",
+  "summary": "写入一个或多个 hash field，返回其中新增的 field 数。"
+ },
+ "HSETNX": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "仅当该 field 不存在时才写入 hash field。"
+ },
+ "HTTL": {
+  "compat": "有差异：FIELDS 之前若混入一个多余的 NX|XX|GT|LT token、kevy 会静默接受、Redis 则会报错。",
+  "complexity": "O(F) —— FIELDS 子句里列出的字段数。",
+  "summary": "按字段返回剩余 TTL、单位为秒(-1 表示无 TTL、-2 表示字段不存在)。"
+ },
+ "HVALS": {
+  "compat": "兼容",
+  "complexity": "O(N)，N 为 field 个数。",
+  "summary": "返回 hash 的全部值。"
+ },
+ "IDX.COUNT": {
+  "compat": "kevy 独有：最接近的是 FT.SEARCH 配 LIMIT 0 0。",
+  "complexity": "每个 shard 上 O(log N + matched) —— 它不是 O(1) 的计数器，也不是 B-tree 的 rank 查询，而是把命中的那段区间数了一遍。",
+  "summary": "统计匹配区间谓词或等值谓词的索引条目数。"
+ },
+ "IDX.CREATE": {
+  "compat": "kevy 独有：最接近的是 RediSearch 的 FT.CREATE —— 同样是在 key 前缀上声明索引，但 RediSearch 是一个独立模块，带自己的索引服务；kevy 的 catalog 在进程内，索引在写入钩子里维护。",
+  "complexity": "调用本身 O(1)；构建是异步的 —— 每个 shard 先给自己匹配到的 key 拍一份快照（该 shard 上 O(keys)），再按每 tick 2048 行的速度回填。单行的构建代价：range / unique 是 O(log N)，text 是 O(tokens)，vector 是 O(ef_construction * M * dim)。",
+  "summary": "在某个 key 前缀上声明一个二级索引（catalog 变更，由 sidecar 持久化）。"
+ },
+ "IDX.DROP": {
+  "compat": "kevy 独有：最接近的是 FT.DROPINDEX。",
+  "complexity": "O(catalog 大小)。",
+  "summary": "删除一个已声明的索引（catalog 变更，由 sidecar 持久化）。"
+ },
+ "IDX.EXPLAIN": {
+  "compat": "kevy 独有：最接近的是 FT.EXPLAIN，它返回的是解析后的查询树；我们返回的是索引种类、构建状态、预估行数和一行执行计划。",
+  "complexity": "执行计划只靠解析得出，但 est_rows 要付出与 IDX.LIST 相同的实时统计遍历代价。",
+  "summary": "只做 IDX.QUERY 的解析而不执行：给出索引种类、构建状态、est_rows 和一行执行计划。"
+ },
+ "IDX.LIST": {
+  "compat": "kevy 独有：最接近的是 FT._LIST 与 FT.INFO 两者合起来。",
+  "complexity": "不是 O(1) —— 每个 shard 会为每个索引现算统计：range / unique 是 O(1)，text 是 O(distinct tokens + docs)，vector 是 O(nodes + links)，agg 是 O(groups + rows)。",
+  "summary": "列出已声明的索引，附带每个索引的构建状态与统计。"
+ },
+ "IDX.QUERY": {
+  "compat": "kevy 独有：最接近的是 RediSearch 的 FT.SEARCH —— 在两条轴上确实可比（我们的文本索引是倒排段上的 BM25，向量索引是 HNSW，RediSearch 两者都有）。差异在于：没有独立模块，也没有独立的索引服务；我们的 BM25 统计是按 shard 算的，不是全局的；查询面是一套固定语法，不是 DSL —— 没有字段加权，没有短语与邻近搜索，没有词干还原，也没有聚合管线。",
+  "complexity": "取决于索引种类。range：O(log N + limit)。unique：O(log N + hits)。全文：O(各倒排表长度之和)，带 MaxScore 剪枝。向量 ANN：O(dim * (M log N + ef * M)) 次距离计算（HNSW）。agg GROUPS：有界的 top-K，1 到 3 轮扇出。HYBRID：两个子查询各按 4 倍深度取，再在发起端用 RRF 融合。COMPOSE：不受 limit 约束 —— 两侧叶子都要完整物化，因为结果是按 key 排序的，而 segment 是按 value 排序的。",
+  "summary": "查询索引：区间 / 等值、文本 MATCH、向量 KNN、聚合分组，或跨两个索引的 COMPOSE。"
+ },
+ "IDX.REBUILD": {
+  "compat": "kevy 独有：Redis 没有对应物 —— RediSearch 在内部处理 HNSW 的删除，不向外暴露任何重建命令。",
+  "complexity": "仅对向量索引有效（墓碑压实）。在每个 shard 上同步执行 O(V_live * ef_construction * M * dim) 次距离计算 —— 这是整个扩展命令面里最贵的一条。",
+  "summary": "重建一个 ANN 索引（墓碑压实）。"
+ },
+ "IDX.VERIFY": {
+  "compat": "kevy 独有：Redis 没有对应物 —— RediSearch 的索引是异步维护的，不提供任何一致性校验命令。",
+  "complexity": "每个 shard 上 O(N) —— 每一条索引项都要回到原行重读并重新做类型转换；这恰恰是它的意义所在：让索引漂移变成可证伪的事实，而不是一句口头保证。",
+  "summary": "校验索引：把每一条索引项都拿回它对应的行重读一遍，报告 entries / bytes / coerce_failures / duplicates / drift / checked。"
+ },
+ "INCR": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "把 key 的整数值加 1。"
+ },
+ "INCRBY": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "把 key 的整数值加上指定的量。"
+ },
+ "INCRBYFLOAT": {
+  "compat": "有差异：算术全程按 f64 做，回复走的是 Rust 的最短往返浮点打印器，而不是 Redis 那样的 long double 累加器。因此末尾几位数字可能与 Redis 不一致。",
+  "complexity": "O(1)。",
+  "summary": "把 key 的浮点值加上指定的量。"
+ },
+ "INFO": {
+  "compat": "有差异：只有 8 个分区（server、clients、memory、persistence、stats、replication、cluster、keyspace）—— 没有 commandstats / latencystats / errorstats / cpu；为了让客户端能嗅探版本，redis_version 报的是 7.4.0，另外单列一行 kevy_version；各项数值最多可能滞后一个 tick。",
+  "complexity": "在键空间上是 O(1) —— 它从不遍历键空间；把各 shard 的计量值加总是 O(S)。",
+  "summary": "以文本形式输出服务器的统计与状态分区。"
+ },
+ "KEYS": {
+  "compat": "兼容",
+  "complexity": "O(N)，N 为整个键空间的 key 数 —— 每个 shard 都要遍历自己的整张表，再对每个 key 做一次 O(P*K) 的 glob 匹配。",
+  "summary": "返回键空间里所有匹配该 glob 模式的 key（跨 shard 汇聚）。"
+ },
+ "LINDEX": {
+  "compat": "兼容",
+  "complexity": "O(1) —— list 底层是 VecDeque，按下标取就是一次直接偏移（Redis 的 quicklist 是 O(N)）。",
+  "summary": "返回 list 中指定下标处的元素。"
+ },
+ "LLEN": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "返回 list 的长度。"
+ },
+ "LMOVE": {
+  "compat": "有差异：跨 shard 的搬运不是原子的 —— 参见 BRPOPLPUSH。",
+  "complexity": "O(1)。",
+  "summary": "在两个 list 之间原子地搬运一个元素。"
+ },
+ "LPOP": {
+  "compat": "有差异：对已存在的 key 执行 LPOP key 0，kevy 回复一个 nil 数组，Redis 回复的则是空数组。",
+  "complexity": "O(C)，C 为弹出的元素个数。",
+  "summary": "从 list 头部弹出一个或多个元素。"
+ },
+ "LPOS": {
+  "compat": "兼容",
+  "complexity": "恒为 O(N) —— 整个 list 会先被完整拷贝一份，之后才轮到 RANK / COUNT / MAXLEN 生效。所以 MAXLEN 限制的是比较次数，拷贝量它管不着。",
+  "summary": "返回 list 中匹配元素的下标。"
+ },
+ "LPUSH": {
+  "compat": "兼容",
+  "complexity": "O(M)，M 为元素个数，每个均摊 O(1)。",
+  "summary": "把一个或多个元素压入 list 头部。"
+ },
+ "LRANGE": {
+  "compat": "兼容",
+  "complexity": "O(M)，M 为返回的元素个数 —— 起始偏移是 O(1) 跳过去的（Redis 是 O(S+M)）。",
+  "summary": "返回 list 的一段区间。"
+ },
+ "LREM": {
+  "compat": "兼容",
+  "complexity": "最坏 O(N*R) —— 扫描本身是 O(N)，但每删掉一个元素最多要挪动半个 deque（Redis 是 O(N+R)）。",
+  "summary": "从 list 中删除所有等于给定值的元素。"
+ },
+ "LSET": {
+  "compat": "兼容",
+  "complexity": "O(1) —— 直接按下标写入（Redis 对中间位置的下标是 O(N)）。",
+  "summary": "改写 list 中指定下标处的元素。"
+ },
+ "LTRIM": {
+  "compat": "兼容",
+  "complexity": "O(R)，R 为被移除的元素个数。",
+  "summary": "把 list 裁剪到给定区间。"
+ },
+ "MEMORY": {
+  "compat": "有差异：USAGE 的 SAMPLES 会被解析并忽略（我们的记账本就精确）；PURGE 是空操作（用的是系统分配器，没有 arena）；DOCTOR 和 MALLOC-STATS 返回固定的字符串；STATS 只有精简后的 8 个字段。",
+  "complexity": "USAGE：O(1) —— 记账是精确的，不是抽样估算的。STATS：O(1)，直接取自实例级的计量值。",
+  "summary": "内存查看子命令。"
+ },
+ "MGET": {
+  "compat": "有差异：key 先按 shard 分组，再逐个 shard 独立探测，所以回复不是一份跨 shard 的时间点快照。",
+  "complexity": "O(N) 个 key，每个 key 在其归属 shard 上做一次 O(1) 探测。",
+  "summary": "批量返回多个 key 的值（跨 shard 汇聚）。"
+ },
+ "MSET": {
+  "compat": "有差异：原子性只到 shard 一级 —— 键值对按 key 拆到各个 shard，逐个 shard 应用，中间没有任何跨 shard 屏障，所以读者可能看到一部分已经写入、另一部分还没写。Redis 的 MSET 是全局原子的。",
+  "complexity": "O(N) 组，每组一次 O(1) 的 SET。",
+  "summary": "批量写入多组 key 与 value —— 原子性只到单个 shard 之内。"
+ },
+ "MULTI": {
+  "compat": "兼容。",
+  "complexity": "O(1)。",
+  "summary": "开启事务；后续命令会排队，直到 EXEC。"
+ },
+ "PERSIST": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "移除 key 上的 TTL。"
+ },
+ "PEXPIRE": {
+  "compat": "有差异：不解析 NX / XX / GT / LT 条件标志 —— arity 固定为 3。",
+  "complexity": "O(1)。",
+  "summary": "设定 key 的 TTL，单位为毫秒。"
+ },
+ "PEXPIREAT": {
+  "compat": "有差异：不解析 NX / XX / GT / LT 条件标志 —— arity 固定为 3。",
+  "complexity": "O(1)。",
+  "summary": "把 key 的过期时刻设为一个绝对 Unix 时间戳，单位为毫秒。"
+ },
+ "PING": {
+  "compat": "有差异：kevy 没有 RESP2 的订阅者模式，所以订阅状态下的 PING 不会切换成数组形式，已订阅的连接上也照样可以发非 pubsub 命令。",
+  "complexity": "O(1)。",
+  "summary": "探活；返回 PONG，或回显可选的消息。"
+ },
+ "PREFIX.DIGEST": {
+  "compat": "kevy 独有：最接近的是 DEBUG DIGEST —— 性质相仿（Redis 也是把逐 key 的摘要 XOR 起来），但 Redis 的是整库口径且藏在 DEBUG 后面，我们这条是按前缀的（迁移真正关心的单位），而且是一条受支持的正式命令。",
+  "complexity": "每个 shard 上遍历 O(该 shard 上的 key 数)，再加上 O(各行大小之和) 做摘要。逐行的摘要之间做 XOR，因此结果与顺序无关，shard 数改变后依然可比。",
+  "summary": "对某个前缀下的行做一个与顺序无关的校验和，用于迁移核对。"
+ },
+ "PREFIX.STATS": {
+  "compat": "kevy 独有：最接近的是 INFO keyspace 里的 db0:keys=N,expires=M —— 同样是那两个计数，但它是整库口径、靠一个计数器 O(1) 拿到的，我们这条是按前缀的，因此代价是 O(键空间)。",
+  "complexity": "O(该 shard 上的 key 数) —— 每个 shard 都要把键空间完整走一遍；前缀这个维度无法预先算好。",
+  "summary": "报告某个 key 前缀的 key 数量与字节数统计。"
+ },
+ "PSETEX": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "写入 key 的值，并设定以毫秒为单位的 TTL。"
+ },
+ "PSUBSCRIBE": {
+  "compat": "兼容。",
+  "complexity": "O(p * P) —— 每个模式都要把共享的模式注册表线性扫一遍。",
+  "summary": "订阅与给定 glob 模式匹配的频道。"
+ },
+ "PTTL": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "返回 key 的剩余 TTL，单位为毫秒（-1 表示没有 TTL，-2 表示 key 不存在）。"
+ },
+ "PUBLISH": {
+  "compat": "兼容。",
+  "complexity": "频道查找 O(1)，外加 O(P) —— 即便一个都匹配不上，也要把已注册的模式线性走一遍，逐个做 glob 匹配。投递只扇出到有订阅者的那些 shard。",
+  "summary": "向频道投递一条消息；返回接收者数量。"
+ },
+ "PUNSUBSCRIBE": {
+  "compat": "兼容。",
+  "complexity": "O(p * P)。",
+  "summary": "退订模式（不给参数时退订全部模式）。"
+ },
+ "QUIT": {
+  "compat": "兼容。",
+  "complexity": "O(1)。",
+  "summary": "回复 OK 之后关闭连接。"
+ },
+ "RANDOMKEY": {
+  "compat": "有差异：结果并不随机 —— 每个 shard 按 hash 桶顺序返回自己遇到的第一个存活 key，归约时又只取第一个 shard 的结果。所以只要键空间不变，每次拿到的都是同一个 key。不要拿它做抽样。",
+  "complexity": "期望 O(1)。",
+  "summary": "从键空间里返回一个随机 key。"
+ },
+ "RENAME": {
+  "compat": "有差异：跨 shard 的重命名是先 Take 再 Put 的非原子序列 —— 中间存在一个两个 key 都看不见的窗口。想走原子路径，就用 {hashtag} 把两个 key 固定到同一个 shard 上。",
+  "complexity": "字符串值是 O(1)；含 M 个元素的容器是 O(M) —— 条目的权重要靠遍历整个值重新算一遍。",
+  "summary": "重命名 key，直接覆盖掉目标 key（写在 runtime 的 Op 层路由）。"
+ },
+ "RENAMENX": {
+  "compat": "有差异：跨 shard 的 RENAMENX 是 Take、Put、被拒后再放回的非原子序列 —— 中间存在一个源 key 从键空间里消失的窗口。",
+  "complexity": "字符串值是 O(1)；含 M 个元素的容器是 O(M)。",
+  "summary": "仅当目标 key 不存在时才重命名（写在 runtime 的 Op 层路由）。"
+ },
+ "REPL.TOKEN": {
+  "compat": "kevy 独有：read-your-writes 令牌。Redis 里最接近的概念是 master_repl_offset，但它不是可续读的按 shard 游标。",
+  "complexity": "O(S) —— 每个 shard 一对 (generation, offset)。",
+  "summary": "kevy 扩展：签发一个 read-your-writes 令牌 —— 每个 shard 一对 [generation, offset](主库报告自己 feed 的尾部，副本报告自己已应用到的位置)。"
+ },
+ "REPL.WAIT": {
+  "compat": "kevy 独有：等待某个 (generation, offset) 令牌被应用 —— 正是这一点让 read-your-writes 能跨故障转移成立。",
+  "complexity": "O(S) —— 这是一道屏障，不是键空间操作；实际耗时就是复制延迟，上界由 TIMEOUT 决定（默认 1s，硬上限 60s）。",
+  "summary": "kevy 扩展：在副本上阻塞，直到每个 shard 都应用了给定的 REPL.TOKEN(此后的读即为 read-your-writes)；成功返回 +OK，超时或代际不匹配返回 -MISDIRECTED writer is <primary>。TIMEOUT 默认 1000 ms，硬上限 60 s。在主库上：立即返回 +OK。"
+ },
+ "REPLICAOF": {
+  "compat": "有差异：port 参数给的是主库的复制端口基准值，不是它的客户端端口（默认基准 = 客户端端口 + 10000）；链式复制会被拒绝。",
+  "complexity": "命令本身 O(1)；随后的全量重同步在后台进行，代价是 O(N)。",
+  "summary": "让本机成为另一台服务器的副本，或用 NO ONE 把它提升为主。"
+ },
+ "ROLE": {
+  "compat": "兼容。",
+  "complexity": "副本上 O(1)；主库上 O(R)。",
+  "summary": "报告本机的复制角色与状态。"
+ },
+ "RPOP": {
+  "compat": "有差异：对已存在的 key 执行 RPOP key 0，kevy 回复一个 nil 数组，Redis 回复的则是空数组。",
+  "complexity": "O(C)，C 为弹出的元素个数。",
+  "summary": "从 list 尾部弹出一个或多个元素。"
+ },
+ "RPOPLPUSH": {
+  "compat": "有差异：跨 shard 的搬运不是原子的 —— 参见 BRPOPLPUSH。",
+  "complexity": "O(1)。",
+  "summary": "弹出 source 的尾元素，压入 destination 的头部。"
+ },
+ "RPUSH": {
+  "compat": "兼容",
+  "complexity": "O(M)，M 为元素个数，每个均摊 O(1)。",
+  "summary": "把一个或多个元素追加到 list 尾部。"
+ },
+ "SADD": {
+  "compat": "兼容",
+  "complexity": "O(M)，M 为成员个数。",
+  "summary": "向 set 添加一个或多个成员。"
+ },
+ "SAVE": {
+  "compat": "有差异：SAVE 不再是「同步到落盘为止」—— 它冻结一份写时复制视图后立刻返回 OK，因此「SAVE 返回了，所以 dump 文件可以放心拷走」这个前提不再成立。",
+  "complexity": "O(S) 扇出；每个 shard 做 O(N/S) 的写时复制冻结。",
+  "summary": "把数据集同步快照到磁盘。"
+ },
+ "SCAN": {
+  "compat": "有差异：SCAN 不是游标迭代器。每次调用都会扫遍每个 shard 的整个键空间，然后带着游标 0 把所有匹配项一批返回，所以标准的 SCAN 循环跑完一个往返就结束了。COUNT 与 TYPE 会被接受然后忽略，MATCH 生效。Redis 那套增量推进、单次工作量有界、容忍 rehash 的保证，在这里一条都不存在。",
+  "complexity": "每次调用都是 O(N)，N 为整个键空间的 key 数 —— 这里没有增量遍历这回事。",
+  "summary": "扫一遍键空间，把全部匹配项一次返回；它不是游标迭代器（COUNT 与 TYPE 会被接受然后忽略，游标恒为 0）。"
+ },
+ "SCARD": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "返回 set 的成员数量。"
+ },
+ "SCRIPT": {
+  "compat": "有差异：只有 LOAD / EXISTS / FLUSH —— SCRIPT KILL 是设计上就不存在的：没有 -BUSY 状态可供打断，因为超预算的脚本会自行中止。",
+  "complexity": "LOAD：O(len(script))。EXISTS：O(k)。FLUSH：O(已缓存的脚本数)。",
+  "summary": "管理进程级的 Lua 脚本缓存。"
+ },
+ "SDIFF": {
+  "compat": "兼容",
+  "complexity": "O（各源 set 基数之和）。",
+  "summary": "返回若干 set 的差集（跨 shard 汇聚）。"
+ },
+ "SDIFFSTORE": {
+  "compat": "兼容",
+  "complexity": "O（各源 set 基数之和），再加上在 destination 所属 shard 上写结果的 O（结果集大小）。",
+  "summary": "把若干 set 的差集写入 destination。"
+ },
+ "SELECT": {
+  "compat": "有差异：kevy 是单库 —— SELECT 0 返回 OK，其它任何索引一律报错。",
+  "complexity": "O(1)。",
+  "summary": "选择逻辑数据库；kevy 只有单库，只接受索引 0。"
+ },
+ "SET": {
+  "compat": "有差异：只解析 NX / XX / EX / PX —— KEEPTTL、EXAT、PXAT、GET 以及 IFEQ 一族都会报语法错误。过期选项若重复给出，kevy 不报错，而是静默地以最后一个为准。",
+  "complexity": "O(1)。",
+  "summary": "写入 key 的字符串值，可选地带上 TTL 与存在性条件。"
+ },
+ "SETEX": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "写入 key 的值，并设定以秒为单位的 TTL。"
+ },
+ "SETNX": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "仅当 key 不存在时才写入它的值。"
+ },
+ "SHUTDOWN": {
+  "compat": "有差异：只解析 SHUTDOWN [NOSAVE|SAVE] —— NOW、FORCE 和 ABORT 属于语法错误。",
+  "complexity": "把停止标志置位是 O(1)；随后的排空收尾是 O(N)。",
+  "summary": "停止服务器进程（连接直接断开，不返回任何回复）。"
+ },
+ "SINTER": {
+  "compat": "兼容",
+  "complexity": "O（各源 set 基数之和） —— kevy 没有「先取最小集合」这一步，所以 SINTER huge tiny 的代价是 O(huge)，而 Redis 只花 O(tiny * k)。",
+  "summary": "返回若干 set 的交集（跨 shard 汇聚）。"
+ },
+ "SINTERSTORE": {
+  "compat": "兼容",
+  "complexity": "O（各源 set 基数之和） 加 O（结果集大小）；同样没有「先取最小集合」的算法。",
+  "summary": "把若干 set 的交集写入 destination。"
+ },
+ "SISMEMBER": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "判断某个值是不是 set 的成员。"
+ },
+ "SLAVEOF": {
+  "compat": "有差异：REPLICAOF 的废弃别名，连那个复制端口基准值参数也照搬。",
+  "complexity": "O(1)，外加一次后台重同步。",
+  "summary": "REPLICAOF 的旧式别名。"
+ },
+ "SLOWLOG": {
+  "compat": "有差异：日志是按 shard 各存一份的，GET 按时间戳跨 shard 归并，因此 id 不是全局单调的；每条记录的 client-addr 与 client-name 都是空字符串。",
+  "complexity": "GET：O(S) 扇出，外加 O(L log L) 的归并。LEN：O(S)。RESET：O(S)。",
+  "summary": "查看或重置慢命令日志。"
+ },
+ "SMEMBERS": {
+  "compat": "兼容",
+  "complexity": "O(N)，N 为成员个数。",
+  "summary": "返回 set 的全部成员。"
+ },
+ "SPOP": {
+  "compat": "有差异：成员并不随机 —— SPOP 按 hash 桶顺序返回最前面的那些成员，且种子是一个固定常量，所以对同一个 set 反复 SPOP 的结果是完全确定的。",
+  "complexity": "期望 O(count)；用 N 次调用把一个 N 成员的 set 抽干是 O(N^2)，因为每次调用都要从头重扫一遍桶。",
+  "summary": "随机移除并返回 set 中的一个或多个成员。"
+ },
+ "SRANDMEMBER": {
+  "compat": "有差异：并不随机 —— 对给定的 set，每次返回的都是排在最前那个桶里的同一个成员。另外负数 count 会被直接拒绝，而不是像 Redis 那样返回 |count| 个允许重复的成员。",
+  "complexity": "期望 O(count)。",
+  "summary": "随机返回 set 中的一个或多个成员，不移除它们。"
+ },
+ "SREM": {
+  "compat": "兼容",
+  "complexity": "O(M)，M 为成员个数。",
+  "summary": "从 set 移除一个或多个成员。"
+ },
+ "SSCAN": {
+  "compat": "有差异：它不是游标迭代器 —— 游标恒为 0，整个 set 在一次回复里全部返回。COUNT 校验过后直接忽略。",
+  "complexity": "O(N) —— 整个 set 会被拷贝出来，一次性返回。",
+  "summary": "遍历 set 的成员（单批次游标）。"
+ },
+ "STRLEN": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "返回 key 所存字符串值的长度。"
+ },
+ "SUBSCRIBE": {
+  "compat": "有差异：kevy 没有 RESP2 的订阅者模式 —— SUBSCRIBE 之后连接照样可以发任何命令，而 Redis 会把它限制在 pubsub 那几个命令加 PING / QUIT / RESET。",
+  "complexity": "O(c) 个频道；从不扇出到其它 shard。",
+  "summary": "订阅给定的频道。"
+ },
+ "SUNION": {
+  "compat": "兼容",
+  "complexity": "O（各源 set 基数之和）。",
+  "summary": "返回若干 set 的并集（跨 shard 汇聚）。"
+ },
+ "SUNIONSTORE": {
+  "compat": "兼容",
+  "complexity": "O（各源 set 基数之和） 加 O（结果集大小）。",
+  "summary": "把若干 set 的并集写入 destination。"
+ },
+ "TTL": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "返回 key 的剩余 TTL，单位为秒（-1 表示没有 TTL，-2 表示 key 不存在）。"
+ },
+ "TYPE": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "返回 key 所存值的类型。"
+ },
+ "UNLINK": {
+  "compat": "有差异：UNLINK 只是 DEL 的别名 —— 值在归属 shard 的 reactor 线程上就地释放，并不交给后台线程，所以它带不来任何延迟上的好处。",
+  "complexity": "O(N) 个 key，容器类型的 key 每个另加 O(M) —— 与 DEL 完全一致。",
+  "summary": "删除一个或多个 key（在 kevy 的 shard 模型里，它就是 DEL 的别名）。"
+ },
+ "UNSUBSCRIBE": {
+  "compat": "兼容。",
+  "complexity": "O(c) 个频道。",
+  "summary": "退订频道（不给参数时退订全部频道）。"
+ },
+ "UNWATCH": {
+  "compat": "兼容。",
+  "complexity": "O(1)。",
+  "summary": "清空所有被 WATCH 的 key。"
+ },
+ "VIEW.CREATE": {
+  "compat": "kevy 独有：Redis 没有对应物。视图既不是存储的查询，也不是 join —— 它是一棵架在已声明索引之上的命名组合树，只存成员关系与顺序，从不存字段值。",
+  "complexity": "调用本身 O(树的大小)。materialized 视图在下一次 tick 惰性构建（一次完整的 eval_tree 加一次 O(M log M) 排序）；virtual 视图则永远不构建任何东西。",
+  "summary": "在若干索引之上声明一个组合视图，并指定 ORDER BY(catalog 变更，由 sidecar 持久化)。"
+ },
+ "VIEW.DROP": {
+  "compat": "kevy 独有。",
+  "complexity": "O(catalog 大小)。",
+  "summary": "删除一个已声明的视图（catalog 变更，由 sidecar 持久化）。"
+ },
+ "VIEW.EXPLAIN": {
+  "compat": "kevy 独有：最接近的是 FT.EXPLAIN，但它返回的是查询树，而不是每个叶子的基数。",
+  "complexity": "O(各叶子的 (log N + matched) 之和) —— 每个叶子的基数都是真数出来的，所以在一个宽泛的叶子上跑 EXPLAIN，代价与真去数它一样。",
+  "summary": "展开视图的组合树，并给出每个叶子的基数。"
+ },
+ "VIEW.LIST": {
+  "compat": "kevy 独有。",
+  "complexity": "在发起端 O(视图数量) —— catalog 是进程全局的。",
+  "summary": "列出已声明的视图及其模式与形状。"
+ },
+ "VIEW.QUERY": {
+  "compat": "kevy 独有：Redis 没有对应物。刻意不做的部分：没有 join，视图层没有谓词，视图自身不做投影，没有 HAVING，也没有聚合。",
+  "complexity": "virtual：O(log N_order + candidates * leaves) —— 它顺着 ORDER 索引流式扫描，对每个候选逐个探测是否属于该视图，取够 limit 就停，因此从不物化整个成员集合。materialized：O(log M + limit)。加上 FIELDS 与 VIA 会多出第二次扇出，用来把原行取回来。",
+  "summary": "按视图的既定顺序翻页取出成员，可通过 VIA 模板顺带把字段取回来。"
+ },
+ "VIEW.REBUILD": {
+  "compat": "kevy 独有。",
+  "complexity": "仅对 materialized 视图有效。在每个 shard 上立刻（而不是推迟到某次 tick）对整棵树做一次完整的 eval_tree，再加上 O(M log M) 的排序与重新插入。",
+  "summary": "强制重建一个 materialized 视图。"
+ },
+ "VIEW.VERIFY": {
+  "compat": "kevy 独有。",
+  "complexity": "materialized：O(M)。virtual：O(各叶子的 （log N + 叶子区间） 之和 + M) —— 仅仅为了报出基数就要重新完整求值一次，这是 virtual 视图唯一比 materialized 更贵的场合。",
+  "summary": "校验视图，报告成员数与字节数的统计。"
+ },
+ "WAIT": {
+  "compat": "有差异：它是跨全部 shard 的屏障，返回各 shard 中的最小值（Redis 只有一个 offset 要等）；timeout 0 会被压到 60s，而不是无限等下去；ACK 只表示帧已进入副本的应用流水线，不表示 fsync 落盘。",
+  "complexity": "O(S) —— 一道跨全部 shard 的屏障，返回的是各 shard 里的最小已确认副本数；实际耗时是一次复制往返。",
+  "summary": "阻塞直到每个 shard 的 master_repl_offset 都被至少 numreplicas 个副本确认（或者超过 timeout 毫秒）；返回各 shard 中最小的已确认副本数。timeout 0 表示一直等，硬上限 60 s。注意：副本的 ACK 不等于 fsync 落盘。"
+ },
+ "WATCH": {
+  "compat": "兼容。",
+  "complexity": "W 个 key 是 O(W)，归并成 O(min(W,S)) 条跨 shard 消息。",
+  "summary": "监视 key，为下一次 EXEC 做乐观锁。"
+ },
+ "XACK": {
+  "compat": "兼容。",
+  "complexity": "O(A log P)。",
+  "summary": "确认消费者组的待处理条目，把它们从 PEL 中移除。"
+ },
+ "XADD": {
+  "compat": "有差异：近似裁剪的「~」只为线路兼容而接受，实际总是精确裁剪；LIMIT 子句不解析。",
+  "complexity": "插入是 O(log N)；只要 MAXLEN / MINID 子句真的淘汰了条目，就变成 O(N*F) —— 裁剪会触发一次全量的权重重算。",
+  "summary": "向流追加一条条目，可顺带按 MAXLEN / MINID 裁剪。"
+ },
+ "XAUTOCLAIM": {
+  "compat": "有差异：PEL 扫完之后返回的下一个游标是 last-claimed+1 而不是 0-0，所以循环到 0-0 才停的客户端要多一次往返。",
+  "complexity": "O(log P + K + COUNT log N)；空闲过滤跑在取数之前，因此一个全是新鲜条目的 PEL 会被完整走一遍。",
+  "summary": "从游标开始扫描并认领空闲的待处理条目。"
+ },
+ "XCLAIM": {
+  "compat": "有差异：IDLE / TIME / RETRYCOUNT / FORCE / JUSTID 会被解析，LASTID 不会；key 或消费者组不存在时返回「no such key」而不是 NOGROUP。",
+  "complexity": "O(A * (log P + log N))。",
+  "summary": "认领指定的空闲待处理条目。"
+ },
+ "XDEL": {
+  "compat": "兼容。",
+  "complexity": "删 D 个 ID 是 O(D log N + N*F) —— 不是 O(1)：收尾的权重重算与整条流的长度成线性。",
+  "summary": "按 ID 删除流中的条目。"
+ },
+ "XGROUP": {
+  "compat": "有差异：支持 CREATE / SETID / DESTROY / CREATECONSUMER / DELCONSUMER / MKSTREAM；但 key 不存在时，非 CREATE 的子命令返回 0 或 NOGROUP，而不是 Redis 的报错；XGROUP HELP 不存在。",
+  "complexity": "CREATE / DESTROY：O(1)，外加一次 O(N*F) 的权重重算。SETID / CREATECONSUMER：O(1)。DELCONSUMER：O(P)。",
+  "summary": "管理流的消费者组。"
+ },
+ "XINFO": {
+  "compat": "有差异：只有 STREAM / GROUPS / CONSUMERS / HELP，没有 XINFO STREAM FULL；radix-tree-keys 与 nodes 是凭空造出来的字段（kevy 根本没有 radix tree），entries-read 是近似值，CONSUMERS 不返回 inactive。",
+  "complexity": "STREAM：O(1)。GROUPS：O(G*N) —— lag 是逐个组各做一次全量条目遍历算出来的。CONSUMERS：O(C)。",
+  "summary": "查看流本身、它的消费者组或组内的消费者。"
+ },
+ "XLEN": {
+  "compat": "兼容。",
+  "complexity": "O(1)。",
+  "summary": "返回流中条目的数量。"
+ },
+ "XPENDING": {
+  "compat": "兼容。",
+  "complexity": "汇总形式：O(P*C) —— 按消费者分账要在 PEL 的每一行上做一次线性查找。扩展形式：O(log P + K)。",
+  "summary": "查看消费者组的待处理条目（汇总形式或扩展形式）。"
+ },
+ "XRANGE": {
+  "compat": "兼容。",
+  "complexity": "O(log N + M) —— 一次 B-tree 区间下降，COUNT 惰性生效。",
+  "summary": "返回某个 ID 区间内的流条目。"
+ },
+ "XREAD": {
+  "compat": "有差异：不解析「+」这种取最后一条 ID 的写法，只接受显式 ID 和「$」。",
+  "complexity": "S 条流合计 O(S * (log N + M))；「$」是 O(1)；挂起阻塞是 O(1)。",
+  "summary": "从一条或多条流读取新条目，可阻塞。"
+ },
+ "XREADGROUP": {
+  "compat": "有差异：COUNT 会被解析，但不限制「>」形式的扫描量。",
+  "complexity": "「>」形式：O(log N + U + M) —— COUNT 并不限制扫描范围，整条未投递的尾巴会先全部物化出来，再由 COUNT 截断。重放形式：O(log P + K)。",
+  "summary": "以消费者组成员的身份读取流条目，可阻塞。"
+ },
+ "XREVRANGE": {
+  "compat": "兼容。",
+  "complexity": "O(log N + M)。",
+  "summary": "按逆序返回某个 ID 区间内的流条目。"
+ },
+ "XSETID": {
+  "compat": "兼容。",
+  "complexity": "O(log N)。",
+  "summary": "覆写流的 last-generated ID 与相关的记账计数器。"
+ },
+ "XTRIM": {
+  "compat": "有差异：「~」会被接受，但裁剪始终是精确的；LIMIT 不解析；阈值后面多余的 token 被静默忽略，而不是报错。",
+  "complexity": "淘汰 R 条条目是 O(R log N + N*F)。",
+  "summary": "按长度或最小 ID 裁剪流。"
+ },
+ "ZADD": {
+  "compat": "兼容",
+  "complexity": "O(M log N) —— 每个成员一次 O(1) 的 hash 插入，再加一次 O(log N) 的树插入。",
+  "summary": "向 zset 添加带分值的成员，可带条件标志。"
+ },
+ "ZCARD": {
+  "compat": "兼容",
+  "complexity": "O(1)。",
+  "summary": "返回 zset 的成员数量。"
+ },
+ "ZCOUNT": {
+  "compat": "兼容",
+  "complexity": "O(N) —— 全量扫描再过滤，不是区间 seek。Redis 的 O(log N) 在这里不成立。",
+  "summary": "统计分值落在给定区间内的成员个数。"
+ },
+ "ZDIFFSTORE": {
+  "compat": "兼容",
+  "complexity": "O（各源 zset 基数之和 + R log R）；每个源都在各自的 shard 上被整体取出。",
+  "summary": "把若干 zset 的差集写入 destination。"
+ },
+ "ZINCRBY": {
+  "compat": "兼容",
+  "complexity": "O(log N)。",
+  "summary": "增加 zset 中某个成员的分值。"
+ },
+ "ZINTERCARD": {
+  "compat": "兼容",
+  "complexity": "O（各源 zset 基数之和） —— LIMIT 不会让汇聚提前短路，它只作用在合并那一步。",
+  "summary": "返回若干 zset 交集的基数。"
+ },
+ "ZINTERSTORE": {
+  "compat": "兼容",
+  "complexity": "O（各源 zset 基数之和 + R log R）。",
+  "summary": "把若干 zset 的交集写入 destination。"
+ },
+ "ZPOPMIN": {
+  "compat": "兼容",
+  "complexity": "O(M log N)。",
+  "summary": "弹出至多 count 个分值最低的成员。"
+ },
+ "ZPOPMIN.BELOW": {
+  "compat": "kevy 独有：延时任务原语（分值即到期时刻），Redis 没有对应命令。",
+  "complexity": "O(M log N) —— take_while 一碰到不小于阈值的分值就停，绝不会走到到期前缀之外。",
+  "summary": "kevy 扩展：弹出至多 count 个分值严格小于阈值的最低成员（延时任务原语）。"
+ },
+ "ZRANGE": {
+  "compat": "有差异：只接受传统的 'key start stop [WITHSCORES]' 形式 —— Redis 6.2 引入的 BYSCORE / BYLEX / REV / LIMIT 参数一律报语法错误。",
+  "complexity": "O(start + M) —— 树迭代器只能一个节点一个节点往前走，没有秩索引可供直接跳转。",
+  "summary": "按排名区间返回成员。"
+ },
+ "ZRANGEBYSCORE": {
+  "compat": "兼容",
+  "complexity": "O(N + M) —— 全量扫描再过滤。LIMIT 是在整个命中集物化之后才应用的，并不减少实际工作量。",
+  "summary": "返回分值落在给定区间内的成员。"
+ },
+ "ZRANK": {
+  "compat": "有差异：不支持 Redis 7.2 的 WITHSCORE 选项。",
+  "complexity": "O(N) —— 线性扫描定位。注意不是 O(log N)：kevy 的 zset 没有按秩增强的结构，拿不到跳表那种秩索引。",
+  "summary": "返回成员的排名 —— 按分值从低到高。"
+ },
+ "ZREM": {
+  "compat": "兼容",
+  "complexity": "O(M log N)。",
+  "summary": "从 zset 移除一个或多个成员。"
+ },
+ "ZREMRANGEBYRANK": {
+  "compat": "兼容",
+  "complexity": "O(start + M log N)。",
+  "summary": "移除落在给定排名区间内的成员。"
+ },
+ "ZREMRANGEBYSCORE": {
+  "compat": "兼容",
+  "complexity": "O(N + M log N) —— 先全量扫描找出命中集，再逐个删掉这 M 个成员。",
+  "summary": "移除分值落在给定区间内的成员。"
+ },
+ "ZREVRANGEBYSCORE": {
+  "compat": "兼容",
+  "complexity": "O(N + M) —— 仍是一次正向的全量扫描加过滤，最后把结果反转。",
+  "summary": "返回分值落在给定区间内的成员，从高到低排列。"
+ },
+ "ZSCAN": {
+  "compat": "有差异：它不是游标迭代器 —— 每次调用都把整个 zset 返回，游标恒为 0，COUNT 解析过后直接忽略。",
+  "complexity": "O(N) —— 整个 zset 会被完整物化。",
+  "summary": "遍历 zset 的成员与分值（单批次游标）。"
+ },
+ "ZSCORE": {
+  "compat": "兼容",
+  "complexity": "O(1) —— 一次 hash 查找。",
+  "summary": "返回成员的分值。"
+ },
+ "ZUNIONSTORE": {
+  "compat": "兼容",
+  "complexity": "O（各源 zset 基数之和 + R log R）。",
+  "summary": "把若干 zset 的并集写入 destination。"
+ }
+}

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CONFIG — kevy コマンドリファレンス</title>
-<meta name="description" content="CONFIG — Read or change server configuration parameters. GET: O(patterns * 16). SET: O(1) plus one config swap that shards pick up on their next tick. REWRITE: O(config file size)">
+<meta name="description" content="CONFIG — サーバ設定パラメータを読み書きする。 GET は O(patterns * 16)。SET は O(1) と設定スワップ 1 回で、各 shard は次の tick でそれを拾う。REWRITE は設定ファイルのサイズに比例する。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>サーバー</span> <span>/</span> <b>CONFIG</b></nav>
 
     <h1 class="cmd">CONFIG</h1>
-    <p class="lede">Read or change server configuration parameters.</p>
+    <p class="lede">サーバ設定パラメータを読み書きする。</p>
 
     <pre class="syntax"><code>CONFIG GET parameter | SET parameter value | REWRITE | RESETSTAT</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>GET: O(patterns * 16). SET: O(1) plus one config swap that shards pick up on their next tick. REWRITE: O(config file size)</code></p>
+      <p class="cx-body"><code>GET は O(patterns * 16)。SET は O(1) と設定スワップ 1 回で、各 shard は次の tick でそれを拾う。REWRITE は設定ファイルのサイズに比例する。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: 16 Redis-named parameters exist; only maxmemory, maxmemory-policy, appendfsync, the auto-rewrite pair, hz, maxmemory-samples, loglevel and logfile are hot-settable — bind, port, io-threads, dir and appendonly error at runtime; RESETSTAT is a no-op</p>
+        <p>差異あり。Redis と同名のパラメータを 16 個持つ。稼働中に変更できるのは maxmemory、maxmemory-policy、appendfsync、auto-rewrite の 2 つ、hz、maxmemory-samples、loglevel、logfile のみで、bind、port、io-threads、dir、appendonly は実行時にエラーとなる。RESETSTAT は何もしない。</p>
       </div>
     </section>
 

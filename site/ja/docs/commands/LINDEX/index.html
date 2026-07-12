@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LINDEX — kevy コマンドリファレンス</title>
-<meta name="description" content="LINDEX — Return the element at the given list index. O(1) — the list is a VecDeque, so an index is a direct offset (Redis's quicklist is O(N))">
+<meta name="description" content="LINDEX — 指定した位置のリスト要素を返す。 O(1) —— リストの実体は VecDeque であり、添字はそのままオフセットになる(Redis の quicklist は O(N))。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>リスト</span> <span>/</span> <b>LINDEX</b></nav>
 
     <h1 class="cmd">LINDEX</h1>
-    <p class="lede">Return the element at the given list index.</p>
+    <p class="lede">指定した位置のリスト要素を返す。</p>
 
     <pre class="syntax"><code>LINDEX key index</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(1) — the list is a VecDeque, so an index is a direct offset (Redis's quicklist is O(N))</code></p>
+      <p class="cx-body"><code>O(1) —— リストの実体は VecDeque であり、添字はそのままオフセットになる(Redis の quicklist は O(N))。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call note">
         <span class="h">互換</span>
-        <p>full</p>
+        <p>互換</p>
       </div>
     </section>
 

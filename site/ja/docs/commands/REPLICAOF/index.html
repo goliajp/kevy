@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>REPLICAOF — kevy コマンドリファレンス</title>
-<meta name="description" content="REPLICAOF — Make this server a replica of another, or promote it with NO ONE. O(1) at the command; the full resync that follows is O(N) in the background">
+<meta name="description" content="REPLICAOF — このサーバを別のサーバのレプリカにする。NO ONE で昇格させる。 コマンド自体は O(1)。その後に走るフルリシンクは、バックグラウンドで O(N)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>レプリケーション</span> <span>/</span> <b>REPLICAOF</b></nav>
 
     <h1 class="cmd">REPLICAOF</h1>
-    <p class="lede">Make this server a replica of another, or promote it with NO ONE.</p>
+    <p class="lede">このサーバを別のサーバのレプリカにする。NO ONE で昇格させる。</p>
 
     <pre class="syntax"><code>REPLICAOF host port | NO ONE</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(1) at the command; the full resync that follows is O(N) in the background</code></p>
+      <p class="cx-body"><code>コマンド自体は O(1)。その後に走るフルリシンクは、バックグラウンドで O(N)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: the port argument is the primary's REPLICATION port base, not its client port (the default base is client port + 10000); chain replication is rejected</p>
+        <p>差異あり。port 引数は primary のクライアントポートではなく、replication ポートのベース値である(既定のベース値はクライアントポート + 10000)。チェイン構成のレプリケーションは拒否する。</p>
       </div>
     </section>
 

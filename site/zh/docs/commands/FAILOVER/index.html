@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FAILOVER — kevy 命令参考</title>
-<meta name="description" content="FAILOVER — Planned zero-loss handover: quiesce writes, wait for the target replica to drain, promote it, and follow it. O(1) at the command — the handover runs in the background, polling the target until it is caught up">
+<meta name="description" content="FAILOVER — 有计划的零丢失切换：停写、等目标副本追平、把它提升为主、然后本机改为跟随它。 命令本身 O(1) —— 切换在后台进行，不断轮询目标直到它追平为止。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>复制</span> <span>/</span> <b>FAILOVER</b></nav>
 
     <h1 class="cmd">FAILOVER</h1>
-    <p class="lede">Planned zero-loss handover: quiesce writes, wait for the target replica to drain, promote it, and follow it.</p>
+    <p class="lede">有计划的零丢失切换：停写、等目标副本追平、把它提升为主、然后本机改为跟随它。</p>
 
     <pre class="syntax"><code>FAILOVER host port [TIMEOUT ms] | ABORT</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(1) at the command — the handover runs in the background, polling the target until it is caught up</code></p>
+      <p class="cx-body"><code>命令本身 O(1) —— 切换在后台进行，不断轮询目标直到它追平为止。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: Redis's syntax is FAILOVER [TO host port [FORCE]] [ABORT] [TIMEOUT ms] with an optional target; kevy's is FAILOVER host port [TIMEOUT ms] | ABORT — the target is mandatory and positional, and the port given is the target's client port</p>
+        <p>有差异：Redis 的语法是 FAILOVER [TO host port [FORCE]] [ABORT] [TIMEOUT ms]，目标可选；kevy 的是 FAILOVER host port [TIMEOUT ms] | ABORT —— 目标是必填的位置参数，而且这里给的 port 是目标的客户端端口。</p>
       </div>
     </section>
 

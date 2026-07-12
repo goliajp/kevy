@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>REPLICAOF — kevy 命令参考</title>
-<meta name="description" content="REPLICAOF — Make this server a replica of another, or promote it with NO ONE. O(1) at the command; the full resync that follows is O(N) in the background">
+<meta name="description" content="REPLICAOF — 让本机成为另一台服务器的副本，或用 NO ONE 把它提升为主。 命令本身 O(1)；随后的全量重同步在后台进行，代价是 O(N)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>复制</span> <span>/</span> <b>REPLICAOF</b></nav>
 
     <h1 class="cmd">REPLICAOF</h1>
-    <p class="lede">Make this server a replica of another, or promote it with NO ONE.</p>
+    <p class="lede">让本机成为另一台服务器的副本，或用 NO ONE 把它提升为主。</p>
 
     <pre class="syntax"><code>REPLICAOF host port | NO ONE</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(1) at the command; the full resync that follows is O(N) in the background</code></p>
+      <p class="cx-body"><code>命令本身 O(1)；随后的全量重同步在后台进行，代价是 O(N)。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: the port argument is the primary's REPLICATION port base, not its client port (the default base is client port + 10000); chain replication is rejected</p>
+        <p>有差异：port 参数给的是主库的复制端口基准值，不是它的客户端端口（默认基准 = 客户端端口 + 10000）；链式复制会被拒绝。</p>
       </div>
     </section>
 

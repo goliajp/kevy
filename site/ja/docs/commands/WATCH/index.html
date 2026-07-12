@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WATCH — kevy コマンドリファレンス</title>
-<meta name="description" content="WATCH — Watch keys for optimistic locking of the next EXEC. O(W) keys, grouped into O(min(W,S)) cross-shard messages">
+<meta name="description" content="WATCH — 次の EXEC のために、key を楽観ロックの対象として監視する。 key W 個に対して O(W)。shard をまたぐメッセージは O(min(W,S)) 通にまとめられる。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>トランザクション</span> <span>/</span> <b>WATCH</b></nav>
 
     <h1 class="cmd">WATCH</h1>
-    <p class="lede">Watch keys for optimistic locking of the next EXEC.</p>
+    <p class="lede">次の EXEC のために、key を楽観ロックの対象として監視する。</p>
 
     <pre class="syntax"><code>WATCH key [key ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(W) keys, grouped into O(min(W,S)) cross-shard messages</code></p>
+      <p class="cx-body"><code>key W 個に対して O(W)。shard をまたぐメッセージは O(min(W,S)) 通にまとめられる。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call note">
         <span class="h">互換</span>
-        <p>full</p>
+        <p>互換</p>
       </div>
     </section>
 

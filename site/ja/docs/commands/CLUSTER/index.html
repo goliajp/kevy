@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CLUSTER — kevy コマンドリファレンス</title>
-<meta name="description" content="CLUSTER — Cluster topology introspection (virtual-node model over shards). INFO / NODES / SLOTS / SHARDS / MYID: O(S). KEYSLOT: O(len(key)). COUNTKEYSINSLOT: O(N/S)">
+<meta name="description" content="CLUSTER — クラスタトポロジの参照(shard 上に構成した仮想ノードモデル)。 INFO / NODES / SLOTS / SHARDS / MYID は O(S)。KEYSLOT は O(len(key))。COUNTKEYSINSLOT は O(N/S)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>サーバー</span> <span>/</span> <b>CLUSTER</b></nav>
 
     <h1 class="cmd">CLUSTER</h1>
-    <p class="lede">Cluster topology introspection (virtual-node model over shards).</p>
+    <p class="lede">クラスタトポロジの参照(shard 上に構成した仮想ノードモデル)。</p>
 
     <pre class="syntax"><code>CLUSTER INFO | NODES | SLOTS | SHARDS | KEYSLOT key | COUNTKEYSINSLOT slot</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>INFO / NODES / SLOTS / SHARDS / MYID: O(S). KEYSLOT: O(len(key)). COUNTKEYSINSLOT: O(N/S)</code></p>
+      <p class="cx-body"><code>INFO / NODES / SLOTS / SHARDS / MYID は O(S)。KEYSLOT は O(len(key))。COUNTKEYSINSLOT は O(N/S)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: a read-only virtual-node topology derived from config (one virtual master per shard) — no gossip, no MEET / FORGET / SETSLOT effect (they reply OK as no-ops), no MIGRATE / ASK, no failover; COUNTKEYSINSLOT counts only the answering shard's keys</p>
+        <p>差異あり。設定から導出した読み取り専用の仮想ノードトポロジであり(shard 1 つにつき仮想 master 1 つ)、gossip はない。MEET / FORGET / SETSLOT は効果を持たず OK を返すだけの no-op であり、MIGRATE / ASK もフェイルオーバーも存在しない。COUNTKEYSINSLOT は応答した shard の key しか数えない。</p>
       </div>
     </section>
 

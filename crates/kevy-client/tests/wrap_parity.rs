@@ -137,9 +137,17 @@ fn hash_field_ttl_round_trip() {
         .unwrap();
     assert_eq!(codes, vec![1, -2]);
 
+    // HTTL is SECONDS. The old assertion here was `(1..=120_000)`, which a
+    // millisecond reply satisfies just as happily as a second one — and that is
+    // precisely how HTTL shipped returning milliseconds. Bound it tight enough
+    // that only the right unit fits.
     let ttls = c.httl(b"h", &[&b"a"[..], &b"b"[..]]).unwrap();
-    assert!((1..=120_000).contains(&ttls[0]), "ttl = {}", ttls[0]);
+    assert!((110..=120).contains(&ttls[0]), "HTTL must reply seconds: {}", ttls[0]);
     assert_eq!(ttls[1], -1);
+
+    // HPTTL is MILLISECONDS, over the very same deadline.
+    let ms = c.hpttl(b"h", &[&b"a"[..]]).unwrap()[0];
+    assert!((110_000..=120_000).contains(&ms), "HPTTL must reply millis: {ms}");
 
     // NX refuses to overwrite the existing deadline.
     let codes = c
@@ -151,12 +159,18 @@ fn hash_field_ttl_round_trip() {
         .hpexpire(b"h", &[&b"b"[..]], Duration::from_millis(90_500), HExpireCond::Always)
         .unwrap();
     assert_eq!(codes, vec![1]);
+    // 90_500 ms rounds to 91 s — HTTL rounds to nearest, as the key-level TTL
+    // and Redis both do.
     let ttl = c.httl(b"h", &[&b"b"[..]]).unwrap()[0];
-    assert!((1..=90_500).contains(&ttl), "ttl = {ttl}");
+    assert!((85..=91).contains(&ttl), "HTTL must reply seconds: {ttl}");
+    let ms = c.hpttl(b"h", &[&b"b"[..]]).unwrap()[0];
+    assert!((85_000..=90_500).contains(&ms), "HPTTL must reply millis: {ms}");
 
     let codes = c.hpersist(b"h", &[&b"a"[..], &b"b"[..]]).unwrap();
     assert_eq!(codes, vec![1, 1]);
     assert_eq!(c.httl(b"h", &[&b"a"[..], &b"b"[..]]).unwrap(), vec![-1, -1]);
+    // the sentinels are units-free and must pass through both verbs untouched
+    assert_eq!(c.hpttl(b"h", &[&b"a"[..], &b"gone"[..]]).unwrap(), vec![-1, -2]);
 }
 
 // ───────────────────────── zset algebra ─────────────────────────

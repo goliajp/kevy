@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>IDX.DROP — kevy コマンドリファレンス</title>
-<meta name="description" content="IDX.DROP — Drop a declared index (catalog mutation, sidecar-persisted). O(catalog size)">
+<meta name="description" content="IDX.DROP — 宣言済みのインデックスを削除する(カタログの変更であり、サイドカーへ永続化される)。 O(catalog size)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>インデックス</span> <span>/</span> <b>IDX.DROP</b></nav>
 
     <h1 class="cmd">IDX.DROP</h1>
-    <p class="lede">Drop a declared index (catalog mutation, sidecar-persisted).</p>
+    <p class="lede">宣言済みのインデックスを削除する(カタログの変更であり、サイドカーへ永続化される)。</p>
 
     <pre class="syntax"><code>IDX.DROP name</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(catalog size)</code></p>
+      <p class="cx-body"><code>O(catalog size)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call warn">
         <span class="h">kevy 固有</span>
-        <p>kevy-only: nearest is FT.DROPINDEX</p>
+        <p>kevy 固有。最も近いのは FT.DROPINDEX。</p>
       </div>
     </section>
 

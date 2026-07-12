@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BLPOP — kevy 命令参考</title>
-<meta name="description" content="BLPOP — Blocking left pop across one or more lists (effect logged as LPOP). O(1) to serve; the park is O(1) and waiters are woken FIFO per key">
+<meta name="description" content="BLPOP — 在一个或多个 list 上做阻塞式左弹出（effect 按 LPOP 记录）。 服务一次是 O(1)；阻塞挂起本身是 O(1)，同一个 key 上的等待者按 FIFO 唤醒。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>列表</span> <span>/</span> <b>BLPOP</b></nav>
 
     <h1 class="cmd">BLPOP</h1>
-    <p class="lede">Blocking left pop across one or more lists (effect logged as LPOP).</p>
+    <p class="lede">在一个或多个 list 上做阻塞式左弹出（effect 按 LPOP 记录）。</p>
 
     <pre class="syntax"><code>BLPOP key [key ...] timeout</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(1) to serve; the park is O(1) and waiters are woken FIFO per key</code></p>
+      <p class="cx-body"><code>服务一次是 O(1)；阻塞挂起本身是 O(1)，同一个 key 上的等待者按 FIFO 唤醒。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: on a multi-shard server the multi-key form does not honour Redis's left-to-right key priority — keys on the connection's own shard are served before remote ones</p>
+        <p>有差异：多 shard 部署下，多 key 形式不遵守 Redis 的从左到右 key 优先级 —— 落在连接自身 shard 上的 key 会先于远端 key 被服务。</p>
       </div>
     </section>
 

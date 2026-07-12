@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SELECT — kevy コマンドリファレンス</title>
-<meta name="description" content="SELECT — Select the logical database; kevy is single-DB and only accepts index 0. O(1)">
+<meta name="description" content="SELECT — 論理データベースを選択する。kevy は単一 DB であり、index 0 だけを受理する。 O(1)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>接続</span> <span>/</span> <b>SELECT</b></nav>
 
     <h1 class="cmd">SELECT</h1>
-    <p class="lede">Select the logical database; kevy is single-DB and only accepts index 0.</p>
+    <p class="lede">論理データベースを選択する。kevy は単一 DB であり、index 0 だけを受理する。</p>
 
     <pre class="syntax"><code>SELECT index</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(1)</code></p>
+      <p class="cx-body"><code>O(1)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: kevy is single-DB — SELECT 0 replies OK and any other index is an error</p>
+        <p>差異あり。kevy は単一 DB —— SELECT 0 は OK を返し、それ以外の index はエラーになる。</p>
       </div>
     </section>
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SUBSCRIBE — kevy 命令参考</title>
-<meta name="description" content="SUBSCRIBE — Subscribe to the given channels. O(c) channels; never fans out to other shards">
+<meta name="description" content="SUBSCRIBE — 订阅给定的频道。 O(c) 个频道；从不扇出到其它 shard。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>发布订阅</span> <span>/</span> <b>SUBSCRIBE</b></nav>
 
     <h1 class="cmd">SUBSCRIBE</h1>
-    <p class="lede">Subscribe to the given channels.</p>
+    <p class="lede">订阅给定的频道。</p>
 
     <pre class="syntax"><code>SUBSCRIBE channel [channel ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(c) channels; never fans out to other shards</code></p>
+      <p class="cx-body"><code>O(c) 个频道；从不扇出到其它 shard。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: kevy has no RESP2 subscriber mode — after SUBSCRIBE the connection may still issue any command, where Redis restricts it to the pubsub verbs plus PING / QUIT / RESET</p>
+        <p>有差异：kevy 没有 RESP2 的订阅者模式 —— SUBSCRIBE 之后连接照样可以发任何命令，而 Redis 会把它限制在 pubsub 那几个命令加 PING / QUIT / RESET。</p>
       </div>
     </section>
 

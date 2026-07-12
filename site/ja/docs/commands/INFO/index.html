@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>INFO — kevy コマンドリファレンス</title>
-<meta name="description" content="INFO — Report server statistics and status sections as text. O(1) in the keyspace — it never walks it; O(S) to sum the per-shard gauges">
+<meta name="description" content="INFO — サーバの統計と状態を、セクション単位のテキストで返す。 keyspace に対しては O(1) —— 走査は一切しない。shard ごとのゲージを合算するのに O(S)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>サーバー</span> <span>/</span> <b>INFO</b></nav>
 
     <h1 class="cmd">INFO</h1>
-    <p class="lede">Report server statistics and status sections as text.</p>
+    <p class="lede">サーバの統計と状態を、セクション単位のテキストで返す。</p>
 
     <pre class="syntax"><code>INFO [section]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(1) in the keyspace — it never walks it; O(S) to sum the per-shard gauges</code></p>
+      <p class="cx-body"><code>keyspace に対しては O(1) —— 走査は一切しない。shard ごとのゲージを合算するのに O(S)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: 8 sections only (server, clients, memory, persistence, stats, replication, cluster, keyspace) — no commandstats / latencystats / errorstats / cpu; reports redis_version 7.4.0 for client sniffing plus a kevy_version line, and the values are up to one tick stale</p>
+        <p>差異あり。セクションは 8 つのみ(server、clients、memory、persistence、stats、replication、cluster、keyspace)で、commandstats / latencystats / errorstats / cpu は存在しない。クライアント側の判定のために redis_version 7.4.0 を返し、別途 kevy_version 行を持つ。値は最大 1 tick 分だけ古いことがある。</p>
       </div>
     </section>
 

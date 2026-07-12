@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EVAL — kevy 命令参考</title>
-<meta name="description" content="EVAL — Run a Lua script server-side; routed to KEYS[1]'s shard when numkeys &gt;= 1. O(compile + the script's own work). The whole script is one atomic unit on KEYS[1]'s shard and blocks that shard for its duration. The runaway guard is an INSTRUCTION budget (lua time_limit_ms x 40000 instructions), not a wall clock">
+<meta name="description" content="EVAL — 在服务端执行一段 Lua 脚本；当 numkeys &gt;= 1 时，路由到 KEYS[1] 所在的 shard。 O(编译 + 脚本自身的开销)。整段脚本在 KEYS[1] 所在的 shard 上作为一个原子单元执行，执行期间独占那个 shard。失控保护用的是指令预算（lua time_limit_ms x 40000 条指令），不是墙钟时间。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>脚本</span> <span>/</span> <b>EVAL</b></nav>
 
     <h1 class="cmd">EVAL</h1>
-    <p class="lede">Run a Lua script server-side; routed to KEYS[1]'s shard when numkeys &gt;= 1.</p>
+    <p class="lede">在服务端执行一段 Lua 脚本；当 numkeys &gt;= 1 时，路由到 KEYS[1] 所在的 shard。</p>
 
     <pre class="syntax"><code>EVAL script numkeys [key [key ...]] [arg [arg ...]]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(compile + the script's own work). The whole script is one atomic unit on KEYS[1]'s shard and blocks that shard for its duration. The runaway guard is an INSTRUCTION budget (lua time_limit_ms x 40000 instructions), not a wall clock</code></p>
+      <p class="cx-body"><code>O(编译 + 脚本自身的开销)。整段脚本在 KEYS[1] 所在的 shard 上作为一个原子单元执行，执行期间独占那个 shard。失控保护用的是指令预算（lua time_limit_ms x 40000 条指令），不是墙钟时间。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: there is no -BUSY state and no SCRIPT KILL — an over-budget script is aborted in place and answered with an ordinary error; nested EVAL is rejected, a redis.call touching another shard's key returns CROSSSLOT, and EVAL auto-caches its source by SHA1 so EVALSHA works without SCRIPT LOAD</p>
+        <p>有差异：没有 -BUSY 状态，也没有 SCRIPT KILL —— 超预算的脚本就地中止，并以一个普通错误应答；嵌套 EVAL 会被拒绝；redis.call 碰到别的 shard 上的 key 会返回 CROSSSLOT；EVAL 会按 SHA1 自动缓存源码，所以不做 SCRIPT LOAD 也能直接 EVALSHA。</p>
       </div>
     </section>
 

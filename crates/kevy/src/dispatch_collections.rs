@@ -35,7 +35,8 @@ pub(crate) fn dispatch_hash<A: ArgvView + ?Sized>(
         b"HEXPIRE" => crate::cmd_hash_ttl::cmd_hexpire(store, args, out),
         b"HPEXPIRE" => crate::cmd_hash_ttl::cmd_hpexpire(store, args, out),
         b"HPEXPIREAT" => crate::cmd_hash_ttl::cmd_hpexpireat(store, args, out),
-        b"HTTL" => crate::cmd_hash_ttl::cmd_httl(store, args, out),
+        b"HTTL" => crate::cmd_hash_ttl::cmd_httl(store, args, true, "httl", out),
+        b"HPTTL" => crate::cmd_hash_ttl::cmd_httl(store, args, false, "hpttl", out),
         b"HPERSIST" => crate::cmd_hash_ttl::cmd_hpersist(store, args, out),
         // Deprecated `HMSET` alias — same wire shape as
         // HSET (`HMSET key field value [field value ...]`), but

@@ -26,10 +26,14 @@ BAD = ",.;:!?"
 #
 # Two shapes are NOT violations and must not be flagged:
 #   * a digit on either side — `3.5`, `1,000`, and markdown's `### 2. レプリカ`,
-#     where the dot is an ordinal marker rather than a full stop;
-#   * a Latin letter after the mark — `kevy, Redis` inside an English fragment.
+#     where the dot is an ordinal marker rather than a full stop.
+#
+# A Latin letter after the mark is NOT an excuse. 「注意:replica」 is exactly as
+# wrong as 「注意:レプリカ」 — the colon belongs to the Chinese clause that opened
+# it, not to the English word that happens to follow. An earlier version of this
+# gate let those through, and a native-speaker pass found them.
 PAT = re.compile(
-    rf"(?:[{CJK}][{re.escape(BAD)}](?![\d\w])"
+    rf"(?:[{CJK}][{re.escape(BAD)}](?![\d])"
     rf"|(?<![\d])[{re.escape(BAD)}][ \t]*[{CJK}])"
 )
 
