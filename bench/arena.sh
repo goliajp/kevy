@@ -123,15 +123,24 @@ run_server_and_measure() { # label, start-command...
     "$@" >/dev/null 2>&1 &
     local SPID=$!
     sleep 1
-    wait_ready || { kill $SPID 2>/dev/null; return 1; }
+    if ! wait_ready; then
+        # Never a silent gap: a missing engine is a hole in the table and
+        # must read as one.
+        echo "# !! $label never came up — its rows are ABSENT from this table" >&2
+        echo "# !! $label ABSENT (did not start)"
+        kill $SPID 2>/dev/null
+        docker rm -f "arena-$label" >/dev/null 2>&1 || true
+        return 1
+    fi
     measure | sed "s/^/$label /"
     kill $SPID 2>/dev/null
     wait $SPID 2>/dev/null
-    docker rm -f arena-valkey >/dev/null 2>&1 || true
+    docker rm -f "arena-$label" >/dev/null 2>&1 || true
     sleep 1
 }
 
 echo "server test median stdev"
+
 run_server_and_measure kevy \
     env KEVY_BIND=127.0.0.1 taskset -c "$SRV_CORES" "$KBIN" --threads 8 --port $PORT --no-aof
 
@@ -139,4 +148,22 @@ run_server_and_measure valkey \
     docker run --rm --name arena-valkey --network host --cpuset-cpus "$SRV_CORES" \
     valkey/valkey:9.1 valkey-server --port $PORT --save '' --appendonly no --io-threads 8
 
-echo "# gap rule: |kevy-valkey| <= max(stdev_kevy, stdev_valkey) => NOISE"
+# The other two engines of the four-way position claim. They were measured
+# once, in the T9 decomposition, with the same quantized ruler this file just
+# stopped using — 8M/3,996,004 = 2.0020s for redis and 8M/1,776,199 = 4.5040s
+# for dragonfly, both exact multiples of 250ms. The headline ratios (1.60x
+# redis, 3.60x dragonfly) were therefore bucket arithmetic. Measuring all four
+# through one harness is the only way the position plot means anything.
+# Set FOURWAY=0 to run the bare kevy-vs-valkey table only.
+if [ "${FOURWAY:-1}" = 1 ]; then
+    run_server_and_measure redis8 \
+        docker run --rm --name arena-redis8 --network host --cpuset-cpus "$SRV_CORES" \
+        redis:8 redis-server --port $PORT --save '' --appendonly no --io-threads 8
+
+    run_server_and_measure dragonfly \
+        docker run --rm --name arena-dragonfly --network host --cpuset-cpus "$SRV_CORES" \
+        --ulimit memlock=-1 docker.dragonflydb.io/dragonflydb/dragonfly \
+        --port $PORT --proactor_threads=8
+fi
+
+echo "# gap rule: |kevy-other| <= max(stdev_kevy, stdev_other) => NOISE"
