@@ -62,7 +62,7 @@ is GENERATED from the server's verb metadata table — do not edit by hand.
 
 - `KEYS pattern` [readonly] — Return every key matching the glob pattern (cross-shard gather).
 - `RANDOMKEY` [readonly] — Return a random key from the keyspace.
-- `SCAN cursor [MATCH pattern] [COUNT count]` [readonly] — Incrementally iterate the keyspace (COUNT is accepted and ignored).
+- `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]` [readonly] — Incrementally iterate the keyspace: O(COUNT) buckets per call, amortised O(N) for a full sweep, rehash-tolerant; cursors encode (shard, position) so they are only valid on the server that issued them.
 
 ### generic
 

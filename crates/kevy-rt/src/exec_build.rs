@@ -116,7 +116,9 @@ impl<C: Commands> Shard<C> {
             Route::SUnion => self.build_gather(args, GatherKind::Set, MultiOp::SUnion),
             Route::SDiff => self.build_gather(args, GatherKind::Set, MultiOp::SDiff),
             Route::Keys(pat) => self.fanout_keys(pat, None, KeyShape::Keys),
-            Route::Scan(pat) => self.fanout_keys(pat, None, KeyShape::Scan),
+            // v4: real cursor iterator — one shard per call, chained by
+            // the finalize hook. Lives in `crate::exec_scan`.
+            Route::Scan(spec) => self.build_scan_targets(spec),
             Route::RandomKey => self.fanout_keys(None, Some(1), KeyShape::Random),
             Route::XReadGather { streams, count, group } => {
                 self.build_xread_targets(streams, count, group)
@@ -286,7 +288,7 @@ impl<C: Commands> Shard<C> {
         )
     }
 
-    /// Fan a key-collection out to every shard (KEYS/SCAN/RANDOMKEY).
+    /// Fan a key-collection out to every shard (KEYS/RANDOMKEY).
     fn fanout_keys(
         &self,
         pat: Option<Vec<u8>>,

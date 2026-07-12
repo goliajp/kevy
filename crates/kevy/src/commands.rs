@@ -10,7 +10,7 @@ use kevy_rt::{
 };
 use kevy_store::Store;
 
-use crate::cmd::{self, scan_pattern, upper_verb};
+use crate::cmd::{self, scan_args, upper_verb};
 use crate::{
     Argv, KevyCommands, cmd_block, cmd_block_serve, cmd_hello, cmd_resolve, config_global,
     dispatch, map_appendfsync, map_eviction_policy, ops,
@@ -69,7 +69,7 @@ impl Commands for KevyCommands {
             b"SUNION" if args.len() >= 2 => Route::SUnion,
             b"SDIFF" if args.len() >= 2 => Route::SDiff,
             b"KEYS" if args.len() == 2 => Route::Keys(Some(args[1].to_vec())),
-            b"SCAN" if args.len() >= 2 => Route::Scan(scan_pattern(args)),
+            b"SCAN" if args.len() >= 2 => Route::Scan(scan_args(args)),
             b"RANDOMKEY" if args.len() == 1 => Route::RandomKey,
             b"SUBSCRIBE" if args.len() >= 2 => Route::Subscribe,
             b"UNSUBSCRIBE" => Route::Unsubscribe, // no args = unsubscribe all

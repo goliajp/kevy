@@ -53,6 +53,26 @@ pub(crate) enum Agg {
         shape: KeyShape,
         acc: Vec<Vec<u8>>,
     },
+    /// `SCAN` paging orchestrator: one [`crate::message::Op::ScanStep`]
+    /// is in flight against `shard`; fold records the page, then
+    /// `finalize_scan_agg` either replies `[next-cursor, keys]` or —
+    /// when the shard is exhausted with budget left — re-arms the slot
+    /// and chains into `shard + 1` (so an empty server answers cursor 0
+    /// in ONE call instead of one call per shard).
+    ScanPage {
+        /// Shard the in-flight `ScanStep` targets.
+        shard: usize,
+        /// Remaining buckets-visited budget (the request's COUNT).
+        budget: usize,
+        /// MATCH glob to carry into chained shards.
+        pattern: Option<Vec<u8>>,
+        /// TYPE filter to carry into chained shards.
+        type_filter: Option<Vec<u8>>,
+        /// Keys accumulated across this call's page(s).
+        keys: Vec<Vec<u8>>,
+        /// The shard's next in-shard cursor (0 = shard exhausted).
+        next: u64,
+    },
     /// `WATCH` fan-out accumulator: each owning shard returns its
     /// `(key, version)` pairs via [`Part::WatchVersions`]; the origin
     /// shard appends them all and, when the last fan-out reply arrives,

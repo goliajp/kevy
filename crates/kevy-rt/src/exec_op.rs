@@ -195,6 +195,15 @@ impl<C: Commands> Shard<C> {
             Op::CollectKeys(pat, limit) => {
                 Part::Keys(self.store.collect_keys(pat.as_deref(), limit))
             }
+            Op::ScanStep { cursor, count, pattern, type_filter } => {
+                let (next, keys, visited) = self.store.scan_page(
+                    cursor,
+                    count,
+                    pattern.as_deref(),
+                    type_filter.as_deref(),
+                );
+                Part::ScanPage { next, keys, visited }
+            }
             Op::CheckWatch(keys) => {
                 // EXEC's pre-execution fan-out: report whether any of
                 // `keys` (each carrying the version recorded at WATCH

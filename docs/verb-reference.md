@@ -56,7 +56,7 @@ Every wire-reachable verb, from the server's own metadata table
 |---|---|---|---|
 | `KEYS pattern` | 2 | readonly | Return every key matching the glob pattern (cross-shard gather). |
 | `RANDOMKEY` | 1 | readonly | Return a random key from the keyspace. |
-| `SCAN cursor [MATCH pattern] [COUNT count]` | -2 | readonly | Incrementally iterate the keyspace (COUNT is accepted and ignored). |
+| `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]` | -2 | readonly | Incrementally iterate the keyspace: O(COUNT) buckets per call, amortised O(N) for a full sweep, rehash-tolerant; cursors encode (shard, position) so they are only valid on the server that issued them. |
 
 ## generic
 
