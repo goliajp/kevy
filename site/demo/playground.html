@@ -208,6 +208,12 @@
       </div>
       <p class="p-note">The honest comparison: kevy versus what the platform already gives you.
         Same workload, same tab, measured right now — <b>including the axis kevy loses.</b></p>
+      <p class="p-note"><b>&ldquo;But kevy&rsquo;s own write log can land in IndexedDB — isn&rsquo;t that circular?&rdquo;</b>
+        No, and the distinction is the whole point. IndexedDB here is a <em>block store</em>: kevy appends a
+        batched byte log to it, off the hot path. It is never on the read or write path — every operation runs
+        inside wasm linear memory. Using IndexedDB to hold a log is not the same as using it <em>as the
+        key-value engine</em>, which is what the bars below measure. OPFS is the primary backend; IndexedDB is
+        the fallback where OPFS synchronous handles are unavailable.</p>
       <div class="row">
         <button class="primary" id="b-bench">Run benchmark</button>
         <input type="number" id="bn" value="2000" min="200" max="20000" step="200" style="max-width:120px">
@@ -253,10 +259,9 @@ try {
   });
   $('chip-engine').className = 'chip live';
   $('chip-engine').innerHTML = 'engine <b>live</b>';
-  // Which durable backend actually took: OPFS where available, IndexedDB otherwise.
-  const backend = (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.getDirectory)
-    ? 'OPFS' : 'IndexedDB';
-  $('chip-backend').innerHTML = `persistence <b>${backend}</b>`;
+  // The REAL backend kevy landed on — asked, not guessed.
+  const label = { opfs: 'OPFS', idb: 'IndexedDB (log only)' }[db.backend] ?? 'in-memory';
+  $('chip-backend').innerHTML = `write log <b>${label}</b>`;
   $('chip-tab').innerHTML = `tab <b>${TAB}</b>`;
   $('url-hint').textContent = location.href;
   refreshKeys();
@@ -484,7 +489,7 @@ if (new URLSearchParams(location.search).has('selftest')) {
       location.reload();
     } else {
       sessionStorage.removeItem(MARK);
-      const result = { pass: false, steps: {} };
+      const result = { pass: false, steps: {}, backend: db.backend };
 
       // 1. Durability: the value must have survived the reload.
       const got = db.getText('selftest:key');
