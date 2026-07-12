@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Playground — kevy</title>
+<meta name="description" content="A real kevy engine, compiled to WebAssembly, running in this tab. Write keys, watch TTLs expire, read the append-only log off your own disk.">
+<link rel="stylesheet" href="../assets/kevy.css">
+<link rel="stylesheet" href="../assets/play.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body data-pkg="../demo/pkg">
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../docs/">Docs</a>
+      <a href="../docs/commands/">Commands</a>
+      <a href="../play/" aria-current="page">Playground</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language">
+        <a href="../play/" aria-current="page">EN</a>
+        <a href="../zh/play/">中文</a>
+        <a href="../ja/play/">日本語</a>
+      </nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="page">
+  <div class="band">
+    <p class="eyebrow">Playground</p>
+    <h1>The engine, in this tab</h1>
+    <p class="lede">This is kevy-store — the same engine the server runs — compiled to WebAssembly. There is no backend. Turn off your network and the page keeps working, because the keys are in your browser's filesystem, not in ours.</p>
+  </div>
+
+  <div id="boot" class="boot"><span class="spin" aria-hidden="true"></span>Starting the engine…</div>
+
+  <div id="app" class="grid" hidden>
+
+    <!-- keyspace ------------------------------------------------------- -->
+    <section class="panel span2">
+      <div class="panel-h">
+        <h2>Keyspace</h2>
+        <p class="hint">Read back out of the engine every 100 ms. Click a row to edit it.</p>
+      </div>
+      <div class="ks-wrap">
+        <table class="ks">
+          <thead><tr><th>key</th><th>value</th><th>ttl (s)</th></tr></thead>
+          <tbody id="ks-body"></tbody>
+        </table>
+      </div>
+      <form id="w" class="wform">
+        <input id="wk" placeholder="key" aria-label="key" autocomplete="off" spellcheck="false">
+        <input id="wv" placeholder="value" aria-label="value" autocomplete="off" spellcheck="false">
+        <input id="wt" placeholder="ttl (s)" aria-label="ttl (s)" type="number" min="0" step="1" inputmode="numeric">
+        <button type="submit" class="btn primary">Write</button>
+        <button type="button" class="btn" id="flush">Flush all</button>
+      </form>
+    </section>
+
+    <!-- scenarios ------------------------------------------------------ -->
+    <section class="panel">
+      <div class="panel-h">
+        <h2>Scenarios</h2>
+        <p class="hint">Pick one. The buttons perform real writes — there is no canned output on this page.</p>
+      </div>
+      <div class="scen">
+        <button class="btn" data-scenario="session">Session cache</button>
+        <button class="btn" data-scenario="rate">Rate limiter</button>
+        <button class="btn" data-scenario="flags">Feature flags</button>
+        <button class="btn" data-scenario="cart">Shopping cart</button>
+      </div>
+      <p id="scen-note" class="scen-note"></p>
+    </section>
+
+    <!-- durability ----------------------------------------------------- -->
+    <section class="panel">
+      <div class="panel-h"><h2>Durability</h2></div>
+      <dl class="stats">
+        <div><dt>Backend</dt><dd id="stat-backend" class="mono">—</dd></div>
+        <div><dt>Keys</dt><dd id="stat-keys" class="mono">0</dd></div>
+        <div><dt>Log size</dt><dd id="stat-bytes" class="mono">0 B</dd></div>
+        <div><dt>Origin quota used</dt><dd id="stat-quota" class="mono">—</dd></div>
+      </dl>
+      <p class="hint">Reload and the keys are still here. The engine replays this log when it opens — the same code path the server takes at boot.</p>
+      <div class="row">
+        <button class="btn" id="reload">Reload the page</button>
+        <button class="btn" id="dl" disabled>Download the log</button>
+      </div>
+    </section>
+
+    <!-- the log -------------------------------------------------------- -->
+    <section class="panel span2">
+      <div class="panel-h">
+        <h2>The append-only log</h2>
+        <p class="hint">These bytes are read straight out of OPFS by this page, with no help from the engine. That is the claim: they are on your disk, and anything can go and look.</p>
+      </div>
+      <pre id="aof" class="aof" aria-live="polite"></pre>
+    </section>
+
+    <!-- pub/sub -------------------------------------------------------- -->
+    <section class="panel span2">
+      <div class="panel-h">
+        <h2>Pub/Sub across tabs</h2>
+        <p class="hint">Publish from either tab and both receive it. The bridge is a BroadcastChannel; the channel filtering happens inside the engine, not in JavaScript.</p>
+      </div>
+      <form id="p" class="wform">
+        <input id="pc" placeholder="room" aria-label="room" autocomplete="off" spellcheck="false" value="room">
+        <input id="pm" placeholder="message" aria-label="message" autocomplete="off">
+        <button type="submit" class="btn primary">Publish</button>
+        <button type="button" class="btn" id="newtab">Open a second tab</button>
+      </form>
+      <ul id="feed" class="feed"><li class="waiting">Waiting for a message…</li></ul>
+    </section>
+
+  </div>
+</main>
+
+<script type="module" src="../assets/play.js"></script>
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>
