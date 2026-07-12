@@ -9,8 +9,9 @@ SECTIONS
 {
   .vector_table ORIGIN(FLASH) :
   {
-    LONG(0x20400000);            /* slot 0: initial stack pointer (top of SRAM) */
-    KEEP(*(.vector_table));      /* slot 1: reset handler */
+    LONG(0x20400000);                    /* slot 0: initial stack pointer (top of SRAM) */
+    KEEP(*(.vector_table));              /* slot 1: reset */
+    KEEP(*(.vector_table.exceptions));   /* slots 2-15: NMI .. SysTick */
   } > FLASH
   .text   : { *(.text .text.*); } > FLASH
   .rodata : { *(.rodata .rodata.*); } > FLASH

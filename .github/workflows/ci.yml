@@ -307,7 +307,14 @@ jobs:
         # panic handler, semihosting — and fails the build if the KV or
         # TTL surface misbehaves there.
         working-directory: bench/mcu-probe
-        run: cargo run --release
+        run: |
+          set -o pipefail
+          cargo run --release 2>&1 | tee /tmp/mcu.log
+          # A zero exit code alone does not prove the firmware ran: a lockup or a
+          # QEMU that never reached main can still leave one behind. Demand the
+          # sentinel the firmware only prints after the KV + TTL checks pass.
+          grep -q '^== kevy-store RUNS on a bare-metal MCU ==$' /tmp/mcu.log \
+            || { echo '::error::the MCU probe did not reach its success sentinel'; exit 1; }
 
   # ───────────── miri on the unsafe stones (catches UB in slot mgmt, ─────────────
   # ───────────── SPSC ring atomics, and the zset encoding face)      ─────────────

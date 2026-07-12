@@ -106,6 +106,14 @@ fn print_num(mut n: u64) {
     }
 }
 
+fn print_hex(n: u32) {
+    print("0x");
+    for shift in (0..8).rev() {
+        let nib = ((n >> (shift * 4)) & 0xf) as u8;
+        putc(if nib < 10 { b'0' + nib } else { b'a' + nib - 10 });
+    }
+}
+
 /// SYS_EXIT — hand the emulator an exit code so `cargo run` terminates.
 fn exit(code: u32) -> ! {
     // ADP_Stopped_ApplicationExit, with the status in a two-word block.
@@ -140,6 +148,57 @@ pub unsafe extern "C" fn reset() -> ! {
 #[unsafe(link_section = ".vector_table")]
 #[unsafe(no_mangle)]
 pub static RESET_VECTOR: unsafe extern "C" fn() -> ! = reset;
+
+// ------------------------------------------------------------- faults
+
+/// Slots 2-15 of the ARMv7-M vector table. The architecture requires all
+/// sixteen; a firmware that fills only reset takes its first fault into a
+/// vector of whatever bytes happen to follow, then locks up with nothing
+/// to show for it. These handlers make a fault name itself instead.
+#[unsafe(link_section = ".vector_table.exceptions")]
+#[unsafe(no_mangle)]
+pub static EXCEPTIONS: [Option<unsafe extern "C" fn() -> !>; 14] = [
+    Some(unhandled),  // 2  NMI
+    Some(hard_fault), // 3  HardFault
+    Some(unhandled),  // 4  MemManage
+    Some(unhandled),  // 5  BusFault
+    Some(unhandled),  // 6  UsageFault
+    None,             // 7  reserved
+    None,             // 8  reserved
+    None,             // 9  reserved
+    None,             // 10 reserved
+    Some(unhandled),  // 11 SVCall
+    Some(unhandled),  // 12 DebugMonitor
+    None,             // 13 reserved
+    Some(unhandled),  // 14 PendSV
+    Some(unhandled),  // 15 SysTick
+];
+
+fn scb(addr: u32) -> u32 {
+    unsafe { core::ptr::read_volatile(addr as *const u32) }
+}
+
+/// Report the fault status registers, so a fault in CI is a diagnosis and
+/// not a register dump from a locked-up core.
+unsafe extern "C" fn hard_fault() -> ! {
+    print("\n== HARDFAULT ==\n  HFSR  = ");
+    print_hex(scb(0xE000_ED2C));
+    print("\n  CFSR  = ");
+    print_hex(scb(0xE000_ED28));
+    print("\n  BFAR  = ");
+    print_hex(scb(0xE000_ED38));
+    print("\n  MMFAR = ");
+    print_hex(scb(0xE000_ED34));
+    print("\n");
+    exit(1)
+}
+
+unsafe extern "C" fn unhandled() -> ! {
+    print("\n== UNHANDLED EXCEPTION ==\n  ICSR = ");
+    print_hex(scb(0xE000_ED04)); // VECTACTIVE tells which one
+    print("\n");
+    exit(1)
+}
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
