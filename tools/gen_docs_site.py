@@ -71,6 +71,58 @@ BLURB = {
         "migration": "Moving in from Redis, and back out again.",
         "UPGRADING": "3.x to 4.0: what breaks, and why.",
     },
+    "zh": {
+        "designing-on-kevy": "习惯了想表、现在要学着想键。",
+        "cookbook": "能直接跑的配方：会话、限流、队列、排行榜、信息流。",
+        "persistence": "append-only 日志、快照、以及 kill -9 之后还剩下什么。",
+        "tuning": "shard、连接数、以及真正有用的那两个开关。",
+        "replication": "一主 N 从、还有那个不会骗人的 offset。",
+        "availability": "failover、epoch、以及我们不承诺保住的那些写。",
+        "cluster": "为什么没有 cluster、以及该怎么办。",
+        "accept-shards": "一个开关、把 listener 交给更少的核、换来 10.6%。",
+        "uds": "Unix socket：没有 TCP、没有回环、没有内核拷贝。",
+        "async": "pipelining、以及这个引擎为什么没有 async runtime。",
+        "indexes": "二级索引：怎么建起来的、代价是多少。",
+        "vector-search": "在你的键空间上做 KNN。不含 embedding 模型。",
+        "text-search": "BM25 全文检索、以及它到哪儿为止。",
+        "views": "物化视图、由写路径顺手保持新鲜。",
+        "cdc": "一条变更流、别的进程可以 tail 它。",
+        "pubsub": "频道、模式、以及订阅者跟不上时会发生什么。",
+        "lua": "EVAL —— 跑在我们自己写的解释器上。",
+        "wasm": "浏览器标签页里的 151 KB、持久化到 OPFS。",
+        "embedded-listener": "嵌进去、同时还能在 socket 上讲 RESP。",
+        "iot": "no_std、没有分配器、没有操作系统。",
+        "error-replies": "每一条错误字符串、以及它属于哪份契约。",
+        "rds-workloads": "关系型负载在这里到底要付多少钱 —— 照实说。",
+        "migration": "从 Redis 搬进来、以及再搬出去。",
+        "UPGRADING": "3.x 到 4.0：什么会坏、为什么。",
+    },
+    "ja": {
+        "designing-on-kevy": "テーブルで考えることに慣れた頭で、キーで考え直す。",
+        "cookbook": "そのまま動くレシピ —— セッション、レート制限、キュー、ランキング、フィード。",
+        "persistence": "append-only ログ、スナップショット、そして kill -9 の後に何が残るか。",
+        "tuning": "shard、コネクション、そして本当に効く二つのフラグ。",
+        "replication": "一つの primary と N 個の replica、そして嘘をつかない offset。",
+        "availability": "failover、epoch、そして我々が守ると約束しない書き込み。",
+        "cluster": "cluster が無い理由と、代わりに何をするか。",
+        "accept-shards": "listener を持つ core を減らして 10.6% を買ったフラグ。",
+        "uds": "Unix ドメインソケット —— TCP も loopback も kernel コピーも無い。",
+        "async": "pipelining と、このエンジンに async runtime が無い理由。",
+        "indexes": "セカンダリインデックス —— どう構築され、何を払うのか。",
+        "vector-search": "キー空間の上での KNN。embedding モデルは含まない。",
+        "text-search": "BM25 全文検索と、その限界。",
+        "views": "マテリアライズドビュー。書き込みパスが鮮度を保つ。",
+        "cdc": "別プロセスから tail できる変更フィード。",
+        "pubsub": "チャンネル、パターン、そして遅い購読者に何が起きるか。",
+        "lua": "EVAL —— 自前で書いたインタープリタの上で。",
+        "wasm": "ブラウザのタブに 151 KB、OPFS へ永続化。",
+        "embedded-listener": "組み込みつつ、socket では RESP を話す。",
+        "iot": "no_std、アロケータ無し、OS 無し。",
+        "error-replies": "すべてのエラー文字列と、それが属する契約。",
+        "rds-workloads": "リレーショナルなワークロードがここで払う代価を、正直に。",
+        "migration": "Redis から移ってくる道と、出ていく道。",
+        "UPGRADING": "3.x から 4.0 へ —— 何が壊れ、なぜ壊れるのか。",
+    },
 }
 
 CSS_HREF = "assets/docs.css"
@@ -82,8 +134,13 @@ def title_of(md, fallback):
 
 
 def blurb(slug, lang, titles):
-    b = BLURB["en"].get(slug)
-    return b or titles.get(slug, slug)
+    """The one-liner for the hub, in the reader's language.
+
+    Falls back to English rather than to nothing: a hub card whose title is
+    Chinese and whose blurb is English is at least honest about which half has
+    been done. A blank one just looks broken.
+    """
+    return BLURB.get(lang, {}).get(slug) or BLURB["en"].get(slug) or titles.get(slug, slug)
 
 
 def shell(lang, slug, title, desc, body, toc, nav, depth, have=None):
