@@ -115,10 +115,23 @@ fn print_hex(n: u32) {
 }
 
 /// SYS_EXIT — hand the emulator an exit code so `cargo run` terminates.
+///
+/// On AArch32 the reason code goes in r1 *directly*. Passing a pointer to a
+/// `[reason, status]` block is the AArch64 / `SYS_EXIT_EXTENDED` convention;
+/// a 32-bit emulator reads that pointer as the reason, fails to recognise it,
+/// and exits non-zero — which is how a firmware that printed every success
+/// line still failed the build.
 fn exit(code: u32) -> ! {
-    // ADP_Stopped_ApplicationExit, with the status in a two-word block.
-    let block = [0x2002u32, code];
-    sys_call(0x18, block.as_ptr() as u32);
+    const ADP_STOPPED_APPLICATION_EXIT: u32 = 0x2_0026;
+    const ADP_STOPPED_RUN_TIME_ERROR: u32 = 0x2_0023;
+    sys_call(
+        0x18,
+        if code == 0 {
+            ADP_STOPPED_APPLICATION_EXIT
+        } else {
+            ADP_STOPPED_RUN_TIME_ERROR
+        },
+    );
     loop {}
 }
 

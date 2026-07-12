@@ -264,7 +264,7 @@ kevy is the hot in-memory tier.
 **Does the full command surface work in the browser?** The npm
 package exposes the KV + TTL + counter + scan + pub/sub cut — the
 surface a browser store needs, kept small on purpose (the wasm module
-is ~425 KB uncompressed). The Rust API on wasm targets exposes the
+is 416 KB uncompressed). The Rust API on wasm targets exposes the
 full `kevy-embedded` feature set of whichever features you compile
 in.
 
