@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZRANGEBYSCORE — kevy command reference</title>
-<meta name="description" content="ZRANGEBYSCORE — Return members with scores within the given bounds. O(N + M) — a full scan and filter; LIMIT is applied after the whole match set is materialised, so it does not reduce the work">
+<meta name="description" content="ZRANGEBYSCORE — Return members with scores within the given bounds. O(log N + M) — a rank descent seeks to the score bound, then only the M in-range members are walked; LIMIT is still applied after the match set is materialised, so it bounds the reply, not the walk">
 <link rel="stylesheet" href="../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>Complexity</h2>
-      <p class="cx-body"><code>O(N + M) — a full scan and filter; LIMIT is applied after the whole match set is materialised, so it does not reduce the work</code></p>
+      <p class="cx-body"><code>O(log N + M) — a rank descent seeks to the score bound, then only the M in-range members are walked; LIMIT is still applied after the match set is materialised, so it bounds the reply, not the walk</code></p>
       <p class="engine-note">Complexity and compatibility are read out of kevy's implementation, not copied from Redis's reference. Several genuinely differ.</p>
     </section>
 

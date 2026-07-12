@@ -29,9 +29,9 @@ pub struct VerbMeta {
     pub since: &'static str,
     pub syntax: &'static str,
     /// Time complexity of THIS engine's implementation, derived by reading it.
-    /// Never copied from Redis's docs: our sorted set is a hash plus a plain
-    /// `BTreeSet` with no rank augmentation, so `ZRANK` is O(N) here where
-    /// Redis is O(log N), and our score-range queries scan rather than seek.
+    /// Never copied from Redis's docs: several of ours genuinely differ in
+    /// both directions (LINDEX/LSET are O(1) on a VecDeque where Redis's
+    /// quicklist is O(N); SSCAN copies the whole set in one batch).
     pub complexity: &'static str,
     /// How this verb differs from Redis, if it does: `full`, `differs: …`, or
     /// `kevy-only…`. This is the field a person migrating off Redis actually
@@ -185,13 +185,29 @@ mod tests {
     /// someone who did not read our code. They are not typos.
     #[test]
     fn the_costs_that_differ_from_redis_stay_differing() {
-        let zrank = verb_meta("ZRANK").expect("ZRANK");
-        assert!(zrank.complexity.contains("O(N)"), "ZRANK is O(N) here: no rank-augmented structure");
         let scan = verb_meta("SCAN").expect("SCAN");
         assert!(scan.compat.contains("not a cursor iterator"), "SCAN sweeps the whole keyspace");
         let randomkey = verb_meta("RANDOMKEY").expect("RANDOMKEY");
         assert!(randomkey.compat.contains("NOT random"));
         let spop = verb_meta("SPOP").expect("SPOP");
         assert!(spop.compat.contains("NOT random"));
+    }
+
+    /// Deviations that were FIXED — the table must keep claiming the fixed
+    /// cost, and a regression back to the old structure would have to come
+    /// here and explain itself. ZRANK spent v1–v3 as an O(N) linear scan
+    /// (`kevy-ranktree` closed it); its remaining WITHSCORE compat gap is a
+    /// separate, still-open deviation and must not be silently dropped with
+    /// the complexity fix.
+    #[test]
+    fn the_fixed_deviations_stay_fixed() {
+        let zrank = verb_meta("ZRANK").expect("ZRANK");
+        assert!(
+            zrank.complexity.contains("O(log N)"),
+            "ZRANK is O(log N) now: the (score, member) tree is rank-augmented"
+        );
+        assert!(zrank.compat.contains("WITHSCORE"), "the WITHSCORE gap is still open");
+        let zcount = verb_meta("ZCOUNT").expect("ZCOUNT");
+        assert!(zcount.complexity.contains("O(log N)"), "ZCOUNT is two rank descents now");
     }
 }

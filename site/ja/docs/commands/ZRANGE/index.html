@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZRANGE — kevy コマンドリファレンス</title>
-<meta name="description" content="ZRANGE — 順位の範囲を指定してメンバーを返す。 O(start + M) —— 木の反復子は一ノードずつ進む。順位で飛び越えるためのインデックスは存在しない。">
+<meta name="description" content="ZRANGE — 順位の範囲を指定してメンバーを返す。 O(log N + M) —— 一度の順位降下で start に直接着地し、要求された M 件のメンバーを順に辿る。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(start + M) —— 木の反復子は一ノードずつ進む。順位で飛び越えるためのインデックスは存在しない。</code></p>
+      <p class="cx-body"><code>O(log N + M) —— 一度の順位降下で start に直接着地し、要求された M 件のメンバーを順に辿る。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 

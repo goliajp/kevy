@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GEOSEARCH — kevy command reference</title>
-<meta name="description" content="GEOSEARCH — Search members within a radius or box from a member or coordinate. O(N) per call — up to nine neighbour ranges, each fetched with a full zset scan; the geohash block prunes distance maths, not iteration">
+<meta name="description" content="GEOSEARCH — Search members within a radius or box from a member or coordinate. O(log N + C) — up to nine neighbour ranges, each a seeked slice of the score tree; C = members inside the matched geohash cells (the block bound now prunes iteration too, not just distance maths)">
 <link rel="stylesheet" href="../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>Complexity</h2>
-      <p class="cx-body"><code>O(N) per call — up to nine neighbour ranges, each fetched with a full zset scan; the geohash block prunes distance maths, not iteration</code></p>
+      <p class="cx-body"><code>O(log N + C) — up to nine neighbour ranges, each a seeked slice of the score tree; C = members inside the matched geohash cells (the block bound now prunes iteration too, not just distance maths)</code></p>
       <p class="engine-note">Complexity and compatibility are read out of kevy's implementation, not copied from Redis's reference. Several genuinely differ.</p>
     </section>
 

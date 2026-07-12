@@ -2,9 +2,9 @@
 //!
 //! One row per dispatch-reachable verb. `complexity` and `compat` were
 //! derived by reading THIS engine's implementation — never copied from
-//! Redis's documentation, because several of ours genuinely differ (our
-//! sorted set is a hash plus a plain BTreeSet with no rank augmentation, so
-//! Redis's O(log N) does not transfer to ZRANK).
+//! Redis's documentation, because several of ours genuinely differ (SCAN
+//! sweeps in one batch, SPOP is deterministic, LINDEX is O(1) where
+//! Redis's quicklist is O(N)).
 
 use super::{VerbMeta, v};
 use super::flags::*;

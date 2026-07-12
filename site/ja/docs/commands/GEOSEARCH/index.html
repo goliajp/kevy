@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GEOSEARCH — kevy コマンドリファレンス</title>
-<meta name="description" content="GEOSEARCH — メンバーまたは座標を起点として、半径または矩形の範囲でメンバーを検索する。 1 回の呼び出しで O(N) —— 最大 9 つの近傍レンジを、それぞれ zset の全走査で取得する。geohash ブロックが削るのは距離計算であって、走査そのものではない。">
+<meta name="description" content="GEOSEARCH — メンバーまたは座標を起点として、半径または矩形の範囲でメンバーを検索する。 O(log N + C) —— 最大 9 つの近傍レンジを、それぞれスコア木からシークで切り出す。C は該当 geohash セル内のメンバー数（ブロック境界が距離計算だけでなく走査そのものも削るようになった）。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>1 回の呼び出しで O(N) —— 最大 9 つの近傍レンジを、それぞれ zset の全走査で取得する。geohash ブロックが削るのは距離計算であって、走査そのものではない。</code></p>
+      <p class="cx-body"><code>O(log N + C) —— 最大 9 つの近傍レンジを、それぞれスコア木からシークで切り出す。C は該当 geohash セル内のメンバー数（ブロック境界が距離計算だけでなく走査そのものも削るようになった）。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
