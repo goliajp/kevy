@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZREMRANGEBYSCORE — kevy コマンドリファレンス</title>
-<meta name="description" content="ZREMRANGEBYSCORE — 指定した範囲のスコアを持つメンバーを削除する。 O(N + M log N) —— 全件を走査して対象を洗い出したあと、M 件を削除する。">
+<meta name="description" content="ZREMRANGEBYSCORE — 指定した範囲のスコアを持つメンバーを削除する。 O(log N + M log N) —— シークで対象を洗い出したあと、M 件を削除する。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(N + M log N) —— 全件を走査して対象を洗い出したあと、M 件を削除する。</code></p>
+      <p class="cx-body"><code>O(log N + M log N) —— シークで対象を洗い出したあと、M 件を削除する。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 

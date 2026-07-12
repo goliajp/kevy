@@ -37,7 +37,7 @@ def field(c, lang, key):
 # ── languages ────────────────────────────────────────────────────────────────
 # The page chrome is localized. The `complexity` and `compat` strings are not:
 # they are normative statements derived from the engine's source, and a
-# paraphrase of "ZRANK is O(N) because our sorted set has no rank augmentation"
+# paraphrase of "LINDEX is O(1) because the list is a ring buffer, not a quicklist"
 # is a place for drift to hide. They are rendered verbatim, and each locale says
 # so rather than pretending otherwise.
 LANGS = {

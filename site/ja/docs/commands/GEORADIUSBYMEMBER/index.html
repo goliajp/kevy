@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GEORADIUSBYMEMBER — kevy コマンドリファレンス</title>
-<meta name="description" content="GEORADIUSBYMEMBER — 既存メンバーを中心とする旧来形式の半径検索。STORE による書き出しにも対応する。 1 回の呼び出しで O(N)。中心メンバーの引き当ては O(1)。">
+<meta name="description" content="GEORADIUSBYMEMBER — 既存メンバーを中心とする旧来形式の半径検索。STORE による書き出しにも対応する。 O(log N + C) —— GEORADIUS と同じ 9 セルのシーク取得。中心メンバーの引き当ては O(1)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>1 回の呼び出しで O(N)。中心メンバーの引き当ては O(1)。</code></p>
+      <p class="cx-body"><code>O(log N + C) —— GEORADIUS と同じ 9 セルのシーク取得。中心メンバーの引き当ては O(1)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GEOSEARCHSTORE — kevy コマンドリファレンス</title>
-<meta name="description" content="GEOSEARCHSTORE — source に対して GEOSEARCH を実行し、その結果を destination に書き出す。 検索に O(N)、書き込み先を自身の shard 上で書き直すのに O(D + K log K)。">
+<meta name="description" content="GEOSEARCHSTORE — source に対して GEOSEARCH を実行し、その結果を destination に書き出す。 検索に O(log N + C)、書き込み先を自身の shard 上で書き直すのに O(D + K log K)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>検索に O(N)、書き込み先を自身の shard 上で書き直すのに O(D + K log K)。</code></p>
+      <p class="cx-body"><code>検索に O(log N + C)、書き込み先を自身の shard 上で書き直すのに O(D + K log K)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 

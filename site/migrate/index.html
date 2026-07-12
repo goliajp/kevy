@@ -60,7 +60,7 @@ IDX.QUERY  idx:sem KNN &quot;&lt;vector&gt;&quot; LIMIT 10</code></pre></li><li>
 <section class="band">
   <div class="call loss">
     <span class="h">What you give up by leaving Redis</span>
-    <p><b>No cluster.</b> Replicas are copies, not shards. <b>No AUTH, no TLS.</b> And <b>a handful of commands behave differently</b> — <code>SCAN</code> is not a cursor iterator (one call returns everything and cursor 0), <code>ZRANK</code> is O(N), a cross-shard <code>RENAME</code> is not atomic. None of these is a bug and all of them are documented per command. Read the list before you commit, not after: <a href="../docs/commands/">every command's real cost and real deviation</a>.</p>
+    <p><b>No cluster.</b> Replicas are copies, not shards. <b>No AUTH, no TLS.</b> And <b>a handful of commands behave differently</b> — <code>SCAN</code> is not a cursor iterator (one call returns everything and cursor 0), a cross-shard <code>RENAME</code> is not atomic. None of these is a bug and all of them are documented per command. Read the list before you commit, not after: <a href="../docs/commands/">every command's real cost and real deviation</a>.</p>
   </div>
 </section>
 <section class="band">

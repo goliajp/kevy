@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZCOUNT — kevy コマンドリファレンス</title>
-<meta name="description" content="ZCOUNT — 指定した範囲のスコアを持つメンバーの個数を返す。 O(N) —— 全件を走査して絞り込む。範囲シークではない。Redis の O(log N) はここには当てはまらない。">
+<meta name="description" content="ZCOUNT — 指定した範囲のスコアを持つメンバーの個数を返す。 O(log N) —— 順位統計木で二回の順位降下によりスコア範囲を挟み込む。走査は一切しない。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(N) —— 全件を走査して絞り込む。範囲シークではない。Redis の O(log N) はここには当てはまらない。</code></p>
+      <p class="cx-body"><code>O(log N) —— 順位統計木で二回の順位降下によりスコア範囲を挟み込む。走査は一切しない。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 

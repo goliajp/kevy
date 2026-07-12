@@ -78,9 +78,9 @@ fn llms_txt() -> String {
          the same members every time); and multi-key writes are atomic only within one\n\
          shard — co-locate keys with a {{hashtag}} when you need them to move together.\n\n\
          Read `complexity` before you assume a cost. It was derived from THIS engine's\n\
-         code, not copied from Redis: our sorted set is a hash plus a plain BTreeSet\n\
-         with no rank augmentation, so ZRANK is O(N) here and score-range queries scan\n\
-         rather than seek.\n\n\
+         code, not copied from Redis — several genuinely differ in both directions:\n\
+         LINDEX and LSET are O(1) on our ring buffer where Redis's quicklist is O(N),\n\
+         while SINTER has no smallest-set-first ordering and ZSCAN copies the set.\n\n\
          ## Docs\n\n\
          - [Verb reference](docs/verb-reference.md): every verb, arity, flags, syntax\n\
          - [Designing on kevy](docs/designing-on-kevy.md): the serving-engine model\n\
@@ -119,9 +119,9 @@ fn verb_reference() -> String {
          (kevy-specific surface; argument 1 is a catalog name, not a key).\n\n\
          **Complexity** is the cost of THIS engine's implementation, read out of the\n\
          code — not copied from Redis's reference. Several genuinely differ, and they\n\
-         look like typos and are not: `ZRANK` is O(N) because our sorted set has no\n\
-         rank-augmented structure, `ZCOUNT` and `ZRANGEBYSCORE` scan rather than seek,\n\
-         and every geo search is O(N).\n\n\
+         look like typos and are not: `LINDEX` and `LSET` are O(1) on our ring buffer\n\
+         where Redis's quicklist is O(N), `SINTER` has no smallest-set-first ordering,\n\
+         and `SSCAN`/`ZSCAN` copy the whole collection in one batch.\n\n\
          **Redis compatibility** is `full`, `differs: …`, or `kevy-only`. This is the\n\
          column to read before a migration; it is also the column Redis's own reference\n\
          cannot have.\n\n",

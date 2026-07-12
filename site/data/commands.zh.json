@@ -171,22 +171,22 @@
  },
  "GEORADIUS": {
   "compat": "有差异：目标 key 写在它自己的 shard 上，所以跨 shard 的 STORE 与这次搜索之间不是原子的。",
-  "complexity": "每次调用 O(N)；带 STORE / STOREDIST 时再加 O(K log K) 的写入，以及 O(D) 的目标清空。",
+  "complexity": "O(log N + C) —— 最多九个相邻区块，每个都在分值树上 seek 取出；C 为命中区块内的成员数。带 STORE / STOREDIST 时再加 O(K log K) 的写入，以及 O(D) 的目标清空。",
   "summary": "以坐标为圆心的旧式半径搜索，可选把结果写入目标 key。"
  },
  "GEORADIUSBYMEMBER": {
   "compat": "有差异：目标 key 写在它自己的 shard 上，所以跨 shard 的 STORE 与这次搜索之间不是原子的。",
-  "complexity": "每次调用 O(N)；锚点成员的查找是 O(1)。",
+  "complexity": "O(log N + C) —— 与 GEORADIUS 相同的九区块 seek 取法；锚点成员的查找是 O(1)。",
   "summary": "以已有成员为圆心的旧式半径搜索，可选把结果写入目标 key。"
  },
  "GEOSEARCH": {
   "compat": "有差异：只读形式下 STOREDIST 会被接受并忽略；COUNT 0 是错误。",
-  "complexity": "每次调用 O(N) —— 最多九个相邻区块，每个都靠一次全量 zset 扫描取出；geohash 分块省掉的是距离计算，不是迭代。",
+  "complexity": "O(log N + C) —— 最多九个相邻区块，每个都是分值树上 seek 出来的一段切片；C 为命中 geohash 区块内的成员数（分块现在连迭代一起省，不只是距离计算）。",
   "summary": "从某个成员或某个坐标出发，按半径或矩形范围搜索成员。"
  },
  "GEOSEARCHSTORE": {
   "compat": "有差异：STOREDIST 按查询所用的单位存距离（Redis 也是如此）；destination 写在它自己的 shard 上，因此 source 与 destination 可能落在不同的核心上，这次写入与那次读取之间不是原子的。",
-  "complexity": "搜索 O(N)，外加在 destination 所属 shard 上重写它的 O(D + K log K)。",
+  "complexity": "搜索 O(log N + C)，外加在 destination 所属 shard 上重写它的 O(D + K log K)。",
   "summary": "在 source 上执行 GEOSEARCH，并把命中结果写入 destination。"
  },
  "GET": {
@@ -836,7 +836,7 @@
  },
  "ZCOUNT": {
   "compat": "兼容",
-  "complexity": "O(N) —— 全量扫描再过滤，不是区间 seek。Redis 的 O(log N) 在这里不成立。",
+  "complexity": "O(log N) —— 在秩统计树上做两次秩下降夹住分值区间，完全不扫描。",
   "summary": "统计分值落在给定区间内的成员个数。"
  },
  "ZDIFFSTORE": {
@@ -871,17 +871,17 @@
  },
  "ZRANGE": {
   "compat": "有差异：只接受传统的 'key start stop [WITHSCORES]' 形式 —— Redis 6.2 引入的 BYSCORE / BYLEX / REV / LIMIT 参数一律报语法错误。",
-  "complexity": "O(start + M) —— 树迭代器只能一个节点一个节点往前走，没有秩索引可供直接跳转。",
+  "complexity": "O(log N + M) —— 一次秩下降直接定位到 start，然后顺序走过请求的 M 个成员。",
   "summary": "按排名区间返回成员。"
  },
  "ZRANGEBYSCORE": {
   "compat": "兼容",
-  "complexity": "O(N + M) —— 全量扫描再过滤。LIMIT 是在整个命中集物化之后才应用的，并不减少实际工作量。",
+  "complexity": "O(log N + M) —— 秩下降 seek 到分值下界，只走过区间内的 M 个成员。LIMIT 仍在命中集物化之后应用，约束的是回复而不是遍历。",
   "summary": "返回分值落在给定区间内的成员。"
  },
  "ZRANK": {
   "compat": "有差异：不支持 Redis 7.2 的 WITHSCORE 选项。",
-  "complexity": "O(N) —— 线性扫描定位。注意不是 O(log N)：kevy 的 zset 没有按秩增强的结构，拿不到跳表那种秩索引。",
+  "complexity": "O(log N) —— 先哈希查到分值，再对按秩增强的（分值，成员）树做一次下降。",
   "summary": "返回成员的排名 —— 按分值从低到高。"
  },
  "ZREM": {
@@ -891,17 +891,17 @@
  },
  "ZREMRANGEBYRANK": {
   "compat": "兼容",
-  "complexity": "O(start + M log N)。",
+  "complexity": "O(log N + M log N) —— 一次秩下降定位到 start，再逐个删除这 M 个成员。",
   "summary": "移除落在给定排名区间内的成员。"
  },
  "ZREMRANGEBYSCORE": {
   "compat": "兼容",
-  "complexity": "O(N + M log N) —— 先全量扫描找出命中集，再逐个删掉这 M 个成员。",
+  "complexity": "O(log N + M log N) —— 用 seek 找出命中集，再逐个删掉这 M 个成员。",
   "summary": "移除分值落在给定区间内的成员。"
  },
  "ZREVRANGEBYSCORE": {
   "compat": "兼容",
-  "complexity": "O(N + M) —— 仍是一次正向的全量扫描加过滤，最后把结果反转。",
+  "complexity": "O(log N + M) —— seek 后正向走过 M 个命中成员，最后把结果反转。",
   "summary": "返回分值落在给定区间内的成员，从高到低排列。"
  },
  "ZSCAN": {

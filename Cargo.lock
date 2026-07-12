@@ -605,6 +605,10 @@ name = "kevy-pubsub-bench"
 version = "3.18.0"
 
 [[package]]
+name = "kevy-ranktree"
+version = "3.18.0"
+
+[[package]]
 name = "kevy-replicate"
 version = "3.18.0"
 dependencies = [
@@ -663,6 +667,7 @@ dependencies = [
  "kevy-bytes",
  "kevy-hash",
  "kevy-map",
+ "kevy-ranktree",
 ]
 
 [[package]]
