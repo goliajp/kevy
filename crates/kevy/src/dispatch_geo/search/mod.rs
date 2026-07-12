@@ -16,7 +16,7 @@ use kevy_geo::{
     EARTH_RADIUS_METERS, decode_score, haversine_meters, neighbor_score_ranges,
 };
 use kevy_resp::{
-    ArgvView, encode_array_len, encode_bulk, encode_error, encode_integer,
+    ArgvView, CmdError, encode_array_len, encode_bulk, encode_error, encode_integer,
 };
 use kevy_store::{ScoreBound, Store};
 
@@ -63,8 +63,34 @@ pub(super) fn run_search(
     let ranges = neighbor_score_ranges(clon, clat, opts.shape.bounding_radius_meters());
     let mut hits = collect_hits(store, key, &ranges, clon, clat, opts)?;
     apply_sort(&mut hits, opts.sort);
-    apply_count(&mut hits, opts.count, opts.any);
+    apply_count(&mut hits, opts.sort, opts.count, opts.any);
     Ok(hits)
+}
+
+/// The search half of a geo `*STORE`: the `(member, score)` pairs the
+/// destination ZSet gets. Used by the single-shard dispatch path below and,
+/// on a multi-shard server, by the runtime's `Op::GeoSearch` — which runs it
+/// on the SOURCE's shard and ships these pairs to the DESTINATION's shard.
+pub(super) fn search_pairs(
+    store: &mut Store,
+    key: &[u8],
+    opts: &Opts,
+) -> Result<Vec<(Vec<u8>, f64)>, SearchError> {
+    let hits = run_search(store, key, opts)?;
+    Ok(store_pairs(&hits, opts))
+}
+
+/// `STOREDIST` stores the distance **in the unit the query asked for** — a
+/// `km` search stores 166.27, not 166274.15 (Redis's `geoAppendIfWithinShape`
+/// divides by the shape's `conversion`). Without it, the score is the source
+/// member's geohash, which is what makes a stored key a valid GEO key again.
+fn store_pairs(hits: &[Hit], opts: &Opts) -> Vec<(Vec<u8>, f64)> {
+    hits.iter()
+        .map(|h| {
+            let score = if opts.storedist { h.dist_m / opts.unit } else { h.score };
+            (h.member.clone(), score)
+        })
+        .collect()
 }
 
 pub(super) enum SearchError {
@@ -205,20 +231,18 @@ fn apply_sort(hits: &mut [Hit], sort: Sort) {
     }
 }
 
-fn apply_count(hits: &mut Vec<Hit>, count: Option<usize>, any: bool) {
-    if let Some(n) = count {
-        // Without ANY, COUNT pairs with an implicit ASC sort so the
-        // closest N are returned. With ANY, the slice order is left
-        // as-collected for the speed-vs-determinism trade-off.
-        if !any && !is_sorted_asc(hits) {
-            hits.sort_by(|a, b| a.dist_m.partial_cmp(&b.dist_m).unwrap());
-        }
-        hits.truncate(n);
+fn apply_count(hits: &mut Vec<Hit>, sort: Sort, count: Option<usize>, any: bool) {
+    let Some(n) = count else { return };
+    // COUNT with no explicit ASC/DESC implies "the closest n" — Redis sorts
+    // ascending before truncating. An explicit sort has already ordered the
+    // hits (`apply_sort`), and truncating a DESC list keeps the FARTHEST n:
+    // re-sorting ascending here returned the nearest n instead — the opposite
+    // result set. ANY keeps the as-collected order (the documented
+    // speed-vs-determinism trade).
+    if matches!(sort, Sort::None) && !any {
+        hits.sort_by(|a, b| a.dist_m.partial_cmp(&b.dist_m).unwrap());
     }
-}
-
-fn is_sorted_asc(hits: &[Hit]) -> bool {
-    hits.windows(2).all(|w| w[0].dist_m <= w[1].dist_m)
+    hits.truncate(n);
 }
 
 // ───────────── legacy GEORADIUS option parsing ─────────────
@@ -236,7 +260,7 @@ pub(super) struct LegacyRadiusParsed {
 /// the integer count to be encoded by the caller).
 pub(super) enum RadiusReply {
     Replied,
-    Stored(Result<usize, kevy_store::StoreError>),
+    Stored(usize),
 }
 
 pub(super) fn emit_or_store(
@@ -250,7 +274,12 @@ pub(super) fn emit_or_store(
             emit_reply(hits, &parsed.opts, out);
             RadiusReply::Replied
         }
-        Some(dst) => RadiusReply::Stored(write_hits_to_zset(store, dst, hits, parsed.opts.storedist)),
+        // Single-shard path only: with the two keys on different shards the
+        // runtime never gets here — it routes the write to `dst`'s shard.
+        Some(dst) => {
+            let pairs = store_pairs(hits, &parsed.opts);
+            RadiusReply::Stored(store.zstore_result(dst, &pairs))
+        }
     }
 }
 
@@ -269,51 +298,33 @@ pub(super) fn cmd_geosearchstore<A: ArgvView + ?Sized>(
     args: &A,
     out: &mut Vec<u8>,
 ) {
-    if args.len() < 5 {
-        return wrong_args(out, "geosearchstore");
-    }
-    let opts = match parse_opts_at(args, 3) {
-        Ok(o) => o,
+    let (src, opts) = match plan_geosearchstore(args) {
+        Ok(p) => p,
         Err(msg) => return encode_error(out, msg.as_wire()),
     };
     let dst = args[1].to_vec();
-    let src = args[2].to_vec();
-    let hits = match run_search(store, &src, &opts) {
-        Ok(h) => h,
+    match search_pairs(store, &src, &opts) {
+        Ok(pairs) => encode_integer(out, store.zstore_result(&dst, &pairs) as i64),
         Err(SearchError::NoMember) => {
-            return encode_error(out, "ERR could not decode requested zset member");
+            encode_error(out, "ERR could not decode requested zset member");
         }
-        Err(SearchError::Store(e)) => return store_err(out, e),
-    };
-    match write_hits_to_zset(store, &dst, &hits, opts.storedist) {
-        Ok(n) => encode_integer(out, n as i64),
-        Err(e) => store_err(out, e),
+        Err(SearchError::Store(e)) => store_err(out, e),
     }
 }
 
-/// Atomically replace `dst` with a ZSet built from `hits`. `storedist`
-/// controls whether the score is the source geohash (`false`) or the
-/// metric distance in metres (`true`). An empty `hits` slice deletes
-/// `dst`, matching Redis's "no key on empty result" behaviour.
-fn write_hits_to_zset(
-    store: &mut Store,
-    dst: &[u8],
-    hits: &[Hit],
-    storedist: bool,
-) -> Result<usize, kevy_store::StoreError> {
-    store.del(&[dst]);
-    if hits.is_empty() {
-        return Ok(0);
+/// `GEOSEARCHSTORE dst src …` → `(source key, options)`. The destination is
+/// argv[1] and belongs to the caller: on a multi-shard server the write lands
+/// on ITS shard, not the source's (see `kevy_rt::Route::GeoStore`).
+pub(super) fn plan_geosearchstore<A: ArgvView + ?Sized>(
+    args: &A,
+) -> Result<(Vec<u8>, Opts), CmdError> {
+    if args.len() < 5 {
+        return Err(CmdError::Wire(
+            "ERR wrong number of arguments for 'geosearchstore' command",
+        ));
     }
-    let pairs: Vec<(f64, &[u8])> = hits
-        .iter()
-        .map(|h| {
-            let score = if storedist { h.dist_m } else { h.score };
-            (score, h.member.as_slice())
-        })
-        .collect();
-    store.zadd(dst, &pairs)?;
-    Ok(pairs.len())
+    let opts = parse_opts_at(args, 3)?;
+    Ok((args[2].to_vec(), opts))
 }
 
 // ───────────── reply ─────────────

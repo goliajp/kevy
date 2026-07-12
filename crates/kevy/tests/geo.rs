@@ -688,3 +688,297 @@ fn geosearch_bybox_filters_to_rectangle() {
     assert!(s.contains("Agrigento"));
     assert!(!s.contains("Roma"), "Roma should be out of box: {s}");
 }
+
+// ───────────── cross-shard geo *STORE (v4) ─────────────
+//
+// Every test above runs on `Server::start(1)`, where a source and a
+// destination key always land on the same shard — which hid a whole
+// class of routing bugs. These run on 8 shards, where they don't: the
+// source is read on its own shard and the destination written on its.
+// Each asserts the DESTINATION's contents, never just the reply count —
+// the broken routing replied `:2` and wrote nowhere anybody could read.
+
+/// One shard-crossing generation: 8 differently-hashed key pairs, so at
+/// least one lands source and destination on different shards (in practice
+/// most do). A single pair could get lucky and co-locate.
+const PAIRS: usize = 8;
+
+fn text(r: &[u8]) -> String {
+    String::from_utf8_lossy(r).into_owned()
+}
+
+fn cmd(c: &mut std::net::TcpStream, parts: &[&[u8]]) -> Vec<u8> {
+    c.write_all(&req(parts)).unwrap();
+    read_reply(c)
+}
+
+fn geoadd_sicily(c: &mut std::net::TcpStream, key: &[u8]) {
+    let r = cmd(
+        c,
+        &[
+            b"GEOADD", key, b"13.361389", b"38.115556", b"Palermo", b"15.087269", b"37.502669",
+            b"Catania",
+        ],
+    );
+    assert_eq!(r, b":2\r\n");
+}
+
+/// The bulk-string body of a `$n\r\n…\r\n` reply, parsed as f64.
+fn bulk_f64(r: &[u8]) -> f64 {
+    let s = text(r);
+    let (_, body) = s.split_once("\r\n").unwrap_or_else(|| panic!("not a bulk reply: {s}"));
+    body.trim_end_matches("\r\n")
+        .parse()
+        .unwrap_or_else(|_| panic!("not a float: {s}"))
+}
+
+#[test]
+fn geosearchstore_writes_destination_on_its_own_shard() {
+    let srv = Server::start(8);
+    let mut c = srv.connect();
+    for i in 0..PAIRS {
+        let (src, dst) = (format!("gs-src-{i}"), format!("gs-dst-{i}"));
+        geoadd_sicily(&mut c, src.as_bytes());
+        let r = cmd(
+            &mut c,
+            &[
+                b"GEOSEARCHSTORE",
+                dst.as_bytes(),
+                src.as_bytes(),
+                b"FROMLONLAT",
+                b"15",
+                b"37",
+                b"BYRADIUS",
+                b"200",
+                b"km",
+                b"ASC",
+            ],
+        );
+        assert_eq!(r, b":2\r\n", "{src} → {dst}: stored count");
+        let z = text(&cmd(&mut c, &[b"ZRANGE", dst.as_bytes(), b"0", b"-1"]));
+        assert!(
+            z.contains("Catania") && z.contains("Palermo"),
+            "{dst} must hold the hits on its OWN shard, got: {z}",
+        );
+    }
+}
+
+#[test]
+fn geosearchstore_frommember_resolves_anchor_on_the_source_shard() {
+    let srv = Server::start(8);
+    let mut c = srv.connect();
+    for i in 0..PAIRS {
+        let (src, dst) = (format!("gm-src-{i}"), format!("gm-dst-{i}"));
+        geoadd_sicily(&mut c, src.as_bytes());
+        // The anchor member lives in `src`. Routed by the destination, this
+        // looked it up in `dst`'s (empty) keyspace: "could not decode
+        // requested zset member".
+        let r = cmd(
+            &mut c,
+            &[
+                b"GEOSEARCHSTORE",
+                dst.as_bytes(),
+                src.as_bytes(),
+                b"FROMMEMBER",
+                b"Palermo",
+                b"BYRADIUS",
+                b"200",
+                b"km",
+                b"ASC",
+            ],
+        );
+        assert_eq!(r, b":2\r\n", "{src} → {dst}: got {}", text(&r));
+        let z = text(&cmd(&mut c, &[b"ZRANGE", dst.as_bytes(), b"0", b"-1"]));
+        assert!(z.contains("Catania") && z.contains("Palermo"), "{dst}: {z}");
+    }
+}
+
+#[test]
+fn georadius_store_writes_destination_on_its_own_shard() {
+    let srv = Server::start(8);
+    let mut c = srv.connect();
+    for i in 0..PAIRS {
+        let (src, dst) = (format!("gr-src-{i}"), format!("gr-dst-{i}"));
+        geoadd_sicily(&mut c, src.as_bytes());
+        let r = cmd(
+            &mut c,
+            &[
+                b"GEORADIUS",
+                src.as_bytes(),
+                b"15",
+                b"37",
+                b"200",
+                b"km",
+                b"STORE",
+                dst.as_bytes(),
+            ],
+        );
+        assert_eq!(r, b":2\r\n", "{src} → {dst}: stored count");
+        let z = text(&cmd(&mut c, &[b"ZRANGE", dst.as_bytes(), b"0", b"-1"]));
+        assert!(
+            z.contains("Catania") && z.contains("Palermo"),
+            "{dst} must hold the hits on its OWN shard, got: {z}",
+        );
+    }
+}
+
+#[test]
+fn georadiusbymember_store_writes_destination_on_its_own_shard() {
+    let srv = Server::start(8);
+    let mut c = srv.connect();
+    for i in 0..PAIRS {
+        let (src, dst) = (format!("gb-src-{i}"), format!("gb-dst-{i}"));
+        geoadd_sicily(&mut c, src.as_bytes());
+        let r = cmd(
+            &mut c,
+            &[
+                b"GEORADIUSBYMEMBER",
+                src.as_bytes(),
+                b"Palermo",
+                b"200",
+                b"km",
+                b"STORE",
+                dst.as_bytes(),
+            ],
+        );
+        assert_eq!(r, b":2\r\n", "{src} → {dst}: stored count");
+        let z = text(&cmd(&mut c, &[b"ZRANGE", dst.as_bytes(), b"0", b"-1"]));
+        assert!(z.contains("Catania") && z.contains("Palermo"), "{dst}: {z}");
+    }
+}
+
+#[test]
+fn geo_store_empty_result_deletes_the_destination_on_its_shard() {
+    let srv = Server::start(8);
+    let mut c = srv.connect();
+    for i in 0..PAIRS {
+        let (src, dst) = (format!("ge-src-{i}"), format!("ge-dst-{i}"));
+        geoadd_sicily(&mut c, src.as_bytes());
+        // Stale destination content must go, even though it lives on a shard
+        // the search never touches.
+        assert_eq!(cmd(&mut c, &[b"ZADD", dst.as_bytes(), b"1", b"stale"]), b":1\r\n");
+        let r = cmd(
+            &mut c,
+            &[
+                b"GEOSEARCHSTORE",
+                dst.as_bytes(),
+                src.as_bytes(),
+                b"FROMLONLAT",
+                b"0",
+                b"0",
+                b"BYRADIUS",
+                b"1",
+                b"km",
+            ],
+        );
+        assert_eq!(r, b":0\r\n");
+        assert_eq!(cmd(&mut c, &[b"EXISTS", dst.as_bytes()]), b":0\r\n", "{dst} must be gone");
+    }
+}
+
+#[test]
+fn geo_storedist_scores_are_in_the_queried_unit() {
+    let srv = Server::start(8);
+    let mut c = srv.connect();
+    for i in 0..PAIRS {
+        let (src, dst) = (format!("gd-src-{i}"), format!("gd-dst-{i}"));
+        geoadd_sicily(&mut c, src.as_bytes());
+        // Palermo → Catania is 166.27 km. STOREDIST stores the distance in
+        // the unit the query asked for (Redis divides by the shape's
+        // conversion), not raw metres.
+        let r = cmd(
+            &mut c,
+            &[
+                b"GEOSEARCHSTORE",
+                dst.as_bytes(),
+                src.as_bytes(),
+                b"FROMMEMBER",
+                b"Palermo",
+                b"BYRADIUS",
+                b"200",
+                b"km",
+                b"STOREDIST",
+            ],
+        );
+        assert_eq!(r, b":2\r\n", "{}", text(&r));
+        let d = bulk_f64(&cmd(&mut c, &[b"ZSCORE", dst.as_bytes(), b"Catania"]));
+        assert!(
+            (d - 166.27).abs() < 0.1,
+            "STOREDIST km score should be ~166.27 km, got {d}",
+        );
+        let zero = bulk_f64(&cmd(&mut c, &[b"ZSCORE", dst.as_bytes(), b"Palermo"]));
+        assert!(zero.abs() < 0.001, "anchor distance should be 0, got {zero}");
+    }
+}
+
+#[test]
+fn georadius_storedist_scores_are_in_the_queried_unit() {
+    let srv = Server::start(8);
+    let mut c = srv.connect();
+    let (src, dst) = (b"gdr-src".as_slice(), b"gdr-dst".as_slice());
+    geoadd_sicily(&mut c, src);
+    let r = cmd(
+        &mut c,
+        &[b"GEORADIUSBYMEMBER", src, b"Palermo", b"200", b"km", b"STOREDIST", dst],
+    );
+    assert_eq!(r, b":2\r\n");
+    let d = bulk_f64(&cmd(&mut c, &[b"ZSCORE", dst, b"Catania"]));
+    assert!((d - 166.27).abs() < 0.1, "expected ~166.27 km, got {d}");
+    // …and in metres when the query is in metres.
+    let mdst = b"gdr-dst-m".as_slice();
+    let r = cmd(
+        &mut c,
+        &[b"GEORADIUSBYMEMBER", src, b"Palermo", b"200000", b"m", b"STOREDIST", mdst],
+    );
+    assert_eq!(r, b":2\r\n");
+    let d = bulk_f64(&cmd(&mut c, &[b"ZSCORE", mdst, b"Catania"]));
+    assert!((d - 166_274.0).abs() < 100.0, "expected ~166274 m, got {d}");
+}
+
+#[test]
+fn geosearch_desc_with_count_returns_the_farthest() {
+    let srv = Server::start(8);
+    let mut c = srv.connect();
+    geoadd_sicily(&mut c, b"gsort");
+    // From (15,37): Catania ≈ 56 km, Palermo ≈ 190 km. DESC + COUNT 1 asks
+    // for the FARTHEST one; truncating an ascending sort returned the
+    // nearest — the opposite result set.
+    let r = text(&cmd(
+        &mut c,
+        &[
+            b"GEOSEARCH", b"gsort", b"FROMLONLAT", b"15", b"37", b"BYRADIUS", b"200", b"km",
+            b"DESC", b"COUNT", b"1",
+        ],
+    ));
+    assert!(r.contains("Palermo") && !r.contains("Catania"), "DESC COUNT 1: {r}");
+    // ASC + COUNT 1 still returns the nearest…
+    let r = text(&cmd(
+        &mut c,
+        &[
+            b"GEOSEARCH", b"gsort", b"FROMLONLAT", b"15", b"37", b"BYRADIUS", b"200", b"km",
+            b"ASC", b"COUNT", b"1",
+        ],
+    ));
+    assert!(r.contains("Catania") && !r.contains("Palermo"), "ASC COUNT 1: {r}");
+    // …and COUNT with no explicit sort keeps the implicit-nearest contract.
+    let r = text(&cmd(
+        &mut c,
+        &[
+            b"GEOSEARCH", b"gsort", b"FROMLONLAT", b"15", b"37", b"BYRADIUS", b"200", b"km",
+            b"COUNT", b"1",
+        ],
+    ));
+    assert!(r.contains("Catania") && !r.contains("Palermo"), "COUNT 1 (no sort): {r}");
+}
+
+#[test]
+fn georadius_desc_with_count_returns_the_farthest() {
+    let srv = Server::start(8);
+    let mut c = srv.connect();
+    geoadd_sicily(&mut c, b"grsort");
+    let r = text(&cmd(
+        &mut c,
+        &[b"GEORADIUS", b"grsort", b"15", b"37", b"200", b"km", b"DESC", b"COUNT", b"1"],
+    ));
+    assert!(r.contains("Palermo") && !r.contains("Catania"), "DESC COUNT 1: {r}");
+}

@@ -46,7 +46,21 @@ impl<C: Commands> Shard<C> {
         }
         let dst_shard = self.shard_of(&dst);
         let op = build_store_op(combine, zset_inputs, weights, aggregate, dst);
-        // Re-arm the slot for step 2: one Int part sums into the reply.
+        self.ship_store_op(conn_id, seq, dst_shard, op);
+    }
+
+    /// Step 2 of a `*STORE` orchestrator: re-arm the pending slot so one
+    /// `Part::Int` (the stored cardinality) folds into the `:n` reply, then
+    /// run the store Op on the DESTINATION's owning shard. Shared with the
+    /// geo `*STORE` orchestrator ([`crate::exec_geostore`]) — both compute
+    /// elsewhere and materialize here.
+    pub(crate) fn ship_store_op(
+        &mut self,
+        conn_id: u64,
+        seq: u64,
+        dst_shard: usize,
+        op: Op,
+    ) {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {
@@ -93,7 +107,7 @@ impl<C: Commands> Shard<C> {
 
     /// Complete the pending slot with a pre-encoded reply (parse /
     /// WRONGTYPE aborts).
-    fn fill_zstore_slot(&mut self, conn_id: u64, seq: u64, reply: Vec<u8>) {
+    pub(crate) fn fill_zstore_slot(&mut self, conn_id: u64, seq: u64, reply: Vec<u8>) {
         if let Some(c) = self.conns.get_mut(&conn_id) {
             let idx = (seq - c.next_emit) as usize;
             if let Some(slot) = c.pending.get_mut(idx) {

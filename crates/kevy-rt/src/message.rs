@@ -6,6 +6,9 @@
 
 use crate::BlockKind;
 use kevy_resp::{Argv, RespVersion};
+
+pub use crate::message_kinds::{KeyShape, MultiOp, ZCombine};
+pub(crate) use crate::message_kinds::{DispatchMeta, GatherKind, Gathered};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -36,82 +39,6 @@ pub(crate) type PubSubPatternReg = Arc<RwLock<Vec<(Vec<u8>, u32, u64)>>>;
 /// One pub/sub message `(channel, payload)`, shared (not cloned) across the
 /// shards it fans out to.
 pub(crate) type PubMsg = Arc<(Vec<u8>, Vec<u8>)>;
-
-/// What to fetch per key in a cross-shard gather.
-#[derive(Clone, Copy)]
-pub(crate) enum GatherKind {
-    /// String value (for MGET).
-    Str,
-    /// Set members (for SINTER/SUNION/SDIFF).
-    Set,
-    /// Scored members: zsets as-is, plain sets at score 1.0 (for the
-    /// zset algebra family — Redis lets sets participate).
-    Scored,
-}
-
-/// A single key's gathered payload.
-pub(crate) enum Gathered {
-    Str(Option<Vec<u8>>),
-    Members(Vec<Vec<u8>>),
-    /// `(member, score)` payload for [`GatherKind::Scored`].
-    Scored(Vec<(Vec<u8>, f64)>),
-    WrongType,
-}
-
-/// The multi-key gather reductions computed on the originating shard.
-/// Public: [`crate::Route::Gather`] carries it, and embedders' `route()`
-/// implementations construct it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MultiOp {
-    /// `MGET` — values gathered in request order.
-    Mget,
-    /// `SINTER`.
-    SInter,
-    /// `SUNION`.
-    SUnion,
-    /// `SDIFF`.
-    SDiff,
-    /// `ZINTERCARD numkeys key… [LIMIT n]` — read-only gathered count.
-    /// The `LIMIT` cap is parsed from the argv by the gather builder
-    /// (it sits after the keys), not carried here.
-    ZInterCard,
-}
-
-/// Which algebra combination a `*STORE` orchestrator runs after its
-/// gather completes. Public: [`crate::Route::ZAlgebraStore`]
-/// carries it, and embedders' `route()` implementations construct it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ZCombine {
-    /// `ZINTERSTORE`.
-    ZInter,
-    /// `ZUNIONSTORE`.
-    ZUnion,
-    /// `ZDIFFSTORE`.
-    ZDiff,
-    /// `SINTERSTORE`.
-    SInter,
-    /// `SUNIONSTORE`.
-    SUnion,
-    /// `SDIFFSTORE`.
-    SDiff,
-}
-
-/// Write-side facts the origin's `resolve()` already computed, carried
-/// with a dispatched command so the executing shard never re-parses the
-/// verb. Before this rode along, every forwarded write re-ran THREE
-/// full verb matches (`is_write` + `route` for the WATCH bump +
-/// `wake_idx`) on the owning shard — measurable at -c50 (SET trailed
-/// GET by the cost of those walks).
-#[derive(Clone, Copy)]
-pub(crate) struct DispatchMeta {
-    pub(crate) is_write: bool,
-    /// `Some(i)` = waking writes (LPUSH/RPUSH/XADD): argv[i] is the key
-    /// whose blocked waiters should be woken after the write.
-    pub(crate) wake_idx: Option<u8>,
-    /// `Some(i)` = argv[i] is the routed key (Route::Single) — the WATCH
-    /// version bump target. `None` for keyless `Route::Local` cmds.
-    pub(crate) key_idx: Option<u8>,
-}
 
 /// A unit of work shipped to the owning shard. Forwarded single-key
 /// commands don't ride here — they go through the batched
@@ -150,6 +77,12 @@ pub(crate) enum Op {
     /// Extension fan-out: run `Commands::extension_op` on this
     /// shard with the original argv; reply is an opaque chunk.
     Extension { argv: Vec<Vec<u8>> },
+    /// Step-1 of the geo `*STORE` orchestrator: run the search half of
+    /// `GEOSEARCHSTORE` / `GEORADIUS[BYMEMBER] … STORE` on the SOURCE key's
+    /// shard (read-only — the destination write is a separate
+    /// [`Op::ZStoreResult`] on the destination's shard). Reply
+    /// [`Part::GeoHits`].
+    GeoSearch { argv: Vec<Vec<u8>> },
     /// `REPL.TOKEN` fan-out: read this shard's live
     /// `(feed generation, next_offset)` pair. Reply [`Part::ReplToken`].
     /// Live (not tick-stale): a token minted right after a write must
@@ -205,6 +138,38 @@ pub(crate) enum Op {
         ttl_ms: Option<u64>,
         nx: bool,
     },
+    /// Same-shard list move — one atomic pop+push on the owning shard.
+    /// Reply [`Part::ListMoved`].
+    ListMove {
+        src: Vec<u8>,
+        dst: Vec<u8>,
+        from_left: bool,
+        to_left: bool,
+    },
+    /// Cross-shard list move step 1: pop one element off `key` on this
+    /// shard. Reply [`Part::ListMoveTaken`] — `None` when the source is
+    /// empty or absent, which the orchestrator turns into a nil reply
+    /// without ever touching the destination.
+    ListMoveTake { key: Vec<u8>, from_left: bool },
+    /// Cross-shard list move step 2: push the taken element onto `key` on
+    /// this shard. Reply [`Part::ListMovePushed`] — `refused` carries the
+    /// element back when the destination exists and is not a list, so the
+    /// orchestrator can put it back where it came from instead of dropping
+    /// it on the floor.
+    ListMovePush {
+        key: Vec<u8>,
+        value: Vec<u8>,
+        to_left: bool,
+    },
+    /// Cross-shard list move rollback: the destination refused the element
+    /// (WRONGTYPE), so put it back on the source, at the end it came from.
+    /// Reply [`Part::Ok`] — the orchestrator has already decided the client
+    /// gets `-WRONGTYPE`.
+    ListMoveRestore {
+        key: Vec<u8>,
+        value: Vec<u8>,
+        from_left: bool,
+    },
     /// `SLOWLOG GET` — collect this shard's ring buffer. Reply
     /// [`Part::SlowlogEntries`] with a clone of the deque (origin
     /// sorts + truncates after merging across shards).
@@ -226,18 +191,6 @@ pub(crate) enum Op {
     XReadOne { index: u32, argv: Argv, write: bool },
 }
 
-/// How a keyspace-collection reply is shaped. Public:
-/// [`crate::Route::Keyspace`] carries it, and embedders' `route()`
-/// implementations construct it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyShape {
-    /// `KEYS` — a flat array of keys.
-    Keys,
-    /// `SCAN` — `[cursor, [keys]]` (cursor always "0").
-    Scan,
-    /// `RANDOMKEY` — one key as a bulk string, or nil.
-    Random,
-}
 
 /// A RESP reply fragment with a 30-byte inline arm. The forwarded-dispatch
 /// hot path produces tiny replies (`+OK`, `:N`, a `$16` GET payload = 23 B)
@@ -292,6 +245,9 @@ pub(crate) enum Part {
     Ok,
     /// Per-key gathered payloads.
     Gathered(Vec<(Vec<u8>, Gathered)>),
+    /// Geo `*STORE` step-1 result: the members the search matched on the
+    /// source key's shard (or the error it raised there).
+    GeoHits(crate::GeoHits),
     /// A shard's collected keys (KEYS/SCAN/RANDOMKEY).
     Keys(Vec<Vec<u8>>),
     /// `WATCH` partial reply: each key this shard owns paired with its
@@ -314,6 +270,13 @@ pub(crate) enum Part {
     RenamePutDone {
         refused: Option<(kevy_store::Value, Option<u64>)>,
     },
+    /// Cross-shard list move step 1: the popped element, or `None` when the
+    /// source was empty/absent. `Err(())` = the source is not a list.
+    ListMoveTaken(Result<Option<Vec<u8>>, ()>),
+    /// Cross-shard list move step 2: `refused` is `None` when the push
+    /// landed. `Some(value)` when the destination exists and is not a list
+    /// — the element comes back so the orchestrator can restore the source.
+    ListMovePushed { refused: Option<Vec<u8>> },
     /// `SLOWLOG GET` partial: this shard's ring buffer contents (in
     /// FIFO order — oldest first). Origin sorts by timestamp DESC and
     /// truncates per the `Get(count)` request.

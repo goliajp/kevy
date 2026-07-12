@@ -133,6 +133,10 @@ impl Commands for KevyCommands {
         }
     }
 
+    fn geo_search(&self, store: &mut Store, argv: &[Vec<u8>]) -> kevy_rt::GeoHits {
+        crate::dispatch_geo::geo_search(store, argv)
+    }
+
     fn extension_op(&self, store: &mut Store, argv: &[Vec<u8>]) -> Vec<u8> {
         if argv.first().is_some_and(|v| v.eq_ignore_ascii_case(b"PREFIX.DIGEST")) {
             return crate::cmd_digest::extension_op(store, argv);

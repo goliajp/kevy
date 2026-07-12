@@ -225,6 +225,34 @@ impl<C: Commands> Shard<C> {
             return; // not a key we're watching for this conn (stale)
         };
         ob.serving = true;
+
+        // A parked BRPOPLPUSH whose destination lives on another shard cannot
+        // be served by a local dispatch on the source's shard: `rpoplpush`
+        // would push the element into THAT shard's keyspace, where no reader
+        // of the destination will ever look. That is how this silently lost 9
+        // of 12 elements on an 8-shard server. Run the cross-shard
+        // orchestrator instead — it takes from the source's shard, pushes to
+        // the destination's, restores on WRONGTYPE, and hands the reply back
+        // here through `origin_on_serve_resp`.
+        if let Some((src, dst)) = self.brpoplpush_pair(conn, key)
+            && self.shard_of(&dst) != self.shard_of(&src)
+        {
+            // `fold` addresses a pending slot by `seq - conn.next_emit`, so the
+            // orchestrator's slot must be handed the seq it will actually sit
+            // at. Passing a bare 0 makes `fold` decide the reply was already
+            // emitted and drop it on the floor — the Take lands, the chain
+            // stops, and the element is stranded off both lists.
+            let Some(seq) = self
+                .conns
+                .get(&conn)
+                .map(|c| c.next_emit + c.pending.len() as u64)
+            else {
+                return;
+            };
+            self.start_list_move_inner(conn, seq, &src, &dst, false, true, true);
+            return;
+        }
+
         if shard == self.id {
             let reply = self.target_serve(self.id, conn, key);
             self.origin_on_serve_resp(conn, key.to_vec(), reply);
@@ -238,6 +266,18 @@ impl<C: Commands> Shard<C> {
                 },
             );
         }
+    }
+
+    /// `(source, destination)` when this conn is parked on a BRPOPLPUSH whose
+    /// serve replay is `BRPOPLPUSH src dst 0`. `None` for every other kind.
+    fn brpoplpush_pair(&self, conn: u64, key: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+        let ob = self.origin_blocks.get(&conn)?;
+        if ob.kind != BlockKind::Brpoplpush {
+            return None;
+        }
+        let ok = ob.keys.iter().find(|k| k.key == key)?;
+        let dst = ok.serve_argv.get(2)?.to_vec();
+        Some((key.to_vec(), dst))
     }
 
     /// origin: the serve result is back. Non-empty → deliver + unpark + cancel

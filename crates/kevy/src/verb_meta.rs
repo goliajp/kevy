@@ -93,7 +93,7 @@ pub const VERB_META: &[VerbMeta] = &[
     // ---- scan (keyspace iteration) --------------------------------------
     v("KEYS",        "scan", 2,  R, "Return every key matching the glob pattern (cross-shard gather).", "1.0.0", "KEYS pattern"),
     v("RANDOMKEY",   "scan", 1,  R, "Return a random key from the keyspace.", "1.0.0", "RANDOMKEY"),
-    v("SCAN",        "scan", -2, R, "Incrementally iterate the keyspace (COUNT is accepted and ignored).", "1.0.0", "SCAN cursor [MATCH pattern] [COUNT count]"),
+    v("SCAN",        "scan", -2, R, "Sweep the keyspace and return every match at once; NOT a cursor iterator (COUNT and TYPE are accepted and ignored, and the cursor is always 0).", "1.0.0", "SCAN cursor [MATCH pattern] [COUNT count]"),
     // ---- generic (type-agnostic key ops) --------------------------------
     v("DEL",         "generic", -2, W, "Delete one or more keys.", "1.0.0", "DEL key [key ...]"),
     v("EXISTS",      "generic", -2, R, "Count how many of the given keys exist.", "1.0.0", "EXISTS key [key ...]"),
@@ -250,7 +250,7 @@ pub const VERB_META: &[VerbMeta] = &[
     v("IDX.EXPLAIN", "index", -2, RX, "The IDX.QUERY parse without the execution: kind, state, est_rows, and the plan line.", "3.0.0", "IDX.EXPLAIN name RANGE min max|EQ value|MATCH text|KNN vector|GROUPS [args ...]"),
     v("IDX.QUERY",   "index", -4, RX, "Query an index: range/equality, text MATCH, vector KNN, aggregation groups, or a two-index COMPOSE.", "3.0.0", "IDX.QUERY name RANGE min max [LIMIT n] [CURSOR c] [FIELDS field ...] | name EQ value [LIMIT n] [CURSOR c] [FIELDS field ...] | name MATCH text [LIMIT n] [FIELDS field ...] | name KNN vector [LIMIT k] [EF ef] [FIELDS field ...] | name GROUP group | name GROUPS [BY count|sum|min|max] [LIMIT n] | HYBRID text_idx MATCH text ann_idx KNN vector [LIMIT n] [RRFK k] [EF ef] [FIELDS field ...] | COMPOSE AND|OR nameA RANGE min max|EQ value nameB RANGE min max|EQ value [LIMIT n] [CURSOR c] [FIELDS field ...]"),
     v("IDX.REBUILD", "index", 2,  WX, "Rebuild an ANN index (tombstone compaction).", "3.0.0", "IDX.REBUILD name"),
-    v("IDX.VERIFY",  "index", 2,  RX, "Verify an index and report entry/byte/drift statistics.", "3.0.0", "IDX.VERIFY name"),
+    v("IDX.VERIFY",  "index", 2,  RX, "Verify an index: re-read every held entry against its row and report entries/bytes/coerce_failures/duplicates/drift/checked.", "3.0.0", "IDX.VERIFY name"),
     // ---- views (VIEW.* extension) -------------------------------------------
     v("VIEW.CREATE", "view", -8, WX, "Declare a composed view over indexes with an ORDER BY (catalog mutation, sidecar-persisted).", "3.0.0", "VIEW.CREATE name QUERY tree ORDER BY index [DESC] [MODE virtual|materialized] [TOPK k] [VIA template] (tree = '( AND|OR|DIFF sub sub )' | 'index RANGE min max' | 'index EQ value')"),
     v("VIEW.DROP",   "view", 2,  WX, "Drop a declared view (catalog mutation, sidecar-persisted).", "3.0.0", "VIEW.DROP name"),

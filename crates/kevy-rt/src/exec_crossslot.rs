@@ -55,7 +55,7 @@ impl<C: Commands> Shard<C> {
 pub(crate) fn is_crossslot_checked(route: &Route) -> bool {
     matches!(
         route,
-        Route::Gather(_) | Route::MSet | Route::ZAlgebraStore(_)
+        Route::Gather(_) | Route::MSet | Route::ZAlgebraStore(_) | Route::GeoStore { .. }
     )
 }
 
@@ -80,6 +80,11 @@ pub(crate) fn keys_span_slots<A: ArgvView + ?Sized>(route: &Route, args: &A) -> 
                 }
             }
             return slots.windows(2).any(|w| w[0] != w[1]);
+        }
+        // Geo *STORE keys don't sit at fixed argv indices (the legacy forms
+        // hide `dst` in the option soup), so the route already carries both.
+        Route::GeoStore { src, dst } => {
+            return kevy_hash::key_hash_slot(src) != kevy_hash::key_hash_slot(dst);
         }
         Route::Gather(crate::MultiOp::ZInterCard) => {
             let Some(n) = parse_numkeys(args, 1) else { return false };

@@ -223,31 +223,35 @@ pub(super) fn reduce_list(catalogs: &CatalogState, chunks: &[Vec<u8>]) -> Vec<u8
     out
 }
 
+/// Six counters per shard, summed. `drift` and `checked` are the two the verb
+/// exists for: `checked` is how many held entries were re-read against the
+/// keyspace, `drift` is how many disagreed. A write-hook-maintained index
+/// should always report `drift 0` — VERIFY is what makes that falsifiable.
+/// It used to report four counters and no drift at all, while the registry
+/// and the docs advertised it.
 pub(super) fn reduce_verify(chunks: &[Vec<u8>]) -> Vec<u8> {
     let mut out = Vec::new();
-    let (mut entries, mut bytes, mut coerce, mut dups) = (0u64, 0u64, 0u64, 0u64);
+    let mut sums = [0u64; 6];
     for c in chunks {
         let mut pos = 1usize;
-        for slot in 0..4 {
+        for slot in &mut sums {
             let Some(w) = c.get(pos..pos + 8) else { break };
-            let v = u64::from_le_bytes(w.try_into().expect("8 bytes"));
-            match slot {
-                0 => entries += v,
-                1 => bytes += v,
-                2 => coerce += v,
-                _ => dups += v,
-            }
+            *slot += u64::from_le_bytes(w.try_into().expect("8 bytes"));
             pos += 8;
         }
     }
-    encode_array_len(&mut out, 8);
-    encode_bulk(&mut out, b"entries");
-    encode_bulk(&mut out, entries.to_string().as_bytes());
-    encode_bulk(&mut out, b"bytes");
-    encode_bulk(&mut out, bytes.to_string().as_bytes());
-    encode_bulk(&mut out, b"coerce_failures");
-    encode_bulk(&mut out, coerce.to_string().as_bytes());
-    encode_bulk(&mut out, b"duplicates");
-    encode_bulk(&mut out, dups.to_string().as_bytes());
+    let labels: [&[u8]; 6] = [
+        b"entries",
+        b"bytes",
+        b"coerce_failures",
+        b"duplicates",
+        b"drift",
+        b"checked",
+    ];
+    encode_array_len(&mut out, 12);
+    for (label, v) in labels.iter().zip(sums.iter()) {
+        encode_bulk(&mut out, label);
+        encode_bulk(&mut out, v.to_string().as_bytes());
+    }
     out
 }

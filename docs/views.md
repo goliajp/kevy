@@ -44,7 +44,10 @@ leaf     = <index> RANGE <min> <max> | <index> EQ <value>
 
 Supporting verbs: `VIEW.LIST` (catalog + mode + shape),
 `VIEW.EXPLAIN name` (the tree with per-leaf cardinalities),
-`VIEW.VERIFY name` (members / bytes / order-exclusions),
+`VIEW.VERIFY name` (members / bytes / order-exclusions — **bytes and
+order-exclusions are materialized-only**; a virtual view stores nothing and
+reports both as 0, and verifying one costs a full fresh `eval_tree`, which is
+the one place a virtual view is the expensive one),
 `VIEW.REBUILD name` (force a materialized rebuild — answer-
 preserving), `VIEW.DROP name`.
 

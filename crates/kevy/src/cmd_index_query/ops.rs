@@ -224,6 +224,18 @@ pub(super) fn op_compose(ctx: &Ctx<'_>, store: &mut Store, argv: &[Vec<u8>]) -> 
 /// The COMPOSE set algebra over two READY segments: AND filters the
 /// A-hits through B's held entries; OR unions both ranges. Key-sorted,
 /// cursor-trimmed, truncated to the limit.
+/// `LIMIT` does NOT bound the work here, and cannot.
+///
+/// Every other shape in this surface is cursor-paged and limit-bounded. This
+/// one is not, and the reason is structural rather than an oversight: a
+/// segment is a `BTreeSet<(value, key)>` — ordered by VALUE — while COMPOSE's
+/// result and its cursor are ordered by KEY. Producing one key-ordered page
+/// therefore requires the whole match set, so a `COMPOSE OR` over two broad
+/// ranges pays for both ranges plus a sort on every page even at `LIMIT 10`.
+///
+/// This is a cost model, not a bug, and the command reference states it. The
+/// only way to bound it would be to page in value order of the driving leaf,
+/// which is a different (and less useful) contract.
 fn compose_keys(
     cq: &ComposeQuery,
     ty_a: ValType,
@@ -233,6 +245,8 @@ fn compose_keys(
 ) -> Option<Vec<Vec<u8>>> {
     let (min_a, max_a) = sub_bounds(&cq.a.shape, ty_a)?;
     let (min_b, max_b) = sub_bounds(&cq.b.shape, ty_b)?;
+    // usize::MAX is deliberate — see the note above: a key-ordered page needs
+    // the full match set out of a value-ordered index.
     let (a_hits, _) = seg_a.range(&min_a, &max_a, None, usize::MAX);
     let mut keys: Vec<Vec<u8>> = if cq.and {
         a_hits

@@ -11,9 +11,15 @@
 //! - `search.rs` — GEOSEARCH, by far the largest single command in
 //!   this family (radius/box modes, six option flags). Split out so
 //!   each file stays under the project's ≤500-LOC rule.
+//! - `store.rs` — the cross-shard half of the `*STORE` family: which two
+//!   keys a STORE form touches (routing) and the source-shard search the
+//!   runtime calls back for.
 
 mod radius;
 mod search;
+mod store;
+
+pub(crate) use store::{geo_search, geo_store_route};
 
 use kevy_resp::CmdError;
 use kevy_geo::{

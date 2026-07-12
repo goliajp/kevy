@@ -47,6 +47,7 @@ impl<C: Commands> Shard<C> {
             | Route::Unwatch
             | Route::Hello
             | Route::Rename { .. }
+            | Route::ListMove { .. }
             | Route::Slowlog(_) => {
                 eprintln!(
                     "kevy WARN: build_multi_targets reached conn-level route {route:?} \
@@ -87,6 +88,16 @@ impl<C: Commands> Shard<C> {
                 MultiOp::ZInterCard => self.build_zintercard(args),
             },
             Route::ZAlgebraStore(combine) => self.build_zalgebra_store(args, combine),
+            // Geo *STORE: one target — the SOURCE key's shard runs the
+            // search; `finalize_geostore_agg` then ships the write to the
+            // DESTINATION's shard.
+            Route::GeoStore { src, dst } => {
+                let argv: Vec<Vec<u8>> = (0..args.len()).map(|i| args[i].to_vec()).collect();
+                (
+                    vec![(self.shard_of(&src), Op::GeoSearch { argv })],
+                    Agg::GeoStore { dst, hits: None },
+                )
+            }
             Route::Extension => {
                 let argv: Vec<Vec<u8>> = (0..args.len()).map(|i| args[i].to_vec()).collect();
                 let targets = (0..self.nshards)
