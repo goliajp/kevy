@@ -53,7 +53,7 @@
       kevy は Rust でゼロから書いたストレージエンジンです。<b>サードパーティのクレートを一切使っていません</b>
       —— ハッシュマップも、アロケーション戦略も、プロトコルパーサも、イベントループも、すべて自前。
       だからこそ同じエンジンが 16 コアのサーバーにも、<b>OS すら載っていないマイコン</b>にも収まります。
-      まず、ご自身の状況を選んでください:
+      まず、ご自身の状況を選んでください：
     </p>
 
     <div class="channels rise d4">
@@ -248,7 +248,7 @@
       <div class="card">
         <p class="tag">機能のコスト</p>
         <h3>使った分だけ払う</h3>
-        <p>呼ばない feature フラグは LTO が丸ごと削り、サイズには乗りません。効いてくるのは実際に使う機能です —— なかでも永続化が突出しています:</p>
+        <p>呼ばない feature フラグは LTO が丸ごと削り、サイズには乗りません。効いてくるのは実際に使う機能です —— なかでも永続化が突出しています：</p>
         <div class="tbl-wrap" style="margin-top:10px;border:0">
           <table style="min-width:0">
             <tbody>
@@ -414,13 +414,13 @@
     <div class="cols-2">
       <div class="card">
         <p class="tag">サーバー</p>
-        <p style="margin-bottom:8px">Docker、あるいはランタイム不要の静的バイナリで:</p>
+        <p style="margin-bottom:8px">Docker、あるいはランタイム不要の静的バイナリで：</p>
         <p><code>docker run -p 6379:6379 goliakk/kevy</code></p>
         <p style="margin-top:10px"><a href="https://github.com/goliajp/kevy/blob/develop/docs/quickstart.md">クイックスタート</a> <span style="color:var(--line-strong)">·</span> <a href="https://github.com/goliajp/kevy/blob/develop/docs/UPGRADING.md">Redis からの移行</a> <span style="color:var(--line-strong)">·</span> <a href="https://github.com/goliajp/kevy/blob/develop/docs/availability.md">レプリケーションとフェイルオーバー</a></p>
       </div>
       <div class="card">
         <p class="tag">ライブラリ · ブラウザ · エージェント</p>
-        <p style="margin-bottom:8px">Rust、npm、そして MCP サーバー:</p>
+        <p style="margin-bottom:8px">Rust、npm、そして MCP サーバー：</p>
         <p><code>cargo add kevy-embedded</code> <span style="color:var(--line-strong)">·</span> <code>npm i @goliajp/kevy</code></p>
         <p style="margin-top:10px"><a href="https://github.com/goliajp/kevy/blob/develop/docs/iot.md">組み込みと IoT</a> <span style="color:var(--line-strong)">·</span> <a href="https://github.com/goliajp/kevy/blob/develop/docs/wasm.md">WebAssembly</a> <span style="color:var(--line-strong)">·</span> <a href="https://github.com/goliajp/kevy/blob/develop/docs/cookbook.md">Cookbook</a></p>
       </div>

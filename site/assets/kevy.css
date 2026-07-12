@@ -1,0 +1,512 @@
+/* kevy.golia.jp — the design system.
+ *
+ * The reference is a manual, not a product page. SQLite's reader is an
+ * engineer choosing a tool; Redis's reader is a VP signing a contract.
+ * This site is built for the first one. That decides everything below:
+ * density over air, tables over cards, a figure over an adjective, and a
+ * colour reserved for the axes we LOSE.
+ *
+ * Type is a system stack on purpose. A 567-page command reference wants a
+ * face that is already on the reader's machine and already legible at 14px
+ * in a table cell; a display font here would be a liability, and a webfont
+ * would be a network request this site does not make. The character comes
+ * from rhythm, rules, tabular figures and restraint instead.
+ *
+ * Measurements are not invented: prose 68ch, reference 900px, sidebar
+ * 280px, TOC 240px and only above 1280px — the numbers the best manuals
+ * converged on (rustdoc 960, mdbook 750, Tailwind 672 + 288).
+ *
+ * No external requests. No build step. Light by default; dark is opt-in.
+ */
+
+/* ════════════════════════════════════════════════════════════ tokens */
+
+:root {
+  color-scheme: light;
+
+  /* Paper, not screen-white. A manual you could have printed. */
+  --paper: #FCFCFA;
+  --surface: #FFFFFF;
+  --sunken: #F3F3EF;
+  --raised: #FFFFFF;
+
+  --ink: #14171A;
+  --ink-soft: #3D454D;
+  --muted: #5C656E;
+  --faint: #8B939B;
+
+  --rule: #E4E3DD;      /* hairline */
+  --rule-firm: #CBCAC2; /* structural */
+
+  /* One accent. Deep, printed-ink teal — not a SaaS gradient. */
+  --accent: #0E5468;
+  --accent-deep: #093C4B;
+  --accent-wash: #E6F0F2;
+
+  /* Reserved for the axes kevy LOSES. Honesty gets its own colour. */
+  --loss: #97382D;
+  --loss-wash: #F8E9E6;
+
+  /* A caution that is not a loss (gotchas, footguns). */
+  --warn: #7A5A12;
+  --warn-wash: #F7F0DC;
+
+  --sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Noto Sans", "Helvetica Neue", Arial, "Noto Sans CJK SC",
+    "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "SF Mono", "SFMono-Regular", "JetBrains Mono",
+    "Cascadia Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  --prose: 68ch;   /* running text */
+  --ref: 900px;    /* a page with syntax blocks and argument tables */
+  --gutter: clamp(20px, 4vw, 64px);
+  --mast-h: 60px;   /* the sticky masthead; anything else that sticks parks under it */
+  --side: 280px;
+  --toc: 240px;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --paper: #101316;
+  --surface: #161A1E;
+  --sunken: #1D2226;
+  --raised: #1B2025;
+
+  --ink: #E8EAEC;
+  --ink-soft: #C3C8CC;
+  --muted: #949CA3;
+  --faint: #6A737A;
+
+  --rule: #262C31;
+  --rule-firm: #3A424A;
+
+  --accent: #6FC0D4;
+  --accent-deep: #9AD6E5;
+  --accent-wash: #12313B;
+
+  --loss: #E08A7B;
+  --loss-wash: #2E1A16;
+
+  --warn: #D9B košík;
+  --warn: #D6B45E;
+  --warn-wash: #2C2617;
+}
+
+/* ══════════════════════════════════════════════════════════════ base */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; scroll-padding-top: 76px; }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-variant-numeric: tabular-nums;
+}
+
+/* CJK sets slightly larger — the same optical size needs more em. */
+:root:lang(zh-Hans) body,
+:root:lang(ja) body { font-size: 16.5px; line-height: 1.75; }
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+a:hover { color: var(--accent-deep); border-bottom-color: currentColor; }
+
+b, strong { font-weight: 640; color: var(--ink); }
+
+h1, h2, h3, h4 {
+  color: var(--ink);
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+  margin: 0;
+}
+
+code, kbd, samp {
+  font-family: var(--mono);
+  font-size: 0.875em;
+  font-variant-ligatures: none;
+}
+
+:not(pre) > code {
+  background: var(--sunken);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 0.08em 0.36em;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.mono { font-family: var(--mono); }
+.num  { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+.skip { position: absolute; left: -9999px; }
+.skip:focus {
+  left: var(--gutter); top: 10px; z-index: 60;
+  background: var(--surface); border: 1px solid var(--rule-firm);
+  padding: 8px 14px; border-radius: 4px;
+}
+
+.sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* ═════════════════════════════════════════════════════════ masthead */
+
+.mast {
+  position: sticky; top: 0; z-index: 40;
+  background: color-mix(in srgb, var(--paper) 90%, transparent);
+  backdrop-filter: saturate(1.5) blur(10px);
+  border-bottom: 1px solid var(--rule);
+}
+
+.mast-in {
+  display: flex; align-items: center; gap: 22px;
+  height: var(--mast-h); padding-inline: var(--gutter);
+}
+
+.brand {
+  display: flex; align-items: baseline; gap: 7px;
+  font: 700 19px/1 var(--mono);
+  letter-spacing: -0.02em;
+  color: var(--ink); border: 0; flex: none;
+}
+.brand::after {
+  content: ""; width: 6px; height: 14px;
+  background: var(--accent); align-self: center;
+}
+.brand .v {
+  font: 500 11px/1 var(--mono);
+  color: var(--faint); letter-spacing: 0.04em;
+}
+
+.nav { display: flex; gap: 18px; flex: 1; min-width: 0; }
+.nav a {
+  font-size: 14.5px; color: var(--muted); border: 0; white-space: nowrap;
+  padding-block: 4px;
+}
+.nav a:hover { color: var(--ink); }
+.nav a[aria-current] {
+  color: var(--ink); font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.mast-right { display: flex; align-items: center; gap: 12px; flex: none; }
+
+.lang { display: flex; gap: 9px; font-size: 13px; }
+.lang a { color: var(--faint); border: 0; }
+.lang a:hover { color: var(--ink); }
+.lang a[aria-current] { color: var(--ink); font-weight: 600; }
+
+.icon-btn {
+  display: grid; place-items: center;
+  width: 32px; height: 32px; padding: 0;
+  border: 1px solid var(--rule); border-radius: 4px;
+  background: var(--surface); color: var(--muted); cursor: pointer;
+}
+.icon-btn:hover { color: var(--ink); border-color: var(--rule-firm); }
+.icon-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+.icon-btn .moon { display: none; }
+:root[data-theme="dark"] .icon-btn .sun { display: none; }
+:root[data-theme="dark"] .icon-btn .moon { display: block; }
+
+/* Drawer toggle — a checkbox, so the sidebar needs no JS at all. */
+.drawer-btn { display: none; }
+
+/* ═══════════════════════════════════════════════════════════ layout */
+
+.page { padding-inline: var(--gutter); }
+.prose { max-width: var(--prose); }
+.ref   { max-width: var(--ref); }
+
+.band { padding-block: clamp(44px, 5vw, 76px); border-bottom: 1px solid var(--rule); }
+.band:last-child { border-bottom: 0; }
+
+.band-head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 20px; }
+.band-head h2 { font-size: clamp(22px, 2.2vw, 30px); font-weight: 660; flex: none; }
+.band-head .rule { flex: 1; height: 1px; background: var(--rule-firm); min-width: 16px; }
+.band-head .meta { flex: none; font: 12px/1 var(--mono); color: var(--faint); }
+
+.eyebrow {
+  margin: 0 0 10px;
+  font: 600 11.5px/1 var(--mono);
+  letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--accent);
+}
+
+.lede { font-size: 18.5px; line-height: 1.65; color: var(--ink-soft); max-width: var(--prose); }
+.lede b { color: var(--ink); }
+
+.note { margin: 0 0 26px; max-width: var(--prose); color: var(--ink-soft); }
+
+/* ════════════════════════════════════════════════════════════ hero */
+
+.hero { padding: clamp(44px, 6vw, 84px) var(--gutter) clamp(32px, 4vw, 52px); border-bottom: 1px solid var(--rule); }
+
+.hero h1 {
+  margin: 14px 0 0;
+  max-width: 26ch;
+  font-size: clamp(30px, 3.6vw, 48px);
+  font-weight: 680;
+  letter-spacing: -0.025em;
+  line-height: 1.14;
+}
+
+/* The definition sentence. Every adjective in it is a link, and every link
+   lands on the page that PROVES the adjective. An adjective that cannot be
+   clicked has no business being here. */
+.definition {
+  margin: 20px 0 0;
+  max-width: 72ch;
+  font-size: 19px;
+  line-height: 1.62;
+  color: var(--ink-soft);
+}
+.definition a {
+  color: var(--ink);
+  font-weight: 600;
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.definition a:hover { color: var(--accent-deep); border-bottom-color: var(--accent); }
+
+/* The positioning line. One sentence that does the work of a paragraph. */
+.stance {
+  margin: 26px 0 0;
+  padding: 16px 0 16px 18px;
+  max-width: 70ch;
+  border-left: 3px solid var(--accent);
+  font-size: 17.5px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+.stance b { font-weight: 660; }
+
+/* ══════════════════════════════════════════════════════ scenarios */
+
+.scenarios {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+  gap: 1px;
+  margin-top: clamp(32px, 4vw, 52px);
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.sc {
+  display: flex; flex-direction: column; gap: 11px;
+  padding: 24px 22px 20px;
+  background: var(--surface);
+  border: 0; color: inherit;
+  transition: background .16s;
+}
+.sc:hover { background: var(--sunken); }
+
+.sc-no { font: 600 11px/1 var(--mono); letter-spacing: 0.15em; color: var(--faint); }
+
+/* The scenario title is the READER'S sentence, not our module name. */
+.sc h2 { font-size: 18.5px; line-height: 1.35; font-weight: 640; letter-spacing: -0.01em; }
+.sc p  { margin: 0; font-size: 15px; line-height: 1.6; color: var(--muted); flex: 1; }
+
+.sc-figs { display: flex; flex-wrap: wrap; gap: 5px 20px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.sc-fig  { display: flex; flex-direction: column; gap: 1px; }
+.sc-fig span { font: 10.5px/1 var(--mono); letter-spacing: 0.06em; color: var(--faint); }
+.sc-fig b    { font: 600 14.5px/1.2 var(--mono); color: var(--ink); }
+
+.sc-go { font-size: 13px; font-weight: 600; color: var(--accent); }
+.sc-go::after { content: " →"; transition: margin .15s; }
+.sc:hover .sc-go::after { margin-left: 4px; }
+
+/* ═════════════════════════════════════════════════════════ figures */
+
+.figs { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; }
+.fig  { background: var(--surface); padding: 16px 18px; }
+.fig .k { display: block; font: 11px/1 var(--mono); letter-spacing: 0.07em; color: var(--faint); margin-bottom: 6px; }
+.fig .v { font: 650 24px/1.1 var(--mono); letter-spacing: -0.02em; color: var(--ink); }
+.fig .u { font: 11px/1 var(--mono); color: var(--faint); margin-left: 4px; }
+.fig.is-loss .v { color: var(--loss); }
+
+/* ══════════════════════════════════════════════════════════ tables */
+
+.tbl { border: 1px solid var(--rule); border-radius: 5px; background: var(--surface); overflow-x: auto; }
+.tbl > table { margin: 0; border: 0; }
+
+table { width: 100%; border-collapse: collapse; font-size: 14.5px; margin: 18px 0; }
+
+caption {
+  caption-side: top; text-align: left;
+  padding: 11px 15px;
+  font: 600 11.5px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--accent);
+}
+
+th {
+  padding: 10px 15px; text-align: left;
+  font: 600 11.5px/1.3 var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--faint);
+  border-bottom: 1px solid var(--rule-firm);
+  white-space: nowrap;
+}
+
+td { padding: 10px 15px; border-bottom: 1px solid var(--rule); color: var(--ink-soft); vertical-align: top; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover td { background: var(--sunken); }
+
+td.k { font-family: var(--mono); font-size: 13.5px; color: var(--ink); font-weight: 550; white-space: nowrap; }
+.r { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--ink); }
+
+.win  { color: var(--accent); font-weight: 640; }
+.lose { color: var(--loss);   font-weight: 640; }
+.tie  { color: var(--warn);   font-weight: 640; }
+
+/* ═══════════════════════════════════════════════════════════ code */
+
+pre {
+  margin: 16px 0;
+  padding: 14px 16px;
+  background: var(--sunken);
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink);
+  tab-size: 2;
+}
+pre code { background: 0; border: 0; padding: 0; font-size: inherit; white-space: pre; }
+
+/* A code block that says which file it is, and can be copied. */
+.snip { margin: 18px 0; border: 1px solid var(--rule); border-radius: 5px; overflow: hidden; background: var(--surface); }
+.snip-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 12px;
+  background: var(--sunken);
+  border-bottom: 1px solid var(--rule);
+  font: 11.5px/1 var(--mono); color: var(--muted);
+}
+.snip-bar .file { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snip-bar button {
+  border: 1px solid var(--rule); background: var(--surface); color: var(--muted);
+  font: 11px/1 var(--mono); padding: 4px 8px; border-radius: 3px; cursor: pointer;
+}
+.snip-bar button:hover { color: var(--ink); border-color: var(--rule-firm); }
+.snip pre { margin: 0; border: 0; border-radius: 0; background: var(--surface); }
+
+/* ═════════════════════════════════════════════════════════ callouts */
+
+.call { margin: 20px 0; padding: 14px 16px; border-radius: 5px; border: 1px solid; font-size: 15px; line-height: 1.6; }
+.call p:first-child { margin-top: 0; }
+.call p:last-child  { margin-bottom: 0; }
+.call .h { display: block; margin-bottom: 5px; font: 600 11.5px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; }
+
+.call.note { background: var(--accent-wash); border-color: color-mix(in srgb, var(--accent) 28%, transparent); color: var(--ink-soft); }
+.call.note .h { color: var(--accent); }
+
+.call.warn { background: var(--warn-wash); border-color: color-mix(in srgb, var(--warn) 30%, transparent); color: var(--ink-soft); }
+.call.warn .h { color: var(--warn); }
+
+/* The one that matters. Where kevy loses, it says so in its own colour. */
+.call.loss { background: var(--loss-wash); border-color: color-mix(in srgb, var(--loss) 30%, transparent); color: var(--ink-soft); }
+.call.loss .h { color: var(--loss); }
+.call.loss code { background: color-mix(in srgb, var(--loss) 8%, transparent); border-color: color-mix(in srgb, var(--loss) 22%, transparent); }
+
+/* ══════════════════════════════════════════════════════════ cards */
+
+.cols-2, .cols-3 { display: grid; gap: 18px; }
+.cols-2 { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); }
+.cols-3 { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+
+.card { padding: 20px 22px; background: var(--surface); border: 1px solid var(--rule); border-radius: 5px; }
+.card h3 { margin: 6px 0 8px; font-size: 17px; font-weight: 640; line-height: 1.35; }
+.card p  { margin: 0 0 9px; font-size: 15px; line-height: 1.62; color: var(--muted); }
+.card p:last-child { margin-bottom: 0; }
+.card ul, .card ol { margin: 0; padding-left: 19px; font-size: 15px; line-height: 1.62; color: var(--muted); }
+.card li { margin-bottom: 6px; }
+.card li:last-child { margin-bottom: 0; }
+
+/* ═════════════════════════════════════════════════ decision list */
+
+/* The if-then table on /when-to-use/. Not a disclaimer — a decision tool.
+   SQLite's version of this page is its second-most-linked page for a
+   reason: the reader trusts the project that tells them to leave. */
+.decide { list-style: none; margin: 22px 0 0; padding: 0; max-width: 78ch; }
+.decide li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 22px;
+  align-items: baseline;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--rule);
+  font-size: 16px;
+}
+.decide li:first-child { border-top: 1px solid var(--rule-firm); }
+.decide .q { color: var(--ink-soft); }
+.decide .a { font-weight: 650; white-space: nowrap; font-size: 15px; }
+.decide .a.no  { color: var(--loss); }
+.decide .a.yes { color: var(--accent); }
+
+/* ══════════════════════════════════════════════════════════ footer */
+
+.foot {
+  padding: 34px var(--gutter) 46px;
+  border-top: 1px solid var(--rule);
+  font-size: 14px;
+  color: var(--faint);
+}
+.foot-in { display: flex; flex-wrap: wrap; gap: 26px 44px; }
+.foot-col { min-width: 130px; }
+.foot-col h4 { margin: 0 0 9px; font: 600 11px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
+.foot-col a { display: block; padding: 3px 0; color: var(--muted); border: 0; }
+.foot-col a:hover { color: var(--ink); }
+.foot-base { margin-top: 30px; padding-top: 18px; border-top: 1px solid var(--rule); display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+.foot-base .sep { color: var(--rule-firm); }
+
+/* Every page says when it was last touched. The cheapest trust signal
+   there is, and the one SQLite has been printing since 2004. */
+.stamp { margin-left: auto; font: 11.5px/1 var(--mono); color: var(--faint); }
+
+/* ════════════════════════════════════════════════════════ motion */
+
+.rise { opacity: 0; animation: rise .55s cubic-bezier(.22,.68,.24,1) forwards; }
+.d1 { animation-delay: .02s } .d2 { animation-delay: .08s }
+.d3 { animation-delay: .14s } .d4 { animation-delay: .21s }
+@keyframes rise { from { opacity: 0; transform: translateY(8px) } to { opacity: 1; transform: none } }
+@media (prefers-reduced-motion: reduce) { .rise { opacity: 1; animation: none } }
+
+/* ══════════════════════════════════════════════════════ narrow */
+
+@media (max-width: 1000px) {
+  .nav { display: none; }
+  .drawer-btn { display: grid; }
+}
+
+@media (max-width: 640px) {
+  body { font-size: 15.5px; }
+  :root { --mast-h: 56px; }
+  .mast-in { gap: 12px; }
+  .band-head { flex-wrap: wrap; gap: 8px; }
+  .band-head .rule { display: none; }
+  .decide li { grid-template-columns: 1fr; gap: 4px; }
+  .decide .a { justify-self: start; }
+}

@@ -1,0 +1,422 @@
+/* Documentation & reference layer, on top of kevy.css.
+ *
+ * A reference manual is a place people arrive at from a search engine, read one
+ * fact, and leave. So: the fact is above the fold, the page is scannable at a
+ * glance, and nothing animates. Every rule here earns its place by making a
+ * command page faster to read — there is no decoration.
+ */
+
+/* ── the reference page ─────────────────────────────────────────────────── */
+
+.ref {
+  max-width: 62rem;
+}
+
+.crumb {
+  display: flex;
+  gap: 0.5ch;
+  align-items: baseline;
+  flex-wrap: wrap;
+  font-size: 0.8125rem;
+  color: var(--muted);
+  margin-bottom: 1.75rem;
+  font-family: var(--mono);
+}
+.crumb a {
+  color: var(--ink-soft);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+.crumb a:hover {
+  color: var(--accent);
+  border-bottom-color: currentColor;
+}
+.crumb span {
+  color: var(--rule);
+}
+.crumb b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+h1.cmd {
+  font-family: var(--mono);
+  font-size: clamp(1.75rem, 1.2rem + 2.4vw, 2.75rem);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.5rem;
+  /* A command name is an identifier, not a headline. Tight, monospaced,
+   * and the same weight the reader will type it in. */
+}
+
+.ref .lede {
+  font-size: 1.0625rem;
+  line-height: 1.65;
+  color: var(--ink-soft);
+  max-width: 62ch;
+  margin: 0 0 2rem;
+}
+
+/* The syntax line is the single thing most readers came for. It gets the
+ * strongest frame on the page and sits directly under the summary. */
+pre.syntax {
+  margin: 0 0 2rem;
+  padding: 1rem 1.15rem;
+  background: var(--sunken);
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--accent);
+  border-radius: 3px;
+  overflow-x: auto;
+}
+pre.syntax code {
+  font-family: var(--mono);
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  color: var(--ink);
+  background: none;
+  padding: 0;
+  white-space: pre;
+}
+
+/* ── the metadata strip ─────────────────────────────────────────────────── */
+
+dl.meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 1px;
+  margin: 0 0 2.5rem;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  overflow: hidden;
+}
+dl.meta > div {
+  background: var(--surface);
+  padding: 0.75rem 1rem;
+}
+dl.meta dt {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  margin-bottom: 0.3rem;
+  font-weight: 600;
+}
+dl.meta dd {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--ink);
+  line-height: 1.5;
+}
+dl.meta dd.mono {
+  font-family: var(--mono);
+}
+dl.meta dd code {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.4rem;
+  margin-right: 0.25rem;
+  background: var(--sunken);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--ink-soft);
+}
+
+/* ── sections ───────────────────────────────────────────────────────────── */
+
+.ref section {
+  margin-bottom: 2.5rem;
+}
+.ref h2 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-weight: 600;
+  color: var(--muted);
+  margin: 0 0 0.85rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+/* The complexity line is the column Redis's reference does not have. It is
+ * rendered as code because it IS a claim about the machine, not prose. */
+.cx-body {
+  margin: 0 0 0.65rem;
+}
+.cx-body code {
+  display: block;
+  font-family: var(--mono);
+  font-size: 0.875rem;
+  line-height: 1.7;
+  padding: 0.85rem 1rem;
+  background: var(--sunken);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  color: var(--ink);
+  white-space: pre-wrap;
+}
+.engine-note {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--muted);
+  max-width: 68ch;
+}
+
+/* ── the compatibility callout ──────────────────────────────────────────── */
+/* Three states, three colours, and the one that means "this will surprise you"
+ * is the one that gets the loud one. Honesty is the design element here: the
+ * --loss colour exists precisely so a difference cannot be quietly styled away. */
+
+.call {
+  padding: 0.9rem 1.1rem;
+  border-radius: 3px;
+  border: 1px solid var(--rule);
+  border-left-width: 3px;
+  background: var(--surface);
+}
+.call .h {
+  display: inline-block;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  margin-bottom: 0.4rem;
+}
+.call p {
+  margin: 0;
+  font-size: 0.9375rem;
+  line-height: 1.7;
+  color: var(--ink);
+  max-width: 68ch;
+}
+.call.note {
+  border-left-color: var(--accent-deep);
+}
+.call.note .h {
+  color: var(--accent-deep);
+}
+.call.loss {
+  border-left-color: var(--loss);
+  background: var(--loss-wash);
+}
+.call.loss .h {
+  color: var(--loss);
+}
+.call.warn {
+  border-left-color: var(--accent);
+  background: var(--accent-wash);
+}
+.call.warn .h {
+  color: var(--accent);
+}
+
+/* ── see-also ───────────────────────────────────────────────────────────── */
+
+.sees {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0;
+}
+.sees a {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  color: var(--ink-soft);
+  text-decoration: none;
+  background: var(--surface);
+}
+.sees a:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.back {
+  margin-top: 3rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+  font-size: 0.875rem;
+}
+.back a {
+  color: var(--ink-soft);
+  text-decoration: none;
+}
+.back a:hover {
+  color: var(--accent);
+}
+
+/* ── the index: filters ─────────────────────────────────────────────────── */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  margin: 2rem 0 1.25rem;
+  position: sticky;
+  top: var(--mast-h);
+  z-index: 5;
+  padding: 0.85rem 0;
+  background: var(--paper);
+  border-bottom: 1px solid var(--rule);
+}
+.filters input,
+.filters select {
+  font: inherit;
+  font-size: 0.875rem;
+  padding: 0.45rem 0.65rem;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+}
+.filters input {
+  flex: 1 1 16rem;
+  min-width: 0;
+  font-family: var(--mono);
+}
+.filters input:focus,
+.filters select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+  border-color: var(--accent);
+}
+.hits {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* ── the index: table ───────────────────────────────────────────────────── */
+
+.tbl {
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+}
+.tbl table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+.tbl thead th {
+  position: sticky;
+  top: 0;
+  text-align: left;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 0.65rem 0.85rem;
+  background: var(--sunken);
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+.tbl tbody tr {
+  border-bottom: 1px solid var(--rule);
+}
+.tbl tbody tr:last-child {
+  border-bottom: 0;
+}
+.tbl tbody tr:hover {
+  background: var(--surface);
+}
+.tbl td {
+  padding: 0.6rem 0.85rem;
+  vertical-align: top;
+  line-height: 1.5;
+}
+.tbl td.k {
+  white-space: nowrap;
+}
+.tbl td.k a {
+  font-family: var(--mono);
+  font-weight: 600;
+  font-size: 0.8125rem;
+  color: var(--ink);
+  text-decoration: none;
+}
+.tbl td.k a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.tbl td.g {
+  color: var(--muted);
+  white-space: nowrap;
+  font-size: 0.8125rem;
+}
+.tbl td.cx {
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.tbl td.sum {
+  color: var(--ink-soft);
+  min-width: 22rem;
+}
+
+.badge {
+  display: inline-block;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 0.15rem 0.45rem;
+  border-radius: 2px;
+  white-space: nowrap;
+  border: 1px solid;
+}
+.badge.full {
+  color: var(--accent-deep);
+  border-color: color-mix(in srgb, var(--accent-deep) 35%, transparent);
+  background: color-mix(in srgb, var(--accent-deep) 8%, transparent);
+}
+.badge.differs {
+  color: var(--loss);
+  border-color: color-mix(in srgb, var(--loss) 35%, transparent);
+  background: var(--loss-wash);
+}
+.badge.only {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  background: var(--accent-wash);
+}
+
+/* ── phone ──────────────────────────────────────────────────────────────── */
+/* The reference table does not collapse into cards. A command reference read on
+ * a phone is still a table — the reader is comparing rows. It scrolls sideways,
+ * with the command name pinned so the row never loses its subject. */
+
+@media (max-width: 40rem) {
+  .filters {
+    gap: 0.45rem;
+  }
+  .filters input {
+    flex-basis: 100%;
+  }
+  .hits {
+    margin-left: 0;
+  }
+  .tbl td.k {
+    position: sticky;
+    left: 0;
+    background: var(--paper);
+    border-right: 1px solid var(--rule);
+  }
+  .tbl tbody tr:hover td.k {
+    background: var(--surface);
+  }
+  .tbl td.sum {
+    min-width: 20rem;
+  }
+  dl.meta {
+    grid-template-columns: 1fr 1fr;
+  }
+  h1.cmd {
+    word-break: break-all;
+  }
+}
