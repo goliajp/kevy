@@ -3,6 +3,7 @@
 Static site for kevy: hand-written HTML/CSS, no build step, no external
 requests (no CDN fonts, no image assets). The directory is
 self-contained — copying `site/` to any static host is a full deploy.
+The live one is `t01:/apps/kevy/web` (see Deploying).
 
 ## Layout
 
@@ -17,7 +18,7 @@ site/
 │   ├── repl.js         REPL over the @goliajp/kevy loader API
 │   └── pkg/            wasm artifacts, copied from crates/kevy-wasm/pkg/
 │                       (kevy.js · kevy.d.ts · kevy-opfs-worker.js · kevy.wasm)
-├── CNAME               kevy.golia.jp (GitHub Pages custom domain)
+├── CNAME               kevy.golia.jp (legacy; domain is configured on the box)
 └── README.md           this file
 ```
 
@@ -38,34 +39,28 @@ python3 -m http.server --directory site <port>
 Any static file server works; the demo page needs `http://` (not
 `file://`) because it uses ES modules and a worker.
 
-## Deploying to GitHub Pages
+## Deploying
 
-Option A — Pages from a branch directory (simplest):
-
-1. GitHub → repository **Settings → Pages**.
-2. Source: **Deploy from a branch**; pick the branch and folder `/site`
-   — GitHub only offers `/ (root)` and `/docs` as folders, so if `/site`
-   is not selectable use Option B, or mirror `site/` into a branch root.
-3. Custom domain: enter `kevy.golia.jp` (the `CNAME` file in this
-   directory keeps the setting across deploys), tick **Enforce HTTPS**
-   once the certificate is issued.
-
-Option B — `gh-pages` branch with `site/` as its root:
+The site is served from **`t01:/apps/kevy/web`**. DevOps owns the box,
+the web server and TLS for `kevy.golia.jp`; that groundwork is already
+done and is not ours to re-create. Deploying is therefore just
+**updating the files in place** — there is no build step and nothing to
+compile.
 
 ```sh
-git checkout --orphan gh-pages
-git rm -rf .
-git checkout <source-branch> -- site
-mv site/* site/.[!.]* . 2>/dev/null; rmdir site
-git add -A && git commit -m "site: deploy"
-git push origin gh-pages
+# From the repo root, after the wasm bundle in site/demo/pkg/ is current.
+rsync -av --delete site/ t01:/apps/kevy/web/
 ```
 
-then Settings → Pages → Source: `gh-pages` branch, `/ (root)`.
+`--delete` keeps the target an exact mirror, so a file removed here
+disappears there. Check `site/demo/pkg/` first: the demo loads
+`kevy.wasm` / `kevy.js` from it, and those are build artifacts that must
+be refreshed from `crates/kevy-wasm/pkg/` whenever the wasm changes (see
+the wasm bump step in the release checklist).
 
-DNS (at the golia.jp zone): a `CNAME` record for `kevy` pointing at
-`goliajp.github.io.`. Certificate provisioning after the DNS change
-takes a few minutes; **Enforce HTTPS** becomes tickable when it is done.
+The `CNAME` file is a leftover of an earlier GitHub Pages plan. It is
+harmless on a plain static host and is kept only so the directory stays
+portable; the live domain is configured on the box, not by this file.
 
 ## Header requirements: none
 
