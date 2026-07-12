@@ -55,6 +55,9 @@ export class Kevy {
   get(key: Bytes): Uint8Array | undefined;
   /** GET decoded as UTF-8 text. */
   getText(key: Bytes): string | undefined;
+  /** Read many keys in one crossing into wasm; `undefined` per miss. */
+  mget(keys: Bytes[]): (Uint8Array | undefined)[];
+  mgetText(keys: Bytes[]): (string | undefined)[];
   /** DEL. True if the key existed. */
   del(key: Bytes): boolean;
   /** EXISTS. */

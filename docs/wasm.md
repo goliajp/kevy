@@ -84,7 +84,7 @@ values are genuinely binary, not strings.
 
 kevy's zero-dependency law extends to the toolchain: there is no
 binding generator on either side. The [`kevy-wasm`](https://docs.rs/kevy-wasm)
-crate exports a flat, hand-written C ABI — 29 `extern "C"` symbols —
+crate exports a flat, hand-written C ABI — 30 `extern "C"` symbols —
 and `pkg/kevy.js` is a hand-written loader that owns the TypedArray
 boundary, the UTF-8 codecs, the persistence pump, and the cross-tab
 bridge. The conventions:

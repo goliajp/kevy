@@ -234,3 +234,52 @@ pub unsafe extern "C" fn kevy_keys(h: u32, pp: *const u8, pl: u32, limit: u32) -
         keys.len() as i32
     })
 }
+
+/// `MGET key…` — read many keys in ONE crossing.
+///
+/// The per-call cost of a wasm KV read is dominated not by the lookup but
+/// by the boundary: encoding the key into linear memory, the call itself,
+/// and copying the value back out. For a small value that crossing costs
+/// more than the lookup. Batching amortizes it across `count` keys — it
+/// does not remove it, so a single small read still loses to a native
+/// synchronous `localStorage.getItem`, which crosses nothing.
+///
+/// Argument buffer: `count` entries of `[len: u32 LE][key bytes]`.
+/// Result buffer: `count` entries of `[len: u32 LE][value bytes]`, where
+/// `len == u32::MAX` marks a miss (absent or expired) and is followed by
+/// no bytes. Returns the entry count, or an error status.
+///
+/// # Safety
+///
+/// Pointer/length pairs follow the [`crate::arg`] contract.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kevy_mget(h: u32, kp: *const u8, kl: u32, count: u32) -> i32 {
+    // SAFETY: loader-staged argument buffer, live for this call.
+    let buf = unsafe { arg(kp, kl) };
+    if count > i32::MAX as u32 {
+        return ERR;
+    }
+    with(h, BAD_HANDLE, |inst| {
+        inst.out.clear();
+        let mut off = 0usize;
+        for _ in 0..count {
+            // Each entry: a u32 length header, then that many key bytes.
+            // A truncated buffer is a caller bug, not a miss — fail loudly.
+            let Some(hdr) = buf.get(off..off + 4) else { return ERR };
+            let len = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize;
+            off += 4;
+            let Some(key) = buf.get(off..off + len) else { return ERR };
+            off += len;
+            match inst.store.get(key) {
+                Ok(Some(v)) => {
+                    inst.out.extend_from_slice(&(v.len() as u32).to_le_bytes());
+                    inst.out.extend_from_slice(&v);
+                }
+                // The miss sentinel: no value bytes follow.
+                Ok(None) => inst.out.extend_from_slice(&u32::MAX.to_le_bytes()),
+                Err(e) => return inst.fail(e),
+            }
+        }
+        count as i32
+    })
+}
