@@ -98,6 +98,9 @@ jobs:
       - name: CJK punctuation (no half-width commas in Chinese/Japanese prose)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_cjk_punct.py
+      - name: site links (no dead internal link in site/)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python3 tools/check_links.py
       - name: locgate (files ≤500 LOC, fns ≤50 or waivered)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: bash bench/locgate.sh

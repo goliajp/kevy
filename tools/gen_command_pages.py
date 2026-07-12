@@ -352,7 +352,10 @@ def render_index(lang):
 {THEME_JS}</body>
 </html>
 """
-    return head(f"{LANGS[lang]['commands']} — {L['title_suffix']}", lang, 3, L["index_lede"]) + mast(lang, 3, "") + body
+    # site/docs/commands/           -> up 2
+    # site/{zh,ja}/docs/commands/    -> up 3
+    d = 2 + (0 if lang == "en" else 1)
+    return head(f"{LANGS[lang]['commands']} — {L['title_suffix']}", lang, d, L["index_lede"]) + mast(lang, d, "") + body
 
 
 def render_command(c, lang, siblings):
@@ -424,7 +427,10 @@ def render_command(c, lang, siblings):
 {THEME_JS}</body>
 </html>
 """
-    return head(f"{c['name']} — {L['title_suffix']}", lang, 4, desc) + mast(lang, 4, f"{c['name']}/") + body
+    # site/docs/commands/SET/          -> up 3
+    # site/{zh,ja}/docs/commands/SET/  -> up 4
+    d = 3 + (0 if lang == "en" else 1)
+    return head(f"{c['name']} — {L['title_suffix']}", lang, d, desc) + mast(lang, d, f"{c['name']}/") + body
 
 
 def main():
