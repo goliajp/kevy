@@ -12,7 +12,7 @@ No replication config (`role = "standalone"`, the default). Every write is ackno
 
 ### Primary + replicas
 
-```toml
+```toml,fragment
 # primary                          # each replica
 [replication]                      [replication]
 role = "primary"                   role = "replica"

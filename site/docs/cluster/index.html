@@ -63,6 +63,7 @@
 <p>Whole-keyspace commands (<code>KEYS</code>, <code>SCAN</code>, <code>DBSIZE</code>, <code>FLUSHALL</code>) stay whole-keyspace on every port — kevy fans them out internally so a client doesn't have to.</p>
 <h2 id="enabling-it">Enabling it</h2>
 <figure class="code"><pre><code class="lang-toml"># kevy.toml
+[server]
 port = 6004
 
 [cluster]
@@ -109,12 +110,14 @@ let reply = cc.request_unkeyed(&amp;[b"PING".to_vec()])?;
 <h2 id="primary-and-replicas">Primary and replicas</h2>
 <p>A kevy server can be a primary streaming its write log, or a replica that mirrors one (the default role is <code>standalone</code> — replication dormant). The primary binds a dedicated replication listener per shard; replicas connect, hand over their last-applied offset, and apply the streamed frames onto local shards. Chain replication (replica-of-replica) is not supported.</p>
 <figure class="code"><pre><code class="lang-toml"># primary.toml
+[server]
 port = 6004
 
 [replication]
 role             = "primary"
 listen_port_base = 16004    # optional; defaults to port + 10000</code></pre></figure>
 <figure class="code"><pre><code class="lang-toml"># replica.toml
+[server]
 port = 6004
 
 [replication]

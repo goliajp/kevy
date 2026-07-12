@@ -28,15 +28,17 @@ kevy 如何让数据扛过重启——AOF、快照、fsync 策略、重写/压�
 
 ```toml
 # kevy.toml
-dir         = "/var/lib/kevy"
-port        = 6379
-threads     = 4
-appendonly  = true
+[server]
+data_dir = "/var/lib/kevy"
+port     = 6379
+threads  = 4
 
+[persistence]
+aof = true
 # AOF durability — see the knobs table below for the full set.
 appendfsync                 = "everysec"   # always | everysec | no
-auto_aof_rewrite_percentage = 100          # rewrite when AOF doubles since last rewrite
-auto_aof_rewrite_min_size   = 67108864     # …and is at least 64 MiB
+auto_aof_rewrite_percentage = 100          # rewrite when the AOF doubles since the last rewrite
+auto_aof_rewrite_min_size   = "64mb"       # …and is at least this big
 ```
 
 通过 RESP 用标准的 Redis 风格命令操作：
@@ -118,10 +120,10 @@ fn main() -> kevy_embedded::KevyResult<()> {
 | 旋钮 | 服务器（TOML / `CONFIG SET`）| 嵌入式（`Config::…`）| 默认值 | 备注 |
 |---|---|---|---|---|
 | AOF fsync 策略 | `appendfsync`（`always` / `everysec` / `no`）| `with_appendfsync(AppendFsync::…)` | `EverySec` | 服务器侧可在线调整。 |
-| AOF 开关 | `appendonly`（`true` / `false`）| 由 `with_persist(...)` 隐式开启 | `true`（服务器）；嵌入式在调用 `with_persist` 前关闭 | 关闭后跳过一切磁盘持久化。 |
+| AOF 开关 | `aof`（`true` / `false`）| 由 `with_persist(...)` 隐式开启 | `true`（服务器）；嵌入式在调用 `with_persist` 前关闭 | 关闭后跳过一切磁盘持久化。 |
 | 自动重写百分比 | `auto_aof_rewrite_percentage` | `with_auto_aof_rewrite(pct, min)` 的第一个参数 | `100` | 设为 `0` 关闭自动重写。 |
 | 自动重写最小体积 | `auto_aof_rewrite_min_size` | `with_auto_aof_rewrite(pct, min)` 的第二个参数 | `67108864`（64 MiB）| 两个阈值同时满足才触发自动重写。 |
-| 持久化目录 | `dir` / 环境变量 `KEVY_DIR` | `with_persist(path)` | 服务器 `./data`；嵌入式无 | 每个 kevy 实例一个目录。 |
+| 持久化目录 | `data_dir` / 环境变量 `KEVY_DIR` | `with_persist(path)` | 服务器 `./data`；嵌入式无 | 每个 kevy 实例一个目录。 |
 | reactor / reaper 节拍 | reactor tick，约 100 ms | 后台 reaper，或自行调用 `Store::tick` | 约 100 ms | 驱动 `EverySec` 刷盘、自动重写检查、TTL 清理。 |
 
 ### 触发面

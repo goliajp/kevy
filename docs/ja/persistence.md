@@ -28,15 +28,17 @@ kevyが再起動をまたいでデータを保持する仕組みを説明しま�
 
 ```toml
 # kevy.toml
-dir         = "/var/lib/kevy"
-port        = 6379
-threads     = 4
-appendonly  = true
+[server]
+data_dir = "/var/lib/kevy"
+port     = 6379
+threads  = 4
 
-# AOF 耐久性 — 全ノブは下の表を参照。
+[persistence]
+aof = true
+# AOF durability — see the knobs table below for the full set.
 appendfsync                 = "everysec"   # always | everysec | no
-auto_aof_rewrite_percentage = 100          # 前回リライト時から AOF が倍増したらリライト
-auto_aof_rewrite_min_size   = 67108864     # …かつ少なくとも 64 MiB
+auto_aof_rewrite_percentage = 100          # rewrite when the AOF doubles since the last rewrite
+auto_aof_rewrite_min_size   = "64mb"       # …and is at least this big
 ```
 
 運用は通常のRedisスタイルのコマンドをRESP経由で行えます。
@@ -118,10 +120,10 @@ fn main() -> kevy_embedded::KevyResult<()> {
 | ノブ | サーバー（TOML / `CONFIG SET`） | 組み込み（`Config::…`） | デフォルト | 備考 |
 |---|---|---|---|---|
 | AOF fsyncポリシー | `appendfsync`（`always` / `everysec` / `no`） | `with_appendfsync(AppendFsync::…)` | `EverySec` | サーバーではライブ変更可能。 |
-| AOF有効化 | `appendonly`（`true` / `false`） | `with_persist(...)`で暗黙的に | サーバーは`true`、組み込みは`with_persist`までオフ | 無効化するとオンディスク永続化を丸ごとスキップ。 |
+| AOF有効化 | `aof`（`true` / `false`） | `with_persist(...)`で暗黙的に | サーバーは`true`、組み込みは`with_persist`までオフ | 無効化するとオンディスク永続化を丸ごとスキップ。 |
 | 自動リライトのパーセンテージ | `auto_aof_rewrite_percentage` | `with_auto_aof_rewrite(pct, min)`の第1引数 | `100` | `0`で自動リライトを無効化。 |
 | 自動リライトの最小サイズ | `auto_aof_rewrite_min_size` | `with_auto_aof_rewrite(pct, min)`の第2引数 | `67108864`（64 MiB） | 両方の閾値を満たしたときだけ自動リライトが発火。 |
-| 永続化ディレクトリ | `dir` / 環境変数`KEVY_DIR` | `with_persist(path)` | サーバーは`./data`、組み込みはなし | kevyインスタンスごとに1ディレクトリ。 |
+| 永続化ディレクトリ | `data_dir` / 環境変数`KEVY_DIR` | `with_persist(path)` | サーバーは`./data`、組み込みはなし | kevyインスタンスごとに1ディレクトリ。 |
 | リアクター/リーパー周期 | reactor tick、約100ms | バックグラウンドリーパー、または`Store::tick`の呼び出し | 約100ms | `EverySec`のflush、自動リライトのチェック、TTLエビクションを駆動。 |
 
 ### トリガー一覧
@@ -262,7 +264,7 @@ TTLがあるはずなのに`expire_pending_count() == 0`が返るなら、それ
 
 ## リカバリポイント（v2.3）
 
-変更フィードを有効にすると（`[feed] enabled = true`、[cdc.md](../cdc.md)を参照）、すべてのスナップショットが採取時点のフィードカーソルを記録します。カーソルはスナップショットデータ自体と同じ追記禁止ウィンドウ内で凍結されます。これがリカバリポイント契約を与えます：
+変更フィードを有効にすると（`[feed] enabled = true`、[cdc.md](cdc.md)を参照）、すべてのスナップショットが採取時点のフィードカーソルを記録します。カーソルはスナップショットデータ自体と同じ追記禁止ウィンドウ内で凍結されます。これがリカバリポイント契約を与えます：
 
 > **スナップショットS + Sに記録されたカーソル以降のフィードフレーム = それ以降の任意のカーソルにおける正確な状態。**
 

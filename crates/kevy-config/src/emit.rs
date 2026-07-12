@@ -277,9 +277,9 @@ fn push_cluster(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "cluster", "node_id", toml_string(&cl.node_id));
     push(v, "cluster", "elect_port_base", cl.elect_port_base.to_string());
     let peers: Vec<String> = cl.peers.iter().map(PeerEntry::to_token).collect();
-    push(v, "cluster", "peers", toml_string(&peers.join(",")));
+    push(v, "cluster", "peers", toml_array(&peers));
     let scopes: Vec<String> = cl.scopes.iter().map(ScopeEntry::to_token).collect();
-    push(v, "cluster", "scopes", toml_string(&scopes.join(",")));
+    push(v, "cluster", "scopes", toml_array(&scopes));
 }
 
 fn push_replication(v: &mut Vec<CanonicalPair>, cfg: &Config) {
@@ -320,7 +320,7 @@ fn push_replication(v: &mut Vec<CanonicalPair>, cfg: &Config) {
 
 fn push_lua(v: &mut Vec<CanonicalPair>, cfg: &Config) {
     push(v, "lua", "time_limit_ms", cfg.lua.time_limit_ms.to_string());
-    push(v, "lua", "allow_dialects", toml_string(&cfg.lua.allow_dialects.join(",")));
+    push(v, "lua", "allow_dialects", toml_array(&cfg.lua.allow_dialects));
 }
 
 fn push_metrics(v: &mut Vec<CanonicalPair>, cfg: &Config) {
@@ -347,6 +347,23 @@ fn push(v: &mut Vec<CanonicalPair>, section: &'static str, key: &'static str, va
 
 fn log_output_str(o: &LogOutput) -> String {
     o.as_str().into_owned()
+}
+
+/// `["a", "b"]` — the canonical TOML form for a list.
+///
+/// Emitting `"a,b"` instead would mean a user who wrote an array got a string
+/// back the first time anything rewrote their config. The parser still reads
+/// both; only one of them is worth writing.
+fn toml_array(items: &[String]) -> String {
+    let mut out = String::from("[");
+    for (i, it) in items.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&toml_string(it));
+    }
+    out.push(']');
+    out
 }
 
 fn toml_string(s: &str) -> String {

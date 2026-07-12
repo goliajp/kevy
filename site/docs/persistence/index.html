@@ -50,15 +50,17 @@
 <h3 id="server-mode">Server mode</h3>
 <p>Drop this into <code>kevy.toml</code> and launch with <code>kevy --config kevy.toml</code>:</p>
 <figure class="code"><pre><code class="lang-toml"># kevy.toml
-dir         = "/var/lib/kevy"
-port        = 6379
-threads     = 4
-appendonly  = true
+[server]
+data_dir = "/var/lib/kevy"
+port     = 6379
+threads  = 4
 
+[persistence]
+aof = true
 # AOF durability — see the knobs table below for the full set.
 appendfsync                 = "everysec"   # always | everysec | no
-auto_aof_rewrite_percentage = 100          # rewrite when AOF doubles since last rewrite
-auto_aof_rewrite_min_size   = 67108864     # …and is at least 64 MiB</code></pre></figure>
+auto_aof_rewrite_percentage = 100          # rewrite when the AOF doubles since the last rewrite
+auto_aof_rewrite_min_size   = "64mb"       # …and is at least this big</code></pre></figure>
 <p>Operate it with standard Redis-style commands over RESP:</p>
 <figure class="code"><pre><code class="lang-text">$ redis-cli -p 6379 BGSAVE
 Background saving started
@@ -118,7 +120,7 @@ fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
 <p>A fresh embedded store with the default config writes only the AOF — no snapshot file appears until <code>save_snapshot</code> runs. That is expected; the AOF on its own is enough to rebuild the keyspace.</p>
 <h2 id="configuration-knobs">Configuration knobs</h2>
 <h3 id="durability-and-aof-growth">Durability and AOF growth</h3>
-<div class="tbl"><table><thead><tr><th>Knob</th><th>Server (TOML / <code>CONFIG SET</code>)</th><th>Embedded (<code>Config::…</code>)</th><th>Default</th><th>Notes</th></tr></thead><tbody><tr><td>AOF fsync policy</td><td><code>appendfsync</code> (<code>always</code> / <code>everysec</code> / <code>no</code>)</td><td><code>with_appendfsync(AppendFsync::…)</code></td><td><code>EverySec</code></td><td>Live-tunable on the server.</td></tr><tr><td>AOF enabled</td><td><code>appendonly</code> (<code>true</code> / <code>false</code>)</td><td>implied by <code>with_persist(...)</code></td><td><code>true</code> (server), off until <code>with_persist</code></td><td>Disabling skips all on-disk persistence.</td></tr><tr><td>Auto-rewrite percentage</td><td><code>auto_aof_rewrite_percentage</code></td><td>first arg of <code>with_auto_aof_rewrite(pct, min)</code></td><td><code>100</code></td><td><code>0</code> disables auto-rewrite.</td></tr><tr><td>Auto-rewrite minimum size</td><td><code>auto_aof_rewrite_min_size</code></td><td>second arg of <code>with_auto_aof_rewrite(pct, min)</code></td><td><code>67108864</code> (64 MiB)</td><td>Auto-rewrite fires only when both thresholds are met.</td></tr><tr><td>Persistence directory</td><td><code>dir</code> / env <code>KEVY_DIR</code></td><td><code>with_persist(path)</code></td><td><code>./data</code> (server); none (embedded)</td><td>One directory per kevy instance.</td></tr><tr><td>Reactor / reaper cadence</td><td>reactor tick, ~100 ms</td><td>background reaper, or your <code>Store::tick</code> calls</td><td>~100 ms</td><td>Drives <code>EverySec</code> flush, auto-rewrite checks, TTL eviction.</td></tr></tbody></table></div>
+<div class="tbl"><table><thead><tr><th>Knob</th><th>Server (TOML / <code>CONFIG SET</code>)</th><th>Embedded (<code>Config::…</code>)</th><th>Default</th><th>Notes</th></tr></thead><tbody><tr><td>AOF fsync policy</td><td><code>appendfsync</code> (<code>always</code> / <code>everysec</code> / <code>no</code>)</td><td><code>with_appendfsync(AppendFsync::…)</code></td><td><code>EverySec</code></td><td>Live-tunable on the server.</td></tr><tr><td>AOF enabled</td><td><code>aof</code> (<code>true</code> / <code>false</code>)</td><td>implied by <code>with_persist(...)</code></td><td><code>true</code> (server), off until <code>with_persist</code></td><td>Disabling skips all on-disk persistence.</td></tr><tr><td>Auto-rewrite percentage</td><td><code>auto_aof_rewrite_percentage</code></td><td>first arg of <code>with_auto_aof_rewrite(pct, min)</code></td><td><code>100</code></td><td><code>0</code> disables auto-rewrite.</td></tr><tr><td>Auto-rewrite minimum size</td><td><code>auto_aof_rewrite_min_size</code></td><td>second arg of <code>with_auto_aof_rewrite(pct, min)</code></td><td><code>67108864</code> (64 MiB)</td><td>Auto-rewrite fires only when both thresholds are met.</td></tr><tr><td>Persistence directory</td><td><code>data_dir</code> / env <code>KEVY_DIR</code></td><td><code>with_persist(path)</code></td><td><code>./data</code> (server); none (embedded)</td><td>One directory per kevy instance.</td></tr><tr><td>Reactor / reaper cadence</td><td>reactor tick, ~100 ms</td><td>background reaper, or your <code>Store::tick</code> calls</td><td>~100 ms</td><td>Drives <code>EverySec</code> flush, auto-rewrite checks, TTL eviction.</td></tr></tbody></table></div>
 <h3 id="trigger-surface">Trigger surface</h3>
 <div class="tbl"><table><thead><tr><th>Action</th><th>Server</th><th>Embedded</th><th>Blocking shape</th></tr></thead><tbody><tr><td>Synchronous snapshot</td><td><code>SAVE</code></td><td><code>Store::save_snapshot()</code></td><td>Returns after the file is on disk; locks held only for freeze + rename.</td></tr><tr><td>Background snapshot</td><td><code>BGSAVE</code></td><td>call <code>save_snapshot</code> from a worker thread</td><td>Returns immediately; commit lands within one reactor tick of the disk write finishing.</td></tr><tr><td>AOF rewrite</td><td><code>BGREWRITEAOF</code></td><td><code>Store::rewrite_aof()</code></td><td>Returns after the atomic rename; serialization runs with the keyspace live.</td></tr><tr><td>Live-tune fsync</td><td><code>CONFIG SET appendfsync everysec</code></td><td>rebuild <code>Config</code></td><td>n/a</td></tr><tr><td>Graceful shutdown</td><td>`SHUTDOWN [SAVE\</td><td>NOSAVE]` (or SIGTERM)</td><td>drop the last <code>Store</code> clone</td><td>Drains every shard: in-flight persist jobs land, the AOF tail is force-fsynced, then the process exits. <code>SAVE</code> additionally takes one final snapshot per shard. No reply is sent — the client observes the connection closing (Redis behavior).</td></tr></tbody></table></div>
 <h3 id="fsync-policy-semantics">fsync policy semantics</h3>

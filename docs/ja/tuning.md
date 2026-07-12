@@ -94,7 +94,7 @@ redis-cli -s /tmp/kevy.sock SET foo bar
 
 ### レプリケーションと可用性
 
-プライマリ/レプリカのトポロジで動かすときだけ関係します（[docs/replication.md](replication.md)、[docs/availability.md](../availability.md)）。
+プライマリ/レプリカのトポロジで動かすときだけ関係します（[docs/replication.md](replication.md)、[docs/availability.md](availability.md)）。
 
 **ポートレイアウト。** 各ノードは3つのプレーンを使い、デフォルトではすべてクライアントポートから導出されます：
 
@@ -106,7 +106,7 @@ redis-cli -s /tmp/kevy.sock SET foo bar
 
 1台のマシンに複数インスタンスを同居させる場合は、クライアントポートを最低`nshards`離してください。そうしないとデフォルトのレプリケーションレンジが衝突します。`FAILOVER`と自動再ターゲットは`port + 10000`の慣習を前提にしているため、フェイルオーバーを使うデプロイでは`listen_port_base`をデフォルトのままにしてください。
 
-**整合性ノブ。** 2つの`[replication]`キーで、可用性とより強い保証を交換できます（ラダーの全体像は[docs/availability.md](../availability.md)）:
+**整合性ノブ。** 2つの`[replication]`キーで、可用性とより強い保証を交換できます（ラダーの全体像は[docs/availability.md](availability.md)）:
 
 | ノブ | デフォルト | 何をするか |
 |------|---------|--------------|

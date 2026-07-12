@@ -50,15 +50,17 @@
 <h3 id="服务器模式">服务器模式</h3>
 <p>把下面的内容写进 <code>kevy.toml</code>，然后用 <code>kevy --config kevy.toml</code> 启动：</p>
 <figure class="code"><pre><code class="lang-toml"># kevy.toml
-dir         = "/var/lib/kevy"
-port        = 6379
-threads     = 4
-appendonly  = true
+[server]
+data_dir = "/var/lib/kevy"
+port     = 6379
+threads  = 4
 
+[persistence]
+aof = true
 # AOF durability — see the knobs table below for the full set.
 appendfsync                 = "everysec"   # always | everysec | no
-auto_aof_rewrite_percentage = 100          # rewrite when AOF doubles since last rewrite
-auto_aof_rewrite_min_size   = 67108864     # …and is at least 64 MiB</code></pre></figure>
+auto_aof_rewrite_percentage = 100          # rewrite when the AOF doubles since the last rewrite
+auto_aof_rewrite_min_size   = "64mb"       # …and is at least this big</code></pre></figure>
 <p>通过 RESP 用标准的 Redis 风格命令操作：</p>
 <figure class="code"><pre><code class="lang-text">$ redis-cli -p 6379 BGSAVE
 Background saving started
@@ -118,7 +120,7 @@ fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
 <p>默认配置下，新建的嵌入式 store 只写 AOF—— <code>save_snapshot</code> 跑过之前不会出现快照文件。这是预期行为：单凭 AOF 已足够重建键空间。</p>
 <h2 id="配置旋钮">配置旋钮</h2>
 <h3 id="耐久性与-aof-增长">耐久性与 AOF 增长</h3>
-<div class="tbl"><table><thead><tr><th>旋钮</th><th>服务器（TOML / <code>CONFIG SET</code>）</th><th>嵌入式（<code>Config::…</code>）</th><th>默认值</th><th>备注</th></tr></thead><tbody><tr><td>AOF fsync 策略</td><td><code>appendfsync</code>（<code>always</code> / <code>everysec</code> / <code>no</code>）</td><td><code>with_appendfsync(AppendFsync::…)</code></td><td><code>EverySec</code></td><td>服务器侧可在线调整。</td></tr><tr><td>AOF 开关</td><td><code>appendonly</code>（<code>true</code> / <code>false</code>）</td><td>由 <code>with_persist(...)</code> 隐式开启</td><td><code>true</code>（服务器）；嵌入式在调用 <code>with_persist</code> 前关闭</td><td>关闭后跳过一切磁盘持久化。</td></tr><tr><td>自动重写百分比</td><td><code>auto_aof_rewrite_percentage</code></td><td><code>with_auto_aof_rewrite(pct, min)</code> 的第一个参数</td><td><code>100</code></td><td>设为 <code>0</code> 关闭自动重写。</td></tr><tr><td>自动重写最小体积</td><td><code>auto_aof_rewrite_min_size</code></td><td><code>with_auto_aof_rewrite(pct, min)</code> 的第二个参数</td><td><code>67108864</code>（64 MiB）</td><td>两个阈值同时满足才触发自动重写。</td></tr><tr><td>持久化目录</td><td><code>dir</code> / 环境变量 <code>KEVY_DIR</code></td><td><code>with_persist(path)</code></td><td>服务器 <code>./data</code>；嵌入式无</td><td>每个 kevy 实例一个目录。</td></tr><tr><td>reactor / reaper 节拍</td><td>reactor tick，约 100 ms</td><td>后台 reaper，或自行调用 <code>Store::tick</code></td><td>约 100 ms</td><td>驱动 <code>EverySec</code> 刷盘、自动重写检查、TTL 清理。</td></tr></tbody></table></div>
+<div class="tbl"><table><thead><tr><th>旋钮</th><th>服务器（TOML / <code>CONFIG SET</code>）</th><th>嵌入式（<code>Config::…</code>）</th><th>默认值</th><th>备注</th></tr></thead><tbody><tr><td>AOF fsync 策略</td><td><code>appendfsync</code>（<code>always</code> / <code>everysec</code> / <code>no</code>）</td><td><code>with_appendfsync(AppendFsync::…)</code></td><td><code>EverySec</code></td><td>服务器侧可在线调整。</td></tr><tr><td>AOF 开关</td><td><code>aof</code>（<code>true</code> / <code>false</code>）</td><td>由 <code>with_persist(...)</code> 隐式开启</td><td><code>true</code>（服务器）；嵌入式在调用 <code>with_persist</code> 前关闭</td><td>关闭后跳过一切磁盘持久化。</td></tr><tr><td>自动重写百分比</td><td><code>auto_aof_rewrite_percentage</code></td><td><code>with_auto_aof_rewrite(pct, min)</code> 的第一个参数</td><td><code>100</code></td><td>设为 <code>0</code> 关闭自动重写。</td></tr><tr><td>自动重写最小体积</td><td><code>auto_aof_rewrite_min_size</code></td><td><code>with_auto_aof_rewrite(pct, min)</code> 的第二个参数</td><td><code>67108864</code>（64 MiB）</td><td>两个阈值同时满足才触发自动重写。</td></tr><tr><td>持久化目录</td><td><code>data_dir</code> / 环境变量 <code>KEVY_DIR</code></td><td><code>with_persist(path)</code></td><td>服务器 <code>./data</code>；嵌入式无</td><td>每个 kevy 实例一个目录。</td></tr><tr><td>reactor / reaper 节拍</td><td>reactor tick，约 100 ms</td><td>后台 reaper，或自行调用 <code>Store::tick</code></td><td>约 100 ms</td><td>驱动 <code>EverySec</code> 刷盘、自动重写检查、TTL 清理。</td></tr></tbody></table></div>
 <h3 id="触发面">触发面</h3>
 <div class="tbl"><table><thead><tr><th>动作</th><th>服务器</th><th>嵌入式</th><th>阻塞形态</th></tr></thead><tbody><tr><td>同步快照</td><td><code>SAVE</code></td><td><code>Store::save_snapshot()</code></td><td>文件落盘后返回；锁只在冻结 + rename 期间持有。</td></tr><tr><td>后台快照</td><td><code>BGSAVE</code></td><td>在工作线程里调用 <code>save_snapshot</code></td><td>立即返回；磁盘写完后一个 reactor tick 内提交落地。</td></tr><tr><td>AOF 重写</td><td><code>BGREWRITEAOF</code></td><td><code>Store::rewrite_aof()</code></td><td>原子 rename 后返回；序列化期间键空间照常在线。</td></tr><tr><td>在线调整 fsync</td><td><code>CONFIG SET appendfsync everysec</code></td><td>重建 <code>Config</code></td><td>无</td></tr><tr><td>有序停机</td><td>`SHUTDOWN [SAVE\</td><td>NOSAVE]`（或 SIGTERM）</td><td>drop 最后一个 <code>Store</code> clone</td><td>逐 shard 排空：在途持久化任务落地、AOF 尾巴强制 fsync，然后进程退出。<code>SAVE</code> 额外为每个 shard 拍一张最终快照。不发送回复——客户端观察到连接关闭（Redis 行为）。</td></tr></tbody></table></div>
 <h3 id="fsync-策略语义">fsync 策略语义</h3>

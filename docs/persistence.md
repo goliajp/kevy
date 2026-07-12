@@ -28,15 +28,17 @@ Drop this into `kevy.toml` and launch with `kevy --config kevy.toml`:
 
 ```toml
 # kevy.toml
-dir         = "/var/lib/kevy"
-port        = 6379
-threads     = 4
-appendonly  = true
+[server]
+data_dir = "/var/lib/kevy"
+port     = 6379
+threads  = 4
 
+[persistence]
+aof = true
 # AOF durability — see the knobs table below for the full set.
 appendfsync                 = "everysec"   # always | everysec | no
-auto_aof_rewrite_percentage = 100          # rewrite when AOF doubles since last rewrite
-auto_aof_rewrite_min_size   = 67108864     # …and is at least 64 MiB
+auto_aof_rewrite_percentage = 100          # rewrite when the AOF doubles since the last rewrite
+auto_aof_rewrite_min_size   = "64mb"       # …and is at least this big
 ```
 
 Operate it with standard Redis-style commands over RESP:
@@ -118,10 +120,10 @@ A fresh embedded store with the default config writes only the AOF — no snapsh
 | Knob | Server (TOML / `CONFIG SET`) | Embedded (`Config::…`) | Default | Notes |
 |---|---|---|---|---|
 | AOF fsync policy | `appendfsync` (`always` / `everysec` / `no`) | `with_appendfsync(AppendFsync::…)` | `EverySec` | Live-tunable on the server. |
-| AOF enabled | `appendonly` (`true` / `false`) | implied by `with_persist(...)` | `true` (server), off until `with_persist` | Disabling skips all on-disk persistence. |
+| AOF enabled | `aof` (`true` / `false`) | implied by `with_persist(...)` | `true` (server), off until `with_persist` | Disabling skips all on-disk persistence. |
 | Auto-rewrite percentage | `auto_aof_rewrite_percentage` | first arg of `with_auto_aof_rewrite(pct, min)` | `100` | `0` disables auto-rewrite. |
 | Auto-rewrite minimum size | `auto_aof_rewrite_min_size` | second arg of `with_auto_aof_rewrite(pct, min)` | `67108864` (64 MiB) | Auto-rewrite fires only when both thresholds are met. |
-| Persistence directory | `dir` / env `KEVY_DIR` | `with_persist(path)` | `./data` (server); none (embedded) | One directory per kevy instance. |
+| Persistence directory | `data_dir` / env `KEVY_DIR` | `with_persist(path)` | `./data` (server); none (embedded) | One directory per kevy instance. |
 | Reactor / reaper cadence | reactor tick, ~100 ms | background reaper, or your `Store::tick` calls | ~100 ms | Drives `EverySec` flush, auto-rewrite checks, TTL eviction. |
 
 ### Trigger surface
