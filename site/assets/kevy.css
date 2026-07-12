@@ -497,13 +497,40 @@ pre code { background: 0; border: 0; padding: 0; font-size: inherit; white-space
 /* ══════════════════════════════════════════════════════ narrow */
 
 @media (max-width: 1000px) {
-  .nav { display: none; }
-  .drawer-btn { display: grid; }
+  /* The nav does NOT go away here. It used to hide behind a .drawer-btn that
+   * was never actually built, so every page below 1000px shipped with no
+   * navigation at all — you could reach the site and then not leave the page
+   * you landed on.
+   *
+   * Four links do not need a drawer. They wrap onto their own row and scroll
+   * sideways if they must: always visible, no JS, no focus trap, no aria dance,
+   * and nothing to forget to build. */
+  .mast-in {
+    flex-wrap: wrap;
+    height: auto;
+    padding-block: 10px;
+    row-gap: 8px;
+  }
+  .nav {
+    order: 3;
+    flex: 1 0 100%;
+    gap: 20px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+  .nav a { white-space: nowrap; }
+  .mast-right { margin-left: auto; }
+  .drawer-btn { display: none; }
+  /* The masthead is two rows now, so anything sticking below it must know. */
+  :root { --mast-h: 96px; }
 }
 
 @media (max-width: 640px) {
   body { font-size: 15.5px; }
-  :root { --mast-h: 56px; }
+  :root { --mast-h: 92px; }
   .mast-in { gap: 12px; }
   .band-head { flex-wrap: wrap; gap: 8px; }
   .band-head .rule { display: none; }
