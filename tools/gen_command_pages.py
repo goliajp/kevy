@@ -364,7 +364,7 @@ def render_command(c, lang, siblings):
     loc_compat = field(c, lang, "compat")
     compat_body = loc_compat
     if lang != "en":
-        # A native write-up already carries its own prefix («有差异:» / «差異あり。»).
+        # A native write-up already carries its own prefix («有差异：» / «差異あり。»).
         pass
     elif kind == "full":
         compat_body = L["compat_note_full"]

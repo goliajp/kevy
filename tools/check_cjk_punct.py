@@ -85,14 +85,24 @@ def main():
     if args:
         targets = [pathlib.Path(a) for a in args]
     else:
-        targets = [root / "site/zh", root / "site/ja", root / "docs/zh", root / "docs/ja"]
+        # The generators and the playground's script carry Chinese and Japanese
+        # string tables of their own. Checking only the rendered HTML would
+        # catch the mistake one step downstream of where it is fixable — and
+        # would miss it entirely in a string that is not rendered on every page.
+        targets = [
+            root / "site/zh", root / "site/ja",
+            root / "docs/zh", root / "docs/ja",
+            root / "site/assets", root / "site/data", root / "tools",
+        ]
 
     files = []
     for t in targets:
         if t.is_dir():
-            files += sorted(t.rglob("*.html")) + sorted(t.rglob("*.md"))
+            for ext in ("*.html", "*.md", "*.js", "*.py", "*.json"):
+                files += sorted(t.rglob(ext))
         elif t.exists():
             files.append(t)
+    files = sorted(set(files))
 
     total = 0
     for f in files:
