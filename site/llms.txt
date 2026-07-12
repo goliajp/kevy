@@ -9,6 +9,8 @@ is discoverable live via `COMMAND DOCS <verb>`, which answers with the same
 `complexity` and `compat` fields printed here; errors are self-explaining and
 their prefixes are a stable contract (docs/error-replies.md). This file is
 GENERATED from the server's verb metadata table — do not edit by hand.
+The full text of every document below is inlined at https://kevy.golia.jp/llms-full.txt,
+which is one fetch and needs no crawling.
 
 Read `compat` before you assume a verb behaves the way Redis's docs say. kevy
 is wire-compatible, not behaviour-identical, and the differences that matter
@@ -25,15 +27,15 @@ rather than seek.
 
 ## Docs
 
-- [Verb reference](docs/verb-reference.md): every verb, arity, flags, syntax
-- [Designing on kevy](docs/designing-on-kevy.md): the serving-engine model
-- [Cookbook](docs/cookbook.md): RDS-to-kevy modeling recipes
-- [RDS workloads](docs/rds-workloads.md): SQL-to-kevy reference matrix (types, SELECT, JOIN, transactions, DDL)
-- [Indexes](docs/indexes.md) · [Views](docs/views.md) · [Text search](docs/text-search.md) · [Vector search](docs/vector-search.md)
-- [CDC feeds](docs/cdc.md) · [Replication](docs/replication.md) · [Availability & failover](docs/availability.md) · [Persistence](docs/persistence.md)
-- [Migration](docs/migration.md) · [Upgrading between majors](docs/UPGRADING.md)
-- [WASM / browser](docs/wasm.md) · [IoT / embedded tiers](docs/iot.md)
-- [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
+- [Verb reference](https://kevy.golia.jp/docs/commands/): every verb, arity, flags, syntax
+- [Designing on kevy](https://kevy.golia.jp/docs/designing-on-kevy/): the serving-engine model
+- [Cookbook](https://kevy.golia.jp/docs/cookbook/): RDS-to-kevy modeling recipes
+- [RDS workloads](https://kevy.golia.jp/docs/rds-workloads/): SQL-to-kevy reference matrix (types, SELECT, JOIN, transactions, DDL)
+- [Indexes](https://kevy.golia.jp/docs/indexes/) · [Views](https://kevy.golia.jp/docs/views/) · [Text search](https://kevy.golia.jp/docs/text-search/) · [Vector search](https://kevy.golia.jp/docs/vector-search/)
+- [CDC feeds](https://kevy.golia.jp/docs/cdc/) · [Replication](https://kevy.golia.jp/docs/replication/) · [Availability & failover](https://kevy.golia.jp/docs/availability/) · [Persistence](https://kevy.golia.jp/docs/persistence/)
+- [Migration](https://kevy.golia.jp/docs/migration/) · [Upgrading between majors](https://kevy.golia.jp/docs/UPGRADING/)
+- [WASM / browser](https://kevy.golia.jp/docs/wasm/) · [IoT / embedded tiers](https://kevy.golia.jp/docs/iot/)
+- [Error contract](https://kevy.golia.jp/docs/error-replies/) · [Tuning](https://kevy.golia.jp/docs/tuning/)
 
 ## Verbs (184 total)
 

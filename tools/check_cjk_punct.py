@@ -32,9 +32,14 @@ BAD = ",.;:!?"
 # wrong as 「注意:レプリカ」 — the colon belongs to the Chinese clause that opened
 # it, not to the English word that happens to follow. An earlier version of this
 # gate let those through, and a native-speaker pass found them.
+# The digit exemption applies to the DOT only. `3.5` and markdown's `### 2. レ`
+# are legitimate; `4.0:什么会坏` is not — a colon after a version number is still
+# a Chinese colon, and it still has to be full-width. An earlier version of this
+# gate excused every mark that followed a digit and let that one through.
 PAT = re.compile(
     rf"(?:[{CJK}][{re.escape(BAD)}](?![\d])"
-    rf"|(?<![\d])[{re.escape(BAD)}][ \t]*[{CJK}])"
+    rf"|(?<![\d])\.[ \t]*[{CJK}]"
+    rf"|[,;:!?][ \t]*[{CJK}])"
 )
 
 # Regions where ASCII punctuation is the correct character: code, markup,
@@ -59,8 +64,13 @@ def blank(text):
     line-by-line, and a multi-line <pre> collapsed into spaces would shift every
     line number after it.
     """
+    # Filled with \x01, not spaces. A tag is a HARD boundary: the full stop that
+    # ends an English blurb inside <p>…</p> is not adjacent to the Chinese
+    # heading in the <h3> that follows it, even though only markup separates
+    # them in the byte stream. Filling with spaces made the matcher walk right
+    # across the tag and report a violation that was not there.
     def spaces(m):
-        return "".join("\n" if ch == "\n" else " " for ch in m.group(0))
+        return "".join("\n" if ch == "\n" else "\x01" for ch in m.group(0))
 
     for pat in STRIP:
         text = pat.sub(spaces, text)

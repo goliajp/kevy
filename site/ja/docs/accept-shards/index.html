@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>--accept-shards N — スパースなコネクションをシャードの部分集合に畳む — kevy</title>
+<meta name="description" content="--accept-shards Nは、リスナーのbindとacceptのarmをシャード0..Nだけに限定するようkevyに指示します。残りのシャードはcompute-onlyのワーカーとして残り、クロスシャードの読み書きは引き続き処理します。">
+<link rel="stylesheet" href="../../../assets/kevy.css">
+<link rel="stylesheet" href="../../../assets/docs.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../ja/docs/" aria-current="page">ドキュメント</a>
+      <a href="../../../ja/docs/commands/">コマンド</a>
+      <a href="../../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../../ja/play/">Playground</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language"><a href="../../../docs/accept-shards/">EN</a><a href="../../../zh/docs/accept-shards/">中文</a><a href="../../../ja/docs/accept-shards/" aria-current="page">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell">
+  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/accept-shards/" aria-current="page">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">184 コマンド全て</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1><code>--accept-shards N</code> — スパースなコネクションをシャードの部分集合に畳む</h1></div>
+<p><code>--accept-shards N</code>は、リスナーのbindと<code>accept</code>のarmをシャード<code>0..N</code>だけに限定するようkevyに指示します。残りのシャードはcompute-onlyのワーカーとして残り、クロスシャードの読み書きは引き続き処理します。</p>
+<h2 id="このドキュメントが必要になるとき">このドキュメントが必要になるとき</h2>
+<p>kevyの各シャードは、busy-pollの本体を持つ独自のリアクターを回しています。この本体がイテレーションごとのオーバーヘッド（wakerのdrain、inboxのチェック、acceptのarm）を償却できるのは、各イテレーションが十分な数の生産的イベントを見るときだけです。<code>concurrent_conns / threads</code>がおおよそ1を下回ると、どのシャードもイテレーションの大半を遊休状態で過ごすようになり、集計スループットは同じマシン上で1〜2スレッドのサーバーが出す値を下回ります。</p>
+<p><code>--accept-shards N</code>に手を伸ばすのは、次のような場合です。</p>
+<ul><li>クライアント数が少なく、既知である（典型的なアプリサーバー、レプリケーションのフォロワー、内部サービス）。</li><li>それでも<code>--threads</code>はコア数に合わせておきたい（クロスシャードホップ時のキー空間並列性のため）。</li><li>ベンチマークが「シャードを増やすとスループットが上がるどころか下がる」と示している。</li></ul>
+<p>コネクション数が多い（平均してシャードあたり1コネクション以上）、予測できない、あるいはthundering herd型のクライアントプールに駆動されている場合は、設定しないでください。そこでは「全シャードがacceptする」というデフォルトが正解です。</p>
+<h2 id="中心となる考え方">中心となる考え方</h2>
+<p>accept集合は起動時に静的に宣言されます。集合の内側のシャードはリスナーfdをbindし、<code>accept</code>のSQEをarmします。外側のシャードはそのどちらもしないため、カーネルの<code>SO_REUSEPORT</code>グループがSYNをそちらへルーティングすることはありません。accept集合の外にいるシャードも、自分のキー空間スライスは所有し続け、クロスシャードのinboxもdrainし続けます。したがって、そのスライスにハッシュされる書き込みはそこへディスパッチされて実行され、応答は所有コネクションのシャードを通って戻ります。ステートレスシャードのモデルは無傷です——どのシャードもまったく同じコードパスを走り、ただ一部がたまたまコネクションを1本も持たない、というだけです。</p>
+<figure class="code"><pre><code>                      clients (SO_REUSEPORT group)
+                                 |
+                  +--------------+--------------+
+                  |              |              |
+              shard 0        shard 1        shard 2          &lt;-- accept-set (--accept-shards 3)
+              listen + accept + own conns + own keyspace slice
+                  |              |              |
+                  +------ cross-shard dispatch -------+
+                  |       |       |       |       |       |
+              shard 3  shard 4  shard 5  shard 6  shard 7  shard 8  shard 9   &lt;-- compute-only
+              no listener, no accept; execute dispatched cmds, own keyspace slice</code></pre></figure>
+<h2 id="動かしてみる例">動かしてみる例</h2>
+<p>10スレッド、accept 3シャード、標準のRedisポートでlistenする場合。</p>
+<figure class="code"><pre><code class="lang-sh">kevy --threads 10 --accept-shards 3 --port 6379</code></pre></figure>
+<p>環境変数での同等指定。</p>
+<figure class="code"><pre><code class="lang-sh">KEVY_THREADS=10 KEVY_ACCEPT_SHARDS=3 kevy --port 6379</code></pre></figure>
+<p>TOML（<code>kevy.toml</code>）での同等指定。</p>
+<figure class="code"><pre><code class="lang-toml">[server]
+threads = 10
+accept_shards = 3
+port = 6379</code></pre></figure>
+<p>優先順位はCLI &gt; env &gt; TOML &gt; デフォルトです。<code>accept_shards</code>は<code>1 &lt;= accept_shards &lt;= threads</code>を満たす必要があり、この範囲を外れると起動時に終了コード2でfail fastします。デフォルトは未設定で、その場合は全シャードがacceptし、バイナリはこのフラグのないビルドとバイト単位で同一に振る舞います。</p>
+<h2 id="サイジングの経験則">サイジングの経験則</h2>
+<p>目安は<code>accept_shards ≈ ceil(conns / 20)</code>です。経験的なスイートスポットは、各acceptシャードがおおよそ15〜25コネクションを持つプラトーです——busy-pollの本体が償却できる程度には密で、クロスシャードのディスパッチがinboxチャネルを飽和させない程度には疎、という帯域です。</p>
+<div class="tbl"><table><thead><tr><th style="text-align:right">同時コネクション数</th><th style="text-align:right">threads</th><th style="text-align:right">推奨<code>--accept-shards</code></th><th style="text-align:right">acceptシャードあたりのconns</th></tr></thead><tbody><tr><td style="text-align:right">10</td><td style="text-align:right">10</td><td style="text-align:right">1</td><td style="text-align:right">10</td></tr><tr><td style="text-align:right">20</td><td style="text-align:right">10</td><td style="text-align:right">1</td><td style="text-align:right">20</td></tr><tr><td style="text-align:right">50</td><td style="text-align:right">10</td><td style="text-align:right">2または3</td><td style="text-align:right">25または17</td></tr><tr><td style="text-align:right">100</td><td style="text-align:right">10</td><td style="text-align:right">5</td><td style="text-align:right">20</td></tr><tr><td style="text-align:right">200</td><td style="text-align:right">10</td><td style="text-align:right">10（デフォルト、未設定）</td><td style="text-align:right">20</td></tr><tr><td style="text-align:right">50</td><td style="text-align:right">16</td><td style="text-align:right">2または3</td><td style="text-align:right">25または17</td></tr><tr><td style="text-align:right">100</td><td style="text-align:right">16</td><td style="text-align:right">5または6</td><td style="text-align:right">20または17</td></tr><tr><td style="text-align:right">500</td><td style="text-align:right">16</td><td style="text-align:right">16（デフォルト、未設定）</td><td style="text-align:right">31</td></tr></tbody></table></div>
+<p>代表的な<code>--threads 10 -c 50 -d 65536</code> SETワークロードでは、<code>--accept-shards 3</code>が50コネクションを約5/シャードから約17/シャードへ畳むことで、デフォルト比+10.6%のスループットを引き出します。同じプラトーは<code>--accept-shards 2</code>（25 conns/シャード）でも成立します。</p>
+<h2 id="トレードオフ">トレードオフ</h2>
+<div class="tbl"><table><thead><tr><th>観点</th><th>accept集合のシャード</th><th>compute-onlyのシャード</th></tr></thead><tbody><tr><td>busy-pollの償却</td><td>高い（自前のコネクションのfan-inがイテレーションごとの仕事を生む）</td><td>クロスシャードのinboxレートに依存</td></tr><tr><td>コネクションごとの読み書きコスト</td><td>ローカル、ホップなし</td><td>該当なし（所有コネクションがない）</td></tr><tr><td>クロスシャードのディスパッチコスト</td><td>ホップごとにチャネル送信1回</td><td>チャネル受信1回 + 実行 + 応答送信1回</td></tr><tr><td>キー空間の所有</td><td>自分のスライスを所有</td><td>自分のスライスを所有</td></tr><tr><td>遊休時のCPU下限</td><td>acceptがarmされ、<code>io_uring_enter</code>でブロックする</td><td><code>URING_SPIN_LIMIT</code>までスピンしてからブロックする</td></tr><tr><td>テール遅延への影響</td><td>acceptのSQEがホットループに仕事を足す</td><td>ホットループはよりきれい。クロスシャードホップがチャネル1回分を足す</td></tr></tbody></table></div>
+<p>具体的には、<code>N</code>を小さく選ぶほど各コネクションはホットなacceptシャードの恩恵を受けますが、クロスシャードホップを踏む書き込みの割合は高くなります（全キーのうち<code>(threads - N) / threads</code>）。conns/シャード ≈ 15〜25のプラトーは、busy-pollの利得が追加のホップ代を払える場所です。それを大きく下回るとディスパッチのコストが支配し、大きく上回れば未設定のデフォルトに戻っただけになります。</p>
+<h2 id="faq">FAQ</h2>
+<p><b><code>--accept-shards</code>は常に設定すべきですか？</b> いいえ。平均して<code>concurrent_conns / threads &gt;= 1</code>なら、デフォルト（全シャードがaccept）がすでに最適です——busy-pollの本体は助けなしに償却できます。<code>--accept-shards</code>は、シャードを増やすとスループットが落ちるスパースコネクション領域のためのものです。</p>
+<p><b>自分のワークロードで<code>N</code>をどう選べばいいですか？</b> 目安の<code>ceil(conns / 20)</code>から始めてください。perfgateで<code>{ceil(conns/25), ceil(conns/20), ceil(conns/15)}</code>にわたって<code>N</code>をスイープし、目標のテール遅延予算のもとでスループットが最大になるものを選びます。15〜25 conns/シャードのプラトー上ならどこでも、本番設定として安全です。</p>
+<p><b>レプリケーション、AOF、永続化を壊しませんか？</b> 壊しません。accept集合の外のシャードも、accept集合のシャードとまったく同じリアクターループ、同じTTLリーパー、同じAOFライター、同じレプリケーションのtickを走らせます。省くのはリスナーのbindと<code>accept</code>のarmだけです。レプリケーションのフォロワーも、スナップショット/AOFからのリストアも、<code>N</code>の値に関係なく同一に振る舞います。</p>
+<p><b>accept集合の外のシャードは、どうやって書き込みを処理し続けるのですか？</b> 自分のキー空間スライスを所有しているからです。accept集合のシャード上のクライアントコネクションが、compute-onlyシャードにハッシュされるキーへの書き込みを発行すると、accept集合のシャードは所有シャードのinboxへ<code>Inbound::RequestBatch</code>をpushします。所有シャードは自分のキー空間スライスに対してコマンドを実行し、応答は発信元シャードの応答チャネルを通って戻ります。クライアントから見ればホップは不可視です——1本のコネクション上に、1つの応答が順序どおり見えるだけです。</p>
+<p><b>数を間違えたらどうなりますか？</b> <code>N</code>が小さすぎるコストは、飽和したクロスシャードinboxとテール遅延の悪化です。<code>N</code>が大きすぎるコストは、元のスパースコネクションの逆転現象です。どちらも新しい値で再起動すれば回復できます——この選択に紐づくオンディスク状態はありません。</p></main>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#このドキュメントが必要になるとき">このドキュメントが必要になるとき</a></li><li class="l2"><a href="#中心となる考え方">中心となる考え方</a></li><li class="l2"><a href="#動かしてみる例">動かしてみる例</a></li><li class="l2"><a href="#サイジングの経験則">サイジングの経験則</a></li><li class="l2"><a href="#トレードオフ">トレードオフ</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></aside>
+</div>
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>
