@@ -128,84 +128,67 @@ impl<C: Commands> Shard<C> {
         else {
             return;
         };
-
+        let m = Move { conn_id, seq, blocking, src, dst, src_shard, dst_shard, from_left, to_left };
         match step {
-            ListMoveStep::Take => match taken {
-                // Source empty or absent. For a plain move that is a nil
-                // reply. For a parked BRPOPLPUSH it means another client
-                // drained the source between the readiness signal and our
-                // Take — hand an EMPTY reply back to the arbiter, which
-                // re-arms the watchers and keeps the conn parked.
-                None | Some(Ok(None)) => {
-                    let miss = if blocking { Vec::new() } else { b"$-1\r\n".to_vec() };
-                    self.finish_list_move(conn_id, blocking, &src, miss);
-                }
-                Some(Err(())) => self.finish_list_move(conn_id, blocking, &src, wrongtype()),
-                Some(Ok(Some(value))) => {
-                    self.rearm(
-                        conn_id,
-                        Agg::ListMoveOrchestrator {
-                            step: ListMoveStep::Push,
-                            blocking,
-                            src,
-                            dst: dst.clone(),
-                            src_shard,
-                            dst_shard,
-                            from_left,
-                            to_left,
-                            taken: Some(Ok(Some(value.clone()))),
-                            pushed: None,
-                        },
-                    );
-                    self.dispatch_op(
-                        conn_id,
-                        seq,
-                        dst_shard,
-                        Op::ListMovePush { key: dst, value, to_left },
-                    );
-                }
-            },
-            ListMoveStep::Push => {
-                let element = match taken {
-                    Some(Ok(Some(v))) => v,
-                    // Unreachable by construction: we only enter Push with an
-                    // element in hand. Reply nil rather than panic in a reactor.
-                    _ => return self.finish_list_move(conn_id, blocking, &src, b"$-1\r\n".to_vec()),
-                };
-                if pushed == Some(true) {
-                    let mut out = Vec::with_capacity(element.len() + 16);
-                    kevy_resp::encode_bulk(&mut out, &element);
-                    return self.finish_list_move(conn_id, blocking, &src, out);
-                }
-                // The destination exists and is not a list. Put the element
-                // back where it came from before telling the client — a
-                // WRONGTYPE must not cost them their data.
-                self.rearm(
-                    conn_id,
-                    Agg::ListMoveOrchestrator {
-                        step: ListMoveStep::Restore,
-                        blocking,
-                        src: src.clone(),
-                        dst,
-                        src_shard,
-                        dst_shard,
-                        from_left,
-                        to_left,
-                        taken: Some(Ok(Some(element.clone()))),
-                        pushed: Some(false),
-                    },
-                );
-                self.dispatch_op(
-                    conn_id,
-                    seq,
-                    src_shard,
-                    Op::ListMoveRestore { key: src, value: element, from_left },
-                );
-            }
+            ListMoveStep::Take => self.after_take(m, taken),
+            ListMoveStep::Push => self.after_push(m, taken, pushed),
             // The element is back on the source; the client gets the error the
             // destination raised.
-            ListMoveStep::Restore => self.finish_list_move(conn_id, blocking, &src, wrongtype()),
+            ListMoveStep::Restore => self.finish_list_move(m.conn_id, m.blocking, &m.src, wrongtype()),
         }
+    }
+
+    /// Step 1 landed: the source either gave up an element or it did not.
+    fn after_take(&mut self, m: Move, taken: Option<Result<Option<Vec<u8>>, ()>>) {
+        let value = match taken {
+            // Source empty or absent. A plain move replies nil. A parked
+            // BRPOPLPUSH means another client drained the source between the
+            // readiness signal and our Take — hand an EMPTY reply back to the
+            // arbiter, which re-arms the watchers and keeps the conn parked.
+            None | Some(Ok(None)) => {
+                let miss = if m.blocking { Vec::new() } else { b"$-1\r\n".to_vec() };
+                return self.finish_list_move(m.conn_id, m.blocking, &m.src, miss);
+            }
+            Some(Err(())) => {
+                return self.finish_list_move(m.conn_id, m.blocking, &m.src, wrongtype());
+            }
+            Some(Ok(Some(v))) => v,
+        };
+        self.rearm(m.conn_id, m.agg(ListMoveStep::Push, Some(value.clone()), None));
+        let (conn_id, seq, dst_shard, dst, to_left) =
+            (m.conn_id, m.seq, m.dst_shard, m.dst.clone(), m.to_left);
+        self.dispatch_op(conn_id, seq, dst_shard, Op::ListMovePush { key: dst, value, to_left });
+    }
+
+    /// Step 2 landed: the destination took the element, or refused it.
+    fn after_push(
+        &mut self,
+        m: Move,
+        taken: Option<Result<Option<Vec<u8>>, ()>>,
+        pushed: Option<bool>,
+    ) {
+        let Some(Ok(Some(element))) = taken else {
+            // Unreachable by construction — we only enter Push holding an
+            // element. Reply nil rather than panic inside a reactor.
+            return self.finish_list_move(m.conn_id, m.blocking, &m.src, b"$-1\r\n".to_vec());
+        };
+        if pushed == Some(true) {
+            let mut out = Vec::with_capacity(element.len() + 16);
+            kevy_resp::encode_bulk(&mut out, &element);
+            return self.finish_list_move(m.conn_id, m.blocking, &m.src, out);
+        }
+        // The destination exists and is not a list. Put the element back where
+        // it came from before telling the client — a WRONGTYPE must not cost
+        // them their data.
+        self.rearm(m.conn_id, m.agg(ListMoveStep::Restore, Some(element.clone()), Some(false)));
+        let (conn_id, seq, src_shard, src, from_left) =
+            (m.conn_id, m.seq, m.src_shard, m.src.clone(), m.from_left);
+        self.dispatch_op(
+            conn_id,
+            seq,
+            src_shard,
+            Op::ListMoveRestore { key: src, value: element, from_left },
+        );
     }
 
     /// Re-arm the orchestrator slot for the next step.
@@ -240,6 +223,38 @@ impl<C: Commands> Shard<C> {
                 slot.done = Some(SmallReply::from_vec(bytes));
             }
             drain_front(c);
+        }
+    }
+}
+
+/// The orchestrator's invariants, carried between steps so each step's handler
+/// takes one argument instead of nine.
+struct Move {
+    conn_id: u64,
+    seq: u64,
+    blocking: bool,
+    src: Vec<u8>,
+    dst: Vec<u8>,
+    src_shard: usize,
+    dst_shard: usize,
+    from_left: bool,
+    to_left: bool,
+}
+
+impl Move {
+    /// Rebuild the agg for the next step, carrying the element forward.
+    fn agg(&self, step: ListMoveStep, taken: Option<Vec<u8>>, pushed: Option<bool>) -> Agg {
+        Agg::ListMoveOrchestrator {
+            step,
+            blocking: self.blocking,
+            src: self.src.clone(),
+            dst: self.dst.clone(),
+            src_shard: self.src_shard,
+            dst_shard: self.dst_shard,
+            from_left: self.from_left,
+            to_left: self.to_left,
+            taken: taken.map(|v| Ok(Some(v))),
+            pushed,
         }
     }
 }
