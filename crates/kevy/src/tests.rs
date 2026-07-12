@@ -1,5 +1,5 @@
 use super::*;
-use kevy_rt::{Commands, KeyShape, MultiOp, Route, TxnKind};
+use kevy_rt::{Commands, MultiOp, Route, TxnKind};
 
 /// Dispatch a command (given as argv pieces) against `store`, returning RESP.
 fn d(store: &mut Store, parts: &[&[u8]]) -> Vec<u8> {
@@ -206,7 +206,7 @@ fn route_keyspace_verbs() {
     assert!(matches!(c.route(&argv(&[b"BGREWRITEAOF"])), Route::RewriteAof));
     assert!(matches!(
         c.route(&argv(&[b"RANDOMKEY"])),
-        Route::Keyspace(KeyShape::Random, None)
+        Route::RandomKey
     ));
 }
 
@@ -236,11 +236,11 @@ fn route_multikey_and_pubsub_verbs() {
     ));
     assert!(matches!(
         c.route(&argv(&[b"KEYS", b"*"])),
-        Route::Keyspace(KeyShape::Keys, Some(_))
+        Route::Keys(Some(_))
     ));
     assert!(matches!(
         c.route(&argv(&[b"SCAN", b"0"])),
-        Route::Keyspace(KeyShape::Scan, _)
+        Route::Scan(_)
     ));
     assert!(matches!(
         c.route(&argv(&[b"SUBSCRIBE", b"chan"])),
@@ -340,7 +340,7 @@ fn resolve_unifies_route_and_txn_kind() {
         (vec![b"SUBSCRIBE".as_ref(), b"c".as_ref()], Route::Subscribe),
         (vec![b"UNSUBSCRIBE".as_ref()], Route::Unsubscribe),
         (vec![b"PUBLISH".as_ref(), b"c".as_ref(), b"m".as_ref()], Route::Publish),
-        (vec![b"RANDOMKEY".as_ref()], Route::Keyspace(KeyShape::Random, None)),
+        (vec![b"RANDOMKEY".as_ref()], Route::RandomKey),
         (vec![b"DEL".as_ref(), b"a".as_ref(), b"b".as_ref()], Route::DelKeys),
         (vec![b"EXISTS".as_ref(), b"a".as_ref(), b"b".as_ref()], Route::ExistsKeys),
     ] {

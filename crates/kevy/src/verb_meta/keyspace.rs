@@ -18,9 +18,9 @@ pub(super) const ROWS: &[VerbMeta] = &[
     v("RANDOMKEY",   "scan", 1,  R, "Return a random key from the keyspace.", "1.0.0", "RANDOMKEY",
       "O(1) expected — each shard probes a random slot, and the origin folds the candidates through a reservoir weighted by shard key counts, so every key is equally likely",
       "full"),
-    v("SCAN",        "scan", -2, R, "Sweep the keyspace and return every match at once; NOT a cursor iterator (COUNT and TYPE are accepted and ignored, and the cursor is always 0).", "1.0.0", "SCAN cursor [MATCH pattern] [COUNT count]",
-      "O(N) keys in the WHOLE keyspace, on every call — there is no incremental walk",
-      "differs: SCAN is not a cursor iterator. Every call sweeps every shard's entire keyspace and replies with cursor 0 and all matches in one batch, so the standard SCAN loop terminates after one round trip. COUNT and TYPE are accepted and ignored; MATCH is honoured. Redis's incremental, bounded-work, rehash-tolerant guarantees do not exist here"),
+    v("SCAN",        "scan", -2, R, "Iterate the keyspace incrementally: each call walks ~COUNT buckets of one shard and returns the next cursor.", "4.0.0", "SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]",
+      "O(COUNT) buckets per call, amortised O(N) for a full sweep — reverse-binary cursor, rehash-tolerant (a key present for the whole sweep is returned at least once even across table growth)",
+      "differs: cursors encode (shard, position), so a cursor is only valid on the server and shard count that issued it — the same per-node property Redis Cluster cursors have. MATCH and TYPE filter after collection; COUNT bounds the buckets visited, not the keys returned"),
     // ---- generic ---------------------------------------------------
     v("DEL",         "generic", -2, W, "Delete one or more keys.", "1.0.0", "DEL key [key ...]",
       "O(N) keys, plus O(M) per key holding a collection of M elements (the drop walks the container)",

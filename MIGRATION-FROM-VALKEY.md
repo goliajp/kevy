@@ -50,8 +50,6 @@ Most of these are **intentional scope choices** (detailed below); a few are road
 
 ### Still deferred
 
-- Incremental `SCAN` cursor (currently a single full pass; cursor `0`
-  is the canonical entry point — replies are valkey-shaped)
 - `EVAL` / `EVALSHA` / `FUNCTION` (Lua scripting) — needs a pure-Rust
   Lua engine to keep the 0-deps charter; no committed timeline
 - Non-blocking multi-stream `XREAD` across shards currently reads only
@@ -59,6 +57,11 @@ Most of these are **intentional scope choices** (detailed below); a few are road
 
 ### Landed since v1.0 (previously deferred)
 
+- **Incremental `SCAN` cursor** (v4) — a real bounded-work iterator:
+  O(COUNT) buckets per call, rehash-tolerant (dictScan-style
+  reverse-binary cursor), `MATCH` + `COUNT` + `TYPE` honoured. Cursors
+  encode (shard, position), so they are only valid on the server that
+  issued them — the same per-node property valkey cluster cursors have.
 - `RENAME` / `RENAMENX` across shards — two-phase take→put orchestrator
   (same-shard stays one atomic op).
 - True RESP3 — `HELLO 3` negotiates proto 3; replies use RESP3 shapes

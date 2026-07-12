@@ -211,6 +211,15 @@ impl<C: Commands> Shard<C> {
                 live: self.store.dbsize() as u64,
                 draw: self.store.rand_draw(),
             },
+            Op::ScanStep { cursor, count, pattern, type_filter } => {
+                let (next, keys, visited) = self.store.scan_page(
+                    cursor,
+                    count,
+                    pattern.as_deref(),
+                    type_filter.as_deref(),
+                );
+                Part::ScanPage { next, keys, visited }
+            }
             Op::CheckWatch(keys) => {
                 // EXEC's pre-execution fan-out: report whether any of
                 // `keys` (each carrying the version recorded at WATCH

@@ -84,15 +84,4 @@ pub(crate) struct DispatchMeta {
 }
 
 
-/// How a keyspace-collection reply is shaped. Public:
-/// [`crate::Route::Keyspace`] carries it, and embedders' `route()`
-/// implementations construct it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyShape {
-    /// `KEYS` — a flat array of keys.
-    Keys,
-    /// `SCAN` — `[cursor, [keys]]` (cursor always "0").
-    Scan,
-    /// `RANDOMKEY` — one key as a bulk string, or nil.
-    Random,
-}
+

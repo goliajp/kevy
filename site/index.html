@@ -145,7 +145,7 @@ db.set(&quot;cart:u1&quot;, json, { ttlMs: 3_600_000 });</code></pre></li></ol>
 <section class="band deep">
   <div class="call loss">
     <span class="h">What kevy will not do</span>
-    <p><b>It is not a cluster.</b> Replication and failover exist; sharding data across machines does not, and will not. If one machine is not enough, kevy is the wrong answer. <b>There is no AUTH and no TLS</b> — run it on a private network or behind something that does those properly. And <b>some commands differ from Redis</b>: <code>SCAN</code> is not a cursor iterator. <a href="docs/commands/">Every difference is written down</a>, per command. <a href="choose/">And here is when not to use it at all.</a></p>
+    <p><b>It is not a cluster.</b> Replication and failover exist; sharding data across machines does not, and will not. If one machine is not enough, kevy is the wrong answer. <b>There is no AUTH and no TLS</b> — run it on a private network or behind something that does those properly. And <b>some commands still differ from Redis</b> — the headline one: multi-key writes are atomic per shard, not globally, so a cross-shard <code>RENAME</code> or <code>MSET</code> is not one atomic step. <a href="docs/commands/">Every difference is written down</a>, per command. <a href="choose/">And here is when not to use it at all.</a></p>
   </div>
 </section>
 </main>

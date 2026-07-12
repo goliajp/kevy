@@ -9,9 +9,9 @@
 //! one place makes that contract obvious.
 
 use kevy_resp::ArgvView;
-use kevy_rt::{KeyShape, MultiOp, ResolvedCmd, Route, TxnKind, parse_slowlog_sub};
+use kevy_rt::{MultiOp, ResolvedCmd, Route, TxnKind, parse_slowlog_sub};
 
-use crate::cmd::{self, scan_pattern, upper_verb};
+use crate::cmd::{self, scan_args, upper_verb};
 use crate::cmd_block;
 use crate::state::ReplicationState;
 
@@ -154,9 +154,9 @@ fn route_for_verb<A: ArgvView + ?Sized>(
         b"SINTER" if args.len() >= 2 => Route::Gather(MultiOp::SInter),
         b"SUNION" if args.len() >= 2 => Route::Gather(MultiOp::SUnion),
         b"SDIFF" if args.len() >= 2 => Route::Gather(MultiOp::SDiff),
-        b"KEYS" if args.len() == 2 => Route::Keyspace(KeyShape::Keys, Some(args[1].to_vec())),
-        b"SCAN" if args.len() >= 2 => Route::Keyspace(KeyShape::Scan, scan_pattern(args)),
-        b"RANDOMKEY" if args.len() == 1 => Route::Keyspace(KeyShape::Random, None),
+        b"KEYS" if args.len() == 2 => Route::Keys(Some(args[1].to_vec())),
+        b"SCAN" if args.len() >= 2 => Route::Scan(scan_args(args)),
+        b"RANDOMKEY" if args.len() == 1 => Route::RandomKey,
         b"SUBSCRIBE" if args.len() >= 2 => Route::Subscribe,
         b"UNSUBSCRIBE" => Route::Unsubscribe,
         b"PSUBSCRIBE" if args.len() >= 2 => Route::Psubscribe,

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SCAN — kevy command reference</title>
-<meta name="description" content="SCAN — Sweep the keyspace and return every match at once; NOT a cursor iterator (COUNT and TYPE are accepted and ignored, and the cursor is always 0). O(N) keys in the WHOLE keyspace, on every call — there is no incremental walk">
+<meta name="description" content="SCAN — Iterate the keyspace incrementally: each call walks ~COUNT buckets of one shard and returns the next cursor. O(COUNT) buckets per call, amortised O(N) for a full sweep — reverse-binary cursor, rehash-tolerant (a key present for the whole sweep is returned at least once even across table growth)">
 <link rel="stylesheet" href="../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../assets/docs.css">
 <script>
@@ -44,20 +44,20 @@
     <nav class="crumb"><a href="../">Commands</a> <span>/</span> <span>Keyspace scan</span> <span>/</span> <b>SCAN</b></nav>
 
     <h1 class="cmd">SCAN</h1>
-    <p class="lede">Sweep the keyspace and return every match at once; NOT a cursor iterator (COUNT and TYPE are accepted and ignored, and the cursor is always 0).</p>
+    <p class="lede">Iterate the keyspace incrementally: each call walks ~COUNT buckets of one shard and returns the next cursor.</p>
 
-    <pre class="syntax"><code>SCAN cursor [MATCH pattern] [COUNT count]</code></pre>
+    <pre class="syntax"><code>SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]</code></pre>
 
     <dl class="meta">
       <div><dt>Group</dt><dd>Keyspace scan</dd></div>
-      <div><dt>Since</dt><dd class="mono">1.0.0</dd></div>
+      <div><dt>Since</dt><dd class="mono">4.0.0</dd></div>
       <div><dt>Arity</dt><dd class="mono">at least 2</dd></div>
       <div><dt>Flags</dt><dd><code>readonly</code></dd></div>
     </dl>
 
     <section>
       <h2>Complexity</h2>
-      <p class="cx-body"><code>O(N) keys in the WHOLE keyspace, on every call — there is no incremental walk</code></p>
+      <p class="cx-body"><code>O(COUNT) buckets per call, amortised O(N) for a full sweep — reverse-binary cursor, rehash-tolerant (a key present for the whole sweep is returned at least once even across table growth)</code></p>
       <p class="engine-note">Complexity and compatibility are read out of kevy's implementation, not copied from Redis's reference. Several genuinely differ.</p>
     </section>
 
@@ -65,7 +65,7 @@
       <h2>Redis compatibility</h2>
       <div class="call loss">
         <span class="h">Differs</span>
-        <p>SCAN is not a cursor iterator. Every call sweeps every shard's entire keyspace and replies with cursor 0 and all matches in one batch, so the standard SCAN loop terminates after one round trip. COUNT and TYPE are accepted and ignored; MATCH is honoured. Redis's incremental, bounded-work, rehash-tolerant guarantees do not exist here</p>
+        <p>cursors encode (shard, position), so a cursor is only valid on the server and shard count that issued it — the same per-node property Redis Cluster cursors have. MATCH and TYPE filter after collection; COUNT bounds the buckets visited, not the keys returned</p>
       </div>
     </section>
 

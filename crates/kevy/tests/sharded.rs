@@ -330,16 +330,27 @@ fn keys_scan_randomkey_across_cores() {
     c.write_all(&req(&[b"KEYS", b"*"])).unwrap();
     assert_eq!(read_array_sorted(&mut c).len(), 7);
 
-    // SCAN replies [cursor "0", [keys]].
-    c.write_all(&req(&[b"SCAN", b"0", b"MATCH", b"u:*"]))
-        .unwrap();
-    assert_eq!(read_len(&mut c, b'*'), 2);
-    let curlen = read_len(&mut c, b'$') as usize;
-    let mut cur = vec![0u8; curlen];
-    c.read_exact(&mut cur).unwrap();
-    c.read_exact(&mut [0u8; 2]).unwrap();
-    assert_eq!(cur, b"0");
-    assert_eq!(read_array_sorted(&mut c).len(), 6);
+    // SCAN replies [cursor, [keys]] — v4: a real cursor iterator, so
+    // follow the cursor until it returns to "0" and check set coverage.
+    let mut cursor = b"0".to_vec();
+    let mut scanned: Vec<Vec<u8>> = Vec::new();
+    for _ in 0..64 {
+        c.write_all(&req(&[b"SCAN", &cursor, b"MATCH", b"u:*"]))
+            .unwrap();
+        assert_eq!(read_len(&mut c, b'*'), 2);
+        let curlen = read_len(&mut c, b'$') as usize;
+        let mut cur = vec![0u8; curlen];
+        c.read_exact(&mut cur).unwrap();
+        c.read_exact(&mut [0u8; 2]).unwrap();
+        scanned.extend(read_array_sorted(&mut c));
+        if cur == b"0" {
+            break;
+        }
+        cursor = cur;
+    }
+    scanned.sort();
+    scanned.dedup();
+    assert_eq!(scanned.len(), 6);
 
     // RANDOMKEY returns some existing key.
     c.write_all(&req(&[b"RANDOMKEY"])).unwrap();

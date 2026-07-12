@@ -188,8 +188,14 @@ mod tests {
     /// "fixed". Writing a bug down is not fixing it.
     #[test]
     fn the_costs_that_differ_from_redis_stay_differing() {
-        let scan = verb_meta("SCAN").expect("SCAN");
-        assert!(scan.compat.contains("not a cursor iterator"), "SCAN sweeps the whole keyspace");
+        // All three of the deviations this test used to pin (SCAN's full sweep,
+        // ZRANK's O(N), SPOP's determinism) are FIXED and live in the test
+        // below. What remains pinned here are the deviations that are still
+        // true — a fixed one must never be re-documented, and a documented one
+        // must never be quietly "corrected" toward Redis's numbers by someone
+        // who did not read our code.
+        let hscan = verb_meta("HSCAN").expect("HSCAN");
+        assert!(hscan.compat.contains("not a cursor iterator"), "HSCAN is still single-batch");
     }
 
     /// The deviations we FIXED must not creep back into the table as folklore.
@@ -213,5 +219,11 @@ mod tests {
         assert!(zrank.compat.contains("WITHSCORE"), "the WITHSCORE gap is still open");
         let zcount = verb_meta("ZCOUNT").expect("ZCOUNT");
         assert!(zcount.complexity.contains("O(log N)"), "ZCOUNT is two rank descents now");
+        let scan = verb_meta("SCAN").expect("SCAN");
+        assert!(
+            scan.complexity.contains("O(COUNT) buckets per call"),
+            "SCAN is a real cursor iterator now; the full-sweep note must not return"
+        );
+        assert!(scan.compat.contains("(shard, position)"), "the cursor-portability caveat stays");
     }
 }
