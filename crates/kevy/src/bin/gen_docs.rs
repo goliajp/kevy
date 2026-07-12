@@ -21,6 +21,9 @@ fn main() -> ExitCode {
     let outputs = [
         (root.join("llms.txt"), llms_txt()),
         (root.join("docs/verb-reference.md"), verb_reference()),
+        // The site's command reference renders from this. Same table, same CI
+        // parity check — the pages cannot drift from the engine.
+        (root.join("site/data/commands.json"), commands_json()),
     ];
     let mut stale = false;
     for (path, want) in outputs {
@@ -143,4 +146,54 @@ fn verb_reference() -> String {
         s.push('\n');
     }
     s
+}
+
+/// The registry as JSON, for the site's command reference to render.
+///
+/// Hand-rolled, because kevy takes no dependencies and this is the only JSON
+/// this binary emits. Only three characters need escaping for the strings we
+/// hold (no control characters live in the table, and a test asserts that).
+fn commands_json() -> String {
+    let mut s = String::from("{\n  \"generated_from\": \"crates/kevy/src/verb_meta\",\n");
+    let _ = writeln!(s, "  \"count\": {},", VERB_META.len());
+    s.push_str("  \"commands\": [\n");
+    for (i, m) in VERB_META.iter().enumerate() {
+        s.push_str("    {");
+        let _ = write!(s, "\"name\": \"{}\", ", esc(m.name));
+        let _ = write!(s, "\"group\": \"{}\", ", esc(m.group));
+        let _ = write!(s, "\"arity\": {}, ", m.arity);
+        s.push_str("\"flags\": [");
+        for (j, f) in m.flags.iter().enumerate() {
+            if j > 0 {
+                s.push_str(", ");
+            }
+            let _ = write!(s, "\"{}\"", esc(f));
+        }
+        s.push_str("], ");
+        let _ = write!(s, "\"since\": \"{}\", ", esc(m.since));
+        let _ = write!(s, "\"syntax\": \"{}\", ", esc(m.syntax));
+        let _ = write!(s, "\"summary\": \"{}\", ", esc(m.summary));
+        let _ = write!(s, "\"complexity\": \"{}\", ", esc(m.complexity));
+        let _ = write!(s, "\"compat\": \"{}\"", esc(m.compat));
+        s.push('}');
+        if i + 1 < VERB_META.len() {
+            s.push(',');
+        }
+        s.push('\n');
+    }
+    s.push_str("  ]\n}\n");
+    s
+}
+
+fn esc(v: &str) -> String {
+    let mut out = String::with_capacity(v.len() + 8);
+    for c in v.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            c => out.push(c),
+        }
+    }
+    out
 }
