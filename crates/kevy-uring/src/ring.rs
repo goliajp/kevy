@@ -242,7 +242,7 @@ impl IoUring {
             let fd = unsafe {
                 ffi::syscall(
                     SYS_IO_URING_SETUP,
-                    c_long::from(entries),
+                    ffi::arg(entries),
                     &raw mut p,
                 )
             };
@@ -412,7 +412,7 @@ impl IoUring {
         // pass the registered index instead of the raw fd. The kernel skips
         // its per-syscall fget/fput on the ring.
         let (syscall_fd, extra_flags) = match self.enter_ring {
-            Some((idx, flag)) => (c_long::from(idx), flag),
+            Some((idx, flag)) => (ffi::arg(idx), flag),
             None => (c_long::from(self.ring_fd), 0),
         };
         enter_flags |= extra_flags;
@@ -421,9 +421,9 @@ impl IoUring {
             ffi::syscall(
                 SYS_IO_URING_ENTER,
                 syscall_fd,
-                c_long::from(to_submit),
-                c_long::from(wait_nr),
-                c_long::from(enter_flags),
+                ffi::arg(to_submit),
+                ffi::arg(wait_nr),
+                ffi::arg(enter_flags),
                 ptr::null::<c_void>(),
                 0usize,
             )
