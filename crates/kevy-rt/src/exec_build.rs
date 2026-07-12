@@ -7,7 +7,7 @@
 use kevy_resp::CmdError;
 use crate::Commands;
 use crate::Route;
-use crate::message::{Agg, GatherKind, KeyShape, KvPairs, MultiOp, Op};
+use crate::message::{Agg, GatherKind, KvPairs, MultiOp, Op};
 use crate::shard::Shard;
 use kevy_resp::{Argv, ArgvView};
 use std::collections::HashMap;
@@ -147,12 +147,15 @@ impl<C: Commands> Shard<C> {
             Route::FeedRead | Route::FeedTail | Route::FeedShards => {
                 gather_error("ERR internal: feed route hit multi builder")
             }
-            Route::Keyspace(KeyShape::Random, _) => {
+            Route::Keys(pat) => self.fanout_keys(pat),
+            // A real cursor iterator — one shard per call, chained by the
+            // finalize hook while the COUNT budget lasts (`crate::exec_scan`).
+            Route::Scan(spec) => self.build_scan_targets(spec),
+            Route::RandomKey => {
                 // One candidate per shard; the fold holds a weighted reservoir.
                 let targets = (0..self.nshards).map(|s| (s, Op::RandomKey)).collect();
                 (targets, Agg::RandomKey { key: None, seen: 0 })
             }
-            Route::Keyspace(shape, pat) => self.fanout_keys(pat, None, shape),
             Route::XReadGather { streams, count, group } => {
                 self.build_xread_targets(streams, count, group)
             }
@@ -323,23 +326,15 @@ impl<C: Commands> Shard<C> {
         )
     }
 
-    /// Fan a key-collection out to every shard (KEYS/SCAN).
-    fn fanout_keys(
-        &self,
-        pat: Option<Vec<u8>>,
-        limit: Option<usize>,
-        shape: KeyShape,
-    ) -> (Vec<(usize, Op)>, Agg) {
+    /// Fan a key-collection out to every shard — KEYS, and only KEYS now.
+    /// SCAN pages one shard at a time through its own builder, and RANDOMKEY
+    /// draws one weighted candidate per shard; the KeyShape enum this used to
+    /// dispatch on retired with them.
+    fn fanout_keys(&self, pat: Option<Vec<u8>>) -> (Vec<(usize, Op)>, Agg) {
         let targets = (0..self.nshards)
-            .map(|s| (s, Op::CollectKeys(pat.clone(), limit)))
+            .map(|s| (s, Op::CollectKeys(pat.clone(), None)))
             .collect();
-        (
-            targets,
-            Agg::Keys {
-                shape,
-                acc: Vec::new(),
-            },
-        )
+        (targets, Agg::Keys { acc: Vec::new() })
     }
 
     /// Split `args[1..]` (keys) by owning shard.

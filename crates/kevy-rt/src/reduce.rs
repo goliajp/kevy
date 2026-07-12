@@ -5,7 +5,7 @@
 //! pub/sub framing, the seq-ring drain, and the shard hash.
 
 use crate::conn::Conn;
-use crate::message::{Agg, Gathered, KeyShape, MultiOp, SmallReply};
+use crate::message::{Agg, Gathered, MultiOp, SmallReply};
 use kevy_hash::KevyHash;
 use kevy_resp::{
     RespVersion, encode_array_len, encode_bulk, encode_error, encode_null_bulk,
@@ -94,7 +94,7 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
             SmallReply::from_vec(finalize_gather(op, limit, keys, got, proto))
         }
         Agg::XReadGather { slots } => SmallReply::from_vec(finalize_xread_gather(slots)),
-        Agg::Keys { shape, acc } => SmallReply::from_vec(finalize_keys(shape, acc)),
+        Agg::Keys { acc } => SmallReply::from_vec(finalize_keys(acc)),
         Agg::RandomKey { key, .. } => {
             let mut out = Vec::new();
             match key {
@@ -119,7 +119,8 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
         | Agg::ListMoveOrchestrator { .. }
         | Agg::ZStoreGather { .. }
         | Agg::GeoStore { .. }
-        | Agg::ExtensionGather { .. } => {
+        | Agg::ExtensionGather { .. }
+        | Agg::ScanPage { .. } => {
             let mut out = Vec::new();
             encode_error(&mut out, "ERR internal: orchestrator agg hit materialize");
             SmallReply::from_vec(out)
@@ -137,29 +138,15 @@ fn encode_inline_int(n: i64) -> SmallReply {
     SmallReply::Inline { len, buf: out }
 }
 
-/// Reduce keys collected from all shards into the final RESP reply.
-fn finalize_keys(shape: KeyShape, acc: Vec<Vec<u8>>) -> Vec<u8> {
+/// KEYS: a flat array of every shard's matches. This used to dispatch on a
+/// KeyShape enum shared with SCAN and RANDOMKEY; both grew their own
+/// aggregators (a paging orchestrator and a weighted reservoir) and the enum
+/// retired with them.
+fn finalize_keys(acc: Vec<Vec<u8>>) -> Vec<u8> {
     let mut out = Vec::new();
-    match shape {
-        KeyShape::Keys => {
-            encode_array_len(&mut out, acc.len() as i64);
-            for k in &acc {
-                encode_bulk(&mut out, k);
-            }
-        }
-        KeyShape::Scan => {
-            // [cursor, [keys]] — cursor "0" (non-incremental: one full pass).
-            encode_array_len(&mut out, 2);
-            encode_bulk(&mut out, b"0");
-            encode_array_len(&mut out, acc.len() as i64);
-            for k in &acc {
-                encode_bulk(&mut out, k);
-            }
-        }
-        // RANDOMKEY folds through Agg::RandomKey's reservoir now, never here.
-        // acc.first() was the old path, and it meant a key on any shard other
-        // than the first could never be returned.
-        KeyShape::Random => encode_error(&mut out, "ERR internal: RANDOMKEY hit finalize_keys"),
+    encode_array_len(&mut out, acc.len() as i64);
+    for k in &acc {
+        encode_bulk(&mut out, k);
     }
     out
 }

@@ -4,7 +4,7 @@
 //! (500-LOC house rule); `message` re-exports everything, so paths are
 //! unchanged. All crate-private.
 
-use crate::message::{Gathered, KeyShape, MultiOp, SmallReply, ZCombine};
+use crate::message::{Gathered, MultiOp, SmallReply, ZCombine};
 use kevy_resp::{Argv, RespVersion};
 use std::collections::HashMap;
 
@@ -66,9 +66,8 @@ pub(crate) enum Agg {
         dst: Vec<u8>,
         hits: Option<crate::GeoHits>,
     },
-    /// Keys collected from all shards, shaped per `KeyShape`.
+    /// KEYS: every shard's matching keys, flattened at the origin.
     Keys {
-        shape: KeyShape,
         acc: Vec<Vec<u8>>,
     },
     /// RANDOMKEY's weighted reservoir. Each shard's candidate replaces the held
@@ -77,6 +76,26 @@ pub(crate) enum Agg {
     RandomKey {
         key: Option<Vec<u8>>,
         seen: u64,
+    },
+    /// `SCAN` paging orchestrator: one [`crate::message::Op::ScanStep`]
+    /// is in flight against `shard`; fold records the page, then
+    /// `finalize_scan_agg` either replies `[next-cursor, keys]` or —
+    /// when the shard is exhausted with budget left — re-arms the slot
+    /// and chains into `shard + 1` (so an empty server answers cursor 0
+    /// in ONE call instead of one call per shard).
+    ScanPage {
+        /// Shard the in-flight `ScanStep` targets.
+        shard: usize,
+        /// Remaining buckets-visited budget (the request's COUNT).
+        budget: usize,
+        /// MATCH glob to carry into chained shards.
+        pattern: Option<Vec<u8>>,
+        /// TYPE filter to carry into chained shards.
+        type_filter: Option<Vec<u8>>,
+        /// Keys accumulated across this call's page(s).
+        keys: Vec<Vec<u8>>,
+        /// The shard's next in-shard cursor (0 = shard exhausted).
+        next: u64,
     },
     /// `WATCH` fan-out accumulator: each owning shard returns its
     /// `(key, version)` pairs via [`Part::WatchVersions`]; the origin

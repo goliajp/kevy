@@ -7,7 +7,7 @@
 use crate::BlockKind;
 use kevy_resp::{Argv, RespVersion};
 
-pub use crate::message_kinds::{KeyShape, MultiOp, ZCombine};
+pub use crate::message_kinds::{MultiOp, ZCombine};
 pub(crate) use crate::message_kinds::{DispatchMeta, GatherKind, Gathered};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -97,11 +97,22 @@ pub(crate) enum Op {
     /// `CLIENT KILL` — close this shard's conns matching the selector;
     /// reply is the matched count ([`Part::Int`]).
     ClientKill(crate::client_ops::ClientKillFilter),
-    /// Collect this shard's keys (optional glob + limit) — KEYS/SCAN/RANDOMKEY.
+    /// Collect this shard's matching keys — KEYS. (SCAN pages through
+    /// [`Op::ScanStep`]; RANDOMKEY draws through [`Op::RandomKey`].)
     CollectKeys(Option<Vec<u8>>, Option<usize>),
     /// One arbitrary key from this shard, plus the weight and randomness the
     /// origin needs to fold candidates fairly (see [`Part::RandomKey`]).
     RandomKey,
+    /// One `SCAN` page on this shard: walk ~`count` buckets from the
+    /// in-shard `cursor` (reverse-binary, rehash-tolerant — see
+    /// [`kevy_store::Store::scan_page`]), applying the MATCH glob and
+    /// TYPE filter. Reply: [`Part::ScanPage`].
+    ScanStep {
+        cursor: u64,
+        count: usize,
+        pattern: Option<Vec<u8>>,
+        type_filter: Option<Vec<u8>>,
+    },
     /// `WATCH key [key ...]` — register each key in this shard's
     /// version tracker and report its current version back. The origin
     /// shard collates the (key, version) pairs into the conn's
@@ -195,6 +206,7 @@ pub(crate) enum Op {
 }
 
 
+
 /// A RESP reply fragment with a 30-byte inline arm. The forwarded-dispatch
 /// hot path produces tiny replies (`+OK`, `:N`, a `$16` GET payload = 23 B)
 /// whose heap `Vec` round-trip (alloc on the owning shard, free after the
@@ -251,7 +263,7 @@ pub(crate) enum Part {
     /// Geo `*STORE` step-1 result: the members the search matched on the
     /// source key's shard (or the error it raised there).
     GeoHits(crate::GeoHits),
-    /// A shard's collected keys (KEYS/SCAN/RANDOMKEY).
+    /// A shard's collected keys (KEYS).
     Keys(Vec<Vec<u8>>),
     /// This shard's RANDOMKEY candidate. `live` is the shard's key count — the
     /// reservoir weight — and `draw` is a fresh draw from the shard's own RNG,
@@ -262,6 +274,15 @@ pub(crate) enum Part {
         key: Option<Vec<u8>>,
         live: u64,
         draw: u64,
+    },
+    /// One shard's `SCAN` page ([`Op::ScanStep`] reply): the next
+    /// in-shard cursor (0 = this shard is exhausted), the keys that
+    /// passed the filters, and how many buckets the walk visited (the
+    /// origin debits its COUNT work budget with it).
+    ScanPage {
+        next: u64,
+        keys: Vec<Vec<u8>>,
+        visited: usize,
     },
     /// `WATCH` partial reply: each key this shard owns paired with its
     /// current version, in request order. The origin shard collates

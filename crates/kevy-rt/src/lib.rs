@@ -88,6 +88,7 @@ mod exec_pubsub_pattern;
 mod exec_listmove;
 mod exec_rename;
 mod exec_replwait;
+mod exec_scan;
 mod exec_feed;
 mod exec_geostore;
 mod exec_zalgebra;
@@ -163,9 +164,9 @@ pub use replica_inbox::{
     ReplicaApply, ReplicaInboxReceiver, ReplicaInboxSender, SnapshotGate, replica_inbox_pair,
 };
 pub use replication_gate::ReplicatedApplyGuard;
-pub use route::{Route, XGroupCtx};
+pub use route::{Route, ScanArgs, XGroupCtx};
 pub use client_ops::ClientKillFilter;
-pub use message::{KeyShape, MultiOp, ZCombine};
+pub use message::{MultiOp, ZCombine};
 pub use runtime::Runtime;
 pub use types::{
     ExtensionReduced, LiveRuntimeConfig, NotifyClass, ReplicaAck, ReplicaViewRow, ResolvedCmd,

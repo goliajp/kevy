@@ -94,11 +94,17 @@ pub enum Route {
         timeout_ms: u64,
         miss: Vec<u8>,
     },
-    /// Keyspace collection (`KEYS` / `SCAN` / `RANDOMKEY`) — every
-    /// shard contributes its matching keys, shaped at the origin per
-    /// [`crate::KeyShape`]. The second field is the glob pattern
-    /// (`None` = every key; `RANDOMKEY` carries none).
-    Keyspace(crate::KeyShape, Option<Vec<u8>>),
+    /// `KEYS pattern` — every shard returns its matching keys.
+    Keys(Option<Vec<u8>>),
+    /// `SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]` — a real
+    /// cursor iterator: each call visits ~COUNT buckets of ONE shard
+    /// (chaining into the next shard only while the work budget lasts)
+    /// and replies `[next-cursor, keys]`. `Err` carries the pre-parsed
+    /// error message the command layer wants on the wire (invalid
+    /// cursor / syntax error) — the runtime replies it verbatim.
+    Scan(Result<ScanArgs, &'static str>),
+    /// `RANDOMKEY` — one arbitrary key across all shards.
+    RandomKey,
     /// `SUBSCRIBE` / `UNSUBSCRIBE` — connection-level (modifies this conn).
     Subscribe,
     Unsubscribe,
@@ -177,6 +183,27 @@ pub enum Route {
         count: Option<usize>,
         group: Option<XGroupCtx>,
     },
+}
+
+/// Parsed `SCAN` arguments carried by [`Route::Scan`].
+///
+/// `cursor` is the raw wire cursor: the runtime splits it into
+/// `(shard, in-shard position)` — shard index in the top 10 bits,
+/// reverse-binary bucket cursor in the low 54 (see `exec_scan` for the
+/// documented limits). Cursors are therefore only meaningful on the
+/// server (and shard count) that issued them, like Redis Cluster
+/// cursors are per-node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanArgs {
+    /// Raw wire cursor (`0` starts a sweep).
+    pub cursor: u64,
+    /// `COUNT` — buckets-visited work bound per call (default 10).
+    pub count: usize,
+    /// `MATCH` glob, applied to each visited key.
+    pub pattern: Option<Vec<u8>>,
+    /// `TYPE` — keep only keys whose value type name matches
+    /// (case-insensitive; unknown names match nothing).
+    pub type_filter: Option<Vec<u8>>,
 }
 
 /// The `GROUP <name> <consumer>` (+ `NOACK`) context an `XREADGROUP`

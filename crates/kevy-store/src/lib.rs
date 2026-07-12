@@ -98,6 +98,7 @@ mod keyspace;
 mod list;
 mod notify;
 mod rng;
+mod scan;
 pub use notify::KeyspaceEvent;
 mod list_ops;
 mod set;

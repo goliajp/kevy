@@ -201,8 +201,9 @@ OK
                 "data across machines does not, and will not. If one machine is not "
                 "enough, kevy is the wrong answer. <b>There is no AUTH and no TLS</b> — "
                 "run it on a private network or behind something that does those "
-                "properly. And <b>some commands differ from Redis</b>: "
-                "<code>SCAN</code> is not a cursor iterator. "
+                "properly. And <b>some commands still differ from Redis</b> — the headline one: "
+                "multi-key writes are atomic per shard, not globally, so a cross-shard "
+                "<code>RENAME</code> or <code>MSET</code> is not one atomic step. "
                 "<a href=\"~/docs/commands/\">Every difference is written down</a>, per "
                 "command. <a href=\"~/choose/\">And here is when not to use it at "
                 "all.</a>"
@@ -278,10 +279,9 @@ PAGES["migrate"] = {
             "title": "What you give up by leaving Redis",
             "body": (
                 "<b>No cluster.</b> Replicas are copies, not shards. <b>No AUTH, no "
-                "TLS.</b> And <b>a handful of commands behave differently</b> — "
-                "<code>SCAN</code> is not a cursor iterator (one call returns "
-                "everything and cursor 0), a "
-                "cross-shard <code>RENAME</code> is not atomic. None of these is a bug "
+                "TLS.</b> And <b>a handful of commands behave differently</b> — the one to know: a "
+                "cross-shard <code>RENAME</code> is not atomic (multi-key writes are "
+                "atomic per shard, not globally). None of these is a bug "
                 "and all of them are documented per command. Read the list before you "
                 "commit, not after: <a href=\"~/docs/commands/\">every command's real "
                 "cost and real deviation</a>."
@@ -445,7 +445,7 @@ PAGES["choose"] = {
             "items": [
                 {
                     "q": "Is it really a drop-in replacement for Redis?",
-                    "a": "On the wire, yes — RESP2 and RESP3, 184 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. <code>SCAN</code> is not a cursor iterator: one call sweeps the whole keyspace and returns cursor 0, so the usual SCAN loop finishes after a single round trip. A cross-shard <code>RENAME</code> is not atomic. <a href=\"~/docs/commands/\">All 184 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
+                    "a": "On the wire, yes — RESP2 and RESP3, 184 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. A cross-shard <code>RENAME</code> is not atomic — multi-key writes are atomic per shard, not globally. And a SCAN cursor is only valid on the server that issued it, the same per-node property Redis Cluster has. <a href=\"~/docs/commands/\">All 184 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
                 },
                 {
                     "q": "What happens when the machine dies?",
