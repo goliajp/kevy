@@ -58,6 +58,12 @@ export class Kevy {
   /** Read many keys in one crossing into wasm; `undefined` per miss. */
   mget(keys: Bytes[]): (Uint8Array | undefined)[];
   mgetText(keys: Bytes[]): (string | undefined)[];
+  /**
+   * The durable backend actually in use — where the WRITE LOG is
+   * appended, not where operations are served. KV runs in wasm memory;
+   * the log is batched to the backend off the hot path.
+   */
+  readonly backend: "opfs" | "idb" | null;
   /** DEL. True if the key existed. */
   del(key: Bytes): boolean;
   /** EXISTS. */

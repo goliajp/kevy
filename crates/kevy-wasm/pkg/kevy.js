@@ -299,6 +299,22 @@ export class Kevy {
     return this.mget(keys).map((v) => (v === undefined ? undefined : td.decode(v)));
   }
 
+  /**
+   * Which durable backend is actually in use: `"opfs"`, `"idb"`, or
+   * `null` when the store is pure in-memory.
+   *
+   * Worth being precise about, because `"idb"` looks alarming next to
+   * kevy's benchmarks against IndexedDB: the backend is where the WRITE
+   * LOG is appended, not where reads and writes are served. Every KV
+   * operation runs inside wasm linear memory; the log is flushed to the
+   * backend in batches off the hot path. Using IndexedDB as a block
+   * store is not the same thing as using it as the key-value engine —
+   * which is exactly the difference the benchmark measures.
+   */
+  get backend() {
+    return this.#backend ? this.#backend.kind : null;
+  }
+
   /** DEL. Returns true if the key existed. */
   del(key) {
     this.#clock();
@@ -607,6 +623,8 @@ async function openBackend(kind, name) {
  * thread.
  */
 class OpfsBackend {
+  /** Which durable backend actually took. Surfaced by `Kevy#backend`. */
+  kind = "opfs";
   #worker;
   #next = 1;
   #pending = new Map();
@@ -663,6 +681,8 @@ class OpfsBackend {
  * replace clears and writes one chunk.
  */
 class IdbBackend {
+  /** Which durable backend actually took. Surfaced by `Kevy#backend`. */
+  kind = "idb";
   #db;
 
   static open(name) {
