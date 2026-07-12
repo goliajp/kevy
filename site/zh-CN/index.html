@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kevy — 纯 Rust、零依赖的 Redis 兼容存储引擎</title>
-<meta name="description" content="kevy 是纯 Rust 手写、零第三方依赖的 Redis 兼容存储引擎。可作服务端运行(GET 639 万 ops/s,领先 valkey 9.1 1.6–3.6 倍),可嵌进你的程序直到裸机单片机(392 KB),可在浏览器里跑(416 KB wasm,快过 IndexedDB 9–190 倍),也可通过 MCP 直接做 AI agent 的记忆层。">
+<meta name="description" content="kevy 是纯 Rust 手写、零第三方依赖的 Redis 兼容存储引擎。可作服务端运行(GET 639 万 ops/s,领先 valkey 9.1 1.6–4.0 倍),可嵌进你的程序直到裸机单片机(392 KB),可在浏览器里跑(416 KB wasm,快过 IndexedDB 77–189 倍),也可通过 MCP 直接做 AI agent 的记忆层。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230A0D10'/%3E%3Ctext x='5' y='24' font-family='ui-monospace,monospace' font-size='21' font-weight='700' fill='%233FC7D4'%3Ek%3C/text%3E%3Crect x='21' y='9' width='5' height='14' fill='%233FC7D4'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="../assets/site.css">
 <script>
@@ -64,7 +64,7 @@
         <div class="ch-figs">
           <div class="ch-fig"><span>GET</span><b>639 万/s</b></div>
           <div class="ch-fig"><span>SET</span><b>638 万/s</b></div>
-          <div class="ch-fig"><span>对 valkey 9.1</span><b>1.6–3.6×</b></div>
+          <div class="ch-fig"><span>对 valkey 9.1</span><b>1.6–4.0×</b></div>
         </div>
         <span class="ch-go">看实测数字</span>
       </a>
@@ -87,7 +87,7 @@
         <p>localStorage 卡在 ~5 MB 且会阻塞页面,IndexedDB 太慢。这里跑的是引擎本身,就在你的标签页里。</p>
         <div class="ch-figs">
           <div class="ch-fig"><span>wasm</span><b>416 KB</b></div>
-          <div class="ch-fig"><span>对 IndexedDB</span><b>9–190×</b></div>
+          <div class="ch-fig"><span>对 IndexedDB</span><b>77–189×</b></div>
           <div class="ch-fig"><span>跨标签页 p50</span><b>0.1 ms</b></div>
         </div>
         <span class="ch-go">当场试一下</span>
@@ -160,18 +160,18 @@
 
     <div style="margin-top:18px" class="tbl-wrap">
       <table>
-        <caption class="tag" style="text-align:left;padding:10px 14px;caption-side:top">竞技场 · 七个面全部对打 valkey 9.1,同机</caption>
+        <caption class="tag" style="text-align:left;padding:10px 14px;caption-side:top">竞技场 · 七个面全部对打 valkey 9.1,同机 · 数据取自 3.17.0 release 复测</caption>
         <thead>
           <tr><th>命令</th><th class="num">kevy</th><th class="num">valkey 9.1</th><th class="num">倍数</th><th>考察什么</th></tr>
         </thead>
         <tbody>
-          <tr><td class="k">GET</td><td class="num">6,389,776</td><td class="num">2,131,628</td><td class="num win">3.0×</td><td>点读,缓存热路径</td></tr>
-          <tr><td class="k">SET</td><td class="num">6,389,776</td><td class="num">1,522,939</td><td class="num win">4.2×</td><td>点写,且写日志开着</td></tr>
-          <tr><td class="k">INCR</td><td class="num">6,389,776</td><td class="num">2,131,060</td><td class="num win">3.0×</td><td>原子计数,读-改-写</td></tr>
-          <tr><td class="k">SADD</td><td class="num">5,329,780</td><td class="num">2,131,060</td><td class="num win">2.5×</td><td>集合成员</td></tr>
-          <tr><td class="k">HSET</td><td class="num">4,566,210</td><td class="num">1,682,793</td><td class="num win">2.7×</td><td>哈希字段写</td></tr>
-          <tr><td class="k">LPUSH</td><td class="num">3,196,164</td><td class="num">1,599,360</td><td class="num win">2.0×</td><td>列表头插,队列形态</td></tr>
-          <tr><td class="k">ZADD</td><td class="num">2,906,977</td><td class="num">1,598,402</td><td class="num win">1.8×</td><td>有序集合,最贵的写</td></tr>
+          <tr><td class="k">GET</td><td class="num">6,389,776</td><td class="num">2,131,060</td><td class="num win">3.00×</td><td>点读,缓存热路径</td></tr>
+          <tr><td class="k">SET</td><td class="num">6,389,776</td><td class="num">1,598,082</td><td class="num win">4.00×</td><td>点写,且写日志开着</td></tr>
+          <tr><td class="k">INCR</td><td class="num">5,326,232</td><td class="num">2,131,628</td><td class="num win">2.50×</td><td>原子计数,读-改-写</td></tr>
+          <tr><td class="k">SADD</td><td class="num">5,326,232</td><td class="num">2,131,628</td><td class="num win">2.50×</td><td>集合成员</td></tr>
+          <tr><td class="k">HSET</td><td class="num">3,998,001</td><td class="num">1,776,199</td><td class="num win">2.25×</td><td>哈希字段写</td></tr>
+          <tr><td class="k">LPUSH</td><td class="num">3,196,164</td><td class="num">1,776,199</td><td class="num win">1.80×</td><td>列表头插,队列形态</td></tr>
+          <tr><td class="k">ZADD</td><td class="num">2,666,667</td><td class="num">1,682,793</td><td class="num win">1.58×</td><td>有序集合,最贵的写</td></tr>
         </tbody>
       </table>
     </div>
@@ -279,13 +279,13 @@
       <div class="plot">
         <p class="tag" style="margin:0 0 12px">点写 · ops/秒 · 10 万键</p>
         <div class="plot-rows">
-          <div class="prow me"><span class="who">kevy(wasm)</span><span class="track"><span class="fill" data-w="100"></span></span><span class="val">1,742,160</span></div>
-          <div class="prow"><span class="who">localStorage</span><span class="track"><span class="fill" data-w="21"></span></span><span class="val">365,464 <small>4.8×</small></span></div>
-          <div class="prow"><span class="who">IndexedDB</span><span class="track"><span class="fill" data-w="1"></span></span><span class="val">9,168 <small>190×</small></span></div>
+          <div class="prow me"><span class="who">kevy(wasm)</span><span class="track"><span class="fill" data-w="100"></span></span><span class="val">1,787,310</span></div>
+          <div class="prow"><span class="who">localStorage</span><span class="track"><span class="fill" data-w="21"></span></span><span class="val">361,696 <small>4.9×</small></span></div>
+          <div class="prow"><span class="who">IndexedDB</span><span class="track"><span class="fill" data-w="1"></span></span><span class="val">9,479 <small>189×</small></span></div>
         </div>
         <p class="plot-foot">
-          扫描也是一样的走向:在 10 万键上做一次模式扫描,kevy 用 <b>5.5 ms</b>,
-          IndexedDB 用 <b>257 ms</b> —— <b>47 倍</b>。
+          扫描也是一样的走向:在 10 万键上做一次模式扫描,kevy 用 <b>5.6 ms</b>,
+          IndexedDB 用 <b>254 ms</b> —— <b>46 倍</b>。
         </p>
       </div>
 
@@ -439,10 +439,9 @@
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var root = document.documentElement;
-    var dark = root.dataset.theme
-      ? root.dataset.theme === "dark"
-      : matchMedia("(prefers-color-scheme: dark)").matches;
-    root.dataset.theme = dark ? "light" : "dark";
+    // Light is the default; dark is opt-in. The OS preference is not
+    // consulted — a reader who wants dark asks for it here.
+    root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
     try { localStorage.setItem("kevy-theme", root.dataset.theme); } catch (e) {}
   });
 

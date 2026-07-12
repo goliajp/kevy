@@ -29,27 +29,6 @@ function print(text, cls) {
 // access handles exist only inside dedicated workers, so the check runs
 // in a throwaway worker; no cross-origin isolation (COOP/COEP) is needed
 // by either backend — the loader's OPFS worker talks plain postMessage.
-async function probeOpfs() {
-  if (!("storage" in navigator) || typeof Worker === "undefined") return false;
-  const src =
-    "onmessage=async()=>{try{" +
-    "const r=await navigator.storage.getDirectory();" +
-    "const d=await r.getDirectoryHandle('kevy-wasm',{create:true});" +
-    "const f=await d.getFileHandle('probe.tmp',{create:true});" +
-    "const h=await f.createSyncAccessHandle();h.close();" +
-    "await d.removeEntry('probe.tmp');postMessage(true)" +
-    "}catch(e){postMessage(false)}};";
-  const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
-  const w = new Worker(url);
-  const ok = await new Promise((resolve) => {
-    w.onmessage = (ev) => resolve(ev.data === true);
-    w.onerror = () => resolve(false);
-    setTimeout(() => resolve(false), 2000);
-  });
-  w.terminate();
-  URL.revokeObjectURL(url);
-  return ok;
-}
 
 const subs = new Map(); // channel -> unsubscribe
 const psubs = new Map(); // pattern -> unsubscribe
@@ -271,15 +250,17 @@ async function selftest() {
 
 (async () => {
   try {
-    const [instance, opfs] = await Promise.all([
-      open({ persist: { name: "kevy-demo" } }),
-      probeOpfs(),
-    ]);
-    db = instance;
+    db = await open({ persist: { name: "kevy-demo" } });
     dot.classList.add("on");
     const n = db.dbsize();
+    // The engine reports which backend it actually opened. Probing the
+    // platform and guessing from that is how a page ends up claiming OPFS
+    // on a build that silently fell back to IndexedDB.
+    const backend = db.backend === "opfs" ? "OPFS" : "IndexedDB";
+    const badge = document.getElementById("backend");
+    if (badge) badge.textContent = backend;
     stat.textContent =
-      `engine ready · persistence: ${opfs ? "OPFS" : "IndexedDB"} (auto)` +
+      `engine ready · persistence: ${backend}` +
       ` · cross-tab bridge: on · ${n} key${n === 1 ? "" : "s"} replayed`;
     print("kevy is up. Data persists across reloads; open a second tab for pub/sub.", "dim");
     print("Type: help", "dim");

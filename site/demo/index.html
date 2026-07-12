@@ -3,42 +3,60 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>kevy live demo — the engine in your browser</title>
-<meta name="description" content="A browser REPL over the kevy WebAssembly engine: real commands, OPFS persistence that survives reloads, and pub/sub across tabs. No backend.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23132242'/%3E%3Ctext x='6' y='24' font-family='monospace' font-size='20' fill='%23d97706'%3Ek%3C/text%3E%3C/svg%3E">
+<title>kevy REPL — the engine, running in this tab</title>
+<meta name="description" content="A browser REPL over the kevy WebAssembly engine: real commands, OPFS persistence that survives a reload, and pub/sub across tabs. No backend.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230A0D10'/%3E%3Ctext x='5' y='24' font-family='ui-monospace,monospace' font-size='21' font-weight='700' fill='%233FC7D4'%3Ek%3C/text%3E%3Crect x='21' y='9' width='5' height='14' fill='%233FC7D4'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="../assets/site.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
 </head>
 <body>
 
-<header class="site">
-  <div class="wrap">
-    <div class="wordmark"><a href="../">kevy<span class="cursor-block"></span></a></div>
-    <nav class="top">
-      <a href="../">home</a>
-      <a href="playground.html">playground</a>
-      <a href="https://github.com/goliajp/kevy/tree/develop/docs">docs</a>
-      <a href="https://github.com/goliajp/kevy">github</a>
-    </nav>
-    <div class="lang" aria-label="Language">
-      <a href="../">EN</a><span class="sep">·</span><a href="../ja/" lang="ja">日本語</a><span class="sep">·</span><a href="../zh-CN/" lang="zh-CN">简体中文</a>
+<a class="skip" href="#main">Skip to content</a>
+
+<header class="masthead">
+  <div class="wrap masthead-in">
+    <a class="wordmark" href="../">kevy</a>
+    <div class="mast-spec" aria-label="Build facts">
+      <span>wasm <b>416 KB</b></span>
+      <span>deps <b>0</b></span>
+      <span>backend <b id="backend">—</b></span>
+      <span>no server</span>
+    </div>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language">
+        <a href="../" aria-current="page">EN</a>
+        <a href="../zh-CN/" lang="zh-Hans">中文</a>
+        <a href="../ja/" lang="ja">日本語</a>
+      </nav>
+      <a class="ghost-link" href="playground.html">Playground</a>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle light or dark theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
     </div>
   </div>
 </header>
 
-<main>
+<main id="main">
 
-<section class="sheet">
-  <div class="wrap">
-    <div class="strip">Live demo · WebAssembly</div>
-    <h1>kevy, running in this tab.</h1>
-    <p class="lead">This page loads the real kevy engine as a wasm module
-    and opens it with persistence on. Everything below runs locally —
-    there is no backend. Type <code>help</code> for the command list.</p>
+  <div class="wrap hero" style="padding-bottom:0">
+    <p class="tag rise d1">Live · WebAssembly · No backend</p>
+    <h1 class="rise d2" style="font-size:clamp(28px,3.6vw,44px)">kevy, <em>running in this tab</em>.</h1>
+    <p class="lede rise d3">
+      This page loads the real engine as a wasm module and opens it with persistence on.
+      Nothing here round-trips to a server — the keyspace lives in your browser's memory,
+      and the write log goes to your disk. Type <code>help</code> for the command list.
+    </p>
 
-    <div class="repl">
-      <div class="bar">
+    <div class="repl rise d4">
+      <div class="repl-bar">
         <span class="dot" id="dot"></span>
-        <span class="stat" id="stat">loading kevy.wasm …</span>
+        <span id="stat">loading kevy.wasm …</span>
       </div>
       <pre id="log" aria-live="polite"></pre>
       <form id="f" autocomplete="off">
@@ -47,60 +65,110 @@
                aria-label="Command input" placeholder="help">
       </form>
     </div>
+  </div>
 
-    <div class="guides">
-      <div class="guide">
-        <h3>Persistence you can refresh</h3>
+  <section class="band wrap" id="try">
+    <div class="band-head">
+      <span class="tag">Exercises</span>
+      <h2>Three things a browser store usually cannot do</h2>
+      <span class="rule"></span>
+      <span class="meta">run them in the console above</span>
+    </div>
+
+    <div class="cols-3">
+      <div class="card">
+        <p class="tag">01 · Durability</p>
+        <h3>Survive a reload</h3>
         <ol>
           <li><code>set greeting hello</code></li>
-          <li>Reload this page (writes stream to OPFS as a kevy
-              append-only log; IndexedDB where OPFS is unavailable).</li>
+          <li>Reload this page. The write streamed to OPFS as a kevy append-only log
+              (IndexedDB where OPFS has no synchronous handles).</li>
           <li><code>get greeting</code> — still there.</li>
         </ol>
-        <p>The stored bytes are a standard kevy AOF: the same log replays
-        in a native kevy server unchanged.</p>
+        <p>Those bytes are an ordinary kevy AOF: the same log replays into a native
+        kevy server unchanged.</p>
       </div>
-      <div class="guide">
-        <h3>Pub/sub across two tabs</h3>
+
+      <div class="card">
+        <p class="tag">02 · Cross-tab</p>
+        <h3>Pub/sub between two tabs</h3>
         <ol>
           <li>Open this page in a second tab.</li>
           <li>Tab A: <code>subscribe news</code></li>
           <li>Tab B: <code>publish news hello-from-B</code></li>
-          <li>Tab A prints the message — delivered over
-              BroadcastChannel, at-most-once, no backlog.</li>
+          <li>Tab A prints it — carried over BroadcastChannel, at-most-once, no backlog.</li>
         </ol>
+        <p>Real channel and pattern subscriptions, not the coarse <code>storage</code> event.</p>
       </div>
-      <div class="guide">
+
+      <div class="card">
+        <p class="tag">03 · Expiry</p>
         <h3>TTLs, counters, scans</h3>
-        <p><code>set session abc ttl 5000</code> then watch
-        <code>pttl session</code> count down and the key expire.
-        <code>incr visits</code> · <code>keys *</code> ·
-        <code>dbsize</code> · <code>flushall</code>.</p>
-      </div>
-      <div class="guide">
-        <h3>What this is</h3>
-        <p>The <a href="https://www.npmjs.com/package/@goliajp/kevy">@goliajp/kevy</a>
-        npm package: a ~420&nbsp;KB <code>wasm32-unknown-unknown</code>
-        module behind a hand-written ES-module loader. Zero dependencies,
-        no binding generator. Measured against browser storage in
-        <a href="https://github.com/goliajp/kevy/blob/develop/bench/WASM-BENCH.md">bench/WASM-BENCH.md</a>:
-        durable writes at 593k–848k ops/s vs 46k for raw IndexedDB.</p>
+        <p><code>set session abc ttl 5000</code>, then watch <code>pttl session</code>
+        count down and the key expire on its own.</p>
+        <p style="margin-top:8px"><code>incr visits</code> · <code>keys *</code> ·
+        <code>dbsize</code> · <code>flushall</code></p>
+        <p style="margin-top:8px">Expiry is the engine's, not a <code>setTimeout</code>
+        someone bolted on the outside.</p>
       </div>
     </div>
-  </div>
-</section>
+
+    <div class="cols-2" style="margin-top:18px">
+      <div class="card">
+        <p class="tag">What this actually is</p>
+        <h3>The engine, not a wrapper</h3>
+        <p>
+          The <a href="https://www.npmjs.com/package/@goliajp/kevy">@goliajp/kevy</a> package:
+          a <b>416 KB</b> <code>wasm32-unknown-unknown</code> module behind a hand-written
+          ES-module loader. Zero dependencies, and <b>no binding generator</b> — the C ABI
+          is written by hand, so there is no <code>wasm-bindgen</code> glue between you and it.
+        </p>
+        <p>
+          Every operation executes in wasm linear memory. Storage is where the log lands,
+          not where the lookups happen.
+        </p>
+      </div>
+      <div class="card">
+        <p class="tag">Measured, including the loss</p>
+        <h3>Where it wins, and where it does not</h3>
+        <p>
+          Against IndexedDB it is <b>77–189×</b> faster. Against <code>localStorage</code> it
+          wins writes <b>4.9×</b> — and <b>loses small reads</b>, because a native synchronous
+          hash lookup crosses no boundary and a wasm call does.
+        </p>
+        <p style="margin-top:10px">
+          <a href="../#web">The full numbers, losses included →</a>
+          <span style="color:var(--line-strong)">·</span>
+          <a href="playground.html">Run the benchmark here →</a>
+        </p>
+      </div>
+    </div>
+  </section>
 
 </main>
 
-<footer class="site">
-  <div class="wrap">
-    <span>© GOLIA K.K. · Apache-2.0 OR MIT</span>
-    <div class="lang">
-      <a href="../">EN</a><span class="sep">·</span><a href="../ja/" lang="ja">日本語</a><span class="sep">·</span><a href="../zh-CN/" lang="zh-CN">简体中文</a>
-    </div>
-  </div>
+<footer class="foot wrap">
+  <span>kevy 4.0</span>
+  <span class="sep">·</span>
+  <span>© GOLIA K.K.</span>
+  <span class="sep">·</span>
+  <span>Apache-2.0 OR MIT</span>
+  <span class="sep">·</span>
+  <a href="../">Home</a>
+  <a href="https://github.com/goliajp/kevy">GitHub</a>
+  <a href="https://www.npmjs.com/package/@goliajp/kevy">npm</a>
+  <a href="https://github.com/goliajp/kevy/blob/develop/docs/wasm.md">Docs</a>
 </footer>
 
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var root = document.documentElement;
+    // Light is the default; dark is opt-in. The OS preference is not
+    // consulted — a reader who wants dark asks for it here.
+    root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", root.dataset.theme); } catch (e) {}
+  });
+</script>
 <script type="module" src="repl.js"></script>
 </body>
 </html>
