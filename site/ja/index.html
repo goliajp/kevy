@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kevy — 純 Rust・依存ゼロの Redis 互換ストレージエンジン</title>
-<meta name="description" content="kevy は一行も外部クレートを使わずに書かれた、純 Rust・依存ゼロの Redis 互換ストレージエンジンです。サーバーとして動き(GET 639 万 ops/s、valkey 9.1 比 1.6〜3.6 倍)、アプリの中に組み込め(392 KB、OS のないマイコンまで)、ブラウザでも動き(416 KB の wasm、IndexedDB 比 9〜190 倍)、MCP 経由で AI エージェントの記憶層にもなります。">
+<meta name="description" content="kevy は一行も外部クレートを使わずに書かれた、純 Rust・依存ゼロの Redis 互換ストレージエンジンです。サーバーとして動き(GET 639 万 ops/s、valkey 9.1 比 1.6〜4.0 倍)、アプリの中に組み込め(392 KB、OS のないマイコンまで)、ブラウザでも動き(416 KB の wasm、IndexedDB 比 77〜189 倍)、MCP 経由で AI エージェントの記憶層にもなります。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230A0D10'/%3E%3Ctext x='5' y='24' font-family='ui-monospace,monospace' font-size='21' font-weight='700' fill='%233FC7D4'%3Ek%3C/text%3E%3Crect x='21' y='9' width='5' height='14' fill='%233FC7D4'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="../assets/site.css">
 <script>
@@ -65,7 +65,7 @@
         <div class="ch-figs">
           <div class="ch-fig"><span>GET</span><b>639万/s</b></div>
           <div class="ch-fig"><span>SET</span><b>638万/s</b></div>
-          <div class="ch-fig"><span>valkey 9.1 比</span><b>1.6–3.6×</b></div>
+          <div class="ch-fig"><span>valkey 9.1 比</span><b>1.6–4.0×</b></div>
         </div>
         <span class="ch-go">実測値を見る</span>
       </a>
@@ -88,7 +88,7 @@
         <p>localStorage は約 5 MB で頭打ちのうえタブを止めます。IndexedDB は遅い。ここで動くのはエンジンそのもの、あなたのタブの中で。</p>
         <div class="ch-figs">
           <div class="ch-fig"><span>wasm</span><b>416 KB</b></div>
-          <div class="ch-fig"><span>IndexedDB 比</span><b>9–190×</b></div>
+          <div class="ch-fig"><span>IndexedDB 比</span><b>77–189×</b></div>
           <div class="ch-fig"><span>タブ間 p50</span><b>0.1 ms</b></div>
         </div>
         <span class="ch-go">その場で試す</span>
@@ -163,18 +163,18 @@
 
     <div style="margin-top:18px" class="tbl-wrap">
       <table>
-        <caption class="tag" style="text-align:left;padding:10px 14px;caption-side:top">アリーナ · 7 面すべてを valkey 9.1 と同一マシンで対戦</caption>
+        <caption class="tag" style="text-align:left;padding:10px 14px;caption-side:top">アリーナ · 7 面すべてを valkey 9.1 と同一マシンで対戦 · 3.17.0 リリース時の計測</caption>
         <thead>
           <tr><th>コマンド</th><th class="num">kevy</th><th class="num">valkey 9.1</th><th class="num">倍率</th><th>何を測るか</th></tr>
         </thead>
         <tbody>
-          <tr><td class="k">GET</td><td class="num">6,389,776</td><td class="num">2,131,628</td><td class="num win">3.0×</td><td>点読み。キャッシュのホットパス</td></tr>
-          <tr><td class="k">SET</td><td class="num">6,389,776</td><td class="num">1,522,939</td><td class="num win">4.2×</td><td>点書き。書き込みログ有効のまま</td></tr>
-          <tr><td class="k">INCR</td><td class="num">6,389,776</td><td class="num">2,131,060</td><td class="num win">3.0×</td><td>アトミックカウンタ(read-modify-write)</td></tr>
-          <tr><td class="k">SADD</td><td class="num">5,329,780</td><td class="num">2,131,060</td><td class="num win">2.5×</td><td>集合のメンバーシップ</td></tr>
-          <tr><td class="k">HSET</td><td class="num">4,566,210</td><td class="num">1,682,793</td><td class="num win">2.7×</td><td>ハッシュのフィールド書き込み</td></tr>
-          <tr><td class="k">LPUSH</td><td class="num">3,196,164</td><td class="num">1,599,360</td><td class="num win">2.0×</td><td>リスト先頭への挿入(キュー形)</td></tr>
-          <tr><td class="k">ZADD</td><td class="num">2,906,977</td><td class="num">1,598,402</td><td class="num win">1.8×</td><td>ソート済み集合。最も重い書き込み</td></tr>
+          <tr><td class="k">GET</td><td class="num">6,389,776</td><td class="num">2,131,060</td><td class="num win">3.00×</td><td>点読み。キャッシュのホットパス</td></tr>
+          <tr><td class="k">SET</td><td class="num">6,389,776</td><td class="num">1,598,082</td><td class="num win">4.00×</td><td>点書き。書き込みログ有効のまま</td></tr>
+          <tr><td class="k">INCR</td><td class="num">5,326,232</td><td class="num">2,131,628</td><td class="num win">2.50×</td><td>アトミックカウンタ(read-modify-write)</td></tr>
+          <tr><td class="k">SADD</td><td class="num">5,326,232</td><td class="num">2,131,628</td><td class="num win">2.50×</td><td>集合のメンバーシップ</td></tr>
+          <tr><td class="k">HSET</td><td class="num">3,998,001</td><td class="num">1,776,199</td><td class="num win">2.25×</td><td>ハッシュのフィールド書き込み</td></tr>
+          <tr><td class="k">LPUSH</td><td class="num">3,196,164</td><td class="num">1,776,199</td><td class="num win">1.80×</td><td>リスト先頭への挿入(キュー形)</td></tr>
+          <tr><td class="k">ZADD</td><td class="num">2,666,667</td><td class="num">1,682,793</td><td class="num win">1.58×</td><td>ソート済み集合。最も重い書き込み</td></tr>
         </tbody>
       </table>
     </div>
@@ -285,13 +285,13 @@
       <div class="plot">
         <p class="tag" style="margin:0 0 12px">点書き · ops/秒 · 10万キー</p>
         <div class="plot-rows">
-          <div class="prow me"><span class="who">kevy(wasm)</span><span class="track"><span class="fill" data-w="100"></span></span><span class="val">1,742,160</span></div>
-          <div class="prow"><span class="who">localStorage</span><span class="track"><span class="fill" data-w="21"></span></span><span class="val">365,464 <small>4.8×</small></span></div>
-          <div class="prow"><span class="who">IndexedDB</span><span class="track"><span class="fill" data-w="1"></span></span><span class="val">9,168 <small>190×</small></span></div>
+          <div class="prow me"><span class="who">kevy(wasm)</span><span class="track"><span class="fill" data-w="100"></span></span><span class="val">1,787,310</span></div>
+          <div class="prow"><span class="who">localStorage</span><span class="track"><span class="fill" data-w="21"></span></span><span class="val">361,696 <small>4.9×</small></span></div>
+          <div class="prow"><span class="who">IndexedDB</span><span class="track"><span class="fill" data-w="1"></span></span><span class="val">9,479 <small>189×</small></span></div>
         </div>
         <p class="plot-foot">
-          スキャンも同じ傾向です。10万キーに対するパターンスキャンは kevy が <b>5.5 ms</b>、
-          IndexedDB が <b>257 ms</b> —— <b>47 倍</b>。
+          スキャンも同じ傾向です。10万キーに対するパターンスキャンは kevy が <b>5.6 ms</b>、
+          IndexedDB が <b>254 ms</b> —— <b>46 倍</b>。
         </p>
       </div>
 
@@ -446,10 +446,9 @@
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var root = document.documentElement;
-    var dark = root.dataset.theme
-      ? root.dataset.theme === "dark"
-      : matchMedia("(prefers-color-scheme: dark)").matches;
-    root.dataset.theme = dark ? "light" : "dark";
+    // Light is the default; dark is opt-in. The OS preference is not
+    // consulted — a reader who wants dark asks for it here.
+    root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
     try { localStorage.setItem("kevy-theme", root.dataset.theme); } catch (e) {}
   });
 
