@@ -36,7 +36,7 @@
 </header>
 
 <div class="doc-shell">
-  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/" aria-current="page">クラスタ</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">184 コマンド全て</a></li></ul></aside>
+  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/" aria-current="page">クラスタ</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">184 コマンド全て</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>クラスタ</h1></div>
 <p>kevyのクラスタ機能には独立した2つのレイヤがあります。<b>シングルノードのマルチシャード公開</b>（1プロセスで、すべてのシャードがRedis Clusterを話す）と、<b>マルチノードのレプリケーション+スコープ付きマルチライター</b>（プライマリ、レプリカ、組み込み、クォーラムフェイルオーバー）です。片方だけ、両方、あるいはどちらも使わない、が選べます。</p>
 <h2 id="2レイヤの概観">2レイヤの概観</h2>
@@ -63,6 +63,7 @@
 <p>キー空間全体を対象とするコマンド（<code>KEYS</code>、<code>SCAN</code>、<code>DBSIZE</code>、<code>FLUSHALL</code>）は、どのポートで実行してもキー空間全体を対象とし続けます。kevyが内部でファンアウトするので、クライアントが面倒を見る必要はありません。</p>
 <h2 id="有効化">有効化</h2>
 <figure class="code"><pre><code class="lang-toml"># kevy.toml
+[server]
 port = 6004
 
 [cluster]
@@ -109,12 +110,14 @@ let reply = cc.request_unkeyed(&amp;[b"PING".to_vec()])?;
 <h2 id="プライマリとレプリカ">プライマリとレプリカ</h2>
 <p>kevyサーバーは、自分の書き込みログをストリーミングするプライマリにも、それをミラーするレプリカにもなれます（デフォルトのロールは<code>standalone</code>で、レプリケーションは休眠しています）。プライマリはシャードごとに専用のレプリケーションリスナーをbindします。レプリカは接続し、最後に適用したオフセットを渡し、ストリーミングされてくるフレームをローカルシャードに適用します。チェーンレプリケーション（レプリカのレプリカ）はサポートされません。</p>
 <figure class="code"><pre><code class="lang-toml"># primary.toml
+[server]
 port = 6004
 
 [replication]
 role             = "primary"
 listen_port_base = 16004    # 任意。デフォルトは port + 10000</code></pre></figure>
 <figure class="code"><pre><code class="lang-toml"># replica.toml
+[server]
 port = 6004
 
 [replication]

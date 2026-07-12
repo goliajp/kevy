@@ -50,6 +50,7 @@ Whole-keyspace commands (`KEYS`, `SCAN`, `DBSIZE`, `FLUSHALL`) stay whole-keyspa
 
 ```toml
 # kevy.toml
+[server]
 port = 6004
 
 [cluster]
@@ -141,6 +142,7 @@ A kevy server can be a primary streaming its write log, or a replica that mirror
 
 ```toml
 # primary.toml
+[server]
 port = 6004
 
 [replication]
@@ -150,6 +152,7 @@ listen_port_base = 16004    # optional; defaults to port + 10000
 
 ```toml
 # replica.toml
+[server]
 port = 6004
 
 [replication]

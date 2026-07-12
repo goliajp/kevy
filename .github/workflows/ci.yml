@@ -101,6 +101,11 @@ jobs:
       - name: site links (no dead internal link in site/)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_links.py
+      - name: doc configs (every ```toml in docs/ actually loads)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo build -q -p kevy --bin kevy
+          python3 tools/check_doc_toml.py
       - name: locgate (files ≤500 LOC, fns ≤50 or waivered)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: bash bench/locgate.sh

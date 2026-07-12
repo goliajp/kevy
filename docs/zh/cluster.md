@@ -50,6 +50,7 @@ shard `i` 固定绑定 `port_base + 1 + i`（`port_base` 可在 TOML 里覆盖�
 
 ```toml
 # kevy.toml
+[server]
 port = 6004
 
 [cluster]
@@ -141,6 +142,7 @@ let reply = cc.request_unkeyed(&[b"PING".to_vec()])?;
 
 ```toml
 # primary.toml
+[server]
 port = 6004
 
 [replication]
@@ -150,6 +152,7 @@ listen_port_base = 16004    # optional; defaults to port + 10000
 
 ```toml
 # replica.toml
+[server]
 port = 6004
 
 [replication]

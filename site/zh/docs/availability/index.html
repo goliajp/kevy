@@ -44,7 +44,7 @@
 <h3 id="单节点">单节点</h3>
 <p>不配置复制（<code>role = "standalone"</code>，默认）。每次写入落进本地 store 即告确认；耐久性交给 <a href="../persistence/"><code>docs/persistence.md</code></a>（AOF + RDB）。没有切主可言——可用性就等于进程的存活时间。</p>
 <h3 id="主节点-副本">主节点 + 副本</h3>
-<figure class="code"><pre><code class="lang-toml"># primary                          # each replica
+<figure class="code"><pre><code class="lang-toml,fragment"># primary                          # each replica
 [replication]                      [replication]
 role = "primary"                   role = "replica"
                                    upstream = "primary.internal:16004"</code></pre></figure>

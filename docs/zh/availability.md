@@ -12,7 +12,7 @@
 
 ### 主节点 + 副本
 
-```toml
+```toml,fragment
 # primary                          # each replica
 [replication]                      [replication]
 role = "primary"                   role = "replica"

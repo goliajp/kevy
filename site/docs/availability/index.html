@@ -44,7 +44,7 @@
 <h3 id="single-node">Single node</h3>
 <p>No replication config (<code>role = "standalone"</code>, the default). Every write is acknowledged as soon as it lands in the local store; durability is <a href="https://github.com/goliajp/kevy/blob/develop/docs/persistence.md"><code>docs/persistence.md</code></a> (AOF + RDB). There is no failover — availability equals the lifetime of the process.</p>
 <h3 id="primary-replicas">Primary + replicas</h3>
-<figure class="code"><pre><code class="lang-toml"># primary                          # each replica
+<figure class="code"><pre><code class="lang-toml,fragment"># primary                          # each replica
 [replication]                      [replication]
 role = "primary"                   role = "replica"
                                    upstream = "primary.internal:16004"</code></pre></figure>

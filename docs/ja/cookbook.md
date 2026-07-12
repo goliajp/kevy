@@ -309,7 +309,7 @@ kevy-cli -p 6004 IDX.QUERY HYBRID chunk_text MATCH 'change frame' chunk_ann KNN 
 
 ---
 
-最後の2つのレシピは、ラックの外へ出ます。エッジノードの上のkevy——同じサーバーバイナリ、あるいは`core`ティアまで絞り込んで655 KBにした`kevy-embedded`（[docs/iot.md](../iot.md)）——は同じverbを話すので、パターンはデータセンターからセンサーゲートウェイまでそのまま持ち運べます。
+最後の2つのレシピは、ラックの外へ出ます。エッジノードの上のkevy——同じサーバーバイナリ、あるいは`core`ティアまで絞り込んで655 KBにした`kevy-embedded`（[docs/iot.md](iot.md)）——は同じverbを話すので、パターンはデータセンターからセンサーゲートウェイまでそのまま持ち運べます。
 
 ## 19. センサーキャッシュ（最新値＋生存リース）
 
@@ -365,7 +365,7 @@ kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX reading:   # the uplink loop
 
 ## レシピ索引
 
-レシピ↔それが置き換えるSQL構文↔意味論と限界を明記する[rds-workloads.md](../rds-workloads.md)のマトリクス行、の対応表です。
+レシピ↔それが置き換えるSQL構文↔意味論と限界を明記する[rds-workloads.md](rds-workloads.md)のマトリクス行、の対応表です。
 
 | # | レシピ | SQL構文 | マトリクス行 |
 |---|---|---|---|

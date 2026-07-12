@@ -12,7 +12,7 @@ kevyのデプロイが、ノード障害を越えて書き込み可能・読み�
 
 ### プライマリ + レプリカ
 
-```toml
+```toml,fragment
 # primary                          # each replica
 [replication]                      [replication]
 role = "primary"                   role = "replica"

@@ -41,6 +41,10 @@ def inline(s, link_map=None):
 
     def link(m):
         text, href = m.group(1), m.group(2)
+        # A backslash-escaped character in a URL is markdown's escape, not part
+        # of the path: `rds\-workloads.md` is a link to rds-workloads.md, and
+        # carrying the backslash through produced a 404.
+        href = re.sub(r"\\(.)", r"\1", href)
         if link_map:
             href = link_map(href)
         return f'<a href="{html.escape(href, quote=True)}">{text}</a>'

@@ -63,6 +63,7 @@
 <p>全键空间命令（<code>KEYS</code>、<code>SCAN</code>、<code>DBSIZE</code>、<code>FLUSHALL</code>）在任何端口上都仍作用于整个键空间——kevy 在内部完成扇出，客户端无需自己动手。</p>
 <h2 id="启用方式">启用方式</h2>
 <figure class="code"><pre><code class="lang-toml"># kevy.toml
+[server]
 port = 6004
 
 [cluster]
@@ -109,12 +110,14 @@ let reply = cc.request_unkeyed(&amp;[b"PING".to_vec()])?;
 <h2 id="主节点与副本">主节点与副本</h2>
 <p>一台 kevy 服务器可以当主节点，把自己的写日志流式发出；也可以当副本，镜像某个主节点（默认角色是 <code>standalone</code>，复制子系统休眠）。主节点为每个 shard 绑定一个专用复制监听；副本连上来，报出自己最后应用的 offset，再把流过来的帧逐条应用到本地 shard。不支持链式复制（副本的副本）。</p>
 <figure class="code"><pre><code class="lang-toml"># primary.toml
+[server]
 port = 6004
 
 [replication]
 role             = "primary"
 listen_port_base = 16004    # optional; defaults to port + 10000</code></pre></figure>
 <figure class="code"><pre><code class="lang-toml"># replica.toml
+[server]
 port = 6004
 
 [replication]

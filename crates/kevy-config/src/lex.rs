@@ -14,6 +14,8 @@ pub(crate) enum Token {
     RBracket,
     /// `=` — key/value separator.
     Equals,
+    /// `,` — separates the elements of an array.
+    Comma,
     /// `\n` — statement terminator. Multiple newlines compress here for
     /// the parser to consume one at a time.
     Newline,
@@ -88,6 +90,10 @@ impl<'a> Lexer<'a> {
             b'=' => {
                 self.advance();
                 Token::Equals
+            }
+            b',' => {
+                self.advance();
+                Token::Comma
             }
             b'"' | b'\'' => self.consume_string(b, line, col)?,
             c if c.is_ascii_digit() || c == b'-' || c == b'+' => self.consume_number(line, col)?,
