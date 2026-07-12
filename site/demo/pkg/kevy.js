@@ -252,6 +252,53 @@ export class Kevy {
     return v === undefined ? undefined : td.decode(v);
   }
 
+  /**
+   * MGET — read many keys in a single crossing into wasm.
+   *
+   * A per-key `get()` pays the boundary cost every call: encode the key
+   * into linear memory, call, copy the value back. On small values that
+   * crossing dominates the lookup. `mget` pays it once for the whole
+   * batch, which is what makes wasm KV competitive on read-heavy work.
+   *
+   * Returns an array parallel to `keys`: a `Uint8Array` per hit,
+   * `undefined` per miss.
+   */
+  mget(keys) {
+    if (!keys.length) return [];
+    this.#clock();
+    // Stage every key into one scratch buffer: [len u32][key bytes]…
+    let cap = 0;
+    for (const k of keys) cap += 4 + this.#cap(k);
+    const ptr = this.#ensureScratch(cap);
+    const mem = this.#mem();
+    const dv = new DataView(mem.buffer);
+    let off = ptr;
+    for (const k of keys) {
+      const body = off + 4;
+      const len = this.#encodeAt(mem, k, body);
+      dv.setUint32(off, len, true);
+      off = body + len;
+    }
+    const n = this.#check(this.#e.kevy_mget(this.#h, ptr, off - ptr, keys.length));
+    const buf = this.#out();
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    const out = [];
+    let i = 0;
+    for (let j = 0; j < n; j++) {
+      const len = view.getUint32(i, true);
+      i += 4;
+      if (len === 0xffffffff) { out.push(undefined); continue; } // miss sentinel
+      out.push(buf.slice(i, i + len));
+      i += len;
+    }
+    return out;
+  }
+
+  /** MGET decoded as UTF-8 text; `undefined` per miss. */
+  mgetText(keys) {
+    return this.mget(keys).map((v) => (v === undefined ? undefined : td.decode(v)));
+  }
+
   /** DEL. Returns true if the key existed. */
   del(key) {
     this.#clock();

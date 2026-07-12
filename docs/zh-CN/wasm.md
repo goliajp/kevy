@@ -66,7 +66,7 @@ key 和 value 处处接受 `string | Uint8Array | ArrayBuffer`：字符串在边
 
 ## 绑定的工作方式（没有 wasm-bindgen）
 
-kevy 的零依赖法则延伸到工具链：边界两侧都没有绑定生成器。[`kevy-wasm`](https://docs.rs/kevy-wasm) crate 导出一套扁平的手写 C ABI——29 个 `extern "C"` symbol；`pkg/kevy.js` 是手写 loader，负责 TypedArray 边界、UTF-8 编解码、持久化泵和跨 tab 桥。约定如下：
+kevy 的零依赖法则延伸到工具链：边界两侧都没有绑定生成器。[`kevy-wasm`](https://docs.rs/kevy-wasm) crate 导出一套扁平的手写 C ABI——30 个 `extern "C"` symbol；`pkg/kevy.js` 是手写 loader，负责 TypedArray 边界、UTF-8 编解码、持久化泵和跨 tab 桥。约定如下：
 
 - **实例**是 `kevy_open` 发出的 `u32` 句柄；其余每个调用都以句柄开头。`0` 永远不是合法句柄。
 - **入参字节**以 `(ptr, len)` 对传入，指向由 `kevy_alloc` 取得、用 `kevy_free` 归还的线性内存。

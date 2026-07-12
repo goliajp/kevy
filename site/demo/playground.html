@@ -400,6 +400,15 @@ $('b-bench').onclick = async () => {
   for (let i = 0; i < N; i++) db.get(`bench:${i}`);
   readBench.kevy = N / ((performance.now() - t) / 1000);
 
+  // Batched read: one crossing per chunk instead of one per key. It
+  // amortizes the call overhead — but the per-key encode and per-value
+  // copy stay linear, so it narrows the gap without closing it.
+  const chunk = 256;
+  const allKeys = Array.from({ length: N }, (_, i) => `bench:${i}`);
+  t = performance.now();
+  for (let i = 0; i < N; i += chunk) db.mget(allKeys.slice(i, i + chunk));
+  readBench.kevyBatch = N / ((performance.now() - t) / 1000);
+
   t = performance.now();
   for (let i = 0; i < N; i++) localStorage.getItem(`bench:${i}`);
   readBench.ls = bench.ls ? N / ((performance.now() - t) / 1000) : 0;
@@ -419,7 +428,8 @@ $('b-bench').onclick = async () => {
     { label: 'IndexedDB', v: Math.round(bench.idb) },
   ];
   const readBars = [
-    { label: 'kevy', v: Math.round(readBench.kevy), kevy: true },
+    { label: 'kevy (per key)', v: Math.round(readBench.kevy), kevy: true },
+    { label: 'kevy (mget)', v: Math.round(readBench.kevyBatch), kevy: true },
     { label: 'localStorage', v: Math.round(readBench.ls) },
     { label: 'IndexedDB', v: Math.round(readBench.idb) },
   ];
@@ -436,7 +446,8 @@ $('b-bench').onclick = async () => {
     `<b>Reads: localStorage wins</b>${rVsLs ? ` — kevy runs at ${rVsLs.toFixed(2)}× of it` : ''}. ` +
     `That is not the engine being slow: <code>getItem</code> is a native synchronous hash lookup with no boundary to cross, ` +
     `while every kevy read encodes the key, crosses into wasm, and copies the value back out. On a 16-byte value that ` +
-    `crossing costs more than the lookup itself.<br><br>` +
+    `crossing costs more than the lookup itself. <code>mget()</code> batches the crossing and wins back ~1.5×, but the ` +
+    `per-key encode and per-value copy stay linear — so it narrows the gap and cannot close it.<br><br>` +
     `<b>What you buy for it:</b> ~5–10 MB is localStorage's hard ceiling and every write blocks this tab (it is synchronous); ` +
     `kevy holds gigabytes, flushes in the background, scans by pattern, expires by TTL, does atomic counters and hashes and lists, ` +
     `and carries pub/sub across tabs. <b>If your data is small, string-only, and read-mostly — use localStorage.</b> ` +
@@ -448,7 +459,8 @@ $('b-bench').onclick = async () => {
   refreshKeys();
   btn.disabled = false; btn.textContent = 'Run benchmark';
   return { kevy: bench.kevy, ls: bench.ls, idb: bench.idb,
-           readKevy: readBench.kevy, readLs: readBench.ls, readIdb: readBench.idb };
+           readKevy: readBench.kevy, readKevyBatch: readBench.kevyBatch,
+           readLs: readBench.ls, readIdb: readBench.idb };
 };
 
 // ---------- selftest (?selftest=1) ----------
@@ -495,14 +507,15 @@ if (new URLSearchParams(location.search).has('selftest')) {
       // Both axes must have produced numbers — including the read axis,
       // where kevy loses to localStorage. A demo that only measures the
       // axis it wins is not a measurement.
-      result.steps.benchRan = !!(bench && bench.kevy > 0 && bench.idb > 0 && bench.readKevy > 0);
+      result.steps.benchRan = !!(bench && bench.kevy > 0 && bench.idb > 0 && bench.readKevy > 0 && bench.readKevyBatch > 0);
       result.bench = bench
         ? {
             write: { kevy: Math.round(bench.kevy), localStorage: Math.round(bench.ls), indexedDB: Math.round(bench.idb) },
-            read: { kevy: Math.round(bench.readKevy), localStorage: Math.round(bench.readLs), indexedDB: Math.round(bench.readIdb) },
+            read: { kevy: Math.round(bench.readKevy), kevyBatch: Math.round(bench.readKevyBatch), localStorage: Math.round(bench.readLs), indexedDB: Math.round(bench.readIdb) },
             kevyVsLocalStorage: {
               write: +(bench.kevy / bench.ls).toFixed(2),
               read: +(bench.readKevy / bench.readLs).toFixed(2), // < 1 = kevy loses, as it should read
+              readBatched: +(bench.readKevyBatch / bench.readLs).toFixed(2), // batching narrows it, never closes it
             },
           }
         : null;
