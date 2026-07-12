@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SRANDMEMBER — kevy コマンドリファレンス</title>
-<meta name="description" content="SRANDMEMBER — セットのメンバーを、削除せずに一つ以上返す。 O(count)(期待値)">
+<meta name="description" content="SRANDMEMBER — 集合からランダムに一つ以上のメンバーを、取り除かずに返す。count が負なら重複を許す。 count が集合よりずっと小さければ O(count) 期待値(ランダムスロット探索)。集合の四分の一を超えると O(N) となり、コピーしてシャッフルするほうが棄却サンプリングより速い。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -44,28 +44,28 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>集合</span> <span>/</span> <b>SRANDMEMBER</b></nav>
 
     <h1 class="cmd">SRANDMEMBER</h1>
-    <p class="lede">セットのメンバーを、削除せずに一つ以上返す。</p>
+    <p class="lede">集合からランダムに一つ以上のメンバーを、取り除かずに返す。count が負なら重複を許す。</p>
 
     <pre class="syntax"><code>SRANDMEMBER key [count]</code></pre>
 
     <dl class="meta">
       <div><dt>グループ</dt><dd>集合</dd></div>
       <div><dt>追加バージョン</dt><dd class="mono">1.0.0</dd></div>
-      <div><dt>引数の数</dt><dd class="mono">2 個以上</dd></div>
+      <div><dt>引数の数</dt><dd class="mono">3 個以上</dd></div>
       <div><dt>フラグ</dt><dd><code>readonly</code></dd></div>
     </dl>
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(count)(期待値)</code></p>
+      <p class="cx-body"><code>count が集合よりずっと小さければ O(count) 期待値(ランダムスロット探索)。集合の四分の一を超えると O(N) となり、コピーしてシャッフルするほうが棄却サンプリングより速い。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
     <section>
       <h2>Redis との互換性</h2>
-      <div class="call loss">
-        <span class="h">差異あり</span>
-        <p>差異あり。ランダムではない。あるセットに対しては、毎回同じ先頭バケットのメンバーが返る。また負の count は拒否され、Redis のように重複を許して |count| 個返すことはしない。</p>
+      <div class="call note">
+        <span class="h">互換</span>
+        <p>互換</p>
       </div>
     </section>
 

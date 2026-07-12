@@ -206,6 +206,11 @@ impl<C: Commands> Shard<C> {
             Op::CollectKeys(pat, limit) => {
                 Part::Keys(self.store.collect_keys(pat.as_deref(), limit))
             }
+            Op::RandomKey => Part::RandomKey {
+                key: self.store.random_key(),
+                live: self.store.dbsize() as u64,
+                draw: self.store.rand_draw(),
+            },
             Op::CheckWatch(keys) => {
                 // EXEC's pre-execution fan-out: report whether any of
                 // `keys` (each carrying the version recorded at WATCH

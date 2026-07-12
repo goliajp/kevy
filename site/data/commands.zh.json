@@ -500,9 +500,9 @@
   "summary": "回复 OK 之后关闭连接。"
  },
  "RANDOMKEY": {
-  "compat": "有差异：结果并不随机 —— 每个 shard 按 hash 桶顺序返回自己遇到的第一个存活 key，归约时又只取第一个 shard 的结果。所以只要键空间不变，每次拿到的都是同一个 key。不要拿它做抽样。",
-  "complexity": "期望 O(1)。",
-  "summary": "从键空间里返回一个随机 key。"
+  "compat": "兼容",
+  "complexity": "O(1) 期望 —— 每个 shard 探一个随机槽位、原点按各 shard 的键数做加权水库抽样、所以每个键的概率严格相等。",
+  "summary": "从键空间随机返回一个键。"
  },
  "RENAME": {
   "compat": "有差异：跨 shard 的重命名是先 Take 再 Put 的非原子序列 —— 中间存在一个两个 key 都看不见的窗口。想走原子路径，就用 {hashtag} 把两个 key 固定到同一个 shard 上。",
@@ -640,14 +640,14 @@
   "summary": "返回 set 的全部成员。"
  },
  "SPOP": {
-  "compat": "有差异：成员并不随机 —— SPOP 按 hash 桶顺序返回最前面的那些成员，且种子是一个固定常量，所以对同一个 set 反复 SPOP 的结果是完全确定的。",
-  "complexity": "期望 O(count)；用 N 次调用把一个 N 成员的 set 抽干是 O(N^2)，因为每次调用都要从头重扫一遍桶。",
-  "summary": "随机移除并返回 set 中的一个或多个成员。"
+  "compat": "兼容",
+  "complexity": "O(count) 期望 —— 每个成员都从一个随机槽位探起、取第一个被占用的。",
+  "summary": "随机移除并返回集合中的一个或多个成员。"
  },
  "SRANDMEMBER": {
-  "compat": "有差异：并不随机 —— 对给定的 set，每次返回的都是排在最前那个桶里的同一个成员。另外负数 count 会被直接拒绝，而不是像 Redis 那样返回 |count| 个允许重复的成员。",
-  "complexity": "期望 O(count)。",
-  "summary": "随机返回 set 中的一个或多个成员，不移除它们。"
+  "compat": "兼容",
+  "complexity": "count 远小于集合时是 O(count) 期望(随机槽位探测)；超过集合四分之一后是 O(N)、此时复制加洗牌比拒绝采样更划算。",
+  "summary": "随机返回集合中的一个或多个成员、不移除。count 为负时允许重复。"
  },
  "SREM": {
   "compat": "兼容",

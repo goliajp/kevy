@@ -99,6 +99,9 @@ pub(crate) enum Op {
     ClientKill(crate::client_ops::ClientKillFilter),
     /// Collect this shard's keys (optional glob + limit) — KEYS/SCAN/RANDOMKEY.
     CollectKeys(Option<Vec<u8>>, Option<usize>),
+    /// One arbitrary key from this shard, plus the weight and randomness the
+    /// origin needs to fold candidates fairly (see [`Part::RandomKey`]).
+    RandomKey,
     /// `WATCH key [key ...]` — register each key in this shard's
     /// version tracker and report its current version back. The origin
     /// shard collates the (key, version) pairs into the conn's
@@ -250,6 +253,16 @@ pub(crate) enum Part {
     GeoHits(crate::GeoHits),
     /// A shard's collected keys (KEYS/SCAN/RANDOMKEY).
     Keys(Vec<Vec<u8>>),
+    /// This shard's RANDOMKEY candidate. `live` is the shard's key count — the
+    /// reservoir weight — and `draw` is a fresh draw from the shard's own RNG,
+    /// so the origin's fold can pick WITHOUT owning an entropy source. Before
+    /// this, the reducer took the first shard's candidate every time: a key on
+    /// any other shard could never be returned at all.
+    RandomKey {
+        key: Option<Vec<u8>>,
+        live: u64,
+        draw: u64,
+    },
     /// `WATCH` partial reply: each key this shard owns paired with its
     /// current version, in request order. The origin shard collates
     /// these into the conn's watched set.

@@ -127,29 +127,7 @@ impl Parser {
             Some(s) => return Err(unexpected(s, "expected '='".into())),
             None => return Err(self.eof("expected '='")),
         }
-        let value_span = self
-            .tokens
-            .get(self.pos)
-            .cloned()
-            .ok_or_else(|| self.eof("expected value"))?;
-        let value = match value_span.tok {
-            Token::Str(s) => Value::Str(s),
-            Token::Int(n) => Value::Int(n),
-            Token::Bool(b) => Value::Bool(b),
-            Token::LBracket => {
-                self.pos += 1;
-                let arr = self.parse_array()?;
-                // parse_array leaves self.pos on the `]`; fall through to the
-                // shared `self.pos += 1` below, as the scalar arms do.
-                Value::Arr(arr)
-            }
-            ref other => {
-                return Err(unexpected(
-                    &value_span,
-                    format!("expected value, got {other:?}"),
-                ));
-            }
-        };
+        let value = self.parse_value()?;
         self.pos += 1;
         self.expect_eol("after value")?;
         self.items.push(Item {
@@ -164,6 +142,30 @@ impl Parser {
     /// Expect either a `Newline` or EOF. Anything else (a second token on
     /// the same line) is rejected — we don't support multiple assignments
     /// per line.
+    /// One value token — scalar or array. Leaves `self.pos` ON the value's
+    /// last token (the scalar itself, or the array's `]`); the caller does the
+    /// shared `self.pos += 1`.
+    fn parse_value(&mut self) -> Result<Value, ConfigError> {
+        let value_span = self
+            .tokens
+            .get(self.pos)
+            .cloned()
+            .ok_or_else(|| self.eof("expected value"))?;
+        match value_span.tok {
+            Token::Str(s) => Ok(Value::Str(s)),
+            Token::Int(n) => Ok(Value::Int(n)),
+            Token::Bool(b) => Ok(Value::Bool(b)),
+            Token::LBracket => {
+                self.pos += 1;
+                self.parse_array().map(Value::Arr)
+            }
+            ref other => Err(unexpected(
+                &value_span,
+                format!("expected value, got {other:?}"),
+            )),
+        }
+    }
+
     /// `[ "a", "b", ]` — entered with `self.pos` just past the `[`, and left on
     /// the `]`. Newlines inside the brackets are skipped, so the multi-line form
     /// TOML users write for a long list works too. A trailing comma is allowed,

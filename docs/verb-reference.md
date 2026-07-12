@@ -23,7 +23,7 @@ cannot have.
 | Verb | Arity | Flags | Complexity | Redis | Summary |
 |---|---|---|---|---|---|
 | `KEYS pattern` | 2 | readonly | O(N) keys in the whole keyspace — every shard walks its entire map, plus an O(P*K) glob match per key | full | Return every key matching the glob pattern (cross-shard gather). |
-| `RANDOMKEY` | 1 | readonly | O(1) expected | differs: the result is NOT random — each shard returns the first live key in hash-bucket order and the reducer takes the first shard's, so a fixed keyspace returns the same key every time; do not use it for sampling | Return a random key from the keyspace. |
+| `RANDOMKEY` | 1 | readonly | O(1) expected — each shard probes a random slot, and the origin folds the candidates through a reservoir weighted by shard key counts, so every key is equally likely | full | Return a random key from the keyspace. |
 | `SCAN cursor [MATCH pattern] [COUNT count]` | -2 | readonly | O(N) keys in the WHOLE keyspace, on every call — there is no incremental walk | differs: SCAN is not a cursor iterator. Every call sweeps every shard's entire keyspace and replies with cursor 0 and all matches in one batch, so the standard SCAN loop terminates after one round trip. COUNT and TYPE are accepted and ignored; MATCH is honoured. Redis's incremental, bounded-work, rehash-tolerant guarantees do not exist here | Sweep the keyspace and return every match at once; NOT a cursor iterator (COUNT and TYPE are accepted and ignored, and the cursor is always 0). |
 
 ## generic
@@ -122,8 +122,8 @@ cannot have.
 | `SINTERSTORE destination key [key ...]` | -3 | write | O(sum of the source cardinalities) + O(result); same no-smallest-first algorithm | full | Store the intersection of the given sets into destination. |
 | `SISMEMBER key member` | 3 | readonly | O(1) | full | Check whether a value is a member of a set. |
 | `SMEMBERS key` | 2 | readonly | O(N) members | full | Return all members of a set. |
-| `SPOP key [count]` | -2 | write | O(count) expected; draining an N-member set with N calls is O(N^2) because the bucket scan restarts each time | differs: members are NOT random — SPOP returns the first members in hash-bucket order and the seed is a fixed constant, so repeated SPOP on the same set is fully deterministic | Remove and return one or more random members of a set. |
-| `SRANDMEMBER key [count]` | -2 | readonly | O(count) expected | differs: NOT random — it returns the same first-bucket member every time for a given set; a negative count is rejected instead of returning \|count\| members with repetitions | Return one or more random members of a set without removing them. |
+| `SPOP key [count]` | -2 | write | O(count) expected — each member is drawn by probing a random slot and taking the first occupied one | full | Remove and return one or more random members of a set. |
+| `SRANDMEMBER key [count]` | -3 | readonly | O(count) expected when count is a small fraction of the set (random-slot probing); O(N) once count exceeds a quarter of it, where copying and shuffling beats rejection sampling | full | Return one or more random members of a set without removing them. A negative count allows repeats. |
 | `SREM key member [member ...]` | -3 | write | O(M) members | full | Remove one or more members from a set. |
 | `SSCAN key cursor [MATCH pattern] [COUNT count]` | -3 | readonly | O(N) — the whole set is copied and returned in one batch | differs: not a cursor iterator — the cursor is always 0 and the entire set comes back in one reply; COUNT is validated then ignored | Iterate a set's members (single-batch cursor). |
 | `SUNION key [key ...]` | -2 | readonly | O(sum of the source cardinalities) | full | Return the union of the given sets (cross-shard gather). |

@@ -66,6 +66,25 @@ impl<C: Commands> Shard<C> {
                 // Geo *STORE step 1: the source shard's search result.
                 (Agg::GeoStore { hits, .. }, Part::GeoHits(h)) => *hits = Some(h),
                 (Agg::Keys { acc, .. }, Part::Keys(ks)) => acc.extend(ks),
+                // Weighted reservoir: candidate i survives with probability
+                // live_i / seen, which makes every key in the whole keyspace
+                // exactly equally likely — a big shard's candidate wins more
+                // often precisely because it stands for more keys. The shard's
+                // own `draw` supplies the coin, so the fold stays a pure
+                // (agg, part) function.
+                // An empty shard's candidate is None — absorbed, weight zero.
+                // It gets its own arm because the mismatch fallthrough below
+                // treats an unpaired (agg, part) as a routing bug.
+                (Agg::RandomKey { .. }, Part::RandomKey { key: None, .. }) => {}
+                (
+                    Agg::RandomKey { key, seen },
+                    Part::RandomKey { key: Some(k), live, draw },
+                ) => {
+                    *seen += live.max(1);
+                    if key.is_none() || kevy_rng_below(draw, *seen) < live.max(1) {
+                        *key = Some(k);
+                    }
+                }
                 (
                     Agg::PrefixStats { keys, expires },
                     Part::PrefixStats { keys: k, expires: e },
@@ -224,4 +243,13 @@ pub(crate) fn relative_ttl_write<A: ArgvView + ?Sized>(args: &A) -> bool {
             .any(|i| args[i].eq_ignore_ascii_case(b"EX") || args[i].eq_ignore_ascii_case(b"PX"));
     }
     false
+}
+
+/// Uniform in `0..n` from one raw draw (Lemire's multiply-shift, no rejection).
+/// The residual bias is under one part in 2^64/n — invisible at keyspace sizes.
+fn kevy_rng_below(draw: u64, n: u64) -> u64 {
+    if n <= 1 {
+        return 0;
+    }
+    ((u128::from(draw) * u128::from(n)) >> 64) as u64
 }

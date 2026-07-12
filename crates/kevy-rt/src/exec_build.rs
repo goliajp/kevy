@@ -147,11 +147,12 @@ impl<C: Commands> Shard<C> {
             Route::FeedRead | Route::FeedTail | Route::FeedShards => {
                 gather_error("ERR internal: feed route hit multi builder")
             }
-            Route::Keyspace(shape, pat) => {
-                // RANDOMKEY needs one key per shard; KEYS/SCAN collect all.
-                let limit = matches!(shape, KeyShape::Random).then_some(1);
-                self.fanout_keys(pat, limit, shape)
+            Route::Keyspace(KeyShape::Random, _) => {
+                // One candidate per shard; the fold holds a weighted reservoir.
+                let targets = (0..self.nshards).map(|s| (s, Op::RandomKey)).collect();
+                (targets, Agg::RandomKey { key: None, seen: 0 })
             }
+            Route::Keyspace(shape, pat) => self.fanout_keys(pat, None, shape),
             Route::XReadGather { streams, count, group } => {
                 self.build_xread_targets(streams, count, group)
             }
@@ -322,7 +323,7 @@ impl<C: Commands> Shard<C> {
         )
     }
 
-    /// Fan a key-collection out to every shard (KEYS/SCAN/RANDOMKEY).
+    /// Fan a key-collection out to every shard (KEYS/SCAN).
     fn fanout_keys(
         &self,
         pat: Option<Vec<u8>>,

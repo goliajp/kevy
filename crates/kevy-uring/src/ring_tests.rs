@@ -92,7 +92,7 @@ fn reads_a_file() {
     let Some(mut ring) = ring_or_skip(8) else {
         return;
     };
-    let path = std::env::temp_dir().join(format!("kevy-uring-{}", std::process::id()));
+    let path = kevy_tmpdir::unique_dir("uring");
     {
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(b"hello io_uring").unwrap();

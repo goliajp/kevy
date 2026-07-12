@@ -86,13 +86,7 @@ mod tests {
     use super::*;
 
     fn tmp_dir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!(
-            "kevy-electmeta-{tag}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id(),
-        ));
-        std::fs::create_dir_all(&d).unwrap();
-        d
+        kevy_tmpdir::unique_dir(&format!("elect-{tag}"))
     }
 
     #[test]

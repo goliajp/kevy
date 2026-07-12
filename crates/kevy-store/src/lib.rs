@@ -97,6 +97,7 @@ pub use hash_ttl::{HExpireCode, HExpireCond};
 mod keyspace;
 mod list;
 mod notify;
+mod rng;
 pub use notify::KeyspaceEvent;
 mod list_ops;
 mod set;
@@ -163,6 +164,10 @@ pub use clock::set_wall_clock_ms;
 #[derive(Default)]
 pub struct Store {
     pub(crate) map: KevyMap<SmallBytes, Entry>,
+    /// The random source. SPOP and SRANDMEMBER promise an ARBITRARY member;
+    /// before this they returned the first one in hash-bucket order, which for
+    /// a given set is the same member every time.
+    pub(crate) rng: rng::Rng,
     /// Per-field hash TTLs: key → (field → absolute unix-ms
     /// deadline). Holds ONLY keys with live field TTLs — one
     /// `is_empty()` branch per hash access when the feature is unused.

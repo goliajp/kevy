@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SRANDMEMBER — kevy command reference</title>
-<meta name="description" content="SRANDMEMBER — Return one or more random members of a set without removing them. O(count) expected">
+<meta name="description" content="SRANDMEMBER — Return one or more random members of a set without removing them. A negative count allows repeats. O(count) expected when count is a small fraction of the set (random-slot probing); O(N) once count exceeds a quarter of it, where copying and shuffling beats rejection sampling">
 <link rel="stylesheet" href="../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../assets/docs.css">
 <script>
@@ -44,28 +44,28 @@
     <nav class="crumb"><a href="../">Commands</a> <span>/</span> <span>Set</span> <span>/</span> <b>SRANDMEMBER</b></nav>
 
     <h1 class="cmd">SRANDMEMBER</h1>
-    <p class="lede">Return one or more random members of a set without removing them.</p>
+    <p class="lede">Return one or more random members of a set without removing them. A negative count allows repeats.</p>
 
     <pre class="syntax"><code>SRANDMEMBER key [count]</code></pre>
 
     <dl class="meta">
       <div><dt>Group</dt><dd>Set</dd></div>
       <div><dt>Since</dt><dd class="mono">1.0.0</dd></div>
-      <div><dt>Arity</dt><dd class="mono">at least 2</dd></div>
+      <div><dt>Arity</dt><dd class="mono">at least 3</dd></div>
       <div><dt>Flags</dt><dd><code>readonly</code></dd></div>
     </dl>
 
     <section>
       <h2>Complexity</h2>
-      <p class="cx-body"><code>O(count) expected</code></p>
+      <p class="cx-body"><code>O(count) expected when count is a small fraction of the set (random-slot probing); O(N) once count exceeds a quarter of it, where copying and shuffling beats rejection sampling</code></p>
       <p class="engine-note">Complexity and compatibility are read out of kevy's implementation, not copied from Redis's reference. Several genuinely differ.</p>
     </section>
 
     <section>
       <h2>Redis compatibility</h2>
-      <div class="call loss">
-        <span class="h">Differs</span>
-        <p>NOT random — it returns the same first-bucket member every time for a given set; a negative count is rejected instead of returning |count| members with repetitions</p>
+      <div class="call note">
+        <span class="h">Compatible</span>
+        <p>Behaves as Redis does.</p>
       </div>
     </section>
 

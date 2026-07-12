@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SPOP — kevy command reference</title>
-<meta name="description" content="SPOP — Remove and return one or more random members of a set. O(count) expected; draining an N-member set with N calls is O(N^2) because the bucket scan restarts each time">
+<meta name="description" content="SPOP — Remove and return one or more random members of a set. O(count) expected — each member is drawn by probing a random slot and taking the first occupied one">
 <link rel="stylesheet" href="../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../assets/docs.css">
 <script>
@@ -57,15 +57,15 @@
 
     <section>
       <h2>Complexity</h2>
-      <p class="cx-body"><code>O(count) expected; draining an N-member set with N calls is O(N^2) because the bucket scan restarts each time</code></p>
+      <p class="cx-body"><code>O(count) expected — each member is drawn by probing a random slot and taking the first occupied one</code></p>
       <p class="engine-note">Complexity and compatibility are read out of kevy's implementation, not copied from Redis's reference. Several genuinely differ.</p>
     </section>
 
     <section>
       <h2>Redis compatibility</h2>
-      <div class="call loss">
-        <span class="h">Differs</span>
-        <p>members are NOT random — SPOP returns the first members in hash-bucket order and the seed is a fixed constant, so repeated SPOP on the same set is fully deterministic</p>
+      <div class="call note">
+        <span class="h">Compatible</span>
+        <p>Behaves as Redis does.</p>
       </div>
     </section>
 

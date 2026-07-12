@@ -55,6 +55,7 @@ kevy-lua = { path = "../kevy-lua", version = "=3.18.0" }
 kevy-lua-host = { path = "../kevy-lua-host", version = "3.18.0" }
 
 [dev-dependencies]
+kevy-tmpdir = { path = "../kevy-tmpdir", version = "3.18.0" }
 kevy-embedded = { path = "../kevy-embedded", version = "3.18.0" }
 kevy-bench = { path = "../kevy-bench" }
 # kevy-client is the URL-facade client; only used by integration tests

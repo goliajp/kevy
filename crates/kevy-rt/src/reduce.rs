@@ -95,6 +95,14 @@ pub(crate) fn materialize(agg: Agg, proto: RespVersion) -> SmallReply {
         }
         Agg::XReadGather { slots } => SmallReply::from_vec(finalize_xread_gather(slots)),
         Agg::Keys { shape, acc } => SmallReply::from_vec(finalize_keys(shape, acc)),
+        Agg::RandomKey { key, .. } => {
+            let mut out = Vec::new();
+            match key {
+                Some(k) => encode_bulk(&mut out, &k),
+                None => encode_null_bulk(&mut out),
+            }
+            SmallReply::from_vec(out)
+        }
         Agg::SlowlogGet { count, entries } => {
             SmallReply::from_vec(crate::exec_slowlog::encode_slowlog_get(count, entries))
         }
@@ -148,10 +156,10 @@ fn finalize_keys(shape: KeyShape, acc: Vec<Vec<u8>>) -> Vec<u8> {
                 encode_bulk(&mut out, k);
             }
         }
-        KeyShape::Random => match acc.first() {
-            Some(k) => encode_bulk(&mut out, k),
-            None => encode_null_bulk(&mut out),
-        },
+        // RANDOMKEY folds through Agg::RandomKey's reservoir now, never here.
+        // acc.first() was the old path, and it meant a key on any shard other
+        // than the first could never be returned.
+        KeyShape::Random => encode_error(&mut out, "ERR internal: RANDOMKEY hit finalize_keys"),
     }
     out
 }

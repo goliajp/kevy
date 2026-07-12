@@ -100,8 +100,7 @@ fn embed_repl(store: &Store, dir: &str, nshards: usize) -> ExitCode {
 /// Copy `dump-*.rdb`, `aof-*.aof` and `shards.meta` into a scratch
 /// dir. `Ok(None)` = the dir holds no kevy data files at all.
 fn copy_data_files(src: &Path) -> std::io::Result<Option<PathBuf>> {
-    let scratch = std::env::temp_dir().join(format!("kevy-cli-embed-{}", std::process::id()));
-    std::fs::create_dir_all(&scratch)?;
+    let scratch = kevy_tmpdir::unique_dir("cli-embed");
     let mut copied = 0usize;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;

@@ -237,15 +237,7 @@ mod tests {
     use crate::read_shards_meta;
 
     fn temp_dir(name: &str) -> PathBuf {
-        let p = std::env::temp_dir().join(format!(
-            "kevy-reshard-{name}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&p).unwrap();
-        p
+        kevy_tmpdir::unique_dir(&format!("reshard-{name}"))
     }
 
     fn touch(dir: &Path, name: &str) {

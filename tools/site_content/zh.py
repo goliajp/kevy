@@ -209,7 +209,7 @@ OK
                 "<b>没有 AUTH，也没有 TLS</b>——把它跑在内网，或者放在一个真正把这两件事"
                 "做好的东西后面。还有，<b>有些命令和 Redis 不一样</b>："
                 "<code>SCAN</code> 不是游标迭代器，<code>ZRANK</code> 是 O(N)，"
-                "<code>SPOP</code> 不随机。"
+                ""
                 "<a href=\"~/docs/commands/\">每一处差异都逐条写下来了</a>。"
                 "<a href=\"~/choose/\">还有，这里写着什么时候根本不该用它。</a>"
             ),
@@ -282,7 +282,7 @@ PAGES["migrate"] = {
                 "<b>没有集群。</b>副本是拷贝，不是分片。<b>没有 AUTH，没有 TLS。</b>"
                 "还有<b>几条命令的行为不一样</b>——<code>SCAN</code> 不是游标迭代器"
                 "（一次调用就把全部返回，游标为 0），<code>ZRANK</code> 是 O(N)，"
-                "<code>SPOP</code> 和 <code>SRANDMEMBER</code> 不随机，跨 shard 的 "
+                "跨 shard 的 "
                 "<code>RENAME</code> 不是原子的。这些都不是 bug，而且每一条都在命令文档里"
                 "写着。请在决定之前把这份清单读完，不要等决定之后："
                 "<a href=\"~/docs/commands/\">每条命令真实的代价和真实的偏差</a>。"
@@ -431,7 +431,7 @@ PAGES["choose"] = {
             "items": [
                 {
                     "q": "它真的能直接替换 Redis 吗？",
-                    "a": "在协议层面，是的——RESP2 和 RESP3，184 条命令，你的客户端库不会察觉。在行为层面，大体上是，而例外恰恰是重点。<code>SCAN</code> 不是游标迭代器：一次调用就扫完整个 keyspace 并返回游标 0，所以常见的那个 SCAN 循环跑一次往返就结束了。<code>ZRANK</code> 是 O(N)，因为我们的 sorted set 没有排名索引。<code>SPOP</code> 和 <code>SRANDMEMBER</code> 不随机——每次返回的都是同一批成员。跨 shard 的 <code>RENAME</code> 不是原子的。<a href=\"~/docs/commands/\">全部 184 条命令都标着真实的偏差和真实的代价</a>，这些是从实现里读出来的，不是从 Redis 的文档里抄来的。",
+                    "a": "在协议层面，是的——RESP2 和 RESP3，184 条命令，你的客户端库不会察觉。在行为层面，大体上是，而例外恰恰是重点。<code>SCAN</code> 不是游标迭代器：一次调用就扫完整个 keyspace 并返回游标 0，所以常见的那个 SCAN 循环跑一次往返就结束了。<code>ZRANK</code> 是 O(N)，因为我们的 sorted set 没有排名索引。跨 shard 的 <code>RENAME</code> 不是原子的。<a href=\"~/docs/commands/\">全部 184 条命令都标着真实的偏差和真实的代价</a>，这些是从实现里读出来的，不是从 Redis 的文档里抄来的。",
                 },
                 {
                     "q": "机器挂了会怎么样？",

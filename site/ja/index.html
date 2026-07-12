@@ -66,7 +66,7 @@ OK
     <span><i style="background:var(--edge-hi)"></i>Redis 8</span>
     <span><i style="background:var(--thin)"></i>差は 15% 未満——勝敗を決めるのはエンジンではなく、あなたのワークロードです</span>
   </div>
-  <p class="tbl-note"><b>LPUSH と ZADD は、12% と 10% しか上回っていません。</b>この差では、勝敗を決めるのは値のサイズとキーの分布です。リストやソート済みセットがホットパスなら、速さは乗り換える理由になりません。<a href="benchmarks/">valkey や Dragonfly も含めた、完全な表はこちら。</a></p>
+  <p class="tbl-note"><b>LPUSH と ZADD は、12% と 10% しか上回っていません。</b>この差では、勝敗を決めるのは値のサイズとキーの分布です。リストやソート済みセットがホットパスなら、速さは乗り換える理由になりません。<a href="../ja/benchmarks/">valkey や Dragonfly も含めた、完全な表はこちら。</a></p>
 </section>
 <section class="band" id="more"><div class="sec-h"><h2>AI システムに必要なものが、<br>データをすでに持っているエンジンの中に。</h2><p class="sec-lede">モジュールではありません。サイドカーでもありません。元データからずれていく、真実の 2 つ目のコピーでもありません。</p></div><div class="cards"><a class="card" href="../ja/use/ai/">
       <span class="card-k">ベクトル</span>
@@ -145,7 +145,7 @@ db.set(&quot;cart:u1&quot;, json, { ttlMs: 3_600_000 });</code></pre></li></ol>
 <section class="band deep">
   <div class="call loss">
     <span class="h">kevy がやらないこと</span>
-    <p><b>クラスタではありません。</b>レプリケーションとフェイルオーバーはありますが、マシンをまたぐデータのシャーディングはなく、今後もありません。1 台で足りないなら、kevy は間違った答えです。<b>AUTH も TLS もありません</b>——プライベートなネットワークで動かすか、それらを正しく処理するものの後ろに置いてください。そして<b>いくつかのコマンドは Redis と挙動が違います</b>。<code>SCAN</code> はカーソルによる反復ではなく、<code>ZRANK</code> は O(N)、<code>SPOP</code> はランダムではありません。<a href="docs/commands/">違いはすべて、コマンドごとに書き出してあります</a>。<a href="choose/">そして、そもそも使うべきでない場合はこちら。</a></p>
+    <p><b>クラスタではありません。</b>レプリケーションとフェイルオーバーはありますが、マシンをまたぐデータのシャーディングはなく、今後もありません。1 台で足りないなら、kevy は間違った答えです。<b>AUTH も TLS もありません</b>——プライベートなネットワークで動かすか、それらを正しく処理するものの後ろに置いてください。そして<b>いくつかのコマンドは Redis と挙動が違います</b>。<code>SCAN</code> はカーソルによる反復ではなく、<code>ZRANK</code> は O(N) です。<a href="../ja/docs/commands/">違いはすべて、コマンドごとに書き出してあります</a>。<a href="../ja/choose/">そして、そもそも使うべきでない場合はこちら。</a></p>
   </div>
 </section>
 </main>

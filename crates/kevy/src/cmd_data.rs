@@ -24,16 +24,28 @@ pub(crate) fn cmd_spop_rand<A: ArgvView + ?Sized>(
         return wrong_args(out, name);
     }
     let count_given = args.len() == 3;
-    let count = if count_given {
+    // A NEGATIVE count means SRANDMEMBER with repetition — |count| members,
+    // duplicates allowed. Redis has had that form since 2.6 and kevy rejected it
+    // outright, which is exactly the shape a caller reaches for to sample with
+    // replacement. SPOP has no such form: you cannot remove the same member
+    // twice, and Redis errors on it too.
+    let raw = if count_given {
         match arg_i64(&args[2]) {
-            Some(c) if c >= 0 => c as usize,
-            _ => return encode_error(out, "ERR value is out of range, must be positive"),
+            Some(c) => c,
+            None => return encode_error(out, ERR_NOT_INT),
         }
     } else {
         1
     };
+    if raw < 0 && remove {
+        return encode_error(out, "ERR value is out of range, must be positive");
+    }
+    let with_repeats = raw < 0;
+    let count = raw.unsigned_abs() as usize;
     let res = if remove {
         store.spop(&args[1], count)
+    } else if with_repeats {
+        store.srandmember_with_repeats(&args[1], count)
     } else {
         store.srandmember(&args[1], count)
     };
