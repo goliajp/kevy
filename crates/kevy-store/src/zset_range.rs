@@ -22,9 +22,10 @@ impl Store {
             Some(e) => match &e.value {
                 Value::ZSet(z) => Ok(match range_bounds(start, stop, z.len()) {
                     None => Vec::new(),
+                    // O(log N) seek to the start rank, then walk M items —
+                    // no skip-walk from the front.
                     Some((s, end)) => z
-                        .ordered()
-                        .skip(s)
+                        .ordered_from(s)
                         .take(end - s + 1)
                         .map(|(m, sc)| (m.to_vec(), sc))
                         .collect(),
@@ -55,11 +56,16 @@ impl Store {
         match self.live_entry(key) {
             None => Ok(Vec::new()),
             Some(e) => match &e.value {
-                Value::ZSet(z) => Ok(z
-                    .ordered()
-                    .filter(|(_, sc)| min.ge_ok(*sc) && max.le_ok(*sc))
-                    .map(|(m, sc)| (m.to_vec(), sc))
-                    .collect()),
+                Value::ZSet(z) => {
+                    // Two O(log N) rank descents bracket the score range,
+                    // then only the M matches are walked — no scan+filter.
+                    let lo = z.score_start_rank(&min);
+                    let hi = z.score_end_rank(&max);
+                    Ok(z.ordered_from(lo)
+                        .take(hi.saturating_sub(lo))
+                        .map(|(m, sc)| (m.to_vec(), sc))
+                        .collect())
+                }
                 Value::SmallZSetInline(z) => {
                     let mut entries: Vec<(Vec<u8>, f64)> = z
                         .iter()
@@ -86,10 +92,10 @@ impl Store {
         match self.live_entry(key) {
             None => Ok(0),
             Some(e) => match &e.value {
+                // Two rank descents — O(log N), no iteration at all.
                 Value::ZSet(z) => Ok(z
-                    .ordered()
-                    .filter(|(_, sc)| min.ge_ok(*sc) && max.le_ok(*sc))
-                    .count()),
+                    .score_end_rank(&max)
+                    .saturating_sub(z.score_start_rank(&min))),
                 Value::SmallZSetInline(z) => Ok(z
                     .iter()
                     .filter(|(_, sc)| min.ge_ok(*sc) && max.le_ok(*sc))
@@ -209,9 +215,9 @@ impl Store {
             Some(e) => match &e.value {
                 Value::ZSet(z) => match crate::util::range_bounds(start, stop, z.len()) {
                     None => return Ok(0),
+                    // Seek to the start rank (O(log N)), collect the M hits.
                     Some((s, end)) => z
-                        .ordered()
-                        .skip(s)
+                        .ordered_from(s)
                         .take(end - s + 1)
                         .map(|(m, _)| m.to_vec())
                         .collect(),

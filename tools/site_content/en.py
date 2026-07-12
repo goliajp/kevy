@@ -202,8 +202,8 @@ OK
                 "enough, kevy is the wrong answer. <b>There is no AUTH and no TLS</b> — "
                 "run it on a private network or behind something that does those "
                 "properly. And <b>some commands differ from Redis</b>: "
-                "<code>SCAN</code> is not a cursor iterator, <code>ZRANK</code> is "
-                "O(N), <code>SPOP</code> is not random. "
+                "<code>SCAN</code> is not a cursor iterator, <code>SPOP</code> is "
+                "not random, a cross-shard <code>RENAME</code> is not atomic. "
                 "<a href=\"~/docs/commands/\">Every difference is written down</a>, per "
                 "command. <a href=\"~/choose/\">And here is when not to use it at "
                 "all.</a>"
@@ -281,7 +281,7 @@ PAGES["migrate"] = {
                 "<b>No cluster.</b> Replicas are copies, not shards. <b>No AUTH, no "
                 "TLS.</b> And <b>a handful of commands behave differently</b> — "
                 "<code>SCAN</code> is not a cursor iterator (one call returns "
-                "everything and cursor 0), <code>ZRANK</code> is O(N), "
+                "everything and cursor 0), "
                 "<code>SPOP</code> and <code>SRANDMEMBER</code> are not random, and a "
                 "cross-shard <code>RENAME</code> is not atomic. None of these is a bug "
                 "and all of them are documented per command. Read the list before you "
@@ -447,7 +447,7 @@ PAGES["choose"] = {
             "items": [
                 {
                     "q": "Is it really a drop-in replacement for Redis?",
-                    "a": "On the wire, yes — RESP2 and RESP3, 184 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. <code>SCAN</code> is not a cursor iterator: one call sweeps the whole keyspace and returns cursor 0, so the usual SCAN loop finishes after a single round trip. <code>ZRANK</code> is O(N), because our sorted set has no rank index. <code>SPOP</code> and <code>SRANDMEMBER</code> are not random — they return the same members every time. A cross-shard <code>RENAME</code> is not atomic. <a href=\"~/docs/commands/\">All 184 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
+                    "a": "On the wire, yes — RESP2 and RESP3, 184 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. <code>SCAN</code> is not a cursor iterator: one call sweeps the whole keyspace and returns cursor 0, so the usual SCAN loop finishes after a single round trip. <code>SPOP</code> and <code>SRANDMEMBER</code> are not random — they return the same members every time. A cross-shard <code>RENAME</code> is not atomic. <a href=\"~/docs/commands/\">All 184 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
                 },
                 {
                     "q": "What happens when the machine dies?",

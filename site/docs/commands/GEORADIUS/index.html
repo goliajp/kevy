@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GEORADIUS — kevy command reference</title>
-<meta name="description" content="GEORADIUS — Legacy radius search around a coordinate, with optional STORE writes. O(N) per call; STORE / STOREDIST add O(K log K) to write plus O(D) to clear the destination">
+<meta name="description" content="GEORADIUS — Legacy radius search around a coordinate, with optional STORE writes. O(log N + C) — up to nine neighbour cell ranges, each seeked on the score tree; C = members inside the matched cells. STORE / STOREDIST add O(K log K) to write plus O(D) to clear the destination">
 <link rel="stylesheet" href="../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>Complexity</h2>
-      <p class="cx-body"><code>O(N) per call; STORE / STOREDIST add O(K log K) to write plus O(D) to clear the destination</code></p>
+      <p class="cx-body"><code>O(log N + C) — up to nine neighbour cell ranges, each seeked on the score tree; C = members inside the matched cells. STORE / STOREDIST add O(K log K) to write plus O(D) to clear the destination</code></p>
       <p class="engine-note">Complexity and compatibility are read out of kevy's implementation, not copied from Redis's reference. Several genuinely differ.</p>
     </section>
 

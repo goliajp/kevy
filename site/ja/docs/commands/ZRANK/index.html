@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZRANK — kevy コマンドリファレンス</title>
-<meta name="description" content="ZRANK — メンバーの順位をスコアの低い順で返す。 O(N) —— 位置を線形に走査する。O(log N) ではない。kevy のソート済みセットには順位を補強する構造が無いため、スキップリストのような順位インデックスは存在しない。">
+<meta name="description" content="ZRANK — メンバーの順位をスコアの低い順で返す。 O(log N) —— ハッシュでスコアを引き、順位補強された（スコア、メンバー）木を一度だけ降りる。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(N) —— 位置を線形に走査する。O(log N) ではない。kevy のソート済みセットには順位を補強する構造が無いため、スキップリストのような順位インデックスは存在しない。</code></p>
+      <p class="cx-body"><code>O(log N) —— ハッシュでスコアを引き、順位補強された（スコア、メンバー）木を一度だけ降りる。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 

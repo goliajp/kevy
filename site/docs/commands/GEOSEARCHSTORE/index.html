@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GEOSEARCHSTORE — kevy command reference</title>
-<meta name="description" content="GEOSEARCHSTORE — Run GEOSEARCH on source and store the hits into destination. O(N) to search, plus O(D + K log K) to rewrite the destination on its own shard">
+<meta name="description" content="GEOSEARCHSTORE — Run GEOSEARCH on source and store the hits into destination. O(log N + C) to search, plus O(D + K log K) to rewrite the destination on its own shard">
 <link rel="stylesheet" href="../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>Complexity</h2>
-      <p class="cx-body"><code>O(N) to search, plus O(D + K log K) to rewrite the destination on its own shard</code></p>
+      <p class="cx-body"><code>O(log N + C) to search, plus O(D + K log K) to rewrite the destination on its own shard</code></p>
       <p class="engine-note">Complexity and compatibility are read out of kevy's implementation, not copied from Redis's reference. Several genuinely differ.</p>
     </section>
 

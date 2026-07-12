@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZRANGEBYSCORE — kevy コマンドリファレンス</title>
-<meta name="description" content="ZRANGEBYSCORE — 指定した範囲のスコアを持つメンバーを返す。 O(N + M) —— 全件を走査して絞り込む。LIMIT は一致集合を全て実体化したあとに適用されるため、処理量そのものは減らない。">
+<meta name="description" content="ZRANGEBYSCORE — 指定した範囲のスコアを持つメンバーを返す。 O(log N + M) —— 順位降下でスコア下限までシークし、範囲内の M 件だけを辿る。LIMIT は一致集合を実体化したあとに適用されるため、制限されるのは応答であって走査ではない。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(N + M) —— 全件を走査して絞り込む。LIMIT は一致集合を全て実体化したあとに適用されるため、処理量そのものは減らない。</code></p>
+      <p class="cx-body"><code>O(log N + M) —— 順位降下でスコア下限までシークし、範囲内の M 件だけを辿る。LIMIT は一致集合を実体化したあとに適用されるため、制限されるのは応答であって走査ではない。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 

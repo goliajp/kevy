@@ -171,22 +171,22 @@
  },
  "GEORADIUS": {
   "compat": "差異あり。書き込み先は自身の shard 上で更新されるため、shard をまたぐ STORE は検索と原子的にならない。",
-  "complexity": "1 回の呼び出しで O(N)。STORE / STOREDIST を指定すると、書き込みに O(K log K)、書き込み先のクリアに O(D) が加わる。",
+  "complexity": "O(log N + C) —— 最大 9 つの近傍レンジを、それぞれスコア木のシークで取得する。C は該当セル内のメンバー数。STORE / STOREDIST を指定すると、書き込みに O(K log K)、書き込み先のクリアに O(D) が加わる。",
   "summary": "座標を中心とする旧来形式の半径検索。STORE による書き出しにも対応する。"
  },
  "GEORADIUSBYMEMBER": {
   "compat": "差異あり。書き込み先は自身の shard 上で更新されるため、shard をまたぐ STORE は検索と原子的にならない。",
-  "complexity": "1 回の呼び出しで O(N)。中心メンバーの引き当ては O(1)。",
+  "complexity": "O(log N + C) —— GEORADIUS と同じ 9 セルのシーク取得。中心メンバーの引き当ては O(1)。",
   "summary": "既存メンバーを中心とする旧来形式の半径検索。STORE による書き出しにも対応する。"
  },
  "GEOSEARCH": {
   "compat": "差異あり。読み取り専用形式では STOREDIST を受理した上で無視する。COUNT 0 はエラー。",
-  "complexity": "1 回の呼び出しで O(N) —— 最大 9 つの近傍レンジを、それぞれ zset の全走査で取得する。geohash ブロックが削るのは距離計算であって、走査そのものではない。",
+  "complexity": "O(log N + C) —— 最大 9 つの近傍レンジを、それぞれスコア木からシークで切り出す。C は該当 geohash セル内のメンバー数（ブロック境界が距離計算だけでなく走査そのものも削るようになった）。",
   "summary": "メンバーまたは座標を起点として、半径または矩形の範囲でメンバーを検索する。"
  },
  "GEOSEARCHSTORE": {
   "compat": "差異あり。STOREDIST はクエリが指定した単位で距離を格納する(Redis も同じ)。書き込み先は自身の shard 上で更新されるため、source と destination は別のコアに載り得るし、書き込みは読み取りと原子的にならない。",
-  "complexity": "検索に O(N)、書き込み先を自身の shard 上で書き直すのに O(D + K log K)。",
+  "complexity": "検索に O(log N + C)、書き込み先を自身の shard 上で書き直すのに O(D + K log K)。",
   "summary": "source に対して GEOSEARCH を実行し、その結果を destination に書き出す。"
  },
  "GET": {
@@ -836,7 +836,7 @@
  },
  "ZCOUNT": {
   "compat": "互換",
-  "complexity": "O(N) —— 全件を走査して絞り込む。範囲シークではない。Redis の O(log N) はここには当てはまらない。",
+  "complexity": "O(log N) —— 順位統計木で二回の順位降下によりスコア範囲を挟み込む。走査は一切しない。",
   "summary": "指定した範囲のスコアを持つメンバーの個数を返す。"
  },
  "ZDIFFSTORE": {
@@ -871,17 +871,17 @@
  },
  "ZRANGE": {
   "compat": "差異あり。受理するのは旧来の key start stop [WITHSCORES] 形式のみ。Redis 6.2 の BYSCORE / BYLEX / REV / LIMIT 引数は構文エラーになる。",
-  "complexity": "O(start + M) —— 木の反復子は一ノードずつ進む。順位で飛び越えるためのインデックスは存在しない。",
+  "complexity": "O(log N + M) —— 一度の順位降下で start に直接着地し、要求された M 件のメンバーを順に辿る。",
   "summary": "順位の範囲を指定してメンバーを返す。"
  },
  "ZRANGEBYSCORE": {
   "compat": "互換",
-  "complexity": "O(N + M) —— 全件を走査して絞り込む。LIMIT は一致集合を全て実体化したあとに適用されるため、処理量そのものは減らない。",
+  "complexity": "O(log N + M) —— 順位降下でスコア下限までシークし、範囲内の M 件だけを辿る。LIMIT は一致集合を実体化したあとに適用されるため、制限されるのは応答であって走査ではない。",
   "summary": "指定した範囲のスコアを持つメンバーを返す。"
  },
  "ZRANK": {
   "compat": "差異あり。Redis 7.2 の WITHSCORE オプションは非対応。",
-  "complexity": "O(N) —— 位置を線形に走査する。O(log N) ではない。kevy のソート済みセットには順位を補強する構造が無いため、スキップリストのような順位インデックスは存在しない。",
+  "complexity": "O(log N) —— ハッシュでスコアを引き、順位補強された（スコア、メンバー）木を一度だけ降りる。",
   "summary": "メンバーの順位をスコアの低い順で返す。"
  },
  "ZREM": {
@@ -891,17 +891,17 @@
  },
  "ZREMRANGEBYRANK": {
   "compat": "互換",
-  "complexity": "O(start + M log N)",
+  "complexity": "O(log N + M log N) —— 一度の順位降下で start に着地し、M 件のメンバーを削除する。",
   "summary": "指定した順位の範囲にあるメンバーを削除する。"
  },
  "ZREMRANGEBYSCORE": {
   "compat": "互換",
-  "complexity": "O(N + M log N) —— 全件を走査して対象を洗い出したあと、M 件を削除する。",
+  "complexity": "O(log N + M log N) —— シークで対象を洗い出したあと、M 件を削除する。",
   "summary": "指定した範囲のスコアを持つメンバーを削除する。"
  },
  "ZREVRANGEBYSCORE": {
   "compat": "互換",
-  "complexity": "O(N + M) —— 前方向に全件を走査して絞り込み、その結果を反転する。",
+  "complexity": "O(log N + M) —— シークして前方向に M 件の一致メンバーを辿り、その結果を反転する。",
   "summary": "指定した範囲のスコアを持つメンバーを、スコアの高い順に返す。"
  },
  "ZSCAN": {

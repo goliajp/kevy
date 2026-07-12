@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZRANGEBYSCORE — kevy 命令参考</title>
-<meta name="description" content="ZRANGEBYSCORE — 返回分值落在给定区间内的成员。 O(N + M) —— 全量扫描再过滤。LIMIT 是在整个命中集物化之后才应用的，并不减少实际工作量。">
+<meta name="description" content="ZRANGEBYSCORE — 返回分值落在给定区间内的成员。 O(log N + M) —— 秩下降 seek 到分值下界，只走过区间内的 M 个成员。LIMIT 仍在命中集物化之后应用，约束的是回复而不是遍历。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(N + M) —— 全量扫描再过滤。LIMIT 是在整个命中集物化之后才应用的，并不减少实际工作量。</code></p>
+      <p class="cx-body"><code>O(log N + M) —— 秩下降 seek 到分值下界，只走过区间内的 M 个成员。LIMIT 仍在命中集物化之后应用，约束的是回复而不是遍历。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的，不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误，但不是。</p>
     </section>
 

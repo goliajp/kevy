@@ -156,12 +156,17 @@ impl Store {
         Ok(removed)
     }
 
-    /// `ZRANK` — 0-based position in ascending order (O(n) for now).
+    /// `ZRANK` — 0-based position in ascending order. O(log N): a hash
+    /// lookup for the score, then one order-statistic tree descent.
     pub fn zrank(&mut self, key: &[u8], member: &[u8]) -> Result<Option<usize>, StoreError> {
         match self.live_entry(key) {
             None => Ok(None),
             Some(e) => match &e.value {
-                Value::ZSet(z) => Ok(z.ordered().position(|(m, _)| m == member)),
+                Value::ZSet(z) => Ok(z
+                    .by_member
+                    .get(member)
+                    .copied()
+                    .and_then(|sc| z.rank_of(member, sc))),
                 Value::SmallZSetInline(z) => {
                     // Inline holds at most 2 entries; sort by score (then
                     // bytes) so ZRANK matches ZRANGE order.

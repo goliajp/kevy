@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZREVRANGEBYSCORE — kevy command reference</title>
-<meta name="description" content="ZREVRANGEBYSCORE — Return members with scores within the given bounds, highest first. O(N + M) — a forward full scan and filter, then the result is reversed">
+<meta name="description" content="ZREVRANGEBYSCORE — Return members with scores within the given bounds, highest first. O(log N + M) — a seeked forward walk of the M matches, then the result is reversed">
 <link rel="stylesheet" href="../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>Complexity</h2>
-      <p class="cx-body"><code>O(N + M) — a forward full scan and filter, then the result is reversed</code></p>
+      <p class="cx-body"><code>O(log N + M) — a seeked forward walk of the M matches, then the result is reversed</code></p>
       <p class="engine-note">Complexity and compatibility are read out of kevy's implementation, not copied from Redis's reference. Several genuinely differ.</p>
     </section>
 
