@@ -4,7 +4,8 @@
 a feature-tiered build that goes from a ~411 KB in-memory KV core to
 the full index/replication surface, musl cross-builds for Linux-class
 IoT boards (Pi Zero 2, OpenWrt routers, industrial ARM), and a
-`no_std` core proven on a bare-metal Cortex-M target. Resource
+`no_std` core that has been booted and exercised on a bare-metal
+Cortex-M target, not merely compile-checked. Resource
 budgets are enforced by a gate, not promised by a README.
 
 ## The feature tiers
@@ -135,8 +136,8 @@ sizes are the static-musl artifact.
 | `aarch64-unknown-linux-musl` | Pi Zero 2 / Pi 4-5 / most ARM64 SBC | 411 KB | **run — natively**, 336 KB empty-store RSS, 2.86M store-ops/s |
 | `armv7-unknown-linux-musleabihf` | Pi 2-3, older 32-bit ARM | 383 KB | **run** (emulated) |
 | `arm-unknown-linux-musleabihf` | Pi Zero / Pi 1 (ARMv6) | 411 KB | **run** (emulated) |
-| `thumbv7em-none-eabihf` | Cortex-M4/M7 MCU | — | `no_std` **stones** compile-check only — the full engine does not run here (see below) |
-| `riscv64gc-unknown-linux-musl` | RISC-V SBC | — | **not verified** — needs a RISC-V musl sysroot to link; the Rust side is untested, so it is neither claimed nor ruled out |
+| `riscv64gc-unknown-linux-musl` | RISC-V SBC | 420 KB | **run** (emulated) — needs a RISC-V cross-gcc as the linker (its target spec wants `libgcc_s`, which `rust-lld` cannot supply) plus `crt-static` |
+| `thumbv7em-none-eabihf` | Cortex-M4/M7 MCU | 145 KB firmware | **run on bare metal** — `kevy-store` only, not the full `kevy-embedded` surface (that needs `std`). See below. |
 
 The aarch64 numbers are the trustworthy performance ones: that row ran
 natively on ARM64. The armv7/ARMv6 rows prove the code is correct on
@@ -172,14 +173,33 @@ CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUNNER=qemu-aarch64 \
 
 Below Linux entirely, the storage stones build without `std`. Five
 crates carry `#![no_std]` cores behind their `std` default feature —
-`kevy-store`, `kevy-hash`, `kevy-bytes`, `kevy-map`, `kevy-madvise` —
-and CI proves the combination on a real MCU target
-(`thumbv7em-none-eabihf`, Cortex-M4/M7 class):
+`kevy-store`, `kevy-hash`, `kevy-bytes`, `kevy-map`, `kevy-madvise`.
+
+CI does not merely compile them for a Cortex-M: it **boots them on
+one**. `bench/mcu-probe` is a bare-metal firmware — hand-written vector
+table, bump allocator, panic handler, semihosting I/O, because kevy
+takes no dependencies and so cannot reach for `cortex-m-rt` or
+`embedded-alloc` — that stands up a real `Store` under QEMU
+(`mps2-an386`, Cortex-M4) and exercises the KV and TTL surface. It runs
+on every push; if the store misbehaves on an MCU, the build fails.
 
 ```sh
-cargo check --target thumbv7em-none-eabihf -p kevy-store \
-  --no-default-features --features alloc,external-clock
+cd bench/mcu-probe && cargo run --release
 ```
+
+Measured on that MCU, with a 64 KiB heap:
+
+| | |
+|---|---|
+| Firmware image | 145 KB |
+| Heap for an empty `Store` | **0 B** — the store allocates nothing until you write |
+| Heap for 64 sensor keys | 17.8 KB |
+| TTL | expires correctly when the firmware advances its own clock |
+
+**What runs on an MCU is `kevy-store`, not `kevy-embedded`.** The
+embedded façade (`Config`, background reapers, persistence, the
+listener) needs `std`; the MCU gets the storage engine underneath it,
+driven directly.
 
 What the `no_std` cut means in practice:
 

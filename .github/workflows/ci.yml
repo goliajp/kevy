@@ -236,7 +236,16 @@ jobs:
           rustup toolchain install stable --no-self-update
           rustup default stable
           rustup target add aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf \
-            arm-unknown-linux-musleabihf x86_64-unknown-linux-musl thumbv7em-none-eabihf
+            arm-unknown-linux-musleabihf x86_64-unknown-linux-musl \
+            riscv64gc-unknown-linux-musl thumbv7em-none-eabihf
+
+      - name: Install the RISC-V linker and a Cortex-M emulator
+        # riscv64-musl's target spec wants libgcc_s, which rust-lld cannot
+        # supply — it needs a real RISC-V cross toolchain. qemu-system-arm
+        # is what actually RUNS the bare-metal MCU probe.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-riscv64-linux-gnu qemu-system-arm
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -286,6 +295,19 @@ jobs:
             echo "== consumer (core) on $t =="
             cargo build --release --no-default-features --features core --target "$t"
           done
+          echo "== consumer (core) on riscv64gc-unknown-linux-musl =="
+          CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_MUSL_LINKER=riscv64-linux-gnu-gcc \
+          RUSTFLAGS="-C target-feature=+crt-static" \
+            cargo build --release --no-default-features --features core \
+              --target riscv64gc-unknown-linux-musl
+
+      - name: Run kevy-store on a bare-metal Cortex-M4 (QEMU)
+        # The no_std claim used to rest on `cargo check`. This BOOTS the
+        # stone on an MCU — hand-written vector table, bump allocator,
+        # panic handler, semihosting — and fails the build if the KV or
+        # TTL surface misbehaves there.
+        working-directory: bench/mcu-probe
+        run: cargo run --release
 
   # ───────────── miri on the unsafe stones (catches UB in slot mgmt, ─────────────
   # ───────────── SPSC ring atomics, and the zset encoding face)      ─────────────
