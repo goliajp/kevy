@@ -116,17 +116,41 @@ Both faces of the measurement have to stop reading a rounded clock.
    the books to get a green light" — the recorded numbers were never
    measurements of the code in the first place.
 
+## The worst part: we already knew
+
+`bench/kevy_ab.sh`, line 4, written some campaign ago and never touched since:
+
+> Reports STEADY-STATE "overall" rps (the final "requests per second" line is
+> **quantized under `--threads` and unreliable**).
+
+Someone found this, wrote a one-off A/B script that works around it by reading
+the running `overall:` samples instead of the final line — and stopped there.
+It never reached `perfgate.sh`. It never reached `arena.sh`. It never reached
+`loopback_c50.sh`. It never reached the ledger. So the gates kept reading the
+quantized line for weeks, the published table kept printing buckets, and three
+investigations went chasing a ghost the repo had already named.
+
+**A workaround buried in a one-off script is not a fix.** If it does not land
+in the gate, it does not exist, and the next person to hit the same wall will
+pay full price — as we just did, in a ship blocker.
+
 ## The methodology lesson
 
 The `bench/perfgate.sh` header has warned since 2026-06-11 that instance
 variance is "the dominant noise axis". It was not noise. It was the ruler.
 
+`arena.sh`'s own header describes the artefact and misdiagnoses it: "2M-request
+cells finished in ~0.5s and QUANTIZED LOW (ledger v1 recorded 3.99M/s; the
+ceiling ladder measured 5.3M/s truth)". 2M/0.5s is exactly 4.0M — the bucket
+0.377s rounds up into. The word *quantized* is right there, and the cause was
+assigned to N. Raising N narrows the bucket relative to the run; it never
+removes it.
+
 Three separate investigations (K-401, K-402, G2) each looked straight at the
 grid — K-402's own doc even flagged that its 8.56M reading "coincides with the
-historical 8.55M attractor" — and each of them theorised about *the system*
-instead of asking what could possibly produce a constant 250 ms step. The
-question "what has a 250 ms period?" was one arithmetic operation away
-(`N / rps`) for four straight days.
+historical 8.55M attractor" — and each theorised about *the system* instead of
+asking what could produce a constant 250 ms step. The question "what has a
+250 ms period?" was one division away (`N / rps`) for four straight days.
 
 **When measurements cluster on evenly-spaced levels, suspect the instrument
 before the system.** Added to `.claude/rule/perf-vs-foss.md` as R13.

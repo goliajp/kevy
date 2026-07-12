@@ -136,8 +136,48 @@ shard-local cache + epoch invalidation;store 写面改 `&[u8]`)+ **K-110 内核�
 **不得以"环境"名义挂起**。细账:`bench/PERF-FINDING-2026-07-11-v4-set-write-path-regression.md`。
 
 **教训(方法论)**:同盒同刻 A/B 的**对照组必须是 baseline 值的来源代码本身**。
-拿"另一个同样带病的提交"当对照,会得到"两者一致"的假绿灯 —— 这是本项目 perf 方法论
-§9 双 gate 的一个新反模式:**"baseline commit ≠ baseline 值的来源"**。
+拿"另一个同样带病的提交"当对照,会得到"两者一致"的假绿灯。→ 规则 **R12**。
+
+---
+
+### 2026-07-12 二次翻案 —— **回归根本不存在,红灯是尺子**
+
+上面对 G2 的撤回是对的(对照组确实选错了),但它当时**保留了 K-402 的回归结论**。
+继续挖到底,K-402 也倒了 —— 而且倒得更彻底:
+
+**根因(源码级)**:`redis-benchmark` 在 `--threads` 模式下,**结束测量的唯一出口
+是它自己 250ms 的 `showThroughput` 定时器**(`redis-benchmark.c:52`
+`SHOW_THROUGHPUT_INTERVAL 250`;`:1653` `aeStop`;不加 `--threads` 时是 `:425`
+在 `clientDone` 里立即停)。于是 `totlatency`(`:970/:973`)被**向上取整到 250ms
+的整数倍**,报出的吞吐**被量化**且**被系统性低报**。
+
+把所有"instance 模式 / 吸引子"换算回耗时,步长全是 **0.250–0.251 秒**
+(N=30M / N=20M / `--accept-shards 1` / arena `-P 16`,四种互不相关的配置)。
+**perfgate legacy 口径一格 = 7%;arena 口径一格 = 20%。**
+
+**顺序平衡 + 修好尺子后复测**:legacy SET **−0.23%**、legacy GET **+0.98%**、
+pinned_cluster_set **−1.0%** —— 全在样本方差(3.5–5.6%)之内。**v4 没有性能回归。**
+
+**被这一个假象污染的**:K-402(ship blocker)、K-401(LPUSH"双峰",结论对理由错)、
+PERF-LEDGER 的"8.55M 吸引子"、perfgate 的 `legacy_8sh_set` baseline
+(**录在最幸运的那一格上** —— v3.18.0 自己也只有约 40% 的 instance 落进去,
+**这个 gate 对它自己的基线版本都会红大半时间**)、整张 arena 表的精度
+(GET/SET 读数逐位相同、INCR/SADD 读数逐位相同 —— 不是抄错,是同一个格子)。
+
+**没被污染的**:每个结论的**方向**。kevy 与 valkey 隔着三到五个格子,取整填不平 3× 的差距。
+
+**已修**:`perfgate.sh` / `arena.sh` 改为**从服务端命令计数器、在稳态窗口读吞吐**;
+perfgate 进一步改成**相对 gate**(重建 baseline commit 的二进制,同盒同刻交错、
+顺序翻转地比)—— 因为盒子会漂(同一份代码从录基线时的 24.3M 漂到 21.0M,
+**−13%,超过 8% 的容差**),跨时间比绝对值的 gate 在漂移盒上注定不可靠。
+
+规则 **R13:读数落在等间距的档位上时,先怀疑尺子。** 完整账:
+`bench/PERF-FINDING-2026-07-12-benchmark-250ms-quantization.md`。
+
+**最难看的一点**:`perfgate.sh` 的表头从 2026-06-11 起就写着 instance variance 是
+"the dominant noise axis" —— **它不是噪声,它是尺子**。而 arena 表里 GET 和 SET
+读数逐位相同这个刺眼的巧合摆了四天,三轮独立调查(K-401 / K-402 / G2)都盯着格子看,
+却没人做过那一次除法(`N / rps`)。
 
 ## 事故记录 — 追净盒 perfgate 时误损 lx64 ollama 服务(2026-07-12,已恢复)
 
