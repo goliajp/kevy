@@ -11,7 +11,7 @@ legacy encodings:
 | String | `Vec<u8>` |
 | Hash / Set | `HashMap` / `HashSet` (hashbrown Swiss table) |
 | List | `VecDeque` (ring buffer — O(1) at both ends) |
-| Sorted set | `HashMap` + `BTreeSet<(score, member)>` (a B-tree, not a skiplist) |
+| Sorted set | `HashMap` + `kevy-ranktree` order-statistic B-tree keyed by `(score, member)` — O(log N) rank/select |
 
 - Lazy TTL expiry; `WRONGTYPE` errors via [`StoreError`].
 - `&mut self`, lock-free API — designed to be sharded one-per-core.

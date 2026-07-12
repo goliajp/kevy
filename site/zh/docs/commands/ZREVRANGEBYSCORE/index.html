@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZREVRANGEBYSCORE — kevy 命令参考</title>
-<meta name="description" content="ZREVRANGEBYSCORE — 返回分值落在给定区间内的成员，从高到低排列。 O(N + M) —— 仍是一次正向的全量扫描加过滤，最后把结果反转。">
+<meta name="description" content="ZREVRANGEBYSCORE — 返回分值落在给定区间内的成员，从高到低排列。 O(log N + M) —— seek 后正向走过 M 个命中成员，最后把结果反转。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(N + M) —— 仍是一次正向的全量扫描加过滤，最后把结果反转。</code></p>
+      <p class="cx-body"><code>O(log N + M) —— seek 后正向走过 M 个命中成员，最后把结果反转。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的，不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误，但不是。</p>
     </section>
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZCOUNT — kevy command reference</title>
-<meta name="description" content="ZCOUNT — Count members with scores within the given bounds. O(N) — a full scan and filter, NOT a range seek; Redis's O(log N) does not apply">
+<meta name="description" content="ZCOUNT — Count members with scores within the given bounds. O(log N) — two rank descents on the order-statistic tree bracket the score range; nothing is scanned">
 <link rel="stylesheet" href="../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>Complexity</h2>
-      <p class="cx-body"><code>O(N) — a full scan and filter, NOT a range seek; Redis's O(log N) does not apply</code></p>
+      <p class="cx-body"><code>O(log N) — two rank descents on the order-statistic tree bracket the score range; nothing is scanned</code></p>
       <p class="engine-note">Complexity and compatibility are read out of kevy's implementation, not copied from Redis's reference. Several genuinely differ.</p>
     </section>
 

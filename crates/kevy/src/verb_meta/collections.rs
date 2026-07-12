@@ -2,9 +2,9 @@
 //!
 //! One row per dispatch-reachable verb. `complexity` and `compat` were
 //! derived by reading THIS engine's implementation — never copied from
-//! Redis's documentation, because several of ours genuinely differ (our
-//! sorted set is a hash plus a plain BTreeSet with no rank augmentation, so
-//! Redis's O(log N) does not transfer to ZRANK).
+//! Redis's documentation, because several of ours genuinely differ (SSCAN
+//! is a single-batch copy, SPOP is deterministic, SINTER has no
+//! smallest-set-first ordering).
 
 use super::{VerbMeta, v};
 use super::flags::*;
@@ -172,7 +172,7 @@ pub(super) const ROWS: &[VerbMeta] = &[
       "O(1)",
       "full"),
     v("ZCOUNT",      "zset", 4,  R,  "Count members with scores within the given bounds.", "1.0.0", "ZCOUNT key min max",
-      "O(N) — a full scan and filter, NOT a range seek; Redis's O(log N) does not apply",
+      "O(log N) — two rank descents on the order-statistic tree bracket the score range; nothing is scanned",
       "full"),
     v("ZDIFFSTORE",  "zset", -4, W,  "Store the difference of the given sorted sets into destination.", "1.0.0", "ZDIFFSTORE destination numkeys key [key ...]",
       "O(sum of the source cardinalities + R log R); each source is extracted whole on its own shard",
@@ -193,25 +193,25 @@ pub(super) const ROWS: &[VerbMeta] = &[
       "O(M log N) — take_while stops at the first score at or above the threshold, so it never walks past the due prefix",
       "kevy-only: a delayed-job primitive (score = due time); no Redis analogue"),
     v("ZRANGE",      "zset", -4, R,  "Return members by rank range.", "1.0.0", "ZRANGE key start stop [WITHSCORES]",
-      "O(start + M) — the tree iterator advances one node at a time; there is no rank index to jump with",
+      "O(log N + M) — one rank descent seeks to start, then the M requested members are walked",
       "differs: only the legacy 'key start stop [WITHSCORES]' form is accepted — the Redis 6.2 BYSCORE / BYLEX / REV / LIMIT arguments are a syntax error"),
     v("ZRANGEBYSCORE", "zset", -4, R, "Return members with scores within the given bounds.", "1.0.0", "ZRANGEBYSCORE key min max [WITHSCORES] [LIMIT offset count]",
-      "O(N + M) — a full scan and filter; LIMIT is applied after the whole match set is materialised, so it does not reduce the work",
+      "O(log N + M) — a rank descent seeks to the score bound, then only the M in-range members are walked; LIMIT is still applied after the match set is materialised, so it bounds the reply, not the walk",
       "full"),
     v("ZRANK",       "zset", 3,  R,  "Return a member's rank, ordered from the lowest score.", "1.0.0", "ZRANK key member",
-      "O(N) — a linear position scan. NOT O(log N): our zset has no rank-augmented structure",
+      "O(log N) — a hash lookup for the score, then one descent of the rank-augmented (score, member) tree",
       "differs: the Redis 7.2 WITHSCORE option is not supported"),
     v("ZREM",        "zset", -3, W,  "Remove one or more members from a sorted set.", "1.0.0", "ZREM key member [member ...]",
       "O(M log N)",
       "full"),
     v("ZREMRANGEBYRANK", "zset", 4, W, "Remove members within the given rank range.", "1.0.0", "ZREMRANGEBYRANK key start stop",
-      "O(start + M log N)",
+      "O(log N + M log N) — a rank descent seeks to start, then M member deletes",
       "full"),
     v("ZREMRANGEBYSCORE", "zset", 4, W, "Remove members with scores within the given bounds.", "1.0.0", "ZREMRANGEBYSCORE key min max",
-      "O(N + M log N) — a full scan to find the hit set, then M deletes",
+      "O(log N + M log N) — a seek finds the hit set, then M deletes",
       "full"),
     v("ZREVRANGEBYSCORE", "zset", -4, R, "Return members with scores within the given bounds, highest first.", "1.0.0", "ZREVRANGEBYSCORE key max min [WITHSCORES] [LIMIT offset count]",
-      "O(N + M) — a forward full scan and filter, then the result is reversed",
+      "O(log N + M) — a seeked forward walk of the M matches, then the result is reversed",
       "full"),
     v("ZSCAN",       "zset", -3, R,  "Iterate a sorted set's members and scores (single-batch cursor).", "1.0.0", "ZSCAN key cursor [MATCH pattern] [COUNT count]",
       "O(N) — the whole set is materialised",

@@ -145,7 +145,7 @@ db.set(&quot;cart:u1&quot;, json, { ttlMs: 3_600_000 });</code></pre></li></ol>
 <section class="band deep">
   <div class="call loss">
     <span class="h">kevy 不会做的事</span>
-    <p><b>它不是集群。</b>复制和故障切换有；把数据分片到多台机器上没有，以后也不会有。如果一台机器不够用，kevy 就是错的答案。<b>没有 AUTH，也没有 TLS</b>——把它跑在内网，或者放在一个真正把这两件事做好的东西后面。还有，<b>有些命令和 Redis 不一样</b>：<code>SCAN</code> 不是游标迭代器，<code>ZRANK</code> 是 O(N)，<a href="../zh/docs/commands/">每一处差异都逐条写下来了</a>。<a href="../zh/choose/">还有，这里写着什么时候根本不该用它。</a></p>
+    <p><b>它不是集群。</b>复制和故障切换有；把数据分片到多台机器上没有，以后也不会有。如果一台机器不够用，kevy 就是错的答案。<b>没有 AUTH，也没有 TLS</b>——把它跑在内网，或者放在一个真正把这两件事做好的东西后面。还有，<b>有些命令和 Redis 不一样</b>：<code>SCAN</code> 不是游标迭代器。<a href="../zh/docs/commands/">每一处差异都逐条写下来了</a>。<a href="../zh/choose/">还有，这里写着什么时候根本不该用它。</a></p>
   </div>
 </section>
 </main>

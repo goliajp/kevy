@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZRANK — kevy 命令参考</title>
-<meta name="description" content="ZRANK — 返回成员的排名 —— 按分值从低到高。 O(N) —— 线性扫描定位。注意不是 O(log N)：kevy 的 zset 没有按秩增强的结构，拿不到跳表那种秩索引。">
+<meta name="description" content="ZRANK — 返回成员的排名 —— 按分值从低到高。 O(log N) —— 先哈希查到分值，再对按秩增强的（分值，成员）树做一次下降。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(N) —— 线性扫描定位。注意不是 O(log N)：kevy 的 zset 没有按秩增强的结构，拿不到跳表那种秩索引。</code></p>
+      <p class="cx-body"><code>O(log N) —— 先哈希查到分值，再对按秩增强的（分值，成员）树做一次下降。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的，不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误，但不是。</p>
     </section>
 

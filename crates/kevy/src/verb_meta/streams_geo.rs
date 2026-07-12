@@ -2,9 +2,9 @@
 //!
 //! One row per dispatch-reachable verb. `complexity` and `compat` were
 //! derived by reading THIS engine's implementation — never copied from
-//! Redis's documentation, because several of ours genuinely differ (our
-//! sorted set is a hash plus a plain BTreeSet with no rank augmentation, so
-//! Redis's O(log N) does not transfer to ZRANK).
+//! Redis's documentation, because several of ours genuinely differ (SCAN
+//! sweeps in one batch, SPOP is deterministic, LINDEX is O(1) where
+//! Redis's quicklist is O(N)).
 
 use super::{VerbMeta, v};
 use super::flags::*;
@@ -71,15 +71,15 @@ pub(super) const ROWS: &[VerbMeta] = &[
       "O(M)",
       "full"),
     v("GEORADIUS",   "geo", -6, W, "Legacy radius search around a coordinate, with optional STORE writes.", "1.0.0", "GEORADIUS key longitude latitude radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key] [STOREDIST key]",
-      "O(N) per call; STORE / STOREDIST add O(K log K) to write plus O(D) to clear the destination",
+      "O(log N + C) — up to nine neighbour cell ranges, each seeked on the score tree; C = members inside the matched cells. STORE / STOREDIST add O(K log K) to write plus O(D) to clear the destination",
       "differs: the destination is written on its own shard, so a STORE across shards is not atomic with the search"),
     v("GEORADIUSBYMEMBER", "geo", -5, W, "Legacy radius search around an existing member, with optional STORE writes.", "1.0.0", "GEORADIUSBYMEMBER key member radius m|km|mi|ft [WITHCOORD] [WITHDIST] [WITHHASH] [COUNT count [ANY]] [ASC|DESC] [STORE key] [STOREDIST key]",
-      "O(N) per call; the anchor lookup is O(1)",
+      "O(log N + C) — the seeked nine-cell fetch, same as GEORADIUS; the anchor lookup is O(1)",
       "differs: the destination is written on its own shard, so a STORE across shards is not atomic with the search"),
     v("GEOSEARCH",   "geo", -4, R, "Search members within a radius or box from a member or coordinate.", "1.0.0", "GEOSEARCH key FROMMEMBER member|FROMLONLAT longitude latitude BYRADIUS radius m|km|mi|ft|BYBOX width height m|km|mi|ft [ASC|DESC] [COUNT count [ANY]] [WITHCOORD] [WITHDIST] [WITHHASH]",
-      "O(N) per call — up to nine neighbour ranges, each fetched with a full zset scan; the geohash block prunes distance maths, not iteration",
+      "O(log N + C) — up to nine neighbour ranges, each a seeked slice of the score tree; C = members inside the matched geohash cells (the block bound now prunes iteration too, not just distance maths)",
       "differs: STOREDIST is accepted and ignored on the read-only form; COUNT 0 is an error"),
     v("GEOSEARCHSTORE", "geo", -5, W, "Run GEOSEARCH on source and store the hits into destination.", "1.0.0", "GEOSEARCHSTORE destination source FROMMEMBER member|FROMLONLAT longitude latitude BYRADIUS radius m|km|mi|ft|BYBOX width height m|km|mi|ft [ASC|DESC] [COUNT count [ANY]] [STOREDIST]",
-      "O(N) to search, plus O(D + K log K) to rewrite the destination on its own shard",
+      "O(log N + C) to search, plus O(D + K log K) to rewrite the destination on its own shard",
       "differs: STOREDIST stores the distance in the unit the query asked for (Redis does the same); the destination is written on its own shard, so the source and destination may live on different cores and the write is not atomic with the read"),
 ];

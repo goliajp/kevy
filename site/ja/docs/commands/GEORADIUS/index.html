@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GEORADIUS — kevy コマンドリファレンス</title>
-<meta name="description" content="GEORADIUS — 座標を中心とする旧来形式の半径検索。STORE による書き出しにも対応する。 1 回の呼び出しで O(N)。STORE / STOREDIST を指定すると、書き込みに O(K log K)、書き込み先のクリアに O(D) が加わる。">
+<meta name="description" content="GEORADIUS — 座標を中心とする旧来形式の半径検索。STORE による書き出しにも対応する。 O(log N + C) —— 最大 9 つの近傍レンジを、それぞれスコア木のシークで取得する。C は該当セル内のメンバー数。STORE / STOREDIST を指定すると、書き込みに O(K log K)、書き込み先のクリアに O(D) が加わる。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -57,7 +57,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>1 回の呼び出しで O(N)。STORE / STOREDIST を指定すると、書き込みに O(K log K)、書き込み先のクリアに O(D) が加わる。</code></p>
+      <p class="cx-body"><code>O(log N + C) —— 最大 9 つの近傍レンジを、それぞれスコア木のシークで取得する。C は該当セル内のメンバー数。STORE / STOREDIST を指定すると、書き込みに O(K log K)、書き込み先のクリアに O(D) が加わる。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 

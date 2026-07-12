@@ -58,6 +58,7 @@ members = [
     "crates/kevy-vector",
     "crates/kevy-bytes",
     "crates/kevy-map",
+    "crates/kevy-ranktree",
     "crates/kevy-resp-client",
     "crates/kevy-config",
     "crates/kevy-embedded",

@@ -4,8 +4,9 @@
 use crate::nostd_prelude::*;
 pub use kevy_bytes::SmallBytes;
 use kevy_map::{KevyMap, KevySet};
+use kevy_ranktree::RankTree;
 use core::cmp::Ordering;
-use alloc::collections::{BTreeSet, VecDeque};
+use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 
 /// Backing structure for a Hash value — [`KevyMap`] keyed by [`SmallBytes`]
@@ -19,7 +20,7 @@ pub type ListData = VecDeque<Vec<u8>>;
 pub type SetData = KevySet<SmallBytes>;
 
 /// A total-ordered f64 score (Redis scores are never NaN). `total_cmp` gives a
-/// total order so scores can key a `BTreeSet`.
+/// total order so scores can key an ordered container.
 #[derive(Clone, Copy, PartialEq)]
 pub struct Score(pub f64);
 impl Eq for Score {}
@@ -59,35 +60,35 @@ impl ScoreBound {
     }
 }
 
-/// Sorted set: a member→score map plus a B-tree ordered by `(score, member)`.
-/// (A B-tree is cache-friendlier than Redis's skiplist; `ZRANK` is O(n) here —
-/// an order-statistics tree for O(log n) rank is a later perf item.)
+/// Sorted set: a member→score map plus an order-statistic B-tree keyed by
+/// `(score, member)` ([`kevy_ranktree::RankTree`] — every node carries its
+/// subtree count), so rank queries (`ZRANK`, `ZRANGE` by rank, `ZCOUNT`,
+/// score-bound seeks) are O(log N) descents instead of linear walks.
 #[derive(Default, Clone)]
 pub struct ZSetData {
     pub(crate) by_member: KevyMap<SmallBytes, f64>,
-    /// The `(score, member)` index is still keyed by `Vec<u8>` member —
-    /// changing this requires the `BTreeSet` to accept a `(Score,
-    /// SmallBytes)` ordering, which is fine but a larger sweep; keep
-    /// it as-is for now to avoid touching ZRANGE paths.
-    pub(crate) by_score: BTreeSet<(Score, Vec<u8>)>,
+    /// The `(score, member)` order-statistic index. Member is a
+    /// [`SmallBytes`] (≤22 B inline in the node's key slot), ordered by
+    /// byte-lexicographic `Ord` — the same order the old `Vec<u8>` gave.
+    pub(crate) by_score: RankTree<(Score, SmallBytes)>,
 }
 
 impl ZSetData {
     pub(crate) fn insert(&mut self, member: &[u8], score: f64) -> bool {
         let is_new = match self.by_member.insert(SmallBytes::from_slice(member), score) {
             Some(old) => {
-                self.by_score.remove(&(Score(old), member.to_vec()));
+                self.by_score.remove(&(Score(old), SmallBytes::from_slice(member)));
                 false
             }
             None => true,
         };
-        self.by_score.insert((Score(score), member.to_vec()));
+        self.by_score.insert((Score(score), SmallBytes::from_slice(member)));
         is_new
     }
     pub(crate) fn remove(&mut self, member: &[u8]) -> bool {
         match self.by_member.remove(member) {
             Some(old) => {
-                self.by_score.remove(&(Score(old), member.to_vec()));
+                self.by_score.remove(&(Score(old), SmallBytes::from_slice(member)));
                 true
             }
             None => false,
@@ -99,6 +100,24 @@ impl ZSetData {
     /// `(member, score)` pairs in ascending `(score, member)` order.
     pub fn ordered(&self) -> impl Iterator<Item = (&[u8], f64)> {
         self.by_score.iter().map(|(s, m)| (m.as_slice(), s.0))
+    }
+    /// Like [`Self::ordered`] but starting at ascending `rank` — one
+    /// O(log N) seek, no skip-walk.
+    pub(crate) fn ordered_from(&self, rank: usize) -> impl Iterator<Item = (&[u8], f64)> {
+        self.by_score.iter_from(rank).map(|(s, m)| (m.as_slice(), s.0))
+    }
+    /// The ascending rank of `member` (whose score is `score`). O(log N).
+    pub(crate) fn rank_of(&self, member: &[u8], score: f64) -> Option<usize> {
+        self.by_score.rank_of(&(Score(score), SmallBytes::from_slice(member)))
+    }
+    /// First rank whose score satisfies `min` as a lower bound. O(log N).
+    pub(crate) fn score_start_rank(&self, min: &ScoreBound) -> usize {
+        self.by_score.partition_point(|(s, _)| !min.ge_ok(s.0))
+    }
+    /// First rank whose score fails `max` as an upper bound (i.e. one past
+    /// the last in-range rank). O(log N).
+    pub(crate) fn score_end_rank(&self, max: &ScoreBound) -> usize {
+        self.by_score.partition_point(|(s, _)| max.le_ok(s.0))
     }
 }
 
@@ -294,12 +313,16 @@ impl Value {
             | Value::SmallHashInline(_)
             | Value::SmallListInline(_)
             | Value::SmallZSetInline(_) => 0,
+            // Each member's bytes live twice when they spill to heap (>22 B):
+            // once as the `by_member` key, once inside the rank tree's
+            // `(Score, SmallBytes)` key — hence the ×2 on `heap_bytes`.
+            // Members ≤22 B are inline in both slots (heap_bytes = 0).
             Value::ZSet(z) => collection_overhead(z.by_member.capacity(), HASH_SLOT_BYTES)
                 + z.by_member
                     .iter()
-                    .map(|(m, _)| m.heap_bytes() as u64)
+                    .map(|(m, _)| 2 * m.heap_bytes() as u64)
                     .sum::<u64>()
-                + (z.by_score.len() as u64).saturating_mul(BTREE_SLOT_BYTES),
+                + (z.by_score.len() as u64).saturating_mul(RANKTREE_SLOT_BYTES),
             Value::Stream(s) => s.weight(),
         }
     }
@@ -363,8 +386,18 @@ pub(crate) const HASH_SLOT_BYTES: u64 = 32;
 pub(crate) const SET_SLOT_BYTES: u64 = 24;
 /// `VecDeque` ring-buffer slot per stored `Vec<u8>` header (24 B Vec metadata).
 pub(crate) const LIST_SLOT_BYTES: u64 = 24;
-/// `BTreeSet` per-entry overhead (node pointers + 6-element B-tree node padding).
+/// `BTreeSet`/`BTreeMap` per-entry overhead (node pointers + B-tree node
+/// padding) — the stream index's accounting constant.
 pub(crate) const BTREE_SLOT_BYTES: u64 = 40;
+/// `kevy_ranktree::RankTree` per-key overhead. Measured from the structure:
+/// the `(Score, SmallBytes)` key slot is 32 B; nodes hold ≤15 keys in a Vec
+/// whose buffer rounds to 16 slots at ~2/3 fill (≈10-11 live keys), so the
+/// key arrays amortise to ≈48 B per key; the per-node fixed cost (56 B
+/// header + Box allocation, ~1 node per 10 keys) and the internal nodes'
+/// child-pointer arrays add ≈8 B more. 64 errs slightly high (allocator
+/// size-class rounding), keeping `used_memory` a conservative upper bound —
+/// same policy as [`ENTRY_OVERHEAD`].
+pub(crate) const RANKTREE_SLOT_BYTES: u64 = 64;
 /// Per-entry overhead in the top-level keyspace map: the inline 24-byte
 /// `SmallBytes` key cell + the 64-byte `Entry` (post weight/clock fields) +
 /// metadata. Approximation that errs slightly high so `used_memory` stays a
@@ -398,8 +431,10 @@ pub fn list_item_weight(value_cap: usize) -> u64 {
 }
 
 /// Per-member delta a new zset member charges: hash slot for `by_member` +
-/// BTreeSet slot for `by_score` + the member's heap bytes.
+/// rank-tree slot for `by_score` + the member's heap bytes — twice, because
+/// a heap-spilling member (>22 B) is stored in both structures (inline
+/// members cost 0 here, matching [`Value::weight`]'s ZSet arm).
 #[inline]
 pub fn zset_member_weight(member: &SmallBytes) -> u64 {
-    member.heap_bytes() as u64 + HASH_SLOT_BYTES + BTREE_SLOT_BYTES
+    2 * member.heap_bytes() as u64 + HASH_SLOT_BYTES + RANKTREE_SLOT_BYTES
 }
