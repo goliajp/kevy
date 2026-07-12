@@ -19,6 +19,23 @@ unsafe extern "C" {
     pub fn syscall(num: c_long, ...) -> c_long;
 }
 
+/// Widen a `u32` syscall argument to `c_long`.
+///
+/// `c_long::from(v)` cannot be used: `c_long` is `i64` on 64-bit targets
+/// (where `From<u32>` exists) but `i32` on 32-bit ones (where it does
+/// not), so the `From` form makes the crate un-compilable for any 32-bit
+/// target — which a 32-bit build reaches through a dev-dependency even
+/// though io_uring itself only runs on 64-bit Linux.
+///
+/// Every argument passed through here is a small kernel-bounded value —
+/// a queue depth (≤ 32768), a register opcode, a registered-ring index,
+/// or a flags bitmask — so widening is lossless at either width.
+#[inline]
+#[allow(clippy::cast_possible_wrap)] // values are kernel-bounded; see above
+pub const fn arg(v: u32) -> c_long {
+    v as c_long
+}
+
 // ---- io_uring syscall numbers — identical across Linux architectures ------
 
 pub const SYS_IO_URING_SETUP: c_long = 425;
