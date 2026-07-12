@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kevy を使うべきか — kevy</title>
+<meta name="description" content="自分の問題にどの kevy が合うのか、選ぶことで何を差し出すのか、そして代わりに別のものを使うべき場合。">
+<link rel="stylesheet" href="../../assets/kevy.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../ja/choose/" aria-current="page">使うべきか</a>
+      <a href="../../ja/docs/">ドキュメント</a>
+      <a href="../../ja/docs/commands/">コマンド</a>
+      <a href="../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../ja/play/">Playground</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language">
+        <a href="../../choose/">EN</a>
+        <a href="../../zh/choose/">中文</a>
+        <a href="../../ja/choose/" aria-current="page">日本語</a>
+      </nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+<section class="band" style="border-top:0"><div>
+    <p class="eyebrow">選ぶ</p>
+    <h1>kevy を使うべきでしょうか</h1>
+    <p class="lede">使うべきでない場合もあります。ここでは、実際に判断する順番どおりに並べます。<b>そもそもキーバリューという形が正しいのか。データはどこに置かれる必要があるのか。そして、何を差し出すことになるのか。</b></p>
+    
+  </div></section>
+<section class="band prose"><h2>まず——キーバリューという形は、正しいか</h2><p><b>キーが分かっているなら、kevy を使ってください。</b>セッション ID、ユーザー ID、キューの名前、キャッシュキー。読み取りは問い合わせではなく参照です。これは思われているよりも広い範囲を覆います。さらにセカンダリインデックスとマテリアライズドビューが、問い合わせのいくつかも参照に変えます。</p><p><b>読み取りが本当にクエリなら、kevy を使わないでください。</b>5 つのテーブルにまたがる結合、アドホックな分析、無関係な行にまたがり本物の分離レベルを要求するトランザクション——それは PostgreSQL の仕事であり、PostgreSQL に留めておくべきです。<a href="../../ja/docs/rds-workloads/">リレーショナルな各ワークロードが、ここでいくらかかるか</a>を書いてあります。答えが「やめておきなさい」になるものも含めて。</p><p><b>1 台で足りないなら、kevy を使わないでください。</b>クラスタモードはなく、今後もできません。1 台の kevy は毎秒数百万回の操作をこなし、たいていの製品が到達する上限よりも余裕がありますが、それを超えたらシャーディングするものが必要です。kevy は、それではありません。</p></section>
+<section class="band">
+  <div class="sec-h"><h2>次に——データは、どこに置かれる必要があるか</h2><p class="sec-lede">これが形を決めます。どの行でも、コマンドは同じです。</p></div>
+  <div class="tbl"><table><thead><tr><th>状況</th><th>選ぶもの</th><th>理由</th></tr></thead><tbody><tr><td>複数のサービスがデータを共有する</td><td class="num">サーバー</td><td class="num">1 プロセス、ポートで RESP。既存の Redis クライアントが、そのまま接続できます。</td></tr><tr><td>1 つのプログラムがデータを所有する</td><td class="num">組み込み</td><td class="num">ソケットも、2 つ目のプロセスも、シリアライズも要りません。ラウンドトリップではなく、関数呼び出しです。</td></tr><tr><td>データはユーザーの端末のもの</td><td class="num">ブラウザ</td><td class="num">151 KB の WebAssembly。本物の TTL と pub/sub があり、ブラウザのファイルシステムに永続化されます。オフラインでも動きます。</td></tr><tr><td>リクエストごとに、エッジで動く</td><td class="num">エッジ</td><td class="num">暖機するものも、張りにいく接続もありません。ストアは、コードと同じ isolate の中にあります。</td></tr><tr><td>OS もヒープもないデバイス</td><td class="num">ベアメタル</td><td class="num">kevy-store は no_std です。固定 arena のみ、アロケータなし。CI が push のたびに Cortex-M で起動させています。</td></tr></tbody></table></div>
+  <p class="tbl-note">選んだら固定される、というものではありません。組み込み API とワイヤプロトコルは同じ操作を公開しているので、プロセス内ストアで手狭になったプログラムは、データベースの開き方を変えるだけでサーバーに移れます。使い方を書き直す必要はありません。</p>
+</section>
+<section class="band"><div class="sec-h"><h2>最後に——何を差し出すことになるか</h2></div><div class="faq"><details><summary>本当に Redis のドロップイン置き換えになりますか</summary><div>ワイヤの上では、なります。RESP2 と RESP3、184 個のコマンドに対応し、クライアントライブラリは違いに気づきません。挙動もおおむね同じですが、その例外こそが要点です。<code>SCAN</code> はカーソルによる反復ではありません。1 回の呼び出しでキースペース全体を走査してカーソル 0 を返すので、いつもの SCAN ループは 1 往復で終わります。<code>ZRANK</code> は O(N) です。ソート済みセットに順位の索引を持たないからです。<code>SPOP</code> と <code>SRANDMEMBER</code> はランダムではなく、毎回同じ要素を返します。シャードをまたぐ <code>RENAME</code> は原子的ではありません。<a href="../../ja/docs/commands/">184 個すべてのコマンドに、本当の差異と本当のコストを併記してあります</a>。Redis の文書から書き写したものではなく、実装から読み出したものです。</div></details><details><summary>マシンが落ちたら、どうなりますか</summary><div>書き込みはすべて、まず追記専用ログに入り、起動時にログが再生されます。既定の <code>everysec</code> の fsync なら、強制終了で失うのは最大 1 秒分の書き込みです。<code>appendfsync = "always"</code> にすれば失うものはありませんが、スループットを代償に払います。スナップショットは、再生にかかる時間を抑えるためだけに存在します。<a href="../../ja/docs/persistence/">永続化のガイド</a>に数字があります。</div></details><details><summary>マシン障害を生き延びられますか</summary><div>はい。プライマリ 1 台とレプリカ N 台で、本物のフェイルオーバーがあります。計画的な引き継ぎ、エポックによるフェンシングを伴うクラッシュ時の選出、そして任意で選べる一貫性の段階(<code>WAIT</code>、read-your-writes トークン、上限つきの遅延)。<b>得られない</b>のは、マシンをまたぐデータのシャーディングです。レプリカはコピーであって、切片ではありません。<a href="../../ja/docs/availability/">可用性のガイド</a>に、フェイルオーバーでどの書き込みが生き残り、どれが生き残らないのかを明記してあります。</div></details><details><summary>認証はありますか</summary><div>ありません。今後もありません。AUTH も ACL も TLS も、恒久的に対象外です。kevy はプライベートなネットワークで動かすか、それらを正しく行うプロキシの後ろに置いてください。中途半端な認証層は、正直に何もないことよりも悪いものです。人に信頼させてしまうからです。</div></details><details><summary>依存ゼロ——それは無謀ではありませんか</summary><div>飾りとは正反対で、可搬性を本物にしているのが、まさにそれです。ハッシュマップ、ハッシュ関数、RESP パーサ、B-tree、arena アロケータ、io_uring のバインディング、Lua インタプリタ——すべてこのリポジトリにあり、すべて Rust です。kevy の周辺にある C は、カーネルがそれ以外の方法では公開していない、ごく少数のシステムコールだけで、<code>kevy-sys</code> に手で書いてあります。おかげでサプライチェーンは、半日で読み切れます。</div></details><details><summary>手狭になったら、あるいは気が変わったら</summary><div><code>kevy-cli export</code> がキースペースをプレーンな RESP ファイルに書き出し、Redis 互換のサーバーなら、どれでもそれを取り込めます。そして <code>kevy-cli digest</code> が、何かを捨ててしまう前に、コピーが忠実であることを証明します。<a href="../../ja/docs/migration/">移行ガイド</a>は、入ってくる手順と同じ丁寧さで、出ていく手順も扱っています。</div></details></div></section>
+<section class="band">
+  <div class="call note">
+    <span class="h">まだ決められませんか</span>
+    <p><a href="../../ja/play/">playground</a> を開いてください。WebAssembly にコンパイルされた本物の kevy エンジンが、あなたのタブの中で動いています。キーを書き、TTL が切れていく様子を眺め、自分のディスクに置かれた追記専用ログを覗いてみてください。録画ではありませんし、サーバーも介在しません。</p>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <p class="foot-b">kevy 4.0 — 答えが「いいえ」になる場合も含めて</p>
+    <nav>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+      <a href="https://crates.io/crates/kevy">crates.io</a>
+      <a href="../../llms.txt">llms.txt</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

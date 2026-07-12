@@ -1,49 +1,47 @@
 # English content for kevy.golia.jp.
 #
-# The site answers a visitor's questions, in the order they actually ask them:
+# kevy is the data layer for building AI systems. Redis-compatible, faster, and
+# it covers what a Redis plus a vector database plus a search index plus a queue
+# were covering between them.
 #
-#   why does this exist  ->  why would I move to it  ->  what am I trying to do
-#   ->  should I use it here  ->  why  ->  how  ->  what will it cost me
+# The site says exactly two things:
+#   1. what the reader needs to see
+#   2. what we actually are
 #
-# It is not a place to narrate our engineering. How we found that our benchmark
-# harness was quantised, which optimisations turned out to be a tax rather than a
-# bottleneck, how many rounds of decomposition it took — that lives in bench/ and
-# in the commit log, where the people who care will look for it. A visitor here
-# has a problem and twenty seconds.
+# It does not talk about our engineering. Not the dependency count, not the
+# language, not how carefully we measured — measuring honestly is the floor, not
+# an achievement, and a site that congratulates itself for it is a site about
+# itself. That material lives in the repository, for the people who go looking.
 #
-# What DOES belong, because it changes what a reader decides:
-#   * where kevy wins by a lot, and where by almost nothing (LPUSH: 12%);
-#   * what it refuses to do (no cluster, no AUTH, no TLS);
-#   * which commands do not behave the way Redis's documentation says.
-# That is honesty in the reader's service. The rest was honesty in ours.
+# What DOES belong, because it changes what a reader decides: where we are only
+# barely ahead (LPUSH: 12%), what we refuse to do (no cluster, no AUTH, no TLS),
+# and which commands do not behave the way Redis's docs say.
 #
-# Numbers: bench/PERF-LEDGER.md (median of five, counted server-side over a
-# steady window). Sizes: ls -l site/demo/pkg/kevy.wasm and its gzip.
+# Numbers: bench/PERF-LEDGER.md. Sizes: ls -l site/demo/pkg/kevy.wasm.
 
 PAGES = {}
 
 # ── / ───────────────────────────────────────────────────────────────────────
 
 PAGES[""] = {
-    "title": "kevy — a Redis-compatible store you can put anywhere",
-    "desc": "A Redis-compatible store in pure Rust. Run it as a server, embed it in your binary, ship it to a browser tab, or boot it on a microcontroller — one engine, one API, no dependencies.",
-    "foot": "pure Rust, zero third-party dependencies",
+    "title": "kevy — the data layer for AI systems",
+    "desc": "A Redis-compatible data layer built for AI systems. Same protocol, more speed, and vector search, full-text, indexes, views and a change feed in the same engine — on a server, in your binary, in a browser tab, or on a device.",
+    "foot": "GOLIA",
     "blocks": [
         {
             "t": "hero",
-            "eyebrow": "Version 4.0",
-            "h1": "Your data needs somewhere fast to live.<br>It is not always a server.",
+            "eyebrow": "kevy 4.0",
+            "h1": "The data layer<br>for AI systems.",
             "lede": (
-                "kevy is a <span class=\"nb\">Redis-compatible</span> store that runs "
-                "in more than one place. The same engine serves a 16-core machine, "
-                "sits inside your binary with no socket at all, ships to a browser tab "
-                "as 151 KB of WebAssembly, and boots on a microcontroller with no "
-                "operating system. <b>You learn one API and use it everywhere.</b>"
+                "Redis-compatible, so you can swap it in. <b>Faster on every "
+                "operation.</b> And it does what an AI system actually needs — vector "
+                "search, full-text, secondary indexes, materialised views and a change "
+                "feed — <b>in the same engine, over the same keys.</b>"
             ),
             "ctas": [
-                {"label": "What are you trying to do?", "href": "#do"},
-                {"label": "Should I use it?", "href": "choose/"},
-                {"label": "Try it in your browser", "href": "play/"},
+                {"label": "Why you can replace Redis", "href": "#swap"},
+                {"label": "What else it does", "href": "#more"},
+                {"label": "Run it in your browser", "href": "play/"},
             ],
             "aside": """<pre class="hero-code"><code>$ cargo install kevy
 $ kevy --port 6379
@@ -51,144 +49,164 @@ $ kevy --port 6379
 $ redis-cli -p 6379
 &gt; SET session:7f3a '{"user":"ada"}' EX 3600
 OK
-&gt; TTL session:7f3a
-(integer) 3600</code></pre>""",
+&gt; IDX.QUERY idx:sem KNN "&lt;vector&gt;" LIMIT 10
+1) "doc:4410"
+2) "doc:9982"</code></pre>""",
         },
         {
-            "t": "prose",
-            "h2": "Why this exists",
-            "body": [
-                "Redis is excellent and most teams should keep using it. kevy was "
-                "built because a Redis-shaped hole kept appearing in places Redis "
-                "cannot go.",
-                "You cannot put Redis inside a desktop app so it works offline. You "
-                "cannot ship it to a browser tab. You cannot boot it on a sensor with "
-                "256 KB of RAM. Each of those ends with someone writing a fourth "
-                "storage layer — its own API, its own bugs, its own idea of what a TTL "
-                "means. <b>kevy is one engine that fits all four, and it speaks the "
-                "protocol your team already knows.</b>",
-                "It has no third-party dependencies: not a hashmap crate, not a "
-                "hasher, not an async runtime. That is not a flourish — it is the "
-                "reason the same code compiles for a server, a browser and a "
-                "microcontroller. Any crate that assumes a heap, a thread or a clock "
-                "would close one of those doors.",
+            "t": "bars",
+            "id": "swap",
+            "tone": "deep",
+            "eyebrow": "Why you can replace Redis",
+            "h2": "Same protocol. More throughput.",
+            "intro": (
+                "Your client does not change — RESP2 and RESP3, 184 commands, the "
+                "library you already use. One machine, 16 cores, loopback, small "
+                "values, median of five runs."
+            ),
+            # name, kevy, redis 8, ratio, thin?
+            "rows": [
+                ["GET", 7800299, 5597865, "1.39×", False],
+                ["SET", 6918058, 2573396, "2.69×", False],
+                ["INCR", 6133940, 3459395, "1.77×", False],
+                ["SADD", 5600597, 3690483, "1.52×", False],
+                ["HSET", 4287217, 3021325, "1.42×", False],
+                ["LPUSH", 3213470, 2862374, "1.12×", True],
+                ["ZADD", 3053101, 2773929, "1.10×", True],
             ],
+            "us": "kevy 4.0",
+            "them": "Redis 8",
+            "thin": "margin under 15% — your workload decides, not the engine",
+            "note": (
+                "<b>LPUSH and ZADD are only 12% and 10% ahead.</b> At that margin your "
+                "value sizes and key distribution decide the winner. If lists or "
+                "sorted sets are your hot path, speed is not the reason to switch. "
+                "<a href=\"~/benchmarks/\">The full table, against valkey and Dragonfly "
+                "too.</a>"
+            ),
         },
         {
             "t": "cards",
-            "h2": "Why teams move to it",
-            "intro": "Three reasons people actually switch. If none of them is your reason, keep the thing you have — it is working.",
+            "id": "more",
+            "eyebrow": "What else it does",
+            "h2": "The things an AI system needs,<br>in the engine that already holds the data.",
+            "intro": "Not modules. Not a sidecar. Not a second copy of the truth drifting away from the first.",
             "items": [
                 {
-                    "kicker": "Reason one",
-                    "title": "You need it where Redis cannot go",
-                    "body": "A CLI that works on a plane. A web app that survives a reload with no backend. A device with no OS. Today those get a separate storage layer each; with kevy they get the same one.",
-                    "go": "Coming from Redis",
-                    "href": "migrate/",
-                },
-                {
-                    "kicker": "Reason two",
-                    "title": "You can delete a service",
-                    "body": "Secondary indexes, materialised views, vector KNN, BM25 full-text and a change feed are in the engine. No search cluster beside your cache, no modules, no second copy of the data drifting from the first.",
-                    "go": "See what it can index",
-                    "href": "use/ai/",
-                },
-                {
-                    "kicker": "Reason three",
-                    "title": "Your database is doing work it hates",
-                    "body": "Sessions, rate limits, queues, feature flags, hot rows. Those reads are lookups, not questions — and they are the ones hammering your Postgres.",
-                    "go": "Coming from a database",
-                    "href": "migrate/",
-                },
-            ],
-        },
-        {
-            "t": "cards",
-            "id": "do",
-            "h2": "What are you trying to do?",
-            "intro": "Start from the problem. Each page says whether kevy is right for it, what it costs you, and exactly how to do it — with commands you can paste.",
-            "items": [
-                {
-                    "kicker": "Cache & sessions",
-                    "title": "Take load off the database",
-                    "body": "Sessions, hot rows, rate limits, feature flags — the things that expire on their own.",
-                    "go": "How",
-                    "href": "use/cache/",
-                },
-                {
-                    "kicker": "Queues & jobs",
-                    "title": "Hand work to a worker",
-                    "body": "Background jobs, retries, delayed tasks, and a queue that does not lose them when a worker dies.",
-                    "go": "How",
-                    "href": "use/queue/",
-                },
-                {
-                    "kicker": "Realtime",
-                    "title": "Push to a live client",
-                    "body": "Chat, presence, notifications, dashboards. Fan out to many subscribers at once.",
-                    "go": "How",
-                    "href": "use/realtime/",
-                },
-                {
-                    "kicker": "AI applications",
-                    "title": "Give an agent a memory",
-                    "body": "Vector search, full-text search and a change feed, in the store that already holds the data.",
+                    "kicker": "Vector",
+                    "title": "KNN over your keyspace",
+                    "body": "An HNSW index, declared once, kept current by the write path. You bring the embedding; kevy stores, indexes and searches it.",
                     "go": "How",
                     "href": "use/ai/",
                 },
                 {
-                    "kicker": "Primary store",
-                    "title": "Serve reads without a database",
-                    "body": "Secondary indexes and materialised views, so a read stays a lookup instead of becoming a query.",
+                    "kicker": "Full text",
+                    "title": "BM25, and hybrid ranking",
+                    "body": "Full-text search over the same keys, and a hybrid query that fuses the text ranking with the vector ranking.",
+                    "go": "How",
+                    "href": "use/ai/",
+                },
+                {
+                    "kicker": "Indexes",
+                    "title": "Look up by any field",
+                    "body": "Secondary indexes turn a filtered read back into a lookup. No query planner, no scan.",
                     "go": "How",
                     "href": "use/app-store/",
                 },
                 {
-                    "kicker": "Ship it inside",
-                    "title": "Put the store in the thing",
-                    "body": "A desktop app, a browser tab, an edge worker, a microcontroller. No server, no socket, no network.",
+                    "kicker": "Views",
+                    "title": "The answer, kept ready",
+                    "body": "Materialised views hold an aggregate current on the write path, so a read never recomputes it.",
+                    "go": "How",
+                    "href": "use/app-store/",
+                },
+                {
+                    "kicker": "Change feed",
+                    "title": "Tail every write",
+                    "body": "A resumable feed another process — or an agent — can follow. Nothing to poll.",
+                    "go": "How",
+                    "href": "use/ai/",
+                },
+                {
+                    "kicker": "Anywhere",
+                    "title": "Server, binary, browser, device",
+                    "body": "The same engine and the same commands: a 16-core server, inside your binary, 151 KB in a browser tab, or a chip with no operating system.",
                     "go": "How",
                     "href": "use/embedded/",
                 },
             ],
         },
         {
-            "t": "table",
-            "h2": "How fast, on one machine",
-            "intro": (
-                "16 cores, loopback, small values, counted from the server's own "
-                "counters over a steady window. Your workload will differ — "
-                "<a href=\"benchmarks/\">the full table and the method are here</a>."
-            ),
-            "head": ["", "kevy 4.0", "Redis 8", "valkey 9.1", "vs Redis 8"],
-            "rows": [
-                ["GET", "7,800,299", "5,597,865", "3,014,687", "*1.39×"],
-                ["SET", "6,918,058", "2,573,396", "1,749,976", "*2.69×"],
-                ["INCR", "6,133,940", "3,459,395", "2,484,273", "*1.77×"],
-                ["LPUSH", "3,213,470", "2,862,374", "1,943,222", "!1.12×"],
-                ["ZADD", "3,053,101", "2,773,929", "1,802,759", "!1.10×"],
+            "t": "prose",
+            "tone": "blue",
+            "h2": "Why an AI system needs a different data layer",
+            "body": [
+                "An agent writes a document, embeds it, indexes it, caches it, and "
+                "tells something else it changed. Today that is four systems — a "
+                "cache, a vector database, a search index, a queue — holding the same "
+                "facts and drifting apart. Every one of them is a place to forget a "
+                "step.",
+                "<b>kevy collapses them into one.</b> Declare the index; write the key "
+                "the way you already write it. The engine keeps the vector index, the "
+                "text index, the secondary index and the view current on the write "
+                "path, and the change feed tells anyone who is listening.",
+                "And it runs where the agent runs. In your service, inside the binary "
+                "with no socket, in the browser tab as WebAssembly, or on the device "
+                "at the edge of the network.",
             ],
-            "note": (
-                "Read the last two rows before you decide. <b>Against Redis 8, LPUSH is "
-                "ahead by 12% and ZADD by 10%</b> — close enough that your value sizes "
-                "and key distribution decide the winner, not the engine. If lists or "
-                "sorted sets are your hot path, speed is not a reason to switch."
-            ),
+        },
+        {
+            "t": "cards",
+            "tone": "deep",
+            "h2": "What are you building?",
+            "intro": "Each page says whether kevy fits, what it costs you, and exactly how — with commands you can paste.",
+            "items": [
+                {"kicker": "AI", "title": "Agent memory & RAG", "body": "Vectors, full text, a change feed, and a TTL that expires a session for you.", "go": "How", "href": "use/ai/"},
+                {"kicker": "Serving", "title": "Reads without a database", "body": "Indexes and views, so a read stays a lookup instead of becoming a query.", "go": "How", "href": "use/app-store/"},
+                {"kicker": "Cache", "title": "Sessions & rate limits", "body": "The rows that were never a database problem, off your database.", "go": "How", "href": "use/cache/"},
+                {"kicker": "Queues", "title": "Background jobs", "body": "Streams with consumer groups: a job survives the worker that was holding it.", "go": "How", "href": "use/queue/"},
+                {"kicker": "Realtime", "title": "Push to live clients", "body": "Pub/sub with pattern subscriptions — and across browser tabs, with no server.", "go": "How", "href": "use/realtime/"},
+                {"kicker": "Embedded", "title": "Put it in the thing", "body": "Desktop app, browser, edge worker, microcontroller. No server, no socket.", "go": "How", "href": "use/embedded/"},
+            ],
+        },
+        {
+            "t": "steps",
+            "h2": "Start",
+            "intro": "",
+            "items": [
+                {
+                    "title": "As a server",
+                    "body": "RESP on 6379. Your redis-cli and your client library do not know anything changed.",
+                    "code": "cargo install kevy\nkevy --port 6379",
+                },
+                {
+                    "title": "In your Rust program",
+                    "body": "No socket, no second process, no serialisation.",
+                    "code": 'kevy-embedded = "4.0"\n\nlet db = Db::open("data/")?;\ndb.set(b"k", b"v", None)?;',
+                },
+                {
+                    "title": "In a browser tab",
+                    "body": "151 KB. Persists to the browser's filesystem and survives a reload.",
+                    "code": 'import { open } from "@goliajp/kevy";\n\nconst db = await open({ persist: { name: "app" } });\ndb.set("cart:u1", json, { ttlMs: 3_600_000 });',
+                },
+            ],
         },
         {
             "t": "callout",
             "kind": "loss",
+            "tone": "deep",
             "title": "What kevy will not do",
             "body": (
                 "<b>It is not a cluster.</b> Replication and failover exist; sharding "
                 "data across machines does not, and will not. If one machine is not "
                 "enough, kevy is the wrong answer. <b>There is no AUTH and no TLS</b> — "
                 "run it on a private network or behind something that does those "
-                "properly. And <b>some commands differ from Redis in ways that will "
-                "surprise you</b>: <code>SCAN</code> is not a cursor iterator, "
-                "<code>ZRANK</code> is O(N), <code>SPOP</code> is not random. "
-                "<a href=\"docs/commands/\">Every difference is written down</a>, per "
-                "command, in a column Redis's own reference does not have."
+                "properly. And <b>some commands differ from Redis</b>: "
+                "<code>SCAN</code> is not a cursor iterator, <code>ZRANK</code> is "
+                "O(N), <code>SPOP</code> is not random. "
+                "<a href=\"~/docs/commands/\">Every difference is written down</a>, per "
+                "command. <a href=\"~/choose/\">And here is when not to use it at "
+                "all.</a>"
             ),
         },
     ],
@@ -250,8 +268,8 @@ PAGES["migrate"] = {
                     ),
                 },
                 {
-                    "title": "It is one auditable binary",
-                    "body": "Zero third-party dependencies. 33 crates, one author, a supply chain you can read in an afternoon. For a regulated build, a vendored build, or anything shipped to a customer's machine, that is not a nicety.",
+                    "title": "It is faster on the operations you already run",
+                    "body": "1.4× on GET, 2.7× on SET, 1.8× on INCR against Redis 8 on the same machine. Read the whole table before you count on it, though — LPUSH and ZADD are only 12% and 10% ahead, and if lists or sorted sets are your hot path this is not the reason to move.",
                 },
             ],
         },
@@ -267,7 +285,7 @@ PAGES["migrate"] = {
                 "<code>SPOP</code> and <code>SRANDMEMBER</code> are not random, and a "
                 "cross-shard <code>RENAME</code> is not atomic. None of these is a bug "
                 "and all of them are documented per command. Read the list before you "
-                "commit, not after: <a href=\"docs/commands/\">every command's real "
+                "commit, not after: <a href=\"~/docs/commands/\">every command's real "
                 "cost and real deviation</a>."
             ),
         },
@@ -317,23 +335,23 @@ kevy-cli import -p 6380 --resume dump.resp""",
         {
             "t": "table",
             "h2": "Which parts should move",
-            "intro": "Honest per workload. The last two rows are the ones people get wrong.",
+            "intro": "Per workload. The three rows in red are the ones people get wrong.",
             "head": ["Workload", "Move it?", "Why"],
             "rows": [
                 ["Sessions, tokens", "*Yes", "A lookup by key with a TTL. The database was doing you a favour, not a job."],
                 ["Rate limits, counters", "*Yes", "INCR with an expiry is atomic and O(1). In SQL this is a row lock on your hottest row."],
                 ["Job queues", "*Yes", "Lists and streams, with consumer groups and per-message acknowledgement. A queue table is a lock convention with extra steps."],
                 ["Feature flags, config", "*Yes", "Read constantly, written rarely, joined never."],
-                ["Filtered lists (by status, by owner)", "*Often", "A secondary index answers it without a query planner. See <a href=\"use/app-store/\">serving reads</a>."],
+                ["Filtered lists (by status, by owner)", "*Often", "A secondary index answers it without a query planner. See <a href=\"~/use/app-store/\">serving reads</a>."],
                 ["Aggregates (counts, totals)", "*Often", "A materialised view keeps it current on the write path instead of recomputing it on every read."],
                 ["Joins across several tables", "!No", "kevy has no joins and will not grow them. This is what Postgres is for."],
                 ["Analytics, ad-hoc queries", "!No", "There is no query planner and no optimiser. Do not try."],
                 ["Transactions across unrelated rows", "!No", "MULTI is per shard, not global. If you need serialisable isolation across the keyspace, you need a database."],
             ],
             "note": (
-                "The two red rows are not a to-do list. They are refusals — kevy will "
+                "The three red rows are not a to-do list. They are refusals — kevy will "
                 "not grow joins or an optimiser, because doing either badly is worse "
-                "than not doing it. <a href=\"docs/rds-workloads/\">Every relational "
+                "than not doing it. <a href=\"~/docs/rds-workloads/\">Every relational "
                 "workload, with what it actually costs here</a>, including the ones "
                 "where the honest answer is \"keep it in Postgres\"."
             ),
@@ -352,7 +370,7 @@ kevy-cli import -p 6380 --resume dump.resp""",
                 "The same three commands run in the other direction. "
                 "<code>kevy-cli export</code> writes a plain RESP file that any "
                 "Redis-compatible server will import, and <code>digest</code> proves "
-                "the copy is faithful. <a href=\"docs/migration/\">The migration "
+                "the copy is faithful. <a href=\"~/docs/migration/\">The migration "
                 "guide covers moving out</a> as carefully as moving in — we would much "
                 "rather you leave cleanly than stay because you are stuck."
             ),
@@ -390,7 +408,7 @@ PAGES["choose"] = {
                 "across five tables, ad-hoc analytics, a transaction spanning "
                 "unrelated rows with real isolation — that is PostgreSQL, and it "
                 "should stay PostgreSQL. We wrote down "
-                "<a href=\"docs/rds-workloads/\">what each relational workload costs "
+                "<a href=\"~/docs/rds-workloads/\">what each relational workload costs "
                 "here</a>, including the ones where the answer is do not.",
                 "<b>Do not use kevy if one machine is not enough.</b> There is no "
                 "cluster mode and there will not be one. A single kevy does several "
@@ -429,27 +447,23 @@ PAGES["choose"] = {
             "items": [
                 {
                     "q": "Is it really a drop-in replacement for Redis?",
-                    "a": "On the wire, yes — RESP2 and RESP3, 184 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. <code>SCAN</code> is not a cursor iterator: one call sweeps the whole keyspace and returns cursor 0, so the usual SCAN loop finishes after a single round trip. <code>ZRANK</code> is O(N), because our sorted set has no rank index. <code>SPOP</code> and <code>SRANDMEMBER</code> are not random — they return the same members every time. A cross-shard <code>RENAME</code> is not atomic. <a href=\"docs/commands/\">All 184 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
+                    "a": "On the wire, yes — RESP2 and RESP3, 184 commands, and your client library will not notice. In behaviour, mostly, and the exceptions are the point. <code>SCAN</code> is not a cursor iterator: one call sweeps the whole keyspace and returns cursor 0, so the usual SCAN loop finishes after a single round trip. <code>ZRANK</code> is O(N), because our sorted set has no rank index. <code>SPOP</code> and <code>SRANDMEMBER</code> are not random — they return the same members every time. A cross-shard <code>RENAME</code> is not atomic. <a href=\"~/docs/commands/\">All 184 commands carry their real deviation and their real cost</a>, read out of the implementation rather than copied from Redis's documentation.",
                 },
                 {
                     "q": "What happens when the machine dies?",
-                    "a": "Every write goes to an append-only log first, and the log replays on boot. With the default <code>everysec</code> fsync you lose at most a second of writes to a hard kill; set <code>appendfsync = \"always\"</code> and you lose nothing, at a cost in throughput. Snapshots exist only to bound how long the replay takes. <a href=\"docs/persistence/\">The persistence guide</a> has the numbers.",
+                    "a": "Every write goes to an append-only log first, and the log replays on boot. With the default <code>everysec</code> fsync you lose at most a second of writes to a hard kill; set <code>appendfsync = \"always\"</code> and you lose nothing, at a cost in throughput. Snapshots exist only to bound how long the replay takes. <a href=\"~/docs/persistence/\">The persistence guide</a> has the numbers.",
                 },
                 {
                     "q": "Can I survive a machine failure?",
-                    "a": "Yes — one primary, N replicas, with real failover: planned handover, crash election with epoch fencing, and an opt-in consistency ladder (<code>WAIT</code>, read-your-writes tokens, bounded staleness). What you do <b>not</b> get is data sharded across machines. Replicas are copies, not slices. <a href=\"docs/availability/\">The availability guide</a> states exactly which writes survive a failover and which do not.",
+                    "a": "Yes — one primary, N replicas, with real failover: planned handover, crash election with epoch fencing, and an opt-in consistency ladder (<code>WAIT</code>, read-your-writes tokens, bounded staleness). What you do <b>not</b> get is data sharded across machines. Replicas are copies, not slices. <a href=\"~/docs/availability/\">The availability guide</a> states exactly which writes survive a failover and which do not.",
                 },
                 {
                     "q": "Is there authentication?",
                     "a": "No, and there will not be. No AUTH, no ACLs, no TLS — permanently out of scope. Run kevy on a private network, or behind a proxy that does those things properly. A half-hearted auth layer is worse than an honest absence of one, because it invites people to trust it.",
                 },
                 {
-                    "q": "Zero dependencies — is that not reckless?",
-                    "a": "It is the opposite of a flourish: it is what makes the portability real. The hash map, the hasher, the RESP parser, the B-tree, the arena allocator, the io_uring bindings, the Lua interpreter — all in this repository, all Rust. The only C anywhere near kevy is the handful of syscalls the kernel exposes no other way, hand-written in <code>kevy-sys</code>. It also means the supply chain is something you can read in an afternoon.",
-                },
-                {
                     "q": "What if I outgrow it, or just change my mind?",
-                    "a": "<code>kevy-cli export</code> writes your keyspace to a plain RESP file that any Redis-compatible server will import, and <code>kevy-cli digest</code> proves the copy is faithful before you throw anything away. <a href=\"docs/migration/\">The migration guide</a> covers moving out as carefully as moving in.",
+                    "a": "<code>kevy-cli export</code> writes your keyspace to a plain RESP file that any Redis-compatible server will import, and <code>kevy-cli digest</code> proves the copy is faithful before you throw anything away. <a href=\"~/docs/migration/\">The migration guide</a> covers moving out as carefully as moving in.",
                 },
             ],
         },
@@ -458,7 +472,7 @@ PAGES["choose"] = {
             "kind": "note",
             "title": "Still not sure?",
             "body": (
-                "Open the <a href=\"play/\">playground</a>. It is a real kevy engine "
+                "Open the <a href=\"~/play/\">playground</a>. It is a real kevy engine "
                 "compiled to WebAssembly, running in your tab — write keys, watch TTLs "
                 "expire, look at the append-only log sitting on your own disk. Nothing "
                 "is pre-recorded, and no server is involved."
@@ -540,9 +554,9 @@ DEL   user:881            # after you write to Postgres""",
             "h2": "Next",
             "intro": "",
             "items": [
-                {"kicker": "Guide", "title": "The cookbook", "body": "Working recipes for sessions, rate limits, leaderboards and feeds.", "go": "Read it", "href": "../../docs/cookbook/"},
-                {"kicker": "Guide", "title": "Persistence", "body": "What survives a kill -9, and what the fsync policy costs you.", "go": "Read it", "href": "../../docs/persistence/"},
-                {"kicker": "Reference", "title": "Every command", "body": "184 commands, each with its real cost and its deviation from Redis.", "go": "Look it up", "href": "../../docs/commands/"},
+                {"kicker": "Guide", "title": "The cookbook", "body": "Working recipes for sessions, rate limits, leaderboards and feeds.", "go": "Read it", "href": "docs/cookbook/"},
+                {"kicker": "Guide", "title": "Persistence", "body": "What survives a kill -9, and what the fsync policy costs you.", "go": "Read it", "href": "docs/persistence/"},
+                {"kicker": "Reference", "title": "Every command", "body": "184 commands, each with its real cost and its deviation from Redis.", "go": "Look it up", "href": "docs/commands/"},
             ],
         },
     ],
@@ -637,7 +651,7 @@ XPENDING jobs:pay g1""",
                 "materialised first. And on a multi-shard server, <code>BLPOP</code> "
                 "across several keys does not honour Redis's strict left-to-right "
                 "priority — keys on the connection's own shard are served first. All "
-                "of this is per-command in <a href=\"../../docs/commands/\">the "
+                "of this is per-command in <a href=\"~/docs/commands/\">the "
                 "reference</a>."
             ),
         },
@@ -646,8 +660,8 @@ XPENDING jobs:pay g1""",
             "h2": "Next",
             "intro": "",
             "items": [
-                {"kicker": "Guide", "title": "The cookbook", "body": "Queue recipes, including retry and dead-letter patterns.", "go": "Read it", "href": "../../docs/cookbook/"},
-                {"kicker": "Reference", "title": "Stream commands", "body": "XADD, XREADGROUP, XAUTOCLAIM and the rest, with their real costs.", "go": "Look it up", "href": "../../docs/commands/"},
+                {"kicker": "Guide", "title": "The cookbook", "body": "Queue recipes, including retry and dead-letter patterns.", "go": "Read it", "href": "docs/cookbook/"},
+                {"kicker": "Reference", "title": "Stream commands", "body": "XADD, XREADGROUP, XAUTOCLAIM and the rest, with their real costs.", "go": "Look it up", "href": "docs/commands/"},
             ],
         },
     ],
@@ -680,7 +694,7 @@ PAGES["use/realtime"] = {
                 "presence ping or a live counter, and exactly wrong for anything you "
                 "would be upset to lose.",
                 "<b>If losing a message matters, use a stream instead</b> — see "
-                "<a href=\"../queue/\">queues</a>. Streams keep history, support "
+                "<a href=\"~/use/queue/\">queues</a>. Streams keep history, support "
                 "consumer groups, and let a client that was offline catch up. Pub/sub "
                 "is the cheap thing; the cheapness is the trade.",
             ],
@@ -732,7 +746,7 @@ db.publish("room:42", JSON.stringify({ user: "ada", text: "hello" }));""",
                 "should know about before you rely on delivery. There is no "
                 "acknowledgement and no replay. <b>If either matters, you want a "
                 "stream, not a channel.</b> "
-                "<a href=\"../../docs/pubsub/\">The pub/sub guide</a> is specific "
+                "<a href=\"~/docs/pubsub/\">The pub/sub guide</a> is specific "
                 "about the limits."
             ),
         },
@@ -741,8 +755,8 @@ db.publish("room:42", JSON.stringify({ user: "ada", text: "hello" }));""",
             "h2": "Next",
             "intro": "",
             "items": [
-                {"kicker": "Guide", "title": "Pub/sub", "body": "Channels, patterns, and what happens to a subscriber that falls behind.", "go": "Read it", "href": "../../docs/pubsub/"},
-                {"kicker": "Try it", "title": "Two tabs, no server", "body": "Open the playground in two tabs and publish from either one.", "go": "Playground", "href": "../../play/"},
+                {"kicker": "Guide", "title": "Pub/sub", "body": "Channels, patterns, and what happens to a subscriber that falls behind.", "go": "Read it", "href": "docs/pubsub/"},
+                {"kicker": "Try it", "title": "Two tabs, no server", "body": "Open the playground in two tabs and publish from either one.", "go": "Playground", "href": "play/"},
             ],
         },
     ],
@@ -833,8 +847,8 @@ FEED.READ 0 1 0 COUNT 2     -> the writes themselves, replayable""",
                 "not a guarantee. And <b>there is no embedding model</b> — if you were "
                 "hoping kevy would call one for you, it will not, and you should know "
                 "that before you plan around it. "
-                "<a href=\"../../docs/vector-search/\">The vector guide</a> and "
-                "<a href=\"../../docs/text-search/\">the text guide</a> are specific."
+                "<a href=\"~/docs/vector-search/\">The vector guide</a> and "
+                "<a href=\"~/docs/text-search/\">the text guide</a> are specific."
             ),
         },
         {
@@ -842,7 +856,7 @@ FEED.READ 0 1 0 COUNT 2     -> the writes themselves, replayable""",
             "kind": "note",
             "title": "If the thing reading these docs is an agent",
             "body": (
-                "<a href=\"../../llms-full.txt\">llms-full.txt</a> is one fetch: every "
+                "<a href=\"~/llms-full.txt\">llms-full.txt</a> is one fetch: every "
                 "command with its real cost and its real deviation from Redis, plus the "
                 "complete text of all twenty-four guides. It is generated from the "
                 "engine's own verb table, so it cannot drift from what the server does."
@@ -853,9 +867,9 @@ FEED.READ 0 1 0 COUNT 2     -> the writes themselves, replayable""",
             "h2": "Next",
             "intro": "",
             "items": [
-                {"kicker": "Guide", "title": "Vector search", "body": "HNSW, the tuning knobs, and what approximate actually means here.", "go": "Read it", "href": "../../docs/vector-search/"},
-                {"kicker": "Guide", "title": "Full-text search", "body": "BM25, tokenisation including CJK, and where it stops.", "go": "Read it", "href": "../../docs/text-search/"},
-                {"kicker": "Guide", "title": "The change feed", "body": "Tail every write from another process, with resumable offsets.", "go": "Read it", "href": "../../docs/cdc/"},
+                {"kicker": "Guide", "title": "Vector search", "body": "HNSW, the tuning knobs, and what approximate actually means here.", "go": "Read it", "href": "docs/vector-search/"},
+                {"kicker": "Guide", "title": "Full-text search", "body": "BM25, tokenisation including CJK, and where it stops.", "go": "Read it", "href": "docs/text-search/"},
+                {"kicker": "Guide", "title": "The change feed", "body": "Tail every write from another process, with resumable offsets.", "go": "Read it", "href": "docs/cdc/"},
             ],
         },
     ],
@@ -939,7 +953,7 @@ VIEW.QUERY  v:open881
                 "there will not be: an index answers \"which keys match these fields\", "
                 "not \"join these two collections\". If your read genuinely needs a "
                 "join, keep it in Postgres. We wrote down "
-                "<a href=\"../../docs/rds-workloads/\">what every relational workload "
+                "<a href=\"~/docs/rds-workloads/\">what every relational workload "
                 "costs here</a>, including the ones where the answer is do not move it."
             ),
         },
@@ -948,9 +962,9 @@ VIEW.QUERY  v:open881
             "h2": "Next",
             "intro": "",
             "items": [
-                {"kicker": "Guide", "title": "Designing on kevy", "body": "How to think in keys when you are used to thinking in tables.", "go": "Read it", "href": "../../docs/designing-on-kevy/"},
-                {"kicker": "Guide", "title": "Secondary indexes", "body": "How they build, what they cost, and how to explain a query plan.", "go": "Read it", "href": "../../docs/indexes/"},
-                {"kicker": "Reference", "title": "RDS workloads", "body": "Every relational pattern, with the honest cost of doing it here.", "go": "Read it", "href": "../../docs/rds-workloads/"},
+                {"kicker": "Guide", "title": "Designing on kevy", "body": "How to think in keys when you are used to thinking in tables.", "go": "Read it", "href": "docs/designing-on-kevy/"},
+                {"kicker": "Guide", "title": "Secondary indexes", "body": "How they build, what they cost, and how to explain a query plan.", "go": "Read it", "href": "docs/indexes/"},
+                {"kicker": "Reference", "title": "RDS workloads", "body": "Every relational pattern, with the honest cost of doing it here.", "go": "Read it", "href": "docs/rds-workloads/"},
             ],
         },
     ],
@@ -1050,9 +1064,9 @@ store.set(b"temp", b"21.4")?;""",
             "h2": "Next",
             "intro": "",
             "items": [
-                {"kicker": "Guide", "title": "kevy on WebAssembly", "body": "The browser build, OPFS persistence, and the size budget.", "go": "Read it", "href": "../../docs/wasm/"},
-                {"kicker": "Guide", "title": "The embedded listener", "body": "Embed the engine and still speak RESP on a socket.", "go": "Read it", "href": "../../docs/embedded-listener/"},
-                {"kicker": "Guide", "title": "IoT and bare metal", "body": "no_std, the arena, and the feature tiers.", "go": "Read it", "href": "../../docs/iot/"},
+                {"kicker": "Guide", "title": "kevy on WebAssembly", "body": "The browser build, OPFS persistence, and the size budget.", "go": "Read it", "href": "docs/wasm/"},
+                {"kicker": "Guide", "title": "The embedded listener", "body": "Embed the engine and still speak RESP on a socket.", "go": "Read it", "href": "docs/embedded-listener/"},
+                {"kicker": "Guide", "title": "IoT and bare metal", "body": "no_std, the arena, and the feature tiers.", "go": "Read it", "href": "docs/iot/"},
             ],
         },
     ],

@@ -14,6 +14,7 @@ Run: python3 tools/gen_command_pages.py
 
 import json
 import pathlib
+import re
 import shutil
 import sys
 
@@ -190,6 +191,18 @@ def esc(s):
     )
 
 
+def brief(complexity):
+    """The leading cost term, for the index table.
+
+    A full complexity line runs to a paragraph — APPEND's explains why repeated
+    appends are O(N^2). Printed whole in a table cell it pushed the compatibility
+    and summary columns clean off the right-hand edge, where nobody found them.
+    The index shows the term; the command's own page shows the reasoning.
+    """
+    head = re.split(r"\s+—\s+|\s+——\s*|;|。|、", complexity, maxsplit=1)[0].strip()
+    return head if len(head) <= 40 else head[:38].rstrip() + "…"
+
+
 def compat_kind(compat):
     if compat == "full":
         return "full"
@@ -289,7 +302,7 @@ def render_index(lang):
                 f'<tr data-name="{esc(c["name"].lower())}" data-group="{esc(g)}" data-compat="{kind}">'
                 f'<td class="k"><a href="{esc(c["name"])}/">{esc(c["name"])}</a></td>'
                 f'<td class="g">{esc(GROUP_LABEL[g][lang])}</td>'
-                f'<td class="cx mono">{esc(field(c, lang, "complexity").split("—")[0].split("——")[0].strip())}</td>'
+                f'<td class="cx mono">{esc(brief(field(c, lang, "complexity")))}</td>'
                 f'<td><span class="badge {kind}">{esc(badge)}</span></td>'
                 f'<td class="sum">{esc(field(c, lang, "summary"))}</td>'
                 f"</tr>"

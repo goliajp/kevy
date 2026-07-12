@@ -6,7 +6,6 @@
 <title>Benchmarks — kevy</title>
 <meta name="description" content="kevy 4.0 against Redis 8, valkey 9.1 and Dragonfly on one machine — including the commands where kevy is barely ahead.">
 <link rel="stylesheet" href="../assets/kevy.css">
-<link rel="stylesheet" href="../assets/pages.css">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,15 +40,12 @@
 </header>
 
 <main id="main">
-<section class="hero">
-  <div class="hero-in">
+<section class="band" style="border-top:0"><div>
     <p class="eyebrow">Benchmarks</p>
     <h1>How fast, and where it isn't</h1>
     <p class="lede">One machine, 16 cores, loopback. Every figure is reproducible from <code>bench/</code> in the repository. <b>Read the last two rows before you decide anything</b> — they are the ones where speed is not a reason to switch.</p>
     
-  </div>
-  
-</section>
+  </div></section>
 <section class="band">
   <div class="sec-h"><h2>Four engines, one machine</h2><p class="sec-lede">50 connections, small values. Median of five runs, counted from each server's own command counter over a three-second steady window rather than from the benchmark client's reported rate.</p></div>
   <div class="tbl"><table><thead><tr><th></th><th>kevy 4.0</th><th>Redis 8</th><th>valkey 9.1</th><th>Dragonfly</th><th>vs Redis 8</th></tr></thead><tbody><tr><td>GET</td><td class="num">7,800,299</td><td class="num">5,597,865</td><td class="num">3,014,687</td><td class="num">2,132,210</td><td class="win">1.39×</td></tr><tr><td>SET</td><td class="num">6,918,058</td><td class="num">2,573,396</td><td class="num">1,749,976</td><td class="num">1,511,377</td><td class="win">2.69×</td></tr><tr><td>INCR</td><td class="num">6,133,940</td><td class="num">3,459,395</td><td class="num">2,484,273</td><td class="num">1,387,568</td><td class="win">1.77×</td></tr><tr><td>SADD</td><td class="num">5,600,597</td><td class="num">3,690,483</td><td class="num">2,385,857</td><td class="num">1,678,098</td><td class="win">1.52×</td></tr><tr><td>HSET</td><td class="num">4,287,217</td><td class="num">3,021,325</td><td class="num">1,970,791</td><td class="num">1,515,763</td><td class="win">1.42×</td></tr><tr><td>LPUSH</td><td class="num">3,213,470</td><td class="num">2,862,374</td><td class="num">1,943,222</td><td class="num">1,320,497</td><td class="loss">1.12×</td></tr><tr><td>ZADD</td><td class="num">3,053,101</td><td class="num">2,773,929</td><td class="num">1,802,759</td><td class="num">1,455,126</td><td class="loss">1.10×</td></tr></tbody></table></div>

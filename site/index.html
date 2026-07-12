@@ -3,10 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>kevy — a Redis-compatible store you can put anywhere</title>
-<meta name="description" content="A Redis-compatible store in pure Rust. Run it as a server, embed it in your binary, ship it to a browser tab, or boot it on a microcontroller — one engine, one API, no dependencies.">
+<title>kevy — the data layer for AI systems</title>
+<meta name="description" content="A Redis-compatible data layer built for AI systems. Same protocol, more speed, and vector search, full-text, indexes, views and a change feed in the same engine — on a server, in your binary, in a browser tab, or on a device.">
 <link rel="stylesheet" href="assets/kevy.css">
-<link rel="stylesheet" href="assets/pages.css">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,86 +40,119 @@
 </header>
 
 <main id="main">
-<section class="hero">
-  <div class="hero-in">
-    <p class="eyebrow">Version 4.0</p>
-    <h1>Your data needs somewhere fast to live.<br>It is not always a server.</h1>
-    <p class="lede">kevy is a <span class="nb">Redis-compatible</span> store that runs in more than one place. The same engine serves a 16-core machine, sits inside your binary with no socket at all, ships to a browser tab as 151 KB of WebAssembly, and boots on a microcontroller with no operating system. <b>You learn one API and use it everywhere.</b></p>
-    <div class="ctas"><a class="cta primary" href="#do">What are you trying to do?</a><a class="cta" href="choose/">Should I use it?</a><a class="cta" href="play/">Try it in your browser</a></div>
-  </div>
-  <div class="hero-aside"><pre class="hero-code"><code>$ cargo install kevy
+<section class="band" style="border-top:0"><div class="split"><div>
+    <p class="eyebrow">kevy 4.0</p>
+    <h1>The data layer<br>for AI systems.</h1>
+    <p class="lede">Redis-compatible, so you can swap it in. <b>Faster on every operation.</b> And it does what an AI system actually needs — vector search, full-text, secondary indexes, materialised views and a change feed — <b>in the same engine, over the same keys.</b></p>
+    <div class="ctas"><a class="cta primary" href="#swap">Why you can replace Redis</a><a class="cta" href="#more">What else it does</a><a class="cta" href="play/">Run it in your browser</a></div>
+  </div><div><pre class="hero-code"><code>$ cargo install kevy
 $ kevy --port 6379
 
 $ redis-cli -p 6379
 &gt; SET session:7f3a '{"user":"ada"}' EX 3600
 OK
-&gt; TTL session:7f3a
-(integer) 3600</code></pre></div>
+&gt; IDX.QUERY idx:sem KNN "&lt;vector&gt;" LIMIT 10
+1) "doc:4410"
+2) "doc:9982"</code></pre></div></div></section>
+<section class="band deep" id="swap">
+  <div class="sec-h">
+    <p class="eyebrow">Why you can replace Redis</p>
+    <h2>Same protocol. More throughput.</h2>
+    <p class="sec-lede">Your client does not change — RESP2 and RESP3, 184 commands, the library you already use. One machine, 16 cores, loopback, small values, median of five runs.</p>
+  </div>
+  <div class="bars"><div class="bar-row"><div class="bar-k">GET</div><div class="bar-track"><div class="bar us" style="width:100.0%"></div><div class="bar them" style="width:71.8%"></div></div><div class="bar-n">1.39×</div></div><div class="bar-row"><div class="bar-k">SET</div><div class="bar-track"><div class="bar us" style="width:88.7%"></div><div class="bar them" style="width:33.0%"></div></div><div class="bar-n">2.69×</div></div><div class="bar-row"><div class="bar-k">INCR</div><div class="bar-track"><div class="bar us" style="width:78.6%"></div><div class="bar them" style="width:44.3%"></div></div><div class="bar-n">1.77×</div></div><div class="bar-row"><div class="bar-k">SADD</div><div class="bar-track"><div class="bar us" style="width:71.8%"></div><div class="bar them" style="width:47.3%"></div></div><div class="bar-n">1.52×</div></div><div class="bar-row"><div class="bar-k">HSET</div><div class="bar-track"><div class="bar us" style="width:55.0%"></div><div class="bar them" style="width:38.7%"></div></div><div class="bar-n">1.42×</div></div><div class="bar-row"><div class="bar-k">LPUSH</div><div class="bar-track"><div class="bar us narrow" style="width:41.2%"></div><div class="bar them" style="width:36.7%"></div></div><div class="bar-n narrow">1.12×</div></div><div class="bar-row"><div class="bar-k">ZADD</div><div class="bar-track"><div class="bar us narrow" style="width:39.1%"></div><div class="bar them" style="width:35.6%"></div></div><div class="bar-n narrow">1.10×</div></div></div>
+  <div class="bars-legend">
+    <span><i style="background:var(--blue)"></i>kevy 4.0</span>
+    <span><i style="background:var(--edge-hi)"></i>Redis 8</span>
+    <span><i style="background:var(--thin)"></i>margin under 15% — your workload decides, not the engine</span>
+  </div>
+  <p class="tbl-note"><b>LPUSH and ZADD are only 12% and 10% ahead.</b> At that margin your value sizes and key distribution decide the winner. If lists or sorted sets are your hot path, speed is not the reason to switch. <a href="benchmarks/">The full table, against valkey and Dragonfly too.</a></p>
 </section>
-<section class="band prose"><h2>Why this exists</h2><p>Redis is excellent and most teams should keep using it. kevy was built because a Redis-shaped hole kept appearing in places Redis cannot go.</p><p>You cannot put Redis inside a desktop app so it works offline. You cannot ship it to a browser tab. You cannot boot it on a sensor with 256 KB of RAM. Each of those ends with someone writing a fourth storage layer — its own API, its own bugs, its own idea of what a TTL means. <b>kevy is one engine that fits all four, and it speaks the protocol your team already knows.</b></p><p>It has no third-party dependencies: not a hashmap crate, not a hasher, not an async runtime. That is not a flourish — it is the reason the same code compiles for a server, a browser and a microcontroller. Any crate that assumes a heap, a thread or a clock would close one of those doors.</p></section>
-<section class="band"><div class="sec-h"><h2>Why teams move to it</h2><p class="sec-lede">Three reasons people actually switch. If none of them is your reason, keep the thing you have — it is working.</p></div><div class="cards"><a class="card" href="migrate/">
-      <span class="card-k">Reason one</span>
-      <h3>You need it where Redis cannot go</h3>
-      <p>A CLI that works on a plane. A web app that survives a reload with no backend. A device with no OS. Today those get a separate storage layer each; with kevy they get the same one.</p>
-      <span class="card-go">Coming from Redis</span>
+<section class="band" id="more"><div class="sec-h"><h2>The things an AI system needs,<br>in the engine that already holds the data.</h2><p class="sec-lede">Not modules. Not a sidecar. Not a second copy of the truth drifting away from the first.</p></div><div class="cards"><a class="card" href="use/ai/">
+      <span class="card-k">Vector</span>
+      <h3>KNN over your keyspace</h3>
+      <p>An HNSW index, declared once, kept current by the write path. You bring the embedding; kevy stores, indexes and searches it.</p>
+      <span class="card-go">How</span>
     </a><a class="card" href="use/ai/">
-      <span class="card-k">Reason two</span>
-      <h3>You can delete a service</h3>
-      <p>Secondary indexes, materialised views, vector KNN, BM25 full-text and a change feed are in the engine. No search cluster beside your cache, no modules, no second copy of the data drifting from the first.</p>
-      <span class="card-go">See what it can index</span>
-    </a><a class="card" href="migrate/">
-      <span class="card-k">Reason three</span>
-      <h3>Your database is doing work it hates</h3>
-      <p>Sessions, rate limits, queues, feature flags, hot rows. Those reads are lookups, not questions — and they are the ones hammering your Postgres.</p>
-      <span class="card-go">Coming from a database</span>
+      <span class="card-k">Full text</span>
+      <h3>BM25, and hybrid ranking</h3>
+      <p>Full-text search over the same keys, and a hybrid query that fuses the text ranking with the vector ranking.</p>
+      <span class="card-go">How</span>
+    </a><a class="card" href="use/app-store/">
+      <span class="card-k">Indexes</span>
+      <h3>Look up by any field</h3>
+      <p>Secondary indexes turn a filtered read back into a lookup. No query planner, no scan.</p>
+      <span class="card-go">How</span>
+    </a><a class="card" href="use/app-store/">
+      <span class="card-k">Views</span>
+      <h3>The answer, kept ready</h3>
+      <p>Materialised views hold an aggregate current on the write path, so a read never recomputes it.</p>
+      <span class="card-go">How</span>
+    </a><a class="card" href="use/ai/">
+      <span class="card-k">Change feed</span>
+      <h3>Tail every write</h3>
+      <p>A resumable feed another process — or an agent — can follow. Nothing to poll.</p>
+      <span class="card-go">How</span>
+    </a><a class="card" href="use/embedded/">
+      <span class="card-k">Anywhere</span>
+      <h3>Server, binary, browser, device</h3>
+      <p>The same engine and the same commands: a 16-core server, inside your binary, 151 KB in a browser tab, or a chip with no operating system.</p>
+      <span class="card-go">How</span>
     </a></div></section>
-<section class="band" id="do"><div class="sec-h"><h2>What are you trying to do?</h2><p class="sec-lede">Start from the problem. Each page says whether kevy is right for it, what it costs you, and exactly how to do it — with commands you can paste.</p></div><div class="cards"><a class="card" href="use/cache/">
-      <span class="card-k">Cache &amp; sessions</span>
-      <h3>Take load off the database</h3>
-      <p>Sessions, hot rows, rate limits, feature flags — the things that expire on their own.</p>
+<section class="band prose blue"><h2>Why an AI system needs a different data layer</h2><p>An agent writes a document, embeds it, indexes it, caches it, and tells something else it changed. Today that is four systems — a cache, a vector database, a search index, a queue — holding the same facts and drifting apart. Every one of them is a place to forget a step.</p><p><b>kevy collapses them into one.</b> Declare the index; write the key the way you already write it. The engine keeps the vector index, the text index, the secondary index and the view current on the write path, and the change feed tells anyone who is listening.</p><p>And it runs where the agent runs. In your service, inside the binary with no socket, in the browser tab as WebAssembly, or on the device at the edge of the network.</p></section>
+<section class="band deep"><div class="sec-h"><h2>What are you building?</h2><p class="sec-lede">Each page says whether kevy fits, what it costs you, and exactly how — with commands you can paste.</p></div><div class="cards"><a class="card" href="use/ai/">
+      <span class="card-k">AI</span>
+      <h3>Agent memory &amp; RAG</h3>
+      <p>Vectors, full text, a change feed, and a TTL that expires a session for you.</p>
+      <span class="card-go">How</span>
+    </a><a class="card" href="use/app-store/">
+      <span class="card-k">Serving</span>
+      <h3>Reads without a database</h3>
+      <p>Indexes and views, so a read stays a lookup instead of becoming a query.</p>
+      <span class="card-go">How</span>
+    </a><a class="card" href="use/cache/">
+      <span class="card-k">Cache</span>
+      <h3>Sessions &amp; rate limits</h3>
+      <p>The rows that were never a database problem, off your database.</p>
       <span class="card-go">How</span>
     </a><a class="card" href="use/queue/">
-      <span class="card-k">Queues &amp; jobs</span>
-      <h3>Hand work to a worker</h3>
-      <p>Background jobs, retries, delayed tasks, and a queue that does not lose them when a worker dies.</p>
+      <span class="card-k">Queues</span>
+      <h3>Background jobs</h3>
+      <p>Streams with consumer groups: a job survives the worker that was holding it.</p>
       <span class="card-go">How</span>
     </a><a class="card" href="use/realtime/">
       <span class="card-k">Realtime</span>
-      <h3>Push to a live client</h3>
-      <p>Chat, presence, notifications, dashboards. Fan out to many subscribers at once.</p>
-      <span class="card-go">How</span>
-    </a><a class="card" href="use/ai/">
-      <span class="card-k">AI applications</span>
-      <h3>Give an agent a memory</h3>
-      <p>Vector search, full-text search and a change feed, in the store that already holds the data.</p>
-      <span class="card-go">How</span>
-    </a><a class="card" href="use/app-store/">
-      <span class="card-k">Primary store</span>
-      <h3>Serve reads without a database</h3>
-      <p>Secondary indexes and materialised views, so a read stays a lookup instead of becoming a query.</p>
+      <h3>Push to live clients</h3>
+      <p>Pub/sub with pattern subscriptions — and across browser tabs, with no server.</p>
       <span class="card-go">How</span>
     </a><a class="card" href="use/embedded/">
-      <span class="card-k">Ship it inside</span>
-      <h3>Put the store in the thing</h3>
-      <p>A desktop app, a browser tab, an edge worker, a microcontroller. No server, no socket, no network.</p>
+      <span class="card-k">Embedded</span>
+      <h3>Put it in the thing</h3>
+      <p>Desktop app, browser, edge worker, microcontroller. No server, no socket.</p>
       <span class="card-go">How</span>
     </a></div></section>
 <section class="band">
-  <div class="sec-h"><h2>How fast, on one machine</h2><p class="sec-lede">16 cores, loopback, small values, counted from the server's own counters over a steady window. Your workload will differ — <a href="benchmarks/">the full table and the method are here</a>.</p></div>
-  <div class="tbl"><table><thead><tr><th></th><th>kevy 4.0</th><th>Redis 8</th><th>valkey 9.1</th><th>vs Redis 8</th></tr></thead><tbody><tr><td>GET</td><td class="num">7,800,299</td><td class="num">5,597,865</td><td class="num">3,014,687</td><td class="win">1.39×</td></tr><tr><td>SET</td><td class="num">6,918,058</td><td class="num">2,573,396</td><td class="num">1,749,976</td><td class="win">2.69×</td></tr><tr><td>INCR</td><td class="num">6,133,940</td><td class="num">3,459,395</td><td class="num">2,484,273</td><td class="win">1.77×</td></tr><tr><td>LPUSH</td><td class="num">3,213,470</td><td class="num">2,862,374</td><td class="num">1,943,222</td><td class="loss">1.12×</td></tr><tr><td>ZADD</td><td class="num">3,053,101</td><td class="num">2,773,929</td><td class="num">1,802,759</td><td class="loss">1.10×</td></tr></tbody></table></div>
-  <p class="tbl-note">Read the last two rows before you decide. <b>Against Redis 8, LPUSH is ahead by 12% and ZADD by 10%</b> — close enough that your value sizes and key distribution decide the winner, not the engine. If lists or sorted sets are your hot path, speed is not a reason to switch.</p>
+  <div class="sec-h"><h2>Start</h2></div>
+  <ol class="steps"><li><h3>As a server</h3><p>RESP on 6379. Your redis-cli and your client library do not know anything changed.</p><pre><code>cargo install kevy
+kevy --port 6379</code></pre></li><li><h3>In your Rust program</h3><p>No socket, no second process, no serialisation.</p><pre><code>kevy-embedded = &quot;4.0&quot;
+
+let db = Db::open(&quot;data/&quot;)?;
+db.set(b&quot;k&quot;, b&quot;v&quot;, None)?;</code></pre></li><li><h3>In a browser tab</h3><p>151 KB. Persists to the browser's filesystem and survives a reload.</p><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
+
+const db = await open({ persist: { name: &quot;app&quot; } });
+db.set(&quot;cart:u1&quot;, json, { ttlMs: 3_600_000 });</code></pre></li></ol>
 </section>
-<section class="band">
+<section class="band deep">
   <div class="call loss">
     <span class="h">What kevy will not do</span>
-    <p><b>It is not a cluster.</b> Replication and failover exist; sharding data across machines does not, and will not. If one machine is not enough, kevy is the wrong answer. <b>There is no AUTH and no TLS</b> — run it on a private network or behind something that does those properly. And <b>some commands differ from Redis in ways that will surprise you</b>: <code>SCAN</code> is not a cursor iterator, <code>ZRANK</code> is O(N), <code>SPOP</code> is not random. <a href="docs/commands/">Every difference is written down</a>, per command, in a column Redis's own reference does not have.</p>
+    <p><b>It is not a cluster.</b> Replication and failover exist; sharding data across machines does not, and will not. If one machine is not enough, kevy is the wrong answer. <b>There is no AUTH and no TLS</b> — run it on a private network or behind something that does those properly. And <b>some commands differ from Redis</b>: <code>SCAN</code> is not a cursor iterator, <code>ZRANK</code> is O(N), <code>SPOP</code> is not random. <a href="docs/commands/">Every difference is written down</a>, per command. <a href="choose/">And here is when not to use it at all.</a></p>
   </div>
 </section>
 </main>
 
 <footer class="foot">
   <div class="foot-in">
-    <p class="foot-b">kevy 4.0 — pure Rust, zero third-party dependencies</p>
+    <p class="foot-b">kevy 4.0 — GOLIA</p>
     <nav>
       <a href="https://github.com/goliajp/kevy">GitHub</a>
       <a href="https://crates.io/crates/kevy">crates.io</a>

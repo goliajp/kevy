@@ -6,7 +6,6 @@
 <title>Cache and sessions — kevy</title>
 <meta name="description" content="Sessions, hot rows, rate limits and feature flags in kevy: why it fits, what it costs, and the commands to do it.">
 <link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/pages.css">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,15 +40,12 @@
 </header>
 
 <main id="main">
-<section class="hero">
-  <div class="hero-in">
+<section class="band" style="border-top:0"><div>
     <p class="eyebrow">Cache &amp; sessions</p>
     <h1>Take the load your database hates</h1>
     <p class="lede">Sessions, rate limits, feature flags, the hot row every request reads. They are in Postgres in most applications, and they are the rows getting hammered — not because a database is bad at them, but because <b>they were never questions. You already know the key.</b></p>
     
-  </div>
-  
-</section>
+  </div></section>
 <section class="band prose"><h2>Why this fits</h2><p>Every one of these has the same shape: a key you already hold, a small value, and a lifetime. kevy does the lookup in O(1), expires the key itself without a cron job, and does several million of them a second on one machine.</p><p>The part people underrate is the <b>expiry</b>. A cache built on a database needs a sweeper, and the sweeper is where the bugs live. Here the engine drops the key when its time is up, whether or not anyone asks for it.</p></section>
 <section class="band">
   <div class="sec-h"><h2>How</h2></div>
@@ -78,17 +74,17 @@ DEL   user:881            # after you write to Postgres</code></pre></figure>
     <p>A cache is a second copy of the truth, and it can be wrong. kevy does not solve that — nothing does. <b>Invalidate on write, not on a timer</b>, and keep the TTL as a backstop rather than as the plan. And note that a multi-key <code>MSET</code> or <code>DEL</code> is atomic only within one shard: if two keys must change together, co-locate them with a <code>{hashtag}</code>.</p>
   </div>
 </section>
-<section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../../../docs/cookbook/">
+<section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../docs/cookbook/">
       <span class="card-k">Guide</span>
       <h3>The cookbook</h3>
       <p>Working recipes for sessions, rate limits, leaderboards and feeds.</p>
       <span class="card-go">Read it</span>
-    </a><a class="card" href="../../../../docs/persistence/">
+    </a><a class="card" href="../../docs/persistence/">
       <span class="card-k">Guide</span>
       <h3>Persistence</h3>
       <p>What survives a kill -9, and what the fsync policy costs you.</p>
       <span class="card-go">Read it</span>
-    </a><a class="card" href="../../../../docs/commands/">
+    </a><a class="card" href="../../docs/commands/">
       <span class="card-k">Reference</span>
       <h3>Every command</h3>
       <p>184 commands, each with its real cost and its deviation from Redis.</p>
