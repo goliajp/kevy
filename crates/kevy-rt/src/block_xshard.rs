@@ -226,30 +226,7 @@ impl<C: Commands> Shard<C> {
         };
         ob.serving = true;
 
-        // A parked BRPOPLPUSH whose destination lives on another shard cannot
-        // be served by a local dispatch on the source's shard: `rpoplpush`
-        // would push the element into THAT shard's keyspace, where no reader
-        // of the destination will ever look. That is how this silently lost 9
-        // of 12 elements on an 8-shard server. Run the cross-shard
-        // orchestrator instead — it takes from the source's shard, pushes to
-        // the destination's, restores on WRONGTYPE, and hands the reply back
-        // here through `origin_on_serve_resp`.
-        if let Some((src, dst)) = self.brpoplpush_pair(conn, key)
-            && self.shard_of(&dst) != self.shard_of(&src)
-        {
-            // `fold` addresses a pending slot by `seq - conn.next_emit`, so the
-            // orchestrator's slot must be handed the seq it will actually sit
-            // at. Passing a bare 0 makes `fold` decide the reply was already
-            // emitted and drop it on the floor — the Take lands, the chain
-            // stops, and the element is stranded off both lists.
-            let Some(seq) = self
-                .conns
-                .get(&conn)
-                .map(|c| c.next_emit + c.pending.len() as u64)
-            else {
-                return;
-            };
-            self.start_list_move_inner(conn, seq, &src, &dst, false, true, true);
+        if self.serve_via_list_move(conn, key) {
             return;
         }
 
@@ -266,6 +243,35 @@ impl<C: Commands> Shard<C> {
                 },
             );
         }
+    }
+
+    /// A parked BRPOPLPUSH whose destination lives on another shard cannot be
+    /// served by a local dispatch on the source's shard: `rpoplpush` would push
+    /// the element into THAT shard's keyspace, where no reader of the
+    /// destination will ever look. That is how this silently lost 9 of 12
+    /// elements on an 8-shard server. Run the cross-shard orchestrator instead
+    /// — it takes from the source's shard, pushes to the destination's,
+    /// restores on WRONGTYPE, and hands the reply back through
+    /// `origin_on_serve_resp`.
+    ///
+    /// Returns `true` when it took the serve.
+    fn serve_via_list_move(&mut self, conn: u64, key: &[u8]) -> bool {
+        let Some((src, dst)) = self.brpoplpush_pair(conn, key) else {
+            return false;
+        };
+        if self.shard_of(&dst) == self.shard_of(&src) {
+            return false;
+        }
+        // `fold` addresses a pending slot by `seq - conn.next_emit`, so the
+        // orchestrator's slot must be handed the seq it will actually sit at.
+        // Passing a bare 0 makes `fold` decide the reply was already emitted
+        // and drop it on the floor — the Take lands, the chain stops, and the
+        // element is stranded off both lists.
+        let Some(seq) = self.conns.get(&conn).map(|c| c.next_emit + c.pending.len() as u64) else {
+            return false;
+        };
+        self.start_list_move_inner(conn, seq, &src, &dst, false, true, true);
+        true
     }
 
     /// `(source, destination)` when this conn is parked on a BRPOPLPUSH whose

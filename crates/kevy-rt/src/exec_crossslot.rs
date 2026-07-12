@@ -64,39 +64,8 @@ pub(crate) fn is_crossslot_checked(route: &Route) -> bool {
 /// arg starting at 1; everything else uses args[1..]). Short-circuits
 /// on the first slot disagreement.
 pub(crate) fn keys_span_slots<A: ArgvView + ?Sized>(route: &Route, args: &A) -> bool {
-    // numkeys-form argv: keys are NOT a uniform args[1..] walk.
-    //   ZINTERSTORE/ZUNIONSTORE/ZDIFFSTORE dst numkeys k…  → dst + args[3..3+n]
-    //   ZINTERCARD numkeys k…                              → args[2..2+n]
-    // (the set-form *STOREs are a plain dst+keys walk, handled below).
-    match route {
-        Route::ZAlgebraStore(
-            crate::ZCombine::ZInter | crate::ZCombine::ZUnion | crate::ZCombine::ZDiff,
-        ) => {
-            let Some(n) = parse_numkeys(args, 2) else { return false };
-            let mut slots = key_slot_at(args, 1).into_iter().collect::<Vec<_>>();
-            for i in 3..(3 + n).min(args.len()) {
-                if let Some(sl) = key_slot_at(args, i) {
-                    slots.push(sl);
-                }
-            }
-            return slots.windows(2).any(|w| w[0] != w[1]);
-        }
-        // Geo *STORE keys don't sit at fixed argv indices (the legacy forms
-        // hide `dst` in the option soup), so the route already carries both.
-        Route::GeoStore { src, dst } => {
-            return kevy_hash::key_hash_slot(src) != kevy_hash::key_hash_slot(dst);
-        }
-        Route::Gather(crate::MultiOp::ZInterCard) => {
-            let Some(n) = parse_numkeys(args, 1) else { return false };
-            let mut slots = Vec::new();
-            for i in 2..(2 + n).min(args.len()) {
-                if let Some(sl) = key_slot_at(args, i) {
-                    slots.push(sl);
-                }
-            }
-            return slots.windows(2).any(|w| w[0] != w[1]);
-        }
-        _ => {}
+    if let Some(spans) = irregular_form_spans(route, args) {
+        return spans;
     }
     let step = if matches!(route, Route::MSet) { 2 } else { 1 };
     let n = args.len();
@@ -115,6 +84,46 @@ pub(crate) fn keys_span_slots<A: ArgvView + ?Sized>(route: &Route, args: &A) -> 
         i += step;
     }
     false
+}
+
+/// The routes whose keys are NOT a uniform `args[1..]` walk. `None` means the
+/// route uses the uniform walk in the caller.
+///
+///   ZINTERSTORE / ZUNIONSTORE / ZDIFFSTORE dst numkeys k…  → dst + args[3..3+n]
+///   ZINTERCARD numkeys k…                                  → args[2..2+n]
+///   the geo *STORE family                                  → the route carries
+///     both keys, because the legacy forms hide `dst` in the option soup
+///
+/// (The set-form *STOREs are a plain dst+keys walk and fall through.)
+fn irregular_form_spans<A: ArgvView + ?Sized>(route: &Route, args: &A) -> Option<bool> {
+    match route {
+        Route::ZAlgebraStore(
+            crate::ZCombine::ZInter | crate::ZCombine::ZUnion | crate::ZCombine::ZDiff,
+        ) => {
+            let n = parse_numkeys(args, 2)?;
+            let mut slots: Vec<u16> = key_slot_at(args, 1).into_iter().collect();
+            for i in 3..(3 + n).min(args.len()) {
+                if let Some(sl) = key_slot_at(args, i) {
+                    slots.push(sl);
+                }
+            }
+            Some(slots.windows(2).any(|w| w[0] != w[1]))
+        }
+        Route::GeoStore { src, dst } => {
+            Some(kevy_hash::key_hash_slot(src) != kevy_hash::key_hash_slot(dst))
+        }
+        Route::Gather(crate::MultiOp::ZInterCard) => {
+            let n = parse_numkeys(args, 1)?;
+            let mut slots: Vec<u16> = Vec::new();
+            for i in 2..(2 + n).min(args.len()) {
+                if let Some(sl) = key_slot_at(args, i) {
+                    slots.push(sl);
+                }
+            }
+            Some(slots.windows(2).any(|w| w[0] != w[1]))
+        }
+        _ => None,
+    }
 }
 
 fn parse_numkeys<A: ArgvView + ?Sized>(args: &A, idx: usize) -> Option<usize> {

@@ -63,9 +63,21 @@ fn llms_txt() -> String {
          > store for applications (declared indexes, views, write-time aggregates,\n\
          > CJK full-text search, vector KNN, CDC feeds, replication) speaking RESP.\n\n\
          Machine notes: wire protocol is RESP2 (RESP3 via HELLO 3). Every verb below\n\
-         is discoverable live via `COMMAND DOCS <verb>`; errors are self-explaining\n\
-         and their prefixes are a stable contract (docs/error-replies.md). This file\n\
-         is GENERATED from the server's verb metadata table — do not edit by hand.\n\n\
+         is discoverable live via `COMMAND DOCS <verb>`, which answers with the same\n\
+         `complexity` and `compat` fields printed here; errors are self-explaining and\n\
+         their prefixes are a stable contract (docs/error-replies.md). This file is\n\
+         GENERATED from the server's verb metadata table — do not edit by hand.\n\n\
+         Read `compat` before you assume a verb behaves the way Redis's docs say. kevy\n\
+         is wire-compatible, not behaviour-identical, and the differences that matter\n\
+         are stated per verb rather than buried in a migration guide. Three that catch\n\
+         people: SCAN is not a cursor iterator (one call sweeps the whole keyspace and\n\
+         returns cursor 0); RANDOMKEY, SPOP and SRANDMEMBER are NOT random (they return\n\
+         the same members every time); and multi-key writes are atomic only within one\n\
+         shard — co-locate keys with a {{hashtag}} when you need them to move together.\n\n\
+         Read `complexity` before you assume a cost. It was derived from THIS engine's\n\
+         code, not copied from Redis: our sorted set is a hash plus a plain BTreeSet\n\
+         with no rank augmentation, so ZRANK is O(N) here and score-range queries scan\n\
+         rather than seek.\n\n\
          ## Docs\n\n\
          - [Verb reference](docs/verb-reference.md): every verb, arity, flags, syntax\n\
          - [Designing on kevy](docs/designing-on-kevy.md): the serving-engine model\n\
@@ -83,6 +95,8 @@ fn llms_txt() -> String {
         let _ = writeln!(s, "### {group}\n");
         for m in verbs {
             let _ = writeln!(s, "- `{}` [{}] — {}", m.syntax, flags_of(m), m.summary);
+            let _ = writeln!(s, "  - complexity: {}", m.complexity);
+            let _ = writeln!(s, "  - compat: {}", m.compat);
         }
         s.push('\n');
     }
@@ -99,20 +113,30 @@ fn verb_reference() -> String {
          `cargo run -p kevy --bin gen_docs .` — do not edit by hand.\n\n\
          {} verbs. Flags: `write`/`readonly` (side-effect class),\n\
          `admin`, `blocking`, `pubsub`, `transaction`, `extension`\n\
-         (kevy-specific surface; argument 1 is a catalog name, not a key).\n\n",
+         (kevy-specific surface; argument 1 is a catalog name, not a key).\n\n\
+         **Complexity** is the cost of THIS engine's implementation, read out of the\n\
+         code — not copied from Redis's reference. Several genuinely differ, and they\n\
+         look like typos and are not: `ZRANK` is O(N) because our sorted set has no\n\
+         rank-augmented structure, `ZCOUNT` and `ZRANGEBYSCORE` scan rather than seek,\n\
+         and every geo search is O(N).\n\n\
+         **Redis compatibility** is `full`, `differs: …`, or `kevy-only`. This is the\n\
+         column to read before a migration; it is also the column Redis's own reference\n\
+         cannot have.\n\n",
         VERB_META.len()
     );
     for (group, verbs) in groups() {
         let _ = writeln!(s, "## {group}\n");
-        let _ = writeln!(s, "| Verb | Arity | Flags | Summary |");
-        let _ = writeln!(s, "|---|---|---|---|");
+        let _ = writeln!(s, "| Verb | Arity | Flags | Complexity | Redis | Summary |");
+        let _ = writeln!(s, "|---|---|---|---|---|---|");
         for m in verbs {
             let _ = writeln!(
                 s,
-                "| `{}` | {} | {} | {} |",
+                "| `{}` | {} | {} | {} | {} | {} |",
                 m.syntax.replace('|', "\\|"),
                 m.arity,
                 flags_of(m),
+                m.complexity.replace('|', "\\|"),
+                m.compat.replace('|', "\\|"),
                 m.summary.replace('|', "\\|")
             );
         }
