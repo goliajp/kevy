@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unixドメインソケット（UDS）トランスポート — kevy</title>
+<meta name="description" content="kevyはオプションのUnixドメインstreamリスナーを公開しています。TCPポートとまったく同じRESPセマンティクスを話すので、同一ホストのクライアントはループバックスタックを丸ごとスキップできます。">
+<link rel="stylesheet" href="../../../assets/kevy.css">
+<link rel="stylesheet" href="../../../assets/docs.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../ja/docs/" aria-current="page">ドキュメント</a>
+      <a href="../../../ja/docs/commands/">コマンド</a>
+      <a href="../../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../../ja/play/">Playground</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language"><a href="../../../docs/uds/">EN</a><a href="../../../zh/docs/uds/">中文</a><a href="../../../ja/docs/uds/" aria-current="page">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell">
+  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/uds/" aria-current="page">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">184 コマンド全て</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>Unixドメインソケット（UDS）トランスポート</h1></div>
+<p>kevyはオプションのUnixドメインstreamリスナーを公開しています。TCPポートとまったく同じRESPセマンティクスを話すので、同一ホストのクライアントはループバックスタックを丸ごとスキップできます。</p>
+<h2 id="このドキュメントが必要になるとき">このドキュメントが必要になるとき</h2>
+<p>クライアントとサーバーが同じホストに同居しているなら、UDSが適切なトランスポートです：</p>
+<ul><li><b>同一ホストのクライアント</b> — 1台のマシンにアプリとkevyが同居している、あるいはtmpfsやマウント済みソケットディレクトリを共有するコンテナ構成。</li><li><b>遅延に敏感なワークロード</b> — コネクション数が少ない、ペイロードが小さい、あるいはTCPループバック往復のフロアが制約になっている高ファンアウトのパイプライニング。</li><li><b>コンテナサイドカー</b> — サイドカーとメインコンテナが<code>/run</code>や<code>/tmp</code>のボリュームを共有する構成。ソケットファイルがそのままIPCハンドルになり、ポート割り当ては不要です。</li></ul>
+<p>ホストをまたぐクライアントには引き続きTCPが必要です。UDSのスコープはファイルシステムであり、カーネルの外には出ません。</p>
+<h2 id="中心となる考え方">中心となる考え方</h2>
+<p><code>KEVY_UNIX_SOCKET</code>にファイルシステムのパスを設定すると、kevyはデュアルバインドします。TCPリスナーはこれまでどおり生き続け、UDSリスナーが同じシャードランタイム上で同じRESP2/3パーサーを使ってacceptします。<code>unix://</code>のURLか<code>-s &lt;path&gt;</code>フラグを受け取るRESPクライアントなら、設定1行で切り替えられます。UDSはループバックの<code>rep_movs</code>、<code>nft_do_chain</code>、TCPのsyscallパスを丸ごと省くため、どのワークロードでもopあたりのフロアが目に見えて下がります。</p>
+<h2 id="動かしてみる例">動かしてみる例</h2>
+<p>両方のトランスポートを有効にしてkevyを起動します：</p>
+<figure class="code"><pre><code class="lang-sh">KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6379</code></pre></figure>
+<p><code>redis-cli</code>でUDS経由で接続します：</p>
+<figure class="code"><pre><code class="lang-sh">redis-cli -s /tmp/kevy.sock SET foo bar
+# OK
+redis-cli -s /tmp/kevy.sock GET foo
+# "bar"</code></pre></figure>
+<p>TCPの<code>:6379</code>も並行して生きています。データもシャードも同じです：</p>
+<figure class="code"><pre><code class="lang-sh">redis-cli -p 6379 GET foo
+# "bar"</code></pre></figure>
+<p>リポジトリ内のRustクライアント（<code>kevy-client</code>／<code>kevy-client-async</code>）が話すのは<code>tcp://</code>／<code>kevy://</code>／<code>redis://</code>と、プロセス内の<code>mem://</code>／<code>file:///</code>スキームです——<code>unix://</code>のURLは受け付けません。Rustからは、同一ホストのクライアントはTCPループバックで接続するか、同じ*プロセス*に住んでいるなら組み込みバックエンド（<code>file:///</code>／<code>mem://</code>）でソケットを丸ごと省きます。こちらはUDSがなり得るどんな速さよりも速いのです。UDSは、他言語やエコシステムドライバの、プロセス外・同一ホストのクライアントのためのものです。</p>
+<h2 id="パーミッションとセキュリティ">パーミッションとセキュリティ</h2>
+<p>UDSの信頼境界は<b>ファイルシステム</b>です。UnixソケットにRESPレベルのAUTHやTLSはありません。ソケットファイルを<code>open(2)</code>できる者は誰でも、<code>FLUSHALL</code>を含む任意のコマンドを発行できます。</p>
+<ul><li><b>ソケットファイルの所有者。</b> kevyはサーバーの実行ユーザーとしてソケットを作ります。起動後に<code>chown</code>/<code>chgrp</code>するか、ソケットを所有させたいIDでkevyを実行してください。</li><li><b>パーミッションビット。</b> 同居するクライアントプロセスが接続できるよう、デフォルトでは緩いビットでソケットを作ります。引き締めたい場合は、ソケットを制限付きディレクトリに置きます。たとえば<code>kevy</code>グループ所有・<code>0750</code>の<code>/run/kevy/</code>に置けば、グループメンバーだけが<code>connect(2)</code>できます。ソケットinode自体へのアクセスはディレクトリの権限が守ります。</li><li><b>tmpfsかディスクか。</b> ほとんどのLinuxディストリビューションでは<code>/tmp</code>と<code>/run</code>はtmpfsで、ソケットの置き場所として理想的です（connect時のディスクI/Oがありません）。実ファイルシステム上の永続パスでも動きます。inodeはランデブーポイントにすぎず、データがディスクに触れることはありません。</li><li><b>信頼ドメイン。</b> ソケットパスへの読み書き権限を持つアカウントは、すべて完全に認証済みとして扱ってください。クライアントごとのIDが必要なら、それはkevyより上の層（サイドカープロキシ、カーネルLSM、名前空間分離）に置く必要があります。</li></ul>
+<h2 id="サーバー設定ノブ">サーバー設定ノブ</h2>
+<div class="tbl"><table><thead><tr><th>環境変数</th><th>CLIフラグ</th><th>デフォルト</th><th>効果</th></tr></thead><tbody><tr><td><code>KEVY_UNIX_SOCKET</code></td><td>（今のところenv専用）</td><td>未設定</td><td>bindするファイルシステムパス。未設定ならTCPのみ。</td></tr><tr><td><code>KEVY_BIND</code></td><td><code>--bind</code></td><td><code>127.0.0.1</code></td><td>TCPのbindアドレス。UDSのbindとは独立。</td></tr><tr><td><code>--port</code></td><td><code>--port</code></td><td><code>6379</code></td><td>TCPポート。UDS設定時もbindされる。</td></tr></tbody></table></div>
+<p>注意：</p>
+<ul><li><b>パスが事前に存在してはいけません。</b> <code>KEVY_UNIX_SOCKET</code>が既存ファイルを指している場合、kevyは起動を拒否します。自分が作ったのではないパスを上書きしないためです。再起動時に掃除する（<code>rm -f /tmp/kevy.sock</code>）か、実行ごとのパス（<code>/run/kevy/$(date +%s).sock</code>）を使ってください。これは意図的な仕様です。黙ってunlinkしてしまうと、設定を誤ったkevyが他サービスのソケットを奪いかねません。</li><li><b>環境変数が設定されていれば常にデュアルバインド。</b> UDS専用モードはなく、TCPリスナーも必ず上がります。TCPを禁止したければ、管理下にあるループバック専用アドレスにbindし、ファイアウォールで塞いでください。</li><li><b>acceptループはシャード0が所有します。</b> acceptされた接続は既存のシャード別ランタイムへディスパッチされるので、ソケット越しのワークロードの並列性も引き続き<code>--threads</code>で制御できます。</li><li><b>io_uringパス。</b> Linuxで<code>KEVY_IO_URING=1</code>のとき、UDSのacceptはTCPと同じio_uringインスタンスを通るmultishot accept SQEとして動き、余計なreactorコストはかかりません。<code>TCP_NODELAY</code>はUDSには設定されません（IPソケットではないためです）。</li></ul>
+<h2 id="トレードオフ">トレードオフ</h2>
+<p>同じkevyバイナリ上でのUDSとTCPループバックの比較：</p>
+<div class="tbl"><table><thead><tr><th>観点</th><th>UDS</th><th>TCPループバック</th></tr></thead><tbody><tr><td>opあたりのフロア</td><td>低い（IP/checksum/port/NAGLEなし）</td><td>高い</td></tr><tr><td>到達範囲</td><td>同一ホストのみ</td><td>任意のホスト</td></tr><tr><td>ID</td><td>ファイルシステムのパーミッション</td><td>port + bindアドレス + AUTH</td></tr><tr><td>ライフサイクル</td><td>ディスク上のソケットファイル。再起動時に掃除が必要</td><td>ポートのライフサイクルはカーネル管理</td></tr><tr><td>観測</td><td><code>lsof</code> / <code>ss -xl</code></td><td><code>ss -tln</code>、<code>netstat</code>、<code>tcpdump</code></td></tr><tr><td>クライアント設定</td><td><code>unix:///path</code>または<code>-s /path</code></td><td><code>host:port</code></td></tr></tbody></table></div>
+<p>スループットの利得はワークロードの形に依存します。最も得をするのは小ペイロード・低コネクション数のセル（ループバックのopあたりの税が支配的だったところ）で、CPU飽和セルの利得は小さくなります（トランスポートがフロアではなかったためです）。実測値は<a href="https://github.com/goliajp/kevy/blob/develop/bench/REPORT.md">bench/REPORT.md</a>を参照してください。</p>
+<h2 id="faq">FAQ</h2>
+<h3 id="udsとtcpを同時にbindできますか">UDSとTCPを同時にbindできますか？</h3>
+<p>はい。むしろそれが唯一のモードです。<code>KEVY_UNIX_SOCKET</code>を設定するとUDSリスナーが追加され、TCPリスナーはそのまま生き続けます。クライアントごとに都合のよいほうを使ってください。</p>
+<h3 id="サーバーがsocket-existsと言って起動を拒否します">サーバーが「socket exists」と言って起動を拒否します。</h3>
+<p>意図的な仕様です。kevyは自分が作っていないパスを<code>unlink</code>しません。設定を誤った実行が他サービスのソケットを黙って奪うのを防ぐためです。再起動前に古いファイルを消す（<code>rm -f /tmp/kevy.sock</code>）か、<code>/run/kevy/$(uuidgen).sock</code>のような実行ごとのパスを使ってください。kevyがクラッシュしてファイルが残った場合は、手で消して問題ありません。</p>
+<h3 id="udsはtcpループバックよりどれくらい速いですか">UDSはTCPループバックよりどれくらい速いですか？</h3>
+<p>どのワークロードでも目に見えて速くなります。UDSはIPパス全体をスキップするためです。checksumなし、netfilterチェーン（<code>nft_do_chain</code>）なし、ループバックの<code>rep_movs</code>なし、パケットごとのACK往復なし。倍率は、opあたりの予算のうちループバックオーバーヘッドが占めていた割合で決まります。単一コネクション・小ペイロードのワークロードが最も大きく跳ね、CPUバウンドでパイプライニングしたセルの伸びは小さくなります。自分のワークロードでの計測は、<code>redis-benchmark -s /tmp/kevy.sock</code>と<code>-h 127.0.0.1</code>の比較で行ってください。</p>
+<h3 id="自分のクライアントライブラリはudsを使えますか">自分のクライアントライブラリはUDSを使えますか？</h3>
+<p>エコシステムドライバの多くが使えます。<code>redis-cli</code>と<code>redis-benchmark</code>は<code>-s &lt;path&gt;</code>を取ります。ioredis、node-redis、redis-py、redis-rb、go-redis、lettuce、jedisはいずれも<code>unix:///path</code>のURLか明示的なソケットパスオプションを受け付けます——正確なキー名は各ドライバの接続オプションのドキュメントで確認してください。リポジトリ内の<a href="https://github.com/goliajp/kevy/tree/develop/crates/kevy-client">kevy-client</a> / <a href="https://github.com/goliajp/kevy/tree/develop/crates/kevy-client-async">kevy-client-async</a>はUDSを話しま<b>せん</b>。同一プロセスのRustクライアントには組み込みの<code>file:///</code>／<code>mem://</code>バックエンドがどんなソケットにも勝ち、プロセスをまたぐときはTCPを使います。</p>
+<h3 id="全クライアントが同一ホストにあるならtcpを完全に外すべきですか">全クライアントが同一ホストにあるならTCPを完全に外すべきですか？</h3>
+<p>外すこともできますが、必須ではありません。TCPを<code>127.0.0.1</code>にbindしたままにしても、誰も接続しなければコストはゼロですし、クライアントのUDSパスが誤設定になったときのフォールバックにもなります。よくあるデプロイは「ホットなクライアントにはUDS、<code>redis-cli</code>でのデバッグにはTCP」という形です。</p></main>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#このドキュメントが必要になるとき">このドキュメントが必要になるとき</a></li><li class="l2"><a href="#中心となる考え方">中心となる考え方</a></li><li class="l2"><a href="#動かしてみる例">動かしてみる例</a></li><li class="l2"><a href="#パーミッションとセキュリティ">パーミッションとセキュリティ</a></li><li class="l2"><a href="#サーバー設定ノブ">サーバー設定ノブ</a></li><li class="l2"><a href="#トレードオフ">トレードオフ</a></li><li class="l2"><a href="#faq">FAQ</a></li><li class="l3"><a href="#udsとtcpを同時にbindできますか">UDSとTCPを同時にbindできますか？</a></li><li class="l3"><a href="#サーバーがsocket-existsと言って起動を拒否します">サーバーが「socket exists」と言って起動を拒否します。</a></li><li class="l3"><a href="#udsはtcpループバックよりどれくらい速いですか">UDSはTCPループバックよりどれくらい速いですか？</a></li><li class="l3"><a href="#自分のクライアントライブラリはudsを使えますか">自分のクライアントライブラリはUDSを使えますか？</a></li><li class="l3"><a href="#全クライアントが同一ホストにあるならtcpを完全に外すべきですか">全クライアントが同一ホストにあるならTCPを完全に外すべきですか？</a></li></ul></aside>
+</div>
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

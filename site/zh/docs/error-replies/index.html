@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>错误回复目录 — kevy</title>
+<meta name="description" content="kevy 在线协议层发出的每一种错误回复的速查表：什么触发它、客户端下一步该做什么。">
+<link rel="stylesheet" href="../../../assets/kevy.css">
+<link rel="stylesheet" href="../../../assets/docs.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../zh/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../zh/docs/" aria-current="page">文档</a>
+      <a href="../../../zh/docs/commands/">命令</a>
+      <a href="../../../zh/benchmarks/">基准</a>
+      <a href="../../../zh/play/">Playground</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language"><a href="../../../docs/error-replies/">EN</a><a href="../../../zh/docs/error-replies/" aria-current="page">中文</a><a href="../../../ja/docs/error-replies/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell">
+  <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/" aria-current="page">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 184 个命令</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>错误回复目录</h1></div>
+<p>kevy 在线协议层发出的每一种错误回复的速查表：什么触发它、客户端下一步该做什么。</p>
+<h2 id="怎么读这张表">怎么读这张表</h2>
+<p>kevy 的错误以 RESP simple-error 字符串传输：<code>-&lt;PREFIX&gt; &lt;message&gt;\r\n</code>。第一个以空白分隔的 token 是<b>前缀</b>（<code>ERR</code>、<code>WRONGTYPE</code>、<code>MOVED</code>、<code>CROSSSLOT</code>……）。客户端库通常把它暴露成错误变体或异常，其 <code>.kind</code> / <code>.code</code> / 类名与前缀对应；行的其余部分是给人读的消息。</p>
+<p>本目录按前缀分组。如果你按结构处理错误（推荐），就匹配前缀；后面的消息是给日志和运维看的，不是给解析器看的。</p>
+<p>错误是 kevy 面向用户契约的一部分。新增、改名或挪用一个前缀，对做模式匹配的客户端来说都是破坏性变更。</p>
+<h2 id="核心目录">核心目录</h2>
+<div class="tbl"><table><thead><tr><th>前缀</th><th>触发时机</th><th>恢复 / 下一步</th></tr></thead><tbody><tr><td><code>-ERR unknown command '&lt;cmd&gt;'</code></td><td>命令名未实现或不识别。</td><td>查 README 命令覆盖表；确认拼写。</td></tr><tr><td><code>-ERR wrong number of arguments for '&lt;cmd&gt;' command</code></td><td>argc 与命令接受的形状不符。</td><td>按文档的参数个数重发。</td></tr><tr><td><code>-ERR value is not an integer or out of range</code></td><td>INCR/DECR 类命令作用在无法解析为 i64 的值上，或数值参数越界。</td><td>用 <code>SET</code> 覆盖成可解析的整数；夹紧输入。</td></tr><tr><td><code>-ERR no such key</code></td><td>RENAME / RENAMENX / COPY / GETEX 的目标 key 不存在。</td><td>按 key 不存在处理（必要时先用 <code>EXISTS</code> 预检）。</td></tr><tr><td><code>-ERR kevy only supports DB 0</code></td><td><code>SELECT N</code> 且 N ≠ 0。</td><td>kevy 没有多 DB；用独立实例或 key 命名空间。</td></tr><tr><td><code>-ERR MULTI calls can not be nested</code></td><td>已在 MULTI 块内又发 <code>MULTI</code>。</td><td>等 <code>EXEC</code> / <code>DISCARD</code> 之后再开新事务。</td></tr><tr><td><code>-ERR EXEC without MULTI</code></td><td>没有打开的事务却发了 <code>EXEC</code>。</td><td>与 <code>MULTI</code> 配对，或丢弃该命令。</td></tr><tr><td><code>-ERR DISCARD without MULTI</code></td><td>没有打开的事务却发了 <code>DISCARD</code>。</td><td>与 <code>MULTI</code> 配对，或丢弃该命令。</td></tr><tr><td><code>-ERR WATCH inside MULTI is not allowed</code></td><td>在 MULTI 块内发 <code>WATCH</code>。</td><td>在 <code>MULTI</code> 之前发 <code>WATCH</code>。</td></tr><tr><td><code>-ERR &lt;cmd&gt; not allowed inside MULTI</code></td><td>不能排队的命令（pub/sub、<code>WATCH</code>、<code>HELLO</code>、<code>RENAME</code>）被排进了 MULTI。</td><td>把这些命令放在事务之外。</td></tr><tr><td><code>-ERR Protocol error</code></td><td>入站字节不是合法 RESP。</td><td>重连重试；若持续出现，审计客户端序列化器。</td></tr><tr><td><code>-ERR CONFIG SET failed for '&lt;key&gt;': &lt;reason&gt;</code></td><td>CONFIG 字段未知或取值越界。</td><td><code>CONFIG GET *</code> 查看支持的字段与当前值。</td></tr><tr><td><code>-ERR CONFIG REWRITE could not write &lt;path&gt;: &lt;io-error&gt;</code></td><td>配置 TOML 路径缺失或不可写。</td><td>检查 <code>--config</code> 路径与文件系统权限。</td></tr><tr><td><code>-WRONGTYPE Operation against a key holding the wrong kind of value</code></td><td>命令作用在已存在但类型不同的 key 上。</td><td>见 <a href="#wrong-type-规则">Wrong-type 规则</a>。</td></tr><tr><td><code>-EXECABORT Transaction discarded because of previous errors.</code></td><td>MULTI 期间某条排队命令是未知动词或参数过少，EXEC 拒绝整批、什么都不执行。</td><td>修正出错的排队命令，重新 <code>MULTI</code> / 排队 / <code>EXEC</code>。</td></tr><tr><td><code>-MOVED &lt;slot&gt; &lt;host:port&gt;</code></td><td>key 的哈希槽不属于本节点。</td><td>见<a href="#集群路由回复">集群路由回复</a>。</td></tr><tr><td><code>-CROSSSLOT Keys in request don't hash to the same slot</code></td><td>多 key 命令跨了多个哈希槽。</td><td>见<a href="#集群路由回复">集群路由回复</a>。</td></tr><tr><td><code>-MISDIRECTED writer is &lt;host:port&gt;</code></td><td>写入落在了不拥有该 key scope 的节点上，或 <code>REPL.WAIT</code> 在此副本上无法提供读己之写（超时或 generation 不匹配）。</td><td>见<a href="#集群路由回复">集群路由回复</a>；对 <code>REPL.WAIT</code>，去 <code>&lt;host:port&gt;</code> 读主节点。</td></tr><tr><td><code>-QUIESCED migrating to &lt;host:port&gt;</code></td><td>槽或 scope 正在迁移、在本节点冻结，或节点正处于向 <code>&lt;host:port&gt;</code> 的 <code>FAILOVER</code> 交接中。</td><td>见<a href="#集群路由回复">集群路由回复</a>。</td></tr><tr><td><code>-OOM command not allowed when used memory &gt; 'maxmemory'</code></td><td>超限后在 <code>noeviction</code> 策略下发写类命令。</td><td>调高 <code>maxmemory</code>、设置逐出策略（如 <code>allkeys-lru</code>），或 <code>DEL</code> 腾出空间。已有数据完好。</td></tr><tr><td><code>-READONLY You can't write against a read only replica.</code></td><td>向副本节点发送写命令。</td><td>发给主节点，或使用路由客户端。</td></tr><tr><td><code>-NOREPLICAS Not enough good replicas to write.</code></td><td><code>min_replicas_to_write = N</code> 的主节点看到的健康副本少于 N。</td><td>退避重试；恢复副本（见 <a href="../availability/">docs/availability.md</a>）。</td></tr><tr><td><code>-NOREPLICAS primary lost quorum; writes fenced</code></td><td>elect 多数派主节点联系不上严格多数的同僚（分区少数侧）；写入在租约窗口内自我围栏。</td><td>退避重试——分区愈合后围栏解除，或多数派选出新主节点、路由客户端会找到它。</td></tr><tr><td><code>-STALE replica is stale; read the primary or raise replica_max_staleness_ms</code></td><td>读请求发给了上一次主节点心跳早于其 <code>replica_max_staleness_ms</code> 界限的副本。</td><td>在副本追平前读主节点，或调高/关闭该界限。</td></tr><tr><td><code>-READONLY can't write against a read-only script</code></td><td>通过 <code>EVAL_RO</code> / <code>EVALSHA_RO</code> 求值的脚本尝试写入。</td><td>改用可写的 <code>EVAL</code> / <code>EVALSHA</code> 变体。</td></tr><tr><td><code>-NOSCRIPT No matching script. Please use EVAL.</code></td><td><code>EVALSHA &lt;sha&gt;</code> 请求的脚本不在缓存中。</td><td>直接调 <code>EVAL</code>（kevy 自动缓存）或先 <code>SCRIPT LOAD</code>。</td></tr><tr><td><code>-LOADING kevy is loading the dataset in memory</code></td><td>副本正在从主节点接收 full-resync 快照期间收到读请求。</td><td>等待重试（窗口以快照传送时长为界）；loading 期间 <code>PING</code>、<code>INFO</code>、<code>HELLO</code> 照常应答，健康检查与监控不中断。</td></tr><tr><td><code>-ERR No such client address in the list</code></td><td>旧式 <code>CLIENT KILL &lt;addr:port&gt;</code> 没有匹配到任何连接。</td><td>用 <code>CLIENT LIST</code> 列出在线连接后按现存 <code>addr</code> 重发；过滤式形态（`CLIENT KILL ID\</td><td>ADDR\</td><td>LADDR …`）返回计数 0 而不报错。</td></tr></tbody></table></div>
+<h3 id="kevy-从不发出的前缀">kevy 从不发出的前缀</h3>
+<p>kevy 有意不在协议层做认证与授权；下面这些 Redis 兼容前缀刻意缺席：</p>
+<ul><li><code>-NOAUTH</code>——没有 <code>AUTH</code> 命令面。</li><li><code>-WRONGPASS</code>——没有密码检查。</li><li><code>-NOPERM</code>——没有 ACL 系统。</li><li><code>-MISCONF</code>——持久化失败（AOF 追加或后台保存）会记到 stderr，节点继续用一致的内存状态服务；kevy 不把耐久性错误变成客户端可见的应答。重启时重放已落盘的部分。</li><li><code>-BUSY</code>——kevy 没有交互式 <code>SCRIPT KILL</code>。脚本改由指令预算封顶（<code>[lua] time_limit_ms</code>，<code>0</code> = 不限）；超预算的脚本就地中断，其 <code>EVAL</code> 返回普通的 <code>-ERR</code> Lua 错误，失控脚本不会卡住 shard 等别的客户端来打断。</li></ul>
+<p>如果你的客户端认为这些前缀可能出现，在 kevy 上请按不可达处理。访问控制交给部署边界（kevy 默认绑定 <code>127.0.0.1</code>）。</p>
+<h2 id="wrong-type-规则">Wrong-type 规则</h2>
+<p><code>WRONGTYPE</code> 回复表示这个 key 已存在，但 Redis 数据类型与命令期望的不同。规则如下：</p>
+<ul><li>类型在 key 创建时确定，直到 key 被删除（或过期）前保持不变。</li><li><code>DEL &lt;key&gt;</code> 之后重发原命令会成功（类型已被重置）。</li><li><code>EXPIRE</code> / <code>PERSIST</code> / <code>TYPE</code> / <code>OBJECT ENCODING</code> / <code>EXISTS</code> / <code>DEL</code> / <code>UNLINK</code> 与类型无关，永不抛 <code>WRONGTYPE</code>。</li><li>key 不存在时永远不会返回 <code>WRONGTYPE</code>；缺失 key 的语义遵循各命令的文档行为（<code>GET</code> 返回 nil、<code>LPUSH</code> 创建列表，依此类推）。</li></ul>
+<p>恢复路径永远是二选一：换一个 key，或 <code>DEL</code> 现有 key 后按预期类型重建。</p>
+<h2 id="集群路由回复">集群路由回复</h2>
+<p>这些前缀只在 kevy 以路由模式（cluster 或 scoped）运行时出现。非集群客户端可能永远见不到它们。</p>
+<ul><li><b><code>-MOVED &lt;slot&gt; &lt;host:port&gt;</code></b>——key 的哈希槽永久归属另一节点时触发。客户端应重连 <code>&lt;host:port&gt;</code> 并重发。集群感知客户端（如 <code>redis-cli -c</code>、cluster 模式的 <code>ioredis</code>）会透明跟随重定向并更新槽映射。</li><li><b><code>-CROSSSLOT Keys in request don't hash to the same slot</code></b>——多 key 命令（<code>MGET</code>、<code>MSET</code>、多 key 的 <code>DEL</code>、多 <code>KEYS</code> 的 <code>EVAL</code>、<code>SUNIONSTORE</code> 等）的 key 没有全部落在同一槽时触发。用共享的 <code>{hashtag}</code> 段把 key 放到一起，或在客户端按槽拆分命令。</li><li><b><code>-MISDIRECTED writer is &lt;host:port&gt;</code></b>——写入落在不拥有该 key scope 的节点上时触发。路由客户端跟随重定向；手动客户端应重连 <code>&lt;host:port&gt;</code>。</li><li><b><code>-QUIESCED migrating to &lt;host:port&gt;</code></b>——槽或 scope 正在迁移、在本节点冻结期间触发。客户端应视同 <code>MOVED</code>，去 <code>&lt;host:port&gt;</code> 重试。迁移完成后，那个节点会给出权威应答。</li><li>完整路由模型见 <a href="https://github.com/goliajp/kevy/tree/develop/docs">docs/</a> 下的协议说明。</li></ul>
+<h2 id="faq">FAQ</h2>
+<p><b>我的客户端把 <code>-MOVED</code> 当致命错误——怎么办？</b> 这个客户端不是集群感知的。要么换集群感知客户端（如 <code>redis-cli -c</code>、带 <code>Cluster</code> 的 <code>ioredis</code>、带 <code>RedisCluster</code> 的 <code>redis-py</code>、kevy 路由客户端），要么在驱动外包一层：捕获 <code>MOVED</code>、重连消息里的主机、重发命令。</p>
+<p><b>单 key 命令收到了 <code>-CROSSSLOT</code>——是 bug 吗？</b> 不是。<code>CROSSSLOT</code> 只对多 key 命令触发。如果它出现在看似单 key 的调用上，说明这条命令实际是多 key 的（比如带两个 <code>KEYS</code> 的 <code>EVAL</code>、带源和目的的 <code>SUNIONSTORE</code>）。用 <code>{tag}</code> 记法强制同槽放置，或拆分调用。</p>
+<p><b>收到了 <code>-OOM</code>——我的数据坏了吗？</b> 没有。<code>-OOM</code> 在命令准入时就被拒绝；这次写入根本没有落地。keyspace 与命令之前的状态完全一致。腾出空间（<code>DEL</code> / 设置逐出策略 / 调高 <code>maxmemory</code>）后重试。</p>
+<p><b><code>-LOADING</code> 一直出现——该等多久？</b> 等 full-resync 快照传送完成（时长与数据集大小和链路速度成正比）。loading 期间 <code>PING</code>、<code>INFO</code>、<code>HELLO</code> 照常应答（<code>INFO replication</code> 报告 <code>loading:1</code>），健康检查不受影响。副本只有在重连时落后主节点 backlog 太多才会进入这个状态；如果 <code>-LOADING</code> 反复出现，调高 <code>[replication] replication_buffer_size</code> 或排查链路。</p>
+<p><b>排队的 MULTI 命令返回了 <code>-EXECABORT</code>——有写入被应用吗？</b> 没有。<code>EXECABORT</code> 表示事务作为一个整批被拒绝；排队序列里什么都没执行。修正出错的命令后重新 <code>MULTI</code>。</p>
+<h2 id="扩展面idx-view-feed">扩展面（IDX. / VIEW. / FEED.）</h2>
+<p>扩展 verb 遵循同一套前缀契约。每个错误都自我解释：点名 verb 和对象，并指向发现面（撞上错误的 agent 可以在带内恢复）。</p>
+<div class="tbl"><table><thead><tr><th>前缀</th><th>触发时机</th><th>恢复</th></tr></thead><tbody><tr><td><code>ERR &lt;VERB&gt; '&lt;name&gt;': bad arguments — run COMMAND DOCS &lt;VERB&gt; for the syntax</code></td><td>IDX./VIEW. verb 参数解析失败</td><td><code>COMMAND DOCS &lt;verb&gt;</code> 返回完整语法串</td></tr><tr><td><code>ERR no such index '&lt;name&gt;' (IDX.LIST enumerates them)</code></td><td>查询点名了不存在的索引</td><td><code>IDX.LIST</code> / <code>VIEW.LIST</code> 枚举目录</td></tr><tr><td><code>INDEXBUILDING index '&lt;name&gt;' is still building (poll IDX.LIST until state=ready)</code></td><td>查询撞上了建索引后的回填窗口</td><td>轮询 <code>IDX.LIST</code> 的 <code>state</code>；见 <a href="../migration/">docs/migration.md</a></td></tr><tr><td><code>INDEXOVERBUDGET index '&lt;name&gt;' build exceeded MAXMEM (raise maxmemory or DROP the index)</code></td><td>构建触到内存预算</td><td>调高 <code>maxmemory</code> 或 <code>IDX.DROP</code></td></tr><tr><td><code>FEEDRESYNC &lt;gen&gt; &lt;tail&gt;</code></td><td>FEED 游标不再可服务（generation 递增或超出 backlog）</td><td>从新快照 + 返回的游标重启消费；见 <a href="../../../docs/cdc/">docs/cdc.md</a></td></tr></tbody></table></div>
+<h2 id="更新这份目录">更新这份目录</h2>
+<p>如果你新增或修改了发出 <code>-&lt;PREFIX&gt; ...</code> 回复的代码路径：</p>
+<ol><li>更新<a href="#核心目录">核心目录</a>里的行（或加一行）。</li><li>引入新前缀时，扩展线协议层混沌测试 <a href="https://github.com/goliajp/kevy/blob/develop/crates/kevy/tests/wire_torture_chaos.rs">crates/kevy/tests/wire_torture_chaos.rs</a>。</li><li>在发布它的版本的 <a href="https://github.com/goliajp/kevy/blob/develop/CHANGELOG.md">CHANGELOG.md</a> 里记一笔。</li></ol>
+<p>错误是客户端契约的一部分。悄悄改消息文本，会弄坏生态里对其做模式匹配的库。</p></main>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#怎么读这张表">怎么读这张表</a></li><li class="l2"><a href="#核心目录">核心目录</a></li><li class="l3"><a href="#kevy-从不发出的前缀">kevy 从不发出的前缀</a></li><li class="l2"><a href="#wrong-type-规则">Wrong-type 规则</a></li><li class="l2"><a href="#集群路由回复">集群路由回复</a></li><li class="l2"><a href="#faq">FAQ</a></li><li class="l2"><a href="#扩展面idx-view-feed">扩展面（IDX. / VIEW. / FEED.）</a></li><li class="l2"><a href="#更新这份目录">更新这份目录</a></li></ul></aside>
+</div>
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

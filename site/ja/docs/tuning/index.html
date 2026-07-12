@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kevyのチューニング — kevy</title>
+<meta name="description" content="kevyのopあたりのコストを左右するランタイムノブのリファレンスです。CPUレイアウト、リアクターの選択、永続化、メモリ上限、ネットワークトランスポート、そしてLinux側のいくつかのレバーを扱います。">
+<link rel="stylesheet" href="../../../assets/kevy.css">
+<link rel="stylesheet" href="../../../assets/docs.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../ja/docs/" aria-current="page">ドキュメント</a>
+      <a href="../../../ja/docs/commands/">コマンド</a>
+      <a href="../../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../../ja/play/">Playground</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language"><a href="../../../docs/tuning/">EN</a><a href="../../../zh/docs/tuning/">中文</a><a href="../../../ja/docs/tuning/" aria-current="page">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell">
+  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/" aria-current="page">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">184 コマンド全て</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>kevyのチューニング</h1></div>
+<p>kevyのopあたりのコストを左右するランタイムノブのリファレンスです。CPUレイアウト、リアクターの選択、永続化、メモリ上限、ネットワークトランスポート、そしてLinux側のいくつかのレバーを扱います。</p>
+<h2 id="このドキュメントが必要になるとき">このドキュメントが必要になるとき</h2>
+<p>次のような場面で参照してください：</p>
+<ul><li>ベンチマークでkevyがスループットや遅延の目標に届いておらず、次にどのノブを回すべきか知りたい。</li><li>デフォルト（TCPループバック、io_uring自動検出、<code>appendfsync everysec</code>、<code>maxmemory</code>なし）がワークロードに合わないホストにkevyをデプロイする。たとえばスパースコネクションのサービス、NVMe前提の耐久性要件、メモリ上限付きのキャッシュ層など。</li><li><code>perf</code>でkevyをプロファイルしていて、デバッグ行テーブルを残すビルドプロファイルが必要。</li></ul>
+<p>ノートPCでkevyを立ち上げて数字に問題がないなら、このページは不要です。デフォルトはどのワークロードでもそこそこ良い性能が出るよう調整されています。</p>
+<h2 id="中心となる考え方">中心となる考え方</h2>
+<p>kevyはスレッド・パー・コアのサーバーです。OSスレッドごとに1シャード、CRC16ハッシュタグで分割したシェアードナッシングのキー空間、各シャードにbusy-pollリアクター、という構成です。デフォルトは「どのワークロードでもまずまず」を狙っています。チューニングとは、シャード数・リアクター・永続化ポリシーを、<b>実際のパフォーマンスデータがボトルネックだと示しているもの</b>に合わせる作業です。先回りしてノブを切り替えないでください。計測し、コストを特定し、変数を1つずつ変えてください。</p>
+<h2 id="チューニングプレイブック">チューニングプレイブック</h2>
+<h3 id="cpuとシャード">CPUとシャード</h3>
+<div class="tbl"><table><thead><tr><th>ノブ</th><th>どこ</th><th>デフォルト</th><th>効果</th></tr></thead><tbody><tr><td><code>--threads N</code> / <code>KEVY_THREADS</code></td><td>CLI / env</td><td>オンラインコア数</td><td>シャード数。OSスレッドごとに1シャード</td></tr><tr><td><code>--accept-shards K</code></td><td>CLI</td><td>全シャードがaccept</td><td>最初のKシャードだけがリスナーをbindし、残りはcompute-only</td></tr><tr><td>CPU pinning</td><td><code>taskset</code> / <code>numactl</code></td><td>なし</td><td>シャードを固定のコア集合にロック</td></tr></tbody></table></div>
+<p><b><code>--threads</code>の選び方。</b> ワークロードに実際に存在する並列性に合わせてください。シングルクライアントのパイプラインベンチ（<code>-c 1 -P 16</code>）は1シャードを飽和させます。ここで<code>--threads 10</code>にすると、9つのシャードが仕事のないbusy-pollを回し、シャード0のキャッシュラインを奪うだけです。本物のマルチクライアントなら、<code>min(cores, 想定同時クライアント数 / 4)</code>から始めて計測してください。</p>
+<p><b><code>--accept-shards</code>の選び方。</b> コネクション対シャード比が低い場合（スパースコネクションのワークロード。たとえば50クライアントを10シャードで受けると5 conns/shard）、イテレーションごとのbusy-pollオーバーヘッドが償却できなくなり、スループットが落ちます。経験則は<code>ceil(conns / 20)</code>です。50 connsなら<code>--accept-shards 3</code>とし、3つのlistenシャードがそれぞれ約17接続を受け持ちます。残りのシャードはcompute-onlyですが、内部ディスパッチャ経由でクロスシャードの仕事は受け続けます。経験的なスイートスポットは点推定より広めです。フルスイープの結果と、クロスシャードホップの税がaccept集中の利得を上回るケースの議論は<a href="https://github.com/goliajp/kevy/blob/develop/docs/accept-shards.md">docs/accept-shards.md</a>を参照してください。</p>
+<p><b>CPU pinning。</b> ベンチ用や単一テナントのホストでは、kevyを固定コア集合にpinすると、NIC IRQ→softirq→ユーザースレッドのパスを同じL1/L2に保てます：</p>
+<figure class="code"><pre><code class="lang-sh">taskset -c 0-9 kevy --port 6004 --threads 10</code></pre></figure>
+<p>同じマシン上でクライアントも動かすなら、サーバーとクライアントを<b>互いに素な</b>コアレンジにpinします（サーバー<code>0-9</code>、クライアント<code>10-15</code>）。コアを共有すると、リアクターの利得を吹き飛ばすスケジューラのping-pongが復活します。</p>
+<h3 id="リアクターの選択">リアクターの選択</h3>
+<div class="tbl"><table><thead><tr><th>プラットフォーム</th><th>デフォルト</th><th>上書き</th></tr></thead><tbody><tr><td>Linux ≥ 5.19</td><td>io_uring（自動検出）</td><td><code>KEVY_IO_URING=0</code>でepollを強制。<code>KEVY_IO_URING=1</code>でio_uringを必須にし、seccompで<code>io_uring_setup</code>がブロックされていれば大きな音を立てて終了</td></tr><tr><td>macOS / *BSD</td><td>kqueue</td><td>設定不可</td></tr><tr><td>旧Linux</td><td>epoll</td><td>n/a</td></tr></tbody></table></div>
+<p>Linuxの自動検出は起動時に<code>io_uring_setup</code>を試します。syscallがブロックされている場合（seccompプロファイル、ロックダウンされたコンテナ）、kevyは黙ってepollにフォールバックします。黙って劣化するのではなく大きな音を立てて失敗してほしい硬化デプロイでは、<code>KEVY_IO_URING=1</code>を設定してください。io_uringが本当に使えない限りサーバーは起動を拒否します。逆に、再現可能なepoll対io_uringベンチのため、あるいはカーネルリグレッションの回避のためにio_uringを外したい場合は、<code>KEVY_IO_URING=0</code>を設定します。</p>
+<figure class="code"><pre><code class="lang-sh">KEVY_IO_URING=1 kevy --port 6004   # io_uring 必須、ブロックされていれば終了
+KEVY_IO_URING=0 kevy --port 6004   # epoll 強制</code></pre></figure>
+<h3 id="永続化">永続化</h3>
+<p>AOFポリシーは<code>appendfsync</code>（configファイルまたは<code>CONFIG SET</code>）で制御します。3つの値はRedisのセマンティクスと一致します：</p>
+<div class="tbl"><table><thead><tr><th><code>appendfsync</code></th><th>耐久性</th><th>コスト</th></tr></thead><tbody><tr><td><code>always</code></td><td>各書き込みを応答前に<code>fsync</code></td><td>遅延は最大。NVMeのsync遅延で律速</td></tr><tr><td><code>everysec</code>（デフォルト）</td><td>バックグラウンドスレッドで毎秒<code>fsync</code></td><td>データロス窓は最大1秒。ホットパスのコストはほぼゼロ</td></tr><tr><td><code>no</code></td><td><code>fsync</code>しない。カーネルが自分のスケジュールでflush</td><td>最速。データロス窓はページキャッシュのflush間隔</td></tr></tbody></table></div>
+<p><code>everysec</code>のバックグラウンド<code>fsync</code>は、シャードのホットパスから外れた専用bioスレッドで走るため、シャードのテール遅延がディスク遅延と結合することはありません。純粋なキャッシュや読み取りレプリカでは、<code>--no-aof</code>でAOFを完全に無効化する（AOFファイルは一切書かれず、バッファにも積まれない）選択肢もあります。</p>
+<h3 id="メモリ">メモリ</h3>
+<div class="tbl"><table><thead><tr><th>ノブ</th><th>デフォルト</th><th>何をするか</th></tr></thead><tbody><tr><td><code>maxmemory</code></td><td>無制限</td><td>バイト単位のハードなメモリ上限。達するとエビクションポリシーが動く</td></tr><tr><td><code>maxmemory-policy</code></td><td><code>noeviction</code></td><td>上限に達したときどのキーを落とすか</td></tr><tr><td><code>maxmemory-samples</code></td><td>5</td><td>近似LRU/LFUポリシーのサンプルサイズ</td></tr></tbody></table></div>
+<p>エビクションポリシーはRedisをミラーしています：<code>noeviction</code>、<code>allkeys-lru</code>、<code>allkeys-lfu</code>、<code>allkeys-random</code>、<code>volatile-lru</code>、<code>volatile-lfu</code>、<code>volatile-random</code>、<code>volatile-ttl</code>。<code>noeviction</code>は上限到達後の書き込みをOOMで失敗させるもので、プライマリストアの安全なデフォルトです。<code>allkeys-*</code>系は、どのキーも使い捨てにできるキャッシュ層での正解です。</p>
+<p><code>maxmemory-samples</code>は近似ポリシーの品質とコストを調整するダイヤルです。サンプルするキーを増やすほど真のLRU/LFUに近づきますが、エビクションごとのCPUコストが増えます。デフォルトの5はほとんどのキャッシュワークロードで十分です。アクセスパターン上、エビクションが悪い犠牲者を選んでいるのが見えるなら10に上げ、エビクション自体がプロファイルに現れるときに限って3に下げてください。</p>
+<h3 id="ネットワーク">ネットワーク</h3>
+<p>デフォルトのトランスポートはTCPです。クライアントが同一ホストにいるなら、Unixドメインソケットに切り替えてループバックTCPスタックを丸ごとスキップできます：</p>
+<figure class="code"><pre><code class="lang-sh">KEVY_UNIX_SOCKET=/tmp/kevy.sock kevy --port 6004
+redis-cli -s /tmp/kevy.sock SET foo bar</code></pre></figure>
+<p>サーバーはデュアルバインドします。TCPはリモートクライアント用に上がったままで、UDSがローカルを受け持ちます。RESPセマンティクスも、シャードランタイムも同じです。ローカルクライアントのワークロードでは利得が大きくなります（小さいペイロードサイズではループバックTCPパスが支配的なコストになるためです）。詳細な数値、権限モデル、UDSが向かないケースは<a href="../uds/">docs/uds.md</a>を参照してください。</p>
+<p><b>bindアドレスの警告。</b> 現時点のkevyにはAUTHもTLSもありません。非ループバックアドレス（<code>--bind 0.0.0.0</code>や公開インタフェース）にbindすると起動時に警告が出ます。ネットワーク上の誰でもコマンドを発行できてしまうためです。kevyはプライベートネットワーク境界の内側か、認証を終端するプロキシの背後で動かしてください。</p>
+<p><b>コネクションのイントロスペクション。</b> <code>INFO clients</code>は全シャードを合算したライブの<code>connected_clients</code>ゲージを報告します。<code>CLIENT LIST</code>／<code>CLIENT INFO</code>は、実在するクライアント接続ごとにRedis 7.x形の行を1つ描画します——ピアアドレス、グローバルに一意な<code>id</code>、<code>name</code>、購読数、MULTIキュー深さ、入出力バッファサイズ（<code>cmd=NULL</code>：最後のコマンド名は追跡しません）。<code>CLIENT SETNAME</code>はLIST用に接続へラベルを付けます。<code>CLIENT KILL ID &lt;id&gt; | ADDR &lt;ip:port&gt; | LADDR &lt;ip:port&gt;</code>（またはレガシーな位置引数形<code>CLIENT KILL &lt;ip:port&gt;</code>）は、ブロッキングコマンドで待機中のものも含め、一致するすべての接続を閉じます。teardownは犠牲となる接続の保留出力がはけるのを待つので、自分自身をkillした接続も自分のリプライは受け取れます。</p>
+<h3 id="レプリケーションと可用性">レプリケーションと可用性</h3>
+<p>プライマリ/レプリカのトポロジで動かすときだけ関係します（<a href="../replication/">docs/replication.md</a>、<a href="../../../docs/availability/">docs/availability.md</a>）。</p>
+<p><b>ポートレイアウト。</b> 各ノードは3つのプレーンを使い、デフォルトではすべてクライアントポートから導出されます：</p>
+<div class="tbl"><table><thead><tr><th>プレーン</th><th>ポート</th><th>備考</th></tr></thead><tbody><tr><td>クライアントRESP</td><td><code>port</code>（例：6004）</td><td>クライアントと<code>peers</code>のclient-portが指すもの</td></tr><tr><td>レプリケーション</td><td><code>listen_port_base + shard_i</code>。デフォルトのbase = <code>port</code> + 10000</td><td><code>nshards</code>個の連続ポート。レプリカもこのレンジをbindする（v3.15）</td></tr><tr><td>選挙</td><td><code>elect_port_base</code>。デフォルト = <code>port</code> + 200</td><td>ノードごとに1本のコントロールプレーンリスナー</td></tr></tbody></table></div>
+<p>1台のマシンに複数インスタンスを同居させる場合は、クライアントポートを最低<code>nshards</code>離してください。そうしないとデフォルトのレプリケーションレンジが衝突します。<code>FAILOVER</code>と自動再ターゲットは<code>port + 10000</code>の慣習を前提にしているため、フェイルオーバーを使うデプロイでは<code>listen_port_base</code>をデフォルトのままにしてください。</p>
+<p><b>整合性ノブ。</b> 2つの<code>[replication]</code>キーで、可用性とより強い保証を交換できます（ラダーの全体像は<a href="../../../docs/availability/">docs/availability.md</a>）:</p>
+<div class="tbl"><table><thead><tr><th>ノブ</th><th>デフォルト</th><th>何をするか</th></tr></thead><tbody><tr><td><code>replica_max_staleness_ms</code></td><td><code>0</code>（オフ）</td><td>最後のプライマリハートビートが境界より古いレプリカは、読み出しを<code>-STALE</code>で拒否する。ハートビートは1Hzでストリームに乗るため、約2秒未満の境界は健全なリンクでも発火する</td></tr><tr><td><code>min_replicas_to_write</code></td><td><code>0</code>（オフ）</td><td>健全なレプリカがN台未満のとき、プライマリは書き込みを<code>-NOREPLICAS</code>で拒否する</td></tr></tbody></table></div>
+<p>呼び出し単位のバリアなら、常設のconfigの代わりに、ブロックする呼び出し1回分のコストで済みます。プライマリでは<code>WAIT n timeout</code>、レプリカでのread-your-writesには<code>REPL.TOKEN</code> + <code>REPL.WAIT</code>です。どちらも<code>timeout 0</code>を「永遠に待つ」と解釈し、60秒でハードキャップされます。</p>
+<h3 id="linuxカーネルノブ">Linuxカーネルノブ</h3>
+<p>kevyの下にあるカーネル側のフロアを動かすホストレベルのレバーが2つあります。どちらもベンチ用・単一テナント専用です。適用する前にトレードオフを読んでください。</p>
+<p><b>Spectre / BHBミティゲーション。</b> ミティゲーションが有効（デフォルト）のLinux 6.x系カーネルでは、すべてのsyscallが<code>clear_bhb_loop</code>などの代金を払います。小ペイロードの<code>-c 1</code>ワークロードでは、これがkevyの実行中の単独最大のCPU消費です。カーネルコマンドラインで無効化します：</p>
+<figure class="code"><pre><code class="lang-sh"># GRUB_CMDLINE_LINUX_DEFAULT に `mitigations=off` を追加、その後:
+sudo update-grub &amp;&amp; sudo reboot
+cat /proc/cmdline | grep mitigations</code></pre></figure>
+<p>これが許されるのは、untrustedなコードが一切走らない単一テナントマシンだけです（ワイヤから来るLuaなし、サードパーティプラグインなし、マルチテナントコンテナなし）。マルチテナントホスト、共有CIランナー、untrustedなユーザーコードを処理するものには適用しないでください。利得は<code>-c 1</code>で+10〜15%程度で、ワークロードがパイプライニングするほど縮みます。</p>
+<p><b><code>.text</code>セグメントのヒュージページ。</b> kevyは自分のコードセグメントに<code>madvise(MADV_HUGEPAGE)</code>を呼べます。これによりカーネルはkevyバイナリの命令を4KiBではなく2MiBページで裏付けます。利得は、ホットなdispatchループのiTLBフットプリントが小さくなることです。ランタイムコストは実質ゼロなので、<code>/sys/kernel/mm/transparent_hugepage/enabled</code>が<code>always</code>か<code>madvise</code>のLinuxホストでは有効にする価値があります。トレードオフは起動時の<code>madvise</code>呼び出し1回分の小さなコストだけで、<code>mitigations=off</code>と違ってセキュリティ上の代償はありません。</p>
+<h2 id="プロファイリング">プロファイリング</h2>
+<p>実際のシンボルに解決される<code>perf record</code>のフレームグラフを取るには、<code>release-perf</code>プロファイルでビルドしてください。最適化レベルは<code>release</code>と同じで、デバッグ行テーブルだけが残ります：</p>
+<figure class="code"><pre><code class="lang-sh">cargo build --profile release-perf
+./target/release-perf/kevy --port 6004 --threads 1 &amp;
+KEVY_PID=$!
+
+perf record -F 999 -p $KEVY_PID -g --call-graph=fp -- sleep 30
+perf report --stdio | head -60
+
+# インライン展開シンボルの生アドレスを解決:
+addr2line -e ./target/release-perf/kevy -f -i 0x&lt;addr&gt;</code></pre></figure>
+<p>標準の<code>release</code>プロファイルは行テーブルをstripするため、<code>perf</code>はシンボルのない生アドレスを返し、<code>addr2line</code>は<code>??</code>を返します。<code>release</code>バイナリをプロファイルしないでください。まず<code>release-perf</code>でリビルドしてください。</p>
+<p><code>clear_bhb_loop</code>などカーネル側のコストをシンボル単位で帰属させるには、<code>fp</code>の代わりに<code>--call-graph=dwarf</code>でキャプチャし、同じ<code>addr2line</code>のフローを使ってください。dwarfのアンワインダは遅いですが、syscall境界を越えて正しく展開します。</p>
+<h2 id="トレードオフ">トレードオフ</h2>
+<div class="tbl"><table><thead><tr><th>ノブ</th><th>コスト</th><th>買えるもの</th></tr></thead><tbody><tr><td><code>--threads N</code>（上げる）</td><td>Nがワークロードの並列性を超えると、遊休busy-pollシャードにCPUを浪費</td><td>同時クライアント容量の増加</td></tr><tr><td><code>--threads N</code>（下げる）</td><td>クロスシャードホップの税を1シャード分回避</td><td>スパースコネクションでのCPU浪費の削減</td></tr><tr><td><code>--accept-shards K</code></td><td>リスナーの集中。クライアントが生の<code>connect</code>をするならエントリポイントが減る</td><td>acceptする各シャード上で、イテレーションごとのオーバーヘッドがより多くのコネクションに償却される</td></tr><tr><td><code>KEVY_IO_URING=1</code>（強制）</td><td>seccompがio_uringをブロックしているとサーバーが起動拒否</td><td>硬化ホストでepollへ黙って劣化しない</td></tr><tr><td><code>KEVY_IO_URING=0</code>（epoll強制）</td><td>io_uringのopあたりの節約を諦める</td><td>再現可能なepollベースライン。カーネルリグレッションの回避</td></tr><tr><td><code>appendfsync always</code></td><td>全書き込みが<code>fsync</code>でブロック</td><td>データロスゼロの耐久性</td></tr><tr><td><code>appendfsync no</code></td><td>データロス窓 = ページキャッシュのflush間隔</td><td>最速の書き込みパス</td></tr><tr><td><code>--no-aof</code></td><td>永続化なし</td><td>ディスクI/Oの最小化。レプリカ/キャッシュ用途</td></tr><tr><td><code>maxmemory</code>設定</td><td>書き込みが失敗（<code>noeviction</code>）またはエビクト（<code>allkeys-*</code>）し得る</td><td>メモリフットプリントの有界化</td></tr><tr><td><code>maxmemory-samples</code>を上げる</td><td>エビクションごとのCPUコスト</td><td>近似LRU/LFUの犠牲者選択が改善</td></tr><tr><td>Unixドメインソケット</td><td>ローカル限定。ファイルシステム権限のセキュリティモデル</td><td>TCPループバックスタックをスキップ</td></tr><tr><td><code>replica_max_staleness_ms</code>設定</td><td>遅れているレプリカでの読み出しは追いつくまで失敗（<code>-STALE</code>）</td><td>読み出しステイルネスの有界化</td></tr><tr><td><code>min_replicas_to_write</code>設定</td><td>書き込み可用性がレプリカの健全性と結合（<code>-NOREPLICAS</code>）</td><td>虚空への書き込みをしない</td></tr><tr><td><code>mitigations=off</code></td><td>Spectre / Meltdown / MDSなどのミティゲーションが全オフ</td><td>syscallパスの税を取り戻す</td></tr><tr><td><code>.text</code>への<code>MADV_HUGEPAGE</code></td><td>意味のあるコストなし</td><td>dispatchループのiTLBフットプリント縮小</td></tr><tr><td><code>release-perf</code>ビルド</td><td>バイナリが大きくなる（デバッグ行テーブル）</td><td><code>perf</code>がシンボル解決できる</td></tr></tbody></table></div>
+<h2 id="faq">FAQ</h2>
+<p><b><code>--accept-shards</code>は常に設定すべきですか？</b></p>
+<p>いいえ。このノブは、conns/shardsが低くbusy-pollの本体が償却できないスパースコネクション向けです。デンスコネクション（たとえば1000クライアント×10シャード = 100 conns/shard）では、デフォルトの「全シャードがacceptする」が正解です。リスナーを均等に広げたほうがaccept側の競合が減るからです。<code>ceil(conns / 20)</code>は、実際にスパースコネクションのケースになっているときだけ適用してください。</p>
+<p><b>io_uringは常にepollより速いですか？</b></p>
+<p>Linux ≥ 5.19で投入（submission）をバッチできるワークロードなら、はい、目に見えて速いです。古いカーネル、<code>io_uring_setup</code>をブロックするseccompフィルタ、バッチ機会がなくopごとに1 syscallに支配されるワークロードでは差が縮みます。自動検出が正しいデフォルトです。上書きするのは、実測に基づく理由があるか、黙ってフォールバックせず大きな音を立てて失敗すべき硬化デプロイの場合だけにしてください。</p>
+<p><b><code>appendfsync</code>の本番でのスイートスポットは？</b></p>
+<p>ほぼ全員にとって<code>everysec</code>です。データロスを1秒に有界化し、<code>fsync</code>をホットパスから外し、テール遅延への影響はほぼゼロです。<code>always</code>を使うのは、耐久性の要件が本当にゼロデータロスを求めるときだけです（その場合、NVMeの<code>fsync</code>遅延がテール遅延を律速するのは受け入れることになります）。<code>no</code>は、AOFがウォームリスタートの高速化のためだけに存在する純粋キャッシュに限ってください。</p>
+<p><b><code>MADV_HUGEPAGE</code>はいつ必要ですか？</b></p>
+<p><code>perf</code>がホットなdispatchループ上のiTLBミスを示すとき、あるいはホストの<code>/sys/kernel/mm/transparent_hugepage/enabled</code>が<code>madvise</code>のとき（この場合、ほかにkevyをオプトインさせるものがありません）です。THPが有効なLinuxホストではコストのかからないノブなので、デフォルトの姿勢は「オンのままにしておく」です。macOS / BSDに等価物はありません。</p>
+<p><b><code>perf</code>レポートが生アドレスばかりです。何を間違えましたか？</b></p>
+<p><code>cargo build --release</code>のバイナリをプロファイルしています。標準のreleaseプロファイルはデバッグ行テーブルをstripするため、<code>perf</code>にも<code>addr2line</code>にも解決の手がかりがありません。<code>cargo build --profile release-perf</code>でリビルドして録り直してください。</p></main>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#このドキュメントが必要になるとき">このドキュメントが必要になるとき</a></li><li class="l2"><a href="#中心となる考え方">中心となる考え方</a></li><li class="l2"><a href="#チューニングプレイブック">チューニングプレイブック</a></li><li class="l3"><a href="#cpuとシャード">CPUとシャード</a></li><li class="l3"><a href="#リアクターの選択">リアクターの選択</a></li><li class="l3"><a href="#永続化">永続化</a></li><li class="l3"><a href="#メモリ">メモリ</a></li><li class="l3"><a href="#ネットワーク">ネットワーク</a></li><li class="l3"><a href="#レプリケーションと可用性">レプリケーションと可用性</a></li><li class="l3"><a href="#linuxカーネルノブ">Linuxカーネルノブ</a></li><li class="l2"><a href="#プロファイリング">プロファイリング</a></li><li class="l2"><a href="#トレードオフ">トレードオフ</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></aside>
+</div>
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

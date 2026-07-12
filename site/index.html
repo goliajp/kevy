@@ -57,12 +57,12 @@ OK
 kevy_version:4.0.0
 dependencies:0</code></pre></div>
 </section>
-<section class="band"><div class="sec-h"><h2>One engine, five places to put it</h2><p class="sec-lede">Pick by where the data has to live — the API is the same in all five.</p></div><div class="cards"><a class="card" href="docs/server/">
+<section class="band"><div class="sec-h"><h2>One engine, five places to put it</h2><p class="sec-lede">Pick by where the data has to live — the API is the same in all five.</p></div><div class="cards"><a class="card" href="docs/tuning/">
       <span class="card-k">Server</span>
       <h3>A drop-in Redis replacement</h3>
       <p>One shard per core, io_uring on Linux, SO_REUSEPORT. Your existing client does not know it changed.</p>
       <span class="card-go">Run a server</span>
-    </a><a class="card" href="docs/embedded/">
+    </a><a class="card" href="docs/embedded-listener/">
       <span class="card-k">Embedded</span>
       <h3>A store inside your binary</h3>
       <p>No socket, no process, no serialisation. Call it like a HashMap that happens to be durable.</p>
@@ -72,12 +72,12 @@ dependencies:0</code></pre></div>
       <h3>151 KB of WebAssembly</h3>
       <p>A real keyspace with TTLs and pub/sub in the tab, persisted to OPFS. Not a localStorage wrapper.</p>
       <span class="card-go">Open the playground</span>
-    </a><a class="card" href="docs/edge/">
+    </a><a class="card" href="docs/wasm/">
       <span class="card-k">Edge</span>
       <h3>Cold-start in a worker</h3>
       <p>No runtime to warm up, no connection to open. The store is in the isolate with your code.</p>
       <span class="card-go">Deploy to an edge</span>
-    </a><a class="card" href="docs/embedded/">
+    </a><a class="card" href="docs/iot/">
       <span class="card-k">Bare metal</span>
       <h3>No allocator, no OS</h3>
       <p>kevy-store is no_std. It runs on a Cortex-M with a fixed arena and no heap — CI proves it every push.</p>
@@ -97,7 +97,7 @@ dependencies:0</code></pre></div>
 <section class="band">
   <div class="call loss">
     <span class="h">What kevy is not</span>
-    <p>It is not a cluster. There is no gossip, no slot migration, no sentinel — replication and failover exist, sharding across machines does not, and it is <a href="docs/scope/">refused on purpose</a>. There is no AUTH and no TLS: put it behind something that does those properly. Several commands deviate from Redis, some of them surprisingly — <code>SCAN</code> is not a cursor iterator, <code>ZRANK</code> is O(N), <code>SPOP</code> is not random. <a href="docs/commands/">Every one of them is written down</a>, in the column Redis's own reference does not have.</p>
+    <p>It is not a cluster. There is no gossip, no slot migration, no sentinel — replication and failover exist, sharding across machines does not, and it is <a href="docs/cluster/">refused on purpose</a>. There is no AUTH and no TLS: put it behind something that does those properly. Several commands deviate from Redis, some of them surprisingly — <code>SCAN</code> is not a cursor iterator, <code>ZRANK</code> is O(N), <code>SPOP</code> is not random. <a href="docs/commands/">Every one of them is written down</a>, in the column Redis's own reference does not have.</p>
   </div>
 </section>
 <section class="band">

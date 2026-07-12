@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upgrading kevy — kevy</title>
+<meta name="description" content="Two chapters, newest first: 3.x → 4.0 (an API-definition major: the wire and the disk carry over, the Rust faces changed once and are now frozen) and 2.x → 3.x (a capability major:">
+<link rel="stylesheet" href="../../assets/kevy.css">
+<link rel="stylesheet" href="../../assets/docs.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../docs/" aria-current="page">Docs</a>
+      <a href="../../docs/commands/">Commands</a>
+      <a href="../../benchmarks/">Benchmarks</a>
+      <a href="../../play/">Playground</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language"><a href="../../docs/UPGRADING/" aria-current="page">EN</a><a href="../../zh/docs/" class="untranslated" title="not translated yet">中文</a><a href="../../ja/docs/" class="untranslated" title="not translated yet">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell">
+  <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/" aria-current="page">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>Upgrading kevy</h1></div>
+<p>Two chapters, newest first: <b>3.x → 4.0</b> (an API-definition major: the wire and the disk carry over, the Rust faces changed once and are now frozen) and <b>2.x → 3.x</b> (a capability major: everything carried over). Each chapter is explicit about what upgrades automatically, what needs a code change, and how to go back.</p>
+<hr>
+<h1 id="3x-40">3.x → 4.0</h1>
+<p>4.0 is the industrial-production declaration. The semver major was spent deliberately — one break window in which every long-standing public-API debt was paid, and after which the surfaces are <b>frozen</b>: later 4.x releases are additive only. If you talk to kevy over the wire, 4.0 is a binary swap. If you link a kevy crate, expect a short, mechanical migration — every change below has a one-line rule.</p>
+<h2 id="tldr-versions-at-a-glance">TL;DR — versions at a glance</h2>
+<div class="tbl"><table><thead><tr><th>Component</th><th>3.x era</th><th>4.0</th><th>Action</th></tr></thead><tbody><tr><td><code>kevy</code> (server)</td><td>3.18.x</td><td>4.0.0</td><td>swap the binary, restart on the same data dir</td></tr><tr><td><code>kevy-embedded</code></td><td>3.18.x</td><td>4.0.0</td><td>bump + apply the API table below</td></tr><tr><td><code>kevy-client</code></td><td><b>1.14.x</b></td><td><b>4.0.0</b></td><td>bump — version-line unification (same move <code>kevy-embedded</code> made at 3.0.0) + the API table</td></tr><tr><td><code>kevy-client-async</code></td><td><b>1.1.x</b></td><td><b>4.0.0</b></td><td>same</td></tr><tr><td><code>kevy-wasm</code> / <code>@goliajp/kevy</code> (npm)</td><td>—</td><td>4.0.0</td><td>new in 4.0 — <a href="../wasm/">docs/wasm.md</a></td></tr><tr><td>Infra crates (<code>kevy-store</code>, <code>kevy-rt</code>, …)</td><td>3.18.x</td><td>4.0.0</td><td>follow the workspace version</td></tr></tbody></table></div>
+<h2 id="what-is-compatible-automatically">What is compatible automatically</h2>
+<p><b>Wire protocol.</b> RESP is unchanged, and every verb alias (<code>SLAVEOF</code>, <code>HMSET</code>, …) is kept. Redis clients, scripts, and <code>redis-cli</code> sessions work as before; the reply-parity suite against valkey 9.1 still gates CI.</p>
+<p><b>Snapshots and AOF.</b> A 4.0 binary reads every 3.x (and 2.x) snapshot format and replays 3.x AOFs unchanged. Formats did not change in 4.0 — downgrade to 3.18 is equally a binary swap (unlike the 3.x → 2.x direction, which has a format edge; see the 2.x → 3.x chapter).</p>
+<p><b>Config.</b> Every 3.x config key is accepted and means the same thing. Two keys got <i>stricter or truer</i> semantics — see "Behavior changes" below (<code>notify_keyspace_events</code> unknown-flag rejection, <code>min_replicas_max_lag_ms</code> enforcement).</p>
+<p><b>One removed knob.</b> Custom snapshot/AOF <i>filenames</i> are gone (the <code>kevy-embedded</code> <code>Config::with_snapshot_filename</code> / <code>with_aof_filename</code> builders). The on-disk layout is now fixed at <code>dump-{i}.rdb</code> / <code>aof-{i}.aof</code> per shard. Directories that used the default names — including every legacy single-file dir — load unchanged; only dirs written under a <i>custom</i> name need a one-time <code>mv</code> to the fixed names before the first 4.0 open.</p>
+<h2 id="the-api-break-table">The API break table</h2>
+<p>Everything in this section is a compile-time break with a mechanical fix. Nothing here changes runtime semantics except where called out.</p>
+<h3 id="1-flush-shims-removed">1. <code>flush()</code> shims removed</h3>
+<p>The deprecated aliases are gone; the surviving name says what it does (it WIPES the store):</p>
+<div class="tbl"><table><thead><tr><th>Crate</th><th>Removed</th><th>Call instead</th></tr></thead><tbody><tr><td><code>kevy-embedded</code></td><td><code>Store::flush()</code></td><td><code>Store::flushall()</code></td></tr><tr><td><code>kevy-client</code></td><td><code>Connection::flush()</code></td><td><code>Connection::flushall()</code></td></tr><tr><td><code>kevy-store</code></td><td><code>Store::flush()</code></td><td><code>Store::flushall()</code></td></tr></tbody></table></div>
+<h3 id="2-one-error-currency-kevyerror">2. One error currency: <code>KevyError</code></h3>
+<p>Every public fallible face of <code>kevy-embedded</code> and <code>kevy-client</code> now returns <code>KevyResult&lt;T&gt;</code> (<code>Result&lt;T, KevyError&gt;</code>) instead of <code>io::Result&lt;T&gt;</code>. The type lives in <code>kevy-store</code> and is re-exported by both crates:</p>
+<figure class="code"><pre><code class="lang-rust">pub enum KevyError {
+    Store(StoreError),      // structured engine errors, no longer
+                            // flattened into io::Error strings
+    Io(std::io::Error),     // real I/O, preserved via From
+    Protocol(String),       // server error replies, wire text intact
+    ReadOnly,               // replica write rejection
+    InvalidInput(String),   // e.g. URL parse errors
+    NotFound(String),
+    Unsupported(String),    // e.g. remote-only calls on embedded
+    TimedOut,               // e.g. Subscription::recv_timeout
+    Closed,                 // stream/bus gone; also terminates
+                            // subscriber iterators
+}</code></pre></figure>
+<p>Migration is usually just the return-type annotation — <code>?</code> keeps working because <code>From&lt;io::Error&gt;</code> and <code>From&lt;StoreError&gt;</code> exist:</p>
+<figure class="code"><pre><code class="lang-rust">// 3.x
+fn warm(conn: &amp;mut Connection) -&gt; std::io::Result&lt;()&gt; {
+    conn.set(b"greeting", b"hello")?;
+    Ok(())
+}
+
+// 4.0
+use kevy_client::{Connection, KevyResult};
+
+fn warm(conn: &amp;mut Connection) -&gt; KevyResult&lt;()&gt; {
+    conn.set(b"greeting", b"hello")?;
+    Ok(())
+}</code></pre></figure>
+<p>Code that <i>inspected</i> errors gets strictly better off — match the variant instead of parsing strings:</p>
+<div class="tbl"><table><thead><tr><th>3.x signal</th><th>4.0</th></tr></thead><tbody><tr><td><code>io::Error::other("kevy-store: …")</code> wrapper text</td><td><code>KevyError::Store(e)</code> — the structured <code>StoreError</code></td></tr><tr><td>replica write rejection: <code>io::Error::other("READONLY …")</code></td><td><code>KevyError::ReadOnly</code> (its <code>Display</code> still starts with <code>READONLY</code>)</td></tr><tr><td>server <code>-ERR …</code> replies as opaque <code>io::Error</code></td><td><code>KevyError::Protocol(text)</code> — wire text preserved</td></tr><tr><td><code>ErrorKind::TimedOut</code> from <code>Subscription::recv_timeout</code></td><td><code>KevyError::TimedOut</code></td></tr><tr><td><code>ErrorKind::UnexpectedEof</code> as the subscriber-stream-gone signal</td><td><code>KevyError::Closed</code>; <code>SubscriberEvents</code> / <code>SubscriberMessages</code> iterators yield <code>KevyResult&lt;_&gt;</code> and end on it</td></tr><tr><td><code>ErrorKind::Unsupported</code> for remote-only features</td><td><code>KevyError::Unsupported(msg)</code></td></tr></tbody></table></div>
+<p>There is deliberately <b>no</b> <code>From&lt;KevyError&gt; for io::Error</code>: that back-edge would reinstate the lossy downgrade this change removes. At a boundary that truly needs <code>io::Error</code>, convert explicitly and own the loss.</p>
+<p>(<code>kevy-resp-client</code> keeps its <code>io::Result</code> face on purpose — it is a pure transport stone and <code>io::Error</code> is its honest currency.)</p>
+<h3 id="3-constructor-naming-resources-open-network-connect">3. Constructor naming: resources <code>open</code>, network <code>connect</code></h3>
+<p>One verb per kind, everywhere. Local, file-backed things <code>open</code>; things with a peer <code>connect</code>; pure in-memory values <code>new</code>. The renames:</p>
+<div class="tbl"><table><thead><tr><th>Crate</th><th>3.x</th><th>4.0</th></tr></thead><tbody><tr><td><code>kevy-client</code></td><td><code>Connection::open(url)</code></td><td><code>Connection::connect(url)</code></td></tr><tr><td><code>kevy-client</code></td><td><code>Subscriber::open(url, channels)</code></td><td><code>Subscriber::connect_channels(url, channels)</code></td></tr><tr><td><code>kevy-client-async</code></td><td><code>AsyncConnection::open(url)</code></td><td><code>AsyncConnection::connect(url)</code></td></tr><tr><td><code>kevy-client-async</code></td><td><code>AsyncSubscriber::open(url, channels)</code></td><td><code>AsyncSubscriber::connect_channels(url, channels)</code></td></tr><tr><td><code>kevy-resp-client</code></td><td><code>RespClient::from_url(url)</code></td><td><code>RespClient::connect_url(url)</code></td></tr></tbody></table></div>
+<p>Already conforming, unchanged: <code>kevy_embedded::Store::open</code>, <code>kevy_persist::Aof::open</code>, <code>kevy_store::Store::new</code>, <code>ClusterClient::connect</code>, <code>RwClient::connect</code>, <code>Subscriber::connect(url)</code>, <code>RespClient::connect(host, port)</code>.</p>
+<h3 id="4-kevy-rtruntime-is-built-not-positioned">4. <code>kevy_rt::Runtime</code> is built, not positioned</h3>
+<p>The positional constructor is gone; <code>Runtime</code> is its own builder:</p>
+<figure class="code"><pre><code class="lang-rust">// 3.x
+let rt = Runtime::new([127, 0, 0, 1], 6004, 4, commands);
+
+// 4.0
+let rt = Runtime::builder(commands)
+    .bind([127, 0, 0, 1], 6004)
+    .shards(4);</code></pre></figure>
+<p><code>builder(commands)</code> defaults: bind <code>127.0.0.1:6004</code>, 1 shard, AOF on (<code>EverySec</code>), data dir <code>"."</code>. <code>bind</code> / <code>shards</code> are <code>#[must_use]</code> setters like the existing <code>with_*</code> chain. This is also the visible face of the 4.0 instance work: a <code>Runtime</code> no longer touches global state, so one process can run several independent kevy instances.</p>
+<h3 id="5-kevy-store-writes-take-borrowed-argv">5. <code>kevy-store</code> writes take borrowed argv</h3>
+<p>The owned-argument forms are removed; the borrowed forms (previously the <code>_borrowed</code> twins) now own the canonical names:</p>
+<div class="tbl"><table><thead><tr><th>3.x (owned)</th><th>4.0 (borrowed, same name)</th></tr></thead><tbody><tr><td><code>del(&amp;[Vec&lt;u8&gt;])</code> / <code>exists(&amp;[Vec&lt;u8&gt;])</code></td><td><code>del(&amp;[&amp;[u8]])</code> / <code>exists(&amp;[&amp;[u8]])</code></td></tr><tr><td><code>hset(&amp;[(Vec&lt;u8&gt;, Vec&lt;u8&gt;)])</code> / <code>hdel(&amp;[Vec&lt;u8&gt;])</code> / <code>hmget(&amp;[Vec&lt;u8&gt;])</code></td><td><code>hset(&amp;[(&amp;[u8], &amp;[u8])])</code> / <code>hdel(&amp;[&amp;[u8]])</code> / <code>hmget(&amp;[&amp;[u8]])</code></td></tr><tr><td><code>sadd</code> / <code>srem</code> / <code>lpush</code> / <code>rpush</code> / <code>zrem</code> <code>(&amp;[Vec&lt;u8&gt;])</code></td><td>same names, <code>(&amp;[&amp;[u8]])</code></td></tr><tr><td><code>zadd(&amp;[(f64, Vec&lt;u8&gt;)])</code></td><td><code>zadd(&amp;[(f64, &amp;[u8])])</code></td></tr><tr><td><code>zadd_flags_borrowed(…)</code></td><td>renamed <code>zadd_flags(…)</code></td></tr></tbody></table></div>
+<figure class="code"><pre><code class="lang-rust">// 3.x
+store.del(&amp;[b"k1".to_vec(), b"k2".to_vec()]);
+
+// 4.0 — pass slices; no allocation
+store.del(&amp;[b"k1".as_slice(), b"k2".as_slice()]);</code></pre></figure>
+<p>This is a performance fix wearing an API change: <code>kevy-embedded</code>'s facades now hand borrowed argv straight through, and the per-call <code>to_vec()</code> copies on every embedded write path are gone.</p>
+<h3 id="6-commands-trait-route-embedders-with-a-custom-command-set">6. <code>Commands</code> trait + <code>Route</code> (embedders with a custom command set)</h3>
+<p>Only relevant if you <code>impl kevy_rt::Commands</code> yourself:</p>
+<ul><li><code>dispatch_resp3</code> (Vec-returning form) removed — override <code>dispatch_into_resp3</code>.</li><li><code>wake_idx</code> method removed — populate <code>ResolvedCmd::wake_idx</code> in your <code>resolve()</code>; the field is unchanged.</li><li><code>extension_reduce_v3</code> and the old two-arg <code>extension_reduce</code> merged into <code>extension_reduce(argv, chunks, proto) -&gt; ExtensionReduced</code>; return <code>ExtensionReduced::Reply(bytes)</code>, or <code>ExtensionReduced::Continue(argv2)</code> instead of the old NUL-prefixed in-band continuation frame.</li><li><code>Route::{MGet, SInter, SUnion, SDiff, ZInterCard}</code> collapsed into <code>Route::Gather(MultiOp)</code>; <code>Route::{Keys, Scan, RandomKey}</code> into <code>Route::Keyspace(KeyShape, Option&lt;Vec&lt;u8&gt;&gt;)</code>. <code>MultiOp</code> and <code>KeyShape</code> are newly public.</li><li><code>Commands::on_replication_view</code> replicas entry is now <code>(String, Ipv4Addr, u16, u64, Option&lt;ReplicaAck&gt;)</code> — a leading replica-id <code>String</code>, then the peer <code>(Ipv4Addr, u16)</code>, the sent offset, and <code>ReplicaAck { acked_offset, ack_age_ms }</code> (which replaces the bare acked offset); destructure it.</li></ul>
+<h2 id="behavior-changes-no-code-change-ops-visible">Behavior changes (no code change, ops-visible)</h2>
+<ul><li><b><code>-LOADING</code> is real.</b> While a replica swallows a full-resync snapshot, reads answer <code>-LOADING</code> instead of serving the half-replaced dataset. <code>PING</code>, <code>INFO</code>, and <code>HELLO</code> stay answerable (health checks keep working), matching the verbs Redis exempts. Retry-on-<code>-LOADING</code> loops written for Redis behave correctly as-is.</li><li><b><code>notify_keyspace_events</code> rejects unknown flag characters</b> at config parse instead of silently ignoring them — and the flag set grew real <code>x</code> (expired), <code>e</code> (evicted), and <code>n</code> (new-key) events. A config that previously smuggled a typo through will now fail loudly; fix the flag string.</li><li><b><code>min-replicas-to-write</code> counts only live ACKs.</b> The <code>min_replicas_max_lag_ms</code> key existed in 3.x and is now enforced: a replica whose last ACK is older than the window no longer satisfies the write gate. Deployments relying on a <i>stalled</i> replica to keep writes flowing will see <code>-NOREPLICAS</code> — which is the semantics the key always promised.</li><li><b>The <code>CLIENT</code> face tells the truth</b>: <code>CLIENT LIST</code> is the real connection table (getpeername-backed addresses, globally unique ids), <code>CLIENT KILL</code> really kills (including blocked connections), <code>CLIENT SETNAME</code> sticks, and <code>connected_clients</code> in <code>INFO</code> is a live gauge.</li><li><b><code>SHUTDOWN</code> drains gracefully</b>: in-flight replies finish and the AOF gets a final fsync before exit, closing the everysec tail window that a bare SIGTERM used to leave unsynced.</li><li><b><code>ROLE</code> / <code>INFO replication</code> aggregate across shards</b> with per-replica identity (<code>ip:port</code> and true per-replica offsets). Parsers that assumed one summary line per server keep working; the per-replica lines are richer.</li></ul>
+<h2 id="the-feature-system-new-in-40">The feature system (new in 4.0)</h2>
+<p><code>kevy-embedded</code> is now feature-tiered so small targets pay only for what they use. The default remains everything-on:</p>
+<div class="tbl"><table><thead><tr><th>Feature</th><th>Adds</th><th>Pulls in</th></tr></thead><tbody><tr><td><code>core</code></td><td>KV + TTL + pubsub + atomic/pipeline</td><td>(nothing)</td></tr><tr><td><code>persist</code></td><td>snapshots + AOF</td><td><code>kevy-persist</code></td></tr><tr><td><code>index</code></td><td>declared indexes + views</td><td><code>kevy-index</code></td></tr><tr><td><code>text</code></td><td>full-text (BM25) segments</td><td><code>index</code>, <code>kevy-text</code></td></tr><tr><td><code>vector</code></td><td>HNSW ANN segments</td><td><code>index</code>, <code>kevy-vector</code></td></tr><tr><td><code>replicate</code></td><td>replication + CDC feed</td><td><code>persist</code>, <code>kevy-replicate</code></td></tr><tr><td><code>listener</code></td><td>read-only RESP listener</td><td>(nothing)</td></tr></tbody></table></div>
+<p>The <code>core</code> tier cross-compiles for musl targets and holds an enforced budget (≤ 700 KB binary, ≤ 2 MB empty-store RSS); five foundation crates additionally build <code>no_std</code>. See <a href="../iot/">docs/iot.md</a>. At the other end of the size spectrum, the same embedded core now runs in the browser as <code>@goliajp/kevy</code> — see <a href="../wasm/">docs/wasm.md</a>.</p>
+<h2 id="downgrading-40-318">Downgrading 4.0 → 3.18</h2>
+<p>Binary swap back; snapshot and AOF formats are shared. The only edge: a config file using the new notify flags (<code>x</code>/<code>e</code>/<code>n</code>) parses on 3.18 but the events never fire there.</p>
+<hr>
+<h1 id="2x-3x">2.x → 3.x</h1>
+<p>kevy 3.x is a superset of 2.x: every 2.x workload runs unchanged, and the upgrade is a binary swap for the server and a dependency bump for embedded users. This chapter is explicit about what carries over automatically, what changed names or numbers, and the one direction that needs care (downgrading back to 2.x).</p>
+<h2 id="tldr-versions-at-a-glance">TL;DR — versions at a glance</h2>
+<div class="tbl"><table><thead><tr><th>Component</th><th>2.x era</th><th>3.x (final: 3.18.x)</th><th>Action</th></tr></thead><tbody><tr><td><code>kevy</code> (server)</td><td>2.0.x</td><td>3.18.x</td><td>swap the binary, restart on the same data dir</td></tr><tr><td><code>kevy-embedded</code></td><td><b>1.x</b> (1.4–1.16)</td><td><b>3.x</b></td><td>bump the dep — the 1.x line ended at v3.0.0 when the whole workspace unified on one version</td></tr><tr><td><code>kevy-client</code></td><td>1.12.x</td><td>1.13–1.14</td><td>bump; API unchanged</td></tr><tr><td><code>kevy-client-async</code></td><td>1.0.x</td><td>1.1.x</td><td>bump; API unchanged</td></tr><tr><td><code>kevy-cli</code></td><td>unpublished</td><td>3.x</td><td><code>cargo install kevy-cli</code> — now carries the whole migration toolchain</td></tr><tr><td>Infra crates (<code>kevy-store</code>, <code>kevy-rt</code>, …)</td><td>2.0.x</td><td>3.x</td><td>follow the workspace version</td></tr></tbody></table></div>
+<p>The <code>kevy-embedded</code> jump from 1.x to 3.x is a <b>version-line unification, not an API rewrite</b>: the 1.16 surface is contained in 3.x. If your <code>Cargo.toml</code> says <code>kevy-embedded = "1"</code>, change it to <code>"3"</code> and rebuild — or go straight to <code>"4"</code> with the chapter above.</p>
+<h2 id="what-is-compatible-automatically">What is compatible automatically</h2>
+<p><b>Wire protocol.</b> RESP is unchanged. 3.x remains reply-checked byte-for-byte against valkey 9.1 in CI (98 commands). Existing Redis clients, scripts, and <code>redis-cli</code> sessions work as before.</p>
+<p><b>Snapshots.</b> The 3.x loader reads every 2.x snapshot format (<code>KEVYSNAP</code> versions 2–5): relative-TTL v2 files, absolute-TTL v3, stream-group v4, and feed-cursor v5. Point a 3.x server at a 2.x data directory and it loads.</p>
+<p><b>AOF.</b> The AOF is a verb log and 3.x's verb set is a superset of 2.x's — replay works unchanged. <code>appendfsync</code> semantics are unchanged.</p>
+<p><b>Config.</b> Every 2.x config key is accepted. New sections (<code>[replication] single_source</code>, <code>--accept-shards</code>, …) are additive with defaults that reproduce 2.x behavior.</p>
+<h2 id="upgrade-steps">Upgrade steps</h2>
+<h3 id="server-deployment">Server deployment</h3>
+<ol><li>Take a snapshot on the running 2.x server (<code>SAVE</code> or your normal backup), and keep a copy — see “Downgrading” below for why.</li><li>Stop 2.x, start the 3.x binary with the same flags and data dir.</li><li>Verify: <code>DBSIZE</code> matches, and if you want cryptographic-grade assurance run <code>kevy-cli digest -p &lt;port&gt; &lt;prefix&gt;</code> before and after — equal digests mean an identical keyspace.</li></ol>
+<p>Rolling a replica pair: upgrade the replica first, let it re-sync, then fail traffic over and upgrade the former primary. (2.x has no managed failover, so from 2.x this is the usual manual swap. Once you are on 3.15+, the fail-over step itself becomes one verb — <code>FAILOVER host port</code> — see <a href="../availability/">docs/availability.md</a>.)</p>
+<h3 id="embedded-applications">Embedded applications</h3>
+<ol><li><code>kevy-embedded = "3"</code> in <code>Cargo.toml</code>.</li><li>Rebuild. The 1.16 API is present unchanged; new capability surfaces (index/view/text/vector/feed/replication) are additive methods and <code>Config</code> options.</li><li>One trait note: if (and only if) you wrote a custom <code>impl kevy_rt::Commands</code> and construct <code>ResolvedCmd</code> literals, two fields were added during the v2 arc (<code>block_hint</code>, <code>wake_idx</code>). The default <code>resolve()</code> fills them; literal constructors add the two fields.</li><li>On-disk data from an embedded 1.x app loads as-is (same snapshot formats as the server).</li></ol>
+<h3 id="clients">Clients</h3>
+<p><code>kevy-client 1.13+</code> / <code>kevy-client-async 1.1</code> are drop-in: the minor bump only re-pins internal crates to the 3.x workspace. Generic Redis client libraries are unaffected either way.</p>
+<h2 id="what-3x-adds-why-you-upgrade">What 3.x adds (why you upgrade)</h2>
+<p>Declared indexes with hydration (<code>IDX.*</code>), named views (<code>VIEW.*</code>), write-time aggregates (GROUP BY / distributed top-K), dictionary-free CJK full-text search with BM25, HNSW vector KNN (plus hybrid BM25+KNN fusion), CDC feeds with the recovery-point contract (<code>FEED.*</code>), embedded-as-primary replication, the machine-readable contract (<code>COMMAND DOCS</code>, generated references, the <code>kevy-mcp</code> MCP server), the availability arc (replication lag truth, <code>FAILOVER</code>, quorum crash elections, the <code>WAIT</code> / <code>REPL.TOKEN</code> / <code>REPL.WAIT</code> consistency ladder — <a href="../availability/">docs/availability.md</a>), and the migration toolchain (<code>kevy-cli import/export/--verify/diff/ inspect/digest</code>). Start at <a href="../designing-on-kevy/">docs/designing-on-kevy.md</a> and <a href="../cookbook/">docs/cookbook.md</a>; performance receipts live in <a href="https://github.com/goliajp/kevy/blob/main/bench/PERF-LEDGER.md">bench/PERF-LEDGER.md</a>.</p>
+<p>None of these activate implicitly: a 3.x server with a 2.x workload has an empty catalog, and the index hook on an empty catalog is on the perfgate ratchet (no regression vs 2.x).</p>
+<h2 id="downgrading-the-one-direction-that-needs-care">Downgrading (the one direction that needs care)</h2>
+<p>A 3.x server <b>writes</b> snapshot format v4, or v5 once a CDC feed cursor exists. A 2.x binary reads at most v4:</p>
+<ul><li>If you never enabled feeds, a 3.x snapshot loads on 2.x.</li><li>If feeds were active (v5), 2.x refuses the file. Downgrade path: <code>kevy-cli export</code> on 3.x → <code>kevy-cli import</code> into a fresh 2.x — or restore the pre-upgrade backup from step 1 and accept the gap.</li></ul>
+<p>Verbs introduced in 3.x (<code>IDX.*</code>, <code>VIEW.*</code>, <code>FEED.*</code>, …) naturally don't replay on a 2.x binary — if you used them, the export/import path is the correct downgrade, not AOF replay.</p>
+<h2 id="version-history-in-one-line-each">Version history in one line each</h2>
+<ul><li><b>3.0.0</b> — the serving-engine declaration (indexes, views, FTS, ANN, CDC, on-ramp; eleven gated trains).</li><li><b>3.8.0</b> — the perf arc (measured vs valkey 9.1 and RediSearch; bare face 1.6–3.3×, ANN 1.64× ahead at recall 1.000, FTS single common term 93×; embedded-as-primary replication). No releases were cut between 3.0.0 and 3.8.0; 3.8.0 contains trains v3.1–v3.8.</li><li><b>3.17.0</b> — the availability release: the AI-native serving faces (machine-readable verb contract, generated docs, <code>kevy-mcp</code>, hybrid retrieval) and the availability arc (replication heartbeat/ACK truth, <code>FAILOVER</code> + quorum crash elections, the consistency ladder, contract gates in CI). Contains trains v3.9–v3.17; no releases were cut in between.</li><li><b>3.17.1–3.17.4</b> — maintenance: the <code>luna-core</code> Lua runtime bump, the docs/migration wave, first-adopter feedback (<code>kevy-cli --embed</code>), and the docs/i18n polish wave.</li><li><b>3.18.0</b> — the structure release: LOC debt to zero with the limits enforced in CI, six more stones fuzzed (day-one harvest: four real bugs fixed), miri/pedantic/missing-docs sweeps, Rust 1.97.0.</li></ul></main>
+  <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#tldr-versions-at-a-glance">TL;DR — versions at a glance</a></li><li class="l2"><a href="#what-is-compatible-automatically">What is compatible automatically</a></li><li class="l2"><a href="#the-api-break-table">The API break table</a></li><li class="l3"><a href="#1-flush-shims-removed">1. flush() shims removed</a></li><li class="l3"><a href="#2-one-error-currency-kevyerror">2. One error currency: KevyError</a></li><li class="l3"><a href="#3-constructor-naming-resources-open-network-connect">3. Constructor naming: resources open, network connect</a></li><li class="l3"><a href="#4-kevy-rtruntime-is-built-not-positioned">4. kevy_rt::Runtime is built, not positioned</a></li><li class="l3"><a href="#5-kevy-store-writes-take-borrowed-argv">5. kevy-store writes take borrowed argv</a></li><li class="l3"><a href="#6-commands-trait-route-embedders-with-a-custom-command-set">6. Commands trait + Route (embedders with a custom command set)</a></li><li class="l2"><a href="#behavior-changes-no-code-change-ops-visible">Behavior changes (no code change, ops-visible)</a></li><li class="l2"><a href="#the-feature-system-new-in-40">The feature system (new in 4.0)</a></li><li class="l2"><a href="#downgrading-40-318">Downgrading 4.0 → 3.18</a></li><li class="l2"><a href="#tldr-versions-at-a-glance">TL;DR — versions at a glance</a></li><li class="l2"><a href="#what-is-compatible-automatically">What is compatible automatically</a></li><li class="l2"><a href="#upgrade-steps">Upgrade steps</a></li><li class="l3"><a href="#server-deployment">Server deployment</a></li><li class="l3"><a href="#embedded-applications">Embedded applications</a></li><li class="l3"><a href="#clients">Clients</a></li><li class="l2"><a href="#what-3x-adds-why-you-upgrade">What 3.x adds (why you upgrade)</a></li><li class="l2"><a href="#downgrading-the-one-direction-that-needs-care">Downgrading (the one direction that needs care)</a></li><li class="l2"><a href="#version-history-in-one-line-each">Version history in one line each</a></li></ul></aside>
+</div>
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>
