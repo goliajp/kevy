@@ -154,3 +154,32 @@ asking what could produce a constant 250 ms step. The question "what has a
 
 **When measurements cluster on evenly-spaced levels, suspect the instrument
 before the system.** Added to `.claude/rule/perf-vs-foss.md` as R13.
+
+## What was NOT contaminated
+
+`bench/v125-precision.sh` — the harness behind `bench/REPORT.md`'s headline
+table — passes no `--threads`, so `clientDone` stops it the moment the last
+reply lands (`redis-benchmark.c:425`). Its numbers are continuous: 2.59 M at
+N=1M is 0.386 s, 2.67 M is 0.3745 s, 94.7 k is 10.56 s — none of them a
+multiple of 250 ms. Its **CI95 < 1%** claim is real.
+
+Which makes one thing in `README.md` a straight category error rather than a
+measurement one: the perf section describes the *precision* harness
+("precision-mode with CI95 < 1%") and then prints a table of *arena* numbers
+(GET 6.39 M/s). The method sentence and the figures come from different
+harnesses, and only one of them earns that sentence.
+
+**The contaminated set, exhaustively:**
+
+| harness | `--threads` | status |
+|---|---|---|
+| `bench/arena.sh` | yes | **was quantized** — fixed, re-measured |
+| `bench/perfgate.sh` legacy + zalg angles | yes | **was quantized** — fixed, re-measured |
+| `bench/perfgate.sh` pinned angles | no | clean (8 single-threaded generators) |
+| `bench/loopback_c50.sh` | yes | **was quantized** — fixed |
+| `bench/kevy_ab.sh` | yes | already worked around it, and told nobody |
+| `bench/v125-precision.sh` | no | clean — REPORT.md's CI95 table stands |
+
+Everything downstream of the first three — the README tables, the site's arena
+table and position plot, `docs/rds-workloads.md`, `PERF-LEDGER.md`, and the T9
+four-way — carried the buckets outward.
