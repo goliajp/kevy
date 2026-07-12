@@ -43,3 +43,6 @@ index-catalog.meta
 bench/iot-consumer/target/
 bench/mcu-probe/target/
 bench/iot-consumer/riscv-out
+
+# perfgate builds the reference binary from the baseline commit and caches it here.
+bench/.perfgate-ref/
