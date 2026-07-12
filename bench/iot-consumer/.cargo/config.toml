@@ -1,0 +1,18 @@
+# Cross-link the musl targets with rust-lld, which ships with the
+# toolchain. Without this the host `cc` is invoked for a foreign
+# architecture and fails with "file in wrong format" — building these
+# targets would otherwise need a musl cross-gcc installed on every dev
+# box and CI runner. Every shipped target is listed so the fixture builds
+# the same way on a Linux runner and a darwin dev box, where even
+# x86_64-musl is a cross-link.
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+
+[target.armv7-unknown-linux-musleabihf]
+linker = "rust-lld"
+
+[target.arm-unknown-linux-musleabihf]
+linker = "rust-lld"
