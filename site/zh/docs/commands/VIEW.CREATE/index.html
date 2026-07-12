@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VIEW.CREATE — kevy 命令参考</title>
-<meta name="description" content="VIEW.CREATE — Declare a composed view over indexes with an ORDER BY (catalog mutation, sidecar-persisted). O(tree size) at the call. A materialized view builds lazily on the next tick (a full eval_tree plus an O(M log M) sort); a virtual view builds nothing, ever">
+<meta name="description" content="VIEW.CREATE — 在若干索引之上声明一个组合视图，并指定 ORDER BY(catalog 变更，由 sidecar 持久化)。 调用本身 O(树的大小)。materialized 视图在下一次 tick 惰性构建（一次完整的 eval_tree 加一次 O(M log M) 排序）；virtual 视图则永远不构建任何东西。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>视图</span> <span>/</span> <b>VIEW.CREATE</b></nav>
 
     <h1 class="cmd">VIEW.CREATE</h1>
-    <p class="lede">Declare a composed view over indexes with an ORDER BY (catalog mutation, sidecar-persisted).</p>
+    <p class="lede">在若干索引之上声明一个组合视图，并指定 ORDER BY(catalog 变更，由 sidecar 持久化)。</p>
 
     <pre class="syntax"><code>VIEW.CREATE name QUERY tree ORDER BY index [DESC] [MODE virtual|materialized] [TOPK k] [VIA template] (tree = '( AND|OR|DIFF sub sub )' | 'index RANGE min max' | 'index EQ value')</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(tree size) at the call. A materialized view builds lazily on the next tick (a full eval_tree plus an O(M log M) sort); a virtual view builds nothing, ever</code></p>
+      <p class="cx-body"><code>调用本身 O(树的大小)。materialized 视图在下一次 tick 惰性构建（一次完整的 eval_tree 加一次 O(M log M) 排序）；virtual 视图则永远不构建任何东西。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call warn">
         <span class="h">kevy 独有</span>
-        <p>kevy-only: no Redis analogue. A view is neither a stored query nor a join — it is a named composition tree over declared indexes that stores membership and order only, never field values</p>
+        <p>kevy 独有：Redis 没有对应物。视图既不是存储的查询，也不是 join —— 它是一棵架在已声明索引之上的命名组合树，只存成员关系与顺序，从不存字段值。</p>
       </div>
     </section>
 

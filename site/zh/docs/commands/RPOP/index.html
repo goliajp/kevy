@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RPOP — kevy 命令参考</title>
-<meta name="description" content="RPOP — Pop one or more elements from the tail of a list. O(C) elements popped">
+<meta name="description" content="RPOP — 从 list 尾部弹出一个或多个元素。 O(C)，C 为弹出的元素个数。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>列表</span> <span>/</span> <b>RPOP</b></nav>
 
     <h1 class="cmd">RPOP</h1>
-    <p class="lede">Pop one or more elements from the tail of a list.</p>
+    <p class="lede">从 list 尾部弹出一个或多个元素。</p>
 
     <pre class="syntax"><code>RPOP key [count]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(C) elements popped</code></p>
+      <p class="cx-body"><code>O(C)，C 为弹出的元素个数。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: RPOP key 0 on an existing key replies a nil array where Redis replies an empty array</p>
+        <p>有差异：对已存在的 key 执行 RPOP key 0，kevy 回复一个 nil 数组，Redis 回复的则是空数组。</p>
       </div>
     </section>
 

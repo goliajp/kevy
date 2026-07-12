@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>IDX.COUNT — kevy コマンドリファレンス</title>
-<meta name="description" content="IDX.COUNT — Count index entries matching a range or equality predicate. O(log N + matched) per shard — NOT an O(1) counter and not a B-tree rank query; it counts the matched range">
+<meta name="description" content="IDX.COUNT — 範囲述語または等値述語に一致するインデックスエントリの件数を数える。 shard あたり O(log N + matched) —— O(1) のカウンタでもなければ、B-tree の rank クエリでもない。一致した範囲を実際に数え上げる。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>インデックス</span> <span>/</span> <b>IDX.COUNT</b></nav>
 
     <h1 class="cmd">IDX.COUNT</h1>
-    <p class="lede">Count index entries matching a range or equality predicate.</p>
+    <p class="lede">範囲述語または等値述語に一致するインデックスエントリの件数を数える。</p>
 
     <pre class="syntax"><code>IDX.COUNT name RANGE min max | EQ value</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(log N + matched) per shard — NOT an O(1) counter and not a B-tree rank query; it counts the matched range</code></p>
+      <p class="cx-body"><code>shard あたり O(log N + matched) —— O(1) のカウンタでもなければ、B-tree の rank クエリでもない。一致した範囲を実際に数え上げる。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call warn">
         <span class="h">kevy 固有</span>
-        <p>kevy-only: nearest is FT.SEARCH with LIMIT 0 0</p>
+        <p>kevy 固有。最も近いのは FT.SEARCH の LIMIT 0 0。</p>
       </div>
     </section>
 

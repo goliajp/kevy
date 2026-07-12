@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>REPL.WAIT — kevy 命令参考</title>
-<meta name="description" content="REPL.WAIT — kevy extension: on a replica, block until every shard has applied the given REPL.TOKEN (then reads are read-your-writes); +OK on success, -MISDIRECTED writer is &lt;primary&gt; on timeout or generation mismatch. Default TIMEOUT 1000 ms, hard cap 60 s. On a primary: immediate +OK. O(S) — a barrier, not a keyspace op; the wall-clock cost is the replication lag, bounded by TIMEOUT (default 1s, hard-capped at 60s)">
+<meta name="description" content="REPL.WAIT — kevy 扩展：在副本上阻塞，直到每个 shard 都应用了给定的 REPL.TOKEN(此后的读即为 read-your-writes)；成功返回 +OK，超时或代际不匹配返回 -MISDIRECTED writer is &lt;primary&gt;。TIMEOUT 默认 1000 ms，硬上限 60 s。在主库上：立即返回 +OK。 O(S) —— 这是一道屏障，不是键空间操作；实际耗时就是复制延迟，上界由 TIMEOUT 决定（默认 1s，硬上限 60s）。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>复制</span> <span>/</span> <b>REPL.WAIT</b></nav>
 
     <h1 class="cmd">REPL.WAIT</h1>
-    <p class="lede">kevy extension: on a replica, block until every shard has applied the given REPL.TOKEN (then reads are read-your-writes); +OK on success, -MISDIRECTED writer is &lt;primary&gt; on timeout or generation mismatch. Default TIMEOUT 1000 ms, hard cap 60 s. On a primary: immediate +OK.</p>
+    <p class="lede">kevy 扩展：在副本上阻塞，直到每个 shard 都应用了给定的 REPL.TOKEN(此后的读即为 read-your-writes)；成功返回 +OK，超时或代际不匹配返回 -MISDIRECTED writer is &lt;primary&gt;。TIMEOUT 默认 1000 ms，硬上限 60 s。在主库上：立即返回 +OK。</p>
 
     <pre class="syntax"><code>REPL.WAIT gen offset [gen offset ...] [TIMEOUT milliseconds]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(S) — a barrier, not a keyspace op; the wall-clock cost is the replication lag, bounded by TIMEOUT (default 1s, hard-capped at 60s)</code></p>
+      <p class="cx-body"><code>O(S) —— 这是一道屏障，不是键空间操作；实际耗时就是复制延迟，上界由 TIMEOUT 决定（默认 1s，硬上限 60s）。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call warn">
         <span class="h">kevy 独有</span>
-        <p>kevy-only: waits until a (generation, offset) token has been applied, which is what makes read-your-writes possible across a failover</p>
+        <p>kevy 独有：等待某个 (generation, offset) 令牌被应用 —— 正是这一点让 read-your-writes 能跨故障转移成立。</p>
       </div>
     </section>
 

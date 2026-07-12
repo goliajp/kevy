@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RENAME — kevy 命令参考</title>
-<meta name="description" content="RENAME — Rename a key, overwriting the destination (write routed at the runtime Op level). O(1) for a string value; O(M) for a collection of M elements (the entry's weight is re-derived by walking the value)">
+<meta name="description" content="RENAME — 重命名 key，直接覆盖掉目标 key（写在 runtime 的 Op 层路由）。 字符串值是 O(1)；含 M 个元素的容器是 O(M) —— 条目的权重要靠遍历整个值重新算一遍。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>通用键操作</span> <span>/</span> <b>RENAME</b></nav>
 
     <h1 class="cmd">RENAME</h1>
-    <p class="lede">Rename a key, overwriting the destination (write routed at the runtime Op level).</p>
+    <p class="lede">重命名 key，直接覆盖掉目标 key（写在 runtime 的 Op 层路由）。</p>
 
     <pre class="syntax"><code>RENAME key newkey</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(1) for a string value; O(M) for a collection of M elements (the entry's weight is re-derived by walking the value)</code></p>
+      <p class="cx-body"><code>字符串值是 O(1)；含 M 个元素的容器是 O(M) —— 条目的权重要靠遍历整个值重新算一遍。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: a cross-shard rename is a non-atomic Take then Put — there is a window in which neither key is visible; co-locate the two keys with a {hashtag} for the atomic path</p>
+        <p>有差异：跨 shard 的重命名是先 Take 再 Put 的非原子序列 —— 中间存在一个两个 key 都看不见的窗口。想走原子路径，就用 {hashtag} 把两个 key 固定到同一个 shard 上。</p>
       </div>
     </section>
 

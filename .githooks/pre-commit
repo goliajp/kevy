@@ -22,11 +22,26 @@ set -euo pipefail
 
 readonly LOC_LIMIT=500
 
-# Staged Rust source files under crates/<x>/src/, excluding any path
-# segment containing `tests` or `benches` (test files exempt).
+# Staged Rust source files under crates/<x>/src/, minus the test files.
+#
+# A test file is not only one under a tests/ directory. Rust's usual way to
+# unit-test private items is a `#[cfg(test)] #[path = "foo_tests.rs"] mod`
+# hanging off the source file, so plenty of pure-test code lives in src/ —
+# store_tests_more.rs, map_tests.rs, elector_tests.rs. Those are exempt too, and
+# for the same reason: a 700-line test file is a long list of independent cases,
+# not a function that got away from someone.
+#
+# This mirrors bench/locgate.sh, which CI runs. Two gates that disagree about
+# what they are gating is worse than one gate — the author fixes whichever one
+# happens to fire and learns the wrong rule.
+# The three clauses below are bench/locgate.sh's exemption, character for
+# character: a `/tests` path segment, a `_tests.rs` suffix, or a `tests_` run
+# anywhere in the basename (which is what catches store_tests_more.rs).
 staged=$(git diff --cached --name-only --diff-filter=ACM \
   | grep -E '^crates/[^/]+/src/.*\.rs$' \
-  | grep -vE '(^|/)(tests|benches)(/|$)' \
+  | grep -vE '/tests' \
+  | grep -vE '_tests\.rs$' \
+  | grep -vE '/[^/]*tests_[^/]*\.rs$' \
   || true)
 
 if [ -z "$staged" ]; then

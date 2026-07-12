@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SAVE — kevy 命令参考</title>
-<meta name="description" content="SAVE — Synchronously snapshot the dataset to disk. O(S) fan-out; O(N/S) copy-on-write freeze per shard">
+<meta name="description" content="SAVE — 把数据集同步快照到磁盘。 O(S) 扇出；每个 shard 做 O(N/S) 的写时复制冻结。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>服务器</span> <span>/</span> <b>SAVE</b></nav>
 
     <h1 class="cmd">SAVE</h1>
-    <p class="lede">Synchronously snapshot the dataset to disk.</p>
+    <p class="lede">把数据集同步快照到磁盘。</p>
 
     <pre class="syntax"><code>SAVE</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(S) fan-out; O(N/S) copy-on-write freeze per shard</code></p>
+      <p class="cx-body"><code>O(S) 扇出；每个 shard 做 O(N/S) 的写时复制冻结。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: SAVE is no longer synchronous-until-durable — it freezes a copy-on-write view and replies OK immediately, so 'SAVE returned, therefore the dump is safe to copy' no longer holds</p>
+        <p>有差异：SAVE 不再是「同步到落盘为止」—— 它冻结一份写时复制视图后立刻返回 OK，因此「SAVE 返回了，所以 dump 文件可以放心拷走」这个前提不再成立。</p>
       </div>
     </section>
 

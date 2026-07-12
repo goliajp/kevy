@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZPOPMIN.BELOW — kevy コマンドリファレンス</title>
-<meta name="description" content="ZPOPMIN.BELOW — kevy extension: pop up to count lowest members with score strictly below the threshold (delayed-job primitive). O(M log N) — take_while stops at the first score at or above the threshold, so it never walks past the due prefix">
+<meta name="description" content="ZPOPMIN.BELOW — kevy 拡張。スコアが閾値より厳密に小さいメンバーを、低い方から最大 count 個 pop する(遅延ジョブ用のプリミティブ)。 O(M log N) —— take_while は閾値以上のスコアに当たった時点で止まるため、期限の来た先頭部分より先へは進まない。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ソート済み集合</span> <span>/</span> <b>ZPOPMIN.BELOW</b></nav>
 
     <h1 class="cmd">ZPOPMIN.BELOW</h1>
-    <p class="lede">kevy extension: pop up to count lowest members with score strictly below the threshold (delayed-job primitive).</p>
+    <p class="lede">kevy 拡張。スコアが閾値より厳密に小さいメンバーを、低い方から最大 count 個 pop する(遅延ジョブ用のプリミティブ)。</p>
 
     <pre class="syntax"><code>ZPOPMIN.BELOW key below [count]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(M log N) — take_while stops at the first score at or above the threshold, so it never walks past the due prefix</code></p>
+      <p class="cx-body"><code>O(M log N) —— take_while は閾値以上のスコアに当たった時点で止まるため、期限の来た先頭部分より先へは進まない。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call warn">
         <span class="h">kevy 固有</span>
-        <p>kevy-only: a delayed-job primitive (score = due time); no Redis analogue</p>
+        <p>kevy 固有。遅延ジョブ用のプリミティブ(スコア = 実行予定時刻)。Redis に対応するコマンドは無い。</p>
       </div>
     </section>
 

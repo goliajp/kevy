@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VIEW.REBUILD — kevy 命令参考</title>
-<meta name="description" content="VIEW.REBUILD — Force a rebuild of a materialized view. Materialized only. A full eval_tree over the whole tree plus an O(M log M) sort and re-insert, on every shard, now (not deferred to a tick)">
+<meta name="description" content="VIEW.REBUILD — 强制重建一个 materialized 视图。 仅对 materialized 视图有效。在每个 shard 上立刻（而不是推迟到某次 tick）对整棵树做一次完整的 eval_tree，再加上 O(M log M) 的排序与重新插入。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>视图</span> <span>/</span> <b>VIEW.REBUILD</b></nav>
 
     <h1 class="cmd">VIEW.REBUILD</h1>
-    <p class="lede">Force a rebuild of a materialized view.</p>
+    <p class="lede">强制重建一个 materialized 视图。</p>
 
     <pre class="syntax"><code>VIEW.REBUILD name</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>Materialized only. A full eval_tree over the whole tree plus an O(M log M) sort and re-insert, on every shard, now (not deferred to a tick)</code></p>
+      <p class="cx-body"><code>仅对 materialized 视图有效。在每个 shard 上立刻（而不是推迟到某次 tick）对整棵树做一次完整的 eval_tree，再加上 O(M log M) 的排序与重新插入。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call warn">
         <span class="h">kevy 独有</span>
-        <p>kevy-only</p>
+        <p>kevy 独有。</p>
       </div>
     </section>
 

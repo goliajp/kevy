@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VIEW.LIST — kevy コマンドリファレンス</title>
-<meta name="description" content="VIEW.LIST — List declared views with their mode and shape. O(views) at the origin — the catalog is process-global">
+<meta name="description" content="VIEW.LIST — 宣言済みの view を、モードと形状とともに列挙する。 origin 側で O(views) —— カタログはプロセス全体で共有される。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ビュー</span> <span>/</span> <b>VIEW.LIST</b></nav>
 
     <h1 class="cmd">VIEW.LIST</h1>
-    <p class="lede">List declared views with their mode and shape.</p>
+    <p class="lede">宣言済みの view を、モードと形状とともに列挙する。</p>
 
     <pre class="syntax"><code>VIEW.LIST</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(views) at the origin — the catalog is process-global</code></p>
+      <p class="cx-body"><code>origin 側で O(views) —— カタログはプロセス全体で共有される。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call warn">
         <span class="h">kevy 固有</span>
-        <p>kevy-only</p>
+        <p>kevy 固有。</p>
       </div>
     </section>
 

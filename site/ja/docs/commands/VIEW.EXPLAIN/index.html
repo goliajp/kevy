@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VIEW.EXPLAIN — kevy コマンドリファレンス</title>
-<meta name="description" content="VIEW.EXPLAIN — Explain a view's composition tree with per-leaf cardinalities. O(sum over leaves of (log N + matched)) — each leaf's cardinality is a real count, so EXPLAIN on a broad leaf costs as much as counting it">
+<meta name="description" content="VIEW.EXPLAIN — view の合成ツリーを、葉ごとのカーディナリティつきで説明する。 葉ごとの (log N + matched) の総和。各葉のカーディナリティは実際に数えた値であるため、広い葉に対する EXPLAIN は、その葉を数えるのと同じだけのコストがかかる。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ビュー</span> <span>/</span> <b>VIEW.EXPLAIN</b></nav>
 
     <h1 class="cmd">VIEW.EXPLAIN</h1>
-    <p class="lede">Explain a view's composition tree with per-leaf cardinalities.</p>
+    <p class="lede">view の合成ツリーを、葉ごとのカーディナリティつきで説明する。</p>
 
     <pre class="syntax"><code>VIEW.EXPLAIN name</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(sum over leaves of (log N + matched)) — each leaf's cardinality is a real count, so EXPLAIN on a broad leaf costs as much as counting it</code></p>
+      <p class="cx-body"><code>葉ごとの (log N + matched) の総和。各葉のカーディナリティは実際に数えた値であるため、広い葉に対する EXPLAIN は、その葉を数えるのと同じだけのコストがかかる。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call warn">
         <span class="h">kevy 固有</span>
-        <p>kevy-only: nearest is FT.EXPLAIN, which returns a query tree rather than per-leaf cardinalities</p>
+        <p>kevy 固有。最も近いのは FT.EXPLAIN だが、あちらが返すのはクエリツリーであって、葉ごとのカーディナリティではない。</p>
       </div>
     </section>
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SINTERSTORE — kevy コマンドリファレンス</title>
-<meta name="description" content="SINTERSTORE — Store the intersection of the given sets into destination. O(sum of the source cardinalities) + O(result); same no-smallest-first algorithm">
+<meta name="description" content="SINTERSTORE — 指定したセットの積集合を destination に格納する。 O(元セットの濃度の総和) に加え O(結果の要素数)。小さいセットから先に処理しない点は SINTER と同じ。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>集合</span> <span>/</span> <b>SINTERSTORE</b></nav>
 
     <h1 class="cmd">SINTERSTORE</h1>
-    <p class="lede">Store the intersection of the given sets into destination.</p>
+    <p class="lede">指定したセットの積集合を destination に格納する。</p>
 
     <pre class="syntax"><code>SINTERSTORE destination key [key ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(sum of the source cardinalities) + O(result); same no-smallest-first algorithm</code></p>
+      <p class="cx-body"><code>O(元セットの濃度の総和) に加え O(結果の要素数)。小さいセットから先に処理しない点は SINTER と同じ。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call note">
         <span class="h">互換</span>
-        <p>full</p>
+        <p>互換</p>
       </div>
     </section>
 

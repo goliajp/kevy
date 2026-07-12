@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RANDOMKEY — kevy コマンドリファレンス</title>
-<meta name="description" content="RANDOMKEY — Return a random key from the keyspace. O(1) expected">
+<meta name="description" content="RANDOMKEY — キースペースからキーを一つ返す。 O(1)(期待値)">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>キースペース走査</span> <span>/</span> <b>RANDOMKEY</b></nav>
 
     <h1 class="cmd">RANDOMKEY</h1>
-    <p class="lede">Return a random key from the keyspace.</p>
+    <p class="lede">キースペースからキーを一つ返す。</p>
 
     <pre class="syntax"><code>RANDOMKEY</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(1) expected</code></p>
+      <p class="cx-body"><code>O(1)(期待値)</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: the result is NOT random — each shard returns the first live key in hash-bucket order and the reducer takes the first shard's, so a fixed keyspace returns the same key every time; do not use it for sampling</p>
+        <p>差異あり。返るキーはランダムではない。各 shard は hash バケット順で最初に見つかった生存キーを返し、reducer は先頭 shard の分をそのまま採用する。したがってキースペースが変わらない限り毎回同じキーが返る。サンプリング用途には使えない。</p>
       </div>
     </section>
 

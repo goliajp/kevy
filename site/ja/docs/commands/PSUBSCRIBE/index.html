@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PSUBSCRIBE — kevy コマンドリファレンス</title>
-<meta name="description" content="PSUBSCRIBE — Subscribe to channels matching the given glob patterns. O(p * P) — each pattern costs a linear scan of the shared pattern registry">
+<meta name="description" content="PSUBSCRIBE — glob パターンに一致するチャネルを購読する。 O(p * P) —— パターン 1 つにつき、共有パターンレジストリの線形走査が 1 回かかる。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>Pub/Sub</span> <span>/</span> <b>PSUBSCRIBE</b></nav>
 
     <h1 class="cmd">PSUBSCRIBE</h1>
-    <p class="lede">Subscribe to channels matching the given glob patterns.</p>
+    <p class="lede">glob パターンに一致するチャネルを購読する。</p>
 
     <pre class="syntax"><code>PSUBSCRIBE pattern [pattern ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(p * P) — each pattern costs a linear scan of the shared pattern registry</code></p>
+      <p class="cx-body"><code>O(p * P) —— パターン 1 つにつき、共有パターンレジストリの線形走査が 1 回かかる。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call note">
         <span class="h">互換</span>
-        <p>full</p>
+        <p>互換</p>
       </div>
     </section>
 

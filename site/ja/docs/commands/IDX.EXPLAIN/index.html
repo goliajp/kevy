@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>IDX.EXPLAIN — kevy コマンドリファレンス</title>
-<meta name="description" content="IDX.EXPLAIN — The IDX.QUERY parse without the execution: kind, state, est_rows, and the plan line. The plan is parse-only, but est_rows costs the same live stats walk as IDX.LIST">
+<meta name="description" content="IDX.EXPLAIN — IDX.QUERY の解析だけを行い、実行はしない。kind、state、est_rows、そしてプラン 1 行を返す。 プラン自体は解析のみで済むが、est_rows の算出には IDX.LIST と同じ実統計の走査コストがかかる。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>インデックス</span> <span>/</span> <b>IDX.EXPLAIN</b></nav>
 
     <h1 class="cmd">IDX.EXPLAIN</h1>
-    <p class="lede">The IDX.QUERY parse without the execution: kind, state, est_rows, and the plan line.</p>
+    <p class="lede">IDX.QUERY の解析だけを行い、実行はしない。kind、state、est_rows、そしてプラン 1 行を返す。</p>
 
     <pre class="syntax"><code>IDX.EXPLAIN name RANGE min max|EQ value|MATCH text|KNN vector|GROUPS [args ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>The plan is parse-only, but est_rows costs the same live stats walk as IDX.LIST</code></p>
+      <p class="cx-body"><code>プラン自体は解析のみで済むが、est_rows の算出には IDX.LIST と同じ実統計の走査コストがかかる。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call warn">
         <span class="h">kevy 固有</span>
-        <p>kevy-only: nearest is FT.EXPLAIN, which returns a parsed query tree; ours returns kind, build state, estimated rows and a one-line plan</p>
+        <p>kevy 固有。最も近いのは FT.EXPLAIN で、あちらは解析済みのクエリツリーを返す。kevy が返すのは kind、ビルド状態、推定行数、そして 1 行のプランである。</p>
       </div>
     </section>
 

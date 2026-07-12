@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BGSAVE — kevy 命令参考</title>
-<meta name="description" content="BGSAVE — Start a snapshot save in the background. O(S) fan-out; O(N/S) copy-on-write freeze per shard on the reactor, then serialise off-thread">
+<meta name="description" content="BGSAVE — 在后台开始一次快照保存。 O(S) 扇出；每个 shard 在 reactor 上做 O(N/S) 的写时复制冻结，随后在别的线程上完成序列化。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>服务器</span> <span>/</span> <b>BGSAVE</b></nav>
 
     <h1 class="cmd">BGSAVE</h1>
-    <p class="lede">Start a snapshot save in the background.</p>
+    <p class="lede">在后台开始一次快照保存。</p>
 
     <pre class="syntax"><code>BGSAVE</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(S) fan-out; O(N/S) copy-on-write freeze per shard on the reactor, then serialise off-thread</code></p>
+      <p class="cx-body"><code>O(S) 扇出；每个 shard 在 reactor 上做 O(N/S) 的写时复制冻结，随后在别的线程上完成序列化。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: replies +OK rather than Redis's status line, and writes one dump per shard</p>
+        <p>有差异：返回 +OK 而不是 Redis 的状态行；每个 shard 各写一份 dump。</p>
       </div>
     </section>
 

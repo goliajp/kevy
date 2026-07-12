@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HPERSIST — kevy コマンドリファレンス</title>
-<meta name="description" content="HPERSIST — Remove per-field TTLs from a hash. O(F) fields">
+<meta name="description" content="HPERSIST — ハッシュのフィールド単位の TTL を解除する。 O(F) —— フィールド数 F。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ハッシュ</span> <span>/</span> <b>HPERSIST</b></nav>
 
     <h1 class="cmd">HPERSIST</h1>
-    <p class="lede">Remove per-field TTLs from a hash.</p>
+    <p class="lede">ハッシュのフィールド単位の TTL を解除する。</p>
 
     <pre class="syntax"><code>HPERSIST key FIELDS numfields field [field ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(F) fields</code></p>
+      <p class="cx-body"><code>O(F) —— フィールド数 F。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,13 +63,13 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: silently accepts a stray NX|XX|GT|LT token before FIELDS (it shares HEXPIRE's parser) where Redis rejects it</p>
+        <p>差異あり。FIELDS の手前に紛れ込んだ NX|XX|GT|LT トークンを黙って受理する(HEXPIRE と解析器を共有しているため)。Redis はこれを拒否する。</p>
       </div>
     </section>
 
     <section class="siblings">
       <h2>関連</h2>
-      <p class="sees"><a href="../HDEL/">HDEL</a><a href="../HEXISTS/">HEXISTS</a><a href="../HEXPIRE/">HEXPIRE</a><a href="../HGET/">HGET</a><a href="../HGETALL/">HGETALL</a><a href="../HINCRBY/">HINCRBY</a><a href="../HKEYS/">HKEYS</a><a href="../HLEN/">HLEN</a><a href="../HMGET/">HMGET</a><a href="../HMSET/">HMSET</a><a href="../HPEXPIRE/">HPEXPIRE</a><a href="../HPEXPIREAT/">HPEXPIREAT</a><a href="../HSCAN/">HSCAN</a><a href="../HSET/">HSET</a><a href="../HSETNX/">HSETNX</a><a href="../HTTL/">HTTL</a><a href="../HVALS/">HVALS</a></p>
+      <p class="sees"><a href="../HDEL/">HDEL</a><a href="../HEXISTS/">HEXISTS</a><a href="../HEXPIRE/">HEXPIRE</a><a href="../HGET/">HGET</a><a href="../HGETALL/">HGETALL</a><a href="../HINCRBY/">HINCRBY</a><a href="../HKEYS/">HKEYS</a><a href="../HLEN/">HLEN</a><a href="../HMGET/">HMGET</a><a href="../HMSET/">HMSET</a><a href="../HPEXPIRE/">HPEXPIRE</a><a href="../HPEXPIREAT/">HPEXPIREAT</a><a href="../HPTTL/">HPTTL</a><a href="../HSCAN/">HSCAN</a><a href="../HSET/">HSET</a><a href="../HSETNX/">HSETNX</a><a href="../HTTL/">HTTL</a><a href="../HVALS/">HVALS</a></p>
     </section>
 
     <p class="back"><a href="../">← コマンド一覧へ</a></p>

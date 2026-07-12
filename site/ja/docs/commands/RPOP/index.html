@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RPOP — kevy コマンドリファレンス</title>
-<meta name="description" content="RPOP — Pop one or more elements from the tail of a list. O(C) elements popped">
+<meta name="description" content="RPOP — リストの末尾から要素を一つ以上 pop する。 O(C) —— pop した要素数 C。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>リスト</span> <span>/</span> <b>RPOP</b></nav>
 
     <h1 class="cmd">RPOP</h1>
-    <p class="lede">Pop one or more elements from the tail of a list.</p>
+    <p class="lede">リストの末尾から要素を一つ以上 pop する。</p>
 
     <pre class="syntax"><code>RPOP key [count]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(C) elements popped</code></p>
+      <p class="cx-body"><code>O(C) —— pop した要素数 C。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: RPOP key 0 on an existing key replies a nil array where Redis replies an empty array</p>
+        <p>差異あり。既存のキーに対する RPOP key 0 は、Redis が空の配列を返すのに対し nil 配列を返す。</p>
       </div>
     </section>
 

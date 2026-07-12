@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PING — kevy 命令参考</title>
-<meta name="description" content="PING — Ping the server; returns PONG or echoes the optional message. O(1)">
+<meta name="description" content="PING — 探活；返回 PONG，或回显可选的消息。 O(1)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>连接</span> <span>/</span> <b>PING</b></nav>
 
     <h1 class="cmd">PING</h1>
-    <p class="lede">Ping the server; returns PONG or echoes the optional message.</p>
+    <p class="lede">探活；返回 PONG，或回显可选的消息。</p>
 
     <pre class="syntax"><code>PING [message]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(1)</code></p>
+      <p class="cx-body"><code>O(1)。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: kevy has no RESP2 subscriber mode, so PING while subscribed does not switch to the array form and non-pubsub commands stay legal on a subscribed connection</p>
+        <p>有差异：kevy 没有 RESP2 的订阅者模式，所以订阅状态下的 PING 不会切换成数组形式，已订阅的连接上也照样可以发非 pubsub 命令。</p>
       </div>
     </section>
 

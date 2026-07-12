@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MGET — kevy 命令参考</title>
-<meta name="description" content="MGET — Return the values of multiple keys (cross-shard gather). O(N) keys, one O(1) probe each on the owning shard">
+<meta name="description" content="MGET — 批量返回多个 key 的值（跨 shard 汇聚）。 O(N) 个 key，每个 key 在其归属 shard 上做一次 O(1) 探测。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>字符串</span> <span>/</span> <b>MGET</b></nav>
 
     <h1 class="cmd">MGET</h1>
-    <p class="lede">Return the values of multiple keys (cross-shard gather).</p>
+    <p class="lede">批量返回多个 key 的值（跨 shard 汇聚）。</p>
 
     <pre class="syntax"><code>MGET key [key ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(N) keys, one O(1) probe each on the owning shard</code></p>
+      <p class="cx-body"><code>O(N) 个 key，每个 key 在其归属 shard 上做一次 O(1) 探测。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: keys are grouped by shard and each shard is probed independently, so the reply is not a point-in-time snapshot across shards</p>
+        <p>有差异：key 先按 shard 分组，再逐个 shard 独立探测，所以回复不是一份跨 shard 的时间点快照。</p>
       </div>
     </section>
 

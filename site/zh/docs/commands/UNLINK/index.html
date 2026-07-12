@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>UNLINK — kevy 命令参考</title>
-<meta name="description" content="UNLINK — Delete one or more keys (alias of DEL in kevy's shard model). O(N) keys, plus O(M) per collection-typed key — identical to DEL">
+<meta name="description" content="UNLINK — 删除一个或多个 key（在 kevy 的 shard 模型里，它就是 DEL 的别名）。 O(N) 个 key，容器类型的 key 每个另加 O(M) —— 与 DEL 完全一致。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>通用键操作</span> <span>/</span> <b>UNLINK</b></nav>
 
     <h1 class="cmd">UNLINK</h1>
-    <p class="lede">Delete one or more keys (alias of DEL in kevy's shard model).</p>
+    <p class="lede">删除一个或多个 key（在 kevy 的 shard 模型里，它就是 DEL 的别名）。</p>
 
     <pre class="syntax"><code>UNLINK key [key ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(N) keys, plus O(M) per collection-typed key — identical to DEL</code></p>
+      <p class="cx-body"><code>O(N) 个 key，容器类型的 key 每个另加 O(M) —— 与 DEL 完全一致。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: UNLINK is an alias of DEL — the value is freed inline on the owning shard's reactor thread, not by a background thread, so it gives no latency benefit</p>
+        <p>有差异：UNLINK 只是 DEL 的别名 —— 值在归属 shard 的 reactor 线程上就地释放，并不交给后台线程，所以它带不来任何延迟上的好处。</p>
       </div>
     </section>
 

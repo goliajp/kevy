@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VIEW.LIST — kevy 命令参考</title>
-<meta name="description" content="VIEW.LIST — List declared views with their mode and shape. O(views) at the origin — the catalog is process-global">
+<meta name="description" content="VIEW.LIST — 列出已声明的视图及其模式与形状。 在发起端 O(视图数量) —— catalog 是进程全局的。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>视图</span> <span>/</span> <b>VIEW.LIST</b></nav>
 
     <h1 class="cmd">VIEW.LIST</h1>
-    <p class="lede">List declared views with their mode and shape.</p>
+    <p class="lede">列出已声明的视图及其模式与形状。</p>
 
     <pre class="syntax"><code>VIEW.LIST</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(views) at the origin — the catalog is process-global</code></p>
+      <p class="cx-body"><code>在发起端 O(视图数量) —— catalog 是进程全局的。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call warn">
         <span class="h">kevy 独有</span>
-        <p>kevy-only</p>
+        <p>kevy 独有。</p>
       </div>
     </section>
 

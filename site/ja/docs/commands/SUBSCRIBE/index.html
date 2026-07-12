@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SUBSCRIBE — kevy コマンドリファレンス</title>
-<meta name="description" content="SUBSCRIBE — Subscribe to the given channels. O(c) channels; never fans out to other shards">
+<meta name="description" content="SUBSCRIBE — 指定したチャネルを購読する。 チャネル c 個に対して O(c)。他の shard へ fan-out することはない。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>Pub/Sub</span> <span>/</span> <b>SUBSCRIBE</b></nav>
 
     <h1 class="cmd">SUBSCRIBE</h1>
-    <p class="lede">Subscribe to the given channels.</p>
+    <p class="lede">指定したチャネルを購読する。</p>
 
     <pre class="syntax"><code>SUBSCRIBE channel [channel ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(c) channels; never fans out to other shards</code></p>
+      <p class="cx-body"><code>チャネル c 個に対して O(c)。他の shard へ fan-out することはない。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: kevy has no RESP2 subscriber mode — after SUBSCRIBE the connection may still issue any command, where Redis restricts it to the pubsub verbs plus PING / QUIT / RESET</p>
+        <p>差異あり。kevy に RESP2 の subscriber モードはない —— SUBSCRIBE 後もそのコネクションから任意のコマンドを発行できる。Redis では pubsub 系の verb と PING / QUIT / RESET に制限される。</p>
       </div>
     </section>
 

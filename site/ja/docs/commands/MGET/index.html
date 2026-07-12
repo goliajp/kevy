@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MGET — kevy コマンドリファレンス</title>
-<meta name="description" content="MGET — Return the values of multiple keys (cross-shard gather). O(N) keys, one O(1) probe each on the owning shard">
+<meta name="description" content="MGET — 複数キーの値を返す(shard をまたいで収集する)。 O(N) —— キー数 N。各キーは所有 shard 上で O(1) の探索一回で済む。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>文字列</span> <span>/</span> <b>MGET</b></nav>
 
     <h1 class="cmd">MGET</h1>
-    <p class="lede">Return the values of multiple keys (cross-shard gather).</p>
+    <p class="lede">複数キーの値を返す(shard をまたいで収集する)。</p>
 
     <pre class="syntax"><code>MGET key [key ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(N) keys, one O(1) probe each on the owning shard</code></p>
+      <p class="cx-body"><code>O(N) —— キー数 N。各キーは所有 shard 上で O(1) の探索一回で済む。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: keys are grouped by shard and each shard is probed independently, so the reply is not a point-in-time snapshot across shards</p>
+        <p>差異あり。キーは shard ごとにまとめられ、shard ごとに独立して探索される。したがって応答は shard をまたいだ一時点のスナップショットではない。</p>
       </div>
     </section>
 

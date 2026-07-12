@@ -86,3 +86,50 @@
 - `COMPOSE` 无视 `LIMIT`(见 B 节)
 - A 节的全部兼容性事实 → 进命令参考的 `Compatibility with Redis` 栏
 - C 节的文档 bug → 改成如实
+
+---
+
+## D — HTTL returned milliseconds (a real wire bug, found by the translation pass)
+
+Four independent agents, writing the Chinese and Japanese command reference from
+the English one, stopped at the same entry and asked the same question: *HTTL's
+summary says milliseconds — but Redis's HTTL is the seconds verb, and HPTTL is
+the millisecond one. Which is the typo, the doc or the code?*
+
+Neither. The code was wrong.
+
+`Store::httl` returns `deadline_ms - now_unix_ms()`, and `cmd_httl` encoded that
+straight onto the wire. A client that asked how many **seconds** were left on a
+hash field got a number a **thousand times too large** — and nothing caught it,
+because the tests had been written against the implementation rather than
+against Redis. `wrap_parity.rs` asserted `(1..=120_000).contains(&ttl)` after a
+120-second HEXPIRE: a range that a seconds reply (120) and a milliseconds reply
+(120 000) both satisfy. `hash_ttl_e2e.rs` was blunter still — it asserted
+`observed_ms > 90_000` and named the variable `observed_ms`. The bug was not
+merely untested; it was *pinned down* by two tests.
+
+`HPTTL` did not exist at all, so there was no way to ask for milliseconds either.
+
+### Fixed
+
+* `HTTL` now replies **seconds**, rounded with the same `(ms + 500) / 1000` the
+  key-level `TTL` uses, which is Redis's rounding.
+* `HPTTL` is implemented and registered — the millisecond verb Redis has and we
+  did not.
+* `Store::httl` renamed to `Store::hpttl`. The store speaks milliseconds and
+  nothing else (its key-level verb is `pttl`, and there is no `ttl`); putting
+  the seconds rounding at the command and embedded layers keeps that true.
+* `Db::httl` (seconds) / `Db::hpttl` (ms) and `Kevy::httl` / `Kevy::hpttl` in
+  kevy-client, so the embedded and wire faces agree. This is breaking for
+  `kevy-embedded`, which is going to 4.0.0 regardless.
+* The two tests that pinned the bug now bound the reply tightly enough that only
+  the correct unit fits, and assert both verbs against the same deadline.
+
+### The lesson worth keeping
+
+A range assertion wide enough to admit two units is not a weak test — it is an
+*absent* one wearing a test's clothes. And the reason this surfaced now, after
+shipping through 3.x, is that writing a fact down in three languages forces you
+to understand it, while copying it into one lets you pass it along unread. The
+compat column was supposed to document deviations from Redis. It found one
+instead.

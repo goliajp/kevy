@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XRANGE — kevy コマンドリファレンス</title>
-<meta name="description" content="XRANGE — Return stream entries within an ID range. O(log N + M) — a B-tree range descent, COUNT applied lazily">
+<meta name="description" content="XRANGE — ID 範囲に含まれるストリームのエントリを返す。 O(log N + M) —— B-tree の範囲降下であり、COUNT は遅延して適用される。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ストリーム</span> <span>/</span> <b>XRANGE</b></nav>
 
     <h1 class="cmd">XRANGE</h1>
-    <p class="lede">Return stream entries within an ID range.</p>
+    <p class="lede">ID 範囲に含まれるストリームのエントリを返す。</p>
 
     <pre class="syntax"><code>XRANGE key start end [COUNT count]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(log N + M) — a B-tree range descent, COUNT applied lazily</code></p>
+      <p class="cx-body"><code>O(log N + M) —— B-tree の範囲降下であり、COUNT は遅延して適用される。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call note">
         <span class="h">互換</span>
-        <p>full</p>
+        <p>互換</p>
       </div>
     </section>
 

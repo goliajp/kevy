@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HSCAN — kevy コマンドリファレンス</title>
-<meta name="description" content="HSCAN — Iterate a hash's fields and values (single-batch cursor). O(N) — the whole hash is copied and returned in one batch">
+<meta name="description" content="HSCAN — ハッシュのフィールドと値を反復する(単一バッチのカーソル)。 O(N) —— ハッシュ全体をコピーし、一度の応答でまとめて返す。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ハッシュ</span> <span>/</span> <b>HSCAN</b></nav>
 
     <h1 class="cmd">HSCAN</h1>
-    <p class="lede">Iterate a hash's fields and values (single-batch cursor).</p>
+    <p class="lede">ハッシュのフィールドと値を反復する(単一バッチのカーソル)。</p>
 
     <pre class="syntax"><code>HSCAN key cursor [MATCH pattern] [COUNT count]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(N) — the whole hash is copied and returned in one batch</code></p>
+      <p class="cx-body"><code>O(N) —— ハッシュ全体をコピーし、一度の応答でまとめて返す。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,13 +63,13 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: not a cursor iterator — the cursor is always 0 and the entire hash comes back in a single reply; NOVALUES is not parsed and COUNT is validated then ignored</p>
+        <p>差異あり。カーソル反復子ではない。カーソルは常に 0 で、ハッシュ全体が一度の応答で返る。NOVALUES は解析せず、COUNT は検証だけして無視する。</p>
       </div>
     </section>
 
     <section class="siblings">
       <h2>関連</h2>
-      <p class="sees"><a href="../HDEL/">HDEL</a><a href="../HEXISTS/">HEXISTS</a><a href="../HEXPIRE/">HEXPIRE</a><a href="../HGET/">HGET</a><a href="../HGETALL/">HGETALL</a><a href="../HINCRBY/">HINCRBY</a><a href="../HKEYS/">HKEYS</a><a href="../HLEN/">HLEN</a><a href="../HMGET/">HMGET</a><a href="../HMSET/">HMSET</a><a href="../HPERSIST/">HPERSIST</a><a href="../HPEXPIRE/">HPEXPIRE</a><a href="../HPEXPIREAT/">HPEXPIREAT</a><a href="../HSET/">HSET</a><a href="../HSETNX/">HSETNX</a><a href="../HTTL/">HTTL</a><a href="../HVALS/">HVALS</a></p>
+      <p class="sees"><a href="../HDEL/">HDEL</a><a href="../HEXISTS/">HEXISTS</a><a href="../HEXPIRE/">HEXPIRE</a><a href="../HGET/">HGET</a><a href="../HGETALL/">HGETALL</a><a href="../HINCRBY/">HINCRBY</a><a href="../HKEYS/">HKEYS</a><a href="../HLEN/">HLEN</a><a href="../HMGET/">HMGET</a><a href="../HMSET/">HMSET</a><a href="../HPERSIST/">HPERSIST</a><a href="../HPEXPIRE/">HPEXPIRE</a><a href="../HPEXPIREAT/">HPEXPIREAT</a><a href="../HPTTL/">HPTTL</a><a href="../HSET/">HSET</a><a href="../HSETNX/">HSETNX</a><a href="../HTTL/">HTTL</a><a href="../HVALS/">HVALS</a></p>
     </section>
 
     <p class="back"><a href="../">← コマンド一覧へ</a></p>

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CLIENT — kevy コマンドリファレンス</title>
-<meta name="description" content="CLIENT — Connection introspection and control subcommands. ID / GETNAME / SETNAME / INFO: O(1). LIST: O(S) fan-out + O(C) rows. KILL: O(S) + O(C) scan">
+<meta name="description" content="CLIENT — コネクションの参照と制御を行うサブコマンド群。 ID / GETNAME / SETNAME / INFO は O(1)。LIST は O(S) の fan-out と O(C) 行の生成。KILL は O(S) と O(C) の走査。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>サーバー</span> <span>/</span> <b>CLIENT</b></nav>
 
     <h1 class="cmd">CLIENT</h1>
-    <p class="lede">Connection introspection and control subcommands.</p>
+    <p class="lede">コネクションの参照と制御を行うサブコマンド群。</p>
 
     <pre class="syntax"><code>CLIENT ID | GETNAME | SETNAME name | LIST | KILL filter | INFO | NO-EVICT ON|OFF</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>ID / GETNAME / SETNAME / INFO: O(1). LIST: O(S) fan-out + O(C) rows. KILL: O(S) + O(C) scan</code></p>
+      <p class="cx-body"><code>ID / GETNAME / SETNAME / INFO は O(1)。LIST は O(S) の fan-out と O(C) 行の生成。KILL は O(S) と O(C) の走査。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: ID / GETNAME / SETNAME / INFO / LIST (bare) / KILL (ID, ADDR) / NO-EVICT only; CLIENT LIST with a filter is a syntax error and every other subcommand (PAUSE, REPLY, TRACKING, UNBLOCK, NO-TOUCH) is unknown</p>
+        <p>差異あり。ID / GETNAME / SETNAME / INFO / LIST(引数なし)/ KILL(ID、ADDR)/ NO-EVICT のみ。フィルタ付きの CLIENT LIST は構文エラーであり、PAUSE、REPLY、TRACKING、UNBLOCK、NO-TOUCH を含むその他のサブコマンドはすべて未知のコマンドとして扱う。</p>
       </div>
     </section>
 

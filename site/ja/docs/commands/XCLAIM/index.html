@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XCLAIM — kevy コマンドリファレンス</title>
-<meta name="description" content="XCLAIM — Claim specific idle pending entries for a consumer. O(A * (log P + log N))">
+<meta name="description" content="XCLAIM — 指定した id の idle な pending エントリを、コンシューマーへ claim する。 O(A * (log P + log N))。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ストリーム</span> <span>/</span> <b>XCLAIM</b></nav>
 
     <h1 class="cmd">XCLAIM</h1>
-    <p class="lede">Claim specific idle pending entries for a consumer.</p>
+    <p class="lede">指定した id の idle な pending エントリを、コンシューマーへ claim する。</p>
 
     <pre class="syntax"><code>XCLAIM key group consumer min-idle-time id [id ...] [IDLE ms] [TIME unix-time-milliseconds] [RETRYCOUNT count] [FORCE] [JUSTID]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(A * (log P + log N))</code></p>
+      <p class="cx-body"><code>O(A * (log P + log N))。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: IDLE / TIME / RETRYCOUNT / FORCE / JUSTID are parsed but LASTID is not, and a missing key or group returns 'no such key' instead of NOGROUP</p>
+        <p>差異あり。IDLE / TIME / RETRYCOUNT / FORCE / JUSTID は解析するが、LASTID は解析しない。key または group が存在しない場合は NOGROUP ではなく「no such key」を返す。</p>
       </div>
     </section>
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VIEW.EXPLAIN — kevy 命令参考</title>
-<meta name="description" content="VIEW.EXPLAIN — Explain a view's composition tree with per-leaf cardinalities. O(sum over leaves of (log N + matched)) — each leaf's cardinality is a real count, so EXPLAIN on a broad leaf costs as much as counting it">
+<meta name="description" content="VIEW.EXPLAIN — 展开视图的组合树，并给出每个叶子的基数。 O(各叶子的 (log N + matched) 之和) —— 每个叶子的基数都是真数出来的，所以在一个宽泛的叶子上跑 EXPLAIN，代价与真去数它一样。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>视图</span> <span>/</span> <b>VIEW.EXPLAIN</b></nav>
 
     <h1 class="cmd">VIEW.EXPLAIN</h1>
-    <p class="lede">Explain a view's composition tree with per-leaf cardinalities.</p>
+    <p class="lede">展开视图的组合树，并给出每个叶子的基数。</p>
 
     <pre class="syntax"><code>VIEW.EXPLAIN name</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(sum over leaves of (log N + matched)) — each leaf's cardinality is a real count, so EXPLAIN on a broad leaf costs as much as counting it</code></p>
+      <p class="cx-body"><code>O(各叶子的 (log N + matched) 之和) —— 每个叶子的基数都是真数出来的，所以在一个宽泛的叶子上跑 EXPLAIN，代价与真去数它一样。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call warn">
         <span class="h">kevy 独有</span>
-        <p>kevy-only: nearest is FT.EXPLAIN, which returns a query tree rather than per-leaf cardinalities</p>
+        <p>kevy 独有：最接近的是 FT.EXPLAIN，但它返回的是查询树，而不是每个叶子的基数。</p>
       </div>
     </section>
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WATCH — kevy 命令参考</title>
-<meta name="description" content="WATCH — Watch keys for optimistic locking of the next EXEC. O(W) keys, grouped into O(min(W,S)) cross-shard messages">
+<meta name="description" content="WATCH — 监视 key，为下一次 EXEC 做乐观锁。 W 个 key 是 O(W)，归并成 O(min(W,S)) 条跨 shard 消息。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>事务</span> <span>/</span> <b>WATCH</b></nav>
 
     <h1 class="cmd">WATCH</h1>
-    <p class="lede">Watch keys for optimistic locking of the next EXEC.</p>
+    <p class="lede">监视 key，为下一次 EXEC 做乐观锁。</p>
 
     <pre class="syntax"><code>WATCH key [key ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(W) keys, grouped into O(min(W,S)) cross-shard messages</code></p>
+      <p class="cx-body"><code>W 个 key 是 O(W)，归并成 O(min(W,S)) 条跨 shard 消息。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call note">
         <span class="h">兼容</span>
-        <p>full</p>
+        <p>兼容。</p>
       </div>
     </section>
 

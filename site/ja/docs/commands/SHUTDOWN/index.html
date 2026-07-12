@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SHUTDOWN — kevy コマンドリファレンス</title>
-<meta name="description" content="SHUTDOWN — Stop the server process (connection drops without a reply). O(1) to trip the stop flag; the drain that follows is O(N)">
+<meta name="description" content="SHUTDOWN — サーバプロセスを停止する(応答を返さないままコネクションが切れる)。 停止フラグを立てるまでが O(1)。その後に続く drain は O(N)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>サーバー</span> <span>/</span> <b>SHUTDOWN</b></nav>
 
     <h1 class="cmd">SHUTDOWN</h1>
-    <p class="lede">Stop the server process (connection drops without a reply).</p>
+    <p class="lede">サーバプロセスを停止する(応答を返さないままコネクションが切れる)。</p>
 
     <pre class="syntax"><code>SHUTDOWN [NOSAVE|SAVE]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(1) to trip the stop flag; the drain that follows is O(N)</code></p>
+      <p class="cx-body"><code>停止フラグを立てるまでが O(1)。その後に続く drain は O(N)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: only SHUTDOWN [NOSAVE|SAVE] parses — NOW, FORCE and ABORT are a syntax error</p>
+        <p>差異あり。解析するのは SHUTDOWN [NOSAVE|SAVE] のみ。NOW、FORCE、ABORT は構文エラーとなる。</p>
       </div>
     </section>
 

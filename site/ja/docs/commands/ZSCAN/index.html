@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZSCAN — kevy コマンドリファレンス</title>
-<meta name="description" content="ZSCAN — Iterate a sorted set's members and scores (single-batch cursor). O(N) — the whole set is materialised">
+<meta name="description" content="ZSCAN — ソート済みセットのメンバーとスコアを反復する(単一バッチのカーソル)。 O(N) —— セット全体を実体化する。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ソート済み集合</span> <span>/</span> <b>ZSCAN</b></nav>
 
     <h1 class="cmd">ZSCAN</h1>
-    <p class="lede">Iterate a sorted set's members and scores (single-batch cursor).</p>
+    <p class="lede">ソート済みセットのメンバーとスコアを反復する(単一バッチのカーソル)。</p>
 
     <pre class="syntax"><code>ZSCAN key cursor [MATCH pattern] [COUNT count]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(N) — the whole set is materialised</code></p>
+      <p class="cx-body"><code>O(N) —— セット全体を実体化する。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: not a cursor iterator — every call returns the whole set with cursor 0, and COUNT is parsed then ignored</p>
+        <p>差異あり。カーソル反復子ではない。呼び出しのたびにカーソル 0 とセット全体が返り、COUNT は解析されたあと無視される。</p>
       </div>
     </section>
 

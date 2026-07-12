@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BLPOP — kevy コマンドリファレンス</title>
-<meta name="description" content="BLPOP — Blocking left pop across one or more lists (effect logged as LPOP). O(1) to serve; the park is O(1) and waiters are woken FIFO per key">
+<meta name="description" content="BLPOP — 一つ以上のリストに対する、左端からのブロッキング pop(効果は LPOP として記録される)。 応答自体は O(1)。park も O(1) で、待機者はキーごとに FIFO で起こされる。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>リスト</span> <span>/</span> <b>BLPOP</b></nav>
 
     <h1 class="cmd">BLPOP</h1>
-    <p class="lede">Blocking left pop across one or more lists (effect logged as LPOP).</p>
+    <p class="lede">一つ以上のリストに対する、左端からのブロッキング pop(効果は LPOP として記録される)。</p>
 
     <pre class="syntax"><code>BLPOP key [key ...] timeout</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(1) to serve; the park is O(1) and waiters are woken FIFO per key</code></p>
+      <p class="cx-body"><code>応答自体は O(1)。park も O(1) で、待機者はキーごとに FIFO で起こされる。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: on a multi-shard server the multi-key form does not honour Redis's left-to-right key priority — keys on the connection's own shard are served before remote ones</p>
+        <p>差異あり。shard が複数あるサーバーでは、複数キー形式が Redis の左から右へのキー優先順位に従わない。接続が属する shard 上のキーが、他 shard のキーより先に処理される。</p>
       </div>
     </section>
 

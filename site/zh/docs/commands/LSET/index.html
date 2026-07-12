@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LSET — kevy 命令参考</title>
-<meta name="description" content="LSET — Set the list element at the given index. O(1) — a direct index write (Redis is O(N) for a mid-list index)">
+<meta name="description" content="LSET — 改写 list 中指定下标处的元素。 O(1) —— 直接按下标写入（Redis 对中间位置的下标是 O(N)）。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>列表</span> <span>/</span> <b>LSET</b></nav>
 
     <h1 class="cmd">LSET</h1>
-    <p class="lede">Set the list element at the given index.</p>
+    <p class="lede">改写 list 中指定下标处的元素。</p>
 
     <pre class="syntax"><code>LSET key index element</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(1) — a direct index write (Redis is O(N) for a mid-list index)</code></p>
+      <p class="cx-body"><code>O(1) —— 直接按下标写入（Redis 对中间位置的下标是 O(N)）。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call note">
         <span class="h">兼容</span>
-        <p>full</p>
+        <p>兼容</p>
       </div>
     </section>
 

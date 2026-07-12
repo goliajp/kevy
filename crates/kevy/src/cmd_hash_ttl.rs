@@ -1,7 +1,7 @@
 //! Hash field-TTL commands (Redis 7.4):
-//! `HEXPIRE` / `HPEXPIRE` / `HPEXPIREAT` / `HTTL` / `HPERSIST`, all
+//! `HEXPIRE` / `HPEXPIRE` / `HPEXPIREAT` / `HTTL` / `HPTTL` / `HPERSIST`, all
 //! `key <arg> [NX|XX|GT|LT] FIELDS <numfields> field [field ...]`
-//! shaped (HTTL/HPERSIST take no condition/ttl). Replies are per-field
+//! shaped (HTTL/HPTTL/HPERSIST take no condition/ttl). Replies are per-field
 //! integer arrays in request order.
 //!
 //! AOF: the relative forms get an absolute `HPEXPIREAT` follow-up
@@ -110,23 +110,36 @@ pub(crate) fn cmd_hpexpireat<A: ArgvView + ?Sized>(store: &mut Store, args: &A, 
     hexpire_generic(store, args, out, "hpexpireat", |abs| abs.max(0) as u64);
 }
 
-/// `HTTL key FIELDS n f…` — remaining ms per field (`-2` missing,
-/// `-1` no TTL).
-pub(crate) fn cmd_httl<A: ArgvView + ?Sized>(store: &mut Store, args: &A, out: &mut Vec<u8>) {
+/// `HTTL key FIELDS n f…` (seconds) / `HPTTL …` (milliseconds) — remaining
+/// per-field TTL, with `-2` for a missing field and `-1` for one with no TTL.
+///
+/// The store keeps deadlines in milliseconds, so HPTTL is the raw subtraction
+/// and HTTL rounds to the nearest second — the same `(ms + 500) / 1000` the
+/// key-level TTL uses, and the same rounding Redis does. Returning milliseconds
+/// from a verb named HTTL would hand a client asking for seconds a number a
+/// thousand times too large.
+pub(crate) fn cmd_httl<A: ArgvView + ?Sized>(
+    store: &mut Store,
+    args: &A,
+    in_secs: bool,
+    cmd: &str,
+    out: &mut Vec<u8>,
+) {
     if args.len() < 5 {
-        return wrong_args(out, "httl");
+        return wrong_args(out, cmd);
     }
     let (_, idx) = match parse_cond_fields(args, 2) {
         Ok(t) => t,
         Err(e) => return encode_error(out, e.as_wire()),
     };
     let fields: Vec<&[u8]> = idx.iter().map(|&i| &args[i] as &[u8]).collect();
-    match store.httl(&args[1], &fields) {
+    match store.hpttl(&args[1], &fields) {
         Err(e) => store_err(out, e),
         Ok(ttls) => {
             encode_array_len(out, ttls.len() as i64);
-            for t in ttls {
-                encode_integer(out, t);
+            for ms in ttls {
+                // The -2 / -1 sentinels pass through untouched.
+                encode_integer(out, if in_secs && ms >= 0 { (ms + 500) / 1000 } else { ms });
             }
         }
     }

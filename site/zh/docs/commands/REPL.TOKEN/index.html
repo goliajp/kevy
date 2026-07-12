@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>REPL.TOKEN — kevy 命令参考</title>
-<meta name="description" content="REPL.TOKEN — kevy extension: mint a read-your-writes token — per-shard [generation, offset] pairs (a primary reports its live feed tail; a replica its applied positions). O(S) — one (generation, offset) pair per shard">
+<meta name="description" content="REPL.TOKEN — kevy 扩展：签发一个 read-your-writes 令牌 —— 每个 shard 一对 [generation, offset](主库报告自己 feed 的尾部，副本报告自己已应用到的位置)。 O(S) —— 每个 shard 一对 (generation, offset)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>复制</span> <span>/</span> <b>REPL.TOKEN</b></nav>
 
     <h1 class="cmd">REPL.TOKEN</h1>
-    <p class="lede">kevy extension: mint a read-your-writes token — per-shard [generation, offset] pairs (a primary reports its live feed tail; a replica its applied positions).</p>
+    <p class="lede">kevy 扩展：签发一个 read-your-writes 令牌 —— 每个 shard 一对 [generation, offset](主库报告自己 feed 的尾部，副本报告自己已应用到的位置)。</p>
 
     <pre class="syntax"><code>REPL.TOKEN</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(S) — one (generation, offset) pair per shard</code></p>
+      <p class="cx-body"><code>O(S) —— 每个 shard 一对 (generation, offset)。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call warn">
         <span class="h">kevy 独有</span>
-        <p>kevy-only: the read-your-writes token; the nearest Redis concept is master_repl_offset, which is not a resumable per-shard cursor</p>
+        <p>kevy 独有：read-your-writes 令牌。Redis 里最接近的概念是 master_repl_offset，但它不是可续读的按 shard 游标。</p>
       </div>
     </section>
 

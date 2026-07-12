@@ -458,7 +458,7 @@ fn hash_field_ttl_full_matrix_with_reopen() {
         );
         assert!(!s.hexists(b"h", b"soon").unwrap());
         // httl visible
-        let ttls = s.httl(b"h", &[b"ttl", b"keep"]).unwrap();
+        let ttls = s.hpttl(b"h", &[b"ttl", b"keep"]).unwrap();
         assert!(ttls[0] > 100_000);
         assert_eq!(ttls[1], -1);
         // persist round-trip for another field then re-set ttl
@@ -468,7 +468,7 @@ fn hash_field_ttl_full_matrix_with_reopen() {
     // AOF replay: ttl field still carries its deadline, keep does not
     {
         let s2 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
-        let ttls = s2.httl(b"h", &[b"ttl", b"keep"]).unwrap();
+        let ttls = s2.hpttl(b"h", &[b"ttl", b"keep"]).unwrap();
         assert!(ttls[0] > 0, "deadline survived replay: {ttls:?}");
         assert_eq!(ttls[1], -1, "persisted field stays persisted");
         // snapshot path: SAVE then reopen from the dump
@@ -476,7 +476,7 @@ fn hash_field_ttl_full_matrix_with_reopen() {
     }
     {
         let s3 = Store::open(Config::default().with_persist(&dir).with_ttl_reaper_manual()).unwrap();
-        let ttls = s3.httl(b"h", &[b"ttl"]).unwrap();
+        let ttls = s3.hpttl(b"h", &[b"ttl"]).unwrap();
         assert!(ttls[0] > 0, "deadline survived snapshot round-trip: {ttls:?}");
         drop(s3);
     }

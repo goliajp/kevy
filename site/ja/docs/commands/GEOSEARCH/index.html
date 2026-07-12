@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GEOSEARCH — kevy コマンドリファレンス</title>
-<meta name="description" content="GEOSEARCH — Search members within a radius or box from a member or coordinate. O(N) per call — up to nine neighbour ranges, each fetched with a full zset scan; the geohash block prunes distance maths, not iteration">
+<meta name="description" content="GEOSEARCH — メンバーまたは座標を起点として、半径または矩形の範囲でメンバーを検索する。 1 回の呼び出しで O(N) —— 最大 9 つの近傍レンジを、それぞれ zset の全走査で取得する。geohash ブロックが削るのは距離計算であって、走査そのものではない。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>地理空間</span> <span>/</span> <b>GEOSEARCH</b></nav>
 
     <h1 class="cmd">GEOSEARCH</h1>
-    <p class="lede">Search members within a radius or box from a member or coordinate.</p>
+    <p class="lede">メンバーまたは座標を起点として、半径または矩形の範囲でメンバーを検索する。</p>
 
     <pre class="syntax"><code>GEOSEARCH key FROMMEMBER member|FROMLONLAT longitude latitude BYRADIUS radius m|km|mi|ft|BYBOX width height m|km|mi|ft [ASC|DESC] [COUNT count [ANY]] [WITHCOORD] [WITHDIST] [WITHHASH]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(N) per call — up to nine neighbour ranges, each fetched with a full zset scan; the geohash block prunes distance maths, not iteration</code></p>
+      <p class="cx-body"><code>1 回の呼び出しで O(N) —— 最大 9 つの近傍レンジを、それぞれ zset の全走査で取得する。geohash ブロックが削るのは距離計算であって、走査そのものではない。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: STOREDIST is accepted and ignored on the read-only form; COUNT 0 is an error</p>
+        <p>差異あり。読み取り専用形式では STOREDIST を受理した上で無視する。COUNT 0 はエラー。</p>
       </div>
     </section>
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DEL — kevy コマンドリファレンス</title>
-<meta name="description" content="DEL — Delete one or more keys. O(N) keys, plus O(M) per key holding a collection of M elements (the drop walks the container)">
+<meta name="description" content="DEL — 一つ以上のキーを削除する。 O(N) —— キー数 N。さらに要素数 M のコレクションを保持するキーごとに O(M)(解放時にコンテナを走査するため)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>汎用キー操作</span> <span>/</span> <b>DEL</b></nav>
 
     <h1 class="cmd">DEL</h1>
-    <p class="lede">Delete one or more keys.</p>
+    <p class="lede">一つ以上のキーを削除する。</p>
 
     <pre class="syntax"><code>DEL key [key ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(N) keys, plus O(M) per key holding a collection of M elements (the drop walks the container)</code></p>
+      <p class="cx-body"><code>O(N) —— キー数 N。さらに要素数 M のコレクションを保持するキーごとに O(M)(解放時にコンテナを走査するため)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: the multi-key form is split by shard and summed with no barrier, so it is not atomic across shards; the single-key form is</p>
+        <p>差異あり。複数キー形式は shard 単位に分割して実行し、結果を合算するだけでバリアを張らない。したがって shard をまたぐアトミック性は無い。単一キー形式はアトミック。</p>
       </div>
     </section>
 

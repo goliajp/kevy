@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FEED.TAIL — kevy 命令参考</title>
-<meta name="description" content="FEED.TAIL — Return a shard's current feed generation and next offset. O(1) on a single shard">
+<meta name="description" content="FEED.TAIL — 返回某个 shard 当前的 feed generation 与下一个 offset。 单个 shard 上 O(1)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>变更流</span> <span>/</span> <b>FEED.TAIL</b></nav>
 
     <h1 class="cmd">FEED.TAIL</h1>
-    <p class="lede">Return a shard's current feed generation and next offset.</p>
+    <p class="lede">返回某个 shard 当前的 feed generation 与下一个 offset。</p>
 
     <pre class="syntax"><code>FEED.TAIL shard</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(1) on a single shard</code></p>
+      <p class="cx-body"><code>单个 shard 上 O(1)。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call warn">
         <span class="h">kevy 独有</span>
-        <p>kevy-only: nearest is INFO replication's master_repl_offset, which is not a resumable per-shard CDC cursor</p>
+        <p>kevy 独有：最接近的是 INFO replication 里的 master_repl_offset，但它不是可续读的按 shard CDC 游标。</p>
       </div>
     </section>
 

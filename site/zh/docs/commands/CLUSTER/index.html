@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CLUSTER — kevy 命令参考</title>
-<meta name="description" content="CLUSTER — Cluster topology introspection (virtual-node model over shards). INFO / NODES / SLOTS / SHARDS / MYID: O(S). KEYSLOT: O(len(key)). COUNTKEYSINSLOT: O(N/S)">
+<meta name="description" content="CLUSTER — 集群拓扑查看（架在 shard 之上的虚拟节点模型）。 INFO / NODES / SLOTS / SHARDS / MYID：O(S)。KEYSLOT：O(len(key))。COUNTKEYSINSLOT：O(N/S)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>服务器</span> <span>/</span> <b>CLUSTER</b></nav>
 
     <h1 class="cmd">CLUSTER</h1>
-    <p class="lede">Cluster topology introspection (virtual-node model over shards).</p>
+    <p class="lede">集群拓扑查看（架在 shard 之上的虚拟节点模型）。</p>
 
     <pre class="syntax"><code>CLUSTER INFO | NODES | SLOTS | SHARDS | KEYSLOT key | COUNTKEYSINSLOT slot</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>INFO / NODES / SLOTS / SHARDS / MYID: O(S). KEYSLOT: O(len(key)). COUNTKEYSINSLOT: O(N/S)</code></p>
+      <p class="cx-body"><code>INFO / NODES / SLOTS / SHARDS / MYID：O(S)。KEYSLOT：O(len(key))。COUNTKEYSINSLOT：O(N/S)。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: a read-only virtual-node topology derived from config (one virtual master per shard) — no gossip, no MEET / FORGET / SETSLOT effect (they reply OK as no-ops), no MIGRATE / ASK, no failover; COUNTKEYSINSLOT counts only the answering shard's keys</p>
+        <p>有差异：这是一份从配置推导出来的只读虚拟拓扑（每个 shard 一个虚拟 master）—— 没有 gossip，MEET / FORGET / SETSLOT 不产生任何效果（只是返回 OK 的空操作），没有 MIGRATE / ASK，也没有故障转移；COUNTKEYSINSLOT 只统计应答它的那个 shard 上的 key。</p>
       </div>
     </section>
 

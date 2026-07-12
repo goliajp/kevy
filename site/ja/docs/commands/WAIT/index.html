@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WAIT — kevy コマンドリファレンス</title>
-<meta name="description" content="WAIT — Block until every shard's master_repl_offset is acknowledged by at least numreplicas replicas (or timeout ms pass); returns the minimum acked-replica count across shards. timeout 0 = wait forever, hard-capped at 60 s. NOTE: a replica ACK is not fsync durability. O(S) — an all-shard barrier returning the MINIMUM acked-replica count; the wall-clock cost is the replication round trip">
+<meta name="description" content="WAIT — 全 shard の master_repl_offset が numreplicas 台以上の replica に ack されるまで(または timeout ミリ秒が経過するまで)ブロックし、shard 横断での ack 済み replica 数の最小値を返す。timeout 0 は無期限待ちだが、上限は 60 s。注意：replica の ACK は fsync による永続化を意味しない。 O(S) —— 全 shard に対するバリアであり、返すのは shard 横断での ack 済み replica 数の最小値である。実時間のコストはレプリケーションの往復そのもの。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>レプリケーション</span> <span>/</span> <b>WAIT</b></nav>
 
     <h1 class="cmd">WAIT</h1>
-    <p class="lede">Block until every shard's master_repl_offset is acknowledged by at least numreplicas replicas (or timeout ms pass); returns the minimum acked-replica count across shards. timeout 0 = wait forever, hard-capped at 60 s. NOTE: a replica ACK is not fsync durability.</p>
+    <p class="lede">全 shard の master_repl_offset が numreplicas 台以上の replica に ack されるまで(または timeout ミリ秒が経過するまで)ブロックし、shard 横断での ack 済み replica 数の最小値を返す。timeout 0 は無期限待ちだが、上限は 60 s。注意：replica の ACK は fsync による永続化を意味しない。</p>
 
     <pre class="syntax"><code>WAIT numreplicas timeout</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(S) — an all-shard barrier returning the MINIMUM acked-replica count; the wall-clock cost is the replication round trip</code></p>
+      <p class="cx-body"><code>O(S) —— 全 shard に対するバリアであり、返すのは shard 横断での ack 済み replica 数の最小値である。実時間のコストはレプリケーションの往復そのもの。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: it is an all-shard barrier returning the minimum across shards (Redis has one offset to wait on); timeout 0 is capped at 60s rather than blocking forever, and an ACK means the frame reached the replica's apply pipeline, not fsync durability</p>
+        <p>差異あり。全 shard に対するバリアであり、shard 横断の最小値を返す(Redis では待つべき offset が 1 つしかない)。timeout 0 は無期限ではなく 60 秒で頭打ちになる。ACK はフレームが replica の適用パイプラインへ届いたことを意味するだけで、fsync による永続化ではない。</p>
       </div>
     </section>
 

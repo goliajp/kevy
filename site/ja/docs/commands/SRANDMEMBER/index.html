@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SRANDMEMBER — kevy コマンドリファレンス</title>
-<meta name="description" content="SRANDMEMBER — Return one or more random members of a set without removing them. O(count) expected">
+<meta name="description" content="SRANDMEMBER — セットのメンバーを、削除せずに一つ以上返す。 O(count)(期待値)">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>集合</span> <span>/</span> <b>SRANDMEMBER</b></nav>
 
     <h1 class="cmd">SRANDMEMBER</h1>
-    <p class="lede">Return one or more random members of a set without removing them.</p>
+    <p class="lede">セットのメンバーを、削除せずに一つ以上返す。</p>
 
     <pre class="syntax"><code>SRANDMEMBER key [count]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(count) expected</code></p>
+      <p class="cx-body"><code>O(count)(期待値)</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: NOT random — it returns the same first-bucket member every time for a given set; a negative count is rejected instead of returning |count| members with repetitions</p>
+        <p>差異あり。ランダムではない。あるセットに対しては、毎回同じ先頭バケットのメンバーが返る。また負の count は拒否され、Redis のように重複を許して |count| 個返すことはしない。</p>
       </div>
     </section>
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MSET — kevy コマンドリファレンス</title>
-<meta name="description" content="MSET — Set multiple key/value pairs atomically per shard. O(N) pairs, one O(1) SET each">
+<meta name="description" content="MSET — 複数のキーと値の組を設定する。アトミック性は shard 単位。 O(N) —— 組数 N。各組は O(1) の SET 一回。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>文字列</span> <span>/</span> <b>MSET</b></nav>
 
     <h1 class="cmd">MSET</h1>
-    <p class="lede">Set multiple key/value pairs atomically per shard.</p>
+    <p class="lede">複数のキーと値の組を設定する。アトミック性は shard 単位。</p>
 
     <pre class="syntax"><code>MSET key value [key value ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(N) pairs, one O(1) SET each</code></p>
+      <p class="cx-body"><code>O(N) —— 組数 N。各組は O(1) の SET 一回。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: atomic only per shard — pairs are split by key and applied shard-by-shard with no cross-shard barrier, so a reader can observe some pairs written and others not; Redis MSET is globally atomic</p>
+        <p>差異あり。アトミックなのは shard 単位のみ。組はキーによって分割され、shard ごとに順次適用される。shard をまたぐバリアが無いため、一部の組だけが書き込まれた状態を読み手が観測しうる。Redis の MSET は全体としてアトミックである。</p>
       </div>
     </section>
 

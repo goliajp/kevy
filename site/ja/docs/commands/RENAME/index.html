@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RENAME — kevy コマンドリファレンス</title>
-<meta name="description" content="RENAME — Rename a key, overwriting the destination (write routed at the runtime Op level). O(1) for a string value; O(M) for a collection of M elements (the entry's weight is re-derived by walking the value)">
+<meta name="description" content="RENAME — キーの名前を変更する。変更先が存在すれば上書きする(書き込みは runtime の Op 層でルーティングされる)。 文字列値なら O(1)。要素数 M のコレクションなら O(M) —— エントリの重みを値の走査によって求め直すため。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>汎用キー操作</span> <span>/</span> <b>RENAME</b></nav>
 
     <h1 class="cmd">RENAME</h1>
-    <p class="lede">Rename a key, overwriting the destination (write routed at the runtime Op level).</p>
+    <p class="lede">キーの名前を変更する。変更先が存在すれば上書きする(書き込みは runtime の Op 層でルーティングされる)。</p>
 
     <pre class="syntax"><code>RENAME key newkey</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(1) for a string value; O(M) for a collection of M elements (the entry's weight is re-derived by walking the value)</code></p>
+      <p class="cx-body"><code>文字列値なら O(1)。要素数 M のコレクションなら O(M) —— エントリの重みを値の走査によって求め直すため。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: a cross-shard rename is a non-atomic Take then Put — there is a window in which neither key is visible; co-locate the two keys with a {hashtag} for the atomic path</p>
+        <p>差異あり。shard をまたぐ RENAME は Take のあとに Put を行う非アトミックな二段操作であり、その間にどちらのキーも見えない窓が生じる。アトミックな経路を通したい場合は {hashtag} で二つのキーを同一 shard に寄せること。</p>
       </div>
     </section>
 

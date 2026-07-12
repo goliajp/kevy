@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EXPIRE — kevy コマンドリファレンス</title>
-<meta name="description" content="EXPIRE — Set a key's TTL in seconds (non-positive TTL deletes the key). O(1)">
+<meta name="description" content="EXPIRE — キーの TTL を秒単位で設定する(TTL が 0 以下ならキーを削除する)。 O(1)">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>汎用キー操作</span> <span>/</span> <b>EXPIRE</b></nav>
 
     <h1 class="cmd">EXPIRE</h1>
-    <p class="lede">Set a key's TTL in seconds (non-positive TTL deletes the key).</p>
+    <p class="lede">キーの TTL を秒単位で設定する(TTL が 0 以下ならキーを削除する)。</p>
 
     <pre class="syntax"><code>EXPIRE key seconds</code></pre>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: the NX / XX / GT / LT condition flags are not parsed — arity is fixed at 3, so EXPIRE key seconds NX is a wrong-arity error</p>
+        <p>差異あり。NX / XX / GT / LT の条件フラグは解析しない。arity が 3 に固定されているため、EXPIRE key seconds NX は arity エラーになる。</p>
       </div>
     </section>
 

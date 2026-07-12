@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FEED.TAIL — kevy コマンドリファレンス</title>
-<meta name="description" content="FEED.TAIL — Return a shard's current feed generation and next offset. O(1) on a single shard">
+<meta name="description" content="FEED.TAIL — 指定した shard の、現在の feed generation と次の offset を返す。 単一の shard 上で O(1)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>変更フィード</span> <span>/</span> <b>FEED.TAIL</b></nav>
 
     <h1 class="cmd">FEED.TAIL</h1>
-    <p class="lede">Return a shard's current feed generation and next offset.</p>
+    <p class="lede">指定した shard の、現在の feed generation と次の offset を返す。</p>
 
     <pre class="syntax"><code>FEED.TAIL shard</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(1) on a single shard</code></p>
+      <p class="cx-body"><code>単一の shard 上で O(1)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call warn">
         <span class="h">kevy 固有</span>
-        <p>kevy-only: nearest is INFO replication's master_repl_offset, which is not a resumable per-shard CDC cursor</p>
+        <p>kevy 固有。最も近いのは INFO replication の master_repl_offset だが、それは shard ごとの再開可能な CDC カーソルではない。</p>
       </div>
     </section>
 

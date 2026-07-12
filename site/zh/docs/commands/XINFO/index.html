@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XINFO — kevy 命令参考</title>
-<meta name="description" content="XINFO — Introspect a stream, its groups, or its consumers. STREAM: O(1). GROUPS: O(G*N) — 'lag' is a linear walk of every entry, once per group. CONSUMERS: O(C)">
+<meta name="description" content="XINFO — 查看流本身、它的消费者组或组内的消费者。 STREAM：O(1)。GROUPS：O(G*N) —— lag 是逐个组各做一次全量条目遍历算出来的。CONSUMERS：O(C)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>流</span> <span>/</span> <b>XINFO</b></nav>
 
     <h1 class="cmd">XINFO</h1>
-    <p class="lede">Introspect a stream, its groups, or its consumers.</p>
+    <p class="lede">查看流本身、它的消费者组或组内的消费者。</p>
 
     <pre class="syntax"><code>XINFO STREAM key | GROUPS key | CONSUMERS key group | HELP</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>STREAM: O(1). GROUPS: O(G*N) — 'lag' is a linear walk of every entry, once per group. CONSUMERS: O(C)</code></p>
+      <p class="cx-body"><code>STREAM：O(1)。GROUPS：O(G*N) —— lag 是逐个组各做一次全量条目遍历算出来的。CONSUMERS：O(C)。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: STREAM / GROUPS / CONSUMERS / HELP only — XINFO STREAM FULL is absent; radix-tree-keys and nodes are synthetic (we have no radix tree), entries-read is approximated, and CONSUMERS omits 'inactive'</p>
+        <p>有差异：只有 STREAM / GROUPS / CONSUMERS / HELP，没有 XINFO STREAM FULL；radix-tree-keys 与 nodes 是凭空造出来的字段（kevy 根本没有 radix tree），entries-read 是近似值，CONSUMERS 不返回 inactive。</p>
       </div>
     </section>
 

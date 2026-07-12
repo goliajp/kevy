@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PREFIX.STATS — kevy 命令参考</title>
-<meta name="description" content="PREFIX.STATS — Report key-count and byte statistics for a key prefix. O(keys on the shard) — a full keyspace walk on every shard; the prefix cannot be precomputed">
+<meta name="description" content="PREFIX.STATS — 报告某个 key 前缀的 key 数量与字节数统计。 O(该 shard 上的 key 数) —— 每个 shard 都要把键空间完整走一遍；前缀这个维度无法预先算好。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>迁移</span> <span>/</span> <b>PREFIX.STATS</b></nav>
 
     <h1 class="cmd">PREFIX.STATS</h1>
-    <p class="lede">Report key-count and byte statistics for a key prefix.</p>
+    <p class="lede">报告某个 key 前缀的 key 数量与字节数统计。</p>
 
     <pre class="syntax"><code>PREFIX.STATS prefix</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(keys on the shard) — a full keyspace walk on every shard; the prefix cannot be precomputed</code></p>
+      <p class="cx-body"><code>O(该 shard 上的 key 数) —— 每个 shard 都要把键空间完整走一遍；前缀这个维度无法预先算好。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call warn">
         <span class="h">kevy 独有</span>
-        <p>kevy-only: nearest is INFO keyspace's db0:keys=N,expires=M — the same two counters, but whole-DB and O(1) off a counter, where ours is per-prefix and therefore O(keyspace)</p>
+        <p>kevy 独有：最接近的是 INFO keyspace 里的 db0:keys=N,expires=M —— 同样是那两个计数，但它是整库口径、靠一个计数器 O(1) 拿到的，我们这条是按前缀的，因此代价是 O(键空间)。</p>
       </div>
     </section>
 

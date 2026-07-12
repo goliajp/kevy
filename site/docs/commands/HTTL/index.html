@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HTTL — kevy command reference</title>
-<meta name="description" content="HTTL — Return per-field remaining TTLs in milliseconds (-1 no TTL, -2 missing). O(F) fields">
+<meta name="description" content="HTTL — Return per-field remaining TTLs in seconds (-1 no TTL, -2 missing). O(F) fields">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">Commands</a> <span>/</span> <span>Hash</span> <span>/</span> <b>HTTL</b></nav>
 
     <h1 class="cmd">HTTL</h1>
-    <p class="lede">Return per-field remaining TTLs in milliseconds (-1 no TTL, -2 missing).</p>
+    <p class="lede">Return per-field remaining TTLs in seconds (-1 no TTL, -2 missing).</p>
 
     <pre class="syntax"><code>HTTL key FIELDS numfields field [field ...]</code></pre>
 
@@ -69,7 +69,7 @@
 
     <section class="siblings">
       <h2>See also</h2>
-      <p class="sees"><a href="../HDEL/">HDEL</a><a href="../HEXISTS/">HEXISTS</a><a href="../HEXPIRE/">HEXPIRE</a><a href="../HGET/">HGET</a><a href="../HGETALL/">HGETALL</a><a href="../HINCRBY/">HINCRBY</a><a href="../HKEYS/">HKEYS</a><a href="../HLEN/">HLEN</a><a href="../HMGET/">HMGET</a><a href="../HMSET/">HMSET</a><a href="../HPERSIST/">HPERSIST</a><a href="../HPEXPIRE/">HPEXPIRE</a><a href="../HPEXPIREAT/">HPEXPIREAT</a><a href="../HSCAN/">HSCAN</a><a href="../HSET/">HSET</a><a href="../HSETNX/">HSETNX</a><a href="../HVALS/">HVALS</a></p>
+      <p class="sees"><a href="../HDEL/">HDEL</a><a href="../HEXISTS/">HEXISTS</a><a href="../HEXPIRE/">HEXPIRE</a><a href="../HGET/">HGET</a><a href="../HGETALL/">HGETALL</a><a href="../HINCRBY/">HINCRBY</a><a href="../HKEYS/">HKEYS</a><a href="../HLEN/">HLEN</a><a href="../HMGET/">HMGET</a><a href="../HMSET/">HMSET</a><a href="../HPERSIST/">HPERSIST</a><a href="../HPEXPIRE/">HPEXPIRE</a><a href="../HPEXPIREAT/">HPEXPIREAT</a><a href="../HPTTL/">HPTTL</a><a href="../HSCAN/">HSCAN</a><a href="../HSET/">HSET</a><a href="../HSETNX/">HSETNX</a><a href="../HVALS/">HVALS</a></p>
     </section>
 
     <p class="back"><a href="../">← All commands</a></p>

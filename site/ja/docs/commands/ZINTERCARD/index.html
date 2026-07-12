@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZINTERCARD — kevy コマンドリファレンス</title>
-<meta name="description" content="ZINTERCARD — Return the cardinality of the intersection of the given sorted sets. O(sum of the source cardinalities) — LIMIT does not short-circuit the gather, only the combine">
+<meta name="description" content="ZINTERCARD — 指定したソート済みセットの積集合の要素数を返す。 O(元セットの濃度の総和) —— LIMIT は収集を打ち切らない。効くのは結合の段階だけである。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ソート済み集合</span> <span>/</span> <b>ZINTERCARD</b></nav>
 
     <h1 class="cmd">ZINTERCARD</h1>
-    <p class="lede">Return the cardinality of the intersection of the given sorted sets.</p>
+    <p class="lede">指定したソート済みセットの積集合の要素数を返す。</p>
 
     <pre class="syntax"><code>ZINTERCARD numkeys key [key ...] [LIMIT limit]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(sum of the source cardinalities) — LIMIT does not short-circuit the gather, only the combine</code></p>
+      <p class="cx-body"><code>O(元セットの濃度の総和) —— LIMIT は収集を打ち切らない。効くのは結合の段階だけである。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call note">
         <span class="h">互換</span>
-        <p>full</p>
+        <p>互換</p>
       </div>
     </section>
 

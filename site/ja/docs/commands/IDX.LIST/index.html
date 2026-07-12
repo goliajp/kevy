@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>IDX.LIST — kevy コマンドリファレンス</title>
-<meta name="description" content="IDX.LIST — List declared indexes with per-index build state and stats. Not O(1) — per shard, per index it computes live stats: range/unique O(1), text O(distinct tokens + docs), vector O(nodes + links), agg O(groups + rows)">
+<meta name="description" content="IDX.LIST — 宣言済みのインデックスを、ビルド状態と統計とともに列挙する。 O(1) ではない —— shard ごと、インデックスごとに実際の統計を計算する。range / unique は O(1)、text は O(distinct tokens + docs)、vector は O(nodes + links)、agg は O(groups + rows)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>インデックス</span> <span>/</span> <b>IDX.LIST</b></nav>
 
     <h1 class="cmd">IDX.LIST</h1>
-    <p class="lede">List declared indexes with per-index build state and stats.</p>
+    <p class="lede">宣言済みのインデックスを、ビルド状態と統計とともに列挙する。</p>
 
     <pre class="syntax"><code>IDX.LIST</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>Not O(1) — per shard, per index it computes live stats: range/unique O(1), text O(distinct tokens + docs), vector O(nodes + links), agg O(groups + rows)</code></p>
+      <p class="cx-body"><code>O(1) ではない —— shard ごと、インデックスごとに実際の統計を計算する。range / unique は O(1)、text は O(distinct tokens + docs)、vector は O(nodes + links)、agg は O(groups + rows)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call warn">
         <span class="h">kevy 固有</span>
-        <p>kevy-only: nearest is FT._LIST plus FT.INFO combined</p>
+        <p>kevy 固有。最も近いのは FT._LIST と FT.INFO を合わせたもの。</p>
       </div>
     </section>
 

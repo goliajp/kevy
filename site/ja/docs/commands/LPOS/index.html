@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LPOS — kevy コマンドリファレンス</title>
-<meta name="description" content="LPOS — Return the index of matching elements in a list. O(N) always — the whole list is copied before RANK / COUNT / MAXLEN are applied, so MAXLEN bounds the comparisons but not the copy">
+<meta name="description" content="LPOS — リスト内で一致する要素の位置を返す。 常に O(N) —— RANK / COUNT / MAXLEN を適用する前にリスト全体をコピーする。したがって MAXLEN が抑えるのは比較回数だけであり、コピー量は抑えない。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>リスト</span> <span>/</span> <b>LPOS</b></nav>
 
     <h1 class="cmd">LPOS</h1>
-    <p class="lede">Return the index of matching elements in a list.</p>
+    <p class="lede">リスト内で一致する要素の位置を返す。</p>
 
     <pre class="syntax"><code>LPOS key element [RANK rank] [COUNT num-matches] [MAXLEN len]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(N) always — the whole list is copied before RANK / COUNT / MAXLEN are applied, so MAXLEN bounds the comparisons but not the copy</code></p>
+      <p class="cx-body"><code>常に O(N) —— RANK / COUNT / MAXLEN を適用する前にリスト全体をコピーする。したがって MAXLEN が抑えるのは比較回数だけであり、コピー量は抑えない。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call note">
         <span class="h">互換</span>
-        <p>full</p>
+        <p>互換</p>
       </div>
     </section>
 

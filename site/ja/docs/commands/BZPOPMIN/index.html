@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>BZPOPMIN — kevy コマンドリファレンス</title>
-<meta name="description" content="BZPOPMIN — Blocking pop of the lowest-scored member across one or more sorted sets. O(log N) per pop; the park is O(1)">
+<meta name="description" content="BZPOPMIN — 一つ以上のソート済みセットから、スコアが最小のメンバーをブロッキングで pop する。 pop 一回につき O(log N)。park は O(1)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ソート済み集合</span> <span>/</span> <b>BZPOPMIN</b></nav>
 
     <h1 class="cmd">BZPOPMIN</h1>
-    <p class="lede">Blocking pop of the lowest-scored member across one or more sorted sets.</p>
+    <p class="lede">一つ以上のソート済みセットから、スコアが最小のメンバーをブロッキングで pop する。</p>
 
     <pre class="syntax"><code>BZPOPMIN key [key ...] timeout</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(log N) per pop; the park is O(1)</code></p>
+      <p class="cx-body"><code>pop 一回につき O(log N)。park は O(1)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call note">
         <span class="h">互換</span>
-        <p>full</p>
+        <p>互換</p>
       </div>
     </section>
 

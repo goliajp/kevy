@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RPUSH — kevy コマンドリファレンス</title>
-<meta name="description" content="RPUSH — Append one or more elements to a list. O(M) values, O(1) amortised each">
+<meta name="description" content="RPUSH — リストの末尾に要素を一つ以上追加する。 O(M) —— 値の個数 M。一件あたりは償却 O(1)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>リスト</span> <span>/</span> <b>RPUSH</b></nav>
 
     <h1 class="cmd">RPUSH</h1>
-    <p class="lede">Append one or more elements to a list.</p>
+    <p class="lede">リストの末尾に要素を一つ以上追加する。</p>
 
     <pre class="syntax"><code>RPUSH key element [element ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(M) values, O(1) amortised each</code></p>
+      <p class="cx-body"><code>O(M) —— 値の個数 M。一件あたりは償却 O(1)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call note">
         <span class="h">互換</span>
-        <p>full</p>
+        <p>互換</p>
       </div>
     </section>
 

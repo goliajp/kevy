@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SCRIPT — kevy 命令参考</title>
-<meta name="description" content="SCRIPT — Manage the process-wide Lua script cache. LOAD: O(len(script)). EXISTS: O(k). FLUSH: O(cached scripts)">
+<meta name="description" content="SCRIPT — 管理进程级的 Lua 脚本缓存。 LOAD：O(len(script))。EXISTS：O(k)。FLUSH：O(已缓存的脚本数)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>脚本</span> <span>/</span> <b>SCRIPT</b></nav>
 
     <h1 class="cmd">SCRIPT</h1>
-    <p class="lede">Manage the process-wide Lua script cache.</p>
+    <p class="lede">管理进程级的 Lua 脚本缓存。</p>
 
     <pre class="syntax"><code>SCRIPT LOAD script | EXISTS sha1 [sha1 ...] | FLUSH [ASYNC|SYNC]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>LOAD: O(len(script)). EXISTS: O(k). FLUSH: O(cached scripts)</code></p>
+      <p class="cx-body"><code>LOAD：O(len(script))。EXISTS：O(k)。FLUSH：O(已缓存的脚本数)。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: LOAD / EXISTS / FLUSH only — SCRIPT KILL does not exist, by design: there is no -BUSY state to interrupt because an over-budget script self-aborts</p>
+        <p>有差异：只有 LOAD / EXISTS / FLUSH —— SCRIPT KILL 是设计上就不存在的：没有 -BUSY 状态可供打断，因为超预算的脚本会自行中止。</p>
       </div>
     </section>
 

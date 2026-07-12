@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>INCRBYFLOAT — kevy コマンドリファレンス</title>
-<meta name="description" content="INCRBYFLOAT — Increment the float value of a key by the given amount. O(1)">
+<meta name="description" content="INCRBYFLOAT — キーの浮動小数点値を指定した分だけ増やす。 O(1)">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>文字列</span> <span>/</span> <b>INCRBYFLOAT</b></nav>
 
     <h1 class="cmd">INCRBYFLOAT</h1>
-    <p class="lede">Increment the float value of a key by the given amount.</p>
+    <p class="lede">キーの浮動小数点値を指定した分だけ増やす。</p>
 
     <pre class="syntax"><code>INCRBYFLOAT key increment</code></pre>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: arithmetic is f64 and the reply uses Rust's shortest-round-trip float printer, not a long double accumulator, so trailing digits can diverge from Redis</p>
+        <p>差異あり。演算は f64 で行い、応答には long double の累算器ではなく Rust の最短往復表現による浮動小数点出力を用いる。そのため末尾の桁が Redis と食い違うことがある。</p>
       </div>
     </section>
 

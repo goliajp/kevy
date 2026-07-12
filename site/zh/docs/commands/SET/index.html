@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SET — kevy 命令参考</title>
-<meta name="description" content="SET — Set a key's string value with optional TTL and existence conditions. O(1)">
+<meta name="description" content="SET — 写入 key 的字符串值，可选地带上 TTL 与存在性条件。 O(1)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>字符串</span> <span>/</span> <b>SET</b></nav>
 
     <h1 class="cmd">SET</h1>
-    <p class="lede">Set a key's string value with optional TTL and existence conditions.</p>
+    <p class="lede">写入 key 的字符串值，可选地带上 TTL 与存在性条件。</p>
 
     <pre class="syntax"><code>SET key value [EX seconds|PX milliseconds] [NX|XX]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(1)</code></p>
+      <p class="cx-body"><code>O(1)。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: only NX / XX / EX / PX are parsed — KEEPTTL, EXAT, PXAT, GET and the IFEQ family are a syntax error; a repeated expire option is silently accepted last-one-wins instead of erroring</p>
+        <p>有差异：只解析 NX / XX / EX / PX —— KEEPTTL、EXAT、PXAT、GET 以及 IFEQ 一族都会报语法错误。过期选项若重复给出，kevy 不报错，而是静默地以最后一个为准。</p>
       </div>
     </section>
 

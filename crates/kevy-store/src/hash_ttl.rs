@@ -112,7 +112,7 @@ impl Store {
 
     /// Remaining TTL per field: `-2` key/field missing, `-1` no TTL,
     /// else remaining ms.
-    pub fn httl(&mut self, key: &[u8], fields: &[&[u8]]) -> Result<Vec<i64>, StoreError> {
+    pub fn hpttl(&mut self, key: &[u8], fields: &[&[u8]]) -> Result<Vec<i64>, StoreError> {
         self.purge_hash_ttl(key);
         let now = now_unix_ms();
         let mut out = Vec::with_capacity(fields.len());
@@ -313,7 +313,7 @@ mod tests {
             .hexpire_at(b"h", &[b"a", b"nope"], far, HExpireCond::Always)
             .unwrap();
         assert_eq!(codes, vec![1, -2]);
-        let ttls = s.httl(b"h", &[b"a", b"b", b"nope"]).unwrap();
+        let ttls = s.hpttl(b"h", &[b"a", b"b", b"nope"]).unwrap();
         assert!(ttls[0] > 90_000 && ttls[0] <= 100_000);
         assert_eq!(&ttls[1..], &[-1, -2]);
         // NX refuses existing, XX refuses missing
@@ -336,7 +336,7 @@ mod tests {
         );
         // persist
         assert_eq!(s.hpersist(b"h", &[b"a", b"b", b"nope"]).unwrap(), vec![1, -1, -2]);
-        assert_eq!(s.httl(b"h", &[b"a"]).unwrap(), vec![-1]);
+        assert_eq!(s.hpttl(b"h", &[b"a"]).unwrap(), vec![-1]);
     }
 
     #[test]
@@ -367,7 +367,7 @@ mod tests {
         s.hexpire_at(b"h", &[b"a", b"b"], soon, HExpireCond::Always).unwrap();
         // overwrite a → its TTL is discarded (Redis 7.4)
         s.hset(b"h", &[(b"a".as_slice(), b"new".as_slice())]).unwrap();
-        assert_eq!(s.httl(b"h", &[b"a"]).unwrap(), vec![-1]);
+        assert_eq!(s.hpttl(b"h", &[b"a"]).unwrap(), vec![-1]);
         std::thread::sleep(core::time::Duration::from_millis(40));
         // reaper sweeps b, reports the removal for effect logging
         let swept = s.tick_hash_ttl(100);

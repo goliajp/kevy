@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>REPL.WAIT — kevy コマンドリファレンス</title>
-<meta name="description" content="REPL.WAIT — kevy extension: on a replica, block until every shard has applied the given REPL.TOKEN (then reads are read-your-writes); +OK on success, -MISDIRECTED writer is &lt;primary&gt; on timeout or generation mismatch. Default TIMEOUT 1000 ms, hard cap 60 s. On a primary: immediate +OK. O(S) — a barrier, not a keyspace op; the wall-clock cost is the replication lag, bounded by TIMEOUT (default 1s, hard-capped at 60s)">
+<meta name="description" content="REPL.WAIT — kevy 拡張。replica 上では、与えられた REPL.TOKEN を全 shard が適用し終えるまでブロックする(以降の読み取りは read-your-writes になる)。成功で +OK、タイムアウトまたは generation 不一致では -MISDIRECTED writer is &lt;primary&gt; を返す。TIMEOUT の既定は 1000 ms、上限は 60 s。primary 上では即座に +OK。 O(S) —— keyspace 操作ではなくバリアである。実時間のコストはレプリケーション遅延そのものであり、TIMEOUT(既定 1 秒、上限 60 秒)で頭打ちになる。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>レプリケーション</span> <span>/</span> <b>REPL.WAIT</b></nav>
 
     <h1 class="cmd">REPL.WAIT</h1>
-    <p class="lede">kevy extension: on a replica, block until every shard has applied the given REPL.TOKEN (then reads are read-your-writes); +OK on success, -MISDIRECTED writer is &lt;primary&gt; on timeout or generation mismatch. Default TIMEOUT 1000 ms, hard cap 60 s. On a primary: immediate +OK.</p>
+    <p class="lede">kevy 拡張。replica 上では、与えられた REPL.TOKEN を全 shard が適用し終えるまでブロックする(以降の読み取りは read-your-writes になる)。成功で +OK、タイムアウトまたは generation 不一致では -MISDIRECTED writer is &lt;primary&gt; を返す。TIMEOUT の既定は 1000 ms、上限は 60 s。primary 上では即座に +OK。</p>
 
     <pre class="syntax"><code>REPL.WAIT gen offset [gen offset ...] [TIMEOUT milliseconds]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(S) — a barrier, not a keyspace op; the wall-clock cost is the replication lag, bounded by TIMEOUT (default 1s, hard-capped at 60s)</code></p>
+      <p class="cx-body"><code>O(S) —— keyspace 操作ではなくバリアである。実時間のコストはレプリケーション遅延そのものであり、TIMEOUT(既定 1 秒、上限 60 秒)で頭打ちになる。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call warn">
         <span class="h">kevy 固有</span>
-        <p>kevy-only: waits until a (generation, offset) token has been applied, which is what makes read-your-writes possible across a failover</p>
+        <p>kevy 固有。(generation, offset) のトークンが適用されるまで待つ。フェイルオーバーをまたいでも read-your-writes が成り立つのは、この待機があるためである。</p>
       </div>
     </section>
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XADD — kevy 命令参考</title>
-<meta name="description" content="XADD — Append an entry to a stream, with optional trim. O(log N) to insert; O(N*F) whenever a MAXLEN / MINID clause actually evicts, because the trim triggers a full weight recompute">
+<meta name="description" content="XADD — 向流追加一条条目，可顺带按 MAXLEN / MINID 裁剪。 插入是 O(log N)；只要 MAXLEN / MINID 子句真的淘汰了条目，就变成 O(N*F) —— 裁剪会触发一次全量的权重重算。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>流</span> <span>/</span> <b>XADD</b></nav>
 
     <h1 class="cmd">XADD</h1>
-    <p class="lede">Append an entry to a stream, with optional trim.</p>
+    <p class="lede">向流追加一条条目，可顺带按 MAXLEN / MINID 裁剪。</p>
 
     <pre class="syntax"><code>XADD key [NOMKSTREAM] [MAXLEN [=|~] threshold | MINID [=|~] id] id|* field value [field value ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(log N) to insert; O(N*F) whenever a MAXLEN / MINID clause actually evicts, because the trim triggers a full weight recompute</code></p>
+      <p class="cx-body"><code>插入是 O(log N)；只要 MAXLEN / MINID 子句真的淘汰了条目，就变成 O(N*F) —— 裁剪会触发一次全量的权重重算。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: the approximate-trim '~' is accepted for wire compatibility but always trims exactly, and the LIMIT clause is not parsed</p>
+        <p>有差异：近似裁剪的「~」只为线路兼容而接受，实际总是精确裁剪；LIMIT 子句不解析。</p>
       </div>
     </section>
 

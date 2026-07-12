@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LMOVE — kevy コマンドリファレンス</title>
-<meta name="description" content="LMOVE — Atomically move an element between two lists. O(1)">
+<meta name="description" content="LMOVE — 二つのリストの間で要素をアトミックに移動する。 O(1)">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>リスト</span> <span>/</span> <b>LMOVE</b></nav>
 
     <h1 class="cmd">LMOVE</h1>
-    <p class="lede">Atomically move an element between two lists.</p>
+    <p class="lede">二つのリストの間で要素をアトミックに移動する。</p>
 
     <pre class="syntax"><code>LMOVE source destination LEFT|RIGHT LEFT|RIGHT</code></pre>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: a cross-shard move is not atomic — see BRPOPLPUSH</p>
+        <p>差異あり。shard をまたぐ移動はアトミックではない —— BRPOPLPUSH を参照。</p>
       </div>
     </section>
 

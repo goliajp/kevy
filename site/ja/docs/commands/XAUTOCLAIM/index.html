@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XAUTOCLAIM — kevy コマンドリファレンス</title>
-<meta name="description" content="XAUTOCLAIM — Scan and claim idle pending entries starting from a cursor. O(log P + K + COUNT log N); the idle filter runs before the take, so a PEL of fresh entries is walked in full">
+<meta name="description" content="XAUTOCLAIM — カーソル位置から、idle 状態の pending エントリを走査して claim する。 O(log P + K + COUNT log N)。idle フィルタは取得より前に走るため、新しいエントリばかりの PEL は全体を走査することになる。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ストリーム</span> <span>/</span> <b>XAUTOCLAIM</b></nav>
 
     <h1 class="cmd">XAUTOCLAIM</h1>
-    <p class="lede">Scan and claim idle pending entries starting from a cursor.</p>
+    <p class="lede">カーソル位置から、idle 状態の pending エントリを走査して claim する。</p>
 
     <pre class="syntax"><code>XAUTOCLAIM key group consumer min-idle-time start [COUNT count] [JUSTID]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(log P + K + COUNT log N); the idle filter runs before the take, so a PEL of fresh entries is walked in full</code></p>
+      <p class="cx-body"><code>O(log P + K + COUNT log N)。idle フィルタは取得より前に走るため、新しいエントリばかりの PEL は全体を走査することになる。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: the next-cursor is last-claimed+1 rather than 0-0 when the PEL scan completes, so a client looping until 0-0 needs one extra round trip</p>
+        <p>差異あり。PEL の走査が末尾まで到達したときの next-cursor は 0-0 ではなく last-claimed+1 になる。0-0 が返るまでループするクライアントは、1 往復余計に必要となる。</p>
       </div>
     </section>
 

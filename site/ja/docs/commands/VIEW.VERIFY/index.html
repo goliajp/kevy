@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VIEW.VERIFY — kevy コマンドリファレンス</title>
-<meta name="description" content="VIEW.VERIFY — Verify a view and report member/byte statistics. materialized: O(M). virtual: O(sum over leaves of (log N + leaf range) + M) — a full fresh evaluation just to report cardinality, which is the one place a virtual view is the expensive one">
+<meta name="description" content="VIEW.VERIFY — view を検証し、メンバー数とバイト数の統計を報告する。 materialized は O(M)。virtual は、葉ごとの (log N + leaf range) の総和に O(M) を加えたもの —— カーディナリティを報告するためだけに完全な再評価を行う。virtual view が materialized より高くつく、唯一の場面である。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ビュー</span> <span>/</span> <b>VIEW.VERIFY</b></nav>
 
     <h1 class="cmd">VIEW.VERIFY</h1>
-    <p class="lede">Verify a view and report member/byte statistics.</p>
+    <p class="lede">view を検証し、メンバー数とバイト数の統計を報告する。</p>
 
     <pre class="syntax"><code>VIEW.VERIFY name</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>materialized: O(M). virtual: O(sum over leaves of (log N + leaf range) + M) — a full fresh evaluation just to report cardinality, which is the one place a virtual view is the expensive one</code></p>
+      <p class="cx-body"><code>materialized は O(M)。virtual は、葉ごとの (log N + leaf range) の総和に O(M) を加えたもの —— カーディナリティを報告するためだけに完全な再評価を行う。virtual view が materialized より高くつく、唯一の場面である。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call warn">
         <span class="h">kevy 固有</span>
-        <p>kevy-only</p>
+        <p>kevy 固有。</p>
       </div>
     </section>
 

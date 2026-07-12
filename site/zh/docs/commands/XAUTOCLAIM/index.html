@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XAUTOCLAIM — kevy 命令参考</title>
-<meta name="description" content="XAUTOCLAIM — Scan and claim idle pending entries starting from a cursor. O(log P + K + COUNT log N); the idle filter runs before the take, so a PEL of fresh entries is walked in full">
+<meta name="description" content="XAUTOCLAIM — 从游标开始扫描并认领空闲的待处理条目。 O(log P + K + COUNT log N)；空闲过滤跑在取数之前，因此一个全是新鲜条目的 PEL 会被完整走一遍。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>流</span> <span>/</span> <b>XAUTOCLAIM</b></nav>
 
     <h1 class="cmd">XAUTOCLAIM</h1>
-    <p class="lede">Scan and claim idle pending entries starting from a cursor.</p>
+    <p class="lede">从游标开始扫描并认领空闲的待处理条目。</p>
 
     <pre class="syntax"><code>XAUTOCLAIM key group consumer min-idle-time start [COUNT count] [JUSTID]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(log P + K + COUNT log N); the idle filter runs before the take, so a PEL of fresh entries is walked in full</code></p>
+      <p class="cx-body"><code>O(log P + K + COUNT log N)；空闲过滤跑在取数之前，因此一个全是新鲜条目的 PEL 会被完整走一遍。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: the next-cursor is last-claimed+1 rather than 0-0 when the PEL scan completes, so a client looping until 0-0 needs one extra round trip</p>
+        <p>有差异：PEL 扫完之后返回的下一个游标是 last-claimed+1 而不是 0-0，所以循环到 0-0 才停的客户端要多一次往返。</p>
       </div>
     </section>
 

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>XTRIM — kevy コマンドリファレンス</title>
-<meta name="description" content="XTRIM — Trim a stream by length or minimum ID. O(R log N + N*F) for R evicted entries">
+<meta name="description" content="XTRIM — 長さまたは最小 ID を基準にストリームをトリムする。 退避されるエントリが R 件で O(R log N + N*F)。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>ストリーム</span> <span>/</span> <b>XTRIM</b></nav>
 
     <h1 class="cmd">XTRIM</h1>
-    <p class="lede">Trim a stream by length or minimum ID.</p>
+    <p class="lede">長さまたは最小 ID を基準にストリームをトリムする。</p>
 
     <pre class="syntax"><code>XTRIM key MAXLEN|MINID [=|~] threshold</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(R log N + N*F) for R evicted entries</code></p>
+      <p class="cx-body"><code>退避されるエントリが R 件で O(R log N + N*F)。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: '~' is accepted but trimming is always exact, LIMIT is not parsed, and trailing tokens after the threshold are silently ignored instead of erroring</p>
+        <p>差異あり。「~」は受理するが、トリムは常に厳密に行う。LIMIT は解析しない。threshold の後ろに続く余分なトークンは、エラーにせず黙って無視する。</p>
       </div>
     </section>
 

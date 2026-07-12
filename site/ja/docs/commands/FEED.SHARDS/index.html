@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FEED.SHARDS — kevy コマンドリファレンス</title>
-<meta name="description" content="FEED.SHARDS — Return the number of change-feed shards. O(1), answered locally">
+<meta name="description" content="FEED.SHARDS — 変更フィードの shard 数を返す。 O(1)。ローカルで応答する。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>変更フィード</span> <span>/</span> <b>FEED.SHARDS</b></nav>
 
     <h1 class="cmd">FEED.SHARDS</h1>
-    <p class="lede">Return the number of change-feed shards.</p>
+    <p class="lede">変更フィードの shard 数を返す。</p>
 
     <pre class="syntax"><code>FEED.SHARDS</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>O(1), answered locally</code></p>
+      <p class="cx-body"><code>O(1)。ローカルで応答する。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call warn">
         <span class="h">kevy 固有</span>
-        <p>kevy-only: Redis has no shard-partitioned change feed to enumerate</p>
+        <p>kevy 固有。Redis には、列挙すべき shard 分割型の変更フィードそのものが存在しない。</p>
       </div>
     </section>
 

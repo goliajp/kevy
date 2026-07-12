@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PUBLISH — kevy 命令参考</title>
-<meta name="description" content="PUBLISH — Post a message to a channel; returns the receiver count. O(1) channel lookup + O(P) — a linear walk of the registered patterns with one glob match each, even when none match. Delivery fans out only to the shards holding a subscriber">
+<meta name="description" content="PUBLISH — 向频道投递一条消息；返回接收者数量。 频道查找 O(1)，外加 O(P) —— 即便一个都匹配不上，也要把已注册的模式线性走一遍，逐个做 glob 匹配。投递只扇出到有订阅者的那些 shard。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>发布订阅</span> <span>/</span> <b>PUBLISH</b></nav>
 
     <h1 class="cmd">PUBLISH</h1>
-    <p class="lede">Post a message to a channel; returns the receiver count.</p>
+    <p class="lede">向频道投递一条消息；返回接收者数量。</p>
 
     <pre class="syntax"><code>PUBLISH channel message</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(1) channel lookup + O(P) — a linear walk of the registered patterns with one glob match each, even when none match. Delivery fans out only to the shards holding a subscriber</code></p>
+      <p class="cx-body"><code>频道查找 O(1)，外加 O(P) —— 即便一个都匹配不上，也要把已注册的模式线性走一遍，逐个做 glob 匹配。投递只扇出到有订阅者的那些 shard。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call note">
         <span class="h">兼容</span>
-        <p>full</p>
+        <p>兼容。</p>
       </div>
     </section>
 

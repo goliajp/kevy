@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FEED.READ — kevy コマンドリファレンス</title>
-<meta name="description" content="FEED.READ — Read change-feed frames from one shard past a generation/offset cursor. A single shard (the shard is an argument, not a fan-out). O(log B) to locate the start offset in the backlog plus O(count * frame size) to decode and re-encode. COUNT defaults to 256 and is hard-capped at 4096">
+<meta name="description" content="FEED.READ — 1 つの shard から、generation / offset のカーソル以降の変更フィードフレームを読む。 対象は単一の shard である(shard は引数であって、fan-out ではない)。backlog 内で開始 offset を引き当てるのに O(log B)、加えてデコードと再エンコードに O(count * frame size)。COUNT の既定は 256、上限は 4096。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>変更フィード</span> <span>/</span> <b>FEED.READ</b></nav>
 
     <h1 class="cmd">FEED.READ</h1>
-    <p class="lede">Read change-feed frames from one shard past a generation/offset cursor.</p>
+    <p class="lede">1 つの shard から、generation / offset のカーソル以降の変更フィードフレームを読む。</p>
 
     <pre class="syntax"><code>FEED.READ shard generation offset [COUNT n] [PREFIX prefix ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>A single shard (the shard is an argument, not a fan-out). O(log B) to locate the start offset in the backlog plus O(count * frame size) to decode and re-encode. COUNT defaults to 256 and is hard-capped at 4096</code></p>
+      <p class="cx-body"><code>対象は単一の shard である(shard は引数であって、fan-out ではない)。backlog 内で開始 offset を引き当てるのに O(log B)、加えてデコードと再エンコードに O(count * frame size)。COUNT の既定は 256、上限は 4096。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call warn">
         <span class="h">kevy 固有</span>
-        <p>kevy-only: no clean Redis analogue. Keyspace notifications are fire-and-forget with no cursor and no replay; Redis Streams have cursors but are a stream you must dual-write to, not a feed over your existing keyspace; the replication backlog is what this is built on, but Redis exposes it only to replicas. kevy is deliberately not a broker: no consumer groups, no server-side positions, no global cross-shard order</p>
+        <p>kevy 固有。Redis にきれいに対応するものはない。keyspace notification は撃ちっぱなしで、カーソルも再生もない。Redis Streams はカーソルを持つが、それは既存の keyspace に対するフィードではなく、二重書き込みが必要な別のストリームである。レプリケーションの backlog はこの機能の土台そのものだが、Redis はそれを replica にしか見せない。kevy は意図的にブローカーではない —— コンシューマーグループも、サーバ側の位置管理も、shard 横断の全順序も持たない。</p>
       </div>
     </section>
 

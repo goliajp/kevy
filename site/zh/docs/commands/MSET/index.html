@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MSET — kevy 命令参考</title>
-<meta name="description" content="MSET — Set multiple key/value pairs atomically per shard. O(N) pairs, one O(1) SET each">
+<meta name="description" content="MSET — 批量写入多组 key 与 value —— 原子性只到单个 shard 之内。 O(N) 组，每组一次 O(1) 的 SET。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>字符串</span> <span>/</span> <b>MSET</b></nav>
 
     <h1 class="cmd">MSET</h1>
-    <p class="lede">Set multiple key/value pairs atomically per shard.</p>
+    <p class="lede">批量写入多组 key 与 value —— 原子性只到单个 shard 之内。</p>
 
     <pre class="syntax"><code>MSET key value [key value ...]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(N) pairs, one O(1) SET each</code></p>
+      <p class="cx-body"><code>O(N) 组，每组一次 O(1) 的 SET。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: atomic only per shard — pairs are split by key and applied shard-by-shard with no cross-shard barrier, so a reader can observe some pairs written and others not; Redis MSET is globally atomic</p>
+        <p>有差异：原子性只到 shard 一级 —— 键值对按 key 拆到各个 shard，逐个 shard 应用，中间没有任何跨 shard 屏障，所以读者可能看到一部分已经写入、另一部分还没写。Redis 的 MSET 是全局原子的。</p>
       </div>
     </section>
 

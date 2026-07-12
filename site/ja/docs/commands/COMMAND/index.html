@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>COMMAND — kevy コマンドリファレンス</title>
-<meta name="description" content="COMMAND — Introspect the command table (COUNT, LIST, INFO, DOCS subcommands). bare / LIST / DOCS: O(V) verbs. COUNT: O(1). INFO / DOCS with k names: O(k*V) — the lookup is a linear scan">
+<meta name="description" content="COMMAND — コマンドテーブルを参照する(COUNT / LIST / INFO / DOCS)。 引数なし / LIST / DOCS は verb 数 V に対して O(V)。COUNT は O(1)。INFO / DOCS に名前を k 個渡すと O(k*V) —— 引き当ては線形走査である。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">コマンド</a> <span>/</span> <span>サーバー</span> <span>/</span> <b>COMMAND</b></nav>
 
     <h1 class="cmd">COMMAND</h1>
-    <p class="lede">Introspect the command table (COUNT, LIST, INFO, DOCS subcommands).</p>
+    <p class="lede">コマンドテーブルを参照する(COUNT / LIST / INFO / DOCS)。</p>
 
     <pre class="syntax"><code>COMMAND [COUNT | LIST | INFO command [command ...] | DOCS [command [command ...]]]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>計算量</h2>
-      <p class="cx-body"><code>bare / LIST / DOCS: O(V) verbs. COUNT: O(1). INFO / DOCS with k names: O(k*V) — the lookup is a linear scan</code></p>
+      <p class="cx-body"><code>引数なし / LIST / DOCS は verb 数 V に対して O(V)。COUNT は O(1)。INFO / DOCS に名前を k 個渡すと O(k*V) —— 引き当ては線形走査である。</code></p>
       <p class="engine-note">計算量と互換性は kevy の実装から読み取ったものであり、Redis のドキュメントを写したものではない。実際に異なるものがいくつかある。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>Redis との互換性</h2>
       <div class="call loss">
         <span class="h">差異あり</span>
-        <p>differs: COUNT / LIST / INFO / DOCS only — GETKEYS and GETKEYSANDFLAGS are absent, and the info rows hard-code first/last/step and leave ACL categories, tips and key-specs empty</p>
+        <p>差異あり。COUNT / LIST / INFO / DOCS のみで、GETKEYS と GETKEYSANDFLAGS は存在しない。info 行の first / last / step は固定値であり、ACL カテゴリ、tips、key-specs は空のまま返す。</p>
       </div>
     </section>
 

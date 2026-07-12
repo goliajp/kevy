@@ -60,10 +60,25 @@ impl Store {
         Ok(codes)
     }
 
-    /// `HTTL` — remaining ms per field (`-2` missing, `-1` no TTL).
+    /// `HTTL` — remaining **seconds** per field (`-2` missing, `-1` no TTL).
+    ///
+    /// Rounded to the nearest second, as the wire verb and Redis both do. For
+    /// the unrounded value use [`Db::hpttl`]. Before 4.0 this method carried the
+    /// HTTL name and returned milliseconds, which is a thousand-fold error
+    /// waiting to happen in any caller that trusted the name.
     pub fn httl(&self, key: &[u8], fields: &[&[u8]]) -> KevyResult<Vec<i64>> {
+        Ok(self
+            .hpttl(key, fields)?
+            .into_iter()
+            .map(|ms| if ms >= 0 { (ms + 500) / 1000 } else { ms })
+            .collect())
+    }
+
+    /// `HPTTL` — remaining **milliseconds** per field (`-2` missing, `-1` no
+    /// TTL).
+    pub fn hpttl(&self, key: &[u8], fields: &[&[u8]]) -> KevyResult<Vec<i64>> {
         let mut g = self.wshard(key);
-        g.store.httl(key, fields).map_err(store_err)
+        g.store.hpttl(key, fields).map_err(store_err)
     }
 
     /// `HPERSIST` — clear per-field TTLs (`-2` missing, `-1` had no

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SSCAN — kevy 命令参考</title>
-<meta name="description" content="SSCAN — Iterate a set's members (single-batch cursor). O(N) — the whole set is copied and returned in one batch">
+<meta name="description" content="SSCAN — 遍历 set 的成员（单批次游标）。 O(N) —— 整个 set 会被拷贝出来，一次性返回。">
 <link rel="stylesheet" href="../../../../assets/kevy.css">
 <link rel="stylesheet" href="../../../../assets/docs.css">
 <script>
@@ -42,7 +42,7 @@
     <nav class="crumb"><a href="../">命令</a> <span>/</span> <span>集合</span> <span>/</span> <b>SSCAN</b></nav>
 
     <h1 class="cmd">SSCAN</h1>
-    <p class="lede">Iterate a set's members (single-batch cursor).</p>
+    <p class="lede">遍历 set 的成员（单批次游标）。</p>
 
     <pre class="syntax"><code>SSCAN key cursor [MATCH pattern] [COUNT count]</code></pre>
 
@@ -55,7 +55,7 @@
 
     <section>
       <h2>复杂度</h2>
-      <p class="cx-body"><code>O(N) — the whole set is copied and returned in one batch</code></p>
+      <p class="cx-body"><code>O(N) —— 整个 set 会被拷贝出来，一次性返回。</code></p>
       <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
     </section>
 
@@ -63,7 +63,7 @@
       <h2>与 Redis 的兼容性</h2>
       <div class="call loss">
         <span class="h">有差异</span>
-        <p>differs: not a cursor iterator — the cursor is always 0 and the entire set comes back in one reply; COUNT is validated then ignored</p>
+        <p>有差异：它不是游标迭代器 —— 游标恒为 0，整个 set 在一次回复里全部返回。COUNT 校验过后直接忽略。</p>
       </div>
     </section>
 
