@@ -18,24 +18,24 @@
   align-items: baseline;
   flex-wrap: wrap;
   font-size: 0.8125rem;
-  color: var(--muted);
+  color: var(--text-3);
   margin-bottom: 1.75rem;
   font-family: var(--mono);
 }
 .crumb a {
-  color: var(--ink-soft);
+  color: var(--text-2);
   text-decoration: none;
   border-bottom: 1px solid transparent;
 }
 .crumb a:hover {
-  color: var(--accent);
+  color: var(--blue);
   border-bottom-color: currentColor;
 }
 .crumb span {
-  color: var(--rule);
+  color: var(--edge);
 }
 .crumb b {
-  color: var(--ink);
+  color: var(--text);
   font-weight: 600;
 }
 
@@ -52,7 +52,7 @@ h1.cmd {
 .ref .lede {
   font-size: 1.0625rem;
   line-height: 1.65;
-  color: var(--ink-soft);
+  color: var(--text-2);
   max-width: 62ch;
   margin: 0 0 2rem;
 }
@@ -62,9 +62,9 @@ h1.cmd {
 pre.syntax {
   margin: 0 0 2rem;
   padding: 1rem 1.15rem;
-  background: var(--sunken);
-  border: 1px solid var(--rule);
-  border-left: 3px solid var(--accent);
+  background: var(--deep);
+  border: 1px solid var(--edge);
+  border-left: 3px solid var(--blue);
   border-radius: 3px;
   overflow-x: auto;
 }
@@ -72,7 +72,7 @@ pre.syntax code {
   font-family: var(--mono);
   font-size: 0.9375rem;
   line-height: 1.6;
-  color: var(--ink);
+  color: var(--text);
   background: none;
   padding: 0;
   white-space: pre;
@@ -85,27 +85,27 @@ dl.meta {
   grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
   gap: 1px;
   margin: 0 0 2.5rem;
-  background: var(--rule);
-  border: 1px solid var(--rule);
+  background: var(--edge);
+  border: 1px solid var(--edge);
   border-radius: 3px;
   overflow: hidden;
 }
 dl.meta > div {
-  background: var(--surface);
+  background: var(--lift);
   padding: 0.75rem 1rem;
 }
 dl.meta dt {
   font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.07em;
-  color: var(--muted);
+  color: var(--text-3);
   margin-bottom: 0.3rem;
   font-weight: 600;
 }
 dl.meta dd {
   margin: 0;
   font-size: 0.875rem;
-  color: var(--ink);
+  color: var(--text);
   line-height: 1.5;
 }
 dl.meta dd.mono {
@@ -115,10 +115,10 @@ dl.meta dd code {
   font-size: 0.75rem;
   padding: 0.1rem 0.4rem;
   margin-right: 0.25rem;
-  background: var(--sunken);
-  border: 1px solid var(--rule);
+  background: var(--deep);
+  border: 1px solid var(--edge);
   border-radius: 2px;
-  color: var(--ink-soft);
+  color: var(--text-2);
 }
 
 /* ── sections ───────────────────────────────────────────────────────────── */
@@ -131,10 +131,10 @@ dl.meta dd code {
   text-transform: uppercase;
   letter-spacing: 0.09em;
   font-weight: 600;
-  color: var(--muted);
+  color: var(--text-3);
   margin: 0 0 0.85rem;
   padding-bottom: 0.5rem;
-  border-bottom: 1px solid var(--rule);
+  border-bottom: 1px solid var(--edge);
 }
 
 /* The complexity line is the column Redis's reference does not have. It is
@@ -148,17 +148,17 @@ dl.meta dd code {
   font-size: 0.875rem;
   line-height: 1.7;
   padding: 0.85rem 1rem;
-  background: var(--sunken);
-  border: 1px solid var(--rule);
+  background: var(--deep);
+  border: 1px solid var(--edge);
   border-radius: 3px;
-  color: var(--ink);
+  color: var(--text);
   white-space: pre-wrap;
 }
 .engine-note {
   margin: 0;
   font-size: 0.8125rem;
   line-height: 1.6;
-  color: var(--muted);
+  color: var(--text-3);
   max-width: 68ch;
 }
 
@@ -170,9 +170,9 @@ dl.meta dd code {
 .call {
   padding: 0.9rem 1.1rem;
   border-radius: 3px;
-  border: 1px solid var(--rule);
+  border: 1px solid var(--edge);
   border-left-width: 3px;
-  background: var(--surface);
+  background: var(--lift);
 }
 .call .h {
   display: inline-block;
@@ -186,28 +186,28 @@ dl.meta dd code {
   margin: 0;
   font-size: 0.9375rem;
   line-height: 1.7;
-  color: var(--ink);
+  color: var(--text);
   max-width: 68ch;
 }
 .call.note {
-  border-left-color: var(--accent-deep);
+  border-left-color: var(--blue-dim);
 }
 .call.note .h {
-  color: var(--accent-deep);
+  color: var(--blue-dim);
 }
 .call.loss {
-  border-left-color: var(--loss);
-  background: var(--loss-wash);
+  border-left-color: var(--thin);
+  background: var(--thin-wash);
 }
 .call.loss .h {
-  color: var(--loss);
+  color: var(--thin);
 }
 .call.warn {
-  border-left-color: var(--accent);
-  background: var(--accent-wash);
+  border-left-color: var(--blue);
+  background: var(--blue-wash);
 }
 .call.warn .h {
-  color: var(--accent);
+  color: var(--blue);
 }
 
 /* ── see-also ───────────────────────────────────────────────────────────── */
@@ -222,29 +222,29 @@ dl.meta dd code {
   font-family: var(--mono);
   font-size: 0.75rem;
   padding: 0.25rem 0.55rem;
-  border: 1px solid var(--rule);
+  border: 1px solid var(--edge);
   border-radius: 2px;
-  color: var(--ink-soft);
+  color: var(--text-2);
   text-decoration: none;
-  background: var(--surface);
+  background: var(--lift);
 }
 .sees a:hover {
-  color: var(--accent);
-  border-color: var(--accent);
+  color: var(--blue);
+  border-color: var(--blue);
 }
 
 .back {
   margin-top: 3rem;
   padding-top: 1.25rem;
-  border-top: 1px solid var(--rule);
+  border-top: 1px solid var(--edge);
   font-size: 0.875rem;
 }
 .back a {
-  color: var(--ink-soft);
+  color: var(--text-2);
   text-decoration: none;
 }
 .back a:hover {
-  color: var(--accent);
+  color: var(--blue);
 }
 
 /* ── the index: filters ─────────────────────────────────────────────────── */
@@ -259,17 +259,17 @@ dl.meta dd code {
   top: var(--mast-h);
   z-index: 5;
   padding: 0.85rem 0;
-  background: var(--paper);
-  border-bottom: 1px solid var(--rule);
+  background: var(--void);
+  border-bottom: 1px solid var(--edge);
 }
 .filters input,
 .filters select {
   font: inherit;
   font-size: 0.875rem;
   padding: 0.45rem 0.65rem;
-  background: var(--surface);
-  color: var(--ink);
-  border: 1px solid var(--rule);
+  background: var(--lift);
+  color: var(--text);
+  border: 1px solid var(--edge);
   border-radius: 3px;
 }
 .filters input {
@@ -279,14 +279,14 @@ dl.meta dd code {
 }
 .filters input:focus,
 .filters select:focus {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--blue);
   outline-offset: -1px;
-  border-color: var(--accent);
+  border-color: var(--blue);
 }
 .hits {
   font-family: var(--mono);
   font-size: 0.75rem;
-  color: var(--muted);
+  color: var(--text-3);
   margin-left: auto;
   white-space: nowrap;
 }
@@ -295,7 +295,7 @@ dl.meta dd code {
 
 .tbl {
   overflow-x: auto;
-  border: 1px solid var(--rule);
+  border: 1px solid var(--edge);
   border-radius: 3px;
 }
 .tbl table {
@@ -310,21 +310,21 @@ dl.meta dd code {
   font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.07em;
-  color: var(--muted);
+  color: var(--text-3);
   font-weight: 600;
   padding: 0.65rem 0.85rem;
-  background: var(--sunken);
-  border-bottom: 1px solid var(--rule);
+  background: var(--deep);
+  border-bottom: 1px solid var(--edge);
   white-space: nowrap;
 }
 .tbl tbody tr {
-  border-bottom: 1px solid var(--rule);
+  border-bottom: 1px solid var(--edge);
 }
 .tbl tbody tr:last-child {
   border-bottom: 0;
 }
 .tbl tbody tr:hover {
-  background: var(--surface);
+  background: var(--lift);
 }
 .tbl td {
   padding: 0.6rem 0.85rem;
@@ -338,26 +338,32 @@ dl.meta dd code {
   font-family: var(--mono);
   font-weight: 600;
   font-size: 0.8125rem;
-  color: var(--ink);
+  color: var(--text);
   text-decoration: none;
 }
 .tbl td.k a:hover {
-  color: var(--accent);
+  color: var(--blue);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 .tbl td.g {
-  color: var(--muted);
+  color: var(--text-3);
   white-space: nowrap;
   font-size: 0.8125rem;
 }
+/* The cost term, not the essay. `nowrap` on the full complexity line grew the
+ * cell to several thousand pixels and pushed the compatibility badge and the
+ * summary off the right edge of the page. */
 .tbl td.cx {
   font-size: 0.75rem;
-  color: var(--ink-soft);
+  color: var(--text-2);
   white-space: nowrap;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .tbl td.sum {
-  color: var(--ink-soft);
+  color: var(--text-2);
   min-width: 22rem;
 }
 
@@ -371,19 +377,19 @@ dl.meta dd code {
   border: 1px solid;
 }
 .badge.full {
-  color: var(--accent-deep);
-  border-color: color-mix(in srgb, var(--accent-deep) 35%, transparent);
-  background: color-mix(in srgb, var(--accent-deep) 8%, transparent);
+  color: var(--blue-dim);
+  border-color: color-mix(in srgb, var(--blue-dim) 35%, transparent);
+  background: color-mix(in srgb, var(--blue-dim) 8%, transparent);
 }
 .badge.differs {
-  color: var(--loss);
-  border-color: color-mix(in srgb, var(--loss) 35%, transparent);
-  background: var(--loss-wash);
+  color: var(--thin);
+  border-color: color-mix(in srgb, var(--thin) 35%, transparent);
+  background: var(--thin-wash);
 }
 .badge.only {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-  background: var(--accent-wash);
+  color: var(--blue);
+  border-color: color-mix(in srgb, var(--blue) 35%, transparent);
+  background: var(--blue-wash);
 }
 
 /* ── phone ──────────────────────────────────────────────────────────────── */
@@ -404,11 +410,11 @@ dl.meta dd code {
   .tbl td.k {
     position: sticky;
     left: 0;
-    background: var(--paper);
-    border-right: 1px solid var(--rule);
+    background: var(--void);
+    border-right: 1px solid var(--edge);
   }
   .tbl tbody tr:hover td.k {
-    background: var(--surface);
+    background: var(--lift);
   }
   .tbl td.sum {
     min-width: 20rem;
@@ -455,8 +461,8 @@ dl.meta dd code {
   top: var(--mast-h);
   max-height: calc(100vh - var(--mast-h));
   overflow-y: auto;
-  padding: 2rem 1.25rem 3rem var(--gutter);
-  border-right: 1px solid var(--rule);
+  padding: 2rem 1.25rem 3rem var(--gut);
+  border-right: 1px solid var(--edge);
   scrollbar-width: thin;
 }
 .side-h {
@@ -465,7 +471,7 @@ dl.meta dd code {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-weight: 600;
-  color: var(--muted);
+  color: var(--text-3);
 }
 .side-h:first-child {
   margin-top: 0;
@@ -482,29 +488,29 @@ dl.meta dd code {
   border-radius: 3px;
   font-size: 0.875rem;
   line-height: 1.45;
-  color: var(--ink-soft);
+  color: var(--text-2);
   text-decoration: none;
 }
 .side li a:hover {
-  background: var(--surface);
-  color: var(--ink);
+  background: var(--lift);
+  color: var(--text);
 }
 .side li a[aria-current="page"] {
-  background: var(--accent-wash);
-  color: var(--accent);
+  background: var(--blue-wash);
+  color: var(--blue);
   font-weight: 600;
 }
 
 /* ── the document ───────────────────────────────────────────────────────── */
 
 .doc {
-  padding: 2.5rem var(--gutter) 5rem;
+  padding: 2.5rem var(--gut) 5rem;
   min-width: 0;
 }
 .doc-head {
   margin-bottom: 2.25rem;
   padding-bottom: 1.5rem;
-  border-bottom: 1px solid var(--rule);
+  border-bottom: 1px solid var(--edge);
 }
 .doc-head h1 {
   margin: 0;
@@ -512,14 +518,14 @@ dl.meta dd code {
   line-height: 1.2;
   letter-spacing: -0.018em;
   font-weight: 640;
-  color: var(--ink);
+  color: var(--text);
   text-wrap: balance;
 }
 .doc-head .lede {
   margin: 0.75rem 0 0;
   font-size: 1.0625rem;
   line-height: 1.7;
-  color: var(--ink-soft);
+  color: var(--text-2);
   max-width: 68ch;
 }
 
@@ -530,7 +536,7 @@ dl.meta dd code {
   line-height: 1.3;
   font-weight: 620;
   letter-spacing: -0.012em;
-  color: var(--ink);
+  color: var(--text);
   scroll-margin-top: calc(var(--mast-h) + 1rem);
   text-transform: none;
   border: 0;
@@ -539,20 +545,20 @@ dl.meta dd code {
   margin: 2rem 0 0.75rem;
   font-size: 1.0625rem;
   font-weight: 620;
-  color: var(--ink);
+  color: var(--text);
   scroll-margin-top: calc(var(--mast-h) + 1rem);
 }
 .doc h4 {
   margin: 1.5rem 0 0.6rem;
   font-size: 0.9375rem;
   font-weight: 620;
-  color: var(--ink);
+  color: var(--text);
 }
 .doc p {
   margin: 0 0 1.1rem;
   font-size: 1rem;
   line-height: 1.8;
-  color: var(--ink-soft);
+  color: var(--text-2);
   max-width: 72ch;
 }
 .doc ul,
@@ -565,19 +571,19 @@ dl.meta dd code {
   margin-bottom: 0.4rem;
   font-size: 1rem;
   line-height: 1.75;
-  color: var(--ink-soft);
+  color: var(--text-2);
 }
 .doc li::marker {
-  color: var(--muted);
+  color: var(--text-3);
 }
 .doc a {
-  color: var(--accent);
+  color: var(--blue);
   text-decoration: underline;
   text-underline-offset: 2px;
   text-decoration-thickness: 1px;
 }
 .doc b {
-  color: var(--ink);
+  color: var(--text);
   font-weight: 620;
 }
 .doc code {
@@ -585,17 +591,17 @@ dl.meta dd code {
   font-size: 0.85em;
   padding: 0.1rem 0.35rem;
   border-radius: 2px;
-  background: var(--sunken);
-  border: 1px solid var(--rule);
-  color: var(--ink);
+  background: var(--deep);
+  border: 1px solid var(--edge);
+  color: var(--text);
   word-break: break-word;
 }
 .doc figure.code {
   margin: 0 0 1.4rem;
-  border: 1px solid var(--rule);
+  border: 1px solid var(--edge);
   border-radius: 4px;
   overflow: hidden;
-  background: var(--sunken);
+  background: var(--deep);
 }
 .doc figure.code pre {
   margin: 0;
@@ -609,15 +615,15 @@ dl.meta dd code {
   padding: 0;
   background: none;
   border: 0;
-  color: var(--ink-soft);
+  color: var(--text-2);
   white-space: pre;
   word-break: normal;
 }
 .doc blockquote {
   margin: 0 0 1.3rem;
   padding: 0.85rem 1.1rem;
-  border-left: 3px solid var(--accent);
-  background: var(--accent-wash);
+  border-left: 3px solid var(--blue);
+  background: var(--blue-wash);
   border-radius: 0 3px 3px 0;
   max-width: 72ch;
 }
@@ -628,7 +634,7 @@ dl.meta dd code {
 .doc hr {
   margin: 2.5rem 0;
   border: 0;
-  border-top: 1px solid var(--rule);
+  border-top: 1px solid var(--edge);
 }
 .doc .tbl {
   margin-bottom: 1.4rem;
@@ -653,7 +659,7 @@ dl.meta dd code {
     top: var(--mast-h);
     max-height: calc(100vh - var(--mast-h));
     overflow-y: auto;
-    padding: 2.5rem var(--gutter) 3rem 0;
+    padding: 2.5rem var(--gut) 3rem 0;
   }
 }
 .toc-h {
@@ -662,13 +668,13 @@ dl.meta dd code {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-weight: 600;
-  color: var(--muted);
+  color: var(--text-3);
 }
 .toc ul {
   list-style: none;
   margin: 0;
   padding: 0;
-  border-left: 1px solid var(--rule);
+  border-left: 1px solid var(--edge);
 }
 .toc li a {
   display: block;
@@ -677,7 +683,7 @@ dl.meta dd code {
   border-left: 1px solid transparent;
   font-size: 0.8125rem;
   line-height: 1.5;
-  color: var(--muted);
+  color: var(--text-3);
   text-decoration: none;
 }
 .toc li.l3 a {
@@ -685,8 +691,8 @@ dl.meta dd code {
   font-size: 0.75rem;
 }
 .toc li a:hover {
-  color: var(--accent);
-  border-left-color: var(--accent);
+  color: var(--blue);
+  border-left-color: var(--blue);
 }
 
 /* ── the hub ────────────────────────────────────────────────────────────── */
@@ -700,41 +706,41 @@ dl.meta dd code {
   text-transform: uppercase;
   letter-spacing: 0.09em;
   font-weight: 600;
-  color: var(--muted);
+  color: var(--text-3);
   border: 0;
   padding: 0;
 }
 .hub-sec .cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
-  background: var(--paper);
-  border: 1px solid var(--rule);
+  background: var(--void);
+  border: 1px solid var(--edge);
   border-radius: 4px;
   overflow: hidden;
 }
 .hub-sec .card {
   padding: 1rem 1.1rem 1.1rem;
   text-decoration: none;
-  border-right: 1px solid var(--rule);
-  border-bottom: 1px solid var(--rule);
+  border-right: 1px solid var(--edge);
+  border-bottom: 1px solid var(--edge);
   margin: 0 -1px -1px 0;
   min-width: 0;
 }
 .hub-sec .card:hover {
-  background: var(--surface);
+  background: var(--lift);
 }
 .hub-sec .card h3 {
   margin: 0 0 0.3rem;
   font-size: 0.9375rem;
   font-weight: 620;
-  color: var(--ink);
+  color: var(--text);
   line-height: 1.35;
 }
 .hub-sec .card p {
   margin: 0;
   font-size: 0.8125rem;
   line-height: 1.6;
-  color: var(--ink-soft);
+  color: var(--text-2);
   max-width: none;
 }
 
@@ -748,8 +754,8 @@ dl.meta dd code {
     position: static;
     max-height: none;
     border-right: 0;
-    border-bottom: 1px solid var(--rule);
-    padding: 1.25rem var(--gutter);
+    border-bottom: 1px solid var(--edge);
+    padding: 1.25rem var(--gut);
     /* A twenty-four-item map is not what someone on a phone wants above the
      * document they clicked. It folds; the masthead nav stays. */
     display: flex;

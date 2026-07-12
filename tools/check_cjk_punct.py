@@ -59,6 +59,12 @@ SOFT = [
     re.compile(r"<code\b.*?</code>", re.S | re.I),
 ]
 STRIP = [
+    # A `*` or `!` right after an opening quote is the table renderer's win/loss
+    # marker on a data cell, not punctuation: site_render.table() strips it before
+    # the cell reaches the page. Both CJK content files need it — 「"!不要搬"」 and
+    # 「"!移すな"」 are the three refusal rows on the migration page, and the marker
+    # is the whole reason they are painted red.
+    re.compile(r"""(?<=["'])[*!](?=[^"'\n]*["'])"""),
     re.compile(r"<pre\b.*?</pre>", re.S | re.I),
     re.compile(r"<script\b.*?</script>", re.S | re.I),
     re.compile(r"<style\b.*?</style>", re.S | re.I),
@@ -91,6 +97,29 @@ def blank(text):
     for pat in STRIP:
         text = pat.sub(fill("\x01"), text)
     return text
+
+
+def unbalanced(raw, is_md):
+    """Tags whose opener outnumbers its closer, for the DOTALL regions.
+
+    A gate that silently checks LESS than it claims is worse than no gate. The
+    <code>…</code> and <pre>…</pre> patterns are DOTALL, so a single unclosed
+    <code> — in a comment, in a string, anywhere — makes the matcher swallow
+    everything down to the NEXT closing tag, blanking real prose out of the
+    check. It happened: a file reported ok with a half-width comma sitting in the
+    blanked region. The count has to balance, or we refuse rather than lie.
+    """
+    out = []
+    for tag in ("code", "pre", "script", "style"):
+        opens = len(re.findall(rf"<{tag}\b", raw, re.I))
+        closes = len(re.findall(rf"</{tag}>", raw, re.I))
+        if opens != closes:
+            out.append(f"{tag}: {opens} open, {closes} closed")
+    # Fences are pairwise — but only in markdown. In a Python source they are
+    # just three characters inside a regex, and md.py has three of them.
+    if is_md and raw.count("```") % 2:
+        out.append("``` fences: odd count")
+    return out
 
 
 def check(path):
@@ -135,7 +164,21 @@ def main():
     files = sorted({f for f in files if f.resolve() != me})
 
     total = 0
+    broken = 0
     for f in files:
+        rel = f.resolve().relative_to(root) if f.resolve().is_relative_to(root) else f
+        text = f.read_text(encoding="utf-8")
+        # A file with no CJK in it cannot have a CJK punctuation problem, so an
+        # unbalanced fence in a Python tool's docstring is not this gate's
+        # business. Only files it would actually check have to be checkable.
+        bad_tags = (unbalanced(text, f.suffix == ".md")
+                    if re.search(f"[{CJK}]", text) else [])
+        if bad_tags:
+            broken += 1
+            print(f"{rel}: UNCHECKABLE — {'; '.join(bad_tags)}")
+            print("    An unbalanced tag makes this gate blank out real prose and "
+                  "then report ok. Balance it, or write the tag name without "
+                  "angle brackets.")
         hits = check(f)
         if not hits:
             continue
@@ -149,6 +192,10 @@ def main():
         if len(hits) > 6:
             print(f"{rel}: … and {len(hits) - 6} more")
 
+    if broken:
+        print()
+        print(f"REFUSED: {broken} file(s) the gate cannot honestly check.")
+        return 1
     if total:
         print()
         print(f"REFUSED: {total} half-width punctuation marks in CJK prose "

@@ -3,10 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>kevy——纯 Rust 写的 Redis 兼容引擎</title>
-<meta name="description" content="一个纯 Rust 写成、零第三方依赖的 Redis 兼容存储引擎。可以当服务端跑，可以嵌进你自己的二进制，可以编译成 WebAssembly，也能塞进一颗单片机。">
+<title>kevy——AI 系统的数据层</title>
+<meta name="description" content="一个为 AI 系统准备的 Redis 兼容数据层。协议不变，速度更快，而且向量检索、全文检索、二级索引、物化视图和变更流都在同一个引擎里——可以跑在服务器上、你的二进制里、浏览器标签页里，或者一台设备上。">
 <link rel="stylesheet" href="../assets/kevy.css">
-<link rel="stylesheet" href="../assets/pages.css">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,83 +40,119 @@
 </header>
 
 <main id="main">
-<section class="hero">
-  <div class="hero-in">
-    <p class="eyebrow">4.0 版本</p>
-    <h1>一个 Redis 兼容的引擎，<br>从零写起。</h1>
-    <p class="lede">kevy 说的是 RESP 协议，实现了 184 条命令，而且<b>没有任何第三方依赖</b>——没有 hashmap crate，没有 hasher，没有异步运行时。33 个 crate，都是我们自己写的，都是 Rust。同一套引擎，可以撑起一台 16 核的服务器，可以嵌进一个 CLI，可以编译成 151 KB 的 WebAssembly，也可以在一颗连分配器都没有的 Cortex-M 单片机上启动。</p>
-    <div class="ctas"><a class="cta primary" href="../zh/play/">在浏览器里试一下</a><a class="cta" href="../zh/docs/">读文档</a><a class="cta" href="../zh/benchmarks/">看实测数字</a></div>
-  </div>
-  <div class="hero-aside"><pre class="hero-code"><code>$ cargo install kevy
+<section class="band" style="border-top:0"><div class="split"><div>
+    <p class="eyebrow">kevy 4.0</p>
+    <h1>AI 系统的<br>数据层。</h1>
+    <p class="lede">兼容 Redis，所以可以直接换上去。<b>每一个操作都更快。</b>而且它做的正是一个 AI 系统真正需要的事——向量检索、全文检索、二级索引、物化视图、变更流——<b>都在同一个引擎里，都建在同一批 key 上。</b></p>
+    <div class="ctas"><a class="cta primary" href="../#swap">为什么可以直接替换 Redis</a><a class="cta" href="../#more">它还能做什么</a><a class="cta" href="../zh/play/">在浏览器里跑一下</a></div>
+  </div><div><pre class="hero-code"><code>$ cargo install kevy
 $ kevy --port 6379
 
 $ redis-cli -p 6379
-&gt; SET greeting "hello"
+&gt; SET session:7f3a '{"user":"ada"}' EX 3600
 OK
-&gt; INFO server
-kevy_version:4.0.0
-dependencies:0</code></pre></div>
+&gt; IDX.QUERY idx:sem KNN "&lt;vector&gt;" LIMIT 10
+1) "doc:4410"
+2) "doc:9982"</code></pre></div></div></section>
+<section class="band deep" id="swap">
+  <div class="sec-h">
+    <p class="eyebrow">为什么可以直接替换 Redis</p>
+    <h2>同样的协议。更高的吞吐。</h2>
+    <p class="sec-lede">你的客户端不用改——RESP2 和 RESP3，184 条命令，还是你现在用的那个库。一台机器，16 核，loopback，小 value，五次运行取中位数。</p>
+  </div>
+  <div class="bars"><div class="bar-row"><div class="bar-k">GET</div><div class="bar-track"><div class="bar us" style="width:100.0%"></div><div class="bar them" style="width:71.8%"></div></div><div class="bar-n">1.39×</div></div><div class="bar-row"><div class="bar-k">SET</div><div class="bar-track"><div class="bar us" style="width:88.7%"></div><div class="bar them" style="width:33.0%"></div></div><div class="bar-n">2.69×</div></div><div class="bar-row"><div class="bar-k">INCR</div><div class="bar-track"><div class="bar us" style="width:78.6%"></div><div class="bar them" style="width:44.3%"></div></div><div class="bar-n">1.77×</div></div><div class="bar-row"><div class="bar-k">SADD</div><div class="bar-track"><div class="bar us" style="width:71.8%"></div><div class="bar them" style="width:47.3%"></div></div><div class="bar-n">1.52×</div></div><div class="bar-row"><div class="bar-k">HSET</div><div class="bar-track"><div class="bar us" style="width:55.0%"></div><div class="bar them" style="width:38.7%"></div></div><div class="bar-n">1.42×</div></div><div class="bar-row"><div class="bar-k">LPUSH</div><div class="bar-track"><div class="bar us narrow" style="width:41.2%"></div><div class="bar them" style="width:36.7%"></div></div><div class="bar-n narrow">1.12×</div></div><div class="bar-row"><div class="bar-k">ZADD</div><div class="bar-track"><div class="bar us narrow" style="width:39.1%"></div><div class="bar them" style="width:35.6%"></div></div><div class="bar-n narrow">1.10×</div></div></div>
+  <div class="bars-legend">
+    <span><i style="background:var(--blue)"></i>kevy 4.0</span>
+    <span><i style="background:var(--edge-hi)"></i>Redis 8</span>
+    <span><i style="background:var(--thin)"></i>领先不到 15%——决定胜负的是你的负载，不是引擎</span>
+  </div>
+  <p class="tbl-note"><b>LPUSH 和 ZADD 只领先 12% 和 10%。</b>差距薄到这个程度，决定胜负的是你的 value 大小和 key 分布。如果 list 或者 sorted set 是你的热路径，那么性能就不是换过来的理由。<a href="../zh/benchmarks/">完整的表格在这里，valkey 和 Dragonfly 也一起打了。</a></p>
 </section>
-<section class="band"><div class="sec-h"><h2>一套引擎，几种跑法</h2><p class="sec-lede">按数据必须待在哪里来挑——不管哪一种，API 都是同一套。</p></div><div class="cards"><a class="card" href="../zh/docs/tuning/">
-      <span class="card-k">服务端</span>
-      <h3>可以直接换掉 Redis</h3>
-      <p>一核一个 shard，Linux 上走 io_uring，配合 SO_REUSEPORT。你现有的客户端不会发现东西换过了。</p>
-      <span class="card-go">跑一个服务端</span>
-    </a><a class="card" href="../zh/docs/embedded-listener/">
+<section class="band" id="more"><div class="sec-h"><h2>一个 AI 系统需要的那些东西，<br>就在已经存着数据的那个引擎里。</h2><p class="sec-lede">不是模块。不是 sidecar。也不是一份会慢慢偏离原件的事实副本。</p></div><div class="cards"><a class="card" href="../zh/use/ai/">
+      <span class="card-k">向量</span>
+      <h3>在你的 keyspace 上做 KNN</h3>
+      <p>一个 HNSW 索引，声明一次，之后由写入路径维持最新。embedding 由你给出；kevy 负责存它、索引它、检索它。</p>
+      <span class="card-go">怎么做</span>
+    </a><a class="card" href="../zh/use/ai/">
+      <span class="card-k">全文</span>
+      <h3>BM25，以及混合排序</h3>
+      <p>在同一批 key 上做全文检索，还有一种把文本排序和向量排序融合起来的混合查询。</p>
+      <span class="card-go">怎么做</span>
+    </a><a class="card" href="../zh/use/app-store/">
+      <span class="card-k">索引</span>
+      <h3>按任意字段来查</h3>
+      <p>二级索引把一次带过滤的读变回一次查表。没有查询计划器，没有扫描。</p>
+      <span class="card-go">怎么做</span>
+    </a><a class="card" href="../zh/use/app-store/">
+      <span class="card-k">视图</span>
+      <h3>答案一直是备好的</h3>
+      <p>物化视图在写入路径上就把聚合维持在最新，于是读的时候永远不必重算一遍。</p>
+      <span class="card-go">怎么做</span>
+    </a><a class="card" href="../zh/use/ai/">
+      <span class="card-k">变更流</span>
+      <h3>跟读每一次写</h3>
+      <p>一条可以续读的流，另一个进程——或者一个 agent——可以一直跟着它。什么都不用轮询。</p>
+      <span class="card-go">怎么做</span>
+    </a><a class="card" href="../zh/use/embedded/">
+      <span class="card-k">哪里都能放</span>
+      <h3>服务器、二进制、浏览器、设备</h3>
+      <p>同一个引擎，同一批命令：一台 16 核的服务器、你的二进制内部、浏览器标签页里的 151 KB，或者一颗没有操作系统的芯片。</p>
+      <span class="card-go">怎么做</span>
+    </a></div></section>
+<section class="band prose blue"><h2>为什么 AI 系统需要一个不一样的数据层</h2><p>一个 agent 写下一篇文档，给它做 embedding，给它建索引，把它放进缓存，再通知别的东西它变了。今天这是四套系统——一个缓存、一个向量数据库、一个搜索索引、一个队列——它们持有同样的事实，然后慢慢彼此偏离。每一套都是一个可能漏掉一步的地方。</p><p><b>kevy 把它们收成一个。</b>声明索引，然后照你原来的方式写 key。引擎会在写入路径上把向量索引、文本索引、二级索引和视图都维持在最新，而变更流会告诉每一个在听的人。</p><p>而且 agent 在哪里跑，它就能在哪里跑。在你的服务里，在二进制内部、连 socket 都没有，在浏览器标签页里作为 WebAssembly，或者在网络边缘的那台设备上。</p></section>
+<section class="band deep"><div class="sec-h"><h2>你在做的是什么？</h2><p class="sec-lede">每一页都会说清楚 kevy 合不合适、代价是什么、以及具体怎么做——命令可以直接粘贴。</p></div><div class="cards"><a class="card" href="../zh/use/ai/">
+      <span class="card-k">AI</span>
+      <h3>Agent 记忆与 RAG</h3>
+      <p>向量、全文、变更流，还有一个会替你把会话过期掉的 TTL。</p>
+      <span class="card-go">怎么做</span>
+    </a><a class="card" href="../zh/use/app-store/">
+      <span class="card-k">对外服务</span>
+      <h3>不靠数据库扛住读</h3>
+      <p>索引和视图，让一次读始终是查表，而不是变成一次查询。</p>
+      <span class="card-go">怎么做</span>
+    </a><a class="card" href="../zh/use/cache/">
+      <span class="card-k">缓存</span>
+      <h3>会话与限流</h3>
+      <p>那些本来就不是数据库问题的行，从你的数据库上挪走。</p>
+      <span class="card-go">怎么做</span>
+    </a><a class="card" href="../zh/use/queue/">
+      <span class="card-k">队列</span>
+      <h3>后台任务</h3>
+      <p>带消费组的 stream：拿着任务的那个 worker 挂了，任务还在。</p>
+      <span class="card-go">怎么做</span>
+    </a><a class="card" href="../zh/use/realtime/">
+      <span class="card-k">实时</span>
+      <h3>推给在线的客户端</h3>
+      <p>带模式订阅的发布订阅——而且在浏览器标签页之间也能用，不需要服务端。</p>
+      <span class="card-go">怎么做</span>
+    </a><a class="card" href="../zh/use/embedded/">
       <span class="card-k">嵌入</span>
-      <h3>装在你二进制里的存储</h3>
-      <p>没有 socket，没有进程，没有序列化。当成一个碰巧会落盘的 HashMap 来用就行。</p>
-      <span class="card-go">嵌进去</span>
-    </a><a class="card" href="../zh/play/">
-      <span class="card-k">浏览器</span>
-      <h3>151 KB 的 WebAssembly</h3>
-      <p>标签页里跑一个真的 keyspace，有 TTL，有发布订阅，数据落在 OPFS 上。不是给 localStorage 包一层皮。</p>
-      <span class="card-go">打开 Playground</span>
-    </a><a class="card" href="../zh/docs/wasm/">
-      <span class="card-k">边缘</span>
-      <h3>在 worker 里冷启动</h3>
-      <p>没有要预热的运行时，也不用建连接。存储和你的代码待在同一个 isolate 里。</p>
-      <span class="card-go">部署到边缘</span>
-    </a><a class="card" href="../zh/docs/iot/">
-      <span class="card-k">裸机</span>
-      <h3>没有分配器，没有操作系统</h3>
-      <p>kevy-store 是 no_std 的。它在 Cortex-M 上跑，只用一块固定大小的 arena，没有堆——每次 push，CI 都会重新验一遍。</p>
-      <span class="card-go">看 MCU 上的验证</span>
-    </a><a class="card" href="../llms.txt">
-      <span class="card-k">智能体</span>
-      <h3>给 LLM 当记忆</h3>
-      <p>向量索引和全文索引，一条变更流，还有一份直接从引擎自己的命令表生成的 llms.txt。</p>
-      <span class="card-go">读 llms.txt</span>
+      <h3>把它放进东西本身</h3>
+      <p>桌面应用、浏览器、边缘 worker、单片机。没有服务端，没有 socket。</p>
+      <span class="card-go">怎么做</span>
     </a></div></section>
 <section class="band">
-  <div class="sec-h"><h2>吞吐量，老老实实测出来的</h2><p class="sec-lede">同一台机器，16 核，走 loopback。五次运行取中位数，数字是从服务端自己的 <code>total_commands_processed</code> 里数出来的，取三秒稳态窗口内的增量——<b>不是</b> redis-benchmark 打印的那个 rps。那个数被一个 250 ms 的定时器量化过，会给你一句听着很舒服的假话。</p></div>
-  <div class="tbl"><table><thead><tr><th></th><th>kevy 4.0</th><th>valkey 9.1</th><th>Redis 8</th><th>Dragonfly</th><th>vs Redis 8</th></tr></thead><tbody><tr><td>GET</td><td class="num">7,800,299</td><td class="num">3,014,687</td><td class="num">5,597,865</td><td class="num">2,132,210</td><td class="win">1.39×</td></tr><tr><td>SET</td><td class="num">6,918,058</td><td class="num">1,749,976</td><td class="num">2,573,396</td><td class="num">1,511,377</td><td class="win">2.69×</td></tr><tr><td>INCR</td><td class="num">6,133,940</td><td class="num">2,484,273</td><td class="num">3,459,395</td><td class="num">1,387,568</td><td class="win">1.77×</td></tr><tr><td>SADD</td><td class="num">5,600,597</td><td class="num">2,385,857</td><td class="num">3,690,483</td><td class="num">1,678,098</td><td class="win">1.52×</td></tr><tr><td>HSET</td><td class="num">4,287,217</td><td class="num">1,970,791</td><td class="num">3,021,325</td><td class="num">1,515,763</td><td class="win">1.42×</td></tr><tr><td>LPUSH</td><td class="num">3,213,470</td><td class="num">1,943,222</td><td class="num">2,862,374</td><td class="num">1,320,497</td><td class="loss">1.12×</td></tr><tr><td>ZADD</td><td class="num">3,053,101</td><td class="num">1,802,759</td><td class="num">2,773,929</td><td class="num">1,455,126</td><td class="loss">1.10×</td></tr></tbody></table></div>
-  <p class="tbl-note">七条命令，三个对手，七战七胜。但请把最后两行读完。对 Redis 8，LPUSH 只领先 12%，ZADD 只领先 10%——差距薄到这个程度，决定胜负的是你的硬件、你的 value 大小、你的 key 分布，而不是我们。凡是薄成这样的行，我们一律用这个颜色标出来，因为一个只把自己好看的行印出来的基准页面，那叫广告。<a href="benchmarks/">完整的测法，以及我们为了把它测对付出过什么。</a></p>
-</section>
-<section class="band prose"><h2>零依赖是一条设计约束，不是一句吹嘘</h2><p>哈希表是自己写的。hasher 是自己写的。RESP 解析器、B 树、arena 分配器、io_uring 绑定、事件循环、geohash、Lua 解释器——全都是自己写的，全都是 Rust，全都在这个仓库里。整个 kevy 附近唯一的 C，是内核不肯用别的方式暴露出来的那几个系统调用，在 <code>kevy-sys</code> 里手写成 <code>unsafe extern "C"</code>。libc 的那个 crate，我们不链接。</p><p>这不是洁癖。同一份代码之所以能同时编译成一台 16 核的服务端、一块 no_std 的单片机固件、一个 WebAssembly 模块，靠的正是这条约束——依赖树里没有任何东西能跳出来告诉我们这做不到。一个 crate 只要假定了分配器、假定了线程、假定了时钟，它就替你关上其中一扇门。</p><p>还有一个结果：供应链是可以读完的。33 个 crate，一个作者，一棵 <code>cargo tree</code> 一屏放得下。</p></section>
-<section class="band">
-  <div class="call loss">
-    <span class="h">kevy 不是什么</span>
-    <p>它不是集群。没有 gossip，没有 slot 迁移，没有 sentinel——复制和故障切换有，跨机器分片没有，而且是<a href="docs/cluster/">故意不做</a>。没有 AUTH，也没有 TLS：请把它放在一个真正把这两件事做好的东西后面。有几条命令的行为和 Redis 不一样，有些还挺出人意料——<code>SCAN</code> 不是游标迭代器，<code>ZRANK</code> 是 O(N)，<code>SPOP</code> 不随机。<a href="docs/commands/">每一条我们都写下来了</a>，写在 Redis 自己的命令参考里没有的那一栏。</p>
-  </div>
-</section>
-<section class="band">
-  <div class="sec-h"><h2>三十秒</h2><p class="sec-lede">三个入口。按你的数据待在哪里挑一个。</p></div>
-  <ol class="steps"><li><h3>当服务端跑</h3><p>6379 端口上说 RESP。你的 redis-cli、你的客户端库、你现有的代码，一行都不用改。</p><pre><code>cargo install kevy
-kevy --port 6379</code></pre></li><li><h3>放进你的 Rust 二进制</h3><p>没有 socket，没有进程。引擎就是一个 struct。</p><pre><code>kevy-embedded = &quot;4.0&quot;
+  <div class="sec-h"><h2>开始</h2></div>
+  <ol class="steps"><li><h3>当服务端跑</h3><p>在 6379 上说 RESP。你的 redis-cli 和你的客户端库不会发现有任何变化。</p><pre><code>cargo install kevy
+kevy --port 6379</code></pre></li><li><h3>在你的 Rust 程序里</h3><p>没有 socket，没有第二个进程，没有序列化。</p><pre><code>kevy-embedded = &quot;4.0&quot;
 
 let db = Db::open(&quot;data/&quot;)?;
-db.set(b&quot;k&quot;, b&quot;v&quot;, None)?;
-assert_eq!(db.get(b&quot;k&quot;)?.as_deref(), Some(&amp;b&quot;v&quot;[..]));</code></pre></li><li><h3>放进浏览器标签页</h3><p>gzip 之后 151 KB。数据落在 OPFS 上，刷新页面还在，发布订阅可以跨标签页。</p><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
+db.set(b&quot;k&quot;, b&quot;v&quot;, None)?;</code></pre></li><li><h3>在浏览器标签页里</h3><p>151 KB。落在浏览器的文件系统上，刷新之后还在。</p><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
 
 const db = await open({ persist: { name: &quot;app&quot; } });
-db.set(&quot;cart:u1&quot;, JSON.stringify(items), { ttlMs: 3600_000 });</code></pre></li></ol>
+db.set(&quot;cart:u1&quot;, json, { ttlMs: 3_600_000 });</code></pre></li></ol>
+</section>
+<section class="band deep">
+  <div class="call loss">
+    <span class="h">kevy 不会做的事</span>
+    <p><b>它不是集群。</b>复制和故障切换有；把数据分片到多台机器上没有，以后也不会有。如果一台机器不够用，kevy 就是错的答案。<b>没有 AUTH，也没有 TLS</b>——把它跑在内网，或者放在一个真正把这两件事做好的东西后面。还有，<b>有些命令和 Redis 不一样</b>：<code>SCAN</code> 不是游标迭代器，<code>ZRANK</code> 是 O(N)，<code>SPOP</code> 不随机。<a href="../zh/docs/commands/">每一处差异都逐条写下来了</a>。<a href="../zh/choose/">还有，这里写着什么时候根本不该用它。</a></p>
+  </div>
 </section>
 </main>
 
 <footer class="foot">
   <div class="foot-in">
-    <p class="foot-b">kevy 4.0 — 纯 Rust，零第三方依赖</p>
+    <p class="foot-b">kevy 4.0 — GOLIA</p>
     <nav>
       <a href="https://github.com/goliajp/kevy">GitHub</a>
       <a href="https://crates.io/crates/kevy">crates.io</a>

@@ -6,7 +6,6 @@
 <title>Embedding kevy — kevy</title>
 <meta name="description" content="Put the store inside the program: a desktop app, a browser tab, an edge worker, or a microcontroller with no operating system.">
 <link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/pages.css">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,15 +40,12 @@
 </header>
 
 <main id="main">
-<section class="hero">
-  <div class="hero-in">
+<section class="band" style="border-top:0"><div>
     <p class="eyebrow">Ship it inside</p>
     <h1>Put the store<br>inside the thing</h1>
     <p class="lede">No server, no socket, no network. The engine is a struct you call, a 151 KB WebAssembly module, or a no_std library on a chip with no operating system — <b>and it is the same engine, with the same commands, in all three.</b></p>
     
-  </div>
-  
-</section>
+  </div></section>
 <section class="band prose"><h2>Why this fits</h2><p>Every application that has to work offline ends up writing a storage layer. A desktop app gets SQLite and a schema nobody wanted. A web app gets localStorage, discovers the 5 MB ceiling and the fact that it is synchronous and string-only, and then gets IndexedDB and an abstraction over it. A device gets a hand-rolled ring buffer in flash.</p><p><b>All three are the same problem, and they can be the same solution.</b> kevy embeds with no process boundary, ships to a browser with real TTLs and pub/sub, and boots on a Cortex-M with a fixed arena and no allocator at all. CI proves the last one on every push.</p></section>
 <section class="band">
   <div class="sec-h"><h2>How — inside a Rust program</h2></div>
@@ -91,17 +87,17 @@ store.set(b&quot;temp&quot;, b&quot;21.4&quot;)?;</code></pre></figure>
     <p><b>In the browser, localStorage is faster for a small synchronous read</b> — it is a map in the page's own address space and nothing built on OPFS will beat it at that. kevy wins on everything that makes localStorage a bad idea anyway: real TTLs, no 5 MB ceiling, byte values rather than strings, and writes that do not block the main thread. <b>On a microcontroller you size the arena yourself</b> and there is no growing it at runtime — that is what no allocator means. And <b>an embedded store is not shared</b>: if a second process needs the data, you want the server, or the embedded RESP listener.</p>
   </div>
 </section>
-<section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../../../docs/wasm/">
+<section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../docs/wasm/">
       <span class="card-k">Guide</span>
       <h3>kevy on WebAssembly</h3>
       <p>The browser build, OPFS persistence, and the size budget.</p>
       <span class="card-go">Read it</span>
-    </a><a class="card" href="../../../../docs/embedded-listener/">
+    </a><a class="card" href="../../docs/embedded-listener/">
       <span class="card-k">Guide</span>
       <h3>The embedded listener</h3>
       <p>Embed the engine and still speak RESP on a socket.</p>
       <span class="card-go">Read it</span>
-    </a><a class="card" href="../../../../docs/iot/">
+    </a><a class="card" href="../../docs/iot/">
       <span class="card-k">Guide</span>
       <h3>IoT and bare metal</h3>
       <p>no_std, the arena, and the feature tiers.</p>

@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>从 Redis 或数据库迁过来——kevy</title>
+<meta name="description" content="团队为什么会从 Redis 或 Postgres 换到 kevy，具体有哪些变化，代价是什么，以及怎样不重写代码就把迁移做完。">
+<link rel="stylesheet" href="../../assets/kevy.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../zh/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../zh/choose/">该不该用</a>
+      <a href="../../zh/docs/">文档</a>
+      <a href="../../zh/docs/commands/">命令</a>
+      <a href="../../zh/benchmarks/">基准</a>
+      <a href="../../zh/play/">Playground</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language">
+        <a href="../../migrate/">EN</a>
+        <a href="../../zh/migrate/" aria-current="page">中文</a>
+        <a href="../../ja/migrate/">日本語</a>
+      </nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+<section class="band" style="border-top:0"><div>
+    <p class="eyebrow">迁移</p>
+    <h1>你为什么要搬，<br>以及搬过来的代价</h1>
+    <p class="lede">这是两场完全不同的对话。从 <b>Redis</b> 过来，协议是一样的，要问的是哪些行为不一样。从<b>关系型数据库</b>过来，没有一处是一样的，要问的是这份负载里到底哪一部分该搬——答案是<b>只搬一部分</b>，而且我们会说清楚是哪一部分。</p>
+    
+  </div></section>
+<section class="band prose"><h2>从 Redis 过来</h2><p><b>你的客户端不用改。</b>kevy 说 RESP2 和 RESP3，实现了 184 条命令。把你现有的库指过来就行，代码不动，redis-cli 不换。没有新的 SDK 要接，也没有新协议要学。</p><p><b>所以真正要问的只有一句：你能换到什么。</b>只有三样。如果这三样对你都没有价值，那就留在 Redis——它是一件极好的软件，为换而换，只是白白搭进去一个星期。</p></section>
+<section class="band">
+  <div class="sec-h"><h2>具体能换到什么</h2></div>
+  <ol class="steps"><li><h3>它能跑在 Redis 跑不到的地方</h3><p>嵌进二进制，发到浏览器标签页，在一颗没有分配器的 Cortex-M 上启动。今天这些场合各要一层自己的存储、一套自己的 API；在这里，它们是同一个引擎、同一批命令。如果你曾经为客户端那边另写过一个缓存，这就是值得看一眼的理由。</p></li><li><h3>它顺带把搜索服务也替掉</h3><p>二级索引、物化视图、向量 KNN、BM25 全文检索都在引擎里——不是模块，不是 sidecar，也不是一份会慢慢和原数据对不上的副本。原本要跑 Redis 加一个搜索集群的团队，往往只需要跑一个东西。</p><pre><code># look up by a field, not just by the key
+IDX.CREATE idx:city ON PREFIX user: FIELD city TYPE str KIND range
+IDX.QUERY  idx:city EQ osaka
+
+# vectors, in the same engine, over the same keys
+IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann DIM 768 DISTANCE cosine
+IDX.QUERY  idx:sem KNN &quot;&lt;vector&gt;&quot; LIMIT 10</code></pre></li><li><h3>你现在跑的那些操作，它更快</h3><p>同一台机器上对 Redis 8：GET 快 1.4×，SET 快 2.7×，INCR 快 1.8×。不过在你把这个当成理由之前，先把整张表看完——LPUSH 和 ZADD 只领先 12% 和 10%，如果 list 或者 sorted set 是你的热路径，那这就不是你该搬的理由。</p></li></ol>
+</section>
+<section class="band">
+  <div class="call loss">
+    <span class="h">离开 Redis 要放弃什么</span>
+    <p><b>没有集群。</b>副本是拷贝，不是分片。<b>没有 AUTH，没有 TLS。</b>还有<b>几条命令的行为不一样</b>——<code>SCAN</code> 不是游标迭代器（一次调用就把全部返回，游标为 0），<code>ZRANK</code> 是 O(N)，<code>SPOP</code> 和 <code>SRANDMEMBER</code> 不随机，跨 shard 的 <code>RENAME</code> 不是原子的。这些都不是 bug，而且每一条都在命令文档里写着。请在决定之前把这份清单读完，不要等决定之后：<a href="../../zh/docs/commands/">每条命令真实的代价和真实的偏差</a>。</p>
+  </div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>怎么从 Redis 搬过来</h2></div>
+  <figure class="code"><figcaption>从 Redis 导出，导入 kevy，再校验两边一致。下面每一条命令都真的跑过。</figcaption><pre><code># 1. dump what you want to move. it is a RESP file — readable,
+#    diffable, and it streams rather than loading into memory.
+kevy-cli export -p 6379 --prefix user: dump.resp
+-&gt; exported 41023 keys -&gt; dump.resp
+
+# 2. load it. --strict stops on the first error rather than
+#    limping onward with a half-migrated keyspace.
+kevy-cli import -p 6380 --strict dump.resp
+-&gt; imported 82046 ok, 0 errors, offset 4108331
+
+# 3. prove they agree, rather than hoping.
+kevy-cli digest -p 6379 user:
+kevy-cli digest -p 6380 user:
+-&gt; 41023 keys 3bca92aa52269300     # the same hash, or you did not migrate
+
+# an interrupted import resumes where it stopped:
+kevy-cli import -p 6380 --resume dump.resp</code></pre></figure>
+</section>
+<section class="band prose"><h2>从关系型数据库过来</h2><p><b>不要搬你的数据库。</b>要搬的是它身上那一部分从来就不是数据库问题的东西。</p><p>会话。限流。功能开关。任务队列。还有那一行每个请求都要读、却从来没人拿去 join 的热点行。在大多数应用里，这些都住在 Postgres 里，而它们正是被敲得最狠的那些行——不是因为关系型数据库做不好，而是因为它们从来就不是提问。它们是查表。key 你早就知道了。</p><p><b>Postgres 最擅长的那些事，留给 Postgres</b>——join、临时查询、分析，以及跨无关行的真隔离事务。kevy 接走对外服务的那条路径，让数据库喘口气。</p><p><b>而且有一部分提问式的读也能搬。</b>二级索引和物化视图意味着，一个带过滤条件的列表、一个持续累计的总数，不必变成一次查询——写入路径已经把答案备好了。这正是大多数应用真正在用 ORM 的那一部分。</p></section>
+<section class="band">
+  <div class="sec-h"><h2>哪些部分该搬</h2><p class="sec-lede">按负载逐条来。红色的那三行，是最多人搞错的地方。</p></div>
+  <div class="tbl"><table><thead><tr><th>负载</th><th>搬吗</th><th>为什么</th></tr></thead><tbody><tr><td>会话、令牌</td><td class="win">搬</td><td class="num">按 key 查表，带一个 TTL。数据库一直是在帮你的忙，那本来就不是它的活。</td></tr><tr><td>限流、计数器</td><td class="win">搬</td><td class="num">带过期的 INCR 是原子的，而且 O(1)。在 SQL 里，这是压在你最热那一行上的行锁。</td></tr><tr><td>任务队列</td><td class="win">搬</td><td class="num">list 和 stream，带消费组和逐条确认。所谓队列表，不过是一套加了额外步骤的加锁约定。</td></tr><tr><td>功能开关、配置</td><td class="win">搬</td><td class="num">一直在读，很少写，从来不 join。</td></tr><tr><td>带过滤的列表（按状态、按归属）</td><td class="win">多数该搬</td><td class="num">二级索引不需要查询计划器就能回答。见<a href="../../zh/use/app-store/">用索引扛住读</a>。</td></tr><tr><td>聚合（计数、合计）</td><td class="win">多数该搬</td><td class="num">物化视图在写入路径上就把它更新好，不必每次读都重算一遍。</td></tr><tr><td>跨多张表的 join</td><td class="loss">不要搬</td><td class="num">kevy 没有 join，以后也不会长出 join。这正是 Postgres 存在的意义。</td></tr><tr><td>分析、临时查询</td><td class="loss">不要搬</td><td class="num">这里没有查询计划器，也没有优化器。不要尝试。</td></tr><tr><td>跨无关行的事务</td><td class="loss">不要搬</td><td class="num">MULTI 是按 shard 生效的，不是全局的。如果你需要跨整个 keyspace 的可串行化隔离，你需要的是数据库。</td></tr></tbody></table></div>
+  <p class="tbl-note">红色那三行不是待办清单，是拒绝——kevy 不会长出 join，也不会长出优化器，因为把这两样做砸了，比不做还糟。<a href="../../zh/docs/rds-workloads/">每一种关系型负载，以及它在这里真实的代价</a>，其中也包括那些诚实答案就是留在 Postgres 里的负载。</p>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>怎么从数据库搬过来</h2></div>
+  <figure class="code"><figcaption>不要一次性切换。一次只搬一种负载，让数据库继续做事实来源，然后测。</figcaption><pre><code># 1. pick ONE workload. sessions are the usual first, because
+#    nothing joins against them and losing one is survivable.
+
+# 2. write to both for a week. reads still come from Postgres.
+#    you are checking that the shapes match, not that it is fast.
+
+# 3. flip reads to kevy. keep the dual write.
+redis-cli SET session:$SID &quot;$JSON&quot; EX 3600
+
+# 4. when it has been boring for a fortnight, drop the table.
+
+# then do the next workload. rate limits, then queues, then
+# whichever of your read paths a secondary index can answer.</code></pre></figure>
+</section>
+<section class="band">
+  <div class="call note">
+    <span class="h">如果你以后又想走</span>
+    <p>同样这三条命令，反过来跑一遍就行。<code>kevy-cli export</code> 写出的是一个普通的 RESP 文件，任何 Redis 兼容的服务端都能导入，而 <code>digest</code> 能证明这份拷贝没有走样。<a href="../../zh/docs/migration/">迁移指南里，搬出去这件事</a>写得和搬进来一样细——我们宁可你走得干净，也不希望你是因为被卡住才留下。</p>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <p class="foot-b">kevy 4.0 — 有什么变化，代价是什么</p>
+    <nav>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+      <a href="https://crates.io/crates/kevy">crates.io</a>
+      <a href="../../llms.txt">llms.txt</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

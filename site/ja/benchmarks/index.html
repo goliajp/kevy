@@ -4,9 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ベンチマーク — kevy</title>
-<meta name="description" content="1 台のマシンで kevy 4.0 を valkey 9.1、Redis 8、Dragonfly と比べた。測定方法と数字、そして計測ハーネス自身が嘘をついていたと気づくまでに費やした 1 週間の話。">
+<meta name="description" content="1 台のマシンでの kevy 4.0 と Redis 8、valkey 9.1、Dragonfly の比較——kevy がかろうじて上回っているだけのコマンドも含めて。">
 <link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/pages.css">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,47 +40,38 @@
 </header>
 
 <main id="main">
-<section class="hero">
-  <div class="hero-in">
+<section class="band" style="border-top:0"><div>
     <p class="eyebrow">ベンチマーク</p>
-    <h1>数字と、それを最初に間違えた話</h1>
-    <p class="lede">ここにある数字はすべて、リポジトリの <code>bench/</code> から再現できる。それよりも役に立つ話をする。以前の数字を無価値にした間違いが何だったか、どうやってそれに気づいたか、二度と起きないように何を変えたか。</p>
+    <h1>どれだけ速いか、そして、どこで速くないか</h1>
+    <p class="lede">1 台のマシン、16 コア、ループバック。すべての数字は、リポジトリの <code>bench/</code> から再現できます。<b>何かを決める前に、最後の 2 行を読んでください</b>——速さが乗り換える理由にならないのは、その 2 行です。</p>
     
-  </div>
-  
-</section>
+  </div></section>
 <section class="band">
-  <div class="call warn">
-    <span class="h">計測ハーネスは、私たちに嘘をついていた</span>
-    <p>redis-benchmark は、250 ms ごとに発火するタイマー(<code>SHOW_THROUGHPUT_INTERVAL</code>)を使ってスループットを出す。だから表示される rps は、必ず <code>n / (0.25 秒の整数倍)</code> になる——そして kevy が出す速度では、1 回の実行が数ティックで終わってしまう。以前の表で GET と SET が一桁まで同じ数字を出していたのは、これが理由だ。私たちはその不自然さを、肩をすくめて見過ごしていた。あれは量子化だった。<code>redis-benchmark.c</code> を読むまでの 1 週間、ありもしない 5% の性能低下を追いかけていた。いま載せている数字は、すべてサーバー自身の <code>INFO stats</code> を 3 秒間の定常状態で数えたものだ。さらにハーネスは参照コミットを毎回ビルドし直し、2 つを交互に走らせる。マシンの状態がドリフトしても、それだけで結果を作れないようにするためだ。</p>
-  </div>
+  <div class="sec-h"><h2>4 つのエンジン、1 台のマシン</h2><p class="sec-lede">コネクション 50、小さな値。5 回実行した中央値です。ベンチマーククライアントが報告する速度ではなく、各サーバー自身のコマンドカウンタを、3 秒間の定常状態で数えました。</p></div>
+  <div class="tbl"><table><thead><tr><th></th><th>kevy 4.0</th><th>Redis 8</th><th>valkey 9.1</th><th>Dragonfly</th><th>Redis 8 比</th></tr></thead><tbody><tr><td>GET</td><td class="num">7,800,299</td><td class="num">5,597,865</td><td class="num">3,014,687</td><td class="num">2,132,210</td><td class="win">1.39×</td></tr><tr><td>SET</td><td class="num">6,918,058</td><td class="num">2,573,396</td><td class="num">1,749,976</td><td class="num">1,511,377</td><td class="win">2.69×</td></tr><tr><td>INCR</td><td class="num">6,133,940</td><td class="num">3,459,395</td><td class="num">2,484,273</td><td class="num">1,387,568</td><td class="win">1.77×</td></tr><tr><td>SADD</td><td class="num">5,600,597</td><td class="num">3,690,483</td><td class="num">2,385,857</td><td class="num">1,678,098</td><td class="win">1.52×</td></tr><tr><td>HSET</td><td class="num">4,287,217</td><td class="num">3,021,325</td><td class="num">1,970,791</td><td class="num">1,515,763</td><td class="win">1.42×</td></tr><tr><td>LPUSH</td><td class="num">3,213,470</td><td class="num">2,862,374</td><td class="num">1,943,222</td><td class="num">1,320,497</td><td class="loss">1.12×</td></tr><tr><td>ZADD</td><td class="num">3,053,101</td><td class="num">2,773,929</td><td class="num">1,802,759</td><td class="num">1,455,126</td><td class="loss">1.10×</td></tr></tbody></table></div>
+  <p class="tbl-note"><b>LPUSH は Redis 8 より 12%、ZADD は 10% 速いだけです。</b>この差では、勝敗を決めるのはエンジンではなく、値のサイズとキーの分布です。リストやソート済みセットがホットパスなら、自分のワークロードで測ってください。速さを理由に乗り換えてはいけません。この 2 行の色は、そのために付けてあります。</p>
 </section>
-<section class="band">
-  <div class="sec-h"><h2>同じ 1 台で、4 つを比べる</h2><p class="sec-lede">16 コア、loopback、50 コネクション、3 バイトの value。5 回の実行の中央値。5 回のあいだのばらつきは<a href="https://github.com/goliajp/kevy/blob/main/bench/PERF-LEDGER.md">台帳</a>にある —— どの行も数パーセントであり、順位を変えるほどではない。</p></div>
-  <div class="tbl"><table><thead><tr><th></th><th>kevy 4.0</th><th>valkey 9.1</th><th>Redis 8</th><th>Dragonfly</th><th>valkey 比</th><th>Redis 8 比</th><th>Dragonfly 比</th></tr></thead><tbody><tr><td>GET</td><td class="num">7,800,299</td><td class="num">3,014,687</td><td class="num">5,597,865</td><td class="num">2,132,210</td><td class="win">2.59×</td><td class="win">1.39×</td><td class="win">3.66×</td></tr><tr><td>SET</td><td class="num">6,918,058</td><td class="num">1,749,976</td><td class="num">2,573,396</td><td class="num">1,511,377</td><td class="win">3.95×</td><td class="win">2.69×</td><td class="win">4.58×</td></tr><tr><td>INCR</td><td class="num">6,133,940</td><td class="num">2,484,273</td><td class="num">3,459,395</td><td class="num">1,387,568</td><td class="win">2.47×</td><td class="win">1.77×</td><td class="win">4.42×</td></tr><tr><td>SADD</td><td class="num">5,600,597</td><td class="num">2,385,857</td><td class="num">3,690,483</td><td class="num">1,678,098</td><td class="win">2.35×</td><td class="win">1.52×</td><td class="win">3.34×</td></tr><tr><td>HSET</td><td class="num">4,287,217</td><td class="num">1,970,791</td><td class="num">3,021,325</td><td class="num">1,515,763</td><td class="win">2.18×</td><td class="win">1.42×</td><td class="win">2.83×</td></tr><tr><td>LPUSH</td><td class="num">3,213,470</td><td class="num">1,943,222</td><td class="num">2,862,374</td><td class="num">1,320,497</td><td class="win">1.65×</td><td class="loss">1.12×</td><td class="win">2.43×</td></tr><tr><td>ZADD</td><td class="num">3,053,101</td><td class="num">1,802,759</td><td class="num">2,773,929</td><td class="num">1,455,126</td><td class="win">1.69×</td><td class="loss">1.10×</td><td class="win">2.10×</td></tr></tbody></table></div>
-  <p class="tbl-note">7 戦 7 勝。ただし<b>LPUSH は Redis 8 より 12%、ZADD は 10% しか速くない</b>——この程度の差では、エンジンよりも値のサイズとキーの分布のほうが効く。その 2 つが自分のホットなコマンドなら、うちの数字を鵜呑みにせず、自分のワークロードで測ってほしい。色が付いているのには意味がある。余裕を持って勝てていない行にだけ、この色を使う。この表をひと目見たときに、見出しではなく事実のほうが伝わるように。</p>
-</section>
-<section class="band prose"><h2>このベンチマークが教えてくれないこと</h2><p>これは 1 台のマシンの、ループバック上の、小さな値による測定だ。つまりネットワークが消えている。実際の運用で本当に待たされている相手は、たいていそのネットワークのほうだ。GET が valkey より 2.6 倍速くても、レイテンシの 90% が回線なら、p99 が 2.6 倍良くなることはない。</p><p>値が大きくなると、話の形が変わる。1 値あたり 64 KB では全体がカーネルの TCP パスに律速され、差は 1 桁台まで縮まる。perf のトレースと書き起こしは <code>bench/</code> に置いてある——その中には、ユーザー空間の memcpy を実測で減らしたのに、スループットがまったく動かなかった最適化が 3 件含まれている。memcpy はボトルネックではなく、ただの税だったからだ。</p><p>エンジンは単一ノードだ。1 台では足りないという問題を抱えているなら、kevy はそれを解決しない。このページのどの数字も、その事実を変えない。</p></section>
+<section class="band prose"><h2>この数字が、教えてくれないこと</h2><p><b>ループバックです。</b>ここにネットワークはありませんが、実際の運用で待たされる相手は、たいていネットワークです。GET が 2.6 倍速いエンジンでも、レイテンシの大半が回線なら、p99 が 2.6 倍良くなることはありません。</p><p><b>値が小さいです。</b>1 値あたり 64 KB になると、全体がカーネルの TCP パスに律速され、差は 1 桁台まで縮まります。大きなブロブを保存するなら、この数字は、あなたの話ではありません。</p><p><b>1 台のマシンです。</b>kevy にクラスタモードはありません。1 台では足りないことが問題なら、このページのどの数字も助けになりません。</p></section>
 <section class="band">
   <div class="sec-h"><h2>ブラウザ向けビルド</h2><p class="sec-lede">タブに実際に配るもの。</p></div>
-  <div class="tbl"><table><thead><tr><th></th><th>サイズ</th><th>備考</th></tr></thead><tbody><tr><td>kevy.wasm</td><td class="num">416 KB</td><td class="num">エンジン本体、非圧縮</td></tr><tr><td>gzip 後</td><td class="num">151 KB</td><td class="num">回線を流れる量</td></tr><tr><td>コールドスタート</td><td class="num">&lt; 20 ms</td><td class="num">コンパイルとインスタンス化、キャッシュが温まった状態</td></tr></tbody></table></div>
-  <p class="tbl-note">小さな読み取りだけを比べれば、localStorage のほうが速い。あれはブラウザ自身のアドレス空間にある同期のマップであり、OPFS の上に作られたものがそこで勝つことはない。kevy が勝つのは、そもそも localStorage を選ぶべきでない理由のほうだ：TTL があること、5 MB の上限がないこと、値が文字列ではなくバイト列であること、書き込みがメインスレッドを止めないこと。</p>
+  <div class="tbl"><table><thead><tr><th></th><th>サイズ</th><th></th></tr></thead><tbody><tr><td>kevy.wasm</td><td class="num">416 KB</td><td class="num">エンジン本体、非圧縮</td></tr><tr><td>gzip 後</td><td class="num">151 KB</td><td class="num">回線を流れる量</td></tr><tr><td>コールドスタート</td><td class="num">&lt; 20 ms</td><td class="num">コンパイルとインスタンス化、キャッシュが温まった状態</td></tr></tbody></table></div>
+  <p class="tbl-note"><b>小さな同期の読み取りでは、localStorage が kevy に勝ちます</b>。今後もそうです——あれはページ自身のアドレス空間にあるマップです。kevy が勝つのは、そもそも localStorage を選ぶべきでない理由のほうです。本物の TTL、5 MB の上限がないこと、値が文字列ではなくバイト列であること、書き込みがメインスレッドを止めないこと。</p>
 </section>
 <section class="band">
   <div class="sec-h"><h2>再現する</h2></div>
-  <figure class="code"><figcaption>このページの内容は、すべてこの 2 つのスクリプトから出てくる。</figcaption><pre><code>git clone https://github.com/goliajp/kevy &amp;&amp; cd kevy
+  <figure class="code"><figcaption>スクリプトは 2 つ。このページの内容は、すべてそこから出てきます。</figcaption><pre><code>git clone https://github.com/goliajp/kevy &amp;&amp; cd kevy
 
-# four-way arena: kevy, valkey, redis 8, dragonfly
+# four-way: kevy, Redis 8, valkey, Dragonfly
 bash bench/arena.sh
 
-# the regression gate: rebuilds the reference commit and interleaves
+# the regression gate CI runs on every push
 bash bench/perfgate.sh</code></pre></figure>
 </section>
 </main>
 
 <footer class="foot">
   <div class="foot-in">
-    <p class="foot-b">kevy 4.0 — このページの数字はすべて bench/ から再現できる</p>
+    <p class="foot-b">kevy 4.0 — リポジトリの bench/ から再現できます</p>
     <nav>
       <a href="https://github.com/goliajp/kevy">GitHub</a>
       <a href="https://crates.io/crates/kevy">crates.io</a>

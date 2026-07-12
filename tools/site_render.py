@@ -54,22 +54,21 @@ def hero(b, up, L=""):
         f'<a class="cta{" primary" if i == 0 else ""}" href="{up}{loc(c["href"], L)}">{e(c["label"])}</a>'
         for i, c in enumerate(b.get("ctas", []))
     )
-    aside = f'<div class="hero-aside">{b["aside"]}</div>' if b.get("aside") else ""
-    return f"""<section class="hero">
-  <div class="hero-in">
+    aside = f'<div>{b["aside"]}</div>' if b.get("aside") else ""
+    inner = f'''<div>
     <p class="eyebrow">{e(b["eyebrow"])}</p>
     <h1>{b["h1"]}</h1>
     <p class="lede">{b["lede"]}</p>
     {f'<div class="ctas">{ctas}</div>' if ctas else ""}
-  </div>
-  {aside}
-</section>"""
+  </div>'''
+    body = f'<div class="split">{inner}{aside}</div>' if b.get("aside") else inner
+    return f'<section class="band{tone(b)}"{anchor(b)} style="border-top:0">{body}</section>'
 
 
 def prose(b, up, L=""):
     ps = "".join(f"<p>{p}</p>" for p in b["body"])
-    h = f'<h2>{e(b["h2"])}</h2>' if b.get("h2") else ""
-    return f'<section class="band prose">{h}{ps}</section>'
+    h = f'<h2>{b["h2"]}</h2>' if b.get("h2") else ""
+    return f'<section class="band prose{tone(b)}"{anchor(b)}>{h}{ps}</section>'
 
 
 def cards(b, up, L=""):
@@ -82,9 +81,9 @@ def cards(b, up, L=""):
     </a>"""
         for c in b["items"]
     )
-    h = f'<h2>{e(b["h2"])}</h2>' if b.get("h2") else ""
+    h = f'<h2>{b["h2"]}</h2>' if b.get("h2") else ""   # h2 may carry <br>
     intro = f'<p class="sec-lede">{b["intro"]}</p>' if b.get("intro") else ""
-    return f'<section class="band"{anchor(b)}><div class="sec-h">{h}{intro}</div><div class="cards">{items}</div></section>'
+    return f'<section class="band{tone(b)}"{anchor(b)}><div class="sec-h">{h}{intro}</div><div class="cards">{items}</div></section>'
 
 
 def table(b, up, L=""):
@@ -107,9 +106,9 @@ def table(b, up, L=""):
                 cls = ' class="num"'
             tds.append(f"<td{cls}>{txt}</td>")
         rows.append(f"<tr>{''.join(tds)}</tr>")
-    h = f'<h2>{e(b["h2"])}</h2>' if b.get("h2") else ""
+    h = f'<h2>{b["h2"]}</h2>' if b.get("h2") else ""
     note = f'<p class="tbl-note">{b["note"]}</p>' if b.get("note") else ""
-    return f"""<section class="band">
+    return f"""<section class="band{tone(b)}"{anchor(b)}>
   <div class="sec-h">{h}{f'<p class="sec-lede">{b["intro"]}</p>' if b.get("intro") else ""}</div>
   <div class="tbl"><table><thead><tr>{head}</tr></thead><tbody>{"".join(rows)}</tbody></table></div>
   {note}
@@ -118,14 +117,14 @@ def table(b, up, L=""):
 
 def code(b, up, L=""):
     cap = f'<figcaption>{b["caption"]}</figcaption>' if b.get("caption") else ""
-    return f"""<section class="band">
-  {f'<div class="sec-h"><h2>{e(b["h2"])}</h2></div>' if b.get("h2") else ""}
+    return f"""<section class="band{tone(b)}"{anchor(b)}>
+  {f'<div class="sec-h"><h2>{b["h2"]}</h2></div>' if b.get("h2") else ""}
   <figure class="code">{cap}<pre><code>{e(b["text"])}</code></pre></figure>
 </section>"""
 
 
 def callout(b, up, L=""):
-    return f"""<section class="band">
+    return f"""<section class="band{tone(b)}"{anchor(b)}>
   <div class="call {b.get("kind", "note")}">
     <span class="h">{e(b["title"])}</span>
     <p>{b["body"]}</p>
@@ -140,8 +139,8 @@ def steps(b, up, L=""):
         + "</li>"
         for s in b["items"]
     )
-    return f"""<section class="band">
-  <div class="sec-h"><h2>{e(b["h2"])}</h2>{f'<p class="sec-lede">{b["intro"]}</p>' if b.get("intro") else ""}</div>
+    return f"""<section class="band{tone(b)}"{anchor(b)}>
+  <div class="sec-h"><h2>{b["h2"]}</h2>{f'<p class="sec-lede">{b["intro"]}</p>' if b.get("intro") else ""}</div>
   <ol class="steps">{items}</ol>
 </section>"""
 
@@ -151,7 +150,7 @@ def faq(b, up, L=""):
         f"<details><summary>{e(q['q'])}</summary><div>{q['a']}</div></details>"
         for q in b["items"]
     )
-    return f'<section class="band"><div class="sec-h"><h2>{e(b["h2"])}</h2></div><div class="faq">{items}</div></section>'
+    return f'<section class="band{tone(b)}"{anchor(b)}><div class="sec-h"><h2>{b["h2"]}</h2></div><div class="faq">{items}</div></section>'
 
 
 def anchor(b):
@@ -159,8 +158,52 @@ def anchor(b):
     return f' id="{e(b["id"])}"' if b.get("id") else ""
 
 
+def tone(b):
+    """A band's value. `deep` recedes; `blue` is GOLIA's full-bleed accent and
+    is spent once per page, on the thing the reader should walk away with."""
+    t = b.get("tone")
+    return f" {t}" if t in ("deep", "blue") else ""
+
+
+def bars(b, up, L=""):
+    """The measurement, at real proportions.
+
+    Each row draws kevy's bar and the rival's from the same scale, so the chart
+    cannot say something the table underneath it does not. Where the margin is
+    thin the bar is short AND a different colour — a reader who only glances
+    still sees which two rows are close.
+    """
+    peak = max(r[1] for r in b["rows"])
+    rows = []
+    for name, us, them, ratio, thin in b["rows"]:
+        n = " narrow" if thin else ""
+        rows.append(
+            f'<div class="bar-row"><div class="bar-k">{e(name)}</div>'
+            f'<div class="bar-track">'
+            f'<div class="bar us{n}" style="width:{us / peak * 100:.1f}%"></div>'
+            f'<div class="bar them" style="width:{them / peak * 100:.1f}%"></div>'
+            f'</div>'
+            f'<div class="bar-n{n}">{e(ratio)}</div></div>'
+        )
+    return f"""<section class="band{tone(b)}"{anchor(b)}>
+  <div class="sec-h">
+    {f'<p class="eyebrow">{e(b["eyebrow"])}</p>' if b.get("eyebrow") else ""}
+    <h2>{b["h2"]}</h2>
+    {f'<p class="sec-lede">{b["intro"]}</p>' if b.get("intro") else ""}
+  </div>
+  <div class="bars">{"".join(rows)}</div>
+  <div class="bars-legend">
+    <span><i style="background:var(--blue)"></i>{e(b["us"])}</span>
+    <span><i style="background:var(--edge-hi)"></i>{e(b["them"])}</span>
+    <span><i style="background:var(--thin)"></i>{e(b["thin"])}</span>
+  </div>
+  {f'<p class="tbl-note">{b["note"]}</p>' if b.get("note") else ""}
+</section>"""
+
+
 BLOCKS = {
     "hero": hero,
+    "bars": bars,
     "prose": prose,
     "cards": cards,
     "table": table,
@@ -181,6 +224,14 @@ def page(spec, lang, slug):
     up = "../" * depth
     n = NAV[lang]
     body = "\n".join(BLOCKS[b["t"]](b, up, DIRS[lang]) for b in spec["blocks"])
+    # An href inside a prose body cannot know how deep its page is, and it does
+    # not pass through loc(). So the content writes `~/docs/commands/` and this
+    # expands it — one rule, one place, and a link that is wrong is wrong
+    # everywhere rather than only on the pages nobody clicked.
+    # llms.txt and llms-full.txt are language-neutral — they are generated from
+    # the engine's verb table, and there is one of each. They live at the root.
+    body = body.replace('href="~/llms', f'href="{up}llms')
+    body = body.replace('href="~/', f'href="{up}{DIRS[lang]}')
     cur = lambda s: ' aria-current="page"' if s == slug else ""
 
     def lang_href(code):
@@ -194,7 +245,6 @@ def page(spec, lang, slug):
 <title>{e(spec["title"])}</title>
 <meta name="description" content="{e(spec["desc"])}">
 <link rel="stylesheet" href="{up}assets/kevy.css">
-<link rel="stylesheet" href="{up}assets/pages.css">
 <script>
   try {{
     var t = localStorage.getItem("kevy-theme");

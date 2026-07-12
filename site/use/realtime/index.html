@@ -6,7 +6,6 @@
 <title>Realtime and pub/sub — kevy</title>
 <meta name="description" content="Chat, presence, notifications and live dashboards on kevy&#x27;s pub/sub — including what happens to a subscriber that cannot keep up.">
 <link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/pages.css">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,16 +40,13 @@
 </header>
 
 <main id="main">
-<section class="hero">
-  <div class="hero-in">
+<section class="band" style="border-top:0"><div>
     <p class="eyebrow">Realtime</p>
     <h1>Push it to everyone<br>who is listening</h1>
     <p class="lede">Chat, presence, notifications, a dashboard that updates itself. One publish, many subscribers, no polling. <b>And in the browser build, the same pub/sub works between two tabs with no server at all.</b></p>
     
-  </div>
-  
-</section>
-<section class="band prose"><h2>Why this fits — and where it does not</h2><p>Pub/sub is fire-and-forget. A message goes to whoever is subscribed <b>at that moment</b>; nobody who connects a second later will ever see it, and there is no acknowledgement. That is exactly right for a presence ping or a live counter, and exactly wrong for anything you would be upset to lose.</p><p><b>If losing a message matters, use a stream instead</b> — see <a href="../queue/">queues</a>. Streams keep history, support consumer groups, and let a client that was offline catch up. Pub/sub is the cheap thing; the cheapness is the trade.</p></section>
+  </div></section>
+<section class="band prose"><h2>Why this fits — and where it does not</h2><p>Pub/sub is fire-and-forget. A message goes to whoever is subscribed <b>at that moment</b>; nobody who connects a second later will ever see it, and there is no acknowledgement. That is exactly right for a presence ping or a live counter, and exactly wrong for anything you would be upset to lose.</p><p><b>If losing a message matters, use a stream instead</b> — see <a href="../../use/queue/">queues</a>. Streams keep history, support consumer groups, and let a client that was offline catch up. Pub/sub is the cheap thing; the cheapness is the trade.</p></section>
 <section class="band">
   <div class="sec-h"><h2>How</h2></div>
   <figure class="code"><figcaption>Channels, and patterns for a whole family of them at once.</figcaption><pre><code># subscriber
@@ -89,12 +85,12 @@ db.publish(&quot;room:42&quot;, JSON.stringify({ user: &quot;ada&quot;, text: &q
     <p><b>A slow subscriber is dropped, not buffered forever.</b> If a client cannot keep up, its messages are discarded rather than growing the server's memory without bound — a deliberate choice, and one you should know about before you rely on delivery. There is no acknowledgement and no replay. <b>If either matters, you want a stream, not a channel.</b> <a href="../../docs/pubsub/">The pub/sub guide</a> is specific about the limits.</p>
   </div>
 </section>
-<section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../../../docs/pubsub/">
+<section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../docs/pubsub/">
       <span class="card-k">Guide</span>
       <h3>Pub/sub</h3>
       <p>Channels, patterns, and what happens to a subscriber that falls behind.</p>
       <span class="card-go">Read it</span>
-    </a><a class="card" href="../../../../play/">
+    </a><a class="card" href="../../play/">
       <span class="card-k">Try it</span>
       <h3>Two tabs, no server</h3>
       <p>Open the playground in two tabs and publish from either one.</p>

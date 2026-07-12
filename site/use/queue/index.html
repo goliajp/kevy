@@ -6,7 +6,6 @@
 <title>Queues and background jobs — kevy</title>
 <meta name="description" content="Job queues in kevy: lists for simple work, streams with consumer groups for work you cannot afford to lose.">
 <link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/pages.css">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,15 +40,12 @@
 </header>
 
 <main id="main">
-<section class="hero">
-  <div class="hero-in">
+<section class="band" style="border-top:0"><div>
     <p class="eyebrow">Queues &amp; jobs</p>
     <h1>Hand work to a worker,<br>and get it back if the worker dies</h1>
     <p class="lede">A queue table in a relational database is a locking convention with extra steps. kevy has two real queues: <b>a list</b> when losing a job is survivable, and <b>a stream with consumer groups</b> when it is not.</p>
     
-  </div>
-  
-</section>
+  </div></section>
 <section class="band prose"><h2>Which of the two</h2><p><b>Use a list</b> when the job is cheap to redo and the worker is unlikely to die mid-task — sending an email, warming a cache, invalidating a CDN path. <code>BRPOP</code> blocks until there is work, so the worker does not poll.</p><p><b>Use a stream</b> when the job must not be lost. A consumer group hands each message to exactly one worker and remembers that it did. If the worker dies before acknowledging, the message stays in the pending list and another worker can claim it — that is the whole reason streams exist, and it is the difference between a queue and a hope.</p></section>
 <section class="band">
   <div class="sec-h"><h2>How — a list, for work you can redo</h2></div>
@@ -95,12 +91,12 @@ XPENDING jobs:pay g1</code></pre></figure>
     <p><b>A stream is not free.</b> Trimming with <code>MAXLEN</code> recomputes the stream's weight, which is O(N) in the whole stream — so trim on a schedule, not on every <code>XADD</code>. <code>XREADGROUP</code>'s <code>COUNT</code> bounds what you are handed, <b>not what is scanned</b>: the entire undelivered tail is materialised first. And on a multi-shard server, <code>BLPOP</code> across several keys does not honour Redis's strict left-to-right priority — keys on the connection's own shard are served first. All of this is per-command in <a href="../../docs/commands/">the reference</a>.</p>
   </div>
 </section>
-<section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../../../docs/cookbook/">
+<section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../docs/cookbook/">
       <span class="card-k">Guide</span>
       <h3>The cookbook</h3>
       <p>Queue recipes, including retry and dead-letter patterns.</p>
       <span class="card-go">Read it</span>
-    </a><a class="card" href="../../../../docs/commands/">
+    </a><a class="card" href="../../docs/commands/">
       <span class="card-k">Reference</span>
       <h3>Stream commands</h3>
       <p>XADD, XREADGROUP, XAUTOCLAIM and the rest, with their real costs.</p>

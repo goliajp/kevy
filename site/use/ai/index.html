@@ -6,7 +6,6 @@
 <title>Storage for AI applications — kevy</title>
 <meta name="description" content="Vector search, full-text search and a change feed in the store that already holds your data. What kevy gives an AI application, and what it does not.">
 <link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/pages.css">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,15 +40,12 @@
 </header>
 
 <main id="main">
-<section class="hero">
-  <div class="hero-in">
+<section class="band" style="border-top:0"><div>
     <p class="eyebrow">AI applications</p>
     <h1>One store for the data<br>and the way you find it</h1>
     <p class="lede">RAG and agent memory usually mean three systems: a cache, a vector database, and a search index — with the same facts in all three, drifting apart. <b>kevy has vector KNN, BM25 full-text and a change feed in the engine</b>, over the keys you already wrote.</p>
     
-  </div>
-  
-</section>
+  </div></section>
 <section class="band prose"><h2>Why this fits</h2><p>The expensive part of a RAG stack is not the search. It is keeping three copies of the truth in step: you write a document, then you have to remember to embed it, index it, and invalidate the cache. Every one of those is a place to forget.</p><p><b>In kevy the index is a declaration, not a pipeline.</b> You tell the engine which keys and which field, and the write path keeps the index current. There is nothing to run afterwards and nothing to fall behind.</p><p><b>What kevy does not do is produce the embedding.</b> There is no model in the engine and there will not be one — inference does not belong in a storage engine, and pretending otherwise would tie your vector format to our release cycle. You bring the vector; kevy stores it, indexes it and searches it.</p></section>
 <section class="band">
   <div class="sec-h"><h2>How — vector search</h2></div>
@@ -95,17 +91,17 @@ FEED.READ 0 1 0 COUNT 2     -&gt; the writes themselves, replayable</code></pre>
     <p><a href="../../llms-full.txt">llms-full.txt</a> is one fetch: every command with its real cost and its real deviation from Redis, plus the complete text of all twenty-four guides. It is generated from the engine's own verb table, so it cannot drift from what the server does.</p>
   </div>
 </section>
-<section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../../../docs/vector-search/">
+<section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../docs/vector-search/">
       <span class="card-k">Guide</span>
       <h3>Vector search</h3>
       <p>HNSW, the tuning knobs, and what approximate actually means here.</p>
       <span class="card-go">Read it</span>
-    </a><a class="card" href="../../../../docs/text-search/">
+    </a><a class="card" href="../../docs/text-search/">
       <span class="card-k">Guide</span>
       <h3>Full-text search</h3>
       <p>BM25, tokenisation including CJK, and where it stops.</p>
       <span class="card-go">Read it</span>
-    </a><a class="card" href="../../../../docs/cdc/">
+    </a><a class="card" href="../../docs/cdc/">
       <span class="card-k">Guide</span>
       <h3>The change feed</h3>
       <p>Tail every write from another process, with resumable offsets.</p>
