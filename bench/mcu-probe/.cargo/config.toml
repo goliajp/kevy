@@ -1,6 +1,8 @@
+# The linker script is passed by build.rs (`cargo::rustc-link-arg`), not by
+# rustflags here: a RUSTFLAGS environment variable overrides config rustflags
+# wholesale and would silently drop it. See build.rs.
 [build]
 target = "thumbv7em-none-eabihf"
 
 [target.thumbv7em-none-eabihf]
-rustflags = ["-C", "link-arg=-Tlink.x"]
 runner = "qemu-system-arm -cpu cortex-m4 -machine mps2-an386 -nographic -semihosting-config enable=on,target=native -kernel"
