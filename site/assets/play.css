@@ -455,3 +455,17 @@ tr.changed {
     gap: 0.4rem;
   }
 }
+
+/* The CRLF that ends every RESP frame. Spelled out rather than shown as U+240D,
+ * which most monospace faces do not have a glyph for and render as tofu. */
+.aof .crlf {
+  color: var(--muted);
+  opacity: 0.55;
+  font-style: normal;
+}
+
+/* The feed sizes to its contents. A min-height painted an empty strip of the
+ * container's rule colour under the last message, which read as a broken row. */
+.feed {
+  min-height: 0;
+}

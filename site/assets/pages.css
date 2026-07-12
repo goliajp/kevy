@@ -572,3 +572,50 @@ figure.code code {
     align-items: flex-start;
   }
 }
+
+/* ── CJK display type ───────────────────────────────────────────────────────
+ *
+ * A Chinese or Japanese headline set at the same size as an English one reads
+ * much heavier: every glyph is full-width and dense, where Latin has ascenders,
+ * descenders and whitespace doing the breathing. The same clamp that looks right
+ * for "A Redis-compatible engine" makes 「一个 Redis 兼容的引擎」 overflow its
+ * column and break in the middle of 兼容 — splitting a word in a headline, which
+ * no one would do on purpose.
+ *
+ * So the display sizes come down, and the leading opens up. This is not a
+ * concession to a translation. It is what the writing system wants. */
+
+:lang(zh) .hero h1,
+:lang(ja) .hero h1 {
+  font-size: clamp(1.6rem, 1.1rem + 2.5vw, 2.65rem);
+  line-height: 1.3;
+  letter-spacing: 0;
+  font-weight: 700;
+}
+:lang(zh) .hero .lede,
+:lang(ja) .hero .lede {
+  line-height: 1.9;
+  max-width: 42ch; /* a hanzi is twice a Latin character wide */
+}
+:lang(zh) main > .band h2,
+:lang(ja) main > .band h2 {
+  font-size: clamp(1.15rem, 1rem + 0.7vw, 1.5rem);
+  line-height: 1.45;
+  letter-spacing: 0;
+  font-weight: 700;
+}
+:lang(zh) .prose p,
+:lang(ja) .prose p,
+:lang(zh) .sec-lede,
+:lang(ja) .sec-lede,
+:lang(zh) main .call p,
+:lang(ja) main .call p {
+  line-height: 1.95;
+  max-width: 45ch;
+}
+:lang(zh) .cards .card p,
+:lang(ja) .cards .card p,
+:lang(zh) .tbl-note,
+:lang(ja) .tbl-note {
+  line-height: 1.85;
+}

@@ -14,9 +14,12 @@ import pathlib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 NAV = {
-    "en": {"docs": "Docs", "cmds": "Commands", "play": "Playground", "bench": "Benchmarks"},
-    "zh": {"docs": "文档", "cmds": "命令", "play": "Playground", "bench": "基准"},
-    "ja": {"docs": "ドキュメント", "cmds": "コマンド", "play": "Playground", "bench": "ベンチマーク"},
+    "en": {"choose": "Should I use it?", "docs": "Docs", "cmds": "Commands",
+           "play": "Playground", "bench": "Benchmarks"},
+    "zh": {"choose": "该不该用", "docs": "文档", "cmds": "命令",
+           "play": "Playground", "bench": "基准"},
+    "ja": {"choose": "使うべきか", "docs": "ドキュメント", "cmds": "コマンド",
+           "play": "Playground", "bench": "ベンチマーク"},
 }
 DIRS = {"en": "", "zh": "zh/", "ja": "ja/"}
 HTML_LANG = {"en": "en", "zh": "zh-Hans", "ja": "ja"}
@@ -81,7 +84,7 @@ def cards(b, up, L=""):
     )
     h = f'<h2>{e(b["h2"])}</h2>' if b.get("h2") else ""
     intro = f'<p class="sec-lede">{b["intro"]}</p>' if b.get("intro") else ""
-    return f'<section class="band"><div class="sec-h">{h}{intro}</div><div class="cards">{items}</div></section>'
+    return f'<section class="band"{anchor(b)}><div class="sec-h">{h}{intro}</div><div class="cards">{items}</div></section>'
 
 
 def table(b, up, L=""):
@@ -151,6 +154,11 @@ def faq(b, up, L=""):
     return f'<section class="band"><div class="sec-h"><h2>{e(b["h2"])}</h2></div><div class="faq">{items}</div></section>'
 
 
+def anchor(b):
+    """`id` on a block, so a hero CTA can point at the section it promises."""
+    return f' id="{e(b["id"])}"' if b.get("id") else ""
+
+
 BLOCKS = {
     "hero": hero,
     "prose": prose,
@@ -167,8 +175,9 @@ BLOCKS = {
 
 
 def page(spec, lang, slug):
-    """slug: "" for the landing page, else "when-to-use" etc."""
-    depth = (0 if lang == "en" else 1) + (1 if slug else 0)
+    """slug: "" for the landing page, "choose", "use/cache", …"""
+    # site/use/cache/index.html is three deep; site/zh/use/cache/ is four.
+    depth = (0 if lang == "en" else 1) + (slug.count("/") + 1 if slug else 0)
     up = "../" * depth
     n = NAV[lang]
     body = "\n".join(BLOCKS[b["t"]](b, up, DIRS[lang]) for b in spec["blocks"])
@@ -199,6 +208,7 @@ def page(spec, lang, slug):
   <div class="mast-in">
     <a class="brand" href="{up}{DIRS[lang]}">kevy<span class="v">4.0</span></a>
     <nav class="nav">
+      <a href="{up}{DIRS[lang]}choose/"{cur("choose")}>{n["choose"]}</a>
       <a href="{up}{DIRS[lang]}docs/">{n["docs"]}</a>
       <a href="{up}{DIRS[lang]}docs/commands/">{n["cmds"]}</a>
       <a href="{up}{DIRS[lang]}benchmarks/"{cur("benchmarks")}>{n["bench"]}</a>

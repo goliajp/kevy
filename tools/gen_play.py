@@ -60,6 +60,7 @@ L = {
         "waiting": "Waiting for a message…",
         "nav_docs": "Docs",
         "nav_cmds": "Commands",
+        "nav_bench": "Benchmarks",
         "nav_play": "Playground",
     },
     "zh": {
@@ -107,6 +108,7 @@ L = {
         "waiting": "等待消息……",
         "nav_docs": "文档",
         "nav_cmds": "命令",
+        "nav_bench": "基准",
         "nav_play": "Playground",
     },
     "ja": {
@@ -155,6 +157,7 @@ L = {
         "waiting": "メッセージを待っている……",
         "nav_docs": "ドキュメント",
         "nav_cmds": "コマンド",
+        "nav_bench": "ベンチマーク",
         "nav_play": "Playground",
     },
 }
@@ -183,6 +186,7 @@ TPL = """<!doctype html>
     <nav class="nav">
       <a href="{up}{dir}docs/">{nav_docs}</a>
       <a href="{up}{dir}docs/commands/">{nav_cmds}</a>
+      <a href="{up}{dir}benchmarks/">{nav_bench}</a>
       <a href="{up}{dir}play/" aria-current="page">{nav_play}</a>
     </nav>
     <div class="mast-right">

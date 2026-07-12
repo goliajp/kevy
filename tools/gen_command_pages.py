@@ -44,6 +44,9 @@ LANGS = {
         "dir": "",
         "html_lang": "en",
         "commands": "Commands",
+        "nav_choose": "Should I use it?",
+        "nav_docs": "Docs",
+        "nav_bench": "Benchmarks",
         "title_suffix": "kevy command reference",
         "search": "Filter commands…",
         "group": "Group",
@@ -79,6 +82,9 @@ LANGS = {
         "dir": "zh/",
         "html_lang": "zh-Hans",
         "commands": "命令",
+        "nav_choose": "该不该用",
+        "nav_docs": "文档",
+        "nav_bench": "基准",
         "title_suffix": "kevy 命令参考",
         "search": "筛选命令……",
         "group": "分组",
@@ -113,6 +119,9 @@ LANGS = {
         "dir": "ja/",
         "html_lang": "ja",
         "commands": "コマンド",
+        "nav_choose": "使うべきか",
+        "nav_docs": "ドキュメント",
+        "nav_bench": "ベンチマーク",
         "title_suffix": "kevy コマンドリファレンス",
         "search": "コマンドを絞り込む……",
         "group": "グループ",
@@ -230,8 +239,10 @@ def mast(lang, depth, here):
   <div class="mast-in">
     <a class="brand" href="{up}{L['dir']}">kevy<span class="v">4.0</span></a>
     <nav class="nav">
-      <a href="{up}{L['dir']}docs/">Docs</a>
+      <a href="{up}{L['dir']}choose/">{esc(L['nav_choose'])}</a>
+      <a href="{up}{L['dir']}docs/">{esc(L['nav_docs'])}</a>
       <a href="{up}{L['dir']}docs/commands/" aria-current="page">{esc(L['commands'])}</a>
+      <a href="{up}{L['dir']}benchmarks/">{esc(L['nav_bench'])}</a>
       <a href="{up}{L['dir']}play/">Playground</a>
     </nav>
     <div class="mast-right">

@@ -307,10 +307,12 @@ async function paintLog() {
   // Show the tail — the newest writes are the ones you just made, and the head
   // of a replayed log is old news.
   const tail = bytes.slice(Math.max(0, n - 512));
-  pre.textContent = dec
-    .decode(tail)
-    .replace(/\r\n/g, "␍␊\n")
-    .trimStart();
+  // RESP delimits with CRLF, and the CRLF is the point — it is what makes this
+  // the wire format rather than a text file. But U+240D / U+240A have no glyph
+  // in most monospace faces and render as tofu, so the marker is spelled out
+  // and dimmed instead of shown as a character nobody's font has.
+  pre.innerHTML = esc(dec.decode(tail).trimStart())
+    .replace(/\r\n/g, '<i class="crlf">\\r\\n</i>\n');
   pre.scrollTop = pre.scrollHeight;
 
   if (navigator.storage?.estimate) {

@@ -778,3 +778,33 @@ dl.meta dd code {
 .lang a.untranslated:hover {
   opacity: 0.7;
 }
+
+/* Same reason as pages.css: CJK display type is heavier at the same size, and
+ * CJK prose needs more leading and a narrower measure than Latin. */
+:lang(zh) .doc-head h1,
+:lang(ja) .doc-head h1 {
+  font-size: clamp(1.5rem, 1.2rem + 1.4vw, 2.15rem);
+  line-height: 1.35;
+  letter-spacing: 0;
+  font-weight: 700;
+}
+:lang(zh) .doc h2,
+:lang(ja) .doc h2 {
+  font-size: 1.25rem;
+  line-height: 1.45;
+  letter-spacing: 0;
+}
+:lang(zh) .doc p,
+:lang(ja) .doc p,
+:lang(zh) .doc li,
+:lang(ja) .doc li {
+  line-height: 1.95;
+}
+:lang(zh) .doc p,
+:lang(ja) .doc p {
+  max-width: 45ch;
+}
+:lang(zh) h1.cmd,
+:lang(ja) h1.cmd {
+  letter-spacing: -0.01em; /* a command name is Latin even on a Chinese page */
+}

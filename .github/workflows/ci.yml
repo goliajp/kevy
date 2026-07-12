@@ -101,6 +101,11 @@ jobs:
       - name: site links (no dead internal link in site/)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python3 tools/check_links.py
+      - name: site commands (every RESP example on the site actually runs)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo build -q -p kevy --bin kevy
+          python3 tools/check_site_commands.py
       - name: doc configs (every ```toml in docs/ actually loads)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
