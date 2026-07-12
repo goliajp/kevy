@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coming from Redis or a database — kevy</title>
+<meta name="description" content="Why teams move to kevy from Redis or from Postgres, exactly what changes, what it costs, and how to do the move without a rewrite.">
+<link rel="stylesheet" href="../assets/kevy.css">
+<link rel="stylesheet" href="../assets/pages.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../choose/">Should I use it?</a>
+      <a href="../docs/">Docs</a>
+      <a href="../docs/commands/">Commands</a>
+      <a href="../benchmarks/">Benchmarks</a>
+      <a href="../play/">Playground</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language">
+        <a href="../migrate/" aria-current="page">EN</a>
+        <a href="../zh/migrate/">中文</a>
+        <a href="../ja/migrate/">日本語</a>
+      </nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+<section class="hero">
+  <div class="hero-in">
+    <p class="eyebrow">Migrating</p>
+    <h1>Why you would move,<br>and what it costs you</h1>
+    <p class="lede">Two different conversations. Coming from <b>Redis</b>, the protocol is the same and the question is what behaves differently. Coming from a <b>relational database</b>, nothing is the same and the question is which part of the workload should move at all — the answer is <b>some of it</b>, and we will say which.</p>
+    
+  </div>
+  
+</section>
+<section class="band prose"><h2>Coming from Redis</h2><p><b>Your client does not change.</b> kevy speaks RESP2 and RESP3 and answers 184 commands. Point your existing library at it, keep your code, keep your redis-cli. There is no SDK to adopt and no new protocol to learn.</p><p><b>So the only real question is what you gain.</b> Three things, and if none of them is worth anything to you, then stay on Redis — it is a superb piece of software and switching for its own sake is a waste of your week.</p></section>
+<section class="band">
+  <div class="sec-h"><h2>What you gain, concretely</h2></div>
+  <ol class="steps"><li><h3>It runs where Redis cannot</h3><p>Embed it in a binary, ship it to a browser tab, boot it on a Cortex-M with no allocator. Today each of those needs its own storage layer with its own API; here it is the same engine and the same commands. If you have ever written a second cache for the client side, this is the reason to look.</p></li><li><h3>It replaces the search service too</h3><p>Secondary indexes, materialised views, vector KNN and BM25 full-text are in the engine — not a module, not a sidecar, not a second copy of the data drifting out of sync with the first. Teams running Redis plus a search cluster can often run one thing.</p><pre><code># look up by a field, not just by the key
+IDX.CREATE idx:city ON PREFIX user: FIELD city TYPE str KIND range
+IDX.QUERY  idx:city EQ osaka
+
+# vectors, in the same engine, over the same keys
+IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann DIM 768 DISTANCE cosine
+IDX.QUERY  idx:sem KNN &quot;&lt;vector&gt;&quot; LIMIT 10</code></pre></li><li><h3>It is one auditable binary</h3><p>Zero third-party dependencies. 33 crates, one author, a supply chain you can read in an afternoon. For a regulated build, a vendored build, or anything shipped to a customer's machine, that is not a nicety.</p></li></ol>
+</section>
+<section class="band">
+  <div class="call loss">
+    <span class="h">What you give up by leaving Redis</span>
+    <p><b>No cluster.</b> Replicas are copies, not shards. <b>No AUTH, no TLS.</b> And <b>a handful of commands behave differently</b> — <code>SCAN</code> is not a cursor iterator (one call returns everything and cursor 0), <code>ZRANK</code> is O(N), <code>SPOP</code> and <code>SRANDMEMBER</code> are not random, and a cross-shard <code>RENAME</code> is not atomic. None of these is a bug and all of them are documented per command. Read the list before you commit, not after: <a href="docs/commands/">every command's real cost and real deviation</a>.</p>
+  </div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>How to move, from Redis</h2></div>
+  <figure class="code"><figcaption>Export from Redis, import into kevy, and check the two agree. Every command below was run.</figcaption><pre><code># 1. dump what you want to move. it is a RESP file — readable,
+#    diffable, and it streams rather than loading into memory.
+kevy-cli export -p 6379 --prefix user: dump.resp
+-&gt; exported 41023 keys -&gt; dump.resp
+
+# 2. load it. --strict stops on the first error rather than
+#    limping onward with a half-migrated keyspace.
+kevy-cli import -p 6380 --strict dump.resp
+-&gt; imported 82046 ok, 0 errors, offset 4108331
+
+# 3. prove they agree, rather than hoping.
+kevy-cli digest -p 6379 user:
+kevy-cli digest -p 6380 user:
+-&gt; 41023 keys 3bca92aa52269300     # the same hash, or you did not migrate
+
+# an interrupted import resumes where it stopped:
+kevy-cli import -p 6380 --resume dump.resp</code></pre></figure>
+</section>
+<section class="band prose"><h2>Coming from a relational database</h2><p><b>Do not move your database.</b> Move the part of it that was never a database problem.</p><p>Sessions. Rate limits. Feature flags. Job queues. The hot row every request reads and nobody ever joins against. These live in Postgres in most applications, and they are the rows getting hammered — not because a relational database is bad at them, but because they were never questions. They are lookups. You already know the key.</p><p><b>Keep Postgres for what it is unmatched at</b> — joins, ad-hoc queries, analytics, transactions with real isolation across unrelated rows. kevy takes the serving path and gives the database its evenings back.</p><p><b>And some questions can move too.</b> Secondary indexes and materialised views mean a filtered list or a running total does not have to become a query — the write path keeps the answer ready. That is the part of an ORM most applications actually use.</p></section>
+<section class="band">
+  <div class="sec-h"><h2>Which parts should move</h2><p class="sec-lede">Honest per workload. The last two rows are the ones people get wrong.</p></div>
+  <div class="tbl"><table><thead><tr><th>Workload</th><th>Move it?</th><th>Why</th></tr></thead><tbody><tr><td>Sessions, tokens</td><td class="win">Yes</td><td class="num">A lookup by key with a TTL. The database was doing you a favour, not a job.</td></tr><tr><td>Rate limits, counters</td><td class="win">Yes</td><td class="num">INCR with an expiry is atomic and O(1). In SQL this is a row lock on your hottest row.</td></tr><tr><td>Job queues</td><td class="win">Yes</td><td class="num">Lists and streams, with consumer groups and per-message acknowledgement. A queue table is a lock convention with extra steps.</td></tr><tr><td>Feature flags, config</td><td class="win">Yes</td><td class="num">Read constantly, written rarely, joined never.</td></tr><tr><td>Filtered lists (by status, by owner)</td><td class="win">Often</td><td class="num">A secondary index answers it without a query planner. See <a href="use/app-store/">serving reads</a>.</td></tr><tr><td>Aggregates (counts, totals)</td><td class="win">Often</td><td class="num">A materialised view keeps it current on the write path instead of recomputing it on every read.</td></tr><tr><td>Joins across several tables</td><td class="loss">No</td><td class="num">kevy has no joins and will not grow them. This is what Postgres is for.</td></tr><tr><td>Analytics, ad-hoc queries</td><td class="loss">No</td><td class="num">There is no query planner and no optimiser. Do not try.</td></tr><tr><td>Transactions across unrelated rows</td><td class="loss">No</td><td class="num">MULTI is per shard, not global. If you need serialisable isolation across the keyspace, you need a database.</td></tr></tbody></table></div>
+  <p class="tbl-note">The two red rows are not a to-do list. They are refusals — kevy will not grow joins or an optimiser, because doing either badly is worse than not doing it. <a href="docs/rds-workloads/">Every relational workload, with what it actually costs here</a>, including the ones where the honest answer is "keep it in Postgres".</p>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>How to move, from a database</h2></div>
+  <figure class="code"><figcaption>Nothing is cut over at once. Move one workload, keep the database as the source of truth, and measure.</figcaption><pre><code># 1. pick ONE workload. sessions are the usual first, because
+#    nothing joins against them and losing one is survivable.
+
+# 2. write to both for a week. reads still come from Postgres.
+#    you are checking that the shapes match, not that it is fast.
+
+# 3. flip reads to kevy. keep the dual write.
+redis-cli SET session:$SID &quot;$JSON&quot; EX 3600
+
+# 4. when it has been boring for a fortnight, drop the table.
+
+# then do the next workload. rate limits, then queues, then
+# whichever of your read paths a secondary index can answer.</code></pre></figure>
+</section>
+<section class="band">
+  <div class="call note">
+    <span class="h">And if you want to leave again</span>
+    <p>The same three commands run in the other direction. <code>kevy-cli export</code> writes a plain RESP file that any Redis-compatible server will import, and <code>digest</code> proves the copy is faithful. <a href="docs/migration/">The migration guide covers moving out</a> as carefully as moving in — we would much rather you leave cleanly than stay because you are stuck.</p>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <p class="foot-b">kevy 4.0 — what changes, and what it costs</p>
+    <nav>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+      <a href="https://crates.io/crates/kevy">crates.io</a>
+      <a href="../llms.txt">llms.txt</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>
