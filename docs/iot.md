@@ -1,7 +1,7 @@
 # kevy on IoT devices
 
 `kevy-embedded` scales down as deliberately as the server scales up:
-a feature-tiered build that goes from a ~655 KB in-memory KV core to
+a feature-tiered build that goes from a ~411 KB in-memory KV core to
 the full index/replication surface, musl cross-builds for Linux-class
 IoT boards (Pi Zero 2, OpenWrt routers, industrial ARM), and a
 `no_std` core proven on a bare-metal Cortex-M target. Resource
@@ -61,8 +61,14 @@ either number requires a written verdict:
 
 | Budget | Line | Measured |
 |---|---|---|
-| Binary size (`core` archetype example, `--profile iot`) | ≤ 700 KB | **655 KB** |
-| Empty-store RSS right after `open` (Linux) | ≤ 2 MB | gated on Linux runs |
+| Binary size (`core` consumer, static musl) | ≤ 600 KB | **454 KB** (x86_64) · **411 KB** (aarch64) · **383 KB** (armv7) |
+| Empty-store RSS right after `open` (Linux) | ≤ 2 MB | **336 KB** (aarch64) |
+
+> These are measured on `bench/iot-consumer` — a crate deliberately kept
+> **outside** the workspace whose only dependency is `kevy-embedded`. That
+> is the shape you ship. An earlier version of this gate sized a workspace
+> `--example` instead; building an example pulls dev-dependencies (the
+> `kevy` server crate), which inflated the reported size by ~60%.
 
 The `iot` cargo profile is defined in the workspace root — `release`
 codegen with size the priority:
@@ -115,8 +121,31 @@ you own the loop. TTL precision tracks the tick cadence.
 ## Cross-compiling: musl and the CI matrix
 
 Static musl binaries are the deployment currency of Linux-class IoT —
-one file, no glibc coupling, `scp` and run. Both musl targets are
-compile-gated in CI with the **full** default feature surface:
+one file, no glibc coupling, `scp` and run.
+
+### Platform coverage — what has actually been run
+
+Every row below was built AND executed, not merely compile-checked. The
+`core`-tier consumer was run on a real kernel for that architecture; the
+sizes are the static-musl artifact.
+
+| Target | Board class | Size | Status |
+|---|---|---|---|
+| `x86_64-unknown-linux-musl` | industrial x86, gateways | 454 KB | **run** |
+| `aarch64-unknown-linux-musl` | Pi Zero 2 / Pi 4-5 / most ARM64 SBC | 411 KB | **run — natively**, 336 KB empty-store RSS, 2.86M store-ops/s |
+| `armv7-unknown-linux-musleabihf` | Pi 2-3, older 32-bit ARM | 383 KB | **run** (emulated) |
+| `arm-unknown-linux-musleabihf` | Pi Zero / Pi 1 (ARMv6) | 411 KB | **run** (emulated) |
+| `thumbv7em-none-eabihf` | Cortex-M4/M7 MCU | — | `no_std` **stones** compile-check only — the full engine does not run here (see below) |
+| `riscv64gc-unknown-linux-musl` | RISC-V SBC | — | **not verified** — needs a RISC-V musl sysroot to link; the Rust side is untested, so it is neither claimed nor ruled out |
+
+The aarch64 numbers are the trustworthy performance ones: that row ran
+natively on ARM64. The armv7/ARMv6 rows prove the code is correct on
+32-bit ARM, but their timing and RSS carry emulator overhead and should
+not be read as device figures.
+
+All shipped targets are compile-gated in CI (the standalone consumer is
+built for each on every push), with the **full** default surface checked
+on the Tier A targets:
 
 ```sh
 rustup target add aarch64-unknown-linux-musl
@@ -175,10 +204,24 @@ from multiple contexts concurrently is outside the contract.
 
 ## Sizing guidance
 
-- The 655 KB / 2 MB numbers are the `core` archetype on the `iot`
-  profile — the floor, not the typical. Each tier you add buys its
-  subsystem's code and working memory; if the number matters, measure
-  your exact feature set with the `iotgate` recipe above.
+- The numbers above are the `core` tier — the floor, not the typical.
+  What each capability actually costs, measured on aarch64-musl with the
+  `iot` profile (a consumer that genuinely *calls* the tier's API — a
+  feature flag you never use is eliminated by LTO and costs nothing):
+
+  | You use | Binary | Delta |
+  |---|---|---|
+  | KV + TTL (`core`) | 392 KB | — |
+  | + durability (snapshot + AOF) | 601 KB | **+209 KB** |
+  | + RESP listener | 629 KB | +28 KB |
+  | + secondary index | 667 KB | +66 KB |
+  | + full-text (BM25) | 691 KB | +24 KB |
+  | + vector ANN (HNSW) | 696 KB | +29 KB |
+
+  Durability is by far the largest single line — everything else is a
+  small increment on top of it. Empty-store RSS moves the same way:
+  336 KB at `core`, 656 KB with every feature compiled in, so the tier
+  you pick shows up in resident memory even more than in bytes on disk.
 - Memory scales with the keyspace: the empty-store RSS budget exists
   precisely so the baseline cost of *having* kevy stays trivial next
   to your data.

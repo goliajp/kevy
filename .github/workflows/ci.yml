@@ -235,7 +235,8 @@ jobs:
         run: |
           rustup toolchain install stable --no-self-update
           rustup default stable
-          rustup target add aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf thumbv7em-none-eabihf
+          rustup target add aarch64-unknown-linux-musl armv7-unknown-linux-musleabihf \
+            arm-unknown-linux-musleabihf x86_64-unknown-linux-musl thumbv7em-none-eabihf
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -249,9 +250,12 @@ jobs:
             cargo-iot-
 
       - name: Check kevy-embedded on the Tier A musl targets (full surface)
+        # ARMv6 (arm-unknown-linux-musleabihf) is the Pi Zero / Pi 1 class
+        # and was previously ungated even though the docs name that board.
         run: |
           cargo check --target aarch64-unknown-linux-musl -p kevy-embedded
           cargo check --target armv7-unknown-linux-musleabihf -p kevy-embedded
+          cargo check --target arm-unknown-linux-musleabihf -p kevy-embedded
 
       - name: Check the no_std core stones (thumbv7em, alloc + external-clock)
         # kevy-store pulls kevy-hash / -bytes / -map / -madvise with the
@@ -267,6 +271,20 @@ jobs:
           for f in core core,persist core,index core,index,text,vector core,persist,replicate core,listener; do
             echo "== features: $f =="
             cargo check -p kevy-embedded --no-default-features --features "$f"
+          done
+
+      - name: Build the standalone consumer on every shipped IoT target
+        # The real delivery shape: a crate outside the workspace whose only
+        # dependency is kevy-embedded. Building a workspace *example* pulls
+        # dev-dependencies (the `kevy` server crate) and inflated the measured
+        # size by ~60%, so the consumer is what iotgate sizes and what CI
+        # must prove compiles on every board we claim.
+        working-directory: bench/iot-consumer
+        run: |
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
+                   armv7-unknown-linux-musleabihf arm-unknown-linux-musleabihf; do
+            echo "== consumer (core) on $t =="
+            cargo build --release --no-default-features --features core --target "$t"
           done
 
   # ───────────── miri on the unsafe stones (catches UB in slot mgmt, ─────────────
