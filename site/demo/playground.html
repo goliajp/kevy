@@ -207,7 +207,7 @@
         <span class="hint">runs live, on your machine</span>
       </div>
       <p class="p-note">The honest comparison: kevy versus what the platform already gives you.
-        Same workload, same tab, measured right now.</p>
+        Same workload, same tab, measured right now — <b>including the axis kevy loses.</b></p>
       <div class="row">
         <button class="primary" id="b-bench">Run benchmark</button>
         <input type="number" id="bn" value="2000" min="200" max="20000" step="200" style="max-width:120px">
@@ -335,16 +335,26 @@ $('b-pub').onclick = () => {
 };
 
 // ---------- benchmark ----------
-function drawBars(title, results, unit) {
-  const max = Math.max(...results.map(r => r.v));
-  $('bars').innerHTML =
-    `<div class="bar-row"><span class="name" style="color:var(--ink);font-weight:600">${title}</span><span></span><span class="val" style="color:var(--faint)">${unit}</span></div>` +
+function group(title, results, note) {
+  const max = Math.max(...results.map(r => r.v), 1);
+  return (
+    `<div class="bar-row"><span class="name" style="color:var(--ink);font-weight:600">${title}</span>` +
+    `<span class="bench-note" style="font-size:11.5px">${note}</span>` +
+    `<span class="val" style="color:var(--faint)">ops/sec</span></div>` +
     results.map(r => `
       <div class="bar-row">
         <span class="name">${r.label}</span>
         <div class="bar-track"><div class="bar-fill ${r.kevy ? 'kevy' : 'other'}" style="width:${(r.v / max * 100).toFixed(1)}%"></div></div>
         <span class="val">${r.v.toLocaleString()}</span>
-      </div>`).join('');
+      </div>`).join('')
+  );
+}
+// Both axes, side by side — the one kevy wins and the one it loses.
+function drawTwo(t1, r1, t2, r2) {
+  $('bars').innerHTML =
+    group(t1, r1, '<span style="color:var(--good)">kevy wins</span>') +
+    `<div style="height:8px"></div>` +
+    group(t2, r2, '<span style="color:var(--crit)">localStorage wins</span>');
 }
 async function idbOpen() {
   return new Promise((res, rej) => {
@@ -384,27 +394,61 @@ $('b-bench').onclick = async () => {
   });
   bench.idb = N / ((performance.now() - t) / 1000);
 
-  const results = [
+  // ---- point READS: the axis kevy loses, shown rather than hidden ----
+  const readBench = {};
+  t = performance.now();
+  for (let i = 0; i < N; i++) db.get(`bench:${i}`);
+  readBench.kevy = N / ((performance.now() - t) / 1000);
+
+  t = performance.now();
+  for (let i = 0; i < N; i++) localStorage.getItem(`bench:${i}`);
+  readBench.ls = bench.ls ? N / ((performance.now() - t) / 1000) : 0;
+
+  t = performance.now();
+  await new Promise((res, rej) => {
+    const tx = idb.transaction('kv', 'readonly');
+    const os = tx.objectStore('kv');
+    for (let i = 0; i < N; i++) os.get(`bench:${i}`);
+    tx.oncomplete = res; tx.onerror = () => rej(tx.error);
+  });
+  readBench.idb = N / ((performance.now() - t) / 1000);
+
+  const writeBars = [
     { label: 'kevy', v: Math.round(bench.kevy), kevy: true },
     { label: 'localStorage', v: Math.round(bench.ls) },
     { label: 'IndexedDB', v: Math.round(bench.idb) },
   ];
-  drawBars(`point writes · ${N.toLocaleString()} ops`, results, 'ops/sec');
+  const readBars = [
+    { label: 'kevy', v: Math.round(readBench.kevy), kevy: true },
+    { label: 'localStorage', v: Math.round(readBench.ls) },
+    { label: 'IndexedDB', v: Math.round(readBench.idb) },
+  ];
+  drawTwo(
+    `point writes · ${N.toLocaleString()} ops`, writeBars,
+    `point reads · ${N.toLocaleString()} ops`, readBars,
+  );
 
-  const vsIdb = bench.idb ? (bench.kevy / bench.idb) : 0;
-  const vsLs = bench.ls ? (bench.kevy / bench.ls) : 0;
+  const wVsLs = bench.ls ? bench.kevy / bench.ls : 0;
+  const rVsLs = readBench.ls ? readBench.kevy / readBench.ls : 0;
+  const wVsIdb = bench.idb ? bench.kevy / bench.idb : 0;
   $('bench-verdict').innerHTML =
-    `kevy is <b>${vsIdb.toFixed(0)}×</b> IndexedDB` +
-    (bench.ls ? ` and <b>${vsLs.toFixed(1)}×</b> localStorage` : ` (localStorage hit its quota)`) +
-    ` on writes. localStorage is synchronous — it blocks this tab while it runs, and caps out near 5 MB.` +
-    ` kevy keeps the data in-process and flushes to OPFS in the background.`;
+    `<b>Writes:</b> kevy ${wVsLs ? `${wVsLs.toFixed(1)}× localStorage, ` : ''}${wVsIdb.toFixed(0)}× IndexedDB. ` +
+    `<b>Reads: localStorage wins</b>${rVsLs ? ` — kevy runs at ${rVsLs.toFixed(2)}× of it` : ''}. ` +
+    `That is not the engine being slow: <code>getItem</code> is a native synchronous hash lookup with no boundary to cross, ` +
+    `while every kevy read encodes the key, crosses into wasm, and copies the value back out. On a 16-byte value that ` +
+    `crossing costs more than the lookup itself.<br><br>` +
+    `<b>What you buy for it:</b> ~5–10 MB is localStorage's hard ceiling and every write blocks this tab (it is synchronous); ` +
+    `kevy holds gigabytes, flushes in the background, scans by pattern, expires by TTL, does atomic counters and hashes and lists, ` +
+    `and carries pub/sub across tabs. <b>If your data is small, string-only, and read-mostly — use localStorage.</b> ` +
+    `kevy earns its keep past that.`;
 
   // Clean up the comparison keys so the demo store stays honest.
   for (let i = 0; i < N; i++) { db.del(`bench:${i}`); localStorage.removeItem(`bench:${i}`); }
   idb.close(); indexedDB.deleteDatabase('kevy-bench-cmp');
   refreshKeys();
   btn.disabled = false; btn.textContent = 'Run benchmark';
-  return { kevy: bench.kevy, ls: bench.ls, idb: bench.idb };
+  return { kevy: bench.kevy, ls: bench.ls, idb: bench.idb,
+           readKevy: readBench.kevy, readLs: readBench.ls, readIdb: readBench.idb };
 };
 
 // ---------- selftest (?selftest=1) ----------
@@ -448,10 +492,19 @@ if (new URLSearchParams(location.search).has('selftest')) {
       // 3. Benchmark: the page's own bench must produce real numbers.
       $('bn').value = '500';
       const bench = await $('b-bench').onclick();
-      result.steps.benchRan = !!(bench && bench.kevy > 0 && bench.idb > 0);
+      // Both axes must have produced numbers — including the read axis,
+      // where kevy loses to localStorage. A demo that only measures the
+      // axis it wins is not a measurement.
+      result.steps.benchRan = !!(bench && bench.kevy > 0 && bench.idb > 0 && bench.readKevy > 0);
       result.bench = bench
-        ? { kevyOpsPerSec: Math.round(bench.kevy), idbOpsPerSec: Math.round(bench.idb),
-            lsOpsPerSec: Math.round(bench.ls), kevyVsIdb: +(bench.kevy / bench.idb).toFixed(1) }
+        ? {
+            write: { kevy: Math.round(bench.kevy), localStorage: Math.round(bench.ls), indexedDB: Math.round(bench.idb) },
+            read: { kevy: Math.round(bench.readKevy), localStorage: Math.round(bench.readLs), indexedDB: Math.round(bench.readIdb) },
+            kevyVsLocalStorage: {
+              write: +(bench.kevy / bench.ls).toFixed(2),
+              read: +(bench.readKevy / bench.readLs).toFixed(2), // < 1 = kevy loses, as it should read
+            },
+          }
         : null;
 
       db.del('selftest:key');
