@@ -181,6 +181,11 @@ impl<C: Commands> Shard<C> {
                 let chunk = self.commands.extension_op(&mut self.store, &argv);
                 Part::ExtensionChunk(chunk)
             }
+            // Read-only: the destination write is Op::ZStoreResult on the
+            // destination's own shard, so nothing is logged here.
+            Op::GeoSearch { argv } => {
+                Part::GeoHits(self.commands.geo_search(&mut self.store, &argv))
+            }
             // REPL.TOKEN: live (generation, next_offset) off
             // this shard's feed. No feed installed (replication + CDC
             // both off) → (0, 0): generation 0 is the "no stream"
@@ -247,6 +252,83 @@ impl<C: Commands> Shard<C> {
                     }
                 }
                 Part::Reply(SmallReply::from_vec(reply))
+            }
+            Op::ListMove { src, dst, from_left, to_left } => {
+                // Same-shard atomic move — `start_list_move` only emits this
+                // when one shard owns both keys, which is exactly Redis's
+                // atomicity.
+                let moved = if !from_left && to_left {
+                    self.store.rpoplpush(&src, &dst)
+                } else {
+                    self.store.lmove(&src, &dst, from_left, to_left)
+                };
+                // The same-shard arm answers with the finished reply — the
+                // slot is a plain `Agg::First`, exactly like every other
+                // single-shard write.
+                let mut out = Vec::new();
+                match moved {
+                    Ok(Some(v)) => {
+                        self.after_list_move(&src, &dst, from_left, to_left);
+                        kevy_resp::encode_bulk(&mut out, &v);
+                    }
+                    Ok(None) => out.extend_from_slice(b"$-1\r\n"),
+                    Err(_) => out.extend_from_slice(
+                        b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n",
+                    ),
+                }
+                Part::Reply(SmallReply::from_vec(out))
+            }
+            Op::ListMoveTake { key, from_left } => {
+                // Step 1 of the cross-shard move: pop one element. The
+                // destination is not touched until the element is in hand, so
+                // an empty source costs the destination nothing.
+                let popped = if from_left {
+                    self.store.lpop(&key, 1)
+                } else {
+                    self.store.rpop(&key, 1)
+                };
+                match popped {
+                    Ok(mut v) => {
+                        let element = v.pop();
+                        if element.is_some() {
+                            self.store.bump_if_watched(&key);
+                            self.log_list_pop(&key, from_left);
+                            self.notify_list_event(&key, from_left, true);
+                        }
+                        Part::ListMoveTaken(Ok(element))
+                    }
+                    Err(_) => Part::ListMoveTaken(Err(())),
+                }
+            }
+            Op::ListMovePush { key, value, to_left } => {
+                // Step 2. A destination that exists and is not a list refuses
+                // the element and hands it back — the orchestrator restores it
+                // to the source rather than dropping it.
+                let pushed = if to_left {
+                    self.store.lpush(&key, &[value.as_slice()])
+                } else {
+                    self.store.rpush(&key, &[value.as_slice()])
+                };
+                match pushed {
+                    Ok(_) => {
+                        self.store.bump_if_watched(&key);
+                        self.notify_list_event(&key, to_left, false);
+                        self.log_list_push(&key, &value, to_left);
+                        Part::ListMovePushed { refused: None }
+                    }
+                    Err(_) => Part::ListMovePushed { refused: Some(value) },
+                }
+            }
+            Op::ListMoveRestore { key, value, from_left } => {
+                // Rollback: put the element back on the end it was taken from.
+                let _ = if from_left {
+                    self.store.lpush(&key, &[value.as_slice()])
+                } else {
+                    self.store.rpush(&key, &[value.as_slice()])
+                };
+                self.store.bump_if_watched(&key);
+                self.log_list_push(&key, &value, from_left);
+                Part::Ok
             }
             Op::RenameTake(src) => {
                 // Step 1 of cross-shard RENAME: atomically take the

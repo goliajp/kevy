@@ -174,7 +174,7 @@ AOF (+ feed-cursor recovery points) per
   checked by sampling `PTTL`, not by `diff`.
 - **`KEYS`/`SCAN` habits.** Ops one-liners that did `SELECT COUNT(*)`
   should use `PREFIX.STATS` or `IDX.COUNT` — `KEYS pattern` is a
-  full-keyspace gather and `SCAN MATCH` a full incremental walk;
+  full-keyspace gather and `SCAN MATCH` a full NON-incremental sweep — every SCAN call walks the entire keyspace on every shard and returns all matches with cursor 0, so the usual SCAN loop terminates after one round trip;
   neither is a serving path (and on a big keyspace, barely an ops
   path).
 - **Index build racing reads.** Right after declarations, queries

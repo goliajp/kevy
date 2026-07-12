@@ -124,7 +124,7 @@ Alg. 4), which preserves bridge links to outlying regions.
 Deletes tombstone the graph node (it keeps routing, stops matching);
 updates tombstone + reinsert. `IDX.VERIFY` reports vectors / bytes /
 tombstones and flags `rebuild_recommended` past 30% dead;
-`IDX.REBUILD` re-inserts the living per shard (bounded O(n·EF) work,
+`IDX.REBUILD` re-inserts the living per shard (bounded O(n · ef_construction · M · dim) work — every living key goes back through the full HNSW insert, so the neighbour cap M and the dimensionality both multiply in,
 answer-preserving — asserted in e2e). Graphs are derived state: never
 persisted, rebuilt from data after restart. On the server that
 restart rebuild is a background backfill — queries answer

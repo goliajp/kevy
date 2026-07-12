@@ -209,13 +209,21 @@ impl ReplicationSource {
             None => return Err(FromOffset::TooOld),
             _ => {}
         }
-        // Locate the start index. Offsets are monotonic so binary search
-        // is correct; the deque slices into two parts so we iterate.
-        let start = self.buf.iter().position(|f| f.offset >= from);
-        Ok(FramesIter {
-            buf: &self.buf,
-            cursor: start.unwrap_or(self.buf.len()),
-        })
+        // Offsets are monotonic, so the start index is a binary search. The
+        // comment here used to say exactly that — and then called
+        // `iter().position(...)`, an O(B) walk of the whole backlog, on a path
+        // that both FEED.READ and the replica stream take on every poll. A
+        // consumer resuming from an old cursor paid for the entire backlog
+        // before it saw its first frame.
+        //
+        // `VecDeque` is two contiguous runs, each individually sorted, so
+        // `partition_point` on each half gives the answer in O(log B).
+        let (a, b) = self.buf.as_slices();
+        let start = match a.partition_point(|f| f.offset < from) {
+            i if i < a.len() => i,
+            _ => a.len() + b.partition_point(|f| f.offset < from),
+        };
+        Ok(FramesIter { buf: &self.buf, cursor: start })
     }
 }
 

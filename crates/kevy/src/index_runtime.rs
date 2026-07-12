@@ -341,13 +341,13 @@ fn apply_row_agg(
     }
 }
 
-enum RowValue {
+pub(crate) enum RowValue {
     Value(IndexValue),
     CoerceFailed,
     Gone,
 }
 
-fn row_value(store: &mut Store, spec: &IndexSpec, key: &[u8]) -> RowValue {
+pub(crate) fn row_value(store: &mut Store, spec: &IndexSpec, key: &[u8]) -> RowValue {
     match store.hget(key, &spec.field) {
         Ok(Some(raw)) => {
             let raw = raw.to_vec();

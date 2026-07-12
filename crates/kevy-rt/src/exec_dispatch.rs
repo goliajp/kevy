@@ -133,6 +133,36 @@ impl<C: Commands> Shard<C> {
     ) -> bool {
         // Field-only read, before the conn borrow.
         let t0 = self.slowlog_t0();
+
+        // A BRPOPLPUSH whose destination lives on another shard must NOT run
+        // the local dispatch below: `Store::rpoplpush` pushes into whatever
+        // store it is handed, so the element would land in THIS shard's
+        // keyspace and be invisible to every later read of the destination.
+        // The command still returned the moved value, so the caller believed
+        // it had worked — 9 of 12 elements vanished on an 8-shard server.
+        //
+        // Park it instead. The cross-shard arbiter arms on the source, sees it
+        // is already non-empty, and hands the serve to the orchestrator in
+        // `exec_listmove`, which pops on the source's shard and pushes on the
+        // destination's.
+        if let crate::BlockHint::Block { kind: crate::BlockKind::Brpoplpush, keys, timeout_ms } =
+            &block_hint
+            && args.len() == 4
+            && !keys.is_empty()
+            && self.shard_of(&args[2]) != self.shard_of(&keys[0])
+        {
+            let (keys, timeout_ms) = (keys.clone(), *timeout_ms);
+            self.slowlog_maybe(t0, args);
+            self.park_dispatch(
+                conn_id,
+                args,
+                crate::BlockKind::Brpoplpush,
+                keys,
+                timeout_ms,
+                proto,
+            );
+            return true;
+        }
         // GET handled in ONE keyspace lookup here, with
         // zero-copy for ArcBulk (push the Arc to conn.output_arcs so the
         // reactor's writev sends value bytes direct from keyspace) and
@@ -275,7 +305,16 @@ impl<C: Commands> Shard<C> {
         } else {
             crate::blocked::unix_now_ms().saturating_add(timeout_ms)
         };
-        if keys.len() == 1 && self.shard_of(&keys[0]) == self.id {
+        // A cross-shard-destination BRPOPLPUSH can never take the in-shard
+        // fast path: that path's wake serves the replay through a LOCAL
+        // dispatch, which is the very thing that loses the element. Force it
+        // through the arbiter, whose serve runs the orchestrator.
+        let xshard_dst = kind == crate::BlockKind::Brpoplpush
+            && args.len() == 4
+            && !keys.is_empty()
+            && self.shard_of(&args[2]) != self.shard_of(&keys[0]);
+
+        if !xshard_dst && keys.len() == 1 && self.shard_of(&keys[0]) == self.id {
             // In-shard fast path: narrow to the one key + freeze `$`.
             let serve = self.commands.block_serve_argv(args, kind, &keys[0]);
             let serve = self.commands.resolve_block_argv(&mut self.store, &serve, kind);

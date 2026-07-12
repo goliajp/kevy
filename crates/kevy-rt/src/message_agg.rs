@@ -58,6 +58,14 @@ pub(crate) enum Agg {
         keys: Vec<Vec<u8>>,
         got: HashMap<Vec<u8>, Gathered>,
     },
+    /// Geo `*STORE` orchestrator, step 1: the source key's shard runs the
+    /// search (`Op::GeoSearch`) and folds its [`crate::GeoHits`] here; the
+    /// origin then ships `Op::ZStoreResult` to `dst`'s shard (step 2 folds
+    /// through a re-armed `Agg::SumInt`). See [`crate::exec_geostore`].
+    GeoStore {
+        dst: Vec<u8>,
+        hits: Option<crate::GeoHits>,
+    },
     /// Keys collected from all shards, shaped per `KeyShape`.
     Keys {
         shape: KeyShape,
@@ -127,6 +135,50 @@ pub(crate) enum Agg {
         /// (we're still in Take phase).
         put_stored: Option<bool>,
     },
+    /// Cross-shard `RPOPLPUSH` / `LMOVE` / `BRPOPLPUSH` orchestrator.
+    ///
+    /// Three steps, and the third only on failure:
+    ///   Take   — `Op::ListMoveTake` on the source's shard pops one element.
+    ///   Push   — `Op::ListMovePush` on the destination's shard pushes it.
+    ///   Restore— `Op::ListMoveRestore` back on the source, if and only if
+    ///            the destination refused it (WRONGTYPE). The element is
+    ///            never dropped.
+    ///
+    /// This is NOT atomic: between Take and Push the element exists in
+    /// neither list, and a crash in that window loses it. Redis's
+    /// single-threaded RPOPLPUSH is atomic and a job queue may be relying on
+    /// that. Co-locate the two keys with a `{hashtag}` to get the atomic
+    /// same-shard path.
+    ListMoveOrchestrator {
+        step: ListMoveStep,
+        /// Serving a parked `BRPOPLPUSH`. The reply does not go out through
+        /// this slot — it goes back through the block arbiter, which has to
+        /// unpark the conn and cancel its other watchers on a hit, and RE-ARM
+        /// on a miss (another client drained the source between the readiness
+        /// signal and our Take). A non-blocking move just replies nil there.
+        blocking: bool,
+        src: Vec<u8>,
+        dst: Vec<u8>,
+        src_shard: usize,
+        dst_shard: usize,
+        from_left: bool,
+        to_left: bool,
+        /// The element captured by step 1. `Ok(None)` = the source was
+        /// empty, and the move ends there with a nil reply. `Err(())` = the
+        /// source is not a list.
+        taken: Option<Result<Option<Vec<u8>>, ()>>,
+        /// Step 2's verdict, `Some(false)` when the destination refused.
+        pushed: Option<bool>,
+    },
+}
+
+/// Phase of the cross-shard list-move orchestrator. See
+/// [`Agg::ListMoveOrchestrator`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListMoveStep {
+    Take,
+    Push,
+    Restore,
 }
 
 /// Phase of the cross-shard RENAME orchestrator. See [`Agg::RenameOrchestrator`].

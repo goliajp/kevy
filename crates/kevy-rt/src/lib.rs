@@ -85,15 +85,18 @@ mod exec_notify;
 mod exec_op;
 mod exec_pubsub;
 mod exec_pubsub_pattern;
+mod exec_listmove;
 mod exec_rename;
 mod exec_replwait;
 mod exec_feed;
+mod exec_geostore;
 mod exec_zalgebra;
 mod exec_slowlog;
 mod exec_watch;
 mod inbox;
 mod persist_worker;
 mod message;
+mod message_kinds;
 mod message_agg;
 mod reduce;
 mod replica_inbox;
@@ -150,6 +153,7 @@ pub use blocked::{BlockHint, BlockKind};
 pub use lua_wake_bridge::push_lua_wake_key;
 pub use reduce::shard_of as shard_of_key;
 pub use cluster::shard_slot_range;
+pub use exec_geostore::GeoHits;
 pub use exec_slowlog::{SlowlogSub, parse_slowlog_sub};
 pub use kevy_config::NotificationFlags;
 pub use kevy_persist::Fsync;
@@ -295,6 +299,17 @@ pub trait Commands: Clone + Send + 'static {
     /// [`Commands::extension_reduce`] at the origin.
     fn extension_op(&self, _store: &mut Store, _argv: &[Vec<u8>]) -> Vec<u8> {
         Vec::new()
+    }
+
+    /// Search half of a geo `*STORE` (`GEOSEARCHSTORE` / `GEORADIUS…STORE`),
+    /// run on the SOURCE key's shard: match `argv`'s query against the source
+    /// zset and return the `(member, score)` pairs to write — the scores
+    /// already in their final form (geohash, or the STOREDIST distance in the
+    /// unit the command asked for). The runtime writes them at the
+    /// destination's own shard; see [`crate::exec_geostore`]. A command set
+    /// that doesn't route [`Route::GeoStore`] never sees this call.
+    fn geo_search(&self, _store: &mut Store, _argv: &[Vec<u8>]) -> GeoHits {
+        GeoHits::Error(b"-ERR unknown command\r\n".to_vec())
     }
 
     /// Pre-dispatch write gate. `Some(err_bytes)` rejects every

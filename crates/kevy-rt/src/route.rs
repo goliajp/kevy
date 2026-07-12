@@ -38,6 +38,22 @@ pub enum Route {
     /// zset/set algebra `*STORE` family: gather sources, combine
     /// per [`crate::message::ZCombine`], materialize at `args[1]`.
     ZAlgebraStore(crate::ZCombine),
+    /// Geo `*STORE` family — `GEOSEARCHSTORE dst src …` and
+    /// `GEORADIUS[BYMEMBER] src … STORE|STOREDIST dst`.
+    ///
+    /// These MUST be routed, not left to the catch-all `Route::Single(1)`:
+    /// GEOSEARCHSTORE puts the DESTINATION at argv[1] (so the search then
+    /// read the source off the wrong shard — `:0`, or "could not decode
+    /// requested zset member" for FROMMEMBER) while GEORADIUS puts the
+    /// SOURCE there (so the destination was written into the source's
+    /// shard, invisible to every later read of it). Both keys are carried
+    /// here because neither sits at a fixed argv index — the legacy forms
+    /// hide `dst` behind an option-soup scan.
+    ///
+    /// The search runs on `src`'s shard ([`crate::Commands::geo_search`]),
+    /// the write lands on `dst`'s (`Op::ZStoreResult`) — see
+    /// [`crate::exec_geostore`].
+    GeoStore { src: Vec<u8>, dst: Vec<u8> },
     /// `FEED.READ <shard> <gen> <offset> …` — shard-index routed.
     FeedRead,
     /// `FEED.TAIL <shard>`.
@@ -116,6 +132,29 @@ pub enum Route {
     Rename {
         /// `true` for `RENAMENX` (no overwrite — reply `:0` if dst exists).
         nx: bool,
+    },
+    /// `RPOPLPUSH src dst` / `LMOVE src dst LEFT|RIGHT LEFT|RIGHT` /
+    /// `BRPOPLPUSH src dst timeout`, once the blocking form has an element
+    /// to serve.
+    ///
+    /// These MUST be routed, not left to `Route::Single(1)`. The source and
+    /// the destination are different keys and can live on different shards;
+    /// the catch-all route hashes args[1] (the source), so the destination
+    /// push executed on the SOURCE's shard and the element was written into
+    /// a keyspace nobody would ever read it from. It returned the moved
+    /// value, so the caller believed it had worked. Measured on an 8-shard
+    /// server: 11 of 12 moves silently lost the element.
+    ///
+    /// Same-shard pairs are one atomic Op on the owning shard. Cross-shard
+    /// pairs run the Take→Push orchestrator (mirroring [`Self::Rename`]),
+    /// which is NOT atomic — see `exec_listmove`.
+    ListMove {
+        /// Pop from the head of the source (`LMOVE ... LEFT ...`) rather
+        /// than the tail (`RPOPLPUSH`).
+        from_left: bool,
+        /// Push onto the head of the destination (`RPOPLPUSH`, `LMOVE ...
+        /// LEFT`) rather than the tail.
+        to_left: bool,
     },
     /// `SLOWLOG GET / LEN / RESET / HELP`. The sub-command + parsed
     /// args are pre-decoded at routing time so the runtime knows

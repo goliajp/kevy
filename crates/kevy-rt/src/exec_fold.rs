@@ -63,6 +63,8 @@ impl<C: Commands> Shard<C> {
                         got.insert(k, g);
                     }
                 }
+                // Geo *STORE step 1: the source shard's search result.
+                (Agg::GeoStore { hits, .. }, Part::GeoHits(h)) => *hits = Some(h),
                 (Agg::Keys { acc, .. }, Part::Keys(ks)) => acc.extend(ks),
                 (
                     Agg::PrefixStats { keys, expires },
@@ -103,6 +105,16 @@ impl<C: Commands> Shard<C> {
                         *taken = refused;
                     }
                 }
+                // Cross-shard list move: buffer each step's result in the agg
+                // so finalize can decide the next hop.
+                (
+                    Agg::ListMoveOrchestrator { taken, .. },
+                    Part::ListMoveTaken(r),
+                ) => *taken = Some(r),
+                (
+                    Agg::ListMoveOrchestrator { pushed, .. },
+                    Part::ListMovePushed { refused },
+                ) => *pushed = Some(refused.is_none()),
                 // The terminal step-1 miss (RenameNoSuchSrc) leaves
                 // `taken == None`; finalize reads that as "missing src".
                 _ => {}
@@ -116,7 +128,9 @@ impl<C: Commands> Shard<C> {
                     Agg::WatchCollect { .. }
                         | Agg::ExecPrep { .. }
                         | Agg::RenameOrchestrator { .. }
+                        | Agg::ListMoveOrchestrator { .. }
                         | Agg::ZStoreGather { .. }
+                        | Agg::GeoStore { .. }
                         | Agg::ExtensionGather { .. }
                 ) {
                     Some(agg)
@@ -135,7 +149,9 @@ impl<C: Commands> Shard<C> {
                     self.finalize_watch_agg(conn_id, seq, agg);
                 }
                 Agg::RenameOrchestrator { .. } => self.finalize_rename_agg(conn_id, seq, agg),
+                Agg::ListMoveOrchestrator { .. } => self.finalize_list_move_agg(conn_id, seq, agg),
                 Agg::ZStoreGather { .. } => self.finalize_zstore_agg(conn_id, seq, agg),
+                Agg::GeoStore { .. } => self.finalize_geostore_agg(conn_id, seq, agg),
                 Agg::ExtensionGather { argv, chunks } => {
                     let proto = self
                         .conns

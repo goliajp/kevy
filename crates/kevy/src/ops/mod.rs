@@ -64,7 +64,8 @@ pub(crate) fn dispatch_ops<A: ArgvView + ?Sized>(
         b"MOVE-SCOPE-INGEST" => scope_move::cmd_move_scope_ingest(ctx, store, args, out),
         b"MEMORY" => {
             let cfg = ctx.state.config();
-            memory::cmd_memory(&cfg, store, args, out);
+            let totals = ctx.state.obs.aggregate();
+            memory::cmd_memory(&cfg, &totals, store, args, out);
         }
         _ => return false,
     }

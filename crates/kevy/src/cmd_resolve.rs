@@ -140,6 +140,15 @@ fn route_for_verb<A: ArgvView + ?Sized>(
         b"SAVE" => Route::Save,
         b"BGSAVE" => Route::BgSave,
         b"BGREWRITEAOF" => Route::RewriteAof,
+        // MEMORY USAGE answers about a KEY, so it has to run on that key's
+        // shard. Without this arm it fell through to the default
+        // `Route::Single(1)` and was routed by hashing args[1] — the
+        // subcommand token — so `MEMORY USAGE k` ran on whichever shard owns
+        // the literal string "USAGE" and returned nil for every key that
+        // lives elsewhere. The other subcommands answer from instance-wide
+        // state and can run anywhere.
+        b"MEMORY" if args.len() >= 3 && args[1].eq_ignore_ascii_case(b"USAGE") => Route::Single(2),
+        b"MEMORY" => Route::Local,
         b"MSET" if args.len() >= 3 && !args.len().is_multiple_of(2) => Route::MSet,
         b"MGET" if args.len() >= 2 => Route::Gather(MultiOp::Mget),
         b"SINTER" if args.len() >= 2 => Route::Gather(MultiOp::SInter),
@@ -162,6 +171,16 @@ fn route_for_verb<A: ArgvView + ?Sized>(
         b"SUNIONSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SUnion),
         b"SDIFFSTORE" if args.len() >= 3 => Route::ZAlgebraStore(kevy_rt::ZCombine::SDiff),
         b"ZINTERCARD" if args.len() >= 3 => Route::Gather(MultiOp::ZInterCard),
+        // Geo *STORE: the source and the destination are different keys and
+        // neither family puts them where the catch-all below assumes —
+        // GEOSEARCHSTORE has dst at argv[1], GEORADIUS[BYMEMBER] has src
+        // there with dst buried in the option tail. Route by both (search on
+        // the source's shard, write on the destination's); the query-only
+        // forms fall through to the single-key route.
+        b"GEOSEARCHSTORE" | b"GEORADIUS" | b"GEORADIUSBYMEMBER" => {
+            crate::dispatch_geo::geo_store_route(upper, args)
+                .unwrap_or(if args.len() >= 2 { Route::Single(1) } else { Route::Local })
+        }
         b"IDX.QUERY" if args.len() >= 4 => Route::Extension,
         b"IDX.EXPLAIN" if args.len() >= 2 => Route::Extension,
         b"IDX.REBUILD" if args.len() == 2 => Route::Extension,
@@ -178,6 +197,23 @@ fn route_for_verb<A: ArgvView + ?Sized>(
         b"FEED.READ" if args.len() >= 4 => Route::FeedRead,
         b"FEED.TAIL" if args.len() == 2 => Route::FeedTail,
         b"FEED.SHARDS" if args.len() == 1 => Route::FeedShards,
+        // RPOPLPUSH / LMOVE move an element BETWEEN two keys, and
+        // the two keys can live on different shards. Without these arms they
+        // fell through to `Route::Single(1)` — hash args[1], the SOURCE — and
+        // the destination push ran on the source's shard, writing the element
+        // into a keyspace no reader would ever look in. The command still
+        // returned the moved value. 11 of 12 moves lost the element on an
+        // 8-shard server. See `kevy_rt::exec_listmove`.
+        //
+        // BRPOPLPUSH is NOT here: it is a blocking verb, so it stays
+        // `Route::Local` and is served through the park/wake path, which has
+        // its own destination-routing fix (see `cmd_block`).
+        b"RPOPLPUSH" if args.len() == 3 => Route::ListMove { from_left: false, to_left: true },
+        b"LMOVE" if args.len() == 5 => {
+            let from_left = args[3].eq_ignore_ascii_case(b"LEFT");
+            let to_left = args[4].eq_ignore_ascii_case(b"LEFT");
+            Route::ListMove { from_left, to_left }
+        }
         b"RENAME" => Route::Rename { nx: false },
         b"RENAMENX" => Route::Rename { nx: true },
         // (BLPOP / BRPOP fold into the Local-routed verb list above —

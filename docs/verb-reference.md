@@ -56,7 +56,7 @@ Every wire-reachable verb, from the server's own metadata table
 |---|---|---|---|
 | `KEYS pattern` | 2 | readonly | Return every key matching the glob pattern (cross-shard gather). |
 | `RANDOMKEY` | 1 | readonly | Return a random key from the keyspace. |
-| `SCAN cursor [MATCH pattern] [COUNT count]` | -2 | readonly | Incrementally iterate the keyspace (COUNT is accepted and ignored). |
+| `SCAN cursor [MATCH pattern] [COUNT count]` | -2 | readonly | Sweep the keyspace and return every match at once; **not** a cursor iterator (COUNT and TYPE accepted and ignored, cursor always 0). |
 
 ## generic
 
@@ -261,7 +261,7 @@ Every wire-reachable verb, from the server's own metadata table
 | `IDX.EXPLAIN name RANGE min max\|EQ value\|MATCH text\|KNN vector\|GROUPS [args ...]` | -2 | readonly,extension | The IDX.QUERY parse without the execution: kind, state, est_rows, and the plan line. |
 | `IDX.QUERY name RANGE min max [LIMIT n] [CURSOR c] [FIELDS field ...] \| name EQ value [LIMIT n] [CURSOR c] [FIELDS field ...] \| name MATCH text [LIMIT n] [FIELDS field ...] \| name KNN vector [LIMIT k] [EF ef] [FIELDS field ...] \| name GROUP group \| name GROUPS [BY count\|sum\|min\|max] [LIMIT n] \| HYBRID text_idx MATCH text ann_idx KNN vector [LIMIT n] [RRFK k] [EF ef] [FIELDS field ...] \| COMPOSE AND\|OR nameA RANGE min max\|EQ value nameB RANGE min max\|EQ value [LIMIT n] [CURSOR c] [FIELDS field ...]` | -4 | readonly,extension | Query an index: range/equality, text MATCH, vector KNN, aggregation groups, or a two-index COMPOSE. |
 | `IDX.REBUILD name` | 2 | write,extension | Rebuild an ANN index (tombstone compaction). |
-| `IDX.VERIFY name` | 2 | readonly,extension | Verify an index and report entry/byte/drift statistics. |
+| `IDX.VERIFY name` | 2 | readonly,extension | Verify an index: re-read every held entry against its row; reports entries/bytes/coerce_failures/duplicates/drift/checked. |
 
 ## view
 
