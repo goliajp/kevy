@@ -41,3 +41,5 @@ vendor/bundle/
 view-catalog.meta
 index-catalog.meta
 bench/iot-consumer/target/
+bench/mcu-probe/target/
+bench/iot-consumer/riscv-out
