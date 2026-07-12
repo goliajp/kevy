@@ -4,7 +4,7 @@
 
 所有 recipe 背后的设计立场是：**建模访问路径，而不是 schema**。RDS 允许你把这个决定推迟给查询规划器；kevy 要你把它说出来——回报是服务时的微秒级页面（实测数字见 `bench/VALIDATION-LEDGER.md`）。
 
-每个命令块都能对一台新起的本地 kevy 原样运行（`kevy --port 6004`；recipe 11–14、16 和 20 还需要 `kevy.toml` 里 `[feed] enabled = true`——见 [docs/cdc.md](../cdc.md)）。`bench/cookbook_smoke.sh` 会把（英文版）cookbook 里的每一行 `kevy-cli` 对一台一次性服务器执行一遍，保证这些命令块永远诚实。
+每个命令块都能对一台新起的本地 kevy 原样运行（`kevy --port 6004`；recipe 11–14、16 和 20 还需要 `kevy.toml` 里 `[feed] enabled = true`——见 [docs/cdc.md](cdc.md)）。`bench/cookbook_smoke.sh` 会把（英文版）cookbook 里的每一行 `kevy-cli` 对一台一次性服务器执行一遍，保证这些命令块永远诚实。
 
 ## 1. 表与行
 
@@ -149,7 +149,7 @@ kevy-cli -p 6004 IDX.QUERY evt_ord RANGE '2026-07-04|000000' '2026-07-04|999999'
 
 **SQL 对应物**：JSON/JSONB 列 + 生成列索引——[矩阵：类型系统](rds-workloads.md#类型系统)。
 
-拍平成 hash 字段：`profile.city` → 字段 `profile.city`。你保住了按字段读写、字段级 TTL（HEXPIRE）和可索引性——JSONB 给你的一切，除了 JSON-path 查询，那是**永久出局**的（查询引擎斜坡；见 [../designing-on-kevy.md](../designing-on-kevy.md) 的 REFUSED 表）。
+拍平成 hash 字段：`profile.city` → 字段 `profile.city`。你保住了按字段读写、字段级 TTL（HEXPIRE）和可索引性——JSONB 给你的一切，除了 JSON-path 查询，那是**永久出局**的（查询引擎斜坡；见 [designing-on-kevy.md](designing-on-kevy.md) 的 REFUSED 表）。
 
 ```console
 kevy-cli -p 6004 HSET user:7 profile.city tokyo profile.plan pro
@@ -180,7 +180,7 @@ kevy-cli delete-prefix -p 6004 --rate 5000 order:1001:   # 子行清空,父行�
 
 **SQL 对应物**：事务性 outbox 表 + 中继 worker——[矩阵：CDC](rds-workloads.md#cdc)。
 
-事务性 outbox 模式之所以存在，是因为 RDS 提交和消息总线发布无法原子化。在 kevy 里**feed 就是 outbox**：每笔已提交的写入本来就是一个位于 `(generation, offset)` 游标处的变更帧，at-least-once、可按前缀过滤（[docs/cdc.md](../cdc.md)）。消费 `FEED.READ`；别再造第二本日志。
+事务性 outbox 模式之所以存在，是因为 RDS 提交和消息总线发布无法原子化。在 kevy 里**feed 就是 outbox**：每笔已提交的写入本来就是一个位于 `(generation, offset)` 游标处的变更帧，at-least-once、可按前缀过滤（[docs/cdc.md](cdc.md)）。消费 `FEED.READ`；别再造第二本日志。
 
 ```console
 # 需要 kevy.toml 里 [feed] enabled = true(见 ../cdc.md)
@@ -223,7 +223,7 @@ kevy-cli diff old-rds-mirror.internal:6379 127.0.0.1:6004 user:   # needs-extern
 
 - `export`——逻辑导出、可续传、RESP 走到哪就能载到哪。
 - CDC → 数仓：游标消费者把插入流进你的 OLAP 存储，正是 CDC-to-Kafka 的形状。
-- 只读 listener（[../embedded-listener.md](../embedded-listener.md)）供 embedded 应用做临时抽取。
+- 只读 listener（[embedded-listener.md](embedded-listener.md)）供 embedded 应用做临时抽取。
 
 ```console
 kevy-cli -p 6004 HSET order:1001 user_id 42 total 1999
@@ -273,7 +273,7 @@ kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX session:    # gen 1 = 新数�
 
 **SQL 对应物**：`WHERE ts BETWEEN …` + pgvector `ORDER BY embedding <=> ? LIMIT k`——[矩阵：SELECT](rds-workloads.md#select)。
 
-情景记忆对同一批行回答两个问题：*最近发生了什么*（时间）和*什么与此相似*（语义）。一个前缀，每个问题一个索引——`DIM 8` 是为了演示可读；真实 embedding 是 768+ 维、以 f32-LE blob 传输，下面的 `csv:` 调试形态在任何接受向量的地方都可用（存储字段与查询向量走同一个解析器——[../vector-search.md](../vector-search.md)）。
+情景记忆对同一批行回答两个问题：*最近发生了什么*（时间）和*什么与此相似*（语义）。一个前缀，每个问题一个索引——`DIM 8` 是为了演示可读；真实 embedding 是 768+ 维、以 f32-LE blob 传输，下面的 `csv:` 调试形态在任何接受向量的地方都可用（存储字段与查询向量走同一个解析器——[vector-search.md](vector-search.md)）。
 
 ```console
 kevy-cli -p 6004 HSET mem:1 ts 1783200000 kind obs what 'user prefers dark roast' v csv:0.9,0.1,0,0,0,0,0,0
@@ -309,7 +309,7 @@ kevy-cli -p 6004 IDX.QUERY HYBRID chunk_text MATCH 'change frame' chunk_ann KNN 
 
 ---
 
-最后两个 recipe 彻底离开机架：边缘节点上的 kevy——同一个服务器二进制，或裁到 `core` 档 655 KB 的 `kevy-embedded`（[../iot.md](../iot.md)）——说的还是同一套 verb，模式从数据中心到传感器网关逐字迁移。
+最后两个 recipe 彻底离开机架：边缘节点上的 kevy——同一个服务器二进制，或裁到 `core` 档 655 KB 的 `kevy-embedded`（[iot.md](iot.md)）——说的还是同一套 verb，模式从数据中心到传感器网关逐字迁移。
 
 ## 19. 传感器缓存（最新值 + 存活租约）
 
@@ -336,7 +336,7 @@ kevy-cli -p 6004 XLEN sensor:t1:log
 kevy-cli -p 6004 XRANGE sensor:t1:log - + COUNT 10
 ```
 
-Embedded 形态：同一批 verb 走网关进程内的类型化 API——`store.hset(…)` / `store.expire(…)` / `store.xadd(…)`——完全不经过 socket;`core` feature 档承载本 recipe 用到的一切（[../iot.md](../iot.md)）。
+Embedded 形态：同一批 verb 走网关进程内的类型化 API——`store.hset(…)` / `store.expire(…)` / `store.xadd(…)`——完全不经过 socket；`core` feature 档承载本 recipe 用到的一切（[iot.md](iot.md)）。
 
 ## 20. 边缘聚合（写时 GROUP BY + 上行）
 

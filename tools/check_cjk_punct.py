@@ -36,21 +36,33 @@ BAD = ",.;:!?"
 # are legitimate; `4.0:什么会坏` is not — a colon after a version number is still
 # a Chinese colon, and it still has to be full-width. An earlier version of this
 # gate excused every mark that followed a digit and let that one through.
+GAP = r"[ \t\x02]*"  # crosses an inline code span, never an HTML tag
 PAT = re.compile(
     rf"(?:[{CJK}][{re.escape(BAD)}](?![\d])"
-    rf"|(?<![\d])\.[ \t]*[{CJK}]"
-    rf"|[,;:!?][ \t]*[{CJK}])"
+    rf"|(?<![\d])\.{GAP}[{CJK}]"
+    rf"|[,;:!?]{GAP}[{CJK}])"
 )
 
-# Regions where ASCII punctuation is the correct character: code, markup,
-# attributes, URLs, and entities.
+# Regions where ASCII punctuation is the correct character. Two kinds, and the
+# difference matters:
+#
+#   HARD (\x01) — a boundary BETWEEN sentences. An HTML tag is one: the full stop
+#     ending an English blurb in <p>…</p> is not adjacent to the Chinese heading
+#     in the <h3> that follows, however close they sit in the byte stream.
+#
+#   SOFT (\x02) — a span INSIDE a sentence. An inline code span is one:
+#     「完全不经过 socket;`core` 里…」 has a half-width semicolon in Chinese prose,
+#     and the backtick that follows must not be allowed to hide it. The matcher
+#     looks straight through a soft span; it stops dead at a hard one.
+SOFT = [
+    re.compile(r"`[^`\n]+`"),  # inline markdown code
+    re.compile(r"<code\b.*?</code>", re.S | re.I),
+]
 STRIP = [
     re.compile(r"<pre\b.*?</pre>", re.S | re.I),
-    re.compile(r"<code\b.*?</code>", re.S | re.I),
     re.compile(r"<script\b.*?</script>", re.S | re.I),
     re.compile(r"<style\b.*?</style>", re.S | re.I),
     re.compile(r"```.*?```", re.S),  # markdown fences
-    re.compile(r"`[^`\n]+`"),  # inline markdown code
     re.compile(r"<[^>]+>"),  # tags, with all their attributes
     re.compile(r"https?://\S+"),
     re.compile(r"&[a-z]+;"),
@@ -69,11 +81,15 @@ def blank(text):
     # heading in the <h3> that follows it, even though only markup separates
     # them in the byte stream. Filling with spaces made the matcher walk right
     # across the tag and report a violation that was not there.
-    def spaces(m):
-        return "".join("\n" if ch == "\n" else "\x01" for ch in m.group(0))
+    def fill(ch):
+        def sub(m):
+            return "".join("\n" if c == "\n" else ch for c in m.group(0))
+        return sub
 
+    for pat in SOFT:
+        text = pat.sub(fill("\x02"), text)
     for pat in STRIP:
-        text = pat.sub(spaces, text)
+        text = pat.sub(fill("\x01"), text)
     return text
 
 
@@ -112,7 +128,11 @@ def main():
                 files += sorted(t.rglob(ext))
         elif t.exists():
             files.append(t)
-    files = sorted(set(files))
+    # This file quotes the mistakes it exists to catch — 「注意:replica」 and the
+    # rest are counterexamples in its own comments. A linter cannot lint itself
+    # without failing on its own test fixtures.
+    me = pathlib.Path(__file__).resolve()
+    files = sorted({f for f in files if f.resolve() != me})
 
     total = 0
     for f in files:

@@ -1,15 +1,15 @@
 # 在 kevy 上跑 RDS 负载
 
-你在 MySQL 或 PostgreSQL 上跑着一套业务负载，正考虑把它——整体或部分——搬到 kevy 上。本页是**参考矩阵**：逐一列出 SQL 层面的每种构造、kevy 里承载它的机制、精确到 verb，以及语义差异。凡是 kevy 拒绝的构造，都直说拒绝，并附上已覆盖的替代方案。配套的 [cookbook](cookbook.md) 把这些行变成可运行的配方；[designing-on-kevy](../designing-on-kevy.md) 是引擎本身的一页地图。
+你在 MySQL 或 PostgreSQL 上跑着一套业务负载，正考虑把它——整体或部分——搬到 kevy 上。本页是**参考矩阵**：逐一列出 SQL 层面的每种构造、kevy 里承载它的机制、精确到 verb，以及语义差异。凡是 kevy 拒绝的构造，都直说拒绝，并附上已覆盖的替代方案。配套的 [cookbook](cookbook.md) 把这些行变成可运行的配方；[designing-on-kevy](designing-on-kevy.md) 是引擎本身的一页地图。
 
 ## 分工
 
 RDS 让你先写数据、以后再定访问路径——查询计划器在查询时把任意 `WHERE` 子句变成*某个*计划。kevy 把这件事倒过来：**访问路径由你在写入时声明**（索引、聚合、视图），引擎随每次写入同步维护（按构造派生，零漂移），服务端查询是微秒级查找，永远不做计划搜索。这笔交易明码标价：
 
 - 你放弃的：对未声明路径的临时查询。没有匹配索引的 `WHERE` 在 kevy 上不是慢——它*按设计不存在*（要么把访问路径建模出来，要么别上线这个查询）。
-- 你得到的：可预测的服务延迟（单台服务器扛整套栈时，水合页面 p99 < 1ms、经索引 + 视图钩子的写扇出 p99 < 200µs——[designing-on-kevy](../designing-on-kevy.md) 里有 gate 把守的数字），以及远超磁盘 B-tree 引擎的 Redis 同级裸吞吐（见[容量估算](#容量估算与运维差异)）。
+- 你得到的：可预测的服务延迟（单台服务器扛整套栈时，水合页面 p99 < 1ms、经索引 + 视图钩子的写扇出 p99 < 200µs——[designing-on-kevy](designing-on-kevy.md) 里有 gate 把守的数字），以及远超磁盘 B-tree 引擎的 Redis 同级裸吞吐（见[容量估算](#容量估算与运维差异)）。
 
-这条边界是章程，不是待办：没有查询语言、没有计划器、没有 join、没有服务端校验 DSL、没有触发器（"Law 3"，[designing-on-kevy](../designing-on-kevy.md)）。下文的一切，都是把 SQL 构造映射到这个固定接口面上。
+这条边界是章程，不是待办：没有查询语言、没有计划器、没有 join、没有服务端校验 DSL、没有触发器（"Law 3"，[designing-on-kevy](designing-on-kevy.md)）。下文的一切，都是把 SQL 构造映射到这个固定接口面上。
 
 ## 表、行、列
 
@@ -44,7 +44,7 @@ kevy 存的是字节；类型在**真正要紧的地方——建索引时**声�
 | DATETIME / TIMESTAMP | Unix 纪元（秒或毫秒）存成 `i64` | 范围索引给你 `BETWEEN`；kevy 没有日期算术——日历运算归应用 |
 | BOOL | `0` / `1` 存成 `i64` | 可索引、可组合（`EQ 0`）|
 | JSON / JSONB | 摊平成 hash 字段（`profile.city`）| 逐字段读、TTL（`HEXPIRE`）、可索引；JSON-path 查询永久出局——cookbook 配方 9 |
-| embedding（pgvector）| `dim × 4` 字节 f32-LE，索引 `TYPE vector` | [vector-search](../vector-search.md) |
+| embedding（pgvector）| `dim × 4` 字节 f32-LE，索引 `TYPE vector` | [vector-search](vector-search.md) |
 
 ## PRIMARY KEY、UNIQUE、AUTO_INCREMENT
 
@@ -82,7 +82,7 @@ WATCH + MULTI/EXEC check-then-write           # CAS loop (cookbook recipe 4)
 - **每个索引一个字段。**一个索引覆盖一个前缀的一个声明字段。多列谓词要么是恰好**两个**索引的 `COMPOSE AND|OR`（按键序——两个值域各异，键序是唯一共享的顺序），要么用一个[视图](#view)承载最多 4 个叶子的具名可复用组合。更宽的临时合取就是滑向查询计划器的坡——拒绝。剩下的谓词水合后在应用侧过滤。
 - **`RANGE`/`EQ`/`COMPOSE`**：默认 `LIMIT 100`，上限 `10000`，游标分页（`[next-cursor, rows]`，`"0"` = 起点/耗尽）。游标契约是 SCAN 级的：遍历期间保持稳定的行恰好出现一次；并发写入的行可能出现，也可能不出现。没有全局快照——与 `SCAN`/`DBSIZE` 同一信封。
 - **前缀 `LIKE`**：`TYPE str KIND range` 索引按字节字典序有序，所以 `LIKE 'abc%'` 就是 `RANGE 'abc' 'abc<0xff>'`——一次索引扫描，不是走一遍键空间。（用 `SCAN 0 MATCH 'user:*'` 匹配键名前缀的路子也有，但它要增量走完整个键空间——留给运维杂务，绝不能当服务路径。）
-- **`MATCH`** 对查询 token 取 OR 语义，按 BM25 排序，内置 CJK bigram；`LIMIT` 上限 1000，无游标；没有短语查询、没有布尔语法、没有高亮（[text-search](../text-search.md)）。
+- **`MATCH`** 对查询 token 取 OR 语义，按 BM25 排序，内置 CJK bigram；`LIMIT` 上限 1000，无游标；没有短语查询、没有布尔语法、没有高亮（[text-search](text-search.md)）。
 - **`FIELDS`** 在同一次调用里、在每行所属的 shard 上水合指定的 hash 字段——用一跳替代“索引扫描 + 主键回查”的两跳。它同时也是 JOIN 形状的水合原语（见下文）。
 - **`IDX.EXPLAIN` 仅作诊断。**它报告 kind、state、`est_rows`，以及你已写定的那条查询的计划行——没有在多个计划之间挑选的优化器。
 
@@ -135,7 +135,7 @@ VIEW.CREATE live_adults QUERY '( AND user_live EQ 0 user_age RANGE 18 200 )'
 VIEW.QUERY live_adults LIMIT 10 [FIELDS name] [VIA …]
 ```
 
-杀手级应用是**热列表**：把“按优先级排的前 100 个就绪任务”做成 `TOPK` 物化视图，写税约 2%，微秒级应答，永久新鲜——RDS 要靠覆盖索引 + 有纪律的查询 + 运气才能近似（[views](../views.md)）。
+杀手级应用是**热列表**：把“按优先级排的前 100 个就绪任务”做成 `TOPK` 物化视图，写税约 2%，微秒级应答，永久新鲜——RDS 要靠覆盖索引 + 有纪律的查询 + 运气才能近似（[views](views.md)）。
 
 ## 事务
 
@@ -146,7 +146,7 @@ kevy 的事务故事就是 Redis 的（Law 1），对到 SQL 上是这样：
 | `BEGIN … COMMIT`（批）| `MULTI` … `EXEC` | 命令先排队，再作为一个单元应用；**批内没有交互式读**——要据以分支的读，得放在 `MULTI` 之前 |
 | `SELECT … FOR UPDATE` | `WATCH key` + `MULTI`/`EXEC` | 乐观 CAS，不是锁：WATCH 住的键有变，`EXEC` 就回 nil——重读后重试（cookbook 配方 4）|
 | `ROLLBACK` | 无 | 排队阶段出错即中止整批（`-EXECABORT`，一条命令都没跑）；`EXEC` 内的运行时错误**不会**撤销其余命令——Redis 语义 |
-| 存储过程 / 一次原子 RMW | `EVAL`（Lua）| 整个脚本在 `KEYS[1]` 所属 shard 上是一个原子单元；读—判—写，可以真正分支（[lua](../lua.md)）|
+| 存储过程 / 一次原子 RMW | `EVAL`（Lua）| 整个脚本在 `KEYS[1]` 所属 shard 上是一个原子单元；读—判—写，可以真正分支（[lua](lua.md)）|
 | 可串行化的单实体事务 | 嵌入式 `store.atomic(key, …)` | 锁住 shard 的闭包：读能看到自己的写，提交原子 + 一次 fsync（cookbook 配方 5）|
 | 跨实体可串行化 | 嵌入式 `atomic_all_shards` | 确定性的锁顺序；这是重锤——慎用 |
 
@@ -173,8 +173,8 @@ kevy 的事务故事就是 Redis 的（Law 1），对到 SQL 上是这样：
 |---|---|
 | `CREATE INDEX idx ON t (col)` | `IDX.CREATE idx ON PREFIX t: FIELD col TYPE i64\|f64\|str KIND range` |
 | `CREATE UNIQUE INDEX` | `KIND unique`（围栏语义，见上）|
-| `CREATE INDEX … USING gin (tsvector)` | `KIND text`（[text-search](../text-search.md)）|
-| pgvector `USING hnsw` | `KIND ann DIM d [DISTANCE cosine\|l2\|ip] [M m] [EF ef]`（[vector-search](../vector-search.md)）|
+| `CREATE INDEX … USING gin (tsvector)` | `KIND text`（[text-search](text-search.md)）|
+| pgvector `USING hnsw` | `KIND ann DIM d [DISTANCE cosine\|l2\|ip] [M m] [EF ef]`（[vector-search](vector-search.md)）|
 | `DROP INDEX` | `IDX.DROP idx` |
 | `\d` / information_schema | `IDX.LIST` / `VIEW.LIST`（state、entries、bytes）|
 
@@ -217,7 +217,7 @@ PITR 的范围说明：feed 窗口是内存里的 backlog（`feed_buffer_size`�
 
 ## CDC
 
-feed 就是 kevy 的“binlog 即 API”——Debezium 从 RDS 里抽取的那套东西，这里原生供应（[cdc](../cdc.md)）：
+feed 就是 kevy 的“binlog 即 API”——Debezium 从 RDS 里抽取的那套东西，这里原生供应（[cdc](cdc.md)）：
 
 | Debezium/binlog 概念 | kevy |
 |---|---|
@@ -231,7 +231,7 @@ feed 就是 kevy 的“binlog 即 API”——Debezium 从 RDS 里抽取的那�
 
 ## kevy 不会做的事
 
-拒绝清单，集中一处。每一条都是章程决定（[designing-on-kevy](../designing-on-kevy.md)，项目的 scope 日志）——不是路线图上的缺口：
+拒绝清单，集中一处。每一条都是章程决定（[designing-on-kevy](designing-on-kevy.md)，项目的 scope 日志）——不是路线图上的缺口：
 
 | 拒绝 | 因为 | 改用 |
 |---|---|---|
@@ -258,7 +258,7 @@ feed 就是 kevy 的“binlog 即 API”——Debezium 从 RDS 里抽取的那�
 > + Σ 各索引公式 + 视图成员数 × 条目大小——然后在加载过的样本上
 > 用 `MEMORY USAGE` / `IDX.LIST` 的 bytes 验证。
 
-各子系统公式（每条都在 CI 里对实测 RSS 设了 gate）：范围索引 ≈ `rows × (value_width + avg_key_len + 48)`；文本与 ANN 公式见 [text-search](../text-search.md) / [vector-search](../vector-search.md)（1M × 1024 维向量 ≈ 4.1 GiB）；agg ≈ 由分组数主导（[indexes](../indexes.md)）；视图成员 ≈ `order_value_width + key_len + 48`（[views](../views.md)）。设好 `maxmemory` + 一个驱逐策略，或者接受 `-OOM` 拒绝（拒绝发生在写入准入时——已有数据绝不腐蚀）。
+各子系统公式（每条都在 CI 里对实测 RSS 设了 gate）：范围索引 ≈ `rows × (value_width + avg_key_len + 48)`；文本与 ANN 公式见 [text-search](text-search.md) / [vector-search](vector-search.md)（1M × 1024 维向量 ≈ 4.1 GiB）；agg ≈ 由分组数主导（[indexes](indexes.md)）；视图成员 ≈ `order_value_width + key_len + 48`（[views](views.md)）。设好 `maxmemory` + 一个驱逐策略，或者接受 `-OOM` 拒绝（拒绝发生在写入准入时——已有数据绝不腐蚀）。
 
 **服务余量。**v3.18.0 发布竞技场（kevy vs valkey 9.1，公平对打协议，5 次取中位——`bench/PERF-LEDGER.md`）：GET 3.00×、SET 3.99×、INCR 3.00×、SADD 2.50×、HSET 2.25×、ZADD 1.73×、LPUSH 1.64×——完整的复制/心跳 pipeline 落地后 7/7 全胜。对上磁盘优先的 RDS 做点查，差距还要更大；那里诚实的比较是“kevy 同时替掉缓存层和业务查询”，不是逐查询的 benchmark。
 

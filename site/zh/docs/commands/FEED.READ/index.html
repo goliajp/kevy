@@ -56,7 +56,7 @@
     <section>
       <h2>复杂度</h2>
       <p class="cx-body"><code>只涉及单个 shard(shard 是参数，不是扇出)。在 backlog 里定位起始 offset 是 O(log B)，解码再重新编码是 O(count * 帧大小)。COUNT 默认 256，硬上限 4096。</code></p>
-      <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
+      <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的，不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误，但不是。</p>
     </section>
 
     <section>

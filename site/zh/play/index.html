@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Playground —— kevy</title>
-<meta name="description" content="一个真的 kevy 引擎、编译成 WebAssembly、跑在这个标签页里。写键、看 TTL 过期、把 append-only 日志从你自己的磁盘上读出来。">
+<meta name="description" content="一个真的 kevy 引擎，编译成 WebAssembly，跑在这个标签页里。写键、看 TTL 过期、把 append-only 日志从你自己的磁盘上读出来。">
 <link rel="stylesheet" href="../../assets/kevy.css">
 <link rel="stylesheet" href="../../assets/play.css">
 <script>
@@ -41,8 +41,8 @@
 <main id="main" class="page">
   <div class="band">
     <p class="eyebrow">Playground</p>
-    <h1>引擎、就在这个标签页里</h1>
-    <p class="lede">这是 kevy-store —— 跟服务器上跑的是同一个引擎 —— 编译成了 WebAssembly。没有后端。把网断掉、这个页面照样工作、因为键在你浏览器的文件系统里、不在我们的。</p>
+    <h1>引擎，就在这个标签页里</h1>
+    <p class="lede">这是 kevy-store —— 跟服务器上跑的是同一个引擎 —— 编译成了 WebAssembly。没有后端。把网断掉，这个页面照样工作，因为键在你浏览器的文件系统里，不在我们的。</p>
   </div>
 
   <div id="boot" class="boot"><span class="spin" aria-hidden="true"></span>正在启动引擎……</div>
@@ -105,7 +105,7 @@
     <section class="panel span2">
       <div class="panel-h">
         <h2>append-only 日志</h2>
-        <p class="hint">这些字节是这个页面直接从 OPFS 读出来的、没有经过引擎。这就是那个主张：它们在你的磁盘上、任何东西都可以去看。</p>
+        <p class="hint">这些字节是这个页面直接从 OPFS 读出来的，没有经过引擎。这就是那个主张：它们在你的磁盘上，任何东西都可以去看。</p>
       </div>
       <pre id="aof" class="aof" aria-live="polite"></pre>
     </section>
@@ -114,7 +114,7 @@
     <section class="panel span2">
       <div class="panel-h">
         <h2>跨标签页的发布订阅</h2>
-        <p class="hint">从任意一个标签页发布、两边都会收到。桥是 BroadcastChannel、但频道的过滤发生在引擎内部、不在 JavaScript 里。</p>
+        <p class="hint">从任意一个标签页发布，两边都会收到。桥是 BroadcastChannel，但频道的过滤发生在引擎内部，不在 JavaScript 里。</p>
       </div>
       <form id="p" class="wform">
         <input id="pc" placeholder="房间" aria-label="房间" autocomplete="off" spellcheck="false" value="room">

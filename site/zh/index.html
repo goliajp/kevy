@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kevy——纯 Rust 写的 Redis 兼容引擎</title>
+<meta name="description" content="一个纯 Rust 写成、零第三方依赖的 Redis 兼容存储引擎。可以当服务端跑，可以嵌进你自己的二进制，可以编译成 WebAssembly，也能塞进一颗单片机。">
+<link rel="stylesheet" href="../assets/kevy.css">
+<link rel="stylesheet" href="../assets/pages.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../zh/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../zh/docs/">文档</a>
+      <a href="../zh/docs/commands/">命令</a>
+      <a href="../zh/benchmarks/">基准</a>
+      <a href="../zh/play/">Playground</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language">
+        <a href="../">EN</a>
+        <a href="../zh/" aria-current="page">中文</a>
+        <a href="../ja/">日本語</a>
+      </nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+<section class="hero">
+  <div class="hero-in">
+    <p class="eyebrow">4.0 版本</p>
+    <h1>一个 Redis 兼容的引擎，<br>从零写起。</h1>
+    <p class="lede">kevy 说的是 RESP 协议，实现了 184 条命令，而且<b>没有任何第三方依赖</b>——没有 hashmap crate，没有 hasher，没有异步运行时。33 个 crate，都是我们自己写的，都是 Rust。同一套引擎，可以撑起一台 16 核的服务器，可以嵌进一个 CLI，可以编译成 151 KB 的 WebAssembly，也可以在一颗连分配器都没有的 Cortex-M 单片机上启动。</p>
+    <div class="ctas"><a class="cta primary" href="../zh/play/">在浏览器里试一下</a><a class="cta" href="../zh/docs/">读文档</a><a class="cta" href="../zh/benchmarks/">看实测数字</a></div>
+  </div>
+  <div class="hero-aside"><pre class="hero-code"><code>$ cargo install kevy
+$ kevy --port 6379
+
+$ redis-cli -p 6379
+&gt; SET greeting "hello"
+OK
+&gt; INFO server
+kevy_version:4.0.0
+dependencies:0</code></pre></div>
+</section>
+<section class="band"><div class="sec-h"><h2>一套引擎，几种跑法</h2><p class="sec-lede">按数据必须待在哪里来挑——不管哪一种，API 都是同一套。</p></div><div class="cards"><a class="card" href="../zh/docs/tuning/">
+      <span class="card-k">服务端</span>
+      <h3>可以直接换掉 Redis</h3>
+      <p>一核一个 shard，Linux 上走 io_uring，配合 SO_REUSEPORT。你现有的客户端不会发现东西换过了。</p>
+      <span class="card-go">跑一个服务端</span>
+    </a><a class="card" href="../zh/docs/embedded-listener/">
+      <span class="card-k">嵌入</span>
+      <h3>装在你二进制里的存储</h3>
+      <p>没有 socket，没有进程，没有序列化。当成一个碰巧会落盘的 HashMap 来用就行。</p>
+      <span class="card-go">嵌进去</span>
+    </a><a class="card" href="../zh/play/">
+      <span class="card-k">浏览器</span>
+      <h3>151 KB 的 WebAssembly</h3>
+      <p>标签页里跑一个真的 keyspace，有 TTL，有发布订阅，数据落在 OPFS 上。不是给 localStorage 包一层皮。</p>
+      <span class="card-go">打开 Playground</span>
+    </a><a class="card" href="../zh/docs/wasm/">
+      <span class="card-k">边缘</span>
+      <h3>在 worker 里冷启动</h3>
+      <p>没有要预热的运行时，也不用建连接。存储和你的代码待在同一个 isolate 里。</p>
+      <span class="card-go">部署到边缘</span>
+    </a><a class="card" href="../zh/docs/iot/">
+      <span class="card-k">裸机</span>
+      <h3>没有分配器，没有操作系统</h3>
+      <p>kevy-store 是 no_std 的。它在 Cortex-M 上跑，只用一块固定大小的 arena，没有堆——每次 push，CI 都会重新验一遍。</p>
+      <span class="card-go">看 MCU 上的验证</span>
+    </a><a class="card" href="../llms.txt">
+      <span class="card-k">智能体</span>
+      <h3>给 LLM 当记忆</h3>
+      <p>向量索引和全文索引，一条变更流，还有一份直接从引擎自己的命令表生成的 llms.txt。</p>
+      <span class="card-go">读 llms.txt</span>
+    </a></div></section>
+<section class="band">
+  <div class="sec-h"><h2>吞吐量，老老实实测出来的</h2><p class="sec-lede">同一台机器，16 核，走 loopback。五次运行取中位数，数字是从服务端自己的 <code>total_commands_processed</code> 里数出来的，取三秒稳态窗口内的增量——<b>不是</b> redis-benchmark 打印的那个 rps。那个数被一个 250 ms 的定时器量化过，会给你一句听着很舒服的假话。</p></div>
+  <div class="tbl"><table><thead><tr><th></th><th>kevy 4.0</th><th>valkey 9.1</th><th>Redis 8</th><th>Dragonfly</th><th>vs Redis 8</th></tr></thead><tbody><tr><td>GET</td><td class="num">7,800,299</td><td class="num">3,014,687</td><td class="num">5,597,865</td><td class="num">2,132,210</td><td class="win">1.39×</td></tr><tr><td>SET</td><td class="num">6,918,058</td><td class="num">1,749,976</td><td class="num">2,573,396</td><td class="num">1,511,377</td><td class="win">2.69×</td></tr><tr><td>INCR</td><td class="num">6,133,940</td><td class="num">2,484,273</td><td class="num">3,459,395</td><td class="num">1,387,568</td><td class="win">1.77×</td></tr><tr><td>SADD</td><td class="num">5,600,597</td><td class="num">2,385,857</td><td class="num">3,690,483</td><td class="num">1,678,098</td><td class="win">1.52×</td></tr><tr><td>HSET</td><td class="num">4,287,217</td><td class="num">1,970,791</td><td class="num">3,021,325</td><td class="num">1,515,763</td><td class="win">1.42×</td></tr><tr><td>LPUSH</td><td class="num">3,213,470</td><td class="num">1,943,222</td><td class="num">2,862,374</td><td class="num">1,320,497</td><td class="loss">1.12×</td></tr><tr><td>ZADD</td><td class="num">3,053,101</td><td class="num">1,802,759</td><td class="num">2,773,929</td><td class="num">1,455,126</td><td class="loss">1.10×</td></tr></tbody></table></div>
+  <p class="tbl-note">七条命令，三个对手，七战七胜。但请把最后两行读完。对 Redis 8，LPUSH 只领先 12%，ZADD 只领先 10%——差距薄到这个程度，决定胜负的是你的硬件、你的 value 大小、你的 key 分布，而不是我们。凡是薄成这样的行，我们一律用这个颜色标出来，因为一个只把自己好看的行印出来的基准页面，那叫广告。<a href="benchmarks/">完整的测法，以及我们为了把它测对付出过什么。</a></p>
+</section>
+<section class="band prose"><h2>零依赖是一条设计约束，不是一句吹嘘</h2><p>哈希表是自己写的。hasher 是自己写的。RESP 解析器、B 树、arena 分配器、io_uring 绑定、事件循环、geohash、Lua 解释器——全都是自己写的，全都是 Rust，全都在这个仓库里。整个 kevy 附近唯一的 C，是内核不肯用别的方式暴露出来的那几个系统调用，在 <code>kevy-sys</code> 里手写成 <code>unsafe extern "C"</code>。libc 的那个 crate，我们不链接。</p><p>这不是洁癖。同一份代码之所以能同时编译成一台 16 核的服务端、一块 no_std 的单片机固件、一个 WebAssembly 模块，靠的正是这条约束——依赖树里没有任何东西能跳出来告诉我们这做不到。一个 crate 只要假定了分配器、假定了线程、假定了时钟，它就替你关上其中一扇门。</p><p>还有一个结果：供应链是可以读完的。33 个 crate，一个作者，一棵 <code>cargo tree</code> 一屏放得下。</p></section>
+<section class="band">
+  <div class="call loss">
+    <span class="h">kevy 不是什么</span>
+    <p>它不是集群。没有 gossip，没有 slot 迁移，没有 sentinel——复制和故障切换有，跨机器分片没有，而且是<a href="docs/cluster/">故意不做</a>。没有 AUTH，也没有 TLS：请把它放在一个真正把这两件事做好的东西后面。有几条命令的行为和 Redis 不一样，有些还挺出人意料——<code>SCAN</code> 不是游标迭代器，<code>ZRANK</code> 是 O(N)，<code>SPOP</code> 不随机。<a href="docs/commands/">每一条我们都写下来了</a>，写在 Redis 自己的命令参考里没有的那一栏。</p>
+  </div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>三十秒</h2><p class="sec-lede">三个入口。按你的数据待在哪里挑一个。</p></div>
+  <ol class="steps"><li><h3>当服务端跑</h3><p>6379 端口上说 RESP。你的 redis-cli、你的客户端库、你现有的代码，一行都不用改。</p><pre><code>cargo install kevy
+kevy --port 6379</code></pre></li><li><h3>放进你的 Rust 二进制</h3><p>没有 socket，没有进程。引擎就是一个 struct。</p><pre><code>kevy-embedded = &quot;4.0&quot;
+
+let db = Db::open(&quot;data/&quot;)?;
+db.set(b&quot;k&quot;, b&quot;v&quot;, None)?;
+assert_eq!(db.get(b&quot;k&quot;)?.as_deref(), Some(&amp;b&quot;v&quot;[..]));</code></pre></li><li><h3>放进浏览器标签页</h3><p>gzip 之后 151 KB。数据落在 OPFS 上，刷新页面还在，发布订阅可以跨标签页。</p><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
+
+const db = await open({ persist: { name: &quot;app&quot; } });
+db.set(&quot;cart:u1&quot;, JSON.stringify(items), { ttlMs: 3600_000 });</code></pre></li></ol>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <p class="foot-b">kevy 4.0 — 纯 Rust，零第三方依赖</p>
+    <nav>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+      <a href="https://crates.io/crates/kevy">crates.io</a>
+      <a href="../llms.txt">llms.txt</a>
+    </nav>
+  </div>
+</footer>
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

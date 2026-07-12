@@ -36,7 +36,7 @@
 </header>
 
 <div class="doc-shell">
-  <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/" aria-current="page">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 184 个命令</a></li></ul></aside>
+  <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/" aria-current="page">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 184 个命令</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>RDS→kevy 建模 cookbook</h1></div>
 <p>你正在把一个关系型数据模型搬上 kevy。下面每个 recipe 用的都是已交付的原语——没有 roadmap 功能，没有「即将推出」。每一条都点名它替代的 RDS 概念，和承接它的 kevy 模式。</p>
 <p>所有 recipe 背后的设计立场是：<b>建模访问路径，而不是 schema</b>。RDS 允许你把这个决定推迟给查询规划器；kevy 要你把它说出来——回报是服务时的微秒级页面（实测数字见 <code>bench/VALIDATION-LEDGER.md</code>）。</p>
@@ -120,7 +120,7 @@ kevy-cli -p 6004 IDX.CREATE evt_ord ON PREFIX evt: FIELD ord TYPE str KIND range
 kevy-cli -p 6004 IDX.QUERY evt_ord RANGE '2026-07-04|000000' '2026-07-04|999999' LIMIT 100</code></pre></figure>
 <h2 id="9-jsonb">9. JSONB</h2>
 <p><b>SQL 对应物</b>：JSON/JSONB 列 + 生成列索引——<a href="../rds-workloads/#类型系统">矩阵：类型系统</a>。</p>
-<p>拍平成 hash 字段：<code>profile.city</code> → 字段 <code>profile.city</code>。你保住了按字段读写、字段级 TTL（HEXPIRE）和可索引性——JSONB 给你的一切，除了 JSON-path 查询，那是<b>永久出局</b>的（查询引擎斜坡；见 <a href="../designing-on-kevy/">../designing-on-kevy.md</a> 的 REFUSED 表）。</p>
+<p>拍平成 hash 字段：<code>profile.city</code> → 字段 <code>profile.city</code>。你保住了按字段读写、字段级 TTL（HEXPIRE）和可索引性——JSONB 给你的一切，除了 JSON-path 查询，那是<b>永久出局</b>的（查询引擎斜坡；见 <a href="../designing-on-kevy/">designing-on-kevy.md</a> 的 REFUSED 表）。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET user:7 profile.city tokyo profile.plan pro
 kevy-cli -p 6004 HGET user:7 profile.city
 kevy-cli -p 6004 HEXPIRE user:7 3600 FIELDS 1 profile.plan   # 字段级 TTL 在拍平后依然可用</code></pre></figure>
@@ -157,7 +157,7 @@ kevy-cli diff old-rds-mirror.internal:6379 127.0.0.1:6004 user:   # needs-extern
 <h2 id="14-分析导出">14. 分析导出</h2>
 <p><b>SQL 对应物</b>：喂数仓的 ETL 作业 / binlog tap——<a href="../rds-workloads/#cdc">矩阵：CDC</a>。</p>
 <p>服务与分析不共用一个引擎。导出模式：</p>
-<ul><li><code>export</code>——逻辑导出、可续传、RESP 走到哪就能载到哪。</li><li>CDC → 数仓：游标消费者把插入流进你的 OLAP 存储，正是 CDC-to-Kafka 的形状。</li><li>只读 listener（<a href="../../../docs/embedded-listener/">../embedded-listener.md</a>）供 embedded 应用做临时抽取。</li></ul>
+<ul><li><code>export</code>——逻辑导出、可续传、RESP 走到哪就能载到哪。</li><li>CDC → 数仓：游标消费者把插入流进你的 OLAP 存储，正是 CDC-to-Kafka 的形状。</li><li>只读 listener（<a href="../embedded-listener/">embedded-listener.md</a>）供 embedded 应用做临时抽取。</li></ul>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET order:1001 user_id 42 total 1999
 kevy-cli export -p 6004 --prefix order: /tmp/orders.resp
 kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX order:   # CDC 到数仓的读循环</code></pre></figure>
@@ -186,7 +186,7 @@ kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX session:    # gen 1 = 新数�
 <p><code>messages</code> 字段装的是你的压缩步骤产出的任何摘要；重写它就是一条 <code>HSET</code>，而每次修订本来就是提交序里的一个变更帧——多数 agent 框架外挂的「对话历史」表，就是 recipe 12 的审计日志白送给你。</p>
 <h2 id="17-情景记忆时间-语义">17. 情景记忆（时间 × 语义）</h2>
 <p><b>SQL 对应物</b>：<code>WHERE ts BETWEEN …</code> + pgvector <code>ORDER BY embedding &lt;=&gt; ? LIMIT k</code>——<a href="../rds-workloads/#select">矩阵：SELECT</a>。</p>
-<p>情景记忆对同一批行回答两个问题：<i>最近发生了什么</i>（时间）和*什么与此相似*（语义）。一个前缀，每个问题一个索引——<code>DIM 8</code> 是为了演示可读；真实 embedding 是 768+ 维、以 f32-LE blob 传输，下面的 <code>csv:</code> 调试形态在任何接受向量的地方都可用（存储字段与查询向量走同一个解析器——<a href="../../../docs/vector-search/">../vector-search.md</a>）。</p>
+<p>情景记忆对同一批行回答两个问题：<i>最近发生了什么</i>（时间）和*什么与此相似*（语义）。一个前缀，每个问题一个索引——<code>DIM 8</code> 是为了演示可读；真实 embedding 是 768+ 维、以 f32-LE blob 传输，下面的 <code>csv:</code> 调试形态在任何接受向量的地方都可用（存储字段与查询向量走同一个解析器——<a href="../vector-search/">vector-search.md</a>）。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET mem:1 ts 1783200000 kind obs what 'user prefers dark roast' v csv:0.9,0.1,0,0,0,0,0,0
 kevy-cli -p 6004 HSET mem:2 ts 1783203600 kind obs what 'user asked about decaf' v csv:0.8,0.3,0.1,0,0,0,0,0
 kevy-cli -p 6004 HSET mem:3 ts 1783207200 kind reflection what 'coffee questions cluster in the morning' v csv:0,0.2,0.9,0.1,0,0,0,0
@@ -209,7 +209,7 @@ kevy-cli -p 6004 IDX.QUERY HYBRID chunk_text MATCH 'typed key prefix' chunk_ann 
 kevy-cli -p 6004 IDX.QUERY HYBRID chunk_text MATCH 'change frame' chunk_ann KNN csv:0,0.1,0.9,0,0,0,0,0 LIMIT 2 RRFK 20 FIELDS body</code></pre></figure>
 <p><code>HYBRID</code> 在服务端跑两条腿并以<b>倒数排名融合</b>（RRF）合并：每个 key 在 BM25 列表与 KNN 列表上各取 <code>Σ 1/(k + rank)</code>——只看排名，所以两种异质分数尺度永远不需要归一化；同时在*两条*腿都靠前的 chunk，胜过只霸一条腿的 chunk。<code>RRFK</code> 就是那个 k（默认 60）：信得过每条腿的头部命中、想让「两边都同意」占主导时调低；想把融合拉平、让共识深入两个列表时调高。</p>
 <hr>
-<p>最后两个 recipe 彻底离开机架：边缘节点上的 kevy——同一个服务器二进制，或裁到 <code>core</code> 档 655 KB 的 <code>kevy-embedded</code>（<a href="../../../docs/iot/">../iot.md</a>）——说的还是同一套 verb，模式从数据中心到传感器网关逐字迁移。</p>
+<p>最后两个 recipe 彻底离开机架：边缘节点上的 kevy——同一个服务器二进制，或裁到 <code>core</code> 档 655 KB 的 <code>kevy-embedded</code>（<a href="../iot/">iot.md</a>）——说的还是同一套 verb，模式从数据中心到传感器网关逐字迁移。</p>
 <h2 id="19-传感器缓存最新值-存活租约">19. 传感器缓存（最新值 + 存活租约）</h2>
 <p><b>SQL 对应物</b>：<code>readings_latest</code> upsert 表 + 陈旧度 cron——<a href="../rds-workloads/#容量估算与运维差异">矩阵：容量估算与运维差异</a>。</p>
 <p>每个传感器的当前值是一行数据；TTL 是存活契约。停止上报的传感器会从缓存中过期消失——<b>缺席本身就是掉线信号</b>，不用写清扫任务：</p>
@@ -224,7 +224,7 @@ kevy-cli -p 6004 EXISTS sensor:t1         # 1 = 在报,0 = 已失联</code></pre
 kevy-cli -p 6004 XADD sensor:t1:log MAXLEN '~' 1000 '*' val 21.7
 kevy-cli -p 6004 XLEN sensor:t1:log
 kevy-cli -p 6004 XRANGE sensor:t1:log - + COUNT 10</code></pre></figure>
-<p>Embedded 形态：同一批 verb 走网关进程内的类型化 API——<code>store.hset(…)</code> / <code>store.expire(…)</code> / <code>store.xadd(…)</code>——完全不经过 socket;<code>core</code> feature 档承载本 recipe 用到的一切（<a href="../../../docs/iot/">../iot.md</a>）。</p>
+<p>Embedded 形态：同一批 verb 走网关进程内的类型化 API——<code>store.hset(…)</code> / <code>store.expire(…)</code> / <code>store.xadd(…)</code>——完全不经过 socket；<code>core</code> feature 档承载本 recipe 用到的一切（<a href="../iot/">iot.md</a>）。</p>
 <h2 id="20-边缘聚合写时-group-by-上行">20. 边缘聚合（写时 GROUP BY + 上行）</h2>
 <p><b>SQL 对应物</b>：每次仪表盘刷新重跑一遍的 <code>SELECT zone, COUNT(*), SUM(w) … GROUP BY zone</code>——<a href="../rds-workloads/#group-by-与聚合">矩阵：GROUP BY 与聚合</a>。</p>
 <p>边缘节点就地汇总、只上传摘要——原始读数多到没法上行。聚合声明一次，由写路径维护，于是「聚合作业」直接不复存在：</p>

@@ -66,12 +66,12 @@ L = {
         "dir": "zh/",
         "lang": "zh-Hans",
         "title": "Playground —— kevy",
-        "desc": "一个真的 kevy 引擎、编译成 WebAssembly、跑在这个标签页里。写键、看 TTL 过期、把 append-only 日志从你自己的磁盘上读出来。",
+        "desc": "一个真的 kevy 引擎，编译成 WebAssembly，跑在这个标签页里。写键、看 TTL 过期、把 append-only 日志从你自己的磁盘上读出来。",
         "eyebrow": "Playground",
-        "h1": "引擎、就在这个标签页里",
+        "h1": "引擎，就在这个标签页里",
         "lede": (
             "这是 kevy-store —— 跟服务器上跑的是同一个引擎 —— 编译成了 WebAssembly。"
-            "没有后端。把网断掉、这个页面照样工作、因为键在你浏览器的文件系统里、不在我们的。"
+            "没有后端。把网断掉，这个页面照样工作，因为键在你浏览器的文件系统里，不在我们的。"
         ),
         "booting": "正在启动引擎……",
         "ks": "键空间",
@@ -95,9 +95,9 @@ L = {
         "s_flags": "功能开关",
         "s_cart": "购物车",
         "aof_h": "append-only 日志",
-        "aof_note": "这些字节是这个页面直接从 OPFS 读出来的、没有经过引擎。这就是那个主张：它们在你的磁盘上、任何东西都可以去看。",
+        "aof_note": "这些字节是这个页面直接从 OPFS 读出来的，没有经过引擎。这就是那个主张：它们在你的磁盘上，任何东西都可以去看。",
         "reload_note": "刷新之后键还在。引擎打开时会重放这份日志 —— 跟服务器启动时走的是同一条代码路径。",
-        "tab_note": "从任意一个标签页发布、两边都会收到。桥是 BroadcastChannel、但频道的过滤发生在引擎内部、不在 JavaScript 里。",
+        "tab_note": "从任意一个标签页发布，两边都会收到。桥是 BroadcastChannel，但频道的过滤发生在引擎内部，不在 JavaScript 里。",
         "k_ph": "键",
         "v_ph": "值",
         "t_ph": "存活秒数",

@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>kevy — 純 Rust・依存ゼロの Redis 互換ストレージエンジン</title>
-<meta name="description" content="kevy は一行も外部クレートを使わずに書かれた、純 Rust・依存ゼロの Redis 互換ストレージエンジンです。サーバーとして動き(GET 639 万 ops/s、valkey 9.1 比 1.6〜4.0 倍)、アプリの中に組み込め(392 KB、OS のないマイコンまで)、ブラウザでも動き(416 KB の wasm、IndexedDB 比 77〜189 倍)、MCP 経由で AI エージェントの記憶層にもなります。">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230A0D10'/%3E%3Ctext x='5' y='24' font-family='ui-monospace,monospace' font-size='21' font-weight='700' fill='%233FC7D4'%3Ek%3C/text%3E%3Crect x='21' y='9' width='5' height='14' fill='%233FC7D4'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="../assets/site.css">
+<title>kevy — 純 Rust で書いた Redis 互換エンジン</title>
+<meta name="description" content="サードパーティ製クレートを一つも使わず、純 Rust で書いた Redis 互換のストレージエンジン。サーバーとして動き、バイナリに組み込め、WebAssembly にコンパイルでき、マイコンにも収まる。">
+<link rel="stylesheet" href="../assets/kevy.css">
+<link rel="stylesheet" href="../assets/pages.css">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -15,27 +15,23 @@
 </script>
 </head>
 <body>
-
-<a class="skip" href="#main">本文へスキップ</a>
-
-<header class="masthead">
-  <div class="wrap masthead-in">
-    <a class="wordmark" href="/ja/">kevy</a>
-    <div class="mast-spec" aria-label="ビルド情報">
-      <span>v<b>4.0</b></span>
-      <span>Rust <b>1.97</b></span>
-      <span>依存 <b>0</b></span>
-      <span>crate <b>33</b></span>
-      <span>Apache-2.0 <b>OR</b> MIT</span>
-    </div>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../ja/docs/">ドキュメント</a>
+      <a href="../ja/docs/commands/">コマンド</a>
+      <a href="../ja/benchmarks/">ベンチマーク</a>
+      <a href="../ja/play/">Playground</a>
+    </nav>
     <div class="mast-right">
-      <nav class="lang" aria-label="言語">
-        <a href="/">EN</a>
-        <a href="/zh-CN/" lang="zh-Hans">中文</a>
-        <a href="/ja/" lang="ja" aria-current="page">日本語</a>
+      <nav class="lang" aria-label="Language">
+        <a href="../">EN</a>
+        <a href="../zh/">中文</a>
+        <a href="../ja/" aria-current="page">日本語</a>
       </nav>
-      <a class="ghost-link" href="https://github.com/goliajp/kevy">GitHub</a>
-      <button class="icon-btn" id="theme" type="button" aria-label="ライト／ダークテーマの切り替え">
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
         <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
         <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
       </button>
@@ -44,429 +40,97 @@
 </header>
 
 <main id="main">
-
-  <!-- ============================================ hero: four channels -->
-  <div class="wrap hero">
-    <p class="tag rise d1">純 Rust · 依存ゼロ · Redis 互換</p>
-    <h1 class="rise d2">ひとつのエンジンが、<em>四つの場所</em>で動く。</h1>
-    <p class="lede rise d3">
-      kevy は Rust でゼロから書いたストレージエンジンです。<b>サードパーティのクレートを一切使っていません</b>
-      —— ハッシュマップも、アロケーション戦略も、プロトコルパーサも、イベントループも、すべて自前。
-      だからこそ同じエンジンが 16 コアのサーバーにも、<b>OS すら載っていないマイコン</b>にも収まります。
-      まず、ご自身の状況を選んでください：
-    </p>
-
-    <div class="channels rise d4">
-
-      <a class="ch" href="#server">
-        <span class="ch-no">CH 01</span>
-        <h2>本番で Redis がボトルネックになっている</h2>
-        <p>ワイヤ互換なのでクライアントはそのまま。thread-per-core、io_uring、GC 停止なし。レプリケーション、フェイルオーバー、クラスタまで同梱。</p>
-        <div class="ch-figs">
-          <div class="ch-fig"><span>GET</span><b>639万/s</b></div>
-          <div class="ch-fig"><span>SET</span><b>638万/s</b></div>
-          <div class="ch-fig"><span>valkey 9.1 比</span><b>1.6–4.0×</b></div>
-        </div>
-        <span class="ch-go">実測値を見る</span>
-      </a>
-
-      <a class="ch" href="#embed">
-        <span class="ch-no">CH 02</span>
-        <h2>ストアを隣にではなく、プログラムの中に置きたい</h2>
-        <p>デーモンではなく Rust のライブラリです。ソケットも、シリアライズも、二つ目のプロセスもなし —— OS のないマイコンまで降りていけます。</p>
-        <div class="ch-figs">
-          <div class="ch-fig"><span>コアのサイズ</span><b>392 KB</b></div>
-          <div class="ch-fig"><span>空ストアの常駐</span><b>336 KB</b></div>
-          <div class="ch-fig"><span>実機動作</span><b>6 種</b></div>
-        </div>
-        <span class="ch-go">対応ボードを見る</span>
-      </a>
-
-      <a class="ch" href="#web">
-        <span class="ch-no">CH 03</span>
-        <h2>ブラウザで本物のデータを持ちたい</h2>
-        <p>localStorage は約 5 MB で頭打ちのうえタブを止めます。IndexedDB は遅い。ここで動くのはエンジンそのもの、あなたのタブの中で。</p>
-        <div class="ch-figs">
-          <div class="ch-fig"><span>wasm</span><b>416 KB</b></div>
-          <div class="ch-fig"><span>IndexedDB 比</span><b>77–189×</b></div>
-          <div class="ch-fig"><span>タブ間 p50</span><b>0.1 ms</b></div>
-        </div>
-        <span class="ch-go">その場で試す</span>
-      </a>
-
-      <a class="ch" href="#agent">
-        <span class="ch-no">CH 04</span>
-        <h2>エージェントに検索できる記憶を持たせたい</h2>
-        <p>ベクトル ANN・全文・セカンダリインデックスが同じキースペースに同居。しかもエージェントは MCP から直接触れます。</p>
-        <div class="ch-figs">
-          <div class="ch-fig"><span>索引の種類</span><b>4</b></div>
-          <div class="ch-fig"><span>MCP ツール</span><b>5</b></div>
-          <div class="ch-fig"><span>ハイブリッド</span><b>RRF</b></div>
-        </div>
-        <span class="ch-go">機能面を見る</span>
-      </a>
-
-    </div>
+<section class="hero">
+  <div class="hero-in">
+    <p class="eyebrow">バージョン 4.0</p>
+    <h1><span class="nb">Redis 互換</span>のエンジンを、<br>ゼロから書いた。</h1>
+    <p class="lede">kevy は RESP を話し、184 個のコマンドに応答する。そして<b>サードパーティ依存を一つも持たない</b>——ハッシュマップの crate も、ハッシュ関数も、非同期ランタイムも入っていない。crate は 33 個、すべて自前、すべて Rust。同じエンジンが 16 コアのサーバーを動かし、CLI に組み込まれ、151 KB の WebAssembly にコンパイルされ、アロケータすら持たない Cortex-M マイコンの上で起動する。</p>
+    <div class="ctas"><a class="cta primary" href="../ja/play/">ブラウザで試す</a><a class="cta" href="../ja/docs/">ドキュメントを読む</a><a class="cta" href="../ja/benchmarks/">数字を見る</a></div>
   </div>
+  <div class="hero-aside"><pre class="hero-code"><code>$ cargo install kevy
+$ kevy --port 6379
 
-  <!-- ================================================= CH 01 · server -->
-  <section class="band wrap" id="server">
-    <div class="band-head">
-      <span class="tag">CH 01</span>
-      <h2>本番の Redis を置き換える</h2>
-      <span class="rule"></span>
-      <span class="meta">-c 50 -P 16 · n=800万 · 5 回の中央値 · 同一マシン</span>
-    </div>
-    <p class="band-note">
-      同じハードウェア、同じ計測手順。サーバーはコア 0–7、負荷生成側は 8–15 にピン留めしています。
-      これはパイプライン負荷でのスループット上限 —— つまり、実負荷下のキャッシュの姿です。
-      <b>このページの数字はすべて実測であり、負けている項目もそのまま載せています。</b>
-    </p>
+$ redis-cli -p 6379
+&gt; SET greeting "hello"
+OK
+&gt; INFO server
+kevy_version:4.0.0
+dependencies:0</code></pre></div>
+</section>
+<section class="band"><div class="sec-h"><h2>同じエンジンを、どこに置くか</h2><p class="sec-lede">データがどこにあるべきかで選べばいい。API はどれも同じだ。</p></div><div class="cards"><a class="card" href="../ja/docs/tuning/">
+      <span class="card-k">サーバー</span>
+      <h3>Redis をそのまま置き換える</h3>
+      <p>1 コアにつき 1 シャード、Linux では io_uring、SO_REUSEPORT。既存のクライアントは、入れ替わったことに気づかない。</p>
+      <span class="card-go">サーバーを動かす</span>
+    </a><a class="card" href="../ja/docs/embedded-listener/">
+      <span class="card-k">組み込み</span>
+      <h3>バイナリの中に置くストア</h3>
+      <p>ソケットもプロセスもシリアライズもない。永続化される HashMap のつもりで呼べばいい。</p>
+      <span class="card-go">組み込む</span>
+    </a><a class="card" href="../ja/play/">
+      <span class="card-k">ブラウザ</span>
+      <h3>151 KB の WebAssembly</h3>
+      <p>TTL と pub/sub を備えた本物のキースペースがタブの中で動き、OPFS に永続化される。localStorage のラッパーではない。</p>
+      <span class="card-go">Playground を開く</span>
+    </a><a class="card" href="../ja/docs/wasm/">
+      <span class="card-k">エッジ</span>
+      <h3>worker のコールドスタートに間に合う</h3>
+      <p>暖機するランタイムも、張りにいくコネクションもない。ストアはコードと同じ isolate の中にある。</p>
+      <span class="card-go">エッジに載せる</span>
+    </a><a class="card" href="../ja/docs/iot/">
+      <span class="card-k">ベアメタル</span>
+      <h3>アロケータもなし、OS もなし</h3>
+      <p>kevy-store は no_std。固定 arena だけを使い、ヒープなしで Cortex-M の上を走る——CI が push のたびに証明している。</p>
+      <span class="card-go">MCU プローブを見る</span>
+    </a><a class="card" href="../llms.txt">
+      <span class="card-k">エージェント</span>
+      <h3>LLM の記憶</h3>
+      <p>ベクトル索引と全文索引、変更フィード、そしてエンジン自身のコマンド表から起こした llms.txt がある。</p>
+      <span class="card-go">llms.txt を読む</span>
+    </a></div></section>
+<section class="band">
+  <div class="sec-h"><h2>スループットを、正直に測る</h2><p class="sec-lede">1 台のマシン、16 コア、ループバック。5 回実行した中央値で、サーバー自身の <code>total_commands_processed</code> を 3 秒間の定常状態で数えた値だ。redis-benchmark が表示する rps は<b>使っていない</b>——あれは 250 ms に量子化されていて、こちらに都合のいい嘘をつく。</p></div>
+  <div class="tbl"><table><thead><tr><th></th><th>kevy 4.0</th><th>valkey 9.1</th><th>Redis 8</th><th>Dragonfly</th><th>Redis 8 比</th></tr></thead><tbody><tr><td>GET</td><td class="num">7,800,299</td><td class="num">3,014,687</td><td class="num">5,597,865</td><td class="num">2,132,210</td><td class="win">1.39×</td></tr><tr><td>SET</td><td class="num">6,918,058</td><td class="num">1,749,976</td><td class="num">2,573,396</td><td class="num">1,511,377</td><td class="win">2.69×</td></tr><tr><td>INCR</td><td class="num">6,133,940</td><td class="num">2,484,273</td><td class="num">3,459,395</td><td class="num">1,387,568</td><td class="win">1.77×</td></tr><tr><td>SADD</td><td class="num">5,600,597</td><td class="num">2,385,857</td><td class="num">3,690,483</td><td class="num">1,678,098</td><td class="win">1.52×</td></tr><tr><td>HSET</td><td class="num">4,287,217</td><td class="num">1,970,791</td><td class="num">3,021,325</td><td class="num">1,515,763</td><td class="win">1.42×</td></tr><tr><td>LPUSH</td><td class="num">3,213,470</td><td class="num">1,943,222</td><td class="num">2,862,374</td><td class="num">1,320,497</td><td class="loss">1.12×</td></tr><tr><td>ZADD</td><td class="num">3,053,101</td><td class="num">1,802,759</td><td class="num">2,773,929</td><td class="num">1,455,126</td><td class="loss">1.10×</td></tr></tbody></table></div>
+  <p class="tbl-note">3 者すべてに 7 戦 7 勝。ただし、最後の 2 行を読んでほしい。Redis 8 に対して LPUSH は 12%、ZADD は 10% しか上回っていない——この差では、勝者を決めるのはこちらではなく、そちらのハードウェア、値のサイズ、キーの分布だ。この 2 行には、差が薄いときのためにとってある色を塗ってある。都合のいい行だけを並べたベンチマークは、ただの広告だからだ。<a href="benchmarks/">測定方法の全体と、それを正しくするために払った代償。</a></p>
+</section>
+<section class="band prose"><h2>依存ゼロは設計上の制約であって、自慢ではない</h2><p>ハッシュマップは自前だ。ハッシュ関数も自前だ。RESP パーサ、B-tree、arena アロケータ、io_uring のバインディング、イベントループ、geohash、Lua インタプリタ——すべて自前で、すべて Rust で、すべてこのリポジトリの中にある。kevy の周辺に存在する C は、カーネルがそれ以外の方法では見せてくれない、ごく少数のシステムコールだけだ。それも <code>kevy-sys</code> の中に <code>unsafe extern "C"</code> として手で書いてある。libc の crate はリンクしていない。</p><p>純粋さのための純粋さではない。同じコードが 16 コアのサーバーにも、no_std のマイコンにも、WebAssembly モジュールにもコンパイルできるのは、これがあるからだ——依存ツリーの中に、それは無理だと言ってくる相手がいない。アロケータやスレッドや時計の存在を前提にする crate は、そのたびに扉をひとつ閉める。</p><p>そして、サプライチェーンが読めるものになる。crate は 33 個、作者は 1 人、<code>cargo tree</code> は画面 1 枚に収まる。</p></section>
+<section class="band">
+  <div class="call loss">
+    <span class="h">kevy がやらないこと</span>
+    <p>クラスタではない。gossip もスロット移行も sentinel もない。レプリケーションとフェイルオーバーはあるが、マシンをまたぐシャーディングはない。これは<a href="docs/cluster/">意図的に断っている</a>。AUTH も TLS もない。それらをきちんと処理できるものの後ろに置くこと。Redis と挙動の違うコマンドがいくつかあり、中には意外なものもある——<code>SCAN</code> はカーソルによる反復ではない。<code>ZRANK</code> は O(N) だ。<code>SPOP</code> はランダムではない。<a href="docs/commands/">その一つひとつを書き出してある</a>——Redis 自身のリファレンスには存在しない欄として。</p>
+  </div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>30 秒</h2><p class="sec-lede">入口は 3 つ。データがどこにあるかで選べばいい。</p></div>
+  <ol class="steps"><li><h3>サーバーとして</h3><p>6379 番で RESP を話す。redis-cli も、クライアントライブラリも、既存のコードもそのまま使える。</p><pre><code>cargo install kevy
+kevy --port 6379</code></pre></li><li><h3>Rust のバイナリの中で</h3><p>ソケットもプロセスもない。エンジンは struct だ。</p><pre><code>kevy-embedded = &quot;4.0&quot;
 
-    <div class="plot">
-      <p class="tag" style="margin:0 0 4px">位置づけ · パイプラインスループット上限</p>
-      <p style="margin:0 0 14px;font-size:12.5px;color:var(--muted)">
-        kevy は <b class="mono" style="color:var(--ink)">639万</b> GET/s、
-        <b class="mono" style="color:var(--ink)">638万</b> SET/s。バーは kevy を基準にした相対値、
-        右端の数字は kevy が何倍速いかを示します。
-      </p>
-      <div class="plot-rows">
-        <div class="prow me">
-          <span class="who">kevy 4.0</span>
-          <span class="track"><span class="fill" data-w="100"></span></span>
-          <span class="val">639万 <small>GET/s</small></span>
-        </div>
-        <div class="prow">
-          <span class="who">redis 8</span>
-          <span class="track"><span class="fill" data-w="62"></span></span>
-          <span class="val win">1.60×</span>
-        </div>
-        <div class="prow">
-          <span class="who">valkey 9.1</span>
-          <span class="track"><span class="fill" data-w="33"></span></span>
-          <span class="val win">3.00×</span>
-        </div>
-        <div class="prow">
-          <span class="who">dragonfly</span>
-          <span class="track"><span class="fill" data-w="28"></span></span>
-          <span class="val win">3.60×</span>
-        </div>
-      </div>
-      <p class="plot-foot">
-        興味深いのは dragonfly です。同じ shared-nothing 系であり、しかも
-        <b>私たちが検討したうえで採用しなかった手法をすべて使っています</b>
-        —— io_uring BUNDLE、MSG_RING、direct descriptor —— それでも 1 操作あたり
-        <b>10,400 サイクル、私たちの 2.2 倍</b>を費やします。redis 8 は単一スレッド実行(コア使用率 43%)、
-        valkey 9.1 は <b>サイクルの 33% を io-thread 間の <code>pthread_mutex_lock</code></b> に使っています。
-      </p>
-    </div>
+let db = Db::open(&quot;data/&quot;)?;
+db.set(b&quot;k&quot;, b&quot;v&quot;, None)?;
+assert_eq!(db.get(b&quot;k&quot;)?.as_deref(), Some(&amp;b&quot;v&quot;[..]));</code></pre></li><li><h3>ブラウザのタブの中で</h3><p>gzip 後 151 KB。OPFS に永続化され、リロードしても残り、タブをまたいで pub/sub を話す。</p><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
 
-    <div style="margin-top:18px" class="tbl-wrap">
-      <table>
-        <caption class="tag" style="text-align:left;padding:10px 14px;caption-side:top">アリーナ · 7 面すべてを valkey 9.1 と同一マシンで対戦 · 3.17.0 リリース時の計測</caption>
-        <thead>
-          <tr><th>コマンド</th><th class="num">kevy</th><th class="num">valkey 9.1</th><th class="num">倍率</th><th>何を測るか</th></tr>
-        </thead>
-        <tbody>
-          <tr><td class="k">GET</td><td class="num">6,389,776</td><td class="num">2,131,060</td><td class="num win">3.00×</td><td>点読み。キャッシュのホットパス</td></tr>
-          <tr><td class="k">SET</td><td class="num">6,389,776</td><td class="num">1,598,082</td><td class="num win">4.00×</td><td>点書き。書き込みログ有効のまま</td></tr>
-          <tr><td class="k">INCR</td><td class="num">5,326,232</td><td class="num">2,131,628</td><td class="num win">2.50×</td><td>アトミックカウンタ(read-modify-write)</td></tr>
-          <tr><td class="k">SADD</td><td class="num">5,326,232</td><td class="num">2,131,628</td><td class="num win">2.50×</td><td>集合のメンバーシップ</td></tr>
-          <tr><td class="k">HSET</td><td class="num">3,998,001</td><td class="num">1,776,199</td><td class="num win">2.25×</td><td>ハッシュのフィールド書き込み</td></tr>
-          <tr><td class="k">LPUSH</td><td class="num">3,196,164</td><td class="num">1,776,199</td><td class="num win">1.80×</td><td>リスト先頭への挿入(キュー形)</td></tr>
-          <tr><td class="k">ZADD</td><td class="num">2,666,667</td><td class="num">1,682,793</td><td class="num win">1.58×</td><td>ソート済み集合。最も重い書き込み</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="cols-3" style="margin-top:18px">
-      <div class="card">
-        <p class="tag">アーキテクチャ</p>
-        <h3>thread-per-core、共有なし</h3>
-        <p>各シャードが自分のコアでキースペースとリアクタを専有します(Linux では io_uring)。ホットパスにコア間ロックはなく、最悪のタイミングで止まる GC もありません。</p>
-      </div>
-      <div class="card">
-        <p class="tag">互換性</p>
-        <h3>クライアントは変更不要</h3>
-        <p>ワイヤは RESP2 / RESP3。CI で valkey 9.1 とバイト単位の差分テストを行っています。Lua(<code>EVAL</code>)、pub/sub、streams、トランザクション、キースペース通知に対応。</p>
-      </div>
-      <div class="card">
-        <p class="tag">可用性</p>
-        <h3>後付けではないレプリケーションとフェイルオーバー</h3>
-        <p>本物の書き込みログを持つプライマリ／レプリカ、エポックによるフェンシング付きの多数決選出、計画フェイルオーバー(<code>FAILOVER</code>)、read-your-writes トークン、有界の陳腐化、静的スコープのクラスタ。</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================================== CH 02 · embedded -->
-  <section class="band wrap" id="embed">
-    <div class="band-head">
-      <span class="tag">CH 02</span>
-      <h2>ストアをプログラムの中に置く</h2>
-      <span class="rule"></span>
-      <span class="meta">consumer ビルド · opt-level z · fat LTO</span>
-    </div>
-    <p class="band-note">
-      デーモンもソケットもシリアライズもありません。<code>kevy-embedded</code> は、あなたのプログラムが直接呼ぶ Rust ライブラリです。
-      kevy は何にも依存していないので、クロスコンパイルに C ツールチェーンも <code>-sys</code> クレート群も要りません ——
-      だからこそ、ほかのストアが届かないボードにまで届きます。<b>下の各行は cargo check ではなく、実際に動かした結果です。</b>
-    </p>
-
-    <div class="tbl-wrap">
-      <table>
-        <thead>
-          <tr><th>ターゲット</th><th>ボードの区分</th><th class="num">サイズ</th><th>検証方法</th></tr>
-        </thead>
-        <tbody>
-          <tr><td class="k">x86_64-musl</td><td>産業用 x86、ゲートウェイ</td><td class="num">454 KB</td><td>実行済み</td></tr>
-          <tr><td class="k">aarch64-musl</td><td>Pi Zero 2、Pi 4–5、多くの ARM64 SBC</td><td class="num">411 KB</td><td><span class="win">実機でネイティブ実行</span> —— 空ストア常駐 336 KB、286万 store-ops/s</td></tr>
-          <tr><td class="k">armv7-musl</td><td>Pi 2–3、旧世代の 32 ビット ARM</td><td class="num">383 KB</td><td>実行済み(エミュレータ)</td></tr>
-          <tr><td class="k">arm-musl(ARMv6)</td><td>Pi Zero、Pi 1</td><td class="num">411 KB</td><td>実行済み(エミュレータ)</td></tr>
-          <tr><td class="k">riscv64-musl</td><td>RISC-V SBC</td><td class="num">420 KB</td><td>実行済み(エミュレータ)</td></tr>
-          <tr><td class="k">thumbv7em</td><td>Cortex-M4 / M7、OS なし</td><td class="num">145 KB</td><td><span class="win">ベアメタルで起動</span> —— 下記参照</td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="cols-2" style="margin-top:18px">
-      <div class="card">
-        <p class="tag">ベアメタル</p>
-        <h3>マイコン上で起動します</h3>
-        <p>
-          cargo check ではありません。CI は本物のファームウェアをビルドし —— ベクタテーブル、バンプアロケータ、
-          パニックハンドラ、セミホスティングまで手書きです。依存ゼロのエンジンが <code>cortex-m-rt</code> に頼るわけにはいかないので ——
-          それを <b>QEMU 上の Cortex-M4 で実際に起動</b>させます。push のたびに。
-        </p>
-        <ul>
-          <li>ファームウェアイメージ <b>145 KB</b></li>
-          <li>空ストアのヒープ使用量 <b>0 バイト</b> —— 書くまで 1 バイトも確保しません</li>
-          <li>センサキー 64 件で <b>17.8 KB</b>。ファームウェアが自前の時計を進めれば TTL は正しく失効します</li>
-          <li>そこで動くのはストレージエンジン本体であって、<b>組み込み用ファサード層ではありません</b> —— そちらは <code>std</code> を必要とします</li>
-        </ul>
-      </div>
-
-      <div class="card">
-        <p class="tag">機能のコスト</p>
-        <h3>使った分だけ払う</h3>
-        <p>呼ばない feature フラグは LTO が丸ごと削り、サイズには乗りません。効いてくるのは実際に使う機能です —— なかでも永続化が突出しています：</p>
-        <div class="tbl-wrap" style="margin-top:10px;border:0">
-          <table style="min-width:0">
-            <tbody>
-              <tr><td>KV + TTL</td><td class="num">392 KB</td><td class="num" style="color:var(--faint)">—</td></tr>
-              <tr><td>+ 永続化(スナップショット + 書き込みログ)</td><td class="num">601 KB</td><td class="num lose">+209</td></tr>
-              <tr><td>+ RESP リスナー</td><td class="num">629 KB</td><td class="num">+28</td></tr>
-              <tr><td>+ セカンダリインデックス</td><td class="num">667 KB</td><td class="num">+66</td></tr>
-              <tr><td>+ 全文検索(BM25)</td><td class="num">691 KB</td><td class="num">+24</td></tr>
-              <tr><td>+ ベクトル ANN(HNSW)</td><td class="num">696 KB</td><td class="num">+29</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- =================================================== CH 03 · web -->
-  <section class="band wrap" id="web">
-    <div class="band-head">
-      <span class="tag">CH 03</span>
-      <h2>ブラウザに本物のデータを置く</h2>
-      <span class="rule"></span>
-      <span class="meta">ヘッドレス Chrome · 10万キー · 16 バイト値</span>
-    </div>
-    <p class="band-note">
-      IndexedDB のラッパーではありません —— <b>エンジンそのものを WebAssembly にコンパイルしたもの</b>で、
-      C ABI は手書き、<code>wasm-bindgen</code> は使いません。すべての操作は wasm のリニアメモリ上で走り、
-      書き込みログはホットパスの外でまとめて OPFS に流します。
-      <b>IndexedDB にログを置くことと、IndexedDB をエンジンとして使うことは別物です</b> ——
-      下のバーが測っているのは、まさにその差です。
-    </p>
-
-    <div class="cols-2">
-      <div class="plot">
-        <p class="tag" style="margin:0 0 12px">点書き · ops/秒 · 10万キー</p>
-        <div class="plot-rows">
-          <div class="prow me"><span class="who">kevy(wasm)</span><span class="track"><span class="fill" data-w="100"></span></span><span class="val">1,787,310</span></div>
-          <div class="prow"><span class="who">localStorage</span><span class="track"><span class="fill" data-w="21"></span></span><span class="val">361,696 <small>4.9×</small></span></div>
-          <div class="prow"><span class="who">IndexedDB</span><span class="track"><span class="fill" data-w="1"></span></span><span class="val">9,479 <small>189×</small></span></div>
-        </div>
-        <p class="plot-foot">
-          スキャンも同じ傾向です。10万キーに対するパターンスキャンは kevy が <b>5.6 ms</b>、
-          IndexedDB が <b>254 ms</b> —— <b>46 倍</b>。
-        </p>
-      </div>
-
-      <div class="honest">
-        <p class="tag">kevy が負ける軸</p>
-        <h3 style="margin:6px 0 0;font-size:15px;font-weight:700">小さな値の読み出しは localStorage のほうが速い。これは今後も変わりません。</h3>
-        <p>
-          <code>getItem</code> はネイティブの同期ハッシュ探索で、境界を一切またぎません。一方 kevy の読み出しは毎回、
-          キーをエンコードし、wasm 境界を越え、値をコピーして返します —— 16 バイトの値では、その往復のほうが探索本体より高くつきます。
-          <code>mget()</code> でまとめれば約 1.5 倍取り戻せますが、<b>それでも負けます</b>。
-          キーごとのエンコードと値ごとのコピーは線形で、償却できないからです。
-        </p>
-        <p>
-          <b>つまり、データが小さく、文字列だけで、読み取り中心なら localStorage を使ってください。</b>
-          kevy が効いてくるのは 5 MB を超えたあたりから、そして書き込み・スキャン・TTL、
-          さらに「同期書き込みでタブが固まる」ことが許容できない場面です。
-        </p>
-      </div>
-    </div>
-
-    <div class="cols-3" style="margin-top:18px">
-      <div class="card">
-        <p class="tag">永続化</p>
-        <div class="reading"><span class="v">OPFS</span><span class="u">主経路</span></div>
-        <h3>変数の中ではなく、リロードを越えて生き残る</h3>
-        <p>書き込みログは OPFS(オリジン専用ファイルシステム)に追記します。同期ハンドルが使えない環境では IndexedDB にフォールバック。タブをリロードすれば、データはディスクから戻ります。</p>
-      </div>
-      <div class="card">
-        <p class="tag">タブ間</p>
-        <div class="reading"><span class="v">0.1</span><span class="u">ms p50</span></div>
-        <h3>タブ間の pub/sub</h3>
-        <p>BroadcastChannel 上に載せた本物のチャネル購読・パターン購読です。粗い <code>storage</code> イベントではありません。一方のタブで publish すれば、他方がミリ秒未満で受け取ります。</p>
-      </div>
-      <div class="card">
-        <p class="tag">試す</p>
-        <div class="reading"><span class="v">416</span><span class="u">KB wasm</span></div>
-        <h3>あなたのタブの中で動きます</h3>
-        <p>playground はキーを書き、フラッシュし、<b>ページをリロード</b>して、ディスクから戻ってきた値を見せます —— そのうえで上のベンチマークをあなたのマシンで実行します。</p>
-        <p style="margin-top:10px"><a href="../demo/playground.html">playground を開く →</a> <span style="color:var(--line-strong)">·</span> <a href="../demo/">REPL →</a></p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ================================================= CH 04 · agent -->
-  <section class="band wrap" id="agent">
-    <div class="band-head">
-      <span class="tag">CH 04</span>
-      <h2>エージェントに検索できる記憶を与える</h2>
-      <span class="rule"></span>
-      <span class="meta">kevy-mcp · stdio · 依存ゼロの JSON-RPC</span>
-    </div>
-    <p class="band-note">
-      セッション状態、エピソード記憶、RAG コーパス —— 普通なら三つのシステムになります。ここではひとつのストアです。
-      <b>ベクトル ANN、全文 BM25、セカンダリインデックスが同じキースペースの上に載り</b>、それらを融合するハイブリッド検索があります。
-      さらに MCP サーバーが付くので、エージェントは自作の接着コードを経由せず直接触れます。
-    </p>
-
-    <div class="cols-3">
-      <div class="card">
-        <p class="tag">検索</p>
-        <h3>四種類の索引、ひとつのキースペース</h3>
-        <ul>
-          <li><b>ベクトル ANN</b>(HNSW)—— あなたが用意した埋め込みによる意味検索</li>
-          <li><b>全文</b> —— 転置セグメント、BM25 でランキング</li>
-          <li><b>範囲 / ユニーク</b> —— 通常のセカンダリインデックス</li>
-          <li><b>ハイブリッド</b> —— ベクトル × 全文の RRF 融合をサーバー側でマージ</li>
-        </ul>
-      </div>
-      <div class="card">
-        <p class="tag">到達</p>
-        <h3>エージェントが直接話しかける</h3>
-        <p><code>kevy-mcp</code> は stdio 上の MCP サーバーで、同じ依存ゼロの規律で書かれています —— JSON-RPC も手書きです。</p>
-        <p>あえて<b>ツールは 5 個、50 個ではありません</b>:<code>discover</code>(エージェント自身がコマンド表を読む)、<code>read</code>、<code>explain</code>、<code>info</code>、そして <code>write</code> —— <b>書き込みは明示的に有効化</b>します。コマンドは argv 配列で渡すので、動詞ごとにツールを生やさなくても全機能に届きます。</p>
-        <p>これらのスキーマは <code>COMMAND DOCS</code> や <code>llms.txt</code> と同一のコマンド表から生成されます —— 単一の正となる情報源で、CI が乖離を検出します。</p>
-      </div>
-      <div class="card">
-        <p class="tag">形</p>
-        <h3>TTL がそのまま記憶ポリシー</h3>
-        <p>セッションコンテキストは自分で失効します。エピソード記憶はベクトルと時刻の両方の索引を持ちます。チャンクは元になったベクトルの隣に置くので、検索結果は本文そのものを返します —— あとで引き直す必要のある row id ではなく。</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================================== how it's built -->
-  <section class="band wrap" id="built">
-    <div class="band-head">
-      <span class="tag">出所</span>
-      <h2>なぜこの数字が信用できるのか</h2>
-      <span class="rule"></span>
-      <span class="meta">このページの主張はすべて実測です</span>
-    </div>
-
-    <div class="cols-3">
-      <div class="card">
-        <p class="tag">依存</p>
-        <div class="reading"><span class="v">0</span><span class="u">crates.io 依存</span></div>
-        <p style="margin-top:8px">ハッシュマップ、アロケーション戦略、RESP パーサ、io_uring バインディング、HNSW 索引、Lua VM —— すべてここで書いています。33 クレート、すべて <code>kevy-*</code>。<code>unsafe</code> は OS 境界にだけ置き、ストア・プロトコル・永続化の各層は <code>#![forbid(unsafe_code)]</code> です。</p>
-      </div>
-      <div class="card">
-        <p class="tag">検証</p>
-        <div class="reading"><span class="v">6</span><span class="u">プラットフォームを CI で</span></div>
-        <p style="margin-top:8px">valkey 9.1 とのバイト単位の差分テスト。信頼境界ごとの fuzz、unsafe を含む石には <code>miri</code>、並行部分には <code>loom</code>。スループットのラチェットが後退を検出するとビルドが落ちます。MCU ファームウェアはコンパイルではなく<b>起動</b>させています。</p>
-      </div>
-      <div class="card">
-        <p class="tag">開示</p>
-        <div class="reading"><span class="v">1</span><span class="u">負けている軸</span></div>
-        <p style="margin-top:8px">勝った数字だけを載せる仕様書は、広告です。kevy は小さな値の読み出しで <code>localStorage</code> に負けます。このページはそれを赤で、理由と物理的な制約まで添えて書いています —— 本番であなたを噛むのは、たいてい誰も教えてくれなかった数字だからです。</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ==================================================== start here -->
-  <section class="band wrap" id="start">
-    <div class="band-head">
-      <span class="tag">はじめる</span>
-      <h2>チャンネルを選ぶ</h2>
-      <span class="rule"></span>
-      <span class="meta">Apache-2.0 OR MIT</span>
-    </div>
-    <div class="cols-2">
-      <div class="card">
-        <p class="tag">サーバー</p>
-        <p style="margin-bottom:8px">Docker、あるいはランタイム不要の静的バイナリで：</p>
-        <p><code>docker run -p 6379:6379 goliakk/kevy</code></p>
-        <p style="margin-top:10px"><a href="https://github.com/goliajp/kevy/blob/develop/docs/quickstart.md">クイックスタート</a> <span style="color:var(--line-strong)">·</span> <a href="https://github.com/goliajp/kevy/blob/develop/docs/UPGRADING.md">Redis からの移行</a> <span style="color:var(--line-strong)">·</span> <a href="https://github.com/goliajp/kevy/blob/develop/docs/availability.md">レプリケーションとフェイルオーバー</a></p>
-      </div>
-      <div class="card">
-        <p class="tag">ライブラリ · ブラウザ · エージェント</p>
-        <p style="margin-bottom:8px">Rust、npm、そして MCP サーバー：</p>
-        <p><code>cargo add kevy-embedded</code> <span style="color:var(--line-strong)">·</span> <code>npm i @goliajp/kevy</code></p>
-        <p style="margin-top:10px"><a href="https://github.com/goliajp/kevy/blob/develop/docs/iot.md">組み込みと IoT</a> <span style="color:var(--line-strong)">·</span> <a href="https://github.com/goliajp/kevy/blob/develop/docs/wasm.md">WebAssembly</a> <span style="color:var(--line-strong)">·</span> <a href="https://github.com/goliajp/kevy/blob/develop/docs/cookbook.md">Cookbook</a></p>
-      </div>
-    </div>
-  </section>
-
+const db = await open({ persist: { name: &quot;app&quot; } });
+db.set(&quot;cart:u1&quot;, JSON.stringify(items), { ttlMs: 3600_000 });</code></pre></li></ol>
+</section>
 </main>
 
-<footer class="foot wrap">
-  <span>kevy 4.0</span>
-  <span class="sep">·</span>
-  <span>© GOLIA K.K.</span>
-  <span class="sep">·</span>
-  <span>Apache-2.0 OR MIT</span>
-  <span class="sep">·</span>
-  <a href="https://github.com/goliajp/kevy">GitHub</a>
-  <a href="https://crates.io/crates/kevy">crates.io</a>
-  <a href="https://www.npmjs.com/package/@goliajp/kevy">npm</a>
-  <a href="https://github.com/goliajp/kevy/tree/develop/docs">ドキュメント</a>
-  <a href="../llms.txt">llms.txt</a>
+<footer class="foot">
+  <div class="foot-in">
+    <p class="foot-b">kevy 4.0 — 純 Rust、サードパーティ依存ゼロ</p>
+    <nav>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
+      <a href="https://crates.io/crates/kevy">crates.io</a>
+      <a href="../llms.txt">llms.txt</a>
+    </nav>
+  </div>
 </footer>
 
 <script>
   document.getElementById("theme").addEventListener("click", function () {
-    var root = document.documentElement;
-    // Light is the default; dark is opt-in. The OS preference is not
-    // consulted — a reader who wants dark asks for it here.
-    root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
-    try { localStorage.setItem("kevy-theme", root.dataset.theme); } catch (e) {}
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
   });
-
-  var fills = document.querySelectorAll(".fill");
-  if (!matchMedia("(prefers-reduced-motion: reduce)").matches && "IntersectionObserver" in window) {
-    var io = new IntersectionObserver(function (entries) {
-      entries.forEach(function (e) {
-        if (!e.isIntersecting) return;
-        var f = e.target;
-        setTimeout(function () { f.style.width = f.dataset.w + "%"; }, 60);
-        io.unobserve(f);
-      });
-    }, { threshold: 0.25 });
-    fills.forEach(function (f) { io.observe(f); });
-  } else {
-    fills.forEach(function (f) { f.style.width = f.dataset.w + "%"; });
-  }
 </script>
-
 </body>
 </html>

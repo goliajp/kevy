@@ -56,7 +56,7 @@
     <section>
       <h2>复杂度</h2>
       <p class="cx-body"><code>调用本身 O(1)；构建是异步的 —— 每个 shard 先给自己匹配到的 key 拍一份快照（该 shard 上 O(keys)），再按每 tick 2048 行的速度回填。单行的构建代价：range / unique 是 O(log N)，text 是 O(tokens)，vector 是 O(ef_construction * M * dim)。</code></p>
-      <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
+      <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的，不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误，但不是。</p>
     </section>
 
     <section>
