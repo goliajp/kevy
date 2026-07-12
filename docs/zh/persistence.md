@@ -261,7 +261,7 @@ store.evictions_total();        // total evicted by maxmemory
 
 ## 恢复点（v2.3）
 
-启用变更 feed（`[feed] enabled = true`，见 [cdc.md](../cdc.md)）后，每份快照都记下采集那一刻的 feed 游标——与快照数据本身在同一个禁追加窗口里冻结。由此得到恢复点契约：
+启用变更 feed（`[feed] enabled = true`，见 [cdc.md](cdc.md)）后，每份快照都记下采集那一刻的 feed 游标——与快照数据本身在同一个禁追加窗口里冻结。由此得到恢复点契约：
 
 > **快照 S + 从 S 所记游标起的 feed 帧 = 之后任意游标处的精确状态。**
 

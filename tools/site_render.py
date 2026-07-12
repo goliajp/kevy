@@ -26,12 +26,29 @@ def e(s):
     return html.escape(str(s), quote=True)
 
 
+def loc(href, lang_dir):
+    """Put a site-internal link into the reader's own language.
+
+    Every href in the content files is written English-relative — `docs/`,
+    `play/`, `benchmarks/`. Rendered for the Chinese page they have to become
+    `zh/docs/`, and they were not: the Chinese landing page's six cards and three
+    buttons all pointed at the ENGLISH documentation. No link checker would ever
+    have found it, because both pages exist. A reader clicking 「跑一个服务端」
+    simply arrived somewhere they could not read.
+
+    llms.txt and the like are language-neutral and stay where they are.
+    """
+    if not lang_dir or href.startswith(("http", "#", "llms")):
+        return href
+    return f"{lang_dir}{href}"
+
+
 # ── blocks ──────────────────────────────────────────────────────────────────
 
 
-def hero(b, up):
+def hero(b, up, L=""):
     ctas = "".join(
-        f'<a class="cta{" primary" if i == 0 else ""}" href="{up}{c["href"]}">{e(c["label"])}</a>'
+        f'<a class="cta{" primary" if i == 0 else ""}" href="{up}{loc(c["href"], L)}">{e(c["label"])}</a>'
         for i, c in enumerate(b.get("ctas", []))
     )
     aside = f'<div class="hero-aside">{b["aside"]}</div>' if b.get("aside") else ""
@@ -46,15 +63,15 @@ def hero(b, up):
 </section>"""
 
 
-def prose(b, up):
+def prose(b, up, L=""):
     ps = "".join(f"<p>{p}</p>" for p in b["body"])
     h = f'<h2>{e(b["h2"])}</h2>' if b.get("h2") else ""
     return f'<section class="band prose">{h}{ps}</section>'
 
 
-def cards(b, up):
+def cards(b, up, L=""):
     items = "".join(
-        f"""<a class="card" href="{up}{c["href"]}">
+        f"""<a class="card" href="{up}{loc(c["href"], L)}">
       <span class="card-k">{e(c["kicker"])}</span>
       <h3>{e(c["title"])}</h3>
       <p>{c["body"]}</p>
@@ -67,7 +84,7 @@ def cards(b, up):
     return f'<section class="band"><div class="sec-h">{h}{intro}</div><div class="cards">{items}</div></section>'
 
 
-def table(b, up):
+def table(b, up, L=""):
     head = "".join(f"<th>{e(h)}</th>" for h in b["head"])
     rows = []
     for r in b["rows"]:
@@ -96,7 +113,7 @@ def table(b, up):
 </section>"""
 
 
-def code(b, up):
+def code(b, up, L=""):
     cap = f'<figcaption>{b["caption"]}</figcaption>' if b.get("caption") else ""
     return f"""<section class="band">
   {f'<div class="sec-h"><h2>{e(b["h2"])}</h2></div>' if b.get("h2") else ""}
@@ -104,7 +121,7 @@ def code(b, up):
 </section>"""
 
 
-def callout(b, up):
+def callout(b, up, L=""):
     return f"""<section class="band">
   <div class="call {b.get("kind", "note")}">
     <span class="h">{e(b["title"])}</span>
@@ -113,7 +130,7 @@ def callout(b, up):
 </section>"""
 
 
-def steps(b, up):
+def steps(b, up, L=""):
     items = "".join(
         f'<li><h3>{e(s["title"])}</h3><p>{s["body"]}</p>'
         + (f'<pre><code>{e(s["code"])}</code></pre>' if s.get("code") else "")
@@ -126,7 +143,7 @@ def steps(b, up):
 </section>"""
 
 
-def faq(b, up):
+def faq(b, up, L=""):
     items = "".join(
         f"<details><summary>{e(q['q'])}</summary><div>{q['a']}</div></details>"
         for q in b["items"]
@@ -154,7 +171,7 @@ def page(spec, lang, slug):
     depth = (0 if lang == "en" else 1) + (1 if slug else 0)
     up = "../" * depth
     n = NAV[lang]
-    body = "\n".join(BLOCKS[b["t"]](b, up) for b in spec["blocks"])
+    body = "\n".join(BLOCKS[b["t"]](b, up, DIRS[lang]) for b in spec["blocks"])
     cur = lambda s: ' aria-current="page"' if s == slug else ""
 
     def lang_href(code):

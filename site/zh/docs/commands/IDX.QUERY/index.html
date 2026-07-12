@@ -56,7 +56,7 @@
     <section>
       <h2>复杂度</h2>
       <p class="cx-body"><code>取决于索引种类。range：O(log N + limit)。unique：O(log N + hits)。全文：O(各倒排表长度之和)，带 MaxScore 剪枝。向量 ANN：O(dim * (M log N + ef * M)) 次距离计算（HNSW）。agg GROUPS：有界的 top-K，1 到 3 轮扇出。HYBRID：两个子查询各按 4 倍深度取，再在发起端用 RRF 融合。COMPOSE：不受 limit 约束 —— 两侧叶子都要完整物化，因为结果是按 key 排序的，而 segment 是按 value 排序的。</code></p>
-      <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
+      <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的，不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误，但不是。</p>
     </section>
 
     <section>

@@ -257,6 +257,6 @@ single_source = true          # ONE upstream stream, hash-routed locally
 
 从 offset 0（全新）或超出 backlog 窗口处握手的副本，会从 embed 源收到一次完整快照发送（v1.21 的反 scope，在 v3.2 关闭）：对每个 shard 做时间点冻结，附带 as-of offset，然后衔接实时帧。
 
-与 CDC feed（[docs/cdc.md](../cdc.md)）的关系：两者按设计共存。复制源服务的是副本一致性（基础设施平面，per-source offset）；feed 服务的是应用级 CDC（`(generation, offset)` 游标、前缀过滤、at-least-once）。硬把两者统一，会把面向应用的 CDC 语义绑死在副本协议上。
+与 CDC feed（[docs/cdc.md](cdc.md)）的关系：两者按设计共存。复制源服务的是副本一致性（基础设施平面，per-source offset）；feed 服务的是应用级 CDC（`(generation, offset)` 游标、前缀过滤、at-least-once）。硬把两者统一，会把面向应用的 CDC 语义绑死在副本协议上。
 
 Gate：`bench/repligate.sh`——真双进程验证：对全新副本的快照发送、静默后 digest 稳定性、重启后重同步，以及副本本地在复制数据之上的 `IDX.CREATE`/`IDX.QUERY`。

@@ -14,7 +14,7 @@ RDSからの移行を考えているなら、まずこのページを読み、�
 | **P3 — ビューと代数** | インデックス上の名前付き合成（virtual / materialized top-K）、Redisセマンティクスをそのまま持つzset/set代数。 | docs/views.md |
 | **P4 — フロー** | `(generation, offset)`カーソルを持つCDCフィード（組み込みのoutbox）、ブロッキングpop、ハッシュフィールドTTL、スナップショット読み出しビュー、組み込みの読み取り専用RESPリスナー。 | docs/cdc.md、docs/embedded-listener.md |
 | **P5 — 証拠** | 宣言した行はすべて計測され、突き合わされる。クラッシュ整合性のカオスゲート、30Mキーの混在スタックsoak。 | bench/VALIDATION-LEDGER.md |
-| **P6 — 可用性** | ackされたオフセットの真実とハートビートを持つレプリケーション、計画的なハンドオーバー（`FAILOVER`）とクラッシュフェイルオーバー（クォーラム選挙、選挙のみが書き込み権限を与える、フォークの破棄）、そしてオプトインの整合性ラダー（`WAIT`、read-your-writesトークン（`REPL.TOKEN`/`REPL.WAIT`）、有界ステイルネス（`-STALE`）、クォーラムリースによる書き込みフェンス）。12個の実行可能なclamp（availgate）がCIで走る。 | docs/availability.md、docs/replication.md |
+| **P6 — 可用性** | ackされたオフセットの真実とハートビートを持つレプリケーション、計画的なハンドオーバー（`FAILOVER`）とクラッシュフェイルオーバー（クォーラム選挙、選挙のみが書き込み権限を与える、フォークの破棄）、そしてオプトインの整合性ラダー（`WAIT`、read-your-writesトークン（`REPL.TOKEN`/`REPL.WAIT`）、有界ステイルネス（`-STALE`）、クォーラムリースによる書き込みフェンス）。13個の実行可能なclamp（availgate）がCIで走る。 | docs/availability.md、docs/replication.md |
 
 ## 3つの法
 

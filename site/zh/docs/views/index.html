@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>视图（VIEW. / view_） — kevy</title>
+<meta name="description" content="视图是若干声明过的索引的具名组合——一棵由索引形状构成的 AND / OR / DIFF 树，外加一个排序索引——可以作为一个整体来查询，要么每次查询时求值（virtual），要么在每次写入时增量维护（materialized，可选择用 top-K 封顶）。视图是引擎对“热点列表”查询的回答——WHERE state = 'ready' AND pri BE">
+<link rel="stylesheet" href="../../../assets/kevy.css">
+<link rel="stylesheet" href="../../../assets/docs.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../zh/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../zh/docs/" aria-current="page">文档</a>
+      <a href="../../../zh/docs/commands/">命令</a>
+      <a href="../../../zh/benchmarks/">基准</a>
+      <a href="../../../zh/play/">Playground</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language"><a href="../../../docs/views/">EN</a><a href="../../../zh/docs/views/" aria-current="page">中文</a><a href="../../../ja/docs/views/">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell">
+  <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/" aria-current="page">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 184 个命令</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>视图（<code>VIEW.*</code> / <code>view_*</code>）</h1></div>
+<p>视图是<b>若干声明过的索引的具名组合</b>——一棵由索引形状构成的 AND / OR / DIFF 树，外加一个排序索引——可以作为一个整体来查询，要么每次查询时求值（<b>virtual</b>），要么在每次写入时增量维护（<b>materialized</b>，可选择用 top-K 封顶）。视图是引擎对“热点列表”查询的回答——<code>WHERE state = 'ready' AND pri BETWEEN 0 AND 100 ORDER BY pri DESC LIMIT 10</code>——把它做成一条声明过的访问路径，而不是查询期的扫描。</p>
+<figure class="code"><pre><code>IDX.CREATE j_pri  ON PREFIX job: FIELD pri  TYPE i64 KIND range
+IDX.CREATE j_state ON PREFIX job: FIELD state TYPE str KIND range
+
+VIEW.CREATE ready_jobs
+    QUERY ( AND j_pri RANGE 0 100 j_state EQ ready )
+    ORDER BY j_pri DESC
+    MODE materialized TOPK 100
+VIEW.QUERY ready_jobs LIMIT 10</code></pre></figure>
+<h2 id="快速上手服务器">快速上手（服务器）</h2>
+<p>视图要组合的一切都必须先存在——叶子和 ORDER BY 索引，都是在同一个前缀域上声明过的 <code>IDX.*</code> 索引（<a href="../indexes/">indexes.md</a>）：</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 IDX.CREATE j_pri ON PREFIX job: FIELD pri TYPE i64 KIND range
+kevy-cli -p 6004 IDX.CREATE j_state ON PREFIX job: FIELD state TYPE str KIND range
+kevy-cli -p 6004 VIEW.CREATE ready_jobs QUERY ( AND j_pri RANGE 0 100 j_state EQ ready ) ORDER BY j_pri DESC MODE materialized TOPK 100
+kevy-cli -p 6004 HSET job:1 pri 10 state ready
+kevy-cli -p 6004 HSET job:2 pri 99 state blocked
+kevy-cli -p 6004 VIEW.QUERY ready_jobs LIMIT 10</code></pre></figure>
+<p>回复按视图顺序分页给出 <code>key, order-value</code> 对，并带一个可续读的 <code>CURSOR</code>。树的语法（一行，带括号）：</p>
+<figure class="code"><pre><code>tree     = '(' AND|OR|DIFF sub sub ')' | leaf
+leaf     = &lt;index&gt; RANGE &lt;min&gt; &lt;max&gt; | &lt;index&gt; EQ &lt;value&gt;</code></pre></figure>
+<p>配套 verb：<code>VIEW.LIST</code>（目录 + 模式 + 形状）、<code>VIEW.EXPLAIN name</code>（带逐叶子基数的树）、<code>VIEW.VERIFY name</code>（成员数 / 字节数 / 排序排除数——<b>字节数和排序排除数只对 materialized 有意义</b>；virtual 视图什么都不存，两项都报 0，而校验一个 virtual 视图要付一次全新的 <code>eval_tree</code>，这是 virtual 视图唯一比较贵的地方）、<code>VIEW.REBUILD name</code>（强制重建 materialized 内容——保持答案不变）、<code>VIEW.DROP name</code>。</p>
+<h2 id="三条结构规则">三条结构规则</h2>
+<ol><li><b>组件是具名索引。</b> 叶子携带一个形状（<code>RANGE min max</code> 或 <code>EQ v</code>，在 CREATE 时强制转换成被引用索引的类型）；视图层自己不持有任何谓词。树深 ≤ 3、叶子 ≤ 4 个；<code>AND</code> / <code>OR</code> 可能被引擎重排，<code>DIFF</code> 固定是左减右。</li><li><b>视图只存成员关系和顺序</b>——绝不存字段值。<code>ORDER BY &lt;index&gt;</code> 提供排序键；不在排序索引里的行被排除（有计数，<code>VIEW.VERIFY</code> 可见）。</li><li><b>补水是解引用，不是查询。</b> <code>VIA &lt;template&gt;</code>（例如 <code>user:{key.1}</code>；<code>{key}</code> = 成员键，<code>{key.N}</code> = 它按 <code>:</code> 切分后的第 N 段）把每个成员映射到一个目标键；<code>VIEW.QUERY … FIELDS f…</code> 在目标所属的 shard 上、通过第二次内部扇出读取那些字段。目标不存在 = 行字段为 nil。目标不接受任何谓词。</li></ol>
+<h2 id="模式与成本模型">模式与成本模型</h2>
+<ul><li><b>Virtual</b>——查询时求值：按顺序流式扫过 ORDER 索引，对每个候选探测树的成员关系。一页 LIMIT-100 的代价是 O(limit / 选择率) 次探测，而不是 O(成员数)。永远新鲜；零写入成本。它的失效形态是“高选择性的树压在一个庞大的 ORDER 域上”（每吐出一行要探测很多候选）——那种形状想要的是物化。</li><li><b>Materialized</b>——逐 shard 的有序成员集，在维护索引的同一个写钩子里更新（每次写入、每个被引用的索引探测一次，所有视图共享）。<code>TOPK k</code> 把它约束在 <code>k + k/4</code>，从视图最差的那一端淘汰；一个比当前最差者还差的非成员，只用一次比较就被拒绝——<a href="https://github.com/goliajp/kevy/blob/develop/bench/viewgate.sh"><code>bench/viewgate.sh</code></a> 实测的稳态写入税，在 3 个索引 + 4 个 top-K 视图下约为 2%（gate 钳在 &lt; 15%）。收缩到 <code>k</code> 以下会安排一次逐 shard 的本地重建（下一个 tick）。不设上限的 materialized 视图，每笔受影响的写入付 O(log 成员数)。</li><li><code>VIEW.CREATE</code> 刚做完时，预期会有一个短暂的稳定窗口（新建的 top-K 集合在淘汰阈值稳定下来之前，第一波写入会跑得慢一些）。</li></ul>
+<p>怎么选：高写入域上的一个看板 top-100 想要 <code>MODE materialized TOPK 100</code>（内存有界，非争夺者被 O(1) 拒绝）；一个中等规模域上偶尔翻页的报表想要 <code>MODE virtual</code>（零写入税，永远新鲜）。<code>VIEW.EXPLAIN</code> 给出逐叶子的基数——那就是这次判断所需的选择率数据。</p>
+<h3 id="diff声明式的反连接">DIFF：声明式的反连接</h3>
+<p><code>DIFF</code> 是左减右，且<b>不满足交换律</b>——它是引擎唯一不会重排其子节点的树节点。经典用法是“合格但未被排除”：</p>
+<figure class="code"><pre><code>VIEW.CREATE assignable
+    QUERY ( DIFF j_pri RANGE 0 100 j_state EQ quarantined )
+    ORDER BY j_pri DESC
+    MODE virtual</code></pre></figure>
+<p>——工作优先级带里的每一个 job，减去被隔离的那些。</p>
+<p>用 SQL 的话说，这就是 <code>WHERE … AND NOT EXISTS (…)</code> 那个形状——只不过做成了一条声明过的访问路径，而不是每次查询时的子查询（<a href="../rds-workloads/">rds-workloads.md</a> 映射了这套词汇的其余部分）。</p>
+<h2 id="一致性">一致性</h2>
+<p>与索引同一个信封（<a href="../indexes/">indexes.md</a>）：与触发它的那次写入在所属 shard 内原子，跨 shard 归并时没有全局快照（SCAN 类）。</p>
+<ul><li>只要有任何一个被引用的索引还在 backfill，查询就回答 <code>-INDEXBUILDING</code>（一个不完整的索引会悄悄谎报成员关系）——重试纪律与索引查询相同。</li><li><code>VIEW.REBUILD</code> 保持答案不变（e2e 套件里有断言）；<code>VIEW.VERIFY</code> 让漂移可被证伪（成员数 / 字节数 / 排序排除数）。</li><li>视图目录持久化在数据目录的 sidecar 文件里；materialized 的<b>内容</b>是派生状态——重启后重建，从不进快照。</li></ul>
+<h2 id="embedded">Embedded</h2>
+<p>类型化 API，在 <code>index</code> 这个 cargo feature 后面（默认开启）——树作为一个值传进去，进程内没有文本语法，而且每个调用都返回 <code>KevyResult</code>（4.0 的单一错误货币）：</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{
+    Config, IndexKind, IndexValType, IndexValue, Store, ViewLeaf,
+    ViewMode, ViewTree,
+};
+
+fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
+    let store = Store::open(Config::default())?;
+    store.idx_create(b"j_pri", b"job:", b"pri", IndexValType::I64,
+                     IndexKind::Range)?;
+    store.idx_create(b"j_state", b"job:", b"state", IndexValType::Str,
+                     IndexKind::Range)?;
+
+    let tree = ViewTree::And(
+        Box::new(ViewTree::Leaf(ViewLeaf {
+            index: b"j_pri".to_vec(),
+            min: IndexValue::I64(0),
+            max: IndexValue::I64(100),
+        })),
+        Box::new(ViewTree::Leaf(ViewLeaf {
+            index: b"j_state".to_vec(),
+            min: IndexValue::Str(b"ready".to_vec()),
+            max: IndexValue::Str(b"ready".to_vec()),   // EQ = same min/max
+        })),
+    );
+    store.view_create(b"ready_jobs", tree, b"j_pri", /*desc*/ true,
+                      ViewMode::Materialized { top_k: 100 })?;
+
+    store.hset(b"job:1", &amp;[
+        (b"pri".as_slice(), b"10".as_slice()),
+        (b"state".as_slice(), b"ready".as_slice()),
+    ])?;
+
+    // One page: (Vec&lt;(key, order_value)&gt;, Option&lt;resume_cursor&gt;).
+    let (rows, _next) = store.view_query(b"ready_jobs", None, 10)?;
+    for (key, val) in &amp;rows {
+        println!("{} {val:?}", String::from_utf8_lossy(key));
+    }
+    Ok(())
+}</code></pre></figure>
+<ul><li><code>view_create(name, tree, order_by, desc, mode)</code> 同步构建；每一个被引用的索引（叶子 + ORDER BY）都必须已经声明过（否则是 <code>KevyError::InvalidInput</code>）。</li><li><code>view_query(name, after, limit)</code> 分页给出 <code>(key, order_value)</code> 行；返回的游标以排他方式续读（DESC 视图从大的那一端开始翻）。<code>view_count</code> / <code>view_list</code> / <code>view_drop</code> 补齐整个接口面。</li><li>没有 <code>VIA</code> / <code>FIELDS</code>——进程内的调用方自己解引用，用 <code>hget</code> 直接读字段。</li></ul>
+<h2 id="性能">性能</h2>
+<p>实测信封——钳制住在 <a href="https://github.com/goliajp/kevy/blob/develop/bench/viewgate.sh"><code>bench/viewgate.sh</code></a> 里，对着一台真服务器在 100 万行上跑：</p>
+<ul><li>Virtual <code>VIEW.QUERY</code> p99 &lt; 3ms（两组件的树）。</li><li>Materialized <code>VIEW.QUERY</code> p99 &lt; 2ms（这是索引读那条线——一页 materialized 就是一次有序集合读）。</li><li>3 个索引 + 4 个 materialized top-K 视图下的写入税，相比只有索引的同一负载 &lt; 15%（稳态实测约 2%）。</li><li>逐成员的内存落在下面那条公式的 ±20% 之内。</li></ul>
+<p>逐成员内存 ≈ <code>order_value_width + key_len + 48</code> 字节，由 <code>VIEW.VERIFY</code> 实时报告。</p>
+<h2 id="另见">另见</h2>
+<ul><li><a href="../indexes/">indexes.md</a>——视图所组合的那些索引（声明、backfill，以及视图继承下来的一致性信封）。</li><li><a href="../rds-workloads/">rds-workloads.md</a>——视图在 SQL 到 kevy 映射里所处的位置。</li><li><a href="../commands/">verb-reference.md</a>——每一种 <code>VIEW.*</code> 形态的生成式语法参考。</li><li><a href="../cookbook/">cookbook.md</a>——放在上下文里的视图菜谱。</li></ul></main>
+  <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#快速上手服务器">快速上手（服务器）</a></li><li class="l2"><a href="#三条结构规则">三条结构规则</a></li><li class="l2"><a href="#模式与成本模型">模式与成本模型</a></li><li class="l3"><a href="#diff声明式的反连接">DIFF：声明式的反连接</a></li><li class="l2"><a href="#一致性">一致性</a></li><li class="l2"><a href="#embedded">Embedded</a></li><li class="l2"><a href="#性能">性能</a></li><li class="l2"><a href="#另见">另见</a></li></ul></aside>
+</div>
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

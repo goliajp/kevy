@@ -77,6 +77,14 @@ returns `KevyResult<T>` (`Result<T, KevyError>`) instead of
 `io::Result<T>`. The type lives in `kevy-store` and is re-exported
 by both crates:
 
+**One deliberate exception.** The change feed keeps its own error type:
+`changes_since` and `changes_tail` return `Result<_, FeedError>`, and there is
+no `From<FeedError> for KevyError`. `FeedError::Resync` and `FeedError::Future`
+are not failures — they are stream control signals telling the reader where it
+is relative to the log, and folding them into a general-purpose error enum would
+invite callers to `?` past the one thing they must handle. See
+[CDC feeds](cdc.md).
+
 ```rust
 pub enum KevyError {
     Store(StoreError),      // structured engine errors, no longer

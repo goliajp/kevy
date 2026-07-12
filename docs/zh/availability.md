@@ -64,7 +64,7 @@ REPL.WAIT gen offset [gen offset ...] [TIMEOUT milliseconds]
 
 先写主节点，再在主节点上执行 `REPL.TOKEN`：它按 shard 返回一对对 `(generation, offset)`，即实时 feed 的尾部位置，天然覆盖你刚才那笔写入。把整个 token 带到你准备读取的副本上执行 `REPL.WAIT`：它会阻塞到每个 shard 都**应用**到至少那个位置，然后回答 `+OK`，这条连接上的下一次读就能看到你的写入。`TIMEOUT` 默认 1000 ms；`0` 和更大的值都封顶在 60 s。
 
-`generation` 这一半是防误用的保险：它标识一段从未断裂的 offset 历史（CDC feed 用的也是同一个 generation——见 [`docs/cdc.md`](../cdc.md)）。切主、`FLUSHALL`、崩溃重启都会递增它，所以拿旧主节点 offset 空间铸出的 token，永远不会在新主节点上误判为已满足——generation 不匹配时，`REPL.WAIT` 立即回答 `-MISDIRECTED writer is <primary>`，客户端退回去读主节点。超时也给同样的回复：两种情况的恢复路径只有一条，就是“去读写者”。
+`generation` 这一半是防误用的保险：它标识一段从未断裂的 offset 历史（CDC feed 用的也是同一个 generation——见 [`docs/cdc.md`](cdc.md)）。切主、`FLUSHALL`、崩溃重启都会递增它，所以拿旧主节点 offset 空间铸出的 token，永远不会在新主节点上误判为已满足——generation 不匹配时，`REPL.WAIT` 立即回答 `-MISDIRECTED writer is <primary>`，客户端退回去读主节点。超时也给同样的回复：两种情况的恢复路径只有一条，就是“去读写者”。
 
 在主节点上，`REPL.WAIT` 立即返回 `+OK`（你已经在跟写者对话），所以路由客户端无条件发这个调用是安全的。
 
@@ -212,7 +212,7 @@ FAILOVER ABORT
 ## 参见
 
 - [`docs/replication.md`](replication.md)——流机制、快照发送、以 embed 作副本、backlog 容量估算。
-- [`docs/cdc.md`](../cdc.md)——`REPL.TOKEN` 共用的 `(generation, offset)` 游标模型。
+- [`docs/cdc.md`](cdc.md)——`REPL.TOKEN` 共用的 `(generation, offset)` 游标模型。
 - [`docs/error-replies.md`](error-replies.md)——完整错误目录。
 - [`docs/persistence.md`](persistence.md)——故事里耐久性的那一半（`WAIT` 不是）。
 - [`crates/kevy-elect/docs/protocol.md`](https://github.com/goliajp/kevy/blob/develop/crates/kevy-elect/docs/protocol.md)——选举线协议。

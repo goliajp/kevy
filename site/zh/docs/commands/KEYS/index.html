@@ -56,7 +56,7 @@
     <section>
       <h2>复杂度</h2>
       <p class="cx-body"><code>O(N)，N 为整个键空间的 key 数 —— 每个 shard 都要遍历自己的整张表，再对每个 key 做一次 O(P*K) 的 glob 匹配。</code></p>
-      <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
+      <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的，不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误，但不是。</p>
     </section>
 
     <section>

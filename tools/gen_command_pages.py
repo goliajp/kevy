@@ -97,16 +97,16 @@ LANGS = {
         "kevy_only": "kevy 独有",
         "count": "{n} 个命令",
         "index_lede": (
-            "服务器会应答的每一个动词、直接来自它自己的注册表 —— "
+            "服务器会应答的每一个动词，直接来自它自己的注册表 —— "
             "也就是 <code>COMMAND DOCS</code> 读的同一张表。有两栏是 Redis 的参考文档里没有的："
-            "这个命令在<b>本引擎里的真实代价</b>、以及它<b>与 Redis 的差异</b>。"
+            "这个命令在<b>本引擎里的真实代价</b>，以及它<b>与 Redis 的差异</b>。"
         ),
         "compat_note_full": "行为与 Redis 一致。",
-        "compat_note_only": "kevy 有这个动词、Redis 没有。",
+        "compat_note_only": "kevy 有这个动词，Redis 没有。",
         "back": "← 返回全部命令",
         "engine_note": (
-            "复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。"
-            "有几条确实不一样 —— 它们看起来像笔误、但不是。"
+            "复杂度与兼容性是从 kevy 的实现里读出来的，不是抄 Redis 的文档。"
+            "有几条确实不一样 —— 它们看起来像笔误，但不是。"
         ),
     },
     "ja": {

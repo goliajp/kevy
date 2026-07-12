@@ -47,8 +47,8 @@ dependencies:0</code></pre>""",
         },
         {
             "t": "cards",
-            "h2": "One engine, five places to put it",
-            "intro": "Pick by where the data has to live — the API is the same in all five.",
+            "h2": "One engine, wherever the data has to live",
+            "intro": "Pick by where the data has to be. The API is the same in every one of them.",
             "items": [
                 {
                     "kicker": "Server",
@@ -82,7 +82,7 @@ dependencies:0</code></pre>""",
                     "kicker": "Bare metal",
                     "title": "No allocator, no OS",
                     "body": "kevy-store is no_std. It runs on a Cortex-M with a fixed arena and no heap — CI proves it every push.",
-                    "go": "See the MCU probe",
+                    "go": "Run it on a microcontroller",
                     "href": "docs/iot/",
                 },
                 {
@@ -225,8 +225,10 @@ PAGES["benchmarks"] = {
             "t": "table",
             "h2": "Four-way, one box",
             "intro": (
-                "16 cores, loopback, 50 connections, 3-byte values. Median of five "
-                "runs; the ± is the sample standard deviation across them."
+                "16 cores, loopback, 50 connections, 3-byte values. Median of five runs. "
+                "The spread across those runs is in "
+                "<a href=\"https://github.com/goliajp/kevy/blob/main/bench/PERF-LEDGER.md\">the ledger</a> — "
+                "it is a few percent on every row, and it does not change an ordering."
             ),
             "head": ["", "kevy 4.0", "valkey 9.1", "Redis 8", "Dragonfly", "vs valkey", "vs Redis 8", "vs Dragonfly"],
             "rows": [

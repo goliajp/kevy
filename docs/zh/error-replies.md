@@ -103,7 +103,7 @@ kevy 有意不在协议层做认证与授权；下面这些 Redis 兼容前缀�
 | `ERR no such index '<name>' (IDX.LIST enumerates them)` | 查询点名了不存在的索引 | `IDX.LIST` / `VIEW.LIST` 枚举目录 |
 | `INDEXBUILDING index '<name>' is still building (poll IDX.LIST until state=ready)` | 查询撞上了建索引后的回填窗口 | 轮询 `IDX.LIST` 的 `state`；见 [docs/migration.md](migration.md) |
 | `INDEXOVERBUDGET index '<name>' build exceeded MAXMEM (raise maxmemory or DROP the index)` | 构建触到内存预算 | 调高 `maxmemory` 或 `IDX.DROP` |
-| `FEEDRESYNC <gen> <tail>` | FEED 游标不再可服务（generation 递增或超出 backlog） | 从新快照 + 返回的游标重启消费；见 [docs/cdc.md](../cdc.md) |
+| `FEEDRESYNC <gen> <tail>` | FEED 游标不再可服务（generation 递增或超出 backlog） | 从新快照 + 返回的游标重启消费；见 [docs/cdc.md](cdc.md) |
 
 ## 更新这份目录
 

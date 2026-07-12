@@ -192,7 +192,7 @@ flag 串遵循 Redis 约定——先频道、后事件类：
 redis-cli -p 6379 PSUBSCRIBE '__keyevent@0__:*'
 ```
 
-通知投递与本页其他一切共用同一条 at-most-once pub/sub 总线：发布瞬间没有订阅者，事件就没了。绝不能漏变更的消费者应该上 CDC feed（[`docs/cdc.md`](../cdc.md)）——它有游标、可重放；keyspace 通知是「叫醒」信号，不是账本。
+通知投递与本页其他一切共用同一条 at-most-once pub/sub 总线：发布瞬间没有订阅者，事件就没了。绝不能漏变更的消费者应该上 CDC feed（[`docs/cdc.md`](cdc.md)）——它有游标、可重放；keyspace 通知是「叫醒」信号，不是账本。
 
 ## URL 后端表
 

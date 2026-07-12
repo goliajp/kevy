@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>全文検索（KIND text） — kevy</title>
+<meta name="description" content="textはインデックスエンジンの3番目のkindです。ほかのインデックスと同じように宣言すれば、フィールドの生バイト列がトークン化され、シャードごとの転置セグメントになります。セグメントはすべての書き込みと同期して維持されます（ドリフトゼロ。range/uniqueと同じ、構成上の派生物という規律です）。別立ての検索サーバーも、取り込みパイプラインも、アナラ">
+<link rel="stylesheet" href="../../../assets/kevy.css">
+<link rel="stylesheet" href="../../../assets/docs.css">
+<script>
+  try {
+    var t = localStorage.getItem("kevy-theme");
+    if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+  } catch (e) {}
+</script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="mast">
+  <div class="mast-in">
+    <a class="brand" href="../../../ja/">kevy<span class="v">4.0</span></a>
+    <nav class="nav">
+      <a href="../../../ja/docs/" aria-current="page">ドキュメント</a>
+      <a href="../../../ja/docs/commands/">コマンド</a>
+      <a href="../../../ja/benchmarks/">ベンチマーク</a>
+      <a href="../../../ja/play/">Playground</a>
+    </nav>
+    <div class="mast-right">
+      <nav class="lang" aria-label="Language"><a href="../../../docs/text-search/">EN</a><a href="../../../zh/docs/text-search/">中文</a><a href="../../../ja/docs/text-search/" aria-current="page">日本語</a></nav>
+      <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
+        <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        <svg class="moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.2 8.2 0 0 1 9.5 4a8.3 8.3 0 1 0 10.5 10.5z"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="doc-shell">
+  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/" aria-current="page">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">184 コマンド全て</a></li></ul></aside>
+  <main id="main" class="doc"><div class="doc-head"><h1>全文検索（<code>KIND text</code>）</h1></div>
+<p>textはインデックスエンジンの3番目のkindです。ほかのインデックスと同じように宣言すれば、フィールドの生バイト列がトークン化され、シャードごとの転置セグメントになります。セグメントはすべての書き込みと同期して維持されます（ドリフトゼロ。<code>range</code>/<code>unique</code>と同じ、構成上の派生物という規律です）。別立ての検索サーバーも、取り込みパイプラインも、アナライザの設定もありません。1つのverbがインデックスを宣言し、以降のすべての書き込みがそれを正確に保ちます。</p>
+<figure class="code"><pre><code>IDX.CREATE posts ON PREFIX post: FIELD body TYPE str KIND text
+IDX.QUERY posts MATCH "rust 全文检索" LIMIT 10 [FIELDS title body]</code></pre></figure>
+<h2 id="クイックスタートサーバー">クイックスタート（サーバー）</h2>
+<p>行は宣言したプレフィックス配下のハッシュキーであり、インデックス対象の値は宣言された1つのフィールドです。<code>range</code>インデックスとまったく同じです（<a href="../indexes/">indexes.md</a>）。</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 IDX.CREATE posts ON PREFIX post: FIELD body TYPE str KIND text
+kevy-cli -p 6004 HSET post:1 title "intro" body "kevy is a pure-Rust key-value store"
+kevy-cli -p 6004 HSET post:2 title "search" body "dictionary-free CJK full-text search"
+kevy-cli -p 6004 IDX.QUERY posts MATCH "full-text rust" LIMIT 10</code></pre></figure>
+<p>応答は<code>key, score</code>の組のフラットな配列で、良いものが先に来ます。<code>FIELDS</code>を足すと、各ヒットを所有するシャード上で、指定したハッシュフィールドを同じ呼び出しの中でhydrateします（2回目の往復はありません）。</p>
+<figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 IDX.QUERY posts MATCH "search" LIMIT 10 FIELDS title</code></pre></figure>
+<p>補助verbは、ほかのkindと同じようにtextインデックスにも効きます。</p>
+<ul><li><code>IDX.EXPLAIN posts MATCH "full-text rust"</code> — 実行を伴わないパースです。kind、ビルド状態、推定行数、そしてプランの行を返します。</li><li><code>IDX.VERIFY posts</code> / <code>IDX.LIST</code> — entries / bytes / postings / トークン統計を、ライブで。</li><li><code>IDX.DROP posts</code> — 宣言を落とします（カタログの変更であり、サイドカーに永続化されます）。</li></ul>
+<p><code>MATCH</code>は<code>LIMIT</code>（1000以下）と<code>FIELDS</code>を受け取ります。<code>CURSOR</code>形式は存在しません（理由は「マッチとランキング」を参照）。</p>
+<h2 id="クイックスタート組み込み">クイックスタート（組み込み）</h2>
+<p>プロセス内でも同じエンジンです。textのkindは<code>text</code> cargoフィーチャの背後にあります（デフォルトで有効。コンパイルから外すと、<code>IndexKind::Text</code>での<code>idx_create</code>は<code>KevyError::Unsupported</code>を返します）。</p>
+<figure class="code"><pre><code class="lang-rust">use kevy_embedded::{Config, IndexKind, IndexValType, Store};
+
+fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
+    let store = Store::open(Config::default())?;
+
+    store.idx_create(b"posts", b"post:", b"body", IndexValType::Str,
+                     IndexKind::Text)?;   // builds synchronously
+    store.hset(b"post:1", &amp;[
+        (b"title".as_slice(), b"intro".as_slice()),
+        (b"body".as_slice(),
+         b"kevy is a pure-Rust key-value store".as_slice()),
+    ])?;
+
+    // BM25-ranked hits, best first: Vec&lt;(key, score)&gt;.
+    let hits = store.idx_match(b"posts", b"rust store", 10)?;
+    for (key, score) in &amp;hits {
+        println!("{} {score}", String::from_utf8_lossy(key));
+    }
+    Ok(())
+}</code></pre></figure>
+<p><code>idx_match</code>は<code>KevyResult&lt;Vec&lt;(Vec&lt;u8&gt;, f64)&gt;&gt;</code>を返します。インデックスが見つからなければ<code>KevyError::NotFound</code>がそれを名指しします。組み込みに<code>FIELDS</code>のhydrationはありません——プロセス内にいるのですから、フィールドは<code>hget</code>で読んでください。組み込みのビルドは同期的です。<code>idx_create</code>はインデックスが提供可能になった時点で返ります（ポーリングすべき<code>-INDEXBUILDING</code>の局面はありません）。</p>
+<h2 id="トークン化辞書不要">トークン化（辞書不要）</h2>
+<ul><li>ラテン文字・英数字の連なり → 小文字化された語トークン（長さ2以上）。</li><li>CJK（統合漢字、かな、ハングル）→ <b>隣接するbigram</b>。「全文检索」は全文/文检/检索としてインデックスされるので、任意の2文字部分列のクエリが辞書なしでマッチします。孤立したCJK文字は、それ自身を出力します。</li><li>トークンがスクリプト境界をまたぐことはありません。クエリも同じ規則でトークン化されます。</li></ul>
+<p>bigram方式がCJK対応のすべてです。出荷すべき辞書もなければ、古くなる辞書もありません。混在スクリプトの文書（<code>"Rust 入门"</code>）は、両方の半分をそれぞれの規則でインデックスします。代償は、1文字のCJKクエリにおける再現率のノイズです（それらは孤立文字として出力されたものにしかマッチしません）。2文字以上でクエリしてください。</p>
+<h2 id="マッチとランキング">マッチとランキング</h2>
+<p><code>MATCH</code>は<b>クエリトークン上のORセマンティクスで、BM25でランクづけ</b>します（k1=1.2、b=0.75、非負idfのバリアント）。より多くの、そしてより稀なクエリ語にマッチする文書ほど上位に来ます。語の頻度は飽和し、長い文書は正規化により下げられます。</p>
+<p>宣言された近似が2つあります。</p>
+<ul><li><b>スコアはシャードローカルです。</b> df/avgdlは各シャード自身のコーパスから来ます（グローバルな統計を取ろうとすれば、シャードをまたぐ書き込み調整が必要になります）。ハッシュシャーディングされたキーであれば統計はシャード間で収束し、マージされたランキングは安定します。異なるシャードから来たスコアどうしは比較可能ですが、単一コーパスで走らせた結果と同一ではありません。</li><li><b>カーソルはありません。</b> BM25の深いページングはアンチパターンです（ページNを出すには、その上にあるものすべてを再スコアリングする必要があります）。<code>LIMIT</code>は1000で頭打ちです。</li></ul>
+<p>フレーズクエリなし、ブール構文なし、ハイライトなし——それらはクエリエンジンへの坂道です（意図的にスコープ外です）。それらが必要なら、あなたが説明しているのは検索エンジンです。kevyのtext kindは「宣言されたフィールドに対するランクづけされた参照」で止まります。</p>
+<h2 id="ハイブリッド検索bm25-knn">ハイブリッド検索（BM25 + KNN）</h2>
+<p>同じコーパス上のtextインデックスとANNインデックスは、reciprocal-rank fusionによってサーバーサイドで融合します。</p>
+<figure class="code"><pre><code>IDX.QUERY HYBRID posts MATCH "rust storage" embs KNN &lt;f32-le-blob&gt;
+    [LIMIT n] [RRFK k] [EF ef] [FIELDS f…]</code></pre></figure>
+<p>各ヒットの融合スコアは、2つの結果リストにわたる<code>Σ 1/(k + rank_i)</code>です（<code>RRFK</code>のデフォルトは60——標準的な融合定数です。生のスコアではなく順位を使うので、BM25と距離を互いに較正する必要がありません）。KNN側は<a href="../vector-search/">vector-search.md</a>を参照してください。HYBRIDはサーバーのverbです。組み込みの呼び出し側は<code>idx_match</code>と<code>idx_knn</code>を走らせ、プロセス内で融合してください。</p>
+<h2 id="ライフサイクルと整合性">ライフサイクルと整合性</h2>
+<p>どのインデックスkindとも同じ包絡線です（<a href="../indexes/">indexes.md</a>）。</p>
+<ul><li>書き込みとそのセグメント更新は、<b>所有シャードの内側でアトミック</b>です（単一のリアクタースレッド / シャードロック）。更新は、古い文書のトークンをちょうど過不足なく取り除き、新しいものを挿入します。そのために文書は元のテキストを保持しており、tombstoneのドリフトは起きません。</li><li>宣言されたフィールドが欠けている行は、単にトークンを寄与しません。<code>TYPE str</code>のtextフィールドに、型強制の失敗という概念はありません。</li><li>シャードをまたぐクエリは、グローバルスナップショットなしに、シャードごとのtop-Kをマージします（SCANクラス。<code>DBSIZE</code>と同じです）。</li><li><b>サーバーのバックフィルは非同期です。</b> 稼働中のキー空間に対して<code>IDX.CREATE</code>した直後、あるいは再起動の直後は、再構築が完了するまでクエリは<code>-INDEXBUILDING</code>を返します（データの可用性がインデックスのビルドを待つことは決してありません。ポーリングするかリトライしてください——<a href="../indexes/">indexes.md</a>を参照）。組み込みのビルドは同期的です。</li><li>転置セグメントは<b>派生状態</b>です——スナップショットにもAOFにも決して記録されず、再起動後にデータから再構築されます。</li><li><code>IDX.CREATE</code>時の<code>MAXMEM</code>はセグメントのメモリに上限を設けます。予算を超えるビルドは、際限なく成長するのではなく、宣言的に失敗します（クエリに<code>-INDEXOVERBUDGET</code>が返ります）。</li></ul>
+<h2 id="パフォーマンス">パフォーマンス</h2>
+<p>top-Kの評価にはMaxScoreによる枝刈りを使います（稀な語から先に処理し、より一般的なリストは、新しい文書をtop Kへ押し上げられなくなった時点から候補ごとのプローブに切り替わります）。postingsはdoc-idの転置リストで、2通りにインパクト順序づけされています。tfのバケットは降順、各バケットの内側では疎なlog2 dlバンドが昇順です。単一語のクエリ（枝刈りの相手となる2本目のリストがない場合）は、下端がk番目の床を超えられない最初のバンドでちょうど停止します。おかげで最も一般的な語ですら、20万文書でおよそ0.1msで答えます（postingsの全走査だった頃はおよそ6msでした）。postingsが1件だけのトークン（Zipfのロングテール）はインラインにとどまり、ヒープを消費しません。</p>
+<p>計測された包絡線です（領収書はbenchツリーにあります）。</p>
+<ul><li><a href="https://github.com/goliajp/kevy/blob/main/bench/textgate.sh"><code>bench/textgate.sh</code></a>は、実サーバーに対して、100万件の混在スクリプト文書（各およそ100バイト）で<code>MATCH</code> p95 &lt; 20msをゲートし、あわせてメモリの式を実RSSの増分に対してゲートします。CIに隣接するリリースチェックの中で走ります——これらの数値は願望ではなく、clampです。</li><li><a href="https://github.com/goliajp/kevy/blob/main/bench/PERF-LEDGER.md"><code>bench/PERF-LEDGER.md</code></a>が比較対決を記録しています。同一コーパス上のRediSearchの<code>FT.SEARCH</code>に対して、BM25 top-10でqps +21%、p95は互角です。</li></ul>
+<p>書き込み側は標準的なインデックス税です。マッチするインデックス1つにつき、書き込みごとにハッシュフィールド読み出し1回とセグメント更新1回。空のカタログのコストは、書き込みごとに1回の分岐しない分岐です。</p>
+<h2 id="サイジング">サイジング</h2>
+<p><code>bytes ≈ Σ_token (token_len + 48) + postings × 64 + Σ_doc (key_len + text_len + 72)</code>（文書は元のテキストを保持するので、更新は自分のトークンだけをちょうど取り除けます）。<code>IDX.VERIFY</code> / <code>IDX.LIST</code>がライブで報告します（textのkindではentries/bytes/postings/tokens）。<code>bench/textgate.sh</code>がこの式を実RSSの増分に対してゲートします。</p>
+<p>再構築は標準のバックフィルの骨組みに乗ります（サーバーではtick増分、組み込みでは同期）。</p>
+<h2 id="関連項目">関連項目</h2>
+<ul><li><a href="../indexes/">indexes.md</a> — このkindが差し込まれるインデックスエンジン（宣言の文法、カーソルの契約、整合性の包絡線）。</li><li><a href="../vector-search/">vector-search.md</a> — ANNのkindと、<code>HYBRID</code>のもう半分。</li><li><a href="../commands/">verb-reference.md</a> — すべての<code>IDX.*</code>形式の、生成された文法。</li><li><a href="../cookbook/">cookbook.md</a> — 文脈の中の全文検索レシピ。</li></ul></main>
+  <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#クイックスタートサーバー">クイックスタート（サーバー）</a></li><li class="l2"><a href="#クイックスタート組み込み">クイックスタート（組み込み）</a></li><li class="l2"><a href="#トークン化辞書不要">トークン化（辞書不要）</a></li><li class="l2"><a href="#マッチとランキング">マッチとランキング</a></li><li class="l2"><a href="#ハイブリッド検索bm25-knn">ハイブリッド検索（BM25 + KNN）</a></li><li class="l2"><a href="#ライフサイクルと整合性">ライフサイクルと整合性</a></li><li class="l2"><a href="#パフォーマンス">パフォーマンス</a></li><li class="l2"><a href="#サイジング">サイジング</a></li><li class="l2"><a href="#関連項目">関連項目</a></li></ul></aside>
+</div>
+
+<script>
+  document.getElementById("theme").addEventListener("click", function () {
+    var r = document.documentElement;
+    r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem("kevy-theme", r.dataset.theme); } catch (e) {}
+  });
+</script>
+</body>
+</html>

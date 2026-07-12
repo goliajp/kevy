@@ -56,7 +56,7 @@
     <section>
       <h2>复杂度</h2>
       <p class="cx-body"><code>值不超过 64 B 时是均摊 O(1)；一旦超过这个阈值，每次调用都是 O(N) —— Arc 里的负载会被整块拷出来重新装箱。所以靠反复 APPEND 拼一个大字符串，总代价是 O(N^2)。</code></p>
-      <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
+      <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的，不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误，但不是。</p>
     </section>
 
     <section>

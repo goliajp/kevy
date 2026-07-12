@@ -56,7 +56,7 @@
     <section>
       <h2>复杂度</h2>
       <p class="cx-body"><code>O(编译 + 脚本自身的开销)。整段脚本在 KEYS[1] 所在的 shard 上作为一个原子单元执行，执行期间独占那个 shard。失控保护用的是指令预算（lua time_limit_ms x 40000 条指令），不是墙钟时间。</code></p>
-      <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的、不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误、但不是。</p>
+      <p class="engine-note">复杂度与兼容性是从 kevy 的实现里读出来的，不是抄 Redis 的文档。有几条确实不一样 —— 它们看起来像笔误，但不是。</p>
     </section>
 
     <section>

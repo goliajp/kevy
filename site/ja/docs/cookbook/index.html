@@ -36,20 +36,20 @@
 </header>
 
 <div class="doc-shell">
-  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/" aria-current="page">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">184 コマンド全て</a></li></ul></aside>
+  <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/" aria-current="page">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">184 コマンド全て</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>RDS→kevyモデリング・クックブック</h1></div>
 <p>リレーショナルなデータモデルをkevyへ移すためのレシピ集です。以下のレシピはすべて出荷済みのプリミティブだけを使います——ロードマップ上の機能も「近日公開」もありません。各レシピは、置き換える対象のRDS概念と、それを担うkevyのパターンを名指しで示します。</p>
 <p>すべてのレシピに共通する設計姿勢は、<b>スキーマではなくアクセスパスをモデリングする</b>ことです。RDSではその決定をクエリプランナーに先送りできますが、kevyはあなた自身に宣言させます——その見返りが、サービング時のマイクロ秒単位のページ応答です（実測値は<code>bench/VALIDATION-LEDGER.md</code>にあります）。</p>
 <p>各コマンドブロックは、まっさらなローカルkevy（<code>kevy --port 6004</code>。レシピ11〜14、16、20はさらに<code>kevy.toml</code>に<code>[feed] enabled = true</code>が必要です——docs/cdc.md参照）に対してそのまま実行できます。<code>bench/cookbook_smoke.sh</code>が下記のすべての<code>kevy-cli</code>行を使い捨てサーバーに対して実行するので、ブロックの内容は常に正直に保たれます。</p>
 <h2 id="1-テーブルと行">1. テーブルと行</h2>
-<p><b>SQL相当：</b><code>CREATE TABLE</code> + <code>SELECT col FROM t WHERE id = ?</code>——<a href="../../../docs/rds-workloads/#tables-rows-columns">マトリクス：テーブル・行・カラム</a>。</p>
+<p><b>SQL相当：</b><code>CREATE TABLE</code> + <code>SELECT col FROM t WHERE id = ?</code>——<a href="../rds-workloads/#tables-rows-columns">マトリクス：テーブル・行・カラム</a>。</p>
 <p>行は、型を表すプレフィックスの下のハッシュです。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET user:42 name ada email ada@example.com age 36
 kevy-cli -p 6004 HGET user:42 name
 kevy-cli -p 6004 HGET user:42 phone    # NULL = absent field: already answers (nil)</code></pre></figure>
 <ul><li>テーブル→キープレフィックス（<code>user:</code>）。カラム→ハッシュフィールド。主キー→キーそのもの。</li><li><b>NULL＝フィールドの不在。</b>番兵文字列を格納してはいけません。存在しないフィールドへの<code>HGET</code>はすでにnilを返しますし、インデックス仕様はフィールドの欠けた行を「除外された行」として扱います（<code>IDX.VERIFY</code>のカウントで確認できます）。</li><li>カラムの型はあなたの管轄です。kevyが格納するのはバイト列です。型が意味を持つ場所——インデックス作成時（<code>TYPE i64|f64|str|vector</code>）——で宣言してください。型強制の失敗はカウントされ、黙ってインデックスされることはありません。</li></ul>
 <h2 id="2-1対多多対多">2. 1対多、多対多</h2>
-<p><b>SQL相当：</b>外部キーカラム＋中間テーブル。<code>SELECT … FROM orders WHERE user_id = ?</code>——<a href="../../../docs/rds-workloads/#join">マトリクス：JOIN</a>。</p>
+<p><b>SQL相当：</b>外部キーカラム＋中間テーブル。<code>SELECT … FROM orders WHERE user_id = ?</code>——<a href="../rds-workloads/#join">マトリクス：JOIN</a>。</p>
 <p>リンクキーが関係を担います。片側ごとに1つのセットです。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET order:1001 user_id 42 total 1999 status shipped
 kevy-cli -p 6004 HSET order:1002 user_id 42 total 550 status pending
@@ -61,13 +61,13 @@ kevy-cli -p 6004 SADD order:1001:tags urgent</code></pre></figure>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 IDX.CREATE order_user ON PREFIX order: FIELD user_id TYPE i64 KIND range
 kevy-cli -p 6004 IDX.QUERY order_user EQ 42 FIELDS total status</code></pre></figure>
 <h2 id="3-シーケンス">3. シーケンス</h2>
-<p><b>SQL相当：</b><code>AUTO_INCREMENT</code> / <code>CREATE SEQUENCE</code> + <code>nextval()</code>——<a href="../../../docs/rds-workloads/#primary-key-unique-auto_increment">マトリクス：主キー・UNIQUE・AUTO_INCREMENT</a>。</p>
+<p><b>SQL相当：</b><code>AUTO_INCREMENT</code> / <code>CREATE SEQUENCE</code> + <code>nextval()</code>——<a href="../rds-workloads/#primary-key-unique-auto_increment">マトリクス：主キー・UNIQUE・AUTO_INCREMENT</a>。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 INCR seq:order          # one id
 kevy-cli -p 6004 INCRBY seq:order 100    # block allocation: hand out 100 ids
                                          # from app memory, refill when dry</code></pre></figure>
 <p>ブロック割り当てが高スループット形です。クラッシュ時に欠番が出るのは、PostgreSQLのシーケンスと同じ契約です。</p>
 <h2 id="4-楽観ロック行バージョン">4. 楽観ロック（行バージョン）</h2>
-<p><b>SQL相当：</b><code>UPDATE t SET …, version = v+1 WHERE id = ? AND version = v</code>（バージョンカラムCAS）——<a href="../../../docs/rds-workloads/#transactions">マトリクス：トランザクション</a>。</p>
+<p><b>SQL相当：</b><code>UPDATE t SET …, version = v+1 WHERE id = ? AND version = v</code>（バージョンカラムCAS）——<a href="../rds-workloads/#transactions">マトリクス：トランザクション</a>。</p>
 <p>サーバー側はWATCH/MULTI——CASループです。トランザクションはコネクションスコープなので、1つのREPLセッション内で実行します（ここではヒアドキュメントで流し込みます）。</p>
 <figure class="code"><pre><code class="lang-bash">kevy-cli -p 6004 HSET user:42 balance 100 version 7
 kevy-cli -p 6004 &lt;&lt;'TXN'
@@ -80,7 +80,7 @@ TXN</code></pre></figure>
 <p><code>WATCH</code>の後に誰かが<code>user:42</code>に触れていた場合、<code>EXEC</code>はnilを返します——レースに負けたということなので、読み直してリトライしてください。</p>
 <p>組み込み側では、読んで・判断して・書くの一連を1つの<code>atomic()</code>ブロック内で実行します——シャードロックのおかげで、リトライループなしに分岐がレースフリーになります。</p>
 <h2 id="5-check制約と複数キー不変条件">5. CHECK制約と複数キー不変条件</h2>
-<p><b>SQL相当：</b><code>CHECK (balance &gt;= 0)</code>＋トリガー維持の監査行——<a href="../../../docs/rds-workloads/#constraints-and-triggers">マトリクス：制約とトリガー</a>。</p>
+<p><b>SQL相当：</b><code>CHECK (balance &gt;= 0)</code>＋トリガー維持の監査行——<a href="../rds-workloads/#constraints-and-triggers">マトリクス：制約とトリガー</a>。</p>
 <p>RDSは<code>CHECK (balance &gt;= 0)</code>をエンジン内で実行します。kevyでの置き換えは<b>アトミックブロック内の読み取り</b>です。不変条件の評価はアプリが行い、その判断と書き込みコミットが一体であることをエンジンが保証します。</p>
 <figure class="code"><pre><code class="lang-rust">// embedded — debit that must not overdraw, plus an audit row:
 store.atomic(b"acct:7", |ctx| {
@@ -92,7 +92,7 @@ store.atomic(b"acct:7", |ctx| {
 })</code></pre></figure>
 <p>シャードをまたぐ不変条件には<code>atomic_all_shards</code>（決定的ロック順序、文書化されたデッドロック免除）があります。使いどころは控えめに——これは直列化可能トランザクションという名のハンマーであり、大半の不変条件は設計上1つのキープレフィックスの下に収まるものです。</p>
 <h2 id="6-冪等性キー">6. 冪等性キー</h2>
-<p><b>SQL相当：</b><code>UNIQUE INDEX</code> + <code>INSERT … ON CONFLICT DO NOTHING</code>——<a href="../../../docs/rds-workloads/#primary-key-unique-auto_increment">マトリクス：主キー・UNIQUE・AUTO_INCREMENT</a>。</p>
+<p><b>SQL相当：</b><code>UNIQUE INDEX</code> + <code>INSERT … ON CONFLICT DO NOTHING</code>——<a href="../rds-workloads/#primary-key-unique-auto_increment">マトリクス：主キー・UNIQUE・AUTO_INCREMENT</a>。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET req:9001 idem_key pay-2026-07-04-a77 amount 1999
 kevy-cli -p 6004 IDX.CREATE req_idem ON PREFIX req: FIELD idem_key TYPE str KIND unique
 kevy-cli -p 6004 IDX.QUERY req_idem EQ pay-2026-07-04-a77   # duplicates are visible as multi-hit reads
@@ -100,7 +100,7 @@ kevy-cli -p 6004 IDX.VERIFY req_idem                        # ...and counted her
 kevy-cli -p 6004 SET idem:pay-2026-07-04-a77 1 NX PX 86400000</code></pre></figure>
 <p>行を書いてからクエリします——重複は*可視*です（uniqueは書き込みを拒否する代わりにVERIFYで重複を数える、宣言的なフェンスであって書き込みゲートではありません）。ハードなゲートが必要なら、処理の前に<code>SET … NX PX</code>形を使います。NXがアトミックな占有宣言で、TTLが保持ウィンドウです。</p>
 <h2 id="7-ソフトデリート">7. ソフトデリート</h2>
-<p><b>SQL相当：</b><code>deleted</code>フラグカラム＋部分インデックス／ビュー<code>WHERE deleted = 0</code>——<a href="../../../docs/rds-workloads/#view">マトリクス：VIEW</a>。</p>
+<p><b>SQL相当：</b><code>deleted</code>フラグカラム＋部分インデックス／ビュー<code>WHERE deleted = 0</code>——<a href="../rds-workloads/#view">マトリクス：VIEW</a>。</p>
 <p>消さずにフラグを立てます。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET user:42 deleted 0 age 36
 kevy-cli -p 6004 HSET user:43 deleted 1 age 51
@@ -111,7 +111,7 @@ kevy-cli -p 6004 IDX.QUERY user_live EQ 0 LIMIT 100    # live rows only</code></
 kevy-cli -p 6004 VIEW.CREATE live_users QUERY '(' AND user_live EQ 0 user_age RANGE 18 200 ')' ORDER BY user_age
 kevy-cli -p 6004 VIEW.QUERY live_users LIMIT 10</code></pre></figure>
 <h2 id="8-複合順序付けorder-by-a-b">8. 複合順序付け（ORDER BY a, b）</h2>
-<p><b>SQL相当：</b>複合インデックスでの<code>ORDER BY a, b</code>——<a href="../../../docs/rds-workloads/#order-by--limit--offset">マトリクス：ORDER BY / LIMIT / OFFSET</a>。</p>
+<p><b>SQL相当：</b>複合インデックスでの<code>ORDER BY a, b</code>——<a href="../rds-workloads/#order-by--limit--offset">マトリクス：ORDER BY / LIMIT / OFFSET</a>。</p>
 <p>複合キーを書き込み時に1つのインデックス対象フィールドへエンコードします。有界な整数<code>b</code>なら<code>score = a * 1_000_000 + b</code>、辞書順の複合ならゼロ埋め文字列フィールドです——インデックスは1本、ORDER BYも1つ。書き込みフックが他のフィールドと同様に維持します。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET evt:1 ord '2026-07-04|000042'
 kevy-cli -p 6004 HSET evt:2 ord '2026-07-04|000007'
@@ -119,14 +119,14 @@ kevy-cli -p 6004 HSET evt:3 ord '2026-07-05|000001'
 kevy-cli -p 6004 IDX.CREATE evt_ord ON PREFIX evt: FIELD ord TYPE str KIND range
 kevy-cli -p 6004 IDX.QUERY evt_ord RANGE '2026-07-04|000000' '2026-07-04|999999' LIMIT 100</code></pre></figure>
 <h2 id="9-jsonb">9. JSONB</h2>
-<p><b>SQL相当：</b>生成カラムインデックス付きのJSON/JSONBカラム——<a href="../../../docs/rds-workloads/#type-system">マトリクス：型システム</a>。</p>
+<p><b>SQL相当：</b>生成カラムインデックス付きのJSON/JSONBカラム——<a href="../rds-workloads/#type-system">マトリクス：型システム</a>。</p>
 <p>ハッシュフィールドへ平坦化します。<code>profile.city</code>→フィールド<code>profile.city</code>。フィールド単位の読み書き、フィールドTTL（HEXPIRE）、インデックス可能性はそのまま残ります——JSONBが与えてくれたもののうちJSONパスクエリだけが<b>恒久的に対象外</b>です（クエリエンジンへの坂道。docs/designing-on-kevy.mdのREFUSEDテーブル参照）。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET user:7 profile.city tokyo profile.plan pro
 kevy-cli -p 6004 HGET user:7 profile.city
 kevy-cli -p 6004 HEXPIRE user:7 3600 FIELDS 1 profile.plan   # per-field TTL survives the flattening</code></pre></figure>
 <p>誰もインデックスしない深いネストのブロブは、シリアライズ済みの1フィールドのままで構いません。パスが意味を持った瞬間に、フィールドへ昇格させてください。</p>
 <h2 id="10-カスケード削除外部キー">10. カスケード削除／外部キー</h2>
-<p><b>SQL相当：</b><code>FOREIGN KEY … ON DELETE CASCADE</code>——<a href="../../../docs/rds-workloads/#constraints-and-triggers">マトリクス：制約とトリガー</a>。</p>
+<p><b>SQL相当：</b><code>FOREIGN KEY … ON DELETE CASCADE</code>——<a href="../rds-workloads/#constraints-and-triggers">マトリクス：制約とトリガー</a>。</p>
 <p>カスケードはアプリのパターンであって、エンジンの魔法では決してありません。</p>
 <ul><li>同期・小さな影響範囲：1つのアトミックブロック内で削除（<code>ctx.del(row)</code>、<code>ctx.srem(parent_link, id)</code>）。</li><li>一括・プレフィックス形：<code>delete-prefix</code>——レート制限つき、再開可能。</li><li>非同期：CDCコンシューマ（<code>PREFIX</code>付き<code>FEED.READ</code>）が親の削除に反応して子を掃除——コミット後・疎結合・リプレイ可能な、トリガーの置き換えです。</li></ul>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET order:1001 user_id 42
@@ -134,7 +134,7 @@ kevy-cli -p 6004 RPUSH order:1001:items sku-7 sku-9
 kevy-cli -p 6004 SADD order:1001:tags urgent
 kevy-cli delete-prefix -p 6004 --rate 5000 order:1001:   # children gone, parent row stays</code></pre></figure>
 <h2 id="11-不要になるアウトボックス">11. 不要になるアウトボックス</h2>
-<p><b>SQL相当：</b>トランザクショナル・アウトボックステーブル＋リレーワーカー——<a href="../../../docs/rds-workloads/#cdc">マトリクス：CDC</a>。</p>
+<p><b>SQL相当：</b>トランザクショナル・アウトボックステーブル＋リレーワーカー——<a href="../rds-workloads/#cdc">マトリクス：CDC</a>。</p>
 <p>トランザクショナル・アウトボックスというパターンは、RDSのコミットとメッセージバスへのpublishをアトミックにできないから存在します。kevyでは<b>フィードがアウトボックス</b>です。コミットされた各書き込みは、すでに<code>(generation, offset)</code>カーソル位置の変更フレームであり、at-least-once配送・プレフィックスフィルタ可能です（docs/cdc.md）。<code>FEED.READ</code>を消費してください。二本目のジャーナルを組んではいけません。</p>
 <figure class="code"><pre><code class="lang-console"># needs [feed] enabled = true in kevy.toml (docs/cdc.md)
 kevy-cli -p 6004 HSET order:9001 status paid
@@ -142,7 +142,7 @@ kevy-cli -p 6004 FEED.SHARDS
 kevy-cli -p 6004 FEED.TAIL 0                             # a fresh consumer's starting cursor
 kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 10 PREFIX order:  # gen 1 = a fresh data dir's first generation</code></pre></figure>
 <h2 id="12-監査履歴">12. 監査履歴</h2>
-<p><b>SQL相当：</b>トリガー維持の監査／履歴テーブル（またはbinlog考古学）——<a href="../../../docs/rds-workloads/#cdc">マトリクス：CDC</a>。</p>
+<p><b>SQL相当：</b>トリガー維持の監査／履歴テーブル（またはbinlog考古学）——<a href="../rds-workloads/#cdc">マトリクス：CDC</a>。</p>
 <p>CDCの保持期間こそが監査ログです。フレームはコミット順に、適用された効果のargvを運びます。コンプライアンス上負っているウィンドウに合わせてフィードのバックログをサイズし、カーソルコンシューマでコールドストレージへエクスポートします。特定時点の再構築には、スナップショットをリストアして<code>(gen, offset)</code>リカバリポイントまでリプレイします（docs/persistence.md）。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET acct:7 balance 100
 kevy-cli -p 6004 HSET acct:7 balance 90
@@ -155,14 +155,14 @@ kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 10 PREFIX user:   # the mirror consumer's
 kevy-cli diff 127.0.0.1:6004 127.0.0.1:6004 user:        # digests match: safe form of the check
 kevy-cli diff old-rds-mirror.internal:6379 127.0.0.1:6004 user:   # needs-external</code></pre></figure>
 <h2 id="14-分析エクスポート">14. 分析エクスポート</h2>
-<p><b>SQL相当：</b>ウェアハウスへ流すETLジョブ／binlogタップ——<a href="../../../docs/rds-workloads/#cdc">マトリクス：CDC</a>。</p>
+<p><b>SQL相当：</b>ウェアハウスへ流すETLジョブ／binlogタップ——<a href="../rds-workloads/#cdc">マトリクス：CDC</a>。</p>
 <p>サービングと分析はエンジンを共有しません。エクスポートのパターンは次の通りです。</p>
 <ul><li><code>export</code>——論理エクスポート。再開可能で、RESPが通じる場所ならどこへでもロードできます。</li><li>CDC→ウェアハウス：カーソルコンシューマがOLAPストアへinsertをストリーミング。まさにCDC-to-Kafkaの形です。</li><li>読み取り専用リスナー（<code>docs/embedded-listener.md</code>）：組み込みアプリからのアドホックな取り出しに。</li></ul>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET order:1001 user_id 42 total 1999
 kevy-cli export -p 6004 --prefix order: /tmp/orders.resp
 kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX order:   # the CDC-to-warehouse read loop</code></pre></figure>
 <h2 id="15-ロード順序インデックス後回しの規則">15. ロード順序（インデックス後回しの規則）</h2>
-<p><b>SQL相当：</b><code>LOAD DATA</code>が先、<code>CREATE INDEX</code>が後(バルクロードの規律)——<a href="../../../docs/rds-workloads/#secondary-index-ddl">マトリクス：セカンダリインデックスDDL</a>。</p>
+<p><b>SQL相当：</b><code>LOAD DATA</code>が先、<code>CREATE INDEX</code>が後(バルクロードの規律)——<a href="../rds-workloads/#secondary-index-ddl">マトリクス：セカンダリインデックスDDL</a>。</p>
 <p>バルクロードが<b>先</b>、インデックス／ビューの宣言は<b>後</b>です。バックフィルは既存の行から100万行あたり約7秒で構築します——インポートする行ごとに書き込みフックのコストを払うより桁違いに安上がりです（docs/migration.md）。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET item:1 price 10
 kevy-cli -p 6004 HSET item:2 price 25
@@ -174,7 +174,7 @@ kevy-cli -p 6004 IDX.QUERY item_price RANGE 0 100 LIMIT 10</code></pre></figure>
 <hr>
 <p>続く3つのレシピはワークロードを入れ替えます。置き換える対象はRDSではなく、AIエージェントのメモリスタックです。新しいものは何も要りません——セッション状態も、エピソード記憶も、RAG検索も、キープレフィックスを着替えただけの同じアクセスパスパターンです。</p>
 <h2 id="16-ttl付きセッションコンテキスト">16. TTL付きセッションコンテキスト</h2>
-<p><b>SQL相当：</b>セッションテーブル＋期限切れ掃除のcronジョブ——<a href="../../../docs/rds-workloads/#sizing-and-operational-deltas">マトリクス：運用上の差分</a>。</p>
+<p><b>SQL相当：</b>セッションテーブル＋期限切れ掃除のcronジョブ——<a href="../rds-workloads/#sizing-and-operational-deltas">マトリクス：運用上の差分</a>。</p>
 <p>エージェントの作業コンテキストは、リース付きの1行です。コンパクション済みの会話はハッシュに住み、<code>EXPIRE</code>がアイドル退去ポリシーです（ターンごとに更新——スライディングウィンドウ）。そして「ターン7の時点でエージェントは何を知っていたか」と聞かれたときにリプレイする監査証跡が、フィードです。</p>
 <figure class="code"><pre><code class="lang-console"># needs [feed] enabled = true in kevy.toml (docs/cdc.md)
 kevy-cli -p 6004 HSET session:a7 user 42 turns 6 messages 'wants refund for order 1001; tone calm' last_tool order_lookup
@@ -185,7 +185,7 @@ kevy-cli -p 6004 FEED.TAIL 0                                  # audit cursor: wh
 kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX session:    # gen 1 = a fresh data dir's first generation</code></pre></figure>
 <p><code>messages</code>フィールドの中身は、あなたのコンパクションステップが生成する要約なら何でも構いません。書き換えは<code>HSET</code>1回で、しかもすべての改訂はすでにコミット順の変更フレームになっています——多くのエージェントフレームワークが後付けする「会話履歴」テーブルは、レシピ12の監査ログとしてタダで手に入ります。</p>
 <h2 id="17-エピソード記憶時間意味">17. エピソード記憶（時間×意味）</h2>
-<p><b>SQL相当：</b><code>WHERE ts BETWEEN …</code>＋pgvectorの<code>ORDER BY embedding &lt;=&gt; ? LIMIT k</code>——<a href="../../../docs/rds-workloads/#select">マトリクス：SELECT</a>。</p>
+<p><b>SQL相当：</b><code>WHERE ts BETWEEN …</code>＋pgvectorの<code>ORDER BY embedding &lt;=&gt; ? LIMIT k</code>——<a href="../rds-workloads/#select">マトリクス：SELECT</a>。</p>
 <p>エピソード記憶は、同じ行たちに対して2つの質問に答えます。<i>最近何が起きたか</i>（時間）と、<i>これに似ているものは何か</i>（意味）です。プレフィックスは1つ、質問ごとにインデックスを1本——<code>DIM 8</code>はデモを読みやすくするためで、実際の埋め込みは768次元以上をf32-LEブロブとして送ります。下の<code>csv:</code>デバッグ形式は、ベクトルを受け付けるすべての場所で使えます（格納フィールドもクエリベクトルも同じパーサーを通ります——docs/vector-search.md）。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET mem:1 ts 1783200000 kind obs what 'user prefers dark roast' v csv:0.9,0.1,0,0,0,0,0,0
 kevy-cli -p 6004 HSET mem:2 ts 1783203600 kind obs what 'user asked about decaf' v csv:0.8,0.3,0.1,0,0,0,0,0
@@ -198,7 +198,7 @@ kevy-cli -p 6004 IDX.QUERY mem_ann KNN csv:0.85,0.2,0,0,0,0,0,0 LIMIT 2 FIELDS w
 kevy-cli -p 6004 IDX.QUERY COMPOSE AND mem_ts RANGE 1783203000 1783210000 mem_kind EQ reflection LIMIT 10 FIELDS what</code></pre></figure>
 <p><code>COMPOSE AND</code>はスカラーの脚（<code>RANGE</code>/<code>EQ</code>）を連言します——ここでは「この時間窓の中で、かつreflectionであるもの」。*窓の中で似ているもの*については、意図的にKNNの脚がありません（グラフ探索の内側でのフィルタリングはクエリエンジンへの坂道であり、REFUSEDです）。<code>LIMIT</code>に余裕を持たせてKNNを実行し、上のように<code>FIELDS</code>で<code>ts</code>をハイドレートして、窓の外のヒットをクライアント側で捨ててください。</p>
 <h2 id="18-ハイブリッド検索のragチャンク">18. ハイブリッド検索のRAGチャンク</h2>
-<p><b>SQL相当：</b>tsvector全文検索＋pgvector KNNのアプリ側融合——<a href="../../../docs/rds-workloads/#select">マトリクス：SELECT</a>。</p>
+<p><b>SQL相当：</b>tsvector全文検索＋pgvector KNNのアプリ側融合——<a href="../rds-workloads/#select">マトリクス：SELECT</a>。</p>
 <p>チャンクは2つの検索面——テキストとその埋め込み——を併せ持つ行なので、1回の書き込みが両方のインデックスを維持します。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET chunk:1 doc kevy-guide seq 1 body 'rows are hashes under a typed key prefix' v csv:1,0,0,0,0,0,0,0
 kevy-cli -p 6004 HSET chunk:2 doc kevy-guide seq 2 body 'indexes are declared once and maintained by the write hook' v csv:0,1,0,0,0,0,0,0
@@ -209,9 +209,9 @@ kevy-cli -p 6004 IDX.QUERY HYBRID chunk_text MATCH 'typed key prefix' chunk_ann 
 kevy-cli -p 6004 IDX.QUERY HYBRID chunk_text MATCH 'change frame' chunk_ann KNN csv:0,0.1,0.9,0,0,0,0,0 LIMIT 2 RRFK 20 FIELDS body</code></pre></figure>
 <p><code>HYBRID</code>は両方の脚をサーバー側で実行し、<b>Reciprocal Rank Fusion</b>で融合します。各キーはBM25リストとKNNリストにわたって<code>Σ 1/(k + rank)</code>のスコアを得ます——ランクのみを使うので、性質の異なる2つのスコア尺度を正規化する必要がなく、*両方*の脚で上位に来るチャンクが片方だけで首位のチャンクに勝ちます。<code>RRFK</code>がそのk（デフォルト60）です。各脚のトップヒットを信頼していて、そこでの一致を支配的にしたいなら下げ、両リストのより深いところまで見た合意へ融合を平らにしたいなら上げてください。</p>
 <hr>
-<p>最後の2つのレシピは、ラックの外へ出ます。エッジノードの上のkevy——同じサーバーバイナリ、あるいは<code>core</code>ティアまで絞り込んで655 KBにした<code>kevy-embedded</code>（<a href="../../../docs/iot/">docs/iot.md</a>）——は同じverbを話すので、パターンはデータセンターからセンサーゲートウェイまでそのまま持ち運べます。</p>
+<p>最後の2つのレシピは、ラックの外へ出ます。エッジノードの上のkevy——同じサーバーバイナリ、あるいは<code>core</code>ティアまで絞り込んで655 KBにした<code>kevy-embedded</code>（<a href="../iot/">docs/iot.md</a>）——は同じverbを話すので、パターンはデータセンターからセンサーゲートウェイまでそのまま持ち運べます。</p>
 <h2 id="19-センサーキャッシュ最新値生存リース">19. センサーキャッシュ（最新値＋生存リース）</h2>
-<p><b>SQL相当：</b><code>readings_latest</code>アップサートテーブル＋鮮度チェックのcron——<a href="../../../docs/rds-workloads/#sizing-and-operational-deltas">マトリクス：運用上の差分</a>。</p>
+<p><b>SQL相当：</b><code>readings_latest</code>アップサートテーブル＋鮮度チェックのcron——<a href="../rds-workloads/#sizing-and-operational-deltas">マトリクス：運用上の差分</a>。</p>
 <p>各センサーの現在値は1つの行で、TTLが生存契約です。報告が止まったセンサーはキャッシュから期限切れで消えます——<b>不在こそがオフラインの信号</b>であり、書くべき掃除ジョブはありません。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET sensor:t1 val 21.5 unit C ts 1783200000
 kevy-cli -p 6004 EXPIRE sensor:t1 90
@@ -226,7 +226,7 @@ kevy-cli -p 6004 XLEN sensor:t1:log
 kevy-cli -p 6004 XRANGE sensor:t1:log - + COUNT 10</code></pre></figure>
 <p>組み込み形：ゲートウェイプロセスの中から型付きAPIで同じverbを使います——<code>store.hset(…)</code>／<code>store.expire(…)</code>／<code>store.xadd(…)</code>——ソケットは一切ありません。このレシピが使うものはすべて<code>core</code>フィーチャーティアに収まっています（docs/iot.md）。</p>
 <h2 id="20-エッジ集計書き込み時group-byアップリンク">20. エッジ集計（書き込み時GROUP BY＋アップリンク）</h2>
-<p><b>SQL相当：</b>ダッシュボード更新のたびに再実行される<code>SELECT zone, COUNT(*), SUM(w) … GROUP BY zone</code>——<a href="../../../docs/rds-workloads/#group-by-and-aggregates">マトリクス：GROUP BYと集計</a>。</p>
+<p><b>SQL相当：</b>ダッシュボード更新のたびに再実行される<code>SELECT zone, COUNT(*), SUM(w) … GROUP BY zone</code>——<a href="../rds-workloads/#group-by-and-aggregates">マトリクス：GROUP BYと集計</a>。</p>
 <p>エッジノードはローカルで要約し、要約だけを送ります——生の読み取り値はアップリンクに流すには多すぎます。集計を一度宣言すれば、それは書き込みパスの中で維持されます。つまり「集計ジョブ」はただ存在しなくなるのです。</p>
 <figure class="code"><pre><code class="lang-console">kevy-cli -p 6004 HSET reading:1 zone floor1 w 120
 kevy-cli -p 6004 HSET reading:2 zone floor1 w 180
@@ -240,8 +240,8 @@ kevy-cli -p 6004 FEED.TAIL 0
 kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX reading:   # the uplink loop</code></pre></figure>
 <p>レシピ19の<code>MAXLEN</code>キャップとTTLを組み合わせてください。生の読み取り値はノード上で有界に保たれ、集計行は小さいまま、フィードカーソルは再起動を生き延びます——kevyそれ自体の他に可動部品ゼロの、エッジの物語の全部です。</p>
 <h2 id="レシピ索引">レシピ索引</h2>
-<p>レシピ↔それが置き換えるSQL構文↔意味論と限界を明記する<a href="../../../docs/rds-workloads/">rds-workloads.md</a>のマトリクス行、の対応表です。</p>
-<div class="tbl"><table><thead><tr><th>#</th><th>レシピ</th><th>SQL構文</th><th>マトリクス行</th></tr></thead><tbody><tr><td>1</td><td>テーブルと行</td><td><code>CREATE TABLE</code>、ポイント<code>SELECT</code></td><td><a href="../../../docs/rds-workloads/#tables-rows-columns">テーブル・行・カラム</a></td></tr><tr><td>2</td><td>1対多、多対多</td><td>FKカラム、中間テーブル、<code>WHERE fk = ?</code></td><td><a href="../../../docs/rds-workloads/#join">JOIN</a></td></tr><tr><td>3</td><td>シーケンス</td><td><code>AUTO_INCREMENT</code> / <code>nextval()</code></td><td><a href="../../../docs/rds-workloads/#primary-key-unique-auto_increment">PK・UNIQUE・AUTO_INCREMENT</a></td></tr><tr><td>4</td><td>楽観ロック</td><td>バージョンカラムCASの<code>UPDATE</code></td><td><a href="../../../docs/rds-workloads/#transactions">トランザクション</a></td></tr><tr><td>5</td><td>CHECK制約</td><td><code>CHECK (…)</code>＋監査トリガー</td><td><a href="../../../docs/rds-workloads/#constraints-and-triggers">制約とトリガー</a></td></tr><tr><td>6</td><td>冪等性キー</td><td><code>UNIQUE INDEX</code> + <code>ON CONFLICT DO NOTHING</code></td><td><a href="../../../docs/rds-workloads/#primary-key-unique-auto_increment">PK・UNIQUE・AUTO_INCREMENT</a></td></tr><tr><td>7</td><td>ソフトデリート</td><td>フラグカラム＋フィルタ付きビュー</td><td><a href="../../../docs/rds-workloads/#view">VIEW</a></td></tr><tr><td>8</td><td>複合順序付け</td><td><code>ORDER BY a, b</code></td><td><a href="../../../docs/rds-workloads/#order-by--limit--offset">ORDER BY / LIMIT / OFFSET</a></td></tr><tr><td>9</td><td>JSONB</td><td>JSONカラム＋生成カラムインデックス</td><td><a href="../../../docs/rds-workloads/#type-system">型システム</a></td></tr><tr><td>10</td><td>カスケード削除／FK</td><td><code>ON DELETE CASCADE</code></td><td><a href="../../../docs/rds-workloads/#constraints-and-triggers">制約とトリガー</a></td></tr><tr><td>11</td><td>不要になるアウトボックス</td><td>トランザクショナル・アウトボックステーブル</td><td><a href="../../../docs/rds-workloads/#cdc">CDC</a></td></tr><tr><td>12</td><td>監査履歴</td><td>監査テーブル／binlog考古学</td><td><a href="../../../docs/rds-workloads/#cdc">CDC</a></td></tr><tr><td>13</td><td>ロールバックウィンドウ</td><td>カットオーバー時の逆レプリケーション</td><td><a href="../migration/">移行プレイブック</a></td></tr><tr><td>14</td><td>分析エクスポート</td><td>ウェアハウスへのETL／binlogタップ</td><td><a href="../../../docs/rds-workloads/#cdc">CDC</a></td></tr><tr><td>15</td><td>ロード順序</td><td>バルク<code>LOAD DATA</code>、インデックスは後</td><td><a href="../../../docs/rds-workloads/#secondary-index-ddl">セカンダリインデックスDDL</a></td></tr><tr><td>16</td><td>TTL付きセッションコンテキスト</td><td>セッションテーブル＋期限切れcron</td><td><a href="../../../docs/rds-workloads/#sizing-and-operational-deltas">運用上の差分</a></td></tr><tr><td>17</td><td>エピソード記憶</td><td>時間<code>BETWEEN</code>＋pgvector KNN</td><td><a href="../../../docs/rds-workloads/#select">SELECT</a></td></tr><tr><td>18</td><td>RAGハイブリッド検索</td><td>tsvector＋pgvector、融合</td><td><a href="../../../docs/rds-workloads/#select">SELECT</a></td></tr><tr><td>19</td><td>センサーキャッシュ</td><td>アップサートテーブル＋鮮度cron</td><td><a href="../../../docs/rds-workloads/#sizing-and-operational-deltas">運用上の差分</a></td></tr><tr><td>20</td><td>エッジ集計</td><td>更新ごとの<code>GROUP BY</code>＋ETLアップリンク</td><td><a href="../../../docs/rds-workloads/#group-by-and-aggregates">GROUP BYと集計</a></td></tr></tbody></table></div></main>
+<p>レシピ↔それが置き換えるSQL構文↔意味論と限界を明記する<a href="../rds-workloads/">rds-workloads.md</a>のマトリクス行、の対応表です。</p>
+<div class="tbl"><table><thead><tr><th>#</th><th>レシピ</th><th>SQL構文</th><th>マトリクス行</th></tr></thead><tbody><tr><td>1</td><td>テーブルと行</td><td><code>CREATE TABLE</code>、ポイント<code>SELECT</code></td><td><a href="../rds-workloads/#tables-rows-columns">テーブル・行・カラム</a></td></tr><tr><td>2</td><td>1対多、多対多</td><td>FKカラム、中間テーブル、<code>WHERE fk = ?</code></td><td><a href="../rds-workloads/#join">JOIN</a></td></tr><tr><td>3</td><td>シーケンス</td><td><code>AUTO_INCREMENT</code> / <code>nextval()</code></td><td><a href="../rds-workloads/#primary-key-unique-auto_increment">PK・UNIQUE・AUTO_INCREMENT</a></td></tr><tr><td>4</td><td>楽観ロック</td><td>バージョンカラムCASの<code>UPDATE</code></td><td><a href="../rds-workloads/#transactions">トランザクション</a></td></tr><tr><td>5</td><td>CHECK制約</td><td><code>CHECK (…)</code>＋監査トリガー</td><td><a href="../rds-workloads/#constraints-and-triggers">制約とトリガー</a></td></tr><tr><td>6</td><td>冪等性キー</td><td><code>UNIQUE INDEX</code> + <code>ON CONFLICT DO NOTHING</code></td><td><a href="../rds-workloads/#primary-key-unique-auto_increment">PK・UNIQUE・AUTO_INCREMENT</a></td></tr><tr><td>7</td><td>ソフトデリート</td><td>フラグカラム＋フィルタ付きビュー</td><td><a href="../rds-workloads/#view">VIEW</a></td></tr><tr><td>8</td><td>複合順序付け</td><td><code>ORDER BY a, b</code></td><td><a href="../rds-workloads/#order-by--limit--offset">ORDER BY / LIMIT / OFFSET</a></td></tr><tr><td>9</td><td>JSONB</td><td>JSONカラム＋生成カラムインデックス</td><td><a href="../rds-workloads/#type-system">型システム</a></td></tr><tr><td>10</td><td>カスケード削除／FK</td><td><code>ON DELETE CASCADE</code></td><td><a href="../rds-workloads/#constraints-and-triggers">制約とトリガー</a></td></tr><tr><td>11</td><td>不要になるアウトボックス</td><td>トランザクショナル・アウトボックステーブル</td><td><a href="../rds-workloads/#cdc">CDC</a></td></tr><tr><td>12</td><td>監査履歴</td><td>監査テーブル／binlog考古学</td><td><a href="../rds-workloads/#cdc">CDC</a></td></tr><tr><td>13</td><td>ロールバックウィンドウ</td><td>カットオーバー時の逆レプリケーション</td><td><a href="../migration/">移行プレイブック</a></td></tr><tr><td>14</td><td>分析エクスポート</td><td>ウェアハウスへのETL／binlogタップ</td><td><a href="../rds-workloads/#cdc">CDC</a></td></tr><tr><td>15</td><td>ロード順序</td><td>バルク<code>LOAD DATA</code>、インデックスは後</td><td><a href="../rds-workloads/#secondary-index-ddl">セカンダリインデックスDDL</a></td></tr><tr><td>16</td><td>TTL付きセッションコンテキスト</td><td>セッションテーブル＋期限切れcron</td><td><a href="../rds-workloads/#sizing-and-operational-deltas">運用上の差分</a></td></tr><tr><td>17</td><td>エピソード記憶</td><td>時間<code>BETWEEN</code>＋pgvector KNN</td><td><a href="../rds-workloads/#select">SELECT</a></td></tr><tr><td>18</td><td>RAGハイブリッド検索</td><td>tsvector＋pgvector、融合</td><td><a href="../rds-workloads/#select">SELECT</a></td></tr><tr><td>19</td><td>センサーキャッシュ</td><td>アップサートテーブル＋鮮度cron</td><td><a href="../rds-workloads/#sizing-and-operational-deltas">運用上の差分</a></td></tr><tr><td>20</td><td>エッジ集計</td><td>更新ごとの<code>GROUP BY</code>＋ETLアップリンク</td><td><a href="../rds-workloads/#group-by-and-aggregates">GROUP BYと集計</a></td></tr></tbody></table></div></main>
   <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#1-テーブルと行">1. テーブルと行</a></li><li class="l2"><a href="#2-1対多多対多">2. 1対多、多対多</a></li><li class="l2"><a href="#3-シーケンス">3. シーケンス</a></li><li class="l2"><a href="#4-楽観ロック行バージョン">4. 楽観ロック（行バージョン）</a></li><li class="l2"><a href="#5-check制約と複数キー不変条件">5. CHECK制約と複数キー不変条件</a></li><li class="l2"><a href="#6-冪等性キー">6. 冪等性キー</a></li><li class="l2"><a href="#7-ソフトデリート">7. ソフトデリート</a></li><li class="l2"><a href="#8-複合順序付けorder-by-a-b">8. 複合順序付け（ORDER BY a, b）</a></li><li class="l2"><a href="#9-jsonb">9. JSONB</a></li><li class="l2"><a href="#10-カスケード削除外部キー">10. カスケード削除／外部キー</a></li><li class="l2"><a href="#11-不要になるアウトボックス">11. 不要になるアウトボックス</a></li><li class="l2"><a href="#12-監査履歴">12. 監査履歴</a></li><li class="l2"><a href="#13-ロールバックウィンドウ逆方向ミラー">13. ロールバックウィンドウ（逆方向ミラー）</a></li><li class="l2"><a href="#14-分析エクスポート">14. 分析エクスポート</a></li><li class="l2"><a href="#15-ロード順序インデックス後回しの規則">15. ロード順序（インデックス後回しの規則）</a></li><li class="l2"><a href="#16-ttl付きセッションコンテキスト">16. TTL付きセッションコンテキスト</a></li><li class="l2"><a href="#17-エピソード記憶時間意味">17. エピソード記憶（時間×意味）</a></li><li class="l2"><a href="#18-ハイブリッド検索のragチャンク">18. ハイブリッド検索のRAGチャンク</a></li><li class="l2"><a href="#19-センサーキャッシュ最新値生存リース">19. センサーキャッシュ（最新値＋生存リース）</a></li><li class="l2"><a href="#20-エッジ集計書き込み時group-byアップリンク">20. エッジ集計（書き込み時GROUP BY＋アップリンク）</a></li><li class="l2"><a href="#レシピ索引">レシピ索引</a></li></ul></aside>
 </div>
 
