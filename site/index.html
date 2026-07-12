@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kevy — a Redis-compatible engine in pure Rust, with zero dependencies</title>
-<meta name="description" content="kevy is a pure-Rust, zero-dependency, Redis-compatible storage engine. It runs as a server (6.39M GET/s, 1.6–3.6× valkey), inside your program down to a bare-metal MCU (392 KB), in the browser (415 KB wasm, 9–190× IndexedDB), and as an agent's memory layer over MCP.">
+<meta name="description" content="kevy is a pure-Rust, zero-dependency, Redis-compatible storage engine. It runs as a server (6.39M GET/s, 1.6–3.6× valkey), inside your program down to a bare-metal MCU (392 KB), in the browser (416 KB wasm, 9–190× IndexedDB), and as an agent's memory layer over MCP.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230A0D10'/%3E%3Ctext x='5' y='24' font-family='ui-monospace,monospace' font-size='21' font-weight='700' fill='%233FC7D4'%3Ek%3C/text%3E%3Crect x='21' y='9' width='5' height='14' fill='%233FC7D4'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="assets/site.css">
 <script>
@@ -89,7 +89,7 @@
         <h2>The browser needs to hold real data</h2>
         <p>localStorage caps out at ~5 MB and blocks the tab. IndexedDB is slow. This is the engine itself, in your tab.</p>
         <div class="ch-figs">
-          <div class="ch-fig"><span>wasm</span><b>415 KB</b></div>
+          <div class="ch-fig"><span>wasm</span><b>416 KB</b></div>
           <div class="ch-fig"><span>vs IndexedDB</span><b>9–190×</b></div>
           <div class="ch-fig"><span>cross-tab p50</span><b>0.1 ms</b></div>
         </div>
@@ -334,7 +334,7 @@
       </div>
       <div class="card">
         <p class="tag">Try it</p>
-        <div class="reading"><span class="v">415</span><span class="u">KB wasm</span></div>
+        <div class="reading"><span class="v">416</span><span class="u">KB wasm</span></div>
         <h3>Running in your own tab</h3>
         <p>The playground writes a key, flushes it, <b>reloads the page</b>, and shows the value coming back from disk — then runs the benchmark above on your machine.</p>
         <p style="margin-top:10px"><a href="demo/playground.html">Open the playground →</a> <span style="color:var(--line-strong)">·</span> <a href="demo/">REPL →</a></p>
