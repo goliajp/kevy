@@ -31,7 +31,11 @@ pub(crate) fn cmd_spop_rand<A: ArgvView + ?Sized>(
     let with_repeats = raw < 0;
     let count = raw.unsigned_abs() as usize;
     let res = if remove {
-        store.spop(&args[1], count)
+        let res = store.spop(&args[1], count);
+        if let Ok(popped) = &res {
+            set_spop_propagation(&args[1], popped);
+        }
+        res
     } else if with_repeats {
         store.srandmember_with_repeats(&args[1], count)
     } else {
@@ -53,6 +57,28 @@ pub(crate) fn cmd_spop_rand<A: ArgvView + ?Sized>(
             }
         }
     }
+}
+
+/// SPOP's random pick must NOT propagate by verb: an AOF replay or a
+/// replica re-running `SPOP key n` draws its own random members and
+/// silently diverges from what this process actually removed. Override
+/// the recorded frame with the effect — `SREM key <popped…>` — exactly
+/// as Redis does (and as `kevy-embedded::Store::spop` already does via
+/// `commit_write`). A pop that removed nothing (missing/empty set)
+/// suppresses the frame entirely: a no-op `SPOP` must never reach the
+/// AOF or a replica. The runtime consumes the override in the same
+/// command's post-write housekeeping (see `kevy_rt::propagation`).
+fn set_spop_propagation(key: &[u8], popped: &[Vec<u8>]) {
+    use kevy_rt::propagation::{Propagate, set_override};
+    if popped.is_empty() {
+        set_override(Propagate::Suppress);
+        return;
+    }
+    let mut frame: Vec<Vec<u8>> = Vec::with_capacity(2 + popped.len());
+    frame.push(b"SREM".to_vec());
+    frame.push(key.to_vec());
+    frame.extend(popped.iter().cloned());
+    set_override(Propagate::Replace(frame));
 }
 
 /// The optional SPOP/SRANDMEMBER count. A NEGATIVE count means

@@ -58,6 +58,31 @@ fn read_only_violation(argv: &[&[u8]], read_only: bool) -> Option<Vec<u8>> {
     None
 }
 
+/// Cross-shard inner-call enforcement. Under `--threads > 1`, EVAL
+/// routes to KEYS[1]'s shard; the inner `redis.call` hits this same
+/// shard's Store. Calling on a key that lives on a different shard
+/// silently mis-routes — matches Redis Cluster's intended-disallowed
+/// behaviour, enforced loudly with CROSSSLOT instead of corrupting
+/// state (the same rule Redis Cluster applies via slot validation).
+fn cross_shard_violation(
+    state: &Arc<RuntimeState>,
+    my_shard: usize,
+    argv: &[&[u8]],
+) -> Option<Vec<u8>> {
+    let cfg = state.config();
+    let nshards = cfg.server.threads;
+    if nshards > 1
+        && let Some(target_key) = argv.get(1)
+    {
+        let target_shard =
+            kevy_rt::shard_of_key(target_key, nshards, cfg.cluster.enabled);
+        if target_shard != my_shard {
+            return Some(b"-CROSSSLOT Lua redis.call target key is on a different shard than the EVAL. Use {hashtag} to colocate keys, or run kevy --threads 1.\r\n".to_vec());
+        }
+    }
+    None
+}
+
 fn lua_redis_call(
     state: &Arc<RuntimeState>,
     my_shard: usize,
@@ -68,24 +93,8 @@ fn lua_redis_call(
     if let Some(err) = read_only_violation(argv, read_only) {
         return err;
     }
-    // Cross-shard inner-call enforcement. Under
-    // `--threads > 1`, EVAL routes to KEYS[1]'s shard;
-    // the inner `redis.call` hits this same
-    // shard's Store. Calling on a key that lives on a different
-    // shard silently mis-routes — matches Redis Cluster's
-    // intended-disallowed behaviour. Return CROSSSLOT loudly
-    // instead of corrupting state. Same rule Redis Cluster
-    // applies via slot validation at EVAL dispatch.
-    let cfg = state.config();
-    let nshards = cfg.server.threads;
-    if nshards > 1
-        && let Some(target_key) = argv.get(1)
-    {
-        let target_shard =
-            kevy_rt::shard_of_key(target_key, nshards, cfg.cluster.enabled);
-        if target_shard != my_shard {
-            return b"-CROSSSLOT Lua redis.call target key is on a different shard than the EVAL. Use {hashtag} to colocate keys, or run kevy --threads 1.\r\n".to_vec();
-        }
+    if let Some(err) = cross_shard_violation(state, my_shard, argv) {
+        return err;
     }
     let mut a = Argv::default();
     for slice in argv {
@@ -102,6 +111,12 @@ fn lua_redis_call(
     shard.set_shard_id(my_shard);
     let ctx = Ctx { state, shard: &shard };
     crate::dispatch::dispatch_into(&ctx, store, &a, &mut out);
+    // The runtime logs/replicates the OUTER EVAL frame (whole-script
+    // propagation); an inner nondeterministic verb (SPOP) must not
+    // leak its effect-frame override into the EVAL's own post-write
+    // housekeeping — that would replace the whole script's frame with
+    // a single SREM. Drop it here, per inner call.
+    kevy_rt::propagation::discard_override();
     bridge_lua_wake_keys(argv, &out);
     out
 }

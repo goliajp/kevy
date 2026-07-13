@@ -65,7 +65,7 @@ fn reshard<C: Commands>(
 ) -> io::Result<()> {
     let mut temp = Store::new();
     let sources = merge_sources(dir, prev.n, &StdLayout, &mut temp, |store, args| {
-        commands.dispatch(store, &args);
+        crate::shard_run::replay_dispatch(commands, store, &args);
     })?;
 
     let mut stores: Vec<Store> = (0..target.n).map(|_| Store::new()).collect();

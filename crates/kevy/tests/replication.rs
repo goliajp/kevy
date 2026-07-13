@@ -1260,6 +1260,149 @@ fn server_as_replica_applies_upstream_writes() {
     replica.shutdown();
 }
 
+/// Read one RESP2 reply off `s`, returning any bulk payloads it
+/// carried: an array of bulks (SMEMBERS / count-form SPOP) yields each
+/// member, a bare bulk yields one, a null bulk / `+OK` / `:n` yields
+/// none. Doubles as a discard-the-reply consumer for the pop storm.
+fn read_resp_bulks(s: &mut std::net::TcpStream) -> Vec<Vec<u8>> {
+    let head = read_line(s);
+    match head[0] {
+        b'+' | b':' => Vec::new(),
+        b'$' => {
+            let n: i64 = std::str::from_utf8(&head[1..head.len() - 2])
+                .unwrap()
+                .parse()
+                .unwrap();
+            if n < 0 {
+                return Vec::new();
+            }
+            let mut payload = vec![0u8; n as usize + 2];
+            s.read_exact(&mut payload).unwrap();
+            payload.truncate(n as usize);
+            vec![payload]
+        }
+        b'*' => {
+            let n: i64 = std::str::from_utf8(&head[1..head.len() - 2])
+                .unwrap()
+                .parse()
+                .unwrap();
+            let mut out = Vec::new();
+            for _ in 0..n.max(0) {
+                out.extend(read_resp_bulks(s));
+            }
+            out
+        }
+        other => panic!(
+            "unexpected RESP tag {other:?} in {:?}",
+            String::from_utf8_lossy(&head)
+        ),
+    }
+}
+
+/// Sorted SMEMBERS of `key` over the wire.
+fn smembers_sorted(s: &mut std::net::TcpStream, key: &[u8]) -> Vec<Vec<u8>> {
+    send_resp(s, &[b"SMEMBERS", key]);
+    let mut m = read_resp_bulks(s);
+    m.sort();
+    m
+}
+
+/// v4 SPOP is genuinely random — so the replication stream must carry
+/// the EFFECT (`SREM key <popped…>`), never the verb: a replica
+/// re-running `SPOP key n` draws its own random members and silently
+/// diverges (the repligate failure shape: replica churning to a
+/// different digest while the primary is stopped). Storm-pop four
+/// 50-member sets on the primary — bare and count forms interleaved,
+/// one set drained to empty for the Suppress path — then compare every
+/// set member-for-member across primary and replica. Red under verb
+/// propagation.
+#[test]
+fn spop_storm_keeps_replica_sets_identical() {
+    let primary = Server::start(1);
+    let mut writer = std::net::TcpStream::connect(("127.0.0.1", primary.port)).unwrap();
+
+    let keys: Vec<Vec<u8>> = (0..4).map(|k| format!("spop-set-{k}").into_bytes()).collect();
+    let all: Vec<Vec<u8>> = (0..50).map(|i| format!("m{i:02}").into_bytes()).collect();
+    for key in &keys {
+        let mut argv: Vec<&[u8]> = vec![b"SADD", key];
+        argv.extend(all.iter().map(Vec::as_slice));
+        send_resp(&mut writer, &argv);
+        assert_eq!(read_line(&mut writer), b":50\r\n");
+    }
+
+    // Replica attaches from offset 0 — it receives the SADDs above and
+    // the whole storm below as live frames.
+    let replica = ReplicaServer::start(primary.replication_base);
+
+    // The storm: 10 rounds × (1 bare pop + 1 two-member pop) per key.
+    for _ in 0..10 {
+        for key in &keys {
+            send_resp(&mut writer, &[b"SPOP", key]);
+            let _ = read_resp_bulks(&mut writer);
+            send_resp(&mut writer, &[b"SPOP", key, b"2"]);
+            let _ = read_resp_bulks(&mut writer);
+        }
+    }
+    // Drain the last set completely, then pop it again while empty —
+    // the empty pop must stream NOTHING (Suppress), not a no-op verb.
+    send_resp(&mut writer, &[b"SPOP", &keys[3], b"100"]);
+    let drained = read_resp_bulks(&mut writer);
+    assert_eq!(drained.len(), 20, "set 3 should have had 20 members left");
+    send_resp(&mut writer, &[b"SPOP", &keys[3]]);
+    assert_eq!(read_line(&mut writer), b"$-1\r\n");
+
+    // Fence: frames apply in order on the single shard, so once this
+    // SET is visible on the replica every prior SREM has landed too.
+    send_resp(&mut writer, &[b"SET", b"spop-fence", b"done"]);
+    assert_eq!(read_line(&mut writer), b"+OK\r\n");
+
+    // Connect to the replica (retry — see server_as_replica test) and
+    // poll the fence key.
+    let mut reader = (0..1500)
+        .find_map(|_| {
+            std::net::TcpStream::connect(("127.0.0.1", replica.port))
+                .ok()
+                .or_else(|| {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    None
+                })
+        })
+        .expect("replica accept loop never became ready within 30s");
+    let mut fenced = false;
+    for _ in 0..500 {
+        send_resp(&mut reader, &[b"GET", b"spop-fence"]);
+        if read_resp_bulks(&mut reader) == vec![b"done".to_vec()] {
+            fenced = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(fenced, "replica never caught up to the post-storm fence");
+
+    // Member-for-member equality on every set. Under verb propagation
+    // the replica drew its own 30 random members per set — the odds of
+    // matching are astronomically against.
+    for (i, key) in keys.iter().enumerate() {
+        let on_primary = smembers_sorted(&mut writer, key);
+        let on_replica = smembers_sorted(&mut reader, key);
+        assert_eq!(
+            on_primary.len(),
+            if i == 3 { 0 } else { 20 },
+            "primary set {i}: unexpected survivor count"
+        );
+        assert_eq!(
+            on_replica, on_primary,
+            "set {i} diverged between primary and replica — SPOP verb replayed?"
+        );
+    }
+
+    drop(reader);
+    drop(writer);
+    // Primary first — see server_as_replica_applies_upstream_writes.
+    primary.shutdown();
+    replica.shutdown();
+}
+
 /// Dynamic REPLICAOF e2e — a server brought up as
 /// standalone (no `[replication]` config) takes a runtime `REPLICAOF
 /// host port` command, starts mirroring an upstream primary's keyspace,

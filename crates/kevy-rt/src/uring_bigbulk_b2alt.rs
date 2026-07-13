@@ -245,6 +245,10 @@ impl<C: Commands> Shard<C> {
             key: &key,
             body: &body,
         };
+        // No propagation-override take here (cf. post_write_housekeeping):
+        // this path records a literal `SET` it built itself — deterministic,
+        // never SPOP — and none can be pending anyway: every other dispatch
+        // consumes its own override before this runs.
         if self.aof.is_some() {
             self.log_write(&view);
         }

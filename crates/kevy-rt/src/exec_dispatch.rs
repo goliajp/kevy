@@ -363,33 +363,50 @@ impl<C: Commands> Shard<C> {
             let key = args[idx as usize].to_vec();
             self.commands.on_write(&mut self.store, &key);
         }
-        // A9: AOF off is the default (--no-aof). cold-tag the AOF-enabled
-        // branch so the predictor learns the off case + LLVM keeps the
-        // log_write call site off the predicted fall-through.
-        if self.aof.is_some() {
-            #[cold]
-            #[inline(never)]
-            fn cold() {}
-            cold();
-            self.log_write(args);
-        }
-        // Replication: when `[replication] role = "primary"`, push the
-        // applied mutation to this shard's backlog so connected replicas
-        // can stream it. Generic over ArgvView so no `Argv` is
-        // materialised on the borrowed fast path. `None` (the default)
-        // short-circuits to one Option-discriminant check.
-        //
-        // The `is_applying_replicated` check suppresses the push when
-        // this dispatch is itself applying a frame pulled from an
-        // upstream primary (server-as-replica path). Defends
-        // against chain replication / infinite re-emit in the brief
-        // window during `REPLICAOF NO ONE` promotion when both an
-        // upstream link and a downstream source can coexist. The
-        // thread-local read is a cheap branch on the cold path here.
-        if let Some(src) = self.replicate.as_mut().map(|f| f.source_mut())
-            && !crate::replication_gate::is_applying_replicated()
-        {
-            src.push_mutation(args);
+        // Propagation override: a verb whose effect is nondeterministic
+        // (SPOP's random pick) replaced its wire frame with the
+        // deterministic effect (`SREM key <popped…>`) or suppressed
+        // recording (a pop off an empty set). ONE take serves both the
+        // AOF append and the replication push, so disk and replicas
+        // always record the very same frame — and the thread-local is
+        // cleared on every write, so an override can never leak into
+        // the next command of a pipelined batch (nor survive the
+        // `is_applying_replicated` apply path: the take below runs
+        // there too, and the frame — if any — goes to the replica's
+        // own AOF while the gated push stays suppressed). Deterministic
+        // writes (the overwhelming default) pay one thread-local take.
+        let prop = crate::propagation::take_override();
+        if matches!(prop, crate::propagation::Propagate::AsIs) {
+            // A9: AOF off is the default (--no-aof). cold-tag the AOF-enabled
+            // branch so the predictor learns the off case + LLVM keeps the
+            // log_write call site off the predicted fall-through.
+            if self.aof.is_some() {
+                #[cold]
+                #[inline(never)]
+                fn cold() {}
+                cold();
+                self.log_write(args);
+            }
+            // Replication: when `[replication] role = "primary"`, push the
+            // applied mutation to this shard's backlog so connected replicas
+            // can stream it. Generic over ArgvView so no `Argv` is
+            // materialised on the borrowed fast path. `None` (the default)
+            // short-circuits to one Option-discriminant check.
+            //
+            // The `is_applying_replicated` check suppresses the push when
+            // this dispatch is itself applying a frame pulled from an
+            // upstream primary (server-as-replica path). Defends
+            // against chain replication / infinite re-emit in the brief
+            // window during `REPLICAOF NO ONE` promotion when both an
+            // upstream link and a downstream source can coexist. The
+            // thread-local read is a cheap branch on the cold path here.
+            if let Some(src) = self.replicate.as_mut().map(|f| f.source_mut())
+                && !crate::replication_gate::is_applying_replicated()
+            {
+                src.push_mutation(args);
+            }
+        } else {
+            self.record_propagation_override(prop);
         }
         self.maybe_notify_dispatch(args);
         // BLOCK wake: if this write targets a key a waiter is parked on,
@@ -408,6 +425,31 @@ impl<C: Commands> Shard<C> {
         let lua_wakes = crate::lua_wake_bridge::drain_lua_wake_buffer();
         for key in lua_wakes {
             self.wake_key(&key);
+        }
+    }
+
+    /// Cold sibling of the AsIs arm in [`Self::post_write_housekeeping`]:
+    /// record a `Replace` effect frame to the AOF + replication backlog
+    /// (same gates as the AsIs path), or record nothing (`Suppress`).
+    /// Out-of-line — only nondeterministic verbs (SPOP) land here.
+    #[cold]
+    #[inline(never)]
+    fn record_propagation_override(&mut self, prop: crate::propagation::Propagate) {
+        let crate::propagation::Propagate::Replace(frame) = prop else {
+            return; // Suppress: nothing recorded, nothing pushed.
+        };
+        let total: usize = frame.iter().map(Vec::len).sum();
+        let mut argv = kevy_resp::Argv::with_capacity(frame.len(), total);
+        for part in &frame {
+            argv.push(part);
+        }
+        if self.aof.is_some() {
+            self.log_write(&argv);
+        }
+        if let Some(src) = self.replicate.as_mut().map(|f| f.source_mut())
+            && !crate::replication_gate::is_applying_replicated()
+        {
+            src.push_mutation(&argv);
         }
     }
 

@@ -41,6 +41,17 @@ change in 4.0 — downgrade to 3.18 is equally a binary swap (unlike
 the 3.x → 2.x direction, which has a format edge; see the 2.x → 3.x
 chapter).
 
+**One AOF caveat: legacy `SPOP` frames.** 4.0 makes SPOP genuinely
+random, and therefore logs (and replicates) its *effect* — `SREM key
+<popped…>`, the members actually removed — instead of the verb. A
+3.x-era AOF that was never rewritten can still carry raw `SPOP`
+frames; replaying one under 4.0 draws a fresh random pick, so the
+surviving set after that first replay can differ from the
+pre-upgrade process's. If your sets see SPOP traffic, run
+`BGREWRITEAOF` once — right before or right after the upgrade — to
+materialize current state; from then on the log carries only
+deterministic frames.
+
 **Config.** Every 3.x config key is accepted and means the same
 thing. Two keys got *stricter or truer* semantics — see "Behavior
 changes" below (`notify_keyspace_events` unknown-flag rejection,
