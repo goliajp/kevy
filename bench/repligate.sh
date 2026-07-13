@@ -18,6 +18,11 @@ cargo build --release -p kevy --bin kevy -p kevy-cli --bin kevy-cli 2>&1 | tail 
 cargo build --release -p kevy-embedded --example primary_writer 2>&1 | tail -1
 KEVY=target/release/kevy
 CLI=target/release/kevy-cli
+# Every CLI call bounded: a server wedged into accept-but-never-reply
+# turns a gate into a silent multi-hour hang on CI (seen twice on the
+# contract job). With coreutils timeout the call fails loudly at the
+# exact clamp instead; macOS dev boxes (no timeout) run unbounded.
+command -v timeout >/dev/null 2>&1 && CLI="timeout 15 $CLI"
 WRITER=target/release/examples/primary_writer
 # port+10000 replication ranges span nshards consecutive ports —
 # keep the two servers >= nshards apart (v3.15: replicas listen too).
