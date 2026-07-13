@@ -92,7 +92,9 @@ fn reads_a_file() {
     let Some(mut ring) = ring_or_skip(8) else {
         return;
     };
-    let path = kevy_tmpdir::unique_dir("uring");
+    // unique_dir CREATES a directory — the data file must live inside it,
+    // not at its path (File::create on a directory is IsADirectory).
+    let path = kevy_tmpdir::unique_dir("uring").join("data.bin");
     {
         let mut f = std::fs::File::create(&path).unwrap();
         f.write_all(b"hello io_uring").unwrap();
