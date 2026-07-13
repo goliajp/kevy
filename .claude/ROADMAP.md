@@ -304,11 +304,12 @@ client 生态 —— 该策略 t2 里 gate 化。
 - [ ] embedded bench RFC:竞品名单+轴先 RFC(候选:Go vs bbolt/badger;Node vs better-sqlite3/classic-level;C# vs LiteDB;C vs lmdb)→ 拍板后跑 → bench/EMBEDDED-LEDGER.md
 - [ ] server 面 vs valkey 沿用 arena/perfgate 常驻,不重复建
 
-### t5 — 渠道真发行(拍板项集中:npm org / brew tap repo / apt 域名+GPG / NuGet 账号 / goliajp/kevy-go repo / pub.dev publisher)
+### t5 — 总线收尾(渠道除外)
+- [ ] lx64 post-fix arena 复测(悬案)→ README 基准表解冻
+- [ ] CHANGELOG 4.0.0 补总线各 train;五轴终审(ship 挪到 t6 渠道后)
+
+### t6 — 渠道真发行 + ship(用户拍板 2026-07-14 放最后;名字勘定同日:brew formula `kevy` 404 可用、npm 裸名 `kevy` 与 `expo-kevy` 可用、nuget `Kevy` 0 hits 可用、apt 自建仓库包名 `kevy`;npm scope 统一 **@goliapkg**(两 scope 均未发布过,零迁移),包机制文件已全部切换)
 - [ ] 拍板后:brew tap 建 repo + formula 发布;apt 仓库上线 t01;npm 平台分包发布(kevy-bin + kevy-node + expo-kevy);NuGet push;kevy-go repo 剥离 + tag
 - [ ] 发行后三渠道真装 smoke 重跑(脚本已有)+ site 安装页六语言
 - [ ] README 六语言矩阵 + llms.txt 同步
-
-### t6 — 总线收尾
-- [ ] lx64 post-fix arena 复测(悬案)→ README 基准表解冻
-- [ ] CHANGELOG 4.0.0 补总线各 train;五轴终审 → ship **v4.0.0**(tag 前 CI 真绿 + 用户验收)
+- [ ] 五轴终审 → ship **v4.0.0**(tag 前 CI 真绿 + 用户验收)

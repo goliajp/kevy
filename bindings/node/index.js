@@ -1,10 +1,10 @@
-// @goliajp/kevy-node — kevy embedded, one API on two runtimes.
+// @goliapkg/kevy-node — kevy embedded, one API on two runtimes.
 //
 // Bun loads the engine over bun:ffi; Node loads the hand-written N-API
 // addon (kevy-napi). Either way this file is the API: the typed methods below
-// mirror @goliajp/kevy (the wasm package), and cmd() reaches all 184 verbs.
+// mirror @goliapkg/kevy (the wasm package), and cmd() reaches all 184 verbs.
 //
-//   import { open } from "@goliajp/kevy-node";
+//   import { open } from "@goliapkg/kevy-node";
 //   const db = open({ dir: "data/" });
 //   db.set("session:7f3a", value, { ttlMs: 3_600_000 });
 //   db.getText("session:7f3a");

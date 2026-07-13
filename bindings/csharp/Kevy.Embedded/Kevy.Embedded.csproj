@@ -12,7 +12,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>Kevy.Embedded</RootNamespace>
 
-    <PackageId>Kevy.Embedded</PackageId>
+    <!-- nuget.org package id `Kevy` verified free 2026-07-14; the project
+         keeps the Kevy.Embedded name (namespace + folder). -->
+    <PackageId>Kevy</PackageId>
     <Version>4.0.0</Version>
     <Authors>GOLIA K.K.</Authors>
     <Description>kevy embedded in .NET — the real native engine behind one Cmd() entry plus a typed surface. TTL, structures, pub/sub, persistence you can read; pure Rust, zero services.</Description>

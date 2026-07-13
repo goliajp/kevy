@@ -1,4 +1,4 @@
-// The typed-surface smoke for @goliajp/kevy-node (runs under Bun; the same
+// The typed-surface smoke for @goliapkg/kevy-node (runs under Bun; the same
 // file exercises the Node path once the N-API addon lands).
 import { expect, test } from "bun:test";
 

@@ -2,13 +2,15 @@
 // engine. Mirrors bun.js's backend contract one-to-one; resp.js turns
 // replies into JS values.
 //
-//   import { open } from "@goliajp/kevy-node/node.js";
+//   import { open } from "@goliapkg/kevy-node/node.js";
 //   const db = open({ dir: "data/" });        // or open() for in-memory
 //   db.cmd("SET", "k", "v");
 //   text(db.cmd("GET", "k"))                  // "v"
 //
 // argv crosses the addon as one flat Buffer — a u32-LE length prefix per
 // argument — so the native side needs no array or string APIs.
+
+import { createRequire } from "node:module";
 
 import { KevyError, parse, text } from "./resp.js";
 
@@ -17,10 +19,17 @@ export { KevyError, text };
 const LIB = process.env.KEVY_NAPI_LIB ?? defaultLibPath();
 
 function defaultLibPath() {
-  const ext = process.platform === "darwin" ? "dylib" : "so";
-  // In-repo layout first (development / ffigate), then alongside this file
-  // (the published package ships the addon next to the loader).
-  return new URL(`../../target/debug/libkevy_napi.${ext}`, import.meta.url).pathname;
+  // Published layout first: the platform package npm picked from
+  // optionalDependencies (see packaging/npm/gen-node-platform-pkg.sh).
+  try {
+    return createRequire(import.meta.url).resolve(
+      `@goliapkg/kevy-node-${process.platform}-${process.arch}/kevy.node`,
+    );
+  } catch {
+    // In-repo layout (development / ffigate).
+    const ext = process.platform === "darwin" ? "dylib" : "so";
+    return new URL(`../../target/debug/libkevy_napi.${ext}`, import.meta.url).pathname;
+  }
 }
 
 // process.dlopen is the one loader that takes an arbitrary path and

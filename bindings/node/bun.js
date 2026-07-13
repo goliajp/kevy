@@ -2,7 +2,7 @@
 // build step. Mirrors the C ABI one-to-one; resp.js turns replies into
 // JS values.
 //
-//   import { open } from "@goliajp/kevy-node/bun.js";
+//   import { open } from "@goliapkg/kevy-node/bun.js";
 //   const db = open({ dir: "data/" });        // or open() for in-memory
 //   db.cmd("SET", "k", "v");
 //   text(db.cmd("GET", "k"))                  // "v"
@@ -17,9 +17,16 @@ const LIB = process.env.KEVY_FFI_LIB ?? defaultLibPath();
 
 function defaultLibPath() {
   const ext = process.platform === "darwin" ? "dylib" : "so";
-  // In-repo layout first (development / ffigate), then alongside this file
-  // (the published package ships the library next to the loader).
-  return new URL(`../../target/debug/libkevy_ffi.${ext}`, import.meta.url).pathname;
+  // Published layout first: the platform package npm/bun picked from
+  // optionalDependencies (see packaging/npm/gen-node-platform-pkg.sh).
+  try {
+    return import.meta.require.resolve(
+      `@goliapkg/kevy-node-${process.platform}-${process.arch}/libkevy_ffi.${ext}`,
+    );
+  } catch {
+    // In-repo layout (development / ffigate).
+    return new URL(`../../target/debug/libkevy_ffi.${ext}`, import.meta.url).pathname;
+  }
 }
 
 const c = dlopen(LIB, {
