@@ -71,7 +71,7 @@
       <h2>Redis compatibility</h2>
       <div class="call loss">
         <span class="h">Differs</span>
-        <p>there is no -BUSY state and no SCRIPT KILL — an over-budget script is aborted in place and answered with an ordinary error; nested EVAL is rejected, a redis.call touching another shard's key returns CROSSSLOT, and EVAL auto-caches its source by SHA1 so EVALSHA works without SCRIPT LOAD</p>
+        <p>there is no -BUSY state and no SCRIPT KILL — an over-budget script is aborted in place and answered with an ordinary error; nested EVAL is rejected, a redis.call touching another shard's key returns CROSSSLOT, and EVAL auto-caches its source by SHA1 so EVALSHA works without SCRIPT LOAD. Scripts replicate by SOURCE, not by effects: a script calling SPOP draws its own random members on a replica or an AOF replay — keep nondeterministic verbs out of scripts you replicate (plain SPOP outside EVAL propagates its effect and is safe)</p>
       </div>
     </section>
 
