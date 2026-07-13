@@ -1,8 +1,7 @@
 // @goliajp/kevy-node — kevy embedded, one API on two runtimes.
 //
-// Bun loads the engine over bun:ffi; Node loads the prebuilt N-API addon
-// (on the 4.x train — until it lands, Node throws a clear error instead of
-// half-working). Either way this file is the API: the typed methods below
+// Bun loads the engine over bun:ffi; Node loads the hand-written N-API
+// addon (kevy-napi). Either way this file is the API: the typed methods below
 // mirror @goliajp/kevy (the wasm package), and cmd() reaches all 184 verbs.
 //
 //   import { open } from "@goliajp/kevy-node";
@@ -23,13 +22,7 @@ const isBun = typeof globalThis.Bun !== "undefined";
 let backend;
 async function loadBackend() {
   if (!backend) {
-    if (!isBun) {
-      throw new Error(
-        "@goliajp/kevy-node: the Node N-API addon has not shipped yet — " +
-          "run under Bun, or embed via @goliajp/kevy (wasm) meanwhile.",
-      );
-    }
-    backend = await import("./bun.js");
+    backend = await import(isBun ? "./bun.js" : "./node.js");
   }
   return backend;
 }

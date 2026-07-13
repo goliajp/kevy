@@ -468,11 +468,10 @@ jobs:
         run: bash bench/compat3.sh
 
   # ── ffigate — every language door opens on every push ────────────────────
-  # One stone (kevy-ffi), many doors: the C, C++, Go and Bun smokes all run
-  # the same contract — commands, a protocol error as data, a pub/sub round
-  # trip, and a close-and-reopen durability check. The Rust door is the
-  # kevy-embedded suite itself; C# and the Node N-API addon join here when
-  # they land.
+  # One stone (kevy-ffi), many doors: the C, C++, Go, Bun and Node smokes
+  # all run the same contract — commands, a protocol error as data, a
+  # pub/sub round trip, and a close-and-reopen durability check. The Rust
+  # door is the kevy-embedded suite itself; C# joins here when it lands.
   ffigate:
     name: ffigate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -525,4 +524,12 @@ jobs:
       - name: Bun smoke
         uses: oven-sh/setup-bun@v2
       - run: bun test bun.test.js
+        working-directory: bindings/node
+
+      - name: Node smoke
+        uses: actions/setup-node@v5
+        with:
+          node-version: 'lts/*'
+      - run: cargo build -p kevy-napi
+      - run: node --test node.test.js
         working-directory: bindings/node
