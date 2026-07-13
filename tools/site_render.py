@@ -14,12 +14,9 @@ import pathlib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 NAV = {
-    "en": {"choose": "Should I use it?", "docs": "Docs", "cmds": "Commands",
-           "play": "Playground", "bench": "Benchmarks"},
-    "zh": {"choose": "该不该用", "docs": "文档", "cmds": "命令",
-           "play": "Playground", "bench": "基准"},
-    "ja": {"choose": "使うべきか", "docs": "ドキュメント", "cmds": "コマンド",
-           "play": "Playground", "bench": "ベンチマーク"},
+    "en": {"docs": "Docs", "cmds": "Commands", "play": "Playground", "bench": "Benchmarks"},
+    "zh": {"docs": "文档", "cmds": "命令", "play": "Playground", "bench": "基准"},
+    "ja": {"docs": "ドキュメント", "cmds": "コマンド", "play": "Playground", "bench": "ベンチマーク"},
 }
 DIRS = {"en": "", "zh": "zh/", "ja": "ja/"}
 HTML_LANG = {"en": "en", "zh": "zh-Hans", "ja": "ja"}
@@ -54,14 +51,27 @@ def hero(b, up, L=""):
         f'<a class="cta{" primary" if i == 0 else ""}" href="{up}{loc(c["href"], L)}">{e(c["label"])}</a>'
         for i, c in enumerate(b.get("ctas", []))
     )
-    aside = f'<div>{b["aside"]}</div>' if b.get("aside") else ""
+    if b.get("live_term"):
+        t = b["live_term"]  # {"chips": [...], "hint": "..."}
+        chips = "".join(
+            f'<button class="ht-chip" type="button" data-cmd="{e(c)}">{e(c.split(" ")[0])}</button>'
+            for c in t["chips"]
+        )
+        aside = f'''<div id="hero-term" data-pkg="{up}demo/pkg">
+    <div class="ht-bar"><span class="ht-dot"></span><span class="ht-title">kevy — wasm</span><span class="ht-status">booting…</span></div>
+    <div class="ht-out"></div>
+    <div class="ht-chips">{chips}</div>
+    <input class="ht-in" spellcheck="false" autocomplete="off" placeholder="{e(t["hint"])}">
+  </div>'''
+    else:
+        aside = f'<div>{b["aside"]}</div>' if b.get("aside") else ""
     inner = f'''<div>
     <p class="eyebrow">{e(b["eyebrow"])}</p>
     <h1>{b["h1"]}</h1>
     <p class="lede">{b["lede"]}</p>
     {f'<div class="ctas">{ctas}</div>' if ctas else ""}
   </div>'''
-    body = f'<div class="split">{inner}{aside}</div>' if b.get("aside") else inner
+    body = f'<div class="split">{inner}{aside}</div>' if aside else inner
     return f'<section class="band{tone(b)}"{anchor(b)} style="border-top:0">{body}</section>'
 
 
@@ -201,9 +211,38 @@ def bars(b, up, L=""):
 </section>"""
 
 
+def tabs(b, up, L=""):
+    """Capabilities shown AS CODE. A developer skims a landing page for what
+    using the thing looks like; a card that says "How ->" makes them click to
+    find out, and most never do. Every command in these panels is executed
+    against a real server by CI's check_site_commands gate."""
+    heads = "".join(
+        f'<button class="tab{" on" if i == 0 else ""}" type="button" '
+        f'data-tab="{i}">{e(t["label"])}</button>'
+        for i, t in enumerate(b["items"])
+    )
+    panels = "".join(
+        f'<div class="tab-panel{" on" if i == 0 else ""}" data-panel="{i}">'
+        f'<pre><code>{e(t["code"])}</code></pre>'
+        + (f'<p class="tab-note">{t["note"]}</p>' if t.get("note") else "")
+        + (f'<a class="tab-more" href="{up}{loc(t["href"], L)}">{e(t["go"])}</a>' if t.get("href") else "")
+        + "</div>"
+        for i, t in enumerate(b["items"])
+    )
+    return f"""<section class="band{tone(b)}"{anchor(b)}>
+  <div class="sec-h">
+    {f'<p class="eyebrow">{e(b["eyebrow"])}</p>' if b.get("eyebrow") else ""}
+    <h2>{b["h2"]}</h2>
+    {f'<p class="sec-lede">{b["intro"]}</p>' if b.get("intro") else ""}
+  </div>
+  <div class="tabs"><div class="tab-heads">{heads}</div>{panels}</div>
+</section>"""
+
+
 BLOCKS = {
     "hero": hero,
     "bars": bars,
+    "tabs": tabs,
     "prose": prose,
     "cards": cards,
     "table": table,
@@ -258,11 +297,11 @@ def page(spec, lang, slug):
   <div class="mast-in">
     <a class="brand" href="{up}{DIRS[lang]}">kevy<span class="v">4.0</span></a>
     <nav class="nav">
-      <a href="{up}{DIRS[lang]}choose/"{cur("choose")}>{n["choose"]}</a>
       <a href="{up}{DIRS[lang]}docs/">{n["docs"]}</a>
       <a href="{up}{DIRS[lang]}docs/commands/">{n["cmds"]}</a>
       <a href="{up}{DIRS[lang]}benchmarks/"{cur("benchmarks")}>{n["bench"]}</a>
       <a href="{up}{DIRS[lang]}play/">{n["play"]}</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
       <nav class="lang" aria-label="Language">
@@ -293,6 +332,8 @@ def page(spec, lang, slug):
   </div>
 </footer>
 
+{f'<script type="module" src="{up}assets/hero-term.js"></script>' if any(b.get("live_term") for b in spec["blocks"]) else ""}
+{f'<script src="{up}assets/tabs.js" defer></script>' if any(b["t"] == "tabs" for b in spec["blocks"]) else ""}
 <script>
   document.getElementById("theme").addEventListener("click", function () {{
     var r = document.documentElement;

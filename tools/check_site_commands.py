@@ -56,7 +56,12 @@ def commands_in(text):
         #   `GET k   -> "v"`   /   `EXPIRE k 60   # one minute`
         line = re.split(r"\s+->\s|\s+-&gt;\s", line)[0]
         line = re.split(r"\s{2,}#|\s#\s", line)[0].strip()
-        if not line or line.startswith(("(", "1)", "2)")):
+        # Reply lines, not commands: RESP renders integers, nils, array items
+        # and the bare OK exactly like this, and an example that shows its
+        # output is better documentation than one that hides it.
+        if not line or line.startswith(("(", "1)", "2)")) or line == "OK":
+            continue
+        if re.match(r"^\d+\) ", line):
             continue
         # Only lines that start with an UPPERCASE verb are commands.
         if not re.match(r"^[A-Z][A-Z0-9._]*(\s|$)", line):

@@ -25,7 +25,7 @@ PAGES = {}
 
 PAGES[""] = {
     "title": "kevy — the data layer for AI systems",
-    "desc": "A Redis-compatible data layer built for AI systems. Same protocol, more speed, and vector search, full-text, indexes, views and a change feed in the same engine — on a server, in your binary, in a browser tab, or on a device.",
+    "desc": "A Redis-compatible data layer for AI systems: same protocol, more throughput, and vector search, full-text, indexes, views and a change feed in one engine. Try it live — the terminal on this page is the real engine, running in your tab.",
     "foot": "GOLIA",
     "blocks": [
         {
@@ -33,38 +33,141 @@ PAGES[""] = {
             "eyebrow": "kevy 4.0",
             "h1": "The data layer<br>for AI systems.",
             "lede": (
-                "Redis-compatible, so you can swap it in. <b>Faster on every "
-                "operation.</b> And it does what an AI system actually needs — vector "
-                "search, full-text, secondary indexes, materialised views and a change "
-                "feed — <b>in the same engine, over the same keys.</b>"
+                "Redis-compatible — your client connects unchanged. Faster on every "
+                "operation. And vector search, full-text, indexes, views and a change "
+                "feed live <b>in the engine</b>, not in four services around it. "
+                "<b>The terminal on the right is real</b>: the same engine, compiled "
+                "to WebAssembly, running in this tab."
             ),
             "ctas": [
-                {"label": "Why you can replace Redis", "href": "#swap"},
-                {"label": "What else it does", "href": "#more"},
-                {"label": "Run it in your browser", "href": "play/"},
+                {"label": "cargo install kevy", "href": "#start"},
+                {"label": "What it can do", "href": "#code"},
+                {"label": "Open the playground", "href": "play/"},
             ],
-            "aside": """<pre class="hero-code"><code>$ cargo install kevy
-$ kevy --port 6379
+            "live_term": {
+                "hint": "type a command — SET, GET, TTL, INCR, KEYS, SUBSCRIBE, PUBLISH…",
+                "chips": [
+                    'SET session:7f3a \'{"user":"ada"}\' EX 30',
+                    "GET session:7f3a",
+                    "TTL session:7f3a",
+                    "INCR hits",
+                    "KEYS *",
+                    "SUBSCRIBE news",
+                    "PUBLISH news deployed",
+                ],
+            },
+        },
+        {
+            "t": "tabs",
+            "id": "code",
+            "tone": "deep",
+            "eyebrow": "What else it does",
+            "h2": "One engine. The whole stack an AI system needs.",
+            "intro": "Every command below runs against a real server in CI before this page ships. Click through — this is what using kevy looks like.",
+            "items": [
+                {
+                    "label": "Vectors",
+                    "code": """# an HNSW index over your keys — declared once,
+# kept current by the write path
+IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann DIM 768 DISTANCE cosine M 16 EF 200
 
-$ redis-cli -p 6379
-&gt; SET session:7f3a '{"user":"ada"}' EX 3600
-OK
-&gt; IDX.QUERY idx:sem KNN "&lt;vector&gt;" LIMIT 10
-1) "doc:4410"
-2) "doc:9982"</code></pre>""",
+HSET doc:4410 title "Ada on pipelining" vec "<768 f32, little-endian>"
+
+# nearest ten. no separate vector database, no sync job.
+IDX.QUERY idx:sem KNN "<query vector>" LIMIT 10
+-> 1) "doc:4410"
+   2) "doc:9982"
+""",
+                    "note": "You bring the embedding; kevy stores, indexes and searches it. There is no model in the engine, on purpose.",
+                    "go": "Agent memory & RAG",
+                    "href": "use/ai/",
+                },
+                {
+                    "label": "Full text",
+                    "code": """IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
+
+IDX.QUERY idx:ft MATCH "pipelining"
+-> 1) 1) "doc:1"
+      2) "0.2877"          # BM25 score
+
+# hybrid: fuse the text ranking with the vector ranking
+IDX.QUERY HYBRID idx:ft MATCH "pipelining" idx:sem KNN "<vector>" LIMIT 20 RRFK 60""",
+                    "note": "BM25 with CJK tokenisation, over the same keys the vectors index.",
+                    "go": "How search works",
+                    "href": "use/ai/",
+                },
+                {
+                    "label": "Indexes",
+                    "code": """HSET order:1001 customer 881 status open  total 4400
+HSET order:1002 customer 881 status paid  total 8400
+
+IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
+IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range
+
+# the read that would have been a SQL query
+IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
+-> 1) "0"
+   2) 1) 1) "order:1001"
+""",
+                    "note": "A filtered read stays a lookup. No query planner, no scan.",
+                    "go": "Serving reads without a database",
+                    "href": "use/app-store/",
+                },
+                {
+                    "label": "Views",
+                    "code": """# the answer, kept current by the WRITE path
+VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open ) ORDER BY idx:cust
+
+VIEW.QUERY v:open881
+-> 1) "0"
+   2) 1) "order:1001"  2) "881"
+
+# reads never recompute it; writes keep it fresh""",
+                    "note": "What most applications actually want from their ORM.",
+                    "go": "Materialised views",
+                    "href": "use/app-store/",
+                },
+                {
+                    "label": "Change feed",
+                    "code": """# tail every write from another process — or an agent.
+# [feed] enabled = true in kevy.toml
+FEED.SHARDS                 -> (integer) 16
+FEED.TAIL 0                 -> 1) (integer) 1     # generation
+                               2) (integer) 1     # offset
+FEED.READ 0 1 0 COUNT 2     -> the writes themselves, replayable""",
+                    "note": "Resumable offsets. Nothing to poll, nothing to miss.",
+                    "go": "The change feed",
+                    "href": "use/ai/",
+                },
+                {
+                    "label": "Anywhere",
+                    "code": """# a 16-core server
+cargo install kevy && kevy --port 6379
+
+# inside your binary — no socket, no process
+let db = Db::open("data/")?;
+db.set(b"k", b"v", None)?;
+
+# a browser tab — 151 KB, persists to OPFS
+const db = await open({ persist: { name: "app" } });
+
+# a microcontroller — no OS, no allocator
+let mut store = Store::new_in(&mut arena);""",
+                    "note": "The same engine and the same commands in all four places.",
+                    "go": "Embedding kevy",
+                    "href": "use/embedded/",
+                },
+            ],
         },
         {
             "t": "bars",
             "id": "swap",
-            "tone": "deep",
             "eyebrow": "Why you can replace Redis",
             "h2": "Same protocol. More throughput.",
             "intro": (
-                "Your client does not change — RESP2 and RESP3, 184 commands, the "
-                "library you already use. One machine, 16 cores, loopback, small "
-                "values, median of five runs."
+                "RESP2 and RESP3, 184 commands — redis-cli and your client library "
+                "connect unchanged. One machine, 16 cores, loopback, median of five."
             ),
-            # name, kevy, redis 8, ratio, thin?
             "rows": [
                 ["GET", 7800299, 5597865, "1.39×", False],
                 ["SET", 6918058, 2573396, "2.69×", False],
@@ -76,137 +179,53 @@ OK
             ],
             "us": "kevy 4.0",
             "them": "Redis 8",
-            "thin": "margin under 15% — your workload decides, not the engine",
+            "thin": "under 15% — your workload decides, not the engine",
             "note": (
-                "<b>LPUSH and ZADD are only 12% and 10% ahead.</b> At that margin your "
-                "value sizes and key distribution decide the winner. If lists or "
-                "sorted sets are your hot path, speed is not the reason to switch. "
-                "<a href=\"~/benchmarks/\">The full table, against valkey and Dragonfly "
-                "too.</a>"
+                "<b>LPUSH and ZADD are only 12% and 10% ahead.</b> If lists or sorted "
+                "sets are your hot path, speed is not the reason to switch. "
+                "<a href=\"~/benchmarks/\">Full table, against valkey and Dragonfly "
+                "too.</a> Migration is three commands — "
+                "<a href=\"~/migrate/\">export, import, digest</a> — and works in "
+                "both directions."
             ),
         },
         {
-            "t": "cards",
-            "id": "more",
-            "eyebrow": "What else it does",
-            "h2": "The things an AI system needs,<br>in the engine that already holds the data.",
-            "intro": "Not modules. Not a sidecar. Not a second copy of the truth drifting away from the first.",
-            "items": [
-                {
-                    "kicker": "Vector",
-                    "title": "KNN over your keyspace",
-                    "body": "An HNSW index, declared once, kept current by the write path. You bring the embedding; kevy stores, indexes and searches it.",
-                    "go": "How",
-                    "href": "use/ai/",
-                },
-                {
-                    "kicker": "Full text",
-                    "title": "BM25, and hybrid ranking",
-                    "body": "Full-text search over the same keys, and a hybrid query that fuses the text ranking with the vector ranking.",
-                    "go": "How",
-                    "href": "use/ai/",
-                },
-                {
-                    "kicker": "Indexes",
-                    "title": "Look up by any field",
-                    "body": "Secondary indexes turn a filtered read back into a lookup. No query planner, no scan.",
-                    "go": "How",
-                    "href": "use/app-store/",
-                },
-                {
-                    "kicker": "Views",
-                    "title": "The answer, kept ready",
-                    "body": "Materialised views hold an aggregate current on the write path, so a read never recomputes it.",
-                    "go": "How",
-                    "href": "use/app-store/",
-                },
-                {
-                    "kicker": "Change feed",
-                    "title": "Tail every write",
-                    "body": "A resumable feed another process — or an agent — can follow. Nothing to poll.",
-                    "go": "How",
-                    "href": "use/ai/",
-                },
-                {
-                    "kicker": "Anywhere",
-                    "title": "Server, binary, browser, device",
-                    "body": "The same engine and the same commands: a 16-core server, inside your binary, 151 KB in a browser tab, or a chip with no operating system.",
-                    "go": "How",
-                    "href": "use/embedded/",
-                },
-            ],
-        },
-        {
-            "t": "prose",
-            "tone": "blue",
-            "h2": "Why an AI system needs a different data layer",
-            "body": [
-                "An agent writes a document, embeds it, indexes it, caches it, and "
-                "tells something else it changed. Today that is four systems — a "
-                "cache, a vector database, a search index, a queue — holding the same "
-                "facts and drifting apart. Every one of them is a place to forget a "
-                "step.",
-                "<b>kevy collapses them into one.</b> Declare the index; write the key "
-                "the way you already write it. The engine keeps the vector index, the "
-                "text index, the secondary index and the view current on the write "
-                "path, and the change feed tells anyone who is listening.",
-                "And it runs where the agent runs. In your service, inside the binary "
-                "with no socket, in the browser tab as WebAssembly, or on the device "
-                "at the edge of the network.",
-            ],
-        },
-        {
-            "t": "cards",
-            "tone": "deep",
-            "h2": "What are you building?",
-            "intro": "Each page says whether kevy fits, what it costs you, and exactly how — with commands you can paste.",
-            "items": [
-                {"kicker": "AI", "title": "Agent memory & RAG", "body": "Vectors, full text, a change feed, and a TTL that expires a session for you.", "go": "How", "href": "use/ai/"},
-                {"kicker": "Serving", "title": "Reads without a database", "body": "Indexes and views, so a read stays a lookup instead of becoming a query.", "go": "How", "href": "use/app-store/"},
-                {"kicker": "Cache", "title": "Sessions & rate limits", "body": "The rows that were never a database problem, off your database.", "go": "How", "href": "use/cache/"},
-                {"kicker": "Queues", "title": "Background jobs", "body": "Streams with consumer groups: a job survives the worker that was holding it.", "go": "How", "href": "use/queue/"},
-                {"kicker": "Realtime", "title": "Push to live clients", "body": "Pub/sub with pattern subscriptions — and across browser tabs, with no server.", "go": "How", "href": "use/realtime/"},
-                {"kicker": "Embedded", "title": "Put it in the thing", "body": "Desktop app, browser, edge worker, microcontroller. No server, no socket.", "go": "How", "href": "use/embedded/"},
-            ],
-        },
-        {
             "t": "steps",
-            "h2": "Start",
+            "id": "start",
+            "tone": "deep",
+            "h2": "Two minutes",
             "intro": "",
             "items": [
                 {
-                    "title": "As a server",
-                    "body": "RESP on 6379. Your redis-cli and your client library do not know anything changed.",
+                    "title": "Install",
+                    "body": "One binary. No runtime, no dependencies to resolve.",
                     "code": "cargo install kevy\nkevy --port 6379",
                 },
                 {
-                    "title": "In your Rust program",
-                    "body": "No socket, no second process, no serialisation.",
-                    "code": 'kevy-embedded = "4.0"\n\nlet db = Db::open("data/")?;\ndb.set(b"k", b"v", None)?;',
+                    "title": "Point your client at it",
+                    "body": "Whatever you use today keeps working.",
+                    "code": 'redis-cli -p 6379\n> SET greeting hello\nOK\n> TTL greeting\n(integer) -1',
                 },
                 {
-                    "title": "In a browser tab",
-                    "body": "151 KB. Persists to the browser's filesystem and survives a reload.",
-                    "code": 'import { open } from "@goliajp/kevy";\n\nconst db = await open({ persist: { name: "app" } });\ndb.set("cart:u1", json, { ttlMs: 3_600_000 });',
+                    "title": "Do something Redis cannot",
+                    "body": "Declare an index; the write path keeps it current.",
+                    "code": "IDX.CREATE idx:city ON PREFIX user: FIELD city TYPE str KIND range\nIDX.QUERY  idx:city EQ osaka",
                 },
             ],
         },
         {
             "t": "callout",
             "kind": "loss",
-            "tone": "deep",
             "title": "What kevy will not do",
             "body": (
                 "<b>It is not a cluster.</b> Replication and failover exist; sharding "
-                "data across machines does not, and will not. If one machine is not "
-                "enough, kevy is the wrong answer. <b>There is no AUTH and no TLS</b> — "
-                "run it on a private network or behind something that does those "
-                "properly. And <b>some commands still differ from Redis</b> — the headline one: "
-                "multi-key writes are atomic per shard, not globally, so a cross-shard "
-                "<code>RENAME</code> or <code>MSET</code> is not one atomic step. "
-                "<a href=\"~/docs/commands/\">Every difference is written down</a>, per "
-                "command. <a href=\"~/choose/\">And here is when not to use it at "
-                "all.</a>"
+                "across machines does not, and will not. <b>No AUTH, no TLS</b> — run "
+                "it on a private network or behind something that does those properly. "
+                "<b>Multi-key writes are atomic per shard, not globally</b> — a "
+                "cross-shard <code>RENAME</code> or <code>MSET</code> is not one atomic "
+                "step. <a href=\"~/docs/commands/\">Every deviation is documented per "
+                "command</a>, and <a href=\"~/choose/\">here is when not to use kevy "
+                "at all</a>."
             ),
         },
     ],
