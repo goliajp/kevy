@@ -1,5 +1,89 @@
 # Changelog
 
+## 4.0.0 — the instance era
+
+The API break 3.x kept postponing, taken once and set in stone — plus
+the deviations from Redis that turned out to be nothing but debt, paid
+off. Wire protocol and disk format carry over from 3.x unchanged;
+`docs/UPGRADING.md` has the full 3.x → 4.0 table.
+
+### The break (why this is 4.0)
+
+- **The instance era**: every piece of global state — replication,
+  index/view catalogs, signal fan-out, the thread-locals — folded
+  into the runtime instance (`RuntimeState` / `ShardCtx`). Two
+  runtimes in one process is now a passing test, not a hope.
+- **The API set in stone**, consolidated once: one error currency
+  (`KevyError`) everywhere, resources `open` / network `connect`
+  naming, `kevy_rt::Runtime` built by a builder, `kevy-store` writes
+  take borrowed argv, embedders bring a `Commands` trait + `Route`;
+  the deprecated `flush()` shims are gone.
+- Versions: workspace crates → 4.0.0; **kevy-client → 2.0.0** and
+  **kevy-client-async → 2.0.0** (they carry the same break).
+
+### Deviations from Redis, fixed rather than documented
+
+- **SPOP / SRANDMEMBER / RANDOMKEY are actually random** — SPOP
+  popped in storage order, RANDOMKEY could never return keys from
+  most shards. Now: random-slot probing in the set, weighted
+  reservoir sampling across shards (every key strictly
+  equiprobable), and SRANDMEMBER's negative count is implemented
+  instead of rejected.
+- **SCAN is a real cursor iterator** — it used to materialise the
+  whole keyspace to serve page one (2.56 MB to answer COUNT 10).
+  Now a reverse-binary `(shard, position)` cursor walks buckets
+  incrementally, rehash-tolerant, O(COUNT) per call.
+- **ZRANK is O(log N)** — a rank-augmented order-statistic tree
+  (`kevy-ranktree`) replaces the linear scan.
+- **HTTL replied milliseconds** where Redis replies seconds; fixed,
+  and HPTTL added for callers who want the milliseconds.
+- Three cross-shard writes went to the wrong shard; one of them
+  lost data. All three fixed, with the routing pinned by tests.
+
+### Proven where it claims to run
+
+- **The browser build is real** (T8): the durable backend the engine
+  actually picked (OPFS or IndexedDB) is exposed instead of guessed,
+  `mget` batches the boundary crossing, and pub/sub crosses tabs
+  over a BroadcastChannel — measured, not assumed.
+- **IoT is booted, not claimed** (T7): CI boots kevy on a Cortex-M
+  (AArch32 semihosting exit fixed, vector table filled, linker
+  script from build.rs) and on RISC-V; kevy-uring builds on 32-bit;
+  the shipped-artifact size is what the gate frames.
+- **Perf verdicts are earned** (T9): a panoramic decomposition, then
+  five kernel-level attack gates — seqlock read path REFUSED,
+  per-conn CQE batching REFUSED, idle spin reverted as productive
+  waiting, huge pages already in effect, the io_uring basket empty.
+  The harness itself was fixed first: perfgate and arena had been
+  reading a rounded clock (measuring the ruler), and a reported v4
+  SET regression was retracted as quantization noise.
+
+### Smaller truths
+
+- TOML arrays in kevy-config — and 14 documented configs that could
+  not actually load now do, gated in CI forever.
+- `kevy-tmpdir`: five hand-rolled "unique" temp-dir schemes across
+  nine files were not unique (same-process `process::id`, colliding
+  `Instant`); one RAII crate now.
+- Every verb's metadata states its real cost and its real deviation
+  from Redis, pinned by two-way tests: the fixed deviations must
+  stay fixed, the deliberate ones must stay documented.
+
+### The site: kevy.golia.jp
+
+- Trilingual (en / native zh / native ja), full-bleed, one masthead.
+  The landing page boots the engine in the visitor's tab — the
+  terminal is the wasm build, not a mock-up.
+- A command reference generated from the engine's own verb table
+  (184 commands × 3 languages), docs search, `llms.txt` +
+  `llms-full.txt` for machine readers, a playground that shows the
+  keyspace, and scenario pages structured as pasteable task recipes.
+- The site cannot lie by construction: every RESP example executes
+  against a real server in CI, every documented TOML must load in
+  the real binary, every internal link is checked, and CJK prose is
+  gated against half-width punctuation.
+
+
 ## [kevy-client v1.14.0] — 2026-07-08
 
 Independent `kevy-client` minor (workspace stays at 3.17.2): **wrap

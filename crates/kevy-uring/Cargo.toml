@@ -19,4 +19,4 @@ workspace = true
 [dependencies]
 
 [dev-dependencies]
-kevy-tmpdir = { path = "../kevy-tmpdir", version = "3.18.0" }
+kevy-tmpdir = { path = "../kevy-tmpdir", version = "4.0.0" }
