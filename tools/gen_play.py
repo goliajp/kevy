@@ -188,6 +188,7 @@ TPL = """<!doctype html>
       <a href="{up}{dir}docs/commands/">{nav_cmds}</a>
       <a href="{up}{dir}benchmarks/">{nav_bench}</a>
       <a href="{up}{dir}play/" aria-current="page">{nav_play}</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
       <nav class="lang" aria-label="Language">
