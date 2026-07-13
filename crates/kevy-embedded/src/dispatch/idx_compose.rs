@@ -6,7 +6,12 @@ use crate::store::Store;
 
 use kevy_index::IndexValue;
 
-use super::idx::{badargs, no_such_index, spec_of, unhex};
+use super::idx::{badargs, spec_of, unhex};
+// Only the hybrid path (text AND vector) reports a missing ANN index; the
+// import must carry the same gate or the core,index archetype fails
+// deny(warnings) on it.
+#[cfg(all(feature = "text", feature = "vector"))]
+use super::idx::no_such_index;
 use super::idx_query::{emit_row, idx_err, parse_bounds};
 use super::util::{arr, bulk, err};
 
