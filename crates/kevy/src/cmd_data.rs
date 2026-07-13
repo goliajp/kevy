@@ -24,22 +24,10 @@ pub(crate) fn cmd_spop_rand<A: ArgvView + ?Sized>(
         return wrong_args(out, name);
     }
     let count_given = args.len() == 3;
-    // A NEGATIVE count means SRANDMEMBER with repetition — |count| members,
-    // duplicates allowed. Redis has had that form since 2.6 and kevy rejected it
-    // outright, which is exactly the shape a caller reaches for to sample with
-    // replacement. SPOP has no such form: you cannot remove the same member
-    // twice, and Redis errors on it too.
-    let raw = if count_given {
-        match arg_i64(&args[2]) {
-            Some(c) => c,
-            None => return encode_error(out, ERR_NOT_INT),
-        }
-    } else {
-        1
+    let raw = match parse_spop_count(args, count_given, remove, out) {
+        Some(c) => c,
+        None => return, // error already encoded
     };
-    if raw < 0 && remove {
-        return encode_error(out, "ERR value is out of range, must be positive");
-    }
     let with_repeats = raw < 0;
     let count = raw.unsigned_abs() as usize;
     let res = if remove {
@@ -65,6 +53,36 @@ pub(crate) fn cmd_spop_rand<A: ArgvView + ?Sized>(
             }
         }
     }
+}
+
+/// The optional SPOP/SRANDMEMBER count. A NEGATIVE count means
+/// SRANDMEMBER with repetition — |count| members, duplicates allowed
+/// (Redis 2.6 form; the shape a caller reaches for to sample with
+/// replacement). SPOP has no such form: you cannot remove the same
+/// member twice, and Redis errors on it too. `None` = an error reply
+/// was already encoded into `out`.
+fn parse_spop_count<A: ArgvView + ?Sized>(
+    args: &A,
+    count_given: bool,
+    remove: bool,
+    out: &mut Vec<u8>,
+) -> Option<i64> {
+    let raw = if count_given {
+        match arg_i64(&args[2]) {
+            Some(c) => c,
+            None => {
+                encode_error(out, ERR_NOT_INT);
+                return None;
+            }
+        }
+    } else {
+        1
+    };
+    if raw < 0 && remove {
+        encode_error(out, "ERR value is out of range, must be positive");
+        return None;
+    }
+    Some(raw)
 }
 
 /// `BLPOP key timeout` / `BRPOP key timeout` — single-key form only.

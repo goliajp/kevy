@@ -466,3 +466,63 @@ jobs:
       - uses: actions/checkout@v7
       - name: 3-way differential vs valkey 9.1 + redis 7.4
         run: bash bench/compat3.sh
+
+  # ── ffigate — every language door opens on every push ────────────────────
+  # One stone (kevy-ffi), many doors: the C, C++, Go and Bun smokes all run
+  # the same contract — commands, a protocol error as data, a pub/sub round
+  # trip, and a close-and-reopen durability check. The Rust door is the
+  # kevy-embedded suite itself; C# and the Node N-API addon join here when
+  # they land.
+  ffigate:
+    name: ffigate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: ffigate-${{ matrix.os }}-${{ hashFiles('Cargo.lock') }}
+
+      - name: Build the stone
+        run: cargo build -p kevy-ffi
+
+      - name: C smoke
+        run: |
+          extra=""; [ "$(uname)" = Linux ] && extra="-lpthread -ldl -lm"
+          cc -Icrates/kevy-ffi/include crates/kevy-ffi/examples/c/smoke.c \
+             target/debug/libkevy_ffi.a $extra -o /tmp/kevy-smoke-c
+          /tmp/kevy-smoke-c /tmp/kevy-smoke-c-data
+
+      - name: C++ smoke
+        run: |
+          extra=""; [ "$(uname)" = Linux ] && extra="-lpthread -ldl -lm"
+          c++ -std=c++17 -Icrates/kevy-ffi/include \
+              crates/kevy-ffi/examples/cpp/smoke.cpp \
+              target/debug/libkevy_ffi.a $extra -o /tmp/kevy-smoke-cpp
+          /tmp/kevy-smoke-cpp /tmp/kevy-smoke-cpp-data
+
+      - name: Go smoke
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache-dependency-path: bindings/go/go.mod
+      - run: go test ./...
+        working-directory: bindings/go
+
+      - name: Bun smoke
+        uses: oven-sh/setup-bun@v2
+      - run: bun test bun.test.js
+        working-directory: bindings/node

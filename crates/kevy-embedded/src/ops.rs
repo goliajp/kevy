@@ -352,6 +352,15 @@ impl Store {
 
     // ---- pub/sub --------------------------------------------------------
 
+    /// Dispatch one command as argv, appending the RESP-encoded reply to
+    /// `out` — the full read+write verb surface (`ESTORE_OPS` plus the
+    /// conn face). This is the generic entry the FFI layer builds every
+    /// language binding on: one function reaches the whole engine. The
+    /// read-only listener keeps its own narrower whitelist.
+    pub fn dispatch_argv(&self, argv: &[Vec<u8>], out: &mut Vec<u8>) {
+        crate::dispatch::dispatch(self, argv, out);
+    }
+
     /// `PUBLISH channel payload`. Delivers `payload` to every subscriber on
     /// `channel` (direct + pattern matches) inside this process. Returns
     /// the count of receivers the message reached.
