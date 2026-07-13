@@ -34,7 +34,12 @@ COVJSON=$(mktemp)
 # --output-path keeps the JSON pure: runners interleave rustup/cargo
 # info lines into stdout, which broke stdout capture (2026-07-03).
 COVLOG=$(mktemp)
-cargo llvm-cov --workspace --lib --tests --summary-only --json \
+# kevy-napi is excluded from the MEASUREMENT, not from testing: its only
+# executable surface is N-API glue that needs a live Node runtime (the
+# node_api symbols do not even link outside one), and ffigate runs its
+# real suite via `node --test`. llvm-cov instrumenting a crate whose
+# tests it can never execute only dilutes the workspace ratio.
+cargo llvm-cov --workspace --exclude kevy-napi --lib --tests --summary-only --json \
     --output-path "$COVJSON" >"$COVLOG" 2>&1 || {
     echo "covgate: cargo llvm-cov run failed — last 40 lines:" >&2
     tail -40 "$COVLOG" >&2

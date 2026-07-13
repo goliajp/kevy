@@ -404,3 +404,6 @@ fn bulk(out: &mut Vec<u8>, b: &[u8]) {
     out.extend_from_slice(b);
     out.extend_from_slice(b"\r\n");
 }
+
+#[cfg(test)]
+mod abi_tests;
