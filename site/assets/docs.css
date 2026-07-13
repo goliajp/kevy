@@ -449,7 +449,9 @@ dl.meta dd code {
   align-items: start;
 }
 @media (min-width: 1280px) {
-  .doc-shell {
+  /* only when a TOC exists — an unconditional third track leaves a 240px
+   * dead column on pages without one */
+  .doc-shell.has-toc {
     grid-template-columns: 280px minmax(0, 1fr) 240px;
   }
 }

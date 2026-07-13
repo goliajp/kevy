@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WAIT — kevy コマンドリファレンス</title>
 <meta name="description" content="WAIT — 全 shard の master_repl_offset が numreplicas 台以上の replica に ack されるまで(または timeout ミリ秒が経過するまで)ブロックし、shard 横断での ack 済み replica 数の最小値を返す。timeout 0 は無期限待ちだが、上限は 60 s。注意：replica の ACK は fsync による永続化を意味しない。 O(S) —— 全 shard に対するバリアであり、返すのは shard 横断での ack 済み replica 数の最小値である。実時間のコストはレプリケーションの往復そのもの。">
-<link rel="stylesheet" href="../../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../../assets/docs.css">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -27,6 +28,11 @@
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../../ja/docs/search-index.json" data-root="../../../../ja/">
+        <input type="search" placeholder="ドキュメントを検索……" aria-label="ドキュメントを検索……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="../../../../docs/commands/WAIT/">EN</a>
         <a href="../../../../zh/docs/commands/WAIT/">中文</a>

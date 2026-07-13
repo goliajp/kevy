@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Unix-domain socket (UDS) transport — kevy</title>
 <meta name="description" content="kevy exposes an optional Unix-domain stream listener that speaks identical RESP semantics to the TCP port, letting same-host clients skip the loopback stack entirely.">
-<link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/docs.css">
+<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/" aria-current="page">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>Unix-domain socket (UDS) transport</h1></div>
 <p>kevy exposes an optional Unix-domain stream listener that speaks identical RESP semantics to the TCP port, letting same-host clients skip the loopback stack entirely.</p>
@@ -88,7 +88,7 @@ redis-cli -s /tmp/kevy.sock GET foo
   <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#when-you-need-this">When you need this</a></li><li class="l2"><a href="#core-idea">Core idea</a></li><li class="l2"><a href="#worked-example">Worked example</a></li><li class="l2"><a href="#permissions-and-security">Permissions and security</a></li><li class="l2"><a href="#server-config-knobs">Server config knobs</a></li><li class="l2"><a href="#trade-offs">Trade-offs</a></li><li class="l2"><a href="#faq">FAQ</a></li><li class="l3"><a href="#can-i-bind-uds-and-tcp-at-the-same-time">Can I bind UDS and TCP at the same time?</a></li><li class="l3"><a href="#server-refuses-to-start-socket-exists">Server refuses to start — "socket exists"?</a></li><li class="l3"><a href="#how-fast-is-uds-vs-tcp-loopback">How fast is UDS vs TCP loopback?</a></li><li class="l3"><a href="#can-my-client-library-use-uds">Can my client library use UDS?</a></li><li class="l3"><a href="#should-i-drop-tcp-entirely-if-all-my-clients-are-on-the-same-host">Should I drop TCP entirely if all my clients are on the same host?</a></li></ul></aside>
 </div>
 
-<script src="../../assets/docsearch.js" defer></script>
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Availability — kevy</title>
 <meta name="description" content="How a kevy deployment stays writable and readable through node failures: the topologies, the consistency ladder from "fastest, asynchronous" up to "quorum-fenced", planned and cras">
-<link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/docs.css">
+<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/" aria-current="page">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>Availability</h1></div>
 <p>How a kevy deployment stays writable and readable through node failures: the topologies, the consistency ladder from "fastest, asynchronous" up to "quorum-fenced", planned and crash failover, and the exact error contract clients see at every step.</p>
@@ -128,7 +128,7 @@ FAILOVER ABORT</code></pre></figure>
   <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#topologies">Topologies</a></li><li class="l3"><a href="#single-node">Single node</a></li><li class="l3"><a href="#primary-replicas">Primary + replicas</a></li><li class="l3"><a href="#three-node-elect-quorum">Three-node elect quorum</a></li><li class="l2"><a href="#the-consistency-ladder">The consistency ladder</a></li><li class="l3"><a href="#read-your-writes-repltoken-replwait">Read-your-writes: REPL.TOKEN / REPL.WAIT</a></li><li class="l3"><a href="#wait-replica-acknowledgment-not-durability">WAIT — replica acknowledgment, not durability</a></li><li class="l3"><a href="#bounded-staleness--stale">Bounded staleness: -STALE</a></li><li class="l3"><a href="#write-gates-min-replicas-to-write-and-the-quorum-lease">Write gates: min_replicas_to_write and the quorum lease</a></li><li class="l2"><a href="#failover">Failover</a></li><li class="l3"><a href="#planned-the-failover-verb">Planned: the FAILOVER verb</a></li><li class="l3"><a href="#crash-quorum-election">Crash: quorum election</a></li><li class="l2"><a href="#error-contract-for-writers-and-readers">Error contract for writers and readers</a></li><li class="l2"><a href="#operations">Operations</a></li><li class="l3"><a href="#port-conventions">Port conventions</a></li><li class="l3"><a href="#config-keys">Config keys</a></li><li class="l3"><a href="#observability">Observability</a></li><li class="l3"><a href="#the-gate">The gate</a></li><li class="l2"><a href="#see-also">See also</a></li></ul></aside>
 </div>
 
-<script src="../../assets/docsearch.js" defer></script>
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

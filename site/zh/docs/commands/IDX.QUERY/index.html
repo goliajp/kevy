@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>IDX.QUERY — kevy 命令参考</title>
 <meta name="description" content="IDX.QUERY — 查询索引：区间 / 等值、文本 MATCH、向量 KNN、聚合分组，或跨两个索引的 COMPOSE。 取决于索引种类。range：O(log N + limit)。unique：O(log N + hits)。全文：O(各倒排表长度之和)，带 MaxScore 剪枝。向量 ANN：O(dim * (M log N + ef * M)) 次距离计算（HNSW）。agg GROUPS：有界的 top-K，1 到 3 轮扇出。HYBRID：两个子查询各按 4 倍深度取，再在发起端用 RRF 融合。COMPOSE：不受 limit 约束 —— 两侧叶子都要完整物化，因为结果是按 key 排序的，而 segment 是按 value 排序的。">
-<link rel="stylesheet" href="../../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../../assets/docs.css">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -27,6 +28,11 @@
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../../zh/docs/search-index.json" data-root="../../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="../../../../docs/commands/IDX.QUERY/">EN</a>
         <a href="../../../../zh/docs/commands/IDX.QUERY/" aria-current="page">中文</a>

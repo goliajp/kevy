@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Replication — kevy</title>
 <meta name="description" content="How kevy streams writes from a primary to one or more replicas, how to fail over by hand or by quorum, and how an embedded process can subscribe to the same stream as a read replic">
-<link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/docs.css">
+<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/" aria-current="page">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>Replication</h1></div>
 <p>How kevy streams writes from a primary to one or more replicas, how to fail over by hand or by quorum, and how an embedded process can subscribe to the same stream as a read replica.</p>
@@ -178,7 +178,7 @@ single_source = true          # ONE upstream stream, hash-routed locally</code><
   <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#when-you-need-this">When you need this</a></li><li class="l2"><a href="#core-idea">Core idea</a></li><li class="l2"><a href="#worked-example">Worked example</a></li><li class="l3"><a href="#1-primary-kevytoml">1. Primary kevy.toml</a></li><li class="l3"><a href="#2-replica-kevytoml">2. Replica kevy.toml</a></li><li class="l3"><a href="#3-retarget-the-replica-at-runtime">3. Retarget the replica at runtime</a></li><li class="l3"><a href="#4-promote-a-replica-by-hand">4. Promote a replica by hand</a></li><li class="l3"><a href="#5-probe-the-role">5. Probe the role</a></li><li class="l3"><a href="#6-embed-as-replica-one-liner">6. Embed-as-replica (one-liner)</a></li><li class="l2"><a href="#knobs">Knobs</a></li><li class="l2"><a href="#failover">Failover</a></li><li class="l2"><a href="#trade-offs-and-limits">Trade-offs and limits</a></li><li class="l2"><a href="#faq">FAQ</a></li><li class="l2"><a href="#see-also">See also</a></li><li class="l2"><a href="#embedded-as-primary-v32">Embedded-as-primary (v3.2)</a></li></ul></aside>
 </div>
 
-<script src="../../assets/docsearch.js" defer></script>
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

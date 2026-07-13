@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cluster — kevy</title>
 <meta name="description" content="kevy's cluster surface has two independent layers — single-node multi-shard exposure (one process, every shard speaks Redis Cluster) and multi-node replication + scoped multi-write">
-<link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/docs.css">
+<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/" aria-current="page">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>Cluster</h1></div>
 <p>kevy's cluster surface has two independent layers — <b>single-node multi-shard exposure</b> (one process, every shard speaks Redis Cluster) and <b>multi-node replication + scoped multi-writer</b> (primaries, replicas, embeds, quorum failover) — and you can run either, both, or neither.</p>
@@ -223,7 +223,7 @@ writer.set(b"app:billing:invoice:42", b"...")?;
   <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#the-two-layers-at-a-glance">The two layers at a glance</a></li><li class="l2"><a href="#when-you-need-this">When you need this</a></li><li class="l2"><a href="#core-idea">Core idea</a></li><li class="l2"><a href="#enabling-it">Enabling it</a></li><li class="l2"><a href="#using-clusterclient-from-rust">Using ClusterClient from Rust</a></li><li class="l3"><a href="#how-routing-removes-the-cross-shard-hop">How routing removes the cross-shard hop</a></li><li class="l3"><a href="#cross-slot-multi-key-commands">Cross-slot multi-key commands</a></li><li class="l3"><a href="#cluster-commands-supported-on-a-cluster-port">CLUSTER commands supported on a cluster port</a></li><li class="l3"><a href="#falling-back-to-raw-routed-helpers">Falling back to raw routed helpers</a></li><li class="l2"><a href="#primary-and-replicas">Primary and replicas</a></li><li class="l2"><a href="#embed-as-read-replica">Embed as read-replica</a></li><li class="l2"><a href="#scoped-multi-writer">Scoped multi-writer</a></li><li class="l3"><a href="#embed-as-scoped-writer">Embed as scoped writer</a></li><li class="l2"><a href="#kevy-elect-quorum-failover">kevy-elect quorum failover</a></li><li class="l3"><a href="#manual-rejoin-recovery">Manual rejoin recovery</a></li><li class="l2"><a href="#single-node-cluster-mode">Single-node cluster mode</a></li><li class="l2"><a href="#replication">Replication</a></li><li class="l2"><a href="#scoped-multi-writer-elect">Scoped multi-writer + elect</a></li></ul></aside>
 </div>
 
-<script src="../../assets/docsearch.js" defer></script>
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

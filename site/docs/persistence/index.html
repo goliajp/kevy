@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Persistence — kevy</title>
 <meta name="description" content="How kevy keeps data across restarts — the AOF, snapshots, fsync policies, rewrite/compaction, crash recovery, and the introspection that lets you watch all of it.">
-<link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/docs.css">
+<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/" aria-current="page">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>Persistence</h1></div>
 <p>How kevy keeps data across restarts — the AOF, snapshots, fsync policies, rewrite/compaction, crash recovery, and the introspection that lets you watch all of it.</p>
@@ -189,7 +189,7 @@ store.evictions_total();        // total evicted by maxmemory</code></pre></figu
   <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#when-you-need-this">When you need this</a></li><li class="l2"><a href="#core-idea">Core idea</a></li><li class="l2"><a href="#worked-examples">Worked examples</a></li><li class="l3"><a href="#server-mode">Server mode</a></li><li class="l3"><a href="#embedded-mode">Embedded mode</a></li><li class="l2"><a href="#configuration-knobs">Configuration knobs</a></li><li class="l3"><a href="#durability-and-aof-growth">Durability and AOF growth</a></li><li class="l3"><a href="#trigger-surface">Trigger surface</a></li><li class="l3"><a href="#fsync-policy-semantics">fsync policy semantics</a></li><li class="l2"><a href="#trade-offs-and-limits">Trade-offs and limits</a></li><li class="l2"><a href="#faq">FAQ</a></li><li class="l3"><a href="#my-aof-file-is-growing-how-do-i-compact-it">My AOF file is growing — how do I compact it?</a></li><li class="l3"><a href="#can-i-disable-persistence-entirely">Can I disable persistence entirely?</a></li><li class="l3"><a href="#what-is-the-cost-of-a-snapshot-during-high-write-load">What is the cost of a snapshot during high write load?</a></li><li class="l3"><a href="#how-is-recovery-sequenced-on-the-next-boot">How is recovery sequenced on the next boot?</a></li><li class="l3"><a href="#how-do-i-monitor-persistence-from-inside-an-embedded-host-process">How do I monitor persistence from inside an embedded host process?</a></li><li class="l3"><a href="#what-is-every-file-in-the-persistence-directory">What is every file in the persistence directory?</a></li><li class="l2"><a href="#durability-contract-v21">Durability contract (v2.1)</a></li><li class="l2"><a href="#atomicity-charter-embedded-serving-store-v21">Atomicity charter (embedded serving-store, v2.1)</a></li><li class="l2"><a href="#recovery-points-v23">Recovery points (v2.3)</a></li><li class="l2"><a href="#the-snapshot-on-the-replication-wire-v315">The snapshot on the replication wire (v3.15)</a></li></ul></aside>
 </div>
 
-<script src="../../assets/docsearch.js" defer></script>
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

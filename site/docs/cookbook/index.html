@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>The RDS→kevy modeling cookbook — kevy</title>
 <meta name="description" content="You are moving a relational data model onto kevy. Every recipe below uses shipped primitives — no roadmap features, no "coming soon". Each one names the RDS concept it replaces and">
-<link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/docs.css">
+<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/" aria-current="page">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>The RDS→kevy modeling cookbook</h1></div>
 <p>You are moving a relational data model onto kevy. Every recipe below uses shipped primitives — no roadmap features, no "coming soon". Each one names the RDS concept it replaces and the kevy pattern that carries it.</p>
@@ -251,7 +251,7 @@ kevy-cli -p 6004 FEED.READ 0 1 0 COUNT 100 PREFIX reading:   # the uplink loop</
   <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#1-tables-and-rows">1. Tables and rows</a></li><li class="l2"><a href="#2-one-to-many-many-to-many">2. One-to-many, many-to-many</a></li><li class="l2"><a href="#3-sequences">3. Sequences</a></li><li class="l2"><a href="#4-optimistic-locking-row-versions">4. Optimistic locking (row versions)</a></li><li class="l2"><a href="#5-check-constraints-and-multi-key-invariants">5. CHECK constraints and multi-key invariants</a></li><li class="l2"><a href="#6-idempotency-keys">6. Idempotency keys</a></li><li class="l2"><a href="#7-soft-delete">7. Soft delete</a></li><li class="l2"><a href="#8-composite-ordering-order-by-a-b">8. Composite ordering (ORDER BY a, b)</a></li><li class="l2"><a href="#9-jsonb">9. JSONB</a></li><li class="l2"><a href="#10-cascade-delete-foreign-keys">10. Cascade delete / foreign keys</a></li><li class="l2"><a href="#11-the-outbox-you-dont-need">11. The outbox you don't need</a></li><li class="l2"><a href="#12-audit-history">12. Audit history</a></li><li class="l2"><a href="#13-the-rollback-window-reverse-mirror">13. The rollback window (reverse mirror)</a></li><li class="l2"><a href="#14-analytics-export">14. Analytics export</a></li><li class="l2"><a href="#15-loading-order-the-deferred-index-rule">15. Loading order (the deferred-index rule)</a></li><li class="l2"><a href="#16-session-context-with-ttl">16. Session context with TTL</a></li><li class="l2"><a href="#17-episodic-memory-time-semantic">17. Episodic memory (time × semantic)</a></li><li class="l2"><a href="#18-rag-chunks-with-hybrid-retrieval">18. RAG chunks with hybrid retrieval</a></li><li class="l2"><a href="#19-sensor-cache-latest-value-liveness-lease">19. Sensor cache (latest value + liveness lease)</a></li><li class="l2"><a href="#20-edge-aggregation-write-time-group-by-uplink">20. Edge aggregation (write-time GROUP BY + uplink)</a></li><li class="l2"><a href="#recipe-index">Recipe index</a></li></ul></aside>
 </div>
 
-<script src="../../assets/docsearch.js" defer></script>
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

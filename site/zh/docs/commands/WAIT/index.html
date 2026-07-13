@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WAIT — kevy 命令参考</title>
 <meta name="description" content="WAIT — 阻塞直到每个 shard 的 master_repl_offset 都被至少 numreplicas 个副本确认（或者超过 timeout 毫秒）；返回各 shard 中最小的已确认副本数。timeout 0 表示一直等，硬上限 60 s。注意：副本的 ACK 不等于 fsync 落盘。 O(S) —— 一道跨全部 shard 的屏障，返回的是各 shard 里的最小已确认副本数；实际耗时是一次复制往返。">
-<link rel="stylesheet" href="../../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../../assets/docs.css">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -27,6 +28,11 @@
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../../zh/docs/search-index.json" data-root="../../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="../../../../docs/commands/WAIT/">EN</a>
         <a href="../../../../zh/docs/commands/WAIT/" aria-current="page">中文</a>

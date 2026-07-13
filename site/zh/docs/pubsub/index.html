@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pub/sub — kevy</title>
 <meta name="description" content="本文讲 kevy 里发布者如何把消息扇出给多个订阅者——既可以走网络用 PUBLISH / SUBSCRIBE，也可以通过嵌入式 Store 在进程内完成，还可以走 kevy-client 其余部分共用的那套 URL 门面。">
-<link rel="stylesheet" href="../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../assets/docs.css">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/" aria-current="page">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 184 个命令</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>Pub/sub</h1></div>
 <p>本文讲 kevy 里发布者如何把消息扇出给多个订阅者——既可以走网络用 <code>PUBLISH</code> / <code>SUBSCRIBE</code>，也可以通过嵌入式 <code>Store</code> 在进程内完成，还可以走 <code>kevy-client</code> 其余部分共用的那套 URL 门面。</p>
@@ -197,7 +197,7 @@ $ redis-cli -p 6379 PUBSUB NUMPAT
   <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#何时需要">何时需要</a></li><li class="l2"><a href="#核心思路">核心思路</a></li><li class="l2"><a href="#实际示例">实际示例</a></li><li class="l3"><a href="#用-redis-cli-冒烟测试">用 redis-cli 冒烟测试</a></li><li class="l3"><a href="#rust-走-url-门面kevy-client">Rust 走 URL 门面——kevy-client</a></li><li class="l3"><a href="#进程内直连kevy-embedded">进程内直连：kevy-embedded</a></li><li class="l3"><a href="#模式订阅">模式订阅</a></li><li class="l2"><a href="#keyspace-通知">Keyspace 通知</a></li><li class="l2"><a href="#url-后端表">URL 后端表</a></li><li class="l2"><a href="#取舍与限制">取舍与限制</a></li><li class="l2"><a href="#运维内省">运维内省</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></aside>
 </div>
 
-<script src="../../../assets/docsearch.js" defer></script>
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

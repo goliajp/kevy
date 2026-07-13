@@ -21,7 +21,9 @@ function init() {
     // Idempotent, and remembered as a promise: a visitor who types faster than
     // the index fetches must not race a null `entries` into a TypeError — the
     // first version did exactly that, and the search box just went dead.
-    loading ??= fetch(box.dataset.index)
+    // no-cache = revalidate, not refetch: the index JSON sits at a stable URL
+    // and silently goes stale in browser caches after a docs deploy otherwise.
+    loading ??= fetch(box.dataset.index, { cache: "no-cache" })
       .then((r) => r.json())
       .then((es) => (entries = es));
     return loading;

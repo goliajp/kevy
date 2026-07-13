@@ -15,6 +15,9 @@ Run: python3 tools/gen_docs_site.py [--check]
 import pathlib
 import re
 import sys
+import sys as _sys
+_sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from assetv import v as av
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "tools"))
@@ -125,8 +128,6 @@ BLURB = {
     },
 }
 
-CSS_HREF = "assets/docs.css"
-
 
 def title_of(md, fallback):
     m = re.search(r"^#\s+(.*)", md, re.M)
@@ -185,8 +186,8 @@ def shell(lang, slug, title, desc, body, toc, nav, depth, have=None):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <meta name="description" content="{desc}">
-<link rel="stylesheet" href="{up}assets/kevy.css">
-<link rel="stylesheet" href="{up}assets/docs.css">
+<link rel="stylesheet" href="{up}assets/{av('kevy.css')}">
+<link rel="stylesheet" href="{up}assets/{av('docs.css')}">
 <script>
   try {{
     var t = localStorage.getItem("kevy-theme");
@@ -221,13 +222,13 @@ def shell(lang, slug, title, desc, body, toc, nav, depth, have=None):
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell{" has-toc" if toc_html else ""}">
   <aside class="side">{nav}</aside>
   <main id="main" class="doc">{body}</main>
   {toc_html}
 </div>
 
-<script src="{up}assets/docsearch.js" defer></script>
+<script src="{up}assets/{av('docsearch.js')}" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {{
     var r = document.documentElement;

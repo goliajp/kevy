@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>持久化 — kevy</title>
 <meta name="description" content="kevy 如何让数据扛过重启——AOF、快照、fsync 策略、重写/压实、崩溃恢复，以及让你把这一切随时看在眼里的内省接口。">
-<link rel="stylesheet" href="../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../assets/docs.css">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/" aria-current="page">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 184 个命令</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>持久化</h1></div>
 <p>kevy 如何让数据扛过重启——AOF、快照、fsync 策略、重写/压实、崩溃恢复，以及让你把这一切随时看在眼里的内省接口。</p>
@@ -189,7 +189,7 @@ store.evictions_total();        // total evicted by maxmemory</code></pre></figu
   <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#何时需要这份文档">何时需要这份文档</a></li><li class="l2"><a href="#核心思路">核心思路</a></li><li class="l2"><a href="#实战示例">实战示例</a></li><li class="l3"><a href="#服务器模式">服务器模式</a></li><li class="l3"><a href="#嵌入模式">嵌入模式</a></li><li class="l2"><a href="#配置旋钮">配置旋钮</a></li><li class="l3"><a href="#耐久性与-aof-增长">耐久性与 AOF 增长</a></li><li class="l3"><a href="#触发面">触发面</a></li><li class="l3"><a href="#fsync-策略语义">fsync 策略语义</a></li><li class="l2"><a href="#取舍与限制">取舍与限制</a></li><li class="l2"><a href="#faq">FAQ</a></li><li class="l3"><a href="#aof-文件一直在涨怎么压实">AOF 文件一直在涨——怎么压实？</a></li><li class="l3"><a href="#能彻底关掉持久化吗">能彻底关掉持久化吗？</a></li><li class="l3"><a href="#高写入负载下做一次快照要付出什么">高写入负载下做一次快照要付出什么？</a></li><li class="l3"><a href="#下次启动时按什么顺序恢复">下次启动时按什么顺序恢复？</a></li><li class="l3"><a href="#嵌入式宿主进程内部怎么监控持久化">嵌入式宿主进程内部怎么监控持久化？</a></li><li class="l3"><a href="#持久化目录里每个文件都是什么">持久化目录里每个文件都是什么？</a></li><li class="l2"><a href="#耐久性契约v21">耐久性契约（v2.1）</a></li><li class="l2"><a href="#原子性章程嵌入式-serving-storev21">原子性章程（嵌入式 serving-store，v2.1）</a></li><li class="l2"><a href="#恢复点v23">恢复点（v2.3）</a></li><li class="l2"><a href="#复制链路上的快照v315">复制链路上的快照（v3.15）</a></li></ul></aside>
 </div>
 
-<script src="../../../assets/docsearch.js" defer></script>
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

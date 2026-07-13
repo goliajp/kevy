@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DEBUG — kevy コマンドリファレンス</title>
 <meta name="description" content="DEBUG — デバッグ用サブコマンド。SLEEP は shard をブロックし、それ以外のサブコマンドは OK として受け流す。 SLEEP は、応答した shard の reactor スレッドを指定時間だけ停める(他の shard は動き続ける)。それ以外はすべて O(1)。">
-<link rel="stylesheet" href="../../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../../assets/docs.css">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -27,6 +28,11 @@
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../../ja/docs/search-index.json" data-root="../../../../ja/">
+        <input type="search" placeholder="ドキュメントを検索……" aria-label="ドキュメントを検索……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="../../../../docs/commands/DEBUG/">EN</a>
         <a href="../../../../zh/docs/commands/DEBUG/">中文</a>

@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>APPEND — kevy 命令参考</title>
 <meta name="description" content="APPEND — 在字符串值尾部追加字节，返回追加后的新长度。 值不超过 64 B 时是均摊 O(1)；一旦超过这个阈值，每次调用都是 O(N) —— Arc 里的负载会被整块拷出来重新装箱。所以靠反复 APPEND 拼一个大字符串，总代价是 O(N^2)。">
-<link rel="stylesheet" href="../../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../../assets/docs.css">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -27,6 +28,11 @@
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../../zh/docs/search-index.json" data-root="../../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="../../../../docs/commands/APPEND/">EN</a>
         <a href="../../../../zh/docs/commands/APPEND/" aria-current="page">中文</a>

@@ -10,6 +10,9 @@ Blocks: hero, prose, cards, table, code, callout, steps, split, faq.
 
 import html
 import pathlib
+import sys as _sys
+_sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from assetv import v as av
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -283,7 +286,7 @@ def page(spec, lang, slug):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{e(spec["title"])}</title>
 <meta name="description" content="{e(spec["desc"])}">
-<link rel="stylesheet" href="{up}assets/kevy.css">
+<link rel="stylesheet" href="{up}assets/{av('kevy.css')}">
 <script>
   try {{
     var t = localStorage.getItem("kevy-theme");
@@ -332,8 +335,8 @@ def page(spec, lang, slug):
   </div>
 </footer>
 
-{f'<script type="module" src="{up}assets/hero-term.js"></script>' if any(b.get("live_term") for b in spec["blocks"]) else ""}
-{f'<script src="{up}assets/tabs.js" defer></script>' if any(b["t"] == "tabs" for b in spec["blocks"]) else ""}
+{f'<script type="module" src="{up}assets/{av('hero-term.js')}"></script>' if any(b.get("live_term") for b in spec["blocks"]) else ""}
+{f'<script src="{up}assets/{av('tabs.js')}" defer></script>' if any(b["t"] == "tabs" for b in spec["blocks"]) else ""}
 <script>
   document.getElementById("theme").addEventListener("click", function () {{
     var r = document.documentElement;

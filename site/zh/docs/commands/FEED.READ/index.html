@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FEED.READ — kevy 命令参考</title>
 <meta name="description" content="FEED.READ — 从某个 shard 读取变更 feed 的帧，起点是给定的 generation / offset 游标。 只涉及单个 shard(shard 是参数，不是扇出)。在 backlog 里定位起始 offset 是 O(log B)，解码再重新编码是 O(count * 帧大小)。COUNT 默认 256，硬上限 4096。">
-<link rel="stylesheet" href="../../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../../assets/docs.css">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -27,6 +28,11 @@
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../../zh/docs/search-index.json" data-root="../../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="../../../../docs/commands/FEED.READ/">EN</a>
         <a href="../../../../zh/docs/commands/FEED.READ/" aria-current="page">中文</a>

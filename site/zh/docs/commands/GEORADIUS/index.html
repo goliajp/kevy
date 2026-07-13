@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GEORADIUS — kevy 命令参考</title>
 <meta name="description" content="GEORADIUS — 以坐标为圆心的旧式半径搜索，可选把结果写入目标 key。 O(log N + C) —— 最多九个相邻区块，每个都在分值树上 seek 取出；C 为命中区块内的成员数。带 STORE / STOREDIST 时再加 O(K log K) 的写入，以及 O(D) 的目标清空。">
-<link rel="stylesheet" href="../../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../../assets/docs.css">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -27,6 +28,11 @@
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../../zh/docs/search-index.json" data-root="../../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="../../../../docs/commands/GEORADIUS/">EN</a>
         <a href="../../../../zh/docs/commands/GEORADIUS/" aria-current="page">中文</a>

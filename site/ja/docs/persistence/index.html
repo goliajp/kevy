@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>永続化 — kevy</title>
 <meta name="description" content="kevyが再起動をまたいでデータを保持する仕組みを説明します。AOF、スナップショット、fsyncポリシー、リライト（コンパクション）、クラッシュリカバリ、そしてそれらすべてを観測するためのイントロスペクションを扱います。">
-<link rel="stylesheet" href="../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../assets/docs.css">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/" aria-current="page">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">184 コマンド全て</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>永続化</h1></div>
 <p>kevyが再起動をまたいでデータを保持する仕組みを説明します。AOF、スナップショット、fsyncポリシー、リライト（コンパクション）、クラッシュリカバリ、そしてそれらすべてを観測するためのイントロスペクションを扱います。</p>
@@ -189,7 +189,7 @@ store.evictions_total();        // maxmemory による合計 eviction 数</code>
   <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#このドキュメントが必要になるとき">このドキュメントが必要になるとき</a></li><li class="l2"><a href="#中心となる考え方">中心となる考え方</a></li><li class="l2"><a href="#動かしてみる例">動かしてみる例</a></li><li class="l3"><a href="#サーバーモード">サーバーモード</a></li><li class="l3"><a href="#組み込みモード">組み込みモード</a></li><li class="l2"><a href="#設定ノブ">設定ノブ</a></li><li class="l3"><a href="#耐久性とaofの成長">耐久性とAOFの成長</a></li><li class="l3"><a href="#トリガー一覧">トリガー一覧</a></li><li class="l3"><a href="#fsyncポリシーの意味">fsyncポリシーの意味</a></li><li class="l2"><a href="#トレードオフと限界">トレードオフと限界</a></li><li class="l2"><a href="#faq">FAQ</a></li><li class="l3"><a href="#aofファイルが大きくなっていますどうコンパクションしますか">AOFファイルが大きくなっています。どうコンパクションしますか？</a></li><li class="l3"><a href="#永続化を完全に無効化できますか">永続化を完全に無効化できますか？</a></li><li class="l3"><a href="#高い書き込み負荷中のスナップショットのコストは">高い書き込み負荷中のスナップショットのコストは？</a></li><li class="l3"><a href="#次回起動時のリカバリはどう進みますか">次回起動時のリカバリはどう進みますか？</a></li><li class="l3"><a href="#組み込みホストプロセスの中から永続化を監視するには">組み込みホストプロセスの中から永続化を監視するには？</a></li><li class="l3"><a href="#永続化ディレクトリの中の各ファイルは何ですか">永続化ディレクトリの中の各ファイルは何ですか？</a></li><li class="l2"><a href="#耐久性契約v21">耐久性契約（v2.1）</a></li><li class="l2"><a href="#アトミック性憲章組み込みserving-storev21">アトミック性憲章（組み込みserving-store、v2.1）</a></li><li class="l2"><a href="#リカバリポイントv23">リカバリポイント（v2.3）</a></li><li class="l2"><a href="#レプリケーションワイヤ上のスナップショットv315">レプリケーションワイヤ上のスナップショット（v3.15）</a></li></ul></aside>
 </div>
 
-<script src="../../../assets/docsearch.js" defer></script>
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;
