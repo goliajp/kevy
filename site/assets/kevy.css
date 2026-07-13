@@ -1099,3 +1099,183 @@ h1 {
 :lang(ja) h1 {
   font-size: clamp(28px, 3.9vw, 56px);
 }
+
+/* ── the live terminal in the hero ──────────────────────────────────────── */
+/* Not a mock-up: hero-term.js boots the real wasm engine and every reply came
+ * out of it a millisecond ago. If the engine fails to load, the status says so
+ * — a broken truth beats a working lie on the landing page of all places. */
+
+#hero-term {
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  background: var(--deep);
+  overflow: hidden;
+  box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.7);
+}
+.ht-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--edge);
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+}
+.ht-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--edge-hi);
+}
+.ht-status {
+  margin-left: auto;
+}
+.ht-status.on {
+  color: var(--blue-hi);
+}
+.ht-status.on::before {
+  content: "●";
+  margin-right: 5px;
+}
+.ht-out {
+  min-height: 190px;
+  max-height: 230px;
+  overflow-y: auto;
+  padding: 12px 14px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.8;
+}
+.ht-line {
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: var(--text-2);
+}
+.ht-line.cmd {
+  color: var(--text);
+}
+.ht-line.ok {
+  color: var(--blue-hi);
+}
+.ht-line.err {
+  color: var(--thin);
+}
+.ht-line.dim {
+  color: var(--text-3);
+}
+.ht-line.msg {
+  color: #6fd18f;
+}
+.ht-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--edge);
+}
+.ht-chip {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 10px;
+  border: 1px solid var(--edge-hi);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.ht-chip:hover {
+  border-color: var(--blue);
+  color: var(--blue-hi);
+}
+.ht-in {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--edge);
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  padding: 11px 14px;
+  outline: none;
+}
+.ht-in:focus {
+  background: var(--lift);
+}
+
+/* ── capability tabs: the product shown as code ─────────────────────────── */
+
+.tabs {
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--deep);
+}
+.tab-heads {
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--edge);
+  background: var(--void);
+}
+.tab-heads::-webkit-scrollbar {
+  display: none;
+}
+.tab {
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  padding: 13px 20px;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tab:hover {
+  color: var(--text);
+}
+.tab.on {
+  color: var(--text);
+  border-bottom-color: var(--blue);
+}
+.tab-panel {
+  display: none;
+  padding: 22px 24px;
+}
+.tab-panel.on {
+  display: block;
+}
+.tab-panel pre {
+  margin: 0;
+  overflow-x: auto;
+}
+.tab-panel code {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.85;
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--text-2);
+  white-space: pre;
+}
+.tab-note {
+  margin: 14px 0 0;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--text-3);
+  max-width: 84ch;
+}
+.tab-more {
+  display: inline-block;
+  margin-top: 12px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--blue-hi);
+  text-decoration: none;
+}
+.tab-more::after {
+  content: " →";
+}
