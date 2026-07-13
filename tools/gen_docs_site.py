@@ -169,6 +169,7 @@ def shell(lang, slug, title, desc, body, toc, nav, depth, have=None):
     nav_l = {"en": ("Docs", "Commands", "Benchmarks", "Playground"),
              "zh": ("文档", "命令", "基准", "Playground"),
              "ja": ("ドキュメント", "コマンド", "ベンチマーク", "Playground")}[lang]
+    search_ph = {"en": "Search docs…", "zh": "搜索文档……", "ja": "ドキュメントを検索……"}[lang]
     toc_html = ""
     if len(toc) > 1:
         items = "".join(
@@ -205,6 +206,11 @@ def shell(lang, slug, title, desc, body, toc, nav, depth, have=None):
       <a href="{up}{d}play/">{nav_l[3]}</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="{up}{d}docs/search-index.json" data-root="{up}{d}">
+        <input type="search" placeholder="{search_ph}" aria-label="{search_ph}" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">{lang_row}</nav>
       <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
         <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
@@ -220,6 +226,7 @@ def shell(lang, slug, title, desc, body, toc, nav, depth, have=None):
   {toc_html}
 </div>
 
+<script src="{up}assets/docsearch.js" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {{
     var r = document.documentElement;
@@ -232,8 +239,14 @@ def shell(lang, slug, title, desc, body, toc, nav, depth, have=None):
 """
 
 
-def build(lang, present, titles, have):
-    """Return {path: html} for one language. `have` maps lang -> set of slugs."""
+def build(lang, present, titles, have, search_out):
+    """Return {path: html} for one language. `have` maps lang -> set of slugs.
+
+    `search_out` collects the search index as it goes: one entry per document
+    and one per h2/h3 heading, because the thing a reader actually remembers is
+    a section name ("fsync policy", "dual-write window"), not which of
+    twenty-four files it lives in.
+    """
     pages = {}
     d = DIRS[lang]
 
@@ -319,6 +332,11 @@ def build(lang, present, titles, have):
             return f"../{name}/{frag}"
 
         body, toc = render(text, relink)
+        search_out.append({"t": titles[s], "u": f"docs/{s}/", "k": "doc"})
+        for _lvl, slug_, txt in toc:
+            search_out.append(
+                {"t": f"{txt} — {titles[s]}", "u": f"docs/{s}/#{slug_}", "k": "sec"}
+            )
         # The <h1> the markdown carries becomes the page's own head.
         body = re.sub(r"^<h1[^>]*>(.*?)</h1>", r'<div class="doc-head"><h1>\1</h1></div>', body, count=1)
         desc = re.sub(r"<[^>]+>", "", re.search(r"<p>(.*?)</p>", body, re.S).group(1))[:180] if "<p>" in body else titles[s]
@@ -335,13 +353,31 @@ def main():
         lang: {p.stem for p in SRC[lang].glob("*.md") if p.stem not in EXCLUDE}
         for lang in ("en", "zh", "ja")
     }
+    import json
+    commands = json.loads((ROOT / "site/data/commands.json").read_text(encoding="utf-8"))
+    i18n = {
+        l: json.loads((ROOT / f"site/data/commands.{l}.json").read_text(encoding="utf-8"))
+        for l in ("zh", "ja")
+        if (ROOT / f"site/data/commands.{l}.json").exists()
+    }
     for lang in ("en", "zh", "ja"):
         present = sorted(have[lang])
         if not present:
             continue
         src = SRC[lang]
         titles = {s: title_of((src / f"{s}.md").read_text(encoding="utf-8"), s) for s in present}
-        want.update(build(lang, present, titles, have))
+        search = []
+        want.update(build(lang, present, titles, have, search))
+        # Every command is searchable by name — the single likeliest thing a
+        # visitor types — with its localized summary as the subtitle.
+        for c in commands["commands"]:
+            summary = i18n.get(lang, {}).get(c["name"], {}).get("summary") or c["summary"]
+            search.append(
+                {"t": c["name"], "s": summary, "u": f"docs/commands/{c['name']}/", "k": "cmd"}
+            )
+        want[ROOT / "site" / DIRS[lang] / "docs" / "search-index.json"] = (
+            json.dumps(search, ensure_ascii=False, separators=(",", ":")) + "\n"
+        )
 
     if check:
         stale = [p for p, t in want.items()

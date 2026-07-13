@@ -26,6 +26,11 @@
       <a href="../../../ja/play/">Playground</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../ja/docs/search-index.json" data-root="../../../ja/">
+        <input type="search" placeholder="ドキュメントを検索……" aria-label="ドキュメントを検索……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language"><a href="../../../docs/vector-search/">EN</a><a href="../../../zh/docs/vector-search/">中文</a><a href="../../../ja/docs/vector-search/" aria-current="page">日本語</a></nav>
       <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
         <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
@@ -111,6 +116,7 @@ fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
   <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#クイックスタートサーバー">クイックスタート（サーバー）</a></li><li class="l2"><a href="#クイックスタート組み込み">クイックスタート（組み込み）</a></li><li class="l2"><a href="#ワイヤ形式">ワイヤ形式</a></li><li class="l2"><a href="#距離と結果">距離と結果</a></li><li class="l2"><a href="#再現率efというノブ">再現率：EFというノブ</a></li><li class="l2"><a href="#パラメータ削除再構築">パラメータ、削除、再構築</a></li><li class="l2"><a href="#フィルタリングとハイブリッド検索">フィルタリングと、ハイブリッド検索</a></li><li class="l2"><a href="#整合性">整合性</a></li><li class="l2"><a href="#パフォーマンス">パフォーマンス</a></li><li class="l2"><a href="#サイジング">サイジング</a></li><li class="l2"><a href="#関連項目">関連項目</a></li></ul></aside>
 </div>
 
+<script src="../../../assets/docsearch.js" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

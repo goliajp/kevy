@@ -30,7 +30,7 @@ PAGES = {}
 
 PAGES[""] = {
     "title": "kevy — AI システムのためのデータレイヤ",
-    "desc": "AI システムのために作られた、Redis 互換のデータレイヤです。プロトコルは同じまま、より速く。そしてベクトル検索、全文検索、インデックス、ビュー、変更フィードが同じエンジンに入っています——サーバーでも、バイナリの中でも、ブラウザのタブでも、デバイスの上でも。",
+    "desc": "AI システムのための Redis 互換データレイヤ。プロトコルは同じまま、スループットは上。そしてベクトル検索、全文検索、インデックス、ビュー、変更フィードがひとつのエンジンに。実際に触ってみてください——このページのターミナルは本物のエンジンで、あなたのタブの中で動いています。",
     "foot": "GOLIA",
     "blocks": [
         {
@@ -38,167 +38,135 @@ PAGES[""] = {
             "eyebrow": "kevy 4.0",
             "h1": "AI システムのための<br>データレイヤ。",
             "lede": (
-                "Redis 互換なので、そのまま差し替えられます。<b>どの操作でも、"
-                "より高速です。</b>そして AI システムが実際に必要とするもの——"
-                "ベクトル検索、全文検索、セカンダリインデックス、マテリアライズド"
-                "ビュー、変更フィード——を、<b>同じエンジンの中で、同じキーの上で"
-                "</b>提供します。"
+                "Redis 互換——クライアントは、そのままつながります。どの操作でも、"
+                "より高速です。そしてベクトル検索、全文検索、インデックス、ビュー、"
+                "変更フィードは、周りに並べた 4 つのサービスではなく、<b>エンジンの"
+                "中に</b>あります。<b>このターミナルは本物です</b>。同じエンジンを "
+                "WebAssembly にコンパイルしたものが、このタブの中で動いています。"
             ),
             "ctas": [
-                {"label": "なぜ Redis を置き換えられるのか", "href": "#swap"},
-                {"label": "他に何ができるのか", "href": "#more"},
-                {"label": "ブラウザで動かす", "href": "play/"},
+                {"label": "cargo install kevy", "href": "#start"},
+                {"label": "何ができるのか", "href": "#code"},
+                {"label": "playground を開く", "href": "play/"},
             ],
-            "aside": '<pre class="hero-code"><code>$ cargo install kevy\n$ kevy --port 6379\n\n$ redis-cli -p 6379\n&gt; SET session:7f3a \'{"user":"ada"}\' EX 3600\nOK\n&gt; IDX.QUERY idx:sem KNN "&lt;vector&gt;" LIMIT 10\n1) "doc:4410"\n2) "doc:9982"</code></pre>',
+            "live_term": {
+                "hint": "コマンドを入力——SET、GET、TTL、INCR、KEYS、SUBSCRIBE、PUBLISH…",
+                "chips": ['SET session:7f3a \'{"user":"ada"}\' EX 30', 'GET session:7f3a', 'TTL session:7f3a', 'INCR hits', 'KEYS *', 'SUBSCRIBE news', 'PUBLISH news deployed'],
+            },
+        },
+        {
+            "t": "tabs",
+            "id": "code",
+            "tone": "deep",
+            "eyebrow": "他に何ができるのか",
+            "h2": "ひとつのエンジン。AI システムに必要なスタックのすべて。",
+            "intro": "以下のコマンドはすべて、このページを出す前に、CI が実際のサーバーに対して実行しています。タブを切り替えてみてください——kevy を使うとは、こういうことです。",
+            "items": [
+                {
+                    "label": 'ベクトル',
+                    "code": '# an HNSW index over your keys — declared once,\n# kept current by the write path\nIDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann DIM 768 DISTANCE cosine M 16 EF 200\n\nHSET doc:4410 title "Ada on pipelining" vec "<768 f32, little-endian>"\n\n# nearest ten. no separate vector database, no sync job.\nIDX.QUERY idx:sem KNN "<query vector>" LIMIT 10\n-> 1) "doc:4410"\n   2) "doc:9982"\n',
+                    "note": '埋め込みはあなたが持ち込み、kevy がそれを保存し、索引を張り、検索します。エンジンにモデルはありません。それは意図した選択です。',
+                    "go": 'エージェントの記憶と RAG',
+                    "href": 'use/ai/',
+                },
+                {
+                    "label": '全文検索',
+                    "code": 'IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text\n\nIDX.QUERY idx:ft MATCH "pipelining"\n-> 1) 1) "doc:1"\n      2) "0.2877"          # BM25 score\n\n# hybrid: fuse the text ranking with the vector ranking\nIDX.QUERY HYBRID idx:ft MATCH "pipelining" idx:sem KNN "<vector>" LIMIT 20 RRFK 60',
+                    "note": 'CJK のトークン化を備えた BM25。ベクトルが索引している、同じキーの上で。',
+                    "go": '検索の仕組み',
+                    "href": 'use/ai/',
+                },
+                {
+                    "label": 'インデックス',
+                    "code": 'HSET order:1001 customer 881 status open  total 4400\nHSET order:1002 customer 881 status paid  total 8400\n\nIDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range\nIDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range\n\n# the read that would have been a SQL query\nIDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open\n-> 1) "0"\n   2) 1) 1) "order:1001"\n',
+                    "note": '絞り込んだ読み取りは、参照のままです。クエリプランナも、スキャンもありません。',
+                    "go": 'データベースなしで読みを捌く',
+                    "href": 'use/app-store/',
+                },
+                {
+                    "label": 'ビュー',
+                    "code": '# the answer, kept current by the WRITE path\nVIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open ) ORDER BY idx:cust\n\nVIEW.QUERY v:open881\n-> 1) "0"\n   2) 1) "order:1001"  2) "881"\n\n# reads never recompute it; writes keep it fresh',
+                    "note": 'ほとんどのアプリケーションが ORM に本当に求めているもの。',
+                    "go": 'マテリアライズドビュー',
+                    "href": 'use/app-store/',
+                },
+                {
+                    "label": '変更フィード',
+                    "code": '# tail every write from another process — or an agent.\n# [feed] enabled = true in kevy.toml\nFEED.SHARDS                 -> (integer) 16\nFEED.TAIL 0                 -> 1) (integer) 1     # generation\n                               2) (integer) 1     # offset\nFEED.READ 0 1 0 COUNT 2     -> the writes themselves, replayable',
+                    "note": '再開可能なオフセット。ポーリングするものも、取りこぼすものもありません。',
+                    "go": '変更フィード',
+                    "href": 'use/ai/',
+                },
+                {
+                    "label": 'どこでも',
+                    "code": '# a 16-core server\ncargo install kevy && kevy --port 6379\n\n# inside your binary — no socket, no process\nlet db = Db::open("data/")?;\ndb.set(b"k", b"v", None)?;\n\n# a browser tab — 151 KB, persists to OPFS\nconst db = await open({ persist: { name: "app" } });\n\n# a microcontroller — no OS, no allocator\nlet mut store = Store::new_in(&mut arena);',
+                    "note": '4 つの場所すべてで、同じエンジン、同じコマンドです。',
+                    "go": 'kevy を組み込む',
+                    "href": 'use/embedded/',
+                },
+            ],
         },
         {
             "t": "bars",
             "id": "swap",
-            "tone": "deep",
             "eyebrow": "なぜ Redis を置き換えられるのか",
             "h2": "プロトコルは同じ。スループットは上。",
             "intro": (
-                "クライアントは変わりません——RESP2 と RESP3、184 個のコマンド、"
-                "いま使っているライブラリのまま。1 台のマシン、16 コア、ループバック、"
-                "小さな値、5 回実行した中央値です。"
+                "RESP2 と RESP3、184 個のコマンド——redis-cli も、クライアント"
+                "ライブラリも、そのままつながります。1 台のマシン、16 コア、"
+                "ループバック、5 回実行した中央値です。"
             ),
-            # name, kevy, redis 8, ratio, thin?
             "rows": [['GET', 7800299, 5597865, '1.39×', False], ['SET', 6918058, 2573396, '2.69×', False], ['INCR', 6133940, 3459395, '1.77×', False], ['SADD', 5600597, 3690483, '1.52×', False], ['HSET', 4287217, 3021325, '1.42×', False], ['LPUSH', 3213470, 2862374, '1.12×', True], ['ZADD', 3053101, 2773929, '1.10×', True]],
             "us": "kevy 4.0",
             "them": "Redis 8",
-            "thin": "差は 15% 未満——勝敗を決めるのはエンジンではなく、あなたのワークロードです",
+            "thin": "15% 未満——決めるのはエンジンではなく、あなたのワークロードです",
             "note": (
-                "<b>LPUSH と ZADD は、12% と 10% しか上回っていません。</b>この差では、"
-                "勝敗を決めるのは値のサイズとキーの分布です。リストやソート済みセットが"
-                "ホットパスなら、速さは乗り換える理由になりません。"
+                "<b>LPUSH と ZADD は、12% と 10% しか上回っていません。</b>リストや"
+                "ソート済みセットがホットパスなら、速さは乗り換える理由になりません。"
                 "<a href=\"~/benchmarks/\">valkey や Dragonfly も含めた、完全な表は"
-                "こちら。</a>"
+                "こちら。</a>移行はコマンド 3 つ——<a href=\"~/migrate/\">export、"
+                "import、digest</a>——で、どちらの向きにも動きます。"
             ),
         },
         {
-            "t": "cards",
-            "id": "more",
-            "eyebrow": "他に何ができるのか",
-            "h2": "AI システムに必要なものが、<br>データをすでに持っているエンジンの中に。",
-            "intro": "モジュールではありません。サイドカーでもありません。元データからずれていく、真実の 2 つ目のコピーでもありません。",
-            "items": [
-                {
-                    "kicker": "ベクトル",
-                    "title": "キースペースに対する KNN",
-                    "body": "HNSW インデックスを一度宣言すれば、あとは書き込みの側が最新に保ちます。埋め込みはあなたが持ち込み、kevy がそれを保存し、索引を張り、検索します。",
-                    "go": "手順",
-                    "href": "use/ai/",
-                },
-                {
-                    "kicker": "全文検索",
-                    "title": "BM25、そしてハイブリッドな順位付け",
-                    "body": "同じキーに対する全文検索と、テキストの順位付けとベクトルの順位付けを融合するハイブリッドクエリ。",
-                    "go": "手順",
-                    "href": "use/ai/",
-                },
-                {
-                    "kicker": "インデックス",
-                    "title": "任意のフィールドで引く",
-                    "body": "セカンダリインデックスが、絞り込んだ読み取りを、ふたたび参照に戻します。クエリプランナも、スキャンもありません。",
-                    "go": "手順",
-                    "href": "use/app-store/",
-                },
-                {
-                    "kicker": "ビュー",
-                    "title": "答えを、用意しておく",
-                    "body": "マテリアライズドビューが書き込みの側で集計を最新に保つので、読み取りが計算し直すことはありません。",
-                    "go": "手順",
-                    "href": "use/app-store/",
-                },
-                {
-                    "kicker": "変更フィード",
-                    "title": "すべての書き込みを追う",
-                    "body": "別のプロセスが——あるいはエージェントが——追いかけられる、再開可能なフィード。ポーリングは要りません。",
-                    "go": "手順",
-                    "href": "use/ai/",
-                },
-                {
-                    "kicker": "どこでも",
-                    "title": "サーバー、バイナリ、ブラウザ、デバイス",
-                    "body": "同じエンジン、同じコマンドのままです。16 コアのサーバー、バイナリの中、ブラウザのタブで 151 KB、あるいは OS のないチップの上。",
-                    "go": "手順",
-                    "href": "use/embedded/",
-                },
-            ],
-        },
-        {
-            "t": "prose",
-            "tone": "blue",
-            "h2": "なぜ AI システムには、別のデータレイヤが要るのか",
-            "body": [
-                "エージェントは、文書を書き、それを埋め込み、索引に入れ、キャッシュし、"
-                "変更があったことを別の何かに伝えます。いまはそれが 4 つのシステムです"
-                "——キャッシュ、ベクトルデータベース、検索インデックス、キュー。同じ"
-                "事実を抱えたまま、互いにずれていきます。そのどれもが、手順を忘れうる"
-                "場所です。",
-                "<b>kevy は、それをひとつにまとめます。</b>インデックスを宣言し、キーは"
-                "いままでどおりに書くだけです。ベクトルインデックス、テキスト"
-                "インデックス、セカンダリインデックス、そしてビューを、エンジンが"
-                "書き込みの側で最新に保ちます。そして変更フィードが、聞いている相手に"
-                "それを伝えます。",
-                "そして kevy は、エージェントが動く場所で動きます。あなたのサービスの"
-                "中で、ソケットを持たないバイナリの中で、WebAssembly としてブラウザの"
-                "タブの中で、あるいはネットワークの端にあるデバイスの上で。",
-            ],
-        },
-        {
-            "t": "cards",
-            "tone": "deep",
-            "h2": "何を作っていますか",
-            "intro": "それぞれのページに、kevy が合うかどうか、何を差し出すことになるか、そして具体的な手順を——貼り付けて実行できるコマンドとともに書いてあります。",
-            "items": [
-                {"kicker": "AI", "title": "エージェントの記憶と RAG", "body": "ベクトル、全文検索、変更フィード、そしてセッションを勝手に期限切れにしてくれる TTL。", "go": "手順", "href": "use/ai/"},
-                {"kicker": "配信", "title": "データベースなしの読み取り", "body": "インデックスとビューによって、読み取りはクエリにならず、参照のままです。", "go": "手順", "href": "use/app-store/"},
-                {"kicker": "キャッシュ", "title": "セッションとレート制限", "body": "そもそもデータベースの問題ではなかった行を、データベースから外します。", "go": "手順", "href": "use/cache/"},
-                {"kicker": "キュー", "title": "バックグラウンドジョブ", "body": "コンシューマグループつきのストリーム。ジョブは、それを抱えていたワーカーより長く生き残ります。", "go": "手順", "href": "use/queue/"},
-                {"kicker": "リアルタイム", "title": "つながっているクライアントに送る", "body": "パターン購読つきの pub/sub。そしてサーバーなしで、ブラウザのタブをまたいで。", "go": "手順", "href": "use/realtime/"},
-                {"kicker": "組み込み", "title": "そのものの中に入れる", "body": "デスクトップアプリ、ブラウザ、エッジワーカー、マイコン。サーバーもソケットもありません。", "go": "手順", "href": "use/embedded/"},
-            ],
-        },
-        {
             "t": "steps",
-            "h2": "はじめる",
+            "id": "start",
+            "tone": "deep",
+            "h2": "2 分",
             "intro": "",
             "items": [
                 {
-                    "title": "サーバーとして",
-                    "body": "6379 番で RESP。redis-cli も、クライアントライブラリも、何かが変わったことに気づきません。",
+                    "title": 'インストール',
+                    "body": 'バイナリ 1 つです。ランタイムも、解決を待つ依存もありません。',
                     "code": 'cargo install kevy\nkevy --port 6379',
                 },
                 {
-                    "title": "Rust のプログラムの中で",
-                    "body": "ソケットも、2 つ目のプロセスも、シリアライズもありません。",
-                    "code": 'kevy-embedded = "4.0"\n\nlet db = Db::open("data/")?;\ndb.set(b"k", b"v", None)?;',
+                    "title": 'クライアントを向ける',
+                    "body": 'いま使っているものが、そのまま動きます。',
+                    "code": 'redis-cli -p 6379\n> SET greeting hello\nOK\n> TTL greeting\n(integer) -1',
                 },
                 {
-                    "title": "ブラウザのタブで",
-                    "body": "151 KB。ブラウザのファイルシステムに永続化され、リロードにも耐えます。",
-                    "code": 'import { open } from "@goliajp/kevy";\n\nconst db = await open({ persist: { name: "app" } });\ndb.set("cart:u1", json, { ttlMs: 3_600_000 });',
+                    "title": 'Redis にできないことをする',
+                    "body": 'インデックスを宣言すれば、書き込みの側が最新に保ちます。',
+                    "code": 'IDX.CREATE idx:city ON PREFIX user: FIELD city TYPE str KIND range\nIDX.QUERY  idx:city EQ osaka',
                 },
             ],
         },
         {
             "t": "callout",
             "kind": "loss",
-            "tone": "deep",
             "title": "kevy がやらないこと",
             "body": (
                 "<b>クラスタではありません。</b>レプリケーションとフェイルオーバーは"
-                "ありますが、マシンをまたぐデータのシャーディングはなく、今後もあり"
-                "ません。1 台で足りないなら、kevy は間違った答えです。<b>AUTH も TLS "
-                "もありません</b>——プライベートなネットワークで動かすか、それらを"
-                "正しく処理するものの後ろに置いてください。そして<b>いくつかの"
-                "コマンドは今も Redis と挙動が違います</b>。筆頭は原子性です——"
-                "複数キーの書き込みは shard 単位でのみ原子的で、shard をまたぐ "
-                "<code>RENAME</code> や <code>MSET</code> は一手では完了しません。"
-                "<a href=\"~/docs/commands/\">違いはすべて、"
-                "コマンドごとに書き出してあります</a>。<a href=\"~/choose/\">そして、"
-                "そもそも使うべきでない場合はこちら。</a>"
+                "ありますが、マシンをまたぐシャーディングはなく、今後もありません。"
+                "<b>AUTH も TLS もありません</b>——プライベートなネットワークで動かす"
+                "か、それらを正しく処理するものの後ろに置いてください。<b>複数キーの"
+                "書き込みは shard 単位でのみ原子的で、全体では原子的ではありません</b>"
+                "——shard をまたぐ <code>RENAME</code> や <code>MSET</code> は、1 つの"
+                "原子的な操作にはなりません。<a href=\"~/docs/commands/\">差異は"
+                "すべて、コマンドごとに文書化してあります</a>。"
+                "<a href=\"~/choose/\">そして、そもそも使うべきでない場合は"
+                "こちら。</a>"
             ),
         },
     ],
