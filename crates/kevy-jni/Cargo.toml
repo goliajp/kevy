@@ -1,0 +1,21 @@
+[package]
+name = "kevy-jni"
+description = "JNI gate for kevy — hand-written JNIEnv bindings (no jni crate) exporting Java_jp_golia_kevy_KevyNative_* over the kevy-ffi engine, for Android and desktop JVMs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+# cdylib only: this crate IS the loadable libkevy_jni. The logic it wraps
+# lives (and is tested) in kevy-ffi / kevy-embedded; the JVM side is
+# exercised by bindings/android/java/jp/golia/kevy/Smoke.java.
+crate-type = ["cdylib"]
+
+[dependencies]
+kevy-ffi = { path = "../kevy-ffi", version = "4.0.0" }
+
+[lints]
+workspace = true
