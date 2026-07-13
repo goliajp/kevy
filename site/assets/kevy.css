@@ -322,7 +322,7 @@ svg {
 /* ── bands: the page is a sequence of full-bleed rooms ──────────────────── */
 
 .band {
-  padding: clamp(56px, 8vw, 128px) var(--gut);
+  padding: clamp(40px, 4.8vw, 76px) var(--gut);
   border-top: 1px solid var(--edge);
 }
 .band.deep {
@@ -348,7 +348,7 @@ svg {
 }
 
 .eyebrow {
-  margin: 0 0 14px;
+  margin: 0 0 10px;
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 500;
@@ -367,12 +367,12 @@ h3 {
   text-wrap: balance;
 }
 h1 {
-  font-size: clamp(38px, 6.2vw, 88px);
+  font-size: clamp(34px, 4.6vw, 64px);
   font-weight: 800;
   line-height: 1.03;
 }
 h2 {
-  font-size: clamp(26px, 3.3vw, 44px);
+  font-size: clamp(24px, 2.6vw, 36px);
   font-weight: 700;
   line-height: 1.12;
 }
@@ -384,10 +384,10 @@ h3 {
 }
 
 .lede {
-  font-size: clamp(16px, 1.3vw, 21px);
-  line-height: 1.65;
+  font-size: clamp(15px, 1.15vw, 18px);
+  line-height: 1.6;
   color: var(--text-2);
-  margin: 22px 0 0;
+  margin: 14px 0 0;
   max-width: 62ch;
 }
 .lede b {
@@ -407,24 +407,24 @@ h3 {
 :lang(ja) h1 {
   letter-spacing: -0.01em;
   line-height: 1.22;
-  font-size: clamp(30px, 4.6vw, 64px);
+  font-size: clamp(28px, 3.5vw, 48px);
 }
 :lang(zh) h2,
 :lang(ja) h2 {
   letter-spacing: 0;
   line-height: 1.35;
-  font-size: clamp(22px, 2.5vw, 35px);
+  font-size: clamp(20px, 2.1vw, 29px);
 }
 :lang(zh) .lede,
 :lang(ja) .lede {
-  line-height: 1.95;
+  line-height: 1.85;
   max-width: 42ch;
 }
 :lang(zh) .prose p,
 :lang(ja) .prose p,
 :lang(zh) .card p,
 :lang(ja) .card p {
-  line-height: 1.95;
+  line-height: 1.85;
 }
 
 /* ── layout primitives — no container, ever ─────────────────────────────── */
@@ -432,11 +432,11 @@ h3 {
 .split {
   display: grid;
   grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-  gap: clamp(32px, 6vw, 96px);
+  gap: clamp(28px, 4vw, 64px);
   align-items: center;
 }
 .sec-h {
-  margin-bottom: clamp(32px, 4vw, 56px);
+  margin-bottom: clamp(20px, 2.2vw, 32px);
   max-width: 70ch;
 }
 .sec-lede {
@@ -447,11 +447,26 @@ h3 {
 }
 
 .prose p {
-  font-size: clamp(15px, 1.1vw, 17px);
-  line-height: 1.75;
+  font-size: clamp(15px, 1.05vw, 16.5px);
+  line-height: 1.68;
   color: var(--text-2);
   max-width: 68ch;
   margin: 0 0 18px;
+}
+/* Wide screens: prose flows in two columns instead of leaving the right
+ * half of the band empty. The wrapper (not the band — its background must
+ * stay full-bleed) carries the columns; break-inside keeps a paragraph
+ * whole. Below 1440px it degrades to the single readable column. */
+@media (min-width: 1440px) {
+  .pcols {
+    columns: 2;
+    column-gap: 64px;
+    max-width: 150ch;
+  }
+  .pcols p {
+    break-inside: avoid;
+    max-width: none;
+  }
 }
 .prose p:last-child {
   margin-bottom: 0;
@@ -570,7 +585,7 @@ pre.hero-code code {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 26px 28px 28px;
+  padding: 20px 22px 22px;
   background: var(--void);
   text-decoration: none;
   min-width: 0;
@@ -708,7 +723,7 @@ pre.hero-code code {
   text-transform: uppercase;
   color: var(--text-3);
   background: var(--deep);
-  padding: 14px 20px;
+  padding: 10px 16px;
   border-bottom: 1px solid var(--edge);
   white-space: nowrap;
 }
@@ -719,7 +734,7 @@ pre.hero-code code {
   text-align: right;
 }
 .tbl td {
-  padding: 15px 20px;
+  padding: 11px 16px;
   border-bottom: 1px solid var(--edge);
   color: var(--text-2);
   vertical-align: top;
@@ -767,7 +782,7 @@ pre.hero-code code {
 /* ── callout ───────────────────────────────────────────────────────────── */
 
 .call {
-  padding: 24px 28px;
+  padding: 18px 22px;
   border: 1px solid var(--edge);
   border-left: 3px solid var(--blue);
   border-radius: 10px;
@@ -818,7 +833,7 @@ pre.hero-code code {
 .steps li {
   counter-increment: s;
   background: var(--void);
-  padding: 28px 30px 30px;
+  padding: 20px 22px 22px;
   min-width: 0;
 }
 .band.deep .steps li {
@@ -852,7 +867,7 @@ pre.hero-code code {
 }
 .steps pre {
   margin: 0;
-  padding: 16px 18px;
+  padding: 12px 14px;
   background: var(--lift);
   border: 1px solid var(--edge);
   border-radius: 8px;
@@ -860,7 +875,7 @@ pre.hero-code code {
 }
 .steps pre code {
   font-size: 12.5px;
-  line-height: 1.9;
+  line-height: 1.75;
   background: none;
   border: 0;
   padding: 0;
@@ -868,9 +883,12 @@ pre.hero-code code {
   white-space: pre;
 }
 
-/* recipes: each task carries its own cost box, spaced off the step grid */
+/* recipes: each task carries its own cost box, spaced off the step grid
+ * and matching its full width — a 92ch box next to a full-bleed grid reads
+ * as a layout accident, not a measure. */
 .r-cost {
-  margin-top: 18px;
+  margin-top: 14px;
+  max-width: none;
 }
 
 /* ── code figure ───────────────────────────────────────────────────────── */
@@ -924,7 +942,7 @@ figure.code code {
   border-bottom: 0;
 }
 .faq summary {
-  padding: 20px 24px;
+  padding: 14px 20px;
   font-size: 16px;
   font-weight: 500;
   color: var(--text);
@@ -949,7 +967,7 @@ figure.code code {
   background: var(--lift);
 }
 .faq details > div {
-  padding: 0 24px 22px 52px;
+  padding: 0 20px 16px 48px;
   font-size: 15px;
   line-height: 1.85;
   color: var(--text-2);

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Storage for AI applications — kevy</title>
 <meta name="description" content="Vector search, full-text search and a change feed in the store that already holds your data. What kevy gives an AI application, and what it does not.">
-<link rel="stylesheet" href="../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">RAG and agent memory usually mean three systems: a cache, a vector database, and a search index — with the same facts in all three, drifting apart. <b>kevy has vector KNN, BM25 full-text and a change feed in the engine</b>, over the keys you already wrote.</p>
     
   </div></section>
-<section class="band prose"><h2>Why this fits</h2><p>The expensive part of a RAG stack is not the search. It is keeping three copies of the truth in step: you write a document, then you have to remember to embed it, index it, and invalidate the cache. Every one of those is a place to forget.</p><p><b>In kevy the index is a declaration, not a pipeline.</b> You tell the engine which keys and which field, and the write path keeps the index current. There is nothing to run afterwards and nothing to fall behind.</p><p><b>What kevy does not do is produce the embedding.</b> There is no model in the engine and there will not be one — inference does not belong in a storage engine, and pretending otherwise would tie your vector format to our release cycle. You bring the vector; kevy stores it, indexes it and searches it.</p></section>
+<section class="band prose"><h2>Why this fits</h2><div class="pcols"><p>The expensive part of a RAG stack is not the search. It is keeping three copies of the truth in step: you write a document, then you have to remember to embed it, index it, and invalidate the cache. Every one of those is a place to forget.</p><p><b>In kevy the index is a declaration, not a pipeline.</b> You tell the engine which keys and which field, and the write path keeps the index current. There is nothing to run afterwards and nothing to fall behind.</p><p><b>What kevy does not do is produce the embedding.</b> There is no model in the engine and there will not be one — inference does not belong in a storage engine, and pretending otherwise would tie your vector format to our release cycle. You bring the vector; kevy stores it, indexes it and searches it.</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>Search your keys by meaning</h2><p class="sec-lede">KNN over a field of the keys you already write. Declared once; the write path keeps it current, with nothing to sync.</p></div>
   <ol class="steps recipe"><li><h3>Declare the index once</h3><p>The engine backfills existing keys, answering INDEXBUILDING while it does.</p><pre><code>IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann  DIM 768 DISTANCE cosine M 16 EF 200

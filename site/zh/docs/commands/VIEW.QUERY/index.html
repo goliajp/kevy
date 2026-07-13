@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VIEW.QUERY — kevy 命令参考</title>
 <meta name="description" content="VIEW.QUERY — 按视图的既定顺序翻页取出成员，可通过 VIA 模板顺带把字段取回来。 virtual：O(log N_order + candidates * leaves) —— 它顺着 ORDER 索引流式扫描，对每个候选逐个探测是否属于该视图，取够 limit 就停，因此从不物化整个成员集合。materialized：O(log M + limit)。加上 FIELDS 与 VIA 会多出第二次扇出，用来把原行取回来。">
-<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
-<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=d4b38be8">
 <script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {

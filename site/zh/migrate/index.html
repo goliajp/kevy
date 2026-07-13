@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>从 Redis 或数据库迁过来——kevy</title>
 <meta name="description" content="团队为什么会从 Redis 或 Postgres 换到 kevy，具体有哪些变化，代价是什么，以及怎样不重写代码就把迁移做完。">
-<link rel="stylesheet" href="../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">这是两场完全不同的对话。从 <b>Redis</b> 过来，协议是一样的，要问的是哪些行为不一样。从<b>关系型数据库</b>过来，没有一处是一样的，要问的是这份负载里到底哪一部分该搬——答案是<b>只搬一部分</b>，而且我们会说清楚是哪一部分。</p>
     
   </div></section>
-<section class="band prose"><h2>从 Redis 过来</h2><p><b>你的客户端不用改。</b>kevy 说 RESP2 和 RESP3，实现了 184 条命令。把你现有的库指过来就行，代码不动，redis-cli 不换。没有新的 SDK 要接，也没有新协议要学。</p><p><b>所以真正要问的只有一句：你能换到什么。</b>只有三样。如果这三样对你都没有价值，那就留在 Redis——它是一件极好的软件，为换而换，只是白白搭进去一个星期。</p></section>
+<section class="band prose"><h2>从 Redis 过来</h2><div class="pcols"><p><b>你的客户端不用改。</b>kevy 说 RESP2 和 RESP3，实现了 184 条命令。把你现有的库指过来就行，代码不动，redis-cli 不换。没有新的 SDK 要接，也没有新协议要学。</p><p><b>所以真正要问的只有一句：你能换到什么。</b>只有三样。如果这三样对你都没有价值，那就留在 Redis——它是一件极好的软件，为换而换，只是白白搭进去一个星期。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>具体能换到什么</h2></div>
   <ol class="steps"><li><h3>它能跑在 Redis 跑不到的地方</h3><p>嵌进二进制，发到浏览器标签页，在一颗没有分配器的 Cortex-M 上启动。今天这些场合各要一层自己的存储、一套自己的 API；在这里，它们是同一个引擎、同一批命令。如果你曾经为客户端那边另写过一个缓存，这就是值得看一眼的理由。</p></li><li><h3>它顺带把搜索服务也替掉</h3><p>二级索引、物化视图、向量 KNN、BM25 全文检索都在引擎里——不是模块，不是 sidecar，也不是一份会慢慢和原数据对不上的副本。原本要跑 Redis 加一个搜索集群的团队，往往只需要跑一个东西。</p><pre><code># look up by a field, not just by the key
@@ -83,7 +83,7 @@ kevy-cli digest -p 6380 user:
 # an interrupted import resumes where it stopped:
 kevy-cli import -p 6380 --resume dump.resp</code></pre></figure>
 </section>
-<section class="band prose"><h2>从关系型数据库过来</h2><p><b>不要搬你的数据库。</b>要搬的是它身上那一部分从来就不是数据库问题的东西。</p><p>会话。限流。功能开关。任务队列。还有那一行每个请求都要读、却从来没人拿去 join 的热点行。在大多数应用里，这些都住在 Postgres 里，而它们正是被敲得最狠的那些行——不是因为关系型数据库做不好，而是因为它们从来就不是提问。它们是查表。key 你早就知道了。</p><p><b>Postgres 最擅长的那些事，留给 Postgres</b>——join、临时查询、分析，以及跨无关行的真隔离事务。kevy 接走对外服务的那条路径，让数据库喘口气。</p><p><b>而且有一部分提问式的读也能搬。</b>二级索引和物化视图意味着，一个带过滤条件的列表、一个持续累计的总数，不必变成一次查询——写入路径已经把答案备好了。这正是大多数应用真正在用 ORM 的那一部分。</p></section>
+<section class="band prose"><h2>从关系型数据库过来</h2><div class="pcols"><p><b>不要搬你的数据库。</b>要搬的是它身上那一部分从来就不是数据库问题的东西。</p><p>会话。限流。功能开关。任务队列。还有那一行每个请求都要读、却从来没人拿去 join 的热点行。在大多数应用里，这些都住在 Postgres 里，而它们正是被敲得最狠的那些行——不是因为关系型数据库做不好，而是因为它们从来就不是提问。它们是查表。key 你早就知道了。</p><p><b>Postgres 最擅长的那些事，留给 Postgres</b>——join、临时查询、分析，以及跨无关行的真隔离事务。kevy 接走对外服务的那条路径，让数据库喘口气。</p><p><b>而且有一部分提问式的读也能搬。</b>二级索引和物化视图意味着，一个带过滤条件的列表、一个持续累计的总数，不必变成一次查询——写入路径已经把答案备好了。这正是大多数应用真正在用 ORM 的那一部分。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>哪些部分该搬</h2><p class="sec-lede">按负载逐条来。红色的那三行，是最多人搞错的地方。</p></div>
   <div class="tbl"><table><thead><tr><th>负载</th><th>搬吗</th><th>为什么</th></tr></thead><tbody><tr><td>会话、令牌</td><td class="win">搬</td><td class="num">按 key 查表，带一个 TTL。数据库一直是在帮你的忙，那本来就不是它的活。</td></tr><tr><td>限流、计数器</td><td class="win">搬</td><td class="num">带过期的 INCR 是原子的，而且 O(1)。在 SQL 里，这是压在你最热那一行上的行锁。</td></tr><tr><td>任务队列</td><td class="win">搬</td><td class="num">list 和 stream，带消费组和逐条确认。所谓队列表，不过是一套加了额外步骤的加锁约定。</td></tr><tr><td>功能开关、配置</td><td class="win">搬</td><td class="num">一直在读，很少写，从来不 join。</td></tr><tr><td>带过滤的列表（按状态、按归属）</td><td class="win">多数该搬</td><td class="num">二级索引不需要查询计划器就能回答。见<a href="../../zh/use/app-store/">用索引扛住读</a>。</td></tr><tr><td>聚合（计数、合计）</td><td class="win">多数该搬</td><td class="num">物化视图在写入路径上就把它更新好，不必每次读都重算一遍。</td></tr><tr><td>跨多张表的 join</td><td class="loss">不要搬</td><td class="num">kevy 没有 join，以后也不会长出 join。这正是 Postgres 存在的意义。</td></tr><tr><td>分析、临时查询</td><td class="loss">不要搬</td><td class="num">这里没有查询计划器，也没有优化器。不要尝试。</td></tr><tr><td>跨无关行的事务</td><td class="loss">不要搬</td><td class="num">MULTI 是按 shard 生效的，不是全局的。如果你需要跨整个 keyspace 的可串行化隔离，你需要的是数据库。</td></tr></tbody></table></div>

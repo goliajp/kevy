@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>给 AI 应用的存储——kevy</title>
 <meta name="description" content="向量检索、全文检索和变更流，就在已经存着你的数据的那个存储里。kevy 能给一个 AI 应用什么，又不给什么。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">RAG 和 agent 记忆通常意味着三套系统：一个缓存、一个向量数据库、一个搜索索引——同样的事实存三份，然后慢慢彼此对不上。<b>kevy 把向量 KNN、BM25 全文检索和变更流都放在引擎里</b>，直接建在你已经写进去的那些 key 上。</p>
     
   </div></section>
-<section class="band prose"><h2>为什么合适</h2><p>RAG 这一套里，贵的不是检索，而是让三份事实保持同步：你写了一篇文档，然后你还得记住去做 embedding、去建索引、去让缓存失效。这里每一步都是一个可能忘掉的地方。</p><p><b>在 kevy 里，索引是一句声明，不是一条流水线。</b>你告诉引擎是哪些 key、哪个字段，写路径就会把索引维持在最新。事后没有东西要跑，也没有东西会落后。</p><p><b>kevy 不做的那件事，是生成 embedding。</b>引擎里没有模型，以后也不会有——推理不该待在存储引擎里，硬塞进去只会把你的向量格式绑死在我们的发版节奏上。向量由你给出；kevy 负责存它、索引它、检索它。</p></section>
+<section class="band prose"><h2>为什么合适</h2><div class="pcols"><p>RAG 这一套里，贵的不是检索，而是让三份事实保持同步：你写了一篇文档，然后你还得记住去做 embedding、去建索引、去让缓存失效。这里每一步都是一个可能忘掉的地方。</p><p><b>在 kevy 里，索引是一句声明，不是一条流水线。</b>你告诉引擎是哪些 key、哪个字段，写路径就会把索引维持在最新。事后没有东西要跑，也没有东西会落后。</p><p><b>kevy 不做的那件事，是生成 embedding。</b>引擎里没有模型，以后也不会有——推理不该待在存储引擎里，硬塞进去只会把你的向量格式绑死在我们的发版节奏上。向量由你给出；kevy 负责存它、索引它、检索它。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>按语义检索你的 key</h2><p class="sec-lede">在你已经在写的那些 key 的某个字段上做 KNN。声明一次，写路径把它维持在最新，没有东西要同步。</p></div>
   <ol class="steps recipe"><li><h3>把索引声明一次</h3><p>引擎会回填已有的 key，回填期间回答 INDEXBUILDING。</p><pre><code>IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann  DIM 768 DISTANCE cosine M 16 EF 200

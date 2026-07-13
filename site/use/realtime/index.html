@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Realtime and pub/sub — kevy</title>
 <meta name="description" content="Chat, presence, notifications and live dashboards on kevy&#x27;s pub/sub — including what happens to a subscriber that cannot keep up.">
-<link rel="stylesheet" href="../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">Chat, presence, notifications, a dashboard that updates itself. One publish, many subscribers, no polling. <b>And in the browser build, the same pub/sub works between two tabs with no server at all.</b></p>
     
   </div></section>
-<section class="band prose"><h2>Why this fits — and where it does not</h2><p>Pub/sub is fire-and-forget. A message goes to whoever is subscribed <b>at that moment</b>; nobody who connects a second later will ever see it, and there is no acknowledgement. That is exactly right for a presence ping or a live counter, and exactly wrong for anything you would be upset to lose.</p><p><b>If losing a message matters, use a stream instead</b> — see <a href="../../use/queue/">queues</a>. Streams keep history, support consumer groups, and let a client that was offline catch up. Pub/sub is the cheap thing; the cheapness is the trade.</p></section>
+<section class="band prose"><h2>Why this fits — and where it does not</h2><div class="pcols"><p>Pub/sub is fire-and-forget. A message goes to whoever is subscribed <b>at that moment</b>; nobody who connects a second later will ever see it, and there is no acknowledgement. That is exactly right for a presence ping or a live counter, and exactly wrong for anything you would be upset to lose.</p><p><b>If losing a message matters, use a stream instead</b> — see <a href="../../use/queue/">queues</a>. Streams keep history, support consumer groups, and let a client that was offline catch up. Pub/sub is the cheap thing; the cheapness is the trade.</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>Fan a message out to everyone listening</h2><p class="sec-lede">One publish reaches every subscriber connected at that moment — a chat room, a notification, a live counter.</p></div>
   <ol class="steps recipe"><li><h3>Each client subscribes</h3><p>PSUBSCRIBE takes a whole family of channels on one connection.</p><pre><code>SUBSCRIBE room:42

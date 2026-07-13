@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>你该用 kevy 吗？——kevy</title>
 <meta name="description" content="kevy 的哪一种形态适合你的问题，选它要放弃什么，以及哪些情况下你应该去用别的东西。">
-<link rel="stylesheet" href="../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">有时候不该。下面按你真正做决定的顺序来：<b>键值存储这个形状对不对，数据必须待在哪里，以及你要放弃什么。</b></p>
     
   </div></section>
-<section class="band prose"><h2>第一步——键值存储这个形状对吗</h2><p><b>当你已经知道 key 的时候，用 kevy。</b>一个会话 id、一个用户 id、一个队列的名字、一个缓存 key。读是查表，不是提问。这覆盖的应用面比大多数人以为的要大——而且二级索引和物化视图，还能把一部分提问也变成查表。</p><p><b>当你的读确实是查询的时候，不要用 kevy。</b>跨五张表的 join、临时的分析查询、跨无关行且要求真隔离的事务——那是 PostgreSQL 的活，也应该留给 PostgreSQL。我们把<a href="../../zh/docs/rds-workloads/">每一种关系型负载在这里的代价</a>都写下来了，包括那些答案就是别搬的。</p><p><b>如果一台机器不够用，不要用 kevy。</b>它没有集群模式，以后也不会有。单个 kevy 每秒能做几百万次操作，这个余量比大多数产品一辈子用到的都多——但越过它之后，你需要的是一个会分片的东西，那不是这里。</p></section>
+<section class="band prose"><h2>第一步——键值存储这个形状对吗</h2><div class="pcols"><p><b>当你已经知道 key 的时候，用 kevy。</b>一个会话 id、一个用户 id、一个队列的名字、一个缓存 key。读是查表，不是提问。这覆盖的应用面比大多数人以为的要大——而且二级索引和物化视图，还能把一部分提问也变成查表。</p><p><b>当你的读确实是查询的时候，不要用 kevy。</b>跨五张表的 join、临时的分析查询、跨无关行且要求真隔离的事务——那是 PostgreSQL 的活，也应该留给 PostgreSQL。我们把<a href="../../zh/docs/rds-workloads/">每一种关系型负载在这里的代价</a>都写下来了，包括那些答案就是别搬的。</p><p><b>如果一台机器不够用，不要用 kevy。</b>它没有集群模式，以后也不会有。单个 kevy 每秒能做几百万次操作，这个余量比大多数产品一辈子用到的都多——但越过它之后，你需要的是一个会分片的东西，那不是这里。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>第二步——数据必须待在哪里</h2><p class="sec-lede">这一条决定你用哪种形态。每一行里的命令都是同一批。</p></div>
   <div class="tbl"><table><thead><tr><th>你的情况</th><th>用哪种</th><th>为什么</th></tr></thead><tbody><tr><td>多个服务共用这份数据</td><td class="num">服务端</td><td class="num">一个进程，在一个端口上说 RESP。你现有的 Redis 客户端不用改就能连。</td></tr><tr><td>数据只属于一个程序</td><td class="num">嵌入</td><td class="num">没有 socket，没有第二个进程，也没有东西要序列化。是一次函数调用，不是一次网络往返。</td></tr><tr><td>数据属于用户的设备</td><td class="num">浏览器</td><td class="num">151 KB 的 WebAssembly。真的 TTL，真的发布订阅，落在浏览器自己的文件系统上。离线也能用。</td></tr><tr><td>代码在边缘按请求执行</td><td class="num">边缘</td><td class="num">没有要预热的东西，也不用建连接。存储和你的代码待在同一个 isolate 里。</td></tr><tr><td>一台没有操作系统、没有堆的设备</td><td class="num">裸机</td><td class="num">kevy-store 是 no_std 的：一块固定 arena，没有分配器。每次 push，CI 都会在 Cortex-M 上把它启动一遍。</td></tr></tbody></table></div>

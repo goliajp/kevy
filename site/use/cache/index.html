@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cache and sessions — kevy</title>
 <meta name="description" content="Sessions, hot rows, rate limits and feature flags in kevy: the task, the commands, and what each one costs.">
-<link rel="stylesheet" href="../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">Sessions, rate limits, feature flags, the hot row every request reads. They are in Postgres in most applications, and they are the rows getting hammered — not because a database is bad at them, but because <b>they were never questions. You already know the key.</b></p>
     
   </div></section>
-<section class="band prose"><h2>Why this fits</h2><p>Every one of these has the same shape: a key you already hold, a small value, and a lifetime. kevy does the lookup in O(1), expires the key itself without a cron job, and does several million of them a second on one machine.</p><p>The part people underrate is the <b>expiry</b>. A cache built on a database needs a sweeper, and the sweeper is where the bugs live. Here the engine drops the key when its time is up, whether or not anyone asks for it. Four tasks below — each one is pasteable into <code>redis-cli</code> against a running kevy.</p></section>
+<section class="band prose"><h2>Why this fits</h2><div class="pcols"><p>Every one of these has the same shape: a key you already hold, a small value, and a lifetime. kevy does the lookup in O(1), expires the key itself without a cron job, and does several million of them a second on one machine.</p><p>The part people underrate is the <b>expiry</b>. A cache built on a database needs a sweeper, and the sweeper is where the bugs live. Here the engine drops the key when its time is up, whether or not anyone asks for it. Four tasks below — each one is pasteable into <code>redis-cli</code> against a running kevy.</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>A session that cleans itself up</h2><p class="sec-lede">One key per session, gone by itself an hour after the last touch — no sweeper, no cron job, no expired-rows table.</p></div>
   <ol class="steps recipe"><li><h3>Write the session with its lifetime</h3><pre><code>SET session:7f3a &#x27;{&quot;user&quot;:&quot;ada&quot;,&quot;role&quot;:&quot;admin&quot;}&#x27; EX 3600

@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>REPL.WAIT — kevy command reference</title>
 <meta name="description" content="REPL.WAIT — kevy extension: on a replica, block until every shard has applied the given REPL.TOKEN (then reads are read-your-writes); +OK on success, -MISDIRECTED writer is &lt;primary&gt; on timeout or generation mismatch. Default TIMEOUT 1000 ms, hard cap 60 s. On a primary: immediate +OK. O(S) — a barrier, not a keyspace op; the wall-clock cost is the replication lag, bounded by TIMEOUT (default 1s, hard-capped at 60s)">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
-<link rel="stylesheet" href="../../../assets/docs.css?v=35ee534d">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../assets/docs.css?v=d4b38be8">
 <script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {

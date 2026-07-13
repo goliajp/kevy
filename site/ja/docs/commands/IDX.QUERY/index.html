@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>IDX.QUERY — kevy コマンドリファレンス</title>
 <meta name="description" content="IDX.QUERY — インデックスに問い合わせる。範囲 / 等値、text MATCH、vector KNN、集約グループ、2 つのインデックスの COMPOSE のいずれか。 インデックスの kind による。range は O(log N + limit)。unique は O(log N + hits)。全文検索は posting list の長さの総和で、MaxScore による枝刈りが入る。vector ANN は距離計算が O(dim * (M log N + ef * M)) 回(HNSW)。agg GROUPS は 1 ~ 3 ラウンドの fan-out を伴う上限つきの top-K。HYBRID は両方のサブクエリを 4 倍の深さで走らせ、origin で RRF により融合する。COMPOSE は limit で抑えられない —— 結果は key 順であるのに対しセグメントは値順であるため、両方の葉を全件 materialise する。">
-<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
-<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=d4b38be8">
 <script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {

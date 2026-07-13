@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>リアルタイムと pub/sub — kevy</title>
 <meta name="description" content="kevy の pub/sub によるチャット、プレゼンス、通知、ライブダッシュボード。追いつけない購読者に何が起きるのかも含めて。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">チャット、プレゼンス、通知、ひとりでに更新されるダッシュボード。1 回の publish で多数の購読者へ、ポーリングなしで届きます。<b>そしてブラウザ向けビルドでは、同じ pub/sub がサーバーなしで、2 つのタブの間で動きます。</b></p>
     
   </div></section>
-<section class="band prose"><h2>なぜ向いているのか——そして、どこで向いていないのか</h2><p>pub/sub は投げっぱなしです。メッセージは<b>その瞬間に</b>購読している相手へ届きます。1 秒後に接続した人が受け取ることは決してなく、確認応答もありません。プレゼンスの ping やライブなカウンタにはまさに正しく、失って困るものには、まさに間違っています。</p><p><b>メッセージを失うことが問題なら、代わりにストリームを使ってください</b>——<a href="../../../ja/use/queue/">キュー</a>を参照してください。ストリームは履歴を保持し、コンシューマグループに対応し、オフラインだったクライアントが追いつけます。pub/sub は安い手段であり、その安さが、取引の条件です。</p></section>
+<section class="band prose"><h2>なぜ向いているのか——そして、どこで向いていないのか</h2><div class="pcols"><p>pub/sub は投げっぱなしです。メッセージは<b>その瞬間に</b>購読している相手へ届きます。1 秒後に接続した人が受け取ることは決してなく、確認応答もありません。プレゼンスの ping やライブなカウンタにはまさに正しく、失って困るものには、まさに間違っています。</p><p><b>メッセージを失うことが問題なら、代わりにストリームを使ってください</b>——<a href="../../../ja/use/queue/">キュー</a>を参照してください。ストリームは履歴を保持し、コンシューマグループに対応し、オフラインだったクライアントが追いつけます。pub/sub は安い手段であり、その安さが、取引の条件です。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>聞いている全員へ、メッセージをファンアウトする</h2><p class="sec-lede">1 回の publish が、その瞬間につながっているすべての購読者に届きます——チャットルーム、通知、ライブなカウンタ。</p></div>
   <ol class="steps recipe"><li><h3>各クライアントが購読する</h3><p>PSUBSCRIBE なら、チャネルの一族まるごとを 1 本の接続で受け取れます。</p><pre><code>SUBSCRIBE room:42

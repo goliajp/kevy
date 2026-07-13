@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>IDX.CREATE — kevy コマンドリファレンス</title>
 <meta name="description" content="IDX.CREATE — key の prefix に対する二次インデックスを宣言する(カタログの変更であり、サイドカーへ永続化される)。 呼び出し自体は O(1)。ビルドは非同期である —— 各 shard が対象 key のスナップショットを取り(その shard 上の key 数に比例)、1 tick あたり 2048 行ずつ backfill する。1 行あたりのビルドコストは、range / unique が O(log N)、text が O(tokens)、vector が O(ef_construction * M * dim)。">
-<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
-<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=c5c8b1de">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=d4b38be8">
 <script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {

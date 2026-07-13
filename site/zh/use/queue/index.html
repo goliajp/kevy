@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>队列与后台任务——kevy</title>
 <meta name="description" content="在 kevy 里做任务队列：简单的活用 list，丢不起的活用带消费组的 stream。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">关系型数据库里的队列表，本质是一套加了额外步骤的加锁约定。kevy 有两种真正的队列：丢一个任务还能承受的时候，用 <b>list</b>；承受不了的时候，用<b>带消费组的 stream</b>。</p>
     
   </div></section>
-<section class="band prose"><h2>两种选哪种</h2><p><b>用 list</b>：任务重做一遍成本很低，worker 也不太可能干到一半挂掉——发一封邮件、预热一个缓存、让一条 CDN 路径失效。<code>BRPOP</code> 会一直阻塞到有活为止，所以 worker 不必轮询。</p><p><b>用 stream</b>：任务绝对不能丢。消费组会把每条消息恰好交给一个 worker，并且记住自己交过。如果这个 worker 在确认之前挂了，消息会留在 pending 列表里，另一个 worker 可以把它认领走——stream 存在的全部理由就是这个，它也正是一个队列和一份侥幸之间的差别。</p></section>
+<section class="band prose"><h2>两种选哪种</h2><div class="pcols"><p><b>用 list</b>：任务重做一遍成本很低，worker 也不太可能干到一半挂掉——发一封邮件、预热一个缓存、让一条 CDN 路径失效。<code>BRPOP</code> 会一直阻塞到有活为止，所以 worker 不必轮询。</p><p><b>用 stream</b>：任务绝对不能丢。消费组会把每条消息恰好交给一个 worker，并且记住自己交过。如果这个 worker 在确认之前挂了，消息会留在 pending 列表里，另一个 worker 可以把它认领走——stream 存在的全部理由就是这个，它也正是一个队列和一份侥幸之间的差别。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>list，给可以重来的活</h2><p class="sec-lede">生产者往里推，阻塞着的 worker 在有活的那一刻醒来。两条命令，没有轮询循环，也没有调度器。</p></div>
   <ol class="steps recipe"><li><h3>生产者：把任务推进去</h3><pre><code>LPUSH jobs:email &#x27;{&quot;to&quot;:&quot;ada@example.com&quot;,&quot;tpl&quot;:&quot;welcome&quot;}&#x27;

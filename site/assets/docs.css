@@ -463,12 +463,12 @@ dl.meta dd code {
   top: var(--mast-h);
   max-height: calc(100vh - var(--mast-h));
   overflow-y: auto;
-  padding: 2rem 1.25rem 3rem var(--gut);
+  padding: 1.4rem 1.25rem 2rem var(--gut);
   border-right: 1px solid var(--edge);
   scrollbar-width: thin;
 }
 .side-h {
-  margin: 1.5rem 0 0.5rem;
+  margin: 1.05rem 0 0.35rem;
   font-size: 0.6875rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -485,7 +485,7 @@ dl.meta dd code {
 }
 .side li a {
   display: block;
-  padding: 0.32rem 0.55rem;
+  padding: 0.24rem 0.55rem;
   margin-left: -0.55rem;
   border-radius: 3px;
   font-size: 0.875rem;
@@ -506,12 +506,12 @@ dl.meta dd code {
 /* ── the document ───────────────────────────────────────────────────────── */
 
 .doc {
-  padding: 2.5rem var(--gut) 5rem;
+  padding: 1.75rem var(--gut) 3.5rem;
   min-width: 0;
 }
 .doc-head {
-  margin-bottom: 2.25rem;
-  padding-bottom: 1.5rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
   border-bottom: 1px solid var(--edge);
 }
 .doc-head h1 {
@@ -524,15 +524,15 @@ dl.meta dd code {
   text-wrap: balance;
 }
 .doc-head .lede {
-  margin: 0.75rem 0 0;
-  font-size: 1.0625rem;
-  line-height: 1.7;
+  margin: 0.5rem 0 0;
+  font-size: 1rem;
+  line-height: 1.6;
   color: var(--text-2);
   max-width: 68ch;
 }
 
 .doc h2 {
-  margin: 3rem 0 1rem;
+  margin: 2.1rem 0 0.7rem;
   padding-top: 0.5rem;
   font-size: 1.375rem;
   line-height: 1.3;
@@ -544,35 +544,35 @@ dl.meta dd code {
   border: 0;
 }
 .doc h3 {
-  margin: 2rem 0 0.75rem;
+  margin: 1.4rem 0 0.5rem;
   font-size: 1.0625rem;
   font-weight: 620;
   color: var(--text);
   scroll-margin-top: calc(var(--mast-h) + 1rem);
 }
 .doc h4 {
-  margin: 1.5rem 0 0.6rem;
+  margin: 1.1rem 0 0.45rem;
   font-size: 0.9375rem;
   font-weight: 620;
   color: var(--text);
 }
 .doc p {
-  margin: 0 0 1.1rem;
-  font-size: 1rem;
-  line-height: 1.8;
+  margin: 0 0 0.85rem;
+  font-size: 0.9688rem;
+  line-height: 1.68;
   color: var(--text-2);
   max-width: 72ch;
 }
 .doc ul,
 .doc ol {
-  margin: 0 0 1.2rem;
+  margin: 0 0 0.9rem;
   padding-left: 1.4rem;
   max-width: 72ch;
 }
 .doc li {
-  margin-bottom: 0.4rem;
-  font-size: 1rem;
-  line-height: 1.75;
+  margin-bottom: 0.28rem;
+  font-size: 0.9688rem;
+  line-height: 1.62;
   color: var(--text-2);
 }
 .doc li::marker {
@@ -607,13 +607,13 @@ dl.meta dd code {
 }
 .doc figure.code pre {
   margin: 0;
-  padding: 1rem 1.15rem;
+  padding: 0.75rem 0.95rem;
   overflow-x: auto;
 }
 .doc figure.code code {
   font-family: var(--mono);
   font-size: 0.8125rem;
-  line-height: 1.75;
+  line-height: 1.62;
   padding: 0;
   background: none;
   border: 0;

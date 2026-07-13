@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kevy を使うべきか — kevy</title>
 <meta name="description" content="自分の問題にどの kevy が合うのか、選ぶことで何を差し出すのか、そして代わりに別のものを使うべき場合。">
-<link rel="stylesheet" href="../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">使うべきでない場合もあります。ここでは、実際に判断する順番どおりに並べます。<b>そもそもキーバリューという形が正しいのか。データはどこに置かれる必要があるのか。そして、何を差し出すことになるのか。</b></p>
     
   </div></section>
-<section class="band prose"><h2>まず——キーバリューという形は、正しいか</h2><p><b>キーが分かっているなら、kevy を使ってください。</b>セッション ID、ユーザー ID、キューの名前、キャッシュキー。読み取りは問い合わせではなく参照です。これは思われているよりも広い範囲を覆います。さらにセカンダリインデックスとマテリアライズドビューが、問い合わせのいくつかも参照に変えます。</p><p><b>読み取りが本当にクエリなら、kevy を使わないでください。</b>5 つのテーブルにまたがる結合、アドホックな分析、無関係な行にまたがり本物の分離レベルを要求するトランザクション——それは PostgreSQL の仕事であり、PostgreSQL に留めておくべきです。<a href="../../ja/docs/rds-workloads/">リレーショナルな各ワークロードが、ここでいくらかかるか</a>を書いてあります。答えが「やめておきなさい」になるものも含めて。</p><p><b>1 台で足りないなら、kevy を使わないでください。</b>クラスタモードはなく、今後もできません。1 台の kevy は毎秒数百万回の操作をこなし、たいていの製品が到達する上限よりも余裕がありますが、それを超えたらシャーディングするものが必要です。kevy は、それではありません。</p></section>
+<section class="band prose"><h2>まず——キーバリューという形は、正しいか</h2><div class="pcols"><p><b>キーが分かっているなら、kevy を使ってください。</b>セッション ID、ユーザー ID、キューの名前、キャッシュキー。読み取りは問い合わせではなく参照です。これは思われているよりも広い範囲を覆います。さらにセカンダリインデックスとマテリアライズドビューが、問い合わせのいくつかも参照に変えます。</p><p><b>読み取りが本当にクエリなら、kevy を使わないでください。</b>5 つのテーブルにまたがる結合、アドホックな分析、無関係な行にまたがり本物の分離レベルを要求するトランザクション——それは PostgreSQL の仕事であり、PostgreSQL に留めておくべきです。<a href="../../ja/docs/rds-workloads/">リレーショナルな各ワークロードが、ここでいくらかかるか</a>を書いてあります。答えが「やめておきなさい」になるものも含めて。</p><p><b>1 台で足りないなら、kevy を使わないでください。</b>クラスタモードはなく、今後もできません。1 台の kevy は毎秒数百万回の操作をこなし、たいていの製品が到達する上限よりも余裕がありますが、それを超えたらシャーディングするものが必要です。kevy は、それではありません。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>次に——データは、どこに置かれる必要があるか</h2><p class="sec-lede">これが形を決めます。どの行でも、コマンドは同じです。</p></div>
   <div class="tbl"><table><thead><tr><th>状況</th><th>選ぶもの</th><th>理由</th></tr></thead><tbody><tr><td>複数のサービスがデータを共有する</td><td class="num">サーバー</td><td class="num">1 プロセス、ポートで RESP。既存の Redis クライアントが、そのまま接続できます。</td></tr><tr><td>1 つのプログラムがデータを所有する</td><td class="num">組み込み</td><td class="num">ソケットも、2 つ目のプロセスも、シリアライズも要りません。ラウンドトリップではなく、関数呼び出しです。</td></tr><tr><td>データはユーザーの端末のもの</td><td class="num">ブラウザ</td><td class="num">151 KB の WebAssembly。本物の TTL と pub/sub があり、ブラウザのファイルシステムに永続化されます。オフラインでも動きます。</td></tr><tr><td>リクエストごとに、エッジで動く</td><td class="num">エッジ</td><td class="num">暖機するものも、張りにいく接続もありません。ストアは、コードと同じ isolate の中にあります。</td></tr><tr><td>OS もヒープもないデバイス</td><td class="num">ベアメタル</td><td class="num">kevy-store は no_std です。固定 arena のみ、アロケータなし。CI が push のたびに Cortex-M で起動させています。</td></tr></tbody></table></div>
