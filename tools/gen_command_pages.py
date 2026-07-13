@@ -252,11 +252,11 @@ def mast(lang, depth, here):
   <div class="mast-in">
     <a class="brand" href="{up}{L['dir']}">kevy<span class="v">4.0</span></a>
     <nav class="nav">
-      <a href="{up}{L['dir']}choose/">{esc(L['nav_choose'])}</a>
       <a href="{up}{L['dir']}docs/">{esc(L['nav_docs'])}</a>
       <a href="{up}{L['dir']}docs/commands/" aria-current="page">{esc(L['commands'])}</a>
       <a href="{up}{L['dir']}benchmarks/">{esc(L['nav_bench'])}</a>
       <a href="{up}{L['dir']}play/">Playground</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
       <nav class="lang" aria-label="Language">

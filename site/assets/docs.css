@@ -8,8 +8,10 @@
 
 /* ── the reference page ─────────────────────────────────────────────────── */
 
+/* Full width, like every other page. Reading measure lives on the text
+ * elements themselves (ch units), never on the page shell. */
 .ref {
-  max-width: 62rem;
+  max-width: none;
 }
 
 .crumb {
@@ -442,15 +444,13 @@ dl.meta dd code {
 
 .doc-shell {
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
+  grid-template-columns: 280px minmax(0, 1fr);
   gap: 0;
-  max-width: 1440px;
-  margin: 0 auto;
   align-items: start;
 }
 @media (min-width: 1280px) {
   .doc-shell {
-    grid-template-columns: 260px minmax(0, 1fr) 220px;
+    grid-template-columns: 280px minmax(0, 1fr) 240px;
   }
 }
 

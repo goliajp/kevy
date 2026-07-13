@@ -469,3 +469,11 @@ tr.changed {
 .feed {
   min-height: 0;
 }
+
+/* The playground's panels sit outside a .band, so they carry the page gutter
+ * themselves — same --gut every other page uses, so the left edge lines up
+ * across the whole site. */
+#boot,
+#app.grid {
+  margin-inline: var(--gut);
+}

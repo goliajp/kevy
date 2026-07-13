@@ -204,6 +204,7 @@ def shell(lang, slug, title, desc, body, toc, nav, depth, have=None):
       <a href="{up}{d}docs/commands/">{nav_l[1]}</a>
       <a href="{up}{d}benchmarks/">{nav_l[2]}</a>
       <a href="{up}{d}play/">{nav_l[3]}</a>
+      <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
       <div id="docsearch" data-index="{up}{d}docs/search-index.json" data-root="{up}{d}">
