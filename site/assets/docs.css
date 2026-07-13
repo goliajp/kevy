@@ -814,3 +814,105 @@ dl.meta dd code {
 :lang(ja) h1.cmd {
   letter-spacing: -0.01em; /* a command name is Latin even on a Chinese page */
 }
+
+/* ── docs search ────────────────────────────────────────────────────────── */
+
+#docsearch {
+  position: relative;
+}
+#docsearch input {
+  font: inherit;
+  font-size: 13px;
+  font-family: var(--mono);
+  width: clamp(140px, 16vw, 230px);
+  padding: 7px 30px 7px 12px;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: var(--deep);
+  color: var(--text);
+  outline: none;
+}
+#docsearch input:focus {
+  border-color: var(--blue);
+}
+.ds-key {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+.ds-list {
+  display: none;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(430px, 88vw);
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--lift);
+  border: 1px solid var(--edge-hi);
+  border-radius: 10px;
+  box-shadow: 0 20px 50px -18px rgba(0, 0, 0, 0.7);
+  z-index: 60;
+}
+#docsearch.open .ds-list {
+  display: block;
+}
+.ds-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  padding: 9px 13px;
+  text-decoration: none;
+  border-bottom: 1px solid var(--edge);
+}
+.ds-item:last-child {
+  border-bottom: 0;
+}
+.ds-item:hover,
+.ds-item.sel {
+  background: var(--blue-wash);
+}
+.ds-k {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  align-self: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--edge-hi);
+  color: var(--text-3);
+}
+.ds-k.ds-cmd {
+  color: var(--blue-hi);
+  border-color: var(--blue-dim);
+}
+.ds-t {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+.ds-s {
+  grid-column: 2;
+  font-size: 12px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  #docsearch input {
+    width: 130px;
+  }
+  .ds-key {
+    display: none;
+  }
+}

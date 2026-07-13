@@ -26,6 +26,11 @@
       <a href="../../../zh/play/">Playground</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../zh/docs/search-index.json" data-root="../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language"><a href="../../../docs/vector-search/">EN</a><a href="../../../zh/docs/vector-search/" aria-current="page">中文</a><a href="../../../ja/docs/vector-search/">日本語</a></nav>
       <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
         <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
@@ -111,6 +116,7 @@ fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
   <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#快速上手服务器">快速上手（服务器）</a></li><li class="l2"><a href="#快速上手embedded">快速上手（embedded）</a></li><li class="l2"><a href="#线格式">线格式</a></li><li class="l2"><a href="#距离与结果">距离与结果</a></li><li class="l2"><a href="#召回ef-这个旋钮">召回：EF 这个旋钮</a></li><li class="l2"><a href="#参数删除重建">参数、删除、重建</a></li><li class="l2"><a href="#过滤以及混合检索">过滤，以及混合检索</a></li><li class="l2"><a href="#一致性">一致性</a></li><li class="l2"><a href="#性能">性能</a></li><li class="l2"><a href="#定容">定容</a></li><li class="l2"><a href="#另见">另见</a></li></ul></aside>
 </div>
 
+<script src="../../../assets/docsearch.js" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

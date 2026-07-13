@@ -26,6 +26,11 @@
       <a href="../../play/">Playground</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../docs/search-index.json" data-root="../../">
+        <input type="search" placeholder="Search docs…" aria-label="Search docs…" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language"><a href="../../docs/cluster/" aria-current="page">EN</a><a href="../../zh/docs/cluster/">中文</a><a href="../../ja/docs/cluster/">日本語</a></nav>
       <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
         <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
@@ -217,6 +222,7 @@ writer.set(b"app:billing:invoice:42", b"...")?;
   <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#the-two-layers-at-a-glance">The two layers at a glance</a></li><li class="l2"><a href="#when-you-need-this">When you need this</a></li><li class="l2"><a href="#core-idea">Core idea</a></li><li class="l2"><a href="#enabling-it">Enabling it</a></li><li class="l2"><a href="#using-clusterclient-from-rust">Using ClusterClient from Rust</a></li><li class="l3"><a href="#how-routing-removes-the-cross-shard-hop">How routing removes the cross-shard hop</a></li><li class="l3"><a href="#cross-slot-multi-key-commands">Cross-slot multi-key commands</a></li><li class="l3"><a href="#cluster-commands-supported-on-a-cluster-port">CLUSTER commands supported on a cluster port</a></li><li class="l3"><a href="#falling-back-to-raw-routed-helpers">Falling back to raw routed helpers</a></li><li class="l2"><a href="#primary-and-replicas">Primary and replicas</a></li><li class="l2"><a href="#embed-as-read-replica">Embed as read-replica</a></li><li class="l2"><a href="#scoped-multi-writer">Scoped multi-writer</a></li><li class="l3"><a href="#embed-as-scoped-writer">Embed as scoped writer</a></li><li class="l2"><a href="#kevy-elect-quorum-failover">kevy-elect quorum failover</a></li><li class="l3"><a href="#manual-rejoin-recovery">Manual rejoin recovery</a></li><li class="l2"><a href="#single-node-cluster-mode">Single-node cluster mode</a></li><li class="l2"><a href="#replication">Replication</a></li><li class="l2"><a href="#scoped-multi-writer-elect">Scoped multi-writer + elect</a></li></ul></aside>
 </div>
 
+<script src="../../assets/docsearch.js" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

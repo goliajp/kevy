@@ -36,7 +36,7 @@ PAGES[""] = {
                 "Redis-compatible — your client connects unchanged. Faster on every "
                 "operation. And vector search, full-text, indexes, views and a change "
                 "feed live <b>in the engine</b>, not in four services around it. "
-                "<b>The terminal on the right is real</b>: the same engine, compiled "
+                "<b>This terminal is real</b>: the same engine, compiled "
                 "to WebAssembly, running in this tab."
             ),
             "ctas": [

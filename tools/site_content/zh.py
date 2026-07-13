@@ -37,7 +37,7 @@ PAGES = {}
 
 PAGES[""] = {
     "title": "kevy——AI 系统的数据层",
-    "desc": "一个为 AI 系统准备的 Redis 兼容数据层。协议不变，速度更快，而且向量检索、全文检索、二级索引、物化视图和变更流都在同一个引擎里——可以跑在服务器上、你的二进制里、浏览器标签页里，或者一台设备上。",
+    "desc": "一个为 AI 系统准备的 Redis 兼容数据层：协议不变，吞吐更高，向量检索、全文检索、索引、视图和变更流都在一个引擎里。现场试一下——这一页上的终端就是真的引擎，跑在你的标签页里。",
     "foot": "GOLIA",
     "blocks": [
         {
@@ -45,36 +45,140 @@ PAGES[""] = {
             "eyebrow": "kevy 4.0",
             "h1": "AI 系统的<br>数据层。",
             "lede": (
-                "兼容 Redis，所以可以直接换上去。<b>每一个操作都更快。</b>"
-                "而且它做的正是一个 AI 系统真正需要的事——向量检索、全文检索、二级索引、"
-                "物化视图、变更流——<b>都在同一个引擎里，都建在同一批 key 上。</b>"
+                "兼容 Redis——你的客户端不用改就能连。每一个操作都更快。"
+                "向量检索、全文检索、索引、视图和变更流都<b>在引擎里</b>，"
+                "而不是在围着它的四个服务里。<b>这个终端是真的</b>："
+                "同一个引擎，编译成 WebAssembly，就跑在这个标签页里。"
             ),
             "ctas": [
-                {"label": "为什么可以直接替换 Redis", "href": "#swap"},
-                {"label": "它还能做什么", "href": "#more"},
-                {"label": "在浏览器里跑一下", "href": "play/"},
+                {"label": "cargo install kevy", "href": "#start"},
+                {"label": "它能做什么", "href": "#code"},
+                {"label": "打开 Playground", "href": "play/"},
             ],
-            "aside": """<pre class="hero-code"><code>$ cargo install kevy
-$ kevy --port 6379
+            "live_term": {
+                "hint": "输入一条命令——SET、GET、TTL、INCR、KEYS、SUBSCRIBE、PUBLISH……",
+                "chips": [
+                    'SET session:7f3a \'{"user":"ada"}\' EX 30',
+                    "GET session:7f3a",
+                    "TTL session:7f3a",
+                    "INCR hits",
+                    "KEYS *",
+                    "SUBSCRIBE news",
+                    "PUBLISH news deployed",
+                ],
+            },
+        },
+        {
+            "t": "tabs",
+            "id": "code",
+            "tone": "deep",
+            "eyebrow": "它还能做什么",
+            "h2": "一个引擎。AI 系统需要的整个栈。",
+            "intro": "下面每一条命令，在这一页发布之前，都在 CI 里对着一台真实的服务器跑过。逐个点开——用 kevy 就是这个样子。",
+            "items": [
+                {
+                    "label": "向量",
+                    "code": """# an HNSW index over your keys — declared once,
+# kept current by the write path
+IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann DIM 768 DISTANCE cosine M 16 EF 200
 
-$ redis-cli -p 6379
-&gt; SET session:7f3a '{"user":"ada"}' EX 3600
-OK
-&gt; IDX.QUERY idx:sem KNN "&lt;vector&gt;" LIMIT 10
-1) "doc:4410"
-2) "doc:9982"</code></pre>""",
+HSET doc:4410 title "Ada on pipelining" vec "<768 f32, little-endian>"
+
+# nearest ten. no separate vector database, no sync job.
+IDX.QUERY idx:sem KNN "<query vector>" LIMIT 10
+-> 1) "doc:4410"
+   2) "doc:9982"
+""",
+                    "note": "embedding 由你给出；kevy 负责存它、索引它、检索它。引擎里没有模型，这是故意的。",
+                    "go": "Agent 记忆与 RAG",
+                    "href": "use/ai/",
+                },
+                {
+                    "label": "全文",
+                    "code": """IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
+
+IDX.QUERY idx:ft MATCH "pipelining"
+-> 1) 1) "doc:1"
+      2) "0.2877"          # BM25 score
+
+# hybrid: fuse the text ranking with the vector ranking
+IDX.QUERY HYBRID idx:ft MATCH "pipelining" idx:sem KNN "<vector>" LIMIT 20 RRFK 60""",
+                    "note": "BM25，带中日韩分词，建在向量索引的同一批 key 上。",
+                    "go": "检索是怎么工作的",
+                    "href": "use/ai/",
+                },
+                {
+                    "label": "索引",
+                    "code": """HSET order:1001 customer 881 status open  total 4400
+HSET order:1002 customer 881 status paid  total 8400
+
+IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
+IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range
+
+# the read that would have been a SQL query
+IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
+-> 1) "0"
+   2) 1) 1) "order:1001"
+""",
+                    "note": "带过滤的读始终是一次查表。没有查询计划器，没有扫描。",
+                    "go": "不靠数据库扛住读",
+                    "href": "use/app-store/",
+                },
+                {
+                    "label": "视图",
+                    "code": """# the answer, kept current by the WRITE path
+VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open ) ORDER BY idx:cust
+
+VIEW.QUERY v:open881
+-> 1) "0"
+   2) 1) "order:1001"  2) "881"
+
+# reads never recompute it; writes keep it fresh""",
+                    "note": "大多数应用向 ORM 真正索要的，就是这个。",
+                    "go": "物化视图",
+                    "href": "use/app-store/",
+                },
+                {
+                    "label": "变更流",
+                    "code": """# tail every write from another process — or an agent.
+# [feed] enabled = true in kevy.toml
+FEED.SHARDS                 -> (integer) 16
+FEED.TAIL 0                 -> 1) (integer) 1     # generation
+                               2) (integer) 1     # offset
+FEED.READ 0 1 0 COUNT 2     -> the writes themselves, replayable""",
+                    "note": "偏移量可以续上。不用轮询，也不会漏。",
+                    "go": "变更流",
+                    "href": "use/ai/",
+                },
+                {
+                    "label": "哪里都能放",
+                    "code": """# a 16-core server
+cargo install kevy && kevy --port 6379
+
+# inside your binary — no socket, no process
+let db = Db::open("data/")?;
+db.set(b"k", b"v", None)?;
+
+# a browser tab — 151 KB, persists to OPFS
+const db = await open({ persist: { name: "app" } });
+
+# a microcontroller — no OS, no allocator
+let mut store = Store::new_in(&mut arena);""",
+                    "note": "四个地方，同一个引擎、同一批命令。",
+                    "go": "把 kevy 嵌进去",
+                    "href": "use/embedded/",
+                },
+            ],
         },
         {
             "t": "bars",
             "id": "swap",
-            "tone": "deep",
             "eyebrow": "为什么可以直接替换 Redis",
             "h2": "同样的协议。更高的吞吐。",
             "intro": (
-                "你的客户端不用改——RESP2 和 RESP3，184 条命令，还是你现在用的那个库。"
-                "一台机器，16 核，loopback，小 value，五次运行取中位数。"
+                "RESP2 和 RESP3，184 条命令——redis-cli 和你的客户端库不用改就能连。"
+                "一台机器，16 核，loopback，五次取中位数。"
             ),
-            # name, kevy, redis 8, ratio, thin?
             "rows": [
                 ["GET", 7800299, 5597865, "1.39×", False],
                 ["SET", 6918058, 2573396, "2.69×", False],
@@ -86,131 +190,51 @@ OK
             ],
             "us": "kevy 4.0",
             "them": "Redis 8",
-            "thin": "领先不到 15%——决定胜负的是你的负载，不是引擎",
+            "thin": "不到 15%——决定胜负的是你的负载，不是引擎",
             "note": (
-                "<b>LPUSH 和 ZADD 只领先 12% 和 10%。</b>差距薄到这个程度，"
-                "决定胜负的是你的 value 大小和 key 分布。如果 list 或者 sorted set "
+                "<b>LPUSH 和 ZADD 只领先 12% 和 10%。</b>如果 list 或者 sorted set "
                 "是你的热路径，那么性能就不是换过来的理由。"
                 "<a href=\"~/benchmarks/\">完整的表格在这里，valkey 和 Dragonfly 也一起打了。</a>"
+                "迁移只有三条命令——<a href=\"~/migrate/\">export、import、digest</a>——"
+                "而且两个方向都能走。"
             ),
         },
         {
-            "t": "cards",
-            "id": "more",
-            "eyebrow": "它还能做什么",
-            "h2": "一个 AI 系统需要的那些东西，<br>就在已经存着数据的那个引擎里。",
-            "intro": "不是模块。不是 sidecar。也不是一份会慢慢偏离原件的事实副本。",
-            "items": [
-                {
-                    "kicker": "向量",
-                    "title": "在你的 keyspace 上做 KNN",
-                    "body": "一个 HNSW 索引，声明一次，之后由写入路径维持最新。embedding 由你给出；kevy 负责存它、索引它、检索它。",
-                    "go": "怎么做",
-                    "href": "use/ai/",
-                },
-                {
-                    "kicker": "全文",
-                    "title": "BM25，以及混合排序",
-                    "body": "在同一批 key 上做全文检索，还有一种把文本排序和向量排序融合起来的混合查询。",
-                    "go": "怎么做",
-                    "href": "use/ai/",
-                },
-                {
-                    "kicker": "索引",
-                    "title": "按任意字段来查",
-                    "body": "二级索引把一次带过滤的读变回一次查表。没有查询计划器，没有扫描。",
-                    "go": "怎么做",
-                    "href": "use/app-store/",
-                },
-                {
-                    "kicker": "视图",
-                    "title": "答案一直是备好的",
-                    "body": "物化视图在写入路径上就把聚合维持在最新，于是读的时候永远不必重算一遍。",
-                    "go": "怎么做",
-                    "href": "use/app-store/",
-                },
-                {
-                    "kicker": "变更流",
-                    "title": "跟读每一次写",
-                    "body": "一条可以续读的流，另一个进程——或者一个 agent——可以一直跟着它。什么都不用轮询。",
-                    "go": "怎么做",
-                    "href": "use/ai/",
-                },
-                {
-                    "kicker": "哪里都能放",
-                    "title": "服务器、二进制、浏览器、设备",
-                    "body": "同一个引擎，同一批命令：一台 16 核的服务器、你的二进制内部、浏览器标签页里的 151 KB，或者一颗没有操作系统的芯片。",
-                    "go": "怎么做",
-                    "href": "use/embedded/",
-                },
-            ],
-        },
-        {
-            "t": "prose",
-            "tone": "blue",
-            "h2": "为什么 AI 系统需要一个不一样的数据层",
-            "body": [
-                "一个 agent 写下一篇文档，给它做 embedding，给它建索引，把它放进缓存，"
-                "再通知别的东西它变了。今天这是四套系统——一个缓存、一个向量数据库、"
-                "一个搜索索引、一个队列——它们持有同样的事实，然后慢慢彼此偏离。"
-                "每一套都是一个可能漏掉一步的地方。",
-                "<b>kevy 把它们收成一个。</b>声明索引，然后照你原来的方式写 key。"
-                "引擎会在写入路径上把向量索引、文本索引、二级索引和视图都维持在最新，"
-                "而变更流会告诉每一个在听的人。",
-                "而且 agent 在哪里跑，它就能在哪里跑。在你的服务里，在二进制内部、"
-                "连 socket 都没有，在浏览器标签页里作为 WebAssembly，"
-                "或者在网络边缘的那台设备上。",
-            ],
-        },
-        {
-            "t": "cards",
-            "tone": "deep",
-            "h2": "你在做的是什么？",
-            "intro": "每一页都会说清楚 kevy 合不合适、代价是什么、以及具体怎么做——命令可以直接粘贴。",
-            "items": [
-                {"kicker": "AI", "title": "Agent 记忆与 RAG", "body": "向量、全文、变更流，还有一个会替你把会话过期掉的 TTL。", "go": "怎么做", "href": "use/ai/"},
-                {"kicker": "对外服务", "title": "不靠数据库扛住读", "body": "索引和视图，让一次读始终是查表，而不是变成一次查询。", "go": "怎么做", "href": "use/app-store/"},
-                {"kicker": "缓存", "title": "会话与限流", "body": "那些本来就不是数据库问题的行，从你的数据库上挪走。", "go": "怎么做", "href": "use/cache/"},
-                {"kicker": "队列", "title": "后台任务", "body": "带消费组的 stream：拿着任务的那个 worker 挂了，任务还在。", "go": "怎么做", "href": "use/queue/"},
-                {"kicker": "实时", "title": "推给在线的客户端", "body": "带模式订阅的发布订阅——而且在浏览器标签页之间也能用，不需要服务端。", "go": "怎么做", "href": "use/realtime/"},
-                {"kicker": "嵌入", "title": "把它放进东西本身", "body": "桌面应用、浏览器、边缘 worker、单片机。没有服务端，没有 socket。", "go": "怎么做", "href": "use/embedded/"},
-            ],
-        },
-        {
             "t": "steps",
-            "h2": "开始",
+            "id": "start",
+            "tone": "deep",
+            "h2": "两分钟",
             "intro": "",
             "items": [
                 {
-                    "title": "当服务端跑",
-                    "body": "在 6379 上说 RESP。你的 redis-cli 和你的客户端库不会发现有任何变化。",
+                    "title": "安装",
+                    "body": "一个二进制。没有运行时，也没有要解析的依赖。",
                     "code": "cargo install kevy\nkevy --port 6379",
                 },
                 {
-                    "title": "在你的 Rust 程序里",
-                    "body": "没有 socket，没有第二个进程，没有序列化。",
-                    "code": 'kevy-embedded = "4.0"\n\nlet db = Db::open("data/")?;\ndb.set(b"k", b"v", None)?;',
+                    "title": "把你的客户端指过来",
+                    "body": "你今天在用什么，就继续用什么。",
+                    "code": 'redis-cli -p 6379\n> SET greeting hello\nOK\n> TTL greeting\n(integer) -1',
                 },
                 {
-                    "title": "在浏览器标签页里",
-                    "body": "151 KB。落在浏览器的文件系统上，刷新之后还在。",
-                    "code": 'import { open } from "@goliajp/kevy";\n\nconst db = await open({ persist: { name: "app" } });\ndb.set("cart:u1", json, { ttlMs: 3_600_000 });',
+                    "title": "做一件 Redis 做不到的事",
+                    "body": "声明一个索引；写入路径会把它维持在最新。",
+                    "code": "IDX.CREATE idx:city ON PREFIX user: FIELD city TYPE str KIND range\nIDX.QUERY  idx:city EQ osaka",
                 },
             ],
         },
         {
             "t": "callout",
             "kind": "loss",
-            "tone": "deep",
             "title": "kevy 不会做的事",
             "body": (
                 "<b>它不是集群。</b>复制和故障切换有；把数据分片到多台机器上没有，"
-                "以后也不会有。如果一台机器不够用，kevy 就是错的答案。"
-                "<b>没有 AUTH，也没有 TLS</b>——把它跑在内网，或者放在一个真正把这两件事"
-                "做好的东西后面。还有，<b>有些命令和 Redis 不一样</b>："
-                "多键写只在单个 shard 内原子，跨 shard 的 <code>RENAME</code>、<code>MSET</code> 不是一步原子完成。"
-                "<a href=\"~/docs/commands/\">每一处差异都逐条写下来了</a>。"
-                "<a href=\"~/choose/\">还有，这里写着什么时候根本不该用它。</a>"
+                "以后也不会有。<b>没有 AUTH，也没有 TLS</b>——把它跑在内网，"
+                "或者放在一个真正把这两件事做好的东西后面。"
+                "<b>多键写只在单个 shard 内原子，不是全局原子</b>——跨 shard 的 "
+                "<code>RENAME</code> 或 <code>MSET</code> 不是一步原子完成。"
+                "<a href=\"~/docs/commands/\">每一处偏差都按命令逐条写下来了</a>，"
+                "<a href=\"~/choose/\">这里还写着什么时候根本不该用它</a>。"
             ),
         },
     ],

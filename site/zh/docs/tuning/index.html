@@ -26,6 +26,11 @@
       <a href="../../../zh/play/">Playground</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../zh/docs/search-index.json" data-root="../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language"><a href="../../../docs/tuning/">EN</a><a href="../../../zh/docs/tuning/" aria-current="page">中文</a><a href="../../../ja/docs/tuning/">日本語</a></nav>
       <button class="icon-btn" id="theme" type="button" aria-label="Toggle theme">
         <svg class="sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
@@ -118,6 +123,7 @@ addr2line -e ./target/release-perf/kevy -f -i 0x&lt;addr&gt;</code></pre></figur
   <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#何时需要">何时需要</a></li><li class="l2"><a href="#核心思路">核心思路</a></li><li class="l2"><a href="#调优-playbook">调优 playbook</a></li><li class="l3"><a href="#cpu-与-shard">CPU 与 shard</a></li><li class="l3"><a href="#reactor-选择">Reactor 选择</a></li><li class="l3"><a href="#持久化">持久化</a></li><li class="l3"><a href="#内存">内存</a></li><li class="l3"><a href="#网络">网络</a></li><li class="l3"><a href="#复制与可用性">复制与可用性</a></li><li class="l3"><a href="#linux-内核旋钮">Linux 内核旋钮</a></li><li class="l2"><a href="#profiling">Profiling</a></li><li class="l2"><a href="#取舍">取舍</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></aside>
 </div>
 
+<script src="../../../assets/docsearch.js" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;
