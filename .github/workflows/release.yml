@@ -252,13 +252,16 @@ jobs:
           rustup default stable
           rustup target add ${{ matrix.target }}
 
-      - name: Build kevy server binary
+      - name: Build kevy server + cli binaries
         shell: bash
-        run: cargo build --release --bin kevy --target ${{ matrix.target }}
+        run: |
+          cargo build --release --bin kevy --target ${{ matrix.target }}
+          cargo build --release -p kevy-cli --target ${{ matrix.target }}
 
       # Package layout (same on every target):
       #   kevy-<tag>-<target>/
       #     kevy(.exe)
+      #     kevy-cli
       #     README.md
       #     LICENSE-APACHE
       #     LICENSE-MIT
@@ -276,6 +279,7 @@ jobs:
           stage="kevy-${tag}-${{ matrix.target }}"
           mkdir -p "$stage"
           cp "target/${{ matrix.target }}/release/kevy" "$stage/kevy"
+          cp "target/${{ matrix.target }}/release/kevy-cli" "$stage/kevy-cli"
           cp README.md LICENSE-APACHE LICENSE-MIT "$stage/"
           cp crates/kevy/kevy.toml.example "$stage/kevy.toml.example"
           tar -czf "${stage}.tar.gz" "$stage"
