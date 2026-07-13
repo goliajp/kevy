@@ -35,11 +35,11 @@ node -e '
   pkg.optionalDependencies = { [process.argv[2]]: process.argv[3] };
   fs.writeFileSync(p, JSON.stringify(pkg, null, 2));
 ' "$scratch/kevy-bin-meta/package.json" \
-  "@goliajp/kevy-bin-$os-$cpu" "file:$scratch/kevy-bin-$os-$cpu.tgz"
+  "@goliapkg/kevy-bin-$os-$cpu" "file:$scratch/kevy-bin-$os-$cpu.tgz"
 (cd "$scratch/kevy-bin-$os-$cpu" && npm pack --silent --pack-destination "$scratch" > /dev/null)
-mv "$scratch"/goliajp-kevy-bin-"$os"-"$cpu"-*.tgz "$scratch/kevy-bin-$os-$cpu.tgz"
+mv "$scratch"/goliapkg-kevy-bin-"$os"-"$cpu"-*.tgz "$scratch/kevy-bin-$os-$cpu.tgz"
 (cd "$scratch/kevy-bin-meta" && npm pack --silent --pack-destination "$scratch" > /dev/null)
-mv "$scratch"/goliajp-kevy-bin-4*.tgz "$scratch/kevy-bin-meta.tgz"
+mv "$scratch"/goliapkg-kevy-bin-4*.tgz "$scratch/kevy-bin-meta.tgz"
 npm install --silent --no-audit --no-fund "$scratch/kevy-bin-$os-$cpu.tgz"
 npm install --silent --no-audit --no-fund "$scratch/kevy-bin-meta.tgz"
 

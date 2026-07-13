@@ -1,0 +1,41 @@
+{
+  "name": "@goliapkg/kevy",
+  "version": "3.18.0",
+  "description": "kevy in the browser — Redis-compatible KV + TTL + pub/sub compiled to WebAssembly, with OPFS/IndexedDB persistence and cross-tab pub/sub. Zero dependencies.",
+  "type": "module",
+  "main": "kevy.js",
+  "types": "kevy.d.ts",
+  "exports": {
+    ".": {
+      "types": "./kevy.d.ts",
+      "default": "./kevy.js"
+    }
+  },
+  "files": [
+    "kevy.js",
+    "kevy.d.ts",
+    "kevy-opfs-worker.js",
+    "kevy.wasm",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "keywords": [
+    "kevy",
+    "redis",
+    "kv",
+    "wasm",
+    "webassembly",
+    "opfs",
+    "indexeddb",
+    "cache",
+    "pubsub"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/goliajp/kevy.git",
+    "directory": "crates/kevy-wasm/pkg"
+  },
+  "homepage": "https://github.com/goliajp/kevy",
+  "license": "(Apache-2.0 OR MIT)",
+  "author": "GOLIA K.K."
+}

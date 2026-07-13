@@ -10,9 +10,9 @@
 const { execFileSync } = require("node:child_process");
 
 const PLATFORMS = {
-  "linux x64": "@goliajp/kevy-bin-linux-x64",
-  "linux arm64": "@goliajp/kevy-bin-linux-arm64",
-  "darwin arm64": "@goliajp/kevy-bin-darwin-arm64",
+  "linux x64": "@goliapkg/kevy-bin-linux-x64",
+  "linux arm64": "@goliapkg/kevy-bin-linux-arm64",
+  "darwin arm64": "@goliapkg/kevy-bin-darwin-arm64",
 };
 
 function binaryPath(name) {

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate one @goliajp/kevy-bin-<os>-<arch> platform package from built
+# Generate one @goliapkg/kevy-bin-<os>-<arch> platform package from built
 # kevy / kevy-cli binaries. The platform package carries the raw binaries
 # plus the os/cpu fields npm uses to install only the matching one.
 #
@@ -23,9 +23,9 @@ chmod +x "$pkg/kevy" "$pkg/kevy-cli"
 
 cat > "$pkg/package.json" <<EOF
 {
-  "name": "@goliajp/kevy-bin-$os-$cpu",
+  "name": "@goliapkg/kevy-bin-$os-$cpu",
   "version": "$version",
-  "description": "kevy binaries for $os-$cpu. Install @goliajp/kevy-bin instead of this directly.",
+  "description": "kevy binaries for $os-$cpu. Install @goliapkg/kevy-bin instead of this directly.",
   "license": "(Apache-2.0 OR MIT)",
   "repository": { "type": "git", "url": "git+https://github.com/goliajp/kevy.git" },
   "os": ["$os"],
