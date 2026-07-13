@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Queues and background jobs — kevy</title>
 <meta name="description" content="Job queues in kevy: lists for simple work, streams with consumer groups for work you cannot afford to lose.">
-<link rel="stylesheet" href="../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">A queue table in a relational database is a locking convention with extra steps. kevy has two real queues: <b>a list</b> when losing a job is survivable, and <b>a stream with consumer groups</b> when it is not.</p>
     
   </div></section>
-<section class="band prose"><h2>Which of the two</h2><p><b>Use a list</b> when the job is cheap to redo and the worker is unlikely to die mid-task — sending an email, warming a cache, invalidating a CDN path. <code>BRPOP</code> blocks until there is work, so the worker does not poll.</p><p><b>Use a stream</b> when the job must not be lost. A consumer group hands each message to exactly one worker and remembers that it did. If the worker dies before acknowledging, the message stays in the pending list and another worker can claim it — that is the whole reason streams exist, and it is the difference between a queue and a hope.</p></section>
+<section class="band prose"><h2>Which of the two</h2><div class="pcols"><p><b>Use a list</b> when the job is cheap to redo and the worker is unlikely to die mid-task — sending an email, warming a cache, invalidating a CDN path. <code>BRPOP</code> blocks until there is work, so the worker does not poll.</p><p><b>Use a stream</b> when the job must not be lost. A consumer group hands each message to exactly one worker and remembers that it did. If the worker dies before acknowledging, the message stays in the pending list and another worker can claim it — that is the whole reason streams exist, and it is the difference between a queue and a hope.</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>A list, for work you can redo</h2><p class="sec-lede">Producers push; a blocked worker wakes the moment there is work. Two commands, no polling loop, no scheduler.</p></div>
   <ol class="steps recipe"><li><h3>Producer: push the job</h3><pre><code>LPUSH jobs:email &#x27;{&quot;to&quot;:&quot;ada@example.com&quot;,&quot;tpl&quot;:&quot;welcome&quot;}&#x27;

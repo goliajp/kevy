@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>キューとバックグラウンドジョブ — kevy</title>
 <meta name="description" content="kevy でのジョブキュー。単純な仕事にはリスト、失うわけにいかない仕事にはコンシューマグループつきのストリーム。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">リレーショナルデータベースのキュー用テーブルは、手数の増えたロックの慣習にすぎません。kevy には本物のキューが 2 つあります。ジョブを失っても許されるなら<b>リスト</b>、許されないなら<b>コンシューマグループつきのストリーム</b>です。</p>
     
   </div></section>
-<section class="band prose"><h2>2 つの、どちらを使うか</h2><p><b>リストを使う</b>のは、やり直しが安く、ワーカーが作業中に落ちる見込みが低いときです——メールの送信、キャッシュの暖機、CDN パスの無効化。<code>BRPOP</code> は仕事が来るまでブロックするので、ワーカーはポーリングしません。</p><p><b>ストリームを使う</b>のは、ジョブを失ってはならないときです。コンシューマグループは各メッセージを、ちょうど 1 つのワーカーに渡し、渡したことを覚えています。ワーカーが確認応答の前に落ちても、メッセージは保留リストに残り、別のワーカーが引き取れます——ストリームが存在する理由はまさにそれであり、それが、キューと願望との違いです。</p></section>
+<section class="band prose"><h2>2 つの、どちらを使うか</h2><div class="pcols"><p><b>リストを使う</b>のは、やり直しが安く、ワーカーが作業中に落ちる見込みが低いときです——メールの送信、キャッシュの暖機、CDN パスの無効化。<code>BRPOP</code> は仕事が来るまでブロックするので、ワーカーはポーリングしません。</p><p><b>ストリームを使う</b>のは、ジョブを失ってはならないときです。コンシューマグループは各メッセージを、ちょうど 1 つのワーカーに渡し、渡したことを覚えています。ワーカーが確認応答の前に落ちても、メッセージは保留リストに残り、別のワーカーが引き取れます——ストリームが存在する理由はまさにそれであり、それが、キューと願望との違いです。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>やり直せる仕事には、リスト</h2><p class="sec-lede">プロデューサが積み、ブロックしていたワーカーが、仕事の来た瞬間に目を覚まします。コマンド 2 つ。ポーリングのループも、スケジューラもありません。</p></div>
   <ol class="steps recipe"><li><h3>プロデューサ——ジョブを積む</h3><pre><code>LPUSH jobs:email &#x27;{&quot;to&quot;:&quot;ada@example.com&quot;,&quot;tpl&quot;:&quot;welcome&quot;}&#x27;

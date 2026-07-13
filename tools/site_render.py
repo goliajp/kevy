@@ -81,7 +81,7 @@ def hero(b, up, L=""):
 def prose(b, up, L=""):
     ps = "".join(f"<p>{p}</p>" for p in b["body"])
     h = f'<h2>{b["h2"]}</h2>' if b.get("h2") else ""
-    return f'<section class="band prose{tone(b)}"{anchor(b)}>{h}{ps}</section>'
+    return f'<section class="band prose{tone(b)}"{anchor(b)}>{h}<div class="pcols">{ps}</div></section>'
 
 
 def cards(b, up, L=""):

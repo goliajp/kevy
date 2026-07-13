@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>キャッシュとセッション — kevy</title>
 <meta name="description" content="kevy でのセッション、ホットな行、レート制限、フィーチャーフラグ——タスクと、そのためのコマンドと、それぞれのコスト。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">セッション、レート制限、フィーチャーフラグ、すべてのリクエストが読むホットな行。たいていのアプリケーションでこれらは Postgres の中にあり、叩かれ続けているのもそこです。データベースがそれらを苦手だからではありません。<b>そもそも問い合わせではなかったからです。キーは、もう分かっています。</b></p>
     
   </div></section>
-<section class="band prose"><h2>なぜ向いているのか</h2><p>どれも同じ形をしています。すでに手元にあるキー、小さな値、そして寿命。kevy は参照を O(1) で行い、cron を使わずキー自身を期限切れにし、1 台のマシンで毎秒数百万回それをこなします。</p><p>見落とされがちなのが<b>期限切れ</b>です。データベースの上に作ったキャッシュには掃除役が要り、バグはその掃除役に棲みつきます。ここではエンジンが、誰かに読まれるかどうかに関係なく、時間の来たキーを落とします。以下の 4 つのタスクは、どれも動いている kevy に対して、<code>redis-cli</code> からそのまま貼り付けられます。</p></section>
+<section class="band prose"><h2>なぜ向いているのか</h2><div class="pcols"><p>どれも同じ形をしています。すでに手元にあるキー、小さな値、そして寿命。kevy は参照を O(1) で行い、cron を使わずキー自身を期限切れにし、1 台のマシンで毎秒数百万回それをこなします。</p><p>見落とされがちなのが<b>期限切れ</b>です。データベースの上に作ったキャッシュには掃除役が要り、バグはその掃除役に棲みつきます。ここではエンジンが、誰かに読まれるかどうかに関係なく、時間の来たキーを落とします。以下の 4 つのタスクは、どれも動いている kevy に対して、<code>redis-cli</code> からそのまま貼り付けられます。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>ひとりでに片付くセッション</h2><p class="sec-lede">セッションごとにキーは 1 つ。最後に触れてから 1 時間で、ひとりでに消えます——掃除役も、cron も、期限切れ行のテーブルも要りません。</p></div>
   <ol class="steps recipe"><li><h3>セッションを、寿命つきで書く</h3><pre><code>SET session:7f3a &#x27;{&quot;user&quot;:&quot;ada&quot;,&quot;role&quot;:&quot;admin&quot;}&#x27; EX 3600

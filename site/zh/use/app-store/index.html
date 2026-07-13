@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>不靠数据库扛住读——kevy</title>
 <meta name="description" content="kevy 的二级索引和物化视图：怎样让一个带过滤的列表、一个持续累计的总数，始终是一次查表，而不是变成一次查询。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">“这个客户名下所有还没关闭的订单。”“这个购物车里有几件东西。”这类读，一个应用一秒钟要做上千次，而在关系型数据库里，每一次都是一条背后跟着查询计划器的查询。<b>kevy 可以直接把答案备好。</b></p>
     
   </div></section>
-<section class="band prose"><h2>为什么合适</h2><p>键值存储被挡在应用数据之外，通常只因为一句反对：<i>可是我需要按 key 以外的东西去查</i>。这句反对是对的，而二级索引正是为它准备的。</p><p><b>索引是声明出来的，不是建出来的。</b>你写清楚 key 的前缀和字段，写路径会把它维持在最新。一个带过滤的列表于是重新变回一次查表——没有计划器，没有扫描，没有查询。</p><p><b>视图更进一步</b>，在写入时就把聚合维持在最新，于是一个计数、一个合计是读出来的，不是算出来的。这正是大多数应用真正在向 ORM 索要的东西，也正是它们的数据库忙成那样的原因。</p></section>
+<section class="band prose"><h2>为什么合适</h2><div class="pcols"><p>键值存储被挡在应用数据之外，通常只因为一句反对：<i>可是我需要按 key 以外的东西去查</i>。这句反对是对的，而二级索引正是为它准备的。</p><p><b>索引是声明出来的，不是建出来的。</b>你写清楚 key 的前缀和字段，写路径会把它维持在最新。一个带过滤的列表于是重新变回一次查表——没有计划器，没有扫描，没有查询。</p><p><b>视图更进一步</b>，在写入时就把聚合维持在最新，于是一个计数、一个合计是读出来的，不是算出来的。这正是大多数应用真正在向 ORM 索要的东西，也正是它们的数据库忙成那样的原因。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>按字段查，而不是按 key 查</h2><p class="sec-lede">“客户 881 的所有订单”始终是一次查表：每个要查的字段声明一个索引，照常写入，按值来读。</p></div>
   <ol class="steps recipe"><li><h3>你的数据，照你本来的方式写</h3><pre><code>HSET order:1001 customer 881 status open  total 4400

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>把 kevy 嵌进去——kevy</title>
 <meta name="description" content="把存储放进程序本身：一个桌面应用、一个浏览器标签页、一个边缘 worker，或者一颗没有操作系统的单片机。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">没有服务端，没有 socket，没有网络。这个引擎可以是一个你直接调用的 struct，可以是一个 151 KB 的 WebAssembly 模块，也可以是一颗没有操作系统的芯片上的 no_std 库——<b>而且这三种情况下，它是同一个引擎、同一批命令。</b></p>
     
   </div></section>
-<section class="band prose"><h2>为什么合适</h2><p>每一个必须离线可用的应用，最后都会自己写一层存储。桌面应用会得到 SQLite，外加一套没人想要的 schema。web 应用会得到 localStorage，然后撞上 5 MB 的上限，再发现它是同步的、而且只能存字符串，于是又得到 IndexedDB 和包在它外面的一层抽象。设备会得到一个手写在 flash 里的环形缓冲区。</p><p><b>这三件事是同一个问题，也可以是同一个解。</b>kevy 嵌进去不带任何进程边界，发到浏览器时带着真的 TTL 和真的发布订阅，也能在一颗 Cortex-M 上用一块固定 arena、完全不用分配器地启动。最后这一条，CI 每次 push 都会验一遍。</p></section>
+<section class="band prose"><h2>为什么合适</h2><div class="pcols"><p>每一个必须离线可用的应用，最后都会自己写一层存储。桌面应用会得到 SQLite，外加一套没人想要的 schema。web 应用会得到 localStorage，然后撞上 5 MB 的上限，再发现它是同步的、而且只能存字符串，于是又得到 IndexedDB 和包在它外面的一层抽象。设备会得到一个手写在 flash 里的环形缓冲区。</p><p><b>这三件事是同一个问题，也可以是同一个解。</b>kevy 嵌进去不带任何进程边界，发到浏览器时带着真的 TTL 和真的发布订阅，也能在一颗 Cortex-M 上用一块固定 arena、完全不用分配器地启动。最后这一条，CI 每次 push 都会验一遍。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>在一个 Rust 程序里</h2><p class="sec-lede">存储是一个你直接调用的 struct——没有 socket，没有序列化，没有第二个进程。数据是持久的，打开时会重放自己的日志。</p></div>
   <ol class="steps recipe"><li><h3>加进来</h3><pre><code># Cargo.toml

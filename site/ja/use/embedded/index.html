@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kevy を組み込む — kevy</title>
 <meta name="description" content="ストアを、プログラムの中へ。デスクトップアプリ、ブラウザのタブ、エッジワーカー、OS のないマイコン。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">サーバーもソケットもネットワークもありません。エンジンは、呼び出せる struct であり、151 KB の WebAssembly モジュールであり、OS のないチップの上の no_std ライブラリです——<b>そして 3 つとも、同じコマンドを持つ、同じエンジンです。</b></p>
     
   </div></section>
-<section class="band prose"><h2>なぜ向いているのか</h2><p>オフラインで動く必要のあるアプリケーションは、どれも結局ストレージ層を書くことになります。デスクトップアプリは SQLite と、誰も望まなかったスキーマを手に入れます。Web アプリは localStorage を使い、5 MB の上限と、同期でしかも文字列しか扱えないという事実を知り、次に IndexedDB とその上の抽象を手に入れます。デバイスは、フラッシュ上に手書きのリングバッファを手に入れます。</p><p><b>3 つとも同じ問題であり、同じ解になりえます。</b>kevy はプロセス境界なしで組み込め、本物の TTL と pub/sub を持ったままブラウザに届き、固定 arena とアロケータなしで Cortex-M でも起動します。最後のひとつは、CI が push のたびに証明しています。</p></section>
+<section class="band prose"><h2>なぜ向いているのか</h2><div class="pcols"><p>オフラインで動く必要のあるアプリケーションは、どれも結局ストレージ層を書くことになります。デスクトップアプリは SQLite と、誰も望まなかったスキーマを手に入れます。Web アプリは localStorage を使い、5 MB の上限と、同期でしかも文字列しか扱えないという事実を知り、次に IndexedDB とその上の抽象を手に入れます。デバイスは、フラッシュ上に手書きのリングバッファを手に入れます。</p><p><b>3 つとも同じ問題であり、同じ解になりえます。</b>kevy はプロセス境界なしで組み込め、本物の TTL と pub/sub を持ったままブラウザに届き、固定 arena とアロケータなしで Cortex-M でも起動します。最後のひとつは、CI が push のたびに証明しています。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>Rust のプログラムの中で</h2><p class="sec-lede">ストアは、呼び出せる struct です——ソケットも、シリアライズも、2 つ目のプロセスもありません。永続化され、開くときにログを再生します。</p></div>
   <ol class="steps recipe"><li><h3>追加する</h3><pre><code># Cargo.toml

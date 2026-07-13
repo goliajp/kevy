@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Embedding kevy — kevy</title>
 <meta name="description" content="Put the store inside the program: a desktop app, a browser tab, an edge worker, or a microcontroller with no operating system.">
-<link rel="stylesheet" href="../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">No server, no socket, no network. The engine is a struct you call, a 151 KB WebAssembly module, or a no_std library on a chip with no operating system — <b>and it is the same engine, with the same commands, in all three.</b></p>
     
   </div></section>
-<section class="band prose"><h2>Why this fits</h2><p>Every application that has to work offline ends up writing a storage layer. A desktop app gets SQLite and a schema nobody wanted. A web app gets localStorage, discovers the 5 MB ceiling and the fact that it is synchronous and string-only, and then gets IndexedDB and an abstraction over it. A device gets a hand-rolled ring buffer in flash.</p><p><b>All three are the same problem, and they can be the same solution.</b> kevy embeds with no process boundary, ships to a browser with real TTLs and pub/sub, and boots on a Cortex-M with a fixed arena and no allocator at all. CI proves the last one on every push.</p></section>
+<section class="band prose"><h2>Why this fits</h2><div class="pcols"><p>Every application that has to work offline ends up writing a storage layer. A desktop app gets SQLite and a schema nobody wanted. A web app gets localStorage, discovers the 5 MB ceiling and the fact that it is synchronous and string-only, and then gets IndexedDB and an abstraction over it. A device gets a hand-rolled ring buffer in flash.</p><p><b>All three are the same problem, and they can be the same solution.</b> kevy embeds with no process boundary, ships to a browser with real TTLs and pub/sub, and boots on a Cortex-M with a fixed arena and no allocator at all. CI proves the last one on every push.</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>Inside a Rust program</h2><p class="sec-lede">The store is a struct you call — no socket, no serialisation, no second process. Durable, and it replays its log on open.</p></div>
   <ol class="steps recipe"><li><h3>Add it</h3><pre><code># Cargo.toml

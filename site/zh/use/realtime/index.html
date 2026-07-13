@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>实时与发布订阅——kevy</title>
 <meta name="description" content="在 kevy 的发布订阅上做聊天、在线状态、通知和实时仪表盘——也包括一个跟不上的订阅者会怎么样。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">聊天、在线状态、通知、一个会自己更新的仪表盘。一次发布，多个订阅者，不用轮询。<b>而在浏览器版本里，同一套发布订阅在两个标签页之间也能用，完全不需要服务端。</b></p>
     
   </div></section>
-<section class="band prose"><h2>为什么合适——以及哪里不合适</h2><p>发布订阅是发完就不管的。一条消息只会送给<b>那一刻</b>正在订阅的人；晚一秒才连上来的人永远看不到它，而且没有确认。对于一次在线心跳、一个实时计数器，这正好合适；对于任何你丢了会心疼的东西，这正好不合适。</p><p><b>如果丢一条消息是要紧的，就改用 stream</b>——见<a href="../../../zh/use/queue/">队列</a>。stream 保留历史，支持消费组，还能让掉过线的客户端把落下的补回来。发布订阅是便宜的那一个；便宜本身就是这笔交易的内容。</p></section>
+<section class="band prose"><h2>为什么合适——以及哪里不合适</h2><div class="pcols"><p>发布订阅是发完就不管的。一条消息只会送给<b>那一刻</b>正在订阅的人；晚一秒才连上来的人永远看不到它，而且没有确认。对于一次在线心跳、一个实时计数器，这正好合适；对于任何你丢了会心疼的东西，这正好不合适。</p><p><b>如果丢一条消息是要紧的，就改用 stream</b>——见<a href="../../../zh/use/queue/">队列</a>。stream 保留历史，支持消费组，还能让掉过线的客户端把落下的补回来。发布订阅是便宜的那一个；便宜本身就是这笔交易的内容。</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>把一条消息扇出给所有正在听的人</h2><p class="sec-lede">一次发布，送达那一刻在线的每一个订阅者——一个聊天室、一条通知、一个实时计数器。</p></div>
   <ol class="steps recipe"><li><h3>每个客户端各自订阅</h3><p>PSUBSCRIBE 用一条连接就能订下一整族频道。</p><pre><code>SUBSCRIBE room:42

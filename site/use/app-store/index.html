@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Serving reads without a database — kevy</title>
 <meta name="description" content="Secondary indexes and materialised views in kevy: how a filtered list or a running total stays a lookup instead of becoming a query.">
-<link rel="stylesheet" href="../../assets/kevy.css?v=464ef89c">
+<link rel="stylesheet" href="../../assets/kevy.css?v=c5c8b1de">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,7 +46,7 @@
     <p class="lede">"All orders for this customer, still open." "How many items in this cart." These are the reads an application does a thousand times a second, and in a relational database each one is a query with a planner behind it. <b>kevy can keep the answer ready instead.</b></p>
     
   </div></section>
-<section class="band prose"><h2>Why this fits</h2><p>A key-value store is usually rejected for application data with a single objection: <i>but I need to look things up by something other than the key</i>. That objection is correct, and it is what secondary indexes are for.</p><p><b>An index is declared, not built.</b> You name the key pattern and the field; the write path keeps it current. A filtered list becomes a lookup again — no planner, no scan, no query.</p><p><b>A view goes further</b> and keeps an aggregate current on write, so a count or a total is read rather than computed. This is what most applications are actually asking their ORM for, and it is why their database is busy.</p></section>
+<section class="band prose"><h2>Why this fits</h2><div class="pcols"><p>A key-value store is usually rejected for application data with a single objection: <i>but I need to look things up by something other than the key</i>. That objection is correct, and it is what secondary indexes are for.</p><p><b>An index is declared, not built.</b> You name the key pattern and the field; the write path keeps it current. A filtered list becomes a lookup again — no planner, no scan, no query.</p><p><b>A view goes further</b> and keeps an aggregate current on write, so a count or a total is read rather than computed. This is what most applications are actually asking their ORM for, and it is why their database is busy.</p></div></section>
 <section class="band">
   <div class="sec-h"><h2>Look things up by a field, not the key</h2><p class="sec-lede">"All orders for customer 881" stays a lookup: declare an index per field, write normally, read by value.</p></div>
   <ol class="steps recipe"><li><h3>Your data, written the way you would anyway</h3><pre><code>HSET order:1001 customer 881 status open  total 4400
