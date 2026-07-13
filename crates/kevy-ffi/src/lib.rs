@@ -342,6 +342,26 @@ pub unsafe extern "C" fn kevy_sub_close(sub: *mut KevySub) {
     let _ = catch_unwind(AssertUnwindSafe(|| drop(unsafe { Box::from_raw(sub) })));
 }
 
+/// Decode the packed argv the byte-array-oriented bindings send (JNI and
+/// N-API both speak it): each argument is a u32-LE length prefix followed
+/// by that many bytes, back to back. `None` on a truncated prefix/body or
+/// zero arguments — misuse, not a protocol error.
+///
+/// This is a Rust-side helper for the binding shells, not part of the C ABI.
+pub fn unpack_argv(packed: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let mut args = Vec::new();
+    let mut pos = 0usize;
+    while pos < packed.len() {
+        let head = packed.get(pos..pos + 4)?;
+        let len = u32::from_le_bytes(head.try_into().ok()?) as usize;
+        pos += 4;
+        let body = packed.get(pos..pos + len)?;
+        args.push(body.to_vec());
+        pos += len;
+    }
+    if args.is_empty() { None } else { Some(args) }
+}
+
 /// Encode a [`PubsubFrame`] exactly as the server pushes it on the wire, so
 /// every binding's RESP parser handles live frames and command replies with
 /// the same code.

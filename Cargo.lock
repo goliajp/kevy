@@ -607,6 +607,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-napi"
+version = "4.0.0"
+dependencies = [
+ "kevy-ffi",
+]
+
+[[package]]
 name = "kevy-persist"
 version = "4.0.0"
 dependencies = [

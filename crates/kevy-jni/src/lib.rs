@@ -21,7 +21,7 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::null_mut;
 
-use kevy_ffi::{KevyBuf, KevyDb, KevySub};
+use kevy_ffi::{KevyBuf, KevyDb, KevySub, unpack_argv};
 
 mod env;
 use env::{JBoolean, JInt, JLong, JObject, JniEnv, get_byte_array, new_byte_array};
@@ -43,23 +43,6 @@ fn handle<T>(p: *mut T) -> JLong {
 
 const fn empty_buf() -> KevyBuf {
     KevyBuf { ptr: null_mut(), len: 0, cap: 0 }
-}
-
-/// Decode the packed argv the Java side sends: each argument is a u32-LE
-/// length prefix followed by that many bytes, back to back. `None` on a
-/// truncated prefix/body or zero arguments — misuse, not a protocol error.
-fn unpack_argv(packed: &[u8]) -> Option<Vec<Vec<u8>>> {
-    let mut args = Vec::new();
-    let mut pos = 0usize;
-    while pos < packed.len() {
-        let head = packed.get(pos..pos + 4)?;
-        let len = u32::from_le_bytes(head.try_into().ok()?) as usize;
-        pos += 4;
-        let body = packed.get(pos..pos + len)?;
-        args.push(body.to_vec());
-        pos += len;
-    }
-    if args.is_empty() { None } else { Some(args) }
 }
 
 /// Copy a reply buffer into a fresh `byte[]`, then free the buffer.
