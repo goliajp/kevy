@@ -21,7 +21,12 @@
     <PackageLicenseExpression>Apache-2.0 OR MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/goliajp/kevy</RepositoryUrl>
     <PackageProjectUrl>https://kevy.golia.jp</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
 
   <ItemGroup>
     <None Include="runtimes/**" Pack="true" PackagePath="runtimes/" Condition="Exists('runtimes')" />
