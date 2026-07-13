@@ -96,6 +96,7 @@ mod exec_slowlog;
 mod exec_watch;
 mod inbox;
 mod persist_worker;
+pub mod propagation;
 mod message;
 mod message_kinds;
 mod message_agg;

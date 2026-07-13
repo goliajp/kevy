@@ -313,6 +313,11 @@ pub fn drain_commands(
         match parse_command(input) {
             Ok(Some((args, consumed))) => {
                 let reply = kevy.dispatch(store, &args);
+                // This simple path has no AOF / replication recorder, so
+                // nothing consumes a propagation override — drop anything
+                // a nondeterministic verb (SPOP) set, per command, so it
+                // can't linger on this thread.
+                kevy_rt::propagation::discard_override();
                 output.extend_from_slice(&reply);
                 input.drain(..consumed);
                 if args

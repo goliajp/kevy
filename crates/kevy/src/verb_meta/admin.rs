@@ -130,7 +130,7 @@ pub(super) const ROWS: &[VerbMeta] = &[
     // ---- script ----------------------------------------------------
     v("EVAL",        "script", -3, W, "Run a Lua script server-side; routed to KEYS[1]'s shard when numkeys >= 1.", "1.0.0", "EVAL script numkeys [key [key ...]] [arg [arg ...]]",
       "O(compile + the script's own work). The whole script is one atomic unit on KEYS[1]'s shard and blocks that shard for its duration. The runaway guard is an INSTRUCTION budget (lua time_limit_ms x 40000 instructions), not a wall clock",
-      "differs: there is no -BUSY state and no SCRIPT KILL — an over-budget script is aborted in place and answered with an ordinary error; nested EVAL is rejected, a redis.call touching another shard's key returns CROSSSLOT, and EVAL auto-caches its source by SHA1 so EVALSHA works without SCRIPT LOAD"),
+      "differs: there is no -BUSY state and no SCRIPT KILL — an over-budget script is aborted in place and answered with an ordinary error; nested EVAL is rejected, a redis.call touching another shard's key returns CROSSSLOT, and EVAL auto-caches its source by SHA1 so EVALSHA works without SCRIPT LOAD. Scripts replicate by SOURCE, not by effects: a script calling SPOP draws its own random members on a replica or an AOF replay — keep nondeterministic verbs out of scripts you replicate (plain SPOP outside EVAL propagates its effect and is safe)"),
     v("EVALSHA",     "script", -3, W, "Run a cached Lua script by its SHA1 digest.", "1.0.0", "EVALSHA sha1 numkeys [key [key ...]] [arg [arg ...]]",
       "O(1) cache lookup, then identical to EVAL",
       "differs: same instruction-budget model as EVAL (no -BUSY, no SCRIPT KILL); the cache is process-wide and EVAL populates it"),

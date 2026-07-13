@@ -6,11 +6,27 @@
 use crate::Commands;
 use crate::shard::Shard;
 use kevy_persist::{load_snapshot, replay_aof};
+use kevy_resp::ArgvView;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering, fence};
 use std::time::{Duration, Instant};
+
+/// Store-only replay of one logged frame — the body shared by both
+/// reactors' AOF replay and the reshard merge. Replay never re-logs /
+/// re-pushes, so nothing downstream consumes a propagation override; a
+/// legacy AOF can still carry a raw `SPOP` frame whose dispatch sets
+/// one — drop it per frame so it can't leak into the first live
+/// command on the shard.
+pub(crate) fn replay_dispatch<C: Commands, A: ArgvView + ?Sized>(
+    commands: &C,
+    store: &mut kevy_store::Store,
+    args: &A,
+) {
+    commands.dispatch(store, args);
+    crate::propagation::discard_override();
+}
 
 impl<C: Commands> Shard<C> {
     /// Owning shard of `key` under this server's routing scheme.
@@ -54,7 +70,7 @@ impl<C: Commands> Shard<C> {
             let commands = &self.commands;
             let store = &mut self.store;
             replay_aof(&aof_path, |args| {
-                commands.dispatch(store, &args);
+                replay_dispatch(commands, store, &args);
             })?;
         }
 
