@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>缓存与会话——kevy</title>
-<meta name="description" content="在 kevy 里放会话、热点行、限流和功能开关：为什么合适，代价是什么，以及具体用哪些命令。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<meta name="description" content="在 kevy 里放会话、热点行、限流和功能开关：任务是什么、用哪几条命令、每一步的代价是什么。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,33 +46,40 @@
     <p class="lede">会话、限流、功能开关，还有每个请求都要读的那一行热点行。在大多数应用里，它们都住在 Postgres 里，也正是被敲得最狠的那些行——不是因为数据库做不好，而是因为<b>它们从来就不是提问。key 你早就知道了。</b></p>
     
   </div></section>
-<section class="band prose"><h2>为什么合适</h2><p>这些东西的形状是同一个：一个你手里已经有的 key、一个很小的 value、一段寿命。kevy 用 O(1) 查到它，不靠定时任务就让它自己过期，并且在一台机器上每秒做几百万次。</p><p>被低估的那一部分是<b>过期</b>。建在数据库上的缓存需要一个清理任务，而 bug 就住在清理任务里。在这里，时间一到引擎就把 key 丢掉，不管有没有人来问它。</p></section>
+<section class="band prose"><h2>为什么合适</h2><p>这些东西的形状是同一个：一个你手里已经有的 key、一个很小的 value、一段寿命。kevy 用 O(1) 查到它，不靠定时任务就让它自己过期，并且在一台机器上每秒做几百万次。</p><p>被低估的那一部分是<b>过期</b>。建在数据库上的缓存需要一个清理任务，而 bug 就住在清理任务里。在这里，时间一到引擎就把 key 丢掉，不管有没有人来问它。下面是四个任务——每一个都可以原样粘进 <code>redis-cli</code>，对着一个跑起来的 kevy 直接执行。</p></section>
 <section class="band">
-  <div class="sec-h"><h2>怎么做</h2></div>
-  <figure class="code"><figcaption>下面每一条命令都是真的。对着一个跑起来的 kevy，用 redis-cli 直接粘贴。</figcaption><pre><code># a session that cleans itself up
-SET session:7f3a &#x27;{&quot;user&quot;:&quot;ada&quot;,&quot;role&quot;:&quot;admin&quot;}&#x27; EX 3600
-GET session:7f3a
-TTL session:7f3a          -&gt; 3599
-
-# a rate limit: one counter per client, expiring on a window
-INCR   rate:203.0.113.7   -&gt; 1
-EXPIRE rate:203.0.113.7 60
-INCR   rate:203.0.113.7   -&gt; 2      (the window survives)
-
-# feature flags: read constantly, written rarely, joined never
-HSET  flags new-checkout on dark-mode on beta-search off
-HGET  flags new-checkout  -&gt; &quot;on&quot;
-HGETALL flags
-
-# a cached row, invalidated by the writer rather than by a timer
-SET   user:881 &quot;$json&quot; EX 300
-DEL   user:881            # after you write to Postgres</code></pre></figure>
+  <div class="sec-h"><h2>一个会自己收尾的会话</h2><p class="sec-lede">一个会话一个 key，最后一次活动一小时后自己消失——没有清理任务，没有定时任务，也没有一张存过期行的表。</p></div>
+  <ol class="steps recipe"><li><h3>把会话连同寿命一起写进去</h3><pre><code>SET session:7f3a &#x27;{&quot;user&quot;:&quot;ada&quot;,&quot;role&quot;:&quot;admin&quot;}&#x27; EX 3600
+-&gt; OK</code></pre></li><li><h3>每个请求都来读它</h3><pre><code>GET session:7f3a
+-&gt; &quot;{\&quot;user\&quot;:\&quot;ada\&quot;,\&quot;role\&quot;:\&quot;admin\&quot;}&quot;
+TTL session:7f3a
+-&gt; (integer) 3599</code></pre></li><li><h3>滑动过期：有活动就续期</h3><p>续的是钟，不是值——会话死在用户安静下来一小时之后，而不是登录一小时之后。</p><pre><code>EXPIRE session:7f3a 3600
+-&gt; (integer) 1</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p>一个会话就是一个 key，所以上面每一步都是 O(1) 且原子的。如果你把一个用户的状态摊在好几个 key 上，原子性到分片为止——在 key 里用 <code>{hashtag}</code> 把它们放到同一个分片上。</p></div>
 </section>
 <section class="band">
-  <div class="call loss">
-    <span class="h">代价是什么</span>
-    <p>缓存是事实的第二份拷贝，它可能是错的。kevy 解决不了这件事——没有任何东西能解决。<b>要在写的时候让它失效，而不是靠一个定时器</b>，TTL 是兜底，不是方案本身。另外注意，多 key 的 <code>MSET</code> 或 <code>DEL</code> 只在单个 shard 内是原子的：如果两个 key 必须一起变，用 <code>{hashtag}</code> 把它们放到同一个 shard 上。</p>
-  </div>
+  <div class="sec-h"><h2>给一个接口限流</h2><p class="sec-lede">每个客户端每个窗口一个计数器，一分钟内的第 101 个请求会被拒绝。</p></div>
+  <ol class="steps recipe"><li><h3>把这次请求计进去</h3><pre><code>INCR rate:203.0.113.7
+-&gt; (integer) 1</code></pre></li><li><h3>第一次命中时开窗</h3><p>只在返回值是 1 的时候做——后面的请求搭的是已经开着的那个窗口。</p><pre><code>EXPIRE rate:203.0.113.7 60
+-&gt; (integer) 1</code></pre></li><li><h3>超过上限就拒绝</h3><p>计数器越过上限后，由你的 handler 返回 429。窗口继续计数。</p><pre><code>INCR rate:203.0.113.7
+-&gt; (integer) 2      (the window survives)</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p>这是一个<b>固定</b>窗口，不是滑动窗口：一阵跨在窗口边界上的突发流量，短时间内最多能放过两倍的上限。做滥用防护这已经够了，整件事只是两条 O(1) 命令；要是需要更平滑的整形，多花几个 key，而不是多上一套系统。</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>功能开关，每个请求都读</h2><p class="sec-lede">所有开关放在一个 hash 里：热路径上一次 O(1) 的读，一次写就给所有人翻一个开关。</p></div>
+  <ol class="steps recipe"><li><h3>把开关写进去</h3><pre><code>HSET flags new-checkout on dark-mode on beta-search off
+-&gt; (integer) 3</code></pre></li><li><h3>热路径上读一个</h3><pre><code>HGET flags new-checkout
+-&gt; &quot;on&quot;</code></pre></li><li><h3>翻一个，立刻对所有人生效</h3><pre><code>HSET flags beta-search on
+-&gt; (integer) 0      (0 = updated, not added)
+HGETALL flags</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p>一个 hash 住在一个分片上，所以每一次开关读都由同一个分片来答。以开关读的频率，这仍然是每秒几百万次；真有一天它成了热点，就按业务面或者团队把 hash 拆开。</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>缓存一行数据库拥有的数据</h2><p class="sec-lede">热点行从内存里出；Postgres 仍然是事实来源，这份拷贝活不过它的兜底 TTL。</p></div>
+  <ol class="steps recipe"><li><h3>读未命中时，带着兜底 TTL 回填</h3><pre><code>SET user:881 &quot;$json&quot; EX 300
+-&gt; OK</code></pre></li><li><h3>读走这份拷贝</h3><pre><code>GET user:881</code></pre></li><li><h3>写的时候让它失效——不要等定时器</h3><p>在数据库那边的写提交之后删掉它。下一次读未命中、回填，然后就是对的。</p><pre><code>DEL user:881
+-&gt; (integer) 1</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p>缓存是事实的第二份拷贝，它可能是错的——没有任何东西能解决这件事。<b>要在写的时候让它失效，而不是靠定时器</b>，TTL 是兜底，不是方案本身。多 key 的 <code>DEL</code> 或 <code>MSET</code> 只在单个分片内是原子的：如果两个 key 必须一起变，用 <code>{hashtag}</code> 把它们放到一起。</p></div>
 </section>
 <section class="band"><div class="sec-h"><h2>接下来</h2></div><div class="cards"><a class="card" href="../../../zh/docs/cookbook/">
       <span class="card-k">指南</span>

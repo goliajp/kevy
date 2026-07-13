@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Embedding kevy — kevy</title>
 <meta name="description" content="Put the store inside the program: a desktop app, a browser tab, an edge worker, or a microcontroller with no operating system.">
-<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -48,44 +48,29 @@
   </div></section>
 <section class="band prose"><h2>Why this fits</h2><p>Every application that has to work offline ends up writing a storage layer. A desktop app gets SQLite and a schema nobody wanted. A web app gets localStorage, discovers the 5 MB ceiling and the fact that it is synchronous and string-only, and then gets IndexedDB and an abstraction over it. A device gets a hand-rolled ring buffer in flash.</p><p><b>All three are the same problem, and they can be the same solution.</b> kevy embeds with no process boundary, ships to a browser with real TTLs and pub/sub, and boots on a Cortex-M with a fixed arena and no allocator at all. CI proves the last one on every push.</p></section>
 <section class="band">
-  <div class="sec-h"><h2>How — inside a Rust program</h2></div>
-  <figure class="code"><figcaption>No socket, no serialisation, no second process. Durable, and it replays its log on open.</figcaption><pre><code>kevy-embedded = &quot;4.0&quot;
-
-let db = Db::open(&quot;data/&quot;)?;
+  <div class="sec-h"><h2>Inside a Rust program</h2><p class="sec-lede">The store is a struct you call — no socket, no serialisation, no second process. Durable, and it replays its log on open.</p></div>
+  <ol class="steps recipe"><li><h3>Add it</h3><pre><code># Cargo.toml
+kevy-embedded = &quot;4.0&quot;</code></pre></li><li><h3>Open, write, read</h3><pre><code>let db = Db::open(&quot;data/&quot;)?;
 db.set(b&quot;session:7f3a&quot;, b&quot;{\&quot;user\&quot;:\&quot;ada\&quot;}&quot;, Some(Duration::from_secs(3600)))?;
-assert_eq!(db.get(b&quot;session:7f3a&quot;)?.is_some(), true);
-
-// need other processes to reach it later? open the RESP listener
-// and your redis-cli works, without changing any of the above.
-db.listen(&quot;127.0.0.1:6379&quot;)?;</code></pre></figure>
+assert_eq!(db.get(b&quot;session:7f3a&quot;)?.is_some(), true);</code></pre></li><li><h3>Need redis-cli later? Open the listener</h3><p>Other processes reach the same store over RESP, without changing any of the above.</p><pre><code>db.listen(&quot;127.0.0.1:6379&quot;)?;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p><b>An embedded store is not shared.</b> One process owns the data directory; if a second process needs the data, that is what the listener above — or <a href="../../docs/embedded-listener/">the full server</a> — is for.</p></div>
 </section>
 <section class="band">
-  <div class="sec-h"><h2>How — in a browser tab</h2></div>
-  <figure class="code"><figcaption>151 KB gzipped. Persists to the browser's own filesystem, survives a reload, and speaks pub/sub across tabs.</figcaption><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
+  <div class="sec-h"><h2>In a browser tab</h2><p class="sec-lede">151 KB gzipped. Persists to the browser's own filesystem, survives a reload, and speaks pub/sub across tabs.</p></div>
+  <ol class="steps recipe"><li><h3>Open it, persistent</h3><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
 
-const db = await open({ persist: { name: &quot;app&quot; } });
-
-db.set(&quot;cart:u881&quot;, JSON.stringify(items), { ttlMs: 86_400_000 });
+const db = await open({ persist: { name: &quot;app&quot; } });</code></pre></li><li><h3>Write with a real TTL, read after a reload</h3><pre><code>db.set(&quot;cart:u881&quot;, JSON.stringify(items), { ttlMs: 86_400_000 });
 db.get(&quot;cart:u881&quot;);        // still there after a reload
-db.pttl(&quot;cart:u881&quot;);       // the engine expires it, not your code
-
-db.subscribe(&quot;sync&quot;, (payload) =&gt; merge(payload));   // other tabs</code></pre></figure>
+db.pttl(&quot;cart:u881&quot;);       // the engine expires it, not your code</code></pre></li><li><h3>Hear the other tabs</h3><pre><code>db.subscribe(&quot;sync&quot;, (payload) =&gt; merge(payload));</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p><b>localStorage is faster for a small synchronous read</b> — it is a map in the page's own address space, and nothing built on OPFS will beat it at that. kevy wins on everything that makes localStorage a bad idea anyway: real TTLs, no 5 MB ceiling, byte values rather than strings, and writes that do not block the main thread.</p></div>
 </section>
 <section class="band">
-  <div class="sec-h"><h2>How — on a microcontroller</h2></div>
-  <figure class="code"><figcaption>no_std, no allocator, no operating system. A fixed arena you size yourself.</figcaption><pre><code># Cargo.toml
-kevy-store = { version = &quot;4.0&quot;, default-features = false }
-
-# no_std, no heap: the store lives in an arena you provide
-let mut arena = [0u8; 64 * 1024];
+  <div class="sec-h"><h2>On a microcontroller</h2><p class="sec-lede">no_std, no allocator, no operating system: the store lives in a fixed arena you size yourself, and CI boots it on every push.</p></div>
+  <ol class="steps recipe"><li><h3>Strip it down</h3><pre><code># Cargo.toml
+kevy-store = { version = &quot;4.0&quot;, default-features = false }</code></pre></li><li><h3>Give it memory, use it</h3><pre><code>let mut arena = [0u8; 64 * 1024];
 let mut store = Store::new_in(&amp;mut arena);
-store.set(b&quot;temp&quot;, b&quot;21.4&quot;)?;</code></pre></figure>
-</section>
-<section class="band">
-  <div class="call loss">
-    <span class="h">What it costs you</span>
-    <p><b>In the browser, localStorage is faster for a small synchronous read</b> — it is a map in the page's own address space and nothing built on OPFS will beat it at that. kevy wins on everything that makes localStorage a bad idea anyway: real TTLs, no 5 MB ceiling, byte values rather than strings, and writes that do not block the main thread. <b>On a microcontroller you size the arena yourself</b> and there is no growing it at runtime — that is what no allocator means. And <b>an embedded store is not shared</b>: if a second process needs the data, you want the server, or the embedded RESP listener.</p>
-  </div>
+store.set(b&quot;temp&quot;, b&quot;21.4&quot;)?;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p><b>The arena is fixed.</b> There is no growing it at runtime — that is what "no allocator" means, and sizing it is your design decision, not the engine's. The feature tiers and what each one costs in bytes are in <a href="../../docs/iot/">the IoT guide</a>.</p></div>
 </section>
 <section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../docs/wasm/">
       <span class="card-k">Guide</span>

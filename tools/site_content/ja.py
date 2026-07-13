@@ -432,7 +432,7 @@ PAGES["choose"] = {
 
 PAGES["use/cache"] = {
     "title": "キャッシュとセッション — kevy",
-    "desc": "kevy でのセッション、ホットな行、レート制限、フィーチャーフラグ。なぜ向いているのか、何を差し出すのか、そしてそのためのコマンド。",
+    "desc": "kevy でのセッション、ホットな行、レート制限、フィーチャーフラグ——タスクと、そのためのコマンドと、それぞれのコスト。",
     "foot": "ほとんどのチームが、最初に移すワークロード",
     "blocks": [
         {
@@ -457,44 +457,133 @@ PAGES["use/cache"] = {
                 "見落とされがちなのが<b>期限切れ</b>です。データベースの上に作った"
                 "キャッシュには掃除役が要り、バグはその掃除役に棲みつきます。ここでは"
                 "エンジンが、誰かに読まれるかどうかに関係なく、時間の来たキーを"
-                "落とします。",
+                "落とします。以下の 4 つのタスクは、どれも動いている kevy に対して、"
+                "<code>redis-cli</code> からそのまま貼り付けられます。",
             ],
         },
         {
-            "t": "code",
-            "h2": "手順",
-            "caption": "以下のコマンドは、すべて実物です。動いている kevy に対して、redis-cli から貼り付けてください。",
-            "text": """# a session that cleans itself up
-SET session:7f3a '{"user":"ada","role":"admin"}' EX 3600
-GET session:7f3a
-TTL session:7f3a          -> 3599
-
-# a rate limit: one counter per client, expiring on a window
-INCR   rate:203.0.113.7   -> 1
-EXPIRE rate:203.0.113.7 60
-INCR   rate:203.0.113.7   -> 2      (the window survives)
-
-# feature flags: read constantly, written rarely, joined never
-HSET  flags new-checkout on dark-mode on beta-search off
-HGET  flags new-checkout  -> "on"
-HGETALL flags
-
-# a cached row, invalidated by the writer rather than by a timer
-SET   user:881 "$json" EX 300
-DEL   user:881            # after you write to Postgres""",
+            "t": "recipe",
+            "h2": "ひとりでに片付くセッション",
+            "goal": "セッションごとにキーは 1 つ。最後に触れてから 1 時間で、ひとりでに消えます——掃除役も、cron も、期限切れ行のテーブルも要りません。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "セッションを、寿命つきで書く",
+                    "code": """SET session:7f3a '{"user":"ada","role":"admin"}' EX 3600
+-> OK""",
+                },
+                {
+                    "do": "リクエストのたびに読む",
+                    "code": """GET session:7f3a
+-> "{\\"user\\":\\"ada\\",\\"role\\":\\"admin\\"}"
+TTL session:7f3a
+-> (integer) 3599""",
+                },
+                {
+                    "do": "スライド式の期限——アクティビティで更新する",
+                    "note": "触れるのは値ではなく時計です——セッションが消えるのは、ログインの 1 時間後ではなく、ユーザーが静かになってから 1 時間後です。",
+                    "code": """EXPIRE session:7f3a 3600
+-> (integer) 1""",
+                },
+            ],
+            "cost": (
+                "セッションはキー 1 つなので、ここの手順はすべて O(1) で原子的です。"
+                "ひとりのユーザーの状態を複数のキーに広げると、原子性はシャードの"
+                "境界で終わります——キーに <code>{hashtag}</code> を入れて、同じ場所に"
+                "寄せてください。"
+            ),
         },
         {
-            "t": "callout",
-            "kind": "loss",
-            "title": "何を差し出すことになるか",
-            "body": (
-                "キャッシュは真実の 2 つ目のコピーであり、間違うことがあります。"
-                "kevy はそれを解決しません——それを解決できるものは、ありません。"
-                "<b>タイマーではなく、書き込みで無効化してください</b>。TTL は計画"
-                "そのものではなく、最後の保険として置いておくものです。また、複数"
-                "キーの <code>MSET</code> や <code>DEL</code> が原子的なのは、ひとつ"
-                "のシャードの中だけです。2 つのキーが必ず一緒に変わらなければ"
-                "ならないなら、<code>{hashtag}</code> で同じ場所に寄せてください。"
+            "t": "recipe",
+            "h2": "エンドポイントにレート制限をかける",
+            "goal": "クライアントごと、ウィンドウごとにカウンタ 1 つ。1 分の中の 101 回目のリクエストは、断られます。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "リクエストを数える",
+                    "code": """INCR rate:203.0.113.7
+-> (integer) 1""",
+                },
+                {
+                    "do": "最初の 1 回で、ウィンドウを開く",
+                    "note": "返答が 1 だったときだけです——以降のリクエストは、すでに開いているウィンドウに乗ります。",
+                    "code": """EXPIRE rate:203.0.113.7 60
+-> (integer) 1""",
+                },
+                {
+                    "do": "上限を超えたら、断る",
+                    "note": "カウンタが上限を超えたら、ハンドラで 429 を返します。ウィンドウは、そのまま数え続けます。",
+                    "code": """INCR rate:203.0.113.7
+-> (integer) 2      (the window survives)""",
+                },
+            ],
+            "cost": (
+                "これは<b>固定</b>ウィンドウであって、スライド式ではありません。"
+                "境界をまたぐバーストは、短い区間では上限の 2 倍まで通りえます。"
+                "不正利用の抑止ならそれで十分ですし、全体が O(1) のコマンド 2 つで"
+                "済みます。もっと滑らかな整形が要るなら、新しいシステムではなく、"
+                "キーの数で払ってください。"
+            ),
+        },
+        {
+            "t": "recipe",
+            "h2": "フィーチャーフラグ——すべてのリクエストが読む",
+            "goal": "全フラグをひとつのハッシュに。ホットパスは O(1) の読み取り 1 回、フラグを全員ぶん切り替えるのは書き込み 1 回です。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "フラグを設定する",
+                    "code": """HSET flags new-checkout on dark-mode on beta-search off
+-> (integer) 3""",
+                },
+                {
+                    "do": "ホットパスで 1 つ読む",
+                    "code": """HGET flags new-checkout
+-> "on\"""",
+                },
+                {
+                    "do": "1 つを、全員に対して、いま切り替える",
+                    "code": """HSET flags beta-search on
+-> (integer) 0      (0 = updated, not added)
+HGETALL flags""",
+                },
+            ],
+            "cost": (
+                "ひとつのハッシュはひとつのシャードに載るので、フラグの読み取りには"
+                "すべて同じシャードが答えます。フラグ程度の読み取り頻度なら、それでも"
+                "毎秒数百万回です。そこがホットスポットになったら、ハッシュを画面や"
+                "チームの単位で分けてください。"
+            ),
+        },
+        {
+            "t": "recipe",
+            "h2": "データベースが所有する行をキャッシュする",
+            "goal": "ホットな行はメモリから返します。真実は Postgres のまま、コピーが保険より長生きすることはありません。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "読み取りミスのとき、保険の TTL つきで埋める",
+                    "code": """SET user:881 "$json" EX 300
+-> OK""",
+                },
+                {
+                    "do": "読み取りは、コピーから返す",
+                    "code": """GET user:881""",
+                },
+                {
+                    "do": "書き込んだら無効化する——タイマーを待たない",
+                    "note": "データベースへの書き込みがコミットしてから削除します。次の読み取りはミスして埋め直し、正しい値に戻ります。",
+                    "code": """DEL user:881
+-> (integer) 1""",
+                },
+            ],
+            "cost": (
+                "キャッシュは真実の 2 つ目のコピーであり、間違うことがあります——"
+                "それを解決できるものは、ありません。<b>タイマーではなく、書き込みで"
+                "無効化してください</b>。TTL は計画ではなく、最後の保険です。複数キー"
+                "の <code>DEL</code> や <code>MSET</code> が原子的なのは、ひとつの"
+                "シャードの中だけです。2 つのキーが必ず一緒に変わらなければならない"
+                "なら、<code>{hashtag}</code> で同じ場所に寄せてください。"
             ),
         },
         {
@@ -545,62 +634,80 @@ PAGES["use/queue"] = {
             ],
         },
         {
-            "t": "code",
-            "h2": "手順——やり直せる仕事には、リスト",
-            "caption": "ワーカーはブロックします。ポーリングのループも、sleep も、殺到もありません。",
-            "text": """# producer
-LPUSH jobs:email '{"to":"ada@example.com","tpl":"welcome"}'
-
-# worker — blocks until there is something, up to 30 seconds
-BRPOP jobs:email 30
+            "t": "recipe",
+            "h2": "やり直せる仕事には、リスト",
+            "goal": "プロデューサが積み、ブロックしていたワーカーが、仕事の来た瞬間に目を覚まします。コマンド 2 つ。ポーリングのループも、スケジューラもありません。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "プロデューサ——ジョブを積む",
+                    "code": """LPUSH jobs:email '{"to":"ada@example.com","tpl":"welcome"}'
+-> (integer) 1""",
+                },
+                {
+                    "do": "ワーカー——来るまでブロックする",
+                    "note": "ポーリングも、sleep も、殺到もありません——pop はジョブが届いた瞬間に返り、何もなければ 30 秒で手ぶらのまま返ります。",
+                    "code": """BRPOP jobs:email 30
 -> 1) "jobs:email"
-   2) "{\\"to\\":\\"ada@example.com\\",\\"tpl\\":\\"welcome\\"}"
-
-# a delayed job: the score is when it is due.
-# ZPOPMIN.BELOW is kevy's own — it takes only what is actually due,
-# and stops at the first job that is not.
-ZADD jobs:due 1783875499 '{"id":"j-91"}'
+   2) "{\\"to\\":\\"ada@example.com\\",\\"tpl\\":\\"welcome\\"}\"""",
+                },
+                {
+                    "do": "遅延ジョブ——スコアが期日",
+                    "note": "ZPOPMIN.BELOW は kevy 独自のコマンドです。実際に期日の来たものだけを取り、まだのジョブが現れたところで止まります。",
+                    "code": """ZADD jobs:due 1783875499 '{"id":"j-91"}'
+-> (integer) 1
 ZPOPMIN.BELOW jobs:due 1783875500
--> 1) the job payload
-   2) 1783875499
-""",
+-> the job payload, only if it is due""",
+                },
+            ],
+            "cost": (
+                "<b>pop したジョブは、そのワーカーがやり切らなければ、失われます。</b>"
+                "それがコマンド 2 つで済むことの代償です——やり直せる仕事にだけ、"
+                "この取引を選んでください。またマルチシャードのサーバーでは、複数の"
+                "キーにまたがる <code>BLPOP</code> は、Redis の厳密な左から右への"
+                "優先順を守りません。接続自身のシャードにあるキーが、先に処理され"
+                "ます。"
+            ),
         },
         {
-            "t": "code",
-            "h2": "手順——失えない仕事には、ストリーム",
-            "caption": "メッセージは、ワーカーが確認応答するまで保留されます。落ちたワーカーのジョブは、引き取れます。",
-            "text": """# once, at setup
-XGROUP CREATE jobs:pay g1 $ MKSTREAM
-
-# producer
-XADD jobs:pay * order 4410 amount 8400
-
-# worker: read, then work, then acknowledge
-XREADGROUP GROUP g1 worker-3 COUNT 1 BLOCK 5000 STREAMS jobs:pay >
-XACK jobs:pay g1 1783875499458-0
-
-# the worker died before XACK. another one takes over:
-XAUTOCLAIM jobs:pay g1 worker-7 60000 0-0
+            "t": "recipe",
+            "h2": "失えない仕事には、ストリーム",
+            "goal": "各ジョブはちょうど 1 つのワーカーに渡り、確認応答があるまで保留のままです。落ちたワーカーのジョブは、履歴をそっくり残したまま引き取れます。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "セットアップ時に一度——グループを作る",
+                    "code": """XGROUP CREATE jobs:pay g1 $ MKSTREAM
+-> OK""",
+                },
+                {
+                    "do": "プロデューサ——ジョブを追記する",
+                    "code": """XADD jobs:pay * order 4410 amount 8400
+-> "1783875499458-0\"""",
+                },
+                {
+                    "do": "ワーカー——読んで、働いて、確認応答する",
+                    "note": "確認応答する ID は、XREADGROUP が渡してきたものです。XACK までジョブは保留のまま——あなたの担当として、記録に残っています。",
+                    "code": """XREADGROUP GROUP g1 worker-3 COUNT 1 BLOCK 5000 STREAMS jobs:pay >
+XACK jobs:pay g1 1783875499458-0""",
+                },
+                {
+                    "do": "ワーカーが XACK の前に落ちた——ジョブを引き取る",
+                    "code": """XAUTOCLAIM jobs:pay g1 worker-7 60000 0-0
 # claims anything idle for more than 60 s
 
-# what is still outstanding, and who has it
-XPENDING jobs:pay g1""",
-        },
-        {
-            "t": "callout",
-            "kind": "loss",
-            "title": "何を差し出すことになるか",
-            "body": (
+XPENDING jobs:pay g1
+# what is still outstanding, and who has it""",
+                },
+            ],
+            "cost": (
                 "<b>ストリームは、ただではありません。</b><code>MAXLEN</code> による"
                 "切り詰めはストリームの重みを計算し直すため、ストリーム全体に対して "
-                "O(N) です。<code>XADD</code> のたびではなく、定期的に切り詰めて"
-                "ください。<code>XREADGROUP</code> の <code>COUNT</code> が制限するの"
-                "は<b>渡される量であって、走査される量ではありません</b>。未配信の"
-                "末尾は、まず全体が実体化されます。またマルチシャードのサーバーでは、"
-                "複数のキーにまたがる <code>BLPOP</code> は、Redis の厳密な左から右へ"
-                "の優先順を守りません。接続自身のシャードにあるキーが、先に処理され"
-                "ます。これらはすべて<a href=\"~/docs/commands/\">リファレンス</a>"
-                "に、コマンドごとに書いてあります。"
+                "O(N) です——<code>XADD</code> のたびではなく、定期的に切り詰めて"
+                "ください。また <code>XREADGROUP</code> の <code>COUNT</code> が制限"
+                "するのは渡される量であって、<b>走査される量ではありません</b>。"
+                "未配信の末尾は、まず全体が実体化されます。コマンドごとの詳細は"
+                "<a href=\"~/docs/commands/\">リファレンス</a>にあります。"
             ),
         },
         {
@@ -649,53 +756,91 @@ PAGES["use/realtime"] = {
             ],
         },
         {
-            "t": "code",
-            "h2": "手順",
-            "caption": "チャネルと、その一族をまとめて扱うためのパターン。",
-            "text": """# subscriber
-SUBSCRIBE room:42
-PSUBSCRIBE room:*          # every room, one connection
-
-# publisher — returns how many subscribers received it
-PUBLISH room:42 '{"user":"ada","text":"hello"}'
--> (integer) 3
-
-# presence: the TTL does the expiry, the client refreshes every 10 s
-SET presence:ada online EX 30
-
-# who is here. on a large keyspace prefer a set:
-SADD online ada
+            "t": "recipe",
+            "h2": "聞いている全員へ、メッセージをファンアウトする",
+            "goal": "1 回の publish が、その瞬間につながっているすべての購読者に届きます——チャットルーム、通知、ライブなカウンタ。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "各クライアントが購読する",
+                    "note": "PSUBSCRIBE なら、チャネルの一族まるごとを 1 本の接続で受け取れます。",
+                    "code": """SUBSCRIBE room:42
+PSUBSCRIBE room:*          # every room, one connection""",
+                },
+                {
+                    "do": "publish する——返答が聴衆の数",
+                    "code": """PUBLISH room:42 '{"user":"ada","text":"hello"}'
+-> (integer) 3             # how many subscribers received it""",
+                },
+            ],
+            "cost": (
+                "<b>遅い購読者は、いつまでもバッファされるのではなく、切り捨てられ"
+                "ます。</b>クライアントが追いつけない場合、そのメッセージは、サーバー"
+                "のメモリを際限なく増やす代わりに破棄されます。意図した選択であり、"
+                "配信を当てにする前に知っておくべきことです。確認応答も、再送も"
+                "ありません——どちらかが必要なら、必要なのはチャネルではなくストリーム"
+                "です。<a href=\"~/docs/pubsub/\">pub/sub のガイド</a>に、限界を"
+                "具体的に書いてあります。"
+            ),
+        },
+        {
+            "t": "recipe",
+            "h2": "プレゼンス——いま誰がオンラインか",
+            "goal": "帳簿づけはエンジンの期限切れに任せます。静かになったクライアントは、ひとりでに名簿から落ちます。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "ハートビート——寿命つきのキー",
+                    "note": "クライアントは 10 秒ごとに更新します。更新をやめた者から、期限が切れます。",
+                    "code": """SET presence:ada online EX 30
+-> OK""",
+                },
+                {
+                    "do": "名簿は、セットで",
+                    "code": """SADD online ada
+-> (integer) 1
 SMEMBERS online
-SREM online ada""",
+SREM online ada            # on clean disconnect""",
+                },
+            ],
+            "cost": (
+                "TTL によるプレゼンスは<b>最終的に</b>正しくなるものです。クラッシュ"
+                "したクライアントは、最長で TTL のあいだオンラインに見えます——30 秒"
+                "という値は、どこまでの古さに耐えられるかに合わせて決めてください。"
+                "また <code>SMEMBERS</code> はセット全体を 1 回の返答で返します。"
+                "数百万人の名簿なら、代わりに <code>SSCAN</code> でページをめくって"
+                "ください。"
+            ),
         },
         {
-            "t": "code",
-            "h2": "同じことを、ブラウザのタブで",
-            "caption": "同一オリジンの 2 つのタブ。サーバーも WebSocket もありません。橋渡しは BroadcastChannel で、絞り込みはエンジンの中で行われます。",
-            "text": """import { open } from "@goliajp/kevy";
+            "t": "recipe",
+            "h2": "同じことを、2 つのブラウザタブの間で",
+            "goal": "同一オリジンの 2 つのタブ。片方で publish すれば、もう片方が描画します。サーバーも、WebSocket も、接続の状態管理もありません。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "それぞれのタブでエンジンを開く",
+                    "code": """import { open } from "@goliajp/kevy";
 
-const db = await open({ persist: { name: "app" } });
-
-// tab A
-db.subscribe("room:42", (payload, channel) => {
+const db = await open({ persist: { name: "app" } });""",
+                },
+                {
+                    "do": "タブ A が購読する",
+                    "code": """db.subscribe("room:42", (payload, channel) => {
   render(JSON.parse(new TextDecoder().decode(payload)));
-});
-
-// tab B — tab A receives it
-db.publish("room:42", JSON.stringify({ user: "ada", text: "hello" }));""",
-        },
-        {
-            "t": "callout",
-            "kind": "loss",
-            "title": "何を差し出すことになるか",
-            "body": (
-                "<b>遅い購読者は、いつまでも待たれるのではなく、切り捨てられます。</b>"
-                "クライアントが追いつけない場合、そのメッセージは、サーバーのメモリを"
-                "際限なく増やす代わりに破棄されます。意図した選択であり、配信を"
-                "当てにする前に知っておくべきことです。確認応答も、再送もありません。"
-                "<b>そのどちらかが必要なら、必要なのはチャネルではなくストリーム"
-                "です。</b><a href=\"~/docs/pubsub/\">pub/sub のガイド</a>に、"
-                "限界を具体的に書いてあります。"
+});""",
+                },
+                {
+                    "do": "タブ B が publish する——タブ A が描画する",
+                    "code": """db.publish("room:42", JSON.stringify({ user: "ada", text: "hello" }));""",
+                },
+            ],
+            "cost": (
+                "橋渡しは <code>BroadcastChannel</code> なので、届く範囲は<b>同じ"
+                "端末の、同一オリジンのタブ</b>です——絞り込みはエンジンの中で行われ"
+                "ますが、端末をまたぐのはサーバーの仕事です。いますぐ試せます。"
+                "<a href=\"~/play/\">playground</a> を 2 つのタブで開いて、どちら"
+                "からでも publish してみてください。"
             ),
         },
         {
@@ -738,7 +883,7 @@ PAGES["use/ai"] = {
                 "索引に入れ、キャッシュを無効化することを、忘れずにやらなければ"
                 "なりません。そのどれもが、忘れうる場所です。",
                 "<b>kevy では、インデックスはパイプラインではなく宣言です。</b>"
-                "どのキーの、どのフィールドかをエンジンに伝えれば、書き込みの側が"
+                "どのキーの、どのフィールドかをエンジンに伝えれば、書き込みパスが"
                 "インデックスを最新に保ちます。あとから実行するものはなく、遅れて"
                 "いくものもありません。",
                 "<b>kevy がやらないのは、埋め込みを作ることです。</b>エンジンに"
@@ -749,56 +894,97 @@ PAGES["use/ai"] = {
             ],
         },
         {
-            "t": "code",
-            "h2": "手順——ベクトル検索",
-            "caption": "キーのフィールドに張る HNSW インデックス。一度宣言すれば、あとは書き込みの側が最新に保ちます。",
-            "text": """# declare it once. the engine backfills, and answers
-# INDEXBUILDING while it does.
-IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann  DIM 768 DISTANCE cosine M 16 EF 200
-
-# write a document the way you already write documents
-HSET doc:4410 title "Ada on pipelining" vec "<768 f32, little-endian>"
-
-# nearest ten. no separate system, no sync step.
-IDX.QUERY idx:sem KNN "<query vector>" LIMIT 10
+            "t": "recipe",
+            "h2": "キーを、意味で検索する",
+            "goal": "すでに書いているキーのフィールドに対する KNN。一度宣言すれば、あとは書き込みパスが最新に保ちます。同期するものはありません。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "インデックスを一度だけ宣言する",
+                    "note": "エンジンが既存のキーを埋め戻します。その間の問い合わせには INDEXBUILDING を返します。",
+                    "code": """IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann  DIM 768 DISTANCE cosine M 16 EF 200
+-> OK""",
+                },
+                {
+                    "do": "文書は、いままでどおり書く",
+                    "code": """HSET doc:4410 title "Ada on pipelining" vec "<768 f32, little-endian>\"""",
+                },
+                {
+                    "do": "近い順に 10 件",
+                    "code": """IDX.QUERY idx:sem KNN "<query vector>" LIMIT 10
 -> 1) doc:4410
    2) doc:9982""",
+                },
+            ],
+            "cost": (
+                "<b>インデックスは HNSW で、近似です</b>。再現率は保証ではなく、"
+                "調整のためのパラメータ(<code>EF</code>)です。最初の構築は、合致"
+                "するキーに対して O(N) です——行き当たるのではなく、計画してください。"
+                "そして<b>埋め込みモデルはありません</b>。ベクトルは、あなたが持ち込み"
+                "ます。調整のつまみは<a href=\"~/docs/vector-search/\">ベクトルの"
+                "ガイド</a>にあります。"
+            ),
         },
         {
-            "t": "code",
-            "h2": "手順——全文検索、そして両者の併用",
-            "caption": "同じキーに対する BM25、両方のランキングを融合するハイブリッドクエリ、そして追いかけられるフィード。",
-            "text": """IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
-
-IDX.QUERY idx:ft MATCH "pipelining"
+            "t": "recipe",
+            "h2": "全文検索、そして両方のランキングを融合する",
+            "goal": "同じキーに対する BM25。そしてテキストのランキングとベクトルのランキングを、1 つのコマンドで融合するハイブリッドクエリ。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "同じキーに、テキストのインデックスを張る",
+                    "code": """IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
+-> OK""",
+                },
+                {
+                    "do": "マッチを、BM25 の順位つきで",
+                    "code": """IDX.QUERY idx:ft MATCH "pipelining"
 -> 1) 1) "doc:1"
-      2) "0.2877"          # the BM25 score
-
-# hybrid: fuse the text ranking and the vector ranking (RRF)
-IDX.QUERY HYBRID idx:ft MATCH "pipelining" idx:sem KNN "<vector>"  LIMIT 20 RRFK 60
-
-# a change feed: tail every write from another process.
-# needs [feed] enabled = true in kevy.toml
-FEED.SHARDS                 -> (integer) 16
-FEED.TAIL 0                 -> 1) (integer) 1     # generation
-                               2) (integer) 1     # offset
-FEED.READ 0 1 0 COUNT 2     -> the writes themselves, replayable""",
+      2) "0.2877"          # the BM25 score""",
+                },
+                {
+                    "do": "ハイブリッド——両方のランキングを融合する(RRF)",
+                    "code": """IDX.QUERY HYBRID idx:ft MATCH "pipelining" idx:sem KNN "<vector>"  LIMIT 20 RRFK 60""",
+                },
+            ],
+            "cost": (
+                "インデックスの代金は、合致するキーへの<b>書き込みのたびに</b>支払い"
+                "ます——読み取り主体の検索には正しい取引で、毎秒何千回も書き直すキー"
+                "には間違った取引です。トークン化(CJK を含みます)と、BM25 がどこで"
+                "止まるのかは、<a href=\"~/docs/text-search/\">テキストのガイド</a>に"
+                "あります。"
+            ),
         },
         {
-            "t": "callout",
-            "kind": "loss",
-            "title": "何を差し出すことになるか",
-            "body": (
-                "<b>インデックスの構築は、対象となるキーに対して O(N) です。</b>"
-                "追いつくまで、インデックスは <code>INDEXBUILDING</code> を返します。"
-                "最初の構築は、行き当たるのではなく計画してください。<b>ベクトル"
-                "インデックスは HNSW であり、近似です</b>。再現率は保証ではなく、"
-                "調整のためのパラメータ(<code>EF</code>)です。そして<b>埋め込み"
-                "モデルはありません</b>。kevy が代わりに呼んでくれることを期待して"
-                "いたなら、それは起きません。計画を立てる前に、知っておいてください。"
-                "<a href=\"~/docs/vector-search/\">ベクトルのガイド</a>と"
-                "<a href=\"~/docs/text-search/\">テキストのガイド</a>に、"
-                "具体的に書いてあります。"
+            "t": "recipe",
+            "h2": "エージェントの記憶を、遅れさせない",
+            "goal": "別のプロセスから、すべての書き込みを追いかけます——スケジュールではなく変更のたびに埋め込み、止めたところから再開します。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "フィードを有効にする",
+                    "code": """# kevy.toml
+[feed]
+enabled = true""",
+                },
+                {
+                    "do": "自分のカーソルを確かめる",
+                    "code": """FEED.SHARDS                 -> (integer) 16
+FEED.TAIL 0                 -> 1) (integer) 1     # generation
+                               2) (integer) 1     # offset""",
+                },
+                {
+                    "do": "読み、処理し、再開する",
+                    "code": """FEED.READ 0 1 0 COUNT 2     -> the writes themselves, replayable""",
+                },
+            ],
+            "cost": (
+                "フィードはシャード単位です。<code>FEED.SHARDS</code> が、あなたの"
+                "持つカーソルの数を教え、コンシューマはシャードごとにオフセットを "
+                "1 つ追跡します。既定ではオフになっており、<code>[feed]</code> を"
+                "オンにすることが、書き込みパスの帳簿づけの代金です。再起動をまたぐ"
+                "再開は、<a href=\"~/docs/cdc/\">変更フィードのガイド</a>が扱って"
+                "います。"
             ),
         },
         {
@@ -853,7 +1039,7 @@ PAGES["use/app-store"] = {
                 "と。その反論は正しく、セカンダリインデックスは、まさにそのために"
                 "あります。",
                 "<b>インデックスは、構築するものではなく宣言するものです。</b>キーの"
-                "パターンとフィールドを指定すれば、書き込みの側が、それを最新に保ち"
+                "パターンとフィールドを指定すれば、書き込みパスが、それを最新に保ち"
                 "ます。絞り込んだ一覧は、ふたたび参照になります。プランナもスキャンも"
                 "クエリもありません。",
                 "<b>ビューはさらに進んで</b>、書き込み時に集計を最新に保ちます。件数や"
@@ -863,51 +1049,72 @@ PAGES["use/app-store"] = {
             ],
         },
         {
-            "t": "code",
-            "h2": "手順",
-            "caption": "インデックスを宣言し、普通に書き、フィールドで読む。ここにあるコマンドはすべて、実際のサーバーに対して実行したものです。",
-            "text": """# your data, written the way you would anyway
-HSET order:1001 customer 881 status open  total 4400
+            "t": "recipe",
+            "h2": "キーではなく、フィールドで引く",
+            "goal": "「顧客 881 の注文をすべて」が、参照のままです。引きたいフィールドごとにインデックスを宣言し、普通に書き、値で読みます。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "データは、いままでどおり書く",
+                    "code": """HSET order:1001 customer 881 status open  total 4400
 HSET order:1002 customer 881 status paid  total 8400
-HSET order:1003 customer 902 status open  total 1200
-
-# one index per field you want to look up by
-IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
-IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range
-
-# the read that would have been a query
-IDX.QUERY idx:cust EQ 881
+HSET order:1003 customer 902 status open  total 1200""",
+                },
+                {
+                    "do": "引きたいフィールドごとに、インデックスを 1 つ",
+                    "code": """IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
+IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range""",
+                },
+                {
+                    "do": "クエリになるはずだった読み取り",
+                    "code": """IDX.QUERY idx:cust EQ 881
 -> 1) "0"                       # cursor
    2) 1) "order:1001"  2) "881"
-      3) "order:1002"  4) "881"
-
-# two conditions at once
-IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
+      3) "order:1002"  4) "881\"""",
+                },
+                {
+                    "do": "条件を 2 つ、同時に",
+                    "code": """IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
 -> 1) "0"
-   2) 1) 1) "order:1001"
-
-# a VIEW keeps the answer ready on the WRITE path, so the read
-# never recomputes it. (the parens are separate arguments.)
-VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open )  ORDER BY idx:cust
-VIEW.QUERY  v:open881
--> 1) "0"
-   2) 1) "order:1001"  2) "881"
-""",
+   2) 1) 1) "order:1001\"""",
+                },
+            ],
+            "cost": (
+                "<b>インデックスの代金は、読み取りではなく書き込みのたびに支払い"
+                "ます</b>——読み取り主体の配信には正しく、書き込み主体のログには"
+                "間違った取引です。<b>結合はありません</b>し、今後も持ちません。"
+                "インデックスが答えるのは「どのキーがこれらのフィールドに合致する"
+                "か」であって、「この 2 つのコレクションを結合せよ」ではありません。"
+                "読み取りに本当に結合が要るなら、Postgres に置いておいてください——"
+                "どれがそれに当たるのかは、<a href=\"~/docs/rds-workloads/\">RDS "
+                "ワークロードのページ</a>に書いてあります。"
+            ),
         },
         {
-            "t": "callout",
-            "kind": "loss",
-            "title": "何を差し出すことになるか",
-            "body": (
-                "<b>インデックスとビューの代金は、読み取りではなく、書き込みのたびに"
-                "支払います。</b>それが取引の条件であり、読み取り主体の配信には"
-                "正しく、書き込み主体のログには間違っています。<b>結合はありません</b>"
-                "し、今後も持ちません。インデックスが答えるのは「どのキーがこれらの"
-                "フィールドに合致するか」であって、「この 2 つのコレクションを結合"
-                "せよ」ではありません。読み取りに本当に結合が要るなら、Postgres に"
-                "置いておいてください。<a href=\"~/docs/rds-workloads/\">"
-                "リレーショナルな各ワークロードが、ここでいくらかかるか</a>を書いて"
-                "あります。答えが「移さないほうがいい」になるものも含めて。"
+            "t": "recipe",
+            "h2": "更新され続ける答えを、用意しておく",
+            "goal": "絞り込まれ、順序のついた一覧を、書き込みパスが維持します——古くなることが決してないので、読み取りが計算し直すこともありません。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "同じインデックスの上に、ビューを宣言する",
+                    "note": "括弧は、それぞれ独立した引数です。",
+                    "code": """VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open )  ORDER BY idx:cust
+-> OK""",
+                },
+                {
+                    "do": "読む——ここでは何も計算されません",
+                    "code": """VIEW.QUERY  v:open881
+-> 1) "0"
+   2) 1) "order:1001"  2) "881\"""",
+                },
+            ],
+            "cost": (
+                "ビューは<b>書き込みパスの、終わらない仕事</b>です。合致するキーへの"
+                "書き込みは、今日それを読む人がいるかどうかに関係なく、毎回ビューを"
+                "更新します。アプリケーションが実際に捌いている読み取りのために"
+                "ビューを宣言し、捌かなくなったら落としてください。ビューが組み"
+                "合わせるインデックスは、先に存在している必要があります。"
             ),
         },
         {
@@ -958,60 +1165,91 @@ PAGES["use/embedded"] = {
             ],
         },
         {
-            "t": "code",
-            "h2": "手順——Rust のプログラムの中で",
-            "caption": "ソケットも、シリアライズも、2 つ目のプロセスもありません。永続化され、開くときにログを再生します。",
-            "text": """kevy-embedded = "4.0"
-
-let db = Db::open("data/")?;
+            "t": "recipe",
+            "h2": "Rust のプログラムの中で",
+            "goal": "ストアは、呼び出せる struct です——ソケットも、シリアライズも、2 つ目のプロセスもありません。永続化され、開くときにログを再生します。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "追加する",
+                    "code": """# Cargo.toml
+kevy-embedded = "4.0\"""",
+                },
+                {
+                    "do": "開いて、書いて、読む",
+                    "code": """let db = Db::open("data/")?;
 db.set(b"session:7f3a", b"{\\"user\\":\\"ada\\"}", Some(Duration::from_secs(3600)))?;
-assert_eq!(db.get(b"session:7f3a")?.is_some(), true);
-
-// need other processes to reach it later? open the RESP listener
-// and your redis-cli works, without changing any of the above.
-db.listen("127.0.0.1:6379")?;""",
+assert_eq!(db.get(b"session:7f3a")?.is_some(), true);""",
+                },
+                {
+                    "do": "あとで redis-cli が要るなら、リスナーを開く",
+                    "note": "他のプロセスが、同じストアに RESP で届くようになります。上のコードは、何ひとつ変わりません。",
+                    "code": """db.listen("127.0.0.1:6379")?;""",
+                },
+            ],
+            "cost": (
+                "<b>組み込みのストアは、共有されません。</b>データディレクトリを所有"
+                "するのは 1 つのプロセスです。2 つ目のプロセスがデータを必要とする"
+                "なら、そのためにあるのが上のリスナー——あるいは"
+                "<a href=\"~/docs/embedded-listener/\">フルのサーバー</a>——です。"
+            ),
         },
         {
-            "t": "code",
-            "h2": "手順——ブラウザのタブで",
-            "caption": "gzip 後 151 KB。ブラウザ自身のファイルシステムに永続化され、リロードにも耐え、タブをまたいで pub/sub を話します。",
-            "text": """import { open } from "@goliajp/kevy";
+            "t": "recipe",
+            "h2": "ブラウザのタブで",
+            "goal": "gzip 後 151 KB。ブラウザ自身のファイルシステムに永続化され、リロードに耐え、タブをまたいで pub/sub を話します。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "永続化つきで開く",
+                    "code": """import { open } from "@goliajp/kevy";
 
-const db = await open({ persist: { name: "app" } });
-
-db.set("cart:u881", JSON.stringify(items), { ttlMs: 86_400_000 });
+const db = await open({ persist: { name: "app" } });""",
+                },
+                {
+                    "do": "本物の TTL で書き、リロードのあとに読む",
+                    "code": """db.set("cart:u881", JSON.stringify(items), { ttlMs: 86_400_000 });
 db.get("cart:u881");        // still there after a reload
-db.pttl("cart:u881");       // the engine expires it, not your code
-
-db.subscribe("sync", (payload) => merge(payload));   // other tabs""",
+db.pttl("cart:u881");       // the engine expires it, not your code""",
+                },
+                {
+                    "do": "他のタブの声を聞く",
+                    "code": """db.subscribe("sync", (payload) => merge(payload));""",
+                },
+            ],
+            "cost": (
+                "<b>小さな同期の読み取りなら、localStorage のほうが速いです</b>——"
+                "あれはページ自身のアドレス空間にあるマップであり、OPFS の上に作られた"
+                "ものが、そこで勝つことはありません。kevy が勝つのは、そもそも "
+                "localStorage を選ぶべきでない理由のほうです。本物の TTL、5 MB の"
+                "上限がないこと、値が文字列ではなくバイト列であること、そして書き込み"
+                "がメインスレッドを止めないこと。"
+            ),
         },
         {
-            "t": "code",
-            "h2": "手順——マイコンの上で",
-            "caption": "no_std、アロケータなし、OS なし。大きさを自分で決める、固定の arena。",
-            "text": """# Cargo.toml
-kevy-store = { version = "4.0", default-features = false }
-
-# no_std, no heap: the store lives in an arena you provide
-let mut arena = [0u8; 64 * 1024];
+            "t": "recipe",
+            "h2": "マイコンの上で",
+            "goal": "no_std、アロケータなし、OS なし。ストアは、大きさを自分で決める固定の arena に住みます。CI が push のたびに、これを起動させています。",
+            "cost_t": "コストと制約",
+            "items": [
+                {
+                    "do": "そぎ落とす",
+                    "code": """# Cargo.toml
+kevy-store = { version = "4.0", default-features = false }""",
+                },
+                {
+                    "do": "メモリを渡して、使う",
+                    "code": """let mut arena = [0u8; 64 * 1024];
 let mut store = Store::new_in(&mut arena);
 store.set(b"temp", b"21.4")?;""",
-        },
-        {
-            "t": "callout",
-            "kind": "loss",
-            "title": "何を差し出すことになるか",
-            "body": (
-                "<b>ブラウザでは、小さな同期の読み取りなら localStorage のほうが"
-                "速いです</b>——あれはページ自身のアドレス空間にあるマップであり、"
-                "OPFS の上に作られたものが、そこで勝つことはありません。kevy が"
-                "勝つのは、そもそも localStorage を選ぶべきでない理由のほうです。"
-                "本物の TTL、5 MB の上限がないこと、値が文字列ではなくバイト列で"
-                "あること、書き込みがメインスレッドを止めないこと。<b>マイコンでは、"
-                "arena の大きさを自分で決めます</b>し、実行中に広げることはできません。"
-                "アロケータがないとは、そういうことです。そして<b>組み込みのストアは"
-                "共有されません</b>。2 つ目のプロセスがデータを必要とするなら、必要な"
-                "のはサーバーか、組み込みの RESP リスナーです。"
+                },
+            ],
+            "cost": (
+                "<b>arena は固定です。</b>実行中に広げることはできません——"
+                "「アロケータなし」とは、そういうことです。大きさを決めるのは"
+                "エンジンではなく、あなたの設計です。機能の段階と、それぞれが"
+                "何バイト要るのかは、<a href=\"~/docs/iot/\">IoT のガイド</a>に"
+                "あります。"
             ),
         },
         {

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Queues and background jobs — kevy</title>
 <meta name="description" content="Job queues in kevy: lists for simple work, streams with consumer groups for work you cannot afford to lose.">
-<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -48,48 +48,27 @@
   </div></section>
 <section class="band prose"><h2>Which of the two</h2><p><b>Use a list</b> when the job is cheap to redo and the worker is unlikely to die mid-task — sending an email, warming a cache, invalidating a CDN path. <code>BRPOP</code> blocks until there is work, so the worker does not poll.</p><p><b>Use a stream</b> when the job must not be lost. A consumer group hands each message to exactly one worker and remembers that it did. If the worker dies before acknowledging, the message stays in the pending list and another worker can claim it — that is the whole reason streams exist, and it is the difference between a queue and a hope.</p></section>
 <section class="band">
-  <div class="sec-h"><h2>How — a list, for work you can redo</h2></div>
-  <figure class="code"><figcaption>The worker blocks. No polling loop, no sleep, no thundering herd.</figcaption><pre><code># producer
-LPUSH jobs:email &#x27;{&quot;to&quot;:&quot;ada@example.com&quot;,&quot;tpl&quot;:&quot;welcome&quot;}&#x27;
-
-# worker — blocks until there is something, up to 30 seconds
-BRPOP jobs:email 30
+  <div class="sec-h"><h2>A list, for work you can redo</h2><p class="sec-lede">Producers push; a blocked worker wakes the moment there is work. Two commands, no polling loop, no scheduler.</p></div>
+  <ol class="steps recipe"><li><h3>Producer: push the job</h3><pre><code>LPUSH jobs:email &#x27;{&quot;to&quot;:&quot;ada@example.com&quot;,&quot;tpl&quot;:&quot;welcome&quot;}&#x27;
+-&gt; (integer) 1</code></pre></li><li><h3>Worker: block until there is one</h3><p>No polling loop, no sleep, no thundering herd — the pop returns the instant a job arrives, or after 30 seconds empty-handed.</p><pre><code>BRPOP jobs:email 30
 -&gt; 1) &quot;jobs:email&quot;
-   2) &quot;{\&quot;to\&quot;:\&quot;ada@example.com\&quot;,\&quot;tpl\&quot;:\&quot;welcome\&quot;}&quot;
-
-# a delayed job: the score is when it is due.
-# ZPOPMIN.BELOW is kevy&#x27;s own — it takes only what is actually due,
-# and stops at the first job that is not.
-ZADD jobs:due 1783875499 &#x27;{&quot;id&quot;:&quot;j-91&quot;}&#x27;
+   2) &quot;{\&quot;to\&quot;:\&quot;ada@example.com\&quot;,\&quot;tpl\&quot;:\&quot;welcome\&quot;}&quot;</code></pre></li><li><h3>Delayed jobs: the score is the due time</h3><p>ZPOPMIN.BELOW is kevy's own — it takes only what is actually due and stops at the first job that is not.</p><pre><code>ZADD jobs:due 1783875499 &#x27;{&quot;id&quot;:&quot;j-91&quot;}&#x27;
+-&gt; (integer) 1
 ZPOPMIN.BELOW jobs:due 1783875500
--&gt; 1) the job payload
-   2) 1783875499
-</code></pre></figure>
+-&gt; the job payload, only if it is due</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p><b>A popped job that its worker never finishes is gone.</b> That is the trade for this being two commands — take it only for work you can redo. And on a multi-shard server, <code>BLPOP</code> across several keys does not honour Redis's strict left-to-right priority: keys on the connection's own shard are served first.</p></div>
 </section>
 <section class="band">
-  <div class="sec-h"><h2>How — a stream, for work you cannot lose</h2></div>
-  <figure class="code"><figcaption>The message stays pending until a worker acknowledges it. A dead worker's job is reclaimable.</figcaption><pre><code># once, at setup
-XGROUP CREATE jobs:pay g1 $ MKSTREAM
-
-# producer
-XADD jobs:pay * order 4410 amount 8400
-
-# worker: read, then work, then acknowledge
-XREADGROUP GROUP g1 worker-3 COUNT 1 BLOCK 5000 STREAMS jobs:pay &gt;
-XACK jobs:pay g1 1783875499458-0
-
-# the worker died before XACK. another one takes over:
-XAUTOCLAIM jobs:pay g1 worker-7 60000 0-0
+  <div class="sec-h"><h2>A stream, for work you cannot lose</h2><p class="sec-lede">Each job goes to exactly one worker and stays pending until acknowledged. A dead worker's job is reclaimable, with its full history intact.</p></div>
+  <ol class="steps recipe"><li><h3>Once, at setup: create the group</h3><pre><code>XGROUP CREATE jobs:pay g1 $ MKSTREAM
+-&gt; OK</code></pre></li><li><h3>Producer: append the job</h3><pre><code>XADD jobs:pay * order 4410 amount 8400
+-&gt; &quot;1783875499458-0&quot;</code></pre></li><li><h3>Worker: read, work, then acknowledge</h3><p>The ID you acknowledge is the one XREADGROUP handed you. Until the XACK, the job is pending — on you, on the record.</p><pre><code>XREADGROUP GROUP g1 worker-3 COUNT 1 BLOCK 5000 STREAMS jobs:pay &gt;
+XACK jobs:pay g1 1783875499458-0</code></pre></li><li><h3>A worker died before XACK: reclaim its job</h3><pre><code>XAUTOCLAIM jobs:pay g1 worker-7 60000 0-0
 # claims anything idle for more than 60 s
 
-# what is still outstanding, and who has it
-XPENDING jobs:pay g1</code></pre></figure>
-</section>
-<section class="band">
-  <div class="call loss">
-    <span class="h">What it costs you</span>
-    <p><b>A stream is not free.</b> Trimming with <code>MAXLEN</code> recomputes the stream's weight, which is O(N) in the whole stream — so trim on a schedule, not on every <code>XADD</code>. <code>XREADGROUP</code>'s <code>COUNT</code> bounds what you are handed, <b>not what is scanned</b>: the entire undelivered tail is materialised first. And on a multi-shard server, <code>BLPOP</code> across several keys does not honour Redis's strict left-to-right priority — keys on the connection's own shard are served first. All of this is per-command in <a href="../../docs/commands/">the reference</a>.</p>
-  </div>
+XPENDING jobs:pay g1
+# what is still outstanding, and who has it</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p><b>A stream is not free.</b> Trimming with <code>MAXLEN</code> recomputes the stream's weight, which is O(N) in the whole stream — trim on a schedule, not on every <code>XADD</code>. And <code>XREADGROUP</code>'s <code>COUNT</code> bounds what you are handed, <b>not what is scanned</b>: the entire undelivered tail is materialised first. Per-command detail is in <a href="../../docs/commands/">the reference</a>.</p></div>
 </section>
 <section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../docs/cookbook/">
       <span class="card-k">Guide</span>

@@ -158,6 +158,23 @@ def steps(b, up, L=""):
 </section>"""
 
 
+def recipe(b, up, L=""):
+    """A task recipe: the goal in one line, numbered pasteable steps with the
+    expected reply inline (`->` lines, which the command gate skips), and the
+    cost/limits box attached to THIS task rather than pooled at page bottom."""
+    items = "".join(
+        f'<li><h3>{e(s["do"])}</h3>'
+        + (f'<p>{s["note"]}</p>' if s.get("note") else "")
+        + f'<pre><code>{e(s["code"])}</code></pre></li>'
+        for s in b["items"]
+    )
+    return f"""<section class="band{tone(b)}"{anchor(b)}>
+  <div class="sec-h"><h2>{b["h2"]}</h2><p class="sec-lede">{b["goal"]}</p></div>
+  <ol class="steps recipe">{items}</ol>
+  <div class="call loss r-cost"><span class="h">{e(b["cost_t"])}</span><p>{b["cost"]}</p></div>
+</section>"""
+
+
 def faq(b, up, L=""):
     items = "".join(
         f"<details><summary>{e(q['q'])}</summary><div>{q['a']}</div></details>"
@@ -252,6 +269,7 @@ BLOCKS = {
     "code": code,
     "callout": callout,
     "steps": steps,
+    "recipe": recipe,
     "faq": faq,
 }
 

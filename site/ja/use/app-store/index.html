@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>データベースなしで読みを捌く — kevy</title>
 <meta name="description" content="kevy のセカンダリインデックスとマテリアライズドビュー。絞り込んだ一覧や集計を、クエリにせず参照のまま保つ方法。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,42 +46,27 @@
     <p class="lede">「この顧客の、まだ open な注文をすべて」。「このカートに何点入っているか」。これらはアプリケーションが毎秒何千回も行う読み取りであり、リレーショナルデータベースでは、そのひとつひとつが、裏にプランナを抱えたクエリになります。<b>kevy なら、答えを用意しておけます。</b></p>
     
   </div></section>
-<section class="band prose"><h2>なぜ向いているのか</h2><p>キーバリューストアをアプリケーションのデータに使うことは、たいていひとつの反論で退けられます。<i>キー以外のもので引きたいのだが</i>、と。その反論は正しく、セカンダリインデックスは、まさにそのためにあります。</p><p><b>インデックスは、構築するものではなく宣言するものです。</b>キーのパターンとフィールドを指定すれば、書き込みの側が、それを最新に保ちます。絞り込んだ一覧は、ふたたび参照になります。プランナもスキャンもクエリもありません。</p><p><b>ビューはさらに進んで</b>、書き込み時に集計を最新に保ちます。件数や合計は、計算されるのではなく読まれます。ほとんどのアプリケーションが ORM に実際に求めているのはこれであり、データベースが忙しい理由も、これです。</p></section>
+<section class="band prose"><h2>なぜ向いているのか</h2><p>キーバリューストアをアプリケーションのデータに使うことは、たいていひとつの反論で退けられます。<i>キー以外のもので引きたいのだが</i>、と。その反論は正しく、セカンダリインデックスは、まさにそのためにあります。</p><p><b>インデックスは、構築するものではなく宣言するものです。</b>キーのパターンとフィールドを指定すれば、書き込みパスが、それを最新に保ちます。絞り込んだ一覧は、ふたたび参照になります。プランナもスキャンもクエリもありません。</p><p><b>ビューはさらに進んで</b>、書き込み時に集計を最新に保ちます。件数や合計は、計算されるのではなく読まれます。ほとんどのアプリケーションが ORM に実際に求めているのはこれであり、データベースが忙しい理由も、これです。</p></section>
 <section class="band">
-  <div class="sec-h"><h2>手順</h2></div>
-  <figure class="code"><figcaption>インデックスを宣言し、普通に書き、フィールドで読む。ここにあるコマンドはすべて、実際のサーバーに対して実行したものです。</figcaption><pre><code># your data, written the way you would anyway
-HSET order:1001 customer 881 status open  total 4400
+  <div class="sec-h"><h2>キーではなく、フィールドで引く</h2><p class="sec-lede">「顧客 881 の注文をすべて」が、参照のままです。引きたいフィールドごとにインデックスを宣言し、普通に書き、値で読みます。</p></div>
+  <ol class="steps recipe"><li><h3>データは、いままでどおり書く</h3><pre><code>HSET order:1001 customer 881 status open  total 4400
 HSET order:1002 customer 881 status paid  total 8400
-HSET order:1003 customer 902 status open  total 1200
-
-# one index per field you want to look up by
-IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
-IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range
-
-# the read that would have been a query
-IDX.QUERY idx:cust EQ 881
+HSET order:1003 customer 902 status open  total 1200</code></pre></li><li><h3>引きたいフィールドごとに、インデックスを 1 つ</h3><pre><code>IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
+IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range</code></pre></li><li><h3>クエリになるはずだった読み取り</h3><pre><code>IDX.QUERY idx:cust EQ 881
 -&gt; 1) &quot;0&quot;                       # cursor
    2) 1) &quot;order:1001&quot;  2) &quot;881&quot;
-      3) &quot;order:1002&quot;  4) &quot;881&quot;
-
-# two conditions at once
-IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
+      3) &quot;order:1002&quot;  4) &quot;881&quot;</code></pre></li><li><h3>条件を 2 つ、同時に</h3><pre><code>IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
 -&gt; 1) &quot;0&quot;
-   2) 1) 1) &quot;order:1001&quot;
-
-# a VIEW keeps the answer ready on the WRITE path, so the read
-# never recomputes it. (the parens are separate arguments.)
-VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open )  ORDER BY idx:cust
-VIEW.QUERY  v:open881
--&gt; 1) &quot;0&quot;
-   2) 1) &quot;order:1001&quot;  2) &quot;881&quot;
-</code></pre></figure>
+   2) 1) 1) &quot;order:1001&quot;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p><b>インデックスの代金は、読み取りではなく書き込みのたびに支払います</b>——読み取り主体の配信には正しく、書き込み主体のログには間違った取引です。<b>結合はありません</b>し、今後も持ちません。インデックスが答えるのは「どのキーがこれらのフィールドに合致するか」であって、「この 2 つのコレクションを結合せよ」ではありません。読み取りに本当に結合が要るなら、Postgres に置いておいてください——どれがそれに当たるのかは、<a href="../../../ja/docs/rds-workloads/">RDS ワークロードのページ</a>に書いてあります。</p></div>
 </section>
 <section class="band">
-  <div class="call loss">
-    <span class="h">何を差し出すことになるか</span>
-    <p><b>インデックスとビューの代金は、読み取りではなく、書き込みのたびに支払います。</b>それが取引の条件であり、読み取り主体の配信には正しく、書き込み主体のログには間違っています。<b>結合はありません</b>し、今後も持ちません。インデックスが答えるのは「どのキーがこれらのフィールドに合致するか」であって、「この 2 つのコレクションを結合せよ」ではありません。読み取りに本当に結合が要るなら、Postgres に置いておいてください。<a href="../../../ja/docs/rds-workloads/">リレーショナルな各ワークロードが、ここでいくらかかるか</a>を書いてあります。答えが「移さないほうがいい」になるものも含めて。</p>
-  </div>
+  <div class="sec-h"><h2>更新され続ける答えを、用意しておく</h2><p class="sec-lede">絞り込まれ、順序のついた一覧を、書き込みパスが維持します——古くなることが決してないので、読み取りが計算し直すこともありません。</p></div>
+  <ol class="steps recipe"><li><h3>同じインデックスの上に、ビューを宣言する</h3><p>括弧は、それぞれ独立した引数です。</p><pre><code>VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open )  ORDER BY idx:cust
+-&gt; OK</code></pre></li><li><h3>読む——ここでは何も計算されません</h3><pre><code>VIEW.QUERY  v:open881
+-&gt; 1) &quot;0&quot;
+   2) 1) &quot;order:1001&quot;  2) &quot;881&quot;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p>ビューは<b>書き込みパスの、終わらない仕事</b>です。合致するキーへの書き込みは、今日それを読む人がいるかどうかに関係なく、毎回ビューを更新します。アプリケーションが実際に捌いている読み取りのためにビューを宣言し、捌かなくなったら落としてください。ビューが組み合わせるインデックスは、先に存在している必要があります。</p></div>
 </section>
 <section class="band"><div class="sec-h"><h2>次に</h2></div><div class="cards"><a class="card" href="../../../ja/docs/designing-on-kevy/">
       <span class="card-k">ガイド</span>

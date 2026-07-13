@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>把 kevy 嵌进去——kevy</title>
 <meta name="description" content="把存储放进程序本身：一个桌面应用、一个浏览器标签页、一个边缘 worker，或者一颗没有操作系统的单片机。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -48,44 +48,29 @@
   </div></section>
 <section class="band prose"><h2>为什么合适</h2><p>每一个必须离线可用的应用，最后都会自己写一层存储。桌面应用会得到 SQLite，外加一套没人想要的 schema。web 应用会得到 localStorage，然后撞上 5 MB 的上限，再发现它是同步的、而且只能存字符串，于是又得到 IndexedDB 和包在它外面的一层抽象。设备会得到一个手写在 flash 里的环形缓冲区。</p><p><b>这三件事是同一个问题，也可以是同一个解。</b>kevy 嵌进去不带任何进程边界，发到浏览器时带着真的 TTL 和真的发布订阅，也能在一颗 Cortex-M 上用一块固定 arena、完全不用分配器地启动。最后这一条，CI 每次 push 都会验一遍。</p></section>
 <section class="band">
-  <div class="sec-h"><h2>怎么做——在一个 Rust 程序里</h2></div>
-  <figure class="code"><figcaption>没有 socket，没有序列化，没有第二个进程。数据是持久的，打开时会重放自己的日志。</figcaption><pre><code>kevy-embedded = &quot;4.0&quot;
-
-let db = Db::open(&quot;data/&quot;)?;
+  <div class="sec-h"><h2>在一个 Rust 程序里</h2><p class="sec-lede">存储是一个你直接调用的 struct——没有 socket，没有序列化，没有第二个进程。数据是持久的，打开时会重放自己的日志。</p></div>
+  <ol class="steps recipe"><li><h3>加进来</h3><pre><code># Cargo.toml
+kevy-embedded = &quot;4.0&quot;</code></pre></li><li><h3>打开，写，读</h3><pre><code>let db = Db::open(&quot;data/&quot;)?;
 db.set(b&quot;session:7f3a&quot;, b&quot;{\&quot;user\&quot;:\&quot;ada\&quot;}&quot;, Some(Duration::from_secs(3600)))?;
-assert_eq!(db.get(b&quot;session:7f3a&quot;)?.is_some(), true);
-
-// need other processes to reach it later? open the RESP listener
-// and your redis-cli works, without changing any of the above.
-db.listen(&quot;127.0.0.1:6379&quot;)?;</code></pre></figure>
+assert_eq!(db.get(b&quot;session:7f3a&quot;)?.is_some(), true);</code></pre></li><li><h3>以后想用 redis-cli？把 listener 打开</h3><p>其他进程通过 RESP 访问同一份存储，上面的代码一行都不用改。</p><pre><code>db.listen(&quot;127.0.0.1:6379&quot;)?;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p><b>嵌入式的存储不是共享的。</b>数据目录归一个进程所有，如果第二个进程也要这份数据，那正是上面那个 listener——或者<a href="../../../zh/docs/embedded-listener/">完整的服务端</a>——存在的意义。</p></div>
 </section>
 <section class="band">
-  <div class="sec-h"><h2>怎么做——在浏览器标签页里</h2></div>
-  <figure class="code"><figcaption>gzip 之后 151 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。</figcaption><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
+  <div class="sec-h"><h2>在一个浏览器标签页里</h2><p class="sec-lede">gzip 之后 151 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。</p></div>
+  <ol class="steps recipe"><li><h3>打开它，带持久化</h3><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
 
-const db = await open({ persist: { name: &quot;app&quot; } });
-
-db.set(&quot;cart:u881&quot;, JSON.stringify(items), { ttlMs: 86_400_000 });
+const db = await open({ persist: { name: &quot;app&quot; } });</code></pre></li><li><h3>带着真 TTL 写，刷新之后再读</h3><pre><code>db.set(&quot;cart:u881&quot;, JSON.stringify(items), { ttlMs: 86_400_000 });
 db.get(&quot;cart:u881&quot;);        // still there after a reload
-db.pttl(&quot;cart:u881&quot;);       // the engine expires it, not your code
-
-db.subscribe(&quot;sync&quot;, (payload) =&gt; merge(payload));   // other tabs</code></pre></figure>
+db.pttl(&quot;cart:u881&quot;);       // the engine expires it, not your code</code></pre></li><li><h3>听见别的标签页</h3><pre><code>db.subscribe(&quot;sync&quot;, (payload) =&gt; merge(payload));</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p><b>做一次小的同步读，localStorage 更快</b>——它就是页面自己地址空间里的一个 map，任何建在 OPFS 上的东西都赢不了它这一点。kevy 赢在那些本来就让 localStorage 不该被用的地方：真的 TTL、没有 5 MB 上限、value 是字节而不是字符串、写入不挡主线程。</p></div>
 </section>
 <section class="band">
-  <div class="sec-h"><h2>怎么做——在单片机上</h2></div>
-  <figure class="code"><figcaption>no_std，没有分配器，没有操作系统。一块由你自己定大小的固定 arena。</figcaption><pre><code># Cargo.toml
-kevy-store = { version = &quot;4.0&quot;, default-features = false }
-
-# no_std, no heap: the store lives in an arena you provide
-let mut arena = [0u8; 64 * 1024];
+  <div class="sec-h"><h2>在一颗单片机上</h2><p class="sec-lede">no_std，没有分配器，没有操作系统：存储住在一块由你自己定大小的固定 arena 里，CI 每次 push 都会把它启动一遍。</p></div>
+  <ol class="steps recipe"><li><h3>把它裁到最小</h3><pre><code># Cargo.toml
+kevy-store = { version = &quot;4.0&quot;, default-features = false }</code></pre></li><li><h3>给它内存，然后用</h3><pre><code>let mut arena = [0u8; 64 * 1024];
 let mut store = Store::new_in(&amp;mut arena);
-store.set(b&quot;temp&quot;, b&quot;21.4&quot;)?;</code></pre></figure>
-</section>
-<section class="band">
-  <div class="call loss">
-    <span class="h">代价是什么</span>
-    <p><b>在浏览器里，做一次小的同步读，localStorage 更快</b>——它就是页面自己地址空间里的一个 map，任何建在 OPFS 上的东西都赢不了它这一点。kevy 赢在别的地方，而那些地方本来就是 localStorage 不该被用的理由：真的 TTL、没有 5 MB 上限、value 是字节而不是字符串、写入不挡主线程。<b>在单片机上，arena 的大小由你自己定</b>，运行时不能再涨——这就是没有分配器的含义。还有，<b>嵌入式的存储不是共享的</b>：如果第二个进程也要用这份数据，你要的是服务端，或者嵌入式的 RESP listener。</p>
-  </div>
+store.set(b&quot;temp&quot;, b&quot;21.4&quot;)?;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p><b>arena 是固定的。</b>运行时不能再涨——这就是“没有分配器”的含义，它的大小是你的设计决定，不是引擎的。功能分级和每一级要付多少字节，都在 <a href="../../../zh/docs/iot/">IoT 指南</a>里。</p></div>
 </section>
 <section class="band"><div class="sec-h"><h2>接下来</h2></div><div class="cards"><a class="card" href="../../../zh/docs/wasm/">
       <span class="card-k">指南</span>

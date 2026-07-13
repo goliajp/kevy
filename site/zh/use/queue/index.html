@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>队列与后台任务——kevy</title>
 <meta name="description" content="在 kevy 里做任务队列：简单的活用 list，丢不起的活用带消费组的 stream。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -48,48 +48,27 @@
   </div></section>
 <section class="band prose"><h2>两种选哪种</h2><p><b>用 list</b>：任务重做一遍成本很低，worker 也不太可能干到一半挂掉——发一封邮件、预热一个缓存、让一条 CDN 路径失效。<code>BRPOP</code> 会一直阻塞到有活为止，所以 worker 不必轮询。</p><p><b>用 stream</b>：任务绝对不能丢。消费组会把每条消息恰好交给一个 worker，并且记住自己交过。如果这个 worker 在确认之前挂了，消息会留在 pending 列表里，另一个 worker 可以把它认领走——stream 存在的全部理由就是这个，它也正是一个队列和一份侥幸之间的差别。</p></section>
 <section class="band">
-  <div class="sec-h"><h2>怎么做——用 list，做可以重来的活</h2></div>
-  <figure class="code"><figcaption>worker 直接阻塞。没有轮询循环，没有 sleep，也没有惊群。</figcaption><pre><code># producer
-LPUSH jobs:email &#x27;{&quot;to&quot;:&quot;ada@example.com&quot;,&quot;tpl&quot;:&quot;welcome&quot;}&#x27;
-
-# worker — blocks until there is something, up to 30 seconds
-BRPOP jobs:email 30
+  <div class="sec-h"><h2>list，给可以重来的活</h2><p class="sec-lede">生产者往里推，阻塞着的 worker 在有活的那一刻醒来。两条命令，没有轮询循环，也没有调度器。</p></div>
+  <ol class="steps recipe"><li><h3>生产者：把任务推进去</h3><pre><code>LPUSH jobs:email &#x27;{&quot;to&quot;:&quot;ada@example.com&quot;,&quot;tpl&quot;:&quot;welcome&quot;}&#x27;
+-&gt; (integer) 1</code></pre></li><li><h3>worker：阻塞到有活为止</h3><p>没有轮询循环，没有 sleep，也没有惊群——任务一到，pop 立刻返回，等满 30 秒还没有就空手返回。</p><pre><code>BRPOP jobs:email 30
 -&gt; 1) &quot;jobs:email&quot;
-   2) &quot;{\&quot;to\&quot;:\&quot;ada@example.com\&quot;,\&quot;tpl\&quot;:\&quot;welcome\&quot;}&quot;
-
-# a delayed job: the score is when it is due.
-# ZPOPMIN.BELOW is kevy&#x27;s own — it takes only what is actually due,
-# and stops at the first job that is not.
-ZADD jobs:due 1783875499 &#x27;{&quot;id&quot;:&quot;j-91&quot;}&#x27;
+   2) &quot;{\&quot;to\&quot;:\&quot;ada@example.com\&quot;,\&quot;tpl\&quot;:\&quot;welcome\&quot;}&quot;</code></pre></li><li><h3>延时任务：score 就是到期时间</h3><p>ZPOPMIN.BELOW 是 kevy 自己的命令——它只取真正到期的，遇到第一个没到期的就停下。</p><pre><code>ZADD jobs:due 1783875499 &#x27;{&quot;id&quot;:&quot;j-91&quot;}&#x27;
+-&gt; (integer) 1
 ZPOPMIN.BELOW jobs:due 1783875500
--&gt; 1) the job payload
-   2) 1783875499
-</code></pre></figure>
+-&gt; the job payload, only if it is due</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p><b>被 pop 走却没被 worker 干完的任务，就没了。</b>这是整件事只要两条命令的代价——只把可以重来的活交给它。另外在多分片的服务端上，<code>BLPOP</code> 跨多个 key 时并不遵守 Redis 那种严格的从左到右优先级：连接自己所在分片上的 key 会先被服务。</p></div>
 </section>
 <section class="band">
-  <div class="sec-h"><h2>怎么做——用 stream，做丢不起的活</h2></div>
-  <figure class="code"><figcaption>消息在有 worker 确认之前，一直是 pending 的。挂掉的 worker 手上那份活，可以被重新认领。</figcaption><pre><code># once, at setup
-XGROUP CREATE jobs:pay g1 $ MKSTREAM
-
-# producer
-XADD jobs:pay * order 4410 amount 8400
-
-# worker: read, then work, then acknowledge
-XREADGROUP GROUP g1 worker-3 COUNT 1 BLOCK 5000 STREAMS jobs:pay &gt;
-XACK jobs:pay g1 1783875499458-0
-
-# the worker died before XACK. another one takes over:
-XAUTOCLAIM jobs:pay g1 worker-7 60000 0-0
+  <div class="sec-h"><h2>stream，给丢不起的活</h2><p class="sec-lede">每个任务恰好交给一个 worker，在被确认之前一直是 pending。挂掉的 worker 手上的任务可以被认领走，全部历史都还在。</p></div>
+  <ol class="steps recipe"><li><h3>初始化时做一次：建消费组</h3><pre><code>XGROUP CREATE jobs:pay g1 $ MKSTREAM
+-&gt; OK</code></pre></li><li><h3>生产者：把任务追加进去</h3><pre><code>XADD jobs:pay * order 4410 amount 8400
+-&gt; &quot;1783875499458-0&quot;</code></pre></li><li><h3>worker：先读，再干活，然后确认</h3><p>你确认的 ID 就是 XREADGROUP 交到你手上的那个。在 XACK 之前，这个任务一直是 pending——记在你名下，记在账上。</p><pre><code>XREADGROUP GROUP g1 worker-3 COUNT 1 BLOCK 5000 STREAMS jobs:pay &gt;
+XACK jobs:pay g1 1783875499458-0</code></pre></li><li><h3>worker 在 XACK 之前挂了：把它的任务认领回来</h3><pre><code>XAUTOCLAIM jobs:pay g1 worker-7 60000 0-0
 # claims anything idle for more than 60 s
 
-# what is still outstanding, and who has it
-XPENDING jobs:pay g1</code></pre></figure>
-</section>
-<section class="band">
-  <div class="call loss">
-    <span class="h">代价是什么</span>
-    <p><b>stream 不是免费的。</b>用 <code>MAXLEN</code> 裁剪会重算整条流的权重，复杂度是整条流的 O(N)——所以要按计划裁剪，不要每次 <code>XADD</code> 都裁。<code>XREADGROUP</code> 的 <code>COUNT</code> 限制的是交到你手上的条数，<b>不是扫过的条数</b>：整条尚未投递的尾巴会先被物化出来。另外在多 shard 的服务端上，<code>BLPOP</code> 跨多个 key 时并不遵守 Redis 那种严格的从左到右优先级——连接自己所在 shard 上的 key 会先被服务。这些都在<a href="../../../zh/docs/commands/">命令参考</a>里逐条写着。</p>
-  </div>
+XPENDING jobs:pay g1
+# what is still outstanding, and who has it</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p><b>stream 不是免费的。</b>用 <code>MAXLEN</code> 裁剪会重算整条流的权重，复杂度是整条流的 O(N)——按计划裁剪，不要每次 <code>XADD</code> 都裁。<code>XREADGROUP</code> 的 <code>COUNT</code> 限制的是交到你手上的条数，<b>不是扫过的条数</b>：整条尚未投递的尾巴会先被物化出来。逐条命令的细节在<a href="../../../zh/docs/commands/">命令参考</a>里。</p></div>
 </section>
 <section class="band"><div class="sec-h"><h2>接下来</h2></div><div class="cards"><a class="card" href="../../../zh/docs/cookbook/">
       <span class="card-k">指南</span>

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Storage for AI applications — kevy</title>
 <meta name="description" content="Vector search, full-text search and a change feed in the store that already holds your data. What kevy gives an AI application, and what it does not.">
-<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -48,42 +48,29 @@
   </div></section>
 <section class="band prose"><h2>Why this fits</h2><p>The expensive part of a RAG stack is not the search. It is keeping three copies of the truth in step: you write a document, then you have to remember to embed it, index it, and invalidate the cache. Every one of those is a place to forget.</p><p><b>In kevy the index is a declaration, not a pipeline.</b> You tell the engine which keys and which field, and the write path keeps the index current. There is nothing to run afterwards and nothing to fall behind.</p><p><b>What kevy does not do is produce the embedding.</b> There is no model in the engine and there will not be one — inference does not belong in a storage engine, and pretending otherwise would tie your vector format to our release cycle. You bring the vector; kevy stores it, indexes it and searches it.</p></section>
 <section class="band">
-  <div class="sec-h"><h2>How — vector search</h2></div>
-  <figure class="code"><figcaption>An HNSW index over a field of your keys. Declared once; kept current by the write path.</figcaption><pre><code># declare it once. the engine backfills, and answers
-# INDEXBUILDING while it does.
-IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann  DIM 768 DISTANCE cosine M 16 EF 200
-
-# write a document the way you already write documents
-HSET doc:4410 title &quot;Ada on pipelining&quot; vec &quot;&lt;768 f32, little-endian&gt;&quot;
-
-# nearest ten. no separate system, no sync step.
-IDX.QUERY idx:sem KNN &quot;&lt;query vector&gt;&quot; LIMIT 10
+  <div class="sec-h"><h2>Search your keys by meaning</h2><p class="sec-lede">KNN over a field of the keys you already write. Declared once; the write path keeps it current, with nothing to sync.</p></div>
+  <ol class="steps recipe"><li><h3>Declare the index once</h3><p>The engine backfills existing keys, answering INDEXBUILDING while it does.</p><pre><code>IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann  DIM 768 DISTANCE cosine M 16 EF 200
+-&gt; OK</code></pre></li><li><h3>Write documents the way you already do</h3><pre><code>HSET doc:4410 title &quot;Ada on pipelining&quot; vec &quot;&lt;768 f32, little-endian&gt;&quot;</code></pre></li><li><h3>Nearest ten</h3><pre><code>IDX.QUERY idx:sem KNN &quot;&lt;query vector&gt;&quot; LIMIT 10
 -&gt; 1) doc:4410
-   2) doc:9982</code></pre></figure>
+   2) doc:9982</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p><b>The index is HNSW, which is approximate</b>: recall is a tuning parameter (<code>EF</code>), not a guarantee. The first build is O(N) over the matching keys — plan it, do not discover it. And <b>there is no embedding model</b>: you bring the vector. <a href="../../docs/vector-search/">The vector guide</a> has the tuning knobs.</p></div>
 </section>
 <section class="band">
-  <div class="sec-h"><h2>How — full text, and the two together</h2></div>
-  <figure class="code"><figcaption>BM25 over the same keys, a hybrid query that fuses both rankings, and a feed you can tail.</figcaption><pre><code>IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
-
-IDX.QUERY idx:ft MATCH &quot;pipelining&quot;
+  <div class="sec-h"><h2>Full text, and both rankings fused</h2><p class="sec-lede">BM25 over the same keys, and a hybrid query that fuses the text ranking with the vector ranking in one command.</p></div>
+  <ol class="steps recipe"><li><h3>A text index over the same keys</h3><pre><code>IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
+-&gt; OK</code></pre></li><li><h3>Match, ranked by BM25</h3><pre><code>IDX.QUERY idx:ft MATCH &quot;pipelining&quot;
 -&gt; 1) 1) &quot;doc:1&quot;
-      2) &quot;0.2877&quot;          # the BM25 score
-
-# hybrid: fuse the text ranking and the vector ranking (RRF)
-IDX.QUERY HYBRID idx:ft MATCH &quot;pipelining&quot; idx:sem KNN &quot;&lt;vector&gt;&quot;  LIMIT 20 RRFK 60
-
-# a change feed: tail every write from another process.
-# needs [feed] enabled = true in kevy.toml
-FEED.SHARDS                 -&gt; (integer) 16
-FEED.TAIL 0                 -&gt; 1) (integer) 1     # generation
-                               2) (integer) 1     # offset
-FEED.READ 0 1 0 COUNT 2     -&gt; the writes themselves, replayable</code></pre></figure>
+      2) &quot;0.2877&quot;          # the BM25 score</code></pre></li><li><h3>Hybrid: fuse both rankings (RRF)</h3><pre><code>IDX.QUERY HYBRID idx:ft MATCH &quot;pipelining&quot; idx:sem KNN &quot;&lt;vector&gt;&quot;  LIMIT 20 RRFK 60</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p>Indexes are paid for <b>on every write</b> to a matching key — the right trade for read-heavy retrieval, the wrong one for a key you rewrite thousands of times a second. Tokenisation (including CJK) and where BM25 stops are in <a href="../../docs/text-search/">the text guide</a>.</p></div>
 </section>
 <section class="band">
-  <div class="call loss">
-    <span class="h">What it costs you</span>
-    <p><b>An index build is O(N) over the matching keys</b>, and the index answers <code>INDEXBUILDING</code> until it has caught up — plan the first build, do not discover it. <b>The vector index is HNSW, which is approximate</b>: recall is a tuning parameter (<code>EF</code>), not a guarantee. And <b>there is no embedding model</b> — if you were hoping kevy would call one for you, it will not, and you should know that before you plan around it. <a href="../../docs/vector-search/">The vector guide</a> and <a href="../../docs/text-search/">the text guide</a> are specific.</p>
-  </div>
+  <div class="sec-h"><h2>Keep an agent's memory in step</h2><p class="sec-lede">Tail every write from another process — embed on change, not on a schedule, and resume from where you stopped.</p></div>
+  <ol class="steps recipe"><li><h3>Enable the feed</h3><pre><code># kevy.toml
+[feed]
+enabled = true</code></pre></li><li><h3>Find your cursors</h3><pre><code>FEED.SHARDS                 -&gt; (integer) 16
+FEED.TAIL 0                 -&gt; 1) (integer) 1     # generation
+                               2) (integer) 1     # offset</code></pre></li><li><h3>Read, process, resume</h3><pre><code>FEED.READ 0 1 0 COUNT 2     -&gt; the writes themselves, replayable</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p>The feed is per shard: <code>FEED.SHARDS</code> tells you how many cursors you own, and your consumer tracks one offset per shard. It is off by default — flipping <code>[feed]</code> on is what buys the write-path bookkeeping. <a href="../../docs/cdc/">The change-feed guide</a> covers resuming across restarts.</p></div>
 </section>
 <section class="band">
   <div class="call note">

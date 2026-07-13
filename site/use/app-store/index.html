@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Serving reads without a database — kevy</title>
 <meta name="description" content="Secondary indexes and materialised views in kevy: how a filtered list or a running total stays a lookup instead of becoming a query.">
-<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -48,40 +48,25 @@
   </div></section>
 <section class="band prose"><h2>Why this fits</h2><p>A key-value store is usually rejected for application data with a single objection: <i>but I need to look things up by something other than the key</i>. That objection is correct, and it is what secondary indexes are for.</p><p><b>An index is declared, not built.</b> You name the key pattern and the field; the write path keeps it current. A filtered list becomes a lookup again — no planner, no scan, no query.</p><p><b>A view goes further</b> and keeps an aggregate current on write, so a count or a total is read rather than computed. This is what most applications are actually asking their ORM for, and it is why their database is busy.</p></section>
 <section class="band">
-  <div class="sec-h"><h2>How</h2></div>
-  <figure class="code"><figcaption>Declare the index; write normally; read by the field. Every command here was run against a real server.</figcaption><pre><code># your data, written the way you would anyway
-HSET order:1001 customer 881 status open  total 4400
+  <div class="sec-h"><h2>Look things up by a field, not the key</h2><p class="sec-lede">"All orders for customer 881" stays a lookup: declare an index per field, write normally, read by value.</p></div>
+  <ol class="steps recipe"><li><h3>Your data, written the way you would anyway</h3><pre><code>HSET order:1001 customer 881 status open  total 4400
 HSET order:1002 customer 881 status paid  total 8400
-HSET order:1003 customer 902 status open  total 1200
-
-# one index per field you want to look up by
-IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
-IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range
-
-# the read that would have been a query
-IDX.QUERY idx:cust EQ 881
+HSET order:1003 customer 902 status open  total 1200</code></pre></li><li><h3>One index per field you look up by</h3><pre><code>IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
+IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range</code></pre></li><li><h3>The read that would have been a query</h3><pre><code>IDX.QUERY idx:cust EQ 881
 -&gt; 1) &quot;0&quot;                       # cursor
    2) 1) &quot;order:1001&quot;  2) &quot;881&quot;
-      3) &quot;order:1002&quot;  4) &quot;881&quot;
-
-# two conditions at once
-IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
+      3) &quot;order:1002&quot;  4) &quot;881&quot;</code></pre></li><li><h3>Two conditions at once</h3><pre><code>IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
 -&gt; 1) &quot;0&quot;
-   2) 1) 1) &quot;order:1001&quot;
-
-# a VIEW keeps the answer ready on the WRITE path, so the read
-# never recomputes it. (the parens are separate arguments.)
-VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open )  ORDER BY idx:cust
-VIEW.QUERY  v:open881
--&gt; 1) &quot;0&quot;
-   2) 1) &quot;order:1001&quot;  2) &quot;881&quot;
-</code></pre></figure>
+   2) 1) 1) &quot;order:1001&quot;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p><b>Indexes are paid for on every write</b>, not on read — the right trade for read-heavy serving, the wrong one for a write-heavy log. <b>There are no joins</b>, and there will not be: an index answers "which keys match these fields", not "join these two collections". If your read genuinely needs a join, keep it in Postgres — <a href="../../docs/rds-workloads/">the RDS workloads page</a> says which ones those are.</p></div>
 </section>
 <section class="band">
-  <div class="call loss">
-    <span class="h">What it costs you</span>
-    <p><b>Indexes and views are paid for on every write</b>, not on read — that is the trade, and it is the right one for read-heavy serving and the wrong one for a write-heavy log. <b>There are no joins</b>, and there will not be: an index answers "which keys match these fields", not "join these two collections". If your read genuinely needs a join, keep it in Postgres. We wrote down <a href="../../docs/rds-workloads/">what every relational workload costs here</a>, including the ones where the answer is do not move it.</p>
-  </div>
+  <div class="sec-h"><h2>Keep a running answer ready</h2><p class="sec-lede">A filtered, ordered list maintained on the write path — the read never recomputes it, because it was never stale.</p></div>
+  <ol class="steps recipe"><li><h3>Declare the view over the same indexes</h3><p>The parens are separate arguments.</p><pre><code>VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open )  ORDER BY idx:cust
+-&gt; OK</code></pre></li><li><h3>Read it — nothing is computed here</h3><pre><code>VIEW.QUERY  v:open881
+-&gt; 1) &quot;0&quot;
+   2) 1) &quot;order:1001&quot;  2) &quot;881&quot;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p>A view is <b>write-path work forever</b>: every write to a matching key updates it, whether or not anyone reads it today. Declare views for the reads your application actually serves, and drop the ones it stops serving. The indexes a view composes must exist first.</p></div>
 </section>
 <section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../docs/designing-on-kevy/">
       <span class="card-k">Guide</span>
