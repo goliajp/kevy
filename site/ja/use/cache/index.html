@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>キャッシュとセッション — kevy</title>
-<meta name="description" content="kevy でのセッション、ホットな行、レート制限、フィーチャーフラグ。なぜ向いているのか、何を差し出すのか、そしてそのためのコマンド。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<meta name="description" content="kevy でのセッション、ホットな行、レート制限、フィーチャーフラグ——タスクと、そのためのコマンドと、それぞれのコスト。">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,33 +46,40 @@
     <p class="lede">セッション、レート制限、フィーチャーフラグ、すべてのリクエストが読むホットな行。たいていのアプリケーションでこれらは Postgres の中にあり、叩かれ続けているのもそこです。データベースがそれらを苦手だからではありません。<b>そもそも問い合わせではなかったからです。キーは、もう分かっています。</b></p>
     
   </div></section>
-<section class="band prose"><h2>なぜ向いているのか</h2><p>どれも同じ形をしています。すでに手元にあるキー、小さな値、そして寿命。kevy は参照を O(1) で行い、cron を使わずキー自身を期限切れにし、1 台のマシンで毎秒数百万回それをこなします。</p><p>見落とされがちなのが<b>期限切れ</b>です。データベースの上に作ったキャッシュには掃除役が要り、バグはその掃除役に棲みつきます。ここではエンジンが、誰かに読まれるかどうかに関係なく、時間の来たキーを落とします。</p></section>
+<section class="band prose"><h2>なぜ向いているのか</h2><p>どれも同じ形をしています。すでに手元にあるキー、小さな値、そして寿命。kevy は参照を O(1) で行い、cron を使わずキー自身を期限切れにし、1 台のマシンで毎秒数百万回それをこなします。</p><p>見落とされがちなのが<b>期限切れ</b>です。データベースの上に作ったキャッシュには掃除役が要り、バグはその掃除役に棲みつきます。ここではエンジンが、誰かに読まれるかどうかに関係なく、時間の来たキーを落とします。以下の 4 つのタスクは、どれも動いている kevy に対して、<code>redis-cli</code> からそのまま貼り付けられます。</p></section>
 <section class="band">
-  <div class="sec-h"><h2>手順</h2></div>
-  <figure class="code"><figcaption>以下のコマンドは、すべて実物です。動いている kevy に対して、redis-cli から貼り付けてください。</figcaption><pre><code># a session that cleans itself up
-SET session:7f3a &#x27;{&quot;user&quot;:&quot;ada&quot;,&quot;role&quot;:&quot;admin&quot;}&#x27; EX 3600
-GET session:7f3a
-TTL session:7f3a          -&gt; 3599
-
-# a rate limit: one counter per client, expiring on a window
-INCR   rate:203.0.113.7   -&gt; 1
-EXPIRE rate:203.0.113.7 60
-INCR   rate:203.0.113.7   -&gt; 2      (the window survives)
-
-# feature flags: read constantly, written rarely, joined never
-HSET  flags new-checkout on dark-mode on beta-search off
-HGET  flags new-checkout  -&gt; &quot;on&quot;
-HGETALL flags
-
-# a cached row, invalidated by the writer rather than by a timer
-SET   user:881 &quot;$json&quot; EX 300
-DEL   user:881            # after you write to Postgres</code></pre></figure>
+  <div class="sec-h"><h2>ひとりでに片付くセッション</h2><p class="sec-lede">セッションごとにキーは 1 つ。最後に触れてから 1 時間で、ひとりでに消えます——掃除役も、cron も、期限切れ行のテーブルも要りません。</p></div>
+  <ol class="steps recipe"><li><h3>セッションを、寿命つきで書く</h3><pre><code>SET session:7f3a &#x27;{&quot;user&quot;:&quot;ada&quot;,&quot;role&quot;:&quot;admin&quot;}&#x27; EX 3600
+-&gt; OK</code></pre></li><li><h3>リクエストのたびに読む</h3><pre><code>GET session:7f3a
+-&gt; &quot;{\&quot;user\&quot;:\&quot;ada\&quot;,\&quot;role\&quot;:\&quot;admin\&quot;}&quot;
+TTL session:7f3a
+-&gt; (integer) 3599</code></pre></li><li><h3>スライド式の期限——アクティビティで更新する</h3><p>触れるのは値ではなく時計です——セッションが消えるのは、ログインの 1 時間後ではなく、ユーザーが静かになってから 1 時間後です。</p><pre><code>EXPIRE session:7f3a 3600
+-&gt; (integer) 1</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p>セッションはキー 1 つなので、ここの手順はすべて O(1) で原子的です。ひとりのユーザーの状態を複数のキーに広げると、原子性はシャードの境界で終わります——キーに <code>{hashtag}</code> を入れて、同じ場所に寄せてください。</p></div>
 </section>
 <section class="band">
-  <div class="call loss">
-    <span class="h">何を差し出すことになるか</span>
-    <p>キャッシュは真実の 2 つ目のコピーであり、間違うことがあります。kevy はそれを解決しません——それを解決できるものは、ありません。<b>タイマーではなく、書き込みで無効化してください</b>。TTL は計画そのものではなく、最後の保険として置いておくものです。また、複数キーの <code>MSET</code> や <code>DEL</code> が原子的なのは、ひとつのシャードの中だけです。2 つのキーが必ず一緒に変わらなければならないなら、<code>{hashtag}</code> で同じ場所に寄せてください。</p>
-  </div>
+  <div class="sec-h"><h2>エンドポイントにレート制限をかける</h2><p class="sec-lede">クライアントごと、ウィンドウごとにカウンタ 1 つ。1 分の中の 101 回目のリクエストは、断られます。</p></div>
+  <ol class="steps recipe"><li><h3>リクエストを数える</h3><pre><code>INCR rate:203.0.113.7
+-&gt; (integer) 1</code></pre></li><li><h3>最初の 1 回で、ウィンドウを開く</h3><p>返答が 1 だったときだけです——以降のリクエストは、すでに開いているウィンドウに乗ります。</p><pre><code>EXPIRE rate:203.0.113.7 60
+-&gt; (integer) 1</code></pre></li><li><h3>上限を超えたら、断る</h3><p>カウンタが上限を超えたら、ハンドラで 429 を返します。ウィンドウは、そのまま数え続けます。</p><pre><code>INCR rate:203.0.113.7
+-&gt; (integer) 2      (the window survives)</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p>これは<b>固定</b>ウィンドウであって、スライド式ではありません。境界をまたぐバーストは、短い区間では上限の 2 倍まで通りえます。不正利用の抑止ならそれで十分ですし、全体が O(1) のコマンド 2 つで済みます。もっと滑らかな整形が要るなら、新しいシステムではなく、キーの数で払ってください。</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>フィーチャーフラグ——すべてのリクエストが読む</h2><p class="sec-lede">全フラグをひとつのハッシュに。ホットパスは O(1) の読み取り 1 回、フラグを全員ぶん切り替えるのは書き込み 1 回です。</p></div>
+  <ol class="steps recipe"><li><h3>フラグを設定する</h3><pre><code>HSET flags new-checkout on dark-mode on beta-search off
+-&gt; (integer) 3</code></pre></li><li><h3>ホットパスで 1 つ読む</h3><pre><code>HGET flags new-checkout
+-&gt; &quot;on&quot;</code></pre></li><li><h3>1 つを、全員に対して、いま切り替える</h3><pre><code>HSET flags beta-search on
+-&gt; (integer) 0      (0 = updated, not added)
+HGETALL flags</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p>ひとつのハッシュはひとつのシャードに載るので、フラグの読み取りにはすべて同じシャードが答えます。フラグ程度の読み取り頻度なら、それでも毎秒数百万回です。そこがホットスポットになったら、ハッシュを画面やチームの単位で分けてください。</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>データベースが所有する行をキャッシュする</h2><p class="sec-lede">ホットな行はメモリから返します。真実は Postgres のまま、コピーが保険より長生きすることはありません。</p></div>
+  <ol class="steps recipe"><li><h3>読み取りミスのとき、保険の TTL つきで埋める</h3><pre><code>SET user:881 &quot;$json&quot; EX 300
+-&gt; OK</code></pre></li><li><h3>読み取りは、コピーから返す</h3><pre><code>GET user:881</code></pre></li><li><h3>書き込んだら無効化する——タイマーを待たない</h3><p>データベースへの書き込みがコミットしてから削除します。次の読み取りはミスして埋め直し、正しい値に戻ります。</p><pre><code>DEL user:881
+-&gt; (integer) 1</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p>キャッシュは真実の 2 つ目のコピーであり、間違うことがあります——それを解決できるものは、ありません。<b>タイマーではなく、書き込みで無効化してください</b>。TTL は計画ではなく、最後の保険です。複数キーの <code>DEL</code> や <code>MSET</code> が原子的なのは、ひとつのシャードの中だけです。2 つのキーが必ず一緒に変わらなければならないなら、<code>{hashtag}</code> で同じ場所に寄せてください。</p></div>
 </section>
 <section class="band"><div class="sec-h"><h2>次に</h2></div><div class="cards"><a class="card" href="../../../ja/docs/cookbook/">
       <span class="card-k">ガイド</span>

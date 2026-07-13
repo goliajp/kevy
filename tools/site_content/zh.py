@@ -491,7 +491,7 @@ PAGES["choose"] = {
 
 PAGES["use/cache"] = {
     "title": "缓存与会话——kevy",
-    "desc": "在 kevy 里放会话、热点行、限流和功能开关：为什么合适，代价是什么，以及具体用哪些命令。",
+    "desc": "在 kevy 里放会话、热点行、限流和功能开关：任务是什么、用哪几条命令、每一步的代价是什么。",
     "foot": "几乎所有人第一个搬过来的负载",
     "blocks": [
         {
@@ -513,42 +513,127 @@ PAGES["use/cache"] = {
                 "并且在一台机器上每秒做几百万次。",
                 "被低估的那一部分是<b>过期</b>。建在数据库上的缓存需要一个清理任务，"
                 "而 bug 就住在清理任务里。在这里，时间一到引擎就把 key 丢掉，"
-                "不管有没有人来问它。",
+                "不管有没有人来问它。下面是四个任务——每一个都可以原样粘进 "
+                "<code>redis-cli</code>，对着一个跑起来的 kevy 直接执行。",
             ],
         },
         {
-            "t": "code",
-            "h2": "怎么做",
-            "caption": "下面每一条命令都是真的。对着一个跑起来的 kevy，用 redis-cli 直接粘贴。",
-            "text": """# a session that cleans itself up
-SET session:7f3a '{"user":"ada","role":"admin"}' EX 3600
-GET session:7f3a
-TTL session:7f3a          -> 3599
-
-# a rate limit: one counter per client, expiring on a window
-INCR   rate:203.0.113.7   -> 1
-EXPIRE rate:203.0.113.7 60
-INCR   rate:203.0.113.7   -> 2      (the window survives)
-
-# feature flags: read constantly, written rarely, joined never
-HSET  flags new-checkout on dark-mode on beta-search off
-HGET  flags new-checkout  -> "on"
-HGETALL flags
-
-# a cached row, invalidated by the writer rather than by a timer
-SET   user:881 "$json" EX 300
-DEL   user:881            # after you write to Postgres""",
+            "t": "recipe",
+            "h2": "一个会自己收尾的会话",
+            "goal": "一个会话一个 key，最后一次活动一小时后自己消失——没有清理任务，没有定时任务，也没有一张存过期行的表。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "把会话连同寿命一起写进去",
+                    "code": """SET session:7f3a '{"user":"ada","role":"admin"}' EX 3600
+-> OK""",
+                },
+                {
+                    "do": "每个请求都来读它",
+                    "code": """GET session:7f3a
+-> "{\\"user\\":\\"ada\\",\\"role\\":\\"admin\\"}"
+TTL session:7f3a
+-> (integer) 3599""",
+                },
+                {
+                    "do": "滑动过期：有活动就续期",
+                    "note": "续的是钟，不是值——会话死在用户安静下来一小时之后，而不是登录一小时之后。",
+                    "code": """EXPIRE session:7f3a 3600
+-> (integer) 1""",
+                },
+            ],
+            "cost": (
+                "一个会话就是一个 key，所以上面每一步都是 O(1) 且原子的。如果你把"
+                "一个用户的状态摊在好几个 key 上，原子性到分片为止——在 key 里用 "
+                "<code>{hashtag}</code> 把它们放到同一个分片上。"
+            ),
         },
         {
-            "t": "callout",
-            "kind": "loss",
-            "title": "代价是什么",
-            "body": (
-                "缓存是事实的第二份拷贝，它可能是错的。kevy 解决不了这件事——"
-                "没有任何东西能解决。<b>要在写的时候让它失效，而不是靠一个定时器</b>，"
-                "TTL 是兜底，不是方案本身。另外注意，多 key 的 <code>MSET</code> 或 "
-                "<code>DEL</code> 只在单个 shard 内是原子的：如果两个 key 必须一起变，"
-                "用 <code>{hashtag}</code> 把它们放到同一个 shard 上。"
+            "t": "recipe",
+            "h2": "给一个接口限流",
+            "goal": "每个客户端每个窗口一个计数器，一分钟内的第 101 个请求会被拒绝。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "把这次请求计进去",
+                    "code": """INCR rate:203.0.113.7
+-> (integer) 1""",
+                },
+                {
+                    "do": "第一次命中时开窗",
+                    "note": "只在返回值是 1 的时候做——后面的请求搭的是已经开着的那个窗口。",
+                    "code": """EXPIRE rate:203.0.113.7 60
+-> (integer) 1""",
+                },
+                {
+                    "do": "超过上限就拒绝",
+                    "note": "计数器越过上限后，由你的 handler 返回 429。窗口继续计数。",
+                    "code": """INCR rate:203.0.113.7
+-> (integer) 2      (the window survives)""",
+                },
+            ],
+            "cost": (
+                "这是一个<b>固定</b>窗口，不是滑动窗口：一阵跨在窗口边界上的突发流量，"
+                "短时间内最多能放过两倍的上限。做滥用防护这已经够了，整件事只是两条 "
+                "O(1) 命令；要是需要更平滑的整形，多花几个 key，而不是多上一套系统。"
+            ),
+        },
+        {
+            "t": "recipe",
+            "h2": "功能开关，每个请求都读",
+            "goal": "所有开关放在一个 hash 里：热路径上一次 O(1) 的读，一次写就给所有人翻一个开关。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "把开关写进去",
+                    "code": """HSET flags new-checkout on dark-mode on beta-search off
+-> (integer) 3""",
+                },
+                {
+                    "do": "热路径上读一个",
+                    "code": """HGET flags new-checkout
+-> "on\"""",
+                },
+                {
+                    "do": "翻一个，立刻对所有人生效",
+                    "code": """HSET flags beta-search on
+-> (integer) 0      (0 = updated, not added)
+HGETALL flags""",
+                },
+            ],
+            "cost": (
+                "一个 hash 住在一个分片上，所以每一次开关读都由同一个分片来答。"
+                "以开关读的频率，这仍然是每秒几百万次；真有一天它成了热点，"
+                "就按业务面或者团队把 hash 拆开。"
+            ),
+        },
+        {
+            "t": "recipe",
+            "h2": "缓存一行数据库拥有的数据",
+            "goal": "热点行从内存里出；Postgres 仍然是事实来源，这份拷贝活不过它的兜底 TTL。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "读未命中时，带着兜底 TTL 回填",
+                    "code": """SET user:881 "$json" EX 300
+-> OK""",
+                },
+                {
+                    "do": "读走这份拷贝",
+                    "code": """GET user:881""",
+                },
+                {
+                    "do": "写的时候让它失效——不要等定时器",
+                    "note": "在数据库那边的写提交之后删掉它。下一次读未命中、回填，然后就是对的。",
+                    "code": """DEL user:881
+-> (integer) 1""",
+                },
+            ],
+            "cost": (
+                "缓存是事实的第二份拷贝，它可能是错的——没有任何东西能解决这件事。"
+                "<b>要在写的时候让它失效，而不是靠定时器</b>，TTL 是兜底，不是方案本身。"
+                "多 key 的 <code>DEL</code> 或 <code>MSET</code> 只在单个分片内是原子的："
+                "如果两个 key 必须一起变，用 <code>{hashtag}</code> 把它们放到一起。"
             ),
         },
         {
@@ -595,59 +680,76 @@ PAGES["use/queue"] = {
             ],
         },
         {
-            "t": "code",
-            "h2": "怎么做——用 list，做可以重来的活",
-            "caption": "worker 直接阻塞。没有轮询循环，没有 sleep，也没有惊群。",
-            "text": """# producer
-LPUSH jobs:email '{"to":"ada@example.com","tpl":"welcome"}'
-
-# worker — blocks until there is something, up to 30 seconds
-BRPOP jobs:email 30
+            "t": "recipe",
+            "h2": "list，给可以重来的活",
+            "goal": "生产者往里推，阻塞着的 worker 在有活的那一刻醒来。两条命令，没有轮询循环，也没有调度器。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "生产者：把任务推进去",
+                    "code": """LPUSH jobs:email '{"to":"ada@example.com","tpl":"welcome"}'
+-> (integer) 1""",
+                },
+                {
+                    "do": "worker：阻塞到有活为止",
+                    "note": "没有轮询循环，没有 sleep，也没有惊群——任务一到，pop 立刻返回，等满 30 秒还没有就空手返回。",
+                    "code": """BRPOP jobs:email 30
 -> 1) "jobs:email"
-   2) "{\\"to\\":\\"ada@example.com\\",\\"tpl\\":\\"welcome\\"}"
-
-# a delayed job: the score is when it is due.
-# ZPOPMIN.BELOW is kevy's own — it takes only what is actually due,
-# and stops at the first job that is not.
-ZADD jobs:due 1783875499 '{"id":"j-91"}'
+   2) "{\\"to\\":\\"ada@example.com\\",\\"tpl\\":\\"welcome\\"}\"""",
+                },
+                {
+                    "do": "延时任务：score 就是到期时间",
+                    "note": "ZPOPMIN.BELOW 是 kevy 自己的命令——它只取真正到期的，遇到第一个没到期的就停下。",
+                    "code": """ZADD jobs:due 1783875499 '{"id":"j-91"}'
+-> (integer) 1
 ZPOPMIN.BELOW jobs:due 1783875500
--> 1) the job payload
-   2) 1783875499
-""",
+-> the job payload, only if it is due""",
+                },
+            ],
+            "cost": (
+                "<b>被 pop 走却没被 worker 干完的任务，就没了。</b>这是整件事只要"
+                "两条命令的代价——只把可以重来的活交给它。另外在多分片的服务端上，"
+                "<code>BLPOP</code> 跨多个 key 时并不遵守 Redis 那种严格的从左到右"
+                "优先级：连接自己所在分片上的 key 会先被服务。"
+            ),
         },
         {
-            "t": "code",
-            "h2": "怎么做——用 stream，做丢不起的活",
-            "caption": "消息在有 worker 确认之前，一直是 pending 的。挂掉的 worker 手上那份活，可以被重新认领。",
-            "text": """# once, at setup
-XGROUP CREATE jobs:pay g1 $ MKSTREAM
-
-# producer
-XADD jobs:pay * order 4410 amount 8400
-
-# worker: read, then work, then acknowledge
-XREADGROUP GROUP g1 worker-3 COUNT 1 BLOCK 5000 STREAMS jobs:pay >
-XACK jobs:pay g1 1783875499458-0
-
-# the worker died before XACK. another one takes over:
-XAUTOCLAIM jobs:pay g1 worker-7 60000 0-0
+            "t": "recipe",
+            "h2": "stream，给丢不起的活",
+            "goal": "每个任务恰好交给一个 worker，在被确认之前一直是 pending。挂掉的 worker 手上的任务可以被认领走，全部历史都还在。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "初始化时做一次：建消费组",
+                    "code": """XGROUP CREATE jobs:pay g1 $ MKSTREAM
+-> OK""",
+                },
+                {
+                    "do": "生产者：把任务追加进去",
+                    "code": """XADD jobs:pay * order 4410 amount 8400
+-> "1783875499458-0\"""",
+                },
+                {
+                    "do": "worker：先读，再干活，然后确认",
+                    "note": "你确认的 ID 就是 XREADGROUP 交到你手上的那个。在 XACK 之前，这个任务一直是 pending——记在你名下，记在账上。",
+                    "code": """XREADGROUP GROUP g1 worker-3 COUNT 1 BLOCK 5000 STREAMS jobs:pay >
+XACK jobs:pay g1 1783875499458-0""",
+                },
+                {
+                    "do": "worker 在 XACK 之前挂了：把它的任务认领回来",
+                    "code": """XAUTOCLAIM jobs:pay g1 worker-7 60000 0-0
 # claims anything idle for more than 60 s
 
-# what is still outstanding, and who has it
-XPENDING jobs:pay g1""",
-        },
-        {
-            "t": "callout",
-            "kind": "loss",
-            "title": "代价是什么",
-            "body": (
+XPENDING jobs:pay g1
+# what is still outstanding, and who has it""",
+                },
+            ],
+            "cost": (
                 "<b>stream 不是免费的。</b>用 <code>MAXLEN</code> 裁剪会重算整条流的权重，"
-                "复杂度是整条流的 O(N)——所以要按计划裁剪，不要每次 <code>XADD</code> 都裁。"
+                "复杂度是整条流的 O(N)——按计划裁剪，不要每次 <code>XADD</code> 都裁。"
                 "<code>XREADGROUP</code> 的 <code>COUNT</code> 限制的是交到你手上的条数，"
-                "<b>不是扫过的条数</b>：整条尚未投递的尾巴会先被物化出来。另外在多 shard 的"
-                "服务端上，<code>BLPOP</code> 跨多个 key 时并不遵守 Redis 那种严格的"
-                "从左到右优先级——连接自己所在 shard 上的 key 会先被服务。这些都在"
-                "<a href=\"~/docs/commands/\">命令参考</a>里逐条写着。"
+                "<b>不是扫过的条数</b>：整条尚未投递的尾巴会先被物化出来。"
+                "逐条命令的细节在<a href=\"~/docs/commands/\">命令参考</a>里。"
             ),
         },
         {
@@ -693,51 +795,85 @@ PAGES["use/realtime"] = {
             ],
         },
         {
-            "t": "code",
-            "h2": "怎么做",
-            "caption": "频道，以及一次订阅一整族频道的模式匹配。",
-            "text": """# subscriber
-SUBSCRIBE room:42
-PSUBSCRIBE room:*          # every room, one connection
-
-# publisher — returns how many subscribers received it
-PUBLISH room:42 '{"user":"ada","text":"hello"}'
--> (integer) 3
-
-# presence: the TTL does the expiry, the client refreshes every 10 s
-SET presence:ada online EX 30
-
-# who is here. on a large keyspace prefer a set:
-SADD online ada
-SMEMBERS online
-SREM online ada""",
-        },
-        {
-            "t": "code",
-            "h2": "同一件事，在浏览器标签页里",
-            "caption": "同源的两个标签页，没有服务端，也没有 WebSocket。桥是一个 BroadcastChannel，过滤发生在引擎内部。",
-            "text": """import { open } from "@goliajp/kevy";
-
-const db = await open({ persist: { name: "app" } });
-
-// tab A
-db.subscribe("room:42", (payload, channel) => {
-  render(JSON.parse(new TextDecoder().decode(payload)));
-});
-
-// tab B — tab A receives it
-db.publish("room:42", JSON.stringify({ user: "ada", text: "hello" }));""",
-        },
-        {
-            "t": "callout",
-            "kind": "loss",
-            "title": "代价是什么",
-            "body": (
+            "t": "recipe",
+            "h2": "把一条消息扇出给所有正在听的人",
+            "goal": "一次发布，送达那一刻在线的每一个订阅者——一个聊天室、一条通知、一个实时计数器。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "每个客户端各自订阅",
+                    "note": "PSUBSCRIBE 用一条连接就能订下一整族频道。",
+                    "code": """SUBSCRIBE room:42
+PSUBSCRIBE room:*          # every room, one connection""",
+                },
+                {
+                    "do": "发布——返回值就是听众数",
+                    "code": """PUBLISH room:42 '{"user":"ada","text":"hello"}'
+-> (integer) 3             # how many subscribers received it""",
+                },
+            ],
+            "cost": (
                 "<b>跟不上的订阅者会被丢掉，而不是被无限缓冲。</b>如果一个客户端跟不上，"
                 "它的消息会被丢弃，而不是让服务端的内存无上限地涨下去——这是有意的选择，"
-                "在你依赖投递之前，应该先知道它。这里没有确认，也没有重放。"
-                "<b>只要这两样里有一样要紧，你要的就是 stream，不是频道。</b>"
+                "在你依赖投递之前应该先知道它。没有确认，也没有重放：只要这两样里有"
+                "一样要紧，你要的就是 stream，不是频道。"
                 "<a href=\"~/docs/pubsub/\">发布订阅指南</a>把边界写得很具体。"
+            ),
+        },
+        {
+            "t": "recipe",
+            "h2": "在线状态——现在谁在线",
+            "goal": "记账的活交给引擎的过期机制：一个安静下来的客户端，会自己从名单上掉下去。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "心跳：一个带寿命的 key",
+                    "note": "客户端每 10 秒续一次。谁停止续期，谁就过期。",
+                    "code": """SET presence:ada online EX 30
+-> OK""",
+                },
+                {
+                    "do": "名单，用一个 set",
+                    "code": """SADD online ada
+-> (integer) 1
+SMEMBERS online
+SREM online ada            # on clean disconnect""",
+                },
+            ],
+            "cost": (
+                "靠 TTL 的在线状态是<b>最终</b>正确的：一个崩掉的客户端最长会显示在线"
+                "一个 TTL——这个 30 秒要按你能忍多陈旧来定。另外 <code>SMEMBERS</code> "
+                "会把整个 set 一次性返回，名单到了百万级，改用 <code>SSCAN</code> 分页。"
+            ),
+        },
+        {
+            "t": "recipe",
+            "h2": "同一件事，在两个浏览器标签页之间",
+            "goal": "同源的两个标签页：在一个里发布，在另一个里渲染。没有服务端，没有 WebSocket，也没有连接状态。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "在每个标签页里打开引擎",
+                    "code": """import { open } from "@goliajp/kevy";
+
+const db = await open({ persist: { name: "app" } });""",
+                },
+                {
+                    "do": "标签页 A 订阅",
+                    "code": """db.subscribe("room:42", (payload, channel) => {
+  render(JSON.parse(new TextDecoder().decode(payload)));
+});""",
+                },
+                {
+                    "do": "标签页 B 发布——A 把它渲染出来",
+                    "code": """db.publish("room:42", JSON.stringify({ user: "ada", text: "hello" }));""",
+                },
+            ],
+            "cost": (
+                "桥是一个 <code>BroadcastChannel</code>，所以它到达的是<b>同一台设备上"
+                "同源的标签页</b>——过滤仍然发生在引擎内部，但要跨设备，那就是服务端的"
+                "活了。现在就可以试：在两个标签页里打开 <a href=\"~/play/\">playground</a>，"
+                "从任意一边发布。"
             ),
         },
         {
@@ -778,7 +914,7 @@ PAGES["use/ai"] = {
                 "然后你还得记住去做 embedding、去建索引、去让缓存失效。"
                 "这里每一步都是一个可能忘掉的地方。",
                 "<b>在 kevy 里，索引是一句声明，不是一条流水线。</b>你告诉引擎是哪些 key、"
-                "哪个字段，写入路径就会把索引维持在最新。事后没有东西要跑，"
+                "哪个字段，写路径就会把索引维持在最新。事后没有东西要跑，"
                 "也没有东西会落后。",
                 "<b>kevy 不做的那件事，是生成 embedding。</b>引擎里没有模型，以后也不会有"
                 "——推理不该待在存储引擎里，硬塞进去只会把你的向量格式绑死在我们的发版节奏上。"
@@ -786,53 +922,91 @@ PAGES["use/ai"] = {
             ],
         },
         {
-            "t": "code",
-            "h2": "怎么做——向量检索",
-            "caption": "在你的 key 的某个字段上建一个 HNSW 索引。声明一次，之后由写入路径维持最新。",
-            "text": """# declare it once. the engine backfills, and answers
-# INDEXBUILDING while it does.
-IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann  DIM 768 DISTANCE cosine M 16 EF 200
-
-# write a document the way you already write documents
-HSET doc:4410 title "Ada on pipelining" vec "<768 f32, little-endian>"
-
-# nearest ten. no separate system, no sync step.
-IDX.QUERY idx:sem KNN "<query vector>" LIMIT 10
+            "t": "recipe",
+            "h2": "按语义检索你的 key",
+            "goal": "在你已经在写的那些 key 的某个字段上做 KNN。声明一次，写路径把它维持在最新，没有东西要同步。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "把索引声明一次",
+                    "note": "引擎会回填已有的 key，回填期间回答 INDEXBUILDING。",
+                    "code": """IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann  DIM 768 DISTANCE cosine M 16 EF 200
+-> OK""",
+                },
+                {
+                    "do": "照你原来的方式写文档",
+                    "code": """HSET doc:4410 title "Ada on pipelining" vec "<768 f32, little-endian>\"""",
+                },
+                {
+                    "do": "最近的十个",
+                    "code": """IDX.QUERY idx:sem KNN "<query vector>" LIMIT 10
 -> 1) doc:4410
    2) doc:9982""",
+                },
+            ],
+            "cost": (
+                "<b>这个索引是 HNSW，是近似的</b>：召回率是一个可调参数（<code>EF</code>），"
+                "不是一个保证。第一次构建是对匹配到的 key 做 O(N) 的工作——要提前安排，"
+                "不要等它自己撞上来。还有，<b>这里没有 embedding 模型</b>：向量由你给出。"
+                "<a href=\"~/docs/vector-search/\">向量检索指南</a>里有那些可以调的参数。"
+            ),
         },
         {
-            "t": "code",
-            "h2": "怎么做——全文检索，以及两者合用",
-            "caption": "在同一批 key 上做 BM25，用一次混合查询把两种排序融合起来，还有一条可以持续跟读的变更流。",
-            "text": """IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
-
-IDX.QUERY idx:ft MATCH "pipelining"
+            "t": "recipe",
+            "h2": "全文检索，以及两种排序融合",
+            "goal": "在同一批 key 上做 BM25，再用一条混合查询，把文本排序和向量排序融合在一条命令里。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "在同一批 key 上建文本索引",
+                    "code": """IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
+-> OK""",
+                },
+                {
+                    "do": "匹配，按 BM25 排序",
+                    "code": """IDX.QUERY idx:ft MATCH "pipelining"
 -> 1) 1) "doc:1"
-      2) "0.2877"          # the BM25 score
-
-# hybrid: fuse the text ranking and the vector ranking (RRF)
-IDX.QUERY HYBRID idx:ft MATCH "pipelining" idx:sem KNN "<vector>"  LIMIT 20 RRFK 60
-
-# a change feed: tail every write from another process.
-# needs [feed] enabled = true in kevy.toml
-FEED.SHARDS                 -> (integer) 16
-FEED.TAIL 0                 -> 1) (integer) 1     # generation
-                               2) (integer) 1     # offset
-FEED.READ 0 1 0 COUNT 2     -> the writes themselves, replayable""",
+      2) "0.2877"          # the BM25 score""",
+                },
+                {
+                    "do": "混合：把两种排序融合（RRF）",
+                    "code": """IDX.QUERY HYBRID idx:ft MATCH "pipelining" idx:sem KNN "<vector>"  LIMIT 20 RRFK 60""",
+                },
+            ],
+            "cost": (
+                "索引的账是在<b>每次写</b>匹配到的 key 时付的——对读多的检索这是对的交易，"
+                "对一个每秒重写几千次的 key 是错的。分词（包括中日韩）和 BM25 到哪里为止，"
+                "都在<a href=\"~/docs/text-search/\">全文检索指南</a>里。"
+            ),
         },
         {
-            "t": "callout",
-            "kind": "loss",
-            "title": "代价是什么",
-            "body": (
-                "<b>建索引是对匹配到的 key 做 O(N) 的工作</b>，在它追平之前，索引会回答 "
-                "<code>INDEXBUILDING</code>——第一次建索引要提前安排，不要等它自己撞上来。"
-                "<b>向量索引是 HNSW，是近似的</b>：召回率是一个可调参数（<code>EF</code>），"
-                "不是一个保证。还有，<b>这里没有 embedding 模型</b>——如果你原本指望 kevy "
-                "帮你调一个，它不会，而这件事你应该在做规划之前就知道。"
-                "<a href=\"~/docs/vector-search/\">向量检索指南</a>和"
-                "<a href=\"~/docs/text-search/\">全文检索指南</a>都写得很具体。"
+            "t": "recipe",
+            "h2": "让 agent 的记忆跟上数据",
+            "goal": "从另一个进程持续跟读每一次写——变更时才做 embedding，不靠时刻表，还能从停下的地方续上。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "打开变更流",
+                    "code": """# kevy.toml
+[feed]
+enabled = true""",
+                },
+                {
+                    "do": "找到你的游标",
+                    "code": """FEED.SHARDS                 -> (integer) 16
+FEED.TAIL 0                 -> 1) (integer) 1     # generation
+                               2) (integer) 1     # offset""",
+                },
+                {
+                    "do": "读，处理，续上",
+                    "code": """FEED.READ 0 1 0 COUNT 2     -> the writes themselves, replayable""",
+                },
+            ],
+            "cost": (
+                "变更流是按分片记的：<code>FEED.SHARDS</code> 告诉你手里有几个游标，"
+                "你的消费者按分片各记一个偏移量。它默认是关的——打开 <code>[feed]</code> "
+                "才买下写路径上的这份记账。"
+                "<a href=\"~/docs/cdc/\">变更流指南</a>讲了怎么跨重启续读。"
             ),
         },
         {
@@ -882,7 +1056,7 @@ PAGES["use/app-store"] = {
                 "键值存储被挡在应用数据之外，通常只因为一句反对：<i>可是我需要按 key "
                 "以外的东西去查</i>。这句反对是对的，而二级索引正是为它准备的。",
                 "<b>索引是声明出来的，不是建出来的。</b>你写清楚 key 的前缀和字段，"
-                "写入路径会把它维持在最新。一个带过滤的列表于是重新变回一次查表——"
+                "写路径会把它维持在最新。一个带过滤的列表于是重新变回一次查表——"
                 "没有计划器，没有扫描，没有查询。",
                 "<b>视图更进一步</b>，在写入时就把聚合维持在最新，于是一个计数、一个合计是"
                 "读出来的，不是算出来的。这正是大多数应用真正在向 ORM 索要的东西，"
@@ -890,48 +1064,68 @@ PAGES["use/app-store"] = {
             ],
         },
         {
-            "t": "code",
-            "h2": "怎么做",
-            "caption": "声明索引，照常写入，按字段来读。这里的每一条命令都在一台真实的服务器上跑过。",
-            "text": """# your data, written the way you would anyway
-HSET order:1001 customer 881 status open  total 4400
+            "t": "recipe",
+            "h2": "按字段查，而不是按 key 查",
+            "goal": "“客户 881 的所有订单”始终是一次查表：每个要查的字段声明一个索引，照常写入，按值来读。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "你的数据，照你本来的方式写",
+                    "code": """HSET order:1001 customer 881 status open  total 4400
 HSET order:1002 customer 881 status paid  total 8400
-HSET order:1003 customer 902 status open  total 1200
-
-# one index per field you want to look up by
-IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
-IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range
-
-# the read that would have been a query
-IDX.QUERY idx:cust EQ 881
+HSET order:1003 customer 902 status open  total 1200""",
+                },
+                {
+                    "do": "每个要按它查的字段，建一个索引",
+                    "code": """IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
+IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range""",
+                },
+                {
+                    "do": "那次本来会变成查询的读",
+                    "code": """IDX.QUERY idx:cust EQ 881
 -> 1) "0"                       # cursor
    2) 1) "order:1001"  2) "881"
-      3) "order:1002"  4) "881"
-
-# two conditions at once
-IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
+      3) "order:1002"  4) "881\"""",
+                },
+                {
+                    "do": "两个条件一起查",
+                    "code": """IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
 -> 1) "0"
-   2) 1) 1) "order:1001"
-
-# a VIEW keeps the answer ready on the WRITE path, so the read
-# never recomputes it. (the parens are separate arguments.)
-VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open )  ORDER BY idx:cust
-VIEW.QUERY  v:open881
--> 1) "0"
-   2) 1) "order:1001"  2) "881"
-""",
+   2) 1) 1) "order:1001\"""",
+                },
+            ],
+            "cost": (
+                "<b>索引的账是每次写的时候付的</b>，不是读的时候——对读多的服务路径"
+                "这是对的交易，对写多的日志是错的。<b>这里没有 join</b>，以后也不会有："
+                "索引回答的是“哪些 key 匹配这些字段”，不是“把这两个集合连起来”。"
+                "如果你的读确实需要 join，就把它留在 Postgres 里——"
+                "<a href=\"~/docs/rds-workloads/\">关系型负载那一页</a>写着"
+                "哪些读属于这种情况。"
+            ),
         },
         {
-            "t": "callout",
-            "kind": "loss",
-            "title": "代价是什么",
-            "body": (
-                "<b>索引和视图的账，是每次写的时候付的</b>，不是读的时候——这就是这笔交易。"
-                "对读多的服务路径，它是对的；对写多的日志，它是错的。<b>这里没有 join</b>，"
-                "以后也不会有：索引回答的是哪些 key 匹配了这些字段，而不是把两个集合连起来。"
-                "如果你的读确实需要 join，就把它留在 Postgres 里。我们把"
-                "<a href=\"~/docs/rds-workloads/\">每一种关系型负载在这里的代价</a>"
-                "都写下来了，包括那些答案是别搬的。"
+            "t": "recipe",
+            "h2": "把一个持续更新的答案备好",
+            "goal": "一个带过滤、带排序的列表，由写路径一直维持着——读永远不用重算它，因为它从来没有过期过。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "在同样的索引上声明视图",
+                    "note": "括号是各自独立的参数。",
+                    "code": """VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open )  ORDER BY idx:cust
+-> OK""",
+                },
+                {
+                    "do": "读它——这里什么都不用算",
+                    "code": """VIEW.QUERY  v:open881
+-> 1) "0"
+   2) 1) "order:1001"  2) "881\"""",
+                },
+            ],
+            "cost": (
+                "视图是<b>写路径上一直要干的活</b>：每一次对匹配 key 的写都会更新它，"
+                "不管今天有没有人来读。只为应用真正在对外服务的那些读声明视图，"
+                "不再服务的就删掉。视图要组合的那些索引，必须先存在。"
             ),
         },
         {
@@ -978,57 +1172,86 @@ PAGES["use/embedded"] = {
             ],
         },
         {
-            "t": "code",
-            "h2": "怎么做——在一个 Rust 程序里",
-            "caption": "没有 socket，没有序列化，没有第二个进程。数据是持久的，打开时会重放自己的日志。",
-            "text": """kevy-embedded = "4.0"
-
-let db = Db::open("data/")?;
+            "t": "recipe",
+            "h2": "在一个 Rust 程序里",
+            "goal": "存储是一个你直接调用的 struct——没有 socket，没有序列化，没有第二个进程。数据是持久的，打开时会重放自己的日志。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "加进来",
+                    "code": """# Cargo.toml
+kevy-embedded = "4.0\"""",
+                },
+                {
+                    "do": "打开，写，读",
+                    "code": """let db = Db::open("data/")?;
 db.set(b"session:7f3a", b"{\\"user\\":\\"ada\\"}", Some(Duration::from_secs(3600)))?;
-assert_eq!(db.get(b"session:7f3a")?.is_some(), true);
-
-// need other processes to reach it later? open the RESP listener
-// and your redis-cli works, without changing any of the above.
-db.listen("127.0.0.1:6379")?;""",
+assert_eq!(db.get(b"session:7f3a")?.is_some(), true);""",
+                },
+                {
+                    "do": "以后想用 redis-cli？把 listener 打开",
+                    "note": "其他进程通过 RESP 访问同一份存储，上面的代码一行都不用改。",
+                    "code": """db.listen("127.0.0.1:6379")?;""",
+                },
+            ],
+            "cost": (
+                "<b>嵌入式的存储不是共享的。</b>数据目录归一个进程所有，如果第二个进程"
+                "也要这份数据，那正是上面那个 listener——或者"
+                "<a href=\"~/docs/embedded-listener/\">完整的服务端</a>——存在的意义。"
+            ),
         },
         {
-            "t": "code",
-            "h2": "怎么做——在浏览器标签页里",
-            "caption": "gzip 之后 151 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。",
-            "text": """import { open } from "@goliajp/kevy";
+            "t": "recipe",
+            "h2": "在一个浏览器标签页里",
+            "goal": "gzip 之后 151 KB。落在浏览器自己的文件系统上，刷新之后还在，发布订阅还能跨标签页。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "打开它，带持久化",
+                    "code": """import { open } from "@goliajp/kevy";
 
-const db = await open({ persist: { name: "app" } });
-
-db.set("cart:u881", JSON.stringify(items), { ttlMs: 86_400_000 });
+const db = await open({ persist: { name: "app" } });""",
+                },
+                {
+                    "do": "带着真 TTL 写，刷新之后再读",
+                    "code": """db.set("cart:u881", JSON.stringify(items), { ttlMs: 86_400_000 });
 db.get("cart:u881");        // still there after a reload
-db.pttl("cart:u881");       // the engine expires it, not your code
-
-db.subscribe("sync", (payload) => merge(payload));   // other tabs""",
+db.pttl("cart:u881");       // the engine expires it, not your code""",
+                },
+                {
+                    "do": "听见别的标签页",
+                    "code": """db.subscribe("sync", (payload) => merge(payload));""",
+                },
+            ],
+            "cost": (
+                "<b>做一次小的同步读，localStorage 更快</b>——它就是页面自己地址空间里的"
+                "一个 map，任何建在 OPFS 上的东西都赢不了它这一点。kevy 赢在那些本来就让 "
+                "localStorage 不该被用的地方：真的 TTL、没有 5 MB 上限、value 是字节"
+                "而不是字符串、写入不挡主线程。"
+            ),
         },
         {
-            "t": "code",
-            "h2": "怎么做——在单片机上",
-            "caption": "no_std，没有分配器，没有操作系统。一块由你自己定大小的固定 arena。",
-            "text": """# Cargo.toml
-kevy-store = { version = "4.0", default-features = false }
-
-# no_std, no heap: the store lives in an arena you provide
-let mut arena = [0u8; 64 * 1024];
+            "t": "recipe",
+            "h2": "在一颗单片机上",
+            "goal": "no_std，没有分配器，没有操作系统：存储住在一块由你自己定大小的固定 arena 里，CI 每次 push 都会把它启动一遍。",
+            "cost_t": "成本与限制",
+            "items": [
+                {
+                    "do": "把它裁到最小",
+                    "code": """# Cargo.toml
+kevy-store = { version = "4.0", default-features = false }""",
+                },
+                {
+                    "do": "给它内存，然后用",
+                    "code": """let mut arena = [0u8; 64 * 1024];
 let mut store = Store::new_in(&mut arena);
 store.set(b"temp", b"21.4")?;""",
-        },
-        {
-            "t": "callout",
-            "kind": "loss",
-            "title": "代价是什么",
-            "body": (
-                "<b>在浏览器里，做一次小的同步读，localStorage 更快</b>——它就是页面自己"
-                "地址空间里的一个 map，任何建在 OPFS 上的东西都赢不了它这一点。kevy 赢在"
-                "别的地方，而那些地方本来就是 localStorage 不该被用的理由：真的 TTL、"
-                "没有 5 MB 上限、value 是字节而不是字符串、写入不挡主线程。"
-                "<b>在单片机上，arena 的大小由你自己定</b>，运行时不能再涨——"
-                "这就是没有分配器的含义。还有，<b>嵌入式的存储不是共享的</b>："
-                "如果第二个进程也要用这份数据，你要的是服务端，或者嵌入式的 RESP listener。"
+                },
+            ],
+            "cost": (
+                "<b>arena 是固定的。</b>运行时不能再涨——这就是“没有分配器”的含义，"
+                "它的大小是你的设计决定，不是引擎的。功能分级和每一级要付多少字节，"
+                "都在 <a href=\"~/docs/iot/\">IoT 指南</a>里。"
             ),
         },
         {

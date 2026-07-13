@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Realtime and pub/sub — kevy</title>
 <meta name="description" content="Chat, presence, notifications and live dashboards on kevy&#x27;s pub/sub — including what happens to a subscriber that cannot keep up.">
-<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -48,42 +48,29 @@
   </div></section>
 <section class="band prose"><h2>Why this fits — and where it does not</h2><p>Pub/sub is fire-and-forget. A message goes to whoever is subscribed <b>at that moment</b>; nobody who connects a second later will ever see it, and there is no acknowledgement. That is exactly right for a presence ping or a live counter, and exactly wrong for anything you would be upset to lose.</p><p><b>If losing a message matters, use a stream instead</b> — see <a href="../../use/queue/">queues</a>. Streams keep history, support consumer groups, and let a client that was offline catch up. Pub/sub is the cheap thing; the cheapness is the trade.</p></section>
 <section class="band">
-  <div class="sec-h"><h2>How</h2></div>
-  <figure class="code"><figcaption>Channels, and patterns for a whole family of them at once.</figcaption><pre><code># subscriber
-SUBSCRIBE room:42
-PSUBSCRIBE room:*          # every room, one connection
-
-# publisher — returns how many subscribers received it
-PUBLISH room:42 &#x27;{&quot;user&quot;:&quot;ada&quot;,&quot;text&quot;:&quot;hello&quot;}&#x27;
--&gt; (integer) 3
-
-# presence: the TTL does the expiry, the client refreshes every 10 s
-SET presence:ada online EX 30
-
-# who is here. on a large keyspace prefer a set:
-SADD online ada
+  <div class="sec-h"><h2>Fan a message out to everyone listening</h2><p class="sec-lede">One publish reaches every subscriber connected at that moment — a chat room, a notification, a live counter.</p></div>
+  <ol class="steps recipe"><li><h3>Each client subscribes</h3><p>PSUBSCRIBE takes a whole family of channels on one connection.</p><pre><code>SUBSCRIBE room:42
+PSUBSCRIBE room:*          # every room, one connection</code></pre></li><li><h3>Publish — the reply is the audience</h3><pre><code>PUBLISH room:42 &#x27;{&quot;user&quot;:&quot;ada&quot;,&quot;text&quot;:&quot;hello&quot;}&#x27;
+-&gt; (integer) 3             # how many subscribers received it</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p><b>A slow subscriber is dropped, not buffered forever.</b> If a client cannot keep up, its messages are discarded rather than growing the server's memory without bound — a deliberate choice, and one to know about before you rely on delivery. No acknowledgement, no replay: if either matters, you want a stream, not a channel. <a href="../../docs/pubsub/">The pub/sub guide</a> is specific about the limits.</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>Presence — who is online right now</h2><p class="sec-lede">The engine's expiry does the bookkeeping: a client that goes silent falls off the roster by itself.</p></div>
+  <ol class="steps recipe"><li><h3>Heartbeat: a key with a lifetime</h3><p>The client refreshes every 10 s. Whoever stops refreshing expires.</p><pre><code>SET presence:ada online EX 30
+-&gt; OK</code></pre></li><li><h3>The roster, as a set</h3><pre><code>SADD online ada
+-&gt; (integer) 1
 SMEMBERS online
-SREM online ada</code></pre></figure>
+SREM online ada            # on clean disconnect</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p>Presence by TTL is <b>eventually</b> right: a crashed client shows online for up to the TTL — size the 30 s to how stale you can stand. And <code>SMEMBERS</code> returns the whole set in one reply; on a roster of millions, page through <code>SSCAN</code> instead.</p></div>
 </section>
 <section class="band">
-  <div class="sec-h"><h2>The same thing, in a browser tab</h2></div>
-  <figure class="code"><figcaption>Two tabs of the same origin, no server, no WebSocket. The bridge is a BroadcastChannel and the filtering happens inside the engine.</figcaption><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
+  <div class="sec-h"><h2>The same thing, between two browser tabs</h2><p class="sec-lede">Two tabs of the same origin: publish in one, render in the other. No server, no WebSocket, no connection state.</p></div>
+  <ol class="steps recipe"><li><h3>Open the engine in each tab</h3><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
 
-const db = await open({ persist: { name: &quot;app&quot; } });
-
-// tab A
-db.subscribe(&quot;room:42&quot;, (payload, channel) =&gt; {
+const db = await open({ persist: { name: &quot;app&quot; } });</code></pre></li><li><h3>Tab A subscribes</h3><pre><code>db.subscribe(&quot;room:42&quot;, (payload, channel) =&gt; {
   render(JSON.parse(new TextDecoder().decode(payload)));
-});
-
-// tab B — tab A receives it
-db.publish(&quot;room:42&quot;, JSON.stringify({ user: &quot;ada&quot;, text: &quot;hello&quot; }));</code></pre></figure>
-</section>
-<section class="band">
-  <div class="call loss">
-    <span class="h">What it costs you</span>
-    <p><b>A slow subscriber is dropped, not buffered forever.</b> If a client cannot keep up, its messages are discarded rather than growing the server's memory without bound — a deliberate choice, and one you should know about before you rely on delivery. There is no acknowledgement and no replay. <b>If either matters, you want a stream, not a channel.</b> <a href="../../docs/pubsub/">The pub/sub guide</a> is specific about the limits.</p>
-  </div>
+});</code></pre></li><li><h3>Tab B publishes — tab A renders it</h3><pre><code>db.publish(&quot;room:42&quot;, JSON.stringify({ user: &quot;ada&quot;, text: &quot;hello&quot; }));</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p>The bridge is a <code>BroadcastChannel</code>, so this reaches <b>tabs of the same origin on the same device</b> — filtering still happens inside the engine, but crossing devices is what the server is for. Try it now: open <a href="../../play/">the playground</a> in two tabs and publish from either one.</p></div>
 </section>
 <section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../docs/pubsub/">
       <span class="card-k">Guide</span>

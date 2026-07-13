@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>不靠数据库扛住读——kevy</title>
 <meta name="description" content="kevy 的二级索引和物化视图：怎样让一个带过滤的列表、一个持续累计的总数，始终是一次查表，而不是变成一次查询。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,42 +46,27 @@
     <p class="lede">“这个客户名下所有还没关闭的订单。”“这个购物车里有几件东西。”这类读，一个应用一秒钟要做上千次，而在关系型数据库里，每一次都是一条背后跟着查询计划器的查询。<b>kevy 可以直接把答案备好。</b></p>
     
   </div></section>
-<section class="band prose"><h2>为什么合适</h2><p>键值存储被挡在应用数据之外，通常只因为一句反对：<i>可是我需要按 key 以外的东西去查</i>。这句反对是对的，而二级索引正是为它准备的。</p><p><b>索引是声明出来的，不是建出来的。</b>你写清楚 key 的前缀和字段，写入路径会把它维持在最新。一个带过滤的列表于是重新变回一次查表——没有计划器，没有扫描，没有查询。</p><p><b>视图更进一步</b>，在写入时就把聚合维持在最新，于是一个计数、一个合计是读出来的，不是算出来的。这正是大多数应用真正在向 ORM 索要的东西，也正是它们的数据库忙成那样的原因。</p></section>
+<section class="band prose"><h2>为什么合适</h2><p>键值存储被挡在应用数据之外，通常只因为一句反对：<i>可是我需要按 key 以外的东西去查</i>。这句反对是对的，而二级索引正是为它准备的。</p><p><b>索引是声明出来的，不是建出来的。</b>你写清楚 key 的前缀和字段，写路径会把它维持在最新。一个带过滤的列表于是重新变回一次查表——没有计划器，没有扫描，没有查询。</p><p><b>视图更进一步</b>，在写入时就把聚合维持在最新，于是一个计数、一个合计是读出来的，不是算出来的。这正是大多数应用真正在向 ORM 索要的东西，也正是它们的数据库忙成那样的原因。</p></section>
 <section class="band">
-  <div class="sec-h"><h2>怎么做</h2></div>
-  <figure class="code"><figcaption>声明索引，照常写入，按字段来读。这里的每一条命令都在一台真实的服务器上跑过。</figcaption><pre><code># your data, written the way you would anyway
-HSET order:1001 customer 881 status open  total 4400
+  <div class="sec-h"><h2>按字段查，而不是按 key 查</h2><p class="sec-lede">“客户 881 的所有订单”始终是一次查表：每个要查的字段声明一个索引，照常写入，按值来读。</p></div>
+  <ol class="steps recipe"><li><h3>你的数据，照你本来的方式写</h3><pre><code>HSET order:1001 customer 881 status open  total 4400
 HSET order:1002 customer 881 status paid  total 8400
-HSET order:1003 customer 902 status open  total 1200
-
-# one index per field you want to look up by
-IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
-IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range
-
-# the read that would have been a query
-IDX.QUERY idx:cust EQ 881
+HSET order:1003 customer 902 status open  total 1200</code></pre></li><li><h3>每个要按它查的字段，建一个索引</h3><pre><code>IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
+IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range</code></pre></li><li><h3>那次本来会变成查询的读</h3><pre><code>IDX.QUERY idx:cust EQ 881
 -&gt; 1) &quot;0&quot;                       # cursor
    2) 1) &quot;order:1001&quot;  2) &quot;881&quot;
-      3) &quot;order:1002&quot;  4) &quot;881&quot;
-
-# two conditions at once
-IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
+      3) &quot;order:1002&quot;  4) &quot;881&quot;</code></pre></li><li><h3>两个条件一起查</h3><pre><code>IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
 -&gt; 1) &quot;0&quot;
-   2) 1) 1) &quot;order:1001&quot;
-
-# a VIEW keeps the answer ready on the WRITE path, so the read
-# never recomputes it. (the parens are separate arguments.)
-VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open )  ORDER BY idx:cust
-VIEW.QUERY  v:open881
--&gt; 1) &quot;0&quot;
-   2) 1) &quot;order:1001&quot;  2) &quot;881&quot;
-</code></pre></figure>
+   2) 1) 1) &quot;order:1001&quot;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p><b>索引的账是每次写的时候付的</b>，不是读的时候——对读多的服务路径这是对的交易，对写多的日志是错的。<b>这里没有 join</b>，以后也不会有：索引回答的是“哪些 key 匹配这些字段”，不是“把这两个集合连起来”。如果你的读确实需要 join，就把它留在 Postgres 里——<a href="../../../zh/docs/rds-workloads/">关系型负载那一页</a>写着哪些读属于这种情况。</p></div>
 </section>
 <section class="band">
-  <div class="call loss">
-    <span class="h">代价是什么</span>
-    <p><b>索引和视图的账，是每次写的时候付的</b>，不是读的时候——这就是这笔交易。对读多的服务路径，它是对的；对写多的日志，它是错的。<b>这里没有 join</b>，以后也不会有：索引回答的是哪些 key 匹配了这些字段，而不是把两个集合连起来。如果你的读确实需要 join，就把它留在 Postgres 里。我们把<a href="../../../zh/docs/rds-workloads/">每一种关系型负载在这里的代价</a>都写下来了，包括那些答案是别搬的。</p>
-  </div>
+  <div class="sec-h"><h2>把一个持续更新的答案备好</h2><p class="sec-lede">一个带过滤、带排序的列表，由写路径一直维持着——读永远不用重算它，因为它从来没有过期过。</p></div>
+  <ol class="steps recipe"><li><h3>在同样的索引上声明视图</h3><p>括号是各自独立的参数。</p><pre><code>VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open )  ORDER BY idx:cust
+-&gt; OK</code></pre></li><li><h3>读它——这里什么都不用算</h3><pre><code>VIEW.QUERY  v:open881
+-&gt; 1) &quot;0&quot;
+   2) 1) &quot;order:1001&quot;  2) &quot;881&quot;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p>视图是<b>写路径上一直要干的活</b>：每一次对匹配 key 的写都会更新它，不管今天有没有人来读。只为应用真正在对外服务的那些读声明视图，不再服务的就删掉。视图要组合的那些索引，必须先存在。</p></div>
 </section>
 <section class="band"><div class="sec-h"><h2>接下来</h2></div><div class="cards"><a class="card" href="../../../zh/docs/designing-on-kevy/">
       <span class="card-k">指南</span>

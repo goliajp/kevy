@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>リアルタイムと pub/sub — kevy</title>
 <meta name="description" content="kevy の pub/sub によるチャット、プレゼンス、通知、ライブダッシュボード。追いつけない購読者に何が起きるのかも含めて。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -48,42 +48,29 @@
   </div></section>
 <section class="band prose"><h2>なぜ向いているのか——そして、どこで向いていないのか</h2><p>pub/sub は投げっぱなしです。メッセージは<b>その瞬間に</b>購読している相手へ届きます。1 秒後に接続した人が受け取ることは決してなく、確認応答もありません。プレゼンスの ping やライブなカウンタにはまさに正しく、失って困るものには、まさに間違っています。</p><p><b>メッセージを失うことが問題なら、代わりにストリームを使ってください</b>——<a href="../../../ja/use/queue/">キュー</a>を参照してください。ストリームは履歴を保持し、コンシューマグループに対応し、オフラインだったクライアントが追いつけます。pub/sub は安い手段であり、その安さが、取引の条件です。</p></section>
 <section class="band">
-  <div class="sec-h"><h2>手順</h2></div>
-  <figure class="code"><figcaption>チャネルと、その一族をまとめて扱うためのパターン。</figcaption><pre><code># subscriber
-SUBSCRIBE room:42
-PSUBSCRIBE room:*          # every room, one connection
-
-# publisher — returns how many subscribers received it
-PUBLISH room:42 &#x27;{&quot;user&quot;:&quot;ada&quot;,&quot;text&quot;:&quot;hello&quot;}&#x27;
--&gt; (integer) 3
-
-# presence: the TTL does the expiry, the client refreshes every 10 s
-SET presence:ada online EX 30
-
-# who is here. on a large keyspace prefer a set:
-SADD online ada
+  <div class="sec-h"><h2>聞いている全員へ、メッセージをファンアウトする</h2><p class="sec-lede">1 回の publish が、その瞬間につながっているすべての購読者に届きます——チャットルーム、通知、ライブなカウンタ。</p></div>
+  <ol class="steps recipe"><li><h3>各クライアントが購読する</h3><p>PSUBSCRIBE なら、チャネルの一族まるごとを 1 本の接続で受け取れます。</p><pre><code>SUBSCRIBE room:42
+PSUBSCRIBE room:*          # every room, one connection</code></pre></li><li><h3>publish する——返答が聴衆の数</h3><pre><code>PUBLISH room:42 &#x27;{&quot;user&quot;:&quot;ada&quot;,&quot;text&quot;:&quot;hello&quot;}&#x27;
+-&gt; (integer) 3             # how many subscribers received it</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p><b>遅い購読者は、いつまでもバッファされるのではなく、切り捨てられます。</b>クライアントが追いつけない場合、そのメッセージは、サーバーのメモリを際限なく増やす代わりに破棄されます。意図した選択であり、配信を当てにする前に知っておくべきことです。確認応答も、再送もありません——どちらかが必要なら、必要なのはチャネルではなくストリームです。<a href="../../../ja/docs/pubsub/">pub/sub のガイド</a>に、限界を具体的に書いてあります。</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>プレゼンス——いま誰がオンラインか</h2><p class="sec-lede">帳簿づけはエンジンの期限切れに任せます。静かになったクライアントは、ひとりでに名簿から落ちます。</p></div>
+  <ol class="steps recipe"><li><h3>ハートビート——寿命つきのキー</h3><p>クライアントは 10 秒ごとに更新します。更新をやめた者から、期限が切れます。</p><pre><code>SET presence:ada online EX 30
+-&gt; OK</code></pre></li><li><h3>名簿は、セットで</h3><pre><code>SADD online ada
+-&gt; (integer) 1
 SMEMBERS online
-SREM online ada</code></pre></figure>
+SREM online ada            # on clean disconnect</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p>TTL によるプレゼンスは<b>最終的に</b>正しくなるものです。クラッシュしたクライアントは、最長で TTL のあいだオンラインに見えます——30 秒という値は、どこまでの古さに耐えられるかに合わせて決めてください。また <code>SMEMBERS</code> はセット全体を 1 回の返答で返します。数百万人の名簿なら、代わりに <code>SSCAN</code> でページをめくってください。</p></div>
 </section>
 <section class="band">
-  <div class="sec-h"><h2>同じことを、ブラウザのタブで</h2></div>
-  <figure class="code"><figcaption>同一オリジンの 2 つのタブ。サーバーも WebSocket もありません。橋渡しは BroadcastChannel で、絞り込みはエンジンの中で行われます。</figcaption><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
+  <div class="sec-h"><h2>同じことを、2 つのブラウザタブの間で</h2><p class="sec-lede">同一オリジンの 2 つのタブ。片方で publish すれば、もう片方が描画します。サーバーも、WebSocket も、接続の状態管理もありません。</p></div>
+  <ol class="steps recipe"><li><h3>それぞれのタブでエンジンを開く</h3><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
 
-const db = await open({ persist: { name: &quot;app&quot; } });
-
-// tab A
-db.subscribe(&quot;room:42&quot;, (payload, channel) =&gt; {
+const db = await open({ persist: { name: &quot;app&quot; } });</code></pre></li><li><h3>タブ A が購読する</h3><pre><code>db.subscribe(&quot;room:42&quot;, (payload, channel) =&gt; {
   render(JSON.parse(new TextDecoder().decode(payload)));
-});
-
-// tab B — tab A receives it
-db.publish(&quot;room:42&quot;, JSON.stringify({ user: &quot;ada&quot;, text: &quot;hello&quot; }));</code></pre></figure>
-</section>
-<section class="band">
-  <div class="call loss">
-    <span class="h">何を差し出すことになるか</span>
-    <p><b>遅い購読者は、いつまでも待たれるのではなく、切り捨てられます。</b>クライアントが追いつけない場合、そのメッセージは、サーバーのメモリを際限なく増やす代わりに破棄されます。意図した選択であり、配信を当てにする前に知っておくべきことです。確認応答も、再送もありません。<b>そのどちらかが必要なら、必要なのはチャネルではなくストリームです。</b><a href="../../../ja/docs/pubsub/">pub/sub のガイド</a>に、限界を具体的に書いてあります。</p>
-  </div>
+});</code></pre></li><li><h3>タブ B が publish する——タブ A が描画する</h3><pre><code>db.publish(&quot;room:42&quot;, JSON.stringify({ user: &quot;ada&quot;, text: &quot;hello&quot; }));</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p>橋渡しは <code>BroadcastChannel</code> なので、届く範囲は<b>同じ端末の、同一オリジンのタブ</b>です——絞り込みはエンジンの中で行われますが、端末をまたぐのはサーバーの仕事です。いますぐ試せます。<a href="../../../ja/play/">playground</a> を 2 つのタブで開いて、どちらからでも publish してみてください。</p></div>
 </section>
 <section class="band"><div class="sec-h"><h2>次に</h2></div><div class="cards"><a class="card" href="../../../ja/docs/pubsub/">
       <span class="card-k">ガイド</span>

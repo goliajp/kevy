@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cache and sessions — kevy</title>
-<meta name="description" content="Sessions, hot rows, rate limits and feature flags in kevy: why it fits, what it costs, and the commands to do it.">
-<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<meta name="description" content="Sessions, hot rows, rate limits and feature flags in kevy: the task, the commands, and what each one costs.">
+<link rel="stylesheet" href="../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,33 +46,40 @@
     <p class="lede">Sessions, rate limits, feature flags, the hot row every request reads. They are in Postgres in most applications, and they are the rows getting hammered — not because a database is bad at them, but because <b>they were never questions. You already know the key.</b></p>
     
   </div></section>
-<section class="band prose"><h2>Why this fits</h2><p>Every one of these has the same shape: a key you already hold, a small value, and a lifetime. kevy does the lookup in O(1), expires the key itself without a cron job, and does several million of them a second on one machine.</p><p>The part people underrate is the <b>expiry</b>. A cache built on a database needs a sweeper, and the sweeper is where the bugs live. Here the engine drops the key when its time is up, whether or not anyone asks for it.</p></section>
+<section class="band prose"><h2>Why this fits</h2><p>Every one of these has the same shape: a key you already hold, a small value, and a lifetime. kevy does the lookup in O(1), expires the key itself without a cron job, and does several million of them a second on one machine.</p><p>The part people underrate is the <b>expiry</b>. A cache built on a database needs a sweeper, and the sweeper is where the bugs live. Here the engine drops the key when its time is up, whether or not anyone asks for it. Four tasks below — each one is pasteable into <code>redis-cli</code> against a running kevy.</p></section>
 <section class="band">
-  <div class="sec-h"><h2>How</h2></div>
-  <figure class="code"><figcaption>Every command below is real. Paste them into redis-cli against a running kevy.</figcaption><pre><code># a session that cleans itself up
-SET session:7f3a &#x27;{&quot;user&quot;:&quot;ada&quot;,&quot;role&quot;:&quot;admin&quot;}&#x27; EX 3600
-GET session:7f3a
-TTL session:7f3a          -&gt; 3599
-
-# a rate limit: one counter per client, expiring on a window
-INCR   rate:203.0.113.7   -&gt; 1
-EXPIRE rate:203.0.113.7 60
-INCR   rate:203.0.113.7   -&gt; 2      (the window survives)
-
-# feature flags: read constantly, written rarely, joined never
-HSET  flags new-checkout on dark-mode on beta-search off
-HGET  flags new-checkout  -&gt; &quot;on&quot;
-HGETALL flags
-
-# a cached row, invalidated by the writer rather than by a timer
-SET   user:881 &quot;$json&quot; EX 300
-DEL   user:881            # after you write to Postgres</code></pre></figure>
+  <div class="sec-h"><h2>A session that cleans itself up</h2><p class="sec-lede">One key per session, gone by itself an hour after the last touch — no sweeper, no cron job, no expired-rows table.</p></div>
+  <ol class="steps recipe"><li><h3>Write the session with its lifetime</h3><pre><code>SET session:7f3a &#x27;{&quot;user&quot;:&quot;ada&quot;,&quot;role&quot;:&quot;admin&quot;}&#x27; EX 3600
+-&gt; OK</code></pre></li><li><h3>Read it on every request</h3><pre><code>GET session:7f3a
+-&gt; &quot;{\&quot;user\&quot;:\&quot;ada\&quot;,\&quot;role\&quot;:\&quot;admin\&quot;}&quot;
+TTL session:7f3a
+-&gt; (integer) 3599</code></pre></li><li><h3>Sliding expiry: refresh on activity</h3><p>Touch the clock, not the value — the session dies one hour after the user goes quiet, not one hour after login.</p><pre><code>EXPIRE session:7f3a 3600
+-&gt; (integer) 1</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p>A session is one key, so every step here is O(1) and atomic. If you spread one user's state across several keys, atomicity ends at the shard — co-locate them with a <code>{hashtag}</code> in the key.</p></div>
 </section>
 <section class="band">
-  <div class="call loss">
-    <span class="h">What it costs you</span>
-    <p>A cache is a second copy of the truth, and it can be wrong. kevy does not solve that — nothing does. <b>Invalidate on write, not on a timer</b>, and keep the TTL as a backstop rather than as the plan. And note that a multi-key <code>MSET</code> or <code>DEL</code> is atomic only within one shard: if two keys must change together, co-locate them with a <code>{hashtag}</code>.</p>
-  </div>
+  <div class="sec-h"><h2>Rate-limit an endpoint</h2><p class="sec-lede">One counter per client per window; the 101st request inside a minute gets told no.</p></div>
+  <ol class="steps recipe"><li><h3>Count the request</h3><pre><code>INCR rate:203.0.113.7
+-&gt; (integer) 1</code></pre></li><li><h3>Start the window on the first hit</h3><p>Only when the reply was 1 — later requests ride the window that already exists.</p><pre><code>EXPIRE rate:203.0.113.7 60
+-&gt; (integer) 1</code></pre></li><li><h3>Refuse past the limit</h3><p>Your handler returns 429 when the counter passes the limit. The window keeps counting.</p><pre><code>INCR rate:203.0.113.7
+-&gt; (integer) 2      (the window survives)</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p>This is a <b>fixed</b> window, not a sliding one: a burst straddling the boundary can pass up to twice the limit in a short stretch. For abuse control that is fine and the whole thing is two O(1) commands; if you need smoother shaping, spend more keys, not a new system.</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>Feature flags, read on every request</h2><p class="sec-lede">All flags in one hash: one O(1) read on the hot path, one write to flip a flag for everyone.</p></div>
+  <ol class="steps recipe"><li><h3>Set the flags</h3><pre><code>HSET flags new-checkout on dark-mode on beta-search off
+-&gt; (integer) 3</code></pre></li><li><h3>Read one on the hot path</h3><pre><code>HGET flags new-checkout
+-&gt; &quot;on&quot;</code></pre></li><li><h3>Flip one, everywhere, now</h3><pre><code>HSET flags beta-search on
+-&gt; (integer) 0      (0 = updated, not added)
+HGETALL flags</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p>One hash lives on one shard, so one shard answers every flag read. At flag-read rates that is still millions a second; if it ever becomes the hot spot, split the hash by surface or team.</p></div>
+</section>
+<section class="band">
+  <div class="sec-h"><h2>Cache a row your database owns</h2><p class="sec-lede">The hot row served from memory; Postgres stays the truth and the copy can never outlive its backstop.</p></div>
+  <ol class="steps recipe"><li><h3>On a read miss, fill with a backstop TTL</h3><pre><code>SET user:881 &quot;$json&quot; EX 300
+-&gt; OK</code></pre></li><li><h3>Serve reads from the copy</h3><pre><code>GET user:881</code></pre></li><li><h3>On write, invalidate — do not wait for the timer</h3><p>Delete after the database write commits. The next read misses, refills, and is correct.</p><pre><code>DEL user:881
+-&gt; (integer) 1</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p>A cache is a second copy of the truth, and it can be wrong — nothing solves that. <b>Invalidate on write, not on a timer</b>, and keep the TTL as the backstop rather than the plan. A multi-key <code>DEL</code> or <code>MSET</code> is atomic only within one shard: if two keys must change together, co-locate them with a <code>{hashtag}</code>.</p></div>
 </section>
 <section class="band"><div class="sec-h"><h2>Next</h2></div><div class="cards"><a class="card" href="../../docs/cookbook/">
       <span class="card-k">Guide</span>

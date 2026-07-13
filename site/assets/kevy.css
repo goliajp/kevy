@@ -868,6 +868,11 @@ pre.hero-code code {
   white-space: pre;
 }
 
+/* recipes: each task carries its own cost box, spaced off the step grid */
+.r-cost {
+  margin-top: 18px;
+}
+
 /* ── code figure ───────────────────────────────────────────────────────── */
 
 figure.code {

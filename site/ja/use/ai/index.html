@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AI アプリケーションのためのストレージ — kevy</title>
 <meta name="description" content="ベクトル検索、全文検索、変更フィードを、すでにデータを持っているストアの中で。kevy が AI アプリケーションに与えるものと、与えないもの。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,44 +46,31 @@
     <p class="lede">RAG やエージェントの記憶は、たいてい 3 つのシステムを意味します。キャッシュ、ベクトルデータベース、検索インデックス——同じ事実が 3 つにあり、互いにずれていきます。<b>kevy は、ベクトル KNN、BM25 全文検索、変更フィードをエンジンに持っています</b>。すでに書いたキーの上で、そのまま動きます。</p>
     
   </div></section>
-<section class="band prose"><h2>なぜ向いているのか</h2><p>RAG のスタックで高くつくのは、検索ではありません。真実の 3 つのコピーを、歩調を合わせて保つことです。文書を書いたら、それを埋め込み、索引に入れ、キャッシュを無効化することを、忘れずにやらなければなりません。そのどれもが、忘れうる場所です。</p><p><b>kevy では、インデックスはパイプラインではなく宣言です。</b>どのキーの、どのフィールドかをエンジンに伝えれば、書き込みの側がインデックスを最新に保ちます。あとから実行するものはなく、遅れていくものもありません。</p><p><b>kevy がやらないのは、埋め込みを作ることです。</b>エンジンにモデルはなく、今後も持ちません。推論はストレージエンジンの仕事ではありませんし、そうしてしまえば、ベクトルの形式が私たちのリリース周期に縛られます。ベクトルはあなたが持ち込み、kevy がそれを保存し、索引を張り、検索します。</p></section>
+<section class="band prose"><h2>なぜ向いているのか</h2><p>RAG のスタックで高くつくのは、検索ではありません。真実の 3 つのコピーを、歩調を合わせて保つことです。文書を書いたら、それを埋め込み、索引に入れ、キャッシュを無効化することを、忘れずにやらなければなりません。そのどれもが、忘れうる場所です。</p><p><b>kevy では、インデックスはパイプラインではなく宣言です。</b>どのキーの、どのフィールドかをエンジンに伝えれば、書き込みパスがインデックスを最新に保ちます。あとから実行するものはなく、遅れていくものもありません。</p><p><b>kevy がやらないのは、埋め込みを作ることです。</b>エンジンにモデルはなく、今後も持ちません。推論はストレージエンジンの仕事ではありませんし、そうしてしまえば、ベクトルの形式が私たちのリリース周期に縛られます。ベクトルはあなたが持ち込み、kevy がそれを保存し、索引を張り、検索します。</p></section>
 <section class="band">
-  <div class="sec-h"><h2>手順——ベクトル検索</h2></div>
-  <figure class="code"><figcaption>キーのフィールドに張る HNSW インデックス。一度宣言すれば、あとは書き込みの側が最新に保ちます。</figcaption><pre><code># declare it once. the engine backfills, and answers
-# INDEXBUILDING while it does.
-IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann  DIM 768 DISTANCE cosine M 16 EF 200
-
-# write a document the way you already write documents
-HSET doc:4410 title &quot;Ada on pipelining&quot; vec &quot;&lt;768 f32, little-endian&gt;&quot;
-
-# nearest ten. no separate system, no sync step.
-IDX.QUERY idx:sem KNN &quot;&lt;query vector&gt;&quot; LIMIT 10
+  <div class="sec-h"><h2>キーを、意味で検索する</h2><p class="sec-lede">すでに書いているキーのフィールドに対する KNN。一度宣言すれば、あとは書き込みパスが最新に保ちます。同期するものはありません。</p></div>
+  <ol class="steps recipe"><li><h3>インデックスを一度だけ宣言する</h3><p>エンジンが既存のキーを埋め戻します。その間の問い合わせには INDEXBUILDING を返します。</p><pre><code>IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann  DIM 768 DISTANCE cosine M 16 EF 200
+-&gt; OK</code></pre></li><li><h3>文書は、いままでどおり書く</h3><pre><code>HSET doc:4410 title &quot;Ada on pipelining&quot; vec &quot;&lt;768 f32, little-endian&gt;&quot;</code></pre></li><li><h3>近い順に 10 件</h3><pre><code>IDX.QUERY idx:sem KNN &quot;&lt;query vector&gt;&quot; LIMIT 10
 -&gt; 1) doc:4410
-   2) doc:9982</code></pre></figure>
+   2) doc:9982</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p><b>インデックスは HNSW で、近似です</b>。再現率は保証ではなく、調整のためのパラメータ(<code>EF</code>)です。最初の構築は、合致するキーに対して O(N) です——行き当たるのではなく、計画してください。そして<b>埋め込みモデルはありません</b>。ベクトルは、あなたが持ち込みます。調整のつまみは<a href="../../../ja/docs/vector-search/">ベクトルのガイド</a>にあります。</p></div>
 </section>
 <section class="band">
-  <div class="sec-h"><h2>手順——全文検索、そして両者の併用</h2></div>
-  <figure class="code"><figcaption>同じキーに対する BM25、両方のランキングを融合するハイブリッドクエリ、そして追いかけられるフィード。</figcaption><pre><code>IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
-
-IDX.QUERY idx:ft MATCH &quot;pipelining&quot;
+  <div class="sec-h"><h2>全文検索、そして両方のランキングを融合する</h2><p class="sec-lede">同じキーに対する BM25。そしてテキストのランキングとベクトルのランキングを、1 つのコマンドで融合するハイブリッドクエリ。</p></div>
+  <ol class="steps recipe"><li><h3>同じキーに、テキストのインデックスを張る</h3><pre><code>IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
+-&gt; OK</code></pre></li><li><h3>マッチを、BM25 の順位つきで</h3><pre><code>IDX.QUERY idx:ft MATCH &quot;pipelining&quot;
 -&gt; 1) 1) &quot;doc:1&quot;
-      2) &quot;0.2877&quot;          # the BM25 score
-
-# hybrid: fuse the text ranking and the vector ranking (RRF)
-IDX.QUERY HYBRID idx:ft MATCH &quot;pipelining&quot; idx:sem KNN &quot;&lt;vector&gt;&quot;  LIMIT 20 RRFK 60
-
-# a change feed: tail every write from another process.
-# needs [feed] enabled = true in kevy.toml
-FEED.SHARDS                 -&gt; (integer) 16
-FEED.TAIL 0                 -&gt; 1) (integer) 1     # generation
-                               2) (integer) 1     # offset
-FEED.READ 0 1 0 COUNT 2     -&gt; the writes themselves, replayable</code></pre></figure>
+      2) &quot;0.2877&quot;          # the BM25 score</code></pre></li><li><h3>ハイブリッド——両方のランキングを融合する(RRF)</h3><pre><code>IDX.QUERY HYBRID idx:ft MATCH &quot;pipelining&quot; idx:sem KNN &quot;&lt;vector&gt;&quot;  LIMIT 20 RRFK 60</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p>インデックスの代金は、合致するキーへの<b>書き込みのたびに</b>支払います——読み取り主体の検索には正しい取引で、毎秒何千回も書き直すキーには間違った取引です。トークン化(CJK を含みます)と、BM25 がどこで止まるのかは、<a href="../../../ja/docs/text-search/">テキストのガイド</a>にあります。</p></div>
 </section>
 <section class="band">
-  <div class="call loss">
-    <span class="h">何を差し出すことになるか</span>
-    <p><b>インデックスの構築は、対象となるキーに対して O(N) です。</b>追いつくまで、インデックスは <code>INDEXBUILDING</code> を返します。最初の構築は、行き当たるのではなく計画してください。<b>ベクトルインデックスは HNSW であり、近似です</b>。再現率は保証ではなく、調整のためのパラメータ(<code>EF</code>)です。そして<b>埋め込みモデルはありません</b>。kevy が代わりに呼んでくれることを期待していたなら、それは起きません。計画を立てる前に、知っておいてください。<a href="../../../ja/docs/vector-search/">ベクトルのガイド</a>と<a href="../../../ja/docs/text-search/">テキストのガイド</a>に、具体的に書いてあります。</p>
-  </div>
+  <div class="sec-h"><h2>エージェントの記憶を、遅れさせない</h2><p class="sec-lede">別のプロセスから、すべての書き込みを追いかけます——スケジュールではなく変更のたびに埋め込み、止めたところから再開します。</p></div>
+  <ol class="steps recipe"><li><h3>フィードを有効にする</h3><pre><code># kevy.toml
+[feed]
+enabled = true</code></pre></li><li><h3>自分のカーソルを確かめる</h3><pre><code>FEED.SHARDS                 -&gt; (integer) 16
+FEED.TAIL 0                 -&gt; 1) (integer) 1     # generation
+                               2) (integer) 1     # offset</code></pre></li><li><h3>読み、処理し、再開する</h3><pre><code>FEED.READ 0 1 0 COUNT 2     -&gt; the writes themselves, replayable</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p>フィードはシャード単位です。<code>FEED.SHARDS</code> が、あなたの持つカーソルの数を教え、コンシューマはシャードごとにオフセットを 1 つ追跡します。既定ではオフになっており、<code>[feed]</code> をオンにすることが、書き込みパスの帳簿づけの代金です。再起動をまたぐ再開は、<a href="../../../ja/docs/cdc/">変更フィードのガイド</a>が扱っています。</p></div>
 </section>
 <section class="band">
   <div class="call note">

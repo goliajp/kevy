@@ -502,7 +502,7 @@ PAGES["choose"] = {
 
 PAGES["use/cache"] = {
     "title": "Cache and sessions — kevy",
-    "desc": "Sessions, hot rows, rate limits and feature flags in kevy: why it fits, what it costs, and the commands to do it.",
+    "desc": "Sessions, hot rows, rate limits and feature flags in kevy: the task, the commands, and what each one costs.",
     "foot": "the workload almost everyone moves first",
     "blocks": [
         {
@@ -527,43 +527,129 @@ PAGES["use/cache"] = {
                 "The part people underrate is the <b>expiry</b>. A cache built on a "
                 "database needs a sweeper, and the sweeper is where the bugs live. "
                 "Here the engine drops the key when its time is up, whether or not "
-                "anyone asks for it.",
+                "anyone asks for it. Four tasks below — each one is pasteable into "
+                "<code>redis-cli</code> against a running kevy.",
             ],
         },
         {
-            "t": "code",
-            "h2": "How",
-            "caption": "Every command below is real. Paste them into redis-cli against a running kevy.",
-            "text": """# a session that cleans itself up
-SET session:7f3a '{"user":"ada","role":"admin"}' EX 3600
-GET session:7f3a
-TTL session:7f3a          -> 3599
-
-# a rate limit: one counter per client, expiring on a window
-INCR   rate:203.0.113.7   -> 1
-EXPIRE rate:203.0.113.7 60
-INCR   rate:203.0.113.7   -> 2      (the window survives)
-
-# feature flags: read constantly, written rarely, joined never
-HSET  flags new-checkout on dark-mode on beta-search off
-HGET  flags new-checkout  -> "on"
-HGETALL flags
-
-# a cached row, invalidated by the writer rather than by a timer
-SET   user:881 "$json" EX 300
-DEL   user:881            # after you write to Postgres""",
+            "t": "recipe",
+            "h2": "A session that cleans itself up",
+            "goal": "One key per session, gone by itself an hour after the last touch — no sweeper, no cron job, no expired-rows table.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Write the session with its lifetime",
+                    "code": """SET session:7f3a '{"user":"ada","role":"admin"}' EX 3600
+-> OK""",
+                },
+                {
+                    "do": "Read it on every request",
+                    "code": """GET session:7f3a
+-> "{\\"user\\":\\"ada\\",\\"role\\":\\"admin\\"}"
+TTL session:7f3a
+-> (integer) 3599""",
+                },
+                {
+                    "do": "Sliding expiry: refresh on activity",
+                    "note": "Touch the clock, not the value — the session dies one hour after the user goes quiet, not one hour after login.",
+                    "code": """EXPIRE session:7f3a 3600
+-> (integer) 1""",
+                },
+            ],
+            "cost": (
+                "A session is one key, so every step here is O(1) and atomic. If you "
+                "spread one user's state across several keys, atomicity ends at the "
+                "shard — co-locate them with a <code>{hashtag}</code> in the key."
+            ),
         },
         {
-            "t": "callout",
-            "kind": "loss",
-            "title": "What it costs you",
-            "body": (
-                "A cache is a second copy of the truth, and it can be wrong. kevy does "
-                "not solve that — nothing does. <b>Invalidate on write, not on a "
-                "timer</b>, and keep the TTL as a backstop rather than as the plan. "
-                "And note that a multi-key <code>MSET</code> or <code>DEL</code> is "
-                "atomic only within one shard: if two keys must change together, "
-                "co-locate them with a <code>{hashtag}</code>."
+            "t": "recipe",
+            "h2": "Rate-limit an endpoint",
+            "goal": "One counter per client per window; the 101st request inside a minute gets told no.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Count the request",
+                    "code": """INCR rate:203.0.113.7
+-> (integer) 1""",
+                },
+                {
+                    "do": "Start the window on the first hit",
+                    "note": "Only when the reply was 1 — later requests ride the window that already exists.",
+                    "code": """EXPIRE rate:203.0.113.7 60
+-> (integer) 1""",
+                },
+                {
+                    "do": "Refuse past the limit",
+                    "note": "Your handler returns 429 when the counter passes the limit. The window keeps counting.",
+                    "code": """INCR rate:203.0.113.7
+-> (integer) 2      (the window survives)""",
+                },
+            ],
+            "cost": (
+                "This is a <b>fixed</b> window, not a sliding one: a burst straddling "
+                "the boundary can pass up to twice the limit in a short stretch. For "
+                "abuse control that is fine and the whole thing is two O(1) commands; "
+                "if you need smoother shaping, spend more keys, not a new system."
+            ),
+        },
+        {
+            "t": "recipe",
+            "h2": "Feature flags, read on every request",
+            "goal": "All flags in one hash: one O(1) read on the hot path, one write to flip a flag for everyone.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Set the flags",
+                    "code": """HSET flags new-checkout on dark-mode on beta-search off
+-> (integer) 3""",
+                },
+                {
+                    "do": "Read one on the hot path",
+                    "code": """HGET flags new-checkout
+-> "on\"""",
+                },
+                {
+                    "do": "Flip one, everywhere, now",
+                    "code": """HSET flags beta-search on
+-> (integer) 0      (0 = updated, not added)
+HGETALL flags""",
+                },
+            ],
+            "cost": (
+                "One hash lives on one shard, so one shard answers every flag read. "
+                "At flag-read rates that is still millions a second; if it ever "
+                "becomes the hot spot, split the hash by surface or team."
+            ),
+        },
+        {
+            "t": "recipe",
+            "h2": "Cache a row your database owns",
+            "goal": "The hot row served from memory; Postgres stays the truth and the copy can never outlive its backstop.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "On a read miss, fill with a backstop TTL",
+                    "code": """SET user:881 "$json" EX 300
+-> OK""",
+                },
+                {
+                    "do": "Serve reads from the copy",
+                    "code": """GET user:881""",
+                },
+                {
+                    "do": "On write, invalidate — do not wait for the timer",
+                    "note": "Delete after the database write commits. The next read misses, refills, and is correct.",
+                    "code": """DEL user:881
+-> (integer) 1""",
+                },
+            ],
+            "cost": (
+                "A cache is a second copy of the truth, and it can be wrong — nothing "
+                "solves that. <b>Invalidate on write, not on a timer</b>, and keep the "
+                "TTL as the backstop rather than the plan. A multi-key <code>DEL</code> "
+                "or <code>MSET</code> is atomic only within one shard: if two keys "
+                "must change together, co-locate them with a <code>{hashtag}</code>."
             ),
         },
         {
@@ -614,62 +700,79 @@ PAGES["use/queue"] = {
             ],
         },
         {
-            "t": "code",
-            "h2": "How — a list, for work you can redo",
-            "caption": "The worker blocks. No polling loop, no sleep, no thundering herd.",
-            "text": """# producer
-LPUSH jobs:email '{"to":"ada@example.com","tpl":"welcome"}'
-
-# worker — blocks until there is something, up to 30 seconds
-BRPOP jobs:email 30
+            "t": "recipe",
+            "h2": "A list, for work you can redo",
+            "goal": "Producers push; a blocked worker wakes the moment there is work. Two commands, no polling loop, no scheduler.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Producer: push the job",
+                    "code": """LPUSH jobs:email '{"to":"ada@example.com","tpl":"welcome"}'
+-> (integer) 1""",
+                },
+                {
+                    "do": "Worker: block until there is one",
+                    "note": "No polling loop, no sleep, no thundering herd — the pop returns the instant a job arrives, or after 30 seconds empty-handed.",
+                    "code": """BRPOP jobs:email 30
 -> 1) "jobs:email"
-   2) "{\\"to\\":\\"ada@example.com\\",\\"tpl\\":\\"welcome\\"}"
-
-# a delayed job: the score is when it is due.
-# ZPOPMIN.BELOW is kevy's own — it takes only what is actually due,
-# and stops at the first job that is not.
-ZADD jobs:due 1783875499 '{"id":"j-91"}'
+   2) "{\\"to\\":\\"ada@example.com\\",\\"tpl\\":\\"welcome\\"}\"""",
+                },
+                {
+                    "do": "Delayed jobs: the score is the due time",
+                    "note": "ZPOPMIN.BELOW is kevy's own — it takes only what is actually due and stops at the first job that is not.",
+                    "code": """ZADD jobs:due 1783875499 '{"id":"j-91"}'
+-> (integer) 1
 ZPOPMIN.BELOW jobs:due 1783875500
--> 1) the job payload
-   2) 1783875499
-""",
+-> the job payload, only if it is due""",
+                },
+            ],
+            "cost": (
+                "<b>A popped job that its worker never finishes is gone.</b> That is "
+                "the trade for this being two commands — take it only for work you can "
+                "redo. And on a multi-shard server, <code>BLPOP</code> across several "
+                "keys does not honour Redis's strict left-to-right priority: keys on "
+                "the connection's own shard are served first."
+            ),
         },
         {
-            "t": "code",
-            "h2": "How — a stream, for work you cannot lose",
-            "caption": "The message stays pending until a worker acknowledges it. A dead worker's job is reclaimable.",
-            "text": """# once, at setup
-XGROUP CREATE jobs:pay g1 $ MKSTREAM
-
-# producer
-XADD jobs:pay * order 4410 amount 8400
-
-# worker: read, then work, then acknowledge
-XREADGROUP GROUP g1 worker-3 COUNT 1 BLOCK 5000 STREAMS jobs:pay >
-XACK jobs:pay g1 1783875499458-0
-
-# the worker died before XACK. another one takes over:
-XAUTOCLAIM jobs:pay g1 worker-7 60000 0-0
+            "t": "recipe",
+            "h2": "A stream, for work you cannot lose",
+            "goal": "Each job goes to exactly one worker and stays pending until acknowledged. A dead worker's job is reclaimable, with its full history intact.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Once, at setup: create the group",
+                    "code": """XGROUP CREATE jobs:pay g1 $ MKSTREAM
+-> OK""",
+                },
+                {
+                    "do": "Producer: append the job",
+                    "code": """XADD jobs:pay * order 4410 amount 8400
+-> "1783875499458-0\"""",
+                },
+                {
+                    "do": "Worker: read, work, then acknowledge",
+                    "note": "The ID you acknowledge is the one XREADGROUP handed you. Until the XACK, the job is pending — on you, on the record.",
+                    "code": """XREADGROUP GROUP g1 worker-3 COUNT 1 BLOCK 5000 STREAMS jobs:pay >
+XACK jobs:pay g1 1783875499458-0""",
+                },
+                {
+                    "do": "A worker died before XACK: reclaim its job",
+                    "code": """XAUTOCLAIM jobs:pay g1 worker-7 60000 0-0
 # claims anything idle for more than 60 s
 
-# what is still outstanding, and who has it
-XPENDING jobs:pay g1""",
-        },
-        {
-            "t": "callout",
-            "kind": "loss",
-            "title": "What it costs you",
-            "body": (
+XPENDING jobs:pay g1
+# what is still outstanding, and who has it""",
+                },
+            ],
+            "cost": (
                 "<b>A stream is not free.</b> Trimming with <code>MAXLEN</code> "
                 "recomputes the stream's weight, which is O(N) in the whole stream — "
-                "so trim on a schedule, not on every <code>XADD</code>. "
+                "trim on a schedule, not on every <code>XADD</code>. And "
                 "<code>XREADGROUP</code>'s <code>COUNT</code> bounds what you are "
                 "handed, <b>not what is scanned</b>: the entire undelivered tail is "
-                "materialised first. And on a multi-shard server, <code>BLPOP</code> "
-                "across several keys does not honour Redis's strict left-to-right "
-                "priority — keys on the connection's own shard are served first. All "
-                "of this is per-command in <a href=\"~/docs/commands/\">the "
-                "reference</a>."
+                "materialised first. Per-command detail is in "
+                "<a href=\"~/docs/commands/\">the reference</a>."
             ),
         },
         {
@@ -717,54 +820,89 @@ PAGES["use/realtime"] = {
             ],
         },
         {
-            "t": "code",
-            "h2": "How",
-            "caption": "Channels, and patterns for a whole family of them at once.",
-            "text": """# subscriber
-SUBSCRIBE room:42
-PSUBSCRIBE room:*          # every room, one connection
-
-# publisher — returns how many subscribers received it
-PUBLISH room:42 '{"user":"ada","text":"hello"}'
--> (integer) 3
-
-# presence: the TTL does the expiry, the client refreshes every 10 s
-SET presence:ada online EX 30
-
-# who is here. on a large keyspace prefer a set:
-SADD online ada
-SMEMBERS online
-SREM online ada""",
-        },
-        {
-            "t": "code",
-            "h2": "The same thing, in a browser tab",
-            "caption": "Two tabs of the same origin, no server, no WebSocket. The bridge is a BroadcastChannel and the filtering happens inside the engine.",
-            "text": """import { open } from "@goliajp/kevy";
-
-const db = await open({ persist: { name: "app" } });
-
-// tab A
-db.subscribe("room:42", (payload, channel) => {
-  render(JSON.parse(new TextDecoder().decode(payload)));
-});
-
-// tab B — tab A receives it
-db.publish("room:42", JSON.stringify({ user: "ada", text: "hello" }));""",
-        },
-        {
-            "t": "callout",
-            "kind": "loss",
-            "title": "What it costs you",
-            "body": (
+            "t": "recipe",
+            "h2": "Fan a message out to everyone listening",
+            "goal": "One publish reaches every subscriber connected at that moment — a chat room, a notification, a live counter.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Each client subscribes",
+                    "note": "PSUBSCRIBE takes a whole family of channels on one connection.",
+                    "code": """SUBSCRIBE room:42
+PSUBSCRIBE room:*          # every room, one connection""",
+                },
+                {
+                    "do": "Publish — the reply is the audience",
+                    "code": """PUBLISH room:42 '{"user":"ada","text":"hello"}'
+-> (integer) 3             # how many subscribers received it""",
+                },
+            ],
+            "cost": (
                 "<b>A slow subscriber is dropped, not buffered forever.</b> If a "
                 "client cannot keep up, its messages are discarded rather than growing "
-                "the server's memory without bound — a deliberate choice, and one you "
-                "should know about before you rely on delivery. There is no "
-                "acknowledgement and no replay. <b>If either matters, you want a "
-                "stream, not a channel.</b> "
-                "<a href=\"~/docs/pubsub/\">The pub/sub guide</a> is specific "
-                "about the limits."
+                "the server's memory without bound — a deliberate choice, and one to "
+                "know about before you rely on delivery. No acknowledgement, no "
+                "replay: if either matters, you want a stream, not a channel. "
+                "<a href=\"~/docs/pubsub/\">The pub/sub guide</a> is specific about "
+                "the limits."
+            ),
+        },
+        {
+            "t": "recipe",
+            "h2": "Presence — who is online right now",
+            "goal": "The engine's expiry does the bookkeeping: a client that goes silent falls off the roster by itself.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Heartbeat: a key with a lifetime",
+                    "note": "The client refreshes every 10 s. Whoever stops refreshing expires.",
+                    "code": """SET presence:ada online EX 30
+-> OK""",
+                },
+                {
+                    "do": "The roster, as a set",
+                    "code": """SADD online ada
+-> (integer) 1
+SMEMBERS online
+SREM online ada            # on clean disconnect""",
+                },
+            ],
+            "cost": (
+                "Presence by TTL is <b>eventually</b> right: a crashed client shows "
+                "online for up to the TTL — size the 30 s to how stale you can stand. "
+                "And <code>SMEMBERS</code> returns the whole set in one reply; on a "
+                "roster of millions, page through <code>SSCAN</code> instead."
+            ),
+        },
+        {
+            "t": "recipe",
+            "h2": "The same thing, between two browser tabs",
+            "goal": "Two tabs of the same origin: publish in one, render in the other. No server, no WebSocket, no connection state.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Open the engine in each tab",
+                    "code": """import { open } from "@goliajp/kevy";
+
+const db = await open({ persist: { name: "app" } });""",
+                },
+                {
+                    "do": "Tab A subscribes",
+                    "code": """db.subscribe("room:42", (payload, channel) => {
+  render(JSON.parse(new TextDecoder().decode(payload)));
+});""",
+                },
+                {
+                    "do": "Tab B publishes — tab A renders it",
+                    "code": """db.publish("room:42", JSON.stringify({ user: "ada", text: "hello" }));""",
+                },
+            ],
+            "cost": (
+                "The bridge is a <code>BroadcastChannel</code>, so this reaches "
+                "<b>tabs of the same origin on the same device</b> — filtering still "
+                "happens inside the engine, but crossing devices is what the server "
+                "is for. Try it now: open <a href=\"~/play/\">the playground</a> in "
+                "two tabs and publish from either one."
             ),
         },
         {
@@ -817,55 +955,97 @@ PAGES["use/ai"] = {
             ],
         },
         {
-            "t": "code",
-            "h2": "How — vector search",
-            "caption": "An HNSW index over a field of your keys. Declared once; kept current by the write path.",
-            "text": """# declare it once. the engine backfills, and answers
-# INDEXBUILDING while it does.
-IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann  DIM 768 DISTANCE cosine M 16 EF 200
-
-# write a document the way you already write documents
-HSET doc:4410 title "Ada on pipelining" vec "<768 f32, little-endian>"
-
-# nearest ten. no separate system, no sync step.
-IDX.QUERY idx:sem KNN "<query vector>" LIMIT 10
+            "t": "recipe",
+            "h2": "Search your keys by meaning",
+            "goal": "KNN over a field of the keys you already write. Declared once; the write path keeps it current, with nothing to sync.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Declare the index once",
+                    "note": "The engine backfills existing keys, answering INDEXBUILDING while it does.",
+                    "code": """IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann  DIM 768 DISTANCE cosine M 16 EF 200
+-> OK""",
+                },
+                {
+                    "do": "Write documents the way you already do",
+                    "code": """HSET doc:4410 title "Ada on pipelining" vec "<768 f32, little-endian>\"""",
+                },
+                {
+                    "do": "Nearest ten",
+                    "code": """IDX.QUERY idx:sem KNN "<query vector>" LIMIT 10
 -> 1) doc:4410
    2) doc:9982""",
+                },
+            ],
+            "cost": (
+                "<b>The index is HNSW, which is approximate</b>: recall is a tuning "
+                "parameter (<code>EF</code>), not a guarantee. The first build is "
+                "O(N) over the matching keys — plan it, do not discover it. And "
+                "<b>there is no embedding model</b>: you bring the vector. "
+                "<a href=\"~/docs/vector-search/\">The vector guide</a> has the "
+                "tuning knobs."
+            ),
         },
         {
-            "t": "code",
-            "h2": "How — full text, and the two together",
-            "caption": "BM25 over the same keys, a hybrid query that fuses both rankings, and a feed you can tail.",
-            "text": """IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
-
-IDX.QUERY idx:ft MATCH "pipelining"
+            "t": "recipe",
+            "h2": "Full text, and both rankings fused",
+            "goal": "BM25 over the same keys, and a hybrid query that fuses the text ranking with the vector ranking in one command.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "A text index over the same keys",
+                    "code": """IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
+-> OK""",
+                },
+                {
+                    "do": "Match, ranked by BM25",
+                    "code": """IDX.QUERY idx:ft MATCH "pipelining"
 -> 1) 1) "doc:1"
-      2) "0.2877"          # the BM25 score
-
-# hybrid: fuse the text ranking and the vector ranking (RRF)
-IDX.QUERY HYBRID idx:ft MATCH "pipelining" idx:sem KNN "<vector>"  LIMIT 20 RRFK 60
-
-# a change feed: tail every write from another process.
-# needs [feed] enabled = true in kevy.toml
-FEED.SHARDS                 -> (integer) 16
-FEED.TAIL 0                 -> 1) (integer) 1     # generation
-                               2) (integer) 1     # offset
-FEED.READ 0 1 0 COUNT 2     -> the writes themselves, replayable""",
+      2) "0.2877"          # the BM25 score""",
+                },
+                {
+                    "do": "Hybrid: fuse both rankings (RRF)",
+                    "code": """IDX.QUERY HYBRID idx:ft MATCH "pipelining" idx:sem KNN "<vector>"  LIMIT 20 RRFK 60""",
+                },
+            ],
+            "cost": (
+                "Indexes are paid for <b>on every write</b> to a matching key — the "
+                "right trade for read-heavy retrieval, the wrong one for a key you "
+                "rewrite thousands of times a second. Tokenisation (including CJK) "
+                "and where BM25 stops are in "
+                "<a href=\"~/docs/text-search/\">the text guide</a>."
+            ),
         },
         {
-            "t": "callout",
-            "kind": "loss",
-            "title": "What it costs you",
-            "body": (
-                "<b>An index build is O(N) over the matching keys</b>, and the index "
-                "answers <code>INDEXBUILDING</code> until it has caught up — plan the "
-                "first build, do not discover it. <b>The vector index is HNSW, which "
-                "is approximate</b>: recall is a tuning parameter (<code>EF</code>), "
-                "not a guarantee. And <b>there is no embedding model</b> — if you were "
-                "hoping kevy would call one for you, it will not, and you should know "
-                "that before you plan around it. "
-                "<a href=\"~/docs/vector-search/\">The vector guide</a> and "
-                "<a href=\"~/docs/text-search/\">the text guide</a> are specific."
+            "t": "recipe",
+            "h2": "Keep an agent's memory in step",
+            "goal": "Tail every write from another process — embed on change, not on a schedule, and resume from where you stopped.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Enable the feed",
+                    "code": """# kevy.toml
+[feed]
+enabled = true""",
+                },
+                {
+                    "do": "Find your cursors",
+                    "code": """FEED.SHARDS                 -> (integer) 16
+FEED.TAIL 0                 -> 1) (integer) 1     # generation
+                               2) (integer) 1     # offset""",
+                },
+                {
+                    "do": "Read, process, resume",
+                    "code": """FEED.READ 0 1 0 COUNT 2     -> the writes themselves, replayable""",
+                },
+            ],
+            "cost": (
+                "The feed is per shard: <code>FEED.SHARDS</code> tells you how many "
+                "cursors you own, and your consumer tracks one offset per shard. It "
+                "is off by default — flipping <code>[feed]</code> on is what buys the "
+                "write-path bookkeeping. "
+                "<a href=\"~/docs/cdc/\">The change-feed guide</a> covers resuming "
+                "across restarts."
             ),
         },
         {
@@ -928,50 +1108,70 @@ PAGES["use/app-store"] = {
             ],
         },
         {
-            "t": "code",
-            "h2": "How",
-            "caption": "Declare the index; write normally; read by the field. Every command here was run against a real server.",
-            "text": """# your data, written the way you would anyway
-HSET order:1001 customer 881 status open  total 4400
+            "t": "recipe",
+            "h2": "Look things up by a field, not the key",
+            "goal": "\"All orders for customer 881\" stays a lookup: declare an index per field, write normally, read by value.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Your data, written the way you would anyway",
+                    "code": """HSET order:1001 customer 881 status open  total 4400
 HSET order:1002 customer 881 status paid  total 8400
-HSET order:1003 customer 902 status open  total 1200
-
-# one index per field you want to look up by
-IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
-IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range
-
-# the read that would have been a query
-IDX.QUERY idx:cust EQ 881
+HSET order:1003 customer 902 status open  total 1200""",
+                },
+                {
+                    "do": "One index per field you look up by",
+                    "code": """IDX.CREATE idx:cust   ON PREFIX order: FIELD customer TYPE i64 KIND range
+IDX.CREATE idx:status ON PREFIX order: FIELD status   TYPE str KIND range""",
+                },
+                {
+                    "do": "The read that would have been a query",
+                    "code": """IDX.QUERY idx:cust EQ 881
 -> 1) "0"                       # cursor
    2) 1) "order:1001"  2) "881"
-      3) "order:1002"  4) "881"
-
-# two conditions at once
-IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
+      3) "order:1002"  4) "881\"""",
+                },
+                {
+                    "do": "Two conditions at once",
+                    "code": """IDX.QUERY COMPOSE AND idx:cust EQ 881 idx:status EQ open
 -> 1) "0"
-   2) 1) 1) "order:1001"
-
-# a VIEW keeps the answer ready on the WRITE path, so the read
-# never recomputes it. (the parens are separate arguments.)
-VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open )  ORDER BY idx:cust
-VIEW.QUERY  v:open881
--> 1) "0"
-   2) 1) "order:1001"  2) "881"
-""",
+   2) 1) 1) "order:1001\"""",
+                },
+            ],
+            "cost": (
+                "<b>Indexes are paid for on every write</b>, not on read — the right "
+                "trade for read-heavy serving, the wrong one for a write-heavy log. "
+                "<b>There are no joins</b>, and there will not be: an index answers "
+                "\"which keys match these fields\", not \"join these two "
+                "collections\". If your read genuinely needs a join, keep it in "
+                "Postgres — <a href=\"~/docs/rds-workloads/\">the RDS workloads "
+                "page</a> says which ones those are."
+            ),
         },
         {
-            "t": "callout",
-            "kind": "loss",
-            "title": "What it costs you",
-            "body": (
-                "<b>Indexes and views are paid for on every write</b>, not on read — "
-                "that is the trade, and it is the right one for read-heavy serving and "
-                "the wrong one for a write-heavy log. <b>There are no joins</b>, and "
-                "there will not be: an index answers \"which keys match these fields\", "
-                "not \"join these two collections\". If your read genuinely needs a "
-                "join, keep it in Postgres. We wrote down "
-                "<a href=\"~/docs/rds-workloads/\">what every relational workload "
-                "costs here</a>, including the ones where the answer is do not move it."
+            "t": "recipe",
+            "h2": "Keep a running answer ready",
+            "goal": "A filtered, ordered list maintained on the write path — the read never recomputes it, because it was never stale.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Declare the view over the same indexes",
+                    "note": "The parens are separate arguments.",
+                    "code": """VIEW.CREATE v:open881 QUERY ( AND idx:cust EQ 881 idx:status EQ open )  ORDER BY idx:cust
+-> OK""",
+                },
+                {
+                    "do": "Read it — nothing is computed here",
+                    "code": """VIEW.QUERY  v:open881
+-> 1) "0"
+   2) 1) "order:1001"  2) "881\"""",
+                },
+            ],
+            "cost": (
+                "A view is <b>write-path work forever</b>: every write to a matching "
+                "key updates it, whether or not anyone reads it today. Declare views "
+                "for the reads your application actually serves, and drop the ones it "
+                "stops serving. The indexes a view composes must exist first."
             ),
         },
         {
@@ -1021,59 +1221,89 @@ PAGES["use/embedded"] = {
             ],
         },
         {
-            "t": "code",
-            "h2": "How — inside a Rust program",
-            "caption": "No socket, no serialisation, no second process. Durable, and it replays its log on open.",
-            "text": """kevy-embedded = "4.0"
-
-let db = Db::open("data/")?;
+            "t": "recipe",
+            "h2": "Inside a Rust program",
+            "goal": "The store is a struct you call — no socket, no serialisation, no second process. Durable, and it replays its log on open.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Add it",
+                    "code": """# Cargo.toml
+kevy-embedded = "4.0\"""",
+                },
+                {
+                    "do": "Open, write, read",
+                    "code": """let db = Db::open("data/")?;
 db.set(b"session:7f3a", b"{\\"user\\":\\"ada\\"}", Some(Duration::from_secs(3600)))?;
-assert_eq!(db.get(b"session:7f3a")?.is_some(), true);
-
-// need other processes to reach it later? open the RESP listener
-// and your redis-cli works, without changing any of the above.
-db.listen("127.0.0.1:6379")?;""",
+assert_eq!(db.get(b"session:7f3a")?.is_some(), true);""",
+                },
+                {
+                    "do": "Need redis-cli later? Open the listener",
+                    "note": "Other processes reach the same store over RESP, without changing any of the above.",
+                    "code": """db.listen("127.0.0.1:6379")?;""",
+                },
+            ],
+            "cost": (
+                "<b>An embedded store is not shared.</b> One process owns the data "
+                "directory; if a second process needs the data, that is what the "
+                "listener above — or <a href=\"~/docs/embedded-listener/\">the full "
+                "server</a> — is for."
+            ),
         },
         {
-            "t": "code",
-            "h2": "How — in a browser tab",
-            "caption": "151 KB gzipped. Persists to the browser's own filesystem, survives a reload, and speaks pub/sub across tabs.",
-            "text": """import { open } from "@goliajp/kevy";
+            "t": "recipe",
+            "h2": "In a browser tab",
+            "goal": "151 KB gzipped. Persists to the browser's own filesystem, survives a reload, and speaks pub/sub across tabs.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Open it, persistent",
+                    "code": """import { open } from "@goliajp/kevy";
 
-const db = await open({ persist: { name: "app" } });
-
-db.set("cart:u881", JSON.stringify(items), { ttlMs: 86_400_000 });
+const db = await open({ persist: { name: "app" } });""",
+                },
+                {
+                    "do": "Write with a real TTL, read after a reload",
+                    "code": """db.set("cart:u881", JSON.stringify(items), { ttlMs: 86_400_000 });
 db.get("cart:u881");        // still there after a reload
-db.pttl("cart:u881");       // the engine expires it, not your code
-
-db.subscribe("sync", (payload) => merge(payload));   // other tabs""",
+db.pttl("cart:u881");       // the engine expires it, not your code""",
+                },
+                {
+                    "do": "Hear the other tabs",
+                    "code": """db.subscribe("sync", (payload) => merge(payload));""",
+                },
+            ],
+            "cost": (
+                "<b>localStorage is faster for a small synchronous read</b> — it is a "
+                "map in the page's own address space, and nothing built on OPFS will "
+                "beat it at that. kevy wins on everything that makes localStorage a "
+                "bad idea anyway: real TTLs, no 5 MB ceiling, byte values rather than "
+                "strings, and writes that do not block the main thread."
+            ),
         },
         {
-            "t": "code",
-            "h2": "How — on a microcontroller",
-            "caption": "no_std, no allocator, no operating system. A fixed arena you size yourself.",
-            "text": """# Cargo.toml
-kevy-store = { version = "4.0", default-features = false }
-
-# no_std, no heap: the store lives in an arena you provide
-let mut arena = [0u8; 64 * 1024];
+            "t": "recipe",
+            "h2": "On a microcontroller",
+            "goal": "no_std, no allocator, no operating system: the store lives in a fixed arena you size yourself, and CI boots it on every push.",
+            "cost_t": "Cost & limits",
+            "items": [
+                {
+                    "do": "Strip it down",
+                    "code": """# Cargo.toml
+kevy-store = { version = "4.0", default-features = false }""",
+                },
+                {
+                    "do": "Give it memory, use it",
+                    "code": """let mut arena = [0u8; 64 * 1024];
 let mut store = Store::new_in(&mut arena);
 store.set(b"temp", b"21.4")?;""",
-        },
-        {
-            "t": "callout",
-            "kind": "loss",
-            "title": "What it costs you",
-            "body": (
-                "<b>In the browser, localStorage is faster for a small synchronous "
-                "read</b> — it is a map in the page's own address space and nothing "
-                "built on OPFS will beat it at that. kevy wins on everything that makes "
-                "localStorage a bad idea anyway: real TTLs, no 5 MB ceiling, byte "
-                "values rather than strings, and writes that do not block the main "
-                "thread. <b>On a microcontroller you size the arena yourself</b> and "
-                "there is no growing it at runtime — that is what no allocator means. "
-                "And <b>an embedded store is not shared</b>: if a second process needs "
-                "the data, you want the server, or the embedded RESP listener."
+                },
+            ],
+            "cost": (
+                "<b>The arena is fixed.</b> There is no growing it at runtime — that "
+                "is what \"no allocator\" means, and sizing it is your design "
+                "decision, not the engine's. The feature tiers and what each one "
+                "costs in bytes are in <a href=\"~/docs/iot/\">the IoT guide</a>."
             ),
         },
         {

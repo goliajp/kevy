@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>给 AI 应用的存储——kevy</title>
 <meta name="description" content="向量检索、全文检索和变更流，就在已经存着你的数据的那个存储里。kevy 能给一个 AI 应用什么，又不给什么。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -46,44 +46,31 @@
     <p class="lede">RAG 和 agent 记忆通常意味着三套系统：一个缓存、一个向量数据库、一个搜索索引——同样的事实存三份，然后慢慢彼此对不上。<b>kevy 把向量 KNN、BM25 全文检索和变更流都放在引擎里</b>，直接建在你已经写进去的那些 key 上。</p>
     
   </div></section>
-<section class="band prose"><h2>为什么合适</h2><p>RAG 这一套里，贵的不是检索，而是让三份事实保持同步：你写了一篇文档，然后你还得记住去做 embedding、去建索引、去让缓存失效。这里每一步都是一个可能忘掉的地方。</p><p><b>在 kevy 里，索引是一句声明，不是一条流水线。</b>你告诉引擎是哪些 key、哪个字段，写入路径就会把索引维持在最新。事后没有东西要跑，也没有东西会落后。</p><p><b>kevy 不做的那件事，是生成 embedding。</b>引擎里没有模型，以后也不会有——推理不该待在存储引擎里，硬塞进去只会把你的向量格式绑死在我们的发版节奏上。向量由你给出；kevy 负责存它、索引它、检索它。</p></section>
+<section class="band prose"><h2>为什么合适</h2><p>RAG 这一套里，贵的不是检索，而是让三份事实保持同步：你写了一篇文档，然后你还得记住去做 embedding、去建索引、去让缓存失效。这里每一步都是一个可能忘掉的地方。</p><p><b>在 kevy 里，索引是一句声明，不是一条流水线。</b>你告诉引擎是哪些 key、哪个字段，写路径就会把索引维持在最新。事后没有东西要跑，也没有东西会落后。</p><p><b>kevy 不做的那件事，是生成 embedding。</b>引擎里没有模型，以后也不会有——推理不该待在存储引擎里，硬塞进去只会把你的向量格式绑死在我们的发版节奏上。向量由你给出；kevy 负责存它、索引它、检索它。</p></section>
 <section class="band">
-  <div class="sec-h"><h2>怎么做——向量检索</h2></div>
-  <figure class="code"><figcaption>在你的 key 的某个字段上建一个 HNSW 索引。声明一次，之后由写入路径维持最新。</figcaption><pre><code># declare it once. the engine backfills, and answers
-# INDEXBUILDING while it does.
-IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann  DIM 768 DISTANCE cosine M 16 EF 200
-
-# write a document the way you already write documents
-HSET doc:4410 title &quot;Ada on pipelining&quot; vec &quot;&lt;768 f32, little-endian&gt;&quot;
-
-# nearest ten. no separate system, no sync step.
-IDX.QUERY idx:sem KNN &quot;&lt;query vector&gt;&quot; LIMIT 10
+  <div class="sec-h"><h2>按语义检索你的 key</h2><p class="sec-lede">在你已经在写的那些 key 的某个字段上做 KNN。声明一次，写路径把它维持在最新，没有东西要同步。</p></div>
+  <ol class="steps recipe"><li><h3>把索引声明一次</h3><p>引擎会回填已有的 key，回填期间回答 INDEXBUILDING。</p><pre><code>IDX.CREATE idx:sem ON PREFIX doc: FIELD vec TYPE vector KIND ann  DIM 768 DISTANCE cosine M 16 EF 200
+-&gt; OK</code></pre></li><li><h3>照你原来的方式写文档</h3><pre><code>HSET doc:4410 title &quot;Ada on pipelining&quot; vec &quot;&lt;768 f32, little-endian&gt;&quot;</code></pre></li><li><h3>最近的十个</h3><pre><code>IDX.QUERY idx:sem KNN &quot;&lt;query vector&gt;&quot; LIMIT 10
 -&gt; 1) doc:4410
-   2) doc:9982</code></pre></figure>
+   2) doc:9982</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p><b>这个索引是 HNSW，是近似的</b>：召回率是一个可调参数（<code>EF</code>），不是一个保证。第一次构建是对匹配到的 key 做 O(N) 的工作——要提前安排，不要等它自己撞上来。还有，<b>这里没有 embedding 模型</b>：向量由你给出。<a href="../../../zh/docs/vector-search/">向量检索指南</a>里有那些可以调的参数。</p></div>
 </section>
 <section class="band">
-  <div class="sec-h"><h2>怎么做——全文检索，以及两者合用</h2></div>
-  <figure class="code"><figcaption>在同一批 key 上做 BM25，用一次混合查询把两种排序融合起来，还有一条可以持续跟读的变更流。</figcaption><pre><code>IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
-
-IDX.QUERY idx:ft MATCH &quot;pipelining&quot;
+  <div class="sec-h"><h2>全文检索，以及两种排序融合</h2><p class="sec-lede">在同一批 key 上做 BM25，再用一条混合查询，把文本排序和向量排序融合在一条命令里。</p></div>
+  <ol class="steps recipe"><li><h3>在同一批 key 上建文本索引</h3><pre><code>IDX.CREATE idx:ft ON PREFIX doc: FIELD title TYPE str KIND text
+-&gt; OK</code></pre></li><li><h3>匹配，按 BM25 排序</h3><pre><code>IDX.QUERY idx:ft MATCH &quot;pipelining&quot;
 -&gt; 1) 1) &quot;doc:1&quot;
-      2) &quot;0.2877&quot;          # the BM25 score
-
-# hybrid: fuse the text ranking and the vector ranking (RRF)
-IDX.QUERY HYBRID idx:ft MATCH &quot;pipelining&quot; idx:sem KNN &quot;&lt;vector&gt;&quot;  LIMIT 20 RRFK 60
-
-# a change feed: tail every write from another process.
-# needs [feed] enabled = true in kevy.toml
-FEED.SHARDS                 -&gt; (integer) 16
-FEED.TAIL 0                 -&gt; 1) (integer) 1     # generation
-                               2) (integer) 1     # offset
-FEED.READ 0 1 0 COUNT 2     -&gt; the writes themselves, replayable</code></pre></figure>
+      2) &quot;0.2877&quot;          # the BM25 score</code></pre></li><li><h3>混合：把两种排序融合（RRF）</h3><pre><code>IDX.QUERY HYBRID idx:ft MATCH &quot;pipelining&quot; idx:sem KNN &quot;&lt;vector&gt;&quot;  LIMIT 20 RRFK 60</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p>索引的账是在<b>每次写</b>匹配到的 key 时付的——对读多的检索这是对的交易，对一个每秒重写几千次的 key 是错的。分词（包括中日韩）和 BM25 到哪里为止，都在<a href="../../../zh/docs/text-search/">全文检索指南</a>里。</p></div>
 </section>
 <section class="band">
-  <div class="call loss">
-    <span class="h">代价是什么</span>
-    <p><b>建索引是对匹配到的 key 做 O(N) 的工作</b>，在它追平之前，索引会回答 <code>INDEXBUILDING</code>——第一次建索引要提前安排，不要等它自己撞上来。<b>向量索引是 HNSW，是近似的</b>：召回率是一个可调参数（<code>EF</code>），不是一个保证。还有，<b>这里没有 embedding 模型</b>——如果你原本指望 kevy 帮你调一个，它不会，而这件事你应该在做规划之前就知道。<a href="../../../zh/docs/vector-search/">向量检索指南</a>和<a href="../../../zh/docs/text-search/">全文检索指南</a>都写得很具体。</p>
-  </div>
+  <div class="sec-h"><h2>让 agent 的记忆跟上数据</h2><p class="sec-lede">从另一个进程持续跟读每一次写——变更时才做 embedding，不靠时刻表，还能从停下的地方续上。</p></div>
+  <ol class="steps recipe"><li><h3>打开变更流</h3><pre><code># kevy.toml
+[feed]
+enabled = true</code></pre></li><li><h3>找到你的游标</h3><pre><code>FEED.SHARDS                 -&gt; (integer) 16
+FEED.TAIL 0                 -&gt; 1) (integer) 1     # generation
+                               2) (integer) 1     # offset</code></pre></li><li><h3>读，处理，续上</h3><pre><code>FEED.READ 0 1 0 COUNT 2     -&gt; the writes themselves, replayable</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">成本与限制</span><p>变更流是按分片记的：<code>FEED.SHARDS</code> 告诉你手里有几个游标，你的消费者按分片各记一个偏移量。它默认是关的——打开 <code>[feed]</code> 才买下写路径上的这份记账。<a href="../../../zh/docs/cdc/">变更流指南</a>讲了怎么跨重启续读。</p></div>
 </section>
 <section class="band">
   <div class="call note">

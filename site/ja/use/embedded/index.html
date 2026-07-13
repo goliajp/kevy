@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kevy を組み込む — kevy</title>
 <meta name="description" content="ストアを、プログラムの中へ。デスクトップアプリ、ブラウザのタブ、エッジワーカー、OS のないマイコン。">
-<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=464ef89c">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -48,44 +48,29 @@
   </div></section>
 <section class="band prose"><h2>なぜ向いているのか</h2><p>オフラインで動く必要のあるアプリケーションは、どれも結局ストレージ層を書くことになります。デスクトップアプリは SQLite と、誰も望まなかったスキーマを手に入れます。Web アプリは localStorage を使い、5 MB の上限と、同期でしかも文字列しか扱えないという事実を知り、次に IndexedDB とその上の抽象を手に入れます。デバイスは、フラッシュ上に手書きのリングバッファを手に入れます。</p><p><b>3 つとも同じ問題であり、同じ解になりえます。</b>kevy はプロセス境界なしで組み込め、本物の TTL と pub/sub を持ったままブラウザに届き、固定 arena とアロケータなしで Cortex-M でも起動します。最後のひとつは、CI が push のたびに証明しています。</p></section>
 <section class="band">
-  <div class="sec-h"><h2>手順——Rust のプログラムの中で</h2></div>
-  <figure class="code"><figcaption>ソケットも、シリアライズも、2 つ目のプロセスもありません。永続化され、開くときにログを再生します。</figcaption><pre><code>kevy-embedded = &quot;4.0&quot;
-
-let db = Db::open(&quot;data/&quot;)?;
+  <div class="sec-h"><h2>Rust のプログラムの中で</h2><p class="sec-lede">ストアは、呼び出せる struct です——ソケットも、シリアライズも、2 つ目のプロセスもありません。永続化され、開くときにログを再生します。</p></div>
+  <ol class="steps recipe"><li><h3>追加する</h3><pre><code># Cargo.toml
+kevy-embedded = &quot;4.0&quot;</code></pre></li><li><h3>開いて、書いて、読む</h3><pre><code>let db = Db::open(&quot;data/&quot;)?;
 db.set(b&quot;session:7f3a&quot;, b&quot;{\&quot;user\&quot;:\&quot;ada\&quot;}&quot;, Some(Duration::from_secs(3600)))?;
-assert_eq!(db.get(b&quot;session:7f3a&quot;)?.is_some(), true);
-
-// need other processes to reach it later? open the RESP listener
-// and your redis-cli works, without changing any of the above.
-db.listen(&quot;127.0.0.1:6379&quot;)?;</code></pre></figure>
+assert_eq!(db.get(b&quot;session:7f3a&quot;)?.is_some(), true);</code></pre></li><li><h3>あとで redis-cli が要るなら、リスナーを開く</h3><p>他のプロセスが、同じストアに RESP で届くようになります。上のコードは、何ひとつ変わりません。</p><pre><code>db.listen(&quot;127.0.0.1:6379&quot;)?;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p><b>組み込みのストアは、共有されません。</b>データディレクトリを所有するのは 1 つのプロセスです。2 つ目のプロセスがデータを必要とするなら、そのためにあるのが上のリスナー——あるいは<a href="../../../ja/docs/embedded-listener/">フルのサーバー</a>——です。</p></div>
 </section>
 <section class="band">
-  <div class="sec-h"><h2>手順——ブラウザのタブで</h2></div>
-  <figure class="code"><figcaption>gzip 後 151 KB。ブラウザ自身のファイルシステムに永続化され、リロードにも耐え、タブをまたいで pub/sub を話します。</figcaption><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
+  <div class="sec-h"><h2>ブラウザのタブで</h2><p class="sec-lede">gzip 後 151 KB。ブラウザ自身のファイルシステムに永続化され、リロードに耐え、タブをまたいで pub/sub を話します。</p></div>
+  <ol class="steps recipe"><li><h3>永続化つきで開く</h3><pre><code>import { open } from &quot;@goliajp/kevy&quot;;
 
-const db = await open({ persist: { name: &quot;app&quot; } });
-
-db.set(&quot;cart:u881&quot;, JSON.stringify(items), { ttlMs: 86_400_000 });
+const db = await open({ persist: { name: &quot;app&quot; } });</code></pre></li><li><h3>本物の TTL で書き、リロードのあとに読む</h3><pre><code>db.set(&quot;cart:u881&quot;, JSON.stringify(items), { ttlMs: 86_400_000 });
 db.get(&quot;cart:u881&quot;);        // still there after a reload
-db.pttl(&quot;cart:u881&quot;);       // the engine expires it, not your code
-
-db.subscribe(&quot;sync&quot;, (payload) =&gt; merge(payload));   // other tabs</code></pre></figure>
+db.pttl(&quot;cart:u881&quot;);       // the engine expires it, not your code</code></pre></li><li><h3>他のタブの声を聞く</h3><pre><code>db.subscribe(&quot;sync&quot;, (payload) =&gt; merge(payload));</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p><b>小さな同期の読み取りなら、localStorage のほうが速いです</b>——あれはページ自身のアドレス空間にあるマップであり、OPFS の上に作られたものが、そこで勝つことはありません。kevy が勝つのは、そもそも localStorage を選ぶべきでない理由のほうです。本物の TTL、5 MB の上限がないこと、値が文字列ではなくバイト列であること、そして書き込みがメインスレッドを止めないこと。</p></div>
 </section>
 <section class="band">
-  <div class="sec-h"><h2>手順——マイコンの上で</h2></div>
-  <figure class="code"><figcaption>no_std、アロケータなし、OS なし。大きさを自分で決める、固定の arena。</figcaption><pre><code># Cargo.toml
-kevy-store = { version = &quot;4.0&quot;, default-features = false }
-
-# no_std, no heap: the store lives in an arena you provide
-let mut arena = [0u8; 64 * 1024];
+  <div class="sec-h"><h2>マイコンの上で</h2><p class="sec-lede">no_std、アロケータなし、OS なし。ストアは、大きさを自分で決める固定の arena に住みます。CI が push のたびに、これを起動させています。</p></div>
+  <ol class="steps recipe"><li><h3>そぎ落とす</h3><pre><code># Cargo.toml
+kevy-store = { version = &quot;4.0&quot;, default-features = false }</code></pre></li><li><h3>メモリを渡して、使う</h3><pre><code>let mut arena = [0u8; 64 * 1024];
 let mut store = Store::new_in(&amp;mut arena);
-store.set(b&quot;temp&quot;, b&quot;21.4&quot;)?;</code></pre></figure>
-</section>
-<section class="band">
-  <div class="call loss">
-    <span class="h">何を差し出すことになるか</span>
-    <p><b>ブラウザでは、小さな同期の読み取りなら localStorage のほうが速いです</b>——あれはページ自身のアドレス空間にあるマップであり、OPFS の上に作られたものが、そこで勝つことはありません。kevy が勝つのは、そもそも localStorage を選ぶべきでない理由のほうです。本物の TTL、5 MB の上限がないこと、値が文字列ではなくバイト列であること、書き込みがメインスレッドを止めないこと。<b>マイコンでは、arena の大きさを自分で決めます</b>し、実行中に広げることはできません。アロケータがないとは、そういうことです。そして<b>組み込みのストアは共有されません</b>。2 つ目のプロセスがデータを必要とするなら、必要なのはサーバーか、組み込みの RESP リスナーです。</p>
-  </div>
+store.set(b&quot;temp&quot;, b&quot;21.4&quot;)?;</code></pre></li></ol>
+  <div class="call loss r-cost"><span class="h">コストと制約</span><p><b>arena は固定です。</b>実行中に広げることはできません——「アロケータなし」とは、そういうことです。大きさを決めるのはエンジンではなく、あなたの設計です。機能の段階と、それぞれが何バイト要るのかは、<a href="../../../ja/docs/iot/">IoT のガイド</a>にあります。</p></div>
 </section>
 <section class="band"><div class="sec-h"><h2>次に</h2></div><div class="cards"><a class="card" href="../../../ja/docs/wasm/">
       <span class="card-k">ガイド</span>
