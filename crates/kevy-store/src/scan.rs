@@ -4,6 +4,8 @@
 //! semantics (expiry, `MATCH` glob, `TYPE` filter) and the `COUNT`
 //! work bound.
 
+#[cfg(not(feature = "std"))]
+use crate::nostd_prelude::*;
 use crate::{Store, glob_match, now_ns};
 
 /// Buckets visited per [`kevy_map::KevyMap::scan_step`] call (one home
