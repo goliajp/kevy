@@ -22,6 +22,11 @@ KBIN=${1:?usage: availgate.sh <kevy-binary>}
 KBIN=$(cd "$(dirname "$KBIN")" && pwd)/$(basename "$KBIN")
 cd "$(dirname "$0")/.."
 CLI=target/release/kevy-cli
+# Every CLI call bounded: a server wedged into accept-but-never-reply
+# turns a gate into a silent multi-hour hang on CI (seen twice on the
+# contract job). With coreutils timeout the call fails loudly at the
+# exact clamp instead; macOS dev boxes (no timeout) run unbounded.
+command -v timeout >/dev/null 2>&1 && CLI="timeout 15 $CLI"
 [ -x "$CLI" ] || CLI=target/debug/kevy-cli
 # Replication listens at port+10000 for NSHARDS consecutive ports —
 # keep client ports ≥ nshards apart or the two servers' replication

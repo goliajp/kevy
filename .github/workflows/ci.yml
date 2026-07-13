@@ -133,6 +133,7 @@ jobs:
   gates:
     name: contract gates (availgate + aigate + repligate)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust (stable)
