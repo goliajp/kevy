@@ -14,9 +14,13 @@ use crate::shard::Shard;
 
 impl<C: Commands> Shard<C> {
     /// Everything `run_uring` does before its first loop iteration:
-    /// wire the replica inbox's waker (see replica_inbox.rs's wake
-    /// contract) and restore snapshot + AOF, same as the readiness path.
+    /// the embedder's per-shard start hook (Lua / cross-shard registry
+    /// setup lives behind it — dropping it broke EVAL across shards on
+    /// the uring path only), the replica inbox's waker (see
+    /// replica_inbox.rs's wake contract), and the snapshot + AOF
+    /// restore, same as the readiness path.
     pub(crate) fn prepare_uring_shard(&mut self) -> io::Result<()> {
+        self.commands.on_shard_start(self.id);
         if let Some(rx) = &self.replica_inbox {
             rx.attach_waker(Arc::clone(&self.waker));
         }
