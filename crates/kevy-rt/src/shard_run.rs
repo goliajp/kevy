@@ -102,6 +102,11 @@ impl<C: Commands> Shard<C> {
         }
         let waker_fd = self.waker.read_fd();
         let me = self.id;
+        // Server-as-replica: let the runner thread's sends interrupt a
+        // parked poll — see replica_inbox.rs's wake contract.
+        if let Some(rx) = &self.replica_inbox {
+            rx.attach_waker(Arc::clone(&self.waker));
+        }
 
         let mut tick_interval = match self.commands.shard_tick_interval_ms() {
             0 => None,
@@ -274,11 +279,6 @@ impl<C: Commands> Shard<C> {
                         // backlog reclaims space proactively. No-op
                         // when replication is off / no consumers yet.
                         self.tick_replication_watermark();
-                        // Server-as-replica: drain
-                        // events from the replica runner thread and
-                        // apply them. No-op (one Option check) when
-                        // this shard isn't a replica.
-                        self.drain_replica_inbox();
                         last_tick = now;
                     }
                 }
@@ -292,6 +292,15 @@ impl<C: Commands> Shard<C> {
             // stays one branch (E9 gating preserved).
             if self.replicate.is_some() || !self.replicas.is_empty() {
                 self.pump_replication()?;
+            }
+            // Server-as-replica: drain events from the replica runner
+            // thread and apply them. Every iteration, not the interval
+            // tick — at tick cadence the 1024-event budget caps apply
+            // throughput at ~10k frames/s, far under what an upstream
+            // primary emits (the repligate drain regression). Gated at
+            // the call site like the pump above.
+            if self.replica_inbox.is_some() {
+                self.drain_replica_inbox();
             }
             // A non-empty backlog means a peer ring is full: keep spinning so we
             // re-attempt the flush (and keep draining inbound to unblock peers).

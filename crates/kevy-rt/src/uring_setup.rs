@@ -1,10 +1,42 @@
 //! io_uring setup face split from `uring_reactor.rs` (500-LOC rule):
-//! ring capacities, the global availability probe, and the per-shard
-//! ring builder the spawn site uses for the auto-mode epoll fallback.
+//! ring capacities, the global availability probe, the per-shard
+//! ring builder the spawn site uses for the auto-mode epoll fallback,
+//! and the shard's pre-loop preparation.
 
 use std::io;
+use std::sync::Arc;
 
+use kevy_persist::{load_snapshot, replay_aof};
 use kevy_uring::IoUring;
+
+use crate::Commands;
+use crate::shard::Shard;
+
+impl<C: Commands> Shard<C> {
+    /// Everything `run_uring` does before its first loop iteration:
+    /// wire the replica inbox's waker (see replica_inbox.rs's wake
+    /// contract) and restore snapshot + AOF, same as the readiness path.
+    pub(crate) fn prepare_uring_shard(&mut self) -> io::Result<()> {
+        if let Some(rx) = &self.replica_inbox {
+            rx.attach_waker(Arc::clone(&self.waker));
+        }
+        let snap = self.snapshot_path();
+        if snap.exists()
+            && let Err(e) = load_snapshot(&mut self.store, &snap)
+        {
+            eprintln!("kevy: shard {} failed to load {}: {e}", self.id, snap.display());
+        }
+        if self.aof.is_some() {
+            let aof_path = self.aof_path();
+            let commands = &self.commands;
+            let store = &mut self.store;
+            replay_aof(&aof_path, |args| {
+                crate::shard_run::replay_dispatch(commands, store, &args);
+            })?;
+        }
+        Ok(())
+    }
+}
 
 /// SQ/CQ depth per-shard. Paired with `PBUF_ENTRIES` — both were bumped
 /// to fix the c=10 000 cliff (deco-axis-k-c10000).

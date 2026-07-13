@@ -37,10 +37,16 @@ impl<C: Commands> Shard<C> {
         let Some(inbox) = self.replica_inbox.as_ref() else {
             return;
         };
+        // Lower the wake flag BEFORE reading: a send racing this drain
+        // either lands in the try_iter below or re-raises the flag and
+        // wakes the next `Poller::wait`. (Lowering after would let a
+        // frame slip in between and go unannounced.)
+        inbox.signal.wake_pending.store(false, std::sync::atomic::Ordering::Release);
         // Take ownership of all currently-queued events without
         // blocking. `try_iter` yields until the channel is empty;
-        // we cap the per-tick budget to keep the reactor responsive
-        // when a flood of frames lands at once.
+        // we cap the per-call budget to keep the reactor responsive
+        // when a flood of frames lands at once — the wake contract
+        // (or the next iteration, once awake) covers the remainder.
         const MAX_PER_TICK: usize = 1024;
         let mut events = Vec::with_capacity(64);
         for ev in inbox.inner.try_iter().take(MAX_PER_TICK) {

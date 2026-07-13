@@ -22,7 +22,6 @@ use crate::conn::Conn;
 use crate::shard::Shard;
 pub(crate) use crate::uring_conn::UringConn;
 use crate::uring_conn::ParkState;
-use kevy_persist::{load_snapshot, replay_aof};
 use kevy_sys::Socket;
 use kevy_uring::{Completion, IoUring};
 pub(crate) use crate::uring_setup::{URING_ENTRIES, build_uring, io_uring_available};
@@ -77,22 +76,7 @@ impl<C: Commands> Shard<C> {
         ring_pair: (IoUring, kevy_uring::ProvidedBufRing),
         stop: Arc<AtomicBool>,
     ) -> io::Result<()> {
-        self.commands.on_shard_start(self.id);
-        // Restore: snapshot then AOF replay (same as the readiness path).
-        let snap = self.snapshot_path();
-        if snap.exists()
-            && let Err(e) = load_snapshot(&mut self.store, &snap)
-        {
-            eprintln!("kevy: shard {} failed to load {}: {e}", self.id, snap.display());
-        }
-        if self.aof.is_some() {
-            let aof_path = self.aof_path();
-            let commands = &self.commands;
-            let store = &mut self.store;
-            replay_aof(&aof_path, |args| {
-                crate::shard_run::replay_dispatch(commands, store, &args);
-            })?;
-        }
+        self.prepare_uring_shard()?;
 
         // One provided-buffer ring per shard feeds every conn's multishot recv
         // (needs Linux 5.19+; the epoll reactor is the fallback for older
@@ -387,7 +371,6 @@ impl<C: Commands> Shard<C> {
                         self.tick_replication_slots(now);
                         self.tick_replication_view();
                         self.tick_replication_watermark();
-                        self.drain_replica_inbox();
                         last_tick = now;
                     }
                 }
@@ -405,6 +388,15 @@ impl<C: Commands> Shard<C> {
             if self.replicate.is_some() || !self.replicas.is_empty() {
                 self.pump_replication()?;
                 self.reap_closed_replicas();
+            }
+            // Server-as-replica: drain events from the replica runner
+            // thread and apply them. Every iteration, not the interval
+            // tick — at tick cadence the 1024-event budget caps apply
+            // throughput at ~10k frames/s, far under what an upstream
+            // primary emits (the repligate drain regression). Gated at
+            // the call site like the pump above.
+            if self.replica_inbox.is_some() {
+                self.drain_replica_inbox();
             }
 
             // Idle ladder — spin, then a BATCH-GATED deaf nap, then park:
