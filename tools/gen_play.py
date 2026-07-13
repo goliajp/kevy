@@ -9,6 +9,9 @@ Run: python3 tools/gen_play.py
 """
 
 import pathlib
+import sys as _sys
+_sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from assetv import v as av
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -169,8 +172,8 @@ TPL = """<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <meta name="description" content="{desc}">
-<link rel="stylesheet" href="{up}assets/kevy.css">
-<link rel="stylesheet" href="{up}assets/play.css">
+<link rel="stylesheet" href="{up}assets/{css_kevy}">
+<link rel="stylesheet" href="{up}assets/{css_play}">
 <script>
   try {{
     var t = localStorage.getItem("kevy-theme");
@@ -294,7 +297,7 @@ TPL = """<!doctype html>
   </div>
 </main>
 
-<script type="module" src="{up}assets/play.js"></script>
+<script type="module" src="{up}assets/{js_play}"></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {{
     var r = document.documentElement;
@@ -314,6 +317,9 @@ def main():
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(
             TPL.format(
+                css_kevy=av('kevy.css'),
+                css_play=av('play.css'),
+                js_play=av('play.js'),
                 up=up,
                 channel_l=v["c_ph"],
                 en_cur=' aria-current="page"' if code == "en" else "",

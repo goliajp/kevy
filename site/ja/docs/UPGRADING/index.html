@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>kevyのアップグレード — kevy</title>
 <meta name="description" content="章は2つ、新しいものから。3.x → 4.0（APIの定義に関するメジャー。ワイヤとディスクはそのまま引き継がれ、Rustの顔は一度だけ変わって、以後は凍結されます）と、2.x → 3.x（能力のメジャー。すべてが引き継がれました）です。各章は、何が自動でアップグレードされ、何にコード変更が要り、そしてどう戻すのかを明示します。">
-<link rel="stylesheet" href="../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../assets/docs.css">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/" aria-current="page">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">184 コマンド全て</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>kevyのアップグレード</h1></div>
 <p>章は2つ、新しいものから。<b>3.x → 4.0</b>（APIの定義に関するメジャー。ワイヤとディスクはそのまま引き継がれ、Rustの顔は一度だけ変わって、以後は凍結されます）と、<b>2.x → 3.x</b>（能力のメジャー。すべてが引き継がれました）です。各章は、何が自動でアップグレードされ、何にコード変更が要り、そしてどう戻すのかを明示します。</p>
@@ -158,7 +158,7 @@ store.del(&amp;[b"k1".as_slice(), b"k2".as_slice()]);</code></pre></figure>
   <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#tldr-バージョンの一覧">TL;DR —— バージョンの一覧</a></li><li class="l2"><a href="#自動で互換なもの">自動で互換なもの</a></li><li class="l2"><a href="#apiの破壊一覧">APIの破壊一覧</a></li><li class="l3"><a href="#1-flushのshimを削除">1. flush()のshimを削除</a></li><li class="l3"><a href="#2-エラーの通貨を1つにkevyerror">2. エラーの通貨を1つに：KevyError</a></li><li class="l3"><a href="#3-コンストラクタの命名リソースはopenネットワークはconnect">3. コンストラクタの命名：リソースはopen、ネットワークはconnect</a></li><li class="l3"><a href="#4-kevy-rtruntimeは位置引数ではなくビルダーで組む">4. kevy_rt::Runtimeは、位置引数ではなくビルダーで組む</a></li><li class="l3"><a href="#5-kevy-storeの書き込みは借用したargvを取る">5. kevy-storeの書き込みは、借用したargvを取る</a></li><li class="l3"><a href="#6-commandsトレイト-route独自コマンドセットを持つ組み込み側">6. Commandsトレイト + Route（独自コマンドセットを持つ組み込み側）</a></li><li class="l2"><a href="#振る舞いの変更コード変更は不要運用からは見える">振る舞いの変更（コード変更は不要、運用からは見える）</a></li><li class="l2"><a href="#フィーチャシステム40での新顔">フィーチャシステム（4.0での新顔）</a></li><li class="l2"><a href="#40-318のダウングレード">4.0 → 3.18のダウングレード</a></li><li class="l2"><a href="#tldr-バージョンの一覧">TL;DR —— バージョンの一覧</a></li><li class="l2"><a href="#自動で互換なもの">自動で互換なもの</a></li><li class="l2"><a href="#アップグレードの手順">アップグレードの手順</a></li><li class="l3"><a href="#サーバーのデプロイ">サーバーのデプロイ</a></li><li class="l3"><a href="#組み込みアプリケーション">組み込みアプリケーション</a></li><li class="l3"><a href="#クライアント">クライアント</a></li><li class="l2"><a href="#3xで加わるものアップグレードする理由">3.xで加わるもの（アップグレードする理由）</a></li><li class="l2"><a href="#ダウングレード唯一注意が要る方向">ダウングレード（唯一、注意が要る方向）</a></li><li class="l2"><a href="#バージョン履歴各1行">バージョン履歴、各1行</a></li></ul></aside>
 </div>
 
-<script src="../../../assets/docsearch.js" defer></script>
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

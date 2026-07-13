@@ -17,6 +17,9 @@ import pathlib
 import re
 import shutil
 import sys
+import sys as _sys
+_sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
+from assetv import v as av
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DATA = json.loads((ROOT / "site/data/commands.json").read_text(encoding="utf-8"))
@@ -48,6 +51,7 @@ LANGS = {
         "nav_choose": "Should I use it?",
         "nav_docs": "Docs",
         "nav_bench": "Benchmarks",
+        "search_ph": "Search docs…",
         "title_suffix": "kevy command reference",
         "search": "Filter commands…",
         "group": "Group",
@@ -86,6 +90,7 @@ LANGS = {
         "nav_choose": "该不该用",
         "nav_docs": "文档",
         "nav_bench": "基准",
+        "search_ph": "搜索文档……",
         "title_suffix": "kevy 命令参考",
         "search": "筛选命令……",
         "group": "分组",
@@ -123,6 +128,7 @@ LANGS = {
         "nav_choose": "使うべきか",
         "nav_docs": "ドキュメント",
         "nav_bench": "ベンチマーク",
+        "search_ph": "ドキュメントを検索……",
         "title_suffix": "kevy コマンドリファレンス",
         "search": "コマンドを絞り込む……",
         "group": "グループ",
@@ -227,8 +233,9 @@ def head(title, lang, depth, desc):
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{esc(title)}</title>
 <meta name="description" content="{esc(desc)}">
-<link rel="stylesheet" href="{up}assets/kevy.css">
-<link rel="stylesheet" href="{up}assets/docs.css">
+<link rel="stylesheet" href="{up}assets/{av('kevy.css')}">
+<link rel="stylesheet" href="{up}assets/{av('docs.css')}">
+<script src="{up}assets/{av('docsearch.js')}" defer></script>
 <script>
   try {{
     var t = localStorage.getItem("kevy-theme");
@@ -259,6 +266,11 @@ def mast(lang, depth, here):
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="{up}{L['dir']}docs/search-index.json" data-root="{up}{L['dir']}">
+        <input type="search" placeholder="{esc(L['search_ph'])}" aria-label="{esc(L['search_ph'])}" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="{up}docs/commands/{here}"{' aria-current="page"' if lang == 'en' else ''}>EN</a>
         <a href="{up}zh/docs/commands/{here}"{' aria-current="page"' if lang == 'zh' else ''}>中文</a>

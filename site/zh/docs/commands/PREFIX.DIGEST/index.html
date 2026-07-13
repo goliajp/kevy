@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PREFIX.DIGEST — kevy 命令参考</title>
 <meta name="description" content="PREFIX.DIGEST — 对某个前缀下的行做一个与顺序无关的校验和，用于迁移核对。 每个 shard 上遍历 O(该 shard 上的 key 数)，再加上 O(各行大小之和) 做摘要。逐行的摘要之间做 XOR，因此结果与顺序无关，shard 数改变后依然可比。">
-<link rel="stylesheet" href="../../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../../assets/docs.css">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -27,6 +28,11 @@
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../../zh/docs/search-index.json" data-root="../../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="../../../../docs/commands/PREFIX.DIGEST/">EN</a>
         <a href="../../../../zh/docs/commands/PREFIX.DIGEST/" aria-current="page">中文</a>

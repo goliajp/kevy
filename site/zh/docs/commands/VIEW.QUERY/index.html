@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VIEW.QUERY — kevy 命令参考</title>
 <meta name="description" content="VIEW.QUERY — 按视图的既定顺序翻页取出成员，可通过 VIA 模板顺带把字段取回来。 virtual：O(log N_order + candidates * leaves) —— 它顺着 ORDER 索引流式扫描，对每个候选逐个探测是否属于该视图，取够 limit 就停，因此从不物化整个成员集合。materialized：O(log M + limit)。加上 FIELDS 与 VIA 会多出第二次扇出，用来把原行取回来。">
-<link rel="stylesheet" href="../../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../../assets/docs.css">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -27,6 +28,11 @@
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../../zh/docs/search-index.json" data-root="../../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="../../../../docs/commands/VIEW.QUERY/">EN</a>
         <a href="../../../../zh/docs/commands/VIEW.QUERY/" aria-current="page">中文</a>

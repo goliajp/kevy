@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>集群 — kevy</title>
 <meta name="description" content="kevy 的集群能力分两层，彼此独立——单节点多 shard 暴露（一个进程，每个 shard 都讲 Redis Cluster 协议）和多节点复制 + 作用域多写者（主节点、副本、embed、多数派切主）——可以只开一层、两层都开，或都不开。">
-<link rel="stylesheet" href="../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../assets/docs.css">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/" aria-current="page">集群</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 184 个命令</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>集群</h1></div>
 <p>kevy 的集群能力分两层，彼此独立——<b>单节点多 shard 暴露</b>（一个进程，每个 shard 都讲 Redis Cluster 协议）和<b>多节点复制 + 作用域多写者</b>（主节点、副本、embed、多数派切主）——可以只开一层、两层都开，或都不开。</p>
@@ -223,7 +223,7 @@ writer.set(b"app:billing:invoice:42", b"...")?;
   <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#两层概览">两层概览</a></li><li class="l2"><a href="#何时需要">何时需要</a></li><li class="l2"><a href="#核心思路">核心思路</a></li><li class="l2"><a href="#启用方式">启用方式</a></li><li class="l2"><a href="#在-rust-里使用-clusterclient">在 Rust 里使用 ClusterClient</a></li><li class="l3"><a href="#路由如何省掉跨-shard-一跳">路由如何省掉跨 shard 一跳</a></li><li class="l3"><a href="#跨-slot-的多键命令">跨 slot 的多键命令</a></li><li class="l3"><a href="#集群端口上支持的-cluster-命令">集群端口上支持的 CLUSTER 命令</a></li><li class="l3"><a href="#退回原始路由助手">退回原始路由助手</a></li><li class="l2"><a href="#主节点与副本">主节点与副本</a></li><li class="l2"><a href="#以-embed-作只读副本">以 embed 作只读副本</a></li><li class="l2"><a href="#作用域多写者">作用域多写者</a></li><li class="l3"><a href="#以-embed-作作用域写者">以 embed 作作用域写者</a></li><li class="l2"><a href="#kevy-elect-多数派切主">kevy-elect 多数派切主</a></li><li class="l3"><a href="#手工-rejoin-恢复">手工 rejoin 恢复</a></li><li class="l2"><a href="#单节点集群模式">单节点集群模式</a></li><li class="l2"><a href="#复制">复制</a></li><li class="l2"><a href="#作用域多写者-选举">作用域多写者 + 选举</a></li></ul></aside>
 </div>
 
-<script src="../../../assets/docsearch.js" defer></script>
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

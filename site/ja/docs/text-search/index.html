@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>全文検索（KIND text） — kevy</title>
 <meta name="description" content="textはインデックスエンジンの3番目のkindです。ほかのインデックスと同じように宣言すれば、フィールドの生バイト列がトークン化され、シャードごとの転置セグメントになります。セグメントはすべての書き込みと同期して維持されます（ドリフトゼロ。range/uniqueと同じ、構成上の派生物という規律です）。別立ての検索サーバーも、取り込みパイプラインも、アナラ">
-<link rel="stylesheet" href="../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../assets/docs.css">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/" aria-current="page">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">184 コマンド全て</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>全文検索（<code>KIND text</code>）</h1></div>
 <p>textはインデックスエンジンの3番目のkindです。ほかのインデックスと同じように宣言すれば、フィールドの生バイト列がトークン化され、シャードごとの転置セグメントになります。セグメントはすべての書き込みと同期して維持されます（ドリフトゼロ。<code>range</code>/<code>unique</code>と同じ、構成上の派生物という規律です）。別立ての検索サーバーも、取り込みパイプラインも、アナライザの設定もありません。1つのverbがインデックスを宣言し、以降のすべての書き込みがそれを正確に保ちます。</p>
@@ -110,7 +110,7 @@ fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
   <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#クイックスタートサーバー">クイックスタート（サーバー）</a></li><li class="l2"><a href="#クイックスタート組み込み">クイックスタート（組み込み）</a></li><li class="l2"><a href="#トークン化辞書不要">トークン化（辞書不要）</a></li><li class="l2"><a href="#マッチとランキング">マッチとランキング</a></li><li class="l2"><a href="#ハイブリッド検索bm25-knn">ハイブリッド検索（BM25 + KNN）</a></li><li class="l2"><a href="#ライフサイクルと整合性">ライフサイクルと整合性</a></li><li class="l2"><a href="#パフォーマンス">パフォーマンス</a></li><li class="l2"><a href="#サイジング">サイジング</a></li><li class="l2"><a href="#関連項目">関連項目</a></li></ul></aside>
 </div>
 
-<script src="../../../assets/docsearch.js" defer></script>
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

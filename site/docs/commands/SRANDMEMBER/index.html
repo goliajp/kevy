@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SRANDMEMBER — kevy command reference</title>
 <meta name="description" content="SRANDMEMBER — Return one or more random members of a set without removing them. A negative count allows repeats. O(count) expected when count is a small fraction of the set (random-slot probing); O(N) once count exceeds a quarter of it, where copying and shuffling beats rejection sampling">
-<link rel="stylesheet" href="../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../assets/docs.css">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/docs.css?v=35ee534d">
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -27,6 +28,11 @@
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../docs/search-index.json" data-root="../../../">
+        <input type="search" placeholder="Search docs…" aria-label="Search docs…" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="../../../docs/commands/SRANDMEMBER/" aria-current="page">EN</a>
         <a href="../../../zh/docs/commands/SRANDMEMBER/">中文</a>

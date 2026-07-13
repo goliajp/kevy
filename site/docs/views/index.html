@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Views (VIEW. / view_) — kevy</title>
 <meta name="description" content="A view is a named composition of declared indexes — an AND/OR/DIFF tree of index shapes with an ordering index — queryable as one unit, either evaluated per query (virtual) or main">
-<link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/docs.css">
+<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/" aria-current="page">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>Views (<code>VIEW.*</code> / <code>view_*</code>)</h1></div>
 <p>A view is a <b>named composition of declared indexes</b> — an AND/OR/DIFF tree of index shapes with an ordering index — queryable as one unit, either evaluated per query (<b>virtual</b>) or maintained incrementally on every write (<b>materialized</b>, optionally top-K bounded). Views are the engine's answer to the "hot list" query — <code>WHERE state = 'ready' AND pri BETWEEN 0 AND 100 ORDER BY pri DESC LIMIT 10</code> — as a declared access path instead of a query-time scan.</p>
@@ -132,7 +132,7 @@ fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
   <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#quick-start-server">Quick start (server)</a></li><li class="l2"><a href="#the-three-structural-rules">The three structural rules</a></li><li class="l2"><a href="#modes-and-cost-model">Modes and cost model</a></li><li class="l3"><a href="#diff-the-declared-anti-join">DIFF: the declared anti-join</a></li><li class="l2"><a href="#consistency">Consistency</a></li><li class="l2"><a href="#embedded">Embedded</a></li><li class="l2"><a href="#performance">Performance</a></li><li class="l2"><a href="#see-also">See also</a></li></ul></aside>
 </div>
 
-<script src="../../assets/docsearch.js" defer></script>
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

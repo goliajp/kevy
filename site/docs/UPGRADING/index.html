@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Upgrading kevy — kevy</title>
 <meta name="description" content="Two chapters, newest first: 3.x → 4.0 (an API-definition major: the wire and the disk carry over, the Rust faces changed once and are now frozen) and 2.x → 3.x (a capability major:">
-<link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/docs.css">
+<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/" aria-current="page">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>Upgrading kevy</h1></div>
 <p>Two chapters, newest first: <b>3.x → 4.0</b> (an API-definition major: the wire and the disk carry over, the Rust faces changed once and are now frozen) and <b>2.x → 3.x</b> (a capability major: everything carried over). Each chapter is explicit about what upgrades automatically, what needs a code change, and how to go back.</p>
@@ -159,7 +159,7 @@ store.del(&amp;[b"k1".as_slice(), b"k2".as_slice()]);</code></pre></figure>
   <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#tldr-versions-at-a-glance">TL;DR — versions at a glance</a></li><li class="l2"><a href="#what-is-compatible-automatically">What is compatible automatically</a></li><li class="l2"><a href="#the-api-break-table">The API break table</a></li><li class="l3"><a href="#1-flush-shims-removed">1. flush() shims removed</a></li><li class="l3"><a href="#2-one-error-currency-kevyerror">2. One error currency: KevyError</a></li><li class="l3"><a href="#3-constructor-naming-resources-open-network-connect">3. Constructor naming: resources open, network connect</a></li><li class="l3"><a href="#4-kevy-rtruntime-is-built-not-positioned">4. kevy_rt::Runtime is built, not positioned</a></li><li class="l3"><a href="#5-kevy-store-writes-take-borrowed-argv">5. kevy-store writes take borrowed argv</a></li><li class="l3"><a href="#6-commands-trait-route-embedders-with-a-custom-command-set">6. Commands trait + Route (embedders with a custom command set)</a></li><li class="l2"><a href="#behavior-changes-no-code-change-ops-visible">Behavior changes (no code change, ops-visible)</a></li><li class="l2"><a href="#the-feature-system-new-in-40">The feature system (new in 4.0)</a></li><li class="l2"><a href="#downgrading-40-318">Downgrading 4.0 → 3.18</a></li><li class="l2"><a href="#tldr-versions-at-a-glance">TL;DR — versions at a glance</a></li><li class="l2"><a href="#what-is-compatible-automatically">What is compatible automatically</a></li><li class="l2"><a href="#upgrade-steps">Upgrade steps</a></li><li class="l3"><a href="#server-deployment">Server deployment</a></li><li class="l3"><a href="#embedded-applications">Embedded applications</a></li><li class="l3"><a href="#clients">Clients</a></li><li class="l2"><a href="#what-3x-adds-why-you-upgrade">What 3.x adds (why you upgrade)</a></li><li class="l2"><a href="#downgrading-the-one-direction-that-needs-care">Downgrading (the one direction that needs care)</a></li><li class="l2"><a href="#version-history-in-one-line-each">Version history in one line each</a></li></ul></aside>
 </div>
 
-<script src="../../assets/docsearch.js" defer></script>
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

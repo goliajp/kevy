@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SINTER — kevy 命令参考</title>
 <meta name="description" content="SINTER — 返回若干 set 的交集（跨 shard 汇聚）。 O（各源 set 基数之和） —— kevy 没有「先取最小集合」这一步，所以 SINTER huge tiny 的代价是 O(huge)，而 Redis 只花 O(tiny * k)。">
-<link rel="stylesheet" href="../../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../../assets/docs.css">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -27,6 +28,11 @@
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../../zh/docs/search-index.json" data-root="../../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="../../../../docs/commands/SINTER/">EN</a>
         <a href="../../../../zh/docs/commands/SINTER/" aria-current="page">中文</a>

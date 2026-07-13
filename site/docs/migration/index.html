@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Migration — the playbook and the toolchain — kevy</title>
 <meta name="description" content="Two halves. The playbook: how to move a live RDS workload onto kevy in phases, each with its own verification clamp and rollback point. The toolchain (kevy-cli): the commands that ">
-<link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/docs.css">
+<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/" aria-current="page">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>Migration — the playbook and the toolchain</h1></div>
 <p>Two halves. The <b>playbook</b>: how to move a live RDS workload onto kevy in phases, each with its own verification clamp and rollback point. The <b>toolchain</b> (<code>kevy-cli</code>): the commands that move data into, out of, and between kevy servers — and prove the move was faithful. Modeling questions ("what does my <code>JOIN</code> become?") live in <a href="../rds-workloads/">rds-workloads.md</a>; runnable patterns in the <a href="../cookbook/">cookbook</a>.</p>
@@ -117,7 +117,7 @@ kevy-cli -p 6004 IDX.CREATE users ON PREFIX user: FIELD age TYPE i64 KIND range<
   <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#the-phased-playbook">The phased playbook</a></li><li class="l3"><a href="#phase-0-inventory">Phase 0 — Inventory</a></li><li class="l3"><a href="#phase-1-schema-mapping">Phase 1 — Schema mapping</a></li><li class="l3"><a href="#phase-2-change-capture-dual-write-window-opens">Phase 2 — Change capture (dual-write window opens)</a></li><li class="l3"><a href="#phase-3-backfill">Phase 3 — Backfill</a></li><li class="l3"><a href="#phase-4-read-cutover-canary-per-endpoint">Phase 4 — Read cutover (canary, per endpoint)</a></li><li class="l3"><a href="#phase-5-write-cutover-the-rollback-window">Phase 5 — Write cutover + the rollback window</a></li><li class="l3"><a href="#phase-6-decommission">Phase 6 — Decommission</a></li><li class="l2"><a href="#common-pitfalls">Common pitfalls</a></li><li class="l2"><a href="#wire-format">Wire format</a></li><li class="l2"><a href="#consistency-and-resumability">Consistency and resumability</a></li><li class="l2"><a href="#verification">Verification</a></li><li class="l2"><a href="#bulk-operations">Bulk operations</a></li><li class="l2"><a href="#loading-into-an-indexed-keyspace">Loading into an indexed keyspace</a></li><li class="l3"><a href="#waiting-for-index-readiness">Waiting for index readiness</a></li><li class="l3"><a href="#verifying-a-whole-migration-in-one-command">Verifying a whole migration in one command</a></li><li class="l3"><a href="#large-exports">Large exports</a></li></ul></aside>
 </div>
 
-<script src="../../assets/docsearch.js" defer></script>
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

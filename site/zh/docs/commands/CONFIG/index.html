@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CONFIG — kevy 命令参考</title>
 <meta name="description" content="CONFIG — 读取或修改服务器的配置参数。 GET：O(patterns * 16)。SET：O(1)，外加一次配置交换，各 shard 在下一次 tick 时取走。REWRITE：O(配置文件大小)。">
-<link rel="stylesheet" href="../../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../../assets/docs.css">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -27,6 +28,11 @@
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../../zh/docs/search-index.json" data-root="../../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="../../../../docs/commands/CONFIG/">EN</a>
         <a href="../../../../zh/docs/commands/CONFIG/" aria-current="page">中文</a>

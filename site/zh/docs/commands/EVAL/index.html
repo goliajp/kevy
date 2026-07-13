@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>EVAL — kevy 命令参考</title>
 <meta name="description" content="EVAL — 在服务端执行一段 Lua 脚本；当 numkeys &gt;= 1 时，路由到 KEYS[1] 所在的 shard。 O(编译 + 脚本自身的开销)。整段脚本在 KEYS[1] 所在的 shard 上作为一个原子单元执行，执行期间独占那个 shard。失控保护用的是指令预算（lua time_limit_ms x 40000 条指令），不是墙钟时间。">
-<link rel="stylesheet" href="../../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../../assets/docs.css">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -27,6 +28,11 @@
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../../zh/docs/search-index.json" data-root="../../../../zh/">
+        <input type="search" placeholder="搜索文档……" aria-label="搜索文档……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="../../../../docs/commands/EVAL/">EN</a>
         <a href="../../../../zh/docs/commands/EVAL/" aria-current="page">中文</a>

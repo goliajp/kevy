@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RDS workloads on kevy — kevy</title>
 <meta name="description" content="You run an operational workload on MySQL or PostgreSQL and are considering moving it — wholly or partially — onto kevy. This page is the reference matrix: every SQL-surface constru">
-<link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/docs.css">
+<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/" aria-current="page">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>RDS workloads on kevy</h1></div>
 <p>You run an operational workload on MySQL or PostgreSQL and are considering moving it — wholly or partially — onto kevy. This page is the <b>reference matrix</b>: every SQL-surface construct, what carries it in kevy, the exact verbs, and the semantic deltas. Where kevy refuses a construct, the refusal is stated plainly along with the covered alternative. The companion <a href="../cookbook/">cookbook</a> turns these rows into runnable recipes; <a href="../designing-on-kevy/">designing-on-kevy</a> is the one-page map of the engine itself.</p>
@@ -127,7 +127,7 @@ VIEW.QUERY live_adults LIMIT 10 [FIELDS name] [VIA …]</code></pre></figure>
   <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#the-division-of-labor">The division of labor</a></li><li class="l2"><a href="#tables-rows-columns">Tables, rows, columns</a></li><li class="l3"><a href="#type-system">Type system</a></li><li class="l2"><a href="#primary-key-unique-auto-increment">PRIMARY KEY, UNIQUE, AUTO_INCREMENT</a></li><li class="l2"><a href="#select">SELECT</a></li><li class="l2"><a href="#order-by-limit-offset">ORDER BY / LIMIT / OFFSET</a></li><li class="l2"><a href="#group-by-and-aggregates">GROUP BY and aggregates</a></li><li class="l2"><a href="#join">JOIN</a></li><li class="l2"><a href="#view">VIEW</a></li><li class="l2"><a href="#transactions">Transactions</a></li><li class="l2"><a href="#constraints-and-triggers">Constraints and triggers</a></li><li class="l2"><a href="#secondary-index-ddl">Secondary index DDL</a></li><li class="l2"><a href="#pagination-and-optimistic-locking-patterns">Pagination and optimistic locking patterns</a></li><li class="l2"><a href="#backup-and-pitr">Backup and PITR</a></li><li class="l2"><a href="#replication-and-read-scaling">Replication and read scaling</a></li><li class="l2"><a href="#cdc">CDC</a></li><li class="l2"><a href="#what-kevy-will-not-do">What kevy will NOT do</a></li><li class="l2"><a href="#sizing-and-operational-deltas">Sizing and operational deltas</a></li><li class="l2"><a href="#this-page-vs-the-cookbook">This page vs the cookbook</a></li></ul></aside>
 </div>
 
-<script src="../../assets/docsearch.js" defer></script>
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Full-text search (KIND text) — kevy</title>
 <meta name="description" content="Text is the index engine's third kind: declare it like any index and the field's raw bytes tokenize into a per-shard inverted segment, maintained synchronously with every write (ze">
-<link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/docs.css">
+<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/" aria-current="page">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>Full-text search (<code>KIND text</code>)</h1></div>
 <p>Text is the index engine's third kind: declare it like any index and the field's raw bytes tokenize into a per-shard inverted segment, maintained synchronously with every write (zero drift, same derived-by-construction discipline as <code>range</code>/<code>unique</code>). There is no separate search server, no ingestion pipeline, and no analyzer configuration — one verb declares the index, and every subsequent write keeps it exact.</p>
@@ -110,7 +110,7 @@ fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
   <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#quick-start-server">Quick start (server)</a></li><li class="l2"><a href="#quick-start-embedded">Quick start (embedded)</a></li><li class="l2"><a href="#tokenization-dictionary-free">Tokenization (dictionary-free)</a></li><li class="l2"><a href="#matching-and-ranking">Matching and ranking</a></li><li class="l2"><a href="#hybrid-retrieval-bm25-knn">Hybrid retrieval (BM25 + KNN)</a></li><li class="l2"><a href="#lifecycle-and-consistency">Lifecycle and consistency</a></li><li class="l2"><a href="#performance">Performance</a></li><li class="l2"><a href="#sizing">Sizing</a></li><li class="l2"><a href="#see-also">See also</a></li></ul></aside>
 </div>
 
-<script src="../../assets/docsearch.js" defer></script>
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

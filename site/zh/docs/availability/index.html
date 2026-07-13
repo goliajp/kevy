@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>可用性 — kevy</title>
 <meta name="description" content="本文讲 kevy 部署如何在节点故障中保持可读可写：有哪些拓扑，从“最快、异步”一路到“多数派围栏”的一致性阶梯，计划内与崩溃两种切主，以及客户端在每一步看到的精确错误契约。">
-<link rel="stylesheet" href="../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../assets/docs.css">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/" aria-current="page">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 184 个命令</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>可用性</h1></div>
 <p>本文讲 kevy 部署如何在节点故障中保持可读可写：有哪些拓扑，从“最快、异步”一路到“多数派围栏”的一致性阶梯，计划内与崩溃两种切主，以及客户端在每一步看到的精确错误契约。</p>
@@ -128,7 +128,7 @@ FAILOVER ABORT</code></pre></figure>
   <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#拓扑">拓扑</a></li><li class="l3"><a href="#单节点">单节点</a></li><li class="l3"><a href="#主节点-副本">主节点 + 副本</a></li><li class="l3"><a href="#三节点-elect-多数派">三节点 elect 多数派</a></li><li class="l2"><a href="#一致性阶梯">一致性阶梯</a></li><li class="l3"><a href="#读己之写repltoken-replwait">读己之写：REPL.TOKEN / REPL.WAIT</a></li><li class="l3"><a href="#wait副本确认不是耐久性">WAIT——副本确认，不是耐久性</a></li><li class="l3"><a href="#有界陈旧-stale">有界陈旧：-STALE</a></li><li class="l3"><a href="#写闸门min-replicas-to-write-与多数派租约">写闸门：min_replicas_to_write 与多数派租约</a></li><li class="l2"><a href="#切主">切主</a></li><li class="l3"><a href="#计划内failover-verb">计划内：FAILOVER verb</a></li><li class="l3"><a href="#崩溃多数派选举">崩溃：多数派选举</a></li><li class="l2"><a href="#写方与读方的错误契约">写方与读方的错误契约</a></li><li class="l2"><a href="#运维">运维</a></li><li class="l3"><a href="#端口约定">端口约定</a></li><li class="l3"><a href="#配置键">配置键</a></li><li class="l3"><a href="#可观测性">可观测性</a></li><li class="l3"><a href="#gate">Gate</a></li><li class="l2"><a href="#参见">参见</a></li></ul></aside>
 </div>
 
-<script src="../../../assets/docsearch.js" defer></script>
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

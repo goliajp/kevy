@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CDC — the change feed (FEED. / changes_since) — kevy</title>
 <meta name="description" content="kevy exposes every applied write as a consumable change stream — the same effect frames the AOF logs and replicas apply. Typical consumers: cache invalidators, search-index updater">
-<link rel="stylesheet" href="../../assets/kevy.css">
-<link rel="stylesheet" href="../../assets/docs.css">
+<link rel="stylesheet" href="../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">Getting started</p><ul><li><a href="../../docs/designing-on-kevy/">Designing your application on kevy</a></li><li><a href="../../docs/cookbook/">The RDS→kevy modeling cookbook</a></li><li><a href="../../docs/persistence/">Persistence</a></li><li><a href="../../docs/tuning/">Tuning kevy</a></li></ul><p class="side-h">Running it</p><ul><li><a href="../../docs/replication/">Replication</a></li><li><a href="../../docs/availability/">Availability</a></li><li><a href="../../docs/cluster/">Cluster</a></li><li><a href="../../docs/accept-shards/">--accept-shards N — fold sparse connections onto a subset of shards</a></li><li><a href="../../docs/uds/">Unix-domain socket (UDS) transport</a></li><li><a href="../../docs/async/">Async client</a></li></ul><p class="side-h">Working with data</p><ul><li><a href="../../docs/indexes/">Secondary indexes (IDX. / idx_)</a></li><li><a href="../../docs/vector-search/">Vector search (KIND ann)</a></li><li><a href="../../docs/text-search/">Full-text search (KIND text)</a></li><li><a href="../../docs/views/">Views (VIEW. / view_)</a></li><li><a href="../../docs/cdc/" aria-current="page">CDC — the change feed (FEED. / changes_since)</a></li><li><a href="../../docs/pubsub/">Pub/sub</a></li><li><a href="../../docs/lua/">Lua scripting</a></li></ul><p class="side-h">Embedding it</p><ul><li><a href="../../docs/wasm/">kevy on WebAssembly</a></li><li><a href="../../docs/embedded-listener/">Embedded read-only RESP listener</a></li><li><a href="../../docs/iot/">kevy on IoT devices</a></li></ul><p class="side-h">Reference</p><ul><li><a href="../../docs/error-replies/">Error reply catalog</a></li><li><a href="../../docs/rds-workloads/">RDS workloads on kevy</a></li><li><a href="../../docs/migration/">Migration — the playbook and the toolchain</a></li><li><a href="../../docs/UPGRADING/">Upgrading kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../docs/commands/">All 184 commands</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>CDC — the change feed (<code>FEED.*</code> / <code>changes_since</code>)</h1></div>
 <p>kevy exposes every applied write as a consumable change stream — the same effect frames the AOF logs and replicas apply. Typical consumers: cache invalidators, search-index updaters, downstream mirrors — the jobs an "outbox table" does in an RDS stack, without the table.</p>
@@ -78,7 +78,7 @@ let (gen, off) = batch.next;                        // resume here</code></pre><
   <aside class="toc"><p class="toc-h">On this page</p><ul><li class="l2"><a href="#the-cursor-generation-offset">The cursor: (generation, offset)</a></li><li class="l2"><a href="#server-surface">Server surface</a></li><li class="l3"><a href="#errors">Errors</a></li><li class="l2"><a href="#embedded-surface">Embedded surface</a></li><li class="l2"><a href="#delivery-semantics">Delivery semantics</a></li><li class="l2"><a href="#recovery-point-contract-pitr">Recovery-point contract (PITR)</a></li><li class="l2"><a href="#per-prefix-stats">Per-prefix stats</a></li><li class="l2"><a href="#what-this-is-not">What this is not</a></li></ul></aside>
 </div>
 
-<script src="../../assets/docsearch.js" defer></script>
+<script src="../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

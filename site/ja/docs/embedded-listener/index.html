@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>組み込みの読み取り専用RESPリスナー — kevy</title>
 <meta name="description" content="組み込み（プロセス内）のkevyストアは、読み取り専用のリスナーを通じて、外部のRESPクライアント——redis-cli、運用ツール、ダッシュボード——に自分を公開できます。ストアはあなたのプロセスの中のライブラリのままです。リスナーはそこを覗く窓であって、2台目のサーバーではありません。書き込みは、所有プロセスの排他的な権利であり続けます。">
-<link rel="stylesheet" href="../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../assets/docs.css">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/" aria-current="page">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">184 コマンド全て</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>組み込みの読み取り専用RESPリスナー</h1></div>
 <p>組み込み（プロセス内）のkevyストアは、読み取り専用のリスナーを通じて、外部のRESPクライアント——redis-cli、運用ツール、ダッシュボード——に自分を公開できます。ストアはあなたのプロセスの中のライブラリのままです。リスナーはそこを覗く窓であって、2台目のサーバーではありません。書き込みは、所有プロセスの排他的な権利であり続けます。</p>
@@ -105,7 +105,7 @@ store.dispatch_readonly(
   <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#有効にする">有効にする</a></li><li class="l2"><a href="#面">面</a></li><li class="l3"><a href="#verbのセマンティクス">verbのセマンティクス</a></li><li class="l2"><a href="#整合性">整合性</a></li><li class="l2"><a href="#フィードとread-your-writes">フィードとread-your-writes</a></li><li class="l2"><a href="#ソケットなしで覗く">ソケットなしで覗く</a></li><li class="l2"><a href="#窓より多くを求めるとき">窓より多くを求めるとき</a></li><li class="l2"><a href="#パフォーマンス">パフォーマンス</a></li><li class="l2"><a href="#関連項目">関連項目</a></li></ul></aside>
 </div>
 
-<script src="../../../assets/docsearch.js" defer></script>
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

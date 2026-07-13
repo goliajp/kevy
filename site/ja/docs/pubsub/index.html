@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pub/sub — kevy</title>
 <meta name="description" content="kevyで1つの発行者から多数の購読者へメッセージをファンアウトする方法を説明します。ワイヤ上ではPUBLISH/SUBSCRIBEで、プロセス内では組み込みのStore経由で、そしてkevy-clientのほかの部分と同じURLファサード越しに使えます。">
-<link rel="stylesheet" href="../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../assets/docs.css">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/" aria-current="page">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">184 コマンド全て</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>Pub/sub</h1></div>
 <p>kevyで1つの発行者から多数の購読者へメッセージをファンアウトする方法を説明します。ワイヤ上では<code>PUBLISH</code>/<code>SUBSCRIBE</code>で、プロセス内では組み込みの<code>Store</code>経由で、そして<code>kevy-client</code>のほかの部分と同じURLファサード越しに使えます。</p>
@@ -196,7 +196,7 @@ $ redis-cli -p 6379 PUBSUB NUMPAT
   <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#このドキュメントが必要になるとき">このドキュメントが必要になるとき</a></li><li class="l2"><a href="#中心となる考え方">中心となる考え方</a></li><li class="l2"><a href="#動かしてみる例">動かしてみる例</a></li><li class="l3"><a href="#redis-cliでスモークテスト">redis-cliでスモークテスト</a></li><li class="l3"><a href="#urlファサード越しのrust-kevy-client">URLファサード越しのRust — kevy-client</a></li><li class="l3"><a href="#kevy-embedded経由のプロセス内利用">kevy-embedded経由のプロセス内利用</a></li><li class="l3"><a href="#パターン購読">パターン購読</a></li><li class="l2"><a href="#keyspace-notificationsキー空間通知">Keyspace notifications（キー空間通知）</a></li><li class="l2"><a href="#urlバックエンド表">URLバックエンド表</a></li><li class="l2"><a href="#トレードオフと限界">トレードオフと限界</a></li><li class="l2"><a href="#運用イントロスペクション">運用イントロスペクション</a></li><li class="l2"><a href="#faq">FAQ</a></li></ul></aside>
 </div>
 
-<script src="../../../assets/docsearch.js" defer></script>
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

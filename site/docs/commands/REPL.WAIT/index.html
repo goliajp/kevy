@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>REPL.WAIT — kevy command reference</title>
 <meta name="description" content="REPL.WAIT — kevy extension: on a replica, block until every shard has applied the given REPL.TOKEN (then reads are read-your-writes); +OK on success, -MISDIRECTED writer is &lt;primary&gt; on timeout or generation mismatch. Default TIMEOUT 1000 ms, hard cap 60 s. On a primary: immediate +OK. O(S) — a barrier, not a keyspace op; the wall-clock cost is the replication lag, bounded by TIMEOUT (default 1s, hard-capped at 60s)">
-<link rel="stylesheet" href="../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../assets/docs.css">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/docs.css?v=35ee534d">
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -27,6 +28,11 @@
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../docs/search-index.json" data-root="../../../">
+        <input type="search" placeholder="Search docs…" aria-label="Search docs…" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="../../../docs/commands/REPL.WAIT/" aria-current="page">EN</a>
         <a href="../../../zh/docs/commands/REPL.WAIT/">中文</a>

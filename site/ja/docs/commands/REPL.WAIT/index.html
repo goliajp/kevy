@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>REPL.WAIT — kevy コマンドリファレンス</title>
 <meta name="description" content="REPL.WAIT — kevy 拡張。replica 上では、与えられた REPL.TOKEN を全 shard が適用し終えるまでブロックする(以降の読み取りは read-your-writes になる)。成功で +OK、タイムアウトまたは generation 不一致では -MISDIRECTED writer is &lt;primary&gt; を返す。TIMEOUT の既定は 1000 ms、上限は 60 s。primary 上では即座に +OK。 O(S) —— keyspace 操作ではなくバリアである。実時間のコストはレプリケーション遅延そのものであり、TIMEOUT(既定 1 秒、上限 60 秒)で頭打ちになる。">
-<link rel="stylesheet" href="../../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../../assets/docs.css">
+<link rel="stylesheet" href="../../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../../assets/docs.css?v=35ee534d">
+<script src="../../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -27,6 +28,11 @@
       <a href="https://github.com/goliajp/kevy">GitHub</a>
     </nav>
     <div class="mast-right">
+      <div id="docsearch" data-index="../../../../ja/docs/search-index.json" data-root="../../../../ja/">
+        <input type="search" placeholder="ドキュメントを検索……" aria-label="ドキュメントを検索……" autocomplete="off" spellcheck="false">
+        <span class="ds-key">/</span>
+        <div class="ds-list"></div>
+      </div>
       <nav class="lang" aria-label="Language">
         <a href="../../../../docs/commands/REPL.WAIT/">EN</a>
         <a href="../../../../zh/docs/commands/REPL.WAIT/">中文</a>

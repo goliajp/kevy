@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>视图（VIEW. / view_） — kevy</title>
 <meta name="description" content="视图是若干声明过的索引的具名组合——一棵由索引形状构成的 AND / OR / DIFF 树，外加一个排序索引——可以作为一个整体来查询，要么每次查询时求值（virtual），要么在每次写入时增量维护（materialized，可选择用 top-K 封顶）。视图是引擎对“热点列表”查询的回答——WHERE state = 'ready' AND pri BE">
-<link rel="stylesheet" href="../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../assets/docs.css">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">上手</p><ul><li><a href="../../../zh/docs/designing-on-kevy/">在 kevy 上设计应用</a></li><li><a href="../../../zh/docs/cookbook/">RDS→kevy 建模 cookbook</a></li><li><a href="../../../zh/docs/persistence/">持久化</a></li><li><a href="../../../zh/docs/tuning/">调优 kevy</a></li></ul><p class="side-h">运行</p><ul><li><a href="../../../zh/docs/replication/">复制</a></li><li><a href="../../../zh/docs/availability/">可用性</a></li><li><a href="../../../zh/docs/cluster/">集群</a></li><li><a href="../../../zh/docs/accept-shards/">--accept-shards N——把稀疏连接收拢到部分 shard 上</a></li><li><a href="../../../zh/docs/uds/">Unix-domain socket（UDS）传输</a></li><li><a href="../../../zh/docs/async/">异步客户端</a></li></ul><p class="side-h">数据</p><ul><li><a href="../../../zh/docs/indexes/">二级索引（IDX. / idx_）</a></li><li><a href="../../../zh/docs/vector-search/">向量检索（KIND ann）</a></li><li><a href="../../../zh/docs/text-search/">全文检索（KIND text）</a></li><li><a href="../../../zh/docs/views/" aria-current="page">视图（VIEW. / view_）</a></li><li><a href="../../../zh/docs/cdc/">CDC——变更流（FEED. / changes_since）</a></li><li><a href="../../../zh/docs/pubsub/">Pub/sub</a></li><li><a href="../../../zh/docs/lua/">Lua 脚本</a></li></ul><p class="side-h">嵌入</p><ul><li><a href="../../../zh/docs/wasm/">kevy 上 WebAssembly</a></li><li><a href="../../../zh/docs/embedded-listener/">Embedded 只读 RESP listener</a></li><li><a href="../../../zh/docs/iot/">kevy 跑在 IoT 设备上</a></li></ul><p class="side-h">参考</p><ul><li><a href="../../../zh/docs/error-replies/">错误回复目录</a></li><li><a href="../../../zh/docs/rds-workloads/">在 kevy 上跑 RDS 负载</a></li><li><a href="../../../zh/docs/migration/">迁移——playbook 与工具链</a></li><li><a href="../../../zh/docs/UPGRADING/">升级 kevy</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../zh/docs/commands/">全部 184 个命令</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>视图（<code>VIEW.*</code> / <code>view_*</code>）</h1></div>
 <p>视图是<b>若干声明过的索引的具名组合</b>——一棵由索引形状构成的 AND / OR / DIFF 树，外加一个排序索引——可以作为一个整体来查询，要么每次查询时求值（<b>virtual</b>），要么在每次写入时增量维护（<b>materialized</b>，可选择用 top-K 封顶）。视图是引擎对“热点列表”查询的回答——<code>WHERE state = 'ready' AND pri BETWEEN 0 AND 100 ORDER BY pri DESC LIMIT 10</code>——把它做成一条声明过的访问路径，而不是查询期的扫描。</p>
@@ -132,7 +132,7 @@ fn main() -&gt; kevy_embedded::KevyResult&lt;()&gt; {
   <aside class="toc"><p class="toc-h">本页内容</p><ul><li class="l2"><a href="#快速上手服务器">快速上手（服务器）</a></li><li class="l2"><a href="#三条结构规则">三条结构规则</a></li><li class="l2"><a href="#模式与成本模型">模式与成本模型</a></li><li class="l3"><a href="#diff声明式的反连接">DIFF：声明式的反连接</a></li><li class="l2"><a href="#一致性">一致性</a></li><li class="l2"><a href="#embedded">Embedded</a></li><li class="l2"><a href="#性能">性能</a></li><li class="l2"><a href="#另见">另见</a></li></ul></aside>
 </div>
 
-<script src="../../../assets/docsearch.js" defer></script>
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;

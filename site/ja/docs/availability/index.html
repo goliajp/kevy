@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>可用性 — kevy</title>
 <meta name="description" content="kevyのデプロイが、ノード障害を越えて書き込み可能・読み出し可能であり続けるための仕組みです。トポロジ、「最速・非同期」から「クォーラムでフェンスされた」までの整合性ラダー、計画的フェイルオーバーとクラッシュフェイルオーバー、そして各段階でクライアントが見る正確なエラー契約を扱います。">
-<link rel="stylesheet" href="../../../assets/kevy.css">
-<link rel="stylesheet" href="../../../assets/docs.css">
+<link rel="stylesheet" href="../../../assets/kevy.css?v=bd23a2c5">
+<link rel="stylesheet" href="../../../assets/docs.css?v=35ee534d">
 <script>
   try {
     var t = localStorage.getItem("kevy-theme");
@@ -41,7 +41,7 @@
   </div>
 </header>
 
-<div class="doc-shell">
+<div class="doc-shell has-toc">
   <aside class="side"><p class="side-h">はじめに</p><ul><li><a href="../../../ja/docs/designing-on-kevy/">kevyの上にアプリケーションを設計する</a></li><li><a href="../../../ja/docs/cookbook/">RDS→kevyモデリング・クックブック</a></li><li><a href="../../../ja/docs/persistence/">永続化</a></li><li><a href="../../../ja/docs/tuning/">kevyのチューニング</a></li></ul><p class="side-h">運用</p><ul><li><a href="../../../ja/docs/replication/">レプリケーション</a></li><li><a href="../../../ja/docs/availability/" aria-current="page">可用性</a></li><li><a href="../../../ja/docs/cluster/">クラスタ</a></li><li><a href="../../../ja/docs/accept-shards/">--accept-shards N — スパースなコネクションをシャードの部分集合に畳む</a></li><li><a href="../../../ja/docs/uds/">Unixドメインソケット（UDS）トランスポート</a></li><li><a href="../../../ja/docs/async/">非同期クライアント</a></li></ul><p class="side-h">データ</p><ul><li><a href="../../../ja/docs/indexes/">セカンダリインデックス（IDX. / idx_）</a></li><li><a href="../../../ja/docs/vector-search/">ベクトル検索（KIND ann）</a></li><li><a href="../../../ja/docs/text-search/">全文検索（KIND text）</a></li><li><a href="../../../ja/docs/views/">ビュー（VIEW. / view_）</a></li><li><a href="../../../ja/docs/cdc/">CDC — 変更フィード（FEED. / changes_since）</a></li><li><a href="../../../ja/docs/pubsub/">Pub/sub</a></li><li><a href="../../../ja/docs/lua/">Luaスクリプティング</a></li></ul><p class="side-h">組み込み</p><ul><li><a href="../../../ja/docs/wasm/">WebAssembly上のkevy</a></li><li><a href="../../../ja/docs/embedded-listener/">組み込みの読み取り専用RESPリスナー</a></li><li><a href="../../../ja/docs/iot/">IoTデバイス上のkevy</a></li></ul><p class="side-h">リファレンス</p><ul><li><a href="../../../ja/docs/error-replies/">エラーリプライ・カタログ</a></li><li><a href="../../../ja/docs/rds-workloads/">kevy上のRDSワークロード</a></li><li><a href="../../../ja/docs/migration/">移行——プレイブックとツールチェーン</a></li><li><a href="../../../ja/docs/UPGRADING/">kevyのアップグレード</a></li></ul><p class="side-h">&nbsp;</p><ul><li><a href="../../../ja/docs/commands/">184 コマンド全て</a></li></ul></aside>
   <main id="main" class="doc"><div class="doc-head"><h1>可用性</h1></div>
 <p>kevyのデプロイが、ノード障害を越えて書き込み可能・読み出し可能であり続けるための仕組みです。トポロジ、「最速・非同期」から「クォーラムでフェンスされた」までの整合性ラダー、計画的フェイルオーバーとクラッシュフェイルオーバー、そして各段階でクライアントが見る正確なエラー契約を扱います。</p>
@@ -128,7 +128,7 @@ FAILOVER ABORT</code></pre></figure>
   <aside class="toc"><p class="toc-h">このページの内容</p><ul><li class="l2"><a href="#トポロジ">トポロジ</a></li><li class="l3"><a href="#シングルノード">シングルノード</a></li><li class="l3"><a href="#プライマリ-レプリカ">プライマリ + レプリカ</a></li><li class="l3"><a href="#3ノードのelectクォーラム">3ノードのelectクォーラム</a></li><li class="l2"><a href="#整合性ラダー">整合性ラダー</a></li><li class="l3"><a href="#read-your-writesrepltoken-replwait">read-your-writes：REPL.TOKEN / REPL.WAIT</a></li><li class="l3"><a href="#wait-耐久性ではなくレプリカのack">WAIT — 耐久性ではなく、レプリカのack</a></li><li class="l3"><a href="#有界ステイルネス-stale">有界ステイルネス：-STALE</a></li><li class="l3"><a href="#書き込みゲートmin-replicas-to-writeとクォーラムリース">書き込みゲート：min_replicas_to_writeとクォーラムリース</a></li><li class="l2"><a href="#フェイルオーバー">フェイルオーバー</a></li><li class="l3"><a href="#計画的failover-verb">計画的：FAILOVER verb</a></li><li class="l3"><a href="#クラッシュクォーラム選挙">クラッシュ：クォーラム選挙</a></li><li class="l2"><a href="#ライターとリーダーのためのエラー契約">ライターとリーダーのためのエラー契約</a></li><li class="l2"><a href="#運用">運用</a></li><li class="l3"><a href="#ポート規約">ポート規約</a></li><li class="l3"><a href="#configキー">configキー</a></li><li class="l3"><a href="#可観測性">可観測性</a></li><li class="l3"><a href="#ゲート">ゲート</a></li><li class="l2"><a href="#関連項目">関連項目</a></li></ul></aside>
 </div>
 
-<script src="../../../assets/docsearch.js" defer></script>
+<script src="../../../assets/docsearch.js?v=8c03463d" defer></script>
 <script>
   document.getElementById("theme").addEventListener("click", function () {
     var r = document.documentElement;
