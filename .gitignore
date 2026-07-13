@@ -46,3 +46,5 @@ bench/iot-consumer/riscv-out
 
 # perfgate builds the reference binary from the baseline commit and caches it here.
 bench/.perfgate-ref/
+aof-*.aof.premigration.*
+dump-*.rdb.premigration.*
