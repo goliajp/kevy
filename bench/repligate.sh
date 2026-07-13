@@ -67,15 +67,27 @@ echo "repligate: snapshot ship + live frames landed (dbsize=$N)"
 
 # clamp 1: pause the writer (SIGSTOP), let the replica drain, compare digests
 kill -STOP $WPID
-sleep 2
 # primary digest via its embedded data? The writer has no listener — use
-# the REPLICA's own digest twice 1s apart to prove it drained (stable),
-# then a value spot-check against the writer's deterministic final state.
-D1=$($CLI digest -p $REPPORT p:)
+# the REPLICA's own digest, polled until stable. The clamp is "with input
+# stopped, the replica CONVERGES and STAYS stable" — a bounded wait tests
+# exactly that; the old fixed 2s was a razor edge (v3.18 drained in
+# exactly 2s on an idle box) that turned load-sensitive on slow runners.
+D1=""; D2=""
+for _ in $(seq 30); do
+    D2=$($CLI digest -p $REPPORT p:)
+    [ -n "$D1" ] && [ "$D1" = "$D2" ] && break
+    D1="$D2"
+    sleep 1
+done
+if [ "$D1" != "$D2" ] || [ -z "$D1" ]; then
+    echo "repligate: FAIL — replica still churning while primary is stopped ($D1 vs $D2)"
+    exit 1
+fi
+# and it must STAY stable — one more read a second later.
 sleep 1
 D2=$($CLI digest -p $REPPORT p:)
 if [ "$D1" != "$D2" ]; then
-    echo "repligate: FAIL — replica still churning while primary is stopped ($D1 vs $D2)"
+    echo "repligate: FAIL — replica digest moved after convergence ($D1 vs $D2)"
     exit 1
 fi
 echo "repligate: quiesced digest stable: $D1"
@@ -95,12 +107,18 @@ for _ in $(seq 120); do
 done
 [ $CONVERGED = 1 ] || { echo "repligate: FAIL — post-restart replica never re-synced"; exit 1; }
 kill -STOP $WPID
-sleep 2
-D3=$($CLI digest -p $REPPORT p:)
+# same bounded convergence as clamp 1.
+D3=""; D4=""
+for _ in $(seq 30); do
+    D4=$($CLI digest -p $REPPORT p:)
+    [ -n "$D3" ] && [ "$D3" = "$D4" ] && break
+    D3="$D4"
+    sleep 1
+done
 sleep 1
-D4=$($CLI digest -p $REPPORT p:)
-if [ "$D3" != "$D4" ] || [ "$N" -lt 50003 ]; then
-    echo "repligate: FAIL — post-restart digest unstable ($D3 vs $D4)"
+D4B=$($CLI digest -p $REPPORT p:)
+if [ "$D3" != "$D4" ] || [ "$D4" != "$D4B" ] || [ "$N" -lt 50003 ]; then
+    echo "repligate: FAIL — post-restart digest unstable ($D3 vs $D4 vs $D4B)"
     exit 1
 fi
 echo "repligate: restart re-synced + stable: $D3"
