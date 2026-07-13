@@ -40,6 +40,34 @@ off. Wire protocol and disk format carry over from 3.x unchanged;
 - Three cross-shard writes went to the wrong shard; one of them
   lost data. All three fixed, with the routing pinned by tests.
 
+### One stone, many doors (the v4 entrypoints arc)
+
+- **kevy-ffi**, the C ABI stone: one generic `kevy_cmd` entry (argv
+  in, RESP out) reaches every verb with zero per-verb surface, plus
+  the scalar fast path `kevy_get` / `kevy_set` (the MMKV lane) and
+  polled pub/sub. Ships as cdylib + staticlib with `kevy.h` /
+  `kevy.hpp` / a Clang module map.
+- **The language doors**, all thin shells over that one stone, each
+  with the same typed face and a `cmd()` escape hatch: C and C++
+  (the headers are the package), Go (`bindings/go`, cgo over the
+  staticlib), **Bun and Node in one npm package**
+  (`@goliajp/kevy-node` — bun:ffi on Bun, and on Node a hand-written
+  N-API addon, `kevy-napi`: twelve `node_api` symbols declared by
+  hand, no napi crate), Swift (`KevyKit`, SwiftPM wrapping
+  `Kevy.xcframework`), Kotlin/JVM/Android (`kevy-jni`, hand-written
+  JNI slots, no jni crate).
+- **expo-kevy**: kevy in React Native as an Expo module —
+  synchronous JSI functions (the MMKV shape), handles as small ints,
+  the whole typed surface in TypeScript over the same packed-argv /
+  RESP contract the JNI and N-API doors speak.
+- **Channels**: a brew tap formula, apt (a hand-rolled deb, no
+  packaging toolchain), and npm platform packages for the kevy /
+  kevy-cli binaries.
+- **ffigate** in CI: every door opens on every push — C, C++, Go,
+  Bun and Node smokes on both OSes (command round-trip, a protocol
+  error as data, pub/sub, close-and-reopen durability), plus the
+  expo door's TS typecheck.
+
 ### Proven where it claims to run
 
 - **The browser build is real** (T8): the durable backend the engine

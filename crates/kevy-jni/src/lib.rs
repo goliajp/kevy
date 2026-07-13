@@ -186,6 +186,19 @@ pub unsafe extern "system" fn jni_set(
     .unwrap_or(-2)
 }
 
+/// `KevyNative.version()` — the engine version as UTF-8 bytes.
+///
+/// # Safety
+/// Called by the JVM only.
+#[unsafe(export_name = "Java_jp_golia_kevy_KevyNative_version")]
+pub unsafe extern "system" fn jni_version(env: JniEnv, _class: JObject) -> JObject {
+    catch_unwind(AssertUnwindSafe(|| {
+        let v = unsafe { std::ffi::CStr::from_ptr(kevy_ffi::kevy_version()) };
+        unsafe { new_byte_array(env, v.to_bytes()) }
+    }))
+    .unwrap_or(null_mut())
+}
+
 /// `KevyNative.subscribe(long db, byte[] chan, boolean pattern)` — open a
 /// polled subscription on one channel (or glob pattern). Returns the
 /// subscription handle, 0 on failure.
