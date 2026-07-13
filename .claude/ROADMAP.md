@@ -269,3 +269,46 @@ v1.x → v2.0 的完整历史账目见 git log + `CHANGELOG.md` + `.claude/plans
 - [x] CHANGELOG 总账;workspace → 3.17.0;ship(tag/GH/crates/smoke)= 3.x 总线终版
 
 REFUSED:可用性 8 条照旧 + AI 轴 3 条(无 HTTP/REST 面;无 server 端 embedding 生成;无 LangChain/LlamaIndex 官方包)——入 scope-decisions。
+
+---
+
+# v4 入口总线(用户拍板 2026-07-14:包做实 + 渠道发行 + 移动三框架 + 竞品对比;主设计 = .claude/plans/2026-07-13-v4-entrypoints-arc.md + 本表)
+
+现状基线(2026-07-14 盘点):六语言 embedded 门功能面全落地且 ffigate
+每 push 双 OS smoke 绿;但「正式包形态」(prebuilt 分发物 + 装机验证)、
+渠道真发行、移动真机 e2e、竞品对比全部未做。client 面只有 Rust 自家
+(kevy-client / kevy-client-async);其他语言靠 RESP 兼容吃现有 redis
+client 生态 —— 该策略 t2 里 gate 化。
+
+### t1 — 包做实:embedded 面正式包形态(无拍板项,先行)
+- [ ] npm @goliajp/kevy-node prebuilt 打包:kevy-napi .node × (darwin-arm64 / linux-x64 / linux-arm64) + bun cdylib 同装;packaging/npm 加脚本;tarball 装机 smoke(node + bun 双跑)
+- [ ] NuGet Kevy.Embedded 打包:runtimes/<rid>/native 三平台 cdylib;dotnet pack + 本地 feed 装机 smoke
+- [ ] Go module 发布形态核对(libs/<target>/libkevy_ffi.a 内嵌布局 + go.mod 门面);pkg.go.dev 门面 README
+- [ ] 各包 README(npm / NuGet / SwiftPM / Maven / go)= 装法 + typed 面 + cmd 逃生门 + 版本对齐 4.0.0
+- [ ] ffigate 升级:六门断言对齐一张契约表(cmd 面 / error-as-data / pubsub / durability / 标量快路)
+
+### t2 — client 面:兼容矩阵 gate 化(RFC 已内含推荐,自研与否留拍板)
+- [ ] clientgate:主流 redis client 连 kevy server 的兼容矩阵进 CI —— node-redis / ioredis / go-redis / StackExchange.Redis / hiredis / redis-py × (基本 KV + 扩展面 raw 通道 IDX./VIEW./FEED.);async 由各生态 client 自带覆盖
+- [ ] docs:「bring your redis client」页(六语言连接示例)+ Rust 自家双 client 挂链
+- [ ] 拍板项:是否自研 per 语言 typed client(暴露 IDX./FEED. typed 面)—— 推荐不做,RESP 兼容即生态;要做则另立 train
+
+### t3 — 移动做实:RN(expo + bare)+ Flutter(工具链本机已备:Xcode/模拟器/NDK;Flutter SDK 待装)
+- [ ] expo-kevy example app + mobilegate 一期:iOS 模拟器 + Android 模拟器双端 e2e smoke(脚本化,可本机跑)
+- [ ] bare RN 验证:expo-modules-core in bare RN 路线跑通 + 文档;不可行则 TurboModule 壳兜底
+- [ ] flutter_kevy:dart:ffi 直连 kevy-ffi cdylib,federated plugin(android jniLibs + ios xcframework);smoke 进 mobilegate
+- [ ] mobilegate 二期:三框架(expo / bare RN / flutter)all-green 一张表
+
+### t4 — 竞品对比:mmkvgate + embedded bench(性能北极星 = 全轴超越 MMKV)
+- [ ] mmkvgate:iOS XCTest measure + androidx microbenchmark;轴 = 同步标量 get/set × value 尺寸 × 冷/热 + 批量 + 启动加载;对手 = MMKV 原生 + react-native-mmkv(RN 层再对一轮);数字如实入账,输的轴列明
+- [ ] 输轴 → decomposition + attack(perf-vs-foss 方法论,2 轮 polish 不动针即 decomp;目标全轴 ≥ MMKV)
+- [ ] embedded bench RFC:竞品名单+轴先 RFC(候选:Go vs bbolt/badger;Node vs better-sqlite3/classic-level;C# vs LiteDB;C vs lmdb)→ 拍板后跑 → bench/EMBEDDED-LEDGER.md
+- [ ] server 面 vs valkey 沿用 arena/perfgate 常驻,不重复建
+
+### t5 — 渠道真发行(拍板项集中:npm org / brew tap repo / apt 域名+GPG / NuGet 账号 / goliajp/kevy-go repo / pub.dev publisher)
+- [ ] 拍板后:brew tap 建 repo + formula 发布;apt 仓库上线 t01;npm 平台分包发布(kevy-bin + kevy-node + expo-kevy);NuGet push;kevy-go repo 剥离 + tag
+- [ ] 发行后三渠道真装 smoke 重跑(脚本已有)+ site 安装页六语言
+- [ ] README 六语言矩阵 + llms.txt 同步
+
+### t6 — 总线收尾
+- [ ] lx64 post-fix arena 复测(悬案)→ README 基准表解冻
+- [ ] CHANGELOG 4.0.0 补总线各 train;五轴终审 → ship **v4.0.0**(tag 前 CI 真绿 + 用户验收)
