@@ -44,11 +44,28 @@ note() { echo "availgate: ok — $1"; }
 wait_ports_free() {
     # A just-killed server's sockets can linger a beat; binding into
     # that window aborts the new process (fail-fast is the right
-    # PRODUCT behavior — the gate simply waits it out).
+    # PRODUCT behavior — the gate simply waits it out). The whole
+    # per-shard span is checked, client and replication both: a
+    # foreign listener anywhere in it kills the server at bind, and an
+    # unnamed squatter cost a debugging session once (a Kotlin compile
+    # daemon's random RMI port landed on 17393 and availgate said only
+    # "replica never came up") — so a persistent squatter fails HERE,
+    # by name.
+    local spec=""
+    for base in $PPORT $RPORT 1$PPORT 1$RPORT; do
+        for off in 0 1 2 3; do # --threads 4
+            spec="$spec -i :$((base + off))"
+        done
+    done
     for _ in $(seq 50); do
-        lsof -nP -i :$PPORT -i :$RPORT -i :1$PPORT -i :1$RPORT >/dev/null 2>&1 || return 0
+        # shellcheck disable=SC2086
+        lsof -nP $spec >/dev/null 2>&1 || return 0
         sleep 0.2
     done
+    echo "availgate: FAIL — a gate port is held by another process:"
+    # shellcheck disable=SC2086
+    lsof -nP $spec 2>/dev/null | head -5
+    exit 1
 }
 
 start_primary() {
