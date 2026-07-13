@@ -1,0 +1,13 @@
+{
+  "version": 2,
+  "dgSpecHash": "gnAd6V4h19FDAmZbhtDiUPOW0d9q7Ceqi8Rcc5FenlKWCUo28Mfq7fdoZaAErfkRBmbHuQ6YVTCb5sEnZfmRbA==",
+  "success": true,
+  "projectFilePath": "/Users/doracawl/workspace/goliajp/kevy/bench/clientgate/seredis/seredis.csproj",
+  "expectedPackageFiles": [
+    "/Users/doracawl/.nuget/packages/microsoft.extensions.logging.abstractions/6.0.0/microsoft.extensions.logging.abstractions.6.0.0.nupkg.sha512",
+    "/Users/doracawl/.nuget/packages/pipelines.sockets.unofficial/2.2.8/pipelines.sockets.unofficial.2.2.8.nupkg.sha512",
+    "/Users/doracawl/.nuget/packages/stackexchange.redis/2.8.16/stackexchange.redis.2.8.16.nupkg.sha512",
+    "/Users/doracawl/.nuget/packages/system.io.pipelines/5.0.1/system.io.pipelines.5.0.1.nupkg.sha512"
+  ],
+  "logs": []
+}

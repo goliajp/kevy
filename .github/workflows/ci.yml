@@ -467,6 +467,44 @@ jobs:
       - name: 3-way differential vs valkey 9.1 + redis 7.4
         run: bash bench/compat3.sh
 
+  # ── clientgate — bring your redis client, gated ──────────────────────────
+  # kevy speaks RESP; the claim that every ecosystem's mainstream redis
+  # client just works is executable: node-redis, ioredis, go-redis,
+  # StackExchange.Redis, redis-py and hiredis each run the same ladder
+  # (typed ops per family, a pub/sub round trip, an extended verb raw)
+  # against one kevy server.
+  clientgate:
+    name: clientgate (six redis clients, one kevy server)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: clientgate-${{ hashFiles('Cargo.lock') }}
+      - name: Build server + cli (release)
+        run: cargo build --release -p kevy --bin kevy -p kevy-cli --bin kevy-cli
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 'lts/*'
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache-dependency-path: bench/clientgate/goredis/go.mod
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Install hiredis
+        run: sudo apt-get update -q && sudo apt-get install -y -q libhiredis-dev
+      - run: bash bench/clientgate.sh
+
   # ── ffigate — every language door opens on every push ────────────────────
   # One stone (kevy-ffi), many doors: the C, C++, Go, Bun, Node and C#
   # smokes all run the same contract — commands, a protocol error as data,
