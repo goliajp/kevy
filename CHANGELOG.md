@@ -53,9 +53,10 @@ off. Wire protocol and disk format carry over from 3.x unchanged;
   staticlib), **Bun and Node in one npm package**
   (`@goliajp/kevy-node` — bun:ffi on Bun, and on Node a hand-written
   N-API addon, `kevy-napi`: twelve `node_api` symbols declared by
-  hand, no napi crate), Swift (`KevyKit`, SwiftPM wrapping
-  `Kevy.xcframework`), Kotlin/JVM/Android (`kevy-jni`, hand-written
-  JNI slots, no jni crate).
+  hand, no napi crate), C# (`Kevy.Embedded` for NuGet — net8
+  `LibraryImport` P/Invoke, `runtimes/<rid>/native` layout), Swift
+  (`KevyKit`, SwiftPM wrapping `Kevy.xcframework`), Kotlin/JVM/
+  Android (`kevy-jni`, hand-written JNI slots, no jni crate).
 - **expo-kevy**: kevy in React Native as an Expo module —
   synchronous JSI functions (the MMKV shape), handles as small ints,
   the whole typed surface in TypeScript over the same packed-argv /
@@ -64,9 +65,9 @@ off. Wire protocol and disk format carry over from 3.x unchanged;
   packaging toolchain), and npm platform packages for the kevy /
   kevy-cli binaries.
 - **ffigate** in CI: every door opens on every push — C, C++, Go,
-  Bun and Node smokes on both OSes (command round-trip, a protocol
-  error as data, pub/sub, close-and-reopen durability), plus the
-  expo door's TS typecheck.
+  Bun, Node and C# smokes on both OSes (command round-trip, a
+  protocol error as data, pub/sub, close-and-reopen durability),
+  plus the expo door's TS typecheck.
 
 ### Proven where it claims to run
 

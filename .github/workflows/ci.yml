@@ -468,10 +468,10 @@ jobs:
         run: bash bench/compat3.sh
 
   # ── ffigate — every language door opens on every push ────────────────────
-  # One stone (kevy-ffi), many doors: the C, C++, Go, Bun and Node smokes
-  # all run the same contract — commands, a protocol error as data, a
-  # pub/sub round trip, and a close-and-reopen durability check. The Rust
-  # door is the kevy-embedded suite itself; C# joins here when it lands.
+  # One stone (kevy-ffi), many doors: the C, C++, Go, Bun, Node and C#
+  # smokes all run the same contract — commands, a protocol error as data,
+  # a pub/sub round trip, and a close-and-reopen durability check. The
+  # Rust door is the kevy-embedded suite itself.
   ffigate:
     name: ffigate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -533,6 +533,15 @@ jobs:
       - run: cargo build -p kevy-napi
       - run: node --test node.test.js
         working-directory: bindings/node
+
+      - name: C# smoke
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: |
+          ext=so; [ "$(uname)" = Darwin ] && ext=dylib
+          KEVY_FFI_LIB="$PWD/target/debug/libkevy_ffi.$ext" \
+            dotnet run --project bindings/csharp/smoke -c Release -- /tmp/kevy-smoke-cs-data
 
       # The native shells need a host Expo project (and Xcode / the NDK) —
       # they are exercised by the mobile smokes, not here. This pins the

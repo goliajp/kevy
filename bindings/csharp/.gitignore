@@ -1,0 +1,5 @@
+bin/
+obj/
+# Packed-in native engine (runtimes/<rid>/native) — copied at pack time
+# from target/, authoritative build is cargo.
+Kevy.Embedded/runtimes/

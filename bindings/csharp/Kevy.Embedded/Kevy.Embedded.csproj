@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Kevy.Embedded — kevy embedded for .NET, P/Invoke over the kevy-ffi
+       C ABI. The published NuGet ships the engine cdylib under
+       runtimes/<rid>/native/ (copied in at pack time — the .gitignore'd
+       runtimes/ tree); development and ffigate point KEVY_FFI_LIB straight
+       at target/debug instead. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Kevy.Embedded</RootNamespace>
+
+    <PackageId>Kevy.Embedded</PackageId>
+    <Version>4.0.0</Version>
+    <Authors>GOLIA K.K.</Authors>
+    <Description>kevy embedded in .NET — the real native engine behind one Cmd() entry plus a typed surface. TTL, structures, pub/sub, persistence you can read; pure Rust, zero services.</Description>
+    <PackageLicenseExpression>Apache-2.0 OR MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/goliajp/kevy</RepositoryUrl>
+    <PackageProjectUrl>https://kevy.golia.jp</PackageProjectUrl>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="runtimes/**" Pack="true" PackagePath="runtimes/" Condition="Exists('runtimes')" />
+  </ItemGroup>
+
+</Project>
