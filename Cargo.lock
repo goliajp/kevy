@@ -542,6 +542,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kevy-ffi"
+version = "4.0.0"
+dependencies = [
+ "kevy-embedded",
+]
+
+[[package]]
 name = "kevy-geo"
 version = "4.0.0"
 

@@ -68,6 +68,7 @@
 #![warn(missing_docs)]
 
 mod config;
+mod dispatch;
 mod info;
 #[cfg(feature = "persist")]
 mod metric;

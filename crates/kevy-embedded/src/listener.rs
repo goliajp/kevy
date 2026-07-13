@@ -10,7 +10,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 
 use crate::store::WeakStore;
 
-mod verbs;
+pub(crate) mod verbs;
 
 /// crate-internal re-export for [`crate::Store::dispatch_readonly`].
 pub(crate) use verbs::dispatch as verbs_dispatch;
