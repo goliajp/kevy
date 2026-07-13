@@ -564,6 +564,13 @@ name = "kevy-index"
 version = "4.0.0"
 
 [[package]]
+name = "kevy-jni"
+version = "4.0.0"
+dependencies = [
+ "kevy-ffi",
+]
+
+[[package]]
 name = "kevy-lua"
 version = "4.0.0"
 dependencies = [

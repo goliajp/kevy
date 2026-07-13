@@ -74,6 +74,7 @@ members = [
     "crates/kevy-chaos",
     "crates/kevy-mcp",
     "crates/kevy-ffi",
+    "crates/kevy-jni",
     "crates/kevy-wasm",
 ]
 
