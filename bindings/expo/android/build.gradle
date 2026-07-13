@@ -1,0 +1,17 @@
+// The Expo door, Android side. The expo-module-gradle-plugin (injected by
+// Expo autolinking) wires Kotlin and expo-modules-core; the native engine
+// arrives as jniLibs (libkevy_jni.so per ABI) plus the raw KevyNative
+// class, both copied in by scripts/prepare-native.sh from their
+// authoritative homes under bindings/android and crates/kevy-jni.
+apply plugin: 'expo-module-gradle-plugin'
+
+group = 'jp.golia.kevy'
+version = '4.0.0'
+
+android {
+  namespace 'jp.golia.kevy.expo'
+  defaultConfig {
+    versionCode 1
+    versionName '4.0.0'
+  }
+}

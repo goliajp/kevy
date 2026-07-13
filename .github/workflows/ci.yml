@@ -533,3 +533,10 @@ jobs:
       - run: cargo build -p kevy-napi
       - run: node --test node.test.js
         working-directory: bindings/node
+
+      # The native shells need a host Expo project (and Xcode / the NDK) —
+      # they are exercised by the mobile smokes, not here. This pins the
+      # TS surface, where the whole typed layer of the expo door lives.
+      - name: Expo door typecheck
+        run: npx -y -p typescript@5 tsc --noEmit -p tsconfig.json
+        working-directory: bindings/expo

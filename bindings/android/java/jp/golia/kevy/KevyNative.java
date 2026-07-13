@@ -36,6 +36,9 @@ public final class KevyNative {
     /** Scalar fast-path SET, ttlMs 0 = no expiry; 0 = ok, negative = misuse. */
     public static native int set(long db, byte[] key, byte[] val, long ttlMs);
 
+    /** The engine version as UTF-8 bytes. */
+    public static native byte[] version();
+
     /** Subscribe to one channel (a glob when pattern); 0 = failure. */
     public static native long subscribe(long db, byte[] chan, boolean pattern);
 

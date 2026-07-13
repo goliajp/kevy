@@ -1,0 +1,8 @@
+# Vendored native artifacts — authoritative homes are bindings/apple,
+# bindings/android and crates/kevy-jni; scripts/prepare-native.sh copies
+# them in before pod install / gradle build / npm pack.
+ios/Kevy.xcframework/
+android/src/main/java/
+android/src/main/jniLibs/
+android/build/
+node_modules/
