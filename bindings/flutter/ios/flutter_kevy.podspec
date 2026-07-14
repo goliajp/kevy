@@ -18,15 +18,14 @@ Pod::Spec.new do |s|
   s.platform = :ios, '15.0'
   s.vendored_frameworks = 'Kevy.xcframework'
 
-  # A static-library XCFramework must be force-loaded so its symbols reach
-  # the process image for DynamicLibrary.process() — a dead-strip would
-  # drop them otherwise (dart:ffi references them only at runtime). The
-  # slice differs by SDK: device vs simulator.
+  # kevy_anchor.c forces a link-time reference to one engine symbol so the
+  # linker keeps the vendored static xcframework in the binary — without
+  # it, DynamicLibrary.process() (which resolves at runtime) leaves the
+  # library unreferenced and it gets dead-stripped.
+  s.source_files = 'kevy_anchor.c'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386',
-    'OTHER_LDFLAGS[sdk=iphoneos*]' => '-force_load ${PODS_TARGET_SRCROOT}/Kevy.xcframework/ios-arm64/libkevy_ffi.a',
-    'OTHER_LDFLAGS[sdk=iphonesimulator*]' => '-force_load ${PODS_TARGET_SRCROOT}/Kevy.xcframework/ios-arm64-simulator/libkevy_ffi.a',
   }
   s.swift_version = '5.0'
 end
