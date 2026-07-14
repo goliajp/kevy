@@ -115,5 +115,29 @@ Estimated to bring SET 4 KB from ~2.3 µs toward the ~0.3 µs store floor
 (mmap file lifecycle, growth, msync durability, replay + rewrite
 compatibility, per-platform mmap), a persistence-core change that
 belongs in its own RFC + isolated worktree + full durability/replay/
-rewrite test pass — not a tail-end change. Tracked as the next SET
-attack; the decomposition above is its ground truth.
+rewrite test pass — not a tail-end change. The decomposition above is
+its ground truth; the checklist below is its starting point.
+
+#### mmap-AOF implementation checklist (RFC scope)
+
+1. **kevy-sys mmap binding** (none exists today). Hand-written
+   `unsafe extern "C"` for `mmap` / `munmap` / `msync` / `ftruncate` —
+   the same OS-boundary discipline as the socket/poller bindings, no
+   `libc`/`memmap2` crate (the 0-dep charter). Unit-test the round trip.
+2. **Aof mmap backend.** Replace `BufWriter<File>` with a mapped region
+   + append offset: ensure capacity (grow via `ftruncate` + remap as
+   the tail nears the end), memcpy the frame at `offset`, advance. One
+   value copy (into the page) instead of two.
+3. **Preserve every existing Aof semantic — the hard part, not the
+   mmap.** `EverySec`/`Always`/`No` (msync replaces flush+fdatasync),
+   the group-commit window, the `rewrite_tee` diff buffer,
+   `rewrite_from` / `begin_concurrent_rewrite` (the mapped file is
+   swapped), and `size_bytes` for the auto-rewrite trigger.
+4. **Cross-platform.** mmap on Linux + macOS; wasm has no mmap — keep
+   the `BufWriter<File>` backend as the target-gated fallback.
+5. **Test pass.** kevy-persist + kevy-embedded replay + rewrite suites
+   green; a crash-injection replay (kill mid-append, reopen, clean
+   frame boundary); lx64 A/B (SET 4 KB toward the 233 ns store floor).
+
+Until that lands, attack #1's 256 KiB buffer is the shipped SET win
+(−20%, MMKV lead 4.6× → 3.6×).
