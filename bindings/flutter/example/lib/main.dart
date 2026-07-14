@@ -68,9 +68,11 @@ class _MyAppState extends State<MyApp> {
           KevyDb.version());
 
       final allOk = lines.every((l) => l.ok);
+      // ignore: avoid_print
       print(allOk ? 'MOBILEGATE:PASS' : 'MOBILEGATE:FAIL');
       setState(() => _lines = lines);
     } catch (e) {
+      // ignore: avoid_print
       print('MOBILEGATE:ERROR $e');
       setState(() => _err = '$e');
     }
