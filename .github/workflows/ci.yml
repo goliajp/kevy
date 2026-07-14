@@ -134,6 +134,19 @@ jobs:
     name: contract gates (availgate + aigate + repligate)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # Forced epoll — same reason covgate already carries KEVY_IO_URING=0:
+    # the GitHub x86 runners' io_uring environment cannot bring up a kevy
+    # server reliably. availgate's primary parked all four shards in
+    # io_cqring_wait and never accepted a client (thread-state autopsy in
+    # bench/availgate.sh caught it) — a runner-environment gap, not a kevy
+    # logic bug: the same release binary passes io_uring bring-up 25/25 in
+    # an arm64 Linux container and every clamp on macOS. These gates assert
+    # the replication/availability CONTRACT, which the reactor choice does
+    # not change. Root-causing the x86-runner io_uring bring-up is tracked
+    # in .claude/notes/uring-ci-bringup.md (blocked on a healthy x86 Linux
+    # host — the runner is the only x86 env and it is the faulty one).
+    env:
+      KEVY_IO_URING: "0"
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust (stable)
