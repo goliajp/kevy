@@ -11,9 +11,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# iOS: the same stone KevyKit and expo-kevy wrap.
-rm -rf ios/Kevy.xcframework
-cp -R ../apple/KevyKit/Artifacts/Kevy.xcframework ios/
+# iOS: a DYNAMIC-framework xcframework the app embeds + code-signs, so
+# dart:ffi DynamicLibrary.open resolves it via @rpath (the static
+# xcframework KevyKit/expo use is not Swift-import-linkable from a plain
+# CocoaPods pod). Built fresh from kevy-ffi so it carries current perf.
+rm -rf ios/kevy_ffi.xcframework
+../../packaging/apple/build-dynamic-xcframework.sh ios/.dyn-fw
+mv ios/.dyn-fw/kevy_ffi.xcframework ios/
+rm -rf ios/.dyn-fw
 
 # Android: the per-ABI kevy-ffi cdylibs, as jniLibs.
 for pair in aarch64-linux-android:arm64-v8a x86_64-linux-android:x86_64; do
@@ -29,5 +34,5 @@ for pair in aarch64-linux-android:arm64-v8a x86_64-linux-android:x86_64; do
 done
 
 echo "flutter_kevy native artifacts in place:"
-find ios/Kevy.xcframework -name '*.a' | sed 's/^/  /'
+find ios/kevy_ffi.xcframework -name 'kevy_ffi' -type f | sed 's/^/  /'
 find android/src/main/jniLibs -name '*.so' | sed 's/^/  /'

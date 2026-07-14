@@ -35,7 +35,7 @@ migrate_working_dir/
 # Vendored native engine — copied in by scripts/prepare-native.sh from
 # the authoritative homes (kevy-ffi build + the KevyKit xcframework);
 # not committed, regenerated per build.
-ios/Kevy.xcframework/
+ios/kevy_ffi.xcframework/
 android/src/main/jniLibs/
 example/android/
 example/ios/

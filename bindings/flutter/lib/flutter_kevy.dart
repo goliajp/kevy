@@ -28,7 +28,10 @@ export 'src/resp.dart' show KevyError, respText;
 // into the app binary, so its symbols are in the process image.
 final FlutterKevyBindings _b = FlutterKevyBindings(() {
   if (Platform.isAndroid) return ffi.DynamicLibrary.open('libkevy_ffi.so');
-  if (Platform.isIOS || Platform.isMacOS) return ffi.DynamicLibrary.process();
+  // iOS embeds kevy_ffi as a dynamic framework (like Android's .so) and
+  // loads it by name; macOS links the static KevyKit stone into the host.
+  if (Platform.isIOS) return ffi.DynamicLibrary.open('kevy_ffi.framework/kevy_ffi');
+  if (Platform.isMacOS) return ffi.DynamicLibrary.process();
   if (Platform.isLinux) return ffi.DynamicLibrary.open('libkevy_ffi.so');
   if (Platform.isWindows) return ffi.DynamicLibrary.open('kevy_ffi.dll');
   throw UnsupportedError('kevy: unsupported platform');

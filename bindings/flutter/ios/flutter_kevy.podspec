@@ -1,9 +1,15 @@
 #
 # flutter_kevy — a thin dart:ffi layer over the prebuilt kevy-ffi engine.
-# No plugin-local C; the engine ships as Kevy.xcframework (the same one
-# KevyKit and expo-kevy vendor), linked so its symbols land in the app
-# binary — DynamicLibrary.process() finds them. scripts/prepare-native.sh
-# copies the xcframework in.
+# No plugin-local C; the engine ships as kevy_ffi.xcframework, a DYNAMIC
+# framework. CocoaPods embeds + code-signs a vendored dynamic framework
+# into the app's Frameworks/, so dart:ffi DynamicLibrary.open(
+# 'kevy_ffi.framework/kevy_ffi') resolves it at runtime via @rpath — the
+# same shape as the Android door's dynamic .so. This sidesteps the
+# static-xcframework path, where CocoaPods neither registered the Swift
+# `import` module nor linked the `-lkevy_ffi` slice. KevyKit and expo
+# keep the static xcframework (their Swift shells call the symbols
+# directly at link time); flutter is the dynamic variant.
+# scripts/prepare-native.sh builds + copies the dynamic xcframework in.
 #
 Pod::Spec.new do |s|
   s.name             = 'flutter_kevy'
@@ -16,17 +22,14 @@ Pod::Spec.new do |s|
   s.source           = { :path => '.' }
   s.dependency 'Flutter'
   s.platform = :ios, '15.0'
-  s.vendored_frameworks = 'Kevy.xcframework'
-
-  # KevyAnchor.swift `import Kevy`s the xcframework's clang module — the
-  # same mechanism the (green) expo door uses — so CocoaPods links the
-  # vendored static xcframework and its symbols survive into the app
-  # binary, where DynamicLibrary.process() finds them at runtime. A bare-C
-  # extern does not trigger the pod's module link; the module import does.
-  s.source_files = 'KevyAnchor.swift'
+  s.vendored_frameworks = 'kevy_ffi.xcframework'
+  # A trivial source so CocoaPods builds a real framework target for this
+  # pod; a vendored-only pod under use_frameworks! gets none, so the slice
+  # is never extracted and the link fails "Framework 'kevy_ffi' not found".
+  s.source_files = 'flutter_kevy.swift'
+  s.swift_version = '5.0'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386',
   }
-  s.swift_version = '5.0'
 end
