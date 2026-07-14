@@ -126,6 +126,21 @@ impl Aof {
             file.write_all(AOF_MAGIC)?;
             file.sync_data()?;
             size = AOF_MAGIC.len() as u64;
+        } else {
+            // Repair a torn tail before the first append. A crash — power
+            // loss, or a VM/process kill with un-fsynced `EverySec` pages —
+            // can leave a partial frame, or a zero-filled region, after the
+            // last complete one. `replay_aof` stops there (prefix-only), but
+            // an O_APPEND write would land *after* the garbage, orphaning it
+            // behind the torn frame on the next replay: silent data loss.
+            // Truncate to the last complete frame so appends stay contiguous
+            // with the replayable prefix (Redis `aof-load-truncated`).
+            let valid = crate::replay::valid_prefix_len_of_file(path)?;
+            if valid < size {
+                file.set_len(valid)?;
+                file.sync_data()?;
+                size = valid;
+            }
         }
         Ok(Aof {
             file: BufWriter::with_capacity(AOF_BUF_CAP, file),

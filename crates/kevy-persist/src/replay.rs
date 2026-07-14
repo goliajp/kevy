@@ -87,6 +87,51 @@ pub fn replay_aof<F: FnMut(Argv)>(path: &Path, mut apply: F) -> io::Result<()> {
     Ok(())
 }
 
+/// Byte length of the AOF at `path` up to and including the last
+/// **complete** RESP frame (after the magic header). Trailing bytes
+/// beyond it — a partial frame from a crash mid-append, or a zero-filled
+/// region from a crash with un-fsynced pages — are not replayable.
+/// [`crate::aof::Aof::open`] truncates the file to this before the first
+/// append, so new writes stay contiguous with the replayable prefix
+/// instead of landing behind the torn tail (where the next replay would
+/// stop and silently orphan them). Uses the same parser as
+/// [`replay_aof`], so the truncation point and the replay stop point can
+/// never disagree. A missing file is length 0.
+pub(crate) fn valid_prefix_len_of_file(path: &Path) -> io::Result<u64> {
+    let mut data = Vec::new();
+    match File::open(path) {
+        Ok(mut f) => {
+            f.read_to_end(&mut data)?;
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e),
+    }
+    Ok(valid_prefix_len(&data) as u64)
+}
+
+/// Offset after the last complete frame in `data` (magic-aware). Mirrors
+/// the `replay_aof` parse loop, minus the `apply`.
+fn valid_prefix_len(data: &[u8]) -> usize {
+    let total = data.len();
+    let mut pos = if data.len() >= crate::aof::AOF_MAGIC.len()
+        && &data[..crate::aof::AOF_MAGIC.len()] == crate::aof::AOF_MAGIC
+    {
+        crate::aof::AOF_MAGIC.len()
+    } else {
+        0
+    };
+    loop {
+        if pos >= total {
+            break;
+        }
+        match kevy_resp::parse_command(&data[pos..]) {
+            Ok(Some((_, consumed))) => pos += consumed,
+            Ok(None) | Err(_) => break,
+        }
+    }
+    pos
+}
+
 /// Outcome of an AOF replay run — drives the summary log shape.
 enum ReplayStop {
     Clean,
