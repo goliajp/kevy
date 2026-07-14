@@ -1,8 +1,16 @@
-# io_uring server bring-up hangs on the GitHub x86 runners
+# primary+replication server bring-up hangs on the GitHub x86 runners
 
-**Status:** open, worked around (contract gates forced to epoll,
-`KEVY_IO_URING=0`, same as covgate). Not a shipping-path blocker — the
-default reactor auto-selects and this is a CI-runner-environment gap.
+**Status:** open, tracked. availgate + repligate live in a
+`continue-on-error` CI job (`replication-gates`) so the hang is visible
+without masking CI or blocking the branch (user decision 2026-07-14).
+Not a shipping-path blocker.
+
+**NOT io_uring** (corrected): the first cut blamed io_uring and forced
+epoll (`KEVY_IO_URING=0`), but the epoll run hung identically — `wchan`
+showed the shards in `ep_poll`, not `io_cqring_wait`. It is
+reactor-independent. It is **primary+replication specific**: a
+standalone server is green in the docker smoke; the two gates that hang
+(availgate, repligate) each start a real primary AND a real replica.
 
 ## Symptom
 
@@ -36,8 +44,28 @@ producing an accept CQE.
 
 `arms_accept` is not the cause: availgate passes no `--accept-shards`,
 so `accept_shards` is `None` and every shard has `arms_accept = true`
-(`runtime_run.rs`). The `listener` exists, the multishot accept SQE is
-prepped at the top of `run_uring`'s loop.
+(`runtime_run.rs`). The `listener` exists and is registered.
+
+**ss evidence (the decisive one).** The socket-layer autopsy on a
+failing epoll run:
+
+```
+State  Recv-Q Send-Q Local Address:Port  users
+LISTEN 0      1024   127.0.0.1:7381      kevy pid=2769 fd=20
+LISTEN 0      1024   127.0.0.1:7381      kevy pid=2769 fd=17
+LISTEN 0      1024   127.0.0.1:7381      kevy pid=2769 fd=14
+LISTEN 0      1024   127.0.0.1:7381      kevy pid=2769 fd=11
+LISTEN 0      1024   127.0.0.1:17381     kevy pid=2769 fd=12
+```
+
+All four client listeners (SO_REUSEPORT on 7381) are LISTENing, plus
+the replication listener on 17381 — the server is fully up. **Recv-Q =
+0**: nothing is stuck in the accept queue. So the client PING is either
+never reaching the listener, or is accepted and then the connection
+stalls after accept (no read). Next witness needed: an ESTABLISHED-conn
+`ss -tnp` (does the PING conn exist? is its Recv-Q filling — data
+arrived but not read?), and whether `--threads 1` (no SO_REUSEPORT, no
+cross-shard) changes it.
 
 ## What it is not
 
