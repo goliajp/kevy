@@ -38,7 +38,19 @@ PPID_=""
 RPID_=""
 trap 'kill $PPID_ $RPID_ 2>/dev/null; rm -rf "$DIR"' EXIT
 
-fail() { echo "availgate: FAIL — $1"; exit 1; }
+fail() {
+    echo "availgate: FAIL — $1"
+    # The crime scene, not just the verdict: a server that died at
+    # startup says why on its own stderr, which a mute "never came up"
+    # used to discard (one port-squatter and one Linux-only startup
+    # failure each cost a blind debugging round).
+    for f in "$DIR"/pri.out "$DIR"/rep.out "$DIR"/*.out; do
+        [ -f "$f" ] || continue
+        echo "--- $(basename "$f") (tail)"
+        tail -6 "$f"
+    done 2>/dev/null | head -40
+    exit 1
+}
 note() { echo "availgate: ok — $1"; }
 
 wait_ports_free() {
