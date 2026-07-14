@@ -140,4 +140,28 @@ its ground truth; the checklist below is its starting point.
    frame boundary); lx64 A/B (SET 4 KB toward the 233 ns store floor).
 
 Until that lands, attack #1's 256 KiB buffer is the shipped SET win
-(−20%, MMKV lead 4.6× → 3.6×).
+(−20% on lx64, MMKV lead 4.6× → 3.6×).
+
+### Re-measure on the simulator with attack #1 (KevyKit xcframework rebuilt)
+
+Rebuilt the xcframework so KevyKit carries the 256 KiB buffer, re-ran
+the iOS-sim matrix, and added a bulk axis (distinct keys, no reuse):
+
+| Axis        | kevy (attack #1) | MMKV    | Ratio | vs pre-#1 |
+|-------------|-----------------:|--------:|------:|----------:|
+| SET 4 KB    | ~14 µs | ~3.5 µs | 4.0× | was 4.6×  |
+| SET 256 B   | ~1.0 µs| ~0.5 µs | 2.0× | ~same     |
+| BULK 4 KB   | ~15 µs | ~3.5 µs | 4.3× | (new)     |
+
+Two honest reads:
+
+- **attack #1 helps less on the simulator (~−12%) than on lx64 (−20%)**
+  — the sim writes to the host filesystem, a different write path than
+  lx64's ext4, and SET-4KB RSD is ~22% here, so the real-disk lx64
+  number is the more trustworthy one. Still, the direction holds and
+  the 4 KB lead closed from 4.6× to 4.0×.
+- **The bulk hypothesis is refuted.** Distinct-key bulk (15 µs) is no
+  better than warm-key SET (14 µs) — the buffer amortises the same way
+  in both, so there is no extra bulk-only win. The remaining gap is the
+  per-append page-cache/syscall cost, exactly what attack #2b (mmap)
+  targets, in bulk and warm alike.
