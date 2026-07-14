@@ -42,7 +42,9 @@ case "$framework" in
         ;;
     flutter)
         appdir="$HERE/bindings/flutter/example"
-        ios_cmd="flutter run --release -d $(ios_sim_id)"
+        # iOS simulators run debug only (release/profile need a device);
+        # the Android emulator runs release fine.
+        ios_cmd="flutter run --debug -d $(ios_sim_id)"
         android_cmd="flutter run --release -d $(android_dev_id)"
         ;;
     *) echo "unknown framework: $framework" >&2; exit 2 ;;
