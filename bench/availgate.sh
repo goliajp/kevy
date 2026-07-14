@@ -49,6 +49,19 @@ fail() {
         echo "--- $(basename "$f") (tail)"
         tail -6 "$f"
     done 2>/dev/null | head -40
+    # The io_uring bring-up hang is SILENT (two startup lines, then
+    # nothing) and races too rarely to catch outside CI's x86 runners
+    # (25 clean container rounds on arm64) — so when a server is still
+    # alive but mute, the only witness is where each of its threads
+    # sleeps in the kernel. Linux-only (/proc), which is exactly where
+    # the hang lives.
+    for pid in $PPID_ $RPID_; do
+        [ -n "$pid" ] && [ -d "/proc/$pid" ] || continue
+        echo "--- pid $pid thread kernel sleep points:"
+        for t in /proc/$pid/task/*; do
+            echo "  tid $(basename "$t") wchan=$(cat "$t/wchan" 2>/dev/null) stat=$(awk '{print $3}' "$t/stat" 2>/dev/null)"
+        done
+    done
     exit 1
 }
 note() { echo "availgate: ok — $1"; }
