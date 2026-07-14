@@ -209,6 +209,45 @@ fn replay_aof_with_real_corrupt_frame_keeps_prefix() {
     let _ = std::fs::remove_file(&path);
 }
 
+// Regression: a crash (VM/process kill with un-fsynced EverySec pages)
+// leaves a zero-filled region after the last complete frame. Before the
+// fix, `Aof::open` appended *after* the zeros, so the next replay stopped
+// at the zeros and silently orphaned everything written after reopen —
+// the exact "expo Android REOPEN returned ∅" bug. `Aof::open` must
+// truncate the torn tail so the reopen's appends stay replayable.
+#[test]
+fn aof_open_truncates_crash_zero_tail_so_reopen_appends_survive() {
+    let path = temp_file("aof-zero-tail");
+    // Simulate the post-crash file: magic + one good frame + a zero region
+    // (the crash-lost EverySec tail, size journaled but data un-flushed).
+    {
+        let mut f = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&path)
+            .unwrap();
+        f.write_all(AOF_MAGIC).unwrap();
+        write_multibulk(&mut f, &cmd(&[b"SET", b"k", b"v"])).unwrap();
+        f.write_all(&[0u8; 128]).unwrap(); // torn/zeroed tail
+    }
+    // Reopen (what the next process boot does) and append fresh writes.
+    {
+        let mut aof = Aof::open(&path, Fsync::No).unwrap();
+        aof.append(&cmd(&[b"SET", b"k2", b"v2"])).unwrap();
+    }
+    // Replay must see BOTH the pre-crash frame and the post-reopen one —
+    // the append landed contiguous with the prefix, not behind the zeros.
+    let mut got: Vec<Argv> = Vec::new();
+    replay_aof(&path, |args| got.push(args)).unwrap();
+    assert_eq!(
+        got,
+        vec![cmd(&[b"SET", b"k", b"v"]), cmd(&[b"SET", b"k2", b"v2"])],
+        "torn zero-tail truncated on open; reopen's append is replayable"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 pub(crate) fn temp_aof(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
     let uniq = std::time::SystemTime::now()
