@@ -142,6 +142,14 @@ its ground truth; the checklist below is its starting point.
 Until that lands, attack #1's 256 KiB buffer is the shipped SET win
 (−20% on lx64, MMKV lead 4.6× → 3.6×).
 
+**RFC written, awaiting 拍板:**
+`.claude/plans/2026-07-15-v4-mmap-aof-rfc.md` turns this checklist into a
+full design (kevy-sys mmap binding, backend trait with BufWriter
+fallback, msync durability mapping every Fsync policy, growth strategy,
+crash-consistency, and the merge-gate test pass). Two decisions block
+implementation: go/no-go on the rewrite now, and the crash-EOF strategy
+(committed-length marker vs zero-run-as-EOF).
+
 ### Re-measure on the simulator with attack #1 (KevyKit xcframework rebuilt)
 
 Rebuilt the xcframework so KevyKit carries the 256 KiB buffer, re-ran
