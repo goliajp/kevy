@@ -293,7 +293,7 @@ client 生态 —— 该策略 t2 里 gate 化。
 - [ ] 拍板项:是否自研 per 语言 typed client(暴露 IDX./FEED. typed 面)—— 推荐不做,RESP 兼容即生态;要做则另立 train
 
 ### t3 — 移动做实:RN(expo + bare)+ Flutter(工具链本机已备:Xcode/模拟器/NDK;Flutter SDK 待装)
-- [ ] expo-kevy example app + mobilegate 一期:iOS 模拟器 + Android 模拟器双端 e2e smoke(脚本化,可本机跑)
+- [x] expo-kevy example app + mobilegate 一期:iOS 模拟器 + Android 模拟器双端 e2e smoke —— **双端 ALL PASS**(2788f735/9ac1303e);真机抓到 open() file:// URI bug 已下沉库层;mobilegate.sh 用 simctl/adb logcat 独立捕获 verdict
 - [ ] bare RN 验证:expo-modules-core in bare RN 路线跑通 + 文档;不可行则 TurboModule 壳兜底
 - [ ] flutter_kevy:dart:ffi 直连 kevy-ffi cdylib,federated plugin(android jniLibs + ios xcframework);smoke 进 mobilegate
 - [ ] mobilegate 二期:三框架(expo / bare RN / flutter)all-green 一张表
