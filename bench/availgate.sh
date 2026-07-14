@@ -62,6 +62,16 @@ fail() {
             echo "  tid $(basename "$t") wchan=$(cat "$t/wchan" 2>/dev/null) stat=$(awk '{print $3}' "$t/stat" 2>/dev/null)"
         done
     done
+    # The threads park in a normal-looking run state (main in join's
+    # futex, shards in the reactor's poll), yet the client PING never
+    # answers — so the question is the socket layer, not the threads.
+    # ss shows whether the listeners are actually LISTENing and whether
+    # their accept queue (Recv-Q on a LISTEN socket) is filling — i.e.
+    # SYNs land but no accept() drains them. Linux-only, on point.
+    if command -v ss >/dev/null 2>&1; then
+        echo "--- listener + accept-queue state (Recv-Q = unaccepted conns):"
+        ss -tlnp 2>/dev/null | grep -E "Recv-Q|:$PPORT|:$RPORT|:1$PPORT|:1$RPORT" | head -20
+    fi
     exit 1
 }
 note() { echo "availgate: ok — $1"; }
