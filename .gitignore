@@ -26,6 +26,12 @@ node_modules/
 package.json
 package-lock.json
 yarn.lock
+# …but the packages we SHIP are real: their manifests are exempt
+# (bindings/expo/package.json was silently swallowed by the rule
+# above once — the npm package landed on origin with no manifest).
+!bindings/**/package.json
+!packaging/npm/**/package.json
+!crates/kevy-wasm/pkg/package.json
 pnpm-lock.yaml
 
 # Python virtualenvs — same reasoning as node_modules.
