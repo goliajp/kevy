@@ -14,7 +14,12 @@ fn main() {
     let dir = a.next().expect("dir");
     let vsize: usize = a.next().and_then(|s| s.parse().ok()).unwrap_or(4096);
     let n: u64 = a.next().and_then(|s| s.parse().ok()).unwrap_or(4_000_000);
-    let store = Store::open(Config::default().with_persist(dir)).expect("open");
+    // 4th arg: aof 1/0. AOF-off isolates the store path (value.to_vec +
+    // hashmap insert) from the AOF append (write_multibulk + syscall), so
+    // the A/B pins which side owns the SET cost.
+    let aof = a.next().map_or(true, |s| s != "0");
+    let cfg = if aof { Config::default().with_persist(dir) } else { Config::default() };
+    let store = Store::open(cfg).expect("open");
     let val = vec![0x61u8; vsize];
     let keys: Vec<Vec<u8>> = (0..200).map(|i| format!("k{i}").into_bytes()).collect();
     for i in 0..n {
