@@ -36,12 +36,45 @@ next rungs.
   `write` per set, plus the store insert + `Arc<[u8]>` copy); MMKV
   appends into an mmap page (no syscall, no copy out of the page cache).
 
-## Attack surface (perf-vs-foss)
+## Attack log (perf-vs-foss)
 
-SET is the losing family. The 4 KB axis (4.6×) is where the
-size-scaling cost lives, so that is the decomposition target: the
-per-set AOF `write` and the value copy on the SET path vs MMKV's
-in-page append. Phase A (read both paths side by side, ±20% budget)
-before any change. Tracked as the next mmkvgate step.
+SET is the losing family; the 4 KB axis scales worst. GET needs no
+attack — it already clears the bar.
 
-GET needs no attack — it already clears the bar.
+### Decomposition (perf-record on lx64, x86 ext4 + tmpfs)
+
+`crates/kevy-embedded/examples/set4k_bench.rs` loops `Store::set` of a
+4 KB value; `perf record` on the release build put **52% of SET-4KB
+self-time in the `write` syscall** (`ksys_write` → `vfs_write` →
+`generic_perform_write`), consistent on tmpfs and ext4. Root cause: the
+AOF's `BufWriter<File>` defaulted to 8 KiB, so a 4 KB value fills it
+every two appends and flushes a `write` syscall. MMKV's mmap append
+pays no syscall — it memcpys into a mapped page.
+
+### Attack #1 — AOF write buffer 8 KiB → 256 KiB (landed)
+
+Amortise the `write` across ~64 appends instead of 2. Durability is
+unchanged: `EverySec` still flushes + fsyncs once a second, so the
+crash window stays ≤ 1 s regardless of buffer size.
+
+A/B on lx64 (median of 3, 3M × SET 4 KB, ext4, EverySec, RSD < 1%):
+
+| buffer | wall (3M sets) | per-op | vs baseline |
+|--------|---------------:|-------:|------------:|
+| 8 KiB  | 8.80 s | 2.93 µs | — |
+| 256 KiB| 7.01 s | 2.34 µs | **−20.3%** |
+
+`write` self-time 52% → 44% — the syscall *count* dropped, but the
+per-`write` page-cache copy (`copy_from_user` + folio) scales with data
+volume and is untouched. That residue is the next axis, and it is the
+mmap-vs-write architectural gap (attack #2, larger): the copy into a
+mapped page skips the syscall boundary and per-write folio lookup that
+`write` pays. Also open: the value is copied **twice** per SET
+(`value.to_vec()` into the store + `write_all` into the BufWriter) vs
+MMKV's single in-page copy.
+
+Effect on the mmkvgate 4 KB axis (proportional estimate): kevy SET 4 KB
+~16 µs → ~12.8 µs, narrowing MMKV's lead from 4.6× to ~3.6×. Still
+behind — attack #2 (mmap append / kill the double copy) is the path to
+parity. This is a stone-layer win: every AOF write path (server SET
+throughput, HSET/RPUSH/ZADD, bulk import) benefits, not just mobile.
