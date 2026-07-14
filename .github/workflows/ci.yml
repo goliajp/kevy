@@ -124,14 +124,22 @@ jobs:
       - name: Clippy (workspace, all targets, all features)
         run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
 
-  # ───────────── contract gates: AI / MCP (single-process) ─────────────
-  # The single-process behavior contracts: aigate (discovery /
-  # self-explaining errors / MCP wire) and mcpgate (MCP protocol e2e).
-  # One server, hard gate. The multi-process replication contracts
-  # (availgate / repligate) live in their own allow-failure job below —
-  # see the note there.
+  # ───────────── contract gates: availability / AI / replication ─────────────
+  # The executable behavior contracts: availgate's clamps (replication
+  # truth, crash failover, the consistency ladder), aigate (discovery /
+  # self-explaining errors / MCP wire), mcpgate (MCP protocol e2e),
+  # repligate (snapshot ship + live frames + restart resync). Real
+  # processes, release binaries, one hard gate.
+  #
+  # (Was briefly split with availgate/repligate on continue-on-error over
+  # a phantom "primary never came up" hang — root-caused on lx64 to an
+  # availgate SCRIPT bug, not kevy: a `timeout 15 …`-wrapped CLI var made
+  # the `[ -x ]` check fall back to a debug binary that a release-only
+  # build never produces, so every PING ran a missing command. macOS has
+  # no coreutils `timeout`, so it never wrapped and stayed green — which
+  # is why it looked Linux-only. Fixed; folded back to a hard gate.)
   gates:
-    name: contract gates (aigate + mcpgate)
+    name: contract gates (availgate + aigate + repligate)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -155,55 +163,13 @@ jobs:
           cargo build --release -p kevy --bin kevy
           cargo build --release -p kevy-mcp
           cargo build --release -p kevy-cli
+          cargo build --release -p kevy-embedded --example primary_writer
+      - name: availgate (16 clamps, 4 phases)
+        run: bash bench/availgate.sh target/release/kevy
       - name: aigate (wire + MCP)
         run: bash bench/aigate.sh target/release/kevy
       - name: mcpgate (MCP protocol e2e — full tool matrix + error fidelity)
         run: bash bench/mcpgate.sh target/release/kevy
-
-  # ───────────── replication gates: availgate + repligate (allow-failure) ─────────────
-  # These two spin up a real primary AND a real replica (two processes),
-  # and on the GitHub x86 runners the primary hangs after bring-up: ss
-  # shows all four listeners LISTENing with an empty accept queue, the
-  # threads park in a normal run state, yet a client PING never answers —
-  # reactor-independent (epoll and io_uring both), primary+replication
-  # specific (a standalone server is green in the docker smoke), and NOT
-  # reproducible off the x86 runner (25/25 in an arm64 container, every
-  # clamp green on macOS). It is not a kevy logic bug we can see, and it
-  # cannot be root-caused without a healthy x86 Linux host (lx64 is down,
-  # cross-compile can't run, arm64 emulation runs the host kernel). So
-  # this job is `continue-on-error`: the hang is visible and TRACKED
-  # (.claude/notes/uring-ci-bringup.md) without masking the rest of CI or
-  # blocking the branch. The replication CONTRACT itself is exercised on
-  # macOS and locally; when an x86 box exists, this job proves the fix.
-  # Do NOT fold these back into the hard gate until the hang is closed.
-  replication-gates:
-    name: replication gates (availgate + repligate) [allow-failure]
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v7
-      - name: Install Rust (stable)
-        run: |
-          rustup toolchain install stable --no-self-update
-          rustup default stable
-      - name: Cache cargo registry + build artifacts
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: cargo-gates-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            cargo-gates-
-      - name: Build gate binaries (release)
-        run: |
-          cargo build --release -p kevy --bin kevy
-          cargo build --release -p kevy-cli
-          cargo build --release -p kevy-embedded --example primary_writer
-      - name: availgate (12 clamps, 3 phases)
-        run: bash bench/availgate.sh target/release/kevy
       - name: repligate (ship + frames + restart)
         run: bash bench/repligate.sh
 

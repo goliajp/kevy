@@ -21,13 +21,21 @@ set -u
 KBIN=${1:?usage: availgate.sh <kevy-binary>}
 KBIN=$(cd "$(dirname "$KBIN")" && pwd)/$(basename "$KBIN")
 cd "$(dirname "$0")/.."
+# Resolve the CLI binary FIRST, then wrap it. Order matters and got it
+# wrong once with a multi-day cost: wrapping `timeout 15 …` onto CLI
+# before the `[ -x "$CLI" ]` check made that check test the whole string
+# as a path — it failed, fell back to the debug binary, and on a
+# release-only build (every Linux CI run) that binary does not exist, so
+# every PING ran a missing command and the gate reported "primary never
+# came up" while the server was perfectly healthy. macOS has no
+# coreutils `timeout`, so it never wrapped, never fell back, and stayed
+# green — which is exactly why the phantom looked Linux-only.
 CLI=target/release/kevy-cli
-# Every CLI call bounded: a server wedged into accept-but-never-reply
-# turns a gate into a silent multi-hour hang on CI (seen twice on the
-# contract job). With coreutils timeout the call fails loudly at the
-# exact clamp instead; macOS dev boxes (no timeout) run unbounded.
-command -v timeout >/dev/null 2>&1 && CLI="timeout 15 $CLI"
 [ -x "$CLI" ] || CLI=target/debug/kevy-cli
+# Every CLI call bounded: a server wedged into accept-but-never-reply
+# turns a gate into a silent multi-hour hang on CI. With coreutils
+# timeout the call fails loudly at the exact clamp; macOS runs unbounded.
+command -v timeout >/dev/null 2>&1 && CLI="timeout 15 $CLI"
 # Replication listens at port+10000 for NSHARDS consecutive ports —
 # keep client ports ≥ nshards apart or the two servers' replication
 # ranges collide (v3.15: replicas bind a listener too).
