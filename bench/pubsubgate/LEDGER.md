@@ -68,5 +68,45 @@ to roughly 10× (mitt's zero-crossing floor is unbeatable, but 10× is a
 different product than 92×). The Nitro door also lifts **every** RN kevy
 op (GET/SET call overhead), not just pub/sub — same crossing, same tax.
 
-Next: build the Nitro door (spec + C++ glue to kevy-ffi + push callback),
-re-run this gate, record the post-attack row here.
+## Attack — Nitro/JSI door, measured (feasibility spike)
+
+Built as `bindings/nitro-spike` (`react-native-kevy-nitro`): a C++-only
+Nitro HybridObject calling `kevy-ffi` directly via JSI — `abi()`,
+`cmd(argv: ArrayBuffer): ArrayBuffer`, and a poll-model pub/sub trio. Same
+emulator (arm64-v8a), Hermes, expo debug, new arch. `bindings/expo/example/
+nitroBench.ts` times identical round-trips through both doors; NITROGATE
+lines from logcat, median of 2 on-device runs.
+
+| Axis            | Expo door | Nitro door | Nitro/Expo |
+|-----------------|----------:|-----------:|-----------:|
+| `abi()` pure-JSI | —        | 9,090,909/s | — (≈110 ns/call) |
+| `cmd` PING       | 143,266/s | 487,805/s  | **3.4×** |
+| `cmd` SET        | 139,082/s | 295,858/s  | **2.1×** |
+| pub/sub 16 B     | 48,734/s  | 485,447/s  | **~10×** |
+
+Correctness: `NITROGATE:SMOKE abi=1 ping="+PONG\r\n"` — the C++ door really
+reaches the engine, and pub/sub delivered every message (50001/50000).
+
+### Reading it
+
+- **Pub/sub 48 k → 485 k/s (~10×)** — exactly the LEDGER's prediction. The
+  gap to mitt collapses from **93× to 8.6×**: a different product. And this
+  is *still the poll/drain shape* (publish + `subNext` loop, ~2 crossings/
+  msg); a true native→JS push callback would remove one more crossing.
+- **`cmd` PING 143 k → 488 k/s (3.4×)** — a single cmd is one crossing, so
+  the Expo door's 143 k cmd/s ≈ 7 µs/crossing (matches the pub/sub-derived
+  6–7 µs above). Nitro's ~2 µs/cmd is *not* the ~110 ns JSI floor because
+  `cmd` still allocates+copies a reply ArrayBuffer and runs the RESP
+  encode; the crossing is cheap now, the marshalling is what's left.
+- **`abi()` at 9 M/s (~110 ns)** confirms the JSI HostFunction dispatch cost
+  the hypothesis assumed — two orders of magnitude under the Expo door.
+
+Viability: nitrogen 0.36.1 codegen + the native C++ build both work on RN
+0.86.0 (new arch). Two RN-0.86 frictions surfaced and were solved in the
+spike, not worked around: (1) a pure-C++ Nitro module needs a Kotlin
+`ReactPackage` shim for Expo autolinking to link it and to load the .so;
+(2) `libkevy_ffi.so` needed an explicit SONAME or the linked-in path breaks
+dlopen. Both are one-liners, now in the tree.
+
+Next (not done here): a native→JS **push** callback path (removes the drain
+crossing) and an iOS run.
