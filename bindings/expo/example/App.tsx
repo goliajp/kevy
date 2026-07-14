@@ -7,6 +7,7 @@ import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { documentDirectory } from "expo-file-system/legacy";
 import { open, text, version } from "expo-kevy";
 import { runPubsubBench, pubsubGateLines, type BenchRow } from "./pubsubBench";
+import { runNitroBench } from "./nitroBench";
 
 type Line = { label: string; ok: boolean; got: string };
 
@@ -43,6 +44,7 @@ function runSmoke(): Line[] {
 export default function App() {
   const [lines, setLines] = useState<Line[]>([]);
   const [bench, setBench] = useState<BenchRow[]>([]);
+  const [nitro, setNitro] = useState<string[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -62,6 +64,15 @@ export default function App() {
       for (const line of pubsubGateLines(rows)) console.log(line);
     } catch (e) {
       console.log(`PUBSUBGATE:ERROR ${String(e)}`);
+    }
+    // Nitro (JSI) fast-path door vs the Expo door — nitrogate reads the
+    // NITROGATE lines (cmd round-trips through both doors).
+    try {
+      const nitroLines = runNitroBench();
+      setNitro(nitroLines);
+      for (const line of nitroLines) console.log(line);
+    } catch (e) {
+      console.log(`NITROGATE:ERROR ${String(e)}`);
     }
   }, []);
 
@@ -93,6 +104,16 @@ export default function App() {
             {b.opsPerSec.toLocaleString()} ({b.detail})
           </Text>
         </View>
+      ))}
+      {nitro.length > 0 ? (
+        <Text style={[styles.title, { fontSize: 16, marginTop: 16 }]}>
+          Nitro (JSI) door vs Expo door
+        </Text>
+      ) : null}
+      {nitro.map((l) => (
+        <Text key={l} style={styles.got}>
+          {l.replace(/^NITROGATE:\s*/, "")}
+        </Text>
       ))}
     </ScrollView>
   );
