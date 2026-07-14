@@ -63,20 +63,29 @@ run_ios() {
 run_one() {
     local platform=$1
     if [ "$platform" = ios ]; then run_ios; return $?; fi
-    # Android: expo run:android streams logcat through the CLI reliably.
+    # Android: same as iOS — capture the verdict from the device's own
+    # log (adb logcat), not the expo CLI, which exits after launching.
     local logf; logf=$(mktemp)
+    echo "mobilegate: streaming logcat…"
+    adb logcat -c 2>/dev/null || true
+    adb logcat 2>/dev/null | grep --line-buffered "MOBILEGATE" > "$logf" &
+    local streampid=$!
     echo "mobilegate: building + booting on android (this is slow)…"
-    npx expo run:android 2>&1 | tee "$logf" &
-    local pid=$!
+    local runf; runf=$(mktemp)
+    ( npx expo run:android > "$runf" 2>&1 ) &
+    local runpid=$!
+    local rc=1
     for _ in $(seq 360); do
-        if grep -q "MOBILEGATE:PASS" "$logf"; then
-            echo "mobilegate: android PASS"; kill $pid 2>/dev/null || true; return 0; fi
+        if grep -q "MOBILEGATE:PASS" "$logf"; then echo "mobilegate: android PASS"; rc=0; break; fi
         if grep -qE "MOBILEGATE:(FAIL|ERROR)" "$logf"; then
-            echo "mobilegate: android FAIL"; grep "MOBILEGATE:" "$logf" | head -1; kill $pid 2>/dev/null || true; return 1; fi
-        kill -0 $pid 2>/dev/null || { echo "mobilegate: android exited early"; tail -20 "$logf"; return 1; }
+            echo "mobilegate: android FAIL"; grep "MOBILEGATE:" "$logf" | head -1; rc=1; break; fi
+        if ! kill -0 $runpid 2>/dev/null && grep -qiE "FAILURE|error:" "$runf" \
+           && ! grep -q "BUILD SUCCESSFUL" "$runf"; then
+            echo "mobilegate: android build failed"; tail -15 "$runf"; rc=1; break; fi
         sleep 2
     done
-    echo "mobilegate: android timed out"; kill $pid 2>/dev/null || true; return 1
+    kill $streampid $runpid 2>/dev/null || true
+    return $rc
 }
 
 rc=0
