@@ -18,11 +18,12 @@ Pod::Spec.new do |s|
   s.platform = :ios, '15.0'
   s.vendored_frameworks = 'Kevy.xcframework'
 
-  # kevy_anchor.c forces a link-time reference to one engine symbol so the
-  # linker keeps the vendored static xcframework in the binary — without
-  # it, DynamicLibrary.process() (which resolves at runtime) leaves the
-  # library unreferenced and it gets dead-stripped.
-  s.source_files = 'kevy_anchor.c'
+  # KevyAnchor.swift `import Kevy`s the xcframework's clang module — the
+  # same mechanism the (green) expo door uses — so CocoaPods links the
+  # vendored static xcframework and its symbols survive into the app
+  # binary, where DynamicLibrary.process() finds them at runtime. A bare-C
+  # extern does not trigger the pod's module link; the module import does.
+  s.source_files = 'KevyAnchor.swift'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386',
