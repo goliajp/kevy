@@ -66,14 +66,13 @@ export default function App() {
       console.log(`PUBSUBGATE:ERROR ${String(e)}`);
     }
     // Nitro (JSI) fast-path door vs the Expo door — nitrogate reads the
-    // NITROGATE lines (cmd round-trips through both doors).
-    try {
-      const nitroLines = runNitroBench();
-      setNitro(nitroLines);
-      for (const line of nitroLines) console.log(line);
-    } catch (e) {
-      console.log(`NITROGATE:ERROR ${String(e)}`);
-    }
+    // NITROGATE lines. Async: the push variants await native->JS delivery.
+    runNitroBench()
+      .then((nitroLines) => {
+        setNitro(nitroLines);
+        for (const line of nitroLines) console.log(line);
+      })
+      .catch((e) => console.log(`NITROGATE:ERROR ${String(e)}`));
   }, []);
 
   const allOk = lines.length > 0 && lines.every((l) => l.ok) && !err;
