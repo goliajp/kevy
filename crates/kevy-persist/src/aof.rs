@@ -25,6 +25,17 @@ use crate::{
 /// byte-compatible with kevy-written logs.
 pub const AOF_MAGIC: &[u8; 9] = b"KEVYAOF1\n";
 
+/// AOF write buffer capacity. `BufWriter`'s default is 8 KiB — a single
+/// 4 KiB value fills it in two writes, so the append path spends ~half
+/// its time in the `write` syscall (perf-measured: SET 4 KiB, 52% in
+/// `write`/`ksys_write`, on both tmpfs and ext4). MMKV's mmap append
+/// pays no syscall at all; a larger buffer amortises the write across
+/// many appends the same way, without changing durability — `EverySec`
+/// still flushes + fsyncs once a second, so the crash window is
+/// unchanged (≤ 1 s) regardless of buffer size. 256 KiB holds ~64 4 KiB
+/// appends per syscall; per-shard cost is one such buffer.
+const AOF_BUF_CAP: usize = 256 * 1024;
+
 /// When to fsync the AOF to disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Fsync {
@@ -117,7 +128,7 @@ impl Aof {
             size = AOF_MAGIC.len() as u64;
         }
         Ok(Aof {
-            file: BufWriter::new(file),
+            file: BufWriter::with_capacity(AOF_BUF_CAP, file),
             path: path.to_path_buf(),
             fsync,
             dirty: false,
@@ -300,7 +311,7 @@ impl Aof {
         // go nowhere visible. Reopen against the new path.
         std::fs::rename(&tmp, &self.path)?;
         let f = OpenOptions::new().append(true).open(&self.path)?;
-        self.file = BufWriter::new(f);
+        self.file = BufWriter::with_capacity(AOF_BUF_CAP, f);
         self.size_bytes = bytes;
         self.size_at_last_rewrite = bytes;
         self.dirty = false;
@@ -348,7 +359,7 @@ impl Aof {
         std::fs::rename(tmp, &self.path)?;
         let f = OpenOptions::new().append(true).open(&self.path)?;
         let bytes = f.metadata().map_or(0, |m| m.len());
-        self.file = BufWriter::new(f);
+        self.file = BufWriter::with_capacity(AOF_BUF_CAP, f);
         self.size_bytes = bytes;
         self.size_at_last_rewrite = bytes;
         self.dirty = false;
