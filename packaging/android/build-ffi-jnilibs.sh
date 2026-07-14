@@ -19,7 +19,12 @@ API=24
 for triple in aarch64-linux-android x86_64-linux-android; do
   upper="$(echo "$triple" | tr '[:lower:]-' '[:upper:]_')"
   export "CARGO_TARGET_${upper}_LINKER=$BIN/${triple}${API}-clang"
-  cargo build -p kevy-ffi --release --target "$triple"
+  # Set an explicit SONAME. Flutter's dart:ffi dlopen()s by absolute path so
+  # it never needed one, but a consumer that *links* against this .so (the
+  # RN/Nitro C++ door does) records the DT_NEEDED from the SONAME — without
+  # it the linker bakes in the build-time path and dlopen fails at runtime.
+  RUSTFLAGS="-C link-arg=-Wl,-soname,libkevy_ffi.so" \
+    cargo build -p kevy-ffi --release --target "$triple"
 done
 
 echo "kevy-ffi jniLibs ready:"
