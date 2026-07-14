@@ -110,3 +110,52 @@ dlopen. Both are one-liners, now in the tree.
 
 Next (not done here): a native→JS **push** callback path (removes the drain
 crossing) and an iOS run.
+
+## Attack — native→JS push callback, measured
+
+The "remove the drain crossing" follow-up, built and measured. kevy-ffi is
+**poll-only** (`kevy_sub_next`, no `sub_wait`/callback registration), so a
+faithful push is: on `subscribePush`, spawn a **native poller thread** that
+loops `kevy_sub_next`; per frame, invoke the JS callback — which Nitro turns
+(a `void`-returning callback ⇒ `AsyncJSCallback`) into a fire-and-forget hop
+onto the JS thread via the RN CallInvoker. That is **JS-side push** (one
+callback per message, zero JS-side polling); the **native side still polls**.
+A true zero-CPU engine push would need a new kevy-ffi `sub_wait()` — an
+engine change, deliberately *not* done here. Two variants: per-message (one
+hop/frame) and batched (drain all pending, one hop/batch).
+
+Same emulator, Hermes, new arch. `nitroBench.ts` publishes M=50 000 and
+awaits full delivery. Median of 2 on-device runs:
+
+| Variant       | ops/s      | vs poll | note |
+|---------------|-----------:|--------:|------|
+| mitt          | 3,850,000  | —       | in-process floor |
+| poll/drain    | 510–532k   | 1.0×    | last round's baseline |
+| push/message  | 234–237k   | **0.4–0.5×** | one CallInvoker hop per frame |
+| push/batched  | 658–694k   | **1.3×** | ~7–8 frames per hop |
+
+All 50001/50000 delivered, no crash; app CPU 0.0% after `stopPush()` (the
+poller is joined, not leaked).
+
+### Reading it
+
+- **Push-per-message *loses* (0.4–0.5× poll).** The native→JS CallInvoker
+  hop per message costs **more** than the 2 `subNext` crossings it removes —
+  a hop is an enqueue onto the JS event loop + a thread wake, not a bare JSI
+  call. Removing crossings only helps if what replaces them is cheaper; here
+  it isn't. This is the load-bearing negative result of the round.
+- **Push-batched *wins* (1.3× poll).** Draining all pending frames per wake
+  and delivering one array-of-ArrayBuffers hop amortizes the hop across ~7–8
+  frames. It's the best kevy pub/sub shape measured, and closes the gap to
+  mitt to **~5.5×** (from poll's 7.5× and the Expo door's 93×).
+- **Caveat — native still polls.** The poller busy-spins (`yield` on empty),
+  burning ~one core *while a push subscription is live*. The honest fix is an
+  engine `sub_wait()` (block until a frame) exposed through kevy-ffi; that
+  would make push zero-CPU-when-idle and is the only thing here that needs an
+  engine change. Lifecycle is clean: `stopPush()` joins the thread (verified
+  0.0% CPU afterwards).
+
+Takeaway for the RN door: keep the **poll/drain** door as the simple default
+and offer **batched push** for high-fanout subscribers; skip push-per-message
+(it's a pessimization on this workload). A real engine `sub_wait()` is the
+next lever if push-when-idle CPU matters.
