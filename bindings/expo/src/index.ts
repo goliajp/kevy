@@ -203,8 +203,14 @@ export class KevyDb {
 
 // Open the engine: { dir } for persistence, nothing for in-memory.
 // Synchronous — this is React Native, the MMKV shape is the point.
+//
+// React Native's filesystem APIs hand back file:// URIs (expo-file-system,
+// react-native-fs), so accept one: the native engine wants a plain path,
+// and making every caller strip the scheme themselves is a footgun, not a
+// contract. A path without a scheme passes through unchanged.
 export function open(opts: OpenOptions = {}): KevyDb {
-  return new KevyDb(native.open(opts.dir ?? null), opts.tickMs ?? 50);
+  const dir = opts.dir == null ? null : decodeURI(opts.dir).replace(/^file:\/\//, "");
+  return new KevyDb(native.open(dir), opts.tickMs ?? 50);
 }
 
 export function version(): string {
