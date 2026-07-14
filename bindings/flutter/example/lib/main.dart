@@ -2,7 +2,7 @@
 // mobilegate drives headlessly runs here on start and paints green or
 // red, and logs MOBILEGATE:<PASS|FAIL> so the gate can read the verdict
 // from the device log. Synchronous kevy calls, the MMKV shape.
-import 'dart:developer' as developer;
+
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -68,10 +68,10 @@ class _MyAppState extends State<MyApp> {
           KevyDb.version());
 
       final allOk = lines.every((l) => l.ok);
-      developer.log(allOk ? 'MOBILEGATE:PASS' : 'MOBILEGATE:FAIL');
+      print(allOk ? 'MOBILEGATE:PASS' : 'MOBILEGATE:FAIL');
       setState(() => _lines = lines);
     } catch (e) {
-      developer.log('MOBILEGATE:ERROR $e');
+      print('MOBILEGATE:ERROR $e');
       setState(() => _err = '$e');
     }
   }
