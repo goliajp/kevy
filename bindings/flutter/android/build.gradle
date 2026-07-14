@@ -1,0 +1,53 @@
+// The Android Gradle Plugin builds the native code with the Android NDK.
+
+group = "jp.golia.flutter_kevy"
+version = "1.0"
+
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        // The Android Gradle Plugin knows how to build native code with the NDK.
+        classpath("com.android.tools.build:gradle:9.0.1")
+    }
+}
+
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: "com.android.library"
+
+android {
+    namespace = "jp.golia.flutter_kevy"
+
+    // Bumping the plugin compileSdk version requires all clients of this plugin
+    // to bump the version in their app.
+    compileSdk = 36
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        minSdk = 24
+    }
+
+    // No CMake: flutter_kevy is a thin dart:ffi layer over the prebuilt
+    // kevy-ffi engine, not plugin-local C. The per-ABI libkevy_ffi.so
+    // (built by packaging/android/build-ffi-jnilibs.sh and vendored by
+    // scripts/prepare-native.sh) ships as a jniLib the system loader
+    // resolves at DynamicLibrary.open('libkevy_ffi.so').
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ["src/main/jniLibs"]
+        }
+    }
+}
