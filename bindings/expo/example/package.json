@@ -12,6 +12,7 @@
     "expo-file-system": "~57.0.0",
     "expo-kevy": "file:..",
     "expo-status-bar": "~57.0.0",
+    "mitt": "^3.0.1",
     "react": "19.2.3",
     "react-native": "0.86.0"
   },

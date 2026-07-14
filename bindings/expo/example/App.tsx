@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { documentDirectory } from "expo-file-system/legacy";
 import { open, text, version } from "expo-kevy";
+import { runPubsubBench, pubsubGateLines, type BenchRow } from "./pubsubBench";
 
 type Line = { label: string; ok: boolean; got: string };
 
@@ -41,6 +42,7 @@ function runSmoke(): Line[] {
 
 export default function App() {
   const [lines, setLines] = useState<Line[]>([]);
+  const [bench, setBench] = useState<BenchRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -52,6 +54,14 @@ export default function App() {
     } catch (e) {
       setErr(String(e));
       console.log(`MOBILEGATE:ERROR ${String(e)}`);
+    }
+    // pub/sub throughput vs mitt — pubsubgate reads the PUBSUBGATE lines.
+    try {
+      const rows = runPubsubBench();
+      setBench(rows);
+      for (const line of pubsubGateLines(rows)) console.log(line);
+    } catch (e) {
+      console.log(`PUBSUBGATE:ERROR ${String(e)}`);
     }
   }, []);
 
@@ -69,6 +79,19 @@ export default function App() {
           <Text style={styles.mark}>{l.ok ? "✓" : "✗"}</Text>
           <Text style={styles.label}>{l.label}</Text>
           <Text style={styles.got}>{l.got}</Text>
+        </View>
+      ))}
+      {bench.length > 0 ? (
+        <Text style={[styles.title, { fontSize: 16, marginTop: 16 }]}>
+          pub/sub throughput (ops/s)
+        </Text>
+      ) : null}
+      {bench.map((b) => (
+        <View key={b.label} style={styles.row}>
+          <Text style={styles.label}>{b.label}</Text>
+          <Text style={styles.got}>
+            {b.opsPerSec.toLocaleString()} ({b.detail})
+          </Text>
         </View>
       ))}
     </ScrollView>
