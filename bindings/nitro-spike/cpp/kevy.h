@@ -1,0 +1,97 @@
+/* kevy.h — C ABI for embedding kevy.
+ *
+ * One generic command entry: kevy_cmd() takes argv and returns the
+ * RESP-encoded reply, the same bytes a kevy server would send. All verbs
+ * are reachable through it; pair it with any small RESP parser.
+ *
+ * Pub/sub is polled: kevy_sub_next() drains one frame at a time, encoded
+ * as the RESP array the server would push.
+ *
+ * Every function is safe to call from multiple threads on the same handle.
+ * Handles must be closed exactly once; buffers freed exactly once.
+ *
+ * ABI version: KEVY_ABI (bumped only on breaking signature changes).
+ */
+#ifndef KEVY_H
+#define KEVY_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#define KEVY_ABI 1
+
+typedef struct KevyDb KevyDb;   /* opaque database handle */
+typedef struct KevySub KevySub; /* opaque subscription handle */
+
+/* A buffer owned by kevy. Free with kevy_buf_free(); never free() it.
+ * All three fields must reach kevy_buf_free() untouched. */
+typedef struct {
+  uint8_t *ptr;
+  size_t len;
+  size_t cap;
+} KevyBuf;
+
+/* ── lifecycle ─────────────────────────────────────────────────────── */
+
+/* Open a persistent store rooted at dir (UTF-8, dir_len bytes, no NUL
+ * needed). Replays its log on open. NULL on failure. */
+KevyDb *kevy_open(const uint8_t *dir, size_t dir_len);
+
+/* Open a pure in-memory store — nothing survives the process. */
+KevyDb *kevy_open_mem(void);
+
+/* Close the store. The handle must not be used afterwards. */
+void kevy_close(KevyDb *db);
+
+/* ── commands ──────────────────────────────────────────────────────── */
+
+/* Execute one command; argv[0] is the verb ("SET", "IDX.CREATE", …).
+ * Writes the RESP reply to *out. Returns 0 on success — note a protocol
+ * error (-ERR …) is still a successful call with a RESP error in *out.
+ * Non-zero = the call itself was misused; *out is empty, do not free. */
+int32_t kevy_cmd(KevyDb *db, size_t argc, const uint8_t *const *argv,
+                 const size_t *argv_len, KevyBuf *out);
+
+/* Scalar fast path — GET/SET without argv or RESP framing. The lane the
+ * mobile bindings' hot loop lives on. kevy_get: 1 hit / 0 miss / neg
+ * misuse; kevy_set: 0 ok / neg misuse (ttl_ms 0 = no TTL). */
+int32_t kevy_get(KevyDb *db, const uint8_t *key, size_t key_len, KevyBuf *out);
+int32_t kevy_set(KevyDb *db, const uint8_t *key, size_t key_len,
+                 const uint8_t *val, size_t val_len, uint64_t ttl_ms);
+
+/* Free any KevyBuf returned by this library: pass its three fields
+ * unchanged. Scalars, not the struct by value — indirect struct passing
+ * (AArch64, >16 bytes) is beyond several FFI loaders. Null ptr = no-op. */
+void kevy_buf_free(uint8_t *ptr, size_t len, size_t cap);
+
+/* ── pub/sub (polled) ──────────────────────────────────────────────── */
+
+/* Subscribe to one channel / one glob pattern. NULL on failure. */
+KevySub *kevy_subscribe(KevyDb *db, const uint8_t *chan, size_t chan_len);
+KevySub *kevy_psubscribe(KevyDb *db, const uint8_t *pat, size_t pat_len);
+
+/* Drain one pending frame without blocking.
+ * 1 = frame written to *out (RESP array: message / pmessage / acks);
+ * 0 = nothing queued; negative = misuse. */
+int32_t kevy_sub_next(KevySub *sub, KevyBuf *out);
+
+/* Close the subscription (unsubscribes everything it held). */
+void kevy_sub_close(KevySub *sub);
+
+/* ── meta ──────────────────────────────────────────────────────────── */
+
+/* Engine version, e.g. "4.0.0". Static string — do not free. */
+const char *kevy_version(void);
+
+/* Runtime ABI version; compare against KEVY_ABI at startup. */
+uint32_t kevy_abi(void);
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif
+
+#endif /* KEVY_H */

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://nitro.margelo.com/nitro.schema.json",
+  "cxxNamespace": ["kevy"],
+  "ios": {
+    "iosModuleName": "KevyNitro"
+  },
+  "android": {
+    "androidNamespace": ["kevy"],
+    "androidCxxLibName": "KevyNitro"
+  },
+  "autolinking": {
+    "KevyNitro": {
+      "all": {
+        "language": "c++",
+        "implementationClassName": "HybridKevyNitro"
+      }
+    }
+  },
+  "ignorePaths": ["**/node_modules"]
+}
