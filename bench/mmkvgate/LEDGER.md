@@ -75,6 +75,45 @@ MMKV's single in-page copy.
 
 Effect on the mmkvgate 4 KB axis (proportional estimate): kevy SET 4 KB
 ~16 µs → ~12.8 µs, narrowing MMKV's lead from 4.6× to ~3.6×. Still
-behind — attack #2 (mmap append / kill the double copy) is the path to
-parity. This is a stone-layer win: every AOF write path (server SET
+behind. This is a stone-layer win: every AOF write path (server SET
 throughput, HSET/RPUSH/ZADD, bulk import) benefits, not just mobile.
+
+### Decomposition #2 — where the remaining SET cost lives (lx64)
+
+`set4k_bench` gained an AOF on/off toggle to isolate the store path
+from the AOF append. 3M × SET 4 KB, median of 3, ext4:
+
+| config           | wall | per-op | share |
+|------------------|-----:|-------:|------:|
+| AOF **off** (store only) | 0.70 s | 233 ns | 10% |
+| AOF **on** (256 KiB buf) | 6.91 s | 2.30 µs | 100% |
+
+**AOF is 90% of SET; the store (value.to_vec + hashmap insert) is a
+flat 233 ns.** So the value copy into the store is a non-issue — the
+whole gap is the AOF append. Of that append, perf splits ~43% `write`
+syscall (ext4 page-cache: `copy_from_user` + folio) and ~47% user-space
+(header formatting + the BufWriter memcpy of the value).
+
+### Attack #2a — itoa header vs `write!` (REVERTED, no needle)
+
+Replaced `write!(w, "*{}\r\n", n)` with a stack-buffer itoa header to
+kill the `format_args!`/`write_fmt` dispatch. A/B: 6.91 s → 6.89 s —
+within noise (~0.3%). Reverted. The header fmt is not the bottleneck;
+the value memcpy (into the BufWriter) and the page-cache copy are, and
+both scale with data volume, not with formatter overhead.
+
+### Attack #2b — mmap append (the parity path, RFC-scoped, not yet done)
+
+What is left is the architectural gap: kevy appends through
+`write`→ext4 page-cache; MMKV memcpys into an mmap'd page. An
+mmap-backed AOF (append = memcpy into a mapped region, grow by
+ftruncate+remap, durability by msync on the EverySec tick) removes the
+`write` syscall AND the per-write folio lookup, and lets the value be
+copied once (into the mapped page) instead of into a BufWriter first.
+Estimated to bring SET 4 KB from ~2.3 µs toward the ~0.3 µs store floor
+— i.e. into MMKV's range. But it is a rewrite of the AOF backend
+(mmap file lifecycle, growth, msync durability, replay + rewrite
+compatibility, per-platform mmap), a persistence-core change that
+belongs in its own RFC + isolated worktree + full durability/replay/
+rewrite test pass — not a tail-end change. Tracked as the next SET
+attack; the decomposition above is its ground truth.
