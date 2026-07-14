@@ -156,7 +156,12 @@ class KevyDb {
       final rc = _b.kevy_get(_live, kp, k.length, out);
       if (rc < 0) throw KevyError('kevy: kevy_get misuse');
       if (rc == 0) return null;
-      return _takeBuf(out.ref) as Uint8List;
+      // The scalar fast path returns RAW value bytes, not a RESP reply —
+      // take them directly, do NOT parse.
+      final b = out.ref;
+      final bytes = Uint8List.fromList(b.ptr.asTypedList(b.len));
+      _b.kevy_buf_free(b.ptr, b.len, b.cap);
+      return bytes;
     } finally {
       malloc.free(kp);
       calloc.free(out);
