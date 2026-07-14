@@ -77,4 +77,76 @@ std::optional<std::shared_ptr<ArrayBuffer>> HybridKevyNitro::subNext() {
   return takeBuf(out);
 }
 
+// ── push model ─────────────────────────────────────────────────────────
+//
+// kevy-ffi is poll-only. To turn that into a JS-side push we spawn a native
+// thread that spins kevy_sub_next; each frame we invoke the JS callback,
+// which Nitro converts (void return => AsyncJSCallback) into a fire-and-
+// forget hop onto the JS thread via the CallInvoker. The native thread
+// never blocks on JS. On empty we yield — a busy poll, honest caveat: this
+// burns a core while subscribed; a real engine sub_wait() would remove it.
+
+void HybridKevyNitro::subscribePush(
+    const std::string& channel,
+    const std::function<void(const std::shared_ptr<ArrayBuffer>&)>& onMessage) {
+  stopPushInternal();
+  _pushSub = kevy_subscribe(
+      _db, reinterpret_cast<const uint8_t*>(channel.data()), channel.size());
+  _pollRunning.store(true, std::memory_order_release);
+  KevySub* sub = _pushSub;
+  auto cb = onMessage;
+  _poller = std::thread([this, sub, cb]() {
+    while (_pollRunning.load(std::memory_order_acquire)) {
+      KevyBuf out{};
+      if (kevy_sub_next(sub, &out) == 1) {
+        std::vector<uint8_t> v(out.ptr, out.ptr + out.len);
+        kevy_buf_free(out.ptr, out.len, out.cap);
+        cb(ArrayBuffer::move(std::move(v))); // hops to the JS thread
+      } else {
+        std::this_thread::yield();
+      }
+    }
+  });
+}
+
+void HybridKevyNitro::subscribePushBatched(
+    const std::string& channel,
+    const std::function<void(const std::vector<std::shared_ptr<ArrayBuffer>>&)>& onBatch) {
+  stopPushInternal();
+  _pushSub = kevy_subscribe(
+      _db, reinterpret_cast<const uint8_t*>(channel.data()), channel.size());
+  _pollRunning.store(true, std::memory_order_release);
+  KevySub* sub = _pushSub;
+  auto cb = onBatch;
+  _poller = std::thread([this, sub, cb]() {
+    while (_pollRunning.load(std::memory_order_acquire)) {
+      std::vector<std::shared_ptr<ArrayBuffer>> batch;
+      KevyBuf out{};
+      while (kevy_sub_next(sub, &out) == 1) {
+        std::vector<uint8_t> v(out.ptr, out.ptr + out.len);
+        kevy_buf_free(out.ptr, out.len, out.cap);
+        batch.push_back(ArrayBuffer::move(std::move(v)));
+      }
+      if (!batch.empty()) {
+        cb(batch); // one hop for the whole drained batch
+      } else {
+        std::this_thread::yield();
+      }
+    }
+  });
+}
+
+void HybridKevyNitro::stopPush() { stopPushInternal(); }
+
+void HybridKevyNitro::stopPushInternal() {
+  _pollRunning.store(false, std::memory_order_release);
+  if (_poller.joinable()) {
+    _poller.join();
+  }
+  if (_pushSub != nullptr) {
+    kevy_sub_close(_pushSub);
+    _pushSub = nullptr;
+  }
+}
+
 } // namespace margelo::nitro::kevy

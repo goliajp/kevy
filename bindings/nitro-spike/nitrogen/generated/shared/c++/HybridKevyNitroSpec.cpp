@@ -19,6 +19,9 @@ namespace margelo::nitro::kevy {
       prototype.registerHybridMethod("subscribe", &HybridKevyNitroSpec::subscribe);
       prototype.registerHybridMethod("publish", &HybridKevyNitroSpec::publish);
       prototype.registerHybridMethod("subNext", &HybridKevyNitroSpec::subNext);
+      prototype.registerHybridMethod("subscribePush", &HybridKevyNitroSpec::subscribePush);
+      prototype.registerHybridMethod("subscribePushBatched", &HybridKevyNitroSpec::subscribePushBatched);
+      prototype.registerHybridMethod("stopPush", &HybridKevyNitroSpec::stopPush);
     });
   }
 

@@ -31,7 +31,7 @@ function packAB(args: (string | Uint8Array)[]): ArrayBuffer {
 
 const ops = (n: number, ms: number) => Math.round((n / Math.max(1, ms)) * 1000);
 
-export function runNitroBench(): string[] {
+export async function runNitroBench(): Promise<string[]> {
   const lines: string[] = [];
   const N = 100_000;
 
@@ -96,38 +96,89 @@ export function runNitroBench(): string[] {
     db.close();
   }
 
-  // Pub/sub (bonus): mitt (in-process, no boundary) vs the Nitro door
-  // (publish + poll-drain, one crossing each), 16 B payload.
+  // Pub/sub, four ways, 16 B payload, M messages each:
+  //   mitt          — in-process JS emitter, no boundary (the floor).
+  //   poll/drain    — publish + JS-side subNext loop (~3 crossings/msg).
+  //   push/message  — native poller thread hops each frame to JS (1 hop/msg).
+  //   push/batched  — poller drains all pending, one hop per batch.
+  const M = 50_000;
+  const payload = "x".repeat(16);
+  const msg = enc.encode(payload).buffer;
+
+  // mitt
+  let mittOps = 0;
   {
-    const M = 50_000;
-    const payload = "x".repeat(16);
-    let mittOps = 0;
-    {
-      const emitter = mitt<{ ev: string }>();
-      let recv = 0;
-      emitter.on("ev", () => recv++);
-      const t = Date.now();
-      for (let i = 0; i < M; i++) emitter.emit("ev", payload);
-      mittOps = ops(recv, Date.now() - t);
-    }
-    let nitroOps = 0;
+    const emitter = mitt<{ ev: string }>();
     let recv = 0;
-    {
-      const n2 = createKevyNitro();
-      n2.subscribe("ev");
-      const msg = enc.encode(payload).buffer;
-      const t = Date.now();
-      for (let i = 0; i < M; i++) {
-        n2.publish("ev", msg);
-        for (let f = n2.subNext(); f !== undefined; f = n2.subNext()) recv++;
-      }
-      for (let f = n2.subNext(); f !== undefined; f = n2.subNext()) recv++;
-      nitroOps = ops(recv, Date.now() - t);
-    }
-    lines.push(
-      `NITROGATE: pubsub 16B mitt=${mittOps} ops/s | nitro=${nitroOps} ops/s (${recv}/${M}) | mitt/nitro=${(mittOps / Math.max(1, nitroOps)).toFixed(1)}x`
-    );
+    emitter.on("ev", () => recv++);
+    const t = Date.now();
+    for (let i = 0; i < M; i++) emitter.emit("ev", payload);
+    mittOps = ops(recv, Date.now() - t);
   }
+
+  // poll/drain (the baseline this round attacks)
+  let pollOps = 0;
+  {
+    const n2 = createKevyNitro();
+    n2.subscribe("ev");
+    let recv = 0;
+    const t = Date.now();
+    for (let i = 0; i < M; i++) {
+      n2.publish("ev", msg);
+      for (let f = n2.subNext(); f !== undefined; f = n2.subNext()) recv++;
+    }
+    for (let f = n2.subNext(); f !== undefined; f = n2.subNext()) recv++;
+    pollOps = ops(recv, Date.now() - t);
+  }
+
+  // push/message — one native->JS hop per frame. Publish all M, then await
+  // the callbacks draining on the JS thread; time the whole pipeline.
+  let pushOps = 0;
+  let pushRecv = 0;
+  {
+    const n3 = createKevyNitro();
+    let resolveDone!: () => void;
+    const done = new Promise<void>((r) => (resolveDone = r));
+    n3.subscribePush("ev", () => {
+      if (++pushRecv >= M) resolveDone();
+    });
+    const t = Date.now();
+    for (let i = 0; i < M; i++) n3.publish("ev", msg);
+    await done;
+    pushOps = ops(pushRecv, Date.now() - t);
+    n3.stopPush();
+  }
+
+  // push/batched — one hop per drained batch. hops reveals the batch factor.
+  let batchedOps = 0;
+  let batchedRecv = 0;
+  let hops = 0;
+  {
+    const n4 = createKevyNitro();
+    let resolveDone!: () => void;
+    const done = new Promise<void>((r) => (resolveDone = r));
+    n4.subscribePushBatched("ev", (frames) => {
+      hops++;
+      batchedRecv += frames.length;
+      if (batchedRecv >= M) resolveDone();
+    });
+    const t = Date.now();
+    for (let i = 0; i < M; i++) n4.publish("ev", msg);
+    await done;
+    batchedOps = ops(batchedRecv, Date.now() - t);
+    n4.stopPush();
+  }
+
+  const x = (a: number, b: number) => (a / Math.max(1, b)).toFixed(1);
+  lines.push(
+    `NITROGATE: pubsub 16B mitt=${mittOps} | poll=${pollOps} | push=${pushOps} | pushBatched=${batchedOps} ops/s`
+  );
+  lines.push(
+    `NITROGATE: pubsub push/poll=${x(pushOps, pollOps)}x | pushBatched/poll=${x(batchedOps, pollOps)}x | mitt/pushBatched=${x(mittOps, batchedOps)}x`
+  );
+  lines.push(
+    `NITROGATE: pubsub detail push(${pushRecv}/${M}) batched(${batchedRecv}/${M} in ${hops} hops, avg ${Math.round(batchedRecv / Math.max(1, hops))}/hop)`
+  );
 
   return lines;
 }

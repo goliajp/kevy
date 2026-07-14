@@ -18,6 +18,8 @@
 #include <NitroModules/ArrayBuffer.hpp>
 #include <string>
 #include <optional>
+#include <functional>
+#include <vector>
 
 namespace margelo::nitro::kevy {
 
@@ -55,6 +57,9 @@ namespace margelo::nitro::kevy {
       virtual void subscribe(const std::string& channel) = 0;
       virtual void publish(const std::string& channel, const std::shared_ptr<ArrayBuffer>& payload) = 0;
       virtual std::optional<std::shared_ptr<ArrayBuffer>> subNext() = 0;
+      virtual void subscribePush(const std::string& channel, const std::function<void(const std::shared_ptr<ArrayBuffer>& /* frame */)>& onMessage) = 0;
+      virtual void subscribePushBatched(const std::string& channel, const std::function<void(const std::vector<std::shared_ptr<ArrayBuffer>>& /* frames */)>& onBatch) = 0;
+      virtual void stopPush() = 0;
 
     protected:
       // Hybrid Setup
