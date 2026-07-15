@@ -48,6 +48,11 @@ struct Server {
 // args (e.g. --cluster) may be passed.
 std::unique_ptr<Server> spawn_server(const std::vector<std::string>& extra = {});
 
+// Spawn with an extra TOML config file (to enable optional surfaces like
+// [feed]). The toml is written to a temp file passed via --config.
+std::unique_ptr<Server> spawn_server_config(const std::string& toml,
+                                            const std::vector<std::string>& extra = {});
+
 // A unique named mem:// URL (so pub/sub works and stores don't leak).
 std::string unique_mem_url();
 
