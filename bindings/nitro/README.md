@@ -11,21 +11,34 @@ Requires the New Architecture (`newArchEnabled=true`) and
 ## API
 
 ```ts
-import { createKevyNitro } from 'react-native-kevy-nitro'
+import {
+  createKevyNitro,
+  createKevyNitroAt,
+  unpackFrames,
+} from 'react-native-kevy-nitro'
 
 const kevy = createKevyNitro() // C++ opens an in-memory kevy db
 
-// 1. cmd() — the fast path. Any verb, RESP reply as ArrayBuffer.
-const reply = kevy.cmd(packArgv(['SET', 'k', 'v'])) // u32-LE len prefix/arg
+// 1. getData/setData — the scalar KV door (MMKV-shaped). Raw key/value
+//    ArrayBuffers straight into kevy_get/kevy_set: no argv packing, no RESP
+//    framing, no JS decode. The fastest KV lane.
+kevy.setData(keyAB, valueAB, 0)          // ttlMs (0 = no TTL); returns void
+const value = kevy.getData(keyAB)        // ArrayBuffer | undefined (miss)
 
-// 2. Poll pub/sub — the default. No background thread, no idle CPU.
+// 2. cmd() — the general fast path. Any verb, RESP reply as ArrayBuffer.
+const reply = kevy.cmd(packArgv(['INCR', 'n'])) // u32-LE len prefix/arg
+
+// 3. Poll pub/sub — the default. No background thread, no idle CPU.
 kevy.subscribe('room')
-kevy.publish('room', payload)      // ArrayBuffer
+kevy.publish('room', payload)            // ArrayBuffer
 for (let f = kevy.subNext(); f; f = kevy.subNext()) handle(f)
 
-// 3. Batched push — the high-fanout path. A native poller parks on the
-//    engine (kevy_sub_wait; ~0% idle CPU) and delivers each burst in one hop.
-kevy.subscribePushBatched('room', (frames) => frames.forEach(handle))
+// 4. Batched push — the high-fanout path. A native poller parks on the
+//    engine (kevy_sub_wait; ~0% idle CPU) and delivers each burst in ONE hop
+//    as ONE packed ArrayBuffer; unpackFrames slices zero-copy views back out.
+kevy.subscribePushBatched('room', (packed, count) => {
+  for (const frame of unpackFrames(packed, count)) handle(frame) // Uint8Array
+})
 // ...later
 kevy.stopPush() // joins the poller thread
 ```
@@ -33,6 +46,27 @@ kevy.stopPush() // joins the poller thread
 `subscribePush` (one native→JS hop per message) also exists but is a
 pessimization on measured workloads — the per-frame CallInvoker hop costs
 more than the drain crossings it removes. Prefer `subscribePushBatched`.
+
+### Durable (file-backed) vs in-memory
+
+`createKevyNitro()` opens an **in-memory** db — fastest, but nothing survives
+the process. MMKV is a *persistent* store, so a fair KV comparison needs kevy
+durable too. `createKevyNitroAt(dir)` opens the db **file-backed** (AOF,
+replayed on open) at `dir` — durable across launches, at the cost of the
+append-log write per set:
+
+```ts
+const kevy = createKevyNitroAt(FileSystem.documentDirectory + 'kevy')
+```
+
+Perf/durability tradeoff (see `bench/PERF-DECOMP-2026-07-16-rn-mmkv-mitt.md`
+and `bench/PERF-FINDING-2026-07-15-mmap-aof-refuted.md` for the ground
+truth): in-memory `setData` (~35 ns FFI CPU, host) crushes MMKV but is
+ephemeral. Durable `setData` is gated by the **AOF-vs-mmap** axis, not the
+crossing — on real ext4 kevy's durable SET beats MMKV **3.97×** (buffered
+append-log amortises to ~3 µs/op vs MMKV's mmap overwrite-in-place). The
+scalar door removes the RESP/crossing tax in **both** regimes; durability is
+an orthogonal choice.
 
 ## Measured (Android emulator, arm64-v8a, Hermes, new arch)
 

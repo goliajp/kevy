@@ -46,6 +46,38 @@ HybridKevyNitro::cmd(const std::shared_ptr<ArrayBuffer>& argv) {
   return takeBuf(out);
 }
 
+// ── scalar KV door ───────────────────────────────────────────────────────
+//
+// kevy_get / kevy_set directly: no argv, no RESP framing. The key/value come
+// in as ArrayBuffers (borrowed for the synchronous call), the value goes out
+// as one ArrayBuffer (the single unavoidable copy — engine owns its Vec, JS
+// owns the buffer). setData frames no reply at all.
+
+std::optional<std::shared_ptr<ArrayBuffer>>
+HybridKevyNitro::getData(const std::shared_ptr<ArrayBuffer>& key) {
+  KevyBuf out{};
+  int32_t rc = kevy_get(_db, key->data(), key->size(), &out);
+  if (rc != 1) {
+    return std::nullopt; // 0 = miss, <0 = misuse — nothing to free
+  }
+  return takeBuf(out);
+}
+
+void HybridKevyNitro::setData(const std::shared_ptr<ArrayBuffer>& key,
+                              const std::shared_ptr<ArrayBuffer>& value,
+                              double ttlMs) {
+  kevy_set(_db, key->data(), key->size(), value->data(), value->size(),
+           static_cast<uint64_t>(ttlMs));
+}
+
+bool HybridKevyNitro::openAt(const std::string& dir) {
+  if (_db != nullptr) {
+    kevy_close(_db);
+  }
+  _db = kevy_open(reinterpret_cast<const uint8_t*>(dir.data()), dir.size());
+  return _db != nullptr; // NULL = open failed; caller must not use data ops
+}
+
 void HybridKevyNitro::subscribe(const std::string& channel) {
   if (_sub != nullptr) {
     kevy_sub_close(_sub);
@@ -123,9 +155,23 @@ void HybridKevyNitro::subscribePush(
   });
 }
 
+// Append one drained frame to the packed batch buffer as [u32-LE len][bytes],
+// then free the KevyBuf. The JS side (unpackFrames) walks these prefixes to
+// slice zero-copy Uint8Array views — so a batch of M frames crosses as ONE
+// ArrayBuffer instead of M ArrayBuffer::move JSI allocations.
+static void packFrame(std::vector<uint8_t>& packed, KevyBuf& buf) {
+  uint32_t n = static_cast<uint32_t>(buf.len);
+  packed.push_back(static_cast<uint8_t>(n & 0xFF));
+  packed.push_back(static_cast<uint8_t>((n >> 8) & 0xFF));
+  packed.push_back(static_cast<uint8_t>((n >> 16) & 0xFF));
+  packed.push_back(static_cast<uint8_t>((n >> 24) & 0xFF));
+  packed.insert(packed.end(), buf.ptr, buf.ptr + buf.len);
+  kevy_buf_free(buf.ptr, buf.len, buf.cap);
+}
+
 void HybridKevyNitro::subscribePushBatched(
     const std::string& channel,
-    const std::function<void(const std::vector<std::shared_ptr<ArrayBuffer>>&)>& onBatch) {
+    const std::function<void(const std::shared_ptr<ArrayBuffer>&, double)>& onBatch) {
   stopPushInternal();
   _pushSub = kevy_subscribe(
       _db, reinterpret_cast<const uint8_t*>(channel.data()), channel.size());
@@ -135,9 +181,6 @@ void HybridKevyNitro::subscribePushBatched(
   _poller = std::thread([this, sub, cb]() {
     // Name the thread so it's distinct from the JS thread it was spawned
     // from (bionic otherwise inherits the creator's name, "mqt_v_js").
-    // Darwin's pthread_setname_np names the *current* thread and takes one
-    // arg; bionic/Linux takes (thread, name). We're on the poller thread
-    // either way, so both name this thread.
 #if defined(__APPLE__)
     pthread_setname_np("kevy-push-poll");
 #else
@@ -149,19 +192,18 @@ void HybridKevyNitro::subscribePushBatched(
       if (rc != 1) {
         continue; // timeout or closed — re-check the run flag
       }
-      std::vector<std::shared_ptr<ArrayBuffer>> batch;
-      std::vector<uint8_t> v(out.ptr, out.ptr + out.len);
-      kevy_buf_free(out.ptr, out.len, out.cap);
-      batch.push_back(ArrayBuffer::move(std::move(v)));
-      // Drain everything else already queued — non-blocking — so the whole
-      // burst rides one JS hop.
+      // Pack the whole burst — frame 1 plus everything else already queued —
+      // into one length-prefixed buffer, so it rides one JS hop as one AB.
+      std::vector<uint8_t> packed;
+      uint32_t count = 0;
+      packFrame(packed, out);
+      count++;
       KevyBuf more{};
       while (kevy_sub_next(sub, &more) == 1) {
-        std::vector<uint8_t> mv(more.ptr, more.ptr + more.len);
-        kevy_buf_free(more.ptr, more.len, more.cap);
-        batch.push_back(ArrayBuffer::move(std::move(mv)));
+        packFrame(packed, more);
+        count++;
       }
-      cb(batch); // one hop for the whole batch
+      cb(ArrayBuffer::move(std::move(packed)), static_cast<double>(count));
     }
   });
 }

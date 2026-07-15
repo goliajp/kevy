@@ -16,10 +16,9 @@
 
 
 #include <NitroModules/ArrayBuffer.hpp>
-#include <string>
 #include <optional>
+#include <string>
 #include <functional>
-#include <vector>
 
 namespace margelo::nitro::kevy {
 
@@ -54,11 +53,14 @@ namespace margelo::nitro::kevy {
       // Methods
       virtual double abi() = 0;
       virtual std::shared_ptr<ArrayBuffer> cmd(const std::shared_ptr<ArrayBuffer>& argv) = 0;
+      virtual std::optional<std::shared_ptr<ArrayBuffer>> getData(const std::shared_ptr<ArrayBuffer>& key) = 0;
+      virtual void setData(const std::shared_ptr<ArrayBuffer>& key, const std::shared_ptr<ArrayBuffer>& value, double ttlMs) = 0;
+      virtual bool openAt(const std::string& dir) = 0;
       virtual void subscribe(const std::string& channel) = 0;
       virtual void publish(const std::string& channel, const std::shared_ptr<ArrayBuffer>& payload) = 0;
       virtual std::optional<std::shared_ptr<ArrayBuffer>> subNext() = 0;
       virtual void subscribePush(const std::string& channel, const std::function<void(const std::shared_ptr<ArrayBuffer>& /* frame */)>& onMessage) = 0;
-      virtual void subscribePushBatched(const std::string& channel, const std::function<void(const std::vector<std::shared_ptr<ArrayBuffer>>& /* frames */)>& onBatch) = 0;
+      virtual void subscribePushBatched(const std::string& channel, const std::function<void(const std::shared_ptr<ArrayBuffer>& /* packed */, double /* count */)>& onBatch) = 0;
       virtual void stopPush() = 0;
 
     protected:

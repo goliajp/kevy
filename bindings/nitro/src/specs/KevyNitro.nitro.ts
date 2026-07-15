@@ -18,6 +18,28 @@ export interface KevyNitro
   // reference. Returns the RESP reply bytes as an ArrayBuffer.
   cmd(argv: ArrayBuffer): ArrayBuffer
 
+  // Scalar KV door — the MMKV-shaped fast lane. get/set with NO argv packing,
+  // NO RESP framing, NO verb. Calls kevy_get / kevy_set directly, so the JS
+  // side hands raw key/value ArrayBuffers and gets raw value bytes back. This
+  // removes the whole RESP tax (JS packAB + C++ argv unpack + engine RESP
+  // encode + reply framing + JS RESP decode) — only the one JSI hop and the
+  // one unavoidable value copy each way remain.
+  //   getData: key ArrayBuffer -> value ArrayBuffer, or undefined on miss.
+  //   setData: key + value ArrayBuffers, ttlMs (0 = no TTL); returns void —
+  //            no reply is framed or crossed at all.
+  getData(key: ArrayBuffer): ArrayBuffer | undefined
+  setData(key: ArrayBuffer, value: ArrayBuffer, ttlMs: number): void
+
+  // Re-open this instance's db file-backed (durable) at `dir`, replacing the
+  // in-memory db the constructor opened. MMKV is a persistent store, so a
+  // fair KV comparison needs kevy durable too: in-memory is fastest but
+  // ephemeral, file-backed survives the process (AOF replay on open). Call
+  // this once, right after creation, before any subscribe/data call. Returns
+  // true if the durable store opened, false on failure (the instance is left
+  // without a usable db — do not call getData/setData after a false). The
+  // default (no call) stays in-memory, backward-compatible.
+  openAt(dir: string): boolean
+
   // Poll-model pub/sub (bonus), mirroring kevy-ffi's polled sub. One
   // subscription per object; subNext drains one RESP frame or undefined.
   subscribe(channel: string): void
@@ -34,10 +56,16 @@ export interface KevyNitro
   // Per-message: one native->JS hop per frame.
   subscribePush(channel: string, onMessage: (frame: ArrayBuffer) => void): void
   // Batched: the poller drains ALL available frames per wake and delivers
-  // them in ONE hop — amortizes the CallInvoker hop across a batch.
+  // them in ONE hop — amortizes the CallInvoker hop across a batch. To also
+  // kill the M−1 JSI ArrayBuffer allocations a batch of M frames used to make
+  // (one ArrayBuffer::move per frame), the poller memcpys each drained frame
+  // as [u32-LE length prefix][bytes] into ONE growing buffer and delivers
+  // ONE ArrayBuffer plus the frame count. The JS side slices Uint8Array views
+  // (subarray, zero-copy) per frame by walking the u32 prefixes — see
+  // unpackFrames() in index.ts.
   subscribePushBatched(
     channel: string,
-    onBatch: (frames: ArrayBuffer[]) => void
+    onBatch: (packed: ArrayBuffer, count: number) => void
   ): void
   // Stop the poller thread and close the push subscription.
   stopPush(): void

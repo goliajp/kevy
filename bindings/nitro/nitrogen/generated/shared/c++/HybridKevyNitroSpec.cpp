@@ -16,6 +16,9 @@ namespace margelo::nitro::kevy {
     registerHybrids(this, [](Prototype& prototype) {
       prototype.registerHybridMethod("abi", &HybridKevyNitroSpec::abi);
       prototype.registerHybridMethod("cmd", &HybridKevyNitroSpec::cmd);
+      prototype.registerHybridMethod("getData", &HybridKevyNitroSpec::getData);
+      prototype.registerHybridMethod("setData", &HybridKevyNitroSpec::setData);
+      prototype.registerHybridMethod("openAt", &HybridKevyNitroSpec::openAt);
       prototype.registerHybridMethod("subscribe", &HybridKevyNitroSpec::subscribe);
       prototype.registerHybridMethod("publish", &HybridKevyNitroSpec::publish);
       prototype.registerHybridMethod("subNext", &HybridKevyNitroSpec::subNext);
