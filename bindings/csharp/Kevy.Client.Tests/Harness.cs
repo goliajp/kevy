@@ -71,6 +71,7 @@ public sealed class ServerFixture : IDisposable
     private readonly Process? _proc;
     private readonly string _tmp;
     public string? Url { get; }
+    public int Port { get; }
 
     public ServerFixture() : this(Array.Empty<string>(), null) { }
 
@@ -84,6 +85,7 @@ public sealed class ServerFixture : IDisposable
         _tmp = Directory.CreateTempSubdirectory("kevy-xunit-").FullName;
         if (bin is null) return;
         var port = FreePort();
+        Port = port;
         var args = new List<string> { "--bind", "127.0.0.1", "--port", port.ToString(), "--dir", _tmp };
         if (config is not null)
         {
@@ -174,6 +176,17 @@ internal static class H
         await rem.FlushAllAsync();
         await body(rem);
     }
+
+    // The URLs to exercise pub/sub over: a named embedded bus + (if
+    // available) the remote server. Named/remote so a publisher and a
+    // subscriber on the same URL find each other.
+    internal static IEnumerable<string> PubsubUrls(ServerFixture fx)
+    {
+        yield return Mem();
+        if (fx.HasServer) yield return fx.RequireUrl();
+    }
+
+    internal static bool IsRemote(string url) => url.StartsWith("kevy") || url.StartsWith("redis") || url.StartsWith("tcp");
 
     internal static byte[] B(string s) => System.Text.Encoding.UTF8.GetBytes(s);
 
