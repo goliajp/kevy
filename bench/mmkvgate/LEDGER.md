@@ -26,6 +26,17 @@ next rungs.
 | SET 256 B   | ~1400 ns| ~675 ns | 2.07×       | MMKV 2.1× faster |
 | SET 4 KB    | ~16 µs  | ~3.5 µs | 4.6×        | MMKV 4.6× faster |
 
+> ⚠️ **The SET rows above are iOS-simulator numbers and are now known to
+> be a simulator artifact.** On real hardware (lx64 x86_64 ext4), the same
+> SET 4 KB workload run through both engines gives **kevy 2.98 µs/op vs
+> MMKV 11.84 µs/op — kevy 3.97× FASTER** (median of 3; kevy on EverySec,
+> the *more* durable setting). The sim's host-FS write path both inflated
+> kevy's `write()` and made MMKV's mmap look cheap. On real hardware kevy
+> beats MMKV on **both** GET and SET. See
+> `bench/PERF-FINDING-2026-07-15-mmap-aof-refuted.md`. The definitive
+> *mobile* number still needs a real-device run, but the sim is the outlier
+> and must not drive decisions.
+
 ### Reading it
 
 - **GET: kevy wins every axis, and the lead widens with value size**
