@@ -17,6 +17,8 @@
     "android/CMakeLists.txt",
     "android/src",
     "cpp",
+    "ios/KevyEngine.xcframework",
+    "KevyNitro.podspec",
     "nitro.json",
     "README.md"
   ],
