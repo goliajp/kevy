@@ -287,3 +287,10 @@ server, embedded, and browser alike. A binding generator would be a
 build-time dependency and would own the boundary layout; the
 hand-written ABI keeps the contract explicit, versioned, and
 auditable.
+
+## In a Tauri app
+
+Running kevy in a desktop/mobile app? A Tauri backend is Rust, so kevy can
+embed **natively** in the backend (one shared store, durable, cross-window)
+instead of in the webview as wasm. See [docs/tauri.md](tauri.md) for the
+backend-store-vs-wasm decision.
