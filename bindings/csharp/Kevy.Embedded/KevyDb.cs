@@ -64,7 +64,13 @@ public sealed unsafe class KevyDb : IDisposable
         CmdBytes([.. argv.Select(Encoding.UTF8.GetBytes)]);
 
     /// <summary>Cmd for binary-safe arguments.</summary>
-    public KevyValue CmdBytes(IReadOnlyList<byte[]> argv)
+    public KevyValue CmdBytes(IReadOnlyList<byte[]> argv) =>
+        KevyValue.Parse(CmdRaw(argv));
+
+    /// <summary>Run one command and return the raw RESP reply bytes,
+    /// unparsed — the universal command path the unified Kevy client backs
+    /// its embedded exec on, parsing with its own RESP3-capable reader.</summary>
+    public byte[] CmdRaw(IReadOnlyList<byte[]> argv)
     {
         var db = Live();
         if (argv.Count == 0) throw new KevyException("kevy: empty argv");
@@ -85,7 +91,7 @@ public sealed unsafe class KevyDb : IDisposable
             KevyBuf @out;
             var rc = KevyNative.kevy_cmd(db, (nuint)argv.Count, ptrs, lens, &@out);
             if (rc != 0) throw new KevyException("kevy: kevy_cmd misuse");
-            return KevyValue.Parse(KevyNative.TakeBuf(in @out));
+            return KevyNative.TakeBuf(in @out);
         }
         finally
         {
@@ -94,6 +100,24 @@ public sealed unsafe class KevyDb : IDisposable
                 if (pin.IsAllocated) pin.Free();
             }
         }
+    }
+
+    /// <summary>Open a low-level subscription over one channel or glob
+    /// pattern, yielding raw RESP frame bytes via poll / blocking wait —
+    /// the surface the unified client's embedded Subscriber is built on
+    /// (contract §5.2). Caller owns the returned handle.</summary>
+    public KevyRawSub OpenRawSub(byte[] name, bool pattern)
+    {
+        IntPtr h;
+        fixed (byte* p = name.Length > 0 ? name : NonEmpty)
+        {
+            h = pattern
+                ? KevyNative.kevy_psubscribe(Live(), p, (nuint)name.Length)
+                : KevyNative.kevy_subscribe(Live(), p, (nuint)name.Length);
+        }
+        return h == IntPtr.Zero
+            ? throw new KevyException("kevy: subscribe failed")
+            : new KevyRawSub(h);
     }
 
     // ── the scalar fast path: no argv assembly, no RESP framing ─────────
