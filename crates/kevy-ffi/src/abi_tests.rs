@@ -120,6 +120,40 @@ fn pubsub_ack_message_and_pattern_frames() {
 }
 
 #[test]
+fn sub_wait_blocks_then_delivers_and_times_out() {
+    let db = kevy_open_mem();
+    let sub = unsafe { kevy_subscribe(db, b"c1".as_ptr(), 2) };
+    assert!(!sub.is_null());
+
+    // The subscribe ack is already queued — wait returns it at once.
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_sub_wait(sub, 1000, &raw mut out) }, 1);
+    assert!(take(out).starts_with(b"*3\r\n$9\r\nsubscribe\r\n"));
+
+    // Nothing queued now: a bounded wait times out with 0 and an empty buf
+    // (and it actually parked — no busy-spin — for ~the timeout).
+    let mut out = KevyBuf::empty();
+    let t = std::time::Instant::now();
+    assert_eq!(unsafe { kevy_sub_wait(sub, 50, &raw mut out) }, 0);
+    assert!(out.ptr.is_null());
+    assert!(t.elapsed() >= std::time::Duration::from_millis(40));
+
+    // A publish from another thread wakes the waiter.
+    let db2 = db as usize;
+    let h = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        cmd(db2 as *mut _, &[b"PUBLISH", b"c1", b"hi"]);
+    });
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_sub_wait(sub, 2000, &raw mut out) }, 1);
+    assert_eq!(take(out), b"*3\r\n$7\r\nmessage\r\n$2\r\nc1\r\n$2\r\nhi\r\n");
+    h.join().unwrap();
+
+    unsafe { kevy_sub_close(sub) };
+    unsafe { kevy_close(db) };
+}
+
+#[test]
 fn persistent_open_survives_close_and_reopen() {
     let dir = kevy_tmpdir_path();
     let bytes = dir.as_bytes();
