@@ -23,3 +23,5 @@ export {
   isNil,
   isError,
 } from "./resp.ts";
+export { parseConnectURL, type Target } from "./url.ts";
+export { EmbeddedDb, EmbSub, version, abi } from "./embedded.ts";
