@@ -1,15 +1,18 @@
-// Package kevy embeds the kevy engine — the same engine the server runs —
-// behind the C ABI in crates/kevy-ffi.
+// Package kevy is the first-party Go client for kevy — the pure-Rust
+// Redis-compatible engine. It ships two things behind one import:
 //
-// One method carries the whole command surface: Cmd sends argv, the reply
-// comes back parsed from RESP. A protocol error (-ERR …) is a Value with
-// Kind == KindError, not a Go error: the engine answering "no" is a working
-// engine. Go errors are reserved for ABI misuse and open failures.
+//   - The embedded engine (this file + emb_sub.go), bound to the C ABI in
+//     crates/kevy-ffi: an in-process Store reachable through one Cmd path
+//     plus scalar Get/Set and polled pub/sub (contract §5).
+//   - The unified Client (client*.go), which routes a single Connect(url)
+//     to either the embedded engine (mem:// / file://) or a native RESP
+//     TCP server (kevy:// / redis:// / tcp://), exposing every command
+//     family with both a blocking and an async face (contract §1–§4).
 //
-//	db, err := kevy.Open("data/")
-//	defer db.Close()
-//	db.Cmd("SET", "k", "v")
-//	v, _ := db.Cmd("GET", "k") // v.Str == "v"
+// A protocol error (-ERR …) from the embedded Cmd path is a Reply with
+// Kind == KindError, not a Go error: the engine answering "no" is a
+// working engine. The typed Client methods, by contrast, map -ERR to a
+// *KevyError, because a typed call has exactly one meaning.
 package kevy
 
 /*
@@ -27,12 +30,15 @@ import (
 	"unsafe"
 )
 
-// DB is an open embedded engine. Close it exactly once.
+// DB is an open embedded engine — the kevy-embedded surface (contract
+// §5.2). Close it exactly once. Every method is safe from multiple
+// goroutines on the same handle (the C ABI serialises internally).
 type DB struct {
 	p *C.KevyDb
 }
 
-// Open opens a persistent store rooted at dir, replaying its log.
+// Open opens a persistent store rooted at dir, replaying its log on open
+// (snapshot then AOF). Flushes and closes durably.
 func Open(dir string) (*DB, error) {
 	b := []byte(dir)
 	var ptr *C.uint8_t
@@ -65,8 +71,8 @@ func (d *DB) Close() {
 }
 
 // Cmd runs one command; args[0] is the verb. The error is non-nil only for
-// ABI misuse — inspect the Value for protocol-level errors.
-func (d *DB) Cmd(args ...string) (Value, error) {
+// ABI misuse — inspect the Reply for protocol-level errors.
+func (d *DB) Cmd(args ...string) (Reply, error) {
 	raw := make([][]byte, len(args))
 	for i, a := range args {
 		raw[i] = []byte(a)
@@ -74,13 +80,14 @@ func (d *DB) Cmd(args ...string) (Value, error) {
 	return d.CmdBytes(raw...)
 }
 
-// CmdBytes is Cmd for binary-safe arguments.
-func (d *DB) CmdBytes(args ...[]byte) (Value, error) {
+// CmdBytes is Cmd for binary-safe arguments — the universal command path
+// through which every one of kevy's ~184 verbs is reachable.
+func (d *DB) CmdBytes(args ...[]byte) (Reply, error) {
 	if d.p == nil {
-		return Value{}, errors.New("kevy: closed handle")
+		return Reply{}, errors.New("kevy: closed handle")
 	}
 	if len(args) == 0 {
-		return Value{}, errors.New("kevy: empty argv")
+		return Reply{}, errors.New("kevy: empty argv")
 	}
 	// The argv array holds Go pointers, and cgo only lets a Go pointer
 	// travel inside another Go allocation when the pointees are pinned.
@@ -105,74 +112,53 @@ func (d *DB) CmdBytes(args ...[]byte) (Value, error) {
 	rc := C.kevy_cmd(d.p, C.size_t(len(args)), &ptrs[0], &lens[0], &out)
 	runtime.KeepAlive(args)
 	if rc != 0 {
-		return Value{}, errors.New("kevy: kevy_cmd misuse")
+		return Reply{}, errors.New("kevy: kevy_cmd misuse")
 	}
-	return takeBuf(out)
+	return takeReply(out)
 }
 
 var empty byte
 
-// Sub is a subscription handle. Poll Next; Close to unsubscribe.
-type Sub struct {
-	p *C.KevySub
-}
-
-// Subscribe opens a subscription on one channel.
-func (d *DB) Subscribe(channel string) (*Sub, error) {
-	return d.sub(channel, false)
-}
-
-// PSubscribe opens a subscription on one glob pattern.
-func (d *DB) PSubscribe(pattern string) (*Sub, error) {
-	return d.sub(pattern, true)
-}
-
-func (d *DB) sub(name string, pattern bool) (*Sub, error) {
+// GetScalar is the scalar fast GET (no argv/RESP framing, contract §5.2).
+// ok is false on a miss or an expired key.
+func (d *DB) GetScalar(key []byte) (value []byte, ok bool, err error) {
 	if d.p == nil {
-		return nil, errors.New("kevy: closed handle")
+		return nil, false, errors.New("kevy: closed handle")
 	}
-	b := []byte(name)
-	var ptr *C.uint8_t
-	if len(b) > 0 {
-		ptr = (*C.uint8_t)(unsafe.Pointer(&b[0]))
-	}
-	var p *C.KevySub
-	if pattern {
-		p = C.kevy_psubscribe(d.p, ptr, C.size_t(len(b)))
-	} else {
-		p = C.kevy_subscribe(d.p, ptr, C.size_t(len(b)))
-	}
-	runtime.KeepAlive(b)
-	if p == nil {
-		return nil, errors.New("kevy: subscribe failed")
-	}
-	return &Sub{p: p}, nil
-}
-
-// Next drains one pending frame (message / pmessage / ack) without
-// blocking. ok is false when nothing is queued.
-func (s *Sub) Next() (v Value, ok bool, err error) {
-	if s.p == nil {
-		return Value{}, false, errors.New("kevy: closed subscription")
-	}
+	var pin runtime.Pinner
+	defer pin.Unpin()
+	kp := keyPtr(key, &pin)
 	var out C.KevyBuf
-	rc := C.kevy_sub_next(s.p, &out)
+	rc := C.kevy_get(d.p, kp, C.size_t(len(key)), &out)
+	runtime.KeepAlive(key)
 	if rc < 0 {
-		return Value{}, false, errors.New("kevy: subscription misuse")
+		return nil, false, errors.New("kevy: kevy_get misuse")
 	}
 	if rc == 0 {
-		return Value{}, false, nil
+		return nil, false, nil
 	}
-	val, err := takeBuf(out)
-	return val, err == nil, err
+	v := C.GoBytes(unsafe.Pointer(out.ptr), C.int(out.len))
+	C.kevy_buf_free(out.ptr, out.len, out.cap)
+	return v, true, nil
 }
 
-// Close unsubscribes from everything this handle held.
-func (s *Sub) Close() {
-	if s.p != nil {
-		C.kevy_sub_close(s.p)
-		s.p = nil
+// SetScalar is the scalar fast SET (contract §5.2). ttlMs == 0 means no
+// TTL.
+func (d *DB) SetScalar(key, val []byte, ttlMs uint64) error {
+	if d.p == nil {
+		return errors.New("kevy: closed handle")
 	}
+	var pin runtime.Pinner
+	defer pin.Unpin()
+	kp := keyPtr(key, &pin)
+	vp := keyPtr(val, &pin)
+	rc := C.kevy_set(d.p, kp, C.size_t(len(key)), vp, C.size_t(len(val)), C.uint64_t(ttlMs))
+	runtime.KeepAlive(key)
+	runtime.KeepAlive(val)
+	if rc < 0 {
+		return errors.New("kevy: kevy_set misuse or storage error")
+	}
+	return nil
 }
 
 // Version reports the engine version, e.g. "4.0.0".
@@ -180,12 +166,24 @@ func Version() string {
 	return C.GoString(C.kevy_version())
 }
 
-func takeBuf(buf C.KevyBuf) (Value, error) {
+// ABI reports the runtime C ABI version.
+func ABI() uint32 { return uint32(C.kevy_abi()) }
+
+func keyPtr(b []byte, pin *runtime.Pinner) *C.uint8_t {
+	if len(b) == 0 {
+		pin.Pin(&empty)
+		return (*C.uint8_t)(unsafe.Pointer(&empty))
+	}
+	p := &b[0]
+	pin.Pin(p)
+	return (*C.uint8_t)(unsafe.Pointer(p))
+}
+
+func takeReply(buf C.KevyBuf) (Reply, error) {
 	defer C.kevy_buf_free(buf.ptr, buf.len, buf.cap)
 	if buf.len == 0 {
-		return Value{}, errors.New("kevy: empty reply")
+		return Reply{}, errors.New("kevy: empty reply")
 	}
 	raw := C.GoBytes(unsafe.Pointer(buf.ptr), C.int(buf.len))
-	v, _, err := parseRESP(raw)
-	return v, err
+	return decodeReply(raw)
 }
