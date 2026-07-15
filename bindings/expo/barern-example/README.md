@@ -66,8 +66,40 @@ Two additional bare-RN fixes were needed that a managed Expo app gets for free:
    does not provide on its own; the managed Expo entry point loads this
    implicitly, a bare app must import it.
 
+## How expo-modules-core autolinking is wired (manual, RN 0.86) — iOS
+
+CocoaPods side of the same "Expo modules in bare RN" path. `install-expo-modules`
+is equally dead on iOS/RN 0.86, so this mirrors what `expo prebuild -p ios`
+generates for SDK 57 (verified against a throwaway prebuild):
+
+- **`ios/Podfile`** — the two Expo `require`s (`expo/scripts/autolinking` +
+  `react-native/scripts/react_native_pods`), `use_expo_modules!` in the target,
+  and the config command swapped to expo-modules-autolinking's
+  `react-native-config` (so Expo modules are discovered). This pulls in
+  `ExpoModulesCore` and the `ExpoKevy` dev pod; `pod install` writes an
+  `ExpoModulesProvider.swift` that registers `KevyExpoModule`.
+- **`ios/Podfile.properties.json`** — `expo.jsEngine: hermes` (read by the Podfile).
+- **`ios/BareKevy/AppDelegate.swift`** — subclasses `ExpoAppDelegate` and boots
+  React Native through `ExpoReactNativeFactory` (not the plain
+  `RCTReactNativeFactory`), which attaches Expo's module registry to the bridge.
+  The bare specifics are kept: module name `BareKevy`, debug bundle root `index`.
+
+Two bare-RN/CocoaPods fixes a managed Expo app gets for free:
+
+1. **Deployment target 16.4** — the community scaffold ships `IPHONEOS_DEPLOYMENT_TARGET = 15.1`;
+   the Expo modules (`Expo`, `ExpoModulesCore`) require ≥ 16.4, so the app
+   target is bumped to match (the Podfile already pins pods to 16.4).
+2. **arm64-only simulator build** — `Kevy.xcframework` ships an `ios-arm64-simulator`
+   slice (Apple-Silicon host, per `packaging/apple/build-xcframework.sh`). A fat
+   `arm64+x86_64` Release build finds no matching sim slice and CocoaPods skips
+   the whole framework (`no such module 'Kevy'`). Building the active arm64 arch
+   only (`ONLY_ACTIVE_ARCH=YES ARCHS=arm64`) matches the slice — the same thing
+   `expo run:ios` does on Apple Silicon.
+
 ## Scope
 
-Only **Android** was wired and validated (per the task — on `emulator-5554`).
-The `ios/` folder is the untouched community-CLI scaffold: its `Podfile` is
-NOT wired for Expo modules, so iOS is not expected to build as-is.
+Both **Android** (`emulator-5554`) and **iOS** (booted simulator) are wired and
+validated end-to-end — each logs `MOBILEGATE:PASS` from the on-device smoke.
+Run the iOS gate with `bash bench/mobilegate.sh barern ios` (iOS prereqs: build
++ vendor `Kevy.xcframework` via `packaging/apple/build-xcframework.sh` +
+`bindings/expo/scripts/prepare-native.sh`, then `pod install`).
