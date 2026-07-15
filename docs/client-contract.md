@@ -124,11 +124,18 @@ KevyError =
   | Closed              // the connection / in-process bus is gone (EOF)
 ```
 
-**Key distinction — protocol error vs transport error:**
-- A server error **reply** (`-ERR wrong number of arguments`, `-WRONGTYPE …`,
-  etc.) surfaces as `Protocol(<text>)` with the wire text preserved verbatim
-  (minus the leading `-`). It is a *successful round-trip that returned an
-  error frame*.
+**Key distinction — store-semantic vs protocol vs transport error:**
+- A server error **reply** whose text is a **recognized store-semantic
+  error** — `WRONGTYPE …`, `… is not an integer or out of range`, `… is not
+  a valid float`, `… out of range`, `no such key`, `OOM …` — surfaces as
+  `KevyError::Store(<variant>)` (§2.3), **on both backends**. The remote path
+  recognizes these from the reply text; the embedded path returns the same
+  structured variant directly. This is what lets the conformance tests (§6)
+  assert `Store(WrongType)` uniformly on embedded *and* remote.
+- Any **other** server error reply (`-ERR wrong number of arguments`, a
+  verb-specific `-ERR …`, etc.) surfaces as `Protocol(<text>)` with the wire
+  text preserved verbatim (minus the leading `-`). It is a *successful
+  round-trip that returned an error frame*.
 - A malformed frame or an unexpected reply *shape* (e.g. an `Int` where a
   `Bulk` was expected) also surfaces as `Protocol(<description>)`.
 - A socket/file failure surfaces as `Io`.
@@ -376,7 +383,14 @@ order only (never field values).
 
 Both backends serve the same cursor contract. Embedded is single-shard
 (shard `0`) and requires the store opened with feed enabled (§5); otherwise
-`Unsupported`.
+`Unsupported`. **Caveat for C-ABI ports:** the C ABI (§5.1) `kevy_open` /
+`kevy_open_mem` take no feed-enable flag, so a pure-FFI embedded store cannot
+turn the feed on — C-ABI ports MUST return `Unsupported` for embedded
+`feed_*` (the Rust in-process client, which links `kevy-embedded` and calls
+`with_feed`, is the only embedded path that serves CDC today). Remote `FEED.*`
+requires the server started with feed enabled. Adding a feed flag to
+`kevy_open` is a tracked future ABI extension; until then, embedded CDC =
+remote or Rust-embedded only.
 
 | Method | Params | Returns | Notes |
 |---|---|---|---|
@@ -481,8 +495,16 @@ blocking client). Ports SHOULD offer the fluent form on the async face.
 
 ### 3.14 Blocking pops
 
-Both backends block for real (embedded parks on the store condvar; remote
-lets the server park the connection).
+Remote lets the server park the connection (a real block). **Embedded via the
+C ABI cannot** — the C ABI (§5.1) exposes no blocking-pop symbol, and the
+embedded `cmd` dispatcher answers `-ERR unknown command 'BLPOP'` (blocking
+verbs live in the server's connection reactor, not argv dispatch). So a
+pure-FFI embedded port MUST **emulate** `blpop`/`brpop`/`bzpopmin` by polling
+the non-blocking pop on a short interval, waking on a concurrent push
+(observably correct; the only difference is a bounded poll latency, not
+semantics). The Rust in-process client — which links `kevy-embedded`
+directly, not the C ABI — parks on the store condvar; C-ABI ports poll. Both
+honor the same timeout contract below.
 
 | Method | Params | Returns | Notes |
 |---|---|---|---|
