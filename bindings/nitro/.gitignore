@@ -1,0 +1,7 @@
+node_modules/
+android/build/
+android/.cxx/
+*.tgz
+# Vendored native engine — built by packaging/apple/build-xcframework.sh
+# (~75 MB of static libs, too large for git; regenerate locally / at publish).
+ios/KevyEngine.xcframework/

@@ -68,5 +68,172 @@ to roughly 10× (mitt's zero-crossing floor is unbeatable, but 10× is a
 different product than 92×). The Nitro door also lifts **every** RN kevy
 op (GET/SET call overhead), not just pub/sub — same crossing, same tax.
 
-Next: build the Nitro door (spec + C++ glue to kevy-ffi + push callback),
-re-run this gate, record the post-attack row here.
+## Attack — Nitro/JSI door, measured (feasibility spike)
+
+Built as `bindings/nitro` (`react-native-kevy-nitro`): a C++-only
+Nitro HybridObject calling `kevy-ffi` directly via JSI — `abi()`,
+`cmd(argv: ArrayBuffer): ArrayBuffer`, and a poll-model pub/sub trio. Same
+emulator (arm64-v8a), Hermes, expo debug, new arch. `bindings/expo/example/
+nitroBench.ts` times identical round-trips through both doors; NITROGATE
+lines from logcat, median of 2 on-device runs.
+
+| Axis            | Expo door | Nitro door | Nitro/Expo |
+|-----------------|----------:|-----------:|-----------:|
+| `abi()` pure-JSI | —        | 9,090,909/s | — (≈110 ns/call) |
+| `cmd` PING       | 143,266/s | 487,805/s  | **3.4×** |
+| `cmd` SET        | 139,082/s | 295,858/s  | **2.1×** |
+| pub/sub 16 B     | 48,734/s  | 485,447/s  | **~10×** |
+
+Correctness: `NITROGATE:SMOKE abi=1 ping="+PONG\r\n"` — the C++ door really
+reaches the engine, and pub/sub delivered every message (50001/50000).
+
+### Reading it
+
+- **Pub/sub 48 k → 485 k/s (~10×)** — exactly the LEDGER's prediction. The
+  gap to mitt collapses from **93× to 8.6×**: a different product. And this
+  is *still the poll/drain shape* (publish + `subNext` loop, ~2 crossings/
+  msg); a true native→JS push callback would remove one more crossing.
+- **`cmd` PING 143 k → 488 k/s (3.4×)** — a single cmd is one crossing, so
+  the Expo door's 143 k cmd/s ≈ 7 µs/crossing (matches the pub/sub-derived
+  6–7 µs above). Nitro's ~2 µs/cmd is *not* the ~110 ns JSI floor because
+  `cmd` still allocates+copies a reply ArrayBuffer and runs the RESP
+  encode; the crossing is cheap now, the marshalling is what's left.
+- **`abi()` at 9 M/s (~110 ns)** confirms the JSI HostFunction dispatch cost
+  the hypothesis assumed — two orders of magnitude under the Expo door.
+
+Viability: nitrogen 0.36.1 codegen + the native C++ build both work on RN
+0.86.0 (new arch). Two RN-0.86 frictions surfaced and were solved in the
+spike, not worked around: (1) a pure-C++ Nitro module needs a Kotlin
+`ReactPackage` shim for Expo autolinking to link it and to load the .so;
+(2) `libkevy_ffi.so` needed an explicit SONAME or the linked-in path breaks
+dlopen. Both are one-liners, now in the tree.
+
+Next (not done here): a native→JS **push** callback path (removes the drain
+crossing) and an iOS run.
+
+## Attack — native→JS push callback, measured
+
+The "remove the drain crossing" follow-up, built and measured. kevy-ffi is
+**poll-only** (`kevy_sub_next`, no `sub_wait`/callback registration), so a
+faithful push is: on `subscribePush`, spawn a **native poller thread** that
+loops `kevy_sub_next`; per frame, invoke the JS callback — which Nitro turns
+(a `void`-returning callback ⇒ `AsyncJSCallback`) into a fire-and-forget hop
+onto the JS thread via the RN CallInvoker. That is **JS-side push** (one
+callback per message, zero JS-side polling); the **native side still polls**.
+A true zero-CPU engine push would need a new kevy-ffi `sub_wait()` — an
+engine change, deliberately *not* done here. Two variants: per-message (one
+hop/frame) and batched (drain all pending, one hop/batch).
+
+Same emulator, Hermes, new arch. `nitroBench.ts` publishes M=50 000 and
+awaits full delivery. Median of 2 on-device runs:
+
+| Variant       | ops/s      | vs poll | note |
+|---------------|-----------:|--------:|------|
+| mitt          | 3,850,000  | —       | in-process floor |
+| poll/drain    | 510–532k   | 1.0×    | last round's baseline |
+| push/message  | 234–237k   | **0.4–0.5×** | one CallInvoker hop per frame |
+| push/batched  | 658–694k   | **1.3×** | ~7–8 frames per hop |
+
+All 50001/50000 delivered, no crash; app CPU 0.0% after `stopPush()` (the
+poller is joined, not leaked).
+
+### Reading it
+
+- **Push-per-message *loses* (0.4–0.5× poll).** The native→JS CallInvoker
+  hop per message costs **more** than the 2 `subNext` crossings it removes —
+  a hop is an enqueue onto the JS event loop + a thread wake, not a bare JSI
+  call. Removing crossings only helps if what replaces them is cheaper; here
+  it isn't. This is the load-bearing negative result of the round.
+- **Push-batched *wins* (1.3× poll).** Draining all pending frames per wake
+  and delivering one array-of-ArrayBuffers hop amortizes the hop across ~7–8
+  frames. It's the best kevy pub/sub shape measured, and closes the gap to
+  mitt to **~5.5×** (from poll's 7.5× and the Expo door's 93×).
+- **Caveat — native still polls.** The poller busy-spins (`yield` on empty),
+  burning ~one core *while a push subscription is live*. The honest fix is an
+  engine `sub_wait()` (block until a frame) exposed through kevy-ffi; that
+  would make push zero-CPU-when-idle and is the only thing here that needs an
+  engine change. Lifecycle is clean: `stopPush()` joins the thread (verified
+  0.0% CPU afterwards).
+
+Takeaway for the RN door: keep the **poll/drain** door as the simple default
+and offer **batched push** for high-fanout subscribers; skip push-per-message
+(it's a pessimization on this workload). A real engine `sub_wait()` is the
+next lever if push-when-idle CPU matters.
+
+## Attack — `kevy_sub_wait`: the busy-spin, killed
+
+The `sub_wait()` lever, landed. kevy-ffi gained
+`kevy_sub_wait(sub, timeout_ms, out)` — a **real kernel park** on the
+engine's mpsc (`recv_timeout`), not a spin. Both push pollers now block in
+`kevy_sub_wait(sub, 250ms)` (250 ms slices so `stopPush` still joins
+promptly) instead of looping `kevy_sub_next` + `yield`. The batched variant
+blocks for frame 1, then drains the rest non-blocking before the one hop.
+
+**Idle CPU — a live push subscription with NO traffic**, measured on the
+emulator (arm64-v8a) with raw `top -H` / `/proc/<tid>/stat`. The poller
+thread is named `kevy-push-poll` (bionic otherwise inherits the JS thread's
+name `mqt_v_js`, which hid it):
+
+| Build | Poller thread state | Poller %CPU | Process %CPU |
+|-------|---------------------|------------:|-------------:|
+| busy-spin (`kevy_sub_next` + `yield`) | **R** (runnable) | **~100–103%** (a full core) | ~104–119% |
+| `kevy_sub_wait` (this) | **S** (parked) | **0.0%**, `cpu_ticks=0` | ~0–8% (idle baseline) |
+
+That is the headline: **~1 full core → 0%** when a subscription is live but
+idle. The poller sleeps in the kernel until a frame arrives.
+
+Throughput is unchanged by the switch (the hot path never touched
+`kevy_sub_next`'s spin): poll ~460–530k | push ~207–237k (0.4–0.5×) |
+**batched ~580–694k (1.2–1.3× poll)** | all 50001/50000 delivered, no crash.
+`sub_wait` buys the idle CPU for free — no throughput cost.
+
+Net: batched push over `sub_wait` is now a clean win on both axes — 1.2–1.3×
+poll throughput **and** zero idle CPU. It's the high-fanout pub/sub path for
+the RN door.
+
+## Attack — the Nitro door on iOS
+
+The remaining port, done. The same C++ HybridObject builds + links + runs on
+the iOS Simulator (iPhone 17 Pro / iOS 26.5, arm64). `KevyNitro.podspec`
+compiles `cpp/**`, the nitrogen ObjC++ `+load` registers the hybrid (no
+Kotlin-style shim needed on iOS), and it links the engine via a vendored
+`KevyEngine.xcframework` — the C++ includes the local `kevy.h` and links the
+`.a`, mirroring the Android `libkevy_ffi.so` link. `kevy_sub_wait` is in the
+iOS `.a` too, so the push poller parks the same way.
+
+Measured (Release, embedded bundle — rendered on-device):
+
+| Axis | Expo door | Nitro door | Nitro/Expo |
+|------|----------:|-----------:|-----------:|
+| `cmd` PING | 179,211/s | 1,886,792/s | **10.5×** |
+| `cmd` SET  | 172,712/s | 1,639,344/s |  9.5× |
+| pub/sub poll | — | 1,063,851/s | — |
+| pub/sub push/msg | — | 877,193/s | 0.8× poll |
+| pub/sub batched | — | 1,388,917/s | **1.3× poll** |
+
+`abi()` pure-JSI ~20M/s; `SMOKE abi=1 ping="+PONG\r\n"`; all 50001/50000
+delivered. **Idle CPU (live push sub, no traffic): 0.0%** — the
+`kevy-push-poll` thread parks in `kevy_sub_wait`, identical to Android.
+
+The door-vs-door **ratios hold on both platforms** — batched push 1.3× poll,
+per-message push < poll, zero idle CPU. (iOS Release runs higher absolute
+than Android Debug; ratios are the invariant.)
+
+### iOS gotchas hit + fixed (RN 0.86 + CocoaPods, bleeding edge)
+
+- `pthread_setname_np` is **one-arg on Darwin** (current thread) vs two-arg
+  on bionic — `#if __APPLE__` split.
+- Two pods vendoring `Kevy.xcframework` → CocoaPods **name clash**; renamed
+  the Nitro copy to `KevyEngine.xcframework`.
+- Both xcframeworks shipped a Clang `module Kevy` → **"redefinition of
+  module"** (cascaded into ExpoModulesCore); stripped the modulemap from the
+  Nitro copy (the C++ uses the local `kevy.h`, not `import Kevy`).
+- Release sim build pulls `arm64 x86_64` but the sim slice is arm64-only →
+  **"no matching slice"**; built with `ARCHS=arm64 EXCLUDED_ARCHS=x86_64`
+  (the documented Apple-Silicon fix).
+- Dev-harness note: the expo-dev-client on RN 0.86 would not reliably load
+  the Metro bundle for the out-of-tree symlinked module (stale dev-client
+  cache + Metro Haste churn), and RN `console.log` doesn't reach the iOS
+  device log in bridgeless dev. The numbers above were taken from a **Release
+  build with the JS bundle embedded** (no Metro), rendered on-screen — a real
+  on-device run, but not via `simctl log`.

@@ -1,0 +1,39 @@
+{
+  "name": "react-native-kevy-nitro",
+  "version": "0.0.1",
+  "description": "kevy for React Native via Nitro (JSI): a C++ HybridObject calling kevy-ffi directly — synchronous cmd() with ArrayBuffer payloads, and native->JS push pub/sub — bypassing the Expo-module dispatch + JNI crossing tax.",
+  "main": "src/index.ts",
+  "module": "src/index.ts",
+  "types": "src/index.ts",
+  "react-native": "src/index.ts",
+  "source": "src/index.ts",
+  "files": [
+    "src",
+    "react-native.config.js",
+    "nitrogen",
+    "android/build.gradle",
+    "android/gradle.properties",
+    "android/fix-prefab.gradle",
+    "android/CMakeLists.txt",
+    "android/src",
+    "cpp",
+    "ios/KevyEngine.xcframework",
+    "KevyNitro.podspec",
+    "nitro.json",
+    "README.md"
+  ],
+  "scripts": {
+    "specs": "nitrogen --logLevel=\"debug\""
+  },
+  "keywords": ["react-native", "nitro", "kevy", "jsi"],
+  "license": "(Apache-2.0 OR MIT)",
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*",
+    "react-native-nitro-modules": "*"
+  },
+  "devDependencies": {
+    "nitrogen": "0.36.1",
+    "react-native-nitro-modules": "0.36.1"
+  }
+}
