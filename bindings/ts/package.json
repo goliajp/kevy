@@ -1,0 +1,30 @@
+{
+  "name": "@goliapkg/kevy",
+  "version": "4.0.0",
+  "description": "The first-party TypeScript client for kevy — the pure-Rust Redis-compatible engine. One connect(url) routes to the in-process embedded engine (mem:// / file://, over bun:ffi or the N-API addon) or a native RESP2/3 TCP server (kevy:// / redis:// / tcp://). Async-by-default with a synchronous embedded escape hatch. Runs on both Node and Bun.",
+  "license": "(Apache-2.0 OR MIT)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/goliajp/kevy.git"
+  },
+  "homepage": "https://kevy.golia.jp",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./embedded": "./src/embedded.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test:node": "node --test test/*.test.ts",
+    "test:bun": "bun test test/*.test.ts"
+  },
+  "optionalDependencies": {
+    "@goliapkg/kevy-node-darwin-arm64": "4.0.0",
+    "@goliapkg/kevy-node-linux-x64": "4.0.0",
+    "@goliapkg/kevy-node-linux-arm64": "4.0.0"
+  }
+}
