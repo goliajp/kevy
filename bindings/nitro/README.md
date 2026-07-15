@@ -79,6 +79,33 @@ x86_64-sim slice.
 
 Regenerate the Nitro bindings with `npm run specs` (nitrogen).
 
+## Gate
+
+The Nitro door is a JSI C++ HybridObject — it only exists inside a running
+React Native app, so it is gated **on a device**, not on the host. Its
+smoke lives in the shared Expo example app: `App.tsx` calls
+`runNitroBench()` (from `bindings/expo/example/nitroBench.ts`), which opens
+a Nitro db, runs `cmd`/pub-sub/batched-push against it, and logs its
+verdict lines to the device console — `NITROGATE:ERROR …` on any failure,
+the door-vs-door bench lines otherwise (see the tables above).
+
+Drive it with the existing mobile gate, which boots the example app onto a
+simulator/emulator and reads the device log:
+
+```
+bash bench/mobilegate.sh expo ios       # iOS Simulator (Xcode)
+bash bench/mobilegate.sh expo android    # Android emulator (SDK)
+```
+
+Because a native build + device boot is heavy and toolchain-bound, this is
+a **developer / CI-on-macOS gate**, not part of the per-push matrix — the
+same status as every other mobile door. It cannot run on a host without a
+booted simulator/emulator. Perf method and raw numbers:
+`bench/pubsubgate/LEDGER.md`.
+
+(The sibling raw JVM/JNI door, `bindings/android`, is pure-JVM and *is*
+host-runnable — see `bench/jnigate.sh`.)
+
 ## License
 
 Apache-2.0 OR MIT.
