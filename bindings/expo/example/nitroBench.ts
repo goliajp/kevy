@@ -128,6 +128,29 @@ export async function runNitroBench(): Promise<string[]> {
     lines.push(
       `NITROGATE: kv scalar getData=${sGet} setData=${sSet} ops/s | vs cmd=${x(sGet, cmdGet)}x get / ${x(sSet, cmdSet)}x set`
     );
+
+    // Head-to-head vs MMKV — the same 16 B get/set workload through the kevy
+    // scalar door (getData/setData) and react-native-mmkv, in one app on one
+    // device, so the comparison is real end-to-end (not KevyKit-direct like
+    // mmkvgate). MMKV is optional: if it isn't linked the kevy line still
+    // prints, and this axis reports that instead of crashing the bench.
+    try {
+      // Lazy so a missing/unlinked MMKV degrades to a note, not a bench crash.
+      const { MMKV } = require("react-native-mmkv") as typeof import("react-native-mmkv");
+      const m = new MMKV({ id: "nitrogate-mmkv" });
+      m.set("k", valAB); // seed so getBuffer hits
+      let mGet = 0, mSet = 0;
+      { const t = Date.now(); for (let i = 0; i < N; i++) m.getBuffer("k"); mGet = ops(N, Date.now() - t); }
+      { const t = Date.now(); for (let i = 0; i < N; i++) m.set("k", valAB); mSet = ops(N, Date.now() - t); }
+      lines.push(
+        `NITROGATE: kv-vs-mmkv 16B GET kevy=${sGet} mmkv=${mGet} ops/s | kevy/mmkv=${x(sGet, mGet)}x`
+      );
+      lines.push(
+        `NITROGATE: kv-vs-mmkv 16B SET kevy=${sSet} mmkv=${mSet} ops/s | kevy/mmkv=${x(sSet, mSet)}x`
+      );
+    } catch (e) {
+      lines.push(`NITROGATE: kv-vs-mmkv SKIPPED (react-native-mmkv not linked: ${String(e)})`);
+    }
   }
 
   // Pub/sub, four ways, 16 B payload, M messages each:
