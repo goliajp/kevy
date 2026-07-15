@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'" />
+    <title>kevy in Electron</title>
+    <style>
+      body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 24px; background: #0f1115; color: #e6e6e6; }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      p.sub { margin: 0 0 20px; color: #8b93a1; }
+      section { background: #171a21; border: 1px solid #262b36; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+      h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: #8b93a1; margin: 0 0 12px; }
+      input { background: #0f1115; border: 1px solid #2c3340; color: #e6e6e6; border-radius: 6px; padding: 7px 9px; font: inherit; }
+      button { background: #3b82f6; color: #fff; border: 0; border-radius: 6px; padding: 7px 14px; font: inherit; cursor: pointer; }
+      button:hover { background: #2f6fe0; }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .out { font-family: ui-monospace, monospace; color: #7ee787; margin-top: 10px; min-height: 20px; }
+      #log { font-family: ui-monospace, monospace; font-size: 13px; background: #0f1115; border: 1px solid #262b36; border-radius: 6px; padding: 10px; height: 150px; overflow: auto; margin-top: 10px; }
+      #log div { color: #cbd5e1; }
+    </style>
+  </head>
+  <body>
+    <h1>kevy in Electron</h1>
+    <p class="sub">The real native engine runs in the main process. This page only sees <code>window.kevy</code>.</p>
+
+    <section>
+      <h2>Key / value</h2>
+      <div class="row">
+        <input id="key" placeholder="key" value="greeting" size="12" />
+        <input id="val" placeholder="value" value="hello from kevy" size="20" />
+        <button id="set">SET</button>
+        <button id="get">GET</button>
+      </div>
+      <div class="out" id="kvOut"></div>
+    </section>
+
+    <section>
+      <h2>Live pub/sub</h2>
+      <div class="row">
+        <input id="chan" placeholder="channel" value="room" size="10" />
+        <input id="msg" placeholder="message" value="ping" size="20" />
+        <button id="pub">PUBLISH</button>
+      </div>
+      <div id="log"></div>
+    </section>
+
+    <script src="./renderer.js"></script>
+  </body>
+</html>

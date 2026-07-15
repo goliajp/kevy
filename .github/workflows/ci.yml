@@ -581,6 +581,13 @@ jobs:
       - run: node --test node.test.js
         working-directory: bindings/node
 
+      # The Electron door reuses the Node door's addon (no separate native
+      # build). Its main-process bridge + preload are dependency-injected, so
+      # the whole surface runs headlessly here — no display / xvfb.
+      - name: Electron door smoke (headless)
+        run: node --test test/*.test.js
+        working-directory: bindings/electron
+
       - name: C# smoke
         uses: actions/setup-dotnet@v4
         with:

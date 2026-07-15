@@ -32,7 +32,7 @@ while SINTER has no smallest-set-first ordering and ZSCAN copies the set.
 - [Indexes](docs/indexes.md) · [Views](docs/views.md) · [Text search](docs/text-search.md) · [Vector search](docs/vector-search.md)
 - [CDC feeds](docs/cdc.md) · [Replication](docs/replication.md) · [Availability & failover](docs/availability.md) · [Persistence](docs/persistence.md)
 - [Migration](docs/migration.md) · [Upgrading between majors](docs/UPGRADING.md)
-- [WASM / browser](docs/wasm.md) · [IoT / embedded tiers](docs/iot.md)
+- [WASM / browser](docs/wasm.md) · [Electron apps](docs/electron.md) · [IoT / embedded tiers](docs/iot.md)
 - [Error contract](docs/error-replies.md) · [Tuning](docs/tuning.md)
 
 ## Verbs (184 total)
