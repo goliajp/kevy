@@ -133,6 +133,22 @@ std::unique_ptr<Server> spawn_server(const std::vector<std::string>& extra) {
 #endif
 }
 
+std::unique_ptr<Server> spawn_server_config(const std::string& toml,
+                                            const std::vector<std::string>& extra) {
+  if (!server_available()) return nullptr;
+  char tmpl[] = "/tmp/kevy-cpp-cfg-XXXXXX";
+  char* dir = ::mkdtemp(tmpl);
+  if (dir == nullptr) return nullptr;
+  std::string cfg = std::string(dir) + "/kevy.toml";
+  FILE* f = ::fopen(cfg.c_str(), "w");
+  if (f == nullptr) return nullptr;
+  ::fwrite(toml.data(), 1, toml.size(), f);
+  ::fclose(f);
+  std::vector<std::string> args = {"--config", cfg};
+  for (const auto& e : extra) args.push_back(e);
+  return spawn_server(args);
+}
+
 }  // namespace test
 }  // namespace kevy
 

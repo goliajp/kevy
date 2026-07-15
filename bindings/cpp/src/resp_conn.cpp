@@ -37,6 +37,11 @@ std::unique_ptr<RespConn> RespConn::dial(const std::string& host, uint16_t port)
   if (fd < 0) throw IoError("kevy: connect failed for " + host + ":" + port_s);
   int one = 1;
   ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+#ifdef SO_NOSIGPIPE
+  // macOS/BSD: never raise SIGPIPE on a write to a peer that has gone away —
+  // surface it as an error instead (Linux uses MSG_NOSIGNAL on send).
+  ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
   return std::unique_ptr<RespConn>(new RespConn(fd));
 }
 
@@ -47,10 +52,14 @@ void RespConn::close() {
   }
 }
 
+#ifndef MSG_NOSIGNAL
+#define MSG_NOSIGNAL 0
+#endif
+
 void RespConn::write_all(const char* data, size_t len) {
   size_t sent = 0;
   while (sent < len) {
-    ssize_t n = ::send(fd_, data + sent, len - sent, 0);
+    ssize_t n = ::send(fd_, data + sent, len - sent, MSG_NOSIGNAL);
     if (n > 0) {
       sent += static_cast<size_t>(n);
       continue;
