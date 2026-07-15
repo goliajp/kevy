@@ -1,6 +1,7 @@
 #include "HybridKevyNitro.hpp"
 
 #include <cstdint>
+#include <pthread.h>
 #include <vector>
 
 namespace margelo::nitro::kevy {
@@ -79,12 +80,15 @@ std::optional<std::shared_ptr<ArrayBuffer>> HybridKevyNitro::subNext() {
 
 // ── push model ─────────────────────────────────────────────────────────
 //
-// kevy-ffi is poll-only. To turn that into a JS-side push we spawn a native
-// thread that spins kevy_sub_next; each frame we invoke the JS callback,
-// which Nitro converts (void return => AsyncJSCallback) into a fire-and-
-// forget hop onto the JS thread via the CallInvoker. The native thread
-// never blocks on JS. On empty we yield — a busy poll, honest caveat: this
-// burns a core while subscribed; a real engine sub_wait() would remove it.
+// kevy-ffi is poll-only for the drain (kevy_sub_next), but kevy_sub_wait
+// parks the calling thread in the kernel on the engine's mpsc until a frame
+// arrives (or timeout). We spawn one native thread that blocks in
+// kevy_sub_wait and, per frame, invokes the JS callback — which Nitro turns
+// (void return => AsyncJSCallback) into a fire-and-forget hop onto the JS
+// thread via the CallInvoker. No busy-spin: idle costs zero CPU. We wait in
+// 250 ms slices so stopPush stays responsive — the run flag is re-checked
+// between waits, so join() returns within one slice.
+static constexpr uint64_t kWaitSliceMs = 250;
 
 void HybridKevyNitro::subscribePush(
     const std::string& channel,
@@ -96,15 +100,18 @@ void HybridKevyNitro::subscribePush(
   KevySub* sub = _pushSub;
   auto cb = onMessage;
   _poller = std::thread([this, sub, cb]() {
+    // Name the thread so it's distinct from the JS thread it was spawned
+    // from (bionic otherwise inherits the creator's name, "mqt_v_js").
+    pthread_setname_np(pthread_self(), "kevy-push-poll");
     while (_pollRunning.load(std::memory_order_acquire)) {
       KevyBuf out{};
-      if (kevy_sub_next(sub, &out) == 1) {
+      int32_t rc = kevy_sub_wait(sub, kWaitSliceMs, &out); // kernel park
+      if (rc == 1) {
         std::vector<uint8_t> v(out.ptr, out.ptr + out.len);
         kevy_buf_free(out.ptr, out.len, out.cap);
         cb(ArrayBuffer::move(std::move(v))); // hops to the JS thread
-      } else {
-        std::this_thread::yield();
       }
+      // rc == 0: timeout — loop, re-check the run flag. rc < 0: closed.
     }
   });
 }
@@ -119,19 +126,28 @@ void HybridKevyNitro::subscribePushBatched(
   KevySub* sub = _pushSub;
   auto cb = onBatch;
   _poller = std::thread([this, sub, cb]() {
+    // Name the thread so it's distinct from the JS thread it was spawned
+    // from (bionic otherwise inherits the creator's name, "mqt_v_js").
+    pthread_setname_np(pthread_self(), "kevy-push-poll");
     while (_pollRunning.load(std::memory_order_acquire)) {
-      std::vector<std::shared_ptr<ArrayBuffer>> batch;
       KevyBuf out{};
-      while (kevy_sub_next(sub, &out) == 1) {
-        std::vector<uint8_t> v(out.ptr, out.ptr + out.len);
-        kevy_buf_free(out.ptr, out.len, out.cap);
-        batch.push_back(ArrayBuffer::move(std::move(v)));
+      int32_t rc = kevy_sub_wait(sub, kWaitSliceMs, &out); // block for frame 1
+      if (rc != 1) {
+        continue; // timeout or closed — re-check the run flag
       }
-      if (!batch.empty()) {
-        cb(batch); // one hop for the whole drained batch
-      } else {
-        std::this_thread::yield();
+      std::vector<std::shared_ptr<ArrayBuffer>> batch;
+      std::vector<uint8_t> v(out.ptr, out.ptr + out.len);
+      kevy_buf_free(out.ptr, out.len, out.cap);
+      batch.push_back(ArrayBuffer::move(std::move(v)));
+      // Drain everything else already queued — non-blocking — so the whole
+      // burst rides one JS hop.
+      KevyBuf more{};
+      while (kevy_sub_next(sub, &more) == 1) {
+        std::vector<uint8_t> mv(more.ptr, more.ptr + more.len);
+        kevy_buf_free(more.ptr, more.len, more.cap);
+        batch.push_back(ArrayBuffer::move(std::move(mv)));
       }
+      cb(batch); // one hop for the whole batch
     }
   });
 }

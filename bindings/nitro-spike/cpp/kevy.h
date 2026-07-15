@@ -79,6 +79,12 @@ KevySub *kevy_psubscribe(KevyDb *db, const uint8_t *pat, size_t pat_len);
  * 0 = nothing queued; negative = misuse. */
 int32_t kevy_sub_next(KevySub *sub, KevyBuf *out);
 
+/* Block until one frame is queued or timeout_ms elapses (0 = wait forever).
+ * Parks the thread — no busy-poll — so a push-style poller can wait in the
+ * kernel instead of spinning kevy_sub_next.
+ * 1 = frame written to *out; 0 = timeout; negative = misuse / bus closed. */
+int32_t kevy_sub_wait(KevySub *sub, uint64_t timeout_ms, KevyBuf *out);
+
 /* Close the subscription (unsubscribes everything it held). */
 void kevy_sub_close(KevySub *sub);
 
