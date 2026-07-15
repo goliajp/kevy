@@ -34,3 +34,12 @@ RESP framing) — the lane that answers an mmap KV's synchronous
 read/write. Layout: `java/` is the bare JNI surface (`KevyNative`),
 `kevy/` the Kotlin shell. Same API shape as every other kevy
 embedding. Docs: <https://kevy.golia.jp>.
+
+## Gate
+
+The JNI surface is pure-JVM (no Android), so it is smoked on any JDK host:
+`bash bench/jnigate.sh` builds `libkevy_jni`, compiles this `java/` surface,
+and runs `Smoke.java` (command entry + scalar fast path + pub/sub round trip
++ reopen-durability → `smoke-jvm: ok`). The full Kotlin/AAR form on a real
+device is driven by `bench/mobilegate.sh` (developer/CI-on-macOS, needs an
+emulator — out of host scope here).
