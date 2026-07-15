@@ -106,8 +106,11 @@ db.set(b&quot;k&quot;, b&quot;v&quot;, None)?;
 # a browser tab — 151 KB, persists to OPFS
 const db = await open({ persist: { name: &quot;app&quot; } });
 
+# a phone — inside your React Native or Flutter app
+db.set(&quot;session:7f3a&quot;, token, { ttlMs: 3_600_000 });
+
 # a microcontroller — no OS, no allocator
-let mut store = Store::new_in(&amp;mut arena);</code></pre><p class="tab-note">The same engine and the same commands in all four places.</p><a class="tab-more" href="use/embedded/">Embedding kevy</a></div></div>
+let mut store = Store::new_in(&amp;mut arena);</code></pre><p class="tab-note">The same engine and the same commands in all five places — and on a phone it is faster than MMKV.</p><a class="tab-more" href="use/embedded/">Embedding kevy</a></div></div>
 </section>
 <section class="band" id="swap">
   <div class="sec-h">
