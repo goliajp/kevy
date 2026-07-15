@@ -189,4 +189,51 @@ Throughput is unchanged by the switch (the hot path never touched
 
 Net: batched push over `sub_wait` is now a clean win on both axes — 1.2–1.3×
 poll throughput **and** zero idle CPU. It's the high-fanout pub/sub path for
-the RN door. (iOS still unwired; that's the remaining port.)
+the RN door.
+
+## Attack — the Nitro door on iOS
+
+The remaining port, done. The same C++ HybridObject builds + links + runs on
+the iOS Simulator (iPhone 17 Pro / iOS 26.5, arm64). `KevyNitro.podspec`
+compiles `cpp/**`, the nitrogen ObjC++ `+load` registers the hybrid (no
+Kotlin-style shim needed on iOS), and it links the engine via a vendored
+`KevyEngine.xcframework` — the C++ includes the local `kevy.h` and links the
+`.a`, mirroring the Android `libkevy_ffi.so` link. `kevy_sub_wait` is in the
+iOS `.a` too, so the push poller parks the same way.
+
+Measured (Release, embedded bundle — rendered on-device):
+
+| Axis | Expo door | Nitro door | Nitro/Expo |
+|------|----------:|-----------:|-----------:|
+| `cmd` PING | 179,211/s | 1,886,792/s | **10.5×** |
+| `cmd` SET  | 172,712/s | 1,639,344/s |  9.5× |
+| pub/sub poll | — | 1,063,851/s | — |
+| pub/sub push/msg | — | 877,193/s | 0.8× poll |
+| pub/sub batched | — | 1,388,917/s | **1.3× poll** |
+
+`abi()` pure-JSI ~20M/s; `SMOKE abi=1 ping="+PONG\r\n"`; all 50001/50000
+delivered. **Idle CPU (live push sub, no traffic): 0.0%** — the
+`kevy-push-poll` thread parks in `kevy_sub_wait`, identical to Android.
+
+The door-vs-door **ratios hold on both platforms** — batched push 1.3× poll,
+per-message push < poll, zero idle CPU. (iOS Release runs higher absolute
+than Android Debug; ratios are the invariant.)
+
+### iOS gotchas hit + fixed (RN 0.86 + CocoaPods, bleeding edge)
+
+- `pthread_setname_np` is **one-arg on Darwin** (current thread) vs two-arg
+  on bionic — `#if __APPLE__` split.
+- Two pods vendoring `Kevy.xcframework` → CocoaPods **name clash**; renamed
+  the Nitro copy to `KevyEngine.xcframework`.
+- Both xcframeworks shipped a Clang `module Kevy` → **"redefinition of
+  module"** (cascaded into ExpoModulesCore); stripped the modulemap from the
+  Nitro copy (the C++ uses the local `kevy.h`, not `import Kevy`).
+- Release sim build pulls `arm64 x86_64` but the sim slice is arm64-only →
+  **"no matching slice"**; built with `ARCHS=arm64 EXCLUDED_ARCHS=x86_64`
+  (the documented Apple-Silicon fix).
+- Dev-harness note: the expo-dev-client on RN 0.86 would not reliably load
+  the Metro bundle for the out-of-tree symlinked module (stale dev-client
+  cache + Metro Haste churn), and RN `console.log` doesn't reach the iOS
+  device log in bridgeless dev. The numbers above were taken from a **Release
+  build with the JS bundle embedded** (no Metro), rendered on-screen — a real
+  on-device run, but not via `simctl log`.
