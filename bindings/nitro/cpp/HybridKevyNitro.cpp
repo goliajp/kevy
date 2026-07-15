@@ -112,14 +112,18 @@ std::optional<std::shared_ptr<ArrayBuffer>> HybridKevyNitro::subNext() {
 
 // ── push model ─────────────────────────────────────────────────────────
 //
-// kevy-ffi is poll-only for the drain (kevy_sub_next), but kevy_sub_wait
-// parks the calling thread in the kernel on the engine's mpsc until a frame
-// arrives (or timeout). We spawn one native thread that blocks in
-// kevy_sub_wait and, per frame, invokes the JS callback — which Nitro turns
-// (void return => AsyncJSCallback) into a fire-and-forget hop onto the JS
-// thread via the CallInvoker. No busy-spin: idle costs zero CPU. We wait in
-// 250 ms slices so stopPush stays responsive — the run flag is re-checked
-// between waits, so join() returns within one slice.
+// The push family is a known-channel "give me payloads" API, so it drains
+// the RESP-free lane: kevy_sub_wait_raw parks in the kernel until a delivery
+// frame arrives (skipping subscribe/unsubscribe acks) and yields JUST the
+// payload bytes — no `*3\r\n$7\r\nmessage…` framing to encode natively or
+// parse in JS (the engine's encode_frame is ~208 ns/frame, measured). We
+// spawn one native thread that blocks in kevy_sub_wait_raw and, per frame,
+// invokes the JS callback — which Nitro turns (void return =>
+// AsyncJSCallback) into a fire-and-forget hop onto the JS thread via the
+// CallInvoker. No busy-spin: idle costs zero CPU. We wait in 250 ms slices so
+// stopPush stays responsive — the run flag is re-checked between waits, so
+// join() returns within one slice. (Callers that need the channel/kind or
+// ack frames use the framed subscribe/subNext lane instead.)
 static constexpr uint64_t kWaitSliceMs = 250;
 
 void HybridKevyNitro::subscribePush(
@@ -144,13 +148,14 @@ void HybridKevyNitro::subscribePush(
 #endif
     while (_pollRunning.load(std::memory_order_acquire)) {
       KevyBuf out{};
-      int32_t rc = kevy_sub_wait(sub, kWaitSliceMs, &out); // kernel park
+      int32_t rc = kevy_sub_wait_raw(sub, kWaitSliceMs, &out); // kernel park
       if (rc == 1) {
         std::vector<uint8_t> v(out.ptr, out.ptr + out.len);
         kevy_buf_free(out.ptr, out.len, out.cap);
         cb(ArrayBuffer::move(std::move(v))); // hops to the JS thread
       }
-      // rc == 0: timeout — loop, re-check the run flag. rc < 0: closed.
+      // rc == 0: timeout or an ack was skipped — loop, re-check the run flag.
+      // rc < 0: closed.
     }
   });
 }
@@ -188,18 +193,20 @@ void HybridKevyNitro::subscribePushBatched(
 #endif
     while (_pollRunning.load(std::memory_order_acquire)) {
       KevyBuf out{};
-      int32_t rc = kevy_sub_wait(sub, kWaitSliceMs, &out); // block for frame 1
+      int32_t rc = kevy_sub_wait_raw(sub, kWaitSliceMs, &out); // block for frame 1
       if (rc != 1) {
-        continue; // timeout or closed — re-check the run flag
+        continue; // timeout, ack skipped, or closed — re-check the run flag
       }
       // Pack the whole burst — frame 1 plus everything else already queued —
       // into one length-prefixed buffer, so it rides one JS hop as one AB.
+      // Raw payloads only (kevy_sub_next_raw skips acks), so the batch never
+      // carries a control frame.
       std::vector<uint8_t> packed;
       uint32_t count = 0;
       packFrame(packed, out);
       count++;
       KevyBuf more{};
-      while (kevy_sub_next(sub, &more) == 1) {
+      while (kevy_sub_next_raw(sub, &more) == 1) {
         packFrame(packed, more);
         count++;
       }
