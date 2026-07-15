@@ -117,7 +117,9 @@ public final class KevyClient implements AutoCloseable {
     public List<byte[]> hgetall(byte[] key) { return CollOps.hgetall(backend, key); }
     public List<byte[]> hgetall(String key) { return hgetall(Bytes.of(key)); }
     public List<byte[]> hkeys(byte[] key) { return CollOps.hkeys(backend, key); }
+    public List<byte[]> hkeys(String key) { return hkeys(Bytes.of(key)); }
     public List<byte[]> hvals(byte[] key) { return CollOps.hvals(backend, key); }
+    public List<byte[]> hvals(String key) { return hvals(Bytes.of(key)); }
 
     // ---- List (§3.3) ----
     public long lpush(byte[] key, byte[]... values) { return CollOps.lpush(backend, key, values); }
@@ -141,6 +143,7 @@ public final class KevyClient implements AutoCloseable {
     public List<byte[]> smembers(byte[] key) { return CollOps.smembers(backend, key); }
     public List<byte[]> smembers(String key) { return smembers(Bytes.of(key)); }
     public long scard(byte[] key) { return CollOps.scard(backend, key); }
+    public long scard(String key) { return scard(Bytes.of(key)); }
     public boolean sismember(byte[] key, byte[] member) { return CollOps.sismember(backend, key, member); }
     public boolean sismember(String key, String member) { return sismember(Bytes.of(key), Bytes.of(member)); }
     public List<byte[]> sinter(byte[]... keys) { return CollOps.sinter(backend, keys); }
