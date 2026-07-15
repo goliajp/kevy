@@ -26,5 +26,9 @@
     "@goliapkg/kevy-node-darwin-arm64": "4.0.0",
     "@goliapkg/kevy-node-linux-x64": "4.0.0",
     "@goliapkg/kevy-node-linux-arm64": "4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "typescript": "^7.0.2"
   }
 }
