@@ -344,6 +344,21 @@ impl<C: Commands> Shard<C> {
     /// never come through here — `start_single` pushes them straight onto
     /// `request_batch` (the hot batched lane).
     pub(crate) fn dispatch_targets(&mut self, conn_id: u64, seq: u64, targets: Vec<(usize, Op)>) {
+        // Read-your-writes across the two cross-shard lanes. Single-key
+        // forwards (SET/GET) buffer in `request_batch` and only leave the
+        // shard when `flush_requests` runs at the end of the reactor
+        // iteration; a multi-key op fans out here via the *immediate*
+        // `send_to` below. Within one connection's command stream — most
+        // visibly a queued `SET` then `MGET` inside a MULTI/EXEC — the
+        // immediate gather would otherwise reach the owning shard BEFORE
+        // the still-buffered write, reading stale (nil) state. Flushing the
+        // batched lane first sends those writes ahead of this op's requests
+        // on the same origin→peer ring (FIFO), so the peer applies the
+        // write before it serves the gather. `flush_requests` short-circuits
+        // on an empty batch, so a lone non-transactional MGET (nothing
+        // buffered) pays one predicted-not-taken branch and still fans out
+        // fully asynchronously.
+        self.flush_requests();
         for (shard, op) in targets {
             if shard == self.id {
                 let part = self.exec_op(op);

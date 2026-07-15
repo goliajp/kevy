@@ -2,7 +2,6 @@
 Remote-only."""
 
 import kevy
-import pytest
 from kevy import ReplyKind
 
 
@@ -31,23 +30,17 @@ def test_exec_typed_cursor(remote_server):
     c.close()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "kevy SERVER deviation (client is correct): MGET queued in a MULTI does "
-        "not observe writes made earlier in the SAME MULTI block, while GET does. "
-        "The Go reference port never exercised MGET-in-MULTI, so it did not surface "
-        "this. See client-contract.md §3.12 (EXEC = array of N typed replies, one "
-        "per queued command, executed in order). If this test starts passing the "
-        "server was fixed — drop the xfail."
-    ),
-)
-def test_mget_in_multi_sees_earlier_write_deviation(remote_server):
+def test_mget_in_multi_sees_earlier_write(remote_server):
+    # Read-your-writes inside a MULTI: an MGET queued after a SET of the same
+    # key must observe that write, exactly like GET does. This was a server
+    # deviation (the cross-shard gather raced ahead of the still-buffered
+    # single-key write); fixed server-side — see client-contract.md §3.12
+    # (EXEC = array of N typed replies, one per queued command, executed in
+    # order).
     c = kevy.connect(remote_server.url)
     tx = c.multi()
     tx.set("w", "1").mget("w")
     replies = tx.exec()
-    # GET would see it; MGET should too — but the server returns [Nil].
     assert replies[1].items[0].data == b"1"
     c.close()
 
