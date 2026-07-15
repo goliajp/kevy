@@ -79,6 +79,18 @@ func spawnServer(t *testing.T, extra ...string) *spawnedServer {
 	return s
 }
 
+// spawnServerConfig starts a server with an extra TOML config file (used
+// to enable optional surfaces like [feed]).
+func spawnServerConfig(t *testing.T, toml string, extra ...string) *spawnedServer {
+	t.Helper()
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "kevy.toml")
+	if err := os.WriteFile(cfgPath, []byte(toml), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	return spawnServer(t, append([]string{"--config", cfgPath}, extra...)...)
+}
+
 func (s *spawnedServer) url() string {
 	return fmt.Sprintf("kevy://127.0.0.1:%d", s.port)
 }
