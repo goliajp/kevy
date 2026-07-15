@@ -70,6 +70,27 @@ pub enum PubsubFrame {
     },
 }
 
+impl PubsubFrame {
+    /// The raw message payload, moved out of the frame.
+    ///
+    /// `Some(payload)` for the two delivery frames ([`Message`](Self::Message)
+    /// and [`Pmessage`](Self::Pmessage)); `None` for every control/ack frame
+    /// (subscribe / unsubscribe / …), which carries no payload. Consuming
+    /// `self` lets a scalar drain hand a push subscriber just the bytes with
+    /// no extra copy — the pub/sub analog of the KV scalar door. The channel
+    /// and the message-vs-pmessage distinction are dropped; a caller that
+    /// needs either keeps matching on the frame.
+    #[must_use]
+    pub fn into_payload(self) -> Option<Vec<u8>> {
+        match self {
+            PubsubFrame::Message { payload, .. } | PubsubFrame::Pmessage { payload, .. } => {
+                Some(payload)
+            }
+            _ => None,
+        }
+    }
+}
+
 // `BusEntry` + `PubsubBus` live in [`crate::pubsub_bus`] — split out so
 // this file stays under the 500-LOC house rule. Re-exported below so
 // `crate::store::Inner` keeps its existing `pubsub::PubsubBus` import.

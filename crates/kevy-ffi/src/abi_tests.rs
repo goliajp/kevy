@@ -154,6 +154,100 @@ fn sub_wait_blocks_then_delivers_and_times_out() {
 }
 
 #[test]
+fn raw_drain_returns_payload_and_framed_lane_is_unchanged() {
+    let db = kevy_open_mem();
+    // Two independent subscriptions on the same channel: one drained raw,
+    // one drained framed — proving both lanes see the same publish and each
+    // returns its own shape.
+    let raw = unsafe { kevy_subscribe(db, b"c1".as_ptr(), 2) };
+    let framed = unsafe { kevy_subscribe(db, b"c1".as_ptr(), 2) };
+    assert!(!raw.is_null() && !framed.is_null());
+
+    // The raw lane SKIPS the subscribe ack (a control frame, no payload):
+    // with only the ack queued it reports 0 (nothing *with a payload*).
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_sub_next_raw(raw, &raw mut out) }, 0);
+    assert!(out.ptr.is_null());
+    // The framed lane still delivers that ack as a full RESP array.
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_sub_next(framed, &raw mut out) }, 1);
+    assert!(take(out).starts_with(b"*3\r\n$9\r\nsubscribe\r\n"));
+
+    assert_eq!(cmd(db, &[b"PUBLISH", b"c1", b"hello"]), b":2\r\n");
+
+    // Raw lane: exactly the payload bytes, no framing.
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_sub_next_raw(raw, &raw mut out) }, 1);
+    assert_eq!(take(out), b"hello");
+    // Framed lane: byte-for-byte the RESP array the server pushes — proof the
+    // existing lane is unaffected by the new one.
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_sub_next(framed, &raw mut out) }, 1);
+    assert_eq!(take(out), b"*3\r\n$7\r\nmessage\r\n$2\r\nc1\r\n$5\r\nhello\r\n");
+
+    // Drained: raw reports 0 with an empty (non-freeable) buffer.
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_sub_next_raw(raw, &raw mut out) }, 0);
+    assert!(out.ptr.is_null());
+
+    // Pattern subscriber: raw still hands back just the payload.
+    let praw = unsafe { kevy_psubscribe(db, b"c*".as_ptr(), 2) };
+    assert_eq!(cmd(db, &[b"PUBLISH", b"c1", b"world"]), b":3\r\n");
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_sub_next_raw(praw, &raw mut out) }, 1);
+    assert_eq!(take(out), b"world");
+
+    // Misuse is reported, not undefined.
+    let mut misuse = KevyBuf::empty();
+    assert!(unsafe { kevy_sub_next_raw(std::ptr::null_mut(), &raw mut misuse) } < 0);
+    assert!(unsafe { kevy_sub_next_raw(raw, std::ptr::null_mut()) } < 0);
+
+    unsafe { kevy_sub_close(raw) };
+    unsafe { kevy_sub_close(framed) };
+    unsafe { kevy_sub_close(praw) };
+    unsafe { kevy_close(db) };
+}
+
+#[test]
+fn sub_wait_raw_skips_ack_blocks_then_delivers_payload() {
+    let db = kevy_open_mem();
+    let sub = unsafe { kevy_subscribe(db, b"c1".as_ptr(), 2) };
+    assert!(!sub.is_null());
+
+    // The subscribe ack is queued but carries no payload: wait_raw reports 0
+    // (re-wait), it does NOT surface framing bytes.
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_sub_wait_raw(sub, 1000, &raw mut out) }, 0);
+    assert!(out.ptr.is_null());
+
+    // Nothing queued now: a bounded wait times out (0), and it actually parked.
+    let mut out = KevyBuf::empty();
+    let t = std::time::Instant::now();
+    assert_eq!(unsafe { kevy_sub_wait_raw(sub, 50, &raw mut out) }, 0);
+    assert!(out.ptr.is_null());
+    assert!(t.elapsed() >= std::time::Duration::from_millis(40));
+
+    // A publish from another thread wakes the waiter with just the payload.
+    let db2 = db as usize;
+    let h = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        cmd(db2 as *mut _, &[b"PUBLISH", b"c1", b"payload-only"]);
+    });
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_sub_wait_raw(sub, 2000, &raw mut out) }, 1);
+    assert_eq!(take(out), b"payload-only");
+    h.join().unwrap();
+
+    // Misuse.
+    let mut misuse = KevyBuf::empty();
+    assert!(unsafe { kevy_sub_wait_raw(std::ptr::null_mut(), 0, &raw mut misuse) } < 0);
+    assert!(unsafe { kevy_sub_wait_raw(sub, 0, std::ptr::null_mut()) } < 0);
+
+    unsafe { kevy_sub_close(sub) };
+    unsafe { kevy_close(db) };
+}
+
+#[test]
 fn persistent_open_survives_close_and_reopen() {
     let dir = kevy_tmpdir_path();
     let bytes = dir.as_bytes();
