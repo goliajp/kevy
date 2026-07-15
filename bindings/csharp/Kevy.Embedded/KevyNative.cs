@@ -77,6 +77,11 @@ internal static unsafe partial class KevyNative
     [LibraryImport(Lib)]
     internal static partial int kevy_sub_next(IntPtr sub, KevyBuf* @out);
 
+    // Block up to timeout_ms (0 = forever) for one frame: 1 frame, 0
+    // timeout, negative misuse/bus-gone. Parks the thread — no busy-poll.
+    [LibraryImport(Lib)]
+    internal static partial int kevy_sub_wait(IntPtr sub, ulong timeoutMs, KevyBuf* @out);
+
     [LibraryImport(Lib)]
     internal static partial void kevy_sub_close(IntPtr sub);
 
