@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>kevy + Tauri</title>
+    <style>
+      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+      body { margin: 0; padding: 2rem; max-width: 720px; margin-inline: auto; }
+      h1 { font-size: 1.4rem; }
+      h2 { font-size: 1rem; margin-top: 1.75rem; }
+      section { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 10px; padding: 1rem 1.25rem; margin-block: 0.75rem; }
+      input, button { font: inherit; padding: 0.4rem 0.6rem; border-radius: 7px; border: 1px solid color-mix(in srgb, currentColor 30%, transparent); }
+      button { cursor: pointer; }
+      .row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; margin-block: 0.4rem; }
+      .out { font-family: ui-monospace, monospace; white-space: pre-wrap; background: color-mix(in srgb, currentColor 8%, transparent); padding: 0.5rem 0.7rem; border-radius: 7px; min-height: 1.2rem; }
+      #feed { font-family: ui-monospace, monospace; max-height: 180px; overflow: auto; }
+      .muted { opacity: 0.65; font-size: 0.85rem; }
+    </style>
+  </head>
+  <body>
+    <h1>kevy embedded in Tauri</h1>
+    <p class="muted">
+      One shared kevy engine runs in the Rust backend; every action below is an
+      <code>invoke('plugin:kevy|…')</code> into it.
+    </p>
+
+    <section>
+      <h2>String key: set / get</h2>
+      <div class="row">
+        <input id="key" placeholder="key" value="greeting" />
+        <input id="val" placeholder="value" value="hello from kevy" />
+        <button id="set">SET</button>
+        <button id="get">GET</button>
+      </div>
+      <div class="out" id="kvOut">—</div>
+    </section>
+
+    <section>
+      <h2>Live pub/sub</h2>
+      <div class="row">
+        <input id="chan" placeholder="channel" value="room" />
+        <button id="sub">SUBSCRIBE</button>
+        <button id="unsub" disabled>UNSUBSCRIBE</button>
+      </div>
+      <div class="row">
+        <input id="msg" placeholder="message" value="ping" />
+        <button id="pub">PUBLISH</button>
+      </div>
+      <div class="out" id="feed"></div>
+    </section>
+
+    <section>
+      <h2>Raw command</h2>
+      <div class="row">
+        <input id="raw" placeholder="e.g. HSET h f1 v1 f2 v2" value="INCR counter" style="flex:1" />
+        <button id="run">RUN</button>
+      </div>
+      <div class="out" id="rawOut">—</div>
+    </section>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

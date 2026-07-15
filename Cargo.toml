@@ -79,6 +79,17 @@ members = [
     "crates/kevy-wasm",
 ]
 
+# STANDALONE, deliberately-excluded crates. These depend on the `tauri` crate
+# (an unavoidable ecosystem dependency for a Tauri plugin / app) and therefore
+# must NOT join the 0-dependency workspace — keeping `tauri` out of the root
+# build graph preserves the pure-Rust, 0-dep charter. Each also carries its own
+# empty `[workspace]` table so it roots its own build when invoked directly.
+# See bindings/tauri/README.md for the full boundary note.
+exclude = [
+    "bindings/tauri/tauri-plugin-kevy",
+    "bindings/tauri/example/src-tauri",
+]
+
 [workspace.package]
 version = "4.0.0"
 edition = "2024"
