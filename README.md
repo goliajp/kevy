@@ -333,6 +333,7 @@ server's own metadata — the same rows `COMMAND DOCS` serves).
 | Async client | [`docs/async.md`](docs/async.md) |
 | Browser / WASM | [`docs/wasm.md`](docs/wasm.md) |
 | Electron apps | [`docs/electron.md`](docs/electron.md) |
+| Tauri apps | [`docs/tauri.md`](docs/tauri.md) |
 | IoT & feature tiers | [`docs/iot.md`](docs/iot.md) |
 | Accept-shard sizing | [`docs/accept-shards.md`](docs/accept-shards.md) |
 | Error reply reference | [`docs/error-replies.md`](docs/error-replies.md) |
