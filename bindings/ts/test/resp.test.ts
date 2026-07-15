@@ -88,6 +88,26 @@ test("encode/decode round-trips binary-safe payloads", () => {
   if (r.kind === "bulk") assert.deepEqual([...r.bytes], [...raw]);
 });
 
+test("arrays parse in full regardless of element count (regression)", () => {
+  // A flat label/value array (IDX.LIST shape): 12 elements. Regression for a
+  // loop bound that shrank with remaining bytes and truncated long arrays.
+  const idxList =
+    "*1\r\n*12\r\n$4\r\nname\r\n$5\r\nbyage\r\n$6\r\nprefix\r\n$5\r\nuser:\r\n$4\r\nkind\r\n$5\r\nrange\r\n" +
+    "$5\r\nstate\r\n$8\r\nbuilding\r\n$7\r\nentries\r\n$1\r\n0\r\n$5\r\nbytes\r\n$1\r\n0\r\n";
+  const r = dec(idxList);
+  assert.equal(r.kind, "array");
+  if (r.kind === "array" && r.items[0]!.kind === "array") {
+    assert.equal(r.items[0]!.items.length, 12);
+    assert.equal(replyText(r.items[0]!.items[0]!), "name");
+    assert.equal(replyText(r.items[0]!.items[11]!), "0");
+  }
+  // A larger array of small ints must also fully parse.
+  const big = "*50\r\n" + Array.from({ length: 50 }, (_, i) => `:${i}\r\n`).join("");
+  const b = dec(big);
+  assert.equal(b.kind, "array");
+  if (b.kind === "array") assert.equal(b.items.length, 50);
+});
+
 test("classifyStoreError recognizes store-semantic errors", () => {
   assert.equal(classifyStoreError("WRONGTYPE Operation against ..."), "wrongType");
   assert.equal(classifyStoreError("value is not an integer or out of range"), "notInteger");
