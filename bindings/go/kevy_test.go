@@ -17,10 +17,10 @@ func TestSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if v, _ := db.Cmd("SET", "smoke:go", "v1"); v.Str != "OK" {
+	if v, _ := db.Cmd("SET", "smoke:go", "v1"); v.Str() != "OK" {
 		t.Fatalf("SET: %+v", v)
 	}
-	if v, _ := db.Cmd("GET", "smoke:go"); v.Str != "v1" {
+	if v, _ := db.Cmd("GET", "smoke:go"); v.Str() != "v1" {
 		t.Fatalf("GET: %+v", v)
 	}
 	if v, _ := db.Cmd("NOSUCHVERB"); !v.IsError() {
@@ -41,8 +41,8 @@ func TestSmoke(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("missing message frame: %v", err)
 	}
-	if len(frame.Arr) != 3 || frame.Arr[0].Str != "message" ||
-		frame.Arr[1].Str != "c1" || frame.Arr[2].Str != "hello" {
+	if len(frame.Array) != 3 || frame.Array[0].Str() != "message" ||
+		frame.Array[1].Str() != "c1" || frame.Array[2].Str() != "hello" {
 		t.Fatalf("frame: %+v", frame)
 	}
 	if _, ok, _ := sub.Next(); ok {
@@ -57,7 +57,7 @@ func TestSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if v, _ := db.Cmd("GET", "smoke:go"); v.Str != "v1" {
+	if v, _ := db.Cmd("GET", "smoke:go"); v.Str() != "v1" {
 		t.Fatalf("GET after reopen: %+v", v)
 	}
 	if v, _ := db.Cmd("DEL", "smoke:go"); v.Int != 1 {
