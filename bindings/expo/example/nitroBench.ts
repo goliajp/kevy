@@ -1,0 +1,197 @@
+// NITROGATE — the crossing tax, attacked. The current Expo door crosses
+// JS<->native via an Expo-module dispatch + packed-argv marshalling + JNI
+// (measured ~6-7us/crossing, ~50k pub/sub msg/s on device). The Nitro door
+// calls a C++ HybridObject *directly via JSI* (~100-500ns/call expected),
+// passing argv as an ArrayBuffer by reference. This bench times identical
+// cmd round-trips through both doors so the delta is purely the crossing.
+import mitt from "mitt";
+import { open } from "expo-kevy";
+import { createKevyNitro, type KevyNitro } from "react-native-kevy-nitro";
+
+// Held forever so the idle push subscription (and its native poller) is not
+// GC'd — lets `adb top` sample the poller's idle CPU. See the tail of
+// runNitroBench: with kevy_sub_wait the poller parks in the kernel, so this
+// must read ~0% (vs the old yield-spin build burning ~one core).
+let idleHold: KevyNitro | undefined;
+
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+// The same packed form the JNI/N-API doors speak: u32-LE length prefix per
+// arg, then the bytes. Returns an ArrayBuffer sized exactly to the payload
+// so it can be handed to the Nitro cmd() by reference.
+function packAB(args: (string | Uint8Array)[]): ArrayBuffer {
+  const bufs = args.map((a) => (a instanceof Uint8Array ? a : enc.encode(a)));
+  let total = 0;
+  for (const b of bufs) total += 4 + b.length;
+  const out = new Uint8Array(total);
+  const view = new DataView(out.buffer);
+  let pos = 0;
+  for (const b of bufs) {
+    view.setUint32(pos, b.length, true);
+    out.set(b, pos + 4);
+    pos += 4 + b.length;
+  }
+  return out.buffer;
+}
+
+const ops = (n: number, ms: number) => Math.round((n / Math.max(1, ms)) * 1000);
+
+export async function runNitroBench(): Promise<string[]> {
+  const lines: string[] = [];
+  const N = 100_000;
+
+  const nitro = createKevyNitro();
+
+  // Correctness smoke: the C++ door is really talking to the engine.
+  const abi = nitro.abi();
+  const pong = dec.decode(new Uint8Array(nitro.cmd(packAB(["PING"]))));
+  lines.push(`NITROGATE:SMOKE abi=${abi} ping=${JSON.stringify(pong)}`);
+
+  // Pure-JSI crossing ceiling: abi() does nothing but cross and return a
+  // number — the floor cost of a Nitro call, no engine work.
+  {
+    const t = Date.now();
+    for (let i = 0; i < N; i++) nitro.abi();
+    lines.push(`NITROGATE: abi (pure-JSI) nitro=${ops(N, Date.now() - t)} ops/s`);
+  }
+
+  // cmd round-trip: PING (cheapest verb — isolates the crossing, not the
+  // engine). Expo door vs Nitro door, same N, same verb.
+  {
+    const db = open({});
+    let e = 0;
+    {
+      const t = Date.now();
+      for (let i = 0; i < N; i++) db.cmd("PING");
+      e = ops(N, Date.now() - t);
+    }
+    const ping = packAB(["PING"]);
+    let nt = 0;
+    {
+      const t = Date.now();
+      for (let i = 0; i < N; i++) nitro.cmd(ping);
+      nt = ops(N, Date.now() - t);
+    }
+    lines.push(
+      `NITROGATE: cmd PING expo=${e} ops/s | nitro=${nt} ops/s | nitro/expo=${(nt / Math.max(1, e)).toFixed(1)}x`
+    );
+    db.close();
+  }
+
+  // cmd round-trip: SET (a write with a small payload) — the real GET/SET
+  // hot path a store binding lives on, both doors.
+  {
+    const db = open({});
+    let e = 0;
+    {
+      const t = Date.now();
+      for (let i = 0; i < N; i++) db.cmd("SET", "k", "v");
+      e = ops(N, Date.now() - t);
+    }
+    const setcmd = packAB(["SET", "k", "v"]);
+    let nt = 0;
+    {
+      const t = Date.now();
+      for (let i = 0; i < N; i++) nitro.cmd(setcmd);
+      nt = ops(N, Date.now() - t);
+    }
+    lines.push(
+      `NITROGATE: cmd SET expo=${e} ops/s | nitro=${nt} ops/s | nitro/expo=${(nt / Math.max(1, e)).toFixed(1)}x`
+    );
+    db.close();
+  }
+
+  // Pub/sub, four ways, 16 B payload, M messages each:
+  //   mitt          — in-process JS emitter, no boundary (the floor).
+  //   poll/drain    — publish + JS-side subNext loop (~3 crossings/msg).
+  //   push/message  — native poller thread hops each frame to JS (1 hop/msg).
+  //   push/batched  — poller drains all pending, one hop per batch.
+  const M = 50_000;
+  const payload = "x".repeat(16);
+  const msg = enc.encode(payload).buffer;
+
+  // mitt
+  let mittOps = 0;
+  {
+    const emitter = mitt<{ ev: string }>();
+    let recv = 0;
+    emitter.on("ev", () => recv++);
+    const t = Date.now();
+    for (let i = 0; i < M; i++) emitter.emit("ev", payload);
+    mittOps = ops(recv, Date.now() - t);
+  }
+
+  // poll/drain (the baseline this round attacks)
+  let pollOps = 0;
+  {
+    const n2 = createKevyNitro();
+    n2.subscribe("ev");
+    let recv = 0;
+    const t = Date.now();
+    for (let i = 0; i < M; i++) {
+      n2.publish("ev", msg);
+      for (let f = n2.subNext(); f !== undefined; f = n2.subNext()) recv++;
+    }
+    for (let f = n2.subNext(); f !== undefined; f = n2.subNext()) recv++;
+    pollOps = ops(recv, Date.now() - t);
+  }
+
+  // push/message — one native->JS hop per frame. Publish all M, then await
+  // the callbacks draining on the JS thread; time the whole pipeline.
+  let pushOps = 0;
+  let pushRecv = 0;
+  {
+    const n3 = createKevyNitro();
+    let resolveDone!: () => void;
+    const done = new Promise<void>((r) => (resolveDone = r));
+    n3.subscribePush("ev", () => {
+      if (++pushRecv >= M) resolveDone();
+    });
+    const t = Date.now();
+    for (let i = 0; i < M; i++) n3.publish("ev", msg);
+    await done;
+    pushOps = ops(pushRecv, Date.now() - t);
+    n3.stopPush();
+  }
+
+  // push/batched — one hop per drained batch. hops reveals the batch factor.
+  let batchedOps = 0;
+  let batchedRecv = 0;
+  let hops = 0;
+  {
+    const n4 = createKevyNitro();
+    let resolveDone!: () => void;
+    const done = new Promise<void>((r) => (resolveDone = r));
+    n4.subscribePushBatched("ev", (frames) => {
+      hops++;
+      batchedRecv += frames.length;
+      if (batchedRecv >= M) resolveDone();
+    });
+    const t = Date.now();
+    for (let i = 0; i < M; i++) n4.publish("ev", msg);
+    await done;
+    batchedOps = ops(batchedRecv, Date.now() - t);
+    n4.stopPush();
+  }
+
+  const x = (a: number, b: number) => (a / Math.max(1, b)).toFixed(1);
+  lines.push(
+    `NITROGATE: pubsub 16B mitt=${mittOps} | poll=${pollOps} | push=${pushOps} | pushBatched=${batchedOps} ops/s`
+  );
+  lines.push(
+    `NITROGATE: pubsub push/poll=${x(pushOps, pollOps)}x | pushBatched/poll=${x(batchedOps, pollOps)}x | mitt/pushBatched=${x(mittOps, batchedOps)}x`
+  );
+  lines.push(
+    `NITROGATE: pubsub detail push(${pushRecv}/${M}) batched(${batchedRecv}/${M} in ${hops} hops, avg ${Math.round(batchedRecv / Math.max(1, hops))}/hop)`
+  );
+
+  // Idle-CPU probe: hold one live push subscription on a channel nothing
+  // ever publishes to. The native poller sits blocked in kevy_sub_wait
+  // (kernel park) — sample the app's CPU now; it must be ~0%.
+  idleHold = createKevyNitro();
+  idleHold.subscribePush("idle-never-published", () => {});
+  lines.push("NITROGATE:IDLE live push sub, no traffic — sample app CPU now");
+
+  return lines;
+}
