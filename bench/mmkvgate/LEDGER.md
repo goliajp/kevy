@@ -142,13 +142,23 @@ its ground truth; the checklist below is its starting point.
 Until that lands, attack #1's 256 KiB buffer is the shipped SET win
 (−20% on lx64, MMKV lead 4.6× → 3.6×).
 
-**RFC written, awaiting 拍板:**
-`.claude/plans/2026-07-15-v4-mmap-aof-rfc.md` turns this checklist into a
-full design (kevy-sys mmap binding, backend trait with BufWriter
-fallback, msync durability mapping every Fsync policy, growth strategy,
-crash-consistency, and the merge-gate test pass). Two decisions block
-implementation: go/no-go on the rewrite now, and the crash-EOF strategy
-(committed-length marker vs zero-run-as-EOF).
+**Attack #2b (mmap) — BUILT, MEASURED, REFUTED.**
+The mmap backend was fully implemented (`feature/v4-mmap-aof`: kevy-sys
+mmap binding, committed_len+crc crash-safety, all rewrite paths, every
+test green) and A/B'd on lx64 ext4. Result: **mmap is 5–6× SLOWER than
+the BufWriter backend at every scale** (17 µs/op flat vs 3 µs/op
+buffered). `perf stat` confirmed the mechanism: an append-only mmap takes
+**~1 minor page fault per append** (528k faults / 500k appends) because it
+touches a fresh page every ~4 KB and never revisits one, whereas `write()`
+populates the page cache kernel-batched with almost none. MMKV's mmap wins
+only because it **overwrites a small resident region** (hot pages, no
+growth); kevy's AOF is an **unbounded append log**, so mmap is the wrong
+tool. The SET gap is architectural (overwrite-in-place store vs append
+log), not an mmap trick — full write-up:
+`bench/PERF-FINDING-2026-07-15-mmap-aof-refuted.md`. Do not merge; the
+BufWriter backend stays. Next honest step for the SET gap: a real-device
+mmkvgate (the sim SET numbers are inflated by its host-FS write path — on
+real ext4 the buffered SET 4 KB is already ~3 µs/op, near MMKV's ~3.5 µs).
 
 ### Re-measure on the simulator with attack #1 (KevyKit xcframework rebuilt)
 
