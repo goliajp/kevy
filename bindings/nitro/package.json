@@ -1,7 +1,7 @@
 {
   "name": "react-native-kevy-nitro",
   "version": "0.0.1",
-  "description": "kevy via Nitro (JSI) — feasibility spike: direct JSI HybridObject over kevy-ffi, bypassing the Expo-module dispatch + JNI crossing tax.",
+  "description": "kevy for React Native via Nitro (JSI): a C++ HybridObject calling kevy-ffi directly — synchronous cmd() with ArrayBuffer payloads, and native->JS push pub/sub — bypassing the Expo-module dispatch + JNI crossing tax.",
   "main": "src/index.ts",
   "module": "src/index.ts",
   "types": "src/index.ts",
@@ -17,7 +17,8 @@
     "android/CMakeLists.txt",
     "android/src",
     "cpp",
-    "nitro.json"
+    "nitro.json",
+    "README.md"
   ],
   "scripts": {
     "specs": "nitrogen --logLevel=\"debug\""
