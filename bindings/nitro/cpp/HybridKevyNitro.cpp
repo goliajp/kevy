@@ -10,7 +10,7 @@ double HybridKevyNitro::abi() { return static_cast<double>(kevy_abi()); }
 
 // Copy a kevy-owned KevyBuf into a JS-owned ArrayBuffer, then free the
 // KevyBuf. One copy — unavoidable, the engine owns its Vec and JS owns the
-// ArrayBuffer. The win the spike measures is the *crossing*, not this copy.
+// ArrayBuffer. The win is the *crossing* being cheap now, not this copy.
 static std::shared_ptr<ArrayBuffer> takeBuf(KevyBuf& buf) {
   std::vector<uint8_t> out(buf.ptr, buf.ptr + buf.len);
   kevy_buf_free(buf.ptr, buf.len, buf.cap);

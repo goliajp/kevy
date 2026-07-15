@@ -70,7 +70,7 @@ op (GET/SET call overhead), not just pub/sub — same crossing, same tax.
 
 ## Attack — Nitro/JSI door, measured (feasibility spike)
 
-Built as `bindings/nitro-spike` (`react-native-kevy-nitro`): a C++-only
+Built as `bindings/nitro` (`react-native-kevy-nitro`): a C++-only
 Nitro HybridObject calling `kevy-ffi` directly via JSI — `abi()`,
 `cmd(argv: ArrayBuffer): ArrayBuffer`, and a poll-model pub/sub trio. Same
 emulator (arm64-v8a), Hermes, expo debug, new arch. `bindings/expo/example/
@@ -159,3 +159,34 @@ Takeaway for the RN door: keep the **poll/drain** door as the simple default
 and offer **batched push** for high-fanout subscribers; skip push-per-message
 (it's a pessimization on this workload). A real engine `sub_wait()` is the
 next lever if push-when-idle CPU matters.
+
+## Attack — `kevy_sub_wait`: the busy-spin, killed
+
+The `sub_wait()` lever, landed. kevy-ffi gained
+`kevy_sub_wait(sub, timeout_ms, out)` — a **real kernel park** on the
+engine's mpsc (`recv_timeout`), not a spin. Both push pollers now block in
+`kevy_sub_wait(sub, 250ms)` (250 ms slices so `stopPush` still joins
+promptly) instead of looping `kevy_sub_next` + `yield`. The batched variant
+blocks for frame 1, then drains the rest non-blocking before the one hop.
+
+**Idle CPU — a live push subscription with NO traffic**, measured on the
+emulator (arm64-v8a) with raw `top -H` / `/proc/<tid>/stat`. The poller
+thread is named `kevy-push-poll` (bionic otherwise inherits the JS thread's
+name `mqt_v_js`, which hid it):
+
+| Build | Poller thread state | Poller %CPU | Process %CPU |
+|-------|---------------------|------------:|-------------:|
+| busy-spin (`kevy_sub_next` + `yield`) | **R** (runnable) | **~100–103%** (a full core) | ~104–119% |
+| `kevy_sub_wait` (this) | **S** (parked) | **0.0%**, `cpu_ticks=0` | ~0–8% (idle baseline) |
+
+That is the headline: **~1 full core → 0%** when a subscription is live but
+idle. The poller sleeps in the kernel until a frame arrives.
+
+Throughput is unchanged by the switch (the hot path never touched
+`kevy_sub_next`'s spin): poll ~460–530k | push ~207–237k (0.4–0.5×) |
+**batched ~580–694k (1.2–1.3× poll)** | all 50001/50000 delivered, no crash.
+`sub_wait` buys the idle CPU for free — no throughput cost.
+
+Net: batched push over `sub_wait` is now a clean win on both axes — 1.2–1.3×
+poll throughput **and** zero idle CPU. It's the high-fanout pub/sub path for
+the RN door. (iOS still unwired; that's the remaining port.)
