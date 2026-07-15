@@ -596,3 +596,147 @@ jobs:
       - name: Expo door typecheck
         run: npx -y -p typescript@5 tsc --noEmit -p tsconfig.json
         working-directory: bindings/expo
+
+  # ── client-conformance — the seven native kevy clients, full suites ──────
+  # ffigate (above) opens each language door with the embedded FFI *smoke*;
+  # this is the fuller *conformance* proof: every first-party client's whole
+  # test suite, run against BOTH an in-process embedded backend AND a spawned
+  # real `kevy` server (so the extended verbs — IDX./VIEW./FEED., zset
+  # algebra, hash-field TTL, cluster routing — are exercised over the wire).
+  # One matrix leg per door: Go, Python, TypeScript-on-Node, TypeScript-on-Bun,
+  # C#, C++ and Java. The shared boilerplate (checkout / Rust / cache / the
+  # release server build) is written once; only the leaf toolchain + run steps
+  # fan out by language. Each leg runs that port's own known-green command
+  # verbatim — no invented flags.
+  client-conformance:
+    name: client-conformance (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # `ffi` = the native lib cargo package a leg needs prebuilt (empty
+          # for Java, whose run-tests.sh builds kevy-jni itself). `lang` keys
+          # every per-language `if:` below.
+          - { name: go,      lang: go,     ffi: kevy-ffi }
+          - { name: python,  lang: python, ffi: kevy-ffi }
+          - { name: ts-node, lang: node,   ffi: kevy-napi }
+          - { name: ts-bun,  lang: bun,    ffi: kevy-ffi }
+          - { name: csharp,  lang: dotnet, ffi: kevy-ffi }
+          - { name: cpp,     lang: cpp,    ffi: kevy-ffi }
+          - { name: java,    lang: java,   ffi: "" }
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+
+      - name: Cache cargo registry + build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: client-conformance-${{ matrix.name }}-${{ hashFiles('Cargo.lock') }}
+
+      # Every leg's remote-backend tests spawn `target/release/kevy` — the same
+      # binary the ports' harnesses locate under target/release first.
+      - name: Build the kevy server (release)
+        run: cargo build --release -p kevy --bin kevy
+
+      # kevy-ffi (Go/C++ staticlib, Python/Bun/C# cdylib) or kevy-napi (Node
+      # addon), debug — where each port's harness looks first (target/debug).
+      - name: Build the door's native lib
+        if: matrix.ffi != ''
+        run: cargo build -p ${{ matrix.ffi }}
+
+      # ── per-language toolchains (exactly one leg fires each) ──────────────
+      - name: Set up Go
+        if: matrix.lang == 'go'
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          cache-dependency-path: bindings/go/go.mod
+
+      - name: Set up Python
+        if: matrix.lang == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Set up Node
+        if: matrix.lang == 'node'
+        uses: actions/setup-node@v5
+        with:
+          # `node --test` strips TS types natively (the suite is *.test.ts);
+          # that is default-on from Node 23.6, so pin the current LTS (24)
+          # rather than lts/* to stay above that floor deterministically.
+          node-version: '24'
+
+      - name: Set up Bun
+        if: matrix.lang == 'bun'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up .NET
+        if: matrix.lang == 'dotnet'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Set up JDK
+        # run-tests.sh SKIPs (exit 0) when javac is absent — installing the
+        # JDK is what makes the Java leg a real gate instead of a silent pass.
+        # (cmake + g++ for the C++ leg are already on the ubuntu-latest image,
+        # so that door needs no setup step.)
+        if: matrix.lang == 'java'
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # ── each port's own, known-green conformance command (verbatim) ──────
+      - name: Go — go test ./...
+        if: matrix.lang == 'go'
+        working-directory: bindings/go
+        run: go test ./...
+
+      - name: Python — pytest (embedded + spawned server)
+        if: matrix.lang == 'python'
+        working-directory: bindings/python
+        run: |
+          python -m pip install -e '.[test]'
+          python -m pytest -q
+
+      - name: TypeScript on Node — node --test
+        if: matrix.lang == 'node'
+        working-directory: bindings/ts
+        run: npm run test:node
+
+      - name: TypeScript on Bun — bun test
+        if: matrix.lang == 'bun'
+        working-directory: bindings/ts
+        run: bun run test:bun
+
+      - name: C# — dotnet test
+        if: matrix.lang == 'dotnet'
+        working-directory: bindings/csharp
+        # Harness.cs auto-locates the cdylib only by its macOS name (.dylib);
+        # on the Linux runner we hand it the built .so explicitly (KEVY_FFI_LIB
+        # takes precedence in both Harness.cs and the KevyNative resolver) —
+        # the same way ffigate's C# smoke points at the lib.
+        env:
+          KEVY_FFI_LIB: ${{ github.workspace }}/target/debug/libkevy_ffi.so
+        run: dotnet test Kevy.Client.Tests -c Release
+
+      - name: C++ — cmake + ctest
+        if: matrix.lang == 'cpp'
+        run: |
+          cmake -S bindings/cpp -B bindings/cpp/build
+          cmake --build bindings/cpp/build
+          ctest --test-dir bindings/cpp/build --output-on-failure
+
+      - name: Java — run-tests.sh (kevy-jni + JUnit 5, both backends)
+        if: matrix.lang == 'java'
+        run: bash bindings/java/run-tests.sh
