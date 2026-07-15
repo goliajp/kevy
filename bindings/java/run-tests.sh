@@ -48,7 +48,7 @@ javac -cp "$OUT/classes:$JUNIT_JAR" -d "$OUT/test-classes" @"$OUT/test.txt"
 echo "run-tests: running JUnit 5…"
 export KEVY_SERVER_BIN="$SERVER_BIN"
 java -Djava.library.path="$JNI_DIR" \
-  -jar "$JUNIT_JAR" \
+  -jar "$JUNIT_JAR" execute \
   -cp "$OUT/classes:$OUT/test-classes" \
   --scan-classpath \
   --details=tree \
