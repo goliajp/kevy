@@ -31,6 +31,9 @@ func (c *Client) BLPop(ctx context.Context, keys [][]byte, timeout *time.Duratio
 	if err := checkBlockingArgs(keys, timeout); err != nil {
 		return KV{}, false, err
 	}
+	if c.emb != nil {
+		return c.embBlockKV(ctx, "LPOP", keys, timeout)
+	}
 	return c.popKV(ctx, "BLPOP", keys, timeout)
 }
 
@@ -38,6 +41,9 @@ func (c *Client) BLPop(ctx context.Context, keys [][]byte, timeout *time.Duratio
 func (c *Client) BRPop(ctx context.Context, keys [][]byte, timeout *time.Duration) (KV, bool, error) {
 	if err := checkBlockingArgs(keys, timeout); err != nil {
 		return KV{}, false, err
+	}
+	if c.emb != nil {
+		return c.embBlockKV(ctx, "RPOP", keys, timeout)
 	}
 	return c.popKV(ctx, "BRPOP", keys, timeout)
 }
@@ -47,6 +53,9 @@ func (c *Client) BRPop(ctx context.Context, keys [][]byte, timeout *time.Duratio
 func (c *Client) BZPopMin(ctx context.Context, keys [][]byte, timeout *time.Duration) (ZPopHit, bool, error) {
 	if err := checkBlockingArgs(keys, timeout); err != nil {
 		return ZPopHit{}, false, err
+	}
+	if c.emb != nil {
+		return c.embBlockZ(ctx, keys, timeout)
 	}
 	r, err := c.exec(ctx, blockingArgv("BZPOPMIN", keys, timeout))
 	if err != nil {
@@ -113,6 +122,73 @@ func blockingArgv(verb string, keys [][]byte, timeout *time.Duration) [][]byte {
 		argv = append(argv, []byte(strconv.FormatFloat(timeout.Seconds(), 'g', -1, 64)))
 	}
 	return argv
+}
+
+// embBlockKV emulates BLPOP/BRPOP on the embedded backend by polling the
+// non-blocking pop until data arrives or the timeout elapses. The §5.1 C
+// ABI exposes no blocking-pop symbol, so a pure-FFI port cannot park on
+// the store condvar; this poll gives the same observable blocking.
+func (c *Client) embBlockKV(ctx context.Context, verb string, keys [][]byte, timeout *time.Duration) (KV, bool, error) {
+	deadline, hasDL := blockDeadline(timeout)
+	for {
+		for _, k := range keys {
+			r, err := c.exec(ctx, [][]byte{bs(verb), k, bs("1")})
+			if err != nil {
+				return KV{}, false, err
+			}
+			if r.Kind == KindArray && len(r.Array) > 0 && r.Array[0].Kind == KindBulk {
+				return KV{Key: k, Value: r.Array[0].Bytes}, true, nil
+			}
+			if r.Kind == KindBulk {
+				return KV{Key: k, Value: r.Bytes}, true, nil
+			}
+		}
+		if done, err := blockWait(ctx, deadline, hasDL); done {
+			return KV{}, false, err
+		}
+	}
+}
+
+func (c *Client) embBlockZ(ctx context.Context, keys [][]byte, timeout *time.Duration) (ZPopHit, bool, error) {
+	deadline, hasDL := blockDeadline(timeout)
+	for {
+		for _, k := range keys {
+			r, err := c.exec(ctx, [][]byte{bs("ZPOPMIN"), k, bs("1")})
+			if err != nil {
+				return ZPopHit{}, false, err
+			}
+			if r.Kind == KindArray && len(r.Array) >= 2 && r.Array[0].Kind == KindBulk {
+				score, perr := scoreOf(r.Array[1])
+				if perr != nil {
+					return ZPopHit{}, false, perr
+				}
+				return ZPopHit{Key: k, Member: r.Array[0].Bytes, Score: score}, true, nil
+			}
+		}
+		if done, err := blockWait(ctx, deadline, hasDL); done {
+			return ZPopHit{}, false, err
+		}
+	}
+}
+
+func blockDeadline(timeout *time.Duration) (time.Time, bool) {
+	if timeout == nil {
+		return time.Time{}, false
+	}
+	return time.Now().Add(*timeout), true
+}
+
+// blockWait sleeps one poll interval, returning done=true when the
+// deadline elapses (miss) or ctx is cancelled (its error).
+func blockWait(ctx context.Context, deadline time.Time, hasDL bool) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return true, ctxErr(ctx)
+	}
+	if hasDL && !time.Now().Before(deadline) {
+		return true, nil
+	}
+	time.Sleep(5 * time.Millisecond)
+	return false, nil
 }
 
 func scoreOf(r Reply) (float64, error) {
