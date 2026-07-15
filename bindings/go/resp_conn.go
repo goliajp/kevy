@@ -130,27 +130,32 @@ func (c *respConn) readOne(ctx context.Context) (Reply, error) {
 // interrupts the blocked read by pushing the deadline into the past
 // (leaving the connection reusable). Returns a stop func.
 func (c *respConn) armContext(ctx context.Context) func() {
-	if ctx == nil {
+	// Capture the connection reference: mapIoErr may nil c.conn on a
+	// mid-call failure, but SetDeadline on an already-closed net.Conn is
+	// safe (returns an error, never panics), so the watcher/stop closures
+	// operate on the captured reference.
+	conn := c.conn
+	if ctx == nil || conn == nil {
 		return func() {}
 	}
 	if dl, ok := ctx.Deadline(); ok {
-		_ = c.conn.SetDeadline(dl)
+		_ = conn.SetDeadline(dl)
 	}
 	done := ctx.Done()
 	if done == nil {
-		return func() { _ = c.conn.SetDeadline(time.Time{}) }
+		return func() { _ = conn.SetDeadline(time.Time{}) }
 	}
 	stopped := make(chan struct{})
 	go func() {
 		select {
 		case <-done:
-			_ = c.conn.SetReadDeadline(time.Now())
+			_ = conn.SetReadDeadline(time.Now())
 		case <-stopped:
 		}
 	}()
 	return func() {
 		close(stopped)
-		_ = c.conn.SetDeadline(time.Time{})
+		_ = conn.SetDeadline(time.Time{})
 	}
 }
 
