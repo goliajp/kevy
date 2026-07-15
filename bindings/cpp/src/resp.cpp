@@ -240,6 +240,49 @@ Reply decode_reply(const uint8_t* buf, size_t len) {
   return out;
 }
 
+static void append_len_line(std::string& out, char tag, long n) {
+  out.push_back(tag);
+  out.append(std::to_string(n));
+  out.append("\r\n");
+}
+
+void encode_reply(std::string& out, const Reply& r) {
+  switch (r.kind) {
+    case ReplyKind::Simple: out.push_back('+'); out.append(r.bytes); out.append("\r\n"); break;
+    case ReplyKind::Error: out.push_back('-'); out.append(r.bytes); out.append("\r\n"); break;
+    case ReplyKind::BigNumber: out.push_back('('); out.append(r.bytes); out.append("\r\n"); break;
+    case ReplyKind::Int: out.push_back(':'); out.append(std::to_string(r.integer)); out.append("\r\n"); break;
+    case ReplyKind::Bulk:
+      append_len_line(out, '$', static_cast<long>(r.bytes.size()));
+      out.append(r.bytes); out.append("\r\n");
+      break;
+    case ReplyKind::BlobError:
+      append_len_line(out, '!', static_cast<long>(r.bytes.size()));
+      out.append(r.bytes); out.append("\r\n");
+      break;
+    case ReplyKind::Nil: out.append("$-1\r\n"); break;
+    case ReplyKind::Null: out.append("_\r\n"); break;
+    case ReplyKind::Array:
+    case ReplyKind::Set:
+    case ReplyKind::Push: {
+      char tag = r.kind == ReplyKind::Set ? '~' : (r.kind == ReplyKind::Push ? '>' : '*');
+      append_len_line(out, tag, static_cast<long>(r.array.size()));
+      for (const auto& e : r.array) encode_reply(out, e);
+      break;
+    }
+    case ReplyKind::Map:
+      append_len_line(out, '%', static_cast<long>(r.map.size()));
+      for (const auto& [k, v] : r.map) { encode_reply(out, k); encode_reply(out, v); }
+      break;
+    case ReplyKind::Double: out.push_back(','); out.append(std::to_string(r.dbl)); out.append("\r\n"); break;
+    case ReplyKind::Boolean: out.append(r.boolean ? "#t\r\n" : "#f\r\n"); break;
+    case ReplyKind::Verbatim:
+      append_len_line(out, '=', static_cast<long>(r.bytes.size() + 4));
+      out.append(r.verbatim_fmt.data(), 3); out.push_back(':'); out.append(r.bytes); out.append("\r\n");
+      break;
+  }
+}
+
 }  // namespace resp
 
 const char* Reply::shape() const {
