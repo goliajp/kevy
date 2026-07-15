@@ -12,9 +12,13 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>Kevy.Embedded</RootNamespace>
 
-    <!-- nuget.org package id `Kevy` verified free 2026-07-14; the project
-         keeps the Kevy.Embedded name (namespace + folder). -->
-    <PackageId>kevy</PackageId>
+    <!-- The unified `kevy` NuGet package is now produced by Kevy.Client,
+         which folds this FFI door in as an internal building block. This
+         project is compiled + referenced but no longer packed on its own
+         (avoids a duplicate `kevy` package id). Packaging policy pending
+         user confirmation — see the v4-csharp-client report. -->
+    <IsPackable>false</IsPackable>
+    <PackageId>Kevy.Embedded.Internal</PackageId>
     <Version>4.0.0</Version>
     <Authors>GOLIA K.K.</Authors>
     <Description>kevy embedded in .NET — the real native engine behind one Cmd() entry plus a typed surface. TTL, structures, pub/sub, persistence you can read; pure Rust, zero services.</Description>
