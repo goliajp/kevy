@@ -13,6 +13,22 @@ fn publish_to_no_subscribers_returns_zero() {
 }
 
 #[test]
+fn into_payload_yields_bytes_for_delivery_frames_only() {
+    // Delivery frames surrender their payload (moved out, no copy).
+    let m = PubsubFrame::Message { channel: b"c".to_vec(), payload: b"p".to_vec() };
+    assert_eq!(m.into_payload(), Some(b"p".to_vec()));
+    let pm = PubsubFrame::Pmessage {
+        pattern: b"c*".to_vec(),
+        channel: b"c".to_vec(),
+        payload: b"q".to_vec(),
+    };
+    assert_eq!(pm.into_payload(), Some(b"q".to_vec()));
+    // Control/ack frames carry no payload.
+    assert_eq!(PubsubFrame::Subscribe { channel: b"c".to_vec(), count: 1 }.into_payload(), None);
+    assert_eq!(PubsubFrame::Unsubscribe { channel: None, count: 0 }.into_payload(), None);
+}
+
+#[test]
 fn subscribe_ack_then_message_delivered() {
     let s = store();
     let sub = s.subscribe(&[b"news"]);

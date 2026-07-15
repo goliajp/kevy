@@ -85,6 +85,19 @@ int32_t kevy_sub_next(KevySub *sub, KevyBuf *out);
  * 1 = frame written to *out; 0 = timeout; negative = misuse / bus closed. */
 int32_t kevy_sub_wait(KevySub *sub, uint64_t timeout_ms, KevyBuf *out);
 
+/* Scalar drain — the raw message *payload* only, no RESP framing (the
+ * pub/sub analog of kevy_get). Skips control/ack frames, moves the payload
+ * into *out. For a known-channel push subscriber that only wants the bytes;
+ * the channel and message-vs-pmessage distinction are lost (a pattern
+ * subscriber that needs the channel keeps using kevy_sub_next).
+ * 1 = payload written to *out; 0 = nothing queued; negative = misuse. */
+int32_t kevy_sub_next_raw(KevySub *sub, KevyBuf *out);
+
+/* Blocking kevy_sub_next_raw: parks up to timeout_ms (0 = wait forever).
+ * 1 = payload written to *out; 0 = timeout OR a control/ack frame was
+ * consumed (no payload) — re-wait; negative = misuse / bus closed. */
+int32_t kevy_sub_wait_raw(KevySub *sub, uint64_t timeout_ms, KevyBuf *out);
+
 /* Close the subscription (unsubscribes everything it held). */
 void kevy_sub_close(KevySub *sub);
 
