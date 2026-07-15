@@ -30,6 +30,10 @@ size_t parse_reply(const uint8_t* buf, size_t len, Reply& out);
 // Throws ProtocolError on truncation/malformation.
 Reply decode_reply(const uint8_t* buf, size_t len);
 
+// Re-encode a decoded Reply back to RESP wire bytes (used by the C façade's
+// raw command path so C callers can re-parse with any RESP parser).
+void encode_reply(std::string& out, const Reply& r);
+
 }  // namespace resp
 }  // namespace kevy
 
