@@ -5,7 +5,7 @@
 
 import net from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { connect } from "../src/index.ts";
@@ -51,6 +51,14 @@ export async function spawnServer(extra: string[] = []): Promise<Server> {
       }
     },
   };
+}
+
+/** Spawn a server with an extra TOML config (enables e.g. [feed]). */
+export async function spawnServerConfig(toml: string, extra: string[] = []): Promise<Server> {
+  const dir = mkdtempSync(join(tmpdir(), "kevy-ts-cfg-"));
+  const cfg = join(dir, "kevy.toml");
+  writeFileSync(cfg, toml);
+  return spawnServer(["--config", cfg, ...extra]);
 }
 
 async function waitReady(url: string): Promise<void> {

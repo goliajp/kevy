@@ -198,13 +198,15 @@ function aggReply(buf: Uint8Array, at: number, kind: "array" | "set" | "push"): 
   }
   let pos = hdr + 2;
   const items: Reply[] = [];
-  for (let i = 0; i < capHint(count, buf.length - pos); i++) {
+  // Parse exactly `count` elements; parseReply signals need-more (next===pos)
+  // when the buffer is short, so a hostile length never over-allocates (we
+  // bail on the first short element).
+  for (let i = 0; i < count; i++) {
     const [item, next] = parseReply(buf, pos);
     if (next === pos) return [NIL, at];
     items.push(item);
     pos = next;
   }
-  if (items.length < count) return [NIL, at];
   return [{ kind, items }, pos];
 }
 
@@ -215,7 +217,7 @@ function mapReply(buf: Uint8Array, at: number): [Reply, number] {
   if (count < 0) throw new ProtocolError("bad map length");
   let pos = hdr + 2;
   const pairs: Array<readonly [Reply, Reply]> = [];
-  for (let i = 0; i < capHint(count, (buf.length - pos) >> 1); i++) {
+  for (let i = 0; i < count; i++) {
     const [k, kn] = parseReply(buf, pos);
     if (kn === pos) return [NIL, at];
     pos = kn;
@@ -224,7 +226,6 @@ function mapReply(buf: Uint8Array, at: number): [Reply, number] {
     pos = vn;
     pairs.push([k, v]);
   }
-  if (pairs.length < count) return [NIL, at];
   return [{ kind: "map", pairs }, pos];
 }
 
@@ -277,13 +278,6 @@ function attributedReply(buf: Uint8Array, at: number): [Reply, number] {
 function parseLen(s: string, what: string): number {
   if (!/^-?\d+$/.test(s)) throw new ProtocolError(`bad ${what} ${s}`);
   return Number(s);
-}
-
-// Cap a header-declared count by the bytes remaining so a hostile length
-// header cannot force a huge allocation (mirrors the Rust/Go parser).
-function capHint(count: number, remaining: number): number {
-  if (remaining < 0) remaining = 0;
-  return count > remaining ? remaining : count;
 }
 
 // --- encoder ------------------------------------------------------------
