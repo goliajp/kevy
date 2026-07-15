@@ -1,38 +1,70 @@
 # kevy-go
 
-kevy embedded in **Go** — the real native engine in your process, no
-server. One typed surface, `Cmd()` to every verb, TTL, structures,
-pub/sub, and persistence you can read (AOF + snapshots). cgo over a
-static library vendored per target (the wasmtime-go model) — no
-system dependency to install.
+The first-party **Go** client for kevy — the pure-Rust Redis-compatible
+engine. One import ships both faces of the [client contract](../../docs/client-contract.md):
+
+- **Embedded** (`mem://` / `file://`): the real native engine in your
+  process, no server. cgo over a static library (`crates/kevy-ffi`) — no
+  system dependency to install.
+- **Remote** (`kevy://` / `redis://` / `tcp://`): a native RESP2/RESP3 TCP
+  client. Same business code, switch backends by changing only the URL.
 
 ```bash
 go get github.com/goliajp/kevy-go
 ```
 
 ```go
-import kevy "github.com/goliajp/kevy-go"
+import (
+	"context"
+	kevy "github.com/goliajp/kevy-go"
+)
 
-db, err := kevy.Open("data/") // or kevy.OpenMem()
+ctx := context.Background()
+
+// Embedded in-process, or "kevy://127.0.0.1:6379" for a server — same code.
+c, err := kevy.Connect("mem://app")
 if err != nil { panic(err) }
-defer db.Close()
+defer c.Close()
 
-db.SetEx("session:7f3a", []byte("payload"), time.Hour)
-v, ok, _ := db.Get("session:7f3a") // []byte("payload"), true
+c.Set(ctx, []byte("k"), []byte("v"))
+v, ok, _ := c.Get(ctx, []byte("k"))       // []byte("v"), true
+c.ZAdd(ctx, []byte("board"), kevy.ZMember{Score: 42, Member: []byte("alice")})
 
-sub, _ := db.Subscribe("room")
-db.Publish("room", []byte("hi"))
-frame, ok, _ := sub.Next() // poll; RESP frame as kevy.Value
+// Errors are values: a typed KevyError, inspectable by variant.
+if _, err := c.Incr(ctx, []byte("k")); err != nil {
+	if se, ok := kevy.StoreErrorOf(err); ok && se == kevy.StoreNotInteger {
+		// structured store error
+	}
+}
 
-// The escape hatch: every verb, RESP semantics, errors as VALUES.
-reply, _ := db.Cmd("ZADD", "board", "42", "alice")
+// Raw escape hatch: every verb reachable, RESP reply as data.
+reply, _ := c.Do(ctx, []byte("COMMAND"), []byte("COUNT"))
 ```
 
-Typed methods (`Set` / `SetEx` / `Get` / `Del` / `Incr` / `IncrBy` /
-`Expire` / `PTTL` / `Keys` / `MGet` / `DBSize` / `FlushAll` /
-`Publish` / `TypeOf`) return an `error` on a protocol error — a typed
-call has one meaning. `Cmd()` returns the error **as a `Value`**
-instead: driving the raw verb surface, the engine saying no is data.
+## Both faces, one client
 
-Same API shape as every other kevy embedding (Node/Bun, .NET, Swift,
-Kotlin, wasm). Docs: <https://kevy.golia.jp>.
+Blocking methods take a `context.Context` for cancellation/timeout. The
+async face is reached via `c.Async()`, returning a `*Async` whose methods
+resolve a `Future[T]` — they delegate to the same blocking methods, so
+sync and async always agree:
+
+```go
+a := c.Async()
+f := a.Get(ctx, []byte("k"))
+res, _ := f.Await(ctx)                       // {Value, OK}
+
+// Generic async for any op:
+n, _ := kevy.GoAsync(a, ctx, func(ctx context.Context, c *kevy.Client) (int64, error) {
+	return c.DBSize(ctx)
+}).Await(ctx)
+```
+
+## Coverage
+
+Core KV, hash, list, set, zset, zset-algebra, hash-field TTL, blocking
+pops, `IDX.*` (typed + raw), `VIEW.*`/`FEED.*` (raw + typed feed),
+pub/sub (`Subscriber`), transactions (`MULTI`/`EXEC`/`WATCH`), pipeline,
+and a CRC16-routed `ClusterClient`. The embedded store (`DB`) exposes the
+`Cmd` / scalar `GetScalar`/`SetScalar` / `Subscribe` surface directly.
+
+Docs: <https://kevy.golia.jp>.
