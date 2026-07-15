@@ -1,0 +1,40 @@
+{
+  "name": "@goliapkg/kevy-electron",
+  "version": "4.0.0",
+  "description": "kevy embedded in an Electron app — the real native engine in the main process (via the N-API door), reached from any renderer through a contextBridge preload + IPC. Safe under contextIsolation and sandbox; no electron-rebuild (stable Node-API).",
+  "license": "(Apache-2.0 OR MIT)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/goliajp/kevy.git"
+  },
+  "homepage": "https://kevy.golia.jp",
+  "type": "module",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": "./index.js",
+    "./preload": "./preload.cjs"
+  },
+  "files": [
+    "index.js",
+    "main.js",
+    "bridge.js",
+    "wire.js",
+    "preload.cjs",
+    "index.d.ts"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "peerDependencies": {
+    "electron": ">=28"
+  },
+  "peerDependenciesMeta": {
+    "electron": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@goliapkg/kevy-node": "4.0.0"
+  }
+}
