@@ -247,6 +247,32 @@ pub unsafe extern "system" fn jni_sub_next(env: JniEnv, _class: JObject, sub: JL
     .unwrap_or(null_mut())
 }
 
+/// `KevyNative.subWait(long sub, long timeoutMs)` — block up to `timeoutMs`
+/// (0 = forever) for one frame, parking in the kernel instead of spinning.
+/// Returns the RESP-array frame bytes, or null on timeout / bus-gone / misuse.
+/// The blocking twin of [`jni_sub_next`]; lets a JVM subscriber wait without
+/// a busy poll loop.
+///
+/// # Safety
+/// Called by the JVM only; `sub` must be a live handle (or 0).
+#[unsafe(export_name = "Java_jp_golia_kevy_KevyNative_subWait")]
+pub unsafe extern "system" fn jni_sub_wait(
+    env: JniEnv,
+    _class: JObject,
+    sub: JLong,
+    timeout_ms: JLong,
+) -> JObject {
+    catch_unwind(AssertUnwindSafe(|| {
+        if sub == 0 {
+            return null_mut();
+        }
+        let mut out = empty_buf();
+        let rc = unsafe { kevy_ffi::kevy_sub_wait(sub_ptr(sub), timeout_ms as u64, &mut out) };
+        if rc == 1 { unsafe { take_buf(env, out) } } else { null_mut() }
+    }))
+    .unwrap_or(null_mut())
+}
+
 /// `KevyNative.subClose(long sub)` — close a subscription handle. 0 is a
 /// no-op; the handle must not be used afterwards.
 ///
