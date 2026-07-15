@@ -65,6 +65,15 @@ db.pttl(&quot;cart:u881&quot;);       // the engine expires it, not your code</c
   <div class="call loss r-cost"><span class="h">Cost &amp; limits</span><p><b>localStorage is faster for a small synchronous read</b> — it is a map in the page's own address space, and nothing built on OPFS will beat it at that. kevy wins on everything that makes localStorage a bad idea anyway: real TTLs, no 5 MB ceiling, byte values rather than strings, and writes that do not block the main thread.</p></div>
 </section>
 <section class="band">
+  <div class="sec-h"><h2>In a mobile app</h2><p class="sec-lede">The synchronous get/set store MMKV owns — with real TTLs, hashes/lists/zsets, pub/sub, and the same <code>cmd()</code> to every verb. React Native (Expo or bare), Flutter, or native. <a href="../../benchmarks/">4× faster than MMKV at SET on real hardware, faster at GET too.</a></p></div>
+  <ol class="steps recipe"><li><h3>Install the door</h3><pre><code># React Native / Expo
+npx expo install expo-kevy
+# Flutter
+flutter pub add flutter_kevy</code></pre></li><li><h3>Open, write with a TTL, read — synchronously</h3><pre><code>const db = open({ dir: `${documentDirectory}kevy` });
+db.set(&quot;session:7f3a&quot;, token, { ttlMs: 3_600_000 });
+db.getText(&quot;session:7f3a&quot;);   // on the JS thread, no await</code></pre></li><li><h3>Want it faster? The JSI door</h3><p>react-native-kevy-nitro calls the engine's C ABI directly — 3–10× faster per call, and a push subscriber that sleeps at 0% CPU until a message arrives.</p><pre><code>import { KevyNitro } from &quot;react-native-kevy-nitro&quot;;</code></pre></li></ol>
+</section>
+<section class="band">
   <div class="sec-h"><h2>On a microcontroller</h2><p class="sec-lede">no_std, no allocator, no operating system: the store lives in a fixed arena you size yourself, and CI boots it on every push.</p></div>
   <ol class="steps recipe"><li><h3>Strip it down</h3><pre><code># Cargo.toml
 kevy-store = { version = &quot;4.0&quot;, default-features = false }</code></pre></li><li><h3>Give it memory, use it</h3><pre><code>let mut arena = [0u8; 64 * 1024];
