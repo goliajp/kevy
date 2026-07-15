@@ -150,7 +150,7 @@ function makeClient(be: Backend, url: string): Client {
     watch: (...keys: Data[]) => watch(be, keys),
     unwatch: () => unwatch(be),
     multi: () => multi(be),
-    pipeline: (build: (p: PipelineBuf) => void) => runPipeline(requireRemote(be, "pipeline"), build),
+    pipeline: async (build: (p: PipelineBuf) => void) => runPipeline(requireRemote(be, "pipeline"), build),
     sync: makeSyncClient(be),
   };
   return Object.assign(bindAsync(be), extra) as Client;

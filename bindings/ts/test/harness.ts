@@ -30,27 +30,40 @@ export interface Server {
 }
 
 export async function spawnServer(extra: string[] = []): Promise<Server> {
-  const port = await freePort();
-  const dir = mkdtempSync(join(tmpdir(), "kevy-ts-srv-"));
-  const proc: ChildProcess = spawn(
-    bin,
-    ["--bind", "127.0.0.1", "--port", String(port), "--dir", dir, ...extra],
-    { stdio: "ignore" },
-  );
-  const url = `kevy://127.0.0.1:${port}`;
-  await waitReady(url);
-  return {
-    url,
-    port,
-    close() {
+  // freePort has an inherent TOCTOU race (another spawn can grab the same
+  // port between close and bind), so retry on a boot/connect failure — real
+  // for parallel test files, harmless otherwise.
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const port = await freePort();
+    const dir = mkdtempSync(join(tmpdir(), "kevy-ts-srv-"));
+    const proc: ChildProcess = spawn(
+      bin,
+      ["--bind", "127.0.0.1", "--port", String(port), "--dir", dir, ...extra],
+      { stdio: "ignore" },
+    );
+    const url = `kevy://127.0.0.1:${port}`;
+    try {
+      await waitReady(url, 4000);
+      return {
+        url,
+        port,
+        close() {
+          proc.kill("SIGKILL");
+          try {
+            rmSync(dir, { recursive: true, force: true });
+          } catch {
+            // best effort
+          }
+        },
+      };
+    } catch (e) {
+      lastErr = e;
       proc.kill("SIGKILL");
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {
-        // best effort
-      }
-    },
-  };
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  throw new Error(`spawnServer failed after retries: ${String(lastErr)}`);
 }
 
 /** Spawn a server with an extra TOML config (enables e.g. [feed]). */
@@ -61,8 +74,8 @@ export async function spawnServerConfig(toml: string, extra: string[] = []): Pro
   return spawnServer(["--config", cfg, ...extra]);
 }
 
-async function waitReady(url: string): Promise<void> {
-  const deadline = Date.now() + 10_000;
+async function waitReady(url: string, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
       const c = await connect(url);

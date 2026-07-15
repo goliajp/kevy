@@ -19,8 +19,9 @@
     "src"
   ],
   "scripts": {
-    "test:node": "node --test test/*.test.ts",
-    "test:bun": "bun test test/*.test.ts"
+    "test:node": "node --test --test-concurrency=1 --test-timeout=20000 test/*.test.ts",
+    "test:bun": "bun test --timeout 20000 test/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "optionalDependencies": {
     "@goliapkg/kevy-node-darwin-arm64": "4.0.0",
