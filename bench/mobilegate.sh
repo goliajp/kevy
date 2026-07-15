@@ -49,12 +49,31 @@ case "$framework" in
         android_cmd="flutter run --release -d $(android_dev_id)"
         ;;
     barern)
-        # expo-kevy in a BARE @react-native-community/cli app (Android only;
-        # the iOS Podfile is the untouched community scaffold). Release build
-        # bundles the JS so no metro server is needed for the gate.
+        # expo-kevy in a BARE @react-native-community/cli app. Both the iOS
+        # Podfile and the Android gradle are hand-wired for expo-modules
+        # autolinking (RN 0.86 / SDK 57 — install-expo-modules is dead there;
+        # the wiring mirrors `expo prebuild`). Release build bundles the JS so
+        # no metro server is needed for the gate.
+        #
+        # iOS prereq (once): build + vendor the native artifact, then pods —
+        #   packaging/apple/build-xcframework.sh bindings/apple/KevyKit/Artifacts
+        #   bash bindings/expo/scripts/prepare-native.sh   # copies Kevy.xcframework in
+        #   ( cd bindings/expo/barern-example/ios && pod install )
+        # Built arm64-only: Kevy.xcframework ships an arm64 iOS-simulator slice
+        # (Apple-Silicon host, per packaging/apple/build-xcframework.sh), so a
+        # fat arm64+x86_64 Release build finds no matching sim slice. Restricting
+        # to the active arm64 arch matches the slice (same as `expo run:ios`).
         appdir="$HERE/bindings/expo/barern-example"
         [ -d "$appdir/node_modules" ] || ( cd "$appdir" && npm install --no-audit --no-fund )
-        ios_cmd="echo 'barern/ios not wired for Expo modules' >&2; exit 2"
+        ios_cmd='sim=$(ios_sim_id); \
+          [ -d ios/BareKevy.xcworkspace ] || ( cd ios && pod install ); \
+          xcodebuild -workspace ios/BareKevy.xcworkspace -scheme BareKevy \
+            -configuration Release -sdk iphonesimulator -derivedDataPath ios/build \
+            -destination "id=$sim" ONLY_ACTIVE_ARCH=YES ARCHS=arm64 EXCLUDED_ARCHS=x86_64 \
+            CODE_SIGNING_ALLOWED=NO build && \
+          app=$(find ios/build/Build/Products/Release-iphonesimulator -maxdepth 1 -name "*.app" | head -1) && \
+          xcrun simctl install "$sim" "$app" && \
+          xcrun simctl launch "$sim" org.reactjs.native.example.BareKevy'
         android_cmd="npx react-native run-android --mode release"
         ;;
     *) echo "unknown framework: $framework" >&2; exit 2 ;;
