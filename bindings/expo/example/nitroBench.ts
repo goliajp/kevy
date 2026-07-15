@@ -6,7 +6,11 @@
 // cmd round-trips through both doors so the delta is purely the crossing.
 import mitt from "mitt";
 import { open } from "expo-kevy";
-import { createKevyNitro, type KevyNitro } from "react-native-kevy-nitro";
+import {
+  createKevyNitro,
+  unpackFrames,
+  type KevyNitro,
+} from "react-native-kevy-nitro";
 
 // Held forever so the idle push subscription (and its native poller) is not
 // GC'd — lets `adb top` sample the poller's idle CPU. See the tail of
@@ -36,6 +40,7 @@ function packAB(args: (string | Uint8Array)[]): ArrayBuffer {
 }
 
 const ops = (n: number, ms: number) => Math.round((n / Math.max(1, ms)) * 1000);
+const x = (a: number, b: number) => (a / Math.max(1, b)).toFixed(1);
 
 export async function runNitroBench(): Promise<string[]> {
   const lines: string[] = [];
@@ -102,6 +107,29 @@ export async function runNitroBench(): Promise<string[]> {
     db.close();
   }
 
+  // Scalar KV door: getData/setData call kevy_get/kevy_set directly — no argv
+  // packing, no RESP framing, no JS decode. Timed against the RESP cmd lane
+  // (cmd GET / cmd SET) on the SAME Nitro door, so the ratio is purely the
+  // RESP tax the scalar door removes. MMKV's device numbers (mmkvgate LEDGER)
+  // are the external bar (~425 ns GET / ~565 ns SET, iOS sim).
+  {
+    const kv = createKevyNitro();
+    const val16 = "v".repeat(16);
+    const keyAB = enc.encode("k").buffer;
+    const valAB = enc.encode(val16).buffer;
+    kv.setData(keyAB, valAB, 0); // seed so getData hits
+    const getcmd = packAB(["GET", "k"]);
+    const setcmd = packAB(["SET", "k", val16]);
+    let cmdGet = 0, cmdSet = 0, sGet = 0, sSet = 0;
+    { const t = Date.now(); for (let i = 0; i < N; i++) kv.cmd(getcmd); cmdGet = ops(N, Date.now() - t); }
+    { const t = Date.now(); for (let i = 0; i < N; i++) kv.cmd(setcmd); cmdSet = ops(N, Date.now() - t); }
+    { const t = Date.now(); for (let i = 0; i < N; i++) kv.getData(keyAB); sGet = ops(N, Date.now() - t); }
+    { const t = Date.now(); for (let i = 0; i < N; i++) kv.setData(keyAB, valAB, 0); sSet = ops(N, Date.now() - t); }
+    lines.push(
+      `NITROGATE: kv scalar getData=${sGet} setData=${sSet} ops/s | vs cmd=${x(sGet, cmdGet)}x get / ${x(sSet, cmdSet)}x set`
+    );
+  }
+
   // Pub/sub, four ways, 16 B payload, M messages each:
   //   mitt          — in-process JS emitter, no boundary (the floor).
   //   poll/drain    — publish + JS-side subNext loop (~3 crossings/msg).
@@ -163,8 +191,11 @@ export async function runNitroBench(): Promise<string[]> {
     const n4 = createKevyNitro();
     let resolveDone!: () => void;
     const done = new Promise<void>((r) => (resolveDone = r));
-    n4.subscribePushBatched("ev", (frames) => {
+    n4.subscribePushBatched("ev", (packed, count) => {
       hops++;
+      // One ArrayBuffer per batch now (not M) — slice zero-copy views back
+      // out by walking the u32-LE length prefixes.
+      const frames = unpackFrames(packed, count);
       batchedRecv += frames.length;
       if (batchedRecv >= M) resolveDone();
     });
@@ -175,7 +206,6 @@ export async function runNitroBench(): Promise<string[]> {
     n4.stopPush();
   }
 
-  const x = (a: number, b: number) => (a / Math.max(1, b)).toFixed(1);
   lines.push(
     `NITROGATE: pubsub 16B mitt=${mittOps} | poll=${pollOps} | push=${pushOps} | pushBatched=${batchedOps} ops/s`
   );
