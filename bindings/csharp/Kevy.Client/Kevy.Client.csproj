@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Kevy.Client — the first-party unified kevy client for .NET: one
+       Connect(url) routing to the in-process embedded engine (mem:// /
+       file://) or a native RESP TCP server (kevy:// / redis:// / tcp://),
+       every command family exposed on BOTH a synchronous and an async
+       Task face (contract §1.4). It links the Kevy.Embedded P/Invoke door
+       for the embedded backend and ships as the `kevy` NuGet package. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>Kevy</RootNamespace>
+    <AssemblyName>Kevy.Client</AssemblyName>
+
+    <PackageId>kevy</PackageId>
+    <Version>4.0.0</Version>
+    <Authors>GOLIA K.K.</Authors>
+    <Description>The first-party kevy client for .NET — one Connect(url) to the embedded engine or a remote RESP server, every command family on both a sync and an async face. Pure Rust engine, zero services.</Description>
+    <PackageLicenseExpression>Apache-2.0 OR MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/goliajp/kevy</RepositoryUrl>
+    <PackageProjectUrl>https://kevy.golia.jp</PackageProjectUrl>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Kevy.Embedded/Kevy.Embedded.csproj" />
+  </ItemGroup>
+
+</Project>
