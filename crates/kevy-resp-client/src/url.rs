@@ -18,7 +18,7 @@ pub struct ParsedUrl {
     /// omits `:port`.
     pub port: u16,
     /// Optional db index from a `/N` path component. Only valid for
-    /// `kevy://` and `redis://`; `tcp://` rejects any path.
+    /// `kevy://` and `redis://`; `tcp://` accepts but ignores a path.
     pub db: Option<u32>,
 }
 
@@ -80,14 +80,12 @@ fn parse_authority(authority: &str) -> io::Result<(String, u16)> {
 }
 
 /// Optional DB index from the path component. `tcp://` is a raw-socket
-/// URL and rejects any path; `kevy://` and `redis://` honour `/N`.
+/// URL that **ignores** any `/db` (no `SELECT`), per the client contract
+/// (docs/client-contract.md §1.1); `kevy://` and `redis://` honour `/N`.
 fn parse_db_path(scheme: &str, path: Option<&str>) -> io::Result<Option<u32>> {
     match path {
         None | Some("") => Ok(None),
-        Some(p) if scheme == "tcp" => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("tcp:// URL must not have a path: '/{p}'"),
-        )),
+        Some(_) if scheme == "tcp" => Ok(None),
         Some(p) => {
             let n: u32 = p.parse().map_err(|_| {
                 io::Error::new(
@@ -163,10 +161,11 @@ mod tests {
     }
 
     #[test]
-    fn tcp_with_path_rejected() {
-        // tcp:// is the raw form — db indices only make sense with the
-        // redis/kevy semantic schemes.
-        assert!(parse_url("tcp://h:6379/0").is_err());
+    fn tcp_with_path_ignored() {
+        // tcp:// is the raw form: it accepts but IGNORES a /db (no SELECT),
+        // per the client contract (docs/client-contract.md §1.1). db is None.
+        let parsed = parse("tcp://h:6379/0");
+        assert_eq!(parsed.db, None);
     }
 
     #[test]
