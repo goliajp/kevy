@@ -258,6 +258,33 @@ class FlutterKevyBindings {
         int Function(ffi.Pointer<KevySubHandle>, ffi.Pointer<KevyBuf>)
       >();
 
+  /// Block until one frame is queued or timeout_ms elapses (0 = wait forever).
+  /// Parks the thread — no busy-poll — so a push-style poller can wait in the
+  /// kernel instead of spinning kevy_sub_next.
+  /// 1 = frame written to *out; 0 = timeout; negative = misuse / bus closed.
+  int kevy_sub_wait(
+    ffi.Pointer<KevySubHandle> sub,
+    int timeout_ms,
+    ffi.Pointer<KevyBuf> out,
+  ) {
+    return _kevy_sub_wait(sub, timeout_ms, out);
+  }
+
+  late final _kevy_sub_waitPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<KevySubHandle>,
+            ffi.Uint64,
+            ffi.Pointer<KevyBuf>,
+          )
+        >
+      >('kevy_sub_wait');
+  late final _kevy_sub_wait = _kevy_sub_waitPtr
+      .asFunction<
+        int Function(ffi.Pointer<KevySubHandle>, int, ffi.Pointer<KevyBuf>)
+      >();
+
   /// Close the subscription (unsubscribes everything it held).
   void kevy_sub_close(ffi.Pointer<KevySubHandle> sub) {
     return _kevy_sub_close(sub);

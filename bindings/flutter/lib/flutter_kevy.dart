@@ -37,8 +37,9 @@ final FlutterKevyBindings _b = FlutterKevyBindings(() {
   throw UnsupportedError('kevy: unsupported platform');
 }());
 
-/// A polled pub/sub subscription. [next] drains one frame (or null when
-/// the queue is empty); [close] unsubscribes.
+/// A pub/sub subscription. [next] drains one frame without blocking (or
+/// null when the queue is empty); [waitNext] parks in the kernel until a
+/// frame arrives or the timeout elapses; [close] unsubscribes.
 class KevySub {
   ffi.Pointer<KevySubHandle> _p;
   KevySub._(this._p);
@@ -48,6 +49,21 @@ class KevySub {
     final out = calloc<KevyBuf>();
     try {
       final rc = _b.kevy_sub_next(_p, out);
+      if (rc < 0) throw KevyError('kevy: subscription misuse');
+      if (rc == 0) return null;
+      return _takeBuf(out.ref);
+    } finally {
+      calloc.free(out);
+    }
+  }
+
+  /// Block up to [timeoutMs] (0 = forever) for one frame, parking in the
+  /// kernel instead of spinning [next]. Returns null on timeout / bus-gone.
+  Object? waitNext(int timeoutMs) {
+    if (_p == ffi.nullptr) return null;
+    final out = calloc<KevyBuf>();
+    try {
+      final rc = _b.kevy_sub_wait(_p, timeoutMs, out);
       if (rc < 0) throw KevyError('kevy: subscription misuse');
       if (rc == 0) return null;
       return _takeBuf(out.ref);
