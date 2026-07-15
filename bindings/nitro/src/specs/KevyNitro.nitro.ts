@@ -24,13 +24,12 @@ export interface KevyNitro
   publish(channel: string, payload: ArrayBuffer): void
   subNext(): ArrayBuffer | undefined
 
-  // Push-model pub/sub. kevy-ffi is poll-only (no sub_wait / callback API),
-  // so "push" here means: a dedicated NATIVE poller thread loops
-  // kevy_sub_next and, per frame, invokes this JS callback — which Nitro
-  // auto-hops onto the JS thread (AsyncJSCallback -> CallInvoker). That is
-  // JS-side push (one callback per message, zero JS-side polling); the
-  // native side still polls. A true zero-CPU engine push would need a new
-  // kevy-ffi sub_wait/callback API (an engine change — NOT done here).
+  // Push-model pub/sub. A dedicated NATIVE poller thread blocks in
+  // kevy_sub_wait — a real kernel park on the engine's mpsc channel, so it
+  // burns 0% CPU while idle (no busy-spin) — and, per frame, invokes this JS
+  // callback, which Nitro auto-hops onto the JS thread (AsyncJSCallback ->
+  // CallInvoker). That is JS-side push (one callback per message, zero
+  // JS-side polling) with a native poller that sleeps until a frame arrives.
   //
   // Per-message: one native->JS hop per frame.
   subscribePush(channel: string, onMessage: (frame: ArrayBuffer) => void): void
