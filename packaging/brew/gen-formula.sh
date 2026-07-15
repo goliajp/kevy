@@ -15,7 +15,6 @@ cat <<EOF
 class Kevy < Formula
   desc "Redis-compatible data layer for AI systems — server + cli"
   homepage "https://kevy.golia.jp"
-  version "$v"
   license any_of: ["Apache-2.0", "MIT"]
 
   on_macos do
