@@ -102,7 +102,14 @@ void HybridKevyNitro::subscribePush(
   _poller = std::thread([this, sub, cb]() {
     // Name the thread so it's distinct from the JS thread it was spawned
     // from (bionic otherwise inherits the creator's name, "mqt_v_js").
+    // Darwin's pthread_setname_np names the *current* thread and takes one
+    // arg; bionic/Linux takes (thread, name). We're on the poller thread
+    // either way, so both name this thread.
+#if defined(__APPLE__)
+    pthread_setname_np("kevy-push-poll");
+#else
     pthread_setname_np(pthread_self(), "kevy-push-poll");
+#endif
     while (_pollRunning.load(std::memory_order_acquire)) {
       KevyBuf out{};
       int32_t rc = kevy_sub_wait(sub, kWaitSliceMs, &out); // kernel park
@@ -128,7 +135,14 @@ void HybridKevyNitro::subscribePushBatched(
   _poller = std::thread([this, sub, cb]() {
     // Name the thread so it's distinct from the JS thread it was spawned
     // from (bionic otherwise inherits the creator's name, "mqt_v_js").
+    // Darwin's pthread_setname_np names the *current* thread and takes one
+    // arg; bionic/Linux takes (thread, name). We're on the poller thread
+    // either way, so both name this thread.
+#if defined(__APPLE__)
+    pthread_setname_np("kevy-push-poll");
+#else
     pthread_setname_np(pthread_self(), "kevy-push-poll");
+#endif
     while (_pollRunning.load(std::memory_order_acquire)) {
       KevyBuf out{};
       int32_t rc = kevy_sub_wait(sub, kWaitSliceMs, &out); // block for frame 1
