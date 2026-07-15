@@ -57,7 +57,7 @@ func TestSmoke(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if v, _ := db.Cmd("GET", "smoke:go"); v.Str != "v1" {
+	if v, _ := db.Cmd("GET", "smoke:go"); v.Str() != "v1" {
 		t.Fatalf("GET after reopen: %+v", v)
 	}
 	if v, _ := db.Cmd("DEL", "smoke:go"); v.Int != 1 {
