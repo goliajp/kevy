@@ -47,11 +47,15 @@ export interface KevyNitro
   subNext(): ArrayBuffer | undefined
 
   // Push-model pub/sub. A dedicated NATIVE poller thread blocks in
-  // kevy_sub_wait — a real kernel park on the engine's mpsc channel, so it
-  // burns 0% CPU while idle (no busy-spin) — and, per frame, invokes this JS
-  // callback, which Nitro auto-hops onto the JS thread (AsyncJSCallback ->
+  // kevy_sub_wait_raw — a real kernel park on the engine's mpsc channel, so
+  // it burns 0% CPU while idle (no busy-spin) — and, per frame, invokes this
+  // JS callback, which Nitro auto-hops onto the JS thread (AsyncJSCallback ->
   // CallInvoker). That is JS-side push (one callback per message, zero
   // JS-side polling) with a native poller that sleeps until a frame arrives.
+  // The push family drains the RESP-free lane: the callback receives the raw
+  // message PAYLOAD (no `*3…message…` framing), and subscribe/unsubscribe
+  // acks are skipped — a known-channel consumer wants only the bytes. (Need
+  // the channel/kind? Use the framed subscribe/subNext lane above.)
   //
   // Per-message: one native->JS hop per frame.
   subscribePush(channel: string, onMessage: (frame: ArrayBuffer) => void): void
