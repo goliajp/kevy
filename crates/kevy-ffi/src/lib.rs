@@ -19,7 +19,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use kevy_embedded::{Config, PubsubFrame, Store, Subscription};
+use kevy_embedded::{Config, KevyError, PubsubFrame, Store, Subscription};
 
 /// Opaque database handle. A `Box<Store>` on the Rust side.
 pub struct KevyDb {
@@ -326,6 +326,52 @@ pub unsafe extern "C" fn kevy_sub_next(sub: *mut KevySub, out: *mut KevyBuf) -> 
         }
         Ok(Ok(None)) => 0,
         _ => -2,
+    }
+}
+
+/// Block until one pub/sub frame is queued, or `timeout_ms` elapses.
+///
+/// Same output/return shape as [`kevy_sub_next`], but instead of returning
+/// 0 the instant the queue is empty it **parks the calling thread** (no
+/// busy-poll) up to `timeout_ms`: 1 with `out` holding the frame, 0 on
+/// timeout, negative on misuse or once the bus tears down. `timeout_ms == 0`
+/// waits indefinitely (until a frame arrives or the bus is gone).
+///
+/// The engine already parks efficiently on its `mpsc` channel; this just
+/// exposes that wait to the C ABI so a push-style binding (a poller thread
+/// that hops each frame onto a host runtime) can block in the kernel
+/// instead of spinning `kevy_sub_next` and burning a core.
+///
+/// # Safety
+/// `sub` must be live; `out` must point to writable [`KevyBuf`] storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kevy_sub_wait(sub: *mut KevySub, timeout_ms: u64, out: *mut KevyBuf) -> i32 {
+    if out.is_null() {
+        return -1;
+    }
+    unsafe { out.write(KevyBuf::empty()) };
+    if sub.is_null() {
+        return -1;
+    }
+    let s = unsafe { &(*sub).sub };
+    let waited = catch_unwind(AssertUnwindSafe(|| {
+        if timeout_ms == 0 {
+            s.recv().map(Some)
+        } else {
+            match s.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
+                Ok(f) => Ok(Some(f)),
+                Err(KevyError::TimedOut) => Ok(None),
+                Err(e) => Err(e),
+            }
+        }
+    }));
+    match waited {
+        Ok(Ok(Some(frame))) => {
+            unsafe { out.write(KevyBuf::from_vec(encode_frame(&frame))) };
+            1
+        }
+        Ok(Ok(None)) => 0, // timeout, nothing arrived
+        _ => -2,           // bus closed or panic
     }
 }
 
