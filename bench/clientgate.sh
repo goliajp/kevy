@@ -73,10 +73,13 @@ run go-redis gorun
 # ── .NET: StackExchange.Redis ──
 run se-redis env KEVY_PORT=$PORT dotnet run --project bench/clientgate/seredis -c Release
 
-# ── Python: redis-py (venv, no global pollution) ──
+# ── Python: redis-py, sync + asyncio (venv, no global pollution) ──
+# The async client (redis.asyncio) ships in the same `redis` package, so
+# both smokes run off one install — same ladder, sync vs await.
 python3 -m venv "$DIR/venv" >/dev/null 2>&1 \
     && "$DIR/venv/bin/pip" install --quiet redis >/dev/null 2>&1
-run redis-py env KEVY_PORT=$PORT "$DIR/venv/bin/python" bench/clientgate/redispy.py
+run redis-py       env KEVY_PORT=$PORT "$DIR/venv/bin/python" bench/clientgate/redispy.py
+run redis-py-async env KEVY_PORT=$PORT "$DIR/venv/bin/python" bench/clientgate/redispy_async.py
 
 # ── C: hiredis ──
 HIREDIS_PREFIX=""
