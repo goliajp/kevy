@@ -64,6 +64,38 @@ mapping mechanism. No amount of mmap-implementation polish changes the
    honest next measurement** before committing to an overwrite-in-place
    rearchitecture.
 
+## The phantom gap — kevy already BEATS MMKV on SET on real hardware
+
+After refuting mmap, built MMKV's own POSIX/Core lib on lx64 and ran the
+**same** SET workload (200 warm keys, 4 KB value, 500k sets) through both,
+on the same ext4, external timing, median of 3:
+
+| SET 4 KB (lx64 ext4) | µs/op | sets/s | on-disk |
+|----------------------|------:|-------:|---------|
+| **kevy buffered (EverySec)** | **2.98** | 335,345 | 5.4 MB (auto-rewrite compacts) |
+| **MMKV (default)** | 11.84 | 84,445 | 2.1 MB (overwrite-in-place) |
+
+**kevy is 3.97× FASTER than MMKV at SET on real hardware.** The iOS-sim
+mmkvgate said the opposite (kevy ~14 µs, MMKV ~3.5 µs, MMKV 4× faster) —
+that was a **simulator artifact**: the sim's host-FS write path both
+inflated kevy's `write()` and made MMKV's mmap look cheap. On real ext4,
+MMKV's mmap + periodic full-writeback loses to kevy's `write()` + BufWriter
++ auto-rewrite. Both compact (kevy via auto-BGREWRITEAOF keeping the AOF at
+5.4 MB, MMKV via in-place overwrite at 2.1 MB); kevy's is 4× faster.
+
+**The whole mmap-AOF detour was chasing a gap that does not exist on real
+hardware.** On real hardware kevy beats MMKV on *both* GET and SET.
+Durability note: kevy ran EverySec (fsync ≤1 s), MMKV its default (lazy
+writeback + sync-on-close) — kevy is the *more* durable of the two and
+still 4× faster.
+
+Caveat (honesty): lx64 is x86_64 Linux ext4, not a phone (ARM + flash).
+This refutes "MMKV is fundamentally faster at SET" (it isn't — that was
+sim-specific), but the definitive **mobile** number still needs a
+real-device mmkvgate. The sim is now the outlier of three measurements
+(sim: MMKV wins; lx64: kevy wins 4×), so its numbers should not drive
+decisions.
+
 ## What was NOT wasted
 
 The mmap agent's work is a correct, tested implementation (kevy-sys mmap
