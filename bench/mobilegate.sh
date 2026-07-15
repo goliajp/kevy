@@ -12,6 +12,7 @@
 #
 #   bash bench/mobilegate.sh expo ios          bash bench/mobilegate.sh flutter android
 #   bash bench/mobilegate.sh expo android      bash bench/mobilegate.sh flutter ios
+#   bash bench/mobilegate.sh barern android    # expo-kevy in a BARE RN app
 #
 # Prereqs: Xcode + a booted iOS simulator (ios) / Android SDK + a booted
 # emulator (android), and the door's native artifacts vendored (each
@@ -19,8 +20,8 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
-framework=${1:?usage: mobilegate.sh <expo|flutter> <ios|android>}
-platform=${2:?usage: mobilegate.sh <expo|flutter> <ios|android>}
+framework=${1:?usage: mobilegate.sh <expo|flutter|barern> <ios|android>}
+platform=${2:?usage: mobilegate.sh <expo|flutter|barern> <ios|android>}
 
 if ! command -v npx >/dev/null 2>&1; then
     nvm_bin=$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1)
@@ -46,6 +47,15 @@ case "$framework" in
         # the Android emulator runs release fine.
         ios_cmd="flutter run --debug -d $(ios_sim_id)"
         android_cmd="flutter run --release -d $(android_dev_id)"
+        ;;
+    barern)
+        # expo-kevy in a BARE @react-native-community/cli app (Android only;
+        # the iOS Podfile is the untouched community scaffold). Release build
+        # bundles the JS so no metro server is needed for the gate.
+        appdir="$HERE/bindings/expo/barern-example"
+        [ -d "$appdir/node_modules" ] || ( cd "$appdir" && npm install --no-audit --no-fund )
+        ios_cmd="echo 'barern/ios not wired for Expo modules' >&2; exit 2"
+        android_cmd="npx react-native run-android --mode release"
         ;;
     *) echo "unknown framework: $framework" >&2; exit 2 ;;
 esac
