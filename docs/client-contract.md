@@ -80,6 +80,14 @@ does (async is TCP-only there). Ports SHOULD support embedded on both faces
 for ergonomics, but MUST at minimum support **remote on both faces** and
 **embedded on the sync face**.
 
+**Language caveat (validated by the TS port):** a language with no
+synchronous socket read — JavaScript/TypeScript on Node and Bun — cannot
+offer a synchronous *remote* face at all. There the accepted shape is:
+async-by-default for both backends, and a synchronous **embedded-only** face
+(a `.sync` surface / `connectSync`) that throws `Unsupported` on a remote
+URL. Go/Rust/Java/Python/C#/C++ have blocking sockets and give both faces on
+both backends; JS/TS is the documented exception.
+
 The async surface in the Rust reference is TCP-only and covers the
 string/generic + hash/list/set/zset + pipeline + cluster + subscriber
 families. Ports SHOULD extend async coverage to the full family set (that is
