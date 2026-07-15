@@ -6,7 +6,13 @@
 // cmd round-trips through both doors so the delta is purely the crossing.
 import mitt from "mitt";
 import { open } from "expo-kevy";
-import { createKevyNitro } from "react-native-kevy-nitro";
+import { createKevyNitro, type KevyNitro } from "react-native-kevy-nitro";
+
+// Held forever so the idle push subscription (and its native poller) is not
+// GC'd — lets `adb top` sample the poller's idle CPU. See the tail of
+// runNitroBench: with kevy_sub_wait the poller parks in the kernel, so this
+// must read ~0% (vs the old yield-spin build burning ~one core).
+let idleHold: KevyNitro | undefined;
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -179,6 +185,13 @@ export async function runNitroBench(): Promise<string[]> {
   lines.push(
     `NITROGATE: pubsub detail push(${pushRecv}/${M}) batched(${batchedRecv}/${M} in ${hops} hops, avg ${Math.round(batchedRecv / Math.max(1, hops))}/hop)`
   );
+
+  // Idle-CPU probe: hold one live push subscription on a channel nothing
+  // ever publishes to. The native poller sits blocked in kevy_sub_wait
+  // (kernel park) — sample the app's CPU now; it must be ~0%.
+  idleHold = createKevyNitro();
+  idleHold.subscribePush("idle-never-published", () => {});
+  lines.push("NITROGATE:IDLE live push sub, no traffic — sample app CPU now");
 
   return lines;
 }
