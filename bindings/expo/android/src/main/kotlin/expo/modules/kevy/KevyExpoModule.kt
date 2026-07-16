@@ -8,9 +8,11 @@
 // parsing and the typed surface live in src/index.ts.
 package expo.modules.kevy
 
+import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import jp.golia.kevy.KevyNative
+import jp.golia.kevy.ScalarGetSignal
 
 class KevyExpoModule : Module() {
     private val dbs = HashMap<Int, Long>()
@@ -43,7 +45,18 @@ class KevyExpoModule : Module() {
         }
 
         Function("get") { id: Int, key: ByteArray ->
-            KevyNative.get(db(id), key)
+            try {
+                KevyNative.get(db(id), key)
+            } catch (signal: ScalarGetSignal) {
+                // The scalar lane can't carry a typed store error (GET on a
+                // non-string key). Translate the JNI signal to the cross-platform
+                // KEVY_WRONGTYPE marker so src/index.ts re-runs the framed GET,
+                // which surfaces -ERR WRONGTYPE. Mirrors iOS's wrongType().
+                throw CodedException(
+                    "KEVY_WRONGTYPE: scalar GET on a non-string key; use the framed GET",
+                    signal,
+                )
+            }
         }
 
         Function("set") { id: Int, key: ByteArray, value: ByteArray, ttlMs: Double ->
