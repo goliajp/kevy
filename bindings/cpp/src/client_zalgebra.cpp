@@ -9,7 +9,7 @@
 
 namespace kevy {
 
-using detail::i2s;
+using detail::Args;
 
 namespace {
 
@@ -25,22 +25,16 @@ void check_source_keys(const ByteList& keys) {
   if (keys.empty()) throw InvalidInputError("zset algebra needs at least one source key");
 }
 
-std::vector<std::string> zstore_argv(const char* verb, std::string_view dest, const ByteList& keys,
-                                     const std::optional<std::vector<double>>& weights, ZAggregate agg) {
-  std::vector<std::string> argv;
+Args zstore_argv(std::string_view verb, std::string_view dest, const ByteList& keys,
+                 const std::optional<std::vector<double>>& weights, ZAggregate agg) {
+  Args argv;
   argv.reserve(keys.size() * 2 + 6);
-  argv.emplace_back(verb);
-  argv.emplace_back(dest);
-  argv.push_back(i2s(static_cast<int64_t>(keys.size())));
-  detail::push_all(argv, keys);
+  argv.add(verb).add(dest).add_int(static_cast<int64_t>(keys.size())).add_all(keys);
   if (weights.has_value()) {
-    argv.emplace_back("WEIGHTS");
-    for (double w : *weights) argv.push_back(detail::format_double(w));
+    argv.add("WEIGHTS");
+    for (double w : *weights) argv.add_double(w);
   }
-  if (agg != ZAggregate::Sum) {
-    argv.emplace_back("AGGREGATE");
-    argv.emplace_back(agg_tag(agg));
-  }
+  if (agg != ZAggregate::Sum) argv.add("AGGREGATE").add(agg_tag(agg));
   return argv;
 }
 
@@ -65,15 +59,10 @@ int64_t Client::zunionstore_with(std::string_view dest, const ByteList& keys,
 
 int64_t Client::zintercard(const ByteList& keys, std::optional<uint64_t> limit) {
   check_source_keys(keys);
-  std::vector<std::string> argv;
+  Args argv;
   argv.reserve(keys.size() + 4);
-  argv.emplace_back("ZINTERCARD");
-  argv.push_back(i2s(static_cast<int64_t>(keys.size())));
-  detail::push_all(argv, keys);
-  if (limit.has_value()) {
-    argv.emplace_back("LIMIT");
-    argv.push_back(detail::u2s(*limit));
-  }
+  argv.add("ZINTERCARD").add_int(static_cast<int64_t>(keys.size())).add_all(keys);
+  if (limit.has_value()) argv.add("LIMIT").add_uint(*limit);
   return exec_count(argv);
 }
 

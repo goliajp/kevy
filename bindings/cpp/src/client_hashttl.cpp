@@ -9,6 +9,7 @@
 
 namespace kevy {
 
+using detail::Args;
 using detail::i2s;
 using detail::raise_reply_error;
 using detail::raise_unexpected;
@@ -30,18 +31,14 @@ void check_fields(const ByteList& fields) {
 }
 
 // "verb key [arg] [cond] FIELDS n field…"
-std::vector<std::string> hashttl_argv(const char* verb, std::string_view key,
-                                      std::optional<std::string> arg, HExpireCond cond,
-                                      const ByteList& fields) {
-  std::vector<std::string> argv;
+Args hashttl_argv(std::string_view verb, std::string_view key, std::optional<std::string> arg,
+                  HExpireCond cond, const ByteList& fields) {
+  Args argv;
   argv.reserve(fields.size() + 6);
-  argv.emplace_back(verb);
-  argv.emplace_back(key);
-  if (arg.has_value()) argv.push_back(*arg);
-  if (const char* kw = cond_keyword(cond)) argv.emplace_back(kw);
-  argv.emplace_back("FIELDS");
-  argv.push_back(i2s(static_cast<int64_t>(fields.size())));
-  detail::push_all(argv, fields);
+  argv.add(verb).add(key);
+  if (arg.has_value()) argv.add_owned(std::move(*arg));
+  if (const char* kw = cond_keyword(cond)) argv.add(kw);
+  argv.add("FIELDS").add_int(static_cast<int64_t>(fields.size())).add_all(fields);
   return argv;
 }
 

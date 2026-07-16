@@ -24,10 +24,10 @@ StoreErrorKind classify_store_error(const std::string& text, bool& recognized);
 // Throw a ProtocolError naming the actual reply variant (shape mismatch).
 [[noreturn]] void raise_unexpected(const Reply& r);
 
-// Turn an Array/Set reply of bulk/nil into a list, nil → empty string entries
-// mapped by the caller's optional handling (here: empty string placeholder is
-// avoided — callers wanting optionals use their own path).
-std::vector<std::string> array_to_bulks(const Reply& r);
+// Turn an Array/Set reply of bulk/nil into a list, moving each bulk payload
+// out of the (about-to-die) reply; a nil member becomes an empty-string
+// placeholder (callers wanting optionals use their own path).
+std::vector<std::string> array_to_bulks(Reply&& r);
 
 double score_of(const Reply& r);
 double parse_float_bytes(const std::string& b);

@@ -8,6 +8,7 @@
 
 namespace kevy {
 
+using detail::Args;
 using detail::i2s;
 using detail::raise_reply_error;
 using detail::raise_unexpected;
@@ -32,7 +33,7 @@ void simple_ok(const Reply& r) {
 void Client::watch(const ByteList& keys) {
   if (keys.empty()) throw InvalidInputError("WATCH needs at least one key");
   detail::RespConn* conn = require_remote("WATCH");
-  simple_ok(conn->request(detail::verb_list("WATCH", keys)));
+  simple_ok(conn->request(detail::verb_list("WATCH", keys).views()));
 }
 
 void Client::unwatch() {
@@ -50,8 +51,8 @@ Transaction Client::multi() {
 
 Transaction::~Transaction() { close(); }
 
-void Transaction::queue_argv(const std::vector<std::string>& argv) {
-  Reply r = conn_->request(argv);
+void Transaction::queue_argv(const Args& argv) {
+  Reply r = conn_->request(argv.views());
   if (r.kind == ReplyKind::Simple && r.str() == "QUEUED") return;
   if (r.kind == ReplyKind::Error) raise_reply_error(r);
   raise_unexpected(r);
@@ -59,16 +60,16 @@ void Transaction::queue_argv(const std::vector<std::string>& argv) {
 
 Transaction& Transaction::queue(const std::vector<std::string>& parts) {
   if (parts.empty()) throw InvalidInputError("Transaction.queue needs at least a verb");
-  queue_argv(parts);
+  queue_argv(Args(parts));
   return *this;
 }
 
 Transaction& Transaction::set(std::string_view key, std::string_view value) {
-  queue_argv({"SET", std::string(key), std::string(value)});
+  queue_argv({"SET", key, value});
   return *this;
 }
 Transaction& Transaction::get(std::string_view key) {
-  queue_argv({"GET", std::string(key)});
+  queue_argv({"GET", key});
   return *this;
 }
 Transaction& Transaction::del(const std::vector<std::string_view>& keys) {
@@ -82,11 +83,11 @@ Transaction& Transaction::exists(const std::vector<std::string_view>& keys) {
   return *this;
 }
 Transaction& Transaction::incr(std::string_view key) {
-  queue_argv({"INCR", std::string(key)});
+  queue_argv({"INCR", key});
   return *this;
 }
 Transaction& Transaction::incr_by(std::string_view key, int64_t delta) {
-  queue_argv({"INCRBY", std::string(key), i2s(delta)});
+  queue_argv({"INCRBY", key, i2s(delta)});
   return *this;
 }
 Transaction& Transaction::mget(const std::vector<std::string_view>& keys) {
@@ -96,13 +97,10 @@ Transaction& Transaction::mget(const std::vector<std::string_view>& keys) {
 }
 Transaction& Transaction::mset(const std::vector<std::pair<std::string_view, std::string_view>>& pairs) {
   if (pairs.empty()) throw InvalidInputError("Transaction.mset needs a non-empty key/value list");
-  std::vector<std::string> argv;
+  Args argv;
   argv.reserve(pairs.size() * 2 + 1);
-  argv.emplace_back("MSET");
-  for (auto& [k, v] : pairs) {
-    argv.emplace_back(k);
-    argv.emplace_back(v);
-  }
+  argv.add("MSET");
+  for (auto& [k, v] : pairs) argv.add(k).add(v);
   queue_argv(argv);
   return *this;
 }
@@ -171,7 +169,7 @@ void TransactionReplies::expect_empty() {
 
 Reply TransactionReplies::raw() {
   if (pos_ >= items_.size()) throw ProtocolError("transaction reply cursor exhausted");
-  return items_[pos_++];
+  return std::move(items_[pos_++]);  // consumed once; the cursor never re-reads it
 }
 
 void TransactionReplies::next_ok() {
@@ -195,7 +193,7 @@ int64_t TransactionReplies::next_int() {
 
 std::optional<std::string> TransactionReplies::next_bulk() {
   Reply v = raw();
-  if (v.kind == ReplyKind::Bulk) return v.bytes;
+  if (v.kind == ReplyKind::Bulk) return std::move(v.bytes);
   if (v.is_nil()) return std::nullopt;
   tx_mismatch("Bulk or Nil", v);
 }
@@ -205,8 +203,8 @@ std::vector<std::optional<std::string>> TransactionReplies::next_array_of_bulks(
   if (v.kind == ReplyKind::Array) {
     std::vector<std::optional<std::string>> out;
     out.reserve(v.array.size());
-    for (const auto& it : v.array) {
-      if (it.kind == ReplyKind::Bulk) out.push_back(it.bytes);
+    for (auto& it : v.array) {
+      if (it.kind == ReplyKind::Bulk) out.push_back(std::move(it.bytes));
       else if (it.is_nil()) out.push_back(std::nullopt);
       else tx_mismatch("Array element Bulk/Nil", it);
     }
@@ -218,7 +216,7 @@ std::vector<std::optional<std::string>> TransactionReplies::next_array_of_bulks(
 
 std::string TransactionReplies::next_simple() {
   Reply v = raw();
-  if (v.kind == ReplyKind::Simple) return v.bytes;
+  if (v.kind == ReplyKind::Simple) return std::move(v.bytes);
   tx_mismatch("Simple", v);
 }
 

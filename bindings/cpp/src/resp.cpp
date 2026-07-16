@@ -8,7 +8,7 @@
 namespace kevy {
 namespace resp {
 
-void encode_command(std::string& out, const std::vector<std::string>& argv) {
+void encode_command(std::string& out, const std::vector<std::string_view>& argv) {
   out.push_back('*');
   out.append(std::to_string(argv.size()));
   out.append("\r\n");

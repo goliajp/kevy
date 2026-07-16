@@ -17,6 +17,7 @@ namespace kevy {
 
 namespace detail {
 class RespConn;
+class Args;
 }
 
 // A typed cursor over a successful EXEC's per-command replies (§4.10). Each
@@ -80,7 +81,7 @@ class Transaction {
   void close();
 
  private:
-  void queue_argv(const std::vector<std::string>& argv);
+  void queue_argv(const detail::Args& argv);
   Reply finish_exec();
   detail::RespConn* conn_;
   bool live_;

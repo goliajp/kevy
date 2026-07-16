@@ -114,7 +114,7 @@ Reply RespConn::read_one() {
   }
 }
 
-Reply RespConn::request(const std::vector<std::string>& argv) {
+Reply RespConn::request(const std::vector<std::string_view>& argv) {
   if (fd_ < 0) throw ClosedError();
   wbuf_.clear();
   resp::encode_command(wbuf_, argv);
@@ -131,7 +131,7 @@ std::vector<Reply> RespConn::pipeline_raw(const std::string& wire, size_t n) {
   return out;
 }
 
-void RespConn::write(const std::vector<std::string>& argv) {
+void RespConn::write(const std::vector<std::string_view>& argv) {
   if (fd_ < 0) throw ClosedError();
   wbuf_.clear();
   resp::encode_command(wbuf_, argv);
