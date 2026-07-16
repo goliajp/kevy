@@ -128,25 +128,31 @@ export async function runNitroBench(): Promise<string[]> {
       `NITROGATE: kv scalar getData=${sGet} setData=${sSet} ops/s | vs cmd=${x(sGet, cmdGet)}x get / ${x(sSet, cmdSet)}x set`
     );
 
-    // Head-to-head vs MMKV — the same 16 B get/set workload through the kevy
-    // scalar door (getData/setData) and react-native-mmkv, in one app on one
-    // device, so the comparison is real end-to-end (not KevyKit-direct like
-    // mmkvgate). MMKV is optional: if it isn't linked the kevy line still
-    // prints, and this axis reports that instead of crashing the bench.
+    // Head-to-head vs MMKV across value sizes — the SAME get/set workload
+    // through the kevy scalar door (getData/setData) and react-native-mmkv,
+    // in one app on one device (real end-to-end, not KevyKit-direct like
+    // mmkvgate). Larger values shift the cost from fixed per-op marshalling
+    // toward the data copy: kevy reads from an in-memory hashmap + zero-copy
+    // wraps the return, MMKV mmap-reads + protobuf-decodes — so the size
+    // sweep shows whether kevy's engine edge surfaces once the binding layer
+    // is competitive. MMKV is optional: a missing link degrades to a note.
     try {
       // Lazy so a missing/unlinked MMKV degrades to a note, not a bench crash.
       const { MMKV } = require("react-native-mmkv") as typeof import("react-native-mmkv");
       const m = new MMKV({ id: "nitrogate-mmkv" });
-      m.set("k", valAB); // seed so getBuffer hits
-      let mGet = 0, mSet = 0;
-      { const t = Date.now(); for (let i = 0; i < N; i++) m.getBuffer("k"); mGet = ops(N, Date.now() - t); }
-      { const t = Date.now(); for (let i = 0; i < N; i++) m.set("k", valAB); mSet = ops(N, Date.now() - t); }
-      lines.push(
-        `NITROGATE: kv-vs-mmkv 16B GET kevy=${sGet} mmkv=${mGet} ops/s | kevy/mmkv=${x(sGet, mGet)}x`
-      );
-      lines.push(
-        `NITROGATE: kv-vs-mmkv 16B SET kevy=${sSet} mmkv=${mSet} ops/s | kevy/mmkv=${x(sSet, mSet)}x`
-      );
+      for (const size of [16, 256, 4096]) {
+        const vAB = enc.encode("v".repeat(size)).buffer;
+        kv.setData("k", vAB, 0);
+        m.set("k", vAB);
+        let kGet = 0, kSet = 0, mGet = 0, mSet = 0;
+        { const t = Date.now(); for (let i = 0; i < N; i++) kv.getData("k"); kGet = ops(N, Date.now() - t); }
+        { const t = Date.now(); for (let i = 0; i < N; i++) kv.setData("k", vAB, 0); kSet = ops(N, Date.now() - t); }
+        { const t = Date.now(); for (let i = 0; i < N; i++) m.getBuffer("k"); mGet = ops(N, Date.now() - t); }
+        { const t = Date.now(); for (let i = 0; i < N; i++) m.set("k", vAB); mSet = ops(N, Date.now() - t); }
+        lines.push(
+          `NITROGATE: kv-vs-mmkv ${size}B GET kevy=${kGet} mmkv=${mGet} | kevy/mmkv=${x(kGet, mGet)}x  SET kevy=${kSet} mmkv=${mSet} | kevy/mmkv=${x(kSet, mSet)}x`
+        );
+      }
     } catch (e) {
       lines.push(`NITROGATE: kv-vs-mmkv SKIPPED (react-native-mmkv not linked: ${String(e)})`);
     }

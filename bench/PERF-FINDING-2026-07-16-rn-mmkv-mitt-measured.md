@@ -144,3 +144,29 @@ throughout.
   the engine `into_owned` — each ~50–100 ns, diminishing. SET already ties.
 - pub/sub vs mitt is unchanged (mitt's zero-crossing floor is physical; not a
   binding-shape problem).
+
+### Size sweep — where kevy overtakes (measured, 2 stable runs)
+
+With the binding competitive, swept value size to see the engine edge:
+
+| size | GET kevy/mmkv | SET kevy/mmkv |
+|------|--------------:|--------------:|
+| 16 B | 0.9× | ~0.9× |
+| 256 B | 0.9× | **1.1× (kevy wins)** |
+| 4096 B | 0.9× | **1.2–1.4× (kevy wins, lead grows)** |
+
+- **GET stays ~0.9× at every size** — the hypothesis that kevy's in-memory
+  read would overtake MMKV's mmap on large GET was **refuted** (measure rules;
+  both scale similarly, MMKV stays ~10% ahead on GET).
+- **SET crosses over: kevy ties at 16 B and beats MMKV from 256 B up, the
+  lead growing to ~1.4× at 4 KB.** kevy's in-memory store insert scales better
+  than MMKV's mmap-append + periodic full-writeback for larger writes — the
+  same edge the engine-level mmkvgate saw on real hardware, now confirmed
+  **through the Nitro door** for realistic payloads. (The Nitro door opens
+  kevy_open_mem, so this SET is non-durable in-memory vs MMKV's mmap; the
+  durable-SET comparison is the separate AOF-vs-mmap axis.)
+
+**Bottom line after the binding attacks:** for realistic payloads (256 B+)
+kevy's Nitro door **beats MMKV on SET** (up to 1.4× at 4 KB) and trails by a
+steady ~10% on GET — a completely different product from the pre-attack
+"MMKV 1.7–2.3× faster."
