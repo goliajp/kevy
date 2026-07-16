@@ -112,6 +112,13 @@ def _bind_signatures(lib: ctypes.CDLL) -> None:
     lib.kevy_buf_free.argtypes = [_U8P, ctypes.c_size_t, ctypes.c_size_t]
     lib.kevy_get.restype = ctypes.c_int32
     lib.kevy_get.argtypes = [ctypes.c_void_p, _U8P, ctypes.c_size_t, ctypes.POINTER(KevyBuf)]
+    # Zero-copy GET lane: a bulk value returns an Arc clone (no engine copy);
+    # freed with kevy_buf_free_shared (paired). ctypes.string_at makes the one
+    # copy into Python bytes.
+    lib.kevy_get_shared.restype = ctypes.c_int32
+    lib.kevy_get_shared.argtypes = [ctypes.c_void_p, _U8P, ctypes.c_size_t, ctypes.POINTER(KevyBuf)]
+    lib.kevy_buf_free_shared.restype = None
+    lib.kevy_buf_free_shared.argtypes = [_U8P, ctypes.c_size_t, ctypes.c_size_t]
     lib.kevy_set.restype = ctypes.c_int32
     lib.kevy_set.argtypes = [
         ctypes.c_void_p,
@@ -154,6 +161,14 @@ def _take_buf(lib: ctypes.CDLL, out: KevyBuf) -> bytes:
         return b""
     data = ctypes.string_at(out.ptr, out.len)
     lib.kevy_buf_free(out.ptr, out.len, out.cap)
+    return data
+
+
+def _take_buf_shared(lib: ctypes.CDLL, out: KevyBuf) -> bytes:
+    """Like :func:`_take_buf`, but for a buffer from kevy_get_shared — freed
+    via the paired kevy_buf_free_shared (drops the engine Arc)."""
+    data = b"" if out.len == 0 else ctypes.string_at(out.ptr, out.len)
+    lib.kevy_buf_free_shared(out.ptr, out.len, out.cap)
     return data
 
 
@@ -227,13 +242,13 @@ class DB:
             raise IoError("kevy: closed handle")
         kp, kn, owner = _bytes_arg(key)
         out = KevyBuf()
-        rc = self._lib.kevy_get(ctypes.c_void_p(self._p), kp, kn, ctypes.byref(out))
+        rc = self._lib.kevy_get_shared(ctypes.c_void_p(self._p), kp, kn, ctypes.byref(out))
         del owner
         if rc < 0:
-            raise IoError("kevy: kevy_get misuse")
+            raise IoError("kevy: kevy_get_shared misuse")
         if rc == 0:
             return None
-        return _take_buf(self._lib, out)
+        return _take_buf_shared(self._lib, out)
 
     def set(self, key: bytes, value: bytes, ttl_ms: int = 0) -> None:
         """Scalar fast SET (§5.2). ttl_ms == 0 means no TTL."""

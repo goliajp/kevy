@@ -129,16 +129,19 @@ func (d *DB) GetScalar(key []byte) (value []byte, ok bool, err error) {
 	defer pin.Unpin()
 	kp := keyPtr(key, &pin)
 	var out C.KevyBuf
-	rc := C.kevy_get(d.p, kp, C.size_t(len(key)), &out)
+	// Zero-copy shared lane: a bulk value comes back as an Arc clone (no engine
+	// copy); GoBytes makes the one copy into Go-owned memory, then the paired
+	// shared free drops the Arc. Saves the engine's into_owned copy on big GETs.
+	rc := C.kevy_get_shared(d.p, kp, C.size_t(len(key)), &out)
 	runtime.KeepAlive(key)
 	if rc < 0 {
-		return nil, false, errors.New("kevy: kevy_get misuse")
+		return nil, false, errors.New("kevy: kevy_get_shared misuse")
 	}
 	if rc == 0 {
 		return nil, false, nil
 	}
 	v := C.GoBytes(unsafe.Pointer(out.ptr), C.int(out.len))
-	C.kevy_buf_free(out.ptr, out.len, out.cap)
+	C.kevy_buf_free_shared(out.ptr, out.len, out.cap)
 	return v, true, nil
 }
 
