@@ -24,6 +24,48 @@ fn take(buf: KevyBuf) -> Vec<u8> {
     v
 }
 
+/// Copy the bytes out then free via the SHARED lane (drops the engine Arc).
+fn take_shared(buf: KevyBuf) -> Vec<u8> {
+    let v = if buf.ptr.is_null() {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) }.to_vec()
+    };
+    unsafe { kevy_buf_free_shared(buf.ptr, buf.len, buf.cap) };
+    v
+}
+
+#[test]
+fn shared_get_zero_copy_small_and_bulk_and_plain_lane_unchanged() {
+    let db = kevy_open_mem();
+    let small = b"tiny"; // inline Value::Str
+    let big = vec![0x61u8; 4096]; // > 64 B → Value::ArcBulk (the zero-copy path)
+    unsafe {
+        assert_eq!(kevy_set(db, b"s".as_ptr(), 1, small.as_ptr(), small.len(), 0), 0);
+        assert_eq!(kevy_set(db, b"b".as_ptr(), 1, big.as_ptr(), big.len(), 0), 0);
+    }
+    // Shared GET returns the exact bytes for both encodings.
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_get_shared(db, b"s".as_ptr(), 1, &raw mut out) }, 1);
+    assert_eq!(take_shared(out), small);
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_get_shared(db, b"b".as_ptr(), 1, &raw mut out) }, 1);
+    assert_eq!(take_shared(out), big);
+    // Miss.
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_get_shared(db, b"absent".as_ptr(), 6, &raw mut out) }, 0);
+    // The bulk value is STILL intact after the shared buffer was freed — the Arc
+    // was dropped exactly once, the store's own clone lives on (no UAF/double-free).
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_get(db, b"b".as_ptr(), 1, &raw mut out) }, 1);
+    assert_eq!(take(out), big); // plain (Vec) lane byte-unchanged
+    // Misuse + null-cap free no-op.
+    let mut out = KevyBuf::empty();
+    assert!(unsafe { kevy_get_shared(std::ptr::null_mut(), b"s".as_ptr(), 1, &raw mut out) } < 0);
+    unsafe { kevy_buf_free_shared(std::ptr::null_mut(), 0, 0) };
+    unsafe { kevy_close(db) };
+}
+
 #[test]
 fn version_and_abi() {
     assert_eq!(kevy_abi(), KEVY_ABI);

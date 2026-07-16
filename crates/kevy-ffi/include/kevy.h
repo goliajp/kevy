@@ -63,6 +63,17 @@ int32_t kevy_get(KevyDb *db, const uint8_t *key, size_t key_len, KevyBuf *out);
 int32_t kevy_set(KevyDb *db, const uint8_t *key, size_t key_len,
                  const uint8_t *val, size_t val_len, uint64_t ttl_ms);
 
+/* Zero-copy GET: a bulk value comes back as an Arc clone (refcount bump, no
+ * byte copy) whose bytes the returned buffer VIEWS — the analog of MMKV
+ * returning a view of its mmap page. In the out KevyBuf, ptr/len are the value
+ * view; cap is an OPAQUE owner handle. Free ONLY with kevy_buf_free_shared()
+ * (NOT kevy_buf_free). 1 hit / 0 miss / neg misuse. */
+int32_t kevy_get_shared(KevyDb *db, const uint8_t *key, size_t key_len, KevyBuf *out);
+
+/* Free a KevyBuf from kevy_get_shared() (drops the engine Arc). ptr/len are
+ * ignored; cap is the opaque owner handle. Pairs 1:1 with kevy_get_shared. */
+void kevy_buf_free_shared(uint8_t *ptr, size_t len, size_t cap);
+
 /* Free any KevyBuf returned by this library: pass its three fields
  * unchanged. Scalars, not the struct by value — indirect struct passing
  * (AArch64, >16 bytes) is beyond several FFI loaders. Null ptr = no-op. */

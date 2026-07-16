@@ -22,6 +22,17 @@ static std::shared_ptr<ArrayBuffer> takeBuf(KevyBuf& buf) {
   });
 }
 
+// Same wrap, but for a buffer from the ZERO-COPY shared GET lane
+// (kevy_get_shared): a bulk value's bytes are the engine's Arc, not a copy —
+// the wrap holds it and drops the Arc via kevy_buf_free_shared at GC (cap is
+// the opaque Arc owner handle). This is why big GET no longer memcpys N bytes.
+static std::shared_ptr<ArrayBuffer> takeBufShared(KevyBuf& buf) {
+  KevyBuf owned = buf;
+  return ArrayBuffer::wrap(owned.ptr, owned.len, [owned]() {
+    kevy_buf_free_shared(owned.ptr, owned.len, owned.cap);
+  });
+}
+
 std::shared_ptr<ArrayBuffer>
 HybridKevyNitro::cmd(const std::shared_ptr<ArrayBuffer>& argv) {
   // The packed form: u32-LE length prefix per arg, then the bytes. Parse
@@ -55,18 +66,19 @@ HybridKevyNitro::cmd(const std::shared_ptr<ArrayBuffer>& argv) {
 //
 // kevy_get / kevy_set directly: no argv, no RESP framing. The key/value come
 // in as ArrayBuffers (borrowed for the synchronous call), the value goes out
-// as one ArrayBuffer (the single unavoidable copy — engine owns its Vec, JS
-// owns the buffer). setData frames no reply at all.
+// as one ArrayBuffer. getData uses the ZERO-COPY shared lane: a bulk value
+// (>64 B) crosses as an Arc clone the JS buffer views directly — no byte copy,
+// the analog of MMKV's mmap-page view. setData frames no reply at all.
 
 std::optional<std::shared_ptr<ArrayBuffer>>
 HybridKevyNitro::getData(const std::string& key) {
   KevyBuf out{};
   const auto* kp = reinterpret_cast<const uint8_t*>(key.data());
-  int32_t rc = kevy_get(_db, kp, key.size(), &out);
+  int32_t rc = kevy_get_shared(_db, kp, key.size(), &out);
   if (rc != 1) {
     return std::nullopt; // 0 = miss, <0 = misuse — nothing to free
   }
-  return takeBuf(out);
+  return takeBufShared(out);
 }
 
 void HybridKevyNitro::setData(const std::string& key,
