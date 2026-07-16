@@ -21,7 +21,7 @@ pub unsafe extern "C" fn kevy_set(h: u32, kp: *const u8, kl: u32, vp: *const u8,
             inst.log_frame(&[b"SET", key, value]);
             OK
         }
-        Err(e) => inst.fail(e),
+        Err(e) => inst.fail_kevy(&e),
     })
 }
 
@@ -52,7 +52,7 @@ pub unsafe extern "C" fn kevy_set_ttl(
                 inst.log_frame(&[b"PEXPIREAT", key, deadline.to_string().as_bytes()]);
                 OK
             }
-            Err(e) => inst.fail(e),
+            Err(e) => inst.fail_kevy(&e),
         }
     })
 }
@@ -78,7 +78,7 @@ pub unsafe extern "C" fn kevy_get(h: u32, kp: *const u8, kl: u32) -> i32 {
             1
         }
         Ok(None) => 0,
-        Err(e) => inst.fail(e),
+        Err(e) => inst.fail_kevy(&e),
     })
 }
 
@@ -98,7 +98,7 @@ pub unsafe extern "C" fn kevy_del(h: u32, kp: *const u8, kl: u32) -> i32 {
             }
             n as i32
         }
-        Err(e) => inst.fail(e),
+        Err(e) => inst.fail_kevy(&e),
     })
 }
 
@@ -113,7 +113,7 @@ pub unsafe extern "C" fn kevy_exists(h: u32, kp: *const u8, kl: u32) -> i32 {
     let key = unsafe { arg(kp, kl) };
     with(h, BAD_HANDLE, |inst| match inst.store.exists(&[key]) {
         Ok(n) => n as i32,
-        Err(e) => inst.fail(e),
+        Err(e) => inst.fail_kevy(&e),
     })
 }
 
@@ -136,7 +136,7 @@ pub unsafe extern "C" fn kevy_expire(h: u32, kp: *const u8, kl: u32, ttl_ms: f64
                 1
             }
             Ok(false) => 0,
-            Err(e) => inst.fail(e),
+            Err(e) => inst.fail_kevy(&e),
         }
     })
 }
@@ -156,7 +156,7 @@ pub unsafe extern "C" fn kevy_persist(h: u32, kp: *const u8, kl: u32) -> i32 {
             1
         }
         Ok(false) => 0,
-        Err(e) => inst.fail(e),
+        Err(e) => inst.fail_kevy(&e),
     })
 }
 
@@ -191,7 +191,7 @@ pub unsafe extern "C" fn kevy_incrby(h: u32, kp: *const u8, kl: u32, delta: f64)
             inst.put_out(n.to_string().as_bytes());
             OK
         }
-        Err(e) => inst.fail(e),
+        Err(e) => inst.fail_kevy(&e),
     })
 }
 
@@ -209,7 +209,7 @@ pub extern "C" fn kevy_flushall(h: u32) -> i32 {
             inst.log_frame(&[b"FLUSHALL"]);
             OK
         }
-        Err(e) => inst.fail(e),
+        Err(e) => inst.fail_kevy(&e),
     })
 }
 
@@ -282,7 +282,7 @@ pub unsafe extern "C" fn kevy_mget(h: u32, kp: *const u8, kl: u32, count: u32) -
                 }
                 // The miss sentinel: no value bytes follow.
                 Ok(None) => inst.out.extend_from_slice(&u32::MAX.to_le_bytes()),
-                Err(e) => return inst.fail(e),
+                Err(e) => return inst.fail_kevy(&e),
             }
         }
         count as i32

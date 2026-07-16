@@ -3,6 +3,7 @@
 //! (on native we pass Rust slices' pointers straight through).
 
 use crate::abi_aof::{kevy_aof_dump, kevy_aof_frame_in, kevy_aof_frames_out};
+use crate::abi_cmd::kevy_cmd;
 use crate::abi_core::{
     OPEN_CAPTURE_AOF, kevy_abi_version, kevy_alloc, kevy_close, kevy_free, kevy_open,
     kevy_out_len, kevy_out_ptr, kevy_tick,
@@ -249,6 +250,100 @@ fn aof_dump_compacts_and_replays() {
     assert_eq!(kevy_dbsize(r) as u64, 50);
     assert_eq!(get(r, b"k7"), (1, b"final".to_vec()));
     kevy_close(r);
+}
+
+/// Pack argv the way the JS loader does: each arg as a u32-LE length
+/// prefix followed by its bytes, back to back.
+fn pack_argv(parts: &[&[u8]]) -> Vec<u8> {
+    let mut buf = Vec::new();
+    for p in parts {
+        buf.extend_from_slice(&(p.len() as u32).to_le_bytes());
+        buf.extend_from_slice(p);
+    }
+    buf
+}
+
+/// Run one command through the raw channel; returns (status, reply bytes).
+fn cmd(h: u32, parts: &[&[u8]]) -> (i32, Vec<u8>) {
+    let packed = pack_argv(parts);
+    let s = unsafe { kevy_cmd(h, packed.as_ptr(), packed.len() as u32) };
+    (s, out(h))
+}
+
+#[test]
+fn cmd_universal_path_reaches_the_compiled_surface() {
+    let h = kevy_open(0);
+    // String round-trip through the raw channel: SET replies +OK, GET the bulk.
+    let (s, reply) = cmd(h, &[b"SET", b"k", b"v"]);
+    assert!(s >= 0);
+    assert_eq!(reply, b"+OK\r\n");
+    let (s, reply) = cmd(h, &[b"GET", b"k"]);
+    assert!(s >= 0);
+    assert_eq!(reply, b"$1\r\nv\r\n");
+
+    // An arbitrary non-KV verb the typed surface does not wrap: LPUSH/LLEN
+    // — proving the path bottoms out in the full dispatcher, per the
+    // conformance checklist ("cmd(argv) runs an arbitrary verb").
+    let (s, reply) = cmd(h, &[b"LPUSH", b"l", b"x"]);
+    assert!(s >= 0);
+    assert_eq!(reply, b":1\r\n");
+    let (s, reply) = cmd(h, &[b"LLEN", b"l"]);
+    assert!(s >= 0);
+    assert_eq!(reply, b":1\r\n");
+
+    // A verb-level error is a *successful* call with a RESP error frame.
+    let (s, reply) = cmd(h, &[b"GET", b"l"]);
+    assert!(s >= 0, "verb error is not an ABI-misuse status");
+    assert_eq!(
+        reply,
+        b"-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"
+    );
+
+    // Index/replication verbs are not compiled into the wasm closure: an
+    // unknown-command RESP error is the correct, expected answer.
+    let (s, reply) = cmd(h, &[b"IDX.CREATE", b"i"]);
+    assert!(s >= 0);
+    assert!(
+        reply.starts_with(b"-ERR unknown command"),
+        "uncompiled verb should be an unknown-command error, got {:?}",
+        String::from_utf8_lossy(&reply)
+    );
+
+    kevy_close(h);
+}
+
+#[test]
+fn cmd_rejects_malformed_and_bad_handle() {
+    let h = kevy_open(0);
+    // Empty packed argv is caller misuse (-1), not a protocol error.
+    let s = unsafe { kevy_cmd(h, std::ptr::null(), 0) };
+    assert_eq!(s, ERR);
+    assert!(!out(h).is_empty());
+    kevy_close(h);
+    // Bad handle after close.
+    let packed = pack_argv(&[b"PING"]);
+    assert_eq!(
+        unsafe { kevy_cmd(h, packed.as_ptr(), packed.len() as u32) },
+        BAD_HANDLE
+    );
+}
+
+#[test]
+fn wrong_type_get_surfaces_canonical_message() {
+    let h = kevy_open(0);
+    // Make `l` a list via the raw channel, then a typed GET must reject it
+    // with the Redis-canonical WRONGTYPE wording — NOT the internal
+    // `store error: WrongType` Debug spelling that used to leak to JS.
+    assert!(cmd(h, &[b"RPUSH", b"l", b"a"]).0 >= 0);
+    let (status, msg) = get(h, b"l");
+    assert_eq!(status, ERR);
+    let text = String::from_utf8(msg).unwrap();
+    assert_eq!(
+        text,
+        "WRONGTYPE Operation against a key holding the wrong kind of value"
+    );
+    assert!(!text.contains("store error"), "internal Debug spelling leaked: {text}");
+    kevy_close(h);
 }
 
 #[test]
