@@ -5,9 +5,12 @@
 // passing argv as an ArrayBuffer by reference. This bench times identical
 // cmd round-trips through both doors so the delta is purely the crossing.
 import mitt from "mitt";
+import { documentDirectory, deleteAsync } from "expo-file-system/legacy";
 import { open } from "expo-kevy";
 import {
+  createKevyBus,
   createKevyNitro,
+  createKevyNitroAt,
   unpackFrames,
   type KevyNitro,
 } from "react-native-kevy-nitro";
@@ -52,6 +55,18 @@ export async function runNitroBench(): Promise<string[]> {
   const abi = nitro.abi();
   const pong = dec.decode(new Uint8Array(nitro.cmd(packAB(["PING"]))));
   lines.push(`NITROGATE:SMOKE abi=${abi} ping=${JSON.stringify(pong)}`);
+
+  // Scheduler warmup: ~300 ms of the cheapest crossing BEFORE any timing, so
+  // big-core promotion happens outside the measured windows. Measured on a
+  // Samsung S22: cold runs sit on little cores at 1/5-1/6 the throughput of a
+  // promoted run — every axis below moves together with placement, so warm up
+  // once here rather than skew the first-timed axis.
+  {
+    const t0 = Date.now();
+    while (Date.now() - t0 < 300) {
+      for (let i = 0; i < 1_000; i++) nitro.abi();
+    }
+  }
 
   // Pure-JSI crossing ceiling: abi() does nothing but cross and return a
   // number — the floor cost of a Nitro call, no engine work.
@@ -140,17 +155,30 @@ export async function runNitroBench(): Promise<string[]> {
       // Lazy so a missing/unlinked MMKV degrades to a note, not a bench crash.
       const { MMKV } = require("react-native-mmkv") as typeof import("react-native-mmkv");
       const m = new MMKV({ id: "nitrogate-mmkv" });
+      // Durable kevy handle for the SET axis MMKV is implicitly playing on:
+      // MMKV's mmap file IS its durability; the in-memory kv above is not a
+      // fair opponent for writes. dir-open = AOF + appendfsync everysec —
+      // buffered append, background fsync ≤1 s: comparable-to-stricter
+      // durability vs MMKV's OS-writeback pages (bench/mmkvgate/LEDGER.md).
+      // Fresh dir each run: no replay tax on open, no cross-run growth.
+      const kvdDir = `${documentDirectory}kevy-nitrogate`;
+      await deleteAsync(kvdDir, { idempotent: true }).catch(() => undefined);
+      const kvd = createKevyNitroAt(kvdDir.replace(/^file:\/\//, ""));
       for (const size of [16, 256, 4096]) {
         const vAB = enc.encode("v".repeat(size)).buffer;
         kv.setData("k", vAB, 0);
         m.set("k", vAB);
-        let kGet = 0, kSet = 0, mGet = 0, mSet = 0;
+        let kGet = 0, kSet = 0, dSet = 0, mGet = 0, mSet = 0;
         { const t = Date.now(); for (let i = 0; i < N; i++) kv.getData("k"); kGet = ops(N, Date.now() - t); }
         { const t = Date.now(); for (let i = 0; i < N; i++) kv.setData("k", vAB, 0); kSet = ops(N, Date.now() - t); }
+        { const t = Date.now(); for (let i = 0; i < N; i++) kvd.setData("k", vAB, 0); dSet = ops(N, Date.now() - t); }
         { const t = Date.now(); for (let i = 0; i < N; i++) m.getBuffer("k"); mGet = ops(N, Date.now() - t); }
         { const t = Date.now(); for (let i = 0; i < N; i++) m.set("k", vAB); mSet = ops(N, Date.now() - t); }
         lines.push(
           `NITROGATE: kv-vs-mmkv ${size}B GET kevy=${kGet} mmkv=${mGet} | kevy/mmkv=${x(kGet, mGet)}x  SET kevy=${kSet} mmkv=${mSet} | kevy/mmkv=${x(kSet, mSet)}x`
+        );
+        lines.push(
+          `NITROGATE: kv-vs-mmkv-durable ${size}B SET kevy=${dSet} mmkv=${mSet} | kevy/mmkv=${x(dSet, mSet)}x (kevy AOF everysec vs mmkv mmap)`
         );
       }
     } catch (e) {
@@ -234,11 +262,43 @@ export async function runNitroBench(): Promise<string[]> {
     n4.stopPush();
   }
 
+  // bare publish floor — no subscribers anywhere, no bus machinery: the
+  // native publish leg alone (raw JSI dispatch + kevy_publish on an empty
+  // bus). bus-vs-this splits the hybrid lane's cost into native vs JS parts.
+  let pubFloorOps = 0;
+  {
+    const n6 = createKevyNitro();
+    const t = Date.now();
+    for (let i = 0; i < M; i++) n6.publish("ev", msg);
+    pubFloorOps = ops(M, Date.now() - t);
+  }
+
+  // bus (hybrid) — the TS local-fanout lane: subscribers dispatch in JS
+  // (mitt's physical position), each publish still crosses once to the
+  // engine bus (raw-lane consumers + receiver count). The delivery leg pays
+  // zero crossings; the publish leg pays exactly one.
+  let busOps = 0;
+  let busCount = 0;
+  {
+    const n5 = createKevyNitro();
+    const bus = createKevyBus(n5);
+    let recv = 0;
+    bus.subscribe("ev", () => {
+      recv++;
+    });
+    const t = Date.now();
+    for (let i = 0; i < M; i++) busCount = bus.publish("ev", msg);
+    // The M dispatch microtasks queued ahead of this continuation all run
+    // before the await resumes — recv is final here.
+    await Promise.resolve();
+    busOps = ops(recv, Date.now() - t);
+  }
+
   lines.push(
-    `NITROGATE: pubsub 16B mitt=${mittOps} | poll=${pollOps} | push=${pushOps} | pushBatched=${batchedOps} ops/s`
+    `NITROGATE: pubsub 16B mitt=${mittOps} | bus=${busOps} | pubFloor=${pubFloorOps} | poll=${pollOps} | push=${pushOps} | pushBatched=${batchedOps} ops/s`
   );
   lines.push(
-    `NITROGATE: pubsub push/poll=${x(pushOps, pollOps)}x | pushBatched/poll=${x(batchedOps, pollOps)}x | mitt/pushBatched=${x(mittOps, batchedOps)}x`
+    `NITROGATE: pubsub push/poll=${x(pushOps, pollOps)}x | pushBatched/poll=${x(batchedOps, pollOps)}x | mitt/pushBatched=${x(mittOps, batchedOps)}x | mitt/bus=${x(mittOps, busOps)}x (bus count=${busCount})`
   );
   lines.push(
     `NITROGATE: pubsub detail push(${pushRecv}/${M}) batched(${batchedRecv}/${M} in ${hops} hops, avg ${Math.round(batchedRecv / Math.max(1, hops))}/hop)`
