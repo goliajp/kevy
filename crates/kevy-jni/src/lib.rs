@@ -24,7 +24,7 @@ use std::ptr::null_mut;
 use kevy_ffi::{KevyBuf, KevyDb, KevySub, unpack_argv};
 
 mod env;
-use env::{JBoolean, JInt, JLong, JObject, JniEnv, get_byte_array, new_byte_array};
+use env::{JBoolean, JInt, JLong, JObject, JniEnv, get_byte_array, new_byte_array, throw};
 
 /// Rebuild a store pointer from the opaque handle Java carries.
 fn db_ptr(handle: JLong) -> *mut KevyDb {
@@ -167,6 +167,13 @@ pub unsafe extern "system" fn jni_cmd(
 /// saves the malloc+memcpy that the plain [`kevy_ffi::kevy_get`] lane spends
 /// cloning the value into a fresh `Vec` before handing it out.
 ///
+/// The shared lane collapses a store error (GET on a non-string key — its only
+/// error is `WrongType`) into `-2`, which `null` alone can't distinguish from a
+/// miss (`0`). So on that error this throws a `jp.golia.kevy.ScalarGetSignal`,
+/// telling the Java side to re-run the framed GET, which surfaces the proper
+/// typed WRONGTYPE store exception (matching the remote backend). A miss stays
+/// `null` — no framing cost on the common absent-key path.
+///
 /// # Safety
 /// Called by the JVM only, same contract as [`jni_cmd`].
 #[unsafe(export_name = "Java_jp_golia_kevy_KevyNative_get")]
@@ -183,7 +190,23 @@ pub unsafe extern "system" fn jni_get(
         let k = unsafe { get_byte_array(env, key) };
         let mut out = empty_buf();
         let rc = unsafe { kevy_ffi::kevy_get_shared(db_ptr(db), k.as_ptr(), k.len(), &mut out) };
-        if rc == 1 { unsafe { take_buf_shared(env, out) } } else { null_mut() }
+        match rc {
+            1 => unsafe { take_buf_shared(env, out) },
+            0 => null_mut(),
+            // Store error (WrongType): `out` is the empty sentinel on a
+            // non-hit, so there is no buffer to free — just signal the
+            // framed-GET fallback and return.
+            _ => {
+                unsafe {
+                    throw(
+                        env,
+                        c"jp/golia/kevy/ScalarGetSignal",
+                        c"kevy scalar GET hit a store error; use the framed path",
+                    );
+                }
+                null_mut()
+            }
+        }
     }))
     .unwrap_or(null_mut())
 }

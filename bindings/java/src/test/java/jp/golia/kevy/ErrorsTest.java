@@ -28,6 +28,20 @@ class ErrorsTest {
 
     @ParameterizedTest(name = "{0}")
     @MethodSource("backends")
+    void getOnWrongTypeIsStructured(Supplier<KevyClient> f) {
+        // GET on a list key: the embedded scalar lane must NOT swallow the
+        // WRONGTYPE into Optional.empty() — it has to surface the same typed
+        // StoreException the remote (framed GET) backend throws.
+        try (KevyClient c = f.get()) {
+            c.lpush("mylist", "a");
+            KevyException e = assertThrows(KevyException.class, () -> c.get("mylist"));
+            assertEquals(ErrorKind.STORE, e.kind());
+            assertEquals(StoreError.WRONG_TYPE, e.storeError());
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("backends")
     void incrOnNonNumberIsNotInteger(Supplier<KevyClient> f) {
         try (KevyClient c = f.get()) {
             c.set("k", "abc");

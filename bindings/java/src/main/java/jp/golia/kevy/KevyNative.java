@@ -35,7 +35,12 @@ public final class KevyNative {
      */
     public static native byte[] cmd(long db, byte[] packedArgv);
 
-    /** Scalar fast-path GET: raw value bytes, or null on a miss. */
+    /**
+     * Scalar fast-path GET: raw value bytes, or null on a miss. A store error
+     * (GET on a non-string key, i.e. WRONGTYPE) is thrown as a
+     * {@link ScalarGetSignal} — the lane can't fold a typed error into a
+     * byte[], so {@link EmbeddedBackend} catches it and re-runs the framed GET.
+     */
     public static native byte[] get(long db, byte[] key);
 
     /** Scalar fast-path SET, ttlMs 0 = no expiry; 0 = ok, negative = misuse. */
