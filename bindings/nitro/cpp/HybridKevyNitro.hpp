@@ -46,6 +46,12 @@ public:
     stopPushInternal();
   }
 
+  // Registers getData/setData as RAW JSI methods (no typed-converter layer —
+  // the converters' per-call NativeState attach + JSICache registration are
+  // 40-90% of a small op's time; MMKV's hand-written HostObject shape). The
+  // other nine methods register typed, exactly as the generated spec would.
+  void loadHybridMethods() override;
+
   double abi() override;
   std::shared_ptr<ArrayBuffer> cmd(const std::shared_ptr<ArrayBuffer>& argv) override;
 
@@ -57,7 +63,7 @@ public:
   bool openAt(const std::string& dir) override;
 
   void subscribe(const std::string& channel) override;
-  void publish(const std::string& channel, const std::shared_ptr<ArrayBuffer>& payload) override;
+  double publish(const std::string& channel, const std::shared_ptr<ArrayBuffer>& payload) override;
   std::optional<std::shared_ptr<ArrayBuffer>> subNext() override;
 
   void subscribePush(
@@ -79,6 +85,20 @@ private:
   // surface the -WRONGTYPE reply as a typed JS exception instead of a phantom
   // miss. Isomorphic to the C++ door's get_framed_fallback.
   std::optional<std::shared_ptr<ArrayBuffer>> getDataFramed(const std::string& key);
+
+  // The raw JSI bodies behind loadHybridMethods' registerRawHybridMethod:
+  // hand-rolled arg/return handling (jsi::JSError on the JS boundary, typed
+  // std::exception → JSError like Nitro's typed path, so WRONGTYPE keeps
+  // surfacing as the same typed error).
+  facebook::jsi::Value getDataRaw(facebook::jsi::Runtime& runtime,
+                                  const facebook::jsi::Value& thisValue,
+                                  const facebook::jsi::Value* args, size_t count);
+  facebook::jsi::Value setDataRaw(facebook::jsi::Runtime& runtime,
+                                  const facebook::jsi::Value& thisValue,
+                                  const facebook::jsi::Value* args, size_t count);
+  facebook::jsi::Value publishRaw(facebook::jsi::Runtime& runtime,
+                                  const facebook::jsi::Value& thisValue,
+                                  const facebook::jsi::Value* args, size_t count);
 
   // Spawn the single push-poller thread: subscribe, mark the run flag, and
   // loop `drain(sub)` (one kernel-park wait cycle per call) until stopPush.

@@ -46,8 +46,11 @@ export interface KevyNitro
 
   // Poll-model pub/sub (bonus), mirroring kevy-ffi's polled sub. One
   // subscription per object; subNext drains one RESP frame or undefined.
+  // publish returns the engine's receiver count (the `:N` PUBLISH reply —
+  // Redis semantics), so callers and the TS local-fanout lane can report a
+  // combined delivery count.
   subscribe(channel: string): void
-  publish(channel: string, payload: ArrayBuffer): void
+  publish(channel: string, payload: ArrayBuffer): number
   subNext(): ArrayBuffer | undefined
 
   // Push-model pub/sub. A dedicated NATIVE poller thread blocks in

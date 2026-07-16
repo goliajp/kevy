@@ -1,5 +1,7 @@
 #include "HybridKevyNitro.hpp"
 
+#include <jsi/jsi.h>
+
 #include <cstdint>
 #include <pthread.h>
 #include <stdexcept>
@@ -9,7 +11,39 @@
 
 namespace margelo::nitro::kevy {
 
+namespace jsi = facebook::jsi;
+
 double HybridKevyNitro::abi() { return static_cast<double>(kevy_abi()); }
+
+// ── prototype wiring ─────────────────────────────────────────────────────
+//
+// Replaces (does NOT chain) the generated HybridKevyNitroSpec registration:
+// the two hot KV methods register as RAW JSI functions, skipping the typed
+// converter layer whose per-call costs (a doomed dynamic_pointer_cast, a
+// MutableBufferNativeState alloc + setNativeState on every returned buffer,
+// and a JSICache row + two allocs per ArrayBuffer argument — the latter also
+// growing unbounded until runtime teardown) are 40-90% of a small op. This is
+// the shape MMKV's hand-written HostObject uses. The other nine methods
+// register typed, byte-for-byte what the spec's loadHybridMethods would do —
+// keep this list in sync with the generated HybridKevyNitroSpec.cpp when the
+// spec gains methods (nitrogen cannot re-add the hot pair behind our back;
+// this override wins at runtime).
+void HybridKevyNitro::loadHybridMethods() {
+  HybridObject::loadHybridMethods();
+  registerHybrids(this, [](Prototype& prototype) {
+    prototype.registerHybridMethod("abi", &HybridKevyNitro::abi);
+    prototype.registerHybridMethod("cmd", &HybridKevyNitro::cmd);
+    prototype.registerRawHybridMethod("getData", 1, &HybridKevyNitro::getDataRaw);
+    prototype.registerRawHybridMethod("setData", 3, &HybridKevyNitro::setDataRaw);
+    prototype.registerHybridMethod("openAt", &HybridKevyNitro::openAt);
+    prototype.registerHybridMethod("subscribe", &HybridKevyNitro::subscribe);
+    prototype.registerRawHybridMethod("publish", 2, &HybridKevyNitro::publishRaw);
+    prototype.registerHybridMethod("subNext", &HybridKevyNitro::subNext);
+    prototype.registerHybridMethod("subscribePush", &HybridKevyNitro::subscribePush);
+    prototype.registerHybridMethod("subscribePushBatched", &HybridKevyNitro::subscribePushBatched);
+    prototype.registerHybridMethod("stopPush", &HybridKevyNitro::stopPush);
+  });
+}
 
 // Hand a kevy-owned KevyBuf to JS with ZERO binding-layer copy: wrap the
 // engine's buffer directly in a JS ArrayBuffer and free it (kevy_buf_free)
@@ -159,6 +193,110 @@ void HybridKevyNitro::setData(const std::string& key,
            static_cast<uint64_t>(ttlMs));
 }
 
+// ── raw JSI lane (the registrations in loadHybridMethods) ────────────────
+
+// A jsi::MutableBuffer view over a shared-lane KevyBuf: JS reads the engine's
+// bytes in place (an Arc for bulk values), and the Arc/Vec drops when the JS
+// ArrayBuffer is GC'd. One allocation total — the same shape as MMKV's
+// MMKVManagedBuffer, minus the typed converter's NativeState attach.
+class KevySharedBuf final : public jsi::MutableBuffer {
+public:
+  explicit KevySharedBuf(KevyBuf buf) : _buf(buf) {}
+  ~KevySharedBuf() override {
+    kevy_buf_free_shared(_buf.ptr, _buf.len, _buf.cap);
+  }
+  uint8_t* data() override { return _buf.ptr; }
+  size_t size() const override { return _buf.len; }
+
+private:
+  KevyBuf _buf;
+};
+
+jsi::Value HybridKevyNitro::getDataRaw(jsi::Runtime& rt, const jsi::Value&,
+                                       const jsi::Value* args, size_t count) {
+  try {
+    if (count < 1) {
+      throw jsi::JSError(rt, "KevyNitro.getData expected (key: string)");
+    }
+    std::string key = args[0].asString(rt).utf8(rt);
+    KevyBuf out{};
+    int32_t rc = kevy_get_shared(
+        _db.get(), reinterpret_cast<const uint8_t*>(key.data()), key.size(),
+        &out);
+    if (rc == 1) { // hit: zero-copy Arc view, one MutableBuffer alloc
+      return jsi::ArrayBuffer(rt, std::make_shared<KevySharedBuf>(out));
+    }
+    if (rc == 0) {
+      return jsi::Value::undefined(); // miss — nothing to free
+    }
+    // rc < 0 = WRONGTYPE: re-issue framed so the typed error surfaces (throws).
+    auto framed = getDataFramed(key);
+    if (!framed.has_value()) {
+      return jsi::Value::undefined();
+    }
+    // Nitro's ArrayBuffer IS a jsi::MutableBuffer — hand it straight over.
+    return jsi::ArrayBuffer(rt, std::move(framed.value()));
+  } catch (const jsi::JSError&) {
+    throw; // already a JS error (incl. the WRONGTYPE message) — pass through
+  } catch (const std::exception& e) {
+    // Same contract as Nitro's typed path: std::exception → typed JSError.
+    throw jsi::JSError(rt, std::string("KevyNitro.getData: ") + e.what());
+  }
+}
+
+jsi::Value HybridKevyNitro::publishRaw(jsi::Runtime& rt, const jsi::Value&,
+                                       const jsi::Value* args, size_t count) {
+  try {
+    if (count < 2) {
+      throw jsi::JSError(
+          rt, "KevyNitro.publish expected (channel: string, payload: ArrayBuffer)");
+    }
+    std::string channel = args[0].asString(rt).utf8(rt);
+    jsi::Object obj = args[1].asObject(rt);
+    if (!obj.isArrayBuffer(rt)) {
+      throw jsi::JSError(rt, "KevyNitro.publish: payload must be an ArrayBuffer");
+    }
+    jsi::ArrayBuffer ab = obj.getArrayBuffer(rt);
+    int64_t receivers = kevy_publish(
+        _db.get(), reinterpret_cast<const uint8_t*>(channel.data()),
+        channel.size(), ab.data(rt), ab.size(rt));
+    return jsi::Value(static_cast<double>(receivers));
+  } catch (const jsi::JSError&) {
+    throw;
+  } catch (const std::exception& e) {
+    throw jsi::JSError(rt, std::string("KevyNitro.publish: ") + e.what());
+  }
+}
+
+jsi::Value HybridKevyNitro::setDataRaw(jsi::Runtime& rt, const jsi::Value&,
+                                       const jsi::Value* args, size_t count) {
+  try {
+    if (count < 2) {
+      throw jsi::JSError(
+          rt, "KevyNitro.setData expected (key: string, value: ArrayBuffer, ttlMs?)");
+    }
+    std::string key = args[0].asString(rt).utf8(rt);
+    jsi::Object obj = args[1].asObject(rt);
+    if (!obj.isArrayBuffer(rt)) {
+      throw jsi::JSError(rt, "KevyNitro.setData: value must be an ArrayBuffer");
+    }
+    jsi::ArrayBuffer ab = obj.getArrayBuffer(rt);
+    uint64_t ttl = 0;
+    if (count > 2 && args[2].isNumber()) {
+      ttl = static_cast<uint64_t>(args[2].asNumber());
+    }
+    // kevy_set copies synchronously — the ArrayBuffer bytes are only borrowed
+    // for the duration of this call, no cache row, no wrapper allocs.
+    kevy_set(_db.get(), reinterpret_cast<const uint8_t*>(key.data()),
+             key.size(), ab.data(rt), ab.size(rt), ttl);
+    return jsi::Value::undefined();
+  } catch (const jsi::JSError&) {
+    throw;
+  } catch (const std::exception& e) {
+    throw jsi::JSError(rt, std::string("KevyNitro.setData: ") + e.what());
+  }
+}
+
 bool HybridKevyNitro::openAt(const std::string& dir) {
   // reset() closes the prior (in-memory ctor) db, then adopts the file-backed
   // one — the deleter runs on the old handle.
@@ -172,16 +310,14 @@ void HybridKevyNitro::subscribe(const std::string& channel) {
       channel.size()));
 }
 
-void HybridKevyNitro::publish(const std::string& channel,
-                              const std::shared_ptr<ArrayBuffer>& payload) {
-  const uint8_t* verb = reinterpret_cast<const uint8_t*>("PUBLISH");
-  const uint8_t* chan = reinterpret_cast<const uint8_t*>(channel.data());
-  const uint8_t* msg = payload->data();
-  const uint8_t* ptrs[3] = {verb, chan, msg};
-  size_t lens[3] = {7, channel.size(), payload->size()};
-  KevyBuf out{};
-  kevy_cmd(_db.get(), 3, ptrs, lens, &out);
-  kevy_buf_free(out.ptr, out.len, out.cap);
+double HybridKevyNitro::publish(const std::string& channel,
+                                const std::shared_ptr<ArrayBuffer>& payload) {
+  // Scalar publish: no argv packing, no RESP ":N" reply to allocate, parse,
+  // and free — kevy_publish returns the receiver count directly (it used to
+  // be dropped on the floor here).
+  return static_cast<double>(
+      kevy_publish(_db.get(), reinterpret_cast<const uint8_t*>(channel.data()),
+                   channel.size(), payload->data(), payload->size()));
 }
 
 std::optional<std::shared_ptr<ArrayBuffer>> HybridKevyNitro::subNext() {

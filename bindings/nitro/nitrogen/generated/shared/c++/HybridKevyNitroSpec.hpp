@@ -57,7 +57,7 @@ namespace margelo::nitro::kevy {
       virtual void setData(const std::string& key, const std::shared_ptr<ArrayBuffer>& value, double ttlMs) = 0;
       virtual bool openAt(const std::string& dir) = 0;
       virtual void subscribe(const std::string& channel) = 0;
-      virtual void publish(const std::string& channel, const std::shared_ptr<ArrayBuffer>& payload) = 0;
+      virtual double publish(const std::string& channel, const std::shared_ptr<ArrayBuffer>& payload) = 0;
       virtual std::optional<std::shared_ptr<ArrayBuffer>> subNext() = 0;
       virtual void subscribePush(const std::string& channel, const std::function<void(const std::shared_ptr<ArrayBuffer>& /* frame */)>& onMessage) = 0;
       virtual void subscribePushBatched(const std::string& channel, const std::function<void(const std::shared_ptr<ArrayBuffer>& /* packed */, double /* count */)>& onBatch) = 0;
