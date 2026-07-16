@@ -29,6 +29,20 @@ function runSmoke(): Line[] {
 
   check("INCRBY", db.incrby("n", 5) === 5, db.incrby("n", 0));
 
+  // WRONGTYPE fidelity: GET on a list key must throw a typed WRONGTYPE, not a
+  // phantom miss. Exercises the scalar -2 → ScalarGetSignal → Kotlin catch →
+  // TS framed-fallback chain end-to-end on device (this quality pass's fix).
+  db.cmd("LPUSH", "lst", "x");
+  let wt = false;
+  let wtGot = "no-throw (phantom miss — stale native?)";
+  try {
+    db.get("lst");
+  } catch (e) {
+    wtGot = String(e);
+    wt = /WRONGTYPE/i.test(wtGot);
+  }
+  check("WRONGTYPE", wt, wtGot);
+
   db.close();
 
   // Durability: reopen the same dir, the key survived the close.
