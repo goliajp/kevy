@@ -69,7 +69,12 @@ pub unsafe extern "C" fn kevy_get(h: u32, kp: *const u8, kl: u32) -> i32 {
     let key = unsafe { arg(kp, kl) };
     with(h, BAD_HANDLE, |inst| match inst.store.get(key) {
         Ok(Some(v)) => {
-            inst.put_out(&v);
+            // `get` already allocated `v`; move it into the result buffer
+            // rather than `put_out(&v)`'s `extend_from_slice` copy. Giving up
+            // the reused `inst.out` allocation is free — it is overwritten on
+            // the next call anyway. `kevy_out_ptr` / `kevy_out_len` read
+            // `inst.out`, so they now view the moved vec.
+            inst.out = v;
             1
         }
         Ok(None) => 0,

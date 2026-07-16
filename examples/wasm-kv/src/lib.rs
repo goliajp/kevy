@@ -1,5 +1,12 @@
 //! kevy-embedded as an in-process KV cache inside WebAssembly.
 //!
+//! **Standalone demo, NOT the shipped binding.** This example uses
+//! `wasm-bindgen` (`KvCache`) purely to illustrate driving kevy-embedded from
+//! JS; it shares no code with the shipped path. The shipped WebAssembly binding
+//! is the hand-written flat `extern "C"` ABI in `crates/kevy-wasm` plus its
+//! dependency-free ES-module loader `crates/kevy-wasm/pkg/kevy.js` — no
+//! `wasm-bindgen` involved.
+//!
 //! "Best within the constraints": a browser / WASI wasm module has **no
 //! threads** and (in the browser) **no filesystem**, so we run kevy-embedded in
 //! its pure in-memory mode (with the manual TTL reaper, since there's no thread
