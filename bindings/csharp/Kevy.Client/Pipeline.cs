@@ -5,12 +5,14 @@
 // batch returns [] without touching the wire; an empty-argv command poisons
 // the batch → InvalidInput at send.
 
+using System.Buffers;
+
 namespace Kevy;
 
 /// <summary>Accumulates commands for <see cref="KevyClient.Pipeline"/>.</summary>
 public sealed class PipelineBuf
 {
-    private readonly List<byte> _buf = new();
+    private readonly ArrayBufferWriter<byte> _buf = new();
     private int _count;
     private bool _poisoned;
 
@@ -19,7 +21,10 @@ public sealed class PipelineBuf
     public PipelineBuf Cmd(params KevyBytes[] parts)
     {
         if (parts.Length == 0) { _poisoned = true; return this; }
-        Resp.EncodeCommand(_buf, parts.Raw());
+        var argv = parts.Raw();
+        var size = Resp.EncodedSize(argv);
+        Resp.EncodeInto(_buf.GetSpan(size), argv);
+        _buf.Advance(size);
         _count++;
         return this;
     }
@@ -31,7 +36,7 @@ public sealed class PipelineBuf
     public bool IsEmpty => _count == 0;
 
     internal bool Poisoned => _poisoned;
-    internal byte[] Wire() => _buf.ToArray();
+    internal byte[] Wire() => _buf.WrittenSpan.ToArray();
 }
 
 public sealed partial class KevyClient

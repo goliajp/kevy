@@ -12,35 +12,35 @@ public sealed partial class KevyClient
     public IReadOnlyList<sbyte> HExpire(KevyBytes key, KevyBytes[] fields, TimeSpan ttl, HExpireCond cond = HExpireCond.Always) =>
         ShapeCodes(Exec(HashTtlArgv("HEXPIRE", key, Argv.I((long)ttl.TotalSeconds), cond, fields)));
     /// <summary>Async HEXPIRE.</summary>
-    public async Task<IReadOnlyList<sbyte>> HExpireAsync(KevyBytes key, KevyBytes[] fields, TimeSpan ttl, HExpireCond cond = HExpireCond.Always, CancellationToken ct = default) =>
+    public async ValueTask<IReadOnlyList<sbyte>> HExpireAsync(KevyBytes key, KevyBytes[] fields, TimeSpan ttl, HExpireCond cond = HExpireCond.Always, CancellationToken ct = default) =>
         ShapeCodes(await ExecAsync(HashTtlArgv("HEXPIRE", key, Argv.I((long)ttl.TotalSeconds), cond, fields), ct));
 
     /// <summary>HPEXPIRE (millisecond precision).</summary>
     public IReadOnlyList<sbyte> HPExpire(KevyBytes key, KevyBytes[] fields, TimeSpan ttl, HExpireCond cond = HExpireCond.Always) =>
         ShapeCodes(Exec(HashTtlArgv("HPEXPIRE", key, Argv.I(Argv.DurationMs(ttl)), cond, fields)));
     /// <summary>Async HPEXPIRE.</summary>
-    public async Task<IReadOnlyList<sbyte>> HPExpireAsync(KevyBytes key, KevyBytes[] fields, TimeSpan ttl, HExpireCond cond = HExpireCond.Always, CancellationToken ct = default) =>
+    public async ValueTask<IReadOnlyList<sbyte>> HPExpireAsync(KevyBytes key, KevyBytes[] fields, TimeSpan ttl, HExpireCond cond = HExpireCond.Always, CancellationToken ct = default) =>
         ShapeCodes(await ExecAsync(HashTtlArgv("HPEXPIRE", key, Argv.I(Argv.DurationMs(ttl)), cond, fields), ct));
 
     /// <summary>HPERSIST — clear per-field TTLs (-2 missing, -1 no TTL, 1 cleared).</summary>
     public IReadOnlyList<sbyte> HPersist(KevyBytes key, params KevyBytes[] fields) =>
         ShapeCodes(Exec(HashTtlArgv("HPERSIST", key, null, HExpireCond.Always, fields)));
     /// <summary>Async HPERSIST.</summary>
-    public async Task<IReadOnlyList<sbyte>> HPersistAsync(KevyBytes key, KevyBytes[] fields, CancellationToken ct = default) =>
+    public async ValueTask<IReadOnlyList<sbyte>> HPersistAsync(KevyBytes key, KevyBytes[] fields, CancellationToken ct = default) =>
         ShapeCodes(await ExecAsync(HashTtlArgv("HPERSIST", key, null, HExpireCond.Always, fields), ct));
 
     /// <summary>HTTL — remaining TTL per field, seconds.</summary>
     public IReadOnlyList<long> HTtl(KevyBytes key, params KevyBytes[] fields) =>
         ShapeInts(Exec(HashTtlArgv("HTTL", key, null, HExpireCond.Always, fields)));
     /// <summary>Async HTTL.</summary>
-    public async Task<IReadOnlyList<long>> HTtlAsync(KevyBytes key, KevyBytes[] fields, CancellationToken ct = default) =>
+    public async ValueTask<IReadOnlyList<long>> HTtlAsync(KevyBytes key, KevyBytes[] fields, CancellationToken ct = default) =>
         ShapeInts(await ExecAsync(HashTtlArgv("HTTL", key, null, HExpireCond.Always, fields), ct));
 
     /// <summary>HPTTL — remaining TTL per field, milliseconds.</summary>
     public IReadOnlyList<long> HPTtl(KevyBytes key, params KevyBytes[] fields) =>
         ShapeInts(Exec(HashTtlArgv("HPTTL", key, null, HExpireCond.Always, fields)));
     /// <summary>Async HPTTL.</summary>
-    public async Task<IReadOnlyList<long>> HPTtlAsync(KevyBytes key, KevyBytes[] fields, CancellationToken ct = default) =>
+    public async ValueTask<IReadOnlyList<long>> HPTtlAsync(KevyBytes key, KevyBytes[] fields, CancellationToken ct = default) =>
         ShapeInts(await ExecAsync(HashTtlArgv("HPTTL", key, null, HExpireCond.Always, fields), ct));
 
     private static byte[][] HashTtlArgv(string verb, KevyBytes key, byte[]? arg, HExpireCond cond, KevyBytes[] fields)

@@ -10,6 +10,7 @@
 //   db.Set("session:7f3a", value, ttlMs: 3_600_000);
 //   db.GetText("session:7f3a");
 
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace Kevy.Embedded;
@@ -17,15 +18,32 @@ namespace Kevy.Embedded;
 /// <summary>The embedded engine. One instance owns its data directory.</summary>
 public sealed unsafe class KevyDb : IDisposable
 {
+    // The C ABI version (kevy-ffi KEVY_ABI) this assembly's P/Invoke
+    // signatures target. Asserted against the loaded cdylib on open.
+    private const uint ExpectedAbi = 1;
+
     private IntPtr _db;
     private readonly List<KevySubscription> _subs = [];
 
     private KevyDb(IntPtr db) => _db = db;
 
+    // Fail fast when the loaded engine speaks a different ABI than these
+    // signatures were compiled against — otherwise a mismatch is silent
+    // memory corruption at the first call.
+    private static void CheckAbi()
+    {
+        var actual = KevyNative.kevy_abi();
+        if (actual != ExpectedAbi)
+            throw new KevyException(
+                $"kevy: ABI mismatch — this client targets kevy_abi {ExpectedAbi}, " +
+                $"the loaded engine reports {actual}; update the kevy native library or the client");
+    }
+
     /// <summary>Open a persistent store rooted at <paramref name="dir"/>,
     /// replaying its log.</summary>
     public static KevyDb Open(string dir)
     {
+        CheckAbi();
         var bytes = Encoding.UTF8.GetBytes(dir);
         IntPtr db;
         fixed (byte* p = bytes)
@@ -38,6 +56,7 @@ public sealed unsafe class KevyDb : IDisposable
     /// <summary>Open a pure in-memory store — nothing survives the process.</summary>
     public static KevyDb OpenInMemory()
     {
+        CheckAbi();
         var db = KevyNative.kevy_open_mem();
         return db == IntPtr.Zero ? throw new KevyException("kevy: open failed") : new KevyDb(db);
     }
@@ -74,17 +93,21 @@ public sealed unsafe class KevyDb : IDisposable
     {
         var db = Live();
         if (argv.Count == 0) throw new KevyException("kevy: empty argv");
-        // Pin every argument for the duration of the call; the engine
-        // copies on its side.
-        var pins = new System.Runtime.InteropServices.GCHandle[argv.Count];
+        // Pin every argument for the duration of the call; the engine copies
+        // on its side. Pin handles live on the stack for the common small
+        // argc, falling back to the heap only for a very wide command so a
+        // hostile/huge argc can't blow the stack.
+        const int StackMax = 128;
+        Span<GCHandle> pins = argv.Count > StackMax
+            ? new GCHandle[argv.Count]
+            : stackalloc GCHandle[argv.Count];
         var ptrs = stackalloc byte*[argv.Count];
         var lens = stackalloc nuint[argv.Count];
         try
         {
             for (var i = 0; i < argv.Count; i++)
             {
-                pins[i] = System.Runtime.InteropServices.GCHandle.Alloc(
-                    argv[i], System.Runtime.InteropServices.GCHandleType.Pinned);
+                pins[i] = GCHandle.Alloc(argv[i], GCHandleType.Pinned);
                 ptrs[i] = (byte*)pins[i].AddrOfPinnedObject();
                 lens[i] = (nuint)argv[i].Length;
             }
@@ -144,7 +167,11 @@ public sealed unsafe class KevyDb : IDisposable
     public void Set(string key, string value, long ttlMs = 0) =>
         Set(key, Encoding.UTF8.GetBytes(value), ttlMs);
 
-    /// <summary>Fetch <paramref name="key"/>'s raw bytes; null on a miss.</summary>
+    /// <summary>Fetch <paramref name="key"/>'s raw bytes; null on a miss. Uses
+    /// the zero-copy shared lane (kevy_get_shared): a bulk value comes back as
+    /// an Arc clone — a refcount bump, no engine-side byte copy — and the one
+    /// managed copy is made by <see cref="KevyNative.TakeBufShared"/>, which
+    /// then drops the Arc via kevy_buf_free_shared.</summary>
     public byte[]? Get(string key)
     {
         var k = Encoding.UTF8.GetBytes(key);
@@ -152,13 +179,13 @@ public sealed unsafe class KevyDb : IDisposable
         KevyBuf @out;
         fixed (byte* kp = k)
         {
-            rc = KevyNative.kevy_get(Live(), kp, (nuint)k.Length, &@out);
+            rc = KevyNative.kevy_get_shared(Live(), kp, (nuint)k.Length, &@out);
         }
         return rc switch
         {
-            1 => KevyNative.TakeBuf(in @out),
+            1 => KevyNative.TakeBufShared(in @out),
             0 => null,
-            _ => throw new KevyException("kevy: kevy_get misuse"),
+            _ => throw new KevyException("kevy: kevy_get_shared misuse"),
         };
     }
 

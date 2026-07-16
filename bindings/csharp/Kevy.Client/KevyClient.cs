@@ -82,10 +82,13 @@ public sealed partial class KevyClient : IDisposable
         throw new KevyClosedException();
     }
 
-    private async Task<Reply> ExecAsync(byte[][] argv, CancellationToken ct)
+    // Returns a ValueTask so the embedded backend — which completes
+    // synchronously (in-process mutex, §1.4) — allocates neither a Task nor an
+    // async state machine; the remote path wraps its socket Task once.
+    private ValueTask<Reply> ExecAsync(byte[][] argv, CancellationToken ct)
     {
-        if (_emb is not null) return EmbExec(argv);
-        if (_remote is not null) return await _remote.RequestAsync(argv, ct).ConfigureAwait(false);
+        if (_emb is not null) return new ValueTask<Reply>(EmbExec(argv));
+        if (_remote is not null) return new ValueTask<Reply>(_remote.RequestAsync(argv, ct));
         throw new KevyClosedException();
     }
 
@@ -111,7 +114,7 @@ public sealed partial class KevyClient : IDisposable
     }
 
     /// <summary>The async twin of <see cref="Do"/>.</summary>
-    public Task<Reply> DoAsync(KevyBytes[] argv, CancellationToken ct = default)
+    public ValueTask<Reply> DoAsync(KevyBytes[] argv, CancellationToken ct = default)
     {
         if (argv.Length == 0) throw new KevyInvalidInputException("Do needs at least a verb");
         return ExecAsync(argv.Raw(), ct);
@@ -188,17 +191,17 @@ public sealed partial class KevyClient : IDisposable
     // --- adapters: sync + async over the shapers ---------------------------
 
     private long ExecInt(byte[][] a) => ShapeInt(Exec(a));
-    private async Task<long> ExecIntAsync(byte[][] a, CancellationToken ct) => ShapeInt(await ExecAsync(a, ct));
+    private async ValueTask<long> ExecIntAsync(byte[][] a, CancellationToken ct) => ShapeInt(await ExecAsync(a, ct));
     private long ExecCount(byte[][] a) => ShapeCount(Exec(a));
-    private async Task<long> ExecCountAsync(byte[][] a, CancellationToken ct) => ShapeCount(await ExecAsync(a, ct));
+    private async ValueTask<long> ExecCountAsync(byte[][] a, CancellationToken ct) => ShapeCount(await ExecAsync(a, ct));
     private bool ExecBool(byte[][] a) => ShapeBool(Exec(a));
-    private async Task<bool> ExecBoolAsync(byte[][] a, CancellationToken ct) => ShapeBool(await ExecAsync(a, ct));
+    private async ValueTask<bool> ExecBoolAsync(byte[][] a, CancellationToken ct) => ShapeBool(await ExecAsync(a, ct));
     private void ExecOk(byte[][] a) => ShapeOk(Exec(a));
-    private async Task ExecOkAsync(byte[][] a, CancellationToken ct) => ShapeOk(await ExecAsync(a, ct));
+    private async ValueTask ExecOkAsync(byte[][] a, CancellationToken ct) => ShapeOk(await ExecAsync(a, ct));
     private byte[]? ExecOptBulk(byte[][] a) => ShapeOptBulk(Exec(a));
-    private async Task<byte[]?> ExecOptBulkAsync(byte[][] a, CancellationToken ct) => ShapeOptBulk(await ExecAsync(a, ct));
+    private async ValueTask<byte[]?> ExecOptBulkAsync(byte[][] a, CancellationToken ct) => ShapeOptBulk(await ExecAsync(a, ct));
     private List<byte[]> ExecByteList(byte[][] a) => ShapeByteList(Exec(a));
-    private async Task<List<byte[]>> ExecByteListAsync(byte[][] a, CancellationToken ct) => ShapeByteList(await ExecAsync(a, ct));
+    private async ValueTask<List<byte[]>> ExecByteListAsync(byte[][] a, CancellationToken ct) => ShapeByteList(await ExecAsync(a, ct));
 
     internal static double ScoreOf(Reply r) => r.Kind switch
     {

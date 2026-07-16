@@ -6,7 +6,8 @@
 // reaches the wire. Argv holds the small encoders (verb / int / float →
 // bytes) shared across the command families.
 
-using System.Globalization;
+using System.Buffers;
+using System.Buffers.Text;
 using System.Text;
 
 namespace Kevy;
@@ -32,12 +33,29 @@ internal static class Argv
 {
     internal static byte[] S(string s) => Encoding.ASCII.GetBytes(s);
 
-    internal static byte[] I(long n) => Encoding.ASCII.GetBytes(n.ToString(CultureInfo.InvariantCulture));
+    // Integer / float args format straight into a stack buffer (Utf8Formatter
+    // is culture-invariant) — no interim string, one byte[] copy for the wire.
+    internal static byte[] I(long n)
+    {
+        Span<byte> buf = stackalloc byte[20]; // long.MinValue = 20 chars incl. sign
+        Utf8Formatter.TryFormat(n, buf, out var written);
+        return buf[..written].ToArray();
+    }
 
-    internal static byte[] U(ulong n) => Encoding.ASCII.GetBytes(n.ToString(CultureInfo.InvariantCulture));
+    internal static byte[] U(ulong n)
+    {
+        Span<byte> buf = stackalloc byte[20]; // ulong.MaxValue = 20 digits
+        Utf8Formatter.TryFormat(n, buf, out var written);
+        return buf[..written].ToArray();
+    }
 
-    // Shortest round-trippable form, matching the Rust/Go 'g' formatting.
-    internal static byte[] F(double f) => Encoding.ASCII.GetBytes(f.ToString("R", CultureInfo.InvariantCulture));
+    // Shortest round-trippable form ('R'), matching the Rust/Go 'g' formatting.
+    internal static byte[] F(double f)
+    {
+        Span<byte> buf = stackalloc byte[32];
+        Utf8Formatter.TryFormat(f, buf, out var written, new StandardFormat('R'));
+        return buf[..written].ToArray();
+    }
 
     internal static byte[][] Raw(this KevyBytes[] xs)
     {

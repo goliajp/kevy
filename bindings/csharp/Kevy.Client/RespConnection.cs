@@ -5,6 +5,7 @@
 // (SendAsync/ReceiveAsync) so the unified client can offer both faces over
 // this one backend. Not safe for concurrent use from multiple threads.
 
+using System.Buffers;
 using System.Net.Sockets;
 
 namespace Kevy;
@@ -54,19 +55,19 @@ internal sealed class RespConnection : IDisposable
 
     internal Reply Request(IReadOnlyList<byte[]> argv)
     {
-        WriteWire(Encode(argv));
+        EncodeAndSend(argv);
         return ReadOne();
     }
 
     internal async Task<Reply> RequestAsync(IReadOnlyList<byte[]> argv, CancellationToken ct)
     {
-        await WriteWireAsync(Encode(argv), ct).ConfigureAwait(false);
+        await EncodeAndSendAsync(argv, ct).ConfigureAwait(false);
         return await ReadOneAsync(ct).ConfigureAwait(false);
     }
 
     internal IReadOnlyList<Reply> PipelineRaw(byte[] wire, int n)
     {
-        WriteWire(wire);
+        WriteWire(wire, wire.Length);
         var outp = new List<Reply>(n);
         while (outp.Count < n) outp.Add(ReadOne());
         return outp;
@@ -74,7 +75,7 @@ internal sealed class RespConnection : IDisposable
 
     internal async Task<IReadOnlyList<Reply>> PipelineRawAsync(byte[] wire, int n, CancellationToken ct)
     {
-        await WriteWireAsync(wire, ct).ConfigureAwait(false);
+        await WriteWireAsync(wire, wire.Length, ct).ConfigureAwait(false);
         var outp = new List<Reply>(n);
         while (outp.Count < n) outp.Add(await ReadOneAsync(ct).ConfigureAwait(false));
         return outp;
@@ -82,10 +83,10 @@ internal sealed class RespConnection : IDisposable
 
     // Write sends argv without reading a reply — the decoupled send side
     // used by the pub/sub consumer, which then drains frames with ReadReply.
-    internal void Write(IReadOnlyList<byte[]> argv) => WriteWire(Encode(argv));
+    internal void Write(IReadOnlyList<byte[]> argv) => EncodeAndSend(argv);
 
     internal Task WriteAsync(IReadOnlyList<byte[]> argv, CancellationToken ct) =>
-        WriteWireAsync(Encode(argv), ct);
+        EncodeAndSendAsync(argv, ct);
 
     internal Reply ReadReply() => ReadOne();
 
@@ -115,33 +116,52 @@ internal sealed class RespConnection : IDisposable
 
     // --- wire I/O -------------------------------------------------------
 
-    private static byte[] Encode(IReadOnlyList<byte[]> argv)
+    // Encode argv into one ArrayPool rental, send exactly the encoded span,
+    // return the buffer to the pool — no per-request List<byte>/ToArray churn.
+    private void EncodeAndSend(IReadOnlyList<byte[]> argv)
     {
-        var buf = new List<byte>(16 + argv.Count * 16);
-        Resp.EncodeCommand(buf, argv);
-        return buf.ToArray();
+        var size = Resp.EncodedSize(argv);
+        var buf = ArrayPool<byte>.Shared.Rent(size);
+        try
+        {
+            Resp.EncodeInto(buf, argv);
+            WriteWire(buf, size);
+        }
+        finally { ArrayPool<byte>.Shared.Return(buf); }
     }
 
-    private void WriteWire(byte[] wire)
+    private async Task EncodeAndSendAsync(IReadOnlyList<byte[]> argv, CancellationToken ct)
+    {
+        var size = Resp.EncodedSize(argv);
+        var buf = ArrayPool<byte>.Shared.Rent(size);
+        try
+        {
+            Resp.EncodeInto(buf, argv);
+            await WriteWireAsync(buf, size, ct).ConfigureAwait(false);
+        }
+        finally { ArrayPool<byte>.Shared.Return(buf); }
+    }
+
+    private void WriteWire(byte[] wire, int len)
     {
         var s = Live();
         try
         {
             var sent = 0;
-            while (sent < wire.Length)
-                sent += s.Send(wire, sent, wire.Length - sent, SocketFlags.None);
+            while (sent < len)
+                sent += s.Send(wire, sent, len - sent, SocketFlags.None);
         }
         catch (SocketException e) { throw MapIo(e); }
     }
 
-    private async Task WriteWireAsync(byte[] wire, CancellationToken ct)
+    private async Task WriteWireAsync(byte[] wire, int len, CancellationToken ct)
     {
         var s = Live();
         try
         {
             var sent = 0;
-            while (sent < wire.Length)
-                sent += await s.SendAsync(wire.AsMemory(sent), SocketFlags.None, ct).ConfigureAwait(false);
+            while (sent < len)
+                sent += await s.SendAsync(wire.AsMemory(sent, len - sent), SocketFlags.None, ct).ConfigureAwait(false);
         }
         catch (SocketException e) { throw MapIo(e); }
     }

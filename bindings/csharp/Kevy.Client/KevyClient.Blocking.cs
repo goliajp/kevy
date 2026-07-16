@@ -19,7 +19,7 @@ public sealed partial class KevyClient
         return _emb is not null ? EmbPopKv("LPOP", keys, timeout) : PopKv("BLPOP", keys, timeout);
     }
     /// <summary>Async BLPOP.</summary>
-    public Task<Kv?> BLPopAsync(KevyBytes[] keys, TimeSpan? timeout, CancellationToken ct = default)
+    public ValueTask<Kv?> BLPopAsync(KevyBytes[] keys, TimeSpan? timeout, CancellationToken ct = default)
     {
         CheckBlocking(keys, timeout);
         return _emb is not null ? EmbPopKvAsync("LPOP", keys, timeout, ct) : PopKvAsync("BLPOP", keys, timeout, ct);
@@ -32,7 +32,7 @@ public sealed partial class KevyClient
         return _emb is not null ? EmbPopKv("RPOP", keys, timeout) : PopKv("BRPOP", keys, timeout);
     }
     /// <summary>Async BRPOP.</summary>
-    public Task<Kv?> BRPopAsync(KevyBytes[] keys, TimeSpan? timeout, CancellationToken ct = default)
+    public ValueTask<Kv?> BRPopAsync(KevyBytes[] keys, TimeSpan? timeout, CancellationToken ct = default)
     {
         CheckBlocking(keys, timeout);
         return _emb is not null ? EmbPopKvAsync("RPOP", keys, timeout, ct) : PopKvAsync("BRPOP", keys, timeout, ct);
@@ -45,7 +45,7 @@ public sealed partial class KevyClient
         return _emb is not null ? EmbPopZ(keys, timeout) : ShapeZPop(Exec(BlockingArgv("BZPOPMIN", keys, timeout)));
     }
     /// <summary>Async BZPOPMIN.</summary>
-    public async Task<ZPopHit?> BZPopMinAsync(KevyBytes[] keys, TimeSpan? timeout, CancellationToken ct = default)
+    public async ValueTask<ZPopHit?> BZPopMinAsync(KevyBytes[] keys, TimeSpan? timeout, CancellationToken ct = default)
     {
         CheckBlocking(keys, timeout);
         if (_emb is not null) return await EmbPopZAsync(keys, timeout, ct);
@@ -54,7 +54,7 @@ public sealed partial class KevyClient
 
     private Kv? PopKv(string verb, KevyBytes[] keys, TimeSpan? timeout) =>
         ShapeKv(Exec(BlockingArgv(verb, keys, timeout)));
-    private async Task<Kv?> PopKvAsync(string verb, KevyBytes[] keys, TimeSpan? timeout, CancellationToken ct) =>
+    private async ValueTask<Kv?> PopKvAsync(string verb, KevyBytes[] keys, TimeSpan? timeout, CancellationToken ct) =>
         ShapeKv(await ExecAsync(BlockingArgv(verb, keys, timeout), ct));
 
     private static Kv? ShapeKv(Reply r)
@@ -89,7 +89,7 @@ public sealed partial class KevyClient
         }
     }
 
-    private async Task<Kv?> EmbPopKvAsync(string verb, KevyBytes[] keys, TimeSpan? timeout, CancellationToken ct)
+    private async ValueTask<Kv?> EmbPopKvAsync(string verb, KevyBytes[] keys, TimeSpan? timeout, CancellationToken ct)
     {
         var deadline = Deadline(timeout);
         while (true)
@@ -121,7 +121,7 @@ public sealed partial class KevyClient
         }
     }
 
-    private async Task<ZPopHit?> EmbPopZAsync(KevyBytes[] keys, TimeSpan? timeout, CancellationToken ct)
+    private async ValueTask<ZPopHit?> EmbPopZAsync(KevyBytes[] keys, TimeSpan? timeout, CancellationToken ct)
     {
         var deadline = Deadline(timeout);
         while (true)

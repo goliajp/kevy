@@ -91,13 +91,10 @@ public abstract record KevyValue
     {
         if (pos >= b.Length) throw new KevyException("kevy: truncated RESP reply");
         tag = b[pos];
-        for (var i = pos + 1; i + 1 < b.Length; i++)
-        {
-            if (b[i] != (byte)'\r' || b[i + 1] != (byte)'\n') continue;
-            var head = Encoding.UTF8.GetString(b.Slice(pos + 1, i - pos - 1));
-            pos = i + 2;
-            return head;
-        }
-        throw new KevyException("kevy: truncated RESP reply");
+        var rel = b[(pos + 1)..].IndexOf("\r\n"u8); // vectorized CRLF scan
+        if (rel < 0) throw new KevyException("kevy: truncated RESP reply");
+        var head = Encoding.UTF8.GetString(b.Slice(pos + 1, rel));
+        pos = pos + 1 + rel + 2;
+        return head;
     }
 }

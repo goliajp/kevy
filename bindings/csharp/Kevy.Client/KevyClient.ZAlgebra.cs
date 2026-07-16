@@ -14,7 +14,7 @@ public sealed partial class KevyClient
     public long ZInterStoreWith(KevyBytes dest, KevyBytes[] keys, double[]? weights, ZAggregate agg) =>
         ExecCount(ZStoreArgv("ZINTERSTORE", dest, keys, weights, agg));
     /// <summary>Async ZINTERSTORE.</summary>
-    public Task<long> ZInterStoreAsync(KevyBytes dest, KevyBytes[] keys, double[]? weights = null, ZAggregate agg = ZAggregate.Sum, CancellationToken ct = default) =>
+    public ValueTask<long> ZInterStoreAsync(KevyBytes dest, KevyBytes[] keys, double[]? weights = null, ZAggregate agg = ZAggregate.Sum, CancellationToken ct = default) =>
         ExecCountAsync(ZStoreArgv("ZINTERSTORE", dest, keys, weights, agg), ct);
 
     /// <summary>ZUNIONSTORE (unweighted SUM) into dest; dest cardinality.</summary>
@@ -24,14 +24,14 @@ public sealed partial class KevyClient
     public long ZUnionStoreWith(KevyBytes dest, KevyBytes[] keys, double[]? weights, ZAggregate agg) =>
         ExecCount(ZStoreArgv("ZUNIONSTORE", dest, keys, weights, agg));
     /// <summary>Async ZUNIONSTORE.</summary>
-    public Task<long> ZUnionStoreAsync(KevyBytes dest, KevyBytes[] keys, double[]? weights = null, ZAggregate agg = ZAggregate.Sum, CancellationToken ct = default) =>
+    public ValueTask<long> ZUnionStoreAsync(KevyBytes dest, KevyBytes[] keys, double[]? weights = null, ZAggregate agg = ZAggregate.Sum, CancellationToken ct = default) =>
         ExecCountAsync(ZStoreArgv("ZUNIONSTORE", dest, keys, weights, agg), ct);
 
     /// <summary>ZINTERCARD; <paramref name="limit"/> null counts everything,
     /// otherwise short-circuits at limit.</summary>
     public long ZInterCard(KevyBytes[] keys, long? limit) => ExecCount(ZInterCardArgv(keys, limit));
     /// <summary>Async ZINTERCARD.</summary>
-    public Task<long> ZInterCardAsync(KevyBytes[] keys, long? limit, CancellationToken ct = default) =>
+    public ValueTask<long> ZInterCardAsync(KevyBytes[] keys, long? limit, CancellationToken ct = default) =>
         ExecCountAsync(ZInterCardArgv(keys, limit), ct);
 
     private static void CheckSourceKeys(KevyBytes[] keys)
