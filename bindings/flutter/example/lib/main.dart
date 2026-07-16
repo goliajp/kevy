@@ -56,6 +56,20 @@ class _MyAppState extends State<MyApp> {
       check('TTL', ttl > 0 && ttl <= 30000, '${ttl}ms');
 
       check('INCRBY', db.incrBy('n', 5) == 5, db.incrBy('n', 0));
+
+      // WRONGTYPE fidelity: GET on a list key must throw a typed WRONGTYPE
+      // (scalar lane error → framed-GET fallback), not a phantom miss —
+      // this also catches a stale vendored engine binary on device.
+      db.cmd(['LPUSH', 'lst', 'x']);
+      var wt = false;
+      var wtGot = 'no-throw (phantom miss — stale native?)';
+      try {
+        db.get('lst');
+      } catch (e) {
+        wtGot = '$e';
+        wt = wtGot.contains('WRONGTYPE');
+      }
+      check('WRONGTYPE', wt, wtGot);
       db.close();
 
       // Durability: reopen the same dir, the key survived.
