@@ -13,8 +13,8 @@ public sealed partial class KevyClient
     /// <summary>Number of change-feed shards (embedded: 1).</summary>
     public long FeedShards() => _emb is not null ? 1 : ExecCount([Argv.S("FEED.SHARDS")]);
     /// <summary>Async FEED.SHARDS.</summary>
-    public Task<long> FeedShardsAsync(CancellationToken ct = default) =>
-        _emb is not null ? Task.FromResult(1L) : ExecCountAsync([Argv.S("FEED.SHARDS")], ct);
+    public ValueTask<long> FeedShardsAsync(CancellationToken ct = default) =>
+        _emb is not null ? new ValueTask<long>(1L) : ExecCountAsync([Argv.S("FEED.SHARDS")], ct);
 
     /// <summary>The shard's (generation, next_offset) cursor — where a fresh
     /// or resumed consumer begins.</summary>
@@ -24,7 +24,7 @@ public sealed partial class KevyClient
         return ParseTail(Exec([Argv.S("FEED.TAIL"), Argv.I(shard)]));
     }
     /// <summary>Async FEED.TAIL.</summary>
-    public async Task<(ulong Generation, ulong NextOffset)> FeedTailAsync(int shard, CancellationToken ct = default)
+    public async ValueTask<(ulong Generation, ulong NextOffset)> FeedTailAsync(int shard, CancellationToken ct = default)
     {
         EmbeddedFeedGuard(shard);
         return ParseTail(await ExecAsync([Argv.S("FEED.TAIL"), Argv.I(shard)], ct));
@@ -39,7 +39,7 @@ public sealed partial class KevyClient
         return ParseBatch(Exec(FeedReadArgv(shard, generation, offset, count, prefixes)));
     }
     /// <summary>Async FEED.READ.</summary>
-    public async Task<FeedBatch> FeedReadAsync(int shard, ulong generation, ulong offset, int count = 0, KevyBytes[]? prefixes = null, CancellationToken ct = default)
+    public async ValueTask<FeedBatch> FeedReadAsync(int shard, ulong generation, ulong offset, int count = 0, KevyBytes[]? prefixes = null, CancellationToken ct = default)
     {
         EmbeddedFeedGuard(shard);
         return ParseBatch(await ExecAsync(FeedReadArgv(shard, generation, offset, count, prefixes ?? Array.Empty<KevyBytes>()), ct));

@@ -14,13 +14,13 @@ public sealed partial class KevyClient
     public void IdxCreateRange(KevyBytes name, KevyBytes prefix, KevyBytes field, IdxType ty) =>
         IdxCreateRaw(name, "ON", "PREFIX", prefix, "FIELD", field, "TYPE", ty.Tag(), "KIND", "range");
     /// <summary>Async IDX.CREATE range.</summary>
-    public Task IdxCreateRangeAsync(KevyBytes name, KevyBytes prefix, KevyBytes field, IdxType ty, CancellationToken ct = default) =>
+    public ValueTask IdxCreateRangeAsync(KevyBytes name, KevyBytes prefix, KevyBytes field, IdxType ty, CancellationToken ct = default) =>
         IdxCreateRawAsync(new KevyBytes[] { name, "ON", "PREFIX", prefix, "FIELD", field, "TYPE", ty.Tag(), "KIND", "range" }, ct);
 
     /// <summary>IDX.CREATE argv passthrough (everything after the verb).</summary>
     public void IdxCreateRaw(params KevyBytes[] args) { RequireRemote("IDX.CREATE"); ExecOk(Argv.Cmd("IDX.CREATE", args.Raw())); }
     /// <summary>Async IDX.CREATE passthrough.</summary>
-    public Task IdxCreateRawAsync(KevyBytes[] args, CancellationToken ct = default)
+    public ValueTask IdxCreateRawAsync(KevyBytes[] args, CancellationToken ct = default)
     {
         RequireRemote("IDX.CREATE");
         return ExecOkAsync(Argv.Cmd("IDX.CREATE", args.Raw()), ct);
@@ -29,13 +29,13 @@ public sealed partial class KevyClient
     /// <summary>IDX.DROP; whether it existed.</summary>
     public bool IdxDrop(KevyBytes name) { RequireRemote("IDX.DROP"); return ExecBool([Argv.S("IDX.DROP"), name.Raw]); }
     /// <summary>Async IDX.DROP.</summary>
-    public Task<bool> IdxDropAsync(KevyBytes name, CancellationToken ct = default)
+    public ValueTask<bool> IdxDropAsync(KevyBytes name, CancellationToken ct = default)
     { RequireRemote("IDX.DROP"); return ExecBoolAsync([Argv.S("IDX.DROP"), name.Raw], ct); }
 
     /// <summary>IDX.LIST (unknown labels skipped).</summary>
     public IReadOnlyList<IdxInfo> IdxList() { RequireRemote("IDX.LIST"); return ParseIdxList(Exec([Argv.S("IDX.LIST")])); }
     /// <summary>Async IDX.LIST.</summary>
-    public async Task<IReadOnlyList<IdxInfo>> IdxListAsync(CancellationToken ct = default)
+    public async ValueTask<IReadOnlyList<IdxInfo>> IdxListAsync(CancellationToken ct = default)
     { RequireRemote("IDX.LIST"); return ParseIdxList(await ExecAsync([Argv.S("IDX.LIST")], ct)); }
 
     /// <summary>IDX.QUERY name RANGE min max [LIMIT n] [CURSOR c] → one page
@@ -43,21 +43,21 @@ public sealed partial class KevyClient
     public IdxPage IdxQueryRange(KevyBytes name, KevyBytes min, KevyBytes max, int limit, byte[]? cursor = null) =>
         ParseIdxPage(IdxQueryRaw(RangeArgs(name, min, max, limit, cursor)));
     /// <summary>Async IDX.QUERY RANGE.</summary>
-    public async Task<IdxPage> IdxQueryRangeAsync(KevyBytes name, KevyBytes min, KevyBytes max, int limit, byte[]? cursor = null, CancellationToken ct = default) =>
+    public async ValueTask<IdxPage> IdxQueryRangeAsync(KevyBytes name, KevyBytes min, KevyBytes max, int limit, byte[]? cursor = null, CancellationToken ct = default) =>
         ParseIdxPage(await IdxQueryRawAsync(RangeArgs(name, min, max, limit, cursor), ct));
 
     /// <summary>IDX.QUERY name EQ value [LIMIT n].</summary>
     public IdxPage IdxQueryEq(KevyBytes name, KevyBytes value, int limit) =>
         ParseIdxPage(IdxQueryRaw(new KevyBytes[] { name, "EQ", value, "LIMIT", Argv.I(limit) }));
     /// <summary>Async IDX.QUERY EQ.</summary>
-    public async Task<IdxPage> IdxQueryEqAsync(KevyBytes name, KevyBytes value, int limit, CancellationToken ct = default) =>
+    public async ValueTask<IdxPage> IdxQueryEqAsync(KevyBytes name, KevyBytes value, int limit, CancellationToken ct = default) =>
         ParseIdxPage(await IdxQueryRawAsync(new KevyBytes[] { name, "EQ", value, "LIMIT", Argv.I(limit) }, ct));
 
     /// <summary>IDX.QUERY name MATCH text [LIMIT n] → BM25 (key, score), best first.</summary>
     public IReadOnlyList<Ranked> IdxQueryMatch(KevyBytes name, KevyBytes text, int limit) =>
         ParseRanked(IdxQueryRaw(new KevyBytes[] { name, "MATCH", text, "LIMIT", Argv.I(limit) }));
     /// <summary>Async IDX.QUERY MATCH.</summary>
-    public async Task<IReadOnlyList<Ranked>> IdxQueryMatchAsync(KevyBytes name, KevyBytes text, int limit, CancellationToken ct = default) =>
+    public async ValueTask<IReadOnlyList<Ranked>> IdxQueryMatchAsync(KevyBytes name, KevyBytes text, int limit, CancellationToken ct = default) =>
         ParseRanked(await IdxQueryRawAsync(new KevyBytes[] { name, "MATCH", text, "LIMIT", Argv.I(limit) }, ct));
 
     /// <summary>IDX.QUERY name KNN vector [LIMIT k] → (key, distance) nearest
@@ -65,7 +65,7 @@ public sealed partial class KevyClient
     public IReadOnlyList<Ranked> IdxQueryKnn(KevyBytes name, float[] vector, int k) =>
         ParseRanked(IdxQueryRaw(new KevyBytes[] { name, "KNN", VectorBlob(vector), "LIMIT", Argv.I(k) }));
     /// <summary>Async IDX.QUERY KNN.</summary>
-    public async Task<IReadOnlyList<Ranked>> IdxQueryKnnAsync(KevyBytes name, float[] vector, int k, CancellationToken ct = default) =>
+    public async ValueTask<IReadOnlyList<Ranked>> IdxQueryKnnAsync(KevyBytes name, float[] vector, int k, CancellationToken ct = default) =>
         ParseRanked(await IdxQueryRawAsync(new KevyBytes[] { name, "KNN", VectorBlob(vector), "LIMIT", Argv.I(k) }, ct));
 
     /// <summary>IDX.QUERY argv passthrough returning the raw Reply — the
@@ -77,7 +77,7 @@ public sealed partial class KevyClient
         return r.Kind == ReplyKind.Error ? throw Err.ReplyError(r) : r;
     }
     /// <summary>Async IDX.QUERY passthrough.</summary>
-    public async Task<Reply> IdxQueryRawAsync(KevyBytes[] args, CancellationToken ct = default)
+    public async ValueTask<Reply> IdxQueryRawAsync(KevyBytes[] args, CancellationToken ct = default)
     {
         RequireRemote("IDX.QUERY");
         var r = await ExecAsync(Argv.Cmd("IDX.QUERY", args.Raw()), ct);

@@ -7,7 +7,7 @@
 // self-contained buffer and reports bytes consumed so the streaming TCP
 // reader can reassemble across socket reads (0 consumed = need more bytes).
 
-using System.Globalization;
+using System.Buffers.Text;
 using System.Text;
 
 namespace Kevy;
@@ -114,24 +114,57 @@ public sealed class Reply
 /// <summary>The RESP2/RESP3 wire codec.</summary>
 internal static class Resp
 {
-    // EncodeCommand appends argv as a RESP multibulk request.
-    internal static void EncodeCommand(List<byte> outBuf, IReadOnlyList<byte[]> argv)
+    // EncodedSize is the exact byte length EncodeInto will write for argv, so
+    // the caller can rent one buffer of that size (no growth, no re-copy).
+    internal static int EncodedSize(IReadOnlyList<byte[]> argv)
     {
-        outBuf.Add((byte)'*');
-        AppendInt(outBuf, argv.Count);
-        outBuf.Add((byte)'\r'); outBuf.Add((byte)'\n');
+        var n = 3 + DigitCount(argv.Count); // '*' + digits + CRLF
         foreach (var a in argv)
-        {
-            outBuf.Add((byte)'$');
-            AppendInt(outBuf, a.Length);
-            outBuf.Add((byte)'\r'); outBuf.Add((byte)'\n');
-            outBuf.AddRange(a);
-            outBuf.Add((byte)'\r'); outBuf.Add((byte)'\n');
-        }
+            n += 5 + DigitCount(a.Length) + a.Length; // '$' + digits + CRLF + data + CRLF
+        return n;
     }
 
-    private static void AppendInt(List<byte> outBuf, long n) =>
-        outBuf.AddRange(Encoding.ASCII.GetBytes(n.ToString(CultureInfo.InvariantCulture)));
+    // EncodeInto writes argv as a RESP multibulk request into dst (which must
+    // hold at least EncodedSize bytes), returning the count written. Integer
+    // headers format straight into the buffer via Utf8Formatter — no per-arg
+    // string or byte[] allocation.
+    internal static int EncodeInto(Span<byte> dst, IReadOnlyList<byte[]> argv)
+    {
+        var p = 0;
+        dst[p++] = (byte)'*';
+        p += WriteUInt(dst[p..], argv.Count);
+        p = Crlf(dst, p);
+        foreach (var a in argv)
+        {
+            dst[p++] = (byte)'$';
+            p += WriteUInt(dst[p..], a.Length);
+            p = Crlf(dst, p);
+            a.CopyTo(dst[p..]);
+            p += a.Length;
+            p = Crlf(dst, p);
+        }
+        return p;
+    }
+
+    private static int Crlf(Span<byte> dst, int p)
+    {
+        dst[p] = (byte)'\r';
+        dst[p + 1] = (byte)'\n';
+        return p + 2;
+    }
+
+    private static int WriteUInt(Span<byte> dst, long v)
+    {
+        Utf8Formatter.TryFormat(v, dst, out var written);
+        return written;
+    }
+
+    private static int DigitCount(long v)
+    {
+        var n = 1;
+        for (var t = v; t >= 10; t /= 10) n++;
+        return n;
+    }
 
     // Parse decodes one RESP reply from the front of buf, returning the
     // bytes consumed (0 = need more). Throws KevyProtocolException on a
@@ -161,11 +194,12 @@ internal static class Resp
         };
     }
 
+    // First CRLF at or after `from` (hardware-vectorized two-byte search), or
+    // -1 if the frame is not yet complete.
     private static int FindCrlf(ReadOnlySpan<byte> buf, int from)
     {
-        for (var i = from; i + 1 < buf.Length; i++)
-            if (buf[i] == (byte)'\r' && buf[i + 1] == (byte)'\n') return i;
-        return -1;
+        var rel = buf[from..].IndexOf("\r\n"u8);
+        return rel < 0 ? -1 : from + rel;
     }
 
     private static int Line(ReadOnlySpan<byte> buf, ReplyKind kind, out Reply? reply)
@@ -182,7 +216,7 @@ internal static class Resp
         reply = null;
         var eol = FindCrlf(buf, 1);
         if (eol < 0) return 0;
-        if (!long.TryParse(AsciiOf(buf[1..eol]), out var n))
+        if (!ParseI64(buf[1..eol], out var n))
             throw new KevyProtocolException("bad integer reply");
         reply = new Reply { Kind = ReplyKind.Int, Integer = n };
         return eol + 2;
@@ -193,7 +227,7 @@ internal static class Resp
         reply = null;
         var hdr = FindCrlf(buf, 1);
         if (hdr < 0) return 0;
-        if (!int.TryParse(AsciiOf(buf[1..hdr]), out var n))
+        if (!ParseI32(buf[1..hdr], out var n))
             throw new KevyProtocolException("bad bulk length");
         if (n < 0) { reply = new Reply { Kind = ReplyKind.Nil }; return hdr + 2; }
         var start = hdr + 2;
@@ -208,7 +242,7 @@ internal static class Resp
         reply = null;
         var hdr = FindCrlf(buf, 1);
         if (hdr < 0) return 0;
-        if (!int.TryParse(AsciiOf(buf[1..hdr]), out var count))
+        if (!ParseI32(buf[1..hdr], out var count))
             throw new KevyProtocolException("bad aggregate length");
         if (count < 0)
         {
@@ -234,7 +268,7 @@ internal static class Resp
         reply = null;
         var hdr = FindCrlf(buf, 1);
         if (hdr < 0) return 0;
-        if (!int.TryParse(AsciiOf(buf[1..hdr]), out var count) || count < 0)
+        if (!ParseI32(buf[1..hdr], out var count) || count < 0)
             throw new KevyProtocolException("bad map length");
         var pos = hdr + 2;
         var pairs = new List<(Reply, Reply)>(CapHint(count, (buf.Length - pos) / 2));
@@ -257,7 +291,8 @@ internal static class Resp
         reply = null;
         var eol = FindCrlf(buf, 1);
         if (eol < 0) return 0;
-        if (!double.TryParse(AsciiOf(buf[1..eol]), NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
+        var s = buf[1..eol];
+        if (!Utf8Parser.TryParse(s, out double v, out var used) || used != s.Length)
             throw new KevyProtocolException("bad double");
         reply = new Reply { Kind = ReplyKind.Double, Double = v };
         return eol + 2;
@@ -268,11 +303,12 @@ internal static class Resp
         reply = null;
         var eol = FindCrlf(buf, 1);
         if (eol < 0) return 0;
-        var body = AsciiOf(buf[1..eol]);
-        reply = body switch
+        var body = buf[1..eol];
+        if (body.Length != 1) throw new KevyProtocolException("bad boolean payload");
+        reply = body[0] switch
         {
-            "t" => new Reply { Kind = ReplyKind.Boolean, Bool = true },
-            "f" => new Reply { Kind = ReplyKind.Boolean, Bool = false },
+            (byte)'t' => new Reply { Kind = ReplyKind.Boolean, Bool = true },
+            (byte)'f' => new Reply { Kind = ReplyKind.Boolean, Bool = false },
             _ => throw new KevyProtocolException("bad boolean payload"),
         };
         return eol + 2;
@@ -283,7 +319,7 @@ internal static class Resp
         reply = null;
         var hdr = FindCrlf(buf, 1);
         if (hdr < 0) return 0;
-        if (!int.TryParse(AsciiOf(buf[1..hdr]), out var n))
+        if (!ParseI32(buf[1..hdr], out var n))
             throw new KevyProtocolException("bad verbatim length");
         if (n < 4) throw new KevyProtocolException("verbatim length < 4 (fmt + ':')");
         var start = hdr + 2;
@@ -325,5 +361,12 @@ internal static class Resp
         return count > remaining ? remaining : count;
     }
 
-    private static string AsciiOf(ReadOnlySpan<byte> b) => Encoding.ASCII.GetString(b);
+    // Zero-alloc header integer parse (§4.1). Utf8Parser consumes the digits
+    // in place; requiring FULL consumption keeps the original strictness (a
+    // trailing non-digit like ":12x\r\n" is still rejected).
+    private static bool ParseI64(ReadOnlySpan<byte> b, out long value) =>
+        Utf8Parser.TryParse(b, out value, out var used) && used == b.Length;
+
+    private static bool ParseI32(ReadOnlySpan<byte> b, out int value) =>
+        Utf8Parser.TryParse(b, out value, out var used) && used == b.Length;
 }

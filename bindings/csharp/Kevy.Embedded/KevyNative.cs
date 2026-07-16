@@ -64,6 +64,20 @@ internal static unsafe partial class KevyNative
     [LibraryImport(Lib)]
     internal static partial int kevy_get(IntPtr db, byte* key, nuint keyLen, KevyBuf* @out);
 
+    // Zero-copy shared GET lane. On a hit the returned KevyBuf's `Cap` is an
+    // OPAQUE tagged owner handle (an engine Arc pointer or a tagged Vec
+    // capacity), NOT a plain allocation capacity. It MUST be released with
+    // kevy_buf_free_shared — passing it to kevy_buf_free misreclaims the
+    // engine's Arc/Vec (memory corruption). Pairs 1:1 with the shared free.
+    [LibraryImport(Lib)]
+    internal static partial int kevy_get_shared(IntPtr db, byte* key, nuint keyLen, KevyBuf* @out);
+
+    // Frees a buffer from kevy_get_shared, dropping the engine Arc/Vec. Never
+    // call this on a plain kevy_get / kevy_cmd buffer, and never free a shared
+    // buffer with kevy_buf_free.
+    [LibraryImport(Lib)]
+    internal static partial void kevy_buf_free_shared(byte* ptr, nuint len, nuint cap);
+
     [LibraryImport(Lib)]
     internal static partial int kevy_set(
         IntPtr db, byte* key, nuint keyLen, byte* val, nuint valLen, ulong ttlMs);
@@ -85,12 +99,27 @@ internal static unsafe partial class KevyNative
     [LibraryImport(Lib)]
     internal static partial void kevy_sub_close(IntPtr sub);
 
-    /// <summary>Copy a reply buffer into managed bytes, then free it.</summary>
+    /// <summary>Copy a plain-lane reply buffer into managed bytes, then free
+    /// it (kevy_cmd / kevy_get). `Cap` is a real allocation capacity here.</summary>
     internal static byte[] TakeBuf(in KevyBuf buf)
     {
         if (buf.Len == 0) return [];
         var bytes = new ReadOnlySpan<byte>(buf.Ptr, checked((int)buf.Len)).ToArray();
         kevy_buf_free(buf.Ptr, buf.Len, buf.Cap);
+        return bytes;
+    }
+
+    /// <summary>Copy a shared-lane GET buffer into managed bytes, then release
+    /// the engine Arc/Vec via kevy_buf_free_shared. Use ONLY for buffers from
+    /// <see cref="kevy_get_shared"/>: the tagged <c>Cap</c> owner handle is not
+    /// a plain capacity, so <see cref="kevy_buf_free"/> would misreclaim it. A
+    /// shared hit is always freed here, even when empty (its Cap owns memory).</summary>
+    internal static byte[] TakeBufShared(in KevyBuf buf)
+    {
+        var bytes = buf.Len == 0
+            ? []
+            : new ReadOnlySpan<byte>(buf.Ptr, checked((int)buf.Len)).ToArray();
+        kevy_buf_free_shared(buf.Ptr, buf.Len, buf.Cap);
         return bytes;
     }
 }
