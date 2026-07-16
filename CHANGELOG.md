@@ -68,6 +68,33 @@ off. Wire protocol and disk format carry over from 3.x unchanged;
   Bun, Node and C# smokes on both OSes (command round-trip, a
   protocol error as data, pub/sub, close-and-reopen durability),
   plus the expo door's TS typecheck.
+- **kevy_publish**, the scalar publish: PUBLISH without the RESP
+  round-trip (subscribe was always a direct symbol; publish no
+  longer packs argv or parses `:N` back out). Adopted by the Swift,
+  Flutter and Nitro doors; on device it lifted every RN pub/sub lane.
+- **react-native-kevy-nitro, measured to its floor on real
+  hardware**: the hot methods (`getData`/`setData`/`publish`)
+  register as raw JSI functions — no typed-converter layer, the
+  hand-written-HostObject shape MMKV uses — after on-device
+  decomposition showed the converter tax (and an unbounded per-call
+  cache) was the remaining small-value gap. SET now beats
+  react-native-mmkv at every size (up to ~3×), GET from 256 B up
+  (~3.8× at 4 KB); `publish` returns the receiver count it used to
+  drop. New `createKevyBus`: same-runtime pub/sub fan-out in JS
+  (mitt's physical position) while every publish still reaches the
+  engine bus — the honest floor against a plain JS emitter is ~4×,
+  down from ~10×, and the bare publish crossing itself measures as
+  fast as a mitt emit.
+- **expo-kevy callback pub/sub is now the local fan-out lane**:
+  handlers dispatch in JS one microtask after publish (was a ≤50 ms
+  timer pump over a native sub) — immediate delivery, zero idle
+  work; `publish` returns engine + local receiver count. The raw
+  polled lanes stay on the engine bus.
+- **The durable-SET axis, measured honestly on device** (kevy AOF
+  everysec vs MMKV's mmap): kevy wins the small/medium writes that
+  dominate mobile KV (16 B 1.3×, 256 B 1.1×), MMKV's page model wins
+  multi-KB durable blobs (4 KB ~5-10× — the AOF appends every value
+  byte, mmap re-dirties a page). In-memory kevy wins every size.
 
 ### Proven where it claims to run
 
