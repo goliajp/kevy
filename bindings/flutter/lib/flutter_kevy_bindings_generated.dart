@@ -169,6 +169,57 @@ class FlutterKevyBindings {
         )
       >();
 
+  /// Zero-copy GET: a bulk value comes back as an Arc clone (refcount bump, no
+  /// byte copy) whose bytes the returned buffer VIEWS — the analog of MMKV
+  /// returning a view of its mmap page. In the out KevyBuf, ptr/len are the value
+  /// view; cap is an OPAQUE owner handle. Free ONLY with kevy_buf_free_shared()
+  /// (NOT kevy_buf_free). 1 hit / 0 miss / neg misuse.
+  int kevy_get_shared(
+    ffi.Pointer<KevyDbHandle> db,
+    ffi.Pointer<ffi.Uint8> key,
+    int key_len,
+    ffi.Pointer<KevyBuf> out,
+  ) {
+    return _kevy_get_shared(db, key, key_len, out);
+  }
+
+  late final _kevy_get_sharedPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<KevyDbHandle>,
+            ffi.Pointer<ffi.Uint8>,
+            ffi.Size,
+            ffi.Pointer<KevyBuf>,
+          )
+        >
+      >('kevy_get_shared');
+  late final _kevy_get_shared = _kevy_get_sharedPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<KevyDbHandle>,
+          ffi.Pointer<ffi.Uint8>,
+          int,
+          ffi.Pointer<KevyBuf>,
+        )
+      >();
+
+  /// Free a KevyBuf from kevy_get_shared(): pass all three fields unchanged (cap
+  /// is a tagged owner handle — an Arc for a bulk value or a Vec for a small
+  /// one). Pairs 1:1 with kevy_get_shared; do NOT mix with kevy_buf_free.
+  void kevy_buf_free_shared(ffi.Pointer<ffi.Uint8> ptr, int len, int cap) {
+    return _kevy_buf_free_shared(ptr, len, cap);
+  }
+
+  late final _kevy_buf_free_sharedPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Void Function(ffi.Pointer<ffi.Uint8>, ffi.Size, ffi.Size)
+        >
+      >('kevy_buf_free_shared');
+  late final _kevy_buf_free_shared = _kevy_buf_free_sharedPtr
+      .asFunction<void Function(ffi.Pointer<ffi.Uint8>, int, int)>();
+
   /// Free any KevyBuf returned by this library: pass its three fields
   /// unchanged. Scalars, not the struct by value — indirect struct passing
   /// (AArch64, >16 bytes) is beyond several FFI loaders. Null ptr = no-op.
@@ -281,6 +332,56 @@ class FlutterKevyBindings {
         >
       >('kevy_sub_wait');
   late final _kevy_sub_wait = _kevy_sub_waitPtr
+      .asFunction<
+        int Function(ffi.Pointer<KevySubHandle>, int, ffi.Pointer<KevyBuf>)
+      >();
+
+  /// Scalar drain — the raw message *payload* only, no RESP framing (the
+  /// pub/sub analog of kevy_get). Skips control/ack frames, moves the payload
+  /// into *out. For a known-channel push subscriber that only wants the bytes;
+  /// the channel and message-vs-pmessage distinction are lost (a pattern
+  /// subscriber that needs the channel keeps using kevy_sub_next).
+  /// 1 = payload written to *out; 0 = nothing queued; negative = misuse.
+  int kevy_sub_next_raw(
+    ffi.Pointer<KevySubHandle> sub,
+    ffi.Pointer<KevyBuf> out,
+  ) {
+    return _kevy_sub_next_raw(sub, out);
+  }
+
+  late final _kevy_sub_next_rawPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(ffi.Pointer<KevySubHandle>, ffi.Pointer<KevyBuf>)
+        >
+      >('kevy_sub_next_raw');
+  late final _kevy_sub_next_raw = _kevy_sub_next_rawPtr
+      .asFunction<
+        int Function(ffi.Pointer<KevySubHandle>, ffi.Pointer<KevyBuf>)
+      >();
+
+  /// Blocking kevy_sub_next_raw: parks up to timeout_ms (0 = wait forever).
+  /// 1 = payload written to *out; 0 = timeout OR a control/ack frame was
+  /// consumed (no payload) — re-wait; negative = misuse / bus closed.
+  int kevy_sub_wait_raw(
+    ffi.Pointer<KevySubHandle> sub,
+    int timeout_ms,
+    ffi.Pointer<KevyBuf> out,
+  ) {
+    return _kevy_sub_wait_raw(sub, timeout_ms, out);
+  }
+
+  late final _kevy_sub_wait_rawPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int32 Function(
+            ffi.Pointer<KevySubHandle>,
+            ffi.Uint64,
+            ffi.Pointer<KevyBuf>,
+          )
+        >
+      >('kevy_sub_wait_raw');
+  late final _kevy_sub_wait_raw = _kevy_sub_wait_rawPtr
       .asFunction<
         int Function(ffi.Pointer<KevySubHandle>, int, ffi.Pointer<KevyBuf>)
       >();

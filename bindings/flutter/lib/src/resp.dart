@@ -56,8 +56,8 @@ _Parsed _one(Uint8List b, int at) {
     case 0x24: // $
       final n = int.parse(head);
       if (n < 0) return _Parsed(null, after);
-      return _Parsed(
-          Uint8List.fromList(b.sublist(after, after + n)), after + n + 2);
+      // sublist already returns a fresh Uint8List — no fromList copy needed.
+      return _Parsed(b.sublist(after, after + n), after + n + 2);
     case 0x2a: // *
       final n = int.parse(head);
       if (n < 0) return _Parsed(null, after);
