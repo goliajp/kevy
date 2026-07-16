@@ -24,11 +24,12 @@ use kevy_embedded::{Config, KevyError, Store, Subscription};
 mod frame;
 use frame::encode_frame;
 
-mod sub_raw;
-pub use sub_raw::{kevy_sub_next_raw, kevy_sub_wait_raw};
-
 mod dispatch;
+mod publish;
+mod sub_raw;
 pub use dispatch::dispatch_packed;
+pub use publish::kevy_publish;
+pub use sub_raw::{kevy_sub_next_raw, kevy_sub_wait_raw};
 
 /// Opaque database handle. A `Box<Store>` on the Rust side.
 pub struct KevyDb {

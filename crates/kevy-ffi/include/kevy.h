@@ -88,6 +88,12 @@ void kevy_buf_free(uint8_t *ptr, size_t len, size_t cap);
 KevySub *kevy_subscribe(KevyDb *db, const uint8_t *chan, size_t chan_len);
 KevySub *kevy_psubscribe(KevyDb *db, const uint8_t *pat, size_t pat_len);
 
+/* Scalar publish — PUBLISH without the RESP round-trip (no argv packing, no
+ * reply buffer). Delivers to every in-process subscriber (direct + pattern)
+ * and returns the receiver count; -1 on misuse. */
+int64_t kevy_publish(KevyDb *db, const uint8_t *chan, size_t chan_len,
+                     const uint8_t *payload, size_t payload_len);
+
 /* Drain one pending frame without blocking.
  * 1 = frame written to *out (RESP array: message / pmessage / acks);
  * 0 = nothing queued; negative = misuse. */

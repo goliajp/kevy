@@ -162,6 +162,47 @@ fn pubsub_ack_message_and_pattern_frames() {
 }
 
 #[test]
+fn publish_scalar_counts_and_delivers_same_frames_as_framed() {
+    let db = kevy_open_mem();
+
+    // No subscribers: the count is 0, and misuse is a clean -1.
+    assert_eq!(unsafe { kevy_publish(db, b"c1".as_ptr(), 2, b"hi".as_ptr(), 2) }, 0);
+    assert_eq!(
+        unsafe { kevy_publish(std::ptr::null_mut(), b"c1".as_ptr(), 2, b"hi".as_ptr(), 2) },
+        -1
+    );
+
+    // One channel sub + one pattern sub: same :2 a framed PUBLISH reports,
+    // and each receives the identical frame bytes the framed lane delivers.
+    let sub = unsafe { kevy_subscribe(db, b"c1".as_ptr(), 2) };
+    let psub = unsafe { kevy_psubscribe(db, b"c*".as_ptr(), 2) };
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_sub_next(sub, &raw mut out) }, 1);
+    drop(take(out)); // subscribe ack
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_sub_next(psub, &raw mut out) }, 1);
+    drop(take(out)); // psubscribe ack
+
+    assert_eq!(unsafe { kevy_publish(db, b"c1".as_ptr(), 2, b"hi".as_ptr(), 2) }, 2);
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_sub_next(sub, &raw mut out) }, 1);
+    assert_eq!(take(out), b"*3\r\n$7\r\nmessage\r\n$2\r\nc1\r\n$2\r\nhi\r\n");
+    let mut out = KevyBuf::empty();
+    assert_eq!(unsafe { kevy_sub_next(psub, &raw mut out) }, 1);
+    assert_eq!(
+        take(out),
+        b"*4\r\n$8\r\npmessage\r\n$2\r\nc*\r\n$2\r\nc1\r\n$2\r\nhi\r\n"
+    );
+
+    // Empty payload is legal (null ptr allowed only with len 0).
+    assert_eq!(unsafe { kevy_publish(db, b"c1".as_ptr(), 2, std::ptr::null(), 0) }, 2);
+
+    unsafe { kevy_sub_close(sub) };
+    unsafe { kevy_sub_close(psub) };
+    unsafe { kevy_close(db) };
+}
+
+#[test]
 fn sub_wait_blocks_then_delivers_and_times_out() {
     let db = kevy_open_mem();
     let sub = unsafe { kevy_subscribe(db, b"c1".as_ptr(), 2) };
