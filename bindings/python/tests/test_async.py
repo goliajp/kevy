@@ -15,6 +15,18 @@ async def test_async_core_roundtrip(backend):
     await ac.close()
 
 
+async def test_async_wrongtype_surfaces_store_error(backend):
+    # The async embedded get() also routes through the scalar fast lane; a
+    # GET on a list key must still surface the typed WrongTypeError via the
+    # framed-GET fallback, matching the sync face and the remote path.
+    ac = await backend.aconnect()
+    await ac.rpush("l", "a")
+    with pytest.raises(kevy.WrongTypeError) as ei:
+        await ac.get("l")
+    assert ei.value.kind is kevy.StoreErrorKind.WRONG_TYPE
+    await ac.close()
+
+
 async def test_sync_and_async_agree(backend):
     # Both faces run against the same backing store/server and agree.
     sync_c = backend.connect()

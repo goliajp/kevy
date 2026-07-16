@@ -20,7 +20,7 @@ from ._client_async_remote import AsyncRemoteMixin
 from ._decode import Bytesish, to_bytes
 from ._embedded import DB
 from ._enums import HExpireCond, ZAggregate
-from ._errors import ClosedError, InvalidInputError
+from ._errors import ClosedError, InvalidInputError, IoError
 from ._reply import Reply
 from ._resp_conn_async import AsyncRespConn
 from ._url import TargetKind, parse_connect_url, release_store, resolve_store
@@ -101,10 +101,21 @@ class AsyncClient(AsyncRemoteMixin):
 
     async def set(self, key: Bytesish, value: Bytesish) -> None:
         """Store ``value`` at ``key`` (no TTL); raises on a non-OK reply."""
+        if self._emb is not None:
+            await asyncio.to_thread(self._emb.set, to_bytes(key), to_bytes(value))
+            return
         await self._run(ops.set_(key, value))
 
     async def get(self, key: Bytesish) -> Optional[bytes]:
         """Value at ``key``, or None on a miss."""
+        if self._emb is not None:
+            try:
+                return await asyncio.to_thread(self._emb.get, to_bytes(key))
+            except IoError:
+                # Scalar lane collapses WRONGTYPE into IoError; re-run the
+                # framed GET so the typed StoreError surfaces (§2.2). Mirrors
+                # the sync face; the embedded op runs off-loop like cmd does.
+                pass
         return await self._run(ops.get(key))
 
     async def delete(self, *keys: Bytesish) -> int:
@@ -149,6 +160,9 @@ class AsyncClient(AsyncRemoteMixin):
 
     async def set_with_ttl(self, key: Bytesish, value: Bytesish, ttl: Duration) -> None:
         """Store ``value`` at ``key`` with a TTL; raises on a non-OK reply."""
+        if self._emb is not None:
+            await asyncio.to_thread(self._emb.set, to_bytes(key), to_bytes(value), ops.to_ms(ttl))
+            return
         await self._run(ops.set_with_ttl(key, value, ttl))
 
     async def mget(self, *keys: Bytesish) -> List[Optional[bytes]]:

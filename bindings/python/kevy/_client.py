@@ -18,7 +18,7 @@ from ._decode import Bytesish, dec_bulks, to_bytes
 from ._client_remote import RemoteMixin
 from ._embedded import DB
 from ._enums import HExpireCond, ZAggregate
-from ._errors import InvalidInputError
+from ._errors import InvalidInputError, IoError
 from ._reply import Reply
 from ._resp_conn import RespConn
 from ._types import ZMember
@@ -123,10 +123,22 @@ class Client(RemoteMixin):
 
     def set(self, key: Bytesish, value: Bytesish) -> None:
         """Store ``value`` at ``key`` (no TTL); raises on a non-OK reply."""
+        if self._emb is not None:
+            self._emb.set(to_bytes(key), to_bytes(value))
+            return
         self._run(ops.set_(key, value))
 
     def get(self, key: Bytesish) -> Optional[bytes]:
         """Value at ``key``, or None on a miss."""
+        if self._emb is not None:
+            try:
+                return self._emb.get(to_bytes(key))
+            except IoError:
+                # The scalar lane collapses WRONGTYPE (kevy_get_shared rc == -2)
+                # into an opaque IoError; re-run the framed GET so the proper
+                # typed StoreError surfaces (§2.2), mirroring Go/TS. GET is
+                # idempotent, so the retry is side-effect-free.
+                pass
         return self._run(ops.get(key))  # type: ignore[return-value]
 
     def delete(self, *keys: Bytesish) -> int:
@@ -171,6 +183,9 @@ class Client(RemoteMixin):
 
     def set_with_ttl(self, key: Bytesish, value: Bytesish, ttl: Duration) -> None:
         """Store ``value`` at ``key`` with a TTL; raises on a non-OK reply."""
+        if self._emb is not None:
+            self._emb.set(to_bytes(key), to_bytes(value), ops.to_ms(ttl))
+            return
         self._run(ops.set_with_ttl(key, value, ttl))
 
     def mget(self, *keys: Bytesish) -> List[Optional[bytes]]:

@@ -5,12 +5,29 @@ import pytest
 
 
 def test_wrongtype_surfaces_store_error(backend):
+    # On embedded, get() now takes the scalar fast lane (kevy_get_shared),
+    # which collapses WRONGTYPE into an opaque IoError; the high-level get()
+    # must still surface the SAME typed WrongTypeError as the RESP path by
+    # falling back to the framed GET. This asserts it on both backends.
     c = backend.connect()
     c.rpush("l", "a")  # l is a list
     with pytest.raises(kevy.WrongTypeError) as ei:
-        c.get("l")  # GET on a list → WRONGTYPE
+        c.get("l")  # GET on a list → WRONGTYPE (via the scalar-lane fallback on embedded)
     assert isinstance(ei.value, kevy.StoreError)
     assert ei.value.kind is kevy.StoreErrorKind.WRONG_TYPE
+    c.close()
+
+
+def test_scalar_lane_roundtrip_binary_safe(backend):
+    # The good-path scalar SET/GET (embedded) and the RESP path (remote) both
+    # round-trip binary values with embedded NULs — the scalar lane passes an
+    # explicit length, never treating a NUL as a terminator.
+    c = backend.connect()
+    key = b"bin\x00key"
+    val = b"\x00\xff\x00value\r\n"
+    c.set(key, val)
+    assert c.get(key) == val
+    assert c.get(b"absent-scalar") is None  # miss stays a miss, not an error
     c.close()
 
 
