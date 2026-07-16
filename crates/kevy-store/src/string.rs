@@ -23,6 +23,17 @@ pub enum GetReply<'a> {
     ArcBulk(Arc<Box<[u8]>>),
 }
 
+/// Owned GET result for the FFI zero-copy shared lane
+/// ([`Store::get_shared_owned`]). Bulk values ride out as an Arc clone (no
+/// byte copy); small values as a plain Vec (one alloc — cheaper than a fresh
+/// Arc). The FFI's shared free reconstructs whichever the tag says.
+pub enum GetShared {
+    /// Bulk value — the engine's Arc, cloned. Zero byte copy.
+    Arc(Arc<Box<[u8]>>),
+    /// Small value (Str/Int) — a plain owned Vec, one allocation.
+    Bytes(Vec<u8>),
+}
+
 impl Store {
     // ---- strings -------------------------------------------------------
     /// GET variant that exposes the underlying encoding
@@ -53,17 +64,24 @@ impl Store {
     /// (mirrors MMKV's zero-copy mmap-page view, the thing that made kevy lose
     /// large GET). Small values (`Str`/`Int`) allocate a fresh `Arc<Box<[u8]>>`
     /// — the same one copy the Vec lane already pays — so the caller's free path
-    /// is uniform (always an Arc). Wrong type errors like [`Self::get_for_reply`].
-    pub fn get_arc(&mut self, key: &[u8]) -> Result<Option<Arc<Box<[u8]>>>, StoreError> {
-        match self.live_entry(key) {
+    /// is uniform. Read-only (`&self`, like [`Self::get_shared`]) so the FFI
+    /// can take it under a SHARED shard lock — no LRU stamp, matching the
+    /// `maxmemory == 0` fast path the mobile door runs on. Wrong type errors
+    /// like [`Self::get_for_reply`].
+    pub fn get_shared_owned(&self, key: &[u8]) -> Result<Option<GetShared>, StoreError> {
+        match self.map.get(key) {
             None => Ok(None),
+            Some(e) if e.is_expired(self.cached_clock, self.cached_ns) => Ok(None),
+            // Bulk (already Arc-backed) → clone the Arc: ZERO byte copy. Small
+            // (`Str`/`Int`) → a plain Vec (one alloc, cheaper than wrapping a
+            // fresh Arc — the FFI's shared free handles either).
             Some(e) => match &e.value {
-                Value::ArcBulk(a) => Ok(Some(Arc::clone(a))),
-                Value::Str(v) => Ok(Some(Arc::new(v.as_slice().to_vec().into_boxed_slice()))),
+                Value::ArcBulk(a) => Ok(Some(GetShared::Arc(Arc::clone(a)))),
+                Value::Str(v) => Ok(Some(GetShared::Bytes(v.as_slice().to_vec()))),
                 Value::Int(n) => {
                     let mut tmp = itoa_i64_stack();
                     let s = format_i64_into(*n, &mut tmp);
-                    Ok(Some(Arc::new(s.to_vec().into_boxed_slice())))
+                    Ok(Some(GetShared::Bytes(s.to_vec())))
                 }
                 _ => Err(StoreError::WrongType),
             },

@@ -77,10 +77,16 @@ impl Store {
     /// values come back as an `Arc::clone` — **no byte copy** — so the FFI can
     /// hand JS a buffer viewing the engine's own storage (the win vs the plain
     /// [`Self::get`], which `into_owned`-copies). Takes the write shard guard
-    /// (the keyspace `get_arc` is `&mut`, same as the maxmemory `get` path).
-    pub fn get_arc(&self, key: &[u8]) -> KevyResult<Option<std::sync::Arc<Box<[u8]>>>> {
-        let mut g = self.wshard(key);
-        g.store.get_arc(key).map_err(store_err)
+    /// Read-only, so under `maxmemory == 0` (the mobile door) it takes the
+    /// SHARED shard lock — same fast path as [`Self::get`]; with eviction it
+    /// takes the exclusive lock for consistency (no LRU stamp on this lane).
+    pub fn get_shared_owned(&self, key: &[u8]) -> KevyResult<Option<kevy_store::GetShared>> {
+        if self.config().maxmemory == 0 {
+            let g = self.rshard(key);
+            return g.store.get_shared_owned(key).map_err(store_err);
+        }
+        let g = self.wshard(key);
+        g.store.get_shared_owned(key).map_err(store_err)
     }
 
     /// `DEL key1 [key2 ...]`. Returns the count of keys actually removed.

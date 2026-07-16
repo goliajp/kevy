@@ -249,16 +249,29 @@ pub unsafe extern "C" fn kevy_get_shared(
     }
     let store = unsafe { &(*db).store };
     let k = unsafe { std::slice::from_raw_parts(key, key_len) };
-    match catch_unwind(AssertUnwindSafe(|| store.get_arc(k))) {
-        Ok(Ok(Some(arc))) => {
-            // Read the view ptr/len from the Arc BEFORE into_raw (deref
-            // coercion Arc<Box<[u8]>> -> [u8]; no raw-pointer autoref). The
-            // into_raw'd pointer becomes the opaque owner handle in `cap`.
-            let slice: &[u8] = &arc;
-            let data = slice.as_ptr() as *mut u8;
-            let len = slice.len();
-            let raw = std::sync::Arc::into_raw(arc); // *const Box<[u8]> (thin)
-            unsafe { out.write(KevyBuf { ptr: data, len, cap: raw as usize }) };
+    match catch_unwind(AssertUnwindSafe(|| store.get_shared_owned(k))) {
+        Ok(Ok(Some(shared))) => {
+            // `cap` doubles as a tagged owner handle so the shared free knows
+            // how to reclaim: low bit 0 = an Arc raw pointer (bulk, always
+            // 8-aligned so the bit is free); low bit 1 = a Vec (small), with
+            // its capacity in the high bits. Bulk is zero-copy; small is a
+            // single-alloc Vec (never the extra fresh-Arc allocation).
+            let (data, len, cap) = match shared {
+                kevy_embedded::GetShared::Arc(arc) => {
+                    // Read view ptr/len before into_raw (deref coercion
+                    // Arc<Box<[u8]>> -> [u8]; no raw-pointer autoref).
+                    let slice: &[u8] = &arc;
+                    let d = slice.as_ptr() as *mut u8;
+                    let l = slice.len();
+                    let raw = std::sync::Arc::into_raw(arc); // 8-aligned → tag 0
+                    (d, l, raw as usize)
+                }
+                kevy_embedded::GetShared::Bytes(v) => {
+                    let mut v = std::mem::ManuallyDrop::new(v);
+                    (v.as_mut_ptr(), v.len(), (v.capacity() << 1) | 1)
+                }
+            };
+            unsafe { out.write(KevyBuf { ptr: data, len, cap }) };
             1
         }
         Ok(Ok(None)) => 0,
@@ -273,11 +286,17 @@ pub unsafe extern "C" fn kevy_get_shared(
 /// # Safety
 /// `cap` must be a value produced by [`kevy_get_shared`], freed exactly once.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn kevy_buf_free_shared(_ptr: *mut u8, _len: usize, cap: usize) {
+pub unsafe extern "C" fn kevy_buf_free_shared(ptr: *mut u8, len: usize, cap: usize) {
     if cap == 0 {
-        return;
+        return; // empty sentinel
     }
-    drop(unsafe { std::sync::Arc::from_raw(cap as *const Box<[u8]>) });
+    if cap & 1 == 1 {
+        // Vec-backed small value: capacity in the high bits.
+        drop(unsafe { Vec::from_raw_parts(ptr, len, cap >> 1) });
+    } else {
+        // Arc-backed bulk value: cap is the Arc raw pointer.
+        drop(unsafe { std::sync::Arc::from_raw(cap as *const Box<[u8]>) });
+    }
 }
 
 /// Scalar fast path: `SET`, optionally with a TTL (`ttl_ms` 0 = none).

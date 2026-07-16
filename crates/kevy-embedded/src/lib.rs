@@ -130,8 +130,8 @@ pub use metric::KevyMetric;
 #[cfg(feature = "persist")]
 pub use kevy_persist::RewriteStats;
 pub use kevy_store::{
-    ExpireStats, HExpireCode, HExpireCond, KevyError, KevyResult, ScoreBound, StoreError,
-    ZAggregate, ZaddFlags, ZaddReport,
+    ExpireStats, GetShared, HExpireCode, HExpireCond, KevyError, KevyResult, ScoreBound,
+    StoreError, ZAggregate, ZaddFlags, ZaddReport,
 };
 #[cfg(all(feature = "replicate", not(target_arch = "wasm32")))]
 pub use ops_feed::{Change, ChangeBatch, FeedError, PrefixInfo};

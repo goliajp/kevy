@@ -70,8 +70,9 @@ int32_t kevy_set(KevyDb *db, const uint8_t *key, size_t key_len,
  * (NOT kevy_buf_free). 1 hit / 0 miss / neg misuse. */
 int32_t kevy_get_shared(KevyDb *db, const uint8_t *key, size_t key_len, KevyBuf *out);
 
-/* Free a KevyBuf from kevy_get_shared() (drops the engine Arc). ptr/len are
- * ignored; cap is the opaque owner handle. Pairs 1:1 with kevy_get_shared. */
+/* Free a KevyBuf from kevy_get_shared(): pass all three fields unchanged (cap
+ * is a tagged owner handle — an Arc for a bulk value or a Vec for a small
+ * one). Pairs 1:1 with kevy_get_shared; do NOT mix with kevy_buf_free. */
 void kevy_buf_free_shared(uint8_t *ptr, size_t len, size_t cap);
 
 /* Free any KevyBuf returned by this library: pass its three fields
