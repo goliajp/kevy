@@ -257,3 +257,29 @@ alone). SET unchanged (still wins 256 B+). MOBILEGATE smoke PASS both devices.
 The audit's Tier-3 (SET copy, batched-push amortization, mitt floor) stays
 not-worth / not-closable as reasoned. T1 was the one high-value item and it
 landed, measured, on both phones.
+
+### T1 follow-up — read-lock fast path (host win, device proves the small-value floor)
+
+A host FFI microbench of the shared lane found it was +85 ns *slower* than
+`kevy_get` at 16 B: `get_shared_owned` took the WRITE shard guard (it was
+`&mut`, stamping LRU) where `kevy_get`'s fast path uses the READ guard, plus
+small values built a fresh 2-alloc Arc. Fixed both — `get_shared_owned` is now
+`&self` (read lock, `maxmemory==0`) and small values return a 1-alloc `Vec`
+(the FFI tags `cap`'s low bit: 0 = Arc raw ptr, 1 = Vec capacity). Host
+microbench after: shared is now **faster than `kevy_get` at every size**
+(16 B 245→230, 256 B 246→191, 4 KB 296→190 ns).
+
+**But re-measured on both real phones, the GET ratios did NOT move**: iPhone
+16 B still 0.8× / 256 B 1.0–1.1× / 4 KB 2.3–3.2×; Samsung 16 B 0.6× / 256 B
+0.8× / 4 KB 1.1×. This is the decisive evidence that **the small-value GET
+loss is the fixed JSI-crossing overhead, not the engine** — a −90 ns FFI win
+is invisible under the ~µs crossing, so no engine change can close 16 B vs
+MMKV. Large GET, where the copy dominated, is where the engine win shows (and
+does). The read-lock fix is kept as correct engine hygiene (the shared lane is
+now strictly ≥ the plain lane for every caller, e.g. non-crossing embedded
+doors), not for the RN ratio.
+
+**Perf audit exhausted (measured, both devices):** GET large = kevy wins
+(zero-copy Arc); GET small = crossing-bound (not closable, proven); SET = one
+inherent copy each side (kevy wins 256 B+); pub/sub = mitt's physical
+zero-crossing floor. Nothing closable remains.
