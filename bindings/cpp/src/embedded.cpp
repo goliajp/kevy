@@ -117,11 +117,14 @@ Reply EmbeddedStore::cmd(const std::vector<std::string>& argv) {
 std::optional<std::string> EmbeddedStore::get(std::string_view key) {
   if (db_ == nullptr) throw ClosedError();
   KevyBuf out{};
-  int32_t rc = kevy_get(db_, byte_ptr(key), key.size(), &out);
-  if (rc < 0) throw ProtocolError("kevy: kevy_get misuse");
+  // Zero-copy shared lane: a bulk value is an Arc clone (no engine copy); the
+  // std::string ctor makes the one copy, then the paired shared free drops the
+  // Arc. Saves the engine's into_owned copy on large GETs.
+  int32_t rc = kevy_get_shared(db_, byte_ptr(key), key.size(), &out);
+  if (rc < 0) throw ProtocolError("kevy: kevy_get_shared misuse");
   if (rc == 0) return std::nullopt;
   std::string v(reinterpret_cast<const char*>(out.ptr), out.len);
-  kevy_buf_free(out.ptr, out.len, out.cap);
+  kevy_buf_free_shared(out.ptr, out.len, out.cap);
   return v;
 }
 
