@@ -7,6 +7,10 @@
 //   $N …           -> Uint8Array (call text() helper for strings)
 //   $-1 / *-1      -> null
 //   *N …           -> Array
+//
+// RESP2 only: kevy's FFI replies never negotiate RESP3, so the five tags
+// above (+ - : $ *) are the whole grammar. The RESP3 tags (_ # , ( ! = % ~ >)
+// are intentionally not handled and hit the unknown-tag path below.
 
 export type KevyReply =
   | string
@@ -18,7 +22,10 @@ export type KevyReply =
   | KevyReply[];
 
 export class KevyError {
-  constructor(public message: string) {}
+  readonly message: string;
+  constructor(message: string) {
+    this.message = message;
+  }
 }
 
 const dec = new TextDecoder();
