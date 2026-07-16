@@ -50,6 +50,10 @@ public final class KevyNative {
     /** Drain one pending pub/sub frame (RESP array bytes); null = queue empty. */
     public static native byte[] subNext(long sub);
 
+    /** Block up to timeoutMs (0 = forever) for one pub/sub frame; null on
+     *  timeout / bus-gone. Kernel park, not a busy poll. */
+    public static native byte[] subWait(long sub, long timeoutMs);
+
     /** Close a subscription handle. Must not be used afterwards. */
     public static native void subClose(long sub);
 

@@ -8,6 +8,19 @@
 // in submission order, and the SyncBackend lock keeps a concurrently-used
 // blocking face safe. A KevyException raised by the operation completes the
 // future exceptionally.
+//
+// Coverage: every stateless command family the blocking client exposes —
+// core, hash, list, set, zset + algebra, hash-field TTL, blocking pops, IDX.*,
+// FEED.*, and pipelines. Deliberately OFF the async face are the *stateful*
+// surfaces, because a CompletableFuture over a shared single-thread executor
+// can't carry their session/handle affinity:
+//   - Transactions (watch/unwatch/multi): WATCH..MULTI..EXEC is pinned to one
+//     connection across calls; the Transaction handle is where you drive it.
+//   - Pub/sub (subscribe/recv): a subscribed connection is its own mode — use
+//     the dedicated Subscriber type.
+//   - Cluster: a slot-routed multi-shard client is the separate ClusterClient.
+// Reach any of them through the blocking face via blocking(), or the raw
+// escape hatch execute(...) for one-off verbs.
 package jp.golia.kevy;
 
 import java.time.Duration;
@@ -115,10 +128,35 @@ public final class KevyAsyncClient {
     public CompletableFuture<Optional<KeyValue>> brpop(byte[][] keys, Duration t) { return run(() -> c.brpop(keys, t)); }
     public CompletableFuture<Optional<ZPopHit>> bzpopmin(byte[][] keys, Duration t) { return run(() -> c.bzpopmin(keys, t)); }
 
+    // ---- IDX.* (§3.8) — remote-only (embedded answers Unsupported) ----
+    public CompletableFuture<Void> idxCreateRange(String name, String prefix, String field, IdxType ty) { return run(() -> { c.idxCreateRange(name, prefix, field, ty); return null; }); }
+    public CompletableFuture<Void> idxCreateRaw(List<byte[]> args) { return run(() -> { c.idxCreateRaw(args); return null; }); }
+    public CompletableFuture<Boolean> idxDrop(String name) { return run(() -> c.idxDrop(name)); }
+    public CompletableFuture<List<IdxInfo>> idxList() { return run(c::idxList); }
+    public CompletableFuture<IdxPage> idxQueryRange(String name, byte[] min, byte[] max, long limit, byte[] cursor) { return run(() -> c.idxQueryRange(name, min, max, limit, cursor)); }
+    public CompletableFuture<IdxPage> idxQueryEq(String name, byte[] value, long limit) { return run(() -> c.idxQueryEq(name, value, limit)); }
+    public CompletableFuture<List<Scored>> idxQueryMatch(String name, String text, long limit) { return run(() -> c.idxQueryMatch(name, text, limit)); }
+    public CompletableFuture<List<Scored>> idxQueryKnn(String name, float[] vector, long k) { return run(() -> c.idxQueryKnn(name, vector, k)); }
+    public CompletableFuture<Reply> idxQueryRaw(List<byte[]> args) { return run(() -> c.idxQueryRaw(args)); }
+
+    // ---- FEED.* (§3.10) ----
+    public CompletableFuture<Long> feedShards() { return run(c::feedShards); }
+    public CompletableFuture<FeedTail> feedTail(long shard) { return run(() -> c.feedTail(shard)); }
+    public CompletableFuture<FeedBatch> feedRead(long shard, long generation, long offset, Long count, byte[]... prefixes) { return run(() -> c.feedRead(shard, generation, offset, count, prefixes)); }
+
     // ---- pipeline (§3.13) ----
     public CompletableFuture<List<Reply>> pipeline(java.util.function.Consumer<PipelineBuf> build) { return run(() -> c.pipeline(build)); }
 
+    /** Stop the executor and give in-flight tasks a bounded window to finish. */
     void shutdown() {
         pool.shutdown();
+        try {
+            if (!pool.awaitTermination(2, java.util.concurrent.TimeUnit.SECONDS)) {
+                pool.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            pool.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 }
