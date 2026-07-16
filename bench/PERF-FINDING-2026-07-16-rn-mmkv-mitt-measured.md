@@ -170,3 +170,49 @@ With the binding competitive, swept value size to see the engine edge:
 kevy's Nitro door **beats MMKV on SET** (up to 1.4× at 4 KB) and trails by a
 steady ~10% on GET — a completely different product from the pre-attack
 "MMKV 1.7–2.3× faster."
+
+---
+
+## DEFINITIVE — real device (iPhone 15, iOS 26.5.2, Release, signed)
+
+The simulator numbers above are relative-standing signals; this is the real
+phone. Built a signed Release (GOLIA team), installed on a physical iPhone 15,
+ran the same bench, pulled the results file off the app container (console.log
+does not reach the host from a device Release — the app writes a file). One
+run (the on-device figures are stable; Date.now() ms granularity):
+
+| KV (iPhone 15) | GET kevy/mmkv | SET kevy/mmkv |
+|----------------|--------------:|--------------:|
+| 16 B | 0.8× | 0.8× |
+| 256 B | 0.9× | **1.3× (kevy wins)** |
+| 4096 B | **0.5×** | **1.6× (kevy wins)** |
+
+Raw: GET kevy 2.63M/2.63M/1.03M vs MMKV 3.23M/3.03M/2.08M ops/s;
+SET kevy 1.96M/2.86M/2.63M vs MMKV 2.38M/2.13M/1.67M. Nitro cmd door
+**11–13× over the Expo door** (PING 13.4×, SET 11.0×); scalar door 2.4–2.5×
+over the RESP cmd lane. pub/sub `mitt/pushBatched = 5.8×` (real hardware, vs
+the sim's 12× — the crossing is relatively cheaper on-device); `push/poll
+1.1×`, `pushBatched/poll 0.9×`.
+
+**What the real device confirms and what it revises:**
+- **SET crossover holds on real hardware** — kevy ties at 16 B and **beats
+  MMKV from 256 B up, 1.6× at 4 KB**. kevy's in-memory store insert scales
+  past MMKV's mmap-append + writeback. This is the headline: for realistic
+  write payloads, kevy's Nitro door is faster than MMKV.
+- **GET revises the sim story** — on real hardware MMKV wins GET at every
+  size and its lead **grows with value size** (0.8× @16 B → **0.5× @4 KB**),
+  the *opposite* of both the flat-0.9× sim and the engine-level mmkvgate
+  (which had kevy winning large GET via KevyKit-direct). Cause: MMKV's
+  `getBuffer` returns a **zero-copy view of the mmap page**; kevy's `kevy_get`
+  must `into_owned`-copy the value out from behind the store lock (an
+  in-memory store can't hand out a borrowed view that outlives the lock). At
+  4 KB that copy is the gap. This is **architectural** (mmap-view vs
+  locked-store-copy), not a binding-shape fix — the same durability/storage
+  model tradeoff the mmap-AOF finding named, now visible on GET.
+
+**Net, on a real phone:** kevy's Nitro KV door **beats MMKV on SET for
+realistic payloads** (the common mobile write) and **trails on GET, more so
+for large values** (MMKV's mmap-view edge). pub/sub trails mitt ~6× (physical
+crossing floor). A completely different, honest picture from the pre-attack
+"kevy loses everything 1.7–2.3×" — earned by device-grounded decomposition +
+two measured binding attacks + a real-device confirmation.

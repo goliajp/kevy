@@ -4,7 +4,7 @@
 // kevy calls on the JS thread, the MMKV shape.
 import { useEffect, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
-import { documentDirectory } from "expo-file-system/legacy";
+import { documentDirectory, writeAsStringAsync } from "expo-file-system/legacy";
 import { open, text, version } from "expo-kevy";
 import { runPubsubBench, pubsubGateLines, type BenchRow } from "./pubsubBench";
 import { runNitroBench } from "./nitroBench";
@@ -48,31 +48,42 @@ export default function App() {
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
+    // Accumulate every GATE line so a device Release build (where console.log
+    // does not reach the host) can write them to a file we pull off-device.
+    const captured: string[] = [];
+    const emit = (line: string) => { console.log(line); captured.push(line); };
     try {
       const result = runSmoke();
       setLines(result);
       // The side-channel mobilegate reads: one line, once settled.
-      console.log(result.every((l) => l.ok) ? "MOBILEGATE:PASS" : "MOBILEGATE:FAIL");
+      emit(result.every((l) => l.ok) ? "MOBILEGATE:PASS" : "MOBILEGATE:FAIL");
     } catch (e) {
       setErr(String(e));
-      console.log(`MOBILEGATE:ERROR ${String(e)}`);
+      emit(`MOBILEGATE:ERROR ${String(e)}`);
     }
     // pub/sub throughput vs mitt — pubsubgate reads the PUBSUBGATE lines.
     try {
       const rows = runPubsubBench();
       setBench(rows);
-      for (const line of pubsubGateLines(rows)) console.log(line);
+      for (const line of pubsubGateLines(rows)) emit(line);
     } catch (e) {
-      console.log(`PUBSUBGATE:ERROR ${String(e)}`);
+      emit(`PUBSUBGATE:ERROR ${String(e)}`);
     }
     // Nitro (JSI) fast-path door vs the Expo door — nitrogate reads the
     // NITROGATE lines. Async: the push variants await native->JS delivery.
     runNitroBench()
       .then((nitroLines) => {
         setNitro(nitroLines);
-        for (const line of nitroLines) console.log(line);
+        for (const line of nitroLines) emit(line);
       })
-      .catch((e) => console.log(`NITROGATE:ERROR ${String(e)}`));
+      .catch((e) => emit(`NITROGATE:ERROR ${String(e)}`))
+      .finally(() => {
+        // Persist for off-device pull (devicectl / adb): the deterministic
+        // channel when console.log is unavailable in a Release build.
+        writeAsStringAsync(`${documentDirectory}nitrogate-results.txt`, captured.join("\n"))
+          .then(() => console.log("NITROGATE:WROTE results file"))
+          .catch((e) => console.log(`NITROGATE:WRITE-ERROR ${String(e)}`));
+      });
   }, []);
 
   const allOk = lines.length > 0 && lines.every((l) => l.ok) && !err;
