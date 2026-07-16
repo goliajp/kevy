@@ -41,3 +41,27 @@ case "$out" in
     *"smoke-jvm: ok"*) echo "jnigate: PASS — raw JNI door opens on the JVM" ;;
     *) echo "jnigate: FAIL — no 'smoke-jvm: ok' in output"; exit 1 ;;
 esac
+
+# The typed Kotlin shell (KevyDB) carries the scalar lane's WRONGTYPE fidelity:
+# get() on a non-string key must surface a typed KevyException, not leak the
+# native ScalarGetSignal / a NoClassDefFoundError. That path lives in Kotlin,
+# so it needs kotlinc; without it the raw JNI gate above still stands and we
+# skip cleanly.
+if command -v kotlinc >/dev/null 2>&1; then
+    echo "jnigate: compiling the Kotlin shell + smoke…"
+    kotlinc -cp "$DIR/classes" -include-runtime -d "$DIR/kevy.jar" \
+        bindings/android/kevy/src/main/kotlin/jp/golia/kevy/*.kt \
+        bindings/android/kevy/src/smoke/kotlin/jp/golia/kevy/*.kt
+
+    ktout="$(java -Djava.library.path="$libdir" \
+            -cp "$DIR/classes:$DIR/kevy.jar" jp.golia.kevy.SmokeKt 2>&1)" || {
+        echo "jnigate: FAIL — Kotlin Smoke exited non-zero"; echo "$ktout"; exit 1
+    }
+    echo "$ktout"
+    case "$ktout" in
+        *"smoke-kt: ok"*) echo "jnigate: PASS — Kotlin shell surfaces a typed scalar WRONGTYPE" ;;
+        *) echo "jnigate: FAIL — no 'smoke-kt: ok' in output"; exit 1 ;;
+    esac
+else
+    echo "jnigate: SKIP Kotlin smoke — no kotlinc on PATH (raw JNI door still gated above)"
+fi

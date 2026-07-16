@@ -146,9 +146,19 @@ class KevyDB private constructor(private var handle: Long) : AutoCloseable {
         set(key, value.toByteArray(Charsets.UTF_8), ttlMs)
     }
 
-    /** Fetch [key]; null on a miss. Scalar fast path. */
+    /** Fetch [key]; null on a miss. Scalar fast path.
+     *
+     *  The scalar lane can't carry a typed store error, so on a WRONGTYPE
+     *  (GET on a non-string key) the native throws [ScalarGetSignal]. Catch
+     *  it and re-run the framed GET so a typed [KevyException] (WRONGTYPE)
+     *  surfaces — the same failure cmd("GET", …) and every other kevy backend
+     *  raise, rather than folding the wrong type into a null miss. */
     fun get(key: String): ByteArray? =
-        KevyNative.get(live(), key.toByteArray(Charsets.UTF_8))
+        try {
+            KevyNative.get(live(), key.toByteArray(Charsets.UTF_8))
+        } catch (signal: ScalarGetSignal) {
+            (want(cmd("GET", key)) as? KevyValue.Bulk)?.bytes
+        }
 
     /** Fetch [key] as UTF-8 text; null on a miss. */
     fun getText(key: String): String? = get(key)?.toString(Charsets.UTF_8)
