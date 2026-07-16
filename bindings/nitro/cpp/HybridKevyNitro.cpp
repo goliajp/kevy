@@ -2,6 +2,9 @@
 
 #include <cstdint>
 #include <pthread.h>
+#include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace margelo::nitro::kevy {
@@ -42,6 +45,11 @@ HybridKevyNitro::cmd(const std::shared_ptr<ArrayBuffer>& argv) {
   size_t total = argv->size();
   std::vector<const uint8_t*> ptrs;
   std::vector<size_t> lens;
+  // Most commands are a handful of args; reserve so the common case does no
+  // per-call growth reallocs. A wider argv still grows (rare), and the reserve
+  // never scales with a large *value* payload (it's an arg count, not bytes).
+  ptrs.reserve(8);
+  lens.reserve(8);
   size_t pos = 0;
   while (pos + 4 <= total) {
     uint32_t len = static_cast<uint32_t>(base[pos]) |
@@ -58,7 +66,7 @@ HybridKevyNitro::cmd(const std::shared_ptr<ArrayBuffer>& argv) {
   }
 
   KevyBuf out{};
-  kevy_cmd(_db, ptrs.size(), ptrs.data(), lens.data(), &out);
+  kevy_cmd(_db.get(), ptrs.size(), ptrs.data(), lens.data(), &out);
   return takeBuf(out);
 }
 
@@ -74,35 +82,94 @@ std::optional<std::shared_ptr<ArrayBuffer>>
 HybridKevyNitro::getData(const std::string& key) {
   KevyBuf out{};
   const auto* kp = reinterpret_cast<const uint8_t*>(key.data());
-  int32_t rc = kevy_get_shared(_db, kp, key.size(), &out);
-  if (rc != 1) {
-    return std::nullopt; // 0 = miss, <0 = misuse — nothing to free
+  int32_t rc = kevy_get_shared(_db.get(), kp, key.size(), &out);
+  if (rc == 1) {
+    return takeBufShared(out); // hit: zero-copy Arc view (the hot path)
   }
-  return takeBufShared(out);
+  if (rc == 0) {
+    return std::nullopt; // miss — nothing to free
+  }
+  // rc < 0 = WRONGTYPE (get_shared's only error, a GET on a non-string key).
+  // The shared lane can't convey it, so re-issue as a framed GET and let the
+  // typed error surface — never a phantom miss. Only this rare case pays the
+  // framed hop; hit/miss above never reach here.
+  return getDataFramed(key);
+}
+
+// Parse a RESP GET reply from the framed lane into the scalar-door shape:
+//   -ERR/-WRONGTYPE → throw (Nitro turns the std::exception into a typed JS
+//                     error, message-carried, like every sibling door);
+//   nil ($-1 / _)   → nullopt (miss);
+//   bulk / simple   → copy the value out (rare path) and hand it to JS.
+// Frees the reply buffer exactly once on every exit.
+static std::optional<std::shared_ptr<ArrayBuffer>> parseGetReply(KevyBuf out) {
+  const uint8_t* p = out.ptr;
+  size_t n = out.len;
+  if (p == nullptr || n == 0) {
+    kevy_buf_free(out.ptr, out.len, out.cap);
+    throw std::runtime_error("kevy: empty reply from framed GET");
+  }
+  uint8_t tag = p[0];
+  if (tag == '-') { // error line: "-WRONGTYPE ...\r\n"
+    size_t end = 1;
+    while (end < n && p[end] != '\r') {
+      end++;
+    }
+    std::string msg(reinterpret_cast<const char*>(p + 1), end - 1);
+    kevy_buf_free(out.ptr, out.len, out.cap);
+    throw std::runtime_error(msg);
+  }
+  if (tag == '_' || (tag == '$' && n >= 2 && p[1] == '-')) { // RESP3 / RESP2 nil
+    kevy_buf_free(out.ptr, out.len, out.cap);
+    return std::nullopt;
+  }
+  // Bulk "$<len>\r\n<value>\r\n" or Simple "+<value>\r\n": the value is the
+  // bytes between the header line and the trailing CRLF (frame geometry — no
+  // length re-parse). Copy it (rare path), then free the frame.
+  size_t hdr = 1;
+  while (hdr + 1 < n && !(p[hdr] == '\r' && p[hdr + 1] == '\n')) {
+    hdr++;
+  }
+  size_t start = (tag == '+') ? 1 : hdr + 2;
+  size_t stop = (tag == '+') ? hdr : (n >= 2 ? n - 2 : start);
+  if (stop < start) {
+    stop = start;
+  }
+  std::vector<uint8_t> value(p + start, p + stop);
+  kevy_buf_free(out.ptr, out.len, out.cap);
+  return ArrayBuffer::move(std::move(value));
+}
+
+std::optional<std::shared_ptr<ArrayBuffer>>
+HybridKevyNitro::getDataFramed(const std::string& key) {
+  const uint8_t* verb = reinterpret_cast<const uint8_t*>("GET");
+  const uint8_t* kp = reinterpret_cast<const uint8_t*>(key.data());
+  const uint8_t* ptrs[2] = {verb, kp};
+  size_t lens[2] = {3, key.size()};
+  KevyBuf out{};
+  kevy_cmd(_db.get(), 2, ptrs, lens, &out);
+  return parseGetReply(out);
 }
 
 void HybridKevyNitro::setData(const std::string& key,
                               const std::shared_ptr<ArrayBuffer>& value,
                               double ttlMs) {
   const auto* kp = reinterpret_cast<const uint8_t*>(key.data());
-  kevy_set(_db, kp, key.size(), value->data(), value->size(),
+  kevy_set(_db.get(), kp, key.size(), value->data(), value->size(),
            static_cast<uint64_t>(ttlMs));
 }
 
 bool HybridKevyNitro::openAt(const std::string& dir) {
-  if (_db != nullptr) {
-    kevy_close(_db);
-  }
-  _db = kevy_open(reinterpret_cast<const uint8_t*>(dir.data()), dir.size());
+  // reset() closes the prior (in-memory ctor) db, then adopts the file-backed
+  // one — the deleter runs on the old handle.
+  _db.reset(kevy_open(reinterpret_cast<const uint8_t*>(dir.data()), dir.size()));
   return _db != nullptr; // NULL = open failed; caller must not use data ops
 }
 
 void HybridKevyNitro::subscribe(const std::string& channel) {
-  if (_sub != nullptr) {
-    kevy_sub_close(_sub);
-  }
-  _sub = kevy_subscribe(
-      _db, reinterpret_cast<const uint8_t*>(channel.data()), channel.size());
+  _sub.reset(kevy_subscribe(
+      _db.get(), reinterpret_cast<const uint8_t*>(channel.data()),
+      channel.size()));
 }
 
 void HybridKevyNitro::publish(const std::string& channel,
@@ -113,7 +180,7 @@ void HybridKevyNitro::publish(const std::string& channel,
   const uint8_t* ptrs[3] = {verb, chan, msg};
   size_t lens[3] = {7, channel.size(), payload->size()};
   KevyBuf out{};
-  kevy_cmd(_db, 3, ptrs, lens, &out);
+  kevy_cmd(_db.get(), 3, ptrs, lens, &out);
   kevy_buf_free(out.ptr, out.len, out.cap);
 }
 
@@ -122,7 +189,7 @@ std::optional<std::shared_ptr<ArrayBuffer>> HybridKevyNitro::subNext() {
     return std::nullopt;
   }
   KevyBuf out{};
-  int32_t rc = kevy_sub_next(_sub, &out);
+  int32_t rc = kevy_sub_next(_sub.get(), &out);
   if (rc != 1) {
     return std::nullopt;
   }
@@ -145,37 +212,45 @@ std::optional<std::shared_ptr<ArrayBuffer>> HybridKevyNitro::subNext() {
 // ack frames use the framed subscribe/subNext lane instead.)
 static constexpr uint64_t kWaitSliceMs = 250;
 
+// Name the poller thread so it's distinct from the JS thread it was spawned
+// from (bionic otherwise inherits the creator's name, "mqt_v_js"). Darwin's
+// pthread_setname_np names the *current* thread and takes one arg; bionic/Linux
+// takes (thread, name). We're on the poller thread either way, so both name it.
+static void namePollThread() {
+#if defined(__APPLE__)
+  pthread_setname_np("kevy-push-poll");
+#else
+  pthread_setname_np(pthread_self(), "kevy-push-poll");
+#endif
+}
+
+void HybridKevyNitro::spawnPoller(const std::string& channel,
+                                  std::function<void(KevySub*)> drain) {
+  stopPushInternal();
+  _pushSub.reset(kevy_subscribe(
+      _db.get(), reinterpret_cast<const uint8_t*>(channel.data()),
+      channel.size()));
+  _pollRunning.store(true, std::memory_order_release);
+  KevySub* sub = _pushSub.get();
+  _poller = std::thread([this, sub, drain = std::move(drain)]() {
+    namePollThread();
+    while (_pollRunning.load(std::memory_order_acquire)) {
+      drain(sub); // one kernel-park wait cycle; re-checks the run flag after
+    }
+  });
+}
+
 void HybridKevyNitro::subscribePush(
     const std::string& channel,
     const std::function<void(const std::shared_ptr<ArrayBuffer>&)>& onMessage) {
-  stopPushInternal();
-  _pushSub = kevy_subscribe(
-      _db, reinterpret_cast<const uint8_t*>(channel.data()), channel.size());
-  _pollRunning.store(true, std::memory_order_release);
-  KevySub* sub = _pushSub;
-  auto cb = onMessage;
-  _poller = std::thread([this, sub, cb]() {
-    // Name the thread so it's distinct from the JS thread it was spawned
-    // from (bionic otherwise inherits the creator's name, "mqt_v_js").
-    // Darwin's pthread_setname_np names the *current* thread and takes one
-    // arg; bionic/Linux takes (thread, name). We're on the poller thread
-    // either way, so both name this thread.
-#if defined(__APPLE__)
-    pthread_setname_np("kevy-push-poll");
-#else
-    pthread_setname_np(pthread_self(), "kevy-push-poll");
-#endif
-    while (_pollRunning.load(std::memory_order_acquire)) {
-      KevyBuf out{};
-      int32_t rc = kevy_sub_wait_raw(sub, kWaitSliceMs, &out); // kernel park
-      if (rc == 1) {
-        std::vector<uint8_t> v(out.ptr, out.ptr + out.len);
-        kevy_buf_free(out.ptr, out.len, out.cap);
-        cb(ArrayBuffer::move(std::move(v))); // hops to the JS thread
-      }
-      // rc == 0: timeout or an ack was skipped — loop, re-check the run flag.
-      // rc < 0: closed.
+  spawnPoller(channel, [cb = onMessage](KevySub* sub) {
+    KevyBuf out{};
+    int32_t rc = kevy_sub_wait_raw(sub, kWaitSliceMs, &out); // kernel park
+    if (rc == 1) {
+      cb(takeBuf(out)); // wrap + GC-time free; zero-copy, like getData
     }
+    // rc == 0: timeout or an ack was skipped; rc < 0: closed — either way the
+    // outer loop re-checks the run flag.
   });
 }
 
@@ -196,41 +271,26 @@ static void packFrame(std::vector<uint8_t>& packed, KevyBuf& buf) {
 void HybridKevyNitro::subscribePushBatched(
     const std::string& channel,
     const std::function<void(const std::shared_ptr<ArrayBuffer>&, double)>& onBatch) {
-  stopPushInternal();
-  _pushSub = kevy_subscribe(
-      _db, reinterpret_cast<const uint8_t*>(channel.data()), channel.size());
-  _pollRunning.store(true, std::memory_order_release);
-  KevySub* sub = _pushSub;
-  auto cb = onBatch;
-  _poller = std::thread([this, sub, cb]() {
-    // Name the thread so it's distinct from the JS thread it was spawned
-    // from (bionic otherwise inherits the creator's name, "mqt_v_js").
-#if defined(__APPLE__)
-    pthread_setname_np("kevy-push-poll");
-#else
-    pthread_setname_np(pthread_self(), "kevy-push-poll");
-#endif
-    while (_pollRunning.load(std::memory_order_acquire)) {
-      KevyBuf out{};
-      int32_t rc = kevy_sub_wait_raw(sub, kWaitSliceMs, &out); // block for frame 1
-      if (rc != 1) {
-        continue; // timeout, ack skipped, or closed — re-check the run flag
-      }
-      // Pack the whole burst — frame 1 plus everything else already queued —
-      // into one length-prefixed buffer, so it rides one JS hop as one AB.
-      // Raw payloads only (kevy_sub_next_raw skips acks), so the batch never
-      // carries a control frame.
-      std::vector<uint8_t> packed;
-      uint32_t count = 0;
-      packFrame(packed, out);
-      count++;
-      KevyBuf more{};
-      while (kevy_sub_next_raw(sub, &more) == 1) {
-        packFrame(packed, more);
-        count++;
-      }
-      cb(ArrayBuffer::move(std::move(packed)), static_cast<double>(count));
+  spawnPoller(channel, [cb = onBatch](KevySub* sub) {
+    KevyBuf out{};
+    int32_t rc = kevy_sub_wait_raw(sub, kWaitSliceMs, &out); // block for frame 1
+    if (rc != 1) {
+      return; // timeout, ack skipped, or closed — outer loop re-checks the flag
     }
+    // Pack the whole burst — frame 1 plus everything else already queued — into
+    // one length-prefixed buffer, so it rides one JS hop as one AB. Raw
+    // payloads only (kevy_sub_next_raw skips acks): never a control frame. This
+    // deliberate copy (packFrame) coalesces M frames into one crossing.
+    std::vector<uint8_t> packed;
+    uint32_t count = 0;
+    packFrame(packed, out);
+    count++;
+    KevyBuf more{};
+    while (kevy_sub_next_raw(sub, &more) == 1) {
+      packFrame(packed, more);
+      count++;
+    }
+    cb(ArrayBuffer::move(std::move(packed)), static_cast<double>(count));
   });
 }
 
@@ -241,10 +301,7 @@ void HybridKevyNitro::stopPushInternal() {
   if (_poller.joinable()) {
     _poller.join();
   }
-  if (_pushSub != nullptr) {
-    kevy_sub_close(_pushSub);
-    _pushSub = nullptr;
-  }
+  _pushSub.reset(); // closes via KevySubDeleter (no-op if already null)
 }
 
 } // namespace margelo::nitro::kevy

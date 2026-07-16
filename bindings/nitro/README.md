@@ -34,7 +34,7 @@ kevy.publish('room', payload)            // ArrayBuffer
 for (let f = kevy.subNext(); f; f = kevy.subNext()) handle(f)
 
 // 4. Batched push — the high-fanout path. A native poller parks on the
-//    engine (kevy_sub_wait; ~0% idle CPU) and delivers each burst in ONE hop
+//    engine (kevy_sub_wait_raw; ~0% idle CPU) and delivers each burst in ONE hop
 //    as ONE packed ArrayBuffer; unpackFrames slices zero-copy views back out.
 kevy.subscribePushBatched('room', (packed, count) => {
   for (const frame of unpackFrames(packed, count)) handle(frame) // Uint8Array
@@ -77,7 +77,7 @@ an orthogonal choice.
 | pub/sub batched push | — | ~660k/s (1.3× poll) |
 
 Idle CPU with a live push subscription and no traffic: **~0%** — the poller
-parks in the kernel via `kevy_sub_wait` (a spin-poll build burned ~one core).
+parks in the kernel via `kevy_sub_wait_raw` (a spin-poll build burned ~one core).
 
 ## Measured (iOS Simulator, iPhone 17 Pro / iOS 26.5, arm64, Release)
 
@@ -89,7 +89,7 @@ parks in the kernel via `kevy_sub_wait` (a spin-poll build burned ~one core).
 | pub/sub batched push | — | ~1.39M/s (1.3× poll) |
 
 `abi()` pure-JSI ~20M/s. Idle CPU with a live push subscription: **0.0%**
-(the `kevy-push-poll` thread parks in `kevy_sub_wait`, same as Android). All
+(the `kevy-push-poll` thread parks in `kevy_sub_wait_raw`, same as Android). All
 50001/50000 pub/sub frames delivered; `abi=1`, `cmd(PING)="+PONG\r\n"`.
 (Release numbers run higher than Android's Debug numbers; the door-vs-door
 ratios are the story and hold on both platforms — batched push = 1.3× poll,
