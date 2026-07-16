@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <string_view>
+#include <utility>
 
 #include "harness.hpp"
 #include "kevy/embedded.hpp"
@@ -24,6 +26,32 @@ KEVY_TEST(embedded_cmd_scalar) {
   auto v = db.get("s");
   CHECK(v.has_value() && *v == "fast");
   CHECK(!db.get("missing").has_value());
+}
+
+KEVY_TEST(embedded_get_view_zero_copy) {
+  EmbeddedStore db = EmbeddedStore::open_mem();
+  db.set("k", "hello");
+  // Zero-copy view over the shared lane.
+  auto sv = db.get_view("k");
+  CHECK(sv.has_value());
+  CHECK(sv->view() == std::string_view("hello"));
+  CHECK_EQ(sv->size(), size_t(5));
+  CHECK(!sv->empty());
+  CHECK_EQ(sv->bytes().size(), size_t(5));
+  // Move leaves the source empty and keeps the value valid in the destination.
+  SharedValue moved = std::move(*sv);
+  CHECK(moved.view() == std::string_view("hello"));
+  // Miss → nullopt.
+  CHECK(!db.get_view("nope").has_value());
+  // Empty value: a present hit whose view() is empty (not a dangling range),
+  // and the paired shared free still runs — no UB on ptr==null,len==0 (§8).
+  db.set("e", "");
+  auto ev = db.get_view("e");
+  CHECK(ev.has_value());
+  CHECK(ev->empty());
+  CHECK(ev->view() == std::string_view(""));
+  auto g = db.get("e");  // copying convenience over the same lane
+  CHECK(g.has_value() && g->empty());
 }
 
 KEVY_TEST(embedded_subscribe_poll_and_wait) {

@@ -78,6 +78,10 @@ class ProtocolError : public KevyError {
  public:
   explicit ProtocolError(std::string msg) : KevyError(ErrorKind::Protocol, std::move(msg)) {}
 };
+// Defined for taxonomy parity with the reference and the sibling ports (§2.1);
+// not thrown by this port — the embedded backend cannot open a replica, and
+// (like Go/Python) a remote -READONLY frame surfaces as ProtocolError. Kept so
+// `catch (const ReadOnlyError&)` and ErrorKind::ReadOnly stay part of the API.
 class ReadOnlyError : public KevyError {
  public:
   ReadOnlyError() : KevyError(ErrorKind::ReadOnly, "READONLY You can't write against a read only replica") {}
