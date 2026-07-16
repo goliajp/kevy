@@ -35,6 +35,7 @@ namespace kevy {
 namespace detail {
 class RespConn;
 class Args;
+class AsyncExecutor;
 }
 class Transaction;
 class PipelineBuf;
@@ -186,6 +187,7 @@ class Client {
 
   std::unique_ptr<detail::RespConn> remote_;
   std::shared_ptr<EmbeddedStore> emb_;
+  std::unique_ptr<detail::AsyncExecutor> async_exec_;  // lazily created by async()
   std::string url_;
 };
 
