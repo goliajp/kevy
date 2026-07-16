@@ -187,6 +187,12 @@ func takeReply(buf C.KevyBuf) (Reply, error) {
 	if buf.len == 0 {
 		return Reply{}, errors.New("kevy: empty reply")
 	}
-	raw := C.GoBytes(unsafe.Pointer(buf.ptr), C.int(buf.len))
-	return decodeReply(raw)
+	// Parse directly over a zero-copy view of the C buffer instead of first
+	// GoBytes-copying the whole reply: parseReply clones every []byte it
+	// retains (cloneBytes), so nothing outlives this view, and the paired
+	// kevy_buf_free below reclaims the buffer once decoding is done.
+	raw := unsafe.Slice((*byte)(unsafe.Pointer(buf.ptr)), int(buf.len))
+	r, err := decodeReply(raw)
+	runtime.KeepAlive(buf)
+	return r, err
 }

@@ -17,6 +17,7 @@ type respConn struct {
 	conn    net.Conn
 	rbuf    []byte
 	wbuf    []byte
+	chunk   []byte // reused per-read scratch (single-goroutine per the doc)
 	hostStr string
 }
 
@@ -34,6 +35,7 @@ func dialResp(host string, port uint16) (*respConn, error) {
 		conn:    conn,
 		rbuf:    make([]byte, 0, 8192),
 		wbuf:    make([]byte, 0, 1024),
+		chunk:   make([]byte, 8192),
 		hostStr: addr,
 	}, nil
 }
@@ -104,7 +106,6 @@ func (c *respConn) roundtrip(ctx context.Context, wire []byte, n int) ([]Reply, 
 }
 
 func (c *respConn) readOne(ctx context.Context) (Reply, error) {
-	chunk := make([]byte, 8192)
 	for {
 		r, used, perr := parseReply(c.rbuf)
 		if perr != nil {
@@ -114,9 +115,9 @@ func (c *respConn) readOne(ctx context.Context) (Reply, error) {
 			c.rbuf = c.rbuf[used:]
 			return r, nil
 		}
-		n, err := c.conn.Read(chunk)
+		n, err := c.conn.Read(c.chunk)
 		if n > 0 {
-			c.rbuf = append(c.rbuf, chunk[:n]...)
+			c.rbuf = append(c.rbuf, c.chunk[:n]...)
 			continue
 		}
 		if err != nil {

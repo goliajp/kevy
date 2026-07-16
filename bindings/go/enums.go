@@ -85,36 +85,3 @@ func (t IdxType) tag() []byte {
 		return []byte("i64")
 	}
 }
-
-// RespVersion is the per-connection RESP dialect (§4.1).
-type RespVersion int
-
-const (
-	// RespV2 is the default RESP2 dialect.
-	RespV2 RespVersion = iota
-	// RespV3 adds the nine extra prefixes plus push frames.
-	RespV3
-)
-
-// EvictionPolicy configures the embedded store's maxmemory behaviour
-// (§5.3). Only EvictNoEviction is meaningful without a max-memory bound.
-type EvictionPolicy int
-
-const (
-	// EvictNoEviction rejects writes with OOM once maxmemory is hit.
-	EvictNoEviction EvictionPolicy = iota
-	// EvictAllKeysLru evicts the least-recently-used key.
-	EvictAllKeysLru
-	// EvictAllKeysLfu evicts the least-frequently-used key.
-	EvictAllKeysLfu
-	// EvictAllKeysRandom evicts a random key.
-	EvictAllKeysRandom
-	// EvictVolatileLru evicts the LRU key among those with a TTL.
-	EvictVolatileLru
-	// EvictVolatileLfu evicts the LFU key among those with a TTL.
-	EvictVolatileLfu
-	// EvictVolatileRandom evicts a random key among those with a TTL.
-	EvictVolatileRandom
-	// EvictVolatileTtl evicts the key with the nearest TTL.
-	EvictVolatileTtl
-)

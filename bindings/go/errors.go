@@ -167,12 +167,12 @@ func unexpectedReply(r Reply) *KevyError {
 	return errProtocol("unexpected RESP reply variant: %s", r.shape())
 }
 
-// classifyWireError maps a server error frame's text onto the structured
-// error taxonomy. On the embedded backend a recognised store error is
-// returned as KindStore (contract §6: "wrong-type op surfaces
-// Store(WrongType)"); otherwise it is a Protocol error carrying the wire
-// text verbatim. Remote callers use protocolFromError to always keep the
-// text (contract §2.2: remote -ERR → Protocol).
+// classifyStoreError maps a server error frame's text onto the structured
+// store-error taxonomy. It returns (kind, true) for a recognised store
+// error — the caller (replyErr) then wraps it as KindStore (contract §6:
+// "wrong-type op surfaces Store(WrongType)") — and (_, false) for anything
+// else, which replyErr keeps verbatim as a Protocol error (contract §2.2:
+// remote -ERR → Protocol).
 func classifyStoreError(text []byte) (StoreErrorKind, bool) {
 	s := string(text)
 	switch {
