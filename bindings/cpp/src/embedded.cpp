@@ -5,6 +5,7 @@
 #include "kevy.h"
 #include "kevy/errors.hpp"
 #include "kevy/resp.hpp"
+#include "reply_util.hpp"
 
 namespace kevy {
 namespace {
@@ -119,6 +120,7 @@ Reply EmbeddedStore::cmd(const std::vector<std::string_view>& argv) {
 SharedValue& SharedValue::operator=(SharedValue&& o) noexcept {
   if (this != &o) {
     release();
+    owned_ = std::move(o.owned_);  // frees our old owned buffer, steals o's (ptr stable)
     ptr_ = o.ptr_;
     len_ = o.len_;
     cap_ = o.cap_;
@@ -145,9 +147,28 @@ std::optional<SharedValue> EmbeddedStore::get_view(std::string_view key) {
   // byte copy) that SharedValue owns and views; the shared free drops the Arc
   // in its destructor.
   int32_t rc = kevy_get_shared(db_, byte_ptr(key), key.size(), &out);
-  if (rc < 0) throw ProtocolError("kevy: kevy_get_shared misuse");
+  // The shared lane rejects a non-string key with a negative code. Re-issue as
+  // a framed GET so the -WRONGTYPE frame surfaces as a typed StoreError, not an
+  // opaque "misuse" ProtocolError (mirrors the framed cmd path and Client).
+  if (rc < 0) return get_framed_fallback(key);
   if (rc == 0) return std::nullopt;
   return SharedValue(out.ptr, out.len, out.cap);
+}
+
+std::optional<SharedValue> EmbeddedStore::get_framed_fallback(std::string_view key) {
+  Reply r = cmd({"GET", key});
+  switch (r.kind) {
+    case ReplyKind::Bulk:
+    case ReplyKind::Simple:
+      return SharedValue(std::vector<uint8_t>(r.bytes.begin(), r.bytes.end()));
+    case ReplyKind::Nil:
+    case ReplyKind::Null:
+      return std::nullopt;
+    case ReplyKind::Error:
+      detail::raise_reply_error(r);  // [[noreturn]] → StoreError(WrongType) etc.
+    default:
+      detail::raise_unexpected(r);   // [[noreturn]]
+  }
 }
 
 std::optional<std::string> EmbeddedStore::get(std::string_view key) {

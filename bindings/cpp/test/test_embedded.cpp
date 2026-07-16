@@ -54,6 +54,30 @@ KEVY_TEST(embedded_get_view_zero_copy) {
   CHECK(g.has_value() && g->empty());
 }
 
+KEVY_TEST(embedded_get_wrongtype_is_typed) {
+  // The high-level GET rides the zero-copy scalar lane, which rejects a
+  // non-string key. That must surface as a typed Store(WrongType), NOT the
+  // opaque "misuse" ProtocolError — matching the framed cmd path and Client.
+  EmbeddedStore db = EmbeddedStore::open_mem();
+  db.cmd({"RPUSH", "list", "a", "b"});  // a list-typed key
+  // get_view path
+  try {
+    db.get_view("list");
+    t.fail("expected WrongType throw from get_view");
+  } catch (const KevyError& e) {
+    CHECK(e.kind() == ErrorKind::Store);
+    CHECK(e.store_error() == StoreErrorKind::WrongType);
+  }
+  // copying get() path (built on get_view)
+  try {
+    db.get("list");
+    t.fail("expected WrongType throw from get");
+  } catch (const KevyError& e) {
+    CHECK(e.kind() == ErrorKind::Store);
+    CHECK(e.store_error() == StoreErrorKind::WrongType);
+  }
+}
+
 KEVY_TEST(embedded_subscribe_poll_and_wait) {
   EmbeddedStore db = EmbeddedStore::open_mem();
   Subscription sub = db.subscribe("room");
