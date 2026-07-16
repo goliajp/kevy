@@ -133,7 +133,7 @@ pub use stream::{
     XAddIdSpec, XClaimOpts, now_unix_ms, parse_explicit_id, parse_range_end,
     parse_range_start, parse_xadd_id,
 };
-pub use string::GetReply;
+pub use string::{GetReply, GetShared};
 pub use util::glob_match;
 pub use value::*;
 
