@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 
 
 @dataclass
@@ -16,17 +16,24 @@ class ZMember:
     member: bytes
 
 
-@dataclass
-class KV:
-    """A (key, value) blocking-pop hit (§3.14)."""
+class KV(NamedTuple):
+    """A (key, value) blocking-pop hit (§3.14).
+
+    A tuple subtype: ``KV(b"q", b"a") == (b"q", b"a")``, so it destructures
+    and compares like the plain pair while also exposing ``.key``/``.value``.
+    """
 
     key: bytes
     value: bytes
 
 
-@dataclass
-class ZPopHit:
-    """A (key, member, score) BZPOPMIN hit (§4.9)."""
+class ZPopHit(NamedTuple):
+    """A (key, member, score) BZPOPMIN hit (§4.9).
+
+    A tuple subtype: ``ZPopHit(b"z", b"a", 1.0) == (b"z", b"a", 1.0)``, so it
+    destructures and compares like the plain triple while also exposing
+    ``.key``/``.member``/``.score``.
+    """
 
     key: bytes
     member: bytes

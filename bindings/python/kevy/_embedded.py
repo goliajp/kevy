@@ -54,10 +54,6 @@ def _candidate_paths() -> List[str]:
     repo = os.path.abspath(os.path.join(here, "..", "..", ".."))
     for profile in ("release", "debug"):
         paths.append(os.path.join(repo, "target", profile, name))
-    # A git worktree keeps no target/ of its own; fall back to the primary
-    # checkout that built the library at this same commit.
-    paths.append(os.path.join("/Users/doracawl/workspace/goliajp/kevy", "target", "release", name))
-    paths.append(os.path.join("/Users/doracawl/workspace/goliajp/kevy", "target", "debug", name))
     return paths
 
 
@@ -146,12 +142,17 @@ def _ptr_of(buf) -> "ctypes._Pointer":
 
 def _bytes_arg(data: bytes):
     """A (ptr, len) pair for one argument, plus a keep-alive owner. A
-    non-null pointer is used even for 0-length (§5.1)."""
+    non-null pointer is used even for 0-length (§5.1).
+
+    The C ABI takes ``*const u8`` with an explicit length, so the immutable
+    ``bytes`` buffer is wrapped in place (no copy) — the returned owner keeps
+    it alive across the call. Binary-safe: the length is passed separately, so
+    an embedded NUL in ``data`` is never treated as a terminator."""
     n = len(data)
     if n == 0:
         return _ptr_of(_EMPTY), 0, None
-    owner = ctypes.create_string_buffer(data, n)  # exact length, no extra NUL
-    return _ptr_of(owner), n, owner
+    owner = ctypes.c_char_p(data)  # borrows the bytes buffer, no copy
+    return ctypes.cast(owner, _U8P), n, owner
 
 
 def _take_buf(lib: ctypes.CDLL, out: KevyBuf) -> bytes:
@@ -196,7 +197,7 @@ class DB:
 
     def close(self) -> None:
         if self._p:
-            self._lib.kevy_close(ctypes.c_void_p(self._p))
+            self._lib.kevy_close(self._p)
             self._p = 0
 
     def __del__(self):  # best-effort; explicit close() is the contract
@@ -224,9 +225,7 @@ class DB:
             if owner is not None:
                 owners.append(owner)
         out = KevyBuf()
-        rc = self._lib.kevy_cmd(
-            ctypes.c_void_p(self._p), argc, ptrs, lens, ctypes.byref(out)
-        )
+        rc = self._lib.kevy_cmd(self._p, argc, ptrs, lens, ctypes.byref(out))
         # owners kept alive until here
         del owners
         if rc != 0:
@@ -242,7 +241,7 @@ class DB:
             raise IoError("kevy: closed handle")
         kp, kn, owner = _bytes_arg(key)
         out = KevyBuf()
-        rc = self._lib.kevy_get_shared(ctypes.c_void_p(self._p), kp, kn, ctypes.byref(out))
+        rc = self._lib.kevy_get_shared(self._p, kp, kn, ctypes.byref(out))
         del owner
         if rc < 0:
             raise IoError("kevy: kevy_get_shared misuse")
@@ -256,9 +255,7 @@ class DB:
             raise IoError("kevy: closed handle")
         kp, kn, ko = _bytes_arg(key)
         vp, vn, vo = _bytes_arg(value)
-        rc = self._lib.kevy_set(
-            ctypes.c_void_p(self._p), kp, kn, vp, vn, ctypes.c_uint64(ttl_ms)
-        )
+        rc = self._lib.kevy_set(self._p, kp, kn, vp, vn, ttl_ms)
         del ko, vo
         if rc < 0:
             raise IoError("kevy: kevy_set misuse or storage error")
@@ -274,7 +271,7 @@ class DB:
             raise IoError("kevy: closed handle")
         np, nn, owner = _bytes_arg(name)
         fn = self._lib.kevy_psubscribe if pattern else self._lib.kevy_subscribe
-        handle = fn(ctypes.c_void_p(self._p), np, nn)
+        handle = fn(self._p, np, nn)
         del owner
         if not handle:
             raise IoError("kevy: subscribe failed")
@@ -296,7 +293,7 @@ class Sub:
         if not self._p:
             raise IoError("kevy: closed subscription")
         out = KevyBuf()
-        rc = self._lib.kevy_sub_next(ctypes.c_void_p(self._p), ctypes.byref(out))
+        rc = self._lib.kevy_sub_next(self._p, ctypes.byref(out))
         if rc < 0:
             raise IoError("kevy: subscription misuse")
         if rc == 0:
@@ -309,9 +306,7 @@ class Sub:
         if not self._p:
             raise IoError("kevy: closed subscription")
         out = KevyBuf()
-        rc = self._lib.kevy_sub_wait(
-            ctypes.c_void_p(self._p), ctypes.c_uint64(timeout_ms), ctypes.byref(out)
-        )
+        rc = self._lib.kevy_sub_wait(self._p, timeout_ms, ctypes.byref(out))
         if rc < 0:
             raise IoError("kevy: subscription closed")
         if rc == 0:
@@ -320,7 +315,7 @@ class Sub:
 
     def close(self) -> None:
         if self._p:
-            self._lib.kevy_sub_close(ctypes.c_void_p(self._p))
+            self._lib.kevy_sub_close(self._p)
             self._p = 0
 
     def __del__(self):

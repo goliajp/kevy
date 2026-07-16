@@ -47,8 +47,9 @@ build). Every verb is reachable through `db.cmd(*argv) -> Reply`; `db.get`
 
 Every family of the contract (§3): core string/generic, hash, list, set,
 sorted set, sorted-set algebra, hash-field TTL, declarative indexes
-(`idx_*`, remote-only), views + `IDX.*` extras via the raw `do(*argv)` /
-`idx_query_raw` escape hatches, change feed (`feed_*`), pub/sub
+(`idx_*`, remote-only) — with any other `IDX.*` subcommand reachable through
+the raw `do(*argv)` / `idx_query_raw` escape hatches — change feed
+(`feed_*`), pub/sub
 (`Subscriber` / `AsyncSubscriber`), transactions (`Transaction`),
 pipelines, blocking pops (`blpop`/`brpop`/`bzpopmin`), and the cluster
 client (`ClusterClient`). Bytes and `str` are both accepted; the wire is

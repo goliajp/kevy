@@ -126,10 +126,13 @@ class ClosedError(KevyError):
         super().__init__(message)
 
 
-def store_error_for(text: bytes) -> Optional[StoreError]:
+def store_error_for(text: bytes) -> Optional[KevyError]:
     """Map a server error frame's text onto the structured taxonomy, or
-    None when the text is not a recognised store-semantic error (§2.2)."""
+    None when the text is not a recognised error (§2.2). Recognises the
+    store-semantic variants plus the READONLY replica-write rejection."""
     s = text.decode("utf-8", "replace")
+    if s.startswith("READONLY"):
+        return ReadOnlyError(s)
     if s.startswith("WRONGTYPE"):
         return WrongTypeError(s)
     if s.startswith("OOM"):

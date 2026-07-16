@@ -22,6 +22,7 @@ class AsyncRespConn:
         self._reader: Optional[asyncio.StreamReader] = reader
         self._writer: Optional[asyncio.StreamWriter] = writer
         self._rbuf = bytearray()
+        self._start = 0  # consume offset into _rbuf; compacted occasionally
         self.host = host
         self.port = port
 
@@ -97,12 +98,13 @@ class AsyncRespConn:
         assert self._reader is not None
         while True:
             try:
-                reply, used = parse_reply(bytes(self._rbuf))
+                reply, newpos = parse_reply(self._rbuf, self._start)
             except ProtocolError:
                 raise ProtocolError("malformed reply")
-            if used > 0:
-                del self._rbuf[:used]
-                return reply  # type: ignore[return-value]
+            if reply is not None:
+                self._start = newpos
+                self._compact()
+                return reply
             try:
                 chunk = await self._reader.read(8192)
             except OSError as e:
@@ -112,3 +114,14 @@ class AsyncRespConn:
                 self.close()
                 raise ClosedError()
             self._rbuf.extend(chunk)
+
+    def _compact(self) -> None:
+        # Drop the consumed prefix when the buffer is drained, or when the dead
+        # prefix has grown large — not per reply (that memmove is what made
+        # multi-reply reassembly O(N²)).
+        if self._start == len(self._rbuf):
+            self._rbuf.clear()
+            self._start = 0
+        elif self._start >= 65536:
+            del self._rbuf[:self._start]
+            self._start = 0

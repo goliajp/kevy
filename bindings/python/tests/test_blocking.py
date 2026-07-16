@@ -13,7 +13,9 @@ import pytest
 def test_blpop_immediate_hit(backend):
     c = backend.connect()
     c.rpush("q", "a", "b")
-    assert c.blpop(["q"], timeout=1.0) == (b"q", b"a")  # head
+    hit = c.blpop(["q"], timeout=1.0)  # head
+    assert hit == (b"q", b"a")
+    assert hit.key == b"q" and hit.value == b"a"  # named-field KV shape (§3.14)
     assert c.brpop(["q"], timeout=1.0) == (b"q", b"b")  # tail
     c.close()
 
@@ -31,6 +33,7 @@ def test_bzpopmin_lowest_score(backend):
     c.zadd("z", (3.0, "c"), (1.0, "a"), (2.0, "b"))
     hit = c.bzpopmin(["z"], timeout=1.0)
     assert hit == (b"z", b"a", 1.0)
+    assert hit.key == b"z" and hit.member == b"a" and hit.score == 1.0  # ZPopHit (§4.9)
     c.close()
 
 
