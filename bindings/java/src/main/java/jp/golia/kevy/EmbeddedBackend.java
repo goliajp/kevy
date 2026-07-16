@@ -20,7 +20,14 @@ final class EmbeddedBackend implements Backend {
 
     @Override
     public byte[] fastGet(byte[] key) {
-        return lease.db().get(key);
+        try {
+            return lease.db().get(key);
+        } catch (ScalarGetSignal wrongType) {
+            // The scalar lane can't carry a typed store error. Re-run the
+            // framed GET so Decode surfaces the WRONGTYPE StoreException the
+            // remote backend also throws — the rare wrong-type case only.
+            return Decode.optBulk(exec(Argv.cmd("GET").add(key).list()));
+        }
     }
 
     @Override
