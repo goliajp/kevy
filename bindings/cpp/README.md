@@ -53,9 +53,10 @@ kevy::OptBytes v = f.get();
 ### Coverage
 
 Core KV, hash, list, set, zset, zset-algebra, hash-field TTL, blocking pops,
-`IDX.*` (typed + raw), `VIEW.*`/`FEED.*`, pub/sub (`Subscriber`),
+`IDX.*` (typed + raw), typed `FEED.*` (change feed), pub/sub (`Subscriber`),
 transactions (`MULTI`/`EXEC`/`WATCH`), `PipelineBuf`, and a CRC16-routed
-cluster client. The embedded store is reachable directly through
+cluster client. `VIEW.*` (§3.9) has no typed wrapper — reach it through the
+raw `command()` escape hatch. The embedded store is reachable directly through
 `kevy/embedded.hpp`. Bytes are never assumed UTF-8; nullable returns use
 `std::optional`.
 
@@ -74,11 +75,16 @@ so C callers also get URL routing and the remote backend.)
 ## Build & test
 
 ```bash
-cargo build -p kevy-ffi                       # produces the static lib the client links
+cargo build -p kevy-ffi                       # the embedded static lib the client links (required)
+cargo build --release -p kevy                 # the server the remote tests spawn (see note)
 cmake -S bindings/cpp -B bindings/cpp/build
 cmake --build bindings/cpp/build
 ctest --test-dir bindings/cpp/build           # runs the kevy_tests target
 ```
+
+The remote-backend tests spawn `target/release/kevy`; without that second build
+they **skip** (the embedded tests still run). Point CMake at a different server
+binary with `-DKEVY_SERVER_BIN=/path/to/kevy`.
 
 CMake exposes the `kevy_client` static library target; `target_link_libraries(you PUBLIC kevy_client)`.
 
