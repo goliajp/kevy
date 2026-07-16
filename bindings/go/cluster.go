@@ -16,6 +16,14 @@ const numSlots = 16384
 
 // ClusterClient holds one connection per distinct shard node plus a
 // slot → shard-index table (contract §4.12).
+//
+// The typed method surface here covers the core KV + generic-key families
+// (Get/Set/SetWithTTL/Incr/IncrBy/Expire/Persist/TTLMs/Del/Exists) plus
+// Ping/Publish/DBSize/FlushAll. Collection, index, feed and other family
+// verbs are reachable through the routed raw path: use RequestKeyed for a
+// single-key command (it slot-routes to the owner shard exactly like the
+// typed methods) and RequestUnkeyed for a keyless one. For example a
+// cluster LPUSH is cc.RequestKeyed(ctx, key, []byte("LPUSH"), key, val).
 type ClusterClient struct {
 	shards     []*respConn
 	slotToShrd []uint16
@@ -88,7 +96,7 @@ func (cc *ClusterClient) RequestUnkeyed(ctx context.Context, argv ...[]byte) (Re
 
 // Ping is answered by any shard (accepts +PONG or +OK).
 func (cc *ClusterClient) Ping(ctx context.Context) error {
-	r, err := cc.RequestUnkeyed(ctx, bs("PING"))
+	r, err := cc.RequestUnkeyed(ctx, verbPing)
 	if err != nil {
 		return err
 	}
@@ -109,17 +117,17 @@ func (cc *ClusterClient) Publish(ctx context.Context, channel, message []byte) (
 
 // Set stores value under key (key-routed).
 func (cc *ClusterClient) Set(ctx context.Context, key, value []byte) error {
-	return clusterOK(cc.RequestKeyed(ctx, key, bs("SET"), key, value))
+	return clusterOK(cc.RequestKeyed(ctx, key, verbSet, key, value))
 }
 
 // SetWithTTL is an atomic SET … PX ttl_ms (key-routed).
 func (cc *ClusterClient) SetWithTTL(ctx context.Context, key, value []byte, ttl time.Duration) error {
-	return clusterOK(cc.RequestKeyed(ctx, key, bs("SET"), key, value, bs("PX"), itob(durationToMs(ttl))))
+	return clusterOK(cc.RequestKeyed(ctx, key, verbSet, key, value, modPX, itob(durationToMs(ttl))))
 }
 
 // Get fetches key; ok false on miss (key-routed).
 func (cc *ClusterClient) Get(ctx context.Context, key []byte) (value []byte, ok bool, err error) {
-	r, rerr := cc.RequestKeyed(ctx, key, bs("GET"), key)
+	r, rerr := cc.RequestKeyed(ctx, key, verbGet, key)
 	if rerr != nil {
 		return nil, false, rerr
 	}
@@ -137,7 +145,7 @@ func (cc *ClusterClient) Get(ctx context.Context, key []byte) (value []byte, ok 
 
 // Incr adds 1 to key (key-routed).
 func (cc *ClusterClient) Incr(ctx context.Context, key []byte) (int64, error) {
-	return clusterInt(cc.RequestKeyed(ctx, key, bs("INCR"), key))
+	return clusterInt(cc.RequestKeyed(ctx, key, verbIncr, key))
 }
 
 // IncrBy adds delta to key (key-routed).

@@ -210,7 +210,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	if c.emb != nil {
 		return nil
 	}
-	r, err := c.exec(ctx, argv1("PING"))
+	r, err := c.exec(ctx, [][]byte{verbPing})
 	if err != nil {
 		return err
 	}
@@ -224,14 +224,22 @@ func (c *Client) Ping(ctx context.Context) error {
 	}
 }
 
-// Set stores value under key unconditionally (contract §3.1).
+// Set stores value under key unconditionally (contract §3.1). On the
+// embedded backend it takes the scalar fast lane (no argv/RESP framing).
 func (c *Client) Set(ctx context.Context, key, value []byte) error {
-	return c.execOK(ctx, [][]byte{bs("SET"), key, value})
+	if c.emb != nil {
+		return c.emb.SetScalar(key, value, 0)
+	}
+	return c.execOK(ctx, [][]byte{verbSet, key, value})
 }
 
-// Get fetches key; ok is false when absent or expired.
+// Get fetches key; ok is false when absent or expired. On the embedded
+// backend it takes the zero-copy scalar shared lane (contract §5.2).
 func (c *Client) Get(ctx context.Context, key []byte) (value []byte, ok bool, err error) {
-	r, err := c.exec(ctx, [][]byte{bs("GET"), key})
+	if c.emb != nil {
+		return c.emb.GetScalar(key)
+	}
+	r, err := c.exec(ctx, [][]byte{verbGet, key})
 	if err != nil {
 		return nil, false, err
 	}
@@ -259,7 +267,7 @@ func (c *Client) Exists(ctx context.Context, keys ...[]byte) (int64, error) {
 
 // Incr adds 1 to key and returns the post-increment value.
 func (c *Client) Incr(ctx context.Context, key []byte) (int64, error) {
-	return c.execInt(ctx, [][]byte{bs("INCR"), key})
+	return c.execInt(ctx, [][]byte{verbIncr, key})
 }
 
 // IncrBy adds delta (negative = DECRBY) and returns the post value.
@@ -308,9 +316,13 @@ func (c *Client) FlushAll(ctx context.Context) error {
 	return c.execOK(ctx, argv1("FLUSHALL"))
 }
 
-// SetWithTTL is an atomic SET … PX ttl_ms.
+// SetWithTTL is an atomic SET … PX ttl_ms. On the embedded backend it
+// takes the scalar fast lane, passing the TTL directly.
 func (c *Client) SetWithTTL(ctx context.Context, key, value []byte, ttl time.Duration) error {
-	return c.execOK(ctx, [][]byte{bs("SET"), key, value, bs("PX"), itob(durationToMs(ttl))})
+	if c.emb != nil {
+		return c.emb.SetScalar(key, value, uint64(durationToMs(ttl)))
+	}
+	return c.execOK(ctx, [][]byte{verbSet, key, value, modPX, itob(durationToMs(ttl))})
 }
 
 // MGet fetches many keys; a missing/wrong-type key yields nil, in order.
@@ -372,6 +384,17 @@ func (c *Client) execBool(ctx context.Context, argv [][]byte) (bool, error) {
 }
 
 // --- argv helpers -------------------------------------------------------
+
+// Hot constant verbs, promoted to package-level read-only []byte so the
+// core string/generic key path allocates no fresh verb slice per call.
+// They are never mutated; the wire encoder and the FFI copy out.
+var (
+	verbGet  = []byte("GET")
+	verbSet  = []byte("SET")
+	verbIncr = []byte("INCR")
+	verbPing = []byte("PING")
+	modPX    = []byte("PX")
+)
 
 func bs(s string) []byte { return []byte(s) }
 
