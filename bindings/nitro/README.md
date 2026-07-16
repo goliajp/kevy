@@ -19,18 +19,19 @@ import {
 
 const kevy = createKevyNitro() // C++ opens an in-memory kevy db
 
-// 1. getData/setData — the scalar KV door (MMKV-shaped). Raw key/value
-//    ArrayBuffers straight into kevy_get/kevy_set: no argv packing, no RESP
-//    framing, no JS decode. The fastest KV lane.
-kevy.setData(keyAB, valueAB, 0)          // ttlMs (0 = no TTL); returns void
-const value = kevy.getData(keyAB)        // ArrayBuffer | undefined (miss)
+// 1. getData/setData — the scalar KV door (MMKV-shaped): string key, value
+//    ArrayBuffer straight into kevy_get/kevy_set — no argv packing, no RESP
+//    framing, no JS decode, and both register as RAW JSI methods (no typed
+//    converter layer on the hot path). The fastest KV lane.
+kevy.setData('k', valueAB, 0)            // ttlMs (0 = no TTL); returns void
+const value = kevy.getData('k')          // ArrayBuffer | undefined (miss)
 
 // 2. cmd() — the general fast path. Any verb, RESP reply as ArrayBuffer.
 const reply = kevy.cmd(packArgv(['INCR', 'n'])) // u32-LE len prefix/arg
 
 // 3. Poll pub/sub — the default. No background thread, no idle CPU.
 kevy.subscribe('room')
-kevy.publish('room', payload)            // ArrayBuffer
+kevy.publish('room', payload)            // ArrayBuffer → engine receiver count
 for (let f = kevy.subNext(); f; f = kevy.subNext()) handle(f)
 
 // 4. Batched push — the high-fanout path. A native poller parks on the
@@ -46,6 +47,27 @@ kevy.stopPush() // joins the poller thread
 `subscribePush` (one native→JS hop per message) also exists but is a
 pessimization on measured workloads — the per-frame CallInvoker hop costs
 more than the drain crossings it removes. Prefer `subscribePushBatched`.
+
+### The bus lane — same-runtime pub/sub without the delivery crossing
+
+The engine's bus is in-process, so for subscribers living in this same JS
+runtime the native round-trip is pure transport (measured ~6-10× behind a
+plain JS emitter on device). `createKevyBus` dispatches local handlers in JS
+— an emitter's physical position — while **every publish still goes to the
+engine bus**, which stays the source of truth for the raw lanes above:
+
+```ts
+const bus = createKevyBus(kevy)
+const off = bus.subscribe('room', (payload, channel) => handle(payload))
+const receivers = bus.publish('room', payloadAB) // engine + local count
+off()
+```
+
+Boundaries, stated plainly: a handler subscribed on the bus is dispatched
+only by the bus (never doubly via the raw lanes); delivery is a microtask —
+async, FIFO, at-most-once, snapshot-at-publish, payload copied (Redis value
+semantics) — the same contract as the engine bus; raw-lane subscribers keep
+receiving via the engine exactly as before.
 
 ### Durable (file-backed) vs in-memory
 
