@@ -63,6 +63,19 @@ fn incr_on_non_integer_is_store_error() {
 }
 
 #[test]
+fn get_on_non_string_is_wrongtype_store_error() {
+    let s = store();
+    // LPUSH makes `k` a list, so the typed string `get` must reject it.
+    let argv = vec![b"LPUSH".to_vec(), b"k".to_vec(), b"x".to_vec()];
+    raw_cmd(&s, &argv).unwrap();
+    let err = get(&s, b"k").unwrap_err();
+    // Serialises to { kind: "Store", store: "WrongType", … }.
+    let v = serde_json::to_value(err).unwrap();
+    assert_eq!(v["kind"], "Store");
+    assert_eq!(v["store"], "WrongType");
+}
+
+#[test]
 fn dbsize_and_flushall() {
     let s = store();
     set(&s, b"x", b"1", None).unwrap();
