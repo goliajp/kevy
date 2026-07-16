@@ -34,9 +34,8 @@ use std::time::Duration;
 
 use kevy_embedded::Subscription;
 use kevy_resp::{Reply, encode_command};
+use kevy_resp_client::ReplyReadBuf;
 
-#[cfg(test)]
-use crate::subscribe_io::classify;
 use crate::subscribe_io::{frame_to_event, invalid, recv_remote, send_to, shape};
 use crate::{Target, parse_url, resolve_store};
 
@@ -53,7 +52,7 @@ enum Inner {
     /// TCP RESP2 connection, drained one reply at a time.
     Remote {
         stream: TcpStream,
-        buf: Vec<u8>,
+        buf: ReplyReadBuf,
     },
     /// In-process bus subscription. `timeout` mirrors the TCP
     /// `SO_RCVTIMEO` behaviour for [`Subscriber::recv`] / [`Subscriber::set_read_timeout`].
@@ -92,7 +91,7 @@ impl Subscriber {
                 stream.set_nodelay(true).ok();
                 Inner::Remote {
                     stream,
-                    buf: Vec::with_capacity(8192),
+                    buf: ReplyReadBuf::with_capacity(8192),
                 }
             }
         };
@@ -243,11 +242,8 @@ impl Subscriber {
                 // semantic — the body's just server metadata.
                 let mut chunk = [0u8; 4096];
                 loop {
-                    match kevy_resp::parse_reply(buf) {
-                        Ok(Some((reply, used))) => {
-                            buf.drain(..used);
-                            return classify_hello3_reply(reply);
-                        }
+                    match buf.parse_next() {
+                        Ok(Some(reply)) => return classify_hello3_reply(reply),
                         Ok(None) => {}
                         Err(_) => {
                             return Err(KevyError::Protocol("malformed HELLO 3 reply".into()));
@@ -257,7 +253,7 @@ impl Subscriber {
                     if n == 0 {
                         return Err(KevyError::Closed);
                     }
-                    buf.extend_from_slice(&chunk[..n]);
+                    buf.extend(&chunk[..n]);
                 }
             }
         }

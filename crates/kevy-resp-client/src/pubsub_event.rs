@@ -219,3 +219,128 @@ fn shape(r: &Reply) -> &'static str {
 fn invalid(msg: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.into())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_subscribe_ack() {
+        let r = Reply::Array(vec![
+            Reply::Bulk(b"subscribe".to_vec()),
+            Reply::Bulk(b"chan".to_vec()),
+            Reply::Int(1),
+        ]);
+        assert_eq!(
+            classify_pubsub(r).unwrap(),
+            PubsubEvent::Subscribe {
+                channel: b"chan".to_vec(),
+                count: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn classify_message_event() {
+        let r = Reply::Array(vec![
+            Reply::Bulk(b"message".to_vec()),
+            Reply::Bulk(b"news".to_vec()),
+            Reply::Bulk(b"hello".to_vec()),
+        ]);
+        assert_eq!(
+            classify_pubsub(r).unwrap(),
+            PubsubEvent::Message {
+                channel: b"news".to_vec(),
+                payload: b"hello".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn classify_pmessage_event() {
+        let r = Reply::Array(vec![
+            Reply::Bulk(b"pmessage".to_vec()),
+            Reply::Bulk(b"news.*".to_vec()),
+            Reply::Bulk(b"news.tech".to_vec()),
+            Reply::Bulk(b"hi".to_vec()),
+        ]);
+        assert_eq!(
+            classify_pubsub(r).unwrap(),
+            PubsubEvent::Pmessage {
+                pattern: b"news.*".to_vec(),
+                channel: b"news.tech".to_vec(),
+                payload: b"hi".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn classify_unsubscribe_with_nil_channel() {
+        let r = Reply::Array(vec![
+            Reply::Bulk(b"unsubscribe".to_vec()),
+            Reply::Nil,
+            Reply::Int(0),
+        ]);
+        assert_eq!(
+            classify_pubsub(r).unwrap(),
+            PubsubEvent::Unsubscribe {
+                channel: None,
+                count: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn classify_accepts_push_frame() {
+        // RESP3 servers wrap the same shape in a `>N` push frame.
+        let r = Reply::Push(vec![
+            Reply::Bulk(b"message".to_vec()),
+            Reply::Bulk(b"c".to_vec()),
+            Reply::Bulk(b"p".to_vec()),
+        ]);
+        assert_eq!(
+            classify_pubsub(r).unwrap(),
+            PubsubEvent::Message {
+                channel: b"c".to_vec(),
+                payload: b"p".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn classify_accepts_simple_string_fields() {
+        // `take_bulk` accepts `Simple` as well as `Bulk` — a server may
+        // send the kind/channel as simple strings.
+        let r = Reply::Array(vec![
+            Reply::Simple(b"subscribe".to_vec()),
+            Reply::Simple(b"chan".to_vec()),
+            Reply::Int(2),
+        ]);
+        assert_eq!(
+            classify_pubsub(r).unwrap(),
+            PubsubEvent::Subscribe {
+                channel: b"chan".to_vec(),
+                count: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn classify_rejects_unknown_kind() {
+        let r = Reply::Array(vec![
+            Reply::Bulk(b"bogus".to_vec()),
+            Reply::Bulk(b"x".to_vec()),
+            Reply::Int(0),
+        ]);
+        assert!(classify_pubsub(r).is_err());
+    }
+
+    #[test]
+    fn classify_rejects_wrong_arity() {
+        let r = Reply::Array(vec![
+            Reply::Bulk(b"subscribe".to_vec()),
+            Reply::Bulk(b"x".to_vec()),
+        ]);
+        assert!(classify_pubsub(r).is_err());
+    }
+}

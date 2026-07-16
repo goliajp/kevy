@@ -180,7 +180,7 @@ match conn {
 # }
 ```
 
-## Wrap coverage matrix (kevy server 3.17 × kevy-client 1.14)
+## Wrap coverage matrix (kevy server 4.x × kevy-client 2.0.0)
 
 Status legend — **wrapped**: typed `Connection` methods; **partial**:
 the listed subset is wrapped, the rest is raw-only; **raw-only**: no
@@ -202,17 +202,17 @@ of scope for this client.
 | script (EVAL/EVALSHA…) | raw-only | |
 | string (SET/GET/INCR/MSET/bitmaps…) | partial | `set`/`set_with_ttl`/`get`/`incr`/`incr_by`/`mget`/`mset`; APPEND/GETRANGE/SETNX/bitmaps raw-only |
 | hash (HSET/HGET/HGETALL…) | partial | `hset`/`hget`/`hdel`/`hlen`/`hgetall`/`hkeys`/`hvals`; HINCRBY/HSETNX/HSCAN… raw-only |
-| hash field-TTL (HEXPIRE/HPEXPIRE/HPERSIST/HTTL) | wrapped | v1.14: per-field codes in request order; `HPEXPIREAT` raw-only |
+| hash field-TTL (HEXPIRE/HPEXPIRE/HPERSIST/HTTL) | wrapped | v2.0.0: per-field codes in request order; `HPEXPIREAT` raw-only |
 | list (LPUSH/LRANGE/LREM…) | partial | `lpush`/`rpush`/`lpop`/`rpop`/`llen`/`lrange`; LINSERT/LSET/LTRIM… raw-only |
-| blocking (BLPOP/BRPOP/BZPOPMIN/BRPOPLPUSH) | partial | v1.14: `blpop`/`brpop`/`bzpopmin` (both backends really block); `BRPOPLPUSH` raw-only |
+| blocking (BLPOP/BRPOP/BZPOPMIN/BRPOPLPUSH) | partial | v2.0.0: `blpop`/`brpop`/`bzpopmin` (both backends really block); `BRPOPLPUSH` raw-only |
 | set (SADD/SMEMBERS/SINTER…) | partial | `sadd`/`srem`/`smembers`/`scard`/`sismember`/`sinter`/`sunion`/`sdiff`; SPOP/SRANDMEMBER/S\*STORE raw-only |
 | zset (ZADD/ZRANGE/ZSCORE…) | partial | `zadd`/`zrem`/`zscore`/`zcard`/`zrange`; ZCOUNT/ZRANK/ZINCRBY/ZSCAN… raw-only |
-| zset algebra (Z\*STORE/ZINTERCARD) | partial | v1.14: `zinterstore`/`zunionstore` (+`_with` WEIGHTS/AGGREGATE)/`zintercard`; `ZDIFFSTORE` raw-only |
+| zset algebra (Z\*STORE/ZINTERCARD) | partial | v2.0.0: `zinterstore`/`zunionstore` (+`_with` WEIGHTS/AGGREGATE)/`zintercard`; `ZDIFFSTORE` raw-only |
 | stream (XADD/XREAD/XREADGROUP…) | raw-only | |
 | geo (GEOADD/GEOSEARCH…) | raw-only | |
-| index (IDX.CREATE/QUERY/DROP/LIST…) | partial | v1.14, remote-only: `idx_create_range`/`idx_create_raw`, `idx_query_range`/`_eq`/`_match`/`_knn`/`_raw`, `idx_drop`, `idx_list`; COUNT/VERIFY/EXPLAIN/REBUILD via `idx_query_raw`-style passthrough |
+| index (IDX.CREATE/QUERY/DROP/LIST…) | partial | v2.0.0, remote-only: `idx_create_range`/`idx_create_raw`, `idx_query_range`/`_eq`/`_match`/`_knn`/`_raw`, `idx_drop`, `idx_list`; COUNT/VERIFY/EXPLAIN/REBUILD via `idx_query_raw`-style passthrough |
 | view (VIEW.*) | raw-only | |
-| feed / CDC (FEED.SHARDS/TAIL/READ) | wrapped | v1.14: `feed_shards`/`feed_tail`/`feed_read` — the network face of embedded `changes_since`; same `FEEDRESYNC` error text on both backends |
+| feed / CDC (FEED.SHARDS/TAIL/READ) | wrapped | v2.0.0: `feed_shards`/`feed_tail`/`feed_read` — the network face of embedded `changes_since`; same `FEEDRESYNC` error text on both backends |
 | migration (RESTORE/MIGRATE…) | raw-only | |
 | cluster (CLUSTER SLOTS routing) | wrapped | `ClusterClient` (separate type, CRC16 slot routing) |
 
@@ -239,30 +239,30 @@ remote-only rows (tx, pipeline, index); for those it answers
 
 **Multi-key**: `mget`, `mset`, `sinter`, `sunion`, `sdiff`.
 
-**Blocking pops** (v1.14): `blpop`, `brpop`, `bzpopmin` — real
+**Blocking pops** (v2.0.0): `blpop`, `brpop`, `bzpopmin` — real
 blocking on both backends; `timeout: Option<Duration>` (`None` =
 forever; the remote socket has no read timeout, so a blocking pop
 never races a client-side deadline).
 
-**Hash field-TTL** (v1.14): `hexpire`, `hpexpire`, `hpersist`,
+**Hash field-TTL** (v2.0.0): `hexpire`, `hpexpire`, `hpersist`,
 `httl` — per-field result codes (`HExpireCode`) in request order,
 with the `NX|XX|GT|LT` condition as `HExpireCond`.
 
-**Zset algebra** (v1.14): `zinterstore`, `zunionstore` (plus `_with`
+**Zset algebra** (v2.0.0): `zinterstore`, `zunionstore` (plus `_with`
 variants exposing `WEIGHTS` + `AGGREGATE SUM|MIN|MAX`), `zintercard`
 with optional `LIMIT`.
 
-**Declarative indexes** (v1.14, remote-only): `idx_create_range`,
+**Declarative indexes** (v2.0.0, remote-only): `idx_create_range`,
 `idx_create_raw`, `idx_query_range` / `idx_query_eq` (paged
 `IdxPage`), `idx_query_match` / `idx_query_knn` (ranked `(key,
 score)`), `idx_query_raw`, `idx_drop`, `idx_list` (`IdxInfo`).
 
-**Change feed / CDC** (v1.14): `feed_shards`, `feed_tail`,
+**Change feed / CDC** (v2.0.0): `feed_shards`, `feed_tail`,
 `feed_read` (`FeedBatch` of offset-tagged argv frames, prefix
 filtering, `FEEDRESYNC` cursor-rebuild contract shared with the
 embedded `changes_since`).
 
-**Pipelining** (v1.14, remote-only): `pipeline(|p| p.cmd(...))` —
+**Pipelining** (v2.0.0, remote-only): `pipeline(|p| p.cmd(...))` —
 one write, in-order replies, non-atomic.
 
 **Keyspace iteration**: `keys(pattern)`,
