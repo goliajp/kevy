@@ -98,3 +98,49 @@ into an app that also carries the Expo door). All fixed to reach the numbers:
 - The decomposition's FFI-level measurements (20–35 ns scalar, 208 ns
   encode_frame) remain correct; what was refuted is the *device-level
   projection through the JSI/Nitro layer*.
+
+---
+
+## Follow-up — the Nitro-glue decomposition, attacked and MEASURED (same day)
+
+The refutation named the right next target: the **Nitro binding layer**, not
+the engine. This time the loop stayed device-grounded — read MMKV's cpp,
+form a candidate, measure it on the sim — and it turned the KV result around.
+
+### Attack 1 — zero-copy ArrayBuffer return
+Source read: MMKV's `getBuffer` wraps its `MMBuffer` in a `jsi::ArrayBuffer`
+(zero binding copy, freed at GC). kevy's `takeBuf` memcpy'd the KevyBuf into a
+`std::vector` first. Fix: `ArrayBuffer::wrap` the KevyBuf directly, defer
+`kevy_buf_free` to GC (Nitro `DeleteFn`). **Measured: getData 704k → 926k
+ops/s (+31%).**
+
+### Attack 2 — string keys (the big one)
+Device data, not a source guess, pointed here: `setData` (2 AB args, void
+return) measured **slower** than `getData` (1 AB arg, 1 AB return) → the
+dominant cost is **ArrayBuffer *argument* marshalling** (~560 ns/AB-arg),
+not the return. MMKV takes a **string** key. Mirror it —
+`getData(key: string)` / `setData(key: string, value: ArrayBuffer)`.
+**Measured (stacked on attack 1):**
+
+| Axis | original | +zero-copy | +string key | vs MMKV now |
+|------|---------:|-----------:|------------:|------------:|
+| GET  | 704k (0.4×) | 926k (0.5×) | **~1.56M (0.85×)** | MMKV ~1.15× |
+| SET  | 775k (0.6×) | 775k | **~1.45M (1.0×)** | **TIES MMKV** |
+
+**Net turnaround: KV went from losing badly (GET 0.4×, SET 0.6×) to
+competitive (GET ~0.85×, SET parity) — all device-measured, stacked, stable.**
+The scalar door is now 2.7–2.9× over the RESP cmd lane. MOBILEGATE smoke PASS
+throughout.
+
+### Lesson (the methodology, both directions)
+- Source-only estimates get refuted (the first pass predicted a win, measured
+  a loss). **Device-grounded** estimates hold (attack 2's ~560 ns/AB-arg was
+  derived from on-device getData-vs-setData and confirmed by the measurement).
+- The gap was never the engine (kevy's FFI scalar beats MMKV's mmap) nor the
+  RESP tax (already removed) — it was the **binding-layer data shape**:
+  copying instead of wrapping, and ArrayBuffer args instead of string keys.
+  Both are exactly what MMKV got right and kevy hadn't.
+- Remaining GET ~15%: the `std::function` deleteFunc alloc, the FFI boundary,
+  the engine `into_owned` — each ~50–100 ns, diminishing. SET already ties.
+- pub/sub vs mitt is unchanged (mitt's zero-crossing floor is physical; not a
+  binding-shape problem).
