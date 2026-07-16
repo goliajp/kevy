@@ -7,9 +7,13 @@
 //   $-1 / *-1      -> null
 //   *N …           -> Array
 
-export class KevyError {
+// Extends Error so the taxonomy survives a `throw` intact: the typed surface
+// throws this value directly (index.js), and `instanceof KevyError` — and
+// `instanceof Error` — both hold, with a real stack. Mirrors bindings/ts.
+export class KevyError extends Error {
   constructor(message) {
-    this.message = message;
+    super(message);
+    this.name = "KevyError";
   }
 }
 
@@ -57,6 +61,8 @@ function one(b, at) {
       return [items, pos];
     }
     default:
+      // RESP2 only: the embedded cmd() path always replies in RESP2. A future
+      // RESP3 tag (_ = null, # = bool, , = double, % = map, …) would land here.
       throw new Error(`kevy: unknown RESP tag ${b[at]}`);
   }
 }
