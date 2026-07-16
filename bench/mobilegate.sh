@@ -23,6 +23,14 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 framework=${1:?usage: mobilegate.sh <expo|flutter|barern> <ios|android>}
 platform=${2:?usage: mobilegate.sh <expo|flutter|barern> <ios|android>}
 
+# A device run against a stale vendored engine binary tests yesterday's
+# code with today's green suites (caught live 2026-07-16) — gate it first,
+# it is seconds against a 10-minute build.
+bash "$HERE/bench/vendorgate.sh" >/dev/null 2>&1 || {
+    echo "mobilegate: vendored natives are STALE — run bench/vendorgate.sh for the list" >&2
+    exit 1
+}
+
 if ! command -v npx >/dev/null 2>&1; then
     nvm_bin=$(ls -d "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | sort -V | tail -1)
     [ -n "$nvm_bin" ] && export PATH="$nvm_bin:$PATH"

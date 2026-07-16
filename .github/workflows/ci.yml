@@ -120,6 +120,12 @@ jobs:
       - name: commentgate (comment hygiene)
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: bash bench/commentgate.sh
+      # vendorgate (tracked vendored binaries/headers match the current ABI):
+      # gitignored artifacts are absent on a fresh clone and SKIP; the
+      # tracked ones (nitro jniLibs, nitro cpp/kevy.h) must be current.
+      - name: vendorgate (vendored natives current)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: bash bench/vendorgate.sh
 
       - name: Clippy (workspace, all targets, all features)
         run: cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
