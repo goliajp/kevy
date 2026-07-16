@@ -8,7 +8,7 @@
 import { replyText, unexpectedReply, toBytes, type Data, type Reply } from "./resp.ts";
 import { ProtocolError } from "./errors.ts";
 import { type IdxType } from "./enums.ts";
-import { av, replyError } from "./reply.ts";
+import { asBool, asOK, av, replyError, scoreOf } from "./reply.ts";
 import { spec } from "./specs.ts";
 
 /** One IDX.QUERY hit: the row key + the indexed field's wire string form. */
@@ -45,12 +45,6 @@ function bulkBytes(r: Reply): Uint8Array {
   throw unexpectedReply(r);
 }
 
-function scoreValue(r: Reply): number {
-  if (r.kind === "double") return r.value;
-  if (r.kind === "bulk" || r.kind === "simple") return Number(replyText(r));
-  throw unexpectedReply(r);
-}
-
 export function parseIdxPage(r: Reply): IdxPage {
   if (r.kind === "error") replyError(r);
   if (r.kind !== "array" || r.items.length !== 2) {
@@ -77,7 +71,7 @@ export function parseRanked(r: Reply): Ranked[] {
     if (row.kind !== "array" || row.items.length < 2) {
       throw new ProtocolError("IDX.QUERY ranked row: expected [key, score]");
     }
-    return { key: bulkBytes(row.items[0]!), score: scoreValue(row.items[1]!) };
+    return { key: bulkBytes(row.items[0]!), score: scoreOf(row.items[1]!) };
   });
 }
 
@@ -139,11 +133,11 @@ export const idxSpecs = {
   idxCreateRange: spec(
     (name: Data, prefix: Data, field: Data, ty: IdxType) =>
       av("IDX.CREATE", name, "ON", "PREFIX", prefix, "FIELD", field, "TYPE", ty, "KIND", "range"),
-    okReply,
+    asOK,
     R,
   ),
-  idxCreateRaw: spec((...args: Data[]) => av("IDX.CREATE", ...args), okReply, R),
-  idxDrop: spec((name: Data) => av("IDX.DROP", name), boolReply, R),
+  idxCreateRaw: spec((...args: Data[]) => av("IDX.CREATE", ...args), asOK, R),
+  idxDrop: spec((name: Data) => av("IDX.DROP", name), asBool, R),
   idxList: spec(() => av("IDX.LIST"), parseIdxList, R),
   idxQueryRange: spec(
     (name: Data, min: Data, max: Data, limit: number, cursor?: Data) => {
@@ -172,15 +166,3 @@ export const idxSpecs = {
   ),
   idxQueryRaw: spec((...args: Data[]) => av("IDX.QUERY", ...args), asRawReply, R),
 };
-
-function okReply(r: Reply): void {
-  if (r.kind === "error") replyError(r);
-  if (r.kind === "simple" && replyText(r) === "OK") return;
-  throw unexpectedReply(r);
-}
-
-function boolReply(r: Reply): boolean {
-  if (r.kind === "error") replyError(r);
-  if (r.kind === "int") return r.value === 1;
-  throw unexpectedReply(r);
-}

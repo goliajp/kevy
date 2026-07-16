@@ -13,9 +13,49 @@ export type Data = Uint8Array | string;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+// Constant verbs and keywords are re-encoded on every command; cache their
+// bytes once so the hot path (GET/SET and the keyword tails) never re-allocates
+// a Uint8Array. Only this fixed set is memoized — user data (keys/values) is
+// encoded fresh and never inserted, so the map cannot grow unbounded. The
+// cached buffers are read-only downstream (encodeCommand/pack only copy out of
+// them), so sharing one instance across calls is safe.
+const VERB_CACHE: ReadonlyMap<string, Uint8Array> = buildVerbCache();
+
+function buildVerbCache(): Map<string, Uint8Array> {
+  const words = [
+    // core string / generic key
+    "GET", "SET", "DEL", "EXISTS", "INCR", "INCRBY", "PEXPIRE", "PERSIST",
+    "PTTL", "TYPE", "DBSIZE", "FLUSHALL", "PX", "MGET", "MSET", "PUBLISH",
+    // hash
+    "HSET", "HGET", "HDEL", "HLEN", "HGETALL", "HKEYS", "HVALS",
+    // list
+    "LPUSH", "RPUSH", "LPOP", "RPOP", "LLEN", "LRANGE",
+    // set
+    "SADD", "SREM", "SMEMBERS", "SCARD", "SISMEMBER", "SINTER", "SUNION", "SDIFF",
+    // sorted set + algebra
+    "ZADD", "ZREM", "ZSCORE", "ZCARD", "ZRANGE", "ZINTERSTORE", "ZUNIONSTORE",
+    "ZINTERCARD", "WEIGHTS", "AGGREGATE", "SUM", "MIN", "MAX", "LIMIT",
+    // hash field-TTL
+    "HEXPIRE", "HPEXPIRE", "HPERSIST", "HTTL", "HPTTL", "FIELDS",
+    "NX", "XX", "GT", "LT",
+    // secondary indexes
+    "IDX.CREATE", "IDX.DROP", "IDX.LIST", "IDX.QUERY", "ON", "PREFIX", "FIELD",
+    "KIND", "range", "RANGE", "EQ", "MATCH", "KNN", "CURSOR",
+    // blocking pops
+    "BLPOP", "BRPOP", "BZPOPMIN", "ZPOPMIN",
+    // pub/sub + connection
+    "SUBSCRIBE", "PSUBSCRIBE", "UNSUBSCRIBE", "PUNSUBSCRIBE", "HELLO",
+    "PING", "SELECT", "WATCH", "UNWATCH", "MULTI",
+  ];
+  const m = new Map<string, Uint8Array>();
+  for (const w of words) m.set(w, encoder.encode(w));
+  return m;
+}
+
 /** Encode a Data argument to wire bytes. */
 export function toBytes(d: Data): Uint8Array {
-  return typeof d === "string" ? encoder.encode(d) : d;
+  if (typeof d !== "string") return d;
+  return VERB_CACHE.get(d) ?? encoder.encode(d);
 }
 
 /** Decode bytes to a UTF-8 string (helper for string-typed values). */
@@ -300,12 +340,28 @@ export function encodeCommand(argv: Uint8Array[]): Uint8Array {
 
 function writeHeader(out: Uint8Array, pos: number, tag: number, n: number): number {
   out[pos++] = tag;
-  pos += encoder.encodeInto(String(n), out.subarray(pos)).written;
+  pos = writeUint(out, pos, n);
   out[pos++] = 0x0d;
   out[pos++] = 0x0a;
   return pos;
 }
 
+// itoa a non-negative integer straight into `out` (no String() alloc); returns
+// the position past the digits written.
+function writeUint(out: Uint8Array, pos: number, n: number): number {
+  const end = pos + digits(n);
+  let i = end;
+  let x = n;
+  do {
+    out[--i] = 0x30 + (x % 10);
+    x = Math.floor(x / 10);
+  } while (x > 0);
+  return end;
+}
+
+// Decimal width of a non-negative integer, computed arithmetically.
 function digits(n: number): number {
-  return String(n).length;
+  let w = 1;
+  for (let x = n; x >= 10; x = Math.floor(x / 10)) w++;
+  return w;
 }

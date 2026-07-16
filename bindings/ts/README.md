@@ -16,13 +16,14 @@ npm install @goliapkg/kevy        # or: bun add @goliapkg/kevy
 ```
 
 ```ts
-import { connect } from "@goliapkg/kevy";
+import { connect, textOf } from "@goliapkg/kevy";
 
 // Embedded in-process, or "kevy://127.0.0.1:6379" for a server — same code.
 const c = await connect("mem://app");
 
 await c.set("k", "v");
-const v = await c.get("k");                  // "v"
+const v = await c.get("k");                  // Uint8Array | null (binary-safe)
+textOf(v!);                                  // "v" — decode bytes to a string
 await c.zadd("board", { score: 42, member: "alice" });
 
 // Errors are typed and inspectable by variant.
@@ -51,8 +52,8 @@ bind the **same** engine, so they always agree:
 ```ts
 const c = await connect("mem://app");     // or connectSync("mem://app")
 c.sync.set("k", "v");
-c.sync.get("k");                          // "v" — no await, embedded only
-await c.get("k");                         // "v" — same value, async face
+c.sync.get("k");                          // Uint8Array | null — no await, embedded only
+await c.get("k");                         // Uint8Array | null — same value, async face
 ```
 
 `connectSync(url)` opens an embedded backend without `await`; remote URLs

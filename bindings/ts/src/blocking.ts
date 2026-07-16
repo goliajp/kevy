@@ -8,7 +8,7 @@
 import { toBytes, unexpectedReply, type Data, type Reply } from "./resp.ts";
 import { InvalidInputError } from "./errors.ts";
 import { av, replyError, scoreOf } from "./reply.ts";
-import { sleepSync } from "./ffi.ts";
+import { sleep, sleepSync } from "./ffi.ts";
 import type { Backend } from "./backend.ts";
 
 /** A (key, value) blocking-pop hit. */
@@ -69,8 +69,6 @@ function firstZ(r: Reply): [Uint8Array, number] | null {
   }
   return null;
 }
-
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // --- async (both backends) ----------------------------------------------
 

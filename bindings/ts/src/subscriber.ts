@@ -6,10 +6,11 @@
 // producer — use a named bus). recv accepts both RESP2 arrays and RESP3 push.
 
 import { replyText, toBytes, type Data, type Reply } from "./resp.ts";
-import { InvalidInputError, ProtocolError, TimedOutError, UnsupportedError } from "./errors.ts";
+import { ClosedError, InvalidInputError, ProtocolError, TimedOutError, UnsupportedError } from "./errors.ts";
 import { av, replyError } from "./reply.ts";
 import { parseConnectURL, type Target } from "./url.ts";
 import { RespConn } from "./transport.ts";
+import { sleep } from "./ffi.ts";
 import { EmbeddedDb, EmbSub, resolveStore, releaseStore } from "./embedded.ts";
 
 /** One received pub/sub frame — acks and deliveries alike (contract §4.8).
@@ -21,8 +22,6 @@ export type PubsubEvent =
   | { kind: "punsubscribe"; pattern: Uint8Array | null; count: number }
   | { kind: "message"; channel: Uint8Array; payload: Uint8Array }
   | { kind: "pmessage"; pattern: Uint8Array; channel: Uint8Array; payload: Uint8Array };
-
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 interface EmbHandle {
   sub: EmbSub;
@@ -129,7 +128,7 @@ export class Subscriber {
       try {
         yield await this.recv();
       } catch (e) {
-        if ((e as { kind?: string }).kind === "closed") return;
+        if (e instanceof ClosedError) return;
         throw e;
       }
     }
@@ -141,7 +140,7 @@ export class Subscriber {
       try {
         yield await this.recvMessage();
       } catch (e) {
-        if ((e as { kind?: string }).kind === "closed") return;
+        if (e instanceof ClosedError) return;
         throw e;
       }
     }

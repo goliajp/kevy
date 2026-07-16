@@ -57,7 +57,13 @@ export class EmbeddedDb {
   /** Run one command; argv[0] is the verb. Returns the decoded Reply — a
    * protocol -ERR arrives as a Reply of kind "error" (data, not a throw). */
   cmd(...argv: Data[]): Reply {
-    const bytes = this.#handle().cmdRaw(argv.map(toBytes));
+    return this.cmdBytes(argv.map(toBytes));
+  }
+
+  /** Run one command from a pre-encoded argv — the backend's hot path, which
+   * has its bytes already and would otherwise pay a spread + per-arg re-encode. */
+  cmdBytes(argv: Uint8Array[]): Reply {
+    const bytes = this.#handle().cmdRaw(argv);
     if (!bytes) throw new ClosedError("empty reply");
     return decodeReply(bytes);
   }
