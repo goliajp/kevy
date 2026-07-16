@@ -32,7 +32,7 @@ from ._parse import (
 from ._pipeline import PipelineBuf
 from ._reply import Reply, ReplyKind
 from ._transaction import Transaction
-from ._types import FeedBatch, IdxInfo, IdxPage, Ranked
+from ._types import FeedBatch, IdxInfo, IdxPage, KV, Ranked, ZPopHit
 
 
 class RemoteMixin:
@@ -52,7 +52,7 @@ class RemoteMixin:
 
     # --- declarative indexes: IDX.* (§3.8) -----------------------------
 
-    def idx_create_range(self, name, prefix, field, ty: IdxType) -> None:
+    def idx_create_range(self, name: Bytesish, prefix: Bytesish, field: Bytesish, ty: IdxType) -> None:
         self.idx_create_raw(
             to_bytes(name), b"ON", b"PREFIX", to_bytes(prefix),
             b"FIELD", to_bytes(field), b"TYPE", ty.tag(), b"KIND", b"range",
@@ -76,21 +76,22 @@ class RemoteMixin:
         self._require_remote("IDX.LIST")
         return parse_idx_list(self._exec([b"IDX.LIST"]))
 
-    def idx_query_range(self, name, min_, max_, limit: int, cursor: Optional[bytes] = None) -> IdxPage:
+    def idx_query_range(self, name: Bytesish, min_: Bytesish, max_: Bytesish, limit: int,
+                        cursor: Optional[bytes] = None) -> IdxPage:
         args = [b"RANGE", to_bytes(min_), to_bytes(max_), b"LIMIT", str(int(limit)).encode()]
         if cursor is not None:
             args += [b"CURSOR", to_bytes(cursor)]
         return parse_idx_page(self._idx_query(name, args))
 
-    def idx_query_eq(self, name, value, limit: int) -> IdxPage:
+    def idx_query_eq(self, name: Bytesish, value: Bytesish, limit: int) -> IdxPage:
         args = [b"EQ", to_bytes(value), b"LIMIT", str(int(limit)).encode()]
         return parse_idx_page(self._idx_query(name, args))
 
-    def idx_query_match(self, name, text, limit: int) -> List[Ranked]:
+    def idx_query_match(self, name: Bytesish, text: Bytesish, limit: int) -> List[Ranked]:
         args = [b"MATCH", to_bytes(text), b"LIMIT", str(int(limit)).encode()]
         return parse_ranked(self._idx_query(name, args))
 
-    def idx_query_knn(self, name, vector: Sequence[float], k: int) -> List[Ranked]:
+    def idx_query_knn(self, name: Bytesish, vector: Sequence[float], k: int) -> List[Ranked]:
         args = [b"KNN", knn_blob(list(vector)), b"LIMIT", str(int(k)).encode()]
         return parse_ranked(self._idx_query(name, args))
 
@@ -101,7 +102,7 @@ class RemoteMixin:
             raise error_from_reply_text(r.data)
         return r
 
-    def _idx_query(self, name, args: List[bytes]) -> Reply:
+    def _idx_query(self, name: Bytesish, args: List[bytes]) -> Reply:
         return self.idx_query_raw(to_bytes(name), *args)
 
     # --- change feed: FEED.* (§3.10) -----------------------------------
@@ -137,19 +138,19 @@ class RemoteMixin:
 
     # --- blocking pops (§3.14) -----------------------------------------
 
-    def blpop(self, keys: Sequence[Bytesish], timeout=None) -> Optional[Tuple[bytes, bytes]]:
+    def blpop(self, keys: Sequence[Bytesish], timeout=None) -> Optional[KV]:
         kb = _check_block(keys, timeout)
         if getattr(self, "_emb", None) is not None:
             return self._emb_block_kv(b"LPOP", kb, timeout)
         return self._pop_kv(b"BLPOP", kb, timeout)
 
-    def brpop(self, keys: Sequence[Bytesish], timeout=None) -> Optional[Tuple[bytes, bytes]]:
+    def brpop(self, keys: Sequence[Bytesish], timeout=None) -> Optional[KV]:
         kb = _check_block(keys, timeout)
         if getattr(self, "_emb", None) is not None:
             return self._emb_block_kv(b"RPOP", kb, timeout)
         return self._pop_kv(b"BRPOP", kb, timeout)
 
-    def bzpopmin(self, keys: Sequence[Bytesish], timeout=None) -> Optional[Tuple[bytes, bytes, float]]:
+    def bzpopmin(self, keys: Sequence[Bytesish], timeout=None) -> Optional[ZPopHit]:
         kb = _check_block(keys, timeout)
         if getattr(self, "_emb", None) is not None:
             return self._emb_block_z(kb, timeout)
@@ -159,39 +160,39 @@ class RemoteMixin:
             if k.kind is not ReplyKind.BULK or m.kind is not ReplyKind.BULK:
                 raise ProtocolError("BZPOPMIN: bad hit shape")
             from ._decode import score_of
-            return (k.data, m.data, score_of(s))
+            return ZPopHit(k.data, m.data, score_of(s))
         if r.is_nil():
             return None
         if r.is_error():
             raise error_from_reply_text(r.data)
         raise ProtocolError(f"BZPOPMIN: unexpected {r.shape()}")
 
-    def _pop_kv(self, verb: bytes, keys: List[bytes], timeout) -> Optional[Tuple[bytes, bytes]]:
+    def _pop_kv(self, verb: bytes, keys: List[bytes], timeout) -> Optional[KV]:
         r = self._exec(_block_argv(verb, keys, timeout))
         if r.kind is ReplyKind.ARRAY and len(r.items) == 2:
             k, v = r.items
             if k.kind is not ReplyKind.BULK or v.kind is not ReplyKind.BULK:
                 raise ProtocolError(f"{verb!r}: bad hit shape")
-            return (k.data, v.data)
+            return KV(k.data, v.data)
         if r.is_nil():
             return None
         if r.is_error():
             raise error_from_reply_text(r.data)
         raise ProtocolError(f"{verb!r}: unexpected {r.shape()}")
 
-    def _emb_block_kv(self, verb: bytes, keys: List[bytes], timeout) -> Optional[Tuple[bytes, bytes]]:
+    def _emb_block_kv(self, verb: bytes, keys: List[bytes], timeout) -> Optional[KV]:
         deadline = None if timeout is None else time.monotonic() + seconds_of(timeout)
         while True:
             for k in keys:
                 r = self._exec([verb, k, b"1"])
                 if r.kind is ReplyKind.ARRAY and r.items and r.items[0].kind is ReplyKind.BULK:
-                    return (k, r.items[0].data)
+                    return KV(k, r.items[0].data)
                 if r.kind is ReplyKind.BULK:
-                    return (k, r.data)
+                    return KV(k, r.data)
             if _block_done(deadline):
                 return None
 
-    def _emb_block_z(self, keys: List[bytes], timeout) -> Optional[Tuple[bytes, bytes, float]]:
+    def _emb_block_z(self, keys: List[bytes], timeout) -> Optional[ZPopHit]:
         from ._decode import score_of
 
         deadline = None if timeout is None else time.monotonic() + seconds_of(timeout)
@@ -199,7 +200,7 @@ class RemoteMixin:
             for k in keys:
                 r = self._exec([b"ZPOPMIN", k, b"1"])
                 if r.kind is ReplyKind.ARRAY and len(r.items) >= 2 and r.items[0].kind is ReplyKind.BULK:
-                    return (k, r.items[0].data, score_of(r.items[1]))
+                    return ZPopHit(k, r.items[0].data, score_of(r.items[1]))
             if _block_done(deadline):
                 return None
 
