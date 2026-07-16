@@ -214,6 +214,30 @@ while MMKV re-dirties the same mmap page. The engine-level lx64 prior (kevy
 for docs: durable kevy wins the small/medium writes that dominate mobile KV
 use; for multi-KB durable blobs MMKV's mmap model is faster.
 
+### iPhone 15 (signed Release, real device) — the matrix completes
+
+Same build (A1+A2+A3+A4), pulled off the app container after a physical
+unlock. MOBILEGATE:PASS. kevy/mmkv:
+
+| axis | 16B | 256B | 4KB |
+|------|----:|-----:|----:|
+| GET (in-mem) | **1.4×** | **1.4×** | **3.1×** |
+| SET (in-mem) | **2.1×** | **2.0×** | **2.1×** |
+| SET durable (AOF everysec) | 1.0× | 0.7× | 0.1× |
+
+- **GET now wins at EVERY size on iPhone** — the raw-JSI attack closed even
+  the 16B axis there (pre-attack 0.8×); the Samsung 16B residual (0.7×) is
+  the Hermes-interpreter dispatch being relatively heavier on that SoC.
+- getData 3.8-4.5M ops/s (~230 ns/op, was ~300); setData 4.76M; pure-JSI
+  abi() 14.3M; Nitro cmd door 12.9-13.8× over the Expo door.
+- pubsub: mitt 3.57M | **bus 1.92M** | pubFloor 1.67M | poll 980k |
+  pushBatched 862k → **mitt/bus = 1.9×** (Samsung ~4.3×) — the bus lane sits
+  within 2× of a same-thread JS emitter while every publish still hits the
+  real engine bus. bus ≥ pubFloor here is axis-to-axis noise; both are at
+  the same magnitude, i.e. the JS machinery cost is near-invisible on A16.
+- durable mirrors Samsung: fine at 16B, crossover already at 256B (0.7×),
+  4KB is mmap's turf — the honest docs boundary stands.
+
 ### Verdict table (attack → outcome)
 
 | attack | predicted | measured | kept? |
