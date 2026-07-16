@@ -46,11 +46,28 @@ case "$framework" in
     expo)
         appdir="$HERE/bindings/expo/example"
         [ -d "$appdir/node_modules" ] || ( cd "$appdir" && npm install --no-audit --no-fund )
-        # Dedicated Metro port: the default 8081 collides with any other RN
-        # project's Metro on a shared box, and the app then loads a FOREIGN
-        # bundle (observed: a stray 8081 Metro fed another app's bundle and
-        # crashed on its missing native modules).
-        ios_cmd="npx expo run:ios --port 8087"
+        # iOS gates on a Release build: the JS bundle is EMBEDDED, so no Metro
+        # is involved — a dev build fetches its bundle over localhost and a
+        # stray Metro from another project on the default port feeds it a
+        # FOREIGN bundle (observed: crashed on that app's missing native
+        # modules, and the dev client ignored RCT_jsLocation overrides).
+        # arm64-only for the same reason as the barern recipe below: the
+        # vendored sim slice is arm64, and a fat Release build finds no
+        # matching slice (CocoaPods then copies NOTHING and the Swift shell
+        # fails with "no such module 'Kevy'").
+        ios_cmd='sim=$(ios_sim_id); \
+          [ -d ios/HelloWorld.xcworkspace ] || ( cd ios && pod install ); \
+          xcodebuild -workspace ios/HelloWorld.xcworkspace -scheme HelloWorld \
+            -configuration Release -sdk iphonesimulator \
+            -destination "id=$sim" ONLY_ACTIVE_ARCH=YES ARCHS=arm64 EXCLUDED_ARCHS=x86_64 \
+            CODE_SIGNING_ALLOWED=NO build && \
+          app=$(xcodebuild -workspace ios/HelloWorld.xcworkspace -scheme HelloWorld \
+            -configuration Release -sdk iphonesimulator -showBuildSettings 2>/dev/null \
+            | awk -F" = " "/ BUILT_PRODUCTS_DIR/{print \$2; exit}")/HelloWorld.app && \
+          xcrun simctl install "$sim" "$app" && \
+          xcrun simctl launch "$sim" com.anonymous.expo-template-blank-typescript'
+        # Android keeps the dev build (Metro) but on a dedicated port for the
+        # same shared-box reason.
         android_cmd="npx expo run:android --port 8087"
         ;;
     flutter)
