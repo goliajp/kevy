@@ -153,7 +153,13 @@ function makeClient(be: Backend, url: string): Client {
     pipeline: async (build: (p: PipelineBuf) => void) => runPipeline(requireRemote(be, "pipeline"), build),
     sync: makeSyncClient(be),
   };
-  return Object.assign(bindAsync(be), extra) as Client;
+  const face = bindAsync(be);
+  if (be.isEmbedded) {
+    const eb = be as EmbeddedBackend;
+    face.get = async (key: Data) => eb.getScalar(toBytes(key));
+    face.set = async (key: Data, value: Data) => void eb.setScalar(toBytes(key), toBytes(value));
+  }
+  return Object.assign(face, extra) as Client;
 }
 
 function makeSyncClient(be: Backend): SyncClient {
@@ -171,7 +177,13 @@ function makeSyncClient(be: Backend): SyncClient {
     feedTail: (shard: number) => feedTailSync(be, shard),
     feedRead: (shard: number) => feedReadSync(be, shard),
   };
-  return Object.assign(bindSync(be), extra) as SyncClient;
+  const face = bindSync(be);
+  if (be.isEmbedded) {
+    const eb = be as EmbeddedBackend;
+    face.get = (key: Data) => eb.getScalar(toBytes(key));
+    face.set = (key: Data, value: Data) => eb.setScalar(toBytes(key), toBytes(value));
+  }
+  return Object.assign(face, extra) as SyncClient;
 }
 
 function bindAsync(be: Backend): AsyncSpecFace<AllSpecs> {

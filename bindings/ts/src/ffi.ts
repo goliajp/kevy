@@ -3,7 +3,7 @@
 // (kevy-napi) on Node — behind one uniform low-level handle that hands back
 // raw RESP bytes. The higher-level EmbeddedDb (§5.2) parses those into Reply.
 //
-// The Bun path uses the real scalar (kevy_get/kevy_set) and blocking-wait
+// The Bun path uses the real scalar (kevy_get_shared/kevy_set) and blocking-wait
 // (kevy_sub_wait) symbols; the N-API addon exposes only the ten generic
 // symbols, so Node emulates the scalar path via cmd and the blocking wait via
 // a bounded poll (observably identical, contract §3.14 note).
@@ -54,84 +54,125 @@ const SLEEP_BUF = new Int32Array(new SharedArrayBuffer(4));
 export function sleepSync(ms: number): void {
   Atomics.wait(SLEEP_BUF, 0, 0, Math.max(1, ms));
 }
+/** Bounded async sleep (the poll cadence for blocking pops / the embedded bus). */
+export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 // --- Bun: bun:ffi straight onto the cdylib ------------------------------
 
-function loadBun(): RawEngine {
-  // Resolved lazily so Node never evaluates the bun:ffi specifier; Bun's
-  // createRequire resolves the built-in synchronously.
-  const ffi = createRequire(import.meta.url)("bun:ffi") as typeof import("bun:ffi");
-  const { dlopen, FFIType, ptr, toArrayBuffer } = ffi;
-  const lib = process.env.KEVY_FFI_LIB ?? defaultLib("libkevy_ffi");
-  const c = dlopen(lib, {
-    kevy_open: { args: [FFIType.ptr, FFIType.u64], returns: FFIType.ptr },
-    kevy_open_mem: { args: [], returns: FFIType.ptr },
-    kevy_close: { args: [FFIType.ptr], returns: FFIType.void },
-    kevy_cmd: {
-      args: [FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.ptr, FFIType.ptr],
-      returns: FFIType.i32,
-    },
-    kevy_buf_free: { args: [FFIType.ptr, FFIType.u64, FFIType.u64], returns: FFIType.void },
-    kevy_get: { args: [FFIType.ptr, FFIType.ptr, FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
-    kevy_set: {
-      args: [FFIType.ptr, FFIType.ptr, FFIType.u64, FFIType.ptr, FFIType.u64, FFIType.u64],
-      returns: FFIType.i32,
-    },
-    kevy_subscribe: { args: [FFIType.ptr, FFIType.ptr, FFIType.u64], returns: FFIType.ptr },
-    kevy_psubscribe: { args: [FFIType.ptr, FFIType.ptr, FFIType.u64], returns: FFIType.ptr },
-    kevy_sub_next: { args: [FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
-    kevy_sub_wait: { args: [FFIType.ptr, FFIType.u64, FFIType.ptr], returns: FFIType.i32 },
-    kevy_sub_close: { args: [FFIType.ptr], returns: FFIType.void },
-    kevy_version: { args: [], returns: FFIType.cstring },
-    kevy_abi: { args: [], returns: FFIType.u32 },
-  }).symbols;
+// A pointer as bun:ffi hands it back: a plain JS number (48-bit VA fits in a
+// double). u64 args accept a number too, so every parameter below is `number`.
+type Ptr = number;
 
-  const OUT = new BigUint64Array(3);
-  // FFIType.ptr args want a plain number pointer; zero-length buffers reuse
-  // OUT's stable non-null address (any works, len 0 means kevy reads nothing).
-  const nzp = (b: Uint8Array): number => (b.length ? (ptr(b) as number) : (ptr(OUT) as number));
-  const take = (): Uint8Array | null => {
-    const len = Number(OUT[1]);
-    if (len === 0) return null;
-    const p = Number(OUT[0]);
-    const copy = new Uint8Array(toArrayBuffer(p, 0, len)).slice();
-    c.kevy_buf_free(p, len, Number(OUT[2]));
-    return copy;
-  };
+// The kevy C ABI surface this client binds, typed so the module-level helpers
+// can carry `c` without leaking bun:ffi's `any` symbols into business code.
+interface BunSymbols {
+  kevy_open(dir: Ptr, dirLen: number): Ptr;
+  kevy_open_mem(): Ptr;
+  kevy_close(db: Ptr): void;
+  kevy_cmd(db: Ptr, argc: number, argv: Ptr, lens: Ptr, out: Ptr): number;
+  kevy_buf_free(ptr: Ptr, len: number, cap: number): void;
+  kevy_get_shared(db: Ptr, key: Ptr, keyLen: number, out: Ptr): number;
+  kevy_buf_free_shared(ptr: Ptr, len: number, cap: number): void;
+  kevy_set(db: Ptr, key: Ptr, keyLen: number, val: Ptr, valLen: number, ttlMs: number): number;
+  kevy_subscribe(db: Ptr, name: Ptr, nameLen: number): Ptr;
+  kevy_psubscribe(db: Ptr, name: Ptr, nameLen: number): Ptr;
+  kevy_sub_next(sub: Ptr, out: Ptr): number;
+  kevy_sub_wait(sub: Ptr, timeoutMs: number, out: Ptr): number;
+  kevy_sub_close(sub: Ptr): void;
+  kevy_version(): { toString(): string };
+  kevy_abi(): number;
+}
 
-  const makeSub = (p: number): RawSub => ({
+// The bits every Bun helper needs: the symbols, the two `ptr`/`toArrayBuffer`
+// address helpers, the shared 3-word OUT struct, and the non-null-ptr coercer.
+interface BunCtx {
+  c: BunSymbols;
+  ptr: (view: ArrayBufferView) => number;
+  toArrayBuffer: (ptr: number, off: number, len: number) => ArrayBuffer;
+  out: BigUint64Array;
+  nzp: (b: Uint8Array) => number;
+}
+
+// Scratch argv pointer/length vectors for kevy_cmd, reused across calls (the
+// engine is driven single-threaded and kevy_cmd is synchronous, so one pair is
+// enough); grown on demand when a command carries more args than any before.
+let ptrScratch = new BigUint64Array(8);
+let lenScratch = new BigUint64Array(8);
+function scratchFor(n: number): [BigUint64Array, BigUint64Array] {
+  if (ptrScratch.length < n) {
+    ptrScratch = new BigUint64Array(n);
+    lenScratch = new BigUint64Array(n);
+  }
+  return [ptrScratch, lenScratch];
+}
+
+// Consume the plain-lane OUT buffer (kevy_cmd / pub-sub): copy the reply out
+// and free it. null when the reply is empty.
+function bunTake(ctx: BunCtx): Uint8Array | null {
+  const len = Number(ctx.out[1]);
+  if (len === 0) return null;
+  const p = Number(ctx.out[0]);
+  const copy = new Uint8Array(ctx.toArrayBuffer(p, 0, len)).slice();
+  ctx.c.kevy_buf_free(p, len, Number(ctx.out[2]));
+  return copy;
+}
+
+// Consume the shared-lane OUT buffer (kevy_get_shared): the value is a VIEW of
+// the engine's Arc'd bytes for a large bulk (no engine-side copy). We still copy
+// once into the returned Uint8Array, then release the engine owner via the
+// shared free. Only the caller's hit branch reaches here. An empty (but present)
+// value returns an empty array, not null.
+function bunTakeShared(ctx: BunCtx): Uint8Array {
+  const p = Number(ctx.out[0]);
+  const len = Number(ctx.out[1]);
+  const cap = Number(ctx.out[2]);
+  const copy = len === 0 ? new Uint8Array(0) : new Uint8Array(ctx.toArrayBuffer(p, 0, len)).slice();
+  ctx.c.kevy_buf_free_shared(p, len, cap);
+  return copy;
+}
+
+function bunMakeSub(ctx: BunCtx, p: number): RawSub {
+  const { c, ptr, out } = ctx;
+  return {
     nextRaw() {
-      const rc = c.kevy_sub_next(p, ptr(OUT));
+      const rc = c.kevy_sub_next(p, ptr(out));
       if (rc < 0) throw new Error("kevy: subscription misuse");
-      return rc === 0 ? null : take();
+      return rc === 0 ? null : bunTake(ctx);
     },
     waitRaw(timeoutMs) {
-      const rc = c.kevy_sub_wait(p, timeoutMs, ptr(OUT));
+      const rc = c.kevy_sub_wait(p, timeoutMs, ptr(out));
       if (rc < 0) throw new Error("kevy: subscription closed");
-      return rc === 0 ? null : take();
+      return rc === 0 ? null : bunTake(ctx);
     },
     close() {
       if (p) c.kevy_sub_close(p);
     },
-  });
+  };
+}
 
-  const makeHandle = (dbp: number): RawHandle => ({
+function bunMakeHandle(ctx: BunCtx, dbp: number): RawHandle {
+  const { c, ptr, out, nzp } = ctx;
+  return {
     cmdRaw(argv) {
-      const bufs = argv;
-      const ptrs = new BigUint64Array(bufs.length);
-      const lens = new BigUint64Array(bufs.length);
-      for (let i = 0; i < bufs.length; i++) {
-        ptrs[i] = BigInt(nzp(bufs[i]!));
-        lens[i] = BigInt(bufs[i]!.length);
+      const n = argv.length;
+      const [ptrs, lens] = scratchFor(n);
+      for (let i = 0; i < n; i++) {
+        ptrs[i] = BigInt(nzp(argv[i]!));
+        lens[i] = BigInt(argv[i]!.length);
       }
-      const rc = c.kevy_cmd(dbp, bufs.length, ptr(ptrs), ptr(lens), ptr(OUT));
+      const rc = c.kevy_cmd(dbp, n, ptr(ptrs), ptr(lens), ptr(out));
       if (rc !== 0) throw new Error("kevy: kevy_cmd misuse");
-      return take();
+      return bunTake(ctx);
     },
     getScalar(key) {
-      const rc = c.kevy_get(dbp, nzp(key), key.length, ptr(OUT));
-      if (rc < 0) throw new Error("kevy: kevy_get misuse");
-      return rc === 0 ? null : take();
+      // Zero-copy shared lane: a large bulk value is handed out as a view of the
+      // engine's Arc (a refcount bump, no engine-side copy); a small value is a
+      // single fresh Vec, byte-identical cost to the plain lane. The JS copy into
+      // the returned array still happens either way — so the win is large-value
+      // GET only (it saves the engine's Arc-clone-to-fresh-Vec copy).
+      const rc = c.kevy_get_shared(dbp, nzp(key), key.length, ptr(out));
+      if (rc < 0) throw new Error("kevy: kevy_get_shared misuse");
+      return rc === 0 ? null : bunTakeShared(ctx);
     },
     setScalar(key, val, ttlMs) {
       const rc = c.kevy_set(dbp, nzp(key), key.length, nzp(val), val.length, ttlMs);
@@ -142,28 +183,63 @@ function loadBun(): RawEngine {
         ? c.kevy_psubscribe(dbp, nzp(name), name.length)
         : c.kevy_subscribe(dbp, nzp(name), name.length);
       if (!p) throw new Error("kevy: subscribe failed");
-      return makeSub(Number(p));
+      return bunMakeSub(ctx, Number(p));
     },
     close() {
       if (dbp) c.kevy_close(dbp);
     },
-  });
+  };
+}
 
+function loadBun(): RawEngine {
+  // Resolved lazily so Node never evaluates the bun:ffi specifier; Bun's
+  // createRequire resolves the built-in synchronously.
+  const ffi = createRequire(import.meta.url)("bun:ffi") as typeof import("bun:ffi");
+  const { dlopen, FFIType, ptr, toArrayBuffer } = ffi;
+  const lib = process.env.KEVY_FFI_LIB ?? defaultLib("libkevy_ffi");
+  const c = dlopen(lib, bunTable(FFIType)).symbols as BunSymbols;
+
+  const out = new BigUint64Array(3);
+  // FFIType.ptr args want a plain number pointer; zero-length buffers reuse
+  // OUT's stable non-null address (any works, len 0 means kevy reads nothing).
+  const nzp = (b: Uint8Array): number => (b.length ? (ptr(b) as number) : (ptr(out) as number));
+  const ctx: BunCtx = { c, ptr, toArrayBuffer, out, nzp };
   const enc = new TextEncoder();
   return {
     open(dir) {
       const b = enc.encode(dir);
       const p = c.kevy_open(ptr(b), b.length);
       if (!p) throw new Error("kevy: open failed");
-      return makeHandle(Number(p));
+      return bunMakeHandle(ctx, Number(p));
     },
     openMem() {
       const p = c.kevy_open_mem();
       if (!p) throw new Error("kevy: open failed");
-      return makeHandle(Number(p));
+      return bunMakeHandle(ctx, Number(p));
     },
     version: () => c.kevy_version().toString(),
     abi: () => c.kevy_abi(),
+  };
+}
+
+// The dlopen symbol table (data, not control flow — kept as one map).
+function bunTable(t: typeof import("bun:ffi").FFIType) {
+  return {
+    kevy_open: { args: [t.ptr, t.u64], returns: t.ptr },
+    kevy_open_mem: { args: [], returns: t.ptr },
+    kevy_close: { args: [t.ptr], returns: t.void },
+    kevy_cmd: { args: [t.ptr, t.u64, t.ptr, t.ptr, t.ptr], returns: t.i32 },
+    kevy_buf_free: { args: [t.ptr, t.u64, t.u64], returns: t.void },
+    kevy_get_shared: { args: [t.ptr, t.ptr, t.u64, t.ptr], returns: t.i32 },
+    kevy_buf_free_shared: { args: [t.ptr, t.u64, t.u64], returns: t.void },
+    kevy_set: { args: [t.ptr, t.ptr, t.u64, t.ptr, t.u64, t.u64], returns: t.i32 },
+    kevy_subscribe: { args: [t.ptr, t.ptr, t.u64], returns: t.ptr },
+    kevy_psubscribe: { args: [t.ptr, t.ptr, t.u64], returns: t.ptr },
+    kevy_sub_next: { args: [t.ptr, t.ptr], returns: t.i32 },
+    kevy_sub_wait: { args: [t.ptr, t.u64, t.ptr], returns: t.i32 },
+    kevy_sub_close: { args: [t.ptr], returns: t.void },
+    kevy_version: { args: [], returns: t.cstring },
+    kevy_abi: { args: [], returns: t.u32 },
   };
 }
 
@@ -182,28 +258,22 @@ interface NapiExports {
   abi(): number;
 }
 
-function loadNode(): RawEngine {
-  const lib = process.env.KEVY_NAPI_LIB ?? defaultLib("libkevy_napi");
-  const mod = { exports: {} as NapiExports };
-  (process as unknown as { dlopen(m: object, p: string): void }).dlopen(mod, lib);
-  const c = mod.exports;
-  const enc = new TextEncoder();
+// argv crosses the addon as one flat Buffer: a u32-LE length prefix per arg.
+function nodePack(argv: Uint8Array[]): Buffer {
+  let total = 0;
+  for (const a of argv) total += 4 + a.length;
+  const out = Buffer.allocUnsafe(total);
+  let pos = 0;
+  for (const a of argv) {
+    out.writeUInt32LE(a.length, pos);
+    out.set(a, pos + 4);
+    pos += 4 + a.length;
+  }
+  return out;
+}
 
-  // argv crosses the addon as one flat Buffer: a u32-LE length prefix per arg.
-  const pack = (argv: Uint8Array[]): Buffer => {
-    let total = 0;
-    for (const a of argv) total += 4 + a.length;
-    const out = Buffer.allocUnsafe(total);
-    let pos = 0;
-    for (const a of argv) {
-      out.writeUInt32LE(a.length, pos);
-      out.set(a, pos + 4);
-      pos += 4 + a.length;
-    }
-    return out;
-  };
-
-  const makeSub = (p: unknown): RawSub => ({
+function nodeMakeSub(c: NapiExports, p: unknown): RawSub {
+  return {
     nextRaw() {
       const f = c.subNext(p);
       return f == null ? null : f;
@@ -222,14 +292,16 @@ function loadNode(): RawEngine {
     close() {
       c.subClose(p);
     },
-  });
+  };
+}
 
-  const makeHandle = (dbp: unknown): RawHandle => ({
+function nodeMakeHandle(c: NapiExports, enc: TextEncoder, dbp: unknown): RawHandle {
+  return {
     cmdRaw(argv) {
-      return c.cmd(dbp, pack(argv));
+      return c.cmd(dbp, nodePack(argv));
     },
     getScalar(key) {
-      const r = c.cmd(dbp, pack([enc.encode("GET"), key]));
+      const r = c.cmd(dbp, nodePack([enc.encode("GET"), key]));
       if (r == null) return null;
       // Reply is a $bulk or $-1; decode the bulk body lazily in EmbeddedDb.
       return decodeBulk(r);
@@ -239,25 +311,30 @@ function loadNode(): RawEngine {
         ttlMs > 0
           ? [enc.encode("SET"), key, val, enc.encode("PX"), enc.encode(String(ttlMs))]
           : [enc.encode("SET"), key, val];
-      c.cmd(dbp, pack(argv));
+      c.cmd(dbp, nodePack(argv));
     },
     subscribe(name, pattern) {
-      const p = pattern
-        ? c.psubscribe(dbp, Buffer.from(name))
-        : c.subscribe(dbp, Buffer.from(name));
-      return makeSub(p);
+      const p = pattern ? c.psubscribe(dbp, Buffer.from(name)) : c.subscribe(dbp, Buffer.from(name));
+      return nodeMakeSub(c, p);
     },
     close() {
       c.close(dbp);
     },
-  });
+  };
+}
 
+function loadNode(): RawEngine {
+  const lib = process.env.KEVY_NAPI_LIB ?? defaultLib("libkevy_napi");
+  const mod = { exports: {} as NapiExports };
+  (process as unknown as { dlopen(m: object, p: string): void }).dlopen(mod, lib);
+  const c = mod.exports;
+  const enc = new TextEncoder();
   return {
     open(dir) {
-      return makeHandle(c.open(Buffer.from(enc.encode(dir))));
+      return nodeMakeHandle(c, enc, c.open(Buffer.from(enc.encode(dir))));
     },
     openMem() {
-      return makeHandle(c.openMem());
+      return nodeMakeHandle(c, enc, c.openMem());
     },
     version: () => c.version(),
     abi: () => c.abi(),
@@ -269,8 +346,17 @@ function decodeBulk(raw: Uint8Array): Uint8Array | null {
   if (raw[0] !== 0x24) return null; // not a bulk
   let i = 1;
   while (i + 1 < raw.length && !(raw[i] === 0x0d && raw[i + 1] === 0x0a)) i++;
-  const n = Number(new TextDecoder().decode(raw.subarray(1, i)));
-  if (n < 0) return null;
+  // The length header is ASCII digits (optionally a leading '-'); hand-parse it
+  // rather than spin up a TextDecoder for a handful of bytes.
+  let n = 0;
+  let neg = false;
+  let j = 1;
+  if (raw[j] === 0x2d) {
+    neg = true;
+    j++;
+  }
+  for (; j < i; j++) n = n * 10 + (raw[j]! - 0x30);
+  if (neg) return null; // $-1
   const start = i + 2;
   return raw.slice(start, start + n);
 }

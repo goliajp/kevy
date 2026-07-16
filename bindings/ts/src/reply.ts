@@ -4,6 +4,7 @@
 // wire text → ProtocolError (verbatim), a shape mismatch → ProtocolError.
 
 import {
+  textOf,
   toBytes,
   unexpectedReply,
   type Data,
@@ -18,7 +19,7 @@ export function av(...parts: Data[]): Uint8Array[] {
 
 /** Convert a Reply::error into the right thrown KevyError (contract §2.2). */
 export function replyError(r: Reply): never {
-  const text = r.kind === "error" || r.kind === "blobError" ? new TextDecoder().decode(r.bytes) : "";
+  const text = r.kind === "error" || r.kind === "blobError" ? textOf(r.bytes) : "";
   const store = classifyStoreError(text);
   if (store) throw new StoreError(store);
   throw new ProtocolError(text);
@@ -31,7 +32,7 @@ function guard(r: Reply): void {
 /** Expect +OK. */
 export function asOK(r: Reply): void {
   guard(r);
-  if (r.kind === "simple" && new TextDecoder().decode(r.bytes) === "OK") return;
+  if (r.kind === "simple" && textOf(r.bytes) === "OK") return;
   throw unexpectedReply(r);
 }
 
@@ -67,7 +68,7 @@ export function asOptBulk(r: Reply): Uint8Array | null {
 /** Expect a simple string, returned as text (e.g. TYPE). */
 export function asStr(r: Reply): string {
   guard(r);
-  if (r.kind === "simple") return new TextDecoder().decode(r.bytes);
+  if (r.kind === "simple") return textOf(r.bytes);
   throw unexpectedReply(r);
 }
 
@@ -120,10 +121,9 @@ export function asIntList(r: Reply): number[] {
 export function scoreOf(r: Reply): number {
   if (r.kind === "double") return r.value;
   if (r.kind === "bulk" || r.kind === "simple") {
-    const f = Number(new TextDecoder().decode(r.bytes));
-    if (Number.isNaN(f) && new TextDecoder().decode(r.bytes) !== "nan") {
-      throw new ProtocolError(`bad float reply`);
-    }
+    const s = textOf(r.bytes);
+    const f = Number(s);
+    if (Number.isNaN(f) && s !== "nan") throw new ProtocolError(`bad float reply`);
     return f;
   }
   throw unexpectedReply(r);

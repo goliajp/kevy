@@ -6,7 +6,7 @@
 // use beyond the ordered pipelining the client drives.
 
 import net from "node:net";
-import { encodeCommand, parseReply, type Reply } from "./resp.ts";
+import { encodeCommand, parseReply, textOf, toBytes, type Reply } from "./resp.ts";
 import { ClosedError, IoError, ProtocolError, TimedOutError, type KevyError } from "./errors.ts";
 
 interface Waiter {
@@ -15,11 +15,13 @@ interface Waiter {
   timer?: ReturnType<typeof setTimeout>;
 }
 
-const EMPTY = new Uint8Array(0);
-
 export class RespConn {
   #sock: net.Socket;
-  #buf: Uint8Array = EMPTY;
+  // Unconsumed byte segments in arrival order. Packets are appended, never
+  // concatenated per-event (the O(n²) trap); a reply is parsed straight from
+  // the front segment, and the segments are coalesced once only when a single
+  // reply is genuinely split across packets.
+  #chunks: Uint8Array[] = [];
   #waiters: Waiter[] = [];
   #closed = false;
   #closeErr: KevyError | null = null;
@@ -48,22 +50,31 @@ export class RespConn {
   }
 
   #onData(chunk: Buffer): void {
-    this.#buf = this.#buf.length === 0 ? new Uint8Array(chunk) : concat(this.#buf, chunk);
+    this.#chunks.push(chunk);
     this.#drain();
   }
 
   #drain(): void {
-    while (this.#waiters.length > 0) {
+    while (this.#waiters.length > 0 && this.#chunks.length > 0) {
+      let buf = this.#chunks[0]!;
       let r: Reply;
       let used: number;
       try {
-        [r, used] = parseReply(this.#buf, 0);
+        [r, used] = parseReply(buf, 0);
+        if (used === 0 && this.#chunks.length > 1) {
+          // The reply straddles segments: coalesce the pending tail once (not
+          // per packet) into a single buffer and retry.
+          buf = coalesce(this.#chunks);
+          this.#chunks = [buf];
+          [r, used] = parseReply(buf, 0);
+        }
       } catch {
         this.#fail(new ProtocolError("malformed reply"));
         return;
       }
       if (used === 0) break; // need more bytes
-      this.#buf = used === this.#buf.length ? EMPTY : this.#buf.subarray(used);
+      if (used === buf.length) this.#chunks.shift();
+      else this.#chunks[0] = buf.subarray(used);
       const w = this.#waiters.shift()!;
       if (w.timer) clearTimeout(w.timer);
       w.resolve(r);
@@ -135,10 +146,9 @@ export class RespConn {
 
   /** Issue a SELECT n round-trip; a -ERR reply fails the connect. */
   async selectDB(db: number): Promise<void> {
-    const enc = new TextEncoder();
-    const r = await this.request([enc.encode("SELECT"), enc.encode(String(db))]);
+    const r = await this.request([toBytes("SELECT"), toBytes(String(db))]);
     if (r.kind === "error") {
-      throw new ProtocolError(`SELECT ${db} rejected: ${new TextDecoder().decode(r.bytes)}`);
+      throw new ProtocolError(`SELECT ${db} rejected: ${textOf(r.bytes)}`);
     }
   }
 
@@ -150,9 +160,14 @@ export class RespConn {
   }
 }
 
-function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
-  const out = new Uint8Array(a.length + b.length);
-  out.set(a, 0);
-  out.set(b, a.length);
+function coalesce(chunks: Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const out = new Uint8Array(total);
+  let pos = 0;
+  for (const c of chunks) {
+    out.set(c, pos);
+    pos += c.length;
+  }
   return out;
 }

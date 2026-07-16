@@ -4,9 +4,10 @@
 // contract §1.4 / §7). The async face wraps the same op either way, so the
 // two faces agree on results.
 
-import { type Reply } from "./resp.ts";
+import { toBytes, type Reply } from "./resp.ts";
 import { RespConn } from "./transport.ts";
 import { EmbeddedDb, releaseStore } from "./embedded.ts";
+import { asOptBulk } from "./reply.ts";
 import { UnsupportedError } from "./errors.ts";
 
 export interface Backend {
@@ -27,10 +28,29 @@ export class EmbeddedBackend implements Backend {
     this.#key = key;
   }
   async exec(argv: Uint8Array[]): Promise<Reply> {
-    return this.#db.cmd(...argv);
+    return this.#db.cmdBytes(argv);
   }
   execSync(argv: Uint8Array[]): Reply {
-    return this.#db.cmd(...argv);
+    return this.#db.cmdBytes(argv);
+  }
+  /** Scalar fast GET (≡ asOptBulk of a GET) — on Bun this reaches the engine's
+   * shared-lane scalar symbol, skipping argv-pack + RESP encode/decode; on Node
+   * the addon has no scalar symbol so this folds back to a cmd (a no-op win).
+   *
+   * The scalar lane cannot represent a store-semantic error: GET on a list/hash
+   * key is WRONGTYPE, which the FFI collapses to an unclassifiable misuse code.
+   * On that (rare, cold) signal, re-run the full GET so the -ERR maps to the
+   * right StoreError (contract §2.2) — matching the generic path exactly. */
+  getScalar(key: Uint8Array): Uint8Array | null {
+    try {
+      return this.#db.getScalar(key);
+    } catch {
+      return asOptBulk(this.#db.cmdBytes([toBytes("GET"), key]));
+    }
+  }
+  /** Scalar fast SET (≡ asOK of a SET without options). */
+  setScalar(key: Uint8Array, val: Uint8Array): void {
+    this.#db.setScalar(key, val);
   }
   remoteConn(): never {
     throw new UnsupportedError("this feature is remote-only; use the embedded raw cmd() path or the store's typed API");
