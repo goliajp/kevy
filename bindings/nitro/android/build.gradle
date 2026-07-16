@@ -47,9 +47,21 @@ android {
 
     externalNativeBuild {
       cmake {
-        cppFlags "-frtti -fexceptions -Wall -Wextra -fstack-protector-all"
+        cppFlags "-frtti -fexceptions -Wall -Wextra"
         arguments "-DANDROID_STL=c++_shared", "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
         abiFilters (*reactNativeArchitectures())
+      }
+    }
+  }
+
+  buildTypes {
+    debug {
+      externalNativeBuild {
+        cmake {
+          // Canary every frame while developing; release drops it — it was a
+          // per-call tax on the JSI hot path that MMKV does not pay.
+          cppFlags "-fstack-protector-all"
+        }
       }
     }
   }
