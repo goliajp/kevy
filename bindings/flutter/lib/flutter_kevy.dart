@@ -24,25 +24,38 @@ import 'src/resp.dart';
 export 'src/resp.dart' show KevyError, respText;
 
 // The engine is the kevy-ffi cdylib. Android ships it as a jniLib
-// (libkevy_ffi.so, dlopen by name); iOS links the static xcframework
-// into the app binary, so its symbols are in the process image.
-final FlutterKevyBindings _b = FlutterKevyBindings(() {
+// (libkevy_ffi.so, dlopen by name); iOS embeds it as a DYNAMIC framework
+// and loads it by name (hence DynamicLibrary.open below, not .process()) —
+// macOS links the static KevyKit stone into the host process image.
+final ffi.DynamicLibrary _lib = () {
   if (Platform.isAndroid) return ffi.DynamicLibrary.open('libkevy_ffi.so');
-  // iOS embeds kevy_ffi as a dynamic framework (like Android's .so) and
-  // loads it by name; macOS links the static KevyKit stone into the host.
   if (Platform.isIOS) return ffi.DynamicLibrary.open('kevy_ffi.framework/kevy_ffi');
   if (Platform.isMacOS) return ffi.DynamicLibrary.process();
   if (Platform.isLinux) return ffi.DynamicLibrary.open('libkevy_ffi.so');
   if (Platform.isWindows) return ffi.DynamicLibrary.open('kevy_ffi.dll');
   throw UnsupportedError('kevy: unsupported platform');
-}());
+}();
+
+final FlutterKevyBindings _b = FlutterKevyBindings(_lib);
+
+// Leak backstops: if close() is forgotten, the GC still drops the native
+// store / subscription (and its store, AOF, bus registration). Both take a
+// single opaque handle pointer, so they bind straight to a NativeFinalizer.
+// (kevy_buf_free_shared can't — it takes three scalars, not one pointer, so
+// getView() would need a shim; see get() for why we keep the copy instead.)
+final ffi.NativeFinalizer _dbFinalizer =
+    ffi.NativeFinalizer(_lib.lookup<ffi.NativeFinalizerFunction>('kevy_close'));
+final ffi.NativeFinalizer _subFinalizer = ffi.NativeFinalizer(
+    _lib.lookup<ffi.NativeFinalizerFunction>('kevy_sub_close'));
 
 /// A pub/sub subscription. [next] drains one frame without blocking (or
 /// null when the queue is empty); [waitNext] parks in the kernel until a
 /// frame arrives or the timeout elapses; [close] unsubscribes.
-class KevySub {
+class KevySub implements ffi.Finalizable {
   ffi.Pointer<KevySubHandle> _p;
-  KevySub._(this._p);
+  KevySub._(this._p) {
+    if (_p != ffi.nullptr) _subFinalizer.attach(this, _p.cast(), detach: this);
+  }
 
   Object? next() {
     if (_p == ffi.nullptr) return null;
@@ -73,15 +86,20 @@ class KevySub {
   }
 
   void close() {
-    if (_p != ffi.nullptr) _b.kevy_sub_close(_p);
+    if (_p != ffi.nullptr) {
+      _subFinalizer.detach(this);
+      _b.kevy_sub_close(_p);
+    }
     _p = ffi.nullptr;
   }
 }
 
 /// The embedded engine. One instance owns its data directory.
-class KevyDb {
+class KevyDb implements ffi.Finalizable {
   ffi.Pointer<KevyDbHandle> _p;
-  KevyDb._(this._p);
+  KevyDb._(this._p) {
+    if (_p != ffi.nullptr) _dbFinalizer.attach(this, _p.cast(), detach: this);
+  }
 
   /// Open a persistent store rooted at [dir] (a plain path). Throws on
   /// failure.
@@ -147,6 +165,8 @@ class KevyDb {
   }
 
   // ── the scalar fast path: no argv assembly, no RESP framing ─────────
+  /// Store [value] at [key], optionally expiring after [ttlMs] ms
+  /// (0 = no TTL). Overwrites any existing value.
   void set(String key, Uint8List value, {int ttlMs = 0}) {
     final k = utf8.encode(key);
     final kp = malloc<ffi.Uint8>(k.length);
@@ -163,23 +183,41 @@ class KevyDb {
     }
   }
 
+  /// [set] with a UTF-8 string value.
   void setText(String key, String value, {int ttlMs = 0}) =>
       set(key, utf8.encode(value), ttlMs: ttlMs);
 
+  /// The value at [key] as raw bytes, or null on a miss. Throws a typed
+  /// [KevyError] (WRONGTYPE) if [key] holds a non-string type.
   Uint8List? get(String key) {
     final k = utf8.encode(key);
     final kp = malloc<ffi.Uint8>(k.length);
     final out = calloc<KevyBuf>();
     try {
       kp.asTypedList(k.length).setAll(0, k);
-      final rc = _b.kevy_get(_live, kp, k.length, out);
-      if (rc < 0) throw KevyError('kevy: kevy_get misuse');
+      // Zero-copy shared lane: a bulk value comes back as an Arc clone (a
+      // refcount bump, no engine-side Vec copy) that this buffer VIEWS. NOT a
+      // measured win here — Dart's get already used the scalar kevy_get, not
+      // RESP; the delta is only the eliminated engine Vec copy on large
+      // values, unbenchmarked. Adopted for parity with the sibling doors.
+      final rc = _b.kevy_get_shared(_live, kp, k.length, out);
+      // The shared lane rejects a non-string key with a negative code. Re-run
+      // through the framed GET so a -WRONGTYPE reply surfaces as a typed
+      // KevyError instead of an opaque "misuse" (mirrors the C++/Client doors).
+      if (rc < 0) return _getFramedFallback(key);
       if (rc == 0) return null;
       // The scalar fast path returns RAW value bytes, not a RESP reply —
       // take them directly, do NOT parse.
       final b = out.ref;
+      // Empty-string hit: ptr may be null, so never deref it via asTypedList.
+      if (b.len == 0) {
+        _b.kevy_buf_free_shared(b.ptr, b.len, b.cap);
+        return Uint8List(0);
+      }
       final bytes = Uint8List.fromList(b.ptr.asTypedList(b.len));
-      _b.kevy_buf_free(b.ptr, b.len, b.cap);
+      // Pairs 1:1 with kevy_get_shared — the shared free drops the Arc/Vec
+      // owner (cap is its opaque handle); never kevy_buf_free on this buffer.
+      _b.kevy_buf_free_shared(b.ptr, b.len, b.cap);
       return bytes;
     } finally {
       malloc.free(kp);
@@ -187,35 +225,57 @@ class KevyDb {
     }
   }
 
+  // Re-issue GET through the framed path when the scalar lane rejected the
+  // key, so an engine-level error (a -WRONGTYPE on a non-string key) surfaces
+  // as a typed KevyError; a genuine value/miss still resolves normally.
+  Uint8List? _getFramedFallback(String key) {
+    final v = cmd(['GET', key]);
+    if (v is KevyError) throw v;
+    if (v == null) return null;
+    if (v is Uint8List) return v;
+    if (v is String) return Uint8List.fromList(utf8.encode(v));
+    throw KevyError('kevy: kevy_get misuse');
+  }
+
+  /// [get] decoded as UTF-8 text, or null on a miss.
   String? getText(String key) {
     final v = get(key);
     return v == null ? null : utf8.decode(v);
   }
 
   // ── the typed surface (mirrors the other kevy packages) ─────────────
+  /// Delete [keys]; returns how many existed.
   int del(List<String> keys) => _want(cmd(['DEL', ...keys])) as int;
 
+  /// Atomically add [delta] to the integer at [key]; returns the new value.
   int incrBy(String key, int delta) =>
       _want(cmd(['INCRBY', key, '$delta'])) as int;
 
+  /// Set [key]'s TTL to [ttlMs] ms; returns true if the key existed.
   bool expire(String key, int ttlMs) =>
       _want(cmd(['PEXPIRE', key, '$ttlMs'])) == 1;
 
+  /// Remaining TTL of [key] in ms (-1 = no TTL, -2 = no such key).
   int pttlMs(String key) => _want(cmd(['PTTL', key])) as int;
 
+  /// Keys matching the glob [pattern] (default all).
   List<String> keys([String pattern = '*']) {
     final v = _want(cmd(['KEYS', pattern]));
     if (v is! List) return [];
     return v.map(respText).whereType<String>().toList();
   }
 
+  /// Number of keys in the store.
   int dbSize() => _want(cmd(['DBSIZE'])) as int;
 
+  /// Remove every key.
   void flushAll() => _want(cmd(['FLUSHALL']));
 
+  /// Publish [payload] to [channel]; returns the number of receivers.
   int publish(String channel, Uint8List payload) =>
       _want(cmd(['PUBLISH', channel, payload])) as int;
 
+  /// Subscribe to a channel (or a glob [pattern] when [pattern] is true).
   KevySub subscribe(String channel, {bool pattern = false}) {
     final c = utf8.encode(channel);
     final cp = malloc<ffi.Uint8>(c.length);
@@ -231,8 +291,12 @@ class KevyDb {
     }
   }
 
+  /// Close the store, releasing the native handle. Idempotent.
   void close() {
-    if (_p != ffi.nullptr) _b.kevy_close(_p);
+    if (_p != ffi.nullptr) {
+      _dbFinalizer.detach(this);
+      _b.kevy_close(_p);
+    }
     _p = ffi.nullptr;
   }
 
