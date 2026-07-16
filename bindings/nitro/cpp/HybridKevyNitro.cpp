@@ -8,13 +8,18 @@ namespace margelo::nitro::kevy {
 
 double HybridKevyNitro::abi() { return static_cast<double>(kevy_abi()); }
 
-// Copy a kevy-owned KevyBuf into a JS-owned ArrayBuffer, then free the
-// KevyBuf. One copy — unavoidable, the engine owns its Vec and JS owns the
-// ArrayBuffer. The win is the *crossing* being cheap now, not this copy.
+// Hand a kevy-owned KevyBuf to JS with ZERO binding-layer copy: wrap the
+// engine's buffer directly in a JS ArrayBuffer and free it (kevy_buf_free)
+// only when the JS side GCs the ArrayBuffer. Mirrors MMKV's MMKVManagedBuffer
+// (jsi::ArrayBuffer over an owned MMBuffer). The previous takeBuf memcpy'd
+// the KevyBuf into a std::vector first (an extra copy + alloc on every GET);
+// wrap removes both from the hot path. The engine's own into_owned copy
+// (its Vec lives behind the store lock) is the only remaining copy.
 static std::shared_ptr<ArrayBuffer> takeBuf(KevyBuf& buf) {
-  std::vector<uint8_t> out(buf.ptr, buf.ptr + buf.len);
-  kevy_buf_free(buf.ptr, buf.len, buf.cap);
-  return ArrayBuffer::move(std::move(out));
+  KevyBuf owned = buf; // POD (ptr/len/cap); the wrap owns it until GC.
+  return ArrayBuffer::wrap(owned.ptr, owned.len, [owned]() {
+    kevy_buf_free(owned.ptr, owned.len, owned.cap);
+  });
 }
 
 std::shared_ptr<ArrayBuffer>
