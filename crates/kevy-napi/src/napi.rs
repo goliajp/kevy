@@ -9,7 +9,7 @@
 //! below any Node this package supports.
 //!
 //! The gate keeps its surface to Buffers in / Buffer out plus opaque
-//! externals for handles, which needs exactly the twelve symbols below.
+//! externals for handles, which needs exactly the thirteen symbols below.
 
 use std::ffi::c_void;
 
@@ -84,6 +84,11 @@ unsafe extern "C" {
         env: NapiEnv,
         value: u32,
         result: *mut NapiValue,
+    ) -> NapiStatus;
+    pub(crate) fn napi_get_value_int64(
+        env: NapiEnv,
+        value: NapiValue,
+        result: *mut i64,
     ) -> NapiStatus;
     pub(crate) fn napi_get_undefined(env: NapiEnv, result: *mut NapiValue) -> NapiStatus;
     pub(crate) fn napi_get_null(env: NapiEnv, result: *mut NapiValue) -> NapiStatus;
@@ -199,6 +204,23 @@ pub(crate) unsafe fn undefined(env: NapiEnv) -> NapiValue {
 pub(crate) unsafe fn null(env: NapiEnv) -> NapiValue {
     let mut out: NapiValue = std::ptr::null_mut();
     unsafe { napi_get_null(env, &mut out) };
+    out
+}
+
+/// Read a JS number as an `i64` — 0 for a non-number or null handle (the
+/// millisecond arguments this gate reads treat 0 as "none"). N-API is the
+/// only number *reader* in this surface; every other symbol writes.
+///
+/// # Safety
+/// `env` as in [`args`].
+pub(crate) unsafe fn get_i64(env: NapiEnv, value: NapiValue) -> i64 {
+    if value.is_null() {
+        return 0;
+    }
+    let mut out: i64 = 0;
+    if unsafe { napi_get_value_int64(env, value, &mut out) } != 0 {
+        return 0;
+    }
     out
 }
 

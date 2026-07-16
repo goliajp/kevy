@@ -64,8 +64,8 @@ class Db {
 
   // ── the typed surface (mirrors the wasm package) ────────────────────
   set(key, value, opts = {}) {
-    // Scalar lane when the backend exposes it (Bun). Node stays on cmd until
-    // kevy-napi ships the scalar symbols (#27).
+    // Scalar lane when the backend exposes it (both Bun and Node — kevy-napi
+    // ships get/set as of #27).
     if (this.#raw.setScalar) {
       this.#raw.setScalar(key, value, opts.ttlMs != null ? Number(opts.ttlMs) : 0);
       return;
@@ -78,11 +78,11 @@ class Db {
   }
 
   get(key) {
-    // Scalar lane when available (Bun): skips the structural RESP-framing floor
-    // (~575 ns even at 16B; see bench/PERF-FINDING-2026-07-16-embedded-get-
-    // scalar-vs-resp.md — that doc's 2.0-2.6× is a Go-host microbench, the Bun
-    // FFI overhead profile differs, so re-measure on a Bun bench). Node stays on
-    // cmd until kevy-napi ships the scalar symbols (#27).
+    // Scalar lane when available (Bun and Node — kevy-napi ships get/set as of
+    // #27): skips the structural RESP-framing floor (~575 ns even at 16B; see
+    // bench/PERF-FINDING-2026-07-16-embedded-get-scalar-vs-resp.md — that doc's
+    // 2.0-2.6× is a Go-host microbench, the JS-runtime FFI overhead profile
+    // differs, so re-measure on a JS bench before claiming a speedup).
     if (this.#raw.getScalar) {
       try {
         return this.#raw.getScalar(key); // Uint8Array | null
