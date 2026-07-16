@@ -61,6 +61,29 @@ unsafe fn take_buf(env: JniEnv, buf: KevyBuf) -> JObject {
     arr
 }
 
+/// Copy a **shared-lane** reply buffer into a fresh `byte[]`, then free it
+/// through the shared reclaimer. Mirrors [`take_buf`] but pairs with
+/// [`kevy_ffi::kevy_buf_free_shared`], never [`kevy_ffi::kevy_buf_free`]:
+/// the shared GET hands back a view whose `cap` is an OPAQUE owner handle (an
+/// `Arc` raw pointer for bulk, a tagged `Vec` capacity for small), so routing
+/// it through the plain free would corrupt the allocator — UB. The bytes are
+/// still copied into the JVM-owned array (a `byte[]` must own its storage);
+/// what the shared lane saves is the engine-side clone into a fresh `Vec`.
+///
+/// # Safety
+/// `env` must be the current call's `JNIEnv *`; `buf` must be exactly as
+/// returned by [`kevy_ffi::kevy_get_shared`], consumed exactly once.
+unsafe fn take_buf_shared(env: JniEnv, buf: KevyBuf) -> JObject {
+    let arr = if buf.len == 0 {
+        unsafe { new_byte_array(env, &[]) }
+    } else {
+        let s = unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) };
+        unsafe { new_byte_array(env, s) }
+    };
+    unsafe { kevy_ffi::kevy_buf_free_shared(buf.ptr, buf.len, buf.cap) };
+    arr
+}
+
 /// `KevyNative.open(byte[] dir)` — open a persistent store rooted at the
 /// UTF-8 path in `dir`. Returns the db handle, 0 on failure.
 ///
@@ -138,6 +161,12 @@ pub unsafe extern "system" fn jni_cmd(
 /// `KevyNative.get(long db, byte[] key)` — scalar fast-path GET: the raw
 /// value bytes, or null on a miss (and on misuse).
 ///
+/// Rides the **zero-copy shared lane** ([`kevy_ffi::kevy_get_shared`]): a bulk
+/// value is an `Arc` refcount bump (no engine-side byte copy) whose bytes are
+/// copied straight into the JVM array, freed via [`take_buf_shared`]. This
+/// saves the malloc+memcpy that the plain [`kevy_ffi::kevy_get`] lane spends
+/// cloning the value into a fresh `Vec` before handing it out.
+///
 /// # Safety
 /// Called by the JVM only, same contract as [`jni_cmd`].
 #[unsafe(export_name = "Java_jp_golia_kevy_KevyNative_get")]
@@ -153,8 +182,8 @@ pub unsafe extern "system" fn jni_get(
         }
         let k = unsafe { get_byte_array(env, key) };
         let mut out = empty_buf();
-        let rc = unsafe { kevy_ffi::kevy_get(db_ptr(db), k.as_ptr(), k.len(), &mut out) };
-        if rc == 1 { unsafe { take_buf(env, out) } } else { null_mut() }
+        let rc = unsafe { kevy_ffi::kevy_get_shared(db_ptr(db), k.as_ptr(), k.len(), &mut out) };
+        if rc == 1 { unsafe { take_buf_shared(env, out) } } else { null_mut() }
     }))
     .unwrap_or(null_mut())
 }

@@ -48,7 +48,11 @@ public final class PipelineBuf {
         if (buf.poisoned) throw new InvalidInputException("pipeline has an empty-argv command");
         if (buf.cmds.isEmpty()) return new ArrayList<>();
         ByteArrayOutputStream wire = new ByteArrayOutputStream();
-        for (List<byte[]> argv : buf.cmds) RespParser.encodeCommand(wire, argv);
+        try {
+            for (List<byte[]> argv : buf.cmds) RespParser.encodeCommand(wire, argv);
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e); // ByteArrayOutputStream never throws
+        }
         return client.backend().remoteConn().pipelineRaw(wire.toByteArray(), buf.cmds.size());
     }
 }

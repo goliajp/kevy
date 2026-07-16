@@ -1,9 +1,12 @@
 // EmbSub — the embedded pub/sub bus consumer (client-contract §3.11, §5.2).
 // One JNI subscription handle per channel/pattern (the C-ABI pub/sub is
-// per-channel). The desktop JNI door exposes only a non-blocking poll
-// (subNext) — no kevy_sub_wait — so recv polls the handles round-robin on a
-// short interval, honouring the read timeout. The store is held through the
-// process registry so a publish on the same URL reaches here.
+// per-channel). The door exposes both a non-blocking poll (subNext) and a
+// blocking, kernel-parking wait (subWait). recv() first drains anything
+// queued, then parks: the common single-handle case blocks the kernel on that
+// one handle (no busy poll, no latency floor), while many handles round-robin
+// short-timeout parks so none starves — subWait blocks one handle at a time.
+// The store is held through the process registry so a publish on the same URL
+// reaches here.
 package jp.golia.kevy;
 
 import java.util.ArrayList;
@@ -41,19 +44,55 @@ final class EmbSub {
         handles.addAll(keep);
     }
 
+    /** Many-handle park slice: cap one blocking wait so the others get serviced. */
+    private static final long MULTI_SLICE_MS = 50;
+    /** Infinite-wait re-park cap: keeps a torn-down bus detectable, not a spin. */
+    private static final long PARK_CAP_MS = 250;
+
     /** Block for the next frame; timeout=null waits forever, else TimedOut. */
     Reply recv(java.time.Duration timeout) {
-        long end = timeout == null ? Long.MAX_VALUE : System.nanoTime() + timeout.toNanos();
+        long end = timeout == null ? -1 : System.nanoTime() + timeout.toNanos();
         while (true) {
             byte[] frame = poll();
             if (frame != null) return RespParser.decode(frame);
-            if (timeout != null && System.nanoTime() >= end) throw new TimedOutException("recv timed out");
-            try {
-                Thread.sleep(2);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new ClosedException("recv interrupted");
-            }
+            long remainingMs = remainingMs(end);
+            if (remainingMs == 0) throw new TimedOutException("recv timed out");
+            byte[] parked = park(remainingMs);
+            if (parked != null) return RespParser.decode(parked);
+        }
+    }
+
+    /** Milliseconds left until `end`: -1 = wait forever, 0 = deadline passed. */
+    private static long remainingMs(long end) {
+        if (end < 0) return -1;
+        long ns = end - System.nanoTime();
+        return ns <= 0 ? 0 : Math.max(1, ns / 1_000_000);
+    }
+
+    /** Kernel-park for one frame. One handle parks directly (immediate wakeup
+     *  on arrival); many round-robin a short-timeout park so none starves. */
+    private byte[] park(long remainingMs) {
+        int n = handles.size();
+        if (n == 1) {
+            return KevyNative.subWait(handles.get(0).sub(), remainingMs < 0 ? PARK_CAP_MS : remainingMs);
+        }
+        if (n > 1) {
+            long slice = remainingMs < 0 ? MULTI_SLICE_MS : Math.min(remainingMs, MULTI_SLICE_MS);
+            Handle h = handles.get(rr % n);
+            rr = (rr + 1) % n;
+            return KevyNative.subWait(h.sub(), slice);
+        }
+        // No handles subscribed yet: bounded idle wait until one is added.
+        sleep(remainingMs < 0 ? PARK_CAP_MS : Math.min(remainingMs, PARK_CAP_MS));
+        return null;
+    }
+
+    private static void sleep(long ms) {
+        try {
+            Thread.sleep(ms);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ClosedException("recv interrupted");
         }
     }
 

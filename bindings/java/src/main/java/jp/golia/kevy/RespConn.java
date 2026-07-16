@@ -85,7 +85,7 @@ final class RespConn implements AutoCloseable {
 
     private void writeCommand(List<byte[]> argv) {
         try {
-            out.write(RespParser.encodeCommand(argv));
+            RespParser.encodeCommand(out, argv); // straight into the buffered stream, no intermediate byte[]
         } catch (IOException e) {
             throw mapIo(e);
         }

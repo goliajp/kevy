@@ -9,6 +9,9 @@
 package jp.golia.kevy;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -40,28 +43,55 @@ public final class RespParser {
         return p.reply();
     }
 
-    /** Encode a command's argv into the RESP multibulk wire form. */
-    public static void encodeCommand(ByteArrayOutputStream out, List<byte[]> argv) {
-        writeLine(out, '*', Long.toString(argv.size()));
+    /**
+     * Encode a command's argv into the RESP multibulk wire form, straight into
+     * `out` — no intermediate byte[]. Lengths are written as ASCII digits by a
+     * direct itoa (no String/`getBytes` per number). Callers on a buffered
+     * socket stream pass it their `OutputStream` and let the batching flush.
+     */
+    public static void encodeCommand(OutputStream out, List<byte[]> argv) throws IOException {
+        writeLine(out, '*', argv.size());
         for (byte[] a : argv) {
-            writeLine(out, '$', Integer.toString(a.length));
-            out.writeBytes(a);
+            writeLine(out, '$', a.length);
+            out.write(a);
             out.write('\r');
             out.write('\n');
         }
     }
 
+    /** Encode into a fresh byte[] — for callers that want the bytes in hand. */
     public static byte[] encodeCommand(List<byte[]> argv) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        encodeCommand(out, argv);
+        try {
+            encodeCommand(out, argv);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e); // ByteArrayOutputStream never throws
+        }
         return out.toByteArray();
     }
 
-    private static void writeLine(ByteArrayOutputStream out, char tag, String n) {
+    private static void writeLine(OutputStream out, char tag, long n) throws IOException {
         out.write(tag);
-        out.writeBytes(n.getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        writeDecimal(out, n);
         out.write('\r');
         out.write('\n');
+    }
+
+    /** itoa: write non-negative `n` as ASCII decimal digits, no allocation of a
+     *  String. (RESP prefixes here — argv count, bulk length — are never
+     *  negative.) */
+    private static void writeDecimal(OutputStream out, long n) throws IOException {
+        if (n == 0) {
+            out.write('0');
+            return;
+        }
+        byte[] tmp = new byte[20]; // Long.MAX_VALUE is 19 digits
+        int i = tmp.length;
+        while (n > 0) {
+            tmp[--i] = (byte) ('0' + (int) (n % 10));
+            n /= 10;
+        }
+        out.write(tmp, i, tmp.length - i);
     }
 
     /** A mutable position over the buffer; returns null anywhere it runs short. */
@@ -244,13 +274,34 @@ public final class RespParser {
             return (int) Math.min(n, Math.max(0, remaining));
         }
 
+        // atoi straight off the byte buffer — this fires on every `:` reply and
+        // every bulk length header, so it avoids the String+trim+parseLong the
+        // String path spent. Tolerates the surrounding ASCII whitespace the old
+        // trim() did; an optional leading sign then decimal digits, nothing else.
         private long parseLong(int from, int to) {
-            String s = new String(buf, from, to - from, java.nio.charset.StandardCharsets.US_ASCII).trim();
-            try {
-                return Long.parseLong(s);
-            } catch (NumberFormatException e) {
-                throw new ProtocolException("bad integer in RESP frame: '" + s + "'");
+            int i = from;
+            while (i < to && (buf[i] == ' ' || buf[i] == '\t')) i++;
+            int j = to;
+            while (j > i && (buf[j - 1] == ' ' || buf[j - 1] == '\t')) j--;
+            boolean neg = false;
+            if (i < j && (buf[i] == '-' || buf[i] == '+')) {
+                neg = buf[i] == '-';
+                i++;
             }
+            if (i >= j) throw badInt(from, to);
+            long v = 0;
+            for (; i < j; i++) {
+                int d = buf[i] - '0';
+                if (d < 0 || d > 9) throw badInt(from, to);
+                if (v > (Long.MAX_VALUE - d) / 10) throw badInt(from, to); // overflow
+                v = v * 10 + d;
+            }
+            return neg ? -v : v;
+        }
+
+        private ProtocolException badInt(int from, int to) {
+            String s = new String(buf, from, to - from, java.nio.charset.StandardCharsets.US_ASCII);
+            return new ProtocolException("bad integer in RESP frame: '" + s + "'");
         }
 
         private double parseDouble(String s) {
