@@ -27,6 +27,9 @@ use frame::encode_frame;
 mod sub_raw;
 pub use sub_raw::{kevy_sub_next_raw, kevy_sub_wait_raw};
 
+mod dispatch;
+pub use dispatch::dispatch_packed;
+
 /// Opaque database handle. A `Box<Store>` on the Rust side.
 pub struct KevyDb {
     store: Store,
@@ -38,7 +41,8 @@ pub struct KevySub {
 }
 
 /// A byte buffer owned by kevy, returned to the caller. Free it with
-/// [`kevy_buf_free`]. `ptr` is null when `len` is 0.
+/// [`kevy_buf_free`]. `ptr` is null only for a miss/error; a present empty
+/// value has a non-null (dangling) `ptr` with `len == 0`.
 #[repr(C)]
 pub struct KevyBuf {
     /// Start of the buffer (allocated by Rust; never free() it).
@@ -226,7 +230,7 @@ pub unsafe extern "C" fn kevy_get(
 /// Scalar GET, **zero-copy shared lane**. For a bulk value the engine's
 /// `Arc<Box<[u8]>>` is cloned (a refcount bump, no byte copy) and handed out as
 /// a buffer that VIEWS the Arc's bytes — the analog of MMKV returning a view of
-/// its mmap page; small values get a fresh Arc (one copy, as the plain lane).
+/// its mmap page; small values get a plain owned Vec (one alloc).
 /// In the returned `KevyBuf`, `ptr`+`len` are the value view and `cap` is an
 /// OPAQUE owner handle. Free ONLY with [`kevy_buf_free_shared`] — never
 /// [`kevy_buf_free`]. 1 = hit, 0 = miss, negative = misuse.
