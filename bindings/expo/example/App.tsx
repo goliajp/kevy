@@ -66,8 +66,25 @@ export default function App() {
     // does not reach the host) can write them to a file we pull off-device.
     const captured: string[] = [];
     const emit = (line: string) => { console.log(line); captured.push(line); };
+    (async () => {
     try {
       const result = runSmoke();
+      // The callback lane is local fan-out (delivery = a microtask after
+      // publish, not a timer pump): assert a subscribed handler really gets
+      // the payload, and that publish counted it. Async, so it lives here
+      // rather than in the sync runSmoke.
+      const localFanout = await new Promise<string>((resolve) => {
+        const db2 = open({});
+        let counted = 0;
+        db2.subscribe("smoke", (payload) => {
+          db2.close();
+          const got = new TextDecoder().decode(payload);
+          resolve(got === "hi" && counted === 1 ? "ok" : `got "${got}" count=${counted}`);
+        });
+        counted = db2.publish("smoke", "hi");
+        setTimeout(() => resolve("no delivery within 1s"), 1000);
+      });
+      result.push({ label: "PUBSUB cb", ok: localFanout === "ok", got: localFanout });
       setLines(result);
       // The side-channel mobilegate reads: one line, once settled.
       emit(result.every((l) => l.ok) ? "MOBILEGATE:PASS" : "MOBILEGATE:FAIL");
@@ -98,6 +115,7 @@ export default function App() {
           .then(() => console.log("NITROGATE:WROTE results file"))
           .catch((e) => console.log(`NITROGATE:WRITE-ERROR ${String(e)}`));
       });
+    })();
   }, []);
 
   const allOk = lines.length > 0 && lines.every((l) => l.ok) && !err;
