@@ -25,6 +25,16 @@ public class KevyExpoModule: Module {
         NSError(domain: "kevy", code: -1, userInfo: [NSLocalizedDescriptionKey: msg])
     }
 
+    // The scalar GET lane can't carry a typed store error (GET on a non-string
+    // key — its only error is WRONGTYPE). Throw with the KEVY_WRONGTYPE sentinel
+    // so src/index.ts re-runs the framed GET and surfaces -ERR WRONGTYPE. This
+    // mirrors Android's jp.golia.kevy.ScalarGetSignal.
+    private static func wrongType() -> NSError {
+        NSError(domain: "kevy", code: -2, userInfo: [
+            NSLocalizedDescriptionKey: "KEVY_WRONGTYPE: scalar GET on a non-string key; use the framed GET",
+        ])
+    }
+
     public func definition() -> ModuleDefinition {
         Name("Kevy")
 
@@ -53,16 +63,30 @@ public class KevyExpoModule: Module {
             return try Self.runCmd(db, packed)
         }
 
+        // Rides the shared lane (kevy_get_shared) for cross-platform parity
+        // with the Android door — NOT a measured speedup here: this shell is
+        // already on the scalar (not RESP) path, so the shared lane's only
+        // delta over plain kevy_get is one engine-side memcpy on large-bulk
+        // hits, unmeasured on device. Free discipline: the shared lane's `cap`
+        // is an OPAQUE owner handle, not a Vec capacity — it MUST be freed with
+        // kevy_buf_free_shared, never kevy_buf_free (mixing the two frees is UB).
         Function("get") { (id: Int32, key: Data) -> Data? in
             guard let db = self.dbs[id] else { throw Self.fail("kevy: closed handle") }
             var out = KevyBuf()
             let rc = key.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
-                kevy_get(db, raw.bindMemory(to: UInt8.self).baseAddress, raw.count, &out)
+                kevy_get_shared(db, raw.bindMemory(to: UInt8.self).baseAddress, raw.count, &out)
             }
-            guard rc >= 0 else { throw Self.fail("kevy: kevy_get misuse") }
-            if rc == 0 { return nil }
-            defer { kevy_buf_free(out.ptr, out.len, out.cap) }
-            return Data(bytes: out.ptr, count: out.len)
+            switch rc {
+            case 1:
+                defer { kevy_buf_free_shared(out.ptr, out.len, out.cap) }
+                return Data(bytes: out.ptr, count: out.len)
+            case 0:
+                return nil
+            case -2:
+                throw Self.wrongType()
+            default:
+                throw Self.fail("kevy: kevy_get misuse")
+            }
         }
 
         Function("set") { (id: Int32, key: Data, value: Data, ttlMs: Double) in
