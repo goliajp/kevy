@@ -25,6 +25,15 @@ func TestWrongTypeAndNotInteger(t *testing.T) {
 			if se, ok := StoreErrorOf(err); !ok || se != StoreNotInteger {
 				t.Fatalf("INCR non-numeric: want Store(NotInteger), got %v", err)
 			}
+			// GET on a list must surface WRONGTYPE, not collapse to a miss.
+			// The embedded scalar shared lane can't convey WRONGTYPE, so Get
+			// falls back to the framed GET to preserve the typed error —
+			// matching the remote backend.
+			_, _ = c.LPush(bg, b("lst"), b("a"))
+			_, _, err = c.Get(bg, b("lst"))
+			if se, ok := StoreErrorOf(err); !ok || se != StoreWrongType {
+				t.Fatalf("GET on list: want Store(WrongType), got %v", err)
+			}
 		})
 	}
 }

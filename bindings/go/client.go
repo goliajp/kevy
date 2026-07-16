@@ -234,10 +234,16 @@ func (c *Client) Set(ctx context.Context, key, value []byte) error {
 }
 
 // Get fetches key; ok is false when absent or expired. On the embedded
-// backend it takes the zero-copy scalar shared lane (contract §5.2).
+// backend it takes the zero-copy scalar shared lane (contract §5.2), falling
+// back to the framed GET when that lane reports an error: the scalar lane
+// collapses a WRONGTYPE (GET on a non-string) into an opaque code, and the
+// framed path restores the typed *KevyError the remote backend also returns.
 func (c *Client) Get(ctx context.Context, key []byte) (value []byte, ok bool, err error) {
 	if c.emb != nil {
-		return c.emb.GetScalar(key)
+		if v, hit, gerr := c.emb.GetScalar(key); gerr == nil {
+			return v, hit, nil
+		}
+		// fall through to the framed GET for the proper typed error
 	}
 	r, err := c.exec(ctx, [][]byte{verbGet, key})
 	if err != nil {
