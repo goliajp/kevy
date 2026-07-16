@@ -6,8 +6,10 @@
 #ifndef KEVY_EMBEDDED_HPP
 #define KEVY_EMBEDDED_HPP
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -18,6 +20,50 @@ struct KevyDb;
 struct KevySub;
 
 namespace kevy {
+
+// An RAII owner of a zero-copy GET result from the shared lane. Holds the
+// engine's value handle (an Arc clone for a bulk value — no byte copy — or a
+// single Vec for a small one) and exposes the bytes as a borrowed view. The
+// view is valid for the SharedValue's lifetime; the handle is dropped exactly
+// once in the destructor. Move-only. On a large GET this skips the value copy
+// that get() makes into a std::string.
+class SharedValue {
+ public:
+  SharedValue() = default;
+  ~SharedValue() { release(); }
+  SharedValue(SharedValue&& o) noexcept
+      : ptr_(o.ptr_), len_(o.len_), cap_(o.cap_), owns_(o.owns_) {
+    o.owns_ = false;
+    o.ptr_ = nullptr;
+  }
+  SharedValue& operator=(SharedValue&& o) noexcept;
+  SharedValue(const SharedValue&) = delete;
+  SharedValue& operator=(const SharedValue&) = delete;
+
+  // The value as a borrowed view (empty, not a dangling range, for a 0-length
+  // value). Valid until this SharedValue is destroyed or moved from.
+  std::string_view view() const {
+    return len_ == 0 ? std::string_view()
+                     : std::string_view(reinterpret_cast<const char*>(ptr_), len_);
+  }
+  std::span<const std::byte> bytes() const {
+    return len_ == 0 ? std::span<const std::byte>()
+                     : std::span<const std::byte>(reinterpret_cast<const std::byte*>(ptr_), len_);
+  }
+  const uint8_t* data() const { return ptr_; }
+  size_t size() const { return len_; }
+  bool empty() const { return len_ == 0; }
+
+ private:
+  friend class EmbeddedStore;
+  SharedValue(uint8_t* ptr, size_t len, size_t cap) : ptr_(ptr), len_(len), cap_(cap), owns_(true) {}
+  void release();
+
+  uint8_t* ptr_ = nullptr;
+  size_t len_ = 0;
+  size_t cap_ = 0;   // opaque owner handle from the shared lane
+  bool owns_ = false;
+};
 
 // One embedded subscription over a single channel or pattern (§5.2). Poll
 // with next(), block with wait(); the higher-level multi-channel Subscriber
@@ -57,11 +103,17 @@ class EmbeddedStore {
   EmbeddedStore& operator=(const EmbeddedStore&) = delete;
 
   // Run one command; argv[0] is the verb. The universal path — every one of
-  // kevy's ~184 verbs is reachable here. A -ERR is a Reply with is_error().
-  Reply cmd(const std::vector<std::string>& argv);
+  // kevy's ~184 verbs is reachable here. Arguments are borrowed views (the C
+  // ABI takes (ptr, len)); a -ERR is a Reply with is_error().
+  Reply cmd(const std::vector<std::string_view>& argv);
 
-  // Scalar fast GET (no argv/RESP framing). nullopt on miss/expired.
+  // Scalar fast GET (no argv/RESP framing). nullopt on miss/expired. Copies
+  // the value into an owned std::string.
   std::optional<std::string> get(std::string_view key);
+  // Zero-copy GET: the value comes back as a borrowed view held alive by the
+  // returned SharedValue (no byte copy for a bulk value). nullopt on miss.
+  // Prefer this over get() for large values you only read.
+  std::optional<SharedValue> get_view(std::string_view key);
   // Scalar fast SET (ttl_ms == 0 = no TTL).
   void set(std::string_view key, std::string_view value, uint64_t ttl_ms = 0);
 

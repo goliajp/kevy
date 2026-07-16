@@ -99,7 +99,7 @@ void EmbeddedStore::close() {
   }
 }
 
-Reply EmbeddedStore::cmd(const std::vector<std::string>& argv) {
+Reply EmbeddedStore::cmd(const std::vector<std::string_view>& argv) {
   if (db_ == nullptr) throw ClosedError();
   if (argv.empty()) throw InvalidInputError("kevy: empty argv");
   std::vector<const uint8_t*> ptrs(argv.size());
@@ -114,18 +114,48 @@ Reply EmbeddedStore::cmd(const std::vector<std::string>& argv) {
   return take_reply(out);
 }
 
-std::optional<std::string> EmbeddedStore::get(std::string_view key) {
+// --- SharedValue --------------------------------------------------------
+
+SharedValue& SharedValue::operator=(SharedValue&& o) noexcept {
+  if (this != &o) {
+    release();
+    ptr_ = o.ptr_;
+    len_ = o.len_;
+    cap_ = o.cap_;
+    owns_ = o.owns_;
+    o.owns_ = false;
+    o.ptr_ = nullptr;
+  }
+  return *this;
+}
+
+void SharedValue::release() {
+  if (owns_) {
+    kevy_buf_free_shared(ptr_, len_, cap_);
+    owns_ = false;
+  }
+}
+
+// --- get / get_view -----------------------------------------------------
+
+std::optional<SharedValue> EmbeddedStore::get_view(std::string_view key) {
   if (db_ == nullptr) throw ClosedError();
   KevyBuf out{};
-  // Zero-copy shared lane: a bulk value is an Arc clone (no engine copy); the
-  // std::string ctor makes the one copy, then the paired shared free drops the
-  // Arc. Saves the engine's into_owned copy on large GETs.
+  // Zero-copy shared lane: a bulk value is an Arc clone (refcount bump, no
+  // byte copy) that SharedValue owns and views; the shared free drops the Arc
+  // in its destructor.
   int32_t rc = kevy_get_shared(db_, byte_ptr(key), key.size(), &out);
   if (rc < 0) throw ProtocolError("kevy: kevy_get_shared misuse");
   if (rc == 0) return std::nullopt;
-  std::string v(reinterpret_cast<const char*>(out.ptr), out.len);
-  kevy_buf_free_shared(out.ptr, out.len, out.cap);
-  return v;
+  return SharedValue(out.ptr, out.len, out.cap);
+}
+
+std::optional<std::string> EmbeddedStore::get(std::string_view key) {
+  // The copying convenience over the shared lane; view() is empty (not a
+  // dangling range) for a 0-length value, so std::string(view) is UB-free.
+  std::optional<SharedValue> sv = get_view(key);
+  if (!sv.has_value()) return std::nullopt;
+  return std::string(sv->view());
 }
 
 void EmbeddedStore::set(std::string_view key, std::string_view value, uint64_t ttl_ms) {

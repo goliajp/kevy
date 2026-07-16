@@ -10,43 +10,43 @@
 
 namespace kevy {
 
-using detail::i2s;
+using detail::Args;
 using detail::raise_reply_error;
 using detail::raise_unexpected;
 using detail::u2s;
 
 namespace {
 
-FeedFrame parse_feed_frame(const Reply& f) {
+FeedFrame parse_feed_frame(Reply& f) {
   if (f.kind != ReplyKind::Array || f.array.size() != 2)
     throw ProtocolError("FEED.READ: frame shape != [offset, argv]");
-  const Reply& off = f.array[0];
-  const Reply& argv_raw = f.array[1];
+  Reply& off = f.array[0];
+  Reply& argv_raw = f.array[1];
   if (off.kind != ReplyKind::Int || argv_raw.kind != ReplyKind::Array)
     throw ProtocolError("FEED.READ: frame shape != [offset, argv]");
   FeedFrame frame;
   frame.offset = static_cast<uint64_t>(off.integer);
-  for (const auto& a : argv_raw.array) {
-    if (a.kind == ReplyKind::Bulk || a.kind == ReplyKind::Simple) frame.argv.push_back(a.bytes);
+  for (auto& a : argv_raw.array) {
+    if (a.kind == ReplyKind::Bulk || a.kind == ReplyKind::Simple) frame.argv.push_back(std::move(a.bytes));
     else raise_unexpected(a);
   }
   return frame;
 }
 
-FeedBatch parse_feed_batch(const Reply& r) {
+FeedBatch parse_feed_batch(Reply&& r) {
   if (r.kind == ReplyKind::Error) raise_reply_error(r);
   if (r.kind != ReplyKind::Array || r.array.size() != 3)
     throw ProtocolError("FEED.READ: expected [gen, next, frames]");
-  const Reply& g = r.array[0];
-  const Reply& next = r.array[1];
-  const Reply& frames = r.array[2];
+  Reply& g = r.array[0];
+  Reply& next = r.array[1];
+  Reply& frames = r.array[2];
   if (g.kind != ReplyKind::Int || next.kind != ReplyKind::Int)
     throw ProtocolError("FEED.READ: non-integer cursor");
   if (frames.kind != ReplyKind::Array) throw ProtocolError("FEED.READ: frames not an array");
   FeedBatch batch;
   batch.generation = static_cast<uint64_t>(g.integer);
   batch.next_offset = static_cast<uint64_t>(next.integer);
-  for (const auto& f : frames.array) batch.frames.push_back(parse_feed_frame(f));
+  for (auto& f : frames.array) batch.frames.push_back(parse_feed_frame(f));
   return batch;
 }
 
@@ -76,15 +76,11 @@ FeedBatch Client::feed_read(uint64_t shard, uint64_t generation, uint64_t offset
     if (shard != 0) throw InvalidInputError("embedded feed is single-shard: shard must be 0");
     throw UnsupportedError("feed disabled: this port's embedded connect does not enable the change feed");
   }
-  std::vector<std::string> argv{"FEED.READ", u2s(shard), u2s(generation), u2s(offset)};
-  if (count.has_value() && *count > 0) {
-    argv.emplace_back("COUNT");
-    argv.push_back(u2s(*count));
-  }
-  for (auto p : prefixes) {
-    argv.emplace_back("PREFIX");
-    argv.emplace_back(p);
-  }
+  Args argv;
+  argv.reserve(prefixes.size() * 2 + 6);
+  argv.add("FEED.READ").add_uint(shard).add_uint(generation).add_uint(offset);
+  if (count.has_value() && *count > 0) argv.add("COUNT").add_uint(*count);
+  for (auto p : prefixes) argv.add("PREFIX").add(p);
   return parse_feed_batch(exec(argv));
 }
 

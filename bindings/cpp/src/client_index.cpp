@@ -11,7 +11,7 @@
 
 namespace kevy {
 
-using detail::i2s;
+using detail::Args;
 using detail::raise_reply_error;
 using detail::raise_unexpected;
 using detail::u2s;
@@ -26,35 +26,35 @@ const char* idx_type_tag(IdxType t) {
   }
 }
 
-IdxPage parse_idx_page(const Reply& r) {
+IdxPage parse_idx_page(Reply&& r) {
   if (r.kind != ReplyKind::Array || r.array.size() != 2)
     throw ProtocolError("IDX.QUERY page: expected [cursor, rows]");
   IdxPage page;
-  const Reply& cur = r.array[0];
+  Reply& cur = r.array[0];
   if (cur.kind != ReplyKind::Bulk) raise_unexpected(cur);
-  if (cur.bytes != "0") page.cursor = cur.bytes;
-  const Reply& flat = r.array[1];
+  if (cur.bytes != "0") page.cursor = std::move(cur.bytes);
+  Reply& flat = r.array[1];
   if (flat.kind != ReplyKind::Array) throw ProtocolError("IDX.QUERY page: rows not an array");
   if (flat.array.size() % 2 != 0) throw ProtocolError("IDX.QUERY page: odd row pair");
   for (size_t i = 0; i + 1 < flat.array.size(); i += 2) {
-    const Reply& k = flat.array[i];
-    const Reply& v = flat.array[i + 1];
+    Reply& k = flat.array[i];
+    Reply& v = flat.array[i + 1];
     if (k.kind != ReplyKind::Bulk || v.kind != ReplyKind::Bulk)
       throw ProtocolError("IDX.QUERY page: non-bulk row pair");
-    page.rows.push_back(IdxRow{k.bytes, v.bytes});
+    page.rows.push_back(IdxRow{std::move(k.bytes), std::move(v.bytes)});
   }
   return page;
 }
 
-std::vector<Ranked> parse_ranked(const Reply& r) {
+std::vector<Ranked> parse_ranked(Reply&& r) {
   if (r.kind != ReplyKind::Array) raise_unexpected(r);
   std::vector<Ranked> out;
   out.reserve(r.array.size());
-  for (const auto& row : r.array) {
+  for (auto& row : r.array) {
     if (row.kind != ReplyKind::Array || row.array.size() < 2)
       throw ProtocolError("IDX.QUERY ranked row: expected [key, score]");
     if (row.array[0].kind != ReplyKind::Bulk) raise_unexpected(row.array[0]);
-    out.push_back(Ranked{row.array[0].bytes, detail::score_of(row.array[1])});
+    out.push_back(Ranked{std::move(row.array[0].bytes), detail::score_of(row.array[1])});
   }
   return out;
 }
@@ -89,16 +89,16 @@ void Client::idx_create_range(std::string_view name, std::string_view prefix, st
 
 void Client::idx_create_raw(const std::vector<std::string>& args) {
   require_remote("IDX.CREATE");
-  std::vector<std::string> argv;
+  Args argv;
   argv.reserve(args.size() + 1);
-  argv.emplace_back("IDX.CREATE");
-  for (const auto& a : args) argv.push_back(a);
+  argv.add("IDX.CREATE");
+  for (const auto& a : args) argv.add(a);
   exec_ok(argv);
 }
 
 bool Client::idx_drop(std::string_view name) {
   require_remote("IDX.DROP");
-  return exec_bool({"IDX.DROP", std::string(name)});
+  return exec_bool({"IDX.DROP", name});
 }
 
 std::vector<IdxInfo> Client::idx_list() {
@@ -114,10 +114,10 @@ std::vector<IdxInfo> Client::idx_list() {
 
 Reply Client::idx_query_raw(const std::vector<std::string>& args) {
   require_remote("IDX.QUERY");
-  std::vector<std::string> argv;
+  Args argv;
   argv.reserve(args.size() + 1);
-  argv.emplace_back("IDX.QUERY");
-  for (const auto& a : args) argv.push_back(a);
+  argv.add("IDX.QUERY");
+  for (const auto& a : args) argv.add(a);
   Reply r = exec(argv);
   if (r.kind == ReplyKind::Error) raise_reply_error(r);
   return r;

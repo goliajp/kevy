@@ -109,10 +109,10 @@ detail::RespConn* ClusterClient::shard_for(std::string_view key) {
   return shards_[slot_to_shard_[key_hash_slot(key)]].get();
 }
 
-Reply ClusterClient::request_keyed(std::string_view key, const std::vector<std::string>& argv) {
+Reply ClusterClient::request_keyed(std::string_view key, const std::vector<std::string_view>& argv) {
   return shard_for(key)->request(argv);
 }
-Reply ClusterClient::request_unkeyed(const std::vector<std::string>& argv) {
+Reply ClusterClient::request_unkeyed(const std::vector<std::string_view>& argv) {
   return shards_[0]->request(argv);
 }
 
@@ -124,44 +124,44 @@ void ClusterClient::ping() {
 }
 
 int64_t ClusterClient::publish(std::string_view channel, std::string_view message) {
-  return cluster_count(request_unkeyed({"PUBLISH", std::string(channel), std::string(message)}));
+  return cluster_count(request_unkeyed({"PUBLISH", channel, message}));
 }
 
 void ClusterClient::set(std::string_view key, std::string_view value) {
-  cluster_ok(request_keyed(key, {"SET", std::string(key), std::string(value)}));
+  cluster_ok(request_keyed(key, {"SET", key, value}));
 }
 void ClusterClient::set_with_ttl(std::string_view key, std::string_view value, ClusterDuration ttl) {
   int64_t ms = ttl.count() < 0 ? 0 : ttl.count();
-  cluster_ok(request_keyed(key, {"SET", std::string(key), std::string(value), "PX", i2s(ms)}));
+  cluster_ok(request_keyed(key, {"SET", key, value, "PX", i2s(ms)}));
 }
 std::optional<std::string> ClusterClient::get(std::string_view key) {
-  Reply r = request_keyed(key, {"GET", std::string(key)});
-  if (r.kind == ReplyKind::Bulk) return r.bytes;
+  Reply r = request_keyed(key, {"GET", key});
+  if (r.kind == ReplyKind::Bulk) return std::move(r.bytes);
   if (r.is_nil()) return std::nullopt;
   if (r.kind == ReplyKind::Error) raise_reply_error(r);
   raise_unexpected(r);
 }
 int64_t ClusterClient::incr(std::string_view key) {
-  return cluster_int(request_keyed(key, {"INCR", std::string(key)}));
+  return cluster_int(request_keyed(key, {"INCR", key}));
 }
 int64_t ClusterClient::incr_by(std::string_view key, int64_t delta) {
-  return cluster_int(request_keyed(key, {"INCRBY", std::string(key), i2s(delta)}));
+  return cluster_int(request_keyed(key, {"INCRBY", key, i2s(delta)}));
 }
 bool ClusterClient::expire(std::string_view key, ClusterDuration ttl) {
   int64_t ms = ttl.count() < 0 ? 0 : ttl.count();
-  return cluster_bool(request_keyed(key, {"PEXPIRE", std::string(key), i2s(ms)}));
+  return cluster_bool(request_keyed(key, {"PEXPIRE", key, i2s(ms)}));
 }
 bool ClusterClient::persist(std::string_view key) {
-  return cluster_bool(request_keyed(key, {"PERSIST", std::string(key)}));
+  return cluster_bool(request_keyed(key, {"PERSIST", key}));
 }
 int64_t ClusterClient::ttl_ms(std::string_view key) {
-  return cluster_int(request_keyed(key, {"PTTL", std::string(key)}));
+  return cluster_int(request_keyed(key, {"PTTL", key}));
 }
 
 int64_t ClusterClient::per_key_sum(const char* verb, const std::vector<std::string_view>& keys) {
   int64_t total = 0;
   for (auto k : keys) {
-    int64_t n = cluster_int(request_keyed(k, {verb, std::string(k)}));
+    int64_t n = cluster_int(request_keyed(k, {verb, k}));
     if (n > 0) total += n;
   }
   return total;

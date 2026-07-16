@@ -37,8 +37,8 @@ class ClusterClient {
   void close();
   size_t shard_count() const { return shards_.size(); }
 
-  Reply request_keyed(std::string_view key, const std::vector<std::string>& argv);
-  Reply request_unkeyed(const std::vector<std::string>& argv);
+  Reply request_keyed(std::string_view key, const std::vector<std::string_view>& argv);
+  Reply request_unkeyed(const std::vector<std::string_view>& argv);
 
   void ping();
   int64_t publish(std::string_view channel, std::string_view message);

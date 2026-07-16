@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "kevy/reply.hpp"
@@ -25,11 +26,11 @@ class RespConn {
   static std::unique_ptr<RespConn> dial(const std::string& host, uint16_t port);
 
   // Send one command and block for exactly one reply.
-  Reply request(const std::vector<std::string>& argv);
+  Reply request(const std::vector<std::string_view>& argv);
   // Send a pre-encoded batch as one write and read n replies (pipeline).
   std::vector<Reply> pipeline_raw(const std::string& wire, size_t n);
   // Send argv without reading a reply (pub/sub producer side).
-  void write(const std::vector<std::string>& argv);
+  void write(const std::vector<std::string_view>& argv);
   // Block for the next reply frame (pub/sub consumer side).
   Reply read_reply();
   // Bound a blocking read (nullopt clears it). A timeout surfaces as TimedOut.

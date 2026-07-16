@@ -15,6 +15,7 @@
 
 namespace kevy {
 
+using detail::Args;
 using detail::raise_reply_error;
 using detail::raise_unexpected;
 
@@ -26,14 +27,13 @@ void check_args(const ByteList& keys, const std::optional<Duration>& timeout) {
     throw InvalidInputError("timeout Some(0) is ambiguous (wire 0 = wait forever); use nullopt to wait forever");
 }
 
-std::vector<std::string> blocking_argv(const char* verb, const ByteList& keys,
-                                       const std::optional<Duration>& timeout) {
-  std::vector<std::string> argv;
+Args blocking_argv(std::string_view verb, const ByteList& keys,
+                   const std::optional<Duration>& timeout) {
+  Args argv;
   argv.reserve(keys.size() + 2);
-  argv.emplace_back(verb);
-  detail::push_all(argv, keys);
-  if (!timeout.has_value()) argv.emplace_back("0");
-  else argv.push_back(detail::format_double(static_cast<double>(timeout->count()) / 1000.0));
+  argv.add(verb).add_all(keys);
+  if (!timeout.has_value()) argv.add("0");
+  else argv.add_double(static_cast<double>(timeout->count()) / 1000.0);
   return argv;
 }
 
@@ -63,10 +63,10 @@ std::optional<KV> Client::blpop(const ByteList& keys, std::optional<Duration> ti
     auto deadline = block_deadline(timeout);
     for (;;) {
       for (auto k : keys) {
-        Reply r = exec({"LPOP", std::string(k), "1"});
+        Reply r = exec({"LPOP", k, "1"});
         if (r.kind == ReplyKind::Array && !r.array.empty() && r.array[0].kind == ReplyKind::Bulk)
-          return KV{std::string(k), r.array[0].bytes};
-        if (r.kind == ReplyKind::Bulk) return KV{std::string(k), r.bytes};
+          return KV{std::string(k), std::move(r.array[0].bytes)};
+        if (r.kind == ReplyKind::Bulk) return KV{std::string(k), std::move(r.bytes)};
       }
       if (block_expired(deadline)) return std::nullopt;
     }
@@ -74,7 +74,7 @@ std::optional<KV> Client::blpop(const ByteList& keys, std::optional<Duration> ti
   Reply r = exec(blocking_argv("BLPOP", keys, timeout));
   if (r.kind == ReplyKind::Array && r.array.size() == 2 && r.array[0].kind == ReplyKind::Bulk &&
       r.array[1].kind == ReplyKind::Bulk)
-    return KV{r.array[0].bytes, r.array[1].bytes};
+    return KV{std::move(r.array[0].bytes), std::move(r.array[1].bytes)};
   if (r.is_nil()) return std::nullopt;
   if (r.kind == ReplyKind::Error) raise_reply_error(r);
   raise_unexpected(r);
@@ -86,10 +86,10 @@ std::optional<KV> Client::brpop(const ByteList& keys, std::optional<Duration> ti
     auto deadline = block_deadline(timeout);
     for (;;) {
       for (auto k : keys) {
-        Reply r = exec({"RPOP", std::string(k), "1"});
+        Reply r = exec({"RPOP", k, "1"});
         if (r.kind == ReplyKind::Array && !r.array.empty() && r.array[0].kind == ReplyKind::Bulk)
-          return KV{std::string(k), r.array[0].bytes};
-        if (r.kind == ReplyKind::Bulk) return KV{std::string(k), r.bytes};
+          return KV{std::string(k), std::move(r.array[0].bytes)};
+        if (r.kind == ReplyKind::Bulk) return KV{std::string(k), std::move(r.bytes)};
       }
       if (block_expired(deadline)) return std::nullopt;
     }
@@ -97,7 +97,7 @@ std::optional<KV> Client::brpop(const ByteList& keys, std::optional<Duration> ti
   Reply r = exec(blocking_argv("BRPOP", keys, timeout));
   if (r.kind == ReplyKind::Array && r.array.size() == 2 && r.array[0].kind == ReplyKind::Bulk &&
       r.array[1].kind == ReplyKind::Bulk)
-    return KV{r.array[0].bytes, r.array[1].bytes};
+    return KV{std::move(r.array[0].bytes), std::move(r.array[1].bytes)};
   if (r.is_nil()) return std::nullopt;
   if (r.kind == ReplyKind::Error) raise_reply_error(r);
   raise_unexpected(r);
@@ -109,9 +109,9 @@ std::optional<ZPopHit> Client::bzpopmin(const ByteList& keys, std::optional<Dura
     auto deadline = block_deadline(timeout);
     for (;;) {
       for (auto k : keys) {
-        Reply r = exec({"ZPOPMIN", std::string(k), "1"});
+        Reply r = exec({"ZPOPMIN", k, "1"});
         if (r.kind == ReplyKind::Array && r.array.size() >= 2 && r.array[0].kind == ReplyKind::Bulk)
-          return ZPopHit{std::string(k), r.array[0].bytes, detail::score_of(r.array[1])};
+          return ZPopHit{std::string(k), std::move(r.array[0].bytes), detail::score_of(r.array[1])};
       }
       if (block_expired(deadline)) return std::nullopt;
     }
@@ -119,7 +119,7 @@ std::optional<ZPopHit> Client::bzpopmin(const ByteList& keys, std::optional<Dura
   Reply r = exec(blocking_argv("BZPOPMIN", keys, timeout));
   if (r.kind == ReplyKind::Array && r.array.size() == 3 && r.array[0].kind == ReplyKind::Bulk &&
       r.array[1].kind == ReplyKind::Bulk)
-    return ZPopHit{r.array[0].bytes, r.array[1].bytes, detail::score_of(r.array[2])};
+    return ZPopHit{std::move(r.array[0].bytes), std::move(r.array[1].bytes), detail::score_of(r.array[2])};
   if (r.is_nil()) return std::nullopt;
   if (r.kind == ReplyKind::Error) raise_reply_error(r);
   raise_unexpected(r);

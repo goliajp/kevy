@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "kevy/reply.hpp"
@@ -18,7 +19,7 @@ namespace kevy {
 namespace resp {
 
 // Encode argv as a RESP multibulk request, appending to out.
-void encode_command(std::string& out, const std::vector<std::string>& argv);
+void encode_command(std::string& out, const std::vector<std::string_view>& argv);
 
 // Parse exactly one reply from the front of [buf, buf+len). Returns bytes
 // consumed and fills out; returns 0 when more bytes are needed (out

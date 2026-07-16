@@ -10,6 +10,7 @@
 
 namespace kevy {
 
+using detail::Args;
 using detail::i2s;
 using detail::raise_reply_error;
 using detail::raise_unexpected;
@@ -21,32 +22,28 @@ using detail::verb_list;
 
 int64_t Client::hset(std::string_view key,
                      const std::vector<std::pair<std::string_view, std::string_view>>& pairs) {
-  std::vector<std::string> argv;
+  Args argv;
   argv.reserve(pairs.size() * 2 + 2);
-  argv.emplace_back("HSET");
-  argv.emplace_back(key);
-  for (auto& [f, v] : pairs) {
-    argv.emplace_back(f);
-    argv.emplace_back(v);
-  }
+  argv.add("HSET").add(key);
+  for (auto& [f, v] : pairs) argv.add(f).add(v);
   return exec_count(argv);
 }
 
 OptBytes Client::hget(std::string_view key, std::string_view field) {
-  return exec_opt_bulk({"HGET", std::string(key), std::string(field)});
+  return exec_opt_bulk({"HGET", key, field});
 }
 int64_t Client::hdel(std::string_view key, const ByteList& fields) {
   return exec_count(verb_key_list("HDEL", key, fields));
 }
-int64_t Client::hlen(std::string_view key) { return exec_count({"HLEN", std::string(key)}); }
+int64_t Client::hlen(std::string_view key) { return exec_count({"HLEN", key}); }
 std::vector<std::string> Client::hgetall(std::string_view key) {
-  return exec_bulks({"HGETALL", std::string(key)});
+  return exec_bulks({"HGETALL", key});
 }
 std::vector<std::string> Client::hkeys(std::string_view key) {
-  return exec_bulks({"HKEYS", std::string(key)});
+  return exec_bulks({"HKEYS", key});
 }
 std::vector<std::string> Client::hvals(std::string_view key) {
-  return exec_bulks({"HVALS", std::string(key)});
+  return exec_bulks({"HVALS", key});
 }
 
 // --- list (§3.3) --------------------------------------------------------
@@ -59,11 +56,11 @@ int64_t Client::rpush(std::string_view key, const ByteList& values) {
 }
 
 std::vector<std::string> Client::lpop(std::string_view key, uint64_t count) {
-  Reply r = exec({"LPOP", std::string(key), u2s(count)});
+  Reply r = exec({"LPOP", key, u2s(count)});
   switch (r.kind) {
     case ReplyKind::Array:
-    case ReplyKind::Set: return detail::array_to_bulks(r);
-    case ReplyKind::Bulk: return {r.bytes};
+    case ReplyKind::Set: return detail::array_to_bulks(std::move(r));
+    case ReplyKind::Bulk: return {std::move(r.bytes)};
     case ReplyKind::Nil:
     case ReplyKind::Null: return {};
     case ReplyKind::Error: raise_reply_error(r);
@@ -71,20 +68,20 @@ std::vector<std::string> Client::lpop(std::string_view key, uint64_t count) {
   }
 }
 std::vector<std::string> Client::rpop(std::string_view key, uint64_t count) {
-  Reply r = exec({"RPOP", std::string(key), u2s(count)});
+  Reply r = exec({"RPOP", key, u2s(count)});
   switch (r.kind) {
     case ReplyKind::Array:
-    case ReplyKind::Set: return detail::array_to_bulks(r);
-    case ReplyKind::Bulk: return {r.bytes};
+    case ReplyKind::Set: return detail::array_to_bulks(std::move(r));
+    case ReplyKind::Bulk: return {std::move(r.bytes)};
     case ReplyKind::Nil:
     case ReplyKind::Null: return {};
     case ReplyKind::Error: raise_reply_error(r);
     default: raise_unexpected(r);
   }
 }
-int64_t Client::llen(std::string_view key) { return exec_count({"LLEN", std::string(key)}); }
+int64_t Client::llen(std::string_view key) { return exec_count({"LLEN", key}); }
 std::vector<std::string> Client::lrange(std::string_view key, int64_t start, int64_t stop) {
-  return exec_bulks({"LRANGE", std::string(key), i2s(start), i2s(stop)});
+  return exec_bulks({"LRANGE", key, i2s(start), i2s(stop)});
 }
 
 // --- set (§3.4) ---------------------------------------------------------
@@ -96,11 +93,11 @@ int64_t Client::srem(std::string_view key, const ByteList& members) {
   return exec_count(verb_key_list("SREM", key, members));
 }
 std::vector<std::string> Client::smembers(std::string_view key) {
-  return exec_bulks({"SMEMBERS", std::string(key)});
+  return exec_bulks({"SMEMBERS", key});
 }
-int64_t Client::scard(std::string_view key) { return exec_count({"SCARD", std::string(key)}); }
+int64_t Client::scard(std::string_view key) { return exec_count({"SCARD", key}); }
 bool Client::sismember(std::string_view key, std::string_view member) {
-  return exec_bool({"SISMEMBER", std::string(key), std::string(member)});
+  return exec_bool({"SISMEMBER", key, member});
 }
 std::vector<std::string> Client::sinter(const ByteList& keys) { return exec_bulks(verb_list("SINTER", keys)); }
 std::vector<std::string> Client::sunion(const ByteList& keys) { return exec_bulks(verb_list("SUNION", keys)); }
@@ -109,21 +106,17 @@ std::vector<std::string> Client::sdiff(const ByteList& keys) { return exec_bulks
 // --- sorted set (§3.5) --------------------------------------------------
 
 int64_t Client::zadd(std::string_view key, const std::vector<ZMember>& members) {
-  std::vector<std::string> argv;
+  Args argv;
   argv.reserve(members.size() * 2 + 2);
-  argv.emplace_back("ZADD");
-  argv.emplace_back(key);
-  for (const auto& m : members) {
-    argv.push_back(detail::format_double(m.score));
-    argv.push_back(m.member);
-  }
+  argv.add("ZADD").add(key);
+  for (const auto& m : members) argv.add_double(m.score).add(m.member);
   return exec_count(argv);
 }
 int64_t Client::zrem(std::string_view key, const ByteList& members) {
   return exec_count(verb_key_list("ZREM", key, members));
 }
 std::optional<double> Client::zscore(std::string_view key, std::string_view member) {
-  Reply r = exec({"ZSCORE", std::string(key), std::string(member)});
+  Reply r = exec({"ZSCORE", key, member});
   switch (r.kind) {
     case ReplyKind::Bulk: return detail::parse_float_bytes(r.bytes);
     case ReplyKind::Double: return r.dbl;
@@ -133,9 +126,9 @@ std::optional<double> Client::zscore(std::string_view key, std::string_view memb
     default: raise_unexpected(r);
   }
 }
-int64_t Client::zcard(std::string_view key) { return exec_count({"ZCARD", std::string(key)}); }
+int64_t Client::zcard(std::string_view key) { return exec_count({"ZCARD", key}); }
 std::vector<std::string> Client::zrange(std::string_view key, int64_t start, int64_t stop) {
-  return exec_bulks({"ZRANGE", std::string(key), i2s(start), i2s(stop)});
+  return exec_bulks({"ZRANGE", key, i2s(start), i2s(stop)});
 }
 
 }  // namespace kevy

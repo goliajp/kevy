@@ -23,7 +23,11 @@ std::vector<Reply> Client::pipeline(const std::function<void(PipelineBuf&)>& bui
   if (p.poisoned_) throw InvalidInputError("pipeline: a queued command had an empty argv");
   if (p.cmds_.empty()) return {};
   std::string wire;
-  for (const auto& c : p.cmds_) resp::encode_command(wire, c);
+  std::vector<std::string_view> view;
+  for (const auto& c : p.cmds_) {
+    view.assign(c.begin(), c.end());
+    resp::encode_command(wire, view);
+  }
   return conn->pipeline_raw(wire, p.cmds_.size());
 }
 

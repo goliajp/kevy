@@ -34,6 +34,7 @@ namespace kevy {
 
 namespace detail {
 class RespConn;
+class Args;
 }
 class Transaction;
 class PipelineBuf;
@@ -172,16 +173,16 @@ class Client {
   friend class Transaction;
   Client() = default;
 
-  Reply exec(const std::vector<std::string>& argv);
+  Reply exec(const detail::Args& argv);
   detail::RespConn* require_remote(const char* feature);
 
   // typed-reply adapters
-  int64_t exec_int(const std::vector<std::string>& argv);
-  int64_t exec_count(const std::vector<std::string>& argv);
-  void exec_ok(const std::vector<std::string>& argv);
-  bool exec_bool(const std::vector<std::string>& argv);
-  std::vector<std::string> exec_bulks(const std::vector<std::string>& argv);
-  OptBytes exec_opt_bulk(const std::vector<std::string>& argv);
+  int64_t exec_int(const detail::Args& argv);
+  int64_t exec_count(const detail::Args& argv);
+  void exec_ok(const detail::Args& argv);
+  bool exec_bool(const detail::Args& argv);
+  std::vector<std::string> exec_bulks(const detail::Args& argv);
+  OptBytes exec_opt_bulk(const detail::Args& argv);
 
   std::unique_ptr<detail::RespConn> remote_;
   std::shared_ptr<EmbeddedStore> emb_;

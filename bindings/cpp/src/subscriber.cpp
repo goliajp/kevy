@@ -179,23 +179,23 @@ Subscriber Subscriber::connect_channels(const std::string& url,
 
 void Subscriber::subscribe(const std::vector<std::string_view>& channels) {
   if (channels.empty()) throw InvalidInputError("SUBSCRIBE needs ≥ 1 channel");
-  if (remote_) remote_->write(detail::verb_list("SUBSCRIBE", channels));
+  if (remote_) remote_->write(detail::verb_list("SUBSCRIBE", channels).views());
   else emb_->add(channels, false);
 }
 
 void Subscriber::psubscribe(const std::vector<std::string_view>& patterns) {
   if (patterns.empty()) throw InvalidInputError("PSUBSCRIBE needs ≥ 1 pattern");
-  if (remote_) remote_->write(detail::verb_list("PSUBSCRIBE", patterns));
+  if (remote_) remote_->write(detail::verb_list("PSUBSCRIBE", patterns).views());
   else emb_->add(patterns, true);
 }
 
 void Subscriber::unsubscribe(const std::vector<std::string_view>& channels) {
-  if (remote_) remote_->write(detail::verb_list("UNSUBSCRIBE", channels));
+  if (remote_) remote_->write(detail::verb_list("UNSUBSCRIBE", channels).views());
   else emb_->remove(channels, false);
 }
 
 void Subscriber::punsubscribe(const std::vector<std::string_view>& patterns) {
-  if (remote_) remote_->write(detail::verb_list("PUNSUBSCRIBE", patterns));
+  if (remote_) remote_->write(detail::verb_list("PUNSUBSCRIBE", patterns).views());
   else emb_->remove(patterns, true);
 }
 

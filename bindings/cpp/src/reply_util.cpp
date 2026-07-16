@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <string>
+#include <utility>
 
 namespace kevy {
 namespace detail {
@@ -32,14 +33,14 @@ void raise_unexpected(const Reply& r) {
   throw ProtocolError(std::string("unexpected RESP reply variant: ") + r.shape());
 }
 
-std::vector<std::string> array_to_bulks(const Reply& r) {
+std::vector<std::string> array_to_bulks(Reply&& r) {
   std::vector<std::string> out;
   out.reserve(r.array.size());
-  for (const auto& it : r.array) {
+  for (auto& it : r.array) {
     switch (it.kind) {
       case ReplyKind::Bulk:
       case ReplyKind::Simple:
-        out.push_back(it.bytes);
+        out.push_back(std::move(it.bytes));
         break;
       case ReplyKind::Nil:
       case ReplyKind::Null:
