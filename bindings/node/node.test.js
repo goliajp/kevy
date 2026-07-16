@@ -28,6 +28,26 @@ test("addon smoke", () => {
   db.close();
 });
 
+// GET on a non-string key: the scalar shared lane collapses WRONGTYPE to a
+// misuse code (throwing the pending N-API exception), so index.js falls back to
+// the framed GET; the typed surface must surface the -WRONGTYPE as a thrown
+// KevyError whose taxonomy survived the throw. Exercises the new scalar lane +
+// its framed fallback end to end.
+test("typed GET on a non-string key throws WRONGTYPE", async () => {
+  const db = await open(); // in-memory
+  assert.equal(db.cmd("RPUSH", "list", "a"), 1); // key now holds a list
+  let caught;
+  try {
+    db.get("list");
+  } catch (e) {
+    caught = e;
+  }
+  assert.ok(caught instanceof KevyError);
+  assert.ok(caught instanceof Error); // taxonomy + stack both survive the throw
+  assert.match(caught.message, /^WRONGTYPE/);
+  db.close();
+});
+
 test("typed surface", async () => {
   const db = await open(); // in-memory
 

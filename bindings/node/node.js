@@ -68,6 +68,13 @@ class Sub {
     const f = c.subNext(this.#p);
     return f === undefined ? undefined : parse(f);
   }
+  // Blocking wait for one frame (timeoutMs 0 = forever); undefined on timeout.
+  // WARNING: parks the calling OS thread for the whole wait — only safe on a
+  // dedicated worker_thread, NEVER the main event loop (it stalls all of Node).
+  wait(timeoutMs = 0) {
+    const f = c.subWait(this.#p, timeoutMs);
+    return f === undefined ? undefined : parse(f);
+  }
   close() {
     if (this.#p) c.subClose(this.#p);
     this.#p = null;
@@ -87,6 +94,23 @@ class Db {
     if (!this.#p) throw new Error("kevy: closed handle");
     const reply = c.cmd(this.#p, pack(argv));
     return reply === null ? null : parse(reply);
+  }
+
+  // Scalar fast GET: skips argv-pack + RESP framing, riding the engine's
+  // zero-copy shared lane. Returns Uint8Array (a Buffer) | null — the raw value,
+  // no RESP. A GET on a non-string key collapses to a misuse code (WRONGTYPE is
+  // unrepresentable on this lane) and throws; index.js catches it and re-runs a
+  // framed GET so the typed -WRONGTYPE error surfaces. A present-but-empty value
+  // is a Buffer of length 0, NOT null.
+  getScalar(key) {
+    if (!this.#p) throw new Error("kevy: closed handle");
+    return c.get(this.#p, Buffer.from(toBytes(key))); // Buffer | null
+  }
+
+  // Scalar fast SET (ttlMs 0 = no TTL). No WRONGTYPE hazard: SET overwrites.
+  setScalar(key, value, ttlMs = 0) {
+    if (!this.#p) throw new Error("kevy: closed handle");
+    c.set(this.#p, Buffer.from(toBytes(key)), Buffer.from(toBytes(value)), ttlMs);
   }
 
   subscribe(channel) {
