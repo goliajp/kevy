@@ -291,6 +291,42 @@ class FlutterKevyBindings {
         )
       >();
 
+  /// Scalar publish — PUBLISH without the RESP round-trip (no argv packing, no
+  /// reply buffer). Delivers to every in-process subscriber (direct + pattern)
+  /// and returns the receiver count; -1 on misuse.
+  int kevy_publish(
+    ffi.Pointer<KevyDbHandle> db,
+    ffi.Pointer<ffi.Uint8> chan,
+    int chan_len,
+    ffi.Pointer<ffi.Uint8> payload,
+    int payload_len,
+  ) {
+    return _kevy_publish(db, chan, chan_len, payload, payload_len);
+  }
+
+  late final _kevy_publishPtr =
+      _lookup<
+        ffi.NativeFunction<
+          ffi.Int64 Function(
+            ffi.Pointer<KevyDbHandle>,
+            ffi.Pointer<ffi.Uint8>,
+            ffi.Size,
+            ffi.Pointer<ffi.Uint8>,
+            ffi.Size,
+          )
+        >
+      >('kevy_publish');
+  late final _kevy_publish = _kevy_publishPtr
+      .asFunction<
+        int Function(
+          ffi.Pointer<KevyDbHandle>,
+          ffi.Pointer<ffi.Uint8>,
+          int,
+          ffi.Pointer<ffi.Uint8>,
+          int,
+        )
+      >();
+
   /// Drain one pending frame without blocking.
   /// 1 = frame written to *out (RESP array: message / pmessage / acks);
   /// 0 = nothing queued; negative = misuse.
@@ -425,8 +461,10 @@ final class KevyDbHandle extends ffi.Opaque {}
 
 final class KevySubHandle extends ffi.Opaque {}
 
-/// A buffer owned by kevy. Free with kevy_buf_free(); never free() it.
-/// All three fields must reach kevy_buf_free() untouched.
+/// A buffer owned by kevy. Never free() it — free it with the function paired
+/// to the call that produced it (kevy_buf_free for most, kevy_buf_free_shared
+/// for kevy_get_shared; passing a shared-lane buffer to kevy_buf_free corrupts
+/// the heap). All three fields must reach that free untouched.
 final class KevyBuf extends ffi.Struct {
   external ffi.Pointer<ffi.Uint8> ptr;
 

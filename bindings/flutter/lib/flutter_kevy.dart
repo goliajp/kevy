@@ -272,8 +272,23 @@ class KevyDb implements ffi.Finalizable {
   void flushAll() => _want(cmd(['FLUSHALL']));
 
   /// Publish [payload] to [channel]; returns the number of receivers.
-  int publish(String channel, Uint8List payload) =>
-      _want(cmd(['PUBLISH', channel, payload])) as int;
+  /// Scalar lane (kevy_publish): no argv packing, no RESP reply to allocate
+  /// and parse — the publish analog of the direct subscribe symbol below.
+  int publish(String channel, Uint8List payload) {
+    final c = utf8.encode(channel);
+    final buf = malloc<ffi.Uint8>(c.length + payload.length);
+    try {
+      buf.asTypedList(c.length + payload.length)
+        ..setAll(0, c)
+        ..setAll(c.length, payload);
+      final n = _b.kevy_publish(
+          _live, buf, c.length, buf + c.length, payload.length);
+      if (n < 0) throw KevyError('kevy: publish failed');
+      return n;
+    } finally {
+      malloc.free(buf);
+    }
+  }
 
   /// Subscribe to a channel (or a glob [pattern] when [pattern] is true).
   KevySub subscribe(String channel, {bool pattern = false}) {
