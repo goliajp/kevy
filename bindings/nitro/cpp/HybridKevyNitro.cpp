@@ -59,19 +59,21 @@ HybridKevyNitro::cmd(const std::shared_ptr<ArrayBuffer>& argv) {
 // owns the buffer). setData frames no reply at all.
 
 std::optional<std::shared_ptr<ArrayBuffer>>
-HybridKevyNitro::getData(const std::shared_ptr<ArrayBuffer>& key) {
+HybridKevyNitro::getData(const std::string& key) {
   KevyBuf out{};
-  int32_t rc = kevy_get(_db, key->data(), key->size(), &out);
+  const auto* kp = reinterpret_cast<const uint8_t*>(key.data());
+  int32_t rc = kevy_get(_db, kp, key.size(), &out);
   if (rc != 1) {
     return std::nullopt; // 0 = miss, <0 = misuse — nothing to free
   }
   return takeBuf(out);
 }
 
-void HybridKevyNitro::setData(const std::shared_ptr<ArrayBuffer>& key,
+void HybridKevyNitro::setData(const std::string& key,
                               const std::shared_ptr<ArrayBuffer>& value,
                               double ttlMs) {
-  kevy_set(_db, key->data(), key->size(), value->data(), value->size(),
+  const auto* kp = reinterpret_cast<const uint8_t*>(key.data());
+  kevy_set(_db, kp, key.size(), value->data(), value->size(),
            static_cast<uint64_t>(ttlMs));
 }
 

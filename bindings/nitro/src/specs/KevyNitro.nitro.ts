@@ -24,11 +24,15 @@ export interface KevyNitro
   // removes the whole RESP tax (JS packAB + C++ argv unpack + engine RESP
   // encode + reply framing + JS RESP decode) — only the one JSI hop and the
   // one unavoidable value copy each way remain.
-  //   getData: key ArrayBuffer -> value ArrayBuffer, or undefined on miss.
-  //   setData: key + value ArrayBuffers, ttlMs (0 = no TTL); returns void —
-  //            no reply is framed or crossed at all.
-  getData(key: ArrayBuffer): ArrayBuffer | undefined
-  setData(key: ArrayBuffer, value: ArrayBuffer, ttlMs: number): void
+  //   getData: key string -> value ArrayBuffer, or undefined on miss.
+  //   setData: key string + value ArrayBuffer, ttlMs (0 = no TTL); returns
+  //            void — no reply is framed or crossed at all.
+  // The key is a string (not an ArrayBuffer): a short UTF-8 key marshals far
+  // cheaper across JSI than an ArrayBuffer arg (measured ~560 ns/AB-arg on
+  // device), and it mirrors MMKV's string-key API. The value stays an
+  // ArrayBuffer (binary-safe, arbitrary bytes).
+  getData(key: string): ArrayBuffer | undefined
+  setData(key: string, value: ArrayBuffer, ttlMs: number): void
 
   // Re-open this instance's db file-backed (durable) at `dir`, replacing the
   // in-memory db the constructor opened. MMKV is a persistent store, so a

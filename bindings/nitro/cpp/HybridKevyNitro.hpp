@@ -36,8 +36,8 @@ public:
   std::shared_ptr<ArrayBuffer> cmd(const std::shared_ptr<ArrayBuffer>& argv) override;
 
   // Scalar KV door — kevy_get / kevy_set directly, no argv, no RESP.
-  std::optional<std::shared_ptr<ArrayBuffer>> getData(const std::shared_ptr<ArrayBuffer>& key) override;
-  void setData(const std::shared_ptr<ArrayBuffer>& key,
+  std::optional<std::shared_ptr<ArrayBuffer>> getData(const std::string& key) override;
+  void setData(const std::string& key,
                const std::shared_ptr<ArrayBuffer>& value, double ttlMs) override;
   // Re-open file-backed (durable) at dir, replacing the in-memory ctor db.
   bool openAt(const std::string& dir) override;
